@@ -150,7 +150,7 @@ export async function roleProtectHandleGuildMemberUpdate(oldMember, newMember, c
     // (mesmo que audit log venha vazio, o comportamento “self” normalmente não aparece.
     // então só consideramos self quando executorId bate.)
     if (executorId && executorId === newMember.id) {
-      console.log(`[ROLE-PROTECT] SELF: ${newMember.user.tag} removeu cargos próprios. Não vou restaurar.`);
+      // console.log(`[ROLE-PROTECT] SELF: ${newMember.user.tag} removeu cargos próprios. Não vou restaurar.`);
       return false;
     }
 

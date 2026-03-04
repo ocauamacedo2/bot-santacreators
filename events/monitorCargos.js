@@ -102,7 +102,7 @@ async function updateDashboard(client) {
   try {
     await guild.members.fetch({ time: 45000 }); // Garante cache atualizado (45s timeout)
   } catch (e) {
-    console.warn('[MonitorCargos] Fetch timeout (usando cache):', e.message);
+    // console.warn('[MonitorCargos] Fetch timeout (usando cache):', e.message);
   }
   await guild.roles.fetch();
 
