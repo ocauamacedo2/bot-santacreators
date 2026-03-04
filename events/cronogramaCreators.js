@@ -457,55 +457,58 @@ async function updatePanel(client, state) {
     const channel = await client.channels.fetch(PANEL_CHANNEL_ID).catch(() => null);
     if (!channel || !channel.isTextBased()) return;
 
-    // ✅ 1) Limpeza de mensagens antigas (pelo ID salvo)
-    if (state.textMessageIds && state.textMessageIds.length > 0) {
-      for (const id of state.textMessageIds) {
-        const msg = await channel.messages.fetch(id).catch(() => null);
-        if (msg) await msg.delete().catch(() => {});
-      }
-      state.textMessageIds = [];
-    }
-    if (state.textMessageId) {
-      const msg = await channel.messages.fetch(state.textMessageId).catch(() => null);
-      if (msg) await msg.delete().catch(() => {});
-      state.textMessageId = null;
-    }
-
-    // ✅ 2) Limpeza de ÓRFÃOS (mensagens antigas que perderam o ID no state)
-    // Isso resolve o problema de "duplicar" se o bot reiniciou e perdeu o state
-    try {
-      const recent = await channel.messages.fetch({ limit: 50 }).catch(() => null);
-      if (recent) {
-        const orphans = recent.filter(m => 
-          m.author.id === client.user.id && 
-          m.id !== state.panelMessageId && // Não apaga o controle
-          (m.content || "").includes("# 📅 EVENTOS SEMANAIS")
-        );
-        
-        for (const orphan of orphans.values()) {
-          await orphan.delete().catch(() => {});
-        }
-      }
-    } catch (e) {
-      console.warn("[Cronograma] Erro ao limpar órfãos:", e);
-    }
-
-    // ✅ 3) Envia novas mensagens
     const fullContent = buildPanelContent(state);
     const chunks = splitText(fullContent, 2000);
-    
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
-      const isLast = i === chunks.length - 1;
 
-      const sent = await channel.send({ content: chunk, embeds: [], components: [] });
-      state.textMessageIds.push(sent.id);
+    // ✅ Tenta reutilizar as mensagens existentes (Modo Edição)
+    let canReuse = false;
+    const currentIds = state.textMessageIds || [];
 
-      if (isLast) {
-        try {
-          const emojis = ["💜", "📅", "🔥", "🚀", "👏", "🎉", "🤩", "🤯", "🏆", "👑"];
-          for (const e of emojis) await sent.react(e).catch(() => {});
-        } catch {}
+    if (currentIds.length === chunks.length) {
+      try {
+        const fetchedMsgs = await Promise.all(currentIds.map(id => channel.messages.fetch(id)));
+        if (fetchedMsgs.every(m => m)) canReuse = true;
+      } catch { canReuse = false; }
+    }
+
+    if (canReuse) {
+      // Apenas edita
+      for (let i = 0; i < chunks.length; i++) {
+        const msg = await channel.messages.fetch(currentIds[i]).catch(() => null);
+        if (msg && msg.content !== chunks[i]) {
+          await msg.edit({ content: chunks[i], embeds: [], components: [] }).catch(() => {});
+        }
+      }
+    } else {
+      // Recria tudo (Modo Limpeza)
+      if (state.textMessageIds?.length) {
+        for (const id of state.textMessageIds) {
+          const msg = await channel.messages.fetch(id).catch(() => null);
+          if (msg) await msg.delete().catch(() => {});
+        }
+      }
+      state.textMessageIds = [];
+
+      // Limpa órfãos
+      try {
+        const recent = await channel.messages.fetch({ limit: 50 }).catch(() => null);
+        if (recent) {
+          const orphans = recent.filter(m => m.author.id === client.user.id && m.id !== state.panelMessageId && (m.content || "").includes("# 📅 EVENTOS SEMANAIS"));
+          for (const orphan of orphans.values()) await orphan.delete().catch(() => {});
+        }
+      } catch {}
+
+      // Envia novas
+      for (let i = 0; i < chunks.length; i++) {
+        const isLast = i === chunks.length - 1;
+        const sent = await channel.send({ content: chunks[i], embeds: [], components: [] });
+        state.textMessageIds.push(sent.id);
+        if (isLast) {
+          try {
+            const emojis = ["💜", "📅", "🔥", "🚀", "👏", "🎉", "🤩", "🤯", "🏆", "👑"];
+            for (const e of emojis) await sent.react(e).catch(() => {});
+          } catch {}
+        }
       }
     }
 
