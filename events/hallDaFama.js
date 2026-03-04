@@ -294,7 +294,14 @@ Mostraram habilidade, esperteza e sangue nos olhos! <:__:1357520048318709840>
 ${data.imageUrl}`;
 
     // Envia no canal oficial
-    await hallChannel.send({ content: finalMessage });
+    const sentMsg = await hallChannel.send({ content: finalMessage });
+    try {
+      await sentMsg.react("💜");
+      await sentMsg.react("🔥");
+      await sentMsg.react("🚀");
+      await sentMsg.react("👏");
+      await sentMsg.react("🎉");
+    } catch {}
 
     // Garante botão no final
     await ensureButtonAtBottom(hallChannel, client);

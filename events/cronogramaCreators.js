@@ -496,6 +496,11 @@ async function updatePanel(client, state) {
     for (const chunk of chunks) {
       const sent = await channel.send({ content: chunk, embeds: [], components: [] });
       state.textMessageIds.push(sent.id);
+      try {
+        await sent.react("💜");
+        await sent.react("📅");
+        await sent.react("🔥");
+      } catch {}
     }
 
     // ✅ 4) Atualiza a mensagem “CONTROLE” (botões)

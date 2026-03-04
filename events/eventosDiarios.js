@@ -281,7 +281,14 @@ ${data.description}
 ${data.imageUrl}`;
 
     // Envia no canal oficial
-    await eventChannel.send({ content: finalMessage });
+    const sentMsg = await eventChannel.send({ content: finalMessage });
+    try {
+      await sentMsg.react("💜");
+      await sentMsg.react("🔥");
+      await sentMsg.react("🚀");
+      await sentMsg.react("👏");
+      await sentMsg.react("🎉");
+    } catch {}
 
     // Garante botão no final
     await ensureButtonAtBottom(eventChannel, client);
