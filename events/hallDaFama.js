@@ -237,11 +237,11 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
 
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
-        .setCustomId(``)
+        .setCustomId(`${BTN_APPROVE_PREFIX}${reqId}`)
         .setLabel("✅ Aprovar e Postar")
         .setStyle(ButtonStyle.Success),
       new ButtonBuilder()
-        .setCustomId(``)
+        .setCustomId(`${BTN_REJECT_PREFIX}${reqId}`)
         .setLabel("❌ Recusar")
         .setStyle(ButtonStyle.Danger)
     );

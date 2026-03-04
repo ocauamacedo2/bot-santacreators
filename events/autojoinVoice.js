@@ -74,7 +74,7 @@ async function ensureConnection(client, reason = "ensure") {
 
     // se existe conexão mas tá ruim/desconectada, mata ela
     if (conn) {
-      warn(`Conexão existe mas não está READY (status=${conn.state.status}). Reiniciando conexão...`);
+      log(`Conexão existe mas não está READY (status=${conn.state.status}). Reiniciando conexão...`);
       try { conn.destroy(); } catch {}
       await wait(2000); // Espera 2s para garantir que desconectou limpo
     }
@@ -90,10 +90,10 @@ async function ensureConnection(client, reason = "ensure") {
     });
 
     try {
-      await entersState(connection, VoiceConnectionStatus.Ready, 30_000); // Mais tempo para conectar
+      await entersState(connection, VoiceConnectionStatus.Ready, 45_000); // Mais tempo para conectar
       log("Conectado e READY ✅");
     } catch {
-      warn("Não ficou READY em 30s. Vou continuar tentando pelo monitor.");
+      log("Não ficou READY em 45s. O monitor tentará novamente em breve.");
     }
 
     attachGuards(client, guild.id);
@@ -116,7 +116,7 @@ function attachGuards(client, guildId) {
     const delay = clamp(backoff, RECONNECT_MIN_DELAY, RECONNECT_MAX_DELAY);
     backoff = clamp(backoff * 1.6, RECONNECT_MIN_DELAY, RECONNECT_MAX_DELAY);
 
-    warn(`Reconnect em ${delay}ms (${why})`);
+    log(`Reconnect em ${delay}ms (${why})`);
     await wait(delay);
     await ensureConnection(client, `reconnect:${why}`);
   };
