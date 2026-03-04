@@ -74,18 +74,18 @@ async function ensureConnection(client, reason = "ensure") {
 
     // se existe conexão mas tá ruim/desconectada, mata ela
     if (conn) {
-      log(`Conexão existe mas não está READY (status=${conn.state.status}). Reiniciando conexão...`);
+      debug(`Conexão existe mas não está READY (status=${conn.state.status}). Reiniciando conexão...`);
       try { conn.destroy(); } catch {}
       await wait(2000); // Espera 2s para garantir que desconectou limpo
     }
 
-    log(`Conectando no canal: ${canal.name} (${canal.id}) [${reason}]`);
+    debug(`Conectando no canal: ${canal.name} (${canal.id}) [${reason}]`);
 
     const connection = joinVoiceChannel({
       channelId: canal.id,
       guildId: guild.id,
       adapterCreator: guild.voiceAdapterCreator,
-      selfDeaf: false,
+      selfDeaf: true, // ✅ Ajuda na estabilidade
       selfMute: false,
     });
 
@@ -93,7 +93,7 @@ async function ensureConnection(client, reason = "ensure") {
       await entersState(connection, VoiceConnectionStatus.Ready, 45_000); // Mais tempo para conectar
       log("Conectado e READY ✅");
     } catch {
-      log("Não ficou READY em 45s. O monitor tentará novamente em breve.");
+      debug("Não ficou READY em 45s. O monitor tentará novamente em breve.");
     }
 
     attachGuards(client, guild.id);
@@ -108,7 +108,7 @@ function attachGuards(client, guildId) {
   if (client.__autojoinGuardsAttached) return;
   client.__autojoinGuardsAttached = true;
 
-  log("Guards ativados (reconnect + anti-move).");
+  debug("Guards ativados (reconnect + anti-move).");
 
   let backoff = RECONNECT_MIN_DELAY;
 
@@ -116,7 +116,7 @@ function attachGuards(client, guildId) {
     const delay = clamp(backoff, RECONNECT_MIN_DELAY, RECONNECT_MAX_DELAY);
     backoff = clamp(backoff * 1.6, RECONNECT_MIN_DELAY, RECONNECT_MAX_DELAY);
 
-    log(`Reconnect em ${delay}ms (${why})`);
+    debug(`Reconnect em ${delay}ms (${why})`);
     await wait(delay);
     await ensureConnection(client, `reconnect:${why}`);
   };
@@ -156,12 +156,12 @@ function attachGuards(client, guildId) {
       if (oldCh === newCh) return;
 
       // Loga a mudança para depuração
-      warn(`Estado de voz do bot alterado: ${oldCh ?? 'Nenhum'} -> ${newCh ?? 'Nenhum'}`);
+      debug(`Estado de voz do bot alterado: ${oldCh ?? 'Nenhum'} -> ${newCh ?? 'Nenhum'}`);
 
       // Cenário 1: O bot foi movido para um canal que NÃO é o canal padrão.
       // Ação: Forçar o retorno ao canal correto.
       if (newCh && newCh !== VOICE_CHANNEL_ID_PADRAO) {
-        warn(`[Anti-Move] Bot movido para canal incorreto. Forçando retorno...`);
+        debug(`[Anti-Move] Bot movido para canal incorreto. Forçando retorno...`);
         // Um pequeno delay ajuda a evitar race conditions com a API do Discord.
         setTimeout(() => ensureConnection(client, "moved_to_wrong_channel"), 1500);
         return;
@@ -170,7 +170,7 @@ function attachGuards(client, guildId) {
       // Cenário 2: O bot foi desconectado. Ação: Não fazer nada. O monitor periódico
       // (setInterval) já está configurado para reconectar com backoff, evitando loops.
       if (!newCh) {
-        warn("[Anti-Move] Bot desconectado. Aguardando monitor periódico...");
+        debug("[Anti-Move] Bot desconectado. Aguardando monitor periódico...");
         return;
       }
     });
