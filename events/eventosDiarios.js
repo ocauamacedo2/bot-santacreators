@@ -15,13 +15,13 @@ import { dashEmit } from "../utils/dashHub.js";
 
 // ================= CONFIGURAÇÃO =================
 const EVENTOS_CHANNEL_ID = "1385003944803041371"; // Canal Oficial de Eventos Diários
-const APPROVAL_CHANNEL_ID = "1387864036259004436"; // Canal de Aprovação (Mesmo do Cronograma/Hall)
+const APPROVAL_CHANNEL_ID = "1387864036259004436"; // Canal de Aprovação
 
 // Cargos Fixos para Menção
 const ROLE_CIDADAO = "1262978759922028575";
 const ROLE_LIDERES = "1353858422063239310";
 
-// Cidades e seus Cargos (Para mencionar na dinâmica)
+// Cidades e seus Cargos
 const CITIES = {
   nobre:   { label: "Cidade Nobre",   roleId: "1379021805544804382", emoji: "💎" },
   santa:   { label: "Cidade Santa",   roleId: "1379021888709464168", emoji: "🎅" },
@@ -29,7 +29,7 @@ const CITIES = {
   maresia: { label: "Cidade Maresia", roleId: "1379021994678288465", emoji: "🌊" },
 };
 
-// Permissões (Mesma lista do Cronograma/Hall)
+// Permissões
 const ALLOWED_ROLES = [
   "1352408327983861844", // Resp Creators
   "1262262852949905409", // Resp Influ
@@ -45,7 +45,6 @@ const ALLOWED_ROLES = [
   "1414651836861907006", // Responsáveis
 ];
 
-// ✅ QUEM PODE APROVAR (Igual Cronograma)
 const APPROVER_ROLES = [
   "1262262852949905408", // Owner
   "1352408327983861844", // Resp Creators
@@ -58,14 +57,12 @@ const ALLOWED_USERS = [
   "1262262852949905408", // Owner
 ];
 
-// IDs dos Componentes
 const BTN_OPEN_MENU = "evd_open_menu";
 const SEL_CITY = "evd_select_city";
 const MODAL_SUBMIT = "evd_modal_submit";
 const BTN_APPROVE_PREFIX = "evd_approve_";
 const BTN_REJECT_PREFIX = "evd_reject_";
 
-// Memória temporária para aprovação
 const pendingRequests = new Map();
 
 // ================= HELPERS =================
@@ -89,8 +86,8 @@ function buildRegisterButton() {
   );
 }
 
-// Garante que o botão fique sempre no final
-async function ensureButtonAtBottom(channel, client) {
+// ✅ Lógica inteligente: se force=false, só cria se não existir. Se force=true, apaga e recria (pra descer).
+async function ensureButtonAtBottom(channel, client, force = true) {
   try {
     const messages = await channel.messages.fetch({ limit: 20 }).catch(() => null);
     if (!messages) return;
@@ -98,6 +95,9 @@ async function ensureButtonAtBottom(channel, client) {
     const myMsgs = messages.filter(
       (m) => m.author.id === client.user.id && m.components.length > 0 && m.components[0].components[0].customId === BTN_OPEN_MENU
     );
+
+    // Se não for forçado (restart) e já existir botão, não faz nada
+    if (!force && myMsgs.size > 0) return;
 
     for (const m of myMsgs.values()) {
       await m.delete().catch(() => {});
@@ -116,14 +116,14 @@ async function ensureButtonAtBottom(channel, client) {
 export async function eventosDiariosOnReady(client) {
   const channel = await client.channels.fetch(EVENTOS_CHANNEL_ID).catch(() => null);
   if (channel && channel.isTextBased()) {
-    await ensureButtonAtBottom(channel, client);
+    // ✅ No restart, passa false para não spammar se já tiver botão
+    await ensureButtonAtBottom(channel, client, false);
   }
 }
 
 export async function eventosDiariosHandleInteraction(interaction, client) {
   if (!interaction.guild) return false;
 
-  // 1. Botão Inicial -> Select de Cidade
   if (interaction.isButton() && interaction.customId === BTN_OPEN_MENU) {
     if (!hasPermission(interaction.member, interaction.user.id)) {
       return interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
@@ -151,12 +151,11 @@ export async function eventosDiariosHandleInteraction(interaction, client) {
     return true;
   }
 
-  // 2. Seleção de Cidade -> Modal
   if (interaction.isStringSelectMenu() && interaction.customId === SEL_CITY) {
     const cityKey = interaction.values[0];
     
     const modal = new ModalBuilder()
-      .setCustomId(`${MODAL_SUBMIT}:${cityKey}`) // ✅ Garante que o ID da cidade vai no modal
+      .setCustomId(`${MODAL_SUBMIT}:${cityKey}`)
       .setTitle(`Evento - ${CITIES[cityKey].label}`);
 
     modal.addComponents(
@@ -172,7 +171,7 @@ export async function eventosDiariosHandleInteraction(interaction, client) {
         new TextInputBuilder()
           .setCustomId("evd_description")
           .setLabel("Descrição / Regras / Horário")
-          .setPlaceholder("Cole aqui todo o texto explicativo, regras, horários, premiações...")
+          .setPlaceholder("Cole aqui todo o texto explicativo...")
           .setStyle(TextInputStyle.Paragraph)
           .setRequired(true)
       ),
@@ -190,13 +189,12 @@ export async function eventosDiariosHandleInteraction(interaction, client) {
     return true;
   }
 
-  // 3. Modal Submit -> Envia para Aprovação
   if (interaction.isModalSubmit() && interaction.customId.startsWith(MODAL_SUBMIT)) {
     await interaction.deferReply({ ephemeral: true });
 
     const cityKey = interaction.customId.split(":")[1];
     if (!cityKey || !CITIES[cityKey]) {
-      return interaction.editReply("❌ Erro: Cidade não identificada. Tente abrir o menu novamente.");
+      return interaction.editReply("❌ Erro: Cidade não identificada.");
     }
 
     const title = interaction.fields.getTextInputValue("evd_title");
@@ -251,7 +249,6 @@ export async function eventosDiariosHandleInteraction(interaction, client) {
     return true;
   }
 
-  // 4. Aprovar
   if (interaction.isButton() && interaction.customId.startsWith(BTN_APPROVE_PREFIX)) {
     if (!canApprove(interaction.member, interaction.user.id)) {
       return interaction.reply({ content: "🚫 Você não tem permissão para aprovar.", ephemeral: true });
@@ -262,7 +259,7 @@ export async function eventosDiariosHandleInteraction(interaction, client) {
     const data = pendingRequests.get(reqId);
 
     if (!data) {
-      return interaction.editReply("⚠️ Dados da solicitação expiraram ou não foram encontrados.");
+      return interaction.editReply("⚠️ Dados da solicitação expiraram.");
     }
 
     const eventChannel = await client.channels.fetch(EVENTOS_CHANNEL_ID).catch(() => null);
@@ -270,7 +267,6 @@ export async function eventosDiariosHandleInteraction(interaction, client) {
 
     const cityData = CITIES[data.cityKey];
     
-    // Monta a mensagem final (Texto + Menções + Imagem Grande no final)
     const finalMessage = 
 `# 🎉 :  **Santa Creators : ${data.title}** 🎉 
 
@@ -280,27 +276,23 @@ ${data.description}
 
 ${data.imageUrl}`;
 
-    // Envia no canal oficial
     const sentMsg = await eventChannel.send({ content: finalMessage });
+    
+    // ✅ Mais emojis
     try {
-      await sentMsg.react("💜");
-      await sentMsg.react("🔥");
-      await sentMsg.react("🚀");
-      await sentMsg.react("👏");
-      await sentMsg.react("🎉");
+      const emojis = ["💜", "🔥", "🚀", "👏", "🎉", "🤩", "🤯", "🏆", "👑", "💸"];
+      for (const e of emojis) await sentMsg.react(e).catch(() => {});
     } catch {}
 
-    // Garante botão no final
-    await ensureButtonAtBottom(eventChannel, client);
+    // ✅ Aqui passa true para forçar o botão a descer
+    await ensureButtonAtBottom(eventChannel, client, true);
 
-    // Computa pontos (Igual Cronograma/Hall)
     dashEmit("eventosdiarios:aprovado", {
       userId: data.userId,
       approverId: interaction.user.id,
       at: Date.now()
     });
 
-    // Atualiza mensagem de aprovação
     const embedApproved = EmbedBuilder.from(interaction.message.embeds[0])
       .setColor("#2ecc71")
       .setTitle("✅ Evento Diário APROVADO")
@@ -313,7 +305,6 @@ ${data.imageUrl}`;
     return true;
   }
 
-  // 5. Recusar
   if (interaction.isButton() && interaction.customId.startsWith(BTN_REJECT_PREFIX)) {
     if (!canApprove(interaction.member, interaction.user.id)) {
       return interaction.reply({ content: "🚫 Você não tem permissão para recusar.", ephemeral: true });

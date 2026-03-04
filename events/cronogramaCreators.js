@@ -493,14 +493,20 @@ async function updatePanel(client, state) {
     // ✅ 3) Envia novas mensagens
     const fullContent = buildPanelContent(state);
     const chunks = splitText(fullContent, 2000);
-    for (const chunk of chunks) {
+    
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      const isLast = i === chunks.length - 1;
+
       const sent = await channel.send({ content: chunk, embeds: [], components: [] });
       state.textMessageIds.push(sent.id);
-      try {
-        await sent.react("💜");
-        await sent.react("📅");
-        await sent.react("🔥");
-      } catch {}
+
+      if (isLast) {
+        try {
+          const emojis = ["💜", "📅", "🔥", "🚀", "👏", "🎉", "🤩", "🤯", "🏆", "👑"];
+          for (const e of emojis) await sent.react(e).catch(() => {});
+        } catch {}
+      }
     }
 
     // ✅ 4) Atualiza a mensagem “CONTROLE” (botões)

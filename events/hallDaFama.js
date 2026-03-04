@@ -29,8 +29,7 @@ const CITIES = {
   maresia: { label: "Cidade Maresia", roleId: "1379021994678288465", emoji: "🌊" },
 };
 
-// Permissões (Quem pode enviar e aprovar)
-// Mesma lista do Cronograma
+// Permissões
 const ALLOWED_ROLES = [
   "1352408327983861844", // Resp Creators
   "1262262852949905409", // Resp Influ
@@ -46,7 +45,6 @@ const ALLOWED_ROLES = [
   "1414651836861907006", // Responsáveis
 ];
 
-// ✅ QUEM PODE APROVAR (Igual Cronograma)
 const APPROVER_ROLES = [
   "1262262852949905408", // Owner
   "1352408327983861844", // Resp Creators
@@ -59,14 +57,12 @@ const ALLOWED_USERS = [
   "1262262852949905408", // Owner
 ];
 
-// IDs dos Componentes
 const BTN_OPEN_MENU = "hf_open_menu";
 const SEL_CITY = "hf_select_city";
 const MODAL_SUBMIT = "hf_modal_submit";
 const BTN_APPROVE_PREFIX = "hf_approve_";
 const BTN_REJECT_PREFIX = "hf_reject_";
 
-// Memória temporária para aprovação (reiniciou o bot, perde o pendente, mas ok para fluxo rápido)
 const pendingRequests = new Map();
 
 // ================= HELPERS =================
@@ -90,23 +86,23 @@ function buildRegisterButton() {
   );
 }
 
-// Garante que o botão fique sempre no final
-async function ensureButtonAtBottom(channel, client) {
+// ✅ Lógica inteligente: se force=false, só cria se não existir. Se force=true, apaga e recria (pra descer).
+async function ensureButtonAtBottom(channel, client, force = true) {
   try {
-    // 1. Busca mensagens recentes
     const messages = await channel.messages.fetch({ limit: 20 }).catch(() => null);
     if (!messages) return;
 
-    // 2. Remove botões antigos do bot
     const myMsgs = messages.filter(
       (m) => m.author.id === client.user.id && m.components.length > 0 && m.components[0].components[0].customId === BTN_OPEN_MENU
     );
+
+    // Se não for forçado (restart) e já existir botão, não faz nada
+    if (!force && myMsgs.size > 0) return;
 
     for (const m of myMsgs.values()) {
       await m.delete().catch(() => {});
     }
 
-    // 3. Envia novo botão
     await channel.send({
       components: [buildRegisterButton()]
     });
@@ -120,14 +116,14 @@ async function ensureButtonAtBottom(channel, client) {
 export async function hallDaFamaOnReady(client) {
   const channel = await client.channels.fetch(HALL_CHANNEL_ID).catch(() => null);
   if (channel && channel.isTextBased()) {
-    await ensureButtonAtBottom(channel, client);
+    // ✅ No restart, passa false para não spammar se já tiver botão
+    await ensureButtonAtBottom(channel, client, false);
   }
 }
 
 export async function hallDaFamaHandleInteraction(interaction, client) {
   if (!interaction.guild) return false;
 
-  // 1. Botão Inicial -> Select de Cidade
   if (interaction.isButton() && interaction.customId === BTN_OPEN_MENU) {
     if (!hasPermission(interaction.member, interaction.user.id)) {
       return interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
@@ -155,12 +151,11 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
     return true;
   }
 
-  // 2. Seleção de Cidade -> Modal
   if (interaction.isStringSelectMenu() && interaction.customId === SEL_CITY) {
     const cityKey = interaction.values[0];
     
     const modal = new ModalBuilder()
-      .setCustomId(`${MODAL_SUBMIT}:${cityKey}`) // ✅ Garante que o ID da cidade vai no modal
+      .setCustomId(`${MODAL_SUBMIT}:${cityKey}`)
       .setTitle(`Hall da Fama - ${CITIES[cityKey].label}`);
 
     modal.addComponents(
@@ -194,13 +189,12 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
     return true;
   }
 
-  // 3. Modal Submit -> Envia para Aprovação
   if (interaction.isModalSubmit() && interaction.customId.startsWith(MODAL_SUBMIT)) {
     await interaction.deferReply({ ephemeral: true });
 
     const cityKey = interaction.customId.split(":")[1];
     if (!cityKey || !CITIES[cityKey]) {
-      return interaction.editReply("❌ Erro: Cidade não identificada. Tente abrir o menu novamente.");
+      return interaction.editReply("❌ Erro: Cidade não identificada.");
     }
 
     const eventName = interaction.fields.getTextInputValue("hf_event_name");
@@ -209,7 +203,6 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
 
     const reqId = `${interaction.user.id}-${Date.now()}`;
     
-    // Salva dados temporários
     pendingRequests.set(reqId, {
       userId: interaction.user.id,
       cityKey,
@@ -256,7 +249,6 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
     return true;
   }
 
-  // 4. Aprovar
   if (interaction.isButton() && interaction.customId.startsWith(BTN_APPROVE_PREFIX)) {
     if (!canApprove(interaction.member, interaction.user.id)) {
       return interaction.reply({ content: "🚫 Você não tem permissão para aprovar.", ephemeral: true });
@@ -267,13 +259,12 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
     const data = pendingRequests.get(reqId);
 
     if (!data) {
-      return interaction.editReply("⚠️ Dados da solicitação expiraram ou não foram encontrados.");
+      return interaction.editReply("⚠️ Dados da solicitação expiraram.");
     }
 
     const hallChannel = await client.channels.fetch(HALL_CHANNEL_ID).catch(() => null);
     if (!hallChannel) return interaction.editReply("❌ Canal do Hall da Fama não encontrado.");
 
-    // Monta a mensagem final (Formato Texto + Imagem Grande)
     const cityData = CITIES[data.cityKey];
     
     const finalMessage = 
@@ -293,27 +284,23 @@ Mostraram habilidade, esperteza e sangue nos olhos! <:__:1357520048318709840>
 
 ${data.imageUrl}`;
 
-    // Envia no canal oficial
     const sentMsg = await hallChannel.send({ content: finalMessage });
+    
+    // ✅ Mais emojis
     try {
-      await sentMsg.react("💜");
-      await sentMsg.react("🔥");
-      await sentMsg.react("🚀");
-      await sentMsg.react("👏");
-      await sentMsg.react("🎉");
+      const emojis = ["💜", "🔥", "🚀", "👏", "🎉", "🤩", "🤯", "🏆", "👑", "💸"];
+      for (const e of emojis) await sentMsg.react(e).catch(() => {});
     } catch {}
 
-    // Garante botão no final
-    await ensureButtonAtBottom(hallChannel, client);
+    // ✅ Aqui passa true para forçar o botão a descer
+    await ensureButtonAtBottom(hallChannel, client, true);
 
-    // Computa pontos (Igual Cronograma)
     dashEmit("halldafama:aprovado", {
       userId: data.userId,
       approverId: interaction.user.id,
       at: Date.now()
     });
 
-    // Atualiza mensagem de aprovação
     const embedApproved = EmbedBuilder.from(interaction.message.embeds[0])
       .setColor("#2ecc71")
       .setTitle("✅ Hall da Fama APROVADO")
@@ -326,7 +313,6 @@ ${data.imageUrl}`;
     return true;
   }
 
-  // 5. Recusar
   if (interaction.isButton() && interaction.customId.startsWith(BTN_REJECT_PREFIX)) {
     if (!canApprove(interaction.member, interaction.user.id)) {
       return interaction.reply({ content: "🚫 Você não tem permissão para recusar.", ephemeral: true });
