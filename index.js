@@ -229,6 +229,10 @@ import { evt3EventsOnReady, evt3EventsHandleMessage, evt3EventsHandleInteraction
 // ✅ Blacklist Eventos
 import { blacklistEventosOnReady, blacklistEventosHandleInteraction } from "./events/blacklistEventos.js";
 
+// ✅ Hall da Fama & Eventos Diários
+import { hallDaFamaOnReady, hallDaFamaHandleInteraction } from "./events/hallDaFama.js";
+import { eventosDiariosOnReady, eventosDiariosHandleInteraction } from "./events/eventosDiarios.js";
+
 
 // Comandos admin (modular)
 import { registerApagarPV } from "./commands/admin/apagarpv.js";
@@ -938,6 +942,12 @@ try {
       // ✅ Blacklist Eventos
       if (await blacklistEventosHandleInteraction(interaction, client)) return;
 
+      // ✅ Hall da Fama
+      if (await hallDaFamaHandleInteraction(interaction, client)) return;
+
+      // ✅ Eventos Diários
+      if (await eventosDiariosHandleInteraction(interaction, client)) return;
+
       // ✅ Sort Channels (Botão Desfazer !inativo)
       if (await sortChannelsHandleInteraction(interaction, client)) return;
 
@@ -1250,6 +1260,10 @@ try { await evt3EventsOnReady(client); } catch (e) { console.warn("⚠️ [EVT3]
     try { await setStaffV2OnReady(client); } catch {}
     // ✅ Blacklist Eventos
     try { await blacklistEventosOnReady(client); } catch {}
+
+    // ✅ Hall da Fama & Eventos Diários
+    try { await hallDaFamaOnReady(client); } catch (e) { console.warn("⚠️ HallDaFama:", e); }
+    try { await eventosDiariosOnReady(client); } catch (e) { console.warn("⚠️ EventosDiarios:", e); }
 
     // ✅ Cadastro Manual (Setar Cargo)
     try { await cadastroManualOnReady(client); } catch {}
