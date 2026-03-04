@@ -161,6 +161,8 @@ const FULL_SCAN = {
   VENDAS: 20,
   CRONOGRAMA: 20,
   PRESENCAS: 20, // ✅ NOVO
+  HALLDAFAMA: 20, // ✅ NOVO
+  EVENTOSDIARIOS: 20, // ✅ NOVO
 };
 
 
@@ -285,6 +287,8 @@ function loadState() {
       rmAprovados: {},
       rmReprovados: {},
       presencas: {}, // ✅ NOVO
+      halldafama: {}, // ✅ NOVO
+      eventosdiarios: {}, // ✅ NOVO
 
       // ✅ alinhamentos
       alinhamentos: {},
@@ -2070,6 +2074,8 @@ const mPerg = getWeekly(st, "perguntas", wkNow);
 const mVendas = getWeekly(st, "vendas", wkNow);
 const mCronograma = getWeekly(st, "cronograma", wk); // usa wk do scan (histórico)
 const mPresencas = getWeekly(st, "presencas", wkNow); // ✅ NOVO
+const mHall = getWeekly(st, "halldafama", wkNow); // ✅ NOVO
+const mEventosDiarios = getWeekly(st, "eventosdiarios", wkNow); // ✅ NOVO
 
 // ✅ todo o resto continua como tava (wk do scan)
 const mVipCriados = getWeekly(st, "vipCriados", wk);
@@ -2138,6 +2144,8 @@ const wkNowLabel = triLabelShortFromWeekKey(wkNow);
                 `• Vendas: **${mVendas}**`,
                 `• Cronograma: **${mCronograma}**`,
                 `• Presenças Confirmadas: **${mPresencas}**`, // ✅ NOVO
+                `• Hall da Fama: **${mHall}**`, // ✅ NOVO
+                `• Eventos Diários: **${mEventosDiarios}**`, // ✅ NOVO
               ].join("\n")
             )
             .setFooter({ text: `WEEK_KEY: ${wk}` })
@@ -2150,7 +2158,7 @@ const sigObj = {
   mAlinh, mEvtPoder, mPoderesUtil,
   mPagCriados, mPagSol, mPagPago, mPagRep,
   mVipCriados, mVipSol, mVipPago, mVipRep,
-  mDoacoes, mConvites, mPerg, mVendas, mCronograma, mPresencas // ✅ NOVO
+  mDoacoes, mConvites, mPerg, mVendas, mCronograma, mPresencas, mHall, mEventosDiarios // ✅ NOVO
 };
 
 const newSig = JSON.stringify(sigObj);
@@ -2203,6 +2211,8 @@ const oldSig = st._logSig[wk];
       `• Vendas: **${mVendas}**`,
       `• Cronograma: **${mCronograma}**`,
       `• Presenças: **${mPresencas}**`, // ✅ NOVO
+      `• Hall da Fama: **${mHall}**`, // ✅ NOVO
+      `• Eventos Diários: **${mEventosDiarios}**`, // ✅ NOVO
     ].join("\n");
 
     const mainColor =
@@ -2490,6 +2500,28 @@ dashOn("bp:punch", (_p) => {
       const st = loadState();
       const wk = weekKeyFromDateSP(new Date(p.at || Date.now()));
       bumpWeekly(st, "cronograma", wk, 1);
+      saveState(st);
+    } catch {}
+    markDirty({ invalidateScanCache: true });
+  });
+
+  // ✅ HALL DA FAMA
+  dashOn("halldafama:aprovado", (p) => {
+    try {
+      const st = loadState();
+      const wk = weekKeyFromDateSP(new Date(p.at || Date.now()));
+      bumpWeekly(st, "halldafama", wk, 1);
+      saveState(st);
+    } catch {}
+    markDirty({ invalidateScanCache: true });
+  });
+
+  // ✅ EVENTOS DIÁRIOS
+  dashOn("eventosdiarios:aprovado", (p) => {
+    try {
+      const st = loadState();
+      const wk = weekKeyFromDateSP(new Date(p.at || Date.now()));
+      bumpWeekly(st, "eventosdiarios", wk, 1);
       saveState(st);
     } catch {}
     markDirty({ invalidateScanCache: true });

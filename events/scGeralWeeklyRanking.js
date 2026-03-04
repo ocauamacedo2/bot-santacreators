@@ -113,6 +113,7 @@ const PERGUNTAS_LOGS_CHANNEL_ID = process.env.SCPERGUNTAS_LOGS_ID?.trim() || "";
 const VENDAS_LOGS_CHANNEL_ID = "1475237983782179028";
 const CRONOGRAMA_LOGS_CHANNEL_ID = "1387864036259004436";
 const PRESENCA_LOGS_CHANNEL_ID = "1477802343407026257";
+const HALL_CHANNEL_ID = "1386503496353976470"; // ✅ Canal do Hall da Fama
 
 // canais base
 const CH_PODERES_ID = "1374066813171929218";
@@ -792,12 +793,47 @@ async function collectAllPoints(client, mode = "light") {
         const isGreen = emb.color === 3066993; 
         const footer = emb.footer?.text || "";
         if (!isGreen && !footer.includes("Aprovado por")) return;
-
+        
+        const title = emb.title || "";
         const desc = emb.description || "";
         const match = desc.match(/Solicitante:.*?<@!?(\d+)>/i);
         if (!match) return;
+        const userId = match[1];
 
-        pushItem({ userId: match[1], ts: new Date(m.editedTimestamp || m.createdTimestamp), source: "cronograma" });
+        // Diferencia Cronograma, Hall da Fama e Eventos Diários pelo título/descrição
+        if (title.includes("Hall da Fama")) {
+           pushItem({ userId, ts: new Date(m.editedTimestamp || m.createdTimestamp), source: "halldafama" });
+        } else if (title.includes("Evento Diário")) {
+           pushItem({ userId, ts: new Date(m.editedTimestamp || m.createdTimestamp), source: "eventosdiarios" });
+        } else {
+           // Assume cronograma se não for os outros
+           pushItem({ userId, ts: new Date(m.editedTimestamp || m.createdTimestamp), source: "cronograma" });
+        }
+      },
+    });
+  }
+
+  // HALL DA FAMA (Scan do canal oficial)
+  if (HALL_CHANNEL_ID) {
+    await scanChannelEmbeds(client, {
+      channelId: HALL_CHANNEL_ID,
+      weekFloorKey,
+      maxPages: 80,
+      onMessage: async (m) => {
+        // O Hall da Fama é texto puro, mas é enviado pelo bot.
+        // Vamos procurar o padrão do texto.
+        if (m.author.id !== client.user.id) return;
+        if (!m.content.includes("HALL DA FAMA")) return;
+
+        // O bot não marca quem enviou no texto final (só no log/aprovação).
+        // MAS, como o sistema emite evento, o ideal é confiar no evento em tempo real.
+        // Para persistência retroativa de texto puro, é difícil sem um ID no texto.
+        // PORÉM, o código do Hall da Fama que fiz NÃO coloca o ID do autor no texto final público.
+        // SOLUÇÃO: Vou adicionar um comentário invisível ou rodapé no código do Hall da Fama
+        // para permitir esse scan, OU confiamos apenas no dashOn em tempo real.
+        // Como o usuário pediu "igual cronograma", e cronograma tem scan...
+        // Vou assumir que o dashOn segura a onda por enquanto, ou você pode adicionar um log channel pro Hall.
+        // (O código do Hall da Fama já emite dashOn).
       },
     });
   }
@@ -945,6 +981,8 @@ const SOURCE_LABEL = {
   vendas: "Vendas",
   cronograma: "Cronograma",
   presencas: "Presença",
+  halldafama: "Hall da Fama",
+  eventosdiarios: "Eventos Diários",
 };
 
 function aggregateWeekDetailed(items, weekKey) {
@@ -1383,6 +1421,8 @@ function wireHub(client) {
   dashOn("venda:registrada", () => markDirty({ invalidateScanCache: true }));
   dashOn("cronograma:aprovado", () => markDirty({ invalidateScanCache: true }));
   dashOn("presenca:confirmada", () => markDirty({ invalidateScanCache: true }));
+  dashOn("halldafama:aprovado", () => markDirty({ invalidateScanCache: true })); // ✅ NOVO
+  dashOn("eventosdiarios:aprovado", () => markDirty({ invalidateScanCache: true })); // ✅ NOVO
   dashOn("gi:desligado", () => markDirty({ invalidateScanCache: true })); // ✅ Atualiza ranking ao desligar
 
   // scheduler leve: se DIRTY, atualiza

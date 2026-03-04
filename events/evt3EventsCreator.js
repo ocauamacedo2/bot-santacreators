@@ -103,7 +103,7 @@ function EVT3_hasPerm(member, userId) {
 }
 
 function EVT3_areaLabel(type) {
-  if (type === "links") return "MENU DE LINKS";
+  if (type === "links") return "INFO DO EVENTO";
   if (type === "audios") return "ÁUDIOS";
   if (type === "adms") return "ADMS";
   if (type === "org") return "ORGANIZAÇÃO";
@@ -133,7 +133,7 @@ function EVT3_buildMenuRow(mainThreadId, areas) {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(`EVT3_menu_links_${mainThreadId}`)
-      .setLabel("MENU DE LINKS")
+      .setLabel("INFO DO EVENTO")
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(done("links")),
 

@@ -22,7 +22,7 @@ const ROLES_CONFIG = [
   { id: '1388976094920704141', limit: 5,   emoji: '📱', name: 'Social Media' },
   { id: '1388976155830255697', limit: 12,  emoji: '🎯', name: 'Manager' },
   { id: '1388975939161161728', limit: 5,   emoji: '🧠', name: 'Gestor' },
-  { id: '1388976314253312100', limit: 8,   emoji: '🧩', name: 'Coordenação' },
+  { id: '1388976314253312100', limit: 5,   emoji: '🧩', name: 'Coordenação' },
   { id: '1352407252216184833', limit: 4,   emoji: '🛡️', name: 'Resp. Líder' },
   { id: '1262262852949905409', limit: 4,   emoji: '🌟', name: 'Resp. Influ' },
   { id: '1352408327983861844', limit: 2,   emoji: '👑', name: 'Resp. Creators' }

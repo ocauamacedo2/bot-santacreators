@@ -1134,6 +1134,8 @@ for (const cand of manualCandidates) {
     
     // ✅ Atualiza gráfico ao aprovar cronograma
     dashOn("cronograma:aprovado", () => safeUpdate(client, "cronograma approved"));
+    dashOn("halldafama:aprovado", () => safeUpdate(client, "halldafama approved")); // ✅ NOVO
+    dashOn("eventosdiarios:aprovado", () => safeUpdate(client, "eventosdiarios approved")); // ✅ NOVO
 
     await safeUpdate(client, "ready");
     setInterval(() => safeUpdate(client, "interval 3min"), 3 * 60 * 1000);
