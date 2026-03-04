@@ -1,0 +1,27 @@
+{
+  "name": "santacreators",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "pm2-runtime start index.js --node-args='--max-old-space-size=1700' --max-memory-restart 2000M"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.894.0",
+    "@discordjs/voice": "^0.18.0",
+    "bottleneck": "^2.19.5",
+    "discord.js": "^14.19.3",
+    "dotenv": "^16.5.0",
+    "express": "^4.21.1",
+    "ffmpeg-static": "^5.2.0",
+    "mongoose": "^7.6.0",
+    "node-cron": "^3.0.2",
+    "node-fetch": "^3.3.2",
+    "opusscript": "^0.0.8",
+    "play-dl": "^1.9.7",
+    "pm2": "^6.0.14",
+    "qrcode": "^1.5.1",
+    "spotify-web-api-node": "^5.0.2",
+    "ytdl-core": "^4.11.5"
+  }
+}

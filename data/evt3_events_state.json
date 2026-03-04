@@ -1,0 +1,631 @@
+{
+  "evt3ButtonMessageId": "1461441362472865997",
+  "evt3ButtonChannelId": "1457573495952248883",
+  "evt3Events": {
+    "1457583060097827059": {
+      "eventName": "MISSÃO ROSA",
+      "creatorId": "660311795327828008",
+      "panelMessageId": "1457583061515501743",
+      "areas": {
+        "links": {
+          "done": true,
+          "threadId": "1457583104981078142"
+        },
+        "audios": {
+          "done": true,
+          "threadId": "1457583160916312095"
+        },
+        "adms": {
+          "done": true,
+          "threadId": "1457583195716452557"
+        },
+        "org": {
+          "done": true,
+          "threadId": "1457584107721850980"
+        }
+      }
+    },
+    "1457585457197088946": {
+      "eventName": "MISSÃO ROSA",
+      "creatorId": "660311795327828008",
+      "panelMessageId": "1457585458610438221",
+      "areas": {
+        "links": {
+          "done": true,
+          "threadId": "1457585557692612791"
+        },
+        "audios": {
+          "done": true,
+          "threadId": "1457585584519381058"
+        },
+        "adms": {
+          "done": true,
+          "threadId": "1457585601384812605"
+        },
+        "org": {
+          "done": true,
+          "threadId": "1457585629276934165"
+        }
+      }
+    },
+    "1457589050428100679": {
+      "eventName": "# SantaFuga Espacial",
+      "creatorId": "660311795327828008",
+      "panelMessageId": "1457589051434729547",
+      "areas": {
+        "links": {
+          "done": true,
+          "threadId": "1457589120485298351"
+        },
+        "audios": {
+          "done": true,
+          "threadId": "1457589150646800455"
+        },
+        "adms": {
+          "done": true,
+          "threadId": "1457589237313568778"
+        },
+        "org": {
+          "done": true,
+          "threadId": "1457589256389394472"
+        }
+      }
+    },
+    "1457589489047441479": {
+      "eventName": "**Santa Apocalypse**",
+      "creatorId": "660311795327828008",
+      "panelMessageId": "1457589490188292392",
+      "areas": {
+        "links": {
+          "done": true,
+          "threadId": "1457589700603674698"
+        },
+        "audios": {
+          "done": true,
+          "threadId": "1457589722959315107"
+        },
+        "adms": {
+          "done": true,
+          "threadId": "1457589757147349016"
+        },
+        "org": {
+          "done": true,
+          "threadId": "1457589776034168925"
+        }
+      }
+    },
+    "1457589669519822901": {
+      "eventName": "Santa Caos",
+      "creatorId": "660311795327828008",
+      "panelMessageId": "1457589670245568758",
+      "areas": {
+        "links": {
+          "done": true,
+          "threadId": "1457590926426902664"
+        },
+        "audios": {
+          "done": true,
+          "threadId": "1457590936841355324"
+        },
+        "adms": {
+          "done": true,
+          "threadId": "1457590946509230222"
+        },
+        "org": {
+          "done": true,
+          "threadId": "1457590960044114051"
+        }
+      }
+    },
+    "1457589938890735892": {
+      "eventName": "SANTA KARAMBIT CHAOS 🗡️",
+      "creatorId": "660311795327828008",
+      "panelMessageId": "1457589940278788192",
+      "areas": {
+        "links": {
+          "done": true,
+          "threadId": "1457589975271866593"
+        },
+        "audios": {
+          "done": true,
+          "threadId": "1457589994117136639"
+        },
+        "adms": {
+          "done": true,
+          "threadId": "1457590019199074346"
+        },
+        "org": {
+          "done": true,
+          "threadId": "1457590030556987484"
+        }
+      }
+    },
+    "1457591292807876801": {
+      "eventName": "SANTA KARAMBIT WARS",
+      "creatorId": "660311795327828008",
+      "panelMessageId": "1457591293843603489",
+      "areas": {
+        "links": {
+          "done": true,
+          "threadId": "1457591376404287568"
+        },
+        "audios": {
+          "done": true,
+          "threadId": "1457591388446261279"
+        },
+        "adms": {
+          "done": true,
+          "threadId": "1457591401419374806"
+        },
+        "org": {
+          "done": true,
+          "threadId": "1457591413997834454"
+        }
+      }
+    },
+    "1457592156461076551": {
+      "eventName": "SantaCross",
+      "creatorId": "660311795327828008",
+      "panelMessageId": "1457592157463384105",
+      "areas": {
+        "links": {
+          "done": true,
+          "threadId": "1457592215676125287"
+        },
+        "audios": {
+          "done": true,
+          "threadId": "1457592222538268884"
+        },
+        "adms": {
+          "done": true,
+          "threadId": "1457592230129701195"
+        },
+        "org": {
+          "done": true,
+          "threadId": "1457592236379471986"
+        }
+      }
+    },
+    "1457592387277947111": {
+      "eventName": "Socializar SC",
+      "creatorId": "660311795327828008",
+      "panelMessageId": "1457592388523659275",
+      "areas": {
+        "links": {
+          "done": true,
+          "threadId": "1457592448338628721"
+        },
+        "audios": {
+          "done": true,
+          "threadId": "1457592459478569235"
+        },
+        "adms": {
+          "done": true,
+          "threadId": "1457592468894781732"
+        },
+        "org": {
+          "done": true,
+          "threadId": "1457592478906581148"
+        }
+      }
+    },
+    "1457592976585785526": {
+      "eventName": "Santa Pegando Fogo– Batalha Final 🔵🔴",
+      "creatorId": "660311795327828008",
+      "panelMessageId": "1457592977743544523",
+      "areas": {
+        "links": {
+          "done": false,
+          "threadId": null
+        },
+        "audios": {
+          "done": false,
+          "threadId": null
+        },
+        "adms": {
+          "done": false,
+          "threadId": null
+        },
+        "org": {
+          "done": false,
+          "threadId": null
+        }
+      }
+    },
+    "1457593776569847889": {
+      "eventName": "ESCONDE ESCONDE DA PRISÃO",
+      "creatorId": "660311795327828008",
+      "panelMessageId": "1457593777442131979",
+      "areas": {
+        "links": {
+          "done": true,
+          "threadId": "1457593804679938129"
+        },
+        "audios": {
+          "done": true,
+          "threadId": "1457593820903637172"
+        },
+        "adms": {
+          "done": true,
+          "threadId": "1457593835311075562"
+        },
+        "org": {
+          "done": true,
+          "threadId": "1457593854256484458"
+        }
+      }
+    },
+    "1457594195278561375": {
+      "eventName": "SantaCreators Missão PÂNTANO",
+      "creatorId": "660311795327828008",
+      "panelMessageId": "1457594197417791531",
+      "areas": {
+        "links": {
+          "done": true,
+          "threadId": "1457594225909825568"
+        },
+        "audios": {
+          "done": true,
+          "threadId": "1457594236491796685"
+        },
+        "adms": {
+          "done": true,
+          "threadId": "1457594245832769609"
+        },
+        "org": {
+          "done": true,
+          "threadId": "1457594256381317213"
+        }
+      }
+    },
+    "1457644584678068247": {
+      "eventName": "SANTA SOB PRESSÃO",
+      "creatorId": "660311795327828008",
+      "panelMessageId": "1457644586422894686",
+      "areas": {
+        "links": {
+          "done": true,
+          "threadId": "1457644707596341395"
+        },
+        "audios": {
+          "done": true,
+          "threadId": "1457644734771101779"
+        },
+        "adms": {
+          "done": true,
+          "threadId": "1457644739741614082"
+        },
+        "org": {
+          "done": true,
+          "threadId": "1457644749958811701"
+        }
+      }
+    },
+    "1457941945568596161": {
+      "eventName": "SANTA CRIME LIVRE",
+      "creatorId": "660311795327828008",
+      "panelMessageId": "1457941946919026872",
+      "areas": {
+        "links": {
+          "done": true,
+          "threadId": "1457941980553281681"
+        },
+        "audios": {
+          "done": true,
+          "threadId": "1457942001109569566"
+        },
+        "adms": {
+          "done": true,
+          "threadId": "1457942019593863210"
+        },
+        "org": {
+          "done": true,
+          "threadId": "1457942043895664844"
+        }
+      }
+    },
+    "1457996796511916177": {
+      "eventName": "eVENTO teSTS",
+      "creatorId": "660311795327828008",
+      "panelMessageId": "1457996797984116758",
+      "areas": {
+        "links": {
+          "done": true,
+          "threadId": "1457996833233305692"
+        },
+        "audios": {
+          "done": false,
+          "threadId": null
+        },
+        "adms": {
+          "done": false,
+          "threadId": null
+        },
+        "org": {
+          "done": false,
+          "threadId": null
+        }
+      }
+    },
+    "1457998182242979853": {
+      "eventName": "MISSÃO ROSA",
+      "creatorId": "660311795327828008",
+      "panelMessageId": "1457998184923136052",
+      "areas": {
+        "infos": {
+          "done": false,
+          "threadId": null
+        },
+        "audios": {
+          "done": false,
+          "threadId": null
+        },
+        "adms": {
+          "done": false,
+          "threadId": null
+        },
+        "org": {
+          "done": false,
+          "threadId": null
+        },
+        "links": {
+          "done": true,
+          "threadId": "1457998213716901962"
+        }
+      }
+    },
+    "1457999442023157760": {
+      "eventName": "MISSÃO ROSA",
+      "creatorId": "660311795327828008",
+      "panelMessageId": "1457999442962550805",
+      "areas": {
+        "infos": {
+          "done": true,
+          "threadId": "1457999799134720134"
+        },
+        "audios": {
+          "done": true,
+          "threadId": "1458000086792405113"
+        },
+        "adms": {
+          "done": true,
+          "threadId": "1457999945348026550"
+        },
+        "org": {
+          "done": true,
+          "threadId": "1458000681733456036"
+        }
+      }
+    },
+    "1458003038093709491": {
+      "eventName": "SANTA FUGA ESPACIAL",
+      "creatorId": "660311795327828008",
+      "panelMessageId": "1458003039448338495",
+      "areas": {
+        "infos": {
+          "done": true,
+          "threadId": "1458003118464696542"
+        },
+        "audios": {
+          "done": true,
+          "threadId": "1458003221955088445"
+        },
+        "adms": {
+          "done": true,
+          "threadId": "1458003262144905278"
+        },
+        "org": {
+          "done": true,
+          "threadId": "1458003311201620150"
+        }
+      }
+    },
+    "1458004503344451729": {
+      "eventName": "SANTA APOCALIPSE",
+      "creatorId": "660311795327828008",
+      "panelMessageId": "1458004504480972952",
+      "areas": {
+        "infos": {
+          "done": true,
+          "threadId": "1458004550660264081"
+        },
+        "audios": {
+          "done": true,
+          "threadId": "1458005041364602922"
+        },
+        "adms": {
+          "done": true,
+          "threadId": "1458005151737708735"
+        },
+        "org": {
+          "done": true,
+          "threadId": "1458005193592406172"
+        }
+      }
+    },
+    "1458006434418790605": {
+      "eventName": "SANTA CAOS",
+      "creatorId": "660311795327828008",
+      "panelMessageId": "1458006435852980420",
+      "areas": {
+        "infos": {
+          "done": true,
+          "threadId": "1458006513120706632"
+        },
+        "audios": {
+          "done": true,
+          "threadId": "1458006541444710492"
+        },
+        "adms": {
+          "done": true,
+          "threadId": "1458006565125619821"
+        },
+        "org": {
+          "done": true,
+          "threadId": "1458006572188831875"
+        }
+      }
+    },
+    "1458007698330353717": {
+      "eventName": "ESCONDE-ESCONDE DO PRESÍDIO",
+      "creatorId": "660311795327828008",
+      "panelMessageId": "1458007699924062250",
+      "areas": {
+        "infos": {
+          "done": true,
+          "threadId": "1458007723198124105"
+        },
+        "audios": {
+          "done": true,
+          "threadId": "1458007859060150303"
+        },
+        "adms": {
+          "done": true,
+          "threadId": "1458007872104431707"
+        },
+        "org": {
+          "done": true,
+          "threadId": "1458007934247239791"
+        }
+      }
+    },
+    "1458008179743920170": {
+      "eventName": "SC – KARAMBIT WARS",
+      "creatorId": "660311795327828008",
+      "panelMessageId": "1458008182529200285",
+      "areas": {
+        "infos": {
+          "done": true,
+          "threadId": "1458008198790385799"
+        },
+        "audios": {
+          "done": true,
+          "threadId": "1458008216654053490"
+        },
+        "adms": {
+          "done": true,
+          "threadId": "1458008251881885818"
+        },
+        "org": {
+          "done": true,
+          "threadId": "1458008230864224329"
+        }
+      }
+    },
+    "1458008452311023767": {
+      "eventName": "SantaCross – Corrida de Moto",
+      "creatorId": "660311795327828008",
+      "panelMessageId": "1458008453636423774",
+      "areas": {
+        "infos": {
+          "done": true,
+          "threadId": "1458008558879772704"
+        },
+        "audios": {
+          "done": true,
+          "threadId": "1458008568190996562"
+        },
+        "adms": {
+          "done": true,
+          "threadId": "1458008575107403799"
+        },
+        "org": {
+          "done": true,
+          "threadId": "1458008582464471094"
+        }
+      }
+    },
+    "1458008721010462895": {
+      "eventName": "Socializar SC",
+      "creatorId": "660311795327828008",
+      "panelMessageId": "1458008722734321694",
+      "areas": {
+        "infos": {
+          "done": true,
+          "threadId": "1458008875633475639"
+        },
+        "audios": {
+          "done": true,
+          "threadId": "1458008883678281778"
+        },
+        "adms": {
+          "done": true,
+          "threadId": "1458008892738109600"
+        },
+        "org": {
+          "done": true,
+          "threadId": "1458008899318972416"
+        }
+      }
+    },
+    "1458009215913168928": {
+      "eventName": "SANTA PEGANDO FOGO",
+      "creatorId": "660311795327828008",
+      "panelMessageId": "1458009218094334012",
+      "areas": {
+        "infos": {
+          "done": true,
+          "threadId": "1458009233969778854"
+        },
+        "audios": {
+          "done": true,
+          "threadId": "1458009239481094209"
+        },
+        "adms": {
+          "done": true,
+          "threadId": "1458009263963242659"
+        },
+        "org": {
+          "done": true,
+          "threadId": "1458009249517928448"
+        }
+      }
+    },
+    "1458009818009698358": {
+      "eventName": "MISSÃO PÂNTANO",
+      "creatorId": "660311795327828008",
+      "panelMessageId": "1458009819247018046",
+      "areas": {
+        "infos": {
+          "done": true,
+          "threadId": "1458009862758862978"
+        },
+        "audios": {
+          "done": true,
+          "threadId": "1458009873991073813"
+        },
+        "adms": {
+          "done": true,
+          "threadId": "1458009884611186720"
+        },
+        "org": {
+          "done": true,
+          "threadId": "1458009897504477204"
+        }
+      }
+    },
+    "1458010152895516702": {
+      "eventName": "SANTA SOB PRESSÃO",
+      "creatorId": "660311795327828008",
+      "panelMessageId": "1458010153873051851",
+      "areas": {
+        "infos": {
+          "done": true,
+          "threadId": "1458010398409228390"
+        },
+        "audios": {
+          "done": true,
+          "threadId": "1458010406789451941"
+        },
+        "adms": {
+          "done": true,
+          "threadId": "1458010419015979018"
+        },
+        "org": {
+          "done": true,
+          "threadId": "1458010429547745422"
+        }
+      }
+    }
+  }
+}
