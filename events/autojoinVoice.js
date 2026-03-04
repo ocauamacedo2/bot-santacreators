@@ -8,8 +8,8 @@ import {
 
 const VOICE_CHANNEL_ID_PADRAO = "1415386915137388664";
 
-const RECONNECT_MIN_DELAY = 15_000;
-const RECONNECT_MAX_DELAY = 30_000;
+const RECONNECT_MIN_DELAY = 30_000; // Aumentado para 30s
+const RECONNECT_MAX_DELAY = 120_000; // Aumentado para 2 min
 
 const log = (...a) => console.log("🎧 [AutoJoin]", ...a);
 const warn = (...a) => console.warn("⚠️ [AutoJoin]", ...a);
@@ -90,10 +90,10 @@ async function ensureConnection(client, reason = "ensure") {
     });
 
     try {
-      await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
+      await entersState(connection, VoiceConnectionStatus.Ready, 30_000); // Mais tempo para conectar
       log("Conectado e READY ✅");
     } catch {
-      warn("Não ficou READY em 20s. Vou continuar tentando pelo monitor.");
+      warn("Não ficou READY em 30s. Vou continuar tentando pelo monitor.");
     }
 
     attachGuards(client, guild.id);
@@ -123,7 +123,7 @@ function attachGuards(client, guildId) {
 
   // monitor a cada 10s
   client.__autojoinInterval && clearInterval(client.__autojoinInterval);
-  client.__autojoinInterval = setInterval(() => {
+  client.__autojoinInterval = setInterval(() => { // Monitor mais lento (60s)
     const conn = getVoiceConnection(guildId);
 
     if (!conn) {
@@ -139,7 +139,7 @@ function attachGuards(client, guildId) {
     } else {
       backoff = RECONNECT_MIN_DELAY;
     }
-  }, 10_000);
+  }, 60_000);
 
   // anti-move (se moverem/kickarem o bot, volta)
   if (!client.__autojoinVoiceStateHook) {

@@ -160,7 +160,7 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
     const cityKey = interaction.values[0];
     
     const modal = new ModalBuilder()
-      .setCustomId(`${MODAL_SUBMIT}:${cityKey}`)
+      .setCustomId(`${MODAL_SUBMIT}:${cityKey}`) // ✅ Garante que o ID da cidade vai no modal
       .setTitle(`Hall da Fama - ${CITIES[cityKey].label}`);
 
     modal.addComponents(
@@ -199,6 +199,10 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
     await interaction.deferReply({ ephemeral: true });
 
     const cityKey = interaction.customId.split(":")[1];
+    if (!cityKey || !CITIES[cityKey]) {
+      return interaction.editReply("❌ Erro: Cidade não identificada. Tente abrir o menu novamente.");
+    }
+
     const eventName = interaction.fields.getTextInputValue("hf_event_name");
     const winnersText = interaction.fields.getTextInputValue("hf_winners");
     const imageUrl = interaction.fields.getTextInputValue("hf_image");
