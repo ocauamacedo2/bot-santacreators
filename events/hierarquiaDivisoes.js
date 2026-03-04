@@ -312,7 +312,11 @@ async function updateHierarchyPanel(client) {
 
         // ✅ força atualizar cache (melhora "demora pra refletir")
         await guild.roles.fetch();
-        await guild.members.fetch({ force: true });
+        try {
+          await guild.members.fetch({ time: 60000 });
+        } catch (e) {
+          console.warn("[Hierarquia] Fetch members timeout (usando cache parcial):", e.message);
+        }
 
         const slots = loadSlots();
 
