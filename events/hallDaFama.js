@@ -160,7 +160,7 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
     const cityKey = interaction.values[0];
     
     const modal = new ModalBuilder()
-      .setCustomId(`${MODAL_SUBMIT}:`)
+      .setCustomId(`${MODAL_SUBMIT}:${cityKey}`)
       .setTitle(`Hall da Fama - ${CITIES[cityKey].label}`);
 
     modal.addComponents(
@@ -285,7 +285,7 @@ ${data.winnersText}
 
 Mostraram habilidade, esperteza e sangue nos olhos! <:__:1357520048318709840>
 
-@everyone @here <@&> <@&> <@&${cityData.roleId}>
+@everyone @here <@&${ROLE_CIDADAO}> <@&${ROLE_LIDERES}> <@&${cityData.roleId}>
 
 ${data.imageUrl}`;
 

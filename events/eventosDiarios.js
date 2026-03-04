@@ -156,7 +156,7 @@ export async function eventosDiariosHandleInteraction(interaction, client) {
     const cityKey = interaction.values[0];
     
     const modal = new ModalBuilder()
-      .setCustomId(`${MODAL_SUBMIT}:`)
+      .setCustomId(`${MODAL_SUBMIT}:${cityKey}`)
       .setTitle(`Evento - ${CITIES[cityKey].label}`);
 
     modal.addComponents(
@@ -272,7 +272,7 @@ export async function eventosDiariosHandleInteraction(interaction, client) {
 
 ${data.description}
 
-@everyone @here <@&> <@&> <@&${cityData.roleId}>
+@everyone @here <@&${ROLE_CIDADAO}> <@&${ROLE_LIDERES}> <@&${cityData.roleId}>
 
 ${data.imageUrl}`;
 

@@ -8,7 +8,7 @@ import {
 
 const VOICE_CHANNEL_ID_PADRAO = "1415386915137388664";
 
-const RECONNECT_MIN_DELAY = 3_000;
+const RECONNECT_MIN_DELAY = 15_000;
 const RECONNECT_MAX_DELAY = 30_000;
 
 const log = (...a) => console.log("🎧 [AutoJoin]", ...a);
