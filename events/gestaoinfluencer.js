@@ -34,7 +34,13 @@
     // ✅ Importa o getter de stats
     const { getStatsForUser } = await import('./scGeralWeeklyRanking.js');
     // ✅ NOVO: Importa helpers do formscreator
-    const { findFormsCreatorThreadIdByUserId, setFormsCreatorStatus, setFormsCreatorArea } = await import('./formscreator.js');
+    let formsCreator = {};
+    try {
+        formsCreator = await import('./formscreator.js');
+    } catch (e) {
+        console.warn("[SC_GI] ⚠️ Aviso: o módulo formscreator.js não pôde ser carregado. A integração com ele estará desativada.", e.message);
+    }
+    const { findFormsCreatorThreadIdByUserId, setFormsCreatorStatus, setFormsCreatorArea } = formsCreator;
 
     if (client.__SC_GI_INSTALLED) {
       console.log('[SC_GI] Já instalado, pulando.');
@@ -394,14 +400,16 @@
         .setFooter({ text: 'SantaCreators • gestaoinfluencer' })
         .setTimestamp(new Date());
 
-      // ✅ NOVO: Find and add link to formscreator thread
-      let fcLink = null;
-      try {
-          const fcThreadId = await findFormsCreatorThreadIdByUserId(rec.targetId);
-          if (fcThreadId) {
-              fcLink = `https://discord.com/channels/${rec.guildId}/${fcThreadId}`;
-          }
-      } catch {}
+     // ✅ NOVO: Find and add link to formscreator thread
+let fcLink = null;
+try {
+  if (typeof findFormsCreatorThreadIdByUserId === 'function') {
+    const fcThreadId = await findFormsCreatorThreadIdByUserId(rec.targetId).catch(() => null);
+    if (fcThreadId) {
+      fcLink = `https://discord.com/channels/${rec.guildId}/${fcThreadId}`;
+    }
+  }
+} catch {}
 
       emb.setDescription([
           `👤 **Membro:** <@${targetUser.id}>`,
@@ -906,17 +914,15 @@ await msg.edit({
 
       // ✅ NOVO: Update formscreator area
       if (newArea) {
-          try {
-              const fcThreadId = await findFormsCreatorThreadIdByUserId(rec.targetId);
+          if (typeof findFormsCreatorThreadIdByUserId === 'function' && typeof setFormsCreatorArea === 'function') {
+              const fcThreadId = await findFormsCreatorThreadIdByUserId(rec.targetId).catch(() => null);
               if (fcThreadId) {
                   await setFormsCreatorArea(client, {
                       threadId: fcThreadId,
                       newArea: newArea,
                       actor: editor
-                  });
+                  }).catch(e => console.error("[GI] Falha ao editar área no FormsCreator:", e));
               }
-          } catch (e) {
-              console.error("[GI] Falha ao editar área no FormsCreator:", e);
           }
       }
 
@@ -1201,8 +1207,8 @@ await msg.edit({
 
       // ✅ NOVO: Desliga o registro do formscreator
       try {
-          const fcThreadId = await findFormsCreatorThreadIdByUserId(snapshot.targetId);
-          if (fcThreadId) {
+          if (typeof findFormsCreatorThreadIdByUserId === 'function' && typeof setFormsCreatorStatus === 'function') {
+              const fcThreadId = await findFormsCreatorThreadIdByUserId(snapshot.targetId).catch(() => null);
               await setFormsCreatorStatus(client, {
                   threadId: fcThreadId,
                   newStatus: false, // false for inactive

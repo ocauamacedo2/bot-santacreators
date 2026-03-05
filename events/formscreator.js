@@ -98,7 +98,7 @@ const ROLE_REQUIRED_FOR_ACTIVE = "1352275728476930099";
 // =========================
 // PERSISTÊNCIA
 // =========================
-const DATA_DIR = path.join(__dirname, "data");
+const DATA_DIR = path.join(__dirname, "../data"); // Ajustado para subir um nível se estiver em events/
 const STATE_FILE = path.join(DATA_DIR, "formscreator_state.json");
 
 function ensureDataDir() {
