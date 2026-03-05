@@ -24,10 +24,6 @@ const __dirname = path.dirname(__filename);
 // ✅ IMPORTS ADICIONAIS
 // =========================
 import { getStatsForUser } from "./scGeralWeeklyRanking.js";
-
-// =========================
-// CONFIG
-// =========================
 const CREATOR_EQUIPE_ROLE_ID = "1352429001188180039";
 const CREATOR_FORM_CHANNEL_ID = "1389401636446802042";
 const CREATOR_FORM_BUTTON_CHANNEL_ID = "1389401636446802042";
