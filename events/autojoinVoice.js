@@ -184,7 +184,7 @@ async function ensureConnection(client, reason = "ensure") {
       (conn.state.status === VoiceConnectionStatus.Signalling ||
         conn.state.status === VoiceConnectionStatus.Connecting)
     ) {
-      log(`Conexão em ${conn.state.status}. Aguardando ${GRACE_IF_SIGNALLING}ms...`);
+      // log(`Conexão em ${conn.state.status}. Aguardando ${GRACE_IF_SIGNALLING}ms...`);
       try {
         await entersState(conn, VoiceConnectionStatus.Ready, GRACE_IF_SIGNALLING);
         log("Virou READY ✅");
@@ -193,15 +193,16 @@ async function ensureConnection(client, reason = "ensure") {
         clearReconnectTimer(client);
         return;
       } catch {
-        // falhou, mas NÃO destrói aqui → só agenda reconnect
-        warn(`Ainda não virou READY (status=${conn.state.status}). Vou agendar nova tentativa.`);
+        // ✅ FIX: Destrói a conexão travada para tentar limpo na próxima
+        try { conn.destroy(); } catch {}
+        
         st.fails += 1;
         if (st.fails >= MAX_FAILS_BEFORE_COOLDOWN) {
           st.cooldownUntil = Date.now() + COOLDOWN_MS;
           warn(`Entrando em COOLDOWN ${Math.round(COOLDOWN_MS / 60000)}min (evitar flood).`);
           return;
         }
-        scheduleReconnectOnce(client, `still_${conn.state.status}`);
+        scheduleReconnectOnce(client, `reset_stuck`);
         return;
       }
     }
@@ -247,7 +248,9 @@ async function ensureConnection(client, reason = "ensure") {
       st.backoff = RECONNECT_MIN_DELAY;
       clearReconnectTimer(client);
     } catch {
-      warn(`Não ficou READY em ${READY_TIMEOUT}ms (status=${conn.state.status}).`);
+      // ✅ FIX: Destrói se falhar no handshake inicial
+      try { conn.destroy(); } catch {}
+      
       st.fails += 1;
 
       if (st.fails >= MAX_FAILS_BEFORE_COOLDOWN) {
@@ -256,7 +259,7 @@ async function ensureConnection(client, reason = "ensure") {
         return;
       }
 
-      scheduleReconnectOnce(client, `not_ready:${conn.state.status}`);
+      scheduleReconnectOnce(client, `not_ready`);
     }
 
     attachGuards(client, guild.id);
