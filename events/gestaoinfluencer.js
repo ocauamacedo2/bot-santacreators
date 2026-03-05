@@ -393,9 +393,6 @@
           iconURL: registrarUser?.displayAvatarURL?.({ size: 128 }) || undefined
         })
         .setThumbnail(targetUser?.displayAvatarURL?.({ size: 256 }) || null)
-        .setDescription([
-          // ... (existing lines)
-        ].filter(Boolean).join('\n'))
         .setImage(GIF_SC_GI)
         .setFooter({ text: 'SantaCreators • gestaoinfluencer' })
         .setTimestamp(new Date());

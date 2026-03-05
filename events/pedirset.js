@@ -410,6 +410,8 @@ export async function pedirSetHandleInteraction(interaction, client) {
 
   // BOTÃO → Aprovar
   if (interaction.isButton() && interaction.customId.startsWith('aprovar_set_')) {
+    await interaction.deferUpdate().catch(() => {});
+
     const idUnico = interaction.customId.replace('aprovar_set_', '');
     let dados = pedidosSet.get(idUnico);
 
@@ -424,7 +426,7 @@ export async function pedirSetHandleInteraction(interaction, client) {
     }
 
     if (!dados) {
-      await interaction.reply({ content: '❌ Dados do formulário não encontrados (nem pelo embed).', ephemeral: true });
+      await interaction.followUp({ content: '❌ Dados do formulário não encontrados (nem pelo embed).', ephemeral: true });
       return true;
     }
 
@@ -432,12 +434,12 @@ export async function pedirSetHandleInteraction(interaction, client) {
 
     const membro = await interaction.guild.members.fetch(userId).catch(() => null);
     if (!membro) {
-      await interaction.reply({ content: '❌ Membro não encontrado.', ephemeral: true });
+      await interaction.followUp({ content: '❌ Membro não encontrado.', ephemeral: true });
       return true;
     }
 
     if (!CARGOS_AUTORIZADOS_APROVACAO.some(id => interaction.member.roles.cache.has(id))) {
-      await interaction.reply({ content: '❌ Você não tem permissão para aprovar sets.', ephemeral: true });
+      await interaction.followUp({ content: '❌ Você não tem permissão para aprovar sets.', ephemeral: true });
       return true;
     }
 
@@ -508,7 +510,7 @@ export async function pedirSetHandleInteraction(interaction, client) {
     );
 
     try {
-      await interaction.update({
+      await interaction.editReply({
         components: [rowAtualizada],
         embeds: [embedAtualizado]
       });
