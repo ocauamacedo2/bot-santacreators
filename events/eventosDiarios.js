@@ -1,4 +1,6 @@
 // d:\santacreators-main\events\eventosDiarios.js
+import fs from "node:fs";
+import path from "node:path";
 import {
   EmbedBuilder,
   ActionRowBuilder,
@@ -12,6 +14,14 @@ import {
 } from "discord.js";
 
 import { dashEmit } from "../utils/dashHub.js";
+
+// ================= PERSISTÊNCIA =================
+const DATA_DIR = path.resolve(process.cwd(), "data");
+const STATE_FILE = path.join(DATA_DIR, "eventos_diarios_state.json");
+
+const ensureDir = () => { if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true }); };
+const saveState = (data) => { ensureDir(); fs.writeFileSync(STATE_FILE, JSON.stringify(data, null, 2)); };
+const loadState = () => { try { if (fs.existsSync(STATE_FILE)) return JSON.parse(fs.readFileSync(STATE_FILE, "utf8")); } catch {} return { pendingRequests: {} }; };
 
 // ================= CONFIGURAÇÃO =================
 const EVENTOS_CHANNEL_ID = "1385003944803041371"; // Canal Oficial de Eventos Diários
@@ -63,7 +73,8 @@ const MODAL_SUBMIT = "evd_modal_submit";
 const BTN_APPROVE_PREFIX = "evd_approve_";
 const BTN_REJECT_PREFIX = "evd_reject_";
 
-const pendingRequests = new Map();
+// Carrega os pedidos pendentes do arquivo ao iniciar
+let state = loadState();
 
 // ================= HELPERS =================
 function hasPermission(member, userId) {
@@ -114,6 +125,8 @@ async function ensureButtonAtBottom(channel, client, force = true) {
 // ================= EXPORTS =================
 
 export async function eventosDiariosOnReady(client) {
+  // Garante que o estado seja carregado no boot
+  state = loadState();
   const channel = await client.channels.fetch(EVENTOS_CHANNEL_ID).catch(() => null);
   if (channel && channel.isTextBased()) {
     // ✅ No restart, passa false para não spammar se já tiver botão
@@ -203,13 +216,14 @@ export async function eventosDiariosHandleInteraction(interaction, client) {
 
     const reqId = `${interaction.user.id}-${Date.now()}`;
     
-    pendingRequests.set(reqId, {
+    state.pendingRequests[reqId] = {
       userId: interaction.user.id,
       cityKey,
       title,
       description,
       imageUrl
-    });
+    };
+    saveState(state); // Salva no arquivo
 
     const approvalChannel = await client.channels.fetch(APPROVAL_CHANNEL_ID).catch(() => null);
     if (!approvalChannel) {
@@ -256,7 +270,7 @@ export async function eventosDiariosHandleInteraction(interaction, client) {
 
     await interaction.deferReply({ ephemeral: true });
     const reqId = interaction.customId.replace(BTN_APPROVE_PREFIX, "");
-    const data = pendingRequests.get(reqId);
+    const data = state.pendingRequests[reqId];
 
     if (!data) {
       return interaction.editReply("⚠️ Dados da solicitação expiraram.");
@@ -266,17 +280,20 @@ export async function eventosDiariosHandleInteraction(interaction, client) {
     if (!eventChannel) return interaction.editReply("❌ Canal de Eventos não encontrado.");
 
     const cityData = CITIES[data.cityKey];
-    
-    const finalMessage = 
-`# 🎉 :  **Santa Creators : ${data.title}** 🎉 
 
-${data.description}
+    // ✅ CORREÇÃO: Mover texto longo para o Embed
+    const eventEmbed = new EmbedBuilder()
+      .setTitle(`🎉 :  **Santa Creators : ${data.title}** 🎉`)
+      .setDescription(data.description)
+      .setImage(data.imageUrl)
+      .setColor("#9b59b6");
 
-@everyone @here <@&${ROLE_CIDADAO}> <@&${ROLE_LIDERES}> <@&${cityData.roleId}>
+    const mentions = `@everyone @here <@&${ROLE_CIDADAO}> <@&${ROLE_LIDERES}> <@&${cityData.roleId}>`;
 
-${data.imageUrl}`;
-
-    const sentMsg = await eventChannel.send({ content: finalMessage });
+    const sentMsg = await eventChannel.send({ 
+      content: mentions,
+      embeds: [eventEmbed]
+    });
     
     // ✅ Mais emojis
     try {
@@ -298,9 +315,10 @@ ${data.imageUrl}`;
       .setTitle("✅ Evento Diário APROVADO")
       .setFooter({ text: `Aprovado por ${interaction.user.tag}` });
 
-    await interaction.message.edit({ embeds: [embedApproved], components: [] });
+    await interaction.message.edit({ embeds: [embedApproved], components: [] }).catch(() => {});
     
-    pendingRequests.delete(reqId);
+    delete state.pendingRequests[reqId];
+    saveState(state); // Salva a remoção
     await interaction.editReply("✅ Evento postado e pontos computados!");
     return true;
   }
@@ -317,9 +335,10 @@ ${data.imageUrl}`;
       .setTitle("❌ Evento Diário RECUSADO")
       .setFooter({ text: `Recusado por ${interaction.user.tag}` });
 
-    await interaction.message.edit({ embeds: [embedRejected], components: [] });
+    await interaction.message.edit({ embeds: [embedRejected], components: [] }).catch(() => {});
     
-    pendingRequests.delete(reqId);
+    delete state.pendingRequests[reqId];
+    saveState(state); // Salva a remoção
     await interaction.reply({ content: "❌ Solicitação recusada.", ephemeral: true });
     return true;
   }
