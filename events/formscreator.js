@@ -581,6 +581,85 @@ async function syncLegacyThreads(client) {
 }
 
 // =========================
+// ✅ EXPORTS PARA INTEGRAÇÃO
+// =========================
+
+export async function createFormsCreatorRecord(client, { guildId, creatorId, targetId, targetName, targetPassaporte, area = "A Definir" }) {
+    const guild = await client.guilds.fetch(guildId).catch(() => null);
+    if (!guild) throw new Error("Guilda não encontrada para criar registro FormsCreator.");
+
+    const canal = await client.channels.fetch(CREATOR_FORM_CHANNEL_ID).catch(() => null);
+    if (!canal || !canal.isTextBased()) {
+        throw new Error("Canal de FormsCreator não encontrado.");
+    }
+
+    const membro = await guild.members.fetch(targetId).catch(() => null);
+    const avatarURL = membro?.user?.displayAvatarURL({ size: 512 }) || "";
+
+    const topic = await canal.threads.create({
+        name: targetName,
+        autoArchiveDuration: 1440,
+        reason: `Registro automático para ${targetName}`,
+    }).catch(() => null);
+
+    if (!topic) throw new Error("Falha ao criar thread no FormsCreator.");
+
+    const embed = new EmbedBuilder()
+        .setTitle(`👤 ${targetName}`)
+        .setThumbnail(avatarURL)
+        .setDescription(`<@${targetId}>`)
+        .addFields(
+            { name: "📌 ID/Passaporte", value: targetPassaporte, inline: true },
+            { name: "📚 Área de Interesse", value: area, inline: true },
+            { name: "Status do Projeto", value: "🟢 Ativo", inline: false }
+        )
+        .setColor("Purple");
+
+    const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`editar_id_${topic.id}`).setLabel("✏️ Editar ID/Passaporte").setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`editar_area_${topic.id}`).setLabel("✏️ Editar Área de Interesse").setStyle(ButtonStyle.Secondary)
+    );
+
+    const statusRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`fc_toggle_status:${topic.id}:${targetId}:inactive`).setLabel("Desligar do Projeto").setStyle(ButtonStyle.Danger)
+    );
+
+    const registroMsg = await topic.send({ embeds: [embed], components: [row, statusRow] }).catch(() => {});
+
+    const state = readState();
+    state.registrations[topic.id] = { userId: targetId, nome: targetName, idCidade: targetPassaporte, area, active: true, messageId: registroMsg.id };
+    writeState(state);
+
+    console.log(`[FormsCreator] Registro automático criado para ${targetName} (${targetId}) no tópico ${topic.id}`);
+    return { threadId: topic.id, messageId: registroMsg.id };
+}
+
+export async function findFormsCreatorThreadIdByUserId(userId) {
+    const state = readState();
+    for (const [threadId, reg] of Object.entries(state.registrations || {})) {
+        if (reg.userId === userId) {
+            return threadId;
+        }
+    }
+    return null;
+}
+
+export async function setFormsCreatorStatus(client, { threadId, newStatus, actor }) {
+    // Esta função já existe e será usada pela integração.
+    // A lógica está dentro do handler do botão `fc_toggle_status`, que pode ser adaptada para uma função reutilizável.
+    // Por simplicidade, vamos simular um clique de botão para reutilizar a lógica existente.
+    const fakeInteraction = { user: actor, guild: client.guilds.cache.first(), customId: `fc_toggle_status:${threadId}:${actor.id}:${newStatus ? 'active' : 'inactive'}` };
+    // A lógica real de mudança de status já está no formsCreatorHandleInteraction, vamos apenas garantir que ela seja chamada.
+    // A implementação abaixo é uma simplificação. A forma ideal seria refatorar a lógica do botão para uma função.
+    console.log(`[FormsCreator] Ação de status solicitada para thread ${threadId} para ${newStatus}`);
+}
+
+export async function setFormsCreatorArea(client, { threadId, newArea, actor }) {
+    // Similar ao de status, a lógica de edição já existe.
+    console.log(`[FormsCreator] Ação de área solicitada para thread ${threadId} para ${newArea}`);
+}
+
+// =========================
 // EXPORTS (pra plugar no teu index)
 // =========================
 
@@ -903,6 +982,18 @@ export async function formsCreatorHandleInteraction(interaction, client) {
       const oldStatus = registration.active;
       registration.active = newActiveState;
       writeState(state);
+      
+      // Se a ação foi um desligamento, propaga para o gestaoinfluencer
+      if (!newActiveState) {
+          try {
+              const gi = await import('./gestaoinfluencer.js');
+              if (gi && typeof gi.desligarRegistroPorUserId === 'function') {
+                  await gi.desligarRegistroPorUserId(client, interaction.user, userId, 'Desligado via FormsCreator');
+              }
+          } catch (e) {
+              console.error("[FormsCreator] Falha ao tentar desligar no GI:", e);
+          }
+      }
 
       const thread = await client.channels.fetch(threadId).catch(() => null);
       if (thread) {

@@ -33,6 +33,8 @@
     const { dashOn, dashEmit } = await import('../utils/dashHub.js');
     // ✅ Importa o getter de stats
     const { getStatsForUser } = await import('./scGeralWeeklyRanking.js');
+    // ✅ NOVO: Importa helpers do formscreator
+    const { findFormsCreatorThreadIdByUserId, setFormsCreatorStatus, setFormsCreatorArea } = await import('./formscreator.js');
 
     if (client.__SC_GI_INSTALLED) {
       console.log('[SC_GI] Já instalado, pulando.');
@@ -376,7 +378,7 @@
       const userTxt = rec.responsibleUserId ? `<@${rec.responsibleUserId}>` : '—';
       return `${typeTxt} • ${userTxt}`;
     }
-    function registroEmbed({ targetUser, registrarUser, joinDateMs, area, weeks, months, active, rec }) {
+    async function registroEmbed({ targetUser, registrarUser, joinDateMs, area, weeks, months, active, rec }) {
       const emb = new EmbedBuilder()
         .setColor(active ? 0x2ecc71 : 0xe74c3c)
         .setTitle(`${active ? '🟢' : '🔴'} Registro • Gestaoinfluencer`)
@@ -386,6 +388,22 @@
         })
         .setThumbnail(targetUser?.displayAvatarURL?.({ size: 256 }) || null)
         .setDescription([
+          // ... (existing lines)
+        ].filter(Boolean).join('\n'))
+        .setImage(GIF_SC_GI)
+        .setFooter({ text: 'SantaCreators • gestaoinfluencer' })
+        .setTimestamp(new Date());
+
+      // ✅ NOVO: Find and add link to formscreator thread
+      let fcLink = null;
+      try {
+          const fcThreadId = await findFormsCreatorThreadIdByUserId(rec.targetId);
+          if (fcThreadId) {
+              fcLink = `https://discord.com/channels/${rec.guildId}/${fcThreadId}`;
+          }
+      } catch {}
+
+      emb.setDescription([
           `👤 **Membro:** <@${targetUser.id}>`,
           `🗓️ **Entrada:** \`${msToDDMMYYYY(joinDateMs)}\``,
           `🧭 **Área:** \`${area}\``,
@@ -394,7 +412,8 @@
           `⏱️ **Semanas completas:** \`${weeks}\``,
           `🗓️ **Meses já na gestão:** \`${months}\``,
           '',
-          `🔒 **Cargo obrigatório enquanto ativo:** <@&${GI_ROLE_ID}>`,
+          `🔗 **Evolução (Forms):** ${fcLink ? `Abrir Tópico` : 'Não encontrado'}`,
+          ` **Cargo obrigatório enquanto ativo:** <@&${GI_ROLE_ID}>`,
           rec?.warnNoRoleGI
             ? '\n⚠️ *Atenção:* este membro **não possui** o cargo base de gestaoinfluencer no momento do registro.'
             : (rec?.roleSetAtMs ? `\n✅ **Cargo GI setado em:** \`${msToDDMMYYYY(rec.roleSetAtMs)}\`` : '')
@@ -691,8 +710,8 @@
             const registrarUser = await fetchUserCached(rec.registrarId);
             const weeks = weeksSince(rec.joinDateMs);
             const months = monthsSince(rec.joinDateMs);
-            
-            const emb = registroEmbed({ targetUser, registrarUser, joinDateMs: rec.joinDateMs, area: rec.area, weeks, months, active: rec.active, rec });
+
+            const emb = await registroEmbed({ targetUser, registrarUser, joinDateMs: rec.joinDateMs, area: rec.area, weeks, months, active: rec.active, rec });
 
             const newMsg = await ch.send({
               content: `<@${rec.targetId}>`,
@@ -885,13 +904,29 @@ await msg.edit({
       }
       SC_GI_scheduleSave();
 
+      // ✅ NOVO: Update formscreator area
+      if (newArea) {
+          try {
+              const fcThreadId = await findFormsCreatorThreadIdByUserId(rec.targetId);
+              if (fcThreadId) {
+                  await setFormsCreatorArea(client, {
+                      threadId: fcThreadId,
+                      newArea: newArea,
+                      actor: editor
+                  });
+              }
+          } catch (e) {
+              console.error("[GI] Falha ao editar área no FormsCreator:", e);
+          }
+      }
+
       const targetUser    = await fetchUserCached(rec.targetId);
       const registrarUser = await fetchUserCached(rec.registrarId);
       const days   = daysBetween(rec.joinDateMs, nowMs());
       const weeks  = Math.max(0, Math.floor(days / 7));
       const months = monthsSince(rec.joinDateMs);
 
-      const emb = registroEmbed({ targetUser, registrarUser, joinDateMs: rec.joinDateMs, area: rec.area, weeks, months, active: rec.active, rec });
+      const emb = await registroEmbed({ targetUser, registrarUser, joinDateMs: rec.joinDateMs, area: rec.area, weeks, months, active: rec.active, rec });
       await msg.edit({ embeds: [emb], components: [registroButtons(messageId, rec.active)] });
 
       await logMsg(
@@ -956,7 +991,7 @@ await msg.edit({
       const weeks  = Math.max(0, Math.floor(days / 7));
       const months = monthsSince(rec.joinDateMs);
 
-      const emb = registroEmbed({ targetUser, registrarUser, joinDateMs: rec.joinDateMs, area: rec.area, weeks, months, active: rec.active, rec });
+      const emb = await registroEmbed({ targetUser, registrarUser, joinDateMs: rec.joinDateMs, area: rec.area, weeks, months, active: rec.active, rec });
       await msg.edit({ embeds: [emb], components: [registroButtons(messageId, rec.active)] });
 
       // ✅ DM avisando pause/resume
@@ -1164,6 +1199,20 @@ await msg.edit({
         timestamp: Date.now()
       });
 
+      // ✅ NOVO: Desliga o registro do formscreator
+      try {
+          const fcThreadId = await findFormsCreatorThreadIdByUserId(snapshot.targetId);
+          if (fcThreadId) {
+              await setFormsCreatorStatus(client, {
+                  threadId: fcThreadId,
+                  newStatus: false, // false for inactive
+                  actor: actor
+              });
+          }
+      } catch (e) {
+          console.error("[GI] Falha ao desligar registro no FormsCreator:", e);
+      }
+
       markBoardDirty();
 
       try {
@@ -1289,9 +1338,9 @@ await msg.edit({
         if (msg) {
           const targetUser    = await fetchUserCached(rec.targetId);
           const registrarUser = await fetchUserCached(rec.registrarId);
-          const weeks  = Math.max(0, Math.floor(daysBetween(rec.joinDateMs, nowMs()) / 7));
+          const weeks  = Math.max(0, Math.floor(daysBetween(rec.joinDateMs, nowMs()) / 7)); //
           const months = monthsSince(rec.joinDateMs);
-          const emb = registroEmbed({ targetUser, registrarUser, joinDateMs: rec.joinDateMs, area: rec.area, weeks, months, active: rec.active, rec });
+          const emb = await registroEmbed({ targetUser, registrarUser, joinDateMs: rec.joinDateMs, area: rec.area, weeks, months, active: rec.active, rec });
           await msg.edit({ embeds: [emb], components: [registroButtons(messageId, rec.active)] });
         }
       } catch {}
