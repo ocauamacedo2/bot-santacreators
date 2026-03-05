@@ -505,15 +505,17 @@ async function syncLegacyThreads(client) {
       const reg = state.registrations[thread.id];
       // ✅ REVALIDAÇÃO: Checa se o status do cargo mudou
       const member = await channel.guild.members.fetch(reg.userId).catch(() => null);
-      const hasRole = member && member.roles.cache.has(ROLE_REQUIRED_FOR_ACTIVE);
+      // Se membro existe E tem cargo => ATIVO. Se não existe (saiu) ou não tem cargo => INATIVO.
+      const shouldBeActive = !!(member && member.roles.cache.has(ROLE_REQUIRED_FOR_ACTIVE));
 
       // Se o status no state está diferente da realidade, corrige
-      if (reg.active !== hasRole) {
-        reg.active = hasRole;
+      if (reg.active !== shouldBeActive) {
+        reg.active = shouldBeActive;
         updates++; // Marca que houve uma atualização para salvar no final
-        if (!hasRole) {
+        if (!shouldBeActive) {
             // Opcional: avisar no tópico que foi desligado na sincronização
-            thread.send(`⚠️ **Sistema:** Status atualizado para INATIVO durante a sincronização por falta do cargo obrigatório.`).catch(() => {});
+            const motivo = member ? "falta do cargo obrigatório" : "saiu do servidor";
+            thread.send(`⚠️ **Sistema:** Status atualizado para INATIVO durante a sincronização (${motivo}).`).catch(() => {});
         }
       }
 
@@ -547,7 +549,7 @@ async function syncLegacyThreads(client) {
 
         // ✅ Verifica se tem o cargo obrigatório para definir se está ativo
         const member = await channel.guild.members.fetch(userId).catch(() => null);
-        const hasRole = member && member.roles.cache.has(ROLE_REQUIRED_FOR_ACTIVE);
+        const hasRole = !!(member && member.roles.cache.has(ROLE_REQUIRED_FOR_ACTIVE));
 
         state.registrations[thread.id] = {
           userId, nome, idCidade, area, active: hasRole, messageId: regMsg.id
