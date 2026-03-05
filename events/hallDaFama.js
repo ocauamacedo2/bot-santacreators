@@ -190,10 +190,18 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
       new ActionRowBuilder().addComponents(
         new TextInputBuilder()
           .setCustomId("hf_image")
-          .setLabel("Link da Imagem (Banner/Print)")
+          .setLabel("Link da Imagem 1 (Banner/Print)")
           .setPlaceholder("https://cdn.discordapp.com/...")
           .setStyle(TextInputStyle.Short)
           .setRequired(true)
+      ),
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId("hf_image2")
+          .setLabel("Link da Imagem 2 (Opcional)")
+          .setPlaceholder("https://cdn.discordapp.com/...")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(false)
       )
     );
 
@@ -212,6 +220,7 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
     const eventName = interaction.fields.getTextInputValue("hf_event_name");
     const winnersText = interaction.fields.getTextInputValue("hf_winners");
     const imageUrl = interaction.fields.getTextInputValue("hf_image");
+    const imageUrl2 = interaction.fields.getTextInputValue("hf_image2");
 
     const reqId = `${interaction.user.id}-${Date.now()}`;
     
@@ -220,7 +229,8 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
       cityKey,
       eventName,
       winnersText,
-      imageUrl
+      imageUrl,
+      imageUrl2
     };
     saveState(state);
 
@@ -236,7 +246,8 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
       .addFields(
         { name: "Evento", value: eventName },
         { name: "Vencedores", value: winnersText },
-        { name: "Imagem", value: imageUrl }
+        { name: "Imagem 1", value: imageUrl },
+        { name: "Imagem 2", value: imageUrl2 || "—" }
       )
       .setImage(imageUrl)
       .setTimestamp();
@@ -295,7 +306,7 @@ Mostraram habilidade, esperteza e sangue nos olhos! <:__:1357520048318709840>
 
 @everyone @here <@&${ROLE_CIDADAO}> <@&${ROLE_LIDERES}> <@&${cityData.roleId}>
 
-${data.imageUrl}`;
+${data.imageUrl}${data.imageUrl2 ? `\n${data.imageUrl2}` : ''}`;
 
     const sentMsg = await hallChannel.send({ content: finalMessage });
     
