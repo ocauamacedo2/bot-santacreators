@@ -47,9 +47,11 @@ async function connectToVoice(client) {
     if (connection) {
       // Se estiver no canal certo mas conectando/sinalizando, espera um pouco (não mata o processo)
       if (connection.joinConfig.channelId === channel.id && 
-          (connection.state.status === VoiceConnectionStatus.Signalling || connection.state.status === VoiceConnectionStatus.Connecting)) {
+          (connection.state.status === VoiceConnectionStatus.Signalling || 
+           connection.state.status === VoiceConnectionStatus.Connecting || 
+           connection.state.status === VoiceConnectionStatus.Disconnected)) {
           try {
-             await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
+             await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
              isConnecting = false;
              return;
           } catch {}
