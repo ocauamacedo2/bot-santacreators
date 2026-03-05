@@ -119,10 +119,10 @@ export function iniciarAutoJoin(client) {
 
     // Caso 1: Bot desconectado
     if (oldState.channelId && !newState.channelId) {
-      warn("Bot caiu da call.");
+      // warn("Bot caiu da call."); // Silenciado para evitar flood no console
       await checkPunishment(oldState.guild, client.user.id);
       // Tenta reconectar rápido
-      await wait(2000);
+      await wait(5000); // Aumentado para 5s para evitar loop rápido
       connectToVoice(client);
     }
     // Caso 2: Bot movido para canal errado
