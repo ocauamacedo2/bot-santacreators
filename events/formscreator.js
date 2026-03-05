@@ -427,11 +427,28 @@ async function syncLegacyThreads(client) {
   const activeThreads = await channel.threads.fetchActive().catch(() => null);
   if (activeThreads?.threads) activeThreads.threads.forEach(t => allThreads.push(t));
 
-  // 2. Threads Arquivadas (importante para registros antigos)
-  try {
-    const archived = await channel.threads.fetchArchived({ limit: 100 }).catch(() => null);
-    if (archived?.threads) archived.threads.forEach(t => allThreads.push(t));
-  } catch (e) { console.error("[FormsCreator] Erro ao buscar arquivadas:", e); }
+  // 2. Threads Arquivadas (COM PAGINAÇÃO para pegar TODAS)
+  let lastId = null;
+  while (true) {
+    try {
+      const options = { limit: 100 };
+      if (lastId) options.before = lastId;
+      
+      const archived = await channel.threads.fetchArchived(options).catch(() => null);
+      if (!archived || !archived.threads.size) break;
+      
+      archived.threads.forEach(t => allThreads.push(t));
+      lastId = archived.threads.last().id;
+      
+      if (archived.threads.size < 100) break;
+      await new Promise(r => setTimeout(r, 1000)); // Pausa leve pra não travar
+    } catch (e) {
+      console.error("[FormsCreator] Erro ao buscar página de arquivadas:", e);
+      break;
+    }
+  }
+
+  console.log(`[FormsCreator] Varrendo ${allThreads.length} threads (ativas + arquivadas)...`);
 
   let updates = 0;
   for (const thread of allThreads) {
@@ -439,7 +456,11 @@ async function syncLegacyThreads(client) {
       const reg = state.registrations[thread.id];
       try {
         const msg = await thread.messages.fetch(reg.messageId).catch(() => null);
-        if (msg) await ensureButtonsOnMessage(msg, reg.userId, reg.active);
+        if (msg) {
+            // ✅ Traz o tópico de volta à vida (move para ativos)
+            if (thread.archived) await thread.setArchived(false).catch(() => {});
+            await ensureButtonsOnMessage(msg, reg.userId, reg.active);
+        }
       } catch {}
       continue;
     }
@@ -465,7 +486,14 @@ async function syncLegacyThreads(client) {
           userId, nome, idCidade, area, active: true, messageId: regMsg.id
         };
         updates++;
+        
+        // ✅ Traz o tópico de volta à vida (move para ativos)
+        if (thread.archived) await thread.setArchived(false).catch(() => {});
+        
         await ensureButtonsOnMessage(regMsg, userId, true);
+        
+        // ✅ Delay para evitar rate limit do Discord (importante quando tem muitos)
+        await new Promise(r => setTimeout(r, 1500));
       }
     } catch (e) {
       console.error(`[FormsCreator] Erro ao sync thread ${thread.name}:`, e);
