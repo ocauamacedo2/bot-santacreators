@@ -252,24 +252,3 @@ export function iniciarAutoJoin(client) {
     }
   });
 }
-
-export function iniciarAutoJoin(client) {
-  if (client.__autoJoinStarted) return;
-  client.__autoJoinStarted = true;
-
-  log("Módulo carregado (anti-flood + cooldown).");
-
-  const run = async () => {
-    log("Client READY — iniciando autojoin...");
-    await ensureConnection(client, "startup");
-
-    // interval bem mais lento (não precisa bater 3/3 min)
-    client.__autojoinEnsureInterval && clearInterval(client.__autojoinEnsureInterval);
-    client.__autojoinEnsureInterval = setInterval(() => {
-      ensureConnection(client, "interval").catch(() => {});
-    }, ENSURE_INTERVAL);
-  };
-
-  if (client.isReady()) run();
-  else client.once(Events.ClientReady, run);
-}
