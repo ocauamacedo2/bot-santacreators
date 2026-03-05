@@ -301,7 +301,7 @@ ${data.imageUrl}`;
     
     // ✅ Mais emojis
     try {
-      const emojis = ["💜", "🔥", "🚀", "👏", "🎉", "🤩", "🤯", "🏆", "👑", "💸"];
+      const emojis = ["💜", "🔥", "🚀", "👏", "🎉", "🤩", "🤯", "🏆", "👑", "💸", "👀", "✨", "💯", "✅", "📸", "💎", "⚡", "💣", "🫡", "🤝"];
       for (const e of emojis) await sentMsg.react(e).catch(() => {});
     } catch {}
 
