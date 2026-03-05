@@ -364,7 +364,14 @@ async function runReminderJob(client) {
             );
 
             await msg.edit({ embeds: [oldEmbed], components: [rowEdit, newStatusRow] });
-            await thread.send(`⚠️ **Sistema:** Membro desligado automaticamente do projeto por não possuir o cargo obrigatório <@&${ROLE_REQUIRED_FOR_ACTIVE}>.`);
+            
+            // ✅ Anti-spam: verifica se já avisou
+            const recent = await thread.messages.fetch({ limit: 5 }).catch(() => null);
+            const alreadyWarned = recent && recent.some(m => m.author.id === client.user.id && m.content.includes("Membro desligado automaticamente"));
+            
+            if (!alreadyWarned) {
+                await thread.send(`⚠️ **Sistema:** Membro desligado automaticamente do projeto por não possuir o cargo obrigatório <@&${ROLE_REQUIRED_FOR_ACTIVE}>.`);
+            }
           }
         }
       } catch (e) { console.error(`[FormsCreator] Erro ao auto-desligar ${reg.userId}:`, e); }
@@ -430,7 +437,15 @@ async function runReminderJob(client) {
   }
 }
 
+let isSyncing = false;
+
 async function syncLegacyThreads(client) {
+  if (isSyncing) {
+    console.log("[FormsCreator] Sincronização já em andamento. Pulando.");
+    return;
+  }
+  isSyncing = true;
+  try {
   const state = readState();
   const channel = await client.channels.fetch(CREATOR_FORM_CHANNEL_ID).catch(() => null);
   if (!channel) return;
@@ -505,9 +520,14 @@ async function syncLegacyThreads(client) {
       const idCidade = embed.fields.find(f => f.name.includes('ID/Passaporte'))?.value || '?';
       const area = embed.fields.find(f => f.name.includes('Área de Interesse'))?.value || '?';
       
-      // Cria como ativo por padrão, a verificação abaixo corrige se precisar
-      reg = { userId, nome, idCidade, area, active: true, messageId: msg.id };
+      // ✅ FIX: Verifica cargo JÁ na criação para não nascer errado (evita flip-flop)
+      const member = await channel.guild.members.fetch(userId).catch(() => null);
+      const hasRole = member && member.roles.cache.has(ROLE_REQUIRED_FOR_ACTIVE);
+
+      reg = { userId, nome, idCidade, area, active: !!hasRole, messageId: msg.id };
       state.registrations[thread.id] = reg;
+      // Salva imediatamente para evitar perda em crash/restart
+      writeState(state);
       updates++;
     }
 
@@ -524,7 +544,14 @@ async function syncLegacyThreads(client) {
         updates++;
         if (!shouldBeActive) {
             const motivo = member ? "falta do cargo obrigatório" : "saiu do servidor";
-            thread.send(`⚠️ **Sistema:** Status atualizado para INATIVO durante a sincronização (${motivo}).`).catch(() => {});
+            
+            // ✅ Anti-spam: verifica se já avisou nas últimas 10 msgs
+            const recent = await thread.messages.fetch({ limit: 10 }).catch(() => null);
+            const alreadyWarned = recent && recent.some(m => m.author.id === client.user.id && m.content.includes("Status atualizado para INATIVO"));
+
+            if (!alreadyWarned) {
+                thread.send(`⚠️ **Sistema:** Status atualizado para INATIVO durante a sincronização (${motivo}).`).catch(() => {});
+            }
         }
       }
 
@@ -577,6 +604,9 @@ async function syncLegacyThreads(client) {
   if (updates > 0) {
     writeState(state);
     console.log(`[FormsCreator] Sincronizados ${updates} registros antigos.`);
+  }
+  } finally {
+    isSyncing = false;
   }
 }
 
