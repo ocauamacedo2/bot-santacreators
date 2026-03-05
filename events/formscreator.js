@@ -503,12 +503,26 @@ async function syncLegacyThreads(client) {
   for (const thread of allThreads) {
     if (state.registrations[thread.id]) {
       const reg = state.registrations[thread.id];
+      // ✅ REVALIDAÇÃO: Checa se o status do cargo mudou
+      const member = await channel.guild.members.fetch(reg.userId).catch(() => null);
+      const hasRole = member && member.roles.cache.has(ROLE_REQUIRED_FOR_ACTIVE);
+
+      // Se o status no state está diferente da realidade, corrige
+      if (reg.active !== hasRole) {
+        reg.active = hasRole;
+        updates++; // Marca que houve uma atualização para salvar no final
+        if (!hasRole) {
+            // Opcional: avisar no tópico que foi desligado na sincronização
+            thread.send(`⚠️ **Sistema:** Status atualizado para INATIVO durante a sincronização por falta do cargo obrigatório.`).catch(() => {});
+        }
+      }
+
       try {
         const msg = await thread.messages.fetch(reg.messageId).catch(() => null);
         if (msg) {
             // ✅ Traz o tópico de volta à vida (move para ativos)
             if (thread.archived) await thread.setArchived(false).catch(() => {});
-            await ensureButtonsOnMessage(msg, reg.userId, reg.active);
+            await ensureButtonsOnMessage(msg, reg.userId, reg.active); // Usa o status atualizado
         }
       } catch {}
       continue;
