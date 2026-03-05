@@ -340,11 +340,11 @@ export async function eventosDiariosHandleInteraction(interaction, client) {
     const finalMessage = 
 `# 🎉 :  **Santa Creators : ${data.title}** 🎉 
 
-${data.description}
+${data.description.trim()}
 
-${mentions}
+${data.imageUrl}
 
-${data.imageUrl}`;
+${mentions}`;
 
     const sentMsg = await eventChannel.send({ 
       content: finalMessage,
