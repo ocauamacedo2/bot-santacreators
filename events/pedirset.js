@@ -15,7 +15,11 @@ import {
 import { getChannel } from '../utils/cacheDiscord.js';
 import { onceIn } from '../utils/onceIn.js';
 import { dashEmit } from '../utils/dashHub.js';
-import { createFormsCreatorRecord } from './formscreator.js';
+import {
+  createFormsCreatorRecord,
+  findFormsCreatorThreadIdByUserId,
+  setFormsCreatorStatus
+} from './formscreator.js';
 
 // ---------- PEDIR SET ----------
 ///!pedirset
@@ -456,18 +460,35 @@ export async function pedirSetHandleInteraction(interaction, client) {
       timestamp: Date.now()
     });
 
-    // ✅ NOVO: Cria registro no FormsCreator
+    // ✅ NOVO: Reativa ou cria registro no FormsCreator
     try {
-      await createFormsCreatorRecord(client, {
-        guildId: interaction.guildId,
-        creatorId: interaction.user.id, // O aprovador
-        targetId: userId,               // O novo membro
-        targetName: nome,
-        targetPassaporte: passaporte,
-        area: "A Definir"               // Conforme solicitado
-      });
+      const existingThreadId = await findFormsCreatorThreadIdByUserId(userId);
+
+      if (existingThreadId) {
+        // Se já existe, apenas reativa o status
+        await setFormsCreatorStatus(client, {
+          threadId: existingThreadId,
+          newStatus: true,
+          actor: interaction.user,
+        });
+        console.log(`[PedirSet] FormsCreator reativado para o usuário ${userId}.`);
+      } else {
+        // Se não existe, cria um novo
+        await createFormsCreatorRecord(client, {
+          guildId: interaction.guildId,
+          creatorId: interaction.user.id, // O aprovador
+          targetId: userId,               // O novo membro
+          targetName: nome,
+          targetPassaporte: passaporte,
+          area: "A Definir",              // Conforme solicitado
+        });
+        console.log(`[PedirSet] Novo FormsCreator criado para o usuário ${userId}.`);
+      }
     } catch (e) {
-      console.error("[PedirSet] Falha ao criar registro no FormsCreator:", e);
+      console.error("[PedirSet] Falha ao reativar/criar registro no FormsCreator:", e);
+      try {
+        await interaction.followUp({ content: `⚠️ Ocorreu um erro com o FormsCreator: ${e.message}`, ephemeral: true });
+      } catch {}
     }
 
     const baseEmbed = interaction.message.embeds?.[0]

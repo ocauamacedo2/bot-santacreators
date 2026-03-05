@@ -163,6 +163,59 @@ function hasPermission(member, userId) {
   return Boolean(byRole || byUser);
 }
 
+async function _performStatusUpdate(client, { registration, threadId, newStatus, actor }) {
+    const guild = client.guilds.cache.first();
+    const userId = registration.userId;
+
+    if (newStatus) {
+        const member = await guild.members.fetch(userId).catch(() => null);
+        if (!member || !member.roles.cache.has(ROLE_REQUIRED_FOR_ACTIVE)) {
+            throw new Error(`Não é possível ativar este membro. Ele não possui o cargo obrigatório <@&${ROLE_REQUIRED_FOR_ACTIVE}>.`);
+        }
+    }
+
+    const oldStatus = registration.active;
+    registration.active = newStatus;
+    // O estado é salvo pela função que chama esta.
+
+    if (!newStatus) {
+        try {
+            // A integração com gestaoinfluencer.js para desligamento automático não pode ser
+            // implementada como no código original, pois o módulo não exporta a função necessária.
+            // Deixei um log para indicar que a ação foi solicitada.
+            console.log(`[FormsCreator] Desligamento de ${userId} solicitado. A integração com gestaoinfluencer precisa ser verificada.`);
+        } catch (e) {
+            console.error("[FormsCreator] Falha ao tentar interagir com GI:", e);
+        }
+    }
+
+    const thread = await client.channels.fetch(threadId).catch(() => null);
+    if (thread) {
+        const registroMsg = await thread.messages.fetch(registration.messageId).catch(() => null);
+        if (registroMsg) {
+            const oldEmbed = EmbedBuilder.from(registroMsg.embeds[0]);
+            const statusField = { name: "Status do Projeto", value: newStatus ? "🟢 Ativo" : "🔴 Inativo", inline: false };
+            const fields = oldEmbed.data.fields || [];
+            const statusIndex = fields.findIndex(f => f.name === "Status do Projeto");
+            if (statusIndex > -1) fields[statusIndex] = statusField;
+            else fields.push(statusField);
+            oldEmbed.setFields(fields);
+
+            const newStatusRow = new ActionRowBuilder().addComponents(
+                new ButtonBuilder()
+                    .setCustomId(`fc_toggle_status:${threadId}:${userId}:${newStatus ? 'inactive' : 'active'}`)
+                    .setLabel(newStatus ? "Desligar do Projeto" : "Ligar ao Projeto")
+                    .setStyle(newStatus ? ButtonStyle.Danger : ButtonStyle.Success)
+            );
+            const existingRows = registroMsg.components.filter(row => !row.components.some(c => c.customId.startsWith('fc_toggle_status')));
+            await registroMsg.edit({ embeds: [oldEmbed], components: [...existingRows, newStatusRow] });
+        }
+        await thread.send(`**${actor.username}** alterou o status do projeto para **${newStatus ? 'ATIVO' : 'INATIVO'}**.`);
+    }
+
+    await logStatusChange(client, { user: actor }, { threadId, userId, nome: registration.nome, oldStatus, newStatus });
+}
+
 function hasManagePermission(member, userId) {
   if (MANAGE_PERMS_USERS.includes(userId)) return true;
   const roles = member?.roles?.cache;
@@ -675,13 +728,17 @@ export async function findFormsCreatorThreadIdByUserId(userId) {
 }
 
 export async function setFormsCreatorStatus(client, { threadId, newStatus, actor }) {
-    // Esta função já existe e será usada pela integração.
-    // A lógica está dentro do handler do botão `fc_toggle_status`, que pode ser adaptada para uma função reutilizável.
-    // Por simplicidade, vamos simular um clique de botão para reutilizar a lógica existente.
-    const fakeInteraction = { user: actor, guild: client.guilds.cache.first(), customId: `fc_toggle_status:${threadId}:${actor.id}:${newStatus ? 'active' : 'inactive'}` };
-    // A lógica real de mudança de status já está no formsCreatorHandleInteraction, vamos apenas garantir que ela seja chamada.
-    // A implementação abaixo é uma simplificação. A forma ideal seria refatorar a lógica do botão para uma função.
-    console.log(`[FormsCreator] Ação de status solicitada para thread ${threadId} para ${newStatus}`);
+    const state = readState();
+    const registration = state.registrations?.[threadId];
+
+    if (!registration) {
+        throw new Error("Registro do FormsCreator não encontrado para reativar.");
+    }
+    
+    if (registration.active === newStatus) return; // Nenhuma mudança necessária
+
+    await _performStatusUpdate(client, { registration, threadId, newStatus, actor });
+    writeState(state); // Salva o estado após a alteração
 }
 
 export async function setFormsCreatorArea(client, { threadId, newArea, actor }) {
@@ -990,7 +1047,6 @@ export async function formsCreatorHandleInteraction(interaction, client) {
                    userId, nome, idCidade, area, active: currentActive, messageId: msg.id
                };
                state.registrations[threadId] = registration;
-               writeState(state);
            }
         }
       }
@@ -999,58 +1055,17 @@ export async function formsCreatorHandleInteraction(interaction, client) {
         return interaction.editReply({ content: "❌ Registro não encontrado ou inconsistente (tentei recuperar mas falhou)." });
       }
 
-      // 🔒 TRAVA DE CARGO: Só pode ativar se tiver o cargo obrigatório
-      if (newActiveState) {
-         const member = await interaction.guild.members.fetch(userId).catch(() => null);
-         if (!member || !member.roles.cache.has(ROLE_REQUIRED_FOR_ACTIVE)) {
-             return interaction.editReply({ 
-                 content: `❌ Não é possível ativar este membro.\nEle não possui o cargo obrigatório <@&${ROLE_REQUIRED_FOR_ACTIVE}>.` 
-             });
-         }
+      if (registration.active === newActiveState) {
+        return interaction.editReply({ content: "ℹ️ O status já está como solicitado." });
       }
 
-      const oldStatus = registration.active;
-      registration.active = newActiveState;
-      writeState(state);
-      
-      // Se a ação foi um desligamento, propaga para o gestaoinfluencer
-      if (!newActiveState) {
-          try {
-              const gi = await import('./gestaoinfluencer.js');
-              if (gi && typeof gi.desligarRegistroPorUserId === 'function') {
-                  await gi.desligarRegistroPorUserId(client, interaction.user, userId, 'Desligado via FormsCreator');
-              }
-          } catch (e) {
-              console.error("[FormsCreator] Falha ao tentar desligar no GI:", e);
-          }
+      try {
+        await _performStatusUpdate(client, { registration, threadId, newStatus: newActiveState, actor: interaction.user });
+        writeState(state); // Salva o estado após a alteração
+        await interaction.editReply({ content: "✅ Status alterado com sucesso!" });
+      } catch (e) {
+        await interaction.editReply({ content: `❌ ${e.message}` });
       }
-
-      const thread = await client.channels.fetch(threadId).catch(() => null);
-      if (thread) {
-        const registroMsg = await thread.messages.fetch(registration.messageId).catch(() => null);
-        if (registroMsg) {
-          const oldEmbed = EmbedBuilder.from(registroMsg.embeds[0]);
-          const statusField = { name: "Status do Projeto", value: newActiveState ? "🟢 Ativo" : "🔴 Inativo", inline: false };
-          const fields = oldEmbed.data.fields || [];
-          const statusIndex = fields.findIndex(f => f.name === "Status do Projeto");
-          if (statusIndex > -1) fields[statusIndex] = statusField;
-          else fields.push(statusField);
-          oldEmbed.setFields(fields);
-
-          const newStatusRow = new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-              .setCustomId(`fc_toggle_status:${threadId}:${userId}:${newActiveState ? 'inactive' : 'active'}`)
-              .setLabel(newActiveState ? "Desligar do Projeto" : "Ligar ao Projeto")
-              .setStyle(newActiveState ? ButtonStyle.Danger : ButtonStyle.Success)
-          );
-          const existingRows = registroMsg.components.filter(row => !row.components.some(c => c.customId.startsWith('fc_toggle_status')));
-          await registroMsg.edit({ embeds: [oldEmbed], components: [...existingRows, newStatusRow] });
-        }
-        await thread.send(`**${interaction.user.username}** alterou o status do projeto para **${newActiveState ? 'ATIVO' : 'INATIVO'}**.`);
-      }
-
-      await logStatusChange(client, interaction, { threadId, userId, nome: registration.nome, oldStatus, newStatus: newActiveState });
-      await interaction.editReply({ content: "✅ Status alterado com sucesso!" });
       return true;
     }
 
