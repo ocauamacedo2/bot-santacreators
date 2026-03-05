@@ -336,21 +336,26 @@ export async function eventosDiariosHandleInteraction(interaction, client) {
 
     const mentions = `@everyone @here <@&${ROLE_CIDADAO}> <@&${ROLE_LIDERES}> <@&${cityData.roleId}>`;
 
-    // ✅ ALTERAÇÃO: Volta a ser mensagem de texto, mas com 'split' para evitar erro de limite
-    const finalMessage = 
+    // ✅ CORREÇÃO: Dividir o envio em partes para evitar o erro de 2000 caracteres.
+    // Parte 1: Título e Descrição (a parte que pode ser longa)
+    const mainContent =
 `# 🎉 :  **Santa Creators : ${data.title}** 🎉 
 
-${data.description.trim()}
+${data.description.trim()}`;
 
-${data.imageUrl}
-
-${mentions}`;
-
-    const sentMsg = await eventChannel.send({ 
-      content: finalMessage,
-      split: true // <-- A mágica acontece aqui!
+    // Envia a parte principal, usando 'split' para quebrar a descrição se for muito longa.
+    await eventChannel.send({
+      content: mainContent,
+      split: true, // Garante que a descrição seja dividida se necessário.
+      allowedMentions: { parse: [] } // Evita menções acidentais na descrição
     });
-    
+
+    // Parte 2: Imagem e Menções (enviadas em uma mensagem separada)
+    const sentMsg = await eventChannel.send({
+      content: `${data.imageUrl}\n\n${mentions}`,
+      allowedMentions: { parse: ["everyone", "roles"] } // Permite @everyone e @cargos aqui
+    });
+
     // ✅ Mais emojis
     try {
       const emojis = ["💜", "🔥", "🚀", "👏", "🎉", "🤩", "🤯", "🏆", "👑", "💸"];
