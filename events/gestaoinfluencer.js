@@ -1206,11 +1206,13 @@ await msg.edit({
       try {
           if (typeof findFormsCreatorThreadIdByUserId === 'function' && typeof setFormsCreatorStatus === 'function') {
               const fcThreadId = await findFormsCreatorThreadIdByUserId(snapshot.targetId).catch(() => null);
-              await setFormsCreatorStatus(client, {
-                  threadId: fcThreadId,
-                  newStatus: false, // false for inactive
-                  actor: actor
-              });
+              if (fcThreadId) {
+                  await setFormsCreatorStatus(client, {
+                      threadId: fcThreadId,
+                      newStatus: false, // false for inactive
+                      actor: actor
+                  });
+              }
           }
       } catch (e) {
           console.error("[GI] Falha ao desligar registro no FormsCreator:", e);
