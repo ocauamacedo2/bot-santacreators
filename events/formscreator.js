@@ -92,6 +92,9 @@ const EXCLUDE_FEEDBACK_ROLES = [
 // ✅ Cargo alvo dos feedbacks
 const ROLE_GESTAOINFLUENCER = "1371733765243670538";
 
+// ✅ Cargo OBRIGATÓRIO para estar ativo no projeto
+const ROLE_REQUIRED_FOR_ACTIVE = "1352275728476930099";
+
 // =========================
 // PERSISTÊNCIA
 // =========================
@@ -323,6 +326,52 @@ async function runReminderJob(client) {
   const now = new Date();
   const days = diffDays(state.lastPublicReminderAt, now);
 
+  // 🔄 AUTO-DESLIGAMENTO (Check de cargo obrigatório)
+  let stateChanged = false;
+  for (const [threadId, reg] of Object.entries(state.registrations)) {
+    if (!reg.active) continue;
+
+    const member = await guild.members.fetch(reg.userId).catch(() => null);
+    if (!member || !member.roles.cache.has(ROLE_REQUIRED_FOR_ACTIVE)) {
+      // Desliga automaticamente
+      reg.active = false;
+      stateChanged = true;
+
+      try {
+        const thread = await guild.channels.fetch(threadId).catch(() => null);
+        if (thread) {
+          const msg = await thread.messages.fetch(reg.messageId).catch(() => null);
+          if (msg) {
+            const oldEmbed = EmbedBuilder.from(msg.embeds[0]);
+            const statusField = { name: "Status do Projeto", value: "🔴 Inativo (Sem cargo obrigatório)", inline: false };
+            
+            const fields = oldEmbed.data.fields || [];
+            const statusIndex = fields.findIndex(f => f.name === "Status do Projeto");
+            if (statusIndex > -1) fields[statusIndex] = statusField;
+            else fields.push(statusField);
+            oldEmbed.setFields(fields);
+
+            const rowEdit = new ActionRowBuilder().addComponents(
+              new ButtonBuilder().setCustomId(`editar_id_${threadId}`).setLabel("✏️ Editar ID/Passaporte").setStyle(ButtonStyle.Secondary),
+              new ButtonBuilder().setCustomId(`editar_area_${threadId}`).setLabel("✏️ Editar Área de Interesse").setStyle(ButtonStyle.Secondary)
+            );
+
+            const newStatusRow = new ActionRowBuilder().addComponents(
+              new ButtonBuilder()
+                .setCustomId(`fc_toggle_status:${threadId}:${reg.userId}:active`)
+                .setLabel("Ligar ao Projeto")
+                .setStyle(ButtonStyle.Success)
+            );
+
+            await msg.edit({ embeds: [oldEmbed], components: [rowEdit, newStatusRow] });
+            await thread.send(`⚠️ **Sistema:** Membro desligado automaticamente do projeto por não possuir o cargo obrigatório <@&${ROLE_REQUIRED_FOR_ACTIVE}>.`);
+          }
+        }
+      } catch (e) { console.error(`[FormsCreator] Erro ao auto-desligar ${reg.userId}:`, e); }
+    }
+  }
+  if (stateChanged) writeState(state);
+
   // 1. Pega membros ativos do projeto e que não estão na lista de exclusão
   const activeRegistrations = Object.values(state.registrations || {}).filter(r => r.active);
   const membersToEvaluate = [];
@@ -482,15 +531,19 @@ async function syncLegacyThreads(client) {
         const idCidade = embed.fields.find(f => f.name.includes('ID/Passaporte'))?.value || '?';
         const area = embed.fields.find(f => f.name.includes('Área de Interesse'))?.value || '?';
 
+        // ✅ Verifica se tem o cargo obrigatório para definir se está ativo
+        const member = await channel.guild.members.fetch(userId).catch(() => null);
+        const hasRole = member && member.roles.cache.has(ROLE_REQUIRED_FOR_ACTIVE);
+
         state.registrations[thread.id] = {
-          userId, nome, idCidade, area, active: true, messageId: regMsg.id
+          userId, nome, idCidade, area, active: hasRole, messageId: regMsg.id
         };
         updates++;
         
         // ✅ Traz o tópico de volta à vida (move para ativos)
         if (thread.archived) await thread.setArchived(false).catch(() => {});
         
-        await ensureButtonsOnMessage(regMsg, userId, true);
+        await ensureButtonsOnMessage(regMsg, userId, hasRole);
         
         // ✅ Delay para evitar rate limit do Discord (importante quando tem muitos)
         await new Promise(r => setTimeout(r, 1500));
@@ -722,6 +775,14 @@ export async function formsCreatorHandleInteraction(interaction, client) {
           .setStyle(ButtonStyle.Danger)
       );
 
+      // ✅ Verifica cargo obrigatório na criação (se não tiver, já nasce desligado visualmente ou avisa)
+      // Mas como é criação, assumimos que vai ser ativo, o job diário corrige se faltar cargo.
+      // Ou podemos forçar aqui:
+      if (!membro.roles.cache.has(ROLE_REQUIRED_FOR_ACTIVE)) {
+         // Opcional: avisar no tópico
+         setTimeout(() => topic.send(`⚠️ **Atenção:** Este membro não possui o cargo <@&${ROLE_REQUIRED_FOR_ACTIVE}>. Ele será desligado automaticamente no próximo ciclo se não receber o cargo.`).catch(()=>{}), 2000);
+      }
+
       const registroMsg = await topic.send({ embeds: [embed], components: [row, statusRow] }).catch(() => {});
 
       // ✅ Salva no estado
@@ -777,10 +838,45 @@ export async function formsCreatorHandleInteraction(interaction, client) {
       const newActiveState = targetStatusStr === 'active';
 
       const state = readState();
-      const registration = state.registrations?.[threadId];
+      let registration = state.registrations?.[threadId];
+
+      // 🛠️ AUTO-RECOVERY: Se não achou no state, tenta reconstruir da mensagem
+      if (!registration) {
+        const msg = interaction.message;
+        if (msg && msg.embeds.length > 0) {
+           const embed = msg.embeds[0];
+           const descId = embed.description?.replace(/[<@>]/g, '');
+           
+           if (descId === userId) {
+               const nome = embed.title?.replace('👤 ', '') || 'Membro';
+               const idCidade = embed.fields.find(f => f.name.includes('ID/Passaporte'))?.value || '?';
+               const area = embed.fields.find(f => f.name.includes('Área de Interesse'))?.value || '?';
+               
+               // Assume estado atual baseado no botão que foi clicado
+               const statusField = embed.fields.find(f => f.name === "Status do Projeto");
+               const currentActive = statusField ? statusField.value.includes("Ativo") : !newActiveState; 
+
+               registration = {
+                   userId, nome, idCidade, area, active: currentActive, messageId: msg.id
+               };
+               state.registrations[threadId] = registration;
+               writeState(state);
+           }
+        }
+      }
 
       if (!registration || registration.userId !== userId) {
-        return interaction.editReply({ content: "❌ Registro não encontrado ou inconsistente." });
+        return interaction.editReply({ content: "❌ Registro não encontrado ou inconsistente (tentei recuperar mas falhou)." });
+      }
+
+      // 🔒 TRAVA DE CARGO: Só pode ativar se tiver o cargo obrigatório
+      if (newActiveState) {
+         const member = await interaction.guild.members.fetch(userId).catch(() => null);
+         if (!member || !member.roles.cache.has(ROLE_REQUIRED_FOR_ACTIVE)) {
+             return interaction.editReply({ 
+                 content: `❌ Não é possível ativar este membro.\nEle não possui o cargo obrigatório <@&${ROLE_REQUIRED_FOR_ACTIVE}>.` 
+             });
+         }
       }
 
       const oldStatus = registration.active;
