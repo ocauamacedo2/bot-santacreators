@@ -418,6 +418,7 @@ try {
           `🗓️ **Meses já na gestão:** \`${months}\``,
           '',
           `🔗 **Evolução (Forms):** ${fcLink ? `Abrir Tópico` : 'Não encontrado'}`,
+
           `📌 **Status:** ${active ? 'Ativo' : 'Pausado'}`,
           `🔒 **Cargo obrigatório enquanto ativo:** <@&${GI_ROLE_ID}>`,
           rec?.warnNoRoleGI
