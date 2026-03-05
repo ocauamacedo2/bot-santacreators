@@ -817,7 +817,7 @@ try {
         passaporte: options.passaporte || null // ✅ Salva o ID se vier do pedirset
       };
 
-      const emb = registroEmbed({
+      const emb = await registroEmbed({
   targetUser,
   registrarUser: registrar,
   joinDateMs: joinMs,
@@ -1995,7 +1995,7 @@ await msg.edit({
               const weeks = weeksSince(rec.joinDateMs);
               const months = monthsSince(rec.joinDateMs);
 
-              const emb = registroEmbed({ targetUser, registrarUser, joinDateMs: rec.joinDateMs, area: rec.area, weeks, months, active: rec.active, rec });
+              const emb = await registroEmbed({ targetUser, registrarUser, joinDateMs: rec.joinDateMs, area: rec.area, weeks, months, active: rec.active, rec });
 
               const newMsg = await ch.send({
                 content: `<@${rec.targetId}>`,
