@@ -7,248 +7,134 @@ import {
 } from "@discordjs/voice";
 
 const VOICE_CHANNEL_ID_PADRAO = "1415386915137388664";
+const PUNISH_DAYS = 7;
 
-// Configurações de tempo e comportamento
-const CONFIG = {
-  CONNECT_TIMEOUT: 30_000,       // Tempo máx para conectar (30s)
-  RECONNECT_DELAY: 15_000,       // Tempo de espera antes de tentar reconectar (15s)
-  HEALTH_CHECK_INTERVAL: 60_000, // Verifica status a cada 1 min
-  PUNISH_DAYS: 7,                // Dias de castigo para quem desconectar o bot
-};
+// Variável para evitar múltiplas tentativas simultâneas
+let isConnecting = false;
 
-// Logs controlados
+// Logs simples
 const log = (...a) => console.log("🎧 [AutoJoin]", ...a);
 const warn = (...a) => console.warn("⚠️ [AutoJoin]", ...a);
-const err = (...a) => console.error("❌ [AutoJoin]", ...a);
 
-// Estado local
-const STATE = {
-  isConnecting: false,
-  reconnectTimer: null,
-};
+// Função de espera
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// ============================================================================
-// HELPERS
-// ============================================================================
-
-function wait(ms) {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-async function fetchVoiceChannel(client) {
-  try {
-    const channel = await client.channels.fetch(VOICE_CHANNEL_ID_PADRAO).catch(() => null);
-    if (!channel) return null;
-    if (channel.type !== ChannelType.GuildVoice) return null;
-    return channel;
-  } catch {
-    return null;
-  }
-}
-
-// ============================================================================
-// PUNIÇÃO (Audit Log)
-// ============================================================================
-
-async function checkAndPunishDisconnect(guild, botId) {
-  try {
-    const me = guild.members.me;
-    if (!me?.permissions.has(PermissionFlagsBits.ViewAuditLog)) return;
-
-    // Busca logs recentes de desconexão
-    const logs = await guild.fetchAuditLogs({
-      type: AuditLogEvent.MemberDisconnect,
-      limit: 3,
-    }).catch(() => null);
-
-    if (!logs) return;
-
-    const now = Date.now();
-    // Procura um log onde o alvo foi o bot, criado nos últimos 15 segundos
-    const entry = logs.entries.find(
-      (e) => e.target?.id === botId && now - e.createdTimestamp < 15_000
-    );
-
-    if (entry && entry.executor) {
-      const executor = await guild.members.fetch(entry.executor.id).catch(() => null);
-      if (executor && !executor.user.bot) {
-        // Aplica castigo
-        await executor.timeout(
-          CONFIG.PUNISH_DAYS * 24 * 60 * 60 * 1000,
-          "Desconectou o bot de música/autojoin."
-        ).catch(() => null);
-        
-        warn(`Usuário ${executor.user.tag} punido por desconectar o bot.`);
-      }
-    }
-  } catch (e) {
-    // Silencioso se falhar permissão ou api
-  }
-}
-
-// ============================================================================
-// CORE CONNECTION LOGIC
-// ============================================================================
-
+// Função principal de conexão
 async function connectToVoice(client) {
-  // Evita múltiplas tentativas simultâneas
-  if (STATE.isConnecting) return;
-  STATE.isConnecting = true;
+  if (isConnecting) return;
+  isConnecting = true;
 
   try {
-    const channel = await fetchVoiceChannel(client);
-    if (!channel) {
-      // Se não achou o canal, tenta de novo em breve
-      scheduleReconnect(client);
+    // 1. Busca o canal
+    const channel = await client.channels.fetch(VOICE_CHANNEL_ID_PADRAO).catch(() => null);
+    if (!channel || channel.type !== ChannelType.GuildVoice) {
+      // Se não achou o canal, não tem o que fazer.
+      isConnecting = false;
       return;
     }
 
     const guild = channel.guild;
-    const adapterCreator = guild.voiceAdapterCreator;
+    const connection = getVoiceConnection(guild.id);
 
-    // Verifica conexão existente
-    let connection = getVoiceConnection(guild.id);
-
-    // Se já existe e está READY no canal certo, tudo ok
+    // 2. Verifica se já está tudo certo
     if (connection && connection.state.status === VoiceConnectionStatus.Ready && connection.joinConfig.channelId === channel.id) {
-      // log("Conexão estável e ativa.");
+      // Tudo ok, nada a fazer
+      isConnecting = false;
       return;
     }
 
-    // Se existe mas está em estado ruim ou canal errado, destrói para recriar limpo
+    // 3. Se existe conexão mas está errada (outro canal ou travada), destrói
     if (connection) {
       try { connection.destroy(); } catch {}
-      await wait(1000); // Espera limpeza
+      await wait(1000); // Espera limpar
     }
 
-    // Cria nova conexão
-    connection = joinVoiceChannel({
+    // 4. Cria nova conexão
+    const newConnection = joinVoiceChannel({
       channelId: channel.id,
       guildId: guild.id,
-      adapterCreator: adapterCreator,
-      selfDeaf: true, // Importante para economizar recursos e indicar status
+      adapterCreator: guild.voiceAdapterCreator,
+      selfDeaf: true,
       selfMute: false,
     });
 
-    // Monitora eventos da conexão
-    setupConnectionListeners(client, connection, guild.id);
-
-    // Aguarda ficar READY
+    // 5. Aguarda ficar READY (com timeout curto para não travar)
     try {
-      await entersState(connection, VoiceConnectionStatus.Ready, CONFIG.CONNECT_TIMEOUT);
-      log(`Conectado com sucesso em: ${channel.name}`);
+      await entersState(newConnection, VoiceConnectionStatus.Ready, 15_000);
+      log(`Conectado e estável em: ${channel.name}`);
     } catch (error) {
-      warn("Falha ao conectar (timeout). Reiniciando...");
-      try { connection.destroy(); } catch {}
-      scheduleReconnect(client);
+      // Se falhar, destrói silenciosamente para tentar de novo no próximo ciclo
+      try { newConnection.destroy(); } catch {}
     }
 
   } catch (e) {
-    err("Erro fatal no connectToVoice:", e);
-    scheduleReconnect(client);
+    console.error("[AutoJoin] Erro:", e);
   } finally {
-    STATE.isConnecting = false;
+    isConnecting = false;
   }
 }
 
-function setupConnectionListeners(client, connection, guildId) {
-  // Remove listeners antigos se houver (embora destroy() deva limpar)
-  connection.removeAllListeners("stateChange");
-  connection.removeAllListeners("error");
+// Função para punir quem desconecta o bot
+async function checkPunishment(guild, botId) {
+  try {
+    const me = guild.members.me;
+    if (!me?.permissions.has(PermissionFlagsBits.ViewAuditLog)) return;
 
-  connection.on("stateChange", async (oldState, newState) => {
-    // log(`Status: ${oldState.status} -> ${newState.status}`);
+    const logs = await guild.fetchAuditLogs({ type: AuditLogEvent.MemberDisconnect, limit: 1 }).catch(() => null);
+    if (!logs) return;
 
-    if (newState.status === VoiceConnectionStatus.Disconnected) {
-      // Tenta reconectar se cair
-      try {
-        await Promise.race([
-          entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
-          entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
-        ]);
-        // Se voltou para signalling/connecting, deixa o fluxo seguir
-      } catch (e) {
-        // Se ficou disconnected por 5s, assume queda real
-        try { connection.destroy(); } catch {}
-        scheduleReconnect(client);
+    const entry = logs.entries.first();
+    if (!entry) return;
+
+    // Se o alvo foi o bot e aconteceu agora (últimos 10s)
+    if (entry.target?.id === botId && Date.now() - entry.createdTimestamp < 10000) {
+      const executor = entry.executor;
+      if (executor && !executor.bot) {
+        const member = await guild.members.fetch(executor.id).catch(() => null);
+        if (member) {
+          await member.timeout(PUNISH_DAYS * 24 * 60 * 60 * 1000, "Desconectou o bot de voz").catch(() => null);
+          warn(`PUNIÇÃO APLICADA: ${executor.tag} desconectou o bot.`);
+        }
       }
-    } else if (newState.status === VoiceConnectionStatus.Destroyed) {
-      // Se foi destruído, agenda reconexão
-      scheduleReconnect(client);
     }
-  });
-
-  connection.on("error", (error) => {
-    warn("Erro na conexão de voz:", error.message);
-    try { connection.destroy(); } catch {}
-    scheduleReconnect(client);
-  });
+  } catch (e) {
+    console.error("[AutoJoin] Erro ao punir:", e);
+  }
 }
-
-function scheduleReconnect(client) {
-  if (STATE.reconnectTimer) return; // Já agendado
-
-  STATE.reconnectTimer = setTimeout(() => {
-    STATE.reconnectTimer = null;
-    connectToVoice(client);
-  }, CONFIG.RECONNECT_DELAY);
-}
-
-// ============================================================================
-// EXPORTS
-// ============================================================================
 
 export function iniciarAutoJoin(client) {
   if (client.__autoJoinStarted) return;
   client.__autoJoinStarted = true;
 
-  log("Sistema iniciado (Modo Profissional v2).");
+  log("Sistema V3 (Clean) iniciado.");
 
-  // 1. Tenta conectar ao iniciar
-  if (client.isReady()) {
-    connectToVoice(client);
-  } else {
-    client.once(Events.ClientReady, () => connectToVoice(client));
-  }
+  // Tenta conectar ao ligar
+  if (client.isReady()) connectToVoice(client);
+  else client.once(Events.ClientReady, () => connectToVoice(client));
 
-  // 2. Monitor de integridade (Health Check)
-  // Garante que o bot volte se algo muito estranho acontecer
-  setInterval(() => {
-    if (!client.isReady()) return;
-    const connection = getVoiceConnection(client.guilds.cache.first()?.id); // Assume 1 guild principal ou ajusta lógica
-    
-    // Se não tem conexão ou não está ready, força reconexão
-    if (!connection || connection.state.status !== VoiceConnectionStatus.Ready) {
-      // log("Health Check: Conexão ausente ou instável. Reconectando...");
-      connectToVoice(client);
-    }
-  }, CONFIG.HEALTH_CHECK_INTERVAL);
-
-  // 3. Monitor de VoiceState (Anti-Move / Anti-Kick)
+  // Monitor de eventos (Anti-Move / Anti-Kick)
   client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
-    // Filtra apenas eventos do bot
+    // Só nos importamos com o bot
     if (oldState.member?.id !== client.user.id) return;
 
-    // Se foi desconectado (channelId null)
+    // Caso 1: Bot desconectado
     if (oldState.channelId && !newState.channelId) {
-      warn("Bot desconectado da voz.");
-      
-      // Verifica se foi kickado por alguém
-      if (oldState.guild) {
-        await checkAndPunishDisconnect(oldState.guild, client.user.id);
-      }
-      
-      // Reconecta imediatamente (sem esperar o health check)
-      scheduleReconnect(client);
+      warn("Bot caiu da call.");
+      await checkPunishment(oldState.guild, client.user.id);
+      // Tenta reconectar rápido
+      await wait(2000);
+      connectToVoice(client);
     }
-    
-    // Se foi movido para outro canal
+    // Caso 2: Bot movido para canal errado
     else if (newState.channelId && newState.channelId !== VOICE_CHANNEL_ID_PADRAO) {
-      warn("Bot movido de canal. Retornando...");
-      // Desconecta do canal errado para forçar reconexão no certo
-      const connection = getVoiceConnection(newState.guild.id);
-      if (connection) try { connection.destroy(); } catch {}
-      scheduleReconnect(client);
+      warn("Bot movido. Voltando...");
+      connectToVoice(client);
     }
   });
+
+  // Loop de verificação (Health Check) a cada 30s
+  // Garante que o bot volte se algo falhar silenciosamente
+  setInterval(() => {
+    if (client.isReady()) connectToVoice(client);
+  }, 30_000);
 }
