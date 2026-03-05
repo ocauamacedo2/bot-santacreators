@@ -382,6 +382,94 @@ async function runReminderJob(client) {
 }
 
 // =========================
+// SYNC LEGACY (MIGRAÇÃO AUTOMÁTICA)
+// =========================
+async function ensureButtonsOnMessage(msg, userId, isActive) {
+  try {
+    const hasToggle = msg.components.some(row => 
+      row.components.some(c => c.customId?.startsWith('fc_toggle_status'))
+    );
+    const hasStatusField = msg.embeds[0]?.fields?.some(f => f.name === "Status do Projeto");
+    
+    if (hasToggle && hasStatusField) return;
+
+    const rowEdit = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`editar_id_${msg.channel.id}`).setLabel("✏️ Editar ID/Passaporte").setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`editar_area_${msg.channel.id}`).setLabel("✏️ Editar Área de Interesse").setStyle(ButtonStyle.Secondary)
+    );
+
+    const rowStatus = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`fc_toggle_status:${msg.channel.id}:${userId}:${isActive ? 'inactive' : 'active'}`)
+        .setLabel(isActive ? "Desligar do Projeto" : "Ligar ao Projeto")
+        .setStyle(isActive ? ButtonStyle.Danger : ButtonStyle.Success)
+    );
+
+    const oldEmbed = EmbedBuilder.from(msg.embeds[0]);
+    if (!hasStatusField) {
+      oldEmbed.addFields({ name: "Status do Projeto", value: isActive ? "🟢 Ativo" : "🔴 Inativo", inline: false });
+    }
+
+    await msg.edit({ embeds: [oldEmbed], components: [rowEdit, rowStatus] }).catch(() => {});
+  } catch (e) {
+    console.error(`[FormsCreator] Erro ao migrar msg ${msg.id}:`, e);
+  }
+}
+
+async function syncLegacyThreads(client) {
+  const state = readState();
+  const channel = await client.channels.fetch(CREATOR_FORM_CHANNEL_ID).catch(() => null);
+  if (!channel) return;
+
+  const activeThreads = await channel.threads.fetchActive().catch(() => null);
+  if (!activeThreads || !activeThreads.threads) return;
+
+  let updates = 0;
+  for (const thread of activeThreads.threads.values()) {
+    if (state.registrations[thread.id]) {
+      const reg = state.registrations[thread.id];
+      try {
+        const msg = await thread.messages.fetch(reg.messageId).catch(() => null);
+        if (msg) await ensureButtonsOnMessage(msg, reg.userId, reg.active);
+      } catch {}
+      continue;
+    }
+
+    try {
+      const messages = await thread.messages.fetch({ limit: 10 }).catch(() => null);
+      if (!messages) continue;
+
+      const regMsg = messages.find(m => 
+        m.author.id === client.user.id && 
+        m.embeds.length > 0 && 
+        m.embeds[0].description?.match(/^<@\d+>$/)
+      );
+
+      if (regMsg) {
+        const embed = regMsg.embeds[0];
+        const userId = embed.description.replace(/[<@>]/g, '');
+        const nome = embed.title.replace('👤 ', '');
+        const idCidade = embed.fields.find(f => f.name.includes('ID/Passaporte'))?.value || '?';
+        const area = embed.fields.find(f => f.name.includes('Área de Interesse'))?.value || '?';
+
+        state.registrations[thread.id] = {
+          userId, nome, idCidade, area, active: true, messageId: regMsg.id
+        };
+        updates++;
+        await ensureButtonsOnMessage(regMsg, userId, true);
+      }
+    } catch (e) {
+      console.error(`[FormsCreator] Erro ao sync thread ${thread.name}:`, e);
+    }
+  }
+
+  if (updates > 0) {
+    writeState(state);
+    console.log(`[FormsCreator] Sincronizados ${updates} registros antigos.`);
+  }
+}
+
+// =========================
 // EXPORTS (pra plugar no teu index)
 // =========================
 
@@ -390,6 +478,9 @@ export async function formsCreatorOnReady(client) {
   try {
     // ✅ SEMPRE: apaga o antigo e cria um novo ao reiniciar
     await replaceButtonMessage(client);
+
+    // ✅ NOVO: Sincroniza registros antigos (adiciona botões e salva no state)
+    await syncLegacyThreads(client);
 
     // todo dia às 16:00 (SP)
     cron.schedule("0 16 * * *", () => runReminderJob(client), {
