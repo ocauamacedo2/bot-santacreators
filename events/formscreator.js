@@ -421,11 +421,20 @@ async function syncLegacyThreads(client) {
   const channel = await client.channels.fetch(CREATOR_FORM_CHANNEL_ID).catch(() => null);
   if (!channel) return;
 
+  const allThreads = [];
+
+  // 1. Threads Ativas
   const activeThreads = await channel.threads.fetchActive().catch(() => null);
-  if (!activeThreads || !activeThreads.threads) return;
+  if (activeThreads?.threads) activeThreads.threads.forEach(t => allThreads.push(t));
+
+  // 2. Threads Arquivadas (importante para registros antigos)
+  try {
+    const archived = await channel.threads.fetchArchived({ limit: 100 }).catch(() => null);
+    if (archived?.threads) archived.threads.forEach(t => allThreads.push(t));
+  } catch (e) { console.error("[FormsCreator] Erro ao buscar arquivadas:", e); }
 
   let updates = 0;
-  for (const thread of activeThreads.threads.values()) {
+  for (const thread of allThreads) {
     if (state.registrations[thread.id]) {
       const reg = state.registrations[thread.id];
       try {
@@ -514,6 +523,17 @@ export async function formsCreatorHandleMessage(message, client) {
       content: "✅ Botão recriado: apaguei o antigo e deixei apenas 1 no canal.",
       allowedMentions: { repliedUser: false },
     });
+    return true;
+  }
+
+  // comando: !syncforms (força atualização dos botões em registros antigos)
+  if (content.startsWith("!syncforms")) {
+    const temPermissao = hasPermission(message.member, message.author.id);
+    if (!temPermissao) return true;
+
+    await message.reply("🔄 Iniciando varredura de threads (ativas + arquivadas) para adicionar botões...");
+    await syncLegacyThreads(client);
+    await message.channel.send("✅ Sincronização finalizada.");
     return true;
   }
 
