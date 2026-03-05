@@ -1148,6 +1148,9 @@ try {
   // =================================================
   client.once("ready", async () => {
 
+    // ✅ PRIORIDADE MÁXIMA: AutoJoin Voice (Fixo na call)
+    try { iniciarAutoJoin(client); } catch {}
+
 // 🔥 INICIA O REMINDER AQUI
   try {
     await reminderOnReady(client);
@@ -1290,7 +1293,6 @@ try { await evt3EventsOnReady(client); } catch (e) { console.warn("⚠️ [EVT3]
     // Registros/auto
     try { iniciarRegistroPoderes(client); } catch {}
     try { iniciarRegistroEvento(client); } catch {}
-    try { iniciarAutoJoin(client); } catch {}
 
     // Lembretes + Monitor
     try { startTodosLembretes(client); } catch {}
