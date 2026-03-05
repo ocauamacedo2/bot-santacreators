@@ -452,16 +452,6 @@ export async function pedirSetHandleInteraction(interaction, client) {
     // ✅ Nickname atualizado para EQP.C
     await membro.setNickname(`EQP.C | ${nome} | ${passaporte}`).catch(err => console.error('Erro ao mudar nick:', err));
 
-    // ✅ Emite evento para criar controle GI (pausado) e atualizar dashboard
-    dashEmit('pedirset:aprovado', {
-      userId: userId,
-      approverId: interaction.user.id,
-      guildId: interaction.guildId,
-      nome,
-      passaporte,
-      timestamp: Date.now()
-    });
-
     // ✅ NOVO: Reativa ou cria registro no FormsCreator
     try {
       const existingThreadId = await findFormsCreatorThreadIdByUserId(userId);
@@ -492,6 +482,17 @@ export async function pedirSetHandleInteraction(interaction, client) {
         await interaction.followUp({ content: `⚠️ Ocorreu um erro com o FormsCreator: ${e.message}`, ephemeral: true });
       } catch {}
     }
+
+    // ✅ Emite evento para criar controle GI (pausado) e atualizar dashboard
+    // (Movido para DEPOIS do FormsCreator para garantir que o link exista)
+    dashEmit('pedirset:aprovado', {
+      userId: userId,
+      approverId: interaction.user.id,
+      guildId: interaction.guildId,
+      nome,
+      passaporte,
+      timestamp: Date.now()
+    });
 
     const baseEmbed = interaction.message.embeds?.[0]
       ? EmbedBuilder.from(interaction.message.embeds[0])

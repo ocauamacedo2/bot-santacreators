@@ -418,7 +418,8 @@ try {
           `🗓️ **Meses já na gestão:** \`${months}\``,
           '',
           `🔗 **Evolução (Forms):** ${fcLink ? `Abrir Tópico` : 'Não encontrado'}`,
-          ` **Cargo obrigatório enquanto ativo:** <@&${GI_ROLE_ID}>`,
+          `📌 **Status:** ${active ? 'Ativo' : 'Pausado'}`,
+          `🔒 **Cargo obrigatório enquanto ativo:** <@&${GI_ROLE_ID}>`,
           rec?.warnNoRoleGI
             ? '\n⚠️ *Atenção:* este membro **não possui** o cargo base de gestaoinfluencer no momento do registro.'
             : (rec?.roleSetAtMs ? `\n✅ **Cargo GI setado em:** \`${msToDDMMYYYY(rec.roleSetAtMs)}\`` : '')
