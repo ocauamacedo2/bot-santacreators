@@ -430,41 +430,6 @@ async function runReminderJob(client) {
   }
 }
 
-// =========================
-// SYNC LEGACY (MIGRAÇÃO AUTOMÁTICA)
-// =========================
-async function ensureButtonsOnMessage(msg, userId, isActive) {
-  try {
-    const hasToggle = msg.components.some(row => 
-      row.components.some(c => c.customId?.startsWith('fc_toggle_status'))
-    );
-    const hasStatusField = msg.embeds[0]?.fields?.some(f => f.name === "Status do Projeto");
-    
-    if (hasToggle && hasStatusField) return;
-
-    const rowEdit = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`editar_id_${msg.channel.id}`).setLabel("✏️ Editar ID/Passaporte").setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(`editar_area_${msg.channel.id}`).setLabel("✏️ Editar Área de Interesse").setStyle(ButtonStyle.Secondary)
-    );
-
-    const rowStatus = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`fc_toggle_status:${msg.channel.id}:${userId}:${isActive ? 'inactive' : 'active'}`)
-        .setLabel(isActive ? "Desligar do Projeto" : "Ligar ao Projeto")
-        .setStyle(isActive ? ButtonStyle.Danger : ButtonStyle.Success)
-    );
-
-    const oldEmbed = EmbedBuilder.from(msg.embeds[0]);
-    if (!hasStatusField) {
-      oldEmbed.addFields({ name: "Status do Projeto", value: isActive ? "🟢 Ativo" : "🔴 Inativo", inline: false });
-    }
-
-    await msg.edit({ embeds: [oldEmbed], components: [rowEdit, rowStatus] }).catch(() => {});
-  } catch (e) {
-    console.error(`[FormsCreator] Erro ao migrar msg ${msg.id}:`, e);
-  }
-}
-
 async function syncLegacyThreads(client) {
   const state = readState();
   const channel = await client.channels.fetch(CREATOR_FORM_CHANNEL_ID).catch(() => null);
@@ -476,97 +441,137 @@ async function syncLegacyThreads(client) {
   const activeThreads = await channel.threads.fetchActive().catch(() => null);
   if (activeThreads?.threads) activeThreads.threads.forEach(t => allThreads.push(t));
 
-  // 2. Threads Arquivadas (COM PAGINAÇÃO para pegar TODAS)
-  let lastId = null;
-  while (true) {
-    try {
-      const options = { limit: 100 };
-      if (lastId) options.before = lastId;
-      
-      const archived = await channel.threads.fetchArchived(options).catch(() => null);
-      if (!archived || !archived.threads.size) break;
-      
-      archived.threads.forEach(t => allThreads.push(t));
-      lastId = archived.threads.last().id;
-      
-      if (archived.threads.size < 100) break;
-      await new Promise(r => setTimeout(r, 1000)); // Pausa leve pra não travar
-    } catch (e) {
-      console.error("[FormsCreator] Erro ao buscar página de arquivadas:", e);
-      break;
+  // 2. Threads Arquivadas (públicas e privadas)
+  const fetchArchivedThreads = async (type) => {
+    let lastId = null;
+    while (true) {
+      try {
+        const options = { limit: 100, type };
+        if (lastId) options.before = lastId;
+
+        const archived = await channel.threads.fetchArchived(options).catch(() => null);
+        if (!archived || !archived.threads.size) break;
+
+        archived.threads.forEach(t => allThreads.push(t));
+        lastId = archived.threads.last().id;
+
+        if (archived.threads.size < 100) break;
+        await new Promise(r => setTimeout(r, 1000)); // Pausa entre páginas
+      } catch (e) {
+        console.error(`[FormsCreator] Erro ao buscar página de arquivadas (${type}):`, e);
+        break;
+      }
     }
-  }
+  };
+
+  await fetchArchivedThreads('private');
+  await fetchArchivedThreads('public');
 
   console.log(`[FormsCreator] Varrendo ${allThreads.length} threads (ativas + arquivadas)...`);
 
   let updates = 0;
   for (const thread of allThreads) {
-    if (state.registrations[thread.id]) {
-      const reg = state.registrations[thread.id];
+    let reg = state.registrations[thread.id];
+    let msg = null;
+    let userId = null;
+
+    // 1. Tenta achar registro existente
+    if (reg) {
+      userId = reg.userId;
+      try {
+        msg = await thread.messages.fetch(reg.messageId).catch(() => null);
+      } catch {}
+    }
+
+    // 2. Se não achou msg pelo registro, tenta varrer o canal
+    if (!msg) {
+      try {
+        const messages = await thread.messages.fetch({ limit: 10 }).catch(() => null);
+        if (messages) {
+          msg = messages.find(m => 
+            m.author.id === client.user.id && 
+            m.embeds.length > 0 && 
+            m.embeds[0].description?.match(/^<@\d+>$/)
+          );
+        }
+      } catch {}
+    }
+
+    // 3. Se achou msg mas não tinha registro, cria agora
+    if (msg && !reg) {
+      const embed = msg.embeds[0];
+      userId = embed.description.replace(/[<@>]/g, '');
+      const nome = embed.title.replace('👤 ', '');
+      const idCidade = embed.fields.find(f => f.name.includes('ID/Passaporte'))?.value || '?';
+      const area = embed.fields.find(f => f.name.includes('Área de Interesse'))?.value || '?';
+      
+      // Cria como ativo por padrão, a verificação abaixo corrige se precisar
+      reg = { userId, nome, idCidade, area, active: true, messageId: msg.id };
+      state.registrations[thread.id] = reg;
+      updates++;
+    }
+
+    // 4. Processa atualização (Cargo, Icon, Botões)
+    if (reg && msg && userId) {
       // ✅ REVALIDAÇÃO: Checa se o status do cargo mudou
-      const member = await channel.guild.members.fetch(reg.userId).catch(() => null);
+      const member = await channel.guild.members.fetch(userId).catch(() => null);
       // Se membro existe E tem cargo => ATIVO. Se não existe (saiu) ou não tem cargo => INATIVO.
       const shouldBeActive = !!(member && member.roles.cache.has(ROLE_REQUIRED_FOR_ACTIVE));
 
       // Se o status no state está diferente da realidade, corrige
       if (reg.active !== shouldBeActive) {
         reg.active = shouldBeActive;
-        updates++; // Marca que houve uma atualização para salvar no final
+        updates++;
         if (!shouldBeActive) {
-            // Opcional: avisar no tópico que foi desligado na sincronização
             const motivo = member ? "falta do cargo obrigatório" : "saiu do servidor";
             thread.send(`⚠️ **Sistema:** Status atualizado para INATIVO durante a sincronização (${motivo}).`).catch(() => {});
         }
       }
 
       try {
-        const msg = await thread.messages.fetch(reg.messageId).catch(() => null);
-        if (msg) {
-            // ✅ Traz o tópico de volta à vida (move para ativos)
-            if (thread.archived) await thread.setArchived(false).catch(() => {});
-            await ensureButtonsOnMessage(msg, reg.userId, reg.active); // Usa o status atualizado
+        const oldEmbed = EmbedBuilder.from(msg.embeds[0]);
+        
+        // ✅ Atualiza Thumbnail (Icon) se o membro estiver no servidor
+        if (member && member.user) {
+            const avatarURL = member.user.displayAvatarURL();
+            if (oldEmbed.data.thumbnail?.url !== avatarURL) {
+                oldEmbed.setThumbnail(avatarURL);
+            }
         }
-      } catch {}
-      continue;
-    }
 
-    try {
-      const messages = await thread.messages.fetch({ limit: 10 }).catch(() => null);
-      if (!messages) continue;
+        // ✅ Atualiza Campo de Status
+        const statusField = { name: "Status do Projeto", value: reg.active ? "🟢 Ativo" : "🔴 Inativo", inline: false };
+        const fields = oldEmbed.data.fields || [];
+        const statusIndex = fields.findIndex(f => f.name === "Status do Projeto");
+        if (statusIndex > -1) fields[statusIndex] = statusField;
+        else fields.push(statusField);
+        oldEmbed.setFields(fields);
 
-      const regMsg = messages.find(m => 
-        m.author.id === client.user.id && 
-        m.embeds.length > 0 && 
-        m.embeds[0].description?.match(/^<@\d+>$/)
-      );
+        // ✅ Recria Botões (garante que o botão de Ligar/Desligar esteja certo)
+        const rowEdit = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(`editar_id_${thread.id}`).setLabel("✏️ Editar ID/Passaporte").setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder().setCustomId(`editar_area_${thread.id}`).setLabel("✏️ Editar Área de Interesse").setStyle(ButtonStyle.Secondary)
+        );
 
-      if (regMsg) {
-        const embed = regMsg.embeds[0];
-        const userId = embed.description.replace(/[<@>]/g, '');
-        const nome = embed.title.replace('👤 ', '');
-        const idCidade = embed.fields.find(f => f.name.includes('ID/Passaporte'))?.value || '?';
-        const area = embed.fields.find(f => f.name.includes('Área de Interesse'))?.value || '?';
+        const rowStatus = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`fc_toggle_status:${thread.id}:${userId}:${reg.active ? 'inactive' : 'active'}`)
+            .setLabel(reg.active ? "Desligar do Projeto" : "Ligar ao Projeto")
+            .setStyle(reg.active ? ButtonStyle.Danger : ButtonStyle.Success)
+        );
 
-        // ✅ Verifica se tem o cargo obrigatório para definir se está ativo
-        const member = await channel.guild.members.fetch(userId).catch(() => null);
-        const hasRole = !!(member && member.roles.cache.has(ROLE_REQUIRED_FOR_ACTIVE));
-
-        state.registrations[thread.id] = {
-          userId, nome, idCidade, area, active: hasRole, messageId: regMsg.id
-        };
-        updates++;
-        
-        // ✅ Traz o tópico de volta à vida (move para ativos)
+        // Se thread arquivada, desarquiva pra editar
         if (thread.archived) await thread.setArchived(false).catch(() => {});
-        
-        await ensureButtonsOnMessage(regMsg, userId, hasRole);
-        
-        // ✅ Delay para evitar rate limit do Discord (importante quando tem muitos)
-        await new Promise(r => setTimeout(r, 1500));
+
+        await msg.edit({ embeds: [oldEmbed], components: [rowEdit, rowStatus] });
+
+      } catch (e) {
+        console.error(`[FormsCreator] Erro ao atualizar msg ${msg.id} na thread ${thread.name}:`, e);
       }
-    } catch (e) {
-      console.error(`[FormsCreator] Erro ao sync thread ${thread.name}:`, e);
     }
+
+    // ✅ Adiciona um delay consistente no final de cada iteração do loop para evitar rate limits
+    await new Promise(r => setTimeout(r, 300));
   }
 
   if (updates > 0) {
