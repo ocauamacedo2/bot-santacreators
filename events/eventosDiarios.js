@@ -14,7 +14,7 @@ import {
 } from "discord.js";
 
 import { dashEmit } from "../utils/dashHub.js";
-
+///teste
 // ================= PERSISTÊNCIA =================
 const DATA_DIR = path.resolve(process.cwd(), "data");
 const STATE_FILE = path.join(DATA_DIR, "eventos_diarios_state.json");
