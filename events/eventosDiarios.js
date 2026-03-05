@@ -146,6 +146,44 @@ export async function eventosDiariosOnReady(client) {
   if (channel && channel.isTextBased()) {
     // ✅ No restart, passa false para não spammar se já tiver botão
     await ensureButtonAtBottom(channel, client, false);
+
+    // ✅ Auto-correção: Converte embeds antigos para texto ao iniciar
+    console.log('[EventosDiarios] Verificando embeds antigos para converter...');
+    try {
+      const messages = await channel.messages.fetch({ limit: 50 }).catch(() => null);
+      if (messages) {
+        for (const msg of messages.values()) {
+          // Apenas mensagens do bot com embeds
+          if (msg.author.id !== client.user.id || msg.embeds.length === 0) continue;
+
+          const embed = msg.embeds[0];
+          // Verifica se é um embed de evento diário
+          if (embed.title && embed.title.includes("Santa Creators :")) {
+            const title = embed.title.replace(/🎉\s*:\s*\*\*Santa Creators\s*:\s*/i, '').replace(/\*\*\s*🎉/i, '').trim();
+            const description = embed.description || '';
+            const imageUrl = embed.image?.url || '';
+            const mentions = msg.content || ''; // Menções ficam no conteúdo
+
+            const newContent = 
+`# 🎉 :  **Santa Creators : ${title}** 🎉 
+
+${description}
+
+${mentions}
+
+${imageUrl}`;
+
+            // Deleta a mensagem antiga e envia a nova, dividida se necessário
+            await msg.delete().catch(() => {});
+            await channel.send({ content: newContent, split: true });
+            console.log(`[EventosDiarios] Mensagem de evento ${msg.id} convertida de embed para texto.`);
+          }
+        }
+      }
+    } catch (e) {
+      console.error('[EventosDiarios] Erro ao tentar converter embeds antigos:', e);
+    }
+    console.log('[EventosDiarios] Verificação de embeds antigos concluída.');
   }
 }
 
@@ -296,18 +334,21 @@ export async function eventosDiariosHandleInteraction(interaction, client) {
 
     const cityData = CITIES[data.cityKey];
 
-    // ✅ CORREÇÃO: Mover texto longo para o Embed
-    const eventEmbed = new EmbedBuilder()
-      .setTitle(`🎉 :  **Santa Creators : ${data.title}** 🎉`)
-      .setDescription(data.description)
-      .setImage(data.imageUrl)
-      .setColor("#9b59b6");
-
     const mentions = `@everyone @here <@&${ROLE_CIDADAO}> <@&${ROLE_LIDERES}> <@&${cityData.roleId}>`;
 
+    // ✅ ALTERAÇÃO: Volta a ser mensagem de texto, mas com 'split' para evitar erro de limite
+    const finalMessage = 
+`# 🎉 :  **Santa Creators : ${data.title}** 🎉 
+
+${data.description}
+
+${mentions}
+
+${data.imageUrl}`;
+
     const sentMsg = await eventChannel.send({ 
-      content: mentions,
-      embeds: [eventEmbed]
+      content: finalMessage,
+      split: true // <-- A mágica acontece aqui!
     });
     
     // ✅ Mais emojis
