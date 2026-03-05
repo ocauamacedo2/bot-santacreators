@@ -20,8 +20,23 @@ const DATA_DIR = path.resolve(process.cwd(), "data");
 const STATE_FILE = path.join(DATA_DIR, "eventos_diarios_state.json");
 
 const ensureDir = () => { if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true }); };
-const saveState = (data) => { ensureDir(); fs.writeFileSync(STATE_FILE, JSON.stringify(data, null, 2)); };
-const loadState = () => { try { if (fs.existsSync(STATE_FILE)) return JSON.parse(fs.readFileSync(STATE_FILE, "utf8")); } catch {} return { pendingRequests: {} }; };
+
+// ✅ Escrita Atômica (mais segura: escreve num .tmp e renomeia, evitando corromper se o bot cair no meio)
+const saveState = (data) => { 
+  ensureDir(); 
+  const tmp = `${STATE_FILE}.tmp`;
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+    fs.renameSync(tmp, STATE_FILE);
+  } catch (e) {
+    console.error("[EventosDiarios] Erro ao salvar state:", e);
+  }
+};
+
+const loadState = () => { 
+  try { if (fs.existsSync(STATE_FILE)) return JSON.parse(fs.readFileSync(STATE_FILE, "utf8")); } catch (e) { console.error("[EventosDiarios] Erro load:", e); } 
+  return { pendingRequests: {} }; 
+};
 
 // ================= CONFIGURAÇÃO =================
 const EVENTOS_CHANNEL_ID = "1385003944803041371"; // Canal Oficial de Eventos Diários
@@ -273,7 +288,7 @@ export async function eventosDiariosHandleInteraction(interaction, client) {
     const data = state.pendingRequests[reqId];
 
     if (!data) {
-      return interaction.editReply("⚠️ Dados da solicitação expiraram.");
+      return interaction.editReply("⚠️ Dados da solicitação não encontrados (antigos ou expirados).");
     }
 
     const eventChannel = await client.channels.fetch(EVENTOS_CHANNEL_ID).catch(() => null);

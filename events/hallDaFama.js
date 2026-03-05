@@ -1,4 +1,6 @@
 // d:\santacreators-main\events\hallDaFama.js
+import fs from "node:fs";
+import path from "node:path";
 import {
   EmbedBuilder,
   ActionRowBuilder,
@@ -63,7 +65,15 @@ const MODAL_SUBMIT = "hf_modal_submit";
 const BTN_APPROVE_PREFIX = "hf_approve_";
 const BTN_REJECT_PREFIX = "hf_reject_";
 
-const pendingRequests = new Map();
+// ================= PERSISTÊNCIA =================
+const DATA_DIR = path.resolve(process.cwd(), "data");
+const STATE_FILE = path.join(DATA_DIR, "halldafama_state.json");
+
+const ensureDir = () => { if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true }); };
+const saveState = (data) => { ensureDir(); fs.writeFileSync(STATE_FILE, JSON.stringify(data, null, 2)); };
+const loadState = () => { try { if (fs.existsSync(STATE_FILE)) return JSON.parse(fs.readFileSync(STATE_FILE, "utf8")); } catch {} return { pendingRequests: {} }; };
+
+let state = loadState();
 
 // ================= HELPERS =================
 function hasPermission(member, userId) {
@@ -114,6 +124,8 @@ async function ensureButtonAtBottom(channel, client, force = true) {
 // ================= EXPORTS =================
 
 export async function hallDaFamaOnReady(client) {
+  // Garante carregamento no boot
+  state = loadState();
   const channel = await client.channels.fetch(HALL_CHANNEL_ID).catch(() => null);
   if (channel && channel.isTextBased()) {
     // ✅ No restart, passa false para não spammar se já tiver botão
@@ -203,13 +215,14 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
 
     const reqId = `${interaction.user.id}-${Date.now()}`;
     
-    pendingRequests.set(reqId, {
+    state.pendingRequests[reqId] = {
       userId: interaction.user.id,
       cityKey,
       eventName,
       winnersText,
       imageUrl
-    });
+    };
+    saveState(state);
 
     const approvalChannel = await client.channels.fetch(APPROVAL_CHANNEL_ID).catch(() => null);
     if (!approvalChannel) {
@@ -256,7 +269,7 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
 
     await interaction.deferReply({ ephemeral: true });
     const reqId = interaction.customId.replace(BTN_APPROVE_PREFIX, "");
-    const data = pendingRequests.get(reqId);
+    const data = state.pendingRequests[reqId];
 
     if (!data) {
       return interaction.editReply("⚠️ Dados da solicitação expiraram.");
@@ -308,7 +321,8 @@ ${data.imageUrl}`;
 
     await interaction.message.edit({ embeds: [embedApproved], components: [] });
     
-    pendingRequests.delete(reqId);
+    delete state.pendingRequests[reqId];
+    saveState(state);
     await interaction.editReply("✅ Hall da Fama postado e pontos computados!");
     return true;
   }
@@ -327,7 +341,8 @@ ${data.imageUrl}`;
 
     await interaction.message.edit({ embeds: [embedRejected], components: [] });
     
-    pendingRequests.delete(reqId);
+    delete state.pendingRequests[reqId];
+    saveState(state);
     await interaction.reply({ content: "❌ Solicitação recusada.", ephemeral: true });
     return true;
   }
