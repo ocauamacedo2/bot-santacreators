@@ -322,9 +322,9 @@ if (customId.startsWith('iniciar|')) {
     }
   }
 
-  // ✅ Agora envia a mensagem completa (igual teu print/código antigo)
-  const enviada = await interaction.channel.send({
-    content: `✨ Oii, <@${interaction.user.id}> Tudo bem por aí? Seja **MUITO** bem-vind@ à família **SantaCreators**!  
+// ✅ Agora envia a mensagem completa (igual teu print/código antigo)
+const enviada = await interaction.channel.send({
+  content: `✨ Oii, <@${interaction.user.id}> Tudo bem por aí? Seja **MUITO** bem-vind@ à família **SantaCreators**!  
 É um prazer ter você por aqui — e pode ficar tranquil@, porque a <@&1352275728476930099> vai te acompanhar nessa primeira etapa com todo o cuidado. 💖
 
 📝 Nosso processo de entrada é dividido em **duas fases bem tranquilas**:
@@ -335,17 +335,19 @@ if (customId.startsWith('iniciar|')) {
 
 📚 **Agora bora dar uma lida nas regras?**  
 Você já tem acesso à aba  
-**<#1354096658622840962>**  
-**https://discord.com/channels/1262262852782129183/1352285379302002710**  
-**https://discord.com/channels/1262262852782129183/1355622493464821892**
+https://discord.com/channels/1262262852782129183/1352285379302002710  
+https://discord.com/channels/1262262852782129183/1355622493464821892  
+https://discord.com/channels/1262262852782129183/1370830395637239928  
+https://discord.com/channels/1262262852782129183/1381704800608981003  
 
 Onde tá tudo explicadinho e bem organizado pra você entender como a gente funciona.
 
-**Caso queira ficar ainda mais afiad@ para não ter erro...**  
-https://discord.com/channels/1262262852782129183/1381701403331788800  
-https://discord.com/channels/1262262852782129183/1370830395637239928  
-https://discord.com/channels/1262262852782129183/1381704800608981003  
-https://discord.com/channels/1262262852782129183/1353909271485743207
+⚠️ **IMPORTANTE SOBRE A ENTREVISTA**  
+Durante a entrevista **não é permitido utilizar Inteligência Artificial (ChatGPT ou similares)** e **nem copiar e colar diretamente das regras**.  
+
+Queremos entender **se você realmente compreendeu o conteúdo**, então responda **com suas próprias palavras**.  
+
+❌ Caso seja identificado uso de IA ou respostas copiadas diretamente das regras, **a entrevista será automaticamente desconsiderada**.
 
 💬 Qualquer dúvida (mesmo que pareça boba), é só mandar aqui no chat — a gente responde rapidinho!  
 E fica tranquil@ com o tamanho das informações, tá? rs ☺️
@@ -354,8 +356,8 @@ E fica tranquil@ com o tamanho das informações, tá? rs ☺️
 
 🚀 **Preparad@ pra dar esse passo com a gente?**  
 **Bora começar essa jornada juntos!** 🌟`,
-    components: [row]
-  });
+  components: [row]
+});
 
   // log do clique no iniciar (opcional mas eu recomendo)
   await logCompleto(interaction.client, {
