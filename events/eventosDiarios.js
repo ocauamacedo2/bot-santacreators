@@ -18,6 +18,7 @@ import { dashEmit } from "../utils/dashHub.js";
 // ================= PERSISTÊNCIA =================
 const DATA_DIR = path.resolve(process.cwd(), "data");
 const STATE_FILE = path.join(DATA_DIR, "eventos_diarios_state.json");
+const CRONO_FILE = path.join(DATA_DIR, "cronograma_state.json"); // ✅ NOVO
 
 const ensureDir = () => { if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true }); };
 
@@ -91,6 +92,36 @@ const BTN_REJECT_PREFIX = "evd_reject_";
 // Carrega os pedidos pendentes do arquivo ao iniciar
 let state = loadState();
 
+// ================= LÓGICA INTELIGENTE (CRONOGRAMA) =================
+
+// Pega o dia da semana em SP (seg, ter, qua...)
+function getTodayKey() {
+  const now = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
+  const days = ["dom", "seg", "ter", "qua", "qui", "sex", "sab"];
+  return days[now.getDay()];
+}
+
+// Lê o cronograma e retorna os dados de HOJE
+function getTodayEventData() {
+  try {
+    if (!fs.existsSync(CRONO_FILE)) return null;
+    const crono = JSON.parse(fs.readFileSync(CRONO_FILE, "utf8"));
+    const todayKey = getTodayKey();
+    
+    // Tenta pegar do schedule normal (19h)
+    const normal = crono.schedule?.[todayKey];
+    if (normal && normal.active) return normal;
+
+    // Se não tiver, tenta madrugada
+    const madru = crono.madrugada?.[todayKey];
+    if (madru && madru.active) return madru;
+
+    return null;
+  } catch (e) {
+    console.error("[EventosDiarios] Erro ao ler cronograma:", e);
+    return null;
+  }
+}
 // ================= HELPERS =================
 function hasPermission(member, userId) {
   if (ALLOWED_USERS.includes(userId)) return true;
@@ -220,6 +251,20 @@ export async function eventosDiariosHandleInteraction(interaction, client) {
   if (interaction.isStringSelectMenu() && interaction.customId === SEL_CITY) {
     const cityKey = interaction.values[0];
     
+    // ✅ Pega dados do evento de hoje para pré-preencher
+    const eventData = getTodayEventData();
+    let defaultTitle = "";
+    let defaultDescription = "";
+
+    // ✅ Verifica se o evento de hoje é na cidade selecionada
+    const cityLabel = CITIES[cityKey]?.label || "";
+    if (eventData && cityLabel && eventData.city.toLowerCase() === cityLabel.toLowerCase()) {
+        defaultTitle = eventData.eventName || "";
+        const prizes = eventData.prizes || "A definir";
+        // Monta uma descrição padrão com a premiação
+        defaultDescription = `🏆 **Premiação:**\n${prizes}\n\n📝 **Regras/Descrição:**\n- `;
+    }
+
     const modal = new ModalBuilder()
       .setCustomId(`${MODAL_SUBMIT}:${cityKey}`)
       .setTitle(`Evento - ${CITIES[cityKey].label}`);
@@ -230,6 +275,7 @@ export async function eventosDiariosHandleInteraction(interaction, client) {
           .setCustomId("evd_title")
           .setLabel("Título do Evento")
           .setPlaceholder("Ex: SANTA DO CRIME")
+          .setValue(defaultTitle)
           .setStyle(TextInputStyle.Short)
           .setRequired(true)
       ),
@@ -238,6 +284,7 @@ export async function eventosDiariosHandleInteraction(interaction, client) {
           .setCustomId("evd_description")
           .setLabel("Descrição / Regras / Horário")
           .setPlaceholder("Cole aqui todo o texto explicativo...")
+          .setValue(defaultDescription)
           .setStyle(TextInputStyle.Paragraph)
           .setRequired(true)
       ),

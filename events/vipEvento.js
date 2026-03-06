@@ -1,4 +1,7 @@
 // ./events/application/events/vipEvento.js
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   EmbedBuilder,
   ActionRowBuilder,
@@ -18,6 +21,12 @@ const VIP_MENU_CHANNEL_ID = "1414718336826081330"; // onde fica o MENU e os REGI
 const VIP_NOTIFY_CHANNEL_ID = "1424489278615978114"; // notificação de novo registro
 const VIP_CHECK_MENU_CHAT_ID = "1387922662134775818"; // referência ao "outro menu" para checagem
 const VIP_LOGS_CHANNEL_ID = "1414726734472941708"; // logs de ações (tudo)
+
+// ✅ Arquivo do cronograma para dados automáticos
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const DATA_DIR = path.resolve(__dirname, "../data");
+const CRONO_FILE = path.join(DATA_DIR, "cronograma_state.json");
 
 // ── CARGOS/USUÁRIOS AUTORIZADOS ─────────────────────────────────
 const IDS = {
@@ -171,6 +180,43 @@ function VIP_messageHasVipButtons(msg) {
   return false;
 }
 
+// ── Helpers de data e cronograma ───────────────────────────────
+function getTodayKey() {
+  const now = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
+  const days = ["dom", "seg", "ter", "qua", "qui", "sex", "sab"];
+  return days[now.getDay()];
+}
+
+function getTodayDateFormatted() {
+    const now = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
+    const day = String(now.getDate()).padStart(2, '0');
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const year = now.getFullYear();
+    return `${day}/${month}/${year}`;
+}
+
+function getTodayEventData() {
+  try {
+    if (!fs.existsSync(CRONO_FILE)) return null;
+    const crono = JSON.parse(fs.readFileSync(CRONO_FILE, "utf8"));
+    const todayKey = getTodayKey();
+    
+    // Tenta pegar do schedule normal (19h)
+    const normal = crono.schedule?.[todayKey];
+    if (normal && normal.active) return normal;
+
+    // Se não tiver, tenta madrugada
+    const madru = crono.madrugada?.[todayKey];
+    if (madru && madru.active) return madru;
+
+    return null;
+  } catch (e) {
+    console.error("[vipEvento] Erro ao ler cronograma:", e);
+    return null;
+  }
+}
+
+
 // ── UI builders ─────────────────────────────────────────────────
 function VIP_buildMenuEmbed(guild) {
   return new EmbedBuilder()
@@ -219,7 +265,7 @@ function VIP_buildMenuComponents() {
   ];
 }
 
-function VIP_buildModal() {
+function VIP_buildModal(eventData = null) {
   return new ModalBuilder()
     .setCustomId(VIP_MODAL_ID)
     .setTitle("Registro de VIP por Evento")
@@ -229,6 +275,7 @@ function VIP_buildModal() {
           .setCustomId("vip_evt_nome")
           .setLabel("Nome do evento ganho")
           .setStyle(TextInputStyle.Short)
+          .setValue(eventData?.eventName || "")
           .setRequired(true)
       ),
       new ActionRowBuilder().addComponents(
@@ -236,6 +283,7 @@ function VIP_buildModal() {
           .setCustomId("vip_evt_data")
           .setLabel("Dia do evento (ex: 08/09/2025)")
           .setStyle(TextInputStyle.Short)
+          .setValue(getTodayDateFormatted())
           .setRequired(true)
       ),
       new ActionRowBuilder().addComponents(
@@ -257,6 +305,7 @@ function VIP_buildModal() {
           .setCustomId("vip_premiacao")
           .setLabel("Premiação")
           .setStyle(TextInputStyle.Paragraph)
+          .setValue(eventData?.prizes || "")
           .setRequired(true)
       )
     );
@@ -465,7 +514,9 @@ export async function vipEventoHandleInteraction(i, client) {
           await safeReply(i, { content: "🚫 Você não tem permissão para registrar.", ephemeral: true });
           return true;
         }
-        const modal = VIP_buildModal();
+        // ✅ Pega dados do evento de hoje para pré-preencher
+        const eventData = getTodayEventData();
+        const modal = VIP_buildModal(eventData);
         await i.showModal(modal);
         return true;
       }
