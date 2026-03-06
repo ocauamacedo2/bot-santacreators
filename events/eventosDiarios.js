@@ -143,6 +143,59 @@ function buildRegisterButton() {
   );
 }
 
+function createEventModal(cityKey, eventData) {
+  let defaultTitle = "";
+  let defaultDescription = "";
+
+  // Verifica se o evento do dia bate com a cidade selecionada
+  if (eventData && eventData.city) {
+    const cName = eventData.city.toLowerCase();
+    const cKey = cityKey.toLowerCase();
+    const cLabel = (CITIES[cityKey]?.label || "").toLowerCase();
+    
+    // Match flexível (ex: "Nobre" bate com "Cidade Nobre" ou "nobre")
+    if (cName === cKey || cLabel.includes(cName) || cName.includes(cKey)) {
+      defaultTitle = eventData.eventName || "";
+      const prizes = eventData.prizes || "A definir";
+      defaultDescription = `🏆 **Premiação:**\n${prizes}\n\n📝 **Regras/Descrição:**\n- `;
+    }
+  }
+
+  const modal = new ModalBuilder()
+    .setCustomId(`${MODAL_SUBMIT}:${cityKey}`)
+    .setTitle(`Evento - ${CITIES[cityKey].label}`);
+
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("evd_title")
+        .setLabel("Título do Evento")
+        .setPlaceholder("Ex: SANTA DO CRIME")
+        .setValue(defaultTitle)
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+    ),
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("evd_description")
+        .setLabel("Descrição / Regras / Horário")
+        .setPlaceholder("Cole aqui todo o texto explicativo...")
+        .setValue(defaultDescription)
+        .setStyle(TextInputStyle.Paragraph)
+        .setRequired(true)
+    ),
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("evd_image")
+        .setLabel("Link da Imagem (Banner)")
+        .setPlaceholder("https://cdn.discordapp.com/...")
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+    )
+  );
+  return modal;
+}
+
 // ✅ Lógica inteligente: se force=false, só cria se não existir. Se force=true, apaga e recria (pra descer).
 async function ensureButtonAtBottom(channel, client, force = true) {
   try {
@@ -226,6 +279,25 @@ export async function eventosDiariosHandleInteraction(interaction, client) {
       return interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
     }
 
+    // ✅ Tenta detectar cidade automaticamente pelo cronograma
+    const eventData = getTodayEventData();
+    let autoCityKey = null;
+
+    if (eventData && eventData.city) {
+      const normalized = eventData.city.toLowerCase().trim();
+      // Tenta achar a chave da cidade
+      const foundKey = Object.keys(CITIES).find(k => 
+        k === normalized || CITIES[k].label.toLowerCase().includes(normalized) || normalized.includes(k)
+      );
+      if (foundKey) autoCityKey = foundKey;
+    }
+
+    if (autoCityKey) {
+      const modal = createEventModal(autoCityKey, eventData);
+      await interaction.showModal(modal);
+      return true;
+    }
+
     const select = new StringSelectMenuBuilder()
       .setCustomId(SEL_CITY)
       .setPlaceholder("Selecione a Cidade do Evento")
@@ -253,51 +325,7 @@ export async function eventosDiariosHandleInteraction(interaction, client) {
     
     // ✅ Pega dados do evento de hoje para pré-preencher
     const eventData = getTodayEventData();
-    let defaultTitle = "";
-    let defaultDescription = "";
-
-    // ✅ Verifica se o evento de hoje é na cidade selecionada
-    const cityLabel = CITIES[cityKey]?.label || "";
-    if (eventData && cityLabel && eventData.city.toLowerCase() === cityLabel.toLowerCase()) {
-        defaultTitle = eventData.eventName || "";
-        const prizes = eventData.prizes || "A definir";
-        // Monta uma descrição padrão com a premiação
-        defaultDescription = `🏆 **Premiação:**\n${prizes}\n\n📝 **Regras/Descrição:**\n- `;
-    }
-
-    const modal = new ModalBuilder()
-      .setCustomId(`${MODAL_SUBMIT}:${cityKey}`)
-      .setTitle(`Evento - ${CITIES[cityKey].label}`);
-
-    modal.addComponents(
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId("evd_title")
-          .setLabel("Título do Evento")
-          .setPlaceholder("Ex: SANTA DO CRIME")
-          .setValue(defaultTitle)
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true)
-      ),
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId("evd_description")
-          .setLabel("Descrição / Regras / Horário")
-          .setPlaceholder("Cole aqui todo o texto explicativo...")
-          .setValue(defaultDescription)
-          .setStyle(TextInputStyle.Paragraph)
-          .setRequired(true)
-      ),
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId("evd_image")
-          .setLabel("Link da Imagem (Banner)")
-          .setPlaceholder("https://cdn.discordapp.com/...")
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true)
-      )
-    );
-
+    const modal = createEventModal(cityKey, eventData);
     await interaction.showModal(modal);
     return true;
   }
