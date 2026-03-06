@@ -332,12 +332,34 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
     // Monta a string dos vencedores com premiação automática
     let winnersText = "";
 
+    // ✅ LÓGICA MELHORADA DE PREMIAÇÃO
+    let prize1 = "";
+    const hasExtra = topsExtra && topsExtra.trim().length > 0;
+
+    if (!hasExtra) {
+      // Se só tem TOP 1, verifica se o texto de prêmios tem menção a outros ranks
+      const hasOtherRanks = /(TOP\s*[2-9]|2º|3º|[2-9]\.|^[2-9]\s)/im.test(prizesText);
+      
+      if (!hasOtherRanks) {
+        // Se não tem outros ranks, assume que TUDO é pro TOP 1
+        // Removemos "TOP 1" se existir no começo, e juntamos linhas com " + "
+        prize1 = prizesText
+          .split('\n')
+          .map(l => l.replace(/^(TOP\s*1|1º|1\.|^1\s)[:\-\s]*/i, '').trim())
+          .filter(Boolean)
+          .join(' + ');
+      } else {
+        prize1 = extractPrizeForRank(prizesText, 1);
+      }
+    } else {
+      prize1 = extractPrizeForRank(prizesText, 1);
+    }
+
     // TOP 1
-    const prize1 = extractPrizeForRank(prizesText, 1);
     winnersText += `**TOP** <:novo_emoji:1381082106469290076> ${top1} ${prize1 ? `| **${prize1}**` : ""}\n`;
 
     // TOPS EXTRA
-    if (topsExtra) {
+    if (hasExtra) {
       const lines = topsExtra.split('\n').map(l => l.trim()).filter(Boolean);
       lines.forEach((line, index) => {
         const rank = index + 2;
