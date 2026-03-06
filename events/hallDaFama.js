@@ -182,6 +182,57 @@ async function ensureButtonAtBottom(channel, client, force = true) {
   }
 }
 
+function buildHallDaFamaModal(cityKey, defaultEventName) {
+  const modal = new ModalBuilder()
+    .setCustomId(`${MODAL_SUBMIT}:${cityKey}`)
+    .setTitle(`Hall da Fama - ${CITIES[cityKey].label}`);
+
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("hf_event_name")
+        .setLabel("Nome do Evento")
+        .setPlaceholder("Ex: SANTA DO CRIME")
+        .setStyle(TextInputStyle.Short)
+        .setValue(defaultEventName || "")
+        .setRequired(true)
+    ),
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("hf_top1")
+        .setLabel("🥇 TOP 1 (Nome | ID)")
+        .setPlaceholder("Ex: Macedo | 123")
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+    ),
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("hf_tops_extra")
+        .setLabel("🥈 TOP 2, 3... (Um por linha)")
+        .setPlaceholder("Ex: Joao | 456\nMaria | 789")
+        .setStyle(TextInputStyle.Paragraph)
+        .setRequired(false)
+    ),
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("hf_image")
+        .setLabel("Link da Imagem 1 (Banner/Print)")
+        .setPlaceholder("https://cdn.discordapp.com/...")
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+    ),
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("hf_image2")
+        .setLabel("Link da Imagem 2 (Opcional)")
+        .setPlaceholder("https://cdn.discordapp.com/...")
+        .setStyle(TextInputStyle.Short)
+        .setRequired(false)
+    )
+  );
+  return modal;
+}
+
 // ================= EXPORTS =================
 
 export async function hallDaFamaOnReady(client) {
@@ -199,6 +250,27 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
   if (interaction.isButton() && interaction.customId === BTN_OPEN_MENU) {
     if (!hasPermission(interaction.member, interaction.user.id)) {
       return interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
+    }
+
+    // ✅ Tenta detectar cidade automaticamente pelo cronograma
+    const eventData = getTodayEventData();
+    let autoCityKey = null;
+
+    if (eventData && eventData.city) {
+      const normalized = eventData.city.toLowerCase().trim();
+      if (CITIES[normalized]) {
+        autoCityKey = normalized;
+      } else {
+        const foundKey = Object.keys(CITIES).find(k => normalized.includes(k));
+        if (foundKey) autoCityKey = foundKey;
+      }
+    }
+
+    if (autoCityKey) {
+      const defaultEventName = eventData ? eventData.eventName : "";
+      const modal = buildHallDaFamaModal(autoCityKey, defaultEventName);
+      await interaction.showModal(modal);
+      return true;
     }
 
     const select = new StringSelectMenuBuilder()
@@ -231,54 +303,7 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
     const eventData = getTodayEventData();
     const defaultEventName = eventData ? eventData.eventName : "";
     
-    const modal = new ModalBuilder()
-      .setCustomId(`${MODAL_SUBMIT}:${cityKey}`)
-      .setTitle(`Hall da Fama - ${CITIES[cityKey].label}`);
-
-    // Inputs separados para facilitar
-    modal.addComponents(
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId("hf_event_name")
-          .setLabel("Nome do Evento")
-          .setPlaceholder("Ex: SANTA DO CRIME")
-          .setStyle(TextInputStyle.Short)
-          .setValue(defaultEventName || "")
-          .setRequired(true)
-      ),
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId("hf_top1")
-          .setLabel("🥇 TOP 1 (Nome | ID)")
-          .setPlaceholder("Ex: Macedo | 123")
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true)
-      ),
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId("hf_tops_extra")
-          .setLabel("🥈 TOP 2, 3... (Um por linha)")
-          .setPlaceholder("Ex: Joao | 456\nMaria | 789")
-          .setStyle(TextInputStyle.Paragraph)
-          .setRequired(false)
-      ),
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId("hf_image")
-          .setLabel("Link da Imagem 1 (Banner/Print)")
-          .setPlaceholder("https://cdn.discordapp.com/...")
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true)
-      ),
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId("hf_image2")
-          .setLabel("Link da Imagem 2 (Opcional)")
-          .setPlaceholder("https://cdn.discordapp.com/...")
-          .setStyle(TextInputStyle.Short)
-          .setRequired(false)
-      )
-    );
+    const modal = buildHallDaFamaModal(cityKey, defaultEventName);
 
     await interaction.showModal(modal);
     return true;
