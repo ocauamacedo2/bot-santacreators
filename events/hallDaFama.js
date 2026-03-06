@@ -1,6 +1,7 @@
 // d:\santacreators-main\events\hallDaFama.js
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   EmbedBuilder,
   ActionRowBuilder,
@@ -66,14 +67,76 @@ const BTN_APPROVE_PREFIX = "hf_approve_";
 const BTN_REJECT_PREFIX = "hf_reject_";
 
 // ================= PERSISTÊNCIA =================
-const DATA_DIR = path.resolve(process.cwd(), "data");
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const DATA_DIR = path.resolve(__dirname, "../data");
 const STATE_FILE = path.join(DATA_DIR, "halldafama_state.json");
+const CRONO_FILE = path.join(DATA_DIR, "cronograma_state.json"); // Lê o arquivo do cronograma
 
 const ensureDir = () => { if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true }); };
 const saveState = (data) => { ensureDir(); fs.writeFileSync(STATE_FILE, JSON.stringify(data, null, 2)); };
 const loadState = () => { try { if (fs.existsSync(STATE_FILE)) return JSON.parse(fs.readFileSync(STATE_FILE, "utf8")); } catch {} return { pendingRequests: {} }; };
 
 let state = loadState();
+
+// ================= LÓGICA INTELIGENTE (CRONOGRAMA) =================
+
+// Pega o dia da semana em SP (seg, ter, qua...)
+function getTodayKey() {
+  const now = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
+  const days = ["dom", "seg", "ter", "qua", "qui", "sex", "sab"];
+  return days[now.getDay()];
+}
+
+// Lê o cronograma e retorna os dados de HOJE
+function getTodayEventData() {
+  try {
+    if (!fs.existsSync(CRONO_FILE)) return null;
+    const crono = JSON.parse(fs.readFileSync(CRONO_FILE, "utf8"));
+    const todayKey = getTodayKey();
+    
+    // Tenta pegar do schedule normal (19h)
+    const normal = crono.schedule?.[todayKey];
+    if (normal && normal.active) return normal;
+
+    // Se não tiver, tenta madrugada (se for madrugada agora, pega do dia anterior tecnicamente, mas vamos simplificar)
+    const madru = crono.madrugada?.[todayKey];
+    if (madru && madru.active) return madru;
+
+    return null;
+  } catch (e) {
+    console.error("Erro ao ler cronograma:", e);
+    return null;
+  }
+}
+
+// Extrai a premiação do texto do cronograma para uma posição específica (1, 2, 3)
+function extractPrizeForRank(prizesText, rank) {
+  if (!prizesText) return "";
+  const lines = prizesText.split('\n');
+  // Procura linhas que tenham "TOP X" ou "1º" ou apenas comece com o numero
+  const regex = new RegExp(`(TOP\\s*${rank}|${rank}º|${rank}\\.|^${rank}\\s)`, 'i');
+  
+  const line = lines.find(l => regex.test(l));
+  if (line) {
+    // Remove o prefixo "TOP 1:" para ficar só o prêmio
+    return line.replace(regex, '').replace(/^[:\-\s]+/, '').trim();
+  }
+  return "";
+}
+
+// ================= TEMPLATES DE TEXTO (VARIAÇÃO) =================
+const INTRO_TEMPLATES = [
+  "É com **MUITO orgulho** que anunciamos os grandes vencedores do nosso evento!",
+  "**É com MUITA honra** que trazemos os campeões do evento de hoje!",
+  "A disputa foi insana, mas eles mostraram quem manda! Confira os vencedores:",
+  "Mais um evento concluído com sucesso! Uma salva de palmas para os brabos:",
+  "Eles mostraram habilidade, esperteza e sangue nos olhos! 🩸"
+];
+
+function getRandomIntro() {
+  return INTRO_TEMPLATES[Math.floor(Math.random() * INTRO_TEMPLATES.length)];
+}
 
 // ================= HELPERS =================
 function hasPermission(member, userId) {
@@ -96,7 +159,6 @@ function buildRegisterButton() {
   );
 }
 
-// ✅ Lógica inteligente: se force=false, só cria se não existir. Se force=true, apaga e recria (pra descer).
 async function ensureButtonAtBottom(channel, client, force = true) {
   try {
     const messages = await channel.messages.fetch({ limit: 20 }).catch(() => null);
@@ -106,7 +168,6 @@ async function ensureButtonAtBottom(channel, client, force = true) {
       (m) => m.author.id === client.user.id && m.components.length > 0 && m.components[0].components[0].customId === BTN_OPEN_MENU
     );
 
-    // Se não for forçado (restart) e já existir botão, não faz nada
     if (!force && myMsgs.size > 0) return;
 
     for (const m of myMsgs.values()) {
@@ -124,11 +185,9 @@ async function ensureButtonAtBottom(channel, client, force = true) {
 // ================= EXPORTS =================
 
 export async function hallDaFamaOnReady(client) {
-  // Garante carregamento no boot
   state = loadState();
   const channel = await client.channels.fetch(HALL_CHANNEL_ID).catch(() => null);
   if (channel && channel.isTextBased()) {
-    // ✅ No restart, passa false para não spammar se já tiver botão
     await ensureButtonAtBottom(channel, client, false);
   }
 }
@@ -136,6 +195,7 @@ export async function hallDaFamaOnReady(client) {
 export async function hallDaFamaHandleInteraction(interaction, client) {
   if (!interaction.guild) return false;
 
+  // 1. Botão Inicial
   if (interaction.isButton() && interaction.customId === BTN_OPEN_MENU) {
     if (!hasPermission(interaction.member, interaction.user.id)) {
       return interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
@@ -163,29 +223,43 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
     return true;
   }
 
+  // 2. Seleção de Cidade -> Abre Modal
   if (interaction.isStringSelectMenu() && interaction.customId === SEL_CITY) {
     const cityKey = interaction.values[0];
+    
+    // Tenta pegar dados automáticos
+    const eventData = getTodayEventData();
+    const defaultEventName = eventData ? eventData.eventName : "";
     
     const modal = new ModalBuilder()
       .setCustomId(`${MODAL_SUBMIT}:${cityKey}`)
       .setTitle(`Hall da Fama - ${CITIES[cityKey].label}`);
 
+    // Inputs separados para facilitar
     modal.addComponents(
       new ActionRowBuilder().addComponents(
         new TextInputBuilder()
-          .setCustomId("hf_event_name")
-          .setLabel("Nome do Evento")
-          .setPlaceholder("Ex: Fuga Espacial")
+          .setCustomId("hf_top1")
+          .setLabel("🥇 TOP 1 (Nome | ID)")
+          .setPlaceholder("Ex: Macedo | 123")
           .setStyle(TextInputStyle.Short)
           .setRequired(true)
       ),
       new ActionRowBuilder().addComponents(
         new TextInputBuilder()
-          .setCustomId("hf_winners")
-          .setLabel("Vencedores (Top 1, 2, 3 ou GG)")
-          .setPlaceholder("TOP:: 1️⃣ :: Nome | ID | Prêmio\nTOP:: 2️⃣ :: ...")
-          .setStyle(TextInputStyle.Paragraph)
-          .setRequired(true)
+          .setCustomId("hf_top2")
+          .setLabel("🥈 TOP 2 (Opcional)")
+          .setPlaceholder("Ex: Joao | 456")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(false)
+      ),
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId("hf_top3")
+          .setLabel("🥉 TOP 3 (Opcional)")
+          .setPlaceholder("Ex: Maria | 789")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(false)
       ),
       new ActionRowBuilder().addComponents(
         new TextInputBuilder()
@@ -209,18 +283,43 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
     return true;
   }
 
+  // 3. Submit do Modal -> Monta Texto e Envia para Aprovação
   if (interaction.isModalSubmit() && interaction.customId.startsWith(MODAL_SUBMIT)) {
     await interaction.deferReply({ ephemeral: true });
 
     const cityKey = interaction.customId.split(":")[1];
-    if (!cityKey || !CITIES[cityKey]) {
-      return interaction.editReply("❌ Erro: Cidade não identificada.");
-    }
+    if (!cityKey || !CITIES[cityKey]) return interaction.editReply("❌ Erro: Cidade não identificada.");
 
-    const eventName = interaction.fields.getTextInputValue("hf_event_name");
-    const winnersText = interaction.fields.getTextInputValue("hf_winners");
+    // Pega inputs
+    const top1 = interaction.fields.getTextInputValue("hf_top1");
+    const top2 = interaction.fields.getTextInputValue("hf_top2");
+    const top3 = interaction.fields.getTextInputValue("hf_top3");
     const imageUrl = interaction.fields.getTextInputValue("hf_image");
     const imageUrl2 = interaction.fields.getTextInputValue("hf_image2");
+
+    // Pega dados do cronograma (automático)
+    const eventData = getTodayEventData();
+    const eventName = eventData ? eventData.eventName : "Evento Especial"; // Fallback se não achar no cronograma
+    const prizesText = eventData ? eventData.prizes : "";
+
+    // Monta a string dos vencedores com premiação automática
+    let winnersText = "";
+
+    // TOP 1
+    const prize1 = extractPrizeForRank(prizesText, 1);
+    winnersText += `**TOP** <a:novo_emoji:1381082106469290076> ${top1} ${prize1 ? `| **${prize1}**` : ""}\n`;
+
+    // TOP 2
+    if (top2) {
+      const prize2 = extractPrizeForRank(prizesText, 2);
+      winnersText += `**TOP** <a:novo_emoji:1381082144981651500> ${top2} ${prize2 ? `| **${prize2}**` : ""}\n`;
+    }
+
+    // TOP 3
+    if (top3) {
+      const prize3 = extractPrizeForRank(prizesText, 3);
+      winnersText += `**TOP** <a:novo_emoji:1381082168142336095> ${top3} ${prize3 ? `| **${prize3}**` : ""}\n`;
+    }
 
     const reqId = `${interaction.user.id}-${Date.now()}`;
     
@@ -235,17 +334,15 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
     saveState(state);
 
     const approvalChannel = await client.channels.fetch(APPROVAL_CHANNEL_ID).catch(() => null);
-    if (!approvalChannel) {
-      return interaction.editReply("❌ Canal de aprovação não encontrado.");
-    }
+    if (!approvalChannel) return interaction.editReply("❌ Canal de aprovação não encontrado.");
 
     const embed = new EmbedBuilder()
       .setTitle("🛡️ Aprovação: Hall da Fama")
       .setColor("#FFD700")
       .setDescription(`**Solicitante:** <@${interaction.user.id}>\n**Cidade:** ${CITIES[cityKey].label}`)
       .addFields(
-        { name: "Evento", value: eventName },
-        { name: "Vencedores", value: winnersText },
+        { name: "Evento (Automático)", value: eventName },
+        { name: "Vencedores (Formatado)", value: winnersText },
         { name: "Imagem 1", value: imageUrl },
         { name: "Imagem 2", value: imageUrl2 || "—" }
       )
@@ -273,6 +370,7 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
     return true;
   }
 
+  // 4. Aprovação
   if (interaction.isButton() && interaction.customId.startsWith(BTN_APPROVE_PREFIX)) {
     if (!canApprove(interaction.member, interaction.user.id)) {
       return interaction.reply({ content: "🚫 Você não tem permissão para aprovar.", ephemeral: true });
@@ -282,41 +380,39 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
     const reqId = interaction.customId.replace(BTN_APPROVE_PREFIX, "");
     const data = state.pendingRequests[reqId];
 
-    if (!data) {
-      return interaction.editReply("⚠️ Dados da solicitação expiraram.");
-    }
+    if (!data) return interaction.editReply("⚠️ Dados da solicitação expiraram.");
 
     const hallChannel = await client.channels.fetch(HALL_CHANNEL_ID).catch(() => null);
     if (!hallChannel) return interaction.editReply("❌ Canal do Hall da Fama não encontrado.");
 
     const cityData = CITIES[data.cityKey];
+    const intro = getRandomIntro(); // Frase aleatória
     
+    // Montagem da mensagem final (Estilo Diva/Grande)
     const finalMessage = 
 `# 🎉 :  **Santa Creators : ${data.eventName}** 🎉 
 
-É com MUITO orgulho que anunciamos os grandes vencedores do nosso evento de ** ${data.eventName.toUpperCase()} ** na **${cityData.label.toUpperCase()}**! <:coroa_orange:1353939359144870019> 
+${intro} **${data.eventName.toUpperCase()}** na **${cityData.label.toUpperCase()}**! <:coroa_orange:1353939359144870019> 
 
-👏  Uma salva de palmas para os brabos 👏 
+👏  Uma salva de palmas para os BRABOS! 👏 
 
- :**HALL DA FAMA**
+<:12633559939374122111:1368796471297576970>  **HALL DA FAMA** <:12633559939374122111:1368796471297576970> 
 
 ${data.winnersText}
 
-Mostraram habilidade, esperteza e sangue nos olhos! <:__:1357520048318709840>
+**Foi insano, mas mais uma vez os vencedores mostraram que a vitória só é possível com raça! <:__:1357520048318709840>**
 
-@everyone @here <@&${ROLE_CIDADAO}> <@&${ROLE_LIDERES}> <@&${cityData.roleId}>
+||@everyone @here <@&${ROLE_CIDADAO}> <@&${ROLE_LIDERES}> <@&${cityData.roleId}>||
 
 ${data.imageUrl}${data.imageUrl2 ? `\n${data.imageUrl2}` : ''}`;
 
     const sentMsg = await hallChannel.send({ content: finalMessage });
     
-    // ✅ Mais emojis
     try {
-      const emojis = ["💜", "🔥", "🚀", "👏", "🎉", "🤩", "🤯", "🏆", "👑", "💸", "👀", "✨", "💯", "✅", "📸", "💎", "⚡", "💣", "🫡", "🤝"];
+      const emojis = ["💜", "🔥", "🚀", "👏", "🎉", "🤩", "🏆", "👑", "💸", "✨", "💯", "✅", "💎"];
       for (const e of emojis) await sentMsg.react(e).catch(() => {});
     } catch {}
 
-    // ✅ Aqui passa true para forçar o botão a descer
     await ensureButtonAtBottom(hallChannel, client, true);
 
     dashEmit("halldafama:aprovado", {
@@ -338,6 +434,7 @@ ${data.imageUrl}${data.imageUrl2 ? `\n${data.imageUrl2}` : ''}`;
     return true;
   }
 
+  // 5. Reprovação
   if (interaction.isButton() && interaction.customId.startsWith(BTN_REJECT_PREFIX)) {
     if (!canApprove(interaction.member, interaction.user.id)) {
       return interaction.reply({ content: "🚫 Você não tem permissão para recusar.", ephemeral: true });
