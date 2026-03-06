@@ -183,12 +183,14 @@ function VIP_messageHasVipButtons(msg) {
 // ── Helpers de data e cronograma ───────────────────────────────
 function getTodayKey() {
   const now = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
+  // ✅ SEM ROLLOVER: Passou da meia-noite (00:00), já puxa o evento do dia novo.
   const days = ["dom", "seg", "ter", "qua", "qui", "sex", "sab"];
   return days[now.getDay()];
 }
 
 function getTodayDateFormatted() {
     const now = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
+    // ✅ Data exata de agora (sem voltar dia)
     const day = String(now.getDate()).padStart(2, '0');
     const month = String(now.getMonth() + 1).padStart(2, '0');
     const year = now.getFullYear();

@@ -97,6 +97,7 @@ let state = loadState();
 // Pega o dia da semana em SP (seg, ter, qua...)
 function getTodayKey() {
   const now = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
+  // ✅ SEM ROLLOVER: Passou da meia-noite (00:00), já puxa o evento do dia novo.
   const days = ["dom", "seg", "ter", "qua", "qui", "sex", "sab"];
   return days[now.getDay()];
 }
