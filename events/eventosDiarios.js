@@ -445,7 +445,8 @@ ${mentions}`;
     const embedApproved = EmbedBuilder.from(interaction.message.embeds[0])
       .setColor("#2ecc71")
       .setTitle("✅ Evento Diário APROVADO")
-      .setFooter({ text: `Aprovado por ${interaction.user.tag}` });
+      .setFooter({ text: `Aprovado por ${interaction.user.tag}` })
+      .addFields({ name: '✅ Aprovado por', value: `${interaction.user} (\`${interaction.user.tag}\`)`, inline: false });
 
     await interaction.message.edit({ embeds: [embedApproved], components: [] }).catch(() => {});
     

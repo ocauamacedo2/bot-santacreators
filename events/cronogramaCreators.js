@@ -836,7 +836,8 @@ export async function cronogramaCreatorsHandleInteraction(interaction, client) {
 
       const embed = EmbedBuilder.from(interaction.message.embeds[0])
         .setColor("#2ecc71")
-        .setFooter({ text: `Aprovado por ${interaction.user.tag}` });
+        .setFooter({ text: `Aprovado por ${interaction.user.tag}` })
+        .addFields({ name: '✅ Aprovado por', value: `${interaction.user} (\`${interaction.user.tag}\`)`, inline: false });
 
       // 1. Edita a mensagem PRIMEIRO (para os scanners verem que está aprovado)
       await interaction.message.edit({ embeds: [embed], components: [] });
