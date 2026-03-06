@@ -239,6 +239,15 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
     modal.addComponents(
       new ActionRowBuilder().addComponents(
         new TextInputBuilder()
+          .setCustomId("hf_event_name")
+          .setLabel("Nome do Evento")
+          .setPlaceholder("Ex: SANTA DO CRIME")
+          .setStyle(TextInputStyle.Short)
+          .setValue(defaultEventName || "")
+          .setRequired(true)
+      ),
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
           .setCustomId("hf_top1")
           .setLabel("🥇 TOP 1 (Nome | ID)")
           .setPlaceholder("Ex: Macedo | 123")
@@ -247,18 +256,10 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
       ),
       new ActionRowBuilder().addComponents(
         new TextInputBuilder()
-          .setCustomId("hf_top2")
-          .setLabel("🥈 TOP 2 (Opcional)")
-          .setPlaceholder("Ex: Joao | 456")
-          .setStyle(TextInputStyle.Short)
-          .setRequired(false)
-      ),
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId("hf_top3")
-          .setLabel("🥉 TOP 3 (Opcional)")
-          .setPlaceholder("Ex: Maria | 789")
-          .setStyle(TextInputStyle.Short)
+          .setCustomId("hf_tops_extra")
+          .setLabel("🥈 TOP 2, 3... (Um por linha)")
+          .setPlaceholder("Ex: Joao | 456\nMaria | 789")
+          .setStyle(TextInputStyle.Paragraph)
           .setRequired(false)
       ),
       new ActionRowBuilder().addComponents(
@@ -291,15 +292,15 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
     if (!cityKey || !CITIES[cityKey]) return interaction.editReply("❌ Erro: Cidade não identificada.");
 
     // Pega inputs
+    const eventNameInput = interaction.fields.getTextInputValue("hf_event_name");
     const top1 = interaction.fields.getTextInputValue("hf_top1");
-    const top2 = interaction.fields.getTextInputValue("hf_top2");
-    const top3 = interaction.fields.getTextInputValue("hf_top3");
+    const topsExtra = interaction.fields.getTextInputValue("hf_tops_extra");
     const imageUrl = interaction.fields.getTextInputValue("hf_image");
     const imageUrl2 = interaction.fields.getTextInputValue("hf_image2");
 
     // Pega dados do cronograma (automático)
     const eventData = getTodayEventData();
-    const eventName = eventData ? eventData.eventName : "Evento Especial"; // Fallback se não achar no cronograma
+    const eventName = eventNameInput; // Usa o input do usuário
     const prizesText = eventData ? eventData.prizes : "";
 
     // Monta a string dos vencedores com premiação automática
@@ -307,18 +308,21 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
 
     // TOP 1
     const prize1 = extractPrizeForRank(prizesText, 1);
-    winnersText += `**TOP** <a:novo_emoji:1381082106469290076> ${top1} ${prize1 ? `| **${prize1}**` : ""}\n`;
+    winnersText += `**TOP** <:novo_emoji:1381082106469290076> ${top1} ${prize1 ? `| **${prize1}**` : ""}\n`;
 
-    // TOP 2
-    if (top2) {
-      const prize2 = extractPrizeForRank(prizesText, 2);
-      winnersText += `**TOP** <a:novo_emoji:1381082144981651500> ${top2} ${prize2 ? `| **${prize2}**` : ""}\n`;
-    }
+    // TOPS EXTRA
+    if (topsExtra) {
+      const lines = topsExtra.split('\n').map(l => l.trim()).filter(Boolean);
+      lines.forEach((line, index) => {
+        const rank = index + 2;
+        const prize = extractPrizeForRank(prizesText, rank);
+        
+        let emoji = "🏅";
+        if (rank === 2) emoji = "<:novo_emoji:1381082144981651500>";
+        else if (rank === 3) emoji = "<:novo_emoji:1381082168142336095>";
 
-    // TOP 3
-    if (top3) {
-      const prize3 = extractPrizeForRank(prizesText, 3);
-      winnersText += `**TOP** <a:novo_emoji:1381082168142336095> ${top3} ${prize3 ? `| **${prize3}**` : ""}\n`;
+        winnersText += `**TOP** ${emoji} ${line} ${prize ? `| **${prize}**` : ""}\n`;
+      });
     }
 
     const reqId = `${interaction.user.id}-${Date.now()}`;
@@ -409,7 +413,7 @@ ${data.imageUrl}${data.imageUrl2 ? `\n${data.imageUrl2}` : ''}`;
     const sentMsg = await hallChannel.send({ content: finalMessage });
     
     try {
-      const emojis = ["💜", "🔥", "🚀", "👏", "🎉", "🤩", "🏆", "👑", "💸", "✨", "💯", "✅", "💎"];
+      const emojis = ["💜", "🔥", "🚀", "👏", "🎉", "🤩", "🏆", "👑", "💸", "✨", "💯", "✅", "💎", "🫡", "🤝", "🤯", "👀", "📸", "⚡", "💣", "👻", "💀", "👽", "👾", "🤖", "🎃", "😺"];
       for (const e of emojis) await sentMsg.react(e).catch(() => {});
     } catch {}
 

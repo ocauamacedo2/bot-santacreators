@@ -505,7 +505,7 @@ async function updatePanel(client, state) {
         state.textMessageIds.push(sent.id);
         if (isLast) {
           try {
-            const emojis = ["💜", "📅", "🔥", "🚀", "👏", "🎉", "🤩", "🤯", "🏆", "👑", "💸", "👀", "✨", "💯", "✅", "📸", "💎", "⚡", "💣", "🫡"];
+            const emojis = ["💜", "📅", "🔥", "🚀", "👏", "🎉", "🤩", "🤯", "🏆", "👑", "💸", "👀", "✨", "💯", "✅", "📸", "💎", "⚡", "💣", "🫡", "🤝", "👻", "💀", "👽", "👾", "🤖", "🎃", "😺"];
             for (const e of emojis) await sent.react(e).catch(() => {});
           } catch {}
         }
