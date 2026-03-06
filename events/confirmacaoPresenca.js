@@ -43,9 +43,9 @@ const CONFIRM_ROLES = [
 
 // Permissões: Admin (Resetar, Gerenciar)
 const ADMIN_ROLES = [
-  "1352407252216184833", // Resp Lider
   "1352408327983861844", // Resp Creators
   "1262262852949905409", // Resp Influ
+  "1432806235396112386", // Tier 1
 ];
 const ADMIN_USERS = [
   "1262262852949905408", // Owner
