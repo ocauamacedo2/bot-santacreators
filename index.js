@@ -875,13 +875,6 @@ client.on("messageDelete", async (message) => {
 client.on("interactionCreate", async (interaction) => {
   if (interaction.isAutocomplete()) return;
 
-  // ✅ PAY+EVT DASH — botão ➖ Remover Pontos + modal
-  try {
-    if (await payEvtDashHandleInteraction(interaction, client)) return;
-  } catch (e) {
-    console.warn("⚠️ [PAY_EVT_DASH] erro em payEvtDashHandleInteraction:", e);
-  }
-
   // ✅ [RM] Registro Manager — PRIMEIRO de todos (botões/modais dele)
   try {
     const rmHandled = await registroManagerHandleInteraction(interaction, client);
@@ -928,6 +921,13 @@ try {
 } catch (e) {
   console.warn("⚠️ [EVT3] erro em evt3EventsHandleInteraction:", e);
 }
+
+  // ✅ PAY+EVT DASH — botões/modais (remover pontos) - Moved higher for priority
+  try {
+    if (await payEvtDashHandleInteraction(interaction, client)) return;
+  } catch (e) {
+    console.warn("⚠️ [PAY_EVT_DASH] erro em payEvtDashHandleInteraction:", e);
+  }
 
 
 
