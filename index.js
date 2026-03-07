@@ -244,6 +244,9 @@ import { clearHandleMessage } from "./commands/admin/clearHandler.js";
 import { removerPermHandleMessage } from "./commands/admin/removerperm.js";
 import { duplicarPermHandleMessage, duplicarPermHandleInteraction } from "./commands/admin/duplicarperm.js";
 
+// ✅ Editar Permissões em Massa (!editarperm / !verperms)
+import { editarPermHandleMessage, verPermsHandleMessage, editarPermHandleInteraction } from "./commands/admin/editarperm.js";
+
 // Role Protect
 import { roleProtectOnReady, roleProtectHandleMessage, roleProtectHandleGuildMemberUpdate } from "./events/roleProtect.js";
 
@@ -711,6 +714,10 @@ try {
       if (await verIdHandleMessage(message, client)) return;
       if (await apagarChatHandleMessage(message, client)) return;
 
+      // Editar Permissões
+      if (await verPermsHandleMessage(message)) return;
+      if (await editarPermHandleMessage(message, client)) return;
+
       // Fluxos
       if (await pedirSetHandleMessage(message, client)) return;
       if (await handleCorrecao(message, client)) return;
@@ -968,6 +975,9 @@ try {
       
       // ✅ duplicarperm: chama UMA VEZ só (tava duplicado)
       if (await duplicarPermHandleInteraction(interaction, client)) return;
+
+      // ✅ Editar Perm (Undo Button)
+      if (await editarPermHandleInteraction(interaction, client)) return;
 
       // ✅ Cadastro Manual (Setar Cargo)
       if (await cadastroManualHandleInteraction(interaction, client)) return;
