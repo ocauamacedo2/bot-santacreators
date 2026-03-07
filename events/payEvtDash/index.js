@@ -552,20 +552,20 @@ function chartUrlTwoDatasets({ labels, payData, evtData, title }) {
     data: {
       labels,
       datasets: [
-        { label: "Pagamentos", data: payData, backgroundColor: "#5865f2" },
-        { label: "Eventos/Poderes", data: evtData, backgroundColor: "#faa61a" },
+        { label: "Pagamentos", data: payData, backgroundColor: "#5865f2", barPercentage: 0.7, categoryPercentage: 0.8 },
+        { label: "Eventos/Poderes", data: evtData, backgroundColor: "#faa61a", barPercentage: 0.7, categoryPercentage: 0.8 },
       ],
     },
     options: {
       plugins: {
-        title: { display: true, text: title, font: { size: 18 } },
-        datalabels: { anchor: "end", align: "end", offset: 2, clamp: true },
-        legend: { display: true },
+        title: { display: true, text: title, font: { size: 24 } },
+        datalabels: { anchor: "end", align: "end", offset: 4, clamp: true, font: { size: 16, weight: 'bold' }, color: '#000' },
+        legend: { display: true, labels: { font: { size: 16 } } },
       },
-      scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
+      scales: { y: { beginAtZero: true, ticks: { precision: 0, font: { size: 16 } } }, x: { ticks: { font: { size: 16 } } } },
     },
   };
-  return `https://quickchart.io/chart?c=${encodeURIComponent(JSON.stringify(cfg))}&width=1200&height=450&backgroundColor=white&plugins=chartjs-plugin-datalabels`;
+  return `https://quickchart.io/chart?c=${encodeURIComponent(JSON.stringify(cfg))}&width=1200&height=600&backgroundColor=white&plugins=chartjs-plugin-datalabels`;
 }
 
 async function fetchBuffer(url) {
@@ -623,7 +623,6 @@ async function upsertDashboard(client, reason) {
   const top3 = mergeTops(curPay.top, curEvt.top);
 
   // Textos
-  const ddAll = diff(curAllTotal, prevAllTotal);
   const ddPay = diff(curPay.total, prevPay.total);
   const ddEvt = diff(curEvt.total, prevEvt.total);
   
@@ -678,18 +677,17 @@ async function upsertDashboard(client, reason) {
       `🗓️ **Período Atual:** \`${labelFromPeriodKey(thisKey)}\``,
       `🗓️ **Período Passado:** \`${labelFromPeriodKey(lastKey)}\``,
       "",
-      `📌 **Total Atual (Pagamentos+Eventos):** **${curAllTotal}**`,
-      `📌 **Total Passado:** **${prevAllTotal}**`,
-      `📊 **Dif Total:** ${ddAll.mood} **${ddAll.sign}${Math.abs(ddAll.d)}** (${ddAll.pct.toFixed(1)}%)`,
+      ` **Pagamentos (APROVADOS):** **${curPay.total}**`,
+      `└─ Anterior: ${prevPay.total} • Dif: ${ddPay.mood} **${ddPay.sign}${Math.abs(ddPay.d)}** (${ddPay.pct.toFixed(1)}%)`,
       "",
-      `💸 **Pagamentos (APROVADOS):** **${curPay.total}** (Ant: ${prevPay.total}) ${ddPay.sign}${Math.abs(ddPay.d)}`,
-      `🎉 **Eventos (TODOS):** **${curEvt.total}** (Ant: ${prevEvt.total}) ${ddEvt.sign}${Math.abs(ddEvt.d)}`,
+      `🎉 **Eventos (TODOS):** **${curEvt.total}**`,
+      `└─ Anterior: ${prevEvt.total} • Dif: ${ddEvt.mood} **${ddEvt.sign}${Math.abs(ddEvt.d)}** (${ddEvt.pct.toFixed(1)}%)`,
       "",
       goalLine,
       "",
-      `🏆 **Top 1 Passado:** ${prevPay.top[0] ? `<@${prevPay.top[0].userId}> (${prevPay.top[0].count})` : "—"}`
+      `🏆 **Top 1 Pagamentos (Passado):** ${prevPay.top[0] ? `<@${prevPay.top[0].userId}> (${prevPay.top[0].count})` : "—"}`
     ].join("\n"))
-    .addFields({ name: "🏅 Top 3 — Ranking Geral", value: top3Text, inline: false })
+    .addFields({ name: "🏅 Top 3 — Ranking Geral (Soma)", value: top3Text, inline: false })
     .setImage("attachment://chart.png")
     .setTimestamp();
 
