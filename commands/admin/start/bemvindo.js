@@ -85,7 +85,6 @@ export default {
       if (showRules) {
         embed.addFields(
           { name: 'Regras do Servidor', value: `<#${regrasServidorId}>`, inline: true },
-          { name: 'Regras SantaCreators', value: `<#${regrasSCId}>`, inline: true },
         );
       }
 
