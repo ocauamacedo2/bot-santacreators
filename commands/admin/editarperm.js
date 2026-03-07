@@ -116,7 +116,7 @@ export async function verPermsHandleMessage(message) {
 
   const embed = new EmbedBuilder()
     .setTitle('📜 Permissões Disponíveis para !editarperm')
-    .setDescription(`Use estas chaves no comando (separadas por vírgula):\n\n`)
+    .setDescription(`Use estas chaves no comando (separadas por vírgula):\n\n${lista}`)
     .setColor('#00AAFF')
     .setFooter({ text: 'Esta mensagem será apagada em 2 minutos.' });
 
@@ -251,12 +251,12 @@ export async function editarPermHandleMessage(message, client) {
           { name: '👤 Executor', value: `<@${message.author.id}>`, inline: true },
           { name: '🎭 Cargo Afetado', value: `<@&${role.id}>`, inline: true },
           { name: '📂 Categoria', value: `${category.name} (\`${category.id}\`)`, inline: false },
-          { name: '✅ Permissões Definidas', value: permsNames.map(p => `\`\``).join(', '), inline: false },
-          { name: '📊 Canais Afetados', value: ` canais`, inline: true },
+          { name: '✅ Permissões Definidas', value: permsNames.map(p => `\`${p}\``).join(', '), inline: false },
+          { name: '📊 Canais Afetados', value: `${changedCount} canais`, inline: true },
           { name: '📍 Canal do Comando', value: `<#${message.channel.id}>`, inline: true }
         )
         .setTimestamp()
-        .setFooter({ text: `Undo ID: ` });
+        .setFooter({ text: `Undo ID: ${undoId}` });
 
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
@@ -363,7 +363,7 @@ export async function editarPermHandleInteraction(interaction, client) {
       .setDescription(`As permissões do cargo <@&${role.id}> foram restauradas para o estado anterior.`)
       .addFields(
         { name: '👤 Quem Desfez', value: `<@${interaction.user.id}>`, inline: true },
-        { name: '📊 Canais Restaurados', value: ``, inline: true }
+        { name: '📊 Canais Restaurados', value: `${restoredCount}`, inline: true }
       )
       .setTimestamp();
     
@@ -377,6 +377,6 @@ export async function editarPermHandleInteraction(interaction, client) {
     await interaction.message.edit({ components: [row] });
   } catch {}
 
-  await interaction.editReply({ content: `✅ **Sucesso!**  canais/categorias restaurados.` });
+  await interaction.editReply({ content: `✅ **Sucesso!** ${restoredCount} canais/categorias restaurados.` });
   return true;
 }
