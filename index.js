@@ -222,7 +222,7 @@ import { doacaoOnReady, doacaoHandleMessage, doacaoHandleInteraction } from "./e
 // Dash debug + dash router
 import { dashDebugOnReady } from "./events/dashDebug.js";
 import { dashRouterOnReady, dashRouterHandleMessage } from "./events/dashRouter.js";
-import { payEvtDashOnReady, payEvtDashHandleMessage } from "./events/payEvtDash/index.js";
+import { payEvtDashOnReady, payEvtDashHandleMessage, payEvtDashHandleInteraction } from "./events/payEvtDash/index.js";
 // EVT3 EventsCreator (novo, hook-based)
 import { evt3EventsOnReady, evt3EventsHandleMessage, evt3EventsHandleInteraction } from "./events/evt3EventsCreator.js";
 
@@ -875,6 +875,12 @@ client.on("messageDelete", async (message) => {
 client.on("interactionCreate", async (interaction) => {
   if (interaction.isAutocomplete()) return;
 
+  // ✅ PAY+EVT DASH — botão ➖ Remover Pontos + modal
+  try {
+    if (await payEvtDashHandleInteraction(interaction, client)) return;
+  } catch (e) {
+    console.warn("⚠️ [PAY_EVT_DASH] erro em payEvtDashHandleInteraction:", e);
+  }
 
   // ✅ [RM] Registro Manager — PRIMEIRO de todos (botões/modais dele)
   try {
