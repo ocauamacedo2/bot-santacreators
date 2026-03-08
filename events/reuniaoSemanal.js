@@ -37,14 +37,27 @@ const ROLES_REWARD = {
 // Caminhos dos dados
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const DATA_DIR = path.resolve(__dirname, "../data");
+const ROOT_DIR = path.resolve(__dirname, ".."); // Raiz do projeto
+const DATA_DIR = path.join(ROOT_DIR, "data");   // Pasta data
+
+// ✅ Helper inteligente: Procura o arquivo na pasta data, se não achar, tenta na raiz
+function resolvePath(filename) {
+  const inData = path.join(DATA_DIR, filename);
+  const inRoot = path.join(ROOT_DIR, filename);
+  
+  // Se existir na raiz (comportamento antigo de alguns módulos), usa da raiz
+  if (fs.existsSync(inRoot)) return inRoot;
+  // Senão, assume data (padrão novo ou arquivo ainda não criado)
+  return inData;
+}
 
 const FILES = {
   STATE: path.join(DATA_DIR, "reuniao_semanal_state.json"),
   GERAL_RANK: path.join(DATA_DIR, "sc_geral_weekly_rank_state_v1.json"),
-  MANAGER_STATS: path.join(DATA_DIR, "reg_manager_weekly_stats.json"),
-  SOCIAL_STATS: path.join(DATA_DIR, "pay_evt_dash_stats.json"),
-  ALINH_STATS: path.join(DATA_DIR, "alinhamento_dash_state.json"),
+  // ✅ Usa resolvePath para achar onde os outros módulos salvaram
+  MANAGER_STATS: resolvePath("reg_manager_weekly_stats.json"),
+  SOCIAL_STATS: resolvePath("pay_evt_dash_stats.json"),
+  ALINH_STATS: resolvePath("alinhamento_dash_state.json"),
 };
 
 // ================= HELPERS DE ARQUIVO =================
@@ -303,6 +316,13 @@ async function applyRoles(guild, winners, state) {
 
 export async function reuniaoSemanalOnReady(client) {
   console.log("[ReuniaoSemanal] Iniciando...");
+  
+  // ✅ DEBUG: Mostra no console quais arquivos foram encontrados
+  console.log("[ReuniaoSemanal] 🔍 Verificando fontes de dados:");
+  for (const [key, filePath] of Object.entries(FILES)) {
+    console.log(`  📄 ${key}: ${fs.existsSync(filePath) ? "✅ ENCONTRADO" : "❌ NÃO ENCONTRADO"} -> ${filePath}`);
+  }
+
   await updateAdminPanel(client);
   setInterval(() => updateAdminPanel(client), 10 * 60 * 1000);
 }
