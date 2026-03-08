@@ -1167,6 +1167,10 @@ try {
     // ✅ PRIORIDADE MÁXIMA: AutoJoin Voice (Fixo na call)
     try { iniciarAutoJoin(client); } catch {}
 
+    // ✅ REGISTROS (Poderes/Eventos) - Inicia cedo para liberar botões rápido (sem esperar scans)
+    try { iniciarRegistroPoderes(client); } catch {}
+    try { iniciarRegistroEvento(client); } catch {}
+
 // 🔥 INICIA O REMINDER AQUI
   try {
     await reminderOnReady(client);
@@ -1305,10 +1309,6 @@ try { await evt3EventsOnReady(client); } catch (e) { console.warn("⚠️ [EVT3]
 
 
     // console.log("✅ [GRAFICO_MANAGERS] instalado ✅");
-
-    // Registros/auto
-    try { iniciarRegistroPoderes(client); } catch {}
-    try { iniciarRegistroEvento(client); } catch {}
 
     // Lembretes + Monitor
     try { startTodosLembretes(client); } catch {}
