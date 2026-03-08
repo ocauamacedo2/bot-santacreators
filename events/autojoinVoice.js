@@ -71,6 +71,10 @@ async function connectToVoice(client) {
               }
           }
           // ✅ SE ESTIVER READY: NÃO DESTRÓI. Deixa o joinVoiceChannel abaixo apenas reforçar a conexão.
+      } else {
+          // Canal errado, destrói
+          try { connection.destroy(); } catch {}
+          await wait(1000);
       }
     }
 
@@ -79,8 +83,8 @@ async function connectToVoice(client) {
       channelId: channel.id,
       guildId: guild.id,
       adapterCreator: guild.voiceAdapterCreator,
-      selfDeaf: true, // ✅ Recomendado true para estabilidade se não for ouvir
-      selfMute: false,
+      selfDeaf: false, // ✅ CORRIGIDO: false para não entrar ensurdecido
+      selfMute: false, // ✅ CORRIGIDO: false para não entrar mutado
     });
 
     // Listener extra para falhas de rede (tenta recuperar antes de morrer)
@@ -92,6 +96,7 @@ async function connectToVoice(client) {
             ]);
             // Reconectando...
         } catch (error) {
+            // Se falhar a reconexão rápida, destrói para o loop principal tentar novamente limpo
             try { newConnection.destroy(); } catch {}
         }
     });
@@ -119,7 +124,7 @@ async function checkPunishment(guild, botId) {
     if (!me?.permissions.has(PermissionFlagsBits.ViewAuditLog)) return;
 
     // Espera um pouco para o audit log aparecer
-    await wait(2000);
+    await wait(3000); // Aumentado para 3s para garantir log
 
     const logs = await guild.fetchAuditLogs({ type: AuditLogEvent.MemberDisconnect, limit: 1 }).catch(() => null);
     if (!logs) return;
@@ -147,7 +152,7 @@ export function iniciarAutoJoin(client) {
   if (client.__autoJoinStarted) return;
   client.__autoJoinStarted = true;
 
-  log("Sistema V6 (Anti-Disconnect) iniciado.");
+  log("Sistema V7 (Professional Stable) iniciado.");
 
   // Tenta conectar ao ligar
   if (client.isReady()) connectToVoice(client);
@@ -163,11 +168,13 @@ export function iniciarAutoJoin(client) {
       // Verifica punição
       await checkPunishment(oldState.guild, client.user.id);
       // Reconecta
+      await wait(1000);
       connectToVoice(client);
     }
     // Caso 2: Bot movido para canal errado
     else if (newState.channelId && newState.channelId !== VOICE_CHANNEL_ID_PADRAO) {
       // warn("Bot movido. Voltando...");
+      await wait(1000);
       connectToVoice(client);
     }
   });
