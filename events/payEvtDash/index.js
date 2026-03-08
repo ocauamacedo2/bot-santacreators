@@ -472,31 +472,6 @@ async function collectAll(client) {
     }
   }
 
-  // ✅ 2.1 PODERES UTILIZADOS (Yellow) - Adicionado para somar no amarelo
-  const podCh = await client.channels.fetch(CH_PODERES_ID).catch(() => null);
-  if (podCh?.isTextBased?.()) {
-    let lastId;
-    for (let page = 0; page < 50; page++) {
-      const batch = await podCh.messages.fetch({ limit: 100, before: lastId }).catch(() => null);
-      if (!batch?.size) break;
-
-      for (const m of batch.values()) {
-        const emb = m.embeds?.[0];
-        if (!emb || !isPoderesRecordEmbed(emb)) continue;
-
-        const uid = poderes_getUserId(emb);
-        if (!uid) continue;
-
-        DEBUG.scannedPoderesMsgs++;
-        const p = periodKeyFromDateSP(new Date(m.createdTimestamp));
-        DEBUG.evtPeriodFound[p.key] = (DEBUG.evtPeriodFound[p.key] || 0) + 1;
-        events.push({ userId: String(uid), periodKey: p.key, kind: "evt_poderes" });
-      }
-      lastId = batch.last()?.id;
-      if (!lastId) break;
-    }
-  }
-
   // 3. EVT3 (Yellow)
   const st = readEvt3State();
   const map = st?.evt3Events || {};
