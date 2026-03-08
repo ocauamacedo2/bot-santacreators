@@ -41,6 +41,10 @@ globalThis.__SC_ALINV1_DASH_BOOTSTRAPPED__ = true;
     const STORAGE_DIR = path.join(__dirname, "..", "storage");
     const STATE_PATH = path.join(STORAGE_DIR, "sc_alinv1_dashboard_state.json");
 
+    // ✅ NOVO: Caminho para exportar dados para o ReuniaoSemanal ler
+    const DATA_DIR = path.join(__dirname, "..", "data");
+    const STATS_EXPORT_PATH = path.join(DATA_DIR, "alinhamento_dash_state.json");
+
     // ✅ marker fixo pra achar a mensagem antiga se o state sumir
     const DASH_MARKER = "SC_ALINV1_DASH::MAIN_V1";
 
@@ -103,6 +107,30 @@ globalThis.__SC_ALINV1_DASH_BOOTSTRAPPED__ = true;
         ensureDir(STORAGE_DIR);
         fs.writeFileSync(STATE_PATH, JSON.stringify(s, null, 2));
       } catch {}
+    }
+
+    // ✅ Função para salvar os dados agregados para outros módulos usarem
+    function saveStatsExport(items) {
+      try {
+        if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+        
+        const exportData = { weeks: {} };
+        
+        for (const item of items) {
+           const wk = item.weekKey;
+           if (!exportData.weeks[wk]) exportData.weeks[wk] = { counts: {} };
+           
+           // Quem alinhou (alinhador)
+           if (item.alinhador?.type === 'user' && item.alinhador.id) {
+             const uid = item.alinhador.id;
+             exportData.weeks[wk].counts[uid] = (exportData.weeks[wk].counts[uid] || 0) + 1;
+           }
+        }
+        
+        fs.writeFileSync(STATS_EXPORT_PATH, JSON.stringify(exportData, null, 2));
+      } catch (e) {
+        console.error("[ALINV1_DASH] Erro ao exportar stats:", e);
+      }
     }
 
     // ----------------- TIME (SP safe) -----------------
@@ -400,6 +428,9 @@ globalThis.__SC_ALINV1_DASH_BOOTSTRAPPED__ = true;
       DEBUG.stage = "scan";
       const st = loadState();
       const { items } = await collectAlinhamentos();
+
+      // ✅ EXPORTA OS DADOS PARA O REUNIAO SEMANAL
+      saveStatsExport(items);
 
       const chosen = chooseWeeksFromScan();
       const thisWeekKey = chosen.thisKey;
