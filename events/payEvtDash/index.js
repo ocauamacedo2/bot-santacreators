@@ -47,6 +47,9 @@ const PAY_PERIOD_LIMIT = 80;
 const SCAN_PAGES = 160;
 const SCAN_TTL_MS = 25 * 1000;
 
+// ✅ Otimização: parar de escanear se a mensagem for mais velha que 15 dias
+const MAX_AGE_MS = 15 * 24 * 60 * 60 * 1000;
+
 // Permissões para remover pontos
 const ALLOWED_MANAGE_IDS = [
   "660311795327828008", // você
@@ -342,6 +345,10 @@ async function findExistingDashboardMessage(dash, client) {
   }
 }
 
+function isTooOld(ts) {
+  return (Date.now() - ts) > MAX_AGE_MS;
+}
+
 // =========================
 // COLLECT DATA
 // =========================
@@ -374,7 +381,10 @@ async function collectAll(client) {
       const batch = await payCh.messages.fetch({ limit: 100, before: lastId }).catch(() => null);
       if (!batch?.size) break;
 
+      let stopScan = false;
       for (const m of batch.values()) {
+        if (isTooOld(m.createdTimestamp)) { stopScan = true; break; }
+
         DEBUG.scannedPayMsgs++;
         const emb = m.embeds?.[0];
         if (!emb || !isPaymentRecordEmbed(emb)) continue;
@@ -403,6 +413,7 @@ async function collectAll(client) {
           paymentsRejected.push({ userId: String(uid), periodKey: pStatus.key, kind: "pay_rejected" });
         }
       }
+      if (stopScan) break;
       lastId = batch.last()?.id;
       if (!lastId) break;
     }
@@ -417,7 +428,10 @@ async function collectAll(client) {
       const batch = await regEvtCh.messages.fetch({ limit: 100, before: lastId }).catch(() => null);
       if (!batch?.size) break;
 
+      let stopScan = false;
       for (const m of batch.values()) {
+        if (isTooOld(m.createdTimestamp)) { stopScan = true; break; }
+
         const emb = m.embeds?.[0];
         if (!emb || !isManualEventEmbed(emb)) continue;
 
@@ -427,6 +441,7 @@ async function collectAll(client) {
         DEBUG.scannedEvtManualMsgs++;
         manualCandidates.push({ userId: String(uid), ts: m.createdTimestamp });
       }
+      if (stopScan) break;
       lastId = batch.last()?.id;
       if (!lastId) break;
     }
@@ -448,14 +463,18 @@ async function collectAll(client) {
   }
 
   // ✅ 2.1 PODERES UTILIZADOS (Yellow) - Adicionado para somar no amarelo
-  const podCh = await client.channels.fetch(CH_PODERES_ID).catch(() => null);
-  if (podCh?.isTextBased?.()) {
+  // (Renomeado para podChScan para evitar erro de variável duplicada)
+  const podChScan = await client.channels.fetch(CH_PODERES_ID).catch(() => null);
+  if (podChScan?.isTextBased?.()) {
     let lastId;
     for (let page = 0; page < 50; page++) {
-      const batch = await podCh.messages.fetch({ limit: 100, before: lastId }).catch(() => null);
+      const batch = await podChScan.messages.fetch({ limit: 100, before: lastId }).catch(() => null);
       if (!batch?.size) break;
 
+      let stopScan = false;
       for (const m of batch.values()) {
+        if (isTooOld(m.createdTimestamp)) { stopScan = true; break; }
+
         const emb = m.embeds?.[0];
         if (!emb || !isPoderesRecordEmbed(emb)) continue;
 
@@ -467,6 +486,7 @@ async function collectAll(client) {
         DEBUG.evtPeriodFound[p.key] = (DEBUG.evtPeriodFound[p.key] || 0) + 1;
         events.push({ userId: String(uid), periodKey: p.key, kind: "evt_poderes" });
       }
+      if (stopScan) break;
       lastId = batch.last()?.id;
       if (!lastId) break;
     }
@@ -511,7 +531,10 @@ async function collectAll(client) {
       const batch = await cronoCh.messages.fetch({ limit: 100, before: lastId }).catch(() => null);
       if (!batch?.size) break;
 
+      let stopScan = false;
       for (const m of batch.values()) {
+        if (isTooOld(m.createdTimestamp)) { stopScan = true; break; }
+
         const emb = m.embeds?.[0];
         if (!emb || !isApprovedEventEmbed(emb)) continue;
 
@@ -525,6 +548,7 @@ async function collectAll(client) {
         DEBUG.evtPeriodFound[p.key] = (DEBUG.evtPeriodFound[p.key] || 0) + 1;
         events.push({ userId: String(uid), periodKey: p.key, kind: "evt_crono" });
       }
+      if (stopScan) break;
       lastId = batch.last()?.id;
       if (!lastId) break;
     }
