@@ -22,8 +22,8 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Função principal de conexão
 async function connectToVoice(client) {
-  // 🔒 TRAVA DE SEGURANÇA: Se tentou conectar há menos de 5 segundos, ignora.
-  if (Date.now() - lastConnectAttempt < 5000) return;
+  // 🔒 TRAVA DE SEGURANÇA: Se tentou conectar há menos de 10 segundos, ignora.
+  if (Date.now() - lastConnectAttempt < 10000) return;
   lastConnectAttempt = Date.now();
 
   if (isConnecting) return;
@@ -42,19 +42,25 @@ async function connectToVoice(client) {
     const guild = channel.guild;
     const connection = getVoiceConnection(guild.id);
     
-    // Verifica onde o bot está de fato (API do Discord)
-    // ✅ FORCE: true para evitar cache desatualizado que causa falso negativo
-    const me = await guild.members.fetch({ user: client.user.id, force: true }).catch(() => null);
-    const currentChannelId = me?.voice?.channelId;
-
     // 2. Verifica se já está tudo certo (Conexão interna OK + Bot no canal certo)
     const isInternalReady = connection && connection.state.status === VoiceConnectionStatus.Ready;
-    const isPhysicallyInChannel = currentChannelId === channel.id;
+    const isInternalSameChannel = connection && connection.joinConfig.channelId === channel.id;
 
-    if (isInternalReady && isPhysicallyInChannel) {
-      // Tudo ok, nada a fazer
-      isConnecting = false;
-      return;
+    if (isInternalReady && isInternalSameChannel) {
+        // ✅ OTIMIZAÇÃO: Se internamente está OK, verifica API com cautela.
+        // Se a API falhar (erro de rede), confiamos no interno e NÃO reconectamos.
+        try {
+             const me = await guild.members.fetch({ user: client.user.id, force: true });
+             if (me.voice.channelId === channel.id) {
+                 isConnecting = false;
+                 return; // Tudo 100% certo
+             }
+             // Se a API diz que tá em outro canal (ou null), deixa seguir pra corrigir.
+        } catch (e) {
+             // Erro na API? Assume que tá tudo bem pra não derrubar a call.
+             isConnecting = false;
+             return;
+        }
     }
 
     // 3. Se existe conexão mas está errada (outro canal ou travada), destrói
@@ -158,7 +164,7 @@ export function iniciarAutoJoin(client) {
   if (client.__autoJoinStarted) return;
   client.__autoJoinStarted = true;
 
-  log("Sistema V8 (Anti-Loop) iniciado.");
+  log("Sistema V9 (Ultra Stable - Long Check) iniciado.");
 
   // Tenta conectar ao ligar
   if (client.isReady()) connectToVoice(client);
@@ -174,7 +180,7 @@ export function iniciarAutoJoin(client) {
       // Verifica punição
       await checkPunishment(oldState.guild, client.user.id);
       // Reconecta
-      await wait(5000); // ⏳ Espera 5s antes de voltar (quebra o loop)
+      await wait(10000); // ⏳ Espera 10s antes de voltar (mais seguro)
       connectToVoice(client);
     }
     // Caso 2: Bot movido para canal errado
@@ -185,9 +191,9 @@ export function iniciarAutoJoin(client) {
     }
   });
 
-  // Loop de verificação (Health Check) a cada 60s
-  // Aumentado para 60s para evitar spam de verificação
+  // Loop de verificação (Health Check) a cada 5 minutos
+  // Aumentado drasticamente para evitar conflitos se a conexão estiver estável
   setInterval(() => {
     if (client.isReady()) connectToVoice(client);
-  }, 60_000);
+  }, 300_000);
 }
