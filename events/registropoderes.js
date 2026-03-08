@@ -28,7 +28,7 @@ const __dirname = path.dirname(__filename);
 const PODERES_STATE_PATH = path.resolve(__dirname, "../data/poderes_reminder_state.json");
 
 // ✅ COOLDOWN: 12 horas sem registrar de novo
-const REGPOD_COOLDOWN_MS = 12 * 60 * 60 * 1000;
+const REGPOD_COOLDOWN_MS = 8 * 60 * 60 * 1000;
 
 // 🔒 MUTEX GLOBAL PARA O ARQUIVO (Mesmo nome do outro arquivo para compartilhar no mesmo processo)
 if (!globalThis.__PODERES_FILE_MUTEX__) globalThis.__PODERES_FILE_MUTEX__ = Promise.resolve();
