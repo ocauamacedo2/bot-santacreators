@@ -1079,8 +1079,13 @@ function getSourceStats(bySourceByUser) {
     .sort((a, b) => b.val - a.val);
 }
 
-function truncateName(name, len = 12) {
-  return name.length > len ? name.slice(0, len) + ".." : name;
+function extractNameFromNick(nick) {
+  const parts = String(nick || "").split('|').map(s => s.trim());
+  // 3 partes: Cargo | Nome | ID -> Pega o do meio (Nome)
+  if (parts.length >= 3) return parts[1];
+  // 2 partes: Nome | ID -> Pega o primeiro (Nome)
+  // 1 parte: Nome -> Pega o primeiro
+  return parts[0];
 }
 
 function getRandomColors(count) {
@@ -1218,7 +1223,8 @@ function buildRankEmbeds({ wk, wkLabel, agg, minPoints, nameMap = {} }) {
       },
       options: {
         title: { display: true, text: 'Distribuição de Pontos (Fontes)' },
-        plugins: { datalabels: { color: '#000', font: { weight: 'bold', size: 14 } } }
+        legend: { display: true, position: 'bottom' },
+        plugins: { datalabels: { display: true, color: '#000', font: { weight: 'bold', size: 14 } } }
       }
     };
     embeds.push(new EmbedBuilder()
@@ -1228,23 +1234,22 @@ function buildRankEmbeds({ wk, wkLabel, agg, minPoints, nameMap = {} }) {
       .setFooter({ text: marker }));
   }
 
-  // 2. Barra: Quem mais tem pontos (Top 7)
+  // 2. Pizza: Quem mais tem pontos (Top 7)
   if (list.length > 0) {
     const topUsers = list.slice(0, 7);
     const chartConfig = {
-      type: 'bar',
+      type: 'doughnut',
       data: {
-        labels: topUsers.map(u => truncateName(nameMap[u.userId] || u.userId)),
+        labels: topUsers.map(u => extractNameFromNick(nameMap[u.userId] || u.userId)),
         datasets: [{
-          label: 'Pontos',
           data: topUsers.map(u => u.points),
-          backgroundColor: 'rgba(54, 162, 235, 0.7)',
+          backgroundColor: getRandomColors(topUsers.length),
         }]
       },
       options: {
         title: { display: true, text: 'Top Usuários com Mais Pontos' },
-        legend: { display: false },
-        scales: { yAxes: [{ ticks: { beginAtZero: true } }] }
+        legend: { display: true, position: 'bottom' },
+        plugins: { datalabels: { display: true, color: '#000', font: { weight: 'bold', size: 14 } } }
       }
     };
     embeds.push(new EmbedBuilder()
@@ -1254,23 +1259,22 @@ function buildRankEmbeds({ wk, wkLabel, agg, minPoints, nameMap = {} }) {
       .setFooter({ text: marker }));
   }
 
-  // 3. Barra: Quem menos tem pontos (Bottom 7, > 0)
+  // 3. Pizza: Quem menos tem pontos (Bottom 7, > 0)
   if (list.length > 0) {
     const bottomUsers = [...list].reverse().slice(0, 7); // Já filtramos > 0 no aggregate
     const chartConfig = {
-      type: 'bar',
+      type: 'doughnut',
       data: {
-        labels: bottomUsers.map(u => truncateName(nameMap[u.userId] || u.userId)),
+        labels: bottomUsers.map(u => extractNameFromNick(nameMap[u.userId] || u.userId)),
         datasets: [{
-          label: 'Pontos',
           data: bottomUsers.map(u => u.points),
-          backgroundColor: 'rgba(255, 99, 132, 0.7)',
+          backgroundColor: getRandomColors(bottomUsers.length),
         }]
       },
       options: {
         title: { display: true, text: 'Usuários com Menos Pontos (mas pontuaram)' },
-        legend: { display: false },
-        scales: { yAxes: [{ ticks: { beginAtZero: true } }] }
+        legend: { display: true, position: 'bottom' },
+        plugins: { datalabels: { display: true, color: '#000', font: { weight: 'bold', size: 14 } } }
       }
     };
     embeds.push(new EmbedBuilder()
@@ -1280,23 +1284,22 @@ function buildRankEmbeds({ wk, wkLabel, agg, minPoints, nameMap = {} }) {
       .setFooter({ text: marker }));
   }
 
-  // 4. Barra: O que menos dá pontos (Bottom fontes)
+  // 4. Pizza: O que menos dá pontos (Bottom fontes)
   if (sourceStats.length > 0) {
     const bottomSources = [...sourceStats].reverse().slice(0, 6);
     const chartConfig = {
-      type: 'bar',
+      type: 'doughnut',
       data: {
         labels: bottomSources.map(s => s.label),
         datasets: [{
-          label: 'Total de Pontos',
           data: bottomSources.map(s => s.val),
-          backgroundColor: 'rgba(255, 206, 86, 0.7)',
+          backgroundColor: getRandomColors(bottomSources.length),
         }]
       },
       options: {
         title: { display: true, text: 'Fontes com Menos Pontos Gerados' },
-        legend: { display: false },
-        scales: { yAxes: [{ ticks: { beginAtZero: true } }] }
+        legend: { display: true, position: 'bottom' },
+        plugins: { datalabels: { display: true, color: '#000', font: { weight: 'bold', size: 14 } } }
       }
     };
     embeds.push(new EmbedBuilder()
