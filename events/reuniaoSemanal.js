@@ -40,24 +40,17 @@ const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, ".."); // Raiz do projeto
 const DATA_DIR = path.join(ROOT_DIR, "data");   // Pasta data
 
-// ✅ Helper inteligente: Procura o arquivo na pasta data, se não achar, tenta na raiz
-function resolvePath(filename) {
-  const inData = path.join(DATA_DIR, filename);
-  const inRoot = path.join(ROOT_DIR, filename);
-  
-  // Se existir na raiz (comportamento antigo de alguns módulos), usa da raiz
-  if (fs.existsSync(inRoot)) return inRoot;
-  // Senão, assume data (padrão novo ou arquivo ainda não criado)
-  return inData;
-}
-
+// Arquivos fixos
 const FILES = {
   STATE: path.join(DATA_DIR, "reuniao_semanal_state.json"),
   GERAL_RANK: path.join(DATA_DIR, "sc_geral_weekly_rank_state_v1.json"),
-  // ✅ Usa resolvePath para achar onde os outros módulos salvaram
-  MANAGER_STATS: resolvePath("reg_manager_weekly_stats.json"),
-  SOCIAL_STATS: resolvePath("pay_evt_dash_stats.json"),
-  ALINH_STATS: resolvePath("alinhamento_dash_state.json"),
+};
+
+// Nomes de arquivos dinâmicos (podem estar na raiz ou em data)
+const DYNAMIC_FILES = {
+  MANAGER: "reg_manager_weekly_stats.json",
+  SOCIAL: "pay_evt_dash_stats.json",
+  ALINH: "alinhamento_dash_state.json",
 };
 
 // ================= HELPERS DE ARQUIVO =================
@@ -68,6 +61,16 @@ function readJSON(file) {
   } catch {
     return null;
   }
+}
+
+// ✅ Leitura dinâmica: Procura na raiz, se não achar, procura em data
+function readDynamicJSON(filename) {
+  const inRoot = path.join(ROOT_DIR, filename);
+  const inData = path.join(DATA_DIR, filename);
+  
+  if (fs.existsSync(inRoot)) return JSON.parse(fs.readFileSync(inRoot, "utf8"));
+  if (fs.existsSync(inData)) return JSON.parse(fs.readFileSync(inData, "utf8"));
+  return null;
 }
 
 function saveState(data) {
@@ -90,18 +93,41 @@ function loadState() {
   return { ...def, ...data };
 }
 
-// ================= LÓGICA DE DADOS =================
-function getCurrentWeekKey() {
-  const now = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
-  const day = now.getDay();
-  const diff = now.getDate() - day;
-  const sunday = new Date(now.setDate(diff));
-  return sunday.toISOString().slice(0, 10);
-}
+// ================= LÓGICA DE DADOS (TIMEZONE SAFE) =================
+// ✅ Cópia exata da lógica do GraficoManagers para garantir compatibilidade de chave
+const TIME_LOCAL = (() => {
+  const TZ = "America/Sao_Paulo";
+  function nowInSP() {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: TZ,
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+    }).formatToParts(new Date());
+    const get = (t) => Number(parts.find((p) => p.type === t)?.value || 0);
+    return new Date(Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second")));
+  }
+  function startOfDaySP(dateUTC) {
+    return new Date(Date.UTC(dateUTC.getUTCFullYear(), dateUTC.getUTCMonth(), dateUTC.getUTCDate()));
+  }
+  function addDays(dateUTC, n) {
+    const x = new Date(dateUTC.getTime());
+    x.setUTCDate(x.getUTCDate() + n);
+    return x;
+  }
+  function getCurrentWeekKey() {
+    const now = nowInSP();
+    const dow = now.getUTCDay(); // 0=Dom
+    const sunday = startOfDaySP(addDays(now, -dow));
+    return sunday.toISOString().slice(0, 10);
+  }
+  return { getCurrentWeekKey };
+})();
 
 function aggregateData() {
-  const wk = getCurrentWeekKey();
+  const wk = TIME_LOCAL.getCurrentWeekKey();
   
+  console.log(`[ReuniaoSemanal] Buscando dados para semana: ${wk}`);
+
   // 1. GERAL
   const geralData = readJSON(FILES.GERAL_RANK);
   let topGeral = [];
@@ -113,25 +139,28 @@ function aggregateData() {
   }
 
   // 2. MANAGER
-  const mgrData = readJSON(FILES.MANAGER_STATS);
+  const mgrData = readDynamicJSON(DYNAMIC_FILES.MANAGER);
   const mgrWeek = mgrData?.weeks?.[wk]?.approvedForManager || {};
   const topManager = Object.entries(mgrWeek)
     .map(([id, pts]) => ({ id, pts }))
     .sort((a, b) => b.pts - a.pts);
 
   // 3. SOCIAL
-  const socData = readJSON(FILES.SOCIAL_STATS);
+  const socData = readDynamicJSON(DYNAMIC_FILES.SOCIAL);
   const socWeek = socData?.weeks?.[wk]?.points || {};
   const topSocial = Object.entries(socWeek)
     .map(([id, pts]) => ({ id, pts }))
     .sort((a, b) => b.pts - a.pts);
 
   // 4. ALINHAMENTOS
-  const alinhData = readJSON(FILES.ALINH_STATS);
+  const alinhData = readDynamicJSON(DYNAMIC_FILES.ALINH);
   const alinhWeek = alinhData?.weeks?.[wk]?.counts || {};
   const topAlinh = Object.entries(alinhWeek)
     .map(([id, pts]) => ({ id, pts }))
     .sort((a, b) => b.pts - a.pts);
+
+  // Debug logs
+  // console.log(`[ReuniaoSemanal] Stats: Geral=${topGeral.length}, Mgr=${topManager.length}, Soc=${topSocial.length}, Alinh=${topAlinh.length}`);
 
   return { topGeral, topManager, topSocial, topAlinh, wk };
 }
@@ -159,7 +188,17 @@ function buildAdminEmbed(state, data, winners) {
     : "_Nenhuma pauta registrada ainda._";
 
   const fmtUser = (w) => w ? `<@${w.id}> (**${w.pts}** pts)` : "—";
-  const top3Alinh = data.topAlinh.slice(0, 3).map((x, i) => `\`${i+1}.\` <@${x.id}> (${x.pts})`).join("\n") || "—";
+  
+  // ✅ Formata Top 3 para todas as categorias
+  const fmtTop3 = (list) => {
+    if (!list || list.length === 0) return "_Sem dados_";
+    return list.slice(0, 3).map((x, i) => `\`${i+1}.\` <@${x.id}> (${x.pts})`).join("\n");
+  };
+
+  const top3Geral = fmtTop3(data.topGeral);
+  const top3Manager = fmtTop3(data.topManager);
+  const top3Social = fmtTop3(data.topSocial);
+  const top3Alinh = fmtTop3(data.topAlinh);
 
   return new EmbedBuilder()
     .setTitle("📢 Painel de Reunião Semanal (Admin)")
@@ -168,9 +207,16 @@ function buildAdminEmbed(state, data, winners) {
       `**Semana:** ${data.wk}\n\n` +
       `# 📌 Pautas da Reunião\n${pautasTexto}\n\n` +
       `# 📊 Destaques Calculados (Prévia)\n` +
+      
       `🏆 **Creator Destaque (Geral):** ${fmtUser(winners.winnerGeral)}\n` +
+      `> **Top 3 Geral:**\n${top3Geral}\n\n` +
+      
       `📞 **Master Manager:** ${fmtUser(winners.winnerManager)}\n` +
-      `📢 **Master Eventos:** ${fmtUser(winners.winnerSocial)}\n\n` +
+      `> **Top 3 Manager:**\n${top3Manager}\n\n` +
+      
+      `📢 **Master Eventos:** ${fmtUser(winners.winnerSocial)}\n` +
+      `> **Top 3 Social:**\n${top3Social}\n\n` +
+      
       `🧩 **Top Alinhadores:**\n${top3Alinh}\n\n` +
       `━━━━━━━━━━━━━━━━━━━━━━\n` +
       `**⚠️ Instruções Pós-Reunião:**\n` +
@@ -189,7 +235,14 @@ function buildPublicEmbed(state, data, winners) {
     : "—";
 
   const fmtUser = (w) => w ? `<@${w.id}>` : "—";
-  const top3Alinh = data.topAlinh.slice(0, 3).map((x, i) => `\`${i+1}.\` <@${x.id}> (${x.pts})`).join("\n") || "—";
+  
+  // ✅ Top 3 para o público também
+  const fmtTop3 = (list) => {
+    if (!list || list.length === 0) return "—";
+    return list.slice(0, 3).map((x, i) => `\`${i+1}.\` <@${x.id}> (${x.pts})`).join("\n");
+  };
+
+  const top3Alinh = fmtTop3(data.topAlinh);
 
   return new EmbedBuilder()
     .setTitle("📝 Resumo da Reunião Semanal")
@@ -316,13 +369,6 @@ async function applyRoles(guild, winners, state) {
 
 export async function reuniaoSemanalOnReady(client) {
   console.log("[ReuniaoSemanal] Iniciando...");
-  
-  // ✅ DEBUG: Mostra no console quais arquivos foram encontrados
-  console.log("[ReuniaoSemanal] 🔍 Verificando fontes de dados:");
-  for (const [key, filePath] of Object.entries(FILES)) {
-    console.log(`  📄 ${key}: ${fs.existsSync(filePath) ? "✅ ENCONTRADO" : "❌ NÃO ENCONTRADO"} -> ${filePath}`);
-  }
-
   await updateAdminPanel(client);
   setInterval(() => updateAdminPanel(client), 10 * 60 * 1000);
 }
