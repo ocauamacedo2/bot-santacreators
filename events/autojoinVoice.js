@@ -11,6 +11,7 @@ const PUNISH_DAYS = 7;
 
 // Variável para evitar múltiplas tentativas simultâneas
 let isConnecting = false;
+let lastConnectAttempt = 0; // 🔒 Cooldown para evitar loop
 
 // Logs simples
 const log = (...a) => console.log("🎧 [AutoJoin]", ...a);
@@ -21,6 +22,10 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Função principal de conexão
 async function connectToVoice(client) {
+  // 🔒 TRAVA DE SEGURANÇA: Se tentou conectar há menos de 5 segundos, ignora.
+  if (Date.now() - lastConnectAttempt < 5000) return;
+  lastConnectAttempt = Date.now();
+
   if (isConnecting) return;
   isConnecting = true;
 
@@ -28,6 +33,7 @@ async function connectToVoice(client) {
     // 1. Busca o canal
     const channel = await client.channels.fetch(VOICE_CHANNEL_ID_PADRAO).catch(() => null);
     if (!channel || channel.type !== ChannelType.GuildVoice) {
+      console.error(`[AutoJoin] ❌ Canal de voz ${VOICE_CHANNEL_ID_PADRAO} não encontrado ou inválido.`);
       // Se não achou o canal, não tem o que fazer.
       isConnecting = false;
       return;
@@ -73,7 +79,7 @@ async function connectToVoice(client) {
           // ✅ SE ESTIVER READY: NÃO DESTRÓI. Deixa o joinVoiceChannel abaixo apenas reforçar a conexão.
       } else {
           // Canal errado, destrói
-          try { connection.destroy(); } catch {}
+          // try { connection.destroy(); } catch {} // ⚠️ Removido destroy agressivo
           await wait(1000);
       }
     }
@@ -96,8 +102,8 @@ async function connectToVoice(client) {
             ]);
             // Reconectando...
         } catch (error) {
-            // Se falhar a reconexão rápida, destrói para o loop principal tentar novamente limpo
-            try { newConnection.destroy(); } catch {}
+            // Se falhar, deixa o loop principal (setInterval) resolver depois.
+            // Não destrói aqui para evitar o evento "VoiceStateUpdate" de saída.
         }
     });
 
@@ -152,7 +158,7 @@ export function iniciarAutoJoin(client) {
   if (client.__autoJoinStarted) return;
   client.__autoJoinStarted = true;
 
-  log("Sistema V7 (Professional Stable) iniciado.");
+  log("Sistema V8 (Anti-Loop) iniciado.");
 
   // Tenta conectar ao ligar
   if (client.isReady()) connectToVoice(client);
@@ -168,13 +174,13 @@ export function iniciarAutoJoin(client) {
       // Verifica punição
       await checkPunishment(oldState.guild, client.user.id);
       // Reconecta
-      await wait(1000);
+      await wait(5000); // ⏳ Espera 5s antes de voltar (quebra o loop)
       connectToVoice(client);
     }
     // Caso 2: Bot movido para canal errado
     else if (newState.channelId && newState.channelId !== VOICE_CHANNEL_ID_PADRAO) {
       // warn("Bot movido. Voltando...");
-      await wait(1000);
+      await wait(2000);
       connectToVoice(client);
     }
   });

@@ -497,7 +497,7 @@ const setupEventHandlers = () => {
 
   // Ready
   client.once("ready", async () => {
-    try { iniciarAutoJoin(client); } catch {}
+    try { console.log("[CORE] Iniciando AutoJoin..."); iniciarAutoJoin(client); } catch (e) { console.error("[CORE] Erro AutoJoin:", e); }
     try { iniciarRegistroPoderes(client); } catch {}
     try { iniciarRegistroEvento(client); } catch {}
     try { await reminderOnReady(client); } catch (e) {}
@@ -564,7 +564,7 @@ const setupEventHandlers = () => {
     client.user.setActivity("Cauã Macedo – SantaCreators ✨", { type: ActivityType.Watching });
     try { iniciarRegistroPoderes(client); } catch {}
     try { iniciarRegistroEvento(client); } catch {}
-    try { iniciarAutoJoin(client); } catch {}
+    try { iniciarAutoJoin(client); } catch (e) { console.error("[CORE] Erro AutoJoin (Late):", e); }
     try { startTodosLembretes(client); } catch {}
   }
 };
