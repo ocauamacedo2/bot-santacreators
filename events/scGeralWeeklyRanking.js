@@ -1080,11 +1080,17 @@ function getSourceStats(bySourceByUser) {
 }
 
 function extractNameFromNick(nick) {
-  const parts = String(nick || "").split('|').map(s => s.trim());
-  // 3 partes: Cargo | Nome | ID -> Pega o do meio (Nome)
-  if (parts.length >= 3) return parts[1];
-  // 2 partes: Nome | ID -> Pega o primeiro (Nome)
-  // 1 parte: Nome -> Pega o primeiro
+  let parts = String(nick || "").split('|').map(s => s.trim()).filter(s => s.length > 0);
+  if (parts.length === 0) return "Desconhecido";
+
+  // Se a última parte for ID (só números), removemos
+  if (/^\d+$/.test(parts[parts.length - 1])) {
+    const id = parts.pop();
+    if (parts.length === 0) return id; // Se só tinha ID, retorna ele
+  }
+
+  // Se sobrou mais de 1 parte, assumimos que a primeira é Cargo e pegamos a segunda (Nome)
+  if (parts.length > 1) return parts[1];
   return parts[0];
 }
 
