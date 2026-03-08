@@ -186,9 +186,8 @@ function iniciarRegistroPoderes(client) {
   console.log('⚙️ Módulo Registro de Poderes carregado.');
   // console.log('⚙️ Módulo Registro de Poderes carregado.');
 
-
-  // ========= EVENTO: READY (Envia/Renova o botão ao iniciar) =========
-  client.on(Events.ClientReady, async () => {
+  // ✅ Função de Setup (Extraída para rodar imediatamente)
+  const setupBotaoPoderes = async () => {
     console.log(`⚙️ Registro de Poderes verificando canal...`);
     // console.log(`⚙️ Registro de Poderes verificando canal...`);
     try {
@@ -236,7 +235,14 @@ function iniciarRegistroPoderes(client) {
     } catch (err) {
       console.error('❌ Erro no ready do Registro de Poderes:', err);
     }
-  });
+  };
+
+  // ✅ SE O BOT JÁ ESTIVER ON, RODA AGORA. SE NÃO, ESPERA O READY.
+  if (client.isReady()) {
+    setupBotaoPoderes();
+  } else {
+    client.once(Events.ClientReady, setupBotaoPoderes);
+  }
 
   // ========= EVENTO: INTERACTION CREATE (Botão e Modal) =========
   client.on(Events.InteractionCreate, async (interaction) => {

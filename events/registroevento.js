@@ -163,13 +163,19 @@ function iniciarRegistroEvento(client) {
   console.log('⚙️ Módulo Registro de Eventos carregado.');
   // console.log('⚙️ Módulo Registro de Eventos carregado.');
 
-  // 1. READY: Garante que o botão existe ao ligar
-  client.on(Events.ClientReady, async () => {
+  // ✅ Função de Setup
+  const setupBotaoEvento = async () => {
     const canal = await client.channels.fetch(CANAL_REGISTRO_EVENTO).catch(() => null);
     if (!canal) return console.log('❌ Canal de Registro de Evento não encontrado.');
-    
     await resetarBotao(canal, client);
-  });
+  };
+
+  // ✅ SE O BOT JÁ ESTIVER ON, RODA AGORA.
+  if (client.isReady()) {
+    setupBotaoEvento();
+  } else {
+    client.once(Events.ClientReady, setupBotaoEvento);
+  }
 
   // 2. COMANDO: !registroevento (Força o reenvio do botão)
   client.on(Events.MessageCreate, async message => {
