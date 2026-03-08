@@ -346,7 +346,7 @@ function ymdSP(date) {
 
 function startOfDaySP(date) {
   const { y, m, d } = ymdSP(date);
-  return new Date(Date.UTC(y, m - 1, d));
+  return new Date(Date.UTC(y, m - 1, d, 3, 0, 0)); // ✅ FIX: 03:00 UTC = 00:00 SP
 }
 
 function dowSP(date) {
@@ -2010,7 +2010,13 @@ freezeLastWeekIfNeeded(items);
       ? aggregateByWeek(items, lastWeekKey)
       : { total: 0, top: [] };
 
-    const dd = diff(cur.total, prev.total);
+    // ✅ FIX: Usa o snapshot (valor congelado) para o total passado, se existir.
+    // Isso garante que o texto bata com o gráfico e não diminua se mensagens forem apagadas.
+    const prevTotalDisplay = (lastWeekKey && snap.totals[lastWeekKey] != null)
+      ? snap.totals[lastWeekKey]
+      : prev.total;
+
+    const dd = diff(cur.total, prevTotalDisplay);
     const g = gradeLabel(cur.total);
 
     const top3 = cur.top.slice(0, 3);
@@ -2247,7 +2253,7 @@ const oldSig = st._logSig[wk];
           }**`,
           "",
           `📌 **Total Atual:** **${cur.total}**`,
-          `📌 **Total Passado:** **${prev.total}**`,
+          `📌 **Total Passado:** **${prevTotalDisplay}**`,
           `📊 **Diferença:** ${dd.mood} **${dd.sign}${Math.abs(dd.d)}** (${dd.pct.toFixed(
             1
           )}%)`,

@@ -1062,6 +1062,36 @@ function chunkLines(lines, maxChars = 950) {
   return chunks;
 }
 
+// ================== CHART HELPERS ==================
+function getQuickChartUrl(config) {
+  return `https://quickchart.io/chart?c=${encodeURIComponent(JSON.stringify(config))}&width=800&height=450&backgroundColor=white`;
+}
+
+function getSourceStats(bySourceByUser) {
+  const totals = {};
+  for (const userSrc of Object.values(bySourceByUser)) {
+    for (const [src, count] of Object.entries(userSrc)) {
+      totals[src] = (totals[src] || 0) + count;
+    }
+  }
+  return Object.entries(totals)
+    .map(([key, val]) => ({ key, val, label: SOURCE_LABEL[key] || key }))
+    .sort((a, b) => b.val - a.val);
+}
+
+function truncateName(name, len = 12) {
+  return name.length > len ? name.slice(0, len) + ".." : name;
+}
+
+function getRandomColors(count) {
+  const colors = [
+    "#FF6384", "#36A2EB", "#FFCE56", "#4BC0C0", "#9966FF", "#FF9F40",
+    "#C9CBCF", "#FF6384", "#36A2EB", "#FFCE56", "#4BC0C0", "#9966FF"
+  ];
+  return Array.from({ length: count }, (_, i) => colors[i % colors.length]);
+}
+
+
 // ================== MESSAGE RESOLVE (EDITAR SEM SPAM) ==================
 async function resolveRankMessageForWeek(rankChannel, st, wk) {
   try {
@@ -1113,7 +1143,7 @@ async function resolveRankMessageForWeek(rankChannel, st, wk) {
 
 
 // ================== BUILD EMBEDS (SEM IMAGENS) ==================
-function buildRankEmbeds({ wk, wkLabel, agg, minPoints }) {
+function buildRankEmbeds({ wk, wkLabel, agg, minPoints, nameMap = {} }) {
   const list = agg.list || [];
   const bySourceByUser = agg.bySourceByUser || {};
 
@@ -1170,6 +1200,111 @@ function buildRankEmbeds({ wk, wkLabel, agg, minPoints }) {
       .setFooter({ text: marker })
       .setTimestamp(nowSP())
   );
+
+  // ===== GRÁFICOS (NOVOS) =====
+  const sourceStats = getSourceStats(bySourceByUser);
+  
+  // 1. Pizza: O que mais dá pontos (Top 5 fontes)
+  if (sourceStats.length > 0) {
+    const topSources = sourceStats.slice(0, 6);
+    const chartConfig = {
+      type: 'doughnut',
+      data: {
+        labels: topSources.map(s => s.label),
+        datasets: [{
+          data: topSources.map(s => s.val),
+          backgroundColor: getRandomColors(topSources.length),
+        }]
+      },
+      options: {
+        title: { display: true, text: 'Distribuição de Pontos (Fontes)' },
+        plugins: { datalabels: { color: '#000', font: { weight: 'bold', size: 14 } } }
+      }
+    };
+    embeds.push(new EmbedBuilder()
+      .setColor(0x36A2EB)
+      .setTitle("🍕 Fontes de Pontos (Top)")
+      .setImage(getQuickChartUrl(chartConfig))
+      .setFooter({ text: marker }));
+  }
+
+  // 2. Barra: Quem mais tem pontos (Top 7)
+  if (list.length > 0) {
+    const topUsers = list.slice(0, 7);
+    const chartConfig = {
+      type: 'bar',
+      data: {
+        labels: topUsers.map(u => truncateName(nameMap[u.userId] || u.userId)),
+        datasets: [{
+          label: 'Pontos',
+          data: topUsers.map(u => u.points),
+          backgroundColor: 'rgba(54, 162, 235, 0.7)',
+        }]
+      },
+      options: {
+        title: { display: true, text: 'Top Usuários com Mais Pontos' },
+        legend: { display: false },
+        scales: { yAxes: [{ ticks: { beginAtZero: true } }] }
+      }
+    };
+    embeds.push(new EmbedBuilder()
+      .setColor(0x4BC0C0)
+      .setTitle("📊 Top Usuários (Mais Pontos)")
+      .setImage(getQuickChartUrl(chartConfig))
+      .setFooter({ text: marker }));
+  }
+
+  // 3. Barra: Quem menos tem pontos (Bottom 7, > 0)
+  if (list.length > 0) {
+    const bottomUsers = [...list].reverse().slice(0, 7); // Já filtramos > 0 no aggregate
+    const chartConfig = {
+      type: 'bar',
+      data: {
+        labels: bottomUsers.map(u => truncateName(nameMap[u.userId] || u.userId)),
+        datasets: [{
+          label: 'Pontos',
+          data: bottomUsers.map(u => u.points),
+          backgroundColor: 'rgba(255, 99, 132, 0.7)',
+        }]
+      },
+      options: {
+        title: { display: true, text: 'Usuários com Menos Pontos (mas pontuaram)' },
+        legend: { display: false },
+        scales: { yAxes: [{ ticks: { beginAtZero: true } }] }
+      }
+    };
+    embeds.push(new EmbedBuilder()
+      .setColor(0xFF6384)
+      .setTitle("📉 Usuários com Menos Pontos")
+      .setImage(getQuickChartUrl(chartConfig))
+      .setFooter({ text: marker }));
+  }
+
+  // 4. Barra: O que menos dá pontos (Bottom fontes)
+  if (sourceStats.length > 0) {
+    const bottomSources = [...sourceStats].reverse().slice(0, 6);
+    const chartConfig = {
+      type: 'bar',
+      data: {
+        labels: bottomSources.map(s => s.label),
+        datasets: [{
+          label: 'Total de Pontos',
+          data: bottomSources.map(s => s.val),
+          backgroundColor: 'rgba(255, 206, 86, 0.7)',
+        }]
+      },
+      options: {
+        title: { display: true, text: 'Fontes com Menos Pontos Gerados' },
+        legend: { display: false },
+        scales: { yAxes: [{ ticks: { beginAtZero: true } }] }
+      }
+    };
+    embeds.push(new EmbedBuilder()
+      .setColor(0xFFCE56)
+      .setTitle("📉 Fontes Menos Utilizadas")
+      .setImage(getQuickChartUrl(chartConfig))
+      .setFooter({ text: marker }));
+  }
 
   // ===== RANKING DA SEMANA (TODOS) — com paginação se precisar =====
   const pagesTop = chunkLines(topLines, 3800); // 3800 pra ficar seguro no limite do Discord
@@ -1293,6 +1428,22 @@ async function upsertWeeklyRank(client, reason, { scanMode = "light", targetWeek
     const agg = aggregateWeekDetailed(items, wk);
 
     // assinatura (não editar se idêntico)
+    // ✅ Inclui nameMap na assinatura se quiser que atualize quando nomes mudam, mas talvez seja overkill.
+    // Vamos buscar nomes agora.
+    const nameMap = {};
+    if (agg.list.length > 0) {
+      const topU = agg.list.slice(0, 10);
+      const botU = agg.list.slice(-10);
+      const usersToFetch = new Set([...topU.map(u => u.userId), ...botU.map(u => u.userId)]);
+      
+      await Promise.all([...usersToFetch].map(async (uid) => {
+        try {
+          const member = await ch.guild.members.fetch(uid).catch(() => null);
+          nameMap[uid] = member ? (member.displayName || member.user.username) : (await client.users.fetch(uid).catch(() => null))?.username || uid;
+        } catch { nameMap[uid] = uid; }
+      }));
+    }
+
     const sig = JSON.stringify({
       wk,
       min: MIN_POINTS_WEEK,
@@ -1308,7 +1459,7 @@ async function upsertWeeklyRank(client, reason, { scanMode = "light", targetWeek
 // (porque limpamos o ID inválido no resolveRankMessageForWeek)
 let msg = await resolveRankMessageForWeek(ch, st, wk);
 
-const embeds = buildRankEmbeds({ wk, wkLabel, agg, minPoints: MIN_POINTS_WEEK });
+const embeds = buildRankEmbeds({ wk, wkLabel, agg, minPoints: MIN_POINTS_WEEK, nameMap });
 
 // 🔘 BOTÃO (UMA ÚNICA VEZ)
 const row = new ActionRowBuilder().addComponents(
