@@ -24,6 +24,9 @@ const DASH_CHANNEL_ID = "1457985700312911912";
 // Pagamentos
 const PAY_CHANNEL_ID = "1387922662134775818";
 
+// ✅ NOVO: Poderes Utilizados (para somar no Amarelo)
+const CH_PODERES_ID = "1374066813171929218";
+
 // EVT3
 const EVT3_EVENT_CHANNEL_ID = "1457573495952248883";
 const EVT3_STATE_FILE =
@@ -78,6 +81,7 @@ const DEBUG = {
   scannedPayMsgs: 0,
   scannedPayRegs: 0,
   scannedEvtManualMsgs: 0,
+  scannedPoderesMsgs: 0, // ✅ Debug
   scannedCronoMsgs: 0,
 
   payPeriodFound: {},
@@ -240,6 +244,8 @@ function getPaymentStatus(emb) {
 
 function isManualEventEmbed(emb) {
   const t = norm(emb?.title || emb?.data?.title || "");
+  // ✅ FIX: Garante que NÃO pega pagamentos (evita duplicar no amarelo)
+  if (t.includes("pagamento")) return false;
   return t.includes("registro") && (t.includes("poderes") || t.includes("evento") || t.includes("uso de"));
 }
 
@@ -289,6 +295,19 @@ function getApprovedEventUserId(emb) {
   return null;
 }
 
+// ✅ Parser para Poderes Utilizados (igual ao scGeralDash)
+function isPoderesRecordEmbed(emb) {
+  const t = norm(emb?.title || emb?.data?.title || "");
+  return (
+    t.includes("registro") && t.includes("poderes") && t.includes("utilizados")
+  );
+}
+function poderes_getUserId(emb) {
+  const f = getFields(emb).find((x) => norm(x?.name).includes("id"));
+  const v = String(f?.value || "").trim();
+  return /^\d{17,20}$/.test(v) ? v : null;
+}
+
 // =========================
 // DASHBOARD MSG RECOVERY
 // =========================
@@ -333,6 +352,7 @@ async function collectAll(client) {
   DEBUG.scannedPayMsgs = 0;
   DEBUG.scannedPayRegs = 0;
   DEBUG.scannedEvtManualMsgs = 0;
+  DEBUG.scannedPoderesMsgs = 0;
   DEBUG.scannedCronoMsgs = 0;
 
   DEBUG.payPeriodFound = {};
@@ -424,6 +444,31 @@ async function collectAll(client) {
       const p = periodKeyFromDateSP(new Date(cand.ts));
       DEBUG.evtPeriodFound[p.key] = (DEBUG.evtPeriodFound[p.key] || 0) + 1;
       events.push({ userId: cand.userId, periodKey: p.key, kind: "evt_manual" });
+    }
+  }
+
+  // ✅ 2.1 PODERES UTILIZADOS (Yellow) - Adicionado para somar no amarelo
+  const podCh = await client.channels.fetch(CH_PODERES_ID).catch(() => null);
+  if (podCh?.isTextBased?.()) {
+    let lastId;
+    for (let page = 0; page < 50; page++) {
+      const batch = await podCh.messages.fetch({ limit: 100, before: lastId }).catch(() => null);
+      if (!batch?.size) break;
+
+      for (const m of batch.values()) {
+        const emb = m.embeds?.[0];
+        if (!emb || !isPoderesRecordEmbed(emb)) continue;
+
+        const uid = poderes_getUserId(emb);
+        if (!uid) continue;
+
+        DEBUG.scannedPoderesMsgs++;
+        const p = periodKeyFromDateSP(new Date(m.createdTimestamp));
+        DEBUG.evtPeriodFound[p.key] = (DEBUG.evtPeriodFound[p.key] || 0) + 1;
+        events.push({ userId: String(uid), periodKey: p.key, kind: "evt_poderes" });
+      }
+      lastId = batch.last()?.id;
+      if (!lastId) break;
     }
   }
 
