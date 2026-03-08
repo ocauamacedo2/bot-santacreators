@@ -112,6 +112,23 @@ async function isAutorizado(ctx) {
   }
 }
 
+// ✅ Verificação RÁPIDA (sem fetch) para o botão não travar
+function isAutorizadoFast(interaction) {
+  try {
+    const perms = interaction.memberPermissions;
+    if (perms?.has(PermissionFlagsBits.Administrator) || perms?.has(PermissionFlagsBits.ManageGuild)) return true;
+    if (USUARIOS_LIBERADOS.includes(interaction.user.id)) return true;
+
+    const member = interaction.member;
+    // Se não tiver cache de cargos, retorna null (deixa abrir e checa no submit)
+    if (!member || !member.roles || !member.roles.cache) return null;
+
+    return CARGOS_REGISTRO_EVENTO.some(id => member.roles.cache.has(id));
+  } catch {
+    return null;
+  }
+}
+
 // =================== LÓGICA AUXILIAR ===================
 /**
  * Remove botões antigos e envia um novo para o final do chat
@@ -179,24 +196,24 @@ function iniciarRegistroEvento(client) {
     try {
       // Botão -> Abre Modal
       if (interaction.isButton() && interaction.customId === 'abrir_registro_evento') {
-        console.log(`[DEBUG] Botão 'abrir_registro_evento' clicado por ${interaction.user.tag}`);
-        // console.log(`[DEBUG] Botão 'abrir_registro_evento' clicado por ${interaction.user.tag}`);
-        const autorizado = await isAutorizado(interaction);
-        console.log(`[DEBUG] Permissão Evento: ${autorizado}`);
-        // console.log(`[DEBUG] Permissão Evento: ${autorizado}`);
-        if (!autorizado) {
+        // ✅ Usa verificação rápida
+        const auth = isAutorizadoFast(interaction);
+        
+        // Se tiver certeza que NÃO pode, bloqueia. Se for null (sem cache) ou true, deixa passar.
+        if (auth === false) {
           return interaction.reply({ content: '⚠️ Você não tem permissão.', ephemeral: true }).catch(() => {});
         }
-        console.log('[DEBUG] Tentando abrir modal de Evento...');
-        // console.log('[DEBUG] Tentando abrir modal de Evento...');
         return interaction.showModal(buildModal());
       }
 
             // Modal Submit -> Processa Registro
       if (interaction.isModalSubmit() && interaction.customId === "modal_registro_evento") {
+        // ✅ Ganha tempo imediatamente
+        await interaction.deferReply({ ephemeral: true });
+
         if (!(await isAutorizado(interaction))) {
           return interaction
-            .reply({ content: "⚠️ Sem permissão.", ephemeral: true })
+            .editReply({ content: "⚠️ Sem permissão." })
             .catch(() => {});
         }
 
@@ -218,7 +235,7 @@ function iniciarRegistroEvento(client) {
           .setTimestamp();
 
         // Responde para o usuário que clicou (ephemeral)
-        await interaction.reply({ content: "✅ Registro enviado!", ephemeral: true });
+        await interaction.editReply({ content: "✅ Registro enviado!" });
 
         const canal = await client.channels.fetch(CANAL_REGISTRO_EVENTO).catch(() => null);
         if (!canal) return;

@@ -243,17 +243,12 @@ function iniciarRegistroPoderes(client) {
     try {
       // 1) BOTÃO -> ABRE MODAL (SEM await pesado antes do showModal)
 if (interaction.isButton() && interaction.customId === "abrir_registro") {
-  console.log(`[DEBUG] Botão 'abrir_registro' clicado por ${interaction.user.tag}`);
-  // console.log(`[DEBUG] Botão 'abrir_registro' clicado por ${interaction.user.tag}`);
-
   // ✅ trava anti double-click / handler duplicado
   const lockKey = `REGPOD::abrir_registro::${interaction.user.id}`;
   if (!regpodAcquireLock(lockKey, 4500)) return;
 
    // ✅ checagem rápida (sem fetch)
   const fast = isAuthorizedFast(interaction);
-  console.log(`[DEBUG] Permissão Poderes (fast): ${fast}`);
-  // console.log(`[DEBUG] Permissão Poderes (fast): ${fast}`);
 
   // Se fast deu false (tem cache e não tem cargo), bloqueia aqui mesmo
   if (fast === false) {
@@ -311,9 +306,6 @@ if (interaction.isButton() && interaction.customId === "abrir_registro") {
       )
     );
 
-
-  console.log("[DEBUG] Tentando abrir modal de Poderes...");
-  // console.log("[DEBUG] Tentando abrir modal de Poderes...");
 
   try {
     await interaction.showModal(modal);
