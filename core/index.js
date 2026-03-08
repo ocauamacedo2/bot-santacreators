@@ -279,6 +279,9 @@ import {
   hierarquiaHandleGuildMemberUpdate
 } from "../events/hierarquiaDivisoes.js";
 
+// Reunião Semanal
+import { reuniaoSemanalOnReady, reuniaoSemanalHandleMessage, reuniaoSemanalHandleInteraction } from "../events/reuniaoSemanal.js";
+
 // Log Entrada
 import * as memberJoinLog from "../events/logs/memberJoinLog.js";
 
@@ -374,6 +377,7 @@ const setupEventHandlers = () => {
       if (await aulaoHandleMessage(message, client)) return;
       if (await cronogramaCreatorsHandleMessage(message, client)) return;
       if (await hierarquiaHandleMessage(message, client)) return;
+      if (await reuniaoSemanalHandleMessage(message, client)) return;
       if (await sortChannelsHandleMessage(message, client)) return;
       if (await roleProtectHandleMessage(message, client)) return;
       if (await connectStatusHandleMessage(message, client)) return;
@@ -466,6 +470,7 @@ const setupEventHandlers = () => {
       if (await hallDaFamaHandleInteraction(interaction, client)) return;
       if (await eventosDiariosHandleInteraction(interaction, client)) return;
       if (await sortChannelsHandleInteraction(interaction, client)) return;
+      if (await reuniaoSemanalHandleInteraction(interaction, client)) return;
 
       try { if (typeof geralDash?.geralDashHandleInteraction === "function" && await geralDash.geralDashHandleInteraction(interaction, client)) return; } catch (e) {}
 
@@ -536,6 +541,7 @@ const setupEventHandlers = () => {
     try { await monitorCargosOnReady(client); } catch (e) {}
     try { await cronogramaCreatorsOnReady(client); } catch (e) {}
     try { await hierarquiaOnReady(client); } catch (e) {}
+    try { await reuniaoSemanalOnReady(client); } catch (e) {}
     memberJoinLog.initInviteCache(client);
 
     try { startTodosLembretes(client); } catch {}
