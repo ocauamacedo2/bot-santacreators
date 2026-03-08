@@ -14,7 +14,7 @@ import {
 } from "discord.js";
 
 // ================= CONFIGURAÇÃO =================
-const ADMIN_CHANNEL_ID = "1387864036259004436"; // Canal Robusto (Resp)
+const ADMIN_CHANNEL_ID = "1480351746562981999"; // Canal Robusto (Resp)
 const PUBLIC_CHANNEL_ID = "1469726935247487078"; // Canal Resumo (Público)
 
 // Cargos de Gestão (Permissão para mexer no painel)
