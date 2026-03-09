@@ -96,6 +96,9 @@ const CRONOGRAMA_LOGS_CHANNEL_ID = "1387864036259004436";
 // 🔥 PRESENÇA: canal de logs do confirmacaoPresenca.js
 const PRESENCA_LOGS_CHANNEL_ID = "1477802343407026257";
 
+// 🔥 CORREÇÃO: canal de logs do correcao.js
+const CORRECAO_LOGS_CHANNEL_ID = "1471695257010831614";
+
 // Fontes do teu scan “antigo”
 const CH_PODERES_ID = "1374066813171929218";
 const CH_EVENTOS_ID = "1392618646630568076";
@@ -163,6 +166,7 @@ const FULL_SCAN = {
   PRESENCAS: 20, // ✅ NOVO
   HALLDAFAMA: 20, // ✅ NOVO
   EVENTOSDIARIOS: 20, // ✅ NOVO
+  CORRECAO: 20, // ✅ NOVO
 };
 
 
@@ -289,6 +293,7 @@ function loadState() {
       presencas: {}, // ✅ NOVO
       halldafama: {}, // ✅ NOVO
       eventosdiarios: {}, // ✅ NOVO
+      correcao: {}, // ✅ NOVO
 
       // ✅ alinhamentos
       alinhamentos: {},
@@ -1219,6 +1224,30 @@ if (PRESENCA_LOGS_CHANNEL_ID) {
         userId: uid,
         ts: new Date(m.createdTimestamp),
         source: "presencas",
+    });
+  },
+});
+}
+
+// ✅ CORREÇÃO (logs)
+if (CORRECAO_LOGS_CHANNEL_ID) {
+await scanChannelEmbeds(client, {
+  channelId: CORRECAO_LOGS_CHANNEL_ID,
+  weekFloorKey,
+  maxPages: 80,
+  onMessage: async (m) => {
+    const emb = m.embeds?.[0];
+    if (!emb) return;
+    if (!isCorrecaoLogEmbed(emb)) return;
+    if (!correcaoWasScored(emb)) return;
+
+    const uid = correcao_getUserId(emb);
+    if (!uid) return;
+
+    items.push({
+      userId: uid,
+      ts: new Date(m.createdTimestamp),
+      source: "correcao",
       });
     },
   });
@@ -1807,6 +1836,20 @@ function presenca_getUserId(emb) {
   return pickFirstMentionId(v) || pickFirstIdLoose(v);
 }
 
+// Helper para Correção (Backfill/Scan)
+function isCorrecaoLogEmbed(emb) {
+  const t = norm(emb?.title || emb?.data?.title || "");
+  return t.includes("log de correcao de entrevista");
+}
+function correcaoWasScored(emb) {
+  const f = getFields(emb).find(x => norm(x?.name).includes("anti-farm"));
+  return f && (f.value.includes("✅") || f.value.includes("+1"));
+}
+function correcao_getUserId(emb) {
+  const f = getFields(emb).find(x => norm(x?.name).includes("staff que corrigiu"));
+  return f ? (pickFirstMentionId(f.value) || pickFirstIdLoose(f.value)) : null;
+}
+
 async function backfillExtrasThisWeek(client) {
   try {
     const st = loadState();
@@ -1820,6 +1863,7 @@ async function backfillExtrasThisWeek(client) {
     st.weekly.vendas = st.weekly.vendas || {};
     st.weekly.cronograma = st.weekly.cronograma || {};
     st.weekly.presencas = st.weekly.presencas || {};
+    st.weekly.correcao = st.weekly.correcao || {};
 
     // zera semana atual e recalcula
     st.weekly.doacoes[wkNow] = 0;
@@ -1828,6 +1872,7 @@ async function backfillExtrasThisWeek(client) {
     st.weekly.vendas[wkNow] = 0;
     st.weekly.cronograma[wkNow] = 0;
     st.weekly.presencas[wkNow] = 0;
+    st.weekly.correcao[wkNow] = 0;
 
     // -------- DOAÇÕES (somente quando pontuou / isento) --------
     if (DOACAO_LOGS_CHANNEL_ID) {
@@ -1903,6 +1948,19 @@ async function backfillExtrasThisWeek(client) {
         (emb) => isPresencaLogEmbed(emb) && presenca_isConfirmed(emb),
         async (_m, _emb) => {
           st.weekly.presencas[wkNow] += 1;
+        },
+        25
+      );
+    }
+
+    // -------- CORREÇÃO (Pontuou) --------
+    if (CORRECAO_LOGS_CHANNEL_ID) {
+      await scanCurrentWeekEmbeds(
+        client,
+        CORRECAO_LOGS_CHANNEL_ID,
+        (emb) => isCorrecaoLogEmbed(emb) && correcaoWasScored(emb),
+        async (_m, _emb) => {
+          st.weekly.correcao[wkNow] += 1;
         },
         25
       );
@@ -2083,6 +2141,7 @@ const mCronograma = getWeekly(st, "cronograma", wk); // usa wk do scan (históri
 const mPresencas = getWeekly(st, "presencas", wkNow); // ✅ NOVO
 const mHall = getWeekly(st, "halldafama", wkNow); // ✅ NOVO
 const mEventosDiarios = getWeekly(st, "eventosdiarios", wkNow); // ✅ NOVO
+const mCorrecao = getWeekly(st, "correcao", wkNow); // ✅ NOVO
 
 // ✅ todo o resto continua como tava (wk do scan)
 const mVipCriados = getWeekly(st, "vipCriados", wk);
@@ -2153,6 +2212,7 @@ const wkNowLabel = triLabelShortFromWeekKey(wkNow);
                 `• Presenças Confirmadas: **${mPresencas}**`, // ✅ NOVO
                 `• Hall da Fama: **${mHall}**`, // ✅ NOVO
                 `• Eventos Diários: **${mEventosDiarios}**`, // ✅ NOVO
+                `• Correções: **${mCorrecao}**`, // ✅ NOVO
               ].join("\n")
             )
             .setFooter({ text: `WEEK_KEY: ${wk}` })
@@ -2165,7 +2225,7 @@ const sigObj = {
   mAlinh, mEvtPoder, mPoderesUtil,
   mPagCriados, mPagSol, mPagPago, mPagRep,
   mVipCriados, mVipSol, mVipPago, mVipRep,
-  mDoacoes, mConvites, mPerg, mVendas, mCronograma, mPresencas, mHall, mEventosDiarios // ✅ NOVO
+  mDoacoes, mConvites, mPerg, mVendas, mCronograma, mPresencas, mHall, mEventosDiarios, mCorrecao // ✅ NOVO
 };
 
 const newSig = JSON.stringify(sigObj);
@@ -2220,6 +2280,7 @@ const oldSig = st._logSig[wk];
       `• Presenças: **${mPresencas}**`, // ✅ NOVO
       `• Hall da Fama: **${mHall}**`, // ✅ NOVO
       `• Eventos Diários: **${mEventosDiarios}**`, // ✅ NOVO
+      `• Correções: **${mCorrecao}**`, // ✅ NOVO
     ].join("\n");
 
     const mainColor =
@@ -2553,6 +2614,17 @@ dashOn("bp:punch", (_p) => {
       const st = loadState();
       const wk = weekKeyFromDateSP(new Date(p.__at || Date.now()));
       bumpWeekly(st, "presencas", wk, 1);
+      saveState(st);
+    } catch {}
+    markDirty({ invalidateScanCache: true });
+  });
+
+  // ✅ CORREÇÃO
+  dashOn("correcao:usado", (p) => {
+    try {
+      const st = loadState();
+      const wk = weekKeyFromDateSP(new Date(p.__at || Date.now()));
+      bumpWeekly(st, "correcao", wk, 1);
       saveState(st);
     } catch {}
     markDirty({ invalidateScanCache: true });

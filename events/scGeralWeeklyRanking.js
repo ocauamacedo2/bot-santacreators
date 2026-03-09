@@ -113,6 +113,7 @@ const PERGUNTAS_LOGS_CHANNEL_ID = process.env.SCPERGUNTAS_LOGS_ID?.trim() || "";
 const VENDAS_LOGS_CHANNEL_ID = "1475237983782179028";
 const CRONOGRAMA_LOGS_CHANNEL_ID = "1387864036259004436";
 const PRESENCA_LOGS_CHANNEL_ID = "1477802343407026257";
+const CORRECAO_LOGS_CHANNEL_ID = "1471695257010831614"; // ✅ Canal de logs de correção
 const HALL_CHANNEL_ID = "1386503496353976470"; // ✅ Canal do Hall da Fama
 
 // canais base
@@ -858,6 +859,26 @@ async function collectAllPoints(client, mode = "light") {
     });
   }
 
+  // CORREÇÃO (logs)
+  if (CORRECAO_LOGS_CHANNEL_ID) {
+    await scanChannelEmbeds(client, {
+      channelId: CORRECAO_LOGS_CHANNEL_ID,
+      weekFloorKey,
+      maxPages: 80,
+      onMessage: async (m) => {
+        const emb = m.embeds?.[0];
+        if (!emb) return;
+        if (!isCorrecaoLogEmbed(emb)) return;
+        if (!correcaoWasScored(emb)) return;
+
+        const uid = correcao_getUserId(emb);
+        if (!uid) return;
+
+        pushItem({ userId: uid, ts: new Date(m.createdTimestamp), source: "correcao" });
+      },
+    });
+  }
+
   // EVT3 (json + thread createdTimestamp)
   try {
     const st = readEvt3State();
@@ -983,6 +1004,7 @@ const SOURCE_LABEL = {
   presencas: "Presença",
   halldafama: "Hall da Fama",
   eventosdiarios: "Eventos Diários",
+  correcao: "Correção",
 };
 
 function aggregateWeekDetailed(items, weekKey) {
@@ -1583,6 +1605,7 @@ function wireHub(client) {
   dashOn("presenca:confirmada", () => markDirty({ invalidateScanCache: true }));
   dashOn("halldafama:aprovado", () => markDirty({ invalidateScanCache: true })); // ✅ NOVO
   dashOn("eventosdiarios:aprovado", () => markDirty({ invalidateScanCache: true })); // ✅ NOVO
+  dashOn("correcao:usado", () => markDirty({ invalidateScanCache: true })); // ✅ NOVO
   dashOn("gi:desligado", () => markDirty({ invalidateScanCache: true })); // ✅ Atualiza ranking ao desligar
 
   // scheduler leve: se DIRTY, atualiza

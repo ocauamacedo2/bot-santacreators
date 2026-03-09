@@ -1,4 +1,8 @@
 import { EmbedBuilder } from 'discord.js';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { dashEmit } from '../../utils/dashHub.js';
 
 
 
@@ -19,6 +23,37 @@ const CARGOS_PODE_USAR = [
 
 const GIF_CORRECAO =
   'https://media.discordapp.net/attachments/1362477839944777889/1384245215249825832/standard_2rss.gif';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const COOLDOWN_FILE = path.resolve(__dirname, '../../data/correcao_cooldown.json');
+
+function checkCooldown(userId) {
+  try {
+    const dir = path.dirname(COOLDOWN_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    
+    let data = {};
+    if (fs.existsSync(COOLDOWN_FILE)) {
+      data = JSON.parse(fs.readFileSync(COOLDOWN_FILE, 'utf8'));
+    }
+
+    const now = Date.now();
+    const last = data[userId] || 0;
+    const cooldown = 60 * 60 * 1000; // 1 hora
+
+    if (now - last < cooldown) {
+      return { scored: false, remaining: cooldown - (now - last) };
+    }
+
+    data[userId] = now;
+    fs.writeFileSync(COOLDOWN_FILE, JSON.stringify(data, null, 2));
+    return { scored: true, remaining: 0 };
+  } catch (e) {
+    console.error("Erro cooldown correcao:", e);
+    return { scored: true, remaining: 0 };
+  }
+}
 
 const QUESTOES = {
   1: { pergunta: "🧾 Qual o seu nome completo e, se tiver, como você costuma ser chamado dentro do RP?", resposta: "SantaCreators" },
@@ -153,6 +188,8 @@ const numeros = match[1]
     embeds: [embed]
   });
 
+  const scoreInfo = checkCooldown(message.author.id);
+
   const canalLogs = await client.channels.fetch(CANAL_LOGS_CORRECAO).catch(() => null);
   if (canalLogs) {
     // Tenta pegar quem abriu o ticket pelo tópico
@@ -169,12 +206,21 @@ const numeros = match[1]
         { name: '👤 Candidato (Opener)', value: `<@${openerId}>`, inline: true },
         { name: '📍 Canal', value: `${message.channel}`, inline: true },
         { name: '❓ Questões Corrigidas', value: numeros.join(', '), inline: false },
-        { name: '🕒 Data/Hora', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false }
+        { name: '🕒 Data/Hora', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false },
+        { name: '🧠 Anti-farm', value: scoreInfo.scored ? "✅ Pontuou (+1)" : `⏳ Cooldown (${Math.ceil(scoreInfo.remaining / 60000)}m)`, inline: false }
       )
       .setFooter({ text: 'Sistema de Correção • SantaCreators' })
       .setTimestamp();
 
     canalLogs.send({ embeds: [logEmbed] });
+
+    if (scoreInfo.scored) {
+      dashEmit('correcao:usado', {
+        userId: message.author.id,
+        __at: Date.now(),
+        source: 'correcao'
+      });
+    }
   }
 
   return true;
