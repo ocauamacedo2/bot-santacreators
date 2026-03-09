@@ -1389,7 +1389,16 @@ function diff(a, b) {
   return { d, pct, mood, sign };
 }
 
-// ================== COUNTERS (human-driven) ==================
+// ================== BACKFILL (EXTRAS - Doações/Convites/Perguntas) ==================
+// Recalcula a SEMANA ATUAL a partir dos canais de LOG dos módulos.
+// Isso deixa esses 3 contadores "à prova de restart".
+
+function isDoacaoLogEmbed(emb) {
+  const t = norm(emb?.title || emb?.data?.title || "");
+  // doacao.js usa: .setTitle("📦 Nova Doação Registrada")
+  return t.includes("nova doacao registrada");
+}
+
 function bumpWeekly(state, key, weekKey, inc = 1) {
   if (!state.weekly[key]) state.weekly[key] = {};
   state.weekly[key][weekKey] = Number(state.weekly[key][weekKey] || 0) + inc;
@@ -1399,262 +1408,10 @@ function getWeekly(state, key, weekKey) {
   return Number(state.weekly?.[key]?.[weekKey] || 0);
 }
 
-// ================== BACKFILL (pagamentosocial) ==================
 function getStatusValueFromEmbed(emb) {
   const fields = emb?.fields || emb?.data?.fields || [];
   const f = fields.find((x) => x?.name === "📌 Status");
   return String(f?.value || "");
-}
-
-function isPagamentoSocialRecordEmbed(emb) {
-  const t = String(emb?.title || emb?.data?.title || "");
-  return t.includes("Registro de Pagamento de Evento") && t.includes("SANTACREATORS");
-}
-
-async function backfillPagamentoSocialThisWeek(client) {
-  try {
-    const st = loadState();
-    const wkNow = weekKeyFromDateSP(nowSP());
-
-    const ch = await client.channels.fetch(CH_PAGAMENTOS_ID).catch(() => null);
-    if (!ch?.isTextBased?.()) {
-      return { done: false, reason: "canal_invalido" };
-    }
-
-    // garante objetos
-    st.weekly = st.weekly || {};
-    st.weekly.pagCriados = st.weekly.pagCriados || {};
-    st.weekly.pagSolicitados = st.weekly.pagSolicitados || {};
-    st.weekly.pagPagos = st.weekly.pagPagos || {};
-    st.weekly.pagReprovados = st.weekly.pagReprovados || {};
-
-    // zera a semana antes de recalcular
-    st.weekly.pagCriados[wkNow] = 0;
-    st.weekly.pagSolicitados[wkNow] = 0;
-    st.weekly.pagPagos[wkNow] = 0;
-    st.weekly.pagReprovados[wkNow] = 0;
-
-    let created = 0, solicitado = 0, pago = 0, reprovado = 0;
-
-    // ✅ paginação (até 10 páginas = 1000 mensagens)
-    let lastId;
-    let stop = false;
-
-    for (let p = 0; p < 10; p++) {
-      const batch = await ch.messages
-        .fetch({ limit: 100, before: lastId })
-        .catch(() => null);
-
-      if (!batch?.size) break;
-
-      for (const m of batch.values()) {
-        const wkMsg = weekKeyFromDateSP(new Date(m.createdTimestamp));
-
-        // ✅ quando sair da semana atual, PARA O BATCH IMEDIATO
-        if (wkMsg !== wkNow) {
-          stop = true;
-          break;
-        }
-
-        // ✅ REMOVIDO: Aceita logs de qualquer autor (webhooks, outros bots)
-        // if (m.author?.id !== client.user.id) continue;
-
-        const emb = m.embeds?.[0];
-        if (!emb) continue;
-
-        if (!isPagamentoSocialRecordEmbed(emb)) continue;
-
-        created++;
-
-        const status = getStatusValueFromEmbed(emb);
-
-        if (/REPROVADO/i.test(status)) reprovado++;
-        else if (/\bPAGO\b/i.test(status)) pago++;
-        else if (/JÁ FOI SOLICITADO/i.test(status)) solicitado++;
-      }
-
-      lastId = batch.last()?.id;
-      if (!lastId) break;
-      if (stop) break;
-    }
-
-    st.weekly.pagCriados[wkNow] = created;
-    st.weekly.pagSolicitados[wkNow] = solicitado;
-    st.weekly.pagPagos[wkNow] = pago;
-    st.weekly.pagReprovados[wkNow] = reprovado;
-
-    // marca a semana como “já calculada” (mas NÃO impede recalcular depois)
-    st.backfill = st.backfill || {};
-    st.backfill.pagamentosocialWeeks = st.backfill.pagamentosocialWeeks || {};
-    st.backfill.pagamentosocialWeeks[wkNow] = true;
-
-    saveState(st);
-
-    return { done: true, created, solicitado, pago, reprovado };
-  } catch {
-    return { done: false, reason: "erro" };
-  }
-}
-
-
-// ================== BACKFILL (GERAL - contadores humanos) ==================
-// Recalcula a SEMANA ATUAL a partir dos canais para não zerar ao reiniciar.
-// Isso deixa os números "à prova de restart", mesmo se o state sumir/corromper.
-function isEventoPoderRecordEmbed(emb) {
-  const t = norm(emb?.title || emb?.data?.title || "");
-  // ajuste se teu título for diferente
-  return (
-    t.includes("registro") &&
-    (t.includes("uso de poderes") ||
-      (t.includes("poderes") && t.includes("evento")))
-  );
-}
-
-async function scanCurrentWeekEmbeds(
-  client,
-  channelId,
-  matcherFn,
-  onMatchFn,
-  maxPages = 15
-) {
-  const wkNow = weekKeyFromDateSP(nowSP());
-
-  const ch = await client.channels.fetch(channelId).catch(() => null);
-  if (!ch?.isTextBased?.()) return { ok: false, reason: "canal_invalido" };
-
-  let lastId;
-  let stop = false;
-
-  for (let p = 0; p < maxPages; p++) {
-    const batch = await ch.messages
-      .fetch({ limit: 100, before: lastId })
-      .catch(() => null);
-
-    if (!batch?.size) break;
-
-    for (const m of batch.values()) {
-      const ts = m.editedTimestamp || m.createdTimestamp;
-      const wkMsg = weekKeyFromDateSP(new Date(ts));
-
-      // ✅ saiu da semana atual -> para o backfill desse canal
-      if (wkMsg !== wkNow) {
-        stop = true;
-        break;
-      }
-
-      // ✅ REMOVIDO: Aceita logs de qualquer autor (webhooks, outros bots)
-      // if (m.author?.id !== client.user.id) continue;
-
-      const emb = m.embeds?.[0];
-      if (!emb) continue;
-
-      if (!matcherFn(emb)) continue;
-
-      await onMatchFn(m, emb);
-    }
-
-    lastId = batch.last()?.id;
-    if (!lastId) break;
-    if (stop) break;
-  }
-
-  return { ok: true };
-}
-
-async function backfillGeralHumanCountersThisWeek(client) {
-  try {
-    const st = loadState();
-    const wkNow = weekKeyFromDateSP(nowSP());
-
-    // garante objetos
-    st.weekly = st.weekly || {};
-    st.weekly.rmAprovados = st.weekly.rmAprovados || {};
-    st.weekly.rmReprovados = st.weekly.rmReprovados || {};
-    st.weekly.alinhamentos = st.weekly.alinhamentos || {};
-    st.weekly.eventosPoderes = st.weekly.eventosPoderes || {};
-    st.weekly.poderesUtilizados = st.weekly.poderesUtilizados || {};
-
-    // ✅ zera a semana e recalcula
-    st.weekly.rmAprovados[wkNow] = 0;
-    st.weekly.rmReprovados[wkNow] = 0;
-    st.weekly.alinhamentos[wkNow] = 0;
-    st.weekly.eventosPoderes[wkNow] = 0;
-    st.weekly.poderesUtilizados[wkNow] = 0;
-
-    // -------- RM (aprov/reprov) --------
-    await scanCurrentWeekEmbeds(
-      client,
-      CH_MANAGER_ID,
-      (emb) => isRegistroManagerEmbed(emb),
-      async (_m, emb) => {
-        if (manager_isApproved(emb)) st.weekly.rmAprovados[wkNow] += 1;
-        else if (manager_isRejected(emb)) st.weekly.rmReprovados[wkNow] += 1;
-      },
-      20
-    );
-
-    // -------- ALINHAMENTOS --------
-    await scanCurrentWeekEmbeds(
-      client,
-      CH_ALINHAMENTOS_ID,
-      (emb) => isAlinhamentoRecordEmbed(emb),
-      async (_m, _emb) => {
-        st.weekly.alinhamentos[wkNow] += 1;
-      },
-      20
-    );
-
-    // -------- PODERES EM EVENTO (Social Medias) --------
-    await scanCurrentWeekEmbeds(
-      client,
-      CH_EVENTOS_ID,
-      (emb) => isEventoPoderRecordEmbed(emb),
-      async (_m, _emb) => {
-        st.weekly.eventosPoderes[wkNow] += 1;
-      },
-      20
-    );
-
-    // -------- PODERES UTILIZADOS (geral) --------
-    await scanCurrentWeekEmbeds(
-      client,
-      CH_PODERES_ID,
-      (emb) => isPoderesRecordEmbed(emb),
-      async (_m, _emb) => {
-        st.weekly.poderesUtilizados[wkNow] += 1;
-      },
-      20
-    );
-
-    // marca que fez backfill geral da semana (opcional)
-    st.backfill = st.backfill || {};
-    st.backfill.geralWeeks = st.backfill.geralWeeks || {};
-    st.backfill.geralWeeks[wkNow] = true;
-
-    saveState(st);
-
-    return {
-      done: true,
-      wkNow,
-      rmAprovados: st.weekly.rmAprovados[wkNow],
-      rmReprovados: st.weekly.rmReprovados[wkNow],
-      alinhamentos: st.weekly.alinhamentos[wkNow],
-      eventosPoderes: st.weekly.eventosPoderes[wkNow],
-      poderesUtilizados: st.weekly.poderesUtilizados[wkNow],
-    };
-  } catch (e) {
-    return { done: false, reason: e?.message || "erro" };
-  }
-}
-
-// ================== BACKFILL (EXTRAS - Doações/Convites/Perguntas) ==================
-// Recalcula a SEMANA ATUAL a partir dos canais de LOG dos módulos.
-// Isso deixa esses 3 contadores "à prova de restart".
-
-function isDoacaoLogEmbed(emb) {
-  const t = norm(emb?.title || emb?.data?.title || "");
-  // doacao.js usa: .setTitle("📦 Nova Doação Registrada")
-  return t.includes("nova doacao registrada");
 }
 
 function doacaoWasScoredFromEmbed(emb) {
@@ -1676,7 +1433,19 @@ function doacaoWasScoredFromEmbed(emb) {
   }
 }
 
+function isPagamentoSocialRecordEmbed(emb) {
+  const t = String(emb?.title || emb?.data?.title || "");
+  return t.includes("Registro de Pagamento de Evento") && t.includes("SANTACREATORS");
+}
 
+function isEventoPoderRecordEmbed(emb) {
+  const t = norm(emb?.title || emb?.data?.title || "");
+  // ajuste se teu título for diferente
+  return (
+    t.includes("registro") &&
+    (t.includes("uso de poderes") || (t.includes("poderes") && t.includes("evento")))
+  );
+}
 
 function isConviteLogEmbed(emb) {
   const t = norm(emb?.title || emb?.data?.title || "");
@@ -2981,27 +2750,8 @@ export async function geralDashOnReady(client) {
 
   wireHub(client);
 
-  // ✅ backfills primeiro (pra contadores existirem antes do primeiro embed)
-  try {
-    // pagamentos social (já existia)
-    await backfillPagamentoSocialThisWeek(client);
-  } catch {}
-
-  try {
-    // ✅ reconstrói RM/alinhamentos/poderes (sem depender do state)
-    await backfillGeralHumanCountersThisWeek(client);
-  } catch {}
-
-  try {
-    // ✅ NOVO: reconstrói Doações/Convites/Perguntas (pra não zerar no restart)
-    await backfillExtrasThisWeek(client);
-  } catch {}
-
-// ✅ ADICIONADO: Reconstrói VIP, Hall da Fama e Eventos Diários
-  try {
-    await backfillVipAndOthersThisWeek(client);
-  } catch {}
-
+  // ✅ Backfill unificado para evitar sobreescrita de estado
+  await runAllBackfillsOnReady(client);
   const st = loadState();
 
   const now = Date.now();
@@ -3236,12 +2986,8 @@ const wk = chosen.thisKey || weekKeyFromDateSP(nowSP());
     st.nextAllowedAt = NEXT_ALLOWED_AT;
     saveState(st);
 
-    try { await backfillPagamentoSocialThisWeek(client); } catch {}
-    try { await backfillGeralHumanCountersThisWeek(client); } catch {}
-    try { await backfillExtrasThisWeek(client); } catch {}
-    // ✅ ADICIONADO: Força backfill de VIP/Outros no refresh manual
-    try { await backfillVipAndOthersThisWeek(client); } catch {}
-    // Cronograma não precisa de backfill específico pois o scanChannelEmbeds já pega o histórico
+    // ✅ Roda o backfill unificado
+    await runAllBackfillsOnReady(client);
 
     await safeUpdate(client, "manual refresh (!geraldashrefresh)", {
       scanMode: "full",
