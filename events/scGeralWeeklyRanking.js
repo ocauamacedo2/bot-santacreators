@@ -508,6 +508,19 @@ function presenca_getUserId(emb) {
   return pickFirstMentionId(v) || pickFirstIdLoose(v);
 }
 
+function isCorrecaoLogEmbed(emb) {
+  const t = norm(emb?.title || emb?.data?.title || "");
+  return t.includes("log de correcao de entrevista");
+}
+function correcaoWasScored(emb) {
+  const f = getFields(emb).find(x => norm(x?.name).includes("anti-farm"));
+  return f && (f.value.includes("✅") || f.value.includes("+1"));
+}
+function correcao_getUserId(emb) {
+  const f = getFields(emb).find(x => norm(x?.name).includes("staff que corrigiu"));
+  return f ? (pickFirstMentionId(f.value) || pickFirstIdLoose(f.value)) : null;
+}
+
 function pickFirstMentionId(text) {
   const m = /<@!?(\d{17,20})>/.exec(String(text || ""));
   return m ? m[1] : null;
