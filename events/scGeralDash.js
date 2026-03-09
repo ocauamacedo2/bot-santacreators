@@ -99,6 +99,12 @@ const PRESENCA_LOGS_CHANNEL_ID = "1477802343407026257";
 // 🔥 CORREÇÃO: canal de logs do correcao.js
 const CORRECAO_LOGS_CHANNEL_ID = "1471695257010831614";
 
+// ✅ NOVOS CANAIS PARA BACKFILL (VIP / HALL)
+const VIP_MENU_CHANNEL_ID = "1414718336826081330";
+const HALL_CHANNEL_ID = "1386503496353976470";
+
+
+
 // Fontes do teu scan “antigo”
 const CH_PODERES_ID = "1374066813171929218";
 const CH_EVENTOS_ID = "1392618646630568076";
@@ -1850,6 +1856,128 @@ function correcao_getUserId(emb) {
   return f ? (pickFirstMentionId(f.value) || pickFirstIdLoose(f.value)) : null;
 }
 
+// ================== BACKFILL (VIP / HALL / EVENTOS DIÁRIOS) ==================
+
+function isVipRecordEmbed(emb) {
+  const t = norm(emb?.title || emb?.data?.title || "");
+  return t.includes("registro de vip por evento");
+}
+
+function vip_getStatus(emb) {
+  const fields = getFields(emb);
+  
+  // Procura campos que comecem com o nome esperado (normalizado)
+  const sol = fields.find(f => norm(f.name).startsWith("solicitacoes"))?.value || "";
+  const pag = fields.find(f => norm(f.name).startsWith("pagamento"))?.value || "";
+  const rep = fields.find(f => norm(f.name).startsWith("reprovacao"))?.value || "";
+
+  return {
+    isSolicitado: sol.includes("SOLICITADO"),
+    isPago: pag.includes("PAGO"),
+    isReprovado: rep.includes("REPROVADO")
+  };
+}
+
+function isHallDaFamaMsg(msg) {
+  // Hall da fama é mensagem de texto enviada pelo bot
+  return msg.content && msg.content.includes("HALL DA FAMA");
+}
+
+function isEventoDiarioLogEmbed(emb) {
+  const t = norm(emb?.title || emb?.data?.title || "");
+  // Título do log de cronograma para eventos diários
+  return t.includes("evento diario");
+}
+
+async function backfillVipAndOthersThisWeek(client) {
+  try {
+    const st = loadState();
+    const wkNow = weekKeyFromDateSP(nowSP());
+
+    // Garante objetos no state
+    st.weekly = st.weekly || {};
+    st.weekly.vipCriados = st.weekly.vipCriados || {};
+    st.weekly.vipSolicitados = st.weekly.vipSolicitados || {};
+    st.weekly.vipPagos = st.weekly.vipPagos || {};
+    st.weekly.vipReprovados = st.weekly.vipReprovados || {};
+    st.weekly.halldafama = st.weekly.halldafama || {};
+    st.weekly.eventosdiarios = st.weekly.eventosdiarios || {};
+
+    // Zera semana atual para recalcular
+    st.weekly.vipCriados[wkNow] = 0;
+    st.weekly.vipSolicitados[wkNow] = 0;
+    st.weekly.vipPagos[wkNow] = 0;
+    st.weekly.vipReprovados[wkNow] = 0;
+    st.weekly.halldafama[wkNow] = 0;
+    st.weekly.eventosdiarios[wkNow] = 0;
+
+    // 1. VIP EVENTO (Scan do canal de menu/registros)
+    await scanCurrentWeekEmbeds(
+      client,
+      VIP_MENU_CHANNEL_ID,
+      (emb) => isVipRecordEmbed(emb),
+      async (_m, emb) => {
+        st.weekly.vipCriados[wkNow] += 1;
+        
+        const status = vip_getStatus(emb);
+        if (status.isSolicitado) st.weekly.vipSolicitados[wkNow] += 1;
+        if (status.isPago) st.weekly.vipPagos[wkNow] += 1;
+        if (status.isReprovado) st.weekly.vipReprovados[wkNow] += 1;
+      },
+      40 // páginas (olha um pouco mais longe pra garantir)
+    );
+
+    // 2. HALL DA FAMA (Scan manual de mensagens de texto)
+    const hallCh = await client.channels.fetch(HALL_CHANNEL_ID).catch(() => null);
+    if (hallCh?.isTextBased()) {
+       let lastId;
+       for(let p=0; p<15; p++) {
+          const batch = await hallCh.messages.fetch({ limit: 100, before: lastId }).catch(() => null);
+          if(!batch?.size) break;
+          
+          for(const m of batch.values()) {
+             const wkMsg = weekKeyFromDateSP(new Date(m.createdTimestamp));
+             
+             // Se a mensagem é mais nova que a semana atual (futuro?), ignora
+             if(wkMsg > wkNow) continue;
+             // Se a mensagem é mais velha que a semana atual, para o scan
+             if(wkMsg < wkNow) { 
+                lastId = null; // Força parada do loop externo
+                break; 
+             }
+
+             if (isHallDaFamaMsg(m)) {
+                st.weekly.halldafama[wkNow] += 1;
+             }
+          }
+          if(!lastId) break; // Sai se o loop interno pediu
+          lastId = batch.last()?.id;
+       }
+    }
+
+    // 3. EVENTOS DIÁRIOS (Log de Cronograma)
+    if (CRONOGRAMA_LOGS_CHANNEL_ID) {
+      await scanCurrentWeekEmbeds(
+        client,
+        CRONOGRAMA_LOGS_CHANNEL_ID,
+        // Usa isCronogramaApprovedEmbed (já existente) + filtro de título
+        (emb) => isEventoDiarioLogEmbed(emb) && isCronogramaApprovedEmbed(emb),
+        async (_m, _emb) => {
+          st.weekly.eventosdiarios[wkNow] += 1;
+        },
+        25
+      );
+    }
+
+    saveState(st);
+    return { done: true };
+
+  } catch (e) {
+    console.error("[SC_GERAL_DASH] Erro no backfill VIP/Outros:", e);
+    return { done: false, error: e };
+  }
+}
+
 async function backfillExtrasThisWeek(client) {
   try {
     const st = loadState();
@@ -2869,7 +2997,10 @@ export async function geralDashOnReady(client) {
     await backfillExtrasThisWeek(client);
   } catch {}
 
-
+// ✅ ADICIONADO: Reconstrói VIP, Hall da Fama e Eventos Diários
+  try {
+    await backfillVipAndOthersThisWeek(client);
+  } catch {}
 
   const st = loadState();
 
@@ -3108,6 +3239,8 @@ const wk = chosen.thisKey || weekKeyFromDateSP(nowSP());
     try { await backfillPagamentoSocialThisWeek(client); } catch {}
     try { await backfillGeralHumanCountersThisWeek(client); } catch {}
     try { await backfillExtrasThisWeek(client); } catch {}
+    // ✅ ADICIONADO: Força backfill de VIP/Outros no refresh manual
+    try { await backfillVipAndOthersThisWeek(client); } catch {}
     // Cronograma não precisa de backfill específico pois o scanChannelEmbeds já pega o histórico
 
     await safeUpdate(client, "manual refresh (!geraldashrefresh)", {
