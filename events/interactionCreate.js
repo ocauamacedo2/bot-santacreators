@@ -2,6 +2,7 @@ import { Events } from 'discord.js';
 import entrevista from '../utils/entrevista.js';
 import { registroVendasHandleInteraction } from './registroVendas.js';
 import { sortChannelsHandleInteraction } from '../commands/canais/sortChannels.js';
+import { vipRegistroHandleInteraction } from './vipRegistro.js';
 
 // Ignora tudo do fluxo do Pedir Set (tratado no index.js)
 const isSetFlow = (interaction) => {
@@ -25,6 +26,9 @@ export default {
   async execute(interaction) {
     // ✅ não mexe no set flow
     if (isSetFlow(interaction)) return;
+
+    // ✅ VIP/Rolepass Registro
+    if (await vipRegistroHandleInteraction(interaction, interaction.client)) return;
 
     // ✅ VENDAS (Botões e Modais)
     if (await registroVendasHandleInteraction(interaction, interaction.client)) return;
