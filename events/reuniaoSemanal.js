@@ -18,13 +18,12 @@ const ADMIN_CHANNEL_ID = "1480351746562981999"; // Canal Robusto (Resp)
 const PUBLIC_CHANNEL_ID = "1469726935247487078"; // Canal Resumo (Público)
 
 // Cargos de Gestão (Permissão para mexer no painel)
-const ALLOWED_ROLES = [
-  "1262262852949905408", // Owner
-  "1352408327983861844", // Resp Creators
-  "1262262852949905409", // Resp Influ
-  "1352407252216184833", // Resp Lider
-];
-const ALLOWED_USERS = ["660311795327828008", "1262262852949905408"];
+// VIPs (Podem sempre): Owner, Eu, Resp Creators
+const VIP_USERS = ["660311795327828008", "1262262852949905408"];
+const VIP_ROLES = ["1352408327983861844"]; // Resp Creators
+
+// Restritos (Só Sábado): Resp Influ, Resp Lider
+const SATURDAY_ROLES = ["1262262852949905409", "1352407252216184833"];
 
 // Cargos de Premiação (IDs para setar automaticamente)
 const ROLES_REWARD = {
@@ -94,7 +93,6 @@ function loadState() {
 }
 
 // ================= LÓGICA DE DADOS (TIMEZONE SAFE) =================
-// ✅ Cópia exata da lógica do GraficoManagers para garantir compatibilidade de chave
 const TIME_LOCAL = (() => {
   const TZ = "America/Sao_Paulo";
   function nowInSP() {
@@ -120,7 +118,7 @@ const TIME_LOCAL = (() => {
     const sunday = startOfDaySP(addDays(now, -dow));
     return sunday.toISOString().slice(0, 10);
   }
-  return { getCurrentWeekKey };
+  return { getCurrentWeekKey, nowInSP };
 })();
 
 function aggregateData() {
@@ -159,9 +157,6 @@ function aggregateData() {
     .map(([id, pts]) => ({ id, pts }))
     .sort((a, b) => b.pts - a.pts);
 
-  // Debug logs
-  // console.log(`[ReuniaoSemanal] Stats: Geral=${topGeral.length}, Mgr=${topManager.length}, Soc=${topSocial.length}, Alinh=${topAlinh.length}`);
-
   return { topGeral, topManager, topSocial, topAlinh, wk };
 }
 
@@ -170,15 +165,93 @@ function calculateWinners(data) {
   
   let winnerManager = data.topManager[0] || null;
   if (winnerGeral && winnerManager && winnerGeral.id === winnerManager.id) {
-    winnerManager = data.topManager[1] || null;
+    // ✅ Se tiver 2º lugar, usa ele. Se não, mantém o 1º (não deixa vazio).
+    if (data.topManager[1]) {
+      winnerManager = data.topManager[1];
+    }
   }
 
   let winnerSocial = data.topSocial[0] || null;
   if (winnerGeral && winnerSocial && winnerGeral.id === winnerSocial.id) {
-    winnerSocial = data.topSocial[1] || null;
+    // ✅ Se tiver 2º lugar, usa ele. Se não, mantém o 1º.
+    if (data.topSocial[1]) {
+      winnerSocial = data.topSocial[1];
+    }
   }
 
   return { winnerGeral, winnerManager, winnerSocial };
+}
+
+// ================= CHART BUILDER =================
+function generateWeeklyChartUrl(data) {
+  // Pega Top 5 de cada categoria para o gráfico
+  const labels = [];
+  const datasets = [];
+
+  // Helper para extrair dados
+  const extract = (list, label, color) => {
+    const top5 = list.slice(0, 5);
+    if (top5.length === 0) return null;
+    
+    // Adiciona labels (nomes/IDs) se ainda não existirem
+    // Simplificação: Vamos fazer um gráfico de barras agrupado por categoria
+    // Dataset: [Geral, Manager, Social]
+    return {
+      label: label,
+      data: top5.map(x => x.pts),
+      backgroundColor: color
+    };
+  };
+
+  // Como os usuários são diferentes em cada lista, um gráfico de barras simples por categoria é melhor
+  // Vamos fazer um gráfico "Horizontal Bar" mostrando os Top 3 de cada categoria
+  
+  const chartData = {
+    labels: [],
+    datasets: [{
+      label: 'Pontos',
+      data: [],
+      backgroundColor: []
+    }]
+  };
+
+  const addCategory = (title, list, color) => {
+    if (!list || list.length === 0) return;
+    list.slice(0, 5).forEach((u, i) => {
+      // Tenta pegar nome do cache se possível, senão usa ID truncado
+      // Como não temos acesso fácil ao cache de usuários aqui sem async, usamos ID
+      // O QuickChart renderiza texto.
+      chartData.labels.push(`${title} #${i+1}`);
+      chartData.datasets[0].data.push(u.pts);
+      chartData.datasets[0].backgroundColor.push(color);
+    });
+  };
+
+  addCategory('Geral', data.topGeral, '#9b59b6'); // Roxo
+  addCategory('Manager', data.topManager, '#3498db'); // Azul
+  addCategory('Social', data.topSocial, '#e91e63'); // Rosa
+
+  const config = {
+    type: 'bar',
+    data: chartData,
+    options: {
+      legend: { display: false },
+      title: { display: true, text: 'Pontuações da Semana (Top 5 por Categoria)' },
+      scales: {
+        yAxes: [{ ticks: { beginAtZero: true, precision: 0 } }]
+      },
+      plugins: {
+        datalabels: {
+          anchor: 'end',
+          align: 'top',
+          color: 'black',
+          font: { weight: 'bold' }
+        }
+      }
+    }
+  };
+
+  return `https://quickchart.io/chart?c=${encodeURIComponent(JSON.stringify(config))}&width=800&height=400&backgroundColor=white`;
 }
 
 // ================= UI BUILDERS =================
@@ -189,7 +262,6 @@ function buildAdminEmbed(state, data, winners) {
 
   const fmtUser = (w) => w ? `<@${w.id}> (**${w.pts}** pts)` : "—";
   
-  // ✅ Formata Top 3 para todas as categorias
   const fmtTop3 = (list) => {
     if (!list || list.length === 0) return "_Sem dados_";
     return list.slice(0, 3).map((x, i) => `\`${i+1}.\` <@${x.id}> (${x.pts})`).join("\n");
@@ -236,18 +308,19 @@ function buildPublicEmbed(state, data, winners) {
 
   const fmtUser = (w) => w ? `<@${w.id}>` : "—";
   
-  // ✅ Top 3 para o público também
   const fmtTop3 = (list) => {
     if (!list || list.length === 0) return "—";
     return list.slice(0, 3).map((x, i) => `\`${i+1}.\` <@${x.id}> (${x.pts})`).join("\n");
   };
 
   const top3Alinh = fmtTop3(data.topAlinh);
+  const chartUrl = generateWeeklyChartUrl(data);
 
   return new EmbedBuilder()
     .setTitle("📝 Resumo da Reunião Semanal")
     .setColor("#9b59b6")
-    .setImage("https://media.discordapp.net/attachments/1362477839944777889/1384245215249825832/standard_2rss.gif")
+    .setImage(chartUrl) // ✅ Gráfico aqui!
+    .setThumbnail("https://media.discordapp.net/attachments/1362477839944777889/1384245215249825832/standard_2rss.gif")
     .setDescription(
       `Confira os pontos abordados e os destaques da semana!\n\n` +
       `# 📌 Pautas Abordadas\n\n${pautasTexto}\n\n` +
@@ -279,6 +352,7 @@ function buildAdminRows() {
     ),
     new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId("reuniao_publish").setLabel("✅ Publicar & Aplicar Cargos").setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId("reuniao_publish_no_roles").setLabel("📢 Publicar (Sem Cargos)").setStyle(ButtonStyle.Primary), // ✅ NOVO
       new ButtonBuilder().setCustomId("reuniao_force_roles").setLabel("⚡ Forçar Set de Cargos").setStyle(ButtonStyle.Danger)
     )
   ];
@@ -365,6 +439,25 @@ async function applyRoles(guild, winners, state) {
   return log;
 }
 
+// ================= PERMISSIONS CHECK =================
+function checkPermissions(interaction) {
+  const { user, member } = interaction;
+  
+  // 1. VIPs (Sempre podem)
+  if (VIP_USERS.includes(user.id)) return true;
+  if (member.roles.cache.some(r => VIP_ROLES.includes(r.id))) return true;
+
+  // 2. Restritos (Só Sábado)
+  const now = TIME_LOCAL.nowInSP();
+  const isSaturday = now.getDay() === 6; // 6 = Sábado
+
+  if (isSaturday) {
+    if (member.roles.cache.some(r => SATURDAY_ROLES.includes(r.id))) return true;
+  }
+
+  return false;
+}
+
 // ================= EXPORTS =================
 
 export async function reuniaoSemanalOnReady(client) {
@@ -378,7 +471,7 @@ export async function reuniaoSemanalHandleMessage(message, client) {
   
   // ✅ COMANDO MANUAL PARA FORÇAR O PAINEL
   if (message.content === "!painelreuniao") {
-    if (!ALLOWED_USERS.includes(message.author.id)) {
+    if (!VIP_USERS.includes(message.author.id)) {
       await message.reply("❌ Sem permissão.");
       return true;
     }
@@ -395,7 +488,7 @@ export async function reuniaoSemanalHandleMessage(message, client) {
   }
 
   if (message.content === "!reuniao_painel") { // Alias antigo
-    if (!ALLOWED_USERS.includes(message.author.id)) return false;
+    if (!VIP_USERS.includes(message.author.id)) return false;
     const state = loadState();
     state.panelMessageId = null; 
     saveState(state);
@@ -410,12 +503,9 @@ export async function reuniaoSemanalHandleInteraction(interaction, client) {
   if (!interaction.guild) return false;
   if (!interaction.customId?.startsWith("reuniao_")) return false;
 
-  const hasPerm = 
-    ALLOWED_USERS.includes(interaction.user.id) || 
-    interaction.member.roles.cache.some(r => ALLOWED_ROLES.includes(r.id));
-
-  if (!hasPerm) {
-    return interaction.reply({ content: "🚫 Você não tem permissão para gerenciar a reunião.", ephemeral: true });
+  // ✅ Verifica permissão (VIP ou Sábado)
+  if (!checkPermissions(interaction)) {
+    return interaction.reply({ content: "🚫 Você não tem permissão para usar isso agora (Restrito aos Sábados ou Cargos VIP).", ephemeral: true });
   }
 
   if (interaction.customId === "reuniao_add_pauta") {
@@ -455,6 +545,7 @@ export async function reuniaoSemanalHandleInteraction(interaction, client) {
     return true;
   }
 
+  // ✅ PUBLICAR COM CARGOS
   if (interaction.customId === "reuniao_publish") {
     await interaction.deferReply({ ephemeral: true });
     const state = loadState();
@@ -467,6 +558,24 @@ export async function reuniaoSemanalHandleInteraction(interaction, client) {
       await publicChannel.send({ content: "@everyone Resumo da Reunião Semanal:", embeds: [publicEmbed] });
     }
     await interaction.editReply({ content: `✅ **Reunião Publicada!**\n\n📜 **Logs de Cargos:**\n${logs.join("\n") || "Nenhuma alteração."}` });
+    return true;
+  }
+
+  // ✅ NOVO: PUBLICAR SEM CARGOS
+  if (interaction.customId === "reuniao_publish_no_roles") {
+    await interaction.deferReply({ ephemeral: true });
+    const state = loadState();
+    const data = aggregateData();
+    const winners = calculateWinners(data);
+    
+    // Não chama applyRoles
+    
+    const publicChannel = await client.channels.fetch(PUBLIC_CHANNEL_ID).catch(() => null);
+    if (publicChannel) {
+      const publicEmbed = buildPublicEmbed(state, data, winners);
+      await publicChannel.send({ content: "@everyone Resumo da Reunião Semanal (Sem alteração de cargos):", embeds: [publicEmbed] });
+    }
+    await interaction.editReply({ content: `📢 **Reunião Publicada (Apenas Texto)!**\nNenhum cargo foi alterado.` });
     return true;
   }
 
