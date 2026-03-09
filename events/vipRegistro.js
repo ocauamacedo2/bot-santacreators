@@ -841,3 +841,41 @@ export async function vipRegistroHandleInteraction(interaction, client) {
     return true;
   }
 }
+
+// ====== COMMAND HANDLER ======
+export async function vipRegistroHandleMessage(message, client) {
+  if (!message.guild || message.author.bot) return false;
+
+  if (message.content.toLowerCase() === "!vipmenu") {
+    const member = message.member;
+    const isAuth =
+      VIP_AUTH.has(member?.id) ||
+      member?.roles?.cache?.some((r) => VIP_AUTH.has(r.id));
+
+    if (!isAuth) {
+      const reply = await message.reply("🚫 Você não tem permissão para usar este comando.").catch(() => {});
+      setTimeout(() => {
+        message.delete().catch(() => {});
+        if (reply) reply.delete().catch(() => {});
+      }, 5000);
+      return true;
+    }
+
+    await message.delete().catch(() => {});
+
+    const canal = await client.channels.fetch(VIP_CANAL_ID).catch(() => null);
+    if (!ensureIsTextChannel(canal)) {
+      const reply = await message.channel.send("❌ Canal do sistema VIP não encontrado ou inválido.").catch(() => {});
+      if (reply) setTimeout(() => reply.delete().catch(() => {}), 8000);
+      return true;
+    }
+
+    await createFreshMenu(canal);
+    const reply = await message.channel.send("✅ Menu do sistema VIP recriado com sucesso!").catch(() => {});
+    if (reply) setTimeout(() => reply.delete().catch(() => {}), 8000);
+
+    return true;
+  }
+
+  return false;
+}

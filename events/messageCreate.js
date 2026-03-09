@@ -23,6 +23,7 @@ import salvar     from '../commands/salvar.js';
 import meuscargos from '../commands/meuscargos.js';
 import { registroVendasHandleMessage } from './registroVendas.js';
 import { sortChannelsHandleMessage } from '../commands/canais/sortChannels.js';
+import { vipRegistroHandleMessage } from './vipRegistro.js';
 
 // Novos comandos de permissão
 // import editarperm from '../commands/canais/editarperm.js';
@@ -74,6 +75,9 @@ export default {
   name: 'messageCreate',
   async execute(message, _args, client) {
     if (message.author.bot) return;
+
+    // ✅ VIP/Rolepass (Comando !vipmenu)
+    if (await vipRegistroHandleMessage(message, client)) return;
 
     // ✅ VENDAS (Comando !painelvendas)
     if (await registroVendasHandleMessage(message, client)) return;
