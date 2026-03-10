@@ -1646,6 +1646,78 @@ function correcao_getUserId(emb) {
   return f ? (pickFirstMentionId(f.value) || pickFirstIdLoose(f.value)) : null;
 }
 
+// Helper para Pagamento Social (Backfill)
+function pagamento_getStatus(emb) {
+  const fields = getFields(emb);
+  // Assumindo que o status é indicado pela presença de um campo específico
+  const isPago = fields.some(f => norm(f.name).includes("pago por"));
+  const isReprovado = fields.some(f => norm(f.name).includes("reprovado por"));
+  // "Solicitado" pode ser um status intermediário, vamos assumir que tem um campo também
+  const isSolicitado = fields.some(f => norm(f.name).includes("solicitado por"));
+  return { isPago, isReprovado, isSolicitado };
+}
+
+// ================== BACKFILL (GESTAO / PAGAMENTOS) ==================
+async function backfillGestaoThisWeek(client) {
+  try {
+    const st = loadState();
+    const wkNow = weekKeyFromDateSP(nowSP());
+
+    // Garante objetos no state e zera contadores da semana atual
+    const keysToReset = [
+      "rmAprovados", "rmReprovados", "alinhamentos", "eventosPoderes", 
+      "poderesUtilizados", "pagCriados", "pagSolicitados", "pagPagos", "pagReprovados"
+    ];
+    for (const key of keysToReset) {
+      st.weekly[key] = st.weekly[key] || {};
+      st.weekly[key][wkNow] = 0;
+    }
+
+    // -------- MANAGER (Aprovados/Reprovados) --------
+    if (CH_MANAGER_ID) {
+      await scanCurrentWeekEmbeds(client, CH_MANAGER_ID, (emb) => isRegistroManagerEmbed(emb),
+        async (_m, emb) => {
+          if (manager_isApproved(emb)) st.weekly.rmAprovados[wkNow] += 1;
+          if (manager_isRejected(emb)) st.weekly.rmReprovados[wkNow] += 1;
+        }, 25);
+    }
+
+    // -------- ALINHAMENTOS --------
+    if (CH_ALINHAMENTOS_ID) {
+      await scanCurrentWeekEmbeds(client, CH_ALINHAMENTOS_ID, (emb) => isAlinhamentoRecordEmbed(emb),
+        async () => { st.weekly.alinhamentos[wkNow] += 1; }, 25);
+    }
+
+    // -------- PODERES EM EVENTO (Social Medias) --------
+    if (CH_EVENTOS_ID) {
+      await scanCurrentWeekEmbeds(client, CH_EVENTOS_ID, (emb) => eventos_getRecordType(emb) === 'eventopoder',
+        async () => { st.weekly.eventosPoderes[wkNow] += 1; }, 25);
+    }
+
+    // -------- PODERES UTILIZADOS (Geral) --------
+    if (CH_PODERES_ID) {
+      await scanCurrentWeekEmbeds(client, CH_PODERES_ID, (emb) => isPoderesRecordEmbed(emb),
+        async () => { st.weekly.poderesUtilizados[wkNow] += 1; }, 25);
+    }
+    
+    // -------- PAGAMENTO SOCIAL --------
+    if (CH_PAGAMENTOS_ID) {
+      await scanCurrentWeekEmbeds(client, CH_PAGAMENTOS_ID, (emb) => isPaymentRecordEmbed(emb),
+        async (_m, emb) => {
+          st.weekly.pagCriados[wkNow] += 1;
+          const status = pagamento_getStatus(emb);
+          if (status.isSolicitado) st.weekly.pagSolicitados[wkNow] += 1;
+          if (status.isPago) st.weekly.pagPagos[wkNow] += 1;
+          if (status.isReprovado) st.weekly.pagReprovados[wkNow] += 1;
+        }, 25);
+    }
+
+    saveState(st);
+  } catch (e) {
+    console.error("[SC_GERAL_DASH] Erro no backfill de Gestão:", e);
+  }
+}
+
 // ================== BACKFILL (VIP / HALL / EVENTOS DIÁRIOS) ==================
 
 async function scanCurrentWeekEmbeds(client, channelId, filterFn, actionFn, maxPages = 25) {
@@ -1943,6 +2015,7 @@ async function runAllBackfillsOnReady(client) {
   console.log("[SC_GERAL_DASH] 🔄 Rodando backfills...");
   await backfillExtrasThisWeek(client);
   await backfillVipAndOthersThisWeek(client);
+  await backfillGestaoThisWeek(client);
   console.log("[SC_GERAL_DASH] ✅ Backfills concluídos.");
 }
 
