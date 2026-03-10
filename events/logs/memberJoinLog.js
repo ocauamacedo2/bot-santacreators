@@ -1,130 +1,89 @@
-// d:\bots\events\logs\memberJoinLog.js
-import { EmbedBuilder } from "discord.js";
+import { EmbedBuilder, Events, ChannelType } from 'discord.js';
 
-const LOG_CHANNEL_ID = "1362651746866036837";
+// Coloque o ID do canal de logs central aqui.
+// Este canal receberá os avisos de entrada de todos os servidores.
+const CENTRAL_LOG_CHANNEL_ID = 'YOUR_CENTRAL_LOG_CHANNEL_ID'; // <--- SUBSTITUA PELO ID DO SEU CANAL DE LOGS
 
-// Cache local de convites: GuildID -> Map<Code, Uses>
-const invitesCache = new Map();
+/**
+ * @param {import('discord.js').GuildMember} member 
+ */
+async function handleGuildMemberAdd(member) {
+    // Ignora a entrada de outros bots
+    if (member.user.bot) return;
 
-export async function initInviteCache(client) {
-  // Aguarda um pouco para garantir que o bot está pronto e com guilds carregadas
-  await new Promise(r => setTimeout(r, 2000));
-  
-  for (const [guildId, guild] of client.guilds.cache) {
+    const { user, guild } = member;
+    const client = guild.client;
+
+    // Tenta buscar o canal de log central
+    const logChannel = await client.channels.fetch(CENTRAL_LOG_CHANNEL_ID).catch(() => null);
+    if (!logChannel || !logChannel.isTextBased()) {
+        console.warn(`[MemberJoinLog] Canal de log central ${CENTRAL_LOG_CHANNEL_ID} não encontrado ou não é de texto.`);
+        return;
+    }
+
+    // Tenta criar um convite temporário para o "link do servidor"
+    let inviteLink = 'Não foi possível criar um convite.';
+    let inviteCreated = false;
     try {
-      const invites = await guild.invites.fetch().catch(() => null);
-      if (invites) {
-        const codeUses = new Map();
-        invites.forEach(inv => codeUses.set(inv.code, inv.uses));
-        invitesCache.set(guildId, codeUses);
-      }
-    } catch (e) {
-      // console.log(`[MemberJoinLog] Sem permissão para ver convites em ${guild.name}`);
-    }
-  }
-  console.log("[MemberJoinLog] Cache de convites inicializado.");
-}
+        const me = guild.members.me;
+        if (me && me.permissions.has('CreateInstantInvite')) {
+            // Tenta usar o canal de sistema, ou o primeiro canal de texto que o bot pode ver
+            const inviteChannel = guild.systemChannel || guild.channels.cache.find(c => 
+                c.type === ChannelType.GuildText && 
+                c.permissionsFor(me).has('CreateInstantInvite')
+            );
 
-export async function handleInviteCreate(invite) {
-  const guildId = invite.guild?.id;
-  if (!guildId) return;
-  
-  const cached = invitesCache.get(guildId) || new Map();
-  cached.set(invite.code, invite.uses);
-  invitesCache.set(guildId, cached);
-}
-
-export async function handleInviteDelete(invite) {
-  const guildId = invite.guild?.id;
-  if (!guildId) return;
-  
-  const cached = invitesCache.get(guildId);
-  if (cached) {
-    cached.delete(invite.code);
-  }
-}
-
-export async function execute(member, client) {
-  const guild = member.guild;
-  
-  // 1. Tenta descobrir qual convite foi usado
-  let inviteUsed = null;
-  let inviteInfo = "Desconhecido / Vanity / Temporário";
-  let inviter = "Desconhecido";
-
-  try {
-    // Pega convites atuais
-    const currentInvites = await guild.invites.fetch().catch(() => null);
-    const cachedInvites = invitesCache.get(guild.id) || new Map();
-
-    if (currentInvites) {
-      // Procura qual convite teve o uso incrementado
-      inviteUsed = currentInvites.find(inv => {
-        const oldUses = cachedInvites.get(inv.code) || 0;
-        return inv.uses > oldUses;
-      });
-
-      // Atualiza o cache para o estado atual
-      const newCache = new Map();
-      currentInvites.forEach(inv => newCache.set(inv.code, inv.uses));
-      invitesCache.set(guild.id, newCache);
-    }
-
-    if (inviteUsed) {
-      inviteInfo = `\`${inviteUsed.code}\` (${inviteUsed.uses} usos)`;
-      if (inviteUsed.inviter) {
-        inviter = `${inviteUsed.inviter.tag} (<@${inviteUsed.inviter.id}>)`;
-      }
-    } else {
-      // Se não achou convite normal, verifica Vanity
-      try {
-        const vanity = await guild.fetchVanityData().catch(() => null);
-        if (vanity && guild.vanityURLCode) {
-           // Se não achou outro, assume que pode ser vanity
-           // (Lógica simplificada, pois vanity uses nem sempre atualizam realtime na API)
-           inviteInfo = `Vanity: .gg/${guild.vanityURLCode}`;
+            if (inviteChannel) {
+                const invite = await inviteChannel.createInvite({
+                    maxAge: 3600, // O link dura 1 hora
+                    maxUses: 1,   // O link pode ser usado 1 vez
+                    unique: true,
+                    reason: `Link temporário para log de entrada de ${user.tag}`
+                });
+                inviteLink = invite.url;
+                inviteCreated = true;
+            }
         }
-      } catch {}
+    } catch (error) {
+        console.error(`[MemberJoinLog] Falha ao criar convite para o servidor ${guild.name}:`, error);
     }
-  } catch (e) {
-    console.error("[MemberJoinLog] Erro ao processar convites:", e);
-  }
 
-  // 2. Envia Log
-  const logChannel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
-  if (!logChannel || !logChannel.isTextBased()) return;
+    const embed = new EmbedBuilder()
+        .setColor('#2ecc71') // Verde
+        .setAuthor({ name: 'Novo Membro Entrou', iconURL: guild.iconURL({ dynamic: true }) })
+        .setThumbnail(user.displayAvatarURL({ dynamic: true, size: 256 }))
+        .setDescription(`${user} (**${user.tag}**) entrou no servidor **${guild.name}**.`)
+        .addFields(
+            { name: '👤 Usuário', value: `<@${user.id}>\n\`${user.id}\``, inline: true },
+            { name: '📅 Conta Criada', value: `<t:${Math.floor(user.createdTimestamp / 1000)}:R>`, inline: true },
+            { name: '📊 Total de Membros', value: `\`${guild.memberCount}\``, inline: true }
+        )
+        .setFooter({ text: `Servidor: ${guild.name} (${guild.id})`})
+        .setTimestamp();
+    
+    // Adiciona o link do servidor apenas se o convite foi criado com sucesso
+    if (inviteCreated) {
+        embed.addFields({ name: '🔗 Link para o Servidor', value: `Clique aqui para entrar`, inline: false });
+    } else {
+        embed.addFields({ name: '🔗 Link para o Servidor', value: '`Permissão para criar convite ausente`', inline: false });
+    }
 
-  const accountCreatedTimestamp = Math.floor(member.user.createdTimestamp / 1000);
-  const joinedTimestamp = Math.floor(member.joinedTimestamp / 1000);
-  
-  // Cargos (ignora @everyone)
-  const roles = member.roles.cache
-    .filter(r => r.id !== guild.id)
-    .sort((a, b) => b.position - a.position)
-    .map(r => r.toString())
-    .join(", ") || "Nenhum";
+    try {
+        await logChannel.send({ embeds: [embed] });
+    } catch (error) {
+        console.error(`[MemberJoinLog] Falha ao enviar log para o canal ${logChannel.id} no servidor ${guild.name}:`, error);
+    }
+}
 
-  const embed = new EmbedBuilder()
-    .setColor("#2b2d31")
-    .setAuthor({ name: `Entrada: ${member.user.tag}`, iconURL: member.user.displayAvatarURL() })
-    .setThumbnail(member.user.displayAvatarURL({ dynamic: true, size: 256 }))
-    .setDescription(`**${member.user.tag}** entrou no servidor.`)
-    .addFields(
-      { name: "👤 Membro", value: `<@${member.id}> (\`${member.id}\`)`, inline: true },
-      { name: "🔢 Membro #", value: `${guild.memberCount}`, inline: true },
-      { name: "\u200b", value: "\u200b", inline: true }, // Spacer
-
-      { name: "📨 Convite", value: inviteInfo, inline: true },
-      { name: "👋 Convidado por", value: inviter, inline: true },
-      { name: "\u200b", value: "\u200b", inline: true },
-
-      { name: "📅 Conta Criada", value: `<t:${accountCreatedTimestamp}:F> (<t:${accountCreatedTimestamp}:R>)`, inline: false },
-      { name: "📥 Entrada", value: `<t:${joinedTimestamp}:F>`, inline: false },
-      
-      { name: "🛡️ Cargos Atuais", value: roles, inline: false }
-    )
-    .setFooter({ text: `ID: ${member.id}` })
-    .setTimestamp();
-
-  await logChannel.send({ embeds: [embed] }).catch(() => {});
+/**
+ * @param {import('discord.js').Client} client 
+ */
+export function registerMemberJoinLog(client) {
+    if (!CENTRAL_LOG_CHANNEL_ID || CENTRAL_LOG_CHANNEL_ID === 'YOUR_CENTRAL_LOG_CHANNEL_ID') {
+        console.warn('⚠️ [MemberJoinLog] O ID do canal de logs central não foi definido. O log de entrada de membros está desativado.');
+        return;
+    }
+    
+    client.on(Events.GuildMemberAdd, handleGuildMemberAdd);
+    console.log('✅ [MemberJoinLog] Módulo de log de entrada de membros registrado.');
 }
