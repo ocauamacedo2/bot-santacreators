@@ -340,3 +340,37 @@ export async function ausenciasHandleInteraction(interaction, client) {
     }
     return false;
 }
+
+// ===== COMMAND HANDLER =====
+export async function ausenciasHandleMessage(message, client) {
+  if (!message.guild || message.author.bot) return false;
+
+  if (message.content.toLowerCase() === "!ausenciasmenu") {
+    const member = message.member;
+    // Verifica se o ID do usuário está na lista OU se ele tem algum cargo da lista
+    const isAuth = CARGOS_AUTORIZADOS_AUSENCIA.includes(message.author.id) ||
+                   member?.roles?.cache?.some(r => CARGOS_AUTORIZADOS_AUSENCIA.includes(r.id));
+
+    if (!isAuth) {
+      const reply = await message.reply("🚫 Você não tem permissão para usar este comando.").catch(() => {});
+      setTimeout(() => {
+        message.delete().catch(() => {});
+        if (reply) reply.delete().catch(() => {});
+      }, 5000);
+      return true;
+    }
+
+    await message.delete().catch(() => {});
+
+    for (const canalId of Object.values(CANAIS_REGISTRO)) {
+      await enviarBotaoFixoPorCanal(client, canalId);
+    }
+
+    const reply = await message.channel.send("✅ Botões de ausência verificados/recriados nos canais configurados.").catch(() => {});
+    if (reply) setTimeout(() => reply.delete().catch(() => {}), 8000);
+
+    return true;
+  }
+
+  return false;
+}

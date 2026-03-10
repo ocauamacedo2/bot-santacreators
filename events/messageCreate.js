@@ -24,6 +24,7 @@ import meuscargos from '../commands/meuscargos.js';
 import { registroVendasHandleMessage } from './registroVendas.js';
 import { sortChannelsHandleMessage } from '../commands/canais/sortChannels.js';
 import { vipRegistroHandleMessage } from './vipRegistro.js';
+import { ausenciasHandleMessage } from './ausencias.js';
 
 // Novos comandos de permissão
 // import editarperm from '../commands/canais/editarperm.js';
@@ -78,6 +79,9 @@ export default {
 
     // ✅ VIP/Rolepass (Comando !vipmenu)
     if (await vipRegistroHandleMessage(message, client)) return;
+
+    // ✅ Ausências (Comando !ausenciasmenu)
+    if (await ausenciasHandleMessage(message, client)) return;
 
     // ✅ VENDAS (Comando !painelvendas)
     if (await registroVendasHandleMessage(message, client)) return;
