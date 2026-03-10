@@ -7,7 +7,11 @@ const TICKET_CATEGORIES = new Set([
     '1414687963161559180', // Lider
     '1359245055239655544', // Ideias
     '1352706815594598420', // Roupas
-    '1404568518179029142'  // Banners
+    '1404568518179029142',  // Banners
+    // Adicionando as categorias que faltavam
+    '1384650670145278033',
+    '1359244743724241156',
+    '1444857594517913742'
 ]);
 
 const cargosPermitidos = new Set([
@@ -26,15 +30,17 @@ const cargosPermitidos = new Set([
 /**
  * Procura por canais de ticket abertos por um usuário específico.
  * @param {import('discord.js').Guild} guild A guilda para procurar.
- * @param {string} userId O ID do usuário.
+ * @param {import('discord.js').GuildMember} member O membro para verificar as permissões.
  * @returns {Promise<string[]>} Uma lista de IDs de canais de ticket.
  */
-async function findOpenTickets(guild, userId) {
+async function findOpenTickets(guild, member) {
+    if (!member) return [];
     const openTickets = [];
     for (const channel of guild.channels.cache.values()) {
         if (TICKET_CATEGORIES.has(channel.parentId)) {
-            // Verifica o tópico do canal pela tag 'aberto_por:USER_ID'
-            if (channel.topic && channel.topic.includes(`aberto_por:${userId}`)) {
+            // Verifica se o membro tem permissão para ver o canal
+            const perms = channel.permissionsFor(member);
+            if (perms && perms.has('ViewChannel')) {
                 openTickets.push(channel.id);
             }
         }
@@ -74,13 +80,16 @@ export default {
 
         // 3. Tenta por busca no nome/nick
         if (!membroAlvo) {
-            const searchString = query.toLowerCase();
+            // Busca por `| 34`, `(34)`, `[34]` ou ` 34` no final do nome/nick
+            const searchRegex = new RegExp(`[\\|\\(\\[\\s]${query}\\b`, 'i');
             // Garante que o cache de membros está o mais atualizado possível
             await message.guild.members.fetch().catch(() => {});
-            membroAlvo = message.guild.members.cache.find(m =>
-                (m.displayName && m.displayName.toLowerCase().includes(searchString)) ||
-                (m.user?.username && m.user.username.toLowerCase().includes(searchString))
-            );
+            membroAlvo = message.guild.members.cache.find(m => {
+                const displayName = m.displayName || '';
+                const username = m.user?.username || '';
+                // Procura pelo padrão exato para evitar falsos positivos
+                return searchRegex.test(displayName) || searchRegex.test(username);
+            });
         }
 
         if (!membroAlvo) {
@@ -111,7 +120,7 @@ export default {
             .sort((a, b) => b.position - a.position)
             .map(role => role.toString());
 
-        const openTickets = await findOpenTickets(message.guild, user.id);
+        const openTickets = await findOpenTickets(message.guild, membroAlvo);
         const ticketsText = openTickets.length > 0 
             ? openTickets.map(id => `<#${id}>`).join('\n') 
             : 'Nenhum ticket aberto.';
