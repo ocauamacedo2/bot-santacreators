@@ -1,6 +1,7 @@
 import entrevista from '../utils/entrevista.js';
 import { registroVendasOnReady } from './registroVendas.js';
 import { vipRegistroOnReady } from './vipRegistro.js';
+import { ausenciasOnReady } from './ausencias.js';
 
 export default {
   name: 'ready',
@@ -9,5 +10,6 @@ export default {
     await entrevista.reanexar(client);
     await registroVendasOnReady(client);
     await vipRegistroOnReady(client);
+    await ausenciasOnReady(client);
   }
 };
