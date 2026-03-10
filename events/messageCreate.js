@@ -14,7 +14,7 @@ import infoid from '../commands/admin/infoid.js';
 import ping       from '../commands/admin/ping.js';
 import duplicados from '../commands/admin/duplicados.js';
 import cargosvazios from '../commands/admin/cargosvazios.js';
-import clear      from '../commands/admin/clear.js';
+// import clear      from '../commands/admin/clear.js'; // Movido para handler
 import comandos   from '../commands/admin/comandos.js';
 import addemoji   from '../commands/admin/addemoji.js';
 import joincall   from '../commands/admin/joincall.js';
@@ -31,8 +31,13 @@ import { provasAdvHandleMessage } from './provasAdv.js';
 import { focoSemanaisHandleMessage } from './focoSemanais.js';
 
 // Novos comandos de permissão
-// import editarperm from '../commands/canais/editarperm.js';
-import remperm    from '../commands/canais/remperm.js';
+import { removerPermHandleMessage } from '../commands/admin/removerperm.js';
+
+// Handlers que faltavam
+import { clearHandleMessage } from '../commands/admin/clearHandler.js';
+import { verIdHandleMessage } from '../commands/admin/verid.js';
+import { apagarChatHandleMessage } from '../commands/admin/apagarchat.js';
+import { removerMassivoHandleMessage } from '../commands/admin/removerMassivo.js';
 
 // 🔻 removido: setstaff (não usado)
 // import setstaff from '../commands/admin/setstaff.js';
@@ -51,7 +56,7 @@ const commands = {
   perguntas,
 
   // comandos ativos
-  clear,
+  // clear, // Movido para handler
   joincall,
   grupo,
   comandos,
@@ -71,7 +76,7 @@ const commands = {
 
   // permissões de canal
   // editarperm,
-  remperm,
+  // remperm, // Movido para handler
 
   // opcional: se ainda usa
   ping,
@@ -102,6 +107,13 @@ export default {
 
     // ✅ CANAIS (Sort / Inativo / Membros)
     if (await sortChannelsHandleMessage(message, client)) return;
+
+    // ✅ Handlers de comandos que faltavam
+    if (await clearHandleMessage(message, client)) return;
+    if (await removerPermHandleMessage(message, client)) return;
+    if (await verIdHandleMessage(message, client)) return;
+    if (await apagarChatHandleMessage(message, client)) return;
+    if (await removerMassivoHandleMessage(message, client)) return;
 
     if (!message.content.startsWith('!')) return;
 
