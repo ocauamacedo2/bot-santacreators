@@ -281,12 +281,20 @@ function VIP_buildMenuComponents() {
 function VIP_buildModal(eventData = null, cityKey) {
   const getDate = () => {
     try {
-      const now = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
-      const day = String(now.getDate()).padStart(2, '0');
-      const month = String(now.getMonth() + 1).padStart(2, '0');
-      const year = now.getFullYear();
-      return `${day}/${month}/${year}`;
-    } catch { return ""; }
+      // ✅ FIX: Usa Intl.DateTimeFormat para formatação de data robusta e segura,
+      // evitando erros de "Invalid Date" que travam a interação.
+      const formatter = new Intl.DateTimeFormat('pt-BR', {
+        timeZone: 'America/Sao_Paulo',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric'
+      });
+      return formatter.format(new Date());
+    } catch (e) {
+      // Fallback caso o Intl falhe (muito raro)
+      const now = new Date();
+      return `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()}`;
+    }
   };
 
   return new ModalBuilder()
@@ -590,14 +598,19 @@ export async function vipEventoHandleInteraction(i, client) {
 
     // ✅ NOVO: Handler para o select menu de cidade
     if (i.isStringSelectMenu?.() && i.customId === VIP_SELECT_CITY_ID) {
-      const cityKey = i.values[0];
-      if (!CITIES[cityKey]) {
-        return safeReply(i, { content: "❌ Cidade inválida.", ephemeral: true });
-      }
+      try {
+        const cityKey = i.values[0];
+        if (!CITIES[cityKey]) {
+          return await safeReply(i, { content: "❌ Cidade inválida selecionada.", ephemeral: true });
+        }
 
-      // ✅ REMOVIDO: Leitura de arquivo que causava lentidão.
-      const modal = VIP_buildModal(null, cityKey);
-      await i.showModal(modal).catch(() => {});
+        const modal = VIP_buildModal(null, cityKey);
+        await i.showModal(modal);
+      } catch (err) {
+        // ✅ FIX: Adiciona log de erro e avisa o usuário em vez de falhar silenciosamente.
+        console.error("[vipEvento] Falha ao mostrar o modal:", err);
+        await safeReply(i, { content: "❌ Ocorreu um erro ao abrir o formulário. Tente novamente.", ephemeral: true });
+      }
       return true;
     }
 
