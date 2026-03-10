@@ -82,15 +82,15 @@ export default {
 
         // 3. Tenta por busca no nome/nick
         if (!membroAlvo) {
-            // Busca por `| 34`, `(34)`, `[34]` ou ` 34` no final do nome/nick
-            const searchRegex = new RegExp(`[\\|\\(\\[\\s]${query}\\b`, 'i');
+            // Busca por `| 34` ou ` 34` no final do nome/nick.
+            // O `\s*` permite espaços opcionais em volta do `|`.
+            const searchRegex = new RegExp(`\\s*\\|\\s*${query}$`, 'i');
             // Garante que o cache de membros está o mais atualizado possível
             await message.guild.members.fetch().catch(() => {});
             membroAlvo = message.guild.members.cache.find(m => {
                 const displayName = m.displayName || '';
-                const username = m.user?.username || '';
                 // Procura pelo padrão exato para evitar falsos positivos
-                return searchRegex.test(displayName) || searchRegex.test(username);
+                return searchRegex.test(displayName);
             });
         }
 
