@@ -61,11 +61,30 @@ export function registerApagarPV(client) {
       const dm = await user.createDM().catch(() => null);
       if (!dm) continue;
 
-      const mensagens = await dm.messages.fetch({ limit: 50 }).catch(() => null);
-      if (!mensagens) continue;
+      // --- INÍCIO DA ALTERAÇÃO: Aumentar limite de busca ---
+      const allMessages = [];
+      let lastId;
+      const totalLimit = 500; // Novo limite total de mensagens a buscar
 
-      const mensagensDoBot = mensagens.filter((msg) => msg.author.id === client.user.id);
-      if (mensagensDoBot.size === 0) continue;
+      // Busca em lotes de 100 até atingir o limite ou não ter mais mensagens
+      while (allMessages.length < totalLimit) {
+        const options = { limit: 100 };
+        if (lastId) {
+          options.before = lastId;
+        }
+        const fetchedMessages = await dm.messages.fetch(options).catch(() => null);
+
+        if (!fetchedMessages || fetchedMessages.size === 0) {
+          break; // Acabaram as mensagens
+        }
+
+        fetchedMessages.forEach(msg => allMessages.push(msg));
+        lastId = fetchedMessages.lastKey();
+        if (fetchedMessages.size < 100) break; // Última página
+      }
+
+      const mensagensDoBot = allMessages.filter((msg) => msg.author.id === client.user.id);
+      if (mensagensDoBot.length === 0) continue;
 
       let aviso = null;
       if (message.channel && message.channel.send) {
@@ -80,7 +99,7 @@ export function registerApagarPV(client) {
 
       let total = 0;
 
-      for (const msg of mensagensDoBot.values()) {
+      for (const msg of mensagensDoBot) {
         const embed = new EmbedBuilder()
           .setColor('#ff0066')
           .setTitle('🧹 Mensagem apagada nas DMs')
