@@ -279,26 +279,25 @@ function VIP_buildMenuComponents() {
 }
 
 function VIP_buildModal(eventData = null, cityKey) {
-  // ✅ Helpers de segurança para evitar crash no modal
-  const safeVal = (v) => String(v || "").slice(0, 4000);
   const getDate = () => {
     try {
-      if (typeof getTodayDateFormatted === 'function') return getTodayDateFormatted();
-      const now = new Date();
-      return `${String(now.getDate()).padStart(2,'0')}/${String(now.getMonth()+1).padStart(2,'0')}/${now.getFullYear()}`;
+      const now = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
+      const day = String(now.getDate()).padStart(2, '0');
+      const month = String(now.getMonth() + 1).padStart(2, '0');
+      const year = now.getFullYear();
+      return `${day}/${month}/${year}`;
     } catch { return ""; }
   };
 
   return new ModalBuilder()
     .setCustomId(`${VIP_MODAL_ID}:${cityKey}`)
-    .setTitle(`Registro VIP - ${CITIES[cityKey].label}`.slice(0, 45))
+    .setTitle(`Registro VIP - ${CITIES[cityKey].label}`)
     .addComponents(
       new ActionRowBuilder().addComponents(
         new TextInputBuilder()
           .setCustomId("vip_evt_nome")
           .setLabel("Nome do evento ganho")
           .setStyle(TextInputStyle.Short)
-          .setValue(safeVal(eventData?.eventName))
           .setRequired(true)
       ),
       new ActionRowBuilder().addComponents(
@@ -328,7 +327,6 @@ function VIP_buildModal(eventData = null, cityKey) {
           .setCustomId("vip_premiacao")
           .setLabel("Premiação")
           .setStyle(TextInputStyle.Paragraph)
-          .setValue(safeVal(eventData?.prizes))
           .setRequired(true)
       )
     );
@@ -592,23 +590,14 @@ export async function vipEventoHandleInteraction(i, client) {
 
     // ✅ NOVO: Handler para o select menu de cidade
     if (i.isStringSelectMenu?.() && i.customId === VIP_SELECT_CITY_ID) {
-      try {
-        const cityKey = i.values[0];
-        if (!CITIES[cityKey]) {
-          await safeReply(i, { content: "❌ Cidade inválida.", ephemeral: true });
-          return true;
-        }
-
-        // Pega dados do cronograma para pré-preencher
-        const eventData = getTodayEventData();
-
-        // Passa a chave da cidade para o modal
-        const modal = VIP_buildModal(eventData, cityKey);
-        await i.showModal(modal);
-      } catch (err) {
-        console.error("[VIP] Erro ao abrir modal:", err);
-        await safeReply(i, { content: "❌ Erro ao abrir o formulário. Tente novamente.", ephemeral: true });
+      const cityKey = i.values[0];
+      if (!CITIES[cityKey]) {
+        return safeReply(i, { content: "❌ Cidade inválida.", ephemeral: true });
       }
+
+      // ✅ REMOVIDO: Leitura de arquivo que causava lentidão.
+      const modal = VIP_buildModal(null, cityKey);
+      await i.showModal(modal).catch(() => {});
       return true;
     }
 
