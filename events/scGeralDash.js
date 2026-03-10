@@ -1649,11 +1649,14 @@ function correcao_getUserId(emb) {
 // Helper para Pagamento Social (Backfill)
 function pagamento_getStatus(emb) {
   const fields = getFields(emb);
-  // Assumindo que o status é indicado pela presença de um campo específico
-  const isPago = fields.some(f => norm(f.name).includes("pago por"));
-  const isReprovado = fields.some(f => norm(f.name).includes("reprovado por"));
-  // "Solicitado" pode ser um status intermediário, vamos assumir que tem um campo também
-  const isSolicitado = fields.some(f => norm(f.name).includes("solicitado por"));
+  // ✅ FIX: Checa o VALOR do campo de status, não o nome.
+  const statusField = fields.find(f => norm(f.name).includes("status"));
+  const statusValue = norm(statusField?.value || "");
+
+  const isPago = statusValue.includes("pago");
+  const isReprovado = statusValue.includes("reprovado");
+  const isSolicitado = statusValue.includes("solicitado");
+  
   return { isPago, isReprovado, isSolicitado };
 }
 

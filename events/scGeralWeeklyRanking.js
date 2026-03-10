@@ -1492,6 +1492,16 @@ async function upsertWeeklyRank(client, reason, { scanMode = "light", targetWeek
 
     const agg = aggregateWeekDetailed(items, wk);
 
+    // ✅ NOVO: Salva os dados por fonte para o reuniaoSemanal.js
+    try {
+      const sourcesStatePath = path.join(DATA_DIR, "sc_geral_weekly_rank_sources.json");
+      const sourcesState = readJSON(sourcesStatePath, {});
+      sourcesState[wk] = agg.bySourceByUser;
+      writeJSON(sourcesStatePath, sourcesState);
+    } catch (e) {
+      console.error("[SC_GERAL_WEEKLY_RANK] Erro ao salvar dados por fonte:", e);
+    }
+
     // assinatura (não editar se idêntico)
     // ✅ Inclui nameMap na assinatura se quiser que atualize quando nomes mudam, mas talvez seja overkill.
     // Vamos buscar nomes agora.

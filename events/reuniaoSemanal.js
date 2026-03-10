@@ -43,6 +43,8 @@ const DATA_DIR = path.join(ROOT_DIR, "data");   // Pasta data
 const FILES = {
   STATE: path.join(DATA_DIR, "reuniao_semanal_state.json"),
   GERAL_RANK: path.join(DATA_DIR, "sc_geral_weekly_rank_state_v1.json"),
+  // ✅ NOVO: Lê os dados por fonte do ranking semanal
+  RANK_SOURCES: path.join(DATA_DIR, "sc_geral_weekly_rank_sources.json"),
 };
 
 // Nomes de arquivos dinâmicos (podem estar na raiz ou em data)
@@ -144,9 +146,18 @@ function aggregateData() {
     .sort((a, b) => b.pts - a.pts);
 
   // 3. SOCIAL
-  const socData = readDynamicJSON(DYNAMIC_FILES.SOCIAL);
-  const socWeek = socData?.weeks?.[wk]?.points || {};
-  const topSocial = Object.entries(socWeek)
+  // ✅ FIX: Lê os dados do arquivo de fontes do ranking, que é atualizado
+  const sourcesData = readJSON(FILES.RANK_SOURCES);
+  const bySourceByUser = sourcesData?.[wk] || {};
+  const socialPoints = {};
+  for (const userId in bySourceByUser) {
+    const userSources = bySourceByUser[userId];
+    // "Social" (Master Eventos) vem da fonte "eventopoder"
+    if (userSources.eventopoder) {
+      socialPoints[userId] = (socialPoints[userId] || 0) + userSources.eventopoder;
+    }
+  }
+  const topSocial = Object.entries(socialPoints)
     .map(([id, pts]) => ({ id, pts }))
     .sort((a, b) => b.pts - a.pts);
 
