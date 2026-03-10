@@ -468,6 +468,34 @@ async function enviarPergunta(channel, membro, index) {
     entrevistasAtivas.delete(channel.id);
     salvarEntrevistasEmDisco();
 
+    // ✅ NOVO: Dar ponto para o entrevistador ao finalizar
+    const entrevistadorId = dados.entrevistadorId;
+    if (entrevistadorId) {
+        // Emitir para o dashboard em tempo real
+        dashEmit('entrevista:concluida', {
+            userId: entrevistadorId,
+            __at: Date.now(),
+            source: 'perguntas' // Usando a mesma fonte para consistência
+        });
+
+        // Log para rescan
+        const logChannel = await channel.client.channels.fetch(LOG_CHANNEL_ID_NOVO).catch(() => null);
+        if (logChannel) {
+            const logPointEmbed = new EmbedBuilder()
+                .setTitle('🎤 Ponto de Entrevista Concluída')
+                .setColor('#2ecc71')
+                .setDescription(`Ponto para o aplicador da entrevista no canal <#${channel.id}>.`)
+                .addFields(
+                    { name: '🏆 Aplicador (ganhou ponto)', value: `<@${entrevistadorId}> (\`${entrevistadorId}\`)` },
+                    { name: '👤 Candidato', value: `${membro}` },
+                    { name: '🕒 Data/Hora', value: `<t:${Math.floor(Date.now() / 1000)}:F>` }
+                )
+                .setFooter({ text: 'Sistema de Pontuação • SantaCreators' })
+                .setTimestamp();
+            await logChannel.send({ embeds: [logPointEmbed] });
+        }
+    }
+
 const quemAtendeu = dados.entrevistadorId ? `<@${dados.entrevistadorId}>` : 'nossa equipe';
 
 const fim = await channel.send(

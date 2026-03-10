@@ -150,11 +150,26 @@ function aggregateData() {
   const sourcesData = readJSON(FILES.RANK_SOURCES);
   const bySourceByUser = sourcesData?.[wk] || {};
   const socialPoints = {};
+
+  // ✅ Fontes que contam para o ranking "Social"
+  const socialSources = new Set([
+      'pagamentos',     // do pagamentosocial.js
+      'halldafama',     // do hallDaFama.js
+      'eventopoder',    // do registroevento.js (poderes em evento)
+      'cronograma',     // do cronograma (geral)
+      'eventosdiarios'  // do cronograma (eventos diários)
+  ]);
+
   for (const userId in bySourceByUser) {
     const userSources = bySourceByUser[userId];
-    // "Social" (Master Eventos) vem da fonte "eventopoder"
-    if (userSources.eventopoder) {
-      socialPoints[userId] = (socialPoints[userId] || 0) + userSources.eventopoder;
+    let userSocialPoints = 0;
+    for (const source in userSources) {
+        if (socialSources.has(source)) {
+            userSocialPoints += userSources[source];
+        }
+    }
+    if (userSocialPoints > 0) {
+        socialPoints[userId] = userSocialPoints;
     }
   }
   const topSocial = Object.entries(socialPoints)
