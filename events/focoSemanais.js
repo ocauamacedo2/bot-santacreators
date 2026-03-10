@@ -245,6 +245,28 @@ export async function focoSemanaisOnReady(client) {
   await ensureSingleMenuButton(canal, client);
 }
 
+export async function focoSemanaisHandleMessage(message, client) {
+    if (!message.guild || message.author.bot) return false;
+    if (message.content.toLowerCase() === "!focomenu") {
+        const autorizado = CARGOS_AUTORIZADOS_FOCO.some(r => message.member?.roles?.cache?.has(r)) || CARGOS_AUTORIZADOS_FOCO.includes(message.author.id);
+        if (!autorizado) {
+             const m = await message.reply("🚫 Sem permissão.");
+             setTimeout(() => m.delete().catch(() => {}), 5000);
+             return true;
+        }
+        await message.delete().catch(() => {});
+        
+        const canal = await client.channels.fetch(CANAL_MENU_ID).catch(()=>null);
+        if (canal) {
+            await ensureSingleMenuButton(canal, client);
+            const m = await message.channel.send("✅ Menu de Foco Semanal recriado.");
+            setTimeout(() => m.delete().catch(() => {}), 5000);
+        }
+        return true;
+    }
+    return false;
+}
+
 export async function focoSemanaisHandleInteraction(interaction, client) {
   try {
     // abrir modal

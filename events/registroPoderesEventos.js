@@ -216,6 +216,23 @@ export async function registroPoderesEventosOnReady(client) {
     await SC_PWR_ensureSingleMenu(client);
 }
 
+export async function registroPoderesEventosHandleMessage(message, client) {
+    if (!message.guild || message.author.bot) return false;
+    if (message.content.toLowerCase() === "!pwrmenu") {
+         if (!SC_PWR_hasPermission(message.member)) {
+             const m = await message.reply("🚫 Sem permissão.");
+             setTimeout(() => m.delete().catch(() => {}), 5000);
+             return true;
+         }
+         await message.delete().catch(() => {});
+         await SC_PWR_ensureSingleMenu(client);
+         const m = await message.channel.send("✅ Menu de Poderes recriado.");
+         setTimeout(() => m.delete().catch(() => {}), 5000);
+         return true;
+    }
+    return false;
+}
+
 export async function registroPoderesEventosHandleInteraction(interaction, client) {
     try {
         // Botão -> abrir modal

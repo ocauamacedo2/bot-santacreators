@@ -25,6 +25,8 @@ import { registroVendasHandleMessage } from './registroVendas.js';
 import { sortChannelsHandleMessage } from '../commands/canais/sortChannels.js';
 import { vipRegistroHandleMessage } from './vipRegistro.js';
 import { ausenciasHandleMessage } from './ausencias.js';
+import { registroPoderesEventosHandleMessage } from './registroPoderesEventos.js';
+import { focoSemanaisHandleMessage } from './focoSemanais.js';
 
 // Novos comandos de permissão
 // import editarperm from '../commands/canais/editarperm.js';
@@ -82,6 +84,12 @@ export default {
 
     // ✅ Ausências (Comando !ausenciasmenu)
     if (await ausenciasHandleMessage(message, client)) return;
+
+    // ✅ Registro de Poderes (Comando !pwrmenu)
+    if (await registroPoderesEventosHandleMessage(message, client)) return;
+
+    // ✅ Foco Semanal (Comando !focomenu)
+    if (await focoSemanaisHandleMessage(message, client)) return;
 
     // ✅ VENDAS (Comando !painelvendas)
     if (await registroVendasHandleMessage(message, client)) return;
