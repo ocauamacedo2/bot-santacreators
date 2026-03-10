@@ -5,6 +5,7 @@ import { sortChannelsHandleInteraction } from '../commands/canais/sortChannels.j
 import { vipRegistroHandleInteraction } from './vipRegistro.js';
 import { ausenciasHandleInteraction } from './ausencias.js';
 import { registroPoderesEventosHandleInteraction } from './registroPoderesEventos.js';
+import { focoSemanaisHandleInteraction } from './focoSemanais.js';
 
 // Ignora tudo do fluxo do Pedir Set (tratado no index.js)
 const isSetFlow = (interaction) => {
@@ -37,6 +38,9 @@ export default {
 
     // ✅ Registro de Poderes (Eventos)
     if (await registroPoderesEventosHandleInteraction(interaction, interaction.client)) return;
+
+    // ✅ Foco Semanal
+    if (await focoSemanaisHandleInteraction(interaction, interaction.client)) return;
 
     // ✅ VENDAS (Botões e Modais)
     if (await registroVendasHandleInteraction(interaction, interaction.client)) return;

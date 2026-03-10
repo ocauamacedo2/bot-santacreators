@@ -3,6 +3,7 @@ import { registroVendasOnReady } from './registroVendas.js';
 import { vipRegistroOnReady } from './vipRegistro.js';
 import { ausenciasOnReady } from './ausencias.js';
 import { registroPoderesEventosOnReady } from './registroPoderesEventos.js';
+import { focoSemanaisOnReady } from './focoSemanais.js';
 
 export default {
   name: 'ready',
@@ -13,5 +14,6 @@ export default {
     await vipRegistroOnReady(client);
     await ausenciasOnReady(client);
     await registroPoderesEventosOnReady(client);
+    await focoSemanaisOnReady(client);
   }
 };
