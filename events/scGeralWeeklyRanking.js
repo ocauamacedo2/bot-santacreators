@@ -485,7 +485,7 @@ function isConviteLogEmbed(emb) {
 }
 function isPerguntasLogEmbed(emb) {
   const t = norm(emb?.title || emb?.data?.title || "");
-  return t.includes("!perguntas") && t.includes("usado");
+  return (t.includes("!perguntas") && t.includes("usado")) || t.includes("entrevista iniciada");
 }
 function isVendaLogEmbed(emb) {
   const t = norm(emb?.title || emb?.data?.title || "");
@@ -584,6 +584,8 @@ function perguntas_getUserId(emb) {
       fields.find(x => norm(x?.name).includes("usuário")) ||
       fields.find(x => norm(x?.name).includes("autor")) ||
       fields.find(x => norm(x?.name).includes("id")) ||
+      fields.find(x => norm(x?.name).includes("quem")) ||
+      fields.find(x => norm(x?.name).includes("aplicador")) ||
       null;
     if (f) {
       const v = String(f?.value || "");
@@ -760,6 +762,25 @@ async function collectAllPoints(client, mode = "light") {
   if (PERGUNTAS_LOGS_CHANNEL_ID) {
     await scanChannelEmbeds(client, {
       channelId: PERGUNTAS_LOGS_CHANNEL_ID,
+      weekFloorKey,
+      maxPages: 80,
+      onMessage: async (m) => {
+        const emb = m.embeds?.[0];
+        if (!emb) return;
+        if (!isPerguntasLogEmbed(emb)) return;
+
+        const uid = perguntas_getUserId(emb);
+        if (!uid) return;
+
+        pushItem({ userId: uid, ts: new Date(m.createdTimestamp), source: "perguntas" });
+      },
+    });
+  }
+
+  // PERGUNTAS (via canal de CORREÇÃO/LOGS NOVO)
+  if (CORRECAO_LOGS_CHANNEL_ID) {
+    await scanChannelEmbeds(client, {
+      channelId: CORRECAO_LOGS_CHANNEL_ID,
       weekFloorKey,
       maxPages: 80,
       onMessage: async (m) => {

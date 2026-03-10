@@ -1182,6 +1182,25 @@ if (PERGUNTAS_LOGS_CHANNEL_ID) {
   });
 }
 
+// ✅ PERGUNTAS (via canal de CORREÇÃO/LOGS NOVO)
+if (CORRECAO_LOGS_CHANNEL_ID) {
+  await scanChannelEmbeds(client, {
+    channelId: CORRECAO_LOGS_CHANNEL_ID,
+    weekFloorKey,
+    maxPages: 80,
+    onMessage: async (m) => {
+      const emb = m.embeds?.[0];
+      if (!emb) return;
+      if (!isPerguntasLogEmbed(emb)) return;
+
+      const uid = perguntas_getUserId(emb);
+      if (!uid) return;
+
+      items.push({ userId: uid, ts: new Date(m.createdTimestamp), source: "perguntas" });
+    },
+  });
+}
+
 // ✅ CRONOGRAMA (Aprovados)
 if (CRONOGRAMA_LOGS_CHANNEL_ID) {
   await scanChannelEmbeds(client, {
@@ -1456,7 +1475,7 @@ function isConviteLogEmbed(emb) {
 function isPerguntasLogEmbed(emb) {
   const t = norm(emb?.title || emb?.data?.title || "");
   // teu !perguntas logCompleto usa: '🧾 !perguntas usado'
-  return t.includes("!perguntas") && t.includes("usado");
+  return (t.includes("!perguntas") && t.includes("usado")) || t.includes("entrevista iniciada");
 }
 
 function isVendaLogEmbed(emb) {
@@ -1550,6 +1569,8 @@ function perguntas_getUserId(emb) {
       fields.find(x => norm(x?.name).includes("usuário")) ||
       fields.find(x => norm(x?.name).includes("autor")) ||
       fields.find(x => norm(x?.name).includes("id")) ||
+      fields.find(x => norm(x?.name).includes("quem")) ||
+      fields.find(x => norm(x?.name).includes("aplicador")) ||
       null;
 
     if (f) {
@@ -1827,6 +1848,22 @@ async function backfillExtrasThisWeek(client) {
         (emb) => isPerguntasLogEmbed(emb),
         async (_m, _emb) => {
           st.weekly.perguntas[wkNow] += 1;
+        },
+        25
+      );
+    }
+
+    // -------- PERGUNTAS (via canal de CORREÇÃO/LOGS NOVO) --------
+    // O comando !perguntas agora manda log em CORRECAO_LOGS_CHANNEL_ID também
+    if (CORRECAO_LOGS_CHANNEL_ID) {
+      await scanCurrentWeekEmbeds(
+        client,
+        CORRECAO_LOGS_CHANNEL_ID,
+        (emb) => isPerguntasLogEmbed(emb),
+        async (_m, _emb) => {
+          // Pega o ID do aplicador
+          const uid = perguntas_getUserId(_emb);
+          if (uid) st.weekly.perguntas[wkNow] += 1;
         },
         25
       );
