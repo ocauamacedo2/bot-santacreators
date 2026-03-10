@@ -408,7 +408,7 @@ function rebuildPendingFromFormsMessage(message) {
     // ===== SELECT MENU =====
     if (interaction.isStringSelectMenu() && interaction.customId === 'selecionar_ticket') {
       try {
-        await interaction.deferReply({ flags: 64 });
+        await interaction.deferReply({ ephemeral: true });
       } catch (err) {
         console.error('⚠️ Erro ao deferReply da interação:', err);
         return true;
@@ -543,7 +543,7 @@ function rebuildPendingFromFormsMessage(message) {
      if (id.startsWith('aprovar_set:') || id.startsWith('recusar_set:')) {
 
   // ✅ FIX PRINCIPAL — DEFER IMEDIATO
-  await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply({ flags: 64 });
 
   // 🔒 trava múltiplos cliques (agora DEPOIS do defer, seguro)
   if (interaction.message.components?.length) {
@@ -569,7 +569,7 @@ function rebuildPendingFromFormsMessage(message) {
   const hasRolePass = interaction.member?.roles?.cache?.some(r => APPROVER_ROLES.has(r.id));
 
   if (!hasUserPass && !hasRolePass && !USERS_SEMPRE_PODEM.includes(approverId)) {
-    await interaction.editReply({ content: '🚫 Você não tem permissão para aprovar/recusar.' });
+    await interaction.editReply({ content: '🚫 Você não tem permissão para aprovar/recusar.', flags: 64 });
     return true;
   }
 
@@ -587,7 +587,7 @@ function rebuildPendingFromFormsMessage(message) {
 
   if (!data) {
     await interaction.editReply({
-      content: '⚠️ Não consegui localizar os dados desse pedido. Peça para reenviar.'
+      content: '⚠️ Não consegui localizar os dados desse pedido. Peça para reenviar.', flags: 64
     });
     return true;
   }
@@ -602,7 +602,7 @@ function rebuildPendingFromFormsMessage(message) {
   // =========================
   if (action === 'recusar_set') {
     deletePending(reqId);
-    await interaction.editReply({ content: '❌ Solicitação recusada com sucesso.' });
+    await interaction.editReply({ content: '❌ Solicitação recusada com sucesso.', flags: 64 });
     return true;
   }
 
@@ -613,7 +613,7 @@ function rebuildPendingFromFormsMessage(message) {
 
   if (!membro) {
     deletePending(reqId);
-    await interaction.editReply({ content: '⚠️ Usuário não encontrado no servidor.' });
+    await interaction.editReply({ content: '⚠️ Usuário não encontrado no servidor.', flags: 64 });
     return true;
   }
 
@@ -628,7 +628,7 @@ function rebuildPendingFromFormsMessage(message) {
   deletePending(reqId);
 
   await interaction.editReply({
-    content: '✅ Set aprovado e aplicado com sucesso!'
+    content: '✅ Set aprovado e aplicado com sucesso!', flags: 64
   });
 
   return true;
@@ -676,7 +676,7 @@ function rebuildPendingFromFormsMessage(message) {
       // ✅ Botão: Adicionar usuário (abre modal) → AGORA TEM PERMISSÃO
       if (id === 'adicionar_membro') {
         if (!temCargoQuePodeAbrir(member)) {
-          await interaction.reply({ content: '🚫 Você não tem permissão para adicionar alguém neste ticket.', flags: 64 });
+          await interaction.reply({ content: '🚫 Você não tem permissão para adicionar alguém neste ticket.', ephemeral: true });
           return true;
         }
 
@@ -700,7 +700,7 @@ function rebuildPendingFromFormsMessage(message) {
       // ✅ Botão: Remover usuário (abre modal) → AGORA TEM PERMISSÃO
       if (id === 'remover_membro') {
         if (!temCargoQuePodeAbrir(member)) {
-          await interaction.reply({ content: '🚫 Você não tem permissão para remover alguém deste ticket.', flags: 64 });
+          await interaction.reply({ content: '🚫 Você não tem permissão para remover alguém deste ticket.', ephemeral: true });
           return true;
         }
 
@@ -724,7 +724,7 @@ function rebuildPendingFromFormsMessage(message) {
       // ✅ Botão: Assumir ticket
       if (id === 'assumir_ticket') {
         if (!temCargoQuePodeAbrir(member)) {
-          const resposta = { content: '🚫 Você não tem permissão.', flags: 64 };
+          const resposta = { content: '🚫 Você não tem permissão.', ephemeral: true };
           try {
             if (!interaction.replied && !interaction.deferred) {
               await interaction.reply(resposta);
@@ -743,7 +743,7 @@ function rebuildPendingFromFormsMessage(message) {
 
         // se já foi assumido e a pessoa NÃO é resp, barra
         if (jaAssumido && !temCargoDeResp(member)) {
-          await interaction.reply({ content: 'Esse ticket já foi assumido por outra pessoa.', flags: 64 });
+          await interaction.reply({ content: 'Esse ticket já foi assumido por outra pessoa.', ephemeral: true });
           return true;
         }
 
@@ -756,7 +756,7 @@ function rebuildPendingFromFormsMessage(message) {
           responsaveisOficiais.set(interaction.channel.id, member.id);
         }
 
-        const resposta = { content: '🎫 Ticket assumido com sucesso!', flags: 64 };
+        const resposta = { content: '🎫 Ticket assumido com sucesso!', ephemeral: true };
         try {
           if (!interaction.replied && !interaction.deferred) {
             await interaction.reply(resposta);
@@ -772,7 +772,7 @@ function rebuildPendingFromFormsMessage(message) {
       // ✅ Botão: Assumir como Responsável (ADMIN_ONLY)
       if (id === 'assumir_resp') {
         if (!temCargoDeResp(member)) {
-          const resposta = { content: '🚫 Você não tem permissão.', flags: 64 };
+          const resposta = { content: '🚫 Você não tem permissão.', ephemeral: true };
           try {
             if (!interaction.replied && !interaction.deferred) {
               await interaction.reply(resposta);
@@ -792,7 +792,7 @@ function rebuildPendingFromFormsMessage(message) {
         // grava que ESTE é o dono oficial
         responsaveisOficiais.set(interaction.channel.id, member.id);
 
-        await interaction.reply({ content: '👑 Você assumiu este ticket como responsável. Só você fecha agora.', flags: 64 });
+        await interaction.reply({ content: '👑 Você assumiu este ticket como responsável. Só você fecha agora.', ephemeral: true });
         return true;
       }
 
@@ -812,7 +812,7 @@ function rebuildPendingFromFormsMessage(message) {
 
         // 1) precisa ter cargo que pode abrir/fechar
         if (!temCargoQuePodeAbrir(member)) {
-          await interaction.reply({ content: '🚫 Você não tem permissão para fechar este ticket.', flags: 64 });
+          await interaction.reply({ content: '🚫 Você não tem permissão para fechar este ticket.', ephemeral: true });
           return true;
         }
 
@@ -823,7 +823,7 @@ function rebuildPendingFromFormsMessage(message) {
             responsaveisOficiais.set(canalId, member.id);
           } else if (idResp !== member.id) {
             // já tinha outro resp marcado -> só ele pode
-            await interaction.reply({ content: '❌ Já existe um responsável marcado pra este ticket. Só ele pode fechar.', flags: 64 });
+            await interaction.reply({ content: '❌ Já existe um responsável marcado pra este ticket. Só ele pode fechar.', ephemeral: true });
             return true;
           }
           // resp pode seguir mesmo que NINGUÉM tenha assumido
@@ -842,13 +842,13 @@ function rebuildPendingFromFormsMessage(message) {
 
           // 3.2 se tem resp oficial, só ele fecha
           if (idResp && idResp !== member.id) {
-            await interaction.reply({ content: '❌ Apenas o responsável (Resp) atual pode fechar este ticket.', flags: 64 });
+            await interaction.reply({ content: '❌ Apenas o responsável (Resp) atual pode fechar este ticket.', ephemeral: true });
             return true;
           }
 
           // 3.3 se não tem resp, só quem assumiu fecha
           if (!idResp && idAssumidoComum !== member.id) {
-            await interaction.reply({ content: '❌ Apenas quem assumiu o ticket pode fechá-lo.', flags: 64 });
+            await interaction.reply({ content: '❌ Apenas quem assumiu o ticket pode fechá-lo.', ephemeral: true });
             return true;
           }
         }
@@ -1001,7 +1001,7 @@ if (interaction.isModalSubmit() && interaction.customId === 'modal_registro_lide
       try {
         const membro = await interaction.guild.members.fetch(id).catch(() => null);
         if (!membro) {
-          await interaction.reply({ content: '⚠️ ID inválido ou usuário não está no servidor.', ephemeral: true });
+          await interaction.reply({ content: '⚠️ ID inválido ou usuário não está no servidor.', flags: 64 });
           return true;
         }
 
@@ -1012,9 +1012,9 @@ if (interaction.isModalSubmit() && interaction.customId === 'modal_registro_lide
           AttachFiles: true
         });
 
-        await interaction.reply({ content: `<@${id}> adicionado com sucesso ao ticket.`, ephemeral: true });
+        await interaction.reply({ content: `<@${id}> adicionado com sucesso ao ticket.`, flags: 64 });
       } catch (e) {
-        await interaction.reply({ content: `Erro ao adicionar: ${e.message}`, ephemeral: true });
+        await interaction.reply({ content: `Erro ao adicionar: ${e.message}`, flags: 64 });
       }
       return true;
     }
@@ -1027,14 +1027,14 @@ if (interaction.isModalSubmit() && interaction.customId === 'modal_registro_lide
       try {
         const overwrite = channel.permissionOverwrites.cache.get(id);
         if (!overwrite) {
-          await interaction.reply({ content: 'ℹ️ Esse usuário não tem permissão específica neste canal.', ephemeral: true });
+          await interaction.reply({ content: 'ℹ️ Esse usuário não tem permissão específica neste canal.', flags: 64 });
           return true;
         }
 
         await channel.permissionOverwrites.delete(id);
-        await interaction.reply({ content: `<@${id}> removido com sucesso do ticket.`, ephemeral: true });
+        await interaction.reply({ content: `<@${id}> removido com sucesso do ticket.`, flags: 64 });
       } catch (e) {
-        await interaction.reply({ content: `Erro ao remover: ${e.message}`, ephemeral: true });
+        await interaction.reply({ content: `Erro ao remover: ${e.message}`, flags: 64 });
       }
       return true;
     }
@@ -1082,7 +1082,7 @@ if (interaction.isModalSubmit() && interaction.customId === 'modal_registro_lide
   async function finalizarTicketComConclusao(interaction, conclusaoFinal) {
     // garante que não dá erro de "já respondeu"
     try {
-      const msg = { content: "📄 Fechando ticket e gerando transcript...", flags: 64 };
+      const msg = { content: "📄 Fechando ticket e gerando transcript...", ephemeral: true };
       if (!interaction.replied && !interaction.deferred) {
         await interaction.reply(msg);
       } else {

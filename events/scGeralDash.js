@@ -2927,7 +2927,7 @@ export async function geralDashHandleInteraction(interaction, client) {
     if (!hasRole && !isAllowedUser) {
       await interaction.reply({
         content: "❌ Sem permissão.",
-        ephemeral: true,
+        flags: 64,
       });
       return true;
     }
@@ -2969,12 +2969,12 @@ export async function geralDashHandleInteraction(interaction, client) {
     if (!hasRole && !isAllowedUser) {
       await interaction.reply({
         content: "❌ Sem permissão.",
-        ephemeral: true,
+        flags: 64,
       });
       return true;
     }
 
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: 64 });
 
     const userId = interaction.fields.getTextInputValue("userId");
 

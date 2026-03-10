@@ -176,9 +176,13 @@ async function ensureButtonAtBottom(channel, client, force = true) {
       (m) => m.author.id === client.user.id && m.components.length > 0 && m.components[0].components.some(c => c.customId === BTN_OPEN_MENU || c.customId === BTN_EDIT_LAST)
     );
 
-    // Se forçar, ou se não houver botão, continua. Se não forçar e já tiver, para.
-    if (!force && myMsgs.size > 0) return;
+    // ✅ Checa se já existe um painel de botões ATUALIZADO (com 2 botões)
+    const upToDateMsg = myMsgs.find(m => m.components[0]?.components?.length === 2);
 
+    // Se não for forçado e já existir um painel atualizado, não faz nada.
+    if (!force && upToDateMsg) return;
+
+    // Apaga todas as mensagens de botão antigas/desatualizadas do bot
     for (const m of myMsgs.values()) {
       await m.delete().catch(() => {});
     }

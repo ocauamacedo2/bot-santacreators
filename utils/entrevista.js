@@ -243,7 +243,7 @@ async function handleButtons(interaction) {
 
   // RESULTADO
   if (customId.startsWith('aprovar|') || customId.startsWith('reprovar|') || customId.startsWith('alinhar|')) {
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: 64 });
 
     const [acao, userId] = customId.split('|');
     const membro = await guild.members.fetch(userId).catch(() => null);
