@@ -132,6 +132,7 @@ export default {
             .setThumbnail(avatar)
             .setColor('#ff009a')
             .setTitle(`📄 Informações sobre ${membroAlvo.displayName}`)
+            .setDescription(`**Menção:** ${membroAlvo}`)
             .addFields(
                 { name: '🆔 ID do Usuário', value: `\`${user.id}\``, inline: true },
                 { name: '🌐 Apelido', value: `\`${apelido}\``, inline: true },
