@@ -4,6 +4,7 @@ import { registroVendasHandleInteraction } from './registroVendas.js';
 import { sortChannelsHandleInteraction } from '../commands/canais/sortChannels.js';
 import { vipRegistroHandleInteraction } from './vipRegistro.js';
 import { ausenciasHandleInteraction } from './ausencias.js';
+import { registroPoderesEventosHandleInteraction } from './registroPoderesEventos.js';
 
 // Ignora tudo do fluxo do Pedir Set (tratado no index.js)
 const isSetFlow = (interaction) => {
@@ -33,6 +34,9 @@ export default {
 
     // ✅ Ausências (Registro)
     if (await ausenciasHandleInteraction(interaction, interaction.client)) return;
+
+    // ✅ Registro de Poderes (Eventos)
+    if (await registroPoderesEventosHandleInteraction(interaction, interaction.client)) return;
 
     // ✅ VENDAS (Botões e Modais)
     if (await registroVendasHandleInteraction(interaction, interaction.client)) return;
