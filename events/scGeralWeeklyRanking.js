@@ -931,7 +931,7 @@ async function collectAllPoints(client, mode = "light") {
   try {
     const cal = await client.channels.fetch(BP_CALENDAR_CHANNEL_ID).catch(() => null);
     if (cal?.isTextBased?.()) {
-      const pins = await cal.messages.fetchPins().catch(() => null);
+      const pins = await cal.fetchPins().catch(() => null);
       const pinList = pins?.values ? [...pins.values()] : [];
 
       const recent = await cal.messages.fetch({ limit: 120 }).catch(() => null);

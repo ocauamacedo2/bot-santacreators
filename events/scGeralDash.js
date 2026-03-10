@@ -1305,7 +1305,7 @@ await scanChannelEmbeds(client, {
       .catch(() => null);
     if (cal?.isTextBased?.()) {
     // 2) pins (mais rápido)
-const pins = await cal.messages.fetchPins().catch(() => null);
+const pins = await cal.fetchPins().catch(() => null);
 
       const pinList = pins?.values ? [...pins.values()] : [];
 
@@ -1980,6 +1980,9 @@ const { items } = await collectAllGeneral(client, scanMode);
 // ✅ congela a semana passada pra nunca mais mudar
 freezeLastWeekIfNeeded(items);
 
+    // ✅ Carrega o snapshot DEPOIS de congelar, para garantir que os dados estão atualizados
+    const snap = loadWeeklySnapshot();
+
 
 
     const chosen = chooseWeeksUnion();
@@ -2026,7 +2029,6 @@ freezeLastWeekIfNeeded(items);
     const weekKeysDesc = (chosen.keys || []).slice(0, 4);
     const weekKeysAsc = [...weekKeysDesc].sort((a, b) => (a > b ? 1 : -1));
     const chartLabels = weekKeysAsc.map((k) => triLabelShortFromWeekKey(k));
-   const snap = loadWeeklySnapshot();
 
 const chartData = weekKeysAsc.map((k) => {
   // semana atual SEMPRE recalcula
