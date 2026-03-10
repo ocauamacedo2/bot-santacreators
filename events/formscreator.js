@@ -83,6 +83,15 @@ const EXCLUDE_FEEDBACK_ROLES = [
   "1262262852949905409", // resp influ
 ];
 
+// ✅ Cargos que recebem lembrete no PV (dia alternado ao público)
+const DM_REMINDER_ROLES = [
+  "1388976314253312100", // coord.
+  "1352407252216184833", // resp lider
+  "1388975939161161728", // gestor
+  "1352408327983861844", // resp creators
+  "1262262852949905409", // resp influ
+];
+
 // ✅ Cargo alvo dos feedbacks
 const ROLE_GESTAOINFLUENCER = "1371733765243670538";
 
@@ -455,9 +464,9 @@ async function runReminderJob(client) {
   // Ordena por pontos
   activeThisWeek.sort((a, b) => b.points - a.points);
 
-  // 3. Envia lembretes
-  if (days >= 3) {
-    // Lembrete público
+  // 3. Envia lembretes (Alternado: Dia Público / Dia PV)
+  // ✅ Se passou 2 dias ou mais (ou nunca rodou), manda Público e reseta timer
+  if (days >= 2) {
     const ch = await client.channels.fetch(PUBLIC_REMINDER_CHANNEL_ID).catch(() => null);
     if (ch && ch.isTextBased()) {
       const mentions = CREATOR_FORM_NOTIFY_ROLES.map(id => `<@&${id}>`).join(" ");
@@ -479,9 +488,38 @@ async function runReminderJob(client) {
     }
     state.lastPublicReminderAt = now.toISOString();
     writeState(state);
-  } else {
-    // DM nos outros dias (lógica original mantida)
-    // ... (a lógica de DM original já está aqui, não precisa mudar)
+  } 
+  // ✅ Se passou 1 dia (dia intercalado), manda PV
+  else if (days === 1) {
+    const embedDM = new EmbedBuilder()
+        .setTitle("📌 Lembrete Pessoal: Feedbacks da Equipe")
+        .setColor("#f1c40f")
+        .setDescription(
+          "Oie! Passando pra lembrar de deixar aquele feedback na evolução da galera. Hoje é o dia de foco nisso!\n\n" +
+          "**Ranking de Atividades da Semana:**\n" +
+          activeThisWeek.map(u => `• <@${u.userId}> (${u.points} pontos)`).join("\n") +
+          "\n\n" +
+          `Acesse o tópico de cada um no canal <#${CREATOR_FORM_CHANNEL_ID}> para registrar.`
+        )
+        .setFooter({ text: "Alternado: Hoje é dia de lembrete no PV!" });
+
+    // Coleta membros únicos dos cargos definidos
+    const membersToNotify = new Map();
+    for (const roleId of DM_REMINDER_ROLES) {
+        const role = guild.roles.cache.get(roleId);
+        if (role) {
+            for (const [id, member] of role.members) {
+                if (!member.user.bot) membersToNotify.set(id, member);
+            }
+        }
+    }
+
+    // Envia PV personalizado (sem marcar cargo)
+    for (const member of membersToNotify.values()) {
+        try {
+            await member.send({ content: `Olá, ${member.displayName}! 👋`, embeds: [embedDM] });
+        } catch {}
+    }
   }
 }
 
