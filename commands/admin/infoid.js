@@ -85,8 +85,6 @@ export default {
             // Busca por `| 34` ou ` 34` no final do nome/nick.
             // O `\s*` permite espaços opcionais em volta do `|`.
             const searchRegex = new RegExp(`\\s*\\|\\s*${query}$`, 'i');
-            // Garante que o cache de membros está o mais atualizado possível
-            await message.guild.members.fetch().catch(() => {});
             membroAlvo = message.guild.members.cache.find(m => {
                 const displayName = m.displayName || '';
                 // Procura pelo padrão exato para evitar falsos positivos
