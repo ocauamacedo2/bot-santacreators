@@ -1627,6 +1627,27 @@ function correcao_getUserId(emb) {
 
 // ================== BACKFILL (VIP / HALL / EVENTOS DIÁRIOS) ==================
 
+async function scanCurrentWeekEmbeds(client, channelId, filterFn, actionFn, maxPages = 25) {
+  const wkNow = weekKeyFromDateSP(nowSP());
+  
+  await scanChannelEmbeds(client, {
+    channelId,
+    weekFloorKey: wkNow,
+    maxPages,
+    onMessage: async (msg) => {
+      const emb = msg.embeds?.[0];
+      if (!emb) return;
+      
+      const wkMsg = weekKeyFromDateSP(new Date(msg.createdTimestamp));
+      if (wkMsg !== wkNow) return;
+
+      if (filterFn(emb)) {
+        await actionFn(msg, emb);
+      }
+    }
+  });
+}
+
 function isVipRecordEmbed(emb) {
   const t = norm(emb?.title || emb?.data?.title || "");
   return t.includes("registro de vip por evento");
@@ -1879,6 +1900,13 @@ async function backfillExtrasThisWeek(client) {
   } catch (e) {
     return { done: false, reason: e?.message || "erro" };
   }
+}
+
+async function runAllBackfillsOnReady(client) {
+  console.log("[SC_GERAL_DASH] 🔄 Rodando backfills...");
+  await backfillExtrasThisWeek(client);
+  await backfillVipAndOthersThisWeek(client);
+  console.log("[SC_GERAL_DASH] ✅ Backfills concluídos.");
 }
 
 // ================== DASH UPDATE ==================
