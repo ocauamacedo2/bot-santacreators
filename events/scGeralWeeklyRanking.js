@@ -596,27 +596,18 @@ function convite_getSenderId(emb) {
 function perguntas_getUserId(emb) {
   try {
     const fields = getFields(emb);
-    // ✅ Prioriza campos mais específicos para evitar pegar o ID errado
-    let f =
-      fields.find(x => norm(x?.name).includes("aplicador")) ||
-      fields.find(x => norm(x?.name).includes("entrevistador")) ||
+    const f =
       fields.find(x => norm(x?.name).includes("usuario")) ||
       fields.find(x => norm(x?.name).includes("usuário")) ||
       fields.find(x => norm(x?.name).includes("autor")) ||
-      fields.find(x => norm(x?.name).includes("quem"));
-
+      fields.find(x => norm(x?.name).includes("id")) ||
+      fields.find(x => norm(x?.name).includes("quem")) ||
+      fields.find(x => norm(x?.name).includes("aplicador")) ||
+      null;
     if (f) {
       const v = String(f?.value || "");
       return pickFirstMentionId(v) || pickFirstIdLoose(v);
     }
-
-    // Fallback para o campo "id" se os outros falharem
-    f = fields.find(x => norm(x?.name).includes("id"));
-    if (f) {
-      const v = String(f?.value || "");
-      return pickFirstMentionId(v) || pickFirstIdLoose(v);
-    }
-
     const bag = getEmbedTextBag(emb);
     return pickFirstMentionId(bag) || pickFirstIdLoose(bag);
   } catch {
@@ -812,19 +803,12 @@ async function collectAllPoints(client, mode = "light") {
       onMessage: async (m) => {
         const emb = m.embeds?.[0];
         if (!emb) return;
+        if (!isPerguntasLogEmbed(emb)) return;
 
-        // ✅ Checa os dois tipos de log que podem estar neste canal
-        if (isEntrevistaConcluidaLogEmbed(emb)) {
-          const uid = entrevistaConcluida_getUserId(emb);
-          if (uid) {
-            pushItem({ userId: uid, ts: new Date(m.createdTimestamp), source: "perguntas" });
-          }
-        } else if (isPerguntasLogEmbed(emb)) {
-          const uid = perguntas_getUserId(emb);
-          if (uid) {
-            pushItem({ userId: uid, ts: new Date(m.createdTimestamp), source: "perguntas" });
-          }
-        }
+        const uid = perguntas_getUserId(emb);
+        if (!uid) return;
+
+        pushItem({ userId: uid, ts: new Date(m.createdTimestamp), source: "perguntas" });
       },
     });
   }
@@ -1850,8 +1834,15 @@ export async function getStatsForUser(client, userId) {
       .sort((a, b) => b[1] - a[1])
       .map(([src, count]) => `• ${src}: **${count}**`);
 
+    // ✅ NOVO: Pega pontos da semana atual
+    const currentWeekKey = weekKeyFromDateSP(nowSP());
+    const thisWeekBasePoints = byWeek[currentWeekKey] || 0;
+    const thisWeekAdjustment = adjustmentsData.byWeek?.[currentWeekKey]?.[String(userId)] || 0;
+    const thisWeekTotalPoints = thisWeekBasePoints + thisWeekAdjustment;
+
     return {
       total: total + totalAdjustments,
+      thisWeekPoints: thisWeekTotalPoints,
       totalBase: total,
       totalAdjustments,
       sourcesFormatted,

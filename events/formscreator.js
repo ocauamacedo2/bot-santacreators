@@ -78,9 +78,7 @@ const MANAGE_PERMS_USERS = [
 
 // ✅ Cargos para IGNORAR na cobrança de feedback
 const EXCLUDE_FEEDBACK_ROLES = [
-  "1388976314253312100", // coord.
   "1352407252216184833", // resp lider
-  "1388975939161161728", // gestor
   "1352408327983861844", // resp creators
   "1262262852949905409", // resp influ
 ];
@@ -433,6 +431,7 @@ async function runReminderJob(client) {
   const membersToEvaluate = [];
   for (const reg of activeRegistrations) {
     const member = await guild.members.fetch(reg.userId).catch(() => null);
+    // ✅ Mostra todos, EXCETO os cargos de Resp definidos acima.
     if (member && !member.roles.cache.some(r => EXCLUDE_FEEDBACK_ROLES.includes(r.id))) {
       membersToEvaluate.push(reg);
     }
@@ -442,8 +441,9 @@ async function runReminderJob(client) {
   const activeThisWeek = [];
   for (const reg of membersToEvaluate) {
     const stats = await getStatsForUser(client, reg.userId);
-    if (stats && stats.total > 0) { // Tem pontos na semana
-      activeThisWeek.push({ ...reg, points: stats.total });
+    // ✅ FIX: Usa os pontos da semana atual, não o total geral.
+    if (stats && stats.thisWeekPoints > 0) {
+      activeThisWeek.push({ ...reg, points: stats.thisWeekPoints });
     }
   }
 
@@ -460,7 +460,6 @@ async function runReminderJob(client) {
     // Lembrete público
     const ch = await client.channels.fetch(PUBLIC_REMINDER_CHANNEL_ID).catch(() => null);
     if (ch && ch.isTextBased()) {
-      const topActive = activeThisWeek.slice(0, 5);
       const mentions = CREATOR_FORM_NOTIFY_ROLES.map(id => `<@&${id}>`).join(" ");
 
       const embed = new EmbedBuilder()
@@ -469,8 +468,8 @@ async function runReminderJob(client) {
         .setDescription(
           `${mentions}\n\n` +
           "Vamos manter a evolução da nossa equipe em dia! Por favor, deixem seus feedbacks sobre os membros mais ativos da semana, com base no ranking de atividades.\n\n" +
-          "**Membros em Destaque (ativos no ranking):**\n" +
-          topActive.map(u => `• <@${u.userId}> (${u.points} pontos)`).join("\n") +
+          "**Ranking de Atividades da Semana:**\n" +
+          activeThisWeek.map(u => `• <@${u.userId}> (${u.points} pontos)`).join("\n") +
           "\n\n" +
           `Acesse o tópico de cada um no canal <#${CREATOR_FORM_CHANNEL_ID}> para registrar seu feedback sobre o desempenho, ajuda, ou qualquer ponto relevante.`
         )
