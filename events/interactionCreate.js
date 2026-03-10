@@ -6,6 +6,7 @@ import { vipRegistroHandleInteraction } from './vipRegistro.js';
 import { ausenciasHandleInteraction } from './ausencias.js';
 import { registroPoderesEventosHandleInteraction } from './registroPoderesEventos.js';
 import { focoSemanaisHandleInteraction } from './focoSemanais.js';
+import { provasAdvHandleInteraction } from './provasAdv.js';
 
 // Ignora tudo do fluxo do Pedir Set (tratado no index.js)
 const isSetFlow = (interaction) => {
@@ -41,6 +42,9 @@ export default {
 
     // ✅ Foco Semanal
     if (await focoSemanaisHandleInteraction(interaction, interaction.client)) return;
+
+    // ✅ Provas ADV
+    if (await provasAdvHandleInteraction(interaction, interaction.client)) return;
 
     // ✅ VENDAS (Botões e Modais)
     if (await registroVendasHandleInteraction(interaction, interaction.client)) return;

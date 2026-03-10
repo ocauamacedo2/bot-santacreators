@@ -4,6 +4,7 @@ import { vipRegistroOnReady } from './vipRegistro.js';
 import { ausenciasOnReady } from './ausencias.js';
 import { registroPoderesEventosOnReady } from './registroPoderesEventos.js';
 import { focoSemanaisOnReady } from './focoSemanais.js';
+import { provasAdvOnReady } from './provasAdv.js';
 
 export default {
   name: 'ready',
@@ -15,5 +16,6 @@ export default {
     await ausenciasOnReady(client);
     await registroPoderesEventosOnReady(client);
     await focoSemanaisOnReady(client);
+    await provasAdvOnReady(client);
   }
 };

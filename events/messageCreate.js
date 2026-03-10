@@ -26,6 +26,7 @@ import { sortChannelsHandleMessage } from '../commands/canais/sortChannels.js';
 import { vipRegistroHandleMessage } from './vipRegistro.js';
 import { ausenciasHandleMessage } from './ausencias.js';
 import { registroPoderesEventosHandleMessage } from './registroPoderesEventos.js';
+import { provasAdvHandleMessage } from './provasAdv.js';
 import { focoSemanaisHandleMessage } from './focoSemanais.js';
 
 // Novos comandos de permissão
@@ -90,6 +91,9 @@ export default {
 
     // ✅ Foco Semanal (Comando !focomenu)
     if (await focoSemanaisHandleMessage(message, client)) return;
+
+    // ✅ Provas ADV (Comando !provasadv)
+    if (await provasAdvHandleMessage(message, client)) return;
 
     // ✅ VENDAS (Comando !painelvendas)
     if (await registroVendasHandleMessage(message, client)) return;
