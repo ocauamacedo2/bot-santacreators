@@ -209,75 +209,106 @@ function calculateWinners(data) {
 }
 
 // ================= CHART BUILDER =================
-function generateWeeklyChartUrl(data) {
-  // Pega Top 5 de cada categoria para o gráfico
-  const labels = [];
-  const datasets = [];
+async function generateWeeklyChartUrl(data, client) {
+  const topUsers = data.topGeral.slice(0, 10).reverse(); // Inverte para o gráfico horizontal
+  if (topUsers.length === 0) {
+    return "https://quickchart.io/chart?c=%7Btype%3A%27bar%27%2Cdata%3A%7Blabels%3A%5B%27Semana%27%5D%2Cdatasets%3A%5B%7Blabel%3A%27Pontos%27%2Cdata%3A%5B0%5D%7D%5D%7D%2Coptions%3A%7Btitle%3A%7Bdisplay%3Atrue%2Ctext%3A%27Nenhum+dado+dispon%C3%ADvel+para+a+semana%27%7D%7D%7D";
+  }
 
-  // Helper para extrair dados
-  const extract = (list, label, color) => {
-    const top5 = list.slice(0, 5);
-    if (top5.length === 0) return null;
+  const userIds = topUsers.map(u => u.id);
+  const nameMap = {};
+
+  // Busca nomes dos usuários
+  if (client) {
+    const guild = client.guilds.cache.first();
+    if (guild) {
+      await Promise.all(userIds.map(async (uid) => {
+        try {
+          const member = await guild.members.fetch(uid).catch(() => null);
+          nameMap[uid] = member ? (member.displayName || member.user.username) : uid;
+        } catch { nameMap[uid] = uid; }
+      }));
+    }
+  }
+
+  const labels = topUsers.map(u => (nameMap[u.id] || u.id).slice(0, 20));
+
+  const managerPoints = [];
+  const socialPoints = [];
+  const otherPoints = [];
+
+  const socialSources = new Set([
+    'pagamentos', 'halldafama', 'eventopoder', 'cronograma', 'eventosdiarios'
+  ]);
+
+  for (const user of topUsers) {
+    const userId = user.id;
+    const sources = data.bySourceByUser[userId] || {};
+
+    const mgrPts = sources.manager || 0;
     
-    // Adiciona labels (nomes/IDs) se ainda não existirem
-    // Simplificação: Vamos fazer um gráfico de barras agrupado por categoria
-    // Dataset: [Geral, Manager, Social]
-    return {
-      label: label,
-      data: top5.map(x => x.pts),
-      backgroundColor: color
-    };
-  };
+    let socPts = 0;
+    for (const source in sources) {
+      if (socialSources.has(source)) {
+        socPts += sources[source];
+      }
+    }
 
-  // Como os usuários são diferentes em cada lista, um gráfico de barras simples por categoria é melhor
-  // Vamos fazer um gráfico "Horizontal Bar" mostrando os Top 3 de cada categoria
-  
-  const chartData = {
-    labels: [],
-    datasets: [{
-      label: 'Pontos',
-      data: [],
-      backgroundColor: []
-    }]
-  };
+    const totalPts = user.pts;
+    const otherPts = totalPts - mgrPts - socPts;
 
-  const addCategory = (title, list, color) => {
-    if (!list || list.length === 0) return;
-    list.slice(0, 5).forEach((u, i) => {
-      // Tenta pegar nome do cache se possível, senão usa ID truncado
-      // Como não temos acesso fácil ao cache de usuários aqui sem async, usamos ID
-      // O QuickChart renderiza texto.
-      chartData.labels.push(`${title} #${i+1}`);
-      chartData.datasets[0].data.push(u.pts);
-      chartData.datasets[0].backgroundColor.push(color);
-    });
-  };
-
-  addCategory('Geral', data.topGeral, '#9b59b6'); // Roxo
-  addCategory('Manager', data.topManager, '#3498db'); // Azul
-  addCategory('Social', data.topSocial, '#e91e63'); // Rosa
+    managerPoints.push(mgrPts);
+    socialPoints.push(socPts);
+    otherPoints.push(Math.max(0, otherPts));
+  }
 
   const config = {
-    type: 'bar',
-    data: chartData,
+    type: 'horizontalBar',
+    data: {
+      labels: labels,
+      datasets: [
+        {
+          label: 'Manager',
+          data: managerPoints,
+          backgroundColor: '#3498db' // Azul
+        },
+        {
+          label: 'Social',
+          data: socialPoints,
+          backgroundColor: '#e91e63' // Rosa
+        },
+        {
+          label: 'Outros',
+          data: otherPoints,
+          backgroundColor: '#95a5a6' // Cinza
+        }
+      ]
+    },
     options: {
-      legend: { display: false },
-      title: { display: true, text: 'Pontuações da Semana (Top 5 por Categoria)' },
+      title: {
+        display: true,
+        text: 'Top 10 Pontuadores da Semana por Categoria'
+      },
       scales: {
-        yAxes: [{ ticks: { beginAtZero: true, precision: 0 } }]
+        xAxes: [{
+          stacked: true,
+          ticks: { beginAtZero: true, precision: 0 }
+        }],
+        yAxes: [{
+          stacked: true
+        }]
       },
       plugins: {
         datalabels: {
-          anchor: 'end',
-          align: 'top',
-          color: 'black',
-          font: { weight: 'bold' }
+          color: 'white',
+          font: { weight: 'bold' },
+          formatter: (value) => value > 0 ? value : ''
         }
       }
     }
   };
 
-  return `https://quickchart.io/chart?c=${encodeURIComponent(JSON.stringify(config))}&width=800&height=400&backgroundColor=white`;
+  return `https://quickchart.io/chart?c=${encodeURIComponent(JSON.stringify(config))}&width=800&height=600&backgroundColor=white`;
 }
 
 // ================= UI BUILDERS =================
@@ -327,7 +358,7 @@ function buildAdminEmbed(state, data, winners) {
     .setTimestamp();
 }
 
-function buildPublicEmbed(state, data, winners) {
+async function buildPublicEmbed(state, data, winners, client) {
   const pautasTexto = state.pautas.length > 0
     ? state.pautas.map((p, i) => `📌 **${p.title}**\n${p.desc}`).join("\n\n")
     : "—";
@@ -340,7 +371,7 @@ function buildPublicEmbed(state, data, winners) {
   };
 
   const top3Alinh = fmtTop3(data.topAlinh);
-  const chartUrl = generateWeeklyChartUrl(data);
+  const chartUrl = await generateWeeklyChartUrl(data, client);
 
   return new EmbedBuilder()
     .setTitle("📝 Resumo da Reunião Semanal")
@@ -580,7 +611,7 @@ export async function reuniaoSemanalHandleInteraction(interaction, client) {
     const logs = await applyRoles(interaction.guild, winners, state);
     const publicChannel = await client.channels.fetch(PUBLIC_CHANNEL_ID).catch(() => null);
     if (publicChannel) {
-      const publicEmbed = buildPublicEmbed(state, data, winners);
+      const publicEmbed = await buildPublicEmbed(state, data, winners, client);
       await publicChannel.send({ content: "@everyone Resumo da Reunião Semanal:", embeds: [publicEmbed] });
     }
     await interaction.editReply({ content: `✅ **Reunião Publicada!**\n\n📜 **Logs de Cargos:**\n${logs.join("\n") || "Nenhuma alteração."}` });
@@ -598,7 +629,7 @@ export async function reuniaoSemanalHandleInteraction(interaction, client) {
     
     const publicChannel = await client.channels.fetch(PUBLIC_CHANNEL_ID).catch(() => null);
     if (publicChannel) {
-      const publicEmbed = buildPublicEmbed(state, data, winners);
+      const publicEmbed = await buildPublicEmbed(state, data, winners, client);
       await publicChannel.send({ content: "@everyone Resumo da Reunião Semanal (Sem alteração de cargos):", embeds: [publicEmbed] });
     }
     await interaction.editReply({ content: `📢 **Reunião Publicada (Apenas Texto)!**\nNenhum cargo foi alterado.` });
