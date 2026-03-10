@@ -38,9 +38,11 @@ async function findOpenTickets(guild, member) {
     const openTickets = [];
     for (const channel of guild.channels.cache.values()) {
         if (TICKET_CATEGORIES.has(channel.parentId)) {
-            // Verifica se o membro tem permissão para ver o canal
-            const perms = channel.permissionsFor(member);
-            if (perms && perms.has('ViewChannel')) {
+            // Verifica se o membro tem uma permissão explícita (overwrite) no canal,
+            // ignorando permissões herdadas de cargos.
+            const overwrite = channel.permissionOverwrites.cache.get(member.id);
+            // A permissão de ver é concedida se houver um overwrite para o membro que permite 'ViewChannel'
+            if (overwrite && overwrite.allow.has('ViewChannel')) {
                 openTickets.push(channel.id);
             }
         }
