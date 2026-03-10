@@ -347,16 +347,16 @@ export async function eventosDiariosHandleInteraction(interaction, client) {
       return interaction.reply({ content: "🚫 Sem permissão para editar.", ephemeral: true });
     }
 
-    await interaction.deferReply({ ephemeral: true });
+    // await interaction.deferReply({ ephemeral: true }); // Removido para corrigir erro 'InteractionAlreadyReplied'
 
     const eventChannel = await client.channels.fetch(EVENTOS_CHANNEL_ID).catch(() => null);
     if (!eventChannel) {
-      return interaction.editReply("❌ Canal de Eventos não encontrado.");
+      return interaction.reply({ content: "❌ Canal de Eventos não encontrado.", ephemeral: true });
     }
 
     const messages = await eventChannel.messages.fetch({ limit: 50 }).catch(() => null);
     if (!messages) {
-      return interaction.editReply("❌ Não foi possível buscar as mensagens do canal de eventos.");
+      return interaction.reply({ content: "❌ Não foi possível buscar as mensagens do canal de eventos.", ephemeral: true });
     }
 
     // Find the most recent event message from the bot
@@ -366,14 +366,14 @@ export async function eventosDiariosHandleInteraction(interaction, client) {
       .first();
 
     if (!lastEventMessage) {
-      return interaction.editReply("❌ Nenhum evento recente encontrado para editar.");
+      return interaction.reply({ content: "❌ Nenhum evento recente encontrado para editar.", ephemeral: true });
     }
 
     // Parse the content
     const lines = lastEventMessage.content.split('\n');
     const titleLineIndex = lines.findIndex(l => l.startsWith('# 🎉 :'));
     if (titleLineIndex === -1) {
-        return interaction.editReply("❌ Formato de título do evento não encontrado.");
+        return interaction.reply({ content: "❌ Formato de título do evento não encontrado.", ephemeral: true });
     }
     const title = lines[titleLineIndex].match(/# 🎉 :  \*\*Santa Creators : (.*?)\*\* 🎉/)?.[1] || '';
 

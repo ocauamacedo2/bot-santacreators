@@ -110,6 +110,13 @@ export default function createEntrevistasTickets({ client, Transcript }) {
     '1282119104576098314'  // MKT TICKET
   ];
 
+  // ✅ NOVO: Cargos que serão notificados APENAS para tickets de ROUPAS
+  const ROUPAS_NOTIFY_ROLES = [
+    '1353032994486620180', // Equipe Designer (exemplo, mantive o original)
+    // 'ID_DO_CARGO_COORD_DESIGNER',
+    // Adicione ou remova os IDs dos cargos que devem receber a notificação de roupas
+  ];
+
   const CATEGORIES = {
     entrevista: '1359244725781266492',
     suporte: '1359245003523756136',
@@ -329,13 +336,15 @@ function rebuildPendingFromFormsMessage(message) {
       }
 
       if (tipo === 'roupas') {
-        const equipeDesigner = guild.roles.cache.get('1353032994486620180');
-        if (equipeDesigner) {
-          for (const [_, membro] of equipeDesigner.members) {
-            membro.send({
-              content: `🧵 Um novo ticket de **roupas** foi aberto!\n\n📎 Link: ${canal.toString()} <@${membro.id}>\n\nSolicite os detalhes do design e acompanhe o pedido.`
-            }).catch(() => {});
-          }
+        // ✅ Lógica alterada para usar a nova lista
+        const membrosParaNotificar = guild.members.cache.filter(membro =>
+          !membro.user.bot && ROUPAS_NOTIFY_ROLES.some(roleId => membro.roles.cache.has(roleId))
+        );
+
+        for (const [_, membro] of membrosParaNotificar) {
+          membro.send({
+            content: `🧵 Um novo ticket de **roupas** foi aberto!\n\n📎 Link: ${canal.toString()} <@${membro.id}>\n\nSolicite os detalhes do design e acompanhe o pedido.`
+          }).catch(() => {});
         }
       }
 

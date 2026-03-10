@@ -11,7 +11,7 @@ const ALLOWED_CATEGORY_IDS = new Set([
   "1359244725781266492", // Entrevista
   "1359245003523756136", // Suporte (ID corrigido conforme entrevistasTickets.js)
   "1359245055239655544", // Ideias
-  "1352706815594598420", // Roupas
+  // "1352706815594598420", // Roupas (REMOVIDO PARA NÃO NOTIFICAR)
   "1404568518179029142", // Banners
   "1444857594517913742", // Contratar em Game
 ]);

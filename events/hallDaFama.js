@@ -265,16 +265,16 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
       return interaction.reply({ content: "🚫 Sem permissão para editar.", ephemeral: true });
     }
 
-    await interaction.deferReply({ ephemeral: true });
+    // await interaction.deferReply({ ephemeral: true }); // Removido para corrigir erro 'InteractionAlreadyReplied'
 
     const hallChannel = await client.channels.fetch(HALL_CHANNEL_ID).catch(() => null);
     if (!hallChannel) {
-      return interaction.editReply("❌ Canal do Hall da Fama não encontrado.");
+      return interaction.reply({ content: "❌ Canal do Hall da Fama não encontrado.", ephemeral: true });
     }
 
     const messages = await hallChannel.messages.fetch({ limit: 50 }).catch(() => null);
     if (!messages) {
-      return interaction.editReply("❌ Não foi possível buscar as mensagens do canal.");
+      return interaction.reply({ content: "❌ Não foi possível buscar as mensagens do canal.", ephemeral: true });
     }
 
     // Encontra a última mensagem de Hall da Fama postada pelo bot
@@ -284,7 +284,7 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
       .first();
 
     if (!lastHallMessage) {
-      return interaction.editReply("❌ Nenhum post recente do Hall da Fama encontrado para editar.");
+      return interaction.reply({ content: "❌ Nenhum post recente do Hall da Fama encontrado para editar.", ephemeral: true });
     }
 
     // Parse do conteúdo da mensagem
@@ -297,7 +297,7 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
     const winnersEndIndex = lines.findIndex(l => l.includes('Foi insano, mas mais uma vez'));
     
     if (winnersStartIndex <= 1 || winnersEndIndex === -1) {
-        return interaction.editReply("❌ Não foi possível analisar o bloco de vencedores da mensagem.");
+        return interaction.reply({ content: "❌ Não foi possível analisar o bloco de vencedores da mensagem.", ephemeral: true });
     }
     
     const winnersText = lines.slice(winnersStartIndex, winnersEndIndex).join('\n').trim();
