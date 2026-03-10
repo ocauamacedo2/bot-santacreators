@@ -163,7 +163,7 @@ function aggregateData() {
   for (const userId in bySourceByUser) {
     const userSources = bySourceByUser[userId];
     let userSocialPoints = 0;
-    for (const source in userSources) {
+    for (const source in userSources || {}) {
         if (socialSources.has(source)) {
             userSocialPoints += userSources[source];
         }
