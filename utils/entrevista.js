@@ -8,6 +8,8 @@ import {
   AttachmentBuilder
 } from 'discord.js';
 
+import { dashEmit } from './dashHub.js';
+
 // ===== CONFIG =====
 const ENTREVISTA_DURACAO_MIN = 180;
 const ENTREVISTA_DURACAO_MS = ENTREVISTA_DURACAO_MIN * 60 * 1000;
@@ -472,7 +474,7 @@ async function enviarPergunta(channel, membro, index) {
     const entrevistadorId = dados.entrevistadorId;
     if (entrevistadorId) {
         // Emitir para o dashboard em tempo real
-        dashEmit('entrevista:concluida', {
+        dashEmit('entrevista:perguntas', {
             userId: entrevistadorId,
             __at: Date.now(),
             source: 'perguntas' // Usando a mesma fonte para consistência

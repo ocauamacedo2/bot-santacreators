@@ -65,6 +65,8 @@ const SEL_CITY = "hf_select_city";
 const MODAL_SUBMIT = "hf_modal_submit";
 const BTN_APPROVE_PREFIX = "hf_approve_";
 const BTN_REJECT_PREFIX = "hf_reject_";
+const BTN_EDIT_LAST = "hf_edit_last";
+const MODAL_EDIT_SUBMIT = "hf_modal_edit_submit";
 
 // ================= PERSISTÊNCIA =================
 const __filename = fileURLToPath(import.meta.url);
@@ -150,13 +152,18 @@ function canApprove(member, userId) {
   return member?.roles?.cache?.some((r) => APPROVER_ROLES.includes(r.id)) || false;
 }
 
-function buildRegisterButton() {
+function buildControlButtons() {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(BTN_OPEN_MENU)
       .setLabel("🏆 Registrar Hall da Fama")
       .setStyle(ButtonStyle.Success)
-      .setEmoji("👑")
+      .setEmoji("👑"),
+    new ButtonBuilder()
+      .setCustomId(BTN_EDIT_LAST)
+      .setLabel("✏️ Editar Último Hall")
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji("✍️")
   );
 }
 
@@ -166,9 +173,10 @@ async function ensureButtonAtBottom(channel, client, force = true) {
     if (!messages) return;
 
     const myMsgs = messages.filter(
-      (m) => m.author.id === client.user.id && m.components.length > 0 && m.components[0].components[0].customId === BTN_OPEN_MENU
+      (m) => m.author.id === client.user.id && m.components.length > 0 && m.components[0].components.some(c => c.customId === BTN_OPEN_MENU || c.customId === BTN_EDIT_LAST)
     );
 
+    // Se forçar, ou se não houver botão, continua. Se não forçar e já tiver, para.
     if (!force && myMsgs.size > 0) return;
 
     for (const m of myMsgs.values()) {
@@ -176,7 +184,7 @@ async function ensureButtonAtBottom(channel, client, force = true) {
     }
 
     await channel.send({
-      components: [buildRegisterButton()]
+      components: [buildControlButtons()]
     });
   } catch (e) {
     console.error("[HallDaFama] Erro ao mover botão:", e);
@@ -246,6 +254,157 @@ export async function hallDaFamaOnReady(client) {
 
 export async function hallDaFamaHandleInteraction(interaction, client) {
   if (!interaction.guild) return false;
+
+  // ✅ Botão para editar o último post
+  if (interaction.isButton() && interaction.customId === BTN_EDIT_LAST) {
+    if (!hasPermission(interaction.member, interaction.user.id)) {
+      return interaction.reply({ content: "🚫 Sem permissão para editar.", ephemeral: true });
+    }
+
+    await interaction.deferReply({ ephemeral: true });
+
+    const hallChannel = await client.channels.fetch(HALL_CHANNEL_ID).catch(() => null);
+    if (!hallChannel) {
+      return interaction.editReply("❌ Canal do Hall da Fama não encontrado.");
+    }
+
+    const messages = await hallChannel.messages.fetch({ limit: 50 }).catch(() => null);
+    if (!messages) {
+      return interaction.editReply("❌ Não foi possível buscar as mensagens do canal.");
+    }
+
+    // Encontra a última mensagem de Hall da Fama postada pelo bot
+    const lastHallMessage = messages
+      .filter(m => m.author.id === client.user.id && m.content.includes("# 🎉 :  **Santa Creators :"))
+      .sort((a, b) => b.createdTimestamp - a.createdTimestamp)
+      .first();
+
+    if (!lastHallMessage) {
+      return interaction.editReply("❌ Nenhum post recente do Hall da Fama encontrado para editar.");
+    }
+
+    // Parse do conteúdo da mensagem
+    const lines = lastHallMessage.content.split('\n');
+    
+    const titleLine = lines.find(l => l.startsWith('# 🎉 :'));
+    const eventName = titleLine?.match(/# 🎉 :  \*\*Santa Creators : (.*?)\*\* 🎉/)?.[1] || '';
+
+    const winnersStartIndex = lines.findIndex(l => l.includes('HALL DA FAMA')) + 2;
+    const winnersEndIndex = lines.findIndex(l => l.includes('Foi insano, mas mais uma vez'));
+    
+    if (winnersStartIndex <= 1 || winnersEndIndex === -1) {
+        return interaction.editReply("❌ Não foi possível analisar o bloco de vencedores da mensagem.");
+    }
+    
+    const winnersText = lines.slice(winnersStartIndex, winnersEndIndex).join('\n').trim();
+
+    const imageLines = lines.filter(l => l.startsWith('https://'));
+    const imageUrl = imageLines[0] || '';
+    const imageUrl2 = imageLines[1] || '';
+
+    const modal = new ModalBuilder()
+      .setCustomId(`${MODAL_EDIT_SUBMIT}:${lastHallMessage.id}`)
+      .setTitle(`✏️ Editando Hall da Fama`);
+
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId("hf_edit_event_name")
+          .setLabel("Nome do Evento")
+          .setValue(eventName)
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+      ),
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId("hf_edit_winners")
+          .setLabel("🏆 Vencedores (TOP 1, 2, 3...)")
+          .setValue(winnersText)
+          .setStyle(TextInputStyle.Paragraph)
+          .setPlaceholder("Edite os nomes e IDs aqui, mantendo a formatação.")
+          .setRequired(true)
+      ),
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId("hf_edit_image")
+          .setLabel("Link da Imagem 1 (Banner/Print)")
+          .setValue(imageUrl)
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+      ),
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId("hf_edit_image2")
+          .setLabel("Link da Imagem 2 (Opcional)")
+          .setValue(imageUrl2)
+          .setStyle(TextInputStyle.Short)
+          .setRequired(false)
+      )
+    );
+    
+    await interaction.showModal(modal);
+    return true;
+  }
+
+  // ✅ Modal de edição de Hall da Fama
+  if (interaction.isModalSubmit() && interaction.customId.startsWith(MODAL_EDIT_SUBMIT)) {
+    if (!hasPermission(interaction.member, interaction.user.id)) {
+      return interaction.reply({ content: "🚫 Sem permissão para editar.", ephemeral: true });
+    }
+    
+    await interaction.deferReply({ ephemeral: true });
+
+    const messageId = interaction.customId.split(":")[1];
+    const newEventName = interaction.fields.getTextInputValue("hf_edit_event_name");
+    const newWinnersText = interaction.fields.getTextInputValue("hf_edit_winners");
+    const newImageUrl = interaction.fields.getTextInputValue("hf_edit_image");
+    const newImageUrl2 = interaction.fields.getTextInputValue("hf_edit_image2");
+
+    const hallChannel = await client.channels.fetch(HALL_CHANNEL_ID).catch(() => null);
+    if (!hallChannel) {
+      return interaction.editReply("❌ Canal do Hall da Fama não encontrado.");
+    }
+
+    const messageToEdit = await hallChannel.messages.fetch(messageId).catch(() => null);
+    if (!messageToEdit) {
+      return interaction.editReply("❌ A mensagem do Hall da Fama original não foi encontrada. Talvez tenha sido apagada.");
+    }
+
+    // Preserva partes que não são editáveis no modal
+    const oldContent = messageToEdit.content;
+    const lines = oldContent.split('\n');
+    
+    const introLineIndex = lines.findIndex(l => l.startsWith('# 🎉 :')) + 2;
+    const intro = lines[introLineIndex] || getRandomIntro(); // Pega a intro antiga ou uma nova se falhar
+
+    const cityMatch = oldContent.match(/na \*\*(.*?)\*\*!/);
+    const cityName = cityMatch ? cityMatch[1] : "CIDADE"; // Fallback para caso não ache
+
+    const mentionsLine = lines.find(l => l.includes('@everyone')) || '';
+
+    // Remonta a mensagem
+    const finalMessage = 
+`# 🎉 :  **Santa Creators : ${newEventName}** 🎉 
+
+${intro} **${newEventName.toUpperCase()}** na **${cityName}**! <:coroa_orange:1353939359144870019> 
+
+👏  Uma salva de palmas para os BRABOS! 👏 
+
+<:12633559939374122111:1368796471297576970>  **HALL DA FAMA** <:12633559939374122111:1368796471297576970> 
+
+${newWinnersText.trim()}
+
+**Foi insano, mas mais uma vez os vencedores mostraram que a vitória só é possível com raça! <:__:1357520048318709840>**
+
+${mentionsLine}
+
+${newImageUrl}${newImageUrl2 ? `\n${newImageUrl2}` : ''}`;
+
+    await messageToEdit.edit({ content: finalMessage, split: true });
+
+    await interaction.editReply("✅ Hall da Fama editado com sucesso!");
+    return true;
+  }
 
   // 1. Botão Inicial
   if (interaction.isButton() && interaction.customId === BTN_OPEN_MENU) {

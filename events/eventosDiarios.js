@@ -90,6 +90,8 @@ const BTN_APPROVE_PREFIX = "evd_approve_";
 const BTN_REJECT_PREFIX = "evd_reject_";
 
 // Carrega os pedidos pendentes do arquivo ao iniciar
+const BTN_EDIT_LAST = "evd_edit_last";
+const MODAL_EDIT_SUBMIT = "evd_modal_edit_submit";
 let state = loadState();
 
 // ================= LÓGICA INTELIGENTE (CRONOGRAMA) =================
@@ -134,13 +136,18 @@ function canApprove(member, userId) {
   return member?.roles?.cache?.some((r) => APPROVER_ROLES.includes(r.id)) || false;
 }
 
-function buildRegisterButton() {
+function buildControlButtons() {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(BTN_OPEN_MENU)
       .setLabel("📅 Registrar Evento Diário")
       .setStyle(ButtonStyle.Primary)
-      .setEmoji("📢")
+      .setEmoji("📢"),
+    new ButtonBuilder()
+      .setCustomId(BTN_EDIT_LAST)
+      .setLabel("✏️ Editar Último Evento")
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji("✍️")
   );
 }
 
@@ -204,7 +211,7 @@ async function ensureButtonAtBottom(channel, client, force = true) {
     if (!messages) return;
 
     const myMsgs = messages.filter(
-      (m) => m.author.id === client.user.id && m.components.length > 0 && m.components[0].components[0].customId === BTN_OPEN_MENU
+      (m) => m.author.id === client.user.id && m.components.length > 0 && m.components[0].components.some(c => c.customId === BTN_OPEN_MENU || c.customId === BTN_EDIT_LAST)
     );
 
     // Se não for forçado (restart) e já existir botão, não faz nada
@@ -215,7 +222,7 @@ async function ensureButtonAtBottom(channel, client, force = true) {
     }
 
     await channel.send({
-      components: [buildRegisterButton()]
+      components: [buildControlButtons()]
     });
   } catch (e) {
     console.error("[EventosDiarios] Erro ao mover botão:", e);
@@ -328,6 +335,136 @@ export async function eventosDiariosHandleInteraction(interaction, client) {
     const eventData = getTodayEventData();
     const modal = createEventModal(cityKey, eventData);
     await interaction.showModal(modal);
+    return true;
+  }
+
+  if (interaction.isButton() && interaction.customId === BTN_EDIT_LAST) {
+    if (!hasPermission(interaction.member, interaction.user.id)) {
+      return interaction.reply({ content: "🚫 Sem permissão para editar.", ephemeral: true });
+    }
+
+    await interaction.deferReply({ ephemeral: true });
+
+    const eventChannel = await client.channels.fetch(EVENTOS_CHANNEL_ID).catch(() => null);
+    if (!eventChannel) {
+      return interaction.editReply("❌ Canal de Eventos não encontrado.");
+    }
+
+    const messages = await eventChannel.messages.fetch({ limit: 50 }).catch(() => null);
+    if (!messages) {
+      return interaction.editReply("❌ Não foi possível buscar as mensagens do canal de eventos.");
+    }
+
+    // Find the most recent event message from the bot
+    const lastEventMessage = messages
+      .filter(m => m.author.id === client.user.id && m.content.includes("# 🎉 :  **Santa Creators :"))
+      .sort((a, b) => b.createdTimestamp - a.createdTimestamp)
+      .first();
+
+    if (!lastEventMessage) {
+      return interaction.editReply("❌ Nenhum evento recente encontrado para editar.");
+    }
+
+    // Parse the content
+    const lines = lastEventMessage.content.split('\n');
+    const titleLineIndex = lines.findIndex(l => l.startsWith('# 🎉 :'));
+    if (titleLineIndex === -1) {
+        return interaction.editReply("❌ Formato de título do evento não encontrado.");
+    }
+    const title = lines[titleLineIndex].match(/# 🎉 :  \*\*Santa Creators : (.*?)\*\* 🎉/)?.[1] || '';
+
+    const imageUrlLineIndex = lines.findIndex(l => l.startsWith('https://'));
+    const mentionsLineIndex = lines.findIndex(l => l.includes('@everyone'));
+
+    const imageUrl = imageUrlLineIndex > -1 ? lines[imageUrlLineIndex] : '';
+
+    const descriptionStartIndex = titleLineIndex + 2;
+    let descriptionEndIndex = lines.length;
+    if (imageUrlLineIndex > -1) {
+        descriptionEndIndex = imageUrlLineIndex;
+    }
+    if (mentionsLineIndex > -1 && mentionsLineIndex < descriptionEndIndex) {
+        descriptionEndIndex = mentionsLineIndex;
+    }
+    while (descriptionEndIndex > descriptionStartIndex && lines[descriptionEndIndex - 1].trim() === '') {
+        descriptionEndIndex--;
+    }
+
+    const description = lines.slice(descriptionStartIndex, descriptionEndIndex).join('\n');
+
+    const modal = new ModalBuilder()
+      .setCustomId(`${MODAL_EDIT_SUBMIT}:${lastEventMessage.id}`)
+      .setTitle(`✏️ Editando Evento`);
+
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId("evd_edit_title")
+          .setLabel("Título do Evento")
+          .setValue(title)
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+      ),
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId("evd_edit_description")
+          .setLabel("Descrição / Regras / Horário")
+          .setValue(description)
+          .setStyle(TextInputStyle.Paragraph)
+          .setRequired(true)
+      ),
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId("evd_edit_image")
+          .setLabel("Link da Imagem (Banner)")
+          .setValue(imageUrl)
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+      )
+    );
+    
+    await interaction.showModal(modal);
+    return true;
+  }
+
+  if (interaction.isModalSubmit() && interaction.customId.startsWith(MODAL_EDIT_SUBMIT)) {
+    if (!hasPermission(interaction.member, interaction.user.id)) {
+      return interaction.reply({ content: "🚫 Sem permissão para editar.", ephemeral: true });
+    }
+    
+    await interaction.deferReply({ ephemeral: true });
+
+    const messageId = interaction.customId.split(":")[1];
+    const newTitle = interaction.fields.getTextInputValue("evd_edit_title");
+    const newDescription = interaction.fields.getTextInputValue("evd_edit_description");
+    const newImageUrl = interaction.fields.getTextInputValue("evd_edit_image");
+
+    const eventChannel = await client.channels.fetch(EVENTOS_CHANNEL_ID).catch(() => null);
+    if (!eventChannel) {
+      return interaction.editReply("❌ Canal de Eventos não encontrado.");
+    }
+
+    const messageToEdit = await eventChannel.messages.fetch(messageId).catch(() => null);
+    if (!messageToEdit) {
+      return interaction.editReply("❌ A mensagem do evento original não foi encontrada. Talvez tenha sido apagada.");
+    }
+
+    // Extract old mentions to preserve them
+    const oldContent = messageToEdit.content;
+    const oldMentions = oldContent.split('\n').find(l => l.includes('@everyone')) || '';
+
+    const newMessageContent = 
+`# 🎉 :  **Santa Creators : ${newTitle}** 🎉 
+
+${newDescription.trim()}
+
+${newImageUrl}
+
+${oldMentions}`;
+
+    await messageToEdit.edit({ content: newMessageContent, split: true });
+
+    await interaction.editReply("✅ Evento editado com sucesso!");
     return true;
   }
 

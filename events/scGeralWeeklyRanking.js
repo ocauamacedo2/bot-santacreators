@@ -492,6 +492,23 @@ function isVendaLogEmbed(emb) {
   return t.includes("registro de venda");
 }
 
+// ✅ NOVO: PARSERS PARA PONTO DE ENTREVISTA
+function isEntrevistaConcluidaLogEmbed(emb) {
+  const t = norm(emb?.title || emb?.data?.title || "");
+  return t.includes("ponto de entrevista concluida");
+}
+
+function entrevistaConcluida_getUserId(emb) {
+  const fields = getFields(emb);
+  // O campo é "🏆 Aplicador (ganhou ponto)"
+  const f = fields.find(x => norm(x?.name).includes("aplicador (ganhou ponto)"));
+  if (f) {
+    const v = String(f?.value || "");
+    return pickFirstMentionId(v) || pickFirstIdLoose(v);
+  }
+  return null;
+}
+
 // Presença parsers
 function isPresencaLogEmbed(emb) {
   const t = norm(emb?.title || emb?.data?.title || "");
@@ -786,12 +803,19 @@ async function collectAllPoints(client, mode = "light") {
       onMessage: async (m) => {
         const emb = m.embeds?.[0];
         if (!emb) return;
-        if (!isPerguntasLogEmbed(emb)) return;
 
-        const uid = perguntas_getUserId(emb);
-        if (!uid) return;
-
-        pushItem({ userId: uid, ts: new Date(m.createdTimestamp), source: "perguntas" });
+        // ✅ Checa os dois tipos de log que podem estar neste canal
+        if (isEntrevistaConcluidaLogEmbed(emb)) {
+          const uid = entrevistaConcluida_getUserId(emb);
+          if (uid) {
+            pushItem({ userId: uid, ts: new Date(m.createdTimestamp), source: "perguntas" });
+          }
+        } else if (isPerguntasLogEmbed(emb)) {
+          const uid = perguntas_getUserId(emb);
+          if (uid) {
+            pushItem({ userId: uid, ts: new Date(m.createdTimestamp), source: "perguntas" });
+          }
+        }
       },
     });
   }

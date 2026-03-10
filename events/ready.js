@@ -1,5 +1,6 @@
 import entrevista from '../utils/entrevista.js';
 import { registroVendasOnReady } from './registroVendas.js';
+import { installBotGuardian } from './botGuardian.js';
 import { vipRegistroOnReady } from './vipRegistro.js';
 import { ausenciasOnReady } from './ausencias.js';
 import { registroPoderesEventosOnReady } from './registroPoderesEventos.js';
@@ -17,5 +18,8 @@ export default {
     await registroPoderesEventosOnReady(client);
     await focoSemanaisOnReady(client);
     await provasAdvOnReady(client);
+
+    // Instala o guardião de bots
+    installBotGuardian(client);
   }
 };

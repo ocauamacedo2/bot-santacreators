@@ -1158,19 +1158,18 @@ await scanChannelEmbeds(client, {
   },
 });
 
-// ✅ PERGUNTAS (log do !perguntas usado) — só roda se tiver ENV setada
-if (PERGUNTAS_LOGS_CHANNEL_ID) {
+// ✅ PONTO DE ENTREVISTA (via entrevista.js)
+if (CORRECAO_LOGS_CHANNEL_ID) {
   await scanChannelEmbeds(client, {
-    channelId: PERGUNTAS_LOGS_CHANNEL_ID,
+    channelId: CORRECAO_LOGS_CHANNEL_ID,
     weekFloorKey,
     maxPages: 80,
     onMessage: async (m) => {
       const emb = m.embeds?.[0];
       if (!emb) return;
+      if (!isEntrevistaConcluidaLogEmbed(emb)) return; // Procura pelo novo log
 
-      if (!isPerguntasLogEmbed(emb)) return;
-
-      const uid = perguntas_getUserId(emb);
+      const uid = entrevistaConcluida_getUserId(emb); // Pega o ID do aplicador
       if (!uid) return;
 
       items.push({
@@ -1181,26 +1180,6 @@ if (PERGUNTAS_LOGS_CHANNEL_ID) {
     },
   });
 }
-
-// ✅ PERGUNTAS (via canal de CORREÇÃO/LOGS NOVO)
-if (CORRECAO_LOGS_CHANNEL_ID) {
-  await scanChannelEmbeds(client, {
-    channelId: CORRECAO_LOGS_CHANNEL_ID,
-    weekFloorKey,
-    maxPages: 80,
-    onMessage: async (m) => {
-      const emb = m.embeds?.[0];
-      if (!emb) return;
-      if (!isPerguntasLogEmbed(emb)) return;
-
-      const uid = perguntas_getUserId(emb);
-      if (!uid) return;
-
-      items.push({ userId: uid, ts: new Date(m.createdTimestamp), source: "perguntas" });
-    },
-  });
-}
-
 // ✅ CRONOGRAMA (Aprovados)
 if (CRONOGRAMA_LOGS_CHANNEL_ID) {
   await scanChannelEmbeds(client, {
@@ -1646,6 +1625,23 @@ function correcao_getUserId(emb) {
   return f ? (pickFirstMentionId(f.value) || pickFirstIdLoose(f.value)) : null;
 }
 
+// ✅ NOVO: PARSERS PARA PONTO DE ENTREVISTA
+function isEntrevistaConcluidaLogEmbed(emb) {
+  const t = norm(emb?.title || emb?.data?.title || "");
+  return t.includes("ponto de entrevista concluida");
+}
+
+function entrevistaConcluida_getUserId(emb) {
+  const fields = getFields(emb);
+  // O campo é "🏆 Aplicador (ganhou ponto)"
+  const f = fields.find(x => norm(x?.name).includes("aplicador (ganhou ponto)"));
+  if (f) {
+    const v = String(f?.value || "");
+    return pickFirstMentionId(v) || pickFirstIdLoose(v);
+  }
+  return null;
+}
+
 // Helper para Pagamento Social (Backfill)
 function pagamento_getStatus(emb) {
   const fields = getFields(emb);
@@ -1914,37 +1910,21 @@ async function backfillExtrasThisWeek(client) {
       );
     }
 
-    // -------- PERGUNTAS (1 por uso; log "!perguntas usado") --------
-    // Se você não setar SCPERGUNTAS_LOGS_ID, ele só ignora (não quebra nada).
-    if (PERGUNTAS_LOGS_CHANNEL_ID) {
-      await scanCurrentWeekEmbeds(
-        client,
-        PERGUNTAS_LOGS_CHANNEL_ID,
-        (emb) => isPerguntasLogEmbed(emb),
-        async (_m, _emb) => {
-          st.weekly.perguntas[wkNow] += 1;
-        },
-        25
-      );
-    }
-
-    // -------- PERGUNTAS (via canal de CORREÇÃO/LOGS NOVO) --------
-    // O comando !perguntas agora manda log em CORRECAO_LOGS_CHANNEL_ID também
+    // -------- PONTO DE ENTREVISTA (via entrevista.js) --------
     if (CORRECAO_LOGS_CHANNEL_ID) {
       await scanCurrentWeekEmbeds(
         client,
         CORRECAO_LOGS_CHANNEL_ID,
-        (emb) => isPerguntasLogEmbed(emb),
+        (emb) => isEntrevistaConcluidaLogEmbed(emb), // Procura pelo novo log de ponto
         async (_m, _emb) => {
-          // Pega o ID do aplicador
-          const uid = perguntas_getUserId(_emb);
+          // Pega o ID do aplicador que ganhou o ponto
+          const uid = entrevistaConcluida_getUserId(_emb);
           if (uid) st.weekly.perguntas[wkNow] += 1;
         },
         25
       );
     }
 
-    // -------- VENDAS (somente quando pontuou) --------
     if (VENDAS_LOGS_CHANNEL_ID) {
       await scanCurrentWeekEmbeds(
         client,
