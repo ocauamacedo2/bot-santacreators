@@ -9,6 +9,7 @@ import kick       from '../commands/admin/kick.js';
 import copycargo  from '../commands/admin/copycargo.js';
 import perguntas from '../commands/admin/perguntas.js';
 import perfildc from '../commands/admin/perfildc.js';
+import infoid from '../commands/admin/infoid.js';
 
 import ping       from '../commands/admin/ping.js';
 import duplicados from '../commands/admin/duplicados.js';
@@ -66,6 +67,7 @@ const commands = {
   salvarideia: salvar,
   meuscargos,
   perfildc,
+  infoid,
 
   // permissões de canal
   // editarperm,
