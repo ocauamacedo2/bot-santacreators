@@ -110,27 +110,42 @@ export default {
                     { name: "📂 Categoria", value: `**Nome:** ${category.name}\n**ID:** \`${category.id}\``, inline: true }
                 );
 
-                // 4. Lógica de envio duplo
+                // 4. Lógica de envio duplo com logs de erro detalhados
                 const isMainGuild = guild.id === MAIN_GUILD_ID;
+                let localLogOk = false;
+                let centralLogOk = isMainGuild; // Se for a main guild, não precisa de log central, então já consideramos OK.
 
                 const localLogChannelId = LOCAL_LOG_CHANNELS[guild.id];
                 if (localLogChannelId) {
                     const localLogChannel = await guild.channels.fetch(localLogChannelId).catch(() => null);
-                    if (localLogChannel) {
+                    if (localLogChannel && localLogChannel.isTextBased()) {
                         const localEmbed = EmbedBuilder.from(embed).setFooter({ text: `Servidor: ${guild.name} • ${guild.id}` });
                         await localLogChannel.send({ embeds: [localEmbed] }).catch(console.error);
+                        localLogOk = true;
+                    } else {
+                        console.error(`[logarcategoria] ERRO: Canal de log LOCAL (${localLogChannelId}) não encontrado ou não é de texto no servidor ${guild.name}.`);
                     }
+                } else {
+                    // Se não há canal local configurado, consideramos OK para não contar como erro.
+                    localLogOk = true;
                 }
 
                 if (!isMainGuild) {
                     const centralLogChannel = await client.channels.fetch(CENTRAL_LOG_CHANNEL_ID).catch(() => null);
-                    if (centralLogChannel) {
+                    if (centralLogChannel && centralLogChannel.isTextBased()) {
                         const centralEmbed = EmbedBuilder.from(embed).setFooter({ text: `Origem: ${guild.name} • ${guild.id}` });
                         await centralLogChannel.send({ embeds: [centralEmbed] }).catch(console.error);
+                        centralLogOk = true;
+                    } else {
+                        console.error(`[logarcategoria] ERRO CRÍTICO: Canal de log CENTRAL (${CENTRAL_LOG_CHANNEL_ID}) não foi encontrado ou não é um canal de texto. Verifique se o bot está no servidor principal e tem permissão para ver o canal.`);
                     }
                 }
                 
-                successCount++;
+                if (localLogOk && centralLogOk) {
+                    successCount++;
+                } else {
+                    errorCount++;
+                }
             } catch (err) {
                 console.error(`[logarcategoria] Erro ao logar canal ${channel.name}:`, err);
                 errorCount++;
