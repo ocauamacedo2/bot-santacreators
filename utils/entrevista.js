@@ -150,6 +150,7 @@ function carregarEntrevistasDoDisco() {
         mensagens: bruto[id].mensagens || [],
         entrevistadorId: bruto[id].entrevistadorId || null,
         channelId: bruto[id].channelId || null,
+        lastSent: 0, // ✅ Adiciona o campo para o debounce
         globalTimer: null
       });
       count++;
@@ -207,6 +208,13 @@ async function reanexar(client) {
       if (restante <= 0 || !dados.channelId) {
         entrevistas.delete(userId);
         salvarEntrevistasEmDisco();
+        continue;
+      }
+
+      // ✅ Se a entrevista já está no set de ativas, é porque o processo atual já a está controlando.
+      // Isso evita que uma reconexão rápida do bot (que dispara 'ready' de novo) duplique a entrevista.
+      if (entrevistasAtivas.has(dados.channelId)) {
+        console.log(`[Entrevista] Pulando reanexação para o canal ${dados.channelId} pois já está ativo no processo atual.`);
         continue;
       }
 
@@ -414,6 +422,14 @@ E fica tranquil@ com o tamanho das informações, tá? rs ☺️
 
     const timeoutEnd = Date.now() + ENTREVISTA_DURACAO_MS;
 
+    // ✅ Trava para não iniciar uma entrevista em um canal que já tem uma ativa.
+    if (entrevistasAtivas.has(channel.id)) {
+      console.warn(`[Entrevista] Tentativa de iniciar entrevista em canal já ativo: ${channel.id}. Ignorando.`);
+      await interaction.followUp({ content: '⚠️ Já existe uma entrevista ativa neste canal.', ephemeral: true }).catch(() => {});
+      return true;
+    }
+    entrevistasAtivas.add(channel.id);
+
     entrevistas.set(targetId, {
       respostas: [],
       index: 0,
@@ -421,6 +437,7 @@ E fica tranquil@ com o tamanho das informações, tá? rs ☺️
       entrevistadorId,
       channelId: channel.id,
       mensagens: [],
+      lastSent: 0, // ✅ Adiciona o campo para o debounce
       globalTimer: null
     });
 
@@ -478,6 +495,16 @@ E fica tranquil@ com o tamanho das informações, tá? rs ☺️
 async function enviarPergunta(channel, membro, index) {
   const dados = entrevistas.get(membro.id);
   if (!dados) return;
+
+  // ✅ DEBOUNCE: Se uma pergunta foi enviada no último segundo, ignora esta chamada.
+  // Isso previne a condição de corrida entre o reanexar e o setTimeout.
+  const now = Date.now();
+  if (now - (dados.lastSent || 0) < 1000) {
+    console.log(`[Entrevista] Chamada duplicada para ${membro.user.tag} bloqueada (debounce).`);
+    return;
+  }
+  // Atualiza o timestamp do último envio
+  dados.lastSent = now;
 
   if (index >= perguntas.length) {
     if (dados.globalTimer?.timeout) clearTimeout(dados.globalTimer.timeout);
