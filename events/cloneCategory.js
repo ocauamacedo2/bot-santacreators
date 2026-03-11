@@ -1,4 +1,5 @@
 // d:\santacreators-main\services\guildClone\cloneCategory.js
+import { ChannelType } from 'discord.js';
 import { getMirroredId, mapId } from './idRegistry.js';
 import { mapPermissionOverwrites } from './permissionMapper.js';
 import { resolveOrCreateChannel } from './cloneChannel.js';
@@ -28,7 +29,7 @@ export async function cloneSingleCategory(sourceCategoryId, sourceGuild, targetG
 
   // 1. Valida a categoria de origem.
   const sourceCategory = await sourceGuild.channels.fetch(sourceCategoryId).catch(() => null);
-  if (!sourceCategory || !sourceCategory.isCategory()) {
+  if (!sourceCategory || sourceCategory.type !== ChannelType.GuildCategory) {
     report.errors.push(`Categoria de origem com ID ${sourceCategoryId} não encontrada ou não é uma categoria.`);
     return report;
   }

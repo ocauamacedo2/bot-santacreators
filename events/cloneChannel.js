@@ -1,6 +1,7 @@
 // d:\santacreators-main\services\guildClone\cloneChannel.js
 import { getMirroredId, mapId } from './idRegistry.js';
 import { mapPermissionOverwrites } from './permissionMapper.js';
+import { ChannelType } from 'discord.js';
 
 /**
  * Resolve um canal na guilda de destino, criando-o se necessário.
@@ -37,19 +38,20 @@ export async function resolveOrCreateChannel(sourceChannel, targetCategory, targ
   };
 
   // Adiciona propriedades específicas do tipo de canal
-  if (sourceChannel.isTextBased() && !sourceChannel.isVoiceBased()) {
+  if (
+    sourceChannel.type === ChannelType.GuildText ||
+    sourceChannel.type === ChannelType.GuildAnnouncement ||
+    sourceChannel.type === ChannelType.GuildForum
+  ) {
     channelOptions.topic = sourceChannel.topic;
     channelOptions.nsfw = sourceChannel.nsfw;
     channelOptions.rateLimitPerUser = sourceChannel.rateLimitPerUser;
   }
 
-  if (sourceChannel.isVoiceBased()) {
+  if (sourceChannel.type === ChannelType.GuildVoice || sourceChannel.type === ChannelType.GuildStageVoice) {
     channelOptions.bitrate = sourceChannel.bitrate;
     channelOptions.userLimit = sourceChannel.userLimit;
   }
-
-  // Suporte a outros tipos de canal pode ser adicionado aqui (Forum, Stage, etc.)
-  // if (sourceChannel.type === ChannelType.GuildForum) { ... }
 
   // 4. Cria o canal.
   try {
