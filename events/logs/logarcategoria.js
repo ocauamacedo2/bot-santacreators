@@ -110,22 +110,38 @@ export default {
                     { name: "📂 Categoria", value: `**Nome:** ${category.name}\n**ID:** \`${category.id}\``, inline: true }
                 );
 
-                // 4. Lógica de envio duplo refatorada
-                const { local, central } = await sendDualLog({
-                    client,
-                    guild,
-                    embed,
-                    centralLogId: CENTRAL_LOG_CHANNEL_ID,
-                    localLogMap: LOCAL_LOG_CHANNELS,
-                    eventName: 'logarcategoria'
-                });
-                
-                // O helper já loga os erros no console, aqui só contamos.
-                if (local && central) {
-                    successCount++;
-                } else {
-                    errorCount++;
+                // 4. Lógica de envio duplo (self-contained)
+                const isMainGuild = guild.id === MAIN_GUILD_ID;
+
+                // Envia para o canal de log local
+                const localLogChannelId = LOCAL_LOG_CHANNELS[guild.id];
+                if (localLogChannelId) {
+                    try {
+                        const localLogChannel = await client.channels.fetch(localLogChannelId);
+                        if (localLogChannel?.isTextBased()) {
+                            const localEmbed = new EmbedBuilder(embed.toJSON()).setFooter({ text: `Servidor: ${guild.name} • ${guild.id}` });
+                            await localLogChannel.send({ embeds: [localEmbed] });
+                        }
+                    } catch (error) {
+                        console.error(`[logarcategoria] ERRO (Local): Falha ao enviar para o canal ${localLogChannelId} na guilda ${guild.name}.`, error.message);
+                    }
                 }
+
+                // Envia para o canal de log central (se não for a guilda principal)
+                if (!isMainGuild) {
+                    try {
+                        const centralLogChannel = await client.channels.fetch(CENTRAL_LOG_CHANNEL_ID);
+                        if (!centralLogChannel?.isTextBased()) {
+                            console.error(`[logarcategoria] ERRO CRÍTICO: Canal de log CENTRAL (${CENTRAL_LOG_CHANNEL_ID}) não encontrado ou não é de texto.`);
+                        } else {
+                            const centralEmbed = new EmbedBuilder(embed.toJSON()).setFooter({ text: `Origem: ${guild.name} • ${guild.id}` });
+                            await centralLogChannel.send({ embeds: [centralEmbed] });
+                        }
+                    } catch (error) {
+                        console.error(`[logarcategoria] ERRO CRÍTICO: Falha ao enviar para o canal central ${CENTRAL_LOG_CHANNEL_ID}. Verifique as permissões do bot.`, error.message);
+                    }
+                }
+                successCount++;
             } catch (err) {
                 console.error(`[logarcategoria] Erro ao logar canal ${channel.name}:`, err);
                 errorCount++;
