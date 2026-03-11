@@ -39,6 +39,7 @@ import { clearHandleMessage } from '../commands/admin/clearHandler.js';
 import { verIdHandleMessage } from '../commands/admin/verid.js';
 import { apagarChatHandleMessage } from '../commands/admin/apagarchat.js';
 import { removerMassivoHandleMessage } from '../commands/admin/removerMassivo.js';
+import logarcategoria from '../commands/admin/logarcategoria.js';
 
 // 🔻 removido: setstaff (não usado)
 // import setstaff from '../commands/admin/setstaff.js';
@@ -75,6 +76,7 @@ const commands = {
   perfildc,
   infoid,
   criar: criarCategoriaEspelho,
+  logarcategoria,
 
   // permissões de canal
   // editarperm,
