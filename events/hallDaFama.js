@@ -141,6 +141,27 @@ function getRandomIntro() {
   return INTRO_TEMPLATES[Math.floor(Math.random() * INTRO_TEMPLATES.length)];
 }
 
+// Função para dividir texto longo em partes de 2000 caracteres
+function splitText(text, maxLength = 2000) {
+  if (text.length <= maxLength) return [text];
+  const chunks = [];
+  let currentChunk = "";
+  const lines = text.split("\n");
+  for (const line of lines) {
+    if (currentChunk.length + line.length + 1 <= maxLength) {
+      currentChunk += (currentChunk ? "\n" : "") + line;
+    } else {
+      if (currentChunk) chunks.push(currentChunk);
+      currentChunk = line;
+      while (currentChunk.length > maxLength) {
+          chunks.push(currentChunk.slice(0, maxLength));
+          currentChunk = currentChunk.slice(maxLength);
+      }
+    }
+  }
+  if (currentChunk) chunks.push(currentChunk);
+  return chunks;
+}
 // ================= HELPERS =================
 function hasPermission(member, userId) {
   if (ALLOWED_USERS.includes(userId)) return true;
@@ -404,7 +425,11 @@ ${mentionsLine}
 
 ${newImageUrl}${newImageUrl2 ? `\n${newImageUrl2}` : ''}`;
 
-    await messageToEdit.edit({ content: finalMessage, split: true });
+    if (finalMessage.length > 2000) {
+      return interaction.editReply("❌ O conteúdo editado é muito longo (mais de 2000 caracteres) e não pode ser salvo. Por favor, reduza o texto dos vencedores.");
+    }
+
+    await messageToEdit.edit({ content: finalMessage });
 
     await interaction.editReply("✅ Hall da Fama editado com sucesso!");
     return true;
@@ -621,7 +646,15 @@ ${data.winnersText}
 
 ${data.imageUrl}${data.imageUrl2 ? `\n${data.imageUrl2}` : ''}`;
 
-    const sentMsg = await hallChannel.send({ content: finalMessage });
+    const chunks = splitText(finalMessage);
+    let sentMsg;
+    for (const chunk of chunks) {
+        sentMsg = await hallChannel.send({ content: chunk });
+    }
+
+    if (!sentMsg) {
+      return interaction.editReply("❌ Falha ao enviar a mensagem do Hall da Fama. O conteúdo pode estar vazio.");
+    }
     
     try {
       const emojis = ["💜", "🔥", "🚀", "👏", "🎉", "🤩", "🏆", "👑", "💸", "✨", "💯", "✅", "💎", "🫡", "🤝", "🤯", "👀", "📸", "⚡", "💣", "👻", "💀", "👽", "👾", "🤖", "🎃", "😺"];

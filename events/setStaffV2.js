@@ -705,7 +705,7 @@ export async function setStaffV2HandleInteraction(interaction, client) {
       const row = buildRowAprovacao(userId);
 
       // envia no canal de registro
-      const canalRegistro = await client.channels.fetch(CFG.CANAL_REGISTRO).catch(() => null);
+      const canalRegistro = await resolveLogChannel(client, CFG.CANAL_REGISTRO);
       if (!canalRegistro) {
         await interaction.reply({ content: "❌ Não achei o canal de registro do set.", ephemeral: true });
         return true;
@@ -741,7 +741,7 @@ try {
 
 
       // notificação
-      const canalNotif = await client.channels.fetch(CFG.CANAL_NOTIF).catch(() => null);
+      const canalNotif = await resolveLogChannel(client, CFG.CANAL_NOTIF);
       if (canalNotif) {
         await canalNotif
           .send({
@@ -950,7 +950,7 @@ updateByMsgIdStatus(interaction.message?.id, "reprovado");
 
       // logzinho compact de extras (no próprio canal do registro)
       if (acao === "aprovar") {
-        const canalRegistro = await client.channels.fetch(CFG.CANAL_REGISTRO).catch(() => null);
+        const canalRegistro = await resolveLogChannel(client, CFG.CANAL_REGISTRO);
         if (canalRegistro) {
           await canalRegistro
             .send({ content: `🧩 **Extras adicionados** para <@${userIdTarget}>: ${extrasLabel}`, allowedMentions: { parse: ["users"] } })

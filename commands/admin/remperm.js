@@ -1,4 +1,5 @@
-import { ChannelType, EmbedBuilder } from 'discord.js';
+import { ChannelType, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
+import { resolveLogChannel } from '../../events/channelResolver.js';
 
 // Configurações
 const MEMBROS_PERMITIDOS = ['660311795327828008', '1021174007577444463'];
@@ -148,4 +149,3 @@ export default {
     return executarRemPerm(message);
   }
 };
-

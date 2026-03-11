@@ -125,6 +125,27 @@ function getTodayEventData() {
     return null;
   }
 }
+
+function splitText(text, maxLength = 2000) {
+  if (text.length <= maxLength) return [text];
+  const chunks = [];
+  let currentChunk = "";
+  const lines = text.split("\n");
+  for (const line of lines) {
+    if (currentChunk.length + line.length + 1 <= maxLength) {
+      currentChunk += (currentChunk ? "\n" : "") + line;
+    } else {
+      if (currentChunk) chunks.push(currentChunk);
+      currentChunk = line;
+      while (currentChunk.length > maxLength) {
+          chunks.push(currentChunk.slice(0, maxLength));
+          currentChunk = currentChunk.slice(maxLength);
+      }
+    }
+  }
+  if (currentChunk) chunks.push(currentChunk);
+  return chunks;
+}
 // ================= HELPERS =================
 function hasPermission(member, userId) {
   if (ALLOWED_USERS.includes(userId)) return true;
@@ -466,7 +487,11 @@ ${newImageUrl}
 
 ${oldMentions}`;
 
-    await messageToEdit.edit({ content: newMessageContent, split: true });
+    if (newMessageContent.length > 2000) {
+      return interaction.editReply("❌ O conteúdo editado é muito longo (mais de 2000 caracteres) e não pode ser salvo. Por favor, reduza a descrição.");
+    }
+
+    await messageToEdit.edit({ content: newMessageContent });
 
     await interaction.editReply("✅ Evento editado com sucesso!");
     return true;
@@ -563,10 +588,15 @@ ${data.imageUrl}
 
 ${mentions}`;
 
-    const sentMsg = await eventChannel.send({ 
-      content: finalMessage,
-      split: true // <-- A mágica acontece aqui!
-    });
+    const chunks = splitText(finalMessage);
+    let sentMsg;
+    for (const chunk of chunks) {
+        sentMsg = await eventChannel.send({ content: chunk });
+    }
+
+    if (!sentMsg) {
+      return interaction.editReply("❌ Falha ao enviar a mensagem do evento. O conteúdo pode estar vazio.");
+    }
     
     // ✅ Mais emojis
     try {
