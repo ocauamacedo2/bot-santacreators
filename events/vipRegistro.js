@@ -15,6 +15,8 @@ import {
   time,
 } from "discord.js";
 
+import { dashEmit } from "../utils/dashHub.js";
+
 // Guard to prevent multiple initializations
 if (globalThis.__VIP_REGISTRO_LOADED__) {
   // This module is already loaded, do nothing.
@@ -48,6 +50,22 @@ const VIP_MENU_MOTIVO_TEXTO = [
 
 const VIP_GIF =
   'https://media.discordapp.net/attachments/1362477839944777889/1384245215249825832/standard_2rss.gif?ex=68b5ec51&is=68b49ad1&hm=f194706bc612abcd8cbbbf6d62d2c393d49339bfea8714ceab371a0a4c95a670&=';
+
+const VIP_SEL_CITY_ID = 'vip_select_city';
+const VIP_MODAL_ID = 'vip_modal_submit';
+
+const CITIES = {
+    nobre: { label: "Nobre", emoji: "👑", roleId: "1379021805544804382" },
+    santa: { label: "Santa", emoji: "🎅", roleId: "1379021888709464168" },
+    maresia: { label: "Maresia", emoji: "🌊", roleId: "1379021994678288465" },
+    royal: { label: "Royal UK", emoji: "🇬🇧", roleId: "1379021933324271719" },
+    universo: { label: "Universo", emoji: "🌌", roleId: "1379022090891427892" },
+    kng: { label: "KNG", emoji: "🦁", roleId: "1379022161519312896" },
+    malta: { label: "Malta", emoji: "🇲🇹", roleId: "1379022050403815454" },
+    real: { label: "Real", emoji: "💎", roleId: "1423348501110198343" },
+    grande: { label: "Grande", emoji: "🐘", roleId: "1418691103397253322" },
+    boomerang: { label: "Boomerang", emoji: "🪃", roleId: "1423354185570586694" },
+};
 
 // canal onde cai a reprovação
 const VIP_REPROVA_CANAL_ID = '1411819432862285854';
@@ -509,7 +527,6 @@ export async function vipRegistroHandleInteraction(interaction, client) {
             inline: true
           },
           { name: '🌆 Cidade', value: `**${cityName}**`, inline: true },
-          },
           { name: '🏷️ Nome (Equipe)', value: nome || '-', inline: true },
           { name: '🧾 Tipo (livre)', value: `**${tipoRaw || '-'}**`, inline: true },
 
@@ -556,6 +573,11 @@ export async function vipRegistroHandleInteraction(interaction, client) {
       await registroMsg.edit({ components: [new ActionRowBuilder().addComponents(btnSolic, btnRecebeu, btnNegar)] });
 
       await createFreshMenu(canal);
+
+      dashEmit("vip:criado", {
+        by: interaction.user.id,
+        __at: Date.now(),
+      });
 
       await interaction.reply({
         content: `✅ Registro criado para **${benefRaw}** — tipo: **${tipoRaw}**.`,
