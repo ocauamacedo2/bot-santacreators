@@ -37,6 +37,7 @@ import {
 } from "discord.js";
 
 import { dashEmit } from "../utils/dashHub.js";
+import { resolveLogChannel } from "../utils/channelResolver.js";
 import { graficoManagersEmitUpdate } from "./GraficoManagers.js";
 
 // ===============================
@@ -1323,7 +1324,7 @@ async function notifyDecision({ client, registrantId, approved, moderatorId, msg
   }
 
   const moderator = await guild.members.fetch(moderatorId).catch(() => null);
-  const canalAvisos = await client.channels.fetch(CANAL_DECISOES_ID).catch(() => null);
+  const canalAvisos = await resolveLogChannel(client, CANAL_DECISOES_ID);
 
   const link = msg.url;
   const quem = moderator ? `<@${moderator.id}>` : "um moderador";
@@ -1347,7 +1348,7 @@ async function notifyDecision({ client, registrantId, approved, moderatorId, msg
   } catch {}
 
   try {
-    if (canalAvisos) await canalAvisos.send({ content: pubText });
+    if (canalAvisos) await canalAvisos.send({ content: pubText, allowedMentions: { parse: ["users"] } });
   } catch {}
 
   return { dmOk };
@@ -2014,7 +2015,7 @@ if (
 ) {
   const pode = hasAnyRole(interaction.member, CARGOS_PODE_REGISTRAR);
   if (!pode) {
-    return interaction.reply({ content: "❌ Você não tem os cargos necessários.", flags: 64 }).catch(() => {});
+    return interaction.reply({ content: "❌ Você não tem os cargos necessários.", ephemeral: true }).catch(() => {});
   }
 
   // ✅ modal v3
@@ -2069,7 +2070,7 @@ if (
     if (!interaction.replied && !interaction.deferred) {
       await interaction.reply({
         content: "⚠️ O botão estava expirado. Um novo foi criado; clique nele.",
-        flags: 64,
+        ephemeral: true,
       }).catch(() => {});
     }
   }
@@ -2172,7 +2173,7 @@ if (
   if (!org || !String(org).trim() || org === "—") {
     await interaction.reply({
       content: "⚠️ Preencha uma ORG válida.\nUse: **06 | Caribe**",
-      flags: 64,
+      ephemeral: true,
     }).catch(() => {});
     return true;
   }
@@ -2213,7 +2214,7 @@ if (
 
   if (obs) embed.addFields({ name: "📝 Observações", value: obs, inline: false });
 
-  await interaction.reply({ content: "✅ Registro enviado com sucesso!", flags: 64 }).catch(() => {});
+  await interaction.reply({ content: "✅ Registro enviado com sucesso!", ephemeral: true }).catch(() => {});
 
   const canal = await client.channels.fetch(CANAL_REGISTRO_MANAGER).catch(() => null);
   if (!canal?.isTextBased?.()) return true;
@@ -2289,24 +2290,24 @@ if (interaction.isButton()) {
     try {
       const allowed = canUseRmPurgeRejected(interaction.member, interaction.user.id);
       if (!allowed) {
-        await interaction.reply({ content: "❌ Sem permissão.", flags: 64 });
+        await interaction.reply({ content: "❌ Sem permissão.", ephemeral: true });
         return true;
       }
 
       await interaction.deferReply({ ephemeral: true });
       const canal = await client.channels.fetch(CANAL_REGISTRO_MANAGER).catch(() => null);
       if (!canal?.isTextBased?.()) {
-        await interaction.editReply({ content: "❌ Canal inválido." });
+        await interaction.editReply("❌ Canal inválido.");
         return true;
       }
 
       const deleted = await purgeRejectedAny(canal);
-      await interaction.editReply({ content: `✅ Limpeza concluída. **${deleted}** registros reprovados foram apagados.` });
+      await interaction.editReply(`✅ Limpeza concluída. **${deleted}** registros reprovados foram apagados.`);
     } catch (err) {
       console.error("[SC_RM] Erro no purge:", err);
       const msg = `❌ Erro ao limpar: ${err?.message || err}`;
-      if (interaction.deferred) await interaction.editReply({ content: msg }).catch(() => {});
-      else await interaction.reply({ content: msg, flags: 64 }).catch(() => {});
+      if (interaction.deferred) await interaction.editReply(msg).catch(() => {});
+      else await interaction.reply({ content: msg, ephemeral: true }).catch(() => {});
     }
     return true;
   }
@@ -2329,7 +2330,7 @@ if (
   if (!pode) {
     if (!interaction.replied && !interaction.deferred) {
       await interaction
-        .reply({ content: "❌ Sem permissão para aprovar/reprovar.", flags: 64 })
+        .reply({ content: "❌ Sem permissão para aprovar/reprovar.", ephemeral: true })
         .catch(() => {});
     }
     return true;
@@ -2339,7 +2340,7 @@ if (
   const canal = await client.channels.fetch(CANAL_REGISTRO_MANAGER).catch(() => null);
   if (!canal?.isTextBased?.()) {
     if (!interaction.replied && !interaction.deferred) {
-      await interaction.reply({ content: "⚠️ Canal de registros indisponível.", flags: 64 }).catch(() => {});
+      await interaction.reply({ content: "⚠️ Canal de registros indisponível.", ephemeral: true }).catch(() => {});
     }
     return true;
   }
@@ -2347,7 +2348,7 @@ if (
   const msg = await canal.messages.fetch(msgId).catch(() => null);
   if (!msg || !msg.embeds?.length) {
     if (!interaction.replied && !interaction.deferred) {
-      await interaction.reply({ content: "❌ Não achei a mensagem do registro.", flags: 64 }).catch(() => {});
+      await interaction.reply({ content: "❌ Não achei a mensagem do registro.", ephemeral: true }).catch(() => {});
     }
     return true;
   }
@@ -2380,7 +2381,7 @@ if (blockedByHierarchy) {
   await interaction.reply({
     content:
       "❌ Você não pode aprovar este registro porque o registrante possui **cargo igual ou superior** ao seu.",
-    flags: 64,
+    ephemeral: true,
   });
   return true;
 }
@@ -2403,7 +2404,7 @@ if (blockedByHierarchy) {
     if (!allowed) {
       await interaction.reply({
         content: "❌ Você **não pode aprovar** o seu próprio registro.",
-        flags: 64,
+        ephemeral: true,
       }).catch(() => {});
       return true;
     }
@@ -2431,7 +2432,7 @@ if (blockedByHierarchy) {
     } catch (e) {
       console.error("[SC_RM] Erro showModal reprovação:", e);
       if (!interaction.replied && !interaction.deferred) {
-        await interaction.reply({ content: "⚠️ Interação expirada. Clique de novo.", flags: 64 }).catch(() => {});
+        await interaction.reply({ content: "⚠️ Interação expirada. Clique de novo.", ephemeral: true }).catch(() => {});
       }
     }
     return true;
@@ -2501,7 +2502,7 @@ if (orgIdForCheck && !isLegalOrg) {
       `👉 Se você removeu do FACs e quer aprovar de novo, tenta aprovar agora (se não estiver no listão, vai liberar).`;
 
     if (!interaction.replied && !interaction.deferred) {
-      await interaction.reply({ content: msgTxt, flags: 64 }).catch(() => {});
+      await interaction.reply({ content: msgTxt, ephemeral: true }).catch(() => {});
     } else {
       await interaction.editReply({ content: msgTxt }).catch(() => {});
     }
@@ -2520,7 +2521,7 @@ if (!orgIdForCheck && orgNameForCheck) {
       `👉 Se removeu do FACs e quer aprovar de novo, tenta aprovar agora (se não estiver no listão, vai liberar).`;
 
     if (!interaction.replied && !interaction.deferred) {
-      await interaction.reply({ content: msgTxt, flags: 64 }).catch(() => {});
+      await interaction.reply({ content: msgTxt, ephemeral: true }).catch(() => {});
     } else {
       await interaction.editReply({ content: msgTxt }).catch(() => {});
     }
@@ -2529,7 +2530,7 @@ if (!orgIdForCheck && orgNameForCheck) {
 }
 
 
-await interaction.deferReply({ flags: 64 }).catch(() => {});
+await interaction.deferReply({ ephemeral: true }).catch(() => {});
 
   }
 
@@ -2634,7 +2635,7 @@ if (interaction.deferred && !interaction.replied) {
   }
 
   await interaction
-    .editReply({ content: `✅ Registro **aprovado**! ${parts.join(" ")}` })
+    .editReply(`✅ Registro **aprovado**! ${parts.join(" ")}`)
     .catch(() => {});
 }
 
@@ -2662,7 +2663,7 @@ if (
   const msg = await canal.messages.fetch(msgId).catch(() => null);
   if (!msg || !msg.embeds?.length) {
     return interaction
-      .reply({ content: "❌ Não achei a mensagem do registro.", flags: 64 })
+      .reply({ content: "❌ Não achei a mensagem do registro.", ephemeral: true })
       .catch(() => true);
   }
 
@@ -2846,7 +2847,7 @@ if (
     console.error("[SC_RM] registroManagerHandleInteraction erro:", e);
     try {
       if (!interaction.replied && !interaction.deferred) {
-        await interaction.reply({ content: "⚠️ Ocorreu um erro ao processar a ação.", flags: 64 }).catch(() => {});
+        await interaction.reply({ content: "⚠️ Ocorreu um erro ao processar a ação.", ephemeral: true }).catch(() => {});
       }
     } catch {}
     return true;

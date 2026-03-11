@@ -8,6 +8,7 @@ import {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  ChannelType,
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
@@ -15,6 +16,7 @@ import {
 
 
 import { dashOn } from "../utils/dashHub.js";
+import { resolveLogChannel } from "../utils/channelResolver.js";
 
 // ✅ __dirname no ESM
 const __filename = fileURLToPath(import.meta.url);
@@ -1543,22 +1545,15 @@ function perguntas_getUserId(emb) {
   try {
     const fields = getFields(emb);
 
-    // ✅ Prioriza campos mais específicos para evitar pegar o ID errado
-    let f =
-      fields.find(x => norm(x?.name).includes("aplicador")) ||
-      fields.find(x => norm(x?.name).includes("entrevistador")) ||
+    const f =
       fields.find(x => norm(x?.name).includes("usuario")) ||
       fields.find(x => norm(x?.name).includes("usuário")) ||
       fields.find(x => norm(x?.name).includes("autor")) ||
-      fields.find(x => norm(x?.name).includes("quem"));
+      fields.find(x => norm(x?.name).includes("id")) ||
+      fields.find(x => norm(x?.name).includes("quem")) ||
+      fields.find(x => norm(x?.name).includes("aplicador")) ||
+      null;
 
-    if (f) {
-      const v = String(f?.value || "");
-      return pickFirstMentionId(v) || pickFirstIdLoose(v);
-    }
-
-    // Fallback para o campo "id" se os outros falharem
-    f = fields.find(x => norm(x?.name).includes("id"));
     if (f) {
       const v = String(f?.value || "");
       return pickFirstMentionId(v) || pickFirstIdLoose(v);
@@ -2192,11 +2187,10 @@ const mPagRep = getWeekly(st, "pagReprovados", wk);
     // ✅ Só roda quando emitLog = true (ou seja: NÃO roda no boot)
     if (emitLog) {
       try {
-        const logChannel = await client.channels
-          .fetch(DASH_LOG_CHANNEL_ID)
-          .catch(() => null);
+        // ✅ USA O RESOLVEDOR
+        const logChannel = await resolveLogChannel(client, DASH_LOG_CHANNEL_ID);
 
-        if (logChannel?.isTextBased()) {
+        if (logChannel) {
           st.logWeeklyMsgIds = st.logWeeklyMsgIds || {};
 
           const wkLabel = triLabelShortFromWeekKey(wk);
@@ -2934,7 +2928,7 @@ export async function geralDashHandleInteraction(interaction, client) {
     if (!hasRole && !isAllowedUser) {
       await interaction.reply({
         content: "❌ Sem permissão.",
-        flags: 64,
+        ephemeral: true,
       });
       return true;
     }
@@ -2976,12 +2970,12 @@ export async function geralDashHandleInteraction(interaction, client) {
     if (!hasRole && !isAllowedUser) {
       await interaction.reply({
         content: "❌ Sem permissão.",
-        flags: 64,
+        ephemeral: true,
       });
       return true;
     }
 
-    await interaction.deferReply({ flags: 64 });
+    await interaction.deferReply({ ephemeral: true });
 
     const userId = interaction.fields.getTextInputValue("userId");
 
