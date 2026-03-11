@@ -9,7 +9,18 @@ import {
   PermissionsBitField,
 } from "discord.js";
 
-const LOG_CHANNEL_ID = "1377747538433806417";
+// ================== CONFIGURAÇÃO DE LOGS ==================
+const MAIN_GUILD_ID = '1262262852782129183'; // Servidor Principal (Santa Creators)
+const CENTRAL_LOG_CHANNEL_ID = '1377747538433806417'; // Canal central para logs de update
+
+// Mapeamento de Guild ID para Canal de Log Local
+const LOCAL_LOG_CHANNELS = {
+  '1262262852782129183': '1377747538433806417', // Principal (logs no próprio canal central)
+  '1362899773992079533': '1363295055384809483', // Cidade Santa -> #sc-logs
+  '1452416085751234733': '1455312395269443813', // Administração -> #sc-logs
+  // Adicione outros servidores e seus canais de log aqui
+};
+// ==========================================================
 
 // janela pra considerar o audit log "do momento"
 const AUDIT_MAX_AGE_MS = 20_000; // 20s
@@ -97,13 +108,8 @@ export function setupChannelNameCategoryUpdateLog(client) {
       if (!nameChanged && !categoryChanged) return;
 
       const guild = newChannel.guild;
+      const isMainGuild = guild.id === MAIN_GUILD_ID;
 
-      // canal de logs
-      const logChannel =
-        guild.channels.cache.get(LOG_CHANNEL_ID) ||
-        (await guild.channels.fetch(LOG_CHANNEL_ID).catch(() => null));
-
-      if (!logChannel || !logChannel.isTextBased()) return;
 
       // tenta pegar quem foi via audit logs
       const auditEntry = await getExecutorFromAudit(guild, newChannel.id);
@@ -190,7 +196,30 @@ export function setupChannelNameCategoryUpdateLog(client) {
         inline: false,
       });
 
-      await logChannel.send({ embeds: [embed] }).catch(() => {});
+      // Envia para o canal local
+      const localLogChannelId = LOCAL_LOG_CHANNELS[guild.id];
+      if (localLogChannelId) {
+          const localLogChannel = await guild.channels.fetch(localLogChannelId).catch(() => null);
+          if (localLogChannel && localLogChannel.isTextBased()) {
+              const localEmbed = EmbedBuilder.from(embed)
+                .setFooter({ text: `Servidor: ${guild.name} • ${guild.id}` });
+              await localLogChannel.send({ embeds: [localEmbed] }).catch(console.error);
+          }
+      }
+
+      // Envia para o canal central, se a origem não for a guilda principal
+      if (!isMainGuild) {
+          const centralLogChannel = await client.channels.fetch(CENTRAL_LOG_CHANNEL_ID).catch(() => null);
+          if (centralLogChannel && centralLogChannel.isTextBased()) {
+              const centralEmbed = EmbedBuilder.from(embed)
+                  .setFooter({ text: `Origem: ${guild.name} • ${guild.id}` });
+              await centralLogChannel.send({ embeds: [centralEmbed] }).catch(console.error);
+          }
+      } else if (isMainGuild && !localLogChannelId) { // Se for a main guild mas não tiver log local configurado, manda no central
+          const centralLogChannel = await client.channels.fetch(CENTRAL_LOG_CHANNEL_ID).catch(() => null);
+          if (centralLogChannel && centralLogChannel.isTextBased()) await centralLogChannel.send({ embeds: [embed.setFooter({ text: `Servidor: ${guild.name} • ${guild.id}` })] }).catch(console.error);
+      }
+
     } catch (err) {
       console.error("Erro no log channelNameCategoryUpdate:", err);
     }

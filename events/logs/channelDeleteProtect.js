@@ -2,8 +2,17 @@ import { AuditLogEvent, ChannelType, EmbedBuilder } from 'discord.js';
 import { resolveLogChannel } from '../channelResolver.js';
 
 // ================== CONFIG ==================
-// Canal para onde os logs de restauração serão enviados
-const LOG_CHANNEL_ID = '1423088696835571804'; // ⚠️ Troque pelo ID do seu canal de logs de proteção
+// Canais para onde os logs de proteção serão enviados
+const MAIN_GUILD_ID = '1262262852782129183';
+const CENTRAL_LOG_CHANNEL_ID = '1423088696835571804'; // Canal central de logs de proteção
+
+// Mapeamento de Guild ID para Canal de Log Local
+const LOCAL_LOG_CHANNELS = {
+  '1262262852782129183': '1423088696835571804', // Principal (logs no próprio canal central)
+  '1362899773992079533': '1363295055384809483', // Cidade Santa -> #sc-logs
+  '1452416085751234733': '1455312395269443813', // Administração -> #sc-logs
+  // Adicione outros servidores e seus canais de log aqui
+};
 
 // IDs de usuários que podem deletar canais livremente (ex: donos, admins de confiança)
 const BYPASS_USER_IDS = new Set([
@@ -109,18 +118,37 @@ export default function installChannelDeleteProtection(client) {
         // O código para recriar o canal iria aqui.
         // Por segurança, a recriação automática foi omitida.
         // O ideal é logar a tentativa de deleção indevida.
-        const logChannel = await resolveLogChannel(client, LOG_CHANNEL_ID);
-        if (logChannel) {
-            const embed = new EmbedBuilder()
-                .setColor('Red')
-                .setTitle('🚨 ALERTA: Tentativa de Deleção de Canal Bloqueada')
-                .setDescription(`O canal **#${channel.name}** foi protegido contra deleção.`)
-                .addFields(
-                    { name: 'Executor Indevido', value: executor ? `${executor.user.tag} (${executor.id})` : 'Desconhecido' },
-                    { name: 'ID do Canal', value: `\`${channel.id}\`` }
-                )
-                .setTimestamp();
-            await logChannel.send({ embeds: [embed] }).catch(() => {});
+        const isMainGuild = guild.id === MAIN_GUILD_ID;
+
+        const embed = new EmbedBuilder()
+            .setColor('Red')
+            .setTitle('🚨 ALERTA: Tentativa de Deleção de Canal Bloqueada')
+            .setDescription(`O canal **#${channel.name}** foi protegido contra deleção.`)
+            .addFields(
+                { name: 'Executor Indevido', value: executor ? `${executor.user.tag} (${executor.id})` : 'Desconhecido' },
+                { name: 'ID do Canal', value: `\`${channel.id}\`` }
+            )
+            .setTimestamp();
+
+        // Envia para o canal local
+        const localLogChannelId = LOCAL_LOG_CHANNELS[guild.id];
+        if (localLogChannelId) {
+            const localLogChannel = await resolveLogChannel(client, localLogChannelId);
+            if (localLogChannel) {
+                const localEmbed = EmbedBuilder.from(embed)
+                    .setFooter({ text: `Servidor: ${guild.name} • ${guild.id}` });
+                await localLogChannel.send({ embeds: [localEmbed] }).catch(() => {});
+            }
+        }
+
+        // Envia para o canal central, se a origem não for a guilda principal
+        if (!isMainGuild) {
+            const centralLogChannel = await resolveLogChannel(client, CENTRAL_LOG_CHANNEL_ID);
+            if (centralLogChannel) {
+                const centralEmbed = EmbedBuilder.from(embed)
+                    .setFooter({ text: `Origem: ${guild.name} • ${guild.id}` });
+                await centralLogChannel.send({ embeds: [centralEmbed] }).catch(() => {});
+            }
         }
     });
 

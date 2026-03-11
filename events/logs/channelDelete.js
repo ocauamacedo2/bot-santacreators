@@ -1,6 +1,18 @@
 import { AuditLogEvent, ChannelType, EmbedBuilder } from "discord.js";
 
-const LOG_CHANNEL_ID_DELETE = "1377813917866397726";
+// ================== CONFIGURAÇÃO DE LOGS ==================
+const MAIN_GUILD_ID = '1262262852782129183'; // Servidor Principal (Santa Creators)
+const CENTRAL_LOG_CHANNEL_ID = '1377813917866397726'; // Canal central para logs de deleção
+
+// Mapeamento de Guild ID para Canal de Log Local
+const LOCAL_LOG_CHANNELS = {
+  '1262262852782129183': '1377813917866397726', // Principal (logs no próprio canal central)
+  '1362899773992079533': '1363295055384809483', // Cidade Santa -> #sc-logs
+  '1452416085751234733': '1455312395269443813', // Administração -> #sc-logs
+  // Adicione outros servidores e seus canais de log aqui
+};
+// ==========================================================
+
 const TIMEZONE = "America/Sao_Paulo";
 const AUDIT_WINDOW_MS = 15000;
 
@@ -68,10 +80,9 @@ export default {
   async execute(channel) {
     try {
       if (!channel?.guild) return;
-
+      const client = channel.client;
       const guild = channel.guild;
-      const logChannel = await guild.channels.fetch(LOG_CHANNEL_ID_DELETE).catch(() => null);
-      if (!logChannel) return;
+      const isMainGuild = guild.id === MAIN_GUILD_ID;
 
       const { executor, reason } = await fetchAuditExecutor(guild, channel.id);
 
@@ -85,8 +96,7 @@ export default {
           `📌 **Canal:** \`${path}\`\n` +
           `🕒 **Excluído em:** \`${formatLocal(deletedAt)}\` • ${toDiscordTimestamp(deletedAt)}`
         )
-        .setTimestamp(new Date())
-        .setFooter({ text: `Servidor: ${guild.name} • ${guild.id}` });
+        .setTimestamp(new Date());
 
       if (executor) embed.setThumbnail(executor.displayAvatarURL({ size: 256 }));
 
@@ -117,7 +127,29 @@ export default {
       if (extras) embed.addFields({ name: "⚙️ Detalhes Extras", value: extras, inline: false });
       if (reason) embed.addFields({ name: "📝 Motivo (Audit Log)", value: reason, inline: false });
 
-      await logChannel.send({ embeds: [embed] });
+      // Envia para o canal local
+      const localLogChannelId = LOCAL_LOG_CHANNELS[guild.id];
+      if (localLogChannelId) {
+          const localLogChannel = await guild.channels.fetch(localLogChannelId).catch(() => null);
+          if (localLogChannel) {
+              const localEmbed = EmbedBuilder.from(embed)
+                .setFooter({ text: `Servidor: ${guild.name} • ${guild.id}` });
+              await localLogChannel.send({ embeds: [localEmbed] }).catch(console.error);
+          }
+      }
+
+      // Envia para o canal central, se a origem não for a guilda principal
+      if (!isMainGuild) {
+          const centralLogChannel = await client.channels.fetch(CENTRAL_LOG_CHANNEL_ID).catch(() => null);
+          if (centralLogChannel) {
+              const centralEmbed = EmbedBuilder.from(embed)
+                  .setFooter({ text: `Origem: ${guild.name} • ${guild.id}` });
+              await centralLogChannel.send({ embeds: [centralEmbed] }).catch(console.error);
+          }
+      } else if (isMainGuild && !localLogChannelId) { // Se for a main guild mas não tiver log local configurado, manda no central
+          const centralLogChannel = await client.channels.fetch(CENTRAL_LOG_CHANNEL_ID).catch(() => null);
+          if (centralLogChannel) await centralLogChannel.send({ embeds: [embed.setFooter({ text: `Servidor: ${guild.name} • ${guild.id}` })] }).catch(console.error);
+      }
     } catch (err) {
       console.error("[logs/channelDelete] erro:", err);
     }
