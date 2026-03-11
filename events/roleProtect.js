@@ -282,7 +282,7 @@ export async function roleProtectHandleMessage(message, client) {
         .send(DM_TO_VICTIM(victimMember.user.tag, execMember.user.tag))
         .catch(() => {});
     }
-
+    
     const creatorsChannel = await getCreatorsChannel(client, guild);
     if (creatorsChannel) {
       await creatorsChannel

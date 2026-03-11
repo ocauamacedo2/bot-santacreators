@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { dashEmit } from '../../utils/dashHub.js';
+import { resolveLogChannel } from '../../events/channelResolver.js';
 
 
 
@@ -190,7 +191,7 @@ const numeros = match[1]
 
   const scoreInfo = checkCooldown(message.author.id);
 
-  const canalLogs = await client.channels.fetch(CANAL_LOGS_CORRECAO).catch(() => null);
+  const canalLogs = await resolveLogChannel(client, CANAL_LOGS_CORRECAO);
   if (canalLogs) {
     // Tenta pegar quem abriu o ticket pelo tópico
     const topic = message.channel.topic || "";

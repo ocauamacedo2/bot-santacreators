@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ChannelType, PermissionFlagsBits, EmbedBuilder } from "discord.js";
+import { resolveLogChannel } from "../channelResolver.js";
 // ✅ __dirname no ESM
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -339,7 +340,7 @@ function buildDM48(userId, hours) {
 
   async function logDMToChannel(userId, content, embeds, { dmOk = true } = {}) {
     try {
-      const canalLog = await client.channels.fetch(PODERES_LOG_DM_CHANNEL_ID).catch(() => null);
+      const canalLog = await resolveLogChannel(client, PODERES_LOG_DM_CHANNEL_ID);
       if (!canalLog) return;
 
       const ts = Math.floor(Date.now() / 1000);
@@ -354,7 +355,7 @@ function buildDM48(userId, hours) {
 
   async function enviarAvisoPublico() {
     try {
-      const canal = await client.channels.fetch(PODERES_CANAL_PUBLICO_ID).catch(() => null);
+      const canal = await resolveLogChannel(client, PODERES_CANAL_PUBLICO_ID);
       if (!canal || canal.type !== ChannelType.GuildText) return;
 
       const perms = canal.permissionsFor(client.user.id);

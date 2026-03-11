@@ -1319,7 +1319,7 @@ async function notifyDecision({ client, registrantId, approved, moderatorId, msg
   let registrantUser = registrant?.user;
   if (!registrantUser) {
     try {
-      registrantUser = await client.users.fetch(registrantId);
+      registrantUser = await client.users.fetch(registrantId).catch(() => null);
     } catch {}
   }
 

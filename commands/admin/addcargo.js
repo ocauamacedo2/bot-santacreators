@@ -1,5 +1,6 @@
 import { EmbedBuilder } from 'discord.js';
 import dotenv from 'dotenv';
+import { resolveLogChannel } from '../../events/channelResolver.js';
 
 dotenv.config();
 
@@ -187,7 +188,7 @@ async function execute(message, args) {
   const visualMessage = await message.channel.send({ embeds: [embed] });
 
   // ✅ LOG SÓ NO CANAL DO SERVIDOR ATUAL (sem vazar)
-  const logChannel = getLogChannel(message);
+  const logChannel = await getLogChannel(message);
   if (logChannel && logChannel.id !== message.channel.id) {
     await logChannel.send({ embeds: [embed] }).catch(() => {});
   }

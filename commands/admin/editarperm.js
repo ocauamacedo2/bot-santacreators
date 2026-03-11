@@ -9,6 +9,7 @@ import {
   PermissionsBitField,
   ChannelType,
 } from 'discord.js';
+import { resolveLogChannel } from '../../events/channelResolver.js';
 
 // ================= CONFIG =================
 const ALLOWED_USERS = new Set([

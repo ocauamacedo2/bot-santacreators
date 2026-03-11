@@ -10,11 +10,8 @@ function getPrefix() {
 
 async function sendLog(client, guild, payload) {
   try {
-    const ch =
-      guild.channels.cache.get(LOG_CHANNEL_ID) ||
-      (await guild.channels.fetch(LOG_CHANNEL_ID).catch(() => null));
-    if (!ch || !ch.isTextBased()) return;
-    await ch.send(payload).catch(() => {});
+    const ch = await resolveLogChannel(client, LOG_CHANNEL_ID);
+    if (ch) await ch.send(payload).catch(() => {});
   } catch {}
 }
 
