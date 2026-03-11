@@ -1,8 +1,8 @@
 // d:\santacreators-main\commands\admin\criarCategoriaEspelho.js
 import { PermissionsBitField } from 'discord.js';
 import { MIRROR_CONFIG } from '../config/mirrorConfig.js';
-import { ensureGuildEntry } from './idRegistry.js';
-import { cloneSingleCategory } from './cloneCategory.js';
+import { ensureGuildEntry } from './idRegistry.js'; // Corrigido para ser relativo
+import { cloneSingleCategory } from './cloneCategory.js'; // Corrigido para ser relativo
 
 /**
  * Verifica se o usuário tem permissão para usar o comando.

@@ -1,6 +1,6 @@
 // d:\santacreators-main\services\guildClone\permissionMapper.js
 import { OverwriteType } from 'discord.js';
-import { getMirroredId } from './idRegistry.js'; // Assumindo que está na mesma pasta
+import { getMirroredId } from './idRegistry.js';
 import { MIRROR_CONFIG } from '../config/mirrorConfig.js';
 
 /**
