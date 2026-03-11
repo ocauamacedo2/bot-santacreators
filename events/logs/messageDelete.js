@@ -24,8 +24,16 @@ import path from "path";
 import { getCachedMessage } from "./_deleteCache.js";
 import { resolveLogChannel } from "../channelResolver.js";
 
-const HUMAN_LOG_CHANNEL_ID = "1377834202417856732";
-const BOT_LOG_CHANNEL_ID = "1377852282779078666";
+// ================== CONFIGURAÇÃO DE LOGS ==================
+const MAIN_GUILD_ID = '1262262852782129183';
+const CENTRAL_LOG_HUMAN_DELETE_ID = "1377834202417856732";
+const CENTRAL_LOG_BOT_DELETE_ID = "1377852282779078666";
+
+const LOCAL_LOG_CHANNELS = {
+  '1362899773992079533': '1363295055384809483', // Cidade Santa -> #sc-logs
+  '1452416085751234733': '1455312395269443813', // Administração -> #sc-logs
+};
+// ==========================================================
 
 const STORAGE_DIR = path.join(process.cwd(), "storage", "deleted-attachments");
 const AUDIT_TIME_WINDOW_MS = 12_000;
@@ -268,9 +276,7 @@ export default {
         (selfDelete && authorObj?.bot === true) ||
         (selfDelete && !authorObj); // 👈 chave pra consertar o teu problema
 
-      const targetLogId = deletionByBot ? BOT_LOG_CHANNEL_ID : HUMAN_LOG_CHANNEL_ID;
-      const logChannel = await client.channels.fetch(targetLogId).catch(() => null);
-      if (!logChannel) return;
+      const isMainGuild = guild.id === MAIN_GUILD_ID;
 
       const categoryName = getCategoryName(channel);
 
@@ -431,13 +437,34 @@ export default {
 
       const embedsToSend = [embed, ...reconstructedEmbeds].slice(0, 10);
 
-      await logChannel.send({
-        embeds: embedsToSend,
-        files: attachments.length ? attachments.slice(0, 10) : undefined,
-      });
+      // --- DUAL LOG ---
+      const localLogChannelId = LOCAL_LOG_CHANNELS[guild.id];
+      if (localLogChannelId) {
+        const localLogChannel = await client.channels.fetch(localLogChannelId).catch(() => null);
+        if (localLogChannel?.isTextBased()) {
+          const localEmbeds = embedsToSend.map(e => new EmbedBuilder(e.toJSON()).setFooter({ text: `Servidor: ${guild.name} • ${guild.id}` }));
+          await localLogChannel.send({ embeds: localEmbeds, files: attachments.length ? attachments.slice(0, 10) : undefined }).catch(console.error);
+        }
+      }
+
+      if (!isMainGuild) {
+        const centralLogId = deletionByBot ? CENTRAL_LOG_BOT_DELETE_ID : CENTRAL_LOG_HUMAN_DELETE_ID;
+        const centralLogChannel = await client.channels.fetch(centralLogId).catch(() => null);
+        if (centralLogChannel?.isTextBased()) {
+          const centralEmbeds = embedsToSend.map(e => new EmbedBuilder(e.toJSON()).setFooter({ text: `Origem: ${guild.name} • ${guild.id}` }));
+          await centralLogChannel.send({ embeds: centralEmbeds, files: attachments.length ? attachments.slice(0, 10) : undefined }).catch(console.error);
+        }
+      } else if (isMainGuild && !localLogChannelId) {
+          const centralLogId = deletionByBot ? CENTRAL_LOG_BOT_DELETE_ID : CENTRAL_LOG_HUMAN_DELETE_ID;
+          const centralLogChannel = await client.channels.fetch(centralLogId).catch(() => null);
+          if (centralLogChannel) {
+              const centralEmbeds = embedsToSend.map(e => new EmbedBuilder(e.toJSON()).setFooter({ text: `Servidor: ${guild.name} • ${guild.id}` }));
+              await centralLogChannel.send({ embeds: centralEmbeds, files: attachments.length ? attachments.slice(0, 10) : undefined }).catch(console.error);
+          }
+      }
     } catch (err) {
       try {
-        const logChannel = await client.channels.fetch(HUMAN_LOG_CHANNEL_ID).catch(() => null);
+        const logChannel = await client.channels.fetch(CENTRAL_LOG_HUMAN_DELETE_ID).catch(() => null);
         if (logChannel) {
           await logChannel.send({
             content: `⚠️ Erro no logger messageDelete: \`${String(err?.message || err).slice(0, 1900)}\``,

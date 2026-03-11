@@ -1,10 +1,27 @@
 import { EmbedBuilder, AuditLogEvent } from 'discord.js';
 
+// ================== CONFIGURAÇÃO DE LOGS ==================
+const MAIN_GUILD_ID = '1262262852782129183';
+
+const CENTRAL_LOG_BAN_ID = process.env.LOG_BAN || '1377813917866397726'; // Canal central para bans
+const CENTRAL_LOG_UNBAN_ID = process.env.LOG_UNBAN || '1377813917866397726'; // Canal central para unbans
+
+// Mapeamento de Guild ID para Canal de Log Local
+const LOCAL_LOG_CHANNELS = {
+  '1262262852782129183': '1377813917866397726', // Principal (logs no próprio canal central)
+  '1362899773992079533': '1363295055384809483', // Cidade Santa -> #sc-logs
+  '1452416085751234733': '1455312395269443813', // Administração -> #sc-logs
+};
+// ==========================================================
+
 const preBanCache = new Map();
 
 export function setupBanLog(client) {
   client.on('guildMemberRemove', async (member) => {
     try {
+      // Otimização: só guarda cache se o servidor tiver log configurado
+      if (!LOCAL_LOG_CHANNELS[member.guild.id]) return;
+
       const roles = member.roles.cache
         .filter(r => r.id !== member.guild.id)
         .map(r => `<@&${r.id}>`);
@@ -20,8 +37,7 @@ export function setupBanLog(client) {
 
   client.on('guildBanAdd', async (ban) => {
     const { user, guild } = ban;
-    const logChannel = client.channels.cache.get(process.env.LOG_BAN);
-    if (!logChannel) return;
+    const isMainGuild = guild.id === MAIN_GUILD_ID;
 
     try {
       const logs = await guild.fetchAuditLogs({
@@ -55,7 +71,26 @@ export function setupBanLog(client) {
         })
         .setTimestamp();
 
-      await logChannel.send({ embeds: [embed] });
+      // --- DUAL LOG ---
+      const localLogChannelId = LOCAL_LOG_CHANNELS[guild.id];
+      if (localLogChannelId) {
+        const localLogChannel = await client.channels.fetch(localLogChannelId).catch(() => null);
+        if (localLogChannel?.isTextBased()) {
+          const localEmbed = new EmbedBuilder(embed.toJSON()).setFooter({ text: `Servidor: ${guild.name} • ${guild.id}` });
+          await localLogChannel.send({ embeds: [localEmbed] }).catch(console.error);
+        }
+      }
+
+      if (!isMainGuild) {
+        const centralLogChannel = await client.channels.fetch(CENTRAL_LOG_BAN_ID).catch(() => null);
+        if (centralLogChannel?.isTextBased()) {
+          const centralEmbed = new EmbedBuilder(embed.toJSON()).setFooter({ text: `Origem: ${guild.name} • ${guild.id}` });
+          await centralLogChannel.send({ embeds: [centralEmbed] }).catch(console.error);
+        }
+      } else if (isMainGuild && !localLogChannelId) {
+          const centralLogChannel = await client.channels.fetch(CENTRAL_LOG_BAN_ID).catch(() => null);
+          if (centralLogChannel) await centralLogChannel.send({ embeds: [embed.setFooter({ text: `Servidor: ${guild.name} • ${guild.id}` })] }).catch(console.error);
+      }
     } catch (err) {
       console.error('[ERRO] Falha no log de ban:', err);
     }
@@ -63,8 +98,7 @@ export function setupBanLog(client) {
 
   client.on('guildBanRemove', async (ban) => {
     const { user, guild } = ban;
-    const logChannel = client.channels.cache.get(process.env.LOG_UNBAN);
-    if (!logChannel) return;
+    const isMainGuild = guild.id === MAIN_GUILD_ID;
 
     try {
       const logs = await guild.fetchAuditLogs({
@@ -94,7 +128,26 @@ export function setupBanLog(client) {
         })
         .setTimestamp();
 
-      await logChannel.send({ embeds: [embed] });
+      // --- DUAL LOG ---
+      const localLogChannelId = LOCAL_LOG_CHANNELS[guild.id];
+      if (localLogChannelId) {
+        const localLogChannel = await client.channels.fetch(localLogChannelId).catch(() => null);
+        if (localLogChannel?.isTextBased()) {
+          const localEmbed = new EmbedBuilder(embed.toJSON()).setFooter({ text: `Servidor: ${guild.name} • ${guild.id}` });
+          await localLogChannel.send({ embeds: [localEmbed] }).catch(console.error);
+        }
+      }
+
+      if (!isMainGuild) {
+        const centralLogChannel = await client.channels.fetch(CENTRAL_LOG_UNBAN_ID).catch(() => null);
+        if (centralLogChannel?.isTextBased()) {
+          const centralEmbed = new EmbedBuilder(embed.toJSON()).setFooter({ text: `Origem: ${guild.name} • ${guild.id}` });
+          await centralLogChannel.send({ embeds: [centralEmbed] }).catch(console.error);
+        }
+      } else if (isMainGuild && !localLogChannelId) {
+          const centralLogChannel = await client.channels.fetch(CENTRAL_LOG_UNBAN_ID).catch(() => null);
+          if (centralLogChannel) await centralLogChannel.send({ embeds: [embed.setFooter({ text: `Servidor: ${guild.name} • ${guild.id}` })] }).catch(console.error);
+      }
     } catch (err) {
       console.error('[ERRO] Falha no log de unban:', err);
     }
