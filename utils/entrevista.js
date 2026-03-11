@@ -136,8 +136,12 @@ function salvarEntrevistasEmDisco() {
 
 function carregarEntrevistasDoDisco() {
   try {
-    if (!fs.existsSync(ENTREVISTAS_PATH)) return;
+    if (!fs.existsSync(ENTREVISTAS_PATH)) {
+      console.log('[Entrevista] Arquivo de backup não encontrado. Nenhuma entrevista para carregar.');
+      return;
+    }
     const bruto = JSON.parse(fs.readFileSync(ENTREVISTAS_PATH, 'utf8'));
+    let count = 0;
     for (const id in bruto) {
       entrevistas.set(id, {
         respostas: bruto[id].respostas || [],
@@ -148,6 +152,10 @@ function carregarEntrevistasDoDisco() {
         channelId: bruto[id].channelId || null,
         globalTimer: null
       });
+      count++;
+    }
+    if (count > 0) {
+      console.log(`[Entrevista] Carregadas ${count} entrevista(s) do backup.`);
     }
   } catch (e) {
     console.warn('Falha ao carregar entrevistas:', e);
@@ -156,6 +164,8 @@ function carregarEntrevistasDoDisco() {
 
 carregarEntrevistasDoDisco();
 process.on('exit', salvarEntrevistasEmDisco);
+// Estes hooks ajudam a salvar em caso de desligamento normal, mas não em caso de crash.
+// Por isso, chamamos salvarEntrevistasEmDisco() sempre que o estado muda.
 process.on('SIGINT', () => { salvarEntrevistasEmDisco(); process.exit(); });
 process.on('SIGTERM', () => { salvarEntrevistasEmDisco(); process.exit(); });
 
@@ -186,6 +196,11 @@ async function logCompleto(client, data) {
 
 // ===== REANEXAR =====
 async function reanexar(client) {
+  if (entrevistas.size === 0) {
+    console.log('[Entrevista] Nenhuma entrevista pendente para reanexar.');
+    return;
+  }
+  console.log(`[Entrevista] Verificando ${entrevistas.size} entrevista(s) para reanexar...`);
   for (const [userId, dados] of entrevistas.entries()) {
     try {
       const restante = dados.timeoutEnd - Date.now();
@@ -228,6 +243,7 @@ async function reanexar(client) {
         ]
       });
 
+      console.log(`[Entrevista] Reanexando entrevista para ${membro.user.tag} no canal #${channel.name}. Próxima pergunta: ${dados.index + 1}`);
       enviarPergunta(channel, membro, dados.index);
     } catch (e) {
       console.warn('Falha ao reanexar:', userId, e);
@@ -574,6 +590,7 @@ const fim = await channel.send(
 
   dados.mensagens.push(perguntaMsg.id);
   entrevistas.set(membro.id, dados);
+  // Salva o estado após adicionar a mensagem da pergunta, para garantir consistência.
   salvarEntrevistasEmDisco();
 
   try {
