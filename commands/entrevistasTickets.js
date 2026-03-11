@@ -13,6 +13,7 @@ import {
   StringSelectMenuOptionBuilder,
   OverwriteType,
 } from 'discord.js';
+import { resolveLogChannel } from '../events/channelResolver.js';
 
 export default function createEntrevistasTickets({ client, Transcript }) {
   ///!ENTREVISTA
@@ -1557,8 +1558,7 @@ const src = String(raw).trim(); // mantém query
 
     // ✅ manda log (NUNCA pode travar o fechamento)
     try {
-      const logChannel = await withTimeout(guild.channels.fetch(TRANSCRIPTS_CHANNEL_ID), 12_000, "guild.channels.fetch(log)")
-        .catch(() => null);
+      const logChannel = await resolveLogChannel(client, TRANSCRIPTS_CHANNEL_ID);
 
       if (logChannel) {
         await withTimeout(logChannel.send({ embeds: [embedLog], components: [rowLog] }), 12_000, "logChannel.send");

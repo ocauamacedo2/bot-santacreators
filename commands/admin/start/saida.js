@@ -1,5 +1,6 @@
 // events/saida.js — discord.js v14 (ESM)
 import { EmbedBuilder, Events, PermissionsBitField, AuditLogEvent } from 'discord.js';
+import { resolveLogChannel } from '../../../events/channelResolver.js';
 import dotenv from 'dotenv';
 dotenv.config();
 
@@ -29,15 +30,8 @@ export default {
 
       // 🔁 escolhe canal pela guild; se não existir no map, usa o .env (como antes)
       const canalId = CANAIS_SAIDA_POR_GUILD[guild.id] || CANAL_SAIDA;
-
-      if (!canalId) {
-        console.warn('[saida] ❗ Falta CANAL_SAIDA no .env e não há canal mapeado para esta guild.');
-        return;
-      }
-
-      const canal =
-        guild.channels.cache.get(canalId) ||
-        (await guild.channels.fetch(canalId).catch(() => null));
+      
+      const canal = await resolveLogChannel(member.client, canalId);
 
       if (!canal || !canal.isTextBased()) {
         console.warn(`[saida] ❗ Canal inválido/inacessível: ${canalId} (guild: ${guild.id})`);

@@ -1,6 +1,7 @@
 // /events/reminderManager.js
 // Reminder Manager (discord.js v14 • ESM) — MONITOR DE VÁCUO & ENTREVISTAS
 import { EmbedBuilder } from 'discord.js';
+import { resolveLogChannel } from './channelResolver.js';
 
 // =========================
 // CONFIGURAÇÃO
@@ -99,7 +100,7 @@ function isAllowedCategory(channel) {
 
 async function logToChannel(client, guild, data) {
   try {
-    const channel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+    const channel = await resolveLogChannel(client, LOG_CHANNEL_ID);
     if (!channel || !channel.isTextBased()) return;
 
     const embed = new EmbedBuilder()

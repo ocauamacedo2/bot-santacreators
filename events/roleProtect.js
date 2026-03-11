@@ -1,5 +1,6 @@
 // ./events/roleProtect.js
 import { AuditLogEvent, PermissionFlagsBits } from "discord.js";
+import { resolveLogChannel } from './channelResolver.js';
 
 // ======================================================
 // SC_ROLE_PROTECT — Proteção contra remoção de cargos
@@ -208,7 +209,7 @@ export async function roleProtectHandleGuildMemberUpdate(oldMember, newMember, c
       .send(DM_TO_VICTIM(`${newMember.user.tag}`, execMember.user.tag))
       .catch(() => {});
 
-    const creatorsChannel = getCreatorsChannel(guild);
+    const creatorsChannel = await getCreatorsChannel(client, guild);
     if (creatorsChannel) {
       await creatorsChannel
         .send(PUBLIC_MSG(execMember.id, `${newMember.user.tag}`))
@@ -282,7 +283,7 @@ export async function roleProtectHandleMessage(message, client) {
         .catch(() => {});
     }
 
-    const creatorsChannel = getCreatorsChannel(guild);
+    const creatorsChannel = await getCreatorsChannel(client, guild);
     if (creatorsChannel) {
       await creatorsChannel
         .send(PUBLIC_MSG(execMember.id, `<@${targetId}>`))
