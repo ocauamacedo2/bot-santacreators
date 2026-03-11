@@ -1,18 +1,4 @@
-import { EmbedBuilder } from 'discord.js';
-
-// Constantes copiadas de 'entrevistasTickets.js' para manter o módulo isolado
-const TICKET_CATEGORIES = new Set([
-    '1359244725781266492', // Entrevista
-    '1359245003523756136', // Suporte
-    '1414687963161559180', // Lider
-    '1359245055239655544', // Ideias
-    '1352706815594598420', // Roupas
-    '1404568518179029142',  // Banners
-    // Adicionando as categorias que faltavam
-    '1384650670145278033',
-    '1359244743724241156',
-    '1444857594517913742'
-]);
+import { EmbedBuilder, ChannelType } from 'discord.js';
 
 const cargosPermitidos = new Set([
     '660311795327828008', // Você
@@ -37,11 +23,12 @@ async function findOpenTickets(guild, member) {
     if (!member) return [];
     const openTickets = [];
     for (const channel of guild.channels.cache.values()) {
-        if (TICKET_CATEGORIES.has(channel.parentId)) {
-            // Verifica se o membro tem uma permissão explícita (overwrite) no canal,
-            // ignorando permissões herdadas de cargos.
+        // Verifica se é um canal de texto e se o nome começa com o emoji de ticket
+        if (channel.type === ChannelType.GuildText && channel.name.startsWith('🎫┋')) {
+            // Verifica se o membro tem uma permissão explícita (overwrite) para ver o canal.
+            // Isso é mais confiável do que checar a categoria, pois funciona em qualquer lugar.
             const overwrite = channel.permissionOverwrites.cache.get(member.id);
-            // A permissão de ver é concedida se houver um overwrite para o membro que permite 'ViewChannel'
+            // A permissão de ver é concedida se houver um overwrite para o membro que permite 'ViewChannel'.
             if (overwrite && overwrite.allow.has('ViewChannel')) {
                 openTickets.push(channel.id);
             }
