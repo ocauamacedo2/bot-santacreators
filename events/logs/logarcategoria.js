@@ -2,13 +2,13 @@ import { EmbedBuilder, ChannelType } from 'discord.js';
 
 // ================== CONFIGURAÇÃO DE LOGS ==================
 const MAIN_GUILD_ID = '1262262852782129183'; // Servidor Principal (Santa Creators)
-const CENTRAL_LOG_CHANNEL_ID = '1377813851860504647'; // Canal central para logs de criação
+const CENTRAL_LOG_CHANNEL_ID = '1377813851860504647'; // Canal central para logs
 
 // Mapeamento de Guild ID para Canal de Log Local
 const LOCAL_LOG_CHANNELS = {
-  '1262262852782129183': '1377813851860504647', // Principal (logs no próprio canal central)
-  '1362899773992079533': '1363295055384809483', // Cidade Santa -> #sc-logs
-  '1452416085751234733': '1455312395269443813', // Administração -> #sc-logs
+  '1262262852782129183': '1377813851860504647', // Principal
+  '1362899773992079533': '1363295055384809483', // Cidade Santa
+  '1452416085751234733': '1455312395269443813', // Administração
 };
 // ==========================================================
 
@@ -22,7 +22,8 @@ const ALLOWED_USERS = [
   '660311795327828008', // Você
 ];
 
-// Funções de formatação
+// ================== FUNÇÕES ==================
+
 const TIMEZONE = 'America/Sao_Paulo';
 
 function formatLocal(date) {
@@ -61,12 +62,15 @@ function channelJumpLink(guildId, channelId) {
   return `https://discord.com/channels/${guildId}/${channelId}`;
 }
 
+// ================== COMANDO ==================
+
 export default {
   name: 'logarcategoria',
   description: 'Gera logs de criação para todos os canais dentro de uma categoria.',
 
   async execute(message, args, client) {
-    // 1. Verificar permissão
+
+    // 1️⃣ Permissão
     const hasPermission =
       message.member.roles.cache.some(role => ALLOWED_ROLES.includes(role.id)) ||
       ALLOWED_USERS.includes(message.author.id);
@@ -75,8 +79,9 @@ export default {
       return message.reply('❌ Você não tem permissão para usar este comando.');
     }
 
-    // 2. Validar argumentos
+    // 2️⃣ Validar ID da categoria
     const categoryId = args[0];
+
     if (!categoryId || !/^\d{17,20}$/.test(categoryId)) {
       return message.reply('❌ Uso correto: `!logarcategoria <ID da Categoria>`');
     }
@@ -92,18 +97,25 @@ export default {
       `🔎 Analisando a categoria **${category.name}**. Isso pode levar um momento...`
     );
 
-    const childChannels = guild.channels.cache.filter(ch => ch.parentId === category.id);
+    const childChannels = guild.channels.cache.filter(
+      ch => ch.parentId === category.id
+    );
 
     if (childChannels.size === 0) {
-      return statusMsg.edit(`ℹ️ A categoria **${category.name}** não possui canais.`);
+      return statusMsg.edit(
+        `ℹ️ A categoria **${category.name}** não possui canais.`
+      );
     }
 
     let successCount = 0;
     let errorCount = 0;
 
-    // 3. Iterar e logar
+    // ================== LOOP ==================
+
     for (const channel of childChannels.values()) {
+
       try {
+
         const executor = message.author;
         const createdAt = channel.createdAt;
 
@@ -112,20 +124,21 @@ export default {
           .setTitle('📁 Canal (Re)Logado')
           .setDescription(
             `Este é um log gerado manualmente para um canal já existente.\n\n` +
-              `🔗 **Link do canal:** ${channelJumpLink(guild.id, channel.id)}\n` +
-              `🕒 **Criado em:** \`${formatLocal(createdAt)}\` • ${toDiscordTimestamp(createdAt)}`
+            `🔗 **Link do canal:** ${channelJumpLink(guild.id, channel.id)}\n` +
+            `🕒 **Criado em:** \`${formatLocal(createdAt)}\` • ${toDiscordTimestamp(createdAt)}`
           )
           .setTimestamp(new Date());
 
         if (executor) {
-          embed.setThumbnail(executor.displayAvatarURL({ size: 256 }));
+          embed.setThumbnail(
+            executor.displayAvatarURL({ size: 256 })
+          );
         }
 
         embed.addFields(
           {
             name: '👤 Log gerado por',
             value: `${executor} • **ID:** \`${executor.id}\``,
-            inline: false,
           },
           {
             name: '🧾 Informações do Canal',
@@ -138,88 +151,139 @@ export default {
           },
           {
             name: '📂 Categoria',
-            value: `**Nome:** ${category.name}\n**ID:** \`${category.id}\``,
+            value:
+              `**Nome:** ${category.name}\n` +
+              `**ID:** \`${category.id}\``,
             inline: true,
           }
         );
 
-        // 4. Lógica de envio duplo (self-contained)
+        // ================== ENVIO DOS LOGS ==================
+
         const isMainGuild = guild.id === MAIN_GUILD_ID;
 
         let sentLocal = false;
-        let sentCentral = isMainGuild; // se for principal, não precisa enviar pro central separadamente
+        let sentCentral = isMainGuild;
 
-        // Envia para o canal de log local
+        // ===== LOG LOCAL =====
+
         const localLogChannelId = LOCAL_LOG_CHANNELS[guild.id];
+
         if (localLogChannelId) {
+
           try {
-            const localLogChannel = await client.channels.fetch(localLogChannelId);
+
+            const localLogChannel =
+              await client.channels.fetch(localLogChannelId);
 
             if (localLogChannel?.isTextBased()) {
-              const localEmbed = new EmbedBuilder(embed.toJSON()).setFooter({
-                text: `Servidor: ${guild.name} • ${guild.id}`,
+
+              const localEmbed = new EmbedBuilder(embed.toJSON())
+                .setFooter({
+                  text: `Servidor: ${guild.name} • ${guild.id}`,
+                });
+
+              await localLogChannel.send({
+                embeds: [localEmbed],
               });
 
-              await localLogChannel.send({ embeds: [localEmbed] });
               sentLocal = true;
+
             } else {
+
               console.error(
                 `[logarcategoria] ERRO (Local): Canal ${localLogChannelId} não encontrado ou não é texto.`
               );
+
             }
+
           } catch (error) {
+
             console.error(
               `[logarcategoria] ERRO (Local): Falha ao enviar para o canal ${localLogChannelId} na guilda ${guild.name}.`,
-              error
+              error.message
             );
+
           }
+
         } else {
-          console.error(
-            `[logarcategoria] ERRO (Local): Nenhum canal de log local configurado para a guild ${guild.id}.`
-          );
+
+          // Sem canal local configurado = OK
+          sentLocal = true;
+
         }
 
-        // Envia para o canal de log central (se não for a guilda principal)
+        // ===== LOG CENTRAL =====
+
         if (!isMainGuild) {
+
           try {
-            const centralLogChannel = await client.channels.fetch(CENTRAL_LOG_CHANNEL_ID);
+
+            const centralLogChannel =
+              await client.channels.fetch(CENTRAL_LOG_CHANNEL_ID);
 
             if (!centralLogChannel?.isTextBased()) {
+
               console.error(
-                `[logarcategoria] ERRO CRÍTICO: Canal de log CENTRAL (${CENTRAL_LOG_CHANNEL_ID}) não encontrado ou não é de texto.`
+                `[logarcategoria] ERRO CRÍTICO: Canal central (${CENTRAL_LOG_CHANNEL_ID}) não encontrado ou não é texto.`
               );
+
             } else {
-              const centralEmbed = new EmbedBuilder(embed.toJSON()).setFooter({
-                text: `Origem: ${guild.name} • ${guild.id}`,
+
+              const centralEmbed = new EmbedBuilder(embed.toJSON())
+                .setFooter({
+                  text: `Origem: ${guild.name} • ${guild.id}`,
+                });
+
+              await centralLogChannel.send({
+                embeds: [centralEmbed],
               });
 
-              await centralLogChannel.send({ embeds: [centralEmbed] });
               sentCentral = true;
+
             }
+
           } catch (error) {
+
             console.error(
-              `[logarcategoria] ERRO CRÍTICO: Falha ao enviar para o canal central ${CENTRAL_LOG_CHANNEL_ID}. Verifique as permissões do bot.`,
-              error
+              `[logarcategoria] ERRO CRÍTICO: Falha ao enviar para o canal central ${CENTRAL_LOG_CHANNEL_ID}.`,
+              error.message
             );
+
           }
+
         }
+
+        // ===== CONTAGEM =====
 
         if (sentLocal && sentCentral) {
           successCount++;
         } else {
           errorCount++;
         }
+
       } catch (err) {
-        console.error(`[logarcategoria] Erro ao logar canal ${channel.name}:`, err);
+
+        console.error(
+          `[logarcategoria] Erro ao logar canal ${channel.name}:`,
+          err
+        );
+
         errorCount++;
+
       }
 
+      // Delay anti rate limit
       await new Promise(res => setTimeout(res, 300));
+
     }
 
-    // 5. Feedback final
+    // ================== FINAL ==================
+
     await statusMsg.edit(
-      `✅ Concluído! Foram gerados **${successCount}** logs para a categoria **${category.name}**. Falhas: **${errorCount}**.`
+      `✅ Concluído! Foram gerados **${successCount}** logs para a categoria **${category.name}**.\n` +
+      `Falhas: **${errorCount}**.`
     );
+
   },
 };
