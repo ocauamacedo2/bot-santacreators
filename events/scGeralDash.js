@@ -1204,7 +1204,7 @@ if (CRONOGRAMA_LOGS_CHANNEL_ID) {
 
       items.push({
         userId: match[1],
-        ts: new Date(m.editedTimestamp || m.createdTimestamp), // Data da aprovação (edit) ou criação
+        ts: new Date(m.createdTimestamp), // Data da criação do pedido de aprovação
         source: "cronograma",
       });
     },
