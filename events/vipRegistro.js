@@ -4,11 +4,15 @@ import {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  StringSelectMenuBuilder,
+  StringSelectMenuOptionBuilder,
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
   ChannelType,
   Events,
+  TimestampStyles,
+  time,
 } from "discord.js";
 
 // Guard to prevent multiple initializations
@@ -367,6 +371,47 @@ export async function vipRegistroHandleInteraction(interaction, client) {
       return true;
     }
 
+    // ✅ NOVO: Handler para o menu de seleção de cidade
+    if (interaction.isStringSelectMenu() && interaction.customId === VIP_SEL_CITY_ID) {
+        const member = interaction.member;
+        const isAuth =
+            VIP_AUTH.has(member?.id) ||
+            member?.roles?.cache?.some((r) => VIP_AUTH.has(r.id));
+
+        if (!isAuth) {
+            await interaction.reply({ content: '🚫 Você não tem permissão para registrar.', ephemeral: true });
+            return true;
+        }
+
+        const cityKey = interaction.values[0];
+
+        const modal = new ModalBuilder()
+            .setCustomId(`${VIP_MODAL_ID}:${cityKey}`)
+            .setTitle('💎 Registrar Premium');
+
+        const inputNome = new TextInputBuilder().setCustomId('vip_nome_membro').setLabel('Nome do membro da equipe').setStyle(TextInputStyle.Short).setPlaceholder('Ex: Social M. | Maria').setRequired(true);
+        const inputBenef = new TextInputBuilder().setCustomId('vip_beneficiario').setLabel('Beneficiário (ID/@/texto)').setStyle(TextInputStyle.Short).setPlaceholder('Ex: 123... OU <@123...> OU @fulano OU qualquer texto').setRequired(true);
+        const inputVip = new TextInputBuilder().setCustomId('vip_tipo').setLabel('Tipo (livre)').setStyle(TextInputStyle.Short).setPlaceholder('Ex: Ouro / Prata / Rolepass / Premiação 2025 / #ABC123 / etc').setRequired(true);
+        const inputMotivoRegistro = new TextInputBuilder().setCustomId('vip_motivo_registro').setLabel('Motivo do registro').setStyle(TextInputStyle.Paragraph).setPlaceholder('Ex: Destaque, + Doação no Mês, Pagamento Mensal.. etc...').setRequired(true);
+
+        modal.addComponents(
+            new ActionRowBuilder().addComponents(inputNome),
+            new ActionRowBuilder().addComponents(inputBenef),
+            new ActionRowBuilder().addComponents(inputVip),
+            new ActionRowBuilder().addComponents(inputMotivoRegistro)
+        );
+
+        try {
+            await interaction.showModal(modal);
+        } catch (err) {
+            console.error('[VIP] showModal (city select) falhou:', err);
+            if (!interaction.deferred && !interaction.replied) {
+                await interaction.reply({ content: '⚠️ Interação expirada. Clique no botão novamente.', ephemeral: true }).catch(() => {});
+            }
+        }
+        return true;
+    }
+
     // ---------- ABRIR MODAL (REGISTRAR) ----------
     if (interaction.isButton() && interaction.customId === VIP_MENU_OPEN_ID) {
       const member = interaction.member;
@@ -382,68 +427,45 @@ export async function vipRegistroHandleInteraction(interaction, client) {
         return true;
       }
 
-      const modal = new ModalBuilder()
-        .setCustomId('vip_modal_submit')
-        .setTitle('💎 Registrar Premium');
+      const selectMenu = new StringSelectMenuBuilder()
+        .setCustomId(VIP_SEL_CITY_ID)
+        .setPlaceholder('Selecione a cidade do evento')
+        .addOptions(
+            Object.entries(CITIES).map(([key, city]) =>
+                new StringSelectMenuOptionBuilder()
+                    .setLabel(city.label)
+                    .setValue(key)
+                    .setEmoji(city.emoji)
+            )
+        );
 
-      const inputNome = new TextInputBuilder()
-        .setCustomId('vip_nome_membro')
-        .setLabel('Nome do membro da equipe')
-        .setStyle(TextInputStyle.Short)
-        .setPlaceholder('Ex: Social M. | Maria')
-        .setRequired(true);
+      const row = new ActionRowBuilder().addComponents(selectMenu);
 
-      const inputBenef = new TextInputBuilder()
-        .setCustomId('vip_beneficiario')
-        .setLabel('Beneficiário (ID/@/texto)')
-        .setStyle(TextInputStyle.Short)
-        .setPlaceholder('Ex: 123... OU <@123...> OU @fulano OU qualquer texto')
-        .setRequired(true);
-
-      const inputVip = new TextInputBuilder()
-        .setCustomId('vip_tipo')
-        .setLabel('Tipo (livre)')
-        .setStyle(TextInputStyle.Short)
-        .setPlaceholder('Ex: Ouro / Prata / Rolepass / Premiação 2025 / #ABC123 / etc')
-        .setRequired(true);
-
-      // ✅ NOVO: MOTIVO DO REGISTRO (fica aparente no embed)
-      const inputMotivoRegistro = new TextInputBuilder()
-        .setCustomId('vip_motivo_registro')
-        .setLabel('Motivo do registro')
-        .setStyle(TextInputStyle.Paragraph)
-        .setPlaceholder('Ex: Destaque, + Doação no Mês, Pagamento Mensal.. etc...')
-        .setRequired(true);
-
-      modal.addComponents(
-        new ActionRowBuilder().addComponents(inputNome),
-        new ActionRowBuilder().addComponents(inputBenef),
-        new ActionRowBuilder().addComponents(inputVip),
-        new ActionRowBuilder().addComponents(inputMotivoRegistro),
-      );
-
-      try {
-        await interaction.showModal(modal);
-      } catch (err) {
-        console.error('[VIP] showModal falhou:', err);
-        if (!interaction.deferred && !interaction.replied) {
-          await interaction.reply({
-            content: '⚠️ Interação expirada. Clique no botão novamente.',
-            ephemeral: true,
-          }).catch(() => {});
-        }
-      }
+      await interaction.reply({
+          content: '🌆 Para qual cidade é este registro de VIP?',
+          components: [row],
+          ephemeral: true,
+      });
       return true;
     }
 
     // ---------- SUBMIT DO MODAL (REGISTRO) ----------
-    if (interaction.isModalSubmit() && interaction.customId === 'vip_modal_submit') {
+    if (interaction.isModalSubmit() && interaction.customId.startsWith(VIP_MODAL_ID)) {
       const nome = interaction.fields.getTextInputValue('vip_nome_membro')?.trim();
       const benefRaw = interaction.fields.getTextInputValue('vip_beneficiario')?.trim();
       const tipoRaw = interaction.fields.getTextInputValue('vip_tipo')?.trim();
 
       // ✅ NOVO: pega o motivo
       const motivoRegistro = interaction.fields.getTextInputValue('vip_motivo_registro')?.trim();
+
+      // ✅ NOVO: Extrai a cityKey do customId
+      const customIdParts = interaction.customId.split(':');
+      const cityKey = customIdParts.length > 1 ? customIdParts[1] : null;
+
+      if (!cityKey || !CITIES[cityKey]) {
+          await interaction.reply({ content: "❌ Cidade inválida ou não selecionada. Por favor, comece o processo novamente.", ephemeral: true });
+          return true;
+      }
 
       const tipoNorm = vipNormalizeFree(tipoRaw);
       const decor = tipoNorm ? vipDecor[tipoNorm] : vipDecor.CUSTOM;
@@ -466,6 +488,9 @@ export async function vipRegistroHandleInteraction(interaction, client) {
         try { beneficiarioUser = await client.users.fetch(extractedId); } catch {}
       }
 
+      // ✅ NOVO: Pega o nome da cidade
+      const cityName = CITIES[cityKey].label;
+
       const embed = new EmbedBuilder()
         .setColor(decor.color)
         .setTitle(`${decor.emoji} ${decor.label} — 1 mês + Destaque`)
@@ -482,6 +507,8 @@ export async function vipRegistroHandleInteraction(interaction, client) {
               ? `${beneficiarioMention}\n\`${extractedId}\``
               : `${beneficiarioMention}`,
             inline: true
+          },
+          { name: '🌆 Cidade', value: `**${cityName}**`, inline: true },
           },
           { name: '🏷️ Nome (Equipe)', value: nome || '-', inline: true },
           { name: '🧾 Tipo (livre)', value: `**${tipoRaw || '-'}**`, inline: true },
@@ -503,8 +530,13 @@ export async function vipRegistroHandleInteraction(interaction, client) {
         .setImage(VIP_GIF)
         .setFooter({ text: 'SantaCreators – Premium' })
         .setTimestamp();
-
-      const registroMsg = await canal.send({ embeds: [embed] });
+      
+      // ✅ NOVO: Adiciona menção da cidade ao enviar a mensagem
+      const cityRoleMention = CITIES[cityKey] ? `<@&${CITIES[cityKey].roleId}>` : '';
+      const registroMsg = await canal.send({
+        content: `Novo registro de VIP para a ${cityName}! ${cityRoleMention}`,
+        embeds: [embed]
+      });
 
       const btnSolic = new ButtonBuilder()
         .setCustomId(`vip_solicitado_${registroMsg.id}`)

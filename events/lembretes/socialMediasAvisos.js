@@ -10,6 +10,7 @@ export function startSocialMediasAvisos(client) {
   // ================= CONFIGURAÇÃO =================
   const GUILD_ID = "1262262852782129183";
   const CHANNEL_REMINDER_ID = "1424489278615978114"; // Canal de avisos (onde o bot manda e apaga)
+import { resolveLogChannel } from "../channelResolver.js";
   const CHANNEL_EVENTOS_DIARIOS_ID = "1385003944803041371"; // Onde o evento é postado (para checar se já foi feito)
   const CHANNEL_CRONOGRAMA_ID = "1474605177771397223"; // Painel do cronograma (para checar domingo)
 
@@ -185,7 +186,7 @@ export function startSocialMediasAvisos(client) {
     }
 
     // 2. Enviar no Canal (Apagando anterior)
-    const channel = await client.channels.fetch(CHANNEL_REMINDER_ID).catch(() => null);
+    const channel = await resolveLogChannel(client, CHANNEL_REMINDER_ID);
     if (channel) {
       // Tenta apagar a última msg se tivermos o ID
       if (lastReminderMsgId) {
