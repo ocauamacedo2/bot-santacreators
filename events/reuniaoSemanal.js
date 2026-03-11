@@ -12,6 +12,7 @@ import {
   TextInputStyle,
   PermissionsBitField,
 } from "discord.js";
+import { createVipRecordProgrammatically } from "./vipRegistro.js";
 
 // ================= CONFIGURAÇÃO =================
 const ADMIN_CHANNEL_ID = "1480351746562981999"; // Canal Robusto (Resp)
@@ -610,11 +611,47 @@ export async function reuniaoSemanalHandleInteraction(interaction, client) {
     const winners = calculateWinners(data);
     const logs = await applyRoles(interaction.guild, winners, state);
     const publicChannel = await client.channels.fetch(PUBLIC_CHANNEL_ID).catch(() => null);
+
+    // =================================================
+    // ✅ GAMBIARRA: Registrar prêmios no vipRegistro.js
+    // =================================================
+    const registrarUser = interaction.user;
+    const winnerRecords = [
+        { winner: winners.winnerGeral, motivo: 'Creator Destaque' },
+        { winner: winners.winnerManager, motivo: 'Master Manager' },
+        { winner: winners.winnerSocial, motivo: 'Master Eventos' }
+    ];
+
+    let vipLogs = [];
+    for (const record of winnerRecords) {
+        if (record.winner && record.winner.id) {
+            try {
+                const member = await interaction.guild.members.fetch(record.winner.id);
+                const nomeEquipe = `${member.displayName} | ${member.id}`;
+
+                await createVipRecordProgrammatically(client, {
+                    registrarUser: registrarUser,
+                    beneficiarioRaw: record.winner.id,
+                    tipoRaw: 'vipevento2', // Conforme solicitado
+                    motivoRegistro: record.motivo,
+                    nomeEquipe: nomeEquipe
+                });
+                vipLogs.push(`- Registro VIP para ${record.motivo}: <@${record.winner.id}>`);
+            } catch (e) {
+                console.error(`[ReuniaoSemanal] Falha ao registrar VIP para ${record.motivo}:`, e);
+                vipLogs.push(`- ❌ Falha ao registrar VIP para ${record.motivo}`);
+            }
+        }
+    }
+    // =================================================
+
     if (publicChannel) {
       const publicEmbed = await buildPublicEmbed(state, data, winners, client);
       await publicChannel.send({ content: "@everyone Resumo da Reunião Semanal:", embeds: [publicEmbed] });
     }
-    await interaction.editReply({ content: `✅ **Reunião Publicada!**\n\n📜 **Logs de Cargos:**\n${logs.join("\n") || "Nenhuma alteração."}` });
+
+    const finalLogMessage = `✅ **Reunião Publicada!**\n\n📜 **Logs de Cargos:**\n${logs.join("\n") || "Nenhuma alteração."}\n\n💎 **Registros de Premiação:**\n${vipLogs.join('\n') || 'Nenhum prêmio registrado.'}`;
+    await interaction.editReply({ content: finalLogMessage });
     return true;
   }
 

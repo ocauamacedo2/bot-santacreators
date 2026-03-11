@@ -315,6 +315,80 @@ async function moverRegistrosPorFiltro(channel, filtro) {
   return { movidos };
 }
 
+// ====== FUNÇÃO PROGRAMÁTICA (GAMBIARRA) ======
+export async function createVipRecordProgrammatically(client, { registrarUser, beneficiarioRaw, tipoRaw, motivoRegistro, nomeEquipe }) {
+    const tipoNorm = vipNormalizeFree(tipoRaw);
+    const decor = tipoNorm ? vipDecor[tipoNorm] : vipDecor.CUSTOM;
+    const canal = await client.channels.fetch(VIP_CANAL_ID).catch(() => null);
+    if (!ensureIsTextChannel(canal)) {
+        console.error("[VIP Programmatic] Canal de registro VIP não encontrado ou inválido.");
+        return null;
+    }
+
+    const extractedId = extractId(beneficiarioRaw);
+    const beneficiarioMention = extractedId ? `<@${extractedId}>` : beneficiarioRaw;
+
+    let beneficiarioUser = null;
+    if (extractedId) {
+        try { beneficiarioUser = await client.users.fetch(extractedId); } catch {}
+    }
+
+    const embed = new EmbedBuilder()
+        .setColor(decor.color)
+        .setTitle(`${decor.emoji} ${decor.label} — 1 mês + Destaque`)
+        .setDescription(
+            [
+                'Registro de **premium** criado com sucesso.',
+                'Inclui: **1 mês** + **Destaque**.',
+            ].join('\n')
+        )
+        .addFields(
+            {
+                name: '👤 Beneficiário',
+                value: extractedId
+                    ? `${beneficiarioMention}\n\`${extractedId}\``
+                    : `${beneficiarioMention}`,
+                inline: true
+            },
+            { name: '✍️ Nome (Equipe)', value: nomeEquipe || '-', inline: true },
+            { name: '🧾 Tipo (livre)', value: `**${tipoRaw || '-'}**`, inline: true },
+            { name: '📌 Motivo do registro', value: motivoRegistro || '-', inline: false },
+            { name: '✍️ Registrado por', value: `<@${registrarUser.id}>`, inline: true },
+            { name: '🕒 Data', value: `<t:${Math.floor(Date.now() / 1000)}:f>`, inline: true },
+        )
+        .setAuthor({
+            name: `Registrado por ${registrarUser.tag}`,
+            iconURL: registrarUser.displayAvatarURL({ dynamic: true })
+        })
+        .setThumbnail(
+            beneficiarioUser?.displayAvatarURL?.({ dynamic: true, size: 256 }) ||
+            registrarUser.displayAvatarURL({ dynamic: true })
+        )
+        .setImage(VIP_GIF)
+        .setFooter({ text: 'SantaCreators – Premium' })
+        .setTimestamp();
+
+    const registroMsg = await canal.send({
+        content: `Novo registro de VIP!`,
+        embeds: [embed]
+    });
+
+    const targetId = extractedId || 'none';
+    const btnSolic = new ButtonBuilder().setCustomId(`vip_solicitado_${registroMsg.id}`).setLabel('📨 Já foi solicitado').setStyle(ButtonStyle.Secondary);
+    const btnRecebeu = new ButtonBuilder().setCustomId(`vip_recebeu_${registroMsg.id}_${targetId}`).setLabel('✅ Já recebeu').setStyle(ButtonStyle.Success);
+    const btnNegar = new ButtonBuilder().setCustomId(`vip_negar_${registroMsg.id}_${targetId}`).setLabel('❌ Negar').setStyle(ButtonStyle.Danger);
+
+    const row = new ActionRowBuilder().addComponents(btnSolic, btnRecebeu, btnNegar);
+    await registroMsg.edit({ components: [row] });
+
+    dashEmit("vip:criado", {
+        by: registrarUser.id,
+        __at: Date.now(),
+    });
+
+    return registroMsg;
+}
+
 // ====== READY: refresh + watchdog ======
 export async function vipRegistroOnReady(client) {
   if (globalThis.__VIP_REGISTRO_ON_READY_RAN__) return;
@@ -394,10 +468,10 @@ export async function vipRegistroHandleInteraction(interaction, client) {
         .setCustomId(VIP_MODAL_ID)
         .setTitle('💎 Registrar Premium');
 
-      const inputNome = new TextInputBuilder().setCustomId('vip_nome_membro').setLabel('Nome do membro da equipe').setStyle(TextInputStyle.Short).setPlaceholder('Ex: Macedo | 1000').setRequired(true);
-      const inputBenef = new TextInputBuilder().setCustomId('vip_beneficiario').setLabel('Beneficiário (ID/@/texto)').setStyle(TextInputStyle.Short).setPlaceholder('Ex:id discord do membro').setRequired(true);
-      const inputVip = new TextInputBuilder().setCustomId('vip_tipo').setLabel('Tipo (livre)').setStyle(TextInputStyle.Short).setPlaceholder('Ex: VIP Ouro, Rolepass, Premiação').setRequired(true);
-      const inputMotivoRegistro = new TextInputBuilder().setCustomId('vip_motivo_registro').setLabel('Motivo da premiação').setStyle(TextInputStyle.Paragraph).setPlaceholder('Ex: Creator Destaque, Master Manager, etc.').setRequired(true);
+      const inputNome = new TextInputBuilder().setCustomId('vip_nome_membro').setLabel('Nome do membro da equipe').setStyle(TextInputStyle.Short).setPlaceholder('Ex: Social M. | Maria').setRequired(true);
+      const inputBenef = new TextInputBuilder().setCustomId('vip_beneficiario').setLabel('Beneficiário (ID, @menção ou texto livre)').setStyle(TextInputStyle.Short).setPlaceholder('Ex: 123... OU <@123...> OU @fulano').setRequired(true);
+      const inputVip = new TextInputBuilder().setCustomId('vip_tipo').setLabel('Tipo (livre)').setStyle(TextInputStyle.Short).setPlaceholder('Ex: vipevento2, vipstaff, rolepass...').setRequired(true);
+      const inputMotivoRegistro = new TextInputBuilder().setCustomId('vip_motivo_registro').setLabel('✅ Motivo do registro').setStyle(TextInputStyle.Paragraph).setPlaceholder('Ex: Creator Destaque, Master Manager...').setRequired(true);
 
       modal.addComponents(
           new ActionRowBuilder().addComponents(inputNome),
@@ -412,12 +486,25 @@ export async function vipRegistroHandleInteraction(interaction, client) {
 
     // ---------- SUBMIT DO MODAL (REGISTRO) ----------
     if (interaction.isModalSubmit() && interaction.customId === VIP_MODAL_ID) {
+      await interaction.deferReply({ ephemeral: true });
+
       const nome = interaction.fields.getTextInputValue('vip_nome_membro')?.trim();
       const benefRaw = interaction.fields.getTextInputValue('vip_beneficiario')?.trim();
       const tipoRaw = interaction.fields.getTextInputValue('vip_tipo')?.trim();
-
-      // ✅ NOVO: pega o motivo
       const motivoRegistro = interaction.fields.getTextInputValue('vip_motivo_registro')?.trim();
+
+      const registroMsg = await createVipRecordProgrammatically(client, {
+        registrarUser: interaction.user,
+        beneficiarioRaw: benefRaw,
+        tipoRaw: tipoRaw,
+        motivoRegistro: motivoRegistro,
+        nomeEquipe: nome
+      });
+
+      if (!registroMsg) {
+        await interaction.editReply({ content: '❌ Falha ao criar o registro.' });
+        return true;
+      }
 
       const tipoNorm = vipNormalizeFree(tipoRaw);
       const decor = tipoNorm ? vipDecor[tipoNorm] : vipDecor.CUSTOM;
@@ -429,86 +516,11 @@ export async function vipRegistroHandleInteraction(interaction, client) {
         });
         return true;
       }
-
-      const extractedId = extractId(benefRaw); // pode ser null
-      const targetId = extractedId || 'none';
-      const beneficiarioMention = extractedId ? `<@${extractedId}>` : benefRaw;
-
-      let beneficiarioUser = null;
-      if (extractedId) {
-        try { beneficiarioUser = await client.users.fetch(extractedId); } catch {}
-      }
-
-      const embed = new EmbedBuilder()
-        .setColor(decor.color)
-        .setTitle(`${decor.emoji} ${decor.label} — 1 mês + Destaque`)
-        .setDescription(
-          [
-            'Registro de **premium** criado com sucesso.',
-            'Inclui: **1 mês** + **Destaque**.',
-          ].join('\n')
-        )
-        .addFields(
-          {
-            name: '👤 Beneficiário',
-            value: extractedId
-              ? `${beneficiarioMention}\n\`${extractedId}\``
-              : `${beneficiarioMention}`,
-            inline: true
-          },
-          { name: '️ Nome (Equipe)', value: nome || '-', inline: true },
-          { name: '🧾 Tipo (livre)', value: `**${tipoRaw || '-'}**`, inline: true },
-
-          // ✅ NOVO: motivo fica aparente
-          { name: '📌 Motivo do registro', value: motivoRegistro || '-', inline: false },
-
-          { name: '✍️ Registrado por', value: `<@${interaction.user.id}>`, inline: true },
-          { name: '🕒 Data', value: `<t:${Math.floor(Date.now() / 1000)}:f>`, inline: true },
-        )
-        .setAuthor({
-          name: `Registrado por ${interaction.user.tag}`,
-          iconURL: interaction.user.displayAvatarURL({ dynamic: true })
-        })
-        .setThumbnail(
-          beneficiarioUser?.displayAvatarURL?.({ dynamic: true, size: 256 }) ||
-          interaction.user.displayAvatarURL({ dynamic: true })
-        )
-        .setImage(VIP_GIF)
-        .setFooter({ text: 'SantaCreators – Premium' })
-        .setTimestamp();
       
-      const registroMsg = await canal.send({
-        content: `Novo registro de VIP!`,
-        embeds: [embed]
-      });
-
-      const btnSolic = new ButtonBuilder()
-        .setCustomId(`vip_solicitado_${registroMsg.id}`)
-        .setLabel('📨 Já foi solicitado')
-        .setStyle(ButtonStyle.Secondary);
-
-      const btnRecebeu = new ButtonBuilder()
-        .setCustomId(`vip_recebeu_${registroMsg.id}_${targetId}`)
-        .setLabel('✅ Já recebeu')
-        .setStyle(ButtonStyle.Success);
-
-      const btnNegar = new ButtonBuilder()
-        .setCustomId(`vip_negar_${registroMsg.id}_${targetId}`)
-        .setLabel('❌ Negar')
-        .setStyle(ButtonStyle.Danger);
-
-      await registroMsg.edit({ components: [new ActionRowBuilder().addComponents(btnSolic, btnRecebeu, btnNegar)] });
-
       await createFreshMenu(canal);
 
-      dashEmit("vip:criado", {
-        by: interaction.user.id,
-        __at: Date.now(),
-      });
-
-      await interaction.reply({
+      await interaction.editReply({
         content: `✅ Registro criado para **${benefRaw}** — tipo: **${tipoRaw}**.`,
-        ephemeral: true,
       });
       return true;
     }
