@@ -107,7 +107,13 @@ export function setupChannelLog(client) {
       const logChannel = await channel.guild.channels.fetch(logChannelId).catch(() => null);
       const botMember = await channel.guild.members.fetchMe();
 
-      if (member.roles.cache.has(OWNER_ID) || member.roles.cache.has(ADMIN_ID)) return;
+      // Se o executor for o dono do servidor, tiver um cargo maior que o do bot, ou tiver um cargo de bypass, não faz nada.
+      if (
+        member.id === channel.guild.ownerId ||
+        member.roles.highest.position > botMember.roles.highest.position ||
+        member.roles.cache.has(OWNER_ID) ||
+        member.roles.cache.has(ADMIN_ID)
+      ) return;
 
       if (!botMember.permissions.has('ManageRoles') || botMember.roles.highest.comparePositionTo(member.roles.highest) <= 0) {
         if (logChannel) logChannel.send({ content: `⚠️ <@&${OWNER_ID}> <@&${ADMIN_ID}> — O bot tentou punir **${member.user.tag}**, mas **não tem cargo suficiente**.` });
