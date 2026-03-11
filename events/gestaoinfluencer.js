@@ -32,6 +32,7 @@
     const path = await import('node:path');
     const { dashOn, dashEmit } = await import('../utils/dashHub.js');
     // ✅ Importa o getter de stats
+    const { resolveLogChannel } = await import('./channelResolver.js');
     const { getStatsForUser } = await import('./scGeralWeeklyRanking.js');
     // ✅ NOVO: Importa helpers do formscreator
     let formsCreator = {};
@@ -1250,7 +1251,7 @@ await msg.edit({
       }
 
       try {
-        const ch = await guild.channels.fetch(SC_GI_CFG.CHANNEL_DESLIGAMENTOS).catch(() => null);
+        const ch = await resolveLogChannel(guild.client, SC_GI_CFG.CHANNEL_DESLIGAMENTOS);
         if (ch && ch.type === ChannelType.GuildText) {
           const weeks = weeksSince(snapshot.joinDateMs);
           const months = monthsSince(snapshot.joinDateMs);

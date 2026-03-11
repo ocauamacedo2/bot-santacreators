@@ -1,4 +1,5 @@
 // /application/commands/admin/removerMassivo.js
+import { resolveLogChannel } from '../../events/channelResolver.js';
 // ✅ REMOVER MASSIVO DE CARGO — comando: !remover
 // • Remove um cargo de todo mundo (exceto protegidos)
 // • Log completo em arquivo .txt no canal de logs
@@ -212,7 +213,7 @@ export async function removerMassivoHandleMessage(message, client) {
     });
 
     // ----- LOG COMPLETO -----
-    const logs = await message.guild.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+    const logs = await resolveLogChannel(client, LOG_CHANNEL_ID);
     if (logs) {
       const elapsed = Date.now() - startedAt;
       const originalCmd = (content || `!remover ${role.id}`).slice(0, 1000);

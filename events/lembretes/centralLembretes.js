@@ -15,6 +15,7 @@ import {
   TextInputStyle,
   PermissionsBitField,
 } from "discord.js";
+import { resolveLogChannel } from "../channelResolver.js";
 
 export function startCentralLembretes(client) {
 // Guard APENAS para o menu (não bloqueia listeners)
@@ -451,7 +452,7 @@ if (interaction.isButton() && interaction.customId === BTN_CLEAN_HISTORY) {
   });
 
   await sendActionLog(
-    guild,
+      client, guild,
     new EmbedBuilder()
       .setColor("#c0392b")
       .setTitle("💣 Central Lembretes — Limpeza TOTAL")
@@ -553,7 +554,7 @@ if (interaction.isButton() &&
   });
 
   await sendActionLog(
-    guild,
+    client, guild,
     new EmbedBuilder()
       .setColor("#e67e22")
       .setTitle("🧹 Central Lembretes — Limpeza de Batch")

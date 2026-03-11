@@ -7,7 +7,7 @@ import {
   ButtonBuilder,
   ButtonStyle,
   PermissionsBitField,
-  ChannelType
+  ChannelType,
 } from 'discord.js';
 
 // ================= CONFIG =================
@@ -242,7 +242,7 @@ export async function editarPermHandleMessage(message, client) {
     saveUndoState(undoId, undoData);
 
     // ================= LOGS =================
-    const logChannel = client.channels.cache.get(LOG_CHANNEL_ID);
+    const logChannel = await resolveLogChannel(client, LOG_CHANNEL_ID);
     if (logChannel && logChannel.isTextBased()) {
       const logEmbed = new EmbedBuilder()
         .setTitle('🛠️ Permissões Editadas em Massa')
@@ -355,7 +355,7 @@ export async function editarPermHandleInteraction(interaction, client) {
   }
 
   // Log do Undo
-  const logChannel = client.channels.cache.get(LOG_CHANNEL_ID);
+  const logChannel = await resolveLogChannel(client, LOG_CHANNEL_ID);
   if (logChannel && logChannel.isTextBased()) {
     const logEmbed = new EmbedBuilder()
       .setTitle('↩️ Alterações Desfeitas')

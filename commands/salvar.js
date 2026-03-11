@@ -1,5 +1,6 @@
 import dotenv from 'dotenv';
 dotenv.config();
+import { resolveLogChannel } from '../events/channelResolver.js';
 
 // ✅ Canais de log por categoria
 const salvarCategorias = {
@@ -45,12 +46,12 @@ export default {
         const commandName = parts[0].toLowerCase().replace('!', '');
         
         const categoria = salvarCategorias[commandName];
-        if (!categoria) return;
+        if (!categoria || !categoria.canalId) return;
 
         // Pega o conteúdo após o comando
         const conteudo = message.content.slice(parts[0].length).trim();
         
-        const canalLog = client.channels.cache.get(categoria.canalId);
+        const canalLog = await resolveLogChannel(client, categoria.canalId);
 
         if (!canalLog) {
             return message.reply(`⚠️ Canal de log da categoria \`${commandName}\` não encontrado.`);
