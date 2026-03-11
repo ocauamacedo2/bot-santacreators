@@ -82,7 +82,7 @@ function hasDeletionPermission(executor, botMember) {
 /**
  * @param {import('discord.js').Client} client
  */
-export function installChannelDeleteProtection(client) {
+export default function installChannelDeleteProtection(client) {
     if (client.channelDeleteProtectionInstalled) return;
     client.channelDeleteProtectionInstalled = true;
 
