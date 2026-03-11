@@ -238,6 +238,21 @@ async function reanexar(client) {
       entrevistas.set(userId, dados);
       salvarEntrevistasEmDisco();
 
+      // ✅ APAGA A MENSAGEM DA PERGUNTA ANTERIOR PARA EVITAR DUPLICIDADE
+      if (dados.mensagens && dados.mensagens.length > 0) {
+        const lastMsgId = dados.mensagens.pop(); // Pega e remove o último ID do array
+        if (lastMsgId) {
+          try {
+            const oldMsg = await channel.messages.fetch(lastMsgId);
+            await oldMsg.delete();
+            console.log(`[Entrevista] Mensagem de pergunta anterior (${lastMsgId}) apagada com sucesso.`);
+          } catch (e) {
+            // Ignora se a msg não existir mais, o que é normal.
+            // console.log(`[Entrevista] Não foi possível apagar a msg ${lastMsgId}, talvez já tenha sido deletada.`);
+          }
+        }
+      }
+
       await logCompleto(client, {
         titulo: '🔄 Entrevista reanexada',
         cor: 0xf1c40f,
