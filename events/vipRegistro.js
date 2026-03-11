@@ -394,8 +394,8 @@ export async function vipRegistroHandleInteraction(interaction, client) {
         .setCustomId(VIP_MODAL_ID)
         .setTitle('💎 Registrar Premium');
 
-      const inputNome = new TextInputBuilder().setCustomId('vip_nome_membro').setLabel('Nome do membro da equipe').setStyle(TextInputStyle.Short).setPlaceholder('Ex: Social M. | Maria').setRequired(true);
-      const inputBenef = new TextInputBuilder().setCustomId('vip_beneficiario').setLabel('Beneficiário (ID/@/texto)').setStyle(TextInputStyle.Short).setPlaceholder('Ex: 123... OU <@123...> OU @fulano').setRequired(true);
+      const inputNome = new TextInputBuilder().setCustomId('vip_nome_membro').setLabel('Nome do membro da equipe').setStyle(TextInputStyle.Short).setPlaceholder('Ex: Macedo | 1000').setRequired(true);
+      const inputBenef = new TextInputBuilder().setCustomId('vip_beneficiario').setLabel('Beneficiário (ID/@/texto)').setStyle(TextInputStyle.Short).setPlaceholder('Ex:id discord do membro').setRequired(true);
       const inputVip = new TextInputBuilder().setCustomId('vip_tipo').setLabel('Tipo (livre)').setStyle(TextInputStyle.Short).setPlaceholder('Ex: VIP Ouro, Rolepass, Premiação').setRequired(true);
       const inputMotivoRegistro = new TextInputBuilder().setCustomId('vip_motivo_registro').setLabel('Motivo da premiação').setStyle(TextInputStyle.Paragraph).setPlaceholder('Ex: Creator Destaque, Master Manager, etc.').setRequired(true);
 
