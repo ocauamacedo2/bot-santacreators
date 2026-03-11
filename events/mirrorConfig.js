@@ -1,4 +1,4 @@
-// d:\santacreators-main\config\mirrorConfig.js
+// d:\santacreators-main\events\mirrorConfig.js
 
 /**
  * Configuração do sistema de espelhamento de categorias/canais.

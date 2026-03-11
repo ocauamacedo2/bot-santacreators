@@ -1,6 +1,6 @@
 // d:\santacreators-main\utils\channelResolver.js
-import { getMirroredId, getTargetGuildId } from './idRegistry.js'; // Corrigido para ser relativo
-import { MIRROR_CONFIG } from '../config/mirrorConfig.js';
+import { getMirroredId, getTargetGuildId } from './idRegistry.js';
+import { MIRROR_CONFIG } from './mirrorConfig.js';
 
 /**
  * Resolve o ID de um canal espelhado.

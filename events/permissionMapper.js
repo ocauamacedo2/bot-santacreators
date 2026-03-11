@@ -1,7 +1,7 @@
 // d:\santacreators-main\services\guildClone\permissionMapper.js
 import { OverwriteType } from 'discord.js';
 import { getMirroredId } from './idRegistry.js';
-import { MIRROR_CONFIG } from '../config/mirrorConfig.js';
+import { MIRROR_CONFIG } from './mirrorConfig.js';
 
 /**
  * Mapeia as permissões de um canal/categoria de origem para o destino.
