@@ -65,6 +65,9 @@ const ALINV1_REACT_INVALID = "❌";
 // ✅ anti-farm (mesmo registrador + mesma pessoa alinhada = 1 por hora)
 const COOLDOWN_MS = 60 * 60 * 1000;
 
+// ✅ NOVO: Limite de registros por cooldown
+const MAX_REGISTERS_PER_COOLDOWN = 3;
+
 // ✅ storage anti-farm (persistente)
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
