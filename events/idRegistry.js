@@ -111,3 +111,28 @@ export function getTargetGuildId(sourceGuildId) {
     const map = loadMirrorMap();
     return map.guilds[sourceGuildId]?.targetGuildId || null;
 }
+
+/**
+ * Procura um ID espelhado em todas as guildas de origem.
+ * @param {'roles' | 'categories' | 'channels'} type
+ * @param {string} sourceId
+ * @returns {{targetId: string, sourceGuildId: string, targetGuildId: string} | null}
+ */
+export function findMirroredId(type, sourceId) {
+  if (!sourceId) return null;
+  const map = loadMirrorMap();
+  if (!map.guilds) return null;
+
+  for (const sourceGuildId in map.guilds) {
+    const guildMap = map.guilds[sourceGuildId];
+    const targetId = guildMap?.[type]?.[sourceId];
+    if (targetId) {
+      return {
+        targetId,
+        sourceGuildId,
+        targetGuildId: guildMap.targetGuildId,
+      };
+    }
+  }
+  return null;
+}

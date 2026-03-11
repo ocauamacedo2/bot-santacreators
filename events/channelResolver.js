@@ -1,17 +1,16 @@
 // d:\santacreators-main\utils\channelResolver.js
-import { getMirroredId, getTargetGuildId } from './idRegistry.js';
-import { MIRROR_CONFIG } from './mirrorConfig.js';
+import { findMirroredId } from './idRegistry.js';
 
 /**
- * Resolve o ID de um canal espelhado.
+ * Resolve o ID de um canal espelhado, procurando em todas as guildas de origem mapeadas.
  * @param {string} sourceChannelId O ID do canal original.
  * @returns {string | null} O ID do canal espelhado ou null se não houver mapeamento.
  */
 export function resolveMirroredChannelId(sourceChannelId) {
-    const sourceGuildId = MIRROR_CONFIG.SOURCE_GUILD_ID;
-    if (!sourceGuildId || !sourceChannelId) return null;
-
-    return getMirroredId('channels', sourceGuildId, sourceChannelId);
+    if (!sourceChannelId) return null;
+    // A função findMirroredId agora faz a busca em todas as guildas de origem.
+    const result = findMirroredId('channels', sourceChannelId);
+    return result?.targetId || null;
 }
 
 /**
