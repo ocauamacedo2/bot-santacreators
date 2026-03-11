@@ -1,4 +1,5 @@
 import { AuditLogEvent, ChannelType, EmbedBuilder } from "discord.js";
+import { sendDualLog } from './logSender.js';
 
 // ================== CONFIGURAÇÃO DE LOGS ==================
 const MAIN_GUILD_ID = '1262262852782129183'; // Servidor Principal (Santa Creators)
@@ -87,7 +88,6 @@ export default {
       const client = channel.client;
 
       const guild = channel.guild;
-      const isMainGuild = guild.id === MAIN_GUILD_ID;
 
       const { executor, reason } = await fetchAuditExecutor(guild, channel.id);
 
@@ -132,29 +132,15 @@ export default {
       if (extras) embed.addFields({ name: "⚙️ Detalhes Extras", value: extras, inline: false });
       if (reason) embed.addFields({ name: "📝 Motivo (Audit Log)", value: reason, inline: false });
 
-      // Envia para o canal local
-      const localLogChannelId = LOCAL_LOG_CHANNELS[guild.id];
-      if (localLogChannelId) {
-          const localLogChannel = await guild.channels.fetch(localLogChannelId).catch(() => null);
-          if (localLogChannel) {
-              const localEmbed = EmbedBuilder.from(embed)
-                .setFooter({ text: `Servidor: ${guild.name} • ${guild.id}` });
-              await localLogChannel.send({ embeds: [localEmbed] }).catch(console.error);
-          }
-      }
-
-      // Envia para o canal central, se a origem não for a guilda principal
-      if (!isMainGuild) {
-          const centralLogChannel = await client.channels.fetch(CENTRAL_LOG_CHANNEL_ID).catch(() => null);
-          if (centralLogChannel) {
-              const centralEmbed = EmbedBuilder.from(embed)
-                  .setFooter({ text: `Origem: ${guild.name} • ${guild.id}` });
-              await centralLogChannel.send({ embeds: [centralEmbed] }).catch(console.error);
-          }
-      } else if (isMainGuild && !localLogChannelId) { // Se for a main guild mas não tiver log local configurado, manda no central
-          const centralLogChannel = await client.channels.fetch(CENTRAL_LOG_CHANNEL_ID).catch(() => null);
-          if (centralLogChannel) await centralLogChannel.send({ embeds: [embed.setFooter({ text: `Servidor: ${guild.name} • ${guild.id}` })] }).catch(console.error);
-      }
+      // Lógica de envio duplo refatorada
+      await sendDualLog({
+        client,
+        guild,
+        embed,
+        centralLogId: CENTRAL_LOG_CHANNEL_ID,
+        localLogMap: LOCAL_LOG_CHANNELS,
+        eventName: 'channelCreate'
+      });
     } catch (err) {
       console.error("[logs/channelCreate] erro:", err);
     }
