@@ -15,6 +15,7 @@ import {
   EmbedBuilder,
   PermissionsBitField,
 } from "discord.js";
+import { resolveLogChannel } from "./channelResolver.js";
 
 // __dirname no ESM
 const __filename = fileURLToPath(import.meta.url);
@@ -299,7 +300,7 @@ async function replaceButtonMessage(client) {
 }
 
 async function logStatusChange(client, interaction, { threadId, userId, nome, oldStatus, newStatus }) {
-  const logChannel = await client.channels.fetch(LOG_CHANNEL_ID_V2).catch(() => null);
+  const logChannel = await resolveLogChannel(client, LOG_CHANNEL_ID_V2);
   if (!logChannel) return;
 
   const actor = interaction.user;

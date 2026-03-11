@@ -12,6 +12,7 @@ import {
   TextInputStyle,
   OverwriteType,
 } from "discord.js";
+import { resolveLogChannel } from "./channelResolver.js";
 
 // ====== CONFIGS ======
 const CHANNEL_ID = '1384238156731252736';     // canal onde fica o botão
@@ -284,7 +285,7 @@ export async function cadastroManualHandleInteraction(interaction, client) {
     });
 
     // Envia Log
-    const logChannel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+    const logChannel = await resolveLogChannel(client, LOG_CHANNEL_ID);
     if (logChannel) {
       const logEmbed = new EmbedBuilder()
         .setTitle('🧹 Limpeza de Registros (Cadastro)')

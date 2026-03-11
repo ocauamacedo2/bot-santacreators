@@ -1,5 +1,6 @@
 import { PermissionsBitField, EmbedBuilder } from 'discord.js';
 import dotenv from 'dotenv';
+import { resolveLogChannel } from '../../events/channelResolver.js';
 
 dotenv.config();
 
@@ -56,7 +57,7 @@ export default {
             }, 10000);
 
             const logChannelId = process.env.LOG_CHANNEL_ID;
-            const logChannel = message.guild.channels.cache.get(logChannelId);
+            const logChannel = await resolveLogChannel(message.client, logChannelId);
             if (logChannel) {
                 await logChannel.send({ embeds: [kickEmbed] });
             } else {

@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { EmbedBuilder } from 'discord.js';
+import { resolveLogChannel } from './channelResolver.js';
 
 // =====================================================
 // ⚙️ CONFIGURAÇÃO
@@ -156,7 +157,7 @@ async function updateDashboard(client) {
 
 async function checkLimitsAndAlert(client) {
   const state = loadState();
-  const channelAlert = await client.channels.fetch(ALERT_CHANNEL_ID).catch(() => null);
+  const channelAlert = await resolveLogChannel(client, ALERT_CHANNEL_ID);
   if (!channelAlert) return;
 
   const guild = channelAlert.guild;

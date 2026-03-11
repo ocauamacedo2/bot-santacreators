@@ -15,6 +15,7 @@ import {
 import { getChannel } from '../utils/cacheDiscord.js';
 import { onceIn } from '../utils/onceIn.js';
 import { dashEmit } from '../utils/dashHub.js';
+import { resolveLogChannel } from './channelResolver.js';
 import {
   createFormsCreatorRecord,
   findFormsCreatorThreadIdByUserId,
@@ -354,7 +355,7 @@ export async function pedirSetHandleInteraction(interaction, client) {
 
   // MODAL → Resposta
   if (interaction.isModalSubmit() && interaction.customId === 'formulario_set') {
-    await interaction.deferReply({ flags: 64 }).catch(() => {});
+    await interaction.deferReply({ ephemeral: true }).catch(() => {});
 
     const nome       = interaction.fields.getTextInputValue('nome_ingame');
     const passaporte = interaction.fields.getTextInputValue('id_passaporte');
@@ -401,16 +402,16 @@ export async function pedirSetHandleInteraction(interaction, client) {
         .setStyle(ButtonStyle.Danger)
     );
 
-    const canal = await client.channels.fetch(CANAL_LOG_REGISTRO).catch(() => null);
+    const canal = await resolveLogChannel(client, CANAL_LOG_REGISTRO);
     if (canal) await canal.send({ embeds: [embed], components: [row] });
 
-    await interaction.followUp({ content: '✅ Pedido enviado com sucesso!', flags: 64 });
+    await interaction.followUp({ content: '✅ Pedido enviado com sucesso!', ephemeral: true });
     return true;
   }
 
   // BOTÃO → Aprovar
   if (interaction.isButton() && interaction.customId.startsWith('aprovar_set_')) {
-    await interaction.deferUpdate().catch(() => {}); // deferUpdate não tem ephemeral
+    await interaction.deferUpdate().catch(() => {});
 
     const idUnico = interaction.customId.replace('aprovar_set_', '');
     let dados = pedidosSet.get(idUnico);
@@ -426,7 +427,7 @@ export async function pedirSetHandleInteraction(interaction, client) {
     }
 
     if (!dados) {
-      await interaction.followUp({ content: '❌ Dados do formulário não encontrados (nem pelo embed).', flags: 64 });
+      await interaction.followUp({ content: '❌ Dados do formulário não encontrados (nem pelo embed).', ephemeral: true });
       return true;
     }
 
@@ -434,12 +435,12 @@ export async function pedirSetHandleInteraction(interaction, client) {
 
     const membro = await interaction.guild.members.fetch(userId).catch(() => null);
     if (!membro) {
-      await interaction.followUp({ content: '❌ Membro não encontrado.', flags: 64 });
+      await interaction.followUp({ content: '❌ Membro não encontrado.', ephemeral: true });
       return true;
     }
 
     if (!CARGOS_AUTORIZADOS_APROVACAO.some(id => interaction.member.roles.cache.has(id))) {
-      await interaction.followUp({ content: '❌ Você não tem permissão para aprovar sets.', flags: 64 });
+      await interaction.followUp({ content: '❌ Você não tem permissão para aprovar sets.', ephemeral: true });
       return true;
     }
 
@@ -479,7 +480,7 @@ export async function pedirSetHandleInteraction(interaction, client) {
     } catch (e) {
       console.error("[PedirSet] Falha ao reativar/criar registro no FormsCreator:", e);
       try {
-        await interaction.followUp({ content: `⚠️ Ocorreu um erro com o FormsCreator: ${e.message}`, flags: 64 });
+        await interaction.followUp({ content: `⚠️ Ocorreu um erro com o FormsCreator: ${e.message}`, ephemeral: true });
       } catch {}
     }
 
@@ -517,7 +518,7 @@ export async function pedirSetHandleInteraction(interaction, client) {
       });
     } catch (err) {
       console.warn('⚠️ Erro ao atualizar a interação:', err.message);
-      await interaction.followUp({ content: '✅ Set aprovado, mas houve erro ao atualizar a mensagem.', flags: 64 }).catch(() => {});
+      await interaction.followUp({ content: '✅ Set aprovado, mas houve erro ao atualizar a mensagem.', ephemeral: true }).catch(() => {});
     }
 
     await membro.send({
@@ -538,7 +539,7 @@ export async function pedirSetHandleInteraction(interaction, client) {
       ]
     }).catch(() => {});
 
-    const canalEquipe = await client.channels.fetch(CANAL_AVISO_EQUIPE).catch(() => null);
+    const canalEquipe = await resolveLogChannel(client, CANAL_AVISO_EQUIPE);
     if (canalEquipe) {
       await canalEquipe.send({
         content: `<@&${CARGO_EQUIPE_CREATOR}>`,
@@ -565,7 +566,7 @@ export async function pedirSetHandleInteraction(interaction, client) {
       });
     }
 
-    const canalAdm = await client.channels.fetch(CANAL_ADMINISTRACAO).catch(() => null);
+    const canalAdm = await resolveLogChannel(client, CANAL_ADMINISTRACAO);
     if (canalAdm) {
       await canalAdm.send({
         content: `📞 ZipZap recebido: \`${zipzap}\` de <@${userId}> <@&${CARGO_COORDENACAO}>`,
@@ -594,12 +595,12 @@ export async function pedirSetHandleInteraction(interaction, client) {
     }
 
     if (!dados) {
-      await interaction.reply({ content: '❌ Dados do formulário não encontrados (nem pelo embed).', flags: 64 });
+      await interaction.reply({ content: '❌ Dados do formulário não encontrados (nem pelo embed).', ephemeral: true });
       return true;
     }
 
     if (!CARGOS_AUTORIZADOS_APROVACAO.some(id => interaction.member.roles.cache.has(id))) {
-      await interaction.reply({ content: '❌ Você não tem permissão para reprovar sets.', flags: 64 });
+      await interaction.reply({ content: '❌ Você não tem permissão para reprovar sets.', ephemeral: true });
       return true;
     }
 

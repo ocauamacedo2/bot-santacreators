@@ -15,6 +15,7 @@ import {
 } from 'discord.js';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import fetch from 'node-fetch';
+import { resolveLogChannel } from '../../events/channelResolver.js';
 import dotenv from 'dotenv';
 dotenv.config();
 
@@ -633,7 +634,7 @@ if (!isOwner && !message.member.permissionsIn(message.channel).has(PermissionsBi
     setTimeout(()=>chatMsg.delete().catch(()=>{}), 15000);
 
     // LOG no canal de logs
-    const logChannel = await message.client.channels.fetch(LOG_CLEAR_CHANNEL_ID).catch(()=>null);
+    const logChannel = await resolveLogChannel(message.client, LOG_CLEAR_CHANNEL_ID);
     if (logChannel) {
       const logEmbed = new EmbedBuilder()
         .setColor(0x5865F2)

@@ -11,6 +11,7 @@ import {
   TextInputStyle,
   Events
 } from 'discord.js';
+import { resolveLogChannel } from './channelResolver.js';
 
 // Guard to prevent multiple initializations if imported multiple times
 if (globalThis.__SC_FOCO_INSTALLED__) {
@@ -327,7 +328,7 @@ export async function focoSemanaisHandleInteraction(interaction, client) {
       mensagemAtual = msg?.id || null;
 
       // log detalhado
-      const canalLogs = await client.channels.fetch(CANAL_LOGS_FOCO_ID).catch(()=>null);
+      const canalLogs = await resolveLogChannel(client, CANAL_LOGS_FOCO_ID);
       if (canalLogs) {
         const embedLog = new EmbedBuilder()
           .setTitle('📥 Novo Foco Semanal Registrado')

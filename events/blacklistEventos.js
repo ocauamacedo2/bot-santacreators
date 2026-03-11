@@ -13,6 +13,7 @@ import {
   TextInputStyle,
   escapeMarkdown
 } from "discord.js";
+import { resolveLogChannel } from "./channelResolver.js";
 
 ///teste
 const __filename = fileURLToPath(import.meta.url);
@@ -306,7 +307,7 @@ async function notifyStaff(client, guild, action, entry, actor) {
 
 
 async function logAction(client, guild, action, entry, actor, displayMsgUrl) {
-  const channel = await client.channels.fetch(CHANNEL_LOGS_ID).catch(() => null);
+  const channel = await resolveLogChannel(client, CHANNEL_LOGS_ID);
   if (!channel || !channel.isTextBased()) return;
 
   const title = action === "ADD" ? "🚫 Adicionado à Blacklist" : "✅ Removido da Blacklist";

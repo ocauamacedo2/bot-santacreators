@@ -14,6 +14,7 @@
 
 import { EmbedBuilder, Collection, AuditLogEvent } from 'discord.js';
 import dotenv from 'dotenv';
+import { resolveLogChannel } from '../../events/channelResolver.js';
 dotenv.config();
 
 /* ==========================
@@ -146,34 +147,16 @@ function channelLink(guildId, channelId) {
  * ⚠️ CORREÇÃO IMPORTANTE:
  * canais muitas vezes NÃO estão no cache. Então precisa tentar fetch.
  */
-async function getLocalLogChannel(guild) {
+async function getLocalLogChannel(client, guild) {
   if (!guild) return null;
 
   const mappedId = GUILD_LOG_CHANNEL_MAP[guild.id];
-  if (mappedId) {
-    const ch = guild.channels.cache.get(mappedId) || await guild.channels.fetch(mappedId).catch(() => null);
-    return ch?.isTextBased() ? ch : null;
-  }
-
   const fallbackId = FALLBACK_LOGS_CHANNEL[0];
-  if (!fallbackId) return null;
-
-  const ch = guild.channels.cache.get(fallbackId) || await guild.channels.fetch(fallbackId).catch(() => null);
-  return ch?.isTextBased() ? ch : null;
+  return await resolveLogChannel(client, mappedId || fallbackId);
 }
 
 async function getCentralLogChannel(client) {
-  const mainGuild =
-    client.guilds.cache.get(MAIN_GUILD_ID) ||
-    await client.guilds.fetch(MAIN_GUILD_ID).catch(() => null);
-
-  if (!mainGuild) return null;
-
-  const ch =
-    mainGuild.channels.cache.get(MAIN_LOG_CHANNEL_ID) ||
-    await mainGuild.channels.fetch(MAIN_LOG_CHANNEL_ID).catch(() => null);
-
-  return ch?.isTextBased() ? ch : null;
+  return await resolveLogChannel(client, MAIN_LOG_CHANNEL_ID);
 }
 
 async function sendEphemeral(channel, payload, ttlMs = 15_000) {
@@ -294,10 +277,11 @@ function singleEmbed({
  *    - se origem for outro DC     => embed external (nome+id + origem)
  */
 async function sendLogs({ originGuild, originChannel, embedArgs }) {
-  if (!originGuild?.client) return;
+  const client = originGuild?.client;
+  if (!client) return;
 
   // 1) Local
-  const localCh = await getLocalLogChannel(originGuild);
+  const localCh = await getLocalLogChannel(client, originGuild);
   if (localCh) {
     const embLocal = singleEmbed({
       ...embedArgs,

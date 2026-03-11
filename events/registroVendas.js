@@ -14,6 +14,7 @@ import {
   PermissionsBitField,
 } from "discord.js";
 import { dashEmit } from "../utils/dashHub.js";
+import { resolveLogChannel } from "./channelResolver.js";
 
 // ================= CONFIGURAÇÃO =================
 const LOG_CHANNEL_ID = "1475237983782179028"; // Canal de Logs
@@ -241,7 +242,7 @@ async function updatePanel(client) {
 }
 
 async function logSale(client, interaction, data, scoreInfo) {
-  const channel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+  const channel = await resolveLogChannel(client, LOG_CHANNEL_ID);
   if (!channel) {
     console.error(`[Vendas] Erro: Canal de logs ${LOG_CHANNEL_ID} não encontrado.`);
     return;
@@ -281,7 +282,7 @@ async function logSale(client, interaction, data, scoreInfo) {
 }
 
 async function logAdminAction(client, interaction, targetId, actionLabel, amount, oldTotal, newTotal) {
-  const channel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+  const channel = await resolveLogChannel(client, LOG_CHANNEL_ID);
   if (!channel) return;
 
   const embed = new EmbedBuilder()

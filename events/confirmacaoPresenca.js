@@ -13,6 +13,7 @@ import {
   PermissionsBitField,
 } from "discord.js";
 import { dashEmit } from "../utils/dashHub.js";
+import { resolveLogChannel } from "./channelResolver.js";
 
 // ================= CONFIGURAÇÃO =================
 const PANEL_CHANNEL_ID = "1477800974574682242"; // Canal do Painel
@@ -291,7 +292,7 @@ async function updatePanel(client) {
 }
 
 async function logAction(client, interaction, action, orgName, extra = "") {
-  const channel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+  const channel = await resolveLogChannel(client, LOG_CHANNEL_ID);
   if (!channel) return;
 
   const color = action === "CONFIRMOU" ? COLORS.YES : action === "NEGOU" ? COLORS.NO : COLORS.PENDING;

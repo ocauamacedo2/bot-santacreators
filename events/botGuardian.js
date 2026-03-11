@@ -1,5 +1,6 @@
 // d:\santacreators-main\events\botGuardian.js
 import { EmbedBuilder, AuditLogEvent, ActionRowBuilder, ButtonBuilder, ButtonStyle, PermissionsBitField } from 'discord.js';
+import { resolveLogChannel } from './channelResolver.js';
 
 // ================= CONFIG =================
 const LOG_CHANNEL_ID = '1377900084293009418';
@@ -75,7 +76,7 @@ function createLogEmbed({ botMember, executor, allowed, inviteURL }) {
  */
 async function sendLog(client, guild, embed, executor) {
     try {
-        const logChannel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+        const logChannel = await resolveLogChannel(client, LOG_CHANNEL_ID);
         if (!logChannel || !logChannel.isTextBased()) {
             console.error(`[BotGuardian] Canal de log ${LOG_CHANNEL_ID} não encontrado ou não é de texto.`);
             return;
@@ -124,7 +125,7 @@ async function handleBotAdded(member) {
     if (!executor) {
         await member.kick('Não foi possível verificar o autor da adição. Expulso por segurança.').catch(err => console.error(`[BotGuardian] Falha ao expulsar bot sem executor: ${err}`));
         const embed = new EmbedBuilder().setTitle('⚠️ Adição de Bot Bloqueada (Executor Desconhecido)').setColor('Orange').setDescription(`O bot **${member.user.tag}** foi **expulso** porque não foi possível identificar quem o adicionou.`).addFields({ name: '🤖 Bot', value: `${member.user} (\`${member.user.id}\`)` }, { name: '🕒 Data/Hora', value: `<t:${Math.floor(Date.now() / 1000)}:F>` });
-        const logChannel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+        const logChannel = await resolveLogChannel(client, LOG_CHANNEL_ID);
         if (logChannel) await logChannel.send({ embeds: [embed] });
         return;
     }

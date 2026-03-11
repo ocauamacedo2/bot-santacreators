@@ -9,6 +9,7 @@ import {
   TextInputStyle,
 } from "discord.js";
 import { dashEmit } from "../utils/dashHub.js";
+import { resolveLogChannel } from "./channelResolver.js";
 
 // ============================================================================
 // PAGAMENTOS SOCIAL MÍDIAS (SEM LISTENERS AQUI)
@@ -267,7 +268,7 @@ function criarRowStatus(messageId) {
 // Log visual completo
 // =============================
 async function logPagamento(client, interaction, titulo, descricao, linkMsg = null) {
-  const canalLog = await client.channels.fetch(CANAL_LOG_PAGAMENTO).catch(() => null);
+  const canalLog = await resolveLogChannel(client, CANAL_LOG_PAGAMENTO);
   if (!canalLog) return;
 
   const embed = new EmbedBuilder()

@@ -1,5 +1,6 @@
 import { EmbedBuilder } from 'discord.js';
 import dotenv from 'dotenv';
+import { resolveLogChannel } from '../../events/channelResolver.js';
 
 dotenv.config();
 
@@ -73,7 +74,7 @@ export default {
             const replyMessage = await message.channel.send({ embeds: [timeoutEmbed] });
 
             const logChannelId = process.env.LOG_CHANNEL_ID;
-            const logChannel = client.channels.cache.get(logChannelId);
+            const logChannel = await resolveLogChannel(client, logChannelId);
             if (logChannel) {
                 await logChannel.send({ embeds: [timeoutEmbed] });
             } else {

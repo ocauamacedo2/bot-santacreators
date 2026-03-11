@@ -22,6 +22,7 @@ import fs from "fs";
 import path from "path";
 
 import { getCachedMessage } from "./_deleteCache.js";
+import { resolveLogChannel } from "../channelResolver.js";
 
 const HUMAN_LOG_CHANNEL_ID = "1377834202417856732";
 const BOT_LOG_CHANNEL_ID = "1377852282779078666";

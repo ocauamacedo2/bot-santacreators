@@ -11,6 +11,7 @@ import {
 } from "discord.js";
 
 import { dashEmit } from "../utils/dashHub.js";
+import { resolveLogChannel } from "./channelResolver.js";
 // ======================= CONFIG =======================
 const MENU_CHANNEL_ID = "1414718856542421052"; // canal do menu (não envia lá)
 
@@ -441,7 +442,7 @@ export async function lideresConvitesHandleInteraction(i, client) {
 
     // LOG
     try {
-      const log = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+      const log = await resolveLogChannel(client, LOG_CHANNEL_ID);
       if (log && canSend(log)) {
         const emb = new EmbedBuilder()
           .setColor("#c0392b")
@@ -488,7 +489,7 @@ export async function lideresConvitesHandleInteraction(i, client) {
 
     // LOG
     try {
-      const log = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+      const log = await resolveLogChannel(client, LOG_CHANNEL_ID);
       if (log && canSend(log)) {
         const emb = new EmbedBuilder()
           .setColor("#7f8c8d")
@@ -599,7 +600,7 @@ export async function lideresConvitesHandleInteraction(i, client) {
 
     // log de envio
     try {
-      const log = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+      const log = await resolveLogChannel(client, LOG_CHANNEL_ID);
       if (log && canSend(log)) {
         const logEmb = new EmbedBuilder()
           .setColor("#8e44ad")

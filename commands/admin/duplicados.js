@@ -1,5 +1,6 @@
 // d:\bots\commands\admin\duplicados.js
 import { EmbedBuilder } from 'discord.js';
+import { resolveLogChannel } from '../../events/channelResolver.js';
 
 // Configurações
 const LOG_CHANNEL_ID = '1469962433412989082';
@@ -117,7 +118,7 @@ export default {
         setTimeout(() => responseMsg.delete().catch(() => {}), 60000);
 
         // 4. Logs no Canal Específico
-        const logChannel = client.channels.cache.get(LOG_CHANNEL_ID) || await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+        const logChannel = await resolveLogChannel(client, LOG_CHANNEL_ID);
 
         if (logChannel && logChannel.isTextBased()) {
             const logEmbed = new EmbedBuilder()

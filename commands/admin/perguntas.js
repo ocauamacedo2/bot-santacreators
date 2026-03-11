@@ -1,6 +1,7 @@
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from 'discord.js';
 import entrevista from '../../utils/entrevista.js';
 import { dashEmit } from "../../utils/dashHub.js";
+import { resolveLogChannel } from '../../events/channelResolver.js';
 
 const ALERT_ROLE_IDS = [
   "1282119104576098314", // mkt creators
@@ -95,7 +96,7 @@ if (!fetchedAllMembers) {
 
 
     // 📝 LOG NO CANAL NOVO
-    const logChannel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+    const logChannel = await resolveLogChannel(client, LOG_CHANNEL_ID);
     if (logChannel) {
   try {
     const logEmbed = new EmbedBuilder()

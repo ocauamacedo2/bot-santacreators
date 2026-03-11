@@ -10,27 +10,18 @@ import {
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
-  StringSelectMenuBuilder,
-  StringSelectMenuOptionBuilder,
   TimestampStyles,
   time,
 } from "discord.js";
 // ✅ HUB do dashboard (o mesmo que o scGeralDash usa)
 import { dashEmit } from "../utils/dashHub.js";
+import { resolveLogChannel } from "./channelResolver.js";
 
 // ── CONFIG DE CANAIS ─────────────────────────────────────────────
 const VIP_MENU_CHANNEL_ID = "1414718336826081330"; // onde fica o MENU e os REGISTROS
 const VIP_NOTIFY_CHANNEL_ID = "1424489278615978114"; // notificação de novo registro
 const VIP_CHECK_MENU_CHAT_ID = "1387922662134775818"; // referência ao "outro menu" para checagem
 const VIP_LOGS_CHANNEL_ID = "1414726734472941708"; // logs de ações (tudo)
-
-// ✅ NOVO: Cidades e seus Cargos
-const CITIES = {
-  nobre:   { label: "Cidade Nobre",   roleId: "1379021805544804382", emoji: "💎" },
-  santa:   { label: "Cidade Santa",   roleId: "1379021888709464168", emoji: "🎅" },
-  grande:  { label: "Cidade Grande",  roleId: "1418691103397253322", emoji: "🏙️" },
-  maresia: { label: "Cidade Maresia", roleId: "1379021994678288465", emoji: "🌊" },
-};
 
 // ✅ Arquivo do cronograma para dados automáticos
 const __filename = fileURLToPath(import.meta.url);
@@ -86,7 +77,6 @@ const REPROVE_ALLOWED_USERS = [IDS.EU];
 // ── CONSTs de UI ─────────────────────────────────────────────────
 const VIP_MENU_BUTTON_ID = "vip_menu_open";
 const VIP_MODAL_ID = "vip_modal_submit";
-const VIP_SELECT_CITY_ID = "vip_select_city";
 
 const VIP_BTN_SOLICITADO_ID = "vip_mark_solicitado";
 const VIP_BTN_PAGO_ID = "vip_mark_pago";
@@ -278,34 +268,17 @@ function VIP_buildMenuComponents() {
   ];
 }
 
-function VIP_buildModal(eventData = null, cityKey) {
-  const getDate = () => {
-    try {
-      // ✅ FIX: Usa Intl.DateTimeFormat para formatação de data robusta e segura,
-      // evitando erros de "Invalid Date" que travam a interação.
-      const formatter = new Intl.DateTimeFormat('pt-BR', {
-        timeZone: 'America/Sao_Paulo',
-        day: '2-digit',
-        month: '2-digit',
-        year: 'numeric'
-      });
-      return formatter.format(new Date());
-    } catch (e) {
-      // Fallback caso o Intl falhe (muito raro)
-      const now = new Date();
-      return `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()}`;
-    }
-  };
-
+function VIP_buildModal(eventData = null) {
   return new ModalBuilder()
-    .setCustomId(`${VIP_MODAL_ID}:${cityKey}`)
-    .setTitle(`Registro VIP - ${CITIES[cityKey].label}`)
+    .setCustomId(VIP_MODAL_ID)
+    .setTitle("Registro de VIP por Evento")
     .addComponents(
       new ActionRowBuilder().addComponents(
         new TextInputBuilder()
           .setCustomId("vip_evt_nome")
           .setLabel("Nome do evento ganho")
           .setStyle(TextInputStyle.Short)
+          .setValue(eventData?.eventName || "")
           .setRequired(true)
       ),
       new ActionRowBuilder().addComponents(
@@ -313,7 +286,7 @@ function VIP_buildModal(eventData = null, cityKey) {
           .setCustomId("vip_evt_data")
           .setLabel("Dia do evento (ex: 08/09/2025)")
           .setStyle(TextInputStyle.Short)
-          .setValue(getDate())
+          .setValue(getTodayDateFormatted())
           .setRequired(true)
       ),
       new ActionRowBuilder().addComponents(
@@ -335,6 +308,7 @@ function VIP_buildModal(eventData = null, cityKey) {
           .setCustomId("vip_premiacao")
           .setLabel("Premiação")
           .setStyle(TextInputStyle.Paragraph)
+          .setValue(eventData?.prizes || "")
           .setRequired(true)
       )
     );
@@ -356,9 +330,6 @@ function VIP_buildReproveModal(messageId) {
 }
 
 function VIP_buildRegistroEmbed(guild, registrante, payload) {
-  const cityData = CITIES[payload.cityKey];
-  const cityRoleMention = cityData ? `<@&${cityData.roleId}>` : `\`${payload.cityKey}\``;
-
   const when = new Date();
   const avatar = registrante.displayAvatarURL({ size: 256 });
   return new EmbedBuilder()
@@ -378,7 +349,6 @@ function VIP_buildRegistroEmbed(guild, registrante, payload) {
       { name: "📅 Dia do evento", value: `\`${payload.data}\``, inline: true },
       { name: "🆔 ID do ganhador", value: `<@${payload.ganhadorId}> (\`${payload.ganhadorId}\`)`, inline: true },
       { name: "🏢 Organização", value: `\`${payload.org}\``, inline: true },
-      { name: "🌆 Cidade", value: cityRoleMention, inline: true },
       { name: "🎁 Premiação", value: payload.premiacao || "—", inline: false },
       { name: "📝 Solicitações", value: "—", inline: false },
       { name: "💸 Pagamento", value: "—", inline: false }
@@ -543,31 +513,16 @@ export async function vipEventoHandleInteraction(i, client) {
     if (isVipMenuButton) {
       // ABRIR MODAL
       if (i.customId === VIP_MENU_BUTTON_ID) {
-        if (!canRegister(i.member)) return safeReply(i, { content: "🚫 Você não tem permissão para registrar.", ephemeral: true });
-
-        const selectMenu = new StringSelectMenuBuilder()
-          .setCustomId(VIP_SELECT_CITY_ID)
-          .setPlaceholder("Selecione a cidade do evento")
-          .addOptions(
-            Object.entries(CITIES).map(([key, data]) =>
-              new StringSelectMenuOptionBuilder()
-                .setLabel(data.label)
-                .setValue(key)
-                .setEmoji(data.emoji)
-            )
-          );
-
-        const row = new ActionRowBuilder().addComponents(selectMenu);
-
-        await safeReply(i, {
-          content: "🌆 **Em qual cidade foi o evento?**",
-          components: [row],
-          ephemeral: true,
-        });
-
+        if (!canRegister(i.member)) {
+          await safeReply(i, { content: "🚫 Você não tem permissão para registrar.", ephemeral: true });
+          return true;
+        }
+        // ✅ Pega dados do evento de hoje para pré-preencher
+        const eventData = getTodayEventData();
+        const modal = VIP_buildModal(eventData);
+        await i.showModal(modal);
         return true;
       }
-
 
       // FILTROS
       if (!canAction(i.member)) {
@@ -596,26 +551,8 @@ export async function vipEventoHandleInteraction(i, client) {
       return true;
     }
 
-    // ✅ NOVO: Handler para o select menu de cidade
-    if (i.isStringSelectMenu?.() && i.customId === VIP_SELECT_CITY_ID) {
-      try {
-        const cityKey = i.values[0];
-        if (!CITIES[cityKey]) {
-          return await safeReply(i, { content: "❌ Cidade inválida selecionada.", ephemeral: true });
-        }
-
-        const modal = VIP_buildModal(null, cityKey);
-        await i.showModal(modal);
-      } catch (err) {
-        // ✅ FIX: Adiciona log de erro e avisa o usuário em vez de falhar silenciosamente.
-        console.error("[vipEvento] Falha ao mostrar o modal:", err);
-        await safeReply(i, { content: "❌ Ocorreu um erro ao abrir o formulário. Tente novamente.", ephemeral: true });
-      }
-      return true;
-    }
-
     // ── 2) MODAL: Reprovar pagamento (submit) ─────────────────────
-    if (i.isModalSubmit?.() && i.customId?.startsWith(VIP_REPROVE_MODAL_ID)) {
+    if (isVipModalReprovar) {
       await safeDefer(i, { ephemeral: true });
 
       if (!canReprove(i.member)) {
@@ -683,7 +620,7 @@ export async function vipEventoHandleInteraction(i, client) {
         );
       }
 
-      const logs = await guild.channels.fetch(VIP_LOGS_CHANNEL_ID).catch(() => null);
+      const logs = await resolveLogChannel(client, VIP_LOGS_CHANNEL_ID);
       logs?.isTextBased() &&
         logs
           .send({
@@ -707,19 +644,11 @@ export async function vipEventoHandleInteraction(i, client) {
     }
 
     // ── 3) MODAL: Criar registro ──────────────────────────────────
-    if (i.isModalSubmit?.() && i.customId?.startsWith(VIP_MODAL_ID)) {
+    if (isVipModalCriar) {
       await safeDefer(i, { ephemeral: true });
 
       if (!canRegister(i.member)) {
         await safeReply(i, { content: "🚫 Você não tem permissão para registrar.", ephemeral: true });
-        return true;
-      }
-
-      // ✅ Extrai a chave da cidade do customId
-      const parts = i.customId.split(":");
-      const cityKey = parts[1];
-      if (!cityKey || !CITIES[cityKey]) {
-        await safeReply(i, { content: "❌ Erro: Cidade não identificada no formulário.", ephemeral: true });
         return true;
       }
 
@@ -736,7 +665,7 @@ export async function vipEventoHandleInteraction(i, client) {
         return true;
       }
 
-      const embed = VIP_buildRegistroEmbed(guild, i.user, { evento, data, ganhadorId, org, premiacao, cityKey });
+      const embed = VIP_buildRegistroEmbed(guild, i.user, { evento, data, ganhadorId, org, premiacao });
       const msg = await menuCh.send({ embeds: [embed], components: VIP_buildRegistroButtons(false, false, false) });
 
       await VIP_sendDM_VIP(
@@ -857,7 +786,7 @@ export async function vipEventoHandleInteraction(i, client) {
           );
         }
 
-        const logs = await guild.channels.fetch(VIP_LOGS_CHANNEL_ID).catch(() => null);
+        const logs = await resolveLogChannel(client, VIP_LOGS_CHANNEL_ID);
         logs?.isTextBased() &&
           logs
             .send({
@@ -909,7 +838,7 @@ export async function vipEventoHandleInteraction(i, client) {
           );
         }
 
-        const logs = await guild.channels.fetch(VIP_LOGS_CHANNEL_ID).catch(() => null);
+        const logs = await resolveLogChannel(client, VIP_LOGS_CHANNEL_ID);
         logs?.isTextBased() &&
           logs
             .send({

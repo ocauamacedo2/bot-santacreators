@@ -1,5 +1,6 @@
 // d:\bots\commands\admin\cargosvazios.js
 import { EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, ComponentType } from 'discord.js';
+import { resolveLogChannel } from '../../events/channelResolver.js';
 
 // Configurações
 const LOG_CHANNEL_ID = '1469964510315020450';
@@ -160,7 +161,7 @@ export default {
                 emptyRoles.delete(roleId);
 
                 // Log no canal específico
-                const logChannel = client.channels.cache.get(LOG_CHANNEL_ID) || await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+                const logChannel = await resolveLogChannel(client, LOG_CHANNEL_ID);
                 if (logChannel && logChannel.isTextBased()) {
                     const logEmbed = new EmbedBuilder()
                         .setTitle('🗑️ Cargo Vazio Deletado')

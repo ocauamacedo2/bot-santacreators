@@ -8,6 +8,7 @@ import {
   ButtonStyle
 } from 'discord.js';
 import fetch from 'node-fetch';
+import { resolveLogChannel } from '../../events/channelResolver.js';
 
 const MAX_LEN = 2000;
 const LOG_CHANNEL_ID = '1425184455185924127';
