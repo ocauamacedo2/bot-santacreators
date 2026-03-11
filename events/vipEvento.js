@@ -79,6 +79,20 @@ const REPROVE_ALLOWED_USERS = [IDS.EU];
 // ── CONSTs de UI ─────────────────────────────────────────────────
 const VIP_MENU_BUTTON_ID = "vip_menu_open";
 const VIP_MODAL_ID = "vip_modal_submit";
+const VIP_SEL_CITY_ID = 'vip_select_city';
+
+const CITIES = {
+    nobre: { label: "Nobre", emoji: "👑", roleId: "1379021805544804382" },
+    santa: { label: "Santa", emoji: "🎅", roleId: "1379021888709464168" },
+    maresia: { label: "Maresia", emoji: "🌊", roleId: "1379021994678288465" },
+    royal: { label: "Royal UK", emoji: "🇬🇧", roleId: "1379021933324271719" },
+    universo: { label: "Universo", emoji: "🌌", roleId: "1379022090891427892" },
+    kng: { label: "KNG", emoji: "🦁", roleId: "1379022161519312896" },
+    malta: { label: "Malta", emoji: "🇲🇹", roleId: "1379022050403815454" },
+    real: { label: "Real", emoji: "💎", roleId: "1423348501110198343" },
+    grande: { label: "Grande", emoji: "🐘", roleId: "1418691103397253322" },
+    boomerang: { label: "Boomerang", emoji: "🪃", roleId: "1423354185570586694" },
+};
 
 const VIP_BTN_SOLICITADO_ID = "vip_mark_solicitado";
 const VIP_BTN_PAGO_ID = "vip_mark_pago";
