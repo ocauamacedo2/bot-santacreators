@@ -1,5 +1,5 @@
 // d:\santacreators-main\commands\admin\criarCategoriaEspelho.js
-import { PermissionsBitField } from 'discord.js';
+import { PermissionsBitField, ChannelType } from 'discord.js';
 import { MIRROR_CONFIG } from './mirrorConfig.js';
 import { ensureGuildEntry } from './idRegistry.js';
 import { cloneSingleCategory } from './cloneCategory.js';
@@ -20,20 +20,40 @@ export default {
   description: 'Cria um espelho de uma ou mais categorias em um servidor de destino.',
   async execute(message, args, client) {
     // 1. Validação de Permissão
-    if (!hasPermission(message.member)) {
+    const memberOnTarget = await message.guild.members.fetch(message.author.id).catch(() => null);
+    if (!hasPermission(memberOnTarget)) {
       return message.reply('❌ Você não tem permissão para usar este comando.');
     }
 
-    // 2. Validação de Contexto
-    if (message.guild.id !== MIRROR_CONFIG.SOURCE_GUILD_ID) {
-      return message.reply('❌ Este comando só pode ser executado no servidor de origem configurado.');
+    // 2. Parse dos IDs de Categoria
+    const categoryIds = args.join(' ').replace(/,/g, ' ').split(/\s+/).filter(id => /^\d+$/.test(id));
+    if (categoryIds.length === 0) {
+      return message.reply('❓ Uso: `!criar <ID_DA_CATEGORIA_1> [ID_DA_CATEGORIA_2]...` (use no servidor de **destino**).');
+    }
+    const uniqueCategoryIds = [...new Set(categoryIds)];
+
+    // 3. Validação de Contexto (LÓGICA INVERTIDA)
+    const targetGuild = message.guild; // O servidor de destino é onde o comando é executado.
+    let sourceGuild = null;
+
+    // Tenta encontrar a guilda de origem baseada no primeiro ID de categoria
+    const firstCategoryId = uniqueCategoryIds[0];
+    for (const guild of client.guilds.cache.values()) {
+      if (guild.id === targetGuild.id) continue; // Não pode copiar de si mesmo
+
+      try {
+        const channel = await guild.channels.fetch(firstCategoryId);
+        if (channel && channel.type === ChannelType.GuildCategory) {
+          sourceGuild = guild;
+          break; // Encontrou a guilda de origem
+        }
+      } catch (e) {
+        // Canal não encontrado nesta guilda, continua procurando
+      }
     }
 
-    const sourceGuild = message.guild;
-    const targetGuild = await client.guilds.fetch(MIRROR_CONFIG.TARGET_GUILD_ID).catch(() => null);
-
-    if (!targetGuild) {
-      return message.reply('❌ Não foi possível encontrar o servidor de destino. Verifique o `TARGET_GUILD_ID` e se o bot está no servidor.');
+    if (!sourceGuild) {
+      return message.reply(`❌ Não consegui encontrar a categoria com ID \`${firstCategoryId}\` em nenhum dos servidores em que estou (exceto este). Verifique o ID.`);
     }
 
     // 3. Validação de Permissões do Bot
@@ -47,14 +67,6 @@ export default {
     if (missingPerms.length > 0) {
       return message.reply(`❌ O bot não tem as permissões necessárias no servidor de destino: \`${missingPerms.join(', ')}\``);
     }
-
-    // 4. Parse dos IDs de Categoria
-    const categoryIds = args.join(' ').replace(/,/g, ' ').split(/\s+/).filter(id => /^\d+$/.test(id));
-    if (categoryIds.length === 0) {
-      return message.reply('❓ Uso: `!criar <ID_DA_CATEGORIA_1> [ID_DA_CATEGORIA_2]...`');
-    }
-
-    const uniqueCategoryIds = [...new Set(categoryIds)];
 
     // 5. Garante a entrada no registro
     ensureGuildEntry(sourceGuild.id, targetGuild.id);
@@ -70,7 +82,14 @@ export default {
 
     // 6. Processa cada categoria
     for (const categoryId of uniqueCategoryIds) {
-      await initialReply.edit(`⏳ Processando categoria \`${categoryId}\`...`);
+      // Valida se a categoria pertence à guilda de origem encontrada
+      const categoryChannel = await sourceGuild.channels.fetch(categoryId).catch(() => null);
+      if (!categoryChannel || categoryChannel.type !== ChannelType.GuildCategory) {
+        totalReport.errors.push(`ID ${categoryId} não é uma categoria válida no servidor de origem '${sourceGuild.name}'.`);
+        continue;
+      }
+
+      await initialReply.edit(`⏳ Processando categoria \`${categoryChannel.name}\` (\`${categoryId}\`)...`);
 
       const result = await cloneSingleCategory(categoryId, sourceGuild, targetGuild);
 
