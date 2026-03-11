@@ -678,6 +678,7 @@ export async function vipEventoHandleInteraction(i, client) {
 
           dashEmit("vip:reprovado", {
   by: i.user.id,
+  __at: Date.now(),
 });
 
       await safeReply(i, { content: "✅ Reprovado e registrado com motivo. Botões desabilitados.", ephemeral: true });
@@ -765,6 +766,7 @@ export async function vipEventoHandleInteraction(i, client) {
 
       dashEmit("vip:criado", {
   by: i.user.id,
+  __at: Date.now(),
 });
 
 
@@ -859,6 +861,7 @@ export async function vipEventoHandleInteraction(i, client) {
 
             dashEmit("vip:solicitado", {
   by: i.user.id,
+  __at: Date.now(),
 });
 
 
@@ -909,7 +912,8 @@ export async function vipEventoHandleInteraction(i, client) {
             .catch(() => {});
 
             dashEmit("vip:pago", {
-  by: i.user.id,
+  by: i.user.id,  
+  __at: Date.now(),
 })
 
         await safeReply(i, { content: "✅ Marcado como **pago**. Botões desabilitados.", ephemeral: true });
