@@ -16,7 +16,7 @@ import {
 
 
 import { dashOn } from "../utils/dashHub.js";
-import { resolveLogChannel } from "../utils/channelResolver.js";
+import { resolveLogChannel } from "./channelResolver.js";
 
 // ✅ __dirname no ESM
 const __filename = fileURLToPath(import.meta.url);

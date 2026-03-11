@@ -12,7 +12,7 @@ import {
   TextInputStyle,
 } from "discord.js";
 import { dashEmit } from "../utils/dashHub.js";
-import { resolveLogChannel } from "../utils/channelResolver.js";
+import { resolveLogChannel } from "./channelResolver.js";
 
 // ✅ __dirname no ESM (pra path absoluto e estável)
 const __filename = fileURLToPath(import.meta.url);

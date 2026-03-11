@@ -1,5 +1,5 @@
 // d:\santacreators-main\utils\channelResolver.js
-import { getMirroredId, getTargetGuildId } from '../services/guildClone/idRegistry.js';
+import { getMirroredId, getTargetGuildId } from './idRegistry.js';
 import { MIRROR_CONFIG } from '../config/mirrorConfig.js';
 
 /**

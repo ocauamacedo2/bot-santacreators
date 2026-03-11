@@ -10,7 +10,7 @@ import copycargo  from '../commands/admin/copycargo.js';
 import perguntas from '../commands/admin/perguntas.js';
 import perfildc from '../commands/admin/perfildc.js';
 import infoid from '../commands/admin/infoid.js';
-import criarCategoriaEspelho from '../commands/admin/criarCategoriaEspelho.js';
+import criarCategoriaEspelho from './criarCategoriaEspelho.js';
 
 import ping       from '../commands/admin/ping.js';
 import duplicados from '../commands/admin/duplicados.js';
