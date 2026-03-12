@@ -127,35 +127,16 @@ export default {
       if (extras) embed.addFields({ name: "⚙️ Detalhes Extras", value: extras, inline: false });
       if (reason) embed.addFields({ name: "📝 Motivo (Audit Log)", value: reason, inline: false });
 
-      // --- DUAL LOG ---
-      const isMainGuild = guild.id === MAIN_GUILD_ID;
-
-      // 1. Envia para o canal de log local
       const localLogChannelId = LOCAL_LOG_CHANNELS[guild.id];
       if (localLogChannelId) {
         try {
           const localLogChannel = await client.channels.fetch(localLogChannelId);
           if (localLogChannel?.isTextBased()) {
-            const localEmbed = new EmbedBuilder(embed.toJSON()).setFooter({ text: `Servidor: ${guild.name} • ${guild.id}` });
+            const localEmbed = EmbedBuilder.from(embed).setFooter(null);
             await localLogChannel.send({ embeds: [localEmbed] });
           }
         } catch (error) {
           console.error(`[channelDelete] ERRO (Local): Falha ao enviar para o canal ${localLogChannelId} na guilda ${guild.name}.`, error.message);
-        }
-      }
-
-      // 2. Envia para o canal de log central (se não for a guilda principal)
-      if (!isMainGuild) {
-        try {
-          const centralLogChannel = await client.channels.fetch(CENTRAL_LOG_CHANNEL_ID);
-          if (!centralLogChannel?.isTextBased()) {
-            console.error(`[channelDelete] ERRO CRÍTICO: Canal de log CENTRAL (${CENTRAL_LOG_CHANNEL_ID}) não encontrado ou não é de texto.`);
-          } else {
-            const centralEmbed = new EmbedBuilder(embed.toJSON()).setFooter({ text: `Origem: ${guild.name} • ${guild.id}` });
-            await centralLogChannel.send({ embeds: [centralEmbed] });
-          }
-        } catch (error) {
-          console.error(`[channelDelete] ERRO CRÍTICO: Falha ao enviar para o canal central ${CENTRAL_LOG_CHANNEL_ID}. Verifique as permissões do bot.`, error.message);
         }
       }
     } catch (err) {

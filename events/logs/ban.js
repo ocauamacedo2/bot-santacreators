@@ -71,25 +71,7 @@ export function setupBanLog(client) {
         })
         .setTimestamp();
 
-      // --- DUAL LOG ---
-      const localLogChannelId = LOCAL_LOG_CHANNELS[guild.id];
-      if (localLogChannelId) {
-        const localLogChannel = await client.channels.fetch(localLogChannelId).catch(() => null);
-        if (localLogChannel?.isTextBased()) {
-          const localEmbed = new EmbedBuilder(embed.toJSON()).setFooter({ text: `Servidor: ${guild.name} • ${guild.id}` });
-          await localLogChannel.send({ embeds: [localEmbed] }).catch(console.error);
-        }
-      }
-
-      if (!isMainGuild) {
-        const centralLogChannel = await client.channels.fetch(CENTRAL_LOG_BAN_ID).catch(() => null);
-        if (centralLogChannel?.isTextBased()) {
-          const centralEmbed = new EmbedBuilder(embed.toJSON()).setFooter({ text: `Origem: ${guild.name} • ${guild.id}` });
-          await centralLogChannel.send({ embeds: [centralEmbed] }).catch(console.error);
-        }
-      } else if (isMainGuild && !localLogChannelId) {
-          const centralLogChannel = await client.channels.fetch(CENTRAL_LOG_BAN_ID).catch(() => null);
-          if (centralLogChannel) await centralLogChannel.send({ embeds: [embed.setFooter({ text: `Servidor: ${guild.name} • ${guild.id}` })] }).catch(console.error);
+      const localLogChannelId = LOCAL_LOG_CHANNELS[guild
       }
     } catch (err) {
       console.error('[ERRO] Falha no log de ban:', err);
