@@ -1,8 +1,3 @@
-const CARGOLOG_LOCAL_REMOVE_CHANNEL_MAP = {
-  '1262262852782129183': '1352491135339204649',
-  '1362899773992079533': '1363295056634843226',
-  '1452416085751234733': '1455311262237065388',
-};
 import { EmbedBuilder, AuditLogEvent } from 'discord.js';
 
 const CARGOLOG_LOCAL_ADD_CHANNEL_MAP = {
@@ -11,19 +6,22 @@ const CARGOLOG_LOCAL_ADD_CHANNEL_MAP = {
   '1452416085751234733': '1455312395269443813',
 };
 
+const CARGOLOG_LOCAL_REMOVE_CHANNEL_MAP = {
+  '1262262852782129183': '1352491135339204649',
+  '1362899773992079533': '1363295056634843226',
+  '1452416085751234733': '1455311262237065388',
+};
 
-function getLocalAddChannel(client, guild) {
+async function getLocalAddChannel(client, guild) {
   const mappedId = CARGOLOG_LOCAL_ADD_CHANNEL_MAP[guild.id];
   if (!mappedId) return null;
-  const ch = guild.channels.cache.get(mappedId) || client.channels.cache.get(mappedId);
-  return ch?.isTextBased?.() ? ch : null;
+  return await client.channels.fetch(mappedId).catch(() => null);
 }
 
-function getLocalRemoveChannel(client, guild) {
+async function getLocalRemoveChannel(client, guild) {
   const mappedId = CARGOLOG_LOCAL_REMOVE_CHANNEL_MAP[guild.id];
   if (!mappedId) return null;
-  const ch = guild.channels.cache.get(mappedId) || client.channels.cache.get(mappedId);
-  return ch?.isTextBased?.() ? ch : null;
+  return await client.channels.fetch(mappedId).catch(() => null);
 }
 
 function formatRoleLocal(guild, roleId) {
@@ -81,8 +79,8 @@ export function setupRoleUpdateLog(client) {
         console.error('[CARGOLOG] erro audit log:', err);
       }
 
-      const localAddCh = getLocalAddChannel(client, guild);
-      const localRemoveCh = getLocalRemoveChannel(client, guild);
+      const localAddCh = await getLocalAddChannel(client, guild);
+      const localRemoveCh = await getLocalRemoveChannel(client, guild);
 
       if (localAddCh && addedRoles.length) {
         const embLocalAdd = buildLocalEmbed({ type: 'add', guild, member: newMember, executorUser, roleIds: addedRoles });

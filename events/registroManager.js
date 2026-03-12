@@ -37,7 +37,6 @@ import {
 } from "discord.js";
 
 import { dashEmit } from "../utils/dashHub.js";
-import { resolveLogChannel } from "./channelResolver.js";
 import { graficoManagersEmitUpdate } from "./GraficoManagers.js";
 
 // ===============================

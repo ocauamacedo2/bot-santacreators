@@ -1,5 +1,4 @@
 import { AuditLogEvent, ChannelType, EmbedBuilder } from 'discord.js';
-import { resolveLogChannel } from '../channelResolver.js';
 
 // ================== CONFIG ==================
 // Canais para onde os logs de proteção serão enviados
