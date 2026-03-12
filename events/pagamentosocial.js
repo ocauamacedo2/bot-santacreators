@@ -709,7 +709,7 @@ if (id.startsWith("pago__") || id.startsWith("solicitado__") || id.startsWith("r
 
         const canal = await client.channels.fetch(CANAL_PAGAMENTO).catch(() => null);
         if (!canal || !canal.isTextBased()) {
-          await interaction.reply({ content: "❌ Não achei o canal de pagamento.", ephemeral: true }).catch(() => {});
+          await interaction.editReply({ content: "❌ Não achei o canal de pagamento." }).catch(() => {});
           return true;
         }
 
@@ -747,7 +747,7 @@ if (id.startsWith("pago__") || id.startsWith("solicitado__") || id.startsWith("r
 
         const mensagem = await canal.send({ embeds: [embed] }).catch(() => null);
         if (!mensagem) {
-          await interaction.reply({ content: "❌ Falhei ao enviar o registro no canal.", ephemeral: true }).catch(() => {});
+          await interaction.editReply({ content: "❌ Falhei ao enviar o registro no canal." }).catch(() => {});
           return true;
         }
 
@@ -757,7 +757,7 @@ if (id.startsWith("pago__") || id.startsWith("solicitado__") || id.startsWith("r
         await canal.send({ embeds: [criarEmbedMenu()], components: [criarRowMenu()] }).catch(() => {});
         await limparBotoesAntigos(client, canal).catch(() => {});
 
-        await interaction.reply({ content: "✅ Registro criado!", ephemeral: true }).catch(() => {});
+        await interaction.editReply({ content: "✅ Registro criado!" }).catch(() => {});
 
         try {
   dashEmit("pagamento:criado", {
@@ -811,13 +811,13 @@ if (id.startsWith("pago_desc_") || id.startsWith("solicitado_desc_") || id.start
 
   const canal = await client.channels.fetch(CANAL_PAGAMENTO).catch(() => null);
   if (!canal || !canal.isTextBased()) {
-    await interaction.followUp({ content: "❌ Não achei o canal.", ephemeral: true }).catch(() => {});
+    await interaction.editReply({ content: "❌ Não achei o canal." }).catch(() => {});
     return true;
   }
 
   const msgOriginal = await canal.messages.fetch(messageId).catch(() => null);
   if (!msgOriginal?.embeds?.[0]) {
-    await interaction.followUp({ content: "❌ Não achei o embed desse registro.", ephemeral: true }).catch(() => {});
+    await interaction.editReply({ content: "❌ Não achei o embed desse registro." }).catch(() => {});
     return true;
   }
 
@@ -872,7 +872,7 @@ if (id.startsWith("pago_desc_") || id.startsWith("solicitado_desc_") || id.start
 
   const msgNova = await canal.send({ embeds: [embedAtualizado] }).catch(() => null);
   if (!msgNova) {
-    await interaction.followUp({ content: "❌ Falhei ao enviar a atualização.", ephemeral: true }).catch(() => {});
+    await interaction.editReply({ content: "❌ Falhei ao enviar a atualização." }).catch(() => {});
     return true;
   }
 
@@ -897,7 +897,7 @@ if (id.startsWith("pago_desc_") || id.startsWith("solicitado_desc_") || id.start
   await canal.send({ embeds: [criarEmbedMenu()], components: [criarRowMenu()] }).catch(() => {});
   await limparBotoesAntigos(client, canal).catch(() => {});
 
-  await interaction.followUp({ content: "✅ Atualizado e jogado pro final do chat!", ephemeral: true }).catch(() => {});
+  await interaction.editReply({ content: "✅ Atualizado e jogado pro final do chat!" }).catch(() => {});
 
   // ✅ EMITE EVENTO PRO GERALDASH (aqui!)
   try {
@@ -946,7 +946,7 @@ if (id.startsWith("pago_desc_") || id.startsWith("solicitado_desc_") || id.start
 
     return false;
   } catch (err) {
-    if (isUnknownInteraction(err)) return true;
+    if (isUnknownInteraction(err)) return true; // Ignora erros de interação já respondida/expirada
     console.warn("Erro no sistema de pagamentos:", err);
     return true;
   }
