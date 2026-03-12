@@ -276,8 +276,6 @@ export default {
         (selfDelete && authorObj?.bot === true) ||
         (selfDelete && !authorObj); // 👈 chave pra consertar o teu problema
 
-      const isMainGuild = guild.id === MAIN_GUILD_ID;
-
       const categoryName = getCategoryName(channel);
 
       const authorTag = authorObj
@@ -437,30 +435,13 @@ export default {
 
       const embedsToSend = [embed, ...reconstructedEmbeds].slice(0, 10);
 
-      // --- DUAL LOG ---
       const localLogChannelId = LOCAL_LOG_CHANNELS[guild.id];
       if (localLogChannelId) {
         const localLogChannel = await client.channels.fetch(localLogChannelId).catch(() => null);
         if (localLogChannel?.isTextBased()) {
-          const localEmbeds = embedsToSend.map(e => new EmbedBuilder(e.toJSON()).setFooter({ text: `Servidor: ${guild.name} • ${guild.id}` }));
+          const localEmbeds = embedsToSend.map(e => new EmbedBuilder(e.toJSON()).setFooter(null));
           await localLogChannel.send({ embeds: localEmbeds, files: attachments.length ? attachments.slice(0, 10) : undefined }).catch(console.error);
         }
-      }
-
-      if (!isMainGuild) {
-        const centralLogId = deletionByBot ? CENTRAL_LOG_BOT_DELETE_ID : CENTRAL_LOG_HUMAN_DELETE_ID;
-        const centralLogChannel = await client.channels.fetch(centralLogId).catch(() => null);
-        if (centralLogChannel?.isTextBased()) {
-          const centralEmbeds = embedsToSend.map(e => new EmbedBuilder(e.toJSON()).setFooter({ text: `Origem: ${guild.name} • ${guild.id}` }));
-          await centralLogChannel.send({ embeds: centralEmbeds, files: attachments.length ? attachments.slice(0, 10) : undefined }).catch(console.error);
-        }
-      } else if (isMainGuild && !localLogChannelId) {
-          const centralLogId = deletionByBot ? CENTRAL_LOG_BOT_DELETE_ID : CENTRAL_LOG_HUMAN_DELETE_ID;
-          const centralLogChannel = await client.channels.fetch(centralLogId).catch(() => null);
-          if (centralLogChannel) {
-              const centralEmbeds = embedsToSend.map(e => new EmbedBuilder(e.toJSON()).setFooter({ text: `Servidor: ${guild.name} • ${guild.id}` }));
-              await centralLogChannel.send({ embeds: centralEmbeds, files: attachments.length ? attachments.slice(0, 10) : undefined }).catch(console.error);
-          }
       }
     } catch (err) {
       try {

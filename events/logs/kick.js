@@ -28,7 +28,6 @@ export function setupKickLog(client) {
       );
 
       if (!entry) return;
-      const isMainGuild = guild.id === MAIN_GUILD_ID;
 
       const executor = entry.executor;
       const reason = entry.reason || 'Sem motivo especificado';
@@ -54,25 +53,13 @@ export function setupKickLog(client) {
         })
         .setTimestamp();
 
-      // --- DUAL LOG ---
       const localLogChannelId = LOCAL_LOG_CHANNELS[guild.id];
       if (localLogChannelId) {
         const localLogChannel = await client.channels.fetch(localLogChannelId).catch(() => null);
         if (localLogChannel?.isTextBased()) {
-          const localEmbed = new EmbedBuilder(embed.toJSON()).setFooter({ text: `Servidor: ${guild.name} • ${guild.id}` });
+          const localEmbed = new EmbedBuilder(embed.toJSON()).setFooter(null);
           await localLogChannel.send({ embeds: [localEmbed] }).catch(console.error);
         }
-      }
-
-      if (!isMainGuild) {
-        const centralLogChannel = await client.channels.fetch(CENTRAL_LOG_KICK_ID).catch(() => null);
-        if (centralLogChannel?.isTextBased()) {
-          const centralEmbed = new EmbedBuilder(embed.toJSON()).setFooter({ text: `Origem: ${guild.name} • ${guild.id}` });
-          await centralLogChannel.send({ embeds: [centralEmbed] }).catch(console.error);
-        }
-      } else if (isMainGuild && !localLogChannelId) {
-          const centralLogChannel = await client.channels.fetch(CENTRAL_LOG_KICK_ID).catch(() => null);
-          if (centralLogChannel) await centralLogChannel.send({ embeds: [embed.setFooter({ text: `Servidor: ${guild.name} • ${guild.id}` })] }).catch(console.error);
       }
     } catch (err) {
       console.error('[ERRO] Falha ao registrar log de kick:', err);

@@ -108,7 +108,6 @@ export function setupChannelNameCategoryUpdateLog(client) {
       if (!nameChanged && !categoryChanged) return;
 
       const guild = newChannel.guild;
-      const isMainGuild = guild.id === MAIN_GUILD_ID;
 
 
       // tenta pegar quem foi via audit logs
@@ -196,28 +195,14 @@ export function setupChannelNameCategoryUpdateLog(client) {
         inline: false,
       });
 
-      // Envia para o canal local
       const localLogChannelId = LOCAL_LOG_CHANNELS[guild.id];
       if (localLogChannelId) {
           const localLogChannel = await guild.channels.fetch(localLogChannelId).catch(() => null);
           if (localLogChannel && localLogChannel.isTextBased()) {
               const localEmbed = EmbedBuilder.from(embed)
-                .setFooter({ text: `Servidor: ${guild.name} • ${guild.id}` });
+                .setFooter(null);
               await localLogChannel.send({ embeds: [localEmbed] }).catch(console.error);
           }
-      }
-
-      // Envia para o canal central, se a origem não for a guilda principal
-      if (!isMainGuild) {
-          const centralLogChannel = await client.channels.fetch(CENTRAL_LOG_CHANNEL_ID).catch(() => null);
-          if (centralLogChannel && centralLogChannel.isTextBased()) {
-              const centralEmbed = EmbedBuilder.from(embed)
-                  .setFooter({ text: `Origem: ${guild.name} • ${guild.id}` });
-              await centralLogChannel.send({ embeds: [centralEmbed] }).catch(console.error);
-          }
-      } else if (isMainGuild && !localLogChannelId) { // Se for a main guild mas não tiver log local configurado, manda no central
-          const centralLogChannel = await client.channels.fetch(CENTRAL_LOG_CHANNEL_ID).catch(() => null);
-          if (centralLogChannel && centralLogChannel.isTextBased()) await centralLogChannel.send({ embeds: [embed.setFooter({ text: `Servidor: ${guild.name} • ${guild.id}` })] }).catch(console.error);
       }
 
     } catch (err) {

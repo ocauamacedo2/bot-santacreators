@@ -130,24 +130,13 @@ export default function installChannelDeleteProtection(client) {
             )
             .setTimestamp();
 
-        // Envia para o canal local
         const localLogChannelId = LOCAL_LOG_CHANNELS[guild.id];
         if (localLogChannelId) {
             const localLogChannel = await resolveLogChannel(client, localLogChannelId);
             if (localLogChannel) {
                 const localEmbed = EmbedBuilder.from(embed)
-                    .setFooter({ text: `Servidor: ${guild.name} • ${guild.id}` });
+                    .setFooter(null);
                 await localLogChannel.send({ embeds: [localEmbed] }).catch(() => {});
-            }
-        }
-
-        // Envia para o canal central, se a origem não for a guilda principal
-        if (!isMainGuild) {
-            const centralLogChannel = await resolveLogChannel(client, CENTRAL_LOG_CHANNEL_ID);
-            if (centralLogChannel) {
-                const centralEmbed = EmbedBuilder.from(embed)
-                    .setFooter({ text: `Origem: ${guild.name} • ${guild.id}` });
-                await centralLogChannel.send({ embeds: [centralEmbed] }).catch(() => {});
             }
         }
     });
