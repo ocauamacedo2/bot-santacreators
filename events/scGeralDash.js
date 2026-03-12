@@ -1159,7 +1159,7 @@ await scanChannelEmbeds(client, {
   },
 });
 
-// ✅ PONTO DE ENTREVISTA (via entrevista.js)
+// ✅ PERGUNTAS (log do !perguntas)
 if (CORRECAO_LOGS_CHANNEL_ID) {
   await scanChannelEmbeds(client, {
     channelId: CORRECAO_LOGS_CHANNEL_ID,
@@ -1168,9 +1168,12 @@ if (CORRECAO_LOGS_CHANNEL_ID) {
     onMessage: async (m) => {
       const emb = m.embeds?.[0];
       if (!emb) return;
-      if (!isEntrevistaConcluidaLogEmbed(emb)) return; // Procura pelo novo log
+      
+      // Procura pelo log de "!perguntas usado"
+      if (!isPerguntasLogEmbed(emb)) return;
 
-      const uid = entrevistaConcluida_getUserId(emb); // Pega o ID do aplicador
+      // Pega o ID do usuário que usou o comando
+      const uid = perguntas_getUserId(emb);
       if (!uid) return;
 
       items.push({
@@ -1247,13 +1250,13 @@ await scanChannelEmbeds(client, {
     if (!correcaoWasScored(emb)) return;
 
     const uid = correcao_getUserId(emb);
-    if (!uid) return;
-
-    items.push({
-      userId: uid,
-      ts: new Date(m.createdTimestamp),
-      source: "correcao",
+    if (uid) {
+      items.push({
+        userId: uid,
+        ts: new Date(m.createdTimestamp),
+        source: "perguntas", // ✅ Pontua como 'perguntas'
       });
+    }
     },
   });
 }

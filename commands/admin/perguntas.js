@@ -1,139 +1,108 @@
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from 'discord.js';
-import entrevista from '../../utils/entrevista.js';
-import { dashEmit } from "../../utils/dashHub.js";
+import { EmbedBuilder } from 'discord.js';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { dashEmit } from '../../utils/dashHub.js';
 
-const ALERT_ROLE_IDS = [
-  "1282119104576098314", // mkt creators
-  "1352407252216184833", // resp lider
-  "1262262852949905409", // resp influ
-  "1388976314253312100", // coord creators
-  "1388975939161161728", // gestor creators
+// --- CONFIG ---
+// Canal para logar o uso do comando e a pontuação
+const LOG_CHANNEL_ID = "1471695257010831614"; // Usando o mesmo canal de logs de correção para centralizar
+
+// Cargos que podem usar o comando
+const CARGOS_PODE_USAR = [
+  '1262262852949905408', // owner
+  '660311795327828008',  // você
+  '1352408327983861844', // resp creator
+  '1262262852949905409', // resp influ
+  '1352407252216184833', // resp lider
+  '1388976314253312100', // coord creators
+  '1352385500614234134', // coordenação
+  '1352429001188180039', // equipe creator
+  '1282119104576098314', // mkt ticket
+  '1372716303122567239'  // tickets
 ];
 
-const LOG_CHANNEL_ID = "1471695257010831614";
+// ID da categoria de tickets de entrevista
+const CATEGORIA_ENTREVISTA_ID = "1359244725781266492";
 
+// Cooldown para evitar spam de pontos
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const COOLDOWN_FILE = path.resolve(__dirname, '../../data/perguntas_cooldown.json');
+
+function checkCooldown(userId) {
+  try {
+    const dir = path.dirname(COOLDOWN_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    
+    let data = {};
+    if (fs.existsSync(COOLDOWN_FILE)) {
+      data = JSON.parse(fs.readFileSync(COOLDOWN_FILE, 'utf8'));
+    }
+
+    const now = Date.now();
+    const last = data[userId] || 0;
+    const cooldown = 60 * 60 * 1000; // 1 hora
+
+    if (now - last < cooldown) {
+      const remaining = cooldown - (now - last);
+      const minutes = Math.ceil(remaining / 60000);
+      return { scored: false, remaining: `${minutes} minuto(s)` };
+    }
+
+    data[userId] = now;
+    fs.writeFileSync(COOLDOWN_FILE, JSON.stringify(data, null, 2));
+    return { scored: true, remaining: '0' };
+  } catch (e) {
+    console.error("Erro no cooldown do !perguntas:", e);
+    return { scored: true, remaining: '0' }; // Em caso de erro, permite pontuar para não bloquear o usuário
+  }
+}
+
+// --- COMMAND EXECUTION ---
 export default {
-  // (opcional) se quiser permissão aqui igual outros comandos:
-  async hasPermission(message) {
-    const idsPermitidos = [
-      '1262262852949905408',
-      '1352408327983861844',
-      '1262262852949905409',
-      '1352407252216184833',
-      '1282119104576098314'
-    ];
-    return message.member?.roles?.cache?.some(r => idsPermitidos.includes(r.id));
-  },
-
+  name: 'perguntas',
   async execute(message, args, client) {
-  if (!message.guild) {
-    return message.channel.send("Esse comando só funciona dentro do servidor.");
-  }
+    // 1. Validação de permissão
+    const temPermissao = message.member.roles.cache.some(r => CARGOS_PODE_USAR.includes(r.id)) || CARGOS_PODE_USAR.includes(message.author.id);
+    if (!temPermissao) {
+      return message.reply("🚫 Você não tem permissão para usar este comando.").catch(() => {});
+    }
 
-  const row = new ActionRowBuilder().addComponents(
+    // 2. Validação de contexto (só em tickets de entrevista)
+    if (message.channel.parentId !== CATEGORIA_ENTREVISTA_ID) {
+      return message.reply("🚫 Este comando só pode ser usado em um canal de ticket de entrevista.").catch(() => {});
+    }
 
-      new ButtonBuilder()
-        .setCustomId(`iniciar|${message.channel.id}`)
-        .setLabel('📨 Iniciar Entrevista')
-        .setStyle(ButtonStyle.Success)
-    );
+    // 3. Lógica de Cooldown e Pontuação
+    const scoreInfo = checkCooldown(message.author.id);
 
-    await message.channel.send({
-      content: `Clique no botão abaixo para iniciar a entrevista 🎤`,
-      components: [row]
-    });
-
-    // 📊 DASH
-try {
-  dashEmit("entrevista:perguntas", { by: message.author.id });
-} catch (e) {
-  // não deixa o comando cair por causa do dash
-  console.error("[!perguntas] dashEmit falhou:", e);
-}
-
-
-    // 📢 NOTIFICA EQUIPE NO PV
-    const topic = message.channel.topic || "";
-    const m = topic.match(/aberto_por:(\d{5,})/i);
-    const openerId = m ? m[1] : "Desconhecido";
-
-    const alertMsg = `📢 **ENTREVISTA INICIADA!**\n\n` +
-      `📍 **Canal:** ${message.channel}\n` +
-      `👤 **Candidato:** <@${openerId}>\n` +
-      `👮 **Aplicador:** ${message.author}\n\n` +
-      `👉 Fiquem atentos para corrigir assim que o candidato terminar!`;
-
-    let fetchedAllMembers = false;
-
-// tenta buscar todos os membros (pode falhar sem GUILD_MEMBERS intent)
-try {
-  await message.guild.members.fetch();
-  fetchedAllMembers = true;
-} catch (e) {
-  console.warn("[!perguntas] members.fetch() falhou (provável falta de intent/perms). Vou usar cache:", e?.message || e);
-}
-
-for (const roleId of ALERT_ROLE_IDS) {
-  const role = message.guild.roles.cache.get(roleId);
-  if (!role) continue;
-
-  // role.members = só quem tá no cache (se não conseguiu fetch geral)
-  for (const [id, member] of role.members) {
-    if (!member) continue;
-    if (member.user?.bot) continue;
-    if (id === message.author.id) continue;
-
-    // DM pode falhar por privacidade, já tá safe
-    member.send(alertMsg).catch(() => {});
-  }
-}
-
-if (!fetchedAllMembers) {
-  // opcional: só pra deixar claro no log do console
-  console.log("[!perguntas] Notificação por DM rodou via cache (sem fetch geral).");
-}
-
-
-    // 📝 LOG NO CANAL NOVO
+    // 4. Enviar log
     const logChannel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
     if (logChannel) {
-  try {
-    const logEmbed = new EmbedBuilder()
-      .setTitle('🎬 Entrevista Iniciada')
-      .setColor('#00ff00')
-      .setDescription(`O comando **!perguntas** foi usado para iniciar.`)
-      .addFields(
-        { name: '👤 Candidato', value: `<@${openerId}>`, inline: true },
-        { name: '👮 Aplicador', value: `${message.author}`, inline: true },
-        { name: '📍 Canal', value: `${message.channel}`, inline: true }
-      )
-      .setTimestamp();
+      const logEmbed = new EmbedBuilder()
+        .setTitle('🧾 !perguntas usado')
+        .setColor(scoreInfo.scored ? '#57F287' : '#FEE75C') // Verde se pontuou, amarelo se em cooldown
+        .setDescription(`Comando usado por ${message.author} no ticket ${message.channel}.`)
+        .addFields(
+          { name: 'Usuário (ganhou ponto)', value: `${message.author} (\`${message.author.id}\`)`, inline: true },
+          { name: 'Canal', value: `${message.channel}`, inline: true },
+          { name: 'Pontuou?', value: scoreInfo.scored ? '✅ Sim' : `⏳ Não (cooldown: ${scoreInfo.remaining})`, inline: false }
+        )
+        .setTimestamp();
+      await logChannel.send({ embeds: [logEmbed] });
+    }
 
-    await logChannel.send({ embeds: [logEmbed] });
-  } catch (e) {
-    console.error("[!perguntas] Falha ao enviar log no canal LOG_CHANNEL_ID:", e);
-  }
-}
-
-
-    // log completo no canal 145...
-    try {
-  await entrevista.logCompleto(client, {
-    titulo: '🧾 !perguntas usado',
-    cor: 0x9b59b6,
-    autorTag: message.author.tag,
-    autorIcon: message.author.displayAvatarURL({ dynamic: true }),
-    desc: `O comando **!perguntas** foi usado.`,
-    fields: [
-      { name: '👤 Quem', value: `<@${message.author.id}>\n\`${message.author.id}\``, inline: true },
-      { name: '📍 Onde', value: `<#${message.channel.id}>\n\`${message.channel.id}\``, inline: true },
-      { name: '🏠 Servidor', value: `${message.guild?.name}\n\`${message.guildId}\``, inline: false }
-    ],
-    thumb: message.guild?.iconURL({ dynamic: true })
-  });
-} catch (e) {
-  console.error("[!perguntas] entrevista.logCompleto falhou:", e);
-}
-
+    // 5. Emitir evento para o dashboard (apenas se pontuou)
+    if (scoreInfo.scored) {
+      dashEmit('entrevista:perguntas', {
+        userId: message.author.id,
+        __at: Date.now(),
+        source: 'perguntas'
+      });
+      await message.reply({ content: '✅ Ponto de `!perguntas` contabilizado para você!', ephemeral: true }).catch(() => {});
+    } else {
+      await message.reply({ content: `⏳ Você já usou este comando recentemente. Espere mais ${scoreInfo.remaining} para pontuar novamente.`, ephemeral: true }).catch(() => {});
+    }
   }
 };

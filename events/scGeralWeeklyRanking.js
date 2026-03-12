@@ -925,7 +925,7 @@ async function collectAllPoints(client, mode = "light") {
         const uid = correcao_getUserId(emb);
         if (!uid) return;
 
-        pushItem({ userId: uid, ts: new Date(m.createdTimestamp), source: "correcao" });
+        pushItem({ userId: uid, ts: new Date(m.createdTimestamp), source: "perguntas" });
       },
     });
   }
