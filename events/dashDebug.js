@@ -64,7 +64,7 @@ export function dashDebugOnReady(client) {
         return;
       }
 
-      const ch = await client.channels.fetch(DEBUG_CHANNEL_ID).catch(() => null);
+      const ch = DEBUG_CHANNEL_ID ? await client.channels.fetch(DEBUG_CHANNEL_ID).catch(() => null) : null;
       if (!ch?.isTextBased?.()) return;
 
       const st = readState();

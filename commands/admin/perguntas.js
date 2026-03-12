@@ -95,7 +95,7 @@ if (!fetchedAllMembers) {
 
 
     // 📝 LOG NO CANAL NOVO
-    const logChannel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+    const logChannel = LOG_CHANNEL_ID ? await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null) : null;
     if (logChannel) {
   try {
     const logEmbed = new EmbedBuilder()

@@ -9,7 +9,6 @@ import {
   TextInputStyle,
 } from "discord.js";
 import { dashEmit } from "../utils/dashHub.js";
-import { resolveLogChannel } from "./channelResolver.js";
 
 // ============================================================================
 // PAGAMENTOS SOCIAL MÍDIAS (SEM LISTENERS AQUI)

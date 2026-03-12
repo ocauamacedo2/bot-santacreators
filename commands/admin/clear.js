@@ -633,7 +633,7 @@ if (!isOwner && !message.member.permissionsIn(message.channel).has(PermissionsBi
     setTimeout(()=>chatMsg.delete().catch(()=>{}), 15000);
 
     // LOG no canal de logs
-    const logChannel = await message.client.channels.fetch(LOG_CLEAR_CHANNEL_ID).catch(() => null);
+    const logChannel = LOG_CLEAR_CHANNEL_ID ? await message.client.channels.fetch(LOG_CLEAR_CHANNEL_ID).catch(() => null) : null;
     if (logChannel) {
       const logEmbed = new EmbedBuilder()
         .setColor(0x5865F2)
