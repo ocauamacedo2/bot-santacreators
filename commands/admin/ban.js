@@ -64,7 +64,7 @@ export default {
             }, 10000);
 
             const logChannelId = process.env.LOG_CHANNEL_ID;
-            const logChannel = await message.client.channels.fetch(logChannelId).catch(() => null);
+            const logChannel = logChannelId ? await message.client.channels.fetch(logChannelId).catch(() => null) : null;
             if (logChannel) {
                 await logChannel.send({ embeds: [banEmbed] });
             } else {

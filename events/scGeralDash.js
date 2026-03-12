@@ -2186,7 +2186,7 @@ const mPagRep = getWeekly(st, "pagReprovados", wk);
     // ✅ Só roda quando emitLog = true (ou seja: NÃO roda no boot)
     if (emitLog) {
       try {
-        const logChannel = await client.channels.fetch(DASH_LOG_CHANNEL_ID).catch(() => null);
+        const logChannel = DASH_LOG_CHANNEL_ID ? await client.channels.fetch(DASH_LOG_CHANNEL_ID).catch(() => null) : null;
 
         if (logChannel) {
           st.logWeeklyMsgIds = st.logWeeklyMsgIds || {};

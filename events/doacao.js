@@ -898,7 +898,7 @@ export async function doacaoHandleInteraction(interaction, client) {
           .setTimestamp()
           .setColor("Green");
 
-        const canalLog = await client.channels.fetch(CANAL_LOGS_ID).catch(() => null);
+        const canalLog = CANAL_LOGS_ID ? await client.channels.fetch(CANAL_LOGS_ID).catch(() => null) : null;
 
         if (collectedMsg && collectedMsg.attachments.size > 0) {
           const att = collectedMsg.attachments.first();

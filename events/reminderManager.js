@@ -99,7 +99,7 @@ function isAllowedCategory(channel) {
 
 async function logToChannel(client, guild, data) {
   try {
-    const channel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+    const channel = LOG_CHANNEL_ID ? await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null) : null;
     if (!channel || !channel.isTextBased()) return;
 
     const embed = new EmbedBuilder()

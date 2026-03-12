@@ -212,7 +212,7 @@ export async function removerMassivoHandleMessage(message, client) {
     });
 
     // ----- LOG COMPLETO -----
-    const logs = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+    const logs = LOG_CHANNEL_ID ? await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null) : null;
     if (logs) {
       const elapsed = Date.now() - startedAt;
       const originalCmd = (content || `!remover ${role.id}`).slice(0, 1000);

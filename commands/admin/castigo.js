@@ -73,7 +73,7 @@ export default {
             const replyMessage = await message.channel.send({ embeds: [timeoutEmbed] });
 
             const logChannelId = process.env.LOG_CHANNEL_ID;
-            const logChannel = await client.channels.fetch(logChannelId).catch(() => null);
+            const logChannel = logChannelId ? await client.channels.fetch(logChannelId).catch(() => null) : null;
             if (logChannel) {
                 await logChannel.send({ embeds: [timeoutEmbed] });
             } else {

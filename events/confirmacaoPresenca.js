@@ -292,7 +292,7 @@ async function updatePanel(client) {
 }
 
 async function logAction(client, interaction, action, orgName, extra = "") {
-  const channel = await resolveLogChannel(client, LOG_CHANNEL_ID);
+  const channel = LOG_CHANNEL_ID ? await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null) : null;
   if (!channel) return;
 
   const color = action === "CONFIRMOU" ? COLORS.YES : action === "NEGOU" ? COLORS.NO : COLORS.PENDING;

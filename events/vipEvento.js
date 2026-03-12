@@ -674,7 +674,7 @@ export async function vipEventoHandleInteraction(i, client) {
         );
       }
 
-      const logs = await client.channels.fetch(VIP_LOGS_CHANNEL_ID).catch(() => null);
+      const logs = VIP_LOGS_CHANNEL_ID ? await client.channels.fetch(VIP_LOGS_CHANNEL_ID).catch(() => null) : null;
       logs?.isTextBased() &&
         logs
           .send({
@@ -857,7 +857,7 @@ export async function vipEventoHandleInteraction(i, client) {
           );
         }
 
-        const logs = await resolveLogChannel(client, VIP_LOGS_CHANNEL_ID);
+        const logs = VIP_LOGS_CHANNEL_ID ? await client.channels.fetch(VIP_LOGS_CHANNEL_ID).catch(() => null) : null;
         logs?.isTextBased() &&
           logs
             .send({
@@ -910,7 +910,7 @@ export async function vipEventoHandleInteraction(i, client) {
           );
         }
 
-        const logs = await resolveLogChannel(client, VIP_LOGS_CHANNEL_ID);
+        const logs = VIP_LOGS_CHANNEL_ID ? await client.channels.fetch(VIP_LOGS_CHANNEL_ID).catch(() => null) : null;
         logs?.isTextBased() &&
           logs
             .send({

@@ -127,7 +127,7 @@ export default {
       if (extras) embed.addFields({ name: "⚙️ Detalhes Extras", value: extras, inline: false });
       if (reason) embed.addFields({ name: "📝 Motivo (Audit Log)", value: reason, inline: false });
 
-      const localLogChannelId = LOCAL_LOG_CHANNELS[guild.id];
+      const localLogChannelId = LOCAL_LOG_CHANNELS[guild.id] || CENTRAL_LOG_CHANNEL_ID;
       if (localLogChannelId) {
         try {
           const localLogChannel = await client.channels.fetch(localLogChannelId);

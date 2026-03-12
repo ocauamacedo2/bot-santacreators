@@ -242,7 +242,7 @@ export async function editarPermHandleMessage(message, client) {
     saveUndoState(undoId, undoData);
 
     // ================= LOGS =================
-    const logChannel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+    const logChannel = LOG_CHANNEL_ID ? await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null) : null;
     if (logChannel && logChannel.isTextBased()) {
       const logEmbed = new EmbedBuilder()
         .setTitle('🛠️ Permissões Editadas em Massa')
@@ -355,7 +355,7 @@ export async function editarPermHandleInteraction(interaction, client) {
   }
 
   // Log do Undo
-  const logChannel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+  const logChannel = LOG_CHANNEL_ID ? await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null) : null;
   if (logChannel && logChannel.isTextBased()) {
     const logEmbed = new EmbedBuilder()
       .setTitle('↩️ Alterações Desfeitas')

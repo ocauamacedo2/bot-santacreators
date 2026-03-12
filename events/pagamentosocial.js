@@ -268,7 +268,7 @@ function criarRowStatus(messageId) {
 // Log visual completo
 // =============================
 async function logPagamento(client, interaction, titulo, descricao, linkMsg = null) {
-  const canalLog = await resolveLogChannel(client, CANAL_LOG_PAGAMENTO);
+  const canalLog = CANAL_LOG_PAGAMENTO ? await client.channels.fetch(CANAL_LOG_PAGAMENTO).catch(() => null) : null;
   if (!canalLog) return;
 
   const embed = new EmbedBuilder()

@@ -284,7 +284,7 @@ export async function cadastroManualHandleInteraction(interaction, client) {
     });
 
     // Envia Log
-    const logChannel = await resolveLogChannel(client, LOG_CHANNEL_ID);
+    const logChannel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
     if (logChannel) {
       const logEmbed = new EmbedBuilder()
         .setTitle('🧹 Limpeza de Registros (Cadastro)')

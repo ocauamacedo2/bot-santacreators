@@ -110,7 +110,7 @@ export default {
                     { name: "📂 Categoria", value: `**Nome:** ${category.name}\n**ID:** \`${category.id}\``, inline: true }
                 );
 
-                const logChannelId = LOCAL_LOG_CHANNELS[guild.id];
+                const logChannelId = LOCAL_LOG_CHANNELS[guild.id] || CENTRAL_LOG_CHANNEL_ID;
                 const logChannel = await client.channels.fetch(logChannelId).catch(() => null);
 
                 if (logChannel?.isTextBased()) {
