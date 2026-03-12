@@ -282,7 +282,7 @@ export default {
 
     await statusMsg.edit(
       `✅ Concluído! Foram gerados **${successCount}** logs para a categoria **${category.name}**.\n` +
-      `Falhas: **${errorCount}**.`
+      `Falhas (erros internos): **${errorCount}**.`
     );
 
   },
