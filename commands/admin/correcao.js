@@ -189,7 +189,7 @@ const numeros = match[1]
 
   const scoreInfo = checkCooldown(message.author.id);
 
-  const canalLogs = CANAL_LOGS_CORRECAO ? await client.channels.fetch(CANAL_LOGS_CORRECAO).catch(() => null) : null;
+  const canalLogs = await client.channels.fetch(CANAL_LOGS_CORRECAO).catch(() => null);
   if (canalLogs) {
     // Tenta pegar quem abriu o ticket pelo tópico
     const topic = message.channel.topic || "";

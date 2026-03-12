@@ -60,9 +60,8 @@ function getLogChannel(message) {
   const channelId = LOGS_BY_GUILD[guildId] || FALLBACK_LOGS_CHANNEL;
   if (!channelId) return null;
 
-  // ✅ Usa fetch para garantir que o canal seja encontrado mesmo se não estiver no cache.
-  // Não precisa de await aqui porque a função que usa já é async.
-  return message.guild.channels.fetch(channelId).catch(() => null);
+  const ch = message.guild.channels.cache.get(channelId);
+  return ch?.isTextBased() ? ch : null;
 }
 
 async function hasPermission(message) {

@@ -160,7 +160,7 @@ export default {
                 emptyRoles.delete(roleId);
 
                 // Log no canal específico
-                const logChannel = LOG_CHANNEL_ID ? await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null) : null;
+                const logChannel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
                 if (logChannel && logChannel.isTextBased()) {
                     const logEmbed = new EmbedBuilder()
                         .setTitle('🗑️ Cargo Vazio Deletado')

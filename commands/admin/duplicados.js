@@ -117,7 +117,7 @@ export default {
         setTimeout(() => responseMsg.delete().catch(() => {}), 60000);
 
         // 4. Logs no Canal Específico
-        const logChannel = LOG_CHANNEL_ID ? await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null) : null;
+        const logChannel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
 
         if (logChannel && logChannel.isTextBased()) {
             const logEmbed = new EmbedBuilder()

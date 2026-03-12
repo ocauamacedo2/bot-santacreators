@@ -300,7 +300,7 @@ const command = {
     });
 
     // ================== LOG COMPLETO ==================
-    const logChannel = LOG_CHANNEL_ID ? await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null) : null;
+    const logChannel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
     if (logChannel?.isTextBased?.()) {
       const member = message.member;
       const nowTs = Math.floor(Date.now() / 1000);

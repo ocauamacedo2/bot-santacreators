@@ -188,7 +188,7 @@ export default {
               });
 
               // log
-              const logChannel = LOG_CHANNEL_ID ? await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null) : null;
+              const logChannel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
               if (logChannel?.isTextBased?.()) {
                 const logEmbed = new EmbedBuilder()
                   .setTitle('📋 Log de CopyCargo')
@@ -238,7 +238,7 @@ export default {
             });
 
             // log
-            const logChannel = LOG_CHANNEL_ID ? await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null) : null;
+            const logChannel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
             if (logChannel?.isTextBased?.()) {
               const logEmbed = new EmbedBuilder()
                 .setTitle('📋 Log de CopyCargo')

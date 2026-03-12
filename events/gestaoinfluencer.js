@@ -1250,7 +1250,7 @@ await msg.edit({
       }
 
       try {
-        const ch = SC_GI_CFG.CHANNEL_DESLIGAMENTOS ? await guild.client.channels.fetch(SC_GI_CFG.CHANNEL_DESLIGAMENTOS).catch(() => null) : null;
+        const ch = await guild.client.channels.fetch(SC_GI_CFG.CHANNEL_DESLIGAMENTOS).catch(() => null);
         if (ch && ch.type === ChannelType.GuildText) {
           const weeks = weeksSince(snapshot.joinDateMs);
           const months = monthsSince(snapshot.joinDateMs);

@@ -130,7 +130,7 @@ export default function installChannelDeleteProtection(client) {
 
         const localLogChannelId = LOCAL_LOG_CHANNELS[guild.id];
         if (localLogChannelId) {
-            const localLogChannel = await resolveLogChannel(client, localLogChannelId);
+            const localLogChannel = await client.channels.fetch(localLogChannelId).catch(() => null);
             if (localLogChannel) {
                 const localEmbed = EmbedBuilder.from(embed)
                     .setFooter(null);

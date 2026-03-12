@@ -54,9 +54,9 @@ function isRecent(entry, ms = 10_000) {
   return entry && (Date.now() - entry.createdTimestamp) < ms;
 }
 
-function getCreatorsChannel(guild) {
-  const ch = guild.channels.cache.get(CANAL_CREATORS_ID);
-  return ch && ch.isTextBased() ? ch : null;
+async function getCreatorsChannel(guild) {
+  const ch = await guild.channels.fetch(CANAL_CREATORS_ID).catch(() => null);
+  return ch?.isTextBased() ? ch : null;
 }
 
 function rolesRemoviveisDoExecutor(execMember) {

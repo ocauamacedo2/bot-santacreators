@@ -1323,7 +1323,7 @@ async function notifyDecision({ client, registrantId, approved, moderatorId, msg
   }
 
   const moderator = await guild.members.fetch(moderatorId).catch(() => null);
-  const canalAvisos = await resolveLogChannel(client, CANAL_DECISOES_ID);
+  const canalAvisos = await client.channels.fetch(CANAL_DECISOES_ID).catch(() => null);
 
   const link = msg.url;
   const quem = moderator ? `<@${moderator.id}>` : "um moderador";

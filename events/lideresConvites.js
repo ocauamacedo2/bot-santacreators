@@ -11,7 +11,6 @@ import {
 } from "discord.js";
 
 import { dashEmit } from "../utils/dashHub.js";
-// ======================= CONFIG =======================
 const MENU_CHANNEL_ID = "1414718856542421052"; // canal do menu (não envia lá)
 
 const CATEGORY_IDS = new Set([
