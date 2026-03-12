@@ -133,7 +133,7 @@ export default {
           const localLogChannel = await client.channels.fetch(localLogChannelId);
           if (localLogChannel?.isTextBased()) {
             const localEmbed = EmbedBuilder.from(embed).setFooter(null);
-            await localLogChannel.send({ embeds: [localEmbed] });
+            await localLogChannel.send({ embeds: [localEmbed] }).catch(console.error);
           }
         } catch (error) {
           console.error(`[channelDelete] ERRO (Local): Falha ao enviar para o canal ${localLogChannelId} na guilda ${guild.name}.`, error.message);

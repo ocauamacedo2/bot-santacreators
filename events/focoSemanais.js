@@ -11,7 +11,6 @@ import {
   TextInputStyle,
   Events
 } from 'discord.js';
-import { resolveLogChannel } from './channelResolver.js';
 
 // Guard to prevent multiple initializations if imported multiple times
 if (globalThis.__SC_FOCO_INSTALLED__) {

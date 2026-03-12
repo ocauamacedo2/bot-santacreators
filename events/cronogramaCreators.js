@@ -12,7 +12,6 @@ import {
   TextInputBuilder,
   TextInputStyle,
 } from "discord.js";
-import { resolveLogChannel } from "./channelResolver.js";
 
 // ================= CONFIGURAÇÕES =================
 const LOG_CHANNEL_ID = "1474603651757510706"; // Canal de Logs
@@ -533,7 +532,7 @@ async function updatePanel(client, state) {
 
 async function logChange(client, guild, user, oldState, newState, changeType) {
   try {
-    const logChannel = await resolveLogChannel(client, LOG_CHANNEL_ID);
+    const logChannel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
     if (!logChannel) return;
 
     const changeId = `undo_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;

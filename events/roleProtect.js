@@ -1,6 +1,5 @@
 // ./events/roleProtect.js
 import { AuditLogEvent, PermissionFlagsBits } from "discord.js";
-import { resolveLogChannel } from './channelResolver.js';
 
 // ======================================================
 // SC_ROLE_PROTECT — Proteção contra remoção de cargos

@@ -13,8 +13,9 @@ export function setupUserUpdateLog(client) {
   client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
     try {
       if (!ALLOWED_GUILDS.has(newMember.guild.id)) return;
-
-      const logChannel = client.channels.cache.get(process.env.LOG_USER_UPDATE);
+      
+      const logChannelId = process.env.LOG_USER_UPDATE;
+      const logChannel = logChannelId ? await client.channels.fetch(logChannelId).catch(() => null) : null;
       if (!logChannel) return;
 
       const oldNickname = oldMember.nickname || oldMember.user.username;

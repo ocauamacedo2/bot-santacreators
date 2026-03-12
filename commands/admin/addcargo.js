@@ -1,6 +1,5 @@
 import { EmbedBuilder } from 'discord.js';
 import dotenv from 'dotenv';
-import { resolveLogChannel } from '../../events/channelResolver.js';
 
 dotenv.config();
 

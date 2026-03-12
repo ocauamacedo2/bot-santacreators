@@ -9,7 +9,6 @@ import {
   PermissionsBitField,
   ChannelType,
 } from 'discord.js';
-import { resolveLogChannel } from '../../events/channelResolver.js';
 
 // ================= CONFIG =================
 const ALLOWED_USERS = new Set([
@@ -243,7 +242,7 @@ export async function editarPermHandleMessage(message, client) {
     saveUndoState(undoId, undoData);
 
     // ================= LOGS =================
-    const logChannel = await resolveLogChannel(client, LOG_CHANNEL_ID);
+    const logChannel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
     if (logChannel && logChannel.isTextBased()) {
       const logEmbed = new EmbedBuilder()
         .setTitle('🛠️ Permissões Editadas em Massa')
@@ -356,7 +355,7 @@ export async function editarPermHandleInteraction(interaction, client) {
   }
 
   // Log do Undo
-  const logChannel = await resolveLogChannel(client, LOG_CHANNEL_ID);
+  const logChannel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
   if (logChannel && logChannel.isTextBased()) {
     const logEmbed = new EmbedBuilder()
       .setTitle('↩️ Alterações Desfeitas')

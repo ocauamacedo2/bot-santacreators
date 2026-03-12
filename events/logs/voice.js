@@ -33,7 +33,8 @@ export function setupVoiceLog(client) {
     // Move logic
     if (oldState.channelId && newState.channelId && oldState.channelId !== newState.channelId) {
       const guild = newState.guild;
-      const logChannel = guild.channels.cache.get(logs.moved);
+      const logChannelId = logs.moved;
+      const logChannel = logChannelId ? await client.channels.fetch(logChannelId).catch(() => null) : null;
       if (logChannel) {
         const key = `${user.id}-${oldState.channelId}-${newState.channelId}`;
         const now = Date.now();
@@ -107,7 +108,8 @@ export function setupVoiceLog(client) {
     if (oldState.selfDeaf && !newState.selfDeaf) changes.push({ log: logs.selfDeafened, text: `se dessensurdesceu na call <#${newState.channelId}>` });
 
     for (const change of changes) {
-      const logChannel = newState.guild.channels.cache.get(change.log);
+      const logChannelId = change.log;
+      const logChannel = logChannelId ? await client.channels.fetch(logChannelId).catch(() => null) : null;
       if (logChannel) {
         const embed = new EmbedBuilder()
           .setAuthor({ name: user.username, iconURL: user.displayAvatarURL({ dynamic: true }) })

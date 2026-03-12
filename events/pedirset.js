@@ -15,7 +15,6 @@ import {
 import { getChannel } from '../utils/cacheDiscord.js';
 import { onceIn } from '../utils/onceIn.js';
 import { dashEmit } from '../utils/dashHub.js';
-import { resolveLogChannel } from './channelResolver.js';
 import {
   createFormsCreatorRecord,
   findFormsCreatorThreadIdByUserId,
@@ -402,7 +401,7 @@ export async function pedirSetHandleInteraction(interaction, client) {
         .setStyle(ButtonStyle.Danger)
     );
 
-    const canal = await resolveLogChannel(client, CANAL_LOG_REGISTRO);
+    const canal = await client.channels.fetch(CANAL_LOG_REGISTRO).catch(() => null);
     if (canal) await canal.send({ embeds: [embed], components: [row] });
 
     await interaction.followUp({ content: '✅ Pedido enviado com sucesso!', ephemeral: true });
@@ -566,7 +565,7 @@ export async function pedirSetHandleInteraction(interaction, client) {
       });
     }
 
-    const canalAdm = await resolveLogChannel(client, CANAL_ADMINISTRACAO);
+    const canalAdm = await client.channels.fetch(CANAL_ADMINISTRACAO).catch(() => null);
     if (canalAdm) {
       await canalAdm.send({
         content: `📞 ZipZap recebido: \`${zipzap}\` de <@${userId}> <@&${CARGO_COORDENACAO}>`,

@@ -12,7 +12,6 @@ import {
   TextInputStyle,
   OverwriteType,
 } from "discord.js";
-import { resolveLogChannel } from "./channelResolver.js";
 
 // ====== CONFIGS ======
 const CHANNEL_ID = '1384238156731252736';     // canal onde fica o botão

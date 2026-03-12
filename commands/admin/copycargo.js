@@ -2,7 +2,6 @@
 import discord from 'discord.js';
 const { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, PermissionFlagsBits } = discord;
 import dotenv from 'dotenv';
-import { resolveLogChannel } from '../../events/channelResolver.js';
 dotenv.config();
 
 /**
@@ -189,7 +188,7 @@ export default {
               });
 
               // log
-              const logChannel = await resolveLogChannel(client, LOG_CHANNEL_ID);
+              const logChannel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
               if (logChannel?.isTextBased?.()) {
                 const logEmbed = new EmbedBuilder()
                   .setTitle('📋 Log de CopyCargo')
@@ -239,7 +238,7 @@ export default {
             });
 
             // log
-            const logChannel = await resolveLogChannel(client, LOG_CHANNEL_ID);
+            const logChannel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
             if (logChannel?.isTextBased?.()) {
               const logEmbed = new EmbedBuilder()
                 .setTitle('📋 Log de CopyCargo')

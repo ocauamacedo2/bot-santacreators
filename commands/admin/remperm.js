@@ -1,5 +1,4 @@
 import { ChannelType, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
-import { resolveLogChannel } from '../../events/channelResolver.js';
 
 // Configurações
 const MEMBROS_PERMITIDOS = ['660311795327828008', '1021174007577444463'];
@@ -63,7 +62,7 @@ async function executarRemPerm(message) {
       return;
     }
 
-    const logChannel = message.guild.channels.cache.get(CANAL_LOGS_ID);
+    const logChannel = await message.client.channels.fetch(CANAL_LOGS_ID).catch(() => null);
     let resultadoMsg = '';
     let progressMsg;
 

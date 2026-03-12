@@ -147,16 +147,16 @@ function channelLink(guildId, channelId) {
  * ⚠️ CORREÇÃO IMPORTANTE:
  * canais muitas vezes NÃO estão no cache. Então precisa tentar fetch.
  */
+
 async function getLocalLogChannel(client, guild) {
   if (!guild) return null;
 
   const mappedId = GUILD_LOG_CHANNEL_MAP[guild.id];
   const fallbackId = FALLBACK_LOGS_CHANNEL[0];
-  return await resolveLogChannel(client, mappedId || fallbackId);
-}
+  const channelId = mappedId || fallbackId;
+  if (!channelId) return null;
 
-async function getCentralLogChannel(client) {
-  return await resolveLogChannel(client, MAIN_LOG_CHANNEL_ID);
+  return await client.channels.fetch(channelId).catch(() => null);
 }
 
 async function sendEphemeral(channel, payload, ttlMs = 15_000) {
@@ -277,33 +277,15 @@ function singleEmbed({
  *    - se origem for outro DC     => embed external (nome+id + origem)
  */
 async function sendLogs({ originGuild, originChannel, embedArgs }) {
-  const client = originGuild?.client;
-  if (!client) return;
+    const client = originGuild?.client;
+    if (!client) return;
 
-  // 1) Local
-  const localCh = await getLocalLogChannel(client, originGuild);
-  if (localCh) {
-    const embLocal = singleEmbed({
-      ...embedArgs,
-      mode: 'native',
-      originGuild,
-      originChannel,
-    });
-    localCh.send({ embeds: [embLocal] }).catch(() => null);
-  }
-
-  // 2) Central (sempre)
-  const centralCh = await getCentralLogChannel(originGuild.client);
-  if (centralCh) {
-    const mode = isMainGuild(originGuild.id) ? 'native' : 'external';
-    const embCentral = singleEmbed({
-      ...embedArgs,
-      mode,
-      originGuild,
-      originChannel,
-    });
-    centralCh.send({ embeds: [embCentral] }).catch(() => null);
-  }
+    // 1) Envia apenas para o log local
+    const localCh = await getLocalLogChannel(client, originGuild);
+    if (localCh) {
+        const embLocal = singleEmbed({ ...embedArgs, mode: 'native', originGuild, originChannel });
+        localCh.send({ embeds: [embLocal] }).catch(() => null);
+    }
 }
 
 /* ==========================

@@ -104,7 +104,7 @@ export function setupBotAddLog(client) {
       db[key] = { joinedAt: Date.now(), joinedAtISO: new Date().toISOString() };
       writeDB(db);
 
-      const channel = await client.channels.fetch(ADD_LOG_CHANNEL_ID).catch(() => null);
+      const channel = ADD_LOG_CHANNEL_ID ? await client.channels.fetch(ADD_LOG_CHANNEL_ID).catch(() => null) : null;
       if (!channel || !channel.isTextBased()) return;
 
       // perm no canal

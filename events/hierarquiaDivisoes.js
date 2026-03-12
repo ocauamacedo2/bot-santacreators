@@ -12,7 +12,6 @@ import {
   StringSelectMenuOptionBuilder,
   PermissionsBitField,
 } from "discord.js";
-import { resolveLogChannel } from "./channelResolver.js";
 
 // ================= CONFIGURAÇÃO =================
 const CONFIG = {
@@ -497,7 +496,7 @@ async function updateHierarchyPanel(client) {
 
 // ================= LOGS COM BOTÃO DE REVERTER =================
 async function logChange(client, actor, targetUser, oldSlot, newSlot) {
-  const channel = await resolveLogChannel(client, CONFIG.LOG_CHANNEL_ID);
+  const channel = await client.channels.fetch(CONFIG.LOG_CHANNEL_ID).catch(() => null);
   if (!channel) return;
 
   const oldKey = oldSlot || CONFIG.SLOTS.NONE;

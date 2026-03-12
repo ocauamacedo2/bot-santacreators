@@ -140,7 +140,7 @@ export default {
       // rota bot vs humano
       const targetChannelId = author.bot ? BOT_LOG_CHANNEL_ID : HUMAN_LOG_CHANNEL_ID;
 
-      const logChannel = await client.channels.fetch(targetChannelId).catch(() => null);
+      const logChannel = targetChannelId ? await client.channels.fetch(targetChannelId).catch(() => null) : null;
       if (!logChannel || !logChannel.isTextBased()) return;
 
       const oldContent = oldMessage?.content ?? '';

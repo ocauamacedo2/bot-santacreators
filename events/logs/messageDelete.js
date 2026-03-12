@@ -22,7 +22,6 @@ import fs from "fs";
 import path from "path";
 
 import { getCachedMessage } from "./_deleteCache.js";
-import { resolveLogChannel } from "../channelResolver.js";
 
 // ================== CONFIGURAÇÃO DE LOGS ==================
 const MAIN_GUILD_ID = '1262262852782129183';
@@ -275,6 +274,8 @@ export default {
         (deleterUser?.bot === true) ||
         (selfDelete && authorObj?.bot === true) ||
         (selfDelete && !authorObj); // 👈 chave pra consertar o teu problema
+
+      const isMainGuild = guild.id === MAIN_GUILD_ID;
 
       const categoryName = getCategoryName(channel);
 

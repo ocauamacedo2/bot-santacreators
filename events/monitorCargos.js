@@ -2,7 +2,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { EmbedBuilder } from 'discord.js';
-import { resolveLogChannel } from './channelResolver.js';
 
 // =====================================================
 // ⚙️ CONFIGURAÇÃO

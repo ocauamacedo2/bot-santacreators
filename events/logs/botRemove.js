@@ -74,7 +74,7 @@ export function setupBotRemoveLog(client) {
 
       const guild = member.guild;
 
-      const channel = await client.channels.fetch(REMOVE_LOG_CHANNEL_ID).catch(() => null);
+      const channel = REMOVE_LOG_CHANNEL_ID ? await client.channels.fetch(REMOVE_LOG_CHANNEL_ID).catch(() => null) : null;
       if (!channel || !channel.isTextBased()) return;
 
       // perm no canal

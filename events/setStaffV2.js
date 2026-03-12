@@ -17,7 +17,6 @@ import {
   TextInputBuilder,
   TextInputStyle,
 } from "discord.js";
-import { resolveLogChannel } from "./channelResolver.js";
 
 // =====================================================
 // CONFIG FIXA (SEM .env)

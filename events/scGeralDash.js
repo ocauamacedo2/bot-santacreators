@@ -16,7 +16,6 @@ import {
 
 
 import { dashOn } from "../utils/dashHub.js";
-import { resolveLogChannel } from "./channelResolver.js";
 
 // ✅ __dirname no ESM
 const __filename = fileURLToPath(import.meta.url);
@@ -2187,8 +2186,7 @@ const mPagRep = getWeekly(st, "pagReprovados", wk);
     // ✅ Só roda quando emitLog = true (ou seja: NÃO roda no boot)
     if (emitLog) {
       try {
-        // ✅ USA O RESOLVEDOR
-        const logChannel = await resolveLogChannel(client, DASH_LOG_CHANNEL_ID);
+        const logChannel = await client.channels.fetch(DASH_LOG_CHANNEL_ID).catch(() => null);
 
         if (logChannel) {
           st.logWeeklyMsgIds = st.logWeeklyMsgIds || {};

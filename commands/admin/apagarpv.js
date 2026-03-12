@@ -1,6 +1,5 @@
 // /application/commands/admin/apagarpv.js
 import { Events, EmbedBuilder } from 'discord.js';
-import { resolveLogChannel } from '../../events/channelResolver.js';
 
 // ✅ Canais e variáveis importantes
 const LOG_CHANNEL_ID = '1385324623301972120'; // Canal: APAGADOS PRIVADO POR BOT
@@ -35,7 +34,7 @@ export function registerApagarPV(client) {
       return message.reply('❌ Informe o ID, mencione a pessoa ou mencione um cargo.');
     }
 
-    const logChannel = await resolveLogChannel(client, LOG_CHANNEL_ID);
+    const logChannel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
     if (!logChannel) return message.reply('❌ Canal de log não encontrado.');
 
     let membros = [];

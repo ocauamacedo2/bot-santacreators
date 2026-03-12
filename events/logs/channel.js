@@ -3,8 +3,8 @@ import { EmbedBuilder, AuditLogEvent, ChannelType } from 'discord.js';
 export function setupChannelLog(client) {
   // Log de permissões
   client.on('channelUpdate', async (oldChannel, newChannel) => {
-    const logChannel = client.channels.cache.get(process.env.LOG_CHANNEL_PERMISSIONS);
-    if (!logChannel) return;
+    const logChannelId = process.env.LOG_CHANNEL_PERMISSIONS;
+    if (!logChannelId) return;
 
     try {
       const logs = await newChannel.guild.fetchAuditLogs({ type: AuditLogEvent.ChannelOverwriteUpdate, limit: 5 });
@@ -45,6 +45,9 @@ export function setupChannelLog(client) {
 
       if (!changesReport) return;
 
+      const logChannel = await client.channels.fetch(logChannelId).catch(() => null);
+      if (!logChannel || !logChannel.isTextBased()) return;
+
       const embed = new EmbedBuilder()
         .setTitle('⚙️ Permissões Atualizadas')
         .setColor('Orange')
@@ -65,8 +68,9 @@ export function setupChannelLog(client) {
 
   // Log de status de voz
   client.on('channelUpdate', async (oldChannel, newChannel) => {
-    if (oldChannel.type !== ChannelType.GuildVoice) return;
-    const fetchedLogs = await newChannel.guild.fetchAuditLogs({ limit: 5, type: AuditLogEvent.ChannelUpdate });
+    if (oldChannel.type !== ChannelType.GuildVoice && newChannel.type !== ChannelType.GuildVoice) return;
+
+    const fetchedLogs = await newChannel.guild.fetchAuditLogs({ limit: 5, type: AuditLogEvent.ChannelUpdate }).catch(() => null);
     const entry = fetchedLogs.entries.find(log => log.target.id === newChannel.id && Date.now() - log.createdTimestamp < 15_000);
     if (!entry) return;
 
@@ -88,8 +92,9 @@ export function setupChannelLog(client) {
 
   // Proteção de canal deletado
   client.on('channelDelete', async (channel) => {
+    const logChannelId = '1389857160871280650';
     try {
-      const fetchedLogs = await channel.guild.fetchAuditLogs({ limit: 1, type: AuditLogEvent.ChannelDelete });
+      const fetchedLogs = await channel.guild.fetchAuditLogs({ limit: 1, type: AuditLogEvent.ChannelDelete }).catch(() => null);
       const deletionLog = fetchedLogs.entries.first();
       if (!deletionLog) return;
 
@@ -103,7 +108,6 @@ export function setupChannelLog(client) {
       const ADMIN_ID = '1352741003639132160';
       const CIDADAO_ROLE_ID = '1262978759922028575';
       const categoriaBackupId = '1389857472906530866';
-      const logChannelId = '1389857160871280650';
       const logChannel = await channel.guild.channels.fetch(logChannelId).catch(() => null);
       const botMember = await channel.guild.members.fetchMe();
 

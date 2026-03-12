@@ -1,6 +1,5 @@
 // d:\bots\commands\admin\cargosvazios.js
 import { EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, ComponentType } from 'discord.js';
-import { resolveLogChannel } from '../../events/channelResolver.js';
 
 // Configurações
 const LOG_CHANNEL_ID = '1469964510315020450';

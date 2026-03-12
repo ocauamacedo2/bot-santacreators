@@ -13,7 +13,6 @@ import {
   TextInputStyle,
   escapeMarkdown
 } from "discord.js";
-import { resolveLogChannel } from "./channelResolver.js";
 
 ///teste
 const __filename = fileURLToPath(import.meta.url);

@@ -28,6 +28,7 @@ export function setupKickLog(client) {
       );
 
       if (!entry) return;
+      const isMainGuild = guild.id === MAIN_GUILD_ID;
 
       const executor = entry.executor;
       const reason = entry.reason || 'Sem motivo especificado';

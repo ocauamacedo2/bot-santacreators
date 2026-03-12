@@ -37,6 +37,7 @@ export function setupBanLog(client) {
 
   client.on('guildBanAdd', async (ban) => {
     const { user, guild } = ban;
+    const isMainGuild = guild.id === MAIN_GUILD_ID;
 
     try {
       const logs = await guild.fetchAuditLogs({
@@ -85,6 +86,7 @@ export function setupBanLog(client) {
 
   client.on('guildBanRemove', async (ban) => {
     const { user, guild } = ban;
+    const isMainGuild = guild.id === MAIN_GUILD_ID;
 
     try {
       const logs = await guild.fetchAuditLogs({

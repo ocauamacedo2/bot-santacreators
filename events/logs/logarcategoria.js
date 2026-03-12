@@ -110,18 +110,13 @@ export default {
                     { name: "📂 Categoria", value: `**Nome:** ${category.name}\n**ID:** \`${category.id}\``, inline: true }
                 );
 
-                const localLogChannelId = LOCAL_LOG_CHANNELS[guild.id];
-                if (localLogChannelId) {
-                    try {
-                        const localLogChannel = await client.channels.fetch(localLogChannelId);
-                        if (localLogChannel?.isTextBased()) {
-                            const localEmbed = EmbedBuilder.from(embed).setFooter(null);
-                            await localLogChannel.send({ embeds: [localEmbed] });
-                        }
-                    } catch (error) {
-                        console.error(`[logarcategoria] ERRO (Local): Falha ao enviar para o canal ${localLogChannelId} na guilda ${guild.name}.`, error.message);
-                    }
+                const logChannelId = LOCAL_LOG_CHANNELS[guild.id];
+                const logChannel = await client.channels.fetch(logChannelId).catch(() => null);
+
+                if (logChannel?.isTextBased()) {
+                    await logChannel.send({ embeds: [embed.setFooter(null)] });
                 }
+
                 successCount++;
             } catch (err) {
                 console.error(`[logarcategoria] Erro ao logar canal ${channel.name}:`, err);

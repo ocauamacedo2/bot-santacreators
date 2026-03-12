@@ -17,7 +17,6 @@ import {
 } from "discord.js";
 // ✅ HUB do dashboard (o mesmo que o scGeralDash usa)
 import { dashEmit } from "../utils/dashHub.js";
-import { resolveLogChannel } from "./channelResolver.js";
 
 // ── CONFIG DE CANAIS ─────────────────────────────────────────────
 const VIP_MENU_CHANNEL_ID = "1414718336826081330"; // onde fica o MENU e os REGISTROS
@@ -675,7 +674,7 @@ export async function vipEventoHandleInteraction(i, client) {
         );
       }
 
-      const logs = await resolveLogChannel(client, VIP_LOGS_CHANNEL_ID);
+      const logs = await client.channels.fetch(VIP_LOGS_CHANNEL_ID).catch(() => null);
       logs?.isTextBased() &&
         logs
           .send({

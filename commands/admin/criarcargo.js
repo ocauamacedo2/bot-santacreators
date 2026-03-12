@@ -15,7 +15,6 @@ import {
   ButtonBuilder,
   ButtonStyle
 } from "discord.js";
-import { resolveLogChannel } from "../../events/channelResolver.js";
 
 // quem pode por ID direto
 const ALLOWED_USER_IDS = [
@@ -301,7 +300,7 @@ const command = {
     });
 
     // ================== LOG COMPLETO ==================
-    const logChannel = await resolveLogChannel(client, LOG_CHANNEL_ID);
+    const logChannel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
     if (logChannel?.isTextBased?.()) {
       const member = message.member;
       const nowTs = Math.floor(Date.now() / 1000);

@@ -23,7 +23,6 @@ import {
   ButtonStyle,
   PermissionsBitField,
 } from "discord.js";
-import { resolveLogChannel } from "../../events/channelResolver.js";
 
 // ================== CONFIG ==================
 const PREFIX = process.env.PREFIX || "!";
@@ -309,7 +308,7 @@ export async function duplicarPermHandleMessage(message, client) {
     }
 
     // ============ LOG ============
-    const logChannel = await resolveLogChannel(client, LOG_CHANNEL_ID);
+    const logChannel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
     const token = crypto.randomBytes(8).toString("hex");
 
     const cache = readCache();

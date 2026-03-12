@@ -28,7 +28,6 @@ import {
   TextInputBuilder,
   TextInputStyle,
 } from "discord.js";
-import { resolveLogChannel } from "./channelResolver.js";
 
 // ===============================
 // CONFIG
@@ -810,8 +809,8 @@ if (!(now.getUTCDay() === 3 && now.getUTCHours() === 15 && now.getUTCMinutes() =
 }
 
 async function logDM(client, userId, content, embeds, { dmOk = true } = {}) {
-  try {
-    const canalLog = await resolveLogChannel(client, FACSMENU_LOG_DM_CHANNEL_ID);
+  try { 
+    const canalLog = await client.channels.fetch(FACSMENU_LOG_DM_CHANNEL_ID).catch(() => null);
     if (!canalLog?.isTextBased?.()) return;
 
     const ts = Math.floor(Date.now() / 1000);
@@ -849,8 +848,8 @@ async function logAudit(
     extra = null,         // ✅ qualquer extra em string/obj
   } = {}
 ) {
-  try {
-    const ch = await resolveLogChannel(client, FACSMENU_AUDIT_LOG_CHANNEL_ID);
+  try { 
+    const ch = await client.channels.fetch(FACSMENU_AUDIT_LOG_CHANNEL_ID).catch(() => null);
     if (!ch?.isTextBased?.()) return;
 
     const nowTs = Math.floor(Date.now() / 1000);

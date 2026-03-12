@@ -12,7 +12,6 @@ import {
   TextInputStyle,
 } from "discord.js";
 import { dashEmit } from "../utils/dashHub.js";
-import { resolveLogChannel } from "./channelResolver.js";
 
 // ✅ __dirname no ESM (pra path absoluto e estável)
 const __filename = fileURLToPath(import.meta.url);
@@ -899,7 +898,7 @@ export async function doacaoHandleInteraction(interaction, client) {
           .setTimestamp()
           .setColor("Green");
 
-        const canalLog = await resolveLogChannel(client, CANAL_LOGS_ID);
+        const canalLog = await client.channels.fetch(CANAL_LOGS_ID).catch(() => null);
 
         if (collectedMsg && collectedMsg.attachments.size > 0) {
           const att = collectedMsg.attachments.first();

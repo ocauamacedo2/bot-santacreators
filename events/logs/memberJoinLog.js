@@ -71,7 +71,7 @@ async function execute(member) {
         // Atualiza o cache com os novos usos
         invites.set(guild.id, new Collection(newInvites.map((invite) => [invite.code, invite.uses])));
 
-        const logChannel = await guild.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+        const logChannel = LOG_CHANNEL_ID ? await guild.channels.fetch(LOG_CHANNEL_ID).catch(() => null) : null;
         if (!logChannel || !logChannel.isTextBased()) return;
 
         const embed = new EmbedBuilder()

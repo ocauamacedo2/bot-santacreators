@@ -4,7 +4,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from "discord.js";
 import { dashOn } from "../utils/dashHub.js";
-import { resolveLogChannel } from "./channelResolver.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -252,7 +251,7 @@ export async function recrutamentoDashHandleMessage(message, client) {
 
   // Log
   try {
-    const logChannel = await resolveLogChannel(client, LOG_CHANNEL_ID);
+    const logChannel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
     if (logChannel && logChannel.isTextBased()) {
       const embed = new EmbedBuilder()
         .setTitle("🗑️ Dashboard Recrutamento ZERADO")

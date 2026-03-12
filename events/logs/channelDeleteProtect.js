@@ -118,7 +118,6 @@ export default function installChannelDeleteProtection(client) {
         // O código para recriar o canal iria aqui.
         // Por segurança, a recriação automática foi omitida.
         // O ideal é logar a tentativa de deleção indevida.
-        const isMainGuild = guild.id === MAIN_GUILD_ID;
 
         const embed = new EmbedBuilder()
             .setColor('Red')

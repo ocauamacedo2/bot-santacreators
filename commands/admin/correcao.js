@@ -3,8 +3,6 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { dashEmit } from '../../utils/dashHub.js';
-import { resolveLogChannel } from '../../events/channelResolver.js';
-
 
 
 const CANAL_LOGS_CORRECAO = '1471695257010831614'; // ✅ Canal novo solicitado
@@ -191,7 +189,7 @@ const numeros = match[1]
 
   const scoreInfo = checkCooldown(message.author.id);
 
-  const canalLogs = await resolveLogChannel(client, CANAL_LOGS_CORRECAO);
+  const canalLogs = await client.channels.fetch(CANAL_LOGS_CORRECAO).catch(() => null);
   if (canalLogs) {
     // Tenta pegar quem abriu o ticket pelo tópico
     const topic = message.channel.topic || "";

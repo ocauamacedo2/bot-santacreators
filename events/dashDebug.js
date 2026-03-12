@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { EmbedBuilder } from "discord.js";
 import { dashOnAny } from "../utils/dashHub.js";
-import { resolveLogChannel } from "./channelResolver.js";
 
 // =====================================================
 // DASH DEBUG (v2)
@@ -65,7 +64,7 @@ export function dashDebugOnReady(client) {
         return;
       }
 
-      const ch = await resolveLogChannel(client, DEBUG_CHANNEL_ID);
+      const ch = await client.channels.fetch(DEBUG_CHANNEL_ID).catch(() => null);
       if (!ch?.isTextBased?.()) return;
 
       const st = readState();

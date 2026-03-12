@@ -26,7 +26,6 @@ import {
   TextInputBuilder,
   TextInputStyle,
 } from "discord.js";
-import { resolveLogChannel } from "./channelResolver.js";
 
 
 // ===============================
@@ -475,7 +474,7 @@ function getLastNWeekKeys(stats, n) {
 // ===============================
 async function sendLog(client, title, lines) {
   try {
-    const ch = await resolveLogChannel(client, ORG_DASH_LOG_CHANNEL_ID);
+    const ch = await client.channels.fetch(ORG_DASH_LOG_CHANNEL_ID).catch(() => null);
     if (!ch || !ch.isTextBased()) return;
 
     const embed = new EmbedBuilder()

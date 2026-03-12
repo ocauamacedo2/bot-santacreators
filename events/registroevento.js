@@ -9,7 +9,6 @@ import {
   ButtonStyle, 
   PermissionFlagsBits 
 } from 'discord.js';
-import { resolveLogChannel } from './channelResolver.js';
 // ✅ ADD: HUB (pra contar nas métricas humanas do GeralDash)
 import { dashEmit } from "../utils/dashHub.js";
 // ========================== CONFIG ==========================

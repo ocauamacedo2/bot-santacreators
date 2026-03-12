@@ -4,7 +4,6 @@ import {
   PermissionFlagsBits,
   EmbedBuilder,
 } from "discord.js";
-import { resolveLogChannel } from "../../events/channelResolver.js";
 
 // ===============================
 // SC_PERM — REMOVER ACESSO POR CATEGORIA (MODULAR)
@@ -162,7 +161,7 @@ async function processCategory(message, categoryId, roleIds) {
 
   // logs opcional
   if (CANAL_LOGS_ID) {
-    const logCh = await resolveLogChannel(message.client, CANAL_LOGS_ID);
+    const logCh = await message.client.channels.fetch(CANAL_LOGS_ID).catch(() => null);
     if (logCh?.isTextBased()) {
       await logCh.send({ embeds: [sum] }).catch(() => null);
     }

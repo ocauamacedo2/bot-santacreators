@@ -8,9 +8,7 @@ import ban        from '../commands/admin/ban.js';
 import kick       from '../commands/admin/kick.js';
 import copycargo  from '../commands/admin/copycargo.js';
 import perguntas from '../commands/admin/perguntas.js';
-import perfildc from '../commands/admin/perfildc.js';
 import infoid from '../commands/admin/infoid.js';
-import criarCategoriaEspelho from './criarCategoriaEspelho.js';
 
 import ping       from '../commands/admin/ping.js';
 import duplicados from '../commands/admin/duplicados.js';
@@ -39,6 +37,7 @@ import { clearHandleMessage } from '../commands/admin/clearHandler.js';
 import { verIdHandleMessage } from '../commands/admin/verid.js';
 import { apagarChatHandleMessage } from '../commands/admin/apagarchat.js';
 import { removerMassivoHandleMessage } from '../commands/admin/removerMassivo.js';
+import perfildc from '../commands/admin/perfildc.js';
 import logarcategoria from './logs/logarcategoria.js';
 
 // 🔻 removido: setstaff (não usado)
@@ -75,7 +74,6 @@ const commands = {
   meuscargos,
   perfildc,
   infoid,
-  criar: criarCategoriaEspelho,
   logarcategoria,
 
   // permissões de canal
