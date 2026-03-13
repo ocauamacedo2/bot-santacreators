@@ -30,6 +30,52 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const COOLDOWN_FILE = path.resolve(__dirname, '../../data/perguntas_cooldown.json');
 
+// --- PERGUNTAS (para envio manual) ---
+const perguntas = [
+  `📋 **Entrevista Pré-Admissão – SantaCreators**
+---
+🔹 **Regras Internas e Postura na Empresa**
+
+Qual o seu nome completo e, se tiver, como você costuma ser chamado dentro do RP?`,
+  'Sua idade?',
+  'Como você conheceu a SantaCreators? O que te chamou atenção na empresa e te motivou a querer fazer parte dela?',
+  'Durante o RP, qual deve ser sua postura ao interagir com uma pessoa que utiliza preset e nome feminino, mesmo que você perceba diferenças entre o visual do personagem e a voz do jogador?',
+  'Você sabe qual é a importância do uso da jaqueta ou peças da SantaCreators ao entrar no prédio e ao circular nas redondezas? Por que isso é obrigatório?',
+  'Ao utilizar a garagem da empresa, qual deve ser sua conduta em relação ao uniforme? E por que isso é exigido?',
+  'O que você faria se visse um membro utilizando um veículo que você sabe que é da empresa para participar de uma troca de tiro ou assalto de pista?',
+  'Em que situação o uso dos veículos da empresa é permitido para ações ilegais no RP? Quais cuidados devem ser tomados nesses casos?',
+  'Quantos baús existem dentro do prédio da SantaCreators e qual deles é proibido de ser mexido de forma alguma? E por quê?',
+  `🎭 **Imersão e Comportamento no RP**
+
+Se você presenciar um membro da empresa utilizando expressões ou referências do mundo de fora (vida real) sem qualquer contexto válido, quebrando a imersão, como você abordaria a situação?`,
+  'Caso veja algum membro da empresa nas proximidades usando comandos de F8 para sentar no ar, flutuar ou realizar ações que claramente quebram a física do RP, ou até mesmo abusando de poderes, como você reagiria e o que você faria diante dessas situações?',
+  'Se durante o RP um jogador disser algo como "minha internet caiu" ou "precisei sair do Discord", como você orientaria essa pessoa a se manter na imersão? Dê um exemplo de como reformular a frase.',
+  `🧠 **Postura e Responsabilidade**
+
+Como você lidaria com um membro novo que claramente não conhece as regras da empresa e está agindo de forma que compromete a imagem da SantaCreators?`,
+  'Imagine que você esteja em um evento da SantaCreators representando a empresa, e um imprevisto ocorre (por exemplo, uma confusão no local ou alguém quebrando a imersão). Qual seria sua postura?',
+  'Na sua visão, quais atitudes e comportamentos são essenciais para que um membro da SantaCreators evolua na hierarquia e conquiste promoções dentro da empresa?',
+  'Quais atitudes caracterizam abuso de poder dentro do RP e como você deve agir em casos de anti-rp contra você?',
+  `🏢 **Funcionamento da Empresa e Hierarquia**
+
+Por que é importante respeitar a hierarquia dentro da empresa, mesmo que em alguns momentos você tenha mais experiência do que alguém de cargo superior?`,
+  'Em quais situações o uso de poderes é permitido e qual é o objetivo principal desse uso dentro da SantaCreators?',
+  'A call é obrigatória para todos na SantaCreators? Em quais casos ela passa a ser necessária e por quê?',
+  `🚀 **Pergunta Bônus**
+
+Como o comprometimento diário (registro, bate ponto e organização) influencia sua evolução dentro da SantaCreators?`,
+  'Qual é a função do Baú Creators?',
+  'O que é MetaGame no RP?',
+  'O que é considerada Má Conduta?',
+  'O que é Quebra de Imersão?',
+  'Em que situações o uso de NOCLIP/NC é considerado abuso e qual é a alternativa correta?',
+  'Se você for preso pela polícia e tiver seus itens apreendidos, mas depois conseguir fugir e tiver acesso aos comandos kitinf e kitinflu, o que você faria nessa situação?',
+  'Se acontecesse algum problema grave, como quebra de imersão, falta de respeito ou atitude totalmente contra a cultura da empresa, você chamaria um staff? Por quê? E o que esperaria que acontecesse depois?',
+  'Qual deve ser sua conduta ao trocar de roupa dentro da empresa ou nos arredores do prédio?',
+  'Se você é um membro novo e tem uma dúvida, mas vê por perto alguém da coordenação e também um responsável, pra quem você recorre primeiro? E por quê?',
+  'Se um dia você decidir sair do projeto (painel da SantaCreators), como você comunicaria sua saída da forma certa e respeitosa?'
+];
+
 function checkCooldown(userId) {
   try {
     const dir = path.dirname(COOLDOWN_FILE);
@@ -74,10 +120,47 @@ export default {
       return message.reply("🚫 Este comando só pode ser usado em um canal de ticket de entrevista.").catch(() => {});
     }
 
-    // 3. Lógica de Cooldown e Pontuação
+    // 3. Enviar as perguntas em embeds
+    const embeds = [];
+    let currentDescription = '';
+    const embedColor = '#ff009a';
+
+    let questionCounter = 1;
+    for (const question of perguntas) {
+        let questionText;
+        // Trata os cabeçalhos de seção de forma diferente
+        if (question.includes('---') || ['🎭', '🧠', '🏢', '🚀'].some(emoji => question.startsWith(emoji))) {
+            questionText = `\n${question}\n\n`;
+        } else {
+            questionText = `**${questionCounter}.** ${question}\n\n`;
+            questionCounter++;
+        }
+        
+        if (currentDescription.length + questionText.length > 4000) {
+            embeds.push(new EmbedBuilder().setColor(embedColor).setDescription(currentDescription));
+            currentDescription = '';
+        }
+        currentDescription += questionText;
+    }
+
+    if (currentDescription) {
+        embeds.push(new EmbedBuilder().setColor(embedColor).setDescription(currentDescription));
+    }
+
+    try {
+        await message.reply({ content: "Enviando a lista de perguntas para a entrevista manual...", ephemeral: true });
+        for (const embed of embeds) {
+            await message.channel.send({ embeds: [embed] });
+        }
+    } catch (error) {
+        console.error("Erro ao enviar as perguntas da entrevista:", error);
+        await message.channel.send("❌ Ocorreu um erro ao enviar as perguntas. Verifique as permissões do bot neste canal.");
+    }
+
+    // 4. Lógica de Cooldown e Pontuação
     const scoreInfo = checkCooldown(message.author.id);
 
-    // 4. Enviar log
+    // 5. Enviar log
     const logChannel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
     if (logChannel) {
       const logEmbed = new EmbedBuilder()
@@ -93,16 +176,16 @@ export default {
       await logChannel.send({ embeds: [logEmbed] });
     }
 
-    // 5. Emitir evento para o dashboard (apenas se pontuou)
+    // 6. Emitir evento para o dashboard e notificar o usuário (apenas se pontuou)
     if (scoreInfo.scored) {
       dashEmit('entrevista:perguntas', {
         userId: message.author.id,
         __at: Date.now(),
         source: 'perguntas'
       });
-      await message.reply({ content: '✅ Ponto de `!perguntas` contabilizado para você!', ephemeral: true }).catch(() => {});
+      await message.author.send({ content: '✅ Ponto de `!perguntas` contabilizado para você!'}).catch(() => {});
     } else {
-      await message.reply({ content: `⏳ Você já usou este comando recentemente. Espere mais ${scoreInfo.remaining} para pontuar novamente.`, ephemeral: true }).catch(() => {});
+      await message.author.send({ content: `⏳ Você já usou este comando recentemente. Espere mais ${scoreInfo.remaining} para pontuar novamente.`}).catch(() => {});
     }
   }
 };
