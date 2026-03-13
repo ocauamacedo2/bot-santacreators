@@ -265,7 +265,7 @@ export async function focoSemanaisHandleMessage(message, client) {
         return true;
     }
     return false;
-}
+}///TESTE
 
 export async function focoSemanaisHandleInteraction(interaction, client) {
   try {
