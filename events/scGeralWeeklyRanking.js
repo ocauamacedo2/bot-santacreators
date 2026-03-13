@@ -775,26 +775,7 @@ async function collectAllPoints(client, mode = "light") {
     },
   });
 
-  // PERGUNTAS (logs)
-  if (PERGUNTAS_LOGS_CHANNEL_ID) {
-    await scanChannelEmbeds(client, {
-      channelId: PERGUNTAS_LOGS_CHANNEL_ID,
-      weekFloorKey,
-      maxPages: 80,
-      onMessage: async (m) => {
-        const emb = m.embeds?.[0];
-        if (!emb) return;
-        if (!isPerguntasLogEmbed(emb)) return;
-
-        const uid = perguntas_getUserId(emb);
-        if (!uid) return;
-
-        pushItem({ userId: uid, ts: new Date(m.createdTimestamp), source: "perguntas" });
-      },
-    });
-  }
-
-  // PERGUNTAS (via canal de CORREÇÃO/LOGS NOVO)
+  // PONTO DE ENTREVISTA (logs)
   if (CORRECAO_LOGS_CHANNEL_ID) {
     await scanChannelEmbeds(client, {
       channelId: CORRECAO_LOGS_CHANNEL_ID,
@@ -803,9 +784,9 @@ async function collectAllPoints(client, mode = "light") {
       onMessage: async (m) => {
         const emb = m.embeds?.[0];
         if (!emb) return;
-        if (!isPerguntasLogEmbed(emb)) return;
+        if (!isEntrevistaConcluidaLogEmbed(emb)) return;
 
-        const uid = perguntas_getUserId(emb);
+        const uid = entrevistaConcluida_getUserId(emb);
         if (!uid) return;
 
         pushItem({ userId: uid, ts: new Date(m.createdTimestamp), source: "perguntas" });
@@ -1651,7 +1632,8 @@ function wireHub(client) {
   dashOn("bp:punch", () => markDirty({ invalidateScanCache: true }));
   dashOn("doacao:registrada", () => markDirty({ invalidateScanCache: true }));
   dashOn("lideres:convite_enviado", () => markDirty({ invalidateScanCache: true }));
-  dashOn("entrevista:perguntas", () => markDirty({ invalidateScanCache: true }));
+  // ✅ NOVO: Ouve o evento de ponto concluído, não o de início
+  dashOn("entrevista:ponto_concluido", () => markDirty({ invalidateScanCache: true }));
   dashOn("rm:approved", () => markDirty({ invalidateScanCache: true }));
   dashOn("rm:rejected", () => markDirty({ invalidateScanCache: true }));
   dashOn("alinhamento:registrado", () => markDirty({ invalidateScanCache: true }));

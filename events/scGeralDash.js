@@ -1159,8 +1159,8 @@ await scanChannelEmbeds(client, {
   },
 });
 
-// ✅ PERGUNTAS (log do !perguntas)
-if (CORRECAO_LOGS_CHANNEL_ID) {
+// ✅ PONTO DE ENTREVISTA (log de conclusão)
+if (CORRECAO_LOGS_CHANNEL_ID) { // Usa o mesmo canal de logs de correção
   await scanChannelEmbeds(client, {
     channelId: CORRECAO_LOGS_CHANNEL_ID,
     weekFloorKey,
@@ -1169,11 +1169,10 @@ if (CORRECAO_LOGS_CHANNEL_ID) {
       const emb = m.embeds?.[0];
       if (!emb) return;
       
-      // Procura pelo log de "!perguntas usado"
-      if (!isPerguntasLogEmbed(emb)) return;
+      // Procura pelo log de "Ponto de Entrevista Concluída"
+      if (!isEntrevistaConcluidaLogEmbed(emb)) return;
 
-      // Pega o ID do usuário que usou o comando
-      const uid = perguntas_getUserId(emb);
+      const uid = entrevistaConcluida_getUserId(emb);
       if (!uid) return;
 
       items.push({
@@ -1919,7 +1918,7 @@ async function backfillExtrasThisWeek(client) {
       await scanCurrentWeekEmbeds(
         client,
         CORRECAO_LOGS_CHANNEL_ID,
-        (emb) => isEntrevistaConcluidaLogEmbed(emb), // Procura pelo novo log de ponto
+        (emb) => isEntrevistaConcluidaLogEmbed(emb),
         async (_m, _emb) => {
           // Pega o ID do aplicador que ganhou o ponto
           const uid = entrevistaConcluida_getUserId(_emb);
@@ -2719,17 +2718,16 @@ dashOn("bp:punch", (_p) => {
     markDirty();
   });
 
-   dashOn("entrevista:perguntas", (p) => {
-  try {
-    const st = loadState();
-    const wk = weekKeyFromDateSP(new Date(p.__at || Date.now()));
-    bumpWeekly(st, "perguntas", wk, 1);
-    saveState(st);
-  } catch {}
-
-  // ✅ perguntas também entra no ranking via scan do canal de LOG
-  markDirty({ invalidateScanCache: true });
-});
+  // ✅ NOVO: O ponto agora é emitido na conclusão da entrevista
+  dashOn("entrevista:ponto_concluido", (p) => {
+    try {
+      const st = loadState();
+      const wk = weekKeyFromDateSP(new Date(p.__at || Date.now()));
+      bumpWeekly(st, "perguntas", wk, 1);
+      saveState(st);
+    } catch {}
+    markDirty({ invalidateScanCache: true });
+  });
 
 
 

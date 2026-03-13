@@ -284,16 +284,15 @@ async function handleButtons(interaction) {
   if (customId.startsWith('aprovar|') || customId.startsWith('reprovar|') || customId.startsWith('alinhar|')) {
     await interaction.deferReply({ flags: 64 });
 
-    const [acao, userId] = customId.split('|');
+    const [acao, userId, starterId] = customId.split('|');
     const membro = await guild.members.fetch(userId).catch(() => null);
     if (!membro) return interaction.editReply('❌ Membro não encontrado.');
-
+    
     const cargos = {
       aprovar: '1353835229755998290',
       reprovar: '1353835208322842685',
       alinhar: '1382201667335880704'
     };
-
     const mensagens = {
       aprovar: '🎉 Você foi **aprovado(a)** na entrevista! Parabéns e seja bem-vindo(a) à SantaCreators.',
       reprovar: '😕 Sua entrevista foi analisada e você **não foi aprovado(a)** desta vez.',
@@ -313,6 +312,32 @@ async function handleButtons(interaction) {
     await interaction.editReply(`✅ ${membro.user.username} foi marcado como **${acao.toUpperCase()}** por <@${interaction.user.id}>.`);
     await interaction.message.edit({ content: `✅ Ação realizada: **${acao.toUpperCase()}** para <@${membro.id}> por <@${interaction.user.id}>.`, components: [] }).catch(() => {});
     await channel.send(`📌 <@${membro.id}> foi **${acao === 'aprovar' ? 'aprovado(a)' : acao === 'reprovar' ? 'reprovado(a)' : 'colocado(a) em alinhamento'}** por <@${interaction.user.id}>.`).catch(() => {});
+
+    // ✅ LÓGICA DE PONTUAÇÃO
+    const finisherId = interaction.user.id;
+    if (starterId && finisherId === starterId) {
+      // Emite o evento para o dashboard/ranking
+      dashEmit("entrevista:ponto_concluido", {
+        userId: finisherId,
+        __at: Date.now()
+      });
+
+      // Envia um log específico para a pontuação
+      const logChannel = await interaction.client.channels.fetch(LOG_CHANNEL_ID_NOVO).catch(() => null);
+      if (logChannel) {
+        const logEmbed = new EmbedBuilder()
+          .setTitle('🏆 Ponto de Entrevista Concluída')
+          .setColor('#2ecc71')
+          .setDescription(`O aplicador concluiu a avaliação da entrevista que iniciou.`)
+          .addFields(
+            { name: '🏆 Aplicador (ganhou ponto)', value: `<@${finisherId}>`, inline: true },
+            { name: '👤 Candidato', value: `<@${userId}>`, inline: true },
+            { name: '📍 Canal da Entrevista', value: `${channel}`, inline: true }
+          )
+          .setTimestamp();
+        logChannel.send({ embeds: [logEmbed] });
+      }
+    }
 
     await logCompleto(interaction.client, {
       titulo: `✅ Resultado aplicado: ${acao.toUpperCase()}`,
@@ -590,7 +615,7 @@ const fim = await channel.send(
       ]
     });
 
-    await enviarLogFinalEntrevista(membro, dados.respostas);
+    await enviarLogFinalEntrevista(membro, dados);
     return;
   }
 
@@ -660,9 +685,12 @@ async function iniciarContadorGlobal(channel, membroId, remainingMs = ENTREVISTA
 }
 
 // ===== LOG FINAL (avaliação + botões) =====
-async function enviarLogFinalEntrevista(member, respostas) {
+async function enviarLogFinalEntrevista(member, dados) {
   const canalAvaliacao = await member.client.channels.fetch('1382200863866622052').catch(() => null);
   if (!canalAvaliacao) return;
+
+  const respostas = dados.respostas;
+  const entrevistadorId = dados.entrevistadorId || 'none';
 
   const info = new EmbedBuilder()
     .setTitle('📋 Registro de Entrevista Finalizada')
@@ -699,9 +727,9 @@ async function enviarLogFinalEntrevista(member, respostas) {
   }
 
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`aprovar|${member.id}`).setLabel('✅ APROVAR').setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId(`reprovar|${member.id}`).setLabel('❌ REPROVAR').setStyle(ButtonStyle.Danger),
-    new ButtonBuilder().setCustomId(`alinhar|${member.id}`).setLabel('⚠️ ALINHAR').setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId(`aprovar|${member.id}|${entrevistadorId}`).setLabel('✅ APROVAR').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`reprovar|${member.id}|${entrevistadorId}`).setLabel('❌ REPROVAR').setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId(`alinhar|${member.id}|${entrevistadorId}`).setLabel('⚠️ ALINHAR').setStyle(ButtonStyle.Secondary)
   );
 
   await canalAvaliacao.send({
