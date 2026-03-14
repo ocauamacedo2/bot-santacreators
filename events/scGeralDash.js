@@ -186,7 +186,9 @@ const BAR_MAX = 350; // 🎯 nova meta: 350 pontos
 
 // ================== MEMÓRIA ==================
 let LOCK = false;
-let LOCK_TS = 0; // ✅ Timestamp da trava local
+let LOCK_TS = 0; // ✅ Timestamp da trava local do update
+let SCAN_LOCK = false;
+let SCAN_LOCK_TS = 0; // ✅ trava separada só do scan
 let CACHE = { at: 0, payload: null };
 let DIRTY = false; // marcou que teve interação humana desde última atualização
 let NEXT_ALLOWED_AT = 0; // quando pode rodar scan novamente
@@ -845,13 +847,22 @@ async function resolveDashboardMessage(dashChannel, st) {
     }
 
   // 2) pins (mais rápido)
-    let pins = null;
-    if (typeof dashChannel.messages?.fetchPins === 'function') {
+      let pins = null;
+
+    if (typeof dashChannel.messages?.fetchPins === "function") {
       pins = await dashChannel.messages.fetchPins().catch(() => null);
+    } else if (typeof dashChannel.messages?.fetchPinned === "function") {
+      pins = await dashChannel.messages.fetchPinned().catch(() => null);
     }
 
-    if (pins?.size) {
-      const pinned = [...pins.values()].filter((m) => isFromBot(m) && messageHasMarker(m));
+    const pinnedList =
+      pins?.values ? [...pins.values()] :
+      Array.isArray(pins?.items) ? pins.items :
+      Array.isArray(pins) ? pins :
+      [];
+
+    if (pinnedList.length) {
+      const pinned = pinnedList.filter((m) => isFromBot(m) && messageHasMarker(m));
 
       if (pinned.length) {
         pinned.sort((a, b) => (b.createdTimestamp || 0) - (a.createdTimestamp || 0));
@@ -957,10 +968,19 @@ async function resolveDashboardMessage(dashChannel, st) {
 
 async function collectAllGeneral(client, mode = "light") {
   const now = Date.now();
-  if (LOCK) return { items: [] }; // ✅ não deixa rodar se já estiver rodando outro boot (conflito)
 
+  // ✅ trava própria do scan (se quiser evitar scans simultâneos)
+  if (SCAN_LOCK) {
+    if (Date.now() - SCAN_LOCK_TS > 120000) {
+      console.warn("[SC_GERAL_DASH] ⚠️ SCAN_LOCK travado. Resetando.");
+      SCAN_LOCK = false;
+      SCAN_LOCK_TS = 0;
+    } else {
+      return CACHE.payload || { items: [] };
+    }
+  }
 
-  // ✅ SE VAI USAR CACHE, RECONSTRÓI weekKeysFound A PARTIR DELE
+  // ✅ cache leve
   if (mode === "light" && CACHE.payload && now - CACHE.at < SCAN_TTL_MS) {
     DEBUG.weekKeysFound = {};
     for (const it of CACHE.payload.items || []) {
@@ -970,8 +990,12 @@ async function collectAllGeneral(client, mode = "light") {
     return CACHE.payload;
   }
 
+  SCAN_LOCK = true;
+  SCAN_LOCK_TS = Date.now();
+
+  try {
     DEBUG.weekKeysFound = {};
-  const items = [];
+    const items = [];
 
   // ✅ floor = volta 5 semanas (4 semanas do gráfico + 1 semana de folga)
   const wkNow = weekKeyFromDateSP(nowSP());
@@ -1359,9 +1383,13 @@ try {
     DEBUG.weekKeysFound[wk] = (DEBUG.weekKeysFound[wk] || 0) + 1;
   }
 
-  const payload = { items };
-  CACHE = { at: now, payload };
-  return payload;
+     const payload = { items };
+    CACHE = { at: now, payload };
+    return payload;
+  } finally {
+    SCAN_LOCK = false;
+    SCAN_LOCK_TS = 0;
+  }
 }
 
 function chooseWeeksUnion() {
@@ -2768,17 +2796,6 @@ dashOn("bp:sync", async (p) => {
     markDirty({ invalidateScanCache: true });
   });
 
-  // ✅ PRESENÇA CONFIRMADA
-  dashOn("presenca:confirmada", (p) => {
-    try {
-      const st = loadState();
-      const wk = weekKeyFromDateSP(new Date(p.__at || Date.now()));
-      bumpWeekly(st, "presencas", wk, 1);
-      saveState(st);
-    } catch {}
-    markDirty({ invalidateScanCache: true });
-  });
-
   // ✅ CORREÇÃO
   dashOn("correcao:usado", (p) => {
     try {
@@ -3237,8 +3254,14 @@ const wk = chosen.thisKey || weekKeyFromDateSP(nowSP());
   if (low === "!geraldashrefresh") {
     // ✅ FORCE UNLOCK: Destrava qualquer processo preso
     LOCK = false;
+    LOCK_TS = 0;
+
+    SCAN_LOCK = false;
+    SCAN_LOCK_TS = 0;
+
     globalThis.__SC_GERAL_DASH_UPSERTING__ = false;
     globalThis.__SC_GERAL_DASH_LOCK_TS__ = 0;
+
     console.log("[SC_GERAL_DASH] 🔓 Desbloqueio forçado via comando.");
 
     DIRTY = false;
