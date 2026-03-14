@@ -461,10 +461,12 @@ async function updatePanel(client, state) {
     const chunks = splitText(fullContent, 2000);
 
     // Se a lista de IDs de mensagem de texto for igual ao número de chunks, edita as mensagens existentes.
-    if (state.textMessageIds?.length === chunks.length) {
+    const canReuse = state.textMessageIds?.length === chunks.length;
+
+    if (canReuse) {
       // Apenas edita
       for (let i = 0; i < chunks.length; i++) {
-        const msg = await channel.messages.fetch(currentIds[i]).catch(() => null);
+        const msg = await channel.messages.fetch(state.textMessageIds[i]).catch(() => null);
         if (msg && msg.content !== chunks[i]) {
           await msg.edit({ content: chunks[i], embeds: [], components: [] }).catch(() => {});
         }
@@ -479,12 +481,17 @@ async function updatePanel(client, state) {
       }
       state.textMessageIds = [];
 
-      // Limpa órfãos
+      // Limpa órfãos de forma mais agressiva
       try {
         const recent = await channel.messages.fetch({ limit: 50 }).catch(() => null);
         if (recent) {
-          const orphans = recent.filter(m => m.author.id === client.user.id && m.id !== state.panelMessageId && (m.content || "").includes("# 📅 EVENTOS SEMANAIS"));
-          for (const orphan of orphans.values()) await orphan.delete().catch(() => {});
+          // Apaga QUALQUER mensagem do bot que NÃO seja o painel de controle
+          const orphans = recent.filter(m => m.author.id === client.user.id && m.id !== state.panelMessageId);
+          for (const orphan of orphans.values()) {
+            // Adiciona uma verificação para não apagar o próprio painel de controle por engano
+            if (orphan.embeds.some(e => e.footer?.text?.includes("Controle do Cronograma"))) continue;
+            await orphan.delete().catch(() => {});
+          }
         }
       } catch {}
 
@@ -503,15 +510,26 @@ async function updatePanel(client, state) {
     }
 
     // ✅ 4) Atualiza a mensagem “CONTROLE” (botões)
+    let ctrlMsg = null;
     if (state.panelMessageId) {
-      const ctrlMsg = await channel.messages.fetch(state.panelMessageId).catch(() => null);
-      if (ctrlMsg) {
-        await ctrlMsg.edit({
-          content: "🔧 **Painel de Controle**",
-          embeds: [buildControlEmbed()],
-          components: [buildControlRow()],
+      ctrlMsg = await channel.messages.fetch(state.panelMessageId).catch(() => null);
+    }
+    
+    // Se a mensagem de controle não existe, recria
+    if (!ctrlMsg) {
+        ctrlMsg = await channel.send({
+            content: "🔧 **Painel de Controle**",
+            embeds: [buildControlEmbed()],
+            components: [buildControlRow()],
         });
-      }
+        state.panelMessageId = ctrlMsg.id;
+    } else {
+        // Se existe, apenas edita
+        await ctrlMsg.edit({
+            content: "🔧 **Painel de Controle**",
+            embeds: [buildControlEmbed()],
+            components: [buildControlRow()],
+        });
     }
 
     saveState(state);
