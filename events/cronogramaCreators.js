@@ -298,18 +298,8 @@ _Nenhum agendado._
 `;
   }
 
-  // ✅ Menções solicitadas no final (agora com as novas invisíveis)
-  text += `\n\n<@&1262978759922028575> <@&1353858422063239310> <@&1388975939161161728> <@&1392678638176043029> <@&1388976155830255697> @everyone${newMentions}`;
-
-  // ✅ Imagem no final (Link direto para ficar grande e sem embed)
-  // ❌ REMOVIDO: O link da imagem não é mais adicionado ao texto.
-  // A imagem será enviada em uma mensagem separada.
-  let footer = "";
-  // if (state.footerImageUrl) {
-  //   footer = `\n${state.footerImageUrl}`;
-  // }
-
-  return text + footer;
+  // ✅ NÃO coloca mais menções nem link da imagem dentro do texto principal
+  return text;
 }
 
 function buildCronogramaEmbeds(state) {
@@ -425,6 +415,14 @@ function buildControlEmbed() {
     .setTimestamp();
 }
 
+function buildFooterImageEmbed(state) {
+  if (!state.footerImageUrl || !state.footerImageUrl.startsWith("http")) return null;
+
+  return new EmbedBuilder()
+    .setColor("#9b59b6")
+    .setImage(state.footerImageUrl);
+}
+
 function buildControlRow() {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
@@ -460,6 +458,22 @@ function buildScheduleSummary(state) {
   return text;
 }
 
+function buildCronogramaMentions() {
+  const roleIds = [
+    "1262978759922028575",
+    "1353858422063239310",
+    "1388975939161161728",
+    "1392678638176043029",
+    "1388976155830255697",
+    "1379021805544804382",
+    "1379021888709464168",
+    "1379021994678288465",
+    "1418691103397253322",
+  ];
+
+  return `${roleIds.map(id => `<@&${id}>`).join(" ")} @everyone`;
+}
+
 // ================= LOGIC =================
 
 async function updatePanel(client, state) {
@@ -467,19 +481,42 @@ async function updatePanel(client, state) {
     const channel = await client.channels.fetch(PANEL_CHANNEL_ID).catch(() => null);
     if (!channel || !channel.isTextBased()) return;
 
-    const fullContent = buildPanelContent(state);
+        const fullContent = buildPanelContent(state);
     const chunks = splitText(fullContent, 2000);
+    const footerEmbed = buildFooterImageEmbed(state);
+    const mentionsContent = buildCronogramaMentions();
 
-    // Se a lista de IDs de mensagem de texto for igual ao número de chunks, edita as mensagens existentes.
-    const canReuse = state.textMessageIds?.length === chunks.length;
+    // texto + 1 mensagem final de menções/imagem
+    const expectedMessageCount = chunks.length + 1;
 
-    if (canReuse) {
-      // Apenas edita
+    // Se a lista de IDs de mensagem de texto for igual ao número esperado, edita as mensagens existentes.
+    const canReuse = state.textMessageIds?.length === expectedMessageCount;
+
+       if (canReuse) {
+      // Edita os chunks principais
       for (let i = 0; i < chunks.length; i++) {
         const msg = await channel.messages.fetch(state.textMessageIds[i]).catch(() => null);
-        if (msg && msg.content !== chunks[i]) {
-          await msg.edit({ content: chunks[i], embeds: [], components: [] }).catch(() => {});
+        if (msg) {
+          await msg.edit({
+            content: chunks[i],
+            embeds: [],
+            components: [],
+            allowedMentions: { parse: [] },
+          }).catch(() => {});
         }
+      }
+
+      // Edita a última mensagem: menções + imagem
+      const finalMsg = await channel.messages.fetch(state.textMessageIds[chunks.length]).catch(() => null);
+      if (finalMsg) {
+        await finalMsg.edit({
+          content: mentionsContent,
+          embeds: footerEmbed ? [footerEmbed] : [],
+          components: [],
+          allowedMentions: {
+            parse: ["everyone", "roles"],
+          },
+        }).catch(() => {});
       }
     } else {
       // Recria tudo (Modo Limpeza)
@@ -505,18 +542,33 @@ async function updatePanel(client, state) {
         }
       } catch {}
 
-      // Envia novas
+            // Envia os chunks de texto
       for (let i = 0; i < chunks.length; i++) {
-        const isLast = i === chunks.length - 1;
-        const sent = await channel.send({ content: chunks[i], embeds: [], components: [] });
+        const sent = await channel.send({
+          content: chunks[i],
+          embeds: [],
+          components: [],
+          allowedMentions: { parse: [] },
+        });
         state.textMessageIds.push(sent.id);
-        if (isLast) {
-          try {
-            const emojis = ["💜", "📅", "🔥", "🚀", "👏", "🎉", "🤩", "🤯", "🏆", "👑", "💸", "👀", "✨", "💯", "✅", "📸", "💎", "⚡", "💣", "🫡", "🤝", "👻", "💀", "👽", "👾", "🤖", "🎃", "😺"];
-            for (const e of emojis) await sent.react(e).catch(() => {});
-          } catch {}
-        }
       }
+
+      // Envia a mensagem final com menções + imagem
+      const finalSent = await channel.send({
+        content: mentionsContent,
+        embeds: footerEmbed ? [footerEmbed] : [],
+        components: [],
+        allowedMentions: {
+          parse: ["everyone", "roles"],
+        },
+      });
+
+      state.textMessageIds.push(finalSent.id);
+
+      try {
+        const emojis = ["💜", "📅", "🔥", "🚀", "👏", "🎉", "🤩", "🤯", "🏆", "👑", "💸", "👀", "✨", "💯", "✅", "📸", "💎", "⚡", "💣", "🫡", "🤝", "👻", "💀", "👽", "👾", "🤖", "🎃", "😺"];
+        for (const e of emojis) await finalSent.react(e).catch(() => {});
+      } catch {}
     }
 
     // ✅ 4) Atualiza a mensagem “CONTROLE” (botões)
