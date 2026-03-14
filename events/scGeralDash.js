@@ -307,7 +307,7 @@ function loadState() {
 
 
       // ✅ NOVO: bate-ponto (contador humano semanal pro LOG)
-  bateponto: {},
+      bateponto: {},
 
       // ✅ social medias: poderes em evento
       eventosPoderes: {},
@@ -1304,15 +1304,25 @@ await scanChannelEmbeds(client, {
 // BATE PONTO (pinned + recentes)
 try {
   const cal = await client.channels.fetch(BP_CALENDAR_CHANNEL_ID).catch(() => null);
+
   if (cal?.isTextBased?.()) {
-    const pins = await cal.messages.fetchPinned().catch(() => null);
+    let pins = null;
+
+    if (typeof cal.messages?.fetchPinned === "function") {
+      pins = await cal.messages.fetchPinned().catch(() => null);
+    } else if (typeof cal.messages?.fetchPins === "function") {
+      pins = await cal.messages.fetchPins().catch(() => null);
+    }
+
     const pinList = pins?.values ? [...pins.values()] : [];
 
     const recent = await cal.messages.fetch({ limit: 120 }).catch(() => null);
     const recList = recent?.values ? [...recent.values()] : [];
 
     const pool = new Map();
-    for (const m of [...pinList, ...recList]) pool.set(m.id, m);
+    for (const m of [...pinList, ...recList]) {
+      pool.set(m.id, m);
+    }
 
     for (const msg of pool.values()) {
       const obj = safeParseJSONBlock(msg.content);
@@ -1320,22 +1330,27 @@ try {
 
       for (const arr of Object.values(obj.days || {})) {
         if (!Array.isArray(arr)) continue;
+
         for (const e of arr) {
           const uid = String(e?.uid || "").trim();
           const timeStr = String(e?.time || "").trim();
           if (!uid || !timeStr) continue;
+          if (!/^\d{17,20}$/.test(uid)) continue;
 
           const dt = parseBPTimeToDateSP(timeStr);
           if (!dt) continue;
 
-          if (!/^\d{17,20}$/.test(uid)) continue;
-          pushItem({ userId: uid, ts: dt, source: "bateponto" });
+          items.push({
+            userId: uid,
+            ts: dt,
+            source: "bateponto",
+          });
         }
       }
     }
   }
 } catch (e) {
-  console.error("[SC_GERAL_WEEKLY_RANK] ❌ Falha ao coletar bate ponto:", e);
+  console.error("[SC_GERAL_DASH] ❌ Falha ao coletar bate ponto:", e);
 }
 
 
@@ -1884,6 +1899,7 @@ async function backfillExtrasThisWeek(client) {
     st.weekly.cronograma = st.weekly.cronograma || {};
     st.weekly.presencas = st.weekly.presencas || {};
     st.weekly.correcao = st.weekly.correcao || {};
+    st.weekly.bateponto = st.weekly.bateponto || {};
 
     // zera semana atual e recalcula
     st.weekly.doacoes[wkNow] = 0;
@@ -1927,7 +1943,6 @@ async function backfillExtrasThisWeek(client) {
         CORRECAO_LOGS_CHANNEL_ID,
         (emb) => isEntrevistaConcluidaLogEmbed(emb),
         async (_m, _emb) => {
-          // Pega o ID do aplicador que ganhou o ponto
           const uid = entrevistaConcluida_getUserId(_emb);
           if (uid) st.weekly.perguntas[wkNow] += 1;
         },
@@ -1935,13 +1950,14 @@ async function backfillExtrasThisWeek(client) {
       );
     }
 
+    // -------- VENDAS --------
     if (VENDAS_LOGS_CHANNEL_ID) {
       await scanCurrentWeekEmbeds(
         client,
         VENDAS_LOGS_CHANNEL_ID,
         (emb) => isVendaLogEmbed(emb),
         async (_m, emb) => {
-          if (doacaoWasScoredFromEmbed(emb)) st.weekly.vendas[wkNow] += 1; // Reusa a lógica de checar campo "Anti-farm"
+          if (doacaoWasScoredFromEmbed(emb)) st.weekly.vendas[wkNow] += 1;
         },
         25
       );
@@ -1986,7 +2002,6 @@ async function backfillExtrasThisWeek(client) {
       );
     }
 
-    // salva
     saveState(st);
 
     return {
@@ -1998,16 +2013,98 @@ async function backfillExtrasThisWeek(client) {
       vendas: st.weekly.vendas[wkNow],
       cronograma: st.weekly.cronograma[wkNow],
       presencas: st.weekly.presencas[wkNow],
+      correcao: st.weekly.correcao[wkNow],
     };
   } catch (e) {
     return { done: false, reason: e?.message || "erro" };
   }
 }
 
+async function backfillBatePontoThisWeek(client) {
+  try {
+    const st = loadState();
+    const wkNow = weekKeyFromDateSP(nowSP());
+
+    st.weekly = st.weekly || {};
+    st.weekly.bateponto = st.weekly.bateponto || {};
+    st.weekly.bateponto[wkNow] = 0;
+
+    const cal = await client.channels.fetch(BP_CALENDAR_CHANNEL_ID).catch(() => null);
+    if (!cal?.isTextBased?.()) {
+      saveState(st);
+      return { done: false, reason: "canal de bate-ponto não encontrado" };
+    }
+
+    let pins = null;
+
+    if (typeof cal.messages?.fetchPinned === "function") {
+      pins = await cal.messages.fetchPinned().catch(() => null);
+    } else if (typeof cal.messages?.fetchPins === "function") {
+      pins = await cal.messages.fetchPins().catch(() => null);
+    }
+
+    const pinList = pins?.values ? [...pins.values()] : [];
+
+    const recent = await cal.messages.fetch({ limit: 120 }).catch(() => null);
+    const recList = recent?.values ? [...recent.values()] : [];
+
+    const pool = new Map();
+    for (const m of [...pinList, ...recList]) {
+      pool.set(m.id, m);
+    }
+
+    for (const msg of pool.values()) {
+      const obj = safeParseJSONBlock(msg.content);
+      if (!obj?.monthKey || !obj?.days) continue;
+
+      for (const arr of Object.values(obj.days || {})) {
+        if (!Array.isArray(arr)) continue;
+
+        for (const e of arr) {
+          const uid = String(e?.uid || "").trim();
+          const timeStr = String(e?.time || "").trim();
+          if (!uid || !timeStr) continue;
+          if (!/^\d{17,20}$/.test(uid)) continue;
+
+          const dt = parseBPTimeToDateSP(timeStr);
+          if (!dt) continue;
+
+          const wkEntry = weekKeyFromDateSP(dt);
+          if (wkEntry !== wkNow) continue;
+
+          st.weekly.bateponto[wkNow] += 1;
+        }
+      }
+    }
+
+    saveState(st);
+
+    return {
+      done: true,
+      wkNow,
+      bateponto: st.weekly.bateponto[wkNow],
+    };
+  } catch (e) {
+    console.error("[SC_GERAL_DASH] Erro no backfill do bate-ponto:", e);
+    return { done: false, reason: e?.message || "erro" };
+  }
+}
+
 async function runAllBackfillsOnReady(client) {
   console.log("[SC_GERAL_DASH] 🔄 Rodando backfills...");
+
+  // 1) Gestão / registros
   await backfillGestaoThisWeek(client);
+
+  // 2) VIP / Hall / Eventos diários
   await backfillVipAndOthersThisWeek(client);
+
+  // 3) Extras que hoje estavam zerando no restart
+  await backfillExtrasThisWeek(client);
+
+  // 4) Bate-ponto (precisa reconstruir no boot também)
+  await backfillBatePontoThisWeek(client);
+
   console.log("[SC_GERAL_DASH] ✅ Backfills concluídos.");
 }
 
@@ -2281,7 +2378,7 @@ const oldSig = st._logSig[wk];
       } catch {}
     }
 
-    const metricsHuman = [
+       const metricsHuman = [
       "🧑‍💼 **REGISTROS / GESTÃO**",
       `• Manager aprovados: **${mRmOk}**`,
       `• Manager reprovados: **${mRmNo}**`,
@@ -2307,10 +2404,11 @@ const oldSig = st._logSig[wk];
       `• Perguntas: **${mPerg}**`,
       `• Vendas: **${mVendas}**`,
       `• Cronograma: **${mCronograma}**`,
-      `• Presenças: **${mPresencas}**`, // ✅ NOVO
-      `• Hall da Fama: **${mHall}**`, // ✅ NOVO
-      `• Eventos Diários: **${mEventosDiarios}**`, // ✅ NOVO
-      `• Correções: **${mCorrecao}**`, // ✅ NOVO
+      `• Presenças: **${mPresencas}**`,
+      `• Hall da Fama: **${mHall}**`,
+      `• Eventos Diários: **${mEventosDiarios}**`,
+      `• Correções: **${mCorrecao}**`,
+      `• Bate-ponto: **${mBatePonto}**`,
     ].join("\n");
 
     const mainColor =
