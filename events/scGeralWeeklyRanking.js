@@ -950,8 +950,15 @@ async function collectAllPoints(client, mode = "light") {
   try {
     const cal = await client.channels.fetch(BP_CALENDAR_CHANNEL_ID).catch(() => null);
     if (cal?.isTextBased?.()) {
-      const pins = await cal.messages.fetchPinned().catch(() => null);
-      const pinList = pins?.values ? [...pins.values()] : [];
+       let pins = null;
+
+    if (typeof cal.messages?.fetchPinned === "function") {
+      pins = await cal.messages.fetchPinned().catch(() => null);
+    } else if (typeof cal.messages?.fetchPins === "function") {
+      pins = await cal.messages.fetchPins().catch(() => null);
+    }
+
+    const pinList = pins?.values ? [...pins.values()] : [];
 
 
       const recent = await cal.messages.fetch({ limit: 120 }).catch(() => null);
@@ -973,9 +980,13 @@ async function collectAllPoints(client, mode = "light") {
 
             const dt = parseBPTimeToDateSP(timeStr);
             if (!dt) continue;
+          if (!/^\d{17,20}$/.test(uid)) continue;
 
-            if (!/^\d{17,20}$/.test(uid)) continue;
-            pushItem({ userId: uid, ts: dt, source: "bateponto" });
+          items.push({
+            userId: uid,
+            ts: dt,
+            source: "bateponto",
+          });
           }
         }
       }

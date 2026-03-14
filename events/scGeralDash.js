@@ -2645,20 +2645,44 @@ dashOn("bp:punch", (p) => {
   const now = Date.now();
   if (now - BP_FAST_LAST_AT < 15 * 1000) return; // 15s
 
-  // agenda update fast em ~6s (tempo do Discord terminar edit/pin)
+  // agenda update fast em ~6s
   if (BP_FAST_TIMER) clearTimeout(BP_FAST_TIMER);
 
   BP_FAST_TIMER = setTimeout(async () => {
     try {
       BP_FAST_LAST_AT = Date.now();
-      DIRTY = false; // já vamos atualizar aqui mesmo
+      DIRTY = false;
 
-      await safeUpdate(client, "bp:punch fast update", { scanMode: "light", emitLog: true });
-      // console.log("[SC_GERAL_DASH] bp:punch fast ✅");
+      await safeUpdate(client, "bp:punch fast update", {
+        scanMode: "light",
+        emitLog: true,
+      });
     } catch (e) {
       console.error("[SC_GERAL_DASH] bp:punch fast erro:", e);
     }
   }, 6000);
+});
+
+// ✅ NOVO: quando o batePonto terminar boot/supervise/sync,
+// o dash reconstrói a semana atual do bate-ponto e atualiza painel/log
+dashOn("bp:sync", async (p) => {
+  try {
+    await backfillBatePontoThisWeek(client);
+  } catch (e) {
+    console.error("[SC_GERAL_DASH] bp:sync backfill erro:", e);
+  }
+
+  markDirty({ invalidateScanCache: true });
+
+  try {
+    await safeUpdate(client, "bp:sync rebuild", {
+      scanMode: "light",
+      emitLog: true,
+    });
+    DIRTY = false;
+  } catch (e) {
+    console.error("[SC_GERAL_DASH] bp:sync update erro:", e);
+  }
 });
 
 

@@ -13,7 +13,7 @@ import { dashEmit } from "../utils/dashHub.js";
  * Inicializa o sistema de Bate Ponto (v3.12)
  * @param {import('discord.js').Client} client
  */
-export default function setupBatePonto(client) {
+export default async function setupBatePonto(client) {
   try {
     // ===== BLOQUEIA EXPORTS GLOBAIS DO GI (desacoplado) =====
     try {
@@ -737,11 +737,52 @@ const withinWindow = () => {
       await syncMonth();
     };
 
-    client.once(Events.ClientReady, async () => {
-      // console.log(`[SC_BP] ${CFG.VERSION} pronto. userId=${client.user?.id}`);
-      await boot();
-      setInterval(supervise, 2 * 60 * 1000);
-    });
+        const notifyDashSync = async () => {
+      try {
+        dashEmit("bp:sync", {
+          __at: Date.now(),
+          source: "batePonto",
+        });
+      } catch (e) {
+        console.error("[SC_BP] dashEmit bp:sync error:", e);
+      }
+    };
+
+    const startBpSystem = async () => {
+      try {
+        // console.log(`[SC_BP] ${CFG.VERSION} pronto. userId=${client.user?.id}`);
+        await boot();
+
+        // ✅ avisa o GeralDash para reconstruir bate-ponto após boot
+        await notifyDashSync();
+
+        setInterval(async () => {
+          try {
+            await supervise();
+
+            // ✅ mantém o dash sincronizado após cada supervise
+            await notifyDashSync();
+          } catch (e) {
+            console.error("[SC_BP] supervise interval error:", e);
+          }
+        }, 2 * 60 * 1000);
+      } catch (e) {
+        console.error("[SC_BP] startBpSystem error:", e);
+      }
+    };
+
+         // ✅ funciona tanto se o módulo carregar antes quanto depois do ready
+    if (client.isReady?.()) {
+      startBpSystem().catch((e) => {
+        console.error("[SC_BP] startBpSystem immediate error:", e);
+      });
+    } else {
+            client.once(Events.ClientReady, () => {
+        startBpSystem().catch((e) => {
+          console.error("[SC_BP] startBpSystem ready error:", e);
+        });
+      });
+    }
 
     // ===== Comandos =====
     client.on(Events.MessageCreate, async (msg) => {
@@ -827,56 +868,61 @@ const withinWindow = () => {
           else if (chId === CFG.CHANNELS.coord) team = "Coordenação";
           else if (chId === CFG.CHANNELS.responsaveis) team = "Responsáveis";
 
-          const real = nowParts();              // ✅ hora real do registro (SP)
-const eff = effectiveKeyParts();      // ✅ chave do "dia do turno" (trava 2x)
+          const real = nowParts();         // hora real do registro (SP)
+          const eff = effectiveKeyParts(); // dia efetivo do turno
 
-// ✅ FIX CRÍTICO
-const { monthKey } = eff;
+          const { monthKey } = eff;
+          ensureMonth(monthKey);
 
-ensureMonth(monthKey);
+          const timeStr =
+            `${String(real.dd).padStart(2, "0")}/${String(real.mm).padStart(2, "0")}/${real.yyyy} ` +
+            `${String(real.hh).padStart(2, "0")}:${String(real.mi).padStart(2, "0")}`;
 
-const timeStr =
-  `${String(real.dd).padStart(2, "0")}/${String(real.mm).padStart(2, "0")}/${real.yyyy} ` +
-  `${String(real.hh).padStart(2, "0")}:${String(real.mi)}`;
+          // ✅ 01:00–03:59 entra no dia efetivo anterior
+          const dayKey = `${monthKey}-${String(eff.dd).padStart(2, "0")}`;
 
-// ✅ dayKey do "dia efetivo" (01:00–03:59 conta como dia anterior)
-const dayKey = `${monthKey}-${String(eff.dd).padStart(2, "0")}`;
+          addIfMissing(dayKey, {
+            uid: it.user.id,
+            mention: `<@${it.user.id}>`,
+            name: firstName,
+            time: timeStr,
+            team
+          });
 
-addIfMissing(dayKey, {
-  uid: it.user.id,
-  mention: `<@${it.user.id}>`,
-  name: firstName,
-  time: timeStr,
-  team
-});
+          await it.reply({
+            embeds: [embPunch({ user: it.user, channel: it.channel, team, timeStr, name: firstName })]
+          }).catch(() => {});
 
-await it.reply({
-  embeds: [embPunch({ user: it.user, channel: it.channel, team, timeStr, name: firstName })]
-}).catch(() => {});
+          // desce o botão
+          await refreshStickyOnPunch(it.channel, team);
 
-// ✅ desce o botão
-await refreshStickyOnPunch(it.channel, team);
+          // persiste primeiro no calendário
+          const cal = await client.channels.fetch(CFG.CHANNELS.calendar).catch(() => null);
+          if (cal) {
+            await persist(cal, monthKey);
+          }
 
-// ✅ agora monthKey EXISTE
-const cal = await client.channels.fetch(CFG.CHANNELS.calendar).catch(() => null);
-if (cal) await persist(cal, monthKey);
+          // atualiza a linha do tempo
+          await syncMonth();
 
-// ✅ atualiza as mensagens de “Linha do Tempo”
-await syncMonth();
+          // ✅ depois de persistir/sincronizar, avisa o dash
+          try {
+            dashEmit("bp:punch", {
+              userId: it.user.id,
+              team,
+              timeStr,
+              __at: Date.now(),
+            });
 
-// ✅ HUB só depois de tudo persistido
-try {
-  dashEmit("bp:punch", {
-    userId: it.user.id,
-    team,
-    timeStr,
-    __at: Date.now(),
-  });
-} catch (e) {
-  console.error("[SC_BP] dashEmit bp:punch error:", e);
-}
+            dashEmit("bp:sync", {
+              __at: Date.now(),
+              source: "batePonto-modal-submit",
+            });
+          } catch (e) {
+            console.error("[SC_BP] dashEmit bp:punch / bp:sync error:", e);
+          }
 
-return;
+          return;
 
 
         }
