@@ -520,26 +520,24 @@ ${newImageUrl}${newImageUrl2 ? `\n${newImageUrl2}` : ''}`;
     // Monta a string dos vencedores com premiação automática
     let winnersText = "";
 
-    // ✅ LÓGICA MELHORADA DE PREMIAÇÃO
-    let prize1 = "";
+  // ✅ NOVA LÓGICA DE PREMIAÇÃO (Cenários 1, 2 e 3)
     const hasExtra = topsExtra && topsExtra.trim().length > 0;
+    const extraLines = hasExtra ? topsExtra.split('\n').map(l => l.trim()).filter(Boolean) : [];
+    const totalWinners = 1 + extraLines.length; // 1 (Top 1) + extras
 
-    if (!hasExtra) {
-      // Se só tem TOP 1, verifica se o texto de prêmios tem menção a outros ranks
-      const hasOtherRanks = /(TOP\s*[2-9]|2º|3º|[2-9]\.|^[2-9]\s)/im.test(prizesText);
-      
-      if (!hasOtherRanks) {
-        // Se não tem outros ranks, assume que TUDO é pro TOP 1
-        // Removemos "TOP 1" se existir no começo, e juntamos linhas com " + "
-        prize1 = prizesText
-          .split('\n')
-          .map(l => l.replace(/^(TOP\s*1|1º|1\.|^1\s)[:\-\s]*/i, '').trim())
-          .filter(Boolean)
-          .join(' + ');
-      } else {
-        prize1 = extractPrizeForRank(prizesText, 1);
-      }
+    // 🚫 Cenário 2: TOP 1 + TOP 2 (sem TOP 3) -> ERRO
+    if (totalWinners === 2) {
+      return interaction.editReply("❌ Se houver TOP 2, também é obrigatório informar o TOP 3.");
+    }
+
+    let prize1 = "";
+
+    // 🏆 Cenário 1: Apenas TOP 1 -> Recebe TUDO
+    if (totalWinners === 1) {
+      // Acumula todos os prêmios encontrados no texto do cronograma
+      prize1 = ["1", "2", "3"].map(r => extractPrizeForRank(prizesText, r)).filter(Boolean).join(" + ");
     } else {
+      // 🏅 Cenário 3: TOP 1, 2 e 3 -> Distribuição normal
       prize1 = extractPrizeForRank(prizesText, 1);
     }
 
@@ -548,8 +546,7 @@ ${newImageUrl}${newImageUrl2 ? `\n${newImageUrl2}` : ''}`;
 
     // TOPS EXTRA
     if (hasExtra) {
-      const lines = topsExtra.split('\n').map(l => l.trim()).filter(Boolean);
-      lines.forEach((line, index) => {
+      extraLines.forEach((line, index) => {
         const rank = index + 2;
         const prize = extractPrizeForRank(prizesText, rank);
         
