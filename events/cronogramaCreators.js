@@ -213,6 +213,14 @@ function buildPanelContent(state) {
 
   const range = `${dates.dom} → ${dates.sab}`;
 
+  // ✅ NOVAS MENÇÕES (invisíveis)
+  const newMentions = [
+    "1379021805544804382",
+    "1379021888709464168",
+    "1379021994678288465",
+    "1418691103397253322",
+  ].map(id => `<@&${id}>`).join('');
+
   let text = `# 📅 EVENTOS SEMANAIS
 ## 🏆 PREMIAÇÕES
 **Semana:** \`${range}\`
@@ -290,14 +298,16 @@ _Nenhum agendado._
 `;
   }
 
-  // ✅ Menções solicitadas no final
-  text += `\n\n<@&1262978759922028575> <@&1353858422063239310> <@&1388975939161161728> <@&1392678638176043029> <@&1388976155830255697> @everyone`;
+  // ✅ Menções solicitadas no final (agora com as novas invisíveis)
+  text += `\n\n<@&1262978759922028575> <@&1353858422063239310> <@&1388975939161161728> <@&1392678638176043029> <@&1388976155830255697> @everyone${newMentions}`;
 
   // ✅ Imagem no final (Link direto para ficar grande e sem embed)
+  // ❌ REMOVIDO: O link da imagem não é mais adicionado ao texto.
+  // A imagem será enviada em uma mensagem separada.
   let footer = "";
-  if (state.footerImageUrl) {
-    footer = `\n${state.footerImageUrl}`;
-  }
+  // if (state.footerImageUrl) {
+  //   footer = `\n${state.footerImageUrl}`;
+  // }
 
   return text + footer;
 }
