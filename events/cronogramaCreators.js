@@ -460,18 +460,8 @@ async function updatePanel(client, state) {
     const fullContent = buildPanelContent(state);
     const chunks = splitText(fullContent, 2000);
 
-    // ✅ Tenta reutilizar as mensagens existentes (Modo Edição)
-    let canReuse = false;
-    const currentIds = state.textMessageIds || [];
-
-    if (currentIds.length === chunks.length) {
-      try {
-        const fetchedMsgs = await Promise.all(currentIds.map(id => channel.messages.fetch(id)));
-        if (fetchedMsgs.every(m => m)) canReuse = true;
-      } catch { canReuse = false; }
-    }
-
-    if (canReuse) {
+    // Se a lista de IDs de mensagem de texto for igual ao número de chunks, edita as mensagens existentes.
+    if (state.textMessageIds?.length === chunks.length) {
       // Apenas edita
       for (let i = 0; i < chunks.length; i++) {
         const msg = await channel.messages.fetch(currentIds[i]).catch(() => null);
