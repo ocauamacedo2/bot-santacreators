@@ -139,8 +139,22 @@ async function updateDashboard(client) {
   const prevWeekKey = getPreviousWeekKey(weekKey);
 
   // Garante inicialização da semana
-  if (!stats.weeks[weekKey]) stats.weeks[weekKey] = { entrou: 0, saiu: 0 };
-  if (!stats.weeks[prevWeekKey]) stats.weeks[prevWeekKey] = { entrou: 0, saiu: 0 };
+  // Garante inicialização da semana
+  let changed = false;
+
+  if (!stats.weeks[weekKey]) {
+    stats.weeks[weekKey] = { entrou: 0, saiu: 0 };
+    changed = true;
+  }
+
+  if (!stats.weeks[prevWeekKey]) {
+    stats.weeks[prevWeekKey] = { entrou: 0, saiu: 0 };
+    changed = true;
+  }
+
+  if (changed) {
+    saveStats(stats);
+  }
 
   const cur = stats.weeks[weekKey];
   const prev = stats.weeks[prevWeekKey];
@@ -181,6 +195,7 @@ async function updateDashboard(client) {
     const msg = await channel.messages.fetch(stats.messageId).catch(() => null);
     if (msg) {
       await msg.edit({ embeds: [embed], components: [row] });
+      saveStats(stats);
       return;
     }
   }
@@ -191,27 +206,39 @@ async function updateDashboard(client) {
 }
 
 // ================= LISTENERS =================
-export async function recrutamentoDashOnReady(client) {
-  // Listener de Entrada (Pedir Set Aprovado)
-  dashOn('pedirset:aprovado', async () => {
+async function bumpWeekStat(client, field, source) {
+  try {
     const stats = loadStats();
     const wk = getWeekKey();
-    if (!stats.weeks[wk]) stats.weeks[wk] = { entrou: 0, saiu: 0 };
-    
-    stats.weeks[wk].entrou++;
+
+    if (!stats.weeks[wk]) {
+      stats.weeks[wk] = { entrou: 0, saiu: 0 };
+    }
+
+    stats.weeks[wk][field] = Number(stats.weeks[wk][field] || 0) + 1;
+
     saveStats(stats);
+
+    console.log(
+      `[RecrutamentoDash] ${source} -> semana=${wk} | ${field}=${stats.weeks[wk][field]}`
+    );
+
     await updateDashboard(client);
+  } catch (e) {
+    console.error(`[RecrutamentoDash] Erro ao processar ${source}:`, e);
+  }
+}
+
+// ================= LISTENERS =================
+export async function recrutamentoDashOnReady(client) {
+  // Listener de Entrada (Pedir Set Aprovado)
+  dashOn("pedirset:aprovado", async () => {
+    await bumpWeekStat(client, "entrou", "pedirset:aprovado");
   });
 
   // Listener de Saída (GI Desligado)
-  dashOn('gi:desligado', async () => {
-    const stats = loadStats();
-    const wk = getWeekKey();
-    if (!stats.weeks[wk]) stats.weeks[wk] = { entrou: 0, saiu: 0 };
-    
-    stats.weeks[wk].saiu++;
-    saveStats(stats);
-    await updateDashboard(client);
+  dashOn("gi:desligado", async () => {
+    await bumpWeekStat(client, "saiu", "gi:desligado");
   });
 
   // Atualiza no boot
