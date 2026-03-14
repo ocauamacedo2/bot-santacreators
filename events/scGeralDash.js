@@ -2171,7 +2171,7 @@ const mPresencas = getWeekly(st, "presencas", wkNow); // ✅ NOVO
 const mHall = getWeekly(st, "halldafama", wkNow); // ✅ NOVO
 const mEventosDiarios = getWeekly(st, "eventosdiarios", wkNow); // ✅ NOVO
 const mCorrecao = getWeekly(st, "correcao", wkNow); // ✅ NOVO
-
+const mBatePonto = getWeekly(st, "bateponto", wkNow); // ✅ NOVO
 // ✅ todo o resto continua como tava (wk do scan)
 const mVipCriados = getWeekly(st, "vipCriados", wk);
 const mVipSol = getWeekly(st, "vipSolicitados", wk);
@@ -2240,6 +2240,7 @@ const wkNowLabel = triLabelShortFromWeekKey(wkNow);
                 `• Hall da Fama: **${mHall}**`, // ✅ NOVO
                 `• Eventos Diários: **${mEventosDiarios}**`, // ✅ NOVO
                 `• Correções: **${mCorrecao}**`, // ✅ NOVO
+                `• Bate-ponto: **${mBatePonto}**`, // ✅ NOVO
               ].join("\n")
             )
             .setFooter({ text: `WEEK_KEY: ${wk}` })
@@ -2252,8 +2253,9 @@ const sigObj = {
   mAlinh, mEvtPoder, mPoderesUtil,
   mPagCriados, mPagSol, mPagPago, mPagRep,
   mVipCriados, mVipSol, mVipPago, mVipRep,
-  mDoacoes, mConvites, mPerg, mVendas, mCronograma, mPresencas, mHall, mEventosDiarios, mCorrecao // ✅ NOVO
+  mDoacoes, mConvites, mPerg, mVendas, mCronograma, mPresencas, mHall, mEventosDiarios, mCorrecao, mBatePonto // ✅ NOVO
 };
+
 
 const newSig = JSON.stringify(sigObj);
 st._logSig = st._logSig || {};
@@ -2529,7 +2531,14 @@ function wireHub(client) {
 let BP_FAST_TIMER = null;
 let BP_FAST_LAST_AT = 0;
 
-dashOn("bp:punch", (_p) => {
+dashOn("bp:punch", (p) => {
+  try {
+    const st = loadState();
+    const wk = weekKeyFromDateSP(new Date(p.__at || Date.now()));
+    bumpWeekly(st, "bateponto", wk, 1);
+    saveState(st);
+  } catch {}
+
   // invalida cache IMEDIATO
   markDirty({ invalidateScanCache: true });
 
@@ -2552,6 +2561,7 @@ dashOn("bp:punch", (_p) => {
     }
   }, 6000);
 });
+
 
 
 
