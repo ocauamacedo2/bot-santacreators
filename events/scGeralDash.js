@@ -2005,9 +2005,8 @@ async function backfillExtrasThisWeek(client) {
 
 async function runAllBackfillsOnReady(client) {
   console.log("[SC_GERAL_DASH] 🔄 Rodando backfills...");
-  await backfillExtrasThisWeek(client);
-  await backfillVipAndOthersThisWeek(client);
   await backfillGestaoThisWeek(client);
+  await backfillVipAndOthersThisWeek(client);
   console.log("[SC_GERAL_DASH] ✅ Backfills concluídos.");
 }
 

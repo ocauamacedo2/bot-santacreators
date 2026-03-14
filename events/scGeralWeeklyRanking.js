@@ -1514,7 +1514,10 @@ async function upsertWeeklyRank(client, reason, { scanMode = "light", targetWeek
         try {
           const member = await ch.guild.members.fetch(uid).catch(() => null);
           nameMap[uid] = member ? (member.displayName || member.user.username) : (await client.users.fetch(uid).catch(() => null))?.username || uid;
-        } catch { nameMap[uid] = uid; }
+        } catch (e) { 
+          console.warn(`[SC_GERAL_WEEKLY_RANK] Erro ao buscar usuário ${uid}:`, e?.message || e);
+          nameMap[uid] = uid; 
+        }
       }));
     }
 
@@ -1523,6 +1526,7 @@ async function upsertWeeklyRank(client, reason, { scanMode = "light", targetWeek
       min: MIN_POINTS_WEEK,
       totalEvents: agg.totalEvents,
       list: (agg.list || []).map((x) => [x.userId, x.points]),
+      nameMap // ✅ ADICIONA nameMap (para atualizar ao mudar nomes)
     });
 
     st.sigByWeek = st.sigByWeek || {};
@@ -1605,6 +1609,8 @@ async function safeUpdate(client, reason, opts = {}) {
     }
   }
 
+   if (LOCK) return false;
+
   LOCK = true;
   LOCK_TS = Date.now();
   try {
@@ -1634,6 +1640,7 @@ function wireHub(client) {
   dashOn("doacao:registrada", () => markDirty({ invalidateScanCache: true }));
   dashOn("lideres:convite_enviado", () => markDirty({ invalidateScanCache: true }));
   // ✅ NOVO: Ouve o evento de ponto concluído, não o de início
+  dashOn("entrevista:ponto_concluido", () => markDirty({ invalidateScanCache: true }));
   dashOn("entrevista:ponto_concluido", () => markDirty({ invalidateScanCache: true }));
   dashOn("rm:approved", () => markDirty({ invalidateScanCache: true }));
   dashOn("rm:rejected", () => markDirty({ invalidateScanCache: true }));
@@ -1840,18 +1847,18 @@ export async function getStatsForUser(client, userId) {
 export async function handleWeeklyRankInteractions(interaction, client) {
   if (interaction.isButton() && interaction.customId === "SC_REMOVE_POINTS") {
     const member = interaction.member;
-if (!member || !member.roles) {
-  return interaction.reply({
-    content: "❌ Não foi possível validar suas permissões.",
-    ephemeral: true,
-  });
-}
+    if (!member || !member.roles) {
+      return interaction.reply({
+        content: "❌ Não foi possível validar suas permissões.",
+        ephemeral: true,
+      });
+    }
 
-const hasRole = member.roles.cache.some((r) => ALLOWED_REMOVE_ROLES.has(r.id));
-const isAllowedUser = ALLOWED_REMOVE_USERS.has(member.id);
-
+    const hasRole = member.roles.cache.some((r) => ALLOWED_REMOVE_ROLES.has(r.id));
+    const isAllowedUser = ALLOWED_REMOVE_USERS.has(member.id);
 
     if (!hasRole && !isAllowedUser) {
+
       return interaction.reply({
         content: "❌ Você não tem permissão para remover pontos.",
         ephemeral: true,

@@ -625,6 +625,11 @@ const withinWindow = () => {
 
         if (!STATE || STATE.monthKey !== monthKey || !STATE_MSG_ID) await findOrCreateStateMsg(cal, monthKey);
 
+         // await findOrCreateStateMsg(cal, monthKey);
+
+        if (!STATE || STATE.monthKey !== monthKey || !STATE_MSG_ID) {
+          await findOrCreateStateMsg(cal, monthKey);
+        }
         const { mentionPages, namePages } = buildCalendarPages(monthKey, monthHuman, monthName);
         const found = await fetchMonthMessages(cal, monthHuman);
 
@@ -868,7 +873,9 @@ try {
     timeStr,
     __at: Date.now(),
   });
-} catch {}
+} catch (e) {
+  console.error("[SC_BP] dashEmit bp:punch error:", e);
+}
 
 return;
 
