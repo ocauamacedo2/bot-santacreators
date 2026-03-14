@@ -714,8 +714,88 @@ function parseBPTimeToDateSP(timeStr) {
     yy = +m[3],
     hh = +m[4],
     mi = +m[5];
-  // ✅ FIX TIMEZONE: Soma 3h ao horário SP para obter o UTC correto
+
+  // ✅ horário salvo está em SP, convertemos para UTC corretamente
   return new Date(Date.UTC(yy, mm - 1, dd, hh + 3, mi, 0));
+}
+
+function monthKeyFromDateSP(date) {
+  const { y, m } = ymdSP(date);
+  return `${y}-${String(m).padStart(2, "0")}`;
+}
+
+function addMonthsUTC(date, diff) {
+  const d = new Date(date.getTime());
+  d.setUTCMonth(d.getUTCMonth() + diff);
+  return d;
+}
+
+function getRelevantBPMonthKeys() {
+  const now = nowSP();
+  const prev = addMonthsUTC(now, -1);
+  const next = addMonthsUTC(now, 1);
+
+  return Array.from(
+    new Set([
+      monthKeyFromDateSP(prev),
+      monthKeyFromDateSP(now),
+      monthKeyFromDateSP(next),
+    ])
+  );
+}
+
+async function fetchAllBPStateMessages(cal, monthKeys = [], maxPages = 60) {
+  const wanted = new Set((monthKeys || []).filter(Boolean));
+  const found = [];
+  const seen = new Set();
+
+  // 1) tenta pins primeiro
+  let pins = null;
+  if (typeof cal.messages?.fetchPinned === "function") {
+    pins = await cal.messages.fetchPinned().catch(() => null);
+  } else if (typeof cal.messages?.fetchPins === "function") {
+    pins = await cal.messages.fetchPins().catch(() => null);
+  }
+
+  const pinList =
+    pins?.values ? [...pins.values()] :
+    Array.isArray(pins?.items) ? pins.items :
+    Array.isArray(pins) ? pins :
+    [];
+
+  for (const msg of pinList) {
+    if (!msg?.id || seen.has(msg.id)) continue;
+    seen.add(msg.id);
+
+    const obj = safeParseJSONBlock(msg.content);
+    if (!obj?.monthKey || !obj?.days) continue;
+    if (wanted.size && !wanted.has(obj.monthKey)) continue;
+
+    found.push({ msg, obj });
+  }
+
+  // 2) varre histórico
+  let lastId;
+  for (let p = 0; p < maxPages; p++) {
+    const batch = await cal.messages.fetch({ limit: 100, before: lastId }).catch(() => null);
+    if (!batch?.size) break;
+
+    for (const msg of batch.values()) {
+      if (!msg?.id || seen.has(msg.id)) continue;
+      seen.add(msg.id);
+
+      const obj = safeParseJSONBlock(msg.content);
+      if (!obj?.monthKey || !obj?.days) continue;
+      if (wanted.size && !wanted.has(obj.monthKey)) continue;
+
+      found.push({ msg, obj });
+    }
+
+    lastId = batch.last()?.id;
+    if (!lastId) break;
+  }
+
+  return found;
 }
 
 async function scanChannelEmbeds(client, { channelId, weekFloorKey, maxPages = 60, onMessage }) {
@@ -1253,11 +1333,11 @@ if (PRESENCA_LOGS_CHANNEL_ID) {
       const uid = presenca_getUserId(emb);
       if (!uid) return;
 
-      items.push({
-        userId: uid,
-        ts: new Date(m.createdTimestamp),
-        source: "presencas",
-    });
+  items.push({
+  userId: uid,
+  ts: new Date(m.createdTimestamp),
+  source: "presencas",
+});
   },
 });
 }
@@ -1325,33 +1405,15 @@ await scanChannelEmbeds(client, {
     }
   } catch {}
 
-// BATE PONTO (pinned + recentes)
+// BATE PONTO (JSON mensal do calendário)
 try {
   const cal = await client.channels.fetch(BP_CALENDAR_CHANNEL_ID).catch(() => null);
 
   if (cal?.isTextBased?.()) {
-    let pins = null;
+    const monthKeys = getRelevantBPMonthKeys();
+    const stateMessages = await fetchAllBPStateMessages(cal, monthKeys, 60);
 
-    if (typeof cal.messages?.fetchPinned === "function") {
-      pins = await cal.messages.fetchPinned().catch(() => null);
-    } else if (typeof cal.messages?.fetchPins === "function") {
-      pins = await cal.messages.fetchPins().catch(() => null);
-    }
-
-    const pinList = pins?.values ? [...pins.values()] : [];
-
-    const recent = await cal.messages.fetch({ limit: 120 }).catch(() => null);
-    const recList = recent?.values ? [...recent.values()] : [];
-
-    const pool = new Map();
-    for (const m of [...pinList, ...recList]) {
-      pool.set(m.id, m);
-    }
-
-    for (const msg of pool.values()) {
-      const obj = safeParseJSONBlock(msg.content);
-      if (!obj?.monthKey || !obj?.days) continue;
-
+    for (const { obj } of stateMessages) {
       for (const arr of Object.values(obj.days || {})) {
         if (!Array.isArray(arr)) continue;
 
@@ -1363,6 +1425,10 @@ try {
 
           const dt = parseBPTimeToDateSP(timeStr);
           if (!dt) continue;
+
+          // ✅ só entra no scan se estiver dentro da janela de semanas lidas
+          const wkEntry = weekKeyFromDateSP(dt);
+          if (weekFloorKey && wkEntry < weekFloorKey) continue;
 
           items.push({
             userId: uid,
@@ -2063,28 +2129,10 @@ async function backfillBatePontoThisWeek(client) {
       return { done: false, reason: "canal de bate-ponto não encontrado" };
     }
 
-    let pins = null;
+    const monthKeys = getRelevantBPMonthKeys();
+    const stateMessages = await fetchAllBPStateMessages(cal, monthKeys, 60);
 
-    if (typeof cal.messages?.fetchPinned === "function") {
-      pins = await cal.messages.fetchPinned().catch(() => null);
-    } else if (typeof cal.messages?.fetchPins === "function") {
-      pins = await cal.messages.fetchPins().catch(() => null);
-    }
-
-    const pinList = pins?.values ? [...pins.values()] : [];
-
-    const recent = await cal.messages.fetch({ limit: 120 }).catch(() => null);
-    const recList = recent?.values ? [...recent.values()] : [];
-
-    const pool = new Map();
-    for (const m of [...pinList, ...recList]) {
-      pool.set(m.id, m);
-    }
-
-    for (const msg of pool.values()) {
-      const obj = safeParseJSONBlock(msg.content);
-      if (!obj?.monthKey || !obj?.days) continue;
-
+    for (const { obj } of stateMessages) {
       for (const arr of Object.values(obj.days || {})) {
         if (!Array.isArray(arr)) continue;
 

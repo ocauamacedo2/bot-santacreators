@@ -982,11 +982,11 @@ async function collectAllPoints(client, mode = "light") {
             if (!dt) continue;
           if (!/^\d{17,20}$/.test(uid)) continue;
 
-          items.push({
-            userId: uid,
-            ts: dt,
-            source: "bateponto",
-          });
+          pushItem({
+  userId: uid,
+  ts: dt,
+  source: "bateponto",
+});
           }
         }
       }
@@ -1042,7 +1042,7 @@ const SOURCE_LABEL = {
   convites: "Convites",
   perguntas: "Perguntas",
   evt3: "EVT3",
-  bateponto: "Bate Ponto",
+  bateponto: "Bate-ponto",
   vendas: "Vendas",
   cronograma: "Cronograma",
   presencas: "Presença",
@@ -1652,6 +1652,7 @@ function wireHub(client) {
   dashOn("lideres:convite_enviado", () => markDirty({ invalidateScanCache: true }));
   // ✅ NOVO: Ouve o evento de ponto concluído, não o de início
   dashOn("entrevista:ponto_concluido", () => markDirty({ invalidateScanCache: true }));
+  dashOn("presenca:confirmada", () => markDirty({ invalidateScanCache: true }));
   dashOn("entrevista:ponto_concluido", () => markDirty({ invalidateScanCache: true }));
   dashOn("rm:approved", () => markDirty({ invalidateScanCache: true }));
   dashOn("rm:rejected", () => markDirty({ invalidateScanCache: true }));
