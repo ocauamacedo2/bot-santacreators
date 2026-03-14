@@ -727,8 +727,10 @@ export async function cronogramaCreatorsHandleInteraction(interaction, client) {
     if (interaction.customId === "crono_refresh") {
       if (!hasPerm) return interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
       const state = loadState();
+      // ✅ Força a recriação zerando os IDs das mensagens de texto antes de chamar o update
+      state.textMessageIds = [];
       await updatePanel(client, state);
-      return interaction.reply({ content: "✅ Painel atualizado!", ephemeral: true });
+      return interaction.reply({ content: "✅ Painel atualizado e recriado!", ephemeral: true });
     }
 
     if (interaction.customId === "crono_edit_menu") {
