@@ -623,9 +623,8 @@ const withinWindow = () => {
         const cal = await client.channels.fetch(CFG.CHANNELS.calendar).catch(() => null);
         if (!cal) return null;
 
-        if (!STATE || STATE.monthKey !== monthKey || !STATE_MSG_ID) await findOrCreateStateMsg(cal, monthKey);
+        // await findOrCreateStateMsg(cal, monthKey);
 
-         // await findOrCreateStateMsg(cal, monthKey);
 
         if (!STATE || STATE.monthKey !== monthKey || !STATE_MSG_ID) {
           await findOrCreateStateMsg(cal, monthKey);

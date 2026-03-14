@@ -957,6 +957,8 @@ async function resolveDashboardMessage(dashChannel, st) {
 
 async function collectAllGeneral(client, mode = "light") {
   const now = Date.now();
+  if (LOCK) return { items: [] }; // ✅ não deixa rodar se já estiver rodando outro boot (conflito)
+
 
   // ✅ SE VAI USAR CACHE, RECONSTRÓI weekKeysFound A PARTIR DELE
   if (mode === "light" && CACHE.payload && now - CACHE.at < SCAN_TTL_MS) {
@@ -1299,44 +1301,43 @@ await scanChannelEmbeds(client, {
     }
   } catch {}
 
-  // bate-ponto (pinned + recentes)
-  try {
-    const cal = await client.channels
-      .fetch(BP_CALENDAR_CHANNEL_ID)
-      .catch(() => null);
-    if (cal?.isTextBased?.()) {
-    // 2) pins (mais rápido)
-const pins = await cal.fetchPins().catch(() => null);
+// BATE PONTO (pinned + recentes)
+try {
+  const cal = await client.channels.fetch(BP_CALENDAR_CHANNEL_ID).catch(() => null);
+  if (cal?.isTextBased?.()) {
+    const pins = await cal.messages.fetchPinned().catch(() => null);
+    const pinList = pins?.values ? [...pins.values()] : [];
 
-      const pinList = pins?.values ? [...pins.values()] : [];
+    const recent = await cal.messages.fetch({ limit: 120 }).catch(() => null);
+    const recList = recent?.values ? [...recent.values()] : [];
 
-      const recent = await cal.messages.fetch({ limit: 120 }).catch(() => null);
-      const recList = recent?.values ? [...recent.values()] : [];
+    const pool = new Map();
+    for (const m of [...pinList, ...recList]) pool.set(m.id, m);
 
-      const pool = new Map();
-      for (const m of [...pinList, ...recList]) pool.set(m.id, m);
+    for (const msg of pool.values()) {
+      const obj = safeParseJSONBlock(msg.content);
+      if (!obj?.monthKey || !obj?.days) continue;
 
-      for (const msg of pool.values()) {
-        const obj = safeParseJSONBlock(msg.content);
-        if (!obj?.monthKey || !obj?.days) continue;
+      for (const arr of Object.values(obj.days || {})) {
+        if (!Array.isArray(arr)) continue;
+        for (const e of arr) {
+          const uid = String(e?.uid || "").trim();
+          const timeStr = String(e?.time || "").trim();
+          if (!uid || !timeStr) continue;
 
-        for (const arr of Object.values(obj.days || {})) {
-          if (!Array.isArray(arr)) continue;
-          for (const e of arr) {
-            const uid = String(e?.uid || "").trim();
-            const timeStr = String(e?.time || "").trim();
-            if (!uid || !timeStr) continue;
+          const dt = parseBPTimeToDateSP(timeStr);
+          if (!dt) continue;
 
-            const dt = parseBPTimeToDateSP(timeStr);
-            if (!dt) continue;
-
-            if (!/^\d{17,20}$/.test(uid)) continue;
-            items.push({ userId: uid, ts: dt, source: "bateponto" });
-          }
+          if (!/^\d{17,20}$/.test(uid)) continue;
+          pushItem({ userId: uid, ts: dt, source: "bateponto" });
         }
       }
     }
-  } catch {}
+  }
+} catch (e) {
+  console.error("[SC_GERAL_WEEKLY_RANK] ❌ Falha ao coletar bate ponto:", e);
+}
+
 
   for (const it of items) {
     const wk = weekKeyFromDateSP(it.ts);
@@ -2009,6 +2010,7 @@ async function runAllBackfillsOnReady(client) {
   await backfillVipAndOthersThisWeek(client);
   console.log("[SC_GERAL_DASH] ✅ Backfills concluídos.");
 }
+
 
 // ================== DASH UPDATE ==================
 async function upsertDashboard(

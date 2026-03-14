@@ -1657,10 +1657,11 @@ function wireHub(client) {
   dashOn("halldafama:aprovado", () => markDirty({ invalidateScanCache: true })); // ✅ NOVO
   dashOn("eventosdiarios:aprovado", () => markDirty({ invalidateScanCache: true })); // ✅ NOVO
   dashOn("correcao:usado", () => markDirty({ invalidateScanCache: true })); // ✅ NOVO
-  dashOn("gi:desligado", () => markDirty({ invalidateScanCache: true })); // ✅ Atualiza ranking ao desligar
+    dashOn("gi:desligado", () => markDirty({ invalidateScanCache: true })); // ✅ Atualiza ranking ao desligar
 
   // scheduler leve: se DIRTY, atualiza
   setInterval(async () => {
+
     try {
       if (!client.isReady()) return;
       if (!DIRTY) return;
