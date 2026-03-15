@@ -1784,8 +1784,24 @@ function debugText() {
   ].join("\n");
 }
 
+// ✅ NOVO: Exporta o ranking semanal para outros módulos
+export async function getWeeklyRanking(client) {
+  try {
+    // Usa o cache se disponível, ou faz um scan leve
+    const { items } = await collectAllPoints(client, "light");
+    const wkNow = weekKeyFromDateSP(nowSP());
+    const agg = aggregateWeekDetailed(items, wkNow);
+    // Retorna a lista de { userId, points, ... }
+    return agg.list || [];
+  } catch (e) {
+    console.error("[scGeralWeeklyRanking] getWeeklyRanking error:", e);
+    return [];
+  }
+}
+
 // ✅ NOVO: Export para uso externo (ex: gestaoinfluencer desligamento)
 export async function getStatsForUser(client, userId) {
+
   try {
     // Usa scanMode light pra aproveitar cache se tiver, ou scan rápido
     const { items } = await collectAllPoints(client, "light");

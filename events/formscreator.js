@@ -22,7 +22,7 @@ const __dirname = path.dirname(__filename);
 // =========================
 // ✅ IMPORTS ADICIONAIS
 // =========================
-import { getStatsForUser } from "./scGeralWeeklyRanking.js";
+import { getWeeklyRanking } from "./scGeralWeeklyRanking.js";
 const CREATOR_EQUIPE_ROLE_ID = "1352429001188180039";
 const CREATOR_FORM_CHANNEL_ID = "1389401636446802042";
 const CREATOR_FORM_BUTTON_CHANNEL_ID = "1389401636446802042";
@@ -434,37 +434,36 @@ async function runReminderJob(client) {
   }
   if (stateChanged) writeState(state);
 
-  // 1. Pega membros ativos do projeto e que não estão na lista de exclusão
-  const activeRegistrations = Object.values(state.registrations || {}).filter(r => r.active);
-  const membersToEvaluate = [];
-  for (const reg of activeRegistrations) {
-    const member = await guild.members.fetch(reg.userId).catch(() => null);
-    // ✅ Mostra todos, EXCETO os cargos de Resp definidos acima.
-    if (member && !member.roles.cache.some(r => EXCLUDE_FEEDBACK_ROLES.includes(r.id))) {
-      membersToEvaluate.push(reg);
+   // 2. Pega o ranking da semana e filtra para o TOP 10 com os cargos desejados
+  const weeklyRanking = await getWeeklyRanking(client);
+  const rolesToInclude = new Set([
+    "1388976314253312100", // Coord. Creators
+    "1388975939161161728", // Gestor
+    "1388976094920704141", // Social Medias
+    "1388976155830255697", // Manager
+    "1352429001188180039", // Equipe Creators
+  ]);
+
+  const top10 = [];
+  if (weeklyRanking.length > 0) {
+    // O ranking já vem ordenado por pontos
+    for (const user of weeklyRanking) {
+      if (top10.length >= 10) break;
+      try {
+        const member = await guild.members.fetch(user.userId);
+        if (member && member.roles.cache.some(role => rolesToInclude.has(role.id))) {
+          top10.push(user);
+        }
+      } catch (e) {
+        // Ignora se o membro não for encontrado no servidor
+      }
     }
   }
 
-  // 2. Verifica a atividade deles no ranking
-  const activeThisWeek = [];
-  for (const reg of membersToEvaluate) {
-    const stats = await getStatsForUser(client, reg.userId);
-    // ✅ FIX: Usa os pontos da semana atual, não o total geral.
-    if (stats && stats.thisWeekPoints > 0) {
-      activeThisWeek.push({ ...reg, points: stats.thisWeekPoints });
-    }
-  }
+  const rankingLines = top10.length > 0
+    ? top10.map(u => `• <@${u.userId}> (${u.points} pontos)`).join("\n")
+    : "• Nenhum membro com os cargos definidos pontuou no ranking esta semana.";
 
-if (activeThisWeek.length === 0) {
-  console.log("[FormsCreator] Lembrete: Nenhum membro ativo com pontos no ranking foi encontrado.");
-}
-
-// Ordena por pontos
-activeThisWeek.sort((a, b) => b.points - a.points);
-
-const rankingLines = activeThisWeek.length > 0
-  ? activeThisWeek.map(u => `• <@${u.userId}> (${u.points} pontos)`).join("\n")
-  : "• Nenhum membro ativo com pontos no ranking nesta semana até o momento.";
 
   // 3. Envia lembretes (Alternado: Dia Público / Dia PV)
   // ✅ Se passou 2 dias ou mais (ou nunca rodou), manda Público e reseta timer
