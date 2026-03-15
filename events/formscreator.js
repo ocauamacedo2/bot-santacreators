@@ -905,6 +905,33 @@ export async function formsCreatorHandleMessage(message, client) {
       return true;
     }
 
+    // ✅ LÓGICA DE RANKING (Igual ao job automático)
+    const weeklyRanking = await getWeeklyRanking(client);
+    const rolesToInclude = new Set([
+      "1388976314253312100", // Coord. Creators
+      "1388975939161161728", // Gestor
+      "1388976094920704141", // Social Medias
+      "1388976155830255697", // Manager
+      "1352429001188180039", // Equipe Creators
+    ]);
+
+    const top10 = [];
+    if (weeklyRanking.length > 0) {
+      for (const user of weeklyRanking) {
+        if (top10.length >= 10) break;
+        try {
+          const member = await message.guild.members.fetch(user.userId);
+          if (member && member.roles.cache.some(role => rolesToInclude.has(role.id))) {
+            top10.push(user);
+          }
+        } catch (e) {}
+      }
+    }
+
+    const rankingLines = top10.length > 0
+      ? top10.map(u => `• <@${u.userId}> (${u.points} pontos)`).join("\n")
+      : "• Nenhum membro com os cargos definidos pontuou no ranking esta semana.";
+
 const mentions = CREATOR_FORM_NOTIFY_ROLES.map(id => `<@&${id}>`).join(" ");
 
 const embed = new EmbedBuilder()
@@ -913,12 +940,14 @@ const embed = new EmbedBuilder()
   .setDescription(
     "Vamos manter a evolução da nossa equipe em dia! Por favor, deixem seus feedbacks sobre os membros mais ativos da semana, com base no ranking de atividades.\n\n" +
     "**Membros em Destaque (ativos no ranking):**\n" +
-    "• Teste manual do comando público\n\n" +
+    rankingLines +
+    "\n\n" +
     `Acesse o tópico de cada um no canal <#${CREATOR_FORM_CHANNEL_ID}> para registrar seu feedback sobre o desempenho, ajuda, ou qualquer ponto relevante.`
   )
   .setFooter({ text: "Feedback constante = evolução rápida." });
 
 await ch.send({
+
   content: `📌 **Lembrete: Feedbacks da Equipe Creator**\n${mentions}`,
   embeds: [embed],
   allowedMentions: { parse: ["roles"] }
