@@ -404,26 +404,40 @@ async function buildPublicEmbed(state, data, winners, client) {
     if (pautasTexto.length <= FIELD_VALUE_LIMIT) {
       embed.addFields({ name: "# 📌 Pautas Abordadas", value: pautasTexto, inline: false });
     } else {
-      // Divide as pautas em múltiplos campos se o texto for muito longo
+      // Lógica de split segura
       let currentPautaText = "";
       let fieldCount = 1;
+
       for (const pauta of state.pautas) {
-        const pautaString = `📌 **${pauta.title}**\n${pauta.desc}\n\n`;
+        // Corta pautas individuais gigantes para não quebrar o limite hard do Discord
+        let pautaString = `📌 **${pauta.title}**\n${pauta.desc}\n\n`;
+        if (pautaString.length > FIELD_VALUE_LIMIT) {
+           pautaString = pautaString.slice(0, FIELD_VALUE_LIMIT - 10) + "...\n\n";
+        }
+
+        // Se somar vai estourar o limite:
         if (currentPautaText.length + pautaString.length > FIELD_VALUE_LIMIT) {
-          embed.addFields({ name: `# 📌 Pautas Abordadas (Parte ${fieldCount})`, value: currentPautaText, inline: false });
+          // Só adiciona se tiver algo acumulado (evita erro de campo vazio)
+          if (currentPautaText.trim().length > 0) {
+            embed.addFields({ name: `# 📌 Pautas Abordadas (Parte ${fieldCount})`, value: currentPautaText, inline: false });
+            fieldCount++;
+          }
+          // Começa novo acumulador com a pauta atual
           currentPautaText = pautaString;
-          fieldCount++;
         } else {
+          // Cabe no acumulador
           currentPautaText += pautaString;
         }
       }
-      if (currentPautaText) {
+      // Sobra final
+      if (currentPautaText.trim().length > 0) {
         embed.addFields({ name: `# 📌 Pautas Abordadas (Parte ${fieldCount})`, value: currentPautaText, inline: false });
       }
     }
   } else {
     embed.addFields({ name: "# 📌 Pautas Abordadas", value: "—", inline: false });
   }
+
 
   return embed;
 }
