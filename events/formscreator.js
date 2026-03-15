@@ -13,7 +13,6 @@ import {
   TextInputBuilder,
   TextInputStyle,
   EmbedBuilder,
-  PermissionsBitField,
 } from "discord.js";
 
 // __dirname no ESM
@@ -456,52 +455,58 @@ async function runReminderJob(client) {
     }
   }
 
-  if (activeThisWeek.length === 0) {
-    console.log("[FormsCreator] Lembrete: Nenhum membro ativo com pontos no ranking foi encontrado.");
-    return;
-  }
+if (activeThisWeek.length === 0) {
+  console.log("[FormsCreator] Lembrete: Nenhum membro ativo com pontos no ranking foi encontrado.");
+}
 
-  // Ordena por pontos
-  activeThisWeek.sort((a, b) => b.points - a.points);
+// Ordena por pontos
+activeThisWeek.sort((a, b) => b.points - a.points);
+
+const rankingLines = activeThisWeek.length > 0
+  ? activeThisWeek.map(u => `• <@${u.userId}> (${u.points} pontos)`).join("\n")
+  : "• Nenhum membro ativo com pontos no ranking nesta semana até o momento.";
 
   // 3. Envia lembretes (Alternado: Dia Público / Dia PV)
   // ✅ Se passou 2 dias ou mais (ou nunca rodou), manda Público e reseta timer
-  if (days >= 2) {
-    const ch = await client.channels.fetch(PUBLIC_REMINDER_CHANNEL_ID).catch(() => null);
-    if (ch && ch.isTextBased()) {
-      const mentions = CREATOR_FORM_NOTIFY_ROLES.map(id => `<@&${id}>`).join(" ");
+ if (days >= 2) {
+  const ch = await client.channels.fetch(PUBLIC_REMINDER_CHANNEL_ID).catch(() => null);
+  if (ch && ch.isTextBased()) {
+    const mentions = CREATOR_FORM_NOTIFY_ROLES.map(id => `<@&${id}>`).join(" ");
 
-      const embed = new EmbedBuilder()
-        .setTitle("📌 Lembrete: Feedbacks da Equipe Creator")
-        .setColor("#f1c40f")
-        .setDescription(
-          `${mentions}\n\n` +
-          "Vamos manter a evolução da nossa equipe em dia! Por favor, deixem seus feedbacks sobre os membros mais ativos da semana, com base no ranking de atividades.\n\n" +
-          "**Ranking de Atividades da Semana:**\n" +
-          activeThisWeek.map(u => `• <@${u.userId}> (${u.points} pontos)`).join("\n") +
-          "\n\n" +
-          `Acesse o tópico de cada um no canal <#${CREATOR_FORM_CHANNEL_ID}> para registrar seu feedback sobre o desempenho, ajuda, ou qualquer ponto relevante.`
-        )
-        .setFooter({ text: "Feedback constante = evolução rápida." });
+    const embed = new EmbedBuilder()
+  .setTitle("📌 Lembrete: Feedbacks da Equipe Creator")
+  .setColor("#f1c40f")
+  .setDescription(
+    "Vamos manter a evolução da nossa equipe em dia! Por favor, deixem seus feedbacks sobre os membros mais ativos da semana, com base no ranking de atividades.\n\n" +
+    "**Membros em Destaque (ativos no ranking):**\n" +
+    rankingLines +
+    "\n\n" +
+    `Acesse o tópico de cada um no canal <#${CREATOR_FORM_CHANNEL_ID}> para registrar seu feedback sobre o desempenho, ajuda, ou qualquer ponto relevante.`
+  )
+  .setFooter({ text: "Feedback constante = evolução rápida." });
 
-      await ch.send({ embeds: [embed] });
-    }
-    state.lastPublicReminderAt = now.toISOString();
-    writeState(state);
-  } 
+    await ch.send({
+      content: `📌 **Lembrete: Feedbacks da Equipe Creator**\n${mentions}`,
+      embeds: [embed],
+      allowedMentions: { parse: ["roles"] }
+    });
+  }
+  state.lastPublicReminderAt = now.toISOString();
+  writeState(state);
+}
   // ✅ Se passou 1 dia (dia intercalado), manda PV
   else if (days === 1) {
-    const embedDM = new EmbedBuilder()
-        .setTitle("📌 Lembrete Pessoal: Feedbacks da Equipe")
-        .setColor("#f1c40f")
-        .setDescription(
-          "Oie! Passando pra lembrar de deixar aquele feedback na evolução da galera. Hoje é o dia de foco nisso!\n\n" +
-          "**Ranking de Atividades da Semana:**\n" +
-          activeThisWeek.map(u => `• <@${u.userId}> (${u.points} pontos)`).join("\n") +
-          "\n\n" +
-          `Acesse o tópico de cada um no canal <#${CREATOR_FORM_CHANNEL_ID}> para registrar.`
-        )
-        .setFooter({ text: "Alternado: Hoje é dia de lembrete no PV!" });
+   const embedDM = new EmbedBuilder()
+    .setTitle("📌 Lembrete Pessoal: Feedbacks da Equipe Creator")
+    .setColor("#f1c40f")
+    .setDescription(
+      "Vamos manter a evolução da nossa equipe em dia! Por favor, deixem seus feedbacks sobre os membros mais ativos da semana, com base no ranking de atividades.\n\n" +
+      "**Membros em Destaque (ativos no ranking):**\n" +
+      rankingLines +
+      "\n\n" +
+      `Acesse o tópico de cada um no canal <#${CREATOR_FORM_CHANNEL_ID}> para registrar seu feedback sobre o desempenho, ajuda, ou qualquer ponto relevante.`
+    )
+    .setFooter({ text: "Hoje é dia de lembrete no PV." });
 
     // Coleta membros únicos dos cargos definidos
     const membersToNotify = new Map();
@@ -720,16 +725,18 @@ export async function createFormsCreatorRecord(client, { guildId, creatorId, tar
 
     if (!topic) throw new Error("Falha ao criar thread no FormsCreator.");
 
-    const embed = new EmbedBuilder()
-        .setTitle(`👤 ${targetName}`)
-        .setThumbnail(avatarURL)
-        .setDescription(`<@${targetId}>`)
-        .addFields(
-            { name: "📌 ID/Passaporte", value: targetPassaporte, inline: true },
-            { name: "📚 Área de Interesse", value: area, inline: true },
-            { name: "Status do Projeto", value: "🟢 Ativo", inline: false }
-        )
-        .setColor("Purple");
+  const isActiveOnCreate = !!(membro && membro.roles.cache.has(ROLE_REQUIRED_FOR_ACTIVE));
+
+const embed = new EmbedBuilder()
+    .setTitle(`👤 ${targetName}`)
+    .setThumbnail(avatarURL)
+    .setDescription(`<@${targetId}>`)
+    .addFields(
+        { name: "📌 ID/Passaporte", value: targetPassaporte, inline: true },
+        { name: "📚 Área de Interesse", value: area, inline: true },
+        { name: "Status do Projeto", value: isActiveOnCreate ? "🟢 Ativo" : "🔴 Inativo", inline: false }
+    )
+    .setColor("Purple");
 
     const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`editar_id_${topic.id}`).setLabel("✏️ Editar ID/Passaporte").setStyle(ButtonStyle.Secondary),
@@ -740,14 +747,61 @@ export async function createFormsCreatorRecord(client, { guildId, creatorId, tar
         new ButtonBuilder().setCustomId(`fc_toggle_status:${topic.id}:${targetId}:inactive`).setLabel("Desligar do Projeto").setStyle(ButtonStyle.Danger)
     );
 
-    const registroMsg = await topic.send({ embeds: [embed], components: [row, statusRow] }).catch(() => {});
+    // ✅ CORREÇÃO: Adicionado try...catch e mensagem de boas-vindas
+    let registroMsg;
+    try {
+        registroMsg = await topic.send({ embeds: [embed], components: [row, statusRow] });
+        await topic.send({ content: `✨ Bem-vindo(a) <@${targetId}>! Este é seu tópico de acompanhamento individual.` });
+    } catch (e) {
+        console.error(`[FormsCreator] Falha ao enviar mensagem inicial para o tópico ${topic.id}:`, e);
+    }
 
     const state = readState();
-    state.registrations[topic.id] = { userId: targetId, nome: targetName, idCidade: targetPassaporte, area, active: true, messageId: registroMsg.id };
+    // ✅ CORREÇÃO: Garante que registroMsg.id existe antes de usar
+state.registrations[topic.id] = {
+  userId: targetId,
+  nome: targetName,
+  idCidade: targetPassaporte,
+  area,
+  active: isActiveOnCreate,
+  messageId: registroMsg?.id || null
+};
     writeState(state);
 
+    // ✅ CORREÇÃO: Enviar DM para o usuário
+    if (membro) {
+        try {
+            await membro.send(`Olá! Um novo tópico de acompanhamento (<#${topic.id}>) foi criado para você no servidor **${guild.name}**. Fique de olho lá!`);
+        } catch (e) {
+            console.warn(`[FormsCreator] Falha ao enviar DM para ${membro.user.tag} (${membro.id}). O usuário pode ter DMs desativadas.`);
+            // Opcional: avisar no tópico que a DM falhou
+            try {
+                await topic.send(`⚠️ Não foi possível notificar <@${targetId}> por mensagem direta. Avise-o(a) manualmente sobre este tópico.`);
+            } catch {}
+        }
+    }
+
+    // ✅ CORREÇÃO: Enviar log para o canal de logs
+    try {
+        const logChannel = await client.channels.fetch(LOG_CHANNEL_ID_V2).catch(() => null);
+        if (logChannel && logChannel.isTextBased()) {
+            const logEmbed = new EmbedBuilder()
+                .setTitle("📝 Novo Registro de Evolução Criado")
+                .setColor("Blue")
+                .addFields(
+                    { name: "Membro", value: `<@${targetId}>`, inline: true },
+                    { name: "Aprovado por", value: `<@${creatorId}>`, inline: true },
+                    { name: "Tópico Criado", value: `${topic}`, inline: false }
+                )
+                .setTimestamp();
+            await logChannel.send({ embeds: [logEmbed] });
+        }
+    } catch (e) {
+        console.error(`[FormsCreator] Falha ao enviar log de criação para o canal ${LOG_CHANNEL_ID_V2}:`, e);
+    }
+
     console.log(`[FormsCreator] Registro automático criado para ${targetName} (${targetId}) no tópico ${topic.id}`);
-    return { threadId: topic.id, messageId: registroMsg.id };
+    return { threadId: topic.id, messageId: registroMsg?.id };
 }
 
 export async function findFormsCreatorThreadIdByUserId(userId) {
@@ -852,10 +906,27 @@ export async function formsCreatorHandleMessage(message, client) {
       return true;
     }
 
-    await ch.send({ content: buildPublicReminderMessage() });
-    await message.reply("✅ Enviei a mensagem pública agora (canal de lembrete).");
-    return true;
-  }
+const mentions = CREATOR_FORM_NOTIFY_ROLES.map(id => `<@&${id}>`).join(" ");
+
+const embed = new EmbedBuilder()
+  .setTitle("📌 Lembrete: Feedbacks da Equipe Creator")
+  .setColor("#f1c40f")
+  .setDescription(
+    "Vamos manter a evolução da nossa equipe em dia! Por favor, deixem seus feedbacks sobre os membros mais ativos da semana, com base no ranking de atividades.\n\n" +
+    "**Membros em Destaque (ativos no ranking):**\n" +
+    "• Teste manual do comando público\n\n" +
+    `Acesse o tópico de cada um no canal <#${CREATOR_FORM_CHANNEL_ID}> para registrar seu feedback sobre o desempenho, ajuda, ou qualquer ponto relevante.`
+  )
+  .setFooter({ text: "Feedback constante = evolução rápida." });
+
+await ch.send({
+  content: `📌 **Lembrete: Feedbacks da Equipe Creator**\n${mentions}`,
+  embeds: [embed],
+  allowedMentions: { parse: ["roles"] }
+});
+
+await message.reply("✅ Enviei a mensagem pública agora (canal de lembrete).");
+return true;  }
 
   // teste dm
   if (content.startsWith("!testdm")) {
@@ -965,16 +1036,18 @@ export async function formsCreatorHandleInteraction(interaction, client) {
         await interaction.editReply({ content: "❌ Falha ao criar thread." });
         return true;
       }
+const isActiveOnCreate = !!(membro && membro.roles.cache.has(ROLE_REQUIRED_FOR_ACTIVE));
 
-      const embed = new EmbedBuilder()
-        .setTitle(`👤 ${nome}`)
-        .setThumbnail(avatarURL)
-        .setDescription(`<@${idDiscord}>`)
-        .addFields(
-          { name: "📌 ID/Passaporte", value: idCidade, inline: true },
-          { name: "📚 Área de Interesse", value: area, inline: true }
-        )
-        .setColor("Purple");
+const embed = new EmbedBuilder()
+  .setTitle(`👤 ${nome}`)
+  .setThumbnail(avatarURL)
+  .setDescription(`<@${idDiscord}>`)
+  .addFields(
+    { name: "📌 ID/Passaporte", value: idCidade, inline: true },
+    { name: "📚 Área de Interesse", value: area, inline: true },
+    { name: "Status do Projeto", value: isActiveOnCreate ? "🟢 Ativo" : "🔴 Inativo", inline: false }
+  )
+  .setColor("Purple");
 
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
@@ -998,17 +1071,26 @@ export async function formsCreatorHandleInteraction(interaction, client) {
       // ✅ Verifica cargo obrigatório na criação (se não tiver, já nasce desligado visualmente ou avisa)
       // Mas como é criação, assumimos que vai ser ativo, o job diário corrige se faltar cargo.
       // Ou podemos forçar aqui:
-      if (!membro.roles.cache.has(ROLE_REQUIRED_FOR_ACTIVE)) {
-         // Opcional: avisar no tópico
-         setTimeout(() => topic.send(`⚠️ **Atenção:** Este membro não possui o cargo <@&${ROLE_REQUIRED_FOR_ACTIVE}>. Ele será desligado automaticamente no próximo ciclo se não receber o cargo.`).catch(()=>{}), 2000);
-      }
+      if (!membro || !membro.roles.cache.has(ROLE_REQUIRED_FOR_ACTIVE)) {
+   setTimeout(() => topic.send(`⚠️ **Atenção:** Este membro não possui o cargo <@&${ROLE_REQUIRED_FOR_ACTIVE}>. Ele será desligado automaticamente no próximo ciclo se não receber o cargo.`).catch(()=>{}), 2000);
+}
 
-      const registroMsg = await topic.send({ embeds: [embed], components: [row, statusRow] }).catch(() => {});
+      const registroMsg = await topic.send({ embeds: [embed], components: [row, statusRow] }).catch((e) => {
+  console.error(`[FormsCreator] Falha ao enviar registro inicial na thread ${topic.id}:`, e);
+  return null;
+});
 
-      // ✅ Salva no estado
-      const state = readState();
-      state.registrations[topic.id] = { userId: idDiscord, nome, idCidade, area, active: true, messageId: registroMsg.id };
-      writeState(state);
+// ✅ Salva no estado
+const state = readState();
+state.registrations[topic.id] = {
+  userId: idDiscord,
+  nome,
+  idCidade,
+  area,
+  active: isActiveOnCreate,
+  messageId: registroMsg?.id || null
+};
+writeState(state);
 
       // DMs pros cargos
       const linkDoTopico = `https://discord.com/channels/${guild.id}/${topic.id}`;
