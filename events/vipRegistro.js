@@ -277,21 +277,15 @@ async function deleteAllVipMenus(channel) {
 async function forceMoveMenuToBottom(channel, oldMenuMessage = null) {
   if (!channel || !channel.isTextBased()) return null;
 
-  // 1) se veio uma mensagem específica, só apaga se ela for realmente o MENU
+  // apaga a mensagem passada, mas só se ela for realmente um menu
   if (oldMenuMessage && isVipMenuMessage(oldMenuMessage, channel.client)) {
     await oldMenuMessage.delete().catch(() => {});
   }
 
-  // 2) apaga qualquer outro menu antigo que tenha sobrado
-  const msgs = await channel.messages.fetch({ limit: 100 }).catch(() => null);
-  if (msgs) {
-    const menus = [...msgs.values()].filter((m) => isVipMenuMessage(m, channel.client));
-    for (const msg of menus) {
-      await msg.delete().catch(() => {});
-    }
-  }
+  // limpa qualquer outro menu que tenha sobrado
+  await deleteAllVipMenus(channel).catch(() => {});
 
-  // 3) cria um menu novo no final
+  // recria no final
   const sent = await channel.send({
     embeds: [buildMenuEmbed()],
     components: buildMenuComponents(),
@@ -466,7 +460,7 @@ export async function vipRegistroHandleInteraction(interaction, client) {
       return true;
     }
 
-    // ---------- MENU FILTROS ----------
+        // ---------- MENU FILTROS ----------
     if (
       interaction.isButton() &&
       (
@@ -495,10 +489,22 @@ export async function vipRegistroHandleInteraction(interaction, client) {
           ? "solicitados"
           : "naoclicados";
 
+      // apaga especificamente o menu clicado
+      if (interaction.message && isVipMenuMessage(interaction.message, client)) {
+        await interaction.message.delete().catch(() => {});
+      }
+
+      // move os registros primeiro
       const { movidos } = await moverRegistrosPorFiltro(canal, qual);
 
-      // move o menu clicado pro final só depois de mover os registros
-      await forceMoveMenuToBottom(canal, interaction.message).catch(() => {});
+      // limpa qualquer menu antigo restante
+      await deleteAllVipMenus(canal).catch(() => {});
+
+      // recria o menu no final
+      await canal.send({
+        embeds: [buildMenuEmbed()],
+        components: buildMenuComponents(),
+      }).catch(() => {});
 
       await interaction.editReply({
         content: `✅ Filtro aplicado: **${qual}**\n📦 Registros movidos: **${movidos}**`,
@@ -615,36 +621,34 @@ export async function vipRegistroHandleInteraction(interaction, client) {
       const canal = await client.channels.fetch(VIP_CANAL_ID).catch(() => null);
       if (!ensureIsTextChannel(canal)) return true;
 
-      // ====== SOLICITADO ======
-      if (action === "solicitado" && parts[2]) {
-        const msgId = parts[2];
+  // ====== SOLICITADO ======
+if (action === "solicitado" && parts[2]) {
+  const msgId = parts[2];
 
-        if (!isAuth) {
-          await interaction.reply({
-            content: "🚫 Sem permissão para marcar solicitação.",
-            ephemeral: true,
-          }).catch(() => {});
-          return true;
-        }
+  if (!isAuth) {
+    await interaction.reply({
+      content: "🚫 Sem permissão para marcar solicitação.",
+      ephemeral: true,
+    }).catch(() => {});
+    return true;
+  }
 
-        const modal = new ModalBuilder()
-          .setCustomId(`vip_modal_solicitado_${msgId}`)
-          .setTitle("📨 Marcar como Solicitado");
+  const modal = new ModalBuilder()
+    .setCustomId(`vip_modal_solicitado_${msgId}`)
+    .setTitle("📨 Marcar como Solicitado");
 
-        const inputMotivo = new TextInputBuilder()
-          .setCustomId("vip_motivo_solicitacao")
-          .setLabel("Observação (opcional)")
-          .setStyle(TextInputStyle.Paragraph)
-          .setPlaceholder("Ex: Link do comprovante, detalhes adicionais...")
-          .setRequired(false);
+  const inputMotivo = new TextInputBuilder()
+    .setCustomId("vip_motivo_solicitacao")
+    .setLabel("Observação (opcional)")
+    .setStyle(TextInputStyle.Paragraph)
+    .setPlaceholder("Ex: Link do comprovante, detalhes adicionais...")
+    .setRequired(false);
 
-        modal.addComponents(new ActionRowBuilder().addComponents(inputMotivo));
-        await interaction.showModal(modal).catch(() => {});
+  modal.addComponents(new ActionRowBuilder().addComponents(inputMotivo));
+  await interaction.showModal(modal).catch(() => {});
 
-        // aqui NÃO passa interaction.message, porque isso é um registro e não o menu
-        await forceMoveMenuToBottom(canal).catch(() => {});
-        return true;
-      }
+  return true;
+}
 
       // ====== RECEBEU ======
       if (action === "recebeu" && parts[2] && parts[3]) {
@@ -721,48 +725,46 @@ export async function vipRegistroHandleInteraction(interaction, client) {
         return true;
       }
 
-      // ====== NEGAR ======
-      if (action === "negar" && parts[2] && parts[3]) {
-        const msgId = parts[2];
-        const targetId = parts[3];
+     // ====== NEGAR ======
+if (action === "negar" && parts[2] && parts[3]) {
+  const msgId = parts[2];
+  const targetId = parts[3];
 
-        if (!isAuth) {
-          await interaction.reply({
-            content: "🚫 Apenas cargos autorizados podem **negar**.",
-            ephemeral: true,
-          }).catch(() => {});
-          return true;
-        }
+  if (!isAuth) {
+    await interaction.reply({
+      content: "🚫 Apenas cargos autorizados podem **negar**.",
+      ephemeral: true,
+    }).catch(() => {});
+    return true;
+  }
 
-        const modal = new ModalBuilder()
-          .setCustomId(`vip_modal_negar_${msgId}_${targetId}`)
-          .setTitle("❌ Negar / Reprovar pagamento");
+  const modal = new ModalBuilder()
+    .setCustomId(`vip_modal_negar_${msgId}_${targetId}`)
+    .setTitle("❌ Negar / Reprovar pagamento");
 
-        const inputMotivo = new TextInputBuilder()
-          .setCustomId("vip_motivo_reprovacao")
-          .setLabel("Motivo da reprovação")
-          .setStyle(TextInputStyle.Paragraph)
-          .setPlaceholder("Explique resumidamente o porquê da reprovação.")
-          .setRequired(true);
+  const inputMotivo = new TextInputBuilder()
+    .setCustomId("vip_motivo_reprovacao")
+    .setLabel("Motivo da reprovação")
+    .setStyle(TextInputStyle.Paragraph)
+    .setPlaceholder("Explique resumidamente o porquê da reprovação.")
+    .setRequired(true);
 
-        modal.addComponents(new ActionRowBuilder().addComponents(inputMotivo));
+  modal.addComponents(new ActionRowBuilder().addComponents(inputMotivo));
 
-        try {
-          await interaction.showModal(modal);
-        } catch (err) {
-          console.error("[VIP] showModal negar falhou:", err);
-          if (!interaction.deferred && !interaction.replied) {
-            await interaction.reply({
-              content: "⚠️ Interação expirada. Clique novamente em **Negar**.",
-              ephemeral: true,
-            }).catch(() => {});
-          }
-        }
+  try {
+    await interaction.showModal(modal);
+  } catch (err) {
+    console.error("[VIP] showModal negar falhou:", err);
+    if (!interaction.deferred && !interaction.replied) {
+      await interaction.reply({
+        content: "⚠️ Interação expirada. Clique novamente em **Negar**.",
+        ephemeral: true,
+      }).catch(() => {});
+    }
+  }
 
-        // aqui também NÃO passa interaction.message, porque é registro
-        await forceMoveMenuToBottom(canal).catch(() => {});
-        return true;
-      }
+  return true;
+}
     }
 
     // ---------- SUBMIT SOLICITADO ----------
