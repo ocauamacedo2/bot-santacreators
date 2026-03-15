@@ -277,8 +277,8 @@ async function deleteAllVipMenus(channel) {
 async function forceMoveMenuToBottom(channel, oldMenuMessage = null) {
   if (!channel || !channel.isTextBased()) return null;
 
-  // 1) tenta apagar a mensagem exata do menu clicado
-  if (oldMenuMessage) {
+  // 1) se veio uma mensagem específica, só apaga se ela for realmente o MENU
+  if (oldMenuMessage && isVipMenuMessage(oldMenuMessage, channel.client)) {
     await oldMenuMessage.delete().catch(() => {});
   }
 
@@ -497,6 +497,7 @@ export async function vipRegistroHandleInteraction(interaction, client) {
 
       const { movidos } = await moverRegistrosPorFiltro(canal, qual);
 
+      // move o menu clicado pro final só depois de mover os registros
       await forceMoveMenuToBottom(canal, interaction.message).catch(() => {});
 
       await interaction.editReply({
@@ -558,6 +559,7 @@ export async function vipRegistroHandleInteraction(interaction, client) {
 
       await interaction.showModal(modal).catch(() => {});
 
+      // como esse clique veio do menu principal, passa a mensagem do menu
       if (ensureIsTextChannel(canal)) {
         await forceMoveMenuToBottom(canal, interaction.message).catch(() => {});
       }
@@ -593,6 +595,7 @@ export async function vipRegistroHandleInteraction(interaction, client) {
         return true;
       }
 
+      // aqui não existe interaction.message no modal submit, então só recria o menu no final
       await forceMoveMenuToBottom(canal).catch(() => {});
 
       await interaction.editReply({
@@ -638,7 +641,8 @@ export async function vipRegistroHandleInteraction(interaction, client) {
         modal.addComponents(new ActionRowBuilder().addComponents(inputMotivo));
         await interaction.showModal(modal).catch(() => {});
 
-        await forceMoveMenuToBottom(canal, interaction.message).catch(() => {});
+        // aqui NÃO passa interaction.message, porque isso é um registro e não o menu
+        await forceMoveMenuToBottom(canal).catch(() => {});
         return true;
       }
 
@@ -687,7 +691,8 @@ export async function vipRegistroHandleInteraction(interaction, client) {
           }).catch(() => {});
         });
 
-        await forceMoveMenuToBottom(canal, interaction.message).catch(() => {});
+        // aqui também NÃO passa interaction.message, porque é mensagem de registro
+        await forceMoveMenuToBottom(canal).catch(() => {});
 
         if (targetId && targetId !== "none" && isDiscordId(targetId)) {
           try {
@@ -754,7 +759,8 @@ export async function vipRegistroHandleInteraction(interaction, client) {
           }
         }
 
-        await forceMoveMenuToBottom(canal, interaction.message).catch(() => {});
+        // aqui também NÃO passa interaction.message, porque é registro
+        await forceMoveMenuToBottom(canal).catch(() => {});
         return true;
       }
     }
