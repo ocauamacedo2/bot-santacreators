@@ -13,6 +13,8 @@ import {
   TextInputStyle,
 } from "discord.js";
 
+import { dashEmit } from "../utils/dashHub.js";
+
 // ================= CONFIGURAÇÕES =================
 const LOG_CHANNEL_ID = "1474603651757510706"; // Canal de Logs
 const PANEL_CHANNEL_ID = "1474605177771397223"; // ⚠️ CONFIRA SE ESSE ID ESTÁ CORRETO E O BOT VÊ O CANAL
