@@ -274,13 +274,24 @@ async function deleteAllVipMenus(channel) {
   }
 }
 
-async function forceMoveMenuToBottom(channel) {
+async function forceMoveMenuToBottom(channel, oldMenuMessage = null) {
   if (!channel || !channel.isTextBased()) return null;
 
-  // apaga todos os menus antigos primeiro
-  await deleteAllVipMenus(channel).catch(() => {});
+  // 1) tenta apagar a mensagem exata do menu clicado
+  if (oldMenuMessage) {
+    await oldMenuMessage.delete().catch(() => {});
+  }
 
-  // cria um novo no final
+  // 2) apaga qualquer outro menu antigo que tenha sobrado
+  const msgs = await channel.messages.fetch({ limit: 100 }).catch(() => null);
+  if (msgs) {
+    const menus = [...msgs.values()].filter((m) => isVipMenuMessage(m, channel.client));
+    for (const msg of menus) {
+      await msg.delete().catch(() => {});
+    }
+  }
+
+  // 3) cria um menu novo no final
   const sent = await channel.send({
     embeds: [buildMenuEmbed()],
     components: buildMenuComponents(),
@@ -449,7 +460,7 @@ export async function vipRegistroHandleInteraction(interaction, client) {
       await interaction.reply({ embeds: [emb], ephemeral: true }).catch(() => {});
 
       if (ensureIsTextChannel(canal)) {
-        await forceMoveMenuToBottom(canal).catch(() => {});
+        await forceMoveMenuToBottom(canal, interaction.message).catch(() => {});
       }
 
       return true;
@@ -486,7 +497,7 @@ export async function vipRegistroHandleInteraction(interaction, client) {
 
       const { movidos } = await moverRegistrosPorFiltro(canal, qual);
 
-      await forceMoveMenuToBottom(canal).catch(() => {});
+      await forceMoveMenuToBottom(canal, interaction.message).catch(() => {});
 
       await interaction.editReply({
         content: `✅ Filtro aplicado: **${qual}**\n📦 Registros movidos: **${movidos}**`,
@@ -548,7 +559,7 @@ export async function vipRegistroHandleInteraction(interaction, client) {
       await interaction.showModal(modal).catch(() => {});
 
       if (ensureIsTextChannel(canal)) {
-        await forceMoveMenuToBottom(canal).catch(() => {});
+        await forceMoveMenuToBottom(canal, interaction.message).catch(() => {});
       }
 
       return true;
@@ -627,7 +638,7 @@ export async function vipRegistroHandleInteraction(interaction, client) {
         modal.addComponents(new ActionRowBuilder().addComponents(inputMotivo));
         await interaction.showModal(modal).catch(() => {});
 
-        await forceMoveMenuToBottom(canal).catch(() => {});
+        await forceMoveMenuToBottom(canal, interaction.message).catch(() => {});
         return true;
       }
 
@@ -676,7 +687,7 @@ export async function vipRegistroHandleInteraction(interaction, client) {
           }).catch(() => {});
         });
 
-        await forceMoveMenuToBottom(canal).catch(() => {});
+        await forceMoveMenuToBottom(canal, interaction.message).catch(() => {});
 
         if (targetId && targetId !== "none" && isDiscordId(targetId)) {
           try {
@@ -743,7 +754,7 @@ export async function vipRegistroHandleInteraction(interaction, client) {
           }
         }
 
-        await forceMoveMenuToBottom(canal).catch(() => {});
+        await forceMoveMenuToBottom(canal, interaction.message).catch(() => {});
         return true;
       }
     }
