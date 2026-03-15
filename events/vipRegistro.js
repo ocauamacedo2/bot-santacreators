@@ -112,13 +112,40 @@ function normalizeVipCity(raw) {
     .trim()
     .toLowerCase()
     .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "");
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\w\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 
   if (!s) return null;
-  if (s === "nobre" || s.includes("cidade nobre")) return "NOBRE";
-  if (s === "santa" || s.includes("cidade santa")) return "SANTA";
-  if (s === "grande" || s.includes("cidade grande")) return "GRANDE";
-  if (s === "maresia" || s.includes("cidade maresia")) return "MARESIA";
+
+  if (
+    s === "nobre" ||
+    s === "cidade nobre" ||
+    s === "cn" ||
+    s.includes("nobre")
+  ) return "NOBRE";
+
+  if (
+    s === "santa" ||
+    s === "cidade santa" ||
+    s === "cs" ||
+    s.includes("santa")
+  ) return "SANTA";
+
+  if (
+    s === "grande" ||
+    s === "cidade grande" ||
+    s === "cg" ||
+    s.includes("grande")
+  ) return "GRANDE";
+
+  if (
+    s === "maresia" ||
+    s === "cidade maresia" ||
+    s === "cm" ||
+    s.includes("maresia")
+  ) return "MARESIA";
 
   return null;
 }
@@ -386,14 +413,13 @@ export async function createVipRecordProgrammatically(client, {
   tipoRaw,
   motivoRegistro,
   nomeEquipe,
-  cidadeRaw,
+  cidadeKey,
 }) {
   const tipoNorm = vipNormalizeFree(tipoRaw);
   const decor = tipoNorm ? vipDecor[tipoNorm] : vipDecor.CUSTOM;
 
-  const cidadeKey = normalizeVipCity(cidadeRaw);
-  if (!cidadeKey) {
-    console.error("[VIP Programmatic] Cidade inválida:", cidadeRaw);
+  if (!cidadeKey || !VIP_CITY_MAP[cidadeKey]) {
+    console.error("[VIP Programmatic] Cidade inválida:", cidadeKey);
     return { error: "cidade_invalida" };
   }
 
@@ -490,22 +516,24 @@ export async function vipRegistroOnReady(client) {
 // ====== INTERAÇÕES ======
 export async function vipRegistroHandleInteraction(interaction, client) {
   try {
-    // ---------- MENU MOTIVO ----------
-    if (interaction.isButton() && interaction.customId === VIP_MENU_MOTIVO_ID) {
-      const canal = await client.channels.fetch(VIP_CANAL_ID).catch(() => null);
+// ---------- MENU MOTIVO ----------
+if (interaction.isButton() && interaction.customId === VIP_MENU_MOTIVO_ID) {
+  const canal = await client.channels.fetch(VIP_CANAL_ID).catch(() => null);
 
-      const emb = new EmbedBuilder()
-        .setColor("#8e44ad")
-        .setTitle("📌 Motivo do Menu/Registro")
-        .setDescription(VIP_MENU_MOTIVO_TEXTO)
-        .setFooter({ text: "SantaCreators – Premium" });
+  const emb = new EmbedBuilder()
+    .setColor("#8e44ad")
+    .setTitle("📌 Motivo do Menu/Registro")
+    .setDescription(VIP_MENU_MOTIVO_TEXTO)
+    .setFooter({ text: "SantaCreators – Premium" });
 
-      await interaction.reply({ embeds: [emb], ephemeral: true }).catch(() => {});
+  await interaction.reply({ embeds: [emb], ephemeral: true }).catch(() => {});
 
-    
+  if (ensureIsTextChannel(canal)) {
+    await forceMoveMenuToBottom(canal, interaction.message).catch(() => {});
+  }
 
-      return true;
-    }
+  return true;
+}
 
         // ---------- MENU FILTROS ----------
     if (
@@ -594,12 +622,12 @@ if (interaction.isButton() && interaction.customId === VIP_MENU_OPEN_ID) {
     .setPlaceholder("Ex: vipevento2, vipstaff, rolepass...")
     .setRequired(true);
 
-  const inputCidade = new TextInputBuilder()
-    .setCustomId("vip_cidade")
-    .setLabel("Cidade")
-    .setStyle(TextInputStyle.Short)
-    .setPlaceholder("Nobre / Santa / Grande / Maresia")
-    .setRequired(true);
+const inputCidade = new TextInputBuilder()
+  .setCustomId("vip_cidade")
+  .setLabel("Cidade")
+  .setStyle(TextInputStyle.Short)
+  .setPlaceholder("Digite: Nobre, Santa, Grande ou Maresia")
+  .setRequired(true);
 
   const inputMotivoRegistro = new TextInputBuilder()
     .setCustomId("vip_motivo_registro")
@@ -621,7 +649,7 @@ if (interaction.isButton() && interaction.customId === VIP_MENU_OPEN_ID) {
   return true;
 }
 
- // ---------- SUBMIT DO MODAL DE REGISTRO ----------
+// ---------- SUBMIT DO MODAL DE REGISTRO ----------
 if (interaction.isModalSubmit() && interaction.customId === VIP_MODAL_ID) {
   await interaction.deferReply({ ephemeral: true }).catch(() => {});
 
@@ -634,7 +662,7 @@ if (interaction.isModalSubmit() && interaction.customId === VIP_MODAL_ID) {
   const cidadeKey = normalizeVipCity(cidadeRaw);
   if (!cidadeKey) {
     await interaction.editReply({
-      content: "❌ Cidade inválida ou não selecionada. Use: **Nobre, Santa, Grande ou Maresia**.",
+      content: "❌ Cidade inválida. Use exatamente uma destas: **Nobre, Santa, Grande ou Maresia**.",
     }).catch(() => {});
     return true;
   }
@@ -645,12 +673,12 @@ if (interaction.isModalSubmit() && interaction.customId === VIP_MODAL_ID) {
     tipoRaw,
     motivoRegistro,
     nomeEquipe: nome,
-    cidadeRaw,
+    cidadeKey,
   });
 
   if (!registroMsg || registroMsg?.error === "cidade_invalida") {
     await interaction.editReply({
-      content: "❌ Cidade inválida ou não selecionada. Por favor, comece o processo novamente.",
+      content: "❌ Não consegui processar a cidade informada.",
     }).catch(() => {});
     return true;
   }
@@ -661,7 +689,6 @@ if (interaction.isModalSubmit() && interaction.customId === VIP_MODAL_ID) {
     return true;
   }
 
-  // só desce o menu DEPOIS que o registro foi criado com sucesso
   await forceMoveMenuToBottom(canal).catch(() => {});
 
   await interaction.editReply({
