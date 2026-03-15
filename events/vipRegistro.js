@@ -240,10 +240,13 @@ async function moverRegistrosPorFiltro(channel, filtro) {
   const msgs = await channel.messages.fetch({ limit: 100 }).catch(() => null);
   if (!msgs) return { movidos: 0 };
 
- const registros = [...msgs.values()]
-  .filter(m => m.author?.id === channel.client.user.id)
-  .filter(m => m.embeds?.length > 0)
-  .filter(m => (m.embeds?.[0]?.title || '').includes('— 1 mês + Destaque'));
+  // ✅ CORREÇÃO: Inverte a ordem para processar do mais antigo para o mais novo, mantendo a ordem visual.
+  const registros = [...msgs.values()]
+    .reverse()
+    .filter(m => m.author?.id === channel.client.user.id)
+    .filter(m => m.embeds?.length > 0)
+    // ✅ CORREÇÃO: Filtro mais robusto que usa os botões para identificar um registro, em vez de texto no título.
+    .filter(m => messageHasVipButtons(m));
 
   let movidos = 0;
 
@@ -267,17 +270,18 @@ async function moverRegistrosPorFiltro(channel, filtro) {
 
     const targetId = getBeneficiarioId(raw) || 'none';
 
- const btnSolic = new ButtonBuilder()
-  .setCustomId(`vip_solicitado_${nova.id}`)
-  .setLabel('📨 Já foi solicitado')
-  .setStyle(ButtonStyle.Secondary)
-  .setDisabled(ehSolic || ehReceb || ehRepr);
+    // Recria os botões para a nova mensagem
+    const btnSolic = new ButtonBuilder()
+      .setCustomId(`vip_solicitado_${nova.id}`)
+      .setLabel('📨 Já foi solicitado')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(ehSolic || ehReceb || ehRepr);
 
     const btnRecebeu = new ButtonBuilder()
-  .setCustomId(`vip_recebeu_${nova.id}_${targetId}`)
-  .setLabel('✅ Já recebeu')
-  .setStyle(ButtonStyle.Success)
-  .setDisabled(ehReceb || ehRepr);
+      .setCustomId(`vip_recebeu_${nova.id}_${targetId}`)
+      .setLabel('✅ Já recebeu')
+      .setStyle(ButtonStyle.Success)
+      .setDisabled(ehReceb || ehRepr);
 
     const btnNegar = new ButtonBuilder()
       .setCustomId(`vip_negar_${nova.id}_${targetId}`)
