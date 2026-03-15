@@ -290,12 +290,20 @@ function createVipStatusRow(messageId, targetId, rawEmbed) {
 
 // ====== MENU MANAGEMENT ======
 async function deleteAllVipMenus(channel) {
-  const msgs = await channel.messages.fetch({ limit: 100 }).catch(() => null);
-  if (!msgs) return;
+  let before;
+  let keepGoing = true;
 
-  const menus = [...msgs.values()].filter((m) => isVipMenuMessage(m, channel.client));
-  for (const msg of menus) {
-    await msg.delete().catch(() => {});
+  while (keepGoing) {
+    const msgs = await channel.messages.fetch({ limit: 100, before }).catch(() => null);
+    if (!msgs || msgs.size === 0) break;
+
+    const menus = [...msgs.values()].filter((m) => isVipMenuMessage(m, channel.client));
+    for (const msg of menus) {
+      await msg.delete().catch(() => {});
+    }
+
+    before = msgs.last()?.id;
+    if (msgs.size < 100) keepGoing = false;
   }
 }
 
