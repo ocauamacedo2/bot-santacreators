@@ -239,19 +239,20 @@ async function ensureMenu(channel) {
 }
 
 async function createFreshMenu(channel) {
+  const embed = buildMenuEmbed(channel.guild);
+  const sent = await channel.send({ embeds: [embed], components: buildMenuComponents() }).catch(() => null);
+  if (sent) ultimaMsgBotao = sent.id;
+
   const msgs = await channel.messages.fetch({ limit: 50 }).catch(() => null);
   if (msgs) {
     const minhas = msgs.filter(
       (m) =>
+        m.id !== sent.id &&
         m.author?.id === channel.client.user.id &&
         m.components?.[0]?.components?.some((c) => c.customId === VIP_MENU_OPEN_ID)
     );
     for (const m of minhas.values()) await m.delete().catch(() => {});
   }
-
-  const embed = buildMenuEmbed(channel.guild);
-  const sent = await channel.send({ embeds: [embed], components: buildMenuComponents() }).catch(() => null);
-  if (sent) ultimaMsgBotao = sent.id;
   return sent;
 }
 
@@ -561,34 +562,6 @@ export async function vipRegistroHandleInteraction(interaction, client) {
         return true;
       }
 
-      // ====== SUBMIT MODAL SOLICITADO ======
-      if (interaction.isModalSubmit() && interaction.customId.startsWith('vip_modal_solicitado_')) {
-        const msgId = interaction.customId.split('_').pop();
-        const motivo = interaction.fields.getTextInputValue('vip_motivo_solicitacao')?.trim();
-
-        const msgAlvo = await canal.messages.fetch(msgId).catch(() => null);
-        if (!msgAlvo) {
-          await interaction.reply({ content: '❌ Registro não encontrado.', ephemeral: true });
-          return true;
-        }
-
-        let value = `Marcado por <@${interaction.user.id}> em <t:${Math.floor(Date.now()/1000)}:f>`;
-        if (motivo) {
-          value += `\n**Obs:** ${motivo}`;
-        }
-
-        const emb = EmbedBuilder.from(msgAlvo.embeds[0] ?? new EmbedBuilder());
-        emb.addFields({
-          name: '📨 Solicitação',
-          value: value,
-          inline: false
-        });
-        await msgAlvo.edit({ embeds: [emb] });
-
-        await interaction.reply({ content: '📨 Marcado como **solicitado**.', ephemeral: true });
-        return true;
-      }
-
       // ====== RECEBEU (APROVADO / ENTREGUE) ======
       if (action === 'recebeu' && parts[2] && parts[3]) {
         const msgId = parts[2];
@@ -619,13 +592,17 @@ export async function vipRegistroHandleInteraction(interaction, client) {
           inline: false
         });
 
-        const comps = (msgAlvo.components || []).map(row => {
-          const r = ActionRowBuilder.from(row);
-          r.components = r.components.map(c => ButtonBuilder.from(c).setDisabled(true));
-          return r;
-        });
+        // ✅ REENVIA NO FUNDO (Mover para baixo)
+        const newMsg = await canal.send({ embeds: [emb] });
+        const btnSolic = new ButtonBuilder().setCustomId(`vip_solicitado_${newMsg.id}`).setLabel('📨 Já foi solicitado').setStyle(ButtonStyle.Secondary).setDisabled(true);
+        const btnRecebeu = new ButtonBuilder().setCustomId(`vip_recebeu_${newMsg.id}_${targetId}`).setLabel('✅ Já recebeu').setStyle(ButtonStyle.Success).setDisabled(true);
+        const btnNegar = new ButtonBuilder().setCustomId(`vip_negar_${newMsg.id}_${targetId}`).setLabel('❌ Negar').setStyle(ButtonStyle.Danger).setDisabled(true);
+        
+        await newMsg.edit({ components: [new ActionRowBuilder().addComponents(btnSolic, btnRecebeu, btnNegar)] });
+        
+        await msgAlvo.delete().catch(() => {});
 
-        await msgAlvo.edit({ embeds: [emb], components: comps });
+        await createFreshMenu(canal);
 
         // ✅ DM pro BENEFICIÁRIO quando marcar como RECEBEU
         if (targetId && targetId !== 'none' && isDiscordId(targetId)) {
@@ -693,6 +670,52 @@ export async function vipRegistroHandleInteraction(interaction, client) {
       }
     }
 
+    // ---------- SUBMIT DO MODAL (SOLICITADO) ----------
+    if (interaction.isModalSubmit() && interaction.customId.startsWith('vip_modal_solicitado_')) {
+      const msgId = interaction.customId.split('_').pop();
+      const motivo = interaction.fields.getTextInputValue('vip_motivo_solicitacao')?.trim();
+
+      const canal = await client.channels.fetch(VIP_CANAL_ID).catch(() => null);
+      if (!ensureIsTextChannel(canal)) {
+        await interaction.reply({ content: '❌ Canal inválido.', ephemeral: true });
+        return true;
+      }
+
+      const msgAlvo = await canal.messages.fetch(msgId).catch(() => null);
+      if (!msgAlvo) {
+        await interaction.reply({ content: '❌ Registro não encontrado.', ephemeral: true });
+        return true;
+      }
+
+      let value = `Marcado por <@${interaction.user.id}> em <t:${Math.floor(Date.now()/1000)}:f>`;
+      if (motivo) {
+        value += `\n**Obs:** ${motivo}`;
+      }
+
+      const emb = EmbedBuilder.from(msgAlvo.embeds[0] ?? new EmbedBuilder());
+      emb.addFields({
+        name: '📨 Solicitação',
+        value: value,
+        inline: false
+      });
+        
+        // ✅ REENVIA NO FUNDO (Mover para baixo)
+        const targetId = getBeneficiarioId(emb) || 'none';
+        const newMsg = await canal.send({ embeds: [emb] });
+        
+        const btnSolic = new ButtonBuilder().setCustomId(`vip_solicitado_${newMsg.id}`).setLabel('📨 Já foi solicitado').setStyle(ButtonStyle.Secondary);
+        const btnRecebeu = new ButtonBuilder().setCustomId(`vip_recebeu_${newMsg.id}_${targetId}`).setLabel('✅ Já recebeu').setStyle(ButtonStyle.Success);
+        const btnNegar = new ButtonBuilder().setCustomId(`vip_negar_${newMsg.id}_${targetId}`).setLabel('❌ Negar').setStyle(ButtonStyle.Danger);
+
+        await newMsg.edit({ components: [new ActionRowBuilder().addComponents(btnSolic, btnRecebeu, btnNegar)] });
+        await msgAlvo.delete().catch(() => {});
+
+        await createFreshMenu(canal);
+
+        await interaction.reply({ content: '📨 Marcado como **solicitado** e movido para o final.', ephemeral: true });
+      return true;
+    }
+
     // ---------- SUBMIT DO MODAL (NEGAR) ----------
     if (interaction.isModalSubmit() && interaction.customId.startsWith('vip_modal_negar_')) {
       const parts = interaction.customId.split('_'); // ['vip','modal','negar','<msgId>','<targetId>']
@@ -744,13 +767,16 @@ export async function vipRegistroHandleInteraction(interaction, client) {
         inline: false
       });
 
-      const comps = (msgAlvo.components || []).map(row => {
-        const r = ActionRowBuilder.from(row);
-        r.components = r.components.map(c => ButtonBuilder.from(c).setDisabled(true));
-        return r;
-      });
+      // ✅ REENVIA NO FUNDO (Mover para baixo)
+      const newMsg = await canal.send({ embeds: [emb] });
+      const btnSolic = new ButtonBuilder().setCustomId(`vip_solicitado_${newMsg.id}`).setLabel('📨 Já foi solicitado').setStyle(ButtonStyle.Secondary).setDisabled(true);
+      const btnRecebeu = new ButtonBuilder().setCustomId(`vip_recebeu_${newMsg.id}_${targetId}`).setLabel('✅ Já recebeu').setStyle(ButtonStyle.Success).setDisabled(true);
+      const btnNegar = new ButtonBuilder().setCustomId(`vip_negar_${newMsg.id}_${targetId}`).setLabel('❌ Negar').setStyle(ButtonStyle.Danger).setDisabled(true);
 
-      await msgAlvo.edit({ embeds: [emb], components: comps }).catch(() => {});
+      await newMsg.edit({ components: [new ActionRowBuilder().addComponents(btnSolic, btnRecebeu, btnNegar)] });
+      await msgAlvo.delete().catch(() => {});
+
+      await createFreshMenu(canal);
 
       // ✅ DM ao BENEFICIÁRIO (se tiver ID válido)
       let dmOkBenef = false;
@@ -848,7 +874,7 @@ export async function vipRegistroHandleInteraction(interaction, client) {
           : '\n⚠️ **Obs:** Não consegui identificar o registrante no embed (campo “Registrado por”).';
 
       await interaction.reply({
-        content: `❌ Registro **reprovado** e log enviado no canal <#${VIP_REPROVA_CANAL_ID}>.${extra}${extra2}`,
+        content: `❌ Registro **reprovado**, movido para o final e log enviado no canal <#${VIP_REPROVA_CANAL_ID}>.${extra}${extra2}`,
         ephemeral: true,
       });
       return true;
