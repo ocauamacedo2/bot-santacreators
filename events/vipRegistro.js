@@ -396,17 +396,25 @@ export async function vipRegistroHandleInteraction(interaction, client) {
         .setRequired(true);
 
       const inputVip = new TextInputBuilder()
-        .setCustomId("vip_tipo")
-        .setLabel("Qual VIP? (Ouro/Prata/Bronze/Rolepass)")
-        .setStyle(TextInputStyle.Short)
-        .setPlaceholder("Digite: Ouro, Prata, Bronze ou Rolepass")
-        .setRequired(true);
+  .setCustomId("vip_tipo")
+  .setLabel("Qual VIP? (Ouro/Prata/Bronze/Rolepass)")
+  .setStyle(TextInputStyle.Short)
+  .setPlaceholder("Digite: Ouro, Prata, Bronze ou Rolepass")
+  .setRequired(true);
 
-      modal.addComponents(
-        new ActionRowBuilder().addComponents(inputNome),
-        new ActionRowBuilder().addComponents(inputIdDiscord),
-        new ActionRowBuilder().addComponents(inputVip)
-      );
+const inputMotivo = new TextInputBuilder()
+  .setCustomId("vip_motivo_registro")
+  .setLabel("Motivo do registro")
+  .setStyle(TextInputStyle.Paragraph)
+  .setPlaceholder("Ex: Creator Destaque, Master Manager, Premiação semanal...")
+  .setRequired(false);
+
+modal.addComponents(
+  new ActionRowBuilder().addComponents(inputNome),
+  new ActionRowBuilder().addComponents(inputIdDiscord),
+  new ActionRowBuilder().addComponents(inputVip),
+  new ActionRowBuilder().addComponents(inputMotivo)
+);
 
       try {
         await interaction.showModal(modal);
@@ -425,9 +433,10 @@ export async function vipRegistroHandleInteraction(interaction, client) {
 
     // ---------- SUBMIT DO MODAL (REGISTRO) ----------
     if (interaction.isModalSubmit() && interaction.customId === "vip_modal_submit") {
-      const nome = interaction.fields.getTextInputValue("vip_nome_membro")?.trim();
-      const idRaw = interaction.fields.getTextInputValue("vip_id_discord")?.trim();
-      const tipoRaw = interaction.fields.getTextInputValue("vip_tipo")?.trim();
+    const nome = interaction.fields.getTextInputValue("vip_nome_membro")?.trim();
+const idRaw = interaction.fields.getTextInputValue("vip_id_discord")?.trim();
+const tipoRaw = interaction.fields.getTextInputValue("vip_tipo")?.trim();
+const motivoRegistro = interaction.fields.getTextInputValue("vip_motivo_registro")?.trim();
 
       if (!/^\d{17,20}$/.test(idRaw)) {
         await interaction.reply({
@@ -446,14 +455,14 @@ export async function vipRegistroHandleInteraction(interaction, client) {
         return true;
       }
 
-      const registroMsg = await createVipRecordInternal(client, {
-        registrarUser: interaction.user,
-        nomeEquipe: nome,
-        beneficiarioRaw: idRaw,
-        tipoRaw,
-        motivoRegistro: null,
-        isProgrammatic: false,
-      });
+    const registroMsg = await createVipRecordInternal(client, {
+  registrarUser: interaction.user,
+  nomeEquipe: nome,
+  beneficiarioRaw: idRaw,
+  tipoRaw,
+  motivoRegistro,
+  isProgrammatic: false,
+});
 
       if (!registroMsg) {
         await interaction.reply({
