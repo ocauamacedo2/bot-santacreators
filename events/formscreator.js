@@ -373,7 +373,44 @@ function diffDays(fromIso, toDate = new Date()) {
   return Math.floor(ms / (1000 * 60 * 60 * 24));
 }
 
+async function getRankingText(guild, client) {
+  try {
+    const weeklyRanking = await getWeeklyRanking(client);
+    const rolesToInclude = new Set([
+      "1388976314253312100", // Coord. Creators
+      "1388975939161161728", // Gestor
+      "1388976094920704141", // Social Medias
+      "1388976155830255697", // Manager
+      "1352429001188180039", // Equipe Creators
+    ]);
+
+    const top10 = [];
+    if (weeklyRanking && weeklyRanking.length > 0) {
+      for (const user of weeklyRanking) {
+        if (top10.length >= 10) break;
+        try {
+          const member = await guild.members.fetch(user.userId);
+          if (member && member.roles.cache.some(role => rolesToInclude.has(role.id))) {
+            top10.push(user);
+          }
+        } catch (e) {
+          // Ignora se o membro não for encontrado no servidor
+        }
+      }
+    }
+
+    return top10.length > 0
+      ? top10.map(u => `• <@${u.userId}> (${u.points} pontos)`).join("\n")
+      : "• Nenhum membro com os cargos definidos pontuou no ranking esta semana.";
+  } catch (error) {
+    console.error("[FormsCreator] Erro em getRankingText:", error);
+    return "• Ocorreu um erro ao buscar o ranking.";
+  }
+}
+
 async function runReminderJob(client) {
+// ...
+
   const guild = client.guilds.cache.first();
   if (!guild) return;
 
@@ -434,35 +471,9 @@ async function runReminderJob(client) {
   }
   if (stateChanged) writeState(state);
 
-   // 2. Pega o ranking da semana e filtra para o TOP 10 com os cargos desejados
-  const weeklyRanking = await getWeeklyRanking(client);
-  const rolesToInclude = new Set([
-    "1388976314253312100", // Coord. Creators
-    "1388975939161161728", // Gestor
-    "1388976094920704141", // Social Medias
-    "1388976155830255697", // Manager
-    "1352429001188180039", // Equipe Creators
-  ]);
+    // 2. Pega o ranking da semana e filtra para o TOP 10 com os cargos desejados
+  const rankingLines = await getRankingText(guild, client);
 
-  const top10 = [];
-  if (weeklyRanking.length > 0) {
-    // O ranking já vem ordenado por pontos
-    for (const user of weeklyRanking) {
-      if (top10.length >= 10) break;
-      try {
-        const member = await guild.members.fetch(user.userId);
-        if (member && member.roles.cache.some(role => rolesToInclude.has(role.id))) {
-          top10.push(user);
-        }
-      } catch (e) {
-        // Ignora se o membro não for encontrado no servidor
-      }
-    }
-  }
-
-  const rankingLines = top10.length > 0
-    ? top10.map(u => `• <@${u.userId}> (${u.points} pontos)`).join("\n")
-    : "• Nenhum membro com os cargos definidos pontuou no ranking esta semana.";
 
 
   // 3. Envia lembretes (Alternado: Dia Público / Dia PV)
