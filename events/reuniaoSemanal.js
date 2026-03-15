@@ -360,29 +360,23 @@ function buildAdminEmbed(state, data, winners) {
 }
 
 async function buildPublicEmbed(state, data, winners, client) {
-  const pautasTexto = state.pautas.length > 0
-    ? state.pautas.map((p, i) => `📌 **${p.title}**\n${p.desc}`).join("\n\n")
-    : "—";
+  const fmtUser = (w) => (w ? `<@${w.id}>` : "—");
 
-  const fmtUser = (w) => w ? `<@${w.id}>` : "—";
-  
   const fmtTop3 = (list) => {
     if (!list || list.length === 0) return "—";
-    return list.slice(0, 3).map((x, i) => `\`${i+1}.\` <@${x.id}> (${x.pts})`).join("\n");
+    return list.slice(0, 3).map((x, i) => `\`${i + 1}.\` <@${x.id}> (${x.pts})`).join("\n");
   };
 
   const top3Alinh = fmtTop3(data.topAlinh);
   const chartUrl = await generateWeeklyChartUrl(data, client);
 
-  return new EmbedBuilder()
+  const embed = new EmbedBuilder()
     .setTitle("📝 Resumo da Reunião Semanal")
     .setColor("#9b59b6")
-    .setImage(chartUrl) // ✅ Gráfico aqui!
+    .setImage(chartUrl)
     .setThumbnail("https://media.discordapp.net/attachments/1362477839944777889/1384245215249825832/standard_2rss.gif")
     .setDescription(
-      `Confira os pontos abordados e os destaques da semana!\n\n` +
-      `# 📌 Pautas Abordadas\n\n${pautasTexto}\n\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+      `Confira os destaques da semana!\n\n` +
       `# ⭐ Destaques da Semana\n\n` +
       `## 🥇 Top 1 Geral (Creator Destaque)\n` +
       `> ${fmtUser(winners.winnerGeral)}\n` +
@@ -399,7 +393,41 @@ async function buildPublicEmbed(state, data, winners, client) {
     )
     .setFooter({ text: "SantaCreators • Reunião Semanal" })
     .setTimestamp();
+
+  // Adiciona pautas em campos separados para evitar limite de descrição
+  const pautasTexto = state.pautas.length > 0
+    ? state.pautas.map((p) => `📌 **${p.title}**\n${p.desc}`).join("\n\n")
+    : null;
+
+  if (pautasTexto) {
+    const FIELD_VALUE_LIMIT = 1024;
+    if (pautasTexto.length <= FIELD_VALUE_LIMIT) {
+      embed.addFields({ name: "# 📌 Pautas Abordadas", value: pautasTexto, inline: false });
+    } else {
+      // Divide as pautas em múltiplos campos se o texto for muito longo
+      let currentPautaText = "";
+      let fieldCount = 1;
+      for (const pauta of state.pautas) {
+        const pautaString = `📌 **${pauta.title}**\n${pauta.desc}\n\n`;
+        if (currentPautaText.length + pautaString.length > FIELD_VALUE_LIMIT) {
+          embed.addFields({ name: `# 📌 Pautas Abordadas (Parte ${fieldCount})`, value: currentPautaText, inline: false });
+          currentPautaText = pautaString;
+          fieldCount++;
+        } else {
+          currentPautaText += pautaString;
+        }
+      }
+      if (currentPautaText) {
+        embed.addFields({ name: `# 📌 Pautas Abordadas (Parte ${fieldCount})`, value: currentPautaText, inline: false });
+      }
+    }
+  } else {
+    embed.addFields({ name: "# 📌 Pautas Abordadas", value: "—", inline: false });
+  }
+
+  return embed;
 }
+
 
 function buildAdminRows() {
   return [
@@ -603,15 +631,14 @@ export async function reuniaoSemanalHandleInteraction(interaction, client) {
     return true;
   }
 
-  // ✅ PUBLICAR COM CARGOS
+    // ✅ PUBLICAR COM CARGOS
   if (interaction.customId === "reuniao_publish") {
     await interaction.deferReply({ ephemeral: true });
     const state = loadState();
     const data = aggregateData();
     const winners = calculateWinners(data);
     const logs = await applyRoles(interaction.guild, winners, state);
-    const publicChannel = await client.channels.fetch(PUBLIC_CHANNEL_ID).catch(() => null);
-
+    
     // =================================================
     // ✅ GAMBIARRA: Registrar prêmios no vipRegistro.js
     // =================================================
@@ -645,17 +672,32 @@ export async function reuniaoSemanalHandleInteraction(interaction, client) {
     }
     // =================================================
 
-    if (publicChannel) {
-      const publicEmbed = await buildPublicEmbed(state, data, winners, client);
-      await publicChannel.send({ content: "@everyone Resumo da Reunião Semanal:", embeds: [publicEmbed] });
+    let publicMessageSent = false;
+    let publicMessageError = "";
+    try {
+      const publicChannel = await client.channels.fetch(PUBLIC_CHANNEL_ID).catch(() => null);
+      if (publicChannel) {
+        const publicEmbed = await buildPublicEmbed(state, data, winners, client);
+        await publicChannel.send({ content: "@everyone Resumo da Reunião Semanal:", embeds: [publicEmbed] });
+        publicMessageSent = true;
+      } else {
+        publicMessageError = "Canal público não encontrado.";
+      }
+    } catch (e) {
+      console.error("[ReuniaoSemanal] Erro ao enviar mensagem pública:", e);
+      publicMessageError = e.message;
     }
 
-    const finalLogMessage = `✅ **Reunião Publicada!**\n\n📜 **Logs de Cargos:**\n${logs.join("\n") || "Nenhuma alteração."}\n\n💎 **Registros de Premiação:**\n${vipLogs.join('\n') || 'Nenhum prêmio registrado.'}`;
+    const finalLogMessage = `✅ **Reunião Publicada!**\n\n` +
+      `📜 **Logs de Cargos:**\n${logs.join("\n") || "Nenhuma alteração."}\n\n` +
+      `💎 **Registros de Premiação:**\n${vipLogs.join('\n') || 'Nenhum prêmio registrado.'}\n\n` +
+      `${publicMessageSent ? '📢 Resumo enviado no canal público.' : `⚠️ **Falha ao enviar resumo no canal público.**\n> Motivo: ${publicMessageError}`}`;
+      
     await interaction.editReply({ content: finalLogMessage });
     return true;
   }
 
-  // ✅ NOVO: PUBLICAR SEM CARGOS
+    // ✅ NOVO: PUBLICAR SEM CARGOS
   if (interaction.customId === "reuniao_publish_no_roles") {
     await interaction.deferReply({ ephemeral: true });
     const state = loadState();
@@ -664,14 +706,29 @@ export async function reuniaoSemanalHandleInteraction(interaction, client) {
     
     // Não chama applyRoles
     
-    const publicChannel = await client.channels.fetch(PUBLIC_CHANNEL_ID).catch(() => null);
-    if (publicChannel) {
-      const publicEmbed = await buildPublicEmbed(state, data, winners, client);
-      await publicChannel.send({ content: "@everyone Resumo da Reunião Semanal (Sem alteração de cargos):", embeds: [publicEmbed] });
+    let publicMessageSent = false;
+    let publicMessageError = "";
+    try {
+      const publicChannel = await client.channels.fetch(PUBLIC_CHANNEL_ID).catch(() => null);
+      if (publicChannel) {
+        const publicEmbed = await buildPublicEmbed(state, data, winners, client);
+        await publicChannel.send({ content: "@everyone Resumo da Reunião Semanal (Sem alteração de cargos):", embeds: [publicEmbed] });
+        publicMessageSent = true;
+      } else {
+        publicMessageError = "Canal público não encontrado.";
+      }
+    } catch (e) {
+      console.error("[ReuniaoSemanal] Erro ao enviar mensagem pública (sem cargos):", e);
+      publicMessageError = e.message;
     }
-    await interaction.editReply({ content: `📢 **Reunião Publicada (Apenas Texto)!**\nNenhum cargo foi alterado.` });
+
+    const finalLogMessage = `📢 **Reunião Publicada (Apenas Texto)!**\nNenhum cargo foi alterado.\n\n` +
+      `${publicMessageSent ? '📢 Resumo enviado no canal público.' : `⚠️ **Falha ao enviar resumo no canal público.**\n> Motivo: ${publicMessageError}`}`;
+
+    await interaction.editReply({ content: finalLogMessage });
     return true;
   }
+
 
   if (interaction.customId === "reuniao_force_roles") {
     await interaction.deferReply({ ephemeral: true });
