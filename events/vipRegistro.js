@@ -14,7 +14,7 @@ import { dashEmit } from "../utils/dashHub.js";
 
 // Guard to prevent multiple initializations
 if (globalThis.__VIP_REGISTRO_LOADED__) {
-  // This module is already loaded, do nothing.
+  // já carregado
 }
 globalThis.__VIP_REGISTRO_LOADED__ = true;
 
@@ -99,7 +99,7 @@ function hasVipAuth(member) {
 }
 
 // ====== MENU UI ======
-function buildMenuEmbed(guild) {
+function buildMenuEmbed() {
   return new EmbedBuilder()
     .setColor("#8e44ad")
     .setTitle("💜 Registro Mensal + Destaque")
@@ -213,32 +213,10 @@ function isVipRegisterEmbed(rawEmbed) {
   return hasBenef && hasTipo && hasRegistrado && (titleOk || footerOk);
 }
 
-function messageHasVipButtons(msg) {
-  const rows = msg.components || [];
-  for (const row of rows) {
-    const comps = row?.components || [];
-    for (const c of comps) {
-      const id = c.customId || "";
-      if (
-        id.startsWith("vip_solicitado_") ||
-        id.startsWith("vip_recebeu_") ||
-        id.startsWith("vip_negar_")
-      ) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
 function isVipRegistroMessage(msg, client) {
   if (!msg || msg.author?.id !== client.user.id) return false;
   if (!msg.embeds?.length) return false;
-
-  const raw = msg.embeds[0];
-  if (!isVipRegisterEmbed(raw)) return false;
-
-  return true;
+  return isVipRegisterEmbed(msg.embeds[0]);
 }
 
 function createVipStatusRow(messageId, targetId, rawEmbed) {
@@ -268,13 +246,14 @@ function createVipStatusRow(messageId, targetId, rawEmbed) {
 }
 
 // ====== MENU MANAGEMENT ======
-async function limparMenusAntigos(channel) {
+async function limparMenusAntigos(channel, keepMessageId = null) {
   const msgs = await channel.messages.fetch({ limit: 100 }).catch(() => null);
-  if (!msgs) return null;
+  if (!msgs) return;
 
   const menus = [...msgs.values()].filter((m) => {
+    if (keepMessageId && m.id === keepMessageId) return false;
     const ehDoBot = m.author?.id === channel.client.user.id;
-    const temEmbed = m.embeds?.length === 1;
+    const temEmbed = m.embeds?.length > 0;
     const titulo = m.embeds?.[0]?.title || "";
     const temComponentes = m.components?.length > 0;
     const customIds = m.components?.[0]?.components?.map((c) => c.customId) || [];
@@ -283,28 +262,23 @@ async function limparMenusAntigos(channel) {
     return ehDoBot && temEmbed && titulo.includes("Registro Mensal + Destaque") && temComponentes && ehMenu;
   });
 
-  const ordenadas = [...menus].sort((a, b) => b.createdTimestamp - a.createdTimestamp);
-  const paraDeletar = ordenadas.slice(1);
-
-  for (const msg of paraDeletar) {
+  for (const msg of menus) {
     await msg.delete().catch(() => {});
   }
-
-  return ordenadas[0] || null;
 }
 
-async function _repostAndCleanMenu(channel) {
+// ✅ AGORA SEMPRE DESCE O MENU PRA BAIXO
+async function repostAndMoveMenu(channel) {
   if (!channel || !channel.isTextBased()) return null;
 
-  const existente = await limparMenusAntigos(channel).catch(() => null);
-  if (existente) return existente;
-
-  const embed = buildMenuEmbed(channel.guild);
   const sent = await channel.send({
-    embeds: [embed],
+    embeds: [buildMenuEmbed()],
     components: buildMenuComponents(),
   }).catch(() => null);
 
+  if (!sent) return null;
+
+  await limparMenusAntigos(channel, sent.id).catch(() => {});
   return sent;
 }
 
@@ -449,7 +423,7 @@ export async function vipRegistroOnReady(client) {
     return;
   }
 
-  await _repostAndCleanMenu(canal);
+  await repostAndMoveMenu(canal);
 }
 
 // ====== INTERAÇÕES ======
@@ -457,6 +431,11 @@ export async function vipRegistroHandleInteraction(interaction, client) {
   try {
     // ---------- MENU MOTIVO ----------
     if (interaction.isButton() && interaction.customId === VIP_MENU_MOTIVO_ID) {
+      const canal = await client.channels.fetch(VIP_CANAL_ID).catch(() => null);
+      if (ensureIsTextChannel(canal)) {
+        await repostAndMoveMenu(canal).catch(() => {});
+      }
+
       const emb = new EmbedBuilder()
         .setColor("#8e44ad")
         .setTitle("📌 Motivo do Menu/Registro")
@@ -498,7 +477,8 @@ export async function vipRegistroHandleInteraction(interaction, client) {
 
       const { movidos } = await moverRegistrosPorFiltro(canal, qual);
 
-      await _repostAndCleanMenu(canal);
+      // ✅ move o menu também
+      await repostAndMoveMenu(canal).catch(() => {});
 
       await interaction.editReply({
         content: `✅ Filtro aplicado: **${qual}**\n📦 Registros movidos: **${movidos}**`,
@@ -514,6 +494,11 @@ export async function vipRegistroHandleInteraction(interaction, client) {
           ephemeral: true,
         }).catch(() => {});
         return true;
+      }
+
+      const canal = await client.channels.fetch(VIP_CANAL_ID).catch(() => null);
+      if (ensureIsTextChannel(canal)) {
+        await repostAndMoveMenu(canal).catch(() => {});
       }
 
       const modal = new ModalBuilder()
@@ -587,7 +572,8 @@ export async function vipRegistroHandleInteraction(interaction, client) {
         return true;
       }
 
-      await _repostAndCleanMenu(canal);
+      // ✅ move o menu também
+      await repostAndMoveMenu(canal).catch(() => {});
 
       await interaction.editReply({
         content: `✅ Registro criado para **${benefRaw}** — tipo: **${tipoRaw}**.`,
@@ -679,7 +665,8 @@ export async function vipRegistroHandleInteraction(interaction, client) {
           }).catch(() => {});
         });
 
-        await _repostAndCleanMenu(canal);
+        // ✅ move menu junto
+        await repostAndMoveMenu(canal).catch(() => {});
 
         if (targetId && targetId !== "none" && isDiscordId(targetId)) {
           try {
@@ -769,9 +756,7 @@ export async function vipRegistroHandleInteraction(interaction, client) {
       }
 
       let value = `Marcado por <@${interaction.user.id}> em <t:${Math.floor(Date.now() / 1000)}:f>`;
-      if (motivo) {
-        value += `\n**Obs:** ${motivo}`;
-      }
+      if (motivo) value += `\n**Obs:** ${motivo}`;
 
       const emb = EmbedBuilder.from(msgAlvo.embeds[0] ?? new EmbedBuilder());
       emb.addFields({
@@ -799,7 +784,8 @@ export async function vipRegistroHandleInteraction(interaction, client) {
         }).catch(() => {});
       });
 
-      await _repostAndCleanMenu(canal);
+      // ✅ move menu junto
+      await repostAndMoveMenu(canal).catch(() => {});
 
       await interaction.editReply({
         content: "📨 Marcado como **solicitado** e movido para o final.",
@@ -873,7 +859,8 @@ export async function vipRegistroHandleInteraction(interaction, client) {
         }).catch(() => {});
       });
 
-      await _repostAndCleanMenu(canal);
+      // ✅ move menu junto
+      await repostAndMoveMenu(canal).catch(() => {});
 
       let dmOkBenef = false;
       if (targetId && targetId !== "none" && isDiscordId(targetId)) {
@@ -1027,7 +1014,7 @@ export async function vipRegistroHandleMessage(message, client) {
       return true;
     }
 
-    await _repostAndCleanMenu(canal);
+    await repostAndMoveMenu(canal).catch(() => {});
 
     const reply = await message.channel.send("✅ Menu do sistema VIP recriado com sucesso!").catch(() => {});
     if (reply) setTimeout(() => reply.delete().catch(() => {}), 8000);
