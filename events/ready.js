@@ -26,6 +26,10 @@ export default {
   run: async (client) => {
     console.log(`\n✅ [DIAGNOSTICO] O BOT ESTÁ RODANDO A VERSÃO ATUALIZADA! (${new Date().toLocaleString()})\n`);
 
+    // ✅ Define client global para módulos que dependem dele e carrega o autoReactsFotos
+    globalThis.client = client;
+    await import('./autoReactsFotos.js');
+
     // ✅ Lista de todas as tarefas de inicialização
     const startupTasks = [
       { name: 'Entrevistas', fn: () => entrevista.reanexar(client) },

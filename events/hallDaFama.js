@@ -525,11 +525,6 @@ ${newImageUrl}${newImageUrl2 ? `\n${newImageUrl2}` : ''}`;
     const extraLines = hasExtra ? topsExtra.split('\n').map(l => l.trim()).filter(Boolean) : [];
     const totalWinners = 1 + extraLines.length; // 1 (Top 1) + extras
 
-    // 🚫 Cenário 2: TOP 1 + TOP 2 (sem TOP 3) -> ERRO
-    if (totalWinners === 2) {
-      return interaction.editReply("❌ Se houver TOP 2, também é obrigatório informar o TOP 3.");
-    }
-
     let prize1 = "";
 
     // 🏆 Cenário 1: Apenas TOP 1 -> Recebe TUDO
