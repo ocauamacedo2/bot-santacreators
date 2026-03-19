@@ -1,3 +1,5 @@
+
+
 // application/commands/canais/sortChannels.js
 import fs from "node:fs";
 import path from "node:path";
@@ -81,9 +83,12 @@ const INATIVO_CONFIG = {
   ],
 
   // ✅ Permissão contextual extra
-  // • Dentro desta categoria, quem tiver este cargo também pode usar !inativo / !inativos
-  // • Para !membro / !membros, basta ter este cargo, mesmo executando nas categorias de inativos
-  EXTRA_COMMAND_CATEGORY: "1359244725781266492",
+  // • Dentro destas categorias, quem tiver este cargo também pode usar !inativo / !inativos
+  // • Para !membro / !membros / !reativar, também poderá usar nessas categorias
+  EXTRA_COMMAND_CATEGORIES: [
+    "1359244725781266492",
+    "1444857594517913742",
+  ],
   EXTRA_COMMAND_ROLE: "1444857594517913742",
 
   // Categoria padrão de membros
@@ -694,18 +699,19 @@ const isReactivateCmd = REACTIVATE_COMMANDS.includes(content);
     );
 
     // ✅ Permissão extra para !inativo:
-    // só vale quando estiver DENTRO da categoria extra configurada
+    // só vale quando estiver dentro de uma das categorias extras configuradas
     const isExtraCategoryAuthorized =
-      currentCategoryId === INATIVO_CONFIG.EXTRA_COMMAND_CATEGORY &&
+      INATIVO_CONFIG.EXTRA_COMMAND_CATEGORIES.includes(currentCategoryId) &&
       hasExtraCommandRole;
 
-    // ✅ Permissão extra para !membro / !membros:
-    // aqui basta ter o cargo extra, mesmo estando nas categorias de inativos
+    // ✅ Permissão extra para !membro / !membros / !reativar
     const canUseExtraReactivateFlow = hasExtraCommandRole;
 
     // ✅ Permissão geral para comandos padrão
     const canUseStandardFlow =
-      isStandardAuthorized || isExtraCategoryAuthorized || canUseExtraReactivateFlow;
+      isStandardAuthorized ||
+      isExtraCategoryAuthorized ||
+      canUseExtraReactivateFlow;
 
     if (!isSpecialAuthorized && !canUseStandardFlow) {
       setTimeout(() => message.delete().catch(() => {}), 1000);
@@ -724,7 +730,7 @@ const isReactivateCmd = REACTIVATE_COMMANDS.includes(content);
         currentCategoryId === INATIVO_CONFIG.SOURCE_CATEGORY;
 
       const isExtraCommandCategory =
-        currentCategoryId === INATIVO_CONFIG.EXTRA_COMMAND_CATEGORY;
+        INATIVO_CONFIG.EXTRA_COMMAND_CATEGORIES.includes(currentCategoryId);
 
       const isProtectedCategory =
         INATIVO_CONFIG.PROTECTED_CATEGORIES.includes(currentCategoryId);
@@ -942,8 +948,11 @@ const isReactivateCmd = REACTIVATE_COMMANDS.includes(content);
                // ✅ Destino:
         // se quem executou tiver o cargo extra,
         // volta para a categoria extra; senão volta para SOURCE_CATEGORY
+        const extraTargetCategoryId =
+          INATIVO_CONFIG.EXTRA_COMMAND_CATEGORIES[0] || INATIVO_CONFIG.SOURCE_CATEGORY;
+
         const targetCategoryId = canUseExtraReactivateFlow
-          ? INATIVO_CONFIG.EXTRA_COMMAND_CATEGORY
+          ? extraTargetCategoryId
           : INATIVO_CONFIG.SOURCE_CATEGORY;
 
         const targetCategory = message.guild.channels.cache.get(targetCategoryId);
@@ -1093,7 +1102,7 @@ const isReactivateCmd = REACTIVATE_COMMANDS.includes(content);
 
       // ✅ feedback quando usar em categoria errada
       const msg = await message.reply(
-        "❌ Este comando deve ser usado em um canal que esteja em uma categoria de inativos."
+        "❌ Este comando deve ser usado em um canal que esteja em uma categoria de inativos ou em uma das categorias extras permitidas."
       );
       setTimeout(() => msg.delete().catch(() => {}), 8000);
       return true;
@@ -1239,3 +1248,4 @@ if (previousCategoryId && previousCategoryId !== oldCategory.id) {
     return false;
   }
 }
+
