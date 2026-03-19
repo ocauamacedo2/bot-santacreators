@@ -1,0 +1,38 @@
+{
+  "dashboardMsgId": "1461441568543084577",
+  "lastBootFullScanAt": 1768505169435,
+  "lastScanAt": 1768505218471,
+  "nextAllowedAt": 1768519569435,
+  "logWeeklyMsgIds": {},
+  "weekly": {
+    "doacoes": {},
+    "convites": {},
+    "vipCriados": {},
+    "vipSolicitados": {},
+    "vipPagos": {},
+    "vipReprovados": {},
+    "perguntas": {},
+    "rmAprovados": {},
+    "rmReprovados": {},
+    "alinhamentos": {},
+    "eventosPoderes": {},
+    "poderesUtilizados": {},
+    "pagCriados": {
+      "2026-01-11": 27
+    },
+    "pagSolicitados": {
+      "2026-01-11": 0
+    },
+    "pagPagos": {
+      "2026-01-11": 22
+    },
+    "pagReprovados": {
+      "2026-01-11": 0
+    }
+  },
+  "backfill": {
+    "pagamentosocialWeeks": {
+      "2026-01-11": true
+    }
+  }
+}

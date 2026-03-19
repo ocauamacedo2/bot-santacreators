@@ -1,0 +1,926 @@
+{
+  "menuMessageId": "1469880755281985630",
+  "boardMessageIds": [
+    "1469910870543831123",
+    "1469910873672781970"
+  ],
+  "boardContentHash": "695141319",
+  "registros": [
+    {
+      "messageId": "1432556451695558668",
+      "guildId": "1262262852782129183",
+      "channelId": "1417366889398796318",
+      "targetId": "1062743982016299058",
+      "registrarId": "1312777275179274284",
+      "area": "Social Medias",
+      "joinDateMs": 1752181200000,
+      "createdAtMs": 1761618473564,
+      "active": false,
+      "nextWeekTickMs": 1769115600000,
+      "oneMonthNotified": true,
+      "oneMonthNotifiedAt": 1761618521046,
+      "note": "",
+      "responsibleUserId": "1175390962172833792",
+      "responsibleType": "RESP_LIDER",
+      "warnNoRoleGI": false,
+      "responsibleHistory": [
+        {
+          "atMs": 1761618594127,
+          "userId": "789279720977465354",
+          "type": "RESP_INFLU",
+          "setBy": "1312777275179274284"
+        },
+        {
+          "atMs": 1763243377659,
+          "userId": "916772662724931645",
+          "type": "RESP_INFLU",
+          "setBy": "660311795327828008"
+        },
+        {
+          "atMs": 1763978991852,
+          "userId": "1312777275179274284",
+          "type": "RESP_INFLU",
+          "setBy": "660311795327828008"
+        },
+        {
+          "atMs": 1764542255698,
+          "userId": "660311795327828008",
+          "type": "OWNER",
+          "setBy": "1312777275179274284"
+        },
+        {
+          "atMs": 1767122005951,
+          "userId": "442734066580586516",
+          "type": "RESP_LIDER",
+          "setBy": "660311795327828008"
+        },
+        {
+          "atMs": 1769450087693,
+          "userId": "1175390962172833792",
+          "type": "RESP_LIDER",
+          "setBy": "660311795327828008"
+        }
+      ],
+      "pausedAtMs": 1768852707706,
+      "totalPausedMs": 0,
+      "roleSetAtMs": 1761618473564
+    },
+    {
+      "messageId": "1432558113034080318",
+      "guildId": "1262262852782129183",
+      "channelId": "1417366889398796318",
+      "targetId": "789279720977465354",
+      "registrarId": "1312777275179274284",
+      "area": "Manager Creators",
+      "joinDateMs": 1755378000000,
+      "createdAtMs": 1761618869638,
+      "active": false,
+      "nextWeekTickMs": 1769893200000,
+      "oneMonthNotified": true,
+      "oneMonthNotifiedAt": 1761618881047,
+      "note": "",
+      "responsibleUserId": "442734066580586516",
+      "responsibleType": "RESP_INFLU",
+      "warnNoRoleGI": true,
+      "responsibleHistory": [
+        {
+          "atMs": 1761618898863,
+          "userId": "916772662724931645",
+          "type": "RESP_CREATORS",
+          "setBy": "1312777275179274284"
+        },
+        {
+          "atMs": 1762211095866,
+          "userId": "660311795327828008",
+          "type": "OWNER",
+          "setBy": "660311795327828008"
+        },
+        {
+          "atMs": 1763243358836,
+          "userId": "916772662724931645",
+          "type": "RESP_INFLU",
+          "setBy": "660311795327828008"
+        },
+        {
+          "atMs": 1763978970235,
+          "userId": "777973588787200023",
+          "type": "RESP_LIDER",
+          "setBy": "660311795327828008"
+        },
+        {
+          "atMs": 1769449992449,
+          "userId": "1175390962172833792",
+          "type": "RESP_LIDER",
+          "setBy": "660311795327828008"
+        },
+        {
+          "atMs": 1769735913622,
+          "userId": "442734066580586516",
+          "type": "RESP_INFLU",
+          "setBy": "1175390962172833792"
+        }
+      ],
+      "pausedAtMs": 1769591102129,
+      "totalPausedMs": 3794,
+      "roleSetAtMs": null
+    },
+    {
+      "messageId": "1432560130867859539",
+      "guildId": "1262262852782129183",
+      "channelId": "1417366889398796318",
+      "targetId": "1312777275179274284",
+      "registrarId": "1312777275179274284",
+      "area": "Resp. Líder",
+      "joinDateMs": 1758229200000,
+      "createdAtMs": 1761619350645,
+      "active": true,
+      "nextWeekTickMs": 1770930000000,
+      "oneMonthNotified": true,
+      "oneMonthNotifiedAt": 1761619379141,
+      "note": "",
+      "responsibleUserId": "442734066580586516",
+      "responsibleType": "RESP_INFLU",
+      "warnNoRoleGI": true,
+      "responsibleHistory": [
+        {
+          "atMs": 1761619382568,
+          "userId": "916772662724931645",
+          "type": "RESP_CREATORS",
+          "setBy": "1312777275179274284"
+        },
+        {
+          "atMs": 1762208875079,
+          "userId": "660311795327828008",
+          "type": "OWNER",
+          "setBy": "660311795327828008"
+        },
+        {
+          "atMs": 1767122013870,
+          "userId": "777973588787200023",
+          "type": "RESP_LIDER",
+          "setBy": "660311795327828008"
+        },
+        {
+          "atMs": 1769449997990,
+          "userId": "442734066580586516",
+          "type": "RESP_LIDER",
+          "setBy": "660311795327828008"
+        },
+        {
+          "atMs": 1769735646506,
+          "userId": "660311795327828008",
+          "type": "OWNER",
+          "setBy": "1175390962172833792"
+        },
+        {
+          "atMs": 1769760275162,
+          "userId": "1312777275179274284",
+          "type": "RESP_LIDER",
+          "setBy": "660311795327828008"
+        },
+        {
+          "atMs": 1769760279548,
+          "userId": "442734066580586516",
+          "type": "RESP_INFLU",
+          "setBy": "660311795327828008"
+        }
+      ],
+      "pausedAtMs": null,
+      "totalPausedMs": 1553,
+      "roleSetAtMs": null
+    },
+    {
+      "messageId": "1435922289572053003",
+      "guildId": "1262262852782129183",
+      "channelId": "1417366889398796318",
+      "targetId": "710302192753705058",
+      "registrarId": "1312777275179274284",
+      "area": "Equipe Social Medias",
+      "joinDateMs": 1762376400000,
+      "createdAtMs": 1762420951875,
+      "active": true,
+      "nextWeekTickMs": 1770843600000,
+      "oneMonthNotified": true,
+      "oneMonthNotifiedAt": 1764968449606,
+      "note": "",
+      "responsibleUserId": "1312777275179274284",
+      "responsibleType": "RESP_LIDER",
+      "warnNoRoleGI": true,
+      "responsibleHistory": [
+        {
+          "atMs": 1762427847683,
+          "userId": "757685991950516254",
+          "type": "RESP_INFLU",
+          "setBy": "916772662724931645"
+        },
+        {
+          "atMs": 1762437266527,
+          "userId": "1312777275179274284",
+          "type": "RESP_INFLU",
+          "setBy": "660311795327828008"
+        },
+        {
+          "atMs": 1767122043428,
+          "userId": "777973588787200023",
+          "type": "RESP_LIDER",
+          "setBy": "660311795327828008"
+        },
+        {
+          "atMs": 1768186764584,
+          "userId": "1175390962172833792",
+          "type": "RESP_LIDER",
+          "setBy": "777973588787200023"
+        },
+        {
+          "atMs": 1769735775749,
+          "userId": "1312777275179274284",
+          "type": "RESP_LIDER",
+          "setBy": "1175390962172833792"
+        }
+      ],
+      "pausedAtMs": null,
+      "totalPausedMs": 2136320598,
+      "roleSetAtMs": null
+    },
+    {
+      "messageId": "1444820113290432663",
+      "guildId": "1262262852782129183",
+      "channelId": "1417366889398796318",
+      "targetId": "442734066580586516",
+      "registrarId": "956757829325316127",
+      "area": "Resp Influ",
+      "joinDateMs": 1763499600000,
+      "createdAtMs": 1764542358318,
+      "active": true,
+      "nextWeekTickMs": 1770757200000,
+      "oneMonthNotified": true,
+      "oneMonthNotifiedAt": 1766091655531,
+      "note": "",
+      "responsibleUserId": "660311795327828008",
+      "responsibleType": "OWNER",
+      "warnNoRoleGI": false,
+      "responsibleHistory": [
+        {
+          "atMs": 1764542371238,
+          "userId": "956757829325316127",
+          "type": "RESP_INFLU",
+          "setBy": "956757829325316127"
+        },
+        {
+          "atMs": 1765590478018,
+          "userId": "660311795327828008",
+          "type": "OWNER",
+          "setBy": "1312777275179274284"
+        }
+      ],
+      "pausedAtMs": null,
+      "totalPausedMs": 0,
+      "roleSetAtMs": 1764542358318
+    },
+    {
+      "messageId": "1448077138182930462",
+      "guildId": "1262262852782129183",
+      "channelId": "1417366889398796318",
+      "targetId": "1401438290715873410",
+      "registrarId": "777973588787200023",
+      "area": "Coord. Creator",
+      "joinDateMs": 1765227600000,
+      "createdAtMs": 1765318893578,
+      "active": true,
+      "nextWeekTickMs": 1770670800000,
+      "oneMonthNotified": true,
+      "oneMonthNotifiedAt": 1767819652624,
+      "note": "",
+      "responsibleUserId": "1175390962172833792",
+      "responsibleType": "RESP_LIDER",
+      "warnNoRoleGI": true,
+      "responsibleHistory": [
+        {
+          "atMs": 1765590733542,
+          "userId": "777973588787200023",
+          "type": "RESP_LIDER",
+          "setBy": "777973588787200023"
+        },
+        {
+          "atMs": 1766876815757,
+          "userId": "442734066580586516",
+          "type": "RESP_LIDER",
+          "setBy": "660311795327828008"
+        },
+        {
+          "atMs": 1769735934418,
+          "userId": "1175390962172833792",
+          "type": "RESP_LIDER",
+          "setBy": "1175390962172833792"
+        }
+      ],
+      "pausedAtMs": null,
+      "totalPausedMs": 15342026,
+      "roleSetAtMs": null
+    },
+    {
+      "messageId": "1448350467733192724",
+      "guildId": "1262262852782129183",
+      "channelId": "1417366889398796318",
+      "targetId": "1175390962172833792",
+      "registrarId": "777973588787200023",
+      "area": "Resp Líder",
+      "joinDateMs": 1765314000000,
+      "createdAtMs": 1765384060307,
+      "active": true,
+      "nextWeekTickMs": 1770757200000,
+      "oneMonthNotified": true,
+      "oneMonthNotifiedAt": 1767906019968,
+      "note": "",
+      "responsibleUserId": "442734066580586516",
+      "responsibleType": "RESP_INFLU",
+      "warnNoRoleGI": true,
+      "responsibleHistory": [
+        {
+          "atMs": 1765727083541,
+          "userId": "442734066580586516",
+          "type": "RESP_LIDER",
+          "setBy": "660311795327828008"
+        },
+        {
+          "atMs": 1768032122060,
+          "userId": "660311795327828008",
+          "type": "OWNER",
+          "setBy": "1175390962172833792"
+        },
+        {
+          "atMs": 1770073208762,
+          "userId": "442734066580586516",
+          "type": "RESP_INFLU",
+          "setBy": "660311795327828008"
+        }
+      ],
+      "pausedAtMs": null,
+      "totalPausedMs": 248613417,
+      "roleSetAtMs": null
+    },
+    {
+      "messageId": "1453921205122760847",
+      "guildId": "1262262852782129183",
+      "channelId": "1417366889398796318",
+      "targetId": "1018662520745111572",
+      "registrarId": "1062743982016299058",
+      "area": "Gestor Creators",
+      "joinDateMs": 1766610000000,
+      "createdAtMs": 1766712227677,
+      "active": true,
+      "nextWeekTickMs": 1770843600000,
+      "oneMonthNotified": true,
+      "oneMonthNotifiedAt": 1769202001039,
+      "note": "",
+      "responsibleUserId": "442734066580586516",
+      "responsibleType": "RESP_LIDER",
+      "warnNoRoleGI": true,
+      "responsibleHistory": [
+        {
+          "atMs": 1766728414578,
+          "userId": "1312777275179274284",
+          "type": "RESP_INFLU",
+          "setBy": "660311795327828008"
+        },
+        {
+          "atMs": 1767121905072,
+          "userId": "442734066580586516",
+          "type": "RESP_LIDER",
+          "setBy": "660311795327828008"
+        }
+      ],
+      "pausedAtMs": null,
+      "totalPausedMs": 678980350,
+      "roleSetAtMs": null
+    },
+    {
+      "messageId": "1457155806293131275",
+      "guildId": "1262262852782129183",
+      "channelId": "1417366889398796318",
+      "targetId": "1438060169702543492",
+      "registrarId": "777973588787200023",
+      "area": "Social Medias",
+      "joinDateMs": 1767387600000,
+      "createdAtMs": 1767483416717,
+      "active": true,
+      "nextWeekTickMs": 1771016400000,
+      "oneMonthNotified": true,
+      "oneMonthNotifiedAt": 1769979617003,
+      "note": "",
+      "responsibleUserId": "442734066580586516",
+      "responsibleType": "RESP_LIDER",
+      "warnNoRoleGI": false,
+      "responsibleHistory": [
+        {
+          "atMs": 1767483425346,
+          "userId": "777973588787200023",
+          "type": "RESP_LIDER",
+          "setBy": "777973588787200023"
+        },
+        {
+          "atMs": 1767558576112,
+          "userId": "1175390962172833792",
+          "type": "RESP_LIDER",
+          "setBy": "1175390962172833792"
+        },
+        {
+          "atMs": 1767645631500,
+          "userId": "777973588787200023",
+          "type": "RESP_LIDER",
+          "setBy": "660311795327828008"
+        },
+        {
+          "atMs": 1769450009973,
+          "userId": "442734066580586516",
+          "type": "RESP_LIDER",
+          "setBy": "660311795327828008"
+        }
+      ],
+      "pausedAtMs": null,
+      "totalPausedMs": 74683324,
+      "roleSetAtMs": 1767483417911
+    },
+    {
+      "messageId": "1457833927204147434",
+      "guildId": "1262262852782129183",
+      "channelId": "1417366889398796318",
+      "targetId": "722121983969591297",
+      "registrarId": "442734066580586516",
+      "area": "Gestor Creators",
+      "joinDateMs": 1767560400000,
+      "createdAtMs": 1767645093272,
+      "active": true,
+      "nextWeekTickMs": 1770584400000,
+      "oneMonthNotified": true,
+      "oneMonthNotifiedAt": 1770152418072,
+      "note": "",
+      "responsibleUserId": "1175390962172833792",
+      "responsibleType": "RESP_LIDER",
+      "warnNoRoleGI": false,
+      "responsibleHistory": [
+        {
+          "atMs": 1767645103308,
+          "userId": "442734066580586516",
+          "type": "RESP_LIDER",
+          "setBy": "442734066580586516"
+        },
+        {
+          "atMs": 1768186734347,
+          "userId": "1175390962172833792",
+          "type": "RESP_LIDER",
+          "setBy": "442734066580586516"
+        }
+      ],
+      "pausedAtMs": null,
+      "totalPausedMs": 219874935,
+      "roleSetAtMs": 1767645096062
+    },
+    {
+      "messageId": "1459823703599616013",
+      "guildId": "1262262852782129183",
+      "channelId": "1417366889398796318",
+      "targetId": "547949329772707840",
+      "registrarId": "660311795327828008",
+      "area": "Coord. Creators",
+      "joinDateMs": 1768078800000,
+      "createdAtMs": 1768119492966,
+      "active": true,
+      "nextWeekTickMs": 1771102800000,
+      "oneMonthNotified": false,
+      "oneMonthNotifiedAt": null,
+      "note": "",
+      "responsibleUserId": "1175390962172833792",
+      "responsibleType": "RESP_LIDER",
+      "warnNoRoleGI": false,
+      "responsibleHistory": [
+        {
+          "atMs": 1768119509057,
+          "userId": "777973588787200023",
+          "type": "RESP_LIDER",
+          "setBy": "660311795327828008"
+        },
+        {
+          "atMs": 1768186732908,
+          "userId": "1175390962172833792",
+          "type": "RESP_LIDER",
+          "setBy": "777973588787200023"
+        }
+      ],
+      "pausedAtMs": null,
+      "totalPausedMs": 318375763,
+      "roleSetAtMs": 1768119494160
+    },
+    {
+      "messageId": "1461989025794752659",
+      "guildId": "1262262852782129183",
+      "channelId": "1417366889398796318",
+      "targetId": "1141168903037407252",
+      "registrarId": "1175390962172833792",
+      "area": "Coord. Creators",
+      "joinDateMs": 1768597200000,
+      "createdAtMs": 1768635746065,
+      "active": true,
+      "nextWeekTickMs": 1771016400000,
+      "oneMonthNotified": false,
+      "oneMonthNotifiedAt": null,
+      "note": "",
+      "responsibleUserId": "1175390962172833792",
+      "responsibleType": "RESP_LIDER",
+      "warnNoRoleGI": false,
+      "responsibleHistory": [
+        {
+          "atMs": 1768635754878,
+          "userId": "1175390962172833792",
+          "type": "RESP_LIDER",
+          "setBy": "1175390962172833792"
+        }
+      ],
+      "pausedAtMs": null,
+      "totalPausedMs": 57713147,
+      "roleSetAtMs": 1768635747018
+    },
+    {
+      "messageId": "1465033725418148116",
+      "guildId": "1262262852782129183",
+      "channelId": "1417366889398796318",
+      "targetId": "1326039562077732956",
+      "registrarId": "442734066580586516",
+      "area": "Manager Creators",
+      "joinDateMs": 1769288400000,
+      "createdAtMs": 1769361659078,
+      "active": true,
+      "nextWeekTickMs": 1771102800000,
+      "oneMonthNotified": false,
+      "oneMonthNotifiedAt": null,
+      "note": "",
+      "responsibleUserId": "1312777275179274284",
+      "responsibleType": "RESP_LIDER",
+      "warnNoRoleGI": false,
+      "responsibleHistory": [
+        {
+          "atMs": 1769361711061,
+          "userId": "442734066580586516",
+          "type": "RESP_LIDER",
+          "setBy": "442734066580586516"
+        },
+        {
+          "atMs": 1769735797797,
+          "userId": "1312777275179274284",
+          "type": "RESP_LIDER",
+          "setBy": "1175390962172833792"
+        }
+      ],
+      "pausedAtMs": null,
+      "totalPausedMs": 229364573,
+      "roleSetAtMs": 1769361660175
+    },
+    {
+      "messageId": "1465176864413712385",
+      "guildId": "1262262852782129183",
+      "channelId": "1417366889398796318",
+      "targetId": "1464105227967004789",
+      "registrarId": "442734066580586516",
+      "area": "Equipe Social Medias",
+      "joinDateMs": 1769288400000,
+      "createdAtMs": 1769395786045,
+      "active": false,
+      "nextWeekTickMs": 1769893200000,
+      "oneMonthNotified": false,
+      "oneMonthNotifiedAt": null,
+      "note": "",
+      "responsibleUserId": "442734066580586516",
+      "responsibleType": "RESP_LIDER",
+      "warnNoRoleGI": false,
+      "responsibleHistory": [
+        {
+          "atMs": 1769395822657,
+          "userId": "442734066580586516",
+          "type": "RESP_LIDER",
+          "setBy": "442734066580586516"
+        }
+      ],
+      "pausedAtMs": 1769395815918,
+      "totalPausedMs": 0,
+      "roleSetAtMs": 1769395788320
+    },
+    {
+      "messageId": "1466485817592512697",
+      "guildId": "1262262852782129183",
+      "channelId": "1417366889398796318",
+      "targetId": "1266035902090580120",
+      "registrarId": "442734066580586516",
+      "area": "Equipe Manager",
+      "joinDateMs": 1769547600000,
+      "createdAtMs": 1769707864707,
+      "active": true,
+      "nextWeekTickMs": 1770757200000,
+      "oneMonthNotified": false,
+      "oneMonthNotifiedAt": null,
+      "note": "",
+      "responsibleUserId": "442734066580586516",
+      "responsibleType": "RESP_LIDER",
+      "warnNoRoleGI": false,
+      "responsibleHistory": [
+        {
+          "atMs": 1769707895778,
+          "userId": "442734066580586516",
+          "type": "RESP_LIDER",
+          "setBy": "442734066580586516"
+        }
+      ],
+      "pausedAtMs": null,
+      "totalPausedMs": 18818,
+      "roleSetAtMs": 1769707865601
+    },
+    {
+      "messageId": "1467617869411123284",
+      "guildId": "1262262852782129183",
+      "channelId": "1417366889398796318",
+      "targetId": "757685991950516254",
+      "registrarId": "442734066580586516",
+      "area": "Equipe Social Medias",
+      "joinDateMs": 1769893200000,
+      "createdAtMs": 1769977766938,
+      "active": true,
+      "nextWeekTickMs": 1771102800000,
+      "oneMonthNotified": false,
+      "oneMonthNotifiedAt": null,
+      "note": "",
+      "responsibleUserId": "442734066580586516",
+      "responsibleType": "RESP_INFLU",
+      "warnNoRoleGI": false,
+      "responsibleHistory": [
+        {
+          "atMs": 1769977779509,
+          "userId": "442734066580586516",
+          "type": "RESP_INFLU",
+          "setBy": "442734066580586516"
+        }
+      ],
+      "pausedAtMs": null,
+      "totalPausedMs": 390517915,
+      "roleSetAtMs": 1769977768060
+    },
+    {
+      "messageId": "1468016818345218204",
+      "guildId": "1262262852782129183",
+      "channelId": "1417366889398796318",
+      "targetId": "945375790130933800",
+      "registrarId": "1312777275179274284",
+      "area": "Equipe Social Medias",
+      "joinDateMs": 1769979600000,
+      "createdAtMs": 1770072883739,
+      "active": true,
+      "nextWeekTickMs": 1770584400000,
+      "oneMonthNotified": false,
+      "oneMonthNotifiedAt": null,
+      "note": "",
+      "responsibleUserId": "1312777275179274284",
+      "responsibleType": "RESP_LIDER",
+      "warnNoRoleGI": false,
+      "responsibleHistory": [
+        {
+          "atMs": 1770073136656,
+          "userId": "1312777275179274284",
+          "type": "RESP_LIDER",
+          "setBy": "1312777275179274284"
+        }
+      ],
+      "pausedAtMs": null,
+      "totalPausedMs": 24221299,
+      "roleSetAtMs": 1770072885247
+    },
+    {
+      "messageId": "1468079530513006759",
+      "guildId": "1262262852782129183",
+      "channelId": "1417366889398796318",
+      "targetId": "490467386768621588",
+      "registrarId": "660311795327828008",
+      "area": "Equipe Social Medias",
+      "joinDateMs": 1771794000000,
+      "createdAtMs": 1770087835684,
+      "active": true,
+      "nextWeekTickMs": 1770584400000,
+      "oneMonthNotified": false,
+      "oneMonthNotifiedAt": null,
+      "note": "",
+      "responsibleUserId": "442734066580586516",
+      "responsibleType": "RESP_INFLU",
+      "warnNoRoleGI": false,
+      "responsibleHistory": [
+        {
+          "atMs": 1770087847149,
+          "userId": "442734066580586516",
+          "type": "RESP_INFLU",
+          "setBy": "660311795327828008"
+        }
+      ],
+      "pausedAtMs": null,
+      "totalPausedMs": 0,
+      "roleSetAtMs": 1770087836679
+    },
+    {
+      "messageId": "1468156958249848897",
+      "guildId": "1262262852782129183",
+      "channelId": "1417366889398796318",
+      "targetId": "414497575282933760",
+      "registrarId": "442734066580586516",
+      "area": "Equipe Manager",
+      "joinDateMs": 1770066000000,
+      "createdAtMs": 1770106295825,
+      "active": true,
+      "nextWeekTickMs": 1770670800000,
+      "oneMonthNotified": false,
+      "oneMonthNotifiedAt": null,
+      "note": "",
+      "responsibleUserId": "442734066580586516",
+      "responsibleType": "RESP_INFLU",
+      "warnNoRoleGI": false,
+      "responsibleHistory": [
+        {
+          "atMs": 1770106305383,
+          "userId": "442734066580586516",
+          "type": "RESP_INFLU",
+          "setBy": "442734066580586516"
+        }
+      ],
+      "pausedAtMs": null,
+      "totalPausedMs": 233177647,
+      "roleSetAtMs": 1770106296888
+    },
+    {
+      "messageId": "1468159529672773707",
+      "guildId": "1262262852782129183",
+      "channelId": "1417366889398796318",
+      "targetId": "1205089691741716510",
+      "registrarId": "660311795327828008",
+      "area": "Social Medias",
+      "joinDateMs": 1763154000000,
+      "createdAtMs": 1770106908847,
+      "active": false,
+      "nextWeekTickMs": 1770411600000,
+      "oneMonthNotified": true,
+      "oneMonthNotifiedAt": 1770106937850,
+      "note": "",
+      "responsibleUserId": "1175390962172833792",
+      "responsibleType": "RESP_LIDER",
+      "warnNoRoleGI": false,
+      "responsibleHistory": [
+        {
+          "atMs": 1770106932030,
+          "userId": "1175390962172833792",
+          "type": "RESP_LIDER",
+          "setBy": "660311795327828008"
+        }
+      ],
+      "pausedAtMs": 1770108351472,
+      "totalPausedMs": 1434477,
+      "roleSetAtMs": 1770106909382
+    },
+    {
+      "messageId": "1469589214663278714",
+      "guildId": "1262262852782129183",
+      "channelId": "1417366889398796318",
+      "targetId": "1109920991670444035",
+      "registrarId": "442734066580586516",
+      "area": "a definir",
+      "joinDateMs": 1770411600000,
+      "createdAtMs": 1770447772290,
+      "active": true,
+      "nextWeekTickMs": 1771016400000,
+      "oneMonthNotified": false,
+      "oneMonthNotifiedAt": null,
+      "note": "",
+      "responsibleUserId": "442734066580586516",
+      "responsibleType": "RESP_INFLU",
+      "warnNoRoleGI": false,
+      "responsibleHistory": [
+        {
+          "atMs": 1770447883506,
+          "userId": "442734066580586516",
+          "type": "RESP_INFLU",
+          "setBy": "442734066580586516"
+        }
+      ],
+      "pausedAtMs": null,
+      "totalPausedMs": 76570127,
+      "roleSetAtMs": 1770447773435
+    },
+    {
+      "messageId": "1469589481110896670",
+      "guildId": "1262262852782129183",
+      "channelId": "1417366889398796318",
+      "targetId": "922629033106243694",
+      "registrarId": "442734066580586516",
+      "area": "Equipe Social Medias",
+      "joinDateMs": 1770411600000,
+      "createdAtMs": 1770447835805,
+      "active": true,
+      "nextWeekTickMs": 1771016400000,
+      "oneMonthNotified": false,
+      "oneMonthNotifiedAt": null,
+      "note": "",
+      "responsibleUserId": "442734066580586516",
+      "responsibleType": "RESP_INFLU",
+      "warnNoRoleGI": false,
+      "responsibleHistory": [
+        {
+          "atMs": 1770447879242,
+          "userId": "442734066580586516",
+          "type": "RESP_INFLU",
+          "setBy": "442734066580586516"
+        }
+      ],
+      "pausedAtMs": null,
+      "totalPausedMs": 71289083,
+      "roleSetAtMs": 1770447836797
+    },
+    {
+      "messageId": "1469589598094102538",
+      "guildId": "1262262852782129183",
+      "channelId": "1417366889398796318",
+      "targetId": "1372043237984043079",
+      "registrarId": "442734066580586516",
+      "area": "a definir",
+      "joinDateMs": 1770411600000,
+      "createdAtMs": 1770447863759,
+      "active": true,
+      "nextWeekTickMs": 1771016400000,
+      "oneMonthNotified": false,
+      "oneMonthNotifiedAt": null,
+      "note": "",
+      "responsibleUserId": "442734066580586516",
+      "responsibleType": "RESP_INFLU",
+      "warnNoRoleGI": false,
+      "responsibleHistory": [
+        {
+          "atMs": 1770447872789,
+          "userId": "442734066580586516",
+          "type": "RESP_INFLU",
+          "setBy": "442734066580586516"
+        }
+      ],
+      "pausedAtMs": null,
+      "totalPausedMs": 46044461,
+      "roleSetAtMs": 1770447864669
+    },
+    {
+      "messageId": "1469880743000801372",
+      "guildId": "1262262852782129183",
+      "channelId": "1417366889398796318",
+      "targetId": "440232136604385280",
+      "registrarId": "442734066580586516",
+      "area": "a definir",
+      "joinDateMs": 1770411600000,
+      "createdAtMs": 1770517278113,
+      "active": false,
+      "nextWeekTickMs": 1771016400000,
+      "oneMonthNotified": false,
+      "oneMonthNotifiedAt": null,
+      "note": "",
+      "responsibleUserId": "442734066580586516",
+      "responsibleType": "RESP_INFLU",
+      "warnNoRoleGI": false,
+      "responsibleHistory": [
+        {
+          "atMs": 1770517510393,
+          "userId": "442734066580586516",
+          "type": "RESP_INFLU",
+          "setBy": "442734066580586516"
+        }
+      ],
+      "pausedAtMs": 1770517284983,
+      "totalPausedMs": 0,
+      "roleSetAtMs": 1770517278986
+    }
+  ],
+  "giWarnings": [
+    {
+      "userId": "1383254773620277318",
+      "count": 1,
+      "lastAtMs": 1767658370493
+    },
+    {
+      "userId": "1312777275179274284",
+      "count": 1,
+      "lastAtMs": 1768004816572
+    },
+    {
+      "userId": "1433473326206160906",
+      "count": 1,
+      "lastAtMs": 1769448670152
+    },
+    {
+      "userId": "1150419288889491496",
+      "count": 1,
+      "lastAtMs": 1769883781392
+    },
+    {
+      "userId": "1018662520745111572",
+      "count": 1,
+      "lastAtMs": 1770364425894
+    }
+  ],
+  "roleSnapshots": []
+}
