@@ -55,18 +55,18 @@ export default {
 
     console.log(`[STARTUP] Disparando ${startupTasks.length} módulos em paralelo...`);
 
-    // ✅ Executa todas as tarefas em paralelo e aguarda a conclusão de todas
-    const results = await Promise.allSettled(startupTasks.map(task => task.fn()));
-
-    // ✅ Loga o resultado de cada inicialização para diagnóstico
-    results.forEach((result, index) => {
-      const taskName = startupTasks[index].name;
-      if (result.status === 'fulfilled') {
-        console.log(`[STARTUP] ✅ Módulo [${taskName}] inicializado com sucesso.`);
-      } else {
-        console.error(`[STARTUP] ❌ Módulo [${taskName}] falhou ao inicializar:`, result.reason);
+    // ✅ OTIMIZAÇÃO: Executa em SÉRIE com delay para evitar Rate Limit no boot
+    for (const task of startupTasks) {
+      try {
+        await task.fn();
+        console.log(`[STARTUP] ✅ Módulo [${task.name}] inicializado.`);
+        // Pequena pausa entre módulos pesados
+        await new Promise(r => setTimeout(r, 1000));
+      } catch (e) {
+        console.error(`[STARTUP] ❌ Módulo [${task.name}] falhou:`, e);
       }
-    });
+    }
+
 
     // Instala o guardião de bots
     installBotGuardian(client);

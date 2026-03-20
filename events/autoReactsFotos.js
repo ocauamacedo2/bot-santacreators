@@ -1,6 +1,7 @@
-
-
-// D:\santacreators-main\events\autoReactsFotos.js
+// d:\santacreators-main\events\autoReactsFotos.js
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   Events,
   ChannelType,
@@ -8,128 +9,115 @@ import {
 } from "discord.js";
 
 // ==========================================
-// SANTA CREATORS — AUTO REACT EM PUBLICAÇÕES
-// ==========================================
-// 1) Canal de FOTOS/UPS:
-//    - reage quando detectar imagem OU vídeo
-//
-// 2) Canal geral:
-//    - reage em TODAS as mensagens
-//
-// 3) Usa emojis do servidor com prioridade:
-//    - lgbt
-//    - Festinha
-//    - gayyy
-//    - santacreators
-//    - abuser
-//
-// 4) Backfill ao ligar:
-//    - tenta reagir em mensagens recentes
-//
-// 5) Fila interna:
-//    - evita bater forte demais em rate limit
+// SANTA CREATORS — AUTO REACT (OTIMIZADO v2)
 // ==========================================
 
 // ========= CONFIG =========
-const PHOTO_CHANNEL_ID = "1432149017378426941";         // canal onde cai foto/ups
-const ALL_MESSAGES_CHANNEL_ID = "1262262852949905414";  // canal que reage em tudo
+const PHOTO_CHANNEL_ID = "1432149017378426941";
+const ALL_MESSAGES_CHANNEL_ID = "1262262852949905414";
 
 const MAX_REACTIONS_PER_MESSAGE = 20;
-const BACKFILL_FETCH_PER_PAGE = 100;   // máximo por fetch da API
-const BACKFILL_MAX_MESSAGES = 5000;
-const REACTION_DELAY_MS = 200;
+const BACKFILL_FETCH_PER_PAGE = 50; // Reduzido para aliviar a API
+const BACKFILL_MAX_MESSAGES_HARD_LIMIT = 50; // Se não tiver estado salvo, lê apenas as últimas 50
+const REACTION_DELAY_MS = 1500; // Aumentado: 1.5s entre reações para evitar 429
 const IGNORE_BOT_MESSAGES = true;
 
 const MANUAL_BACKFILL_COMMAND = "!reagirantigas";
-const MANUAL_BACKFILL_ALLOWED_USER_IDS = [
-  // se quiser travar por usuário, coloca IDs aqui
-  // "123456789012345678",
-];
+const MANUAL_BACKFILL_ALLOWED_USER_IDS = [];
+
+// ========= PERSISTÊNCIA =========
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const DATA_DIR = path.resolve(__dirname, "../data");
+const STATE_FILE = path.join(DATA_DIR, "autoreact_state.json");
+
+function ensureDir() {
+  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+}
+
+function loadState() {
+  try {
+    if (fs.existsSync(STATE_FILE)) return JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
+  } catch {}
+  return {};
+}
+
+function saveState(data) {
+  ensureDir();
+  try {
+    fs.writeFileSync(STATE_FILE, JSON.stringify(data, null, 2));
+  } catch (e) {
+    console.error("[AUTO_REACTS] Erro ao salvar estado:", e);
+  }
+}
 
 // ========= EMOJIS CUSTOM DO SERVIDOR (PRIORIDADE) =========
-// Vai tentar achar exatamente ou por includes.
 const PRIORITY_CUSTOM_EMOJI_NAMES = [
-  "lgbt",
-  "festinha",
-  "gayyy",
-  "santacreators",
-  "abuser",
-  "roxinho",
-  "aqui",
-  "huhu",
-  "coracaoroxo",
-  "coroaroxa",
-  "palmas",
-  "amarelo",
-  "quebrada",
-  "alertaa",
-  "bunda",
-  "fofinho",
-  "ban",
-  "e_diorgifs",
-  "diabinho",
+  "lgbt", "festinha", "gayyy", "santacreators", "abuser", "roxinho",
+  "aqui", "huhu", "coracaoroxo", "coroaroxa", "palmas", "amarelo",
+  "quebrada", "alertaa", "bunda", "fofinho", "ban", "e_diorgifs", "diabinho",
 ];
 
 // ========= EMOJIS UNICODE PRA COMPLETAR =========
 const UNICODE_REACTIONS = [
-  "💜",
-  "❤️",
-  "🩷",
-  "🧡",
-  "💙",
-  "💚",
-  "💛",
-  "😍",
-  "🥰",
-  "🤩",
-  "😻",
-  "👏",
-  "🙌",
-  "🎉",
-  "🎊",
-  "🔥",
-  "✨",
-  "👑",
-  "💫",
-  "🌟",
-  "🥳",
-  "🫶",
-  "💕",
-  "💖",
-  "💞",
-  "😁",
-  "😄",
+  "💜", "❤️", "🩷", "🧡", "💙", "💚", "💛", "😍", "🥰", "🤩",
+  "😻", "👏", "🙌", "🎉", "🎊", "🔥", "✨", "👑", "💫", "🌟",
+  "🥳", "🫶", "💕", "💖", "💞", "😁", "😄",
 ];
 
 // ========= GUARD GLOBAL =========
 if (!globalThis.__SC_AUTO_REACTS_FOTOS_BOOTSTRAPPED__) {
   globalThis.__SC_AUTO_REACTS_FOTOS_BOOTSTRAPPED__ = true;
+  // Hook client is handled in setupAutoReacts
+}
 
-  const client = globalThis.client;
+// ========= FILA GLOBAL (RATE LIMITER) =========
+// Uma fila única para garantir que não spammamos a API de reações
+const queue = [];
+let processingQueue = false;
 
-  if (!client) {
-    console.warn("[AUTO_REACTS] globalThis.client não encontrado. O módulo foi importado antes do client ficar global.");
-  } else {
-    console.log("[AUTO_REACTS] módulo carregado.");
-    setupAutoReacts(client);
+async function processQueue() {
+  if (processingQueue) return;
+  processingQueue = true;
+
+  while (queue.length > 0) {
+    const task = queue.shift();
+    try {
+      await task();
+    } catch (e) {
+      // Ignora erros comuns para não travar a fila
+      if (!String(e).includes("Unknown Message")) {
+         console.error("[AUTO_REACTS] Erro na fila:", e.message);
+      }
+    }
+    // Delay obrigatório entre chamadas à API
+    await new Promise((r) => setTimeout(r, REACTION_DELAY_MS));
   }
+
+  processingQueue = false;
 }
 
-// ========= FILA GLOBAL =========
-let reactionQueue = Promise.resolve();
+function enqueueReaction(message, emoji) {
+  queue.push(async () => {
+    try {
+        // Verifica se a mensagem ainda existe e é válida antes de reagir
+        if (!message || !message.channel) return;
+        
+        // Verifica se já reagimos (cache local do d.js)
+        const existing = message.reactions.cache.find(r => 
+            (r.emoji.id && emoji.includes(r.emoji.id)) || r.emoji.name === emoji
+        );
+        if (existing?.me) return;
 
-function enqueue(task) {
-  reactionQueue = reactionQueue
-    .then(() => task())
-    .catch((err) => {
-      console.error("[AUTO_REACTS] erro na fila:", err);
-    });
-
-  return reactionQueue;
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+        await message.react(emoji);
+    } catch (err) {
+        // Erros específicos de permissão ou mensagem deletada abortam silenciosamente
+        const msg = String(err?.message || err);
+        if (msg.includes("Unknown Message") || msg.includes("10008") || msg.includes("30010")) return;
+        throw err;
+    }
+  });
+  processQueue();
 }
 
 async function handleManualBackfillCommand(message, client) {
@@ -163,7 +151,7 @@ async function handleManualBackfillCommand(message, client) {
   let mode = null;
   let label = null;
 
-  if (targetRaw === "fotos" || targetRaw === "foto" || targetRaw === "media" || targetRaw === "midia") {
+  if (targetRaw === "fotos" || targetRaw === "foto" || targetRaw === "media") {
     targetChannelId = PHOTO_CHANNEL_ID;
     mode = "media";
     label = "canal de fotos/vídeos";
@@ -173,24 +161,26 @@ async function handleManualBackfillCommand(message, client) {
     label = "canal geral";
   } else {
     await message.reply(
-      "⚠️ Usa assim:\n`!reagirantigas fotos`\n`!reagirantigas geral`\n`!reagirantigas fotos 2000`\n`!reagirantigas geral 3000`"
+      "⚠️ Usa assim:\n`!reagirantigas fotos`\n`!reagirantigas geral`\n`!reagirantigas fotos 500`"
     );
     return true;
   }
 
-  let customMaxMessages = BACKFILL_MAX_MESSAGES;
+  let customMaxMessages = 500; // Padrão seguro para manual
   if (amountRaw && /^\d+$/.test(amountRaw)) {
-    customMaxMessages = Math.max(1, Math.min(Number(amountRaw), 20000));
+    customMaxMessages = Math.max(1, Math.min(Number(amountRaw), 2000)); // Limite duro de 2000
   }
 
   await message.reply(
     `🔄 Iniciando backfill manual no ${label}...\n📦 Limite: **${customMaxMessages}** mensagens.`
   );
 
+  // No manual, ignoramos o estado salvo e forçamos a busca
   try {
     const result = await backfillChannel(client, targetChannelId, mode, {
       maxMessages: customMaxMessages,
       manual: true,
+      ignoreState: true 
     });
 
     await message.reply(
@@ -207,23 +197,24 @@ async function handleManualBackfillCommand(message, client) {
 }
 
 // ========= SETUP =========
-function setupAutoReacts(client) {
+export default function setupAutoReacts(client) {
   client.on(Events.ClientReady, async () => {
-    console.log("[AUTO_REACTS] ClientReady detectado.");
+    // console.log("[AUTO_REACTS] ClientReady detectado. Iniciando backfill inteligente...");
 
-    try {
-      await backfillChannel(client, PHOTO_CHANNEL_ID, "media");
-    } catch (err) {
-      console.error("[AUTO_REACTS] erro no backfill do canal de mídia:", err);
-    }
+    // Delay inicial para não competir com outros sistemas no boot
+    setTimeout(async () => {
+        try {
+            await backfillChannel(client, PHOTO_CHANNEL_ID, "media");
+        } catch (err) {
+            console.error("[AUTO_REACTS] erro no backfill do canal de mídia:", err);
+        }
 
-    try {
-      await backfillChannel(client, ALL_MESSAGES_CHANNEL_ID, "all");
-    } catch (err) {
-      console.error("[AUTO_REACTS] erro no backfill do canal geral:", err);
-    }
-
-    console.log("[AUTO_REACTS] backfill concluído.");
+        try {
+            await backfillChannel(client, ALL_MESSAGES_CHANNEL_ID, "all");
+        } catch (err) {
+            console.error("[AUTO_REACTS] erro no backfill do canal geral:", err);
+        }
+    }, 15000); // 15 segundos após boot
   });
 
   client.on(Events.MessageCreate, async (message) => {
@@ -231,45 +222,28 @@ function setupAutoReacts(client) {
       if (await handleManualBackfillCommand(message, client)) {
         return;
       }
-
       await processMessage(message, "create");
     } catch (err) {
       console.error("[AUTO_REACTS] erro em MessageCreate:", err);
-    }
-  });
-
-  client.on(Events.MessageUpdate, async (_oldMessage, newMessage) => {
-    try {
-      if (newMessage.partial) {
-        try {
-          await newMessage.fetch();
-        } catch {}
-      }
-
-      await processMessage(newMessage, "update");
-    } catch (err) {
-      console.error("[AUTO_REACTS] erro em MessageUpdate:", err);
     }
   });
 }
 
 // ========= PROCESSAMENTO =========
 async function processMessage(message, source = "unknown") {
-  if (!message) return;
-  if (!message.guild) return;
-  if (!message.channel) return;
-  if (message.system) return;
+  if (!message || !message.guild || message.system) return;
   if (IGNORE_BOT_MESSAGES && message.author?.bot) return;
 
   const channelId = message.channel.id;
 
-  // Canal que reage em tudo
+  // Atualiza o estado da última mensagem vista em tempo real
+  updateLastSeenState(channelId, message.id);
+
   if (channelId === ALL_MESSAGES_CHANNEL_ID) {
     await reactToMessage(message, "all", source);
     return;
   }
 
-  // Canal que reage apenas em foto/vídeo
   if (channelId === PHOTO_CHANNEL_ID) {
     if (hasMediaContent(message)) {
       await reactToMessage(message, "media", source);
@@ -278,167 +252,67 @@ async function processMessage(message, source = "unknown") {
   }
 }
 
+// ========= STATE HELPERS =========
+function updateLastSeenState(channelId, messageId) {
+    const state = loadState();
+    state[channelId] = messageId;
+    saveState(state);
+}
+
 // ========= DETECÇÃO DE MÍDIA =========
 function hasMediaContent(message) {
   try {
     const attachments = [...message.attachments.values()];
-
     for (const att of attachments) {
       const ct = String(att.contentType || "").toLowerCase();
-      const name = String(att.name || "").toLowerCase();
-      const url = String(att.url || "").toLowerCase();
-      const proxyURL = String(att.proxyURL || "").toLowerCase();
-
-      // imagem
-      if (ct.startsWith("image/")) return true;
-
-      // vídeo
-      if (ct.startsWith("video/")) return true;
-
-      // fallback por extensão
-      if (
-        name.endsWith(".png") ||
-        name.endsWith(".jpg") ||
-        name.endsWith(".jpeg") ||
-        name.endsWith(".gif") ||
-        name.endsWith(".webp") ||
-        name.endsWith(".bmp") ||
-        name.endsWith(".avif") ||
-        name.endsWith(".heic") ||
-        name.endsWith(".mp4") ||
-        name.endsWith(".mov") ||
-        name.endsWith(".webm") ||
-        name.endsWith(".mkv") ||
-        name.endsWith(".avi") ||
-        name.endsWith(".m4v") ||
-        url.endsWith(".png") ||
-        url.endsWith(".jpg") ||
-        url.endsWith(".jpeg") ||
-        url.endsWith(".gif") ||
-        url.endsWith(".webp") ||
-        url.endsWith(".bmp") ||
-        url.endsWith(".avif") ||
-        url.endsWith(".heic") ||
-        url.endsWith(".mp4") ||
-        url.endsWith(".mov") ||
-        url.endsWith(".webm") ||
-        url.endsWith(".mkv") ||
-        url.endsWith(".avi") ||
-        url.endsWith(".m4v") ||
-        proxyURL.endsWith(".png") ||
-        proxyURL.endsWith(".jpg") ||
-        proxyURL.endsWith(".jpeg") ||
-        proxyURL.endsWith(".gif") ||
-        proxyURL.endsWith(".webp") ||
-        proxyURL.endsWith(".bmp") ||
-        proxyURL.endsWith(".avif") ||
-        proxyURL.endsWith(".heic") ||
-        proxyURL.endsWith(".mp4") ||
-        proxyURL.endsWith(".mov") ||
-        proxyURL.endsWith(".webm") ||
-        proxyURL.endsWith(".mkv") ||
-        proxyURL.endsWith(".avi") ||
-        proxyURL.endsWith(".m4v")
-      ) {
-        return true;
-      }
+      if (ct.startsWith("image/") || ct.startsWith("video/")) return true;
     }
+    // Simplificado: se tem attachment e não sabemos o tipo, assume que é mídia
+    if (attachments.length > 0) return true;
 
-    // embeds com imagem/vídeo/thumbnail/gif
     for (const embed of message.embeds || []) {
-      if (
-        embed?.image?.url ||
-        embed?.thumbnail?.url ||
-        embed?.video?.url ||
-        embed?.provider?.name ||
-        embed?.type === "gifv"
-      ) {
+      if (embed?.image || embed?.video || embed?.thumbnail?.url || embed?.type === 'gifv' || embed?.type === 'image' || embed?.type === 'video') {
         return true;
       }
     }
-
-    // links no conteúdo
-    const content = String(message.content || "").toLowerCase();
-    if (
-      content.includes(".png") ||
-      content.includes(".jpg") ||
-      content.includes(".jpeg") ||
-      content.includes(".gif") ||
-      content.includes(".webp") ||
-      content.includes(".bmp") ||
-      content.includes(".avif") ||
-      content.includes(".heic") ||
-      content.includes(".mp4") ||
-      content.includes(".mov") ||
-      content.includes(".webm") ||
-      content.includes(".mkv") ||
-      content.includes(".avi") ||
-      content.includes(".m4v")
-    ) {
-      return true;
-    }
+    
+    // Links comuns de mídia
+    if (/(https?:\/\/.*\.(?:png|jpg|jpeg|gif|webp|mp4|mov))/i.test(message.content)) return true;
+    
   } catch (err) {
     console.error("[AUTO_REACTS] erro ao detectar mídia:", err);
   }
-
   return false;
 }
 
-// ========= MONTAR LISTA DE REAÇÕES =========
+// ========= LISTA DE REAÇÕES =========
 function buildReactionList(guild) {
   const finalList = [];
   const seen = new Set();
 
-  // 1) emojis custom prioritários do servidor
-  const priorityCustoms = getPriorityCustomEmojis(guild);
-  for (const emoji of priorityCustoms) {
-    const key = String(emoji?.id || emoji);
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    finalList.push(emoji.toString());
-
-    if (finalList.length >= MAX_REACTIONS_PER_MESSAGE) {
-      return finalList;
+  const allEmojis = guild.emojis?.cache || [];
+  
+  // 1) Emojis custom prioritários
+  for (const wantedName of PRIORITY_CUSTOM_EMOJI_NAMES) {
+    const target = wantedName.toLowerCase();
+    const found = allEmojis.find(e => e.name?.toLowerCase().includes(target));
+    if (found && !seen.has(found.id)) {
+        seen.add(found.id);
+        finalList.push(found); // Passa o objeto emoji, não string
+        if (finalList.length >= MAX_REACTIONS_PER_MESSAGE) return finalList;
     }
   }
 
-  // 2) completa com emojis unicode
+  // 2) Unicode
   for (const emoji of UNICODE_REACTIONS) {
-    if (seen.has(emoji)) continue;
-    seen.add(emoji);
-    finalList.push(emoji);
-
-    if (finalList.length >= MAX_REACTIONS_PER_MESSAGE) {
-      break;
+    if (!seen.has(emoji)) {
+        seen.add(emoji);
+        finalList.push(emoji);
+        if (finalList.length >= MAX_REACTIONS_PER_MESSAGE) break;
     }
   }
 
   return finalList;
-}
-
-function getPriorityCustomEmojis(guild) {
-  if (!guild?.emojis?.cache) return [];
-
-  const all = [...guild.emojis.cache.values()].filter((e) => e.available !== false);
-  const selected = [];
-  const usedIds = new Set();
-
-  for (const wantedName of PRIORITY_CUSTOM_EMOJI_NAMES) {
-    const target = String(wantedName).toLowerCase();
-
-    let found = all.find((emoji) => String(emoji.name || "").toLowerCase() === target);
-
-    if (!found) {
-      found = all.find((emoji) => String(emoji.name || "").toLowerCase().includes(target));
-    }
-
-    if (found && !usedIds.has(found.id)) {
-      usedIds.add(found.id);
-      selected.push(found);
-    }
-  }
-
-  return selected;
 }
 
 // ========= REAGIR =========
@@ -448,117 +322,96 @@ async function reactToMessage(message, mode, source = "unknown") {
   const reactions = buildReactionList(message.guild);
   if (!reactions.length) return;
 
+  // Adiciona na fila com delay
   for (const emoji of reactions) {
-    await enqueue(async () => {
-      try {
-        if (!message?.channel) return;
-
-        const alreadyThere = message.reactions.cache.find((r) => {
-          if (typeof r.emoji.id === "string" && emoji.startsWith("<")) {
-            return emoji.includes(r.emoji.id);
-          }
-          return r.emoji.name === emoji;
-        });
-
-        if (alreadyThere?.me) return;
-        
-        // Otimização: Se já tem 20 reações únicas e essa não existe lá, nem tenta (vai dar erro 30010)
-        // Mas se ela JÁ existe (alguém reagiu), o bot consegue somar (+1), então deixa passar.
-        if (message.reactions.cache.size >= 20 && !alreadyThere) {
-           return; 
-        }
-
-        await message.react(emoji);
-        await sleep(REACTION_DELAY_MS);
-      } catch (err) {
-        const msg = String(err?.message || err);
-
-        if (
-          msg.includes("Unknown Emoji") ||
-          msg.includes("Missing Access") ||
-          msg.includes("Missing Permissions") ||
-          msg.includes("Unknown Message") ||
-          msg.includes("Invalid Form Body") ||
-          msg.includes("10014") ||
-          msg.includes("50001") ||
-          msg.includes("50013") ||
-          msg.includes("10008") ||
-          msg.includes("30010") || // Máximo de reações atingido
-          err.code === 30010
-        ) {
-          return;
-        }
-
-        console.error(
-          `[AUTO_REACTS] erro ao reagir msg=${message.id} canal=${message.channel?.id} modo=${mode} fonte=${source} emoji=${emoji}:`,
-          err
-        );
-      }
-    });
+    enqueueReaction(message, emoji);
   }
 }
 
-// ========= BACKFILL =========
+// ========= BACKFILL OTIMIZADO =========
 async function backfillChannel(client, channelId, mode, options = {}) {
   const channel = await client.channels.fetch(channelId).catch(() => null);
-  if (!channel) {
-    console.warn(`[AUTO_REACTS] canal ${channelId} não encontrado no backfill.`);
+  if (!channel || (channel.type !== ChannelType.GuildText && channel.type !== ChannelType.GuildAnnouncement)) {
     return { scanned: 0, processed: 0 };
   }
 
-  if (channel.type !== ChannelType.GuildText && channel.type !== ChannelType.GuildAnnouncement) {
-    console.warn(`[AUTO_REACTS] canal ${channelId} não é texto/anúncio. Tipo: ${channel.type}`);
-    return { scanned: 0, processed: 0 };
+  // Se for automático (boot), usa estado salvo para não ler o canal inteiro
+  let afterId = null;
+  if (!options.ignoreState && !options.manual) {
+      const state = loadState();
+      afterId = state[channelId];
   }
 
-  const maxMessages = Number(options.maxMessages || BACKFILL_MAX_MESSAGES);
-  const sourceLabel = options.manual ? "manual" : "auto";
-
-  let lastId = undefined;
+  // Se temos um afterId, usamos 'after' no fetch (lendo do antigo pro novo).
+  // Se NÃO temos, usamos 'limit' (lendo do novo pro antigo) mas com limite baixo.
+  
   let scanned = 0;
   let processed = 0;
+  let messages = [];
 
-  while (scanned < maxMessages) {
-    const remaining = maxMessages - scanned;
-    const limit = Math.min(BACKFILL_FETCH_PER_PAGE, remaining);
-
-    const messages = await channel.messages.fetch({
-      limit,
-      before: lastId,
-    }).catch(() => null);
-
-    if (!messages?.size) {
-      break;
-    }
-
-    const ordered = [...messages.values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp);
-
-    for (const message of ordered) {
-      scanned++;
-
-      if (!message || message.system) continue;
-      if (IGNORE_BOT_MESSAGES && message.author?.bot) continue;
-
-      if (mode === "media" && !hasMediaContent(message)) {
-        continue;
+  try {
+      if (afterId && !options.manual) {
+          // Modo "Catch Up": Lê o que perdeu desde a última vez
+          // Nota: Discord API 'after' tem limite. Se for muito antigo, pode falhar ou retornar pouco.
+          // Nesse caso, assumimos que o bot ficou off muito tempo e lemos apenas as ultimas 50.
+          
+          const recent = await channel.messages.fetch({ limit: BACKFILL_FETCH_PER_PAGE }).catch(() => null);
+          if (recent) messages = [...recent.values()];
+          
+          // Filtra apenas o que é mais novo que o salvo
+          // (D.js collections não suportam 'after' nativo no fetch simples de limit, apenas via parâmetro explicito,
+          // mas 'after' pega mensagens APÓS aquele ID cronologicamente. Vamos simplificar: pega as últimas X e filtra).
+          messages = messages.filter(m => m.id > afterId);
+      } else {
+          // Modo "Fresh" ou Manual: Pega as últimas X mensagens
+          const limit = options.maxMessages || BACKFILL_MAX_MESSAGES_HARD_LIMIT;
+          let lastId = undefined;
+          
+          while (scanned < limit) {
+              const batchSize = Math.min(BACKFILL_FETCH_PER_PAGE, limit - scanned);
+              const batch = await channel.messages.fetch({ limit: batchSize, before: lastId }).catch(() => null);
+              if (!batch || batch.size === 0) break;
+              
+              const batchArr = [...batch.values()];
+              messages.push(...batchArr);
+              scanned += batchArr.length;
+              lastId = batch.last()?.id;
+          }
       }
+  } catch (e) {
+      console.error("[AUTO_REACTS] Erro no fetch do backfill:", e);
+      return { scanned, processed };
+  }
 
-      await reactToMessage(message, mode, sourceLabel);
-      processed++;
-    }
+  // Ordena cronologicamente (antigo -> novo) para processar na ordem
+  messages.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
 
-    lastId = ordered[0]?.id;
-    if (!lastId || messages.size < limit) {
-      break;
+  let newestId = null;
+
+  for (const message of messages) {
+    // Atualiza o mais recente processado
+    if (!newestId || message.id > newestId) newestId = message.id;
+
+    if (!message.system && (!IGNORE_BOT_MESSAGES || !message.author.bot)) {
+        if (mode === "all" || (mode === "media" && hasMediaContent(message))) {
+            // Verifica se já reagiu para economizar API
+            const hasMyReaction = message.reactions.cache.some(r => r.me);
+            if (!hasMyReaction) {
+                await reactToMessage(message, mode, options.manual ? "manual" : "backfill");
+                processed++;
+            }
+        }
     }
+  }
+
+  // Atualiza o estado com a mensagem mais recente encontrada no canal
+  if (newestId && !options.manual) {
+      updateLastSeenState(channelId, newestId);
   }
 
   console.log(
-    `[AUTO_REACTS] backfill ${sourceLabel} do canal ${channelId} concluído. Vasculhadas: ${scanned} | Processadas: ${processed}`
+    `[AUTO_REACTS] Backfill ${options.manual ? "manual" : "auto"} em ${channel.name}: ${messages.length} lidas, ${processed} na fila.`
   );
 
-  return { scanned, processed };
+  return { scanned: messages.length, processed };
 }
-
-
-
