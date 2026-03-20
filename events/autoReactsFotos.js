@@ -1,374 +1,214 @@
-// D:\santacreators-main\events\autoReactsFotos.js
 import {
   Events,
+  ChannelType,
+  PermissionsBitField,
 } from "discord.js";
 
-// ==========================================
-// SANTA CREATORS — AUTO REACT LEVE
-// ==========================================
-// • NÃO faz backfill
-// • NÃO varre mensagens antigas
-// • NÃO tem comando manual
-// • Reage somente nas próximas mensagens
-//
-// 1) Canal de FOTOS/UPS:
-//    - reage quando detectar imagem OU vídeo
-//
-// 2) Canal geral:
-//    - reage em TODAS as mensagens
-//
-// 3) Usa emojis do servidor com prioridade
-// ==========================================
-
 // ========= CONFIG =========
-const PHOTO_CHANNEL_ID = "1432149017378426941";         // canal onde cai foto/ups
-const ALL_MESSAGES_CHANNEL_ID = "1262262852949905414";  // canal que reage em tudo
+const PHOTO_CHANNEL_ID = "1432149017378426941";
+const ALL_MESSAGES_CHANNEL_ID = "1262262852949905414";
 
 const MAX_REACTIONS_PER_MESSAGE = 20;
 const REACTION_DELAY_MS = 200;
 const IGNORE_BOT_MESSAGES = true;
 
-// ========= EMOJIS CUSTOM DO SERVIDOR (PRIORIDADE) =========
+// 🔥 comando manual
+const COMMAND = "!reagir";
+
+// quem pode usar
+const ALLOWED_USER_IDS = [
+  // coloca teu ID aqui
+  // "SEU_ID"
+  "660311795327828008",
+  "1262262852949905408"
+];
+
+// ========= EMOJIS =========
 const PRIORITY_CUSTOM_EMOJI_NAMES = [
-  "lgbt",
-  "festinha",
-  "gayyy",
-  "santacreators",
-  "abuser",
-  "roxinho",
-  "aqui",
-  "huhu",
-  "coracaoroxo",
-  "coroaroxa",
-  "palmas",
-  "amarelo",
-  "quebrada",
-  "alertaa",
-  "bunda",
-  "fofinho",
-  "ban",
-  "e_diorgifs",
-  "diabinho",
+  "lgbt","festinha","gayyy","santacreators","abuser",
 ];
 
-// ========= EMOJIS UNICODE PRA COMPLETAR =========
 const UNICODE_REACTIONS = [
-  "💜",
-  "❤️",
-  "🩷",
-  "🧡",
-  "💙",
-  "💚",
-  "💛",
-  "😍",
-  "🥰",
-  "🤩",
-  "😻",
-  "👏",
-  "🙌",
-  "🎉",
-  "🎊",
-  "🔥",
-  "✨",
-  "👑",
-  "💫",
-  "🌟",
-  "🥳",
-  "🫶",
-  "💕",
-  "💖",
-  "💞",
-  "😁",
-  "😄",
+  "💜","❤️","😍","👏","🎉","🔥","👑","✨","🥳","💖"
 ];
 
-// ========= GUARD GLOBAL =========
-if (!globalThis.__SC_AUTO_REACTS_FOTOS_LIGHT_BOOTSTRAPPED__) {
-  globalThis.__SC_AUTO_REACTS_FOTOS_LIGHT_BOOTSTRAPPED__ = true;
+// ========= GUARD =========
+if (!globalThis.__AUTO_REACT_LIGHT__) {
+  globalThis.__AUTO_REACT_LIGHT__ = true;
 
   const client = globalThis.client;
-
-  if (!client) {
-    console.warn("[AUTO_REACTS_LIGHT] globalThis.client não encontrado. O módulo foi importado antes do client ficar global.");
-  } else {
-    console.log("[AUTO_REACTS_LIGHT] módulo carregado.");
-    setupAutoReacts(client);
-  }
+  // Garante que o client existe antes de iniciar
+  if (client) setup(client);
 }
 
-// ========= FILA GLOBAL =========
-let reactionQueue = Promise.resolve();
+// ========= FILA =========
+let queue = Promise.resolve();
 
 function enqueue(task) {
-  reactionQueue = reactionQueue
-    .then(() => task())
-    .catch((err) => {
-      console.error("[AUTO_REACTS_LIGHT] erro na fila:", err);
-    });
-
-  return reactionQueue;
+  queue = queue.then(task).catch(()=>{});
+  return queue;
 }
 
 function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise(r => setTimeout(r, ms));
+}
+
+// ========= PAGINAÇÃO (Fetch > 100) =========
+async function fetchManyMessages(channel, limit) {
+  let collected = [];
+  let lastId = null;
+  
+  // Limite de segurança pra não explodir a RAM (ex: max 1000 por comando)
+  const safeLimit = Math.min(limit, 1000);
+
+  while (collected.length < safeLimit) {
+    const options = { limit: Math.min(safeLimit - collected.length, 100) };
+    if (lastId) options.before = lastId;
+    
+    const batch = await channel.messages.fetch(options).catch(() => null);
+    if (!batch || batch.size === 0) break;
+    
+    collected.push(...batch.values());
+    lastId = batch.last().id;
+  }
+  return collected;
 }
 
 // ========= SETUP =========
-function setupAutoReacts(client) {
+function setup(client) {
+
+  // 🔥 mensagens novas
   client.on(Events.MessageCreate, async (message) => {
-    try {
-      await processMessage(message, "create");
-    } catch (err) {
-      console.error("[AUTO_REACTS_LIGHT] erro em MessageCreate:", err);
-    }
+    if (await handleCommand(message)) return;
+    processMessage(message);
   });
 
-  client.on(Events.MessageUpdate, async (_oldMessage, newMessage) => {
-    try {
-      if (newMessage.partial) {
-        try {
-          await newMessage.fetch();
-        } catch {}
-      }
-
-      await processMessage(newMessage, "update");
-    } catch (err) {
-      console.error("[AUTO_REACTS_LIGHT] erro em MessageUpdate:", err);
+  // 🔥 detecta embeds que aparecem depois (links de imagens)
+  client.on(Events.MessageUpdate, async (_old, newMessage) => {
+    // Se for parcial, tenta buscar (mas sem travar)
+    if (newMessage.partial) {
+      try { await newMessage.fetch(); } catch { return; }
     }
+    processMessage(newMessage);
   });
+
+  // 🔥 mini varredura diária leve (10 msgs)
+  // Inicia direto pois o módulo é carregado no ready
+  setInterval(() => {
+    lightScan(client);
+  }, 24 * 60 * 60 * 1000); // 1 dia
+  
+  console.log("[AUTO_REACT] Sistema iniciado (v2 corrigida)");
 }
 
 // ========= PROCESSAMENTO =========
-async function processMessage(message, source = "unknown") {
-  if (!message) return;
-  if (!message.guild) return;
-  if (!message.channel) return;
-  if (message.system) return;
-  if (IGNORE_BOT_MESSAGES && message.author?.bot) return;
+async function processMessage(message) {
+  if (!message || !message.guild) return;
+  if (IGNORE_BOT_MESSAGES && message.author.bot) return;
 
-  const channelId = message.channel.id;
+  // Verifica permissões básicas antes de tentar
+  const perms = message.channel.permissionsFor(message.guild.members.me);
+  if (!perms?.has(PermissionsBitField.Flags.AddReactions)) return;
+  if (!perms?.has(PermissionsBitField.Flags.ReadMessageHistory)) return;
 
-  // Canal que reage em tudo
-  if (channelId === ALL_MESSAGES_CHANNEL_ID) {
-    await reactToMessage(message, "all", source);
-    return;
+  if (message.channel.id === ALL_MESSAGES_CHANNEL_ID) {
+    await react(message);
   }
 
-  // Canal que reage apenas em foto/vídeo
-  if (channelId === PHOTO_CHANNEL_ID) {
-    if (hasMediaContent(message)) {
-      await reactToMessage(message, "media", source);
+  if (message.channel.id === PHOTO_CHANNEL_ID) {
+    if (hasMedia(message)) {
+      await react(message);
     }
   }
 }
 
-// ========= DETECÇÃO DE MÍDIA =========
-function hasMediaContent(message) {
-  try {
-    const attachments = [...message.attachments.values()];
-
-    for (const att of attachments) {
-      const ct = String(att.contentType || "").toLowerCase();
-      const name = String(att.name || "").toLowerCase();
-      const url = String(att.url || "").toLowerCase();
-      const proxyURL = String(att.proxyURL || "").toLowerCase();
-
-      if (ct.startsWith("image/")) return true;
-      if (ct.startsWith("video/")) return true;
-
-      if (
-        name.endsWith(".png") ||
-        name.endsWith(".jpg") ||
-        name.endsWith(".jpeg") ||
-        name.endsWith(".gif") ||
-        name.endsWith(".webp") ||
-        name.endsWith(".bmp") ||
-        name.endsWith(".avif") ||
-        name.endsWith(".heic") ||
-        name.endsWith(".mp4") ||
-        name.endsWith(".mov") ||
-        name.endsWith(".webm") ||
-        name.endsWith(".mkv") ||
-        name.endsWith(".avi") ||
-        name.endsWith(".m4v") ||
-        url.endsWith(".png") ||
-        url.endsWith(".jpg") ||
-        url.endsWith(".jpeg") ||
-        url.endsWith(".gif") ||
-        url.endsWith(".webp") ||
-        url.endsWith(".bmp") ||
-        url.endsWith(".avif") ||
-        url.endsWith(".heic") ||
-        url.endsWith(".mp4") ||
-        url.endsWith(".mov") ||
-        url.endsWith(".webm") ||
-        url.endsWith(".mkv") ||
-        url.endsWith(".avi") ||
-        url.endsWith(".m4v") ||
-        proxyURL.endsWith(".png") ||
-        proxyURL.endsWith(".jpg") ||
-        proxyURL.endsWith(".jpeg") ||
-        proxyURL.endsWith(".gif") ||
-        proxyURL.endsWith(".webp") ||
-        proxyURL.endsWith(".bmp") ||
-        proxyURL.endsWith(".avif") ||
-        proxyURL.endsWith(".heic") ||
-        proxyURL.endsWith(".mp4") ||
-        proxyURL.endsWith(".mov") ||
-        proxyURL.endsWith(".webm") ||
-        proxyURL.endsWith(".mkv") ||
-        proxyURL.endsWith(".avi") ||
-        proxyURL.endsWith(".m4v")
-      ) {
-        return true;
-      }
-    }
-
-    for (const embed of message.embeds || []) {
-      if (
-        embed?.image?.url ||
-        embed?.thumbnail?.url ||
-        embed?.video?.url ||
-        embed?.provider?.name ||
-        embed?.type === "gifv"
-      ) {
-        return true;
-      }
-    }
-
-    const content = String(message.content || "").toLowerCase();
-    if (
-      content.includes(".png") ||
-      content.includes(".jpg") ||
-      content.includes(".jpeg") ||
-      content.includes(".gif") ||
-      content.includes(".webp") ||
-      content.includes(".bmp") ||
-      content.includes(".avif") ||
-      content.includes(".heic") ||
-      content.includes(".mp4") ||
-      content.includes(".mov") ||
-      content.includes(".webm") ||
-      content.includes(".mkv") ||
-      content.includes(".avi") ||
-      content.includes(".m4v")
-    ) {
-      return true;
-    }
-  } catch (err) {
-    console.error("[AUTO_REACTS_LIGHT] erro ao detectar mídia:", err);
-  }
-
-  return false;
+// ========= DETECTAR MIDIA =========
+function hasMedia(message) {
+  if (!message) return false;
+  return message.attachments.size > 0 || message.embeds.length > 0;
 }
 
-// ========= MONTAR LISTA DE REAÇÕES =========
-function buildReactionList(guild) {
-  const finalList = [];
-  const seen = new Set();
-
-  const priorityCustoms = getPriorityCustomEmojis(guild);
-  for (const emoji of priorityCustoms) {
-    const key = String(emoji?.id || emoji);
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    finalList.push(emoji.toString());
-
-    if (finalList.length >= MAX_REACTIONS_PER_MESSAGE) {
-      return finalList;
-    }
-  }
-
-  for (const emoji of UNICODE_REACTIONS) {
-    if (seen.has(emoji)) continue;
-    seen.add(emoji);
-    finalList.push(emoji);
-
-    if (finalList.length >= MAX_REACTIONS_PER_MESSAGE) {
-      break;
-    }
-  }
-
-  return finalList;
+// ========= EMOJIS =========
+function getCustom(guild) {
+  return guild.emojis.cache
+    .filter(e => PRIORITY_CUSTOM_EMOJI_NAMES.some(n => e.name.includes(n)))
+    .map(e => e.toString());
 }
 
-function getPriorityCustomEmojis(guild) {
-  if (!guild?.emojis?.cache) return [];
-
-  const all = [...guild.emojis.cache.values()].filter((e) => e.available !== false);
-  const selected = [];
-  const usedIds = new Set();
-
-  for (const wantedName of PRIORITY_CUSTOM_EMOJI_NAMES) {
-    const target = String(wantedName).toLowerCase();
-
-    let found = all.find((emoji) => String(emoji.name || "").toLowerCase() === target);
-
-    if (!found) {
-      found = all.find((emoji) => String(emoji.name || "").toLowerCase().includes(target));
-    }
-
-    if (found && !usedIds.has(found.id)) {
-      usedIds.add(found.id);
-      selected.push(found);
-    }
-  }
-
-  return selected;
+function buildReactions(guild) {
+  return [...getCustom(guild), ...UNICODE_REACTIONS]
+    .slice(0, MAX_REACTIONS_PER_MESSAGE);
 }
 
 // ========= REAGIR =========
-async function reactToMessage(message, mode, source = "unknown") {
-  if (!message?.guild) return;
-
-  const reactions = buildReactionList(message.guild);
-  if (!reactions.length) return;
+async function react(message) {
+  if (!message || !message.guild) return;
+  const reactions = buildReactions(message.guild);
 
   for (const emoji of reactions) {
     await enqueue(async () => {
       try {
-        if (!message?.channel) return;
+        // Verifica duplicidade usando o cache da mensagem
+        const already = message.reactions.cache.find(r =>
+          r.emoji.name === emoji || emoji.includes(r.emoji.id)
+        );
 
-        const alreadyThere = message.reactions.cache.find((r) => {
-          if (typeof r.emoji.id === "string" && emoji.startsWith("<")) {
-            return emoji.includes(r.emoji.id);
-          }
-          return r.emoji.name === emoji;
-        });
+        if (already?.me) return;
 
-        if (alreadyThere?.me) return;
-
-        // Se a mensagem já bateu o limite de reações únicas, não tenta criar outra nova
-        if (message.reactions.cache.size >= 20 && !alreadyThere) {
-          return;
-        }
+        if (message.reactions.cache.size >= 20 && !already) return;
 
         await message.react(emoji);
         await sleep(REACTION_DELAY_MS);
-      } catch (err) {
-        const msg = String(err?.message || err);
-
-        if (
-          msg.includes("Unknown Emoji") ||
-          msg.includes("Missing Access") ||
-          msg.includes("Missing Permissions") ||
-          msg.includes("Unknown Message") ||
-          msg.includes("Invalid Form Body") ||
-          msg.includes("10014") ||
-          msg.includes("50001") ||
-          msg.includes("50013") ||
-          msg.includes("10008") ||
-          msg.includes("30010") ||
-          err.code === 30010
-        ) {
-          return;
-        }
-
-        console.error(
-          `[AUTO_REACTS_LIGHT] erro ao reagir msg=${message.id} canal=${message.channel?.id} modo=${mode} fonte=${source} emoji=${emoji}:`,
-          err
-        );
-      }
+      } catch {}
     });
   }
+}
+
+// ========= COMANDO =========
+async function handleCommand(message) {
+  if (!message.content || !message.content.startsWith(COMMAND)) return false;
+
+  const isAdmin = message.member.permissions.has(PermissionsBitField.Flags.Administrator);
+  const isAllowed = ALLOWED_USER_IDS.includes(message.author.id);
+
+  if (!isAdmin && !isAllowed) {
+    // message.reply("❌ Sem permissão"); // opcional: não responder pra não poluir
+    return true;
+  }
+
+  const amount = Number(message.content.split(" ")[1]) || 100;
+
+  message.reply(`🔄 Processando últimas ${amount} mensagens (pode demorar um pouco)...`);
+
+  const channel = message.channel;
+  
+  // ✅ Correção: Busca paginada
+  const msgs = await fetchManyMessages(channel, amount);
+
+  let processed = 0;
+  // Itera array reverso (do mais antigo pro mais novo) ou normal, tanto faz
+  for (const msg of msgs) {
+    if (channel.id === PHOTO_CHANNEL_ID && !hasMedia(msg)) continue;
+    await react(msg);
+    processed++;
+  }
+
+  message.channel.send(`✅ Finalizado! Processadas ${processed} mensagens.`);
+  return true;
+}
+
+// ========= SCAN LEVE =========
+async function lightScan(client) {
+  const channel = await client.channels.fetch(PHOTO_CHANNEL_ID).catch(()=>null);
+  if (!channel) return;
+
+  const msgs = await channel.messages.fetch({ limit: 10 });
+
+  for (const msg of msgs.values()) {
+    if (hasMedia(msg)) {
+      await react(msg);
+    }
+  }
+
+  // console.log("[AUTO_REACT] scan leve diário executado");
 }
