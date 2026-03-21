@@ -24,9 +24,26 @@ import { autoReactsFotosOnReady } from './autoReactsFotos.js';
 export default {
   name: 'ready',
   run: async (client) => {
+    console.log("🔥🔥🔥 READY.JS CERTO ESTÁ RODANDO 🔥🔥🔥");
     console.log(`\n✅ [DIAGNOSTICO] O BOT ESTÁ RODANDO A VERSÃO ATUALIZADA! (${new Date().toLocaleString()})\n`);
 
     globalThis.client = client;
+
+    // ✅ TESTE FORÇADO DO AUTO REACT
+    try {
+      console.log("🟡 Tentando importar autoReactsFotos.js...");
+      const mod = await import("./autoReactsFotos.js");
+
+      if (mod.autoReactsFotosOnReady) {
+        console.log("🟢 autoReactsFotosOnReady encontrada. Chamando agora...");
+        await mod.autoReactsFotosOnReady(client);
+        console.log("✅ autoReactsFotosOnReady executada com sucesso.");
+      } else {
+        console.log("❌ autoReactsFotosOnReady NÃO encontrada no módulo.");
+      }
+    } catch (err) {
+      console.error("❌ Erro ao importar/executar autoReactsFotos.js:", err);
+    }
 
     const startupTasks = [
       { name: 'Entrevistas', fn: () => entrevista.reanexar(client) },
@@ -48,7 +65,6 @@ export default {
       { name: 'Lembretes Poderes', fn: () => lembretesPoderesOnReady(client) },
       { name: 'Monitor Online', fn: () => startRolesOnlineMonitor(client) },
       { name: 'Registro Manager', fn: () => registroManagerOnReady(client) },
-      { name: 'AutoReacts Fotos', fn: () => autoReactsFotosOnReady(client) },
     ];
 
     console.log(`[STARTUP] Disparando ${startupTasks.length} módulos em série...`);

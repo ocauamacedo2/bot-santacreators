@@ -89,6 +89,8 @@ function enqueue(task) {
 }
 
 export async function autoReactsFotosOnReady(client) {
+  console.log("🚀 AUTO REACT FOI CHAMADO");
+
   if (!client) {
     console.warn("[SC_AUTO_REACTS] client ausente.");
     return;
@@ -104,6 +106,8 @@ export async function autoReactsFotosOnReady(client) {
 
   client.on(Events.MessageCreate, async (message) => {
     try {
+      console.log("📩 MessageCreate capturado:", message.content || "[sem texto]", "| canal:", message.channel?.id);
+
       if (await handleManualBackfillCommand(message, client)) return;
       await processSantaMessage(message);
     } catch (err) {
@@ -126,6 +130,8 @@ async function handleManualBackfillCommand(message, client) {
   );
 
   if (!matchedCommand) return false;
+
+  console.log("[SC_AUTO_REACTS] comando reconhecido:", content);
 
   console.log(`[SC_AUTO_REACTS] comando detectado: ${content} por ${message.author.tag}`);
 
@@ -202,6 +208,7 @@ async function processSantaMessage(message) {
   if (IGNORE_BOT_MESSAGES && message.author?.bot) return;
 
   const channelId = message.channel.id;
+  console.log("[SC_AUTO_REACTS] processando canal:", channelId, "| msg:", message.id);
 
   if (channelId === ALL_MESSAGES_CHANNEL_ID) {
     console.log(`[SC_AUTO_REACTS] mensagem detectada no canal geral: ${message.id}`);
@@ -210,7 +217,10 @@ async function processSantaMessage(message) {
   }
 
   if (channelId === PHOTO_CHANNEL_ID) {
-    if (hasMediaContent(message)) {
+    const hasMedia = hasMediaContent(message);
+    console.log(`[SC_AUTO_REACTS] checando mídia no canal de fotos: ${message.id} | resultado=${hasMedia}`);
+
+    if (hasMedia) {
       console.log(`[SC_AUTO_REACTS] mídia detectada no canal de fotos: ${message.id}`);
       await reactToMessage(message, "media");
     }
