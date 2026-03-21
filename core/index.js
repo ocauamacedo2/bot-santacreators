@@ -272,7 +272,7 @@ import {
 } from "../events/registroVendas.js";
 
 // Auto React Fotos
-import { autoReactsFotosOnReady } from "../events/autoReactsFotos.js";
+import { autoReactsFotosOnReady, autoReactsFotosHandleMessage } from "../events/autoReactsFotos.js";
 
 // Hierarquia
 import {
@@ -367,6 +367,13 @@ const setupEventHandlers = () => {
     try {
       try { await reminderHandleMessageCreate(message, client); } catch (e) {}
       cacheMessage(message);
+
+
+    // ✅ AUTO REACT FOTOS / GERAL (ANTES DOS RETURNS)
+    try { await autoReactsFotosHandleMessage(message, client); } catch (e) {
+      console.error("[CORE] erro em autoReactsFotosHandleMessage:", e);
+    }
+
 
       if (await payEvtDashHandleMessage(message, client)) return;
       if (await facsComparativoHandleMessage(message, client)) return;
@@ -546,14 +553,14 @@ const setupEventHandlers = () => {
     try { await hierarquiaOnReady(client); } catch (e) {}
     try { await reuniaoSemanalOnReady(client); } catch (e) {}
     
-    // ✅ AUTO REACT FOTOS
-  try {
-    console.log("[CORE] Inicializando autoReactsFotos...");
-    await autoReactsFotosOnReady(client);
-    console.log("[CORE] autoReactsFotos inicializado.");
-  } catch (e) {
-    console.error("[CORE] Erro ao iniciar autoReactsFotos:", e);
-  }
+// ✅ AUTO REACT FOTOS
+try {
+  console.log("[CORE] Inicializando autoReactsFotos (modo centralizado)...");
+  await autoReactsFotosOnReady(client);
+  console.log("[CORE] autoReactsFotos inicializado.");
+} catch (e) {
+  console.error("[CORE] Erro ao iniciar autoReactsFotos:", e);
+}
     
     memberJoinLog.initInviteCache(client);
 

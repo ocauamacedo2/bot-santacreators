@@ -102,20 +102,21 @@ export async function autoReactsFotosOnReady(client) {
   }
 
   client.__SC_AUTO_REACTS_ISOLATED__ = true;
-  console.log("[SC_AUTO_REACTS] inicializando no padrão OnReady...");
+  console.log("[SC_AUTO_REACTS] inicializado no modo centralizado.");
+}
 
-  client.on(Events.MessageCreate, async (message) => {
-    try {
-      console.log("📩 MessageCreate capturado:", message.content || "[sem texto]", "| canal:", message.channel?.id);
+export async function autoReactsFotosHandleMessage(message, client) {
+  try {
+    console.log("📩 [SC_AUTO_REACTS] mensagem recebida:", message.content || "[sem texto]", "| canal:", message.channel?.id);
 
-      if (await handleManualBackfillCommand(message, client)) return;
-      await processSantaMessage(message);
-    } catch (err) {
-      console.error("[SC_AUTO_REACTS] erro em MessageCreate:", err);
-    }
-  });
+    if (await handleManualBackfillCommand(message, client)) return true;
 
-  console.log("[SC_AUTO_REACTS] listener de MessageCreate registrado.");
+    await processSantaMessage(message);
+    return false;
+  } catch (err) {
+    console.error("[SC_AUTO_REACTS] erro em autoReactsFotosHandleMessage:", err);
+    return false;
+  }
 }
 
 async function handleManualBackfillCommand(message, client) {
