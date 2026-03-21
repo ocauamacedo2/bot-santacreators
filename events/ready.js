@@ -8,34 +8,26 @@ import { focoSemanaisOnReady } from './focoSemanais.js';
 import { provasAdvOnReady } from './provasAdv.js';
 import { blacklistFacsOnReady } from './blacklistFacs.js';
 
-// ✅ NOVO: Importa todos os outros módulos de inicialização
 import { geralDashOnReady } from './scGeralDash.js';
 import { geralWeeklyRankOnReady } from './scGeralWeeklyRanking.js';
 import { formsCreatorOnReady } from './formscreator.js';
-import { doacaoOnReady } from './doacao.js'; // Supondo que o nome do arquivo seja doacao.js e a função seja essa
-import { eventosDiariosOnReady } from './eventosDiarios.js'; // Supondo que o nome do arquivo seja eventosDiarios.js
+import { doacaoOnReady } from './doacao.js';
+import { eventosDiariosOnReady } from './eventosDiarios.js';
 import { monitorCargosOnReady } from './monitorCargos.js';
-import { cronogramaOnReady } from './cronograma.js'; // Supondo que o nome do arquivo seja cronograma.js
+import { cronogramaOnReady } from './cronograma.js';
 import { hierarquiaOnReady } from './hierarquiaDivisoes.js';
-import { lembretesPoderesOnReady } from './lembretesPoderes.js'; // Supondo que o nome do arquivo seja lembretesPoderes.js
+import { lembretesPoderesOnReady } from './lembretesPoderes.js';
 import { startRolesOnlineMonitor } from './rolesOnlineMonitor.js';
 import { registroManagerOnReady } from './registroManager.js';
+import { autoReactsFotosOnReady } from './autoReactsFotos.js';
 
 export default {
   name: 'ready',
   run: async (client) => {
     console.log(`\n✅ [DIAGNOSTICO] O BOT ESTÁ RODANDO A VERSÃO ATUALIZADA! (${new Date().toLocaleString()})\n`);
 
-    // ✅ Define client global para módulos que dependem dele e carrega o autoReactsFotos
     globalThis.client = client;
-    try {
-      const { default: initSantaAutoReacts } = await import("./autoReactsFotos.js");
-      initSantaAutoReacts(client);
-    } catch (err) {
-      console.error('[STARTUP] ⚠️ Falha ao carregar autoReactsFotos:', err);
-    }
 
-    // ✅ Lista de todas as tarefas de inicialização
     const startupTasks = [
       { name: 'Entrevistas', fn: () => entrevista.reanexar(client) },
       { name: 'Vendas', fn: () => registroVendasOnReady(client) },
@@ -56,24 +48,21 @@ export default {
       { name: 'Lembretes Poderes', fn: () => lembretesPoderesOnReady(client) },
       { name: 'Monitor Online', fn: () => startRolesOnlineMonitor(client) },
       { name: 'Registro Manager', fn: () => registroManagerOnReady(client) },
+      { name: 'AutoReacts Fotos', fn: () => autoReactsFotosOnReady(client) },
     ];
 
-    console.log(`[STARTUP] Disparando ${startupTasks.length} módulos em paralelo...`);
+    console.log(`[STARTUP] Disparando ${startupTasks.length} módulos em série...`);
 
-    // ✅ OTIMIZAÇÃO: Executa em SÉRIE com delay para evitar Rate Limit no boot
     for (const task of startupTasks) {
       try {
         await task.fn();
         console.log(`[STARTUP] ✅ Módulo [${task.name}] inicializado.`);
-        // Pequena pausa entre módulos pesados
         await new Promise(r => setTimeout(r, 1000));
       } catch (e) {
         console.error(`[STARTUP] ❌ Módulo [${task.name}] falhou:`, e);
       }
     }
 
-
-    // Instala o guardião de bots
     installBotGuardian(client);
 
     console.log(`\n✅ Bot pronto como ${client.user.tag}`);

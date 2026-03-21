@@ -6,15 +6,9 @@ import {
 
 // ==========================================
 // SANTA CREATORS — AUTO REACT ISOLADO
-// ==========================================
-// • Isolado do outro sistema
-// • Sem fallback automático
-// • Sem backfill automático no start
-// • Sem MessageUpdate
-// • Comando próprio: !reagirsc / !reagirscantigas
+// FORMATO PADRÃO DO PROJETO: autoReactsFotosOnReady(client)
 // ==========================================
 
-// ========= CONFIG =========
 const PHOTO_CHANNEL_ID = "1432149017378426941";
 const ALL_MESSAGES_CHANNEL_ID = "1262262852949905414";
 
@@ -23,15 +17,13 @@ const BACKFILL_FETCH_PER_PAGE = 100;
 const BACKFILL_MAX_MESSAGES = 400;
 const IGNORE_BOT_MESSAGES = true;
 
-// comando EXCLUSIVO do Santa
 const MANUAL_BACKFILL_COMMANDS = ["!reagirscantigas", "!reagirsc"];
 
 const MANUAL_BACKFILL_ALLOWED_USER_IDS = [
-  "660311795327828008", // Você
-  "1262262852949905408", // Owner
+  "660311795327828008",
+  "1262262852949905408",
 ];
 
-// ========= EMOJIS CUSTOM =========
 const PRIORITY_CUSTOM_EMOJI_NAMES = [
   "lgbt",
   "festinha",
@@ -54,7 +46,6 @@ const PRIORITY_CUSTOM_EMOJI_NAMES = [
   "diabinho",
 ];
 
-// ========= UNICODE =========
 const UNICODE_REACTIONS = [
   "💜",
   "❤️",
@@ -85,24 +76,6 @@ const UNICODE_REACTIONS = [
   "😄",
 ];
 
-// ========= INIT EXPLÍCITO =========
-export default function initSantaAutoReacts(client) {
-  if (!client) {
-    console.warn("[SC_AUTO_REACTS] client ausente.");
-    return;
-  }
-
-  if (client.__SC_AUTO_REACTS_ISOLATED__) {
-    console.log("[SC_AUTO_REACTS] já estava inicializado.");
-    return;
-  }
-
-  client.__SC_AUTO_REACTS_ISOLATED__ = true;
-  console.log("[SC_AUTO_REACTS] inicializando modo isolado...");
-  setupSantaAutoReacts(client);
-}
-
-// ========= FILA =========
 let reactionQueue = Promise.resolve();
 
 function enqueue(task) {
@@ -115,11 +88,19 @@ function enqueue(task) {
   return reactionQueue;
 }
 
-// ========= SETUP =========
-function setupSantaAutoReacts(client) {
-  client.on(Events.ClientReady, async () => {
-    console.log("[SC_AUTO_REACTS] pronto. Sem backfill automático.");
-  });
+export async function autoReactsFotosOnReady(client) {
+  if (!client) {
+    console.warn("[SC_AUTO_REACTS] client ausente.");
+    return;
+  }
+
+  if (client.__SC_AUTO_REACTS_ISOLATED__) {
+    console.log("[SC_AUTO_REACTS] já estava inicializado.");
+    return;
+  }
+
+  client.__SC_AUTO_REACTS_ISOLATED__ = true;
+  console.log("[SC_AUTO_REACTS] inicializando no padrão OnReady...");
 
   client.on(Events.MessageCreate, async (message) => {
     try {
@@ -129,9 +110,10 @@ function setupSantaAutoReacts(client) {
       console.error("[SC_AUTO_REACTS] erro em MessageCreate:", err);
     }
   });
+
+  console.log("[SC_AUTO_REACTS] listener de MessageCreate registrado.");
 }
 
-// ========= COMANDO MANUAL =========
 async function handleManualBackfillCommand(message, client) {
   if (!message?.guild || !message?.channel) return false;
   if (message.author?.bot) return false;
@@ -144,7 +126,8 @@ async function handleManualBackfillCommand(message, client) {
   );
 
   if (!matchedCommand) return false;
-  console.log(`[SC_AUTO_REACTS] Comando detectado: ${content} por ${message.author.tag}`);
+
+  console.log(`[SC_AUTO_REACTS] comando detectado: ${content} por ${message.author.tag}`);
 
   const member = message.member;
   const isAdminByPerm =
@@ -211,7 +194,6 @@ async function handleManualBackfillCommand(message, client) {
   return true;
 }
 
-// ========= PROCESSAMENTO =========
 async function processSantaMessage(message) {
   if (!message) return;
   if (!message.guild) return;
@@ -222,18 +204,19 @@ async function processSantaMessage(message) {
   const channelId = message.channel.id;
 
   if (channelId === ALL_MESSAGES_CHANNEL_ID) {
+    console.log(`[SC_AUTO_REACTS] mensagem detectada no canal geral: ${message.id}`);
     await reactToMessage(message, "all");
     return;
   }
 
   if (channelId === PHOTO_CHANNEL_ID) {
     if (hasMediaContent(message)) {
+      console.log(`[SC_AUTO_REACTS] mídia detectada no canal de fotos: ${message.id}`);
       await reactToMessage(message, "media");
     }
   }
 }
 
-// ========= DETECÇÃO DE MÍDIA =========
 function hasMediaContent(message) {
   try {
     const attachments = [...(message.attachments?.values?.() || [])];
@@ -333,7 +316,6 @@ function hasMediaContent(message) {
   return false;
 }
 
-// ========= EMOJIS =========
 function getPriorityCustomEmojis(guild) {
   if (!guild?.emojis?.cache) return [];
 
@@ -388,12 +370,14 @@ function buildReactionList(guild) {
   return finalList;
 }
 
-// ========= REAGIR =========
 async function reactToMessage(message, mode = "unknown") {
   if (!message?.guild) return;
 
   const reactions = buildReactionList(message.guild);
-  if (!reactions.length) return;
+  if (!reactions.length) {
+    console.log("[SC_AUTO_REACTS] nenhuma reação disponível no servidor.");
+    return;
+  }
 
   for (const emoji of reactions) {
     await enqueue(async () => {
@@ -406,10 +390,7 @@ async function reactToMessage(message, mode = "unknown") {
         });
 
         if (alreadyThere?.me) return;
-
-        if (message.reactions.cache.size >= 20 && !alreadyThere) {
-          return;
-        }
+        if (message.reactions.cache.size >= 20 && !alreadyThere) return;
 
         await message.react(emoji);
       } catch (err) {
@@ -440,7 +421,6 @@ async function reactToMessage(message, mode = "unknown") {
   }
 }
 
-// ========= BACKFILL =========
 async function backfillChannel(client, channelId, mode, options = {}) {
   const channel = await client.channels.fetch(channelId).catch(() => null);
   if (!channel) {
