@@ -29,8 +29,8 @@ export default {
     // ✅ Define client global para módulos que dependem dele e carrega o autoReactsFotos
     globalThis.client = client;
     try {
-      const mod = await import('./autoReactsFotos.js');
-      if (mod.default) mod.default(client);
+      const { default: initSantaAutoReacts } = await import("../events/autoReactsFotos.js");
+      initSantaAutoReacts(client);
     } catch (err) {
       console.error('[STARTUP] ⚠️ Falha ao carregar autoReactsFotos:', err);
     }

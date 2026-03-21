@@ -5,24 +5,13 @@ import {
 } from "discord.js";
 
 // ==========================================
-// SANTA CREATORS — AUTO REACT EM PUBLICAÇÕES (LEVE)
+// SANTA CREATORS — AUTO REACT ISOLADO
 // ==========================================
-// Mantém:
-// 1) Canal de FOTOS/UPS:
-//    - reage quando detectar imagem OU vídeo
-//
-// 2) Canal geral:
-//    - reage em TODAS as mensagens
-//
-// 3) Usa emojis do servidor com prioridade
-//
-// 4) Backfill MANUAL por comando
-//
-// Leve porque:
-// - NÃO faz backfill automático ao ligar
-// - NÃO usa MessageUpdate
-// - NÃO usa sleep entre reações
-// - NÃO varre milhares de mensagens sozinho ao iniciar
+// • Isolado do outro sistema
+// • Sem fallback automático
+// • Sem backfill automático no start
+// • Sem MessageUpdate
+// • Comando próprio: !reagirsc / !reagirscantigas
 // ==========================================
 
 // ========= CONFIG =========
@@ -31,15 +20,17 @@ const ALL_MESSAGES_CHANNEL_ID = "1262262852949905414";
 
 const MAX_REACTIONS_PER_MESSAGE = 20;
 const BACKFILL_FETCH_PER_PAGE = 100;
-const BACKFILL_MAX_MESSAGES = 400; // mais leve por padrão
+const BACKFILL_MAX_MESSAGES = 400;
 const IGNORE_BOT_MESSAGES = true;
 
-const MANUAL_BACKFILL_COMMAND = "!reagirantigas";
+// comando EXCLUSIVO do Santa
+const MANUAL_BACKFILL_COMMANDS = ["!reagirsc", "!reagirscantigas"];
+
 const MANUAL_BACKFILL_ALLOWED_USER_IDS = [
   // "123456789012345678",
 ];
 
-// ========= EMOJIS CUSTOM DO SERVIDOR (PRIORIDADE) =========
+// ========= EMOJIS CUSTOM =========
 const PRIORITY_CUSTOM_EMOJI_NAMES = [
   "lgbt",
   "festinha",
@@ -62,7 +53,7 @@ const PRIORITY_CUSTOM_EMOJI_NAMES = [
   "diabinho",
 ];
 
-// ========= EMOJIS UNICODE PRA COMPLETAR =========
+// ========= UNICODE =========
 const UNICODE_REACTIONS = [
   "💜",
   "❤️",
@@ -93,30 +84,50 @@ const UNICODE_REACTIONS = [
   "😄",
 ];
 
-// ========= EXPORT & INIT =========
-export default function initAutoReacts(client) {
-  if (client.__SC_AUTO_REACTS_ACTIVE) return;
-  client.__SC_AUTO_REACTS_ACTIVE = true;
-  console.log("[AUTO_REACTS] Inicializando sistema de reações...");
-  setupAutoReacts(client);
+// ========= INIT EXPLÍCITO =========
+export default function initSantaAutoReacts(client) {
+  if (!client) {
+    console.warn("[SC_AUTO_REACTS] client ausente.");
+    return;
+  }
+
+  if (client.__SC_AUTO_REACTS_ISOLATED__) {
+    console.log("[SC_AUTO_REACTS] já estava inicializado.");
+    return;
+  }
+
+  client.__SC_AUTO_REACTS_ISOLATED__ = true;
+  console.log("[SC_AUTO_REACTS] inicializando modo isolado...");
+  setupSantaAutoReacts(client);
 }
 
-// Tenta iniciar automaticamente se o client já estiver global (fallback)
-if (globalThis.client) {
-  initAutoReacts(globalThis.client);
-}
-
-// ========= FILA GLOBAL LEVE =========
+// ========= FILA =========
 let reactionQueue = Promise.resolve();
 
 function enqueue(task) {
   reactionQueue = reactionQueue
     .then(() => task())
     .catch((err) => {
-      console.error("[AUTO_REACTS] erro na fila:", err);
+      console.error("[SC_AUTO_REACTS] erro na fila:", err?.message || err);
     });
 
   return reactionQueue;
+}
+
+// ========= SETUP =========
+function setupSantaAutoReacts(client) {
+  client.on(Events.ClientReady, async () => {
+    console.log("[SC_AUTO_REACTS] pronto. Sem backfill automático.");
+  });
+
+  client.on(Events.MessageCreate, async (message) => {
+    try {
+      if (await handleManualBackfillCommand(message, client)) return;
+      await processSantaMessage(message);
+    } catch (err) {
+      console.error("[SC_AUTO_REACTS] erro em MessageCreate:", err);
+    }
+  });
 }
 
 // ========= COMANDO MANUAL =========
@@ -125,9 +136,13 @@ async function handleManualBackfillCommand(message, client) {
   if (message.author?.bot) return false;
 
   const content = String(message.content || "").trim();
-  if (!content.toLowerCase().startsWith(MANUAL_BACKFILL_COMMAND)) {
-    return false;
-  }
+  const lower = content.toLowerCase();
+
+  const matchedCommand = MANUAL_BACKFILL_COMMANDS.find((cmd) =>
+    lower.startsWith(cmd)
+  );
+
+  if (!matchedCommand) return false;
 
   const member = message.member;
   const isAdminByPerm =
@@ -151,17 +166,17 @@ async function handleManualBackfillCommand(message, client) {
   let mode = null;
   let label = null;
 
-  if (targetRaw === "fotos" || targetRaw === "foto" || targetRaw === "media" || targetRaw === "midia") {
+  if (["fotos", "foto", "media", "midia"].includes(targetRaw)) {
     targetChannelId = PHOTO_CHANNEL_ID;
     mode = "media";
     label = "canal de fotos/vídeos";
-  } else if (targetRaw === "geral" || targetRaw === "all") {
+  } else if (["geral", "all"].includes(targetRaw)) {
     targetChannelId = ALL_MESSAGES_CHANNEL_ID;
     mode = "all";
     label = "canal geral";
   } else {
     await message.reply(
-      "⚠️ Usa assim:\n`!reagirantigas fotos`\n`!reagirantigas geral`\n`!reagirantigas fotos 200`\n`!reagirantigas geral 400`"
+      "⚠️ Usa assim:\n`!reagirsc fotos`\n`!reagirsc geral`\n`!reagirsc fotos 200`\n`!reagirsc geral 400`"
     );
     return true;
   }
@@ -172,7 +187,7 @@ async function handleManualBackfillCommand(message, client) {
   }
 
   await message.reply(
-    `🔄 Iniciando backfill manual no ${label}...\n📦 Limite: **${customMaxMessages}** mensagens.`
+    `🔄 Iniciando backfill manual SC no ${label}...\n📦 Limite: **${customMaxMessages}** mensagens.`
   );
 
   try {
@@ -182,40 +197,20 @@ async function handleManualBackfillCommand(message, client) {
     });
 
     await message.reply(
-      `✅ Backfill manual concluído em ${label}.\n` +
+      `✅ Backfill manual SC concluído em ${label}.\n` +
       `• Vasculhadas: **${result?.scanned ?? 0}**\n` +
       `• Processadas: **${result?.processed ?? 0}**`
     );
   } catch (err) {
-    console.error("[AUTO_REACTS] erro no comando manual de backfill:", err);
-    await message.reply("❌ Deu erro ao rodar o backfill manual.");
+    console.error("[SC_AUTO_REACTS] erro no comando manual:", err);
+    await message.reply("❌ Deu erro ao rodar o backfill manual SC.");
   }
 
   return true;
 }
 
-// ========= SETUP =========
-function setupAutoReacts(client) {
-  client.on(Events.ClientReady, async () => {
-    console.log("[AUTO_REACTS] ClientReady detectado.");
-    console.log("[AUTO_REACTS] modo leve ativo: sem backfill automático.");
-  });
-
-  client.on(Events.MessageCreate, async (message) => {
-    try {
-      if (await handleManualBackfillCommand(message, client)) {
-        return;
-      }
-
-      await processMessage(message, "create");
-    } catch (err) {
-      console.error("[AUTO_REACTS] erro em MessageCreate:", err);
-    }
-  });
-}
-
 // ========= PROCESSAMENTO =========
-async function processMessage(message, source = "unknown") {
+async function processSantaMessage(message) {
   if (!message) return;
   if (!message.guild) return;
   if (!message.channel) return;
@@ -225,13 +220,13 @@ async function processMessage(message, source = "unknown") {
   const channelId = message.channel.id;
 
   if (channelId === ALL_MESSAGES_CHANNEL_ID) {
-    await reactToMessage(message, "all", source);
+    await reactToMessage(message, "all");
     return;
   }
 
   if (channelId === PHOTO_CHANNEL_ID) {
     if (hasMediaContent(message)) {
-      await reactToMessage(message, "media", source);
+      await reactToMessage(message, "media");
     }
   }
 }
@@ -239,7 +234,7 @@ async function processMessage(message, source = "unknown") {
 // ========= DETECÇÃO DE MÍDIA =========
 function hasMediaContent(message) {
   try {
-    const attachments = [...message.attachments.values()];
+    const attachments = [...(message.attachments?.values?.() || [])];
 
     for (const att of attachments) {
       const ct = String(att.contentType || "").toLowerCase();
@@ -303,6 +298,7 @@ function hasMediaContent(message) {
         embed?.image?.url ||
         embed?.thumbnail?.url ||
         embed?.video?.url ||
+        embed?.provider?.name ||
         embed?.type === "gifv"
       ) {
         return true;
@@ -329,13 +325,38 @@ function hasMediaContent(message) {
       return true;
     }
   } catch (err) {
-    console.error("[AUTO_REACTS] erro ao detectar mídia:", err);
+    console.error("[SC_AUTO_REACTS] erro ao detectar mídia:", err?.message || err);
   }
 
   return false;
 }
 
-// ========= MONTAR LISTA DE REAÇÕES =========
+// ========= EMOJIS =========
+function getPriorityCustomEmojis(guild) {
+  if (!guild?.emojis?.cache) return [];
+
+  const all = [...guild.emojis.cache.values()].filter((e) => e.available !== false);
+  const selected = [];
+  const usedIds = new Set();
+
+  for (const wantedName of PRIORITY_CUSTOM_EMOJI_NAMES) {
+    const target = String(wantedName).toLowerCase();
+
+    let found = all.find((emoji) => String(emoji.name || "").toLowerCase() === target);
+
+    if (!found) {
+      found = all.find((emoji) => String(emoji.name || "").toLowerCase().includes(target));
+    }
+
+    if (found && !usedIds.has(found.id)) {
+      usedIds.add(found.id);
+      selected.push(found);
+    }
+  }
+
+  return selected;
+}
+
 function buildReactionList(guild) {
   const finalList = [];
   const seen = new Set();
@@ -365,33 +386,8 @@ function buildReactionList(guild) {
   return finalList;
 }
 
-function getPriorityCustomEmojis(guild) {
-  if (!guild?.emojis?.cache) return [];
-
-  const all = [...guild.emojis.cache.values()].filter((e) => e.available !== false);
-  const selected = [];
-  const usedIds = new Set();
-
-  for (const wantedName of PRIORITY_CUSTOM_EMOJI_NAMES) {
-    const target = String(wantedName).toLowerCase();
-
-    let found = all.find((emoji) => String(emoji.name || "").toLowerCase() === target);
-
-    if (!found) {
-      found = all.find((emoji) => String(emoji.name || "").toLowerCase().includes(target));
-    }
-
-    if (found && !usedIds.has(found.id)) {
-      usedIds.add(found.id);
-      selected.push(found);
-    }
-  }
-
-  return selected;
-}
-
 // ========= REAGIR =========
-async function reactToMessage(message, mode, source = "unknown") {
+async function reactToMessage(message, mode = "unknown") {
   if (!message?.guild) return;
 
   const reactions = buildReactionList(message.guild);
@@ -400,11 +396,9 @@ async function reactToMessage(message, mode, source = "unknown") {
   for (const emoji of reactions) {
     await enqueue(async () => {
       try {
-        if (!message?.channel) return;
-
         const alreadyThere = message.reactions.cache.find((r) => {
-          if (typeof r.emoji.id === "string" && emoji.startsWith("<")) {
-            return emoji.includes(r.emoji.id);
+          if (typeof r.emoji.id === "string" && String(emoji).startsWith("<")) {
+            return String(emoji).includes(r.emoji.id);
           }
           return r.emoji.name === emoji;
         });
@@ -430,13 +424,13 @@ async function reactToMessage(message, mode, source = "unknown") {
           msg.includes("50013") ||
           msg.includes("10008") ||
           msg.includes("30010") ||
-          err.code === 30010
+          err?.code === 30010
         ) {
           return;
         }
 
         console.error(
-          `[AUTO_REACTS] erro ao reagir msg=${message.id} canal=${message.channel?.id} modo=${mode} fonte=${source} emoji=${emoji}:`,
+          `[SC_AUTO_REACTS] erro ao reagir msg=${message.id} canal=${message.channel?.id} modo=${mode} emoji=${emoji}:`,
           err
         );
       }
@@ -448,19 +442,21 @@ async function reactToMessage(message, mode, source = "unknown") {
 async function backfillChannel(client, channelId, mode, options = {}) {
   const channel = await client.channels.fetch(channelId).catch(() => null);
   if (!channel) {
-    console.warn(`[AUTO_REACTS] canal ${channelId} não encontrado no backfill.`);
+    console.warn(`[SC_AUTO_REACTS] canal ${channelId} não encontrado.`);
     return { scanned: 0, processed: 0 };
   }
 
-  if (channel.type !== ChannelType.GuildText && channel.type !== ChannelType.GuildAnnouncement) {
-    console.warn(`[AUTO_REACTS] canal ${channelId} não é texto/anúncio. Tipo: ${channel.type}`);
+  if (
+    channel.type !== ChannelType.GuildText &&
+    channel.type !== ChannelType.GuildAnnouncement
+  ) {
+    console.warn(`[SC_AUTO_REACTS] canal ${channelId} não é texto/anúncio. Tipo: ${channel.type}`);
     return { scanned: 0, processed: 0 };
   }
 
   const maxMessages = Number(options.maxMessages || BACKFILL_MAX_MESSAGES);
-  const sourceLabel = options.manual ? "manual" : "auto";
 
-  let lastId = undefined;
+  let lastId;
   let scanned = 0;
   let processed = 0;
 
@@ -473,34 +469,29 @@ async function backfillChannel(client, channelId, mode, options = {}) {
       before: lastId,
     }).catch(() => null);
 
-    if (!messages?.size) {
-      break;
-    }
+    if (!messages?.size) break;
 
-    const ordered = [...messages.values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+    const ordered = [...messages.values()].sort(
+      (a, b) => a.createdTimestamp - b.createdTimestamp
+    );
 
-    for (const message of ordered) {
+    for (const msg of ordered) {
       scanned++;
 
-      if (!message || message.system) continue;
-      if (IGNORE_BOT_MESSAGES && message.author?.bot) continue;
+      if (!msg || msg.system) continue;
+      if (IGNORE_BOT_MESSAGES && msg.author?.bot) continue;
+      if (mode === "media" && !hasMediaContent(msg)) continue;
 
-      if (mode === "media" && !hasMediaContent(message)) {
-        continue;
-      }
-
-      await reactToMessage(message, mode, sourceLabel);
+      await reactToMessage(msg, mode);
       processed++;
     }
 
     lastId = ordered[0]?.id;
-    if (!lastId || messages.size < limit) {
-      break;
-    }
+    if (!lastId || messages.size < limit) break;
   }
 
   console.log(
-    `[AUTO_REACTS] backfill ${sourceLabel} do canal ${channelId} concluído. Vasculhadas: ${scanned} | Processadas: ${processed}`
+    `[SC_AUTO_REACTS] backfill concluído canal=${channelId} vasculhadas=${scanned} processadas=${processed}`
   );
 
   return { scanned, processed };
