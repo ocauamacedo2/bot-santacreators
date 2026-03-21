@@ -387,6 +387,21 @@ function buildReactionList(guild) {
   return finalList;
 }
 
+function extractCustomEmojiId(emoji) {
+  const match = String(emoji).match(/^<a?:[^:]+:(\d+)>$/);
+  return match?.[1] || null;
+}
+
+function reactionMatchesEmoji(reaction, emoji) {
+  const customId = extractCustomEmojiId(emoji);
+
+  if (customId) {
+    return reaction?.emoji?.id === customId;
+  }
+
+  return reaction?.emoji?.name === emoji;
+}
+
 async function reactToMessage(message, mode = "unknown") {
   if (!message?.guild) return;
 
@@ -399,14 +414,14 @@ async function reactToMessage(message, mode = "unknown") {
   for (const emoji of reactions) {
     await enqueue(async () => {
       try {
-        const alreadyThere = message.reactions.cache.find((r) => {
-          if (typeof r.emoji.id === "string" && String(emoji).startsWith("<")) {
-            return String(emoji).includes(r.emoji.id);
-          }
-          return r.emoji.name === emoji;
-        });
+        const alreadyThere = message.reactions.cache.find((r) =>
+          reactionMatchesEmoji(r, emoji)
+        );
 
+        // se o próprio bot já reagiu com esse emoji, pula
         if (alreadyThere?.me) return;
+
+        // se já bateu 20 reações únicas e esse emoji ainda não existe na mensagem, não tenta criar outra
         if (message.reactions.cache.size >= 20 && !alreadyThere) return;
 
         await message.react(emoji);

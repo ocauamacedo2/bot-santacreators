@@ -370,10 +370,11 @@ const setupEventHandlers = () => {
 
 
     // ✅ AUTO REACT FOTOS / GERAL (ANTES DOS RETURNS)
-    try { await autoReactsFotosHandleMessage(message, client); } catch (e) {
+    try {
+      if (await autoReactsFotosHandleMessage(message, client)) return;
+    } catch (e) {
       console.error("[CORE] erro em autoReactsFotosHandleMessage:", e);
     }
-
 
       if (await payEvtDashHandleMessage(message, client)) return;
       if (await facsComparativoHandleMessage(message, client)) return;
