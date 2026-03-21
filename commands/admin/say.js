@@ -1,14 +1,11 @@
 // commands/admin/say.js
 import {
-  AttachmentBuilder,
   EmbedBuilder,
   ChannelType,
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle
 } from 'discord.js';
-import fetch from 'node-fetch';
-import { autoReactsFotosProcessSentMessage } from '../../events/autoReactsFotos.js';
 
 const MAX_LEN = 2000;
 const LOG_CHANNEL_ID = '1425184455185924127';
@@ -163,21 +160,21 @@ export default {
     return partes;
   },
 
-  async _coletarAnexos(message) {
-    const arquivos = [];
-    for (const att of message.attachments.values()) {
-      try {
-        const res = await fetch(att.url);
-        const buffer = Buffer.from(await res.arrayBuffer());
-        const file = new AttachmentBuilder(buffer, { name: att.name });
-        if (att.spoiler) file.setSpoiler(true);
-        arquivos.push(file);
-      } catch (err) {
-        console.error(`[say] Falha ao baixar anexo ${att.name}:`, err);
-      }
+async _coletarAnexos(message) {
+  const arquivos = [];
+  for (const att of message.attachments.values()) {
+    try {
+      arquivos.push({
+        attachment: att.url,
+        name: att.name,
+        spoiler: !!att.spoiler,
+      });
+    } catch (err) {
+      console.error(`[say] Falha ao preparar anexo ${att.name}:`, err);
     }
-    return arquivos;
-  },
+  }
+  return arquivos;
+},
 
   _allowedMentionsFromOriginal(message) {
     return {
@@ -220,7 +217,7 @@ export default {
 
       let firstOutputMsg = null;
 
-      if (!textoOriginal || textoOriginal.length <= MAX_LEN) {
+if (!textoOriginal || textoOriginal.length <= MAX_LEN) {
   const sent = await message.channel.send({
     content: textoOriginal || null,
     files: anexos.length ? anexos : undefined,
@@ -228,12 +225,6 @@ export default {
     reply: replyOpt,
   });
   firstOutputMsg = sent;
-
-  await autoReactsFotosProcessSentMessage(sent, message.client, {
-    retries: 3,
-    delayMs: 900,
-    mode: 'say'
-  });
 
   await logSayUsage(message, {
     firstOutputMsg,
@@ -244,7 +235,7 @@ export default {
   return;
 }
 
-      const partes = this._dividirMensagemBruta(textoOriginal);
+const partes = this._dividirMensagemBruta(textoOriginal);
 for (let i = 0; i < partes.length; i++) {
   const isLast = i === partes.length - 1;
   const sent = await message.channel.send({
@@ -255,12 +246,6 @@ for (let i = 0; i < partes.length; i++) {
   });
 
   if (i === 0) firstOutputMsg = sent;
-
-  await autoReactsFotosProcessSentMessage(sent, message.client, {
-    retries: isLast ? 3 : 1,
-    delayMs: 900,
-    mode: 'say'
-  });
 }
 
       await logSayUsage(message, {
