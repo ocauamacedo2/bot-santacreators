@@ -232,6 +232,12 @@ function hasMediaContent(message) {
   try {
     const attachments = [...(message.attachments?.values?.() || [])];
 
+    // ✅ Se existe qualquer attachment, já considera mídia
+    // Isso evita falha quando o Discord não preenche contentType/extensão direito
+    if (attachments.length > 0) {
+      return true;
+    }
+
     for (const att of attachments) {
       const ct = String(att.contentType || "").toLowerCase();
       const name = String(att.name || "").toLowerCase();
