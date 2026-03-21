@@ -549,7 +549,10 @@ function isVendaLogEmbed(emb) {
 // ✅ NOVO: PARSERS PARA PONTO DE ENTREVISTA
 function isEntrevistaConcluidaLogEmbed(emb) {
   const t = norm(emb?.title || emb?.data?.title || "");
+  const footer = norm(emb?.footer?.text || emb?.data?.footer?.text || "");
+
   return (
+    footer.includes("sc_entrevista_point_v1") ||
     t.includes("ponto de entrevista concluida") ||
     t.includes("ponto entrevista concluida") ||
     t.includes("pontuacao de entrevista") ||

@@ -16,6 +16,7 @@ const ENTREVISTA_DURACAO_MS = ENTREVISTA_DURACAO_MIN * 60 * 1000;
 
 const CANAL_LOG_COMPLETO = '1458939847317131498';
 const LOG_CHANNEL_ID_NOVO = "1471695257010831614";
+const ENTREVISTA_POINT_LOG_MARKER = "SC_ENTREVISTA_POINT_V1";
 
 const ALERT_ROLE_IDS = [
   "1282119104576098314", // mkt creators
@@ -289,7 +290,7 @@ function getAplicadorIdFromChannel(channel, dados = {}) {
   if (/^\d{17,20}$/.test(fromState)) return fromState;
 
   const topic = String(channel?.topic || "");
-  const m = topic.match(/entrevista_aplicador:(\d{5,})/i);
+  const m = topic.match(/entrevista_aplicador:(\d{17,20})/i);
   return m ? m[1] : null;
 }
 
@@ -339,9 +340,10 @@ async function handleButtons(interaction) {
     await interaction.message.edit({ content: `✅ Ação realizada: **${acao.toUpperCase()}** para <@${membro.id}> por <@${interaction.user.id}>.`, components: [] }).catch(() => {});
     await channel.send(`📌 <@${membro.id}> foi **${acao === 'aprovar' ? 'aprovado(a)' : acao === 'reprovar' ? 'reprovado(a)' : 'colocado(a) em alinhamento'}** por <@${interaction.user.id}>.`).catch(() => {});
 
-      // ✅ NÃO pontua mais aqui.
-    // O ponto agora é concedido somente quando o candidato termina as 30 perguntas,
-    // dentro da função enviarPergunta() no bloco de finalização.
+    // ✅ NÃO pontua aqui.
+    // ✅ NÃO emite dashEmit aqui.
+    // ✅ O ponto continua existindo somente na finalização real da entrevista,
+    // dentro de enviarPergunta() quando index >= perguntas.length.
 
     await logCompleto(interaction.client, {
       titulo: `✅ Resultado aplicado: ${acao.toUpperCase()}`,
@@ -637,6 +639,7 @@ async function enviarPergunta(channel, membro, index) {
             { name: '📂 Categoria', value: categoryId ? `\`${categoryId}\`` : 'Sem categoria', inline: true },
             { name: '📍 Canal da Entrevista', value: `${channel}`, inline: true }
           )
+          .setFooter({ text: ENTREVISTA_POINT_LOG_MARKER })
           .setTimestamp();
 
         await logChannel.send({ embeds: [pointEmbed] }).catch(() => {});

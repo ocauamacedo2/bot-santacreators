@@ -55,7 +55,7 @@ export default {
 try {
   const oldTopic = String(message.channel.topic || "");
   const cleanedTopic = oldTopic
-    .replace(/\bentrevista_aplicador:\d{5,}\b/gi, "")
+    .replace(/\bentrevista_aplicador:\d{17,20}\b/gi, "")
     .replace(/\s{2,}/g, " ")
     .trim();
 

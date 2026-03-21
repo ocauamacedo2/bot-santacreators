@@ -1765,11 +1765,12 @@ function correcao_getUserId(emb) {
 // ✅ NOVO: PARSERS PARA PONTO DE ENTREVISTA
 function isEntrevistaConcluidaLogEmbed(emb) {
   const t = norm(emb?.title || emb?.data?.title || "");
+  const footer = norm(emb?.footer?.text || emb?.data?.footer?.text || "");
+
   return (
+    footer.includes("sc_entrevista_point_v1") ||
     t.includes("ponto de entrevista concluida") ||
     t.includes("ponto entrevista concluida") ||
-    t.includes("entrevista concluida") ||
-    t.includes("entrevista finalizada") ||
     t.includes("pontuacao de entrevista") ||
     t.includes("pontuação de entrevista")
   );
@@ -1780,20 +1781,14 @@ function entrevistaConcluida_getUserId(emb) {
 
   const f =
     fields.find(x => norm(x?.name).includes("aplicador (ganhou ponto)")) ||
-    fields.find(x => norm(x?.name).includes("aplicador")) ||
     fields.find(x => norm(x?.name).includes("ganhou ponto")) ||
-    fields.find(x => norm(x?.name).includes("responsavel")) ||
-    fields.find(x => norm(x?.name).includes("responsável")) ||
     fields.find(x => norm(x?.name).includes("quem aplicou")) ||
     null;
 
-  if (f) {
-    const v = String(f?.value || "");
-    return pickFirstMentionId(v) || pickFirstIdLoose(v);
-  }
+  if (!f) return null;
 
-  const bag = getEmbedTextBag(emb);
-  return pickFirstMentionId(bag) || pickFirstIdLoose(bag);
+  const v = String(f?.value || "");
+  return pickFirstMentionId(v) || pickFirstIdLoose(v);
 }
 
 // Helper para Pagamento Social (Backfill)
