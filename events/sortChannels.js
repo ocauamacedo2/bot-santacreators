@@ -78,8 +78,7 @@ const INATIVO_CONFIG = {
     "1262262852949905408", // Owner
   ],
   SPECIAL_AUTHORIZED_ROLES: [
-    "1352408327983861844", // Resp Creators
-    "1262262852949905409", // Resp Influ
+    "1352408327983861844", // Resp Creators (Apenas este cargo + usuários especiais têm acesso global)
   ],
 
   // ✅ Permissão contextual extra
@@ -731,16 +730,20 @@ const isReactivateCmd = REACTIVATE_COMMANDS.includes(content);
 
       const isExtraCommandCategory =
         INATIVO_CONFIG.EXTRA_COMMAND_CATEGORIES.includes(currentCategoryId);
+        
+      const isTargetCategory = 
+        INATIVO_CONFIG.TARGET_CATEGORIES.includes(currentCategoryId);
 
       const isProtectedCategory =
         INATIVO_CONFIG.PROTECTED_CATEGORIES.includes(currentCategoryId);
 
       // =====================================================
       // 1. LÓGICA PADRÃO
-      // • categoria padrão de membros
+      // • categoria padrão de membros (Source)
       // • OU categoria extra liberada
+      // • OU categoria de inativos (Target) - permite reordenar/mover entre inativos
       // =====================================================
-      if (isSourceCategory || isExtraCommandCategory) {
+      if (isSourceCategory || isExtraCommandCategory || isTargetCategory) {
         if (!canUseStandardFlow) {
           const msg = await message.reply(
             `❌ Você não tem permissão para usar este comando nesta categoria.`
@@ -932,14 +935,19 @@ const isReactivateCmd = REACTIVATE_COMMANDS.includes(content);
       // =====================================================
       // 1. LÓGICA PADRÃO DE REATIVAÇÃO
       // =====================================================
-      if (INATIVO_CONFIG.TARGET_CATEGORIES.includes(currentCategoryId)) {
-        if (!canUseStandardFlow) {
-          const allowedCats = INATIVO_CONFIG.TARGET_CATEGORIES
+      if (
+        INATIVO_CONFIG.TARGET_CATEGORIES.includes(currentCategoryId) ||
+        INATIVO_CONFIG.EXTRA_COMMAND_CATEGORIES.includes(currentCategoryId) ||
+        currentCategoryId === INATIVO_CONFIG.SOURCE_CATEGORY ||
+        (isSpecialAuthorized && currentCategoryId !== INATIVO_CONFIG.SPECIAL_INACTIVE_CATEGORY)
+      ) {
+        if (!canUseStandardFlow && !isSpecialAuthorized) {
+          const allowedCats = [...INATIVO_CONFIG.TARGET_CATEGORIES, ...INATIVO_CONFIG.EXTRA_COMMAND_CATEGORIES, INATIVO_CONFIG.SOURCE_CATEGORY]
             .map((id) => `<#${id}>`)
             .join(", ");
 
           const msg = await message.reply(
-            `❌ Este comando só pode ser usado por usuários autorizados em canais nas categorias de inativos: ${allowedCats}.`
+            `❌ Este comando só pode ser usado por usuários autorizados em canais nas categorias permitidas: ${allowedCats}.`
           );
           setTimeout(() => msg.delete().catch(() => {}), 8000);
           return true;
@@ -1248,4 +1256,3 @@ if (previousCategoryId && previousCategoryId !== oldCategory.id) {
     return false;
   }
 }
-
