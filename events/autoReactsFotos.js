@@ -24,10 +24,11 @@ const BACKFILL_MAX_MESSAGES = 400;
 const IGNORE_BOT_MESSAGES = true;
 
 // comando EXCLUSIVO do Santa
-const MANUAL_BACKFILL_COMMANDS = ["!reagirsc", "!reagirscantigas"];
+const MANUAL_BACKFILL_COMMANDS = ["!reagirscantigas", "!reagirsc"];
 
 const MANUAL_BACKFILL_ALLOWED_USER_IDS = [
-  // "123456789012345678",
+  "660311795327828008", // Você
+  "1262262852949905408", // Owner
 ];
 
 // ========= EMOJIS CUSTOM =========
@@ -143,6 +144,7 @@ async function handleManualBackfillCommand(message, client) {
   );
 
   if (!matchedCommand) return false;
+  console.log(`[SC_AUTO_REACTS] Comando detectado: ${content} por ${message.author.tag}`);
 
   const member = message.member;
   const isAdminByPerm =
