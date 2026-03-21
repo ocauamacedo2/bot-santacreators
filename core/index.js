@@ -271,6 +271,9 @@ import {
   registroVendasHandleInteraction,
 } from "../events/registroVendas.js";
 
+// Auto React Fotos
+import { autoReactsFotosOnReady } from "../events/autoReactsFotos.js";
+
 // Hierarquia
 import {
   hierarquiaOnReady,
@@ -542,7 +545,20 @@ const setupEventHandlers = () => {
     try { await cronogramaCreatorsOnReady(client); } catch (e) {}
     try { await hierarquiaOnReady(client); } catch (e) {}
     try { await reuniaoSemanalOnReady(client); } catch (e) {}
+    
+    // ✅ AUTO REACT FOTOS
+  try {
+    console.log("[CORE] Inicializando autoReactsFotos...");
+    await autoReactsFotosOnReady(client);
+    console.log("[CORE] autoReactsFotos inicializado.");
+  } catch (e) {
+    console.error("[CORE] Erro ao iniciar autoReactsFotos:", e);
+  }
+    
     memberJoinLog.initInviteCache(client);
+
+
+
 
     try { startTodosLembretes(client); } catch {}
     try { startRolesOnlineMonitor(client); } catch {}
