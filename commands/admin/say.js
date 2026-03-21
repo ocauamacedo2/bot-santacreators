@@ -8,6 +8,7 @@ import {
   ButtonStyle
 } from 'discord.js';
 import fetch from 'node-fetch';
+import { autoReactsFotosProcessSentMessage } from '../../events/autoReactsFotos.js';
 
 const MAX_LEN = 2000;
 const LOG_CHANNEL_ID = '1425184455185924127';
@@ -220,34 +221,47 @@ export default {
       let firstOutputMsg = null;
 
       if (!textoOriginal || textoOriginal.length <= MAX_LEN) {
-        const sent = await message.channel.send({
-          content: textoOriginal || null,
-          files: anexos.length ? anexos : undefined,
-          allowedMentions,
-          reply: replyOpt,
-        });
-        firstOutputMsg = sent;
+  const sent = await message.channel.send({
+    content: textoOriginal || null,
+    files: anexos.length ? anexos : undefined,
+    allowedMentions,
+    reply: replyOpt,
+  });
+  firstOutputMsg = sent;
 
-        await logSayUsage(message, {
-          firstOutputMsg,
-          partes: 1,
-          anexosQtd: anexos.length,
-          preview: (textoOriginal || '').slice(0, 300)
-        });
-        return;
-      }
+  await autoReactsFotosProcessSentMessage(sent, message.client, {
+    retries: 3,
+    delayMs: 900,
+    mode: 'say'
+  });
+
+  await logSayUsage(message, {
+    firstOutputMsg,
+    partes: 1,
+    anexosQtd: anexos.length,
+    preview: (textoOriginal || '').slice(0, 300)
+  });
+  return;
+}
 
       const partes = this._dividirMensagemBruta(textoOriginal);
-      for (let i = 0; i < partes.length; i++) {
-        const isLast = i === partes.length - 1;
-        const sent = await message.channel.send({
-          content: partes[i],
-          files: isLast && anexos.length ? anexos : undefined,
-          allowedMentions,
-          reply: i === 0 ? replyOpt : undefined,
-        });
-        if (i === 0) firstOutputMsg = sent;
-      }
+for (let i = 0; i < partes.length; i++) {
+  const isLast = i === partes.length - 1;
+  const sent = await message.channel.send({
+    content: partes[i],
+    files: isLast && anexos.length ? anexos : undefined,
+    allowedMentions,
+    reply: i === 0 ? replyOpt : undefined,
+  });
+
+  if (i === 0) firstOutputMsg = sent;
+
+  await autoReactsFotosProcessSentMessage(sent, message.client, {
+    retries: isLast ? 3 : 1,
+    delayMs: 900,
+    mode: 'say'
+  });
+}
 
       await logSayUsage(message, {
         firstOutputMsg,

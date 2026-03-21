@@ -97,14 +97,19 @@ export async function autoReactsFotosOnReady(client) {
   console.log("[SC_AUTO_REACTS] sistema inicializado.");
 }
 
-export async function autoReactsFotosHandleMessage(message, client) {
+export async function autoReactsFotosHandleMessage(message, client, options = {}) {
   try {
     if (!message?.guild || !message?.channel) return false;
     if (message.system) return false;
-    if (IGNORE_BOT_MESSAGES && message.author?.bot) return false;
+
+    const allowBotMessage = options.allowBotMessage === true;
+
+    if (IGNORE_BOT_MESSAGES && message.author?.bot && !allowBotMessage) {
+      return false;
+    }
 
     // comando manual continua existindo, mas só se a mensagem começar com ele
-    if (await handleManualBackfillCommand(message, client)) {
+    if (!allowBotMessage && await handleManualBackfillCommand(message, client)) {
       return true;
     }
 
@@ -120,13 +125,13 @@ export async function autoReactsFotosHandleMessage(message, client) {
 
     // canal geral -> reage em toda mensagem nova
     if (channelId === ALL_MESSAGES_CHANNEL_ID) {
-      await reactToMessage(message, "all");
+      await reactToMessage(message, options.mode || "all");
       return false;
     }
 
     // canal de fotos -> reage só se tiver mídia
     if (channelId === PHOTO_CHANNEL_ID && hasMediaContent(message)) {
-      await reactToMessage(message, "media");
+      await reactToMessage(message, options.mode || "media");
     }
 
     return false;
@@ -135,6 +140,51 @@ export async function autoReactsFotosHandleMessage(message, client) {
     return false;
   }
 }
+
+export async function autoReactsFotosProcessSentMessage(message, client, options = {}) {
+  try {
+    if (!message?.guild || !message?.channel) return false;
+
+    const retries = Number(options.retries ?? 3);
+    const delayMs = Number(options.delayMs ?? 900);
+
+    for (let attempt = 0; attempt < retries; attempt++) {
+      try {
+        if (attempt > 0) {
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+
+          if (message.partial) {
+            try {
+              await message.fetch();
+            } catch {}
+          }
+        }
+
+        await autoReactsFotosHandleMessage(message, client, {
+          allowBotMessage: true,
+          mode: options.mode || "say",
+        });
+
+        // se for canal de foto e ainda não detectou mídia, tenta de novo nas próximas voltas
+        if (
+          message.channel?.id === PHOTO_CHANNEL_ID &&
+          !hasMediaContent(message) &&
+          attempt < retries - 1
+        ) {
+          continue;
+        }
+
+        break;
+      } catch {}
+    }
+
+    return true;
+  } catch (err) {
+    console.error("[SC_AUTO_REACTS] erro ao processar mensagem enviada externamente:", err?.message || err);
+    return false;
+  }
+}
+
 
 async function handleManualBackfillCommand(message, client) {
   if (!message?.guild || !message?.channel) return false;
