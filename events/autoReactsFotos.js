@@ -1,12 +1,13 @@
 import {
-  Events,
   ChannelType,
   PermissionsBitField,
 } from "discord.js";
 
 // ==========================================
-// SANTA CREATORS — AUTO REACT ISOLADO
-// FORMATO PADRÃO DO PROJETO: autoReactsFotosOnReady(client)
+// SANTA CREATORS — AUTO REACT LIMPO
+// • Sem flood de logs
+// • Sem backfill automático no ready
+// • Só espera mensagem nova e reage
 // ==========================================
 
 const PHOTO_CHANNEL_ID = "1432149017378426941";
@@ -81,40 +82,56 @@ let reactionQueue = Promise.resolve();
 function enqueue(task) {
   reactionQueue = reactionQueue
     .then(() => task())
-    .catch((err) => {
-      console.error("[SC_AUTO_REACTS] erro na fila:", err?.message || err);
-    });
-
+    .catch(() => {});
   return reactionQueue;
 }
 
 export async function autoReactsFotosOnReady(client) {
-  console.log("🚀 AUTO REACT FOI CHAMADO");
+  if (!client) return;
 
-  if (!client) {
-    console.warn("[SC_AUTO_REACTS] client ausente.");
+  if (client.__SC_AUTO_REACTS__) {
     return;
   }
 
-  if (client.__SC_AUTO_REACTS_ISOLATED__) {
-    console.log("[SC_AUTO_REACTS] já estava inicializado.");
-    return;
-  }
-
-  client.__SC_AUTO_REACTS_ISOLATED__ = true;
-  console.log("[SC_AUTO_REACTS] inicializado no modo centralizado.");
+  client.__SC_AUTO_REACTS__ = true;
+  console.log("[SC_AUTO_REACTS] sistema inicializado.");
 }
 
 export async function autoReactsFotosHandleMessage(message, client) {
   try {
-    console.log("📩 [SC_AUTO_REACTS] mensagem recebida:", message.content || "[sem texto]", "| canal:", message.channel?.id);
+    if (!message?.guild || !message?.channel) return false;
+    if (message.system) return false;
+    if (IGNORE_BOT_MESSAGES && message.author?.bot) return false;
 
-    if (await handleManualBackfillCommand(message, client)) return true;
+    // comando manual continua existindo, mas só se a mensagem começar com ele
+    if (await handleManualBackfillCommand(message, client)) {
+      return true;
+    }
 
-    await processSantaMessage(message);
+    const channelId = message.channel.id;
+
+    // ignora tudo fora dos canais monitorados
+    if (
+      channelId !== PHOTO_CHANNEL_ID &&
+      channelId !== ALL_MESSAGES_CHANNEL_ID
+    ) {
+      return false;
+    }
+
+    // canal geral -> reage em toda mensagem nova
+    if (channelId === ALL_MESSAGES_CHANNEL_ID) {
+      await reactToMessage(message, "all");
+      return false;
+    }
+
+    // canal de fotos -> reage só se tiver mídia
+    if (channelId === PHOTO_CHANNEL_ID && hasMediaContent(message)) {
+      await reactToMessage(message, "media");
+    }
+
     return false;
   } catch (err) {
-    console.error("[SC_AUTO_REACTS] erro em autoReactsFotosHandleMessage:", err);
+    console.error("[SC_AUTO_REACTS] erro:", err?.message || err);
     return false;
   }
 }
@@ -131,10 +148,6 @@ async function handleManualBackfillCommand(message, client) {
   );
 
   if (!matchedCommand) return false;
-
-  console.log("[SC_AUTO_REACTS] comando reconhecido:", content);
-
-  console.log(`[SC_AUTO_REACTS] comando detectado: ${content} por ${message.author.tag}`);
 
   const member = message.member;
   const isAdminByPerm =
@@ -194,105 +207,19 @@ async function handleManualBackfillCommand(message, client) {
       `• Processadas: **${result?.processed ?? 0}**`
     );
   } catch (err) {
-    console.error("[SC_AUTO_REACTS] erro no comando manual:", err);
+    console.error("[SC_AUTO_REACTS] erro no backfill manual:", err?.message || err);
     await message.reply("❌ Deu erro ao rodar o backfill manual SC.");
   }
 
   return true;
 }
 
-async function processSantaMessage(message) {
-  if (!message) return;
-  if (!message.guild) return;
-  if (!message.channel) return;
-  if (message.system) return;
-  if (IGNORE_BOT_MESSAGES && message.author?.bot) return;
-
-  const channelId = message.channel.id;
-  console.log("[SC_AUTO_REACTS] processando canal:", channelId, "| msg:", message.id);
-
-  if (channelId === ALL_MESSAGES_CHANNEL_ID) {
-    console.log(`[SC_AUTO_REACTS] mensagem detectada no canal geral: ${message.id}`);
-    await reactToMessage(message, "all");
-    return;
-  }
-
-  if (channelId === PHOTO_CHANNEL_ID) {
-    const hasMedia = hasMediaContent(message);
-    console.log(`[SC_AUTO_REACTS] checando mídia no canal de fotos: ${message.id} | resultado=${hasMedia}`);
-
-    if (hasMedia) {
-      console.log(`[SC_AUTO_REACTS] mídia detectada no canal de fotos: ${message.id}`);
-      await reactToMessage(message, "media");
-    }
-  }
-}
-
 function hasMediaContent(message) {
   try {
     const attachments = [...(message.attachments?.values?.() || [])];
 
-    // ✅ Se existe qualquer attachment, já considera mídia
-    // Isso evita falha quando o Discord não preenche contentType/extensão direito
     if (attachments.length > 0) {
       return true;
-    }
-
-    for (const att of attachments) {
-      const ct = String(att.contentType || "").toLowerCase();
-      const name = String(att.name || "").toLowerCase();
-      const url = String(att.url || "").toLowerCase();
-      const proxyURL = String(att.proxyURL || "").toLowerCase();
-
-      if (ct.startsWith("image/")) return true;
-      if (ct.startsWith("video/")) return true;
-
-      if (
-        name.endsWith(".png") ||
-        name.endsWith(".jpg") ||
-        name.endsWith(".jpeg") ||
-        name.endsWith(".gif") ||
-        name.endsWith(".webp") ||
-        name.endsWith(".bmp") ||
-        name.endsWith(".avif") ||
-        name.endsWith(".heic") ||
-        name.endsWith(".mp4") ||
-        name.endsWith(".mov") ||
-        name.endsWith(".webm") ||
-        name.endsWith(".mkv") ||
-        name.endsWith(".avi") ||
-        name.endsWith(".m4v") ||
-        url.endsWith(".png") ||
-        url.endsWith(".jpg") ||
-        url.endsWith(".jpeg") ||
-        url.endsWith(".gif") ||
-        url.endsWith(".webp") ||
-        url.endsWith(".bmp") ||
-        url.endsWith(".avif") ||
-        url.endsWith(".heic") ||
-        url.endsWith(".mp4") ||
-        url.endsWith(".mov") ||
-        url.endsWith(".webm") ||
-        url.endsWith(".mkv") ||
-        url.endsWith(".avi") ||
-        url.endsWith(".m4v") ||
-        proxyURL.endsWith(".png") ||
-        proxyURL.endsWith(".jpg") ||
-        proxyURL.endsWith(".jpeg") ||
-        proxyURL.endsWith(".gif") ||
-        proxyURL.endsWith(".webp") ||
-        proxyURL.endsWith(".bmp") ||
-        proxyURL.endsWith(".avif") ||
-        proxyURL.endsWith(".heic") ||
-        proxyURL.endsWith(".mp4") ||
-        proxyURL.endsWith(".mov") ||
-        proxyURL.endsWith(".webm") ||
-        proxyURL.endsWith(".mkv") ||
-        proxyURL.endsWith(".avi") ||
-        proxyURL.endsWith(".m4v")
-      ) {
-        return true;
-      }
     }
 
     for (const embed of message.embeds || []) {
@@ -300,7 +227,6 @@ function hasMediaContent(message) {
         embed?.image?.url ||
         embed?.thumbnail?.url ||
         embed?.video?.url ||
-        embed?.provider?.name ||
         embed?.type === "gifv"
       ) {
         return true;
@@ -326,9 +252,7 @@ function hasMediaContent(message) {
     ) {
       return true;
     }
-  } catch (err) {
-    console.error("[SC_AUTO_REACTS] erro ao detectar mídia:", err?.message || err);
-  }
+  } catch {}
 
   return false;
 }
@@ -406,10 +330,7 @@ async function reactToMessage(message, mode = "unknown") {
   if (!message?.guild) return;
 
   const reactions = buildReactionList(message.guild);
-  if (!reactions.length) {
-    console.log("[SC_AUTO_REACTS] nenhuma reação disponível no servidor.");
-    return;
-  }
+  if (!reactions.length) return;
 
   for (const emoji of reactions) {
     await enqueue(async () => {
@@ -418,10 +339,7 @@ async function reactToMessage(message, mode = "unknown") {
           reactionMatchesEmoji(r, emoji)
         );
 
-        // se o próprio bot já reagiu com esse emoji, pula
         if (alreadyThere?.me) return;
-
-        // se já bateu 20 reações únicas e esse emoji ainda não existe na mensagem, não tenta criar outra
         if (message.reactions.cache.size >= 20 && !alreadyThere) return;
 
         await message.react(emoji);
@@ -445,8 +363,8 @@ async function reactToMessage(message, mode = "unknown") {
         }
 
         console.error(
-          `[SC_AUTO_REACTS] erro ao reagir msg=${message.id} canal=${message.channel?.id} modo=${mode} emoji=${emoji}:`,
-          err
+          `[SC_AUTO_REACTS] erro ao reagir msg=${message.id} canal=${message.channel?.id} modo=${mode}:`,
+          err?.message || err
         );
       }
     });
@@ -456,7 +374,6 @@ async function reactToMessage(message, mode = "unknown") {
 async function backfillChannel(client, channelId, mode, options = {}) {
   const channel = await client.channels.fetch(channelId).catch(() => null);
   if (!channel) {
-    console.warn(`[SC_AUTO_REACTS] canal ${channelId} não encontrado.`);
     return { scanned: 0, processed: 0 };
   }
 
@@ -464,7 +381,6 @@ async function backfillChannel(client, channelId, mode, options = {}) {
     channel.type !== ChannelType.GuildText &&
     channel.type !== ChannelType.GuildAnnouncement
   ) {
-    console.warn(`[SC_AUTO_REACTS] canal ${channelId} não é texto/anúncio. Tipo: ${channel.type}`);
     return { scanned: 0, processed: 0 };
   }
 
@@ -503,10 +419,6 @@ async function backfillChannel(client, channelId, mode, options = {}) {
     lastId = ordered[0]?.id;
     if (!lastId || messages.size < limit) break;
   }
-
-  console.log(
-    `[SC_AUTO_REACTS] backfill concluído canal=${channelId} vasculhadas=${scanned} processadas=${processed}`
-  );
 
   return { scanned, processed };
 }
