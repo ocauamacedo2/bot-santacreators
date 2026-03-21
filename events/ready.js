@@ -29,7 +29,8 @@ export default {
     // ✅ Define client global para módulos que dependem dele e carrega o autoReactsFotos
     globalThis.client = client;
     try {
-      await import('./autoReactsFotos.js');
+      const mod = await import('./autoReactsFotos.js');
+      if (mod.default) mod.default(client);
     } catch (err) {
       console.error('[STARTUP] ⚠️ Falha ao carregar autoReactsFotos:', err);
     }

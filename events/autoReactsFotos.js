@@ -93,18 +93,17 @@ const UNICODE_REACTIONS = [
   "😄",
 ];
 
-// ========= GUARD GLOBAL =========
-if (!globalThis.__SC_AUTO_REACTS_FOTOS_BOOTSTRAPPED__) {
-  globalThis.__SC_AUTO_REACTS_FOTOS_BOOTSTRAPPED__ = true;
+// ========= EXPORT & INIT =========
+export default function initAutoReacts(client) {
+  if (client.__SC_AUTO_REACTS_ACTIVE) return;
+  client.__SC_AUTO_REACTS_ACTIVE = true;
+  console.log("[AUTO_REACTS] Inicializando sistema de reações...");
+  setupAutoReacts(client);
+}
 
-  const client = globalThis.client;
-
-  if (!client) {
-    console.warn("[AUTO_REACTS] globalThis.client não encontrado. O módulo foi importado antes do client ficar global.");
-  } else {
-    console.log("[AUTO_REACTS] módulo carregado.");
-    setupAutoReacts(client);
-  }
+// Tenta iniciar automaticamente se o client já estiver global (fallback)
+if (globalThis.client) {
+  initAutoReacts(globalThis.client);
 }
 
 // ========= FILA GLOBAL LEVE =========
