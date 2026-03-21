@@ -29,21 +29,6 @@ export default {
 
     globalThis.client = client;
 
-    // ✅ TESTE FORÇADO DO AUTO REACT
-    try {
-      console.log("🟡 Tentando importar autoReactsFotos.js...");
-      const mod = await import("./autoReactsFotos.js");
-
-      if (mod.autoReactsFotosOnReady) {
-        console.log("🟢 autoReactsFotosOnReady encontrada. Chamando agora...");
-        await mod.autoReactsFotosOnReady(client);
-        console.log("✅ autoReactsFotosOnReady executada com sucesso.");
-      } else {
-        console.log("❌ autoReactsFotosOnReady NÃO encontrada no módulo.");
-      }
-    } catch (err) {
-      console.error("❌ Erro ao importar/executar autoReactsFotos.js:", err);
-    }
 
     const startupTasks = [
       { name: 'Entrevistas', fn: () => entrevista.reanexar(client) },
