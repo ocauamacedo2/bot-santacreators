@@ -120,7 +120,7 @@ const HALL_CHANNEL_ID = "1386503496353976470"; // ✅ Canal do Hall da Fama
 const CH_PODERES_ID = "1374066813171929218";
 const CH_EVENTOS_ID = "1392618646630568076";
 const CH_PAGAMENTOS_ID = "1387922662134775818";
-const CH_MANAGER_ID = "1392680204517769277";
+const CH_MANAGER_ID = "1459789854408708319"; 
 const CH_ALINHAMENTOS_ID = "1425256185707233301";
 
 // EVT3
@@ -361,7 +361,11 @@ function pagamentos_getRegistrarId(emb) {
 
 function isRegistroManagerEmbed(emb) {
   const t = norm(emb?.title || emb?.data?.title || "");
-  return t.includes("registro") && t.includes("evento") && t.includes("manager");
+
+  return (
+    (t.includes("registro") && t.includes("evento") && t.includes("manager")) ||
+    (t.includes("log") && t.includes("registro") && t.includes("manager"))
+  );
 }
 function manager_isApproved(emb) {
   return getFields(emb).some((f) => norm(f?.name).includes("aprovado por"));

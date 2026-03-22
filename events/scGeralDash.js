@@ -110,7 +110,7 @@ const HALL_CHANNEL_ID = "1386503496353976470";
 const CH_PODERES_ID = "1374066813171929218";
 const CH_EVENTOS_ID = "1392618646630568076";
 const CH_PAGAMENTOS_ID = "1387922662134775818";
-const CH_MANAGER_ID = "1392680204517769277";
+const CH_MANAGER_ID = "1459789854408708319"; 
 // ✅ NOVO: Alinhamentos (é o mesmo canal onde ele posta os registros)
 const CH_ALINHAMENTOS_ID = "1425256185707233301";
 const EVT3_STATE_FILE = path.join(DATA_DIR, "evt3_events_state.json");
@@ -613,7 +613,14 @@ function pagamentos_getRegistrarId(emb) {
 
 function isRegistroManagerEmbed(emb) {
   const t = norm(emb?.title || emb?.data?.title || "");
-  return t.includes("registro") && t.includes("evento") && t.includes("manager");
+
+  // aceita:
+  // 1) embed original do canal principal: "Registro de Evento - Manager"
+  // 2) embed do canal arquivo: "LOG — Registro Manager"
+  return (
+    (t.includes("registro") && t.includes("evento") && t.includes("manager")) ||
+    (t.includes("log") && t.includes("registro") && t.includes("manager"))
+  );
 }
 function manager_isApproved(emb) {
   return getFields(emb).some((f) => norm(f?.name).includes("aprovado por"));
