@@ -427,37 +427,6 @@ function vip_getPagoByUserId(emb) {
 
 
 
-///bloco novo do codigo vipevento
-function isVipRecordEmbed(emb) {
-  const t = norm(emb?.title || emb?.data?.title || "");
-  return t.includes("registro de vip por evento");
-}
-
-function vip_getStatus(emb) {
-  const fields = getFields(emb);
-
-  const solValue = fields.find((f) => norm(f?.name).startsWith("solicitacoes"))?.value || "";
-  const pagValue = fields.find((f) => norm(f?.name).startsWith("pagamento"))?.value || "";
-  const repValue = fields.find((f) => norm(f?.name).startsWith("reprovacao"))?.value || "";
-
-  const solNorm = norm(solValue);
-  const pagNorm = norm(pagValue);
-  const repNorm = norm(repValue);
-
-  return {
-    isSolicitado: solNorm.includes("solicitado"),
-    isPago: pagNorm.includes("pago"),
-    isReprovado: repNorm.includes("reprovado"),
-  };
-}
-
-function vip_getPagoByUserId(emb) {
-  const fields = getFields(emb);
-  const f = fields.find((x) => norm(x?.name).startsWith("pagamento"));
-  const v = String(f?.value || "");
-  const m = /por\s+<@!?(\d+)>/i.exec(v);
-  return m ? m[1] : null;
-}
 
 
 // ✅ data/hora do aprovado (pra semana certa)
