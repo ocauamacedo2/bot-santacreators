@@ -1172,23 +1172,36 @@ async function collectAllGeneral(client, mode = "light") {
 
     // ✅ NOVO: pega a data/hora do campo "✅ Aprovado por" (se existir)
   function manager_getApprovedAtSP(emb) {
-    try {
-      const f = getFields(emb).find((x) => norm(x?.name).includes("aprovado por"));
-      const v = String(f?.value || "").trim();
-      if (!v) return null;
+  try {
+    const f = getFields(emb).find((x) => norm(x?.name).includes("aprovado por"));
+    const v = String(f?.value || "").trim();
+    if (!v) return null;
 
-      // tenta achar "dd/mm/aaaa, hh:mm:ss" ou "dd/mm/aaaa hh:mm:ss"
-      const m = /(\d{2})\/(\d{2})\/(\d{4})[,\s]+(\d{2}):(\d{2})(?::(\d{2}))?/.exec(v);
-      if (!m) return null;
+    const m = /(\d{2})\/(\d{2})\/(\d{4})[,\s]+(\d{2}):(\d{2})(?::(\d{2}))?/.exec(v);
+    if (!m) return null;
 
-      const dd = +m[1], mm = +m[2], yy = +m[3], hh = +m[4], mi = +m[5], ss = +(m[6] || 0);
-      
-      // ✅ FIX TIMEZONE: Soma 3h ao horário SP para obter o UTC correto
-      return new Date(Date.UTC(yy, mm - 1, dd, hh + 3, mi, ss));
-    } catch {
-      return null;
-    }
+    const dd = +m[1], mm = +m[2], yy = +m[3], hh = +m[4], mi = +m[5], ss = +(m[6] || 0);
+    return new Date(Date.UTC(yy, mm - 1, dd, hh + 3, mi, ss));
+  } catch {
+    return null;
   }
+}
+
+function manager_getRejectedAtSP(emb) {
+  try {
+    const f = getFields(emb).find((x) => norm(x?.name).includes("reprovado por"));
+    const v = String(f?.value || "").trim();
+    if (!v) return null;
+
+    const m = v.match(/(\d{1,2})\/(\d{1,2})\/(\d{4}).*?(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?/);
+    if (!m) return null;
+
+    const dd = +m[1], mm = +m[2], yy = +m[3], hh = +m[4], mi = +m[5], ss = +(m[6] || 0);
+    return new Date(Date.UTC(yy, mm - 1, dd, hh + 3, mi, ss));
+  } catch {
+    return null;
+  }
+}
 
     await scanChannelEmbeds(client, {
     channelId: CH_MANAGER_ID,
@@ -1842,16 +1855,29 @@ async function backfillGestaoThisWeek(client) {
 
     // -------- MANAGER (Aprovados/Reprovados) --------
     if (CH_MANAGER_ID) {
-      await scanCurrentWeekEmbeds(
-        client,
-        CH_MANAGER_ID,
-        (emb) => isRegistroManagerEmbed(emb),
-        async (_m, emb) => {
-          if (manager_isApproved(emb)) rmAprovados += 1;
-          if (manager_isRejected(emb)) rmReprovados += 1;
+      const wkNowStart = weekKeyToDateUTC(wkNow)?.getTime();
+
+      await scanChannelEmbeds(client, {
+        channelId: CH_MANAGER_ID,
+        weekFloorKey: addDaysToWeekKey(wkNow, -7), // busca com folga pra achar registros antigos aprovados/reprovados agora
+        maxPages: 80,
+        onMessage: async (_m) => {
+          const emb = _m.embeds?.[0];
+          if (!emb) return;
+          if (!isRegistroManagerEmbed(emb)) return;
+
+          const approvedAt = manager_getApprovedAtSP(emb);
+          const rejectedAt = manager_getRejectedAtSP(emb);
+
+          if (manager_isApproved(emb) && approvedAt && weekKeyFromDateSP(approvedAt) === wkNow) {
+            rmAprovados += 1;
+          }
+
+          if (manager_isRejected(emb) && rejectedAt && weekKeyFromDateSP(rejectedAt) === wkNow) {
+            rmReprovados += 1;
+          }
         },
-        25
-      );
+      });
     }
 
     // -------- ALINHAMENTOS --------

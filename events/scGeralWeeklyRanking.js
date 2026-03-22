@@ -115,6 +115,7 @@ const CRONOGRAMA_LOGS_CHANNEL_ID = "1387864036259004436";
 const PRESENCA_LOGS_CHANNEL_ID = "1477802343407026257";
 const CORRECAO_LOGS_CHANNEL_ID = "1471695257010831614"; // ✅ Canal de logs de correção
 const HALL_CHANNEL_ID = "1386503496353976470"; // ✅ Canal do Hall da Fama
+const VIP_MENU_CHANNEL_ID = "1414718336826081330"; // ✅ registros VIP por evento
 
 // canais base
 const CH_PODERES_ID = "1374066813171929218";
@@ -391,6 +392,73 @@ function manager_getManagerId(emb) {
   if (m) return m[1];
   return null;
 }
+
+// VIP EVENTO
+function isVipRecordEmbed(emb) {
+  const t = norm(emb?.title || emb?.data?.title || "");
+  return t.includes("registro de vip por evento");
+}
+
+function vip_getStatus(emb) {
+  const fields = getFields(emb);
+
+  const solValue = fields.find((f) => norm(f?.name).startsWith("solicitacoes"))?.value || "";
+  const pagValue = fields.find((f) => norm(f?.name).startsWith("pagamento"))?.value || "";
+  const repValue = fields.find((f) => norm(f?.name).startsWith("reprovacao"))?.value || "";
+
+  const solNorm = norm(solValue);
+  const pagNorm = norm(pagValue);
+  const repNorm = norm(repValue);
+
+  return {
+    isSolicitado: solNorm.includes("solicitado"),
+    isPago: pagNorm.includes("pago"),
+    isReprovado: repNorm.includes("reprovado"),
+  };
+}
+
+function vip_getPagoByUserId(emb) {
+  const fields = getFields(emb);
+  const f = fields.find((x) => norm(x?.name).startsWith("pagamento"));
+  const v = String(f?.value || "");
+  const m = /por\s+<@!?(\d+)>/i.exec(v);
+  return m ? m[1] : null;
+}
+
+
+
+///bloco novo do codigo vipevento
+function isVipRecordEmbed(emb) {
+  const t = norm(emb?.title || emb?.data?.title || "");
+  return t.includes("registro de vip por evento");
+}
+
+function vip_getStatus(emb) {
+  const fields = getFields(emb);
+
+  const solValue = fields.find((f) => norm(f?.name).startsWith("solicitacoes"))?.value || "";
+  const pagValue = fields.find((f) => norm(f?.name).startsWith("pagamento"))?.value || "";
+  const repValue = fields.find((f) => norm(f?.name).startsWith("reprovacao"))?.value || "";
+
+  const solNorm = norm(solValue);
+  const pagNorm = norm(pagValue);
+  const repNorm = norm(repValue);
+
+  return {
+    isSolicitado: solNorm.includes("solicitado"),
+    isPago: pagNorm.includes("pago"),
+    isReprovado: repNorm.includes("reprovado"),
+  };
+}
+
+function vip_getPagoByUserId(emb) {
+  const fields = getFields(emb);
+  const f = fields.find((x) => norm(x?.name).startsWith("pagamento"));
+  const v = String(f?.value || "");
+  const m = /por\s+<@!?(\d+)>/i.exec(v);
+  return m ? m[1] : null;
+}
+
 
 // ✅ data/hora do aprovado (pra semana certa)
 function manager_getApprovedAtSP(emb) {
@@ -775,6 +843,30 @@ async function collectAllPoints(client, mode = "light") {
     },
   });
 
+  // VIP EVENTO (conta ponto só para quem clicou em PAGO)
+  await scanChannelEmbeds(client, {
+    channelId: VIP_MENU_CHANNEL_ID,
+    weekFloorKey,
+    maxPages: 80,
+    onMessage: async (m) => {
+      const emb = m.embeds?.[0];
+      if (!emb) return;
+      if (!isVipRecordEmbed(emb)) return;
+
+      const status = vip_getStatus(emb);
+      if (!status.isPago) return;
+
+      const uid = vip_getPagoByUserId(emb);
+      if (!uid) return;
+
+      pushItem({
+        userId: uid,
+        ts: new Date(m.createdTimestamp),
+        source: "vipPagos",
+      });
+    },
+  });
+
   // MANAGER (só aprovados, na semana do approvedAt)
   await scanChannelEmbeds(client, {
     channelId: CH_MANAGER_ID,
@@ -1123,6 +1215,7 @@ const SOURCE_LABEL = {
   eventos: "Eventos",
   eventopoder: "Poder em Evento",
   pagamentos: "Pagamentos",
+  vipPagos: "Líderes Pagamentos",
   manager: "Manager",
   alinhamentos: "Alinhamentos",
   doacoes: "Doações",

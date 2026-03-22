@@ -39,10 +39,11 @@ const IDS = {
   RESPONSAVEIS: "1414651836861907006",
   EQUIPE_CREATOR: "1352429001188180039",
 
-  // 🔥 novos cargos p/ REPROVAR
-  MKT_TICKET: "1282119104576098314",
+  // ✅ cargos que você quer no PAGO / REPROVAR
   RESP_CREATORS: "1352408327983861844",
   COORD_CREATORS: "1388976314253312100",
+  RESP_LIDER: "1352407252216184833",
+  RESP_INFLU: "1262262852949905409",
 };
 
 // Quem pode ABRIR o modal/registrar:
@@ -55,7 +56,8 @@ const REGISTER_ALLOWED = [
 ];
 const REGISTER_ALLOWED_USERS = [IDS.EU];
 
-// Quem pode clicar nos botões de ação (SOLICITADO / PAGO) + usar filtros:
+// Quem pode clicar nos botões de ação que DEVEM continuar como estão
+// (SOLICITADO + FILTROS)
 const ACTION_ALLOWED = [
   IDS.OWNER,
   IDS.EU,
@@ -65,13 +67,23 @@ const ACTION_ALLOWED = [
 ];
 const ACTION_ALLOWED_USERS = [IDS.EU];
 
-// Quem pode REPROVAR:
-const REPROVE_ALLOWED = [
-  IDS.OWNER,
-  IDS.RESPONSAVEIS,
-  IDS.MKT_TICKET,
-  IDS.RESP_CREATORS,
+// ✅ Quem pode marcar como PAGO
+const PAYMENT_ALLOWED = [
   IDS.COORD_CREATORS,
+  IDS.RESP_LIDER,
+  IDS.RESP_INFLU,
+  IDS.RESP_CREATORS,
+  IDS.OWNER,
+];
+const PAYMENT_ALLOWED_USERS = [IDS.EU];
+
+// ✅ Quem pode REPROVAR pagamento
+const REPROVE_ALLOWED = [
+  IDS.COORD_CREATORS,
+  IDS.RESP_LIDER,
+  IDS.RESP_INFLU,
+  IDS.RESP_CREATORS,
+  IDS.OWNER,
 ];
 const REPROVE_ALLOWED_USERS = [IDS.EU];
 
@@ -155,6 +167,9 @@ function canRegister(member) {
 }
 function canAction(member) {
   return hasAnyRole(member, ACTION_ALLOWED) || ACTION_ALLOWED_USERS.includes(member?.id);
+}
+function canMarkPaid(member) {
+  return hasAnyRole(member, PAYMENT_ALLOWED) || PAYMENT_ALLOWED_USERS.includes(member?.id);
 }
 function canReprove(member) {
   return hasAnyRole(member, REPROVE_ALLOWED) || REPROVE_ALLOWED_USERS.includes(member.id);
@@ -807,10 +822,19 @@ export async function vipEventoHandleInteraction(i, client) {
 
       await safeDefer(i, { ephemeral: true });
 
-      if (!canAction(i.member)) {
-        await safeReply(i, { content: "🚫 Você não tem permissão para usar esse botão.", ephemeral: true });
-        return true;
-      }
+if (i.customId === VIP_BTN_SOLICITADO_ID) {
+  if (!canAction(i.member)) {
+    await safeReply(i, { content: "🚫 Você não tem permissão para usar esse botão.", ephemeral: true });
+    return true;
+  }
+}
+
+if (i.customId === VIP_BTN_PAGO_ID) {
+  if (!canMarkPaid(i.member)) {
+    await safeReply(i, { content: "🚫 Você não tem permissão para marcar como pago.", ephemeral: true });
+    return true;
+  }
+}
 
       const msg = i.message;
       const guild = i.guild;
