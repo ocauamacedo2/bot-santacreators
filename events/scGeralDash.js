@@ -655,6 +655,40 @@ function manager_getManagerId(emb) {
   return null;
 }
 
+// ✅ data/hora do aprovado (pra semana certa)
+function manager_getApprovedAtSP(emb) {
+  try {
+    const f = getFields(emb).find((x) => norm(x?.name).includes("aprovado por"));
+    const v = String(f?.value || "").trim();
+    if (!v) return null;
+
+    const m = v.match(/(\d{1,2})\/(\d{1,2})\/(\d{4}).*?(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?/);
+    if (!m) return null;
+
+    const dd = +m[1], mm = +m[2], yy = +m[3], hh = +m[4], mi = +m[5], ss = +(m[6] || 0);
+    return new Date(Date.UTC(yy, mm - 1, dd, hh + 3, mi, ss));
+  } catch {
+    return null;
+  }
+}
+
+// ✅ data/hora do reprovado (pra semana certa)
+function manager_getRejectedAtSP(emb) {
+  try {
+    const f = getFields(emb).find((x) => norm(x?.name).includes("reprovado por"));
+    const v = String(f?.value || "").trim();
+    if (!v) return null;
+
+    const m = v.match(/(\d{1,2})\/(\d{1,2})\/(\d{4}).*?(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?/);
+    if (!m) return null;
+
+    const dd = +m[1], mm = +m[2], yy = +m[3], hh = +m[4], mi = +m[5], ss = +(m[6] || 0);
+    return new Date(Date.UTC(yy, mm - 1, dd, hh + 3, mi, ss));
+  } catch {
+    return null;
+  }
+}
+
 // ================== PARSER — ALINHAMENTOS (ALINV1) ==================
 function isAlinhamentoRecordEmbed(emb) {
   const t = norm(emb?.title || emb?.data?.title || "");
@@ -1853,32 +1887,30 @@ async function backfillGestaoThisWeek(client) {
     let pagPagos = 0;
     let pagReprovados = 0;
 
-    // -------- MANAGER (Aprovados/Reprovados) --------
-    if (CH_MANAGER_ID) {
-      const wkNowStart = weekKeyToDateUTC(wkNow)?.getTime();
+// -------- MANAGER (Aprovados/Reprovados) --------
+if (CH_MANAGER_ID) {
+  await scanChannelEmbeds(client, {
+    channelId: CH_MANAGER_ID,
+    weekFloorKey: addDaysToWeekKey(wkNow, -7),
+    maxPages: 80,
+    onMessage: async (_m) => {
+      const emb = _m.embeds?.[0];
+      if (!emb) return;
+      if (!isRegistroManagerEmbed(emb)) return;
 
-      await scanChannelEmbeds(client, {
-        channelId: CH_MANAGER_ID,
-        weekFloorKey: addDaysToWeekKey(wkNow, -7), // busca com folga pra achar registros antigos aprovados/reprovados agora
-        maxPages: 80,
-        onMessage: async (_m) => {
-          const emb = _m.embeds?.[0];
-          if (!emb) return;
-          if (!isRegistroManagerEmbed(emb)) return;
+      const approvedAt = manager_getApprovedAtSP(emb);
+      const rejectedAt = manager_getRejectedAtSP(emb);
 
-          const approvedAt = manager_getApprovedAtSP(emb);
-          const rejectedAt = manager_getRejectedAtSP(emb);
+      if (manager_isApproved(emb) && approvedAt && weekKeyFromDateSP(approvedAt) === wkNow) {
+        rmAprovados += 1;
+      }
 
-          if (manager_isApproved(emb) && approvedAt && weekKeyFromDateSP(approvedAt) === wkNow) {
-            rmAprovados += 1;
-          }
-
-          if (manager_isRejected(emb) && rejectedAt && weekKeyFromDateSP(rejectedAt) === wkNow) {
-            rmReprovados += 1;
-          }
-        },
-      });
-    }
+      if (manager_isRejected(emb) && rejectedAt && weekKeyFromDateSP(rejectedAt) === wkNow) {
+        rmReprovados += 1;
+      }
+    },
+  });
+}
 
     // -------- ALINHAMENTOS --------
     if (CH_ALINHAMENTOS_ID) {
