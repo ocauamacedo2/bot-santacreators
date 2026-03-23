@@ -66,6 +66,7 @@
       CHANNEL_RESTORE_LOG:     '1410688804226076785',
 
       ROLE_GESTAOINFLUENCER:   '1371733765243670538',
+      ROLE_CREATOR_BASE:       '1352939011253076000',
       ROLE_CIDADAO:            '1262978759922028575',
       ROLE_SANTA_CREATORS:     '1352275728476930099',
       CHANNEL_CARGO_LOGS:      '1352491088870375531',
@@ -467,7 +468,7 @@ async function findEarliestTrackedRoleSetAtFromLogs(guild, userId) {
   }
 }
 
-async function resolveInitialTrackedRoleSetAtMs(guild, targetId) {
+async function resolveInitialRoleSetAtMs(guild, targetId) {
   const fromLogs = await findEarliestTrackedRoleSetAtFromLogs(guild, targetId);
   if (fromLogs) return fromLogs;
 
