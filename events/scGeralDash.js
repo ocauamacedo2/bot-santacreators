@@ -734,7 +734,6 @@ function manager_getApprovedAtSP(emb) {
   }
 }
 
-// ✅ data/hora do reprovado (pra semana certa)
 function manager_getRejectedAtSP(emb) {
   try {
     const f = getFields(emb).find((x) => norm(x?.name).includes("reprovado por"));
@@ -1266,38 +1265,8 @@ async function collectAllGeneral(client, mode = "light") {
   });
 
 
-    // ✅ NOVO: pega a data/hora do campo "✅ Aprovado por" (se existir)
-  function manager_getApprovedAtSP(emb) {
-  try {
-    const f = getFields(emb).find((x) => norm(x?.name).includes("aprovado por"));
-    const v = String(f?.value || "").trim();
-    if (!v) return null;
-
-    const m = /(\d{2})\/(\d{2})\/(\d{4})[,\s]+(\d{2}):(\d{2})(?::(\d{2}))?/.exec(v);
-    if (!m) return null;
-
-    const dd = +m[1], mm = +m[2], yy = +m[3], hh = +m[4], mi = +m[5], ss = +(m[6] || 0);
-    return new Date(Date.UTC(yy, mm - 1, dd, hh + 3, mi, ss));
-  } catch {
-    return null;
-  }
-}
-
-function manager_getRejectedAtSP(emb) {
-  try {
-    const f = getFields(emb).find((x) => norm(x?.name).includes("reprovado por"));
-    const v = String(f?.value || "").trim();
-    if (!v) return null;
-
-    const m = v.match(/(\d{1,2})\/(\d{1,2})\/(\d{4}).*?(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?/);
-    if (!m) return null;
-
-    const dd = +m[1], mm = +m[2], yy = +m[3], hh = +m[4], mi = +m[5], ss = +(m[6] || 0);
-    return new Date(Date.UTC(yy, mm - 1, dd, hh + 3, mi, ss));
-  } catch {
-    return null;
-  }
-}
+  // ✅ NÃO redeclare manager_getApprovedAtSP / manager_getRejectedAtSP aqui
+  // ✅ usa as funções globais já declaradas na área de parsers
 
     await scanChannelEmbeds(client, {
     channelId: CH_MANAGER_ID,
