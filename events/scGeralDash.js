@@ -624,6 +624,8 @@ function isRegistroManagerEmbed(emb) {
   );
 }
 
+
+
 function isVipRecordEmbed(emb) {
   const t = norm(emb?.title || emb?.data?.title || "");
   return t.includes("registro de vip por evento");
