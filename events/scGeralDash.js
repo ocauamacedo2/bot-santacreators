@@ -2064,10 +2064,6 @@ async function scanCurrentWeekEmbeds(client, channelId, filterFn, actionFn, maxP
   });
 }
 
-function isVipRecordEmbed(emb) {
-  const t = norm(emb?.title || emb?.data?.title || "");
-  return t.includes("registro de vip por evento");
-}
 
 function vip_getStatus(emb) {
   const fields = getFields(emb);
