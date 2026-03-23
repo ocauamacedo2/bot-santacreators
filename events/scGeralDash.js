@@ -110,7 +110,8 @@ const HALL_CHANNEL_ID = "1386503496353976470";
 const CH_PODERES_ID = "1374066813171929218";
 const CH_EVENTOS_ID = "1392618646630568076";
 const CH_PAGAMENTOS_ID = "1387922662134775818";
-const CH_MANAGER_ID = "1459789854408708319"; 
+const CH_MANAGER_ID = "1459789854408708319"; // arquivo/log histórico
+const CH_MANAGER_MAIN_ID = "1392680204517769277"; // principal da semana
 // ✅ NOVO: Alinhamentos (é o mesmo canal onde ele posta os registros)
 const CH_ALINHAMENTOS_ID = "1425256185707233301";
 const EVT3_STATE_FILE = path.join(DATA_DIR, "evt3_events_state.json");
@@ -621,6 +622,65 @@ function isRegistroManagerEmbed(emb) {
     (t.includes("registro") && t.includes("evento") && t.includes("manager")) ||
     (t.includes("log") && t.includes("registro") && t.includes("manager"))
   );
+}
+
+function isVipRecordEmbed(emb) {
+  const t = norm(emb?.title || emb?.data?.title || "");
+  return t.includes("registro de vip por evento");
+}
+
+function vip_getStatus(emb) {
+  const fields = getFields(emb);
+
+  const solValue = fields.find((f) => norm(f.name).startsWith("solicitacoes"))?.value || "";
+  const pagValue = fields.find((f) => norm(f.name).startsWith("pagamento"))?.value || "";
+  const repValue = fields.find((f) => norm(f.name).startsWith("reprovacao"))?.value || "";
+
+  const solNorm = norm(solValue);
+  const pagNorm = norm(pagValue);
+  const repNorm = norm(repValue);
+
+  return {
+    isSolicitado: solNorm.includes("solicitado"),
+    isPago: pagNorm.includes("pago"),
+    isReprovado: repNorm.includes("reprovado"),
+  };
+}
+
+function vip_getPagoByUserId(emb) {
+  const fields = getFields(emb);
+  const f = fields.find((x) => norm(x?.name).startsWith("pagamento"));
+  const v = String(f?.value || "");
+  const m = /por\s+<@!?(\d+)>/i.exec(v);
+  return m ? m[1] : null;
+}
+
+function vip_getPagoAtSP(emb) {
+  try {
+    const fields = getFields(emb);
+    const f = fields.find((x) => norm(x?.name).startsWith("pagamento"));
+    const v = String(f?.value || "").trim();
+    if (!v) return null;
+
+    let m = /<t:(\d{10,})/i.exec(v);
+    if (m) {
+      return new Date(Number(m[1]) * 1000);
+    }
+
+    m = /(\d{1,2})\/(\d{1,2})\/(\d{4}).*?(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?/i.exec(v);
+    if (!m) return null;
+
+    const dd = +m[1];
+    const mm = +m[2];
+    const yy = +m[3];
+    const hh = +m[4];
+    const mi = +m[5];
+    const ss = +(m[6] || 0);
+
+    return new Date(Date.UTC(yy, mm - 1, dd, hh + 3, mi, ss));
+  } catch {
+    return null;
+  }
 }
 function manager_isApproved(emb) {
   return getFields(emb).some((f) => norm(f?.name).includes("aprovado por"));

@@ -401,10 +401,10 @@ function isVipRecordEmbed(emb) {
 
 function vip_getStatus(emb) {
   const fields = getFields(emb);
-
-  const solValue = fields.find((f) => norm(f?.name).startsWith("solicitacoes"))?.value || "";
-  const pagValue = fields.find((f) => norm(f?.name).startsWith("pagamento"))?.value || "";
-  const repValue = fields.find((f) => norm(f?.name).startsWith("reprovacao"))?.value || "";
+  
+  const solValue = fields.find(f => norm(f.name).startsWith("solicitacoes"))?.value || "";
+  const pagValue = fields.find(f => norm(f.name).startsWith("pagamento"))?.value || "";
+  const repValue = fields.find(f => norm(f.name).startsWith("reprovacao"))?.value || "";
 
   const solNorm = norm(solValue);
   const pagNorm = norm(pagValue);
@@ -413,7 +413,7 @@ function vip_getStatus(emb) {
   return {
     isSolicitado: solNorm.includes("solicitado"),
     isPago: pagNorm.includes("pago"),
-    isReprovado: repNorm.includes("reprovado"),
+    isReprovado: repNorm.includes("reprovado")
   };
 }
 
@@ -425,8 +425,35 @@ function vip_getPagoByUserId(emb) {
   return m ? m[1] : null;
 }
 
+function vip_getPagoAtSP(emb) {
+  try {
+    const fields = getFields(emb);
+    const f = fields.find((x) => norm(x?.name).startsWith("pagamento"));
+    const v = String(f?.value || "").trim();
+    if (!v) return null;
 
+    // 1) tenta pegar timestamp do Discord: <t:1234567890:F>
+    let m = /<t:(\d{10,})/i.exec(v);
+    if (m) {
+      return new Date(Number(m[1]) * 1000);
+    }
 
+    // 2) fallback pra dd/mm/yyyy hh:mm:ss caso um dia o formato mude
+    m = /(\d{1,2})\/(\d{1,2})\/(\d{4}).*?(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?/i.exec(v);
+    if (!m) return null;
+
+    const dd = +m[1];
+    const mm = +m[2];
+    const yy = +m[3];
+    const hh = +m[4];
+    const mi = +m[5];
+    const ss = +(m[6] || 0);
+
+    return new Date(Date.UTC(yy, mm - 1, dd, hh + 3, mi, ss));
+  } catch {
+    return null;
+  }
+}
 
 
 // ✅ data/hora do aprovado (pra semana certa)
@@ -812,30 +839,31 @@ async function collectAllPoints(client, mode = "light") {
     },
   });
 
-  // VIP EVENTO (conta ponto só para quem clicou em PAGO)
-  await scanChannelEmbeds(client, {
-    channelId: VIP_MENU_CHANNEL_ID,
-    weekFloorKey,
-    maxPages: 80,
-    onMessage: async (m) => {
-      const emb = m.embeds?.[0];
-      if (!emb) return;
-      if (!isVipRecordEmbed(emb)) return;
+// VIP EVENTO (conta ponto só para quem clicou em PAGO)
+await scanChannelEmbeds(client, {
+  channelId: VIP_MENU_CHANNEL_ID,
+  weekFloorKey,
+  maxPages: 80,
+  onMessage: async (m) => {
+    const emb = m.embeds?.[0];
+    if (!emb) return;
+    if (!isVipRecordEmbed(emb)) return;
 
-      const status = vip_getStatus(emb);
-      if (!status.isPago) return;
+    const status = vip_getStatus(emb);
+    if (!status.isPago) return;
 
-      const uid = vip_getPagoByUserId(emb);
-      if (!uid) return;
+    const uid = vip_getPagoByUserId(emb);
+    if (!uid) return;
 
-      pushItem({
-        userId: uid,
-        ts: new Date(m.createdTimestamp),
-        source: "vipPagos",
-      });
-    },
-  });
+    const paidAt = vip_getPagoAtSP(emb);
 
+    pushItem({
+      userId: uid,
+      ts: paidAt || new Date(m.createdTimestamp),
+      source: "vipPagos",
+    });
+  },
+});
   // MANAGER (só aprovados, na semana do approvedAt)
   await scanChannelEmbeds(client, {
     channelId: CH_MANAGER_ID,

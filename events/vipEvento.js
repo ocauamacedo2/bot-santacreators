@@ -948,10 +948,10 @@ if (i.customId === VIP_BTN_PAGO_ID) {
             })
             .catch(() => {});
 
-            dashEmit("vip:pago", {
-  by: i.user.id,  
+           dashEmit("vip:pago", {
+  by: i.user.id,
   __at: Date.now(),
-})
+});
 
         await safeReply(i, { content: "✅ Marcado como **pago**. Botões desabilitados.", ephemeral: true });
         return true;
