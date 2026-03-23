@@ -592,6 +592,22 @@ function isDoacaoLogEmbed(emb) {
 function doacaoWasScoredFromEmbed(emb) {
   try {
     const fields = getFields(emb);
+
+    // prioridade = regra do Geral/Semanal (12h)
+    const geral = fields.find((f) => {
+      const n = norm(f?.name);
+      return n.includes("geraldash/semanal") || n.includes("geraldash") || n.includes("semanal");
+    });
+
+    const vg = String(geral?.value || "");
+    if (vg) {
+      if (/isento/i.test(vg)) return true;
+      if (/\+1/.test(vg)) return true;
+      if (/✅/.test(vg)) return true;
+      return false;
+    }
+
+    // fallback para logs antigos
     const anti = fields.find((f) => norm(f?.name).includes("anti-farm"));
     const v = String(anti?.value || "");
     if (/isento/i.test(v)) return true;

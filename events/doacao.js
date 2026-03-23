@@ -880,23 +880,35 @@ export async function doacaoHandleInteraction(interaction, client) {
 
 
         const scoreLine = exempt
-          ? "⚡ Pontuação: **isento** (conta tudo)"
-          : scored
-            ? "✅ Pontuação: **+1** (limite 1/h)"
-            : `⏳ Pontuação: **não contou** (faltam **${msToHuman(remainingMs)}**)`;
+  ? "⚡ Pontuação: **isento** (conta tudo)"
+  : scored
+    ? "✅ Pontuação: **+1** (limite 1/h)"
+    : `⏳ Pontuação: **não contou** (faltam **${msToHuman(remainingMs)}**)`;
 
-        const embedBase = new EmbedBuilder()
-          .setTitle("📦 Nova Doação Registrada")
-          .addFields(
-            { name: "👤 Doado para", value: displayParaQuem, inline: true },
-            { name: "🧾 Item", value: displayItem, inline: true },
-            { name: "📦 Quantidade", value: displayQtd, inline: true },
-            { name: "✍️ Registrado por", value: `<@${interaction.user.id}>`, inline: false },
-            { name: "🧠 Anti-farm", value: scoreLine, inline: false },
-            { name: "🏁 Ranking mensal (1–31)", value: summaryText, inline: false }
-          )
-          .setTimestamp()
-          .setColor("Green");
+const geralLine = exempt
+  ? "⚡ Geral/Semanal: **isento** (conta tudo)"
+  : shouldEmitDash
+    ? "✅ Geral/Semanal: **+1** (cooldown 12h)"
+    : "⏳ Geral/Semanal: **não contou** (cooldown 12h)";
+
+const embedBase = new EmbedBuilder()
+  .setTitle("📦 Nova Doação Registrada")
+  .addFields(
+    { name: "👤 Doado para", value: displayParaQuem, inline: true },
+    { name: "🧾 Item", value: displayItem, inline: true },
+    { name: "📦 Quantidade", value: displayQtd, inline: true },
+    { name: "✍️ Registrado por", value: `<@${interaction.user.id}>`, inline: false },
+
+    // continua sendo a regra do ranking mensal da doação
+    { name: "🧠 Anti-farm", value: scoreLine, inline: false },
+
+    // NOVO: regra específica do GeralDash / Ranking Semanal
+    { name: "🧠 GeralDash/Semanal", value: geralLine, inline: false },
+
+    { name: "🏁 Ranking mensal (1–31)", value: summaryText, inline: false }
+  )
+  .setTimestamp()
+  .setColor("Green");
 
         const canalLog = CANAL_LOGS_ID ? await client.channels.fetch(CANAL_LOGS_ID).catch(() => null) : null;
 

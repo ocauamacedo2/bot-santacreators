@@ -1637,16 +1637,26 @@ function getStatusValueFromEmbed(emb) {
 function doacaoWasScoredFromEmbed(emb) {
   try {
     const fields = getFields(emb);
+
+    // NOVO: prioridade para a regra específica do Geral/Semanal
+    const geral = fields.find((f) => {
+      const n = norm(f?.name);
+      return n.includes("geraldash/semanal") || n.includes("geraldash") || n.includes("semanal");
+    });
+
+    const vg = String(geral?.value || "");
+    if (vg) {
+      if (/isento/i.test(vg)) return true;
+      if (/\+1/.test(vg)) return true;
+      if (/✅/.test(vg)) return true;
+      return false;
+    }
+
+    // fallback para logs antigos
     const anti = fields.find((f) => norm(f?.name).includes("anti-farm"));
     const v = String(anti?.value || "");
-
-    // conta quando pontuou (+1) OU quando é isento (conta tudo)
-    // doacao.js monta:
-    // - "⚡ Pontuação: **isento** (conta tudo)"
-    // - "✅ Pontuação: **+1** (limite 1/h)"
     if (/isento/i.test(v)) return true;
     if (/\+1/.test(v)) return true;
-
     return false;
   } catch {
     return false;
@@ -1919,25 +1929,40 @@ async function backfillGestaoThisWeek(client) {
     let pagReprovados = 0;
 
 // -------- MANAGER (Aprovados/Reprovados) --------
-if (CH_MANAGER_ID) {
+const seenRmApproved = new Set();
+const seenRmRejected = new Set();
+
+for (const rmChannelId of [CH_MANAGER_ID, CH_MANAGER_MAIN_ID]) {
+  if (!rmChannelId) continue;
+
   await scanChannelEmbeds(client, {
-    channelId: CH_MANAGER_ID,
+    channelId: rmChannelId,
     weekFloorKey: addDaysToWeekKey(wkNow, -7),
-    maxPages: 80,
+    maxPages: 150,
     onMessage: async (_m) => {
       const emb = _m.embeds?.[0];
       if (!emb) return;
       if (!isRegistroManagerEmbed(emb)) return;
 
-      const approvedAt = manager_getApprovedAtSP(emb);
-      const rejectedAt = manager_getRejectedAtSP(emb);
+      const registrarId = manager_getRegistrarId(emb) || "sem_registrante";
+      const managerId = manager_getManagerId(emb) || "sem_manager";
 
+      const approvedAt = manager_getApprovedAtSP(emb);
       if (manager_isApproved(emb) && approvedAt && weekKeyFromDateSP(approvedAt) === wkNow) {
-        rmAprovados += 1;
+        const key = `${registrarId}|${managerId}|${approvedAt.getTime()}`;
+        if (!seenRmApproved.has(key)) {
+          seenRmApproved.add(key);
+          rmAprovados += 1;
+        }
       }
 
+      const rejectedAt = manager_getRejectedAtSP(emb);
       if (manager_isRejected(emb) && rejectedAt && weekKeyFromDateSP(rejectedAt) === wkNow) {
-        rmReprovados += 1;
+        const key = `${registrarId}|${managerId}|${rejectedAt.getTime()}`;
+        if (!seenRmRejected.has(key)) {
+          seenRmRejected.add(key);
+          rmReprovados += 1;
+        }
       }
     },
   });
@@ -2225,16 +2250,23 @@ async function backfillExtrasThisWeek(client) {
 
     // -------- CRONOGRAMA --------
     if (CRONOGRAMA_LOGS_CHANNEL_ID) {
-      await scanCurrentWeekEmbeds(
-        client,
-        CRONOGRAMA_LOGS_CHANNEL_ID,
-        (emb) => isCronogramaApprovedEmbed(emb),
-        async () => {
-          cronograma += 1;
-        },
-        25
-      );
-    }
+  await scanChannelEmbeds(client, {
+    channelId: CRONOGRAMA_LOGS_CHANNEL_ID,
+    weekFloorKey: addDaysToWeekKey(wkNow, -7),
+    maxPages: 80,
+    onMessage: async (_m) => {
+      const emb = _m.embeds?.[0];
+      if (!emb) return;
+      if (!isCronogramaApprovedEmbed(emb)) return;
+
+      // conta pela data da aprovação/edição, não só pela criação
+      const ts = new Date(_m.editedTimestamp || _m.createdTimestamp);
+      if (weekKeyFromDateSP(ts) !== wkNow) return;
+
+      cronograma += 1;
+    },
+  });
+}
 
     // -------- PRESENÇAS --------
     if (PRESENCA_LOGS_CHANNEL_ID) {
