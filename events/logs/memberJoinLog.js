@@ -4,7 +4,7 @@ import { EmbedBuilder, Events, Collection, ChannelType } from 'discord.js';
 const invites = new Collection();
 
 // Canal de logs de entrada/saída
-const LOG_CHANNEL_ID = '1377747538433806417';
+const LOG_CHANNEL_ID = '1362651746866036837';
 
 /**
  * Inicializa o cache de convites quando o bot fica pronto.
