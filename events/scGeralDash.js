@@ -2034,27 +2034,6 @@ async function scanCurrentWeekEmbeds(client, channelId, filterFn, actionFn, maxP
 }
 
 
-function vip_getStatus(emb) {
-  const fields = getFields(emb);
-  
-  // Procura campos que comecem com o nome esperado (normalizado)
-  const solValue = fields.find(f => norm(f.name).startsWith("solicitacoes"))?.value || "";
-  const pagValue = fields.find(f => norm(f.name).startsWith("pagamento"))?.value || "";
-  const repValue = fields.find(f => norm(f.name).startsWith("reprovacao"))?.value || "";
-
-  // Normaliza o VALOR do campo para remover maiúsculas e markdown antes de checar
-  const solNorm = norm(solValue);
-  const pagNorm = norm(pagValue);
-  const repNorm = norm(repValue);
-
-  return {
-    isSolicitado: solNorm.includes("solicitado"),
-    isPago: pagNorm.includes("pago"),
-    isReprovado: repNorm.includes("reprovado")
-  };
-}
-
-
 function isHallDaFamaMsg(msg) {
   // Hall da fama é mensagem de texto enviada pelo bot
   return msg.content && msg.content.includes("HALL DA FAMA");
