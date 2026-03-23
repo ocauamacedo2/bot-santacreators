@@ -68,7 +68,7 @@
       ROLE_GESTAOINFLUENCER:   '1371733765243670538',
       ROLE_CIDADAO:            '1262978759922028575',
       ROLE_SANTA_CREATORS:     '1352275728476930099',
-
+      CHANNEL_CARGO_LOGS:      '1352491088870375531',
       AUTH_USER_IDS: [
         '660311795327828008',
         '1262262852949905408'
@@ -328,6 +328,158 @@
       return true;
     }
 
+
+    const CREATOR_BASE_ROLE_ID = SC_GI_CFG.ROLE_CREATOR_BASE;
+
+function extractFirstTimestampFromEmbed(embed) {
+  if (!embed) return null;
+
+  if (embed.timestamp) {
+    const ts = new Date(embed.timestamp).getTime();
+    if (Number.isFinite(ts)) return ts;
+  }
+
+  const raw = [
+    embed.title || '',
+    embed.description || '',
+    ...(Array.isArray(embed.fields) ? embed.fields.flatMap(f => [f?.name || '', f?.value || '']) : []),
+    embed.footer?.text || ''
+  ].join('\n');
+
+  // Exemplo: segunda-feira, 23 de março de 2026 05:13
+  const m = raw.match(/(\d{1,2})\s+de\s+(janeiro|fevereiro|março|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\s+de\s+(\d{4})\s+(\d{2}):(\d{2})/i);
+  if (!m) return null;
+
+  const meses = {
+    janeiro: 0,
+    fevereiro: 1,
+    março: 2,
+    marco: 2,
+    abril: 3,
+    maio: 4,
+    junho: 5,
+    julho: 6,
+    agosto: 7,
+    setembro: 8,
+    outubro: 9,
+    novembro: 10,
+    dezembro: 11
+  };
+
+  const dia = Number(m[1]);
+  const mes = meses[m[2].toLowerCase()];
+  const ano = Number(m[3]);
+  const hora = Number(m[4]);
+  const minuto = Number(m[5]);
+
+  if (mes == null) return null;
+
+  // horário SP (-03)
+  return Date.UTC(ano, mes, dia, hora + 3, minuto, 0, 0);
+}
+
+function messageMentionsUserInEmbed(msg, userId) {
+  const uid = String(userId);
+  const embeds = Array.isArray(msg?.embeds) ? msg.embeds : [];
+  for (const emb of embeds) {
+    const raw = [
+      emb.title || '',
+      emb.description || '',
+      ...(Array.isArray(emb.fields) ? emb.fields.flatMap(f => [f?.name || '', f?.value || '']) : []),
+      emb.footer?.text || ''
+    ].join('\n');
+
+    if (
+      raw.includes(`<@${uid}>`) ||
+      raw.includes(`(${uid})`) ||
+      raw.includes(`| ${uid}`) ||
+      raw.includes(` ${uid}`)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function embedContainsTrackedRoleAdd(msg) {
+  const embeds = Array.isArray(msg?.embeds) ? msg.embeds : [];
+  for (const emb of embeds) {
+    const raw = [
+      emb.title || '',
+      emb.description || '',
+      ...(Array.isArray(emb.fields) ? emb.fields.flatMap(f => [f?.name || '', f?.value || '']) : []),
+      emb.footer?.text || ''
+    ].join('\n').toLowerCase();
+
+    const isCargoAdded =
+      raw.includes('cargo adicionado') ||
+      raw.includes('cargos adicionados');
+
+    if (!isCargoAdded) continue;
+
+    const hasGI =
+      raw.includes('gestaoinfluencer') ||
+      raw.includes(`<@&${GI_ROLE_ID}>`) ||
+      raw.includes(GI_ROLE_ID);
+
+    const hasCreator =
+      raw.includes('creator') ||
+      raw.includes(`<@&${CREATOR_BASE_ROLE_ID}>`) ||
+      raw.includes(CREATOR_BASE_ROLE_ID);
+
+    if (hasGI || hasCreator) return true;
+  }
+  return false;
+}
+
+async function findEarliestTrackedRoleSetAtFromLogs(guild, userId) {
+  try {
+    const ch = await guild.channels.fetch(SC_GI_CFG.CHANNEL_CARGO_LOGS).catch(() => null);
+    if (!ch || !ch.isTextBased()) return null;
+
+    let earliest = null;
+    let before = undefined;
+
+    // varre bastante, mas sem mudar a lógica do resto
+    for (let page = 0; page < 20; page++) {
+      const msgs = await ch.messages.fetch({ limit: 100, before }).catch(() => null);
+      if (!msgs || msgs.size === 0) break;
+
+      const ordered = [...msgs.values()].reverse(); // mais antigas -> mais novas
+      for (const msg of ordered) {
+        if (!messageMentionsUserInEmbed(msg, userId)) continue;
+        if (!embedContainsTrackedRoleAdd(msg)) continue;
+
+        const ts = extractFirstTimestampFromEmbed(msg.embeds?.[0]) || msg.createdTimestamp || null;
+        if (ts && (!earliest || ts < earliest)) {
+          earliest = ts;
+        }
+      }
+
+      before = msgs.last()?.id;
+      if (!before) break;
+    }
+
+    return earliest;
+  } catch (e) {
+    console.warn('[SC_GI] Falha ao buscar primeira setagem pelos logs:', e?.message);
+    return null;
+  }
+}
+
+async function resolveInitialTrackedRoleSetAtMs(guild, targetId) {
+  const fromLogs = await findEarliestTrackedRoleSetAtFromLogs(guild, targetId);
+  if (fromLogs) return fromLogs;
+
+  const member = await fetchMemberCached(guild, targetId).catch(() => null);
+  if (member && (member.roles.cache.has(GI_ROLE_ID) || member.roles.cache.has(CREATOR_BASE_ROLE_ID))) {
+    return nowMs();
+  }
+
+  return null;
+}
+
+
     function getWarningData(userId) {
       const key = String(userId);
       const it = SC_GI_STATE.giWarningsByUser.get(key);
@@ -422,8 +574,8 @@ try {
           `📌 **Status:** ${active ? 'Ativo' : 'Pausado'}`,
           `🔒 **Cargo obrigatório enquanto ativo:** <@&${GI_ROLE_ID}>`,
           rec?.warnNoRoleGI
-            ? '\n⚠️ *Atenção:* este membro **não possui** o cargo base de gestaoinfluencer no momento do registro.'
-            : (rec?.roleSetAtMs ? `\n✅ **Cargo GI setado em:** \`${msToDDMMYYYY(rec.roleSetAtMs)}\`` : '')
+  ? '\n⚠️ *Atenção:* este membro **não possui** GI/Creator base no momento do registro.'
+  : (rec?.roleSetAtMs ? `\n✅ **Primeira setagem GI/Creator em:** \`${msToDDMMYYYY(rec.roleSetAtMs)}\`` : '')
         ].filter(Boolean).join('\n'))
         .setImage(GIF_SC_GI)
         .setFooter({ text: 'SantaCreators • gestaoinfluencer' })
@@ -786,8 +938,9 @@ try {
         SC_GI_STATE.registros.delete(r.messageId);
       }
 
-      // cria o registro
-      let warnNoRoleGI = false, roleSetAtMs = null;
+    // cria o registro
+let warnNoRoleGI = false;
+let roleSetAtMs = await resolveInitialRoleSetAtMs(guild, targetUser.id);
       const ch = await guild.channels.fetch(SC_GI_CFG.CHANNEL_MENU_E_REGISTROS).catch(() => null);
       if (!ch || ch.type !== ChannelType.GuildText) throw new Error('Canal de registros indisponível.');
 
@@ -849,23 +1002,34 @@ await msg.edit({
 }).catch(()=>{});
 
 
-      // ✅ NOVO: já seta cargo GI automaticamente ao criar
-      // Se for criado pausado (via pedirset), NÃO adiciona o cargo agora
-      if (record.active) {
-        await addGIRole(guild, record.targetId, 'Registro criado: GI obrigatório');
-      }
+     // ✅ NOVO: já seta cargo GI automaticamente ao criar
+// Se for criado pausado (via pedirset), NÃO adiciona o cargo agora
+if (record.active) {
+  await addGIRole(guild, record.targetId, 'Registro criado: GI obrigatório');
+}
 
-      // atualiza flags visuais (se conseguiu setar o cargo)
-      try {
-        const member = await fetchMemberCached(guild, record.targetId);
-        if (!member || !member.roles.cache.has(GI_ROLE_ID)) {
-          record.warnNoRoleGI = true;
-        } else {
-          record.warnNoRoleGI = false;
-          record.roleSetAtMs = nowMs();
-        }
-        SC_GI_scheduleSave();
-      } catch {}
+// atualiza flags visuais sem sobrescrever a primeira data histórica
+try {
+  const member = await fetchMemberCached(guild, record.targetId);
+
+  const hasTrackedRole = !!(
+    member &&
+    (member.roles.cache.has(GI_ROLE_ID) || member.roles.cache.has(CREATOR_BASE_ROLE_ID))
+  );
+
+  if (!hasTrackedRole) {
+    record.warnNoRoleGI = true;
+  } else {
+    record.warnNoRoleGI = false;
+
+    // só define se ainda não existe nada salvo
+    if (!record.roleSetAtMs) {
+      record.roleSetAtMs = await resolveInitialRoleSetAtMs(guild, record.targetId);
+    }
+  }
+
+  SC_GI_scheduleSave();
+} catch {}
 
       // ✅ NOVO: DM BOAS-VINDAS (parabéns + 1 mês = vip/destaques)
       const welcome = dmWelcomeEmbed(record, targetUser);
@@ -976,16 +1140,27 @@ await msg.edit({
         if (!rec.nextWeekTickMs) rec.nextWeekTickMs = computeNextWeekTick(rec.joinDateMs);
 
         // ✅ seta cargo GI quando despausar
-        await addGIRole(guild, rec.targetId, 'Retomado via botão (GI obrigatório)');
+await addGIRole(guild, rec.targetId, 'Retomado via botão (GI obrigatório)');
 
-        // ✅ ATUALIZA STATUS DO CARGO (remove aviso e seta data)
-        try {
-          const member = await fetchMemberCached(guild, rec.targetId);
-          if (member && member.roles.cache.has(GI_ROLE_ID)) {
-            rec.warnNoRoleGI = false;
-            rec.roleSetAtMs = nowMs();
-          }
-        } catch {}
+// ✅ atualiza status visual SEM mudar a data histórica do primeiro set
+try {
+  const member = await fetchMemberCached(guild, rec.targetId);
+  const hasTrackedRole = !!(
+    member &&
+    (member.roles.cache.has(GI_ROLE_ID) || member.roles.cache.has(CREATOR_BASE_ROLE_ID))
+  );
+
+  if (hasTrackedRole) {
+    rec.warnNoRoleGI = false;
+
+    // não sobrescreve nunca a data se já existir
+    if (!rec.roleSetAtMs) {
+      rec.roleSetAtMs = await resolveInitialRoleSetAtMs(guild, rec.targetId);
+    }
+  } else {
+    rec.warnNoRoleGI = true;
+  }
+} catch {}
       }
       SC_GI_scheduleSave();
 
