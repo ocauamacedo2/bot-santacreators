@@ -949,6 +949,8 @@ let roleSetAtMs = await resolveInitialRoleSetAtMs(guild, targetUser.id);
       const weeks  = Math.max(0, Math.floor(days / 7));
       const months = monthsSince(joinMs);
 
+      const initialActive = options.initialActive ?? false;
+
       const tempRec = {
         messageId: null,
         guildId: guild.id,
@@ -958,8 +960,8 @@ let roleSetAtMs = await resolveInitialRoleSetAtMs(guild, targetUser.id);
         area: areaStr,
         joinDateMs: joinMs,
         createdAtMs: nowMs(),
-        active: options.initialActive !== undefined ? options.initialActive : true,
-        nextWeekTickMs: computeNextWeekTick(joinMs),
+        active: initialActive,
+        nextWeekTickMs: initialActive ? computeNextWeekTick(joinMs) : null,
         oneMonthNotified: false,
         oneMonthNotifiedAt: null,
         note: '',
@@ -967,7 +969,7 @@ let roleSetAtMs = await resolveInitialRoleSetAtMs(guild, targetUser.id);
         responsibleType: null,
         warnNoRoleGI,
         responsibleHistory: [],
-        pausedAtMs: options.initialActive === false ? nowMs() : null,
+        pausedAtMs: initialActive ? null : nowMs(),
         totalPausedMs: 0,
         roleSetAtMs,
         passaporte: options.passaporte || null // ✅ Salva o ID se vier do pedirset
@@ -1037,14 +1039,16 @@ try {
       await sendDM_andMirror(guild, targetUser, welcome);
 
       // log
-      await logMsg(
+         await logMsg(
         guild,
         'Novo Registro (GI)',
         [
           `👤 Membro: <@${targetUser.id}>`,
           `🗓️ Entrada: \`${msToDDMMYYYY(joinMs)}\``,
           `🧭 Área: \`${areaStr}\``,
-          `✅ Cargo GI setado automaticamente: <@&${GI_ROLE_ID}>`,
+          record.active
+            ? `✅ Cargo GI setado automaticamente: <@&${GI_ROLE_ID}>`
+            : `⏸️ Registro criado pausado (sem setar o cargo GI agora).`,
           `🧾 Por: <@${registrar.id}>`,
           `Ir ao registro})`
         ].filter(Boolean).join('\n'),
