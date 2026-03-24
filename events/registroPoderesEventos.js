@@ -10,10 +10,15 @@ import {
   TextInputStyle,
   ChannelType
 } from "discord.js";
+import { dashEmit } from "../utils/dashHub.js";
 
 // ======= CONFIG =======
 const SC_PWR_MENU_CHANNEL_ID = "1416693217415663657";
 const SC_PWR_LEMBRETES_CHANNEL_ID = "1416693076771999844";
+
+// ✅ NOVO: canal que o GeralDash / Ranking escaneiam para EVENTO / EVENTO PODER
+const SC_PWR_EVENTOS_LOG_CHANNEL_ID = "1392618646630568076";
+
 const SC_PWR_ALLOWED_USER_IDS = new Set([
   "1262262852949905408", // owner
   "660311795327828008",  // você
@@ -91,7 +96,7 @@ function alvoSafeUser(u) {
 function SC_PWR_bigEmbed({ guild, registrar, alvo, poder, obs }) {
   const emb = new EmbedBuilder()
     .setColor(0x9146FF)
-    .setTitle("📋 Registro de Poder para Evento")
+    .setTitle("📋 Registro de Uso de Poder em Evento")
     .setDescription(
       [
         `**Poder setado:** ${poder}`,
@@ -100,12 +105,13 @@ function SC_PWR_bigEmbed({ guild, registrar, alvo, poder, obs }) {
         `👤 **Alvo:** <@${alvo.id}> (\`${alvo.id}\`)`,
         `🛠️ **Registrado por:** <@${registrar.id}> (\`${registrar.id}\`)`,
         "",
+        `✅ **GeralDash/Semanal:** +1 ponto para quem registrou`,
         `⏰ **Lembrete em 2h30** será enviado ao registrante para remover o poder.`,
       ].filter(Boolean).join("\n")
     )
     .setImage(SC_PWR_GIF_URL)
     .setTimestamp(new Date())
-    .setFooter({ text: guild?.name ?? "SantaCreators" });
+    .setFooter({ text: "SC_EVENTO_PODER_V1" });
 
   if (alvo?.displayAvatarURL) emb.setThumbnail(alvo.displayAvatarURL({ size: 128 }));
   if (registrar?.displayAvatarURL) emb.setAuthor({
@@ -266,10 +272,13 @@ export async function registroPoderesEventosHandleInteraction(interaction, clien
             return interaction.reply({ content: "⚠️ Não consegui encontrar o usuário pelo ID informado.", ephemeral: true }).catch(() => {});
           }
 
-          const menuChan = await SC_PWR_fetchChannel(client, SC_PWR_MENU_CHANNEL_ID);
+                    const menuChan = await SC_PWR_fetchChannel(client, SC_PWR_MENU_CHANNEL_ID);
           if (!menuChan) {
             return interaction.reply({ content: "❌ Erro: canal do menu não encontrado.", ephemeral: true }).catch(() => {});
           }
+
+          // ✅ NOVO: canal real de logs/scan do GeralDash + Ranking
+          const eventosLogChan = await SC_PWR_fetchChannel(client, SC_PWR_EVENTOS_LOG_CHANNEL_ID);
 
           // Registro público no canal de menu
           const emb = SC_PWR_bigEmbed({
@@ -279,10 +288,33 @@ export async function registroPoderesEventosHandleInteraction(interaction, clien
             poder,
             obs
           });
-          await menuChan.send({ embeds: [emb] }).catch(() => {});
+
+          // 1) envia no canal do menu
+          const registroMsg = await menuChan.send({ embeds: [emb] }).catch(() => null);
+
+          // 2) ✅ NOVO: envia também no canal de logs de eventos
+          let registroLogMsg = null;
+          if (eventosLogChan && eventosLogChan.id !== menuChan.id) {
+            registroLogMsg = await eventosLogChan.send({ embeds: [emb] }).catch(() => null);
+          }
+
+          // ✅ emite pro GeralDash / Ranking atualizarem na hora
+          try {
+            dashEmit("eventopoder:registrado", {
+              userId: registrar.id,          // quem ganha o ponto
+              alvoUserId: alvoUser.id,
+              poder,
+              obs,
+              channelId: (registroLogMsg?.channelId || eventosLogChan?.id || menuChan.id),
+              messageId: (registroLogMsg?.id || registroMsg?.id || null),
+              __at: Date.now(),
+            });
+          } catch (e) {
+            console.error("[SC_PWR] Falha ao emitir dash event eventopoder:registrado:", e);
+          }
 
           await interaction.reply({
-            content: `✅ Registro criado com sucesso para <@${alvoUser.id}> — **${poder}**.\nUm lembrete será enviado em **2h30**.`,
+            content: `✅ Registro criado com sucesso para <@${alvoUser.id}> — **${poder}**.\nVocê ganhou **+1 ponto** no Geral/Semanal.\nUm lembrete será enviado em **2h30**.`,
             ephemeral: true
           }).catch(() => {});
 
