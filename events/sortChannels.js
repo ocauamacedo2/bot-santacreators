@@ -180,6 +180,25 @@ function deleteChannelState(channelId) {
   saveSortState(state);
 }
 
+// ✅ Resolve a categoria "real" do canal para comandos de movimentação.
+// Em canal normal: usa parentId.
+// Em canal cujo pai não é categoria direta: tenta subir 1 nível.
+function resolveEffectiveCategoryId(channel) {
+  if (!channel) return null;
+
+  // Caso comum: o pai já é uma categoria
+  if (channel.parent?.type === ChannelType.GuildCategory) {
+    return channel.parentId ?? null;
+  }
+
+  // Caso em que o canal está "dentro" de algo cujo pai é a categoria
+  if (channel.parent?.parentId) {
+    return channel.parent.parentId;
+  }
+
+  return channel.parentId ?? null;
+}
+
 // Variáveis globais do módulo de ordenação
 const runningLocks = new Map();
 const debouncers = new Map();
@@ -660,7 +679,7 @@ export async function sortChannelsHandleMessage(message, client) {
   try {
     if (!message.guild || message.author.bot) return false;
 
-const content = message.content.trim().toLowerCase();
+const content = message.content.trim().toLowerCase().split(/\s+/)[0];
 
 const INACTIVE_COMMANDS = ["!inativo", "!inativos"];
 const REACTIVATE_COMMANDS = ["!membro", "!membros", "!reativar"];
@@ -686,9 +705,8 @@ const isReactivateCmd = REACTIVATE_COMMANDS.includes(content);
       console.error(`[SC_SORT] Objeto de membro para ${message.author.id} é nulo mesmo após fetch.`);
       return true;
     }
-
-        const channel = message.channel;
-    const currentCategoryId = channel.parentId;
+const channel = message.channel;
+const currentCategoryId = resolveEffectiveCategoryId(channel);
 
         const isSpecialAuthorized =
       INATIVO_CONFIG.SPECIAL_AUTHORIZED_USERS.includes(message.author.id) ||
@@ -947,11 +965,23 @@ const isReactivateCmd = REACTIVATE_COMMANDS.includes(content);
     // =====================================================
     // LÓGICA PARA !MEMBROS
     // =====================================================
-        if (isReactivateCmd) {
-      // =====================================================
-      // 1. LÓGICA PADRÃO DE REATIVAÇÃO
-      // =====================================================
-      if (INATIVO_CONFIG.STANDARD_FLOW_CATEGORIES.includes(currentCategoryId)) {
+if (isReactivateCmd) {
+  const isInactiveCategory =
+    INATIVO_CONFIG.TARGET_CATEGORIES.includes(currentCategoryId);
+
+  const isExtraEntryCategory =
+    INATIVO_CONFIG.EXTRA_COMMAND_CATEGORIES.includes(currentCategoryId);
+
+  const isMembersCategory =
+    currentCategoryId === INATIVO_CONFIG.SOURCE_CATEGORY;
+
+  const isStandardReactivateContext =
+    isInactiveCategory || isExtraEntryCategory || isMembersCategory;
+
+  // =====================================================
+  // 1. LÓGICA PADRÃO DE REATIVAÇÃO
+  // =====================================================
+  if (isStandardReactivateContext) {
         if (!canUseStandardFlow && !isSpecialAuthorized) {
           const allowedCats = INATIVO_CONFIG.STANDARD_FLOW_CATEGORIES
             .map((id) => `<#${id}>`)
