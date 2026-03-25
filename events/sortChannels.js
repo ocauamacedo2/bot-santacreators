@@ -687,7 +687,16 @@ const REACTIVATE_COMMANDS = ["!membro", "!membros", "!reativar"];
 const isInactiveCmd = INACTIVE_COMMANDS.includes(content);
 const isReactivateCmd = REACTIVATE_COMMANDS.includes(content);
 
-    if (!isInactiveCmd && !isReactivateCmd) return false;
+if (isInactiveCmd || isReactivateCmd) {
+  console.log("[SC_SORT] comando detectado:", {
+    content,
+    channelId: message.channel?.id,
+    channelName: message.channel?.name,
+    parentId: message.channel?.parentId,
+  });
+}
+
+if (!isInactiveCmd && !isReactivateCmd) return false;
 
     // 1. Verifica Permissões
     let member = message.member;

@@ -368,13 +368,19 @@ const setupEventHandlers = () => {
       try { await reminderHandleMessageCreate(message, client); } catch (e) {}
       cacheMessage(message);
 
+      // ✅ PRIORIDADE MÁXIMA: comandos de mover canal
+      try {
+        if (await sortChannelsHandleMessage(message, client)) return;
+      } catch (e) {
+        console.error("[CORE] erro em sortChannelsHandleMessage:", e);
+      }
 
-    // ✅ AUTO REACT FOTOS / GERAL (ANTES DOS RETURNS)
-    try {
-      if (await autoReactsFotosHandleMessage(message, client)) return;
-    } catch (e) {
-      console.error("[CORE] erro em autoReactsFotosHandleMessage:", e);
-    }
+      // ✅ AUTO REACT FOTOS / GERAL
+      try {
+        if (await autoReactsFotosHandleMessage(message, client)) return;
+      } catch (e) {
+        console.error("[CORE] erro em autoReactsFotosHandleMessage:", e);
+      }
 
       if (await payEvtDashHandleMessage(message, client)) return;
       if (await facsComparativoHandleMessage(message, client)) return;
@@ -389,7 +395,6 @@ const setupEventHandlers = () => {
       if (await cronogramaCreatorsHandleMessage(message, client)) return;
       if (await hierarquiaHandleMessage(message, client)) return;
       if (await reuniaoSemanalHandleMessage(message, client)) return;
-      if (await sortChannelsHandleMessage(message, client)) return;
       if (await roleProtectHandleMessage(message, client)) return;
       if (await connectStatusHandleMessage(message, client)) return;
       if (await orgsHandleMessage(message, client)) return;
