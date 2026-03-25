@@ -437,28 +437,58 @@ export async function sortChannelsHandleMessage(message, client) {
 
     // --- !REATIVAR / !MEMBRO ---
     if (["!membro", "!membros", "!reativar"].includes(content)) {
-        // 1. Reativar Especial
+        const isInactiveCat = INATIVO_CONFIG.TARGET_CATEGORIES.includes(catId);
+        const isExtraEntryCat = INATIVO_CONFIG.EXTRA_COMMAND_CATEGORIES.includes(catId);
+        const isMembersCat = catId === INATIVO_CONFIG.SOURCE_CATEGORY;
+
+        // Debug Logs solicitados
+        console.log("[SC_SORT][REATIVAR_DEBUG]", {
+            content,
+            channelId: channel.id,
+            channelName: channel.name,
+            parentId: catId,
+            currentCategoryId: catId,
+            isInactiveCmd: false,
+            isReactivateCmd: true,
+            isInactiveCategory: isInactiveCat,
+            isExtraEntryCategory: isExtraEntryCat,
+            isMembersCategory: isMembersCat,
+            isSpecialAuthorized: isSpecialAuth,
+            canUseStandardFlow: canUse
+        });
+
+        // 1. Reativar Especial (Prioridade)
         if (catId === INATIVO_CONFIG.SPECIAL_INACTIVE_CATEGORY && isSpecialAuth) {
             const state = getChannelState(channel.id);
             if (!state) return message.reply("❌ Sem dados de restauração.");
             
-            const oldCat = await message.guild.channels.fetch(state.oldParentId).catch(()=>null);
+            const oldCat = state.oldParentId ? await message.guild.channels.fetch(state.oldParentId).catch(()=>null) : null;
             if (!oldCat) return message.reply("❌ Categoria original sumiu.");
 
             await channel.setParent(oldCat.id, { lockPermissions: false });
-            await channel.permissionOverwrites.set(state.oldOverwrites.map(o => ({
+            if (state.oldOverwrites) {
+                await channel.permissionOverwrites.set(state.oldOverwrites.map(o => ({
                 id: o.id, type: o.type, allow: BigInt(o.allow), deny: BigInt(o.deny)
-            })));
+                })));
+            }
             if (state.oldPosition) await channel.setPosition(state.oldPosition).catch(()=>{});
             
             deleteChannelState(channel.id);
             await message.delete().catch(()=>{});
+            
+            if (INATIVO_CONFIG.LOG_CHANNEL) {
+                const logCh = await client.channels.fetch(INATIVO_CONFIG.LOG_CHANNEL).catch(()=>null);
+                if (logCh && logCh.isTextBased()) await logCh.send(`✅ Canal ${channel} restaurado (especial) por ${message.author}`);
+            }
             return true;
         }
 
-        // 2. Reativar Padrão (Inativos -> Membros)
-        if (INATIVO_CONFIG.TARGET_CATEGORIES.includes(catId)) {
-            const targetId = hasExtraRole ? (INATIVO_CONFIG.EXTRA_COMMAND_CATEGORIES[0] || INATIVO_CONFIG.SOURCE_CATEGORY) : INATIVO_CONFIG.SOURCE_CATEGORY;
+        // 2. Reativar Padrão (Inativos/Extras -> Membros)
+        if (isInactiveCat || isExtraEntryCat) {
+            // Se estiver numa categoria extra, força ida para SOURCE (Membros). 
+            // Se estiver em inativos, respeita a lógica do cargo extra ou vai para SOURCE.
+            const targetId = (isExtraEntryCat) ? INATIVO_CONFIG.SOURCE_CATEGORY : (hasExtraRole ? (INATIVO_CONFIG.EXTRA_COMMAND_CATEGORIES[0] || INATIVO_CONFIG.SOURCE_CATEGORY) : INATIVO_CONFIG.SOURCE_CATEGORY);
+
             const targetCat = message.guild.channels.cache.get(targetId);
             
             if (!targetCat || targetCat.children.cache.filter(isTextChannelLike).size >= 50) {
@@ -468,12 +498,18 @@ export async function sortChannelsHandleMessage(message, client) {
             await channel.setParent(targetId, { lockPermissions: false });
             await message.delete().catch(()=>{});
             safeSortCategory(message.guild, targetId);
-            safeSortCategory(message.guild, catId); // reordena a de inativos tbm
+            safeSortCategory(message.guild, catId); // reordena a origem tbm
+
+            console.log("[SC_SORT][REATIVAR_TARGET]", {
+                channelId: channel.id,
+                currentCategoryId: catId,
+                targetCategoryId: targetId
+            });
 
             const logCh = await client.channels.fetch(INATIVO_CONFIG.LOG_CHANNEL).catch(()=>null);
             if (logCh) {
                 const row = new ActionRowBuilder().addComponents(
-                    new ButtonBuilder().setCustomId(`SC_MEMBROS_UNDO_${channel.id}_${catId}_${message.author.id}`)
+                    new ButtonBuilder().setCustomId(`SC_MEMBROS_UNDO_${channel.id}_${catId}_${message.author.id}`) // Salva origem atual para desfazer
                     .setLabel("↩️ Desfazer").setStyle(ButtonStyle.Danger)
                 );
                 await logCh.send({ 
