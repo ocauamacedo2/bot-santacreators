@@ -786,6 +786,13 @@ const isReactivateCmd = REACTIVATE_COMMANDS.includes(content);
           : null;
         const oldCategoryName = oldCategory?.name || "Sem Categoria";
 
+        // ✅ Só salva a origem real quando o canal vier da categoria padrão
+        // ou de uma das categorias extras.
+        // ✅ Se já estiver em inativos, preserva o estado anterior.
+        if (isSourceCategory || isExtraCommandCategory) {
+          storeChannelState(channel);
+        }
+
         await channel.setParent(targetCategory.id, { lockPermissions: false });
         await message.delete().catch(() => {});
 
@@ -964,13 +971,31 @@ const isReactivateCmd = REACTIVATE_COMMANDS.includes(content);
           return true;
         }
 
-        let targetCategoryId = INATIVO_CONFIG.SOURCE_CATEGORY;
+            let targetCategoryId = INATIVO_CONFIG.SOURCE_CATEGORY;
 
-        // ✅ Se estiver usando o comando dentro de uma categoria extra,
-        // mantém a própria categoria como destino de "membros".
-        if (isInExtraCommandCategory) {
+        // ✅ Se o canal estiver em uma categoria de inativos,
+        // tenta restaurar para a categoria original salva.
+        if (INATIVO_CONFIG.TARGET_CATEGORIES.includes(currentCategoryId)) {
+          const state = getChannelState(channel.id);
+          const oldParentId = state?.oldParentId;
+
+          if (
+            oldParentId &&
+            (
+              oldParentId === INATIVO_CONFIG.SOURCE_CATEGORY ||
+              INATIVO_CONFIG.EXTRA_COMMAND_CATEGORIES.includes(oldParentId)
+            )
+          ) {
+            targetCategoryId = oldParentId;
+          }
+        }
+        // ✅ Se o comando estiver sendo usado direto dentro de uma categoria extra,
+        // mantém a própria categoria.
+        else if (isInExtraCommandCategory) {
           targetCategoryId = currentCategoryId;
-        } else if (hasExtraCommandRole) {
+        }
+        // ✅ Fallback opcional por cargo extra
+        else if (hasExtraCommandRole) {
           targetCategoryId =
             INATIVO_CONFIG.EXTRA_COMMAND_CATEGORIES[0] ||
             INATIVO_CONFIG.SOURCE_CATEGORY;
@@ -1005,6 +1030,9 @@ const isReactivateCmd = REACTIVATE_COMMANDS.includes(content);
 
         await channel.setParent(targetCategory.id, { lockPermissions: false });
         await message.delete().catch(() => {});
+
+        // ✅ Limpa a origem salva após a restauração
+        deleteChannelState(channel.id);
 
         await safeSortCategory(message.guild, targetCategory.id);
         if (oldCategory) await safeSortCategory(message.guild, oldCategory.id);
