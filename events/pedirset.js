@@ -498,6 +498,13 @@ if (!podeAprovarSet) {
 
     // ✅ NOVO: Reativa ou cria registro no FormsCreator
     try {
+      console.log('[PedirSet] Tentando integração com FormsCreator...', {
+        userId,
+        nome,
+        passaporte,
+        guildId: interaction.guildId,
+      });
+
       const existingThreadId = await findFormsCreatorThreadIdByUserId(userId);
 
       if (existingThreadId) {
