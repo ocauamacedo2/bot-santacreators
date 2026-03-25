@@ -941,11 +941,12 @@ const isReactivateCmd = REACTIVATE_COMMANDS.includes(content);
       // =====================================================
       // 1. LÓGICA PADRÃO DE REATIVAÇÃO
       // =====================================================
-            if (
+      if (
         INATIVO_CONFIG.TARGET_CATEGORIES.includes(currentCategoryId) ||
-        INATIVO_CONFIG.EXTRA_COMMAND_CATEGORIES.includes(currentCategoryId) ||
+        isInExtraCommandCategory ||
         currentCategoryId === INATIVO_CONFIG.SOURCE_CATEGORY ||
-        (isSpecialAuthorized && currentCategoryId !== INATIVO_CONFIG.SPECIAL_INACTIVE_CATEGORY)
+        (isSpecialAuthorized &&
+          currentCategoryId !== INATIVO_CONFIG.SPECIAL_INACTIVE_CATEGORY)
       ) {
         if (!canUseStandardFlow && !isSpecialAuthorized) {
           const allowedCats = [
@@ -965,6 +966,8 @@ const isReactivateCmd = REACTIVATE_COMMANDS.includes(content);
 
         let targetCategoryId = INATIVO_CONFIG.SOURCE_CATEGORY;
 
+        // ✅ Se estiver usando o comando dentro de uma categoria extra,
+        // mantém a própria categoria como destino de "membros".
         if (isInExtraCommandCategory) {
           targetCategoryId = currentCategoryId;
         } else if (hasExtraCommandRole) {
