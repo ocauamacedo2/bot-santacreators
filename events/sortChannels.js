@@ -81,9 +81,18 @@ const INATIVO_CONFIG = {
     "1352408327983861844", // Resp Creators (Apenas este cargo + usuários especiais têm acesso global)
   ],
 
-  // ✅ Permissão contextual extra
-  // • Dentro destas categorias, quem estiver nelas poderá usar o fluxo extra
-  // • Se quiser também exigir um cargo extra real, coloque o ID correto do cargo abaixo
+  // ✅ Categorias da lógica padrão onde os autorizados padrão podem usar
+  // !inativo / !inativos / !membro / !membros / !reativar
+  STANDARD_FLOW_CATEGORIES: [
+    "1444857594517913742",
+    "1359244725781266492",
+    "1384650670145278033",
+    "1383899907244425246",
+    "1410071955159122051",
+    "1477566945598640251",
+  ],
+
+  // ✅ Mantido por compatibilidade, mas agora espelha as categorias extras de entrada
   EXTRA_COMMAND_CATEGORIES: [
     "1359244725781266492",
     "1444857594517913742",
@@ -569,6 +578,7 @@ const SC_SORT_CATEGORY_IDS = [
   "1360108570154373151",
   "1371926306064957541",
   "1384650670145278033",
+  "1444857594517913742",
   "1410071955159122051", // Já estava, mantido
   "1414687963161559180",
   "1428572742051168378",
@@ -699,24 +709,18 @@ const isReactivateCmd = REACTIVATE_COMMANDS.includes(content);
         (r) => r.id === INATIVO_CONFIG.EXTRA_COMMAND_ROLE
       );
 
-    const isInExtraCommandCategory =
-      INATIVO_CONFIG.EXTRA_COMMAND_CATEGORIES.includes(currentCategoryId);
+    // removido: a lógica agora usa STANDARD_FLOW_CATEGORIES
 
-    // ✅ Permissão extra para !inativo:
-    // só vale quando estiver dentro de uma das categorias extras configuradas
-    const isExtraCategoryAuthorized =
-      isInExtraCommandCategory &&
+    const isInStandardFlowCategory =
+      INATIVO_CONFIG.STANDARD_FLOW_CATEGORIES.includes(currentCategoryId);
+
+    // ✅ Permissão contextual da lógica padrão
+    const isStandardFlowCategoryAuthorized =
+      isInStandardFlowCategory &&
       (isStandardAuthorized || hasExtraCommandRole);
 
-    // ✅ Permissão extra para !membro / !membros / !reativar
-    const canUseExtraReactivateFlow =
-      isInExtraCommandCategory || hasExtraCommandRole;
-
     // ✅ Permissão geral para comandos padrão
-    const canUseStandardFlow =
-      isStandardAuthorized ||
-      isExtraCategoryAuthorized ||
-      canUseExtraReactivateFlow;
+    const canUseStandardFlow = isStandardFlowCategoryAuthorized;
 
     if (!isSpecialAuthorized && !canUseStandardFlow) {
       setTimeout(() => message.delete().catch(() => {}), 1000);
@@ -740,16 +744,17 @@ const isReactivateCmd = REACTIVATE_COMMANDS.includes(content);
       const isTargetCategory = 
         INATIVO_CONFIG.TARGET_CATEGORIES.includes(currentCategoryId);
 
+      const isStandardFlowCategory =
+        INATIVO_CONFIG.STANDARD_FLOW_CATEGORIES.includes(currentCategoryId);
+
       const isProtectedCategory =
         INATIVO_CONFIG.PROTECTED_CATEGORIES.includes(currentCategoryId);
 
       // =====================================================
       // 1. LÓGICA PADRÃO
-      // • categoria padrão de membros (Source)
-      // • OU categoria extra liberada
-      // • OU categoria de inativos (Target) - permite reordenar/mover entre inativos
+      // • qualquer categoria da lógica padrão
       // =====================================================
-      if (isSourceCategory || isExtraCommandCategory || isTargetCategory) {
+      if (isStandardFlowCategory) {
         if (!canUseStandardFlow) {
           const msg = await message.reply(
             `❌ Você não tem permissão para usar este comando nesta categoria.`
@@ -785,11 +790,9 @@ const isReactivateCmd = REACTIVATE_COMMANDS.includes(content);
           ? message.guild.channels.cache.get(currentCategoryId)
           : null;
         const oldCategoryName = oldCategory?.name || "Sem Categoria";
-
-        // ✅ Só salva a origem real quando o canal vier da categoria padrão
-        // ou de uma das categorias extras.
-        // ✅ Se já estiver em inativos, preserva o estado anterior.
-        if (isSourceCategory || isExtraCommandCategory) {
+        // ✅ Só salva a origem real quando o canal ainda NÃO estiver em inativos.
+        // ✅ Se já estiver em uma categoria de inativos, preserva o estado anterior.
+        if (isStandardFlowCategory && !isTargetCategory) {
           storeChannelState(channel);
         }
 
@@ -948,19 +951,9 @@ const isReactivateCmd = REACTIVATE_COMMANDS.includes(content);
       // =====================================================
       // 1. LÓGICA PADRÃO DE REATIVAÇÃO
       // =====================================================
-      if (
-        INATIVO_CONFIG.TARGET_CATEGORIES.includes(currentCategoryId) ||
-        isInExtraCommandCategory ||
-        currentCategoryId === INATIVO_CONFIG.SOURCE_CATEGORY ||
-        (isSpecialAuthorized &&
-          currentCategoryId !== INATIVO_CONFIG.SPECIAL_INACTIVE_CATEGORY)
-      ) {
+      if (INATIVO_CONFIG.STANDARD_FLOW_CATEGORIES.includes(currentCategoryId)) {
         if (!canUseStandardFlow && !isSpecialAuthorized) {
-          const allowedCats = [
-            ...INATIVO_CONFIG.TARGET_CATEGORIES,
-            ...INATIVO_CONFIG.EXTRA_COMMAND_CATEGORIES,
-            INATIVO_CONFIG.SOURCE_CATEGORY,
-          ]
+          const allowedCats = INATIVO_CONFIG.STANDARD_FLOW_CATEGORIES
             .map((id) => `<#${id}>`)
             .join(", ");
 
@@ -981,21 +974,12 @@ const isReactivateCmd = REACTIVATE_COMMANDS.includes(content);
 
           if (
             oldParentId &&
-            (
-              oldParentId === INATIVO_CONFIG.SOURCE_CATEGORY ||
-              INATIVO_CONFIG.EXTRA_COMMAND_CATEGORIES.includes(oldParentId)
-            )
+            INATIVO_CONFIG.STANDARD_FLOW_CATEGORIES.includes(oldParentId)
           ) {
             targetCategoryId = oldParentId;
           }
-        }
-        // ✅ Se o comando estiver sendo usado direto dentro de uma categoria extra,
-        // volta para a categoria padrão de membros.
-        else if (isInExtraCommandCategory) {
-          targetCategoryId = INATIVO_CONFIG.SOURCE_CATEGORY;
-        }
-        // ✅ Fallback opcional por cargo extra
-        else if (hasExtraCommandRole) {
+        } else {
+          // ✅ Qualquer outra categoria da lógica padrão volta para SOURCE_CATEGORY
           targetCategoryId = INATIVO_CONFIG.SOURCE_CATEGORY;
         }
 
