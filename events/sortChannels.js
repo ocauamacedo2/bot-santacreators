@@ -971,7 +971,7 @@ const isReactivateCmd = REACTIVATE_COMMANDS.includes(content);
           return true;
         }
 
-            let targetCategoryId = INATIVO_CONFIG.SOURCE_CATEGORY;
+        let targetCategoryId = INATIVO_CONFIG.SOURCE_CATEGORY;
 
         // ✅ Se o canal estiver em uma categoria de inativos,
         // tenta restaurar para a categoria original salva.
@@ -990,15 +990,13 @@ const isReactivateCmd = REACTIVATE_COMMANDS.includes(content);
           }
         }
         // ✅ Se o comando estiver sendo usado direto dentro de uma categoria extra,
-        // mantém a própria categoria.
+        // volta para a categoria padrão de membros.
         else if (isInExtraCommandCategory) {
-          targetCategoryId = currentCategoryId;
+          targetCategoryId = INATIVO_CONFIG.SOURCE_CATEGORY;
         }
         // ✅ Fallback opcional por cargo extra
         else if (hasExtraCommandRole) {
-          targetCategoryId =
-            INATIVO_CONFIG.EXTRA_COMMAND_CATEGORIES[0] ||
-            INATIVO_CONFIG.SOURCE_CATEGORY;
+          targetCategoryId = INATIVO_CONFIG.SOURCE_CATEGORY;
         }
 
         const targetCategory = message.guild.channels.cache.get(targetCategoryId);
