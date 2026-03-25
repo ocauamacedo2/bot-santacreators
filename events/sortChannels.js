@@ -1132,8 +1132,8 @@ const isReactivateCmd = REACTIVATE_COMMANDS.includes(content);
       }
 
       // ✅ feedback quando usar em categoria errada
-      const msg = await message.reply(
-        "❌ Este comando deve ser usado em um canal que esteja em uma categoria de inativos ou em uma das categorias extras permitidas."
+       const msg = await message.reply(
+        "❌ Este comando deve ser usado em um canal que esteja em uma das categorias padrão configuradas ou na categoria de inativos especiais."
       );
       setTimeout(() => msg.delete().catch(() => {}), 8000);
       return true;
@@ -1166,13 +1166,26 @@ export async function sortChannelsHandleInteraction(interaction) {
 
     // Verifica Permissões
     const member = interaction.member;
+
     const isAllowedUser = INATIVO_CONFIG.ALLOWED_USERS.includes(interaction.user.id);
     const isAllowedRole = member.roles.cache.some((r) =>
       INATIVO_CONFIG.ALLOWED_ROLES.includes(r.id)
     );
 
-    // Apenas quem tem permissão ou quem executou pode desfazer
-    if (!isAllowedUser && !isAllowedRole && interaction.user.id !== originalUserId) {
+    const isSpecialAllowedUser =
+      INATIVO_CONFIG.SPECIAL_AUTHORIZED_USERS.includes(interaction.user.id);
+
+    const isSpecialAllowedRole = member.roles.cache.some((r) =>
+      INATIVO_CONFIG.SPECIAL_AUTHORIZED_ROLES.includes(r.id)
+    );
+
+    // ✅ Para undo especial, usa a régua especial
+    // ✅ Para undo padrão, usa a régua padrão
+    const canUndo = isUndoSpecial
+      ? (isSpecialAllowedUser || isSpecialAllowedRole || interaction.user.id === originalUserId)
+      : (isAllowedUser || isAllowedRole || interaction.user.id === originalUserId);
+
+    if (!canUndo) {
       await interaction.reply({
         content: "❌ Você não tem permissão para desfazer esta ação.",
         ephemeral: true,
