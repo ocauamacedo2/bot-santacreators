@@ -21,6 +21,39 @@ import {
   setFormsCreatorStatus
 } from './formscreator.js';
 
+// ================================
+// ✅ HELPERS
+// ================================
+function createSafeNickname(nome, passaporte, maxLength = 32) {
+    const prefix = 'EQP.C';
+    const baseNick = `${prefix} | ${nome} | ${passaporte}`;
+
+    if (baseNick.length <= maxLength) {
+        return baseNick;
+    }
+
+    // Se for muito longo, encurta a parte do 'nome'.
+    const fixedPartsLength = prefix.length + String(passaporte).length + 4; // " | " e " | "
+    const maxNameLength = maxLength - fixedPartsLength;
+
+    if (maxNameLength < 1) {
+        // Se nem o prefixo e o passaporte cabem, trunca a string inteira.
+        return baseNick.substring(0, maxLength);
+    }
+
+    const truncatedName = nome.substring(0, maxNameLength).trim();
+    return `${prefix} | ${truncatedName} | ${passaporte}`;
+}
+
+async function resolveLogChannel(client, channelId) {
+  if (!channelId) return null;
+  try {
+    return await client.channels.fetch(channelId);
+  } catch (error) {
+    return null;
+  }
+}
+
 // ---------- PEDIR SET ----------
 ///!pedirset
 
@@ -460,7 +493,8 @@ if (!podeAprovarSet) {
     await membro.roles.remove(CARGO_ENTREVISTA).catch(() => {});
     
     // ✅ Nickname atualizado para EQP.C
-    await membro.setNickname(`EQP.C | ${nome} | ${passaporte}`).catch(err => console.error('Erro ao mudar nick:', err));
+    const newNickname = createSafeNickname(nome, passaporte);
+    await membro.setNickname(newNickname).catch(err => console.error('Erro ao mudar nick:', err));
 
     // ✅ NOVO: Reativa ou cria registro no FormsCreator
     try {

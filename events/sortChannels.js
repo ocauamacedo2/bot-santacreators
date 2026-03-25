@@ -82,13 +82,13 @@ const INATIVO_CONFIG = {
   ],
 
   // ✅ Permissão contextual extra
-  // • Dentro destas categorias, quem tiver este cargo também pode usar !inativo / !inativos
-  // • Para !membro / !membros / !reativar, também poderá usar nessas categorias
+  // • Dentro destas categorias, quem estiver nelas poderá usar o fluxo extra
+  // • Se quiser também exigir um cargo extra real, coloque o ID correto do cargo abaixo
   EXTRA_COMMAND_CATEGORIES: [
     "1359244725781266492",
     "1444857594517913742",
   ],
-  EXTRA_COMMAND_ROLE: "1444857594517913742",
+  EXTRA_COMMAND_ROLE: null,
 
   // Categoria padrão de membros
   SOURCE_CATEGORY: "1384650670145278033",
@@ -680,7 +680,7 @@ const isReactivateCmd = REACTIVATE_COMMANDS.includes(content);
         const channel = message.channel;
     const currentCategoryId = channel.parentId;
 
-    const isSpecialAuthorized =
+        const isSpecialAuthorized =
       INATIVO_CONFIG.SPECIAL_AUTHORIZED_USERS.includes(message.author.id) ||
       member.roles.cache.some((r) =>
         INATIVO_CONFIG.SPECIAL_AUTHORIZED_ROLES.includes(r.id)
@@ -693,18 +693,24 @@ const isReactivateCmd = REACTIVATE_COMMANDS.includes(content);
       );
 
     // ✅ Tem o cargo extra?
-    const hasExtraCommandRole = member.roles.cache.some(
-      (r) => r.id === INATIVO_CONFIG.EXTRA_COMMAND_ROLE
-    );
+    const hasExtraCommandRole =
+      !!INATIVO_CONFIG.EXTRA_COMMAND_ROLE &&
+      member.roles.cache.some(
+        (r) => r.id === INATIVO_CONFIG.EXTRA_COMMAND_ROLE
+      );
+
+    const isInExtraCommandCategory =
+      INATIVO_CONFIG.EXTRA_COMMAND_CATEGORIES.includes(currentCategoryId);
 
     // ✅ Permissão extra para !inativo:
     // só vale quando estiver dentro de uma das categorias extras configuradas
     const isExtraCategoryAuthorized =
-      INATIVO_CONFIG.EXTRA_COMMAND_CATEGORIES.includes(currentCategoryId) &&
-      hasExtraCommandRole;
+      isInExtraCommandCategory &&
+      (isStandardAuthorized || hasExtraCommandRole);
 
     // ✅ Permissão extra para !membro / !membros / !reativar
-    const canUseExtraReactivateFlow = hasExtraCommandRole;
+    const canUseExtraReactivateFlow =
+      isInExtraCommandCategory || hasExtraCommandRole;
 
     // ✅ Permissão geral para comandos padrão
     const canUseStandardFlow =
@@ -953,15 +959,19 @@ const isReactivateCmd = REACTIVATE_COMMANDS.includes(content);
           return true;
         }
 
-               // ✅ Destino:
-        // se quem executou tiver o cargo extra,
-        // volta para a categoria extra; senão volta para SOURCE_CATEGORY
-        const extraTargetCategoryId =
-          INATIVO_CONFIG.EXTRA_COMMAND_CATEGORIES[0] || INATIVO_CONFIG.SOURCE_CATEGORY;
+                        // ✅ Destino:
+        // se o comando estiver sendo usado dentro de uma categoria extra,
+        // mantém a própria categoria atual como destino;
+        // senão, volta para SOURCE_CATEGORY
+        let targetCategoryId = INATIVO_CONFIG.SOURCE_CATEGORY;
 
-        const targetCategoryId = canUseExtraReactivateFlow
-          ? extraTargetCategoryId
-          : INATIVO_CONFIG.SOURCE_CATEGORY;
+        if (INATIVO_CONFIG.EXTRA_COMMAND_CATEGORIES.includes(currentCategoryId)) {
+          targetCategoryId = currentCategoryId;
+        } else if (hasExtraCommandRole) {
+          targetCategoryId =
+            INATIVO_CONFIG.EXTRA_COMMAND_CATEGORIES[0] ||
+            INATIVO_CONFIG.SOURCE_CATEGORY;
+        }
 
         const targetCategory = message.guild.channels.cache.get(targetCategoryId);
 
