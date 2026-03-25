@@ -941,14 +941,18 @@ const isReactivateCmd = REACTIVATE_COMMANDS.includes(content);
       // =====================================================
       // 1. LÓGICA PADRÃO DE REATIVAÇÃO
       // =====================================================
-      if (
+            if (
         INATIVO_CONFIG.TARGET_CATEGORIES.includes(currentCategoryId) ||
         INATIVO_CONFIG.EXTRA_COMMAND_CATEGORIES.includes(currentCategoryId) ||
         currentCategoryId === INATIVO_CONFIG.SOURCE_CATEGORY ||
         (isSpecialAuthorized && currentCategoryId !== INATIVO_CONFIG.SPECIAL_INACTIVE_CATEGORY)
       ) {
         if (!canUseStandardFlow && !isSpecialAuthorized) {
-          const allowedCats = [...INATIVO_CONFIG.TARGET_CATEGORIES, ...INATIVO_CONFIG.EXTRA_COMMAND_CATEGORIES, INATIVO_CONFIG.SOURCE_CATEGORY]
+          const allowedCats = [
+            ...INATIVO_CONFIG.TARGET_CATEGORIES,
+            ...INATIVO_CONFIG.EXTRA_COMMAND_CATEGORIES,
+            INATIVO_CONFIG.SOURCE_CATEGORY,
+          ]
             .map((id) => `<#${id}>`)
             .join(", ");
 
@@ -959,13 +963,9 @@ const isReactivateCmd = REACTIVATE_COMMANDS.includes(content);
           return true;
         }
 
-                        // ✅ Destino:
-        // se o comando estiver sendo usado dentro de uma categoria extra,
-        // mantém a própria categoria atual como destino;
-        // senão, volta para SOURCE_CATEGORY
         let targetCategoryId = INATIVO_CONFIG.SOURCE_CATEGORY;
 
-        if (INATIVO_CONFIG.EXTRA_COMMAND_CATEGORIES.includes(currentCategoryId)) {
+        if (isInExtraCommandCategory) {
           targetCategoryId = currentCategoryId;
         } else if (hasExtraCommandRole) {
           targetCategoryId =
