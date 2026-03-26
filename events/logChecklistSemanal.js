@@ -9,7 +9,8 @@ import {
   ButtonStyle,
   StringSelectMenuBuilder,
   MessageFlags,
-  PermissionsBitField
+  PermissionsBitField,
+  Guild
 } from "discord.js";
 import { dashEmit } from "../utils/dashHub.js";
 
@@ -74,6 +75,20 @@ function getWeekRangeLabel(weekKey) {
 }
 
 /**
+ * Resolve a guilda principal de forma consistente.
+ * @param {import("discord.js").Client} client
+ * @param {import("discord.js").Guild | null} sourceGuild
+ * @returns {import("discord.js").Guild | null}
+ */
+function resolveMainGuild(client, sourceGuild = null) {
+  if (sourceGuild) return sourceGuild;
+  // Tenta pegar a guilda do cache do cliente, se houver apenas uma, ou a primeira.
+  // Isso é um fallback para contextos onde a guild não está diretamente disponível (ex: cron jobs).
+  if (client.guilds.cache.size === 1) return client.guilds.cache.first();
+  return null;
+}
+
+/**
  * Resolve a identificação visual de um usuário (Menção + Nome).
  * @param {import("discord.js").Guild} guild 
  * @param {string} userId 
@@ -124,6 +139,7 @@ async function refreshMainPanel(client, sourceGuild = null) {
   const panelState = loadJSON(PANEL_CONFIG.STATE_FILE, {});
   if (!panelState?.channelId || !panelState?.messageId) return false;
 
+  console.log("[ChecklistLogs] Atualizando painel principal...", panelState);
   try {
     const guild = resolveMainGuild(client, sourceGuild);
     const channel = await client.channels.fetch(panelState.channelId).catch(() => null);
@@ -131,7 +147,7 @@ async function refreshMainPanel(client, sourceGuild = null) {
 
     const msg = await channel.messages.fetch(panelState.messageId).catch(() => null);
     if (!msg) {
-      console.warn("[ChecklistLogs] Painel principal não encontrado para atualização (msg deletada).");
+      console.warn("[ChecklistLogs] Painel principal não encontrado para atualização (mensagem deletada ou inacessível).");
       return false;
     }
 
@@ -211,7 +227,7 @@ function buildProgressBar(value, total) {
 }
 
 async function buildMainPanel(client) {
-  const guild = client.guilds.cache.get(PANEL_CONFIG.GUILD_ID) || client.guilds.cache.first();
+  const guild = resolveMainGuild(client); // Usa o helper para resolver a guild
   const checklist = syncWeekData();
   const weekKey = weekKeyFromDateSP();
   const data = checklist.weeks[weekKey];
@@ -236,7 +252,7 @@ async function buildMainPanel(client) {
 
     const nameDisplay = await resolveMemberDisplay(guild, respId);
     const allDone = checked === count;
-    const statusIcon = allDone ? "🟢" : (isSunday ? "🟡" : "🔴");
+    const statusIcon = allDone ? "🟢" : (isSunday ? "🟡" : "🔴"); // 🔴 = não conferido, 🟡 = pendente crítico (domingo)
     
     // Gera a lista de membros com a nova identificação
     const memberLines = [];
@@ -251,8 +267,8 @@ async function buildMainPanel(client) {
     if (count > 5) memberListText += `\n*+${count - 5} restantes...*`;
     if (count === 0) memberListText = "_Nenhum membro vinculado._";
 
-    fields.push({
-      name: `👤 Responsável: ${nameDisplay.replace('(**', '').replace('**)', '')} ${allDone ? "🟢" : "🔴"}`,
+    fields.push({ // Título do campo com nome limpo e status
+      name: `👤 Responsável: ${nameDisplay.replace('(**', '').replace('**)', '')} ${allDone ? "🟢" : "🔴"}`, // Remove markdown da menção para o título
       value: `📊 ${checked}/${count} conferidos\n\n${memberListText}\n━━━━━━━━━━━━━━━━━━━`,
       inline: false
     });
@@ -293,8 +309,8 @@ export async function checklistHandleInteraction(interaction, client) {
   if (customId === "logcheck_sync_gi") {
     if (!hasPermission(interaction.member)) return interaction.reply({ content: "❌ Sem permissão.", flags: MessageFlags.Ephemeral });
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-    syncWeekData();
-    await refreshMainPanel(client, interaction.guild);
+    syncWeekData(); // Sincroniza os dados
+    await refreshMainPanel(client, interaction.guild); // Atualiza o painel principal
     return interaction.editReply("✅ Dados sincronizados com sucesso!");
   }
 
@@ -326,7 +342,7 @@ export async function checklistHandleInteraction(interaction, client) {
     const options = [];
     for (const [respId, content] of Object.entries(data.responsaveis)) {
       const pending = Object.values(content.members).filter(m => !m.checked).length;
-      
+      // Select menu label não aceita markdown/menção, então pegamos o nome limpo
       // Select menu label não aceita markdown/menção, então pegamos o nome limpo
       let member = guild.members.cache.get(respId);
       if (!member) { try { member = await guild.members.fetch(respId); } catch {} }
@@ -379,7 +395,7 @@ export async function checklistHandleInteraction(interaction, client) {
     // Refresh UIs
     const updatedData = checklist.weeks[weekKey].responsaveis[respId];
     await sendPersonalManager(interaction, respId, weekKey, updatedData, interaction.user.id !== respId, true);
-    await refreshMainPanel(client, interaction.guild);
+    await refreshMainPanel(client, interaction.guild); // Atualiza o painel principal
   }
 
   // 6. Ações em Massa
@@ -400,7 +416,7 @@ export async function checklistHandleInteraction(interaction, client) {
     // Refresh UIs
     const updatedData = checklist.weeks[weekKey].responsaveis[respId];
     await sendPersonalManager(interaction, respId, weekKey, updatedData, interaction.user.id !== respId, true);
-    await refreshMainPanel(client, interaction.guild);
+    await refreshMainPanel(client, interaction.guild); // Atualiza o painel principal
   }
 
   return false;
@@ -413,7 +429,7 @@ async function sendPersonalManager(interaction, respId, weekKey, data, isAdmin =
   const members = Object.entries(data.members);
   const checked = members.filter(([_, m]) => m.checked).length;
   const total = members.length;
-  const respDisplay = await resolveMemberDisplay(guild, respId);
+  const respDisplay = await resolveMemberDisplay(guild, respId); // Menção + Nome
 
   const memberLines = [];
   for (const [id, m] of members) {
@@ -431,7 +447,7 @@ async function sendPersonalManager(interaction, respId, weekKey, data, isAdmin =
   }
 
   const embed = new EmbedBuilder()
-    .setTitle(`📖 Gerenciar Logs: ${respDisplay.replace(/[<@!>\d]/g, '').replace(' (**', '').replace('**)', '').trim()}`)
+    .setTitle(`📖 Gerenciar Logs: ${respDisplay.replace(/[<@!>\d]/g, '').replace(' (**', '').replace('**)', '').trim()}`) // Título com nome limpo
     .setDescription(
       `📅 **Semana:** ${getWeekRangeLabel(weekKey)}\n` +
       `📊 **Progresso:** ${checked}/${total} conferidos\n\n` +
@@ -442,7 +458,7 @@ async function sendPersonalManager(interaction, respId, weekKey, data, isAdmin =
   const selectOptions = [];
   for (const [id, m] of members) {
     let member = guild.members.cache.get(id);
-    if (!member) { try { member = await guild.members.fetch(id); } catch {} }
+    if (!member) { try { member = await guild.members.fetch(id); } catch {} } // Tenta buscar o membro se não estiver no cache
     const rawName = member?.displayName || member?.user?.username || id;
 
     selectOptions.push({
@@ -552,7 +568,7 @@ export async function checklistHandleMessage(message, client) {
   await message.delete().catch(() => {});
   const payload = await buildMainPanel(client);
   const sent = await message.channel.send(payload);
-  saveJSON(PANEL_CONFIG.STATE_FILE, {
+  saveJSON(PANEL_CONFIG.STATE_FILE, { // Salva o estado completo do painel
     guildId: message.guild.id,
     channelId: message.channel.id,
     messageId: sent.id,
