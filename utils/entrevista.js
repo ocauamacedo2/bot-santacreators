@@ -30,7 +30,6 @@ const ALERT_ROLE_IDS = [
 const ENTREVISTAS_PATH = path.resolve(process.cwd(), 'storage', 'entrevistas_backup.json');
 
 const PERGUNTAS_ALLOWED_CATEGORY_IDS = new Set([
-  "1444857594517913742",
   "1359244725781266492",
 ]);
 
@@ -286,12 +285,12 @@ async function reanexar(client) {
 }
 
 function getAplicadorIdFromChannel(channel, dados = {}) {
-  const fromState = String(dados?.entrevistadorId || "").trim();
-  if (/^\d{17,20}$/.test(fromState)) return fromState;
-
   const topic = String(channel?.topic || "");
   const m = topic.match(/entrevista_aplicador:(\d{17,20})/i);
-  return m ? m[1] : null;
+  if (m) return m[1]; // ✅ Prioridade total para quem usou !perguntas
+
+  const fromState = String(dados?.entrevistadorId || "").trim();
+  if (/^\d{17,20}$/.test(fromState)) return fromState;
 }
 
 function canInterviewPointCount(channel, aplicadorId) {
@@ -455,7 +454,8 @@ E fica tranquil@ com o tamanho das informações, tá? rs ☺️
     const [, targetId] = customId.split('|');
     await interaction.deferUpdate().catch(() => {});
 
-    const entrevistadorId = interaction.user.id; // ✅ aplicador oficial que vai ganhar o ponto se a entrevista concluir
+    const topicId = getAplicadorIdFromChannel(channel);
+    const entrevistadorId = topicId || interaction.user.id; // ✅ Prioriza quem usou !perguntas, fallback p/ quem clicou
 
     const membro = await channel.guild.members.fetch(targetId).catch(() => null);
     if (!membro) return true;

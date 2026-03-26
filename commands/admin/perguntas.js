@@ -13,7 +13,6 @@ const ALERT_ROLE_IDS = [
 const LOG_CHANNEL_ID = "1471695257010831614";
 
 const PERGUNTAS_ALLOWED_CATEGORY_IDS = new Set([
-  "1444857594517913742",
   "1359244725781266492",
 ]);
 
@@ -25,13 +24,17 @@ const PERGUNTAS_BYPASS_USER_IDS = new Set([
 export default {
   async hasPermission(message) {
     const idsPermitidos = [
+      '660311795327828008',
       '1262262852949905408',
       '1352408327983861844',
       '1262262852949905409',
       '1352407252216184833',
       '1282119104576098314'
     ];
-    return message.member?.roles?.cache?.some(r => idsPermitidos.includes(r.id));
+
+    // ✅ Permite se o usuário for você/owner OU se tiver um dos cargos permitidos
+    return idsPermitidos.includes(message.author.id) || 
+           message.member?.roles?.cache?.some(r => idsPermitidos.includes(r.id));
   },
 
   async execute(message, args, client) {
