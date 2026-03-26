@@ -74,14 +74,25 @@ function getWeekRangeLabel(weekKey) {
 }
 
 /**
- * Resolve o nome de exibição de um usuário de forma segura.
+ * Resolve a identificação visual de um usuário (Menção + Nome).
  * @param {import("discord.js").Guild} guild 
  * @param {string} userId 
- * @returns {string}
+ * @returns {Promise<string>} "<@id> (**Nome**)"
  */
-function resolveMemberName(guild, userId) {
-  const member = guild.members.cache.get(userId);
-  return member?.displayName || member?.user?.username || `ID:${userId}`;
+async function resolveMemberDisplay(guild, userId) {
+  if (!guild) return `<@${userId}>`;
+
+  let member = guild.members.cache.get(userId);
+  if (!member) {
+    try {
+      member = await guild.members.fetch(userId);
+    } catch {}
+  }
+
+  if (!member) return `<@${userId}>`;
+
+  const name = member.displayName || member.user.username;
+  return `<@${userId}> (**${name}**)`;
 }
 
 // ===============================
@@ -197,20 +208,25 @@ async function buildMainPanel(client) {
     checkedMembers += checked;
     if (checked < count) respsWithPending++;
 
-    const name = resolveMemberName(guild, respId);
+    const nameDisplay = await resolveMemberDisplay(guild, respId);
     const allDone = checked === count;
     const statusIcon = allDone ? "🟢" : (isSunday ? "🟡" : "🔴");
     
-    let memberListText = membersEntries.slice(0, 5).map(([mId, m]) => {
+    // Gera a lista de membros com a nova identificação
+    const memberLines = [];
+    for (const [mId, m] of membersEntries.slice(0, 5)) {
       const mStatus = m.checked ? "🟢" : (isSunday ? "🟡" : "🔴");
-      return `${mStatus} ${resolveMemberName(guild, mId)}`;
-    }).join("\n");
+      const mDisplay = await resolveMemberDisplay(guild, mId);
+      memberLines.push(`${mStatus} ${mDisplay}`);
+    }
+
+    let memberListText = memberLines.join("\n");
 
     if (count > 5) memberListText += `\n*+${count - 5} restantes...*`;
     if (count === 0) memberListText = "_Nenhum membro vinculado._";
 
     fields.push({
-      name: `${statusIcon} **${name}** ${allDone ? "(em dia)" : "(pendente)"}`,
+      name: `👤 Responsável: ${nameDisplay.replace('(**', '').replace('**)', '')} ${allDone ? "🟢" : "🔴"}`,
       value: `📊 ${checked}/${count} conferidos\n\n${memberListText}\n━━━━━━━━━━━━━━━━━━━`,
       inline: false
     });
@@ -282,15 +298,22 @@ export async function checklistHandleInteraction(interaction, client) {
     const weekKey = weekKeyFromDateSP();
     const data = checklist.weeks[weekKey];
 
-    const options = Object.entries(data.responsaveis).map(([respId, content]) => {
+    const options = [];
+    for (const [respId, content] of Object.entries(data.responsaveis)) {
       const pending = Object.values(content.members).filter(m => !m.checked).length;
-      return {
-        label: resolveMemberName(guild, respId),
+      
+      // Select menu label não aceita markdown/menção, então pegamos o nome limpo
+      let member = guild.members.cache.get(respId);
+      if (!member) { try { member = await guild.members.fetch(respId); } catch {} }
+      const rawName = member?.displayName || member?.user?.username || respId;
+
+      options.push({
+        label: rawName,
         value: `logcheck_inspect:${respId}:${weekKey}`,
         description: pending === 0 ? "Em dia" : `${pending} pendências encontradas`,
         emoji: pending === 0 ? "🟢" : "🔴"
-      };
-    });
+      });
+    }
 
     const select = new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
@@ -379,31 +402,51 @@ async function sendPersonalManager(interaction, respId, weekKey, data, isAdmin =
   const members = Object.entries(data.members);
   const checked = members.filter(([_, m]) => m.checked).length;
   const total = members.length;
-  const respName = resolveMemberName(guild, respId);
+  const respDisplay = await resolveMemberDisplay(guild, respId);
+
+  const memberLines = [];
+  for (const [id, m] of members) {
+    const timeStr = m.checkedAt ? `<t:${Math.floor(m.checkedAt/1000)}:R>` : "";
+    const mDisplay = await resolveMemberDisplay(guild, id);
+    
+    if (m.checked) {
+      const checkerName = await resolveMemberDisplay(guild, m.checkedBy || "");
+      // Remove a menção do checker para não poluir, deixa só o nome em parênteses
+      const checkerClean = checkerName.split(' (')[1]?.replace(')', '') || "Staff";
+      memberLines.push(`🟢 ${mDisplay} — conferido por **${checkerClean}** ${timeStr}`);
+    } else {
+      memberLines.push(`${isSunday ? "🟡" : "🔴"} ${mDisplay} — pendente`);
+    }
+  }
 
   const embed = new EmbedBuilder()
-    .setTitle(`📖 Gerenciar Logs: ${respName}`)
+    .setTitle(`📖 Gerenciar Logs: ${respDisplay.replace(/[<@!>\d]/g, '').replace(' (**', '').replace('**)', '').trim()}`)
     .setDescription(
       `📅 **Semana:** ${getWeekRangeLabel(weekKey)}\n` +
       `📊 **Progresso:** ${checked}/${total} conferidos\n\n` +
-      members.map(([id, m]) => {
-        const timeStr = m.checkedAt ? `<t:${Math.floor(m.checkedAt/1000)}:R>` : "";
-        const checkName = m.checkedBy ? resolveMemberName(guild, m.checkedBy) : "Desconhecido";
-        return `${m.checked ? "🟢" : (isSunday ? "🟡" : "🔴")} **${resolveMemberName(guild, id)}** ${m.checked ? `(por ${checkName} ${timeStr})` : "— *pendente*"}`;
-      }).join("\n")
+      memberLines.join("\n")
     )
     .setColor(checked === total ? "#2ecc71" : "#3498db");
+
+  const selectOptions = [];
+  for (const [id, m] of members) {
+    let member = guild.members.cache.get(id);
+    if (!member) { try { member = await guild.members.fetch(id); } catch {} }
+    const rawName = member?.displayName || member?.user?.username || id;
+
+    selectOptions.push({
+      label: rawName,
+      value: id,
+      emoji: m.checked ? "🔴" : "🟢",
+      description: `@${member?.user?.username || id} | Área: ${m.area} | Status: ${m.checked ? "Conferido" : "Pendente"}`
+    });
+  }
 
   const select = new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
       .setCustomId(`logcheck_toggle:${respId}:${weekKey}`)
       .setPlaceholder("Clique para inverter o status de um membro")
-      .addOptions(members.map(([id, m]) => ({
-        label: resolveMemberName(guild, id),
-        value: id,
-        emoji: m.checked ? "🔴" : "🟢",
-        description: `Área: ${m.area} | Status: ${m.checked ? "Conferido" : "Pendente"}`
-      })))
+      .addOptions(selectOptions)
   );
 
   const buttons = new ActionRowBuilder().addComponents(
