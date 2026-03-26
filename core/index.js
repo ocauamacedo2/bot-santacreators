@@ -406,6 +406,7 @@ const setupEventHandlers = () => {
       if (await connectStatusHandleMessage(message, client)) return;
       if (await orgsHandleMessage(message, client)) return;
       if (await checklistHandleMessage(message, client)) return;
+      if (await checklistHandleMessage(message, client)) return;
 
       try { if (typeof geralDash?.geralDashHandleMessage === "function" && await geralDash.geralDashHandleMessage(message, client)) return; } catch (e) {}
       try { if (await geralWeeklyRankHandleMessage(message, client)) return; } catch (e) {}
@@ -504,6 +505,7 @@ const setupEventHandlers = () => {
       if (await aulaoHandleInteraction(interaction, client)) return;
       if (await cronogramaCreatorsHandleInteraction(interaction, client)) return;
       if (await hierarquiaHandleInteraction(interaction, client)) return;
+      if (await checklistHandleInteraction(interaction, client)) return;
       if (await checklistHandleInteraction(interaction, client)) return;
 
       if (await handlePagamentoSocial(interaction, client).catch(() => false)) return;
