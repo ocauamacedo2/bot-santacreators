@@ -79,41 +79,61 @@ export function getNowSP() { // Exportado para possível uso externo
     }
 
 /**
- * Resolve a identificação visual de um usuário com menção e nome.
- * Tenta buscar o membro no cache ou via fetch.
- * @param {import("discord.js").Guild} guild O objeto da guilda.
- * @param {string} userId O ID do usuário.
- * @returns {Promise<string>} Uma string formatada como "<@ID> (**Nome**)" ou "<@ID>" se o nome não for encontrado.
+ * Resolve a guilda principal de forma consistente.
+ */
+function resolveMainGuild(client, sourceGuild = null) {
+  return sourceGuild || client.guilds.cache.first() || null;
+}
+
+/**
+ * Resolve a identificação visual de um usuário com menção e nome (Robusto).
  */
 async function resolveMemberDisplay(guild, userId) {
-  if (!guild || !userId) return `<@${userId}>`;
+  if (!guild || !userId) return "Usuário desconhecido";
 
   let member = guild.members.cache.get(userId);
   if (!member) {
     try {
       member = await guild.members.fetch(userId);
-    } catch { /* Ignora erro se o membro não for encontrado */ }
+    } catch {}
   }
 
-  const name = member?.displayName || member?.user?.username;
-  return name ? `<@${userId}> (**${name}**)` : `<@${userId}>`;
+  if (member) {
+    const name = member.displayName || member.user?.username || "Usuário";
+    return `<@${userId}> (${name})`;
+  }
+
+  try {
+    const user = await guild.client.users.fetch(userId);
+    if (user) return `<@${userId}> (${user.username})`;
+  } catch {}
+
+  return `<@${userId}>`;
 }
 
 /**
- * Resolve apenas o nome de exibição de um usuário, sem menção.
- * Tenta buscar o membro no cache ou via fetch.
- * @param {import("discord.js").Guild} guild O objeto da guilda.
- * @param {string} userId O ID do usuário.
- * @returns {Promise<string>} O nome de exibição do usuário ou "ID:ID_DO_USUÁRIO" se não for encontrado.
+ * Resolve apenas o nome de exibição de um usuário, sem menção (Robusto).
  */
 async function resolveMemberNameOnly(guild, userId) {
-  if (!guild || !userId) return `ID:${userId}`;
+  if (!guild || !userId) return "Usuário desconhecido";
 
   let member = guild.members.cache.get(userId);
   if (!member) {
-    try { member = await guild.members.fetch(userId); } catch { /* Ignora erro */ }
+    try {
+      member = await guild.members.fetch(userId);
+    } catch {}
   }
-  return member?.displayName || member?.user?.username || `ID:${userId}`;
+
+  if (member) {
+    return member.displayName || member.user?.username || "Usuário desconhecido";
+  }
+
+  try {
+    const user = await guild.client.users.fetch(userId);
+    if (user) return user.username || "Usuário desconhecido";
+  } catch {}
+
+  return `Usuário não encontrado`;
 }
 
     // ===============================
@@ -205,8 +225,8 @@ async function resolveMemberNameOnly(guild, userId) {
     return `${"🟩".repeat(progress)}${"⬛".repeat(empty)} **${Math.round((value / total) * 100) || 0}%**`;
     }
 
-    async function buildMainPanel(client) {
-    const guild = client.guilds.cache.get(PANEL_CONFIG.GUILD_ID) || client.guilds.cache.first();
+    async function buildMainPanel(client, sourceGuild = null) {
+    const guild = resolveMainGuild(client, sourceGuild);
     const checklist = syncWeekData();
     const weekKey = weekKeyFromDateSP();
     const data = checklist.weeks[weekKey];
@@ -290,7 +310,7 @@ async function resolveMemberNameOnly(guild, userId) {
         if (!hasPermission(interaction.member)) return interaction.reply({ content: "❌ Sem permissão.", flags: MessageFlags.Ephemeral });
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         syncWeekData();
-        const panel = await buildMainPanel(client);
+        const panel = await buildMainPanel(client, interaction.guild);
         await interaction.message.edit(panel);
         return interaction.editReply("✅ Dados sincronizados com sucesso!");
     }
@@ -398,7 +418,7 @@ async function resolveMemberNameOnly(guild, userId) {
         await sendPersonalManager(interaction, respId, weekKey, updatedData, interaction.user.id !== respId, true);
         
         // Update Painel Principal se existir
-        const mainPayload = await buildMainPanel(client);
+        const mainPayload = await buildMainPanel(client, interaction.guild);
         const panelState = loadJSON(PANEL_CONFIG.STATE_FILE);
         if (panelState.messageId) {
         const channel = await client.channels.fetch(PANEL_CONFIG.CHANNEL_ID).catch(() => null);
@@ -425,7 +445,7 @@ async function resolveMemberNameOnly(guild, userId) {
         const updatedData = checklist.weeks[weekKey].responsaveis[respId];
         await sendPersonalManager(interaction, respId, weekKey, updatedData, interaction.user.id !== respId, true);
         
-        const mainPayload = await buildMainPanel(client);
+        const mainPayload = await buildMainPanel(client, interaction.guild);
         const panelState = loadJSON(PANEL_CONFIG.STATE_FILE);
         if (panelState.messageId) {
         const channel = await client.channels.fetch(PANEL_CONFIG.CHANNEL_ID).catch(() => null);
@@ -439,7 +459,7 @@ async function resolveMemberNameOnly(guild, userId) {
 
     // Helper para enviar o menu de gerenciamento (pessoal ou admin)
     async function sendPersonalManager(interaction, respId, weekKey, data, isAdmin = false, isUpdate = false) {
-    const guild = interaction.guild;
+    const guild = resolveMainGuild(interaction.client, interaction.guild);
     const isSunday = getNowSP().getDay() === 0;
     const members = Object.entries(data.members || {}); // Safe guard para data.members
     const checked = members.filter(([_, m]) => m.checked).length;
@@ -583,7 +603,7 @@ async function resolveMemberNameOnly(guild, userId) {
     if (!hasPermission(message.member)) return message.reply("❌ Sem permissão.").then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
 
     await message.delete().catch(() => {});
-    const payload = await buildMainPanel(client);
+    const payload = await buildMainPanel(client, message.guild);
     const sent = await message.channel.send(payload);
     saveJSON(PANEL_CONFIG.STATE_FILE, { messageId: sent.id });
     return true;
