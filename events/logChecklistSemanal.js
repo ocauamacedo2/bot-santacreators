@@ -7,7 +7,9 @@ import {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  MessageFlags
+  StringSelectMenuBuilder,
+  MessageFlags,
+  PermissionsBitField
 } from "discord.js";
 import { dashEmit } from "../utils/dashHub.js";
 
@@ -22,17 +24,18 @@ const CHECKLIST_FILE = path.join(DATA_DIR, "sc_logs_checklist.json");
 const GI_DATA_FILE = path.join(DATA_DIR, "sc_gi_registros.json");
 
 const TZ = "America/Sao_Paulo";
-const ROLE_PRIORITY = "1371733765243670538";
-const LOG_CHANNEL_ID = "1460339582842310731"; 
+const ROLE_PRIORITY = "1371733765243670538"; // Membros Prioritários
+const LOG_CHANNEL_ID = "1460339582842310731"; // Auditoria
 
 const PANEL_CONFIG = {
-  CHANNEL_ID: "1477800974574682242", 
+  CHANNEL_ID: "1477800974574682242",
   STATE_FILE: path.join(DATA_DIR, "sc_checklist_panel_state.json")
 };
 
-// Permissões (Baseado no gestaoinfluencer.js)
 const AUTH_CONFIG = {
-  USER_IDS: ["660311795327828008", "1262262852949905408"],
+  // Acesso Total (Admins)
+  SUPER_IDS: ["660311795327828008", "1262262852949905408", "1352408327983861844"],
+  // Cargos autorizados do GI
   ROLE_IDS: [
     "1352408327983861844", // resp creator
     "1414651836861907006", // responsáveis
@@ -60,7 +63,6 @@ function getWeekRangeLabel(weekKey) {
   const start = new Date(weekKey + "T00:00:00");
   const end = new Date(start);
   end.setDate(start.getDate() + 7);
-  
   const fmt = (d) => `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`;
   return `${fmt(start)} → ${fmt(end)}`;
 }
@@ -83,115 +85,319 @@ function saveJSON(file, data) {
     fs.writeFileSync(tmp, JSON.stringify(data, null, 2), "utf8");
     fs.renameSync(tmp, file);
   } catch (e) {
-    console.error(`[ChecklistLogs] Erro ao salvar ${path.basename(file)}:`, e);
+    console.error(`[ChecklistLogs] Erro ao salvar:`, e);
   }
 }
 
 // ===============================
-// LÓGICA DE DADOS
+// LÓGICA DE DADOS & SINCRONIZAÇÃO
 // ===============================
-function getGIData() {
-  const data = loadJSON(GI_DATA_FILE, { registros: [] });
-  return data.registros || [];
-}
-
 function syncWeekData() {
   const checklist = loadJSON(CHECKLIST_FILE, { weeks: {} });
-  const giRegistros = getGIData();
+  const giData = loadJSON(GI_DATA_FILE, { registros: [] });
   const weekKey = weekKeyFromDateSP();
 
   if (!checklist.weeks[weekKey]) {
-    checklist.weeks[weekKey] = { responsaveis: {} };
+    checklist.weeks[weekKey] = { lastSyncedAt: null, responsaveis: {} };
   }
 
   const currentWeek = checklist.weeks[weekKey];
+  const activeGIRegistros = (giData.registros || []).filter(r => r.active && r.responsibleUserId);
 
-  giRegistros.forEach(reg => {
-    if (!reg.active || !reg.responsibleUserId) return;
-
-    const respId = reg.responsibleUserId;
-    const memberId = reg.targetId;
-
-    if (!currentWeek.responsaveis[respId]) {
-      currentWeek.responsaveis[respId] = { members: {} };
-    }
-
-    if (!currentWeek.responsaveis[respId].members[memberId]) {
-      currentWeek.responsaveis[respId].members[memberId] = {
-        checked: false,
-        checkedAt: null,
-        checkedBy: null,
-        area: reg.area || "Geral"
-      };
-    }
+  // 1. Mapear o que existe no GI agora
+  const giMap = new Map(); // RespId -> [MemberId]
+  activeGIRegistros.forEach(reg => {
+    if (!giMap.has(reg.responsibleUserId)) giMap.set(reg.responsibleUserId, []);
+    giMap.get(reg.responsibleUserId).push({ id: reg.targetId, area: reg.area || "Geral" });
   });
 
+  // 2. Limpar membros e responsáveis que não existem mais no GI ou mudaram de Resp
+  const newResponsaveis = {};
+  giMap.forEach((members, respId) => {
+    newResponsaveis[respId] = { members: {} };
+    members.forEach(m => {
+      // Se o membro já existia para este responsável nesta semana, preserva o status
+      const existing = currentWeek.responsaveis[respId]?.members[m.id];
+      if (existing) {
+        newResponsaveis[respId].members[m.id] = existing;
+      } else {
+        // Novo membro vinculado
+        newResponsaveis[respId].members[m.id] = {
+          checked: false,
+          checkedAt: null,
+          checkedBy: null,
+          area: m.area
+        };
+      }
+    });
+  });
+
+  currentWeek.responsaveis = newResponsaveis;
+  currentWeek.lastSyncedAt = Date.now();
+  
   saveJSON(CHECKLIST_FILE, checklist);
   return checklist;
 }
 
-function hasPermission(member) {
+function hasPermission(member, type = "use") {
   if (!member) return false;
-  if (AUTH_CONFIG.USER_IDS.includes(member.id)) return true;
+  if (AUTH_CONFIG.SUPER_IDS.includes(member.id)) return true;
+  if (type === "admin") return false; // Somente Super IDs para admin total
   return member.roles.cache.some(r => AUTH_CONFIG.ROLE_IDS.includes(r.id));
 }
 
 // ===============================
 // UI BUILDERS
 // ===============================
-async function buildPanel(client) {
+function buildProgressBar(value, total) {
+  const size = 15;
+  const progress = Math.round((value / total) * size) || 0;
+  const empty = size - progress;
+  return `\`${"■".repeat(progress)}${"□".repeat(empty)}\` **${Math.round((value / total) * 100) || 0}%**`;
+}
+
+async function buildMainPanel(client) {
   const checklist = syncWeekData();
   const weekKey = weekKeyFromDateSP();
   const data = checklist.weeks[weekKey];
   const isSunday = getNowSP().getDay() === 0;
 
+  let totalMembers = 0;
+  let checkedMembers = 0;
+  let respsWithPending = 0;
+
+  const respLines = Object.entries(data.responsaveis).map(([respId, content]) => {
+    const members = Object.values(content.members);
+    const count = members.length;
+    const checked = members.filter(m => m.checked).length;
+    
+    totalMembers += count;
+    checkedMembers += checked;
+    if (checked < count) respsWithPending++;
+
+    const statusIcon = checked === count ? "✔️" : (isSunday ? "🟡" : "⚠️");
+    const label = checked === count ? "Em dia" : `${count - checked} pendentes`;
+    
+    return `${statusIcon} <@${respId}> • **${checked}/${count}** (${label})`;
+  });
+
   const embed = new EmbedBuilder()
     .setTitle("📋 Checklist Semanal de Logs")
-    .setDescription(`📆 **Semana:** ${getWeekRangeLabel(weekKey)}\n*Status das verificações de logs por responsável.*`)
-    .setColor(isSunday ? "#f1c40f" : "#9b59b6")
+    .setDescription(
+      `📅 **Semana:** ${getWeekRangeLabel(weekKey)}\n` +
+      `🕒 **Fechamento:** Domingo às 23:59\n\n` +
+      `📌 **Responsáveis com pendência:** \`${respsWithPending}\`\n` +
+      `✅ **Membros conferidos:** \`${checkedMembers}\`\n` +
+      `❌ **Membros pendentes:** \`${totalMembers - checkedMembers}\`\n\n` +
+      `📊 **Progresso Geral:**\n${buildProgressBar(checkedMembers, totalMembers)}`
+    )
+    .addFields({ name: "👤 Status por Responsável", value: respLines.join("\n") || "_Nenhum membro vinculado._" })
+    .setColor(respsWithPending === 0 ? "#2ecc71" : (isSunday ? "#f1c40f" : "#9b59b6"))
     .setThumbnail(client.user.displayAvatarURL())
     .setTimestamp();
 
-  const rows = [];
-  const respEntries = Object.entries(data.responsaveis);
-
-  if (respEntries.length === 0) {
-    embed.addFields({ name: "ℹ️ Info", value: "Nenhum membro ativo vinculado a responsáveis no momento." });
-  } else {
-    for (const [respId, content] of respEntries) {
-      const members = Object.entries(content.members);
-      const allChecked = members.every(([_, m]) => m.checked);
-      
-      let fieldTitle = `👤 Resp: <@${respId}>`;
-      fieldTitle += allChecked ? " ✔️ **Em dia**" : " ⚠️ **Pendências**";
-
-      const memberLines = members.map(([mId, m]) => {
-        let status = m.checked ? "✅" : (isSunday ? "🟡" : "❌");
-        return `${status} <@${mId}>`;
-      });
-
-      embed.addFields({ name: fieldTitle, value: memberLines.join("\n") || "Sem membros", inline: false });
-    }
-  }
-
-  const controlRow = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId("logcheck_open_toggle")
-      .setLabel("Atualizar Status")
-      .setStyle(ButtonStyle.Primary)
-      .setEmoji("✅"),
-    new ButtonBuilder()
-      .setCustomId("logcheck_refresh")
-      .setLabel("Sincronizar GI")
-      .setStyle(ButtonStyle.Secondary)
-      .setEmoji("🔄")
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("logcheck_my_members").setLabel("Gerenciar Meus Membros").setStyle(ButtonStyle.Success).setEmoji("✅"),
+    new ButtonBuilder().setCustomId("logcheck_admin_view").setLabel("Visão Geral").setStyle(ButtonStyle.Primary).setEmoji("👑"),
+    new ButtonBuilder().setCustomId("logcheck_sync_gi").setLabel("Sincronizar GI").setStyle(ButtonStyle.Secondary).setEmoji("🔄")
   );
 
-  return { embeds: [embed], components: [controlRow] };
+  return { embeds: [embed], components: [row] };
 }
 
 // ===============================
-// LEMBRETES (DM)
+// HANDLERS (Interações)
+// ===============================
+export async function checklistHandleInteraction(interaction, client) {
+  if (!interaction.guild) return false;
+  const customId = interaction.customId;
+
+  // 1. Sincronizar GI
+  if (customId === "logcheck_sync_gi") {
+    if (!hasPermission(interaction.member)) return interaction.reply({ content: "❌ Sem permissão.", flags: MessageFlags.Ephemeral });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    syncWeekData();
+    const panel = await buildMainPanel(client);
+    await interaction.message.edit(panel);
+    return interaction.editReply("✅ Dados sincronizados com sucesso!");
+  }
+
+  // 2. Gerenciar Meus Membros
+  if (customId === "logcheck_my_members") {
+    if (!hasPermission(interaction.member)) return interaction.reply({ content: "❌ Você não é um responsável registrado.", flags: MessageFlags.Ephemeral });
+    
+    const checklist = loadJSON(CHECKLIST_FILE);
+    const weekKey = weekKeyFromDateSP();
+    const data = checklist.weeks[weekKey];
+    const myData = data.responsaveis[interaction.user.id];
+
+    if (!myData || Object.keys(myData.members).length === 0) {
+      return interaction.reply({ content: "❌ Você não possui membros vinculados a você nesta semana.", flags: MessageFlags.Ephemeral });
+    }
+
+    return sendPersonalManager(interaction, interaction.user.id, weekKey, myData);
+  }
+
+  // 3. Visão Geral (Admin)
+  if (customId === "logcheck_admin_view") {
+    if (!hasPermission(interaction.member, "admin")) return interaction.reply({ content: "❌ Apenas Administradores podem acessar a visão geral.", flags: MessageFlags.Ephemeral });
+    
+    const checklist = loadJSON(CHECKLIST_FILE);
+    const weekKey = weekKeyFromDateSP();
+    const data = checklist.weeks[weekKey];
+
+    const options = Object.entries(data.responsaveis).map(([respId, content]) => {
+      const pending = Object.values(content.members).filter(m => !m.checked).length;
+      return {
+        label: `Resp: ${respId}`,
+        value: `logcheck_inspect:${respId}:${weekKey}`,
+        description: pending === 0 ? "Tudo conferido ✅" : `${pending} pendências encontradas ⚠️`,
+        emoji: pending === 0 ? "✅" : "⚠️"
+      };
+    });
+
+    const select = new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId("logcheck_admin_select")
+        .setPlaceholder("Selecione um responsável para inspecionar")
+        .addOptions(options.slice(0, 25))
+    );
+
+    return interaction.reply({ content: "👑 **Painel Administrativo**\nEscolha um responsável para ver detalhes ou alterar status.", components: [select], flags: MessageFlags.Ephemeral });
+  }
+
+  // 4. Seleção Admin
+  if (interaction.isStringSelectMenu() && customId === "logcheck_admin_select") {
+    const [, respId, weekKey] = interaction.values[0].split(":");
+    const checklist = loadJSON(CHECKLIST_FILE);
+    const data = checklist.weeks[weekKey].responsaveis[respId];
+    return sendPersonalManager(interaction, respId, weekKey, data, true);
+  }
+
+  // 5. Toggle Status Individual
+  if (interaction.isStringSelectMenu() && customId.startsWith("logcheck_toggle:")) {
+    const [, respId, weekKey] = customId.split(":");
+    const memberId = interaction.values[0];
+    
+    const checklist = loadJSON(CHECKLIST_FILE);
+    const member = checklist.weeks[weekKey].responsaveis[respId].members[memberId];
+    
+    const oldStatus = member.checked;
+    member.checked = !oldStatus;
+    member.checkedAt = member.checked ? Date.now() : null;
+    member.checkedBy = member.checked ? interaction.user.id : null;
+
+    saveJSON(CHECKLIST_FILE, checklist);
+    
+    // Log Auditoria
+    await logAudit(client, interaction.user, respId, memberId, member.checked, weekKey);
+
+    // Refresh UI
+    const updatedData = checklist.weeks[weekKey].responsaveis[respId];
+    await sendPersonalManager(interaction, respId, weekKey, updatedData, interaction.user.id !== respId, true);
+    
+    // Update Painel Principal se existir
+    const mainPayload = await buildMainPanel(client);
+    const panelState = loadJSON(PANEL_CONFIG.STATE_FILE);
+    if (panelState.messageId) {
+      const channel = await client.channels.fetch(PANEL_CONFIG.CHANNEL_ID).catch(() => null);
+      const msg = await channel?.messages.fetch(panelState.messageId).catch(() => null);
+      if (msg) await msg.edit(mainPayload).catch(() => {});
+    }
+  }
+
+  // 6. Ações em Massa
+  if (interaction.isButton() && customId.startsWith("logcheck_bulk:")) {
+    const [, action, respId, weekKey] = customId.split(":");
+    const checklist = loadJSON(CHECKLIST_FILE);
+    const members = checklist.weeks[weekKey].responsaveis[respId].members;
+
+    Object.keys(members).forEach(mId => {
+      members[mId].checked = action === "check";
+      members[mId].checkedAt = action === "check" ? Date.now() : null;
+      members[mId].checkedBy = action === "check" ? interaction.user.id : null;
+    });
+
+    saveJSON(CHECKLIST_FILE, checklist);
+    await logAudit(client, interaction.user, respId, "TODOS", action === "check", weekKey, true);
+
+    const updatedData = checklist.weeks[weekKey].responsaveis[respId];
+    await sendPersonalManager(interaction, respId, weekKey, updatedData, interaction.user.id !== respId, true);
+    
+    const mainPayload = await buildMainPanel(client);
+    const panelState = loadJSON(PANEL_CONFIG.STATE_FILE);
+    if (panelState.messageId) {
+      const channel = await client.channels.fetch(PANEL_CONFIG.CHANNEL_ID).catch(() => null);
+      const msg = await channel?.messages.fetch(panelState.messageId).catch(() => null);
+      if (msg) await msg.edit(mainPayload).catch(() => {});
+    }
+  }
+
+  return false;
+}
+
+// Helper para enviar o menu de gerenciamento (pessoal ou admin)
+async function sendPersonalManager(interaction, respId, weekKey, data, isAdmin = false, isUpdate = false) {
+  const members = Object.entries(data.members);
+  const checked = members.filter(([_, m]) => m.checked).length;
+  const total = members.length;
+
+  const embed = new EmbedBuilder()
+    .setTitle(`📖 Gerenciar Logs: <@${respId}>`)
+    .setDescription(
+      `📅 **Semana:** ${getWeekRangeLabel(weekKey)}\n` +
+      `📊 **Progresso:** ${checked}/${total} conferidos\n\n` +
+      members.map(([id, m]) => {
+        const timeStr = m.checkedAt ? `<t:${Math.floor(m.checkedAt/1000)}:R>` : "";
+        return `${m.checked ? "✅" : "❌"} <@${id}> ${m.checked ? `(por <@${m.checkedBy}> ${timeStr})` : "— *pendente*"}`;
+      }).join("\n")
+    )
+    .setColor(checked === total ? "#2ecc71" : "#3498db");
+
+  const select = new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId(`logcheck_toggle:${respId}:${weekKey}`)
+      .setPlaceholder("Clique para inverter o status de um membro")
+      .addOptions(members.map(([id, m]) => ({
+        label: `Membro: ${id}`,
+        value: id,
+        emoji: m.checked ? "❌" : "✅",
+        description: `Área: ${m.area} | Atualmente: ${m.checked ? "Conferido" : "Pendente"}`
+      })))
+  );
+
+  const buttons = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`logcheck_bulk:check:${respId}:${weekKey}`).setLabel("Marcar Todos").setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`logcheck_bulk:uncheck:${respId}:${weekKey}`).setLabel("Desmarcar Todos").setStyle(ButtonStyle.Danger)
+  );
+
+  const payload = { embeds: [embed], components: [select, buttons], flags: MessageFlags.Ephemeral };
+  
+  if (isUpdate) return interaction.update(payload).catch(() => {});
+  return interaction.reply(payload).catch(() => {});
+}
+
+async function logAudit(client, actor, respId, memberId, status, weekKey, isBulk = false) {
+  const channel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+  if (!channel) return;
+
+  const embed = new EmbedBuilder()
+    .setTitle(isBulk ? "📑 Checklist: Ação em Massa" : "📑 Checklist Individual Atualizado")
+    .setColor(status ? "#2ecc71" : "#e74c3c")
+    .addFields(
+      { name: "👤 Responsável", value: `<@${respId}>`, inline: true },
+      { name: "🧍 Membro(s)", value: memberId === "TODOS" ? "Todos os vinculados" : `<@${memberId}>`, inline: true },
+      { name: "📌 Ação", value: status ? "✅ Marcou como Conferido" : "❌ Marcou como Pendente", inline: true },
+      { name: "🔧 Alterado por", value: `${actor}`, inline: true },
+      { name: "📅 Semana", value: weekKey, inline: true }
+    )
+    .setTimestamp();
+
+  await channel.send({ embeds: [embed] }).catch(() => {});
+}
+
+// ===============================
+// LEMBRETES & CRON
 // ===============================
 async function sendSundayReminders(client) {
   const checklist = syncWeekData();
@@ -201,199 +407,57 @@ async function sendSundayReminders(client) {
 
   for (const [respId, content] of Object.entries(data.responsaveis)) {
     const pending = Object.entries(content.members).filter(([_, m]) => !m.checked);
-    
-    if (pending.length > 0) {
-      try {
-        const user = await client.users.fetch(respId).catch(() => null);
-        if (!user) continue;
+    if (pending.length === 0) continue;
 
-        const hasPriority = pending.some(([mId, _]) => {
-          const guild = client.guilds.cache.first(); 
-          const member = guild?.members.cache.get(mId);
-          return member?.roles.cache.has(ROLE_PRIORITY);
-        });
+    try {
+      const user = await client.users.fetch(respId).catch(() => null);
+      if (!user) continue;
 
-        const memberList = pending.map(([mId, _]) => `• <@${mId}>`).join("\n");
+      let hasPriority = false;
+      const guild = client.guilds.cache.first();
+      const memberLines = pending.map(([mId, _]) => {
+        const guildMember = guild?.members.cache.get(mId);
+        if (guildMember?.roles.cache.has(ROLE_PRIORITY)) {
+          hasPriority = true;
+          return `• <@${mId}> 🚨 **(Prioritário)**`;
+        }
+        return `• <@${mId}>`;
+      });
 
-        const embed = new EmbedBuilder()
-          .setTitle(`${hasPriority ? "🚨" : "📩"} **CHECKLIST DE LOGS PENDENTE**`)
-          .setColor(hasPriority ? "#ff0000" : "#f1c40f")
-          .setDescription(
-            `Você ainda precisa verificar as logs de:\n\n${memberList}\n\n` +
-            `📅 **Semana:** ${range}\n\n` +
-            `⚠️ Verifique as logs e marque no painel no canal <#${PANEL_CONFIG.CHANNEL_ID}>.`
-          )
-          .setFooter({ text: "Lembrete Automático • SantaCreators" });
+      const embed = new EmbedBuilder()
+        .setTitle("📩 **CHECKLIST DE LOGS PENDENTE**")
+        .setColor(hasPriority ? "#ff0000" : "#f1c40f")
+        .setDescription(
+          `Você ainda precisa verificar as logs dos seguintes membros:\n\n` +
+          memberLines.join("\n") +
+          `\n\n📅 **Semana:** ${range}\n\n` +
+          `⚠️ Verifique se há logs indevidas ou inconsistentes e marque no painel após a conferência.` +
+          (hasPriority ? `\n\n🚨 **Atenção:** Há membros prioritários pendentes!` : "")
+        )
+        .setFooter({ text: "Lembrete Automático • SantaCreators" })
+        .setTimestamp();
 
-        await user.send({ embeds: [embed] });
-      } catch (e) {
-        console.warn(`[ChecklistLogs] Não foi possível enviar DM para ${respId}:`, e.message);
-      }
+      await user.send({ embeds: [embed] }).catch(() => {});
+    } catch (e) {
+      console.warn(`[ChecklistLogs] Falha ao enviar DM para ${respId}`);
     }
   }
 }
 
-// ===============================
-// HANDLERS
-// ===============================
 export async function checklistOnReady(client) {
   syncWeekData();
-
-  // Cronograma de Lembretes: Domingos 00:00, 12:00, 16:00
-  cron.schedule("0 0,12,16 * * 0", () => {
-    console.log("[ChecklistLogs] Executando lembretes de domingo...");
-    sendSundayReminders(client);
-  }, { timezone: TZ });
-
-  // Auto-refresh do painel a cada 1 hora
-  setInterval(async () => {
-    const panelState = loadJSON(PANEL_CONFIG.STATE_FILE, { messageId: null });
-    if (panelState.messageId) {
-      const channel = await client.channels.fetch(PANEL_CONFIG.CHANNEL_ID).catch(() => null);
-      const msg = await channel?.messages.fetch(panelState.messageId).catch(() => null);
-      if (msg) {
-        const payload = await buildPanel(client);
-        await msg.edit(payload).catch(() => {});
-      }
-    }
-  }, 60 * 60 * 1000);
+  cron.schedule("0 0,12,16 * * 0", () => sendSundayReminders(client), { timezone: TZ });
 }
 
 export async function checklistHandleMessage(message, client) {
   if (!message.guild || message.author.bot) return false;
-  if (message.content !== "!checklogs") return false;
+  if (message.content.toLowerCase() !== "!checklogs") return false;
 
-  if (!hasPermission(message.member)) {
-    return message.reply("❌ Permissão insuficiente.").then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
-  }
+  if (!hasPermission(message.member)) return message.reply("❌ Sem permissão.").then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
 
   await message.delete().catch(() => {});
-  
-  const payload = await buildPanel(client);
+  const payload = await buildMainPanel(client);
   const sent = await message.channel.send(payload);
-  
   saveJSON(PANEL_CONFIG.STATE_FILE, { messageId: sent.id });
   return true;
-}
-
-export async function checklistHandleInteraction(interaction, client) {
-  if (!interaction.guild) return false;
-
-  // 1. Refresh / Sync Manual
-  if (interaction.isButton() && interaction.customId === "logcheck_refresh") {
-    if (!hasPermission(interaction.member)) {
-      return interaction.reply({ content: "❌ Sem permissão.", flags: MessageFlags.Ephemeral });
-    }
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-    syncWeekData();
-    const payload = await buildPanel(client);
-    await interaction.message.edit(payload);
-    return interaction.editReply("✅ Dados sincronizados com o GI e painel atualizado.");
-  }
-
-  // 2. Abrir Menu de Seleção para Toggle
-  if (interaction.isButton() && interaction.customId === "logcheck_open_toggle") {
-    const checklist = loadJSON(CHECKLIST_FILE);
-    const weekKey = weekKeyFromDateSP();
-    const data = checklist.weeks[weekKey];
-    
-    const isSuper = AUTH_CONFIG.USER_IDS.includes(interaction.user.id) || 
-                    interaction.member.roles.cache.has("1352408327983861844");
-
-    let targetEntries = [];
-    if (isSuper) {
-      targetEntries = Object.entries(data.responsaveis);
-    } else {
-      if (data.responsaveis[interaction.user.id]) {
-        targetEntries = [[interaction.user.id, data.responsaveis[interaction.user.id]]];
-      }
-    }
-
-    if (targetEntries.length === 0) {
-      return interaction.reply({ content: "❌ Você não possui membros vinculados para verificar nesta semana.", flags: MessageFlags.Ephemeral });
-    }
-
-    const options = [];
-    targetEntries.forEach(([respId, content]) => {
-      Object.entries(content.members).forEach(([mId, m]) => {
-        options.push({
-          label: `Membro: ${mId}`, 
-          value: `${respId}:${mId}:${weekKey}`,
-          description: `${m.checked ? "✅ Conferido" : "❌ Pendente"} | Área: ${m.area}`,
-          emoji: m.checked ? "✅" : "❌"
-        });
-      });
-    });
-
-    if (options.length === 0) return interaction.reply({ content: "Nenhum membro encontrado.", flags: MessageFlags.Ephemeral });
-
-    const selectMenu = {
-      type: 3,
-      custom_id: "logcheck_select_toggle",
-      options: options.slice(0, 25),
-      placeholder: "Selecione um membro para alterar o status"
-    };
-
-    return interaction.reply({
-      content: "🎯 **Gerenciar Checklist**\nSelecione abaixo para marcar/desmarcar a conferência de logs.",
-      components: [{ type: 1, components: [selectMenu] }],
-      flags: MessageFlags.Ephemeral
-    });
-  }
-
-  // 3. Processar Seleção (Toggle)
-  if (interaction.isStringSelectMenu() && interaction.customId === "logcheck_select_toggle") {
-    const [respId, memberId, weekKey] = interaction.values[0].split(":");
-    
-    const checklist = loadJSON(CHECKLIST_FILE);
-    const weekData = checklist.weeks[weekKey];
-    if (!weekData || !weekData.responsaveis[respId]?.members[memberId]) {
-      return interaction.reply({ content: "❌ Dados expirados ou inválidos.", flags: MessageFlags.Ephemeral });
-    }
-
-    const memberState = weekData.responsaveis[respId].members[memberId];
-    const oldStatus = memberState.checked;
-    memberState.checked = !oldStatus;
-    memberState.checkedAt = memberState.checked ? Date.now() : null;
-    memberState.checkedBy = memberState.checked ? interaction.user.id : null;
-
-    saveJSON(CHECKLIST_FILE, checklist);
-
-    const payload = await buildPanel(client);
-    await interaction.message.edit(payload).catch(() => {});
-
-    try {
-      dashEmit("checklist:toggled", {
-        respId,
-        memberId,
-        checked: memberState.checked,
-        by: interaction.user.id,
-        week: weekKey
-      });
-
-      const logCh = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
-      if (logCh) {
-        const logEmb = new EmbedBuilder()
-          .setTitle("📑 Log de Checklist")
-          .setColor(memberState.checked ? "Green" : "Red")
-          .setDescription([
-            `**Ação:** ${memberState.checked ? "✅ Conferido" : "❌ Desmarcado"}`,
-            `**Membro:** <@${memberId}>`,
-            `**Responsável:** <@${respId}>`,
-            `**Alterado por:** ${interaction.user}`,
-            `**Semana:** ${weekKey}`
-          ].join("\n"))
-          .setTimestamp();
-        await logCh.send({ embeds: [logEmb] });
-      }
-    } catch {}
-
-    return interaction.update({
-      content: `✅ Status de <@${memberId}> alterado para **${memberState.checked ? "CONFERIDO" : "PENDENTE"}**!`,
-      components: [],
-      flags: MessageFlags.Ephemeral
-    });
-  }
-
-  return false;
 }
