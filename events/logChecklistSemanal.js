@@ -47,12 +47,18 @@ const AUTH_CONFIG = {
 // ===============================
 // HELPERS DE TEMPO (SP)
 // ===============================
-function getNowSP() {
+export function getNowSP() {
   return new Date(new Date().toLocaleString("en-US", { timeZone: TZ }));
 }
 
-function weekKeyFromDateSP(date = getNowSP()) {
-  const d = new Date(date);
+/**
+ * Gera a chave da semana (Domingo) baseada em uma data.
+ * @param {Date|number|string} inputDate 
+ * @returns {string} YYYY-MM-DD
+ */
+function weekKeyFromDateSP(inputDate = null) {
+  const date = inputDate ? new Date(inputDate) : getNowSP();
+  const d = new Date(date.toLocaleString("en-US", { timeZone: TZ }));
   const day = d.getDay(); // 0 = Dom
   const diff = d.getDate() - day;
   const sunday = new Date(d.setDate(diff));
@@ -65,6 +71,17 @@ function getWeekRangeLabel(weekKey) {
   end.setDate(start.getDate() + 7);
   const fmt = (d) => `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`;
   return `${fmt(start)} → ${fmt(end)}`;
+}
+
+/**
+ * Resolve o nome de exibição de um usuário de forma segura.
+ * @param {import("discord.js").Guild} guild 
+ * @param {string} userId 
+ * @returns {string}
+ */
+function resolveMemberName(guild, userId) {
+  const member = guild.members.cache.get(userId);
+  return member?.displayName || member?.user?.username || `ID:${userId}`;
 }
 
 // ===============================
@@ -150,13 +167,14 @@ function hasPermission(member, type = "use") {
 // UI BUILDERS
 // ===============================
 function buildProgressBar(value, total) {
-  const size = 15;
+  const size = 10;
   const progress = Math.round((value / total) * size) || 0;
   const empty = size - progress;
-  return `\`${"■".repeat(progress)}${"□".repeat(empty)}\` **${Math.round((value / total) * 100) || 0}%**`;
+  return `${"🟩".repeat(progress)}${"⬛".repeat(empty)} **${Math.round((value / total) * 100) || 0}%**`;
 }
 
 async function buildMainPanel(client) {
+  const guild = client.guilds.cache.get(PANEL_CONFIG.GUILD_ID) || client.guilds.cache.first();
   const checklist = syncWeekData();
   const weekKey = weekKeyFromDateSP();
   const data = checklist.weeks[weekKey];
@@ -166,8 +184,12 @@ async function buildMainPanel(client) {
   let checkedMembers = 0;
   let respsWithPending = 0;
 
-  const respLines = Object.entries(data.responsaveis).map(([respId, content]) => {
+  const fields = [];
+  const respEntries = Object.entries(data.responsaveis);
+
+  for (const [respId, content] of respEntries) {
     const members = Object.values(content.members);
+    const membersEntries = Object.entries(content.members);
     const count = members.length;
     const checked = members.filter(m => m.checked).length;
     
@@ -175,11 +197,24 @@ async function buildMainPanel(client) {
     checkedMembers += checked;
     if (checked < count) respsWithPending++;
 
-    const statusIcon = checked === count ? "✔️" : (isSunday ? "🟡" : "⚠️");
-    const label = checked === count ? "Em dia" : `${count - checked} pendentes`;
+    const name = resolveMemberName(guild, respId);
+    const allDone = checked === count;
+    const statusIcon = allDone ? "🟢" : (isSunday ? "🟡" : "🔴");
     
-    return `${statusIcon} <@${respId}> • **${checked}/${count}** (${label})`;
-  });
+    let memberListText = membersEntries.slice(0, 5).map(([mId, m]) => {
+      const mStatus = m.checked ? "🟢" : (isSunday ? "🟡" : "🔴");
+      return `${mStatus} ${resolveMemberName(guild, mId)}`;
+    }).join("\n");
+
+    if (count > 5) memberListText += `\n*+${count - 5} restantes...*`;
+    if (count === 0) memberListText = "_Nenhum membro vinculado._";
+
+    fields.push({
+      name: `${statusIcon} **${name}** ${allDone ? "(em dia)" : "(pendente)"}`,
+      value: `📊 ${checked}/${count} conferidos\n\n${memberListText}\n━━━━━━━━━━━━━━━━━━━`,
+      inline: false
+    });
+  }
 
   const embed = new EmbedBuilder()
     .setTitle("📋 Checklist Semanal de Logs")
@@ -189,9 +224,9 @@ async function buildMainPanel(client) {
       `📌 **Responsáveis com pendência:** \`${respsWithPending}\`\n` +
       `✅ **Membros conferidos:** \`${checkedMembers}\`\n` +
       `❌ **Membros pendentes:** \`${totalMembers - checkedMembers}\`\n\n` +
-      `📊 **Progresso Geral:**\n${buildProgressBar(checkedMembers, totalMembers)}`
+      `📊 **Progresso Geral:**\n${buildProgressBar(checkedMembers, totalMembers)}\n`
     )
-    .addFields({ name: "👤 Status por Responsável", value: respLines.join("\n") || "_Nenhum membro vinculado._" })
+    .addFields(fields)
     .setColor(respsWithPending === 0 ? "#2ecc71" : (isSunday ? "#f1c40f" : "#9b59b6"))
     .setThumbnail(client.user.displayAvatarURL())
     .setTimestamp();
@@ -240,6 +275,7 @@ export async function checklistHandleInteraction(interaction, client) {
 
   // 3. Visão Geral (Admin)
   if (customId === "logcheck_admin_view") {
+    const guild = interaction.guild;
     if (!hasPermission(interaction.member, "admin")) return interaction.reply({ content: "❌ Apenas Administradores podem acessar a visão geral.", flags: MessageFlags.Ephemeral });
     
     const checklist = loadJSON(CHECKLIST_FILE);
@@ -249,10 +285,10 @@ export async function checklistHandleInteraction(interaction, client) {
     const options = Object.entries(data.responsaveis).map(([respId, content]) => {
       const pending = Object.values(content.members).filter(m => !m.checked).length;
       return {
-        label: `Resp: ${respId}`,
+        label: resolveMemberName(guild, respId),
         value: `logcheck_inspect:${respId}:${weekKey}`,
-        description: pending === 0 ? "Tudo conferido ✅" : `${pending} pendências encontradas ⚠️`,
-        emoji: pending === 0 ? "✅" : "⚠️"
+        description: pending === 0 ? "Em dia" : `${pending} pendências encontradas`,
+        emoji: pending === 0 ? "🟢" : "🔴"
       };
     });
 
@@ -338,18 +374,22 @@ export async function checklistHandleInteraction(interaction, client) {
 
 // Helper para enviar o menu de gerenciamento (pessoal ou admin)
 async function sendPersonalManager(interaction, respId, weekKey, data, isAdmin = false, isUpdate = false) {
+  const guild = interaction.guild;
+  const isSunday = getNowSP().getDay() === 0;
   const members = Object.entries(data.members);
   const checked = members.filter(([_, m]) => m.checked).length;
   const total = members.length;
+  const respName = resolveMemberName(guild, respId);
 
   const embed = new EmbedBuilder()
-    .setTitle(`📖 Gerenciar Logs: <@${respId}>`)
+    .setTitle(`📖 Gerenciar Logs: ${respName}`)
     .setDescription(
       `📅 **Semana:** ${getWeekRangeLabel(weekKey)}\n` +
       `📊 **Progresso:** ${checked}/${total} conferidos\n\n` +
       members.map(([id, m]) => {
         const timeStr = m.checkedAt ? `<t:${Math.floor(m.checkedAt/1000)}:R>` : "";
-        return `${m.checked ? "✅" : "❌"} <@${id}> ${m.checked ? `(por <@${m.checkedBy}> ${timeStr})` : "— *pendente*"}`;
+        const checkName = m.checkedBy ? resolveMemberName(guild, m.checkedBy) : "Desconhecido";
+        return `${m.checked ? "🟢" : (isSunday ? "🟡" : "🔴")} **${resolveMemberName(guild, id)}** ${m.checked ? `(por ${checkName} ${timeStr})` : "— *pendente*"}`;
       }).join("\n")
     )
     .setColor(checked === total ? "#2ecc71" : "#3498db");
@@ -359,10 +399,10 @@ async function sendPersonalManager(interaction, respId, weekKey, data, isAdmin =
       .setCustomId(`logcheck_toggle:${respId}:${weekKey}`)
       .setPlaceholder("Clique para inverter o status de um membro")
       .addOptions(members.map(([id, m]) => ({
-        label: `Membro: ${id}`,
+        label: resolveMemberName(guild, id),
         value: id,
-        emoji: m.checked ? "❌" : "✅",
-        description: `Área: ${m.area} | Atualmente: ${m.checked ? "Conferido" : "Pendente"}`
+        emoji: m.checked ? "🔴" : "🟢",
+        description: `Área: ${m.area} | Status: ${m.checked ? "Conferido" : "Pendente"}`
       })))
   );
 
