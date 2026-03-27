@@ -2225,10 +2225,10 @@ export async function getWeeklyRanking(client) {
     const agg = aggregateWeekDetailed(items, wkNow);
 
     return [...(agg.list || [])].sort((a, b) => {
-      const pa = Number(a?.points || 0);
-      const pb = Number(b?.points || 0);
-      return pb - pa;
-    });
+  const pa = Number(a?.points || 0);
+  const pb = Number(b?.points || 0);
+  return pb - pa;
+});
   } catch (e) {
     console.error("[SC_GERAL_WEEKLY_RANK] getWeeklyRanking error:", e);
     return [];
@@ -2246,8 +2246,8 @@ export async function getWeeklyRankingDebug(client) {
       totalItems: items.length,
       totalRankedUsers: agg.list?.length || 0,
       top15: [...(agg.list || [])]
-        .sort((a, b) => Number(b?.points || 0) - Number(a?.points || 0))
-        .slice(0, 15),
+  .sort((a, b) => Number(b?.points || 0) - Number(a?.points || 0))
+  .slice(0, 15),
     };
   } catch (e) {
     console.error("[scGeralWeeklyRanking] getWeeklyRankingDebug error:", e);
@@ -2345,16 +2345,15 @@ export async function handleWeeklyRankInteractions(interaction, client) {
       });
     }
 
-    const hasRole = member.roles.cache.some((r) => ALLOWED_REMOVE_ROLES.has(r.id));
-    const isAllowedUser = ALLOWED_REMOVE_USERS.has(member.id);
+const hasRole = member.roles.cache.some((r) => ALLOWED_REMOVE_ROLES.has(r.id));
+const isAllowedUser = ALLOWED_REMOVE_USERS.has(member.id);
 
-    if (!hasRole && !isAllowedUser) {
-
-      return interaction.reply({
-        content: "❌ Você não tem permissão para remover pontos.",
-        ephemeral: true,
-      });
-    }
+if (!hasRole && !isAllowedUser) {
+  return interaction.reply({
+    content: "❌ Você não tem permissão para remover pontos.",
+    ephemeral: true,
+  });
+}
 
     const modal = new ModalBuilder()
       .setCustomId("SC_REMOVE_POINTS_MODAL")
@@ -2380,24 +2379,58 @@ export async function handleWeeklyRankInteractions(interaction, client) {
     return interaction.showModal(modal);
   }
 
-  if (interaction.isModalSubmit() && interaction.customId === "SC_REMOVE_POINTS_MODAL") {
-    const userId = interaction.fields.getTextInputValue("userId").trim();
-    const points = Number(interaction.fields.getTextInputValue("points"));
+if (interaction.isModalSubmit() && interaction.customId === "SC_REMOVE_POINTS_MODAL") {
+  const userId = interaction.fields.getTextInputValue("userId").trim();
+  const points = Number(interaction.fields.getTextInputValue("points"));
 
-    if (!/^\d{17,20}$/.test(userId) || !Number.isFinite(points) || points <= 0) {
-      return interaction.reply({ content: "❌ Dados inválidos.", ephemeral: true });
-    }
+  if (!/^\d{17,20}$/.test(userId) || !Number.isFinite(points) || points <= 0) {
+    return interaction.reply({ content: "❌ Dados inválidos.", ephemeral: true });
+  }
 
-    const wk = weekKeyFromDateSP(nowSP());
-    addWeeklyAdjustment(wk, userId, -Math.abs(points));
+  const perm = await canRemovePointsFromTarget({
+    guild: interaction.guild,
+    executorId: interaction.user.id,
+    targetUserId: userId,
+  });
 
-    DIRTY = true;
-
+  if (!perm.ok) {
     return interaction.reply({
-      content: `✅ Removidos **${points} pts** de <@${userId}> na semana atual.`,
+      content: `❌ ${perm.reason}`,
       ephemeral: true,
     });
   }
+
+  const wk = weekKeyFromDateSP(nowSP());
+  const { before, after } = applyManualAdjustment({
+    weekKey: wk,
+    userId,
+    delta: -Math.abs(points),
+  });
+
+  DIRTY = true;
+
+  await emitManualRemoveLog(client, {
+    executorUserId: interaction.user.id,
+    executorMention: `<@${interaction.user.id}>`,
+    executorRoleId: perm.executorRoleId,
+    executorRoleLabel: getRemovalRoleLabel(perm.executorRoleId),
+    targetUserId: userId,
+    targetMention: `<@${userId}>`,
+    qty: points,
+    weekKey: wk,
+    before,
+    after,
+    bypass: perm.bypass,
+  });
+
+  return interaction.reply({
+    content:
+      `✅ Removidos **${points} pts** de <@${userId}> na semana atual.\n` +
+      `🗓️ Semana: \`${wk}\`\n` +
+      `📉 Ajuste do alvo: ${before} → ${after}`,
+    ephemeral: true,
+  });
+}
 }
 
 // ================== EXPORTS ==================
