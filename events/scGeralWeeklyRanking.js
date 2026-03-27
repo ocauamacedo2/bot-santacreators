@@ -24,15 +24,251 @@ const DATA_DIR = path.resolve(__dirname, "../data");
 // ================== AJUSTE MANUAL (CONFIG GLOBAL) ==================
 const ADJUSTMENTS_FILE = path.join(DATA_DIR, "sc_geral_manual_adjustments.json");
 
-const ALLOWED_REMOVE_ROLES = new Set([
-  "1352408327983861844", // resp creators
-  "1262262852949905409", // resp influ
-]);
-
+// ✅ usuários com bypass total
 const ALLOWED_REMOVE_USERS = new Set([
   "660311795327828008", // você
   "1262262852949905408", // owner
 ]);
+
+// ✅ cargos permitidos para remover pontos
+const ALLOWED_REMOVE_ROLES = new Set([
+  "1352408327983861844", // resp creators
+  "1262262852949905409", // resp influ
+  "1352407252216184833", // resp lider
+]);
+
+// ✅ HIERARQUIA INTERNA DOS CARGOS PERMITIDOS
+// quanto MAIOR o número, MAIOR a hierarquia
+// ajuste aqui conforme a hierarquia real desejada
+const REMOVE_ROLE_HIERARCHY = new Map([
+  ["1352407252216184833", 1], // resp lider
+  ["1352408327983861844", 2], // resp creators
+  ["1262262852949905409", 3], // resp influ
+]);
+
+function getAllowedRemovalRoleIdsFromMember(member) {
+  try {
+    if (!member?.roles?.cache) return [];
+    return member.roles.cache
+      .map((r) => r.id)
+      .filter((id) => ALLOWED_REMOVE_ROLES.has(id));
+  } catch {
+    return [];
+  }
+}
+
+function getHighestRemovalHierarchyLevel(member) {
+  const ids = getAllowedRemovalRoleIdsFromMember(member);
+  if (!ids.length) return null;
+
+  let highest = null;
+  for (const id of ids) {
+    const lvl = REMOVE_ROLE_HIERARCHY.get(id);
+    if (lvl == null) continue;
+    if (highest == null || lvl > highest) highest = lvl;
+  }
+  return highest;
+}
+
+function getHighestRemovalRoleId(member) {
+  const ids = getAllowedRemovalRoleIdsFromMember(member);
+  if (!ids.length) return null;
+
+  let bestRoleId = null;
+  let bestLevel = null;
+
+  for (const id of ids) {
+    const lvl = REMOVE_ROLE_HIERARCHY.get(id);
+    if (lvl == null) continue;
+    if (bestLevel == null || lvl > bestLevel) {
+      bestLevel = lvl;
+      bestRoleId = id;
+    }
+  }
+
+  return bestRoleId;
+}
+
+function getRemovalRoleLabel(roleId) {
+  switch (String(roleId || "")) {
+    case "1352407252216184833":
+      return "Resp Líder";
+    case "1352408327983861844":
+      return "Resp Creators";
+    case "1262262852949905409":
+      return "Resp Influ";
+    default:
+      return "Sem cargo permitido";
+  }
+}
+
+async function fetchGuildMemberSafe(guild, userId) {
+  try {
+    if (!guild || !userId) return null;
+    return await guild.members.fetch(userId);
+  } catch {
+    return null;
+  }
+}
+
+function getTargetHighestRemovalHierarchyLevel(member) {
+  return getHighestRemovalHierarchyLevel(member);
+}
+
+/**
+ * Regras:
+ * - owner/você: bypass total
+ * - executor sem cargo permitido: bloqueia
+ * - alvo com cargo permitido:
+ *    - só permite se executor for ESTRITAMENTE acima
+ *    - igual bloqueia
+ *    - abaixo bloqueia
+ * - alvo sem cargo permitido:
+ *    - permite (não está protegido pela hierarquia dos cargos autorizados)
+ */
+async function canRemovePointsFromTarget({ guild, executorId, targetUserId }) {
+  const isBypass = ALLOWED_REMOVE_USERS.has(String(executorId || ""));
+  if (isBypass) {
+    return {
+      ok: true,
+      bypass: true,
+      executorMember: await fetchGuildMemberSafe(guild, executorId),
+      targetMember: await fetchGuildMemberSafe(guild, targetUserId),
+      executorRoleId: null,
+      executorLevel: Infinity,
+      targetLevel: null,
+      reason: null,
+    };
+  }
+
+  const executorMember = await fetchGuildMemberSafe(guild, executorId);
+  if (!executorMember) {
+    return {
+      ok: false,
+      bypass: false,
+      reason: "Executor não encontrado no servidor.",
+      executorMember: null,
+      targetMember: null,
+      executorRoleId: null,
+      executorLevel: null,
+      targetLevel: null,
+    };
+  }
+
+  const executorLevel = getHighestRemovalHierarchyLevel(executorMember);
+  const executorRoleId = getHighestRemovalRoleId(executorMember);
+
+  if (executorLevel == null || !executorRoleId) {
+    return {
+      ok: false,
+      bypass: false,
+      reason: "Você não possui cargo permitido para remover pontos.",
+      executorMember,
+      targetMember: null,
+      executorRoleId: null,
+      executorLevel: null,
+      targetLevel: null,
+    };
+  }
+
+  const targetMember = await fetchGuildMemberSafe(guild, targetUserId);
+  const targetLevel = getTargetHighestRemovalHierarchyLevel(targetMember);
+
+  if (targetLevel == null) {
+    return {
+      ok: true,
+      bypass: false,
+      reason: null,
+      executorMember,
+      targetMember,
+      executorRoleId,
+      executorLevel,
+      targetLevel: null,
+    };
+  }
+
+  if (executorLevel <= targetLevel) {
+    return {
+      ok: false,
+      bypass: false,
+      reason: "Você só pode remover pontos de cargos ABAIXO do seu na hierarquia permitida.",
+      executorMember,
+      targetMember,
+      executorRoleId,
+      executorLevel,
+      targetLevel,
+    };
+  }
+
+  return {
+    ok: true,
+    bypass: false,
+    reason: null,
+    executorMember,
+    targetMember,
+    executorRoleId,
+    executorLevel,
+    targetLevel,
+  };
+}
+
+function loadAdjustments() {
+  return readJSON(ADJUSTMENTS_FILE, {
+    byWeek: {},
+  });
+}
+
+function saveAdjustments(data) {
+  writeJSON(ADJUSTMENTS_FILE, data);
+}
+
+function applyManualAdjustment({ weekKey, userId, delta }) {
+  const data = loadAdjustments();
+  data.byWeek = data.byWeek || {};
+  data.byWeek[weekKey] = data.byWeek[weekKey] || {};
+
+  const before = Number(data.byWeek[weekKey][userId] || 0);
+  const after = before + Number(delta || 0);
+
+  data.byWeek[weekKey][userId] = after;
+  saveAdjustments(data);
+
+  return { before, after, data };
+}
+
+async function emitManualRemoveLog(client, payload = {}) {
+  try {
+    const logChannelId =
+      process.env.SC_GERAL_REMOVE_LOGS_ID?.trim() ||
+      process.env.SC_GERAL_ADJUST_LOGS_ID?.trim() ||
+      "1460762416768880711";
+
+    const ch = await client.channels.fetch(logChannelId).catch(() => null);
+    if (!ch?.isTextBased?.()) return false;
+
+    const embed = new EmbedBuilder()
+      .setTitle("🧾 Remoção manual de pontos")
+      .setColor(0xef4444)
+      .addFields(
+        { name: "Executor", value: payload.executorMention || "—", inline: true },
+        { name: "Alvo", value: payload.targetMention || "—", inline: true },
+        { name: "Quantidade removida", value: `-${Number(payload.qty || 0)}`, inline: true },
+        { name: "Semana", value: `\`${payload.weekKey || "—"}\``, inline: true },
+        { name: "Antes", value: String(payload.before ?? "0"), inline: true },
+        { name: "Depois", value: String(payload.after ?? "0"), inline: true },
+        { name: "Modo", value: payload.bypass ? "BYPASS (owner/você)" : "Hierarquia", inline: true },
+        { name: "Cargo efetivo", value: payload.executorRoleLabel || "BYPASS", inline: true },
+        { name: "Data/Hora", value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false },
+      )
+      .setFooter({ text: `MANUAL_REMOVE::WK=${payload.weekKey || "unknown"}::TARGET=${payload.targetUserId || "unknown"}` });
+
+    await ch.send({ embeds: [embed] });
+    return true;
+  } catch (e) {
+    console.error("[SC_GERAL_WEEKLY_RANK] emitManualRemoveLog error:", e);
+    return false;
+  }
+}
 
 // ✅ GUARD GLOBAL REAL (não deixa boot 2x se importou duplicado)
 const __SC_GERAL_RANK_SKIP__ = Boolean(globalThis.__SC_GERAL_WEEKLY_RANK_ALREADY_BOOTSTRAPPED__);
@@ -1200,25 +1436,14 @@ await scanChannelEmbeds(client, {
 
 
 // ================== AJUSTES MANUAIS (POINT OVERRIDE) ==================
-function loadAdjustments() {
-  return readJSON(ADJUSTMENTS_FILE, { byWeek: {} });
-}
-
-function saveAdjustments(data) {
-  writeJSON(ADJUSTMENTS_FILE, data);
-}
-
+// wrappers compatíveis com o novo bloco global do topo
 function addWeeklyAdjustment(weekKey, userId, delta) {
-  const data = loadAdjustments();
-  data.byWeek = data.byWeek || {};
-  data.byWeek[weekKey] = data.byWeek[weekKey] || {};
-  data.byWeek[weekKey][userId] = (data.byWeek[weekKey][userId] || 0) + delta;
-  saveAdjustments(data);
+  return applyManualAdjustment({ weekKey, userId, delta });
 }
 
 function getWeeklyAdjustment(weekKey, userId) {
   const data = loadAdjustments();
-  return data.byWeek?.[weekKey]?.[userId] || 0;
+  return Number(data.byWeek?.[weekKey]?.[userId] || 0);
 }
 
 
@@ -1257,22 +1482,22 @@ function aggregateWeekDetailed(items, weekKey) {
     bySourceByUser[e.userId][e.source] = (bySourceByUser[e.userId][e.source] || 0) + 1;
   }
 
-  // ✅ Carrega ajustes (compartilhado com GeralDash)
   const adjustmentsData = loadAdjustments();
   const weekAdjustments = adjustmentsData.byWeek?.[weekKey] || {};
 
-  // ✅ Une usuários (quem tem ponto base + quem tem ajuste)
-  const allUserIds = new Set([...Object.keys(totalByUser), ...Object.keys(weekAdjustments)]);
+  const allUserIds = new Set([
+    ...Object.keys(totalByUser),
+    ...Object.keys(weekAdjustments),
+  ]);
 
   const list = [];
   let totalPoints = 0;
 
   for (const userId of allUserIds) {
-    const basePoints = totalByUser[userId] || 0;
-    const adj = weekAdjustments[userId] || 0;
+    const basePoints = Number(totalByUser[userId] || 0);
+    const adj = Number(weekAdjustments[userId] || 0);
     const finalPoints = basePoints + adj;
 
-    // Só mostra quem tem > 0 pontos (igual ao GeralDash)
     if (finalPoints > 0) {
       list.push({
         userId,
@@ -2005,7 +2230,7 @@ export async function getWeeklyRanking(client) {
       return pb - pa;
     });
   } catch (e) {
-    console.error("[scGeralWeeklyRanking] getWeeklyRanking error:", e);
+    console.error("[SC_GERAL_WEEKLY_RANK] getWeeklyRanking error:", e);
     return [];
   }
 }

@@ -128,27 +128,240 @@ const WEEKLY_SNAPSHOT_PATH = path.join(
 );
 
 // ================== AJUSTES MANUAIS (REMOVER / ADICIONAR PONTOS) ==================
-const MANUAL_ADJUST_ALLOWED_ROLES = new Set([
-  "1352408327983861844", // resp creators
-  "1262262852949905409", // resp influ
-]);
 const MANUAL_ADJUST_ALLOWED_USERS = new Set([
   "660311795327828008", // você
   "1262262852949905408", // owner
 ]);
+
+const MANUAL_ADJUST_ALLOWED_ROLES = new Set([
+  "1352408327983861844", // resp creators
+  "1262262852949905409", // resp influ
+  "1352407252216184833", // resp lider
+]);
+
+// ✅ HIERARQUIA INTERNA DOS CARGOS PERMITIDOS
+// quanto MAIOR o número, MAIOR a hierarquia
+// ajuste aqui conforme a tua regra real
+const MANUAL_ADJUST_ROLE_HIERARCHY = new Map([
+  ["1352407252216184833", 1], // resp lider
+  ["1352408327983861844", 2], // resp creators
+  ["1262262852949905409", 3], // resp influ
+]);
+
 const MANUAL_ADJUST_PATH = path.join(DATA_DIR, "sc_geral_manual_adjustments.json");
 
 function loadManualAdjustments() {
   return readJSON(MANUAL_ADJUST_PATH, {
-    byWeek: {
-      // "YYYY-MM-DD": { "userId": -2 }
-    },
+    byWeek: {},
   });
 }
 
 function saveManualAdjustments(data) {
   writeJSON(MANUAL_ADJUST_PATH, data);
 }
+
+function getManualAdjustAllowedRoleIdsFromMember(member) {
+  try {
+    if (!member?.roles?.cache) return [];
+    return member.roles.cache
+      .map((r) => r.id)
+      .filter((id) => MANUAL_ADJUST_ALLOWED_ROLES.has(id));
+  } catch {
+    return [];
+  }
+}
+
+function getManualAdjustHighestLevel(member) {
+  const ids = getManualAdjustAllowedRoleIdsFromMember(member);
+  if (!ids.length) return null;
+
+  let highest = null;
+  for (const id of ids) {
+    const lvl = MANUAL_ADJUST_ROLE_HIERARCHY.get(id);
+    if (lvl == null) continue;
+    if (highest == null || lvl > highest) highest = lvl;
+  }
+  return highest;
+}
+
+function getManualAdjustHighestRoleId(member) {
+  const ids = getManualAdjustAllowedRoleIdsFromMember(member);
+  if (!ids.length) return null;
+
+  let bestRoleId = null;
+  let bestLevel = null;
+
+  for (const id of ids) {
+    const lvl = MANUAL_ADJUST_ROLE_HIERARCHY.get(id);
+    if (lvl == null) continue;
+    if (bestLevel == null || lvl > bestLevel) {
+      bestLevel = lvl;
+      bestRoleId = id;
+    }
+  }
+
+  return bestRoleId;
+}
+
+function getManualAdjustRoleLabel(roleId) {
+  switch (String(roleId || "")) {
+    case "1352407252216184833":
+      return "Resp Líder";
+    case "1352408327983861844":
+      return "Resp Creators";
+    case "1262262852949905409":
+      return "Resp Influ";
+    default:
+      return "Sem cargo permitido";
+  }
+}
+
+async function fetchGuildMemberSafe(guild, userId) {
+  try {
+    if (!guild || !userId) return null;
+    return await guild.members.fetch(userId);
+  } catch {
+    return null;
+  }
+}
+
+async function canManualRemovePoints({ guild, executorId, targetUserId }) {
+  const isBypass = MANUAL_ADJUST_ALLOWED_USERS.has(String(executorId || ""));
+  if (isBypass) {
+    return {
+      ok: true,
+      bypass: true,
+      executorMember: await fetchGuildMemberSafe(guild, executorId),
+      targetMember: await fetchGuildMemberSafe(guild, targetUserId),
+      executorRoleId: null,
+      executorLevel: Infinity,
+      targetLevel: null,
+      reason: null,
+    };
+  }
+
+  const executorMember = await fetchGuildMemberSafe(guild, executorId);
+  if (!executorMember) {
+    return {
+      ok: false,
+      bypass: false,
+      reason: "Executor não encontrado no servidor.",
+      executorMember: null,
+      targetMember: null,
+      executorRoleId: null,
+      executorLevel: null,
+      targetLevel: null,
+    };
+  }
+
+  const executorLevel = getManualAdjustHighestLevel(executorMember);
+  const executorRoleId = getManualAdjustHighestRoleId(executorMember);
+
+  if (executorLevel == null || !executorRoleId) {
+    return {
+      ok: false,
+      bypass: false,
+      reason: "Você não possui cargo permitido para remover pontos.",
+      executorMember,
+      targetMember: null,
+      executorRoleId: null,
+      executorLevel: null,
+      targetLevel: null,
+    };
+  }
+
+  const targetMember = await fetchGuildMemberSafe(guild, targetUserId);
+  const targetLevel = getManualAdjustHighestLevel(targetMember);
+
+  // alvo sem cargo permitido da hierarquia => pode remover
+  if (targetLevel == null) {
+    return {
+      ok: true,
+      bypass: false,
+      reason: null,
+      executorMember,
+      targetMember,
+      executorRoleId,
+      executorLevel,
+      targetLevel: null,
+    };
+  }
+
+  // só remove se o executor estiver ACIMA na hierarquia permitida
+  if (executorLevel <= targetLevel) {
+    return {
+      ok: false,
+      bypass: false,
+      reason: "Você só pode remover pontos de cargos ABAIXO do seu na hierarquia permitida.",
+      executorMember,
+      targetMember,
+      executorRoleId,
+      executorLevel,
+      targetLevel,
+    };
+  }
+
+  return {
+    ok: true,
+    bypass: false,
+    reason: null,
+    executorMember,
+    targetMember,
+    executorRoleId,
+    executorLevel,
+    targetLevel,
+  };
+}
+
+function applyManualAdjustment({ weekKey, userId, delta }) {
+  const manual = loadManualAdjustments();
+  manual.byWeek = manual.byWeek || {};
+  manual.byWeek[weekKey] = manual.byWeek[weekKey] || {};
+
+  const before = Number(manual.byWeek[weekKey][userId] || 0);
+  const after = before + Number(delta || 0);
+
+  manual.byWeek[weekKey][userId] = after;
+  saveManualAdjustments(manual);
+
+  return { before, after, data: manual };
+}
+
+async function emitManualRemovePointLog(client, payload = {}) {
+  try {
+    const logChannelId =
+      process.env.SC_GERAL_REMOVE_LOGS_ID?.trim() ||
+      process.env.SC_GERAL_ADJUST_LOGS_ID?.trim() ||
+      DASH_LOG_CHANNEL_ID;
+
+    const ch = await client.channels.fetch(logChannelId).catch(() => null);
+    if (!ch?.isTextBased?.()) return false;
+
+    const embed = new EmbedBuilder()
+      .setTitle("🧾 Remoção manual de pontos")
+      .setColor(0xef4444)
+      .addFields(
+        { name: "Executor", value: payload.executorMention || "—", inline: true },
+        { name: "Alvo", value: payload.targetMention || "—", inline: true },
+        { name: "Quantidade removida", value: `-${Number(payload.qty || 0)}`, inline: true },
+        { name: "Semana", value: `\`${payload.weekKey || "—"}\``, inline: true },
+        { name: "Antes", value: String(payload.before ?? "0"), inline: true },
+        { name: "Depois", value: String(payload.after ?? "0"), inline: true },
+        { name: "Modo", value: payload.bypass ? "BYPASS (owner/você)" : "Hierarquia", inline: true },
+        { name: "Cargo efetivo", value: payload.executorRoleLabel || "BYPASS", inline: true },
+        { name: "Data/Hora", value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false },
+      )
+      .setFooter({ text: `MANUAL_REMOVE::WK=${payload.weekKey || "unknown"}::TARGET=${payload.targetUserId || "unknown"}` });
+
+    await ch.send({ embeds: [embed] });
+    return true;
+  } catch (e) {
+    console.error("[SC_GERAL_DASH] emitManualRemovePointLog error:", e);
+    return false;
+  }
+}
+
+
 
 // Timezone
 const TZ = "America/Sao_Paulo";
@@ -3337,95 +3550,125 @@ export async function geralDashHandleInteraction(interaction, client) {
     const isAllowedUser = MANUAL_ADJUST_ALLOWED_USERS.has(member.id);
 
     if (!hasRole && !isAllowedUser) {
-      await interaction.reply({
-        content: "❌ Sem permissão.",
-        ephemeral: true,
-      });
-      return true;
-    }
+  await interaction.reply({
+    content: "❌ Sem permissão.",
+    ephemeral: true,
+  });
+  return true;
+}
 
-    const modal = new ModalBuilder()
-      .setCustomId("geraldash_remove_point_modal")
-      .setTitle("Remover pontos — GeralDash");
+const modal = new ModalBuilder()
+  .setCustomId("geraldash_remove_point_modal")
+  .setTitle("Remover pontos — GeralDash");
 
-    const inputUser = new TextInputBuilder()
-      .setCustomId("userId")
-      .setLabel("ID do Manager")
-      .setPlaceholder("Ex: 123456789012345678")
-      .setStyle(TextInputStyle.Short)
-      .setRequired(true);
+const inputUser = new TextInputBuilder()
+  .setCustomId("userId")
+  .setLabel("ID do alvo")
+  .setPlaceholder("Ex: 123456789012345678")
+  .setStyle(TextInputStyle.Short)
+  .setRequired(true);
 
-    const inputQty = new TextInputBuilder()
-      .setCustomId("qty")
-      .setLabel("Quantos pontos REMOVER?")
-      .setStyle(TextInputStyle.Short)
-      .setRequired(true);
+const inputQty = new TextInputBuilder()
+  .setCustomId("qty")
+  .setLabel("Quantos pontos REMOVER?")
+  .setPlaceholder("Ex: 1")
+  .setStyle(TextInputStyle.Short)
+  .setRequired(true);
 
-    modal.addComponents(
-      new ActionRowBuilder().addComponents(inputUser),
-      new ActionRowBuilder().addComponents(inputQty)
-    );
+modal.addComponents(
+  new ActionRowBuilder().addComponents(inputUser),
+  new ActionRowBuilder().addComponents(inputQty)
+);
 
-    await interaction.showModal(modal);
-    return true;
+await interaction.showModal(modal);
+return true;
   }
 
   // ================== MODAL ==================
-  if (interaction.isModalSubmit()) {
-    if (interaction.customId !== "geraldash_remove_point_modal") return false;
+// ================== MODAL ==================
+if (interaction.isModalSubmit()) {
+  if (interaction.customId !== "geraldash_remove_point_modal") return false;
 
-    const member = interaction.member;
-    const hasRole = member?.roles?.cache?.some((r) => MANUAL_ADJUST_ALLOWED_ROLES.has(r.id));
-    const isAllowedUser = MANUAL_ADJUST_ALLOWED_USERS.has(member.id);
+  const member = interaction.member;
+  const hasRole = member?.roles?.cache?.some((r) => MANUAL_ADJUST_ALLOWED_ROLES.has(r.id));
+  const isAllowedUser = MANUAL_ADJUST_ALLOWED_USERS.has(interaction.user.id);
 
-    if (!hasRole && !isAllowedUser) {
-      await interaction.reply({
-        content: "❌ Sem permissão.",
-        ephemeral: true,
-      });
-      return true;
-    }
-
-    await interaction.deferReply({ ephemeral: true });
-
-    const userId = interaction.fields.getTextInputValue("userId");
-
-    if (!/^\d{17,20}$/.test(userId)) {
-      await interaction.editReply({ content: "❌ ID de usuário inválido." });
-      return true;
-    }
-
-    const qty = Number(interaction.fields.getTextInputValue("qty"));
-
-    if (!Number.isInteger(qty) || qty <= 0 || qty > 50) {
-      await interaction.editReply({ content: "❌ Quantidade inválida (1 a 50)." });
-      return true;
-    }
-
-    const chosen = chooseWeeksUnion();
-    const wk = chosen.thisKey || weekKeyFromDateSP(nowSP());
-
-    const manual = loadManualAdjustments();
-    manual.byWeek[wk] = manual.byWeek[wk] || {};
-    manual.byWeek[wk][userId] =
-      (manual.byWeek[wk][userId] || 0) - qty;
-
-    saveManualAdjustments(manual);
-
-    CACHE = { at: 0, payload: null };
-    DIRTY = true;
-
-    await safeUpdate(client, "manual remove point (modal)", {
-      scanMode: "light",
-      emitLog: true,
+  if (!hasRole && !isAllowedUser) {
+    await interaction.reply({
+      content: "❌ Sem permissão.",
+      ephemeral: true,
     });
-
-    await interaction.editReply({
-      content: `✅ Ajuste aplicado!\n➖ **${qty}** ponto(s) removido(s) de <@${userId}>.`,
-    });
-
     return true;
   }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  const userId = String(interaction.fields.getTextInputValue("userId") || "").trim();
+
+  if (!/^\d{17,20}$/.test(userId)) {
+    await interaction.editReply({ content: "❌ ID de usuário inválido." });
+    return true;
+  }
+
+  const qty = Number(String(interaction.fields.getTextInputValue("qty") || "").trim());
+
+  if (!Number.isInteger(qty) || qty <= 0 || qty > 50) {
+    await interaction.editReply({ content: "❌ Quantidade inválida (1 a 50)." });
+    return true;
+  }
+
+  const perm = await canManualRemovePoints({
+    guild: interaction.guild,
+    executorId: interaction.user.id,
+    targetUserId: userId,
+  });
+
+  if (!perm.ok) {
+    await interaction.editReply({ content: `❌ ${perm.reason}` });
+    return true;
+  }
+
+  const chosen = chooseWeeksUnion();
+  const wk = chosen.thisKey || weekKeyFromDateSP(nowSP());
+
+  const { before, after } = applyManualAdjustment({
+    weekKey: wk,
+    userId,
+    delta: -qty,
+  });
+
+  CACHE = { at: 0, payload: null };
+  DIRTY = true;
+
+  await emitManualRemovePointLog(client, {
+    executorUserId: interaction.user.id,
+    executorMention: `<@${interaction.user.id}>`,
+    executorRoleId: perm.executorRoleId,
+    executorRoleLabel: getManualAdjustRoleLabel(perm.executorRoleId),
+    targetUserId: userId,
+    targetMention: `<@${userId}>`,
+    qty,
+    weekKey: wk,
+    before,
+    after,
+    bypass: perm.bypass,
+  });
+
+  await safeUpdate(client, "manual remove point (modal)", {
+    scanMode: "light",
+    emitLog: true,
+  });
+
+  await interaction.editReply({
+    content:
+      `✅ Ajuste aplicado!\n` +
+      `➖ **${qty}** ponto(s) removido(s) de <@${userId}>.\n` +
+      `🗓️ Semana: \`${wk}\`\n` +
+      `📉 Ajuste do alvo: ${before} → ${after}`,
+  });
+
+  return true;
+}
 
   return false;
 }
@@ -3440,54 +3683,82 @@ export async function geralDashHandleMessage(message, client) {
   const content = String(message.content || "").trim();
   const low = content.toLowerCase();
 
-  // ================== COMANDO ADMIN: !removept ==================
-  if (low.startsWith("!removept")) {
-    const member = message.member;
-    const hasRole = member?.roles?.cache?.some((r) => MANUAL_ADJUST_ALLOWED_ROLES.has(r.id));
-    const isAllowedUser = MANUAL_ADJUST_ALLOWED_USERS.has(member.id);
-    if (!hasRole && !isAllowedUser) {
-      await message.channel.send("❌ Sem permissão.");
-      return true;
-    }
+// ================== COMANDO ADMIN: !removept ==================
+if (low.startsWith("!removept")) {
+  const member = message.member;
+  const hasRole = member?.roles?.cache?.some((r) => MANUAL_ADJUST_ALLOWED_ROLES.has(r.id));
+  const isAllowedUser = MANUAL_ADJUST_ALLOWED_USERS.has(message.author.id);
 
-
-    const args = content.split(/\s+/);
-    const mention = args[1];
-    const qty = Number(args[2] || 1);
-
-    const m = /<@!?(\d{17,20})>/.exec(mention || "");
-    if (!m || !qty || qty <= 0) {
-      await message.channel.send(
-        "❌ Uso correto: `!removept @usuario quantidade`"
-      );
-      return true;
-    }
-
-    const userId = m[1];
-const chosen = chooseWeeksUnion();
-const wk = chosen.thisKey || weekKeyFromDateSP(nowSP());
-
-    const manual = loadManualAdjustments();
-    manual.byWeek[wk] = manual.byWeek[wk] || {};
-    manual.byWeek[wk][userId] =
-      (manual.byWeek[wk][userId] || 0) - qty;
-
-    saveManualAdjustments(manual);
-
-    // força atualização geral
-    CACHE = { at: 0, payload: null };
-    DIRTY = true;
-
-    await safeUpdate(client, "manual remove point", {
-      scanMode: "light",
-      emitLog: true,
-    });
-
-    await message.channel.send(
-      `✅ Removido **${qty}** ponto(s) de <@${userId}>.`
-    );
+  if (!hasRole && !isAllowedUser) {
+    await message.channel.send("❌ Sem permissão.");
     return true;
   }
+
+  const args = content.split(/\s+/).filter(Boolean);
+  const rawTarget = String(args[1] || "").trim();
+  const qty = Number(args[2] || "");
+
+  let userId = rawTarget.replace(/[<@!>]/g, "").trim();
+
+  if (!/^\d{17,20}$/.test(userId)) {
+    await message.channel.send("❌ Uso correto: `!removept @usuario quantidade` ou `!removept ID quantidade`");
+    return true;
+  }
+
+  if (!Number.isInteger(qty) || qty <= 0 || qty > 50) {
+    await message.channel.send("❌ Quantidade inválida (1 a 50).");
+    return true;
+  }
+
+  const perm = await canManualRemovePoints({
+    guild: message.guild,
+    executorId: message.author.id,
+    targetUserId: userId,
+  });
+
+  if (!perm.ok) {
+    await message.channel.send(`❌ ${perm.reason}`);
+    return true;
+  }
+
+  const chosen = chooseWeeksUnion();
+  const wk = chosen.thisKey || weekKeyFromDateSP(nowSP());
+
+  const { before, after } = applyManualAdjustment({
+    weekKey: wk,
+    userId,
+    delta: -qty,
+  });
+
+  CACHE = { at: 0, payload: null };
+  DIRTY = true;
+
+  await emitManualRemovePointLog(client, {
+    executorUserId: message.author.id,
+    executorMention: `<@${message.author.id}>`,
+    executorRoleId: perm.executorRoleId,
+    executorRoleLabel: getManualAdjustRoleLabel(perm.executorRoleId),
+    targetUserId: userId,
+    targetMention: `<@${userId}>`,
+    qty,
+    weekKey: wk,
+    before,
+    after,
+    bypass: perm.bypass,
+  });
+
+  await safeUpdate(client, "manual remove point", {
+    scanMode: "light",
+    emitLog: true,
+  });
+
+  await message.channel.send(
+    `✅ Removido **${qty}** ponto(s) de <@${userId}>.\n` +
+    `🗓️ Semana: \`${wk}\`\n` +
+    `📉 Ajuste do alvo: ${before} → ${after}`
+  );
+  return true;
+}
 
   // ================== COMANDOS NORMAIS DO DASH ==================
   if (__SC_GERAL_DASH_SKIP__) return false;
