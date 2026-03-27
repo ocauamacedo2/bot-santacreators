@@ -2355,6 +2355,16 @@ if (!hasRole && !isAllowedUser) {
   });
 }
 
+// 🔥 validação leve antes de abrir modal (melhora UX)
+const executorLevel = getHighestRemovalHierarchyLevel(member);
+
+if (!isAllowedUser && executorLevel == null) {
+  return interaction.reply({
+    content: "❌ Você não possui cargo válido para remover pontos.",
+    ephemeral: true,
+  });
+}
+
     const modal = new ModalBuilder()
       .setCustomId("SC_REMOVE_POINTS_MODAL")
       .setTitle("Remover Pontos (Ranking Semanal)");
