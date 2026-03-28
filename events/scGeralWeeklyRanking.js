@@ -2103,6 +2103,7 @@ dashOn("halldafama:aprovado", () => markDirty({ invalidateScanCache: true }));
 dashOn("eventosdiarios:aprovado", () => markDirty({ invalidateScanCache: true }));
 dashOn("correcao:usado", () => markDirty({ invalidateScanCache: true }));
 dashOn("gi:desligado", () => markDirty({ invalidateScanCache: true }));
+dashOn("gi:retornou", () => markDirty({ invalidateScanCache: true }));
 
   // scheduler leve: se DIRTY, atualiza
   setInterval(async () => {

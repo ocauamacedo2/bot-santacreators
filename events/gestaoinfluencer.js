@@ -320,13 +320,26 @@
       return true;
     }
 
-    async function removeGIRole(guild, userId, reason = 'GI removido por pausa/desligamento') {
+        async function removeGIRole(guild, userId, reason = 'GI removido por pausa/desligamento') {
       const m = await fetchMemberCached(guild, userId);
       if (!m) return false;
       if (!m.roles.cache.has(GI_ROLE_ID)) return true;
       setRoleBypass(userId);
       await m.roles.remove(GI_ROLE_ID, reason).catch(()=>{});
       return true;
+    }
+
+    function emitGIReturned(targetId, extra = {}) {
+      try {
+        if (!targetId) return;
+        dashEmit('gi:retornou', {
+          userId: String(targetId),
+          timestamp: Date.now(),
+          ...extra
+        });
+      } catch (e) {
+        console.warn('[SC_GI] Falha ao emitir gi:retornou:', e?.message || e);
+      }
     }
 
 
@@ -1005,10 +1018,17 @@ await msg.edit({
 }).catch(()=>{});
 
 
-     // ✅ NOVO: já seta cargo GI automaticamente ao criar
+// ✅ NOVO: já seta cargo GI automaticamente ao criar
 // Se for criado pausado (via pedirset), NÃO adiciona o cargo agora
 if (record.active) {
   await addGIRole(guild, record.targetId, 'Registro criado: GI obrigatório');
+
+  // ✅ se a pessoa foi desligada antes e voltou na mesma semana,
+  // isso limpa o bloqueio visual (-99999) e devolve os pontos antigos + novos
+  emitGIReturned(record.targetId, {
+    reason: 'create_registro_active',
+    messageId: record.messageId
+  });
 }
 
 // atualiza flags visuais sem sobrescrever a primeira data histórica
@@ -1145,27 +1165,33 @@ try {
         if (!rec.nextWeekTickMs) rec.nextWeekTickMs = computeNextWeekTick(rec.joinDateMs);
 
         // ✅ seta cargo GI quando despausar
-await addGIRole(guild, rec.targetId, 'Retomado via botão (GI obrigatório)');
+        await addGIRole(guild, rec.targetId, 'Retomado via botão (GI obrigatório)');
 
-// ✅ atualiza status visual SEM mudar a data histórica do primeiro set
-try {
-  const member = await fetchMemberCached(guild, rec.targetId);
-  const hasTrackedRole = !!(
-    member &&
-    (member.roles.cache.has(GI_ROLE_ID) || member.roles.cache.has(CREATOR_BASE_ROLE_ID))
-  );
+        // ✅ emite retorno para reabilitar a pessoa no dash/ranking da semana atual
+        emitGIReturned(rec.targetId, {
+          reason: 'despause_registro',
+          messageId: rec.messageId
+        });
 
-  if (hasTrackedRole) {
-    rec.warnNoRoleGI = false;
+        // ✅ atualiza status visual SEM mudar a data histórica do primeiro set
+        try {
+          const member = await fetchMemberCached(guild, rec.targetId);
+          const hasTrackedRole = !!(
+            member &&
+            (member.roles.cache.has(GI_ROLE_ID) || member.roles.cache.has(CREATOR_BASE_ROLE_ID))
+          );
 
-    // não sobrescreve nunca a data se já existir
-    if (!rec.roleSetAtMs) {
-      rec.roleSetAtMs = await resolveInitialRoleSetAtMs(guild, rec.targetId);
-    }
-  } else {
-    rec.warnNoRoleGI = true;
-  }
-} catch {}
+          if (hasTrackedRole) {
+            rec.warnNoRoleGI = false;
+
+            // não sobrescreve nunca a data se já existir
+            if (!rec.roleSetAtMs) {
+              rec.roleSetAtMs = await resolveInitialRoleSetAtMs(guild, rec.targetId);
+            }
+          } else {
+            rec.warnNoRoleGI = true;
+          }
+        } catch {}
       }
       SC_GI_scheduleSave();
 

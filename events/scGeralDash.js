@@ -3303,6 +3303,42 @@ dashOn("bp:sync", async (p) => {
     }
   });
 
+  // ✅ GI: RETORNOU / REATIVOU -> devolve a visibilidade da semana atual
+  dashOn("gi:retornou", (p) => {
+    try {
+      const userId = p.userId;
+      if (!userId) return;
+
+      const wk = weekKeyFromDateSP(nowSP());
+      const manual = loadManualAdjustments();
+
+      manual.byWeek = manual.byWeek || {};
+      manual.byWeek[wk] = manual.byWeek[wk] || {};
+
+      const currentAdj = Number(manual.byWeek[wk][userId] || 0);
+
+      // Se estava escondido pelo desligamento massivo, limpa o ajuste.
+      // Assim os pontos antigos da semana + novos pontos voltam a contar.
+      if (currentAdj <= -99999) {
+        delete manual.byWeek[wk][userId];
+      }
+
+      // limpeza opcional se a semana ficar vazia
+      if (Object.keys(manual.byWeek[wk]).length === 0) {
+        delete manual.byWeek[wk];
+      }
+
+      saveManualAdjustments(manual);
+
+      // força reprocessar ranking/dash/gráficos
+      markDirty({ invalidateScanCache: true });
+
+      // console.log(`[SC_GERAL_DASH] Usuário ${userId} retornou. Pontos da semana ${wk} reabilitados.`);
+    } catch (e) {
+      console.error("[SC_GERAL_DASH] Erro ao processar retorno do GI:", e);
+    }
+  });
+
   dashOn("vip:criado", (p) => {
     try {
       const st = loadState();
