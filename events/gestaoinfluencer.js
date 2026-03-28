@@ -320,7 +320,7 @@
       return true;
     }
 
-        async function removeGIRole(guild, userId, reason = 'GI removido por pausa/desligamento') {
+            async function removeGIRole(guild, userId, reason = 'GI removido por pausa/desligamento') {
       const m = await fetchMemberCached(guild, userId);
       if (!m) return false;
       if (!m.roles.cache.has(GI_ROLE_ID)) return true;
@@ -1149,7 +1149,7 @@ try {
       if (!msg) throw new Error('Mensagem do registro não encontrada.');
 
       // PAUSAR / DESPAUSAR
-      if (rec.active) {
+            if (rec.active) {
         rec.active = false;
         rec.pausedAtMs = nowMs();
 
@@ -1167,7 +1167,7 @@ try {
         // ✅ seta cargo GI quando despausar
         await addGIRole(guild, rec.targetId, 'Retomado via botão (GI obrigatório)');
 
-        // ✅ emite retorno para reabilitar a pessoa no dash/ranking da semana atual
+        // ✅ AVISA O DASH/RANKING QUE A PESSOA VOLTOU
         emitGIReturned(rec.targetId, {
           reason: 'despause_registro',
           messageId: rec.messageId
