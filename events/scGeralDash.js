@@ -148,7 +148,7 @@ const MANUAL_ADJUST_ROLE_HIERARCHY = new Map([
   ["1262262852949905409", 3], // resp influ
 ]);
 
-const MANUAL_ADJUST_PATH = path.join(DATA_DIR, "sc_geral_manual_adjustments.json");
+const MANUAL_ADJUST_PATH = path.join(DATA_DIR, "sc_points_adjustments.json");
 
 function loadManualAdjustments() {
   return readJSON(MANUAL_ADJUST_PATH, {

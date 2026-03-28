@@ -311,7 +311,7 @@
       return true;
     }
 
-    async function addGIRole(guild, userId, reason = 'GI obrigatório') {
+        async function addGIRole(guild, userId, reason = 'GI obrigatório') {
       const m = await fetchMemberCached(guild, userId);
       if (!m) return false;
       if (m.roles.cache.has(GI_ROLE_ID)) return true;
@@ -320,7 +320,7 @@
       return true;
     }
 
-            async function removeGIRole(guild, userId, reason = 'GI removido por pausa/desligamento') {
+    async function removeGIRole(guild, userId, reason = 'GI removido por pausa/desligamento') {
       const m = await fetchMemberCached(guild, userId);
       if (!m) return false;
       if (!m.roles.cache.has(GI_ROLE_ID)) return true;
@@ -330,17 +330,17 @@
     }
 
     function emitGIReturned(targetId, extra = {}) {
-      try {
-        if (!targetId) return;
-        dashEmit('gi:retornou', {
-          userId: String(targetId),
-          timestamp: Date.now(),
-          ...extra
-        });
-      } catch (e) {
-        console.warn('[SC_GI] Falha ao emitir gi:retornou:', e?.message || e);
-      }
-    }
+  try {
+    if (!targetId) return;
+    dashEmit('gi:retornou', {
+      userId: String(targetId),
+      timestamp: Date.now(),
+      ...extra
+    });
+  } catch (e) {
+    console.warn('[SC_GI] Falha ao emitir gi:retornou:', e?.message || e);
+  }
+}
 
 
     const CREATOR_BASE_ROLE_ID = SC_GI_CFG.ROLE_CREATOR_BASE;

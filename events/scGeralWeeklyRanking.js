@@ -22,7 +22,7 @@ const __dirname = path.dirname(__filename);
 // ✅ pasta /data do projeto
 const DATA_DIR = path.resolve(__dirname, "../data");
 // ================== AJUSTE MANUAL (CONFIG GLOBAL) ==================
-const ADJUSTMENTS_FILE = path.join(DATA_DIR, "sc_geral_manual_adjustments.json");
+const ADJUSTMENTS_FILE = path.join(DATA_DIR, "sc_points_adjustments.json");
 
 // ✅ usuários com bypass total
 const ALLOWED_REMOVE_USERS = new Set([
