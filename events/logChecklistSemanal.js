@@ -23,6 +23,7 @@ const __dirname = path.dirname(__filename);
 const DATA_DIR = path.resolve(process.cwd(), "data");
 const CHECKLIST_FILE = path.join(DATA_DIR, "sc_logs_checklist.json");
 const GI_DATA_FILE = path.join(DATA_DIR, "sc_gi_registros.json");
+const GI_DATA_FILE_ROOT = path.resolve(process.cwd(), "sc_gi_registros.json");
 
 const TZ = "America/Sao_Paulo";
 const ROLE_PRIORITY = "1371733765243670538"; // Membros Prioritários
@@ -110,6 +111,19 @@ async function resolveMemberDisplay(guild, userId) {
   return `<@${userId}> (**${name}**)`;
 }
 
+async function resolveMemberPlainName(guild, userId) {
+  if (!guild) return String(userId);
+
+  let member = guild.members.cache.get(userId);
+  if (!member) {
+    try {
+      member = await guild.members.fetch(userId);
+    } catch {}
+  }
+
+  return member?.displayName || member?.user?.username || String(userId);
+}
+
 // ===============================
 // PERSISTÊNCIA ATÔMICA
 // ===============================
@@ -152,9 +166,10 @@ async function refreshMainPanel(client, sourceGuild = null) {
     }
 
     const payload = await buildMainPanel(client, guild);
-    await msg.edit(payload).catch(() => {});
+    await msg.edit(payload);
     return true;
   } catch (e) {
+    console.error("[ChecklistLogs] Falha ao atualizar painel principal:", e);
     return false;
   }
 }
@@ -162,9 +177,163 @@ async function refreshMainPanel(client, sourceGuild = null) {
 // ===============================
 // LÓGICA DE DADOS & SINCRONIZAÇÃO
 // ===============================
+function normalizeId(value) {
+  if (value === null || value === undefined) return null;
+  const str = String(value).trim();
+  return /^\d{5,25}$/.test(str) ? str : null;
+}
+
+function extractResponsibleIds(reg) {
+  const direct =
+    normalizeId(reg?.responsibleUserId) ||
+    normalizeId(reg?.responsavelUserId) ||
+    normalizeId(reg?.responsavelId) ||
+    null;
+
+  if (direct) {
+    return [direct];
+  }
+
+  if (Array.isArray(reg?.responsibleHistory) && reg.responsibleHistory.length > 0) {
+    const sortedHistory = [...reg.responsibleHistory]
+      .filter(item => item && typeof item === "object")
+      .sort((a, b) => Number(b?.atMs || 0) - Number(a?.atMs || 0));
+
+    for (const item of sortedHistory) {
+      const histId =
+        normalizeId(item?.userId) ||
+        normalizeId(item?.responsavelId) ||
+        normalizeId(item?.id) ||
+        null;
+
+      if (histId) {
+        return [histId];
+      }
+    }
+  }
+
+  if (Array.isArray(reg?.responsaveis)) {
+    for (const item of reg.responsaveis) {
+      const fallbackId =
+        normalizeId(typeof item === "object" ? item?.userId : item) ||
+        normalizeId(typeof item === "object" ? item?.responsavelId : null) ||
+        normalizeId(typeof item === "object" ? item?.id : null);
+
+      if (fallbackId) {
+        return [fallbackId];
+      }
+    }
+  }
+
+  if (Array.isArray(reg?.responsavelIds)) {
+    for (const item of reg.responsavelIds) {
+      const fallbackId = normalizeId(item);
+      if (fallbackId) {
+        return [fallbackId];
+      }
+    }
+  }
+
+  return [];
+}
+
+function extractTargetId(reg) {
+  return (
+    normalizeId(reg?.targetId) ||
+    normalizeId(reg?.userId) ||
+    normalizeId(reg?.memberId) ||
+    normalizeId(reg?.creatorId) ||
+    normalizeId(reg?.colaboradorId) ||
+    null
+  );
+}
+
+function isChecklistEligibleGiRecord(reg) {
+  if (!reg || typeof reg !== "object") return false;
+
+  const targetId = extractTargetId(reg);
+  const responsibleIds = extractResponsibleIds(reg);
+
+  if (!targetId || responsibleIds.length === 0) return false;
+
+  if (reg.deleted === true) return false;
+  if (reg.removed === true) return false;
+  if (reg.desligado === true) return false;
+  if (reg.archived === true) return false;
+  if (reg.isArchived === true) return false;
+  if (reg.status === "desligado") return false;
+  if (reg.status === "arquivado") return false;
+  if (reg.status === "removido") return false;
+
+  // Se existir a flag active e ela estiver false, exclui.
+  if (typeof reg.active === "boolean" && reg.active === false) return false;
+
+  return true;
+}
+
+function pickLatestEligibleGiRecords(registros = []) {
+  const byTarget = new Map();
+
+  for (const reg of registros) {
+    if (!isChecklistEligibleGiRecord(reg)) continue;
+
+    const targetId = extractTargetId(reg);
+    if (!targetId) continue;
+
+    const prev = byTarget.get(targetId);
+
+    const regScore = Math.max(
+      Number(reg?.updatedAtMs || 0),
+      Number(reg?.createdAtMs || 0),
+      Number(reg?.roleSetAtMs || 0),
+      Number(reg?.joinDateMs || 0)
+    );
+
+    const prevScore = prev
+      ? Math.max(
+          Number(prev?.updatedAtMs || 0),
+          Number(prev?.createdAtMs || 0),
+          Number(prev?.roleSetAtMs || 0),
+          Number(prev?.joinDateMs || 0)
+        )
+      : -1;
+
+    if (!prev || regScore >= prevScore) {
+      byTarget.set(targetId, reg);
+    }
+  }
+
+  return [...byTarget.values()];
+}
+
+function readChecklistWeek(weekKey = weekKeyFromDateSP()) {
+  const checklist = loadJSON(CHECKLIST_FILE, { weeks: {} });
+
+  if (!checklist.weeks[weekKey]) {
+    checklist.weeks[weekKey] = { lastSyncedAt: null, responsaveis: {} };
+    saveJSON(CHECKLIST_FILE, checklist);
+  }
+
+  return checklist;
+}
+
+function loadGiSource() {
+  const dataFile = loadJSON(GI_DATA_FILE, null);
+  if (dataFile && Array.isArray(dataFile.registros) && dataFile.registros.length > 0) {
+    return dataFile;
+  }
+
+  const rootFile = loadJSON(GI_DATA_FILE_ROOT, null);
+  if (rootFile && Array.isArray(rootFile.registros) && rootFile.registros.length > 0) {
+    return rootFile;
+  }
+
+  return { registros: [] };
+}
+
 function syncWeekData() {
   const checklist = loadJSON(CHECKLIST_FILE, { weeks: {} });
-  const giData = loadJSON(GI_DATA_FILE, { registros: [] });
+  const giData = loadGiSource();
   const weekKey = weekKeyFromDateSP();
 
   if (!checklist.weeks[weekKey]) {
@@ -172,39 +341,59 @@ function syncWeekData() {
   }
 
   const currentWeek = checklist.weeks[weekKey];
-  const activeGIRegistros = (giData.registros || []).filter(r => r.active && r.responsibleUserId);
+  const rawRegistros = Array.isArray(giData?.registros) ? giData.registros : [];
+  const registros = pickLatestEligibleGiRecords(rawRegistros);
 
-  // 1. Mapear o que existe no GI agora
-  const giMap = new Map(); // RespId -> [MemberId]
-  activeGIRegistros.forEach(reg => {
-    if (!giMap.has(reg.responsibleUserId)) giMap.set(reg.responsibleUserId, []);
-    giMap.get(reg.responsibleUserId).push({ id: reg.targetId, area: reg.area || "Geral" });
-  });
+  const giMap = new Map(); // respId -> Map(memberId -> memberData)
 
-  // 2. Limpar membros e responsáveis que não existem mais no GI ou mudaram de Resp
+  for (const reg of registros) {
+    const targetId = extractTargetId(reg);
+    const responsibleIds = extractResponsibleIds(reg);
+
+    if (!targetId || responsibleIds.length === 0) continue;
+
+    const area =
+      reg?.area ||
+      reg?.setor ||
+      reg?.departamento ||
+      reg?.responsibleType ||
+      "Geral";
+
+    for (const respId of responsibleIds) {
+      if (!giMap.has(respId)) giMap.set(respId, new Map());
+
+      giMap.get(respId).set(targetId, {
+        id: targetId,
+        area,
+        sourceMessageId: reg?.messageId || null,
+        sourceCreatedAtMs: Number(reg?.createdAtMs || 0)
+      });
+    }
+  }
+
   const newResponsaveis = {};
-  giMap.forEach((members, respId) => {
+
+  for (const [respId, memberMap] of giMap.entries()) {
+    const previousRespMembers = currentWeek.responsaveis?.[respId]?.members || {};
     newResponsaveis[respId] = { members: {} };
-    members.forEach(m => {
-      // Se o membro já existia para este responsável nesta semana, preserva o status
-      const existing = currentWeek.responsaveis[respId]?.members[m.id];
-      if (existing) {
-        newResponsaveis[respId].members[m.id] = existing;
-      } else {
-        // Novo membro vinculado
-        newResponsaveis[respId].members[m.id] = {
-          checked: false,
-          checkedAt: null,
-          checkedBy: null,
-          area: m.area
-        };
-      }
-    });
-  });
+
+    for (const [memberId, memberData] of memberMap.entries()) {
+      const existing = previousRespMembers[memberId];
+
+      newResponsaveis[respId].members[memberId] = {
+        checked: existing?.checked === true,
+        checkedAt: existing?.checkedAt || null,
+        checkedBy: existing?.checkedBy || null,
+        area: memberData.area || existing?.area || "Geral",
+        sourceMessageId: memberData.sourceMessageId || existing?.sourceMessageId || null,
+        sourceCreatedAtMs: memberData.sourceCreatedAtMs || existing?.sourceCreatedAtMs || null
+      };
+    }
+  }
 
   currentWeek.responsaveis = newResponsaveis;
   currentWeek.lastSyncedAt = Date.now();
-  
+
   saveJSON(CHECKLIST_FILE, checklist);
   return checklist;
 }
@@ -226,11 +415,11 @@ function buildProgressBar(value, total) {
   return `${"🟩".repeat(progress)}${"⬛".repeat(empty)} **${Math.round((value / total) * 100) || 0}%**`;
 }
 
-async function buildMainPanel(client) {
-  const guild = resolveMainGuild(client); // Usa o helper para resolver a guild
-  const checklist = syncWeekData();
+async function buildMainPanel(client, sourceGuild = null) {
+  const guild = resolveMainGuild(client, sourceGuild);
   const weekKey = weekKeyFromDateSP();
-  const data = checklist.weeks[weekKey];
+  const checklist = syncWeekData();
+  const data = checklist.weeks[weekKey] || { responsaveis: {}, lastSyncedAt: null };
   const isSunday = getNowSP().getDay() === 0;
 
   let totalMembers = 0;
@@ -238,38 +427,44 @@ async function buildMainPanel(client) {
   let respsWithPending = 0;
 
   const fields = [];
-  const respEntries = Object.entries(data.responsaveis);
+  const respEntries = Object.entries(data.responsaveis || {});
 
   for (const [respId, content] of respEntries) {
-    const members = Object.values(content.members);
-    const membersEntries = Object.entries(content.members);
+    const membersObj = content?.members || {};
+    const members = Object.values(membersObj);
+    const membersEntries = Object.entries(membersObj);
     const count = members.length;
     const checked = members.filter(m => m.checked).length;
-    
+
     totalMembers += count;
     checkedMembers += checked;
     if (checked < count) respsWithPending++;
 
-    const nameDisplay = await resolveMemberDisplay(guild, respId);
-    const allDone = checked === count;
-    const statusIcon = allDone ? "🟢" : (isSunday ? "🟡" : "🔴"); // 🔴 = não conferido, 🟡 = pendente crítico (domingo)
-    
-    // Gera a lista de membros com a nova identificação
-    const memberLines = [];
-    for (const [mId, m] of membersEntries.slice(0, 5)) {
-      const mStatus = m.checked ? "🟢" : (isSunday ? "🟡" : "🔴");
-      const mDisplay = await resolveMemberDisplay(guild, mId);
-      memberLines.push(`${mStatus} ${mDisplay}`);
-    }
+    const nameDisplay = await resolveMemberPlainName(guild, respId);
+const allDone = count > 0 && checked === count;
 
-    let memberListText = memberLines.join("\n");
+const memberLines = [];
+for (const [mId, m] of membersEntries.slice(0, 5)) {
+  const mStatus = m.checked ? "🟢" : (isSunday ? "🟡" : "🔴");
+  const mDisplay = await resolveMemberDisplay(guild, mId);
+  memberLines.push(`${mStatus} ${mDisplay}`);
+}
 
-    if (count > 5) memberListText += `\n*+${count - 5} restantes...*`;
-    if (count === 0) memberListText = "_Nenhum membro vinculado._";
+let memberListText = memberLines.join("\n");
+if (count > 5) memberListText += `\n*+${count - 5} restantes...*`;
+if (count === 0) memberListText = "_Nenhum membro vinculado._";
 
-    fields.push({ // Título do campo com nome limpo e status
-      name: `👤 Responsável: ${nameDisplay.replace('(**', '').replace('**)', '')} ${allDone ? "🟢" : "🔴"}`, // Remove markdown da menção para o título
-      value: `📊 ${checked}/${count} conferidos\n\n${memberListText}\n━━━━━━━━━━━━━━━━━━━`,
+fields.push({
+  name: `👤 Responsável: ${nameDisplay} ${allDone ? "🟢" : "🔴"}`,
+  value: `📊 ${checked}/${count} conferidos\n\n${memberListText}\n━━━━━━━━━━━━━━━━━━━`,
+  inline: false
+});
+  }
+
+  if (fields.length === 0) {
+    fields.push({
+      name: "👤 Responsáveis",
+      value: "_Nenhum responsável encontrado na semana atual. Use o botão **Sincronizar GI**._",
       inline: false
     });
   }
@@ -281,7 +476,8 @@ async function buildMainPanel(client) {
       `🕒 **Fechamento:** Domingo às 23:59\n\n` +
       `📌 **Responsáveis com pendência:** \`${respsWithPending}\`\n` +
       `✅ **Membros conferidos:** \`${checkedMembers}\`\n` +
-      `❌ **Membros pendentes:** \`${totalMembers - checkedMembers}\`\n\n` +
+      `❌ **Membros pendentes:** \`${totalMembers - checkedMembers}\`\n` +
+      `🕓 **Última sincronização GI:** ${data.lastSyncedAt ? `<t:${Math.floor(data.lastSyncedAt / 1000)}:R>` : "`Nunca`"}\n\n` +
       `📊 **Progresso Geral:**\n${buildProgressBar(checkedMembers, totalMembers)}\n`
     )
     .addFields(fields)
@@ -307,72 +503,111 @@ export async function checklistHandleInteraction(interaction, client) {
 
   // 1. Sincronizar GI
   if (customId === "logcheck_sync_gi") {
-    if (!hasPermission(interaction.member)) return interaction.reply({ content: "❌ Sem permissão.", flags: MessageFlags.Ephemeral });
+    if (!hasPermission(interaction.member)) {
+      return interaction.reply({ content: "❌ Sem permissão.", flags: MessageFlags.Ephemeral });
+    }
+
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-    syncWeekData(); // Sincroniza os dados
-    await refreshMainPanel(client, interaction.guild); // Atualiza o painel principal
-    return interaction.editReply("✅ Dados sincronizados com sucesso!");
+
+    const checklist = syncWeekData();
+    const weekKey = weekKeyFromDateSP();
+    const data = checklist.weeks?.[weekKey] || { responsaveis: {} };
+
+    const totalResponsaveis = Object.keys(data.responsaveis || {}).length;
+    const totalMembros = Object.values(data.responsaveis || {}).reduce((acc, resp) => {
+      return acc + Object.keys(resp?.members || {}).length;
+    }, 0);
+
+    await refreshMainPanel(client, interaction.guild);
+
+    return interaction.editReply(
+      `✅ Dados sincronizados com sucesso!\n` +
+      `👤 Responsáveis carregados: **${totalResponsaveis}**\n` +
+      `🧍 Membros carregados: **${totalMembros}**`
+    );
   }
 
   // 2. Gerenciar Meus Membros
-  if (customId === "logcheck_my_members") {
-    if (!hasPermission(interaction.member)) return interaction.reply({ content: "❌ Você não é um responsável registrado.", flags: MessageFlags.Ephemeral });
-    
-    const checklist = loadJSON(CHECKLIST_FILE);
-    const weekKey = weekKeyFromDateSP();
-    const data = checklist.weeks[weekKey];
-    const myData = data.responsaveis[interaction.user.id];
-
-    if (!myData || Object.keys(myData.members).length === 0) {
-      return interaction.reply({ content: "❌ Você não possui membros vinculados a você nesta semana.", flags: MessageFlags.Ephemeral });
-    }
-
-    return sendPersonalManager(interaction, interaction.user.id, weekKey, myData);
+if (customId === "logcheck_my_members") {
+  if (!hasPermission(interaction.member)) {
+    return interaction.reply({ content: "❌ Você não é um responsável registrado.", flags: MessageFlags.Ephemeral });
   }
+  
+  const checklist = syncWeekData();
+  const weekKey = weekKeyFromDateSP();
+  const data = checklist.weeks?.[weekKey] || { responsaveis: {} };
+  const myData = data.responsaveis?.[interaction.user.id];
+
+  if (!myData || Object.keys(myData.members || {}).length === 0) {
+    return interaction.reply({ content: "❌ Você não possui membros vinculados a você nesta semana.", flags: MessageFlags.Ephemeral });
+  }
+
+  return sendPersonalManager(interaction, interaction.user.id, weekKey, myData);
+}
 
   // 3. Visão Geral (Admin)
   if (customId === "logcheck_admin_view") {
-    const guild = interaction.guild;
-    if (!hasPermission(interaction.member, "admin")) return interaction.reply({ content: "❌ Apenas Administradores podem acessar a visão geral.", flags: MessageFlags.Ephemeral });
-    
-    const checklist = loadJSON(CHECKLIST_FILE);
-    const weekKey = weekKeyFromDateSP();
-    const data = checklist.weeks[weekKey];
+  const guild = interaction.guild;
+  if (!hasPermission(interaction.member, "admin")) {
+    return interaction.reply({ content: "❌ Apenas Administradores podem acessar a visão geral.", flags: MessageFlags.Ephemeral });
+  }
+  
+  const checklist = syncWeekData();
+  const weekKey = weekKeyFromDateSP();
+  const data = checklist.weeks?.[weekKey] || { responsaveis: {} };
 
-    const options = [];
-    for (const [respId, content] of Object.entries(data.responsaveis)) {
-      const pending = Object.values(content.members).filter(m => !m.checked).length;
-      // Select menu label não aceita markdown/menção, então pegamos o nome limpo
-      // Select menu label não aceita markdown/menção, então pegamos o nome limpo
-      let member = guild.members.cache.get(respId);
-      if (!member) { try { member = await guild.members.fetch(respId); } catch {} }
-      const rawName = member?.displayName || member?.user?.username || respId;
+  const options = [];
+for (const [respId, content] of Object.entries(data.responsaveis || {})) {
+  const pending = Object.values(content?.members || {}).filter(m => !m.checked).length;
 
-      options.push({
-        label: rawName,
-        value: `logcheck_inspect:${respId}:${weekKey}`,
-        description: pending === 0 ? "Em dia" : `${pending} pendências encontradas`,
-        emoji: pending === 0 ? "🟢" : "🔴"
-      });
-    }
+  let member = guild.members.cache.get(respId);
+  if (!member) { try { member = await guild.members.fetch(respId); } catch {} }
+  const rawName = member?.displayName || member?.user?.username || respId;
 
-    const select = new ActionRowBuilder().addComponents(
-      new StringSelectMenuBuilder()
-        .setCustomId("logcheck_admin_select")
-        .setPlaceholder("Selecione um responsável para inspecionar")
-        .addOptions(options.slice(0, 25))
-    );
+  options.push({
+    label: String(rawName).slice(0, 100),
+    value: `logcheck_inspect:${respId}:${weekKey}`,
+    description: String(pending === 0 ? "Em dia" : `${pending} pendências encontradas`).slice(0, 100),
+    emoji: pending === 0 ? "🟢" : "🔴"
+  });
+}
 
-    return interaction.reply({ content: "👑 **Painel Administrativo**\nEscolha um responsável para ver detalhes ou alterar status.", components: [select], flags: MessageFlags.Ephemeral });
+if (options.length === 0) {
+  return interaction.reply({
+    content: "❌ Nenhum responsável encontrado na semana atual.",
+    flags: MessageFlags.Ephemeral
+  });
+}
+
+const select = new ActionRowBuilder().addComponents(
+  new StringSelectMenuBuilder()
+    .setCustomId("logcheck_admin_select")
+    .setPlaceholder("Selecione um responsável para inspecionar")
+    .addOptions(options.slice(0, 25))
+);
+
+return interaction.reply({
+  content: "👑 **Painel Administrativo**\nEscolha um responsável para ver detalhes ou alterar status.",
+  components: [select],
+  flags: MessageFlags.Ephemeral
+});
   }
 
   // 4. Seleção Admin
-  if (interaction.isStringSelectMenu() && customId === "logcheck_admin_select") {
-    const [, respId, weekKey] = interaction.values[0].split(":");
-    const checklist = loadJSON(CHECKLIST_FILE);
-    const data = checklist.weeks[weekKey].responsaveis[respId];
-    return sendPersonalManager(interaction, respId, weekKey, data, true);
+if (interaction.isStringSelectMenu() && customId === "logcheck_admin_select") {
+  const [, respId, weekKey] = interaction.values[0].split(":");
+  const checklist = loadJSON(CHECKLIST_FILE, { weeks: {} });
+  const data = checklist.weeks?.[weekKey]?.responsaveis?.[respId];
+
+  if (!data) {
+    return interaction.reply({
+      content: "❌ Não encontrei dados desse responsável na semana atual.",
+      flags: MessageFlags.Ephemeral
+    });
   }
+
+  return sendPersonalManager(interaction, respId, weekKey, data, true);
+}
 
   // 5. Toggle Status Individual
   if (interaction.isStringSelectMenu() && customId.startsWith("logcheck_toggle:")) {
@@ -396,15 +631,20 @@ export async function checklistHandleInteraction(interaction, client) {
     member.checkedBy = member.checked ? interaction.user.id : null;
 
     saveJSON(CHECKLIST_FILE, checklist);
-    
-    // Log Auditoria
-    await logAudit(client, interaction.user, respId, memberId, member.checked, weekKey);
 
-    // Refresh UIs
-    const updatedData = checklist.weeks[weekKey].responsaveis[respId];
-    await sendPersonalManager(interaction, respId, weekKey, updatedData, interaction.user.id !== respId, true);
-    await refreshMainPanel(client, interaction.guild); // Atualiza o painel principal
-    return true;
+// Log Auditoria
+await logAudit(client, interaction.user, respId, memberId, member.checked, weekKey);
+
+// Recarrega do arquivo já salvo
+const refreshedChecklist = loadJSON(CHECKLIST_FILE, { weeks: {} });
+const updatedData = refreshedChecklist.weeks?.[weekKey]?.responsaveis?.[respId];
+
+if (updatedData) {
+  await sendPersonalManager(interaction, respId, weekKey, updatedData, interaction.user.id !== respId, true);
+}
+
+await refreshMainPanel(client, interaction.guild);
+return true;
   }
 
   // 6. Ações em Massa
@@ -428,14 +668,19 @@ export async function checklistHandleInteraction(interaction, client) {
       members[mId].checkedBy = action === "check" ? interaction.user.id : null;
     });
 
-    saveJSON(CHECKLIST_FILE, checklist);
-    await logAudit(client, interaction.user, respId, "TODOS", action === "check", weekKey, true);
+   saveJSON(CHECKLIST_FILE, checklist);
+await logAudit(client, interaction.user, respId, "TODOS", action === "check", weekKey, true);
 
-    // Refresh UIs
-    const updatedData = checklist.weeks[weekKey].responsaveis[respId];
-    await sendPersonalManager(interaction, respId, weekKey, updatedData, interaction.user.id !== respId, true);
-    await refreshMainPanel(client, interaction.guild); // Atualiza o painel principal
-    return true;
+// Recarrega do arquivo já salvo
+const refreshedChecklist = loadJSON(CHECKLIST_FILE, { weeks: {} });
+const updatedData = refreshedChecklist.weeks?.[weekKey]?.responsaveis?.[respId];
+
+if (updatedData) {
+  await sendPersonalManager(interaction, respId, weekKey, updatedData, interaction.user.id !== respId, true);
+}
+
+await refreshMainPanel(client, interaction.guild);
+return true;
   }
 
   return false;
@@ -448,7 +693,7 @@ async function sendPersonalManager(interaction, respId, weekKey, data, isAdmin =
   const members = Object.entries(data?.members || {});
   const checked = members.filter(([_, m]) => m.checked).length;
   const total = members.length;
-  const respDisplay = await resolveMemberDisplay(guild, respId); // Menção + Nome
+const respDisplay = await resolveMemberPlainName(guild, respId);
 
   const memberLines = [];
   for (const [id, m] of members) {
@@ -471,7 +716,7 @@ async function sendPersonalManager(interaction, respId, weekKey, data, isAdmin =
   }
 
   const embed = new EmbedBuilder()
-    .setTitle(`📖 Gerenciar Logs: ${respDisplay.replace(/[<@!>\d]/g, "").replace("(**", "").replace("**)", "").trim()}`)
+.setTitle(`📖 Gerenciar Logs: ${respDisplay}`)
     .setDescription(
       `📅 **Semana:** ${getWeekRangeLabel(weekKey)}\n` +
       `📊 **Progresso:** ${checked}/${total} conferidos\n\n` +
@@ -602,23 +847,27 @@ async function sendSundayReminders(client) {
 
 export async function checklistOnReady(client) {
   syncWeekData();
+  await refreshMainPanel(client).catch(() => {});
   cron.schedule("0 0,12,16 * * 0", () => sendSundayReminders(client), { timezone: TZ });
 }
-
 export async function checklistHandleMessage(message, client) {
   if (!message.guild || message.author.bot) return false;
   if (message.content.toLowerCase() !== "!checklogs") return false;
 
-  if (!hasPermission(message.member)) return message.reply("❌ Sem permissão.").then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
+  if (!hasPermission(message.member)) {
+    return message.reply("❌ Sem permissão.").then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
+  }
 
   await message.delete().catch(() => {});
-  const payload = await buildMainPanel(client);
+  const payload = await buildMainPanel(client, message.guild);
   const sent = await message.channel.send(payload);
-  saveJSON(PANEL_CONFIG.STATE_FILE, { // Salva o estado completo do painel
+
+  saveJSON(PANEL_CONFIG.STATE_FILE, {
     guildId: message.guild.id,
     channelId: message.channel.id,
     messageId: sent.id,
     updatedAt: Date.now()
   });
+
   return true;
 }
