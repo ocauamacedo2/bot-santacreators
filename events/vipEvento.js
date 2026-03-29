@@ -141,16 +141,36 @@ function isUnknownInteractionError(err) {
 async function safeDefer(i, { ephemeral = true, update = false } = {}) {
   try {
     if (i.deferred || i.replied) return;
-    if (update && i.isMessageComponent()) await i.deferUpdate();
-    else await i.deferReply({ ephemeral });
+
+    if (update && i.isMessageComponent()) {
+      i.__vipDeferredUpdate = true;
+      await i.deferUpdate();
+      return;
+    }
+
+    i.__vipDeferredUpdate = false;
+    await i.deferReply({ ephemeral });
   } catch (e) {
     if (!isUnknownInteractionError(e)) throw e;
   }
 }
 async function safeReply(i, opts) {
   try {
-    if (i.replied) return await i.followUp(opts);
-    if (i.deferred) return await i.editReply(opts);
+    if (i.replied) {
+      return await i.followUp(opts);
+    }
+
+    if (i.deferred) {
+      if (i.__vipDeferredUpdate) {
+        return await i.followUp({
+          ephemeral: true,
+          ...opts,
+        });
+      }
+
+      return await i.editReply(opts);
+    }
+
     return await i.reply(opts);
   } catch (e) {
     if (isUnknownInteractionError(e)) return;
@@ -172,7 +192,7 @@ function canMarkPaid(member) {
   return hasAnyRole(member, PAYMENT_ALLOWED) || PAYMENT_ALLOWED_USERS.includes(member?.id);
 }
 function canReprove(member) {
-  return hasAnyRole(member, REPROVE_ALLOWED) || REPROVE_ALLOWED_USERS.includes(member.id);
+  return hasAnyRole(member, REPROVE_ALLOWED) || REPROVE_ALLOWED_USERS.includes(member?.id);
 }
 
 // ── Helpers de status do registro ───────────────────────────────
@@ -379,7 +399,7 @@ function VIP_buildRegistroEmbed(guild, registrante, payload, cityName) {
       { name: "📅 Dia do evento", value: `\`${payload.data}\``, inline: true },
       { name: "🆔 ID do ganhador", value: `<@${payload.ganhadorId}> (\`${payload.ganhadorId}\`)`, inline: true },
       { name: "🌆 Cidade", value: `**${cityName}**`, inline: true },
-      { name: "� Organização", value: `\`${payload.org}\``, inline: true },
+      { name: "🏢 Organização", value: `\`${payload.org}\``, inline: true },
       { name: "🎁 Premiação", value: payload.premiacao || "—", inline: false },
       { name: "📝 Solicitações", value: "—", inline: false },
       { name: "💸 Pagamento", value: "—", inline: false }
@@ -824,21 +844,27 @@ export async function vipEventoHandleInteraction(i, client) {
         return true;
       }
 
-      await safeDefer(i, { ephemeral: true });
+      await safeDefer(i, { update: true });
 
-if (i.customId === VIP_BTN_SOLICITADO_ID) {
-  if (!canAction(i.member)) {
-    await safeReply(i, { content: "🚫 Você não tem permissão para usar esse botão.", ephemeral: true });
-    return true;
-  }
-}
+      if (i.customId === VIP_BTN_SOLICITADO_ID) {
+        if (!canAction(i.member)) {
+          await safeReply(i, {
+            content: "🚫 Você não tem permissão para usar esse botão.",
+            ephemeral: true,
+          });
+          return true;
+        }
+      }
 
-if (i.customId === VIP_BTN_PAGO_ID) {
-  if (!canMarkPaid(i.member)) {
-    await safeReply(i, { content: "🚫 Você não tem permissão para marcar como pago.", ephemeral: true });
-    return true;
-  }
-}
+      if (i.customId === VIP_BTN_PAGO_ID) {
+        if (!canMarkPaid(i.member)) {
+          await safeReply(i, {
+            content: "🚫 Você não tem permissão para marcar como pago.",
+            ephemeral: true,
+          });
+          return true;
+        }
+      }
 
       const msg = i.message;
       const guild = i.guild;
@@ -862,19 +888,24 @@ if (i.customId === VIP_BTN_PAGO_ID) {
       )})`;
 
       // SOLICITADO
-      if (i.customId === VIP_BTN_SOLICITADO_ID) {
-        const idx = fields.findIndex((f) => f.name.startsWith("📝 Solicitações"));
+        if (i.customId === VIP_BTN_SOLICITADO_ID) {
+        const idx = fields.findIndex((f) => (f.name || "").startsWith("📝 Solicitações"));
         const linha = `• Marcado como **SOLICITADO** por <@${i.user.id}> em ${whenTxt}`;
 
         if (idx >= 0) {
-          const cur = fields[idx].value === "—" ? "" : fields[idx].value + "\n";
+          const atual = fields[idx]?.value || "—";
+          const cur = atual === "—" ? "" : atual + "\n";
           fields[idx].value = (cur + linha).slice(0, 1024);
         } else {
-          fields.push({ name: "📝 Solicitações", value: linha, inline: false });
+          fields.push({ name: "📝 Solicitações", value: linha.slice(0, 1024), inline: false });
         }
 
         embed.setFields(fields);
-        await msg.edit({ embeds: [embed], components: VIP_buildRegistroButtons(false, false, false) });
+
+        await msg.edit({
+          embeds: [embed],
+          components: VIP_buildRegistroButtons(false, false, false),
+        });
 
         if (registranteId) {
           await VIP_sendDM_VIP(
@@ -885,10 +916,13 @@ if (i.customId === VIP_BTN_PAGO_ID) {
           );
         }
 
-        const logs = VIP_LOGS_CHANNEL_ID ? await client.channels.fetch(VIP_LOGS_CHANNEL_ID).catch(() => null) : null;
-        logs?.isTextBased() &&
-          logs
-            .send({
+        try {
+          const logs = VIP_LOGS_CHANNEL_ID
+            ? await client.channels.fetch(VIP_LOGS_CHANNEL_ID).catch(() => null)
+            : null;
+
+          if (logs?.isTextBased()) {
+            await logs.send({
               embeds: [
                 new EmbedBuilder()
                   .setColor(MENU_COLOR)
@@ -896,41 +930,71 @@ if (i.customId === VIP_BTN_PAGO_ID) {
                   .setDescription(`Registro: ${msg.url}\nPor: <@${i.user.id}>`)
                   .setTimestamp(),
               ],
-            })
-            .catch(() => {});
+            });
+          }
+        } catch (logErr) {
+          console.error("[VIP] erro ao enviar log de solicitado:", logErr);
+        }
 
-
+        try {
           dashEmit("vip:solicitado", {
-  by: i.user.id,
-  source: "vipsolicitado",
-  sourceLabel: "VIP Líderes (Solicitado)",
-  __at: Date.now(),
-});
+            by: i.user.id,
+            source: "vipsolicitado",
+            sourceLabel: "VIP Líderes (Solicitado)",
+            __at: Date.now(),
+          });
+        } catch (dashErr) {
+          console.error("[VIP] erro no dashEmit vip:solicitado:", dashErr);
+        }
 
-
-        await safeReply(i, { content: "✅ Marcado como **solicitado**.", ephemeral: true });
+        await safeReply(i, {
+          content: "✅ Marcado como **solicitado**.",
+          ephemeral: true,
+        });
         return true;
       }
 
       // PAGO
-      if (i.customId === VIP_BTN_PAGO_ID) {
-        const pagoIdx = fields.findIndex((f) => f.name.startsWith("💸 Pagamento"));
-        const jaPago = pagoIdx >= 0 && fields[pagoIdx].value && fields[pagoIdx].value !== "—";
-        if (jaPago) {
-          await safeReply(i, { content: "⚠️ Este registro já foi marcado como **pago**.", ephemeral: true });
+            if (i.customId === VIP_BTN_PAGO_ID) {
+        const pagoIdx = fields.findIndex((f) => (f.name || "").startsWith("💸 Pagamento"));
+
+        if (pagoIdx >= 0 && (fields[pagoIdx]?.value || "—") !== "—") {
+          await safeReply(i, {
+            content: "⚠️ Esse registro já está marcado como pago.",
+            ephemeral: true,
+          });
+          return true;
+        }
+
+        const reprovadoIdx = fields.findIndex((f) => (f.name || "").startsWith("⛔ Reprovação"));
+        if (reprovadoIdx >= 0 && /REPROVADO/i.test(fields[reprovadoIdx]?.value || "")) {
+          await safeReply(i, {
+            content: "⚠️ Esse registro está reprovado e não pode ser marcado como pago.",
+            ephemeral: true,
+          });
           return true;
         }
 
         const linha = `• **PAGO** por <@${i.user.id}> em ${whenTxt}`;
-        if (pagoIdx >= 0) fields[pagoIdx].value = linha;
-        else fields.push({ name: "💸 Pagamento", value: linha, inline: false });
+
+        if (pagoIdx >= 0) {
+          fields[pagoIdx].value = linha.slice(0, 1024);
+        } else {
+          fields.push({ name: "💸 Pagamento", value: linha.slice(0, 1024), inline: false });
+        }
 
         embed.setFields(fields);
-        await msg.edit({ embeds: [embed], components: VIP_buildRegistroButtons(true, true, false) });
+
+        await msg.edit({
+          embeds: [embed],
+          components: VIP_buildRegistroButtons(true, true, false),
+        });
 
         if (registranteId) {
-          const ganhadorField = fields.find((f) => f.name.includes("ID do ganhador"));
-          const ganhadorId = ganhadorField ? ganhadorField.value.match(/`(\d+)`/)?.[1] ?? null : null;
+          const ganhadorField = fields.find((f) => (f.name || "").includes("ID do ganhador"));
+          const ganhadorId = ganhadorField
+            ? ganhadorField.value.match(/`(\d+)`/)?.[1] ?? null
+            : null;
 
           await VIP_sendDM_VIP(
             client,
@@ -940,10 +1004,13 @@ if (i.customId === VIP_BTN_PAGO_ID) {
           );
         }
 
-        const logs = VIP_LOGS_CHANNEL_ID ? await client.channels.fetch(VIP_LOGS_CHANNEL_ID).catch(() => null) : null;
-        logs?.isTextBased() &&
-          logs
-            .send({
+        try {
+          const logs = VIP_LOGS_CHANNEL_ID
+            ? await client.channels.fetch(VIP_LOGS_CHANNEL_ID).catch(() => null)
+            : null;
+
+          if (logs?.isTextBased()) {
+            await logs.send({
               embeds: [
                 new EmbedBuilder()
                   .setColor(REG_COLOR)
@@ -951,24 +1018,55 @@ if (i.customId === VIP_BTN_PAGO_ID) {
                   .setDescription(`Registro: ${msg.url}\nPor: <@${i.user.id}>`)
                   .setTimestamp(),
               ],
-            })
-            .catch(() => {});
+            });
+          }
+        } catch (logErr) {
+          console.error("[VIP] erro ao enviar log de pago:", logErr);
+        }
 
+        try {
           dashEmit("vip:pago", {
-  by: i.user.id,
-  source: "vippago",
-  sourceLabel: "VIP Líderes",
-  __at: Date.now(),
-});
+            by: i.user.id,
+            source: "vippago",
+            sourceLabel: "VIP Líderes",
+            __at: Date.now(),
+          });
+        } catch (dashErr) {
+          console.error("[VIP] erro no dashEmit vip:pago:", dashErr);
+        }
 
-        await safeReply(i, { content: "✅ Marcado como **pago**. Botões desabilitados.", ephemeral: true });
+        await safeReply(i, {
+          content: "✅ Marcado como **pago**. Botões desabilitados.",
+          ephemeral: true,
+        });
         return true;
       }
     }
 
     return true;
   } catch (err) {
-    if (!isUnknownInteractionError(err)) console.error("[VIP] erro:", err);
+    if (!isUnknownInteractionError(err)) {
+      console.error("[VIP] erro:", err);
+    }
+
+    try {
+      if (i && !i.replied && !i.deferred) {
+        await i.reply({
+          content: "❌ Ocorreu um erro ao processar essa ação. Verifique os logs e tente novamente.",
+          ephemeral: true,
+        });
+      } else if (i && (i.deferred || i.replied)) {
+        await safeReply(i, {
+          content: "❌ Ocorreu um erro ao processar essa ação. Verifique os logs e tente novamente.",
+          ephemeral: true,
+        });
+      }
+    } catch (replyErr) {
+      if (!isUnknownInteractionError(replyErr)) {
+        console.error("[VIP] erro ao responder falha:", replyErr);
+      }
+    }
+
     return true; // se entrou aqui, era nosso
   }
 }
