@@ -134,6 +134,14 @@ function loadJSON(file, fallback = {}) {
   } catch { return fallback; }
 }
 
+function cloneJSONSafe(value, fallback = {}) {
+  try {
+    return JSON.parse(JSON.stringify(value ?? fallback));
+  } catch {
+    return fallback;
+  }
+}
+
 function saveJSON(file, data) {
   try {
     const dir = path.dirname(file);
@@ -341,6 +349,11 @@ function syncWeekData() {
   }
 
   const currentWeek = checklist.weeks[weekKey];
+
+  if (!currentWeek.responsaveis || typeof currentWeek.responsaveis !== "object") {
+    currentWeek.responsaveis = {};
+  }
+
   const rawRegistros = Array.isArray(giData?.registros) ? giData.registros : [];
   const registros = pickLatestEligibleGiRecords(rawRegistros);
 
@@ -371,16 +384,22 @@ function syncWeekData() {
     }
   }
 
-  const newResponsaveis = {};
+  // Preserva TUDO que já existe na semana atual
+   const mergedResponsaveis = cloneJSONSafe(currentWeek.responsaveis, {});
 
   for (const [respId, memberMap] of giMap.entries()) {
-    const previousRespMembers = currentWeek.responsaveis?.[respId]?.members || {};
-    newResponsaveis[respId] = { members: {} };
+    if (!mergedResponsaveis[respId] || typeof mergedResponsaveis[respId] !== "object") {
+      mergedResponsaveis[respId] = { members: {} };
+    }
+
+    if (!mergedResponsaveis[respId].members || typeof mergedResponsaveis[respId].members !== "object") {
+      mergedResponsaveis[respId].members = {};
+    }
 
     for (const [memberId, memberData] of memberMap.entries()) {
-      const existing = previousRespMembers[memberId];
+      const existing = mergedResponsaveis[respId].members[memberId] || {};
 
-      newResponsaveis[respId].members[memberId] = {
+      mergedResponsaveis[respId].members[memberId] = {
         checked: existing?.checked === true,
         checkedAt: existing?.checkedAt || null,
         checkedBy: existing?.checkedBy || null,
@@ -391,7 +410,7 @@ function syncWeekData() {
     }
   }
 
-  currentWeek.responsaveis = newResponsaveis;
+  currentWeek.responsaveis = mergedResponsaveis;
   currentWeek.lastSyncedAt = Date.now();
 
   saveJSON(CHECKLIST_FILE, checklist);
