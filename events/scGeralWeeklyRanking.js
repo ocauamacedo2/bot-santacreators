@@ -1451,9 +1451,9 @@ function getWeeklyAdjustment(weekKey, userId) {
 const SOURCE_LABEL = {
   poderes: "Poderes",
   eventos: "Eventos",
-  eventopoder: "Poder em Evento",
+  eventopoder: "Setou Poder",
   pagamentos: "Pagamentos",
-  vipPagos: "Líderes Pagamentos",
+  vipPagos: "VIP Líderes",
   manager: "Manager",
   alinhamentos: "Alinhamentos",
   doacoes: "Doações",

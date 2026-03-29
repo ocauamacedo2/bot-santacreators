@@ -395,7 +395,7 @@ const FULL_SCAN = {
 const SCAN_TTL_MS = 20 * 60 * 1000;
 
 // Barra/escala
-const BAR_MAX = 350; // 🎯 nova meta: 350 pontos
+const BAR_MAX = 450; // 🎯 nova meta: 450 pontos
 
 
 // ================== MEMÓRIA ==================
@@ -3339,45 +3339,45 @@ dashOn("bp:sync", async (p) => {
     }
   });
 
-  dashOn("vip:criado", (p) => {
-    try {
-      const st = loadState();
-      const wk = weekKeyFromDateSP(new Date(p.__at || Date.now()));
-      bumpWeekly(st, "vipCriados", wk, 1);
-      saveState(st);
-    } catch {}
-    markDirty();
-  });
+ dashOn("vip:criado", (p) => {
+  try {
+    const st = loadState();
+    const wk = weekKeyFromDateSP(new Date(p.__at || Date.now()));
+    bumpWeekly(st, "vipCriados", wk, 1);
+    saveState(st);
+  } catch {}
+  markDirty({ invalidateScanCache: true });
+});
 
-  dashOn("vip:solicitado", (p) => {
-    try {
-      const st = loadState();
-      const wk = weekKeyFromDateSP(new Date(p.__at || Date.now()));
-      bumpWeekly(st, "vipSolicitados", wk, 1);
-      saveState(st);
-    } catch {}
-    markDirty();
-  });
+dashOn("vip:solicitado", (p) => {
+  try {
+    const st = loadState();
+    const wk = weekKeyFromDateSP(new Date(p.__at || Date.now()));
+    bumpWeekly(st, "vipSolicitados", wk, 1);
+    saveState(st);
+  } catch {}
+  markDirty({ invalidateScanCache: true });
+});
 
-  dashOn("vip:pago", (p) => {
-    try {
-      const st = loadState();
-      const wk = weekKeyFromDateSP(new Date(p.__at || Date.now()));
-      bumpWeekly(st, "vipPagos", wk, 1);
-      saveState(st);
-    } catch {}
-    markDirty();
-  });
+dashOn("vip:pago", (p) => {
+  try {
+    const st = loadState();
+    const wk = weekKeyFromDateSP(new Date(p.__at || Date.now()));
+    bumpWeekly(st, "vipPagos", wk, 1);
+    saveState(st);
+  } catch {}
+  markDirty({ invalidateScanCache: true });
+});
 
-  dashOn("vip:reprovado", (p) => {
-    try {
-      const st = loadState();
-      const wk = weekKeyFromDateSP(new Date(p.__at || Date.now()));
-      bumpWeekly(st, "vipReprovados", wk, 1);
-      saveState(st);
-    } catch {}
-    markDirty();
-  });
+dashOn("vip:reprovado", (p) => {
+  try {
+    const st = loadState();
+    const wk = weekKeyFromDateSP(new Date(p.__at || Date.now()));
+    bumpWeekly(st, "vipReprovados", wk, 1);
+    saveState(st);
+  } catch {}
+  markDirty({ invalidateScanCache: true });
+});
 
   // ✅ NOVO: O ponto agora é emitido na conclusão da entrevista
   dashOn("entrevista:ponto_concluido", (p) => {

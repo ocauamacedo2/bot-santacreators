@@ -299,19 +299,21 @@ export async function registroPoderesEventosHandleInteraction(interaction, clien
           }
 
           // ✅ emite pro GeralDash / Ranking atualizarem na hora
-          try {
-            dashEmit("eventopoder:registrado", {
-              userId: registrar.id,          // quem ganha o ponto
-              alvoUserId: alvoUser.id,
-              poder,
-              obs,
-              channelId: (registroLogMsg?.channelId || eventosLogChan?.id || menuChan.id),
-              messageId: (registroLogMsg?.id || registroMsg?.id || null),
-              __at: Date.now(),
-            });
-          } catch (e) {
-            console.error("[SC_PWR] Falha ao emitir dash event eventopoder:registrado:", e);
-          }
+try {
+  dashEmit("eventopoder:registrado", {
+    userId: registrar.id,          // quem ganha o ponto
+    alvoUserId: alvoUser.id,
+    poder,
+    obs,
+    source: "eventopoder",
+    sourceLabel: "Setou Poder",
+    channelId: (registroLogMsg?.channelId || eventosLogChan?.id || menuChan.id),
+    messageId: (registroLogMsg?.id || registroMsg?.id || null),
+    __at: Date.now(),
+  });
+} catch (e) {
+  console.error("[SC_PWR] Falha ao emitir dash event eventopoder:registrado:", e);
+}
 
           await interaction.reply({
             content: `✅ Registro criado com sucesso para <@${alvoUser.id}> — **${poder}**.\nVocê ganhou **+1 ponto** no Geral/Semanal.\nUm lembrete será enviado em **2h30**.`,

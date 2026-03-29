@@ -704,8 +704,10 @@ export async function vipEventoHandleInteraction(i, client) {
           .catch(() => {});
 
 
-          dashEmit("vip:reprovado", {
+         dashEmit("vip:reprovado", {
   by: i.user.id,
+  source: "vipreprovado",
+  sourceLabel: "VIP Líderes (Reprovado)",
   __at: Date.now(),
 });
 
@@ -792,8 +794,10 @@ export async function vipEventoHandleInteraction(i, client) {
         logs.send({ embeds: [logE] }).catch(() => {});
       }
 
-      dashEmit("vip:criado", {
+     dashEmit("vip:criado", {
   by: i.user.id,
+  source: "vipcriado",
+  sourceLabel: "VIP Líderes (Criado)",
   __at: Date.now(),
 });
 
@@ -896,8 +900,10 @@ if (i.customId === VIP_BTN_PAGO_ID) {
             .catch(() => {});
 
 
-            dashEmit("vip:solicitado", {
+          dashEmit("vip:solicitado", {
   by: i.user.id,
+  source: "vipsolicitado",
+  sourceLabel: "VIP Líderes (Solicitado)",
   __at: Date.now(),
 });
 
@@ -948,8 +954,10 @@ if (i.customId === VIP_BTN_PAGO_ID) {
             })
             .catch(() => {});
 
-           dashEmit("vip:pago", {
+          dashEmit("vip:pago", {
   by: i.user.id,
+  source: "vippago",
+  sourceLabel: "VIP Líderes",
   __at: Date.now(),
 });
 
