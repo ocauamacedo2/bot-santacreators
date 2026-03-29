@@ -378,10 +378,18 @@ export async function checklistHandleInteraction(interaction, client) {
   if (interaction.isStringSelectMenu() && customId.startsWith("logcheck_toggle:")) {
     const [, respId, weekKey] = customId.split(":");
     const memberId = interaction.values[0];
-    
-    const checklist = loadJSON(CHECKLIST_FILE);
-    const member = checklist.weeks[weekKey].responsaveis[respId].members[memberId];
-    
+
+    await interaction.deferUpdate().catch(() => {});
+
+    const checklist = loadJSON(CHECKLIST_FILE, { weeks: {} });
+    const weekData = checklist.weeks?.[weekKey];
+    const respData = weekData?.responsaveis?.[respId];
+    const member = respData?.members?.[memberId];
+
+    if (!weekData || !respData || !member) {
+      return true;
+    }
+
     const oldStatus = member.checked;
     member.checked = !oldStatus;
     member.checkedAt = member.checked ? Date.now() : null;
@@ -396,13 +404,23 @@ export async function checklistHandleInteraction(interaction, client) {
     const updatedData = checklist.weeks[weekKey].responsaveis[respId];
     await sendPersonalManager(interaction, respId, weekKey, updatedData, interaction.user.id !== respId, true);
     await refreshMainPanel(client, interaction.guild); // Atualiza o painel principal
+    return true;
   }
 
   // 6. Ações em Massa
   if (interaction.isButton() && customId.startsWith("logcheck_bulk:")) {
     const [, action, respId, weekKey] = customId.split(":");
-    const checklist = loadJSON(CHECKLIST_FILE);
-    const members = checklist.weeks[weekKey].responsaveis[respId].members;
+
+    await interaction.deferUpdate().catch(() => {});
+
+    const checklist = loadJSON(CHECKLIST_FILE, { weeks: {} });
+    const weekData = checklist.weeks?.[weekKey];
+    const respData = weekData?.responsaveis?.[respId];
+    const members = respData?.members;
+
+    if (!weekData || !respData || !members) {
+      return true;
+    }
 
     Object.keys(members).forEach(mId => {
       members[mId].checked = action === "check";
@@ -417,6 +435,7 @@ export async function checklistHandleInteraction(interaction, client) {
     const updatedData = checklist.weeks[weekKey].responsaveis[respId];
     await sendPersonalManager(interaction, respId, weekKey, updatedData, interaction.user.id !== respId, true);
     await refreshMainPanel(client, interaction.guild); // Atualiza o painel principal
+    return true;
   }
 
   return false;
@@ -426,20 +445,25 @@ export async function checklistHandleInteraction(interaction, client) {
 async function sendPersonalManager(interaction, respId, weekKey, data, isAdmin = false, isUpdate = false) {
   const guild = interaction.guild;
   const isSunday = getNowSP().getDay() === 0;
-  const members = Object.entries(data.members);
+  const members = Object.entries(data?.members || {});
   const checked = members.filter(([_, m]) => m.checked).length;
   const total = members.length;
   const respDisplay = await resolveMemberDisplay(guild, respId); // Menção + Nome
 
   const memberLines = [];
   for (const [id, m] of members) {
-    const timeStr = m.checkedAt ? `<t:${Math.floor(m.checkedAt/1000)}:R>` : "";
+    const timeStr = m.checkedAt ? `<t:${Math.floor(m.checkedAt / 1000)}:R>` : "";
     const mDisplay = await resolveMemberDisplay(guild, id);
     
     if (m.checked) {
-      const checkerName = await resolveMemberDisplay(guild, m.checkedBy || "");
-      // Remove a menção do checker para não poluir, deixa só o nome em parênteses
-      const checkerClean = checkerName.split(' (')[1]?.replace(')', '') || "Staff";
+      const checkerName = m.checkedBy ? await resolveMemberDisplay(guild, m.checkedBy) : "Staff";
+      const checkerClean =
+        checkerName
+          .replace(/^<@!?\d+>\s*/, "")
+          .replace(/^\(\*\*/, "")
+          .replace(/\*\*\)$/, "")
+          .trim() || "Staff";
+
       memberLines.push(`🟢 ${mDisplay} — conferido por **${checkerClean}** ${timeStr}`);
     } else {
       memberLines.push(`${isSunday ? "🟡" : "🔴"} ${mDisplay} — pendente`);
@@ -447,44 +471,66 @@ async function sendPersonalManager(interaction, respId, weekKey, data, isAdmin =
   }
 
   const embed = new EmbedBuilder()
-    .setTitle(`📖 Gerenciar Logs: ${respDisplay.replace(/[<@!>\d]/g, '').replace(' (**', '').replace('**)', '').trim()}`) // Título com nome limpo
+    .setTitle(`📖 Gerenciar Logs: ${respDisplay.replace(/[<@!>\d]/g, "").replace("(**", "").replace("**)", "").trim()}`)
     .setDescription(
       `📅 **Semana:** ${getWeekRangeLabel(weekKey)}\n` +
       `📊 **Progresso:** ${checked}/${total} conferidos\n\n` +
-      memberLines.join("\n")
+      (memberLines.length ? memberLines.join("\n") : "_Nenhum membro vinculado._")
     )
     .setColor(checked === total ? "#2ecc71" : "#3498db");
 
   const selectOptions = [];
   for (const [id, m] of members) {
     let member = guild.members.cache.get(id);
-    if (!member) { try { member = await guild.members.fetch(id); } catch {} } // Tenta buscar o membro se não estiver no cache
+    if (!member) {
+      try {
+        member = await guild.members.fetch(id);
+      } catch {}
+    }
+
     const rawName = member?.displayName || member?.user?.username || id;
 
     selectOptions.push({
-      label: rawName,
+      label: String(rawName).slice(0, 100),
       value: id,
       emoji: m.checked ? "🔴" : "🟢",
-      description: `@${member?.user?.username || id} | Área: ${m.area} | Status: ${m.checked ? "Conferido" : "Pendente"}`
+      description: String(`@${member?.user?.username || id} | Área: ${m.area} | Status: ${m.checked ? "Conferido" : "Pendente"}`).slice(0, 100)
     });
   }
 
-  const select = new ActionRowBuilder().addComponents(
-    new StringSelectMenuBuilder()
-      .setCustomId(`logcheck_toggle:${respId}:${weekKey}`)
-      .setPlaceholder("Clique para inverter o status de um membro")
-      .addOptions(selectOptions)
-  );
+  const components = [];
+
+  if (selectOptions.length > 0) {
+    const select = new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(`logcheck_toggle:${respId}:${weekKey}`)
+        .setPlaceholder("Clique para inverter o status de um membro")
+        .addOptions(selectOptions.slice(0, 25))
+    );
+    components.push(select);
+  }
 
   const buttons = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`logcheck_bulk:check:${respId}:${weekKey}`).setLabel("Marcar Todos").setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId(`logcheck_bulk:uncheck:${respId}:${weekKey}`).setLabel("Desmarcar Todos").setStyle(ButtonStyle.Danger)
   );
 
-  const payload = { embeds: [embed], components: [select, buttons], flags: MessageFlags.Ephemeral };
-  
-  if (isUpdate) return interaction.update(payload).catch(() => {});
-  return interaction.reply(payload).catch(() => {});
+  components.push(buttons);
+
+  const payload = { embeds: [embed], components };
+
+  if (isUpdate) {
+    if (interaction.deferred || interaction.replied) {
+      return interaction.editReply(payload).catch(console.error);
+    }
+    return interaction.update(payload).catch(console.error);
+  }
+
+  if (interaction.deferred || interaction.replied) {
+    return interaction.editReply(payload).catch(console.error);
+  }
+
+  return interaction.reply({ ...payload, flags: MessageFlags.Ephemeral }).catch(console.error);
 }
 
 async function logAudit(client, actor, respId, memberId, status, weekKey, isBulk = false) {
