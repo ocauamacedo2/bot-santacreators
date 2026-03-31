@@ -260,6 +260,40 @@ function updateByMsgIdStatus(msgId, status) {
   saveAll(all);
 }
 
+function getPedidoPendente(userId) {
+  const historico = getHistorico(userId);
+  if (!historico.length) return null;
+
+  for (let i = historico.length - 1; i >= 0; i--) {
+    const item = historico[i];
+    if (String(item?.status || "").toLowerCase() === "pendente") {
+      return item;
+    }
+  }
+
+  return null;
+}
+
+function hasPedidoPendente(userId) {
+  return !!getPedidoPendente(userId);
+}
+
+async function resolveLogChannel(client, channelId) {
+  try {
+    if (!client || !channelId) return null;
+
+    const canal = await client.channels.fetch(channelId).catch(() => null);
+    if (!canal) return null;
+
+    if (canal.type !== ChannelType.GuildText) return null;
+
+    return canal;
+  } catch (e) {
+    console.error("[SETSTAFF_V2] resolveLogChannel erro:", e);
+    return null;
+  }
+}
+
 // ✅ NOVO: Reconstrói dados a partir do Embed se o JSON falhar
 function reconstruirPedidoDoEmbed(embed, userIdTarget) {
   try {
@@ -570,17 +604,28 @@ export async function setStaffV2HandleInteraction(interaction, client) {
     // (A) BOTÕES DE CIDADE (menu fixo)
     // ===========================================
     if (interaction.isButton() && interaction.customId.startsWith("ss2_cidade_")) {
-      const cidade = interaction.customId.split("_")[2];
-      ST.pedidosMap.set(userId, { cidade });
+  const pedidoPendente = getPedidoPendente(userId);
+  if (pedidoPendente) {
+    await interaction.reply({
+      content:
+        "⚠️ Você já possui um pedido de set staff pendente de análise.\n" +
+        "Aguarde aprovação ou reprovação antes de enviar outro.",
+      ephemeral: true,
+    });
+    return true;
+  }
 
-      const rows = buildNivelRows();
-      await interaction.reply({
-        content: "👤 Escolha o nível do seu cargo:",
-        components: rows,
-        ephemeral: true,
-      });
-      return true;
-    }
+  const cidade = interaction.customId.split("_")[2];
+  ST.pedidosMap.set(userId, { cidade });
+
+  const rows = buildNivelRows();
+  await interaction.reply({
+    content: "👤 Escolha o nível do seu cargo:",
+    components: rows,
+    ephemeral: true,
+  });
+  return true;
+}
 
     // ===========================================
     // (B) VER HISTÓRICO (menu fixo)
@@ -619,150 +664,172 @@ export async function setStaffV2HandleInteraction(interaction, client) {
     // ===========================================
     // (C) BOTÕES DE NÍVEL
     // ===========================================
-    if (interaction.isButton() && interaction.customId.startsWith("ss2_nivel_")) {
-      const nivel = interaction.customId.split("_")[2];
-      const base = ST.pedidosMap.get(userId);
-      if (!base?.cidade) {
-        await interaction.reply({
-          content: "⚠️ Seu pedido perdeu o contexto (cidade). Clique no botão de cidade de novo.",
-          ephemeral: true,
-        });
-        return true;
-      }
+if (interaction.isButton() && interaction.customId.startsWith("ss2_nivel_")) {
+  const pedidoPendente = getPedidoPendente(userId);
+  if (pedidoPendente) {
+    await interaction.reply({
+      content:
+        "⚠️ Você já possui um pedido de set staff pendente de análise.\n" +
+        "Aguarde aprovação ou reprovação antes de enviar outro.",
+      ephemeral: true,
+    });
+    return true;
+  }
 
-      base.nivel = nivel;
-      ST.pedidosMap.set(userId, base);
+  const nivel = interaction.customId.split("_")[2];
+  const base = ST.pedidosMap.get(userId);
+  if (!base?.cidade) {
+    await interaction.reply({
+      content: "⚠️ Seu pedido perdeu o contexto (cidade). Clique no botão de cidade de novo.",
+      ephemeral: true,
+    });
+    return true;
+  }
 
-      const modal = new ModalBuilder()
-        .setCustomId("ss2_modal_setstaff")
-        .setTitle("Pedido de Set Staff")
-        .addComponents(
-          new ActionRowBuilder().addComponents(
-            new TextInputBuilder()
-              .setCustomId("nome")
-              .setLabel("Seu Nome")
-              .setStyle(TextInputStyle.Short)
-              .setRequired(true)
-          ),
-          new ActionRowBuilder().addComponents(
-            new TextInputBuilder()
-              .setCustomId("pasta")
-              .setLabel("Sua pasta na cidade")
-              .setStyle(TextInputStyle.Short)
-              .setRequired(true)
-          ),
-          new ActionRowBuilder().addComponents(
-            new TextInputBuilder()
-              .setCustomId("id")
-              .setLabel("Seu ID/Passaporte")
-              .setStyle(TextInputStyle.Short)
-              .setRequired(true)
-          )
-        );
+  base.nivel = nivel;
+  ST.pedidosMap.set(userId, base);
 
-      await interaction.showModal(modal);
-      return true;
-    }
+  const modal = new ModalBuilder()
+    .setCustomId("ss2_modal_setstaff")
+    .setTitle("Pedido de Set Staff")
+    .addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId("nome")
+          .setLabel("Seu Nome")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+      ),
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId("pasta")
+          .setLabel("Sua pasta na cidade")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+      ),
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId("id")
+          .setLabel("Seu ID/Passaporte")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+      )
+    );
+
+  await interaction.showModal(modal);
+  return true;
+}
 
     // ===========================================
     // (D) SUBMIT DO MODAL
     // ===========================================
     if (interaction.isModalSubmit() && interaction.customId === "ss2_modal_setstaff") {
-      const base = ST.pedidosMap.get(userId) || {};
-      const { cidade, nivel } = base;
+  const base = ST.pedidosMap.get(userId) || {};
+  const { cidade, nivel } = base;
 
-      if (!cidade || !nivel) {
-        await interaction.reply({
-          content: "⚠️ Seu pedido perdeu o contexto (cidade/nível). Refaz o fluxo pelo menu.",
-          ephemeral: true,
-        });
-        return true;
-      }
-
-      const nome = interaction.fields.getTextInputValue("nome")?.trim();
-      const pasta = interaction.fields.getTextInputValue("pasta")?.trim();
-      const passaporte = interaction.fields.getTextInputValue("id")?.trim();
-      const dataHora = new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" });
-
-      const payload = {
-        userId,
-        cidade,
-        nivel,
-        nome,
-        pasta,
-        passaporte,
-        dataHora,
-        status: "pendente",
-      };
-
-      // salva histórico
-      pushHistorico(userId, payload);
-      ST.pedidosMap.set(userId, payload);
-
-      // monta embed + botões de aprovação
-      const embed = buildEmbedPedido(payload);
-      const row = buildRowAprovacao(userId);
-
-      // envia no canal de registro
-      const canalRegistro = await resolveLogChannel(client, CFG.CANAL_REGISTRO);
-      if (!canalRegistro) {
-        await interaction.reply({ content: "❌ Não achei o canal de registro do set.", ephemeral: true });
-        return true;
-      }
-
-      const msgRegistro = await canalRegistro.send({
-  content: `Novo pedido de set staff de <@${userId}>`,
-  embeds: [embed],
-  components: [row],
-  allowedMentions: { parse: ["users"] },
-});
-
-// ✅ salva msgId NO ÚLTIMO HISTÓRICO e também em byMsgId (pra botões funcionarem sempre)
-try {
-  const all = loadAll();
-  const h = Array.isArray(all.users?.[userId]) ? all.users[userId] : [];
-  if (h.length) {
-    h[h.length - 1].msgId = msgRegistro.id;
-    all.users[userId] = h;
-    saveAll(all);
-
-    // salva o pedido completo por msgId
-    const ultimo = h[h.length - 1];
-    setByMsgId(msgRegistro.id, ultimo);
-  } else {
-    // fallback (muito raro): mesmo sem array, salva por msgId
-    setByMsgId(msgRegistro.id, { ...payload, msgId: msgRegistro.id });
+  if (!cidade || !nivel) {
+    await interaction.reply({
+      content: "⚠️ Seu pedido perdeu o contexto (cidade/nível). Refaz o fluxo pelo menu.",
+      ephemeral: true,
+    });
+    return true;
   }
-} catch (e) {
-  // ainda assim tenta salvar por msgId
-  setByMsgId(msgRegistro?.id, { ...payload, msgId: msgRegistro?.id });
+
+  const pedidoPendente = getPedidoPendente(userId);
+  if (pedidoPendente) {
+    await interaction.reply({
+      content:
+        "⚠️ Você já possui um pedido de set staff pendente de análise.\n" +
+        "Aguarde aprovação ou reprovação antes de enviar outro.",
+      ephemeral: true,
+    });
+    return true;
+  }
+
+  const nome = interaction.fields.getTextInputValue("nome")?.trim();
+  const pasta = interaction.fields.getTextInputValue("pasta")?.trim();
+  const passaporte = interaction.fields.getTextInputValue("id")?.trim();
+  const dataHora = new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" });
+
+  if (!nome || !pasta || !passaporte) {
+    await interaction.reply({
+      content: "❌ Preencha nome, pasta e passaporte corretamente.",
+      ephemeral: true,
+    });
+    return true;
+  }
+
+  const payload = {
+    userId,
+    cidade,
+    nivel,
+    nome,
+    pasta,
+    passaporte,
+    dataHora,
+    status: "pendente",
+  };
+
+  const embed = buildEmbedPedido(payload);
+  const row = buildRowAprovacao(userId);
+
+  const canalRegistro = await resolveLogChannel(client, CFG.CANAL_REGISTRO);
+  if (!canalRegistro) {
+    await interaction.reply({
+      content: "❌ Não achei o canal de registro do set staff.",
+      ephemeral: true,
+    });
+    return true;
+  }
+
+  let msgRegistro = null;
+
+  try {
+    msgRegistro = await canalRegistro.send({
+      content: `Novo pedido de set staff de <@${userId}>`,
+      embeds: [embed],
+      components: [row],
+      allowedMentions: { parse: ["users"] },
+    });
+  } catch (e) {
+    console.error("[SETSTAFF_V2] erro enviando pedido no canal de registro:", e);
+    await interaction.reply({
+      content: "❌ Não consegui enviar seu pedido para análise. Tente novamente em instantes.",
+      ephemeral: true,
+    });
+    return true;
+  }
+
+  const payloadFinal = {
+    ...payload,
+    msgId: msgRegistro.id,
+  };
+
+  pushHistorico(userId, payloadFinal);
+  setByMsgId(msgRegistro.id, payloadFinal);
+  ST.pedidosMap.delete(userId);
+
+  const canalNotif = await resolveLogChannel(client, CFG.CANAL_NOTIF);
+  if (canalNotif) {
+    await canalNotif
+      .send({
+        content:
+          `📢 Novo pedido de set staff feito por <@${userId}>!\n` +
+          `📌 Analise aqui: <#${CFG.CANAL_REGISTRO}>`,
+        allowedMentions: { parse: ["users"] },
+      })
+      .catch(() => {});
+  }
+
+  const membro = await interaction.guild.members.fetch(userId).catch(() => null);
+  if (membro) {
+    await membro.setNickname(`${nome} | ${passaporte}`).catch(() => {});
+    await membro.roles.add(CFG.CARGO_CIDADAO).catch(() => {});
+  }
+
+  await interaction.reply({ content: "✅ Pedido enviado com sucesso!", ephemeral: true });
+  return true;
 }
-
-
-      // notificação
-      const canalNotif = await resolveLogChannel(client, CFG.CANAL_NOTIF);
-      if (canalNotif) {
-        await canalNotif
-          .send({
-            content:
-              `📢 Novo pedido de set staff feito por <@${userId}>!\n` +
-              `📌 Analise aqui: <#${CFG.CANAL_REGISTRO}>`,
-            allowedMentions: { parse: ["users"] },
-          })
-          .catch(() => {});
-      }
-
-      // aplica cargo cidadão + nickname inicial
-      const membro = await interaction.guild.members.fetch(userId).catch(() => null);
-      if (membro) {
-        await membro.setNickname(`${nome} | ${passaporte}`).catch(() => {});
-        await membro.roles.add(CFG.CARGO_CIDADAO).catch(() => {});
-      }
-
-      await interaction.reply({ content: "✅ Pedido enviado com sucesso!", ephemeral: true });
-      return true;
-    }
-
     // ===========================================
     // (E) VER HISTÓRICO (botão no registro)
     // ===========================================
@@ -958,14 +1025,16 @@ updateByMsgIdStatus(interaction.message?.id, "reprovado");
       }
 
       // feedback
-      await interaction
-        .followUp({
-          content: `✔️ Pedido ${acao === "aprovar" ? "aprovado" : "reprovado"} com sucesso.${dmFalhou ? " (⚠️ DM não foi.)" : ""}`,
-          ephemeral: true,
-        })
-        .catch(() => {});
+      ST.pedidosMap.delete(userIdTarget);
 
-      return true;
+await interaction
+  .followUp({
+    content: `✔️ Pedido ${acao === "aprovar" ? "aprovado" : "reprovado"} com sucesso.${dmFalhou ? " (⚠️ DM não foi.)" : ""}`,
+    ephemeral: true,
+  })
+  .catch(() => {});
+
+return true;
     }
 
     return false;
