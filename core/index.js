@@ -287,7 +287,7 @@ import { reuniaoSemanalOnReady, reuniaoSemanalHandleMessage, reuniaoSemanalHandl
 
 // Log Entrada
 import * as memberJoinLog from "../events/logs/memberJoinLog.js";
-
+import { autoRoleOnJoin } from "./events/autoRoleOnJoin.js";
 // Log Checklist
 import { 
   checklistOnReady, 
@@ -451,6 +451,10 @@ const setupEventHandlers = () => {
 
   // Members
   client.on("guildMemberAdd", async (m) => {
+    try { await autoRoleOnJoin(m); } catch (e) {
+      console.error("[CORE] erro em autoRoleOnJoin:", e);
+    }
+
     try { await bemvindoHandler.execute(m); } catch (e) {}
     try { await setStaffHandleGuildMemberAdd(m, client); } catch (e) {}
     try { await memberJoinLog.execute(m, client); } catch (e) {}
