@@ -216,7 +216,7 @@ export async function blacklistFacsHandleInteraction(interaction, client) {
         .addFields(
           { name: "Organização", value: org, inline: true },
           { name: "Família Ativa", value: familia, inline: true },
-          { name: "Resp que autorizou", value: `<@>`, inline: false },
+          { name: "Resp que autorizou", value: `<@${respId}>`, inline: false },
           { name: "Motivo", value: motivo, inline: false }
         )
         .setImage(BLACKLIST_GIF)
@@ -230,7 +230,7 @@ export async function blacklistFacsHandleInteraction(interaction, client) {
 
       // ✅ Menciona quem registrou + quem autorizou
       await ch.send({
-        content: `📌 Registro por <@${interaction.user.id}> • ✅ Autorizado por <@>`,
+        content: `📌 Registro por <@${interaction.user.id}> • ✅ Autorizado por <@${respId}>`,
         embeds: [registro],
       }).catch(() => {});
 
