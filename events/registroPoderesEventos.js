@@ -38,6 +38,17 @@ const SC_PWR_INPUT_USER_ID = "SC_PWR_INPUT_USER";
 const SC_PWR_INPUT_PODER_ID = "SC_PWR_INPUT_PODER";
 const SC_PWR_INPUT_OBS_ID = "SC_PWR_INPUT_OBS";
 
+// 🔒 trava global para não registrar listeners/lógica duplicada
+if (!globalThis.__SC_PWR_EVENTOS_MODULE_STATE__) {
+  globalThis.__SC_PWR_EVENTOS_MODULE_STATE__ = {
+    readyRan: false,
+    recentSubmits: new Map(),
+  };
+}
+
+const SC_PWR_STATE = globalThis.__SC_PWR_EVENTOS_MODULE_STATE__;
+const SC_PWR_SUBMIT_LOCK_MS = 5000;
+
 // ======= HELPERS =======
 function SC_PWR_hasPermission(member) {
   if (!member) return false;
@@ -48,6 +59,22 @@ function SC_PWR_hasPermission(member) {
     }
   }
   return false;
+}
+
+function SC_PWR_acquireSubmitLock(key, ttl = SC_PWR_SUBMIT_LOCK_MS) {
+  const now = Date.now();
+  const until = SC_PWR_STATE.recentSubmits.get(key) || 0;
+
+  if (until > now) return false;
+
+  SC_PWR_STATE.recentSubmits.set(key, now + ttl);
+
+  setTimeout(() => {
+    const cur = SC_PWR_STATE.recentSubmits.get(key) || 0;
+    if (cur <= Date.now()) SC_PWR_STATE.recentSubmits.delete(key);
+  }, ttl + 250);
+
+  return true;
 }
 
 async function SC_PWR_fetchChannel(client, id) {
@@ -109,9 +136,14 @@ function SC_PWR_bigEmbed({ guild, registrar, alvo, poder, obs }) {
         `⏰ **Lembrete em 2h30** será enviado ao registrante para remover o poder.`,
       ].filter(Boolean).join("\n")
     )
+    .addFields(
+      { name: "🆔 Registrante ID", value: `\`${registrar.id}\``, inline: true },
+      { name: "🆔 Alvo ID", value: `\`${alvo.id}\``, inline: true },
+      { name: "🏷️ Origem", value: "`SC_PWR_EVENTO_PODER`", inline: true },
+    )
     .setImage(SC_PWR_GIF_URL)
     .setTimestamp(new Date())
-    .setFooter({ text: "SC_EVENTO_PODER_V1" });
+    .setFooter({ text: "SC_EVENTO_PODER_V2 • SC_PWR_EVENTO_PODER • REGISTRANTE_PONTUA" });
 
   if (alvo?.displayAvatarURL) emb.setThumbnail(alvo.displayAvatarURL({ size: 128 }));
   if (registrar?.displayAvatarURL) emb.setAuthor({
@@ -218,6 +250,9 @@ function SC_PWR_buildModal() {
 // ======= EXPORTS =======
 
 export async function registroPoderesEventosOnReady(client) {
+    if (SC_PWR_STATE.readyRan) return;
+    SC_PWR_STATE.readyRan = true;
+
     console.log("[SC_PWR] Online. Garantindo menu atualizado…");
     await SC_PWR_ensureSingleMenu(client);
 }
@@ -263,6 +298,20 @@ export async function registroPoderesEventosHandleInteraction(interaction, clien
           const poder = interaction.fields.getTextInputValue(SC_PWR_INPUT_PODER_ID)?.trim();
           const obs = (interaction.fields.getTextInputValue(SC_PWR_INPUT_OBS_ID)?.trim()) || "";
 
+          const submitLockKey = [
+            registrar?.id || "0",
+            idStr || "0",
+            String(poder || "").trim().toLowerCase(),
+            String(obs || "").trim().toLowerCase()
+          ].join("::");
+
+          if (!SC_PWR_acquireSubmitLock(submitLockKey)) {
+            return interaction.reply({
+              content: "⏳ Esse registro já está sendo processado ou acabou de ser enviado. Aguarde alguns segundos.",
+              ephemeral: true
+            }).catch(() => {});
+          }
+
           if (!/^\d{16,21}$/.test(idStr)) {
             return interaction.reply({ content: "⚠️ **ID Discord inválido.** Envie apenas números do ID (16-21 dígitos).", ephemeral: true }).catch(() => {});
           }
@@ -272,7 +321,18 @@ export async function registroPoderesEventosHandleInteraction(interaction, clien
             return interaction.reply({ content: "⚠️ Não consegui encontrar o usuário pelo ID informado.", ephemeral: true }).catch(() => {});
           }
 
-                    const menuChan = await SC_PWR_fetchChannel(client, SC_PWR_MENU_CHANNEL_ID);
+          if (!registrar?.id) {
+            return interaction.reply({ content: "❌ Não consegui identificar quem está registrando.", ephemeral: true }).catch(() => {});
+          }
+
+          if (String(alvoUser.id) === String(registrar.id)) {
+            return interaction.reply({
+              content: "⚠️ Você não pode registrar poder de evento para você mesmo nesse menu.",
+              ephemeral: true
+            }).catch(() => {});
+          }
+
+          const menuChan = await SC_PWR_fetchChannel(client, SC_PWR_MENU_CHANNEL_ID);
           if (!menuChan) {
             return interaction.reply({ content: "❌ Erro: canal do menu não encontrado.", ephemeral: true }).catch(() => {});
           }
@@ -301,14 +361,16 @@ export async function registroPoderesEventosHandleInteraction(interaction, clien
           // ✅ emite pro GeralDash / Ranking atualizarem na hora
 try {
   dashEmit("eventopoder:registrado", {
-    userId: registrar.id,          // quem ganha o ponto
-    alvoUserId: alvoUser.id,
+    userId: String(registrar.id),          // quem ganha o ponto
+    registrarUserId: String(registrar.id), // redundância intencional para debug/rastreamento
+    alvoUserId: String(alvoUser.id),
     poder,
     obs,
     source: "eventopoder",
     sourceLabel: "Setou Poder",
-    channelId: (registroLogMsg?.channelId || eventosLogChan?.id || menuChan.id),
-    messageId: (registroLogMsg?.id || registroMsg?.id || null),
+    sourceSystem: "registroPoderesEventos",
+    channelId: String(registroLogMsg?.channelId || eventosLogChan?.id || menuChan.id),
+    messageId: String(registroLogMsg?.id || registroMsg?.id || ""),
     __at: Date.now(),
   });
 } catch (e) {

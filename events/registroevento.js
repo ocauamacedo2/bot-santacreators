@@ -227,7 +227,7 @@ function iniciarRegistroEvento(client) {
           interaction.fields.getTextInputValue(id)?.trim().slice(0, 256) || "—";
 
         const embed = new EmbedBuilder()
-          .setTitle("📋 Registro de Poderes em Evento") // Padronizado
+  .setTitle("📋 Registro de Evento")// Padronizado
           .addFields(
             { name: "👤 Membro", value: get("jogador"), inline: true },
             { name: "📌 Evento", value: get("evento"), inline: true },
@@ -254,10 +254,10 @@ function iniciarRegistroEvento(client) {
 
         // ✅ conta nas métricas humanas do GeralDash (Social Medias / poderes em evento)
 try {
-  dashEmit("eventopoder:registrado", {
+  dashEmit("evento:registrado", {
     userId: interaction.user.id,
     __at: Date.now(),
-    source: "registro_poderes_em_evento",
+    source: "registro_evento",
     channelId: CANAL_REGISTRO_EVENTO,
   });
 } catch {}
