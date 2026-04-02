@@ -287,7 +287,7 @@ import { reuniaoSemanalOnReady, reuniaoSemanalHandleMessage, reuniaoSemanalHandl
 
 // Log Entrada
 import * as memberJoinLog from "../events/logs/memberJoinLog.js";
-import { autoRoleOnJoin } from "./events/autoRoleOnJoin.js";
+import { autoRoleOnJoin } from "../events/autoRoleOnJoin.js";
 // Log Checklist
 import { 
   checklistOnReady, 
