@@ -1123,11 +1123,16 @@ if (interaction.isModalSubmit() && interaction.customId === 'modal_registro_lide
       }, 5000);
     };
 
+    // ✅ Inicia o agendamento do delete agora mesmo.
+    // Isso garante que, em 5 segundos, o canal suma mesmo que o resto do código trave.
+    agendarDeleteGarantido();
+
+    try {
     // ⚙️ pega TODAS as mensagens em ordem crescente (só UMA vez aqui)
     // 🔧 FIX: se esse fetch ficar pesado/travar por rate, colocamos timeout por “lote”
     const sorted = await (async function fetchTodasAsMensagens(channel) {
       let mensagens = [];
-      let ultimaId;
+      let ultimaId = undefined;
 
       while (true) {
         const options = { limit: 100 };
@@ -1217,14 +1222,20 @@ if (interaction.isModalSubmit() && interaction.customId === 'modal_registro_lide
 
     const contagemAtendentes = new Map(); // userId -> { count, firstTs }
 
+    // 🚀 Otimização: Identifica quais UIDs no chat são Staff apenas uma vez.
+    // Isso evita centenas de chamadas lentas ao banco/API do Discord dentro do loop abaixo.
+    const uidsNoChat = [...new Set(sorted.filter(m => !m.author?.bot && m.author?.id !== idAberto).map(m => m.author?.id))];
+    const staffVerificada = new Set();
+
+    for (const uid of uidsNoChat) {
+      if (await isAtendenteValido(uid)) staffVerificada.add(uid);
+    }
+
     for (const msg of sorted) {
       if (!msg || msg.author?.bot) continue;
 
       const uid = msg.author?.id;
-      if (!uid) continue;
-
-      if (idAberto && uid === idAberto) continue;
-      if (!(await isAtendenteValido(uid))) continue;
+      if (!uid || !staffVerificada.has(uid)) continue;
 
       const atual = contagemAtendentes.get(uid);
       if (!atual) {
@@ -1613,8 +1624,9 @@ const src = String(raw).trim(); // mantém query
       } catch {}
     }
 
-    // ✅ AQUI: agenda delete garantido (independente do que aconteceu)
-    await agendarDeleteGarantido();
+    } catch (err) {
+      console.error("[TICKET] Erro crítico durante o processamento do fechamento:", err);
+    }
   }
 
 
