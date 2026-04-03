@@ -18,6 +18,9 @@ import { createVipRecordProgrammatically } from "./vipRegistro.js";
 const ADMIN_CHANNEL_ID = "1480351746562981999"; // Canal Robusto (Resp)
 const PUBLIC_CHANNEL_ID = "1469726935247487078"; // Canal Resumo (Público)
 
+// ✅ Cargo obrigatório para a pessoa ser considerada ativa na gestão/ranking
+const ROLE_REQUIRED_FOR_ACTIVE = "1352275728476930099";
+
 // Cargos de Gestão (Permissão para mexer no painel)
 // VIPs (Podem sempre): Owner, Eu, Resp Creators
 const VIP_USERS = ["660311795327828008", "1262262852949905408"];
@@ -95,6 +98,34 @@ function loadState() {
   return { ...def, ...data };
 }
 
+// ================= FILTRO DE MEMBROS ATIVOS =================
+async function hasRequiredActiveRole(guild, userId) {
+  try {
+    if (!guild || !userId) return false;
+    const member = await guild.members.fetch(userId).catch(() => null);
+    if (!member) return false;
+    return member.roles.cache.has(ROLE_REQUIRED_FOR_ACTIVE);
+  } catch {
+    return false;
+  }
+}
+
+async function filterRankingByActiveRole(list, guild) {
+  if (!Array.isArray(list) || list.length === 0) return [];
+
+  const filtered = [];
+  for (const item of list) {
+    if (!item?.id) continue;
+
+    const isActive = await hasRequiredActiveRole(guild, item.id);
+    if (isActive) {
+      filtered.push(item);
+    }
+  }
+
+  return filtered;
+}
+
 // ================= LÓGICA DE DADOS (TIMEZONE SAFE) =================
 const TIME_LOCAL = (() => {
   const TZ = "America/Sao_Paulo";
@@ -124,7 +155,7 @@ const TIME_LOCAL = (() => {
   return { getCurrentWeekKey, nowInSP };
 })();
 
-function aggregateData() {
+async function aggregateData(guild) {
   const wk = TIME_LOCAL.getCurrentWeekKey();
   
   console.log(`[ReuniaoSemanal] Buscando dados para semana: ${wk}`);
@@ -135,14 +166,16 @@ function aggregateData() {
   if (geralData?.sigByWeek?.[wk]) {
     try {
       const parsed = JSON.parse(geralData.sigByWeek[wk]);
-      topGeral = parsed.list.map(([id, pts]) => ({ id, pts }));
+      topGeral = parsed.list
+        .map(([id, pts]) => ({ id, pts }))
+        .sort((a, b) => b.pts - a.pts);
     } catch {}
   }
 
   // 2. MANAGER
   const mgrData = readDynamicJSON(DYNAMIC_FILES.MANAGER);
   const mgrWeek = mgrData?.weeks?.[wk]?.approvedForManager || {};
-  const topManager = Object.entries(mgrWeek)
+  let topManager = Object.entries(mgrWeek)
     .map(([id, pts]) => ({ id, pts }))
     .sort((a, b) => b.pts - a.pts);
 
@@ -176,16 +209,23 @@ function aggregateData() {
     }
   }
 
-  const topSocial = Object.entries(socialPoints)
+  let topSocial = Object.entries(socialPoints)
     .map(([id, pts]) => ({ id, pts }))
     .sort((a, b) => b.pts - a.pts);
 
   // 4. ALINHAMENTOS
   const alinhData = readDynamicJSON(DYNAMIC_FILES.ALINH);
   const alinhWeek = alinhData?.weeks?.[wk]?.counts || {};
-  const topAlinh = Object.entries(alinhWeek)
+  let topAlinh = Object.entries(alinhWeek)
     .map(([id, pts]) => ({ id, pts }))
     .sort((a, b) => b.pts - a.pts);
+
+  // ✅ FILTRO FINAL:
+  // só entra nos rankings quem AINDA possui o cargo obrigatório de ativo
+  topGeral = await filterRankingByActiveRole(topGeral, guild);
+  topManager = await filterRankingByActiveRole(topManager, guild);
+  topSocial = await filterRankingByActiveRole(topSocial, guild);
+  topAlinh = await filterRankingByActiveRole(topAlinh, guild);
 
   // ✅ IMPORTANTE: retornar bySourceByUser pro gráfico conseguir ler as fontes
   return {
@@ -505,7 +545,7 @@ async function updateAdminPanel(client) {
     }
 
     const state = loadState();
-    const data = aggregateData();
+    const data = await aggregateData(channel.guild);
     const winners = calculateWinners(data);
 
     const embed = buildAdminEmbed(state, data, winners);
@@ -553,12 +593,19 @@ async function applyRoles(guild, winners, state) {
 
   const add = async (w, roleId, name) => {
     if (!w?.id) return;
+
     const m = await guild.members.fetch(w.id).catch(() => null);
-    if (m) {
-      await m.roles.add(roleId).catch(() => {});
-      log.push(`✅ Adicionado **${name}** para <@${w.id}>`);
-      m.send(`🎉 **Parabéns!** Você foi destaque da semana como **${name}**!\nO cargo foi adicionado ao seu perfil. Continue brilhando! 🚀`).catch(() => {});
+    if (!m) return;
+
+    // ✅ Segurança extra: só aplica prêmio se ainda estiver com cargo de ativo
+    if (!m.roles.cache.has(ROLE_REQUIRED_FOR_ACTIVE)) {
+      log.push(`⏭️ **${name}** não aplicado para <@${w.id}> porque não possui o cargo obrigatório de ativo.`);
+      return;
     }
+
+    await m.roles.add(roleId).catch(() => {});
+    log.push(`✅ Adicionado **${name}** para <@${w.id}>`);
+    m.send(`🎉 **Parabéns!** Você foi destaque da semana como **${name}**!\nO cargo foi adicionado ao seu perfil. Continue brilhando! 🚀`).catch(() => {});
   };
 
   await add(winners.winnerGeral, ROLES_REWARD.CREATOR_DESTAQUE, "Creator Destaque");
@@ -685,7 +732,7 @@ export async function reuniaoSemanalHandleInteraction(interaction, client) {
   if (interaction.customId === "reuniao_publish") {
     await interaction.deferReply({ ephemeral: true });
     const state = loadState();
-    const data = aggregateData();
+    const data = await aggregateData(interaction.guild);
     const winners = calculateWinners(data);
     const logs = await applyRoles(interaction.guild, winners, state);
     
@@ -727,7 +774,7 @@ export async function reuniaoSemanalHandleInteraction(interaction, client) {
     try {
       const publicChannel = await client.channels.fetch(PUBLIC_CHANNEL_ID).catch(() => null);
       if (publicChannel) {
-    const publicEmbed = await buildPublicEmbed(state, data, winners, interaction.guild);
+        const publicEmbed = await buildPublicEmbed(state, data, winners, interaction.guild);
         await publicChannel.send({ content: "@everyone Resumo da Reunião Semanal:", embeds: [publicEmbed] });
         publicMessageSent = true;
       } else {
@@ -751,7 +798,7 @@ export async function reuniaoSemanalHandleInteraction(interaction, client) {
   if (interaction.customId === "reuniao_publish_no_roles") {
     await interaction.deferReply({ ephemeral: true });
     const state = loadState();
-    const data = aggregateData();
+    const data = await aggregateData(interaction.guild);
     const winners = calculateWinners(data);
     
     // Não chama applyRoles
@@ -761,7 +808,7 @@ export async function reuniaoSemanalHandleInteraction(interaction, client) {
     try {
       const publicChannel = await client.channels.fetch(PUBLIC_CHANNEL_ID).catch(() => null);
       if (publicChannel) {
-       const publicEmbed = await buildPublicEmbed(state, data, winners, interaction.guild);
+        const publicEmbed = await buildPublicEmbed(state, data, winners, interaction.guild);
         await publicChannel.send({ content: "@everyone Resumo da Reunião Semanal (Sem alteração de cargos):", embeds: [publicEmbed] });
         publicMessageSent = true;
       } else {
@@ -783,7 +830,7 @@ export async function reuniaoSemanalHandleInteraction(interaction, client) {
   if (interaction.customId === "reuniao_force_roles") {
     await interaction.deferReply({ ephemeral: true });
     const state = loadState();
-    const data = aggregateData();
+    const data = await aggregateData(interaction.guild);
     const winners = calculateWinners(data);
     const logs = await applyRoles(interaction.guild, winners, state);
     await interaction.editReply({ content: `⚡ **Cargos Forçados!**\n\n${logs.join("\n") || "Nenhuma alteração."}` });
