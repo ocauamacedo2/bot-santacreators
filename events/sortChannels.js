@@ -36,10 +36,11 @@ const SORT_GROUPS = [
   },
 {
   id: "LIDERES",
+  strategy: "leaders_tail_balance",
   categories: [
     { id: "1414687963161559180", limit: 30 }, // ✅ 1ª categoria: máximo 30 canais
-    { id: "1428572742051168378", limit: 50 }, // ✅ 2ª categoria: recebe continuação
-    { id: "1482874296685695118", limit: 50 }, // ✅ 3ª categoria: recebe overflow final
+    { id: "1428572742051168378", limit: 50 }, // ✅ 2ª categoria: recebe metade do restante
+    { id: "1482874296685695118", limit: 50 }, // ✅ 3ª categoria: recebe a outra metade do restante
   ],
   sticky: ["1414718336826081330", "1414718856542421052"] // ✅ Fixos no topo
 },
@@ -289,39 +290,112 @@ function isTextChannelLike(ch) {
     const catUsage = new Map(); // CatID -> Count Assigned
     cats.forEach(id => catUsage.set(id, 0));
 
-    let currentCatIndex = 0;
     let pendingChannels = [];
 
-    let dynamicLimit = 50;
-    if (groupConfig.strategy === 'balance' && groupConfig.categories.length > 0) {
-         dynamicLimit = Math.ceil(sortedAll.length / groupConfig.categories.length);
-         if (dynamicLimit > 50) dynamicLimit = 50;
-    }
+    // ✅ Estratégia especial para LÍDERES:
+    // 1ª categoria fica fixa até o limite dela
+    // o restante é dividido entre 2ª e 3ª para não acumular tudo na 2ª
+    if (
+      groupConfig.strategy === "leaders_tail_balance" &&
+      groupConfig.categories.length >= 3
+    ) {
+      const [firstCat, secondCat, thirdCat] = groupConfig.categories;
 
-    for (const ch of sortedAll) {
-      // Tenta encontrar uma categoria com vaga no limite lógico
-      let assigned = false;
-      
-      while (currentCatIndex < groupConfig.categories.length) {
-        const catConfig = groupConfig.categories[currentCatIndex];
-        const currentUsage = catUsage.get(catConfig.id) || 0;
-        
-        const effectiveLimit = groupConfig.strategy === 'balance' 
-          ? Math.min(catConfig.limit, dynamicLimit) 
-          : catConfig.limit;
+      const stickyCount = stickyChannels.length;
+      const firstLimit = Math.min(firstCat.limit, 50);
 
-        if (currentUsage < effectiveLimit && currentUsage < 50) {
-          assignments.set(ch.id, catConfig.id);
-          catUsage.set(catConfig.id, currentUsage + 1);
-          assigned = true;
-          break;
-        } else {
-          currentCatIndex++;
+      // Quantos vão para a 1ª categoria
+      const firstCount = Math.min(sortedAll.length, firstLimit);
+
+      // Restante para dividir entre 2ª e 3ª
+      const remaining = Math.max(0, sortedAll.length - firstCount);
+
+      // Divide o restante no meio
+      let secondTarget = Math.ceil(remaining / 2);
+      let thirdTarget = Math.floor(remaining / 2);
+
+      // Respeita os limites físicos/lógicos
+      secondTarget = Math.min(secondTarget, secondCat.limit, 50);
+      thirdTarget = Math.min(thirdTarget, thirdCat.limit, 50);
+
+      // Se sobrar por conta de limite, tenta empurrar para a outra
+      let distributedTail = secondTarget + thirdTarget;
+      let stillRemaining = remaining - distributedTail;
+
+      if (stillRemaining > 0) {
+        const secondExtraSpace = Math.max(0, Math.min(secondCat.limit, 50) - secondTarget);
+        const addToSecond = Math.min(stillRemaining, secondExtraSpace);
+        secondTarget += addToSecond;
+        stillRemaining -= addToSecond;
+      }
+
+      if (stillRemaining > 0) {
+        const thirdExtraSpace = Math.max(0, Math.min(thirdCat.limit, 50) - thirdTarget);
+        const addToThird = Math.min(stillRemaining, thirdExtraSpace);
+        thirdTarget += addToThird;
+        stillRemaining -= addToThird;
+      }
+
+      const targets = [
+        { id: firstCat.id, limit: firstCount },
+        { id: secondCat.id, limit: secondTarget },
+        { id: thirdCat.id, limit: thirdTarget },
+      ];
+
+      let cursor = 0;
+
+      for (const target of targets) {
+        let assignedHere = 0;
+
+        while (cursor < sortedAll.length && assignedHere < target.limit) {
+          const ch = sortedAll[cursor];
+          assignments.set(ch.id, target.id);
+          catUsage.set(target.id, (catUsage.get(target.id) || 0) + 1);
+          assignedHere++;
+          cursor++;
         }
       }
 
-      if (!assigned) {
-        pendingChannels.push(ch);
+      // Se ainda sobrar qualquer canal por causa de limite, manda para overflow
+      while (cursor < sortedAll.length) {
+        pendingChannels.push(sortedAll[cursor]);
+        cursor++;
+      }
+    } else {
+      let currentCatIndex = 0;
+
+      let dynamicLimit = 50;
+      if (groupConfig.strategy === "balance" && groupConfig.categories.length > 0) {
+        dynamicLimit = Math.ceil(sortedAll.length / groupConfig.categories.length);
+        if (dynamicLimit > 50) dynamicLimit = 50;
+      }
+
+      for (const ch of sortedAll) {
+        // Tenta encontrar uma categoria com vaga no limite lógico
+        let assigned = false;
+
+        while (currentCatIndex < groupConfig.categories.length) {
+          const catConfig = groupConfig.categories[currentCatIndex];
+          const currentUsage = catUsage.get(catConfig.id) || 0;
+
+          const effectiveLimit =
+            groupConfig.strategy === "balance"
+              ? Math.min(catConfig.limit, dynamicLimit)
+              : catConfig.limit;
+
+          if (currentUsage < effectiveLimit && currentUsage < 50) {
+            assignments.set(ch.id, catConfig.id);
+            catUsage.set(catConfig.id, currentUsage + 1);
+            assigned = true;
+            break;
+          } else {
+            currentCatIndex++;
+          }
+        }
+
+        if (!assigned) {
+          pendingChannels.push(ch);
+        }
       }
     }
 
