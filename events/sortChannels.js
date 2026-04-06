@@ -39,8 +39,8 @@ const SORT_GROUPS = [
   strategy: "leaders_tail_balance",
   categories: [
     { id: "1414687963161559180", limit: 30 }, // ✅ 1ª categoria: máximo 30 canais
-    { id: "1428572742051168378", limit: 50 }, // ✅ 2ª categoria: recebe metade do restante
-    { id: "1482874296685695118", limit: 50 }, // ✅ 3ª categoria: recebe a outra metade do restante
+    { id: "1428572742051168378", limit: 50 }, // ✅ 2ª categoria
+    { id: "1482874296685695118", limit: 50 }, // ✅ 3ª categoria
   ],
   sticky: ["1414718336826081330", "1414718856542421052"] // ✅ Fixos no topo
 },
@@ -424,103 +424,61 @@ function isTextChannelLike(ch) {
     }
 
     // --- FASE 3: Execução ---
-// 3.1 Primeiro, move canais na ordem correta para liberar espaço “em cascata”
+// 3.1 Primeiro, move canais para a categoria correta de forma determinística
 let changesCount = 0;
 
 const moveQueue = sortedAll
-  .map((ch) => {
+  .map((ch, orderIndex) => {
     const targetCatId = assignments.get(ch.id);
     return {
       ch,
       targetCatId,
+      orderIndex,
       sourceIndex: getCatIndex(ch.parentId),
       targetIndex: getCatIndex(targetCatId),
     };
   })
   .filter((item) => item.targetCatId && item.ch.parentId !== item.targetCatId)
   .sort((a, b) => {
-    // Move primeiro quem está mais abaixo indo mais pra baixo,
-    // para liberar espaço nas categorias anteriores
+    // ✅ prioridade:
+    // 1. quem sai de categorias mais abaixo primeiro
+    // 2. quem vai para categorias mais abaixo primeiro
+    // 3. mantém a ordem alfabética global calculada em sortedAll
     if (b.sourceIndex !== a.sourceIndex) return b.sourceIndex - a.sourceIndex;
-    return b.targetIndex - a.targetIndex;
+    if (b.targetIndex !== a.targetIndex) return b.targetIndex - a.targetIndex;
+    return a.orderIndex - b.orderIndex;
   });
 
 for (const item of moveQueue) {
   const { ch, targetCatId } = item;
 
-  // Pode ter mudado durante a fila
+  if (!targetCatId) continue;
   if (ch.parentId === targetCatId) continue;
 
-  const currentTargetSize = catCounts.get(targetCatId) || 0;
+  try {
+    const previousParentId = ch.parentId;
 
-  if (currentTargetSize >= 50) {
-    const targetCatChannel = guild.channels.cache.get(targetCatId);
+    await ch.setParent(targetCatId, { lockPermissions: false });
+    changesCount++;
 
-    if (targetCatChannel) {
-      const intruder = targetCatChannel.children.cache.find((c) => {
-        if (!isTextChannelLike(c)) return false;
-        const dest = assignments.get(c.id);
-        return dest && dest !== targetCatId;
-      });
-
-      if (intruder) {
-        const intruderDest = assignments.get(intruder.id);
-
-        if (intruderDest) {
-          try {
-            const intruderPreviousParentId = intruder.parentId;
-
-            await intruder.setParent(intruderDest, { lockPermissions: false });
-            changesCount++;
-
-            if (intruderPreviousParentId) {
-              catCounts.set(
-                intruderPreviousParentId,
-                (catCounts.get(intruderPreviousParentId) || 0) - 1
-              );
-            }
-
-            catCounts.set(
-              intruderDest,
-              (catCounts.get(intruderDest) || 0) + 1
-            );
-
-            await new Promise((r) => setTimeout(r, 1000));
-          } catch (err) {
-            console.error(`[SC_SORT] Falha ao mover intruso ${intruder.name}:`, err);
-          }
-        }
-      }
-    }
-  }
-
-  if ((catCounts.get(targetCatId) || 0) < 50) {
-    try {
-      const previousParentId = ch.parentId;
-
-      await ch.setParent(targetCatId, { lockPermissions: false });
-      changesCount++;
-
-      if (previousParentId) {
-        catCounts.set(
-          previousParentId,
-          (catCounts.get(previousParentId) || 0) - 1
-        );
-      }
-
+    if (previousParentId) {
       catCounts.set(
-        targetCatId,
-        (catCounts.get(targetCatId) || 0) + 1
+        previousParentId,
+        Math.max(0, (catCounts.get(previousParentId) || 0) - 1)
       );
-
-      await new Promise((r) => setTimeout(r, 1200));
-    } catch (err) {
-      if (err.code === 50035) {
-        catCounts.set(targetCatId, 50);
-      } else {
-        console.error(`[SC_SORT] Erro ao mover ${ch.name}:`, err.message);
-      }
     }
+
+    catCounts.set(
+      targetCatId,
+      (catCounts.get(targetCatId) || 0) + 1
+    );
+
+    await new Promise((r) => setTimeout(r, 1200));
+  } catch (err) {
+    console.error(
+      `[SC_SORT] Erro ao mover ${ch.name} de ${ch.parentId} para ${targetCatId}:`,
+      err
+    );
   }
 }
 
