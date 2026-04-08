@@ -471,6 +471,11 @@ const setupEventHandlers = () => {
     try { await hierarquiaHandleGuildMemberUpdate(o, n, client); } catch (e) {}
   });
 
+  // Role Permissions Guard
+  client.on("roleUpdate", async (o, n) => {
+    try { await rolePermissionGuardHandleRoleUpdate(o, n, client); } catch (e) {}
+  });
+
   // Interactions
   client.on("interactionCreate", async (interaction) => {
     if (interaction.isAutocomplete()) return;
