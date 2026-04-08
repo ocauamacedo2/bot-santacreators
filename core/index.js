@@ -288,6 +288,10 @@ import { reuniaoSemanalOnReady, reuniaoSemanalHandleMessage, reuniaoSemanalHandl
 // Log Entrada
 import * as memberJoinLog from "../events/logs/memberJoinLog.js";
 import { autoRoleOnJoin } from "../events/autoRoleOnJoin.js";
+
+// Role Permission Guard
+import { rolePermissionGuardHandleRoleUpdate } from "../events/rolePermissionGuard.js";
+
 // Log Checklist
 import { 
   checklistOnReady, 
@@ -472,8 +476,12 @@ const setupEventHandlers = () => {
   });
 
   // Role Permissions Guard
-  client.on("roleUpdate", async (o, n) => {
-    try { await rolePermissionGuardHandleRoleUpdate(o, n, client); } catch (e) {}
+  client.on("roleUpdate", async (oldRole, newRole) => {
+    try {
+      await rolePermissionGuardHandleRoleUpdate(oldRole, newRole, client);
+    } catch (error) {
+      console.error("[CORE] erro em rolePermissionGuardHandleRoleUpdate:", error);
+    }
   });
 
   // Interactions

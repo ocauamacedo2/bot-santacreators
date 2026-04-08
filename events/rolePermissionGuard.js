@@ -44,40 +44,45 @@ const rolesProcessing = new Set();
  */
 export async function rolePermissionGuardHandleRoleUpdate(oldRole, newRole, client) {
   try {
-    // 1. Prevenção de loop: Se o bot estiver editando este cargo, ignora
+    if (!oldRole || !newRole || !client) return;
+
+    // Evita loop quando a própria correção do bot disparar novo roleUpdate
     if (rolesProcessing.has(newRole.id)) return;
 
-    // 2. Hierarquia: O bot só mexe se o cargo estiver ABAIXO dele
-    // editable retorna true se o bot tem permissão de gerenciar cargos E o cargo está abaixo do topo do bot
-    if (!newRole.editable) return;
+    // Só processa cargos que o bot realmente consegue editar
+    if (!newRole.editable) {
+      return;
+    }
 
-    // 3. Comparação de Permissões: Verifica se novas permissões proibidas foram adicionadas
+    // Descobre se adicionaram alguma permissão proibida agora
     const addedForbidden = FORBIDDEN_PERMISSIONS.filter(
-      (perm) => !oldRole.permissions.has(perm) && newRole.permissions.has(perm)
+      (perm) =>
+        !oldRole.permissions.has(perm) &&
+        newRole.permissions.has(perm)
     );
 
-    // Se nenhuma das proibidas foi ativada, encerra aqui
-    if (addedForbidden.length === 0) return;
+    if (addedForbidden.length === 0) {
+      return;
+    }
 
-    // 4. Correção Automática
     rolesProcessing.add(newRole.id);
 
-    // Calcula o novo bitfield removendo as proibidas
-    const correctedPermissions = newRole.permissions.remove(addedForbidden);
+    try {
+      const correctedPermissions = newRole.permissions.remove(addedForbidden);
 
-    await newRole.setPermissions(
-      correctedPermissions,
-      "[SEGURANÇA] Remoção automática de permissões perigosas em cargo gerenciável."
-    );
+      await newRole.setPermissions(
+        correctedPermissions,
+        "[SEGURANÇA] Remoção automática de permissões perigosas em cargo abaixo do bot."
+      );
 
-    console.log(`[PERM-GUARD] Cargo corrigido: ${newRole.name} (${newRole.id})`);
+      console.log(
+        `[PERM-GUARD] Permissões proibidas removidas do cargo ${newRole.name} (${newRole.id})`
+      );
 
-    // 5. Registro de Logs
-    await processLogs(client, newRole, addedForbidden);
-
-    // Remove do processamento após um curto delay para garantir que o evento de "set" do próprio bot seja ignorado
-    setTimeout(() => rolesProcessing.delete(newRole.id), 2500);
-
+      await processLogs(client, newRole, addedForbidden);
+    } finally {
+      setTimeout(() => rolesProcessing.delete(newRole.id), 2500);
+    }
   } catch (error) {
     rolesProcessing.delete(newRole.id);
     console.error("[PERM-GUARD] Erro ao processar guarda de cargos:", error);
