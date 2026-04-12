@@ -1,8 +1,15 @@
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, Events, PermissionFlagsBits } from 'discord.js';
+import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  Events,
+  PermissionFlagsBits
+} from 'discord.js';
 
 const MAIN_GUILD_ID = '1262262852782129183';
+const BUTTON_CHANNEL_ID = '1493014122944532560';
+const BUTTON_CUSTOM_ID = 'sync_roles_btn';
 
-// MAPEAMENTO DE CARGOS (ID Principal -> ID Secundário)
 const ROLE_MAP = {
   '1352408327983861844': '1493008185970262048', // Resp Creators
   '1262262852949905409': '1490389060802445463', // Resp Influ
@@ -16,12 +23,44 @@ const ROLE_MAP = {
 };
 
 const AUTHORIZED_USERS = [
-  '660311795327828008', // Você
-  '1262262852949905408'  // Owner
+  '660311795327828008',
+  '1262262852949905408'
 ];
 
+async function ensureSyncButtonMessage(client) {
+  try {
+    const channel = await client.channels.fetch(BUTTON_CHANNEL_ID).catch(() => null);
+    if (!channel || !channel.isTextBased()) return;
+
+    const messages = await channel.messages.fetch({ limit: 20 }).catch(() => null);
+    if (!messages) return;
+
+    const existing = messages.find(msg =>
+      msg.author?.id === client.user.id &&
+      msg.components?.some(row =>
+        row.components?.some(component => component.customId === BUTTON_CUSTOM_ID)
+      )
+    );
+
+    if (existing) return;
+
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(BUTTON_CUSTOM_ID)
+        .setLabel('Setar Cargo')
+        .setStyle(ButtonStyle.Success)
+    );
+
+    await channel.send({
+      content: 'Clique no botão abaixo para sincronizar seus cargos e nome com o servidor principal.',
+      components: [row]
+    });
+  } catch (err) {
+    console.error('[SYNC-CARGOS] Erro ao criar botão fixo:', err);
+  }
+}
+
 async function syncMember(client, targetMember) {
-  // Proteção: Nunca altera nada se o servidor atual for o principal
   if (!targetMember || targetMember.guild.id === MAIN_GUILD_ID) return;
 
   try {
@@ -31,38 +70,40 @@ async function syncMember(client, targetMember) {
     const mainMember = await mainGuild.members.fetch(targetMember.id).catch(() => null);
     if (!mainMember) return;
 
-    // SINCRONIZA NOME (Apenas se for diferente)
     if (targetMember.nickname !== mainMember.displayName) {
       await targetMember.setNickname(mainMember.displayName).catch(() => {});
     }
 
     const rolesToAdd = [];
-    const rolesToKeep = Object.values(ROLE_MAP);
+    const mappedSecondaryRoles = Object.values(ROLE_MAP);
 
-    for (const [mainRoleId, targetRoleId] of Object.entries(ROLE_MAP)) {
+    for (const [mainRoleId, secondaryRoleId] of Object.entries(ROLE_MAP)) {
       if (mainMember.roles.cache.has(mainRoleId)) {
-        rolesToAdd.push(targetRoleId);
+        rolesToAdd.push(secondaryRoleId);
       }
     }
 
-    // REMOVE CARGOS (Menos os que possuem Administrador e os que estão no mapa)
-    const rolesToRemove = targetMember.roles.cache.filter(r =>
-      r.id !== targetMember.guild.id && // Ignora @everyone
-      !r.managed && // Ignora cargos de bots/integrações
-      !r.permissions.has(PermissionFlagsBits.Administrator) &&
-      !rolesToKeep.includes(r.id)
+    const rolesToRemove = targetMember.roles.cache.filter(role =>
+      role.id !== targetMember.guild.id &&
+      !role.managed &&
+      !role.permissions.has(PermissionFlagsBits.Administrator)
     );
 
     for (const role of rolesToRemove.values()) {
-      if (role.editable) {
+      if (!role.editable) continue;
+
+      const shouldKeepMappedRole = rolesToAdd.includes(role.id);
+      if (!shouldKeepMappedRole) {
         await targetMember.roles.remove(role).catch(() => {});
       }
     }
 
-    // ADICIONA CARGOS MAPEADOS
     for (const roleId of rolesToAdd) {
       if (!targetMember.roles.cache.has(roleId)) {
-        await targetMember.roles.add(roleId).catch(() => {});
+        const role = targetMember.guild.roles.cache.get(roleId);
+        if (role && role.editable) {
+          await targetMember.roles.add(roleId).catch(() => {});
+        }
       }
     }
   } catch (err) {
@@ -71,35 +112,50 @@ async function syncMember(client, targetMember) {
 }
 
 export function setupSyncCargos(client) {
-  // Sincroniza quando alguém entra no servidor secundário
+  client.once(Events.ClientReady, async () => {
+    await ensureSyncButtonMessage(client);
+  });
+
   client.on(Events.GuildMemberAdd, async (member) => {
+    if (member.user.bot) return;
     await syncMember(client, member);
   });
 
-  // Comando manual: !sincronizarcargos
   client.on(Events.MessageCreate, async (message) => {
+    if (message.author.bot) return;
+    if (!message.guild) return;
+    if (message.guild.id === MAIN_GUILD_ID) return;
     if (!message.content.startsWith('!sincronizarcargos')) return;
     if (!AUTHORIZED_USERS.includes(message.author.id)) return;
-    if (!message.guild || message.guild.id === MAIN_GUILD_ID) return;
 
-    const status = await message.reply('⏳ Iniciando sincronização global neste servidor...');
-    const members = await message.guild.members.fetch();
+    const status = await message.reply('⏳ Iniciando sincronização global neste servidor...').catch(() => null);
+
+    const members = await message.guild.members.fetch().catch(() => null);
+    if (!members) {
+      if (status) {
+        await status.edit('❌ Não consegui buscar os membros deste servidor.').catch(() => {});
+      }
+      return;
+    }
 
     for (const member of members.values()) {
       if (member.user.bot) continue;
       await syncMember(client, member);
     }
 
-    await status.edit('✅ Sincronização de cargos finalizada com sucesso!').catch(() => {});
+    if (status) {
+      await status.edit('✅ Sincronização de cargos finalizada com sucesso!').catch(() => {});
+    }
   });
 
-  // Interação de Botão
   client.on(Events.InteractionCreate, async (interaction) => {
     if (!interaction.isButton()) return;
-    if (interaction.customId === 'sync_roles_btn') {
-      await interaction.deferReply({ ephemeral: true });
-      await syncMember(client, interaction.member);
-      await interaction.editReply('✅ Seus cargos foram sincronizados com o servidor principal!');
-    }
+    if (interaction.customId !== BUTTON_CUSTOM_ID) return;
+
+    await interaction.deferReply({ ephemeral: true }).catch(() => {});
+
+    await syncMember(client, interaction.member);
+
+    await interaction.editReply('✅ Seus cargos foram sincronizados com o servidor principal!').catch(() => {});
   });
 }
