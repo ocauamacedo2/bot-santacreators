@@ -303,6 +303,9 @@ import {
   checklistHandleInteraction 
 } from "../events/logChecklistSemanal.js";
 
+// Role Sync Module
+import { setupSyncCargos } from "../events/syncCargos.js";
+
 // =====================================================
 // Express + Mongo
 // =====================================================
@@ -363,6 +366,9 @@ const setupEventHandlers = () => {
   // Limpa listeners antigos
   const events = ["interactionCreate", "messageCreate", "messageUpdate", "messageDelete", "messageDeleteBulk", "guildMemberAdd", "channelCreate", "channelDelete", "channelUpdate", "guildMemberRemove", "guildMemberUpdate", "ready", "inviteCreate", "inviteDelete", "voiceStateUpdate"];
   events.forEach(e => client.removeAllListeners(e));
+
+  // ✅ Inicializa o Sistema de Sincronização de Cargos
+  setupSyncCargos(client);
 
   setupSortChannels(client);
   setupTicketRenamer(client);
