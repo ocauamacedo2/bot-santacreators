@@ -72,9 +72,9 @@ const DASH_BANNER_URL =
 // ============================================================================
 
 // 🔥 DOAÇÃO: canal onde o módulo doação.js manda os registros (embed "📦 Nova Doação Registrada")
-// - ele usa env SCDOACAO_LOGS_ID, fallback: "1392343906535870597"
+// - ele usa env SCDOACAO_LOGS_ID, fallback: "1486009647923200120"
 const DOACAO_LOGS_CHANNEL_ID =
-  process.env.SCDOACAO_LOGS_ID?.trim() || "1392343906535870597";
+  process.env.SCDOACAO_LOGS_ID?.trim() || "1486009647923200120";
 
 // 🔥 CONVITES: canal LOG do módulo lideresConvites.js
 // - no teu arquivo lideresConvites.js: const LOG_CHANNEL_ID = "1415102820826349648";
@@ -98,7 +98,7 @@ const CRONOGRAMA_LOGS_CHANNEL_ID = "1387864036259004436";
 const PRESENCA_LOGS_CHANNEL_ID = "1486006866046615682";
 
 // 🔥 CORREÇÃO: canal de logs do correcao.js
-const CORRECAO_LOGS_CHANNEL_ID = "1471695257010831614";
+const CORRECAO_LOGS_CHANNEL_ID = "1486084249755979950";
 
 // ✅ NOVOS CANAIS PARA BACKFILL (VIP / HALL)
 const VIP_MENU_CHANNEL_ID = "1414718336826081330";

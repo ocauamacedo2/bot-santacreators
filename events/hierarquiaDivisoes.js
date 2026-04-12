@@ -17,7 +17,7 @@ import {
 const CONFIG = {
   // Canais
   PANEL_CHANNEL_ID: "1370830395637239928", // Canal onde aparece a hierarquia
-  LOG_CHANNEL_ID: "1476721200314187796",   // Canal de logs
+  LOG_CHANNEL_ID: "1486009555606437978",   // Canal de logs
 
   // Cargos (IDs)
   ROLES: {

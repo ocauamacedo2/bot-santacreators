@@ -1,7 +1,7 @@
 // ./events/logs/channelCategoryMove.js
 import { EmbedBuilder, AuditLogEvent, ChannelType, time } from "discord.js";
 
-const LOG_CHANNEL_ID = "1414689188208443585";
+const LOG_CHANNEL_ID = "1486009661512482997";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 

@@ -16,7 +16,7 @@ import {
 import { dashEmit } from "../utils/dashHub.js";
 
 // ================= CONFIGURAÇÕES =================
-const LOG_CHANNEL_ID = "1474603651757510706"; // Canal de Logs
+const LOG_CHANNEL_ID = "1486009619846529075"; // Canal de Logs
 const PANEL_CHANNEL_ID = "1474605177771397223"; // ⚠️ CONFIRA SE ESSE ID ESTÁ CORRETO E O BOT VÊ O CANAL
 const APPROVAL_CHANNEL_ID = "1387864036259004436"; // ✅ Canal de Aprovação
 const BANNER_URL = "https://media.discordapp.net/attachments/1362477839944777889/1384245215249825832/standard_2rss.gif";

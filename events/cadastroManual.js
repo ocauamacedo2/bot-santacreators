@@ -25,7 +25,7 @@ const GIF_BANNER_SETARCARGO_CIDADAO = 'https://media.discordapp.net/attachments/
 const BOTAO_CUSTOM_ID = 'cadastro_cidadao';
 
 // Configs do botão de limpeza
-const LOG_CHANNEL_ID = '1475571908299850011';
+const LOG_CHANNEL_ID = '1486009608765050940';
 const BOTAO_LIMPAR_ID = 'cadastro_limpar_registros';
 const BOTAO_RESTAURAR_ID = 'cadastro_restaurar_backup';
 

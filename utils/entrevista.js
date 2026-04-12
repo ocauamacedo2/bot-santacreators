@@ -733,7 +733,7 @@ async function iniciarContadorGlobal(channel, membroId, remainingMs = ENTREVISTA
 
 // ===== LOG FINAL (avaliação + botões) =====
 async function enviarLogFinalEntrevista(member, dados) {
-  const canalAvaliacao = await member.client.channels.fetch('1382200863866622052').catch(() => null);
+  const canalAvaliacao = await member.client.channels.fetch('1486084237772718120').catch(() => null);
   if (!canalAvaliacao) return;
 
   const respostas = dados.respostas;

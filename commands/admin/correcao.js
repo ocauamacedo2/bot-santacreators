@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 import { dashEmit } from '../../utils/dashHub.js';
 
 
-const CANAL_LOGS_CORRECAO = '1471695257010831614';
+const CANAL_LOGS_CORRECAO = '1486084249755979950';
 
 const CATEGORIA_CORRECAO_PONTUA_ID = '1359244725781266492';
 

@@ -47,7 +47,7 @@ const IGNORE_IF_OPENER_HAS_ROLES = new Set([
 ]);
 
 // 5. Canal de LOGS (onde vai ficar bonito)
-const LOG_CHANNEL_ID = "1471695257010831614";
+const LOG_CHANNEL_ID = "1486084249755979950";
 
 // 6. Quem conta como "respondeu por último" (se a última msg do canal for de alguém assim, para tudo)
 const RESPONDER_STOP_ROLE_IDS = new Set([

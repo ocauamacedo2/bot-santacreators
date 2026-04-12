@@ -43,7 +43,7 @@ export function startLembretePoderes(client) {
   const PODERES_CANAL_PUBLICO_ID = '1410688804226076785';
   const PODERES_REGISTRO_LINK = 'https://discord.com/channels/1262262852782129183/1374066813171929218';
   const PODERES_GIF_URL = 'https://media.discordapp.net/attachments/1362477839944777889/1384245215249825832/standard_2rss.gif?ex=68b14f11&is=68affd91&hm=29acdca41f5165a3688ef1f9fdddfd7b23511eb2d9665ec104495e97d4cd2aab&=&width=515&height=66';
-  const PODERES_LOG_DM_CHANNEL_ID = '1411801178014220348';
+  const PODERES_LOG_DM_CHANNEL_ID = '1486009690767757322';
 
   const PODERES_DM_HOURS = [11, 17];
 
