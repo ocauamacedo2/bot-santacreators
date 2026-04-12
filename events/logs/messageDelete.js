@@ -44,11 +44,17 @@ import { getCachedMessage } from "./_deleteCache.js";
 // ========================= CONFIG =========================
 const MAIN_GUILD_ID = "1262262852782129183";
 
-// Canal único onde vai tudo:
-// - logs de mensagem apagada
-// - alertas de segurança
-// - botão manual de restauração
-const SECURITY_LOG_CHANNEL_ID = "1491267991315157042";
+// CANAIS DE LOG DE MENSAGENS APAGADAS
+const CENTRAL_LOG_HUMAN_DELETE_ID = "1377834202417856732";
+const CENTRAL_LOG_BOT_DELETE_ID = "1377852282779078666";
+
+// CANAL SOMENTE PARA ALERTAS DE PUNIÇÃO / RESTAURAÇÃO
+const SECURITY_ALERT_CHANNEL_ID = "1491267991315157042";
+
+const LOCAL_LOG_CHANNELS = {
+  '1362899773992079533': '1363295055384809483', // Cidade Santa -> #sc-logs
+  '1452416085751234733': '1455312395269443813', // Administração -> #sc-logs
+};
 
 // Cargo opcional de castigo.
 // Se não tiver um cargo específico, deixe null.
@@ -403,14 +409,25 @@ function buildRestoreCustomId(userId) {
   return `restore_roles:${userId}`;
 }
 
-async function sendSecurityChannelMessage(client, payload) {
+async function sendSecurityAlertMessage(client, payload) {
   try {
-    const ch = await client.channels.fetch(SECURITY_LOG_CHANNEL_ID).catch(() => null);
+    const ch = await client.channels.fetch(SECURITY_ALERT_CHANNEL_ID).catch(() => null);
     if (!ch?.isTextBased()) return null;
     return await ch.send(payload).catch(() => null);
   } catch {
     return null;
   }
+}
+
+function resolveDeleteLogChannelId({ guild, deletionByBot }) {
+  if (!guild) return null;
+
+  // prioridade 1: roteamento local por servidor
+  const localLogChannelId = LOCAL_LOG_CHANNELS[guild.id];
+  if (localLogChannelId) return localLogChannelId;
+
+  // prioridade 2: roteamento central por tipo
+  return deletionByBot ? CENTRAL_LOG_BOT_DELETE_ID : CENTRAL_LOG_HUMAN_DELETE_ID;
 }
 
 async function restoreMemberRoles(guild, userId, restoredBy = null) {
@@ -503,7 +520,7 @@ async function processDueRestorations(client) {
         )
         .setTimestamp(new Date());
 
-      await sendSecurityChannelMessage(client, { embeds: [embed] });
+    await sendSecurityAlertMessage(client, { embeds: [embed] });
       await sleep(1200);
     } catch {}
   }
@@ -598,9 +615,9 @@ function ensureInteractionHandler(client) {
         ephemeral: true,
       }).catch(() => null);
 
-      await sendSecurityChannelMessage(interaction.client, {
-        embeds: [restoredEmbed],
-      });
+      await sendSecurityAlertMessage(interaction.client, {
+  embeds: [restoredEmbed],
+});
     } catch (e) {
       try {
         if (!interaction.replied && !interaction.deferred) {
@@ -733,10 +750,10 @@ async function applySuspiciousDeletePunishment({
     )
     .setTimestamp(new Date());
 
-  await sendSecurityChannelMessage(client, {
-    embeds: [alertEmbed],
-    components: [restoreButton],
-  });
+  await sendSecurityAlertMessage(client, {
+  embeds: [alertEmbed],
+  components: [restoreButton],
+});
 
   return { ok: true, restoreAt };
 }
@@ -996,10 +1013,19 @@ export default {
 
       const embedsToSend = [mainEmbed, ...reconstructedEmbeds].slice(0, 10);
 
-      await sendSecurityChannelMessage(client, {
-        embeds: embedsToSend,
-        files: attachments.length ? attachments.slice(0, 10) : undefined,
-      });
+     const deleteLogChannelId = resolveDeleteLogChannelId({ guild, deletionByBot });
+
+if (deleteLogChannelId) {
+  const deleteLogChannel = await client.channels.fetch(deleteLogChannelId).catch(() => null);
+
+  if (deleteLogChannel?.isTextBased()) {
+    const embedsForDeleteLog = embedsToSend.map(e => new EmbedBuilder(e.toJSON()));
+    await deleteLogChannel.send({
+      embeds: embedsForDeleteLog,
+      files: attachments.length ? attachments.slice(0, 10) : undefined,
+    }).catch(console.error);
+  }
+}
 
       // ================= TRAVA DE SEGURANÇA =================
       // Só considera suspeito quando alguém apaga mensagem de OUTRA pessoa.
@@ -1041,9 +1067,14 @@ export default {
       }
     } catch (err) {
       try {
-        await sendSecurityChannelMessage(client, {
-          content: `⚠️ Erro no logger de messageDelete: \`${truncate(String(err?.stack || err?.message || err), 1800)}\``,
-        });
+       try {
+  const errorLogChannel = await client.channels.fetch(CENTRAL_LOG_HUMAN_DELETE_ID).catch(() => null);
+  if (errorLogChannel?.isTextBased()) {
+    await errorLogChannel.send({
+      content: `⚠️ Erro no logger de messageDelete: \`${truncate(String(err?.stack || err?.message || err), 1800)}\``,
+    }).catch(() => null);
+  }
+} catch {}
       } catch {}
     }
   },

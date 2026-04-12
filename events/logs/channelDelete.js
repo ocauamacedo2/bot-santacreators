@@ -3,7 +3,6 @@ import { AuditLogEvent, ChannelType, EmbedBuilder } from "discord.js";
 
 // ================== CONFIGURAÇÃO DE LOGS ==================
 const MAIN_GUILD_ID = '1262262852782129183'; // Servidor Principal (Santa Creators)
-const CENTRAL_LOG_CHANNEL_ID = '1486006819385114714'; // Canal central para logs de deleção
 
 // Mapeamento de Guild ID para Canal de Log Local
 const LOCAL_LOG_CHANNELS = {
