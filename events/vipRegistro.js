@@ -478,7 +478,7 @@ const motivoRegistro = interaction.fields.getTextInputValue("vip_motivo_registro
       }
 
       await interaction.reply({
-        content: `✅ Registro criado para <@${idRaw}> — **${vipDecor[tipo].label}**.`,
+        content: `✅ Registro criado para <@${idRaw}> — **${tipo ? vipDecor[tipo].label : tipoRaw}**.`,
         ephemeral: true,
       }).catch(() => {});
 

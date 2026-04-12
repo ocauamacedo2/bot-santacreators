@@ -804,14 +804,6 @@ export async function vipEventoHandleInteraction(interaction, client) {
       const motivoRegistro = interaction.fields.getTextInputValue("vip_motivo_registro")?.trim();
 
       const tipo = vipNormalize(tipoRaw);
-      if (!tipo) {
-        await interaction.reply({
-          content: "❌ Tipo inválido. Use: **Ouro**, **Prata**, **Bronze** ou **Rolepass**.",
-          ephemeral: true,
-        }).catch(() => {});
-        return true;
-      }
-
       const cidade = normalizeCity(cidadeRaw);
       if (!cidade) {
         await interaction.reply({
@@ -856,7 +848,7 @@ export async function vipEventoHandleInteraction(interaction, client) {
       const mention = maybeId ? `<@${maybeId}>` : `\`${beneficiarioRaw}\``;
 
       await interaction.reply({
-        content: `✅ Registro criado para ${mention} — **${vipDecor[tipo].label}** — **${cidade}**.`,
+        content: `✅ Registro criado para ${mention} — **${tipo ? vipDecor[tipo].label : tipoRaw}** — **${cidade}**.`,
         ephemeral: true,
       }).catch(() => {});
 
