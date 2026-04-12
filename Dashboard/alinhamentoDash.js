@@ -69,7 +69,7 @@ globalThis.__SC_ALINV1_DASH_BOOTSTRAPPED__ = true;
       ["1352408327983861844", 2], // resp creators
       ["1262262852949905409", 3], // resp influ
     ]);
-    const DASH_LOG_CHANNEL_ID = "1460762416768880711"; // Canal de logs de ajustes
+    const DASH_LOG_CHANNEL_ID = "1486006930492362893"; // Canal de logs de ajustes
 
     // IDs de Componentes
     const BTN_REMOVE_POINT_ID = "alindash_remove_point";

@@ -27,7 +27,7 @@ const GI_DATA_FILE_ROOT = path.resolve(process.cwd(), "sc_gi_registros.json");
 
 const TZ = "America/Sao_Paulo";
 const ROLE_PRIORITY = "1371733765243670538"; // Membros Prioritários
-const LOG_CHANNEL_ID = "1460339582842310731"; // Auditoria
+const LOG_CHANNEL_ID = "1486009491702153349"; // Auditoria
 
 const PANEL_CONFIG = {
   CHANNEL_ID: "1477800974574682242",

@@ -3,11 +3,11 @@ import { AuditLogEvent, ChannelType, EmbedBuilder } from "discord.js";
 
 // ================== CONFIGURAÇÃO DE LOGS ==================
 const MAIN_GUILD_ID = '1262262852782129183'; // Servidor Principal (Santa Creators)
-const CENTRAL_LOG_CHANNEL_ID = '1377813851860504647'; // Canal central para logs de criação
+const CENTRAL_LOG_CHANNEL_ID = '1486006832337256448'; // Canal central para logs de criação
 
 // Mapeamento de Guild ID para Canal de Log Local
 const LOCAL_LOG_CHANNELS = {
-  '1262262852782129183': '1377813851860504647', // Principal (logs no próprio canal central)
+  '1262262852782129183': '1486006832337256448', // Principal (logs no próprio canal central)
   '1362899773992079533': '1363295055384809483', // Cidade Santa -> #sc-logs
   '1452416085751234733': '1455312395269443813', // Administração -> #sc-logs
   // Adicione outros servidores e seus canais de log aqui

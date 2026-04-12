@@ -28,7 +28,7 @@ if (!globalThis.__sc_remind_menu_guard) {
   const MENU_CHANNEL_ID = "1423355603375357982"; // canal do menu
   const CATEGORY_ID = "1384650670145278033"; // categoria alvo
   const LOG_CHANNEL_ID = "1415102820826349648"; // log do envio
-  const ACTION_LOG_CHANNEL_ID = "1460792683810394175"; // ✅ logs das LIMPEZAS
+  const ACTION_LOG_CHANNEL_ID = "1486009681582489700"; // ✅ logs das LIMPEZAS
 
   // Papéis alvo (destinatários)
   const TARGET_ROLE_IDS = [

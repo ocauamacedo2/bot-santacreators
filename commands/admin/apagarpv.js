@@ -2,7 +2,7 @@
 import { Events, EmbedBuilder } from 'discord.js';
 
 // ✅ Canais e variáveis importantes
-const LOG_CHANNEL_ID = '1385324623301972120'; // Canal: APAGADOS PRIVADO POR BOT
+const LOG_CHANNEL_ID = '1486009671612502248'; // Canal: APAGADOS PRIVADO POR BOT
 
 // ✅ Permissões autorizadas
 const PERMITIDOS = [

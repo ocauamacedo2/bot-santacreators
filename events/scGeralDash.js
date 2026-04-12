@@ -58,7 +58,7 @@ const DASH_FIND_PAGES = 15; // 15*100 = 1500 msgs
 
 
 // ✅ canal de logs (novidades/mudanças)
-const DASH_LOG_CHANNEL_ID = "1460762416768880711";
+const DASH_LOG_CHANNEL_ID = "1486006930492362893";
 
 const DASH_BANNER_URL =
   "https://media.discordapp.net/attachments/1362477839944777889/1384245215249825832/standard_2rss.gif";
@@ -89,7 +89,7 @@ const CONVITES_LOGS_CHANNEL_ID = "1415102820826349648";
 const PERGUNTAS_LOGS_CHANNEL_ID = process.env.SCPERGUNTAS_LOGS_ID?.trim() || "";
 
 // 🔥 VENDAS: canal de logs do registroVendas.js
-const VENDAS_LOGS_CHANNEL_ID = "1475237983782179028";
+const VENDAS_LOGS_CHANNEL_ID = "1486084262867370105";
 
 // 🔥 CRONOGRAMA: canal de aprovação (onde fica o embed verde)
 const CRONOGRAMA_LOGS_CHANNEL_ID = "1387864036259004436";

@@ -16,7 +16,7 @@ import {
 import { dashEmit } from "../utils/dashHub.js";
 
 // ================= CONFIGURAÇÃO =================
-const LOG_CHANNEL_ID = "1475237983782179028"; // Canal de Logs
+const LOG_CHANNEL_ID = "1486084262867370105"; // Canal de Logs
 const PANEL_CHANNEL_ID = "1475240261796892894"; // Canal do Painel Fixo
 
 const COOLDOWN_MS = 60 * 60 * 1000; // 1 hora (para pontuar no GeralDash)

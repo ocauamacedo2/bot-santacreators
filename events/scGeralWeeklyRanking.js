@@ -241,7 +241,7 @@ async function emitManualRemoveLog(client, payload = {}) {
     const logChannelId =
       process.env.SC_GERAL_REMOVE_LOGS_ID?.trim() ||
       process.env.SC_GERAL_ADJUST_LOGS_ID?.trim() ||
-      "1460762416768880711";
+      "1486006930492362893";
 
     const ch = await client.channels.fetch(logChannelId).catch(() => null);
     if (!ch?.isTextBased?.()) return false;
@@ -346,10 +346,10 @@ const CONVITES_LOGS_CHANNEL_ID = "1415102820826349648";
 
 // PERGUNTAS logs (env opcional)
 const PERGUNTAS_LOGS_CHANNEL_ID = process.env.SCPERGUNTAS_LOGS_ID?.trim() || "";
-const VENDAS_LOGS_CHANNEL_ID = "1475237983782179028";
+const VENDAS_LOGS_CHANNEL_ID = "1486084262867370105";
 const CRONOGRAMA_LOGS_CHANNEL_ID = "1387864036259004436";
 const PRESENCA_LOGS_CHANNEL_ID = "1486006866046615682";
-const CORRECAO_LOGS_CHANNEL_ID = "1471695257010831614"; // ✅ Canal de logs de correção
+const CORRECAO_LOGS_CHANNEL_ID = "1486084249755979950"; // ✅ Canal de logs de correção
 const HALL_CHANNEL_ID = "1386503496353976470"; // ✅ Canal do Hall da Fama
 const VIP_MENU_CHANNEL_ID = "1414718336826081330"; // ✅ registros VIP por evento
 

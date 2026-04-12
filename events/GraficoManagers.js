@@ -36,7 +36,7 @@ import {
 const ORG_DASH_CHANNEL_ID = "1457840340659736658";
 
 // Canal de LOGS do dashboard
-const ORG_DASH_LOG_CHANNEL_ID = "1460339582842310731";
+const ORG_DASH_LOG_CHANNEL_ID = "1486009491702153349";
 
 // ✅ ÍCONE / FOTO (vai lá em cima no author)
 const DASH_ICON_FALLBACK =
