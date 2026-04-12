@@ -161,7 +161,7 @@ import { connectStatusOnReady, connectStatusHandleMessage, connectStatusOnChanne
 import { orgsHandleMessage, orgsHandleInteraction } from "../events/analisarOrgsPorDia.js";
 
 // VIP Evento / Líderes Convites
-import { vipEventoOnReady, vipEventoHandleInteraction } from "../events/vipEvento.js";
+import { vipRegistroOnReady, vipRegistroHandleInteraction } from "../events/vipEvento.js";
 import { lideresConvitesOnReady, lideresConvitesHandleInteraction } from "../events/lideresConvites.js";
 
 // Doação
@@ -574,7 +574,7 @@ const setupEventHandlers = () => {
     try { await setStaffOnReady(client); } catch {}
     try { await connectStatusOnReady(client); } catch {}
     try { await alinhamentosOnReady(client); } catch {}
-    try { await vipEventoOnReady(client); } catch {}
+    try { await vipRegistroOnReady(client);} catch {}
     try { await lideresConvitesOnReady(client); } catch {}
     try { await setStaffV2OnReady(client); } catch {}
     try { await blacklistEventosOnReady(client); } catch {}
