@@ -177,6 +177,11 @@ export async function rolePermissionGuardHandleRoleUpdate(oldRole, newRole, clie
     // captura o executor real ANTES da correção do bot
     const executor = await fetchRealExecutorBeforeFix(newRole.guild, newRole.id, client);
 
+    // ✅ Se o executor for o dono do servidor (Owner), ignora a proteção.
+    if (executor && executor.id === newRole.guild.ownerId) {
+      return;
+    }
+
     // marca apenas o próximo eco da própria correção do bot
     selfFixCache.set(newRole.id, Date.now() + 2000);
 
