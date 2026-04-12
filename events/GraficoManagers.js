@@ -190,24 +190,11 @@ function sumBucket(obj) {
   for (const k of Object.keys(obj)) s += safeNum(obj[k]);
   return s;
 }
-
 function topN(bucketObj, n = 3) {
-  const entries = Object.entries(bucketObj || {})
-    .map(([id, val]) => [String(id), safeNum(val)])
-    function topN(bucketObj, n = 3) {
-  const entries = Object.entries(bucketObj || {})
-    .map(([id, val]) => [String(id), safeNum(val)]);
-
-  entries.sort((a, b) => b[1] - a[1]);
-
-  return entries
-    .slice(0, n)
-    .map(([id, v]) => ({ id, v }));
-}
-
-
-  entries.sort((a, b) => b[1] - a[1]);
-  return entries.slice(0, n).map(([id, v]) => ({ id, v }));
+  return Object.entries(bucketObj || {})
+    .map(([id, val]) => ({ id: String(id), v: safeNum(val) }))
+    .sort((a, b) => b.v - a.v)
+    .slice(0, n);
 }
 
 function pctDiff(cur, prev) {
@@ -1031,9 +1018,11 @@ if (!dashMsg && reason !== "force") {
   const afterTotal = after?.curTotal ?? null;
 
   const beforeTop3 =
-    (before?.top3Current || []).map((x, i) => `${i + 1}. ${x.id}:${x.v}`).join(", ") || "—";
+    (before?.top3Current || []).map((x, i) => `**${i + 1}.** <@${x.id}> (**${x.v}**)`).join(", ") || "—";
   const afterTop3 =
-    (after?.top3Current || []).map((x, i) => `${i + 1}. ${x.id}:${x.v}`).join(", ") || "—";
+    (after?.top3Current || []).map((x, i) => `**${i + 1}.** <@${x.id}> (**${x.v}**)`).join(", ") || "—";
+
+  const jumpUrl = state.messageId ? `https://discord.com/channels/${dashChannel.guild.id}/${ORG_DASH_CHANNEL_ID}/${state.messageId}` : null;
 
   await sendLog(client, "📈 Dashboard atualizado", [
     `**Causador:** ${causeUserId ? `<@${causeUserId}>` : "—"}`,
@@ -1042,6 +1031,7 @@ if (!dashMsg && reason !== "force") {
     `**Total:** ${beforeTotal === null ? "—" : beforeTotal} → **${afterTotal}**`,
     `**Top 3:** ${beforeTop3} → **${afterTop3}**`,
     `**Total últimas 4:** **${after?.sumLast4 ?? "—"}**`,
+    `**Link do Painel:** ${jumpUrl ? `Clique para abrir` : "—"}`,
     `**Hora (SP):** ${nowInSP().toISOString().replace("T", " ").slice(0, 19)} UTC`,
   ]);
 }
