@@ -142,6 +142,29 @@ globalThis.__SC_ALINV1_DASH_BOOTSTRAPPED__ = true;
       } catch {}
     }
 
+    function readJSON(file, fallback) {
+      try {
+        if (!fs.existsSync(file)) return fallback;
+        const raw = fs.readFileSync(file, "utf8");
+        if (!raw || !raw.trim()) return fallback;
+        return JSON.parse(raw);
+      } catch (e) {
+        console.error("[ALINV1_DASH] ⚠️ JSON inválido ou inexistente:", file, e?.message || e);
+        return fallback;
+      }
+    }
+
+    function writeJSON(file, data) {
+      try {
+        ensureDir(path.dirname(file));
+        const tmp = `${file}.tmp`;
+        fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+        fs.renameSync(tmp, file);
+      } catch (e) {
+        console.error("[ALINV1_DASH] ❌ Falha ao salvar arquivo:", file, e?.message || e);
+      }
+    }
+
     // ✅ Função para salvar os dados agregados para outros módulos usarem
     function saveStatsExport(items) {
       try {
