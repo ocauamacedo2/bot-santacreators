@@ -577,7 +577,7 @@ export async function createVipRecordProgrammatically(
 // =============================
 // READY
 // =============================
-export async function vipRegistroOnReady(client) {
+export async function vipEventoOnReady(client) {
   if (globalThis.__VIP_REGISTRO_ON_READY_RAN__) return;
   globalThis.__VIP_REGISTRO_ON_READY_RAN__ = true;
 
@@ -599,7 +599,7 @@ export async function vipRegistroOnReady(client) {
 // =============================
 // INTERAÇÕES
 // =============================
-export async function vipRegistroHandleInteraction(interaction, client) {
+export async function vipEventoHandleInteraction(interaction, client) {
   try {
     // ==========================================================
     // BOTÕES DO MENU
@@ -1159,7 +1159,7 @@ export async function vipRegistroHandleInteraction(interaction, client) {
 // =============================
 // COMMAND HANDLER
 // =============================
-export async function vipRegistroHandleMessage(message, client) {
+export async function vipEventoHandleMessage(message, client) {
   if (!message.guild || message.author.bot) return false;
 
   if (message.content.toLowerCase() === "!vipmenu") {
