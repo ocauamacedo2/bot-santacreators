@@ -2,7 +2,7 @@
 import { EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, ComponentType } from 'discord.js';
 
 // Configurações
-const LOG_CHANNEL_ID = '1469964510315020450';
+const LOG_CHANNEL_ID = '1486006841623449650';
 
 // IDs permitidos (Usuários e Cargos misturados conforme solicitado)
 const PERMITTED_IDS = [

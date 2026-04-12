@@ -5,7 +5,15 @@
   import path from "node:path";
   import crypto from "node:crypto";
   import { fileURLToPath } from "node:url";
-  import { EmbedBuilder } from "discord.js";
+  import { 
+    EmbedBuilder, 
+    ActionRowBuilder, 
+    ButtonBuilder, 
+    ButtonStyle, 
+    ModalBuilder, 
+    TextInputBuilder, 
+    TextInputStyle 
+  } from "discord.js";
 
   /**
    * Inicializa o Dashboard de Alinhamentos (v1)
@@ -44,6 +52,31 @@ globalThis.__SC_ALINV1_DASH_BOOTSTRAPPED__ = true;
     // ✅ NOVO: Caminho para exportar dados para o ReuniaoSemanal ler
     const DATA_DIR = path.join(__dirname, "..", "data");
     const STATS_EXPORT_PATH = path.join(DATA_DIR, "alinhamento_dash_state.json");
+
+    // ✅ CONFIGURAÇÃO DE AJUSTE MANUAL (Padrão scGeralDash)
+    const MANUAL_ADJUST_PATH = path.join(DATA_DIR, "sc_alinv1_manual_adjustments.json");
+    const MANUAL_ADJUST_ALLOWED_USERS = new Set([
+      "660311795327828008", // você
+      "1262262852949905408", // owner
+    ]);
+    const MANUAL_ADJUST_ALLOWED_ROLES = new Set([
+      "1352408327983861844", // resp creators
+      "1262262852949905409", // resp influ
+      "1352407252216184833", // resp lider
+    ]);
+    const MANUAL_ADJUST_ROLE_HIERARCHY = new Map([
+      ["1352407252216184833", 1], // resp lider
+      ["1352408327983861844", 2], // resp creators
+      ["1262262852949905409", 3], // resp influ
+    ]);
+    const DASH_LOG_CHANNEL_ID = "1460762416768880711"; // Canal de logs de ajustes
+
+    // IDs de Componentes
+    const BTN_REMOVE_POINT_ID = "alindash_remove_point";
+    const MODAL_REMOVE_POINT_ID = "alindash_remove_point_modal";
+
+    // Imagem do Banner
+    const DASH_BANNER_URL = "https://media.discordapp.net/attachments/1362477839944777889/1384245215249825832/standard_2rss.gif";
 
     // ✅ marker fixo pra achar a mensagem antiga se o state sumir
     const DASH_MARKER = "SC_ALINV1_DASH::MAIN_V1";
@@ -131,6 +164,133 @@ globalThis.__SC_ALINV1_DASH_BOOTSTRAPPED__ = true;
       } catch (e) {
         console.error("[ALINV1_DASH] Erro ao exportar stats:", e);
       }
+    }
+
+    // ----------------- HELPERS DE AJUSTE MANUAL (ESM) -----------------
+    function loadManualAdjustments() {
+      return readJSON(MANUAL_ADJUST_PATH, { byWeek: {} });
+    }
+    function saveManualAdjustments(data) {
+      writeJSON(MANUAL_ADJUST_PATH, data);
+    }
+    function getManualAdjustHighestLevel(member) {
+      if (!member?.roles?.cache) return null;
+      const ids = member.roles.cache.map(r => r.id).filter(id => MANUAL_ADJUST_ALLOWED_ROLES.has(id));
+      if (!ids.length) return null;
+      let highest = null;
+      for (const id of ids) {
+        const lvl = MANUAL_ADJUST_ROLE_HIERARCHY.get(id);
+        if (lvl == null) continue;
+        if (highest == null || lvl > highest) highest = lvl;
+      }
+      return highest;
+    }
+    function getManualAdjustHighestRoleId(member) {
+      if (!member?.roles?.cache) return null;
+      const ids = member.roles.cache.map(r => r.id).filter(id => MANUAL_ADJUST_ALLOWED_ROLES.has(id));
+      if (!ids.length) return null;
+      let bestRoleId = null, bestLevel = null;
+      for (const id of ids) {
+        const lvl = MANUAL_ADJUST_ROLE_HIERARCHY.get(id);
+        if (lvl == null) continue;
+        if (bestLevel == null || lvl > bestLevel) { bestLevel = lvl; bestRoleId = id; }
+      }
+      return bestRoleId;
+    }
+    function getManualAdjustRoleLabel(roleId) {
+      switch (String(roleId || "")) {
+        case "1352407252216184833": return "Resp Líder";
+        case "1352408327983861844": return "Resp Creators";
+        case "1262262852949905409": return "Resp Influ";
+        default: return "Sem cargo permitido";
+      }
+    }
+    async function fetchGuildMemberSafe(guild, userId) {
+      try { if (!guild || !userId) return null; return await guild.members.fetch(userId); } catch { return null; }
+    }
+    async function canManualRemovePoints({ guild, executorId, targetUserId }) {
+      if (MANUAL_ADJUST_ALLOWED_USERS.has(String(executorId))) return { ok: true, bypass: true };
+      const executorMember = await fetchGuildMemberSafe(guild, executorId);
+      if (!executorMember) return { ok: false, reason: "Executor não encontrado." };
+      const executorLevel = getManualAdjustHighestLevel(executorMember);
+      const executorRoleId = getManualAdjustHighestRoleId(executorMember);
+      if (executorLevel == null || !executorRoleId) return { ok: false, reason: "Sem permissão hierárquica." };
+      const targetMember = await fetchGuildMemberSafe(guild, targetUserId);
+      const targetLevel = getManualAdjustHighestLevel(targetMember);
+      if (targetLevel != null && executorLevel <= targetLevel) return { ok: false, reason: "Nível insuficiente para remover pontos deste cargo." };
+      return { ok: true, bypass: false, executorRoleId };
+    }
+    function applyManualAdjustment({ weekKey, userId, delta }) {
+      const manual = loadManualAdjustments();
+      manual.byWeek[weekKey] = manual.byWeek[weekKey] || {};
+      const before = Number(manual.byWeek[weekKey][userId] || 0);
+      const after = before + Number(delta);
+      manual.byWeek[weekKey][userId] = after;
+      saveManualAdjustments(manual);
+      return { before, after };
+    }
+    async function emitAdjustmentLog(client, payload) {
+      const ch = await client.channels.fetch(DASH_LOG_CHANNEL_ID).catch(() => null);
+      if (!ch?.isTextBased()) return;
+      const embed = new EmbedBuilder()
+        .setTitle("🟣 Ajuste Manual: Alinhamentos")
+        .setColor(0xef4444)
+        .addFields(
+          { name: "Executor", value: `<@${payload.executorId}>`, inline: true },
+          { name: "Alvo", value: `<@${payload.targetId}>`, inline: true },
+          { name: "Qtd", value: String(payload.qty), inline: true },
+          { name: "Semana", value: `\`${payload.weekKey}\``, inline: true },
+          { name: "Antes", value: String(payload.before), inline: true },
+          { name: "Depois", value: String(payload.after), inline: true },
+          { name: "Cargo", value: payload.roleLabel, inline: true }
+        )
+        .setTimestamp();
+      await ch.send({ embeds: [embed] });
+    }
+
+    // ----------------- CHART BUILDER (QuickChart) -----------------
+    function chartUrlLast4Weeks({ labels, data, title }) {
+      const barColors = data.map(v => {
+        if (ALINV1_WEEK_GOAL > 0) return v >= ALINV1_WEEK_GOAL ? "#2ecc71" : v >= ALINV1_WEEK_GOAL * 0.5 ? "#f1c40f" : "#e74c3c";
+        return "#9b59b6";
+      });
+      const grandTotal = data.reduce((a, b) => a + b, 0);
+      const cfg = {
+        type: "bar",
+        data: {
+          labels,
+          datasets: [{ label: "Alinhamentos", data, backgroundColor: barColors, borderWidth: 0, barThickness: 14, maxBarThickness: 20 }]
+        },
+        options: {
+          legend: { display: false },
+          title: { display: true, text: `${title} • TOTAL: ${grandTotal}`, fontSize: 18 },
+          plugins: {
+            datalabels: { anchor: "end", align: "top", offset: 2, color: "#111", font: { weight: "bold", size: 12 }, formatter: (v) => (v > 0 ? String(v) : "") }
+          },
+          scales: {
+            yAxes: [{ ticks: { min: 0, beginAtZero: true, precision: 0 } }],
+            xAxes: [{ ticks: { autoSkip: false, maxRotation: 0, minRotation: 0 } }]
+          }
+        }
+      };
+      return `https://quickchart.io/chart?c=${encodeURIComponent(JSON.stringify(cfg))}&width=1150&height=420&backgroundColor=white&plugins=datalabels`;
+    }
+
+    function getWeekKeyTotal(items, weekKey, manualAdjustments = {}) {
+      const only = items.filter(x => x.weekKey === weekKey);
+      const byAlinhador = {};
+      for (const x of only) {
+        const a = x.alinhador?.raw || null;
+        if (a) byAlinhador[a] = (byAlinhador[a] || 0) + 1;
+      }
+      const weekAdj = manualAdjustments[weekKey] || {};
+      for (const [rawWho, count] of Object.entries(byAlinhador)) {
+        const m = rawWho.match(/<@!?(\d+)>/) || rawWho.match(/^(\d{17,20})$/);
+        const uid = m ? m[1] : null;
+        if (uid && weekAdj[uid]) byAlinhador[rawWho] = Math.max(0, count + Number(weekAdj[uid]));
+      }
+      for (const [uid, adj] of Object.entries(weekAdj)) { if (!byAlinhador[`<@${uid}>`] && adj > 0) byAlinhador[`<@${uid}>`] = adj; }
+      return Object.values(byAlinhador).reduce((acc, v) => acc + v, 0);
     }
 
     // ----------------- TIME (SP safe) -----------------
@@ -316,10 +476,9 @@ globalThis.__SC_ALINV1_DASH_BOOTSTRAPPED__ = true;
       };
     }
 
-    function aggregate(items, weekKey) {
+    function aggregate(items, weekKey, manualAdjustments = {}) {
       const only = items.filter((x) => x.weekKey === weekKey);
-      const total = only.length;
-
+      
       const byAlinhador = {};
       const byAlinhado = {};
 
@@ -329,6 +488,20 @@ globalThis.__SC_ALINV1_DASH_BOOTSTRAPPED__ = true;
         if (a) byAlinhador[a] = (byAlinhador[a] || 0) + 1;
         if (f) byAlinhado[f] = (byAlinhado[f] || 0) + 1;
       }
+
+      // Aplica ajustes manuais apenas para quem alinhou
+      const weekAdj = manualAdjustments[weekKey] || {};
+      for (const [rawWho, count] of Object.entries(byAlinhador)) {
+        const m = rawWho.match(/<@!?(\d+)>/) || rawWho.match(/^(\d{17,20})$/);
+        const uid = m ? m[1] : null;
+        if (uid && weekAdj[uid]) byAlinhador[rawWho] = Math.max(0, count + Number(weekAdj[uid]));
+      }
+      for (const [uid, adj] of Object.entries(weekAdj)) {
+        const mention = `<@${uid}>`;
+        if (!byAlinhador[mention] && adj > 0) byAlinhador[mention] = adj;
+      }
+
+      const total = Object.values(byAlinhador).reduce((acc, v) => acc + v, 0);
 
       const topAlinhador = Object.entries(byAlinhador)
         .map(([who, count]) => ({ who, count }))
@@ -371,7 +544,7 @@ globalThis.__SC_ALINV1_DASH_BOOTSTRAPPED__ = true;
       return crypto.createHash("sha1").update(JSON.stringify(obj)).digest("hex");
     }
 
-    function makeSignature({ thisWeekKey, lastWeekKey, cur, prev, weekKeysFound }) {
+    function makeSignature({ thisWeekKey, lastWeekKey, cur, prev, weekKeysFound, manualAdj }) {
       return hash({
         thisWeekKey,
         lastWeekKey,
@@ -381,6 +554,7 @@ globalThis.__SC_ALINV1_DASH_BOOTSTRAPPED__ = true;
         topF: (cur?.topAlinhado || []).slice(0, 5),
         wk: weekKeysFound || {},
         goal: ALINV1_WEEK_GOAL || 0,
+        adj: manualAdj || {},
         onlyValid: true, // só pra deixar claro na assinatura
       });
     }
@@ -428,6 +602,7 @@ globalThis.__SC_ALINV1_DASH_BOOTSTRAPPED__ = true;
       DEBUG.stage = "scan";
       const st = loadState();
       const { items } = await collectAlinhamentos();
+      const manualAdjData = loadManualAdjustments();
 
       // ✅ EXPORTA OS DADOS PARA O REUNIAO SEMANAL
       saveStatsExport(items);
@@ -440,10 +615,10 @@ globalThis.__SC_ALINV1_DASH_BOOTSTRAPPED__ = true;
       DEBUG.chosenLast = lastWeekKey;
 
       const cur = thisWeekKey
-        ? aggregate(items, thisWeekKey)
+        ? aggregate(items, thisWeekKey, manualAdjData.byWeek)
         : { total: 0, topAlinhador: [], topAlinhado: [] };
       const prev = lastWeekKey
-        ? aggregate(items, lastWeekKey)
+        ? aggregate(items, lastWeekKey, manualAdjData.byWeek)
         : { total: 0, topAlinhador: [], topAlinhado: [] };
       const dd = diff(cur.total, prev.total);
 
@@ -455,6 +630,7 @@ globalThis.__SC_ALINV1_DASH_BOOTSTRAPPED__ = true;
         cur,
         prev,
         weekKeysFound: DEBUG.weekKeysFound,
+        manualAdj: manualAdjData.byWeek,
       });
 
       // ✅ se não mudou nada, não edita
@@ -512,6 +688,19 @@ globalThis.__SC_ALINV1_DASH_BOOTSTRAPPED__ = true;
         ? `${prev.topAlinhador[0].who} (**${prev.topAlinhador[0].count}**)`
         : "_(ninguém)_";
 
+      // ✅ Gerar Gráfico
+      const last4Keys = chooseWeeksFromScan().keys.slice(0, 4).reverse();
+      const chartLabels = last4Keys.map(k => {
+        const [Y, M, D] = k.split("-");
+        return `${D}/${M}`;
+      });
+      const chartData = last4Keys.map(k => getWeekKeyTotal(items, k, manualAdjData.byWeek));
+      const chartUrl = chartUrlLast4Weeks({
+        labels: chartLabels,
+        data: chartData,
+        title: "Alinhamentos — Últimas 4 semanas"
+      });
+
       DEBUG.stage = "embeds";
       const keysPreview =
         Object.entries(DEBUG.weekKeysFound || {})
@@ -523,6 +712,7 @@ globalThis.__SC_ALINV1_DASH_BOOTSTRAPPED__ = true;
       const embedMain = new EmbedBuilder()
         .setColor(0x9b59b6)
         .setTitle("💜 Dashboard — Alinhamentos (Apenas VALIDADOS)")
+        .setImage(DASH_BANNER_URL)
         .setDescription(
           [
             `🗓️ **Semana Atual:** \`${thisWeekKey || "—"}\` • **${
@@ -553,7 +743,19 @@ globalThis.__SC_ALINV1_DASH_BOOTSTRAPPED__ = true;
         })
         .setTimestamp(nowSP());
 
-      const embeds = [embedMain];
+      const embedChart = new EmbedBuilder()
+        .setColor(0x9b59b6)
+        .setTitle("📊 Gráfico de Desempenho")
+        .setImage(chartUrl);
+
+      const embeds = [embedMain, embedChart];
+
+      const adminRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(BTN_REMOVE_POINT_ID)
+          .setLabel("Ajuste manual (-)")
+          .setStyle(ButtonStyle.Danger)
+      );
 
       DEBUG.stage = "upsert msg";
       let msg = null;
@@ -572,7 +774,7 @@ globalThis.__SC_ALINV1_DASH_BOOTSTRAPPED__ = true;
         }
       }
 
-      const payload = { content: "‎", embeds };
+      const payload = { content: "‎", embeds, components: [adminRow] };
 
       if (!msg) {
         msg = await dashCh.send(payload).catch((e) => {
@@ -700,6 +902,71 @@ if (!globalThis.__SC_ALINV1_DASH_INTERVAL__) {
 }
 
 // ✅ Listener messageCreate (com trava global anti-duplicação)
+// ✅ Listener interactionCreate (com trava global anti-duplicação)
+if (!globalThis.__SC_ALINV1_DASH_INTERACTION_LISTENER__) {
+  globalThis.__SC_ALINV1_DASH_INTERACTION_LISTENER__ = true;
+
+  client.on("interactionCreate", async (interaction) => {
+    try {
+      if (!interaction.guild) return;
+
+      // BOTÃO
+      if (interaction.isButton() && interaction.customId === BTN_REMOVE_POINT_ID) {
+        const check = await canManualRemovePoints({ guild: interaction.guild, executorId: interaction.user.id, targetUserId: interaction.user.id });
+        if (!check.ok && !MANUAL_ADJUST_ALLOWED_USERS.has(interaction.user.id)) {
+          return interaction.reply({ content: "❌ Você não tem permissão para ajustar pontos.", ephemeral: true });
+        }
+
+        const modal = new ModalBuilder().setCustomId(MODAL_REMOVE_POINT_ID).setTitle("Remover Pontos — Alinhamentos");
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("userId").setLabel("ID do Alvo").setStyle(TextInputStyle.Short).setRequired(true)),
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("qty").setLabel("Quantidade a REMOVER").setStyle(TextInputStyle.Short).setRequired(true))
+        );
+        return interaction.showModal(modal);
+      }
+
+      // MODAL SUBMIT
+      if (interaction.isModalSubmit() && interaction.customId === MODAL_REMOVE_POINT_ID) {
+        const targetId = interaction.fields.getTextInputValue("userId").trim();
+        const qty = parseInt(interaction.fields.getTextInputValue("qty").trim());
+
+        if (!/^\d{17,20}$/.test(targetId) || isNaN(qty) || qty <= 0 || qty > 50) {
+          return interaction.reply({ content: "❌ Dados inválidos. Use um ID real e quantidade entre 1 e 50.", ephemeral: true });
+        }
+
+        await interaction.deferReply({ ephemeral: true });
+
+        const perm = await canManualRemovePoints({ guild: interaction.guild, executorId: interaction.user.id, targetUserId: targetId });
+        if (!perm.ok) return interaction.editReply({ content: `❌ ${perm.reason}` });
+
+        const weekKey = weekKeyFromDateSP(nowSP());
+        const { before, after } = applyManualAdjustment({ weekKey, userId: targetId, delta: -qty });
+
+        // Invalida cache e atualiza
+        CACHE.at = 0;
+        CACHE.payload = null;
+        
+        await emitAdjustmentLog(client, {
+          executorId: interaction.user.id,
+          targetId,
+          qty,
+          weekKey,
+          before,
+          after,
+          roleLabel: getManualAdjustRoleLabel(perm.executorRoleId)
+        });
+
+        await safeUpdate("manual remove point");
+
+        return interaction.editReply({
+          content: `✅ Ajuste aplicado!\n➖ **${qty}** ponto(s) removido(s) de <@${targetId}> na semana atual (\`${weekKey}\`).`
+        });
+      }
+    } catch (e) {
+      console.error("[ALINV1_DASH] Erro em interaction listener:", e);
+    }
+  });
+}
 if (!globalThis.__SC_ALINV1_DASH_MSG_LISTENER__) {
   globalThis.__SC_ALINV1_DASH_MSG_LISTENER__ = true;
 

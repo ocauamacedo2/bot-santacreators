@@ -43,7 +43,7 @@ import { graficoManagersEmitUpdate } from "./GraficoManagers.js";
 // CONFIG
 // ===============================
 const CANAL_REGISTRO_MANAGER = "1392680204517769277"; // principal (zera domingo)
-const CANAL_REGISTRO_MANAGER_ARQUIVO = "1459789854408708319"; // arquivo/logs (NÃO zera)
+const CANAL_REGISTRO_MANAGER_ARQUIVO = "1486084441762693291"; // arquivo/logs (NÃO zera)
 const CANAL_DECISOES_ID = "1392677042931105843"; // avisos públicos de aprovar/reprovar (mantido)
 
 const CARGOS_PODE_REGISTRAR = [

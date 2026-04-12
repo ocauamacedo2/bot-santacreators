@@ -23,7 +23,7 @@ const CANAL_PAGAMENTO = "1387922662134775818";
 
 // Canal de logs (auditoria) do sistema de pagamentos
 // ⚠️ Troca aqui pelo teu canal de logs real, se for outro.
-const CANAL_LOG_PAGAMENTO = "1396974450314051584";
+const CANAL_LOG_PAGAMENTO = "1486084352403312843";
 
 // Textos padrão (se teu arquivo já tem em outro lugar, pode remover daqui)
 // Mantive pra evitar ReferenceError se não existir no teu arquivo.

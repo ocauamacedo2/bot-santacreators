@@ -17,7 +17,7 @@ import { resolveLogChannel } from "./channelResolver.js";
 
 // ================= CONFIGURAÇÃO =================
 const PANEL_CHANNEL_ID = "1477800974574682242"; // Canal do Painel
-const LOG_CHANNEL_ID = "1477802343407026257";   // Canal de Logs
+const LOG_CHANNEL_ID = "1486006866046615682";   // Canal de Logs
 
 // Arquivos de Dados
 const __filename = fileURLToPath(import.meta.url);

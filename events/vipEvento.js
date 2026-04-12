@@ -22,7 +22,7 @@ import { dashEmit } from "../utils/dashHub.js";
 const VIP_MENU_CHANNEL_ID = "1414718336826081330"; // onde fica o MENU e os REGISTROS
 const VIP_NOTIFY_CHANNEL_ID = "1424489278615978114"; // notificação de novo registro
 const VIP_CHECK_MENU_CHAT_ID = "1387922662134775818"; // referência ao "outro menu" para checagem
-const VIP_LOGS_CHANNEL_ID = "1414726734472941708"; // logs de ações (tudo)
+const VIP_LOGS_CHANNEL_ID = "1486084363778261072"; // logs de ações (tudo)
 
 // ✅ Arquivo do cronograma para dados automáticos
 const __filename = fileURLToPath(import.meta.url);

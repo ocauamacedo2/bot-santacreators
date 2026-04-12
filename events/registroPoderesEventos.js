@@ -14,7 +14,7 @@ import { dashEmit } from "../utils/dashHub.js";
 
 // ======= CONFIG =======
 const SC_PWR_MENU_CHANNEL_ID = "1416693217415663657";
-const SC_PWR_LEMBRETES_CHANNEL_ID = "1416693076771999844";
+const SC_PWR_LEMBRETES_CHANNEL_ID = "1486006779425853582";
 
 // ✅ NOVO: canal que o GeralDash / Ranking escaneiam para EVENTO / EVENTO PODER
 const SC_PWR_EVENTOS_LOG_CHANNEL_ID = "1392618646630568076";

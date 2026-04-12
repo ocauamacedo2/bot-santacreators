@@ -20,7 +20,7 @@ const __dirname = path.dirname(__filename);
 
 // ================= CONFIG =================
 const CHANNEL_DISPLAY_ID = "1470953978790412462";
-const CHANNEL_LOGS_ID = "1470954366507683891";
+const CHANNEL_LOGS_ID = "1486006789752229918";
 
 const GIF_URL = "https://media.discordapp.net/attachments/1362477839944777889/1384245215249825832/standard_2rss.gif";
 const COLOR_THEME = "#9b59b6"; // Roxo SantaCreators

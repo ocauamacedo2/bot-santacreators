@@ -3,12 +3,12 @@ import { EmbedBuilder, AuditLogEvent } from 'discord.js';
 // ================== CONFIGURAÇÃO DE LOGS ==================
 const MAIN_GUILD_ID = '1262262852782129183';
 
-const CENTRAL_LOG_BAN_ID = process.env.LOG_BAN || '1377813917866397726'; // Canal central para bans
-const CENTRAL_LOG_UNBAN_ID = process.env.LOG_UNBAN || '1377813917866397726'; // Canal central para unbans
+const CENTRAL_LOG_BAN_ID = process.env.LOG_BAN || '1362540782829048170'; // Canal central para bans
+const CENTRAL_LOG_UNBAN_ID = process.env.LOG_UNBAN || '1362540930300641490'; // Canal central para unbans
 
 // Mapeamento de Guild ID para Canal de Log Local
 const LOCAL_LOG_CHANNELS = {
-  '1262262852782129183': '1377813917866397726', // Principal (logs no próprio canal central)
+  '1262262852782129183': '1362540782829048170', // Principal (logs no próprio canal central)
   '1362899773992079533': '1363295055384809483', // Cidade Santa -> #sc-logs
   '1452416085751234733': '1455312395269443813', // Administração -> #sc-logs
 };

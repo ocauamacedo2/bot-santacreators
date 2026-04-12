@@ -1,7 +1,7 @@
 // commands/admin/apagarchat.js
 import { EmbedBuilder, PermissionsBitField } from 'discord.js';
 
-const LOG_CHANNEL_ID = '1459398755517333648';
+const LOG_CHANNEL_ID = '1486006769296740532';
 
 // pega prefixo do .env (ou usa !)
 function getPrefix() {

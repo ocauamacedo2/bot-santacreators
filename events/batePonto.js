@@ -54,7 +54,7 @@ export default async function setupBatePonto(client) {
     coord: "1417602334036463656",
     responsaveis: "1425943893400227892",
     bateponto_log: "1427956344148852856",
-    calendar: "1417602545953804328"
+    calendar: "1486006809679364197"
   },
   ROLES_ENV: "rolespermissionbateponto",
   CLEAR_ROLES_ENV: "rolespermissionbatepontoclear",
