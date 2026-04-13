@@ -165,13 +165,22 @@ export default {
 
   async _coletarAnexos(message) {
     const arquivos = [];
+    let totalSize = 0;
+    const MAX_UPLOAD_BYTES = 7.5 * 1024 * 1024; // Limite de segurança de 7.5MB
+
     for (const att of message.attachments.values()) {
+      if (totalSize + att.size > MAX_UPLOAD_BYTES) {
+        console.warn(`[say] Ignorando anexo ${att.name} por exceder o limite de tamanho total.`);
+        continue;
+      }
+
       try {
         const res = await fetch(att.url);
         const buffer = Buffer.from(await res.arrayBuffer());
         const file = new AttachmentBuilder(buffer, { name: att.name });
         if (att.spoiler) file.setSpoiler(true);
         arquivos.push(file);
+        totalSize += att.size;
       } catch (err) {
         console.error(`[say] Falha ao baixar anexo ${att.name}:`, err);
       }

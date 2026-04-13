@@ -38,6 +38,7 @@ import {
 
 import fs from "fs";
 import path from "path";
+import fetch from "node-fetch";
 
 import { getCachedMessage } from "./_deleteCache.js";
 
@@ -834,6 +835,8 @@ export default {
       const attachments = [];
       const savedFiles = [];
       const rawAttachmentInfos = [];
+      let totalSize = 0;
+      const MAX_UPLOAD_BYTES = 7.5 * 1024 * 1024; // Limite de segurança de 7.5MB
 
       // anexos diretos do evento
       if (message.attachments?.size) {
@@ -846,11 +849,18 @@ export default {
             );
 
             await downloadToFile(att.url, filePath);
-            savedFiles.push({ filePath, originalName: name, url: att.url, contentType: att.contentType ?? null });
-            attachments.push(new AttachmentBuilder(filePath, { name }));
-            rawAttachmentInfos.push(
-              `• \`${name}\`${att.contentType ? ` • ${att.contentType}` : ""}\n${att.url}`
-            );
+            const stats = fs.statSync(filePath);
+
+            if (totalSize + stats.size < MAX_UPLOAD_BYTES) {
+              totalSize += stats.size;
+              savedFiles.push({ filePath, originalName: name, url: att.url, contentType: att.contentType ?? null });
+              attachments.push(new AttachmentBuilder(filePath, { name }));
+              rawAttachmentInfos.push(
+                `• \`${name}\`${att.contentType ? ` • ${att.contentType}` : ""}\n${att.url}`
+              );
+            } else {
+              rawAttachmentInfos.push(`• \`${name}\` (⚠️ Muito grande para upload)\n${att.url}`);
+            }
           } catch {}
         }
       }
@@ -867,16 +877,21 @@ export default {
           );
 
           await downloadToFile(a.url, filePath);
-          savedFiles.push({
-            filePath,
-            originalName: name,
-            url: a.url,
-            contentType: a.contentType ?? null,
-          });
-          attachments.push(new AttachmentBuilder(filePath, { name }));
-          rawAttachmentInfos.push(
-            `• \`${name}\`${a.contentType ? ` • ${a.contentType}` : ""}\n${a.url}`
-          );
+          const stats = fs.statSync(filePath);
+
+          if (totalSize + stats.size < MAX_UPLOAD_BYTES) {
+            totalSize += stats.size;
+            savedFiles.push({
+              filePath,
+              originalName: name,
+              url: a.url,
+              contentType: a.contentType ?? null,
+            });
+            attachments.push(new AttachmentBuilder(filePath, { name }));
+            rawAttachmentInfos.push(`• \`${name}\`${a.contentType ? ` • ${a.contentType}` : ""}\n${a.url}`);
+          } else {
+            rawAttachmentInfos.push(`• \`${name}\` (⚠️ Muito grande para upload)\n${a.url}`);
+          }
         } catch {}
       }
 
@@ -892,14 +907,20 @@ export default {
           await downloadToFile(embedImgUrl, filePath).catch(() => null);
 
           if (fs.existsSync(filePath)) {
-            savedFiles.push({
-              filePath,
-              originalName: name,
-              url: embedImgUrl,
-              contentType: `image/${ext}`,
-            });
-            attachments.push(new AttachmentBuilder(filePath, { name }));
-            rawAttachmentInfos.push(`• \`${name}\` • imagem de embed\n${embedImgUrl}`);
+            const stats = fs.statSync(filePath);
+            if (totalSize + stats.size < MAX_UPLOAD_BYTES) {
+              totalSize += stats.size;
+              savedFiles.push({
+                filePath,
+                originalName: name,
+                url: embedImgUrl,
+                contentType: `image/${ext}`,
+              });
+              attachments.push(new AttachmentBuilder(filePath, { name }));
+              rawAttachmentInfos.push(`• \`${name}\` • imagem de embed\n${embedImgUrl}`);
+            } else {
+              rawAttachmentInfos.push(`• \`imagem_embed\` (⚠️ Muito grande para upload)\n${embedImgUrl}`);
+            }
           }
         }
       } catch {}
