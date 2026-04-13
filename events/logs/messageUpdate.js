@@ -10,8 +10,8 @@ import {
 } from 'discord.js';
 
 // >>> CONFIG
-const BOT_LOG_CHANNEL_ID = '1458914126461141083';
-const HUMAN_LOG_CHANNEL_ID = '1377841734410571859';
+const BOT_LOG_CHANNEL_ID = '1486084307897417899';
+const HUMAN_LOG_CHANNEL_ID = '1486084299743826136';
 
 // corta texto com segurança
 function cut(text, max = 1024) {
