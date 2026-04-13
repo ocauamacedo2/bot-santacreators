@@ -1,7 +1,7 @@
 // /application/events/logs/messageDeleteBulk.js
 import { EmbedBuilder, PermissionsBitField } from "discord.js";
 
-const LOG_CHANNEL_ID = "1377834202417856732";
+const LOG_CHANNEL_ID = "1486084272862400706";
 
 export default {
   name: "messageDeleteBulk",
