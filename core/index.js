@@ -441,6 +441,7 @@ const setupEventHandlers = () => {
       await formsCreatorHandleMessage(message, client);
       if (await setStaffV2HandleMessage(message, client)) return;
       if (await doacaoHandleMessage(message, client)) return;
+      if (await vipEventoHandleMessage(message, client)) return;
 
       await entrevistasTickets.onMessageCreate(message);
       await messageCreateHandler.execute(message, [], client);
@@ -584,7 +585,7 @@ const setupEventHandlers = () => {
     try { await setStaffOnReady(client); } catch {}
     try { await connectStatusOnReady(client); } catch {}
     try { await alinhamentosOnReady(client); } catch {}
-    try { await vipRegistroOnReady(client);} catch {}
+    try { await vipEventoOnReady(client); } catch {}
     try { await lideresConvitesOnReady(client); } catch {}
     try { await setStaffV2OnReady(client); } catch {}
     try { await blacklistEventosOnReady(client); } catch {}

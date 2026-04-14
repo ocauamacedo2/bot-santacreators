@@ -39,6 +39,32 @@ const VIP_MAIN_FILTER_SOLIC_ID = "vip_menu_solicitados";
 const VIP_MAIN_FILTER_NAOCLIC_ID = "vip_menu_naoclicados";
 const VIP_MAIN_MOTIVO_ID = "vip_menu_motivo";
 
+const VIP_MAIN_REGISTER_IDS = new Set([
+  VIP_MAIN_REGISTER_ID,
+  "vip_abrir_formulario",
+  "vip_abrir_form",
+  "vip_menu_abrir_formulario",
+]);
+
+const VIP_MAIN_FILTER_SOLIC_IDS = new Set([
+  VIP_MAIN_FILTER_SOLIC_ID,
+  "vip_menu_solicitados_antigo",
+  "vip_solicitados",
+]);
+
+const VIP_MAIN_FILTER_NAOCLIC_IDS = new Set([
+  VIP_MAIN_FILTER_NAOCLIC_ID,
+  "vip_menu_nao_clicados",
+  "vip_naoclicados",
+  "vip_nao_clicados",
+]);
+
+const VIP_MAIN_MOTIVO_IDS = new Set([
+  VIP_MAIN_MOTIVO_ID,
+  "vip_menu_motivo_antigo",
+  "vip_motivo",
+]);
+
 const VIP_GIF =
   "https://media.discordapp.net/attachments/1362477839944777889/1384245215249825832/standard_2rss.gif?ex=68b5ec51&is=68b49ad1&hm=f194706bc612abcd8cbbbf6d62d2c393d49339bfea8714ceab371a0a4c95a670&=";
 
@@ -167,6 +193,70 @@ function extractTargetIdFromComponents(rows = []) {
 
   const parts = btnRecebeu.split("_");
   return parts[3] || "none";
+}
+
+function isVipMainRegisterId(customId) {
+  return VIP_MAIN_REGISTER_IDS.has(customId);
+}
+
+function isVipMainSolicitadosId(customId) {
+  return VIP_MAIN_FILTER_SOLIC_IDS.has(customId);
+}
+
+function isVipMainNaoClicadosId(customId) {
+  return VIP_MAIN_FILTER_NAOCLIC_IDS.has(customId);
+}
+
+function isVipMainMotivoId(customId) {
+  return VIP_MAIN_MOTIVO_IDS.has(customId);
+}
+
+function parseVipLegacyAction(customId) {
+  if (!customId?.startsWith("vip_")) return null;
+
+  const parts = customId.split("_");
+
+  if (customId.startsWith("vip_solicitado_")) {
+    return {
+      action: "solicitado",
+      msgId: parts[2] || null,
+      targetId: null,
+    };
+  }
+
+  if (customId.startsWith("vip_recebeu_")) {
+    return {
+      action: "recebeu",
+      msgId: parts[2] || null,
+      targetId: parts[3] || "none",
+    };
+  }
+
+  if (customId.startsWith("vip_pago_")) {
+    return {
+      action: "recebeu",
+      msgId: parts[2] || null,
+      targetId: parts[3] || "none",
+    };
+  }
+
+  if (customId.startsWith("vip_negar_")) {
+    return {
+      action: "negar",
+      msgId: parts[2] || null,
+      targetId: parts[3] || "none",
+    };
+  }
+
+  if (customId.startsWith("vip_reprovar_")) {
+    return {
+      action: "negar",
+      msgId: parts[2] || null,
+      targetId: parts[3] || "none",
+    };
+  }
+
+  return null;
 }
 
 // =============================
@@ -326,13 +416,13 @@ function createStatusRow(
 
   const btnRecebeu = new ButtonBuilder()
     .setCustomId(`vip_recebeu_${messageId}_${targetId}`)
-    .setLabel("✅ Já recebeu")
+    .setLabel("💸 Já foi pago")
     .setStyle(ButtonStyle.Success)
     .setDisabled(disableRecebeu);
 
   const btnNegar = new ButtonBuilder()
     .setCustomId(`vip_negar_${messageId}_${targetId}`)
-    .setLabel("❌ Negar")
+    .setLabel("⛔ Reprovar pagamento")
     .setStyle(ButtonStyle.Danger)
     .setDisabled(disableNegar);
 
@@ -637,7 +727,7 @@ export async function vipEventoHandleInteraction(interaction, client) {
       const isAuth = hasVipAuth(interaction.member);
 
       // ---------- REGISTRAR ----------
-      if (customId === VIP_MAIN_REGISTER_ID) {
+      if (isVipMainRegisterId(customId)) {
         if (!isAuth) {
           await interaction.reply({
             content: "🚫 Você não tem permissão para registrar.",
@@ -710,7 +800,7 @@ export async function vipEventoHandleInteraction(interaction, client) {
       }
 
       // ---------- FILTRO SOLICITADOS ----------
-      if (customId === VIP_MAIN_FILTER_SOLIC_ID) {
+      if (isVipMainSolicitadosId(customId)) {
         if (!isAuth) {
           await interaction.reply({
             content: "🚫 Você não tem permissão para usar esse filtro.",
@@ -740,7 +830,7 @@ export async function vipEventoHandleInteraction(interaction, client) {
       }
 
       // ---------- FILTRO NÃO CLICADOS ----------
-      if (customId === VIP_MAIN_FILTER_NAOCLIC_ID) {
+          if (isVipMainMotivoId(customId)) {
         if (!isAuth) {
           await interaction.reply({
             content: "🚫 Você não tem permissão para usar esse filtro.",
@@ -876,23 +966,23 @@ export async function vipEventoHandleInteraction(interaction, client) {
     if (
       interaction.isButton() &&
       interaction.customId.startsWith("vip_") &&
-      ![
-        VIP_MAIN_REGISTER_ID,
-        VIP_MAIN_FILTER_SOLIC_ID,
-        VIP_MAIN_FILTER_NAOCLIC_ID,
-        VIP_MAIN_MOTIVO_ID,
-      ].includes(interaction.customId)
+      !isVipMainRegisterId(interaction.customId) &&
+      !isVipMainSolicitadosId(interaction.customId) &&
+      !isVipMainNaoClicadosId(interaction.customId) &&
+      !isVipMainMotivoId(interaction.customId)
     ) {
-      const parts = interaction.customId.split("_");
-      const action = parts[1];
+      const parsedAction = parseVipLegacyAction(interaction.customId);
+      if (!parsedAction?.action) return false;
+
+      const action = parsedAction.action;
 
       const isAuth = hasVipAuth(interaction.member);
       const canal = await client.channels.fetch(VIP_CANAL_ID).catch(() => null);
       if (!ensureIsTextChannel(canal)) return true;
 
       // ====== SOLICITADO ======
-      if (action === "solicitado" && parts[2]) {
-        const msgAlvo = await canal.messages.fetch(parts[2]).catch(() => null);
+      if (action === "solicitado" && parsedAction.msgId) {
+        const msgAlvo = await canal.messages.fetch(parsedAction.msgId).catch(() => null);
         if (!msgAlvo) {
           await interaction.reply({
             content: "❌ Registro não encontrado.",
@@ -967,9 +1057,9 @@ export async function vipEventoHandleInteraction(interaction, client) {
       }
 
       // ====== RECEBEU ======
-      if (action === "recebeu" && parts[2] && parts[3]) {
-        const msgId = parts[2];
-        const targetId = parts[3];
+      if (action === "recebeu" && parsedAction.msgId && parsedAction.targetId) {
+        const msgId = parsedAction.msgId;
+        const targetId = parsedAction.targetId;
 
         const msgAlvo = await canal.messages.fetch(msgId).catch(() => null);
         if (!msgAlvo) {
@@ -1034,9 +1124,9 @@ export async function vipEventoHandleInteraction(interaction, client) {
       }
 
       // ====== NEGAR ======
-      if (action === "negar" && parts[2] && parts[3]) {
-        const msgId = parts[2];
-        const targetId = parts[3];
+      if (action === "negar" && parsedAction.msgId && parsedAction.targetId) {
+        const msgId = parsedAction.msgId;
+        const targetId = parsedAction.targetId;
 
         if (!isAuth) {
           await interaction.reply({
