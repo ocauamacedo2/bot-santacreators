@@ -1,4 +1,4 @@
-// d:\santacreators-main\events\vipRegistro.js
+// ./application/events/vipRegistro.js
 import {
   EmbedBuilder,
   ActionRowBuilder,
@@ -12,35 +12,72 @@ import {
 
 import { dashEmit } from "../utils/dashHub.js";
 
-// Guard to prevent multiple initializations
-if (globalThis.__VIP_REGISTRO_MENSAL_LOADED__) {
+// Guard para evitar dupla carga
+if (globalThis.__VIP_REGISTRO_LOADED__) {
   // já carregado
 }
-globalThis.__VIP_REGISTRO_MENSAL_LOADED__ = true;
+globalThis.__VIP_REGISTRO_LOADED__ = true;
 
 // =============================
-// VIP REGISTRO (MENSAL)
+// CONFIG
 // =============================
 const VIP_CANAL_ID = "1411814379162308688";
-const VIP_MAIN_BUTTON_ID = "vip_registrar_btn";
+const VIP_REPROVA_CANAL_ID = "1411819432862285854";
+
+const VIP_MAIN_REGISTER_ID = "vip_menu_registrar";
+const VIP_MAIN_FILTER_SOLIC_ID = "vip_menu_solicitados";
+const VIP_MAIN_FILTER_NAOCLIC_ID = "vip_menu_naoclicados";
+const VIP_MAIN_MOTIVO_ID = "vip_menu_motivo";
+
+const VIP_MAIN_REGISTER_IDS = new Set([
+  VIP_MAIN_REGISTER_ID,
+  "vip_abrir_formulario",
+  "vip_abrir_form",
+  "vip_menu_abrir_formulario",
+  "vip_registrar_btn",
+]);
+
+const VIP_MAIN_FILTER_SOLIC_IDS = new Set([
+  VIP_MAIN_FILTER_SOLIC_ID,
+  "vip_menu_solicitados_antigo",
+  "vip_solicitados",
+]);
+
+const VIP_MAIN_FILTER_NAOCLIC_IDS = new Set([
+  VIP_MAIN_FILTER_NAOCLIC_ID,
+  "vip_menu_nao_clicados",
+  "vip_naoclicados",
+]);
+
+const VIP_MAIN_MOTIVO_IDS = new Set([
+  VIP_MAIN_MOTIVO_ID,
+  "vip_menu_motivo_antigo",
+  "vip_motivo",
+]);
+
 const VIP_GIF =
   "https://media.discordapp.net/attachments/1362477839944777889/1384245215249825832/standard_2rss.gif?ex=68b5ec51&is=68b49ad1&hm=f194706bc612abcd8cbbbf6d62d2c393d49339bfea8714ceab371a0a4c95a670&=";
 
-// canal onde cai a reprovação
-const VIP_REPROVA_CANAL_ID = "1411819432862285854";
-
-// Quem PODE registrar (abrir modal) OU operar nos botões dos registros:
+// Quem pode registrar/operar
 const VIP_AUTH = new Set([
   "1262262852949905408", // owner
   "1352408327983861844", // resp creator
   "1262262852949905409", // resp influ
   "1352407252216184833", // resp lider
-  "660311795327828008", // eu
+  "1388976314253312100", // coord creators
+  "660311795327828008",  // você
 ]);
 
-let ultimaMsgBotao = null;
+const CITY_ALIASES = [
+  { key: "grande", label: "Cidade Grande", aliases: ["grande", "cidade grande", "cg"] },
+  { key: "maresia", label: "Cidade Maresia", aliases: ["maresia", "cidade maresia", "cm"] },
+  { key: "santa", label: "Cidade Santa", aliases: ["santa", "cidade santa", "cs"] },
+  { key: "nobre", label: "Cidade Nobre", aliases: ["nobre", "cidade nobre", "cn"] },
+];
 
-// ====== HELPERS ======
+// =============================
+// HELPERS BÁSICOS
+// =============================
 function ensureIsTextChannel(ch) {
   return ch && ch.type === ChannelType.GuildText;
 }
@@ -59,20 +96,39 @@ function isDiscordId(text) {
 function extractId(text) {
   const t = (text || "").trim();
   if (isDiscordId(t)) return t;
-
   const m = t.match(/^<@!?(\d{17,20})>$/);
   if (m?.[1]) return m[1];
-
   return null;
 }
 
 function vipNormalize(t) {
   const s = (t || "").toString().trim().toLowerCase();
-  if (/(ouro)/.test(s)) return "OURO";
-  if (/(prata)/.test(s)) return "PRATA";
-  if (/(bronze)/.test(s)) return "BRONZE";
-  if (/(rolepass|role pass|pass)/.test(s)) return "ROLEPASS";
+  if (/(ouro)/i.test(s)) return "OURO";
+  if (/(prata)/i.test(s)) return "PRATA";
+  if (/(bronze)/i.test(s)) return "BRONZE";
+  if (/(rolepass|role pass|pass)/i.test(s)) return "ROLEPASS";
   return null;
+}
+
+function normalizeCity(raw) {
+  const s = (raw || "").toString().trim().toLowerCase();
+  if (!s) return null;
+  for (const city of CITY_ALIASES) {
+    if (city.aliases.some((a) => a === s)) {
+      return city.label;
+    }
+  }
+  return null;
+}
+
+function cityDecor(cityLabel) {
+  switch (cityLabel) {
+    case "Cidade Grande": return "🏙️";
+    case "Cidade Maresia": return "🌊";
+    case "Cidade Santa": return "⛪";
+    case "Cidade Nobre": return "👑";
+    default: return "📍";
+  }
 }
 
 const vipDecor = {
@@ -83,726 +139,359 @@ const vipDecor = {
   CUSTOM: { label: "VIP EVENTO", emoji: "💎", color: "#8e44ad" },
 };
 
-// ====== HELPERS VISUAIS ======
-function buildMainButton() {
-  return new ButtonBuilder()
-    .setCustomId(VIP_MAIN_BUTTON_ID)
-    .setLabel("💎 Registrar VIP / Rolepass")
-    .setStyle(ButtonStyle.Primary);
+function disableComponents(rows = []) {
+  return rows.map((row) => {
+    const clonedRow = ActionRowBuilder.from(row);
+    clonedRow.components = clonedRow.components.map((c) =>
+      ButtonBuilder.from(c).setDisabled(true)
+    );
+    return clonedRow;
+  });
+}
+
+function getFieldValue(embedLike, fieldName) {
+  const fields = embedLike?.fields || embedLike?.data?.fields || [];
+  const f = fields.find((x) => x.name === fieldName);
+  return (f?.value || "").trim();
+}
+
+function getStatusValueFromEmbed(embedLike) {
+  return getFieldValue(embedLike, "📌 Status");
+}
+
+function extractTargetIdFromComponents(rows = []) {
+  const ids = rows
+    ?.flatMap((row) => row.components || [])
+    ?.map((c) => c.customId)
+    ?.filter(Boolean) || [];
+
+  const btnRecebeu = ids.find((id) => id.startsWith("vip_recebeu_") || id.startsWith("vip_pago_"));
+  if (!btnRecebeu) return "none";
+
+  const parts = btnRecebeu.split("_");
+  return parts[3] || "none";
+}
+
+function isVipMainRegisterId(customId) {
+  return VIP_MAIN_REGISTER_IDS.has(customId);
+}
+
+function isVipMainSolicitadosId(customId) {
+  return VIP_MAIN_FILTER_SOLIC_IDS.has(customId);
+}
+
+function isVipMainNaoClicadosId(customId) {
+  return VIP_MAIN_FILTER_NAOCLIC_IDS.has(customId);
+}
+
+function isVipMainMotivoId(customId) {
+  return VIP_MAIN_MOTIVO_IDS.has(customId);
+}
+
+function parseVipLegacyAction(customId) {
+  if (!customId?.startsWith("vip_")) return null;
+  const parts = customId.split("_");
+
+  if (customId.startsWith("vip_solicitado_")) {
+    return { action: "solicitado", msgId: parts[2] || null, targetId: null };
+  }
+  if (customId.startsWith("vip_recebeu_") || customId.startsWith("vip_pago_")) {
+    return { action: "recebeu", msgId: parts[2] || null, targetId: parts[3] || "none" };
+  }
+  if (customId.startsWith("vip_negar_") || customId.startsWith("vip_reprovar_")) {
+    return { action: "negar", msgId: parts[2] || (parts[1] === "reprovar" ? parts[2] : null), targetId: parts[3] || "none" };
+  }
+  return null;
+}
+
+// =============================
+// UI MENU
+// =============================
+function createMainMenuRow() {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(VIP_MAIN_REGISTER_ID)
+      .setLabel("💎 Registrar VIP / Rolepass")
+      .setStyle(ButtonStyle.Primary),
+
+    new ButtonBuilder()
+      .setCustomId(VIP_MAIN_FILTER_SOLIC_ID)
+      .setLabel("📨 Solicitados")
+      .setStyle(ButtonStyle.Secondary),
+
+    new ButtonBuilder()
+      .setCustomId(VIP_MAIN_FILTER_NAOCLIC_ID)
+      .setLabel("🕒 Não clicados")
+      .setStyle(ButtonStyle.Secondary),
+
+    new ButtonBuilder()
+      .setCustomId(VIP_MAIN_MOTIVO_ID)
+      .setLabel("📌 Motivo")
+      .setStyle(ButtonStyle.Secondary)
+  );
+}
+
+async function limparMenusAntigos(channel) {
+  const msgs = await channel.messages.fetch({ limit: 100 }).catch(() => null);
+  if (!msgs) return null;
+
+  const menus = msgs.filter((m) => {
+    const ehDoBot = m.author?.id === channel.client.user.id;
+    if (!ehDoBot || m.components?.length === 0) return false;
+    const ids = m.components.flatMap((row) => row.components || []).map((c) => c.customId);
+    return ids.some(id => VIP_MAIN_REGISTER_IDS.has(id));
+  });
+
+  const ordenadas = [...menus.values()].sort((a, b) => b.createdTimestamp - a.createdTimestamp);
+  const paraDeletar = ordenadas.slice(1);
+  for (const msg of paraDeletar) { await msg.delete().catch(() => {}); }
+  return ordenadas[0] || null;
+}
+
+async function createFreshMainMenu(channel) {
+  await limparMenusAntigos(channel);
+  return await channel.send({
+    embeds: [buildMainEmbed()],
+    components: [createMainMenuRow()],
+  }).catch(() => null);
+}
+
+async function moveMainMenuToBottom(channel) {
+  await createFreshMainMenu(channel).catch(() => {});
+}
+
+function moveMainMenuToBottomLater(client, delayMs = 1200) {
+  setTimeout(async () => {
+    try {
+      const canal = await client.channels.fetch(VIP_CANAL_ID).catch(() => null);
+      if (!ensureIsTextChannel(canal)) return;
+      await moveMainMenuToBottom(canal);
+    } catch {}
+  }, delayMs);
+}
+
+// =============================
+// BOTÕES DOS REGISTROS
+// =============================
+function createStatusRow(messageId, targetId, { disableSolicitado = false } = {}) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`vip_solicitado_${messageId}`).setLabel("📨 Já foi solicitado").setStyle(ButtonStyle.Secondary).setDisabled(disableSolicitado),
+    new ButtonBuilder().setCustomId(`vip_recebeu_${messageId}_${targetId}`).setLabel("💸 Já foi pago").setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`vip_negar_${messageId}_${targetId}`).setLabel("⛔ Reprovar pagamento").setStyle(ButtonStyle.Danger)
+  );
+}
+
+// =============================
+// FILTROS
+// =============================
+async function moverRegistrosPorFiltroVIP(channel, filtro) {
+  const mensagens = await channel.messages.fetch({ limit: 100 }).catch(() => null);
+  if (!mensagens) return { movidos: 0 };
+
+  const lista = [...mensagens.values()]
+    .filter((m) => m.author?.id === channel.client.user.id && m.embeds?.length > 0)
+    .filter((m) => {
+      const ids = m.components?.flatMap((row) => row.components || []).map((c) => c.customId).filter(Boolean) || [];
+      return ids.some((id) => id.startsWith("vip_solicitado_") || id.startsWith("vip_recebeu_") || id.startsWith("vip_negar_"));
+    });
+
+  let movidos = 0;
+  for (const msg of lista) {
+    const embedRaw = msg.embeds?.[0];
+    if (!embedRaw) continue;
+    const embedOriginal = EmbedBuilder.from(embedRaw);
+    const statusValue = getStatusValueFromEmbed(embedOriginal);
+
+    const ehSolicitado = /JÁ FOI SOLICITADO/i.test(statusValue);
+    const ehAguardando = /Aguardando/i.test(statusValue) || (!ehSolicitado && !/RECEBIDO|REPROVADO/i.test(statusValue));
+
+    if ((filtro === "solicitados" && ehSolicitado) || (filtro === "naoclicados" && ehAguardando)) {
+      const msgNova = await channel.send({ embeds: [embedOriginal] }).catch(() => null);
+      if (msgNova) {
+        const targetId = extractTargetIdFromComponents(msg.components || []);
+        await msgNova.edit({ components: [createStatusRow(msgNova.id, targetId, { disableSolicitado: ehSolicitado })] }).catch(() => {});
+        await msg.delete().catch(() => {});
+        movidos++;
+      }
+    }
+  }
+  return { movidos };
+}
+
+function atualizarCampoStatusVip(embedBuilder, novoTexto, cor) {
+  const fields = Array.isArray(embedBuilder.data.fields) ? [...embedBuilder.data.fields] : [];
+  const idx = fields.findIndex((f) => f.name === "📌 Status");
+  const novo = { name: "📌 Status", value: novoTexto, inline: false };
+  if (idx >= 0) fields[idx] = novo; else fields.push(novo);
+  embedBuilder.setFields(fields);
+  if (cor) embedBuilder.setColor(cor);
+  return embedBuilder;
+}
+
+// =============================
+// CRIAÇÃO DE REGISTRO
+// =============================
+async function createVipRecordInternal(client, {
+  registrarUser, nomeEquipe, beneficiarioRaw, tipoRaw, cidadeRaw, motivoRegistro, isProgrammatic = false,
+}) {
+  const canal = await client.channels.fetch(VIP_CANAL_ID).catch(() => null);
+  if (!ensureIsTextChannel(canal)) return null;
+
+  const extractedId = extractId(beneficiarioRaw);
+  let beneficiarioUser = null;
+  if (extractedId) try { beneficiarioUser = await client.users.fetch(extractedId); } catch {}
+
+  const tipoNormalizado = vipNormalize(tipoRaw);
+  const decor = tipoNormalizado ? vipDecor[tipoNormalizado] : vipDecor.CUSTOM;
+  const cidadeNormalizada = normalizeCity(cidadeRaw) || "Cidade Santa";
+
+  const beneficiarioMention = extractedId ? `<@${extractedId}>` : (beneficiarioRaw || "Não informado");
+  const fields = [
+    { name: "👤 Beneficiário", value: extractedId ? `${beneficiarioMention}\n\`${extractedId}\`` : `${beneficiarioMention}`, inline: true },
+    { name: "🏷️ Nome (Equipe)", value: nomeEquipe || "-", inline: true },
+    { name: "🧾 Tipo", value: tipoNormalizado ? `**${decor.label}**` : `**${tipoRaw || "VIP EVENTO"}**`, inline: true },
+    { name: `${cityDecor(cidadeNormalizada)} Cidade`, value: cidadeNormalizada, inline: true },
+    { name: "✍️ Registrado por", value: registrarUser?.id ? `<@${registrarUser.id}>` : "`(sistema)`", inline: true },
+    { name: "🕒 Data", value: `<t:${Math.floor(Date.now() / 1000)}:f>`, inline: true },
+    { name: "📌 Status", value: "`Aguardando ação...`", inline: false },
+  ];
+
+  if (motivoRegistro) fields.splice(4, 0, { name: "📌 Motivo do registro", value: motivoRegistro, inline: false });
+
+  const embed = new EmbedBuilder()
+    .setColor(decor.color).setTitle(tipoNormalizado ? `${decor.emoji} ${decor.label} — 1 mês + Destaque` : `${decor.emoji} ${decor.label} — Premiação`)
+    .setDescription(tipoNormalizado ? ["Registro de **premium** criado.", "Inclui: **1 mês** + **Destaque**."].join("\n") : ["Registro de **premium** criado.", "Premiação registrada pelo sistema."].join("\n"))
+    .addFields(fields).setAuthor({ name: registrarUser?.tag ? `Registrado por ${registrarUser.tag}` : "Registro programático", iconURL: registrarUser?.displayAvatarURL?.() || null })
+    .setThumbnail(beneficiarioUser?.displayAvatarURL?.({ size: 256 }) || registrarUser?.displayAvatarURL?.() || null)
+    .setImage(VIP_GIF).setFooter({ text: isProgrammatic ? "SantaCreators – VIP / Premiação" : "SantaCreators – VIP / Rolepass" }).setTimestamp();
+
+  const msg = await canal.send({ embeds: [embed] }).catch(() => null);
+  if (!msg) return null;
+  await msg.edit({ components: [createStatusRow(msg.id, extractedId || "none")] }).catch(() => {});
+
+  try { dashEmit("vip:criado", { by: registrarUser?.id || "system", __at: Date.now(), targetId: extractedId, tipo: tipoRaw, cidade: cidadeNormalizada }); } catch {}
+  return { message: msg };
+}
+
+// =============================
+// EXPORTS CORE
+// =============================
+export async function createVipRecordProgrammatically(client, data = {}) {
+  return await createVipRecordInternal(client, { ...data, isProgrammatic: true });
+}
+
+export async function vipRegistroOnReady(client) {
+  const canal = await client.channels.fetch(VIP_CANAL_ID).catch(() => null);
+  if (ensureIsTextChannel(canal)) await createFreshMainMenu(canal);
+}
+
+export async function vipRegistroHandleMessage(message, client) {
+  if (!message.guild || message.author.bot) return false;
+  if (message.content.toLowerCase() === "!vipmenu") {
+    if (!hasVipAuth(message.member)) return message.reply("🚫 Sem permissão.").then(m => setTimeout(() => { m.delete().catch(() => {}); message.delete().catch(() => {}); }, 5000));
+    const canal = await client.channels.fetch(VIP_CANAL_ID).catch(() => null);
+    if (!ensureIsTextChannel(canal)) return message.reply("❌ Canal inválido.");
+    await message.delete().catch(() => {});
+    await createFreshMainMenu(canal);
+    return true;
+  }
+  return false;
+}
+
+export async function vipRegistroHandleInteraction(interaction, client) {
+  try {
+    const isAuth = hasVipAuth(interaction.member);
+    if (interaction.isButton()) {
+      const cid = interaction.customId;
+      if (isVipMainRegisterId(cid)) {
+        if (!isAuth) return interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
+        const modal = new ModalBuilder().setCustomId("vip_modal_submit").setTitle("💎 Registrar VIP / Rolepass").addComponents(
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("vip_nome_membro").setLabel("Nome do membro da equipe").setStyle(TextInputStyle.Short).setRequired(true)),
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("vip_beneficiario").setLabel("Beneficiário (ID, @menção ou texto)").setStyle(TextInputStyle.Short).setRequired(true)),
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("vip_tipo").setLabel("Tipo (Ouro/Prata/Bronze/Rolepass)").setStyle(TextInputStyle.Short).setRequired(true)),
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("vip_cidade").setLabel("Cidade (Grande, Maresia, Santa, Nobre)").setStyle(TextInputStyle.Short).setRequired(true)),
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("vip_motivo_registro").setLabel("Motivo").setStyle(TextInputStyle.Paragraph).setRequired(false))
+        );
+        await interaction.showModal(modal);
+        moveMainMenuToBottomLater(client);
+        return true;
+      }
+      if (isVipMainSolicitadosId(cid) || isVipMainNaoClicadosId(cid)) {
+        if (!isAuth) return interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
+        await interaction.deferReply({ ephemeral: true });
+        const canal = await client.channels.fetch(VIP_CANAL_ID).catch(() => null);
+        const type = isVipMainSolicitadosId(cid) ? "solicitados" : "naoclicados";
+        const { movidos } = await moverRegistrosPorFiltroVIP(canal, type);
+        await interaction.editReply(`✅ Filtro aplicado. Movidos: **${movidos}**`);
+        moveMainMenuToBottomLater(client);
+        return true;
+      }
+      if (isVipMainMotivoId(cid)) {
+        return interaction.reply({ embeds: [new EmbedBuilder().setColor("#8e44ad").setTitle("📌 Objetivo").setDescription("Menu para organização de VIPs.")], ephemeral: true });
+      }
+
+      const legacy = parseVipLegacyAction(cid);
+      if (legacy) {
+        const canal = await client.channels.fetch(VIP_CANAL_ID).catch(() => null);
+        const msg = await canal.messages.fetch(legacy.msgId).catch(() => null);
+        if (!msg) return interaction.reply({ content: "❌ Não encontrado.", ephemeral: true });
+
+        if (legacy.action === "solicitado") {
+          if (!isAuth) return interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
+          const emb = EmbedBuilder.from(msg.embeds[0]);
+          atualizarCampoStatusVip(emb, `📨 **JÁ FOI SOLICITADO**\nPor <@${interaction.user.id}> em <t:${Math.floor(Date.now() / 1000)}:f>`, "#f1c40f");
+          await msg.edit({ embeds: [emb], components: [createStatusRow(msg.id, extractTargetIdFromComponents(msg.components), { disableSolicitado: true })] });
+          return interaction.reply({ content: "📨 Marcado.", ephemeral: true });
+        }
+        if (legacy.action === "recebeu") {
+          if (!isAuth && interaction.user.id !== legacy.targetId) return interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
+          const emb = EmbedBuilder.from(msg.embeds[0]);
+          atualizarCampoStatusVip(emb, `✅ **PAGO / RECEBIDO**\nPor <@${interaction.user.id}> em <t:${Math.floor(Date.now() / 1000)}:f>`, "Green");
+          await msg.edit({ embeds: [emb], components: disableComponents(msg.components) });
+          dashEmit("vip:pago", { by: interaction.user.id, targetId: legacy.targetId });
+          return interaction.reply({ content: "✅ Confirmado.", ephemeral: true });
+        }
+        if (legacy.action === "negar") {
+          if (!isAuth) return interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
+          const modal = new ModalBuilder().setCustomId(`vip_modal_negar_${legacy.msgId}_${legacy.targetId}`).setTitle("❌ Reprovar").addComponents(
+            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("vip_motivo_reprovacao").setLabel("Motivo").setStyle(TextInputStyle.Paragraph).setRequired(true))
+          );
+          return interaction.showModal(modal);
+        }
+      }
+    }
+
+    if (interaction.isModalSubmit()) {
+      if (interaction.customId === "vip_modal_submit") {
+        const res = await createVipRecordInternal(client, {
+          registrarUser: interaction.user, nomeEquipe: interaction.fields.getTextInputValue("vip_nome_membro"),
+          beneficiarioRaw: interaction.fields.getTextInputValue("vip_beneficiario"), tipoRaw: interaction.fields.getTextInputValue("vip_tipo"),
+          cidadeRaw: interaction.fields.getTextInputValue("vip_cidade"), motivoRegistro: interaction.fields.getTextInputValue("vip_motivo_registro")
+        });
+        if (res?.error) return interaction.reply({ content: "❌ Cidade inválida.", ephemeral: true });
+        const canal = await client.channels.fetch(VIP_CANAL_ID).catch(() => null);
+        if (canal) await moveMainMenuToBottom(canal);
+        return interaction.reply({ content: "✅ Registro criado!", ephemeral: true });
+      }
+      if (interaction.customId.startsWith("vip_modal_negar_")) {
+        const [, , , msgId, targetId] = interaction.customId.split("_");
+        const motivo = interaction.fields.getTextInputValue("vip_motivo_reprovacao");
+        const canal = await client.channels.fetch(VIP_CANAL_ID).catch(() => null);
+        const msg = await canal.messages.fetch(msgId).catch(() => null);
+        const emb = EmbedBuilder.from(msg.embeds[0]);
+        atualizarCampoStatusVip(emb, `❌ **REPROVADO**\nPor <@${interaction.user.id}>\nMotivo: ${motivo}`, "Red");
+        await msg.edit({ embeds: [emb], components: disableComponents(msg.components) });
+        const reprovaCh = await client.channels.fetch(VIP_REPROVA_CANAL_ID).catch(() => null);
+        if (reprovaCh) reprovaCh.send({ embeds: [new EmbedBuilder().setColor("Red").setTitle("❌ VIP Reprovado").setDescription(`Beneficiário: <@${targetId}>\nMotivo: ${motivo}\nPor: ${interaction.user.tag}`)] });
+        return interaction.reply({ content: "❌ Reprovado com sucesso.", ephemeral: true });
+      }
+    }
+  } catch (e) { console.error("[VIP Registro] Erro:", e); }
 }
 
 function buildMainEmbed() {
   return new EmbedBuilder()
-    .setColor("#8e44ad")
-    .setTitle("💜 Registro de VIP Mensal + Destaque")
-    .setDescription(
-      [
-        "Use o botão abaixo para **registrar**:",
-        "• **VIP Ouro / VIP Prata / VIP Bronze / Rolepass**",
-        "• **Duração:** 1 mês **+ Destaque**",
-        "",
-        "📝 **O que você vai informar:**",
-        "• Nome do membro da equipe",
-        "• **ID do Discord do beneficiário** (será mencionado)",
-        "• Qual VIP? *(Ouro/Prata/Bronze/Rolepass)*",
-      ].join("\n")
-    )
-    .setImage(VIP_GIF)
-    .setFooter({ text: "SantaCreators – Sistema Oficial de Premium" });
-}
-
-async function ensureMainButton(channel) {
-  const msgs = await channel.messages.fetch({ limit: 50 }).catch(() => null);
-  if (!msgs) return null;
-
-  const minhasComBotao = msgs.filter(
-    (m) =>
-      m.author?.id === channel.client.user.id &&
-      m.components?.[0]?.components?.[0]?.customId === VIP_MAIN_BUTTON_ID
-  );
-
-  if (minhasComBotao.size > 0) {
-    const ordered = [...minhasComBotao.values()].sort(
-      (a, b) => b.createdTimestamp - a.createdTimestamp
-    );
-    const keep = ordered[0];
-    ultimaMsgBotao = keep.id;
-
-    for (let i = 1; i < ordered.length; i++) {
-      ordered[i].delete().catch(() => {});
-    }
-
-    return keep;
-  }
-
-  const row = new ActionRowBuilder().addComponents(buildMainButton());
-  const embed = buildMainEmbed();
-  const sent = await channel
-    .send({ embeds: [embed], components: [row] })
-    .catch(() => null);
-
-  if (sent) ultimaMsgBotao = sent.id;
-  return sent;
-}
-
-async function createFreshMainButton(channel) {
-  const msgs = await channel.messages.fetch({ limit: 50 }).catch(() => null);
-  if (msgs) {
-    const minhas = msgs.filter(
-      (m) =>
-        m.author?.id === channel.client.user.id &&
-        m.components?.[0]?.components?.[0]?.customId === VIP_MAIN_BUTTON_ID
-    );
-
-    for (const m of minhas.values()) {
-      await m.delete().catch(() => {});
-    }
-  }
-
-  const row = new ActionRowBuilder().addComponents(buildMainButton());
-  const embed = buildMainEmbed();
-  const sent = await channel
-    .send({ embeds: [embed], components: [row] })
-    .catch(() => null);
-
-  if (sent) ultimaMsgBotao = sent.id;
-  return sent;
-}
-
-function createStatusRow(messageId, targetId) {
-  const btnSolic = new ButtonBuilder()
-    .setCustomId(`vip_solicitado_${messageId}`)
-    .setLabel("📨 Já foi solicitado")
-    .setStyle(ButtonStyle.Secondary);
-
-  const btnRecebeu = new ButtonBuilder()
-    .setCustomId(`vip_recebeu_${messageId}_${targetId}`)
-    .setLabel("✅ Já recebeu")
-    .setStyle(ButtonStyle.Success);
-
-  const btnNegar = new ButtonBuilder()
-    .setCustomId(`vip_negar_${messageId}_${targetId}`)
-    .setLabel("❌ Negar")
-    .setStyle(ButtonStyle.Danger);
-
-  return new ActionRowBuilder().addComponents(btnSolic, btnRecebeu, btnNegar);
-}
-
-function disableComponents(rows = []) {
-  return rows.map((row) => {
-    const r = ActionRowBuilder.from(row);
-    r.components = r.components.map((c) =>
-      ButtonBuilder.from(c).setDisabled(true)
-    );
-    return r;
-  });
-}
-
-// ====== CRIAÇÃO DE REGISTRO ======
-async function createVipRecordInternal(client, {
-  registrarUser,
-  nomeEquipe,
-  beneficiarioRaw,
-  tipoRaw,
-  motivoRegistro,
-  isProgrammatic = false,
-}) {
-  const canal = await client.channels.fetch(VIP_CANAL_ID).catch(() => null);
-  if (!ensureIsTextChannel(canal)) {
-    return null;
-  }
-
-  const extractedId = extractId(beneficiarioRaw);
-
-  let beneficiarioUser = null;
-  if (extractedId) {
-    try {
-      beneficiarioUser = await client.users.fetch(extractedId);
-    } catch {}
-  }
-
-  const tipoNormalizado = vipNormalize(tipoRaw);
-  const decor = tipoNormalizado ? vipDecor[tipoNormalizado] : vipDecor.CUSTOM;
-
-  const beneficiarioMention = extractedId
-    ? `<@${extractedId}>`
-    : (beneficiarioRaw || "Não informado");
-
-  const fields = [
-    {
-      name: "👤 Beneficiário",
-      value: extractedId
-        ? `${beneficiarioMention}\n\`${extractedId}\``
-        : `${beneficiarioMention}`,
-      inline: true,
-    },
-    {
-      name: "🏷️ Nome (Equipe)",
-      value: nomeEquipe || "-",
-      inline: true,
-    },
-    {
-      name: "🧾 Tipo",
-      value: tipoNormalizado
-        ? `**${decor.label}**`
-        : `**${tipoRaw || "VIP EVENTO"}**`,
-      inline: true,
-    },
-    {
-      name: "✍️ Registrado por",
-      value: registrarUser?.id
-        ? `<@${registrarUser.id}>`
-        : "`(não identificado)`",
-      inline: true,
-    },
-    {
-      name: "🕒 Data",
-      value: `<t:${Math.floor(Date.now() / 1000)}:f>`,
-      inline: true,
-    },
-  ];
-
-  if (motivoRegistro) {
-    fields.splice(3, 0, {
-      name: "📌 Motivo do registro",
-      value: motivoRegistro,
-      inline: false,
-    });
-  }
-
-  const embed = new EmbedBuilder()
-    .setColor(decor.color)
-    .setTitle(
-      tipoNormalizado
-        ? `${decor.emoji} ${decor.label} — 1 mês + Destaque`
-        : `${decor.emoji} ${decor.label} — Premiação`
-    )
-    .setDescription(
-      tipoNormalizado
-        ? [
-            "Registro de **premium** criado com sucesso.",
-            "Inclui: **1 mês** + **Destaque**.",
-          ].join("\n")
-        : [
-            "Registro de **premium** criado com sucesso.",
-            "Premiação registrada pelo sistema.",
-          ].join("\n")
-    )
-    .addFields(fields)
-    .setAuthor({
-      name: registrarUser?.tag
-        ? `Registrado por ${registrarUser.tag}`
-        : "Registro programático",
-      iconURL: registrarUser?.displayAvatarURL?.({ dynamic: true }) || null,
-    })
-    .setThumbnail(
-      beneficiarioUser?.displayAvatarURL?.({ dynamic: true, size: 256 }) ||
-        registrarUser?.displayAvatarURL?.({ dynamic: true }) ||
-        null
-    )
-    .setImage(VIP_GIF)
-    .setFooter({
-      text: isProgrammatic
-        ? "SantaCreators – VIP / Premiação"
-        : "SantaCreators – VIP / Rolepass",
-    })
-    .setTimestamp();
-
-  const registroMsg = await canal.send({ embeds: [embed] }).catch(() => null);
-  if (!registroMsg) return null;
-
-  const targetId = extractedId || "none";
-  const row = createStatusRow(registroMsg.id, targetId);
-  await registroMsg.edit({ components: [row] }).catch(() => {});
-
-  try {
-    dashEmit("vip:criado", {
-      by: registrarUser?.id || "system",
-      __at: Date.now(),
-      targetId: extractedId || null,
-      tipo: tipoRaw || null,
-    });
-  } catch {}
-
-  return registroMsg;
-}
-
-// ====== FUNÇÃO PROGRAMÁTICA (usada pela reunião semanal) ======
-export async function createVipRecordProgrammatically(
-  client,
-  {
-    registrarUser,
-    beneficiarioRaw,
-    tipoRaw,
-    motivoRegistro,
-    nomeEquipe,
-  } = {}
-) {
-  return await createVipRecordInternal(client, {
-    registrarUser,
-    nomeEquipe,
-    beneficiarioRaw,
-    tipoRaw,
-    motivoRegistro,
-    isProgrammatic: true,
-  });
-}
-
-// ====== READY ======
-export async function vipRegistroOnReady(client) {
-  if (globalThis.__VIP_REGISTRO_MENSAL_ON_READY_RAN__) return;
-  globalThis.__VIP_REGISTRO_MENSAL_ON_READY_RAN__ = true;
-
-  const canal = await client.channels.fetch(VIP_CANAL_ID).catch(() => null);
-  if (!ensureIsTextChannel(canal)) {
-    console.error("[VIP] Canal inválido:", VIP_CANAL_ID);
-    return;
-  }
-
-  await createFreshMainButton(canal);
-  setInterval(() => ensureMainButton(canal), 10_000);
-}
-
-// ====== INTERAÇÕES ======
-export async function vipRegistroHandleInteraction(interaction, client) {
-  try {
-    // ---------- ABRIR MODAL ----------
-    if (interaction.isButton() && interaction.customId === VIP_MAIN_BUTTON_ID) {
-      const member = interaction.member;
-      const isAuth = hasVipAuth(member);
-
-      if (!isAuth) {
-        await interaction.reply({
-          content: "🚫 Você não tem permissão para registrar.",
-          ephemeral: true,
-        }).catch(() => {});
-        return true;
-      }
-
-      const modal = new ModalBuilder()
-        .setCustomId("vip_modal_submit")
-        .setTitle("💎 Registrar VIP / Rolepass");
-
-      const inputNome = new TextInputBuilder()
-        .setCustomId("vip_nome_membro")
-        .setLabel("Nome do membro da equipe")
-        .setStyle(TextInputStyle.Short)
-        .setPlaceholder("Ex: Social M. | Maria")
-        .setRequired(true);
-
-      const inputIdDiscord = new TextInputBuilder()
-        .setCustomId("vip_id_discord")
-        .setLabel("ID do Discord do beneficiário (17-20 dígitos)")
-        .setStyle(TextInputStyle.Short)
-        .setPlaceholder("Ex: 123456789012345678")
-        .setRequired(true);
-
-      const inputVip = new TextInputBuilder()
-        .setCustomId("vip_tipo")
-        .setLabel("Qual VIP? (Ouro/Prata/Bronze/Rolepass)")
-        .setStyle(TextInputStyle.Short)
-        .setPlaceholder("Digite: Ouro, Prata, Bronze ou Rolepass")
-        .setRequired(true);
-
-      const inputMotivo = new TextInputBuilder()
-        .setCustomId("vip_motivo_registro")
-        .setLabel("Motivo do registro")
-        .setStyle(TextInputStyle.Paragraph)
-        .setPlaceholder("Ex: Creator Destaque, Master Manager, Premiação semanal...")
-        .setRequired(false);
-
-      modal.addComponents(
-        new ActionRowBuilder().addComponents(inputNome),
-        new ActionRowBuilder().addComponents(inputIdDiscord),
-        new ActionRowBuilder().addComponents(inputVip),
-        new ActionRowBuilder().addComponents(inputMotivo)
-      );
-
-      try {
-        await interaction.showModal(modal);
-      } catch (err) {
-        console.error("[VIP] showModal falhou:", err);
-        if (!interaction.deferred && !interaction.replied) {
-          await interaction.reply({
-            content: "⚠️ Interação expirada. Clique no botão novamente.",
-            ephemeral: true,
-          }).catch(() => {});
-        }
-      }
-
-      return true;
-    }
-
-    // ---------- SUBMIT DO MODAL (REGISTRO) ----------
-    if (interaction.isModalSubmit() && interaction.customId === "vip_modal_submit") {
-      const nome = interaction.fields.getTextInputValue("vip_nome_membro")?.trim();
-      const idRaw = interaction.fields.getTextInputValue("vip_id_discord")?.trim();
-      const tipoRaw = interaction.fields.getTextInputValue("vip_tipo")?.trim();
-      const motivoRegistro = interaction.fields.getTextInputValue("vip_motivo_registro")?.trim();
-
-      if (!/^\d{17,20}$/.test(idRaw)) {
-        await interaction.reply({
-          content: "❌ ID de Discord inválido. Informe apenas números (17-20 dígitos).",
-          ephemeral: true,
-        }).catch(() => {});
-        return true;
-      }
-
-      const tipo = vipNormalize(tipoRaw);
-      if (!tipo) {
-        await interaction.reply({
-          content: "❌ Tipo inválido. Use: **Ouro**, **Prata**, **Bronze** ou **Rolepass**.",
-          ephemeral: true,
-        }).catch(() => {});
-        return true;
-      }
-
-      const registroMsg = await createVipRecordInternal(client, {
-        registrarUser: interaction.user,
-        nomeEquipe: nome,
-        beneficiarioRaw: idRaw,
-        tipoRaw,
-        motivoRegistro,
-        isProgrammatic: false,
-      });
-
-      if (!registroMsg) {
-        await interaction.reply({
-          content: "❌ Canal de registro inválido.",
-          ephemeral: true,
-        }).catch(() => {});
-        return true;
-      }
-
-      const canal = await client.channels.fetch(VIP_CANAL_ID).catch(() => null);
-      if (ensureIsTextChannel(canal)) {
-        await createFreshMainButton(canal);
-      }
-
-      await interaction.reply({
-        content: `✅ Registro criado para <@${idRaw}> — **${tipo ? vipDecor[tipo].label : tipoRaw}**.`,
-        ephemeral: true,
-      }).catch(() => {});
-
-      return true;
-    }
-
-    // ---------- BOTÕES DOS REGISTROS ----------
-    if (
-      interaction.isButton() &&
-      interaction.customId.startsWith("vip_") &&
-      interaction.customId !== VIP_MAIN_BUTTON_ID
-    ) {
-      const parts = interaction.customId.split("_");
-      const action = parts[1];
-
-      const isAuth = hasVipAuth(interaction.member);
-
-      const canal = await client.channels.fetch(VIP_CANAL_ID).catch(() => null);
-      if (!ensureIsTextChannel(canal)) return true;
-
-      // ====== SOLICITADO ======
-      if (action === "solicitado" && parts[2]) {
-        const msgAlvo = await canal.messages.fetch(parts[2]).catch(() => null);
-        if (!msgAlvo) {
-          await interaction.reply({
-            content: "❌ Registro não encontrado.",
-            ephemeral: true,
-          }).catch(() => {});
-          return true;
-        }
-
-        if (!isAuth) {
-          await interaction.reply({
-            content: "🚫 Sem permissão para marcar solicitação.",
-            ephemeral: true,
-          }).catch(() => {});
-          return true;
-        }
-
-        const emb = EmbedBuilder.from(msgAlvo.embeds[0] ?? new EmbedBuilder());
-        emb.addFields({
-          name: "📨 Solicitação",
-          value: `Marcado por <@${interaction.user.id}> em <t:${Math.floor(Date.now() / 1000)}:f>`,
-          inline: false,
-        });
-
-        await msgAlvo.edit({ embeds: [emb] }).catch(() => {});
-
-        await interaction.reply({
-          content: "📨 Marcado como **solicitado**.",
-          ephemeral: true,
-        }).catch(() => {});
-
-        return true;
-      }
-
-      // ====== RECEBEU ======
-      if (action === "recebeu" && parts[2] && parts[3]) {
-        const msgId = parts[2];
-        const targetId = parts[3];
-
-        const msgAlvo = await canal.messages.fetch(msgId).catch(() => null);
-        if (!msgAlvo) {
-          await interaction.reply({
-            content: "❌ Registro não encontrado.",
-            ephemeral: true,
-          }).catch(() => {});
-          return true;
-        }
-
-        const allowedByTarget = interaction.user.id === targetId;
-        if (!isAuth && !allowedByTarget) {
-          await interaction.reply({
-            content: "🚫 Somente o beneficiário ou os cargos autorizados podem marcar como **recebido**.",
-            ephemeral: true,
-          }).catch(() => {});
-          return true;
-        }
-
-        const emb = EmbedBuilder.from(msgAlvo.embeds[0] ?? new EmbedBuilder());
-        emb.addFields({
-          name: "✅ Entrega",
-          value: `Confirmado por <@${interaction.user.id}> em <t:${Math.floor(Date.now() / 1000)}:f>`,
-          inline: false,
-        });
-
-        const comps = disableComponents(msgAlvo.components || []);
-        await msgAlvo.edit({ embeds: [emb], components: comps }).catch(() => {});
-
-        await interaction.reply({
-          content: "✅ Marcado como **recebido**.",
-          ephemeral: true,
-        }).catch(() => {});
-
-        return true;
-      }
-
-      // ====== NEGAR (abre modal) ======
-      if (action === "negar" && parts[2] && parts[3]) {
-        const msgId = parts[2];
-        const targetId = parts[3];
-
-        if (!isAuth) {
-          await interaction.reply({
-            content: "🚫 Apenas cargos autorizados podem **negar**.",
-            ephemeral: true,
-          }).catch(() => {});
-          return true;
-        }
-
-        const modal = new ModalBuilder()
-          .setCustomId(`vip_modal_negar_${msgId}_${targetId}`)
-          .setTitle("❌ Negar / Reprovar pagamento");
-
-        const inputMotivo = new TextInputBuilder()
-          .setCustomId("vip_motivo_reprovacao")
-          .setLabel("Motivo da reprovação (enviado em privado e no canal)")
-          .setStyle(TextInputStyle.Paragraph)
-          .setPlaceholder("Explique resumidamente o porquê da reprovação.")
-          .setRequired(true);
-
-        modal.addComponents(new ActionRowBuilder().addComponents(inputMotivo));
-
-        try {
-          await interaction.showModal(modal);
-        } catch (err) {
-          console.error("[VIP] showModal negar falhou:", err);
-          if (!interaction.deferred && !interaction.replied) {
-            await interaction.reply({
-              content: "⚠️ Interação expirada. Clique novamente em **Negar**.",
-              ephemeral: true,
-            }).catch(() => {});
-          }
-        }
-
-        return true;
-      }
-    }
-
-    // ---------- SUBMIT DO MODAL (NEGAR) ----------
-    if (
-      interaction.isModalSubmit() &&
-      interaction.customId.startsWith("vip_modal_negar_")
-    ) {
-      const parts = interaction.customId.split("_");
-      const msgId = parts[3];
-      const targetId = parts[4];
-
-      const isAuth = hasVipAuth(interaction.member);
-      if (!isAuth) {
-        await interaction.reply({
-          content: "🚫 Apenas cargos autorizados podem **negar**.",
-          ephemeral: true,
-        }).catch(() => {});
-        return true;
-      }
-
-      const motivo = interaction.fields.getTextInputValue("vip_motivo_reprovacao")?.trim();
-      if (!motivo) {
-        await interaction.reply({
-          content: "❌ Motivo inválido.",
-          ephemeral: true,
-        }).catch(() => {});
-        return true;
-      }
-
-      const canal = await client.channels.fetch(VIP_CANAL_ID).catch(() => null);
-      if (!ensureIsTextChannel(canal)) {
-        await interaction.reply({
-          content: "❌ Canal de registro inválido.",
-          ephemeral: true,
-        }).catch(() => {});
-        return true;
-      }
-
-      const msgAlvo = await canal.messages.fetch(msgId).catch(() => null);
-      if (!msgAlvo) {
-        await interaction.reply({
-          content: "❌ Registro não encontrado.",
-          ephemeral: true,
-        }).catch(() => {});
-        return true;
-      }
-
-      const emb = EmbedBuilder.from(msgAlvo.embeds[0] ?? new EmbedBuilder());
-      emb.addFields({
-        name: "❌ Reprovado",
-        value: `Por <@${interaction.user.id}> em <t:${Math.floor(Date.now() / 1000)}:f>\n**Motivo:** ${motivo}`,
-        inline: false,
-      });
-
-      const comps = disableComponents(msgAlvo.components || []);
-      await msgAlvo.edit({ embeds: [emb], components: comps }).catch(() => {});
-
-      let dmOk = true;
-      try {
-        const user = await client.users.fetch(targetId);
-        const dmEmbed = new EmbedBuilder()
-          .setColor("#e74c3c")
-          .setTitle("❌ Seu pagamento foi reprovado")
-          .setDescription(
-            [
-              `**Motivo:** ${motivo}`,
-              "",
-              `Abrir registro`,
-            ].join("\n")
-          )
-          .setAuthor({
-            name: `Reprovado por ${interaction.user.tag}`,
-            iconURL: interaction.user.displayAvatarURL({ dynamic: true }),
-          })
-          .addFields({
-            name: "🕒 Hora",
-            value: `<t:${Math.floor(Date.now() / 1000)}:f>`,
-            inline: true,
-          })
-          .setFooter({ text: "SantaCreators – VIP / Rolepass" })
-          .setTimestamp();
-
-        await user.send({ embeds: [dmEmbed] });
-      } catch {
-        dmOk = false;
-      }
-
-      const reprovaCanal = await client.channels
-        .fetch(VIP_REPROVA_CANAL_ID)
-        .catch(() => null);
-
-      if (ensureIsTextChannel(reprovaCanal)) {
-        const logEmbed = new EmbedBuilder()
-          .setColor("#e74c3c")
-          .setTitle("❌ Pagamento reprovado")
-          .setDescription(
-            [
-              `**Beneficiário:** <@${targetId}> \`(${targetId})\``,
-              `**Motivo:** ${motivo}`,
-              "",
-              `🔗 Abrir registro`,
-            ].join("\n")
-          )
-          .setAuthor({
-            name: `${interaction.user.tag}`,
-            iconURL: interaction.user.displayAvatarURL({ dynamic: true }),
-          })
-          .addFields({
-            name: "🕒 Hora",
-            value: `<t:${Math.floor(Date.now() / 1000)}:f>`,
-            inline: true,
-          })
-          .setFooter({ text: "SantaCreators – VIP / Rolepass" })
-          .setTimestamp();
-
-        await reprovaCanal.send({ embeds: [logEmbed] }).catch(() => {});
-      }
-
-      const extra = dmOk
-        ? ""
-        : "\n⚠️ **Atenção:** Não foi possível enviar DM (usuário com DM fechado).";
-
-      await interaction.reply({
-        content: `❌ Registro **reprovado** e motivo enviado para o privado do beneficiário e para o canal <#${VIP_REPROVA_CANAL_ID}>.${extra}`,
-        ephemeral: true,
-      }).catch(() => {});
-
-      return true;
-    }
-
-    return false;
-  } catch (e) {
-    console.error("[VIP] Erro em interação:", e);
-    if (!interaction.replied && !interaction.deferred) {
-      interaction.reply({
-        content: "⚠️ Ocorreu um erro. Tente novamente.",
-        ephemeral: true,
-      }).catch(() => {});
-    }
-    return true;
-  }
-}
-
-// ====== COMMAND HANDLER ======
-export async function vipRegistroHandleMessage(message, client) {
-  if (!message.guild || message.author.bot) return false;
-
-  if (message.content.toLowerCase() === "!vipmenu") {
-    const isAuth = hasVipAuth(message.member);
-
-    if (!isAuth) {
-      const reply = await message
-        .reply("🚫 Você não tem permissão para usar este comando.")
-        .catch(() => {});
-
-      setTimeout(() => {
-        message.delete().catch(() => {});
-        if (reply) reply.delete().catch(() => {});
-      }, 5000);
-
-      return true;
-    }
-
-    await message.delete().catch(() => {});
-
-    const canal = await client.channels.fetch(VIP_CANAL_ID).catch(() => null);
-    if (!ensureIsTextChannel(canal)) {
-      const reply = await message.channel
-        .send("❌ Canal do sistema VIP não encontrado ou inválido.")
-        .catch(() => {});
-
-      if (reply) setTimeout(() => reply.delete().catch(() => {}), 8000);
-      return true;
-    }
-
-    await createFreshMainButton(canal).catch(() => {});
-
-    const reply = await message.channel
-      .send("✅ Menu do sistema VIP recriado com sucesso!")
-      .catch(() => {});
-
-    if (reply) setTimeout(() => reply.delete().catch(() => {}), 8000);
-
-    return true;
-  }
-
-  return false;
+    .setColor("#8e44ad").setTitle("💜 Registro Mensal + Destaque")
+    .setDescription(["Use os botões para **registrar** ou **organizar a fila**.", "", "📝 **Informações:**", "• Nome do membro", "• Beneficiário (ID/@)", "• Tipo (Ouro/Prata/Bronze/Rolepass)", "• **Cidade**", "• **Motivo**", "", "🔎 **Filtros:**", "• **Solicitados**", "• **Não clicados**"].join("\n"))
+    .setImage(VIP_GIF).setFooter({ text: "SantaCreators – Sistema Oficial" });
 }
