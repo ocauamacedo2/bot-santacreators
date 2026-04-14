@@ -296,6 +296,16 @@ async function moveMainMenuToBottom(channel) {
   await createFreshMainMenu(channel).catch(() => {});
 }
 
+function moveMainMenuToBottomLater(client, delayMs = 1200) {
+  setTimeout(async () => {
+    try {
+      const canal = await client.channels.fetch(VIP_CANAL_ID).catch(() => null);
+      if (!ensureIsTextChannel(canal)) return;
+      await moveMainMenuToBottom(canal);
+    } catch {}
+  }, delayMs);
+}
+
 // =============================
 // BOTÕES DOS REGISTROS
 // =============================
@@ -685,6 +695,7 @@ export async function vipEventoHandleInteraction(interaction, client) {
 
         try {
           await interaction.showModal(modal);
+          moveMainMenuToBottomLater(client, 1500);
         } catch (err) {
           console.error("[VIP] showModal falhou:", err);
           if (!interaction.deferred && !interaction.replied) {
@@ -693,12 +704,6 @@ export async function vipEventoHandleInteraction(interaction, client) {
               ephemeral: true,
             }).catch(() => {});
           }
-        }
-
-        // joga o menu lá pra baixo toda vez que clicarem no botão do menu
-        const canal = await client.channels.fetch(VIP_CANAL_ID).catch(() => null);
-        if (ensureIsTextChannel(canal)) {
-          await moveMainMenuToBottom(canal);
         }
 
         return true;
@@ -718,21 +723,19 @@ export async function vipEventoHandleInteraction(interaction, client) {
 
         const canal = await client.channels.fetch(VIP_CANAL_ID).catch(() => null);
         if (!ensureIsTextChannel(canal)) {
-          await interaction.followUp({
+          await interaction.editReply({
             content: "❌ Canal VIP inválido.",
-            ephemeral: true,
           }).catch(() => {});
           return true;
         }
 
         const { movidos } = await moverRegistrosPorFiltroVIP(canal, "solicitados");
-        await moveMainMenuToBottom(canal);
 
-        await interaction.followUp({
+        await interaction.editReply({
           content: `✅ Filtro aplicado: **Solicitados**\n📦 Registros movidos: **${movidos}**`,
-          ephemeral: true,
         }).catch(() => {});
 
+        moveMainMenuToBottomLater(client, 1200);
         return true;
       }
 
@@ -750,21 +753,19 @@ export async function vipEventoHandleInteraction(interaction, client) {
 
         const canal = await client.channels.fetch(VIP_CANAL_ID).catch(() => null);
         if (!ensureIsTextChannel(canal)) {
-          await interaction.followUp({
+          await interaction.editReply({
             content: "❌ Canal VIP inválido.",
-            ephemeral: true,
           }).catch(() => {});
           return true;
         }
 
         const { movidos } = await moverRegistrosPorFiltroVIP(canal, "naoclicados");
-        await moveMainMenuToBottom(canal);
 
-        await interaction.followUp({
+        await interaction.editReply({
           content: `✅ Filtro aplicado: **Não clicados**\n📦 Registros movidos: **${movidos}**`,
-          ephemeral: true,
         }).catch(() => {});
 
+        moveMainMenuToBottomLater(client, 1200);
         return true;
       }
 
@@ -802,11 +803,7 @@ export async function vipEventoHandleInteraction(interaction, client) {
           ephemeral: true,
         }).catch(() => {});
 
-        const canal = await client.channels.fetch(VIP_CANAL_ID).catch(() => null);
-        if (ensureIsTextChannel(canal)) {
-          await moveMainMenuToBottom(canal);
-        }
-
+        moveMainMenuToBottomLater(client, 1200);
         return true;
       }
     }
@@ -857,11 +854,6 @@ export async function vipEventoHandleInteraction(interaction, client) {
         return true;
       }
 
-      const canal = await client.channels.fetch(VIP_CANAL_ID).catch(() => null);
-      if (ensureIsTextChannel(canal)) {
-        await moveMainMenuToBottom(canal);
-      }
-
       const maybeId = extractId(beneficiarioRaw);
       const mention = maybeId ? `<@${maybeId}>` : `\`${beneficiarioRaw}\``;
 
@@ -870,6 +862,7 @@ export async function vipEventoHandleInteraction(interaction, client) {
         ephemeral: true,
       }).catch(() => {});
 
+      moveMainMenuToBottomLater(client, 1200);
       return true;
     }
 
