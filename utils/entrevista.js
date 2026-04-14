@@ -287,10 +287,12 @@ async function reanexar(client) {
 function getAplicadorIdFromChannel(channel, dados = {}) {
   const topic = String(channel?.topic || "");
   const m = topic.match(/entrevista_aplicador:(\d{17,20})/i);
-  if (m) return m[1]; // ✅ Prioridade total para quem usou !perguntas
 
-  const fromState = String(dados?.entrevistadorId || "").trim();
-  if (/^\d{17,20}$/.test(fromState)) return fromState;
+  // ✅ SEMPRE prioridade absoluta pro !perguntas
+  if (m) return m[1];
+
+  // ❌ NÃO usa mais fallback do state
+  return null;
 }
 
 function getStarterIdFromChannel(channel) {
@@ -645,6 +647,8 @@ if (logChannel) {
 
 // ✅ PONTO DE ENTREVISTA: somente aqui, na conclusão real das 30 perguntas
 if (aplicadorId && canCountPoint && entrevistaFoiConduzida) {
+  // ✅ continua igual, mas agora aplicadorId é SEMPRE do !perguntas
+}
   try {
     dashEmit("entrevista:ponto_concluido", {
       userId: aplicadorId,
@@ -739,7 +743,7 @@ if (aplicadorId && canCountPoint && entrevistaFoiConduzida) {
 
     await channel.send(`⏰ <@${membro.id}>, entrevista cancelada por inatividade (passou de ${ENTREVISTA_DURACAO_MIN} min).`);
   }
-}
+
 
 // ===== TIMER GLOBAL =====
 async function iniciarContadorGlobal(channel, membroId, remainingMs = ENTREVISTA_DURACAO_MS) {

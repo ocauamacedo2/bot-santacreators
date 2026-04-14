@@ -62,7 +62,7 @@ try {
     .replace(/\s{2,}/g, " ")
     .trim();
 
-  const nextTopic = `${cleanedTopic}${cleanedTopic ? " | " : ""}entrevista_aplicador:${message.author.id}`.slice(0, 1024);
+const nextTopic = `entrevista_aplicador:${message.author.id}`.slice(0, 1024);
 
   if (typeof message.channel.setTopic === "function") {
     await message.channel.setTopic(nextTopic).catch(() => {});
