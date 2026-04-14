@@ -161,12 +161,11 @@ import { connectStatusOnReady, connectStatusHandleMessage, connectStatusOnChanne
 import { orgsHandleMessage, orgsHandleInteraction } from "../events/analisarOrgsPorDia.js";
 
 // VIP Evento / Líderes Convites
-// algum trecho dos imports do core/index.js
 import {
   vipEventoOnReady,
   vipEventoHandleInteraction,
   vipEventoHandleMessage
-} from "../events/vipRegistro.js";
+} from "../events/vipEvento.js";
 import { lideresConvitesOnReady, lideresConvitesHandleInteraction } from "../events/lideresConvites.js";
 
 // Doação
