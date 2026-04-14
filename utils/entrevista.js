@@ -647,11 +647,9 @@ if (logChannel) {
 
 // ✅ PONTO DE ENTREVISTA: somente aqui, na conclusão real das 30 perguntas
 if (aplicadorId && canCountPoint && entrevistaFoiConduzida) {
-  // ✅ continua igual, mas agora aplicadorId é SEMPRE do !perguntas
-}
   try {
     dashEmit("entrevista:ponto_concluido", {
-      userId: aplicadorId,
+      userId: aplicadorId, // ✅ SEMPRE quem usou !perguntas
       candidateId: membro.id,
       starterId,
       channelId: channel.id,
@@ -680,7 +678,6 @@ if (aplicadorId && canCountPoint && entrevistaFoiConduzida) {
     await logChannel.send({ embeds: [pointEmbed] }).catch(() => {});
   }
 }
-
     await logCompleto(channel.client, {
       titulo: '🏁 Entrevista finalizada',
       cor: 0x3498db,
