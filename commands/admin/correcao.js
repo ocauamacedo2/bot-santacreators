@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 import { dashEmit } from '../../utils/dashHub.js';
 
 
-const CANAL_LOGS_CORRECAO = '1486084249755979950';
+const CANAL_LOGS_CORRECAO = '1486006908056899748';
 
 const CATEGORIA_CORRECAO_PONTUA_ID = '1359244725781266492';
 
@@ -247,7 +247,10 @@ const numeros = match[1]
     ? checkCooldown(message.author.id, message.member)
     : { scored: false, remaining: 0, bypass: false, blockedByCategory: true };
 
-  const canalLogs = await client.channels.fetch(CANAL_LOGS_CORRECAO).catch(() => null);
+  const canalLogs = await client.channels.fetch(CANAL_LOGS_CORRECAO).catch((err) => {
+    console.error('[CORRECAO] Erro ao buscar canal de logs:', CANAL_LOGS_CORRECAO, err);
+    return null;
+  });
 
   // Tenta pegar quem abriu o ticket pelo tópico
   const topic = message.channel.topic || "";
@@ -267,16 +270,18 @@ const numeros = match[1]
     antiFarmText = `⏳ Cooldown (${Math.ceil(scoreInfo.remaining / 60000)}m)`;
   }
 
-  if (canalLogs) {
+  if (!canalLogs) {
+    console.error(`[CORRECAO] Canal de logs não encontrado ou inacessível: ${CANAL_LOGS_CORRECAO}`);
+  } else {
     const logEmbed = new EmbedBuilder()
       .setTitle('📝 Log de Correção de Entrevista')
       .setColor('#00ffff')
       .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
       .addFields(
         { name: '🧑‍🏫 Staff que corrigiu', value: `${message.author} (\`${message.author.id}\`)`, inline: true },
-        { name: '👤 Candidato (Opener)', value: `<@${openerId}>`, inline: true },
+        { name: '👤 Candidato (Opener)', value: openerId !== "Desconhecido" ? `<@${openerId}>` : "Desconhecido", inline: true },
         { name: '📍 Canal', value: `${message.channel}`, inline: true },
-                {
+        {
           name: '🗂️ Regra de pontuação',
           value: hasAnywhereBypass(message.author.id)
             ? "✅ Livre em qualquer canal"
@@ -290,7 +295,9 @@ const numeros = match[1]
       .setFooter({ text: 'Sistema de Correção • SantaCreators' })
       .setTimestamp();
 
-    await canalLogs.send({ embeds: [logEmbed] }).catch(() => {});
+    await canalLogs.send({ embeds: [logEmbed] }).catch((err) => {
+      console.error('[CORRECAO] Erro ao enviar log de correção:', err);
+    });
   }
 
   // ✅ O ponto NÃO depende mais do canal de log existir
