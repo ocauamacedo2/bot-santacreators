@@ -629,6 +629,13 @@ export async function vipEventoOnReady(client) {
 // =============================
 export async function vipEventoHandleInteraction(interaction, client) {
   try {
+    console.log("[VIP] Handler acionado:", {
+      customId: interaction.customId || null,
+      isButton: interaction.isButton?.() || false,
+      isModalSubmit: interaction.isModalSubmit?.() || false,
+      userId: interaction.user?.id || null,
+    });
+
     // ==========================================================
     // BOTÕES DO MENU
     // ==========================================================

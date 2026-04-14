@@ -165,7 +165,7 @@ import {
   vipEventoOnReady,
   vipEventoHandleInteraction,
   vipEventoHandleMessage
-} from "../events/vipEvento.js";
+} from "../events/vipRegistro.js";
 import { lideresConvitesOnReady, lideresConvitesHandleInteraction } from "../events/lideresConvites.js";
 
 // Doação
@@ -498,6 +498,17 @@ const setupEventHandlers = () => {
   client.on("interactionCreate", async (interaction) => {
     if (interaction.isAutocomplete()) return;
     try {
+      console.log("[VIP DEBUG] interactionCreate:", {
+        type: interaction.type,
+        customId: interaction.customId || null,
+        isButton: interaction.isButton?.() || false,
+        isModalSubmit: interaction.isModalSubmit?.() || false,
+        userId: interaction.user?.id || null,
+      });
+
+      const handledByVipEvento = await vipEventoHandleInteraction(interaction, client);
+      if (handledByVipEvento) return;
+
       if (await registroManagerHandleInteraction(interaction, client)) return;
       if (await handleWeeklyRankInteractions(interaction, client)) return;
       if (await registroVendasHandleInteraction(interaction, client)) return;
@@ -510,7 +521,6 @@ const setupEventHandlers = () => {
       if (await orgsHandleInteraction(interaction, client)) return;
       if (await doacaoHandleInteraction(interaction, client)) return;
       if (await formsCreatorHandleInteraction(interaction, client)) return;
-      if (await vipEventoHandleInteraction(interaction, client)) return;
       if (await lideresConvitesHandleInteraction(interaction, client)) return;
       if (await pedirSetHandleInteraction(interaction, client)) return;
       if (await setStaffHandleInteraction(interaction, client)) return;
