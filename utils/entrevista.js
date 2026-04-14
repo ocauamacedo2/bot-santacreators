@@ -293,6 +293,13 @@ function getAplicadorIdFromChannel(channel, dados = {}) {
   if (/^\d{17,20}$/.test(fromState)) return fromState;
 }
 
+function getStarterIdFromChannel(channel) {
+  const topic = String(channel?.topic || "");
+  const m = topic.match(/entrevista_starter:(\d{17,20})/i);
+  if (m) return m[1];
+  return null;
+}
+
 function canInterviewPointCount(channel, aplicadorId) {
   const categoryId = String(channel?.parentId || "");
   if (PERGUNTAS_ALLOWED_CATEGORY_IDS.has(categoryId)) return true;
@@ -365,6 +372,24 @@ async function handleButtons(interaction) {
 if (customId.startsWith('iniciar|')) {
   const [, channelId] = customId.split('|');
   await interaction.deferUpdate().catch(() => {});
+
+  // ✅ SALVA QUEM INICIOU A ENTREVISTA
+  try {
+    const oldTopic = String(interaction.channel.topic || "");
+
+    const cleanedTopic = oldTopic
+      .replace(/\bentrevista_starter:\d{17,20}\b/gi, "")
+      .replace(/\s{2,}/g, " ")
+      .trim();
+
+    const nextTopic = `${cleanedTopic}${cleanedTopic ? " | " : ""}entrevista_starter:${interaction.user.id}`.slice(0, 1024);
+
+    if (typeof interaction.channel.setTopic === "function") {
+      await interaction.channel.setTopic(nextTopic).catch(() => {});
+    }
+  } catch (e) {
+    console.warn("[Entrevista] Falha ao salvar starter:", e?.message || e);
+  }
 
   // ✅ SETA O CARGO DE ENTREVISTA LOGO NO CLIQUE (igual teu antigo)
   const membro = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
@@ -594,57 +619,63 @@ async function enviarPergunta(channel, membro, index) {
       }
     }
 
-    // 📝 LOG DE FINALIZAÇÃO + PONTO
-    const logChannel = await channel.client.channels.fetch(LOG_CHANNEL_ID_NOVO).catch(() => null);
-    if (logChannel) {
-      const logEmbed = new EmbedBuilder()
-        .setTitle('🏁 Entrevista Finalizada')
-        .setColor('#0000ff')
-        .setDescription(`O candidato terminou de responder todas as 30 perguntas.`)
-        .addFields(
-          { name: '👤 Candidato', value: `<@${membro.id}>`, inline: true },
-          { name: '🏆 Aplicador', value: aplicadorId ? `<@${aplicadorId}>` : 'Não identificado', inline: true },
-          { name: '📂 Categoria', value: categoryId ? `\`${categoryId}\`` : 'Sem categoria', inline: true },
-          { name: '✅ Pontua?', value: canCountPoint ? 'Sim' : 'Não', inline: true },
-          { name: '📍 Canal', value: `${channel}`, inline: true },
-          { name: '🕒 Horário', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false }
-        )
-        .setTimestamp();
+   const starterId = getStarterIdFromChannel(channel);
+const entrevistaFoiConduzida = !!starterId;
 
-      await logChannel.send({ embeds: [logEmbed] }).catch(() => {});
-    }
+// 📝 LOG DE FINALIZAÇÃO + PONTO
+const logChannel = await channel.client.channels.fetch(LOG_CHANNEL_ID_NOVO).catch(() => null);
+if (logChannel) {
+  const logEmbed = new EmbedBuilder()
+    .setTitle('🏁 Entrevista Finalizada')
+    .setColor('#0000ff')
+    .setDescription(`O candidato terminou de responder todas as 30 perguntas.`)
+    .addFields(
+      { name: '👤 Candidato', value: `<@${membro.id}>`, inline: true },
+      { name: '🏆 Aplicador (!perguntas)', value: aplicadorId ? `<@${aplicadorId}>` : 'Não identificado', inline: true },
+      { name: '🎤 Quem conduziu (starter)', value: starterId ? `<@${starterId}>` : 'Ninguém iniciou', inline: true },
+      { name: '📂 Categoria', value: categoryId ? `\`${categoryId}\`` : 'Sem categoria', inline: true },
+      { name: '✅ Pontua?', value: (canCountPoint && entrevistaFoiConduzida) ? 'Sim' : 'Não', inline: true },
+      { name: '📍 Canal', value: `${channel}`, inline: true },
+      { name: '🕒 Horário', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false }
+    )
+    .setTimestamp();
 
-    // ✅ PONTO DE ENTREVISTA: somente aqui, na conclusão real das 30 perguntas
-    if (aplicadorId && canCountPoint) {
-      try {
-        dashEmit("entrevista:ponto_concluido", {
-          userId: aplicadorId,
-          candidateId: membro.id,
-          channelId: channel.id,
-          categoryId,
-          __at: Date.now(),
-        });
-      } catch (e) {
-        console.error("[Entrevista] Falha ao emitir entrevista:ponto_concluido:", e);
-      }
+  await logChannel.send({ embeds: [logEmbed] }).catch(() => {});
+}
 
-      if (logChannel) {
-        const pointEmbed = new EmbedBuilder()
-          .setTitle('🏆 Ponto de Entrevista Concluída')
-          .setColor('#2ecc71')
-          .setDescription(`O aplicador ganhou **1 ponto** porque o candidato concluiu as 30 perguntas.`)
-          .addFields(
-            { name: '🏆 Aplicador (ganhou ponto)', value: `<@${aplicadorId}>`, inline: true },
-            { name: '👤 Candidato', value: `<@${membro.id}>`, inline: true },
-            { name: '📂 Categoria', value: categoryId ? `\`${categoryId}\`` : 'Sem categoria', inline: true },
-            { name: '📍 Canal da Entrevista', value: `${channel}`, inline: true }
-          )
-          .setFooter({ text: ENTREVISTA_POINT_LOG_MARKER })
-          .setTimestamp();
+// ✅ PONTO DE ENTREVISTA: somente aqui, na conclusão real das 30 perguntas
+if (aplicadorId && canCountPoint && entrevistaFoiConduzida) {
+  try {
+    dashEmit("entrevista:ponto_concluido", {
+      userId: aplicadorId,
+      candidateId: membro.id,
+      starterId,
+      channelId: channel.id,
+      categoryId,
+      __at: Date.now(),
+    });
+  } catch (e) {
+    console.error("[Entrevista] Falha ao emitir entrevista:ponto_concluido:", e);
+  }
 
-        await logChannel.send({ embeds: [pointEmbed] }).catch(() => {});
-      }
-    }
+  if (logChannel) {
+    const pointEmbed = new EmbedBuilder()
+      .setTitle('🏆 Ponto de Entrevista Concluída')
+      .setColor('#2ecc71')
+      .setDescription(`O aplicador ganhou **1 ponto** porque o candidato concluiu as 30 perguntas.`)
+      .addFields(
+        { name: '🏆 Aplicador (ganhou ponto)', value: `<@${aplicadorId}>`, inline: true },
+        { name: '🎤 Quem conduziu', value: `<@${starterId}>`, inline: true },
+        { name: '👤 Candidato', value: `<@${membro.id}>`, inline: true },
+        { name: '📂 Categoria', value: categoryId ? `\`${categoryId}\`` : 'Sem categoria', inline: true },
+        { name: '📍 Canal da Entrevista', value: `${channel}`, inline: true }
+      )
+      .setFooter({ text: ENTREVISTA_POINT_LOG_MARKER })
+      .setTimestamp();
+
+    await logChannel.send({ embeds: [pointEmbed] }).catch(() => {});
+  }
+}
 
     await logCompleto(channel.client, {
       titulo: '🏁 Entrevista finalizada',
