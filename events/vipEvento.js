@@ -156,6 +156,19 @@ function getStatusValueFromEmbed(embedLike) {
   return getFieldValue(embedLike, "📌 Status");
 }
 
+function extractTargetIdFromComponents(rows = []) {
+  const ids = rows
+    ?.flatMap((row) => row.components || [])
+    ?.map((c) => c.customId)
+    ?.filter(Boolean) || [];
+
+  const btnRecebeu = ids.find((id) => id.startsWith("vip_recebeu_"));
+  if (!btnRecebeu) return "none";
+
+  const parts = btnRecebeu.split("_");
+  return parts[3] || "none";
+}
+
 // =============================
 // UI MENU
 // =============================
@@ -286,21 +299,32 @@ async function moveMainMenuToBottom(channel) {
 // =============================
 // BOTÕES DOS REGISTROS
 // =============================
-function createStatusRow(messageId, targetId) {
+function createStatusRow(
+  messageId,
+  targetId,
+  {
+    disableSolicitado = false,
+    disableRecebeu = false,
+    disableNegar = false,
+  } = {}
+) {
   const btnSolic = new ButtonBuilder()
     .setCustomId(`vip_solicitado_${messageId}`)
     .setLabel("📨 Já foi solicitado")
-    .setStyle(ButtonStyle.Secondary);
+    .setStyle(ButtonStyle.Secondary)
+    .setDisabled(disableSolicitado);
 
   const btnRecebeu = new ButtonBuilder()
     .setCustomId(`vip_recebeu_${messageId}_${targetId}`)
     .setLabel("✅ Já recebeu")
-    .setStyle(ButtonStyle.Success);
+    .setStyle(ButtonStyle.Success)
+    .setDisabled(disableRecebeu);
 
   const btnNegar = new ButtonBuilder()
     .setCustomId(`vip_negar_${messageId}_${targetId}`)
     .setLabel("❌ Negar")
-    .setStyle(ButtonStyle.Danger);
+    .setStyle(ButtonStyle.Danger)
+    .setDisabled(disableNegar);
 
   return new ActionRowBuilder().addComponents(btnSolic, btnRecebeu, btnNegar);
 }
@@ -359,20 +383,14 @@ async function moverRegistrosPorFiltroVIP(channel, filtro) {
     if (ehRecebeuFinal || ehReprovadoFinal) {
       await msgNova.edit({ components: [] }).catch(() => {});
     } else {
-      const ids = msg.components
-        ?.flatMap((row) => row.components || [])
-        ?.map((c) => c.customId) || [];
-
-      const btnRecebeu = ids.find((x) => x.startsWith("vip_recebeu_"));
-      let targetId = "none";
-
-      if (btnRecebeu) {
-        const parts = btnRecebeu.split("_");
-        targetId = parts[3] || "none";
-      }
+      const targetId = extractTargetIdFromComponents(msg.components || []);
 
       await msgNova.edit({
-        components: [createStatusRow(msgNova.id, targetId)],
+        components: [
+          createStatusRow(msgNova.id, targetId, {
+            disableSolicitado: ehSolicitado,
+          }),
+        ],
       }).catch(() => {});
     }
 
@@ -895,13 +913,53 @@ export async function vipEventoHandleInteraction(interaction, client) {
         }
 
         const emb = EmbedBuilder.from(msgAlvo.embeds[0] ?? new EmbedBuilder());
+        const statusAtual = getStatusValueFromEmbed(emb);
+
+        if (/RECEBIDO/i.test(statusAtual) || /REPROVADO/i.test(statusAtual)) {
+          const compsTravados = disableComponents(msgAlvo.components || []);
+          await msgAlvo.edit({ components: compsTravados }).catch(() => {});
+
+          await interaction.reply({
+            content: "⚠️ Esse registro já foi finalizado e não pode mais receber cliques.",
+            ephemeral: true,
+          }).catch(() => {});
+          return true;
+        }
+
+        if (/JÁ FOI SOLICITADO/i.test(statusAtual)) {
+          const targetId = extractTargetIdFromComponents(msgAlvo.components || []);
+
+          await msgAlvo.edit({
+            components: [
+              createStatusRow(msgAlvo.id, targetId, {
+                disableSolicitado: true,
+              }),
+            ],
+          }).catch(() => {});
+
+          await interaction.reply({
+            content: "⚠️ Esse registro já estava marcado como **solicitado**.",
+            ephemeral: true,
+          }).catch(() => {});
+          return true;
+        }
+
         atualizarCampoStatusVip(
           emb,
           `📨 **JÁ FOI SOLICITADO**\nMarcado por <@${interaction.user.id}> em <t:${Math.floor(Date.now() / 1000)}:f>`,
           "#f1c40f"
         );
 
-        await msgAlvo.edit({ embeds: [emb] }).catch(() => {});
+        const targetId = extractTargetIdFromComponents(msgAlvo.components || []);
+
+        await msgAlvo.edit({
+          embeds: [emb],
+          components: [
+            createStatusRow(msgAlvo.id, targetId, {
+              disableSolicitado: true,
+            }),
+          ],
+        }).catch(() => {});
 
         await interaction.reply({
           content: "📨 Marcado como **solicitado**.",
@@ -935,6 +993,19 @@ export async function vipEventoHandleInteraction(interaction, client) {
         }
 
         const emb = EmbedBuilder.from(msgAlvo.embeds[0] ?? new EmbedBuilder());
+        const statusAtual = getStatusValueFromEmbed(emb);
+
+        if (/RECEBIDO/i.test(statusAtual) || /REPROVADO/i.test(statusAtual)) {
+          const compsTravados = disableComponents(msgAlvo.components || []);
+          await msgAlvo.edit({ components: compsTravados }).catch(() => {});
+
+          await interaction.reply({
+            content: "⚠️ Esse registro já foi finalizado e não pode mais receber cliques.",
+            ephemeral: true,
+          }).catch(() => {});
+          return true;
+        }
+
         atualizarCampoStatusVip(
           emb,
           `✅ **RECEBIDO**\nConfirmado por <@${interaction.user.id}> em <t:${Math.floor(Date.now() / 1000)}:f>`,
@@ -950,12 +1021,16 @@ export async function vipEventoHandleInteraction(interaction, client) {
         }).catch(() => {});
 
         try {
-          dashEmit("vip:pago", {
+          const payload = {
             by: interaction.user.id,
             __at: Date.now(),
             targetId: targetId !== "none" ? targetId : null,
             sourceMessageId: msgId,
-          });
+            action: "ja_foi_pago",
+          };
+
+          dashEmit("vip:pago", payload);
+          dashEmit("vip:recebido", payload);
         } catch {}
 
         return true;
@@ -969,6 +1044,29 @@ export async function vipEventoHandleInteraction(interaction, client) {
         if (!isAuth) {
           await interaction.reply({
             content: "🚫 Apenas cargos autorizados podem **negar**.",
+            ephemeral: true,
+          }).catch(() => {});
+          return true;
+        }
+
+        const msgAlvo = await canal.messages.fetch(msgId).catch(() => null);
+        if (!msgAlvo) {
+          await interaction.reply({
+            content: "❌ Registro não encontrado.",
+            ephemeral: true,
+          }).catch(() => {});
+          return true;
+        }
+
+        const emb = EmbedBuilder.from(msgAlvo.embeds[0] ?? new EmbedBuilder());
+        const statusAtual = getStatusValueFromEmbed(emb);
+
+        if (/RECEBIDO/i.test(statusAtual) || /REPROVADO/i.test(statusAtual)) {
+          const compsTravados = disableComponents(msgAlvo.components || []);
+          await msgAlvo.edit({ components: compsTravados }).catch(() => {});
+
+          await interaction.reply({
+            content: "⚠️ Esse registro já foi finalizado e não pode mais receber cliques.",
             ephemeral: true,
           }).catch(() => {});
           return true;
@@ -1051,6 +1149,19 @@ export async function vipEventoHandleInteraction(interaction, client) {
       }
 
       const emb = EmbedBuilder.from(msgAlvo.embeds[0] ?? new EmbedBuilder());
+      const statusAtual = getStatusValueFromEmbed(emb);
+
+      if (/RECEBIDO/i.test(statusAtual) || /REPROVADO/i.test(statusAtual)) {
+        const compsTravados = disableComponents(msgAlvo.components || []);
+        await msgAlvo.edit({ components: compsTravados }).catch(() => {});
+
+        await interaction.reply({
+          content: "⚠️ Esse registro já foi finalizado e não pode mais receber cliques.",
+          ephemeral: true,
+        }).catch(() => {});
+        return true;
+      }
+
       atualizarCampoStatusVip(
         emb,
         `❌ **REPROVADO**\nPor <@${interaction.user.id}> em <t:${Math.floor(Date.now() / 1000)}:f>\n**Motivo:** ${motivo}`,
