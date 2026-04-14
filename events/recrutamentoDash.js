@@ -10,7 +10,7 @@ const __dirname = path.dirname(__filename);
 
 // ================= CONFIG =================
 const DASH_CHANNEL_ID = "1470565043077775524";
-const LOG_CHANNEL_ID = "1470590889335328941";
+const LOG_CHANNEL_ID = "1486087240324218970";
 const ALLOWED_RESET_USERS = ["660311795327828008", "1262262852949905408"];
 const DATA_DIR = path.resolve(__dirname, "../data");
 const STATS_FILE = path.join(DATA_DIR, "recrutamento_stats.json");
