@@ -740,7 +740,7 @@ if (aplicadorId && canCountPoint && entrevistaFoiConduzida) {
 
     await channel.send(`⏰ <@${membro.id}>, entrevista cancelada por inatividade (passou de ${ENTREVISTA_DURACAO_MIN} min).`);
   }
-
+} 
 
 // ===== TIMER GLOBAL =====
 async function iniciarContadorGlobal(channel, membroId, remainingMs = ENTREVISTA_DURACAO_MS) {
