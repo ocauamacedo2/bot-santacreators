@@ -629,13 +629,6 @@ export async function vipEventoOnReady(client) {
 // =============================
 export async function vipEventoHandleInteraction(interaction, client) {
   try {
-    console.log("[VIP] Handler acionado:", {
-      customId: interaction.customId || null,
-      isButton: interaction.isButton?.() || false,
-      isModalSubmit: interaction.isModalSubmit?.() || false,
-      userId: interaction.user?.id || null,
-    });
-
     // ==========================================================
     // BOTÕES DO MENU
     // ==========================================================
@@ -861,6 +854,11 @@ export async function vipEventoHandleInteraction(interaction, client) {
         return true;
       }
 
+      const canal = await client.channels.fetch(VIP_CANAL_ID).catch(() => null);
+      if (ensureIsTextChannel(canal)) {
+        await moveMainMenuToBottom(canal);
+      }
+
       const maybeId = extractId(beneficiarioRaw);
       const mention = maybeId ? `<@${maybeId}>` : `\`${beneficiarioRaw}\``;
 
@@ -869,7 +867,6 @@ export async function vipEventoHandleInteraction(interaction, client) {
         ephemeral: true,
       }).catch(() => {});
 
-      moveMainMenuToBottomLater(client, 1200);
       return true;
     }
 
