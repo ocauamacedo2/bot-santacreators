@@ -166,6 +166,11 @@ import {
   vipEventoHandleInteraction,
   vipEventoHandleMessage
 } from "../events/vipEvento.js";
+import {
+  vipRegistroOnReady,
+  vipRegistroHandleInteraction,
+  vipRegistroHandleMessage
+} from "../events/vipRegistro.js";
 import { lideresConvitesOnReady, lideresConvitesHandleInteraction } from "../events/lideresConvites.js";
 
 // Doação
@@ -442,6 +447,7 @@ const setupEventHandlers = () => {
       if (await setStaffV2HandleMessage(message, client)) return;
       if (await doacaoHandleMessage(message, client)) return;
       if (await vipEventoHandleMessage(message, client)) return;
+      if (await vipRegistroHandleMessage(message, client)) return;
 
       await entrevistasTickets.onMessageCreate(message);
       await messageCreateHandler.execute(message, [], client);
@@ -512,6 +518,7 @@ const setupEventHandlers = () => {
       if (await doacaoHandleInteraction(interaction, client)) return;
       if (await formsCreatorHandleInteraction(interaction, client)) return;
       if (await vipEventoHandleInteraction(interaction, client)) return;
+      if (await vipRegistroHandleInteraction(interaction, client)) return;
       if (await lideresConvitesHandleInteraction(interaction, client)) return;
       if (await pedirSetHandleInteraction(interaction, client)) return;
       if (await setStaffHandleInteraction(interaction, client)) return;
@@ -586,6 +593,7 @@ const setupEventHandlers = () => {
     try { await connectStatusOnReady(client); } catch {}
     try { await alinhamentosOnReady(client); } catch {}
     try { await vipEventoOnReady(client); } catch {}
+    try { await vipRegistroOnReady(client); } catch {}
     try { await lideresConvitesOnReady(client); } catch {}
     try { await setStaffV2OnReady(client); } catch {}
     try { await blacklistEventosOnReady(client); } catch {}
