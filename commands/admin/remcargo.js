@@ -560,6 +560,11 @@ const RESTORE_WINDOW_MS = 10_000;
 
 export function installRoleGuardian(client) {
   client.on('guildMemberUpdate', async (oldMember, newMember) => {
+    // Se o próprio bot é o executor, permite a ação e não restaura.
+    // Isso evita que o bot sabote suas próprias remoções legítimas de cargos.
+    const botMember = newMember.guild.members.me;
+    if (!botMember) return; // Não deveria acontecer, mas para segurança.
+
     try {
       const last = RECENT_RESTORES.get(newMember.id) || 0;
       if (Date.now() - last < 1500) return;
@@ -567,6 +572,7 @@ export function installRoleGuardian(client) {
       const guild = newMember.guild;
       const oldSet = new Set(oldMember.roles.cache.keys());
       const newSet = new Set(newMember.roles.cache.keys());
+    
       const removedIds = [...oldSet].filter(id => !newSet.has(id));
       if (removedIds.length === 0) return;
 
@@ -585,6 +591,11 @@ export function installRoleGuardian(client) {
         ? await guild.members.fetch(executorUser.id).catch(() => null)
         : null;
 
+      // Se o bot é o executor, suas ações são sempre permitidas.
+      if (executorUser && executorUser.id === client.user.id) {
+        return; // Não restaura, não loga como bloqueado por este guardião.
+      }
+
       const removedRoles = removedIds
         .map(id => guild.roles.cache.get(id))
         .filter(Boolean)
@@ -596,7 +607,7 @@ export function installRoleGuardian(client) {
       for (const role of removedRoles) {
         let allowed = false;
 
-        if (!executorMember || executorMember.user.bot) {
+        if (!executorMember) { // Se o executor é desconhecido, assume não permitido por segurança.
           allowed = false;
         } else if (executorMember.id === newMember.id) {
           allowed = canSelfRemove(executorMember, role);

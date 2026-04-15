@@ -29,6 +29,8 @@ const ALLOWED_REMOVERS = [
   // quem pode mexer em protegido sem o bot interferir
   "1262262852949905408", // owner
   "660311795327828008",  // você
+  // ✅ ADD BOT ID HERE dynamically in roleProtectOnReady
+  // "YOUR_BOT_ID_HERE",
 ];
 
 // Mensagens personalizadas
@@ -92,6 +94,11 @@ async function fetchRecentRoleUpdateExecutor(guild, targetUserId) {
   }
 }
 
+// ✅ NEW HELPER: Get highest role position for a member
+function getHighestRolePosition(member) {
+  return member?.roles?.highest?.position ?? -1; // -1 if no roles or member is null
+}
+
 // ======================================================
 // HOOK: READY
 // ======================================================
@@ -106,6 +113,12 @@ export async function roleProtectOnReady(client) {
     if (!botMember) {
       console.log("[ROLE-PROTECT] ready: guild/me indisponível (ok).");
       return;
+    }
+
+    // ✅ Add bot's ID to ALLOWED_REMOVERS dynamically
+    if (!ALLOWED_REMOVERS.includes(client.user.id)) {
+      ALLOWED_REMOVERS.push(client.user.id);
+      console.log(`[ROLE-PROTECT] Added bot ID (${client.user.id}) to ALLOWED_REMOVERS.`);
     }
 
     const need = [
@@ -159,6 +172,21 @@ export async function roleProtectHandleGuildMemberUpdate(oldMember, newMember, c
       console.log(`[ROLE-PROTECT] ALLOWED: ${executorUser.tag} mexeu em protegido (${newMember.user.tag}). Não vou restaurar.`);
       return false;
     }
+
+    // ✅ NEW: 3) HIERARCHY CHECK: Se o executor tem cargo mais alto que o alvo protegido, permite a remoção.
+    const executorMember = await guild.members.fetch(executorId).catch(() => null);
+    if (executorMember) {
+      const executorHighestPos = getHighestRolePosition(executorMember);
+      const targetHighestPos = getHighestRolePosition(newMember);
+
+      if (executorHighestPos > targetHighestPos) {
+        console.log(`[ROLE-PROTECT] HIERARCHY ALLOWED: ${executorMember.user.tag} (pos ${executorHighestPos}) removeu cargo de protegido ${newMember.user.tag} (pos ${targetHighestPos}). Não vou restaurar.`);
+        return false; // Allow removal, do not restore, do not punish.
+      }
+    }
+
+    // Se chegou aqui, a remoção não foi autorizada por SELF, ALLOWED_REMOVER, ou HIERARQUIA.
+    // Procede com restauração e punição.
 
     // Re-adiciona roles removidas que o bot consegue gerenciar
     const rolesToRestore = removed
@@ -261,6 +289,18 @@ export async function roleProtectHandleMessage(message, client) {
 
     // se autor é allowed -> deixa rodar
     if (isAllowedRemover(message.author.id)) return false;
+
+    // ✅ NEW: HIERARCHY CHECK for !remcargo on protected user
+    const targetMember = await guild.members.fetch(targetId).catch(() => null);
+    if (targetMember) {
+      const executorHighestPos = getHighestRolePosition(execMember);
+      const targetHighestPos = getHighestRolePosition(targetMember);
+
+      if (executorHighestPos > targetHighestPos) {
+        console.log(`[ROLE-PROTECT] HIERARCHY ALLOWED (!remcargo): ${execMember.user.tag} (pos ${executorHighestPos}) usou !remcargo em protegido ${targetMember.user.tag} (pos ${targetHighestPos}). Não vou punir.`);
+        return false; // Allow !remcargo, do not punish executor.
+      }
+    }
 
     // 🚨 tentou usar !remcargo em protegido sem permissão
     const punishRoleIds = rolesRemoviveisDoExecutor(execMember);
