@@ -318,6 +318,18 @@ EventEmitter.defaultMaxListeners = 25;
 const app = express();
 const safeSend = wrapRL((ch, payload) => ch.send(payload));
 
+// =====================================================
+// Guardas globais do Core
+// =====================================================
+globalThis.__SC_CORE_GUARDS__ ??= {
+  setarNomeIntervalStarted: false,
+};
+
+client.__coreBootState ??= {
+  readyBootExecuted: false,
+  lateBootExecuted: false,
+};
+
 // Schemas
 const ticketLogSchema = new mongoose.Schema({
   canalId: String, abertoPor: String, fechadoPor: String, motivo: String, abertoEm: Date, fechadoEm: Date,
