@@ -273,12 +273,12 @@ import { aulaoHandleMessage, aulaoHandleInteraction } from "../events/aulaoSanta
 // Cronograma Creators
 import { cronogramaCreatorsOnReady, cronogramaCreatorsHandleMessage, cronogramaCreatorsHandleInteraction } from "../events/cronogramaCreators.js";
 
-// Registro Vendas
+// Ausências
 import {
-  registroVendasOnReady,
-  registroVendasHandleMessage,
-  registroVendasHandleInteraction,
-} from "../events/registroVendas.js";
+  ausenciasOnReady,
+  ausenciasHandleInteraction,
+  ausenciasHandleMessage
+} from "../events/ausenciasMiniV3.js";
 
 // Auto React Fotos
 import { autoReactsFotosOnReady, autoReactsFotosHandleMessage } from "../events/autoReactsFotos.js";
@@ -433,6 +433,7 @@ const setupEventHandlers = () => {
       if (await registroVendasHandleMessage(message, client)) return;
       if (await aulaoHandleMessage(message, client)) return;
       if (await cronogramaCreatorsHandleMessage(message, client)) return;
+      if (await ausenciasHandleMessage(message, client)) return;
       if (await hierarquiaHandleMessage(message, client)) return;
       if (await reuniaoSemanalHandleMessage(message, client)) return;
       if (await roleProtectHandleMessage(message, client)) return;
@@ -544,6 +545,7 @@ const setupEventHandlers = () => {
       if (await orgsHandleInteraction(interaction, client)) return;
       if (await doacaoHandleInteraction(interaction, client)) return;
       if (await formsCreatorHandleInteraction(interaction, client)) return;
+      if (await ausenciasHandleInteraction(interaction, client)) return;
       if (await vipEventoHandleInteraction(interaction, client)) return;
       if (await vipRegistroHandleInteraction(interaction, client)) return;
       if (await lideresConvitesHandleInteraction(interaction, client)) return;
@@ -638,6 +640,7 @@ const setupEventHandlers = () => {
     try { await recrutamentoDashOnReady(client); } catch (e) {}
     try { await monitorCargosOnReady(client); } catch (e) {}
     try { await cronogramaCreatorsOnReady(client); } catch (e) {}
+    try { await ausenciasOnReady(client); } catch (e) {}
     try { await hierarquiaOnReady(client); } catch (e) {}
     try { await reuniaoSemanalOnReady(client); } catch (e) {}
     try { await checklistOnReady(client); } catch (e) {}
