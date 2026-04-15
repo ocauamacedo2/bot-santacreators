@@ -138,7 +138,6 @@ import { verIdHandleMessage } from "../commands/admin/verid.js";
 import { apagarChatHandleMessage } from "../commands/admin/apagarchat.js";
 import { verPermsHandleMessage, editarPermHandleMessage } from "../commands/admin/editarperm.js";
 import { pedirSetHandleMessage } from "../events/pedirset.js";
-import { handleCorrecao } from "../commands/admin/correcao.js";
 import { alinhamentosHandleMessage } from "../events/alinhamentos.js";
 import { setStaffV2HandleMessage } from "../events/setStaffV2.js";
 import { doacaoHandleMessage } from "../events/doacao.js";
