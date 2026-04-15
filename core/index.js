@@ -51,13 +51,14 @@ function mask(t) {
 }
 
 try {
-  // Ajuste: path.resolve("data") pega a raiz do projeto, então funciona igual
   const dataPath = path.resolve("data");
   if (fs.existsSync(dataPath)) {
     const files = fs.readdirSync(dataPath);
     for (const f of files) {
       if (f.endsWith(".tmp")) {
-        try { fs.unlinkSync(path.join(dataPath, f)); } catch {}
+        try {
+          fs.unlinkSync(path.join(dataPath, f));
+        } catch {}
         console.log(`[BOOT] Arquivo temporário removido: ${f}`);
       }
     }
@@ -77,7 +78,7 @@ if (!BOT_TOKEN || BOT_TOKEN.split(".").length !== 3) {
 globalThis.token = BOT_TOKEN;
 
 // =====================================================
-// IMPORTS (Ajustados para ../)
+// IMPORTS
 // =====================================================
 
 // Logs
@@ -104,48 +105,6 @@ import { wrapRL } from "../utils/rl.js";
 import { getChannel } from "../utils/cacheDiscord.js";
 
 // Sistemas
-// Specific Message Handlers (must be imported before messageCreate listener)
-import { registroVendasHandleMessage } from "../events/registroVendas.js";
-import { ausenciasHandleMessage } from "../events/ausencias.js";
-import { registroPoderesEventosHandleMessage } from "../events/registroPoderesEventos.js";
-import { focoSemanaisHandleMessage } from "../events/focoSemanais.js";
-import { provasAdvHandleMessage } from "../events/provasAdv.js";
-import { blacklistFacsHandleMessage } from "../events/blacklistFacs.js";
-import { sortChannelsHandleMessage } from "../commands/canais/sortChannels.js";
-import { payEvtDashHandleMessage } from "../events/payEvtDash/index.js";
-import { facsComparativoHandleMessage } from "../events/facsComparativo.js";
-import { dashRouterHandleMessage } from "../events/dashRouter.js";
-import { facsSemanaisHandleMessage } from "../events/facsSemanais.js";
-import { evt3EventsHandleMessage } from "../events/evt3EventsCreator.js";
-import { recrutamentoDashHandleMessage } from "../events/recrutamentoDash.js";
-import { monitorCargosHandleMessage } from "../events/monitorCargos.js";
-import { registroManagerHandleMessage } from "../events/registroManager.js";
-import { aulaoHandleMessage } from "../events/aulaoSantaCreators.js";
-import { cronogramaCreatorsHandleMessage } from "../events/cronogramaCreators.js";
-import { hierarquiaHandleMessage } from "../events/hierarquiaDivisoes.js";
-import { reuniaoSemanalHandleMessage } from "../events/reuniaoSemanal.js";
-import { roleProtectHandleMessage } from "../events/roleProtect.js";
-import { connectStatusHandleMessage } from "../events/connectStatus.js";
-import { orgsHandleMessage } from "../events/analisarOrgsPorDia.js";
-import { checklistHandleMessage } from "../events/logChecklistSemanal.js";
-import { geralWeeklyRankHandleMessage } from "../events/scGeralWeeklyRanking.js";
-import { criarCargoHandleMessage } from "../commands/admin/criarcargo.js";
-import { removerPermHandleMessage } from "../commands/admin/removerperm.js";
-import { duplicarPermHandleMessage } from "../commands/admin/duplicarperm.js";
-import { clearHandleMessage } from "../commands/admin/clearHandler.js";
-import { removerMassivoHandleMessage } from "../commands/admin/removerMassivo.js";
-import { verIdHandleMessage } from "../commands/admin/verid.js";
-import { apagarChatHandleMessage } from "../commands/admin/apagarchat.js";
-import { verPermsHandleMessage, editarPermHandleMessage } from "../commands/admin/editarperm.js";
-import { pedirSetHandleMessage } from "../events/pedirset.js";
-import { alinhamentosHandleMessage } from "../events/alinhamentos.js";
-import { setStaffV2HandleMessage } from "../events/setStaffV2.js";
-import { doacaoHandleMessage } from "../events/doacao.js";
-import { vipEventoHandleMessage } from "../events/vipEvento.js";
-import { vipRegistroHandleMessage } from "../events/vipRegistro.js";
-import { lideresConvitesHandleMessage } from "../events/lideresConvites.js";
-
-// General MessageCreate handler (should be imported after specific handlers)
 import { iniciarRegistroPoderes } from "../events/registropoderes.js";
 import { iniciarRegistroEvento } from "../events/registroevento.js";
 import { iniciarAutoJoin } from "../events/autojoinVoice.js";
@@ -153,6 +112,7 @@ import { iniciarAutoJoin } from "../events/autojoinVoice.js";
 // Logs Setup
 import { setupUserUpdateLog } from "../events/logs/userUpdate.js";
 import { setupBanLog } from "../events/logs/ban.js";
+import { setupKickLog } from "../events/logs/kick.js";
 import { setupRoleUpdateLog } from "../events/logs/roleUpdate.js";
 import { setupVoiceLog } from "../events/logs/voice.js";
 import { setupChannelCategoryMoveLog } from "../events/logs/channelCategoryMove.js";
@@ -160,49 +120,171 @@ import { setupBotRemoveLog } from "../events/logs/botRemove.js";
 import { setupBotAddLog } from "../events/logs/botAdd.js";
 import { setupNicknameChangeLog } from "../events/logs/nicknameChange.js";
 import { setupChannelLog } from "../events/logs/channel.js";
+import { setupChannelNameCategoryUpdateLog } from "../events/logs/channelNameCategoryUpdate.js";
+import { cacheMessage } from "../events/logs/_deleteCache.js";
+import {
+  reminderOnReady,
+  reminderHandleMessageCreate,
+  reminderHandleChannelDelete,
+  reminderHandleChannelUpdate,
+} from "../events/reminderManager.js";
 
 // Pagamento Social
 import { pagamentoSocialOnReady, handlePagamentoSocial } from "../events/pagamentosocial.js";
 
 // FormsCreator
-import { formsCreatorOnReady, formsCreatorHandleMessage, formsCreatorHandleInteraction } from "../events/formscreator.js";
+import {
+  formsCreatorOnReady,
+  formsCreatorHandleMessage,
+  formsCreatorHandleInteraction,
+} from "../events/formscreator.js";
 
-// Dashboards / Managers (These are likely setup functions, not message handlers)
-import setupBatePonto from "../events/batePonto.js"; // This is a setup function, not a message handler
-import setupAlinhamentoDash from "../Dashboard/alinhamentoDash.js"; // This is a setup function, not a message handler
+// Dashboards / Managers
+import setupBatePonto from "../events/batePonto.js";
+import setupAlinhamentoDash from "../Dashboard/alinhamentoDash.js";
 
+// Alinhamentos
+import {
+  alinhamentosOnReady,
+  alinhamentosHandleMessage,
+  alinhamentosHandleInteraction,
+} from "../events/alinhamentos.js";
+
+// Sort / Renamer
+import {
+  setupSortChannels,
+  sortChannelsHandleMessage,
+  sortChannelsHandleInteraction,
+} from "../commands/canais/sortChannels.js";
+import { setupTicketRenamer } from "../commands/canais/ticketRenamer.js";
+
+// PedirSet
+import {
+  pedirSetOnReady,
+  pedirSetHandleMessage,
+  pedirSetHandleInteraction,
+} from "../events/pedirset.js";
+
+// Lembretes
+import { startTodosLembretes } from "../events/lembretes/index.js";
+
+// Monitor online
+import { startRolesOnlineMonitor } from "../events/rolesOnlineMonitor.js";
+
+// Connect Status
+import {
+  connectStatusOnReady,
+  connectStatusHandleMessage,
+  connectStatusOnChannelDelete,
+} from "../events/connectStatus.js";
+
+// Orgs por dia
+import {
+  orgsHandleMessage,
+  orgsHandleInteraction,
+} from "../events/analisarOrgsPorDia.js";
+
+// Ausências
+import {
+  ausenciasOnReady,
+  ausenciasHandleMessage,
+  ausenciasHandleInteraction,
+} from "../events/ausencias.js";
 
 // VIP Evento / Líderes Convites
 import {
   vipEventoOnReady,
   vipEventoHandleInteraction,
-  vipEventoHandleMessage
+  vipEventoHandleMessage,
 } from "../events/vipEvento.js";
 import {
   vipRegistroOnReady,
   vipRegistroHandleInteraction,
-  vipRegistroHandleMessage
+  vipRegistroHandleMessage,
 } from "../events/vipRegistro.js";
-import { lideresConvitesOnReady, lideresConvitesHandleInteraction } from "../events/lideresConvites.js";
+import {
+  lideresConvitesOnReady,
+  lideresConvitesHandleInteraction,
+} from "../events/lideresConvites.js";
+
+// Doação
+import {
+  doacaoOnReady,
+  doacaoHandleMessage,
+  doacaoHandleInteraction,
+} from "../events/doacao.js";
+
 // Dash debug + router
 import { dashDebugOnReady } from "../events/dashDebug.js";
-import { dashRouterOnReady, dashRouterHandleMessage } from "../events/dashRouter.js";
-import { payEvtDashOnReady, payEvtDashHandleMessage, payEvtDashHandleInteraction } from "../events/payEvtDash/index.js";
+import {
+  dashRouterOnReady,
+  dashRouterHandleMessage,
+} from "../events/dashRouter.js";
+import {
+  payEvtDashOnReady,
+  payEvtDashHandleMessage,
+  payEvtDashHandleInteraction,
+} from "../events/payEvtDash/index.js";
 
 // EVT3
-import { evt3EventsOnReady, evt3EventsHandleMessage, evt3EventsHandleInteraction } from "../events/evt3EventsCreator.js";
+import {
+  evt3EventsOnReady,
+  evt3EventsHandleMessage,
+  evt3EventsHandleInteraction,
+} from "../events/evt3EventsCreator.js";
+
+// Blacklist Eventos
+import {
+  blacklistEventosOnReady,
+  blacklistEventosHandleInteraction,
+} from "../events/blacklistEventos.js";
+
 // Hall da Fama & Eventos Diários
-import { hallDaFamaOnReady, hallDaFamaHandleInteraction } from "../events/hallDaFama.js";
-import { eventosDiariosOnReady, eventosDiariosHandleInteraction } from "../events/eventosDiarios.js";
+import {
+  hallDaFamaOnReady,
+  hallDaFamaHandleInteraction,
+} from "../events/hallDaFama.js";
+import {
+  eventosDiariosOnReady,
+  eventosDiariosHandleInteraction,
+} from "../events/eventosDiarios.js";
 
 // Comandos Admin
 import { registerApagarPV } from "../commands/admin/apagarpv.js";
 import { criarCargoHandleMessage } from "../commands/admin/criarcargo.js";
-import { roleProtectOnReady, roleProtectHandleMessage, roleProtectHandleGuildMemberUpdate } from "../events/roleProtect.js";
+import { verIdHandleMessage } from "../commands/admin/verid.js";
+import { removerMassivoHandleMessage } from "../commands/admin/removerMassivo.js";
+import { apagarChatHandleMessage } from "../commands/admin/apagarchat.js";
+import { clearHandleMessage } from "../commands/admin/clearHandler.js";
+import { removerPermHandleMessage } from "../commands/admin/removerperm.js";
+import {
+  duplicarPermHandleMessage,
+  duplicarPermHandleInteraction,
+} from "../commands/admin/duplicarperm.js";
+import {
+  editarPermHandleMessage,
+  verPermsHandleMessage,
+  editarPermHandleInteraction,
+} from "../commands/admin/editarperm.js";
+
+// Role Protect
+import {
+  roleProtectOnReady,
+  roleProtectHandleMessage,
+  roleProtectHandleGuildMemberUpdate,
+} from "../events/roleProtect.js";
 
 // Set Staff
-import { setStaffOnReady, setStaffHandleInteraction, setStaffHandleGuildMemberAdd } from "../events/administração nobre/setStaff.js";
-import { setStaffV2OnReady, setStaffV2HandleMessage, setStaffV2HandleInteraction } from "../events/setStaffV2.js";
+import {
+  setStaffOnReady,
+  setStaffHandleInteraction,
+  setStaffHandleGuildMemberAdd,
+} from "../events/administração nobre/setStaff.js";
+import {
+  setStaffV2OnReady,
+  setStaffV2HandleMessage,
+  setStaffV2HandleInteraction,
+} from "../events/setStaffV2.js";
 
 // Registro Manager
 import {
@@ -211,8 +293,118 @@ import {
   registroManagerHandleMessage,
   registroManagerHandleMessageDelete,
   registroManagerHandleMessageBulkDelete,
-  registroManagerHandleMessageUpdate
+  registroManagerHandleMessageUpdate,
 } from "../events/registroManager.js";
+
+// FACs
+import {
+  facsSemanaisOnReady,
+  facsSemanaisHandleMessage,
+  facsSemanaisHandleInteraction,
+} from "../events/facsSemanais.js";
+import {
+  facsComparativoOnReady,
+  facsComparativoHandleInteraction,
+  facsComparativoHandleMessage,
+} from "../events/facsComparativo.js";
+
+// Confirmação Presença
+import {
+  confirmacaoPresencaOnReady,
+  confirmacaoPresencaHandleInteraction,
+} from "../events/confirmacaoPresenca.js";
+
+// Geral Dash & Ranking
+import * as geralDash from "../events/scGeralDash.js";
+import {
+  geralWeeklyRankOnReady,
+  geralWeeklyRankHandleMessage,
+  handleWeeklyRankInteractions,
+} from "../events/scGeralWeeklyRanking.js";
+
+// Dashboard Managers
+import {
+  graficoManagersOnReady,
+  graficoManagersHandleInteraction,
+} from "../events/GraficoManagers.js";
+
+// Recrutamento Dash
+import {
+  recrutamentoDashOnReady,
+  recrutamentoDashHandleInteraction,
+  recrutamentoDashHandleMessage,
+} from "../events/recrutamentoDash.js";
+
+// Monitor Cargos
+import {
+  monitorCargosOnReady,
+  monitorCargosHandleUpdate,
+  monitorCargosHandleMessage,
+} from "../events/monitorCargos.js";
+
+// Cadastro Manual
+import {
+  cadastroManualOnReady,
+  cadastroManualHandleInteraction,
+} from "../events/cadastroManual.js";
+
+// Aulão
+import {
+  aulaoHandleMessage,
+  aulaoHandleInteraction,
+} from "../events/aulaoSantaCreators.js";
+
+// Cronograma Creators
+import {
+  cronogramaCreatorsOnReady,
+  cronogramaCreatorsHandleMessage,
+  cronogramaCreatorsHandleInteraction,
+} from "../events/cronogramaCreators.js";
+
+// Registro Vendas
+import {
+  registroVendasOnReady,
+  registroVendasHandleMessage,
+  registroVendasHandleInteraction,
+} from "../events/registroVendas.js";
+
+// Auto React Fotos
+import {
+  autoReactsFotosOnReady,
+  autoReactsFotosHandleMessage,
+} from "../events/autoReactsFotos.js";
+
+// Hierarquia
+import {
+  hierarquiaOnReady,
+  hierarquiaHandleInteraction,
+  hierarquiaHandleMessage,
+  hierarquiaHandleGuildMemberUpdate,
+} from "../events/hierarquiaDivisoes.js";
+
+// Reunião Semanal
+import {
+  reuniaoSemanalOnReady,
+  reuniaoSemanalHandleMessage,
+  reuniaoSemanalHandleInteraction,
+} from "../events/reuniaoSemanal.js";
+
+// Log Entrada
+import * as memberJoinLog from "../events/logs/memberJoinLog.js";
+import { autoRoleOnJoin } from "../events/autoRoleOnJoin.js";
+
+// Role Permission Guard
+import { rolePermissionGuardHandleRoleUpdate } from "../events/rolePermissionGuard.js";
+
+// Log Checklist
+import {
+  checklistOnReady,
+  checklistHandleMessage,
+  checklistHandleInteraction,
+} from "../events/logChecklistSemanal.js";
+
+// Role Sync Module
+import { setupSyncCargos } from "../events/syncCargos.js";
 
 // =====================================================
 // Express + Mongo
@@ -235,28 +427,55 @@ client.__coreBootState ??= {
 
 // Schemas
 const ticketLogSchema = new mongoose.Schema({
-  canalId: String, abertoPor: String, fechadoPor: String, motivo: String, abertoEm: Date, fechadoEm: Date,
+  canalId: String,
+  abertoPor: String,
+  fechadoPor: String,
+  motivo: String,
+  abertoEm: Date,
+  fechadoEm: Date,
 });
 mongoose.model("TicketLog", ticketLogSchema);
 
 const transcriptSchema = new mongoose.Schema({
-  canalId: String, abertoPor: String, assumidoPor: String,
-  mensagens: [{ autor: String, idAutor: String, conteudo: String, horario: Date, avatar: String }],
+  canalId: String,
+  abertoPor: String,
+  assumidoPor: String,
+  mensagens: [
+    {
+      autor: String,
+      idAutor: String,
+      conteudo: String,
+      horario: Date,
+      avatar: String,
+    },
+  ],
 });
 const Transcript = mongoose.model("Transcript", transcriptSchema, "transcripts");
 
 const entrevistasTickets = createEntrevistasTickets({ client, Transcript });
 
-mongoose.connect(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
+mongoose
+  .connect(process.env.MONGO_URI, {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+  })
   .then(() => console.log("✅ Conectado ao MongoDB Atlas!"))
-  .catch((err) => { console.error("❌ Erro ao conectar no MongoDB:", err); process.exit(1); });
+  .catch((err) => {
+    console.error("❌ Erro ao conectar no MongoDB:", err);
+    process.exit(1);
+  });
 
 app.get("/transcript/:canalId", async (req, res) => {
   const { canalId } = req.params;
   const transcript = await Transcript.findOne({ canalId });
   if (!transcript) return res.send("<h2>Transcript não encontrado.</h2>");
-  // (HTML simplificado para economizar espaço no diff, lógica mantida)
-  res.send(`<html><body><h1>Transcript: ${canalId}</h1><pre>${JSON.stringify(transcript.mensagens, null, 2)}</pre></body></html>`);
+  res.send(
+    `<html><body><h1>Transcript: ${canalId}</h1><pre>${JSON.stringify(
+      transcript.mensagens,
+      null,
+      2
+    )}</pre></body></html>`
+  );
 });
 app.listen(3000, () => {});
 
@@ -265,7 +484,6 @@ app.listen(3000, () => {});
 // =====================================================
 let registros = [];
 const loadRegistros = () => {
-  // Ajuste de path: ../events/registros.json
   const filePath = path.join(__dirname, "../events", "registros.json");
   try {
     if (!fs.existsSync(filePath)) {
@@ -273,7 +491,9 @@ const loadRegistros = () => {
       fs.writeFileSync(filePath, "[]", "utf8");
     }
     registros = JSON.parse(fs.readFileSync(filePath, "utf8"));
-  } catch (error) { console.error("Erro ao carregar registros:", error); }
+  } catch (error) {
+    console.error("Erro ao carregar registros:", error);
+  }
 };
 
 // =====================================================
@@ -283,42 +503,52 @@ const setupEventHandlers = () => {
   if (client.__handlersWired) return;
   client.__handlersWired = true;
 
-  // ✅ Inicializa o Sistema de Sincronização de Cargos
   setupSyncCargos(client);
-
   setupSortChannels(client);
   setupTicketRenamer(client);
 
-  // Channel Events
   client.on("channelCreate", async (c) => {
-    try { await channelCreateLog.execute(c); } catch (e) {}
+    try {
+      await channelCreateLog.execute(c);
+    } catch (e) {}
   });
 
   client.on("channelDelete", async (c) => {
-    try { await channelDeleteLog.execute(c); } catch (e) {}
-    try { await channelDeleteProtectLog.execute(c, client); } catch (e) {}
-    try { reminderHandleChannelDelete(c); } catch (e) {}
-    try { connectStatusOnChannelDelete(c); } catch (e) {}
+    try {
+      await channelDeleteLog.execute(c);
+    } catch (e) {}
+    try {
+      await channelDeleteProtectLog.execute(c, client);
+    } catch (e) {}
+    try {
+      reminderHandleChannelDelete(c);
+    } catch (e) {}
+    try {
+      connectStatusOnChannelDelete(c);
+    } catch (e) {}
   });
 
   client.on(Events.ChannelUpdate, async (o, n) => {
-    try { await reminderHandleChannelUpdate(o, n, client); } catch (e) {}
+    try {
+      await reminderHandleChannelUpdate(o, n, client);
+    } catch (e) {}
   });
 
-  // Message Create
   client.on("messageCreate", async (message) => {
     try {
-      try { await reminderHandleMessageCreate(message, client); } catch (e) {}
-      try { cacheMessage(message); } catch (e) {}
+      try {
+        await reminderHandleMessageCreate(message, client);
+      } catch (e) {}
+      try {
+        cacheMessage(message);
+      } catch (e) {}
 
-      // ✅ PRIORIDADE MÁXIMA: comandos de mover canal
       try {
         if (await sortChannelsHandleMessage(message, client)) return;
       } catch (e) {
         console.error("[CORE] erro em sortChannelsHandleMessage:", e);
       }
 
-      // ✅ AUTO REACT FOTOS / GERAL
       try {
         if (await autoReactsFotosHandleMessage(message, client)) return;
       } catch (e) {
@@ -345,7 +575,12 @@ const setupEventHandlers = () => {
       if (await checklistHandleMessage(message, client)) return;
 
       try {
-        if (typeof geralDash?.geralDashHandleMessage === "function" && await geralDash.geralDashHandleMessage(message, client)) return;
+        if (
+          typeof geralDash?.geralDashHandleMessage === "function" &&
+          (await geralDash.geralDashHandleMessage(message, client))
+        ) {
+          return;
+        }
       } catch (e) {}
 
       try {
@@ -380,23 +615,33 @@ const setupEventHandlers = () => {
 
   registerApagarPV(client);
 
-  // Message Updates/Deletes
   client.on("messageUpdate", async (o, n) => {
-    try { await messageUpdateLog.execute(o, n, client); } catch (e) {}
-    try { await registroManagerHandleMessageUpdate(o, n, client); } catch (e) {}
+    try {
+      await messageUpdateLog.execute(o, n, client);
+    } catch (e) {}
+    try {
+      await registroManagerHandleMessageUpdate(o, n, client);
+    } catch (e) {}
   });
 
   client.on("messageDelete", async (m) => {
-    try { await messageDeleteLog.execute(m, client); } catch (e) {}
-    try { await registroManagerHandleMessageDelete(m, client); } catch (e) {}
+    try {
+      await messageDeleteLog.execute(m, client);
+    } catch (e) {}
+    try {
+      await registroManagerHandleMessageDelete(m, client);
+    } catch (e) {}
   });
 
   client.on("messageDeleteBulk", async (ms) => {
-    try { await messageDeleteBulkLog.execute(ms, client); } catch (e) {}
-    try { await registroManagerHandleMessageBulkDelete(ms, ms.first()?.channel, client); } catch (e) {}
+    try {
+      await messageDeleteBulkLog.execute(ms, client);
+    } catch (e) {}
+    try {
+      await registroManagerHandleMessageBulkDelete(ms, ms.first()?.channel, client);
+    } catch (e) {}
   });
 
-  // Members
   client.on("guildMemberAdd", async (m) => {
     try {
       await autoRoleOnJoin(m);
@@ -404,25 +649,38 @@ const setupEventHandlers = () => {
       console.error("[CORE] erro em autoRoleOnJoin:", e);
     }
 
-    try { await bemvindoHandler.execute(m); } catch (e) {}
-    try { await setStaffHandleGuildMemberAdd(m, client); } catch (e) {}
-    try { await memberJoinLog.execute(m, client); } catch (e) {}
+    try {
+      await bemvindoHandler.execute(m);
+    } catch (e) {}
+    try {
+      await setStaffHandleGuildMemberAdd(m, client);
+    } catch (e) {}
+    try {
+      await memberJoinLog.execute(m, client);
+    } catch (e) {}
   });
 
   client.on("guildMemberRemove", async (m) => {
-    try { await saidaHandler.execute(m); } catch (e) {}
+    try {
+      await saidaHandler.execute(m);
+    } catch (e) {}
   });
 
   client.on("inviteCreate", (i) => memberJoinLog.handleInviteCreate(i));
   client.on("inviteDelete", (i) => memberJoinLog.handleInviteDelete(i));
 
   client.on("guildMemberUpdate", async (o, n) => {
-    try { await roleProtectHandleGuildMemberUpdate(o, n, client); } catch (e) {}
-    try { await monitorCargosHandleUpdate(o, n, client); } catch (e) {}
-    try { await hierarquiaHandleGuildMemberUpdate(o, n, client); } catch (e) {}
+    try {
+      await roleProtectHandleGuildMemberUpdate(o, n, client);
+    } catch (e) {}
+    try {
+      await monitorCargosHandleUpdate(o, n, client);
+    } catch (e) {}
+    try {
+      await hierarquiaHandleGuildMemberUpdate(o, n, client);
+    } catch (e) {}
   });
 
-  // Role Permissions Guard
   client.on("roleUpdate", async (oldRole, newRole) => {
     try {
       await rolePermissionGuardHandleRoleUpdate(oldRole, newRole, client);
@@ -431,7 +689,6 @@ const setupEventHandlers = () => {
     }
   });
 
-  // Interactions
   client.on("interactionCreate", async (interaction) => {
     if (interaction.isAutocomplete()) return;
 
@@ -465,7 +722,12 @@ const setupEventHandlers = () => {
       if (await reuniaoSemanalHandleInteraction(interaction, client)) return;
 
       try {
-        if (typeof geralDash?.geralDashHandleInteraction === "function" && await geralDash.geralDashHandleInteraction(interaction, client)) return;
+        if (
+          typeof geralDash?.geralDashHandleInteraction === "function" &&
+          (await geralDash.geralDashHandleInteraction(interaction, client))
+        ) {
+          return;
+        }
       } catch (e) {}
 
       if (await duplicarPermHandleInteraction(interaction, client)) return;
@@ -478,10 +740,15 @@ const setupEventHandlers = () => {
 
       if (await handlePagamentoSocial(interaction, client).catch(() => false)) return;
 
-      // Channel Delete History/Restore
-      if (interaction.isButton() && (interaction.customId.startsWith("cd_history:") || interaction.customId.startsWith("cd_restore:"))) {
-        const filePath = path.join(__dirname, "../data/moderacao/channelDeleteInfractions.json");
-        return interaction.reply({ content: "Funcionalidade movida para o core, verifique os logs.", ephemeral: true });
+      if (
+        interaction.isButton() &&
+        (interaction.customId.startsWith("cd_history:") ||
+          interaction.customId.startsWith("cd_restore:"))
+      ) {
+        return interaction.reply({
+          content: "Funcionalidade movida para o core, verifique os logs.",
+          ephemeral: true,
+        });
       }
 
       if (await entrevista.handleButtons(interaction).catch(() => false)) return;
@@ -493,26 +760,57 @@ const setupEventHandlers = () => {
     }
   });
 
-  // Ready
   client.once("ready", async () => {
     if (client.__coreBootState.readyBootExecuted) return;
     client.__coreBootState.readyBootExecuted = true;
 
-    try { console.log("[CORE] Iniciando AutoJoin..."); iniciarAutoJoin(client); } catch (e) { console.error("[CORE] Erro AutoJoin:", e); }
-    try { iniciarRegistroPoderes(client); } catch (e) {}
-    try { iniciarRegistroEvento(client); } catch (e) {}
-    try { await reminderOnReady(client); } catch (e) {}
+    try {
+      console.log("[CORE] Iniciando AutoJoin...");
+      iniciarAutoJoin(client);
+    } catch (e) {
+      console.error("[CORE] Erro AutoJoin:", e);
+    }
 
-    try { await facsSemanaisOnReady(client); } catch (e) {}
-    try { await facsComparativoOnReady(client); } catch (e) {}
-    try { await confirmacaoPresencaOnReady(client); } catch (e) {}
-    try { await graficoManagersOnReady(client); } catch (e) {}
-    try { await registroManagerOnReady(client); } catch (e) {}
-    try { await registroVendasOnReady(client); } catch (e) {}
-    try { await evt3EventsOnReady(client); } catch (e) {}
-    try { dashDebugOnReady(client); } catch (e) {}
-    try { await dashRouterOnReady(client); } catch (e) {}
-    try { await payEvtDashOnReady(client); } catch (e) {}
+    try {
+      iniciarRegistroPoderes(client);
+    } catch (e) {}
+    try {
+      iniciarRegistroEvento(client);
+    } catch (e) {}
+    try {
+      await reminderOnReady(client);
+    } catch (e) {}
+
+    try {
+      await facsSemanaisOnReady(client);
+    } catch (e) {}
+    try {
+      await facsComparativoOnReady(client);
+    } catch (e) {}
+    try {
+      await confirmacaoPresencaOnReady(client);
+    } catch (e) {}
+    try {
+      await graficoManagersOnReady(client);
+    } catch (e) {}
+    try {
+      await registroManagerOnReady(client);
+    } catch (e) {}
+    try {
+      await registroVendasOnReady(client);
+    } catch (e) {}
+    try {
+      await evt3EventsOnReady(client);
+    } catch (e) {}
+    try {
+      dashDebugOnReady(client);
+    } catch (e) {}
+    try {
+      await dashRouterOnReady(client);
+    } catch (e) {}
+    try {
+      await payEvtDashOnReady(client);
+    } catch (e) {}
 
     try {
       if (typeof geralDash?.geralDashOnReady === "function") {
@@ -520,35 +818,82 @@ const setupEventHandlers = () => {
       }
     } catch (e) {}
 
-    try { await geralWeeklyRankOnReady(client); } catch (e) {}
+    try {
+      await geralWeeklyRankOnReady(client);
+    } catch (e) {}
 
     console.log(`✅ Bot pronto como ${client.user.tag}`);
-    client.user.setActivity("Cauã Macedo – SantaCreators ✨", { type: ActivityType.Watching });
+    client.user.setActivity("Cauã Macedo – SantaCreators ✨", {
+      type: ActivityType.Watching,
+    });
 
-    try { await roleProtectOnReady(client); } catch (e) {}
-    try { await formsCreatorOnReady(client); } catch (e) {}
-    try { await doacaoOnReady(client); } catch (e) {}
-    try { await pedirSetOnReady(client); } catch (e) {}
-    try { await setStaffOnReady(client); } catch (e) {}
-    try { await connectStatusOnReady(client); } catch (e) {}
-    try { await alinhamentosOnReady(client); } catch (e) {}
-    try { await vipEventoOnReady(client); } catch (e) {}
-    try { await vipRegistroOnReady(client); } catch (e) {}
-    try { await lideresConvitesOnReady(client); } catch (e) {}
-    try { await setStaffV2OnReady(client); } catch (e) {}
-    try { await blacklistEventosOnReady(client); } catch (e) {}
-    try { await hallDaFamaOnReady(client); } catch (e) {}
-    try { await eventosDiariosOnReady(client); } catch (e) {}
-    try { await cadastroManualOnReady(client); } catch (e) {}
-    try { await recrutamentoDashOnReady(client); } catch (e) {}
-    try { await monitorCargosOnReady(client); } catch (e) {}
-    try { await cronogramaCreatorsOnReady(client); } catch (e) {}
-    try { await ausenciasOnReady(client); } catch (e) {}
-    try { await hierarquiaOnReady(client); } catch (e) {}
-    try { await reuniaoSemanalOnReady(client); } catch (e) {}
-    try { await checklistOnReady(client); } catch (e) {}
+    try {
+      await roleProtectOnReady(client);
+    } catch (e) {}
+    try {
+      await formsCreatorOnReady(client);
+    } catch (e) {}
+    try {
+      await doacaoOnReady(client);
+    } catch (e) {}
+    try {
+      await pedirSetOnReady(client);
+    } catch (e) {}
+    try {
+      await setStaffOnReady(client);
+    } catch (e) {}
+    try {
+      await connectStatusOnReady(client);
+    } catch (e) {}
+    try {
+      await alinhamentosOnReady(client);
+    } catch (e) {}
+    try {
+      await vipEventoOnReady(client);
+    } catch (e) {}
+    try {
+      await vipRegistroOnReady(client);
+    } catch (e) {}
+    try {
+      await lideresConvitesOnReady(client);
+    } catch (e) {}
+    try {
+      await setStaffV2OnReady(client);
+    } catch (e) {}
+    try {
+      await blacklistEventosOnReady(client);
+    } catch (e) {}
+    try {
+      await hallDaFamaOnReady(client);
+    } catch (e) {}
+    try {
+      await eventosDiariosOnReady(client);
+    } catch (e) {}
+    try {
+      await cadastroManualOnReady(client);
+    } catch (e) {}
+    try {
+      await recrutamentoDashOnReady(client);
+    } catch (e) {}
+    try {
+      await monitorCargosOnReady(client);
+    } catch (e) {}
+    try {
+      await cronogramaCreatorsOnReady(client);
+    } catch (e) {}
+    try {
+      await ausenciasOnReady(client);
+    } catch (e) {}
+    try {
+      await hierarquiaOnReady(client);
+    } catch (e) {}
+    try {
+      await reuniaoSemanalOnReady(client);
+    } catch (e) {}
+    try {
+      await checklistOnReady(client);
+    } catch (e) {}
 
-    // ✅ AUTO REACT FOTOS
     try {
       console.log("[CORE] Inicializando autoReactsFotos (modo centralizado)...");
       await autoReactsFotosOnReady(client);
@@ -557,16 +902,27 @@ const setupEventHandlers = () => {
       console.error("[CORE] Erro ao iniciar autoReactsFotos:", e);
     }
 
-    try { memberJoinLog.initInviteCache(client); } catch (e) {}
+    try {
+      memberJoinLog.initInviteCache(client);
+    } catch (e) {}
 
-    try { startTodosLembretes(client); } catch (e) {}
-    try { startRolesOnlineMonitor(client); } catch (e) {}
-    try { await pagamentoSocialOnReady(client); } catch (e) {}
-    try { await entrevista.reanexar(client); } catch (e) {}
-    try { await entrevistasTickets.onReady(); } catch (e) {}
+    try {
+      startTodosLembretes(client);
+    } catch (e) {}
+    try {
+      startRolesOnlineMonitor(client);
+    } catch (e) {}
+    try {
+      await pagamentoSocialOnReady(client);
+    } catch (e) {}
+    try {
+      await entrevista.reanexar(client);
+    } catch (e) {}
+    try {
+      await entrevistasTickets.onReady();
+    } catch (e) {}
   });
 
-  // Setup Logs
   setupUserUpdateLog(client);
   setupBanLog(client);
   setupKickLog(client);
@@ -579,17 +935,28 @@ const setupEventHandlers = () => {
   setupChannelCategoryMoveLog(client);
   setupNicknameChangeLog(client);
 
-  // Late-wire
   if (client.isReady() && !client.__coreBootState.lateBootExecuted) {
     client.__coreBootState.lateBootExecuted = true;
 
     entrevista.reanexar(client).catch(() => {});
-    client.user.setActivity("Cauã Macedo – SantaCreators ✨", { type: ActivityType.Watching });
+    client.user.setActivity("Cauã Macedo – SantaCreators ✨", {
+      type: ActivityType.Watching,
+    });
 
-    try { iniciarRegistroPoderes(client); } catch (e) {}
-    try { iniciarRegistroEvento(client); } catch (e) {}
-    try { iniciarAutoJoin(client); } catch (e) { console.error("[CORE] Erro AutoJoin (Late):", e); }
-    try { startTodosLembretes(client); } catch (e) {}
+    try {
+      iniciarRegistroPoderes(client);
+    } catch (e) {}
+    try {
+      iniciarRegistroEvento(client);
+    } catch (e) {}
+    try {
+      iniciarAutoJoin(client);
+    } catch (e) {
+      console.error("[CORE] Erro AutoJoin (Late):", e);
+    }
+    try {
+      startTodosLembretes(client);
+    } catch (e) {}
   }
 };
 
@@ -612,7 +979,6 @@ export const initBot = async () => {
       });
     }
 
-    // Slash Command /disconnect
     try {
       const data = [
         new SlashCommandBuilder()
@@ -630,9 +996,9 @@ export const initBot = async () => {
       await client.application.commands.set(data);
     } catch (e) {}
 
-    // Botão "Enviar meu nome"
     const CANAL_BOTAO = "1383152873587740843";
-    const GIF_BANNER = "https://media.discordapp.net/attachments/1362477839944777889/1384245215249825832/standard_2rss.gif";
+    const GIF_BANNER =
+      "https://media.discordapp.net/attachments/1362477839944777889/1384245215249825832/standard_2rss.gif";
 
     if (!globalThis.__SC_CORE_GUARDS__.setarNomeIntervalStarted) {
       globalThis.__SC_CORE_GUARDS__.setarNomeIntervalStarted = true;
