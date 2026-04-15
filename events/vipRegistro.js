@@ -18,6 +18,18 @@ if (globalThis.__VIP_REGISTRO_LOADED__) {
 }
 globalThis.__VIP_REGISTRO_LOADED__ = true;
 
+// ── 🔒 Trava anti double-click / concorrência ─────────────────────
+const VIP_HANDLED_INTERACTIONS = new Set();
+function VIP_hasHandled(i) {
+  try {
+    if (!i?.id) return false;
+    if (VIP_HANDLED_INTERACTIONS.has(i.id)) return true;
+    VIP_HANDLED_INTERACTIONS.add(i.id);
+    setTimeout(() => VIP_HANDLED_INTERACTIONS.delete(i.id), 60_000);
+    return false;
+  } catch { return false; }
+}
+
 // =============================
 // CONFIG
 // =============================
@@ -400,11 +412,16 @@ export async function vipRegistroHandleMessage(message, client) {
 
 export async function vipRegistroHandleInteraction(interaction, client) {
   try {
+    if (!interaction.guild) return false;
+
+    // ✅ Bloqueia processamento duplicado
+    if (VIP_hasHandled(interaction)) return true;
+
     const isAuth = hasVipAuth(interaction.member);
     if (interaction.isButton()) {
       const cid = interaction.customId;
       if (isVipMainRegisterId(cid)) {
-        if (!isAuth) return interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
+        if (!isAuth) return interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true }).catch(() => {});
         const modal = new ModalBuilder().setCustomId("vip_modal_submit").setTitle("💎 Registrar VIP / Rolepass").addComponents(
           new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("vip_nome_membro").setLabel("Nome do membro da equipe").setStyle(TextInputStyle.Short).setRequired(true)),
           new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("vip_beneficiario").setLabel("Beneficiário (ID, @menção ou texto)").setStyle(TextInputStyle.Short).setRequired(true)),
@@ -412,17 +429,27 @@ export async function vipRegistroHandleInteraction(interaction, client) {
           new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("vip_cidade").setLabel("Cidade (Grande, Maresia, Santa, Nobre)").setStyle(TextInputStyle.Short).setRequired(true)),
           new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("vip_motivo_registro").setLabel("Motivo").setStyle(TextInputStyle.Paragraph).setRequired(false))
         );
-        await interaction.showModal(modal);
+        await interaction.showModal(modal).catch(() => {});
         moveMainMenuToBottomLater(client);
         return true;
       }
       if (isVipMainSolicitadosId(cid) || isVipMainNaoClicadosId(cid)) {
-        if (!isAuth) return interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
-        await interaction.deferReply({ ephemeral: true });
+        if (!isAuth) return interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true }).catch(() => {});
+        
+        // ✅ Evita erro de InteractionAlreadyReplied
+        if (!interaction.deferred && !interaction.replied) {
+          await interaction.deferReply({ ephemeral: true }).catch(() => {});
+        }
+
         const canal = await client.channels.fetch(VIP_CANAL_ID).catch(() => null);
         const type = isVipMainSolicitadosId(cid) ? "solicitados" : "naoclicados";
         const { movidos } = await moverRegistrosPorFiltroVIP(canal, type);
-        await interaction.editReply(`✅ Filtro aplicado. Movidos: **${movidos}**`);
+
+        // ✅ Usa editReply com catch para ignorar tokens expirados
+        if (interaction.deferred || interaction.replied) {
+          await interaction.editReply(`✅ Filtro aplicado. Movidos: **${movidos}**`).catch(() => {});
+        }
+
         moveMainMenuToBottomLater(client);
         return true;
       }
@@ -434,56 +461,68 @@ export async function vipRegistroHandleInteraction(interaction, client) {
       if (legacy) {
         const canal = await client.channels.fetch(VIP_CANAL_ID).catch(() => null);
         const msg = await canal.messages.fetch(legacy.msgId).catch(() => null);
-        if (!msg) return interaction.reply({ content: "❌ Não encontrado.", ephemeral: true });
+        if (!msg) return interaction.reply({ content: "❌ Não encontrado.", ephemeral: true }).catch(() => {});
 
         if (legacy.action === "solicitado") {
-          if (!isAuth) return interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
+          if (!isAuth) return interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true }).catch(() => {});
           const emb = EmbedBuilder.from(msg.embeds[0]);
           atualizarCampoStatusVip(emb, `📨 **JÁ FOI SOLICITADO**\nPor <@${interaction.user.id}> em <t:${Math.floor(Date.now() / 1000)}:f>`, "#f1c40f");
           await msg.edit({ embeds: [emb], components: [createStatusRow(msg.id, extractTargetIdFromComponents(msg.components), { disableSolicitado: true })] });
-          return interaction.reply({ content: "📨 Marcado.", ephemeral: true });
+          return interaction.reply({ content: "📨 Marcado.", ephemeral: true }).catch(() => {});
         }
         if (legacy.action === "recebeu") {
-          if (!isAuth && interaction.user.id !== legacy.targetId) return interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
+          if (!isAuth && interaction.user.id !== legacy.targetId) return interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true }).catch(() => {});
           const emb = EmbedBuilder.from(msg.embeds[0]);
           atualizarCampoStatusVip(emb, `✅ **PAGO / RECEBIDO**\nPor <@${interaction.user.id}> em <t:${Math.floor(Date.now() / 1000)}:f>`, "Green");
           await msg.edit({ embeds: [emb], components: disableComponents(msg.components) });
           dashEmit("vip:pago", { by: interaction.user.id, targetId: legacy.targetId });
-          return interaction.reply({ content: "✅ Confirmado.", ephemeral: true });
+          return interaction.reply({ content: "✅ Confirmado.", ephemeral: true }).catch(() => {});
         }
         if (legacy.action === "negar") {
-          if (!isAuth) return interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
+          if (!isAuth) return interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true }).catch(() => {});
           const modal = new ModalBuilder().setCustomId(`vip_modal_negar_${legacy.msgId}_${legacy.targetId}`).setTitle("❌ Reprovar").addComponents(
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("vip_motivo_reprovacao").setLabel("Motivo").setStyle(TextInputStyle.Paragraph).setRequired(true))
           );
-          return interaction.showModal(modal);
+          return interaction.showModal(modal).catch(() => {});
         }
       }
     }
 
     if (interaction.isModalSubmit()) {
       if (interaction.customId === "vip_modal_submit") {
+        if (!interaction.deferred && !interaction.replied) {
+          await interaction.deferReply({ ephemeral: true }).catch(() => {});
+        }
+
         const res = await createVipRecordInternal(client, {
           registrarUser: interaction.user, nomeEquipe: interaction.fields.getTextInputValue("vip_nome_membro"),
           beneficiarioRaw: interaction.fields.getTextInputValue("vip_beneficiario"), tipoRaw: interaction.fields.getTextInputValue("vip_tipo"),
           cidadeRaw: interaction.fields.getTextInputValue("vip_cidade"), motivoRegistro: interaction.fields.getTextInputValue("vip_motivo_registro")
         });
-        if (res?.error) return interaction.reply({ content: "❌ Cidade inválida.", ephemeral: true });
+
+        if (res?.error) return interaction.editReply({ content: "❌ Cidade inválida." }).catch(() => {});
         const canal = await client.channels.fetch(VIP_CANAL_ID).catch(() => null);
         if (canal) await moveMainMenuToBottom(canal);
-        return interaction.reply({ content: "✅ Registro criado!", ephemeral: true });
+        return interaction.editReply({ content: "✅ Registro criado!" }).catch(() => {});
       }
       if (interaction.customId.startsWith("vip_modal_negar_")) {
+        if (!interaction.deferred && !interaction.replied) {
+          await interaction.deferReply({ ephemeral: true }).catch(() => {});
+        }
+
         const [, , , msgId, targetId] = interaction.customId.split("_");
         const motivo = interaction.fields.getTextInputValue("vip_motivo_reprovacao");
         const canal = await client.channels.fetch(VIP_CANAL_ID).catch(() => null);
         const msg = await canal.messages.fetch(msgId).catch(() => null);
+
+        if (!msg) return interaction.editReply({ content: "❌ Registro original não encontrado." }).catch(() => {});
+
         const emb = EmbedBuilder.from(msg.embeds[0]);
         atualizarCampoStatusVip(emb, `❌ **REPROVADO**\nPor <@${interaction.user.id}>\nMotivo: ${motivo}`, "Red");
         await msg.edit({ embeds: [emb], components: disableComponents(msg.components) });
         const reprovaCh = await client.channels.fetch(VIP_REPROVA_CANAL_ID).catch(() => null);
         if (reprovaCh) reprovaCh.send({ embeds: [new EmbedBuilder().setColor("Red").setTitle("❌ VIP Reprovado").setDescription(`Beneficiário: <@${targetId}>\nMotivo: ${motivo}\nPor: ${interaction.user.tag}`)] });
-        return interaction.reply({ content: "❌ Reprovado com sucesso.", ephemeral: true });
+        return interaction.editReply({ content: "❌ Reprovado com sucesso." }).catch(() => {});
       }
     }
   } catch (e) { console.error("[VIP Registro] Erro:", e); }

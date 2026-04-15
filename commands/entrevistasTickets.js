@@ -18,6 +18,19 @@ import { resolveLogChannel } from '../events/channelResolver.js';
 export default function createEntrevistasTickets({ client, Transcript }) {
   ///!ENTREVISTA
 
+  // ── 🔒 Trava anti double-click / concorrência ─────────────────────
+  const HANDLED_INTERACTIONS = new Set();
+  function hasHandled(i) {
+    try {
+      if (!i?.id) return false;
+      if (HANDLED_INTERACTIONS.has(i.id)) return true;
+      HANDLED_INTERACTIONS.add(i.id);
+      setTimeout(() => HANDLED_INTERACTIONS.delete(i.id), 10_000); // 10s de trava
+      return false;
+    } catch { return false; }
+  }
+
+
   // ✅ Variáveis importantes
   const TRANSCRIPTS_CHANNEL_ID = '1358568999738409151'; // Canal onde o log de tickets será enviado
   const TRANSCRIPTS_BASE_URL = 'https://transcripts-santa.squareweb.app/transcript/';
@@ -329,11 +342,12 @@ function rebuildPendingFromFormsMessage(message) {
 
         const aviso = textos[tipo] || textos['suporte'];
 
-        for (const membro of membrosParaNotificar.values()) {
+        // Envia DMs sem dar await para não travar a criação do canal
+        membrosParaNotificar.forEach(membro => {
           membro.send({
             content: `${aviso.titulo}\n\n📎 Link: ${canal.toString()} <@${membro.id}>\n\n${aviso.subtitulo}`
           }).catch(() => {});
-        }
+        });
       }
 
       if (tipo === 'roupas') {
@@ -342,11 +356,11 @@ function rebuildPendingFromFormsMessage(message) {
           !membro.user.bot && ROUPAS_NOTIFY_ROLES.some(roleId => membro.roles.cache.has(roleId))
         );
 
-        for (const [_, membro] of membrosParaNotificar) {
+        membrosParaNotificar.forEach(membro => {
           membro.send({
             content: `🧵 Um novo ticket de **roupas** foi aberto!\n\n📎 Link: ${canal.toString()} <@${membro.id}>\n\nSolicite os detalhes do design e acompanhe o pedido.`
           }).catch(() => {});
-        }
+        });
       }
 
       if (tipo === 'designer') {
@@ -415,6 +429,8 @@ function rebuildPendingFromFormsMessage(message) {
   async function onInteractionCreate(interaction) {
     // (era o client.on(Events.InteractionCreate...))
 
+    if (hasHandled(interaction)) return true;
+
     // ===== SELECT MENU =====
     if (interaction.isStringSelectMenu() && interaction.customId === 'selecionar_ticket') {
       try {
@@ -469,15 +485,14 @@ function rebuildPendingFromFormsMessage(message) {
             PermissionsBitField.Flags.ReadMessageHistory,
             PermissionsBitField.Flags.AttachFiles
           ]).bitfield,
-          deny: 0n,
-          type: 'member'
+          type: OverwriteType.Member
         });
 
         canal = await interaction.guild.channels.create({
           name: `🎫┋${dados.nome}-${interaction.user.username}`,
           type: ChannelType.GuildText,
           parent: categoria,
-          permissionOverwrites: baseOverwrites
+          permissionOverwrites: baseOverwrites,
         });
 
         // 🔒 guarda o tipo + quem abriu no tópico (usado no fechamento)
@@ -488,6 +503,9 @@ function rebuildPendingFromFormsMessage(message) {
         return true;
       }
 
+      // Notifica em background
+      await interaction.editReply({ content: `✅ Canal criado com sucesso: ${canal}` });
+      
       await notificarEquipeEntrevista(interaction.guild, canal, dados.nome);
 
       const embedTicket = new EmbedBuilder()
@@ -536,7 +554,6 @@ function rebuildPendingFromFormsMessage(message) {
         }
       }
 
-      await interaction.editReply({ content: `✅ Canal criado com sucesso: ${canal}` });
       return true;
     }
 
@@ -1091,13 +1108,13 @@ if (interaction.isModalSubmit() && interaction.customId === 'modal_registro_lide
 
   async function finalizarTicketComConclusao(interaction, conclusaoFinal) {
     // garante que não dá erro de "já respondeu"
+    const canal   = interaction.channel;
+    const canalId = canal.id;
     try {
-      const msg = { content: "📄 Fechando ticket e gerando transcript...", ephemeral: true };
+      const msg = { content: `📄 O ticket <#${canalId}> está sendo finalizado e será excluído em instantes.`, ephemeral: true };
       if (!interaction.replied && !interaction.deferred) {
         await interaction.reply(msg);
-      } else {
-        await interaction.followUp(msg);
-      }
+      } else { await interaction.followUp(msg); }
     } catch {}
 
     const canal   = interaction.channel;
