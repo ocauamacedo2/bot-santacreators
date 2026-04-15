@@ -1117,8 +1117,6 @@ if (interaction.isModalSubmit() && interaction.customId === 'modal_registro_lide
       } else { await interaction.followUp(msg); }
     } catch {}
 
-    const canal   = interaction.channel;
-    const canalId = canal.id;
     const guild   = interaction.guild;
     const closer  = interaction.member;
 
