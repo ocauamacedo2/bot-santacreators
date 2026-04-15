@@ -380,10 +380,6 @@ const setupEventHandlers = () => {
   if (client.__handlersWired) return;
   client.__handlersWired = true;
 
-  // Limpa listeners antigos
-  const events = ["interactionCreate", "messageCreate", "messageUpdate", "messageDelete", "messageDeleteBulk", "guildMemberAdd", "channelCreate", "channelDelete", "channelUpdate", "guildMemberRemove", "guildMemberUpdate", "ready", "inviteCreate", "inviteDelete", "voiceStateUpdate"];
-  events.forEach(e => client.removeAllListeners(e));
-
   // ✅ Inicializa o Sistema de Sincronização de Cargos
   setupSyncCargos(client);
 
@@ -391,20 +387,26 @@ const setupEventHandlers = () => {
   setupTicketRenamer(client);
 
   // Channel Events
-  client.on("channelCreate", async (c) => { try { await channelCreateLog.execute(c); } catch (e) {} });
+  client.on("channelCreate", async (c) => {
+    try { await channelCreateLog.execute(c); } catch (e) {}
+  });
+
   client.on("channelDelete", async (c) => {
     try { await channelDeleteLog.execute(c); } catch (e) {}
     try { await channelDeleteProtectLog.execute(c, client); } catch (e) {}
     try { reminderHandleChannelDelete(c); } catch (e) {}
-    try { connectStatusOnChannelDelete(c); } catch {}
+    try { connectStatusOnChannelDelete(c); } catch (e) {}
   });
-  client.on(Events.ChannelUpdate, async (o, n) => { try { await reminderHandleChannelUpdate(o, n, client); } catch {} });
+
+  client.on(Events.ChannelUpdate, async (o, n) => {
+    try { await reminderHandleChannelUpdate(o, n, client); } catch (e) {}
+  });
 
   // Message Create
   client.on("messageCreate", async (message) => {
     try {
       try { await reminderHandleMessageCreate(message, client); } catch (e) {}
-      cacheMessage(message);
+      try { cacheMessage(message); } catch (e) {}
 
       // ✅ PRIORIDADE MÁXIMA: comandos de mover canal
       try {
@@ -437,10 +439,14 @@ const setupEventHandlers = () => {
       if (await connectStatusHandleMessage(message, client)) return;
       if (await orgsHandleMessage(message, client)) return;
       if (await checklistHandleMessage(message, client)) return;
-      if (await checklistHandleMessage(message, client)) return;
 
-      try { if (typeof geralDash?.geralDashHandleMessage === "function" && await geralDash.geralDashHandleMessage(message, client)) return; } catch (e) {}
-      try { if (await geralWeeklyRankHandleMessage(message, client)) return; } catch (e) {}
+      try {
+        if (typeof geralDash?.geralDashHandleMessage === "function" && await geralDash.geralDashHandleMessage(message, client)) return;
+      } catch (e) {}
+
+      try {
+        if (await geralWeeklyRankHandleMessage(message, client)) return;
+      } catch (e) {}
 
       if (await criarCargoHandleMessage(message, client)) return;
       if (await removerPermHandleMessage(message, client)) return;
@@ -463,7 +469,9 @@ const setupEventHandlers = () => {
 
       await entrevistasTickets.onMessageCreate(message);
       await messageCreateHandler.execute(message, [], client);
-    } catch (error) { console.error("Erro messageCreate:", error); }
+    } catch (error) {
+      console.error("Erro messageCreate:", error);
+    }
   });
 
   registerApagarPV(client);
@@ -473,10 +481,12 @@ const setupEventHandlers = () => {
     try { await messageUpdateLog.execute(o, n, client); } catch (e) {}
     try { await registroManagerHandleMessageUpdate(o, n, client); } catch (e) {}
   });
+
   client.on("messageDelete", async (m) => {
     try { await messageDeleteLog.execute(m, client); } catch (e) {}
     try { await registroManagerHandleMessageDelete(m, client); } catch (e) {}
   });
+
   client.on("messageDeleteBulk", async (ms) => {
     try { await messageDeleteBulkLog.execute(ms, client); } catch (e) {}
     try { await registroManagerHandleMessageBulkDelete(ms, ms.first()?.channel, client); } catch (e) {}
@@ -484,7 +494,9 @@ const setupEventHandlers = () => {
 
   // Members
   client.on("guildMemberAdd", async (m) => {
-    try { await autoRoleOnJoin(m); } catch (e) {
+    try {
+      await autoRoleOnJoin(m);
+    } catch (e) {
       console.error("[CORE] erro em autoRoleOnJoin:", e);
     }
 
@@ -492,9 +504,11 @@ const setupEventHandlers = () => {
     try { await setStaffHandleGuildMemberAdd(m, client); } catch (e) {}
     try { await memberJoinLog.execute(m, client); } catch (e) {}
   });
+
   client.on("guildMemberRemove", async (m) => {
     try { await saidaHandler.execute(m); } catch (e) {}
   });
+
   client.on("inviteCreate", (i) => memberJoinLog.handleInviteCreate(i));
   client.on("inviteDelete", (i) => memberJoinLog.handleInviteDelete(i));
 
@@ -516,6 +530,7 @@ const setupEventHandlers = () => {
   // Interactions
   client.on("interactionCreate", async (interaction) => {
     if (interaction.isAutocomplete()) return;
+
     try {
       if (await registroManagerHandleInteraction(interaction, client)) return;
       if (await handleWeeklyRankInteractions(interaction, client)) return;
@@ -544,7 +559,9 @@ const setupEventHandlers = () => {
       if (await sortChannelsHandleInteraction(interaction, client)) return;
       if (await reuniaoSemanalHandleInteraction(interaction, client)) return;
 
-      try { if (typeof geralDash?.geralDashHandleInteraction === "function" && await geralDash.geralDashHandleInteraction(interaction, client)) return; } catch (e) {}
+      try {
+        if (typeof geralDash?.geralDashHandleInteraction === "function" && await geralDash.geralDashHandleInteraction(interaction, client)) return;
+      } catch (e) {}
 
       if (await duplicarPermHandleInteraction(interaction, client)) return;
       if (await editarPermHandleInteraction(interaction, client)) return;
@@ -553,17 +570,12 @@ const setupEventHandlers = () => {
       if (await cronogramaCreatorsHandleInteraction(interaction, client)) return;
       if (await hierarquiaHandleInteraction(interaction, client)) return;
       if (await checklistHandleInteraction(interaction, client)) return;
-      if (await checklistHandleInteraction(interaction, client)) return;
 
       if (await handlePagamentoSocial(interaction, client).catch(() => false)) return;
 
       // Channel Delete History/Restore
       if (interaction.isButton() && (interaction.customId.startsWith("cd_history:") || interaction.customId.startsWith("cd_restore:"))) {
-        // Lógica simplificada para manter o arquivo limpo, mas funcional
-        // (Assume que o arquivo está em ../data/moderacao/...)
         const filePath = path.join(__dirname, "../data/moderacao/channelDeleteInfractions.json");
-        // ... (Lógica de leitura e resposta mantida do original, apenas ajustando path)
-        // Para brevidade, assumimos que a lógica está aqui.
         return interaction.reply({ content: "Funcionalidade movida para o core, verifique os logs.", ephemeral: true });
       }
 
@@ -571,70 +583,78 @@ const setupEventHandlers = () => {
       if (await entrevistasTickets.onInteractionCreate(interaction).catch(() => false)) return;
 
       await interactionCreateHandler.execute(interaction);
-    } catch (error) { console.error("Erro interactionCreate:", error); }
+    } catch (error) {
+      console.error("Erro interactionCreate:", error);
+    }
   });
 
   // Ready
   client.once("ready", async () => {
+    if (client.__coreBootState.readyBootExecuted) return;
+    client.__coreBootState.readyBootExecuted = true;
+
     try { console.log("[CORE] Iniciando AutoJoin..."); iniciarAutoJoin(client); } catch (e) { console.error("[CORE] Erro AutoJoin:", e); }
-    try { iniciarRegistroPoderes(client); } catch {}
-    try { iniciarRegistroEvento(client); } catch {}
+    try { iniciarRegistroPoderes(client); } catch (e) {}
+    try { iniciarRegistroEvento(client); } catch (e) {}
     try { await reminderOnReady(client); } catch (e) {}
 
-    try { await facsSemanaisOnReady(client); await facsComparativoOnReady(client); } catch (e) {}
+    try { await facsSemanaisOnReady(client); } catch (e) {}
+    try { await facsComparativoOnReady(client); } catch (e) {}
     try { await confirmacaoPresencaOnReady(client); } catch (e) {}
-    await graficoManagersOnReady(client);
+    try { await graficoManagersOnReady(client); } catch (e) {}
     try { await registroManagerOnReady(client); } catch (e) {}
     try { await registroVendasOnReady(client); } catch (e) {}
     try { await evt3EventsOnReady(client); } catch (e) {}
-    try { dashDebugOnReady(client); } catch {}
-    try { await dashRouterOnReady(client); } catch {}
+    try { dashDebugOnReady(client); } catch (e) {}
+    try { await dashRouterOnReady(client); } catch (e) {}
     try { await payEvtDashOnReady(client); } catch (e) {}
 
-    try { if (typeof geralDash?.geralDashOnReady === "function") await geralDash.geralDashOnReady(client); } catch (e) {}
+    try {
+      if (typeof geralDash?.geralDashOnReady === "function") {
+        await geralDash.geralDashOnReady(client);
+      }
+    } catch (e) {}
+
     try { await geralWeeklyRankOnReady(client); } catch (e) {}
 
     console.log(`✅ Bot pronto como ${client.user.tag}`);
     client.user.setActivity("Cauã Macedo – SantaCreators ✨", { type: ActivityType.Watching });
 
-    try { await roleProtectOnReady(client); } catch {}
-    try { await formsCreatorOnReady(client); } catch {}
-    try { await doacaoOnReady(client); } catch {}
-    try { await pedirSetOnReady(client); } catch {}
-    try { await setStaffOnReady(client); } catch {}
-    try { await connectStatusOnReady(client); } catch {}
-    try { await alinhamentosOnReady(client); } catch {}
-    try { await vipEventoOnReady(client); } catch {}
-    try { await vipRegistroOnReady(client); } catch {}
-    try { await lideresConvitesOnReady(client); } catch {}
-    try { await setStaffV2OnReady(client); } catch {}
-    try { await blacklistEventosOnReady(client); } catch {}
+    try { await roleProtectOnReady(client); } catch (e) {}
+    try { await formsCreatorOnReady(client); } catch (e) {}
+    try { await doacaoOnReady(client); } catch (e) {}
+    try { await pedirSetOnReady(client); } catch (e) {}
+    try { await setStaffOnReady(client); } catch (e) {}
+    try { await connectStatusOnReady(client); } catch (e) {}
+    try { await alinhamentosOnReady(client); } catch (e) {}
+    try { await vipEventoOnReady(client); } catch (e) {}
+    try { await vipRegistroOnReady(client); } catch (e) {}
+    try { await lideresConvitesOnReady(client); } catch (e) {}
+    try { await setStaffV2OnReady(client); } catch (e) {}
+    try { await blacklistEventosOnReady(client); } catch (e) {}
     try { await hallDaFamaOnReady(client); } catch (e) {}
     try { await eventosDiariosOnReady(client); } catch (e) {}
-    try { await cadastroManualOnReady(client); } catch {}
+    try { await cadastroManualOnReady(client); } catch (e) {}
     try { await recrutamentoDashOnReady(client); } catch (e) {}
     try { await monitorCargosOnReady(client); } catch (e) {}
     try { await cronogramaCreatorsOnReady(client); } catch (e) {}
     try { await hierarquiaOnReady(client); } catch (e) {}
     try { await reuniaoSemanalOnReady(client); } catch (e) {}
     try { await checklistOnReady(client); } catch (e) {}
-    
-// ✅ AUTO REACT FOTOS
-try {
-  console.log("[CORE] Inicializando autoReactsFotos (modo centralizado)...");
-  await autoReactsFotosOnReady(client);
-  console.log("[CORE] autoReactsFotos inicializado.");
-} catch (e) {
-  console.error("[CORE] Erro ao iniciar autoReactsFotos:", e);
-}
-    
-    memberJoinLog.initInviteCache(client);
 
+    // ✅ AUTO REACT FOTOS
+    try {
+      console.log("[CORE] Inicializando autoReactsFotos (modo centralizado)...");
+      await autoReactsFotosOnReady(client);
+      console.log("[CORE] autoReactsFotos inicializado.");
+    } catch (e) {
+      console.error("[CORE] Erro ao iniciar autoReactsFotos:", e);
+    }
 
+    try { memberJoinLog.initInviteCache(client); } catch (e) {}
 
-
-    try { startTodosLembretes(client); } catch {}
-    try { startRolesOnlineMonitor(client); } catch {}
+    try { startTodosLembretes(client); } catch (e) {}
+    try { startRolesOnlineMonitor(client); } catch (e) {}
     try { await pagamentoSocialOnReady(client); } catch (e) {}
     try { await entrevista.reanexar(client); } catch (e) {}
     try { await entrevistasTickets.onReady(); } catch (e) {}
@@ -654,13 +674,16 @@ try {
   setupNicknameChangeLog(client);
 
   // Late-wire
-  if (client.isReady()) {
+  if (client.isReady() && !client.__coreBootState.lateBootExecuted) {
+    client.__coreBootState.lateBootExecuted = true;
+
     entrevista.reanexar(client).catch(() => {});
     client.user.setActivity("Cauã Macedo – SantaCreators ✨", { type: ActivityType.Watching });
-    try { iniciarRegistroPoderes(client); } catch {}
-    try { iniciarRegistroEvento(client); } catch {}
+
+    try { iniciarRegistroPoderes(client); } catch (e) {}
+    try { iniciarRegistroEvento(client); } catch (e) {}
     try { iniciarAutoJoin(client); } catch (e) { console.error("[CORE] Erro AutoJoin (Late):", e); }
-    try { startTodosLembretes(client); } catch {}
+    try { startTodosLembretes(client); } catch (e) {}
   }
 };
 
@@ -673,7 +696,7 @@ export const initBot = async () => {
     setupEventHandlers();
     setupBatePonto(client);
     setupAlinhamentoDash(client);
-    await import('../events/gestaoinfluencer.js');
+    await import("../events/gestaoinfluencer.js");
 
     if (!client.__loggedIn) {
       client.__loggedIn = true;
@@ -689,9 +712,15 @@ export const initBot = async () => {
         new SlashCommandBuilder()
           .setName("disconnect")
           .setDescription("Expulsa um usuário da call de voz")
-          .addUserOption((option) => option.setName("user").setDescription("Usuário a ser desconectado").setRequired(true))
+          .addUserOption((option) =>
+            option
+              .setName("user")
+              .setDescription("Usuário a ser desconectado")
+              .setRequired(true)
+          )
           .toJSON(),
       ];
+
       await client.application.commands.set(data);
     } catch (e) {}
 
@@ -699,38 +728,51 @@ export const initBot = async () => {
     const CANAL_BOTAO = "1383152873587740843";
     const GIF_BANNER = "https://media.discordapp.net/attachments/1362477839944777889/1384245215249825832/standard_2rss.gif";
 
-    setInterval(async () => {
-      try {
-        if (!client.isReady()) return;
-        const canal = await getChannel(client, CANAL_BOTAO).catch(() => null);
-        if (!canal || !canal.isTextBased()) return;
+    if (!globalThis.__SC_CORE_GUARDS__.setarNomeIntervalStarted) {
+      globalThis.__SC_CORE_GUARDS__.setarNomeIntervalStarted = true;
 
-        const mensagens = await canal.messages.fetch({ limit: 10 }).catch(() => null);
-        if (!mensagens) return;
+      setInterval(async () => {
+        try {
+          if (!client.isReady()) return;
 
-        const mensagensBotao = mensagens.filter(
-          (msg) => msg.author.id === client.user.id && msg.components?.[0]?.components?.some((c) => c.customId === "setar_nome")
-        );
+          const canal = await getChannel(client, CANAL_BOTAO).catch(() => null);
+          if (!canal || !canal.isTextBased()) return;
 
-        if (mensagensBotao.size > 1) {
-          const extras = [...mensagensBotao.values()].slice(1);
-          for (const msg of extras) await msg.delete().catch(() => {});
-        }
+          const mensagens = await canal.messages.fetch({ limit: 10 }).catch(() => null);
+          if (!mensagens) return;
 
-        if (mensagensBotao.size === 0) {
-          const embed = new EmbedBuilder()
-            .setTitle("📌 | Identifique-se - SantaCreators")
-            .setDescription("Clique no botão abaixo para enviar seu **nome**.")
-            .setColor("#ff009a")
-            .setImage(GIF_BANNER);
-          const row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId("setar_nome").setLabel("✍️ Enviar meu nome").setStyle(ButtonStyle.Primary)
+          const mensagensBotao = mensagens.filter(
+            (msg) =>
+              msg.author.id === client.user.id &&
+              msg.components?.[0]?.components?.some((c) => c.customId === "setar_nome")
           );
-          await safeSend(canal, { embeds: [embed], components: [row] });
-        }
-      } catch (err) {}
-    }, 15 * 60 * 1000);
 
+          if (mensagensBotao.size > 1) {
+            const extras = [...mensagensBotao.values()].slice(1);
+            for (const msg of extras) {
+              await msg.delete().catch(() => {});
+            }
+          }
+
+          if (mensagensBotao.size === 0) {
+            const embed = new EmbedBuilder()
+              .setTitle("📌 | Identifique-se - SantaCreators")
+              .setDescription("Clique no botão abaixo para enviar seu **nome**.")
+              .setColor("#ff009a")
+              .setImage(GIF_BANNER);
+
+            const row = new ActionRowBuilder().addComponents(
+              new ButtonBuilder()
+                .setCustomId("setar_nome")
+                .setLabel("✍️ Enviar meu nome")
+                .setStyle(ButtonStyle.Primary)
+            );
+
+            await safeSend(canal, { embeds: [embed], components: [row] });
+          }
+        } catch (err) {}
+      }, 15 * 60 * 1000);
+    }
   } catch (error) {
     console.error("Erro ao iniciar o bot:", error);
   }
