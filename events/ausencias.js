@@ -126,14 +126,14 @@ function criarEmbedRegistro({ user, nome, data, hora, motivo, gifUrl, addOrigem,
 
 async function enviarBotaoFixoPorCanal(client, canalId) {
   const canal = await client.channels.fetch(canalId).catch(() => null);
-  if (!canal) return;
+  if (!canal || !canal.isTextBased()) return;
 
-  const mensagens = await canal.messages.fetch({ limit: 20 }).catch(() => null);
+  const mensagens = await canal.messages.fetch({ limit: 25 }).catch(() => null);
   if (mensagens) {
     for (const msg of mensagens.values()) {
-      if (msg.author?.id === client.user.id && (msg.components?.length ?? 0) > 0) {
+      if (msg.author?.id === client.user.id && msg.components?.length > 0) {
         // Check if it's our button to avoid deleting other bots/features buttons if they exist (though unlikely in this specific channel setup)
-        const isMyButton = msg.components[0].components.some(c => c.customId === 'abrir_ausencia');
+        const isMyButton = msg.components[0]?.components?.some(c => c.customId === 'abrir_ausencia');
         if (isMyButton) {
              await msg.delete().catch(() => {});
         }
@@ -167,9 +167,9 @@ export async function ausenciasHandleInteraction(interaction, client) {
     try {
       // BOTÃO → abre modal
       if (interaction.isButton() && interaction.customId === 'abrir_ausencia') {
-        const autorizado = interaction.member?.roles?.cache?.some(r =>
-          CARGOS_AUTORIZADOS_AUSENCIA.includes(r.id)
-        );
+        const isUserAllowed = CARGOS_AUTORIZADOS_AUSENCIA.includes(interaction.user.id);
+        const hasRole = interaction.member?.roles?.cache?.some(r => CARGOS_AUTORIZADOS_AUSENCIA.includes(r.id));
+        const autorizado = isUserAllowed || hasRole;
 
         if (!autorizado) {
           await interaction.reply({
@@ -230,16 +230,15 @@ export async function ausenciasHandleInteraction(interaction, client) {
 
       // MODAL → envia no canal de origem + Ausências Gerais e recria botão
       if (interaction.isModalSubmit() && interaction.customId.startsWith('modal_ausencia_')) {
+        // Ganha tempo para processar (evita timeout de 3s)
+        await interaction.deferReply({ ephemeral: true }).catch(() => {});
+
         const canalId = interaction.customId.replace('modal_ausencia_', '');
         const canalOrigem = await client.channels.fetch(canalId).catch(() => null);
 
         if (!canalOrigem) {
           await interaction
-            .reply({
-              content:
-                '⚠️ O canal de origem não foi encontrado. Vou registrar em Ausências Gerais.',
-              ephemeral: true,
-            })
+            .editReply({ content: '⚠️ O canal de origem não foi encontrado. Vou registrar em Ausências Gerais.' })
             .catch(() => {});
         }
 
@@ -313,18 +312,8 @@ export async function ausenciasHandleInteraction(interaction, client) {
             .catch(() => {});
         }
 
-        // resposta do modal (se ainda não respondeu ali em cima)
-        if (!interaction.replied && !interaction.deferred) {
-          await interaction
-            .reply({ content: '✅ Registro de ausência enviado com sucesso!', ephemeral: true })
-            .catch(() => {});
-        } else {
-          // se já respondeu (canalOrigem inexistente), só tenta followUp
-          await interaction
-            .followUp({ content: '✅ Registro de ausência enviado com sucesso!', ephemeral: true })
-            .catch(() => {});
-        }
-
+        // Resposta final de sucesso
+        await interaction.editReply({ content: '✅ Registro de ausência enviado com sucesso!' }).catch(() => {});
         return true;
       }
     } catch (err) {
