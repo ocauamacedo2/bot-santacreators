@@ -104,6 +104,49 @@ import { wrapRL } from "../utils/rl.js";
 import { getChannel } from "../utils/cacheDiscord.js";
 
 // Sistemas
+// Specific Message Handlers (must be imported before messageCreate listener)
+import { registroVendasHandleMessage } from "../events/registroVendas.js";
+import { ausenciasHandleMessage } from "../events/ausencias.js";
+import { registroPoderesEventosHandleMessage } from "../events/registroPoderesEventos.js";
+import { focoSemanaisHandleMessage } from "../events/focoSemanais.js";
+import { provasAdvHandleMessage } from "../events/provasAdv.js";
+import { blacklistFacsHandleMessage } from "../events/blacklistFacs.js";
+import { sortChannelsHandleMessage } from "../commands/canais/sortChannels.js";
+import { payEvtDashHandleMessage } from "../events/payEvtDash/index.js";
+import { facsComparativoHandleMessage } from "../events/facsComparativo.js";
+import { dashRouterHandleMessage } from "../events/dashRouter.js";
+import { facsSemanaisHandleMessage } from "../events/facsSemanais.js";
+import { evt3EventsHandleMessage } from "../events/evt3EventsCreator.js";
+import { recrutamentoDashHandleMessage } from "../events/recrutamentoDash.js";
+import { monitorCargosHandleMessage } from "../events/monitorCargos.js";
+import { registroManagerHandleMessage } from "../events/registroManager.js";
+import { aulaoHandleMessage } from "../events/aulaoSantaCreators.js";
+import { cronogramaCreatorsHandleMessage } from "../events/cronogramaCreators.js";
+import { hierarquiaHandleMessage } from "../events/hierarquiaDivisoes.js";
+import { reuniaoSemanalHandleMessage } from "../events/reuniaoSemanal.js";
+import { roleProtectHandleMessage } from "../events/roleProtect.js";
+import { connectStatusHandleMessage } from "../events/connectStatus.js";
+import { orgsHandleMessage } from "../events/analisarOrgsPorDia.js";
+import { checklistHandleMessage } from "../events/logChecklistSemanal.js";
+import { geralWeeklyRankHandleMessage } from "../events/scGeralWeeklyRanking.js";
+import { criarCargoHandleMessage } from "../commands/admin/criarcargo.js";
+import { removerPermHandleMessage } from "../commands/admin/removerperm.js";
+import { duplicarPermHandleMessage } from "../commands/admin/duplicarperm.js";
+import { clearHandleMessage } from "../commands/admin/clearHandler.js";
+import { removerMassivoHandleMessage } from "../commands/admin/removerMassivo.js";
+import { verIdHandleMessage } from "../commands/admin/verid.js";
+import { apagarChatHandleMessage } from "../commands/admin/apagarchat.js";
+import { verPermsHandleMessage, editarPermHandleMessage } from "../commands/admin/editarperm.js";
+import { pedirSetHandleMessage } from "../events/pedirset.js";
+import { handleCorrecao } from "../commands/admin/correcao.js";
+import { alinhamentosHandleMessage } from "../events/alinhamentos.js";
+import { setStaffV2HandleMessage } from "../events/setStaffV2.js";
+import { doacaoHandleMessage } from "../events/doacao.js";
+import { vipEventoHandleMessage } from "../events/vipEvento.js";
+import { vipRegistroHandleMessage } from "../events/vipRegistro.js";
+import { lideresConvitesHandleMessage } from "../events/lideresConvites.js";
+
+// General MessageCreate handler (should be imported after specific handlers)
 import { iniciarRegistroPoderes } from "../events/registropoderes.js";
 import { iniciarRegistroEvento } from "../events/registroevento.js";
 import { iniciarAutoJoin } from "../events/autojoinVoice.js";
@@ -111,7 +154,6 @@ import { iniciarAutoJoin } from "../events/autojoinVoice.js";
 // Logs Setup
 import { setupUserUpdateLog } from "../events/logs/userUpdate.js";
 import { setupBanLog } from "../events/logs/ban.js";
-import { setupKickLog } from "../events/logs/kick.js";
 import { setupRoleUpdateLog } from "../events/logs/roleUpdate.js";
 import { setupVoiceLog } from "../events/logs/voice.js";
 import { setupChannelCategoryMoveLog } from "../events/logs/channelCategoryMove.js";
@@ -119,14 +161,6 @@ import { setupBotRemoveLog } from "../events/logs/botRemove.js";
 import { setupBotAddLog } from "../events/logs/botAdd.js";
 import { setupNicknameChangeLog } from "../events/logs/nicknameChange.js";
 import { setupChannelLog } from "../events/logs/channel.js";
-import { setupChannelNameCategoryUpdateLog } from "../events/logs/channelNameCategoryUpdate.js";
-import { cacheMessage } from "../events/logs/_deleteCache.js";
-import {
-  reminderOnReady,
-  reminderHandleMessageCreate,
-  reminderHandleChannelDelete,
-  reminderHandleChannelUpdate
-} from "../events/reminderManager.js";
 
 // Pagamento Social
 import { pagamentoSocialOnReady, handlePagamentoSocial } from "../events/pagamentosocial.js";
@@ -134,31 +168,10 @@ import { pagamentoSocialOnReady, handlePagamentoSocial } from "../events/pagamen
 // FormsCreator
 import { formsCreatorOnReady, formsCreatorHandleMessage, formsCreatorHandleInteraction } from "../events/formscreator.js";
 
-// Dashboards / Managers
-import setupBatePonto from "../events/batePonto.js";
-import setupAlinhamentoDash from "../Dashboard/alinhamentoDash.js";
+// Dashboards / Managers (These are likely setup functions, not message handlers)
+import setupBatePonto from "../events/batePonto.js"; // This is a setup function, not a message handler
+import setupAlinhamentoDash from "../Dashboard/alinhamentoDash.js"; // This is a setup function, not a message handler
 
-// Alinhamentos
-import { alinhamentosOnReady, alinhamentosHandleMessage, alinhamentosHandleInteraction } from "../events/alinhamentos.js";
-
-// Sort / Renamer
-import { setupSortChannels, sortChannelsHandleMessage, sortChannelsHandleInteraction } from "../commands/canais/sortChannels.js";
-import { setupTicketRenamer } from "../commands/canais/ticketRenamer.js";
-
-// PedirSet
-import { pedirSetOnReady, pedirSetHandleMessage, pedirSetHandleInteraction } from "../events/pedirset.js";
-
-// Lembretes
-import { startTodosLembretes } from "../events/lembretes/index.js";
-
-// Monitor online
-import { startRolesOnlineMonitor } from "../events/rolesOnlineMonitor.js";
-
-// Connect Status
-import { connectStatusOnReady, connectStatusHandleMessage, connectStatusOnChannelDelete } from "../events/connectStatus.js";
-
-// Orgs por dia
-import { orgsHandleMessage, orgsHandleInteraction } from "../events/analisarOrgsPorDia.js";
 
 // VIP Evento / Líderes Convites
 import {
@@ -172,10 +185,6 @@ import {
   vipRegistroHandleMessage
 } from "../events/vipRegistro.js";
 import { lideresConvitesOnReady, lideresConvitesHandleInteraction } from "../events/lideresConvites.js";
-
-// Doação
-import { doacaoOnReady, doacaoHandleMessage, doacaoHandleInteraction } from "../events/doacao.js";
-
 // Dash debug + router
 import { dashDebugOnReady } from "../events/dashDebug.js";
 import { dashRouterOnReady, dashRouterHandleMessage } from "../events/dashRouter.js";
@@ -183,10 +192,6 @@ import { payEvtDashOnReady, payEvtDashHandleMessage, payEvtDashHandleInteraction
 
 // EVT3
 import { evt3EventsOnReady, evt3EventsHandleMessage, evt3EventsHandleInteraction } from "../events/evt3EventsCreator.js";
-
-// Blacklist Eventos
-import { blacklistEventosOnReady, blacklistEventosHandleInteraction } from "../events/blacklistEventos.js";
-
 // Hall da Fama & Eventos Diários
 import { hallDaFamaOnReady, hallDaFamaHandleInteraction } from "../events/hallDaFama.js";
 import { eventosDiariosOnReady, eventosDiariosHandleInteraction } from "../events/eventosDiarios.js";
@@ -194,15 +199,6 @@ import { eventosDiariosOnReady, eventosDiariosHandleInteraction } from "../event
 // Comandos Admin
 import { registerApagarPV } from "../commands/admin/apagarpv.js";
 import { criarCargoHandleMessage } from "../commands/admin/criarcargo.js";
-import { verIdHandleMessage } from "../commands/admin/verid.js";
-import { removerMassivoHandleMessage } from "../commands/admin/removerMassivo.js";
-import { apagarChatHandleMessage } from "../commands/admin/apagarchat.js";
-import { clearHandleMessage } from "../commands/admin/clearHandler.js";
-import { removerPermHandleMessage } from "../commands/admin/removerperm.js";
-import { duplicarPermHandleMessage, duplicarPermHandleInteraction } from "../commands/admin/duplicarperm.js";
-import { editarPermHandleMessage, verPermsHandleMessage, editarPermHandleInteraction } from "../commands/admin/editarperm.js";
-
-// Role Protect
 import { roleProtectOnReady, roleProtectHandleMessage, roleProtectHandleGuildMemberUpdate } from "../events/roleProtect.js";
 
 // Set Staff
@@ -216,100 +212,8 @@ import {
   registroManagerHandleMessage,
   registroManagerHandleMessageDelete,
   registroManagerHandleMessageBulkDelete,
-  registroManagerHandleMessageUpdate,
+  registroManagerHandleMessageUpdate
 } from "../events/registroManager.js";
-
-// FACs
-import {
-  facsSemanaisOnReady,
-  facsSemanaisHandleMessage,
-  facsSemanaisHandleInteraction,
-} from "../events/facsSemanais.js";
-import {
-  facsComparativoOnReady,
-  facsComparativoHandleInteraction,
-  facsComparativoHandleMessage,
-} from "../events/facsComparativo.js";
-
-// Confirmação Presença
-import {
-  confirmacaoPresencaOnReady,
-  confirmacaoPresencaHandleInteraction
-} from "../events/confirmacaoPresenca.js";
-
-// Geral Dash & Ranking
-import * as geralDash from "../events/scGeralDash.js";
-import { 
-  geralWeeklyRankOnReady,
-  geralWeeklyRankHandleMessage,
-  handleWeeklyRankInteractions
-} from "../events/scGeralWeeklyRanking.js";
-
-// Dashboard Managers
-import {
-  graficoManagersOnReady,
-  graficoManagersHandleInteraction,
-} from "../events/GraficoManagers.js";
-
-// Recrutamento Dash
-import {
-  recrutamentoDashOnReady,
-  recrutamentoDashHandleInteraction,
-  recrutamentoDashHandleMessage
-} from "../events/recrutamentoDash.js";
-
-// Monitor Cargos
-import { monitorCargosOnReady, monitorCargosHandleUpdate, monitorCargosHandleMessage } from "../events/monitorCargos.js";
-
-// Cadastro Manual
-import {
-  cadastroManualOnReady,
-  cadastroManualHandleInteraction
-} from "../events/cadastroManual.js";
-
-// Aulão
-import { aulaoHandleMessage, aulaoHandleInteraction } from "../events/aulaoSantaCreators.js";
-
-// Cronograma Creators
-import { cronogramaCreatorsOnReady, cronogramaCreatorsHandleMessage, cronogramaCreatorsHandleInteraction } from "../events/cronogramaCreators.js";
-
-// Ausências
-import {
-  ausenciasOnReady,
-  ausenciasHandleInteraction,
-  ausenciasHandleMessage
-} from "../events/ausencias.js";
-
-// Auto React Fotos
-import { autoReactsFotosOnReady, autoReactsFotosHandleMessage } from "../events/autoReactsFotos.js";
-
-// Hierarquia
-import {
-  hierarquiaOnReady,
-  hierarquiaHandleInteraction,
-  hierarquiaHandleMessage,
-  hierarquiaHandleGuildMemberUpdate
-} from "../events/hierarquiaDivisoes.js";
-
-// Reunião Semanal
-import { reuniaoSemanalOnReady, reuniaoSemanalHandleMessage, reuniaoSemanalHandleInteraction } from "../events/reuniaoSemanal.js";
-
-// Log Entrada
-import * as memberJoinLog from "../events/logs/memberJoinLog.js";
-import { autoRoleOnJoin } from "../events/autoRoleOnJoin.js";
-
-// Role Permission Guard
-import { rolePermissionGuardHandleRoleUpdate } from "../events/rolePermissionGuard.js";
-
-// Log Checklist
-import { 
-  checklistOnReady, 
-  checklistHandleMessage, 
-  checklistHandleInteraction 
-} from "../events/logChecklistSemanal.js";
-
-// Role Sync Module
-import { setupSyncCargos } from "../events/syncCargos.js";
 
 // =====================================================
 // Express + Mongo

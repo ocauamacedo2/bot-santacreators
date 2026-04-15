@@ -130,14 +130,13 @@ async function enviarBotaoFixoPorCanal(client, canalId) {
 
   const mensagens = await canal.messages.fetch({ limit: 25 }).catch(() => null);
   if (mensagens) {
-    for (const msg of mensagens.values()) {
-      if (msg.author?.id === client.user.id && msg.components?.length > 0) {
-        // Check if it's our button to avoid deleting other bots/features buttons if they exist (though unlikely in this specific channel setup)
-        const isMyButton = msg.components[0]?.components?.some(c => c.customId === 'abrir_ausencia');
-        if (isMyButton) {
-             await msg.delete().catch(() => {});
-        }
-      }
+    const paraApagar = mensagens.filter(msg => 
+      msg.author.id === client.user.id && 
+      msg.components?.[0]?.components?.some(c => c.customId === 'abrir_ausencia')
+    );
+    
+    for (const msg of paraApagar.values()) {
+      await msg.delete().catch(() => {});
     }
   }
 
@@ -230,16 +229,16 @@ export async function ausenciasHandleInteraction(interaction, client) {
 
       // MODAL → envia no canal de origem + Ausências Gerais e recria botão
       if (interaction.isModalSubmit() && interaction.customId.startsWith('modal_ausencia_')) {
-        // Ganha tempo para processar (evita timeout de 3s)
-        await interaction.deferReply({ ephemeral: true }).catch(() => {});
+        // Resposta imediata para evitar "interação falhou"
+        if (!interaction.deferred && !interaction.replied) {
+          await interaction.deferReply({ ephemeral: true }).catch(() => {});
+        }
 
         const canalId = interaction.customId.replace('modal_ausencia_', '');
         const canalOrigem = await client.channels.fetch(canalId).catch(() => null);
 
         if (!canalOrigem) {
-          await interaction
-            .editReply({ content: '⚠️ O canal de origem não foi encontrado. Vou registrar em Ausências Gerais.' })
-            .catch(() => {});
+          console.warn(`[AUSÊNCIAS] Canal de origem ${canalId} não encontrado.`);
         }
 
         const nome   = (interaction.fields.getTextInputValue('nome')     ?? '').slice(0, 128);
@@ -271,19 +270,7 @@ export async function ausenciasHandleInteraction(interaction, client) {
 
         // Envia no canal de origem (se existir) e reposta o botão único
         if (canalOrigem) {
-          // apaga só nosso último botão (se ainda estiver lá)
-          const mensagens = await canalOrigem.messages.fetch({ limit: 20 }).catch(() => null);
-          if (mensagens) {
-            for (const msg of mensagens.values()) {
-              if (msg.id === mensagemBotaoIds[canalId]) {
-                await msg.delete().catch(() => {});
-              }
-            }
-          }
-
-          await canalOrigem
-            .send({ content: `<@${interaction.user.id}>`, embeds: [embedOrigem] })
-            .catch(() => {});
+          await canalOrigem.send({ content: `<@${interaction.user.id}>`, embeds: [embedOrigem] }).catch(() => {});
 
           await enviarBotaoFixoPorCanal(client, canalId);
         }
@@ -319,7 +306,11 @@ export async function ausenciasHandleInteraction(interaction, client) {
     } catch (err) {
       console.error('[AUSÊNCIAS] erro na interação (somente registro):', err);
       try {
-        if (!interaction.deferred && !interaction.replied) {
+        if (interaction.deferred || interaction.replied) {
+          await interaction.editReply({
+            content: '⚠️ Ocorreu um erro ao processar sua solicitação. Verifique se os dados estão corretos.',
+          }).catch(() => {});
+        } else {
           await interaction.reply({
             content: '⚠️ Ocorreu um erro ao processar sua solicitação.',
             ephemeral: true,
