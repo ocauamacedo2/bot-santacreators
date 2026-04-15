@@ -77,26 +77,58 @@ function rolesRemoviveisDoExecutor(execMember) {
     .map((r) => r.id);
 }
 
-async function fetchRecentRoleUpdateExecutor(guild, targetUserId) {
-  try {
-    const logs = await guild.fetchAuditLogs({
-      type: AuditLogEvent.MemberRoleUpdate,
-      limit: 6,
-    });
+// ✅ NOVO: maior posição real entre oldMember/newMember
+function getComparableHighestRolePosition(...members) {
+  let highest = -1;
 
-    const entry = logs.entries.find(
-      (e) => e?.target?.id === targetUserId && isRecent(e, 15_000)
-    );
-
-    return entry?.executor ?? null;
-  } catch {
-    return null;
+  for (const member of members) {
+    const pos = member?.roles?.highest?.position ?? -1;
+    if (pos > highest) highest = pos;
   }
+
+  return highest;
 }
 
-// ✅ NEW HELPER: Get highest role position for a member
-function getHighestRolePosition(member) {
-  return member?.roles?.highest?.position ?? -1; // -1 if no roles or member is null
+// ✅ NOVO: tenta identificar entrada correta do audit log com retries
+async function fetchRecentRoleUpdateEntry(guild, targetUserId, removedRoleIds = []) {
+  const maxAttempts = 4;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const logs = await guild.fetchAuditLogs({
+        type: AuditLogEvent.MemberRoleUpdate,
+        limit: 12,
+      });
+
+      const entry = logs.entries.find((e) => {
+        if (!e) return false;
+        if (e?.target?.id !== targetUserId) return false;
+        if (!isRecent(e, 30_000)) return false;
+
+        const changes = Array.isArray(e.changes) ? e.changes : [];
+
+        const removedRolesFromLog = changes
+          .filter((c) => c?.key === "$remove" && Array.isArray(c?.new))
+          .flatMap((c) => c.new.map((r) => r?.id).filter(Boolean));
+
+        if (removedRoleIds.length === 0) return true;
+
+        return removedRoleIds.some((rid) => removedRolesFromLog.includes(rid));
+      });
+
+      if (entry) return entry;
+    } catch {}
+
+    await sleep(1500);
+  }
+
+  return null;
+}
+
+// ✅ compatibilidade com o resto do arquivo
+async function fetchRecentRoleUpdateExecutor(guild, targetUserId, removedRoleIds = []) {
+  const entry = await fetchRecentRoleUpdateEntry(guild, targetUserId, removedRoleIds);
+  return entry?.executor ?? null;
 }
 
 // ======================================================
@@ -152,41 +184,44 @@ export async function roleProtectHandleGuildMemberUpdate(oldMember, newMember, c
 
     const guild = newMember.guild;
 
-    // ✅ FIX: Aguarda propagação do Audit Log (evita falso positivo em self-remove)
-    await sleep(2000);
+    // ✅ Aguarda a propagação do audit log
+    await sleep(2500);
 
-    // tenta achar executor
-    const executorUser = await fetchRecentRoleUpdateExecutor(guild, newMember.id);
+    // ✅ Busca entrada mais confiável do audit log, casando também com os cargos removidos
+    const auditEntry = await fetchRecentRoleUpdateEntry(guild, newMember.id, removed);
+    const executorUser = auditEntry?.executor ?? null;
     const executorId = executorUser?.id || null;
 
-    // ✅ 1) SE FOI O PRÓPRIO PROTEGIDO REMOVENDO (SELF) → NÃO RESTAURA, NÃO PUNE
-    // (mesmo que audit log venha vazio, o comportamento “self” normalmente não aparece.
-    // então só consideramos self quando executorId bate.)
+    // ✅ 1) SELF
     if (executorId && executorId === newMember.id) {
-      // console.log(`[ROLE-PROTECT] SELF: ${newMember.user.tag} removeu cargos próprios. Não vou restaurar.`);
       return false;
     }
 
-    // ✅ 2) SE O EXECUTOR É ALLOWED → NÃO RESTAURA, NÃO PUNE
+    // ✅ 2) ALLOWED
     if (executorId && isAllowedRemover(executorId)) {
       console.log(`[ROLE-PROTECT] ALLOWED: ${executorUser.tag} mexeu em protegido (${newMember.user.tag}). Não vou restaurar.`);
       return false;
     }
 
-    // ✅ NEW: 3) HIERARCHY CHECK: Se o executor tem cargo mais alto que o alvo protegido, permite a remoção.
-    const executorMember = await guild.members.fetch(executorId).catch(() => null);
+    // ✅ 3) HIERARCHY CHECK REAL
+    // compara com o maior cargo do alvo entre ANTES e DEPOIS, evitando falso restore
+    const executorMember = executorId
+      ? await guild.members.fetch(executorId).catch(() => null)
+      : null;
+
     if (executorMember) {
-      const executorHighestPos = getHighestRolePosition(executorMember);
-      const targetHighestPos = getHighestRolePosition(newMember);
+      const executorHighestPos = getComparableHighestRolePosition(executorMember);
+      const targetHighestPos = getComparableHighestRolePosition(oldMember, newMember);
 
       if (executorHighestPos > targetHighestPos) {
-        console.log(`[ROLE-PROTECT] HIERARCHY ALLOWED: ${executorMember.user.tag} (pos ${executorHighestPos}) removeu cargo de protegido ${newMember.user.tag} (pos ${targetHighestPos}). Não vou restaurar.`);
-        return false; // Allow removal, do not restore, do not punish.
+        console.log(
+          `[ROLE-PROTECT] HIERARCHY ALLOWED: ${executorMember.user.tag} ` +
+          `(pos ${executorHighestPos}) removeu cargo de protegido ${newMember.user.tag} ` +
+          `(pos ${targetHighestPos}). Não vou restaurar.`
+        );
+        return false;
       }
     }
-
-    // Se chegou aqui, a remoção não foi autorizada por SELF, ALLOWED_REMOVER, ou HIERARQUIA.
-    // Procede com restauração e punição.
 
     // Re-adiciona roles removidas que o bot consegue gerenciar
     const rolesToRestore = removed
@@ -200,17 +235,20 @@ export async function roleProtectHandleGuildMemberUpdate(oldMember, newMember, c
         .catch(() => {});
     }
 
-    // Se não achou executor: restaura e avisa (fail-safe)
+    // Se não achou executor: restaura e avisa
     if (!executorId) {
       await newMember
-        .send("Alerta: detectei remoção de cargos e já restaurei. Executor não identificado (audit log).")
+        .send("Alerta: detectei remoção de cargos e já restaurei. Executor não identificado com segurança no audit log.")
         .catch(() => {});
-      console.log(`[ROLE-PROTECT] Executor não identificado. Restore=${rolesToRestore.length} em ${newMember.user.tag}`);
+      console.log(
+        `[ROLE-PROTECT] Executor não identificado com segurança. ` +
+        `Target=${newMember.user.tag} | Removed=${removed.join(", ") || "nenhum"} | Restore=${rolesToRestore.length}`
+      );
       return true;
     }
 
     // executor fetch
-    const execMember = await guild.members.fetch(executorId).catch(() => null);
+    const execMember = executorMember || await guild.members.fetch(executorId).catch(() => null);
 
     // Se executor inválido ou bot/protegido → só restaura (já foi) e avisa
     if (!execMember || execMember.user.bot || isProtected(execMember.id)) {
@@ -220,7 +258,7 @@ export async function roleProtectHandleGuildMemberUpdate(oldMember, newMember, c
       return true;
     }
 
-    // ✅ 3) aqui sim: terceiro não-allowed mexeu em protegido → pune
+    // aqui sim: terceiro não-allowed mexeu em protegido → pune
     const punishRoleIds = rolesRemoviveisDoExecutor(execMember);
 
     if (punishRoleIds.length > 0) {
@@ -236,7 +274,7 @@ export async function roleProtectHandleGuildMemberUpdate(oldMember, newMember, c
       .send(DM_TO_VICTIM(`${newMember.user.tag}`, execMember.user.tag))
       .catch(() => {});
 
-    const creatorsChannel = await getCreatorsChannel(client, guild);
+    const creatorsChannel = await getCreatorsChannel(guild);
     if (creatorsChannel) {
       await creatorsChannel
         .send(PUBLIC_MSG(execMember.id, `${newMember.user.tag}`))
@@ -245,7 +283,7 @@ export async function roleProtectHandleGuildMemberUpdate(oldMember, newMember, c
 
     console.log(
       `[ROLE-PROTECT] ${execMember.user.tag} mexeu em ${newMember.user.tag}. ` +
-      `Restore=${rolesToRestore.length} | PunishRemoved=${punishRoleIds.length}`
+      `Removed=${removed.join(", ") || "nenhum"} | Restore=${rolesToRestore.length} | PunishRemoved=${punishRoleIds.length}`
     );
 
     return true;
