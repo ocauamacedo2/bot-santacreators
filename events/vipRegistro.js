@@ -18,14 +18,18 @@ if (globalThis.__VIP_REGISTRO_LOADED__) {
 }
 globalThis.__VIP_REGISTRO_LOADED__ = true;
 
-// ── 🔒 Trava anti double-click / concorrência ─────────────────────
-const VIP_HANDLED_INTERACTIONS = new Set();
+globalThis.__VIP_REGISTRO_STATE__ ??= {
+  isMoving: false,
+  handledInteractions: new Set()
+};
+const ST = globalThis.__VIP_REGISTRO_STATE__;
+
 function VIP_hasHandled(i) {
   try {
     if (!i?.id) return false;
-    if (VIP_HANDLED_INTERACTIONS.has(i.id)) return true;
-    VIP_HANDLED_INTERACTIONS.add(i.id);
-    setTimeout(() => VIP_HANDLED_INTERACTIONS.delete(i.id), 60_000);
+    if (ST.handledInteractions.has(i.id)) return true;
+    ST.handledInteractions.add(i.id);
+    setTimeout(() => ST.handledInteractions.delete(i.id), 60_000);
     return false;
   } catch { return false; }
 }
@@ -243,33 +247,60 @@ function createMainMenuRow() {
   );
 }
 
-async function limparMenusAntigos(channel) {
-  const msgs = await channel.messages.fetch({ limit: 100 }).catch(() => null);
-  if (!msgs) return null;
+function isVipMenuMessage(msg, client) {
+  if (!msg || msg.author?.id !== client.user.id) return false;
+  if (!msg.components?.length) return false;
 
-  const menus = msgs.filter((m) => {
-    const ehDoBot = m.author?.id === channel.client.user.id;
-    if (!ehDoBot || m.components?.length === 0) return false;
-    const ids = m.components.flatMap((row) => row.components || []).map((c) => c.customId);
-    return ids.some(id => VIP_MAIN_REGISTER_IDS.has(id));
-  });
+  const ids = msg.components.flatMap((row) => row.components || []).map((c) => c.customId);
+  return ids.some((id) => VIP_MAIN_REGISTER_IDS.has(id));
+}
+
+async function limparMenusAntigos(channel, keepNewest = false) {
+  const msgs = await channel.messages.fetch({ limit: 100 }).catch(() => null);
+  if (!msgs) return;
+
+  const menus = msgs.filter((m) => isVipMenuMessage(m, channel.client));
 
   const ordenadas = [...menus.values()].sort((a, b) => b.createdTimestamp - a.createdTimestamp);
-  const paraDeletar = ordenadas.slice(1);
-  for (const msg of paraDeletar) { await msg.delete().catch(() => {}); }
-  return ordenadas[0] || null;
+  const paraDeletar = keepNewest ? ordenadas.slice(1) : ordenadas;
+
+  for (const msg of paraDeletar) {
+    await msg.delete().catch(() => {});
+  }
 }
 
 async function createFreshMainMenu(channel) {
-  await limparMenusAntigos(channel);
+  if (ST.isMoving) return null;
+  ST.isMoving = true;
+
+  try {
+    // Apaga TODOS os menus antigos antes de enviar o novo para evitar duplicação
+    await limparMenusAntigos(channel, false);
+
   return await channel.send({
     embeds: [buildMainEmbed()],
     components: [createMainMenuRow()],
   }).catch(() => null);
+  } finally {
+    ST.isMoving = false;
+  }
 }
 
 async function moveMainMenuToBottom(channel) {
-  await createFreshMainMenu(channel).catch(() => {});
+  if (ST.isMoving) return;
+
+  // Verifica se o menu já é uma das últimas mensagens para evitar repost desnecessário
+  const msgs = await channel.messages.fetch({ limit: 5 }).catch(() => null);
+  if (msgs) {
+    const lastMsg = msgs.first();
+    if (isVipMenuMessage(lastMsg, channel.client)) {
+      // Se a última mensagem já é o menu, apenas limpa duplicatas perdidas no histórico
+      await limparMenusAntigos(channel, true);
+      return;
+    }
+  }
+
+  await createFreshMainMenu(channel);
 }
 
 function moveMainMenuToBottomLater(client, delayMs = 1200) {
