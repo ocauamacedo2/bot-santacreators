@@ -278,7 +278,7 @@ import {
   ausenciasOnReady,
   ausenciasHandleInteraction,
   ausenciasHandleMessage
-} from "../events/ausenciasMiniV3.js";
+} from "../events/ausencias.js";
 
 // Auto React Fotos
 import { autoReactsFotosOnReady, autoReactsFotosHandleMessage } from "../events/autoReactsFotos.js";
