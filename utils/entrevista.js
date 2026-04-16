@@ -438,14 +438,20 @@ if (customId.startsWith('iniciar|')) {
   // remove botão "Iniciar" da msg antiga
   await interaction.message.edit({ components: [] }).catch(() => {});
 
-  // 🧽 Apagar mensagens antigas de forma eficiente
-  const mensagens = await interaction.channel.messages.fetch({ limit: 20 }).catch(() => null);
-  if (mensagens && mensagens.size > 0) {
-    const toDelete = mensagens.filter(m => m.components?.[0]?.components?.some(c => c.customId?.startsWith('enviar|')));
-    if (toDelete.size > 0) {
-      await interaction.channel.bulkDelete(toDelete).catch(() => {});
-    }
-  }
+  // ✅ Responde a interação imediatamente para remover o delay visual
+  const enviada = await interaction.channel.send({
+      content: `✨ Oii, <@${interaction.user.id}>... (conteúdo omitido)`,
+      components: [row]
+  });
+
+  // 🧽 Limpeza em background (Sem await)
+  (async () => {
+      const mensagens = await interaction.channel.messages.fetch({ limit: 15 }).catch(() => null);
+      if (mensagens) {
+          const toDelete = mensagens.filter(m => m.id !== enviada.id && m.components?.length > 0);
+          if (toDelete.size > 0) await interaction.channel.bulkDelete(toDelete).catch(() => {});
+      }
+  })();
 
 // ✅ Agora envia a mensagem completa (igual teu print/código antigo)
 const enviada = await interaction.channel.send({
