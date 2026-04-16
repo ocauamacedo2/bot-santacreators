@@ -693,6 +693,10 @@ const setupEventHandlers = () => {
     if (interaction.isAutocomplete()) return;
 
     try {
+      // ✅ PRIORIDADE: Botões de Entrevista e Tickets (Ação imediata)
+      if (await entrevista.handleButtons(interaction).catch(() => false)) return;
+      if (await entrevistasTickets.onInteractionCreate(interaction).catch(() => false)) return;
+
       if (await registroManagerHandleInteraction(interaction, client)) return;
       if (await handleWeeklyRankInteractions(interaction, client)) return;
       if (await registroVendasHandleInteraction(interaction, client)) return;
@@ -750,9 +754,6 @@ const setupEventHandlers = () => {
           ephemeral: true,
         });
       }
-
-      if (await entrevista.handleButtons(interaction).catch(() => false)) return;
-      if (await entrevistasTickets.onInteractionCreate(interaction).catch(() => false)) return;
 
       await interactionCreateHandler.execute(interaction);
     } catch (error) {
