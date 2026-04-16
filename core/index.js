@@ -100,6 +100,7 @@ import bemvindoHandler from "../commands/admin/start/bemvindo.js";
 import saidaHandler from "../commands/admin/start/saida.js";
 import { handleCorrecao } from "../commands/admin/correcao.js";
 import createEntrevistasTickets from "../commands/entrevistasTickets.js";
+import { registerApagarPV } from "../commands/admin/apagarpv.js";
 import { iniciarRegistroPoderes } from "../events/registropoderes.js";
 import { registroPoderesEventosOnReady } from "../events/registroPoderesEventos.js";
 import { iniciarRegistroEvento } from "../events/registroevento.js";
@@ -107,6 +108,7 @@ import { iniciarAutoJoin } from "../events/autojoinVoice.js";
 import { installBotGuardian } from "../events/botGuardian.js";
 import { autoRoleOnJoin } from "../events/autoRoleOnJoin.js";
 import { rolePermissionGuardHandleRoleUpdate } from "../events/rolePermissionGuard.js";
+import * as geralDash from "../events/scGeralDash.js";
 
 // Módulos de Comando/Interação
 import { handlePagamentoSocial, pagamentoSocialOnReady } from "../events/pagamentosocial.js";
@@ -198,6 +200,23 @@ app.get("/transcript/:canalId", async (req, res) => {
 app.listen(3000);
 
 // =====================================================
+// Registros Locais
+// =====================================================
+let registros = [];
+const loadRegistros = () => {
+  const filePath = path.join(__dirname, "../events", "registros.json");
+  try {
+    if (!fs.existsSync(filePath)) {
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, "[]", "utf8");
+    }
+    registros = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  } catch (error) {
+    console.error("Erro ao carregar registros:", error);
+  }
+};
+
+// =====================================================
 // ROTEAMENTO DE EVENTOS (SHORT-CIRCUIT)
 // =====================================================
 
@@ -209,6 +228,7 @@ const setupEventHandlers = () => {
   setupSyncCargos(client);
   setupSortChannels(client);
   setupTicketRenamer(client);
+  registerApagarPV(client);
 
   // --- CANAIS ---
   client.on("channelCreate", c => channelCreateLog.execute(c).catch(() => {}));
@@ -438,6 +458,7 @@ client.once("ready", async () => {
 // =====================================================
 export const initBot = async () => {
   try {
+    loadRegistros();
     setupEventHandlers();
 
     if (!client.__loggedIn) {
