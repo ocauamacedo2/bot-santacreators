@@ -232,12 +232,12 @@ const setupEventHandlers = () => {
 
   // --- CANAIS ---
   client.on("channelCreate", c => channelCreateLog.execute(c).catch(() => {}));
-  client.on("channelDelete", c => {
-    channelDeleteLog.execute(c).catch(() => {});
-    channelDeleteProtectLog.execute(c, client).catch(() => {});
-    reminderHandleChannelDelete(c);
-    connectStatusOnChannelDelete(c);
-  });
+client.on("channelDelete", c => {
+  channelDeleteLog.execute(c).catch(() => {});
+  Promise.resolve(channelDeleteProtectLog(c, client)).catch(() => {});
+  reminderHandleChannelDelete(c);
+  connectStatusOnChannelDelete(c);
+});
   client.on(Events.ChannelUpdate, (o, n) => reminderHandleChannelUpdate(o, n, client));
 
   // --- MENSAGENS ---
