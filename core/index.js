@@ -255,9 +255,6 @@ import { criarCargoHandleMessage } from "../commands/admin/criarcargo.js";
 import { verIdHandleMessage } from "../commands/admin/verid.js";
 import { removerMassivoHandleMessage } from "../commands/admin/removerMassivo.js";
 import { apagarChatHandleMessage } from "../commands/admin/apagarchat.js";
-import remcargo, { installRoleGuardian } from "../commands/admin/remcargo.js";
-import mirror from "../events/criarCategoriaEspelho.js";
-import copycargo from "../commands/admin/copycargo.js";
 import { clearHandleMessage } from "../commands/admin/clearHandler.js";
 import { removerPermHandleMessage } from "../commands/admin/removerperm.js";
 import {
@@ -393,11 +390,11 @@ import {
 } from "../events/reuniaoSemanal.js";
 
 // Log Entrada
-import * as memberJoinLog2 from "../events/logs/memberJoinLog.js";
-import { autoRoleOnJoin as autoRoleOnJoin2 } from "../events/autoRoleOnJoin.js";
+import * as memberJoinLog from "../events/logs/memberJoinLog.js";
+import { autoRoleOnJoin } from "../events/autoRoleOnJoin.js";
 
 // Role Permission Guard
-import { rolePermissionGuardHandleRoleUpdate as rolePermissionGuardHandleRoleUpdate2 } from "../events/rolePermissionGuard.js";
+import { rolePermissionGuardHandleRoleUpdate } from "../events/rolePermissionGuard.js";
 
 // Log Checklist
 import {
@@ -499,22 +496,6 @@ const loadRegistros = () => {
   }
 };
 
-function runChannelDeleteProtect(channel, clientInstance) {
-  try {
-    if (channelDeleteProtectLog && typeof channelDeleteProtectLog.execute === "function") {
-      return channelDeleteProtectLog.execute(channel, clientInstance);
-    }
-
-    if (typeof channelDeleteProtectLog === "function") {
-      return channelDeleteProtectLog(channel, clientInstance);
-    }
-
-    return Promise.resolve(false);
-  } catch (error) {
-    return Promise.reject(error);
-  }
-}
-
 // =====================================================
 // Setup Handlers
 // =====================================================
@@ -537,7 +518,7 @@ const setupEventHandlers = () => {
       await channelDeleteLog.execute(c);
     } catch (e) {}
     try {
-      await Promise.resolve(runChannelDeleteProtect(c, client));
+      await channelDeleteProtectLog.execute(c, client);
     } catch (e) {}
     try {
       reminderHandleChannelDelete(c);
@@ -614,19 +595,6 @@ const setupEventHandlers = () => {
       if (await verIdHandleMessage(message, client)) return;
       if (await apagarChatHandleMessage(message, client)) return;
       if (await verPermsHandleMessage(message)) return;
-      
-      if (message.content.startsWith('!criar')) {
-        await mirror.execute(message, message.content.split(/\s+/).slice(1), client);
-        return;
-      }
-      if (message.content.startsWith('!copycargo')) {
-        await copycargo.execute(message);
-        return;
-      }
-      if (message.content.startsWith('!remcargo')) {
-        await remcargo.execute(message, message.content.split(/\s+/).slice(1));
-        return;
-      }
       if (await editarPermHandleMessage(message, client)) return;
 
       if (await pedirSetHandleMessage(message, client)) return;
@@ -676,7 +644,7 @@ const setupEventHandlers = () => {
 
   client.on("guildMemberAdd", async (m) => {
     try {
-      await autoRoleOnJoin2(m);
+      await autoRoleOnJoin(m);
     } catch (e) {
       console.error("[CORE] erro em autoRoleOnJoin:", e);
     }
@@ -688,7 +656,7 @@ const setupEventHandlers = () => {
       await setStaffHandleGuildMemberAdd(m, client);
     } catch (e) {}
     try {
-      await memberJoinLog2.execute(m, client);
+      await memberJoinLog.execute(m, client);
     } catch (e) {}
   });
 
@@ -698,8 +666,8 @@ const setupEventHandlers = () => {
     } catch (e) {}
   });
 
-  client.on("inviteCreate", (i) => memberJoinLog2.handleInviteCreate(i));
-  client.on("inviteDelete", (i) => memberJoinLog2.handleInviteDelete(i));
+  client.on("inviteCreate", (i) => memberJoinLog.handleInviteCreate(i));
+  client.on("inviteDelete", (i) => memberJoinLog.handleInviteDelete(i));
 
   client.on("guildMemberUpdate", async (o, n) => {
     try {
@@ -715,7 +683,7 @@ const setupEventHandlers = () => {
 
   client.on("roleUpdate", async (oldRole, newRole) => {
     try {
-      await rolePermissionGuardHandleRoleUpdate2(oldRole, newRole, client);
+      await rolePermissionGuardHandleRoleUpdate(oldRole, newRole, client);
     } catch (error) {
       console.error("[CORE] erro em rolePermissionGuardHandleRoleUpdate:", error);
     }
@@ -795,14 +763,6 @@ const setupEventHandlers = () => {
   client.once("ready", async () => {
     if (client.__coreBootState.readyBootExecuted) return;
     client.__coreBootState.readyBootExecuted = true;
-    try {
-
-    try {
-      console.log("[CORE] Instalando Role Guardian...");
-      installRoleGuardian(client);
-    } catch (e) {
-      console.error("[CORE] Erro ao instalar Role Guardian:", e);
-    }
 
     try {
       console.log("[CORE] Iniciando AutoJoin...");
@@ -939,23 +899,153 @@ const setupEventHandlers = () => {
       await autoReactsFotosOnReady(client);
       console.log("[CORE] autoReactsFotos inicializado.");
     } catch (e) {
-      console.error("[CORE] Erro autoReactsFotos:", e);
+      console.error("[CORE] Erro ao iniciar autoReactsFotos:", e);
     }
 
     try {
-      await pagamentoSocialOnReady(client);
+      memberJoinLog.initInviteCache(client);
     } catch (e) {}
 
-  } catch (e) {
-    console.error("[CORE] Erro crítico no boot ready:", e);
+    try {
+      startTodosLembretes(client);
+    } catch (e) {}
+    try {
+      startRolesOnlineMonitor(client);
+    } catch (e) {}
+    try {
+      await pagamentoSocialOnReady(client);
+    } catch (e) {}
+    try {
+      await entrevista.reanexar(client);
+    } catch (e) {}
+    try {
+      await entrevistasTickets.onReady();
+    } catch (e) {}
+  });
+
+  setupUserUpdateLog(client);
+  setupBanLog(client);
+  setupKickLog(client);
+  setupRoleUpdateLog(client);
+  setupVoiceLog(client);
+  setupChannelLog(client);
+  setupBotAddLog(client);
+  setupBotRemoveLog(client);
+  setupChannelNameCategoryUpdateLog(client);
+  setupChannelCategoryMoveLog(client);
+  setupNicknameChangeLog(client);
+
+  if (client.isReady() && !client.__coreBootState.lateBootExecuted) {
+    client.__coreBootState.lateBootExecuted = true;
+
+    entrevista.reanexar(client).catch(() => {});
+    client.user.setActivity("Cauã Macedo – SantaCreators ✨", {
+      type: ActivityType.Watching,
+    });
+
+    try {
+      iniciarRegistroPoderes(client);
+    } catch (e) {}
+    try {
+      iniciarRegistroEvento(client);
+    } catch (e) {}
+    try {
+      iniciarAutoJoin(client);
+    } catch (e) {
+      console.error("[CORE] Erro AutoJoin (Late):", e);
+    }
+    try {
+      startTodosLembretes(client);
+    } catch (e) {}
   }
-});
 };
 
-// Inicialização do Bot
-setupEventHandlers();
-loadRegistros();
+// =====================================================
+// INIT
+// =====================================================
+export const initBot = async () => {
+  try {
+    loadRegistros();
+    setupEventHandlers();
+    setupBatePonto(client);
+    setupAlinhamentoDash(client);
+    await import("../events/gestaoinfluencer.js");
 
-client.login(BOT_TOKEN).catch((err) => {
-  console.error("❌ Erro ao fazer login no Discord:", err);
-});
+    if (!client.__loggedIn) {
+      client.__loggedIn = true;
+      await client.login(BOT_TOKEN).catch((e) => {
+        console.error("Erro ao fazer login no bot:", e);
+        process.exit(1);
+      });
+    }
+
+    try {
+      const data = [
+        new SlashCommandBuilder()
+          .setName("disconnect")
+          .setDescription("Expulsa um usuário da call de voz")
+          .addUserOption((option) =>
+            option
+              .setName("user")
+              .setDescription("Usuário a ser desconectado")
+              .setRequired(true)
+          )
+          .toJSON(),
+      ];
+
+      await client.application.commands.set(data);
+    } catch (e) {}
+
+    const CANAL_BOTAO = "1383152873587740843";
+    const GIF_BANNER =
+      "https://media.discordapp.net/attachments/1362477839944777889/1384245215249825832/standard_2rss.gif";
+
+    if (!globalThis.__SC_CORE_GUARDS__.setarNomeIntervalStarted) {
+      globalThis.__SC_CORE_GUARDS__.setarNomeIntervalStarted = true;
+
+      setInterval(async () => {
+        try {
+          if (!client.isReady()) return;
+
+          const canal = await getChannel(client, CANAL_BOTAO).catch(() => null);
+          if (!canal || !canal.isTextBased()) return;
+
+          const mensagens = await canal.messages.fetch({ limit: 10 }).catch(() => null);
+          if (!mensagens) return;
+
+          const mensagensBotao = mensagens.filter(
+            (msg) =>
+              msg.author.id === client.user.id &&
+              msg.components?.[0]?.components?.some((c) => c.customId === "setar_nome")
+          );
+
+          if (mensagensBotao.size > 1) {
+            const extras = [...mensagensBotao.values()].slice(1);
+            for (const msg of extras) {
+              await msg.delete().catch(() => {});
+            }
+          }
+
+          if (mensagensBotao.size === 0) {
+            const embed = new EmbedBuilder()
+              .setTitle("📌 | Identifique-se - SantaCreators")
+              .setDescription("Clique no botão abaixo para enviar seu **nome**.")
+              .setColor("#ff009a")
+              .setImage(GIF_BANNER);
+
+            const row = new ActionRowBuilder().addComponents(
+              new ButtonBuilder()
+                .setCustomId("setar_nome")
+                .setLabel("✍️ Enviar meu nome")
+                .setStyle(ButtonStyle.Primary)
+            );
+
+            await safeSend(canal, { embeds: [embed], components: [row] });
+          }
+        } catch (err) {}
+      }, 15 * 60 * 1000);
+    }
+  } catch (error) {
+    console.error("Erro ao iniciar o bot:", error);
+  }
+};
