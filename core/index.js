@@ -536,80 +536,11 @@ const setupEventHandlers = () => {
 
   client.on("messageCreate", async (message) => {
     try {
-      try {
-        await reminderHandleMessageCreate(message, client);
-      } catch (e) {}
-      try {
-        cacheMessage(message);
-      } catch (e) {}
-
-      try {
-        if (await sortChannelsHandleMessage(message, client)) return;
-      } catch (e) {
-        console.error("[CORE] erro em sortChannelsHandleMessage:", e);
-      }
-
-      try {
-        if (await autoReactsFotosHandleMessage(message, client)) return;
-      } catch (e) {
-        console.error("[CORE] erro em autoReactsFotosHandleMessage:", e);
-      }
-
-      if (await payEvtDashHandleMessage(message, client)) return;
-      if (await facsComparativoHandleMessage(message, client)) return;
-      if (await dashRouterHandleMessage(message)) return;
-      if (await facsSemanaisHandleMessage(message, client)) return;
-      if (await evt3EventsHandleMessage(message, client)) return;
-      if (await recrutamentoDashHandleMessage(message, client)) return;
-      if (await monitorCargosHandleMessage(message, client)) return;
-      if (await registroManagerHandleMessage(message, client)) return;
-      if (await registroVendasHandleMessage(message, client)) return;
-      if (await aulaoHandleMessage(message, client)) return;
-      if (await cronogramaCreatorsHandleMessage(message, client)) return;
-      if (await ausenciasHandleMessage(message, client)) return;
-      if (await hierarquiaHandleMessage(message, client)) return;
-      if (await reuniaoSemanalHandleMessage(message, client)) return;
-      if (await roleProtectHandleMessage(message, client)) return;
-      if (await connectStatusHandleMessage(message, client)) return;
-      if (await orgsHandleMessage(message, client)) return;
-      if (await checklistHandleMessage(message, client)) return;
-
-      try {
-        if (
-          typeof geralDash?.geralDashHandleMessage === "function" &&
-          (await geralDash.geralDashHandleMessage(message, client))
-        ) {
-          return;
-        }
-      } catch (e) {}
-
-      try {
-        if (await geralWeeklyRankHandleMessage(message, client)) return;
-      } catch (e) {}
-
-      if (await criarCargoHandleMessage(message, client)) return;
-      if (await removerPermHandleMessage(message, client)) return;
-      if (await duplicarPermHandleMessage(message, client)) return;
-      if (await clearHandleMessage(message, client)) return;
-      if (await removerMassivoHandleMessage(message, client)) return;
-      if (await verIdHandleMessage(message, client)) return;
-      if (await apagarChatHandleMessage(message, client)) return;
-      if (await verPermsHandleMessage(message)) return;
-      if (await editarPermHandleMessage(message, client)) return;
-
-      if (await pedirSetHandleMessage(message, client)) return;
-      if (await handleCorrecao(message, client)) return;
-      if (await alinhamentosHandleMessage(message, client)) return;
-      await formsCreatorHandleMessage(message, client);
-      if (await setStaffV2HandleMessage(message, client)) return;
-      if (await doacaoHandleMessage(message, client)) return;
-      if (await vipEventoHandleMessage(message, client)) return;
-      if (await vipRegistroHandleMessage(message, client)) return;
-
-      await entrevistasTickets.onMessageCreate(message);
+      // ✅ Único ponto de entrada: delega para o handler central
+      // Isso remove o delay de checar o mesmo comando duas vezes
       await messageCreateHandler.execute(message, [], client);
     } catch (error) {
-      console.error("Erro messageCreate:", error);
+      console.error("[CORE] Erro no fluxo messageCreate:", error);
     }
   });
 
@@ -693,53 +624,10 @@ const setupEventHandlers = () => {
     if (interaction.isAutocomplete()) return;
 
     try {
-      if (await registroManagerHandleInteraction(interaction, client)) return;
-      if (await handleWeeklyRankInteractions(interaction, client)) return;
-      if (await registroVendasHandleInteraction(interaction, client)) return;
-      if (await facsComparativoHandleInteraction(interaction, client)) return;
-      if (await facsSemanaisHandleInteraction(interaction, client)) return;
-      if (await confirmacaoPresencaHandleInteraction(interaction, client)) return;
-      if (await evt3EventsHandleInteraction(interaction, client)) return;
-      if (await payEvtDashHandleInteraction(interaction, client)) return;
-
-      if (await orgsHandleInteraction(interaction, client)) return;
-      if (await doacaoHandleInteraction(interaction, client)) return;
-      if (await formsCreatorHandleInteraction(interaction, client)) return;
-      if (await ausenciasHandleInteraction(interaction, client)) return;
-      if (await vipEventoHandleInteraction(interaction, client)) return;
-      if (await vipRegistroHandleInteraction(interaction, client)) return;
-      if (await lideresConvitesHandleInteraction(interaction, client)) return;
-      if (await pedirSetHandleInteraction(interaction, client)) return;
-      if (await setStaffHandleInteraction(interaction, client)) return;
-      if (await alinhamentosHandleInteraction(interaction, client)) return;
-      if (await setStaffV2HandleInteraction(interaction, client)) return;
-      if (await graficoManagersHandleInteraction(interaction, client)) return;
-      if (await recrutamentoDashHandleInteraction(interaction, client)) return;
-      if (await blacklistEventosHandleInteraction(interaction, client)) return;
-      if (await hallDaFamaHandleInteraction(interaction, client)) return;
-      if (await eventosDiariosHandleInteraction(interaction, client)) return;
-      if (await sortChannelsHandleInteraction(interaction, client)) return;
-      if (await reuniaoSemanalHandleInteraction(interaction, client)) return;
-
-      try {
-        if (
-          typeof geralDash?.geralDashHandleInteraction === "function" &&
-          (await geralDash.geralDashHandleInteraction(interaction, client))
-        ) {
-          return;
-        }
-      } catch (e) {}
-
-      if (await duplicarPermHandleInteraction(interaction, client)) return;
-      if (await editarPermHandleInteraction(interaction, client)) return;
-      if (await cadastroManualHandleInteraction(interaction, client)) return;
-      if (await aulaoHandleInteraction(interaction, client)) return;
-      if (await cronogramaCreatorsHandleInteraction(interaction, client)) return;
-      if (await hierarquiaHandleInteraction(interaction, client)) return;
-      if (await checklistHandleInteraction(interaction, client)) return;
-
-      if (await handlePagamentoSocial(interaction, client).catch(() => false)) return;
-
+      // ✅ Delega o processamento de botões/modais para o handler principal
+      // Isso centraliza a lógica e remove o delay massivo de botões
+      if (await interactionCreateHandler.execute(interaction, client)) return;
+      
       if (
         interaction.isButton() &&
         (interaction.customId.startsWith("cd_history:") ||
@@ -754,7 +642,6 @@ const setupEventHandlers = () => {
       if (await entrevista.handleButtons(interaction).catch(() => false)) return;
       if (await entrevistasTickets.onInteractionCreate(interaction).catch(() => false)) return;
 
-      await interactionCreateHandler.execute(interaction);
     } catch (error) {
       console.error("Erro interactionCreate:", error);
     }
@@ -763,201 +650,23 @@ const setupEventHandlers = () => {
   client.once("ready", async () => {
     if (client.__coreBootState.readyBootExecuted) return;
     client.__coreBootState.readyBootExecuted = true;
-
-    try {
-      console.log("[CORE] Iniciando AutoJoin...");
-      iniciarAutoJoin(client);
-    } catch (e) {
-      console.error("[CORE] Erro AutoJoin:", e);
-    }
-
-    try {
-      iniciarRegistroPoderes(client);
-    } catch (e) {}
-    try {
-      iniciarRegistroEvento(client);
-    } catch (e) {}
-    try {
-      await reminderOnReady(client);
-    } catch (e) {}
-
-    try {
-      await facsSemanaisOnReady(client);
-    } catch (e) {}
-    try {
-      await facsComparativoOnReady(client);
-    } catch (e) {}
-    try {
-      await confirmacaoPresencaOnReady(client);
-    } catch (e) {}
-    try {
-      await graficoManagersOnReady(client);
-    } catch (e) {}
-    try {
-      await registroManagerOnReady(client);
-    } catch (e) {}
-    try {
-      await registroVendasOnReady(client);
-    } catch (e) {}
-    try {
-      await evt3EventsOnReady(client);
-    } catch (e) {}
-    try {
-      dashDebugOnReady(client);
-    } catch (e) {}
-    try {
-      await dashRouterOnReady(client);
-    } catch (e) {}
-    try {
-      await payEvtDashOnReady(client);
-    } catch (e) {}
-
-    try {
-      if (typeof geralDash?.geralDashOnReady === "function") {
-        await geralDash.geralDashOnReady(client);
-      }
-    } catch (e) {}
-
-    try {
-      await geralWeeklyRankOnReady(client);
-    } catch (e) {}
-
+    
+    // ✅ Removemos tudo daqui e deixamos o events/ready.js gerenciar o boot.
+    // Isso acaba com os botões duplicados e erros de sintaxe no restart.
     console.log(`✅ Bot pronto como ${client.user.tag}`);
-    client.user.setActivity("Cauã Macedo – SantaCreators ✨", {
-      type: ActivityType.Watching,
-    });
-
-    try {
-      await roleProtectOnReady(client);
-    } catch (e) {}
-    try {
-      await formsCreatorOnReady(client);
-    } catch (e) {}
-    try {
-      await doacaoOnReady(client);
-    } catch (e) {}
-    try {
-      await pedirSetOnReady(client);
-    } catch (e) {}
-    try {
-      await setStaffOnReady(client);
-    } catch (e) {}
-    try {
-      await connectStatusOnReady(client);
-    } catch (e) {}
-    try {
-      await alinhamentosOnReady(client);
-    } catch (e) {}
-    try {
-      await vipEventoOnReady(client);
-    } catch (e) {}
-    try {
-      await vipRegistroOnReady(client);
-    } catch (e) {}
-    try {
-      await lideresConvitesOnReady(client);
-    } catch (e) {}
-    try {
-      await setStaffV2OnReady(client);
-    } catch (e) {}
-    try {
-      await blacklistEventosOnReady(client);
-    } catch (e) {}
-    try {
-      await hallDaFamaOnReady(client);
-    } catch (e) {}
-    try {
-      await eventosDiariosOnReady(client);
-    } catch (e) {}
-    try {
-      await cadastroManualOnReady(client);
-    } catch (e) {}
-    try {
-      await recrutamentoDashOnReady(client);
-    } catch (e) {}
-    try {
-      await monitorCargosOnReady(client);
-    } catch (e) {}
-    try {
-      await cronogramaCreatorsOnReady(client);
-    } catch (e) {}
-    try {
-      await ausenciasOnReady(client);
-    } catch (e) {}
-    try {
-      await hierarquiaOnReady(client);
-    } catch (e) {}
-    try {
-      await reuniaoSemanalOnReady(client);
-    } catch (e) {}
-    try {
-      await checklistOnReady(client);
-    } catch (e) {}
-
-    try {
-      console.log("[CORE] Inicializando autoReactsFotos (modo centralizado)...");
-      await autoReactsFotosOnReady(client);
-      console.log("[CORE] autoReactsFotos inicializado.");
-    } catch (e) {
-      console.error("[CORE] Erro ao iniciar autoReactsFotos:", e);
-    }
-
-    try {
-      memberJoinLog.initInviteCache(client);
-    } catch (e) {}
-
-    try {
-      startTodosLembretes(client);
-    } catch (e) {}
-    try {
-      startRolesOnlineMonitor(client);
-    } catch (e) {}
-    try {
-      await pagamentoSocialOnReady(client);
-    } catch (e) {}
-    try {
-      await entrevista.reanexar(client);
-    } catch (e) {}
-    try {
-      await entrevistasTickets.onReady();
-    } catch (e) {}
   });
 
-  setupUserUpdateLog(client);
-  setupBanLog(client);
-  setupKickLog(client);
-  setupRoleUpdateLog(client);
-  setupVoiceLog(client);
-  setupChannelLog(client);
-  setupBotAddLog(client);
-  setupBotRemoveLog(client);
-  setupChannelNameCategoryUpdateLog(client);
-  setupChannelCategoryMoveLog(client);
-  setupNicknameChangeLog(client);
-
-  if (client.isReady() && !client.__coreBootState.lateBootExecuted) {
-    client.__coreBootState.lateBootExecuted = true;
-
-    entrevista.reanexar(client).catch(() => {});
-    client.user.setActivity("Cauã Macedo – SantaCreators ✨", {
-      type: ActivityType.Watching,
-    });
-
-    try {
-      iniciarRegistroPoderes(client);
-    } catch (e) {}
-    try {
-      iniciarRegistroEvento(client);
-    } catch (e) {}
-    try {
-      iniciarAutoJoin(client);
-    } catch (e) {
-      console.error("[CORE] Erro AutoJoin (Late):", e);
-    }
-    try {
-      startTodosLembretes(client);
-    } catch (e) {}
-  }
+    setupUserUpdateLog(client);
+    setupBanLog(client);
+    setupKickLog(client);
+    setupRoleUpdateLog(client);
+    setupVoiceLog(client);
+    setupChannelLog(client);
+    setupBotAddLog(client);
+    setupBotRemoveLog(client);
+    setupChannelNameCategoryUpdateLog(client);
+    setupChannelCategoryMoveLog(client);
+    setupNicknameChangeLog(client);
 };
 
 // =====================================================

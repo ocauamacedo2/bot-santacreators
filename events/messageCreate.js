@@ -90,6 +90,34 @@ export default {
   async execute(message, _args, client) {
     if (message.author.bot) return;
 
+    // 🚀 EXECUÇÃO DE COMANDOS PRIORITÁRIA (Resolve o delay em comandos como !perguntas)
+    if (message.content.startsWith('!')) {
+      const parts = message.content.slice(1).trim().split(/\s+/);
+      const commandName = (parts.shift() || '').toLowerCase();
+      const args = parts;
+
+      const command = commands[commandName];
+      if (command) {
+        try {
+          const ok = command.hasPermission ? await command.hasPermission(message) : true;
+          if (!ok) return;
+
+          await command.execute(message, args, client);
+          
+          if (message.deletable) {
+            setTimeout(async () => {
+              try { await message.delete(); } catch (err) {}
+            }, 5000);
+          }
+          return; // Finaliza aqui para não passar pelos outros handlers
+        } catch (err) {
+          console.error(`Erro no comando !${commandName}:`, err);
+          try { await message.reply('❌ Deu erro ao executar esse comando.'); } catch {}
+          return;
+        }
+      }
+    }
+
     // ✅ VIP/Rolepass (Comando !vipmenu)
     if (await vipRegistroHandleMessage(message, client)) return;
 
@@ -121,41 +149,6 @@ export default {
     if (await apagarChatHandleMessage(message, client)) return;
     if (await removerMassivoHandleMessage(message, client)) return;
 
-    if (!message.content.startsWith('!')) return;
-
-    // parse robusto: "!cmd arg1 arg2..."
-    const parts = message.content.slice(1).trim().split(/\s+/);
-    const commandName = (parts.shift() || '').toLowerCase();
-    const args = parts;
-
-    const command = commands[commandName];
-    if (!command) return; // comando não existe
-
-    try {
-      // se seu comando tiver um hasPermission opcional, respeita
-      const ok = command.hasPermission ? await command.hasPermission(message) : true;
-      if (!ok) return;
-
-      await command.execute(message, args, client);
-    } catch (err) {
-      console.error(`Erro no comando !${commandName}:`, err);
-      try { await message.reply('❌ Deu erro ao executar esse comando.'); } catch {}
-    }
-
-    // apaga a mensagem do comando após 5s (se possível)
-    if (message.deletable) {
-      setTimeout(async () => {
-        try {
-          await message.delete();
-        } catch (err) {
-          if (err?.code === 10008) {
-            // console.warn(`Mensagem já deletada/inalcançável: ${err.message}`);
-          } else {
-            console.error(`Erro ao deletar mensagem do !${commandName}:`, err);
-          }
-        }
-      }, 5000);
-    }
   },
 };
 

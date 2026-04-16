@@ -20,6 +20,11 @@ import { lembretesPoderesOnReady } from './lembretesPoderes.js';
 import { startRolesOnlineMonitor } from './rolesOnlineMonitor.js';
 import { registroManagerOnReady } from './registroManager.js';
 import { autoReactsFotosOnReady } from './autoReactsFotos.js';
+import { iniciarAutoJoin } from './autojoinVoice.js';
+import { iniciarRegistroPoderes } from './registropoderes.js';
+import { iniciarRegistroEvento } from './registroevento.js';
+import { pagamentoSocialOnReady } from './pagamentosocial.js';
+import * as memberJoinLog from './logs/memberJoinLog.js';
 
 export default {
   name: 'ready',
@@ -32,6 +37,10 @@ export default {
 
     const startupTasks = [
       { name: 'Entrevistas', fn: () => entrevista.reanexar(client) },
+      { name: 'AutoJoin', fn: () => iniciarAutoJoin(client) },
+      { name: 'Registro Poderes', fn: () => iniciarRegistroPoderes(client) },
+      { name: 'Registro Evento', fn: () => iniciarRegistroEvento(client) },
+      { name: 'Pagamento Social', fn: () => pagamentoSocialOnReady(client) },
       { name: 'Vendas', fn: () => registroVendasOnReady(client) },
       { name: 'VIP Registro', fn: () => vipRegistroOnReady(client) },
       { name: 'Ausências', fn: () => ausenciasOnReady(client) },
@@ -50,6 +59,8 @@ export default {
       { name: 'Lembretes Poderes', fn: () => lembretesPoderesOnReady(client) },
       { name: 'Monitor Online', fn: () => startRolesOnlineMonitor(client) },
       { name: 'Registro Manager', fn: () => registroManagerOnReady(client) },
+      { name: 'Auto React Fotos', fn: () => autoReactsFotosOnReady(client) },
+      { name: 'Invite Cache', fn: () => memberJoinLog.initInviteCache(client) },
     ];
 
     console.log(`[STARTUP] Disparando ${startupTasks.length} módulos em série...`);
@@ -58,7 +69,7 @@ export default {
       try {
         await task.fn();
         console.log(`[STARTUP] ✅ Módulo [${task.name}] inicializado.`);
-        await new Promise(r => setTimeout(r, 1000));
+        await new Promise(r => setTimeout(r, 100)); // Delay reduzido para 100ms
       } catch (e) {
         console.error(`[STARTUP] ❌ Módulo [${task.name}] falhou:`, e);
       }
