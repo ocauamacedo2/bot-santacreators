@@ -120,7 +120,7 @@ Como o comprometimento diário (registro, bate ponto e organização) influencia
 
 
 // ===== BACKUP =====
-function salvarEntrevistasEmDisco() {
+async function salvarEntrevistasEmDisco() {
   try {
     const dados = {};
     entrevistas.forEach((v, id) => {
@@ -757,7 +757,7 @@ async function iniciarContadorGlobal(channel, membroId, remainingMs = ENTREVISTA
 
     entrevistas.delete(membroId);
     entrevistasAtivas.delete(channel.id);
-    salvarEntrevistasEmDisco();
+    await salvarEntrevistasEmDisco();
 
     await msg.edit('⛔ **Tempo esgotado!** Entrevista cancelada.').catch(() => {});
     await channel.send(`❌ <@${membroId}>, tempo total acabou (${ENTREVISTA_DURACAO_MIN} min).`).catch(() => {});
