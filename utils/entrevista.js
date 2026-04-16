@@ -190,8 +190,32 @@ function msgLink(guildId, channelId, messageId) {
   return `https://discord.com/channels/${guildId}/${channelId}/${messageId}`;
 }
 
-async function logCompleto(client, data) {
+let __logCompletoChannelCache = null;
+let __logCompletoChannelCacheAt = 0;
+const LOG_COMPLETO_CACHE_TTL_MS = 60_000;
+
+async function getLogCompletoChannel(client) {
+  const now = Date.now();
+
+  if (
+    __logCompletoChannelCache &&
+    (now - __logCompletoChannelCacheAt) < LOG_COMPLETO_CACHE_TTL_MS
+  ) {
+    return __logCompletoChannelCache;
+  }
+
   const canal = await client.channels.fetch(CANAL_LOG_COMPLETO).catch(() => null);
+  if (canal?.isTextBased?.()) {
+    __logCompletoChannelCache = canal;
+    __logCompletoChannelCacheAt = now;
+    return canal;
+  }
+
+  return null;
+}
+
+async function logCompleto(client, data) {
+  const canal = await getLogCompletoChannel(client);
   if (!canal || !canal.isTextBased?.()) return;
 
   const emb = new EmbedBuilder()

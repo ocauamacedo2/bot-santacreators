@@ -21,6 +21,12 @@ const PERGUNTAS_BYPASS_USER_IDS = new Set([
   "1262262852949905408", // owner
 ]);
 
+function fireAndForget(promise, label = 'async_task') {
+  Promise.resolve(promise).catch((e) => {
+    console.error(`[!perguntas] Falha em ${label}:`, e);
+  });
+}
+
 export default {
   async hasPermission(message) {
     const idsPermitidos = [
@@ -83,14 +89,7 @@ const nextTopic = `entrevista_aplicador:${message.author.id}`.slice(0, 1024);
       `👮 **Aplicador:** ${message.author}\n\n` +
       `👉 Fiquem atentos para corrigir assim que o candidato terminar!`;
 
-    let fetchedAllMembers = false;
-
-    try {
-      await message.guild.members.fetch();
-      fetchedAllMembers = true;
-    } catch (e) {
-      console.warn("[!perguntas] members.fetch() falhou:", e?.message || e);
-    }
+    const notifiedIds = new Set();
 
     for (const roleId of ALERT_ROLE_IDS) {
       const role = message.guild.roles.cache.get(roleId);
@@ -100,17 +99,17 @@ const nextTopic = `entrevista_aplicador:${message.author.id}`.slice(0, 1024);
         if (!member) continue;
         if (member.user?.bot) continue;
         if (id === message.author.id) continue;
+        if (notifiedIds.has(id)) continue;
+
         member.send(alertMsg).catch(() => {});
+        notifiedIds.add(id);
       }
     }
 
-    if (!fetchedAllMembers) {
-      console.log("[!perguntas] Notificação por DM rodou via cache (sem fetch geral).");
-    }
+    fireAndForget(
+      client.channels.fetch(LOG_CHANNEL_ID).then(async (logChannel) => {
+        if (!logChannel) return;
 
-    const logChannel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
-    if (logChannel) {
-      try {
         const logEmbed = new EmbedBuilder()
           .setTitle('🎬 Entrevista Iniciada')
           .setColor('#00ff00')
@@ -123,13 +122,12 @@ const nextTopic = `entrevista_aplicador:${message.author.id}`.slice(0, 1024);
           .setTimestamp();
 
         await logChannel.send({ embeds: [logEmbed] });
-      } catch (e) {
-        console.error("[!perguntas] Falha ao enviar log:", e);
-      }
-    }
+      }),
+      'logChannel.send'
+    );
 
-    try {
-      await entrevista.logCompleto(client, {
+    fireAndForget(
+      entrevista.logCompleto(client, {
         titulo: '🧾 !perguntas usado',
         cor: 0x9b59b6,
         autorTag: message.author.tag,
@@ -141,9 +139,8 @@ const nextTopic = `entrevista_aplicador:${message.author.id}`.slice(0, 1024);
           { name: '🏠 Servidor', value: `${message.guild?.name}\n\`${message.guildId}\``, inline: false }
         ],
         thumb: message.guild?.iconURL({ dynamic: true })
-      });
-    } catch (e) {
-      console.error("[!perguntas] entrevista.logCompleto falhou:", e);
-    }
+      }),
+      'entrevista.logCompleto'
+    );
   }
 };
