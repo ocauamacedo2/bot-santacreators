@@ -756,9 +756,9 @@ if (aplicadorId && canCountPoint && entrevistaFoiConduzida) {
     dados.index = index + 1;
 
     entrevistas.set(membro.id, dados);
-    await salvarEntrevistasEmDisco();
+    salvarEntrevistasEmDisco(); // Tira o await
 
-    setTimeout(() => enviarPergunta(channel, membro, dados.index), 700);
+    setTimeout(() => enviarPergunta(channel, membro, dados.index), 300); // Reduz de 700 para 300ms
 
   } catch (e) {
     entrevistas.delete(membro.id);
