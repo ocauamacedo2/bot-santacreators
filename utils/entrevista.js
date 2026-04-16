@@ -138,7 +138,7 @@ function salvarEntrevistasEmDisco() {
     const dir = path.dirname(ENTREVISTAS_PATH);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
-    fs.writeFileSync(ENTREVISTAS_PATH, JSON.stringify(dados, null, 2));
+    await fs.promises.writeFile(ENTREVISTAS_PATH, JSON.stringify(dados, null, 2), 'utf8');
   } catch (e) {
     console.warn('Falha ao salvar entrevistas:', e);
   }
@@ -174,11 +174,15 @@ function carregarEntrevistasDoDisco() {
 }
 
 carregarEntrevistasDoDisco();
-process.on('exit', salvarEntrevistasEmDisco);
+// Hooks de saída (mantidos como sync para garantir o salvamento no encerramento do processo)
+process.on('exit', () => {
+  const dados = Object.fromEntries(entrevistas);
+  fs.writeFileSync(ENTREVISTAS_PATH, JSON.stringify(dados, null, 2));
+});
 // Estes hooks ajudam a salvar em caso de desligamento normal, mas não em caso de crash.
 // Por isso, chamamos salvarEntrevistasEmDisco() sempre que o estado muda.
-process.on('SIGINT', () => { salvarEntrevistasEmDisco(); process.exit(); });
-process.on('SIGTERM', () => { salvarEntrevistasEmDisco(); process.exit(); });
+process.on('SIGINT', () => { process.exit(); });
+process.on('SIGTERM', () => { process.exit(); });
 
 // ===== HELPERS =====
 function msgLink(guildId, channelId, messageId) {
@@ -217,7 +221,7 @@ async function reanexar(client) {
       const restante = dados.timeoutEnd - Date.now();
       if (restante <= 0 || !dados.channelId) {
         entrevistas.delete(userId);
-        salvarEntrevistasEmDisco();
+        await salvarEntrevistasEmDisco();
         continue;
       }
 
@@ -231,14 +235,14 @@ async function reanexar(client) {
       const channel = await client.channels.fetch(dados.channelId).catch(() => null);
       if (!channel || !channel.isTextBased?.()) {
         entrevistas.delete(userId);
-        salvarEntrevistasEmDisco();
+        await salvarEntrevistasEmDisco();
         continue;
       }
 
       const membro = await channel.guild.members.fetch(userId).catch(() => null);
       if (!membro) {
         entrevistas.delete(userId);
-        salvarEntrevistasEmDisco();
+        await salvarEntrevistasEmDisco();
         continue;
       }
 
@@ -246,7 +250,7 @@ async function reanexar(client) {
       const globalTimer = await iniciarContadorGlobal(channel, userId, restante);
       dados.globalTimer = globalTimer;
       entrevistas.set(userId, dados);
-      salvarEntrevistasEmDisco();
+      await salvarEntrevistasEmDisco();
 
       // ✅ APAGA A MENSAGEM DA PERGUNTA ANTERIOR PARA EVITAR DUPLICIDADE
       if (dados.mensagens && dados.mensagens.length > 0) {
@@ -410,13 +414,12 @@ if (customId.startsWith('iniciar|')) {
   // remove botão "Iniciar" da msg antiga
   await interaction.message.edit({ components: [] }).catch(() => {});
 
-  // 🧽 Apagar mensagens antigas com botão "ENVIAR PERGUNTAS"
+  // 🧽 Apagar mensagens antigas de forma eficiente
   const mensagens = await interaction.channel.messages.fetch({ limit: 20 }).catch(() => null);
-  if (mensagens) {
-    for (const msg of mensagens.values()) {
-      if (msg.components?.[0]?.components?.some(c => c.customId?.startsWith('enviar|'))) {
-        await msg.delete().catch(() => {});
-      }
+  if (mensagens && mensagens.size > 0) {
+    const toDelete = mensagens.filter(m => m.components?.[0]?.components?.some(c => c.customId?.startsWith('enviar|')));
+    if (toDelete.size > 0) {
+      await interaction.channel.bulkDelete(toDelete).catch(() => {});
     }
   }
 
@@ -514,13 +517,13 @@ E fica tranquil@ com o tamanho das informações, tá? rs ☺️
       globalTimer: null
     });
 
-    salvarEntrevistasEmDisco();
+    await salvarEntrevistasEmDisco();
 
     const globalTimer = await iniciarContadorGlobal(channel, targetId);
     const dados = entrevistas.get(targetId);
     dados.globalTimer = globalTimer;
     entrevistas.set(targetId, dados);
-    salvarEntrevistasEmDisco();
+    await salvarEntrevistasEmDisco();
 
     await logCompleto(interaction.client, {
       titulo: '🎬 Entrevista iniciada',
@@ -588,7 +591,7 @@ async function enviarPergunta(channel, membro, index) {
 
     entrevistas.delete(membro.id);
     entrevistasAtivas.delete(channel.id);
-    salvarEntrevistasEmDisco();
+    await salvarEntrevistasEmDisco();
 
     const quemAtendeu = aplicadorId ? `<@${aplicadorId}>` : 'nossa equipe';
 
@@ -709,7 +712,7 @@ if (aplicadorId && canCountPoint && entrevistaFoiConduzida) {
   dados.mensagens.push(perguntaMsg.id);
   entrevistas.set(membro.id, dados);
   // Salva o estado após adicionar a mensagem da pergunta, para garantir consistência.
-  salvarEntrevistasEmDisco();
+  await salvarEntrevistasEmDisco();
 
   try {
     const tempoRestanteMs = dados.timeoutEnd - Date.now();
@@ -729,14 +732,14 @@ if (aplicadorId && canCountPoint && entrevistaFoiConduzida) {
     dados.index = index + 1;
 
     entrevistas.set(membro.id, dados);
-    salvarEntrevistasEmDisco();
+    await salvarEntrevistasEmDisco();
 
     setTimeout(() => enviarPergunta(channel, membro, dados.index), 700);
 
   } catch (e) {
     entrevistas.delete(membro.id);
     entrevistasAtivas.delete(channel.id);
-    salvarEntrevistasEmDisco();
+    await salvarEntrevistasEmDisco();
 
     await channel.send(`⏰ <@${membro.id}>, entrevista cancelada por inatividade (passou de ${ENTREVISTA_DURACAO_MIN} min).`);
   }
