@@ -563,7 +563,17 @@ const setupEventHandlers = () => {
         if (cmd === "verid") { if (await verIdHandleMessage(message, client)) return; }
         if (cmd === "removerperm") { if (await removerPermHandleMessage(message, client)) return; }
         if (cmd === "duplicarperm") { if (await duplicarPermHandleMessage(message, client)) return; }
-        if (cmd === "inativo") { if (await sortChannelsHandleMessage(message, client)) return; }
+
+        // ✅ Encaminha todos os comandos de inativação/reativação para o mesmo handler
+        if (
+          cmd === "inativo" ||
+          cmd === "inativos" ||
+          cmd === "membro" ||
+          cmd === "membros" ||
+          cmd === "reativar"
+        ) {
+          if (await sortChannelsHandleMessage(message, client)) return;
+        }
       }
 
       try {
