@@ -423,6 +423,19 @@ function isTextChannelLike(ch) {
 // 3.1 Primeiro, move canais para a categoria correta de forma determinística
 let changesCount = 0;
 
+// ✅ Contagem física atual por categoria do grupo
+const catCounts = new Map();
+for (const catId of cats) {
+  const count = guild.channels.cache.filter(
+    (c) =>
+      c.parentId === catId &&
+      c.type !== ChannelType.GuildCategory &&
+      !(typeof c.isThread === "function" && c.isThread())
+  ).size;
+
+  catCounts.set(catId, count);
+}
+
 const moveQueue = sortedAll
   .map((ch, orderIndex) => {
     const targetCatId = assignments.get(ch.id);
@@ -1167,6 +1180,17 @@ if (isReactivateCmd) {
           return true;
         }
 
+        const restoreSnapshot = {
+          oldParentId: currentCategoryId,
+          oldPosition: channel.rawPosition,
+          oldOverwrites: channel.permissionOverwrites.cache.map((ow) => ({
+            id: ow.id,
+            type: ow.type,
+            allow: ow.allow.bitfield.toString(),
+            deny: ow.deny.bitfield.toString(),
+          })),
+        };
+
         await channel.setParent(oldCategory.id, { lockPermissions: false });
 
         await channel.permissionOverwrites.set(
@@ -1182,7 +1206,6 @@ if (isReactivateCmd) {
           await channel.setPosition(state.oldPosition).catch(() => {});
         }
 
-        deleteChannelState(channel.id);
         await message.delete().catch(() => {});
 
         const logChannel = await client.channels
@@ -1190,9 +1213,54 @@ if (isReactivateCmd) {
           .catch(() => null);
 
         if (logChannel && logChannel.isTextBased()) {
-          await logChannel.send(
-            `✅ O canal ${channel} foi reativado para sua categoria original por ${message.author}.`
+          const embed = new EmbedBuilder()
+            .setTitle("✅ Canal Reativado para Categoria Original")
+            .setColor("Green")
+            .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
+            .addFields(
+              {
+                name: "👤 Executor",
+                value: `${message.author} (\`${message.author.id}\`)`,
+                inline: true,
+              },
+              {
+                name: "📺 Canal",
+                value: `${channel} (\`${channel.name}\`)`,
+                inline: true,
+              },
+              {
+                name: "📂 Origem",
+                value: `<#${currentCategoryId}> (\`${currentCategoryId || "N/A"}\`)`,
+                inline: false,
+              },
+              {
+                name: "📂 Destino",
+                value: `${oldCategory.name} (\`${oldCategory.id}\`)`,
+                inline: false,
+              },
+              {
+                name: "🕒 Data/Hora",
+                value: `<t:${Math.floor(Date.now() / 1000)}:F>`,
+                inline: false,
+              }
+            )
+            .setFooter({
+              text: "Sistema de Organização Automática • SantaCreators",
+            });
+
+          const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId(`SC_SPECIAL_REDO_${channel.id}_${message.author.id}`)
+              .setLabel("↩️ Desfazer (Voltar para Inativos Especiais)")
+              .setStyle(ButtonStyle.Danger)
           );
+
+          state[channel.id] = restoreSnapshot;
+          saveSortState(state);
+
+          await logChannel.send({ embeds: [embed], components: [row] });
+        } else {
+          deleteChannelState(channel.id);
         }
 
         return true;
@@ -1221,15 +1289,24 @@ export async function sortChannelsHandleInteraction(interaction) {
     const isUndoInativo = interaction.customId.startsWith("SC_INATIVO_UNDO_");
     const isUndoMembros = interaction.customId.startsWith("SC_MEMBROS_UNDO_");
     const isUndoSpecial = interaction.customId.startsWith("SC_SPECIAL_UNDO_");
+    const isRedoSpecial = interaction.customId.startsWith("SC_SPECIAL_REDO_");
 
-    if (!isUndoInativo && !isUndoMembros && !isUndoSpecial) return false;
+    if (!isUndoInativo && !isUndoMembros && !isUndoSpecial && !isRedoSpecial) return false;
 
     // Parse do ID
     const parts = interaction.customId.split("_");
-    // SC, (INATIVO|MEMBROS), UNDO, channelId, oldCatId, userId
-    const channelId = isUndoSpecial ? parts[3] : parts[3];
-    const oldCatId = isUndoSpecial ? null : parts[4]; // Not needed for special undo
-    const originalUserId = isUndoSpecial ? parts[4] : parts[5];
+    let channelId = null;
+    let oldCatId = null;
+    let originalUserId = null;
+
+    if (isUndoInativo || isUndoMembros) {
+      channelId = parts[3];
+      oldCatId = parts[4];
+      originalUserId = parts[5];
+    } else if (isUndoSpecial || isRedoSpecial) {
+      channelId = parts[3];
+      originalUserId = parts[4];
+    }
 
     // Verifica Permissões
     const member = interaction.member;
@@ -1246,9 +1323,7 @@ export async function sortChannelsHandleInteraction(interaction) {
       INATIVO_CONFIG.SPECIAL_AUTHORIZED_ROLES.includes(r.id)
     );
 
-    // ✅ Para undo especial, usa a régua especial
-    // ✅ Para undo padrão, usa a régua padrão
-    const canUndo = isUndoSpecial
+    const canUndo = (isUndoSpecial || isRedoSpecial)
       ? (isSpecialAllowedUser || isSpecialAllowedRole || interaction.user.id === originalUserId)
       : (isAllowedUser || isAllowedRole || interaction.user.id === originalUserId);
 
@@ -1262,8 +1337,7 @@ export async function sortChannelsHandleInteraction(interaction) {
 
     await interaction.deferReply({ ephemeral: true });
 
-    // Lógica para desfazer a inativação especial
-    if (isUndoSpecial) {
+    if (isUndoSpecial || isRedoSpecial) {
       const state = getChannelState(channelId);
       if (!state) {
         await interaction.editReply("❌ Dados de restauração não encontrados.");
@@ -1276,31 +1350,50 @@ export async function sortChannelsHandleInteraction(interaction) {
         return true;
       }
 
-      const oldCategory = await interaction.guild.channels.fetch(state.oldParentId).catch(() => null);
-      if (!oldCategory) {
-        await interaction.editReply("❌ A categoria original não existe mais.");
+      const targetCategory = await interaction.guild.channels.fetch(state.oldParentId).catch(() => null);
+      if (!targetCategory) {
+        await interaction.editReply("❌ A categoria de destino não existe mais.");
         return true;
       }
 
-      await channel.setParent(oldCategory.id, { lockPermissions: false });
+      await channel.setParent(targetCategory.id, { lockPermissions: false });
 
-await channel.permissionOverwrites.set(
-  state.oldOverwrites.map((ow) => ({
-    id: ow.id,
-    type: ow.type,
-    allow: BigInt(ow.allow),
-    deny: BigInt(ow.deny),
-  }))
-);
+      await channel.permissionOverwrites.set(
+        state.oldOverwrites.map((ow) => ({
+          id: ow.id,
+          type: ow.type,
+          allow: BigInt(ow.allow),
+          deny: BigInt(ow.deny),
+        }))
+      );
 
-if (typeof state.oldPosition === "number") {
-  await channel.setPosition(state.oldPosition).catch(() => {});
-}
+      if (typeof state.oldPosition === "number") {
+        await channel.setPosition(state.oldPosition).catch(() => {});
+      }
 
-deleteChannelState(channelId);
+      deleteChannelState(channelId);
 
-      await interaction.editReply(`✅ Ação desfeita. O canal ${channel} foi restaurado.`);
-      await interaction.message.edit({ components: [] }); // Desativa o botão
+      const originalEmbed = EmbedBuilder.from(interaction.message.embeds[0]);
+
+      if (isUndoSpecial) {
+        originalEmbed.setColor("Green");
+        originalEmbed.addFields({
+          name: "✅ Ação Desfeita",
+          value: `Canal reativado por ${interaction.user}.`,
+        });
+
+        await interaction.editReply(`✅ Ação desfeita. O canal ${channel} foi restaurado para **${targetCategory.name}**.`);
+      } else {
+        originalEmbed.setColor("DarkOrange");
+        originalEmbed.addFields({
+          name: "✅ Ação Desfeita",
+          value: `Canal retornado para os inativos especiais por ${interaction.user}.`,
+        });
+
+        await interaction.editReply(`✅ Ação desfeita. O canal ${channel} voltou para **${targetCategory.name}**.`);
+      }
+
+      await interaction.message.edit({ embeds: [originalEmbed], components: [] });
       return true;
     }
 
@@ -1321,17 +1414,15 @@ deleteChannelState(channelId);
       return true;
     }
 
-    // Move de volta
-  const previousCategoryId = channel.parentId;
+    const previousCategoryId = channel.parentId;
 
-await channel.setParent(oldCategory.id, { lockPermissions: false });
+    await channel.setParent(oldCategory.id, { lockPermissions: false });
 
-await safeSortCategory(interaction.guild, oldCategory.id);
-if (previousCategoryId && previousCategoryId !== oldCategory.id) {
-  await safeSortCategory(interaction.guild, previousCategoryId);
-}
+    await safeSortCategory(interaction.guild, oldCategory.id);
+    if (previousCategoryId && previousCategoryId !== oldCategory.id) {
+      await safeSortCategory(interaction.guild, previousCategoryId);
+    }
 
-    // Atualiza o Log (Desativa botão)
     const originalEmbed = EmbedBuilder.from(interaction.message.embeds[0]);
 
     if (isUndoInativo) {
@@ -1341,7 +1432,7 @@ if (previousCategoryId && previousCategoryId !== oldCategory.id) {
         value: `Canal retornado para a origem por ${interaction.user}.`,
       });
       await interaction.editReply(`✅ Canal ${channel} movido de volta para **${oldCategory.name}**.`);
-    } else { // isUndoMembros
+    } else {
       originalEmbed.setColor("Orange");
       originalEmbed.addFields({
         name: "✅ Ação Desfeita",
