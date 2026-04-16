@@ -543,37 +543,28 @@ const setupEventHandlers = () => {
         cacheMessage(message);
       } catch (e) {}
 
-      try {
-        if (await sortChannelsHandleMessage(message, client)) return;
-      } catch (e) {
-        console.error("[CORE] erro em sortChannelsHandleMessage:", e);
+      // --- ROTEADOR RÁPIDO DE COMANDOS (AUDITORIA DE PERFORMANCE) ---
+      const content = message.content || "";
+      const prefix = "!"; 
+      if (content.startsWith(prefix)) {
+        const args = content.slice(prefix.length).trim().split(/\s+/);
+        const cmd = args.shift().toLowerCase();
+
+        // Prioridade Máxima: Entrevista e Perguntas
+        if (cmd === "perguntas") { if (await messageCreateHandler.execute(message, args, client)) return; }
+        if (cmd === "correcao") { if (await handleCorrecao(message, client)) return; }
+        
+        // Comandos Administrativos Diretos
+        if (cmd === "clear" || cmd === "clearbotao") { if (await clearHandleMessage(message, client)) return; }
+        if (cmd === "remover") { if (await removerMassivoHandleMessage(message, client)) return; }
+        if (cmd === "criarcargo") { if (await criarCargoHandleMessage(message, client)) return; }
+        if (cmd === "verid") { if (await verIdHandleMessage(message, client)) return; }
+        if (cmd === "removerperm") { if (await removerPermHandleMessage(message, client)) return; }
+        if (cmd === "duplicarperm") { if (await duplicarPermHandleMessage(message, client)) return; }
+        if (cmd === "inativo") { if (await sortChannelsHandleMessage(message, client)) return; }
       }
 
-      try {
-        if (await autoReactsFotosHandleMessage(message, client)) return;
-      } catch (e) {
-        console.error("[CORE] erro em autoReactsFotosHandleMessage:", e);
-      }
-
-      if (await payEvtDashHandleMessage(message, client)) return;
-      if (await facsComparativoHandleMessage(message, client)) return;
-      if (await dashRouterHandleMessage(message)) return;
-      if (await facsSemanaisHandleMessage(message, client)) return;
-      if (await evt3EventsHandleMessage(message, client)) return;
-      if (await recrutamentoDashHandleMessage(message, client)) return;
-      if (await monitorCargosHandleMessage(message, client)) return;
-      if (await registroManagerHandleMessage(message, client)) return;
-      if (await registroVendasHandleMessage(message, client)) return;
-      if (await aulaoHandleMessage(message, client)) return;
-      if (await cronogramaCreatorsHandleMessage(message, client)) return;
-      if (await ausenciasHandleMessage(message, client)) return;
-      if (await hierarquiaHandleMessage(message, client)) return;
-      if (await reuniaoSemanalHandleMessage(message, client)) return;
-      if (await roleProtectHandleMessage(message, client)) return;
-      if (await connectStatusHandleMessage(message, client)) return;
-      if (await orgsHandleMessage(message, client)) return;
-      if (await checklistHandleMessage(message, client)) return;
-
+      // Fallback para handlers que verificam conteúdo ou condições especiais
       try {
         if (
           typeof geralDash?.geralDashHandleMessage === "function" &&
@@ -583,16 +574,27 @@ const setupEventHandlers = () => {
         }
       } catch (e) {}
 
-      try {
-        if (await geralWeeklyRankHandleMessage(message, client)) return;
-      } catch (e) {}
+      // Módulos de monitoramento/log (rodar apenas se não for comando)
+      if (!content.startsWith(prefix)) {
+          if (await autoReactsFotosHandleMessage(message, client)) return;
+          if (await monitorCargosHandleMessage(message, client)) return;
+          if (await roleProtectHandleMessage(message, client)) return;
+      }
 
-      if (await criarCargoHandleMessage(message, client)) return;
-      if (await removerPermHandleMessage(message, client)) return;
-      if (await duplicarPermHandleMessage(message, client)) return;
-      if (await clearHandleMessage(message, client)) return;
-      if (await removerMassivoHandleMessage(message, client)) return;
-      if (await verIdHandleMessage(message, client)) return;
+      // Restante dos handlers sequenciais (apenas o que não foi capturado no roteador)
+      if (await payEvtDashHandleMessage(message, client)) return;
+      if (await facsComparativoHandleMessage(message, client)) return;
+      if (await dashRouterHandleMessage(message)) return;
+      if (await facsSemanaisHandleMessage(message, client)) return;
+      if (await evt3EventsHandleMessage(message, client)) return;
+      if (await recrutamentoDashHandleMessage(message, client)) return;
+      if (await registroManagerHandleMessage(message, client)) return;
+      if (await registroVendasHandleMessage(message, client)) return;
+      if (await aulaoHandleMessage(message, client)) return;
+      if (await cronogramaCreatorsHandleMessage(message, client)) return;
+      if (await ausenciasHandleMessage(message, client)) return;
+      if (await hierarquiaHandleMessage(message, client)) return;
+      if (await reuniaoSemanalHandleMessage(message, client)) return;
       if (await apagarChatHandleMessage(message, client)) return;
       if (await verPermsHandleMessage(message)) return;
       if (await editarPermHandleMessage(message, client)) return;

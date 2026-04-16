@@ -88,23 +88,20 @@ const nextTopic = `entrevista_aplicador:${message.author.id}`.slice(0, 1024);
       `👤 **Candidato:** <@${openerId}>\n` +
       `👮 **Aplicador:** ${message.author}\n\n` +
       `👉 Fiquem atentos para corrigir assim que o candidato terminar!`;
-
-    const notifiedIds = new Set();
-
-    for (const roleId of ALERT_ROLE_IDS) {
-      const role = message.guild.roles.cache.get(roleId);
-      if (!role) continue;
-
-      for (const [id, member] of role.members) {
-        if (!member) continue;
-        if (member.user?.bot) continue;
-        if (id === message.author.id) continue;
-        if (notifiedIds.has(id)) continue;
-
-        member.send(alertMsg).catch(() => {});
-        notifiedIds.add(id);
-      }
-    }
+    
+    // Enviar notificações em background (Não usa await)
+    (async () => {
+        const notifiedIds = new Set();
+        for (const roleId of ALERT_ROLE_IDS) {
+          const role = message.guild.roles.cache.get(roleId);
+          if (!role) continue;
+          for (const [id, member] of role.members) {
+            if (!member || member.user?.bot || id === message.author.id || notifiedIds.has(id)) continue;
+            member.send(alertMsg).catch(() => {});
+            notifiedIds.add(id);
+          }
+        }
+    })();
 
     fireAndForget(
       client.channels.fetch(LOG_CHANNEL_ID).then(async (logChannel) => {
