@@ -401,23 +401,31 @@ async function handleButtons(interaction) {
  // INICIAR (manda mensagem completa + botão ENVIAR)
 if (customId.startsWith('iniciar|')) {
   const [, channelId] = customId.split('|');
-    await interaction.deferUpdate().catch(() => {});
+  await interaction.deferUpdate().catch(() => {});
 
-    // 1. Ações de metadados em background (Starter e Cargo)
-    (async () => {
-      try {
-        const oldTopic = String(interaction.channel.topic || "");
-        const cleanedTopic = oldTopic.replace(/\bentrevista_starter:\d{17,20}\b/gi, "").replace(/\s{2,}/g, " ").trim();
-        const nextTopic = `${cleanedTopic}${cleanedTopic ? " | " : ""}entrevista_starter:${interaction.user.id}`.slice(0, 1024);
-        if (typeof interaction.channel.setTopic === "function") await interaction.channel.setTopic(nextTopic).catch(() => {});
+  const membro = interaction.member ?? await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+  const cargoEntrevista = interaction.guild.roles.cache.get('1353797415488196770');
 
-        const membro = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
-        const cargoEntrevista = interaction.guild.roles.cache.get('1353797415488196770');
-        if (membro && cargoEntrevista && !membro.roles.cache.has(cargoEntrevista.id)) await membro.roles.add(cargoEntrevista).catch(() => {});
-      } catch (e) {
-        console.warn("[Entrevista] Falha ao configurar starter/cargo:", e?.message || e);
-      }
-    })();
+  try {
+    const oldTopic = String(interaction.channel.topic || "");
+    const cleanedTopic = oldTopic
+      .replace(/\bentrevista_starter:\d{17,20}\b/gi, "")
+      .replace(/\s{2,}/g, " ")
+      .trim();
+
+    const nextTopic = `${cleanedTopic}${cleanedTopic ? " | " : ""}entrevista_starter:${interaction.user.id}`.slice(0, 1024);
+
+    await Promise.allSettled([
+      typeof interaction.channel.setTopic === "function"
+        ? interaction.channel.setTopic(nextTopic)
+        : Promise.resolve(),
+      membro && cargoEntrevista && !membro.roles.cache.has(cargoEntrevista.id)
+        ? membro.roles.add(cargoEntrevista.id)
+        : Promise.resolve()
+    ]);
+  } catch (e) {
+    console.warn("[Entrevista] Falha ao configurar starter/cargo:", e?.message || e);
+  }
 
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
@@ -426,39 +434,37 @@ if (customId.startsWith('iniciar|')) {
       .setStyle(ButtonStyle.Primary)
   );
 
-    // 2. Responde visualmente IMEDIATAMENTE (Remove botão antigo e envia as regras)
   await interaction.message.edit({ components: [] }).catch(() => {});
 
-    const enviada = await interaction.channel.send({
-      content: `✨ Oii, <@${interaction.user.id}> Tudo bem por aí? Seja **MUITO** bem-vind@ à família **SantaCreators**!  \nÉ um prazer ter você por aqui — e pode ficar tranquil@, porque a <@&1352275728476930099> vai te acompanhar nessa primeira etapa com todo o cuidado. 💖\n\n📝 Nosso processo de entrada é dividido em **duas fases bem tranquilas**:\n\n➊ **Aqui pelo Discord/e-mail**, a gente vai trocar uma ideia pra entender melhor o seu perfil e ver como você se sairia em algumas situações dentro da nossa estrutura.\n\n➋ **Depois, dentro da cidade**, vamos te apresentar nosso prédio, explicar direitinho as regras e mostrar na prática como funcionamos por aqui.\n\n📚 **Agora bora dar uma lida nas regras?**\nhttps://discord.com/channels/1262262852782129183/1352285379302002710\nhttps://discord.com/channels/1262262852782129183/1355622493464821892\nhttps://discord.com/channels/1262262852782129183/1370830395637239928\nhttps://discord.com/channels/1262262852782129183/1381704800608981003\n\n⚠️ **IMPORTANTE SOBRE A ENTREVISTA**\nDurante a entrevista **não é permitido utilizar Inteligência Artificial** e **nem copiar e colar**. Responda **com suas próprias palavras**.\n\n✅ Assim que estiver tudo certinho por aí, me avisa aqui mesmo pra gente **começar a sua entrevista**, combinado?\n\n🚀 **Bora começar essa jornada juntos!** 🌟`,
-      components: [row]
+  const enviada = await interaction.channel.send({
+    content: `✨ Oii, <@${interaction.user.id}> Tudo bem por aí? Seja **MUITO** bem-vind@ à família **SantaCreators**!  \nÉ um prazer ter você por aqui — e pode ficar tranquil@, porque a <@&1352275728476930099> vai te acompanhar nessa primeira etapa com todo o cuidado. 💖\n\n📝 Nosso processo de entrada é dividido em **duas fases bem tranquilas**:\n\n➊ **Aqui pelo Discord/e-mail**, a gente vai trocar uma ideia pra entender melhor o seu perfil e ver como você se sairia em algumas situações dentro da nossa estrutura.\n\n➋ **Depois, dentro da cidade**, vamos te apresentar nosso prédio, explicar direitinho as regras e mostrar na prática como funcionamos por aqui.\n\n📚 **Agora bora dar uma lida nas regras?**\nhttps://discord.com/channels/1262262852782129183/1352285379302002710\nhttps://discord.com/channels/1262262852782129183/1355622493464821892\nhttps://discord.com/channels/1262262852782129183/1370830395637239928\nhttps://discord.com/channels/1262262852782129183/1381704800608981003\n\n⚠️ **IMPORTANTE SOBRE A ENTREVISTA**\nDurante a entrevista **não é permitido utilizar Inteligência Artificial** e **nem copiar e colar**. Responda **com suas próprias palavras**.\n\n✅ Assim que estiver tudo certinho por aí, me avisa aqui mesmo pra gente **começar a sua entrevista**, combinado?\n\n🚀 **Bora começar essa jornada juntos!** 🌟`,
+    components: [row]
+  });
+
+  (async () => {
+    const mensagens = await interaction.channel.messages.fetch({ limit: 15 }).catch(() => null);
+    if (mensagens) {
+      const toDelete = mensagens.filter(m => m.id !== enviada.id && m.components?.length > 0);
+      if (toDelete.size > 0) await interaction.channel.bulkDelete(toDelete).catch(() => {});
+    }
+
+    await logCompleto(interaction.client, {
+      titulo: '🚪 Botão: Iniciar Entrevista',
+      cor: 0x1abc9c,
+      autorTag: interaction.user.tag,
+      autorIcon: interaction.user.displayAvatarURL({ dynamic: true }),
+      desc: 'Clicaram em iniciar entrevista.',
+      fields: [
+        { name: '👤 Quem clicou', value: `<@${interaction.user.id}>`, inline: true },
+        { name: '📍 Canal', value: `<#${interaction.channelId}>`, inline: true },
+        { name: '🔗 Mensagem', value: msgLink(interaction.guildId, interaction.channelId, enviada.id), inline: false }
+      ],
+      thumb: interaction.guild?.iconURL({ dynamic: true })
     });
+  })();
 
-    // 3. Limpeza de lixo e Logs em background (Sem await para evitar delay visual)
-    (async () => {
-      const mensagens = await interaction.channel.messages.fetch({ limit: 15 }).catch(() => null);
-      if (mensagens) {
-        const toDelete = mensagens.filter(m => m.id !== enviada.id && m.components?.length > 0);
-        if (toDelete.size > 0) await interaction.channel.bulkDelete(toDelete).catch(() => {});
-      }
-
-      await logCompleto(interaction.client, {
-        titulo: '🚪 Botão: Iniciar Entrevista',
-        cor: 0x1abc9c,
-        autorTag: interaction.user.tag,
-        autorIcon: interaction.user.displayAvatarURL({ dynamic: true }),
-        desc: 'Clicaram em iniciar entrevista.',
-        fields: [
-          { name: '👤 Quem clicou', value: `<@${interaction.user.id}>`, inline: true },
-          { name: '📍 Canal', value: `<#${interaction.channelId}>`, inline: true },
-          { name: '🔗 Mensagem', value: msgLink(interaction.guildId, interaction.channelId, enviada.id), inline: false }
-        ],
-        thumb: interaction.guild?.iconURL({ dynamic: true })
-      });
-    })();
-
-    return true;
-  }
+  return true;
+}
 
 
   // ENVIAR (inicia as perguntas)
@@ -466,84 +472,94 @@ if (customId.startsWith('iniciar|')) {
     const [, targetId] = customId.split('|');
     await interaction.deferUpdate().catch(() => {});
 
-    const topicId = getAplicadorIdFromChannel(channel);
-    const entrevistadorId = topicId || interaction.user.id; // ✅ Prioriza quem usou !perguntas, fallback p/ quem clicou
-
-    const membro = await channel.guild.members.fetch(targetId).catch(() => null);
-    if (!membro) return true;
-
-    await interaction.message.edit({ components: [] }).catch(() => {});
-
-    const aviso = await channel.send({
-      content: `<@${targetId}> Bora! Vamos começar sua entrevista agora ✨`
-    });
-
-    const timeoutEnd = Date.now() + ENTREVISTA_DURACAO_MS;
-
-    // ✅ Trava para não iniciar uma entrevista em um canal que já tem uma ativa.
     if (entrevistasAtivas.has(channel.id)) {
       console.warn(`[Entrevista] Tentativa de iniciar entrevista em canal já ativo: ${channel.id}. Ignorando.`);
       await interaction.followUp({ content: '⚠️ Já existe uma entrevista ativa neste canal.', ephemeral: true }).catch(() => {});
       return true;
     }
+
+    const topicId = getAplicadorIdFromChannel(channel);
+    const entrevistadorId = topicId || interaction.user.id;
+
+    const membro = await channel.guild.members.fetch(targetId).catch(() => null);
+    if (!membro) return true;
+
     entrevistasAtivas.add(channel.id);
 
-    entrevistas.set(targetId, {
-      respostas: [],
-      index: 0,
-      timeoutEnd,
-      entrevistadorId,
-      channelId: channel.id,
-      mensagens: [],
-      lastSent: 0, // ✅ Adiciona o campo para o debounce
-      globalTimer: null
-    });
+    try {
+      await interaction.message.edit({ components: [] }).catch(() => {});
 
-    await salvarEntrevistasEmDisco();
+      const aviso = await channel.send({
+        content: `<@${targetId}> Bora! Vamos começar sua entrevista agora ✨`
+      });
 
-    const globalTimer = await iniciarContadorGlobal(channel, targetId);
-    const dados = entrevistas.get(targetId);
-    dados.globalTimer = globalTimer;
-    entrevistas.set(targetId, dados);
-    await salvarEntrevistasEmDisco();
+      const timeoutEnd = Date.now() + ENTREVISTA_DURACAO_MS;
 
-    await logCompleto(interaction.client, {
-      titulo: '🎬 Entrevista iniciada',
-      cor: 0x2ecc71,
-      autorTag: interaction.user.tag,
-      autorIcon: interaction.user.displayAvatarURL({ dynamic: true }),
-      desc: 'Começaram a entrevista pelo botão ENVIAR.',
-      fields: [
-        { name: '🧑‍💼 Entrevistador', value: `<@${entrevistadorId}>\n\`${entrevistadorId}\``, inline: true },
-        { name: '👤 Entrevistado', value: `<@${targetId}>\n\`${targetId}\``, inline: true },
-        { name: '📍 Canal', value: `<#${channel.id}>\n\`${channel.id}\``, inline: true },
-        { name: '🔗 Mensagem', value: msgLink(interaction.guildId, interaction.channelId, aviso.id), inline: false },
-        { name: '⏳ Duração', value: `${ENTREVISTA_DURACAO_MIN} minutos`, inline: true }
-      ],
-      thumb: guild.iconURL({ dynamic: true })
-    });
+      entrevistas.set(targetId, {
+        respostas: [],
+        index: 0,
+        timeoutEnd,
+        entrevistadorId,
+        channelId: channel.id,
+        mensagens: [],
+        lastSent: 0,
+        globalTimer: null
+      });
 
-    // 📢 NOTIFICA EQUIPE NO PV (ENTREVISTA INICIADA)
-    const alertStartMsg = `📢 **ENTREVISTA INICIADA!**\n\n` +
-      `📍 **Canal:** ${channel}\n` +
-      `👤 **Candidato:** <@${targetId}>\n` +
-      `👮 **Aplicador:** <@${entrevistadorId}>\n\n` +
-      `👉 Fiquem atentos para corrigir assim que o candidato terminar!`;
+      await salvarEntrevistasEmDisco();
 
-    const notifiedStartIds = new Set();
-    for (const roleId of ALERT_ROLE_IDS) {
-      const role = channel.guild.roles.cache.get(roleId);
-      if (!role) continue;
-      for (const [id, staff] of role.members) {
-        if (staff.user.bot) continue;
-        if (notifiedStartIds.has(id)) continue;
-        staff.send(alertStartMsg).catch(() => {});
-        notifiedStartIds.add(id);
+      const globalTimer = await iniciarContadorGlobal(channel, targetId);
+      const dados = entrevistas.get(targetId);
+      if (dados) {
+        dados.globalTimer = globalTimer;
+        entrevistas.set(targetId, dados);
       }
-    }
 
-    enviarPergunta(channel, membro, 0);
-    return true;
+      await salvarEntrevistasEmDisco();
+
+      await logCompleto(interaction.client, {
+        titulo: '🎬 Entrevista iniciada',
+        cor: 0x2ecc71,
+        autorTag: interaction.user.tag,
+        autorIcon: interaction.user.displayAvatarURL({ dynamic: true }),
+        desc: 'Começaram a entrevista pelo botão ENVIAR.',
+        fields: [
+          { name: '🧑‍💼 Entrevistador', value: `<@${entrevistadorId}>\n\`${entrevistadorId}\``, inline: true },
+          { name: '👤 Entrevistado', value: `<@${targetId}>\n\`${targetId}\``, inline: true },
+          { name: '📍 Canal', value: `<#${channel.id}>\n\`${channel.id}\``, inline: true },
+          { name: '🔗 Mensagem', value: msgLink(interaction.guildId, interaction.channelId, aviso.id), inline: false },
+          { name: '⏳ Duração', value: `${ENTREVISTA_DURACAO_MIN} minutos`, inline: true }
+        ],
+        thumb: guild.iconURL({ dynamic: true })
+      });
+
+      const alertStartMsg = `📢 **ENTREVISTA INICIADA!**\n\n` +
+        `📍 **Canal:** ${channel}\n` +
+        `👤 **Candidato:** <@${targetId}>\n` +
+        `👮 **Aplicador:** <@${entrevistadorId}>\n\n` +
+        `👉 Fiquem atentos para corrigir assim que o candidato terminar!`;
+
+      const notifiedStartIds = new Set();
+      for (const roleId of ALERT_ROLE_IDS) {
+        const role = channel.guild.roles.cache.get(roleId);
+        if (!role) continue;
+        for (const [id, staff] of role.members) {
+          if (staff.user.bot) continue;
+          if (notifiedStartIds.has(id)) continue;
+          staff.send(alertStartMsg).catch(() => {});
+          notifiedStartIds.add(id);
+        }
+      }
+
+      await enviarPergunta(channel, membro, 0);
+      return true;
+    } catch (e) {
+      entrevistasAtivas.delete(channel.id);
+      entrevistas.delete(targetId);
+      await salvarEntrevistasEmDisco().catch(() => {});
+      console.error("[Entrevista] Falha ao iniciar entrevista:", e);
+      return true;
+    }
   }
 
   return false;

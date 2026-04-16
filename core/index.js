@@ -545,15 +545,17 @@ const setupEventHandlers = () => {
 
       // --- ROTEADOR RÁPIDO DE COMANDOS (AUDITORIA DE PERFORMANCE) ---
       const content = message.content || "";
-      const prefix = "!"; 
-      if (content.startsWith(prefix)) {
+      const prefix = "!";
+      const isCommand = content.startsWith(prefix);
+
+      if (isCommand) {
         const args = content.slice(prefix.length).trim().split(/\s+/);
         const cmd = args.shift().toLowerCase();
 
         // Prioridade Máxima: Entrevista e Perguntas
         if (cmd === "perguntas") { if (await messageCreateHandler.execute(message, args, client)) return; }
         if (cmd === "correcao") { if (await handleCorrecao(message, client)) return; }
-        
+
         // Comandos Administrativos Diretos
         if (cmd === "clear" || cmd === "clearbotao") { if (await clearHandleMessage(message, client)) return; }
         if (cmd === "remover") { if (await removerMassivoHandleMessage(message, client)) return; }
@@ -564,7 +566,6 @@ const setupEventHandlers = () => {
         if (cmd === "inativo") { if (await sortChannelsHandleMessage(message, client)) return; }
       }
 
-      // Fallback para handlers que verificam conteúdo ou condições especiais
       try {
         if (
           typeof geralDash?.geralDashHandleMessage === "function" &&
@@ -574,14 +575,12 @@ const setupEventHandlers = () => {
         }
       } catch (e) {}
 
-      // Módulos de monitoramento/log (rodar apenas se não for comando)
-      if (!content.startsWith(prefix)) {
-          if (await autoReactsFotosHandleMessage(message, client)) return;
-          if (await monitorCargosHandleMessage(message, client)) return;
-          if (await roleProtectHandleMessage(message, client)) return;
+      if (!isCommand) {
+        if (await autoReactsFotosHandleMessage(message, client)) return;
+        if (await monitorCargosHandleMessage(message, client)) return;
+        if (await roleProtectHandleMessage(message, client)) return;
       }
 
-      // Restante dos handlers sequenciais (apenas o que não foi capturado no roteador)
       if (await payEvtDashHandleMessage(message, client)) return;
       if (await facsComparativoHandleMessage(message, client)) return;
       if (await dashRouterHandleMessage(message)) return;
@@ -609,7 +608,10 @@ const setupEventHandlers = () => {
       if (await vipRegistroHandleMessage(message, client)) return;
 
       await entrevistasTickets.onMessageCreate(message);
-      await messageCreateHandler.execute(message, [], client);
+
+      if (!isCommand) {
+        await messageCreateHandler.execute(message, [], client);
+      }
     } catch (error) {
       console.error("Erro messageCreate:", error);
     }

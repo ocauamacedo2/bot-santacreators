@@ -38,14 +38,31 @@ export default {
       '1282119104576098314'
     ];
 
-    // ✅ Permite se o usuário for você/owner OU se tiver um dos cargos permitidos
-    return idsPermitidos.includes(message.author.id) || 
+    return idsPermitidos.includes(message.author.id) ||
            message.member?.roles?.cache?.some(r => idsPermitidos.includes(r.id));
   },
 
   async execute(message, args, client) {
     if (!message.guild) {
       return message.channel.send("Esse comando só funciona dentro do servidor.");
+    }
+
+    const mensagensRecentes = await message.channel.messages.fetch({ limit: 15 }).catch(() => null);
+    if (mensagensRecentes) {
+      const jaExisteBotao = mensagensRecentes.some((msg) =>
+        msg.author.id === client.user.id &&
+        msg.components?.some((row) =>
+          row.components?.some((component) =>
+            component.customId === `iniciar|${message.channel.id}`
+          )
+        )
+      );
+
+      if (jaExisteBotao) {
+        return message.reply({
+          content: "⚠️ Já existe um botão de iniciar entrevista ativo neste canal."
+        }).catch(() => {});
+      }
     }
 
     const row = new ActionRowBuilder().addComponents(
@@ -56,28 +73,25 @@ export default {
     );
 
     await message.channel.send({
-  content: `Clique no botão abaixo para iniciar a entrevista 🎤`,
-  components: [row]
-});
+      content: `Clique no botão abaixo para iniciar a entrevista 🎤`,
+      components: [row]
+    });
 
-// ✅ salva quem aplicou no tópico do canal para uso posterior
-try {
-  const oldTopic = String(message.channel.topic || "");
-  const cleanedTopic = oldTopic
-    .replace(/\bentrevista_aplicador:\d{17,20}\b/gi, "")
-    .replace(/\s{2,}/g, " ")
-    .trim();
+    try {
+      const oldTopic = String(message.channel.topic || "");
+      const cleanedTopic = oldTopic
+        .replace(/\bentrevista_aplicador:\d{17,20}\b/gi, "")
+        .replace(/\s{2,}/g, " ")
+        .trim();
 
-const nextTopic = `entrevista_aplicador:${message.author.id}`.slice(0, 1024);
+      const nextTopic = `${cleanedTopic}${cleanedTopic ? " | " : ""}entrevista_aplicador:${message.author.id}`.slice(0, 1024);
 
-  if (typeof message.channel.setTopic === "function") {
-    await message.channel.setTopic(nextTopic).catch(() => {});
-  }
-} catch (e) {
-  console.warn("[!perguntas] Falha ao salvar aplicador no tópico:", e?.message || e);
-}
-
-    // Este evento antigo é mantido para logs, mas não será usado para pontuação.
+      if (typeof message.channel.setTopic === "function") {
+        await message.channel.setTopic(nextTopic).catch(() => {});
+      }
+    } catch (e) {
+      console.warn("[!perguntas] Falha ao salvar aplicador no tópico:", e?.message || e);
+    }
 
     const topic = message.channel.topic || "";
     const m = topic.match(/aberto_por:(\d{5,})/i);
@@ -88,19 +102,18 @@ const nextTopic = `entrevista_aplicador:${message.author.id}`.slice(0, 1024);
       `👤 **Candidato:** <@${openerId}>\n` +
       `👮 **Aplicador:** ${message.author}\n\n` +
       `👉 Fiquem atentos para corrigir assim que o candidato terminar!`;
-    
-    // Enviar notificações em background (Não usa await)
+
     (async () => {
-        const notifiedIds = new Set();
-        for (const roleId of ALERT_ROLE_IDS) {
-          const role = message.guild.roles.cache.get(roleId);
-          if (!role) continue;
-          for (const [id, member] of role.members) {
-            if (!member || member.user?.bot || id === message.author.id || notifiedIds.has(id)) continue;
-            member.send(alertMsg).catch(() => {});
-            notifiedIds.add(id);
-          }
+      const notifiedIds = new Set();
+      for (const roleId of ALERT_ROLE_IDS) {
+        const role = message.guild.roles.cache.get(roleId);
+        if (!role) continue;
+        for (const [id, member] of role.members) {
+          if (!member || member.user?.bot || id === message.author.id || notifiedIds.has(id)) continue;
+          member.send(alertMsg).catch(() => {});
+          notifiedIds.add(id);
         }
+      }
     })();
 
     fireAndForget(
