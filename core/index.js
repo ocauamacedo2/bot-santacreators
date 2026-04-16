@@ -242,40 +242,75 @@ const setupEventHandlers = () => {
 
   // --- MENSAGENS ---
   client.on("messageCreate", async (message) => {
-    if (message.author.bot) return;
+    try {
+      if (message.author.bot) return;
 
-    // 1. Logs e Cache Primário
-    autoReactsFotosHandleMessage(message, client).catch(() => {});
-    cacheMessage(message);
-    reminderHandleMessageCreate(message, client).catch(() => {});
+      // 1. Primário
+      try {
+        autoReactsFotosHandleMessage(message, client).catch(() => {});
+      } catch (e) {}
 
-    // 2. Handlers Específicos do Core (Não presentes nos handlers centrais)
-    // Ordem: Sistemas de Dashboard -> Ferramentas -> Central
-    if (await payEvtDashHandleMessage(message, client)) return;
-    if (await facsComparativoHandleMessage(message, client)) return;
-    if (await dashRouterHandleMessage(message)) return;
-    if (await facsSemanaisHandleMessage(message, client)) return;
-    if (await evt3EventsHandleMessage(message, client)) return;
-    if (await recrutamentoDashHandleMessage(message, client)) return;
-    if (await monitorCargosHandleMessage(message, client)) return;
-    if (await registroManagerHandleMessage(message, client)) return;
-    if (await aulaoHandleMessage(message, client)) return;
-    if (await cronogramaCreatorsHandleMessage(message, client)) return;
-    if (await hierarquiaHandleMessage(message, client)) return;
-    if (await reuniaoSemanalHandleMessage(message, client)) return;
-    if (await connectStatusHandleMessage(message, client)) return;
-    if (await orgsHandleMessage(message, client)) return;
-    if (await checklistHandleMessage(message, client)) return;
-    if (await alinhamentosHandleMessage(message, client)) return;
-    if (await handleCorrecao(message, client)) return;
-    if (await pedirSetHandleMessage(message, client)) return;
+      try {
+        cacheMessage(message);
+      } catch (e) {}
 
-    // 3. Delegation para Handlers de Arquivo (Comandos ! e Módulos específicos)
-    // Nota: O messageCreateHandler.execute já contém internamente chamadas para:
-    // vipRegistro, ausencias, registroPoderesEventos, focoSemanais, provasAdv, 
-    // blacklistFacs, registroVendas, sortChannels, handlers de admin (clear, verid, etc.)
-    await messageCreateHandler.execute(message, [], client);
-    await entrevistasTickets.onMessageCreate(message);
+      try {
+        reminderHandleMessageCreate(message, client).catch(() => {});
+      } catch (e) {}
+
+      // 2. Roteamento direto restaurado
+      if (await sortChannelsHandleMessage(message, client)) return;
+      if (await payEvtDashHandleMessage(message, client)) return;
+      if (await facsComparativoHandleMessage(message, client)) return;
+      if (await dashRouterHandleMessage(message)) return;
+      if (await facsSemanaisHandleMessage(message, client)) return;
+      if (await evt3EventsHandleMessage(message, client)) return;
+      if (await recrutamentoDashHandleMessage(message, client)) return;
+      if (await monitorCargosHandleMessage(message, client)) return;
+      if (await registroManagerHandleMessage(message, client)) return;
+      if (await registroVendasHandleMessage(message, client)) return;
+      if (await aulaoHandleMessage(message, client)) return;
+      if (await cronogramaCreatorsHandleMessage(message, client)) return;
+      if (await ausenciasHandleMessage(message, client)) return;
+      if (await hierarquiaHandleMessage(message, client)) return;
+      if (await reuniaoSemanalHandleMessage(message, client)) return;
+      if (await roleProtectHandleMessage(message, client)) return;
+      if (await connectStatusHandleMessage(message, client)) return;
+      if (await orgsHandleMessage(message, client)) return;
+      if (await checklistHandleMessage(message, client)) return;
+
+      try {
+        if (
+          typeof geralDash?.geralDashHandleMessage === "function" &&
+          (await geralDash.geralDashHandleMessage(message, client))
+        ) {
+          return;
+        }
+      } catch (e) {}
+
+      try {
+        if (await geralWeeklyRankHandleMessage(message, client)) return;
+      } catch (e) {}
+
+      if (await handleCorrecao(message, client)) return;
+      if (await pedirSetHandleMessage(message, client)) return;
+      if (await alinhamentosHandleMessage(message, client)) return;
+
+      try {
+        await formsCreatorHandleMessage(message, client);
+      } catch (e) {}
+
+      if (await setStaffV2HandleMessage(message, client)) return;
+      if (await doacaoHandleMessage(message, client)) return;
+      if (await vipEventoHandleMessage(message, client)) return;
+      if (await vipRegistroHandleMessage(message, client)) return;
+
+      // 3. Fallback final
+      await entrevistasTickets.onMessageCreate(message);
+      await messageCreateHandler.execute(message, [], client);
+    } catch (error) {
+      console.error("Erro messageCreate:", error);
+    }
   });
 
   client.on("messageUpdate", (o, n) => {
@@ -319,38 +354,63 @@ const setupEventHandlers = () => {
   client.on("interactionCreate", async (interaction) => {
     if (interaction.isAutocomplete()) return;
 
-    // 1. Handlers de Prioridade do Core (não presentes no interactionCreateHandler)
-    if (await registroManagerHandleInteraction(interaction, client)) return;
-    if (await handleWeeklyRankInteractions(interaction, client)) return;
-    if (await facsComparativoHandleInteraction(interaction, client)) return;
-    if (await facsSemanaisHandleInteraction(interaction, client)) return;
-    if (await confirmacaoPresencaHandleInteraction(interaction, client)) return;
-    if (await evt3EventsHandleInteraction(interaction, client)) return;
-    if (await payEvtDashHandleInteraction(interaction, client)) return;
-    if (await orgsHandleInteraction(interaction, client)) return;
-    if (await alinhamentosHandleInteraction(interaction, client)) return;
-    if (await setStaffV2HandleInteraction(interaction, client)) return;
-    if (await graficoManagersHandleInteraction(interaction, client)) return;
-    if (await recrutamentoDashHandleInteraction(interaction, client)) return;
-    if (await hallDaFamaHandleInteraction(interaction, client)) return;
-    if (await eventosDiariosHandleInteraction(interaction, client)) return;
-    if (await reuniaoSemanalHandleInteraction(interaction, client)) return;
-    if (await hierarquiaHandleInteraction(interaction, client)) return;
-    if (await checklistHandleInteraction(interaction, client)) return;
-    if (await cadastroManualHandleInteraction(interaction, client)) return;
-    if (await aulaoHandleInteraction(interaction, client)) return;
-    if (await cronogramaCreatorsHandleInteraction(interaction, client)) return;
-    if (await pedirSetHandleInteraction(interaction, client)) return;
-    
-    // 2. Handlers de terceiros e integração complexa
-    if (await handlePagamentoSocial(interaction, client)) return;
+    try {
+      if (await registroManagerHandleInteraction(interaction, client)) return;
+      if (await handleWeeklyRankInteractions(interaction, client)) return;
+      if (await registroVendasHandleInteraction(interaction, client)) return;
+      if (await facsComparativoHandleInteraction(interaction, client)) return;
+      if (await facsSemanaisHandleInteraction(interaction, client)) return;
+      if (await confirmacaoPresencaHandleInteraction(interaction, client)) return;
+      if (await evt3EventsHandleInteraction(interaction, client)) return;
+      if (await payEvtDashHandleInteraction(interaction, client)) return;
 
-    // 3. Delegation para Handlers de Arquivo
-    // Nota: O interactionCreateHandler.execute já contém internamente chamadas para:
-    // vipRegistro, ausencias, registroPoderesEventos, focoSemanais, provasAdv,
-    // blacklistFacs, registroVendas, sortChannels, entrevista.handleButtons
-    await interactionCreateHandler.execute(interaction);
-    await entrevistasTickets.onInteractionCreate(interaction);
+      if (await orgsHandleInteraction(interaction, client)) return;
+      if (await doacaoHandleInteraction(interaction, client)) return;
+      if (await formsCreatorHandleInteraction(interaction, client)) return;
+      if (await ausenciasHandleInteraction(interaction, client)) return;
+      if (await vipEventoHandleInteraction(interaction, client)) return;
+      if (await vipRegistroHandleInteraction(interaction, client)) return;
+      if (await lideresConvitesHandleInteraction(interaction, client)) return;
+      if (await pedirSetHandleInteraction(interaction, client)) return;
+      if (await alinhamentosHandleInteraction(interaction, client)) return;
+      if (await setStaffV2HandleInteraction(interaction, client)) return;
+      if (await graficoManagersHandleInteraction(interaction, client)) return;
+      if (await recrutamentoDashHandleInteraction(interaction, client)) return;
+      if (await blacklistEventosHandleInteraction(interaction, client)) return;
+      if (await hallDaFamaHandleInteraction(interaction, client)) return;
+      if (await eventosDiariosHandleInteraction(interaction, client)) return;
+      if (await sortChannelsHandleInteraction(interaction, client)) return;
+      if (await reuniaoSemanalHandleInteraction(interaction, client)) return;
+
+      try {
+        if (
+          typeof geralDash?.geralDashHandleInteraction === "function" &&
+          (await geralDash.geralDashHandleInteraction(interaction, client))
+        ) {
+          return;
+        }
+      } catch (e) {}
+
+      if (await cadastroManualHandleInteraction(interaction, client)) return;
+      if (await aulaoHandleInteraction(interaction, client)) return;
+      if (await cronogramaCreatorsHandleInteraction(interaction, client)) return;
+      if (await hierarquiaHandleInteraction(interaction, client)) return;
+      if (await checklistHandleInteraction(interaction, client)) return;
+
+      if (await handlePagamentoSocial(interaction, client).catch(() => false)) return;
+
+      try {
+        if (await entrevista.handleButtons(interaction).catch(() => false)) return;
+      } catch (e) {}
+
+      try {
+        if (await entrevistasTickets.onInteractionCreate(interaction).catch(() => false)) return;
+      } catch (e) {}
+
+      await interactionCreateHandler.execute(interaction);
+    } catch (error) {
+      console.error("Erro interactionCreate:", error);
+    }
   });
 
   // Invites
