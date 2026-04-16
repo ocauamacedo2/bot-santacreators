@@ -242,8 +242,19 @@ const setupEventHandlers = () => {
 
   // --- MENSAGENS ---
   client.on("messageCreate", async (message) => {
-    try {
-      if (message.author.bot) return;
+  try {
+    const isBotAuthor = !!message.author?.bot;
+    const isWebhook = !!message.webhookId;
+
+    // bloqueio apenas para mensagens de bot que realmente não interessam
+    if (isBotAuthor && !isWebhook) {
+      const hasComponents = Array.isArray(message.components) && message.components.length > 0;
+      const hasEmbeds = Array.isArray(message.embeds) && message.embeds.length > 0;
+
+      if (!hasComponents && !hasEmbeds) {
+        return;
+      }
+    }
 
       // 1. Primário
       try {
@@ -352,66 +363,152 @@ const setupEventHandlers = () => {
 
   // --- INTERAÇÕES ---
   client.on("interactionCreate", async (interaction) => {
-    if (interaction.isAutocomplete()) return;
+  if (interaction.isAutocomplete()) return;
+
+  try {
+    const customId = interaction.isButton() || interaction.isStringSelectMenu() || interaction.isModalSubmit()
+  ? String(interaction.customId || "")
+  : "";
+
+if (customId) {
+  console.log(`[CORE][INTERACTION] type=${interaction.type} customId=${customId}`);
+}
+
+    // =====================================================
+    // ROTEAMENTO PRIORITÁRIO PARA BOTÕES/MODAIS MAIS SENSÍVEIS A DELAY
+    // =====================================================
+    try {
+      // Entrevista / tickets de entrevista
+      if (
+        customId.startsWith("entrevista") ||
+        customId.startsWith("perguntas") ||
+        customId.startsWith("resposta_") ||
+        customId.startsWith("entrevista_")
+      ) {
+        if (await entrevista.handleButtons(interaction).catch(() => false)) return;
+        if (await entrevistasTickets.onInteractionCreate(interaction).catch(() => false)) return;
+      }
+
+      // VIP Evento / VIP Registro
+      if (
+        customId.startsWith("vip_") ||
+        customId.startsWith("vipregistro_") ||
+        customId.startsWith("vipregistro:") ||
+        customId.startsWith("vipevento_") ||
+        customId.startsWith("vipevento:")
+      ) {
+        if (await vipEventoHandleInteraction(interaction, client)) return;
+        if (await vipRegistroHandleInteraction(interaction, client)) return;
+      }
+
+      // Forms Creator
+      if (
+        customId.startsWith("forms") ||
+        customId.startsWith("form_") ||
+        customId.startsWith("fc_")
+      ) {
+        if (await formsCreatorHandleInteraction(interaction, client)) return;
+      }
+
+      // Pedir Set
+      if (
+        customId.startsWith("pedirset") ||
+        customId.startsWith("set_") ||
+        customId.startsWith("ps_")
+      ) {
+        if (await pedirSetHandleInteraction(interaction, client)) return;
+      }
+
+      // Registro Manager
+      if (
+        customId.startsWith("rm_") ||
+        customId.startsWith("registromanager") ||
+        customId.startsWith("manager_")
+      ) {
+        if (await registroManagerHandleInteraction(interaction, client)) return;
+      }
+
+      // Weekly Rank
+      if (
+        customId.startsWith("weeklyrank") ||
+        customId.startsWith("rank_") ||
+        customId.startsWith("sc_rank_")
+      ) {
+        if (await handleWeeklyRankInteractions(interaction, client)) return;
+      }
+
+      // Pagamento Social
+      if (
+        customId.startsWith("pagamentosocial") ||
+        customId.startsWith("psocial_") ||
+        customId.startsWith("pagamento_")
+      ) {
+        if (await handlePagamentoSocial(interaction, client).catch(() => false)) return;
+      }
+    } catch (e) {
+      console.error("[CORE] erro no roteamento prioritário:", e);
+    }
+
+    // =====================================================
+    // FALLBACK COMPLETO ORIGINAL
+    // =====================================================
+    if (await registroManagerHandleInteraction(interaction, client)) return;
+    if (await handleWeeklyRankInteractions(interaction, client)) return;
+    if (await registroVendasHandleInteraction(interaction, client)) return;
+    if (await facsComparativoHandleInteraction(interaction, client)) return;
+    if (await facsSemanaisHandleInteraction(interaction, client)) return;
+    if (await confirmacaoPresencaHandleInteraction(interaction, client)) return;
+    if (await evt3EventsHandleInteraction(interaction, client)) return;
+    if (await payEvtDashHandleInteraction(interaction, client)) return;
+
+    if (await orgsHandleInteraction(interaction, client)) return;
+    if (await doacaoHandleInteraction(interaction, client)) return;
+    if (await formsCreatorHandleInteraction(interaction, client)) return;
+    if (await ausenciasHandleInteraction(interaction, client)) return;
+    if (await vipEventoHandleInteraction(interaction, client)) return;
+    if (await vipRegistroHandleInteraction(interaction, client)) return;
+    if (await lideresConvitesHandleInteraction(interaction, client)) return;
+    if (await pedirSetHandleInteraction(interaction, client)) return;
+    if (await alinhamentosHandleInteraction(interaction, client)) return;
+    if (await setStaffV2HandleInteraction(interaction, client)) return;
+    if (await graficoManagersHandleInteraction(interaction, client)) return;
+    if (await recrutamentoDashHandleInteraction(interaction, client)) return;
+    if (await blacklistEventosHandleInteraction(interaction, client)) return;
+    if (await hallDaFamaHandleInteraction(interaction, client)) return;
+    if (await eventosDiariosHandleInteraction(interaction, client)) return;
+    if (await sortChannelsHandleInteraction(interaction, client)) return;
+    if (await reuniaoSemanalHandleInteraction(interaction, client)) return;
 
     try {
-      if (await registroManagerHandleInteraction(interaction, client)) return;
-      if (await handleWeeklyRankInteractions(interaction, client)) return;
-      if (await registroVendasHandleInteraction(interaction, client)) return;
-      if (await facsComparativoHandleInteraction(interaction, client)) return;
-      if (await facsSemanaisHandleInteraction(interaction, client)) return;
-      if (await confirmacaoPresencaHandleInteraction(interaction, client)) return;
-      if (await evt3EventsHandleInteraction(interaction, client)) return;
-      if (await payEvtDashHandleInteraction(interaction, client)) return;
+      if (
+        typeof geralDash?.geralDashHandleInteraction === "function" &&
+        (await geralDash.geralDashHandleInteraction(interaction, client))
+      ) {
+        return;
+      }
+    } catch (e) {}
 
-      if (await orgsHandleInteraction(interaction, client)) return;
-      if (await doacaoHandleInteraction(interaction, client)) return;
-      if (await formsCreatorHandleInteraction(interaction, client)) return;
-      if (await ausenciasHandleInteraction(interaction, client)) return;
-      if (await vipEventoHandleInteraction(interaction, client)) return;
-      if (await vipRegistroHandleInteraction(interaction, client)) return;
-      if (await lideresConvitesHandleInteraction(interaction, client)) return;
-      if (await pedirSetHandleInteraction(interaction, client)) return;
-      if (await alinhamentosHandleInteraction(interaction, client)) return;
-      if (await setStaffV2HandleInteraction(interaction, client)) return;
-      if (await graficoManagersHandleInteraction(interaction, client)) return;
-      if (await recrutamentoDashHandleInteraction(interaction, client)) return;
-      if (await blacklistEventosHandleInteraction(interaction, client)) return;
-      if (await hallDaFamaHandleInteraction(interaction, client)) return;
-      if (await eventosDiariosHandleInteraction(interaction, client)) return;
-      if (await sortChannelsHandleInteraction(interaction, client)) return;
-      if (await reuniaoSemanalHandleInteraction(interaction, client)) return;
+    if (await cadastroManualHandleInteraction(interaction, client)) return;
+    if (await aulaoHandleInteraction(interaction, client)) return;
+    if (await cronogramaCreatorsHandleInteraction(interaction, client)) return;
+    if (await hierarquiaHandleInteraction(interaction, client)) return;
+    if (await checklistHandleInteraction(interaction, client)) return;
 
-      try {
-        if (
-          typeof geralDash?.geralDashHandleInteraction === "function" &&
-          (await geralDash.geralDashHandleInteraction(interaction, client))
-        ) {
-          return;
-        }
-      } catch (e) {}
+    if (await handlePagamentoSocial(interaction, client).catch(() => false)) return;
 
-      if (await cadastroManualHandleInteraction(interaction, client)) return;
-      if (await aulaoHandleInteraction(interaction, client)) return;
-      if (await cronogramaCreatorsHandleInteraction(interaction, client)) return;
-      if (await hierarquiaHandleInteraction(interaction, client)) return;
-      if (await checklistHandleInteraction(interaction, client)) return;
+    try {
+      if (await entrevista.handleButtons(interaction).catch(() => false)) return;
+    } catch (e) {}
 
-      if (await handlePagamentoSocial(interaction, client).catch(() => false)) return;
+    try {
+      if (await entrevistasTickets.onInteractionCreate(interaction).catch(() => false)) return;
+    } catch (e) {}
 
-      try {
-        if (await entrevista.handleButtons(interaction).catch(() => false)) return;
-      } catch (e) {}
-
-      try {
-        if (await entrevistasTickets.onInteractionCreate(interaction).catch(() => false)) return;
-      } catch (e) {}
-
-      await interactionCreateHandler.execute(interaction);
-    } catch (error) {
-      console.error("Erro interactionCreate:", error);
-    }
-  });
+    await interactionCreateHandler.execute(interaction);
+  } catch (error) {
+    console.error("Erro interactionCreate:", error);
+  }
+});
 
   // Invites
   client.on("inviteCreate", i => memberJoinLog.handleInviteCreate(i));
@@ -450,67 +547,80 @@ client.once("ready", async () => {
   try { await import("../events/gestaoinfluencer.js"); } catch (e) { console.error("Erro GI:", e); }
 
   // 2. Inicialização de Módulos (Sync/Check)
-  const modules = [
-    { name: "Reminder", fn: () => reminderOnReady(client) },
-    { name: "Entrevistas Tickets", fn: () => entrevistasTickets.onReady() },
-    { name: "Poderes", fn: () => iniciarRegistroPoderes(client) },
-    { name: "Poderes (Eventos)", fn: () => registroPoderesEventosOnReady(client) },
-    { name: "Eventos", fn: () => iniciarRegistroEvento(client) },
-    { name: "Foco Semanal", fn: () => focoSemanaisOnReady(client) },
-    { name: "Provas ADV", fn: () => provasAdvOnReady(client) },
-    { name: "Pagamento Social", fn: () => pagamentoSocialOnReady(client) },
-    { name: "FACs Semanais", fn: () => facsSemanaisOnReady(client) },
-    { name: "FACs Comparativo", fn: () => facsComparativoOnReady(client) },
-    { name: "Presença", fn: () => confirmacaoPresencaOnReady(client) },
-    { name: "Dash Managers", fn: () => graficoManagersOnReady(client) },
-    { name: "Reg. Manager", fn: () => registroManagerOnReady(client) },
-    { name: "Vendas", fn: () => registroVendasOnReady(client) },
-    { name: "EVT3", fn: () => evt3EventsOnReady(client) },
-    { name: "PayEvtDash", fn: () => payEvtDashOnReady(client) },
-    { name: "GeralDash", fn: () => geralDash.geralDashOnReady(client) },
-    { name: "WeeklyRank", fn: () => geralWeeklyRankOnReady(client) },
-    { name: "RoleProtect", fn: () => roleProtectOnReady(client) },
-    { name: "FormsCreator", fn: () => formsCreatorOnReady(client) },
-    { name: "Doação", fn: () => doacaoOnReady(client) },
-    { name: "PedirSet", fn: () => pedirSetOnReady(client) },
-    { name: "Connect Status", fn: () => connectStatusOnReady(client) },
-    { name: "Alinhamentos", fn: () => alinhamentosOnReady(client) },
-    { name: "VIP Evento", fn: () => vipEventoOnReady(client) },
-    { name: "VIP Registro", fn: () => vipRegistroOnReady(client) },
-    { name: "Convites Lider", fn: () => lideresConvitesOnReady(client) },
-    { name: "SetStaff V2", fn: () => setStaffV2OnReady(client) },
-    { name: "Blacklist FACS", fn: () => blacklistFacsOnReady(client) },
-    { name: "Blacklist", fn: () => blacklistEventosOnReady(client) },
-    { name: "Hall da Fama", fn: () => hallDaFamaOnReady(client) },
-    { name: "Eventos Diarios", fn: () => eventosDiariosOnReady(client) },
-    { name: "Cadastro Manual", fn: () => cadastroManualOnReady(client) },
-    { name: "Recrutamento Dash", fn: () => recrutamentoDashOnReady(client) },
-    { name: "Monitor Cargos", fn: () => monitorCargosOnReady(client) },
-    { name: "Cronograma", fn: () => cronogramaCreatorsOnReady(client) },
-    { name: "Ausências", fn: () => ausenciasOnReady(client) },
-    { name: "Hierarquia", fn: () => hierarquiaOnReady(client) },
-    { name: "Reunião Semanal", fn: () => reuniaoSemanalOnReady(client) },
-    { name: "Log Checklist", fn: () => checklistOnReady(client) }
-  ];
+ const criticalModules = [
+  { name: "Reminder", fn: () => reminderOnReady(client) },
+  { name: "Entrevistas Tickets", fn: () => entrevistasTickets.onReady() },
+  { name: "Poderes", fn: () => iniciarRegistroPoderes(client) },
+  { name: "Poderes (Eventos)", fn: () => registroPoderesEventosOnReady(client) },
+  { name: "Eventos", fn: () => iniciarRegistroEvento(client) },
+  { name: "Pagamento Social", fn: () => pagamentoSocialOnReady(client) },
+  { name: "Reg. Manager", fn: () => registroManagerOnReady(client) },
+  { name: "FormsCreator", fn: () => formsCreatorOnReady(client) },
+  { name: "PedirSet", fn: () => pedirSetOnReady(client) },
+  { name: "Alinhamentos", fn: () => alinhamentosOnReady(client) },
+  { name: "VIP Evento", fn: () => vipEventoOnReady(client) },
+  { name: "VIP Registro", fn: () => vipRegistroOnReady(client) },
+  { name: "GeralDash", fn: () => geralDash.geralDashOnReady(client) },
+  { name: "WeeklyRank", fn: () => geralWeeklyRankOnReady(client) }
+];
 
-  for (const mod of modules) {
+const secondaryModules = [
+  { name: "Foco Semanal", fn: () => focoSemanaisOnReady(client) },
+  { name: "Provas ADV", fn: () => provasAdvOnReady(client) },
+  { name: "FACs Semanais", fn: () => facsSemanaisOnReady(client) },
+  { name: "FACs Comparativo", fn: () => facsComparativoOnReady(client) },
+  { name: "Presença", fn: () => confirmacaoPresencaOnReady(client) },
+  { name: "Dash Managers", fn: () => graficoManagersOnReady(client) },
+  { name: "Vendas", fn: () => registroVendasOnReady(client) },
+  { name: "EVT3", fn: () => evt3EventsOnReady(client) },
+  { name: "PayEvtDash", fn: () => payEvtDashOnReady(client) },
+  { name: "RoleProtect", fn: () => roleProtectOnReady(client) },
+  { name: "Doação", fn: () => doacaoOnReady(client) },
+  { name: "Connect Status", fn: () => connectStatusOnReady(client) },
+  { name: "Convites Lider", fn: () => lideresConvitesOnReady(client) },
+  { name: "SetStaff V2", fn: () => setStaffV2OnReady(client) },
+  { name: "Blacklist FACS", fn: () => blacklistFacsOnReady(client) },
+  { name: "Blacklist", fn: () => blacklistEventosOnReady(client) },
+  { name: "Hall da Fama", fn: () => hallDaFamaOnReady(client) },
+  { name: "Eventos Diarios", fn: () => eventosDiariosOnReady(client) },
+  { name: "Cadastro Manual", fn: () => cadastroManualOnReady(client) },
+  { name: "Recrutamento Dash", fn: () => recrutamentoDashOnReady(client) },
+  { name: "Monitor Cargos", fn: () => monitorCargosOnReady(client) },
+  { name: "Cronograma", fn: () => cronogramaCreatorsOnReady(client) },
+  { name: "Ausências", fn: () => ausenciasOnReady(client) },
+  { name: "Hierarquia", fn: () => hierarquiaOnReady(client) },
+  { name: "Reunião Semanal", fn: () => reuniaoSemanalOnReady(client) },
+  { name: "Log Checklist", fn: () => checklistOnReady(client) }
+];
+
+for (const mod of criticalModules) {
+  try {
+    await mod.fn();
+    console.log(`[BOOT] ✅ ${mod.name} carregado.`);
+  } catch (e) {
+    console.error(`[BOOT] ❌ Erro ao carregar ${mod.name}:`, e.message);
+  }
+}
+
+setImmediate(async () => {
+  for (const mod of secondaryModules) {
     try {
       await mod.fn();
-      console.log(`[BOOT] ✅ ${mod.name} carregado.`);
+      console.log(`[BOOT][BG] ✅ ${mod.name} carregado.`);
     } catch (e) {
-      console.error(`[BOOT] ❌ Erro ao carregar ${mod.name}:`, e.message);
+      console.error(`[BOOT][BG] ❌ Erro ao carregar ${mod.name}:`, e.message);
     }
   }
 
-  // 3. Atividades de Fundo e Manutenção
-  dashDebugOnReady(client);
-  autoReactsFotosOnReady(client).catch(() => {});
-  memberJoinLog.initInviteCache(client);
-  startTodosLembretes(client);
-  startRolesOnlineMonitor(client);
-  
-  client.user.setActivity("Cauã Macedo – SantaCreators ✨", { type: ActivityType.Watching });
-  console.log(`\n✅ SISTEMA ONLINE E ESTÁVEL!\n`);
+  try { dashDebugOnReady(client); } catch (e) {}
+  try { autoReactsFotosOnReady(client).catch(() => {}); } catch (e) {}
+  try { memberJoinLog.initInviteCache(client); } catch (e) {}
+  try { startTodosLembretes(client); } catch (e) {}
+  try { startRolesOnlineMonitor(client); } catch (e) {}
+});
+
+client.user.setActivity("Cauã Macedo – SantaCreators ✨", { type: ActivityType.Watching });
+console.log(`\n✅ SISTEMA ONLINE E ESTÁVEL!\n`);
 });
 
 // =====================================================
