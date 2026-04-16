@@ -174,6 +174,7 @@ export async function ausenciasHandleInteraction(interaction, client) {
           await interaction.reply({
             content: '❌ Você não tem permissão para registrar ausência.',
             ephemeral: true,
+            flags: 64,
           });
           return true;
         }
@@ -232,6 +233,7 @@ export async function ausenciasHandleInteraction(interaction, client) {
         // Resposta imediata para evitar "interação falhou"
         if (!interaction.deferred && !interaction.replied) {
           await interaction.deferReply({ ephemeral: true }).catch(() => {});
+          await interaction.deferReply({ flags: 64 }).catch(() => {});
         }
 
         const canalId = interaction.customId.replace('modal_ausencia_', '');
