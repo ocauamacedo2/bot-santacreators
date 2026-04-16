@@ -33,6 +33,16 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // =====================================================
+// Inicialização de Guardas e Flags Globais
+// =====================================================
+client.__handlersWired = client.__handlersWired ?? false;
+client.__coreBootState = client.__coreBootState ?? { readyBootExecuted: false };
+client.__loggedIn = client.__loggedIn ?? false;
+globalThis.__SC_CORE_GUARDS__ = globalThis.__SC_CORE_GUARDS__ ?? {
+  setarNomeIntervalStarted: false,
+};
+
+// =====================================================
 // Proteções globais
 // =====================================================
 process.on("unhandledRejection", (e) => console.error("[unhandledRejection]", e));
