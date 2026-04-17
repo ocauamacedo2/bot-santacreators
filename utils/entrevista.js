@@ -441,27 +441,21 @@ if (customId.startsWith('iniciar|')) {
     components: [row]
   });
 
-  (async () => {
-    const mensagens = await interaction.channel.messages.fetch({ limit: 15 }).catch(() => null);
-    if (mensagens) {
-      const toDelete = mensagens.filter(m => m.id !== enviada.id && m.components?.length > 0);
-      if (toDelete.size > 0) await interaction.channel.bulkDelete(toDelete).catch(() => {});
-    }
-
-    await logCompleto(interaction.client, {
-      titulo: '🚪 Botão: Iniciar Entrevista',
-      cor: 0x1abc9c,
-      autorTag: interaction.user.tag,
-      autorIcon: interaction.user.displayAvatarURL({ dynamic: true }),
-      desc: 'Clicaram em iniciar entrevista.',
-      fields: [
-        { name: '👤 Quem clicou', value: `<@${interaction.user.id}>`, inline: true },
-        { name: '📍 Canal', value: `<#${interaction.channelId}>`, inline: true },
-        { name: '🔗 Mensagem', value: msgLink(interaction.guildId, interaction.channelId, enviada.id), inline: false }
-      ],
-      thumb: interaction.guild?.iconURL({ dynamic: true })
-    });
-  })();
+(async () => {
+  await logCompleto(interaction.client, {
+    titulo: '🚪 Botão: Iniciar Entrevista',
+    cor: 0x1abc9c,
+    autorTag: interaction.user.tag,
+    autorIcon: interaction.user.displayAvatarURL({ dynamic: true }),
+    desc: 'Clicaram em iniciar entrevista.',
+    fields: [
+      { name: '👤 Quem clicou', value: `<@${interaction.user.id}>`, inline: true },
+      { name: '📍 Canal', value: `<#${interaction.channelId}>`, inline: true },
+      { name: '🔗 Mensagem', value: msgLink(interaction.guildId, interaction.channelId, enviada.id), inline: false }
+    ],
+    thumb: interaction.guild?.iconURL({ dynamic: true })
+  });
+})();
 
   return true;
 }
