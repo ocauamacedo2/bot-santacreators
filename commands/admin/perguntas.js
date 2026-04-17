@@ -86,16 +86,14 @@ export default {
       typeof message.channel.setTopic === "function" ? message.channel.setTopic(nextTopic).catch(() => {}) : Promise.resolve()
     ]);
 
-    // --- 🛠️ NOTIFICAÇÕES EM BACKGROUND ---
-    (async () => {
-      const topic = message.channel.topic || "";
-      const m = topic.match(/aberto_por:(\d{5,})/i);
-
+    // Pega as informações do tópico para identificar o candidato
     const topic = message.channel.topic || "";
     const m = topic.match(/aberto_por:(\d{5,})/i);
     const openerId = m ? m[1] : "Desconhecido";
 
-    const alertMsg = `📢 **ENTREVISTA INICIADA!**\n\n` +
+    // --- 🛠️ NOTIFICAÇÕES EM BACKGROUND ---
+    (async () => {
+      const alertMsg = `📢 **ENTREVISTA INICIADA!**\n\n` +
       `📍 **Canal:** ${message.channel}\n` +
       `👤 **Candidato:** <@${openerId}>\n` +
       `👮 **Aplicador:** ${message.author}\n\n` +
