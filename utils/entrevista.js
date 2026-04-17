@@ -403,29 +403,8 @@ if (customId.startsWith('iniciar|')) {
   const [, channelId] = customId.split('|');
   await interaction.deferUpdate().catch(() => {});
 
-  const membro = interaction.member ?? await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+  const membro = interaction.member || null;
   const cargoEntrevista = interaction.guild.roles.cache.get('1353797415488196770');
-
-  try {
-    const oldTopic = String(interaction.channel.topic || "");
-    const cleanedTopic = oldTopic
-      .replace(/\bentrevista_starter:\d{17,20}\b/gi, "")
-      .replace(/\s{2,}/g, " ")
-      .trim();
-
-    const nextTopic = `${cleanedTopic}${cleanedTopic ? " | " : ""}entrevista_starter:${interaction.user.id}`.slice(0, 1024);
-
-    await Promise.allSettled([
-      typeof interaction.channel.setTopic === "function"
-        ? interaction.channel.setTopic(nextTopic)
-        : Promise.resolve(),
-      membro && cargoEntrevista && !membro.roles.cache.has(cargoEntrevista.id)
-        ? membro.roles.add(cargoEntrevista.id)
-        : Promise.resolve()
-    ]);
-  } catch (e) {
-    console.warn("[Entrevista] Falha ao configurar starter/cargo:", e?.message || e);
-  }
 
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
@@ -441,21 +420,42 @@ if (customId.startsWith('iniciar|')) {
     components: [row]
   });
 
-(async () => {
-  await logCompleto(interaction.client, {
-    titulo: '🚪 Botão: Iniciar Entrevista',
-    cor: 0x1abc9c,
-    autorTag: interaction.user.tag,
-    autorIcon: interaction.user.displayAvatarURL({ dynamic: true }),
-    desc: 'Clicaram em iniciar entrevista.',
-    fields: [
-      { name: '👤 Quem clicou', value: `<@${interaction.user.id}>`, inline: true },
-      { name: '📍 Canal', value: `<#${interaction.channelId}>`, inline: true },
-      { name: '🔗 Mensagem', value: msgLink(interaction.guildId, interaction.channelId, enviada.id), inline: false }
-    ],
-    thumb: interaction.guild?.iconURL({ dynamic: true })
-  });
-})();
+  (async () => {
+    try {
+      const oldTopic = String(interaction.channel.topic || "");
+      const cleanedTopic = oldTopic
+        .replace(/\bentrevista_starter:\d{17,20}\b/gi, "")
+        .replace(/\s{2,}/g, " ")
+        .trim();
+
+      const nextTopic = `${cleanedTopic}${cleanedTopic ? " | " : ""}entrevista_starter:${interaction.user.id}`.slice(0, 1024);
+
+      await Promise.allSettled([
+        typeof interaction.channel.setTopic === "function"
+          ? interaction.channel.setTopic(nextTopic)
+          : Promise.resolve(),
+        membro && cargoEntrevista && !membro.roles.cache.has(cargoEntrevista.id)
+          ? membro.roles.add(cargoEntrevista.id)
+          : Promise.resolve()
+      ]);
+    } catch (e) {
+      console.warn("[Entrevista] Falha ao configurar starter/cargo:", e?.message || e);
+    }
+
+    await logCompleto(interaction.client, {
+      titulo: '🚪 Botão: Iniciar Entrevista',
+      cor: 0x1abc9c,
+      autorTag: interaction.user.tag,
+      autorIcon: interaction.user.displayAvatarURL({ dynamic: true }),
+      desc: 'Clicaram em iniciar entrevista.',
+      fields: [
+        { name: '👤 Quem clicou', value: `<@${interaction.user.id}>`, inline: true },
+        { name: '📍 Canal', value: `<#${interaction.channelId}>`, inline: true },
+        { name: '🔗 Mensagem', value: msgLink(interaction.guildId, interaction.channelId, enviada.id), inline: false }
+      ],
+      thumb: interaction.guild?.iconURL({ dynamic: true })
+    });
+  })();
 
   return true;
 }
