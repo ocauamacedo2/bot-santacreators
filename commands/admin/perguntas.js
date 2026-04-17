@@ -65,6 +65,7 @@ export default {
       }
     }
 
+    // --- 🚀 EXECUÇÃO PARALELA E RÁPIDA ---
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId(`iniciar|${message.channel.id}`)
@@ -72,26 +73,23 @@ export default {
         .setStyle(ButtonStyle.Success)
     );
 
-    await message.channel.send({
-      content: `Clique no botão abaixo para iniciar a entrevista 🎤`,
-      components: [row]
-    });
+    const oldTopic = String(message.channel.topic || "");
+    const cleanedTopic = oldTopic.replace(/\bentrevista_aplicador:\d{17,20}\b/gi, "").replace(/\s{2,}/g, " ").trim();
+    const nextTopic = `${cleanedTopic}${cleanedTopic ? " | " : ""}entrevista_aplicador:${message.author.id}`.slice(0, 1024);
 
-    try {
-      const oldTopic = String(message.channel.topic || "");
-      const cleanedTopic = oldTopic
-        .replace(/\bentrevista_aplicador:\d{17,20}\b/gi, "")
-        .replace(/\s{2,}/g, " ")
-        .trim();
+    // Envia o botão e seta o tópico ao mesmo tempo
+    await Promise.all([
+      message.channel.send({
+        content: `Clique no botão abaixo para iniciar a entrevista 🎤`,
+        components: [row]
+      }),
+      typeof message.channel.setTopic === "function" ? message.channel.setTopic(nextTopic).catch(() => {}) : Promise.resolve()
+    ]);
 
-      const nextTopic = `${cleanedTopic}${cleanedTopic ? " | " : ""}entrevista_aplicador:${message.author.id}`.slice(0, 1024);
-
-      if (typeof message.channel.setTopic === "function") {
-        await message.channel.setTopic(nextTopic).catch(() => {});
-      }
-    } catch (e) {
-      console.warn("[!perguntas] Falha ao salvar aplicador no tópico:", e?.message || e);
-    }
+    // --- 🛠️ NOTIFICAÇÕES EM BACKGROUND ---
+    (async () => {
+      const topic = message.channel.topic || "";
+      const m = topic.match(/aberto_por:(\d{5,})/i);
 
     const topic = message.channel.topic || "";
     const m = topic.match(/aberto_por:(\d{5,})/i);
@@ -103,7 +101,6 @@ export default {
       `👮 **Aplicador:** ${message.author}\n\n` +
       `👉 Fiquem atentos para corrigir assim que o candidato terminar!`;
 
-    (async () => {
       const notifiedIds = new Set();
       for (const roleId of ALERT_ROLE_IDS) {
         const role = message.guild.roles.cache.get(roleId);

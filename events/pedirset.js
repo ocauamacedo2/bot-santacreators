@@ -471,12 +471,6 @@ export async function pedirSetHandleInteraction(interaction, client) {
 
     const { userId, nome, passaporte, zipzap } = dados;
 
-    const membro = await interaction.guild.members.fetch(userId).catch(() => null);
-    if (!membro) {
-      await interaction.followUp({ content: '❌ Membro não encontrado.', ephemeral: true });
-      return true;
-    }
-
   const podeAprovarSet =
   USUARIOS_AUTORIZADOS_APROVACAO.includes(interaction.user.id) ||
   CARGOS_AUTORIZADOS_APROVACAO.some(id => interaction.member.roles.cache.has(id));
@@ -486,65 +480,13 @@ if (!podeAprovarSet) {
   return true;
 }
 
-    // ✅ Adiciona cargos (SantaCreators + Sênior + Equipe)
-    const rolesToAdd = [CARGO_SET, CARGO_SENIOR_CREATOR, CARGO_EQUIPE_CREATOR_ADD];
-    await membro.roles.add(rolesToAdd).catch(err => console.error('Erro ao add roles no set:', err));
-
-    await membro.roles.remove(CARGO_ENTREVISTA).catch(() => {});
-    
-    // ✅ Nickname atualizado para EQP.C
-    const newNickname = createSafeNickname(nome, passaporte);
-    await membro.setNickname(newNickname).catch(err => console.error('Erro ao mudar nick:', err));
-
-    // ✅ NOVO: Reativa ou cria registro no FormsCreator
-    try {
-      console.log('[PedirSet] Tentando integração com FormsCreator...', {
-        userId,
-        nome,
-        passaporte,
-        guildId: interaction.guildId,
-      });
-
-      const existingThreadId = await findFormsCreatorThreadIdByUserId(userId);
-
-      if (existingThreadId) {
-        // Se já existe, apenas reativa o status
-        await setFormsCreatorStatus(client, {
-          threadId: existingThreadId,
-          newStatus: true,
-          actor: interaction.user,
-        });
-        console.log(`[PedirSet] FormsCreator reativado para o usuário ${userId}.`);
-      } else {
-        // Se não existe, cria um novo
-        await createFormsCreatorRecord(client, {
-          guildId: interaction.guildId,
-          creatorId: interaction.user.id, // O aprovador
-          targetId: userId,               // O novo membro
-          targetName: nome,
-          targetPassaporte: passaporte,
-          area: "A Definir",              // Conforme solicitado
-        });
-        console.log(`[PedirSet] Novo FormsCreator criado para o usuário ${userId}.`);
-      }
-    } catch (e) {
-      console.error("[PedirSet] Falha ao reativar/criar registro no FormsCreator:", e);
-      try {
-        await interaction.followUp({ content: `⚠️ Ocorreu um erro com o FormsCreator: ${e.message}`, ephemeral: true });
-      } catch {}
+    const membro = await interaction.guild.members.fetch(userId).catch(() => null);
+    if (!membro) {
+      await interaction.followUp({ content: '❌ Membro não encontrado.', ephemeral: true });
+      return true;
     }
 
-    // ✅ Emite evento para criar controle GI (pausado) e atualizar dashboard
-    // (Movido para DEPOIS do FormsCreator para garantir que o link exista)
-    dashEmit('pedirset:aprovado', {
-      userId: userId,
-      approverId: interaction.user.id,
-      guildId: interaction.guildId,
-      nome,
-      passaporte,
-      timestamp: Date.now()
-    });
-
+    // --- 🚀 RESPOSTA IMEDIATA AO DISCORD ---
     const baseEmbed = interaction.message.embeds?.[0]
       ? EmbedBuilder.from(interaction.message.embeds[0])
       : new EmbedBuilder().setTitle('📋 Pedido de Set');
@@ -561,68 +503,89 @@ if (!podeAprovarSet) {
         .setDisabled(true)
     );
 
-    try {
-      await interaction.editReply({
-        components: [rowAtualizada],
-        embeds: [embedAtualizado]
-      });
-    } catch (err) {
-      console.warn('⚠️ Erro ao atualizar a interação:', err.message);
-      await interaction.followUp({ content: '✅ Set aprovado, mas houve erro ao atualizar a mensagem.', ephemeral: true }).catch(() => {});
-    }
-
-    await membro.send({
-      embeds: [
-        new EmbedBuilder()
-          .setTitle('🎉 SET APROVADO COM SUCESSO! 🎉')
-          .setDescription([
-            'Parabéns! Seu set na **SantaCreators** foi oficialmente **aprovado** ✅',
-            '',
-            'Agora, **vá até o ticket onde fez sua entrevista** e diga quando poderá fazer a **contratação in game**.',
-            '',
-            'Se tiver dúvidas, fale com a Equipe Creator/Coordenação! 👥'
-          ].join('\n'))
-          .setThumbnail(interaction.guild.iconURL({ dynamic: true }))
-          .setImage('https://media.discordapp.net/attachments/1362477839944777889/1380979949816643654/standard_2r.gif')
-          .setColor('#00cc99')
-          .setFooter({ text: 'SantaCreators • Organização Oficial' })
-      ]
+    // Atualiza a interface na hora
+    await interaction.editReply({
+      components: [rowAtualizada],
+      embeds: [embedAtualizado]
     }).catch(() => {});
 
-    const canalEquipe = await resolveLogChannel(client, CANAL_AVISO_EQUIPE);
-    if (canalEquipe) {
-      await canalEquipe.send({
-        content: `<@&${CARGO_EQUIPE_CREATOR}>`,
+    // --- 🛠️ PROCESSAMENTO EM BACKGROUND (Não bloqueia o clique) ---
+    (async () => {
+      // 1. Cargos e Nick
+      const rolesToAdd = [CARGO_SET, CARGO_SENIOR_CREATOR, CARGO_EQUIPE_CREATOR_ADD];
+      await membro.roles.add(rolesToAdd).catch(() => {});
+      await membro.roles.remove(CARGO_ENTREVISTA).catch(() => {});
+      
+      const newNickname = createSafeNickname(nome, passaporte);
+      await membro.setNickname(newNickname).catch(() => {});
+
+      // 2. FormsCreator
+      try {
+        const existingThreadId = await findFormsCreatorThreadIdByUserId(userId);
+        if (existingThreadId) {
+          await setFormsCreatorStatus(client, {
+            threadId: existingThreadId,
+            newStatus: true,
+            actor: interaction.user,
+          });
+        } else {
+          await createFormsCreatorRecord(client, {
+            guildId: interaction.guildId,
+            creatorId: interaction.user.id,
+            targetId: userId,
+            targetName: nome,
+            targetPassaporte: passaporte,
+            area: "A Definir",
+          });
+        }
+      } catch (e) { console.error("[PedirSet] Background FormsCreator error:", e); }
+
+      // 3. Dash e Logs
+      dashEmit('pedirset:aprovado', {
+        userId: userId,
+        approverId: interaction.user.id,
+        guildId: interaction.guildId,
+        nome,
+        passaporte,
+        timestamp: Date.now()
+      });
+      // 4. DMs e Avisos
+      await membro.send({
         embeds: [
           new EmbedBuilder()
-            .setTitle('📢 Recrutamento Necessário')
+            .setTitle('🎉 SET APROVADO COM SUCESSO! 🎉')
             .setDescription([
-              `🚨 O set de <@${userId}> foi **aprovado**!`,
+              'Parabéns! Seu set na **SantaCreators** foi oficialmente **aprovado** ✅',
               '',
-              '👥 Alguém da **equipe** está disponível para fazer o recrutamento dela **na empresa** in game?',
+              'Agora, **vá até o ticket onde fez sua entrevista** e diga quando poderá fazer a **contratação in game**.',
               '',
-              '> 🧠 **Importante lembrar:**',
-              '• Explicar **muito bem as regras**, especialmente sobre **imersão**,',
-              '• Falar sobre os **baús** (funções e como deve ser usado!),',
-              '• Reforçar que é **obrigatório seguir a hierarquia** sempre,',
-              '• Explicar sobre **doações** e que só se deve **registrar o que for doado**,',
-              '• **Nunca doar** celular, rádio, colete ou qualquer coisa **que não é vendida na cidade**.'
+              'Se tiver dúvidas, fale com a Equipe Creator/Coordenação! 👥'
             ].join('\n'))
-            .setColor('#ff0055')
-            .setFooter({ text: 'SantaCreators • Equipe Creator' })
-            .setTimestamp()
-        ],
-        allowedMentions: { parse: ['roles', 'users'] }
-      });
-    }
+            .setThumbnail(interaction.guild.iconURL({ dynamic: true }))
+            .setImage('https://media.discordapp.net/attachments/1362477839944777889/1380979949816643654/standard_2r.gif')
+            .setColor('#00cc99')
+            .setFooter({ text: 'SantaCreators • Organização Oficial' })
+        ]
+      }).catch(() => {});
 
-    const canalAdm = await client.channels.fetch(CANAL_ADMINISTRACAO).catch(() => null);
-    if (canalAdm) {
-      await canalAdm.send({
-        content: `📞 ZipZap recebido: \`${zipzap}\` de <@${userId}> <@&${CARGO_COORDENACAO}>`,
-        allowedMentions: { parse: ['roles', 'users'] }
-      });
-    }
+      const canalEquipe = await resolveLogChannel(client, CANAL_AVISO_EQUIPE);
+      if (canalEquipe) {
+        await canalEquipe.send({
+          content: `<@&${CARGO_EQUIPE_CREATOR}>`,
+          embeds: [
+            new EmbedBuilder()
+              .setTitle('📢 Recrutamento Necessário')
+              .setDescription(`🚨 O set de <@${userId}> foi **aprovado**!\n\n👥 Alguém da **equipe** está disponível para fazer o recrutamento dela **na empresa** in game?`)
+              .setColor('#ff0055')
+              .setTimestamp()
+          ],
+          allowedMentions: { parse: ['roles', 'users'] }
+        }).catch(() => {});
+      }
+
+      const canalAdm = await client.channels.fetch(CANAL_ADMINISTRACAO).catch(() => null);
+      if (canalAdm) await canalAdm.send({ content: `📞 ZipZap recebido: \`${zipzap}\` de <@${userId}>` }).catch(() => {});
+    })();
 
     pedidosSet.delete(idUnico);
     savePedidosSet();
