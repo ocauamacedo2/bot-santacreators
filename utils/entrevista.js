@@ -583,7 +583,12 @@ async function enviarPergunta(channel, membro, index) {
     if (index >= perguntas.length) {
     if (dados.globalTimer?.timeout) clearTimeout(dados.globalTimer.timeout);
 
-    const aplicadorId = getAplicadorIdFromChannel(channel, dados);
+    // ✅ Validação estrita: O aplicador deve ser quem está registrado no tópico do canal
+    const aplicadorId = getAplicadorIdFromChannel(channel);
+    
+    // Se o aplicador mudou ou não é o mesmo que iniciou, tratamos com cautela
+    const isStarter = aplicadorId === dados.entrevistadorId;
+
     const categoryId = String(channel.parentId || "");
     const canCountPoint = canInterviewPointCount(channel, aplicadorId);
 
@@ -647,7 +652,7 @@ if (logChannel) {
 }
 
 // ✅ PONTO DE ENTREVISTA: somente aqui, na conclusão real das 30 perguntas
-if (aplicadorId && canCountPoint && entrevistaFoiConduzida) {
+    if (aplicadorId && canCountPoint && entrevistaFoiConduzida && isStarter) {
   try {
     dashEmit("entrevista:ponto_concluido", {
       userId: aplicadorId, // ✅ SEMPRE quem usou !perguntas

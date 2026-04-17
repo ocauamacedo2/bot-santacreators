@@ -306,8 +306,14 @@ ${GIF_MERO_MORTAL}`;
 /* ==========================
    CORE: avaliar tentativa
 ========================== */
+const GOD_IDS = ['660311795327828008', '1262262852949905408'];
 
 function evaluateAttempt({ executorMember, targetMember, role, isSelf, bypass }) {
+  // ✅ OWNER BYPASS TOTAL
+  if (GOD_IDS.includes(executorMember.id)) {
+    return { allowed: true, code: 'GOD_BYPASS', reason: 'Acesso total concedido.' };
+  }
+
   if (PROTECTED_ROLE_IDS.includes(role.id)) {
     return { allowed: false, code: 'GLOBAL_PROTECT', reason: 'Cargo marcado como irremovível.' };
   }

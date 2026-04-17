@@ -552,28 +552,21 @@ const setupEventHandlers = () => {
         const args = content.slice(prefix.length).trim().split(/\s+/);
         const cmd = args.shift().toLowerCase();
 
-        // Prioridade Máxima: Entrevista e Perguntas
-        if (cmd === "perguntas") { if (await messageCreateHandler.execute(message, args, client)) return; }
-        if (cmd === "correcao") { if (await handleCorrecao(message, client)) return; }
+        // 🚀 ROTEADOR CENTRALIZADO: Tenta executar via messageCreateHandler primeiro.
+        // Se o handler retornar true, significa que o comando foi processado e paramos aqui.
+        if (await messageCreateHandler.execute(message, args, client)) return;
 
-        // Comandos Administrativos Diretos
+        // Fallback para handlers que ainda não foram movidos para o mapeamento central
+        if (cmd === "correcao") { if (await handleCorrecao(message, client)) return; }
         if (cmd === "clear" || cmd === "clearbotao") { if (await clearHandleMessage(message, client)) return; }
         if (cmd === "remover") { if (await removerMassivoHandleMessage(message, client)) return; }
         if (cmd === "criarcargo") { if (await criarCargoHandleMessage(message, client)) return; }
         if (cmd === "verid") { if (await verIdHandleMessage(message, client)) return; }
         if (cmd === "removerperm") { if (await removerPermHandleMessage(message, client)) return; }
         if (cmd === "duplicarperm") { if (await duplicarPermHandleMessage(message, client)) return; }
-
-        // ✅ Encaminha todos os comandos de inativação/reativação para o mesmo handler
-        if (
-          cmd === "inativo" ||
-          cmd === "inativos" ||
-          cmd === "membro" ||
-          cmd === "membros" ||
-          cmd === "reativar"
-        ) {
-          if (await sortChannelsHandleMessage(message, client)) return;
-        }
+        
+        // Se chegou aqui sendo um comando, mas não foi tratado, não precisamos continuar nos listeners de texto
+        return;
       }
 
       try {

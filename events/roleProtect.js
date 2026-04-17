@@ -161,6 +161,10 @@ export async function roleProtectHandleGuildMemberUpdate(oldMember, newMember, c
     // 1) Se o executor for o próprio bot (remoção legítima programada), libera
     if (executorId === client.user.id) return false;
 
+    // ✅ NOVO: BYPASS TOTAL PARA OWNER/GOD
+    const GOD_IDS = ["660311795327828008", "1262262852949905408"];
+    if (executorId && GOD_IDS.includes(executorId)) return false;
+
     // 2) SELF: O próprio usuário tirando o cargo
     if (executorId && executorId === newMember.id) {
       // Bloqueia se for cargo crítico de sistema
