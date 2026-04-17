@@ -407,21 +407,21 @@ if (customId.startsWith('iniciar|')) {
   const cargoEntrevista = interaction.guild.roles.cache.get('1353797415488196770');
 
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`enviar|${interaction.user.id}|${channelId}`)
-      .setLabel('📩 ENVIAR PERGUNTAS')
-      .setStyle(ButtonStyle.Primary)
-  );
+  new ButtonBuilder()
+    .setCustomId(`enviar|${interaction.user.id}|${channelId}`)
+    .setLabel('📩 ENVIAR PERGUNTAS')
+    .setStyle(ButtonStyle.Primary)
+);
 
+const enviada = await interaction.channel.send({
+  content: `✨ Oii, <@${interaction.user.id}> Tudo bem por aí? Seja **MUITO** bem-vind@ à família **SantaCreators**!  \nÉ um prazer ter você por aqui — e pode ficar tranquil@, porque a <@&1352275728476930099> vai te acompanhar nessa primeira etapa com todo o cuidado. 💖\n\n📝 Nosso processo de entrada é dividido em **duas fases bem tranquilas**:\n\n➊ **Aqui pelo Discord/e-mail**, a gente vai trocar uma ideia pra entender melhor o seu perfil e ver como você se sairia em algumas situações dentro da nossa estrutura.\n\n➋ **Depois, dentro da cidade**, vamos te apresentar nosso prédio, explicar direitinho as regras e mostrar na prática como funcionamos por aqui.\n\n📚 **Agora bora dar uma lida nas regras?**\nhttps://discord.com/channels/1262262852782129183/1352285379302002710\nhttps://discord.com/channels/1262262852782129183/1355622493464821892\nhttps://discord.com/channels/1262262852782129183/1370830395637239928\nhttps://discord.com/channels/1262262852782129183/1381704800608981003\n\n⚠️ **IMPORTANTE SOBRE A ENTREVISTA**\nDurante a entrevista **não é permitido utilizar Inteligência Artificial** e **nem copiar e colar**. Responda **com suas próprias palavras**.\n\n✅ Assim que estiver tudo certinho por aí, me avisa aqui mesmo pra gente **começar a sua entrevista**, combinado?\n\n🚀 **Bora começar essa jornada juntos!** 🌟`,
+  components: [row]
+});
+
+(async () => {
   await interaction.message.edit({ components: [] }).catch(() => {});
 
-  const enviada = await interaction.channel.send({
-    content: `✨ Oii, <@${interaction.user.id}> Tudo bem por aí? Seja **MUITO** bem-vind@ à família **SantaCreators**!  \nÉ um prazer ter você por aqui — e pode ficar tranquil@, porque a <@&1352275728476930099> vai te acompanhar nessa primeira etapa com todo o cuidado. 💖\n\n📝 Nosso processo de entrada é dividido em **duas fases bem tranquilas**:\n\n➊ **Aqui pelo Discord/e-mail**, a gente vai trocar uma ideia pra entender melhor o seu perfil e ver como você se sairia em algumas situações dentro da nossa estrutura.\n\n➋ **Depois, dentro da cidade**, vamos te apresentar nosso prédio, explicar direitinho as regras e mostrar na prática como funcionamos por aqui.\n\n📚 **Agora bora dar uma lida nas regras?**\nhttps://discord.com/channels/1262262852782129183/1352285379302002710\nhttps://discord.com/channels/1262262852782129183/1355622493464821892\nhttps://discord.com/channels/1262262852782129183/1370830395637239928\nhttps://discord.com/channels/1262262852782129183/1381704800608981003\n\n⚠️ **IMPORTANTE SOBRE A ENTREVISTA**\nDurante a entrevista **não é permitido utilizar Inteligência Artificial** e **nem copiar e colar**. Responda **com suas próprias palavras**.\n\n✅ Assim que estiver tudo certinho por aí, me avisa aqui mesmo pra gente **começar a sua entrevista**, combinado?\n\n🚀 **Bora começar essa jornada juntos!** 🌟`,
-    components: [row]
-  });
-
-  (async () => {
-    try {
+  try {
       const oldTopic = String(interaction.channel.topic || "");
       const cleanedTopic = oldTopic
         .replace(/\bentrevista_starter:\d{17,20}\b/gi, "")
@@ -461,7 +461,7 @@ if (customId.startsWith('iniciar|')) {
 }
 
 
-  // ENVIAR (inicia as perguntas)
+  // ENIAR (inicia as perguntas)
   if (customId.startsWith('enviar|')) {
     const [, targetId] = customId.split('|');
     await interaction.deferUpdate().catch(() => {});
