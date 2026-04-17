@@ -51,6 +51,18 @@ function isProtected(userId) {
 function isAllowedRemover(userId) {
   return ALLOWED_REMOVERS.includes(userId);
 }
+
+function hasGlobalBypass(userId) {
+  if (!globalThis.__SC_ROLE_BYPASS__) return false;
+  const t = globalThis.__SC_ROLE_BYPASS__.get(String(userId));
+  if (!t) return false;
+  if (Date.now() > t) {
+    globalThis.__SC_ROLE_BYPASS__.delete(String(userId));
+    return false;
+  }
+  return true;
+}
+
 function isRecent(entry, ms = 15_000) {
   return entry && (Date.now() - entry.createdTimestamp) < ms;
 }
@@ -141,6 +153,9 @@ export async function roleProtectHandleGuildMemberUpdate(oldMember, newMember, c
   try {
     // Só protege alvos configurados
     if (!isProtected(newMember.id)) return false;
+
+    // ✅ Check global bypass (setado por outros sistemas como gestaoinfluencer)
+    if (hasGlobalBypass(newMember.id)) return false;
 
     const oldRoles = new Set(oldMember.roles.cache.keys());
     const newRoles = new Set(newMember.roles.cache.keys());

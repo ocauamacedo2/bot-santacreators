@@ -112,9 +112,6 @@
       // avisos por remoção do cargo GI (mesmo sem registro)
       giWarningsByUser: new Map(), // userId -> { count:number, lastAtMs:number|null }
 
-      // bypass pra quando o bot mexe nos cargos (evita loop com GuildMemberUpdate)
-      roleBypass: new Map(), // userId -> expireAtMs
-
       // NOVO: snapshots pra restauração após punição
       roleSnapshots: new Map(), // userId -> { roleIds: string[], restoreAtMs:number, createdAtMs:number, recordMessageId:string|null }
 
@@ -302,12 +299,14 @@
     const GI_ROLE_ID = SC_GI_CFG.ROLE_GESTAOINFLUENCER; // 1371733765243670538
 
     function setRoleBypass(userId, ms = 8000) {
-      SC_GI_STATE.roleBypass.set(String(userId), nowMs() + ms);
+      if (!globalThis.__SC_ROLE_BYPASS__) globalThis.__SC_ROLE_BYPASS__ = new Map();
+      globalThis.__SC_ROLE_BYPASS__.set(String(userId), Date.now() + ms);
     }
     function hasRoleBypass(userId) {
-      const t = SC_GI_STATE.roleBypass.get(String(userId));
+      if (!globalThis.__SC_ROLE_BYPASS__) return false;
+      const t = globalThis.__SC_ROLE_BYPASS__.get(String(userId));
       if (!t) return false;
-      if (nowMs() > t) { SC_GI_STATE.roleBypass.delete(String(userId)); return false; }
+      if (Date.now() > t) { globalThis.__SC_ROLE_BYPASS__.delete(String(userId)); return false; }
       return true;
     }
 
