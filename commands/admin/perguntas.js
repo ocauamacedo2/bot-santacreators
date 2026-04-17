@@ -86,10 +86,10 @@ export default {
       typeof message.channel.setTopic === "function" ? message.channel.setTopic(nextTopic).catch(() => {}) : Promise.resolve()
     ]);
 
-    // Pega as informações do tópico para identificar o candidato
-    const topic = message.channel.topic || "";
-    const m = topic.match(/aberto_por:(\d{5,})/i);
-    const openerId = m ? m[1] : "Desconhecido";
+// Pega as informações do tópico para identificar o candidato
+const topic = String(message.channel?.topic || "");
+const m = topic.match(/aberto_por:(\d{5,})/i);
+const openerId = m ? m[1] : "Desconhecido";
 
     // --- 🛠️ NOTIFICAÇÕES EM BACKGROUND ---
     (async () => {
