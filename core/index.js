@@ -700,6 +700,11 @@ const setupEventHandlers = () => {
     if (interaction.isAutocomplete()) return;
 
     try {
+      // 🚀 PRIORIDADE MÁXIMA: Botões de Ticket e Entrevista (Resolve o Delay)
+      if (await entrevista.handleButtons(interaction).catch(() => false)) return;
+      if (await entrevistasTickets.onInteractionCreate(interaction).catch(() => false)) return;
+
+      // Outros handlers...
       if (await registroManagerHandleInteraction(interaction, client)) return;
       if (await handleWeeklyRankInteractions(interaction, client)) return;
       if (await registroVendasHandleInteraction(interaction, client)) return;
@@ -757,9 +762,6 @@ const setupEventHandlers = () => {
           ephemeral: true,
         });
       }
-
-      if (await entrevista.handleButtons(interaction).catch(() => false)) return;
-      if (await entrevistasTickets.onInteractionCreate(interaction).catch(() => false)) return;
 
       await interactionCreateHandler.execute(interaction);
     } catch (error) {

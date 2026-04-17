@@ -284,7 +284,10 @@ async function sendLogs({ originGuild, originChannel, embedArgs }) {
     const localCh = await getLocalLogChannel(client, originGuild);
     if (localCh) {
         const embLocal = singleEmbed({ ...embedArgs, mode: 'native', originGuild, originChannel });
-        localCh.send({ embeds: [embLocal] }).catch(() => null);
+        // ✅ EVITA DUPLICAÇÃO: Só envia log se o canal de log for diferente do canal onde o comando foi usado
+        if (originChannel && localCh.id !== originChannel.id) {
+            localCh.send({ embeds: [embLocal] }).catch(() => null);
+        }
     }
 }
 
