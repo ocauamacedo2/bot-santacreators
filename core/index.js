@@ -564,6 +564,14 @@ const setupEventHandlers = () => {
         if (cmd === "verid") { if (await verIdHandleMessage(message, client)) return; }
         if (cmd === "removerperm") { if (await removerPermHandleMessage(message, client)) return; }
         if (cmd === "duplicarperm") { if (await duplicarPermHandleMessage(message, client)) return; }
+
+        // 🚀 Fallbacks para comandos de módulos (estavam fora do roteador e não funcionavam)
+        if (await aulaoHandleMessage(message, client)) return;
+        if (await pedirSetHandleMessage(message, client)) return;
+        if (await cronogramaCreatorsHandleMessage(message, client)) return;
+        if (await ausenciasHandleMessage(message, client)) return;
+        if (await hierarquiaHandleMessage(message, client)) return;
+        if (await reuniaoSemanalHandleMessage(message, client)) return;
         
         // Se chegou aqui sendo um comando, mas não foi tratado, não precisamos continuar nos listeners de texto
         return;
@@ -592,17 +600,10 @@ const setupEventHandlers = () => {
       if (await recrutamentoDashHandleMessage(message, client)) return;
       if (await registroManagerHandleMessage(message, client)) return;
       if (await registroVendasHandleMessage(message, client)) return;
-      if (await aulaoHandleMessage(message, client)) return;
-      if (await cronogramaCreatorsHandleMessage(message, client)) return;
-      if (await ausenciasHandleMessage(message, client)) return;
-      if (await hierarquiaHandleMessage(message, client)) return;
-      if (await reuniaoSemanalHandleMessage(message, client)) return;
       if (await apagarChatHandleMessage(message, client)) return;
       if (await verPermsHandleMessage(message)) return;
       if (await editarPermHandleMessage(message, client)) return;
 
-      if (await pedirSetHandleMessage(message, client)) return;
-      if (await handleCorrecao(message, client)) return;
       if (await alinhamentosHandleMessage(message, client)) return;
       await formsCreatorHandleMessage(message, client);
       if (await setStaffV2HandleMessage(message, client)) return;

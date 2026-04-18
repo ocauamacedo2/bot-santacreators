@@ -531,10 +531,10 @@ function buildSlideContent(index, contentArray) {
 export async function aulaoHandleMessage(message, client) {
   if (!message.guild || message.author.bot) return false;
 
-  const content = message.content.toLowerCase();
+  const content = message.content.toLowerCase().trim();
 
   // --- AULÃO GERAL ---
-  if (content === "!iniciaraulao") {
+  if (content.startsWith("!iniciaraulao")) {
     if (message.author.id !== AULAO_CONFIG.ALLOWED_USER_ID) {
       await message.reply("🚫 Apenas o administrador autorizado pode iniciar o sistema de aulão.");
       return true;
@@ -563,7 +563,7 @@ export async function aulaoHandleMessage(message, client) {
   }
 
   // --- AULÃO RESPONSÁVEIS ---
-  if (content === "!aulaoresp") {
+  if (content.startsWith("!aulaoresp")) {
     if (message.author.id !== AULAO_CONFIG.ALLOWED_USER_ID) {
       await message.reply("🚫 Apenas o administrador autorizado pode iniciar o sistema de aulão.");
       return true;
