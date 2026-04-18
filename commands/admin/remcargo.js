@@ -143,6 +143,17 @@ function channelLink(guildId, channelId) {
   return `https://discord.com/channels/${guildId}/${channelId}`;
 }
 
+function hasGlobalBypass(userId) {
+  if (!globalThis.__SC_ROLE_BYPASS__) return false;
+  const t = globalThis.__SC_ROLE_BYPASS__.get(String(userId));
+  if (!t) return false;
+  if (Date.now() > t) {
+    globalThis.__SC_ROLE_BYPASS__.delete(String(userId));
+    return false;
+  }
+  return true;
+}
+
 /**
  * ⚠️ CORREÇÃO IMPORTANTE:
  * canais muitas vezes NÃO estão no cache. Então precisa tentar fetch.
@@ -573,6 +584,9 @@ export function installRoleGuardian(client) {
     // Isso evita que o bot sabote suas próprias remoções legítimas de cargos.
     const botMember = newMember.guild.members.me;
     if (!botMember) return; // Não deveria acontecer, mas para segurança.
+
+    // ✅ Se houver um bypass global (ex: desligamento do GI), ignora a proteção
+    if (hasGlobalBypass(newMember.id)) return;
 
     try {
       const last = RECENT_RESTORES.get(newMember.id) || 0;
