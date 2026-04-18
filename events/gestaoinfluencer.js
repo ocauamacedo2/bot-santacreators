@@ -24,7 +24,7 @@
       ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder,
       TextInputBuilder, TextInputStyle, EmbedBuilder,
       StringSelectMenuBuilder, UserSelectMenuBuilder,
-      Events, ChannelType, MessageFlags
+      Events, ChannelType, MessageFlags, AuditLogEvent
     } = await import('discord.js');
 
     const fs = await import('node:fs');
@@ -1257,25 +1257,28 @@ try {
     // Mantém SOMENTE o cargo Cidadão (conforme pedido do desligamento)
     async function setOnlyCitizenAndSCRoles(guild, userId) {
       try {
-        const m = await fetchMemberCached(guild, userId);
+        // ✅ Busca o membro fresh da API para evitar cache de cargos desatualizado
+        const m = await guild.members.fetch(userId).catch(() => null);
         if (!m) return;
 
-        // ✅ CORREÇÃO:
-        // 1. Mantém cargos "managed" (de bots/integrações) pois o Discord proíbe remover.
-        // 2. Mantém @everyone (guild.id).
-        // 3. Adiciona Cidadão.
-        // 4. Remove o resto (setando apenas essa lista).
+        const botMember = guild.members.me;
+
+        // ✅ CORREÇÃO DE HIERARQUIA:
+        // Mantém cargos "managed", @everyone e cargos que o bot NÃO consegue editar (acima dele).
+        // Se o bot tentar remover um cargo acima dele, o Discord cancela a operação toda.
         const keep = m.roles.cache
-          .filter(r => r.managed || r.id === guild.id)
+          .filter(r => r.managed || r.id === guild.id || r.comparePositionTo(botMember.roles.highest) >= 0)
           .map(r => r.id);
 
         if (SC_GI_CFG.ROLE_CIDADAO && !keep.includes(SC_GI_CFG.ROLE_CIDADAO)) {
           keep.push(SC_GI_CFG.ROLE_CIDADAO);
         }
 
-        await m.roles.set(keep).catch(e => console.warn(`[SC_GI] Erro ao limpar cargos de ${userId}:`, e.message));
+        await m.roles.set(keep, "Desligamento Gestaoinfluencer: limpeza de cargos").catch(e => {
+            throw new Error(`Falha ao substituir cargos (Hierarquia?): ${e.message}`);
+        });
       } catch (e) {
-        console.warn(`[SC_GI] Erro ao buscar membro ${userId} para limpar cargos:`, e.message);
+        throw e;
       }
     }
 
@@ -1338,11 +1341,11 @@ try {
 
     async function applyNickTemplate(guild, userId, opts = {}) {
       try {
-        const m = await fetchMemberCached(guild, userId);
+        const m = await guild.members.fetch(userId).catch(() => null);
         if (!m) return;
         // ✅ Passa o passaporte salvo (se houver) para restaurar o ID
         const nick = computeNewNick(m, opts.passaporte);
-        await m.setNickname(nick).catch(()=>{});
+        await m.setNickname(nick, "Desligamento Gestaoinfluencer: reset de nick").catch(() => {});
       } catch {}
     }
 
@@ -1371,7 +1374,9 @@ try {
     // ✏️ AJUSTA NICK (SEM SC |)
         // ✅ Passa o passaporte salvo no registro para garantir que o ID volte
         await applyNickTemplate(guild, snapshot.targetId, { passaporte: snapshot.passaporte });
-  } catch {}
+  } catch (e) {
+    console.error(`[SC_GI] Erro crítico no processamento de cargos/nick durante desligamento de ${snapshot.targetId}:`, e.message);
+  }
 
     // ✅ BUSCA ESTATÍSTICAS GERAIS (scGeralWeeklyRanking)
     let statsEmbed = null;
@@ -2172,9 +2177,15 @@ try {
           let orphansRemoved = 0;
           const guild = interaction.guild;
           const restoreLogCh = await guild.channels.fetch(SC_GI_CFG.CHANNEL_RESTORE_LOG).catch(() => null);
+          const defaultChan = await guild.channels.fetch(SC_GI_CFG.CHANNEL_MENU_E_REGISTROS).catch(() => null);
 
-          for (const rec of SC_GI_STATE.registros.values()) {
-            const ch = await guild.channels.fetch(rec.channelId).catch(() => null);
+          // ✅ FIX: Converte para Array para não bugar o Map durante a modificação dos IDs
+          const currentRecords = Array.from(SC_GI_STATE.registros.values());
+
+          for (const rec of currentRecords) {
+            // Tenta o canal salvo, se falhar usa o padrão
+            let ch = await guild.channels.fetch(rec.channelId).catch(() => null);
+            if (!ch) ch = defaultChan;
             if (!ch) continue;
 
             let msg = null;
