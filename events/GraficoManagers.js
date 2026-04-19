@@ -66,14 +66,30 @@ const BTN_REFRESH_ID = "GM_REFRESH";
 const BTN_ADJUST_ID = "GM_ADJUST_POINTS";
 const BTN_ADD_POINTS_ID = "GM_ADD_POINTS";
 
-// ✅ QUEM PODE AJUSTAR (bota seus IDs aqui)
+// ✅ QUEM PODE AJUSTAR (usuários específicos)
 const GM_ADJUST_ALLOWED_USERS = [
   "660311795327828008",
   // "outro_id",
 ];
 
-function canAdjust(userId) {
-  return GM_ADJUST_ALLOWED_USERS.includes(String(userId || ""));
+// ✅ QUEM PODE AJUSTAR (por cargo)
+const GM_ADJUST_ALLOWED_ROLE_IDS = [
+  "1262262852949905409", // RESP INFLU
+  "1352408327983861844", // RESP CREATORS
+  "1262262852949905408", // OWNER
+];
+
+function canAdjust(interaction) {
+  const userId = String(interaction?.user?.id || "");
+  if (GM_ADJUST_ALLOWED_USERS.includes(userId)) return true;
+
+  const memberRoleIds = interaction?.member?.roles?.cache
+    ? [...interaction.member.roles.cache.keys()].map(String)
+    : [];
+
+  return GM_ADJUST_ALLOWED_ROLE_IDS.some((roleId) =>
+    memberRoleIds.includes(String(roleId))
+  );
 }
 
 
@@ -1078,8 +1094,8 @@ export async function graficoManagersHandleInteraction(interaction, client) {
 
 
       // ✅ NOVO: Ajustar pontos
-      if (interaction.customId === BTN_ADJUST_ID) {
-  if (!canAdjust(interaction.user?.id)) {
+if (interaction.customId === BTN_ADJUST_ID) {
+  if (!canAdjust(interaction)) {
     await interaction.reply({
       content: "⛔ Você não tem permissão pra ajustar pontos.",
       ephemeral: true,
@@ -1093,8 +1109,8 @@ export async function graficoManagersHandleInteraction(interaction, client) {
 
 
       // ✅ NOVO: Adicionar pontos
-      if (interaction.customId === BTN_ADD_POINTS_ID) {
-        if (!canAdjust(interaction.user?.id)) {
+    if (interaction.customId === BTN_ADD_POINTS_ID) {
+  if (!canAdjust(interaction)) {
           await interaction.reply({
             content: "⛔ Você não tem permissão pra adicionar pontos.",
             ephemeral: true,
@@ -1112,8 +1128,8 @@ export async function graficoManagersHandleInteraction(interaction, client) {
     // =========================
     // MODAL SUBMIT
     // =========================
-    if (interaction?.isModalSubmit?.() && interaction.customId === "GM_ADJUST_MODAL") {
-  if (!canAdjust(interaction.user?.id)) {
+if (interaction?.isModalSubmit?.() && interaction.customId === "GM_ADJUST_MODAL") {
+  if (!canAdjust(interaction)) {
     await interaction.reply({
       content: "⛔ Você não tem permissão pra ajustar pontos.",
       ephemeral: true,
@@ -1172,16 +1188,16 @@ export async function graficoManagersHandleInteraction(interaction, client) {
     // =========================
     // MODAL SUBMIT (ADICIONAR)
     // =========================
-    if (interaction?.isModalSubmit?.() && interaction.customId === "GM_ADD_POINTS_MODAL") {
-      if (!canAdjust(interaction.user?.id)) {
-        await interaction.reply({
-          content: "⛔ Você não tem permissão pra adicionar pontos.",
-          ephemeral: true,
-        }).catch(() => null);
-        return true;
-      }
+if (interaction?.isModalSubmit?.() && interaction.customId === "GM_ADD_POINTS_MODAL") {
+  if (!canAdjust(interaction)) {
+    await interaction.reply({
+      content: "⛔ Você não tem permissão pra adicionar pontos.",
+      ephemeral: true,
+    }).catch(() => null);
+    return true;
+  }
 
-      await interaction.deferReply({ ephemeral: true }).catch(() => null);
+  await interaction.deferReply({ ephemeral: true }).catch(() => null);
 
       const managerId = String(interaction.fields.getTextInputValue("GM_MANAGER_ID") || "").trim();
       const addPointsRaw = String(interaction.fields.getTextInputValue("GM_ADD_POINTS_QTY") || "").trim();
