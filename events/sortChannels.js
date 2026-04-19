@@ -1286,6 +1286,8 @@ export async function sortChannelsHandleInteraction(interaction) {
   try {
     if (!interaction.isButton()) return false;
 
+    if (!interaction.customId?.includes('SC_')) return false;
+
     const isUndoInativo = interaction.customId.startsWith("SC_INATIVO_UNDO_");
     const isUndoMembros = interaction.customId.startsWith("SC_MEMBROS_UNDO_");
     const isUndoSpecial = interaction.customId.startsWith("SC_SPECIAL_UNDO_");

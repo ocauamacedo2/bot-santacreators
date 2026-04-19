@@ -276,6 +276,8 @@ export async function registroPoderesEventosHandleMessage(message, client) {
 
 export async function registroPoderesEventosHandleInteraction(interaction, client) {
     try {
+        if (!interaction.customId?.includes('SC_PWR_')) return false;
+
         // Botão -> abrir modal
         if (interaction.isButton?.() && interaction.customId === SC_PWR_BUTTON_ID) {
           if (!SC_PWR_hasPermission(interaction.member)) {

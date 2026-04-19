@@ -333,6 +333,8 @@ export async function registroVendasHandleMessage(message, client) {
 export async function registroVendasHandleInteraction(interaction, client) {
   if (!interaction.guild) return false;
 
+  if (!interaction.customId?.includes('vendas')) return false;
+
   // 1. Botão Registrar
   if (interaction.isButton() && interaction.customId === "vendas_registrar") {
     if (!canRegister(interaction.member)) {

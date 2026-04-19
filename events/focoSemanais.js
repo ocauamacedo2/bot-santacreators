@@ -269,6 +269,8 @@ export async function focoSemanaisHandleMessage(message, client) {
 
 export async function focoSemanaisHandleInteraction(interaction, client) {
   try {
+    if (!interaction.customId?.includes('sc_foco')) return false;
+
     // abrir modal
     if (interaction.isButton() && interaction.customId === 'sc_foco_open') {
       const autorizado = CARGOS_AUTORIZADOS_FOCO.some(r => interaction.member?.roles?.cache?.has(r)) || CARGOS_AUTORIZADOS_FOCO.includes(interaction.user.id);

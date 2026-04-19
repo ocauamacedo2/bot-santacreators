@@ -171,6 +171,8 @@ export async function blacklistFacsHandleMessage(message, client) {
 // 3. Chamado no 'interactionCreate'
 export async function blacklistFacsHandleInteraction(interaction, client) {
   try {
+    if (!interaction.customId?.includes('blacklist')) return false;
+
     // Abrir modal
     if (interaction.isButton() && interaction.customId === BTN_ID) {
       if (!hasAnyAllowedRole(interaction.member)) {

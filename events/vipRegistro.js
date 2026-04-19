@@ -443,7 +443,7 @@ export async function vipRegistroHandleMessage(message, client) {
 
 export async function vipRegistroHandleInteraction(interaction, client) {
   try {
-    if (!interaction.guild) return false;
+    if (!interaction.guild || !interaction.customId?.includes('vip_')) return false;
 
     // ✅ Bloqueia processamento duplicado
     if (VIP_hasHandled(interaction)) return true;

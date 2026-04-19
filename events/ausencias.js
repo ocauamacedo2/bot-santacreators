@@ -164,6 +164,8 @@ export async function ausenciasOnReady(client) {
 
 export async function ausenciasHandleInteraction(interaction, client) {
     try {
+      if (!interaction.customId?.includes('ausencia')) return false;
+
       // BOTÃO → abre modal
       if (interaction.isButton() && interaction.customId === 'abrir_ausencia') {
         const isUserAllowed = CARGOS_AUTORIZADOS_AUSENCIA.includes(interaction.user.id);
