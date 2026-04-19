@@ -7,9 +7,6 @@ import {
 } from "discord.js";
 import { dashEmit } from "../utils/dashHub.js";
 
-if (globalThis.__SC_PROVAS_ADV_INSTALLED__) return;
-globalThis.__SC_PROVAS_ADV_INSTALLED__ = true;
-
 // ================== CONFIG ==================
 const CANAL_REGISTRO_ADV_ID = '1394463945443512391';
 
