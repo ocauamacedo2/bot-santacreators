@@ -166,8 +166,8 @@ export async function roleProtectHandleGuildMemberUpdate(oldMember, newMember, c
 
     const guild = newMember.guild;
 
-    // Aguarda propagação do log
-    await sleep(2000);
+    // ✅ Aguarda um pouco mais a propagação do log do Discord
+    await sleep(3000);
 
     const auditEntry = await fetchRecentRoleUpdateEntry(guild, newMember.id, removed);
     const executorUser = auditEntry?.executor ?? null;
@@ -176,9 +176,11 @@ export async function roleProtectHandleGuildMemberUpdate(oldMember, newMember, c
     // 1) Se o executor for o próprio bot (remoção legítima programada), libera
     if (executorId === client.user.id) return false;
 
-    // ✅ BYPASS TOTAL PARA OWNER E ALLOWED_REMOVERS
-    const owners = (process.env.OWNER || '').split(',').map(id => id.trim()).filter(Boolean);
-    if (executorId && (owners.includes(executorId) || isAllowedRemover(executorId))) {
+    // ✅ BYPASS TOTAL PARA OWNER E USUÁRIOS AUTORIZADOS
+    const envOwners = (process.env.OWNER || '').split(',').map(id => id.trim()).filter(Boolean);
+    const isAuthorized = executorId && (envOwners.includes(executorId) || isAllowedRemover(executorId));
+    
+    if (isAuthorized) {
       return false; 
     }
 

@@ -614,6 +614,11 @@ export function installRoleGuardian(client) {
         ? await guild.members.fetch(executorUser.id).catch(() => null)
         : null;
 
+      // ✅ BYPASS TOTAL PARA ALLOWED_REMOVERS NO FLUXO UI (CLIQUES)
+      if (executorUser && ALLOWED_REMOVERS.includes(executorUser.id)) {
+        return;
+      }
+
       // Se o bot é o executor, suas ações são sempre permitidas.
       if (executorUser && executorUser.id === client.user.id) {
         return; // Não restaura, não loga como bloqueado por este guardião.
