@@ -29,39 +29,46 @@ export default {
   name: Events.InteractionCreate,
   once: false,
   async execute(interaction) {
-    // ✅ não mexe no set flow
-    if (isSetFlow(interaction)) return;
+    try {
+      // ✅ não mexe no set flow
+      if (isSetFlow(interaction)) return;
 
-    // ✅ VIP/Rolepass Registro
-    if (await vipRegistroHandleInteraction(interaction, interaction.client)) return;
+      // ✅ VIP/Rolepass Registro
+      if (await vipRegistroHandleInteraction(interaction, interaction.client)) return;
 
-    // ✅ Ausências (Registro)
-    if (await ausenciasHandleInteraction(interaction, interaction.client)) return;
+      // ✅ Ausências (Registro)
+      if (await ausenciasHandleInteraction(interaction, interaction.client)) return;
 
-    // ✅ Registro de Poderes (Eventos)
-    if (await registroPoderesEventosHandleInteraction(interaction, interaction.client)) return;
+      // ✅ Registro de Poderes (Eventos)
+      if (await registroPoderesEventosHandleInteraction(interaction, interaction.client)) return;
 
-    // ✅ Foco Semanal
-    if (await focoSemanaisHandleInteraction(interaction, interaction.client)) return;
+      // ✅ Foco Semanal
+      if (await focoSemanaisHandleInteraction(interaction, interaction.client)) return;
 
-    // ✅ Provas ADV
-    if (await provasAdvHandleInteraction(interaction, interaction.client)) return;
+      // ✅ Provas ADV
+      if (await provasAdvHandleInteraction(interaction, interaction.client)) return;
 
-    // ✅ Blacklist FACS
-    if (await blacklistFacsHandleInteraction(interaction, interaction.client)) return;
+      // ✅ Blacklist FACS
+      if (await blacklistFacsHandleInteraction(interaction, interaction.client)) return;
 
-    // ✅ VENDAS (Botões e Modais)
-    if (await registroVendasHandleInteraction(interaction, interaction.client)) return;
+      // ✅ VENDAS (Botões e Modais)
+      if (await registroVendasHandleInteraction(interaction, interaction.client)) return;
 
-    // ✅ CANAIS (Undo Inativo/Membros)
-    if (await sortChannelsHandleInteraction(interaction, interaction.client)) return;
+      // ✅ CANAIS (Undo Inativo/Membros)
+      if (await sortChannelsHandleInteraction(interaction, interaction.client)) return;
 
-    // ✅ entrevista: botões primeiro
-    if (interaction.isButton()) {
-      const foi = await entrevista.handleButtons(interaction);
-      if (foi) return;
+      // ✅ entrevista: botões primeiro
+      if (interaction.isButton()) {
+        const foi = await entrevista.handleButtons(interaction);
+        if (foi) return;
+      }
+    } catch (err) {
+      console.error('[InteractionCreate] Erro ao processar:', err);
+      try {
+        if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
+          await interaction.reply({ content: '⚠️ Ocorreu um erro interno ao processar sua ação.', ephemeral: true });
+        }
+      } catch {}
     }
-
-    // (se quiser, dá pra tratar outros components aqui depois)
   },
 };

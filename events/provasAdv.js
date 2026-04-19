@@ -251,6 +251,9 @@ export async function provasAdvHandleMessage(message, client) {
 }
 
 export async function provasAdvHandleInteraction(interaction, client) {
+  // ✅ Retorno imediato se a interação não pertencer a este módulo
+  if (!interaction.customId?.includes('prova_adv')) return false;
+
   try {
     // abrir modal (com checagem de cargo)
     if (interaction.isButton() && interaction.customId === 'abrir_prova_adv') {
@@ -354,11 +357,13 @@ ${descricao || '—'}
   } catch (err) {
     console.error('[PROVAS_ADV] erro na interação:', err);
     try {
-      if (!interaction.replied && !interaction.deferred) {
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply({ content: '⚠️ Ocorreu um erro ao processar sua ação.' });
+      } else {
         await interaction.reply({ content: '⚠️ Ocorreu um erro ao processar sua ação.', ephemeral: true });
       }
     } catch {}
-    return true; // Retorna true para parar o roteador se for um erro interno de um ID nosso
+    return true; 
   }
   return false;
 }
