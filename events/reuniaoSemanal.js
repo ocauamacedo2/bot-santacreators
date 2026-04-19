@@ -239,23 +239,30 @@ async function aggregateData(guild) {
 }
 
 function calculateWinners(data) {
-  const winnerGeral = data.topGeral[0] || null;
-  
-  let winnerManager = data.topManager[0] || null;
-  if (winnerGeral && winnerManager && winnerGeral.id === winnerManager.id) {
-    // ✅ Se tiver 2º lugar, usa ele. Se não, mantém o 1º (não deixa vazio).
-    if (data.topManager[1]) {
-      winnerManager = data.topManager[1];
-    }
-  }
+  const pickFirstAvailable = (list, blockedIds = new Set()) => {
+    if (!Array.isArray(list) || list.length === 0) return null;
 
-  let winnerSocial = data.topSocial[0] || null;
-  if (winnerGeral && winnerSocial && winnerGeral.id === winnerSocial.id) {
-    // ✅ Se tiver 2º lugar, usa ele. Se não, mantém o 1º.
-    if (data.topSocial[1]) {
-      winnerSocial = data.topSocial[1];
+    for (const item of list) {
+      if (!item?.id) continue;
+      if (!blockedIds.has(item.id)) {
+        return item;
+      }
     }
-  }
+
+    // ✅ Se todos os colocados já estiverem bloqueados, mantém o primeiro válido
+    // para não deixar a categoria vazia.
+    return list.find((item) => item?.id) || null;
+  };
+
+  const winnerGeral = pickFirstAvailable(data.topGeral);
+
+  const usedIds = new Set();
+  if (winnerGeral?.id) usedIds.add(winnerGeral.id);
+
+  const winnerManager = pickFirstAvailable(data.topManager, usedIds);
+  if (winnerManager?.id) usedIds.add(winnerManager.id);
+
+  const winnerSocial = pickFirstAvailable(data.topSocial, usedIds);
 
   return { winnerGeral, winnerManager, winnerSocial };
 }
