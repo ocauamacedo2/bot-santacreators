@@ -5,10 +5,9 @@ import {
   ModalBuilder, TextInputBuilder, TextInputStyle,
   EmbedBuilder, Events
 } from "discord.js";
+import { dashEmit } from "../utils/dashHub.js";
 
-if (globalThis.__SC_PROVAS_ADV_INSTALLED__) {
-  // already loaded
-}
+if (globalThis.__SC_PROVAS_ADV_INSTALLED__) return;
 globalThis.__SC_PROVAS_ADV_INSTALLED__ = true;
 
 // ================== CONFIG ==================
@@ -288,6 +287,9 @@ export async function provasAdvHandleInteraction(interaction, client) {
 
     // submit do modal
     if (interaction.isModalSubmit() && interaction.customId === 'modal_prova_adv') {
+      // ✅ Responde imediatamente para o Discord não dar "Falha na Interação"
+      await interaction.deferReply({ ephemeral: true }).catch(() => {});
+
       const idDiscord = (interaction.fields.getTextInputValue('id_discord_acusado')||'').trim();
       const nome      = (interaction.fields.getTextInputValue('nome_acusado')||'').trim();
       const idAdv     = (interaction.fields.getTextInputValue('id_adv')||'').trim();
@@ -295,7 +297,7 @@ export async function provasAdvHandleInteraction(interaction, client) {
       const descricao = (interaction.fields.getTextInputValue('descricao_adv')||'').trim();
 
       const canal = await client.channels.fetch(CANAL_REGISTRO_ADV_ID).catch(()=>null);
-      if (!canal) return interaction.reply({ content: '⚠️ Canal de registro indisponível.', ephemeral: true });
+      if (!canal) return interaction.editReply({ content: '⚠️ Canal de registro indisponível.' });
 
       const membro = await interaction.guild.members.fetch(idDiscord).catch(() => null);
       const avatar = membro?.user.displayAvatarURL({ dynamic: true, size: 4096 }) || null;
@@ -319,9 +321,19 @@ ${descricao || '—'}
         .setTimestamp();
 
       await canal.send({ embeds: [embed] }).catch(()=>{});
+
+      // ✅ Integração com Ranking Semanal / GeralDash
+      try {
+        dashEmit("adv:registrada", {
+          userId: interaction.user.id,
+          targetId: idDiscord,
+          __at: Date.now()
+        });
+      } catch {}
+
       try { advBumpUser(interaction.user.id, 1); } catch {}
 
-      await interaction.reply({ content: '✅ Registro enviado. Agora envie a prova (imagem/vídeo) neste canal.', ephemeral: true });
+      await interaction.editReply({ content: '✅ Registro enviado. Agora envie a prova (imagem/vídeo) neste canal.' });
 
       // coletor de 5 min pra reposicionar botão no fim após a mídia
       const collector = canal.createMessageCollector({
@@ -349,6 +361,7 @@ ${descricao || '—'}
         await interaction.reply({ content: '⚠️ Ocorreu um erro ao processar sua ação.', ephemeral: true });
       }
     } catch {}
+    return true; // Retorna true para parar o roteador se for um erro interno de um ID nosso
   }
   return false;
 }
