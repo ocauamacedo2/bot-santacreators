@@ -1904,8 +1904,8 @@ function isPerguntasLogEmbed(emb) {
 
 function isVendaLogEmbed(emb) {
   const t = norm(emb?.title || emb?.data?.title || "");
-  // registroVendas.js usa: .setTitle("💰 Registro de Venda")
-  return t.includes("registro de venda");
+  // Detecção mais flexível para capturar logs de venda
+  return t.includes("venda") && (t.includes("registro") || t.includes("log"));
 }
 
 // ============================================================================
@@ -2450,12 +2450,21 @@ async function backfillExtrasThisWeek(client) {
 
     // -------- VENDAS --------
     if (VENDAS_LOGS_CHANNEL_ID) {
+      const vendasLastPointByUser = new Map();
       await scanCurrentWeekEmbeds(
         client,
         VENDAS_LOGS_CHANNEL_ID,
         (emb) => isVendaLogEmbed(emb),
-        async (_m, emb) => {
-          if (doacaoWasScoredFromEmbed(emb)) vendas += 1;
+        async (m, emb) => {
+          const uid = venda_getSellerId(emb);
+          if (!uid) return;
+
+          const ts = m.createdTimestamp;
+          const last = vendasLastPointByUser.get(uid) || 0;
+          if (!last || Math.abs(last - ts) >= 7 * 60 * 60 * 1000) {
+            vendasLastPointByUser.set(uid, ts);
+            vendas += 1;
+          }
         },
         25
       );

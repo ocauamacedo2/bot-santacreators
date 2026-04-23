@@ -863,7 +863,8 @@ function isPerguntasLogEmbed(emb) {
 }
 function isVendaLogEmbed(emb) {
   const t = norm(emb?.title || emb?.data?.title || "");
-  return t.includes("registro de venda");
+  // Detecção mais flexível para capturar logs de venda
+  return t.includes("venda") && (t.includes("registro") || t.includes("log"));
 }
 
 // ✅ NOVO: PARSERS PARA PONTO DE ENTREVISTA
@@ -1207,6 +1208,7 @@ await scanChannelEmbeds(client, {
 
   // VENDAS (logs)
   if (VENDAS_LOGS_CHANNEL_ID) {
+    const vendasLastPointByUser = new Map(); // Controle de cooldown 7h durante o scan
     await scanChannelEmbeds(client, {
       channelId: VENDAS_LOGS_CHANNEL_ID,
       weekFloorKey,
@@ -1215,11 +1217,16 @@ await scanChannelEmbeds(client, {
         const emb = m.embeds?.[0];
         if (!emb) return;
         if (!isVendaLogEmbed(emb)) return;
-        if (!doacaoWasScoredFromEmbed(emb)) return; // Reusa lógica anti-farm
 
         const uid = venda_getSellerId(emb);
         if (!uid) return;
-        pushItem({ userId: uid, ts: new Date(m.createdTimestamp), source: "vendas" });
+
+        const ts = m.createdTimestamp;
+        const last = vendasLastPointByUser.get(uid) || 0;
+        if (!last || Math.abs(last - ts) >= 7 * 60 * 60 * 1000) {
+          vendasLastPointByUser.set(uid, ts);
+          pushItem({ userId: uid, ts: new Date(ts), source: "vendas" });
+        }
       },
     });
   }
