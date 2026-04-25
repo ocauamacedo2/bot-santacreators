@@ -395,7 +395,7 @@ const FULL_SCAN = {
 const SCAN_TTL_MS = 20 * 60 * 1000;
 
 // Barra/escala
-const BAR_MAX = 450; // 🎯 nova meta: 450 pontos
+const BAR_MAX = 500; // 🎯 nova meta: 500 pontos
 
 
 // ================== MEMÓRIA ==================
@@ -659,14 +659,16 @@ function getFields(emb) {
 }
 
 function gradeLabel(total) {
-  if (total >= 350) return { emoji: "🏆", label: "META BATIDA" };
-  if (total >= 300) return { emoji: "✅", label: "BOM" };
-  if (total >= 250) return { emoji: "🙂", label: "OK" };
-  if (total >= 200) return { emoji: "🟡", label: "NO PROCESSO - TÁ OK" };
-  if (total >= 150) return { emoji: "🟠", label: "ABAIXO DO ESPERADO" };
-  if (total >= 100) return { emoji: "🔴", label: "MUITO ABAIXO DA MÉDIA" };
-  if (total >= 50) return { emoji: "📉", label: "NEGATIVADOS" };
-  return { emoji: "⚫", label: "RUIM" };
+  if (total >= 500) return { emoji: "🏆", label: "META BATIDA" };
+  if (total >= 450) return { emoji: "✨", label: "MUITO BOM" };
+  if (total >= 400) return { emoji: "✅", label: "BOM" };
+  if (total >= 350) return { emoji: "🙂", label: "OK" };
+  if (total >= 300) return { emoji: "📈", label: "MELHORANDO" };
+  if (total >= 250) return { emoji: "🌗", label: "METADE" };
+  if (total >= 200) return { emoji: "🟡", label: "PROCESSO" };
+  if (total >= 100) return { emoji: "🔴", label: "NEGATIVO" };
+  if (total >= 90)  return { emoji: "⚫", label: "RUIM" };
+  return { emoji: "⚪", label: "ABAIXO DE 90" };
 }
 
 
@@ -679,10 +681,10 @@ function progressBarGeneralSimple(value, max = BAR_MAX, width = 18) {
 
   // cor do "filled" muda por faixa (bem mais clean que aquela régua gigante)
  const fillEmoji =
-  v >= 350 ? "🟩" :
-  v >= 250 ? "🟦" :
-  v >= 150 ? "🟨" :
-  v >= 50  ? "🟧" : "🟥";
+  v >= 500 ? "🟩" :
+  v >= 400 ? "🟦" :
+  v >= 300 ? "🟨" :
+  v >= 200 ? "🟧" : "🟥";
 
 
   return `${fillEmoji.repeat(filled)}${"⬛".repeat(empty)}`;
@@ -692,13 +694,14 @@ function progressBarGeneralSimple(value, max = BAR_MAX, width = 18) {
 // ================== QUICKCHART ==================
 function colorForGeneralValue(v) {
   const x = Number(v) || 0;
-  if (x >= 350) return "#16a34a";
-  if (x >= 300) return "#22c55e";
-  if (x >= 250) return "#4ade80";
-  if (x >= 200) return "#facc15";
-  if (x >= 150) return "#fde047";
-  if (x >= 100) return "#f59e0b";
-  if (x >= 50) return "#ef4444";
+  if (x >= 500) return "#16a34a";
+  if (x >= 450) return "#22c55e";
+  if (x >= 400) return "#4ade80";
+  if (x >= 350) return "#3498db";
+  if (x >= 300) return "#facc15";
+  if (x >= 250) return "#fde047";
+  if (x >= 200) return "#f59e0b";
+  if (x >= 100) return "#ef4444";
   return "#991b1b";
 }
 
@@ -2923,25 +2926,21 @@ const oldSig = st._logSig[wk];
     ].join("\n");
 
     const mainColor =
-      cur.total >= 350
+      cur.total >= 500
         ? 0x16a34a
-        : cur.total >= 300
-        ? 0x22c55e
-        : cur.total >= 250
+        : cur.total >= 400
         ? 0x4ade80
-        : cur.total >= 200
+        : cur.total >= 300
         ? 0xfacc15
-        : cur.total >= 150
-        ? 0xfde047
-        : cur.total >= 100
+        : cur.total >= 200
         ? 0xf59e0b
-        : cur.total >= 50
+        : cur.total >= 100
         ? 0xef4444
         : 0x991b1b;
 
     const embedMain = new EmbedBuilder()
       .setColor(mainColor)
-.setTitle("📈 GeralDash — Desempenho Semanal (Meta 350)")
+      .setTitle("📈 GeralDash — Desempenho Semanal (Meta 500)")
       .setImage(DASH_BANNER_URL)
       .setDescription(
         [
