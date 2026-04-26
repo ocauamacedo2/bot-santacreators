@@ -1,4 +1,6 @@
 // /application/commands/entrevistasTickets.js
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   ChannelType,
   PermissionsBitField,
@@ -17,6 +19,119 @@ import { resolveLogChannel } from '../events/channelResolver.js';
 
 export default function createEntrevistasTickets({ client, Transcript }) {
   ///!ENTREVISTA
+
+  // ── 📊 Gerenciamento de Inatividade (Persistência) ─────────────────
+  const INACTIVITY_STORAGE = path.resolve(process.cwd(), 'data', 'ticket_inactivity.json');
+  
+  function loadInactivityState() {
+    try {
+      if (!fs.existsSync(INACTIVITY_STORAGE)) return {};
+      const data = fs.readFileSync(INACTIVITY_STORAGE, 'utf8');
+      return data ? JSON.parse(data) : {};
+    } catch { return {}; }
+  }
+
+  function saveInactivityState(state) {
+    try {
+      const dir = path.dirname(INACTIVITY_STORAGE);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(INACTIVITY_STORAGE, JSON.stringify(state, null, 2));
+    } catch {}
+  }
+
+  // Monitor Inteligente - Regras #1 a #6 e #8
+  async function startInactivityMonitor() {
+    setInterval(async () => {
+      const now = Date.now();
+      const state = loadInactivityState();
+      const targetCats = [CATEGORIES.entrevista, '1444857594517913742'];
+      
+      for (const catId of targetCats) {
+        const category = client.channels.cache.get(catId);
+        if (!category || category.type !== ChannelType.GuildCategory) continue;
+
+        for (const channel of category.children.cache.values()) {
+          if (channel.type !== ChannelType.GuildText) continue;
+
+          const topic = channel.topic || "";
+          const mOpener = topic.match(/aberto_por:(\d{17,20})/i);
+          if (!mOpener) continue;
+          const openerId = mOpener[1];
+
+          const guild = channel.guild;
+          const member = await guild.members.fetch(openerId).catch(() => null);
+
+          // Regra #7: Usuário saiu do servidor
+          if (!member) {
+            await finalizarTicketComConclusao(null, "Ticket fechado automaticamente (usuário saiu/banido).", {
+              channel, guild, isAuto: true, reasonType: "saida"
+            });
+            if (state[channel.id]) delete state[channel.id];
+            continue;
+          }
+
+          // Regra #6: Exceções (Owner, SantaCreators, Você)
+          const bypassRoles = ['1262262852949905408', '1352275728476930099'];
+          if (openerId === '660311795327828008' || member.roles.cache.some(r => bypassRoles.includes(r.id))) {
+            if (state[channel.id]) delete state[channel.id];
+            continue;
+          }
+
+          // Regra #1: Identificação por Cargos (Cidadão + Entrevista)
+          const reqRoles = ['1262978759922028575', '1353797415488196770'];
+          if (!reqRoles.every(rid => member.roles.cache.has(rid))) {
+            if (state[channel.id]) delete state[channel.id];
+            continue;
+          }
+
+          const msgs = await channel.messages.fetch({ limit: 50 }).catch(() => null);
+          if (!msgs) continue;
+
+          // Ignora mensagens de bots para calcular inatividade
+          const lastHumanMsg = msgs.find(m => !m.author.bot);
+          const lastActivity = lastHumanMsg ? lastHumanMsg.createdTimestamp : channel.createdTimestamp;
+
+          const staleTime = now - lastActivity;
+          const isStale = staleTime >= 12 * 60 * 60 * 1000;
+          const tData = state[channel.id] || { accumulated: 0, lastCheck: now, lastReminderIndex: 0 };
+
+          if (isStale) {
+            // Regra #4: Contagem acumulada
+            tData.accumulated += (now - (tData.lastCheck || now));
+            
+            // Regra #2 e #3: Aviso de 12h
+            const reminderIndex = Math.floor(staleTime / (12 * 60 * 60 * 1000));
+            if (reminderIndex > tData.lastReminderIndex) {
+              if (tData.lastReminderId) {
+                const old = await channel.messages.fetch(tData.lastReminderId).catch(() => null);
+                if (old) await old.delete().catch(() => {});
+              }
+              
+              // Regra #8: Marcação inteligente
+              const participants = [...new Set(msgs.filter(m => !m.author.bot && m.author.id !== openerId).map(m => `<@${m.author.id}>`))];
+              const cc = participants.length > 0 ? `\n\nCC: ${participants.join(' ')}` : "";
+              
+              const rem = await channel.send(`⚠️ Olá! Percebemos que este ticket está sem interação há um tempo...\n\nPoderiam informar qual será o desenrolar? 🤔\n\nCaso já tenha sido resolvido ou não haja mais necessidade, pedimos que finalizem o ticket. ✅\n\n⏳ Lembrando que tickets inativos são fechados automaticamente após 7 dias.${cc}`);
+              tData.lastReminderId = rem.id;
+              tData.lastReminderIndex = reminderIndex;
+            }
+          }
+
+          tData.lastCheck = now;
+          state[channel.id] = tData;
+
+          // Regra #5: Fechamento após 7 dias acumulados
+          if (tData.accumulated >= 7 * 24 * 60 * 60 * 1000) {
+            await finalizarTicketComConclusao(null, "Ticket fechado automaticamente por inatividade.", {
+              channel, guild, isAuto: true, reasonType: "inatividade"
+            });
+            delete state[channel.id];
+          }
+        }
+      }
+      saveInactivityState(state);
+    }, 10 * 60 * 1000); // Executa a cada 10 minutos
+  }
 
   // ── 🔒 Trava anti double-click / concorrência ─────────────────────
   const HANDLED_INTERACTIONS = new Set();
@@ -402,6 +517,25 @@ function rebuildPendingFromFormsMessage(message) {
 
   async function onReady() {
     await verificarOuCriarMenu();
+
+    // Regra #7: Monitor de Saída/Banimento
+    client.on('guildMemberRemove', async member => {
+      const targetCats = [CATEGORIES.entrevista, '1444857594517913742'];
+      for (const catId of targetCats) {
+        const cat = member.guild.channels.cache.get(catId);
+        if (!cat) continue;
+        for (const channel of cat.children.cache.values()) {
+          const topic = channel.topic || "";
+          if (topic.includes(`aberto_por:${member.id}`)) {
+            await finalizarTicketComConclusao(null, "Ticket fechado automaticamente (usuário saiu/banido).", {
+              channel, guild: member.guild, isAuto: true, reasonType: "saida"
+            });
+          }
+        }
+      }
+    });
+
+    await startInactivityMonitor();
     return true;
   }
 
@@ -1106,19 +1240,21 @@ if (interaction.isModalSubmit() && interaction.customId === 'modal_registro_lide
     }
   }
 
-  async function finalizarTicketComConclusao(interaction, conclusaoFinal) {
+  async function finalizarTicketComConclusao(interaction, conclusaoFinal, autoData = null) {
     // garante que não dá erro de "já respondeu"
-    const canal   = interaction.channel;
+    const canal   = interaction?.channel || autoData?.channel;
     const canalId = canal.id;
     try {
       const msg = { content: `📄 O ticket <#${canalId}> está sendo finalizado e será excluído em instantes.`, ephemeral: true };
-      if (!interaction.replied && !interaction.deferred) {
-        await interaction.reply(msg);
-      } else { await interaction.followUp(msg); }
+      if (interaction) {
+        if (!interaction.replied && !interaction.deferred) {
+          await interaction.reply(msg);
+        } else { await interaction.followUp(msg); }
+      }
     } catch {}
 
-    const guild   = interaction.guild;
-    const closer  = interaction.member;
+    const guild   = interaction?.guild || autoData?.guild;
+    const closer  = interaction?.member || null;
 
     // ✅ IMPORTANTE: se algo travar, a gente ainda vai deletar o canal
     let deleteAgendado = false;
@@ -1218,7 +1354,12 @@ if (interaction.isModalSubmit() && interaction.customId === 'modal_registro_lide
     // ✅ FECHADOR = quem clicou fechar (de verdade)
     // ✅ =======================
 
-    const CLOSED_BY_ID = closer?.id || interaction.user?.id;
+    const CLOSED_BY_ID = autoData?.isAuto ? "Bot" : (closer?.id || interaction?.user?.id);
+    
+    // Rótulo customizado para o log conforme Regra #5
+    let closedByLabel = `<@${CLOSED_BY_ID}>`;
+    if (autoData?.reasonType === "inatividade") closedByLabel = "Bot (inatividade)";
+    if (autoData?.reasonType === "saida") closedByLabel = "Bot (saída/banido)";
 
     async function isAtendenteValido(userId) {
       if (!userId) return false;
@@ -1563,7 +1704,7 @@ const src = String(raw).trim(); // mantém query
       .addFields(
         { name: "📝 TIPO DE TICKET", value: `\`${tipoTicket}\``, inline: false },
         { name: "📨 Ticket aberto por:",  value: idAberto ? `<@${idAberto}>` : "Desconhecido", inline: true },
-        { name: "✅ Ticket fechado por:", value: `<@${CLOSED_BY_ID}>`, inline: true },
+        { name: "✅ Ticket fechado por:", value: closedByLabel, inline: true },
         { name: "🎨 Creator que atendeu:", value: `<@${ATENDENTE_ID_FINAL}>`, inline: true },
         { name: "🆔 Canal do ticket:",    value: `\`${canalId}\``, inline: false },
         { name: "🕒 Abertura:",           value: `<t:${Math.floor(horarioAbertura.getTime() / 1000)}:f>`, inline: true },
