@@ -33,7 +33,11 @@ const REGISTER_ROLE_IDS = [
 
 // Quem pode GERENCIAR (Admin: !painelvendas, editar, remover)
 const ADMIN_USER_IDS = ["660311795327828008", "1262262852949905408"];
-const ADMIN_ROLE_IDS = ["1352408327983861844"]; // Resp Creators
+const ADMIN_ROLE_IDS = [
+  "1352408327983861844", // Resp Creators
+  "1262262852949905409", // Resp Influ
+  "1490389060802445463", // Resp Influ (Secundário)
+];
 
 // ================= PERSISTÊNCIA =================
 const __filename = fileURLToPath(import.meta.url);
