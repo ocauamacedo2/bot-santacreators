@@ -25,19 +25,6 @@ const CANAIS_SAIDA_POR_GUILD = {
   '1482114384208597174': process.env.CANAL_SAIDA_INFO_SC || CANAL_SAIDA,
 };
 
-// ✅ Nome personalizado por servidor
-const NOMES_SERVIDOR_POR_GUILD = {
-  '1262262852782129183': 'Servidor Principal',
-  '1482114384208597174': 'Servidor Informações SC',
-};
-
-// ✅ Link/convite do servidor por guild
-// Coloca aqui os convites reais dos servidores quando quiser
-const LINKS_SERVIDOR_POR_GUILD = {
-  '1262262852782129183': process.env.LINK_SERVIDOR_PRINCIPAL || 'Não configurado',
-  '1482114384208597174': process.env.LINK_SERVIDOR_INFO_SC || 'Não configurado',
-};
-
 // ✅ Ícone padrão caso o servidor não tenha icon
 const ICON_PADRAO_SERVIDOR =
   (process.env.SAIDA_DEFAULT_GUILD_ICON && process.env.SAIDA_DEFAULT_GUILD_ICON.trim()) ||
@@ -54,12 +41,13 @@ function truncate(value, max = 1024) {
   return text.length > max ? `${text.slice(0, max - 3)}...` : text;
 }
 
-function getGuildDisplayName(guild) {
-  return NOMES_SERVIDOR_POR_GUILD[guild.id] || guild.name || 'Servidor desconhecido';
-}
-
 function getGuildLink(guild) {
-  return LINKS_SERVIDOR_POR_GUILD[guild.id] || 'Não configurado';
+  // Tenta pegar a URL personalizada do servidor (vanity), se não tiver, olha o env, se não, retorna null
+  if (guild.vanityURLCode) return `https://discord.gg/${guild.vanityURLCode}`;
+  
+  const linkEnv = guild.id === '1262262852782129183' ? process.env.LINK_SERVIDOR_PRINCIPAL :
+                  guild.id === '1482114384208597174' ? process.env.LINK_SERVIDOR_INFO_SC : null;
+  return linkEnv || null;
 }
 
 function getGuildIcon(guild) {
@@ -141,7 +129,7 @@ export default {
         return;
       }
 
-      const guildName = getGuildDisplayName(guild);
+      const guildName = guild.name;
       const guildLink = getGuildLink(guild);
       const guildIcon = getGuildIcon(guild);
 
@@ -157,11 +145,16 @@ export default {
       const entrouEmCompleto = formatDiscordTimestamp(member.joinedAt, 'F');
       const contaCriadaEm = formatDiscordTimestamp(user?.createdAt, 'F');
       const contaCriadaRelativo = formatDiscordTimestamp(user?.createdAt, 'R');
+      
+      // Lista de cargos que o membro tinha (removendo o @everyone)
+      const roles = member.roles.cache
+        .filter(r => r.id !== guild.id)
+        .map(r => `<@&${r.id}>`)
+        .join(', ') || 'Nenhum cargo';
 
       const { acaoTexto, motivo, executor } = await detectarSaidaPorAuditLog(guild, user?.id);
 
       const descricaoBase = [
-        `O membro **${displayName}** ${acaoTexto}.`,
         `**Usuário:** ${user ? `<@${user.id}>` : '—'}`,
         `**ID do usuário:** \`${user?.id ?? '—'}\``,
       ].join('\n');
@@ -169,15 +162,14 @@ export default {
       const fields = [
         {
           name: '🏠 Servidor',
-          value: `**Nome:** ${truncate(guildName, 200)}\n**ID:** \`${guild.id}\``,
+          value: `**${truncate(guildName, 200)}**\n\`${guild.id}\``,
           inline: true,
         },
         {
           name: '🔗 Link do servidor',
-          value:
-            guildLink !== 'Não configurado'
-              ? `[Clique aqui para abrir](${guildLink})`
-              : 'Não configurado',
+          value: guildLink 
+            ? `Clique para entrar`
+            : '`Privado/Sem link`',
           inline: true,
         },
         {
@@ -200,6 +192,11 @@ export default {
           value: truncate(displayName, 256),
           inline: true,
         },
+        {
+          name: '🏷️ Cargos que possuía',
+          value: truncate(roles, 1024),
+          inline: false,
+        }
       ];
 
       if (executor) {
@@ -225,7 +222,7 @@ export default {
           iconURL: guildIcon || undefined,
           url: guildLink !== 'Não configurado' ? guildLink : undefined,
         })
-        .setTitle('🚪 Saída de membro')
+        .setTitle(`🚪 ${displayName} ${acaoTexto}`)
         .setDescription(descricaoBase)
         .addFields(fields)
         .setThumbnail(avatar)
