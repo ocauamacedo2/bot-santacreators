@@ -488,6 +488,13 @@ export async function vipRegistroHandleMessage(message, client) {
 
 export async function vipRegistroHandleInteraction(interaction, client) {
   try {
+    console.log("[VIP Registro DEBUG] interaction recebida:", {
+      customId: interaction.customId,
+      isButton: interaction.isButton?.(),
+      isModalSubmit: interaction.isModalSubmit?.(),
+      user: interaction.user?.id
+    });
+
     if (!interaction.guild || !interaction.customId?.includes('vip_')) return false;
     if (VIP_hasHandled(interaction)) return true;
 
@@ -583,6 +590,14 @@ export async function vipRegistroHandleInteraction(interaction, client) {
     if (interaction.isModalSubmit()) {
       if (interaction.customId === "vip_modal_submit") {
         await interaction.deferReply({ ephemeral: true }).catch(() => {});
+
+        console.log("[VIP Registro DEBUG] submit modal VIP:", {
+          nomeId: interaction.fields.getTextInputValue("vip_nome_id"),
+          beneficiarioDiscord: interaction.fields.getTextInputValue("vip_beneficiario_discord"),
+          tipo: interaction.fields.getTextInputValue("vip_tipo"),
+          cidade: interaction.fields.getTextInputValue("vip_cidade"),
+          motivo: interaction.fields.getTextInputValue("vip_motivo_registro")
+        });
 
         const res = await createVipRecordInternal(client, {
           registrarUser: interaction.user, 

@@ -545,7 +545,7 @@ export async function vipEventoHandleInteraction(i, client) {
 
     const isVipCitySelect = i.isStringSelectMenu?.() && i.customId === VIP_SEL_CITY_ID;
 
-    const isVipModalCriar = i.isModalSubmit?.() && i.customId.startsWith(VIP_MODAL_ID);
+    const isVipModalCriar = i.isModalSubmit?.() && i.customId.startsWith(`${VIP_MODAL_ID}:`);
     const isVipRegistroButtons = i.isButton?.() && [VIP_BTN_SOLICITADO_ID, VIP_BTN_PAGO_ID, VIP_BTN_REPROVAR_ID].includes(i.customId);
     const isVipModalReprovar = i.isModalSubmit?.() && i.customId?.startsWith(`${VIP_REPROVE_MODAL_ID}:`);
 
