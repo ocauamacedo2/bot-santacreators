@@ -386,7 +386,9 @@ async function createVipRecordInternal(client, {
 
   const tipoNormalizado = vipNormalize(tipoRaw);
   const decor = tipoNormalizado ? vipDecor[tipoNormalizado] : vipDecor.CUSTOM;
-  const cidadeNormalizada = normalizeCity(cidadeRaw) || "Cidade Santa";
+  const cidadeNormalizada = normalizeCity(cidadeRaw);
+
+  if (!cidadeNormalizada) return { error: true };
 
   const beneficiarioMention = extractedId ? `<@${extractedId}>` : (beneficiarioRaw || "Não informado");
   const fields = [
