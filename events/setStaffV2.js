@@ -63,6 +63,11 @@ const CARGOS_CIDADES = {
   real: "1423348501110198343",
   grande: "1418691103397253322",
   boomerang: "1423354185570586694",
+  district99: "1500677281864093746",
+  liberty99: "1500676325042688092",
+  prime: "1500677363917258822",
+  fronteira: "1500677363917258822",
+  goat: "1500669528479371268",
 };
 
 const CARGOS_STAFF = {
@@ -113,6 +118,11 @@ const ABREVIACOES_CIDADES = {
   real: "REAL",
   grande: "GRND",
   boomerang: "BMG",
+  district99: "D99",
+  liberty99: "L99",
+  prime: "PRM",
+  fronteira: "FRNT",
+  goat: "GOT",
 };
 
 // Níveis que puxam cargos extras ao aprovar
@@ -134,6 +144,11 @@ const LABELS_CIDADES = {
   real: "Real",
   grande: "Grande",
   boomerang: "Boomerang",
+  district99: "District 99",
+  liberty99: "Liberty 99",
+  prime: "Prime",
+  fronteira: "Fronteira",
+  goat: "Goat",
 };
 
 // =====================================================
