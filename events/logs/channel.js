@@ -445,15 +445,21 @@ export function setupChannelLog(client) {
         return;
       }
 
+      // Filtra os cargos para remover: 
+      // 1. Ignora o @everyone (guild.id)
+      // 2. Ignora o cargo de Cidadão (base)
+      // 3. Ignora cargos gerenciados (Bots/Booster)
+      // 4. Garante que o bot tenha hierarquia para editar (editable)
       const rolesToRemove = member.roles.cache.filter(
         (role) =>
+          role.id !== channel.guild.id &&
           role.id !== CIDADAO_ROLE_ID &&
-          role.name !== 'Server Booster' &&
+          !role.managed &&
           role.editable
-      );
+      ).map(r => r.id);
 
       try {
-        if (rolesToRemove.size) {
+        if (rolesToRemove.length > 0) {
           await member.roles.remove(rolesToRemove, 'Canal deletado sem permissão');
         }
 
