@@ -8,6 +8,7 @@ import {
   ButtonBuilder,
   ButtonStyle,
   PermissionsBitField,
+  MessageFlags,
 } from "discord.js";
 import fs from "node:fs";
 import path from "node:path";
@@ -25,7 +26,7 @@ const FIVEM_RANK_MARKER_TAG = "[FIVEM_RETENTION_STATUS]";
 // Caminhos dos arquivos
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const DATA_DIR = path.resolve(__dirname, "../../data");
+const DATA_DIR = path.resolve(__dirname, "../data");
 const HISTORY_FILE_PATH = path.join(DATA_DIR, "fivem_retention_status_history.json");
 
 
@@ -63,6 +64,7 @@ const FIVEM_CITIES = [
 
 const FIVEM_STATE = new Map(); // channelId -> { intervalId, messageId }
 const FIVEM_DEBUG = false;
+const DEFAULT_COLOR = 0x2b2d31;
 
 // ---------- UTILS ----------
 function cn2ParseColor(input, fallback = 0x2b2d31) {
@@ -295,9 +297,10 @@ function getWeekAverage(history, weekKey) {
 async function buildEmbeds(client, currentSnapshot, history) {
  const embeds = [];
  const mainEmbed = new EmbedBuilder()
-   .setColor(cn2ParseColor(process.env.BASE_COLORS, MENU_COLOR))
+    .setColor(cn2ParseColor(process.env.BASE_COLORS, DEFAULT_COLOR))
    .setTitle("📊 STATUS GERAL FIVEM • RETENÇÃO")
-   .setDescription("Comparativo automático entre cidades usando dados públicos do FiveM/CFX.");
+    .setDescription("Comparativo automático entre cidades usando dados públicos do FiveM/CFX.")
+    .setFooter({ text: `Atualização Automática • ${FIVEM_RANK_MARKER_TAG}` });
  const fields = [];
  let totalCurrentClients = 0;
  let totalCurrentMaxClients = 0;
@@ -348,7 +351,7 @@ async function buildEmbeds(client, currentSnapshot, history) {
  embeds.push(mainEmbed);
  // Ranking e Médias (segundo embed)
  const secondaryEmbed = new EmbedBuilder()
-   .setColor(cn2ParseColor(process.env.BASE_COLORS, MENU_COLOR));
+    .setColor(cn2ParseColor(process.env.BASE_COLORS, DEFAULT_COLOR));
  // Ranking Atual
  const rankingAtual = Object.values(currentSnapshot.cities)
    .filter(c => c.online)
@@ -391,7 +394,7 @@ async function buildEmbeds(client, currentSnapshot, history) {
    inline: false,
  });
  // Rodapé
- secondaryEmbed.setFooter({ text: `Fonte: FiveM/CFX público • Atualiza a cada 2 min • Hoje às ${currentSnapshot.spTime}` });
+  secondaryEmbed.setFooter({ text: `Fonte: FiveM/CFX público • Atualiza a cada 2 min • Hoje às ${currentSnapshot.spTime}` });
  embeds.push(secondaryEmbed);
  const row = new ActionRowBuilder().addComponents(
    new ButtonBuilder()
@@ -510,7 +513,7 @@ export async function fivemRetentionStatusOnReady(client) {
 export async function fivemRetentionStatusHandleInteraction(interaction, client) {
  try {
    if (!interaction.isButton?.() || interaction.customId !== "fivem_retention_force_refresh") return false;
-   await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
    const channel = interaction.channel;
    if (!channel?.isTextBased?.()) {
      await interaction.editReply("❌ Não consegui acessar o canal para atualizar o painel.");

@@ -882,7 +882,9 @@ const setupEventHandlers = () => {
     } catch (e) {}
     try {
       await fivemRetentionStatusOnReady(client);
-    } catch (e) {}
+    } catch (e) {
+      console.error("[FIVEM_RETENTION] Falha ao iniciar no Ready:", e);
+    }
     try {
       await setStaffV2OnReady(client);
     } catch (e) {}
