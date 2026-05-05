@@ -28,6 +28,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DATA_DIR = path.resolve(__dirname, "../data");
 const HISTORY_FILE_PATH = path.join(DATA_DIR, "fivem_retention_status_history.json");
+const PEAKS_FILE_PATH = path.join(DATA_DIR, "fivem_retention_daily_peaks.json");
 
 
 const FIVEM_CITIES = [
@@ -217,6 +218,138 @@ function getSnapshotDaysAgo(history, days) {
  const now = Date.now();
  const targetTimestamp = now - days * 24 * 60 * 60 * 1000;
  return findNearestSnapshot(history, targetTimestamp, FIVEM_COMPARISON_TOLERANCE_MS);
+}
+
+function loadPeaks() {
+ ensureDataDir();
+
+ try {
+   if (!fs.existsSync(PEAKS_FILE_PATH)) return {};
+
+   const raw = fs.readFileSync(PEAKS_FILE_PATH, "utf8");
+   const peaks = JSON.parse(raw);
+
+   return peaks && typeof peaks === "object" ? peaks : {};
+ } catch (e) {
+   console.error("[FIVEM_RETENTION] Arquivo de picos corrompido. Fazendo backup e iniciando novo.", e);
+
+   const backupPath = `${PEAKS_FILE_PATH}.corrupted.${Date.now()}.json`;
+
+   if (fs.existsSync(PEAKS_FILE_PATH)) {
+     fs.renameSync(PEAKS_FILE_PATH, backupPath);
+   }
+
+   return {};
+ }
+}
+
+function savePeaks(peaks) {
+ ensureDataDir();
+
+ try {
+   const tempPath = `${PEAKS_FILE_PATH}.tmp`;
+   fs.writeFileSync(tempPath, JSON.stringify(peaks, null, 2), "utf8");
+   fs.renameSync(tempPath, PEAKS_FILE_PATH);
+ } catch (e) {
+   console.error("[FIVEM_RETENTION] Erro ao salvar arquivo de picos:", e);
+ }
+}
+
+function getDateKeyDaysAgoFromSnapshot(currentSnapshot, days) {
+ const base = new Date(currentSnapshot.timestamp - days * 24 * 60 * 60 * 1000);
+ const parts = getSaoPauloParts(base);
+
+ return `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
+}
+
+function isPrimeTimeSnapshot(snapshot) {
+ const minutes = getMinutesOfDayFromSnapshot(snapshot);
+ return minutes >= 18 * 60 && minutes <= 20 * 60 + 30;
+}
+
+function ensurePeakDay(peaks, dateKey) {
+ if (!peaks[dateKey]) {
+   peaks[dateKey] = {
+     date: dateKey,
+     total: {
+       peak: 0,
+       peakTime: null,
+       primePeak: 0,
+       primePeakTime: null,
+     },
+     cities: {},
+   };
+ }
+
+ for (const cityConfig of FIVEM_CITIES) {
+   if (!peaks[dateKey].cities[cityConfig.key]) {
+     peaks[dateKey].cities[cityConfig.key] = {
+       name: cityConfig.name,
+       emoji: cityConfig.emoji,
+       peak: 0,
+       peakTime: null,
+       primePeak: 0,
+       primePeakTime: null,
+     };
+   }
+ }
+
+ return peaks[dateKey];
+}
+
+function updateDailyPeaks(currentSnapshot) {
+ const peaks = loadPeaks();
+ const dateKey = currentSnapshot.spDate;
+ const dayPeak = ensurePeakDay(peaks, dateKey);
+ const isPrime = isPrimeTimeSnapshot(currentSnapshot);
+
+ if ((currentSnapshot.totalClients || 0) > dayPeak.total.peak) {
+   dayPeak.total.peak = currentSnapshot.totalClients || 0;
+   dayPeak.total.peakTime = currentSnapshot.spTime;
+ }
+
+ if (isPrime && (currentSnapshot.totalClients || 0) > dayPeak.total.primePeak) {
+   dayPeak.total.primePeak = currentSnapshot.totalClients || 0;
+   dayPeak.total.primePeakTime = currentSnapshot.spTime;
+ }
+
+ for (const cityConfig of FIVEM_CITIES) {
+   const city = currentSnapshot.cities?.[cityConfig.key];
+   if (!city) continue;
+
+   const cityPeak = dayPeak.cities[cityConfig.key];
+
+   if ((city.clients || 0) > cityPeak.peak) {
+     cityPeak.peak = city.clients || 0;
+     cityPeak.peakTime = currentSnapshot.spTime;
+   }
+
+   if (isPrime && (city.clients || 0) > cityPeak.primePeak) {
+     cityPeak.primePeak = city.clients || 0;
+     cityPeak.primePeakTime = currentSnapshot.spTime;
+   }
+ }
+
+ const maxAge = Date.now() - FIVEM_HISTORY_MAX_DAYS * 24 * 60 * 60 * 1000;
+
+ for (const key of Object.keys(peaks)) {
+   const dateMs = new Date(`${key}T00:00:00-03:00`).getTime();
+   if (dateMs < maxAge) delete peaks[key];
+ }
+
+ savePeaks(peaks);
+
+ return peaks;
+}
+
+function formatPeakCompare(current, previous) {
+ if (!previous || previous <= 0) return "coletando histórico";
+ return formatDiff(calculateDiff(current || 0, previous));
+}
+
+function formatPeakValue(value, time) {
+ if (!value || value <= 0) return "`coletando histórico`";
+ return `\`${formatNumber(value)}\` às \`${time || "--:--"}\``;
 }
 
 // ---------- FIVEM API ----------
@@ -562,42 +695,56 @@ async function buildEmbeds(client, currentSnapshot, history) {
 
  embeds.push(rankingEmbed);
 
- const primeStats = getPrimeTimeStats(history, currentSnapshot);
+ const peaks = loadPeaks();
+
+ const todayKey = currentSnapshot.spDate;
+ const yesterdayKey = getDateKeyDaysAgoFromSnapshot(currentSnapshot, 1);
+ const lastWeekKeyForPeaks = getDateKeyDaysAgoFromSnapshot(currentSnapshot, 7);
+
+ const todayPeaks = peaks[todayKey];
+ const yesterdayPeaks = peaks[yesterdayKey];
+ const lastWeekPeaks = peaks[lastWeekKeyForPeaks];
 
  const primeEmbed = new EmbedBuilder()
    .setColor(cn2ParseColor(process.env.BASE_COLORS, DEFAULT_COLOR))
-   .setTitle("🔥 PICO DO HORÁRIO NOBRE")
-   .setDescription("Métricas coletadas hoje entre **18:00 e 20:30**.");
+   .setTitle("🔥 PICOS E HORÁRIO NOBRE")
+   .setDescription(
+     `Picos salvos automaticamente por dia.\n` +
+     `⏰ Horário nobre monitorado: **18:00 até 20:30**`
+   );
 
- if (!primeStats.started) {
+ primeEmbed.addFields({
+   name: "🌎 Total geral",
+   value:
+     `🏆 **Maior pico de hoje:** ${formatPeakValue(todayPeaks?.total?.peak, todayPeaks?.total?.peakTime)}\n` +
+     `🕘 **Pico de ontem:** ${formatPeakValue(yesterdayPeaks?.total?.peak, yesterdayPeaks?.total?.peakTime)}\n` +
+     `📊 **Comparação com ontem:** ${formatPeakCompare(todayPeaks?.total?.peak, yesterdayPeaks?.total?.peak)}\n` +
+     `📅 **Pico da semana passada:** ${formatPeakValue(lastWeekPeaks?.total?.peak, lastWeekPeaks?.total?.peakTime)}\n` +
+     `📈 **Comparação semanal:** ${formatPeakCompare(todayPeaks?.total?.peak, lastWeekPeaks?.total?.peak)}\n` +
+     `🔥 **Pico no horário nobre hoje:** ${formatPeakValue(todayPeaks?.total?.primePeak, todayPeaks?.total?.primePeakTime)}`,
+   inline: false,
+ });
+
+ for (const cityConfig of FIVEM_CITIES) {
+   const todayCityPeak = todayPeaks?.cities?.[cityConfig.key];
+   const yesterdayCityPeak = yesterdayPeaks?.cities?.[cityConfig.key];
+   const lastWeekCityPeak = lastWeekPeaks?.cities?.[cityConfig.key];
+
    primeEmbed.addFields({
-     name: "⏳ Aguardando horário nobre",
-     value: "As métricas de pico começam a ser calculadas quando chegar entre **18:00 e 20:30**.",
-     inline: false,
-   });
- } else {
-   primeEmbed.addFields({
-     name: "🌎 Total geral no horário nobre",
+     name: `${cityConfig.emoji} ${cityConfig.name}`,
      value:
-       `${formatPeakLine("Total geral", primeStats.total.peak, primeStats.total.peakTime, primeStats.total.average)}\n` +
-       `📊 **Snapshots analisados:** \`${primeStats.snapshotCount}\``,
+       `🏆 **Pico hoje:** ${formatPeakValue(todayCityPeak?.peak, todayCityPeak?.peakTime)}\n` +
+       `🕘 **Ontem:** ${formatPeakValue(yesterdayCityPeak?.peak, yesterdayCityPeak?.peakTime)}\n` +
+       `📊 **Mudança desde ontem:** ${formatPeakCompare(todayCityPeak?.peak, yesterdayCityPeak?.peak)}\n` +
+       `📅 **Semana passada:** ${formatPeakValue(lastWeekCityPeak?.peak, lastWeekCityPeak?.peakTime)}\n` +
+       `📈 **Mudança semanal:** ${formatPeakCompare(todayCityPeak?.peak, lastWeekCityPeak?.peak)}\n` +
+       `🔥 **Pico 18:00–20:30:** ${formatPeakValue(todayCityPeak?.primePeak, todayCityPeak?.primePeakTime)}`,
      inline: false,
    });
-
-   for (const cityConfig of FIVEM_CITIES) {
-     const cityPeak = primeStats.cities[cityConfig.key];
-     if (!cityPeak) continue;
-
-     primeEmbed.addFields({
-       name: `${cityConfig.emoji} ${cityPeak.name}`,
-       value: formatPeakLine("Cidade", cityPeak.peak, cityPeak.peakTime, cityPeak.average),
-       inline: false,
-     });
-   }
  }
 
  primeEmbed.setFooter({
-   text: `Horário nobre: 18:00 até 20:30 • Hoje às ${currentSnapshot.spTime}`,
+   text: `Picos salvos em data/fivem_retention_daily_peaks.json • Hoje às ${currentSnapshot.spTime}`,
  });
 
  embeds.push(primeEmbed);
@@ -647,6 +794,7 @@ async function ensureStickyMessage(channel) {
    const history = loadHistory();
    const currentSnapshot = await createCurrentSnapshot();
    addSnapshot(history, currentSnapshot);
+   updateDailyPeaks(currentSnapshot);
    const { embeds, row } = await buildEmbeds(channel.client, currentSnapshot, history);
    try {
      msg = await channel.send({ embeds, components: [row] });
@@ -677,6 +825,7 @@ async function editPanel(channel, options = {}) {
  const history = loadHistory();
  const currentSnapshot = await createCurrentSnapshot();
  addSnapshot(history, currentSnapshot);
+ updateDailyPeaks(currentSnapshot);
  const { embeds, row } = await buildEmbeds(channel.client, currentSnapshot, history);
  try {
    const edited = await sticky.edit({ embeds, components: [row] });
