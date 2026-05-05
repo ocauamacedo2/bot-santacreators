@@ -481,12 +481,20 @@ async function editPanel(channel, options = {}) {
 export async function fivemRetentionStatusOnReady(client) {
  try {
    const channel = await client.channels.fetch(FIVEM_PANEL_CHANNEL_ID).catch(() => null);
-   if (!channel) return console.error("[FIVEM_RETENTION] Canal fixo não encontrado:", FIVEM_PANEL_CHANNEL_ID);
-   if (typeof channel.isTextBased !== "function" || !channel.isTextBased()) {
-     return console.error("[FIVEM_RETENTION] Canal fixo não é textual");
+   if (!channel) {
+     console.error("[FIVEM_RETENTION] Canal fixo não encontrado:", FIVEM_PANEL_CHANNEL_ID);
+     return;
    }
+   if (typeof channel.isTextBased !== "function" || !channel.isTextBased()) {
+     console.error("[FIVEM_RETENTION] Canal fixo não é textual:", FIVEM_PANEL_CHANNEL_ID);
+     return;
+   }
+
    const edited = await editPanel(channel);
-   if (!edited) return;
+   if (!edited) {
+     console.error("[FIVEM_RETENTION] Falha ao editar/criar painel. Verifique as permissões do bot no canal.", FIVEM_PANEL_CHANNEL_ID);
+     return;
+   }
    const existing = FIVEM_STATE.get(channel.id);
    if (existing?.intervalId) clearInterval(existing.intervalId);
    let intervalId = null;
