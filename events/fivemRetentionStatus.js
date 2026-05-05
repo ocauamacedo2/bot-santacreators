@@ -264,7 +264,7 @@ function getDateKeyDaysAgoFromSnapshot(currentSnapshot, days) {
 
 function isPrimeTimeSnapshot(snapshot) {
  const minutes = getMinutesOfDayFromSnapshot(snapshot);
- return minutes >= 18 * 60 && minutes <= 20 * 60 + 30;
+ return minutes >= 18 * 60 && minutes <= 20 * 60;
 }
 
 function ensurePeakDay(peaks, dateKey) {
@@ -504,6 +504,27 @@ function formatPeakLine(label, peak, peakTime, average) {
  return `**${label}:** pico de \`${formatNumber(peak)}\` às \`${peakTime || "--:--"}\` • média \`${formatNumber(Number(average.toFixed(0)))}\``;
 }
 
+function formatCompareCompact(current, previous) {
+ if (!previous || previous <= 0) return "⚪ `(sem base)`";
+
+ const diff = current - previous;
+ const pct = (diff / previous) * 100;
+
+ if (diff > 0) return `👍 \`(+${formatNumber(diff)}) +${pct.toFixed(1)}%\``;
+ if (diff < 0) return `🔻 \`(${formatNumber(diff)}) ${pct.toFixed(1)}%\``;
+
+ return `➖ \`(0) 0.0%\``;
+}
+
+function formatPanelLine(label, current, previous) {
+ return `**BR ${label.padEnd(8, " ")}** : \`${formatNumber(current)} / ${formatNumber(previous || 0)}\` ${formatCompareCompact(current, previous)}`;
+}
+
+function formatOnlyCurrentLine(label, current, max, pct, index) {
+ const medal = index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : `${index + 1}.`;
+ return `${medal} **BR ${label.padEnd(8, " ")}** : \`${formatNumber(current)}/${formatNumber(max)}\` **${pct}%** 🔴`;
+}
+
 // ---------- EMBED BUILDER ----------
 async function buildEmbeds(client, currentSnapshot, history) {
  const embeds = [];
@@ -511,111 +532,93 @@ async function buildEmbeds(client, currentSnapshot, history) {
  const sevenDaysAgoSnapshot = getSnapshotDaysAgo(history, 7);
  const yesterdaySnapshot = getSnapshotDaysAgo(history, 1);
 
- const hasWeekBase = !!sevenDaysAgoSnapshot;
- const hasYesterdayBase = !!yesterdaySnapshot;
-
- const baseText = (value, hasBase) => hasBase ? formatNumber(value || 0) : "coletando";
- const diffText = (current, previous, hasBase) => hasBase ? formatDiff(calculateDiff(current, previous || 0)) : "coletando";
-
  let totalCurrentClients = 0;
  let totalCurrentMaxClients = 0;
- const cityComparisonData = {};
 
- for (const cityConfig of FIVEM_CITIES) {
-   const city = currentSnapshot.cities[cityConfig.key];
-   if (!city) continue;
+ const cityData = FIVEM_CITIES
+   .map((cityConfig) => {
+     const city = currentSnapshot.cities[cityConfig.key];
+     if (!city) return null;
 
-   totalCurrentClients += city.clients;
-   totalCurrentMaxClients += city.maxClients;
+     totalCurrentClients += city.clients;
+     totalCurrentMaxClients += city.maxClients;
 
-   const sevenDaysAgoCity = sevenDaysAgoSnapshot?.cities?.[cityConfig.key];
-   const yesterdayCity = yesterdaySnapshot?.cities?.[cityConfig.key];
+     return {
+       config: cityConfig,
+       current: city,
+       yesterday: yesterdaySnapshot?.cities?.[cityConfig.key]?.clients || 0,
+       week: sevenDaysAgoSnapshot?.cities?.[cityConfig.key]?.clients || 0,
+       usage: city.maxClients > 0 ? ((city.clients / city.maxClients) * 100).toFixed(2) : "0.00",
+     };
+   })
+   .filter(Boolean);
 
-   cityComparisonData[cityConfig.key] = {
-     current: city,
-     sevenDaysAgoClients: sevenDaysAgoCity?.clients || 0,
-     yesterdayClients: yesterdayCity?.clients || 0,
-   };
- }
+ const sortedCurrent = [...cityData].sort((a, b) => b.current.clients - a.current.clients);
 
  const capacityPercent = totalCurrentMaxClients > 0
    ? ((totalCurrentClients / totalCurrentMaxClients) * 100).toFixed(2)
    : "0.00";
 
- const summaryLines = FIVEM_CITIES
-   .map((cityConfig, index) => {
-     const city = cityComparisonData[cityConfig.key]?.current;
-     if (!city) return null;
-
-     const usage = city.maxClients > 0 ? ((city.clients / city.maxClients) * 100).toFixed(2) : "0.00";
-     const medal = index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : `${index + 1}.`;
-
-     return `${medal} **BR ${city.name}** : \`${formatNumber(city.clients)}/${formatNumber(city.maxClients)}\` **${usage}%** 🔴`;
-   })
-   .filter(Boolean);
-
  const summaryEmbed = new EmbedBuilder()
    .setColor(cn2ParseColor(process.env.BASE_COLORS, DEFAULT_COLOR))
-   .setTitle("Retenção Hoje")
+   .setTitle("📊 STATUS GERAL FIVEM")
    .setDescription(
-     `${summaryLines.join("\n\n")}\n\n` +
-     `**Média geral : ${capacityPercent}%** 🔴`
+     `LISTA FIVEM - Players agora\n\n` +
+     sortedCurrent
+       .map((item, index) => {
+         return formatOnlyCurrentLine(
+           item.current.name,
+           item.current.clients,
+           item.current.maxClients,
+           item.usage,
+           index
+         );
+       })
+       .join("\n\n") +
+     `\n\n**Total de Players** : \`${formatNumber(totalCurrentClients)} / ${formatNumber(totalCurrentMaxClients)}\`\n` +
+     `**Média geral** : **${capacityPercent}%** 🔴`
    )
-   .setFooter({ text: `Fonte: FiveM/CFX público • Atualizando a cada 2 minutos • Hoje às ${currentSnapshot.spTime} • ${FIVEM_RANK_MARKER_TAG}` });
+   .setFooter({
+     text: `Fonte: FiveM/CFX público • Atualizando a cada 2 minutos • Hoje às ${currentSnapshot.spTime} • ${FIVEM_RANK_MARKER_TAG}`,
+   });
 
  embeds.push(summaryEmbed);
 
- const sevenDaysAgoTotalClients = sevenDaysAgoSnapshot?.totalClients || 0;
  const yesterdayTotalClients = yesterdaySnapshot?.totalClients || 0;
 
- const comparisonLines = FIVEM_CITIES
-   .map((cityConfig) => {
-     const item = cityComparisonData[cityConfig.key];
-     if (!item?.current) return null;
-
-     return (
-       `**BR ${item.current.name}**\n` +
-       `Agora: \`${formatNumber(item.current.clients)}\`\n` +
-       `Ontem: \`${baseText(item.yesterdayClients, hasYesterdayBase)}\` • ${diffText(item.current.clients, item.yesterdayClients, hasYesterdayBase)}\n` +
-       `7 dias atrás: \`${baseText(item.sevenDaysAgoClients, hasWeekBase)}\` • ${diffText(item.current.clients, item.sevenDaysAgoClients, hasWeekBase)}`
-     );
-   })
-   .filter(Boolean);
-
- const comparisonEmbed = new EmbedBuilder()
+ const yesterdayEmbed = new EmbedBuilder()
    .setColor(cn2ParseColor(process.env.BASE_COLORS, DEFAULT_COLOR))
-   .setTitle("Comparativo")
+   .setTitle("📉 COMPARAÇÃO COM ONTEM")
    .setDescription(
-     `${comparisonLines.join("\n\n")}\n\n` +
-     `**Total geral**\n` +
-     `Agora: \`${formatNumber(totalCurrentClients)}\`\n` +
-     `Ontem: \`${baseText(yesterdayTotalClients, hasYesterdayBase)}\` • ${diffText(totalCurrentClients, yesterdayTotalClients, hasYesterdayBase)}\n` +
-     `7 dias atrás: \`${baseText(sevenDaysAgoTotalClients, hasWeekBase)}\` • ${diffText(totalCurrentClients, sevenDaysAgoTotalClients, hasWeekBase)}`
-   );
+     `Players agora / Players ontem no mesmo horário\n\n` +
+     cityData
+       .map((item) => formatPanelLine(item.current.name, item.current.clients, item.yesterday))
+       .join("\n\n") +
+     `\n\n**Total de Players** : \`${formatNumber(totalCurrentClients)} / ${formatNumber(yesterdayTotalClients)}\` ${formatCompareCompact(totalCurrentClients, yesterdayTotalClients)}`
+   )
+   .setFooter({
+     text: `Comparação diária • Hoje às ${currentSnapshot.spTime}`,
+   });
 
- embeds.push(comparisonEmbed);
+ embeds.push(yesterdayEmbed);
 
- const rankingAtual = Object.values(currentSnapshot.cities)
-   .filter((c) => c.online)
-   .sort((a, b) => b.clients - a.clients)
-   .map((c, i) => `${i + 1}. **BR ${c.name}** : \`${formatNumber(c.clients)} players\``);
+ const sevenDaysAgoTotalClients = sevenDaysAgoSnapshot?.totalClients || 0;
 
- const currentWeekKey = getWeekKeySP(new Date(currentSnapshot.timestamp));
- const currentWeekAvg = getWeekAverage(history, currentWeekKey);
-
- const lastWeekKey = getWeekKeySP(new Date(currentSnapshot.timestamp - 7 * 24 * 60 * 60 * 1000));
- const lastWeekAvg = getWeekAverage(history, lastWeekKey);
-
- const rankingEmbed = new EmbedBuilder()
+ const weekEmbed = new EmbedBuilder()
    .setColor(cn2ParseColor(process.env.BASE_COLORS, DEFAULT_COLOR))
-   .setTitle("Ranking e Média")
+   .setTitle("📅 COMPARAÇÃO COM 7 DIAS ATRÁS")
    .setDescription(
-     `${rankingAtual.join("\n")}\n\n` +
-     `**Média desta semana:** \`${currentWeekAvg.count > 0 ? formatNumber(Number(currentWeekAvg.average.toFixed(0))) : "coletando"}\`\n` +
-     `**Média semana passada:** \`${lastWeekAvg.count > 0 ? formatNumber(Number(lastWeekAvg.average.toFixed(0))) : "coletando"}\``
-   );
+     `Players agora / Players no mesmo horário há 7 dias\n\n` +
+     cityData
+       .map((item) => formatPanelLine(item.current.name, item.current.clients, item.week))
+       .join("\n\n") +
+     `\n\n**Total de Players** : \`${formatNumber(totalCurrentClients)} / ${formatNumber(sevenDaysAgoTotalClients)}\` ${formatCompareCompact(totalCurrentClients, sevenDaysAgoTotalClients)}`
+   )
+   .setFooter({
+     text: `Comparação semanal • Hoje às ${currentSnapshot.spTime}`,
+   });
 
- embeds.push(rankingEmbed);
+ embeds.push(weekEmbed);
 
  const peaks = loadPeaks();
 
@@ -627,36 +630,77 @@ async function buildEmbeds(client, currentSnapshot, history) {
  const yesterdayPeaks = peaks[yesterdayKey];
  const lastWeekPeaks = peaks[lastWeekKeyForPeaks];
 
- const peakLines = FIVEM_CITIES
+ const peakCityData = FIVEM_CITIES
    .map((cityConfig) => {
      const todayCityPeak = todayPeaks?.cities?.[cityConfig.key];
      const yesterdayCityPeak = yesterdayPeaks?.cities?.[cityConfig.key];
      const lastWeekCityPeak = lastWeekPeaks?.cities?.[cityConfig.key];
 
-     return (
-       `**BR ${cityConfig.name}**\n` +
-       `Hoje: ${formatPeakValue(todayCityPeak?.peak, todayCityPeak?.peakTime)}\n` +
-       `Ontem: ${formatPeakValue(yesterdayCityPeak?.peak, yesterdayCityPeak?.peakTime)}\n` +
-       `Semana passada: ${formatPeakValue(lastWeekCityPeak?.peak, lastWeekCityPeak?.peakTime)}\n` +
-       `Horário nobre: ${formatPeakValue(todayCityPeak?.primePeak, todayCityPeak?.primePeakTime)}`
-     );
+     return {
+       name: cityConfig.name,
+       todayPeak: todayCityPeak?.peak || 0,
+       todayPeakTime: todayCityPeak?.peakTime || "--:--",
+       yesterdayPeak: yesterdayCityPeak?.peak || 0,
+       weekPeak: lastWeekCityPeak?.peak || 0,
+       primePeak: todayCityPeak?.primePeak || 0,
+       primePeakTime: todayCityPeak?.primePeakTime || "--:--",
+     };
    })
-   .join("\n\n");
+   .sort((a, b) => b.primePeak - a.primePeak);
 
- const peakEmbed = new EmbedBuilder()
+ const primeEmbed = new EmbedBuilder()
    .setColor(cn2ParseColor(process.env.BASE_COLORS, DEFAULT_COLOR))
-   .setTitle("Picos do Dia")
+   .setTitle("🔥 PICOS DO HORÁRIO NOBRE")
    .setDescription(
-     `**Total geral**\n` +
-     `Hoje: ${formatPeakValue(todayPeaks?.total?.peak, todayPeaks?.total?.peakTime)}\n` +
-     `Ontem: ${formatPeakValue(yesterdayPeaks?.total?.peak, yesterdayPeaks?.total?.peakTime)}\n` +
-     `Semana passada: ${formatPeakValue(lastWeekPeaks?.total?.peak, lastWeekPeaks?.total?.peakTime)}\n` +
-     `Horário nobre: ${formatPeakValue(todayPeaks?.total?.primePeak, todayPeaks?.total?.primePeakTime)}\n\n` +
-     peakLines
-   )
-   .setFooter({ text: `Horário nobre: 18:00 até 20:30 • Hoje às ${currentSnapshot.spTime}` });
+     `Maior pico registrado entre **18:00 e 20:00**\n\n` +
+     peakCityData
+       .map((item, index) => {
+         const medal = index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : `${index + 1}.`;
 
- embeds.push(peakEmbed);
+         return (
+           `${medal} **BR ${item.name.padEnd(8, " ")}** : \`${formatNumber(item.primePeak)}\` às \`${item.primePeakTime}\`\n` +
+           `↳ Ontem: \`${formatNumber(item.yesterdayPeak)}\` ${formatCompareCompact(item.primePeak, item.yesterdayPeak)}\n` +
+           `↳ 7 dias: \`${formatNumber(item.weekPeak)}\` ${formatCompareCompact(item.primePeak, item.weekPeak)}`
+         );
+       })
+       .join("\n\n")
+   )
+   .setFooter({
+     text: `Picos salvos automaticamente • Horário nobre 18:00 até 20:00 • Hoje às ${currentSnapshot.spTime}`,
+   });
+
+ embeds.push(primeEmbed);
+
+ const allPeaksRanking = FIVEM_CITIES
+   .map((cityConfig) => {
+     const todayCityPeak = todayPeaks?.cities?.[cityConfig.key];
+
+     return {
+       name: cityConfig.name,
+       peak: todayCityPeak?.peak || 0,
+       time: todayCityPeak?.peakTime || "--:--",
+     };
+   })
+   .sort((a, b) => b.peak - a.peak);
+
+ const peaksRankingEmbed = new EmbedBuilder()
+   .setColor(cn2ParseColor(process.env.BASE_COLORS, DEFAULT_COLOR))
+   .setTitle("🏆 MAIORES PICOS DO DIA")
+   .setDescription(
+     `Ranking geral dos maiores picos de hoje\n\n` +
+     allPeaksRanking
+       .map((item, index) => {
+         const medal = index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : `${index + 1}.`;
+         return `${medal} **BR ${item.name.padEnd(8, " ")}** : \`${formatNumber(item.peak)}\` às \`${item.time}\``;
+       })
+       .join("\n\n") +
+     `\n\n**Total geral** : ${formatPeakValue(todayPeaks?.total?.peak, todayPeaks?.total?.peakTime)}`
+   )
+   .setFooter({
+     text: `Pico diário • Hoje às ${currentSnapshot.spTime}`,
+   });
+
+ embeds.push(peaksRankingEmbed);
 
  const row = new ActionRowBuilder().addComponents(
    new ButtonBuilder()
@@ -664,7 +708,7 @@ async function buildEmbeds(client, currentSnapshot, history) {
      .setLabel("🔄 Forçar atualização")
      .setStyle(ButtonStyle.Primary)
  );
-
+// TESTE MACEDO 123
  return { embeds, row };
 }
 // ---------- STICKY MESSAGE ----------
