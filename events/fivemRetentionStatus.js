@@ -11,6 +11,7 @@ import {
 } from "discord.js";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 // ⚙️ CONFIG
 const FIVEM_PANEL_CHANNEL_ID = "1501321157259956244";
@@ -22,7 +23,9 @@ const FIVEM_TIMEZONE = "America/Sao_Paulo";
 const FIVEM_RANK_MARKER_TAG = "[FIVEM_RETENTION_STATUS]";
 
 // Caminhos dos arquivos
-const DATA_DIR = path.resolve(__dirname, "../../data"); // Assumindo que 'events' está em 'application/events'
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const DATA_DIR = path.resolve(__dirname, "../../data");
 const HISTORY_FILE_PATH = path.join(DATA_DIR, "fivem_retention_status_history.json");
 
 
