@@ -293,6 +293,84 @@ function getWeekAverage(history, weekKey) {
  const total = weekSnapshots.reduce((sum, s) => sum + s.totalClients, 0);
  return { average: total / weekSnapshots.length, count: weekSnapshots.length };
 }
+
+function getMinutesOfDayFromSnapshot(snapshot) {
+ const hour = Number(snapshot?.hour ?? 0);
+ const minute = Number(snapshot?.minute ?? 0);
+ return hour * 60 + minute;
+}
+
+function getPrimeTimeStats(history, currentSnapshot) {
+ const PRIME_START = 18 * 60;
+ const PRIME_END = 20 * 60 + 30;
+
+ const todayKey = currentSnapshot.spDate;
+
+ const snapshots = [...history, currentSnapshot].filter((snapshot) => {
+   if (!snapshot || snapshot.spDate !== todayKey) return false;
+   const minutes = getMinutesOfDayFromSnapshot(snapshot);
+   return minutes >= PRIME_START && minutes <= PRIME_END;
+ });
+
+ const stats = {
+   started: snapshots.length > 0,
+   snapshotCount: snapshots.length,
+   total: {
+     peak: 0,
+     peakTime: null,
+     average: 0,
+   },
+   cities: {},
+ };
+
+ for (const cityConfig of FIVEM_CITIES) {
+   stats.cities[cityConfig.key] = {
+     name: cityConfig.name,
+     emoji: cityConfig.emoji,
+     peak: 0,
+     peakTime: null,
+     average: 0,
+   };
+ }
+
+ if (snapshots.length === 0) return stats;
+
+ let totalSum = 0;
+
+ for (const snapshot of snapshots) {
+   totalSum += snapshot.totalClients || 0;
+
+   if ((snapshot.totalClients || 0) > stats.total.peak) {
+     stats.total.peak = snapshot.totalClients || 0;
+     stats.total.peakTime = snapshot.spTime || null;
+   }
+
+   for (const cityConfig of FIVEM_CITIES) {
+     const city = snapshot.cities?.[cityConfig.key];
+     if (!city) continue;
+
+     stats.cities[cityConfig.key].average += city.clients || 0;
+
+     if ((city.clients || 0) > stats.cities[cityConfig.key].peak) {
+       stats.cities[cityConfig.key].peak = city.clients || 0;
+       stats.cities[cityConfig.key].peakTime = snapshot.spTime || null;
+     }
+   }
+ }
+
+ stats.total.average = totalSum / snapshots.length;
+
+ for (const cityConfig of FIVEM_CITIES) {
+   stats.cities[cityConfig.key].average = stats.cities[cityConfig.key].average / snapshots.length;
+ }
+
+ return stats;
+}
+
+function formatPeakLine(label, peak, peakTime, average) {
+ return `**${label}:** pico de \`${formatNumber(peak)}\` às \`${peakTime || "--:--"}\` • média \`${formatNumber(Number(average.toFixed(0)))}\``;
+}
+
 // ---------- EMBED BUILDER ----------
 async function buildEmbeds(client, currentSnapshot, history) {
  const embeds = [];
@@ -312,15 +390,6 @@ async function buildEmbeds(client, currentSnapshot, history) {
    if (!hasBase) return "coletando histórico";
    return formatDiff(calculateDiff(current, previous || 0));
  };
-
- const mainEmbed = new EmbedBuilder()
-   .setColor(cn2ParseColor(process.env.BASE_COLORS, DEFAULT_COLOR))
-   .setTitle("📊 STATUS GERAL FIVEM")
-   .setDescription(
-     `Comparativo automático entre cidades usando dados públicos do FiveM/CFX.\n` +
-     `🕒 Atualizado às **${currentSnapshot.spTime}** • 🔄 Atualiza a cada **2 minutos**`
-   )
-   .setFooter({ text: `Fonte: FiveM/CFX público • ${FIVEM_RANK_MARKER_TAG}` });
 
  let totalCurrentClients = 0;
  let totalCurrentMaxClients = 0;
@@ -342,37 +411,85 @@ async function buildEmbeds(client, currentSnapshot, history) {
    const diffSevenDays = hasWeekBase ? calculateDiff(city.clients, sevenDaysAgoClients) : null;
    const diffYesterday = hasYesterdayBase ? calculateDiff(city.clients, yesterdayClients) : null;
 
-   cityComparisonData[cityConfig.key] = { diffSevenDays, diffYesterday };
-
-   mainEmbed.addFields({
-     name: `${cityConfig.emoji} ${city.name} ${city.online ? "🟢" : "🔴"}`,
-     value:
-       `👥 **Agora:** \`${formatNumber(city.clients)} / ${formatNumber(city.maxClients)}\`\n` +
-       `📅 **Mesmo horário semana passada:** \`${formatBaseValue(sevenDaysAgoClients, hasWeekBase)}\`\n` +
-       `📈 **Mudança semanal:** ${formatCleanDiff(city.clients, sevenDaysAgoClients, hasWeekBase)}\n` +
-       `🕘 **Mesmo horário ontem:** \`${formatBaseValue(yesterdayClients, hasYesterdayBase)}\`\n` +
-       `📊 **Mudança diária:** ${formatCleanDiff(city.clients, yesterdayClients, hasYesterdayBase)}`,
-     inline: false,
-   });
+   cityComparisonData[cityConfig.key] = {
+     current: city,
+     sevenDaysAgoClients,
+     yesterdayClients,
+     diffSevenDays,
+     diffYesterday,
+   };
  }
 
  const sevenDaysAgoTotalClients = sevenDaysAgoSnapshot?.totalClients || 0;
  const yesterdayTotalClients = yesterdaySnapshot?.totalClients || 0;
 
- mainEmbed.addFields({
-   name: "🌎 TOTAL GERAL",
+ const summaryEmbed = new EmbedBuilder()
+   .setColor(cn2ParseColor(process.env.BASE_COLORS, DEFAULT_COLOR))
+   .setTitle("📊 STATUS GERAL FIVEM")
+   .setDescription(
+     `Painel automático usando dados públicos do FiveM/CFX.\n` +
+     `🕒 Atualizado às **${currentSnapshot.spTime}** • 🔄 Atualiza a cada **2 minutos**`
+   )
+   .addFields({
+     name: "🌎 Total geral agora",
+     value:
+       `👥 **Players online:** \`${formatNumber(totalCurrentClients)} / ${formatNumber(totalCurrentMaxClients)}\`\n` +
+       `🏙️ **Cidades monitoradas:** \`${FIVEM_CITIES.length}\`\n` +
+       `📅 **Dia:** \`${currentSnapshot.spWeekday}\``,
+     inline: false,
+   })
+   .setFooter({ text: `Fonte: FiveM/CFX público • ${FIVEM_RANK_MARKER_TAG}` });
+
+ for (const cityConfig of FIVEM_CITIES) {
+   const city = cityComparisonData[cityConfig.key]?.current;
+   if (!city) continue;
+
+   summaryEmbed.addFields({
+     name: `${cityConfig.emoji} ${city.name} ${city.online ? "🟢 Online" : "🔴 Offline"}`,
+     value:
+       `👥 **Agora:** \`${formatNumber(city.clients)} / ${formatNumber(city.maxClients)}\`\n` +
+       `📌 **Uso da capacidade:** \`${city.maxClients > 0 ? ((city.clients / city.maxClients) * 100).toFixed(1) : "0.0"}%\``,
+     inline: true,
+   });
+ }
+
+ embeds.push(summaryEmbed);
+
+ const comparisonEmbed = new EmbedBuilder()
+   .setColor(cn2ParseColor(process.env.BASE_COLORS, DEFAULT_COLOR))
+   .setTitle("📈 COMPARAÇÕES")
+   .setDescription("Comparação com o mesmo horário de ontem e da semana passada.");
+
+ for (const cityConfig of FIVEM_CITIES) {
+   const item = cityComparisonData[cityConfig.key];
+   if (!item?.current) continue;
+
+   comparisonEmbed.addFields({
+     name: `${cityConfig.emoji} ${item.current.name}`,
+     value:
+       `👥 **Agora:** \`${formatNumber(item.current.clients)}\`\n` +
+       `🕘 **Ontem no mesmo horário:** \`${formatBaseValue(item.yesterdayClients, hasYesterdayBase)}\`\n` +
+       `📊 **Mudança desde ontem:** ${formatCleanDiff(item.current.clients, item.yesterdayClients, hasYesterdayBase)}\n` +
+       `📅 **Semana passada no mesmo horário:** \`${formatBaseValue(item.sevenDaysAgoClients, hasWeekBase)}\`\n` +
+       `📈 **Mudança desde semana passada:** ${formatCleanDiff(item.current.clients, item.sevenDaysAgoClients, hasWeekBase)}`,
+     inline: false,
+   });
+ }
+
+ comparisonEmbed.addFields({
+   name: "🌎 Total geral",
    value:
-     `👥 **Agora:** \`${formatNumber(totalCurrentClients)} / ${formatNumber(totalCurrentMaxClients)}\`\n` +
-     `📅 **Mesmo horário semana passada:** \`${formatBaseValue(sevenDaysAgoTotalClients, hasWeekBase)}\`\n` +
-     `📈 **Mudança semanal:** ${formatCleanDiff(totalCurrentClients, sevenDaysAgoTotalClients, hasWeekBase)}\n` +
-     `🕘 **Mesmo horário ontem:** \`${formatBaseValue(yesterdayTotalClients, hasYesterdayBase)}\`\n` +
-     `📊 **Mudança diária:** ${formatCleanDiff(totalCurrentClients, yesterdayTotalClients, hasYesterdayBase)}`,
+     `👥 **Agora:** \`${formatNumber(totalCurrentClients)}\`\n` +
+     `🕘 **Ontem no mesmo horário:** \`${formatBaseValue(yesterdayTotalClients, hasYesterdayBase)}\`\n` +
+     `📊 **Mudança desde ontem:** ${formatCleanDiff(totalCurrentClients, yesterdayTotalClients, hasYesterdayBase)}\n` +
+     `📅 **Semana passada no mesmo horário:** \`${formatBaseValue(sevenDaysAgoTotalClients, hasWeekBase)}\`\n` +
+     `📈 **Mudança desde semana passada:** ${formatCleanDiff(totalCurrentClients, sevenDaysAgoTotalClients, hasWeekBase)}`,
    inline: false,
  });
 
- embeds.push(mainEmbed);
+ embeds.push(comparisonEmbed);
 
- const secondaryEmbed = new EmbedBuilder()
+ const rankingEmbed = new EmbedBuilder()
    .setColor(cn2ParseColor(process.env.BASE_COLORS, DEFAULT_COLOR))
    .setTitle("🏆 RANKINGS E MÉDIAS");
 
@@ -381,7 +498,7 @@ async function buildEmbeds(client, currentSnapshot, history) {
    .sort((a, b) => b.clients - a.clients)
    .map((c, i) => `**${i + 1}º** ${c.name} — \`${formatNumber(c.clients)} players\``);
 
- secondaryEmbed.addFields({
+ rankingEmbed.addFields({
    name: "👑 Ranking atual",
    value: rankingAtual.length > 0 ? rankingAtual.join("\n") : "N/A",
    inline: false,
@@ -391,13 +508,13 @@ async function buildEmbeds(client, currentSnapshot, history) {
 
  if (hasWeekBase) {
    for (const cityConfig of FIVEM_CITIES) {
-     const cityData = cityComparisonData[cityConfig.key];
+     const item = cityComparisonData[cityConfig.key];
 
-     if (cityData?.diffSevenDays?.pct !== "sem base" && typeof cityData?.diffSevenDays?.pct === "number") {
+     if (item?.diffSevenDays?.pct !== "sem base" && typeof item?.diffSevenDays?.pct === "number") {
        growthRanking.push({
          name: cityConfig.name,
-         pct: cityData.diffSevenDays.pct,
-         diff: cityData.diffSevenDays.diff,
+         pct: item.diffSevenDays.pct,
+         diff: item.diffSevenDays.diff,
        });
      }
    }
@@ -415,8 +532,8 @@ async function buildEmbeds(client, currentSnapshot, history) {
        .join("\n")
    : "coletando histórico";
 
- secondaryEmbed.addFields({
-   name: "🚀 Crescimento comparado com semana passada",
+ rankingEmbed.addFields({
+   name: "🚀 Crescimento semanal",
    value: growthRankingText,
    inline: false,
  });
@@ -434,22 +551,56 @@ async function buildEmbeds(client, currentSnapshot, history) {
    ? formatDiff(calculateDiff(currentWeekAvg.average, lastWeekAvg.average))
    : "coletando histórico";
 
- const avgText =
-   `📦 **Média desta semana:** \`${hasCurrentWeekAvg ? formatNumber(Number(currentWeekAvg.average.toFixed(0))) : "coletando histórico"}\`\n` +
-   `📦 **Média da semana passada:** \`${hasLastWeekAvg ? formatNumber(Number(lastWeekAvg.average.toFixed(0))) : "coletando histórico"}\`\n` +
-   `📈 **Mudança da média:** ${diffAvg}`;
-
- secondaryEmbed.addFields({
+ rankingEmbed.addFields({
    name: "📦 Média geral por semana",
-   value: avgText,
+   value:
+     `📦 **Média desta semana:** \`${hasCurrentWeekAvg ? formatNumber(Number(currentWeekAvg.average.toFixed(0))) : "coletando histórico"}\`\n` +
+     `📦 **Média da semana passada:** \`${hasLastWeekAvg ? formatNumber(Number(lastWeekAvg.average.toFixed(0))) : "coletando histórico"}\`\n` +
+     `📈 **Mudança da média:** ${diffAvg}`,
    inline: false,
  });
 
- secondaryEmbed.setFooter({
-   text: `Atualiza a cada 2 min • Hoje às ${currentSnapshot.spTime}`,
+ embeds.push(rankingEmbed);
+
+ const primeStats = getPrimeTimeStats(history, currentSnapshot);
+
+ const primeEmbed = new EmbedBuilder()
+   .setColor(cn2ParseColor(process.env.BASE_COLORS, DEFAULT_COLOR))
+   .setTitle("🔥 PICO DO HORÁRIO NOBRE")
+   .setDescription("Métricas coletadas hoje entre **18:00 e 20:30**.");
+
+ if (!primeStats.started) {
+   primeEmbed.addFields({
+     name: "⏳ Aguardando horário nobre",
+     value: "As métricas de pico começam a ser calculadas quando chegar entre **18:00 e 20:30**.",
+     inline: false,
+   });
+ } else {
+   primeEmbed.addFields({
+     name: "🌎 Total geral no horário nobre",
+     value:
+       `${formatPeakLine("Total geral", primeStats.total.peak, primeStats.total.peakTime, primeStats.total.average)}\n` +
+       `📊 **Snapshots analisados:** \`${primeStats.snapshotCount}\``,
+     inline: false,
+   });
+
+   for (const cityConfig of FIVEM_CITIES) {
+     const cityPeak = primeStats.cities[cityConfig.key];
+     if (!cityPeak) continue;
+
+     primeEmbed.addFields({
+       name: `${cityConfig.emoji} ${cityPeak.name}`,
+       value: formatPeakLine("Cidade", cityPeak.peak, cityPeak.peakTime, cityPeak.average),
+       inline: false,
+     });
+   }
+ }
+
+ primeEmbed.setFooter({
+   text: `Horário nobre: 18:00 até 20:30 • Hoje às ${currentSnapshot.spTime}`,
  });
 
- embeds.push(secondaryEmbed);
+ embeds.push(primeEmbed);
 
  const row = new ActionRowBuilder().addComponents(
    new ButtonBuilder()
