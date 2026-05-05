@@ -63,7 +63,7 @@ const FIVEM_CITIES = [
 
 
 const FIVEM_STATE = new Map(); // channelId -> { intervalId, messageId }
-const FIVEM_DEBUG = false;
+const FIVEM_DEBUG = true; // Set to true for debugging
 const DEFAULT_COLOR = 0x2b2d31;
 
 // ---------- UTILS ----------

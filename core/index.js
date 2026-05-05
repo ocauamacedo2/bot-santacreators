@@ -880,6 +880,7 @@ const setupEventHandlers = () => {
     try {
       await lideresConvitesOnReady(client);
     } catch (e) {}
+    console.log("[CORE] Chamando fivemRetentionStatusOnReady..."); // Added log
     try {
       await fivemRetentionStatusOnReady(client);
     } catch (e) {
