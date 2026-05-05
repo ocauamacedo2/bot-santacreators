@@ -207,6 +207,13 @@ import {
   lideresConvitesHandleInteraction,
 } from "../events/lideresConvites.js";
 
+// FiveM Retention Status
+import {
+  fivemRetentionStatusOnReady,
+  fivemRetentionStatusHandleInteraction,
+  fivemRetentionStatusOnChannelDelete,
+} from "../events/fivemRetentionStatus.js";
+
 // Doação
 import {
   doacaoOnReady,
@@ -526,6 +533,9 @@ const setupEventHandlers = () => {
     try {
       connectStatusOnChannelDelete(c);
     } catch (e) {}
+    try {
+      fivemRetentionStatusOnChannelDelete(c);
+    } catch (e) {}
   });
 
   client.on(Events.ChannelUpdate, async (o, n) => {
@@ -724,6 +734,9 @@ const setupEventHandlers = () => {
       if (await lideresConvitesHandleInteraction(interaction, client)) return;
       if (await pedirSetHandleInteraction(interaction, client)) return;
       if (await setStaffHandleInteraction(interaction, client)) return;
+      const handledRetention = await fivemRetentionStatusHandleInteraction(interaction, client);
+      if (handledRetention) return;
+
       if (await alinhamentosHandleInteraction(interaction, client)) return;
       if (await setStaffV2HandleInteraction(interaction, client)) return;
       if (await graficoManagersHandleInteraction(interaction, client)) return;
@@ -866,6 +879,9 @@ const setupEventHandlers = () => {
     } catch (e) {}
     try {
       await lideresConvitesOnReady(client);
+    } catch (e) {}
+    try {
+      await fivemRetentionStatusOnReady(client);
     } catch (e) {}
     try {
       await setStaffV2OnReady(client);
