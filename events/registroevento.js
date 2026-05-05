@@ -209,13 +209,18 @@ function iniciarRegistroEvento(client) {
         if (auth === false) {
           return interaction.reply({ content: '⚠️ Você não tem permissão.', ephemeral: true }).catch(() => {});
         }
-        return interaction.showModal(buildModal());
+        try {
+          await interaction.showModal(buildModal());
+        } catch (e) {
+          console.error('[RegistroEvento] Erro ao abrir modal:', e);
+        }
+        return;
       }
 
-            // Modal Submit -> Processa Registro
+      // Modal Submit -> Processa Registro
       if (interaction.isModalSubmit() && interaction.customId === "modal_registro_evento") {
         // ✅ Ganha tempo imediatamente
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ ephemeral: true }).catch(() => {});
 
         if (!(await isAutorizado(interaction))) {
           return interaction
@@ -227,7 +232,7 @@ function iniciarRegistroEvento(client) {
           interaction.fields.getTextInputValue(id)?.trim().slice(0, 256) || "—";
 
         const embed = new EmbedBuilder()
-  .setTitle("📋 Registro de Evento")// Padronizado
+          .setTitle("📋 Registro de Poderes em Evento") // ✅ Ajustado para o Scanner do Dash reconhecer como Poderes
           .addFields(
             { name: "👤 Membro", value: get("jogador"), inline: true },
             { name: "📌 Evento", value: get("evento"), inline: true },
@@ -240,11 +245,10 @@ function iniciarRegistroEvento(client) {
           .setFooter({ text: `Registro por ${interaction.user.tag}` })
           .setTimestamp();
 
-        // Responde para o usuário que clicou (ephemeral)
-        await interaction.editReply({ content: "✅ Registro enviado!" });
-
         const canal = await client.channels.fetch(CANAL_REGISTRO_EVENTO).catch(() => null);
-        if (!canal) return;
+        if (!canal) {
+          return interaction.editReply({ content: "❌ Erro: Canal de logs não encontrado." }).catch(() => {});
+        }
 
         // Envia o log no canal
         await canal.send({
@@ -252,9 +256,9 @@ function iniciarRegistroEvento(client) {
           embeds: [embed],
         });
 
-        // ✅ conta nas métricas humanas do GeralDash (Social Medias / poderes em evento)
+        // ✅ Dash: Emitir o nome correto para contar no GeralDash (Social Medias)
 try {
-  dashEmit("evento:registrado", {
+          dashEmit("eventopoder:registrado", {
     userId: interaction.user.id,
     __at: Date.now(),
     source: "registro_evento",
@@ -262,16 +266,21 @@ try {
   });
 } catch {}
 
-
+        // Responde para o usuário que clicou (ephemeral)
+        await interaction.editReply({ content: "✅ Registro enviado com sucesso!" }).catch(() => {});
 
         // Limpa botões antigos e envia um novo para ficar no final
         await resetarBotao(canal, client);
-
         return;
       }
-
     } catch (err) {
       console.error('Erro na interação de Registro de Evento:', err);
+      // ✅ Failsafe: Tenta avisar o usuário se algo deu errado para não ficar carregando infinito
+      try {
+        if (interaction.deferred || interaction.replied) {
+          await interaction.editReply({ content: "❌ Ocorreu um erro interno ao processar seu registro." }).catch(() => {});
+        }
+      } catch {}
     }
   });
 }
