@@ -204,7 +204,7 @@ async function getSnapshotDaysAgo(days) {
      }
    }).sort({ timestamp: 1 });
  } catch (e) {
-   console.error("[FIVEM_RETENTION] Erro ao buscar snapshot histórico:", e);
+   console.error(`[FIVEM_RETENTION] Erro ao buscar snapshot histórico (${days} dias atrás):`, e.message);
    return null;
  }
 }
@@ -246,7 +246,11 @@ async function updateDailyPeaks(currentSnapshot) {
         total: { peak: 0, peakTime: null, primePeak: 0, primePeakTime: null },
         cities: {}
       });
-      for (const city of FIVEM_CITIES) {
+    }
+
+    // Garante que todas as cidades configuradas existem no objeto Mixed (evita erro em novas cidades)
+    for (const city of FIVEM_CITIES) {
+      if (!dayPeak.cities[city.key]) {
         dayPeak.cities[city.key] = { name: city.name, emoji: city.emoji, peak: 0, peakTime: null, primePeak: 0, primePeakTime: null };
       }
     }
@@ -281,10 +285,15 @@ async function updateDailyPeaks(currentSnapshot) {
     dayPeak.markModified('total');
     dayPeak.markModified('cities');
     await dayPeak.save();
+
+    // Limpeza de picos antigos (opcional, para manter paridade com History)
+    const thirtyDaysAgoDate = new Date(Date.now() - FIVEM_HISTORY_MAX_DAYS * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    await PeakModel.deleteMany({ date: { $lt: thirtyDaysAgoDate } });
   } catch (e) {
     console.error("[FIVEM_RETENTION] Erro ao atualizar picos diários:", e);
   }
 }
+
 
 function formatPeakCompare(current, previous) {
  if (!previous || previous <= 0) return "coletando histórico";
