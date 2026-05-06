@@ -510,19 +510,33 @@ function formatCompareCompact(current, previous) {
  const diff = current - previous;
  const pct = (diff / previous) * 100;
 
- if (diff > 0) return `👍 \`(+${formatNumber(diff)}) +${pct.toFixed(1)}%\``;
- if (diff < 0) return `🔻 \`(${formatNumber(diff)}) ${pct.toFixed(1)}%\``;
+ if (diff > 0) return `🔴 \`+${formatNumber(diff)}\` **+${pct.toFixed(1)}%**`;
+ if (diff < 0) return `🟢 \`${formatNumber(diff)}\` **${pct.toFixed(1)}%**`;
 
- return `➖ \`(0) 0.0%\``;
+ return `🟠 \`0\` **0.0%**`;
 }
 
 function formatPanelLine(label, current, previous) {
  return `**BR ${label.padEnd(8, " ")}** : \`${formatNumber(current)} / ${formatNumber(previous || 0)}\` ${formatCompareCompact(current, previous)}`;
 }
 
-function formatOnlyCurrentLine(label, current, max, pct, index) {
+function getStatusEmojiByYesterday(current, previous) {
+ if (!previous || previous <= 0) return "⚪";
+
+ const diff = current - previous;
+ const pct = (diff / previous) * 100;
+
+ if (diff > 0) return "🔴";
+ if (diff < 0) return "🟢";
+
+ return "🟠";
+}
+
+function formatOnlyCurrentLine(label, current, max, pct, index, yesterday = 0) {
  const medal = index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : `${index + 1}.`;
- return `${medal} **BR ${label.padEnd(8, " ")}** : \`${formatNumber(current)}/${formatNumber(max)}\` **${pct}%** 🔴`;
+ const statusEmoji = getStatusEmojiByYesterday(current, yesterday);
+
+ return `${medal} **BR ${label.padEnd(8, " ")}** : \`${formatNumber(current)}/${formatNumber(max)}\` **${pct}%** ${statusEmoji}`;
 }
 
 // ---------- EMBED BUILDER ----------
@@ -567,12 +581,13 @@ async function buildEmbeds(client, currentSnapshot, history) {
      sortedCurrent
        .map((item, index) => {
          return formatOnlyCurrentLine(
-           item.current.name,
-           item.current.clients,
-           item.current.maxClients,
-           item.usage,
-           index
-         );
+  item.current.name,
+  item.current.clients,
+  item.current.maxClients,
+  item.usage,
+  index,
+  item.yesterday
+);
        })
        .join("\n\n") +
      `\n\n**Total de Players** : \`${formatNumber(totalCurrentClients)} / ${formatNumber(totalCurrentMaxClients)}\`\n` +
@@ -637,39 +652,46 @@ async function buildEmbeds(client, currentSnapshot, history) {
      const lastWeekCityPeak = lastWeekPeaks?.cities?.[cityConfig.key];
 
      return {
-       name: cityConfig.name,
-       todayPeak: todayCityPeak?.peak || 0,
-       todayPeakTime: todayCityPeak?.peakTime || "--:--",
-       yesterdayPeak: yesterdayCityPeak?.peak || 0,
-       weekPeak: lastWeekCityPeak?.peak || 0,
-       primePeak: todayCityPeak?.primePeak || 0,
-       primePeakTime: todayCityPeak?.primePeakTime || "--:--",
-     };
+  name: cityConfig.name,
+  todayPeak: todayCityPeak?.peak || 0,
+  todayPeakTime: todayCityPeak?.peakTime || "--:--",
+
+  yesterdayPeak: yesterdayCityPeak?.peak || 0,
+  weekPeak: lastWeekCityPeak?.peak || 0,
+
+  primePeak: todayCityPeak?.primePeak || 0,
+  primePeakTime: todayCityPeak?.primePeakTime || "--:--",
+
+  yesterdayPrimePeak: yesterdayCityPeak?.primePeak || 0,
+  weekPrimePeak: lastWeekCityPeak?.primePeak || 0,
+};
    })
    .sort((a, b) => b.primePeak - a.primePeak);
 
  const primeEmbed = new EmbedBuilder()
-   .setColor(cn2ParseColor(process.env.BASE_COLORS, DEFAULT_COLOR))
-   .setTitle("🔥 PICOS DO HORÁRIO NOBRE")
-   .setDescription(
-     `Maior pico registrado entre **18:00 e 20:00**\n\n` +
-     peakCityData
-       .map((item, index) => {
-         const medal = index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : `${index + 1}.`;
+  .setColor(cn2ParseColor(process.env.BASE_COLORS, DEFAULT_COLOR))
+  .setTitle("🔥 PICOS DO HORÁRIO DE EVENTOS SC 💜")
+  .setDescription(
+    `Maior pico registrado entre **18:00 e 20:00**\n` +
+    `Comparando cada cidade com o pico dela mesma de ontem e de 7 dias atrás.\n\n` +
+    peakCityData
+      .map((item, index) => {
+        const medal = index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : `${index + 1}.`;
 
-         return (
-           `${medal} **BR ${item.name.padEnd(8, " ")}** : \`${formatNumber(item.primePeak)}\` às \`${item.primePeakTime}\`\n` +
-           `↳ Ontem: \`${formatNumber(item.yesterdayPeak)}\` ${formatCompareCompact(item.primePeak, item.yesterdayPeak)}\n` +
-           `↳ 7 dias: \`${formatNumber(item.weekPeak)}\` ${formatCompareCompact(item.primePeak, item.weekPeak)}`
-         );
-       })
-       .join("\n\n")
-   )
-   .setFooter({
-     text: `Picos salvos automaticamente • Horário nobre 18:00 até 20:00 • Hoje às ${currentSnapshot.spTime}`,
-   });
+        return (
+          `${medal} **BR ${item.name.padEnd(8, " ")}**\n` +
+          `Hoje: \`${formatNumber(item.primePeak)}\` players às \`${item.primePeakTime}\`\n` +
+          `Ontem: \`${formatNumber(item.yesterdayPrimePeak)}\` players ${formatCompareCompact(item.primePeak, item.yesterdayPrimePeak)}\n` +
+          `7 dias: \`${formatNumber(item.weekPrimePeak)}\` players ${formatCompareCompact(item.primePeak, item.weekPrimePeak)}`
+        );
+      })
+      .join("\n\n")
+  )
+  .setFooter({
+    text: `Picos salvos automaticamente • Horário eventos 18:00 até 20:00 • Hoje às ${currentSnapshot.spTime}`,
+  });
 
- embeds.push(primeEmbed);
+embeds.push(primeEmbed);
 
  const allPeaksRanking = FIVEM_CITIES
    .map((cityConfig) => {
