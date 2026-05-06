@@ -192,17 +192,49 @@ async function addSnapshot(newSnapshot) {
   }
 }
 
-async function getSnapshotDaysAgo(days) {
- const now = Date.now();
- const targetTimestamp = now - days * 24 * 60 * 60 * 1000;
- 
+async function getSnapshotDaysAgo(days, currentSnapshot = null) {
+ const baseTimestamp = currentSnapshot?.timestamp || Date.now();
+ const targetDate = new Date(baseTimestamp - days * 24 * 60 * 60 * 1000);
+ const targetParts = getSaoPauloParts(targetDate);
+
+ const targetDateKey = `${targetParts.year}-${String(targetParts.month).padStart(2, "0")}-${String(targetParts.day).padStart(2, "0")}`;
+ const targetMinutes = Number(currentSnapshot?.hour ?? getSaoPauloParts(new Date()).hour) * 60 + Number(currentSnapshot?.minute ?? getSaoPauloParts(new Date()).minute);
+
  try {
-   return await HistoryModel.findOne({
-     timestamp: { 
-       $gte: targetTimestamp - FIVEM_COMPARISON_TOLERANCE_MS, 
-       $lte: targetTimestamp + FIVEM_COMPARISON_TOLERANCE_MS 
+   const candidates = await HistoryModel.find({ spDate: targetDateKey }).lean();
+
+   if (!candidates?.length) {
+     FIVEM_DEBUG && console.log(
+       `[FIVEM_RETENTION] Sem base histórica para ${days} dia(s) atrás:`,
+       targetDateKey
+     );
+     return null;
+   }
+
+   let best = null;
+   let bestDistance = Infinity;
+
+   for (const snap of candidates) {
+     const snapMinutes = Number(snap.hour || 0) * 60 + Number(snap.minute || 0);
+     const distance = Math.abs(snapMinutes - targetMinutes);
+
+     if (distance < bestDistance) {
+       best = snap;
+       bestDistance = distance;
      }
-   }).sort({ timestamp: 1 });
+   }
+
+   const toleranceMinutes = Math.ceil(FIVEM_COMPARISON_TOLERANCE_MS / 60000);
+
+   if (bestDistance > toleranceMinutes) {
+     FIVEM_DEBUG && console.log(
+       `[FIVEM_RETENTION] Snapshot encontrado fora da tolerância para ${days} dia(s) atrás:`,
+       targetDateKey,
+       `distância ${bestDistance}min`
+     );
+   }
+
+   return best;
  } catch (e) {
    console.error(`[FIVEM_RETENTION] Erro ao buscar snapshot histórico (${days} dias atrás):`, e.message);
    return null;
@@ -309,8 +341,19 @@ function formatPeakCompare(current, previous) {
 }
 
 function formatPeakValue(value, time) {
- if (!value || value <= 0) return "`coletando histórico`";
+ if (!value || value <= 0) return "`aguardando histórico`";
  return `\`${formatNumber(value)}\` às \`${time || "--:--"}\``;
+}
+
+function formatPrimePeakToday(value, time, currentSnapshot) {
+ if (value && value > 0) return `\`${formatNumber(value)}\` players às \`${time || "--:--"}\``;
+
+ const minutes = getMinutesOfDayFromSnapshot(currentSnapshot);
+
+ if (minutes < 18 * 60) return "`aguardando 18:00`";
+ if (minutes > 20 * 60) return "`sem pico registrado entre 18:00 e 20:00`";
+
+ return "`coletando agora`";
 }
 
 // ---------- FIVEM API ----------
@@ -432,8 +475,8 @@ function formatOnlyCurrentLine(label, current, max, pct, index, yesterday = 0) {
 async function buildEmbeds(client, currentSnapshot) {
  const embeds = [];
 
- const sevenDaysAgoSnapshot = await getSnapshotDaysAgo(7);
- const yesterdaySnapshot = await getSnapshotDaysAgo(1);
+ const sevenDaysAgoSnapshot = await getSnapshotDaysAgo(7, currentSnapshot);
+ const yesterdaySnapshot = await getSnapshotDaysAgo(1, currentSnapshot);
 
  let totalCurrentClients = 0;
  let totalCurrentMaxClients = 0;
@@ -569,7 +612,7 @@ async function buildEmbeds(client, currentSnapshot) {
 
         return (
           `${medal} **BR ${item.name.padEnd(8, " ")}**\n` +
-          `Hoje: \`${formatNumber(item.primePeak)}\` players às \`${item.primePeakTime}\`\n` +
+          `Hoje: ${formatPrimePeakToday(item.primePeak, item.primePeakTime, currentSnapshot)}\n` +
           `Ontem: \`${formatNumber(item.yesterdayPrimePeak)}\` players ${formatCompareCompact(item.primePeak, item.yesterdayPrimePeak)}\n` +
           `7 dias: \`${formatNumber(item.weekPrimePeak)}\` players ${formatCompareCompact(item.primePeak, item.weekPrimePeak)}`
         );
