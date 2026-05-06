@@ -243,7 +243,7 @@ async function updateDailyPeaks(currentSnapshot) {
     if (!dayPeak) {
       dayPeak = new PeakModel({
         date: dateKey,
-        total: { peak: 0, peakTime: null, primePeak: 0, primePeakTime: null },
+        total: { peak: 0, peakTime: null, peakAt: 0, primePeak: 0, primePeakTime: null, primePeakAt: 0 },
         cities: {}
       });
     }
@@ -251,7 +251,11 @@ async function updateDailyPeaks(currentSnapshot) {
     // Garante que todas as cidades configuradas existem no objeto Mixed (evita erro em novas cidades)
     for (const city of FIVEM_CITIES) {
       if (!dayPeak.cities[city.key]) {
-        dayPeak.cities[city.key] = { name: city.name, emoji: city.emoji, peak: 0, peakTime: null, primePeak: 0, primePeakTime: null };
+        dayPeak.cities[city.key] = { 
+          name: city.name, emoji: city.emoji, 
+          peak: 0, peakTime: null, peakAt: 0, 
+          primePeak: 0, primePeakTime: null, primePeakAt: 0 
+        };
       }
     }
 
@@ -260,11 +264,13 @@ async function updateDailyPeaks(currentSnapshot) {
     if ((currentSnapshot.totalClients || 0) > (dayPeak.total.peak || 0)) {
       dayPeak.total.peak = currentSnapshot.totalClients || 0;
       dayPeak.total.peakTime = currentSnapshot.spTime;
+      dayPeak.total.peakAt = currentSnapshot.timestamp;
     }
 
     if (isPrime && (currentSnapshot.totalClients || 0) > (dayPeak.total.primePeak || 0)) {
       dayPeak.total.primePeak = currentSnapshot.totalClients || 0;
       dayPeak.total.primePeakTime = currentSnapshot.spTime;
+      dayPeak.total.primePeakAt = currentSnapshot.timestamp;
     }
 
     for (const cityConfig of FIVEM_CITIES) {
@@ -275,10 +281,12 @@ async function updateDailyPeaks(currentSnapshot) {
       if ((cityData.clients || 0) > (cityPeak.peak || 0)) {
         cityPeak.peak = cityData.clients || 0;
         cityPeak.peakTime = currentSnapshot.spTime;
+        cityPeak.peakAt = currentSnapshot.timestamp;
       }
       if (isPrime && (cityData.clients || 0) > (cityPeak.primePeak || 0)) {
         cityPeak.primePeak = cityData.clients || 0;
         cityPeak.primePeakTime = currentSnapshot.spTime;
+        cityPeak.primePeakAt = currentSnapshot.timestamp;
       }
     }
 
