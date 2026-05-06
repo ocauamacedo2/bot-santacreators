@@ -26,7 +26,7 @@ const FIVEM_RANK_MARKER_TAG = "[FIVEM_RETENTION_STATUS]";
 // Caminhos dos arquivos
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const DATA_DIR = path.resolve(__dirname, "../data");
+const DATA_DIR = path.resolve(process.cwd(), "data");
 const HISTORY_FILE_PATH = path.join(DATA_DIR, "fivem_retention_status_history.json");
 const PEAKS_FILE_PATH = path.join(DATA_DIR, "fivem_retention_daily_peaks.json");
 
@@ -161,6 +161,19 @@ function ensureDataDir() {
    console.error("[FIVEM_RETENTION] Erro ao criar pasta de dados:", e);
  }
 }
+
+function ensureFilesExist() {
+  ensureDataDir();
+  if (!fs.existsSync(HISTORY_FILE_PATH)) {
+    fs.writeFileSync(HISTORY_FILE_PATH, JSON.stringify([], null, 2), "utf8");
+    console.log(`[FIVEM_RETENTION] Arquivo de histórico criado em: ${HISTORY_FILE_PATH}`);
+  }
+  if (!fs.existsSync(PEAKS_FILE_PATH)) {
+    fs.writeFileSync(PEAKS_FILE_PATH, JSON.stringify({}, null, 2), "utf8");
+    console.log(`[FIVEM_RETENTION] Arquivo de picos criado em: ${PEAKS_FILE_PATH}`);
+  }
+}
+
 function loadHistory() {
  ensureDataDir();
  try {
@@ -814,6 +827,8 @@ async function editPanel(channel, options = {}) {
 // ---------- PUBLIC API ----------
 export async function fivemRetentionStatusOnReady(client) {
  try {
+   ensureFilesExist();
+
    const channel = await client.channels.fetch(FIVEM_PANEL_CHANNEL_ID).catch(() => null);
    if (!channel) {
      console.error("[FIVEM_RETENTION] Canal fixo não encontrado:", FIVEM_PANEL_CHANNEL_ID);
