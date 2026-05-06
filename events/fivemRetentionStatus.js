@@ -26,9 +26,9 @@ const FIVEM_RANK_MARKER_TAG = "[FIVEM_RETENTION_STATUS]";
 // Caminhos dos arquivos
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const DATA_DIR = path.resolve(process.cwd(), "data");
-const HISTORY_FILE_PATH = path.join(DATA_DIR, "fivem_retention_status_history.json");
-const PEAKS_FILE_PATH = path.join(DATA_DIR, "fivem_retention_daily_peaks.json");
+const DATA_DIR = path.resolve(__dirname, "../data"); // Aponta para a pasta 'data' na raiz
+const HISTORY_FILE_PATH = path.resolve(DATA_DIR, "fivem_retention_status_history.json");
+const PEAKS_FILE_PATH = path.resolve(DATA_DIR, "fivem_retention_daily_peaks.json");
 
 
 const FIVEM_CITIES = [
@@ -370,8 +370,14 @@ async function fetchCityStatus(city) {
  const fetchFn = await getFetch();
  const controller = new AbortController();
  const timeout = setTimeout(() => controller.abort(), FIVEM_FETCH_TIMEOUT_MS);
+ 
  try {
-   const res = await fetchFn(city.url, { method: "GET", signal: controller.signal });
+   const res = await fetchFn(city.url, { 
+     method: "GET", 
+     signal: controller.signal,
+     headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }
+   });
+
    clearTimeout(timeout);
    if (res.ok) {
      const data = await res.json().catch(() => null);
@@ -872,11 +878,13 @@ export async function fivemRetentionStatusHandleInteraction(interaction, client)
        return true;
      }
 
-     await editPanel(channel);
-
-     if (interaction.deferred || interaction.replied) {
-       await interaction.editReply("✅ Painel atualizado com sucesso!").catch(() => {});
+     const edited = await editPanel(channel);
+     
+     if (!edited) {
+       throw new Error("Não foi possível atualizar o painel. API lenta ou sem permissão.");
      }
+
+     await interaction.editReply("✅ Painel atualizado com sucesso!").catch(() => {});
    } catch (e) {
      console.error("[FIVEM_RETENTION] Erro ao forçar atualização:", e);
      if (interaction.deferred || interaction.replied) {
