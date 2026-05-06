@@ -223,83 +223,59 @@ function getDateKeyDaysAgoFromSnapshot(currentSnapshot, days) {
 }
 
 function isPrimeTimeSnapshot(snapshot) {
- const minutes = getMinutesOfDayFromSnapshot(snapshot);
- return minutes >= 18 * 60 && minutes <= 20 * 60;
+  const minutes = getMinutesOfDayFromSnapshot(snapshot);
+  return minutes >= 18 * 60 && minutes <= 20 * 60;
 }
 
-function ensurePeakDay(peaks, dateKey) {
- if (!peaks[dateKey]) {
-   peaks[dateKey] = {
-     date: dateKey,
-     total: {
-       peak: 0,
-       peakTime: null,
-       primePeak: 0,
-       primePeakTime: null,
-     },
-     cities: {},
-   };
- }
+async function updateDailyPeaks(currentSnapshot) {
+  try {
+    const dateKey = currentSnapshot.spDate;
+    let dayPeak = await PeakModel.findOne({ date: dateKey });
 
- for (const cityConfig of FIVEM_CITIES) {
-   if (!peaks[dateKey].cities[cityConfig.key]) {
-     peaks[dateKey].cities[cityConfig.key] = {
-       name: cityConfig.name,
-       emoji: cityConfig.emoji,
-       peak: 0,
-       peakTime: null,
-       primePeak: 0,
-       primePeakTime: null,
-     };
-   }
- }
+    if (!dayPeak) {
+      dayPeak = new PeakModel({
+        date: dateKey,
+        total: { peak: 0, peakTime: null, primePeak: 0, primePeakTime: null },
+        cities: {}
+      });
+      for (const city of FIVEM_CITIES) {
+        dayPeak.cities[city.key] = { name: city.name, emoji: city.emoji, peak: 0, peakTime: null, primePeak: 0, primePeakTime: null };
+      }
+    }
 
- return peaks[dateKey];
-}
+    const isPrime = isPrimeTimeSnapshot(currentSnapshot);
 
-function updateDailyPeaks(currentSnapshot) {
- const peaks = loadPeaks();
- const dateKey = currentSnapshot.spDate;
- const dayPeak = ensurePeakDay(peaks, dateKey);
- const isPrime = isPrimeTimeSnapshot(currentSnapshot);
+    if ((currentSnapshot.totalClients || 0) > (dayPeak.total.peak || 0)) {
+      dayPeak.total.peak = currentSnapshot.totalClients || 0;
+      dayPeak.total.peakTime = currentSnapshot.spTime;
+    }
 
- if ((currentSnapshot.totalClients || 0) > dayPeak.total.peak) {
-   dayPeak.total.peak = currentSnapshot.totalClients || 0;
-   dayPeak.total.peakTime = currentSnapshot.spTime;
- }
+    if (isPrime && (currentSnapshot.totalClients || 0) > (dayPeak.total.primePeak || 0)) {
+      dayPeak.total.primePeak = currentSnapshot.totalClients || 0;
+      dayPeak.total.primePeakTime = currentSnapshot.spTime;
+    }
 
- if (isPrime && (currentSnapshot.totalClients || 0) > dayPeak.total.primePeak) {
-   dayPeak.total.primePeak = currentSnapshot.totalClients || 0;
-   dayPeak.total.primePeakTime = currentSnapshot.spTime;
- }
+    for (const cityConfig of FIVEM_CITIES) {
+      const cityData = currentSnapshot.cities?.[cityConfig.key];
+      if (!cityData) continue;
 
- for (const cityConfig of FIVEM_CITIES) {
-   const city = currentSnapshot.cities?.[cityConfig.key];
-   if (!city) continue;
+      const cityPeak = dayPeak.cities[cityConfig.key];
+      if ((cityData.clients || 0) > (cityPeak.peak || 0)) {
+        cityPeak.peak = cityData.clients || 0;
+        cityPeak.peakTime = cityData.spTime; // Should be currentSnapshot.spTime
+      }
+      if (isPrime && (cityData.clients || 0) > (cityPeak.primePeak || 0)) {
+        cityPeak.primePeak = cityData.clients || 0;
+        cityPeak.primePeakTime = cityData.spTime; // Should be currentSnapshot.spTime
+      }
+    }
 
-   const cityPeak = dayPeak.cities[cityConfig.key];
-
-   if ((city.clients || 0) > cityPeak.peak) {
-     cityPeak.peak = city.clients || 0;
-     cityPeak.peakTime = currentSnapshot.spTime;
-   }
-
-   if (isPrime && (city.clients || 0) > cityPeak.primePeak) {
-     cityPeak.primePeak = city.clients || 0;
-     cityPeak.primePeakTime = currentSnapshot.spTime;
-   }
- }
-
- const maxAge = Date.now() - FIVEM_HISTORY_MAX_DAYS * 24 * 60 * 60 * 1000;
-
- for (const key of Object.keys(peaks)) {
-   const dateMs = new Date(`${key}T00:00:00-03:00`).getTime();
-   if (dateMs < maxAge) delete peaks[key];
- }
-
- savePeaks(peaks);
-
- return peaks;
+    dayPeak.markModified('total');
+    dayPeak.markModified('cities');
+    await dayPeak.save();
+  } catch (e) {
+    console.error("[FIVEM_RETENTION] Erro ao atualizar picos diários:", e);
+  }
 }
 
 function formatPeakCompare(current, previous) {
@@ -687,7 +663,7 @@ async function editPanel(channel, options = {}) {
 
  const currentSnapshot = await createCurrentSnapshot();
  await addSnapshot(currentSnapshot);
- await updateDailyPeaks(currentSnapshot);
+ await updateDailyPeaks(currentSnapshot); // Make sure this is awaited
  const { embeds, row } = await buildEmbeds(channel.client, currentSnapshot);
  try {
    const edited = await sticky.edit({ embeds, components: [row] });
