@@ -827,54 +827,68 @@ async function editPanel(channel, options = {}) {
 // ---------- PUBLIC API ----------
 export async function fivemRetentionStatusOnReady(client) {
  try {
-   ensureFilesExist();
+   ensureFilesExist(); // Garante estrutura de dados
 
    const channel = await client.channels.fetch(FIVEM_PANEL_CHANNEL_ID).catch(() => null);
-   if (!channel) {
-     console.error("[FIVEM_RETENTION] Canal fixo não encontrado:", FIVEM_PANEL_CHANNEL_ID);
-     return;
-   }
-   if (typeof channel.isTextBased !== "function" || !channel.isTextBased()) {
-     console.error("[FIVEM_RETENTION] Canal fixo não é textual:", FIVEM_PANEL_CHANNEL_ID);
+   if (!channel || !channel.isTextBased()) {
+     console.error("[FIVEM_RETENTION] Canal fixo não encontrado ou inválido:", FIVEM_PANEL_CHANNEL_ID);
      return;
    }
 
-   const edited = await editPanel(channel);
-   if (!edited) {
-     console.error("[FIVEM_RETENTION] Falha ao editar/criar painel. Verifique as permissões do bot no canal.", FIVEM_PANEL_CHANNEL_ID);
-     return;
-   }
+   // Limpa intervalos antigos para evitar duplicidade no mesmo canal
    const existing = FIVEM_STATE.get(channel.id);
    if (existing?.intervalId) clearInterval(existing.intervalId);
-   let intervalId = null;
-   intervalId = setInterval(async () => {
-     await editPanel(channel);
+
+   // Tenta o primeiro update agora (sem travar o resto do bot)
+   editPanel(channel).catch(e => console.error("[FIVEM_RETENTION] Erro no update inicial:", e));
+
+   // Inicia o loop que roda a cada 2 minutos, faça chuva ou faça sol
+   const intervalId = setInterval(async () => {
+     try {
+       await editPanel(channel);
+     } catch (e) {
+       console.error("[FIVEM_RETENTION] Erro no loop de atualização automática:", e);
+     }
    }, FIVEM_REFRESH_INTERVAL_MS);
-   FIVEM_STATE.set(channel.id, { intervalId, messageId: edited.id });
-   FIVEM_DEBUG && console.log("[FIVEM_RETENTION] READY ok — sticky ok no canal", channel.id);
+
+   FIVEM_STATE.set(channel.id, { intervalId, messageId: null });
+   FIVEM_DEBUG && console.log("[FIVEM_RETENTION] Sistema pronto. Loop de 2min ativo no canal", channel.id);
  } catch (err) {
    console.error("[FIVEM_RETENTION] fivemRetentionStatusOnReady erro:", err?.message || err);
  }
 }
+
 export async function fivemRetentionStatusHandleInteraction(interaction, client) {
  try {
    if (!interaction.isButton?.() || interaction.customId !== "fivem_retention_force_refresh") return false;
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-   const channel = interaction.channel;
-   if (!channel?.isTextBased?.()) {
-     await interaction.editReply("❌ Não consegui acessar o canal para atualizar o painel.");
-     return true;
-   }
+
    try {
+     // Avisa o Discord que estamos processando (isso gera o "Thinking...")
+     await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
+
+     const channel = interaction.channel;
+     if (!channel?.isTextBased?.()) {
+       if (interaction.deferred) await interaction.editReply("❌ Não consegui acessar o canal.");
+       return true;
+     }
+
      await editPanel(channel);
-     await interaction.editReply("✅ Painel atualizado com sucesso!");
+
+     if (interaction.deferred || interaction.replied) {
+       await interaction.editReply("✅ Painel atualizado com sucesso!").catch(() => {});
+     }
    } catch (e) {
      console.error("[FIVEM_RETENTION] Erro ao forçar atualização:", e);
-     await interaction.editReply("❌ Não consegui atualizar agora. Tente novamente mais tarde.");
+     if (interaction.deferred || interaction.replied) {
+       await interaction.editReply(`❌ Erro ao atualizar: ${e.message || "Tente novamente mais tarde."}`).catch(() => {});
+     }
    }
    return true;
  } catch (e) {
    cn2LogApiError("[FIVEM_RETENTION] fivemRetentionStatusHandleInteraction erro:", e);
+   if (interaction.deferred || interaction.replied) {
+     await interaction.editReply("❌ Ocorreu um erro interno ao processar a ação.").catch(() => {});
+   }
    return false;
  }
 }
