@@ -172,6 +172,14 @@ async function addSnapshot(newSnapshot) {
     if (last && (newSnapshot.timestamp - last.timestamp < 60 * 1000)) return false;
 
     await HistoryModel.create(newSnapshot);
+
+    FIVEM_DEBUG && console.log(
+      "[FIVEM_RETENTION] Snapshot salvo no MongoDB:",
+      newSnapshot.spDate,
+      newSnapshot.spTime,
+      "Total:",
+      newSnapshot.totalClients
+    );
     
     // Limpeza automática de dados antigos (>30 dias)
     const thirtyDaysAgo = Date.now() - FIVEM_HISTORY_MAX_DAYS * 24 * 60 * 60 * 1000;
@@ -262,11 +270,11 @@ async function updateDailyPeaks(currentSnapshot) {
       const cityPeak = dayPeak.cities[cityConfig.key];
       if ((cityData.clients || 0) > (cityPeak.peak || 0)) {
         cityPeak.peak = cityData.clients || 0;
-        cityPeak.peakTime = cityData.spTime; // Should be currentSnapshot.spTime
+        cityPeak.peakTime = currentSnapshot.spTime;
       }
       if (isPrime && (cityData.clients || 0) > (cityPeak.primePeak || 0)) {
         cityPeak.primePeak = cityData.clients || 0;
-        cityPeak.primePeakTime = cityData.spTime; // Should be currentSnapshot.spTime
+        cityPeak.primePeakTime = currentSnapshot.spTime;
       }
     }
 
