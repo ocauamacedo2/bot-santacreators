@@ -10,9 +10,7 @@ import {
   PermissionsBitField,
   MessageFlags,
 } from "discord.js";
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import mongoose from "mongoose";
 
 // ⚙️ CONFIG
 const FIVEM_PANEL_CHANNEL_ID = "1501321157259956244";
@@ -23,12 +21,31 @@ const FIVEM_COMPARISON_TOLERANCE_MS = 10 * 60 * 1000; // 10 minutos
 const FIVEM_TIMEZONE = "America/Sao_Paulo";
 const FIVEM_RANK_MARKER_TAG = "[FIVEM_RETENTION_STATUS]";
 
-// Caminhos dos arquivos
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const DATA_DIR = path.resolve(__dirname, "../data"); // Aponta para a pasta 'data' na raiz
-const HISTORY_FILE_PATH = path.resolve(DATA_DIR, "fivem_retention_status_history.json");
-const PEAKS_FILE_PATH = path.resolve(DATA_DIR, "fivem_retention_daily_peaks.json");
+// 🗄️ MONGODB MODELS
+const HistorySchema = new mongoose.Schema({
+  timestamp: { type: Number, index: true },
+  iso: String,
+  spDate: { type: String, index: true },
+  spTime: String,
+  spWeekday: String,
+  hour: Number,
+  minute: Number,
+  cities: mongoose.Schema.Types.Mixed,
+  totalClients: Number,
+  totalMaxClients: Number,
+});
+const HistoryModel = mongoose.models.FivemRetentionHistory || mongoose.model("FivemRetentionHistory", HistorySchema);
+
+const PeakSchema = new mongoose.Schema({
+  date: { type: String, unique: true },
+  total: mongoose.Schema.Types.Mixed,
+  cities: mongoose.Schema.Types.Mixed,
+});
+const PeakModel = mongoose.models.FivemRetentionPeak || mongoose.model("FivemRetentionPeak", PeakSchema);
+
+const FIVEM_STATE = new Map(); // channelId -> { intervalId, messageId }
+const FIVEM_DEBUG = true; 
+const DEFAULT_COLOR = 0x2b2d31;
 
 
 const FIVEM_CITIES = [
@@ -61,11 +78,6 @@ const FIVEM_CITIES = [
    url: "https://servers-frontend.fivem.net/api/servers/single/vxz4gq",
  },
 ];
-
-
-const FIVEM_STATE = new Map(); // channelId -> { intervalId, messageId }
-const FIVEM_DEBUG = true; // Set to true for debugging
-const DEFAULT_COLOR = 0x2b2d31;
 
 // ---------- UTILS ----------
 function cn2ParseColor(input, fallback = 0x2b2d31) {
@@ -153,119 +165,54 @@ function formatDiff(diffObj) {
  return `${diffObj.arrow} ${diffStr} (${pctStr})`;
 }
 
-// ---------- HISTORY PERSISTENCE ----------
-function ensureDataDir() {
- try {
-   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
- } catch (e) {
-   console.error("[FIVEM_RETENTION] Erro ao criar pasta de dados:", e);
- }
-}
+// ---------- DATA PERSISTENCE (MONGODB) ----------
+async function addSnapshot(newSnapshot) {
+  try {
+    const last = await HistoryModel.findOne().sort({ timestamp: -1 });
+    if (last && (newSnapshot.timestamp - last.timestamp < 60 * 1000)) return false;
 
-function ensureFilesExist() {
-  ensureDataDir();
-  if (!fs.existsSync(HISTORY_FILE_PATH)) {
-    fs.writeFileSync(HISTORY_FILE_PATH, JSON.stringify([], null, 2), "utf8");
-    console.log(`[FIVEM_RETENTION] Arquivo de histórico criado em: ${HISTORY_FILE_PATH}`);
-  }
-  if (!fs.existsSync(PEAKS_FILE_PATH)) {
-    fs.writeFileSync(PEAKS_FILE_PATH, JSON.stringify({}, null, 2), "utf8");
-    console.log(`[FIVEM_RETENTION] Arquivo de picos criado em: ${PEAKS_FILE_PATH}`);
+    await HistoryModel.create(newSnapshot);
+    
+    // Limpeza automática de dados antigos (>30 dias)
+    const thirtyDaysAgo = Date.now() - FIVEM_HISTORY_MAX_DAYS * 24 * 60 * 60 * 1000;
+    await HistoryModel.deleteMany({ timestamp: { $lt: thirtyDaysAgo } });
+    
+    return true;
+  } catch (e) {
+    console.error("[FIVEM_RETENTION] Erro ao salvar snapshot no MongoDB:", e);
+    return false;
   }
 }
 
-function loadHistory() {
- ensureDataDir();
- try {
-   if (!fs.existsSync(HISTORY_FILE_PATH)) return [];
-   const raw = fs.readFileSync(HISTORY_FILE_PATH, "utf8");
-   const history = JSON.parse(raw);
-   // Limitar histórico a 30 dias
-   const thirtyDaysAgo = Date.now() - FIVEM_HISTORY_MAX_DAYS * 24 * 60 * 60 * 1000;
-   return history.filter(s => s.timestamp >= thirtyDaysAgo);
- } catch (e) {
-   console.error("[FIVEM_RETENTION] Histórico corrompido. Fazendo backup e iniciando novo.", e);
-   const backupPath = `${HISTORY_FILE_PATH}.corrupted.${Date.now()}.json`;
-   if (fs.existsSync(HISTORY_FILE_PATH)) {
-     fs.renameSync(HISTORY_FILE_PATH, backupPath);
-   }
-   return [];
- }
-}
-function saveHistory(history) {
- ensureDataDir();
- try {
-   const tempPath = `${HISTORY_FILE_PATH}.tmp`;
-   fs.writeFileSync(tempPath, JSON.stringify(history, null, 2), "utf8");
-   fs.renameSync(tempPath, HISTORY_FILE_PATH);
- } catch (e) {
-   console.error("[FIVEM_RETENTION] Erro ao salvar histórico:", e);
- }
-}
-function addSnapshot(history, newSnapshot) {
- const lastSnapshot = history[history.length - 1];
- if (lastSnapshot && (newSnapshot.timestamp - lastSnapshot.timestamp < 60 * 1000)) {
-   // Não salvar duplicado se já tiver snapshot no mesmo minuto
-   return false;
- }
- history.push(newSnapshot);
- // Manter histórico limitado
- const thirtyDaysAgo = Date.now() - FIVEM_HISTORY_MAX_DAYS * 24 * 60 * 60 * 1000;
- const filteredHistory = history.filter(s => s.timestamp >= thirtyDaysAgo);
- saveHistory(filteredHistory);
- return true;
-}
-function findNearestSnapshot(history, targetTimestamp, toleranceMs) {
- let nearest = null;
- let minDiff = Infinity;
- for (const snapshot of history) {
-   const diff = Math.abs(snapshot.timestamp - targetTimestamp);
-   if (diff <= toleranceMs && diff < minDiff) {
-     minDiff = diff;
-     nearest = snapshot;
-   }
- }
- return nearest;
-}
-function getSnapshotDaysAgo(history, days) {
+async function getSnapshotDaysAgo(days) {
  const now = Date.now();
  const targetTimestamp = now - days * 24 * 60 * 60 * 1000;
- return findNearestSnapshot(history, targetTimestamp, FIVEM_COMPARISON_TOLERANCE_MS);
-}
-
-function loadPeaks() {
- ensureDataDir();
-
+ 
  try {
-   if (!fs.existsSync(PEAKS_FILE_PATH)) return {};
-
-   const raw = fs.readFileSync(PEAKS_FILE_PATH, "utf8");
-   const peaks = JSON.parse(raw);
-
-   return peaks && typeof peaks === "object" ? peaks : {};
+   return await HistoryModel.findOne({
+     timestamp: { 
+       $gte: targetTimestamp - FIVEM_COMPARISON_TOLERANCE_MS, 
+       $lte: targetTimestamp + FIVEM_COMPARISON_TOLERANCE_MS 
+     }
+   }).sort({ timestamp: 1 });
  } catch (e) {
-   console.error("[FIVEM_RETENTION] Arquivo de picos corrompido. Fazendo backup e iniciando novo.", e);
-
-   const backupPath = `${PEAKS_FILE_PATH}.corrupted.${Date.now()}.json`;
-
-   if (fs.existsSync(PEAKS_FILE_PATH)) {
-     fs.renameSync(PEAKS_FILE_PATH, backupPath);
-   }
-
-   return {};
+   console.error("[FIVEM_RETENTION] Erro ao buscar snapshot histórico:", e);
+   return null;
  }
 }
 
-function savePeaks(peaks) {
- ensureDataDir();
-
- try {
-   const tempPath = `${PEAKS_FILE_PATH}.tmp`;
-   fs.writeFileSync(tempPath, JSON.stringify(peaks, null, 2), "utf8");
-   fs.renameSync(tempPath, PEAKS_FILE_PATH);
- } catch (e) {
-   console.error("[FIVEM_RETENTION] Erro ao salvar arquivo de picos:", e);
- }
+async function loadPeaksMap() {
+  try {
+    const docs = await PeakModel.find();
+    const map = {};
+    for (const d of docs) {
+      map[d.date] = d.toObject();
+    }
+    return map;
+  } catch (e) {
+    console.error("[FIVEM_RETENTION] Erro ao carregar picos do MongoDB:", e);
+    return {};
+  }
 }
 
 function getDateKeyDaysAgoFromSnapshot(currentSnapshot, days) {
@@ -423,100 +370,22 @@ async function fetchAllCities() {
  return { cities: citiesData, totalClients, totalMaxClients };
 }
 async function createCurrentSnapshot() {
- const { cities, totalClients, totalMaxClients } = await fetchAllCities();
- const now = new Date();
- const spParts = getSaoPauloParts(now);
- return {
-   timestamp: now.getTime(),
-   iso: now.toISOString(),
-   spDate: `${spParts.year}-${String(spParts.month).padStart(2, '0')}-${String(spParts.day).padStart(2, '0')}`,
-   spTime: `${String(spParts.hour).padStart(2, '0')}:${String(spParts.minute).padStart(2, '0')}`,
-   spWeekday: spParts.weekday,
-   hour: spParts.hour,
-   minute: spParts.minute,
-   cities,
-   totalClients,
-   totalMaxClients,
- };
-}
-function getWeekAverage(history, weekKey) {
- const weekSnapshots = history.filter(s => getWeekKeySP(new Date(s.timestamp)) === weekKey);
- if (weekSnapshots.length === 0) return { average: 0, count: 0 };
- const total = weekSnapshots.reduce((sum, s) => sum + s.totalClients, 0);
- return { average: total / weekSnapshots.length, count: weekSnapshots.length };
+  const { cities, totalClients, totalMaxClients } = await fetchAllCities();
+  const now = new Date();
+  const spParts = getSaoPauloParts(now);
+  return {
+    timestamp: now.getTime(), iso: now.toISOString(),
+    spDate: `${spParts.year}-${String(spParts.month).padStart(2, '0')}-${String(spParts.day).padStart(2, '0')}`,
+    spTime: `${String(spParts.hour).padStart(2, '0')}:${String(spParts.minute).padStart(2, '0')}`,
+    spWeekday: spParts.weekday, hour: spParts.hour, minute: spParts.minute,
+    cities, totalClients, totalMaxClients,
+  };
 }
 
 function getMinutesOfDayFromSnapshot(snapshot) {
  const hour = Number(snapshot?.hour ?? 0);
  const minute = Number(snapshot?.minute ?? 0);
  return hour * 60 + minute;
-}
-
-function getPrimeTimeStats(history, currentSnapshot) {
- const PRIME_START = 18 * 60;
- const PRIME_END = 20 * 60 + 30;
-
- const todayKey = currentSnapshot.spDate;
-
- const snapshots = [...history, currentSnapshot].filter((snapshot) => {
-   if (!snapshot || snapshot.spDate !== todayKey) return false;
-   const minutes = getMinutesOfDayFromSnapshot(snapshot);
-   return minutes >= PRIME_START && minutes <= PRIME_END;
- });
-
- const stats = {
-   started: snapshots.length > 0,
-   snapshotCount: snapshots.length,
-   total: {
-     peak: 0,
-     peakTime: null,
-     average: 0,
-   },
-   cities: {},
- };
-
- for (const cityConfig of FIVEM_CITIES) {
-   stats.cities[cityConfig.key] = {
-     name: cityConfig.name,
-     emoji: cityConfig.emoji,
-     peak: 0,
-     peakTime: null,
-     average: 0,
-   };
- }
-
- if (snapshots.length === 0) return stats;
-
- let totalSum = 0;
-
- for (const snapshot of snapshots) {
-   totalSum += snapshot.totalClients || 0;
-
-   if ((snapshot.totalClients || 0) > stats.total.peak) {
-     stats.total.peak = snapshot.totalClients || 0;
-     stats.total.peakTime = snapshot.spTime || null;
-   }
-
-   for (const cityConfig of FIVEM_CITIES) {
-     const city = snapshot.cities?.[cityConfig.key];
-     if (!city) continue;
-
-     stats.cities[cityConfig.key].average += city.clients || 0;
-
-     if ((city.clients || 0) > stats.cities[cityConfig.key].peak) {
-       stats.cities[cityConfig.key].peak = city.clients || 0;
-       stats.cities[cityConfig.key].peakTime = snapshot.spTime || null;
-     }
-   }
- }
-
- stats.total.average = totalSum / snapshots.length;
-
- for (const cityConfig of FIVEM_CITIES) {
-   stats.cities[cityConfig.key].average = stats.cities[cityConfig.key].average / snapshots.length;
- }
-
- return stats;
 }
 
 function formatPeakLine(label, peak, peakTime, average) {
@@ -559,11 +428,11 @@ function formatOnlyCurrentLine(label, current, max, pct, index, yesterday = 0) {
 }
 
 // ---------- EMBED BUILDER ----------
-async function buildEmbeds(client, currentSnapshot, history) {
+async function buildEmbeds(client, currentSnapshot) {
  const embeds = [];
 
- const sevenDaysAgoSnapshot = getSnapshotDaysAgo(history, 7);
- const yesterdaySnapshot = getSnapshotDaysAgo(history, 1);
+ const sevenDaysAgoSnapshot = await getSnapshotDaysAgo(7);
+ const yesterdaySnapshot = await getSnapshotDaysAgo(1);
 
  let totalCurrentClients = 0;
  let totalCurrentMaxClients = 0;
@@ -654,7 +523,7 @@ async function buildEmbeds(client, currentSnapshot, history) {
 
  embeds.push(weekEmbed);
 
- const peaks = loadPeaks();
+ const peaks = await loadPeaksMap();
 
  const todayKey = currentSnapshot.spDate;
  const yesterdayKey = getDateKeyDaysAgoFromSnapshot(currentSnapshot, 1);
@@ -785,11 +654,10 @@ async function ensureStickyMessage(channel) {
    if (!perms?.has(PermissionsBitField.Flags.EmbedLinks)) {
      throw new Error("[FIVEM_RETENTION] Bot sem permissão de Inserir Links Incorporados (Embed Links) no canal.");
    }
-   const history = loadHistory();
    const currentSnapshot = await createCurrentSnapshot();
-   addSnapshot(history, currentSnapshot);
-   updateDailyPeaks(currentSnapshot);
-   const { embeds, row } = await buildEmbeds(channel.client, currentSnapshot, history);
+   await addSnapshot(currentSnapshot);
+   await updateDailyPeaks(currentSnapshot);
+   const { embeds, row } = await buildEmbeds(channel.client, currentSnapshot);
    try {
      msg = await channel.send({ embeds, components: [row] });
      FIVEM_DEBUG && console.log("[FIVEM_RETENTION] Sticky criada:", msg.id);
@@ -816,11 +684,11 @@ async function editPanel(channel, options = {}) {
    return null;
  });
  if (!sticky) return null;
- const history = loadHistory();
+
  const currentSnapshot = await createCurrentSnapshot();
- addSnapshot(history, currentSnapshot);
- updateDailyPeaks(currentSnapshot);
- const { embeds, row } = await buildEmbeds(channel.client, currentSnapshot, history);
+ await addSnapshot(currentSnapshot);
+ await updateDailyPeaks(currentSnapshot);
+ const { embeds, row } = await buildEmbeds(channel.client, currentSnapshot);
  try {
    const edited = await sticky.edit({ embeds, components: [row] });
    if (edited) FIVEM_DEBUG && console.log("[FIVEM_RETENTION] Sticky editada:", edited.id);
@@ -833,8 +701,6 @@ async function editPanel(channel, options = {}) {
 // ---------- PUBLIC API ----------
 export async function fivemRetentionStatusOnReady(client) {
  try {
-   ensureFilesExist(); // Garante estrutura de dados
-
    const channel = await client.channels.fetch(FIVEM_PANEL_CHANNEL_ID).catch(() => null);
    if (!channel || !channel.isTextBased()) {
      console.error("[FIVEM_RETENTION] Canal fixo não encontrado ou inválido:", FIVEM_PANEL_CHANNEL_ID);
