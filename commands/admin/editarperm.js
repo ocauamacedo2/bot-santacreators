@@ -109,29 +109,56 @@ function normalize(str) {
 // ================= COMANDO: !verperms =================
 export async function verPermsHandleMessage(message) {
   if (!message.guild || message.author.bot) return false;
-  if (!message.content.toLowerCase().startsWith('!verperms')) return false;
+  const content = message.content.toLowerCase();
+
+  // Aceita variações comuns como !verperms ou !verpemrs
+  if (!content.startsWith('!verperms') && !content.startsWith('!verpemrs') && !content.startsWith('!verperm')) return false;
 
   if (!ALLOWED_USERS.has(message.author.id)) {
-    return false; // Ignora silenciosamente ou pode mandar msg de erro
+    const reply = await message.reply('❌ Você não possui permissão para ver o guia de permissões.');
+    setTimeout(() => {
+      message.delete().catch(() => {});
+      reply.delete().catch(() => {});
+    }, 5000);
+    return true;
   }
 
   // Apaga comando
   await message.delete().catch(() => {});
 
-  const lista = Object.keys(PERMS_MAP).map(p => `• \`${p}\``).join('\n');
+  // Organiza as chaves em colunas para facilitar a leitura
+  const keys = Object.keys(PERMS_MAP).sort();
+  let listaFormatada = "";
+  for (let i = 0; i < keys.length; i += 2) {
+    const k1 = keys[i].padEnd(22);
+    const k2 = keys[i + 1] ? `| ${keys[i + 1]}` : "";
+    listaFormatada += `\`${k1}${k2}\` \n`;
+  }
 
   const embed = new EmbedBuilder()
-    .setTitle('📜 Permissões Disponíveis para !editarperm')
-    .setDescription(`Use estas chaves no comando (separadas por vírgula):\n\n${lista}`)
+    .setTitle(' Guia de Uso: !editarperm')
+    .setDescription(
+      `O comando permite configurar permissões de um cargo em **toda uma categoria** (incluindo todos os canais dentro dela) de forma massiva.\n\n` +
+      `**Estrutura do comando:**\n` +
+      `\`!editarperm @Cargo <ID_DA_CATEGORIA> chave1,chave2,chave3\`\n\n` +
+      `**Exemplo prático:**\n` +
+      `\`!editarperm @Moderador 1359244725781266492 vercanal,mandarmensagem,conectar,falar\`\n\n` +
+      `**Chaves disponíveis (o que por depois das vírgulas):**\n` +
+      `${listaFormatada}`
+    )
     .setColor('#00AAFF')
-    .setFooter({ text: 'Esta mensagem será apagada em 2 minutos.' });
+    .addFields({
+      name: '⚠️ Importante',
+      value: '• Não use espaços entre as vírgulas.\n• Permissões não listadas serão **removidas** do cargo nos canais alvo.'
+    })
+    .setFooter({ text: 'Este guia será apagado em 1 minuto.' });
 
   const msg = await message.channel.send({ embeds: [embed] });
 
-  // Apaga depois de 2 minutos
+  // Apaga depois de 1 minuto
   setTimeout(() => {
     msg.delete().catch(() => {});
-  }, 2 * 60 * 1000);
+  }, 60 * 1000);
 
   return true;
 }
