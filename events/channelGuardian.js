@@ -183,6 +183,11 @@ export async function installChannelGuardian(client) {
             return;
         }
 
+        // 🔓 BYPASS: Avisa aos outros sistemas de segurança (Role Guardian) para não 
+        // devolverem os cargos que vamos remover agora como punição.
+        if (!globalThis.__SC_ROLE_BYPASS__) globalThis.__SC_ROLE_BYPASS__ = new Map();
+        globalThis.__SC_ROLE_BYPASS__.set(perpetratorMember.id, Date.now() + 15000); 
+
         // Usuário não autorizado: remover todos os cargos
         const rolesToRemove = perpetratorMember.roles.cache.filter(role => 
             role.id !== guild.id && // Não remove @everyone
