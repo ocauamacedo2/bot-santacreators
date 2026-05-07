@@ -189,7 +189,7 @@ function buildPanelEmbed(state) {
   const orgs = Object.keys(state.statuses).sort(); // Ordem alfabética/numérica
   
   let description = `**📅 Data:** ${getNowSP().toLocaleDateString("pt-BR")}\n`;
-  description += `**⏰ Horário de Confirmação:** Qui/Sex/Sáb das 16h às 19h\n\n`;
+  description += `**⏰ Horário de Confirmação:** Qui/Sex/Sáb das 19h às 21h\n\n`;
   
   const statusCount = { YES: 0, NO: 0, PENDING: 0 };
 
