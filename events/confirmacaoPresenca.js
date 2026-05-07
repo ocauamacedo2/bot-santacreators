@@ -29,7 +29,7 @@ const PRESENCA_FILE = path.join(DATA_DIR, "confirmacao_presenca_state.json");
 const FACS_FILE_ROOT = path.resolve(process.cwd(), "facs_semanais.json");
 const FACS_FILE_DATA = path.join(DATA_DIR, "facs_semanais.json");
 
-// Horários permitidos (Quinta, Sexta, Sábado das 16h às 19h)
+// Horários permitidos (Quinta, Sexta, Sábado das 19h às 21h)
 const ALLOWED_DAYS = [4, 5, 6]; // 0=Dom, 1=Seg, ..., 4=Qui, 5=Sex, 6=Sab
 const ALLOWED_HOUR_START = 19;
 const ALLOWED_HOUR_END = 21; // Até 20:59
@@ -350,7 +350,7 @@ export async function confirmacaoPresencaHandleInteraction(interaction, client) 
 
     // Checa horário (Bypass para Admins)
     if (!isWindowOpen() && !checkPerms(interaction.member, "ADMIN")) {
-      return interaction.reply({ content: "⏳ O sistema só aceita confirmações **Quinta, Sexta e Sábado das 16h às 19h**.", ephemeral: true });
+      return interaction.reply({ content: "⏳ O sistema só aceita confirmações **Quinta, Sexta e Sábado das 19h às 21h**.", ephemeral: true });
     }
 
     const isConfirm = interaction.customId === "presenca_confirmar";
