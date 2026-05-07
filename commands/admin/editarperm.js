@@ -269,9 +269,11 @@ const targets = category
   : [...message.guild.channels.cache.values()].filter(ch => {
       return (
         ch &&
+        ch.isTextBased() || ch.isVoiceBased() || ch.type === ChannelType.GuildCategory || ch.type === ChannelType.GuildForum && // Filtra tipos de canais válidos
         ch.manageable &&
         ch.permissionOverwrites &&
-        typeof ch.permissionOverwrites.create === 'function'
+        typeof ch.permissionOverwrites.create === 'function' && // Garante que o método existe
+        ch.permissionOverwrites.cache.has(role.id) // <--- NOVA REGRA: SÓ ALTERA SE JÁ TIVER OVERWRITE
       );
     });
 
@@ -279,7 +281,7 @@ const targets = category
 await statusMsg.edit(
   category
     ? `🔄 **Aplicando permissões em ${targets.length} canais/categoria da categoria ${category.name}...**`
-    : `🔄 **Varrendo o servidor inteiro e aplicando permissões onde o bot tem acesso...**\nEncontrados: **${targets.length}** canais/categorias editáveis.`
+    : `🔄 **Varrendo o servidor inteiro e alterando apenas canais/categorias onde o cargo já tinha overwrite configurado...**\nEncontrados: **${targets.length}** canais/categorias editáveis.`
 );
 
     let changedCount = 0;
@@ -319,8 +321,8 @@ await statusMsg.edit(
           {
   name: '📂 Escopo',
   value: category
-    ? `Categoria: ${category.name} (\`${category.id}\`)`
-    : 'Servidor inteiro — apenas canais/categorias onde o bot conseguiu editar',
+    ? `Categoria: ${category.name} (\`${category.id}\`)` // Mantém a mensagem para o modo com categoria
+    : 'Servidor inteiro — apenas canais/categorias onde o cargo já tinha overwrite/permissão configurada', // Nova mensagem para o modo sem categoria
   inline: false
 },
           { name: '✅ Permissões Definidas', value: permsNames.map(p => `\`${p}\``).join(', '), inline: false },
@@ -350,7 +352,7 @@ await statusMsg.edit(
     await statusMsg.edit(
   category
     ? `✅ **Concluído!** Permissões do cargo **${role.name}** alteradas na categoria **${category.name}** e seus canais.\nPermissões definidas: ${permsNames.join(', ')}.`
-    : `✅ **Concluído!** Permissões do cargo **${role.name}** alteradas no servidor inteiro onde o bot tinha acesso.\nCanais/categorias alterados: **${changedCount}**.\nPermissões definidas: ${permsNames.join(', ')}.`
+    : `✅ **Concluído!** Permissões do cargo **${role.name}** alteradas apenas nos canais/categorias onde ele já tinha overwrite configurado.\nCanais/categorias alterados: **${changedCount}**.\nPermissões definidas: ${permsNames.join(', ')}.`
 );
 
     // Apaga conclusão após 20s
