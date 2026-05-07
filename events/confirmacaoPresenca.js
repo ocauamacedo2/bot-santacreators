@@ -31,8 +31,8 @@ const FACS_FILE_DATA = path.join(DATA_DIR, "facs_semanais.json");
 
 // Horários permitidos (Quinta, Sexta, Sábado das 16h às 19h)
 const ALLOWED_DAYS = [4, 5, 6]; // 0=Dom, 1=Seg, ..., 4=Qui, 5=Sex, 6=Sab
-const ALLOWED_HOUR_START = 16;
-const ALLOWED_HOUR_END = 19; // Até 18:59
+const ALLOWED_HOUR_START = 19;
+const ALLOWED_HOUR_END = 21; // Até 20:59
 
 // Permissões: Quem pode confirmar (Vai/Não Vai)
 const CONFIRM_ROLES = [
