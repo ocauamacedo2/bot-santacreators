@@ -1,4 +1,6 @@
 // d:\santacreators-main\commands\admin\editarperm.js
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   EmbedBuilder,
   ActionRowBuilder,
@@ -164,7 +166,7 @@ export async function verPermsHandleMessage(message) {
 }
 
 // ================= COMANDO: !editarperm =================
-export async function editarPermHandleMessage(message, client) {
+export async function editarPermHandleMessage(message, args, client) {
   if (!message.guild || message.author.bot) return false;
   if (!message.content.toLowerCase().startsWith('!editarperm')) return false;
 
@@ -179,9 +181,6 @@ export async function editarPermHandleMessage(message, client) {
   const statusMsg = await message.channel.send('🔄 **Processando alterações de permissão...**');
 
   try {
-    // Parse: !editarperm @cargo <id_cat> perm1, perm2
-    const args = message.content.slice('!editarperm'.length).trim().split(/ +/);
-    
     // 1. Cargo
     const roleMention = args.shift();
     const roleId = roleMention?.replace(/[<@&>]/g, '');
@@ -413,3 +412,8 @@ export async function editarPermHandleInteraction(interaction, client) {
   await interaction.editReply({ content: `✅ **Sucesso!** ${restoredCount} canais/categorias restaurados.` });
   return true;
 }
+
+export default {
+  name: 'editarperm',
+  execute: editarPermHandleMessage,
+};
