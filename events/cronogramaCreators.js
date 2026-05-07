@@ -11,6 +11,7 @@ import {
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
+  MessageFlags,
 } from "discord.js";
 
 import { dashEmit } from "../utils/dashHub.js";
@@ -92,7 +93,6 @@ const DEFAULT_STATE = {
     ter: { city: "Nobre", time: "01:00 às 03:00", active: true, eventName: "F3 MADRUGADA", prizes: "—" },
     qua: { city: "Nobre", time: "01:00 às 03:00", active: true, eventName: "F3 MADRUGADA", prizes: "—" },
     qui: { city: "Nobre", time: "01:00 às 03:00", active: true, eventName: "F3 MADRUGADA", prizes: "—" },
-    qui: { city: "Nobre", time: "01:00 às 03:00", active: false, eventName: "F3 MADRUGADA", prizes: "—" },
     sex: { city: "Nobre", time: "01:00 às 03:00", active: false, eventName: "F3 MADRUGADA", prizes: "—" },
     sab: { city: "Nobre", time: "01:00 às 03:00", active: false, eventName: "F3 MADRUGADA", prizes: "—" },
     dom: { city: "—", time: "—", active: false, eventName: "F3 MADRUGADA", prizes: "—" },
@@ -479,7 +479,7 @@ function buildCronogramaMentions() {
 
 // ================= LOGIC =================
 
-async function updatePanel(client, state) {
+async function updatePanel(client, state, options = {}) {
   try {
     const channel = await client.channels.fetch(PANEL_CHANNEL_ID).catch(() => null);
     if (!channel || !channel.isTextBased()) return;
@@ -493,7 +493,7 @@ async function updatePanel(client, state) {
     const expectedMessageCount = chunks.length + 1;
 
     // Se a lista de IDs de mensagem de texto for igual ao número esperado, edita as mensagens existentes.
-    const canReuse = state.textMessageIds?.length === expectedMessageCount;
+    const canReuse = !options.forceRecreate && state.textMessageIds?.length === expectedMessageCount;
 
        if (canReuse) {
       // Edita os chunks principais
@@ -523,27 +523,26 @@ async function updatePanel(client, state) {
       }
     } else {
       // Recria tudo (Modo Limpeza)
-      if (state.textMessageIds?.length) {
-        for (const id of state.textMessageIds) {
-          const msg = await channel.messages.fetch(id).catch(() => null);
-          if (msg) await msg.delete().catch(() => {});
-        }
-      }
+      const toDelete = new Set(state.textMessageIds || []);
       state.textMessageIds = [];
 
-      // Limpa órfãos de forma mais agressiva
+      // Identifica mensagens para limpar o canal de forma otimizada
       try {
         const recent = await channel.messages.fetch({ limit: 50 }).catch(() => null);
         if (recent) {
-          // Apaga QUALQUER mensagem do bot que NÃO seja o painel de controle
-          const orphans = recent.filter(m => m.author.id === client.user.id && m.id !== state.panelMessageId);
-          for (const orphan of orphans.values()) {
-            // Adiciona uma verificação para não apagar o próprio painel de controle por engano
-            if (orphan.embeds.some(e => e.footer?.text?.includes("Controle do Cronograma"))) continue;
-            await orphan.delete().catch(() => {});
-          }
+          recent.forEach(m => {
+            if (m.author.id === client.user.id && m.id !== state.panelMessageId) {
+              if (m.embeds.some(e => e.footer?.text?.includes("Controle do Cronograma"))) return;
+              toDelete.add(m.id);
+            }
+          });
         }
       } catch {}
+
+      // Deleta em massa/paralelo (muito mais rápido)
+      if (toDelete.size > 0) {
+        await Promise.all(Array.from(toDelete).map(id => channel.messages.delete(id).catch(() => {})));
+      }
 
             // Envia os chunks de texto
       for (let i = 0; i < chunks.length; i++) {
@@ -781,16 +780,16 @@ export async function cronogramaCreatorsHandleInteraction(interaction, client) {
 
   // Botão Desfazer
   if (interaction.isButton() && interaction.customId.startsWith("crono_undo:")) {
-    if (!hasPerm) return interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
+    if (!hasPerm) return interaction.reply({ content: "🚫 Sem permissão.", flags: MessageFlags.Ephemeral });
     
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const changeId = interaction.customId.split(":")[1];
     const previousState = getHistory(changeId);
 
     if (!previousState) return interaction.editReply("❌ Histórico não encontrado.");
 
     saveState(previousState);
-    await updatePanel(client, previousState);
+    await updatePanel(client, previousState, { forceRecreate: true });
     await interaction.editReply("✅ Alteração desfeita com sucesso!");
     return true;
   }
@@ -798,16 +797,15 @@ export async function cronogramaCreatorsHandleInteraction(interaction, client) {
   // Botões Principais
   if (interaction.isButton()) {
     if (interaction.customId === "crono_refresh") {
-      if (!hasPerm) return interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
+      if (!hasPerm) return interaction.reply({ content: "🚫 Sem permissão.", flags: MessageFlags.Ephemeral });
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       const state = loadState();
-      // ✅ Força a recriação zerando os IDs das mensagens de texto antes de chamar o update
-      state.textMessageIds = [];
-      await updatePanel(client, state);
-      return interaction.reply({ content: "✅ Painel atualizado e recriado!", ephemeral: true });
+      await updatePanel(client, state, { forceRecreate: true });
+      return interaction.editReply({ content: "✅ Painel atualizado e recriado!" });
     }
 
     if (interaction.customId === "crono_edit_menu") {
-      if (!hasPerm) return interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
+      if (!hasPerm) return interaction.reply({ content: "🚫 Sem permissão.", flags: MessageFlags.Ephemeral });
       
       const row = new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
@@ -819,21 +817,21 @@ export async function cronogramaCreatorsHandleInteraction(interaction, client) {
             { label: "Editar Imagem Final", value: "edit_footer_img", emoji: "🖼️" }
           ])
       );
-      return interaction.reply({ content: "Selecione o que deseja editar:", components: [row], ephemeral: true });
+      return interaction.reply({ content: "Selecione o que deseja editar:", components: [row], flags: MessageFlags.Ephemeral });
     }
 
     // ✅ Solicitar Aprovação
     if (interaction.customId === "crono_req_approval") {
-      if (!hasPerm) return interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
+      if (!hasPerm) return interaction.reply({ content: "🚫 Sem permissão.", flags: MessageFlags.Ephemeral });
 
       // Checa se é Sábado ou Domingo
       const now = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
       const day = now.getDay(); // 0=Dom, 6=Sab
       if (day !== 0 && day !== 6) {
-          return interaction.reply({ content: "⚠️ A solicitação de aprovação/pontos só é permitida aos **Sábados e Domingos** (dias de atualização).", ephemeral: true });
+          return interaction.reply({ content: "⚠️ A solicitação de aprovação/pontos só é permitida aos **Sábados e Domingos** (dias de atualização).", flags: MessageFlags.Ephemeral });
       }
 
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
       const state = loadState();
       const summary = buildScheduleSummary(state);
@@ -871,7 +869,7 @@ export async function cronogramaCreatorsHandleInteraction(interaction, client) {
         interaction.member.roles.cache.some(r => APPROVER_ROLES.includes(r.id));
 
       if (!isApprover) {
-        return interaction.reply({ content: "🚫 Você não tem permissão para aprovar cronogramas.", ephemeral: true });
+        return interaction.reply({ content: "🚫 Você não tem permissão para aprovar cronogramas.", flags: MessageFlags.Ephemeral });
       }
       
       const targetId = interaction.customId.split(":")[1];
@@ -886,7 +884,7 @@ export async function cronogramaCreatorsHandleInteraction(interaction, client) {
 
         // A) Não pode aprovar a si mesmo
         if (targetId === interaction.user.id) {
-           return interaction.reply({ content: "❌ Você não pode aprovar sua própria solicitação.", ephemeral: true });
+           return interaction.reply({ content: "❌ Você não pode aprovar sua própria solicitação.", flags: MessageFlags.Ephemeral });
         }
 
         // B) Hierarquia específica
@@ -897,12 +895,12 @@ export async function cronogramaCreatorsHandleInteraction(interaction, client) {
 
             // Resp Lider (1352407252216184833) não aprova Resp Influ (1262262852949905409)
             if (approverRoles.has("1352407252216184833") && targetRoles.has("1262262852949905409")) {
-                return interaction.reply({ content: "❌ Resp. Líder não pode aprovar Resp. Influência.", ephemeral: true });
+                return interaction.reply({ content: "❌ Resp. Líder não pode aprovar Resp. Influência.", flags: MessageFlags.Ephemeral });
             }
 
             // Resp Influ não aprova Resp Influ
             if (approverRoles.has("1262262852949905409") && targetRoles.has("1262262852949905409")) {
-                return interaction.reply({ content: "❌ Resp. Influência não pode aprovar outro Resp. Influência.", ephemeral: true });
+                return interaction.reply({ content: "❌ Resp. Influência não pode aprovar outro Resp. Influência.", flags: MessageFlags.Ephemeral });
             }
         }
       }
@@ -925,7 +923,7 @@ export async function cronogramaCreatorsHandleInteraction(interaction, client) {
       });
 
       // 3. Confirmação visual
-      await interaction.followUp({ content: "✅ Cronograma aprovado e ponto computado!", ephemeral: true });
+      await interaction.followUp({ content: "✅ Cronograma aprovado e ponto computado!", flags: MessageFlags.Ephemeral });
       return true;
     }
 
@@ -935,7 +933,7 @@ export async function cronogramaCreatorsHandleInteraction(interaction, client) {
         BYPASS_USERS.includes(interaction.user.id) ||
         interaction.member.roles.cache.some(r => APPROVER_ROLES.includes(r.id));
 
-      if (!isApprover) return interaction.reply({ content: "🚫 Sem permissão para recusar.", ephemeral: true });
+      if (!isApprover) return interaction.reply({ content: "🚫 Sem permissão para recusar.", flags: MessageFlags.Ephemeral });
 
       await interaction.deferUpdate();
 
@@ -945,7 +943,7 @@ export async function cronogramaCreatorsHandleInteraction(interaction, client) {
 
       await interaction.message.edit({ embeds: [embed], components: [] });
       
-      await interaction.followUp({ content: "❌ Cronograma recusado.", ephemeral: true });
+      await interaction.followUp({ content: "❌ Cronograma recusado.", flags: MessageFlags.Ephemeral });
       return true;
     }
   }
@@ -1027,7 +1025,7 @@ export async function cronogramaCreatorsHandleInteraction(interaction, client) {
     await updatePanel(client, newState);
     await logChange(client, interaction.guild, interaction.user, oldState, newState, `Alterou Imagem Final`);
     
-    return interaction.reply({ content: "✅ Imagem atualizada!", ephemeral: true });
+    return interaction.reply({ content: "✅ Imagem atualizada!", flags: MessageFlags.Ephemeral });
   }
 
   // Modal Submit
@@ -1051,7 +1049,7 @@ export async function cronogramaCreatorsHandleInteraction(interaction, client) {
     await updatePanel(client, newState);
     await logChange(client, interaction.guild, interaction.user, oldState, newState, `Editou ${day.toUpperCase()} (${type})`);
 
-    return interaction.reply({ content: "✅ Cronograma atualizado!", ephemeral: true });
+    return interaction.reply({ content: "✅ Cronograma atualizado!", flags: MessageFlags.Ephemeral });
   }
 
   return false;

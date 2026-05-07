@@ -8,6 +8,8 @@ import { registroPoderesEventosHandleInteraction } from './registroPoderesEvento
 import { focoSemanaisHandleInteraction } from './focoSemanais.js';
 import { provasAdvHandleInteraction } from './provasAdv.js';
 import { blacklistFacsHandleInteraction } from './blacklistFacs.js';
+import { cronogramaCreatorsHandleInteraction } from './cronogramaCreators.js';
+import { MessageFlags } from 'discord.js';
 
 // Ignora tudo do fluxo do Pedir Set (tratado no index.js)
 const isSetFlow = (interaction) => {
@@ -32,6 +34,9 @@ export default {
     try {
       // ✅ não mexe no set flow
       if (isSetFlow(interaction)) return;
+
+      // ✅ Cronograma Creators
+      if (await cronogramaCreatorsHandleInteraction(interaction, interaction.client)) return;
 
       // ✅ VIP/Rolepass Registro
       if (await vipRegistroHandleInteraction(interaction, interaction.client)) return;
@@ -66,7 +71,7 @@ export default {
       console.error('[InteractionCreate] Erro ao processar:', err);
       try {
         if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
-          await interaction.reply({ content: '⚠️ Ocorreu um erro interno ao processar sua ação.', ephemeral: true });
+          await interaction.reply({ content: '⚠️ Ocorreu um erro interno ao processar sua ação.', flags: MessageFlags.Ephemeral });
         }
       } catch {}
     }
