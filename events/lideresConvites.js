@@ -68,9 +68,10 @@ const trunc = (s, m = 1000) =>
 
 /**
  * Discord limita content em 4000 chars.
- * Aqui a gente usa 3900 pra ter folga.
+ * ✅ CORREÇÃO: Mensagens normais (fora de threads/premium) têm limite de 2000.
+ * Usamos 1900 para ter margem de segurança.
  */
-const MAX_CONTENT = 3900;
+const MAX_CONTENT = 1900;
 
 function canSend(ch) {
   if (!ch || typeof ch.send !== "function") return false;

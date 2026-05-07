@@ -539,9 +539,14 @@ async function updatePanel(client, state, options = {}) {
         }
       } catch {}
 
-      // Deleta em massa/paralelo (muito mais rápido)
+      // ✅ CORREÇÃO: Usa bulkDelete para apagar em blocos de 100 (evita AbortError)
       if (toDelete.size > 0) {
-        await Promise.all(Array.from(toDelete).map(id => channel.messages.delete(id).catch(() => {})));
+        const deleteArray = Array.from(toDelete);
+        // Divide em grupos de 100 (limite do bulkDelete)
+        for (let i = 0; i < deleteArray.length; i += 100) {
+          const chunk = deleteArray.slice(i, i + 100);
+          await channel.bulkDelete(chunk, true).catch(() => {});
+        }
       }
 
             // Envia os chunks de texto
