@@ -1,6 +1,4 @@
 // d:\santacreators-main\commands\admin\editarperm.js
-import fs from 'node:fs';
-import path from 'node:path';
 import {
   EmbedBuilder,
   ActionRowBuilder,
@@ -8,6 +6,7 @@ import {
   ButtonStyle,
   PermissionsBitField,
   ChannelType,
+  MessageFlags,
 } from 'discord.js';
 
 // ================= CONFIG =================
@@ -17,6 +16,7 @@ const ALLOWED_USERS = new Set([
 ]);
 
 const LOG_CHANNEL_ID = '1479773472082235422';
+const PROGRESS_UPDATE_INTERVAL_MS = 1500; // Atualiza a cada 1.5 segundos
 
 // Mapeamento de nomes amigáveis para Flags do Discord
 const PERMS_MAP = {
@@ -24,6 +24,10 @@ const PERMS_MAP = {
   'gerenciar canal': PermissionsBitField.Flags.ManageChannels,
   'gerenciar permissoes': PermissionsBitField.Flags.ManageRoles,
   'gerenciar webhooks': PermissionsBitField.Flags.ManageWebhooks,
+  'vercanal': PermissionsBitField.Flags.ViewChannel,
+  'vercanais': PermissionsBitField.Flags.ViewChannel,
+  'mandarmensagem': PermissionsBitField.Flags.SendMessages,
+  'mensagem': PermissionsBitField.Flags.SendMessages,
   'criar convite': PermissionsBitField.Flags.CreateInstantInvite,
   'enviar mensagens': PermissionsBitField.Flags.SendMessages,
   'enviar mensagens em topicos': PermissionsBitField.Flags.SendMessagesInThreads,
@@ -31,6 +35,7 @@ const PERMS_MAP = {
   'criar topicos privados': PermissionsBitField.Flags.CreatePrivateThreads,
   'inserir links': PermissionsBitField.Flags.EmbedLinks,
   'anexar arquivos': PermissionsBitField.Flags.AttachFiles,
+  'anexar': PermissionsBitField.Flags.AttachFiles,
   'adicionar reacoes': PermissionsBitField.Flags.AddReactions,
   'usar emojis externos': PermissionsBitField.Flags.UseExternalEmojis,
   'usar figurinhas externas': PermissionsBitField.Flags.UseExternalStickers,
@@ -38,6 +43,7 @@ const PERMS_MAP = {
   'gerenciar mensagens': PermissionsBitField.Flags.ManageMessages,
   'ler historico de mensagens': PermissionsBitField.Flags.ReadMessageHistory,
   'enviar tts': PermissionsBitField.Flags.SendTTSMessages,
+  'gerenciar': PermissionsBitField.Flags.ManageChannels,
   'usar comandos de aplicativo': PermissionsBitField.Flags.UseApplicationCommands,
   'conectar': PermissionsBitField.Flags.Connect,
   'falar': PermissionsBitField.Flags.Speak,

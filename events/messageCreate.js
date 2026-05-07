@@ -41,6 +41,7 @@ import { removerMassivoHandleMessage } from '../commands/admin/removerMassivo.js
 import perfildc from '../commands/admin/perfildc.js';
 import logarcategoria from './logs/logarcategoria.js';
 
+import editarperm, { verPermsHandleMessage } from '../commands/admin/editarperm.js'; // Importa o comando e o handler de verperms
 // 🔻 removido: setstaff (não usado)
 // import setstaff from '../commands/admin/setstaff.js';
 
@@ -75,6 +76,7 @@ const commands = {
   meuscargos,
   perfildc,
   infoid,
+  editarperm,
   logarcategoria,
 
   // permissões de canal
@@ -148,6 +150,9 @@ export default {
     if (await verIdHandleMessage(message, client)) return;
     if (await apagarChatHandleMessage(message, client)) return;
     if (await removerMassivoHandleMessage(message, client)) return;
+
+    // ✅ Comando !verperms
+    if (await verPermsHandleMessage(message)) return;
 
   },
 };
