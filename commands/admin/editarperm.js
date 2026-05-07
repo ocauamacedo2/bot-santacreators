@@ -186,19 +186,37 @@ export async function editarPermHandleMessage(message, args, client) {
     const roleId = roleMention?.replace(/[<@&>]/g, '');
     const role = message.guild.roles.cache.get(roleId);
 
-    // 2. Categoria
-    const catId = args.shift();
-    const category = message.guild.channels.cache.get(catId);
+    // 2. Categoria opcional
+let category = null;
+let permsString = '';
 
-    // 3. Permissões (o resto da string)
-    const permsString = args.join(' ');
-    const permsList = permsString.split(',').map(s => normalize(s));
+const possibleCategoryId = args[0];
+const possibleCategory = possibleCategoryId
+  ? message.guild.channels.cache.get(possibleCategoryId)
+  : null;
 
-    if (!role || !category || category.type !== ChannelType.GuildCategory || !permsList.length) {
-      await statusMsg.edit('❌ **Erro:** Uso incorreto.\n`!editarperm @cargo <id_categoria> Permissao1, Permissao2`');
-      setTimeout(() => statusMsg.delete().catch(() => {}), 10000);
-      return true;
-    }
+if (possibleCategory && possibleCategory.type === ChannelType.GuildCategory) {
+  args.shift();
+  category = possibleCategory;
+}
+
+// 3. Permissões
+permsString = args.join(' ');
+const permsList = permsString
+  .split(',')
+  .map(s => normalize(s))
+  .filter(Boolean);
+
+if (!role || !permsList.length) {
+  await statusMsg.edit(
+    '❌ **Erro:** Uso incorreto.\n' +
+    '`!editarperm @cargo <id_categoria> permissao1,permissao2`\n' +
+    'ou\n' +
+    '`!editarperm @cargo permissao1,permissao2`'
+  );
+  setTimeout(() => statusMsg.delete().catch(() => {}), 10000);
+  return true;
+}
 
     // Mapear permissões
     const newPerms = {};
@@ -222,13 +240,14 @@ export async function editarPermHandleMessage(message, args, client) {
     
     // Snapshot para Undo
     const undoId = `${message.id}-${Date.now()}`;
-    const undoData = {
-      guildId: message.guild.id,
-      roleId: role.id,
-      categoryId: category.id,
-      executorId: message.author.id,
-      channels: [] // { id, allow, deny }
-    };
+   const undoData = {
+  guildId: message.guild.id,
+  roleId: role.id,
+  categoryId: category ? category.id : null,
+  mode: category ? 'category' : 'guild',
+  executorId: message.author.id,
+  channels: [] // { id, allow, deny }
+};
 
     // Função para capturar estado atual de um canal/categoria
     const snapshotChannel = (ch) => {
@@ -242,11 +261,26 @@ export async function editarPermHandleMessage(message, args, client) {
       };
     };
 
-    // Lista de canais afetados (Categoria + Filhos)
-    const targets = [category, ...category.children.cache.values()];
-    
-    // Atualiza status
-    await statusMsg.edit(`🔄 **Aplicando permissões em ${targets.length} canais/categoria...**`);
+  // Lista de canais afetados
+// Se tiver categoria: categoria + filhos
+// Se não tiver categoria: varre todos os canais/categorias do servidor
+const targets = category
+  ? [category, ...category.children.cache.values()]
+  : [...message.guild.channels.cache.values()].filter(ch => {
+      return (
+        ch &&
+        ch.manageable &&
+        ch.permissionOverwrites &&
+        typeof ch.permissionOverwrites.create === 'function'
+      );
+    });
+
+// Atualiza status
+await statusMsg.edit(
+  category
+    ? `🔄 **Aplicando permissões em ${targets.length} canais/categoria da categoria ${category.name}...**`
+    : `🔄 **Varrendo o servidor inteiro e aplicando permissões onde o bot tem acesso...**\nEncontrados: **${targets.length}** canais/categorias editáveis.`
+);
 
     let changedCount = 0;
 
@@ -282,7 +316,13 @@ export async function editarPermHandleMessage(message, args, client) {
         .addFields(
           { name: '👤 Executor', value: `<@${message.author.id}>`, inline: true },
           { name: '🎭 Cargo Afetado', value: `<@&${role.id}>`, inline: true },
-          { name: '📂 Categoria', value: `${category.name} (\`${category.id}\`)`, inline: false },
+          {
+  name: '📂 Escopo',
+  value: category
+    ? `Categoria: ${category.name} (\`${category.id}\`)`
+    : 'Servidor inteiro — apenas canais/categorias onde o bot conseguiu editar',
+  inline: false
+},
           { name: '✅ Permissões Definidas', value: permsNames.map(p => `\`${p}\``).join(', '), inline: false },
           { name: '📊 Canais Afetados', value: `${changedCount} canais`, inline: true },
           { name: '📍 Canal do Comando', value: `<#${message.channel.id}>`, inline: true }
@@ -292,7 +332,7 @@ export async function editarPermHandleMessage(message, args, client) {
 
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
-          .setCustomId(`editarperm_undo:`)
+          .setCustomId(`editarperm_undo:${undoId}`)
           .setLabel('Desfazer Alterações')
           .setStyle(ButtonStyle.Danger)
           .setEmoji('↩️'),
@@ -307,7 +347,11 @@ export async function editarPermHandleMessage(message, args, client) {
     }
 
     // ================= CONCLUSÃO =================
-    await statusMsg.edit(`✅ **Concluído!** Permissões do cargo **${role.name}** alteradas na categoria **${category.name}** e seus canais.\nPermissões definidas: ${permsNames.join(', ')}.`);
+    await statusMsg.edit(
+  category
+    ? `✅ **Concluído!** Permissões do cargo **${role.name}** alteradas na categoria **${category.name}** e seus canais.\nPermissões definidas: ${permsNames.join(', ')}.`
+    : `✅ **Concluído!** Permissões do cargo **${role.name}** alteradas no servidor inteiro onde o bot tinha acesso.\nCanais/categorias alterados: **${changedCount}**.\nPermissões definidas: ${permsNames.join(', ')}.`
+);
 
     // Apaga conclusão após 20s
     setTimeout(() => {
