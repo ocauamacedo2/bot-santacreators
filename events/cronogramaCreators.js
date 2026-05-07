@@ -528,7 +528,7 @@ async function updatePanel(client, state, options = {}) {
 
       // Identifica mensagens para limpar o canal de forma otimizada
       try {
-        const recent = await channel.messages.fetch({ limit: 50 }).catch(() => null);
+        const recent = await channel.messages.fetch({ limit: 200 }).catch(() => null); // Aumentado o limite para uma limpeza mais robusta
         if (recent) {
           recent.forEach(m => {
             if (m.author.id === client.user.id && m.id !== state.panelMessageId) {
