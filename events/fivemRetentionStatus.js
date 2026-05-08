@@ -587,17 +587,17 @@ async function buildEmbeds(client, currentSnapshot) {
  const todayPeaks = peaks[todayKey];
  const yesterdayPeaks = peaks[yesterdayKey];
  const lastWeekPeaks = peaks[lastWeekKeyForPeaks];
-
+ 
+ // Configuração de Labels dinâmicos baseados no dia
  const primeWindow = getPrimeTimeWindow(currentSnapshot);
- const primeTimeLabel = primeWindow ? `${String(primeWindow.startHour).padStart(2, '0')}:00 e ${String(primeWindow.endHour).padStart(2, '0')}:00` : "sem horário específico";
-
- // Pega o valor exato das 21:00 de hoje
- const exact21hToday = todayPeaks?.exact21h?.total || 0;
- const exact21hYesterday = yesterdayPeaks?.exact21h?.total || 0;
- const exact21hLastWeek = lastWeekPeaks?.exact21h?.total || 0;
+ const primeTimeLabel = primeWindow ? primeWindow.label : "sem horário específico";
 
  const weekday = getSaoPauloWeekday(new Date(currentSnapshot.timestamp));
- const isRelevant21hDay = (weekday >= 4 && weekday <= 6) || (weekday >= 1 && weekday <= 3);
+ const isRelevant21hDay = (weekday >= 1 && weekday <= 6);
+
+ // Pega os totais das 21h para o resumo final
+ const exact21hTodayTotal = todayPeaks?.exact21h?.total || 0;
+ const exact21hYesterdayTotal = yesterdayPeaks?.exact21h?.total || 0;
 
  const peakCityData = FIVEM_CITIES
    .map((cityConfig) => {
@@ -632,19 +632,20 @@ async function buildEmbeds(client, currentSnapshot) {
 
  const primeEmbed = new EmbedBuilder()
   .setColor(cn2ParseColor(process.env.BASE_COLORS, DEFAULT_COLOR))
-  .setTitle(`🔥 PICOS DO HORÁRIO DE EVENTOS SC (${primeTimeLabel}) 💜`)
+  .setTitle(`🔥 PICOS DO HORÁRIO DE EVENTOS (${primeTimeLabel}) 💜`)
   .setDescription(
     `Maior pico registrado entre **${primeTimeLabel}**\n` +
     `Comparando cada cidade com o pico dela mesma de ontem e de 7 dias atrás.\n\n` +
     peakCityData
       .map((item, index) => {
-        // Exibe o pico das 21:00 se for um dia relevante
+        // Linha extra com o valor das 21h em ponto
         let exact21hLine = "";
         if (isRelevant21hDay) {
-          exact21hLine = `21:00: \`${formatNumber(item.exact21hToday)}\` players ` +
-                         `Ontem: \`${formatNumber(item.exact21hYesterday)}\` ${formatCompareCompact(item.exact21hToday, item.exact21hYesterday)}\n` +
-                         `7 dias: \`${formatNumber(item.exact21hLastWeek)}\` ${formatCompareCompact(item.exact21hToday, item.exact21hLastWeek)}\n`;
+          exact21hLine = `🕒 às 21:00: \`${formatNumber(item.exact21hToday)}\` players ` +
+                         ` (Ontem: \`${formatNumber(item.exact21hYesterday)}\` ${formatCompareCompact(item.exact21hToday, item.exact21hYesterday)})\n` +
+                         ` 7 dias atrás: \`${formatNumber(item.exact21hLastWeek)}\` ${formatCompareCompact(item.exact21hToday, item.exact21hLastWeek)}\n`;
         }
+
 
 
 
@@ -689,8 +690,8 @@ embeds.push(primeEmbed);
          return `${medal} **BR ${item.name.padEnd(8, " ")}** : \`${formatNumber(item.peak)}\` às \`${item.time}\``;
        })
        .join("\n\n") +
-     (isRelevant21hDay
-       ? `\n\n**Total Geral às 21:00:** \`${formatNumber(exact21hTodayTotal)}\` ${formatCompareCompact(exact21hTodayTotal, exact21hYesterdayTotal)}`
+     (isRelevant21hDay 
+       ? `\n\n**Total Geral às 21:00:** \`${formatNumber(exact21hTodayTotal)}\` ${formatCompareCompact(exact21hTodayTotal, exact21hYesterdayTotal)}` 
        : ""
      ) +
      `\n\n**Total geral** : ${formatPeakValue(todayPeaks?.total?.peak, todayPeaks?.total?.peakTime)}`
