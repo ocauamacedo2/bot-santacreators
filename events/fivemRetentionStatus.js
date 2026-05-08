@@ -146,6 +146,37 @@ function getWeekKeySP(date = new Date()) {
  const sunday = new Date(d.setDate(diff));
  return `${sunday.getFullYear()}-${String(sunday.getMonth() + 1).padStart(2, '0')}-${String(sunday.getDate()).padStart(2, '0')}`;
 }
+
+function getSaoPauloWeekday(date = new Date()) {
+  const spDate = new Date(date.toLocaleString("en-US", { timeZone: FIVEM_TIMEZONE }));
+  return spDate.getDay(); // 0 = Domingo, 1 = Segunda...
+}
+
+function getPrimeTimeWindow(snapshot) {
+  const weekday = getSaoPauloWeekday(new Date(snapshot.timestamp));
+
+  // Segunda (1), Terça (2), Quarta (3) -> 18:00 às 20:00
+  if (weekday >= 1 && weekday <= 3) {
+    return { startHour: 18, endHour: 20, label: "18:00 às 20:00" };
+  }
+
+  // Quinta (4), Sexta (5), Sábado (6) -> 21:00 às 23:00
+  if (weekday >= 4 && weekday <= 6) {
+    return { startHour: 21, endHour: 23, label: "21:00 às 23:00" };
+  }
+
+  return null;
+}
+
+function isExact21hSnapshot(snapshot) {
+  const weekday = getSaoPauloWeekday(new Date(snapshot.timestamp));
+  // Dias de Segunda a Sábado (1-6)
+  const isRelevantDay = (weekday >= 1 && weekday <= 6);
+
+  // Captura o primeiro snapshot da hora 21 (intervalo de 2min)
+  return isRelevantDay && snapshot.hour === 21 && snapshot.minute < 2;
+}
+
 function formatNumber(n) {
  if (typeof n !== 'number' || isNaN(n)) return 'N/A';
  return n.toLocaleString('pt-BR');
@@ -264,8 +295,9 @@ function getDateKeyDaysAgoFromSnapshot(currentSnapshot, days) {
 }
 
 function isPrimeTimeSnapshot(snapshot) {
-  const minutes = getMinutesOfDayFromSnapshot(snapshot);
-  return minutes >= 18 * 60 && minutes <= 20 * 60;
+  const window = getPrimeTimeWindow(snapshot);
+  if (!window) return false;
+  return snapshot.hour >= window.startHour && snapshot.hour < window.endHour;
 }
 
 async function updateDailyPeaks(currentSnapshot) {
