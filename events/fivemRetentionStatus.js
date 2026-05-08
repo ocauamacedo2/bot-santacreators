@@ -359,10 +359,13 @@ function formatPeakValue(value, time) {
 function formatPrimePeakToday(value, time, currentSnapshot) {
  if (value && value > 0) return `\`${formatNumber(value)}\` players às \`${time || "--:--"}\``;
 
+ const window = getPrimeTimeWindow(currentSnapshot);
+ if (!window) return "`sem horário de pico hoje`";
+
  const minutes = getMinutesOfDayFromSnapshot(currentSnapshot);
 
- if (minutes < 18 * 60) return "`aguardando 18:00`";
- if (minutes > 20 * 60) return "`sem pico registrado entre 18:00 e 20:00`";
+ if (minutes < window.startHour * 60) return `\`aguardando ${window.startHour}:00\``;
+ if (minutes > window.endHour * 60) return `\`sem pico registrado entre ${window.label}\``;
 
  return "`coletando agora`";
 }
