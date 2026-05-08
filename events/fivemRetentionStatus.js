@@ -40,6 +40,7 @@ const PeakSchema = new mongoose.Schema({
   date: { type: String, unique: true },
   total: mongoose.Schema.Types.Mixed,
   cities: mongoose.Schema.Types.Mixed,
+  exact21h: mongoose.Schema.Types.Mixed, // Novo campo para players às 21:00
 });
 const PeakModel = mongoose.models.FivemRetentionPeak || mongoose.model("FivemRetentionPeak", PeakSchema);
 
@@ -273,7 +274,14 @@ async function updateDailyPeaks(currentSnapshot) {
     let dayPeak = await PeakModel.findOne({ date: dateKey });
 
     if (!dayPeak) {
-      dayPeak = new PeakModel({
+      dayPeak = new PeakModel({ // Garante que o objeto total e cities existam
+        date: dateKey,
+        total: { peak: 0, peakTime: null, peakAt: 0, primePeak: 0, primePeakTime: null, primePeakAt: 0 },
+        cities: {},
+        exact21h: { total: 0, cities: {} } // Inicializa o novo campo
+      });
+    } else if (!dayPeak.exact21h) { // Adiciona o campo se não existir em documentos antigos
+      dayPeak.exact21h = {
         date: dateKey,
         total: { peak: 0, peakTime: null, peakAt: 0, primePeak: 0, primePeakTime: null, primePeakAt: 0 },
         cities: {}
@@ -289,6 +297,12 @@ async function updateDailyPeaks(currentSnapshot) {
           primePeak: 0, primePeakTime: null, primePeakAt: 0 
         };
       }
+    }
+
+    // Atualiza o pico exato das 21:00
+    if (isExact21hSnapshot(currentSnapshot)) {
+      dayPeak.exact21h.total = currentSnapshot.totalClients || 0;
+      dayPeak.exact21h.cities = currentSnapshot.cities;
     }
 
     const isPrime = isPrimeTimeSnapshot(currentSnapshot);
@@ -324,6 +338,7 @@ async function updateDailyPeaks(currentSnapshot) {
 
     dayPeak.markModified('total');
     dayPeak.markModified('cities');
+    dayPeak.markModified('exact21h'); // Marca o novo campo como modificado
     await dayPeak.save();
 
     // Limpeza de picos antigos (opcional, para manter paridade com History)
@@ -577,11 +592,26 @@ async function buildEmbeds(client, currentSnapshot) {
  const yesterdayPeaks = peaks[yesterdayKey];
  const lastWeekPeaks = peaks[lastWeekKeyForPeaks];
 
+ const primeWindow = getPrimeTimeWindow(currentSnapshot);
+ const primeTimeLabel = primeWindow ? `${String(primeWindow.startHour).padStart(2, '0')}:00 e ${String(primeWindow.endHour).padStart(2, '0')}:00` : "sem horário específico";
+
+ // Pega o valor exato das 21:00 de hoje
+ const exact21hToday = todayPeaks?.exact21h?.total || 0;
+ const exact21hYesterday = yesterdayPeaks?.exact21h?.total || 0;
+ const exact21hLastWeek = lastWeekPeaks?.exact21h?.total || 0;
+
+ const weekday = getSaoPauloWeekday(new Date(currentSnapshot.timestamp));
+ const isRelevant21hDay = (weekday >= 4 && weekday <= 6) || (weekday >= 1 && weekday <= 3);
+
  const peakCityData = FIVEM_CITIES
    .map((cityConfig) => {
      const todayCityPeak = todayPeaks?.cities?.[cityConfig.key];
      const yesterdayCityPeak = yesterdayPeaks?.cities?.[cityConfig.key];
      const lastWeekCityPeak = lastWeekPeaks?.cities?.[cityConfig.key];
+
+     const exact21hCityToday = todayPeaks?.exact21h?.cities?.[cityConfig.key]?.clients || 0;
+     const exact21hCityYesterday = yesterdayPeaks?.exact21h?.cities?.[cityConfig.key]?.clients || 0;
+     const exact21hCityLastWeek = lastWeekPeaks?.exact21h?.cities?.[cityConfig.key]?.clients || 0;
 
      return {
   name: cityConfig.name,
@@ -595,19 +625,33 @@ async function buildEmbeds(client, currentSnapshot) {
   primePeakTime: todayCityPeak?.primePeakTime || "--:--",
 
   yesterdayPrimePeak: yesterdayCityPeak?.primePeak || 0,
-  weekPrimePeak: lastWeekCityPeak?.primePeak || 0,
+  weekPrimePeak: lastWeekCityPeak?.primePeak || 0, // Corrigido para weekPrimePeak
+
+  exact21hToday: exact21hCityToday,
+  exact21hYesterday: exact21hCityYesterday,
+  exact21hLastWeek: exact21hCityLastWeek,
 };
    })
    .sort((a, b) => b.primePeak - a.primePeak);
 
  const primeEmbed = new EmbedBuilder()
   .setColor(cn2ParseColor(process.env.BASE_COLORS, DEFAULT_COLOR))
-  .setTitle("🔥 PICOS DO HORÁRIO DE EVENTOS SC 💜")
+  .setTitle(`🔥 PICOS DO HORÁRIO DE EVENTOS SC (${primeTimeLabel}) 💜`)
   .setDescription(
-    `Maior pico registrado entre **18:00 e 20:00**\n` +
+    `Maior pico registrado entre **${primeTimeLabel}**\n` +
     `Comparando cada cidade com o pico dela mesma de ontem e de 7 dias atrás.\n\n` +
     peakCityData
       .map((item, index) => {
+        // Exibe o pico das 21:00 se for um dia relevante
+        let exact21hLine = "";
+        if (isRelevant21hDay) {
+          exact21hLine = `21:00: \`${formatNumber(item.exact21hToday)}\` players ` +
+                         `Ontem: \`${formatNumber(item.exact21hYesterday)}\` ${formatCompareCompact(item.exact21hToday, item.exact21hYesterday)}\n` +
+                         `7 dias: \`${formatNumber(item.exact21hLastWeek)}\` ${formatCompareCompact(item.exact21hToday, item.exact21hLastWeek)}\n`;
+        }
+
+
+
         const medal = index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : `${index + 1}.`;
 
         return (
@@ -615,10 +659,12 @@ async function buildEmbeds(client, currentSnapshot) {
           `Hoje: ${formatPrimePeakToday(item.primePeak, item.primePeakTime, currentSnapshot)}\n` +
           `Ontem: \`${formatNumber(item.yesterdayPrimePeak)}\` players ${formatCompareCompact(item.primePeak, item.yesterdayPrimePeak)}\n` +
           `7 dias: \`${formatNumber(item.weekPrimePeak)}\` players ${formatCompareCompact(item.primePeak, item.weekPrimePeak)}`
+          + (exact21hLine ? `\n${exact21hLine}` : "") // Adiciona a linha das 21:00
         );
       })
       .join("\n\n")
   )
+  // Atualiza o footer para refletir o novo horário
   .setFooter({
     text: `Picos salvos automaticamente • Horário eventos 18:00 até 20:00 • Hoje às ${currentSnapshot.spTime}`,
   });
@@ -647,7 +693,10 @@ embeds.push(primeEmbed);
          const medal = index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : `${index + 1}.`;
          return `${medal} **BR ${item.name.padEnd(8, " ")}** : \`${formatNumber(item.peak)}\` às \`${item.time}\``;
        })
-       .join("\n\n") +
+       .join("\n\n")
+     + (isRelevant21hDay ? `\n\n**Total de Players às 21:00:** \`${formatNumber(exact21hToday)}\` ${formatCompareCompact(exact21hToday, exact21hYesterday)}` : "") // Adiciona o total das 21:00
+
+     +
      `\n\n**Total geral** : ${formatPeakValue(todayPeaks?.total?.peak, todayPeaks?.total?.peakTime)}`
    )
    .setFooter({
