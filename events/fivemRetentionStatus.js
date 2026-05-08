@@ -274,18 +274,14 @@ async function updateDailyPeaks(currentSnapshot) {
     let dayPeak = await PeakModel.findOne({ date: dateKey });
 
     if (!dayPeak) {
-      dayPeak = new PeakModel({ // Garante que o objeto total e cities existam
+      dayPeak = new PeakModel({
         date: dateKey,
         total: { peak: 0, peakTime: null, peakAt: 0, primePeak: 0, primePeakTime: null, primePeakAt: 0 },
         cities: {},
         exact21h: { total: 0, cities: {} } // Inicializa o novo campo
       });
     } else if (!dayPeak.exact21h) { // Adiciona o campo se não existir em documentos antigos
-      dayPeak.exact21h = {
-        date: dateKey,
-        total: { peak: 0, peakTime: null, peakAt: 0, primePeak: 0, primePeakTime: null, primePeakAt: 0 },
-        cities: {}
-      });
+      dayPeak.exact21h = { total: 0, cities: {} };
     }
 
     // Garante que todas as cidades configuradas existem no objeto Mixed (evita erro em novas cidades)
@@ -659,14 +655,13 @@ async function buildEmbeds(client, currentSnapshot) {
           `Hoje: ${formatPrimePeakToday(item.primePeak, item.primePeakTime, currentSnapshot)}\n` +
           `Ontem: \`${formatNumber(item.yesterdayPrimePeak)}\` players ${formatCompareCompact(item.primePeak, item.yesterdayPrimePeak)}\n` +
           `7 dias: \`${formatNumber(item.weekPrimePeak)}\` players ${formatCompareCompact(item.primePeak, item.weekPrimePeak)}`
-          + (exact21hLine ? `\n${exact21hLine}` : "") // Adiciona a linha das 21:00
+          + (exact21hLine ? `\n${exact21hLine}` : "")
         );
       })
       .join("\n\n")
   )
-  // Atualiza o footer para refletir o novo horário
   .setFooter({
-    text: `Picos salvos automaticamente • Horário eventos 18:00 até 20:00 • Hoje às ${currentSnapshot.spTime}`,
+    text: `Picos salvos automaticamente • Eventos ${primeTimeLabel} • Hoje às ${currentSnapshot.spTime}`,
   });
 
 embeds.push(primeEmbed);
@@ -693,10 +688,11 @@ embeds.push(primeEmbed);
          const medal = index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : `${index + 1}.`;
          return `${medal} **BR ${item.name.padEnd(8, " ")}** : \`${formatNumber(item.peak)}\` às \`${item.time}\``;
        })
-       .join("\n\n")
-     + (isRelevant21hDay ? `\n\n**Total de Players às 21:00:** \`${formatNumber(exact21hToday)}\` ${formatCompareCompact(exact21hToday, exact21hYesterday)}` : "") // Adiciona o total das 21:00
-
-     +
+       .join("\n\n") +
+     (isRelevant21hDay
+       ? `\n\n**Total Geral às 21:00:** \`${formatNumber(exact21hTodayTotal)}\` ${formatCompareCompact(exact21hTodayTotal, exact21hYesterdayTotal)}`
+       : ""
+     ) +
      `\n\n**Total geral** : ${formatPeakValue(todayPeaks?.total?.peak, todayPeaks?.total?.peakTime)}`
    )
    .setFooter({
