@@ -147,28 +147,29 @@ function getWeekKeySP(date = new Date()) {
  return `${sunday.getFullYear()}-${String(sunday.getMonth() + 1).padStart(2, '0')}-${String(sunday.getDate()).padStart(2, '0')}`;
 }
 
-function getSaoPauloWeekday(date = new Date()) {
-  const spDate = new Date(date.toLocaleString("en-US", { timeZone: FIVEM_TIMEZONE }));
-  return spDate.getDay(); // 0 = Domingo, 1 = Segunda...
+/**
+ * Resolve o dia da semana em São Paulo (0=Dom, 1=Seg...)
+ */
+export function getSaoPauloWeekday(date = new Date()) {
+  const spDate = new Date(date.toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
+  return spDate.getDay();
 }
 
-function getPrimeTimeWindow(snapshot) {
+/**
+ * Retorna a janela de pico baseada no dia da semana
+ */
+export function getPrimeTimeWindow(snapshot) {
   const weekday = getSaoPauloWeekday(new Date(snapshot.timestamp));
-
-  // Segunda (1), Terça (2), Quarta (3) -> 18:00 às 20:00
-  if (weekday >= 1 && weekday <= 3) {
-    return { startHour: 18, endHour: 20, label: "18:00 às 20:00" };
-  }
-
-  // Quinta (4), Sexta (5), Sábado (6) -> 21:00 às 23:00
-  if (weekday >= 4 && weekday <= 6) {
-    return { startHour: 21, endHour: 23, label: "21:00 às 23:00" };
-  }
-
+  if (weekday >= 1 && weekday <= 3) return { startHour: 18, endHour: 20, label: "18:00 às 20:00" };
+  if (weekday >= 4 && weekday <= 6) return { startHour: 21, endHour: 23, label: "21:00 às 23:00" };
   return null;
 }
 
-function isExact21hSnapshot(snapshot) {
+/**
+ * Verifica se é o momento de capturar o total "em ponto" das 21:00
+ * (Captura o primeiro registro entre 21:00 e 21:01:59)
+ */
+export function isExact21hSnapshot(snapshot) {
   const weekday = getSaoPauloWeekday(new Date(snapshot.timestamp));
   // Dias de Segunda a Sábado (1-6)
   const isRelevantDay = (weekday >= 1 && weekday <= 6);
