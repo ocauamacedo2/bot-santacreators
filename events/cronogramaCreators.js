@@ -821,8 +821,9 @@ export async function cronogramaCreatorsHandleInteraction(interaction, client) {
             { label: "Editar Madrugada", value: "edit_madru", emoji: "🌌" },
             { label: "Editar Imagem Final", value: "edit_footer_img", emoji: "🖼️" }
           ])
-      );
-      return interaction.reply({ content: "Selecione o que deseja editar:", components: [row], flags: MessageFlags.Ephemeral });
+    );
+    await interaction.reply({ content: "Selecione o que deseja editar:", components: [row], flags: MessageFlags.Ephemeral });
+    return true;
     }
 
     // ✅ Solicitar Aprovação
@@ -988,7 +989,8 @@ export async function cronogramaCreatorsHandleInteraction(interaction, client) {
           { label: "Domingo", value: "dom" }
         ])
     );
-    return interaction.update({ content: `Selecione o dia (${choice === "edit_19h" ? "19h" : "Madrugada"}):`, components: [rowDay] });
+    await interaction.update({ content: `Selecione o dia (${choice === "edit_19h" ? "19h" : "Madrugada"}):`, components: [rowDay] });
+    return true;
   }
 
   // Select Menu (Dia -> Modal)
@@ -1015,11 +1017,14 @@ export async function cronogramaCreatorsHandleInteraction(interaction, client) {
       new ActionRowBuilder().addComponents(inputEvent),
       new ActionRowBuilder().addComponents(inputPrizes)
     );
-    return interaction.showModal(modal);
+    await interaction.showModal(modal);
+    return true;
   }
 
   // Modal Submit (Imagem Final)
   if (interaction.isModalSubmit() && interaction.customId === "crono_save_footer_img") {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
+
     const url = interaction.fields.getTextInputValue("footerImageUrl").trim();
     
     const oldState = loadState();
@@ -1030,11 +1035,14 @@ export async function cronogramaCreatorsHandleInteraction(interaction, client) {
     await updatePanel(client, newState);
     await logChange(client, interaction.guild, interaction.user, oldState, newState, `Alterou Imagem Final`);
     
-    return interaction.reply({ content: "✅ Imagem atualizada!", flags: MessageFlags.Ephemeral });
+    await interaction.editReply({ content: "✅ Imagem atualizada!" });
+    return true;
   }
 
   // Modal Submit
   if (interaction.isModalSubmit() && interaction.customId.startsWith("crono_save_")) {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
+
     const parts = interaction.customId.split("_");
     const type = parts[2];
     const day = parts[3];
@@ -1054,7 +1062,8 @@ export async function cronogramaCreatorsHandleInteraction(interaction, client) {
     await updatePanel(client, newState);
     await logChange(client, interaction.guild, interaction.user, oldState, newState, `Editou ${day.toUpperCase()} (${type})`);
 
-    return interaction.reply({ content: "✅ Cronograma atualizado!", flags: MessageFlags.Ephemeral });
+    await interaction.editReply({ content: "✅ Cronograma atualizado!" });
+    return true;
   }
 
   return false;
