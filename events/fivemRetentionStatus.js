@@ -274,7 +274,7 @@ async function updateDailyPeaks(currentSnapshot) {
     let dayPeak = await PeakModel.findOne({ date: dateKey });
 
     if (!dayPeak) {
-      dayPeak = new PeakModel({
+      dayPeak = new PeakModel({ // Garante que o objeto total e cities existam
         date: dateKey,
         total: { peak: 0, peakTime: null, peakAt: 0, primePeak: 0, primePeakTime: null, primePeakAt: 0 },
         cities: {},
