@@ -56,9 +56,9 @@ export default {
         let verificados = 0;
 
         try {
-            // Force: true para garantir que pegamos todos os membros atualizados
-            const membros = await message.guild.members.fetch({ force: true });
-            const membrosFiltrados = membros.filter(m => m.roles.cache.has(cargoManter.id));
+            // ✅ OTIMIZAÇÃO: Busca apenas os membros que possuem o cargo de referência
+            // Isso evita o erro GuildMembersTimeout em servidores grandes.
+            const membrosFiltrados = await message.guild.members.fetch({ role: cargoManter.id });
             const total = membrosFiltrados.size;
 
             for (const membro of membrosFiltrados.values()) {

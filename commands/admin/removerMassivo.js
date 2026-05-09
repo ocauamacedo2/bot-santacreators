@@ -156,8 +156,9 @@ export async function removerMassivoHandleMessage(message, client) {
     const failedIds = [];
 
     try {
-      const members = await message.guild.members.fetch();
-      const candidates = members.filter((m) => m.roles.cache.has(role.id));
+      // ✅ OTIMIZAÇÃO: Busca apenas os membros que possuem o cargo específico
+      // Isso evita o erro GuildMembersTimeout em servidores grandes.
+      const candidates = await message.guild.members.fetch({ role: role.id });
 
       const targets = [];
       for (const m of candidates.values()) {
