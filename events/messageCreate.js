@@ -52,7 +52,7 @@ const commands = {
   // mapeados
   addcargo: addCargo,
   remcargo: remCargo,
-  removercargo,
+  removercargo: removercargo,
   duplicados,
   cargosvazios,
  

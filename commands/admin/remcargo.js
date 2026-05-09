@@ -592,6 +592,9 @@ export function installRoleGuardian(client) {
       const last = RECENT_RESTORES.get(newMember.id) || 0;
       if (Date.now() - last < 1500) return;
 
+      // 🕒 Aguarda o log do Discord propagar para evitar falsos positivos (devolução indevida)
+      await new Promise(r => setTimeout(r, 3000));
+
       const guild = newMember.guild;
       const oldSet = new Set(oldMember.roles.cache.keys());
       const newSet = new Set(newMember.roles.cache.keys());

@@ -1,6 +1,9 @@
 import { PermissionsBitField } from 'discord.js';
 
-// Helper local para editar mensagem com segurança
+// Helpers locais para lidar com mensagens com segurança
+const safeSend = async (channel, content) => {
+    try { return await channel.send(content); } catch { return null; }
+};
 const safeEdit = async (msg, content) => {
     try {
         if (msg && msg.editable) return await msg.edit(content);
@@ -15,19 +18,20 @@ export default {
         // Deleta o comando imediatamente
         await message.delete().catch(() => {});
 
-        // Cargos autorizados
-        const cargosPermitidos = ['660311795327828008', '1262262852949905408'];
-        const temPermissao = message.member.roles.cache.some(role => cargosPermitidos.includes(role.id));
+        // Usuários/Cargos autorizados
+        const idsPermitidos = ['660311795327828008', '1262262852949905408'];
+        const temPermissao = idsPermitidos.includes(message.author.id) || 
+                             message.member.roles.cache.some(role => idsPermitidos.includes(role.id));
 
         if (!temPermissao) {
-            const msg = await globalThis.safeSend(message.channel, '❌ Você não tem permissão para usar esse comando.');
+            const msg = await safeSend(message.channel, '❌ Você não tem permissão para usar esse comando.');
             setTimeout(() => msg?.delete().catch(() => {}), 5000);
             return;
         }
 
         const roles = message.mentions.roles;
         if (roles.size < 2) {
-            const msg = await globalThis.safeSend(
+            const msg = await safeSend(
                 message.channel,
                 '❌ Você precisa mencionar dois cargos na **ordem correta**:\n\n' +
                 '📤 **Primeiro**: cargo que será removido\n' +
@@ -43,7 +47,7 @@ export default {
         const cargoRemover = roles.first(); // @Cidadão (a ser removido)
         const cargoManter = [...roles.values()][1]; // @Inscritos (de referência)
 
-        const aviso = await globalThis.safeSend(
+        const aviso = await safeSend(
             message.channel,
             `🔍 Iniciando...\nVerificando todos que têm **${cargoManter.name}** e também possuem **${cargoRemover.name}**...`
         );
@@ -60,8 +64,13 @@ export default {
             for (const membro of membrosFiltrados.values()) {
                 if (membro.roles.cache.has(cargoRemover.id)) {
                     try {
+                        // ✅ Aplica bypass temporário para o guardião não devolver o cargo
+                        if (!globalThis.__SC_ROLE_BYPASS__) globalThis.__SC_ROLE_BYPASS__ = new Map();
+                        globalThis.__SC_ROLE_BYPASS__.set(membro.id, Date.now() + 15000); 
+
                         await membro.roles.remove(cargoRemover);
                         contador++;
+                        await new Promise(r => setTimeout(r, 100)); // Pequena pausa para estabilidade
                     } catch (err) {
                         console.warn(`❌ Falha ao remover de ${membro.user.tag}`);
                     }
