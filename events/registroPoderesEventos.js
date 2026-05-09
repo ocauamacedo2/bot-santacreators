@@ -369,7 +369,7 @@ try {
     poder,
     obs,
     source: "eventopoder",
-    sourceLabel: "Setou Poder",
+    sourceLabel: "Poderes Eventosr",
     sourceSystem: "registroPoderesEventos",
     channelId: String(registroLogMsg?.channelId || eventosLogChan?.id || menuChan.id),
     messageId: String(registroLogMsg?.id || registroMsg?.id || ""),
