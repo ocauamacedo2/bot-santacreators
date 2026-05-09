@@ -180,6 +180,10 @@ export async function removerMassivoHandleMessage(message, client) {
             continue;
           }
 
+          // ✅ Aplica bypass temporário para o guardião não devolver o cargo
+          if (!globalThis.__SC_ROLE_BYPASS__) globalThis.__SC_ROLE_BYPASS__ = new Map();
+          globalThis.__SC_ROLE_BYPASS__.set(m.id, Date.now() + 15000);
+
           await m.roles.remove(role, `Remoção em massa por ${message.author.tag} (${message.author.id})`);
           removed++;
           removedIds.push(m.id);
