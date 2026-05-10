@@ -277,6 +277,44 @@ async function getSnapshotDaysAgo(days, currentSnapshot = null) {
  }
 }
 
+async function getExact21hHistory(dateKey) {
+  try {
+    const candidates = await HistoryModel.find({
+      spDate: dateKey,
+      hour: 21,
+    }).lean();
+
+    if (!candidates?.length) {
+      FIVEM_DEBUG && console.log(
+        "[FIVEM_RETENTION] Sem histórico exato das 21h para:",
+        dateKey
+      );
+      return null;
+    }
+
+    let best = null;
+    let bestDistance = Infinity;
+
+    for (const snap of candidates) {
+      const minute = Number(snap.minute || 0);
+      const distance = Math.abs(minute - 0);
+
+      if (distance < bestDistance) {
+        best = snap;
+        bestDistance = distance;
+      }
+    }
+
+    return best;
+  } catch (e) {
+    console.error(
+      "[FIVEM_RETENTION] Erro ao buscar histórico exato das 21h:",
+      e?.message || e
+    );
+    return null;
+  }
+}
+
 async function loadPeaksMap() {
   try {
     const docs = await PeakModel.find();
