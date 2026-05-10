@@ -169,8 +169,8 @@ export function getSaoPauloWeekday(date = new Date()) {
  */
 export function getPrimeTimeWindow(snapshot) {
   const weekday = getSaoPauloWeekday(new Date(snapshot.timestamp));
-  // Terça: 18:00 às 20:00
-  if (weekday === 2) return { startHour: 18, endHour: 20, label: "18:00 às 20:00" };
+  // Terça: 21:00 às 00:00 (Evento Cidade Grande às 23:00)
+  if (weekday === 2) return { startHour: 21, endHour: 24, label: "21:00 às 00:00" };
   // Segunda, Quarta, Quinta, Sexta e Sábado: 21:00 às 23:00
   if ([1, 3, 4, 5, 6].includes(weekday)) return { startHour: 21, endHour: 23, label: "21:00 às 23:00" };
   return null;
@@ -780,6 +780,10 @@ async function buildEmbeds(client, currentSnapshot) {
  const primeWindow = getPrimeTimeWindow(currentSnapshot);
  const primeTimeLabel = primeWindow ? primeWindow.label : "sem horário específico";
  
+ // Cálculos de comparação para o Total Geral do horário de eventos
+ const totalPrimeDiffY = calculateDiff(todayPeaks.total?.primePeak || 0, yesterdayPeaks.total?.primePeak || 0);
+ const totalPrimeDiffW = calculateDiff(todayPeaks.total?.primePeak || 0, lastWeekPeaks.total?.primePeak || 0);
+
  const primePeakSorted = [...peakAnalysisData].sort((a, b) => b.primePeak - a.primePeak);
  const primeEmbed = new EmbedBuilder()
    .setColor(baseColor)
@@ -797,7 +801,9 @@ async function buildEmbeds(client, currentSnapshot) {
        );
      }).join("\n\n") +
      `\n\n${UI.DIVIDER}\n` +
-     `**Máxima no Horário:** \`${formatNumber(todayPeaks.total?.primePeak)}\` players`
+     `**Máxima no Horário:** \`${formatNumber(todayPeaks.total?.primePeak)}\` players\n` +
+     `> **Vs Ontem:** ${formatDiff(totalPrimeDiffY)}\n` +
+     `> **Vs Semana Passada:** ${formatDiff(totalPrimeDiffW)}`
    )
    .setFooter({ text: `Monitoramento Prime Time • Ref: ${currentSnapshot.spTime}` });
  embeds.push(primeEmbed);
