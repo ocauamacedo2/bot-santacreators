@@ -815,20 +815,49 @@ async function buildEmbeds(client, currentSnapshot) {
 // ---------- STICKY MESSAGE ----------
 async function cn2FindStickyMessage(channel, botId) {
  try {
+   // ✅ Tenta recuperar pelo estado em memória primeiro para evitar fetch desnecessário
+   const state = FIVEM_STATE.get(channel.id);
+   if (state?.messageId) {
+     const cachedMsg = await channel.messages.fetch(state.messageId).catch(() => null);
+     if (cachedMsg && cachedMsg.author.id === botId) return cachedMsg;
+   }
+
    const perms = channel.permissionsFor(botId);
    if (!perms?.has(PermissionsBitField.Flags.ViewChannel) || !perms?.has(PermissionsBitField.Flags.ReadMessageHistory)) {
      FIVEM_DEBUG && console.log("[FIVEM_RETENTION] Sem permissão de Ler Histórico no canal", channel.id);
      return null;
    }
+
    const msgs = await channel.messages.fetch({ limit: 50 }).catch(() => null);
    if (!msgs) return null;
-   const found = msgs.find(
+
+   // ✅ Busca mensagens do bot que contenham o marcador em QUALQUER um dos embeds
+   const matches = msgs.filter(
      (m) =>
        m.author?.id === botId &&
        m.embeds?.length > 0 &&
-       ((m.embeds[0].footer?.text || "").includes(FIVEM_RANK_MARKER_TAG))
+       m.embeds.some(e => (e.footer?.text || "").includes(FIVEM_RANK_MARKER_TAG))
    );
-   return found || null;
+
+   if (matches.size === 0) return null;
+
+   // ✅ Ordena por data (mais recente primeiro)
+   const sorted = [...matches.values()].sort((a, b) => b.createdTimestamp - a.createdTimestamp);
+   const keep = sorted[0];
+
+   // ✅ AUTO-CURA: Se houver mais de um painel, apaga os duplicados
+   if (sorted.length > 1) {
+     FIVEM_DEBUG && console.log(`[FIVEM_RETENTION] Detectadas ${sorted.length} duplicatas. Limpando...`);
+     for (let i = 1; i < sorted.length; i++) {
+       await sorted[i].delete().catch(() => {});
+     }
+   }
+
+   // ✅ Sincroniza o ID no mapa de estado
+   const currentState = FIVEM_STATE.get(channel.id) || {};
+   FIVEM_STATE.set(channel.id, { ...currentState, messageId: keep.id });
+
+   return keep;
  } catch (e) {
    cn2LogApiError("[FIVEM_RETENTION] Erro buscando sticky:", e);
    return null;
@@ -851,6 +880,11 @@ async function ensureStickyMessage(channel) {
    const { embeds, row } = await buildEmbeds(channel.client, currentSnapshot);
    try {
      msg = await channel.send({ embeds, components: [row] });
+
+     // ✅ Registra o ID da mensagem no estado assim que for criada
+     const state = FIVEM_STATE.get(channel.id) || {};
+     FIVEM_STATE.set(channel.id, { ...state, messageId: msg.id });
+
      FIVEM_DEBUG && console.log("[FIVEM_RETENTION] Sticky criada:", msg.id);
    } catch (e) {
      cn2LogApiError("[FIVEM_RETENTION] Falha ao criar sticky:", e);
@@ -892,6 +926,10 @@ async function editPanel(channel, options = {}) {
 // ---------- PUBLIC API ----------
 export async function fivemRetentionStatusOnReady(client) {
  try {
+   // ✅ Proteção global para impedir bootstrap duplicado (previne múltiplos loops e mensagens)
+   if (globalThis.__FIVEM_RETENTION_STATUS_BOOTSTRAPPED__) return;
+   globalThis.__FIVEM_RETENTION_STATUS_BOOTSTRAPPED__ = true;
+
    const channel = await client.channels.fetch(FIVEM_PANEL_CHANNEL_ID).catch(() => null);
    if (!channel || !channel.isTextBased()) {
      console.error("[FIVEM_RETENTION] Canal fixo não encontrado ou inválido:", FIVEM_PANEL_CHANNEL_ID);
@@ -914,7 +952,8 @@ export async function fivemRetentionStatusOnReady(client) {
      }
    }, FIVEM_REFRESH_INTERVAL_MS);
 
-   FIVEM_STATE.set(channel.id, { intervalId, messageId: null });
+   // ✅ Inicializa o estado mantendo o messageId se ele já existia
+   FIVEM_STATE.set(channel.id, { intervalId, messageId: existing?.messageId || null });
    FIVEM_DEBUG && console.log("[FIVEM_RETENTION] Sistema pronto. Loop de 2min ativo no canal", channel.id);
  } catch (err) {
    console.error("[FIVEM_RETENTION] fivemRetentionStatusOnReady erro:", err?.message || err);
