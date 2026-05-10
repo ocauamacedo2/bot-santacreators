@@ -48,6 +48,15 @@ const FIVEM_STATE = new Map(); // channelId -> { intervalId, messageId }
 const FIVEM_DEBUG = true; 
 const DEFAULT_COLOR = 0x2b2d31;
 
+// 🎨 UI LAYOUT HELPERS
+const UI = {
+  SEP: "━━━━━━━━━━━━━━━━━━━━━━━━",
+  DIVIDER: "────────────────────────",
+  GROWTH: "🟢",
+  DROP: "🔴",
+  STABLE: "🟠",
+  NONE: "⚪"
+};
 
 const FIVEM_CITIES = [
  {
@@ -185,14 +194,14 @@ function formatNumber(n) {
  return n.toLocaleString('pt-BR');
 }
 function calculateDiff(current, previous) {
- if (typeof current !== 'number' || isNaN(current)) return { diff: 'N/A', pct: 'N/A', arrow: '⚪' };
+ if (typeof current !== 'number' || isNaN(current)) return { diff: 'N/A', pct: 'N/A', arrow: UI.NONE };
  if (typeof previous !== 'number' || isNaN(previous) || previous === 0) {
-   return { diff: current, pct: 'sem base', arrow: current > 0 ? '🔴 ▲' : (current < 0 ? '🟢 ▼' : '🟠 ➖') };
+   return { diff: current, pct: 'sem base', arrow: current > 0 ? UI.GROWTH + ' ▲' : (current < 0 ? UI.DROP + ' ▼' : UI.STABLE + ' ➖') };
  }
  const diff = current - previous;
  const pct = (diff / previous) * 100;
- // Padronização solicitada: 🔴 = crescimento, 🟢 = queda, 🟠 = estabilidade
- return { diff, pct, arrow: diff > 0 ? '🔴 ▲' : (diff < 0 ? '🟢 ▼' : '🟠 ➖') };
+ // Correção: 🟢 = crescimento, 🔴 = queda, 🟠 = estabilidade
+ return { diff, pct, arrow: diff > 0 ? UI.GROWTH + ' ▲' : (diff < 0 ? UI.DROP + ' ▼' : UI.STABLE + ' ➖') };
 }
 function formatDiff(diffObj) {
  if (diffObj.diff === 'N/A') return 'N/A';
@@ -525,15 +534,15 @@ function formatPeakLine(label, peak, peakTime, average) {
 }
 
 function formatCompareCompact(current, previous) {
- if (!previous || previous <= 0) return "⚪ `(sem base)`";
+ if (!previous || previous <= 0) return `${UI.NONE} \`(sem base)\``;
 
  const diff = current - previous;
  const pct = (diff / previous) * 100;
 
- if (diff > 0) return `🔴 \`+${formatNumber(diff)}\` **+${pct.toFixed(1)}%**`;
- if (diff < 0) return `🟢 \`${formatNumber(diff)}\` **${pct.toFixed(1)}%**`;
+ if (diff > 0) return `${UI.GROWTH} \`+${formatNumber(diff)}\` **+${pct.toFixed(1)}%**`;
+ if (diff < 0) return `${UI.DROP} \`${formatNumber(diff)}\` **${pct.toFixed(1)}%**`;
 
- return `🟠 \`0\` **0.0%**`;
+ return `${UI.STABLE} \`0\` **0.0%**`;
 }
 
 function formatPanelLine(label, current, previous) {
@@ -541,21 +550,21 @@ function formatPanelLine(label, current, previous) {
 }
 
 function getStatusEmojiByYesterday(current, previous) {
- if (!previous || previous <= 0) return "⚪";
+ if (!previous || previous <= 0) return UI.NONE;
 
  const diff = current - previous;
 
- if (diff > 0) return "🔴";
- if (diff < 0) return "🟢";
+ if (diff > 0) return UI.GROWTH;
+ if (diff < 0) return UI.DROP;
 
- return "🟠";
+ return UI.STABLE;
 }
 
 function formatOnlyCurrentLine(label, current, max, pct, index, yesterday = 0) {
  const medal = index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : `${index + 1}.`;
  const statusEmoji = getStatusEmojiByYesterday(current, yesterday);
 
- return `${medal} **BR ${label.padEnd(8, " ")}** : \`${formatNumber(current)}/${formatNumber(max)}\` **${pct}%** ${statusEmoji}`;
+ return `${medal} **BR ${label.padEnd(8, " ")}** \n> \`${formatNumber(current)} / ${formatNumber(max)}\` • **${pct}%** ${statusEmoji}`;
 }
 
 // ---------- EMBED BUILDER ----------
@@ -612,21 +621,26 @@ async function buildEmbeds(client, currentSnapshot) {
  
  const dashboardEmbed = new EmbedBuilder()
    .setColor(baseColor)
-   .setTitle("💎 CENTRAL ANALÍTICA — DASHBOARD PREMIUM")
+   .setTitle("💎 CENTRAL ANALÍTICA — RESUMO EXECUTIVO")
    .setThumbnail(client.user.displayAvatarURL())
    .setDescription(
-     `### 🚀 RESUMO EXECUTIVO\n` +
-     `> 🏆 **Líder Atual:** ${leader?.current.emoji} **${leader?.current.name}** (\`${formatNumber(leader?.current.clients)}\` players)\n` +
-     `> 📈 **Maior Crescimento:** ${topGrowth?.current.emoji} **${topGrowth?.current.name}** (${formatDiff(topGrowth?.diffYesterday)})\n` +
-     `> 📉 **Maior Queda:** ${topDrop?.current.emoji} **${topDrop?.current.name}** (${formatDiff(topDrop?.diffYesterday)})\n` +
-     `> ⚡ **Pico Total Hoje:** \`${formatNumber(todayPeaks.total?.peak)}\` players\n` +
-     `> 📊 **Média de Capacidade:** \`${capacityPercent}%\` \n\n` +
-     `### 📈 PERFORMANCE GLOBAL\n` +
-     `• **Total Online:** \`${formatNumber(totalCurrentClients)}\` players\n` +
-     `• **Vs. Ontem:** ${formatDiff(calculateDiff(totalCurrentClients, totalYesterdayClients))}\n` +
-     `• **Vs. Semana Passada:** ${formatDiff(calculateDiff(totalCurrentClients, totalLastWeekClients))}\n`
+     `### 🚀 DESTAQUES DO MOMENTO\n` +
+     `**🏆 Líder da Rede:** ${leader?.current.emoji} **${leader?.current.name}**\n` +
+     `└ \`${formatNumber(leader?.current.clients)}\` ativos agora\n\n` +
+     `**📈 Top Crescimento:** ${topGrowth?.current.emoji} **${topGrowth?.current.name}**\n` +
+     `└ ${formatDiff(topGrowth?.diffYesterday)}\n\n` +
+     `**📉 Maior Declínio:** ${topDrop?.current.emoji} **${topDrop?.current.name}**\n` +
+     `└ ${formatDiff(topDrop?.diffYesterday)}\n\n` +
+     `${UI.DIVIDER}\n\n` +
+     `### 📊 PERFORMANCE GLOBAL\n` +
+     `• **Jogadores Online:** \`${formatNumber(totalCurrentClients)}\` \n` +
+     `• **Pico Máximo Hoje:** \`${formatNumber(todayPeaks.total?.peak)}\` \n` +
+     `• **Capacidade Média:** \`${capacityPercent}%\` \n\n` +
+     `**Comparações de Rede:**\n` +
+     `> 🕒 **Vs. Ontem:** ${formatDiff(calculateDiff(totalCurrentClients, totalYesterdayClients))}\n` +
+     `> 📅 **Vs. 7 Dias:** ${formatDiff(calculateDiff(totalCurrentClients, totalLastWeekClients))}`
    )
-   .setFooter({ text: `Relatório Executivo • Atualizado em ${currentSnapshot.spTime}` })
+   .setFooter({ text: `Relatório de Inteligência • Sincronizado às ${currentSnapshot.spTime}` })
    .setTimestamp();
  embeds.push(dashboardEmbed);
 
@@ -634,9 +648,8 @@ async function buildEmbeds(client, currentSnapshot) {
  const sortedCurrent = [...cityData].sort((a, b) => b.current.clients - a.current.clients);
  const summaryEmbed = new EmbedBuilder()
    .setColor(baseColor)
-   .setTitle("📊 STATUS ATUAL DAS CIDADES")
+   .setTitle("🏢 STATUS EM TEMPO REAL — CIDADES")
    .setDescription(
-     `LISTA FIVEM - Players agora\n\n` +
      sortedCurrent
        .map((item, index) => {
          return formatOnlyCurrentLine(
@@ -649,29 +662,31 @@ async function buildEmbeds(client, currentSnapshot) {
          );
        })
        .join("\n\n") +
-     `\n\n**Total de Players** : \`${formatNumber(totalCurrentClients)} / ${formatNumber(totalMaxClients)}\`\n` +
-     `**Média geral** : **${capacityPercent}%** 🔴`
+     `\n\n${UI.SEP}\n` +
+     `**Total da Rede:** \`${formatNumber(totalCurrentClients)} / ${formatNumber(totalMaxClients)}\` players\n` +
+     `**Saturação Média:** \`${capacityPercent}%\` ${getStatusEmojiByYesterday(totalCurrentClients, totalYesterdayClients)}`
    )
    .setFooter({
-     text: `Fonte: FiveM/CFX público • Atualizando a cada 2 minutos • Hoje às ${currentSnapshot.spTime} • ${FIVEM_RANK_MARKER_TAG}`,
+     text: `Dados atualizados a cada 2min • ${FIVEM_RANK_MARKER_TAG}`,
    });
  embeds.push(summaryEmbed);
 
  // 4. PAINEL — COMPARAÇÃO TEMPORAL (ONTEM & SEMANA PASSADA)
  const comparisonEmbed = new EmbedBuilder()
    .setColor(baseColor)
-   .setTitle("📉 ANÁLISE COMPARATIVA DE AUDIÊNCIA")
+   .setTitle("📉 TRENDS — ANÁLISE COMPARATIVA")
    .setDescription(
-     `### 📅 COMPARAÇÃO COM ONTEM\n` +
-     `*Audiência agora vs Mesma hora ontem*\n` +
-     cityData.map(c => `**${c.current.emoji} ${c.current.name.padEnd(8, " ")}** : \`${formatNumber(c.current.clients)}\` vs \`${formatNumber(c.yesterday)}\` | ${formatDiff(c.diffYesterday)}`).join("\n") +
-     `\n**TOTAL GERAL:** ${formatDiff(calculateDiff(totalCurrentClients, totalYesterdayClients))}\n\n` +
-     `### 📅 MESMO DIA DA SEMANA PASSADA\n` +
-     `*Audiência agora vs Mesma hora e dia há 7 dias*\n` +
-     cityData.map(c => `**${c.current.emoji} ${c.current.name.padEnd(8, " ")}** : \`${formatNumber(c.current.clients)}\` vs \`${formatNumber(c.week)}\` | ${formatDiff(c.diffLastWeek)}`).join("\n") +
-     `\n**TOTAL GERAL:** ${formatDiff(calculateDiff(totalCurrentClients, totalLastWeekClients))}\n`
+     `###  COMPARAÇÃO DIÁRIA (24H)\n` +
+     `*Dados atuais vs. mesmo horário ontem*\n\n` +
+     cityData.map(c => `**${c.current.emoji} BR ${c.current.name.padEnd(8, " ")}**\n> \`${formatNumber(c.current.clients)}\` vs \`${formatNumber(c.yesterday)}\` | ${formatDiff(c.diffYesterday)}`).join("\n\n") +
+     `\n\n**🌐 PERFORMANCE REDE:** ${formatDiff(calculateDiff(totalCurrentClients, totalYesterdayClients))}\n\n` +
+     `${UI.DIVIDER}\n\n` +
+     `### 📅 COMPARAÇÃO SEMANAL (7D)\n` +
+     `*Dados atuais vs. mesmo dia/hora semana passada*\n\n` +
+     cityData.map(c => `**${c.current.emoji} BR ${c.current.name.padEnd(8, " ")}**\n> \`${formatNumber(c.current.clients)}\` vs \`${formatNumber(c.week)}\` | ${formatDiff(c.diffLastWeek)}`).join("\n\n") +
+     `\n\n**🌐 PERFORMANCE REDE:** ${formatDiff(calculateDiff(totalCurrentClients, totalLastWeekClients))}\n`
    )
-   .setFooter({ text: `Análise de Retenção Temporal • Sincronizado às ${currentSnapshot.spTime}` });
+   .setFooter({ text: `Análise de Retenção Dinâmica • Ref: ${currentSnapshot.spTime}` });
  embeds.push(comparisonEmbed);
 
  // 5. PAINEL — RETENÇÃO DAS 21:00 (EM PONTO)
@@ -698,15 +713,15 @@ async function buildEmbeds(client, currentSnapshot) {
 
    const retentionEmbed = new EmbedBuilder()
      .setColor(baseColor)
-     .setTitle("🕒 RETENÇÃO ESTRATÉGICA — 21:00 EM PONTO")
+     .setTitle("🕒 AUDITORIA DE RETENÇÃO — 21:00h")
      .setDescription(
-       `Análise crítica de audiência no horário nobre.\n\n` +
+       `*Snapshot fixo capturado rigorosamente às 21:00:00*\n\n` +
        retentionData.map((item, idx) => {
          const medal = idx === 0 ? "🥇" : idx === 1 ? "🥈" : idx === 2 ? "🥉" : `${idx + 1}.`;
          return (
-           `${medal} **BR ${item.city.name.padEnd(8, " ")}**\n` +
-           `> **Hoje às 21h:** \`${formatNumber(item.t)}\` players\n` +
-           `> **Vs Ontem:** ${formatDiff(item.diffY)}\n` +
+           `${medal} **BR ${item.city.name}**\n` +
+           `> **Ponto fixo:** \`${formatNumber(item.t)}\` players\n` +
+           `> **Vs Ontem:** ${formatDiff(item.diffY)}` +
            `> **Vs Semana Passada:** ${formatDiff(item.diffW)}`
          );
        }).join("\n\n") +
@@ -742,23 +757,23 @@ async function buildEmbeds(client, currentSnapshot) {
 
  const peaksEmbed = new EmbedBuilder()
    .setColor(baseColor)
-   .setTitle("🏆 ANÁLISE DE PICOS (MÁXIMAS DO DIA)")
+   .setTitle("🏆 RECORDES — PICOS DE AUDIÊNCIA (DIA)")
    .setDescription(
-     `Performance máxima atingida por cada cidade hoje.\n\n` +
+     `*Maior volume de jogadores simultâneos registrados hoje*\n\n` +
      peakAnalysisData.map((item, index) => {
        const medal = index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : `${index + 1}.`;
        const diffY = calculateDiff(item.todayPeak, item.yesterdayPeak);
        const diffW = calculateDiff(item.todayPeak, item.weekPeak);
 
        return (
-         `${medal} **BR ${item.name.padEnd(8, " ")}** : \`${formatNumber(item.todayPeak)}\` às \`${item.todayPeakTime}\`\n` +
-         `└─ **Vs Pico Ontem:** ${formatDiff(diffY)}\n` +
-         `└─ **Vs Pico Semana Passada:** ${formatDiff(diffW)}`
+         `${medal} **BR ${item.name}** • \`${formatNumber(item.todayPeak)}\` às \`${item.todayPeakTime}\`\n` +
+         `> **Histórico:** ${formatDiff(diffY)} (24h) | ${formatDiff(diffW)} (7d)`
        );
      }).join("\n\n") +
-     `\n\n**Total Geral:** ${formatPeakValue(todayPeaks.total?.peak, todayPeaks.total?.peakTime)}`
+     `\n\n${UI.DIVIDER}\n` +
+     `**Recorde Geral Hoje:** ${formatPeakValue(todayPeaks.total?.peak, todayPeaks.total?.peakTime)}`
    )
-   .setFooter({ text: `Performance Máxima Diária • Hoje até ${currentSnapshot.spTime}` });
+   .setFooter({ text: `Relatório de Picos Diários • Hoje até ${currentSnapshot.spTime}` });
  embeds.push(peaksEmbed);
 
  // 7. PAINEL — PICOS DO HORÁRIO DE EVENTOS (PRIME TIME)
@@ -768,22 +783,23 @@ async function buildEmbeds(client, currentSnapshot) {
  const primePeakSorted = [...peakAnalysisData].sort((a, b) => b.primePeak - a.primePeak);
  const primeEmbed = new EmbedBuilder()
    .setColor(baseColor)
-   .setTitle(`🔥 PICOS DO HORÁRIO DE EVENTOS (${primeTimeLabel})`)
+   .setTitle(`🔥 PRIME TIME — RETENÇÃO EM EVENTO`)
    .setDescription(
-     `Métricas de retenção registradas entre **${primeTimeLabel}**.\n\n` +
+     `*Janela de análise: **${primeTimeLabel}***\n\n` +
      primePeakSorted.map((item, index) => {
        const medal = index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : `${index + 1}.`;
        const diffY = calculateDiff(item.primePeak, item.yesterdayPrimePeak);
        const diffW = calculateDiff(item.primePeak, item.weekPrimePeak);
 
        return (
-         `${medal} **BR ${item.name.padEnd(8, " ")}** : \`${formatNumber(item.primePeak)}\` às \`${item.primePeakTime}\`\n` +
-         `└─ **Vs Ontem:** ${formatDiff(diffY)} | **Vs Semana Passada:** ${formatDiff(diffW)}`
+         `${medal} **BR ${item.name}** • \`${formatNumber(item.primePeak)}\` às \`${item.primePeakTime}\`\n` +
+         `> **Trends:** ${formatDiff(diffY)} (24h) | ${formatDiff(diffW)} (7d)`
        );
      }).join("\n\n") +
-     `\n\n**Pico Geral no Horário:** \`${formatNumber(todayPeaks.total?.primePeak)}\` players às \`${todayPeaks.total?.primePeakTime || "--:--"}\``
+     `\n\n${UI.DIVIDER}\n` +
+     `**Máxima no Horário:** \`${formatNumber(todayPeaks.total?.primePeak)}\` players`
    )
-   .setFooter({ text: `Análise Prime Time • Sincronizado às ${currentSnapshot.spTime}` });
+   .setFooter({ text: `Monitoramento Prime Time • Ref: ${currentSnapshot.spTime}` });
  embeds.push(primeEmbed);
 
  // Botão de atualização manual
