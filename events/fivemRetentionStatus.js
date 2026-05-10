@@ -169,11 +169,40 @@ export function getSaoPauloWeekday(date = new Date()) {
  */
 export function getPrimeTimeWindow(snapshot) {
   const weekday = getSaoPauloWeekday(new Date(snapshot.timestamp));
-  // Terça: 21:00 às 00:00 (Evento Cidade Grande às 23:00)
-  if (weekday === 2) return { startHour: 21, endHour: 24, label: "21:00 às 00:00" };
-  // Segunda, Quarta, Quinta, Sexta e Sábado: 21:00 às 23:00
-  if ([1, 3, 4, 5, 6].includes(weekday)) return { startHour: 21, endHour: 23, label: "21:00 às 23:00" };
+  // Terça: 21:30 às 00:00 (Evento Cidade Grande às 23:00)
+  if (weekday === 2) return { startHour: 21, startMinute: 30, endHour: 24, endMinute: 0, label: "21:30 às 00:00" };
+  // Segunda, Quarta, Quinta, Sexta e Sábado: 20:00 às 23:00
+  if ([1, 3, 4, 5, 6].includes(weekday)) return { startHour: 20, startMinute: 0, endHour: 23, endMinute: 0, label: "20:00 às 23:00" };
   return null;
+}
+
+/**
+ * Configuração de foco dinâmico por dia de evento
+ */
+export function getEventDayFocusConfig(snapshot) {
+  const weekday = getSaoPauloWeekday(new Date(snapshot.timestamp));
+  const window = getPrimeTimeWindow(snapshot);
+  if (!window) return null;
+
+  const mapping = {
+    1: { cityKey: "maresia", cityName: "Maresia", emoji: "🌊" }, // Segunda
+    2: { cityKey: "grande",  cityName: "Grande",  emoji: "🌆" }, // Terça
+    3: { cityKey: "santa",   cityName: "Santa",   emoji: "🏙️" }, // Quarta
+    4: { cityKey: "nobre",   cityName: "Nobre",   emoji: "👑" }, // Quinta
+    5: { cityKey: "nobre",   cityName: "Nobre",   emoji: "👑" }, // Sexta
+    6: { cityKey: "nobre",   cityName: "Nobre",   emoji: "👑" }, // Sábado
+  };
+
+  const config = mapping[weekday];
+  if (!config) return null;
+
+  return {
+    ...config,
+    title: `🎯 RETENÇÃO DO EVENTO — BR ${config.cityName.toUpperCase()}`,
+    label: window.label,
+    startHour: window.startHour,
+    startMinute: window.startMinute
+  };
 }
 
 /**
@@ -348,7 +377,12 @@ function getDateKeyDaysAgoFromSnapshot(currentSnapshot, days) {
 function isPrimeTimeSnapshot(snapshot) {
   const window = getPrimeTimeWindow(snapshot);
   if (!window) return false;
-  return snapshot.hour >= window.startHour && snapshot.hour < window.endHour;
+
+  const currentTotalMinutes = snapshot.hour * 60 + snapshot.minute;
+  const startTotalMinutes = window.startHour * 60 + (window.startMinute || 0);
+  const endTotalMinutes = window.endHour * 60 + (window.endMinute || 0);
+
+  return currentTotalMinutes >= startTotalMinutes && currentTotalMinutes < endTotalMinutes;
 }
 
 async function updateDailyPeaks(currentSnapshot) {
@@ -731,6 +765,41 @@ async function buildEmbeds(client, currentSnapshot) {
      )
      .setFooter({ text: `Relatório de Retenção Nobre • 21:00h` });
    embeds.push(retentionEmbed);
+ }
+
+ // 5.1 PAINEL — FOCO DO EVENTO DIÁRIO (NOVO)
+ const focusConfig = getEventDayFocusConfig(currentSnapshot);
+ if (focusConfig) {
+   const { cityKey, cityName, emoji, title, label } = focusConfig;
+   
+   const todayCityPeak = todayPeaks.cities?.[cityKey];
+   const yesterdayCityPeak = yesterdayPeaks.cities?.[cityKey];
+   const lastWeekCityPeak = lastWeekPeaks.cities?.[cityKey];
+
+   const peakValue = todayCityPeak?.primePeak || 0;
+   const peakTime = todayCityPeak?.primePeakTime || "--:--";
+   
+   const diffY = calculateDiff(peakValue, yesterdayCityPeak?.primePeak || 0);
+   const diffW = calculateDiff(peakValue, lastWeekCityPeak?.primePeak || 0);
+
+   const focusEmbed = new EmbedBuilder()
+     .setColor(baseColor)
+     .setTitle(title)
+     .setDescription(
+       `Janela de análise: **${label}**\n\n` +
+       `${emoji} **BR ${cityName}**\n` +
+       `> **Pico no evento:** \`${formatNumber(peakValue)}\` players às \`${peakTime}\`\n` +
+       `> **Vs Ontem:** ${formatDiff(diffY)}\n` +
+       `> **Vs Semana Passada:** ${formatDiff(diffW)}\n\n` +
+       `**Resumo:**\n` +
+       `*Retenção focada apenas na cidade principal do evento de hoje.*`
+     )
+     .setFooter({ 
+       text: `Análise de Foco Diário • Sincronizado às ${currentSnapshot.spTime}`,
+       iconURL: client.user.displayAvatarURL()
+     });
+
+   embeds.push(focusEmbed);
  }
 
  // 6. PAINEL — DIFERENÇA DE PICOS (MÁXIMAS DO DIA)
