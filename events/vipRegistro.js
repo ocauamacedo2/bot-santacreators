@@ -541,7 +541,15 @@ export async function vipRegistroHandleInteraction(interaction, client) {
           const emb = EmbedBuilder.from(msg.embeds[0]);
           atualizarCampoStatusVip(emb, `📨 **JÁ FOI SOLICITADO**\nPor <@${interaction.user.id}> em <t:${Math.floor(Date.now() / 1000)}:f>`, "#f1c40f");
           await msg.edit({ embeds: [emb], components: [createStatusRow(msg.id, targetId, { disableSolicitado: true })] });
-          
+
+          // ✅ Notifica o Dashboard
+          dashEmit("vip:solicitado", { 
+            by: interaction.user.id, 
+            targetId: targetId, 
+            __at: Date.now(),
+            source: "vip_registro" 
+          });
+
           // DM Solicitado
           const dmEmbed = buildVipDmEmbed({
             title: "📨 Seu VIP / Rolepass foi marcado como solicitado!",
@@ -561,7 +569,15 @@ export async function vipRegistroHandleInteraction(interaction, client) {
           const emb = EmbedBuilder.from(msg.embeds[0]);
           atualizarCampoStatusVip(emb, `✅ **PAGO / RECEBIDO**\nPor <@${interaction.user.id}> em <t:${Math.floor(Date.now() / 1000)}:f>`, "Green");
           await msg.edit({ embeds: [emb], components: disableComponents(msg.components) });
-          
+
+          // ✅ Notifica o Dashboard (gera ponto no GeralDash)
+          dashEmit("vip:pago", { 
+            by: interaction.user.id, 
+            targetId: targetId, 
+            __at: Date.now(),
+            source: "vip_registro"
+          });
+
           // DM Pago
           const dmEmbed = buildVipDmEmbed({
             title: "✅ Seu VIP / Rolepass foi marcado como pago/recebido!",
@@ -574,7 +590,6 @@ export async function vipRegistroHandleInteraction(interaction, client) {
           });
           await safeSendVipDM(client, targetId, { embeds: [dmEmbed] });
 
-          dashEmit("vip:pago", { by: interaction.user.id, targetId: targetId });
           return interaction.reply({ content: "✅ Confirmado.", ephemeral: true }).catch(() => {});
         }
         if (legacy.action === "negar") {
@@ -632,7 +647,15 @@ export async function vipRegistroHandleInteraction(interaction, client) {
         const emb = EmbedBuilder.from(msg.embeds[0]);
         atualizarCampoStatusVip(emb, `❌ **REPROVADO**\nPor <@${interaction.user.id}>\nMotivo: ${motivo}`, "Red");
         await msg.edit({ embeds: [emb], components: disableComponents(msg.components) });
-        
+
+        // ✅ Notifica o Dashboard
+        dashEmit("vip:reprovado", { 
+          by: interaction.user.id, 
+          targetId: targetId, 
+          __at: Date.now(),
+          source: "vip_registro"
+        });
+
         // DM Reprovado
         const dmEmbed = buildVipDmEmbed({
           title: "❌ Seu VIP / Rolepass foi reprovado.",

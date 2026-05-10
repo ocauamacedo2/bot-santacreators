@@ -764,6 +764,7 @@ export async function reuniaoSemanalHandleInteraction(interaction, client) {
                     registrarUser: registrarUser,
                     beneficiarioRaw: record.winner.id,
                     tipoRaw: 'vipevento2', // Conforme solicitado
+                    cidadeRaw: 'nobre', // ✅ Sempre Nobre conforme seu pedido
                     motivoRegistro: record.motivo,
                     nomeEquipe: nomeEquipe
                 });
