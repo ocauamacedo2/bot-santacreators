@@ -160,8 +160,10 @@ export function getSaoPauloWeekday(date = new Date()) {
  */
 export function getPrimeTimeWindow(snapshot) {
   const weekday = getSaoPauloWeekday(new Date(snapshot.timestamp));
-  if (weekday >= 1 && weekday <= 3) return { startHour: 18, endHour: 20, label: "18:00 às 20:00" };
-  if (weekday >= 4 && weekday <= 6) return { startHour: 21, endHour: 23, label: "21:00 às 23:00" };
+  // Terça: 18:00 às 20:00
+  if (weekday === 2) return { startHour: 18, endHour: 20, label: "18:00 às 20:00" };
+  // Segunda, Quarta, Quinta, Sexta e Sábado: 21:00 às 23:00
+  if ([1, 3, 4, 5, 6].includes(weekday)) return { startHour: 21, endHour: 23, label: "21:00 às 23:00" };
   return null;
 }
 
@@ -185,11 +187,12 @@ function formatNumber(n) {
 function calculateDiff(current, previous) {
  if (typeof current !== 'number' || isNaN(current)) return { diff: 'N/A', pct: 'N/A', arrow: '⚪' };
  if (typeof previous !== 'number' || isNaN(previous) || previous === 0) {
-   return { diff: current, pct: 'sem base', arrow: current > 0 ? '🟢 ▲' : (current < 0 ? '🔴 ▼' : '⚪ ➖') };
+   return { diff: current, pct: 'sem base', arrow: current > 0 ? '🔴 ▲' : (current < 0 ? '🟢 ▼' : '🟠 ➖') };
  }
  const diff = current - previous;
  const pct = (diff / previous) * 100;
- return { diff, pct, arrow: diff > 0 ? '🟢 ▲' : (diff < 0 ? '🔴 ▼' : '⚪ ➖') };
+ // Padronização solicitada: 🔴 = crescimento, 🟢 = queda, 🟠 = estabilidade
+ return { diff, pct, arrow: diff > 0 ? '🔴 ▲' : (diff < 0 ? '🟢 ▼' : '🟠 ➖') };
 }
 function formatDiff(diffObj) {
  if (diffObj.diff === 'N/A') return 'N/A';
@@ -503,7 +506,6 @@ function getStatusEmojiByYesterday(current, previous) {
  if (!previous || previous <= 0) return "⚪";
 
  const diff = current - previous;
- const pct = (diff / previous) * 100;
 
  if (diff > 0) return "🔴";
  if (diff < 0) return "🟢";
@@ -521,223 +523,232 @@ function formatOnlyCurrentLine(label, current, max, pct, index, yesterday = 0) {
 // ---------- EMBED BUILDER ----------
 async function buildEmbeds(client, currentSnapshot) {
  const embeds = [];
-
+ const baseColor = cn2ParseColor(process.env.BASE_COLORS, DEFAULT_COLOR);
+ 
  const sevenDaysAgoSnapshot = await getSnapshotDaysAgo(7, currentSnapshot);
  const yesterdaySnapshot = await getSnapshotDaysAgo(1, currentSnapshot);
 
- let totalCurrentClients = 0;
- let totalCurrentMaxClients = 0;
-
+ // 1. COLETA E CÁLCULO DE MÉTRICAS ANALÍTICAS
  const cityData = FIVEM_CITIES
    .map((cityConfig) => {
      const city = currentSnapshot.cities[cityConfig.key];
      if (!city) return null;
 
-     totalCurrentClients += city.clients;
-     totalCurrentMaxClients += city.maxClients;
+     const yesterdayClients = yesterdaySnapshot?.cities?.[cityConfig.key]?.clients || 0;
+     const lastWeekClients = sevenDaysAgoSnapshot?.cities?.[cityConfig.key]?.clients || 0;
 
      return {
        config: cityConfig,
        current: city,
-       yesterday: yesterdaySnapshot?.cities?.[cityConfig.key]?.clients || 0,
-       week: sevenDaysAgoSnapshot?.cities?.[cityConfig.key]?.clients || 0,
+       yesterday: yesterdayClients,
+       week: lastWeekClients,
        usage: city.maxClients > 0 ? ((city.clients / city.maxClients) * 100).toFixed(2) : "0.00",
+       diffYesterday: calculateDiff(city.clients, yesterdayClients),
+       diffLastWeek: calculateDiff(city.clients, lastWeekClients)
      };
    })
    .filter(Boolean);
 
- const sortedCurrent = [...cityData].sort((a, b) => b.current.clients - a.current.clients);
-
- const capacityPercent = totalCurrentMaxClients > 0
-   ? ((totalCurrentClients / totalCurrentMaxClients) * 100).toFixed(2)
+ const totalCurrentClients = cityData.reduce((acc, c) => acc + c.current.clients, 0);
+ const totalMaxClients = cityData.reduce((acc, c) => acc + c.current.maxClients, 0);
+ const totalYesterdayClients = yesterdaySnapshot?.totalClients || 0;
+ const totalLastWeekClients = sevenDaysAgoSnapshot?.totalClients || 0;
+ 
+ const capacityPercent = totalMaxClients > 0
+   ? ((totalCurrentClients / totalMaxClients) * 100).toFixed(2)
    : "0.00";
 
+ const peaks = await loadPeaksMap();
+ const todayKey = currentSnapshot.spDate;
+ const yesterdayKey = getDateKeyDaysAgoFromSnapshot(currentSnapshot, 1);
+ const lastWeekKey = getDateKeyDaysAgoFromSnapshot(currentSnapshot, 7);
+
+ const todayPeaks = peaks[todayKey] || { total: { peak: 0 }, cities: {} };
+ const yesterdayPeaks = peaks[yesterdayKey] || { total: { peak: 0 }, cities: {} };
+ const lastWeekPeaks = peaks[lastWeekKey] || { total: { peak: 0 }, cities: {} };
+
+ // 2. PAINEL — DASHBOARD EXECUTIVO (DASHBOARD PREMIUM)
+ const leader = [...cityData].sort((a, b) => b.current.clients - a.current.clients)[0];
+ const topGrowth = [...cityData].sort((a, b) => b.diffYesterday.pct - a.diffYesterday.pct)[0];
+ const topDrop = [...cityData].sort((a, b) => a.diffYesterday.pct - b.diffYesterday.pct)[0];
+ 
+ const dashboardEmbed = new EmbedBuilder()
+   .setColor(baseColor)
+   .setTitle("💎 CENTRAL ANALÍTICA — DASHBOARD PREMIUM")
+   .setThumbnail(client.user.displayAvatarURL())
+   .setDescription(
+     `### 🚀 RESUMO EXECUTIVO\n` +
+     `> 🏆 **Líder Atual:** ${leader?.current.emoji} **${leader?.current.name}** (\`${formatNumber(leader?.current.clients)}\` players)\n` +
+     `> 📈 **Maior Crescimento:** ${topGrowth?.current.emoji} **${topGrowth?.current.name}** (${formatDiff(topGrowth?.diffYesterday)})\n` +
+     `> 📉 **Maior Queda:** ${topDrop?.current.emoji} **${topDrop?.current.name}** (${formatDiff(topDrop?.diffYesterday)})\n` +
+     `> ⚡ **Pico Total Hoje:** \`${formatNumber(todayPeaks.total?.peak)}\` players\n` +
+     `> 📊 **Média de Capacidade:** \`${capacityPercent}%\` \n\n` +
+     `### 📈 PERFORMANCE GLOBAL\n` +
+     `• **Total Online:** \`${formatNumber(totalCurrentClients)}\` players\n` +
+     `• **Vs. Ontem:** ${formatDiff(calculateDiff(totalCurrentClients, totalYesterdayClients))}\n` +
+     `• **Vs. Semana Passada:** ${formatDiff(calculateDiff(totalCurrentClients, totalLastWeekClients))}\n`
+   )
+   .setFooter({ text: `Relatório Executivo • Atualizado em ${currentSnapshot.spTime}` })
+   .setTimestamp();
+ embeds.push(dashboardEmbed);
+
+ // 3. PAINEL — STATUS GERAL FIVEM
+ const sortedCurrent = [...cityData].sort((a, b) => b.current.clients - a.current.clients);
  const summaryEmbed = new EmbedBuilder()
-   .setColor(cn2ParseColor(process.env.BASE_COLORS, DEFAULT_COLOR))
-   .setTitle("📊 STATUS GERAL FIVEM")
+   .setColor(baseColor)
+   .setTitle("📊 STATUS ATUAL DAS CIDADES")
    .setDescription(
      `LISTA FIVEM - Players agora\n\n` +
      sortedCurrent
        .map((item, index) => {
          return formatOnlyCurrentLine(
-  item.current.name,
-  item.current.clients,
-  item.current.maxClients,
-  item.usage,
-  index,
-  item.yesterday
-);
+           item.current.name,
+           item.current.clients,
+           item.current.maxClients,
+           item.usage,
+           index,
+           item.yesterday
+         );
        })
        .join("\n\n") +
-     `\n\n**Total de Players** : \`${formatNumber(totalCurrentClients)} / ${formatNumber(totalCurrentMaxClients)}\`\n` +
+     `\n\n**Total de Players** : \`${formatNumber(totalCurrentClients)} / ${formatNumber(totalMaxClients)}\`\n` +
      `**Média geral** : **${capacityPercent}%** 🔴`
    )
    .setFooter({
      text: `Fonte: FiveM/CFX público • Atualizando a cada 2 minutos • Hoje às ${currentSnapshot.spTime} • ${FIVEM_RANK_MARKER_TAG}`,
    });
-
  embeds.push(summaryEmbed);
 
- const yesterdayTotalClients = yesterdaySnapshot?.totalClients || 0;
-
- const yesterdayEmbed = new EmbedBuilder()
-   .setColor(cn2ParseColor(process.env.BASE_COLORS, DEFAULT_COLOR))
-   .setTitle("📉 COMPARAÇÃO COM ONTEM")
+ // 4. PAINEL — COMPARAÇÃO TEMPORAL (ONTEM & SEMANA PASSADA)
+ const comparisonEmbed = new EmbedBuilder()
+   .setColor(baseColor)
+   .setTitle("📉 ANÁLISE COMPARATIVA DE AUDIÊNCIA")
    .setDescription(
-     `Players agora / Players ontem no mesmo horário\n\n` +
-     cityData
-       .map((item) => formatPanelLine(item.current.name, item.current.clients, item.yesterday))
-       .join("\n\n") +
-     `\n\n**Total de Players** : \`${formatNumber(totalCurrentClients)} / ${formatNumber(yesterdayTotalClients)}\` ${formatCompareCompact(totalCurrentClients, yesterdayTotalClients)}`
+     `### 📅 COMPARAÇÃO COM ONTEM\n` +
+     `*Audiência agora vs Mesma hora ontem*\n` +
+     cityData.map(c => `**${c.current.emoji} ${c.current.name.padEnd(8, " ")}** : \`${formatNumber(c.current.clients)}\` vs \`${formatNumber(c.yesterday)}\` | ${formatDiff(c.diffYesterday)}`).join("\n") +
+     `\n**TOTAL GERAL:** ${formatDiff(calculateDiff(totalCurrentClients, totalYesterdayClients))}\n\n` +
+     `### 📅 MESMO DIA DA SEMANA PASSADA\n` +
+     `*Audiência agora vs Mesma hora e dia há 7 dias*\n` +
+     cityData.map(c => `**${c.current.emoji} ${c.current.name.padEnd(8, " ")}** : \`${formatNumber(c.current.clients)}\` vs \`${formatNumber(c.week)}\` | ${formatDiff(c.diffLastWeek)}`).join("\n") +
+     `\n**TOTAL GERAL:** ${formatDiff(calculateDiff(totalCurrentClients, totalLastWeekClients))}\n`
    )
-   .setFooter({
-     text: `Comparação diária • Hoje às ${currentSnapshot.spTime}`,
-   });
+   .setFooter({ text: `Análise de Retenção Temporal • Sincronizado às ${currentSnapshot.spTime}` });
+ embeds.push(comparisonEmbed);
 
- embeds.push(yesterdayEmbed);
-
- const sevenDaysAgoTotalClients = sevenDaysAgoSnapshot?.totalClients || 0;
-
- const weekEmbed = new EmbedBuilder()
-   .setColor(cn2ParseColor(process.env.BASE_COLORS, DEFAULT_COLOR))
-   .setTitle("📅 COMPARAÇÃO COM 7 DIAS ATRÁS")
-   .setDescription(
-     `Players agora / Players no mesmo horário há 7 dias\n\n` +
-     cityData
-       .map((item) => formatPanelLine(item.current.name, item.current.clients, item.week))
-       .join("\n\n") +
-     `\n\n**Total de Players** : \`${formatNumber(totalCurrentClients)} / ${formatNumber(sevenDaysAgoTotalClients)}\` ${formatCompareCompact(totalCurrentClients, sevenDaysAgoTotalClients)}`
-   )
-   .setFooter({
-     text: `Comparação semanal • Hoje às ${currentSnapshot.spTime}`,
-   });
-
- embeds.push(weekEmbed);
-
- const peaks = await loadPeaksMap();
-
- const todayKey = currentSnapshot.spDate;
- const yesterdayKey = getDateKeyDaysAgoFromSnapshot(currentSnapshot, 1);
- const lastWeekKeyForPeaks = getDateKeyDaysAgoFromSnapshot(currentSnapshot, 7);
-
- const todayPeaks = peaks[todayKey];
- const yesterdayPeaks = peaks[yesterdayKey];
- const lastWeekPeaks = peaks[lastWeekKeyForPeaks];
- 
- // Configuração de Labels dinâmicos baseados no dia
- const primeWindow = getPrimeTimeWindow(currentSnapshot);
- const primeTimeLabel = primeWindow ? primeWindow.label : "sem horário específico";
-
+ // 5. PAINEL — RETENÇÃO DAS 21:00 (EM PONTO)
  const weekday = getSaoPauloWeekday(new Date(currentSnapshot.timestamp));
  const isRelevant21hDay = (weekday >= 1 && weekday <= 6);
 
- // Pega os totais das 21h para o resumo final
- const exact21hTodayTotal = todayPeaks?.exact21h?.total || 0;
- const exact21hYesterdayTotal = yesterdayPeaks?.exact21h?.total || 0;
+ if (isRelevant21hDay) {
+   const today21h = todayPeaks.exact21h || { total: 0, cities: {} };
+   const yesterday21h = yesterdayPeaks.exact21h || { total: 0, cities: {} };
+   
+   let lastWeek21h = lastWeekPeaks.exact21h;
+   if (!lastWeek21h || lastWeek21h.total === 0) {
+     const snap = await getExact21hHistory(lastWeekKey);
+     if (snap) lastWeek21h = { total: snap.totalClients, cities: snap.cities };
+   }
+   lastWeek21h ||= { total: 0, cities: {} };
 
- const peakCityData = FIVEM_CITIES
+   const retentionData = FIVEM_CITIES.map(city => {
+     const t = today21h.cities?.[city.key]?.clients || 0;
+     const y = yesterday21h.cities?.[city.key]?.clients || 0;
+     const w = lastWeek21h.cities?.[city.key]?.clients || 0;
+     return { city, t, y, w, diffY: calculateDiff(t, y), diffW: calculateDiff(t, w) };
+   }).sort((a,b) => b.t - a.t);
+
+   const retentionEmbed = new EmbedBuilder()
+     .setColor(baseColor)
+     .setTitle("🕒 RETENÇÃO ESTRATÉGICA — 21:00 EM PONTO")
+     .setDescription(
+       `Análise crítica de audiência no horário nobre.\n\n` +
+       retentionData.map((item, idx) => {
+         const medal = idx === 0 ? "🥇" : idx === 1 ? "🥈" : idx === 2 ? "🥉" : `${idx + 1}.`;
+         return (
+           `${medal} **BR ${item.city.name.padEnd(8, " ")}**\n` +
+           `> **Hoje às 21h:** \`${formatNumber(item.t)}\` players\n` +
+           `> **Vs Ontem:** ${formatDiff(item.diffY)}\n` +
+           `> **Vs Semana Passada:** ${formatDiff(item.diffW)}`
+         );
+       }).join("\n\n") +
+       `\n\n**TOTAL GERAL ÀS 21:00:** \`${formatNumber(today21h.total)}\` players\n` +
+       `**Crescimento Diário:** ${formatDiff(calculateDiff(today21h.total, yesterday21h.total))}\n` +
+       `**Crescimento Semanal:** ${formatDiff(calculateDiff(today21h.total, lastWeek21h.total))}`
+     )
+     .setFooter({ text: `Relatório de Retenção Nobre • 21:00h` });
+   embeds.push(retentionEmbed);
+ }
+
+ // 6. PAINEL — DIFERENÇA DE PICOS (MÁXIMAS DO DIA)
+ const peakAnalysisData = FIVEM_CITIES
    .map((cityConfig) => {
-     const todayCityPeak = todayPeaks?.cities?.[cityConfig.key];
-     const yesterdayCityPeak = yesterdayPeaks?.cities?.[cityConfig.key];
-     const lastWeekCityPeak = lastWeekPeaks?.cities?.[cityConfig.key];
-
-     const exact21hCityToday = todayPeaks?.exact21h?.cities?.[cityConfig.key]?.clients || 0;
-     const exact21hCityYesterday = yesterdayPeaks?.exact21h?.cities?.[cityConfig.key]?.clients || 0;
-     const exact21hCityLastWeek = lastWeekPeaks?.exact21h?.cities?.[cityConfig.key]?.clients || 0;
-
-     return {
-  name: cityConfig.name,
-  todayPeak: todayCityPeak?.peak || 0,
-  todayPeakTime: todayCityPeak?.peakTime || "--:--",
-
-  yesterdayPeak: yesterdayCityPeak?.peak || 0,
-  weekPeak: lastWeekCityPeak?.peak || 0,
-
-  primePeak: todayCityPeak?.primePeak || 0,
-  primePeakTime: todayCityPeak?.primePeakTime || "--:--",
-
-  yesterdayPrimePeak: yesterdayCityPeak?.primePeak || 0,
-  weekPrimePeak: lastWeekCityPeak?.primePeak || 0, // Corrigido para weekPrimePeak
-
-  exact21hToday: exact21hCityToday,
-  exact21hYesterday: exact21hCityYesterday,
-  exact21hLastWeek: exact21hCityLastWeek,
-};
-   })
-   .sort((a, b) => b.primePeak - a.primePeak);
-
- const primeEmbed = new EmbedBuilder()
-  .setColor(cn2ParseColor(process.env.BASE_COLORS, DEFAULT_COLOR))
-  .setTitle(`🔥 PICOS DO HORÁRIO DE EVENTOS (${primeTimeLabel}) 💜`)
-  .setDescription(
-    `Maior pico registrado entre **${primeTimeLabel}**\n` +
-    `Comparando cada cidade com o pico dela mesma de ontem e de 7 dias atrás.\n\n` +
-    peakCityData
-      .map((item, index) => {
-        // Linha extra com o valor das 21h em ponto
-        let exact21hLine = "";
-        if (isRelevant21hDay) {
-          exact21hLine = `🕒 às 21:00: \`${formatNumber(item.exact21hToday)}\` players ` +
-                         ` (Ontem: \`${formatNumber(item.exact21hYesterday)}\` ${formatCompareCompact(item.exact21hToday, item.exact21hYesterday)})\n` +
-                         ` 7 dias atrás: \`${formatNumber(item.exact21hLastWeek)}\` ${formatCompareCompact(item.exact21hToday, item.exact21hLastWeek)}\n`;
-        }
-
-
-
-
-        const medal = index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : `${index + 1}.`;
-
-        return (
-          `${medal} **BR ${item.name.padEnd(8, " ")}**\n` +
-          `Hoje: ${formatPrimePeakToday(item.primePeak, item.primePeakTime, currentSnapshot)}\n` +
-          `Ontem: \`${formatNumber(item.yesterdayPrimePeak)}\` players ${formatCompareCompact(item.primePeak, item.yesterdayPrimePeak)}\n` +
-          `7 dias: \`${formatNumber(item.weekPrimePeak)}\` players ${formatCompareCompact(item.primePeak, item.weekPrimePeak)}`
-          + (exact21hLine ? `\n${exact21hLine}` : "")
-        );
-      })
-      .join("\n\n")
-  )
-  .setFooter({
-    text: `Picos salvos automaticamente • Eventos ${primeTimeLabel} • Hoje às ${currentSnapshot.spTime}`,
-  });
-
-embeds.push(primeEmbed);
-
- const allPeaksRanking = FIVEM_CITIES
-   .map((cityConfig) => {
-     const todayCityPeak = todayPeaks?.cities?.[cityConfig.key];
+     const todayCityPeak = todayPeaks.cities?.[cityConfig.key];
+     const yesterdayCityPeak = yesterdayPeaks.cities?.[cityConfig.key];
+     const lastWeekCityPeak = lastWeekPeaks.cities?.[cityConfig.key];
 
      return {
        name: cityConfig.name,
-       peak: todayCityPeak?.peak || 0,
-       time: todayCityPeak?.peakTime || "--:--",
+       emoji: cityConfig.emoji,
+       todayPeak: todayCityPeak?.peak || 0,
+       todayPeakTime: todayCityPeak?.peakTime || "--:--",
+       yesterdayPeak: yesterdayCityPeak?.peak || 0,
+       weekPeak: lastWeekCityPeak?.peak || 0,
+       primePeak: todayCityPeak?.primePeak || 0,
+       primePeakTime: todayCityPeak?.primePeakTime || "--:--",
+       yesterdayPrimePeak: yesterdayCityPeak?.primePeak || 0,
+       weekPrimePeak: lastWeekCityPeak?.primePeak || 0,
      };
    })
-   .sort((a, b) => b.peak - a.peak);
+   .sort((a, b) => b.todayPeak - a.todayPeak);
 
- const peaksRankingEmbed = new EmbedBuilder()
-   .setColor(cn2ParseColor(process.env.BASE_COLORS, DEFAULT_COLOR))
-   .setTitle("🏆 MAIORES PICOS DO DIA")
+ const peaksEmbed = new EmbedBuilder()
+   .setColor(baseColor)
+   .setTitle("🏆 ANÁLISE DE PICOS (MÁXIMAS DO DIA)")
    .setDescription(
-     `Ranking geral dos maiores picos de hoje\n\n` +
-     allPeaksRanking
-       .map((item, index) => {
-         const medal = index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : `${index + 1}.`;
-         return `${medal} **BR ${item.name.padEnd(8, " ")}** : \`${formatNumber(item.peak)}\` às \`${item.time}\``;
-       })
-       .join("\n\n") +
-     (isRelevant21hDay 
-       ? `\n\n**Total Geral às 21:00:** \`${formatNumber(exact21hTodayTotal)}\` ${formatCompareCompact(exact21hTodayTotal, exact21hYesterdayTotal)}` 
-       : ""
-     ) +
-     `\n\n**Total geral** : ${formatPeakValue(todayPeaks?.total?.peak, todayPeaks?.total?.peakTime)}`
+     `Performance máxima atingida por cada cidade hoje.\n\n` +
+     peakAnalysisData.map((item, index) => {
+       const medal = index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : `${index + 1}.`;
+       const diffY = calculateDiff(item.todayPeak, item.yesterdayPeak);
+       const diffW = calculateDiff(item.todayPeak, item.weekPeak);
+
+       return (
+         `${medal} **BR ${item.name.padEnd(8, " ")}** : \`${formatNumber(item.todayPeak)}\` às \`${item.todayPeakTime}\`\n` +
+         `└─ **Vs Pico Ontem:** ${formatDiff(diffY)}\n` +
+         `└─ **Vs Pico Semana Passada:** ${formatDiff(diffW)}`
+       );
+     }).join("\n\n") +
+     `\n\n**Total Geral:** ${formatPeakValue(todayPeaks.total?.peak, todayPeaks.total?.peakTime)}`
    )
-   .setFooter({
-     text: `Pico diário • Hoje às ${currentSnapshot.spTime}`,
-   });
+   .setFooter({ text: `Performance Máxima Diária • Hoje até ${currentSnapshot.spTime}` });
+ embeds.push(peaksEmbed);
 
- embeds.push(peaksRankingEmbed);
+ // 7. PAINEL — PICOS DO HORÁRIO DE EVENTOS (PRIME TIME)
+ const primeWindow = getPrimeTimeWindow(currentSnapshot);
+ const primeTimeLabel = primeWindow ? primeWindow.label : "sem horário específico";
+ 
+ const primePeakSorted = [...peakAnalysisData].sort((a, b) => b.primePeak - a.primePeak);
+ const primeEmbed = new EmbedBuilder()
+   .setColor(baseColor)
+   .setTitle(`🔥 PICOS DO HORÁRIO DE EVENTOS (${primeTimeLabel})`)
+   .setDescription(
+     `Métricas de retenção registradas entre **${primeTimeLabel}**.\n\n` +
+     primePeakSorted.map((item, index) => {
+       const medal = index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : `${index + 1}.`;
+       const diffY = calculateDiff(item.primePeak, item.yesterdayPrimePeak);
+       const diffW = calculateDiff(item.primePeak, item.weekPrimePeak);
 
+       return (
+         `${medal} **BR ${item.name.padEnd(8, " ")}** : \`${formatNumber(item.primePeak)}\` às \`${item.primePeakTime}\`\n` +
+         `└─ **Vs Ontem:** ${formatDiff(diffY)} | **Vs Semana Passada:** ${formatDiff(diffW)}`
+       );
+     }).join("\n\n") +
+     `\n\n**Pico Geral no Horário:** \`${formatNumber(todayPeaks.total?.primePeak)}\` players às \`${todayPeaks.total?.primePeakTime || "--:--"}\``
+   )
+   .setFooter({ text: `Análise Prime Time • Sincronizado às ${currentSnapshot.spTime}` });
+ embeds.push(primeEmbed);
+
+ // Botão de atualização manual
  const row = new ActionRowBuilder().addComponents(
    new ButtonBuilder()
      .setCustomId("fivem_retention_force_refresh")
