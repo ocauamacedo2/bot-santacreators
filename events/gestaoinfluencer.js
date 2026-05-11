@@ -235,11 +235,8 @@
         const targetMember = targetId ? await guild.members.fetch(targetId).catch(() => null) : null;
         const targetPos = targetMember?.roles.highest.position || -1;
 
-        // ✅ Expandido para incluir Owner e Resp Creators como possíveis responsáveis automáticos
-        // caso o alvo seja de cargo alto.
+        // ✅ Candidatos automáticos apenas entre Resp Influ e Resp Lider
         const eligibleRoles = [
-          SC_GI_CFG.ROLE_OWNER, 
-          SC_GI_CFG.ROLE_RESP_CREATORS, 
           SC_GI_CFG.ROLE_RESP_INFLU, 
           SC_GI_CFG.ROLE_RESP_LIDER
         ];
@@ -249,6 +246,8 @@
           const role = guild.roles.cache.get(roleId) || await guild.roles.fetch(roleId).catch(() => null);
           if (!role) continue;
           for (const [uid, member] of role.members) {
+            // NUNCA escolhe Owner ou Resp Creators automaticamente
+            if (uid === SC_GI_CFG.ROLE_OWNER || member.roles.cache.has(SC_GI_CFG.ROLE_RESP_CREATORS)) continue;
             // 🚫 Não pode ser responsável de si mesmo
             if (uid === targetId) continue;
 

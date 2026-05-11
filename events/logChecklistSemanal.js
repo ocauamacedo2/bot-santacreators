@@ -547,7 +547,7 @@ export async function checklistHandleInteraction(interaction, client) {
 
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-    const checklist = syncWeekData();
+    const checklist = await syncWeekData(client);
     const weekKey = weekKeyFromDateSP();
     const data = checklist.weeks?.[weekKey] || { responsaveis: {} };
 
@@ -590,7 +590,7 @@ if (customId === "logcheck_my_members") {
     return interaction.reply({ content: "❌ Apenas Administradores podem acessar a visão geral.", flags: MessageFlags.Ephemeral });
   }
   
-  const checklist = syncWeekData();
+  const checklist = await syncWeekData(client);
   const weekKey = weekKeyFromDateSP();
   const data = checklist.weeks?.[weekKey] || { responsaveis: {} };
 
