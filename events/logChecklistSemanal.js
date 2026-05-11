@@ -659,26 +659,32 @@ if (customId === "logcheck_my_members") {
   const weekKey = weekKeyFromDateSP();
   const data = checklist.weeks?.[weekKey] || { responsaveis: {} };
 
+    // ✅ PRE-FETCH EM MASSA (Otimização de Performance)
+    const respIds = Object.keys(data.responsaveis || {});
+    if (respIds.length > 0) {
+      await guild.members.fetch({ user: respIds }).catch(() => {});
+    }
+
   const options = [];
-for (const [respId, content] of Object.entries(data.responsaveis || {})) {
+    const respEntries = Object.entries(data.responsaveis || {});
+    
+    for (const [respId, content] of respEntries) {
   const pending = Object.values(content?.members || {}).filter(m => !m.checked).length;
 
-  let member = guild.members.cache.get(respId);
-  if (!member) { try { member = await guild.members.fetch(respId); } catch {} }
+      const member = guild.members.cache.get(respId);
   const rawName = member?.displayName || member?.user?.username || respId;
 
   options.push({
     label: String(rawName).slice(0, 100),
     value: `logcheck_inspect:${respId}:${weekKey}`,
-    description: String(pending === 0 ? "Em dia" : `${pending} pendências encontradas`).slice(0, 100),
+        description: String(pending === 0 ? "Logs conferidos" : `${pending} pendências encontradas`).slice(0, 100),
     emoji: pending === 0 ? "🟢" : "🔴"
   });
 }
 
 if (options.length === 0) {
-  return interaction.reply({
+      return interaction.editReply({
     content: "❌ Nenhum responsável encontrado na semana atual.",
-    flags: MessageFlags.Ephemeral
   });
 }
 
@@ -689,10 +695,9 @@ const select = new ActionRowBuilder().addComponents(
     .addOptions(options.slice(0, 25))
 );
 
-return interaction.reply({
+    return interaction.editReply({
   content: "👑 **Painel Administrativo**\nEscolha um responsável para ver detalhes ou alterar status.",
   components: [select],
-  flags: MessageFlags.Ephemeral
 });
   }
 
@@ -802,25 +807,25 @@ async function sendPersonalManager(interaction, respId, weekKey, data, isAdmin =
   // ✅ Pre-fetch focado apenas nos membros deste responsável específico
   const idsToFetch = new Set([respId]);
   members.forEach(([mId]) => idsToFetch.add(mId));
+  members.forEach(([_, m]) => { if (m.checkedBy) idsToFetch.add(m.checkedBy); });
+
   if (idsToFetch.size > 0 && guild) {
     await guild.members.fetch({ user: Array.from(idsToFetch) }).catch(() => {});
   }
 
-const respDisplay = await resolveMemberPlainName(guild, respId);
+  const respMember = guild.members.cache.get(respId);
+  const respDisplay = respMember?.displayName || respMember?.user?.username || respId;
 
   const memberLines = [];
   for (const [id, m] of members) {
     const timeStr = m.checkedAt ? `<t:${Math.floor(m.checkedAt / 1000)}:R>` : "";
-    const mDisplay = await resolveMemberDisplay(guild, id);
+    const mMember = guild.members.cache.get(id);
+    const mName = mMember?.displayName || mMember?.user?.username || id;
+    const mDisplay = `<@${id}> (**${mName}**)`;
     
     if (m.checked) {
-      const checkerName = m.checkedBy ? await resolveMemberDisplay(guild, m.checkedBy) : "Staff";
-      const checkerClean =
-        checkerName
-          .replace(/^<@!?\d+>\s*/, "")
-          .replace(/^\(\*\*/, "")
-          .replace(/\*\*\)$/, "")
-          .trim() || "Staff";
+      const checkerMem = m.checkedBy ? guild.members.cache.get(m.checkedBy) : null;
+      const checkerClean = checkerMem?.displayName || checkerMem?.user?.username || "Staff";
 
       memberLines.push(`🟢 ${mDisplay} — conferido por **${checkerClean}** ${timeStr}`);
     } else {
@@ -839,12 +844,7 @@ const respDisplay = await resolveMemberPlainName(guild, respId);
 
   const selectOptions = [];
   for (const [id, m] of members) {
-    let member = guild.members.cache.get(id);
-    if (!member) {
-      try {
-        member = await guild.members.fetch(id);
-      } catch {}
-    }
+    const member = guild.members.cache.get(id);
 
     const rawName = member?.displayName || member?.user?.username || id;
 
