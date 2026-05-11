@@ -873,7 +873,6 @@ async function buildEmbeds(client, currentSnapshot) {
  embeds.push(peaksEmbed);
 
  // 7. PAINEL — PICOS DO HORÁRIO DE EVENTOS (PRIME TIME)
- const primeWindow = getPrimeTimeWindow(currentSnapshot, effectiveWeekday);
  const primeTimeLabel = primeWindow ? primeWindow.label : "sem horário específico";
  
  const activePrimePeaks = useYesterdayFocus ? yesterdayPeaks : todayPeaks;
