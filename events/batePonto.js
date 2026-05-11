@@ -991,7 +991,13 @@ const withinWindow = () => {
   });
 }
 
-          if (alreadyToday(it.user.id) && !isBypassUser) return it.reply({ ephemeral: true, embeds: [warn("Você já bateu ponto hoje.")] });
+          const punchTime = getAlreadyPunchedTime(it.user.id);
+          if (punchTime && !isBypassUser) {
+            return it.reply({
+              ephemeral: true,
+              embeds: [warn(`Você já bateu ponto para este turno (Registro: **${punchTime.split(' ')[1]}**).`)]
+            });
+          }
 
           let team = "Social Medias";
           const chId = it.channelId;
