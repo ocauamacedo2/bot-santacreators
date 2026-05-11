@@ -528,7 +528,7 @@ if (count === 0) memberListText = "_Nenhum membro vinculado._";
 
 fields.push({
   name: `👤 Responsável: ${nameDisplay} ${allDone ? "🟢" : "🔴"}`,
-  value: `📊 ${checked}/${count} conferidos\n\n${memberListText}\n━━━━━━━━━━━━━━━━━━━`,
+  value: ` **Menção:** <@${respId}>\n📊 ${checked}/${count} conferidos\n\n${memberListText}\n━━━━━━━━━━━━━━━━━━━`,
   inline: false
 });
   }
