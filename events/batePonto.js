@@ -290,6 +290,21 @@ const withinWindow = () => {
   return (STATE.days[dayKey] || []).some((e) => e.uid === userId);
 };
 
+// ✅ NOVO: retorna o horário do ponto já batido no turno/dia efetivo
+const getAlreadyPunchedTime = (userId) => {
+  try {
+    const eff = effectiveKeyParts();
+    ensureMonth(eff.monthKey);
+
+    const dayKey = `${eff.monthKey}-${String(eff.dd).padStart(2, "0")}`;
+    const found = (STATE.days[dayKey] || []).find((e) => String(e.uid) === String(userId));
+
+    return found?.time || null;
+  } catch {
+    return null;
+  }
+};
+
 
         const findOrCreateStateMsg = async (cal, monthKey) => {
       const sig = `"monthKey":"${monthKey}"`;
