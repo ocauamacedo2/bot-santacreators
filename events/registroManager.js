@@ -1657,14 +1657,14 @@ export async function registroManagerOnReady(client) {
         );
         if (hasBtns) continue;
 
-        // recoloca botões
+        // recoloca botões (simplificado sem sufixo de ID)
         const row = new ActionRowBuilder().addComponents(
           new ButtonBuilder()
-            .setCustomId(`sc_rm_approve_${m.id}`)
+            .setCustomId(`sc_rm_approve`)
             .setLabel("✅ Aprovar")
             .setStyle(ButtonStyle.Success),
           new ButtonBuilder()
-            .setCustomId(`sc_rm_reject_${m.id}`)
+            .setCustomId(`sc_rm_reject`)
             .setLabel("❌ Reprovar")
             .setStyle(ButtonStyle.Danger)
         );
@@ -2218,7 +2218,20 @@ if (
   const canal = await client.channels.fetch(CANAL_REGISTRO_MANAGER).catch(() => null);
   if (!canal?.isTextBased?.()) return true;
 
-  const msg = await canal.send({ embeds: [embed] }).catch(() => null);
+  // Define os botões antes de enviar para garantir que a mensagem já nasça com eles
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`sc_rm_approve`)
+      .setLabel("✅ Aprovar")
+      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId(`sc_rm_reject`)
+      .setLabel("❌ Reprovar")
+      .setStyle(ButtonStyle.Danger)
+  );
+
+  // Envia Embed e Botões em uma única chamada (Atômico)
+  const msg = await canal.send({ embeds: [embed], components: [row] }).catch(() => null);
   if (!msg) return true;
 
   RM_MSG_OWNER.set(msg.id, registrantId);
@@ -2231,36 +2244,6 @@ if (
 
   const displayCache = `${famIdForList} | ${org}`.trim();
   RM_DISPLAY.set(msg.id, displayCache);
-
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`sc_rm_approve_${msg.id}`)
-      .setLabel("✅ Aprovar")
-      .setStyle(ButtonStyle.Success),
-    new ButtonBuilder()
-      .setCustomId(`sc_rm_reject_${msg.id}`)
-      .setLabel("❌ Reprovar")
-      .setStyle(ButtonStyle.Danger)
-  );
-
-  let okButtons = false;
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    const edited = await msg.edit({ components: [row] }).catch(() => null);
-    if (edited) {
-      okButtons = true;
-      break;
-    }
-    await new Promise((r) => setTimeout(r, 350));
-  }
-
-  if (!okButtons) {
-    try {
-      const refetch = await canal.messages.fetch(msg.id).catch(() => null);
-      if (refetch) {
-        await refetch.edit({ components: [row] }).catch(() => {});
-      }
-    } catch {}
-  }
 
   await upsertLogForRMMessage(client, msg);
 

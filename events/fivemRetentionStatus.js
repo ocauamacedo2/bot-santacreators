@@ -167,10 +167,10 @@ export function getSaoPauloWeekday(date = new Date()) {
 /**
  * Retorna a janela de pico baseada no dia da semana
  */
-export function getPrimeTimeWindow(snapshot) {
-  const weekday = getSaoPauloWeekday(new Date(snapshot.timestamp));
-  // Terça: 21:30 às 00:00 (Evento Cidade Grande às 23:00)
-  if (weekday === 2) return { startHour: 21, startMinute: 30, endHour: 24, endMinute: 0, label: "21:30 às 00:00" };
+export function getPrimeTimeWindow(snapshot, customWeekday = null) {
+  const weekday = customWeekday !== null ? customWeekday : getSaoPauloWeekday(new Date(snapshot.timestamp));
+  // Terça: 21:00 às 00:00 (Evento Cidade Grande às 23:00)
+  if (weekday === 2) return { startHour: 21, startMinute: 0, endHour: 24, endMinute: 0, label: "21:00 às 00:00" };
   // Segunda, Quarta, Quinta, Sexta e Sábado: 20:00 às 23:00
   if ([1, 3, 4, 5, 6].includes(weekday)) return { startHour: 20, startMinute: 0, endHour: 23, endMinute: 0, label: "20:00 às 23:00" };
   return null;
@@ -179,9 +179,9 @@ export function getPrimeTimeWindow(snapshot) {
 /**
  * Configuração de foco dinâmico por dia de evento
  */
-export function getEventDayFocusConfig(snapshot) {
-  const weekday = getSaoPauloWeekday(new Date(snapshot.timestamp));
-  const window = getPrimeTimeWindow(snapshot);
+export function getEventDayFocusConfig(snapshot, customWeekday = null) {
+  const weekday = customWeekday !== null ? customWeekday : getSaoPauloWeekday(new Date(snapshot.timestamp));
+  const window = getPrimeTimeWindow(snapshot, weekday);
   if (!window) return null;
 
   const mapping = {
@@ -643,10 +643,12 @@ async function buildEmbeds(client, currentSnapshot) {
  const todayKey = currentSnapshot.spDate;
  const yesterdayKey = getDateKeyDaysAgoFromSnapshot(currentSnapshot, 1);
  const lastWeekKey = getDateKeyDaysAgoFromSnapshot(currentSnapshot, 7);
+ const dayBeforeYesterdayKey = getDateKeyDaysAgoFromSnapshot(currentSnapshot, 2);
 
  const todayPeaks = peaks[todayKey] || { total: { peak: 0 }, cities: {} };
  const yesterdayPeaks = peaks[yesterdayKey] || { total: { peak: 0 }, cities: {} };
  const lastWeekPeaks = peaks[lastWeekKey] || { total: { peak: 0 }, cities: {} };
+ const dayBeforeYesterdayPeaks = peaks[dayBeforeYesterdayKey] || { total: { peak: 0 }, cities: {} };
 
  // 2. PAINEL — DASHBOARD EXECUTIVO (DASHBOARD PREMIUM)
  const leader = [...cityData].sort((a, b) => b.current.clients - a.current.clients)[0];
@@ -768,27 +770,41 @@ async function buildEmbeds(client, currentSnapshot) {
  }
 
  // 5.1 PAINEL — FOCO DO EVENTO DIÁRIO (NOVO)
- const focusConfig = getEventDayFocusConfig(currentSnapshot);
+ // Inteligência: se for madrugada e hoje ainda não teve pico, mostra o de ontem (ex: Grande de Terça)
+ const isEarlyMorning = currentSnapshot.hour < 4;
+ const useYesterdayFocus = isEarlyMorning && (todayPeaks.total?.primePeak || 0) === 0;
+ 
+ const effectiveWeekday = useYesterdayFocus 
+    ? (getSaoPauloWeekday(new Date(currentSnapshot.timestamp)) + 6) % 7 
+    : getSaoPauloWeekday(new Date(currentSnapshot.timestamp));
+
+ const focusConfig = getEventDayFocusConfig(currentSnapshot, effectiveWeekday);
  if (focusConfig) {
    const { cityKey, cityName, emoji, title, label } = focusConfig;
    
-   const todayCityPeak = todayPeaks.cities?.[cityKey];
-   const yesterdayCityPeak = yesterdayPeaks.cities?.[cityKey];
-   const lastWeekCityPeak = lastWeekPeaks.cities?.[cityKey];
+   const activePeaks = useYesterdayFocus ? yesterdayPeaks : todayPeaks;
+   const compYPeaks = useYesterdayFocus ? dayBeforeYesterdayPeaks : yesterdayPeaks;
+   const compWPeaks = useYesterdayFocus ? peaks[getDateKeyDaysAgoFromSnapshot(currentSnapshot, 8)] || { cities: {} } : lastWeekPeaks;
 
-   const peakValue = todayCityPeak?.primePeak || 0;
-   const peakTime = todayCityPeak?.primePeakTime || "--:--";
+   const peakValue = activePeaks.cities?.[cityKey]?.primePeak || 0;
+   const peakTime = activePeaks.cities?.[cityKey]?.primePeakTime || "--:--";
    
-   const diffY = calculateDiff(peakValue, yesterdayCityPeak?.primePeak || 0);
-   const diffW = calculateDiff(peakValue, lastWeekCityPeak?.primePeak || 0);
+   const diffY = calculateDiff(peakValue, compYPeaks.cities?.[cityKey]?.primePeak || 0);
+   const diffW = calculateDiff(peakValue, compWPeaks.cities?.[cityKey]?.primePeak || 0);
 
    const focusEmbed = new EmbedBuilder()
      .setColor(baseColor)
-     .setTitle(title)
+     .setTitle(`${title}${useYesterdayFocus ? " (Resumo de Ontem)" : ""}`)
      .setDescription(
        `Janela de análise: **${label}**\n\n` +
        `${emoji} **BR ${cityName}**\n` +
        `> **Pico no evento:** \`${formatNumber(peakValue)}\` players às \`${peakTime}\`\n` +
+       `### 📅 Monitoramento de Evento\n` +
+       `**${cityName}** das **${label}** ${useYesterdayFocus ? "no dia do evento anterior" : `na **${currentSnapshot.spWeekday}**`}\n\n` +
+       `${emoji} **RESULTADOS DO PICO:**\n` +
+       `> **Máxima atingida:** \`${formatNumber(peakValue)}\` ativos\n` +
+       `> **Horário do registro:** \`${peakTime}\`\n\n` +
+       `**COMPARAÇÃO HISTÓRICA:**\n` +
        `> **Vs Ontem:** ${formatDiff(diffY)}\n` +
        `> **Vs Semana Passada:** ${formatDiff(diffW)}\n\n` +
        `**Resumo:**\n` +
@@ -846,35 +862,51 @@ async function buildEmbeds(client, currentSnapshot) {
  embeds.push(peaksEmbed);
 
  // 7. PAINEL — PICOS DO HORÁRIO DE EVENTOS (PRIME TIME)
- const primeWindow = getPrimeTimeWindow(currentSnapshot);
+ const primeWindow = getPrimeTimeWindow(currentSnapshot, effectiveWeekday);
  const primeTimeLabel = primeWindow ? primeWindow.label : "sem horário específico";
  
- // Cálculos de comparação para o Total Geral do horário de eventos
- const totalPrimeDiffY = calculateDiff(todayPeaks.total?.primePeak || 0, yesterdayPeaks.total?.primePeak || 0);
- const totalPrimeDiffW = calculateDiff(todayPeaks.total?.primePeak || 0, lastWeekPeaks.total?.primePeak || 0);
+ const activePrimePeaks = useYesterdayFocus ? yesterdayPeaks : todayPeaks;
+ const compYPrimePeaks = useYesterdayFocus ? dayBeforeYesterdayPeaks : yesterdayPeaks;
+ const compWPrimePeaks = useYesterdayFocus ? peaks[getDateKeyDaysAgoFromSnapshot(currentSnapshot, 8)] || { total: {} } : lastWeekPeaks;
 
- const primePeakSorted = [...peakAnalysisData].sort((a, b) => b.primePeak - a.primePeak);
+ // Cálculos de comparação para o Total Geral do horário de eventos
+ const totalPrimeDiffY = calculateDiff(activePrimePeaks.total?.primePeak || 0, compYPrimePeaks.total?.primePeak || 0);
+ const totalPrimeDiffW = calculateDiff(activePrimePeaks.total?.primePeak || 0, compWPrimePeaks.total?.primePeak || 0);
+
+ // Mapeia os dados baseados nos picos ativos (hoje ou resumo de ontem)
+ const effectivePeakData = FIVEM_CITIES.map(city => {
+    const p = activePrimePeaks.cities?.[city.key];
+    const py = compYPrimePeaks.cities?.[city.key];
+    const pw = compWPrimePeaks.cities?.[city.key];
+    return {
+        name: city.name,
+        emoji: city.emoji,
+        val: p?.primePeak || 0,
+        time: p?.primePeakTime || "--:--",
+        diffY: calculateDiff(p?.primePeak || 0, py?.primePeak || 0),
+        diffW: calculateDiff(p?.primePeak || 0, pw?.primePeak || 0)
+    };
+ }).sort((a, b) => b.val - a.val);
+
  const primeEmbed = new EmbedBuilder()
    .setColor(baseColor)
-   .setTitle(`🔥 PRIME TIME — RETENÇÃO EM EVENTO`)
+   .setTitle(`🔥 PRIME TIME — RETENÇÃO EM EVENTO${useYesterdayFocus ? " (Ontem)" : ""}`)
    .setDescription(
      `*Janela de análise: **${primeTimeLabel}***\n\n` +
-     primePeakSorted.map((item, index) => {
+     effectivePeakData.map((item, index) => {
        const medal = index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : `${index + 1}.`;
-       const diffY = calculateDiff(item.primePeak, item.yesterdayPrimePeak);
-       const diffW = calculateDiff(item.primePeak, item.weekPrimePeak);
 
        return (
-         `${medal} **BR ${item.name}** • \`${formatNumber(item.primePeak)}\` às \`${item.primePeakTime}\`\n` +
-         `> **Trends:** ${formatDiff(diffY)} (24h) | ${formatDiff(diffW)} (7d)`
+         `${medal} **BR ${item.name}** • \`${formatNumber(item.val)}\` às \`${item.time}\`\n` +
+         `> **Trends:** ${formatDiff(item.diffY)} (24h) | ${formatDiff(item.diffW)} (7d)`
        );
      }).join("\n\n") +
      `\n\n${UI.DIVIDER}\n` +
-     `**Máxima no Horário:** \`${formatNumber(todayPeaks.total?.primePeak)}\` players\n` +
+     `**Máxima no Horário:** \`${formatNumber(activePrimePeaks.total?.primePeak)}\` players\n` +
      `> **Vs Ontem:** ${formatDiff(totalPrimeDiffY)}\n` +
      `> **Vs Semana Passada:** ${formatDiff(totalPrimeDiffW)}`
    )
-   .setFooter({ text: `Monitoramento Prime Time • Ref: ${currentSnapshot.spTime}` });
+   .setFooter({ text: `${useYesterdayFocus ? "Resumo Consolidado" : "Monitoramento em Tempo Real"} • Ref: ${currentSnapshot.spTime}` });
  embeds.push(primeEmbed);
 
  // Botão de atualização manual
