@@ -983,7 +983,8 @@ const withinWindow = () => {
           modal.addComponents(new ActionRowBuilder().addComponents(input));
           await it.showModal(modal);
           return;
-        if (it.isModalSubmit() && it.customId === CFG.KEYS.MODAL_ID) {
+        } // <--- CHAVE DE FECHAMENTO ADICIONADA AQUI
+        if (it.isModalSubmit() && it.customId === CFG.KEYS.MODAL_ID) { // Este 'if' agora está no nível correto
           const firstName = (it.fields.getTextInputValue(CFG.KEYS.MODAL_NAME_ID) || "")
             .trim()
             .split(/\s+/)[0]
