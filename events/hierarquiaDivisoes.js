@@ -350,8 +350,7 @@ async function updateHierarchyPanel(client) {
           if (finalList.length === 0) return "";
 
           // ✅ marca como já listado
-          const role = guild.roles.cache.get(roleId);
-          const roleName = role ? role.name.toUpperCase() : "CARGO";
+          const roleName = role.name.toUpperCase();
           
           const countLine = `\n**totais: ${finalList.length} ${roleName} ${roleId}**`;
           for (const m of finalList) seen.add(m.id);
