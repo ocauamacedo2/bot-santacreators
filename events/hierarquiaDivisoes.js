@@ -210,7 +210,7 @@ function resolveEmoji(channel, code, fallback) {
 
 // Lista formatada por grupos (ex: Gestor/Manager/Social)
 // ✅ "seen" dá prioridade: se já apareceu em cima, não aparece em baixo
-function getMembersByRoleGroups(guild, groupDefs, slots, filterSlot, E, seen) {
+        const getMembersByRoleGroups = (guild, groupDefs, slots, filterSlot, E, seen, groupType) => {
   const lines = [];
           let groupTotal = 0;
 
@@ -270,11 +270,21 @@ function getMembersByRoleGroups(guild, groupDefs, slots, filterSlot, E, seen) {
         })
         .join("\n")
     );
+            
+            if (g.id === "EQ_CREATORS") {
+              lines.push(`\n**equipe sem area: ${count} membros**`);
+            } else if (groupType === "EQUIPE") {
+              lines.push(`\n**Equipe <@&${roleId}> Membros: ${count} Membros**`);
+            } else {
+              lines.push(`\n**TOTAIS: ${count} <@&${roleId}>**`);
+            }
+            lines.push("");
+          }
 
-    lines.push("");
-  }
+          if (groupType === "GESTAO") lines.push(`**TOTAIS DA Coordenação: ${groupTotal}**`);
+          if (groupType === "EQUIPE") lines.push(`**totais da Equipe Creators gerais: ${groupTotal} membros**`);
 
-  return lines.join("\n");
+          return lines.join("\n");
 }
 
 let PANEL_UPDATING = false;
@@ -351,8 +361,6 @@ async function updateHierarchyPanel(client) {
           if (finalList.length === 0) return "";
 
           // ✅ marca como já listado
-          const roleName = role.name.toUpperCase();
-          
           for (const m of finalList) seen.add(m.id);
 
           const countLine = `\ntotais: ${finalList.length} <@&${roleId}>`;
@@ -412,12 +420,12 @@ async function updateHierarchyPanel(client) {
           "┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅",
           `#  ${E.CROWN_INFLU}  COORDENAÇÃO / GESTÃO ${E.CROWN_INFLU}`,
           "",
-          getMembersByRoleGroups(guild, CONFIG.GROUPS.GESTAO, slots, "ANY", E, seen) || "_Ninguém_",
+          getMembersByRoleGroups(guild, CONFIG.GROUPS.GESTAO, slots, "ANY", E, seen, "GESTAO") || "_Ninguém_",
           "",
           "┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅",
           `#  ${E.CROWN_CYAN}    EQUIPE CREATOR  ${E.CROWN_CYAN}`,
           "",
-          getMembersByRoleGroups(guild, CONFIG.GROUPS.EQUIPE, slots, "ANY", E, seen) || "_Ninguém_",
+          getMembersByRoleGroups(guild, CONFIG.GROUPS.EQUIPE, slots, "ANY", E, seen, "EQUIPE") || "_Ninguém_",
           "",
           "┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅",
           "",

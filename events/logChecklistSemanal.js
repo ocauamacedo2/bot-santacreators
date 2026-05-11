@@ -512,7 +512,6 @@ async function buildMainPanel(client, sourceGuild = null) {
     checkedMembers += checked;
     if (checked < count) respsWithPending++;
 
-    const nameDisplay = await resolveMemberPlainName(guild, respId);
 const allDone = count > 0 && checked === count;
 
 const memberLines = [];
@@ -527,7 +526,7 @@ if (count > 5) memberListText += `\n*+${count - 5} restantes...*`;
 if (count === 0) memberListText = "_Nenhum membro vinculado._";
 
 fields.push({
-  name: `👤 Responsável: ${nameDisplay} ${allDone ? "🟢" : "🔴"}`,
+  name: `👤 Responsável: <@${respId}> ${allDone ? "🟢" : "🔴"}`,
   value: `📊 ${checked}/${count} conferidos\n\n${memberListText}\n━━━━━━━━━━━━━━━━━━━`,
   inline: false
 });
