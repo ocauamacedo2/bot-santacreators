@@ -8,7 +8,8 @@ import {
   TextInputBuilder,
   TextInputStyle,
   ButtonStyle,
-  Events
+  Events,
+  MessageFlags
 } from "discord.js";
 import { dashEmit } from "../utils/dashHub.js";
 /**
@@ -957,7 +958,7 @@ const withinWindow = () => {
           if (!canClick(it.member)) return it.reply({ ephemeral: true, embeds: [err("Você não tem permissão para bater ponto aqui.")] });
           if (!withinWindow() && !isBypassUser) {
   return it.reply({
-    ephemeral: true,
+    flags: MessageFlags.Ephemeral,
     embeds: [warn("Bate-ponto disponível **das 17:00 às 23:00** e **das 01:00 às 04:00**.")]
   });
 }
@@ -965,7 +966,7 @@ const withinWindow = () => {
           const punchTime = getAlreadyPunchedTime(it.user.id);
           if (punchTime && !isBypassUser) {
             return it.reply({ 
-              ephemeral: true, 
+              flags: MessageFlags.Ephemeral, 
               embeds: [warn(`Você já bateu ponto para este turno (Registro: **${punchTime.split(' ')[1]}**).`)] 
             });
           }
@@ -983,17 +984,18 @@ const withinWindow = () => {
           modal.addComponents(new ActionRowBuilder().addComponents(input));
           await it.showModal(modal);
           return;
-        } // <--- CHAVE DE FECHAMENTO ADICIONADA AQUI
-        if (it.isModalSubmit() && it.customId === CFG.KEYS.MODAL_ID) { // Este 'if' agora está no nível correto
+        }
+
+        if (it.isModalSubmit() && it.customId === CFG.KEYS.MODAL_ID) {
           const firstName = (it.fields.getTextInputValue(CFG.KEYS.MODAL_NAME_ID) || "")
             .trim()
             .split(/\s+/)[0]
             .slice(0, 16);
 
-          if (!firstName || firstName.length < 2) return it.reply({ ephemeral: true, embeds: [err("Nome inválido. Tente novamente.")] });
+          if (!firstName || firstName.length < 2) return it.reply({ flags: MessageFlags.Ephemeral, embeds: [err("Nome inválido. Tente novamente.")] });
           if (!withinWindow() && !isBypassUser) {
   return it.reply({
-    ephemeral: true,
+    flags: MessageFlags.Ephemeral,
     embeds: [warn("Bate-ponto disponível **das 17:00 às 23:00** e **das 01:00 às 04:00**.")]
   });
 }
@@ -1001,7 +1003,7 @@ const withinWindow = () => {
           const punchTime = getAlreadyPunchedTime(it.user.id);
           if (punchTime && !isBypassUser) {
             return it.reply({
-              ephemeral: true,
+              flags: MessageFlags.Ephemeral,
               embeds: [warn(`Você já bateu ponto para este turno (Registro: **${punchTime.split(' ')[1]}**).`)]
             });
           }
@@ -1068,11 +1070,15 @@ const withinWindow = () => {
           }
 
           return;
+
+
         }
 
 
+        
+
         if (it.isButton() && it.customId === CFG.KEYS.BUTTON_CLEAR_MONTH) {
-          if (!canClear(it.member)) return it.reply({ ephemeral: true, embeds: [err("Sem permissão para limpar o mês.")] });
+          if (!canClear(it.member)) return it.reply({ flags: MessageFlags.Ephemeral, embeds: [err("Sem permissão para limpar o mês.")] });
 
           const { monthKey } = nowParts();
           STATE = emptyMonth(monthKey);
@@ -1081,14 +1087,14 @@ const withinWindow = () => {
           if (cal) await persist(cal, monthKey);
           await syncMonth();
 
-          return it.reply({ ephemeral: true, embeds: [warn("Calendário do mês **limpo** com sucesso.")] });
+          return it.reply({ flags: MessageFlags.Ephemeral, embeds: [warn("Calendário do mês **limpo** com sucesso.")] });
         }
       } catch (e) {
         console.error("[SC_BP] interaction error:", e);
         if (it?.replied || it?.deferred) {
-          try { await it.followUp({ ephemeral: true, embeds: [err("Erro inesperado. Tente novamente.")] }); } catch {}
+          try { await it.followUp({ flags: MessageFlags.Ephemeral, embeds: [err("Erro inesperado. Tente novamente.")] }); } catch {}
         } else {
-          try { await it.reply({ ephemeral: true, embeds: [err("Erro inesperado. Tente novamente.")] }); } catch {}
+          try { await it.reply({ flags: MessageFlags.Ephemeral, embeds: [err("Erro inesperado. Tente novamente.")] }); } catch {}
         }
       }
     });
