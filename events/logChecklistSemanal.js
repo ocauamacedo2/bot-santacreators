@@ -493,8 +493,8 @@ fields.push({
     .setTitle("📋 Checklist Semanal de Logs")
     .setDescription(
       `📅 **Semana:** ${getWeekRangeLabel(weekKey)}\n` +
-      `🕒 **Fechamento:** Domingo às 23:59\n\n` +
-      `📌 **Responsáveis com pendência:** \`${respsWithPending}\`\n` +
+      `🕒 **Fechamento:** Sexta-feira às 23:59\n\n` +
+      `� **Responsáveis com pendência:** \`${respsWithPending}\`\n` +
       `✅ **Membros conferidos:** \`${checkedMembers}\`\n` +
       `❌ **Membros pendentes:** \`${totalMembers - checkedMembers}\`\n` +
       `🕓 **Última sincronização GI:** ${data.lastSyncedAt ? `<t:${Math.floor(data.lastSyncedAt / 1000)}:R>` : "`Nunca`"}\n\n` +
