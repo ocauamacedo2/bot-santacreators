@@ -410,7 +410,8 @@ async function syncWeekData(client) {
         const targetMem = await guild.members.fetch(memberId).catch(() => null);
         
         if (respMem && targetMem) {
-          // Se o alvo tem cargo MAIOR ou IGUAL ao responsável, ele não aparece na lista desse responsável
+          // 🔒 HIERARQUIA RÍGIDA: Se o alvo tem cargo MAIOR ou IGUAL ao responsável, 
+          // ele é ignorado (subordinado não bate log de superior ou igual).
           if (targetMem.roles.highest.position >= respMem.roles.highest.position) continue;
         }
       } catch {}

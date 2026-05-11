@@ -235,20 +235,25 @@
         const targetMember = targetId ? await guild.members.fetch(targetId).catch(() => null) : null;
         const targetPos = targetMember?.roles.highest.position || -1;
 
-        const eligibleRoles = [SC_GI_CFG.ROLE_RESP_INFLU, SC_GI_CFG.ROLE_RESP_LIDER];
+        // ✅ Expandido para incluir Owner e Resp Creators como possíveis responsáveis automáticos
+        // caso o alvo seja de cargo alto.
+        const eligibleRoles = [
+          SC_GI_CFG.ROLE_OWNER, 
+          SC_GI_CFG.ROLE_RESP_CREATORS, 
+          SC_GI_CFG.ROLE_RESP_INFLU, 
+          SC_GI_CFG.ROLE_RESP_LIDER
+        ];
         const candidates = new Map(); // userId -> { member, count }
 
         for (const roleId of eligibleRoles) {
           const role = guild.roles.cache.get(roleId) || await guild.roles.fetch(roleId).catch(() => null);
           if (!role) continue;
           for (const [uid, member] of role.members) {
-            // Ignora Owner e Resp Creators da seleção automática
-            if (uid === SC_GI_CFG.ROLE_OWNER || member.roles.cache.has(SC_GI_CFG.ROLE_RESP_CREATORS)) continue;
-            
             // 🚫 Não pode ser responsável de si mesmo
             if (uid === targetId) continue;
 
-            // 🔒 HIERARQUIA: O responsável DEVE ter cargo maior que o membro (posição maior no Discord)
+            // 🔒 HIERARQUIA RÍGIDA: O responsável DEVE ter cargo ESTRITAMENTE maior (posição >) que o membro.
+            // Isso impede que um Resp Influ cuide de outro Resp Influ.
             if (targetId && member.roles.highest.position <= targetPos) continue;
 
             if (!candidates.has(uid)) candidates.set(uid, { member, count: 0 });
