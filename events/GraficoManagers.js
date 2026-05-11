@@ -27,6 +27,13 @@ import {
   TextInputStyle,
 } from "discord.js";
 
+// ✅ MODULE GUARD: Evita que o sistema de gráficos inicialize duplicado na memória
+const __GM_DASH_SKIP__ = Boolean(globalThis.__GM_DASH_ALREADY_BOOTSTRAPPED__);
+if (__GM_DASH_SKIP__) {
+  // Módulo já carregado, ignorando nova execução.
+} else {
+  globalThis.__GM_DASH_ALREADY_BOOTSTRAPPED__ = true;
+}
 
 // ===============================
 // CONFIG (AJUSTA SÓ ISSO AQUI)
@@ -841,7 +848,7 @@ if (links && !links.error) {
   // fallback: se por algum motivo não veio imageUrl, usa o short (mas pode não renderizar)
   if (!chartImageUrl) chartImageUrl = chartShortUrl;
 } else {
-  await sendLog(client, "❌ QuickChart links falhou", [
+  await sendLog(client, "❌ QuickChart links falhou (GM)", [
     `**Motivo:** \`${links?.error || "desconhecido"}\``,
     `**Dica:** sem isso, o botão até pode existir, mas o embed do gráfico não vai renderizar.`,
   ]);
@@ -888,7 +895,7 @@ if (links && !links.error) {
 
 // ✅ FIX: se alguém clicou no "X" e suprimiu os embeds, dessuprime
 if (dashMsg && dashMsg.flags?.has?.(MessageFlagsBitField.Flags.SuppressEmbeds)) {
-  await sendLog(client, "🧯 Unsuppress embeds", [
+  await sendLog(client, "🧯 Unsuppress embeds (GM)", [
     `**Motivo:** mensagem estava com embeds suprimidos (clicaram no X).`,
     `**Ação:** dashMsg.suppressEmbeds(false)`,
   ]);
@@ -896,7 +903,7 @@ if (dashMsg && dashMsg.flags?.has?.(MessageFlagsBitField.Flags.SuppressEmbeds)) 
   try {
     await dashMsg.suppressEmbeds(false);
   } catch (e) {
-    await sendLog(client, "❌ Falha ao dessuprimir embeds", [
+    await sendLog(client, "❌ Falha ao dessuprimir embeds (GM)", [
       `**Erro:** \`${String(e?.message || e)}\``,
       `**Ação:** vou recriar o painel (FORCE).`,
     ]);
@@ -913,7 +920,7 @@ if (dashMsg && dashMsg.flags?.has?.(MessageFlagsBitField.Flags.SuppressEmbeds)) 
 
 // ✅ RECOVERY: se a mensagem existe mas tá “vazia” (sem embeds), força re-render
 if (dashMsg && (!dashMsg.embeds || dashMsg.embeds.length === 0) && reason !== "force") {
-  await sendLog(client, "🛠️ Recovery", [
+  await sendLog(client, "🛠️ Recovery (GM)", [
     `**Motivo:** mensagem estava sem embeds (vazia)`,
     `**Ação:** vou recriar o painel (FORCE).`,
   ]);
@@ -971,7 +978,7 @@ if (!dashMsg && reason !== "force") {
     .send({ content: "", embeds, components })
     .catch((e) => {
       // tenta logar o erro
-      sendLog(client, "❌ FORCE falhou ao enviar", [
+      sendLog(client, "❌ FORCE falhou ao enviar (GM)", [
         `**Erro:** \`${String(e?.message || e)}\``,
         `**Canal:** \`${ORG_DASH_CHANNEL_ID}\``,
       ]).catch(() => null);
@@ -994,7 +1001,7 @@ if (!dashMsg && reason !== "force") {
   saveState(state);
 
   // 5) log sucesso
-  await sendLog(client, "✅ FORCE OK", [
+  await sendLog(client, "✅ FORCE OK (GM)", [
     `**Semana:** \`${weekKey}\``,
     `**Mensagem nova:** \`${state.messageId}\``,
     `**Embeds:** \`${embeds.length}\``,
@@ -1056,6 +1063,10 @@ if (!dashMsg && reason !== "force") {
 // PUBLIC HOOKS (PLUGA NO INDEX)
 // ===============================
 export async function graficoManagersOnReady(client) {
+  // ✅ EVITA EXECUÇÃO DUPLICADA NO BOOT
+  if (client.__GM_DASH_READY_RAN__) return;
+  client.__GM_DASH_READY_RAN__ = true;
+
   // console.log("[GRAFICO_MANAGERS] onReady chamado ✅", {
   //   ch: ORG_DASH_CHANNEL_ID,
   //   log: ORG_DASH_LOG_CHANNEL_ID,
