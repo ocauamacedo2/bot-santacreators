@@ -541,7 +541,7 @@ async function buildMainPanel(client, sourceGuild = null) {
     if (checked < count) respsWithPending++;
 
     const nameDisplay = await resolveMemberPlainName(guild, respId);
-    const allDone = count > 0 && checked === count;
+    const allDone = count === 0 || checked === count; // ✅ Correção: se não tem membros, está "done"
 
 const memberLines = [];
 for (const [mId, m] of membersEntries.slice(0, 5)) {
