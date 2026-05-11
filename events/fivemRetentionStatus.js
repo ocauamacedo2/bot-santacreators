@@ -401,8 +401,10 @@ async function updateDailyPeaks(currentSnapshot) {
   try {
     const dateKey = currentSnapshot.spDate;
     let dayPeak = await PeakModel.findOne({ date: dateKey });
+    let hasChange = false;
 
     if (!dayPeak) {
+      hasChange = true;
       dayPeak = new PeakModel({ // Garante que o objeto total e cities existam
         date: dateKey,
         total: { peak: 0, peakTime: null, peakAt: 0, primePeak: 0, primePeakTime: null, primePeakAt: 0 },
@@ -411,6 +413,7 @@ async function updateDailyPeaks(currentSnapshot) {
       });
     } else if (!dayPeak.exact21h) { // Adiciona o campo se não existir em documentos antigos
       dayPeak.exact21h = { total: 0, cities: {} };
+      hasChange = true;
     }
 
     // Garante que todas as cidades configuradas existem no objeto Mixed (evita erro em novas cidades)
@@ -426,8 +429,11 @@ async function updateDailyPeaks(currentSnapshot) {
 
     // Atualiza o pico exato das 21:00
     if (isExact21hSnapshot(currentSnapshot)) {
-      dayPeak.exact21h.total = currentSnapshot.totalClients || 0;
-      dayPeak.exact21h.cities = currentSnapshot.cities;
+      if (dayPeak.exact21h.total !== currentSnapshot.totalClients) {
+        dayPeak.exact21h.total = currentSnapshot.totalClients || 0;
+        dayPeak.exact21h.cities = currentSnapshot.cities;
+        hasChange = true;
+      }
     }
 
     const isPrime = isPrimeTimeSnapshot(currentSnapshot);
@@ -436,12 +442,14 @@ async function updateDailyPeaks(currentSnapshot) {
       dayPeak.total.peak = currentSnapshot.totalClients || 0;
       dayPeak.total.peakTime = currentSnapshot.spTime;
       dayPeak.total.peakAt = currentSnapshot.timestamp;
+      hasChange = true;
     }
 
     if (isPrime && (currentSnapshot.totalClients || 0) > (dayPeak.total.primePeak || 0)) {
       dayPeak.total.primePeak = currentSnapshot.totalClients || 0;
       dayPeak.total.primePeakTime = currentSnapshot.spTime;
       dayPeak.total.primePeakAt = currentSnapshot.timestamp;
+      hasChange = true;
     }
 
     for (const cityConfig of FIVEM_CITIES) {
@@ -471,6 +479,7 @@ async function updateDailyPeaks(currentSnapshot) {
     await PeakModel.deleteMany({ date: { $lt: thirtyDaysAgoDate } });
   } catch (e) {
     console.error("[FIVEM_RETENTION] Erro ao atualizar picos diários:", e);
+    return false;
   }
 }
 
@@ -781,55 +790,69 @@ async function buildEmbeds(client, currentSnapshot) {
    embeds.push(retentionEmbed);
  }
 
-  // 5.1 PAINEL — FOCO DO EVENTO (POR CIDADE - FIXO)
+  // 5.1 PAINEL — FOCO DO EVENTO (DINÂMICO POR DIA)
   const isEarlyMorning = currentSnapshot.hour < 4;
   const useYesterdayFocus = isEarlyMorning && (todayPeaks.total?.primePeak || 0) === 0;
   const effectiveWeekday = useYesterdayFocus ? (getSaoPauloWeekday(new Date(currentSnapshot.timestamp)) + 6) % 7 : getSaoPauloWeekday(new Date(currentSnapshot.timestamp));
+  
   const primeWindow = getPrimeTimeWindow(currentSnapshot, effectiveWeekday);
+  const eventFocusConfigs = getEventDayFocusConfig(currentSnapshot, effectiveWeekday);
 
-  if (primeWindow) {
+  if (primeWindow && eventFocusConfigs.length > 0) {
     const activePeaks = useYesterdayFocus ? yesterdayPeaks : todayPeaks;
-    const compYPeaks = useYesterdayFocus ? dayBeforeYesterdayPeaks : yesterdayPeaks;
-    const compWPeaks = useYesterdayFocus ? peaks[getDateKeyDaysAgoFromSnapshot(currentSnapshot, 8)] || { cities: {} } : lastWeekPeaks;
+    const offsetBase = useYesterdayFocus ? 1 : 0;
 
-    // Definimos a lista de cidades para exibir os painéis individuais
-    const focusItems = [
-      { key: "nobre",   name: "Nobre",   emoji: "👑" },
-      { key: "santa",   name: "Santa",   emoji: "🏙️" },
-      { key: "grande",  name: "Grande",  emoji: "🌆" },
-      { key: "maresia", name: "Maresia", emoji: "🌊" }
-    ];
+    // 🧠 Lógica de Comparação Inteligente (Evento vs Evento)
+    let daysToPrevEvent = 1;
+    let daysToLastWeek = 7;
 
-    // Se for Domingo (0), adicionamos o painel Geral (Rede) no topo
-    if (effectiveWeekday === 0) focusItems.unshift({ key: "total", name: "Geral (Rede)", emoji: "🌐" });
+    // Cidades semanais (Dom, Seg, Ter, Qua) -> Compara com 7 dias atrás
+    if ([0, 1, 2, 3].includes(effectiveWeekday)) {
+      daysToPrevEvent = 7;
+      daysToLastWeek = 14;
+    } 
+    // Nobre Quinta (4) -> Último evento foi Sábado (5 dias atrás)
+    else if (effectiveWeekday === 4) {
+      daysToPrevEvent = 5;
+      daysToLastWeek = 7;
+    }
+    // Nobre Sexta (5) e Sábado (6) -> Segue a sequência (1 dia atrás)
+    else {
+      daysToPrevEvent = 1;
+      daysToLastWeek = 7;
+    }
 
-    for (const item of focusItems) {
+    const compYPeaks = peaks[getDateKeyDaysAgoFromSnapshot(currentSnapshot, daysToPrevEvent + offsetBase)] || { total: {}, cities: {} };
+    const compWPeaks = peaks[getDateKeyDaysAgoFromSnapshot(currentSnapshot, daysToLastWeek + offsetBase)] || { total: {}, cities: {} };
+
+    for (const config of eventFocusConfigs) {
       // Trava de segurança para não estourar o limite de 10 embeds do Discord
       if (embeds.length >= 8) break;
 
-      const isTotal = item.key === "total";
-      const peakValue = isTotal ? activePeaks.total?.primePeak || 0 : activePeaks.cities?.[item.key]?.primePeak || 0;
-      const peakTime = isTotal ? activePeaks.total?.primePeakTime || "--:--" : activePeaks.cities?.[item.key]?.primePeakTime || "--:--";
-      const diffY = calculateDiff(peakValue, isTotal ? compYPeaks.total?.primePeak || 0 : compYPeaks.cities?.[item.key]?.primePeak || 0);
-      const diffW = calculateDiff(peakValue, isTotal ? compWPeaks.total?.primePeak || 0 : compWPeaks.cities?.[item.key]?.primePeak || 0);
+      const isTotal = config.cityKey === "total";
+      const peakValue = isTotal ? activePeaks.total?.primePeak || 0 : activePeaks.cities?.[config.cityKey]?.primePeak || 0;
+      const peakTime = isTotal ? activePeaks.total?.primePeakTime || "--:--" : activePeaks.cities?.[config.cityKey]?.primePeakTime || "--:--";
+      
+      const diffY = calculateDiff(peakValue, isTotal ? compYPeaks.total?.primePeak || 0 : compYPeaks.cities?.[config.cityKey]?.primePeak || 0);
+      const diffW = calculateDiff(peakValue, isTotal ? compWPeaks.total?.primePeak || 0 : compWPeaks.cities?.[config.cityKey]?.primePeak || 0);
 
       const focusEmbed = new EmbedBuilder()
         .setColor(baseColor)
-        .setTitle(`🎯 RETENÇÃO DO EVENTO — BR ${item.name.toUpperCase()}${useYesterdayFocus ? " (Ontem)" : ""}`)
+        .setTitle(`${config.title}${useYesterdayFocus ? " (Ontem)" : ""}`)
         .setDescription(
-          `Janela de análise: **${primeWindow.label}**\n\n` +
-          `${item.emoji} **BR ${item.name}**\n` +
+          `Janela de análise: **${config.label}**\n\n` +
+          `${config.emoji} **BR ${config.cityName}**\n` +
           `> **Pico no evento:** \`${formatNumber(peakValue)}\` players às \`${peakTime}\`\n` +
           `### 📅 Monitoramento de Evento\n` +
-          `**${item.name}** das **${primeWindow.label}** ${useYesterdayFocus ? "no dia do evento anterior" : `na **${currentSnapshot.spWeekday}**`}\n\n` +
-          `${item.emoji} **RESULTADOS DO PICO:**\n` +
+          `**${config.cityName}** das **${config.label}** ${useYesterdayFocus ? "no dia do evento anterior" : `na **${currentSnapshot.spWeekday}**`}\n\n` +
+          `${config.emoji} **RESULTADOS DO PICO:**\n` +
           `> **Máxima atingida:** \`${formatNumber(peakValue)}\` ativos\n` +
           `> **Horário do registro:** \`${peakTime}\`\n\n` +
           `**COMPARAÇÃO HISTÓRICA:**\n` +
-          `> **Vs Ontem:** ${formatDiff(diffY)}\n` +
+          `> **Vs Evento Anterior:** ${formatDiff(diffY)}\n` +
           `> **Vs Semana Passada:** ${formatDiff(diffW)}\n\n` +
           `**Resumo:**\n` +
-          `*Retenção focada ${isTotal ? "no desempenho geral de todas as cidades" : `apenas na cidade de ${item.name}`}.*`
+          `*Retenção focada ${isTotal ? "no desempenho geral de todas as cidades" : `apenas na cidade principal do evento de hoje (${config.cityName})`}.*`
         )
         .setFooter({ 
           text: `Análise de Foco Diário • Sincronizado às ${currentSnapshot.spTime}`,
@@ -1040,7 +1063,14 @@ async function editPanel(channel, options = {}) {
 
  const currentSnapshot = await createCurrentSnapshot();
  await addSnapshot(currentSnapshot);
- await updateDailyPeaks(currentSnapshot); // Make sure this is awaited
+ const hasNewPeak = await updateDailyPeaks(currentSnapshot);
+
+ // 🚀 Inteligência: Só edita a mensagem se for forçado, novo pico ou horário das 21h
+ const is21h = isExact21hSnapshot(currentSnapshot);
+ if (!options.force && !hasNewPeak && !is21h) {
+   return null;
+ }
+
  const { embeds, row } = await buildEmbeds(channel.client, currentSnapshot);
  try {
    const edited = await sticky.edit({ embeds, components: [row] });
@@ -1069,7 +1099,7 @@ export async function fivemRetentionStatusOnReady(client) {
    if (existing?.intervalId) clearInterval(existing.intervalId);
 
    // Tenta o primeiro update agora (sem travar o resto do bot)
-   editPanel(channel).catch(e => console.error("[FIVEM_RETENTION] Erro no update inicial:", e));
+   editPanel(channel, { force: true }).catch(e => console.error("[FIVEM_RETENTION] Erro no update inicial:", e));
 
    // Inicia o loop que roda a cada 2 minutos, faça chuva ou faça sol
    const intervalId = setInterval(async () => {
@@ -1102,7 +1132,7 @@ export async function fivemRetentionStatusHandleInteraction(interaction, client)
        return true;
      }
 
-     const edited = await editPanel(channel);
+     const edited = await editPanel(channel, { force: true });
      
      if (!edited) {
        throw new Error("Não foi possível atualizar o painel. API lenta ou sem permissão.");
