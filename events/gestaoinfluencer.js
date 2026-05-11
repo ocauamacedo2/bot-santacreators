@@ -230,8 +230,11 @@
     }
 
     // ====================== UTILS ======================
-    async function findBestResponsible(guild) {
+    async function findBestResponsible(guild, targetId = null) {
       try {
+        const targetMember = targetId ? await guild.members.fetch(targetId).catch(() => null) : null;
+        const targetPos = targetMember?.roles.highest.position || -1;
+
         const eligibleRoles = [SC_GI_CFG.ROLE_RESP_INFLU, SC_GI_CFG.ROLE_RESP_LIDER];
         const candidates = new Map(); // userId -> { member, count }
 
@@ -241,6 +244,13 @@
           for (const [uid, member] of role.members) {
             // Ignora Owner e Resp Creators da seleção automática
             if (uid === SC_GI_CFG.ROLE_OWNER || member.roles.cache.has(SC_GI_CFG.ROLE_RESP_CREATORS)) continue;
+            
+            // 🚫 Não pode ser responsável de si mesmo
+            if (uid === targetId) continue;
+
+            // 🔒 HIERARQUIA: O responsável DEVE ter cargo maior que o membro (posição maior no Discord)
+            if (targetId && member.roles.highest.position <= targetPos) continue;
+
             if (!candidates.has(uid)) candidates.set(uid, { member, count: 0 });
           }
         }
@@ -905,7 +915,7 @@ try {
         for (const rec of records) {
           // 🔧 Auto-atribuição de responsável se estiver vazio
           if (!rec.responsibleUserId) {
-            const newBest = await findBestResponsible(guild);
+            const newBest = await findBestResponsible(guild, rec.targetId);
             if (newBest) {
               rec.responsibleUserId = newBest.userId;
               rec.responsibleType = newBest.type;
@@ -927,7 +937,7 @@ try {
           const isRespStillValid = respMem && (respMem.roles.cache.has(SC_GI_CFG.ROLE_RESP_INFLU) || respMem.roles.cache.has(SC_GI_CFG.ROLE_RESP_LIDER));
           
           if (rec.responsibleUserId && !isRespStillValid) {
-            const newBest = await findBestResponsible(guild);
+            const newBest = await findBestResponsible(guild, rec.targetId);
             if (newBest) {
               rec.responsibleUserId = newBest.userId;
               rec.responsibleType = newBest.type;
@@ -1054,7 +1064,7 @@ let roleSetAtMs = await resolveInitialRoleSetAtMs(guild, targetUser.id);
       // ✅ RESPONSÁVEL AUTOMÁTICO
       let autoResp = null;
       if (!options.responsibleUserId) {
-        autoResp = await findBestResponsible(guild);
+        autoResp = await findBestResponsible(guild, targetId);
       }
 
       const days   = daysBetween(joinMs, nowMs());

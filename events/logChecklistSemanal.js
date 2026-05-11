@@ -399,6 +399,9 @@ async function syncWeekData(client) {
     }
 
     for (const [memberId, memberData] of memberMap.entries()) {
+      // 1. 🚫 Não permite que a pessoa bata a própria log
+      if (memberId === respId) continue;
+
       // 🔒 FILTRO DE HIERARQUIA: 
       // Um subordinado não pode dar log em um superior.
       try {
@@ -407,11 +410,13 @@ async function syncWeekData(client) {
         const targetMem = await guild.members.fetch(memberId).catch(() => null);
         
         if (respMem && targetMem) {
+          // Se o alvo tem cargo MAIOR ou IGUAL ao responsável, ele não aparece na lista desse responsável
           if (targetMem.roles.highest.position >= respMem.roles.highest.position) continue;
         }
       } catch {}
 
       const existing = mergedResponsaveis[respId].members[memberId] || {};
+
       mergedResponsaveis[respId].members[memberId] = {
         checked: existing?.checked === true,
         checkedAt: existing?.checkedAt || null,
@@ -506,7 +511,7 @@ fields.push({
     .setDescription(
       `📅 **Semana:** ${getWeekRangeLabel(weekKey)}\n` +
       `🕒 **Fechamento:** Sexta-feira às 23:59\n\n` +
-      `📌 **Responsáveis com pendência:** \`${respsWithPending}\`\n` +
+      `� **Responsáveis com pendência:** \`${respsWithPending}\`\n` +
       `✅ **Membros conferidos:** \`${checkedMembers}\`\n` +
       `❌ **Membros pendentes:** \`${totalMembers - checkedMembers}\`\n` +
       `🕓 **Última sincronização GI:** ${data.lastSyncedAt ? `<t:${Math.floor(data.lastSyncedAt / 1000)}:R>` : "`Nunca`"}\n\n` +
