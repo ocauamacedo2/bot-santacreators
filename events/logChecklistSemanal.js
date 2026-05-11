@@ -90,10 +90,11 @@ function weekKeyFromDateSP(inputDate = null) {
   const date = inputDate ? new Date(inputDate) : getNowSP();
   const d = new Date(date.toLocaleString("en-US", { timeZone: TZ }));
   const day = d.getDay(); 
-  // ✅ Ajuste para Sexta-feira (5) como início/referência da semana
-  const diff = d.getDate() - (day >= 5 ? day - 5 : day + 2);
-  const friday = new Date(d.setDate(diff));
-  return friday.toISOString().slice(0, 10);
+  // ✅ Início da semana: Sábado (6). Fechamento: Sexta (5)
+  const diff = (day + 1) % 7; 
+  const saturday = new Date(d);
+  saturday.setDate(d.getDate() - diff);
+  return saturday.toISOString().slice(0, 10);
 }
 
 function getWeekRangeLabel(weekKey) {
@@ -368,6 +369,17 @@ function loadGiSource() {
   return { registros: [] };
 }
 
+/**
+ * Busca o status de check de um membro em qualquer lugar da semana atual
+ */
+function findExistingCheck(responsaveis, memberId) {
+  for (const resp of Object.values(responsaveis || {})) {
+    const m = resp.members?.[memberId];
+    if (m && m.checked) return m;
+  }
+  return null;
+}
+
 async function syncWeekData(client) {
   const checklist = loadJSON(CHECKLIST_FILE, { weeks: {} });
   const giData = loadGiSource();
@@ -389,11 +401,19 @@ async function syncWeekData(client) {
 
   const giMap = new Map(); // respId -> Map(memberId -> memberData)
 
+  // ✅ Fetch massivo de membros para evitar gargalo e erros de API no loop
+  const guild = resolveMainGuild(client, null) || (await client.guilds.fetch(targetGuildId));
+  await guild.members.fetch().catch(() => {});
+
   for (const reg of registros) {
     const targetId = extractTargetId(reg);
     const responsibleIds = extractResponsibleIds(reg);
 
     if (!targetId || responsibleIds.length === 0) continue;
+
+    // 🔒 Filtro de Hierarquia: verifica se o responsável é superior ao alvo
+    const targetMem = guild.members.cache.get(targetId);
+    const targetRank = getManagementRank(targetMem);
 
     const area =
       reg?.area ||
@@ -403,6 +423,14 @@ async function syncWeekData(client) {
       "Geral";
 
     for (const respId of responsibleIds) {
+      const respMem = guild.members.cache.get(respId);
+      if (respMem && targetMem) {
+        const respRank = getManagementRank(respMem);
+        // Se o alvo tem rank superior ou igual, esse responsável não pode bater log dele
+        if (targetRank <= respRank) continue;
+      }
+      if (targetId === respId) continue;
+
       if (!giMap.has(respId)) giMap.set(respId, new Map());
 
       giMap.get(respId).set(targetId, {
@@ -414,43 +442,17 @@ async function syncWeekData(client) {
     }
   }
 
-  // Preserva TUDO que já existe na semana atual
-   const mergedResponsaveis = cloneJSONSafe(currentWeek.responsaveis, {});
+  // ✅ Nova lógica de merge: Reconstrói o mapa de responsáveis respeitando os checks existentes
+  const newResponsaveis = {};
 
   for (const [respId, memberMap] of giMap.entries()) {
-    if (!mergedResponsaveis[respId] || typeof mergedResponsaveis[respId] !== "object") {
-      mergedResponsaveis[respId] = { members: {} };
-    }
-
-    if (!mergedResponsaveis[respId].members || typeof mergedResponsaveis[respId].members !== "object") {
-      mergedResponsaveis[respId].members = {};
-    }
+    newResponsaveis[respId] = { members: {} };
 
     for (const [memberId, memberData] of memberMap.entries()) {
-      // 1. 🚫 Não permite que a pessoa bata a própria log
-      if (memberId === respId) continue;
+      // Tenta achar se esse membro já foi conferido em qualquer lugar desta semana
+      const existing = findExistingCheck(currentWeek.responsaveis, memberId);
 
-      // 🔒 FILTRO DE HIERARQUIA: 
-      // Um subordinado não pode dar log em um superior.
-      try {
-        const guild = resolveMainGuild(client, null) || (await client.guilds.fetch(targetGuildId));
-        const respMem = await guild.members.fetch(respId).catch(() => null);
-        const targetMem = await guild.members.fetch(memberId).catch(() => null);
-        
-        if (respMem && targetMem) {
-          const respRank = getManagementRank(respMem);
-          const targetRank = getManagementRank(targetMem);
-          
-          // 🔒 Se o alvo tem rank superior ou igual (índice menor ou igual), ignora.
-          // Ex: Lider (3) vê Coord (4). 4 <= 3 é FALSO -> Aparece no checklist.
-          // Ex: Lider (3) vs Influ (2). 2 <= 3 é VERDADEIRO -> Ignora.
-          if (targetRank <= respRank) continue;
-        }
-      } catch {}
-
-      const existing = mergedResponsaveis[respId].members[memberId] || {};
-
-      mergedResponsaveis[respId].members[memberId] = {
+      newResponsaveis[respId].members[memberId] = {
         checked: existing?.checked === true,
         checkedAt: existing?.checkedAt || null,
         checkedBy: existing?.checkedBy || null,
@@ -461,7 +463,7 @@ async function syncWeekData(client) {
     }
   }
 
-  currentWeek.responsaveis = mergedResponsaveis;
+  currentWeek.responsaveis = newResponsaveis;
   currentWeek.lastSyncedAt = Date.now();
 
   saveJSON(CHECKLIST_FILE, checklist);
