@@ -2305,9 +2305,12 @@ if (
   interaction.customId === "sc_rm_open_v2"
 ) return false;
 
-  const id = interaction.customId;
-  const isApprove = id.startsWith("sc_rm_approve_");
-  const isReject = id.startsWith("sc_rm_reject_");
+  const id = String(interaction.customId || "");
+
+  // ✅ aceita botão sem ID e botão com ID no final
+  const isApprove = id === "sc_rm_approve" || id.startsWith("sc_rm_approve_");
+  const isReject = id === "sc_rm_reject" || id.startsWith("sc_rm_reject_");
+
   if (!isApprove && !isReject) return false;
 
 
@@ -2323,8 +2326,21 @@ if (
     }
     return true;
   }
+  const msgId =
+    id.startsWith("sc_rm_approve_") || id.startsWith("sc_rm_reject_")
+      ? id.split("_").pop()
+      : interaction.message?.id;
 
-  const msgId = id.split("_").pop();
+  if (!msgId) {
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({
+        content: "❌ Não consegui identificar a mensagem do registro.",
+        ephemeral: true,
+      }).catch(() => {});
+    }
+    return true;
+  }
+
   const canal = await client.channels.fetch(CANAL_REGISTRO_MANAGER).catch(() => null);
   if (!canal?.isTextBased?.()) {
     if (!interaction.replied && !interaction.deferred) {
