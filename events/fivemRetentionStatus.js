@@ -182,28 +182,39 @@ export function getPrimeTimeWindow(snapshot, customWeekday = null) {
 export function getEventDayFocusConfig(snapshot, customWeekday = null) {
   const weekday = customWeekday !== null ? customWeekday : getSaoPauloWeekday(new Date(snapshot.timestamp));
   const window = getPrimeTimeWindow(snapshot, weekday);
-  if (!window) return null;
+  if (!window) return []; // Retorna array vazio se não houver janela de evento
 
-  const mapping = {
-    0: { cityKey: "total",   cityName: "Geral (Rede)",  emoji: "🌐" }, // Domingo
-    1: { cityKey: "maresia", cityName: "Maresia", emoji: "🌊" }, // Segunda
-    2: { cityKey: "grande",  cityName: "Grande",  emoji: "🌆" }, // Terça
-    3: { cityKey: "santa",   cityName: "Santa",   emoji: "🏙️" }, // Quarta
-    4: { cityKey: "nobre",   cityName: "Nobre",   emoji: "👑" }, // Quinta
-    5: { cityKey: "nobre",   cityName: "Nobre",   emoji: "👑" }, // Sexta
-    6: { cityKey: "nobre",   cityName: "Nobre",   emoji: "👑" }, // Sábado
-  };
+  const configs = [];
 
-  const config = mapping[weekday];
-  if (!config) return null;
+  // Domingo: Geral (Rede)
+  if (weekday === 0) {
+    configs.push({ cityKey: "total", cityName: "Geral (Rede)", emoji: "🌐" });
+  }
+  // Segunda: Maresia
+  else if (weekday === 1) {
+    configs.push({ cityKey: "maresia", cityName: "Maresia", emoji: "🌊" });
+  }
+  // Terça: Grande
+  else if (weekday === 2) {
+    configs.push({ cityKey: "grande", cityName: "Grande", emoji: "🌆" });
+  }
+  // Quarta: Santa
+  else if (weekday === 3) {
+    configs.push({ cityKey: "santa", cityName: "Santa", emoji: "🏙️" });
+  }
+  // Quinta, Sexta, Sábado: Nobre
+  else if ([4, 5, 6].includes(weekday)) {
+    configs.push({ cityKey: "nobre", cityName: "Nobre", emoji: "👑" });
+  }
 
-  return {
+  // Anexa os detalhes da janela de tempo a cada configuração
+  return configs.map(config => ({
     ...config,
     title: `🎯 RETENÇÃO DO EVENTO — BR ${config.cityName.toUpperCase()}`,
     label: window.label,
     startHour: window.startHour,
     startMinute: window.startMinute
-  };
+  }));
 }
 
 /**
