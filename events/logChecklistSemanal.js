@@ -89,18 +89,18 @@ export function getNowSP() {
 function weekKeyFromDateSP(inputDate = null) {
   const date = inputDate ? new Date(inputDate) : getNowSP();
   const d = new Date(date.toLocaleString("en-US", { timeZone: TZ }));
-  const day = d.getDay(); 
+  const day = d.getDay();
   // ✅ Início da semana: Sábado (6). Fechamento: Sexta (5)
-  const diff = (day + 1) % 7; 
+  const diff = (day + 1) % 7; // Dias a subtrair para chegar ao Sábado anterior/atual
   const saturday = new Date(d);
-  saturday.setDate(d.getDate() - diff);
+  saturday.setDate(d.getDate() - diff); // Este é o Sábado da semana atual
   return saturday.toISOString().slice(0, 10);
 }
 
 function getWeekRangeLabel(weekKey) {
   const start = new Date(weekKey + "T00:00:00");
   const end = new Date(start);
-  end.setDate(start.getDate() + 7);
+  end.setDate(start.getDate() + 6); // Este 'end' é a Sexta-feira
   const fmt = (d) => `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`;
   return `${fmt(start)} → ${fmt(end)}`;
 }
@@ -926,8 +926,10 @@ async function sendSundayReminders(client) {
 export async function checklistOnReady(client) {
   await syncWeekData(client);
   await refreshMainPanel(client).catch(() => {});
-  // ✅ Reset e lembretes agora na Sexta-feira (5)
+  // ✅ Lembretes na Sexta-feira (5) para a semana que está terminando.
   cron.schedule("0 0,12,16 * * 5", () => sendSundayReminders(client), { timezone: TZ });
+  // ✅ O "reset" (início da nova semana) acontece no Sábado 00:00, garantindo que a semana anterior seja fechada.
+  cron.schedule("0 0 * * 6", () => syncWeekData(client), { timezone: TZ });
 }
 export async function checklistHandleMessage(message, client) {
   if (!message.guild || message.author.bot) return false;
