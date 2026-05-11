@@ -571,7 +571,7 @@ if (customId === "logcheck_my_members") {
     return interaction.reply({ content: "❌ Você não é um responsável registrado.", flags: MessageFlags.Ephemeral });
   }
   
-  const checklist = syncWeekData();
+  const checklist = await syncWeekData(client);
   const weekKey = weekKeyFromDateSP();
   const data = checklist.weeks?.[weekKey] || { responsaveis: {} };
   const myData = data.responsaveis?.[interaction.user.id];
