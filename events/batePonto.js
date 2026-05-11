@@ -942,6 +942,14 @@ const withinWindow = () => {
     // ===== Interações =====
     client.on(Events.InteractionCreate, async (it) => {
       try {
+        // ✅ FILTRO DE SEGURANÇA: Se a interação não for deste módulo, ignora imediatamente.
+        const myKeys = [CFG.KEYS.BUTTON_PUNCH, CFG.KEYS.BUTTON_CLEAR_MONTH, CFG.KEYS.MODAL_ID];
+        const isMyInteraction = 
+          (it.isButton() || it.isModalSubmit()) && 
+          myKeys.includes(it.customId);
+
+        if (!isMyInteraction) return;
+
         // ✅ ISENÇÃO DE REGRAS (HORÁRIO E LIMITE)
         const isBypassUser = it.user.id === "660311795327828008";
 
@@ -975,8 +983,6 @@ const withinWindow = () => {
           modal.addComponents(new ActionRowBuilder().addComponents(input));
           await it.showModal(modal);
           return;
-        }
-
         if (it.isModalSubmit() && it.customId === CFG.KEYS.MODAL_ID) {
           const firstName = (it.fields.getTextInputValue(CFG.KEYS.MODAL_NAME_ID) || "")
             .trim()
@@ -1061,12 +1067,8 @@ const withinWindow = () => {
           }
 
           return;
-
-
         }
 
-
-        
 
         if (it.isButton() && it.customId === CFG.KEYS.BUTTON_CLEAR_MONTH) {
           if (!canClear(it.member)) return it.reply({ ephemeral: true, embeds: [err("Sem permissão para limpar o mês.")] });
