@@ -1652,8 +1652,13 @@ export async function registroManagerOnReady(client) {
         // se já tem botões, ok
         const hasBtns = (m.components || []).some((row) =>
           (row?.components || []).some((c) => {
-            const id = c?.customId || "";
-            return id.startsWith("sc_rm_approve_") || id.startsWith("sc_rm_reject_");
+            const id = String(c?.customId || "");
+            return (
+              id === "sc_rm_approve" ||
+              id === "sc_rm_reject" ||
+              id.startsWith("sc_rm_approve_") ||
+              id.startsWith("sc_rm_reject_")
+            );
           })
         );
         if (hasBtns) continue;
