@@ -512,7 +512,8 @@ async function buildMainPanel(client, sourceGuild = null) {
     checkedMembers += checked;
     if (checked < count) respsWithPending++;
 
-const allDone = count > 0 && checked === count;
+    const nameDisplay = await resolveMemberPlainName(guild, respId);
+    const allDone = count > 0 && checked === count;
 
 const memberLines = [];
 for (const [mId, m] of membersEntries.slice(0, 5)) {
@@ -526,7 +527,7 @@ if (count > 5) memberListText += `\n*+${count - 5} restantes...*`;
 if (count === 0) memberListText = "_Nenhum membro vinculado._";
 
 fields.push({
-  name: `👤 Responsável: <@${respId}> ${allDone ? "🟢" : "🔴"}`,
+  name: `👤 Responsável: ${nameDisplay} ${allDone ? "🟢" : "🔴"}`,
   value: `📊 ${checked}/${count} conferidos\n\n${memberListText}\n━━━━━━━━━━━━━━━━━━━`,
   inline: false
 });
@@ -604,6 +605,8 @@ if (customId === "logcheck_my_members") {
     return interaction.reply({ content: "❌ Você não é um responsável registrado.", flags: MessageFlags.Ephemeral });
   }
   
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
   const checklist = await syncWeekData(client);
   const weekKey = weekKeyFromDateSP();
   const data = checklist.weeks?.[weekKey] || { responsaveis: {} };
@@ -623,6 +626,8 @@ if (customId === "logcheck_my_members") {
     return interaction.reply({ content: "❌ Apenas Administradores podem acessar a visão geral.", flags: MessageFlags.Ephemeral });
   }
   
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
   const checklist = await syncWeekData(client);
   const weekKey = weekKeyFromDateSP();
   const data = checklist.weeks?.[weekKey] || { responsaveis: {} };
@@ -666,6 +671,8 @@ return interaction.reply({
 
   // 4. Seleção Admin
 if (interaction.isStringSelectMenu() && customId === "logcheck_admin_select") {
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
   const [, respId, weekKey] = interaction.values[0].split(":");
   const checklist = loadJSON(CHECKLIST_FILE, { weeks: {} });
   const data = checklist.weeks?.[weekKey]?.responsaveis?.[respId];
