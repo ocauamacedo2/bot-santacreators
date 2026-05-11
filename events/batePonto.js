@@ -644,12 +644,29 @@ const withinWindow = () => {
     };
 
     function timeStrKeys(timeStr) {
-      const m = /(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2})/.exec(timeStr || "");
+      const m = /(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})/.exec(timeStr || "");
       if (!m) return null;
-      const [, DD, MM, YYYY] = m;
-      const mm = String(MM).padStart(2, "0");
-      const dd = String(DD).padStart(2, "0");
-      return { monthKey: `${YYYY}-${mm}`, dayKey: `${YYYY}-${mm}-${dd}`, monthHuman: `${mm}/${YYYY}` };
+      const [, DD, MM, YYYY, HH, MI] = m;
+      
+      let y = +YYYY, mo = +MM, d = +DD, h = +HH, mi = +MI;
+
+      // ✅ Aplica a mesma regra de "dia efetivo" no recovery para evitar duplicidade na madrugada
+      if (h >= 0 && h < CFG.LATE_NIGHT_ROLLOVER_HOUR) {
+        const dt = new Date(Date.UTC(y, mo - 1, d, h + 3, mi, 0)); 
+        dt.setUTCDate(dt.getUTCDate() - 1);
+        y = dt.getUTCFullYear();
+        mo = dt.getUTCMonth() + 1;
+        d = dt.getUTCDate();
+      }
+
+      const mmStr = String(mo).padStart(2, "0");
+      const ddStr = String(d).padStart(2, "0");
+
+      return { 
+        monthKey: `${y}-${mmStr}`, 
+        dayKey: `${y}-${mmStr}-${ddStr}`, 
+        monthHuman: `${mmStr}/${y}` 
+      };
     }
 
     const recoverFromLogs = async ({ monthKey, todayOnly = false }) => {
@@ -688,14 +705,14 @@ const withinWindow = () => {
             if (!parsed?.uid || !parsed.timeStr) continue;
             matches++;
 
-            if (todayOnly) {
-              const { yyyy, mm, dd } = nowParts();
-              const todayStr = `${String(dd).padStart(2, "0")}/${String(mm).padStart(2, "0")}/${yyyy}`;
-              if (!parsed.timeStr.startsWith(todayStr)) continue;
-            }
-
             const tk = timeStrKeys(parsed.timeStr);
             if (!tk || tk.monthKey !== monthKey) continue;
+
+            if (todayOnly) {
+              const eff = effectiveKeyParts();
+              const effKey = `${eff.monthKey}-${String(eff.dd).padStart(2, "0")}`;
+              if (tk.dayKey !== effKey) continue;
+            }
 
             const entry = {
               uid: parsed.uid,
@@ -937,7 +954,13 @@ const withinWindow = () => {
   });
 }
 
-          if (alreadyToday(it.user.id) && !isBypassUser) return it.reply({ ephemeral: true, embeds: [warn("Você já bateu ponto hoje.")] });
+          const punchTime = getAlreadyPunchedTime(it.user.id);
+          if (punchTime && !isBypassUser) {
+            return it.reply({ 
+              ephemeral: true, 
+              embeds: [warn(`Você já bateu ponto para este turno (Registro: **${punchTime.split(' ')[1]}**).`)] 
+            });
+          }
 
           const modal = new ModalBuilder().setCustomId(CFG.KEYS.MODAL_ID).setTitle("Bater Ponto — Primeiro Nome");
           const input = new TextInputBuilder()
