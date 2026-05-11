@@ -46,6 +46,34 @@ const AUTH_CONFIG = {
   ]
 };
 
+// ✅ HIERARQUIA DE GESTÃO (Maior para Menor)
+// O sistema ignora cargos externos (como Destaque) e foca apenas nestes IDs para a filtragem.
+const HIERARCHY_ORDER = [
+  "1262262852949905408", // owner
+  "1352408327983861844", // resp creators
+  "1262262852949905409", // resp influ
+  "1352407252216184833", // resp lider
+  "1388976314253312100", // coord
+  "1388975939161161728", // gestor
+  "1388976155830255697", // manager
+  "1388976094920704141", // social
+  "1392678638176043029", // equipe manager
+  "1387253972661964840", // equipe social
+  "1352429001188180039"  // equipe creators
+];
+
+/**
+ * Retorna a posição do membro na hierarquia de gestão definida.
+ * Quanto menor o número, maior o cargo (0 = Owner).
+ */
+function getManagementRank(member) {
+  if (!member) return Infinity;
+  for (let i = 0; i < HIERARCHY_ORDER.length; i++) {
+    if (member.roles.cache.has(HIERARCHY_ORDER[i])) return i;
+  }
+  return Infinity;
+}
+
 // ===============================
 // HELPERS DE TEMPO (SP)
 // ===============================
@@ -410,9 +438,13 @@ async function syncWeekData(client) {
         const targetMem = await guild.members.fetch(memberId).catch(() => null);
         
         if (respMem && targetMem) {
-          // 🔒 HIERARQUIA RÍGIDA: Se o alvo tem cargo MAIOR ou IGUAL ao responsável, 
-          // ele é ignorado (subordinado não bate log de superior ou igual).
-          if (targetMem.roles.highest.position >= respMem.roles.highest.position) continue;
+          const respRank = getManagementRank(respMem);
+          const targetRank = getManagementRank(targetMem);
+          
+          // 🔒 Se o alvo tem rank superior ou igual (índice menor ou igual), ignora.
+          // Ex: Lider (3) vê Coord (4). 4 <= 3 é FALSO -> Aparece no checklist.
+          // Ex: Lider (3) vs Influ (2). 2 <= 3 é VERDADEIRO -> Ignora.
+          if (targetRank <= respRank) continue;
         }
       } catch {}
 
