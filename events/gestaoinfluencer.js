@@ -918,7 +918,11 @@ try {
         const records = Array.from(SC_GI_STATE.registros.values());
         for (const rec of records) {
           // 🔧 Auto-atribuição de responsável se estiver vazio
-          if (!rec.responsibleUserId) {
+          // 🔧 Verificação de responsável desligado ou ausente
+          const respMem = rec.responsibleUserId ? await guild.members.fetch(rec.responsibleUserId).catch(() => null) : null;
+          const isRespStillValid = respMem && (respMem.roles.cache.has(SC_GI_CFG.ROLE_RESP_INFLU) || respMem.roles.cache.has(SC_GI_CFG.ROLE_RESP_LIDER));
+
+          if (!rec.responsibleUserId || !isRespStillValid) {
             const newBest = await findBestResponsible(guild, rec.targetId);
             if (newBest) {
               rec.responsibleUserId = newBest.userId;
