@@ -770,62 +770,64 @@ async function buildEmbeds(client, currentSnapshot) {
    embeds.push(retentionEmbed);
  }
 
- // 5.1 PAINEL — FOCO DO EVENTO DIÁRIO (NOVO)
- // Inteligência: se for madrugada e hoje ainda não teve pico, mostra o de ontem (ex: Grande de Terça)
- const isEarlyMorning = currentSnapshot.hour < 4;
- const useYesterdayFocus = isEarlyMorning && (todayPeaks.total?.primePeak || 0) === 0;
- 
- const effectiveWeekday = useYesterdayFocus 
-    ? (getSaoPauloWeekday(new Date(currentSnapshot.timestamp)) + 6) % 7 
-    : getSaoPauloWeekday(new Date(currentSnapshot.timestamp));
+  // 5.1 PAINEL — FOCO DO EVENTO (POR CIDADE - FIXO)
+  const isEarlyMorning = currentSnapshot.hour < 4;
+  const useYesterdayFocus = isEarlyMorning && (todayPeaks.total?.primePeak || 0) === 0;
+  const effectiveWeekday = useYesterdayFocus ? (getSaoPauloWeekday(new Date(currentSnapshot.timestamp)) + 6) % 7 : getSaoPauloWeekday(new Date(currentSnapshot.timestamp));
+  const primeWindow = getPrimeTimeWindow(currentSnapshot, effectiveWeekday);
 
- const focusConfig = getEventDayFocusConfig(currentSnapshot, effectiveWeekday);
- if (focusConfig) {
-   const { cityKey, cityName, emoji, title, label } = focusConfig;
-   
-   const activePeaks = useYesterdayFocus ? yesterdayPeaks : todayPeaks;
-   const compYPeaks = useYesterdayFocus ? dayBeforeYesterdayPeaks : yesterdayPeaks;
-   const compWPeaks = useYesterdayFocus ? peaks[getDateKeyDaysAgoFromSnapshot(currentSnapshot, 8)] || { cities: {} } : lastWeekPeaks;
-   
-   let peakValue, peakTime, diffY, diffW;
+  if (primeWindow) {
+    const activePeaks = useYesterdayFocus ? yesterdayPeaks : todayPeaks;
+    const compYPeaks = useYesterdayFocus ? dayBeforeYesterdayPeaks : yesterdayPeaks;
+    const compWPeaks = useYesterdayFocus ? peaks[getDateKeyDaysAgoFromSnapshot(currentSnapshot, 8)] || { cities: {} } : lastWeekPeaks;
 
-   if (cityKey === "total") {
-     peakValue = activePeaks.total?.primePeak || 0;
-     peakTime = activePeaks.total?.primePeakTime || "--:--";
-     diffY = calculateDiff(peakValue, compYPeaks.total?.primePeak || 0);
-     diffW = calculateDiff(peakValue, compWPeaks.total?.primePeak || 0);
-   } else {
-     peakValue = activePeaks.cities?.[cityKey]?.primePeak || 0;
-     peakTime = activePeaks.cities?.[cityKey]?.primePeakTime || "--:--";
-     diffY = calculateDiff(peakValue, compYPeaks.cities?.[cityKey]?.primePeak || 0);
-     diffW = calculateDiff(peakValue, compWPeaks.cities?.[cityKey]?.primePeak || 0);
-   }
+    // Definimos a lista de cidades para exibir os painéis individuais
+    const focusItems = [
+      { key: "nobre",   name: "Nobre",   emoji: "👑" },
+      { key: "santa",   name: "Santa",   emoji: "🏙️" },
+      { key: "grande",  name: "Grande",  emoji: "🌆" },
+      { key: "maresia", name: "Maresia", emoji: "🌊" }
+    ];
 
-   const focusEmbed = new EmbedBuilder()
-     .setColor(baseColor)
-     .setTitle(`${title}${useYesterdayFocus ? " (Resumo de Ontem)" : ""}`)
-     .setDescription(
-       `Janela de análise: **${label}**\n\n` +
-       `${emoji} **${cityName}**\n` +
-       `> **Pico no evento:** \`${formatNumber(peakValue)}\` players às \`${peakTime}\`\n` +
-       `### 📅 Monitoramento de Evento\n` +
-       `**${cityName}** das **${label}** ${useYesterdayFocus ? "no dia do evento anterior" : `na **${currentSnapshot.spWeekday}**`}\n\n` +
-       `${emoji} **RESULTADOS DO PICO:**\n` +
-       `> **Máxima atingida:** \`${formatNumber(peakValue)}\` ativos\n` +
-       `> **Horário do registro:** \`${peakTime}\`\n\n` +
-       `**COMPARAÇÃO HISTÓRICA:**\n` +
-       `> **Vs Ontem:** ${formatDiff(diffY)}\n` +
-       `> **Vs Semana Passada:** ${formatDiff(diffW)}\n\n` +
-       `**Resumo:**\n` +
-       `*Retenção focada ${cityKey === "total" ? "no desempenho geral de todas as cidades" : `apenas na cidade principal do evento de hoje (${cityName})`}.*`
-     )
-     .setFooter({ 
-       text: `Análise de Foco Diário • Sincronizado às ${currentSnapshot.spTime}`,
-       iconURL: client.user.displayAvatarURL()
-     });
+    // Se for Domingo (0), adicionamos o painel Geral (Rede) no topo
+    if (effectiveWeekday === 0) focusItems.unshift({ key: "total", name: "Geral (Rede)", emoji: "🌐" });
 
-   embeds.push(focusEmbed);
- }
+    for (const item of focusItems) {
+      // Trava de segurança para não estourar o limite de 10 embeds do Discord
+      if (embeds.length >= 8) break;
+
+      const isTotal = item.key === "total";
+      const peakValue = isTotal ? activePeaks.total?.primePeak || 0 : activePeaks.cities?.[item.key]?.primePeak || 0;
+      const peakTime = isTotal ? activePeaks.total?.primePeakTime || "--:--" : activePeaks.cities?.[item.key]?.primePeakTime || "--:--";
+      const diffY = calculateDiff(peakValue, isTotal ? compYPeaks.total?.primePeak || 0 : compYPeaks.cities?.[item.key]?.primePeak || 0);
+      const diffW = calculateDiff(peakValue, isTotal ? compWPeaks.total?.primePeak || 0 : compWPeaks.cities?.[item.key]?.primePeak || 0);
+
+      const focusEmbed = new EmbedBuilder()
+        .setColor(baseColor)
+        .setTitle(`🎯 RETENÇÃO DO EVENTO — BR ${item.name.toUpperCase()}${useYesterdayFocus ? " (Ontem)" : ""}`)
+        .setDescription(
+          `Janela de análise: **${primeWindow.label}**\n\n` +
+          `${item.emoji} **BR ${item.name}**\n` +
+          `> **Pico no evento:** \`${formatNumber(peakValue)}\` players às \`${peakTime}\`\n` +
+          `### 📅 Monitoramento de Evento\n` +
+          `**${item.name}** das **${primeWindow.label}** ${useYesterdayFocus ? "no dia do evento anterior" : `na **${currentSnapshot.spWeekday}**`}\n\n` +
+          `${item.emoji} **RESULTADOS DO PICO:**\n` +
+          `> **Máxima atingida:** \`${formatNumber(peakValue)}\` ativos\n` +
+          `> **Horário do registro:** \`${peakTime}\`\n\n` +
+          `**COMPARAÇÃO HISTÓRICA:**\n` +
+          `> **Vs Ontem:** ${formatDiff(diffY)}\n` +
+          `> **Vs Semana Passada:** ${formatDiff(diffW)}\n\n` +
+          `**Resumo:**\n` +
+          `*Retenção focada ${isTotal ? "no desempenho geral de todas as cidades" : `apenas na cidade de ${item.name}`}.*`
+        )
+        .setFooter({ 
+          text: `Análise de Foco Diário • Sincronizado às ${currentSnapshot.spTime}`,
+          iconURL: client.user.displayAvatarURL()
+        });
+
+      embeds.push(focusEmbed);
+    }
+  }
 
  // 6. PAINEL — DIFERENÇA DE PICOS (MÁXIMAS DO DIA)
  const peakAnalysisData = FIVEM_CITIES
