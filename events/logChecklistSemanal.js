@@ -380,17 +380,23 @@ function findExistingCheck(responsaveis, memberId) {
   return null;
 }
 
-async function syncWeekData(client) {
+async function syncWeekData(client, force = false) {
   const checklist = loadJSON(CHECKLIST_FILE, { weeks: {} });
-  const giData = loadGiSource();
   const weekKey = weekKeyFromDateSP();
-  const targetGuildId = "1262262852782129183";
 
   if (!checklist.weeks[weekKey]) {
     checklist.weeks[weekKey] = { lastSyncedAt: null, responsaveis: {} };
   }
 
   const currentWeek = checklist.weeks[weekKey];
+
+  // ✅ THROTTLE: Se sincronizou há menos de 5 minutos e não for um "Sincronizar" forçado,
+  // retorna os dados atuais imediatamente sem fazer o scan pesado.
+  if (!force && currentWeek.lastSyncedAt && (Date.now() - currentWeek.lastSyncedAt < 5 * 60 * 1000)) {
+    return checklist;
+  }
+
+  const giData = loadGiSource();
 
   if (!currentWeek.responsaveis || typeof currentWeek.responsaveis !== "object") {
     currentWeek.responsaveis = {};
@@ -401,9 +407,21 @@ async function syncWeekData(client) {
 
   const giMap = new Map(); // respId -> Map(memberId -> memberData)
 
-  // ✅ Fetch massivo de membros para evitar gargalo e erros de API no loop
-  const guild = resolveMainGuild(client, null) || (await client.guilds.fetch(targetGuildId));
-  await guild.members.fetch().catch(() => {});
+  // ✅ Resolve guilda e faz fetch focado apenas nos IDs necessários (MUITO mais rápido)
+  const guild = resolveMainGuild(client, null) || (await client.guilds.fetch("1262262852782129183"));
+  
+  const idsToFetch = new Set();
+  for (const reg of registros) {
+    const tid = extractTargetId(reg);
+    const rids = extractResponsibleIds(reg);
+    if (tid) idsToFetch.add(tid);
+    rids.forEach(id => idsToFetch.add(id));
+  }
+
+  if (idsToFetch.size > 0) {
+    // Busca apenas os membros envolvidos no GI, ignorando o resto do servidor
+    await guild.members.fetch({ user: Array.from(idsToFetch) }).catch(() => {});
+  }
 
   for (const reg of registros) {
     const targetId = extractTargetId(reg);
@@ -490,13 +508,23 @@ function buildProgressBar(value, total) {
 async function buildMainPanel(client, sourceGuild = null) {
   const guild = resolveMainGuild(client, sourceGuild);
   const weekKey = weekKeyFromDateSP();
-  const checklist = await syncWeekData(client);
+  const checklist = await syncWeekData(client, false); // Usa o cache para carregar o painel rápido
   const data = checklist.weeks[weekKey] || { responsaveis: {}, lastSyncedAt: null };
   const isSunday = getNowSP().getDay() === 0;
 
   let totalMembers = 0;
   let checkedMembers = 0;
   let respsWithPending = 0;
+
+  // ✅ Pre-fetch dos nomes que vão aparecer nesta página do painel
+  const idsInPanel = new Set();
+  for (const [respId, content] of Object.entries(data.responsaveis || {})) {
+    idsInPanel.add(respId);
+    Object.keys(content.members || {}).slice(0, 5).forEach(mId => idsInPanel.add(mId));
+  }
+  if (idsInPanel.size > 0 && guild) {
+    await guild.members.fetch({ user: Array.from(idsInPanel) }).catch(() => {});
+  }
 
   const fields = [];
   const respEntries = Object.entries(data.responsaveis || {});
@@ -581,7 +609,7 @@ export async function checklistHandleInteraction(interaction, client) {
 
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-    const checklist = await syncWeekData(client);
+    const checklist = await syncWeekData(client, true); // Único lugar que força o scan pesado
     const weekKey = weekKeyFromDateSP();
     const data = checklist.weeks?.[weekKey] || { responsaveis: {} };
 
@@ -591,7 +619,6 @@ export async function checklistHandleInteraction(interaction, client) {
     }, 0);
 
     await refreshMainPanel(client, interaction.guild);
-
     return interaction.editReply(
       `✅ Dados sincronizados com sucesso!\n` +
       `👤 Responsáveis carregados: **${totalResponsaveis}**\n` +
@@ -607,7 +634,7 @@ if (customId === "logcheck_my_members") {
   
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-  const checklist = await syncWeekData(client);
+  const checklist = await syncWeekData(client, false); // Rápido (usa o que já tem)
   const weekKey = weekKeyFromDateSP();
   const data = checklist.weeks?.[weekKey] || { responsaveis: {} };
   const myData = data.responsaveis?.[interaction.user.id];
@@ -628,7 +655,7 @@ if (customId === "logcheck_my_members") {
   
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-  const checklist = await syncWeekData(client);
+  const checklist = await syncWeekData(client, false); // Rápido (usa o que já tem)
   const weekKey = weekKeyFromDateSP();
   const data = checklist.weeks?.[weekKey] || { responsaveis: {} };
 
@@ -771,6 +798,14 @@ async function sendPersonalManager(interaction, respId, weekKey, data, isAdmin =
   const members = Object.entries(data?.members || {});
   const checked = members.filter(([_, m]) => m.checked).length;
   const total = members.length;
+
+  // ✅ Pre-fetch focado apenas nos membros deste responsável específico
+  const idsToFetch = new Set([respId]);
+  members.forEach(([mId]) => idsToFetch.add(mId));
+  if (idsToFetch.size > 0 && guild) {
+    await guild.members.fetch({ user: Array.from(idsToFetch) }).catch(() => {});
+  }
+
 const respDisplay = await resolveMemberPlainName(guild, respId);
 
   const memberLines = [];
