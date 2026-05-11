@@ -230,6 +230,47 @@
     }
 
     // ====================== UTILS ======================
+    async function findBestResponsible(guild) {
+      try {
+        const eligibleRoles = [SC_GI_CFG.ROLE_RESP_INFLU, SC_GI_CFG.ROLE_RESP_LIDER];
+        const candidates = new Map(); // userId -> { member, count }
+
+        for (const roleId of eligibleRoles) {
+          const role = guild.roles.cache.get(roleId) || await guild.roles.fetch(roleId).catch(() => null);
+          if (!role) continue;
+          for (const [uid, member] of role.members) {
+            // Ignora Owner e Resp Creators da seleção automática
+            if (uid === SC_GI_CFG.ROLE_OWNER || member.roles.cache.has(SC_GI_CFG.ROLE_RESP_CREATORS)) continue;
+            if (!candidates.has(uid)) candidates.set(uid, { member, count: 0 });
+          }
+        }
+
+        if (candidates.size === 0) return null;
+
+        // Conta quantos membros cada um já tem
+        for (const rec of SC_GI_STATE.registros.values()) {
+          if (rec.responsibleUserId && candidates.has(rec.responsibleUserId)) {
+            candidates.get(rec.responsibleUserId).count++;
+          }
+        }
+
+        // Ordena por menor contagem e depois por hierarquia do cargo (maior cargo primeiro)
+        const sorted = Array.from(candidates.values()).sort((a, b) => {
+          if (a.count !== b.count) return a.count - b.count;
+          return b.member.roles.highest.position - a.member.roles.highest.position;
+        });
+
+        const best = sorted[0];
+        return {
+          userId: best.member.id,
+          type: getHighestTypeFromMember(best.member)
+        };
+      } catch (e) {
+        console.error("[SC_GI] Erro ao buscar melhor responsável:", e);
+        return null;
+      }
+    }
+
     const nowMs = () => Date.now();
     const pad2 = n => (n < 10 ? '0' + n : '' + n);
     function fromDDMMYYYY_toMs(str) {
@@ -862,6 +903,28 @@ try {
         // Usa Array.from para evitar problemas de modificação do Map durante iteração
         const records = Array.from(SC_GI_STATE.registros.values());
         for (const rec of records) {
+          // 🔧 Verificação de responsável desligado
+          const respMem = rec.responsibleUserId ? await guild.members.fetch(rec.responsibleUserId).catch(() => null) : null;
+          const isRespStillValid = respMem && (respMem.roles.cache.has(SC_GI_CFG.ROLE_RESP_INFLU) || respMem.roles.cache.has(SC_GI_CFG.ROLE_RESP_LIDER));
+          
+          if (rec.responsibleUserId && !isRespStillValid) {
+            const newBest = await findBestResponsible(guild);
+            if (newBest) {
+              rec.responsibleUserId = newBest.userId;
+              rec.responsibleType = newBest.type;
+              rec.responsibleHistory.push({ atMs: Date.now(), userId: newBest.userId, type: newBest.type, setBy: client.user.id });
+              
+              const chToEdit = await guild.channels.fetch(rec.channelId).catch(() => null);
+              const msgToEdit = chToEdit ? await chToEdit.messages.fetch(rec.messageId).catch(() => null) : null;
+              if (msgToEdit) {
+                const targetU = await fetchUserCached(rec.targetId);
+                const regU = await fetchUserCached(rec.registrarId);
+                const emb = await registroEmbed({ targetUser: targetU, registrarUser: regU, joinDateMs: rec.joinDateMs, area: rec.area, weeks: weeksSince(rec.joinDateMs), months: monthsSince(rec.joinDateMs), active: rec.active, rec });
+                await msgToEdit.edit({ embeds: [emb] }).catch(() => {});
+              }
+            }
+          }
+
           const ch = await guild.channels.fetch(rec.channelId).catch(() => null);
           if (!ch) continue;
 
@@ -936,6 +999,18 @@ try {
     // ====================== CRUD REGISTRO (SEM "TEMP") ======================
     async function createRegistro(guild, registrar, dataStr, areaStr, targetId, options = {}) {
       const joinMs    = fromDDMMYYYY_toMs(dataStr);
+      
+      // 🚫 ANTI-DUPLICAÇÃO: remove qualquer registro pendente para o mesmo targetId antes de criar
+      const existing = Array.from(SC_GI_STATE.registros.values()).filter(r => r.targetId === String(targetId));
+      for (const old of existing) {
+        SC_GI_STATE.registros.delete(old.messageId);
+        const oldCh = await guild.channels.fetch(old.channelId).catch(() => null);
+        if (oldCh) {
+          const oldMsg = await oldCh.messages.fetch(old.messageId).catch(() => null);
+          if (oldMsg) await oldMsg.delete().catch(() => {});
+        }
+      }
+
       if (!joinMs) throw new Error('Data inválida. Use DD/MM/AAAA.');
       const targetUser = await fetchUserCached(targetId);
       if (!targetUser) throw new Error('ID do Discord inválido.');
@@ -957,6 +1032,12 @@ let roleSetAtMs = await resolveInitialRoleSetAtMs(guild, targetUser.id);
       const ch = await guild.channels.fetch(SC_GI_CFG.CHANNEL_MENU_E_REGISTROS).catch(() => null);
       if (!ch || ch.type !== ChannelType.GuildText) throw new Error('Canal de registros indisponível.');
 
+      // ✅ RESPONSÁVEL AUTOMÁTICO
+      let autoResp = null;
+      if (!options.responsibleUserId) {
+        autoResp = await findBestResponsible(guild);
+      }
+
       const days   = daysBetween(joinMs, nowMs());
       const weeks  = Math.max(0, Math.floor(days / 7));
       const months = monthsSince(joinMs);
@@ -977,8 +1058,8 @@ let roleSetAtMs = await resolveInitialRoleSetAtMs(guild, targetUser.id);
         oneMonthNotified: false,
         oneMonthNotifiedAt: null,
         note: '',
-        responsibleUserId: null,
-        responsibleType: null,
+        responsibleUserId: options.responsibleUserId || autoResp?.userId || null,
+        responsibleType: options.responsibleType || autoResp?.type || null,
         warnNoRoleGI,
         responsibleHistory: [],
         pausedAtMs: initialActive ? null : nowMs(),

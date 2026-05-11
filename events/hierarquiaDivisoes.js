@@ -350,6 +350,10 @@ async function updateHierarchyPanel(client) {
           if (finalList.length === 0) return "";
 
           // ✅ marca como já listado
+          const role = guild.roles.cache.get(roleId);
+          const roleName = role ? role.name.toUpperCase() : "CARGO";
+          
+          const countLine = `\n**totais: ${finalList.length} ${roleName} ${roleId}**`;
           for (const m of finalList) seen.add(m.id);
 
           return finalList
@@ -361,8 +365,8 @@ async function updateHierarchyPanel(client) {
                 if (userSlot === CONFIG.SLOTS.DAWN) icon = "🌌 ";
               }
               return `${E.DOT} ${icon}${m.toString()}`;
-            })
-            .join("\n");
+        })
+        .join("\n") + countLine;
         };
 
         const sections = [
@@ -415,6 +419,8 @@ async function updateHierarchyPanel(client) {
           getMembersByRoleGroups(guild, CONFIG.GROUPS.EQUIPE, slots, "ANY", E, seen) || "_Ninguém_",
           "",
           "┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅",
+          "",
+          `# 👥 MEMBROS TOTAIS NA GESTÃO: ${seen.size}`,
           "",
           "🧩 **Organização e comunicação são pilares da nossa estrutura.**",
           "⚠️ *Qualquer denúncia deve ser tratada com os responsáveis!*",

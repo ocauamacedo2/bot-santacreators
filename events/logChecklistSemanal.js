@@ -61,10 +61,11 @@ export function getNowSP() {
 function weekKeyFromDateSP(inputDate = null) {
   const date = inputDate ? new Date(inputDate) : getNowSP();
   const d = new Date(date.toLocaleString("en-US", { timeZone: TZ }));
-  const day = d.getDay(); // 0 = Dom
-  const diff = d.getDate() - day;
-  const sunday = new Date(d.setDate(diff));
-  return sunday.toISOString().slice(0, 10);
+  const day = d.getDay(); 
+  // ✅ Ajuste para Sexta-feira (5) como início/referência da semana
+  const diff = d.getDate() - (day >= 5 ? day - 5 : day + 2);
+  const friday = new Date(d.setDate(diff));
+  return friday.toISOString().slice(0, 10);
 }
 
 function getWeekRangeLabel(weekKey) {
@@ -867,7 +868,8 @@ async function sendSundayReminders(client) {
 export async function checklistOnReady(client) {
   syncWeekData();
   await refreshMainPanel(client).catch(() => {});
-  cron.schedule("0 0,12,16 * * 0", () => sendSundayReminders(client), { timezone: TZ });
+  // ✅ Reset e lembretes agora na Sexta-feira (5)
+  cron.schedule("0 0,12,16 * * 5", () => sendSundayReminders(client), { timezone: TZ });
 }
 export async function checklistHandleMessage(message, client) {
   if (!message.guild || message.author.bot) return false;
