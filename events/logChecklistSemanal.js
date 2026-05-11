@@ -398,6 +398,19 @@ function syncWeekData() {
     }
 
     for (const [memberId, memberData] of memberMap.entries()) {
+      // 🔒 FILTRO DE HIERARQUIA: 
+      // Um subordinado não pode dar log em um superior.
+      try {
+        const guild = resolveMainGuild(null, null) || (await client.guilds.fetch("1262262852782129183"));
+        const respMem = await guild.members.fetch(respId).catch(() => null);
+        const targetMem = await guild.members.fetch(memberId).catch(() => null);
+        
+        if (respMem && targetMem) {
+          // Se o alvo tem cargo maior ou igual ao responsável, ignora (não aparece no checklist dele)
+          if (targetMem.roles.highest.position >= respMem.roles.highest.position) continue;
+        }
+      } catch {}
+
       const existing = mergedResponsaveis[respId].members[memberId] || {};
 
       mergedResponsaveis[respId].members[memberId] = {
