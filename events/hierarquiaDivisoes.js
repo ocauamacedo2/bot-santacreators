@@ -331,7 +331,6 @@ async function updateHierarchyPanel(client) {
 
         // Helper para pegar lista formatada
         const getMembersByRole = (roleId, filterSlot = null) => {
-          const role = guild.roles.cache.get(roleId);
           if (!role) return "";
 
           const members = role.members
@@ -350,10 +349,9 @@ async function updateHierarchyPanel(client) {
           if (finalList.length === 0) return "";
 
           // ✅ marca como já listado
-          const roleName = role.name.toUpperCase();
-          
-          const countLine = `\n**totais: ${finalList.length} ${roleName} ${roleId}**`;
           for (const m of finalList) seen.add(m.id);
+
+          const countLine = `\n**totais: ${finalList.length} <@&${roleId}>**`;
 
           return finalList
             .map((m) => {
@@ -410,12 +408,12 @@ async function updateHierarchyPanel(client) {
           "┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅",
           `#  ${E.CROWN_INFLU}  COORDENAÇÃO / GESTÃO ${E.CROWN_INFLU}`,
           "",
-          getMembersByRoleGroups(guild, CONFIG.GROUPS.GESTAO, slots, "ANY", E, seen) || "_Ninguém_",
+          getMembersByRoleGroups(guild, CONFIG.GROUPS.GESTAO, slots, "ANY", E, seen, "GESTAO") || "_Ninguém_",
           "",
           "┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅",
           `#  ${E.CROWN_CYAN}    EQUIPE CREATOR  ${E.CROWN_CYAN}`,
           "",
-          getMembersByRoleGroups(guild, CONFIG.GROUPS.EQUIPE, slots, "ANY", E, seen) || "_Ninguém_",
+          getMembersByRoleGroups(guild, CONFIG.GROUPS.EQUIPE, slots, "ANY", E, seen, "EQUIPE") || "_Ninguém_",
           "",
           "┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅",
           "",

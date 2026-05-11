@@ -903,6 +903,25 @@ try {
         // Usa Array.from para evitar problemas de modificação do Map durante iteração
         const records = Array.from(SC_GI_STATE.registros.values());
         for (const rec of records) {
+          // 🔧 Auto-atribuição de responsável se estiver vazio
+          if (!rec.responsibleUserId) {
+            const newBest = await findBestResponsible(guild);
+            if (newBest) {
+              rec.responsibleUserId = newBest.userId;
+              rec.responsibleType = newBest.type;
+              rec.responsibleHistory.push({ atMs: Date.now(), userId: newBest.userId, type: newBest.type, setBy: client.user.id });
+              
+              const chToEdit = await guild.channels.fetch(rec.channelId).catch(() => null);
+              const msgToEdit = chToEdit ? await chToEdit.messages.fetch(rec.messageId).catch(() => null) : null;
+              if (msgToEdit) {
+                const targetU = await fetchUserCached(rec.targetId);
+                const regU = await fetchUserCached(rec.registrarId);
+                const emb = await registroEmbed({ targetUser: targetU, registrarUser: regU, joinDateMs: rec.joinDateMs, area: rec.area, weeks: weeksSince(rec.joinDateMs), months: monthsSince(rec.joinDateMs), active: rec.active, rec });
+                await msgToEdit.edit({ embeds: [emb] }).catch(() => {});
+              }
+            }
+          }
+
           // 🔧 Verificação de responsável desligado
           const respMem = rec.responsibleUserId ? await guild.members.fetch(rec.responsibleUserId).catch(() => null) : null;
           const isRespStillValid = respMem && (respMem.roles.cache.has(SC_GI_CFG.ROLE_RESP_INFLU) || respMem.roles.cache.has(SC_GI_CFG.ROLE_RESP_LIDER));
