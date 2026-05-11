@@ -340,10 +340,11 @@ function loadGiSource() {
   return { registros: [] };
 }
 
-function syncWeekData() {
+async function syncWeekData(client) {
   const checklist = loadJSON(CHECKLIST_FILE, { weeks: {} });
   const giData = loadGiSource();
   const weekKey = weekKeyFromDateSP();
+  const targetGuildId = "1262262852782129183";
 
   if (!checklist.weeks[weekKey]) {
     checklist.weeks[weekKey] = { lastSyncedAt: null, responsaveis: {} };
@@ -401,18 +402,16 @@ function syncWeekData() {
       // 🔒 FILTRO DE HIERARQUIA: 
       // Um subordinado não pode dar log em um superior.
       try {
-        const guild = resolveMainGuild(null, null) || (await client.guilds.fetch("1262262852782129183"));
+        const guild = resolveMainGuild(client, null) || (await client.guilds.fetch(targetGuildId));
         const respMem = await guild.members.fetch(respId).catch(() => null);
         const targetMem = await guild.members.fetch(memberId).catch(() => null);
         
         if (respMem && targetMem) {
-          // Se o alvo tem cargo maior ou igual ao responsável, ignora (não aparece no checklist dele)
           if (targetMem.roles.highest.position >= respMem.roles.highest.position) continue;
         }
       } catch {}
 
       const existing = mergedResponsaveis[respId].members[memberId] || {};
-
       mergedResponsaveis[respId].members[memberId] = {
         checked: existing?.checked === true,
         checkedAt: existing?.checkedAt || null,
@@ -451,7 +450,7 @@ function buildProgressBar(value, total) {
 async function buildMainPanel(client, sourceGuild = null) {
   const guild = resolveMainGuild(client, sourceGuild);
   const weekKey = weekKeyFromDateSP();
-  const checklist = syncWeekData();
+  const checklist = await syncWeekData(client);
   const data = checklist.weeks[weekKey] || { responsaveis: {}, lastSyncedAt: null };
   const isSunday = getNowSP().getDay() === 0;
 
@@ -507,7 +506,7 @@ fields.push({
     .setDescription(
       `📅 **Semana:** ${getWeekRangeLabel(weekKey)}\n` +
       `🕒 **Fechamento:** Sexta-feira às 23:59\n\n` +
-      `� **Responsáveis com pendência:** \`${respsWithPending}\`\n` +
+      `📌 **Responsáveis com pendência:** \`${respsWithPending}\`\n` +
       `✅ **Membros conferidos:** \`${checkedMembers}\`\n` +
       `❌ **Membros pendentes:** \`${totalMembers - checkedMembers}\`\n` +
       `🕓 **Última sincronização GI:** ${data.lastSyncedAt ? `<t:${Math.floor(data.lastSyncedAt / 1000)}:R>` : "`Nunca`"}\n\n` +
@@ -834,7 +833,7 @@ async function logAudit(client, actor, respId, memberId, status, weekKey, isBulk
 // LEMBRETES & CRON
 // ===============================
 async function sendSundayReminders(client) {
-  const checklist = syncWeekData();
+  const checklist = await syncWeekData(client);
   const weekKey = weekKeyFromDateSP();
   const data = checklist.weeks[weekKey];
   const range = getWeekRangeLabel(weekKey);
@@ -879,7 +878,7 @@ async function sendSundayReminders(client) {
 }
 
 export async function checklistOnReady(client) {
-  syncWeekData();
+  await syncWeekData(client);
   await refreshMainPanel(client).catch(() => {});
   // ✅ Reset e lembretes agora na Sexta-feira (5)
   cron.schedule("0 0,12,16 * * 5", () => sendSundayReminders(client), { timezone: TZ });
