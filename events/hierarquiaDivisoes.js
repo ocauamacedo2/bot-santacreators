@@ -244,47 +244,48 @@ const getMembersByRoleGroups = (guild, groupDefs, slots, filterSlot, E, seen, gr
       members = members.filter((m) => !seen.has(m.id));
     }
 
-    members.sort((a, b) => a.displayName.localeCompare(b.displayName));
+    const count = members.length;
+    groupTotal += count;
 
-    if (members.length === 0) {
+    if (count === 0) {
       lines.push("_Ninguém_");
-      lines.push("");
-      continue;
-    }
+    } else {
+      members.sort((a, b) => a.displayName.localeCompare(b.displayName));
 
-    // ✅ marca como "já listado" pra não aparecer em categorias abaixo
-    if (seen) {
-      for (const m of members) seen.add(m.id);
-    }
+      // ✅ marca como "já listado" pra não aparecer em categorias abaixo
+      if (seen) {
+        for (const m of members) seen.add(m.id);
+      }
 
-    lines.push(
-      members
-        .map((m) => {
-          const userSlot = slots[m.id] || CONFIG.SLOTS.NONE;
-          let icon = "";
-          if (filterSlot === "ANY") {
-            if (userSlot === CONFIG.SLOTS.EVENING) icon = "🌅 ";
-            if (userSlot === CONFIG.SLOTS.DAWN) icon = "🌌 ";
-          }
-          return `${E.DOT} ${icon}${m.toString()}`;
-        })
-        .join("\n")
-    );
-            
-            if (g.id === "EQ_CREATORS") {
-              lines.push(`\n**equipe sem area: ${count} membros**`);
-            } else if (groupType === "EQUIPE") {
-              lines.push(`\n**Equipe <@&${roleId}> Membros: ${count} Membros**`);
-            } else {
-              lines.push(`\n**TOTAIS: ${count} <@&${roleId}>**`);
+      lines.push(
+        members
+          .map((m) => {
+            const userSlot = slots[m.id] || CONFIG.SLOTS.NONE;
+            let icon = "";
+            if (filterSlot === "ANY") {
+              if (userSlot === CONFIG.SLOTS.EVENING) icon = "🌅 ";
+              if (userSlot === CONFIG.SLOTS.DAWN) icon = "🌌 ";
             }
-            lines.push("");
-          }
+            return `${E.DOT} ${icon}${m.toString()}`;
+          })
+          .join("\n")
+      );
+    }
 
-          if (groupType === "GESTAO") lines.push(`**TOTAIS DA Coordenação: ${groupTotal}**`);
-          if (groupType === "EQUIPE") lines.push(`**totais da Equipe Creators gerais: ${groupTotal} membros**`);
+    if (g.id === "EQ_CREATORS") {
+      lines.push(`\n**equipe sem area: ${count} membros**`);
+    } else if (groupType === "EQUIPE") {
+      lines.push(`\n**Equipe <@&${roleId}> Membros: ${count} Membros**`);
+    } else {
+      lines.push(`\n**TOTAIS: ${count} <@&${roleId}>**`);
+    }
+    lines.push("");
+  }
 
-          return lines.join("\n");
+  if (groupType === "GESTAO") lines.push(`**TOTAIS DA Coordenação: ${groupTotal}**`);
+  if (groupType === "EQUIPE") lines.push(`**totais da Equipe Creators gerais: ${groupTotal} membros**`);
+
+  return lines.join("\n");
 }
 
 let PANEL_UPDATING = false;
@@ -541,9 +542,26 @@ async function logChange(client, actor, targetUser, oldSlot, newSlot) {
 
 // ================= AUTO-UPDATE (MUDANÇA DE CARGO) =================
 export async function hierarquiaHandleGuildMemberUpdate(oldMember, newMember, client) {
-  // ✅ OTIMIZAÇÃO: Desativado para evitar flood.
-  // O painel será atualizado apenas 1x ao dia ou via botão manual.
-  return;
+  const oldRoles = oldMember.roles.cache;
+  const newRoles = newMember.roles.cache;
+
+  if (oldRoles.equals(newRoles)) return;
+
+  // Lista de cargos que importam para a hierarquia
+  const trackedRoles = new Set(Object.values(CONFIG.ROLES));
+
+  const hasRelevantChange = 
+    [...oldRoles.keys()].some(id => trackedRoles.has(id)) ||
+    [...newRoles.keys()].some(id => trackedRoles.has(id));
+
+  if (hasRelevantChange) {
+    // Debounce para evitar flood se vários cargos mudarem ao mesmo tempo
+    if (UPDATE_DEBOUNCE) clearTimeout(UPDATE_DEBOUNCE);
+    
+    UPDATE_DEBOUNCE = setTimeout(() => {
+      updateHierarchyPanel(client).catch(console.error);
+    }, 30000); // Aguarda 30 segundos após a última mudança para atualizar
+  }
 }
 
 // ================= HANDLERS =================
