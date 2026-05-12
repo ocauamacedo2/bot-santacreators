@@ -818,8 +818,13 @@ async function buildEmbeds(client, currentSnapshot) {
       daysToLastEvent++;
     }
     
-    const lastEventDateKey = getDateKeyDaysAgoFromSnapshot(currentSnapshot, daysToLastEvent + (useYesterdayFocus ? 1 : 0));
-    const eventPeaks = peaks[lastEventDateKey] || { total: {}, cities: {} };
+    // 🧠 Inteligência: Se o evento ainda não ocorreu na semana atual, forçamos os dados para zero.
+    // Se daysToLastEvent for maior que o dia da semana atual, significa que estamos buscando um dia da semana passada.
+    const hasHappenedThisWeek = daysToLastEvent <= effectiveWeekday;
+
+    const lastEventDateKey = hasHappenedThisWeek ? getDateKeyDaysAgoFromSnapshot(currentSnapshot, daysToLastEvent + (useYesterdayFocus ? 1 : 0)) : null;
+    const eventPeaks = lastEventDateKey ? (peaks[lastEventDateKey] || { total: {}, cities: {} }) : { total: {}, cities: {} };
+
     const isTotal = item.key === "total";
     
     const peakValue = isTotal ? eventPeaks.total?.primePeak || 0 : eventPeaks.cities?.[item.key]?.primePeak || 0;
@@ -833,16 +838,16 @@ async function buildEmbeds(client, currentSnapshot) {
       else if (eventDayOfWeek === 4) compareDays = 5; // Quinta vs Sábado anterior
     }
     
-    const prevEventDateKey = getDateKeyDaysAgoFromSnapshot(currentSnapshot, daysToLastEvent + compareDays + (useYesterdayFocus ? 1 : 0));
+    const prevEventDateKey = lastEventDateKey ? getDateKeyDaysAgoFromSnapshot(currentSnapshot, daysToLastEvent + compareDays + (useYesterdayFocus ? 1 : 0)) : null;
     const prevEventPeaks = peaks[prevEventDateKey] || { total: {}, cities: {} };
     const prevPeakValue = isTotal ? prevEventPeaks.total?.primePeak || 0 : prevEventPeaks.cities?.[item.key]?.primePeak || 0;
 
-    const weekAgoDateKey = getDateKeyDaysAgoFromSnapshot(currentSnapshot, daysToLastEvent + 7 + (useYesterdayFocus ? 1 : 0));
+    const weekAgoDateKey = lastEventDateKey ? getDateKeyDaysAgoFromSnapshot(currentSnapshot, daysToLastEvent + 7 + (useYesterdayFocus ? 1 : 0)) : null;
     const weekAgoPeaks = peaks[weekAgoDateKey] || { total: {}, cities: {} };
     const weekAgoPeakValue = isTotal ? weekAgoPeaks.total?.primePeak || 0 : weekAgoPeaks.cities?.[item.key]?.primePeak || 0;
 
-    const diffPrev = calculateDiff(peakValue, prevPeakValue);
-    const diffWeek = calculateDiff(peakValue, weekAgoPeakValue);
+    const diffPrev = peakValue > 0 ? calculateDiff(peakValue, prevPeakValue) : { diff: 0, pct: 0, arrow: UI.STABLE + ' ➖' };
+    const diffWeek = peakValue > 0 ? calculateDiff(peakValue, weekAgoPeakValue) : { diff: 0, pct: 0, arrow: UI.STABLE + ' ➖' };
 
     const displayDate = new Date(currentSnapshot.timestamp - (daysToLastEvent + (useYesterdayFocus ? 1 : 0)) * 24 * 60 * 60 * 1000);
     const weekdayName = new Intl.DateTimeFormat("pt-BR", { weekday: "long", timeZone: FIVEM_TIMEZONE }).format(displayDate);
@@ -850,9 +855,9 @@ async function buildEmbeds(client, currentSnapshot) {
     const isActuallyLiveToday = item.days.includes(effectiveWeekday); // Se o evento está "ao vivo" hoje
 
     let fieldValue = `**Pico:** \`${formatNumber(peakValue)}\` @ \`${peakTime}\`\n` +
-                     `**Vs Prev:** ${formatDiff(diffPrev)}\n` +
-                     `**Vs 7D:** ${formatDiff(diffWeek)}\n` +
-                     `*Janela: ${item.label} na ${weekdayName}*`;
+                     `**Vs Prev:** ${peakValue > 0 ? formatDiff(diffPrev) : "🟠 ➖ 0 (aguardando)"}\n` +
+                     `**Vs 7D:** ${peakValue > 0 ? formatDiff(diffWeek) : "🟠 ➖ 0 (aguardando)"}\n` +
+                     `*Janela: ${item.label} na ${isActuallyLiveToday ? currentSnapshot.spWeekday : weekdayName}*`;
 
     // Especial para Nobre: Detalhes dos 3 dias de evento no mesmo painel
     if (item.key === "nobre" && isActuallyLiveToday) {
