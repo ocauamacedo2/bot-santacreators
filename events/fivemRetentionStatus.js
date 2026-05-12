@@ -790,77 +790,102 @@ async function buildEmbeds(client, currentSnapshot) {
    embeds.push(retentionEmbed);
  }
 
-  // 5.1 PAINEL — FOCO DO EVENTO (DINÂMICO POR DIA)
-  const isEarlyMorning = currentSnapshot.hour < 4;
-  const useYesterdayFocus = isEarlyMorning && (todayPeaks.total?.primePeak || 0) === 0;
-  const effectiveWeekday = useYesterdayFocus ? (getSaoPauloWeekday(new Date(currentSnapshot.timestamp)) + 6) % 7 : getSaoPauloWeekday(new Date(currentSnapshot.timestamp));
-  
-  const primeWindow = getPrimeTimeWindow(currentSnapshot, effectiveWeekday);
-  const eventFocusConfigs = getEventDayFocusConfig(currentSnapshot, effectiveWeekday);
+  // 5.1 PAINÉIS DE RETENÇÃO POR CIDADE (FIXOS)
+  const focusItems = [
+    { key: "maresia", name: "Maresia", emoji: "🌊", days: [1], label: "20:00 às 23:00" },
+    { key: "grande",  name: "Grande",  emoji: "🌆", days: [2], label: "21:00 às 00:00" },
+    { key: "santa",   name: "Santa",   emoji: "🏙️", days: [3], label: "20:00 às 23:00" },
+    { key: "nobre",   name: "Nobre",   emoji: "👑", days: [4, 5, 6], label: "20:00 às 23:00" },
+    { key: "total",   name: "Geral (Rede)", emoji: "🌐", days: [0], label: "20:00 às 23:00" }
+  ];
 
-  if (primeWindow && eventFocusConfigs.length > 0) {
-    const activePeaks = useYesterdayFocus ? yesterdayPeaks : todayPeaks;
-    const offsetBase = useYesterdayFocus ? 1 : 0;
+  const currentWeekday = getSaoPauloWeekday(new Date(currentSnapshot.timestamp));
 
-    // 🧠 Lógica de Comparação Inteligente (Evento vs Evento)
-    let daysToPrevEvent = 1;
-    let daysToLastWeek = 7;
+  for (const item of focusItems) {
+    // Discord limita a 10 embeds por mensagem. 
+    if (embeds.length >= 9) break; 
 
-    // Cidades semanais (Dom, Seg, Ter, Qua) -> Compara com 7 dias atrás
-    if ([0, 1, 2, 3].includes(effectiveWeekday)) {
-      daysToPrevEvent = 7;
-      daysToLastWeek = 14;
-    } 
-    // Nobre Quinta (4) -> Último evento foi Sábado (5 dias atrás)
-    else if (effectiveWeekday === 4) {
-      daysToPrevEvent = 5;
-      daysToLastWeek = 7;
+    // 🧠 Inteligência Madrugada: se não teve pico hoje ainda, olha o dia anterior
+    const isEarlyMorning = currentSnapshot.hour < 4;
+    const useYesterdayData = isEarlyMorning && (todayPeaks.total?.primePeak || 0) === 0;
+    const effectiveWeekday = useYesterdayData ? (currentWeekday + 6) % 7 : currentWeekday;
+
+    // Encontrar o dia em que este evento ocorreu pela última vez
+    let daysToLastEvent = 0;
+    while (!item.days.includes((effectiveWeekday - daysToLastEvent + 35) % 7)) {
+      daysToLastEvent++;
     }
-    // Nobre Sexta (5) e Sábado (6) -> Segue a sequência (1 dia atrás)
-    else {
-      daysToPrevEvent = 1;
-      daysToLastWeek = 7;
+    
+    const lastEventDateKey = getDateKeyDaysAgoFromSnapshot(currentSnapshot, daysToLastEvent + (useYesterdayData ? 1 : 0));
+    const eventPeaks = peaks[lastEventDateKey] || { total: {}, cities: {} };
+    const isTotal = item.key === "total";
+    
+    const peakValue = isTotal ? eventPeaks.total?.primePeak || 0 : eventPeaks.cities?.[item.key]?.primePeak || 0;
+    const peakTime = isTotal ? eventPeaks.total?.primePeakTime || "--:--" : eventPeaks.cities?.[item.key]?.primePeakTime || "--:--";
+    
+    // Comparação Dinâmica (Vs Evento Anterior)
+    let compareDays = 7;
+    if (item.key === "nobre") {
+      const eventDayOfWeek = (effectiveWeekday - daysToLastEvent + 35) % 7;
+      if (eventDayOfWeek === 5 || eventDayOfWeek === 6) compareDays = 1;
+      else if (eventDayOfWeek === 4) compareDays = 5;
+    }
+    
+    const prevEventDateKey = getDateKeyDaysAgoFromSnapshot(currentSnapshot, daysToLastEvent + compareDays + (useYesterdayData ? 1 : 0));
+    const prevEventPeaks = peaks[prevEventDateKey] || { total: {}, cities: {} };
+    const prevPeakValue = isTotal ? prevEventPeaks.total?.primePeak || 0 : prevEventPeaks.cities?.[item.key]?.primePeak || 0;
+
+    const weekAgoDateKey = getDateKeyDaysAgoFromSnapshot(currentSnapshot, daysToLastEvent + 7 + (useYesterdayData ? 1 : 0));
+    const weekAgoPeaks = peaks[weekAgoDateKey] || { total: {}, cities: {} };
+    const weekAgoPeakValue = isTotal ? weekAgoPeaks.total?.primePeak || 0 : weekAgoPeaks.cities?.[item.key]?.primePeak || 0;
+
+    const diffPrev = calculateDiff(peakValue, prevPeakValue);
+    const diffWeek = calculateDiff(peakValue, weekAgoPeakValue);
+
+    const displayDate = new Date(currentSnapshot.timestamp - (daysToLastEvent + (useYesterdayData ? 1 : 0)) * 24 * 60 * 60 * 1000);
+    const weekdayName = new Intl.DateTimeFormat("pt-BR", { weekday: "long", timeZone: FIVEM_TIMEZONE }).format(displayDate);
+
+    const isActuallyLiveToday = item.days.includes(effectiveWeekday);
+
+    const focusEmbed = new EmbedBuilder()
+      .setColor(isActuallyLiveToday ? 0x00ff00 : baseColor)
+      .setTitle(`🎯 RETENÇÃO DO EVENTO — BR ${item.name.toUpperCase()}${isActuallyLiveToday ? "" : " (Fixo)"}`)
+      .setDescription(
+        `Janela de análise: **${item.label}**\n\n` +
+        `${item.emoji} **BR ${item.name}**\n` +
+        `> **Pico no evento:** \`${formatNumber(peakValue)}\` players às \`${peakTime}\`\n` +
+        `### 📅 Monitoramento de Evento\n` +
+        `**${item.name}** das **${item.label}** na **${weekdayName}**\n\n` +
+        `${item.emoji} **RESULTADOS DO PICO:**\n` +
+        `> **Máxima atingida:** \`${formatNumber(peakValue)}\` ativos\n` +
+        `> **Horário do registro:** \`${peakTime}\`\n\n` +
+        `**COMPARAÇÃO HISTÓRICA:**\n` +
+        `> **Vs Evento Anterior:** ${formatDiff(diffPrev)}\n` +
+        `> **Vs Semana Passada:** ${formatDiff(diffWeek)}\n\n` +
+        `**Resumo:**\n` +
+        `*Retenção focada ${isTotal ? "no desempenho geral da rede" : `apenas na cidade de ${item.name}`}${isActuallyLiveToday ? " (Evento de hoje)" : ""}.*`
+      )
+      .setFooter({ 
+        text: `Análise de Foco Diário • Sincronizado às ${currentSnapshot.spTime}`,
+        iconURL: client.user.displayAvatarURL()
+      });
+
+    // Especial para Nobre: Detalhes dos 3 dias de evento no mesmo painel
+    if (item.key === "nobre" && isActuallyLiveToday) {
+       const qIdx = effectiveWeekday === 4 ? 0 : (effectiveWeekday === 5 ? 1 : 2);
+       const qVal = peaks[getDateKeyDaysAgoFromSnapshot(currentSnapshot, qIdx + (useYesterdayData ? 1 : 0))]?.cities?.nobre?.primePeak || 0;
+       const sVal = effectiveWeekday >= 5 ? peaks[getDateKeyDaysAgoFromSnapshot(currentSnapshot, (effectiveWeekday === 5 ? 0 : 1) + (useYesterdayData ? 1 : 0))]?.cities?.nobre?.primePeak || 0 : 0;
+       const bVal = effectiveWeekday === 6 ? peaks[getDateKeyDaysAgoFromSnapshot(currentSnapshot, 0 + (useYesterdayData ? 1 : 0))]?.cities?.nobre?.primePeak || 0 : 0;
+       
+       if (qVal > 0 || sVal > 0 || bVal > 0) {
+         focusEmbed.addFields({ 
+           name: "📊 Ciclo Nobre (Qui/Sex/Sáb)", 
+           value: `• Qui: \`${formatNumber(qVal)}\` | Sex: \`${formatNumber(sVal)}\` | Sáb: \`${formatNumber(bVal)}\`` 
+         });
+       }
     }
 
-    const compYPeaks = peaks[getDateKeyDaysAgoFromSnapshot(currentSnapshot, daysToPrevEvent + offsetBase)] || { total: {}, cities: {} };
-    const compWPeaks = peaks[getDateKeyDaysAgoFromSnapshot(currentSnapshot, daysToLastWeek + offsetBase)] || { total: {}, cities: {} };
-
-    for (const config of eventFocusConfigs) {
-      // Trava de segurança para não estourar o limite de 10 embeds do Discord
-      if (embeds.length >= 8) break;
-
-      const isTotal = config.cityKey === "total";
-      const peakValue = isTotal ? activePeaks.total?.primePeak || 0 : activePeaks.cities?.[config.cityKey]?.primePeak || 0;
-      const peakTime = isTotal ? activePeaks.total?.primePeakTime || "--:--" : activePeaks.cities?.[config.cityKey]?.primePeakTime || "--:--";
-      
-      const diffY = calculateDiff(peakValue, isTotal ? compYPeaks.total?.primePeak || 0 : compYPeaks.cities?.[config.cityKey]?.primePeak || 0);
-      const diffW = calculateDiff(peakValue, isTotal ? compWPeaks.total?.primePeak || 0 : compWPeaks.cities?.[config.cityKey]?.primePeak || 0);
-
-      const focusEmbed = new EmbedBuilder()
-        .setColor(baseColor)
-        .setTitle(`${config.title}${useYesterdayFocus ? " (Ontem)" : ""}`)
-        .setDescription(
-          `Janela de análise: **${config.label}**\n\n` +
-          `${config.emoji} **BR ${config.cityName}**\n` +
-          `> **Pico no evento:** \`${formatNumber(peakValue)}\` players às \`${peakTime}\`\n` +
-          `### 📅 Monitoramento de Evento\n` +
-          `**${config.cityName}** das **${config.label}** ${useYesterdayFocus ? "no dia do evento anterior" : `na **${currentSnapshot.spWeekday}**`}\n\n` +
-          `${config.emoji} **RESULTADOS DO PICO:**\n` +
-          `> **Máxima atingida:** \`${formatNumber(peakValue)}\` ativos\n` +
-          `> **Horário do registro:** \`${peakTime}\`\n\n` +
-          `**COMPARAÇÃO HISTÓRICA:**\n` +
-          `> **Vs Evento Anterior:** ${formatDiff(diffY)}\n` +
-          `> **Vs Semana Passada:** ${formatDiff(diffW)}\n\n` +
-          `**Resumo:**\n` +
-          `*Retenção focada ${isTotal ? "no desempenho geral de todas as cidades" : `apenas na cidade principal do evento de hoje (${config.cityName})`}.*`
-        )
-        .setFooter({ 
-          text: `Análise de Foco Diário • Sincronizado às ${currentSnapshot.spTime}`,
-          iconURL: client.user.displayAvatarURL()
-        });
-
-      embeds.push(focusEmbed);
-    }
+    embeds.push(focusEmbed);
   }
 
  // 6. PAINEL — DIFERENÇA DE PICOS (MÁXIMAS DO DIA)
