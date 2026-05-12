@@ -45,7 +45,13 @@ const PeakSchema = new mongoose.Schema({
 const PeakModel = mongoose.models.FivemRetentionPeak || mongoose.model("FivemRetentionPeak", PeakSchema);
 
 const FIVEM_STATE = new Map(); // channelId -> { intervalId, messageId }
-const FIVEM_DEBUG = true; 
+const FIVEM_DEBUG = false; // 🛑 Desativa os logs de depuração para evitar flood
+ // 🧠 Inteligência Madrugada: se não teve pico hoje ainda, olha o dia anterior para os painéis de foco
+ const isEarlyMorning = currentSnapshot.hour < 4;
+ const useYesterdayFocus = isEarlyMorning && (todayPeaks.total?.primePeak || 0) === 0;
+ const effectiveWeekday = useYesterdayFocus ? (weekday + 6) % 7 : weekday;
+ const primeWindow = getPrimeTimeWindow(currentSnapshot, effectiveWeekday);
+
 const DEFAULT_COLOR = 0x2b2d31;
 
 // 🎨 UI LAYOUT HELPERS
@@ -790,7 +796,7 @@ async function buildEmbeds(client, currentSnapshot) {
    embeds.push(retentionEmbed);
  }
 
-  // 5.1 PAINÉIS DE RETENÇÃO POR CIDADE (FIXOS)
+  // 5.1 PAINÉIS DE RETENÇÃO POR CIDADE (DINÂMICO/FIXO)
   const focusItems = [
     { key: "maresia", name: "Maresia", emoji: "🌊", days: [1], label: "20:00 às 23:00" },
     { key: "grande",  name: "Grande",  emoji: "🌆", days: [2], label: "21:00 às 00:00" },
@@ -799,16 +805,9 @@ async function buildEmbeds(client, currentSnapshot) {
     { key: "total",   name: "Geral (Rede)", emoji: "🌐", days: [0], label: "20:00 às 23:00" }
   ];
 
-  const currentWeekday = getSaoPauloWeekday(new Date(currentSnapshot.timestamp));
-
   for (const item of focusItems) {
     // Discord limita a 10 embeds por mensagem. 
     if (embeds.length >= 9) break; 
-
-    // 🧠 Inteligência Madrugada: se não teve pico hoje ainda, olha o dia anterior
-    const isEarlyMorning = currentSnapshot.hour < 4;
-    const useYesterdayData = isEarlyMorning && (todayPeaks.total?.primePeak || 0) === 0;
-    const effectiveWeekday = useYesterdayData ? (currentWeekday + 6) % 7 : currentWeekday;
 
     // Encontrar o dia em que este evento ocorreu pela última vez
     let daysToLastEvent = 0;
@@ -816,7 +815,7 @@ async function buildEmbeds(client, currentSnapshot) {
       daysToLastEvent++;
     }
     
-    const lastEventDateKey = getDateKeyDaysAgoFromSnapshot(currentSnapshot, daysToLastEvent + (useYesterdayData ? 1 : 0));
+    const lastEventDateKey = getDateKeyDaysAgoFromSnapshot(currentSnapshot, daysToLastEvent + (useYesterdayFocus ? 1 : 0));
     const eventPeaks = peaks[lastEventDateKey] || { total: {}, cities: {} };
     const isTotal = item.key === "total";
     
@@ -831,18 +830,18 @@ async function buildEmbeds(client, currentSnapshot) {
       else if (eventDayOfWeek === 4) compareDays = 5;
     }
     
-    const prevEventDateKey = getDateKeyDaysAgoFromSnapshot(currentSnapshot, daysToLastEvent + compareDays + (useYesterdayData ? 1 : 0));
+    const prevEventDateKey = getDateKeyDaysAgoFromSnapshot(currentSnapshot, daysToLastEvent + compareDays + (useYesterdayFocus ? 1 : 0));
     const prevEventPeaks = peaks[prevEventDateKey] || { total: {}, cities: {} };
     const prevPeakValue = isTotal ? prevEventPeaks.total?.primePeak || 0 : prevEventPeaks.cities?.[item.key]?.primePeak || 0;
 
-    const weekAgoDateKey = getDateKeyDaysAgoFromSnapshot(currentSnapshot, daysToLastEvent + 7 + (useYesterdayData ? 1 : 0));
+    const weekAgoDateKey = getDateKeyDaysAgoFromSnapshot(currentSnapshot, daysToLastEvent + 7 + (useYesterdayFocus ? 1 : 0));
     const weekAgoPeaks = peaks[weekAgoDateKey] || { total: {}, cities: {} };
     const weekAgoPeakValue = isTotal ? weekAgoPeaks.total?.primePeak || 0 : weekAgoPeaks.cities?.[item.key]?.primePeak || 0;
 
     const diffPrev = calculateDiff(peakValue, prevPeakValue);
     const diffWeek = calculateDiff(peakValue, weekAgoPeakValue);
 
-    const displayDate = new Date(currentSnapshot.timestamp - (daysToLastEvent + (useYesterdayData ? 1 : 0)) * 24 * 60 * 60 * 1000);
+    const displayDate = new Date(currentSnapshot.timestamp - (daysToLastEvent + (useYesterdayFocus ? 1 : 0)) * 24 * 60 * 60 * 1000);
     const weekdayName = new Intl.DateTimeFormat("pt-BR", { weekday: "long", timeZone: FIVEM_TIMEZONE }).format(displayDate);
 
     const isActuallyLiveToday = item.days.includes(effectiveWeekday);
@@ -863,7 +862,7 @@ async function buildEmbeds(client, currentSnapshot) {
         `> **Vs Evento Anterior:** ${formatDiff(diffPrev)}\n` +
         `> **Vs Semana Passada:** ${formatDiff(diffWeek)}\n\n` +
         `**Resumo:**\n` +
-        `*Retenção focada ${isTotal ? "no desempenho geral da rede" : `apenas na cidade de ${item.name}`}${isActuallyLiveToday ? " (Evento de hoje)" : ""}.*`
+        `*Retenção focada ${isTotal ? "no desempenho geral da rede" : `apenas na cidade principal do evento de hoje (${item.name})`}.*`
       )
       .setFooter({ 
         text: `Análise de Foco Diário • Sincronizado às ${currentSnapshot.spTime}`,
@@ -873,9 +872,9 @@ async function buildEmbeds(client, currentSnapshot) {
     // Especial para Nobre: Detalhes dos 3 dias de evento no mesmo painel
     if (item.key === "nobre" && isActuallyLiveToday) {
        const qIdx = effectiveWeekday === 4 ? 0 : (effectiveWeekday === 5 ? 1 : 2);
-       const qVal = peaks[getDateKeyDaysAgoFromSnapshot(currentSnapshot, qIdx + (useYesterdayData ? 1 : 0))]?.cities?.nobre?.primePeak || 0;
-       const sVal = effectiveWeekday >= 5 ? peaks[getDateKeyDaysAgoFromSnapshot(currentSnapshot, (effectiveWeekday === 5 ? 0 : 1) + (useYesterdayData ? 1 : 0))]?.cities?.nobre?.primePeak || 0 : 0;
-       const bVal = effectiveWeekday === 6 ? peaks[getDateKeyDaysAgoFromSnapshot(currentSnapshot, 0 + (useYesterdayData ? 1 : 0))]?.cities?.nobre?.primePeak || 0 : 0;
+       const qVal = peaks[getDateKeyDaysAgoFromSnapshot(currentSnapshot, qIdx + (useYesterdayFocus ? 1 : 0))]?.cities?.nobre?.primePeak || 0;
+       const sVal = effectiveWeekday >= 5 ? peaks[getDateKeyDaysAgoFromSnapshot(currentSnapshot, (effectiveWeekday === 5 ? 0 : 1) + (useYesterdayFocus ? 1 : 0))]?.cities?.nobre?.primePeak || 0 : 0;
+       const bVal = effectiveWeekday === 6 ? peaks[getDateKeyDaysAgoFromSnapshot(currentSnapshot, 0 + (useYesterdayFocus ? 1 : 0))]?.cities?.nobre?.primePeak || 0 : 0;
        
        if (qVal > 0 || sVal > 0 || bVal > 0) {
          focusEmbed.addFields({ 
@@ -931,8 +930,6 @@ async function buildEmbeds(client, currentSnapshot) {
    .setFooter({ text: `Relatório de Picos Diários • Hoje até ${currentSnapshot.spTime}` });
  embeds.push(peaksEmbed);
 
- // 7. PAINEL — PICOS DO HORÁRIO DE EVENTOS (PRIME TIME)
- const primeTimeLabel = primeWindow ? primeWindow.label : "sem horário específico";
  
  const activePrimePeaks = useYesterdayFocus ? yesterdayPeaks : todayPeaks;
  const compYPrimePeaks = useYesterdayFocus ? dayBeforeYesterdayPeaks : yesterdayPeaks;
