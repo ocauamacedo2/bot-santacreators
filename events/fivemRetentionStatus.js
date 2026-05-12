@@ -46,11 +46,6 @@ const PeakModel = mongoose.models.FivemRetentionPeak || mongoose.model("FivemRet
 
 const FIVEM_STATE = new Map(); // channelId -> { intervalId, messageId }
 const FIVEM_DEBUG = false; // 🛑 Desativa os logs de depuração para evitar flood
- // 🧠 Inteligência Madrugada: se não teve pico hoje ainda, olha o dia anterior para os painéis de foco
- const isEarlyMorning = currentSnapshot.hour < 4;
- const useYesterdayFocus = isEarlyMorning && (todayPeaks.total?.primePeak || 0) === 0;
- const effectiveWeekday = useYesterdayFocus ? (weekday + 6) % 7 : weekday;
- const primeWindow = getPrimeTimeWindow(currentSnapshot, effectiveWeekday);
 
 const DEFAULT_COLOR = 0x2b2d31;
 
@@ -756,6 +751,12 @@ async function buildEmbeds(client, currentSnapshot) {
  const weekday = getSaoPauloWeekday(new Date(currentSnapshot.timestamp));
  const isRelevant21hDay = (weekday >= 1 && weekday <= 6);
 
+ // 🧠 Inteligência Madrugada: se não teve pico hoje ainda, olha o dia anterior para os painéis de foco
+ const isEarlyMorning = currentSnapshot.hour < 4;
+ const useYesterdayFocus = isEarlyMorning && (todayPeaks.total?.primePeak || 0) === 0;
+ const effectiveWeekday = useYesterdayFocus ? (weekday + 6) % 7 : weekday;
+ const primeWindow = getPrimeTimeWindow(currentSnapshot, effectiveWeekday);
+
  if (isRelevant21hDay) {
    const today21h = todayPeaks.exact21h || { total: 0, cities: {} };
    const yesterday21h = yesterdayPeaks.exact21h || { total: 0, cities: {} };
@@ -930,7 +931,7 @@ async function buildEmbeds(client, currentSnapshot) {
    .setFooter({ text: `Relatório de Picos Diários • Hoje até ${currentSnapshot.spTime}` });
  embeds.push(peaksEmbed);
 
- 
+ const primeTimeLabel = primeWindow ? primeWindow.label : "sem horário específico";
  const activePrimePeaks = useYesterdayFocus ? yesterdayPeaks : todayPeaks;
  const compYPrimePeaks = useYesterdayFocus ? dayBeforeYesterdayPeaks : yesterdayPeaks;
  const compWPrimePeaks = useYesterdayFocus ? peaks[getDateKeyDaysAgoFromSnapshot(currentSnapshot, 8)] || { total: {} } : lastWeekPeaks;
