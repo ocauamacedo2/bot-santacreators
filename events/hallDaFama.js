@@ -67,6 +67,8 @@ const BTN_APPROVE_PREFIX = "hf_approve_";
 const BTN_REJECT_PREFIX = "hf_reject_";
 const BTN_EDIT_LAST = "hf_edit_last";
 const MODAL_EDIT_SUBMIT = "hf_modal_edit_submit";
+const BTN_EDIT_PRIZES = "hf_edit_prizes";
+const MODAL_PRIZES_SUBMIT = "hf_modal_prizes_submit";
 
 // ================= PERSISTÊNCIA =================
 const __filename = fileURLToPath(import.meta.url);
@@ -184,7 +186,12 @@ function buildControlButtons() {
       .setCustomId(BTN_EDIT_LAST)
       .setLabel("✏️ Editar Último Hall")
       .setStyle(ButtonStyle.Secondary)
-      .setEmoji("✍️")
+      .setEmoji("✍️"),
+    new ButtonBuilder()
+      .setCustomId(BTN_EDIT_PRIZES)
+      .setLabel("🎁 Editar Premiações")
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji("💰")
   );
 }
 
@@ -194,11 +201,11 @@ async function ensureButtonAtBottom(channel, client, force = true) {
     if (!messages) return;
 
     const myMsgs = messages.filter(
-      (m) => m.author.id === client.user.id && m.components.length > 0 && m.components[0].components.some(c => c.customId === BTN_OPEN_MENU || c.customId === BTN_EDIT_LAST)
+      (m) => m.author.id === client.user.id && m.components.length > 0 && m.components[0].components.some(c => [BTN_OPEN_MENU, BTN_EDIT_LAST, BTN_EDIT_PRIZES].includes(c.customId))
     );
 
-    // ✅ Checa se já existe um painel de botões ATUALIZADO (com 2 botões)
-    const upToDateMsg = myMsgs.find(m => m.components[0]?.components?.length === 2);
+    // ✅ Checa se já existe um painel de botões ATUALIZADO (com 3 botões)
+    const upToDateMsg = myMsgs.find(m => m.components[0]?.components?.length === 3);
 
     // Se não for forçado e já existir um painel atualizado, não faz nada.
     if (!force && upToDateMsg) return;
@@ -281,7 +288,7 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
   if (!interaction.guild) return false;
 
   // ✅ Botão para editar o último post
-  if (interaction.isButton() && interaction.customId === BTN_EDIT_LAST) {
+  if (interaction.isButton() && (interaction.customId === BTN_EDIT_LAST || interaction.customId === BTN_EDIT_PRIZES)) {
     if (!hasPermission(interaction.member, interaction.user.id)) {
       return interaction.reply({ content: "🚫 Sem permissão para editar.", ephemeral: true });
     }
@@ -327,63 +334,88 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
     const imageUrl = imageLines[0] || '';
     const imageUrl2 = imageLines[1] || '';
 
-    const modal = new ModalBuilder()
-      .setCustomId(`${MODAL_EDIT_SUBMIT}:${lastHallMessage.id}`)
-      .setTitle(`✏️ Editando Hall da Fama`);
+    let modal;
+    if (interaction.customId === BTN_EDIT_PRIZES) {
+      modal = new ModalBuilder()
+        .setCustomId(`${MODAL_PRIZES_SUBMIT}:${lastHallMessage.id}`)
+        .setTitle(`💰 Editar Premiações`);
 
-    modal.addComponents(
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId("hf_edit_event_name")
-          .setLabel("Nome do Evento")
-          .setValue(eventName)
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true)
-      ),
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId("hf_edit_winners")
-          .setLabel("🏆 Vencedores (TOP 1, 2, 3...)")
-          .setValue(winnersText)
-          .setStyle(TextInputStyle.Paragraph)
-          .setPlaceholder("Edite os nomes e IDs aqui, mantendo a formatação.")
-          .setRequired(true)
-      ),
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId("hf_edit_image")
-          .setLabel("Link da Imagem 1 (Banner/Print)")
-          .setValue(imageUrl)
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true)
-      ),
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId("hf_edit_image2")
-          .setLabel("Link da Imagem 2 (Opcional)")
-          .setValue(imageUrl2)
-          .setStyle(TextInputStyle.Short)
-          .setRequired(false)
-      )
-    );
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId("hf_edit_winners")
+            .setLabel("🏆 Vencedores e Prêmios")
+            .setValue(winnersText)
+            .setStyle(TextInputStyle.Paragraph)
+            .setPlaceholder("Edite os nomes, IDs e prêmios aqui.")
+            .setRequired(true)
+        )
+      );
+    } else {
+      modal = new ModalBuilder()
+        .setCustomId(`${MODAL_EDIT_SUBMIT}:${lastHallMessage.id}`)
+        .setTitle(`✏️ Editando Hall da Fama`);
+
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId("hf_edit_event_name")
+            .setLabel("Nome do Evento")
+            .setValue(eventName)
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true)
+        ),
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId("hf_edit_winners")
+            .setLabel("🏆 Vencedores (TOP 1, 2, 3...)")
+            .setValue(winnersText)
+            .setStyle(TextInputStyle.Paragraph)
+            .setPlaceholder("Edite os nomes e IDs aqui, mantendo a formatação.")
+            .setRequired(true)
+        ),
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId("hf_edit_image")
+            .setLabel("Link da Imagem 1 (Banner/Print)")
+            .setValue(imageUrl)
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true)
+        ),
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId("hf_edit_image2")
+            .setLabel("Link da Imagem 2 (Opcional)")
+            .setValue(imageUrl2)
+            .setStyle(TextInputStyle.Short)
+            .setRequired(false)
+        )
+      );
+    }
     
     await interaction.showModal(modal);
     return true;
   }
 
   // ✅ Modal de edição de Hall da Fama
-  if (interaction.isModalSubmit() && interaction.customId.startsWith(MODAL_EDIT_SUBMIT)) {
+  if (interaction.isModalSubmit() && (interaction.customId.startsWith(MODAL_EDIT_SUBMIT) || interaction.customId.startsWith(MODAL_PRIZES_SUBMIT))) {
     if (!hasPermission(interaction.member, interaction.user.id)) {
       return interaction.reply({ content: "🚫 Sem permissão para editar.", ephemeral: true });
     }
     
     await interaction.deferReply({ ephemeral: true });
 
+    const isPrizesOnly = interaction.customId.startsWith(MODAL_PRIZES_SUBMIT);
     const messageId = interaction.customId.split(":")[1];
-    const newEventName = interaction.fields.getTextInputValue("hf_edit_event_name");
     const newWinnersText = interaction.fields.getTextInputValue("hf_edit_winners");
-    const newImageUrl = interaction.fields.getTextInputValue("hf_edit_image");
-    const newImageUrl2 = interaction.fields.getTextInputValue("hf_edit_image2");
+    
+    let newEventName, newImageUrl, newImageUrl2;
+    
+    if (!isPrizesOnly) {
+      newEventName = interaction.fields.getTextInputValue("hf_edit_event_name");
+      newImageUrl = interaction.fields.getTextInputValue("hf_edit_image");
+      newImageUrl2 = interaction.fields.getTextInputValue("hf_edit_image2");
+    }
 
     const hallChannel = await client.channels.fetch(HALL_CHANNEL_ID).catch(() => null);
     if (!hallChannel) {
@@ -399,12 +431,21 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
     const oldContent = messageToEdit.content;
     const lines = oldContent.split('\n');
     
+    // Se for apenas prêmios, extraímos o resto da mensagem original
+    if (isPrizesOnly) {
+      const titleLine = lines.find(l => l.startsWith('# 🎉 :'));
+      newEventName = titleLine?.match(/# 🎉 :  \*\*Santa Creators : (.*?)\*\* 🎉/)?.[1] || 'Evento';
+      const imageLines = lines.filter(l => l.startsWith('https://'));
+      newImageUrl = imageLines[0] || '';
+      newImageUrl2 = imageLines[1] || '';
+    }
+
     const introLineIndex = lines.findIndex(l => l.startsWith('# 🎉 :')) + 2;
     const intro = lines[introLineIndex] || getRandomIntro(); // Pega a intro antiga ou uma nova se falhar
 
     const cityMatch = oldContent.match(/na \*\*(.*?)\*\*!/);
     const cityName = cityMatch ? cityMatch[1] : "CIDADE"; // Fallback para caso não ache
-
+    
     const mentionsLine = lines.find(l => l.includes('@everyone')) || '';
 
     // Remonta a mensagem
