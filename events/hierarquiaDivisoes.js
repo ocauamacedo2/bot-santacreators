@@ -210,8 +210,8 @@ function resolveEmoji(channel, code, fallback) {
 
 // Lista formatada por grupos (ex: Gestor/Manager/Social)
 // ✅ "seen" dá prioridade: se já apareceu em cima, não aparece em baixo
-        const getMembersByRoleGroups = (guild, groupDefs, slots, filterSlot, E, seen, groupType) => {
-  const lines = [];
+const getMembersByRoleGroups = (guild, groupDefs, slots, filterSlot, E, seen, groupType) => {
+    const lines = [];
           let groupTotal = 0;
 
   for (const g of groupDefs) {

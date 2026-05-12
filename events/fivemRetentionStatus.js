@@ -1084,9 +1084,14 @@ async function editPanel(channel, options = {}) {
  await addSnapshot(currentSnapshot);
  const hasNewPeak = await updateDailyPeaks(currentSnapshot);
 
- // 🚀 Inteligência: Só edita a mensagem se for forçado, novo pico ou horário das 21h
+ // 🚀 Inteligência: Só edita a mensagem se for forçado, novo pico, horário das 21h ou se passou 1 hora
+ const state = FIVEM_STATE.get(channel.id) || {};
+ const lastEditAt = state.lastEditAt || 0;
+ const timeSinceLastEdit = Date.now() - lastEditAt;
+ const isHourlyUpdate = timeSinceLastEdit >= 60 * 60 * 1000;
+
  const is21h = isExact21hSnapshot(currentSnapshot);
- if (!options.force && !hasNewPeak && !is21h) {
+ if (!options.force && !hasNewPeak && !is21h && !isHourlyUpdate) {
    return null;
  }
 
@@ -1094,6 +1099,11 @@ async function editPanel(channel, options = {}) {
  try {
    const edited = await sticky.edit({ embeds, components: [row] });
    if (edited) FIVEM_DEBUG && console.log("[FIVEM_RETENTION] Sticky editada:", edited.id);
+
+   if (edited) {
+     const updatedState = FIVEM_STATE.get(channel.id) || {};
+     FIVEM_STATE.set(channel.id, { ...updatedState, lastEditAt: Date.now() });
+   }
    return edited;
  } catch (e) {
    cn2LogApiError("[FIVEM_RETENTION] Falha ao editar sticky:", e);
