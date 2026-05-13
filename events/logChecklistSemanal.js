@@ -87,14 +87,18 @@ export function getNowSP() {
  * @returns {string} YYYY-MM-DD
  */
 function weekKeyFromDateSP(inputDate = null) {
-  const date = inputDate ? new Date(inputDate) : getNowSP();
-  const d = new Date(date.toLocaleString("en-US", { timeZone: TZ }));
-  const day = d.getDay();
+  const now = inputDate ? new Date(inputDate) : getNowSP();
+  const day = now.getDay();
   // ✅ Início da semana: Sábado (6). Fechamento: Sexta (5)
   const diff = (day + 1) % 7; // Dias a subtrair para chegar ao Sábado anterior/atual
-  const saturday = new Date(d);
-  saturday.setDate(d.getDate() - diff); // Este é o Sábado da semana atual
-  return saturday.toISOString().slice(0, 10);
+  
+  const saturday = new Date(now);
+  saturday.setDate(now.getDate() - diff);
+  
+  const y = saturday.getFullYear();
+  const m = String(saturday.getMonth() + 1).padStart(2, '0');
+  const d = String(saturday.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
 }
 
 function getWeekRangeLabel(weekKey) {
@@ -128,13 +132,7 @@ function resolveMainGuild(client, sourceGuild = null) {
 async function resolveMemberDisplay(guild, userId) {
   if (!guild) return `<@${userId}>`;
 
-  let member = guild.members.cache.get(userId);
-  if (!member) {
-    try {
-      member = await guild.members.fetch(userId);
-    } catch {}
-  }
-
+  const member = await guild.members.fetch(userId).catch(() => null);
   if (!member) return `<@${userId}>`;
 
   const name = member.displayName || member.user.username;
@@ -144,14 +142,8 @@ async function resolveMemberDisplay(guild, userId) {
 async function resolveMemberPlainName(guild, userId) {
   if (!guild) return String(userId);
 
-  let member = guild.members.cache.get(userId);
-  if (!member) {
-    try {
-      member = await guild.members.fetch(userId);
-    } catch {}
-  }
-
-  return member?.displayName || member?.user?.username || String(userId);
+  const member = await guild.members.fetch(userId).catch(() => null);
+  return member?.displayName || member?.user?.globalName || member?.user?.username || String(userId);
 }
 
 // ===============================
@@ -397,12 +389,16 @@ async function syncWeekData(client, force = false) {
   }
 
   const giData = loadGiSource();
+  const rawRegistros = Array.isArray(giData?.registros) ? giData.registros : [];
+
+  // 🛡️ PROTEÇÃO: Se a fonte estiver vazia (erro de leitura ou arquivo quebrado), 
+  // não prossegue para não apagar o progresso da semana atual.
+  if (rawRegistros.length === 0) return checklist;
 
   if (!currentWeek.responsaveis || typeof currentWeek.responsaveis !== "object") {
     currentWeek.responsaveis = {};
   }
 
-  const rawRegistros = Array.isArray(giData?.registros) ? giData.registros : [];
   const registros = pickLatestEligibleGiRecords(rawRegistros);
 
   const giMap = new Map(); // respId -> Map(memberId -> memberData)
@@ -515,6 +511,11 @@ async function buildMainPanel(client, sourceGuild = null) {
   let totalMembers = 0;
   let checkedMembers = 0;
   let respsWithPending = 0;
+
+  // 🛡️ Garante que a guilda está com membros carregados para evitar IDs em vez de nomes
+  if (guild) {
+    await guild.members.fetch().catch(() => {});
+  }
 
   // ✅ Pre-fetch dos nomes que vão aparecer nesta página do painel
   const idsInPanel = new Set();
