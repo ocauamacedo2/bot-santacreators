@@ -170,10 +170,22 @@ export function getSaoPauloWeekday(date = new Date()) {
  */
 export function getPrimeTimeWindow(snapshot, customWeekday = null) {
   const weekday = customWeekday !== null ? customWeekday : getSaoPauloWeekday(new Date(snapshot.timestamp));
-  // Terça: 21:00 às 00:00 (Evento Cidade Grande às 23:00)
-  if (weekday === 2) return { startHour: 21, startMinute: 0, endHour: 24, endMinute: 0, label: "21:00 às 00:00" };
-  // Segunda, Quarta, Quinta, Sexta, Sábado e Domingo: 20:00 às 23:00
-  if ([0, 1, 3, 4, 5, 6].includes(weekday)) return { startHour: 20, startMinute: 0, endHour: 23, endMinute: 0, label: "20:00 às 23:00" };
+
+  // Domingo: Geral (Rede) - 20:00 às 23:00
+  if (weekday === 0) return { startHour: 20, startMinute: 0, endHour: 23, endMinute: 0, label: "20:00 às 23:00" };
+  // Segunda: Maresia - 20:30 às 22:00
+  if (weekday === 1) return { startHour: 20, startMinute: 30, endHour: 22, endMinute: 0, label: "20:30 às 22:00" };
+  // Terça: Grande - 23:00 às 01:00 (dia seguinte)
+  if (weekday === 2) return { startHour: 23, startMinute: 0, endHour: 25, endMinute: 0, label: "23:00 às 01:00" };
+  // Quarta: Santa - 20:30 às 22:00
+  if (weekday === 3) return { startHour: 20, startMinute: 30, endHour: 22, endMinute: 0, label: "20:30 às 22:00" };
+  // Quinta: Nobre - 21:00 às 23:00
+  if (weekday === 4) return { startHour: 21, startMinute: 0, endHour: 23, endMinute: 0, label: "21:00 às 23:00" };
+  // Sexta: Nobre - 20:30 às 22:30
+  if (weekday === 5) return { startHour: 20, startMinute: 30, endHour: 22, endMinute: 30, label: "20:30 às 22:30" };
+  // Sábado: Nobre - 20:30 às 01:00 (dia seguinte)
+  if (weekday === 6) return { startHour: 20, startMinute: 30, endHour: 25, endMinute: 0, label: "20:30 às 01:00" };
+
   return null;
 }
 
@@ -403,6 +415,7 @@ async function updateDailyPeaks(currentSnapshot) {
     const dateKey = currentSnapshot.spDate;
     let dayPeak = await PeakModel.findOne({ date: dateKey });
     let hasChange = false;
+    const nowTs = currentSnapshot.timestamp;
 
     if (!dayPeak) {
       hasChange = true;
@@ -437,20 +450,42 @@ async function updateDailyPeaks(currentSnapshot) {
       }
     }
 
-    const isPrime = isPrimeTimeSnapshot(currentSnapshot);
-
+    // 1. Atualização de Pico Geral (sempre no dia atual)
     if ((currentSnapshot.totalClients || 0) > (dayPeak.total.peak || 0)) {
       dayPeak.total.peak = currentSnapshot.totalClients || 0;
       dayPeak.total.peakTime = currentSnapshot.spTime;
-      dayPeak.total.peakAt = currentSnapshot.timestamp;
+      dayPeak.total.peakAt = nowTs;
       hasChange = true;
     }
 
-    if (isPrime && (currentSnapshot.totalClients || 0) > (dayPeak.total.primePeak || 0)) {
-      dayPeak.total.primePeak = currentSnapshot.totalClients || 0;
-      dayPeak.total.primePeakTime = currentSnapshot.spTime;
-      dayPeak.total.primePeakAt = currentSnapshot.timestamp;
-      hasChange = true;
+    // 2. Atualização de Pico Prime (Evento) com suporte a rollover
+    const weekday = getSaoPauloWeekday(new Date(nowTs));
+    const winToday = getPrimeTimeWindow(null, weekday);
+    const currentMins = currentSnapshot.hour * 60 + currentSnapshot.minute;
+
+    // Caso A: Janela de hoje
+    if (winToday && currentMins >= (winToday.startHour * 60 + winToday.startMinute) && currentMins < (winToday.endHour * 60 + winToday.endMinute)) {
+      if (updatePrimePeaksInDoc(dayPeak, currentSnapshot)) hasChange = true;
+    }
+    // Caso B: Janela de ontem (rollover)
+    else if (currentSnapshot.hour < 4) {
+      const yesterday = new Date(nowTs - 24 * 60 * 60 * 1000);
+      const winY = getPrimeTimeWindow(null, getSaoPauloWeekday(yesterday));
+      if (winY && winY.endHour > 24) {
+        const minsRollover = (currentSnapshot.hour + 24) * 60 + currentSnapshot.minute;
+        if (minsRollover >= (winY.startHour * 60 + winY.startMinute) && minsRollover < (winY.endHour * 60 + winY.endMinute)) {
+           const yParts = getSaoPauloParts(yesterday);
+           const yKey = `${yParts.year}-${String(yParts.month).padStart(2, '0')}-${String(yParts.day).padStart(2, '0')}`;
+           const yDoc = await PeakModel.findOne({ date: yKey });
+           if (yDoc) {
+             if (updatePrimePeaksInDoc(yDoc, currentSnapshot)) {
+               yDoc.markModified('total');
+               yDoc.markModified('cities');
+               await yDoc.save();
+             }
+           }
+        }
+      }
     }
 
     for (const cityConfig of FIVEM_CITIES) {
@@ -461,12 +496,8 @@ async function updateDailyPeaks(currentSnapshot) {
       if ((cityData.clients || 0) > (cityPeak.peak || 0)) {
         cityPeak.peak = cityData.clients || 0;
         cityPeak.peakTime = currentSnapshot.spTime;
-        cityPeak.peakAt = currentSnapshot.timestamp;
-      }
-      if (isPrime && (cityData.clients || 0) > (cityPeak.primePeak || 0)) {
-        cityPeak.primePeak = cityData.clients || 0;
-        cityPeak.primePeakTime = currentSnapshot.spTime;
-        cityPeak.primePeakAt = currentSnapshot.timestamp;
+        cityPeak.peakAt = nowTs;
+        hasChange = true;
       }
     }
 
@@ -482,6 +513,30 @@ async function updateDailyPeaks(currentSnapshot) {
     console.error("[FIVEM_RETENTION] Erro ao atualizar picos diários:", e);
     return false;
   }
+}
+
+/**
+ * Helper interno para atualizar picos de horário nobre em um documento
+ */
+function updatePrimePeaksInDoc(peakDoc, snapshot) {
+  let changed = false;
+  if ((snapshot.totalClients || 0) > (peakDoc.total.primePeak || 0)) {
+    peakDoc.total.primePeak = snapshot.totalClients || 0;
+    peakDoc.total.primePeakTime = snapshot.spTime;
+    peakDoc.total.primePeakAt = snapshot.timestamp;
+    changed = true;
+  }
+  for (const cityKey in snapshot.cities) {
+    const cityData = snapshot.cities[cityKey];
+    const cityPeak = peakDoc.cities[cityKey];
+    if (cityPeak && (cityData.clients || 0) > (cityPeak.primePeak || 0)) {
+      cityPeak.primePeak = cityData.clients || 0;
+      cityPeak.primePeakTime = snapshot.spTime;
+      cityPeak.primePeakAt = snapshot.timestamp;
+      changed = true;
+    }
+  }
+  return changed;
 }
 
 
@@ -804,10 +859,12 @@ async function buildEmbeds(client, currentSnapshot) {
     .setDescription(`Janela de análise: **${primeWindow.label}** (pode variar por cidade)\n\n`);
 
   const focusItems = [
-    { key: "maresia", name: "Maresia", emoji: "🌊", days: [1], label: "20:00 às 23:00" }, // Segunda
-    { key: "grande",  name: "Grande",  emoji: "🌆", days: [2], label: "21:00 às 00:00" }, // Terça
-    { key: "santa",   name: "Santa",   emoji: "🏙️", days: [3], label: "20:00 às 23:00" }, // Quarta
-    { key: "nobre",   name: "Nobre",   emoji: "👑", days: [4, 5, 6], label: "20:00 às 23:00" }, // Qui, Sex, Sáb
+    { key: "maresia", name: "Maresia", emoji: "🌊", days: [1], label: "20:30 às 22:00" }, // Segunda
+    { key: "grande",  name: "Grande",  emoji: "🌆", days: [2], label: "23:00 às 01:00" }, // Terça
+    { key: "santa",   name: "Santa",   emoji: "🏙️", days: [3], label: "20:30 às 22:00" }, // Quarta
+    { key: "nobre",   name: "Nobre (Qui)", emoji: "👑", days: [4], label: "21:00 às 23:00" },
+    { key: "nobre",   name: "Nobre (Sex)", emoji: "👑", days: [5], label: "20:30 às 22:30" },
+    { key: "nobre",   name: "Nobre (Sab)", emoji: "👑", days: [6], label: "20:30 às 01:00" },
     { key: "total",   name: "Geral (Rede)", emoji: "🌐", days: [0], label: "20:00 às 23:00" }  // Domingo
   ];
 
