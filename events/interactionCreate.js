@@ -9,6 +9,7 @@ import { focoSemanaisHandleInteraction } from './focoSemanais.js';
 import { provasAdvHandleInteraction } from './provasAdv.js';
 import { blacklistFacsHandleInteraction } from './blacklistFacs.js';
 import { cronogramaCreatorsHandleInteraction } from './cronogramaCreators.js';
+import { confirmacaoPresencaHandleInteraction } from './confirmacaoPresenca.js';
 import { MessageFlags } from 'discord.js';
 
 // Ignora tudo do fluxo do Pedir Set (tratado no index.js)
@@ -37,6 +38,9 @@ export default {
 
       // ✅ Cronograma Creators
       if (await cronogramaCreatorsHandleInteraction(interaction, interaction.client)) return;
+
+      // ✅ Confirmação de Presença
+      if (await confirmacaoPresencaHandleInteraction(interaction, interaction.client)) return;
 
       // ✅ VIP/Rolepass Registro
       if (await vipRegistroHandleInteraction(interaction, interaction.client)) return;

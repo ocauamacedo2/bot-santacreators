@@ -529,5 +529,26 @@ export async function confirmacaoPresencaHandleInteraction(interaction, client) 
     }
   }
 
+  // 8. Botão Toggle Window (Admin)
+  if (interaction.isButton() && interaction.customId === "presenca_toggle_window") {
+    if (!checkPerms(interaction.member, "ADMIN")) {
+      return interaction.reply({ content: "🚫 Apenas admins autorizados podem alternar o horário.", ephemeral: true });
+    }
+
+    const now = getNowSP();
+    const day = now.getDay();
+    if (day !== 4 && day !== 6) { // Quinta=4, Sábado=6
+      return interaction.reply({ content: "⏳ A troca de horário só é permitida na **Quinta** e no **Sábado**.", ephemeral: true });
+    }
+
+    let state = loadState();
+    state.activeWindow = state.activeWindow === 1 ? 2 : 1;
+    saveState(state);
+    await updatePanel(client);
+
+    const newTxt = state.activeWindow === 1 ? "19h às 21h" : "22h às 00h";
+    return interaction.reply({ content: `✅ Horário de confirmação alternado para: **${newTxt}**.`, ephemeral: true });
+  }
+
   return false;
 }
