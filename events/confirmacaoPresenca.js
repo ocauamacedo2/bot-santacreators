@@ -31,8 +31,6 @@ const FACS_FILE_DATA = path.join(DATA_DIR, "facs_semanais.json");
 
 // Horários permitidos (Quinta, Sexta, Sábado das 19h às 21h)
 const ALLOWED_DAYS = [4, 5, 6]; // 0=Dom, 1=Seg, ..., 4=Qui, 5=Sex, 6=Sab
-const ALLOWED_HOUR_START = 19;
-const ALLOWED_HOUR_END = 21; // Até 20:59
 
 // Permissões: Quem pode confirmar (Vai/Não Vai)
 const CONFIRM_ROLES = [
@@ -70,10 +68,10 @@ function ensureDir() {
 function loadState() {
   ensureDir();
   try {
-    if (!fs.existsSync(PRESENCA_FILE)) return { messageId: null, statuses: {}, lastResetDate: null };
+    if (!fs.existsSync(PRESENCA_FILE)) return { messageId: null, statuses: {}, lastResetDate: null, activeWindow: 1 };
     return JSON.parse(fs.readFileSync(PRESENCA_FILE, "utf8"));
   } catch {
-    return { messageId: null, statuses: {}, lastResetDate: null };
+    return { messageId: null, statuses: {}, lastResetDate: null, activeWindow: 1 };
   }
 }
 
@@ -126,9 +124,17 @@ function isWindowOpen() {
 
   // Verifica dia
   if (!ALLOWED_DAYS.includes(day)) return false;
-  // Verifica hora (16:00 até 18:59)
-  if (hour >= ALLOWED_HOUR_START && hour < ALLOWED_HOUR_END) return true;
-  
+
+  const state = loadState();
+  const window = state.activeWindow || 1;
+
+  // Janela 1: 19h às 21h | Janela 2: 22h às 00h
+  if (window === 1) {
+    if (hour >= 19 && hour < 21) return true;
+  } else {
+    if (hour >= 22 && hour < 24) return true;
+  }
+
   return false;
 }
 
@@ -188,8 +194,11 @@ function syncOrgs(state) {
 function buildPanelEmbed(state) {
   const orgs = Object.keys(state.statuses).sort(); // Ordem alfabética/numérica
   
+  const window = state.activeWindow || 1;
+  const windowTxt = window === 1 ? "19h às 21h" : "22h às 00h";
+
   let description = `**📅 Data:** ${getNowSP().toLocaleDateString("pt-BR")}\n`;
-  description += `**⏰ Horário de Confirmação:** Qui/Sex/Sáb das 19h às 21h\n\n`;
+  description += `**⏰ Horário de Confirmação:** Qui/Sex/Sáb das ${windowTxt}\n\n`;
   
   const statusCount = { YES: 0, NO: 0, PENDING: 0 };
 
@@ -254,6 +263,10 @@ function buildPanelRows() {
     new ButtonBuilder()
       .setCustomId("presenca_admin_remove")
       .setLabel("🗑️ Resetar Org Específica")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId("presenca_toggle_window")
+      .setLabel("🕒 Alternar Horário (Admin)")
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
       .setCustomId("presenca_refresh")
