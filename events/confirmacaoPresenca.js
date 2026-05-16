@@ -361,7 +361,7 @@ export async function confirmacaoPresencaHandleInteraction(interaction, client) 
       return interaction.reply({ content: "🚫 Você não tem permissão para alterar presenças.", ephemeral: true });
     }
 
-    const state = loadState();
+    let state = loadState();
     const isUserBypass = interaction.user.id === "660311795327828008";
 
     // Checa horário (Ignora para o seu ID)
@@ -408,7 +408,7 @@ export async function confirmacaoPresencaHandleInteraction(interaction, client) 
     const status = interaction.customId.split("_")[2]; // YES ou NO
     const input = interaction.fields.getTextInputValue("org_input").trim().toLowerCase();
     
-    let state = loadState();
+    // Removida redeclaração duplicada de 'state' que causava erro
     state = syncOrgs(state); // Garante sync antes de buscar
 
     // Busca a ORG (pelo ID ou Nome)
