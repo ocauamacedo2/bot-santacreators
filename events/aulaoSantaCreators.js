@@ -20,6 +20,10 @@ const AULAO_CONFIG = {
   // Configuração do Aulão 2 (Responsáveis/Hierarquia)
   BTN_START_RESP_ID: "btn_start_aulao_resp",
   BTN_NEXT_RESP_PREFIX: "btn_aulao_resp_next_",
+
+  // Configuração do Aulão 3 (MKT Creators)
+  BTN_START_MKT_ID: "btn_start_aulao_mkt",
+  BTN_NEXT_MKT_PREFIX: "btn_aulao_mkt_next_",
 };
 
 // Imagens e Cores
@@ -30,6 +34,12 @@ const IMGS = {
     "https://media.discordapp.net/attachments/1362477839944777889/1368084293905285170/sc2.png",
   CHART_PLACEHOLDER:
     "https://quickchart.io/chart?c=%7B%22type%22%3A%22bar%22%2C%22data%22%3A%7B%22labels%22%3A%5B%22Semana%201%22%2C%22Semana%202%22%2C%22Semana%203%22%2C%22Atual%22%5D%2C%22datasets%22%3A%5B%7B%22label%22%3A%22ORGs%20Aprovadas%22%2C%22data%22%3A%5B25%2C32%2C38%2C45%5D%2C%22backgroundColor%22%3A%5B%22%23fee75c%22%2C%22%23faa61a%22%2C%22%23faa61a%22%2C%22%2357f287%22%5D%7D%5D%7D%2C%22options%22%3A%7B%22legend%22%3A%7B%22display%22%3Afalse%7D%2C%22title%22%3A%7B%22display%22%3Atrue%2C%22text%22%3A%22Exemplo%20Visual%20-%20Gr%C3%A1fico%20de%20Desempenho%22%2C%22fontColor%22%3A%22%23fff%22%7D%7D%7D&width=500&height=300&backgroundColor=transparent",
+  MKT_CHART_METRICAS:
+    "https://quickchart.io/chart?c=%7B%22type%22%3A%22bar%22%2C%22data%22%3A%7B%22labels%22%3A%5B%22Manager%22%2C%22Social%22%2C%22Eventos%22%2C%22Poderes%22%5D%2C%22datasets%22%3A%5B%7B%22label%22%3A%22Meta%20Alcan%C3%A7ada%22%2C%22data%22%3A%5B90%2C85%2C95%2C100%5D%2C%22backgroundColor%22%3A%22%232ecc71%22%7D%5D%7D%7D&width=500&height=300&backgroundColor=transparent",
+  MKT_CHART_PROGRESSO:
+    "https://quickchart.io/chart?c=%7B%22type%22%3A%22line%22%2C%22data%22%3A%7B%22labels%22%3A%5B%22M%C3%AAs%201%22%2C%22M%C3%AAs%202%22%2C%22M%C3%AAs%203%22%5D%2C%22datasets%22%3A%5B%7B%22label%22%3A%22Evolu%C3%A7%C3%A3o%22%2C%22data%22%3A%5B10%2C40%2C85%5D%2C%22borderColor%22%3A%22%23ff009a%22%2C%22fill%22%3Afalse%7D%5D%7D%7D&width=500&height=300&backgroundColor=transparent",
+  MKT_CHART_RETENCAO:
+    "https://quickchart.io/chart?c=%7B%22type%22%3A%22doughnut%22%2C%22data%22%3A%7B%22labels%22%3A%5B%22Ativos%22%2C%22Pausados%22%5D%2C%22datasets%22%3A%5B%7B%22data%22%3A%5B80%2C20%5D%2C%22backgroundColor%22%3A%5B%22%233498db%22%2C%22%23e74c3c%22%5D%7D%5D%7D%7D&width=500&height=300&backgroundColor=transparent",
 };
 
 const COLORS = {
@@ -510,6 +520,512 @@ const MODULOS_RESP = [
 ];
 
 // =====================================================
+// [AULÃO 3] MKT CREATORS (Certificação Completa)
+// =====================================================
+const SLIDE_CONTENT_MKT = [
+  [
+    "## 🎓 MÓDULO 1 — O QUE É O CERTIFICADO MKT CREATORS",
+    "",
+    "**✅ Validação de Competência**",
+    "O certificado valida que você domina os sistemas da empresa e está apto a operar com excelência.",
+    "",
+    "**🧠 Mais que um Cargo**",
+    "• Não é apenas um título, é uma **responsabilidade**.",
+    "• Você representa a imagem da SantaCreators perante a comunidade e parceiros.",
+    "",
+    "**🎯 O que você deve dominar:**",
+    "• Atendimento ao cliente e suporte.",
+    "• Operação técnica de botões e sistemas.",
+    "• Condução de entrevistas e gestão de cargos.",
+    "• Postura, cultura e regras de RP.",
+  ].join("\n"),
+
+  [
+    "## 💜 MÓDULO 2 — CULTURA SANTACREATORS",
+    "",
+    "**🤝 Seja Gente Boa**",
+    "A base da nossa empresa é o respeito e a parceria.",
+    "",
+    "**🚫 O que nos afasta:**",
+    "• **Ego:** Ninguém é maior que a estrutura.",
+    "• **Fuxico:** Fofocas destroem o ambiente e não agregam valor.",
+    "• **Má Conduta:** Atitudes tóxicas geram afastamento imediato.",
+    "",
+    "**⚡ Maturidade**",
+    "Quem tem acesso a ferramentas de gestão precisa agir com equilíbrio e seriedade.",
+  ].join("\n"),
+
+  [
+    "## 🛑 MÓDULO 3 — REGRA DE OURO DOS BOTÕES",
+    "",
+    "**⚠️ NÃO CLIQUE POR CURIOSIDADE**",
+    "Nossos botões executam ações em tempo real no banco de dados.",
+    "",
+    "**📑 Rastro Digital**",
+    "• Todo botão gera um **log** com seu nome e horário.",
+    "• Erros operacionais afetam pagamentos, rankings e métricas estratégicas.",
+    "",
+    "**🧠 Obligatoriedade**",
+    "> **Se não entende 100% da função: PERGUNTE.**",
+    "Negligência técnica é passível de punição.",
+  ].join("\n"),
+
+  [
+    "## ⚙️ MÓDULO 4 — SISTEMAS PRINCIPAIS DO MKT",
+    "",
+    "Conheça seus locais de trabalho:",
+    "",
+    "• **Alinhamentos:** [Clique aqui](https://discord.com/channels/1262262852782129183/1425256185707233301)",
+    "• **Pagamentos:** [Clique aqui](https://discord.com/channels/1262262852782129183/1387922662134775818)",
+    "• **Registro Manager:** [Clique aqui](https://discord.com/channels/1262262852782129183/1392680204517769277)",
+    "• **ORGs Não Convidadas:** [Clique aqui](https://discord.com/channels/1262262852782129183/1465142628839456829)",
+    "• **ORGs Confirmadas:** [Clique aqui](https://discord.com/channels/1262262852782129183/1400280714548744252)",
+    "• **Convite DM Líderes:** [Clique aqui](https://discord.com/channels/1262262852782129183/1414718856542421052)",
+    "• **Poderes em Eventos:** [Clique aqui](https://discord.com/channels/1262262852782129183/1392618646630568076)",
+    "• **Poderes Diários:** [Clique aqui](https://discord.com/channels/1262262852782129183/1374066813171929218)",
+  ].join("\n"),
+
+  [
+    "## 🎙️ MÓDULO 5 — ENTREVISTAS",
+    "",
+    "**❓ Comando `!perguntas`**",
+    "• Use **apenas** dentro de tickets de entrevista.",
+    "• É proibido o uso em canais públicos ou de suporte.",
+    "",
+    "**📝 Correção e IA**",
+    "• O candidato **não pode** usar IA ou copiar respostas.",
+    "• Use `!correcao <números>` para apontar erros (Ex: `!correcao 1 5 10`).",
+    "",
+    "**🤝 Papel do Entrevistador**",
+    "Motive o candidato e explique a importância da nossa cultura.",
+  ].join("\n"),
+
+  [
+    "## 👔 MÓDULO 6 — GESTÃO DE CARGOS",
+    "",
+    "Operação de cargos via comandos:",
+    "",
+    "• `!addcargo <@cargo> <@user>` — Adicionar.",
+    "• `!remcargo <@cargo> <@user>` — Remover.",
+    "• `!criarcargo <Nome> | <Cor>` — Novo cargo.",
+    "• `!copycargo <@cargo>` — Clonar permissões.",
+    "",
+    "**📍 Local Correto:** Canal **GERAL BOT** Aqui.",
+    "",
+    "**⚠️ Regras:** Respeite a hierarquia e **nunca** mexa em cargos protegidos.",
+  ].join("\n"),
+
+  [
+    "## 📊 MÓDULO 7 — ORGANIZAÇÃO E MANAGERS",
+    "",
+    "**🗓️ Controle de ORGs**",
+    "• Diferencie ORGs confirmadas de não convidadas.",
+    "• O Registro Manager é o coração das nossas métricas semanais.",
+    "",
+    "**🎯 Qualidade da Informação**",
+    "• Dados errados sabotam a estratégia da empresa.",
+    "• Ser Manager não é só 'clicar', é acompanhar o desenvolvimento da parceria.",
+  ].join("\n"),
+
+  [
+    "## 🏙️ MÓDULO 8 — CONTRATAÇÃO IN-GAME",
+    "",
+    "Siga o fluxo padrão ao recrutar na cidade:",
+    "",
+    "1. Encontre o cidadão na SantaCreators.",
+    "2. Realize a contratação técnica.",
+    "3. **Apresentação:** Mostre o prédio e as instalações.",
+    "4. **Explicação:** Baús, garagens, regras de imersão.",
+    "5. **Regras:** Repasse o básico da cidade e conduta.",
+    "6. **Cultura:** Oriente sobre a postura esperada.",
+  ].join("\n"),
+
+  [
+    "## 🛠️ MÓDULO 9 — SUPORTE",
+    "",
+    "**🤝 Atendimento Premium**",
+    "• Empatia e escuta ativa são obrigatórias.",
+    "• Transparência no tempo de resposta e agradecimento final.",
+    "",
+    "**💻 Slash Commands Úteis:**",
+    "• `/filternewbie` | `/propmanager` | `/qru` | `/sourceid` | `/wallconfig2`",
+  ].join("\n"),
+
+  [
+    "## 🧑‍💼 MÓDULO 10 — RESPONSABILIDADE",
+    "",
+    "**🛡️ Ownership (Dono do Problema)**",
+    "• Nunca use 'não tenho autoridade' como desculpa.",
+    "• Coordenação e Responsáveis devem ter **iniciativa**.",
+    "• Chegue com a **solução**, não apenas com o problema.",
+    "• Se errou, admita e corrija imediatamente.",
+  ].join("\n"),
+
+  [
+    "## 📈 MÓDULO 11 — DASHBOARDS E MÉTRICAS",
+    "",
+    "**📊 Inteligência de Dados**",
+    "• Nossos gráficos (Manager, Social Media, Eventos) são alimentados pelos seus registros.",
+    "",
+    "**🎨 Sinalização:**",
+    "• 🟢 Verde: Crescimento / Meta batida.",
+    "• 🟡 Amarelo: Alerta / Atenção.",
+    "• 🔴 Vermelho: Queda crítica.",
+    "",
+    "Métricas decidem promoções e correções de rota.",
+  ].join("\n"),
+
+  [
+    "## 🚫 MÓDULO 12 — USO DE PODERES",
+    "",
+    "**⚠️ TOLERÂNCIA ZERO PARA ABUSO**",
+    "• Abuso de poder gera **BAN e BLACKLIST PERMANENTE**.",
+    "• NC (Noclip) apenas em locais escondidos.",
+    "• Não entre/saia do NC na frente de players.",
+    "• Wall apenas em serviço no NC. Nunca AFK.",
+    "• **Fix/DV:** Apenas em eventos oficiais.",
+    "",
+    "**💡 Regra Mental:** Em RP, esqueça que você possui poderes.",
+  ].join("\n"),
+
+  [
+    "## ⚡ MÓDULO 13 — CONDUTA COM PODER",
+    "",
+    "**🛠️ Ferramentas Administrativas:**",
+    "• **WALL:** Ver players (apenas no NC).",
+    "• **H:** Apenas urgência extrema.",
+    "• **GOD:** Bug comprovado ou falta de paramédico.",
+    "• **ADV/BAN:** Apenas com provas/clipes.",
+    "• **TPTO / TPTOME:** Respeite a imersão do player.",
+    "• **TPCDS:** Teleporte para local de crime.",
+  ].join("\n"),
+
+  [
+    "## 🔫 MÓDULO 14 — REGRAS DE RP E CIDADE",
+    "",
+    "Domine o básico da rua:",
+    "",
+    "• Voz de assalto clara e rendição ('desce e quebra').",
+    "• **Zonas:** Sul (Pistolas) | Norte (Liberado).",
+    "• **Safe Zones:** Áreas populosas proibidas para ações.",
+    "• **Conduta:** Não quebrar RP, gravar tudo, blips e tempo de procurado (10min).",
+  ].join("\n"),
+
+  [
+    "## 👑 MÓDULO 15 — PERFIL DE UM BOM LÍDER",
+    "",
+    "**🌟 Liderança por Influência**",
+    "• Saiba ouvir e conversar antes de impor.",
+    "• Entenda as dificuldades dos seus auxiliares.",
+    "• Passe a cultura de forma clara.",
+    "• **Presença:** Esteja em call e ajude a empresa a crescer.",
+  ].join("\n"),
+
+  [
+    "## 🎧 MÓDULO 16 — CALLS E RETENÇÃO",
+    "",
+    "**📍 Retenção é Prioridade**",
+    "• Call SC: Resolve problemas das áreas.",
+    "• Call Liderança: Problemas macro da cidade.",
+    "",
+    "**⏰ Horários de Foco:**",
+    "• 16:00 às 23:00",
+    "• 00:40 às 02:30",
+    "Organize sua equipe para cobrir as 24 horas.",
+  ].join("\n"),
+
+  [
+    "## 🎯 MÓDULO 17 — DELEGAÇÃO (CREATOR MASTER)",
+    "",
+    "**🏆 O Próximo Passo**",
+    "1. Monte sua gestão abaixo de você.",
+    "2. Treine sucessores e recicle membros.",
+    "3. Tenha coragem para alinhar ou remover quem não soma.",
+    "4. Garanta que a SantaCreators rode sozinha nos horários de pico.",
+  ].join("\n"),
+
+  [
+    "## 🎓 MÓDULO 18 — CERTIFICAÇÃO FINAL",
+    "",
+    "**Conclusão da Formação MKT Creators**",
+    "",
+    "A partir de agora, seu acesso representa **confiança**.",
+    "Postura, responsabilidade e conhecimento técnico são seus novos pilares.",
+    "",
+    "✅ **Você concluiu o Aulão MKT Creators.**",
+    "",
+    "*SantaCreators — Liderança com Estrutura.*",
+  ].join("\n"),
+];
+
+const MODULOS_MKT = [
+  new EmbedBuilder().setColor(COLORS.ROXO_SC).setTitle("🎓 MÓDULO 1 — CERTIFICADO MKT CREATORS").setDescription("\u200b").setImage(IMGS.BANNER).setThumbnail(IMGS.ICON),
+  new EmbedBuilder().setColor(COLORS.ROSA_SC).setTitle("💜 MÓDULO 2 — CULTURA SANTACREATORS").setDescription("\u200b").setImage(IMGS.BANNER).setThumbnail(IMGS.ICON),
+  new EmbedBuilder().setColor(COLORS.AMARELO_WARN).setTitle("🛑 MÓDULO 3 — REGRA DE OURO DOS BOTÕES").setDescription("\u200b").setImage(IMGS.BANNER).setThumbnail(IMGS.ICON),
+  new EmbedBuilder().setColor(COLORS.AZUL_CLARO).setTitle("⚙️ MÓDULO 4 — SISTEMAS PRINCIPAIS").setDescription("\u200b").setImage(IMGS.BANNER).setThumbnail(IMGS.ICON),
+  new EmbedBuilder().setColor(COLORS.VERDE_OK).setTitle("🎙️ MÓDULO 5 — ENTREVISTAS").setDescription("\u200b").setImage(IMGS.BANNER).setThumbnail(IMGS.ICON),
+  new EmbedBuilder().setColor(COLORS.DARK).setTitle("👔 MÓDULO 6 — GESTÃO DE CARGOS").setDescription("\u200b").setImage(IMGS.BANNER).setThumbnail(IMGS.ICON),
+  new EmbedBuilder().setColor(COLORS.COORD_BLUE).setTitle("📊 MÓDULO 7 — ORGANIZAÇÃO E MANAGERS").setDescription("\u200b").setImage(IMGS.MKT_CHART_METRICAS).setThumbnail(IMGS.ICON),
+  new EmbedBuilder().setColor(COLORS.RESP_PINK).setTitle("🏙️ MÓDULO 8 — CONTRATAÇÃO IN-GAME").setDescription("\u200b").setImage(IMGS.BANNER).setThumbnail(IMGS.ICON),
+  new EmbedBuilder().setColor(COLORS.AZUL_CLARO).setTitle("🛠️ MÓDULO 9 — SUPORTE").setDescription("\u200b").setImage(IMGS.BANNER).setThumbnail(IMGS.ICON),
+  new EmbedBuilder().setColor(COLORS.VERDE_OK).setTitle("🧑‍💼 MÓDULO 10 — RESPONSABILIDADE").setDescription("\u200b").setImage(IMGS.BANNER).setThumbnail(IMGS.ICON),
+  new EmbedBuilder().setColor(COLORS.GOLD).setTitle("📈 MÓDULO 11 — DASHBOARDS E MÉTRICAS").setDescription("\u200b").setImage(IMGS.MKT_CHART_PROGRESSO).setThumbnail(IMGS.ICON),
+  new EmbedBuilder().setColor(COLORS.VERMELHO_ERR).setTitle("🚫 MÓDULO 12 — USO DE PODERES").setDescription("\u200b").setImage(IMGS.BANNER).setThumbnail(IMGS.ICON),
+  new EmbedBuilder().setColor(COLORS.VERMELHO_ERR).setTitle("⚡ MÓDULO 13 — CONDUTA COM PODER").setDescription("\u200b").setImage(IMGS.BANNER).setThumbnail(IMGS.ICON),
+  new EmbedBuilder().setColor(COLORS.AMARELO_WARN).setTitle("🔫 MÓDULO 14 — REGRAS DE RP E CIDADE").setDescription("\u200b").setImage(IMGS.BANNER).setThumbnail(IMGS.ICON),
+  new EmbedBuilder().setColor(COLORS.AMARELO_WARN).setTitle("👑 MÓDULO 15 — PERFIL DE UM BOM LÍDER").setDescription("\u200b").setImage(IMGS.BANNER).setThumbnail(IMGS.ICON),
+  new EmbedBuilder().setColor(COLORS.AZUL_CLARO).setTitle("🎧 MÓDULO 16 — CALLS E RETENÇÃO").setDescription("\u200b").setImage(IMGS.MKT_CHART_RETENCAO).setThumbnail(IMGS.ICON),
+  new EmbedBuilder().setColor(COLORS.GOLD).setTitle("🎯 MÓDULO 17 — DELEGAÇÃO MASTER").setDescription("\u200b").setImage(IMGS.BANNER).setThumbnail(IMGS.ICON),
+  new EmbedBuilder().setColor(COLORS.ROSA_SC).setTitle("🎓 MÓDULO 18 — CERTIFICAÇÃO FINAL").setDescription("\u200b").setImage(IMGS.BANNER).setThumbnail(IMGS.ICON),
+];
+
+// =====================================================
+// [AULÃO 3] MKT CREATORS (Certificação Completa)
+// =====================================================
+const SLIDE_CONTENT_MKT = [
+  [
+    "## 🎓 MÓDULO 1 — O QUE É O CERTIFICADO MKT CREATORS",
+    "",
+    "**✅ Validação de Competência**",
+    "O certificado valida que você domina os sistemas da empresa e está apto a operar com excelência.",
+    "",
+    "**🧠 Mais que um Cargo**",
+    "• Não é apenas um título, é uma **responsabilidade**.",
+    "• Você representa a imagem da SantaCreators perante a comunidade e parceiros.",
+    "",
+    "**🎯 O que você deve dominar:**",
+    "Entendimento completo de atendimento, botões, entrevistas, suporte, cultura, regras e postura.",
+  ].join("\n"),
+
+  [
+    "## 💜 MÓDULO 2 — CULTURA SANTACREATORS",
+    "",
+    "**🤝 Seja Gente Boa**",
+    "A base da nossa empresa é o respeito, humildade e parceria.",
+    "",
+    "**🚫 O que nos afasta:**",
+    "• **Ego:** Deixar subir é o caminho rápido para o BAN.",
+    "• **Fuxico:** Fofocas não agregam e geram desligamento.",
+    "• **Maturidade:** Quem tem acesso aos sistemas precisa agir com equilíbrio.",
+    "",
+    "**⚡ Abuso de Poder:** É terminantemente proibido tirar vantagem própria.",
+  ].join("\n"),
+
+  [
+    "## 🛑 MÓDULO 3 — REGRA DE OURO DOS BOTÕES",
+    "",
+    "**⚠️ NÃO CLIQUE POR CURIOSIDADE**",
+    "Nossos botões executam ações reais em bancos de dados.",
+    "",
+    "**📑 Rastro Digital**",
+    "• Todo botão gera um **log** com seu nome e horário.",
+    "• Cliques errados afetam rankings, dashboards, pagamentos e métricas estratégicas.",
+    "",
+    "**🧠 Obligatoriedade**",
+    "> **Se não entende 100% da função: PERGUNTE antes de clicar.**",
+  ].join("\n"),
+
+  [
+    "## ⚙️ MÓDULO 4 — SISTEMAS PRINCIPAIS DO MKT",
+    "",
+    "Conheça seus locais de trabalho fundamentais:",
+    "",
+    "• **Alinhamentos:** [Acessar Canal](https://discord.com/channels/1262262852782129183/1425256185707233301)",
+    "• **Pagamentos:** [Acessar Canal](https://discord.com/channels/1262262852782129183/1387922662134775818)",
+    "• **Registro Manager:** [Acessar Canal](https://discord.com/channels/1262262852949905414/1392680204517769277)",
+    "• **ORGs Não Convidadas:** [Acessar Canal](https://discord.com/channels/1262262852782129183/1465142628839456829)",
+    "• **ORGs Confirmadas:** [Acessar Canal](https://discord.com/channels/1262262852782129183/1400280714548744252)",
+    "• **Convite DM Líderes:** [Acessar Canal](https://discord.com/channels/1262262852782129183/1414718856542421052)",
+    "• **Poderes em Eventos:** [Acessar Canal](https://discord.com/channels/1262262852782129183/1392618646630568076)",
+    "• **Poderes Diários:** [Acessar Canal](https://discord.com/channels/1262262852782129183/1374066813171929218)",
+  ].join("\n"),
+
+  [
+    "## 🎙️ MÓDULO 5 — ENTREVISTAS",
+    "",
+    "**❓ Comando `!perguntas`**",
+    "• Gera o botão de início. Use **APENAS** em tickets de entrevista.",
+    "",
+    "**📝 Comando `!correcao <números>`**",
+    "• Exemplo: `!correcao 1 5 10`.",
+    "• Use para orientar o candidato sobre questões erradas ou incompletas.",
+    "",
+    "**🤝 Postura do Entrevistador**",
+    "Motive o candidato. Verifique se ele não está usando IA ou copiando respostas. Queremos autenticidade.",
+  ].join("\n"),
+
+  [
+    "## 👔 MÓDULO 6 — GESTÃO DE CARGOS",
+    "",
+    "Comandos permitidos (respeitando hierarquia):",
+    "",
+    "• `!addcargo <@cargo> <@user>` — Adicionar cargo.",
+    "• `!remcargo <@cargo> <@user>` — Remover cargo.",
+    "• `!criarcargo <Nome> | <Cor>` — Criar novo.",
+    "• `!copycargo <@cargo>` — Copiar permissões.",
+    "",
+    "**📍 Local Obrigatório:** Canal **GERAL BOT** aqui.",
+    "",
+    "**⚠️ Importante:** Não teste comandos sem necessidade. Toda alteração gera responsabilidade.",
+  ].join("\n"),
+
+  [
+    "## 📊 MÓDULO 7 — ORGANIZAÇÃO E MANAGERS",
+    "",
+    "**🗓️ Controle de Presença**",
+    "• Diferencie organizações confirmadas de não convidadas.",
+    "• O **Registro Manager** alimenta todas as métricas da alta gestão.",
+    "",
+    "**🎯 Manager Ativo**",
+    "Manager não é só clicar, é organizar, acompanhar e garantir que os dados estejam 100% corretos.",
+  ].join("\n"),
+
+  [
+    "## 🏙️ MÓDULO 8 — CONTRATAÇÃO IN-GAME",
+    "",
+    "Procedimento Padrão:",
+    "1. Localizar o cidadão no prédio da SantaCreators.",
+    "2. Realizar a contratação técnica via painel/comando.",
+    "3. Apresentar a empresa (baús, garagens, regras de imersão).",
+    "4. Explicar conduta e regras básicas da cidade no ato da contratação.",
+  ].join("\n"),
+
+  [
+    "## 🛠️ MÓDULO 9 — SUPORTE",
+    "",
+    "**🤝 Atendimento de Excelência**",
+    "Empatia, respeito, escuta ativa, clareza e transparência.",
+    "",
+    "**💻 Comandos de Atendimento:**",
+    "• `/filternewbie` — Identificar iniciantes.",
+    "• `/propmanager` — Gestão de veículos/hackers.",
+    "• `/qru` — Áreas de disparo no mapa.",
+    "• `/sourceid` — Puxar source de hackers.",
+    "• `/wallconfig2` — Configurar visão administrativa.",
+  ].join("\n"),
+
+  [
+    "## 🧑‍💼 MÓDULO 10 — RESPONSABILIDADE",
+    "",
+    "**🛡️ Iniciativa**",
+    "• Resolva o problema em vez de apenas repassar para cima.",
+    "• Errou? Corrija e assuma. Não use 'não tenho autoridade' como desculpa.",
+    "• Coord e Resp devem chegar com a **solução**, não com o problema.",
+  ].join("\n"),
+
+  [
+    "## 📈 MÓDULO 11 — DASHBOARDS E MÉTRICAS",
+    "",
+    "**📊 Inteligência de Negócio**",
+    "• Dados reais alimentam decisões e promoções.",
+    "• 🟢 Verde: Crescimento | 🟡 Amarelo: Alerta | 🔴 Vermelho: Queda.",
+    "",
+    "Os sistemas de Manager, Social Media e Eventos são monitorados em tempo real pela alta gestão.",
+  ].join("\n"),
+
+  [
+    "## 🚫 MÓDULO 12 — USO DE PODERES",
+    "",
+    "**⚠️ TOLERÂNCIA ZERO PARA ABUSO**",
+    "• Abuso de poder = **BAN e BLACKLIST PERMANENTE**.",
+    "• NC (Noclip) apenas em locais escondidos. Nunca na frente de players.",
+    "• Wall apenas em serviço no NC. Proibido deixar Wall ligado AFK.",
+    "• **God:** Apenas em bugs comprovados ou hackers. Jamais em RP.",
+  ].join("\n"),
+
+  [
+    "## ⚡ MÓDULO 13 — CONDUTA COM PODER",
+    "",
+    "Utilize as ferramentas administrativas com consciência:",
+    "",
+    "• **WALL:** Ver players (apenas no NC).",
+    "• **TPTO / TPTOME:** Respeite a imersão e privacidade do player.",
+    "• **ADV / BAN:** Sempre acompanhados de provas e clipes.",
+    "• **TPCDS:** Teleporte para local de crime.",
+    "• **TPWAY:** Teleporte para sua marcação no GPS.",
+  ].join("\n"),
+
+  [
+    "## 🔫 MÓDULO 14 — REGRAS DE RP E CIDADE",
+    "",
+    "Domine as diretrizes de rua para orientar os membros:",
+    "",
+    "• Voz de assalto e rendição ('desce e quebra').",
+    "• **Zonas:** Sul (Pistolas) | Norte (Armas Liberadas).",
+    "• **Safe Zones:** Proibido ações em áreas populosas (praças, hospitais).",
+    "• **Sistema de Procurado:** 10 minutos de fuga permitida.",
+    "• Todos devem gravar suas ações para defesa futura.",
+  ].join("\n"),
+
+  [
+    "## 👑 MÓDULO 15 — PERFIL DE UM BOM LÍDER",
+    "",
+    "**🌟 Liderança por Exemplo**",
+    "• Saiba ouvir antes de falar. Não imponha, influencie.",
+    "• Entenda as dificuldades da sua equipe.",
+    "• Tenha a postura de um representante oficial da SantaCreators.",
+    "• **Cultura:** Seja gente boa.",
+  ].join("\n"),
+
+  [
+    "## 🎧 MÓDULO 16 — CALLS E RETENÇÃO",
+    "",
+    "**📍 Presença é Importante**",
+    "• Call SantaCreators: Resolve problemas das áreas.",
+    "• Call Liderança: Resolve problemas macro da cidade.",
+    "",
+    "**⏰ Horários de Retenção (Foco Máximo):**",
+    "• 16:00 às 23:00",
+    "• 00:40 às 02:30",
+    "Garanta que a empresa rode 24 horas por dia.",
+  ].join("\n"),
+
+  [
+    "## 🎯 MÓDULO 17 — DELEGAÇÃO (CREATOR MASTER)",
+    "",
+    "**🏆 A Próxima Etapa**",
+    "1. Monte sua gestão abaixo de você.",
+    "2. Treine sucessores e recicle membros.",
+    "3. Remova quem é ruim e alinhe quem é mediano.",
+    "4. Garanta a retenção e presença nos horários principais.",
+  ].join("\n"),
+
+  [
+    "## 🎓 MÓDULO 18 — CERTIFICAÇÃO FINAL",
+    "",
+    "**Conclusão da Formação MKT Creators**",
+    "",
+    "Você agora domina os sistemas, regras e a cultura da SantaCreators.",
+    "Lembre-se: seu acesso representa a **confiança** depositada pela alta gestão.",
+    "",
+    "✅ **Você concluiu o Aulão MKT Creators.**",
+    "",
+    "*SantaCreators — Liderança com Estrutura.*",
+  ].join("\n"),
+];
+
+const MODULOS_MKT = [
+  new EmbedBuilder().setColor(COLORS.ROXO_SC).setTitle("🎓 MÓDULO 1 — CERTIFICADO MKT CREATORS").setDescription("\u200b").setImage(IMGS.BANNER).setThumbnail(IMGS.ICON),
+  new EmbedBuilder().setColor(COLORS.ROSA_SC).setTitle("💜 MÓDULO 2 — CULTURA SANTACREATORS").setDescription("\u200b").setImage(IMGS.BANNER).setThumbnail(IMGS.ICON),
+  new EmbedBuilder().setColor(COLORS.AMARELO_WARN).setTitle("🛑 MÓDULO 3 — REGRA DE OURO DOS BOTÕES").setDescription("\u200b").setImage(IMGS.BANNER).setThumbnail(IMGS.ICON),
+  new EmbedBuilder().setColor(COLORS.AZUL_CLARO).setTitle("⚙️ MÓDULO 4 — SISTEMAS PRINCIPAIS").setDescription("\u200b").setImage(IMGS.BANNER).setThumbnail(IMGS.ICON),
+  new EmbedBuilder().setColor(COLORS.VERDE_OK).setTitle("🎙️ MÓDULO 5 — ENTREVISTAS").setDescription("\u200b").setImage(IMGS.BANNER).setThumbnail(IMGS.ICON),
+  new EmbedBuilder().setColor(COLORS.DARK).setTitle("👔 MÓDULO 6 — GESTÃO DE CARGOS").setDescription("\u200b").setImage(IMGS.BANNER).setThumbnail(IMGS.ICON),
+  new EmbedBuilder().setColor(COLORS.COORD_BLUE).setTitle("📊 MÓDULO 7 — ORGANIZAÇÃO E MANAGERS").setDescription("\u200b").setImage(IMGS.MKT_CHART_METRICAS).setThumbnail(IMGS.ICON),
+  new EmbedBuilder().setColor(COLORS.RESP_PINK).setTitle("🏙️ MÓDULO 8 — CONTRATAÇÃO IN-GAME").setDescription("\u200b").setImage(IMGS.BANNER).setThumbnail(IMGS.ICON),
+  new EmbedBuilder().setColor(COLORS.AZUL_CLARO).setTitle("🛠️ MÓDULO 9 — SUPORTE").setDescription("\u200b").setImage(IMGS.BANNER).setThumbnail(IMGS.ICON),
+  new EmbedBuilder().setColor(COLORS.VERDE_OK).setTitle("🧑‍💼 MÓDULO 10 — RESPONSABILIDADE").setDescription("\u200b").setImage(IMGS.BANNER).setThumbnail(IMGS.ICON),
+  new EmbedBuilder().setColor(COLORS.GOLD).setTitle("📈 MÓDULO 11 — DASHBOARDS E MÉTRICAS").setDescription("\u200b").setImage(IMGS.MKT_CHART_PROGRESSO).setThumbnail(IMGS.ICON),
+  new EmbedBuilder().setColor(COLORS.VERMELHO_ERR).setTitle("🚫 MÓDULO 12 — USO DE PODERES").setDescription("\u200b").setImage(IMGS.BANNER).setThumbnail(IMGS.ICON),
+  new EmbedBuilder().setColor(COLORS.VERMELHO_ERR).setTitle("⚡ MÓDULO 13 — CONDUTA COM PODER").setDescription("\u200b").setImage(IMGS.BANNER).setThumbnail(IMGS.ICON),
+  new EmbedBuilder().setColor(COLORS.AMARELO_WARN).setTitle("🔫 MÓDULO 14 — REGRAS DE RP E CIDADE").setDescription("\u200b").setImage(IMGS.BANNER).setThumbnail(IMGS.ICON),
+  new EmbedBuilder().setColor(COLORS.AMARELO_WARN).setTitle("👑 MÓDULO 15 — PERFIL DE UM BOM LÍDER").setDescription("\u200b").setImage(IMGS.BANNER).setThumbnail(IMGS.ICON),
+  new EmbedBuilder().setColor(COLORS.AZUL_CLARO).setTitle("🎧 MÓDULO 16 — CALLS E RETENÇÃO").setDescription("\u200b").setImage(IMGS.MKT_CHART_RETENCAO).setThumbnail(IMGS.ICON),
+  new EmbedBuilder().setColor(COLORS.GOLD).setTitle("🎯 MÓDULO 17 — DELEGAÇÃO MASTER").setDescription("\u200b").setImage(IMGS.BANNER).setThumbnail(IMGS.ICON),
+  new EmbedBuilder().setColor(COLORS.ROSA_SC).setTitle("🎓 MÓDULO 18 — CERTIFICAÇÃO FINAL").setDescription("\u200b").setImage(IMGS.BANNER).setThumbnail(IMGS.ICON),
+];
+
+// =====================================================
 // HELPERS
 // =====================================================
 function buildSlideContent(index, contentArray) {
@@ -562,6 +1078,64 @@ export async function aulaoHandleMessage(message, client) {
     return true;
   }
 
+  // --- AULÃO MKT CREATORS ---
+  if (content.startsWith("!aulaomkt")) {
+    if (message.author.id !== AULAO_CONFIG.ALLOWED_USER_ID) {
+      await message.reply("🚫 Apenas o administrador autorizado pode iniciar o sistema de aulão.");
+      return true;
+    }
+    if (!AULAO_CONFIG.ALLOWED_CHANNELS.includes(message.channel.id)) {
+      const channels = AULAO_CONFIG.ALLOWED_CHANNELS.map(id => `<#${id}>`).join(" ou ");
+      await message.reply(`⚠️ Este comando deve ser usado no canal ${channels}.`);
+      return true;
+    }
+
+    await message.delete().catch(() => {});
+
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(AULAO_CONFIG.BTN_START_MKT_ID)
+        .setLabel("✅ Iniciar Aulão MKT Creators")
+        .setStyle(ButtonStyle.Success)
+        .setEmoji("🎓")
+    );
+
+    await message.channel.send({
+      content: "**Painel de Controle — Aulão MKT Creators**\nClique abaixo para iniciar a formação oficial para Certificado MKT Creators.",
+      components: [row],
+    });
+    return true;
+  }
+
+  // --- AULÃO MKT CREATORS ---
+  if (content.startsWith("!aulaomkt")) {
+    if (message.author.id !== AULAO_CONFIG.ALLOWED_USER_ID) {
+      await message.reply("🚫 Apenas o administrador autorizado pode iniciar o sistema de aulão.");
+      return true;
+    }
+    if (!AULAO_CONFIG.ALLOWED_CHANNELS.includes(message.channel.id)) {
+      const channels = AULAO_CONFIG.ALLOWED_CHANNELS.map(id => `<#${id}>`).join(" ou ");
+      await message.reply(`⚠️ Este comando deve ser usado no canal ${channels}.`);
+      return true;
+    }
+
+    await message.delete().catch(() => {});
+
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(AULAO_CONFIG.BTN_START_MKT_ID)
+        .setLabel("✅ Iniciar Aulão MKT Creators")
+        .setStyle(ButtonStyle.Success)
+        .setEmoji("🎓")
+    );
+
+    await message.channel.send({
+      content: "**Painel de Controle — Aulão MKT Creators**\nClique abaixo para iniciar a formação oficial para Certificado MKT Creators.",
+      components: [row],
+    });
+    return true;
+  }
+
   // --- AULÃO RESPONSÁVEIS ---
   if (content.startsWith("!aulaoresp")) {
     if (message.author.id !== AULAO_CONFIG.ALLOWED_USER_ID) {
@@ -587,6 +1161,162 @@ export async function aulaoHandleMessage(message, client) {
     await message.channel.send({
       content: "**Painel de Controle — Aulão Hierarquia & Evolução**\nClique abaixo para iniciar a apresentação sobre cargos e responsabilidades.",
       components: [row],
+    });
+    return true;
+  }
+
+  // =====================================================
+  // FLUXO 3: AULÃO MKT CREATORS
+  // =====================================================
+
+  // 3.1 Iniciar MKT
+  if (customId === AULAO_CONFIG.BTN_START_MKT_ID) {
+    if (interaction.user.id !== AULAO_CONFIG.ALLOWED_USER_ID) {
+      await interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
+      return true;
+    }
+
+    await interaction.reply({ content: "🚀 Iniciando Aulão MKT Creators...", ephemeral: true });
+
+    const embed = MODULOS_MKT[0];
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`${AULAO_CONFIG.BTN_NEXT_MKT_PREFIX}1`)
+        .setLabel("➡️ Próximo Slide")
+        .setStyle(ButtonStyle.Primary)
+    );
+
+    await interaction.channel.send({
+      content: buildSlideContent(0, SLIDE_CONTENT_MKT),
+      embeds: [embed],
+      components: [row],
+    });
+    return true;
+  }
+
+  // 3.2 Próximo Slide MKT
+  if (customId.startsWith(AULAO_CONFIG.BTN_NEXT_MKT_PREFIX)) {
+    if (interaction.user.id !== AULAO_CONFIG.ALLOWED_USER_ID) {
+      await interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
+      return true;
+    }
+
+    const nextIndex = parseInt(customId.replace(AULAO_CONFIG.BTN_NEXT_MKT_PREFIX, ""), 10);
+
+    try { await interaction.message.edit({ components: [] }); } catch {}
+
+    if (Number.isNaN(nextIndex) || nextIndex >= MODULOS_MKT.length) {
+      // ✅ TODO: Futura implementação de Quiz Final, Certificado Automático e Cargo.
+      await interaction.reply({ content: "✅ Aulão MKT Creators finalizado!", ephemeral: true });
+      return true;
+    }
+
+    const embed = MODULOS_MKT[nextIndex];
+    const isLast = nextIndex === MODULOS_MKT.length - 1;
+
+    const components = [];
+    if (!isLast) {
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`${AULAO_CONFIG.BTN_NEXT_MKT_PREFIX}${nextIndex + 1}`)
+          .setLabel("➡️ Próximo Slide")
+          .setStyle(ButtonStyle.Primary)
+      );
+      components.push(row);
+    } else {
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId("btn_aulao_mkt_finish")
+          .setLabel("✅ Certificação concluída")
+          .setStyle(ButtonStyle.Success)
+          .setDisabled(true)
+      );
+      components.push(row);
+    }
+
+    await interaction.deferUpdate();
+    await interaction.channel.send({
+      content: buildSlideContent(nextIndex, SLIDE_CONTENT_MKT),
+      embeds: [embed],
+      components,
+    });
+    return true;
+  }
+
+  // =====================================================
+  // FLUXO 3: AULÃO MKT CREATORS
+  // =====================================================
+
+  // 3.1 Iniciar MKT
+  if (customId === AULAO_CONFIG.BTN_START_MKT_ID) {
+    if (interaction.user.id !== AULAO_CONFIG.ALLOWED_USER_ID) {
+      await interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
+      return true;
+    }
+
+    await interaction.reply({ content: "🚀 Iniciando Aulão MKT Creators...", ephemeral: true });
+
+    const embed = MODULOS_MKT[0];
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`${AULAO_CONFIG.BTN_NEXT_MKT_PREFIX}1`)
+        .setLabel("➡️ Próximo Slide")
+        .setStyle(ButtonStyle.Primary)
+    );
+
+    await interaction.channel.send({
+      content: buildSlideContent(0, SLIDE_CONTENT_MKT),
+      embeds: [embed],
+      components: [row],
+    });
+    return true;
+  }
+
+  // 3.2 Próximo Slide MKT
+  if (customId.startsWith(AULAO_CONFIG.BTN_NEXT_MKT_PREFIX)) {
+    if (interaction.user.id !== AULAO_CONFIG.ALLOWED_USER_ID) {
+      await interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
+      return true;
+    }
+
+    const nextIndex = parseInt(customId.replace(AULAO_CONFIG.BTN_NEXT_MKT_PREFIX, ""), 10);
+
+    try { await interaction.message.edit({ components: [] }); } catch {}
+
+    if (Number.isNaN(nextIndex) || nextIndex >= MODULOS_MKT.length) {
+      // ✅ TODO: Futura implementação de Quiz Final, Certificado Automático, Log de conclusão e Cargo.
+      await interaction.reply({ content: "✅ Aulão MKT Creators finalizado!", ephemeral: true });
+      return true;
+    }
+
+    const embed = MODULOS_MKT[nextIndex];
+    const isLast = nextIndex === MODULOS_MKT.length - 1;
+
+    const components = [];
+    if (!isLast) {
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`${AULAO_CONFIG.BTN_NEXT_MKT_PREFIX}${nextIndex + 1}`)
+          .setLabel("➡️ Próximo Slide")
+          .setStyle(ButtonStyle.Primary)
+      );
+      components.push(row);
+    } else {
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId("btn_aulao_mkt_finish")
+          .setLabel("✅ Certificação concluída")
+          .setStyle(ButtonStyle.Success)
+          .setDisabled(true)
+      );
+      components.push(row);
+    }
+
+    await interaction.deferUpdate();
+    await interaction.channel.send({
+      content: buildSlideContent(nextIndex, SLIDE_CONTENT_MKT),
+      embeds: [embed],
+      components,
     });
     return true;
   }
