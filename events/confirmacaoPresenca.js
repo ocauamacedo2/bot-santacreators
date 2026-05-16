@@ -363,7 +363,9 @@ export async function confirmacaoPresencaHandleInteraction(interaction, client) 
 
     // Checa horário (Bypass para Admins)
     if (!isWindowOpen() && !checkPerms(interaction.member, "ADMIN")) {
-      return interaction.reply({ content: "⏳ O sistema só aceita confirmações **Quinta, Sexta e Sábado das 19h às 21h**.", ephemeral: true });
+      const state = loadState();
+      const windowTxt = (state.activeWindow || 1) === 1 ? "19h às 21h" : "22h às 00h";
+      return interaction.reply({ content: `⏳ O sistema só aceita confirmações **Quinta, Sexta e Sábado das ${windowTxt}**.`, ephemeral: true });
     }
 
     const isConfirm = interaction.customId === "presenca_confirmar";
