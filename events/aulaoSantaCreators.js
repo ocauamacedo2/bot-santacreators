@@ -1135,85 +1135,6 @@ export async function aulaoHandleMessage(message, client) {
     });
     return true;
   }
-
-  // =====================================================
-  // FLUXO 3: AULÃO MKT CREATORS
-  // =====================================================
-
-  // 3.1 Iniciar MKT
-  if (customId === AULAO_CONFIG.BTN_START_MKT_ID) {
-    if (interaction.user.id !== AULAO_CONFIG.ALLOWED_USER_ID) {
-      await interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
-      return true;
-    }
-
-    await interaction.reply({ content: "🚀 Iniciando Aulão MKT Creators...", ephemeral: true });
-
-    const embed = MODULOS_MKT[0];
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`${AULAO_CONFIG.BTN_NEXT_MKT_PREFIX}1`)
-        .setLabel("➡️ Próximo Slide")
-        .setStyle(ButtonStyle.Primary)
-    );
-
-    await interaction.channel.send({
-      content: buildSlideContent(0, SLIDE_CONTENT_MKT),
-      embeds: [embed],
-      components: [row],
-    });
-    return true;
-  }
-
-  // 3.2 Próximo Slide MKT
-  if (customId.startsWith(AULAO_CONFIG.BTN_NEXT_MKT_PREFIX)) {
-    if (interaction.user.id !== AULAO_CONFIG.ALLOWED_USER_ID) {
-      await interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
-      return true;
-    }
-
-    const nextIndex = parseInt(customId.replace(AULAO_CONFIG.BTN_NEXT_MKT_PREFIX, ""), 10);
-
-    try { await interaction.message.edit({ components: [] }); } catch {}
-
-    if (Number.isNaN(nextIndex) || nextIndex >= MODULOS_MKT.length) {
-      // ✅ TODO: Futura implementação de Quiz Final, Certificado Automático, Log de conclusão e Cargo.
-      await interaction.reply({ content: "✅ Aulão MKT Creators finalizado!", ephemeral: true });
-      return true;
-    }
-
-    const embed = MODULOS_MKT[nextIndex];
-    const isLast = nextIndex === MODULOS_MKT.length - 1;
-
-    const components = [];
-    if (!isLast) {
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId(`${AULAO_CONFIG.BTN_NEXT_MKT_PREFIX}${nextIndex + 1}`)
-          .setLabel("➡️ Próximo Slide")
-          .setStyle(ButtonStyle.Primary)
-      );
-      components.push(row);
-    } else {
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId("btn_aulao_mkt_finish")
-          .setLabel("✅ Certificação concluída")
-          .setStyle(ButtonStyle.Success)
-          .setDisabled(true)
-      );
-      components.push(row);
-    }
-
-    await interaction.deferUpdate();
-    await interaction.channel.send({
-      content: buildSlideContent(nextIndex, SLIDE_CONTENT_MKT),
-      embeds: [embed],
-      components,
-    });
-    return true;
-  }
-
   return false;
 }
 
@@ -1373,6 +1294,84 @@ export async function aulaoHandleInteraction(interaction, client) {
     await interaction.deferUpdate();
     await interaction.channel.send({
       content: buildSlideContent(nextIndex, SLIDE_CONTENT_RESP),
+      embeds: [embed],
+      components,
+    });
+    return true;
+  }
+
+  // =====================================================
+  // FLUXO 3: AULÃO MKT CREATORS
+  // =====================================================
+
+  // 3.1 Iniciar MKT
+  if (customId === AULAO_CONFIG.BTN_START_MKT_ID) {
+    if (interaction.user.id !== AULAO_CONFIG.ALLOWED_USER_ID) {
+      await interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
+      return true;
+    }
+
+    await interaction.reply({ content: "🚀 Iniciando Aulão MKT Creators...", ephemeral: true });
+
+    const embed = MODULOS_MKT[0];
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`${AULAO_CONFIG.BTN_NEXT_MKT_PREFIX}1`)
+        .setLabel("➡️ Próximo Slide")
+        .setStyle(ButtonStyle.Primary)
+    );
+
+    await interaction.channel.send({
+      content: buildSlideContent(0, SLIDE_CONTENT_MKT),
+      embeds: [embed],
+      components: [row],
+    });
+    return true;
+  }
+
+  // 3.2 Próximo Slide MKT
+  if (customId.startsWith(AULAO_CONFIG.BTN_NEXT_MKT_PREFIX)) {
+    if (interaction.user.id !== AULAO_CONFIG.ALLOWED_USER_ID) {
+      await interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
+      return true;
+    }
+
+    const nextIndex = parseInt(customId.replace(AULAO_CONFIG.BTN_NEXT_MKT_PREFIX, ""), 10);
+
+    try { await interaction.message.edit({ components: [] }); } catch {}
+
+    if (Number.isNaN(nextIndex) || nextIndex >= MODULOS_MKT.length) {
+      // ✅ TODO: Futura implementação de Quiz Final, Certificado Automático, Log de conclusão e Cargo.
+      await interaction.reply({ content: "✅ Aulão MKT Creators finalizado!", ephemeral: true });
+      return true;
+    }
+
+    const embed = MODULOS_MKT[nextIndex];
+    const isLast = nextIndex === MODULOS_MKT.length - 1;
+
+    const components = [];
+    if (!isLast) {
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`${AULAO_CONFIG.BTN_NEXT_MKT_PREFIX}${nextIndex + 1}`)
+          .setLabel("➡️ Próximo Slide")
+          .setStyle(ButtonStyle.Primary)
+      );
+      components.push(row);
+    } else {
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId("btn_aulao_mkt_finish")
+          .setLabel("✅ Certificação concluída")
+          .setStyle(ButtonStyle.Success)
+          .setDisabled(true)
+      );
+      components.push(row);
+    }
+
+    await interaction.deferUpdate();
+    await interaction.channel.send({
+      content: buildSlideContent(nextIndex, SLIDE_CONTENT_MKT),
       embeds: [embed],
       components,
     });
