@@ -42,13 +42,13 @@ const CONFIRM_ROLES = [
 
 // Permissões: Admin (Resetar, Gerenciar)
 const ADMIN_ROLES = [
-  "1352408327983861844", // Resp Creators
-  "1262262852949905409", // Resp Influ
-  "1432806235396112386", // Tier 1
+  "1352408327983861844", // resp creators
+  "1262262852949905409", // resp influ
+  "1262262852949905408", // owner (cargo)
 ];
 const ADMIN_USERS = [
-  "1262262852949905408", // Owner
-  "660311795327828008",  // Você
+  "660311795327828008", // eu
+  "1262262852949905408", // owner (id)
 ];
 
 // Cores e Imagens
@@ -141,14 +141,17 @@ function isWindowOpen() {
 function checkPerms(member, type = "CONFIRM") {
   if (!member) return false;
   
+  const userId = member.id;
+  const roles = member.roles?.cache;
+
   // Admins sempre podem tudo
-  if (ADMIN_USERS.includes(member.id)) return true;
-  if (member.roles.cache.some(r => ADMIN_ROLES.includes(r.id))) return true;
+  if (ADMIN_USERS.includes(userId)) return true;
+  if (roles && roles.some(r => ADMIN_ROLES.includes(r.id))) return true;
 
   if (type === "ADMIN") return false; // Se chegou aqui e queria admin, nega
 
   // Checa roles de confirmação
-  return member.roles.cache.some(r => CONFIRM_ROLES.includes(r.id));
+  return roles && roles.some(r => CONFIRM_ROLES.includes(r.id));
 }
 
 function getOrgId(orgString) {
