@@ -64,6 +64,7 @@ const CANAL_LOG_REGISTRO = '1352706078621696030';
 const CANAL_AVISO_EQUIPE = '1352279622162583593';
 const CANAL_ADMINISTRACAO = '1262262853436440652';
 const CARGO_ENTREVISTA = '1353797415488196770';
+const CARGO_SEM_WL = '1430984036972494908'; // ID do cargo "SEM WL" para remoção automática
 const CARGO_SET = '1352275728476930099';
 const CARGO_EQUIPE_CREATOR = '1352429001188180039';
 const CARGO_COORDENACAO = '1352385500614234134';
@@ -362,6 +363,11 @@ export async function pedirSetHandleInteraction(interaction, client) {
 
   // BOTÃO → Abrir modal
   if (interaction.isButton() && interaction.customId === 'abrir_modal_set') {
+    // ✅ Remove o cargo SEM WL automaticamente ao clicar no botão para abrir o formulário
+    if (interaction.member.roles.cache.has(CARGO_SEM_WL)) {
+      await interaction.member.roles.remove(CARGO_SEM_WL, "Iniciou solicitação de Set").catch(() => {});
+    }
+
     const modal = new ModalBuilder()
       .setCustomId('formulario_set')
       .setTitle('📋 Solicitação de Set SantaCreators')
