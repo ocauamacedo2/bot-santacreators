@@ -361,8 +361,9 @@ export async function confirmacaoPresencaHandleInteraction(interaction, client) 
       return interaction.reply({ content: "🚫 Você não tem permissão para alterar presenças.", ephemeral: true });
     }
 
-    // Checa horário (Bypass para Admins)
-    if (!isWindowOpen() && !checkPerms(interaction.member, "ADMIN")) {
+    // Checa horário
+    // Removido o bypass de Admin para que o bloqueio funcione para todos conforme o horário selecionado
+    if (!isWindowOpen()) {
       const state = loadState();
       const windowTxt = (state.activeWindow || 1) === 1 ? "19h às 21h" : "22h às 00h";
       return interaction.reply({ content: `⏳ O sistema só aceita confirmações **Quinta, Sexta e Sábado das ${windowTxt}**.`, ephemeral: true });
@@ -393,6 +394,13 @@ export async function confirmacaoPresencaHandleInteraction(interaction, client) 
   // 3. Modal Submit (Processar Confirmação)
   if (interaction.isModalSubmit() && interaction.customId.startsWith("modal_presenca_")) {
     await interaction.deferReply({ ephemeral: true });
+
+    // Re-checa horário no submit para garantir que ninguém envie após o fechamento da janela
+    if (!isWindowOpen()) {
+      const state = loadState();
+      const windowTxt = (state.activeWindow || 1) === 1 ? "19h às 21h" : "22h às 00h";
+      return interaction.editReply(`⏳ O sistema fechou para confirmações (${windowTxt}).`);
+    }
 
     const status = interaction.customId.split("_")[2]; // YES ou NO
     const input = interaction.fields.getTextInputValue("org_input").trim().toLowerCase();
