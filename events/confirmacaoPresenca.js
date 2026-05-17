@@ -399,7 +399,7 @@ export async function confirmacaoPresencaHandleInteraction(interaction, client) 
   if (interaction.isModalSubmit() && interaction.customId.startsWith("modal_presenca_")) {
     await interaction.deferReply({ ephemeral: true });
 
-    const state = loadState();
+    let state = loadState();
     const isUserBypass = interaction.user.id === "660311795327828008";
 
     // Re-checa horário no submit (Ignora para o seu ID)
