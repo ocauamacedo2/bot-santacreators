@@ -21,6 +21,10 @@ const FIVEM_COMPARISON_TOLERANCE_MS = 10 * 60 * 1000; // 10 minutos
 const FIVEM_TIMEZONE = "America/Sao_Paulo";
 const FIVEM_RANK_MARKER_TAG = "[FIVEM_RETENTION_STATUS]";
 
+// Semana A = Quinta 00:00-01:00 / Sábado 21:00-22:00
+// Semana B = Quinta 21:00-22:00 / Sábado 00:00-01:00
+const FIVEM_EVENT_WEEK_A_START = "2026-05-17";
+
 // 🗄️ MONGODB MODELS
 const HistorySchema = new mongoose.Schema({
   timestamp: { type: Number, index: true },
@@ -41,6 +45,7 @@ const PeakSchema = new mongoose.Schema({
   total: mongoose.Schema.Types.Mixed,
   cities: mongoose.Schema.Types.Mixed,
   exact21h: mongoose.Schema.Types.Mixed, // Novo campo para players às 21:00
+  eventWindows: mongoose.Schema.Types.Mixed, // Picos separados por janela exata de evento
 });
 const PeakModel = mongoose.models.FivemRetentionPeak || mongoose.model("FivemRetentionPeak", PeakSchema);
 
@@ -168,23 +173,55 @@ export function getSaoPauloWeekday(date = new Date()) {
 /**
  * Retorna a janela de pico baseada no dia da semana
  */
-export function getPrimeTimeWindow(snapshot, customWeekday = null) {
-  const weekday = customWeekday !== null ? customWeekday : getSaoPauloWeekday(new Date(snapshot.timestamp));
+function getWeekModeSP(date = new Date()) {
+  const currentWeekStart = getWeekKeySP(date);
+  const current = new Date(`${currentWeekStart}T00:00:00-03:00`).getTime();
+  const anchor = new Date(`${FIVEM_EVENT_WEEK_A_START}T00:00:00-03:00`).getTime();
 
-  // Domingo: Geral (Rede) - 20:00 às 23:00
-  if (weekday === 0) return { startHour: 20, startMinute: 0, endHour: 23, endMinute: 0, label: "20:00 às 23:00" };
-  // Segunda: Maresia - 20:30 às 22:00
-  if (weekday === 1) return { startHour: 20, startMinute: 30, endHour: 22, endMinute: 0, label: "20:30 às 22:00" };
-  // Terça: Grande - 23:00 às 01:00 (dia seguinte)
-  if (weekday === 2) return { startHour: 23, startMinute: 0, endHour: 25, endMinute: 0, label: "23:00 às 01:00" };
-  // Quarta: Santa - 20:30 às 22:00
-  if (weekday === 3) return { startHour: 20, startMinute: 30, endHour: 22, endMinute: 0, label: "20:30 às 22:00" };
-  // Quinta: Nobre - 21:00 às 23:00
-  if (weekday === 4) return { startHour: 21, startMinute: 0, endHour: 23, endMinute: 0, label: "21:00 às 23:00" };
-  // Sexta: Nobre - 20:30 às 22:30
-  if (weekday === 5) return { startHour: 20, startMinute: 30, endHour: 22, endMinute: 30, label: "20:30 às 22:30" };
-  // Sábado: Nobre - 20:30 às 01:00 (dia seguinte)
-  if (weekday === 6) return { startHour: 20, startMinute: 30, endHour: 25, endMinute: 0, label: "20:30 às 01:00" };
+  const diffWeeks = Math.floor((current - anchor) / (7 * 24 * 60 * 60 * 1000));
+  return diffWeeks % 2 === 0 ? "A" : "B";
+}
+
+export function getPrimeTimeWindow(snapshot, customWeekday = null) {
+  const baseDate = snapshot?.timestamp ? new Date(snapshot.timestamp) : new Date();
+  const weekday = customWeekday !== null ? customWeekday : getSaoPauloWeekday(baseDate);
+  const weekMode = getWeekModeSP(baseDate);
+
+  if (weekday === 0) {
+    return { startHour: 20, startMinute: 0, endHour: 23, endMinute: 0, label: "20:00 às 23:00", eventKey: "rede_domingo_20_23", cityKey: "total", cityName: "Geral (Rede)", emoji: "🌐", weekMode };
+  }
+
+  if (weekday === 1) {
+    return { startHour: 21, startMinute: 0, endHour: 22, endMinute: 0, label: "21:00 às 22:00", eventKey: "maresia_segunda_21_22", cityKey: "maresia", cityName: "Maresia", emoji: "🌊", weekMode };
+  }
+
+  if (weekday === 2) {
+    return { startHour: 23, startMinute: 0, endHour: 24, endMinute: 0, label: "23:00 às 00:00", eventKey: "grande_terca_23_00", cityKey: "grande", cityName: "Grande", emoji: "🌆", weekMode };
+  }
+
+  if (weekday === 3) {
+    return { startHour: 21, startMinute: 0, endHour: 22, endMinute: 0, label: "21:00 às 22:00", eventKey: "santa_quarta_21_22", cityKey: "santa", cityName: "Santa", emoji: "🏙️", weekMode };
+  }
+
+  if (weekday === 4) {
+    if (weekMode === "A") {
+      return { startHour: 0, startMinute: 0, endHour: 1, endMinute: 0, label: "00:00 às 01:00", eventKey: "nobre_quinta_00_01", cityKey: "nobre", cityName: "Nobre (Qui)", emoji: "👑", weekMode };
+    }
+
+    return { startHour: 21, startMinute: 0, endHour: 22, endMinute: 0, label: "21:00 às 22:00", eventKey: "nobre_quinta_21_22", cityKey: "nobre", cityName: "Nobre (Qui)", emoji: "👑", weekMode };
+  }
+
+  if (weekday === 5) {
+    return { startHour: 21, startMinute: 0, endHour: 22, endMinute: 0, label: "21:00 às 22:00", eventKey: "nobre_sexta_21_22", cityKey: "nobre", cityName: "Nobre (Sex)", emoji: "👑", weekMode };
+  }
+
+  if (weekday === 6) {
+    if (weekMode === "A") {
+      return { startHour: 21, startMinute: 0, endHour: 22, endMinute: 0, label: "21:00 às 22:00", eventKey: "nobre_sabado_21_22", cityKey: "nobre", cityName: "Nobre (Sab)", emoji: "👑", weekMode };
+    }
+
+    return { startHour: 0, startMinute: 0, endHour: 1, endMinute: 0, label: "00:00 às 01:00", eventKey: "nobre_sabado_00_01", cityKey: "nobre", cityName: "Nobre (Sab)", emoji: "👑", weekMode };
+  }
 
   return null;
 }
@@ -420,15 +457,21 @@ async function updateDailyPeaks(currentSnapshot) {
     if (!dayPeak) {
       hasChange = true;
       dayPeak = new PeakModel({ // Garante que o objeto total e cities existam
-        date: dateKey,
-        total: { peak: 0, peakTime: null, peakAt: 0, primePeak: 0, primePeakTime: null, primePeakAt: 0 },
-        cities: {},
-        exact21h: { total: 0, cities: {} } // Inicializa o novo campo
-      });
+  date: dateKey,
+  total: { peak: 0, peakTime: null, peakAt: 0, primePeak: 0, primePeakTime: null, primePeakAt: 0 },
+  cities: {},
+  exact21h: { total: 0, cities: {} }, // Inicializa o novo campo
+  eventWindows: {}
+});
     } else if (!dayPeak.exact21h) { // Adiciona o campo se não existir em documentos antigos
-      dayPeak.exact21h = { total: 0, cities: {} };
-      hasChange = true;
-    }
+  dayPeak.exact21h = { total: 0, cities: {} };
+  hasChange = true;
+}
+
+if (!dayPeak.eventWindows) {
+  dayPeak.eventWindows = {};
+  hasChange = true;
+}
 
     // Garante que todas as cidades configuradas existem no objeto Mixed (evita erro em novas cidades)
     for (const city of FIVEM_CITIES) {
@@ -460,29 +503,51 @@ async function updateDailyPeaks(currentSnapshot) {
 
     // 2. Atualização de Pico Prime (Evento) com suporte a rollover
     const weekday = getSaoPauloWeekday(new Date(nowTs));
-    const winToday = getPrimeTimeWindow(null, weekday);
+   const winToday = getPrimeTimeWindow(currentSnapshot, weekday);
     const currentMins = currentSnapshot.hour * 60 + currentSnapshot.minute;
 
     // Caso A: Janela de hoje
     if (winToday && currentMins >= (winToday.startHour * 60 + winToday.startMinute) && currentMins < (winToday.endHour * 60 + winToday.endMinute)) {
-      if (updatePrimePeaksInDoc(dayPeak, currentSnapshot)) hasChange = true;
-    }
+  if (updatePrimePeaksInDoc(dayPeak, currentSnapshot)) hasChange = true;
+  if (updateEventWindowPeakInDoc(dayPeak, currentSnapshot, winToday)) hasChange = true;
+}
     // Caso B: Janela de ontem (rollover)
     else if (currentSnapshot.hour < 4) {
-      const yesterday = new Date(nowTs - 24 * 60 * 60 * 1000);
-      const winY = getPrimeTimeWindow(null, getSaoPauloWeekday(yesterday));
-      if (winY && winY.endHour > 24) {
-        const minsRollover = (currentSnapshot.hour + 24) * 60 + currentSnapshot.minute;
-        if (minsRollover >= (winY.startHour * 60 + winY.startMinute) && minsRollover < (winY.endHour * 60 + winY.endMinute)) {
+  const yesterday = new Date(nowTs - 24 * 60 * 60 * 1000);
+  const winY = getPrimeTimeWindow({ timestamp: yesterday.getTime() }, getSaoPauloWeekday(yesterday));
+
+  const isMidnightWindow = winY && winY.startHour === 0 && winY.endHour === 1;
+  const isRolloverWindow = winY && winY.endHour > 24;
+
+  if (winY && (isMidnightWindow || isRolloverWindow)) {
+    const minsRollover = isMidnightWindow
+      ? currentSnapshot.hour * 60 + currentSnapshot.minute
+      : (currentSnapshot.hour + 24) * 60 + currentSnapshot.minute;
+
+    const startMinutes = winY.startHour * 60 + winY.startMinute;
+    const endMinutes = winY.endHour * 60 + winY.endMinute;
+
+    if (minsRollover >= startMinutes && minsRollover < endMinutes) {
            const yParts = getSaoPauloParts(yesterday);
            const yKey = `${yParts.year}-${String(yParts.month).padStart(2, '0')}-${String(yParts.day).padStart(2, '0')}`;
            const yDoc = await PeakModel.findOne({ date: yKey });
            if (yDoc) {
-             if (updatePrimePeaksInDoc(yDoc, currentSnapshot)) {
-               yDoc.markModified('total');
-               yDoc.markModified('cities');
-               await yDoc.save();
-             }
+             let changedYesterdayDoc = false;
+
+if (updatePrimePeaksInDoc(yDoc, currentSnapshot)) {
+  changedYesterdayDoc = true;
+}
+
+if (updateEventWindowPeakInDoc(yDoc, currentSnapshot, winY)) {
+  changedYesterdayDoc = true;
+}
+
+if (changedYesterdayDoc) {
+  yDoc.markModified('total');
+  yDoc.markModified('cities');
+  yDoc.markModified('eventWindows');
+  await yDoc.save();
+}
            }
         }
       }
@@ -502,13 +567,16 @@ async function updateDailyPeaks(currentSnapshot) {
     }
 
     dayPeak.markModified('total');
-    dayPeak.markModified('cities');
-    dayPeak.markModified('exact21h'); // Marca o novo campo como modificado
-    await dayPeak.save();
+dayPeak.markModified('cities');
+dayPeak.markModified('exact21h'); // Marca o novo campo como modificado
+dayPeak.markModified('eventWindows');
+await dayPeak.save();
 
     // Limpeza de picos antigos (opcional, para manter paridade com History)
     const thirtyDaysAgoDate = new Date(Date.now() - FIVEM_HISTORY_MAX_DAYS * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-    await PeakModel.deleteMany({ date: { $lt: thirtyDaysAgoDate } });
+  await PeakModel.deleteMany({ date: { $lt: thirtyDaysAgoDate } });
+
+return hasChange;
   } catch (e) {
     console.error("[FIVEM_RETENTION] Erro ao atualizar picos diários:", e);
     return false;
@@ -536,6 +604,52 @@ function updatePrimePeaksInDoc(peakDoc, snapshot) {
       changed = true;
     }
   }
+  return changed;
+}
+
+function updateEventWindowPeakInDoc(peakDoc, snapshot, window) {
+  if (!window?.eventKey) return false;
+
+  let changed = false;
+  const isTotal = window.cityKey === "total";
+
+  const currentValue = isTotal
+    ? snapshot.totalClients || 0
+    : snapshot.cities?.[window.cityKey]?.clients || 0;
+
+  if (!peakDoc.eventWindows) peakDoc.eventWindows = {};
+
+  const currentStored = peakDoc.eventWindows[window.eventKey] || {
+    peak: 0,
+    peakTime: null,
+    peakAt: 0,
+    label: window.label,
+    cityKey: window.cityKey,
+    cityName: window.cityName,
+    emoji: window.emoji,
+    dateKey: peakDoc.date,
+    weekKey: getWeekKeySP(new Date(snapshot.timestamp)),
+    weekMode: window.weekMode,
+  };
+
+  if (currentValue > (currentStored.peak || 0)) {
+    peakDoc.eventWindows[window.eventKey] = {
+      ...currentStored,
+      peak: currentValue,
+      peakTime: snapshot.spTime,
+      peakAt: snapshot.timestamp,
+      label: window.label,
+      cityKey: window.cityKey,
+      cityName: window.cityName,
+      emoji: window.emoji,
+      dateKey: peakDoc.date,
+      weekKey: getWeekKeySP(new Date(snapshot.timestamp)),
+      weekMode: window.weekMode,
+    };
+
+    changed = true;
+  }
+
   return changed;
 }
 
@@ -675,7 +789,7 @@ function formatOnlyCurrentLine(label, current, max, pct, index, yesterday = 0) {
  const medal = index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : `${index + 1}.`;
  const statusEmoji = getStatusEmojiByYesterday(current, yesterday);
 
- return `${medal} **BR ${label.padEnd(8, " ")}** \n> \`${formatNumber(current)} / ${formatNumber(max)}\` • **${pct}%** ${statusEmoji}`;
+ return `${medal} **BR ${label.padEnd(8, " ")}** \n> \`${formatNumber(current)} / ${formatNumber(max)}\` players • **${pct}% da capacidade da cidade ocupada** ${statusEmoji}`;
 }
 
 // ---------- EMBED BUILDER ----------
@@ -739,16 +853,18 @@ async function buildEmbeds(client, currentSnapshot) {
    .setDescription(
      `### 🚀 DESTAQUES DO MOMENTO\n` +
      `**🏆 Líder da Rede:** ${leader?.current.emoji} **${leader?.current.name}**\n` +
-     `└ \`${formatNumber(leader?.current.clients)}\` ativos agora\n\n` +
+     `└ \`${formatNumber(leader?.current.clients)}\` ativos agora (Top Ocupação)\n\n` +
      `**📈 Top Crescimento:** ${topGrowth?.current.emoji} **${topGrowth?.current.name}**\n` +
-     `└ ${formatDiff(topGrowth?.diffYesterday)}\n\n` +
+     `└ ${formatDiff(topGrowth?.diffYesterday)} **Vs. Ontem**\n\n` +
      `**📉 Maior Declínio:** ${topDrop?.current.emoji} **${topDrop?.current.name}**\n` +
-     `└ ${formatDiff(topDrop?.diffYesterday)}\n\n` +
+     `└ ${formatDiff(topDrop?.diffYesterday)} **Vs. Ontem**\n\n` +
      `${UI.DIVIDER}\n\n` +
      `### 📊 PERFORMANCE GLOBAL\n` +
      `• **Jogadores Online:** \`${formatNumber(totalCurrentClients)}\` \n` +
      `• **Pico Máximo Hoje:** \`${formatNumber(todayPeaks.total?.peak)}\` \n` +
-     `• **Capacidade Média:** \`${capacityPercent}%\` \n\n` +
+    `• **Ocupação da Rede:** \`${capacityPercent}%\`\n` +
+`└ Explicação: jogadores online agora ÷ capacidade máxima total da rede.\n` +
+`└ Cálculo: \`${formatNumber(totalCurrentClients)} / ${formatNumber(totalMaxClients)}\`\n\n` +
      `**Comparações de Rede:**\n` +
      `> 🕒 **Vs. Ontem:** ${formatDiff(calculateDiff(totalCurrentClients, totalYesterdayClients))}\n` +
      `> 📅 **Vs. 7 Dias:** ${formatDiff(calculateDiff(totalCurrentClients, totalLastWeekClients))}`
@@ -777,7 +893,7 @@ async function buildEmbeds(client, currentSnapshot) {
        .join("\n\n") +
      `\n\n${UI.SEP}\n` +
      `**Total da Rede:** \`${formatNumber(totalCurrentClients)} / ${formatNumber(totalMaxClients)}\` players\n` +
-     `**Saturação Média:** \`${capacityPercent}%\` ${getStatusEmojiByYesterday(totalCurrentClients, totalYesterdayClients)}`
+     `**Ocupação Geral:** \`${capacityPercent}%\` ${getStatusEmojiByYesterday(totalCurrentClients, totalYesterdayClients)}`
    )
    .setFooter({
      text: `Dados atualizados a cada 2min • ${FIVEM_RANK_MARKER_TAG}`,
@@ -852,96 +968,96 @@ async function buildEmbeds(client, currentSnapshot) {
    embeds.push(retentionEmbed);
  }
 
-  // 5.1 PAINÉIS DE RETENÇÃO POR CIDADE (CONSOLIDADO EM UM ÚNICO EMBED)
-  const consolidatedFocusEmbed = new EmbedBuilder()
-    .setColor(baseColor)
-    .setTitle(`🎯 RETENÇÃO DO EVENTO — CIDADES FOCADAS${useYesterdayFocus ? " (Resumo de Ontem)" : ""}`)
-    .setDescription(`Janela de análise: **${primeWindow.label}** (pode variar por cidade)\n\n`);
+ // 5.1 PAINÉIS DE RETENÇÃO POR CIDADE (CONSOLIDADO EM UM ÚNICO EMBED)
+const weekMode = getWeekModeSP(new Date(currentSnapshot.timestamp));
 
-  const focusItems = [
-    { key: "maresia", name: "Maresia", emoji: "🌊", days: [1], label: "20:30 às 22:00" }, // Segunda
-    { key: "grande",  name: "Grande",  emoji: "🌆", days: [2], label: "23:00 às 01:00" }, // Terça
-    { key: "santa",   name: "Santa",   emoji: "🏙️", days: [3], label: "20:30 às 22:00" }, // Quarta
-    { key: "nobre",   name: "Nobre (Qui)", emoji: "👑", days: [4], label: "21:00 às 23:00" },
-    { key: "nobre",   name: "Nobre (Sex)", emoji: "👑", days: [5], label: "20:30 às 22:30" },
-    { key: "nobre",   name: "Nobre (Sab)", emoji: "👑", days: [6], label: "20:30 às 01:00" },
-    { key: "total",   name: "Geral (Rede)", emoji: "🌐", days: [0], label: "20:00 às 23:00" }  // Domingo
-  ];
+const focusItems = [
+  getPrimeTimeWindow(currentSnapshot, 1),
+  getPrimeTimeWindow(currentSnapshot, 2),
+  getPrimeTimeWindow(currentSnapshot, 3),
+  getPrimeTimeWindow(currentSnapshot, 4),
+  getPrimeTimeWindow(currentSnapshot, 5),
+  getPrimeTimeWindow(currentSnapshot, 6),
+  getPrimeTimeWindow(currentSnapshot, 0),
+].filter(Boolean);
 
-  for (const item of focusItems) {
-    // Encontrar o dia em que este evento ocorreu pela última vez
-    let daysToLastEvent = 0;
-    while (!item.days.includes((effectiveWeekday - daysToLastEvent + 35) % 7)) {
-      daysToLastEvent++;
-    }
-    
-    // 🧠 Inteligência: Se o evento ainda não ocorreu na semana atual, forçamos os dados para zero.
-    // Se daysToLastEvent for maior que o dia da semana atual, significa que estamos buscando um dia da semana passada.
-    const hasHappenedThisWeek = daysToLastEvent <= effectiveWeekday;
+const consolidatedFocusEmbed = new EmbedBuilder()
+  .setColor(baseColor)
+  .setTitle(`🎯 RETENÇÃO DO EVENTO — CIDADES FOCADAS${useYesterdayFocus ? " (Resumo de Ontem)" : ""}`)
+  .setDescription(
+    `**Semana atual:** Semana ${weekMode}\n` +
+    `**Regra da semana:** ${weekMode === "A"
+      ? "Quinta 00:00–01:00 / Sábado 21:00–22:00"
+      : "Quinta 21:00–22:00 / Sábado 00:00–01:00"}\n\n` +
+    `Cada linha compara a mesma cidade e a mesma janela exata contra a semana anterior.\n\n`
+  );
 
-    const lastEventDateKey = hasHappenedThisWeek ? getDateKeyDaysAgoFromSnapshot(currentSnapshot, daysToLastEvent + (useYesterdayFocus ? 1 : 0)) : null;
-    const eventPeaks = lastEventDateKey ? (peaks[lastEventDateKey] || { total: {}, cities: {} }) : { total: {}, cities: {} };
+for (const item of focusItems) {
+  const targetWeekday =
+    item.eventKey.includes("domingo") ? 0 :
+    item.eventKey.includes("segunda") ? 1 :
+    item.eventKey.includes("terca") ? 2 :
+    item.eventKey.includes("quarta") ? 3 :
+    item.eventKey.includes("quinta") ? 4 :
+    item.eventKey.includes("sexta") ? 5 :
+    item.eventKey.includes("sabado") ? 6 :
+    null;
 
-    const isTotal = item.key === "total";
-    
-    const peakValue = isTotal ? eventPeaks.total?.primePeak || 0 : eventPeaks.cities?.[item.key]?.primePeak || 0;
-    const peakTime = isTotal ? eventPeaks.total?.primePeakTime || "--:--" : eventPeaks.cities?.[item.key]?.primePeakTime || "--:--";
-    
-    // Comparação Dinâmica (Vs Evento Anterior)
-    let compareDays = 7;
-    if (item.key === "nobre") {
-      const eventDayOfWeek = (effectiveWeekday - daysToLastEvent + 35) % 7;
-      if (eventDayOfWeek === 5 || eventDayOfWeek === 6) compareDays = 1; // Sexta vs Quinta, Sábado vs Sexta
-      else if (eventDayOfWeek === 4) compareDays = 5; // Quinta vs Sábado anterior
-    }
-    
-    const prevEventDateKey = lastEventDateKey ? getDateKeyDaysAgoFromSnapshot(currentSnapshot, daysToLastEvent + compareDays + (useYesterdayFocus ? 1 : 0)) : null;
-    const prevEventPeaks = peaks[prevEventDateKey] || { total: {}, cities: {} };
-    const prevPeakValue = isTotal ? prevEventPeaks.total?.primePeak || 0 : prevEventPeaks.cities?.[item.key]?.primePeak || 0;
+  if (targetWeekday === null) continue;
 
-    const weekAgoDateKey = lastEventDateKey ? getDateKeyDaysAgoFromSnapshot(currentSnapshot, daysToLastEvent + 7 + (useYesterdayFocus ? 1 : 0)) : null;
-    const weekAgoPeaks = peaks[weekAgoDateKey] || { total: {}, cities: {} };
-    const weekAgoPeakValue = isTotal ? weekAgoPeaks.total?.primePeak || 0 : weekAgoPeaks.cities?.[item.key]?.primePeak || 0;
+  let daysToEvent = 0;
 
-    const diffPrev = peakValue > 0 ? calculateDiff(peakValue, prevPeakValue) : { diff: 0, pct: 0, arrow: UI.STABLE + ' ➖' };
-    const diffWeek = peakValue > 0 ? calculateDiff(peakValue, weekAgoPeakValue) : { diff: 0, pct: 0, arrow: UI.STABLE + ' ➖' };
-
-    const displayDate = new Date(currentSnapshot.timestamp - (daysToLastEvent + (useYesterdayFocus ? 1 : 0)) * 24 * 60 * 60 * 1000);
-    const weekdayName = new Intl.DateTimeFormat("pt-BR", { weekday: "long", timeZone: FIVEM_TIMEZONE }).format(displayDate);
-
-    const isActuallyLiveToday = item.days.includes(effectiveWeekday); // Se o evento está "ao vivo" hoje
-
-    let fieldValue = `**Pico:** \`${formatNumber(peakValue)}\` @ \`${peakTime}\`\n` +
-                     `**Vs Prev:** ${peakValue > 0 ? formatDiff(diffPrev) : "🟠 ➖ 0 (aguardando)"}\n` +
-                     `**Vs 7D:** ${peakValue > 0 ? formatDiff(diffWeek) : "🟠 ➖ 0 (aguardando)"}\n` +
-                     `*Janela: ${item.label} na ${isActuallyLiveToday ? currentSnapshot.spWeekday : weekdayName}*`;
-
-    // Especial para Nobre: Detalhes dos 3 dias de evento no mesmo painel
-    if (item.key === "nobre" && isActuallyLiveToday) {
-       const qVal = peaks[getDateKeyDaysAgoFromSnapshot(currentSnapshot, (effectiveWeekday === 4 ? 0 : (effectiveWeekday === 5 ? 1 : 2)) + (useYesterdayFocus ? 1 : 0))]?.cities?.nobre?.primePeak || 0;
-       const sVal = effectiveWeekday >= 5 ? peaks[getDateKeyDaysAgoFromSnapshot(currentSnapshot, (effectiveWeekday === 5 ? 0 : 1) + (useYesterdayFocus ? 1 : 0))]?.cities?.nobre?.primePeak || 0 : 0;
-       const bVal = effectiveWeekday === 6 ? peaks[getDateKeyDaysAgoFromSnapshot(currentSnapshot, 0 + (useYesterdayFocus ? 1 : 0))]?.cities?.nobre?.primePeak || 0 : 0;
-       
-       if (qVal > 0 || sVal > 0 || bVal > 0) {
-         fieldValue += `\n📊 Ciclo (Qui/Sex/Sáb): Qui: \`${formatNumber(qVal)}\` | Sex: \`${formatNumber(sVal)}\` | Sáb: \`${formatNumber(bVal)}\``;
-       }
-    }
-
-    consolidatedFocusEmbed.addFields({
-      name: `${item.emoji} BR ${item.name}${isActuallyLiveToday ? "" : " (Fixo)"}`,
-      value: fieldValue,
-      inline: false // Cada cidade em uma linha separada
-    });
+  while (((effectiveWeekday - daysToEvent + 35) % 7) !== targetWeekday) {
+    daysToEvent++;
+    if (daysToEvent > 7) break;
   }
 
-  consolidatedFocusEmbed.setFooter({
-    text: `Análise de Foco Diário • Sincronizado às ${currentSnapshot.spTime}`,
-    iconURL: client.user.displayAvatarURL()
+  const eventDateKey = getDateKeyDaysAgoFromSnapshot(
+    currentSnapshot,
+    daysToEvent + (useYesterdayFocus ? 1 : 0)
+  );
+
+const isAlternatingWindow =
+  item.eventKey.includes("quinta") ||
+  item.eventKey.includes("sabado");
+
+const compareBackDays = isAlternatingWindow ? 14 : 7;
+
+const weekAgoDateKey = getDateKeyDaysAgoFromSnapshot(
+  currentSnapshot,
+  daysToEvent + compareBackDays + (useYesterdayFocus ? 1 : 0)
+);
+
+  const eventPeaks = peaks[eventDateKey] || { eventWindows: {} };
+  const weekAgoPeaks = peaks[weekAgoDateKey] || { eventWindows: {} };
+
+  const currentWindow = eventPeaks.eventWindows?.[item.eventKey] || null;
+  const lastWeekWindow = weekAgoPeaks.eventWindows?.[item.eventKey] || null;
+
+  const currentPeak = currentWindow?.peak || 0;
+  const currentTime = currentWindow?.peakTime || "--:--";
+  const previousPeak = lastWeekWindow?.peak || 0;
+  const diffWeek = calculateDiff(currentPeak, previousPeak);
+
+  consolidatedFocusEmbed.addFields({
+    name: `${item.emoji} BR ${item.cityName}`,
+    value:
+      `**Janela exata:** \`${item.label}\`\n` +
+      `**Pico salvo:** \`${formatNumber(currentPeak)}\` às \`${currentTime}\`\n` +
+      `**Base semana anterior:** \`${formatNumber(previousPeak)}\`\n` +
+      `**Resultado:** ${currentPeak > 0 ? formatDiff(diffWeek) : "🟠 ➖ 0 (aguardando coleta dessa janela)"}`,
+    inline: false
   });
+}
 
-  embeds.push(consolidatedFocusEmbed);
+consolidatedFocusEmbed.setFooter({
+  text: `Análise por janela exata • Sincronizado às ${currentSnapshot.spTime}`,
+  iconURL: client.user.displayAvatarURL()
+});
 
- // 6. PAINEL — DIFERENÇA DE PICOS (MÁXIMAS DO DIA)
+embeds.push(consolidatedFocusEmbed);
+
+// 6. PAINEL — DIFERENÇA DE PICOS (MÁXIMAS DO DIA)
  const peakAnalysisData = FIVEM_CITIES
    .map((cityConfig) => {
      const todayCityPeak = todayPeaks.cities?.[cityConfig.key];
@@ -987,32 +1103,82 @@ async function buildEmbeds(client, currentSnapshot) {
  const primeTimeLabel = primeWindow ? primeWindow.label : "sem horário específico";
  const activePrimePeaks = useYesterdayFocus ? yesterdayPeaks : todayPeaks;
  const compYPrimePeaks = useYesterdayFocus ? dayBeforeYesterdayPeaks : yesterdayPeaks;
- const compWPrimePeaks = useYesterdayFocus ? peaks[getDateKeyDaysAgoFromSnapshot(currentSnapshot, 8)] || { total: {} } : lastWeekPeaks;
+ const primeIsAlternatingWindow =
+  primeWindow?.eventKey?.includes("quinta") ||
+  primeWindow?.eventKey?.includes("sabado");
+
+const primeCompareBackDays = primeIsAlternatingWindow ? 14 : 7;
+
+const compWPrimePeaks = peaks[
+  getDateKeyDaysAgoFromSnapshot(
+    currentSnapshot,
+    primeCompareBackDays + (useYesterdayFocus ? 1 : 0)
+  )
+] || { total: {}, cities: {}, eventWindows: {} };
 
  // Cálculos de comparação para o Total Geral do horário de eventos
  const totalPrimeDiffY = calculateDiff(activePrimePeaks.total?.primePeak || 0, compYPrimePeaks.total?.primePeak || 0);
  const totalPrimeDiffW = calculateDiff(activePrimePeaks.total?.primePeak || 0, compWPrimePeaks.total?.primePeak || 0);
 
+ // 7. PAINEL — COPA DE DESEMPENHO (RANKING DE EVOLUÇÃO VS SEMANA PASSADA)
+ const performanceRanking = FIVEM_CITIES.map(city => {
+   const p = activePrimePeaks.cities?.[city.key]?.primePeak || 0;
+   const pw = compWPrimePeaks.cities?.[city.key]?.primePeak || 0;
+   const stats = calculateDiff(p, pw);
+   return { city, p, pw, stats };
+ }).sort((a, b) => {
+   if (a.stats.pct === 'sem base') return 1;
+   if (b.stats.pct === 'sem base') return -1;
+   return b.stats.pct - a.stats.pct;
+ });
+
+ const perfEmbed = new EmbedBuilder()
+   .setColor(0x0099ff)
+   .setTitle("🏆 COPA DE DESEMPENHO — EVOLUÇÃO SEMANAL")
+   .setDescription(
+     `*Ranking baseado no crescimento % em relação ao pico do evento na semana passada*\n\n` +
+     performanceRanking.map((item, idx) => {
+       const medal = idx === 0 ? "🔥" : idx === performanceRanking.length - 1 ? "⚠️" : "🔹";
+       const trend = item.stats.pct > 0 ? "Melhorou" : (item.stats.pct < 0 ? "Caiu" : "Estável");
+       
+       return (
+         `${medal} **BR ${item.city.name}**\n` +
+         `> **Status:** ${trend} ${item.stats.arrow}\n` +
+         `> **Pico Atual:** \`${formatNumber(item.p)}\` vs \`${formatNumber(item.pw)}\` (7d)\n` +
+         `> **Diferença:** \`${item.stats.diff > 0 ? '+' : ''}${formatNumber(item.stats.diff)}\` (**${typeof item.stats.pct === 'number' ? item.stats.pct.toFixed(1) + '%' : 'sem base'}**)`
+       );
+     }).join("\n\n")
+   )
+   .setFooter({ text: "O ranking considera apenas dados coletados dentro das janelas de pico alternadas." });
+ 
+ embeds.push(perfEmbed);
+
  // Mapeia os dados baseados nos picos ativos (hoje ou resumo de ontem)
- const effectivePeakData = FIVEM_CITIES.map(city => {
-    const p = activePrimePeaks.cities?.[city.key];
-    const py = compYPrimePeaks.cities?.[city.key];
-    const pw = compWPrimePeaks.cities?.[city.key];
-    return {
-        name: city.name,
-        emoji: city.emoji,
-        val: p?.primePeak || 0,
-        time: p?.primePeakTime || "--:--",
-        diffY: calculateDiff(p?.primePeak || 0, py?.primePeak || 0),
-        diffW: calculateDiff(p?.primePeak || 0, pw?.primePeak || 0)
-    };
- }).sort((a, b) => b.val - a.val);
+const currentEventWindow = primeWindow?.eventKey
+  ? activePrimePeaks.eventWindows?.[primeWindow.eventKey]
+  : null;
+
+const previousEventWindow = primeWindow?.eventKey
+  ? compWPrimePeaks.eventWindows?.[primeWindow.eventKey]
+  : null;
+
+const effectivePeakData = currentEventWindow ? [
+  {
+    name: currentEventWindow.cityName,
+    emoji: currentEventWindow.emoji,
+    val: currentEventWindow.peak || 0,
+    time: currentEventWindow.peakTime || "--:--",
+    diffY: calculateDiff(currentEventWindow.peak || 0, 0),
+    diffW: calculateDiff(currentEventWindow.peak || 0, previousEventWindow?.peak || 0)
+  }
+] : [];
 
  const primeEmbed = new EmbedBuilder()
    .setColor(baseColor)
    .setTitle(`🔥 PRIME TIME — RETENÇÃO EM EVENTO${useYesterdayFocus ? " (Ontem)" : ""}`)
    .setDescription(
-     `*Janela de análise: **${primeTimeLabel}***\n\n` +
+     `*Janela de análise exata do evento atual: **${primeTimeLabel}***\n` +
+`*Comparação: pico salvo nesta mesma janela vs. base anterior salva.*\n\n` +
      effectivePeakData.map((item, index) => {
        const medal = index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : `${index + 1}.`;
 
