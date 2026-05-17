@@ -962,9 +962,9 @@ async function sendSundayReminders(client) {
 export async function checklistOnReady(client) {
   await syncWeekData(client);
   await refreshMainPanel(client).catch(() => {});
-  // ✅ Lembretes na Sexta-feira (5) para a semana que está terminando.
-  cron.schedule("0 0,12,16 * * 5", () => sendSundayReminders(client), { timezone: TZ });
-  // ✅ O "reset" (início da nova semana) acontece no Sábado 00:00, garantindo que a semana anterior seja fechada.
+  // ✅ Cobrança no Domingo (0) para os pendentes da semana que iniciou no Sábado.
+  cron.schedule("0 12,16,20 * * 0", () => sendSundayReminders(client), { timezone: TZ });
+  // ✅ O "reset" (início da nova semana) acontece rigorosamente no Sábado 00:00.
   cron.schedule("0 0 * * 6", () => syncWeekData(client), { timezone: TZ });
 }
 export async function checklistHandleMessage(message, client) {
