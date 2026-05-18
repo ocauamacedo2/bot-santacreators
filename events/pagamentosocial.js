@@ -1,4 +1,6 @@
 // ./application/events/pagamentosocial.js
+import fs from "node:fs";
+import path from "node:path";
 import {
   ActionRowBuilder,
   ButtonBuilder,
