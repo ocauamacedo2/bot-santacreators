@@ -194,12 +194,14 @@ function extractHallParts(content = "") {
     "Evento";
 
   const cityName =
-    contentWithoutUrls.match(/na\s+\*\*(Cidade\s+(?:Nobre|Santa|Grande|Maresia))\*\*!/i)?.[1]?.trim() ||
-    contentWithoutUrls.match(/na\s+(Cidade\s+(?:Nobre|Santa|Grande|Maresia))!/i)?.[1]?.trim() ||
-    contentWithoutUrls.match(/CIDADE\s+(NOBRE|SANTA|GRANDE|MARESIA)/i)?.[0]?.trim() ||
+    rawContent.match(/na\s+\*\*(Cidade\s+(?:Nobre|Santa|Grande|Maresia))\*\*!/i)?.[1]?.trim() ||
+    rawContent.match(/na\s+\*\*CIDADE\s+(NOBRE|SANTA|GRANDE|MARESIA)\*\*!/i)?.[1]?.replace(/^/, "Cidade ").trim() ||
+    rawContent.match(/na\s+(Cidade\s+(?:Nobre|Santa|Grande|Maresia))!/i)?.[1]?.trim() ||
+    rawContent.match(/CIDADE\s+(NOBRE|SANTA|GRANDE|MARESIA)/i)?.[1]?.replace(/^/, "Cidade ").trim() ||
     "Cidade";
 
   let introText =
+    rawContent.match(/\n\n([\s\S]*?)\n\n🏆\s+\*\*/i)?.[1]?.trim() ||
     contentWithoutUrls.match(/🎉\s*(.*?)\s+\*\*[^*]+\*\*\s+na\s+\*\*Cidade\s+(?:Nobre|Santa|Grande|Maresia)\*\*!/i)?.[1]?.trim() ||
     contentWithoutUrls.match(/🎉\s*(.*?)\s+[A-ZÀ-Ú0-9\s]+na\s+CIDADE\s+(?:NOBRE|SANTA|GRANDE|MARESIA)!/i)?.[1]?.trim() ||
     "";
@@ -221,9 +223,12 @@ function extractHallParts(content = "") {
 
   const hallIndex = lines.findIndex(l => l.includes("HALL DA FAMA"));
   const endIndex = lines.findIndex(l => l.includes("Foi insano, mas mais uma vez"));
-
   if (hallIndex !== -1 && endIndex !== -1 && endIndex > hallIndex) {
-    winnersText = lines.slice(hallIndex + 1, endIndex).join("\n").trim();
+    winnersText = lines
+      .slice(hallIndex + 1, endIndex)
+      .filter(l => l.includes("**TOP**") || l.toUpperCase().startsWith("TOP"))
+      .join("\n")
+      .trim();
   }
 
   if (!winnersText) {
@@ -595,12 +600,13 @@ if (!winnersText) {
             .setRequired(true)
         ),
         new ActionRowBuilder().addComponents(
-          new TextInputBuilder()
-            .setCustomId("hf_edit_city")
-            .setLabel("Cidade do Evento")
-            .setValue(cityName)
-            .setStyle(TextInputStyle.Short)
-            .setRequired(true)
+         new TextInputBuilder()
+  .setCustomId("hf_edit_city")
+  .setLabel("Cidade do Evento")
+  .setValue(cityName)
+  .setPlaceholder("Ex: Cidade Nobre")
+  .setStyle(TextInputStyle.Short)
+  .setRequired(true)
         ),
         new ActionRowBuilder().addComponents(
           new TextInputBuilder()
