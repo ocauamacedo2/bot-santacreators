@@ -85,6 +85,19 @@ const loadState = () => { try { if (fs.existsSync(STATE_FILE)) return JSON.parse
 
 let state = loadState();
 
+function getHallScanKeySP() {
+  return new Date().toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
+}
+
+function shouldRunHallScanToday() {
+  return state?.lastAutoCorrectScanKey !== getHallScanKeySP();
+}
+
+function markHallScanDoneToday() {
+  state.lastAutoCorrectScanKey = getHallScanKeySP();
+  saveState(state);
+}
+
 // ================= LÓGICA INTELIGENTE (CRONOGRAMA) =================
 
 // Pega o dia da semana em SP (seg, ter, qua...)
@@ -437,7 +450,11 @@ export async function hallDaFamaOnReady(client) {
   const channel = await client.channels.fetch(HALL_CHANNEL_ID).catch(() => null);
   if (channel && channel.isTextBased()) {
     await ensureButtonAtBottom(channel, client, true);
-    await autoCorrectDuplications(channel, client);
+
+    if (shouldRunHallScanToday()) {
+      await autoCorrectDuplications(channel, client);
+      markHallScanDoneToday();
+    }
   }
 }
 
