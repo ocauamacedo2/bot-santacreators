@@ -170,52 +170,77 @@ function cleanOneLine(value = "") {
 }
 
 function extractHallParts(content = "") {
-  const lines = content.split("\n").map(l => l.trim()).filter(Boolean);
+  const rawContent = String(content || "");
+  const lines = rawContent.split("\n").map(l => l.trim()).filter(Boolean);
 
-  const titleLine = lines.find(l => l.startsWith("# 🎉 :")) || "";
-  const eventName = titleLine.match(/Santa Creators : (.*?)\*\*/)?.[1]?.trim() || "";
+  const titleLine = lines.find(l => l.includes("Santa Creators :")) || "";
+  const eventName =
+    titleLine.match(/Santa Creators\s*:\s*(.*?)\*\*/i)?.[1]?.trim() ||
+    titleLine.match(/Santa Creators\s*:\s*(.*?)\s*🎉/i)?.[1]?.trim() ||
+    "Evento";
 
   const imageLines = lines.filter(l => l.startsWith("http://") || l.startsWith("https://"));
   const imageUrl = imageLines[0] || "";
 
-  const introLine = lines.find(l =>
-    l.includes("<:coroa_orange:") ||
-    l.includes(":coroa_orange:")
-  ) || "";
+  const contentWithoutUrls = rawContent
+    .replace(/https?:\/\/\S+/gi, "")
+    .replace(/\|\|@everyone[\s\S]*?\|\|/gi, "")
+    .replace(/@everyone|@here/gi, "");
+
+  const introLine =
+    lines.find(l =>
+      !l.startsWith("http://") &&
+      !l.startsWith("https://") &&
+      (l.includes("<:coroa_orange:") || l.includes(":coroa_orange:"))
+    ) || "";
 
   let introText = "";
   let cityName = "";
 
-  if (introLine) {
-    const introMatch = introLine.match(/^(.*?)\s+\*\*.*?\*\*\s+na\s+\*\*(.*?)\*\*!/i);
-    if (introMatch) {
-      introText = cleanOneLine(introMatch[1]);
-      cityName = cleanOneLine(introMatch[2]);
-    } else {
-      introText = cleanOneLine(
-        introLine
-          .replace(new RegExp(`${eventName}\\s+na\\s+.*`, "i"), "")
-          .replace(/<:coroa_orange:\d+>/g, "")
-          .replace(/:coroa_orange:/g, "")
-      );
+  const cityMatch =
+    contentWithoutUrls.match(/na\s+\*\*(Cidade\s+(?:Nobre|Santa|Grande|Maresia))\*\*!/i) ||
+    contentWithoutUrls.match(/na\s+(Cidade\s+(?:Nobre|Santa|Grande|Maresia))!/i);
 
-      const cityMatch = introLine.match(/na\s+(CIDADE\s+[A-ZÀ-Ú]+)/i);
-      cityName = cityMatch?.[1]?.trim() || "";
-    }
+  if (cityMatch) {
+    cityName = cleanOneLine(cityMatch[1]);
   }
 
+  if (introLine) {
+    const introBeforeEvent = introLine.split(/\s+\*\*.*?\*\*\s+na\s+\*\*/i)[0];
+
+    introText = cleanOneLine(
+      introBeforeEvent
+        .replace(/^#\s*🎉\s*:\s*\*\*Santa Creators\s*:.*?\*\*\s*🎉/i, "")
+        .replace(/<:coroa_orange:\d+>/g, "")
+        .replace(/:coroa_orange:/g, "")
+    );
+  }
+
+  if (!introText || introText.startsWith("http")) {
+    introText = "A disputa foi insana, mas eles mostraram quem manda! Confira os vencedores:";
+  }
+
+  let winnersText = "";
   const winnersStartIndex = lines.findIndex(l => l.includes("HALL DA FAMA"));
   const winnersEndIndex = lines.findIndex(l => l.includes("Foi insano, mas mais uma vez"));
 
-  let winnersText = "";
   if (winnersStartIndex !== -1 && winnersEndIndex !== -1 && winnersEndIndex > winnersStartIndex) {
     winnersText = lines.slice(winnersStartIndex + 1, winnersEndIndex).join("\n").trim();
   }
 
+  if (!winnersText) {
+    const topMatches = [...rawContent.matchAll(/\*\*TOP\*\*[\s\S]*?(?=\*\*TOP\*\*|\*\*Foi insano|https?:\/\/|$)/g)];
+
+    winnersText = topMatches
+      .map(m => cleanOneLine(m[0]))
+      .filter(Boolean)
+      .join("\n");
+  }
+
   return {
-    eventName: eventName || "Evento",
-    cityName: cityName || "Cidade",
-    introText: introText || getRandomIntro(),
+    eventName: cleanOneLine(eventName) || "Evento",
+    cityName: cleanOneLine(cityName) || "Cidade Maresia",
+    introText: cleanOneLine(introText) || getRandomIntro(),
     winnersText,
     imageUrl
   };
