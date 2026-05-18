@@ -164,6 +164,72 @@ function splitText(text, maxLength = 2000) {
   if (currentChunk) chunks.push(currentChunk);
   return chunks;
 }
+
+function normalizeHallText(value = "") {
+  return String(value)
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function buildHallIntroLine(intro, eventName, cityName) {
+  const cleanIntro = normalizeHallText(intro || getRandomIntro());
+  const cleanEvent = normalizeHallText(eventName || "EVENTO").toUpperCase();
+  const cleanCity = normalizeHallText(cityName || "CIDADE").toUpperCase();
+
+  return `${cleanIntro} **${cleanEvent}** na **${cleanCity}**! <:coroa_orange:1353939359144870019>`;
+}
+
+function fixDuplicatedHallLine(content) {
+  if (!content || !content.includes("Santa Creators :")) return content;
+
+  const lines = content.split("\n");
+
+  const titleLine = lines.find(l => l.startsWith("# 🎉 :"));
+  const eventName = titleLine?.match(/# 🎉 :\s+\*\*Santa Creators : (.*?)\*\* 🎉/)?.[1]?.trim();
+
+  const cityMatch = content.match(/\*\*([^*\n]*Cidade[^*\n]*)\*\*!/i);
+  const cityName = cityMatch?.[1]?.trim();
+
+  if (!eventName || !cityName) return content;
+
+  const fixedIntroIndex = lines.findIndex(line =>
+    line.includes("na **") &&
+    line.includes("<:coroa_orange:")
+  );
+
+  if (fixedIntroIndex === -1) return content;
+
+  const beforeEvent = lines[fixedIntroIndex].split(/\s+\*\*.*?\*\*\s+na\s+\*\*/)[0]?.trim();
+  const intro = beforeEvent || getRandomIntro();
+
+  lines[fixedIntroIndex] = buildHallIntroLine(intro, eventName, cityName);
+
+  return lines.join("\n");
+}
+
+async function autoCorrectDuplications(channel, client) {
+  try {
+    const messages = await channel.messages.fetch({ limit: 50 }).catch(() => null);
+    if (!messages) return;
+
+    const botHallMessages = messages.filter(m =>
+      m.author.id === client.user.id &&
+      m.content.includes("# 🎉 :") &&
+      m.content.includes("Santa Creators :") &&
+      m.content.includes("HALL DA FAMA")
+    );
+
+    for (const msg of botHallMessages.values()) {
+      const fixedContent = fixDuplicatedHallLine(msg.content);
+
+      if (fixedContent !== msg.content && fixedContent.length <= 2000) {
+        await msg.edit({ content: fixedContent }).catch(() => {});
+      }
+    }
+  } catch (e) {
+    console.error("[HallDaFama] Erro ao autocorrigir duplicações:", e);
+  }
+}
 // ================= HELPERS =================
 function hasPermission(member, userId) {
   if (ALLOWED_USERS.includes(userId)) return true;
@@ -464,10 +530,12 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
     const mentionsLine = lines.find(l => l.includes('@everyone')) || '';
 
     // Remonta a mensagem
-    const finalMessage = 
+    const introLine = buildHallIntroLine(newIntro, newEventName, newCityName);
+
+const finalMessage = 
 `# 🎉 :  **Santa Creators : ${newEventName}** 🎉 
 
-${newIntro} **${newEventName.toUpperCase()}** na **${newCityName.toUpperCase()}**! <:coroa_orange:1353939359144870019> 
+${introLine} 
 
 👏  Uma salva de palmas para os BRABOS! 👏 
 
@@ -566,12 +634,14 @@ ${newImageUrl}${newImageUrl2 ? `\n${newImageUrl2}` : ''}`;
     const top1 = interaction.fields.getTextInputValue("hf_top1");
     const topsExtra = interaction.fields.getTextInputValue("hf_tops_extra");
     const imageUrl = interaction.fields.getTextInputValue("hf_image");
-    const imageUrl2 = interaction.fields.getTextInputValue("hf_image2");
+const customCityInput = interaction.fields.getTextInputValue("hf_custom_city")?.trim() || "";
+const imageUrl2 = "";
 
-    // Pega dados do cronograma (automático)
-    const eventData = getTodayEventData();
-    const eventName = eventNameInput; // Usa o input do usuário
-    const prizesText = eventData ? eventData.prizes : "";
+// Pega dados do cronograma (automático)
+const eventData = getTodayEventData();
+const eventName = eventNameInput; // Usa o input do usuário
+const prizesText = eventData ? eventData.prizes : "";
+const cityDisplayName = customCityInput || CITIES[cityKey].label;
 
     // Monta a string dos vencedores com premiação automática
     let winnersText = "";
@@ -612,13 +682,14 @@ ${newImageUrl}${newImageUrl2 ? `\n${newImageUrl2}` : ''}`;
     const reqId = `${interaction.user.id}-${Date.now()}`;
     
     state.pendingRequests[reqId] = {
-      userId: interaction.user.id,
-      cityKey,
-      eventName,
-      winnersText,
-      imageUrl,
-      imageUrl2
-    };
+  userId: interaction.user.id,
+  cityKey,
+  cityDisplayName,
+  eventName,
+  winnersText,
+  imageUrl,
+  imageUrl2
+};
     saveState(state);
 
     const approvalChannel = await client.channels.fetch(APPROVAL_CHANNEL_ID).catch(() => null);
@@ -627,7 +698,7 @@ ${newImageUrl}${newImageUrl2 ? `\n${newImageUrl2}` : ''}`;
     const embed = new EmbedBuilder()
       .setTitle("🛡️ Aprovação: Hall da Fama")
       .setColor("#FFD700")
-      .setDescription(`**Solicitante:** <@${interaction.user.id}>\n**Cidade:** ${CITIES[cityKey].label}`)
+      .setDescription(`**Solicitante:** <@${interaction.user.id}>\n**Cidade:** ${cityDisplayName}`)
       .addFields(
         { name: "Evento (Automático)", value: eventName },
         { name: "Vencedores (Formatado)", value: winnersText },
@@ -674,13 +745,15 @@ ${newImageUrl}${newImageUrl2 ? `\n${newImageUrl2}` : ''}`;
     if (!hallChannel) return interaction.editReply("❌ Canal do Hall da Fama não encontrado.");
 
     const cityData = CITIES[data.cityKey];
-    const intro = getRandomIntro(); // Frase aleatória
-    
-    // Montagem da mensagem final (Estilo Diva/Grande)
-    const finalMessage = 
+const cityName = data.cityDisplayName || cityData.label;
+const intro = getRandomIntro(); // Frase aleatória
+const introLine = buildHallIntroLine(intro, data.eventName, cityName);
+
+// Montagem da mensagem final (Estilo Diva/Grande)
+const finalMessage = 
 `# 🎉 :  **Santa Creators : ${data.eventName}** 🎉 
 
-${intro} **${data.eventName.toUpperCase()}** na **${cityData.label.toUpperCase()}**! <:coroa_orange:1353939359144870019> 
+${introLine} 
 
 👏  Uma salva de palmas para os BRABOS! 👏 
 
