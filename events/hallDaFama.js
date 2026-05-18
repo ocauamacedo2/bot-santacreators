@@ -281,6 +281,7 @@ export async function hallDaFamaOnReady(client) {
   const channel = await client.channels.fetch(HALL_CHANNEL_ID).catch(() => null);
   if (channel && channel.isTextBased()) {
     await ensureButtonAtBottom(channel, client, false);
+    await autoCorrectDuplications(channel, client);
   }
 }
 
@@ -321,6 +322,7 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
     const titleLine = lines.find(l => l.startsWith('# 🎉 :'));
     const eventName = titleLine?.match(/# 🎉 :  \*\*Santa Creators : (.*?)\*\* 🎉/)?.[1] || '';
 
+    const titleLineIndex = lines.findIndex(l => l.startsWith('# 🎉 :'));
     const winnersStartIndex = lines.findIndex(l => l.includes('HALL DA FAMA')) + 2;
     const winnersEndIndex = lines.findIndex(l => l.includes('Foi insano, mas mais uma vez'));
     
@@ -330,9 +332,12 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
     
     const winnersText = lines.slice(winnersStartIndex, winnersEndIndex).join('\n').trim();
 
+    const cityMatch = lastHallMessage.content.match(/na \*\*(.*?)\*\*!/);
+    const cityName = cityMatch ? cityMatch[1] : "CIDADE";
+    const introText = lines[titleLineIndex + 2]?.split(/\s+\*\*.*?\*\*\s+na\s+/)[0]?.trim() || getRandomIntro();
+
     const imageLines = lines.filter(l => l.startsWith('https://'));
     const imageUrl = imageLines[0] || '';
-    const imageUrl2 = imageLines[1] || '';
 
     let modal;
     if (interaction.customId === BTN_EDIT_PRIZES) {
@@ -367,6 +372,22 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
         ),
         new ActionRowBuilder().addComponents(
           new TextInputBuilder()
+            .setCustomId("hf_edit_city")
+            .setLabel("Cidade do Evento")
+            .setValue(cityName)
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true)
+        ),
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId("hf_edit_intro")
+            .setLabel("Texto de Parabéns (Intro)")
+            .setValue(introText)
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true)
+        ),
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
             .setCustomId("hf_edit_winners")
             .setLabel("🏆 Vencedores (TOP 1, 2, 3...)")
             .setValue(winnersText)
@@ -381,14 +402,6 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
             .setValue(imageUrl)
             .setStyle(TextInputStyle.Short)
             .setRequired(true)
-        ),
-        new ActionRowBuilder().addComponents(
-          new TextInputBuilder()
-            .setCustomId("hf_edit_image2")
-            .setLabel("Link da Imagem 2 (Opcional)")
-            .setValue(imageUrl2)
-            .setStyle(TextInputStyle.Short)
-            .setRequired(false)
         )
       );
     }
@@ -409,12 +422,13 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
     const messageId = interaction.customId.split(":")[1];
     const newWinnersText = interaction.fields.getTextInputValue("hf_edit_winners");
     
-    let newEventName, newImageUrl, newImageUrl2;
+    let newEventName, newImageUrl, newImageUrl2, newCityName, newIntro;
     
     if (!isPrizesOnly) {
       newEventName = interaction.fields.getTextInputValue("hf_edit_event_name");
+      newCityName = interaction.fields.getTextInputValue("hf_edit_city");
+      newIntro = interaction.fields.getTextInputValue("hf_edit_intro");
       newImageUrl = interaction.fields.getTextInputValue("hf_edit_image");
-      newImageUrl2 = interaction.fields.getTextInputValue("hf_edit_image2");
     }
 
     const hallChannel = await client.channels.fetch(HALL_CHANNEL_ID).catch(() => null);
@@ -435,24 +449,24 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
     if (isPrizesOnly) {
       const titleLine = lines.find(l => l.startsWith('# 🎉 :'));
       newEventName = titleLine?.match(/# 🎉 :  \*\*Santa Creators : (.*?)\*\* 🎉/)?.[1] || 'Evento';
+      const cityMatch = oldContent.match(/na \*\*(.*?)\*\*!/);
+      newCityName = cityMatch ? cityMatch[1] : "CIDADE";
+      const introLineIndex = lines.findIndex(l => l.startsWith('# 🎉 :')) + 2;
+      newIntro = lines[introLineIndex]?.split(/\s+\*\*.*?\*\*\s+na\s+/)[0]?.trim() || getRandomIntro();
       const imageLines = lines.filter(l => l.startsWith('https://'));
       newImageUrl = imageLines[0] || '';
       newImageUrl2 = imageLines[1] || '';
+    } else {
+      newImageUrl2 = oldContent.split('\n').filter(l => l.startsWith('https://'))[1] || '';
     }
 
-    const introLineIndex = lines.findIndex(l => l.startsWith('# 🎉 :')) + 2;
-    const intro = lines[introLineIndex] || getRandomIntro(); // Pega a intro antiga ou uma nova se falhar
-
-    const cityMatch = oldContent.match(/na \*\*(.*?)\*\*!/);
-    const cityName = cityMatch ? cityMatch[1] : "CIDADE"; // Fallback para caso não ache
-    
     const mentionsLine = lines.find(l => l.includes('@everyone')) || '';
 
     // Remonta a mensagem
     const finalMessage = 
 `# 🎉 :  **Santa Creators : ${newEventName}** 🎉 
 
-${intro} **${newEventName.toUpperCase()}** na **${cityName}**! <:coroa_orange:1353939359144870019> 
+${newIntro} **${newEventName.toUpperCase()}** na **${newCityName.toUpperCase()}**! <:coroa_orange:1353939359144870019> 
 
 👏  Uma salva de palmas para os BRABOS! 👏 
 
