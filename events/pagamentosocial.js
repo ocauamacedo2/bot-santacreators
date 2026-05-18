@@ -234,9 +234,65 @@ function extrairPrimeiraUrlImagem(texto) {
 function limparTextoOCR(texto) {
   return String(texto || "")
     .replace(/\r/g, "\n")
+    .replace(/[|]/g, " ")
+    .replace(/[º°]/g, "")
+    .replace(/[·•]/g, " • ")
+    .replace(/([0-2]?\d)\s*[nH]\s*([0-5]\d)/g, "$1h$2")
+    .replace(/([0-3]?\d)\s*[Il|]\s*([01]?\d)\s*[Il|]\s*((?:20)?\d{2})/g, "$1/$2/$3")
     .replace(/[ \t]+/g, " ")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+function getAgoraSPParts() {
+  const parts = new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date());
+
+  const get = (type) => parts.find((p) => p.type === type)?.value || "";
+
+  return {
+    data: `${get("day")}/${get("month")}/${get("year")}`,
+    horario: `${get("hour")}:${get("minute")}`,
+  };
+}
+
+function normalizarHorarioOCR(hora, minuto, segundo = null) {
+  const h = Number(String(hora || "").replace(/\D/g, ""));
+  const m = Number(String(minuto || "").replace(/\D/g, ""));
+  const s = segundo === null || segundo === undefined
+    ? null
+    : Number(String(segundo || "").replace(/\D/g, ""));
+
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+  if (h < 0 || h > 23) return null;
+  if (m < 0 || m > 59) return null;
+  if (s !== null && (!Number.isFinite(s) || s < 0 || s > 59)) return null;
+
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+function normalizarDataOCR(dia, mes, ano) {
+  const d = Number(String(dia || "").replace(/\D/g, ""));
+  const mo = Number(String(mes || "").replace(/\D/g, ""));
+  let y = String(ano || "").replace(/\D/g, "");
+
+  if (y.length === 2) y = `20${y}`;
+
+  const yy = Number(y);
+
+  if (!Number.isFinite(d) || !Number.isFinite(mo) || !Number.isFinite(yy)) return null;
+  if (d < 1 || d > 31) return null;
+  if (mo < 1 || mo > 12) return null;
+  if (yy < 2020 || yy > 2099) return null;
+
+  return `${String(d).padStart(2, "0")}/${String(mo).padStart(2, "0")}/${yy}`;
 }
 
 function parseValorOCR(texto) {
@@ -264,30 +320,99 @@ function parseValorOCR(texto) {
 function parseHorarioOCR(texto) {
   const t = limparTextoOCR(texto);
 
-  const prioridadeAgoraMesmo = t.match(/Agora\s+mesmo\s*[•·\-–—]?\s*([01]?\d|2[0-3])[:h]([0-5]\d)/i);
-  if (prioridadeAgoraMesmo) {
-    return `${String(prioridadeAgoraMesmo[1]).padStart(2, "0")}:${prioridadeAgoraMesmo[2]}`;
+  const padroesPrioritarios = [
+    // Modelo Nubank tela cheia:
+    // "Agora mesmo • 23h28"
+    /Agora\s+mesmo\s*[•·\-\–\—:\s]*([0-2]?\d)\s*[hH:]\s*([0-5]\d)(?:\s*:\s*([0-5]\d))?/i,
+
+    // Modelo lista/extrato:
+    // "17/05/2026 23:17:42"
+    /\b[0-3]?\d\s*[\/.\-]\s*[01]?\d\s*[\/.\-]\s*(?:20)?\d{2}\s+([0-2]?\d)\s*:\s*([0-5]\d)(?:\s*:\s*([0-5]\d))?\b/i,
+
+    // Modelo texto:
+    // "Transferência para Kzinn oSacana -R$ 5.444.400 17/05/2026 23:17:42"
+    /Transfer[eê]ncia[\s\S]{0,220}?([0-2]?\d)\s*:\s*([0-5]\d)(?:\s*:\s*([0-5]\d))?/i,
+
+    // Modelo tela:
+    // "Pronto, enviamos sua transferência ... 23h28"
+    /Pronto[\s\S]{0,260}?([0-2]?\d)\s*[hH:]\s*([0-5]\d)(?:\s*:\s*([0-5]\d))?/i,
+
+    // Variações comuns
+    /\bàs\s+([0-2]?\d)\s*[hH:]\s*([0-5]\d)(?:\s*:\s*([0-5]\d))?\b/i,
+    /\bas\s+([0-2]?\d)\s*[hH:]\s*([0-5]\d)(?:\s*:\s*([0-5]\d))?\b/i,
+  ];
+
+  for (const regex of padroesPrioritarios) {
+    const m = t.match(regex);
+    const horario = m ? normalizarHorarioOCR(m[1], m[2], m[3]) : null;
+    if (horario) return horario;
   }
 
-  const horarios = [...t.matchAll(/\b([01]?\d|2[0-3])[:h]([0-5]\d)(?::[0-5]\d)?\b/gi)];
+  const horarios = [
+    ...t.matchAll(/\b([0-2]?\d)\s*[hH:]\s*([0-5]\d)(?:\s*:\s*([0-5]\d))?\b/gi),
+  ]
+    .map((m) => normalizarHorarioOCR(m[1], m[2], m[3]))
+    .filter(Boolean);
 
   if (!horarios.length) return null;
 
-  const ultimo = horarios[horarios.length - 1];
-
-  return `${String(ultimo[1]).padStart(2, "0")}:${ultimo[2]}`;
+  return horarios[horarios.length - 1];
 }
 
 function parseDataOCR(texto) {
   const t = limparTextoOCR(texto);
 
-  const datas = [...t.matchAll(/\b([0-3]?\d)[\/.-]([01]?\d)[\/.-](20\d{2})\b/g)];
+  const padroes = [
+    // Modelo lista/extrato:
+    // "17/05/2026 23:17:42"
+    /\b([0-3]?\d)\s*[\/.\-]\s*([01]?\d)\s*[\/.\-]\s*(20\d{2})\s+[0-2]?\d\s*:\s*[0-5]\d(?::[0-5]\d)?\b/g,
 
-  if (!datas.length) return null;
+    // Data comum completa:
+    // "17/05/2026"
+    /\b([0-3]?\d)\s*[\/.\-]\s*([01]?\d)\s*[\/.\-]\s*(20\d{2})\b/g,
 
-  const m = datas[0];
+    // Data curta:
+    // "17/05/26"
+    /\b([0-3]?\d)\s*[\/.\-]\s*([01]?\d)\s*[\/.\-]\s*(\d{2})\b/g,
 
-  return `${String(m[1]).padStart(2, "0")}/${String(m[2]).padStart(2, "0")}/${m[3]}`;
+    // Data por extenso:
+    // "17 de maio de 2026"
+    /\b([0-3]?\d)\s+de\s+([a-zç]+)\s+de\s+(20\d{2})\b/gi,
+  ];
+
+  const meses = {
+    janeiro: "01",
+    fevereiro: "02",
+    marco: "03",
+    março: "03",
+    abril: "04",
+    maio: "05",
+    junho: "06",
+    julho: "07",
+    agosto: "08",
+    setembro: "09",
+    outubro: "10",
+    novembro: "11",
+    dezembro: "12",
+  };
+
+  for (const regex of padroes) {
+    const matches = [...t.matchAll(regex)];
+
+    for (const m of matches) {
+      if (Number.isNaN(Number(m[2]))) {
+        const mesTexto = String(m[2] || "").toLowerCase();
+        const mesNumero = meses[mesTexto];
+        const data = mesNumero ? normalizarDataOCR(m[1], mesNumero, m[3]) : null;
+        if (data) return data;
+      }
+
+      const data = normalizarDataOCR(m[1], m[2], m[3]);
+      if (data) return data;
+    }
+  }
+
+  return null;
 }
 
 function limparNomeRecebedorOCR(nome) {
@@ -364,17 +489,21 @@ async function fetchImagemBuffer(url) {
 async function analisarComprovantePagamento(premiacao) {
   const url = extrairPrimeiraUrlImagem(premiacao);
 
-  const resultado = {
-    ok: false,
-    url,
-    texto: "",
-    valorRaw: null,
-    valorNumero: 0,
-    nomeRecebedor: null,
-    horario: null,
-    data: null,
-    erro: null,
-  };
+const agoraSP = getAgoraSPParts();
+
+const resultado = {
+  ok: false,
+  url,
+  texto: "",
+  valorRaw: null,
+  valorNumero: 0,
+  nomeRecebedor: null,
+  horario: agoraSP.horario,
+  data: agoraSP.data,
+  horarioFonte: "registro",
+  dataFonte: "registro",
+  erro: null,
+};
 
   if (!url) {
     resultado.erro = "Nenhuma URL de imagem encontrada.";
@@ -395,13 +524,24 @@ console.log("[PAGAMENTO OCR] Texto identificado:", texto);
 
     const valor = parseValorOCR(texto);
 
-    resultado.ok = true;
-    resultado.texto = texto;
-    resultado.valorRaw = valor?.raw || null;
-    resultado.valorNumero = valor?.numero || 0;
-    resultado.nomeRecebedor = parseNomeRecebedorOCR(texto);
-    resultado.horario = parseHorarioOCR(texto);
-    resultado.data = parseDataOCR(texto);
+    const horarioOCR = parseHorarioOCR(texto);
+const dataOCR = parseDataOCR(texto);
+
+resultado.ok = true;
+resultado.texto = texto;
+resultado.valorRaw = valor?.raw || null;
+resultado.valorNumero = valor?.numero || 0;
+resultado.nomeRecebedor = parseNomeRecebedorOCR(texto);
+
+if (horarioOCR) {
+  resultado.horario = horarioOCR;
+  resultado.horarioFonte = "print";
+}
+
+if (dataOCR) {
+  resultado.data = dataOCR;
+  resultado.dataFonte = "print";
+}
 
     return resultado;
   } catch (err) {
@@ -1081,6 +1221,8 @@ const premiacao = interaction.fields.getTextInputValue("premiacao").trim();
 
 await interaction.deferReply({ ephemeral: true }).catch(() => {});
 
+const agoraFallback = getAgoraSPParts();
+
 const analiseComprovante = await analisarComprovantePagamento(premiacao).catch((err) => ({
   ok: false,
   url: extrairPrimeiraUrlImagem(premiacao),
@@ -1088,8 +1230,10 @@ const analiseComprovante = await analisarComprovantePagamento(premiacao).catch((
   valorRaw: null,
   valorNumero: 0,
   nomeRecebedor: null,
-  horario: null,
-  data: null,
+  horario: agoraFallback.horario,
+  data: agoraFallback.data,
+  horarioFonte: "registro",
+  dataFonte: "registro",
   erro: err?.message || String(err),
 }));
 
@@ -1121,8 +1265,8 @@ const canal = await client.channels.fetch(CANAL_PAGAMENTO).catch(() => null);
   { name: "🔗 Premiação / Link", value: `${premiacao || PADRAO_INDEFINIDO}`, inline: false },
   { name: "👤 Ganhador", value: `${ganhadorNome} | ${ganhadorId}`, inline: true },
   { name: "💰 Valor Identificado", value: analiseComprovante.valorRaw ? `\`${analiseComprovante.valorRaw}\`` : "`Não identificado`", inline: true },
-  { name: "🕒 Horário do Print", value: analiseComprovante.horario ? `\`${analiseComprovante.horario}\`` : "`Não identificado`", inline: true },
-  { name: "📅 Data do Print", value: analiseComprovante.data ? `\`${analiseComprovante.data}\`` : "`Não identificada`", inline: true },
+  { name: "🕒 Horário", value: analiseComprovante.horario ? `\`${analiseComprovante.horario}\` (${analiseComprovante.horarioFonte === "print" ? "print" : "registro"})` : "`Não identificado`", inline: true },
+{ name: "📅 Data", value: analiseComprovante.data ? `\`${analiseComprovante.data}\` (${analiseComprovante.dataFonte === "print" ? "print" : "registro"})` : "`Não identificada`", inline: true },
   { name: "🧾 Nome no Comprovante", value: analiseComprovante.nomeRecebedor ? `\`${analiseComprovante.nomeRecebedor}\`` : "`Não identificado`", inline: true },
 
   // ✅ FIXO PRA TRAVA / AUDITORIA
