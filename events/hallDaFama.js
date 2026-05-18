@@ -266,40 +266,10 @@ async function autoCorrectDuplications(channel, client) {
   }
 }
 
-async function autoCorrectDuplications(channel, client) {
-  try {
-    const messages = await channel.messages.fetch({ limit: 100 }).catch(() => null);
-    if (!messages) return;
-
-    const botHallMessages = messages.filter(m =>
-      m.author.id === client.user.id &&
-      m.content.includes("Santa Creators :") &&
-      m.content.includes("HALL DA FAMA")
-    );
-
-    for (const msg of botHallMessages.values()) {
-      const fixed = fixDuplicatedHallContent(msg.content);
-
-      if (fixed !== msg.content && fixed.length <= 2000) {
-        await msg.edit({ content: fixed }).catch(() => {});
-      }
-    }
-  } catch (e) {
-    console.error("[HallDaFama] Erro na varredura automática:", e);
-  }
-}
-
-// ================= HELPERS =================
-function hasPermission(member, userId) {
 // ================= HELPERS =================
 function hasPermission(member, userId) {
   if (ALLOWED_USERS.includes(userId)) return true;
   return member?.roles?.cache?.some((r) => ALLOWED_ROLES.includes(r.id)) || false;
-}
-
-function canApprove(member, userId) {
-  if (ALLOWED_USERS.includes(userId)) return true;
-  return member?.roles?.cache?.some((r) => APPROVER_ROLES.includes(r.id)) || false;
 }
 
 function buildControlButtons() {
