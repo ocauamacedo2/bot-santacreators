@@ -190,6 +190,23 @@ function cleanOneLine(value = "") {
   return String(value).replace(/\s+/g, " ").trim();
 }
 
+function isBadHallIntro(value = "") {
+  const text = cleanOneLine(value);
+
+  if (!text) return true;
+  if (text.length < 25) return true;
+  if (text.length > 160) return true;
+  if (text.startsWith("http")) return true;
+  if (text.includes("**TOP**")) return true;
+  if (text.includes("HALL DA FAMA")) return true;
+  if (/^é\s+com$/i.test(text)) return true;
+  if (/^é\s+com\s*$/i.test(text)) return true;
+  if ((text.match(/Confira os vencedores/gi) || []).length > 1) return true;
+  if ((text.match(/Hall da Fama/gi) || []).length > 1) return true;
+
+  return false;
+}
+
 function extractHallParts(content = "") {
   const rawContent = String(content || "");
   const lines = rawContent.split("\n").map(l => l.trim()).filter(Boolean);
@@ -228,13 +245,7 @@ function extractHallParts(content = "") {
       .replace(/<:coroa_orange:\d+>/g, "")
       .replace(/:coroa_orange:/g, "")
   );
-  if (
-    !introText ||
-    introText.startsWith("http") ||
-    introText.includes("**TOP**") ||
-    introText.includes("HALL DA FAMA") ||
-    introText.length > 180
-  ) {
+  if (isBadHallIntro(introText)) {
     introText = getRandomIntro();
   }
 
@@ -284,10 +295,9 @@ function fixDuplicatedHallContent(content = "") {
 
   const lines = content.split("\n");
   const mentionsLine = lines.find(l => l.includes("@everyone")) || "";
-  const imageLines = lines.filter(l => /^https?:\/\//i.test(l.trim()));
 
-  const cleanIntro = cleanOneLine(parts.introText);
-  const introLine = buildHallIntroLine(cleanIntro, parts.eventName, parts.cityName);
+  const safeIntro = isBadHallIntro(parts.introText) ? getRandomIntro() : parts.introText;
+  const introLine = buildHallIntroLine(safeIntro, parts.eventName, parts.cityName);
 
   const fixedMessage =
 `# 🎉 :  **Santa Creators : ${parts.eventName}** 🎉 
@@ -302,9 +312,7 @@ ${parts.winnersText.trim()}
 
 **Foi insano, mas mais uma vez os vencedores mostraram que a vitória só é possível com raça! <:__:1357520048318709840>**
 
-${mentionsLine}
-
-${imageLines.join("\n")}`;
+${mentionsLine}`;
 
   return fixedMessage.trim();
 }
@@ -317,9 +325,9 @@ function updateHallCityOnly(content = "", newCityName = "") {
 
   const lines = cleanedContent.split("\n");
   const mentionsLine = lines.find(l => l.includes("@everyone")) || "";
-  const imageLines = lines.filter(l => /^https?:\/\//i.test(l.trim()));
 
-  const introLine = buildHallIntroLine(parts.introText, parts.eventName, newCityName);
+  const safeIntro = isBadHallIntro(parts.introText) ? getRandomIntro() : parts.introText;
+  const introLine = buildHallIntroLine(safeIntro, parts.eventName, newCityName);
 
   const fixedMessage =
 `# 🎉 :  **Santa Creators : ${parts.eventName}** 🎉 
@@ -334,9 +342,7 @@ ${parts.winnersText.trim()}
 
 **Foi insano, mas mais uma vez os vencedores mostraram que a vitória só é possível com raça! <:__:1357520048318709840>**
 
-${mentionsLine}
-
-${imageLines.join("\n")}`;
+${mentionsLine}`;
 
   return fixedMessage.trim();
 }
