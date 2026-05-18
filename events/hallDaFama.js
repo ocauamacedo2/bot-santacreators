@@ -224,9 +224,10 @@ async function ensureButtonAtBottom(channel, client, force = true) {
 }
 
 function buildHallDaFamaModal(cityKey, defaultEventName) {
+  const defaultCityName = CITIES[cityKey]?.label || "Cidade";
   const modal = new ModalBuilder()
     .setCustomId(`${MODAL_SUBMIT}:${cityKey}`)
-    .setTitle(`Hall da Fama - ${CITIES[cityKey].label}`);
+    .setTitle(`Hall da Fama - ${defaultCityName}`);
 
   modal.addComponents(
     new ActionRowBuilder().addComponents(
@@ -266,14 +267,6 @@ function buildHallDaFamaModal(cityKey, defaultEventName) {
       new TextInputBuilder()
         .setCustomId("hf_image")
         .setLabel("Link da Imagem 1 (Banner/Print)")
-        .setPlaceholder("https://cdn.discordapp.com/...")
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true)
-    ),
-    new ActionRowBuilder().addComponents(
-      new TextInputBuilder()
-        .setCustomId("hf_image2")
-        .setLabel("Link da Imagem 2 (Opcional)")
         .setPlaceholder("https://cdn.discordapp.com/...")
         .setStyle(TextInputStyle.Short)
         .setRequired(false)
@@ -723,6 +716,7 @@ ${data.imageUrl}${data.imageUrl2 ? `\n${data.imageUrl2}` : ''}`;
       approverId: interaction.user.id,
       at: Date.now()
     });
+    await autoCorrectDuplications(hallChannel, client);
 
     const embedApproved = EmbedBuilder.from(interaction.message.embeds[0])
       .setColor("#2ecc71")
