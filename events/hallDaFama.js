@@ -223,7 +223,7 @@ async function ensureButtonAtBottom(channel, client, force = true) {
   }
 }
 
-function buildHallDaFamaModal(cityKey, defaultEventName) {
+function buildHallDaFamaModal(cityKey, defaultEventName, defaultCityName) {
   const modal = new ModalBuilder()
     .setCustomId(`${MODAL_SUBMIT}:${cityKey}`)
     .setTitle(`Hall da Fama - ${CITIES[cityKey].label}`);
@@ -237,6 +237,14 @@ function buildHallDaFamaModal(cityKey, defaultEventName) {
         .setStyle(TextInputStyle.Short)
         .setValue(defaultEventName || "")
         .setRequired(true)
+    ),
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("hf_custom_city")
+        .setLabel("Cidade (Opcional - deixe vazio p/ auto)")
+        .setPlaceholder(`Vazio = ${defaultCityName}`)
+        .setStyle(TextInputStyle.Short)
+        .setRequired(false)
     ),
     new ActionRowBuilder().addComponents(
       new TextInputBuilder()
@@ -258,14 +266,6 @@ function buildHallDaFamaModal(cityKey, defaultEventName) {
       new TextInputBuilder()
         .setCustomId("hf_image")
         .setLabel("Link da Imagem 1 (Banner/Print)")
-        .setPlaceholder("https://cdn.discordapp.com/...")
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true)
-    ),
-    new ActionRowBuilder().addComponents(
-      new TextInputBuilder()
-        .setCustomId("hf_image2")
-        .setLabel("Link da Imagem 2 (Opcional)")
         .setPlaceholder("https://cdn.discordapp.com/...")
         .setStyle(TextInputStyle.Short)
         .setRequired(false)
@@ -367,22 +367,6 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
             .setCustomId("hf_edit_event_name")
             .setLabel("Nome do Evento")
             .setValue(eventName)
-            .setStyle(TextInputStyle.Short)
-            .setRequired(true)
-        ),
-        new ActionRowBuilder().addComponents(
-          new TextInputBuilder()
-            .setCustomId("hf_edit_city")
-            .setLabel("Cidade do Evento")
-            .setValue(cityName)
-            .setStyle(TextInputStyle.Short)
-            .setRequired(true)
-        ),
-        new ActionRowBuilder().addComponents(
-          new TextInputBuilder()
-            .setCustomId("hf_edit_intro")
-            .setLabel("Texto de Parabéns (Intro)")
-            .setValue(introText)
             .setStyle(TextInputStyle.Short)
             .setRequired(true)
         ),
@@ -578,11 +562,13 @@ ${newImageUrl}${newImageUrl2 ? `\n${newImageUrl2}` : ''}`;
 
     // Pega inputs
     const eventNameInput = interaction.fields.getTextInputValue("hf_event_name");
+    const customCityInput = interaction.fields.getTextInputValue("hf_custom_city");
     const top1 = interaction.fields.getTextInputValue("hf_top1");
     const topsExtra = interaction.fields.getTextInputValue("hf_tops_extra");
     const imageUrl = interaction.fields.getTextInputValue("hf_image");
-    const imageUrl2 = interaction.fields.getTextInputValue("hf_image2");
-
+    // O campo hf_image2 foi removido para dar lugar ao custom_city (limite de 5 campos)
+    const imageUrl2 = ""; 
+    
     // Pega dados do cronograma (automático)
     const eventData = getTodayEventData();
     const eventName = eventNameInput; // Usa o input do usuário
@@ -624,11 +610,14 @@ ${newImageUrl}${newImageUrl2 ? `\n${newImageUrl2}` : ''}`;
       });
     }
 
+    // Cidade Final: Custom ou Cronograma
+    const finalCityName = customCityInput && customCityInput.trim().length > 0 ? customCityInput.trim() : CITIES[cityKey].label;
+
     const reqId = `${interaction.user.id}-${Date.now()}`;
     
     state.pendingRequests[reqId] = {
       userId: interaction.user.id,
-      cityKey,
+      cityName: finalCityName,
       eventName,
       winnersText,
       imageUrl,
@@ -642,7 +631,7 @@ ${newImageUrl}${newImageUrl2 ? `\n${newImageUrl2}` : ''}`;
     const embed = new EmbedBuilder()
       .setTitle("🛡️ Aprovação: Hall da Fama")
       .setColor("#FFD700")
-      .setDescription(`**Solicitante:** <@${interaction.user.id}>\n**Cidade:** ${CITIES[cityKey].label}`)
+      .setDescription(`**Solicitante:** <@${interaction.user.id}>\n**Cidade:** ${finalCityName}`)
       .addFields(
         { name: "Evento (Automático)", value: eventName },
         { name: "Vencedores (Formatado)", value: winnersText },
@@ -688,14 +677,13 @@ ${newImageUrl}${newImageUrl2 ? `\n${newImageUrl2}` : ''}`;
     const hallChannel = await client.channels.fetch(HALL_CHANNEL_ID).catch(() => null);
     if (!hallChannel) return interaction.editReply("❌ Canal do Hall da Fama não encontrado.");
 
-    const cityData = CITIES[data.cityKey];
     const intro = getRandomIntro(); // Frase aleatória
     
     // Montagem da mensagem final (Estilo Diva/Grande)
     const finalMessage = 
 `# 🎉 :  **Santa Creators : ${data.eventName}** 🎉 
 
-${intro} **${data.eventName.toUpperCase()}** na **${cityData.label.toUpperCase()}**! <:coroa_orange:1353939359144870019> 
+${intro} **${data.eventName.toUpperCase()}** na **${data.cityName.toUpperCase()}**! <:coroa_orange:1353939359144870019> 
 
 👏  Uma salva de palmas para os BRABOS! 👏 
 
@@ -703,7 +691,7 @@ ${intro} **${data.eventName.toUpperCase()}** na **${cityData.label.toUpperCase()
 
 ${data.winnersText}
 
-**Foi insano, mas mais uma vez os vencedores mostraram que a vitória só é possível com raça! <:__:1357520048318709840>**
+**Foi insano, mas mais uma vez os vencedores mostraram que a vitória só é possível com raça! <:__:1357520048318709840>**`
 
 ||@everyone @here <@&${ROLE_CIDADAO}> <@&${ROLE_LIDERES}> <@&${cityData.roleId}>||
 
