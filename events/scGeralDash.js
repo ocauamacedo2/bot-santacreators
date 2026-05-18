@@ -835,20 +835,6 @@ function pagamentos_getRegistrarId(emb) {
   return m ? (m[1] || m[2]) : null;
 }
 
-// Helper para Pagamento Social (Backfill)
-// ✅ Só considera ponto quando o STATUS estiver realmente PAGO.
-function pagamento_getStatus(emb) {
-  const fields = getFields(emb);
-  const statusField = fields.find((f) => norm(f.name).includes("status"));
-  const statusValue = norm(statusField?.value || "");
-
-  const isPago = statusValue.includes("pago");
-  const isReprovado = statusValue.includes("reprovado");
-  const isSolicitado = statusValue.includes("solicitado");
-
-  return { isPago, isReprovado, isSolicitado };
-}
-
 function isRegistroManagerEmbed(emb) {
   const t = norm(emb?.title || emb?.data?.title || "");
 
