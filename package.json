@@ -21,6 +21,7 @@
     "play-dl": "^1.9.7",
     "pm2": "^6.0.14",
     "qrcode": "^1.5.1",
+    "sharp": "^0.34.5",
     "spotify-web-api-node": "^5.0.2",
     "tesseract.js": "^7.0.0",
     "ytdl-core": "^4.11.5"

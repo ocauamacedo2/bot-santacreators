@@ -13,6 +13,7 @@ import {
 } from "discord.js";
 import { dashEmit } from "../utils/dashHub.js";
 import { createWorker } from "tesseract.js";
+import sharp from "sharp";
 
 // ============================================================================
 // PAGAMENTOS SOCIAL MÍDIAS (SEM LISTENERS AQUI)
@@ -330,7 +331,11 @@ function parseHorarioOCR(texto) {
     /\b[0-3]?\d\s*[\/.\-]\s*[01]?\d\s*[\/.\-]\s*(?:20)?\d{2}\s+([0-2]?\d)\s*:\s*([0-5]\d)(?:\s*:\s*([0-5]\d))?\b/i,
     /\b[0-3]?\d\s*[\/.\-]\s*[01]?\d\s*[\/.\-]\s*(?:20)?\d{2}\s+([0-2]?\d)\s*([0-5]\d)\b/i,
 
+    /Transfer[eê]ncia\s+para[\s\S]{0,220}?([0-2]?\d)\s*:\s*([0-5]\d)(?:\s*:\s*([0-5]\d))?/i,
     /Transfer[eê]ncia[\s\S]{0,260}?([0-2]?\d)\s*:\s*([0-5]\d)(?:\s*:\s*([0-5]\d))?/i,
+
+    /R\$\s*[0-9.\s]+[\s\S]{0,80}?([0-2]?\d)\s*:\s*([0-5]\d)(?:\s*:\s*([0-5]\d))?/i,
+
     /Pronto[\s\S]{0,320}?([0-2]?\d)\s*[hH:]\s*([0-5]\d)(?:\s*:\s*([0-5]\d))?/i,
     /Pronto[\s\S]{0,320}?([0-2]?\d)\s*([0-5]\d)\b/i,
 
@@ -362,6 +367,8 @@ function parseDataOCR(texto) {
   const padroes = [
     // Modelo lista/extrato:
     // "17/05/2026 23:17:42"
+    /Transfer[eê]ncia[\s\S]{0,260}?\b([0-3]?\d)\s*[\/.\-]\s*([01]?\d)\s*[\/.\-]\s*(20\d{2})\s+[0-2]?\d\s*:\s*[0-5]\d(?::[0-5]\d)?\b/gi,
+
     /\b([0-3]?\d)\s*[\/.\-]\s*([01]?\d)\s*[\/.\-]\s*(20\d{2})\s+[0-2]?\d\s*:\s*[0-5]\d(?::[0-5]\d)?\b/g,
 
     // Data comum completa:
@@ -483,6 +490,34 @@ async function fetchImagemBuffer(url) {
   }
 }
 
+async function prepararImagemParaOCR(buffer) {
+  try {
+    const meta = await sharp(buffer).metadata();
+
+    const largura = meta.width || 0;
+    const altura = meta.height || 0;
+
+    const fator =
+      largura <= 600 || altura <= 120
+        ? 5
+        : 3;
+
+    return await sharp(buffer)
+      .resize({
+        width: largura ? Math.max(largura * fator, 1800) : undefined,
+        withoutEnlargement: false,
+      })
+      .grayscale()
+      .normalize()
+      .sharpen()
+      .png()
+      .toBuffer();
+  } catch (err) {
+    console.warn("[PAGAMENTO OCR] Falha ao preparar imagem, usando original:", err?.message || err);
+    return buffer;
+  }
+}
+
 async function reconhecerTextoPagamentoReforcado(worker, buffer) {
   const leituraNormal = await worker.recognize(buffer);
   const textoNormal = limparTextoOCR(leituraNormal?.data?.text || "");
@@ -537,7 +572,8 @@ const resultado = {
   let worker = null;
 
   try {
-    const buffer = await fetchImagemBuffer(url);
+const bufferOriginal = await fetchImagemBuffer(url);
+const bufferOCR = await prepararImagemParaOCR(bufferOriginal);
 
 worker = await createWorker("por");
 
@@ -545,7 +581,7 @@ await worker.setParameters({
   preserve_interword_spaces: "1",
 });
 
-const texto = await reconhecerTextoPagamentoReforcado(worker, buffer);
+const texto = await reconhecerTextoPagamentoReforcado(worker, bufferOCR);
 
 console.log("[PAGAMENTO OCR] Texto identificado:", texto);
 
