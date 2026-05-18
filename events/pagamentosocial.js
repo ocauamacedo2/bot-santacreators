@@ -264,32 +264,57 @@ function parseValorOCR(texto) {
 function parseHorarioOCR(texto) {
   const t = limparTextoOCR(texto);
 
-  const m = t.match(/\b([01]?\d|2[0-3])[:h]([0-5]\d)\b/i);
-  if (!m) return null;
+  const prioridadeAgoraMesmo = t.match(/Agora\s+mesmo\s*[•·\-–—]?\s*([01]?\d|2[0-3])[:h]([0-5]\d)/i);
+  if (prioridadeAgoraMesmo) {
+    return `${String(prioridadeAgoraMesmo[1]).padStart(2, "0")}:${prioridadeAgoraMesmo[2]}`;
+  }
 
-  return `${String(m[1]).padStart(2, "0")}:${m[2]}`;
+  const horarios = [...t.matchAll(/\b([01]?\d|2[0-3])[:h]([0-5]\d)(?::[0-5]\d)?\b/gi)];
+
+  if (!horarios.length) return null;
+
+  const ultimo = horarios[horarios.length - 1];
+
+  return `${String(ultimo[1]).padStart(2, "0")}:${ultimo[2]}`;
 }
 
 function parseDataOCR(texto) {
   const t = limparTextoOCR(texto);
 
-  const m = t.match(/\b([0-3]?\d)[\/.-]([01]?\d)[\/.-](20\d{2})\b/);
-  if (!m) return null;
+  const datas = [...t.matchAll(/\b([0-3]?\d)[\/.-]([01]?\d)[\/.-](20\d{2})\b/g)];
+
+  if (!datas.length) return null;
+
+  const m = datas[0];
 
   return `${String(m[1]).padStart(2, "0")}/${String(m[2]).padStart(2, "0")}/${m[3]}`;
+}
+
+function limparNomeRecebedorOCR(nome) {
+  return String(nome || "")
+    .replace(/[-–—]?\s*R\$\s*[0-9]{1,3}(?:[.\s][0-9]{3})*(?:,[0-9]{2})?/gi, "")
+    .replace(/\bAgora\s+mesmo\b/gi, "")
+    .replace(/\b\d{1,2}[:h]\d{2}\b/gi, "")
+    .replace(/\b\d{1,2}[\/.-]\d{1,2}[\/.-]20\d{2}\b/gi, "")
+    .replace(/[•·]/g, "")
+    .replace(/\s{2,}/g, " ")
+    .replace(/[-–—|:]+$/g, "")
+    .trim();
 }
 
 function parseNomeRecebedorOCR(texto) {
   const t = limparTextoOCR(texto);
 
-  const mPara = t.match(/\bpara\s+([^\n\r]+?)(?:\s+Agora|\s+R\$|\n|$)/i);
+  const mPara = t.match(/\bpara\s+(.+?)(?:\n|Agora\s+mesmo|R\$|$)/i);
   if (mPara?.[1]) {
-    return mPara[1].replace(/[•·]/g, "").trim();
+    const nome = limparNomeRecebedorOCR(mPara[1]);
+    if (nome) return nome;
   }
 
-  const mTransferencia = t.match(/Transfer[eê]ncia\s+de\s+([^\n\r]+?)(?:\s+R\$|\n|$)/i);
+  const mTransferencia = t.match(/Transfer[eê]ncia\s+de\s+(.+?)(?:\n|R\$|$)/i);
   if (mTransferencia?.[1]) {
-    return mTransferencia[1].trim();
+    const nome = limparNomeRecebedorOCR(mTransferencia[1]);
+    if (nome) return nome;
   }
 
   return null;
@@ -363,8 +388,10 @@ async function analisarComprovantePagamento(premiacao) {
 
     worker = await createWorker("por");
 
-    const { data } = await worker.recognize(buffer);
-    const texto = limparTextoOCR(data?.text || "");
+   const { data } = await worker.recognize(buffer);
+const texto = limparTextoOCR(data?.text || "");
+
+console.log("[PAGAMENTO OCR] Texto identificado:", texto);
 
     const valor = parseValorOCR(texto);
 
