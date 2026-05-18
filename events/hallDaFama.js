@@ -228,8 +228,13 @@ function extractHallParts(content = "") {
       .replace(/<:coroa_orange:\d+>/g, "")
       .replace(/:coroa_orange:/g, "")
   );
-
-  if (!introText || introText.startsWith("http") || introText.includes("**TOP**")) {
+  if (
+    !introText ||
+    introText.startsWith("http") ||
+    introText.includes("**TOP**") ||
+    introText.includes("HALL DA FAMA") ||
+    introText.length > 180
+  ) {
     introText = getRandomIntro();
   }
 
@@ -305,19 +310,35 @@ ${imageLines.join("\n")}`;
 }
 
 function updateHallCityOnly(content = "", newCityName = "") {
-  const parts = extractHallParts(content);
-  const lines = content.split("\n");
+  const cleanedContent = fixDuplicatedHallContent(content);
+  const parts = extractHallParts(cleanedContent);
 
-  const introIndex = lines.findIndex(l =>
-    l.includes("<:coroa_orange:") ||
-    l.includes(":coroa_orange:")
-  );
+  if (!parts.winnersText) return cleanedContent;
 
-  if (introIndex === -1) return content;
+  const lines = cleanedContent.split("\n");
+  const mentionsLine = lines.find(l => l.includes("@everyone")) || "";
+  const imageLines = lines.filter(l => /^https?:\/\//i.test(l.trim()));
 
-  lines[introIndex] = buildHallIntroLine(parts.introText, parts.eventName, newCityName);
+  const introLine = buildHallIntroLine(parts.introText, parts.eventName, newCityName);
 
-  return lines.join("\n");
+  const fixedMessage =
+`# 🎉 :  **Santa Creators : ${parts.eventName}** 🎉 
+
+${introLine}
+
+👏  Uma salva de palmas para os BRABOS! 👏 
+
+<:12633559939374122111:1368796471297576970>  **HALL DA FAMA** <:12633559939374122111:1368796471297576970> 
+
+${parts.winnersText.trim()}
+
+**Foi insano, mas mais uma vez os vencedores mostraram que a vitória só é possível com raça! <:__:1357520048318709840>**
+
+${mentionsLine}
+
+${imageLines.join("\n")}`;
+
+  return fixedMessage.trim();
 }
 
 async function autoCorrectDuplications(channel, client) {
@@ -389,12 +410,18 @@ async function ensureButtonAtBottom(channel, client, force = true) {
     const messages = await channel.messages.fetch({ limit: 50 }).catch(() => null);
     if (!messages) return;
 
-  const myMsgs = messages.filter(
-  (m) => m.author.id === client.user.id && m.components.length > 0 && m.components[0].components.some(c => [BTN_OPEN_MENU, BTN_EDIT_LAST, BTN_EDIT_PRIZES, BTN_EDIT_CITY, BTN_SCAN_ALL].includes(c.customId))
-);
+  const myMsgs = messages.filter((m) => {
+    if (m.author.id !== client.user.id || m.components.length === 0) return false;
 
-    // ✅ Checa se já existe um painel de botões ATUALIZADO (com 3 botões)
-  const upToDateMsg = myMsgs.find(m => m.components[0]?.components?.length === 5);
+    const allButtons = m.components.flatMap(row => row.components || []);
+    return allButtons.some(c => [BTN_OPEN_MENU, BTN_EDIT_LAST, BTN_EDIT_PRIZES, BTN_EDIT_CITY, BTN_SCAN_ALL].includes(c.customId));
+  });
+
+    // ✅ Checa se já existe um painel de botões ATUALIZADO com o botão de varredura
+  const upToDateMsg = myMsgs.find((m) => {
+    const allButtons = m.components.flatMap(row => row.components || []);
+    return allButtons.some(c => c.customId === BTN_SCAN_ALL);
+  });
 
     // Se não for forçado e já existir um painel atualizado, não faz nada.
     if (!force && upToDateMsg) return;
@@ -470,7 +497,7 @@ export async function hallDaFamaOnReady(client) {
   state = loadState();
   const channel = await client.channels.fetch(HALL_CHANNEL_ID).catch(() => null);
   if (channel && channel.isTextBased()) {
-    await ensureButtonAtBottom(channel, client, true);
+     await ensureButtonAtBottom(channel, client, true);
 
     if (shouldRunHallScanToday()) {
       await autoCorrectDuplications(channel, client);
