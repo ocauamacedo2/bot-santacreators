@@ -823,9 +823,30 @@ function isPaymentRecordEmbed(emb) {
   return t.includes("Registro de Pagamento de Evento") && t.includes("SANTACREATORS");
 }
 function pagamentos_getRegistrarId(emb) {
-  const f = getFields(emb).find((x) => norm(x?.name).includes("registro"));
-  const m = /<@!?(\d+)>/.exec(String(f?.value || ""));
-  return m ? m[1] : null;
+  const fields = getFields(emb);
+
+  // ✅ Tenta primeiro o campo novo fixo do pagamentosocial.js
+  // ✅ Depois usa fallback antigo "Registro"
+  const f =
+    fields.find((x) => norm(x?.name).includes("criador do registro")) ||
+    fields.find((x) => norm(x?.name).includes("registro"));
+
+  const m = /<@!?(\d+)>|`(\d+)`/.exec(String(f?.value || ""));
+  return m ? (m[1] || m[2]) : null;
+}
+
+// Helper para Pagamento Social (Backfill)
+// ✅ Só considera ponto quando o STATUS estiver realmente PAGO.
+function pagamento_getStatus(emb) {
+  const fields = getFields(emb);
+  const statusField = fields.find((f) => norm(f.name).includes("status"));
+  const statusValue = norm(statusField?.value || "");
+
+  const isPago = statusValue.includes("pago");
+  const isReprovado = statusValue.includes("reprovado");
+  const isSolicitado = statusValue.includes("solicitado");
+
+  return { isPago, isReprovado, isSolicitado };
 }
 
 function isRegistroManagerEmbed(emb) {
@@ -1462,7 +1483,7 @@ async function collectAllGeneral(client, mode = "light") {
 
 
 
-    await scanChannelEmbeds(client, {
+  await scanChannelEmbeds(client, {
     channelId: CH_PAGAMENTOS_ID,
     weekFloorKey,
     maxPages: 80,
@@ -1470,8 +1491,13 @@ async function collectAllGeneral(client, mode = "light") {
       const emb = m.embeds?.[0];
       if (!emb) return;
       if (!isPaymentRecordEmbed(emb)) return;
+
+      const status = pagamento_getStatus(emb);
+      if (!status.isPago) return;
+
       const uid = pagamentos_getRegistrarId(emb);
       if (!uid) return;
+
       items.push({
         userId: uid,
         ts: new Date(m.createdTimestamp),

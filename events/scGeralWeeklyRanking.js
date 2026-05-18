@@ -591,9 +591,26 @@ function isPaymentRecordEmbed(emb) {
   return t.includes("Registro de Pagamento de Evento") && t.includes("SANTACREATORS");
 }
 function pagamentos_getRegistrarId(emb) {
-  const f = getFields(emb).find((x) => norm(x?.name).includes("registro"));
-  const m = /<@!?(\d+)>/.exec(String(f?.value || ""));
-  return m ? m[1] : null;
+  const fields = getFields(emb);
+  // ✅ Tenta pelo campo novo de ID fixo ou pelo antigo de menção
+  const f = fields.find((x) => norm(x?.name).includes("criador do registro")) || 
+            fields.find((x) => norm(x?.name).includes("registro"));
+  const m = /<@!?(\d+)>|`(\d+)`/.exec(String(f?.value || ""));
+  return m ? (m[1] || m[2]) : null;
+}
+
+// Helper para Pagamento Social (Backfill)
+function pagamento_getStatus(emb) {
+  const fields = getFields(emb);
+  // ✅ FIX: Checa o VALOR do campo de status, não o nome.
+  const statusField = fields.find(f => norm(f.name).includes("status"));
+  const statusValue = norm(statusField?.value || "");
+
+  const isPago = statusValue.includes("pago");
+  const isReprovado = statusValue.includes("reprovado");
+  const isSolicitado = statusValue.includes("solicitado");
+  
+  return { isPago, isReprovado, isSolicitado };
 }
 
 function isRegistroManagerEmbed(emb) {
@@ -1078,6 +1095,8 @@ async function collectAllPoints(client, mode = "light") {
   });
 
   // PAGAMENTOS
+  // ✅ Só pontua pagamento social quando estiver PAGO/APROVADO.
+  // ✅ Criado, solicitado ou reprovado NÃO gera ponto.
   await scanChannelEmbeds(client, {
     channelId: CH_PAGAMENTOS_ID,
     weekFloorKey,
@@ -1086,8 +1105,13 @@ async function collectAllPoints(client, mode = "light") {
       const emb = m.embeds?.[0];
       if (!emb) return;
       if (!isPaymentRecordEmbed(emb)) return;
+
+      const status = pagamento_getStatus(emb);
+      if (!status.isPago) return;
+
       const uid = pagamentos_getRegistrarId(emb);
       if (!uid) return;
+
       pushItem({ userId: uid, ts: new Date(m.createdTimestamp), source: "pagamentos" });
     },
   });
