@@ -69,6 +69,8 @@ const BTN_EDIT_LAST = "hf_edit_last";
 const MODAL_EDIT_SUBMIT = "hf_modal_edit_submit";
 const BTN_EDIT_PRIZES = "hf_edit_prizes";
 const MODAL_PRIZES_SUBMIT = "hf_modal_prizes_submit";
+const BTN_EDIT_CITY = "hf_edit_city";
+const MODAL_CITY_SUBMIT = "hf_modal_city_submit";
 
 // ================= PERSISTÊNCIA =================
 const __filename = fileURLToPath(import.meta.url);
@@ -132,11 +134,16 @@ function extractPrizeForRank(prizesText, rank) {
 
 // ================= TEMPLATES DE TEXTO (VARIAÇÃO) =================
 const INTRO_TEMPLATES = [
-  "É com **MUITO orgulho** que anunciamos os grandes vencedores do nosso evento!",
-  "**É com MUITA honra** que trazemos os campeões do evento de hoje!",
-  "A disputa foi insana, mas eles mostraram quem manda! Confira os vencedores:",
-  "Mais um evento concluído com sucesso! Uma salva de palmas para os brabos:",
-  "Eles mostraram habilidade, esperteza e sangue nos olhos! 🩸"
+  "A disputa foi pesada e só os brabos ficaram de pé. Confira os vencedores:",
+  "Mais um evento finalizado com sucesso! Hoje quem brilhou foram eles:",
+  "Teve estratégia, coragem e muita pressão. Esses foram os grandes campeões:",
+  "O evento foi insano do começo ao fim, e esses nomes dominaram a disputa:",
+  "Eles chegaram focados, jogaram muito e garantiram o topo do Hall da Fama:",
+  "A SantaCreators presenciou mais uma disputa absurda. Confira quem levou a melhor:",
+  "Hoje foi dia de mostrar habilidade, frieza e raça. Parabéns aos vencedores:",
+  "Mais uma batalha concluída, e esses brabos cravaram seus nomes na história:",
+  "O evento pegou fogo, mas eles mantiveram o controle e saíram campeões:",
+  "No fim, só quem teve sangue frio ficou no topo. Confira os destaques:"
 ];
 
 function getRandomIntro() {
@@ -173,63 +180,54 @@ function extractHallParts(content = "") {
   const rawContent = String(content || "");
   const lines = rawContent.split("\n").map(l => l.trim()).filter(Boolean);
 
-  const titleLine = lines.find(l => l.includes("Santa Creators :")) || "";
-  const eventName =
-    titleLine.match(/Santa Creators\s*:\s*(.*?)\*\*/i)?.[1]?.trim() ||
-    titleLine.match(/Santa Creators\s*:\s*(.*?)\s*🎉/i)?.[1]?.trim() ||
-    "Evento";
-
-  const imageLines = lines.filter(l => l.startsWith("http://") || l.startsWith("https://"));
-  const imageUrl = imageLines[0] || "";
+  const imageUrl = rawContent.match(/https?:\/\/\S+/i)?.[0] || "";
 
   const contentWithoutUrls = rawContent
     .replace(/https?:\/\/\S+/gi, "")
     .replace(/\|\|@everyone[\s\S]*?\|\|/gi, "")
-    .replace(/@everyone|@here/gi, "");
+    .replace(/@everyone|@here/gi, "")
+    .trim();
 
-  const introLine =
-    lines.find(l =>
-      !l.startsWith("http://") &&
-      !l.startsWith("https://") &&
-      (l.includes("<:coroa_orange:") || l.includes(":coroa_orange:"))
-    ) || "";
+  const eventName =
+    contentWithoutUrls.match(/Santa Creators\s*:\s*(.*?)\*\*/i)?.[1]?.trim() ||
+    contentWithoutUrls.match(/Santa Creators\s*:\s*(.*?)\s*🎉/i)?.[1]?.trim() ||
+    "Evento";
 
-  let introText = "";
-  let cityName = "";
+  const cityName =
+    contentWithoutUrls.match(/na\s+\*\*(Cidade\s+(?:Nobre|Santa|Grande|Maresia))\*\*!/i)?.[1]?.trim() ||
+    contentWithoutUrls.match(/na\s+(Cidade\s+(?:Nobre|Santa|Grande|Maresia))!/i)?.[1]?.trim() ||
+    contentWithoutUrls.match(/CIDADE\s+(NOBRE|SANTA|GRANDE|MARESIA)/i)?.[0]?.trim() ||
+    "Cidade";
 
-  const cityMatch =
-    contentWithoutUrls.match(/na\s+\*\*(Cidade\s+(?:Nobre|Santa|Grande|Maresia))\*\*!/i) ||
-    contentWithoutUrls.match(/na\s+(Cidade\s+(?:Nobre|Santa|Grande|Maresia))!/i);
+  let introText =
+    contentWithoutUrls.match(/🎉\s*(.*?)\s+\*\*[^*]+\*\*\s+na\s+\*\*Cidade\s+(?:Nobre|Santa|Grande|Maresia)\*\*!/i)?.[1]?.trim() ||
+    contentWithoutUrls.match(/🎉\s*(.*?)\s+[A-ZÀ-Ú0-9\s]+na\s+CIDADE\s+(?:NOBRE|SANTA|GRANDE|MARESIA)!/i)?.[1]?.trim() ||
+    "";
 
-  if (cityMatch) {
-    cityName = cleanOneLine(cityMatch[1]);
-  }
+  introText = cleanOneLine(
+    introText
+      .replace(/^:\s*/, "")
+      .replace(/\*\*/g, "")
+      .replace(/Santa Creators\s*:\s*.*?🎉/i, "")
+      .replace(/<:coroa_orange:\d+>/g, "")
+      .replace(/:coroa_orange:/g, "")
+  );
 
-  if (introLine) {
-    const introBeforeEvent = introLine.split(/\s+\*\*.*?\*\*\s+na\s+\*\*/i)[0];
-
-    introText = cleanOneLine(
-      introBeforeEvent
-        .replace(/^#\s*🎉\s*:\s*\*\*Santa Creators\s*:.*?\*\*\s*🎉/i, "")
-        .replace(/<:coroa_orange:\d+>/g, "")
-        .replace(/:coroa_orange:/g, "")
-    );
-  }
-
-  if (!introText || introText.startsWith("http")) {
-    introText = "A disputa foi insana, mas eles mostraram quem manda! Confira os vencedores:";
+  if (!introText || introText.startsWith("http") || introText.includes("**TOP**")) {
+    introText = getRandomIntro();
   }
 
   let winnersText = "";
-  const winnersStartIndex = lines.findIndex(l => l.includes("HALL DA FAMA"));
-  const winnersEndIndex = lines.findIndex(l => l.includes("Foi insano, mas mais uma vez"));
 
-  if (winnersStartIndex !== -1 && winnersEndIndex !== -1 && winnersEndIndex > winnersStartIndex) {
-    winnersText = lines.slice(winnersStartIndex + 1, winnersEndIndex).join("\n").trim();
+  const hallIndex = lines.findIndex(l => l.includes("HALL DA FAMA"));
+  const endIndex = lines.findIndex(l => l.includes("Foi insano, mas mais uma vez"));
+
+  if (hallIndex !== -1 && endIndex !== -1 && endIndex > hallIndex) {
+    winnersText = lines.slice(hallIndex + 1, endIndex).join("\n").trim();
   }
 
   if (!winnersText) {
-    const topMatches = [...rawContent.matchAll(/\*\*TOP\*\*[\s\S]*?(?=\*\*TOP\*\*|\*\*Foi insano|https?:\/\/|$)/g)];
+    const topMatches = [...contentWithoutUrls.matchAll(/\*\*TOP\*\*[\s\S]*?(?=\*\*TOP\*\*|\*\*Foi insano|Foi insano|$)/g)];
 
     winnersText = topMatches
       .map(m => cleanOneLine(m[0]))
@@ -237,9 +235,13 @@ function extractHallParts(content = "") {
       .join("\n");
   }
 
+  if (!winnersText || winnersText.includes("Santa Creators :")) {
+    winnersText = "";
+  }
+
   return {
     eventName: cleanOneLine(eventName) || "Evento",
-    cityName: cleanOneLine(cityName) || "Cidade Maresia",
+    cityName: cleanOneLine(cityName) || "Cidade",
     introText: cleanOneLine(introText) || getRandomIntro(),
     winnersText,
     imageUrl
@@ -247,7 +249,7 @@ function extractHallParts(content = "") {
 }
 
 function buildHallIntroLine(intro, eventName, cityName) {
-  return `${cleanOneLine(intro)} **${cleanOneLine(eventName).toUpperCase()}** na **${cleanOneLine(cityName).toUpperCase()}**! <:coroa_orange:1353939359144870019>`;
+  return `${cleanOneLine(intro)}\n\n🏆 **${cleanOneLine(eventName).toUpperCase()}** na **${cleanOneLine(cityName).toUpperCase()}**! <:coroa_orange:1353939359144870019>`;
 }
 
 function fixDuplicatedHallContent(content = "") {
@@ -264,6 +266,22 @@ function fixDuplicatedHallContent(content = "") {
   if (introIndex === -1) return content;
 
   lines[introIndex] = buildHallIntroLine(parts.introText, parts.eventName, parts.cityName);
+
+  return lines.join("\n");
+}
+
+function updateHallCityOnly(content = "", newCityName = "") {
+  const parts = extractHallParts(content);
+  const lines = content.split("\n");
+
+  const introIndex = lines.findIndex(l =>
+    l.includes("<:coroa_orange:") ||
+    l.includes(":coroa_orange:")
+  );
+
+  if (introIndex === -1) return content;
+
+  lines[introIndex] = buildHallIntroLine(parts.introText, parts.eventName, newCityName);
 
   return lines.join("\n");
 }
@@ -297,6 +315,11 @@ function hasPermission(member, userId) {
   return member?.roles?.cache?.some((r) => ALLOWED_ROLES.includes(r.id)) || false;
 }
 
+function canApprove(member, userId) {
+  if (ALLOWED_USERS.includes(userId)) return true;
+  return member?.roles?.cache?.some((r) => APPROVER_ROLES.includes(r.id)) || false;
+}
+
 function buildControlButtons() {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
@@ -313,7 +336,12 @@ function buildControlButtons() {
       .setCustomId(BTN_EDIT_PRIZES)
       .setLabel("🎁 Editar Premiações")
       .setStyle(ButtonStyle.Secondary)
-      .setEmoji("💰")
+      .setEmoji("💰"),
+    new ButtonBuilder()
+      .setCustomId(BTN_EDIT_CITY)
+      .setLabel("🌆 Editar Cidade")
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji("🌆")
   );
 }
 
@@ -322,12 +350,12 @@ async function ensureButtonAtBottom(channel, client, force = true) {
     const messages = await channel.messages.fetch({ limit: 20 }).catch(() => null);
     if (!messages) return;
 
-    const myMsgs = messages.filter(
-      (m) => m.author.id === client.user.id && m.components.length > 0 && m.components[0].components.some(c => [BTN_OPEN_MENU, BTN_EDIT_LAST, BTN_EDIT_PRIZES].includes(c.customId))
-    );
+  const myMsgs = messages.filter(
+  (m) => m.author.id === client.user.id && m.components.length > 0 && m.components[0].components.some(c => [BTN_OPEN_MENU, BTN_EDIT_LAST, BTN_EDIT_PRIZES, BTN_EDIT_CITY].includes(c.customId))
+);
 
     // ✅ Checa se já existe um painel de botões ATUALIZADO (com 3 botões)
-    const upToDateMsg = myMsgs.find(m => m.components[0]?.components?.length === 3);
+  const upToDateMsg = myMsgs.find(m => m.components[0]?.components?.length === 4);
 
     // Se não for forçado e já existir um painel atualizado, não faz nada.
     if (!force && upToDateMsg) return;
@@ -411,6 +439,86 @@ export async function hallDaFamaOnReady(client) {
 export async function hallDaFamaHandleInteraction(interaction, client) {
   if (!interaction.guild) return false;
 
+  // ✅ Botão para editar somente a cidade do último Hall da Fama
+  if (interaction.isButton() && interaction.customId === BTN_EDIT_CITY) {
+    if (!hasPermission(interaction.member, interaction.user.id)) {
+      return interaction.reply({ content: "🚫 Sem permissão para editar a cidade.", ephemeral: true });
+    }
+
+    const hallChannel = await client.channels.fetch(HALL_CHANNEL_ID).catch(() => null);
+    if (!hallChannel) {
+      return interaction.reply({ content: "❌ Canal do Hall da Fama não encontrado.", ephemeral: true });
+    }
+
+    const messages = await hallChannel.messages.fetch({ limit: 50 }).catch(() => null);
+    if (!messages) {
+      return interaction.reply({ content: "❌ Não foi possível buscar as mensagens do canal.", ephemeral: true });
+    }
+
+    const lastHallMessage = messages
+      .filter(m => m.author.id === client.user.id && m.content.includes("Santa Creators :") && m.content.includes("HALL DA FAMA"))
+      .sort((a, b) => b.createdTimestamp - a.createdTimestamp)
+      .first();
+
+    if (!lastHallMessage) {
+      return interaction.reply({ content: "❌ Nenhum Hall da Fama recente encontrado para editar a cidade.", ephemeral: true });
+    }
+
+    const parts = extractHallParts(lastHallMessage.content);
+
+    const modal = new ModalBuilder()
+      .setCustomId(`${MODAL_CITY_SUBMIT}:${lastHallMessage.id}`)
+      .setTitle("🌆 Editar Cidade do Hall");
+
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId("hf_city_only")
+          .setLabel("Cidade correta do evento")
+          .setValue(parts.cityName || "Cidade")
+          .setPlaceholder("Ex: Cidade Maresia")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+      )
+    );
+
+    await interaction.showModal(modal);
+    return true;
+  }
+
+  // ✅ Modal para editar somente a cidade do último Hall da Fama
+  if (interaction.isModalSubmit() && interaction.customId.startsWith(MODAL_CITY_SUBMIT)) {
+    if (!hasPermission(interaction.member, interaction.user.id)) {
+      return interaction.reply({ content: "🚫 Sem permissão para editar a cidade.", ephemeral: true });
+    }
+
+    await interaction.deferReply({ ephemeral: true });
+
+    const messageId = interaction.customId.split(":")[1];
+    const newCityName = interaction.fields.getTextInputValue("hf_city_only");
+
+    const hallChannel = await client.channels.fetch(HALL_CHANNEL_ID).catch(() => null);
+    if (!hallChannel) {
+      return interaction.editReply("❌ Canal do Hall da Fama não encontrado.");
+    }
+
+    const messageToEdit = await hallChannel.messages.fetch(messageId).catch(() => null);
+    if (!messageToEdit) {
+      return interaction.editReply("❌ A mensagem do Hall da Fama original não foi encontrada. Talvez tenha sido apagada.");
+    }
+
+    const finalContent = updateHallCityOnly(messageToEdit.content, newCityName);
+
+    if (finalContent.length > 2000) {
+      return interaction.editReply("❌ O Hall ficou maior que 2000 caracteres e não pode ser salvo.");
+    }
+
+    await messageToEdit.edit({ content: finalContent });
+
+    await interaction.editReply(`✅ Cidade alterada com sucesso para: **${newCityName}**`);
+    return true;
+  }
+
   // ✅ Botão para editar o último post
   if (interaction.isButton() && (interaction.customId === BTN_EDIT_LAST || interaction.customId === BTN_EDIT_PRIZES)) {
     if (!hasPermission(interaction.member, interaction.user.id)) {
@@ -449,7 +557,10 @@ const winnersText = parts.winnersText;
 const imageUrl = parts.imageUrl;
 
 if (!winnersText) {
-  return interaction.reply({ content: "❌ Não foi possível analisar o bloco de vencedores da mensagem.", ephemeral: true });
+  return interaction.reply({
+    content: "❌ Não consegui separar os vencedores dessa mensagem antiga porque ela está muito embolada. Use o botão 🎁 Editar Premiações para ajustar os TOPs ou poste um novo Hall já com a versão corrigida.",
+    ephemeral: true
+  });
 }
 
     let modal;
@@ -581,7 +692,7 @@ const introLine = buildHallIntroLine(newIntro, newEventName, newCityName);
 const finalMessage = 
 `# 🎉 :  **Santa Creators : ${newEventName}** 🎉 
 
-${introLine} 
+${introLine}
 
 👏  Uma salva de palmas para os BRABOS! 👏 
 
@@ -799,7 +910,7 @@ const introLine = buildHallIntroLine(intro, data.eventName, cityName);
 const finalMessage = 
 `# 🎉 :  **Santa Creators : ${data.eventName}** 🎉 
 
-${introLine} 
+${introLine}
 
 👏  Uma salva de palmas para os BRABOS! 👏 
 
