@@ -333,10 +333,10 @@ function buildControlButtons() {
       .setStyle(ButtonStyle.Success)
       .setEmoji("👑"),
     new ButtonBuilder()
-      .setCustomId(BTN_EDIT_LAST)
-      .setLabel("✏️ Editar Último Hall")
-      .setStyle(ButtonStyle.Secondary)
-      .setEmoji("✍️"),
+  .setCustomId(BTN_EDIT_LAST)
+  .setLabel("✏️ Editar TOPs")
+  .setStyle(ButtonStyle.Secondary)
+  .setEmoji("✍️"),
     new ButtonBuilder()
       .setCustomId(BTN_EDIT_PRIZES)
       .setLabel("🎁 Editar Premiações")
@@ -569,72 +569,22 @@ if (!winnersText) {
 }
 
     let modal;
-    if (interaction.customId === BTN_EDIT_PRIZES) {
-      modal = new ModalBuilder()
-        .setCustomId(`${MODAL_PRIZES_SUBMIT}:${lastHallMessage.id}`)
-        .setTitle(`💰 Editar Premiações`);
 
-      modal.addComponents(
-        new ActionRowBuilder().addComponents(
-          new TextInputBuilder()
-            .setCustomId("hf_edit_winners")
-            .setLabel("🏆 Vencedores e Prêmios")
-            .setValue(winnersText)
-            .setStyle(TextInputStyle.Paragraph)
-            .setPlaceholder("Edite os nomes, IDs e prêmios aqui.")
-            .setRequired(true)
-        )
-      );
-    } else {
-      modal = new ModalBuilder()
-        .setCustomId(`${MODAL_EDIT_SUBMIT}:${lastHallMessage.id}`)
-        .setTitle(`✏️ Editando Hall da Fama`);
+    modal = new ModalBuilder()
+      .setCustomId(`${MODAL_PRIZES_SUBMIT}:${lastHallMessage.id}`)
+      .setTitle(`✏️ Editar TOPs do Hall`);
 
-      modal.addComponents(
-        new ActionRowBuilder().addComponents(
-          new TextInputBuilder()
-            .setCustomId("hf_edit_event_name")
-            .setLabel("Nome do Evento")
-            .setValue(eventName)
-            .setStyle(TextInputStyle.Short)
-            .setRequired(true)
-        ),
-        new ActionRowBuilder().addComponents(
-         new TextInputBuilder()
-  .setCustomId("hf_edit_city")
-  .setLabel("Cidade do Evento")
-  .setValue(cityName)
-  .setPlaceholder("Ex: Cidade Nobre")
-  .setStyle(TextInputStyle.Short)
-  .setRequired(true)
-        ),
-        new ActionRowBuilder().addComponents(
-          new TextInputBuilder()
-            .setCustomId("hf_edit_intro")
-            .setLabel("Texto de Parabéns (Intro)")
-            .setValue(introText)
-            .setStyle(TextInputStyle.Short)
-            .setRequired(true)
-        ),
-        new ActionRowBuilder().addComponents(
-          new TextInputBuilder()
-            .setCustomId("hf_edit_winners")
-            .setLabel("🏆 Vencedores (TOP 1, 2, 3...)")
-            .setValue(winnersText)
-            .setStyle(TextInputStyle.Paragraph)
-            .setPlaceholder("Edite os nomes e IDs aqui, mantendo a formatação.")
-            .setRequired(true)
-        ),
-        new ActionRowBuilder().addComponents(
-          new TextInputBuilder()
-            .setCustomId("hf_edit_image")
-            .setLabel("Link da Imagem 1 (Banner/Print)")
-            .setValue(imageUrl)
-            .setStyle(TextInputStyle.Short)
-            .setRequired(true)
-        )
-      );
-    }
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId("hf_edit_winners")
+          .setLabel("🏆 TOPs / Vencedores")
+          .setValue(winnersText)
+          .setStyle(TextInputStyle.Paragraph)
+          .setPlaceholder("Edite somente os TOPs aqui.")
+          .setRequired(true)
+      )
+    );
     
     await interaction.showModal(modal);
     return true;
