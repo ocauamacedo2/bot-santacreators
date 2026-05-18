@@ -287,7 +287,7 @@ function buildHallIntroLine(intro, eventName, cityName) {
   return `${cleanOneLine(intro)}\n\n🏆 **${cleanOneLine(eventName).toUpperCase()}** na **${cleanOneLine(cityName).toUpperCase()}**! <:coroa_orange:1353939359144870019>`;
 }
 
-function fixDuplicatedHallContent(content = "") {
+function fixDuplicatedHallContent(content = "", attachmentUrls = []) {
   if (!content.includes("Santa Creators :") || !content.includes("HALL DA FAMA")) return content;
 
   const parts = extractHallParts(content);
@@ -295,6 +295,15 @@ function fixDuplicatedHallContent(content = "") {
 
   const lines = content.split("\n");
   const mentionsLine = lines.find(l => l.includes("@everyone")) || "";
+
+  const imageLinesFromContent = lines
+    .map(l => l.trim())
+    .filter(l => /^https?:\/\//i.test(l));
+
+  const imageLines = [...new Set([
+    ...imageLinesFromContent,
+    ...attachmentUrls
+  ])].filter(Boolean);
 
   const safeIntro = isBadHallIntro(parts.introText) ? getRandomIntro() : parts.introText;
   const introLine = buildHallIntroLine(safeIntro, parts.eventName, parts.cityName);
@@ -312,19 +321,30 @@ ${parts.winnersText.trim()}
 
 **Foi insano, mas mais uma vez os vencedores mostraram que a vitória só é possível com raça! <:__:1357520048318709840>**
 
-${mentionsLine}`;
+${mentionsLine}
+
+${imageLines.join("\n")}`;
 
   return fixedMessage.trim();
 }
 
-function updateHallCityOnly(content = "", newCityName = "") {
-  const cleanedContent = fixDuplicatedHallContent(content);
+function updateHallCityOnly(content = "", newCityName = "", attachmentUrls = []) {
+  const cleanedContent = fixDuplicatedHallContent(content, attachmentUrls);
   const parts = extractHallParts(cleanedContent);
 
   if (!parts.winnersText) return cleanedContent;
 
   const lines = cleanedContent.split("\n");
   const mentionsLine = lines.find(l => l.includes("@everyone")) || "";
+
+  const imageLinesFromContent = lines
+    .map(l => l.trim())
+    .filter(l => /^https?:\/\//i.test(l));
+
+  const imageLines = [...new Set([
+    ...imageLinesFromContent,
+    ...attachmentUrls
+  ])].filter(Boolean);
 
   const safeIntro = isBadHallIntro(parts.introText) ? getRandomIntro() : parts.introText;
   const introLine = buildHallIntroLine(safeIntro, parts.eventName, newCityName);
@@ -342,7 +362,9 @@ ${parts.winnersText.trim()}
 
 **Foi insano, mas mais uma vez os vencedores mostraram que a vitória só é possível com raça! <:__:1357520048318709840>**
 
-${mentionsLine}`;
+${mentionsLine}
+
+${imageLines.join("\n")}`;
 
   return fixedMessage.trim();
 }
@@ -359,10 +381,14 @@ async function autoCorrectDuplications(channel, client) {
     );
 
     for (const msg of botHallMessages.values()) {
-      const fixed = fixDuplicatedHallContent(msg.content);
+      const attachmentUrls = [...msg.attachments.values()].map(a => a.url);
+      const fixed = fixDuplicatedHallContent(msg.content, attachmentUrls);
 
-      if (fixed !== msg.content && fixed.length <= 2000) {
-        await msg.edit({ content: fixed }).catch(() => {});
+          if (fixed !== msg.content && fixed.length <= 2000) {
+        await msg.edit({
+          content: fixed,
+          files: [...msg.attachments.values()].map(a => a.url)
+        }).catch(() => {});
       }
     }
   } catch (e) {
@@ -605,13 +631,17 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
       return interaction.editReply("❌ A mensagem do Hall da Fama original não foi encontrada. Talvez tenha sido apagada.");
     }
 
-    const finalContent = updateHallCityOnly(messageToEdit.content, newCityName);
+      const attachmentUrls = [...messageToEdit.attachments.values()].map(a => a.url);
+    const finalContent = updateHallCityOnly(messageToEdit.content, newCityName, attachmentUrls);
 
     if (finalContent.length > 2000) {
       return interaction.editReply("❌ O Hall ficou maior que 2000 caracteres e não pode ser salvo.");
     }
 
-    await messageToEdit.edit({ content: finalContent });
+    await messageToEdit.edit({
+      content: finalContent,
+      files: [...messageToEdit.attachments.values()].map(a => a.url)
+    });
 
     await interaction.editReply(`✅ Cidade alterada com sucesso para: **${newCityName}**`);
     return true;
