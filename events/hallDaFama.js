@@ -71,6 +71,7 @@ const BTN_EDIT_PRIZES = "hf_edit_prizes";
 const MODAL_PRIZES_SUBMIT = "hf_modal_prizes_submit";
 const BTN_EDIT_CITY = "hf_edit_city";
 const MODAL_CITY_SUBMIT = "hf_modal_city_submit";
+const BTN_SCAN_ALL = "hf_scan_all";
 
 // ================= PERSISTÊNCIA =================
 const __filename = fileURLToPath(import.meta.url);
@@ -274,18 +275,33 @@ function fixDuplicatedHallContent(content = "") {
   if (!content.includes("Santa Creators :") || !content.includes("HALL DA FAMA")) return content;
 
   const parts = extractHallParts(content);
+  if (!parts.winnersText) return content;
+
   const lines = content.split("\n");
+  const mentionsLine = lines.find(l => l.includes("@everyone")) || "";
+  const imageLines = lines.filter(l => /^https?:\/\//i.test(l.trim()));
 
-  const introIndex = lines.findIndex(l =>
-    l.includes("<:coroa_orange:") ||
-    l.includes(":coroa_orange:")
-  );
+  const cleanIntro = cleanOneLine(parts.introText);
+  const introLine = buildHallIntroLine(cleanIntro, parts.eventName, parts.cityName);
 
-  if (introIndex === -1) return content;
+  const fixedMessage =
+`# 🎉 :  **Santa Creators : ${parts.eventName}** 🎉 
 
-  lines[introIndex] = buildHallIntroLine(parts.introText, parts.eventName, parts.cityName);
+${introLine}
 
-  return lines.join("\n");
+👏  Uma salva de palmas para os BRABOS! 👏 
+
+<:12633559939374122111:1368796471297576970>  **HALL DA FAMA** <:12633559939374122111:1368796471297576970> 
+
+${parts.winnersText.trim()}
+
+**Foi insano, mas mais uma vez os vencedores mostraram que a vitória só é possível com raça! <:__:1357520048318709840>**
+
+${mentionsLine}
+
+${imageLines.join("\n")}`;
+
+  return fixedMessage.trim();
 }
 
 function updateHallCityOnly(content = "", newCityName = "") {
@@ -355,11 +371,16 @@ function buildControlButtons() {
       .setLabel("🎁 Editar Premiações")
       .setStyle(ButtonStyle.Secondary)
       .setEmoji("💰"),
-    new ButtonBuilder()
+        new ButtonBuilder()
   .setCustomId(BTN_EDIT_CITY)
   .setLabel("🌆 Editar Última CDD")
   .setStyle(ButtonStyle.Secondary)
-  .setEmoji("🌆")
+  .setEmoji("🌆"),
+    new ButtonBuilder()
+      .setCustomId(BTN_SCAN_ALL)
+      .setLabel("🧹 Varredura Geral")
+      .setStyle(ButtonStyle.Danger)
+      .setEmoji("🧹")
   );
 }
 
@@ -369,11 +390,11 @@ async function ensureButtonAtBottom(channel, client, force = true) {
     if (!messages) return;
 
   const myMsgs = messages.filter(
-  (m) => m.author.id === client.user.id && m.components.length > 0 && m.components[0].components.some(c => [BTN_OPEN_MENU, BTN_EDIT_LAST, BTN_EDIT_PRIZES, BTN_EDIT_CITY].includes(c.customId))
+  (m) => m.author.id === client.user.id && m.components.length > 0 && m.components[0].components.some(c => [BTN_OPEN_MENU, BTN_EDIT_LAST, BTN_EDIT_PRIZES, BTN_EDIT_CITY, BTN_SCAN_ALL].includes(c.customId))
 );
 
     // ✅ Checa se já existe um painel de botões ATUALIZADO (com 3 botões)
-  const upToDateMsg = myMsgs.find(m => m.components[0]?.components?.length === 4);
+  const upToDateMsg = myMsgs.find(m => m.components[0]?.components?.length === 5);
 
     // Se não for forçado e já existir um painel atualizado, não faz nada.
     if (!force && upToDateMsg) return;
@@ -460,6 +481,28 @@ export async function hallDaFamaOnReady(client) {
 
 export async function hallDaFamaHandleInteraction(interaction, client) {
   if (!interaction.guild) return false;
+
+  // ✅ Botão manual para varredura geral dos Halls antigos
+  if (interaction.isButton() && interaction.customId === BTN_SCAN_ALL) {
+    if (!hasPermission(interaction.member, interaction.user.id)) {
+      return interaction.reply({ content: "🚫 Sem permissão para fazer varredura geral.", ephemeral: true });
+    }
+
+    await interaction.deferReply({ ephemeral: true });
+
+    const hallChannel = await client.channels.fetch(HALL_CHANNEL_ID).catch(() => null);
+    if (!hallChannel) {
+      return interaction.editReply("❌ Canal do Hall da Fama não encontrado.");
+    }
+
+    await autoCorrectDuplications(hallChannel, client);
+
+    state.lastAutoCorrectScanKey = "";
+    saveState(state);
+
+    await interaction.editReply("✅ Varredura geral concluída. Os Halls duplicados foram corrigidos quando possível.");
+    return true;
+  }
 
   // ✅ Botão para editar somente a cidade do último Hall da Fama
   if (interaction.isButton() && interaction.customId === BTN_EDIT_CITY) {
