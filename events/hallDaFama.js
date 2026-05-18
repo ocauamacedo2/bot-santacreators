@@ -298,14 +298,11 @@ function fixDuplicatedHallContent(content = "", attachmentUrls = []) {
   const lines = content.split("\n");
   const mentionsLine = lines.find(l => l.includes("@everyone")) || "";
 
-  const imageLinesFromContent = lines
-    .map(l => l.trim())
-    .filter(l => /^https?:\/\//i.test(l));
-
-  const imageLines = [...new Set([
+  const imageLinesFromContent = getImageUrlsFromContent(content);
+  const imageLines = uniqueImageUrls([
     ...imageLinesFromContent,
     ...attachmentUrls
-  ])].filter(Boolean);
+  ]);
 
   const safeIntro = isBadHallIntro(parts.introText) ? getRandomIntro() : parts.introText;
   const introLine = buildHallIntroLine(safeIntro, parts.eventName, parts.cityName);
@@ -339,14 +336,11 @@ function updateHallCityOnly(content = "", newCityName = "", attachmentUrls = [])
   const lines = cleanedContent.split("\n");
   const mentionsLine = lines.find(l => l.includes("@everyone")) || "";
 
-  const imageLinesFromContent = lines
-    .map(l => l.trim())
-    .filter(l => /^https?:\/\//i.test(l));
-
-  const imageLines = [...new Set([
+  const imageLinesFromContent = getImageUrlsFromContent(cleanedContent);
+  const imageLines = uniqueImageUrls([
     ...imageLinesFromContent,
     ...attachmentUrls
-  ])].filter(Boolean);
+  ]);
 
   const safeIntro = isBadHallIntro(parts.introText) ? getRandomIntro() : parts.introText;
   const introLine = buildHallIntroLine(safeIntro, parts.eventName, newCityName);
@@ -378,6 +372,38 @@ function normalizeHallName(value = "") {
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
+}
+
+function normalizeImageUrl(url = "") {
+  return String(url)
+    .trim()
+    .replace(/[>)\]\s]+$/g, "");
+}
+
+function uniqueImageUrls(urls = []) {
+  const seen = new Set();
+  const finalUrls = [];
+
+  for (const rawUrl of urls) {
+    const url = normalizeImageUrl(rawUrl);
+    if (!url) continue;
+
+    const key = url.split("?")[0].toLowerCase();
+
+    if (seen.has(key)) continue;
+    seen.add(key);
+    finalUrls.push(url);
+  }
+
+  return finalUrls;
+}
+
+function getImageUrlsFromContent(content = "") {
+  return uniqueImageUrls(String(content).match(/https?:\/\/\S+/gi) || []);
+}
+
+function getImageUrlsFromAttachments(message) {
+  return uniqueImageUrls([...message.attachments.values()].map(a => a.url));
 }
 
 async function findApprovalImagesForHall(client, hallMessage, parts) {
@@ -444,22 +470,24 @@ async function autoCorrectDuplications(channel, client) {
     for (const msg of botHallMessages.values()) {
       const parts = extractHallParts(msg.content);
 
-      const attachmentUrls = [...msg.attachments.values()].map(a => a.url);
-      const contentUrls = msg.content.match(/https?:\/\/\S+/gi) || [];
-      const approvalUrls = await findApprovalImagesForHall(client, msg, parts);
+      const contentUrls = getImageUrlsFromContent(msg.content);
+      const attachmentUrls = getImageUrlsFromAttachments(msg);
 
-      const allImageUrls = [...new Set([
+      let allImageUrls = uniqueImageUrls([
         ...contentUrls,
-        ...attachmentUrls,
-        ...approvalUrls
-      ])].filter(Boolean);
+        ...attachmentUrls
+      ]);
+
+      if (allImageUrls.length === 0) {
+        const approvalUrls = await findApprovalImagesForHall(client, msg, parts);
+        allImageUrls = uniqueImageUrls(approvalUrls);
+      }
 
       const fixed = fixDuplicatedHallContent(msg.content, allImageUrls);
 
       if (fixed !== msg.content && fixed.length <= 2000) {
         await msg.edit({
-          content: fixed,
-          files: [...msg.attachments.values()].map(a => a.url)
+          content: fixed
         }).catch(() => {});
       }
     }
@@ -703,7 +731,7 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
       return interaction.editReply("❌ A mensagem do Hall da Fama original não foi encontrada. Talvez tenha sido apagada.");
     }
 
-      const attachmentUrls = [...messageToEdit.attachments.values()].map(a => a.url);
+    const attachmentUrls = getImageUrlsFromAttachments(messageToEdit);
     const finalContent = updateHallCityOnly(messageToEdit.content, newCityName, attachmentUrls);
 
     if (finalContent.length > 2000) {
@@ -711,8 +739,7 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
     }
 
     await messageToEdit.edit({
-      content: finalContent,
-      files: [...messageToEdit.attachments.values()].map(a => a.url)
+      content: finalContent
     });
 
     await interaction.editReply(`✅ Cidade alterada com sucesso para: **${newCityName}**`);
