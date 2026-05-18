@@ -388,6 +388,22 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
         ),
         new ActionRowBuilder().addComponents(
           new TextInputBuilder()
+            .setCustomId("hf_edit_city")
+            .setLabel("Cidade do Evento")
+            .setValue(cityName)
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true)
+        ),
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId("hf_edit_intro")
+            .setLabel("Texto de Parabéns (Intro)")
+            .setValue(introText)
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true)
+        ),
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
             .setCustomId("hf_edit_winners")
             .setLabel("🏆 Vencedores (TOP 1, 2, 3...)")
             .setValue(winnersText)
