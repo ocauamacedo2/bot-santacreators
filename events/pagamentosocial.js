@@ -238,7 +238,10 @@ function limparTextoOCR(texto) {
     .replace(/[º°]/g, "")
     .replace(/[·•]/g, " • ")
     .replace(/([0-2]?\d)\s*[nH]\s*([0-5]\d)/g, "$1h$2")
+    .replace(/([0-2]?\d)\s+h\s+([0-5]\d)/gi, "$1h$2")
+    .replace(/([0-2]?\d)\s*:\s*([0-5]\d)\s*:\s*([0-5]\d)/g, "$1:$2:$3")
     .replace(/([0-3]?\d)\s*[Il|]\s*([01]?\d)\s*[Il|]\s*((?:20)?\d{2})/g, "$1/$2/$3")
+    .replace(/([0-3]?\d)\s*\/\s*([01]?\d)\s*\/\s*((?:20)?\d{2})/g, "$1/$2/$3")
     .replace(/[ \t]+/g, " ")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
@@ -321,23 +324,16 @@ function parseHorarioOCR(texto) {
   const t = limparTextoOCR(texto);
 
   const padroesPrioritarios = [
-    // Modelo Nubank tela cheia:
-    // "Agora mesmo • 23h28"
     /Agora\s+mesmo\s*[•·\-\–\—:\s]*([0-2]?\d)\s*[hH:]\s*([0-5]\d)(?:\s*:\s*([0-5]\d))?/i,
+    /Agora\s+mesmo[\s\S]{0,40}?([0-2]?\d)\s*([0-5]\d)\b/i,
 
-    // Modelo lista/extrato:
-    // "17/05/2026 23:17:42"
     /\b[0-3]?\d\s*[\/.\-]\s*[01]?\d\s*[\/.\-]\s*(?:20)?\d{2}\s+([0-2]?\d)\s*:\s*([0-5]\d)(?:\s*:\s*([0-5]\d))?\b/i,
+    /\b[0-3]?\d\s*[\/.\-]\s*[01]?\d\s*[\/.\-]\s*(?:20)?\d{2}\s+([0-2]?\d)\s*([0-5]\d)\b/i,
 
-    // Modelo texto:
-    // "Transferência para Kzinn oSacana -R$ 5.444.400 17/05/2026 23:17:42"
-    /Transfer[eê]ncia[\s\S]{0,220}?([0-2]?\d)\s*:\s*([0-5]\d)(?:\s*:\s*([0-5]\d))?/i,
+    /Transfer[eê]ncia[\s\S]{0,260}?([0-2]?\d)\s*:\s*([0-5]\d)(?:\s*:\s*([0-5]\d))?/i,
+    /Pronto[\s\S]{0,320}?([0-2]?\d)\s*[hH:]\s*([0-5]\d)(?:\s*:\s*([0-5]\d))?/i,
+    /Pronto[\s\S]{0,320}?([0-2]?\d)\s*([0-5]\d)\b/i,
 
-    // Modelo tela:
-    // "Pronto, enviamos sua transferência ... 23h28"
-    /Pronto[\s\S]{0,260}?([0-2]?\d)\s*[hH:]\s*([0-5]\d)(?:\s*:\s*([0-5]\d))?/i,
-
-    // Variações comuns
     /\bàs\s+([0-2]?\d)\s*[hH:]\s*([0-5]\d)(?:\s*:\s*([0-5]\d))?\b/i,
     /\bas\s+([0-2]?\d)\s*[hH:]\s*([0-5]\d)(?:\s*:\s*([0-5]\d))?\b/i,
   ];
@@ -350,6 +346,7 @@ function parseHorarioOCR(texto) {
 
   const horarios = [
     ...t.matchAll(/\b([0-2]?\d)\s*[hH:]\s*([0-5]\d)(?:\s*:\s*([0-5]\d))?\b/gi),
+    ...t.matchAll(/\b([0-2]\d)([0-5]\d)\b/g),
   ]
     .map((m) => normalizarHorarioOCR(m[1], m[2], m[3]))
     .filter(Boolean);
@@ -486,6 +483,33 @@ async function fetchImagemBuffer(url) {
   }
 }
 
+async function reconhecerTextoPagamentoReforcado(worker, buffer) {
+  const leituraNormal = await worker.recognize(buffer);
+  const textoNormal = limparTextoOCR(leituraNormal?.data?.text || "");
+
+  await worker.setParameters({
+    tessedit_char_whitelist: "0123456789/:.-hH ",
+    preserve_interword_spaces: "1",
+  });
+
+  const leituraDataHora = await worker.recognize(buffer);
+  const textoDataHora = limparTextoOCR(leituraDataHora?.data?.text || "");
+
+  await worker.setParameters({
+    tessedit_char_whitelist: "",
+    preserve_interword_spaces: "1",
+  });
+
+  return limparTextoOCR(
+    [
+      textoNormal,
+      "",
+      "=== OCR_DATA_HORA_REFORCADO ===",
+      textoDataHora,
+    ].join("\n")
+  );
+}
+
 async function analisarComprovantePagamento(premiacao) {
   const url = extrairPrimeiraUrlImagem(premiacao);
 
@@ -515,16 +539,19 @@ const resultado = {
   try {
     const buffer = await fetchImagemBuffer(url);
 
-    worker = await createWorker("por");
+worker = await createWorker("por");
 
-   const { data } = await worker.recognize(buffer);
-const texto = limparTextoOCR(data?.text || "");
+await worker.setParameters({
+  preserve_interword_spaces: "1",
+});
+
+const texto = await reconhecerTextoPagamentoReforcado(worker, buffer);
 
 console.log("[PAGAMENTO OCR] Texto identificado:", texto);
 
-    const valor = parseValorOCR(texto);
+const valor = parseValorOCR(texto);
 
-    const horarioOCR = parseHorarioOCR(texto);
+const horarioOCR = parseHorarioOCR(texto);
 const dataOCR = parseDataOCR(texto);
 
 resultado.ok = true;
