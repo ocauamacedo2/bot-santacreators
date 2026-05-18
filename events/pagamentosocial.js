@@ -3,6 +3,7 @@ import {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  ChannelType,
   EmbedBuilder,
   ModalBuilder,
   TextInputBuilder,
@@ -14,10 +15,17 @@ import { dashEmit } from "../utils/dashHub.js";
 // PAGAMENTOS SOCIAL MÍDIAS (SEM LISTENERS AQUI)
 // - Exporta: pagamentoSocialOnReady(client) e handlePagamentoSocial(interaction, client)
 // ============================================================================
-
 // =============================
 // ✅ CONFIG (OBRIGATÓRIO)
 // =============================
+// Canal do Dashboard (Gráficos)
+const CANAL_DASHBOARD_PAGAMENTO = "1505716526534103110";
+
+// Arquivos de persistência
+const STATS_FILE = path.join(process.cwd(), "data", "pagamentos_social_stats.json");
+const DASH_STATE_FILE = path.join(process.cwd(), "data", "pagamentos_social_dash_state.json");
+const DASH_MARKER = "SC_PAGAMENTO_DASH::V1";
+
 // Canal onde fica o menu + onde os registros são postados
 const CANAL_PAGAMENTO = "1387922662134775818";
 
@@ -189,6 +197,122 @@ function parseNomeIdFlex(texto) {
   return { nome, id, hasId: true };
 }
 
+function normalizarTipoPremiacao(texto) {
+  const t = String(texto || "").toLowerCase().trim()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, ""); // remove acentos
+    
+  if (t.includes("staff")) return "VIP Staff";
+  if (t.includes("pass")) return "Pass";
+  if (t.includes("ouro")) return "VIP Ouro";
+  if (t.includes("vipevento") || t.includes("vip evento")) return "VIP Evento";
+  if (t.includes("lancamento")) return "VIP Lancamento";
+  
+  return "Outros";
+}
+
+// =============================
+// LÓGICA DE ESTATÍSTICAS
+// =============================
+function getMonthKey() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function loadStats() {
+  const monthKey = getMonthKey();
+  if (!fs.existsSync(STATS_FILE)) return { month: monthKey, totalApproved: 0, approvers: {}, creators: {}, categories: {} };
+  
+  try {
+    const data = JSON.parse(fs.readFileSync(STATS_FILE, "utf8"));
+    if (data.month !== monthKey) {
+      return { month: monthKey, totalApproved: 0, approvers: {}, creators: {}, categories: {} };
+    }
+    return data;
+  } catch {
+    return { month: monthKey, totalApproved: 0, approvers: {}, creators: {}, categories: {} };
+  }
+}
+
+function saveStats(stats) {
+  if (!fs.existsSync(path.dirname(STATS_FILE))) fs.mkdirSync(path.dirname(STATS_FILE), { recursive: true });
+  fs.writeFileSync(STATS_FILE, JSON.stringify(stats, null, 2));
+}
+
+async function updateDashboard(client) {
+  const stats = loadStats();
+  const channel = await client.channels.fetch(CANAL_DASHBOARD_PAGAMENTO).catch(() => null);
+  if (!channel || !channel.isTextBased()) return;
+
+  // Preparar dados para os gráficos
+  const topApprovers = Object.entries(stats.approvers).sort((a,b) => b[1] - a[1]).slice(0, 5);
+  const bottomApprovers = Object.entries(stats.approvers).sort((a,b) => a[1] - b[1]).slice(0, 5);
+  const topCreators = Object.entries(stats.creators).sort((a,b) => b[1] - a[1]).slice(0, 5);
+  const catEntries = Object.entries(stats.categories).sort((a,b) => b[1] - a[1]);
+
+  const labelsApprovers = topApprovers.map(x => x[0].slice(-5)); // IDs curtos
+  const dataApprovers = topApprovers.map(x => x[1]);
+
+  const chartConfig = {
+    type: 'bar',
+    data: {
+      labels: topApprovers.map(x => `ID: ${x[0].slice(-4)}`),
+      datasets: [{ label: 'Aprovações', data: dataApprovers, backgroundColor: '#2ecc71' }]
+    },
+    options: { title: { display: true, text: 'Top 5 Aprovadores do Mês' } }
+  };
+
+  const chartUrl = `https://quickchart.io/chart?c=${encodeURIComponent(JSON.stringify(chartConfig))}&backgroundColor=white`;
+
+  const embed = new EmbedBuilder()
+    .setColor("#ff3399")
+    .setTitle("📊 Dashboard Analítico — Social Mídias")
+    .setDescription(`Relatório consolidado do mês: **${stats.month}**`)
+    .addFields(
+      { name: "📈 Total Aprovado", value: `\`${stats.totalApproved}\` registros`, inline: true },
+      { name: "🥇 Líder de Registros", value: topCreators[0] ? `<@${topCreators[0][0]}> (${topCreators[0][1]})` : "—", inline: true },
+      { name: "\u200B", value: "━━━━━━━━━━━━━━━━━━━━━━" },
+      { 
+        name: "💎 Resumo de VIPs", 
+        value: catEntries.map(([name, count]) => `• **${name}:** ${count}`).join("\n") || "_Nenhum VIP registrado_",
+        inline: false 
+      },
+      {
+        name: "⚖️ Ranking de Aprovação",
+        value: `**Mais aprova:** ${topApprovers[0] ? `<@${topApprovers[0][0]}>` : "—"}\n**Menos aprova:** ${bottomApprovers[0] ? `<@${bottomApprovers[0][0]}>` : "—"}`,
+        inline: false
+      }
+    )
+    .setImage(chartUrl)
+    .setFooter({ text: `${DASH_MARKER} • Atualizado automaticamente` })
+    .setTimestamp();
+
+  const state = readJSON(DASH_STATE_FILE, { messageId: null });
+  let msg = null;
+  if (state.messageId) msg = await channel.messages.fetch(state.messageId).catch(() => null);
+
+  if (msg) {
+    await msg.edit({ embeds: [embed] }).catch(() => {});
+  } else {
+    const newMsg = await channel.send({ embeds: [embed] }).catch(() => null);
+    if (newMsg) {
+      state.messageId = newMsg.id;
+      saveJSON_Dash(DASH_STATE_FILE, state);
+    }
+  }
+}
+
+function readJSON(file, fallback) {
+  try {
+    if (!fs.existsSync(file)) return fallback;
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch { return fallback; }
+}
+
+function saveJSON_Dash(file, data) {
+  if (!fs.existsSync(path.dirname(file))) fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(data, null, 2));
+}
+
 function normalizarDataEvento(s) {
   const t = String(s || "").trim();
   return t || PADRAO_INDEFINIDO;
@@ -218,11 +342,10 @@ function criarRowMenu() {
 
 function criarEmbedMenu() {
   const instrucoes = [
-    "🩷 **Guia rápido — Como preencher:**",
-    "┃ 🏷️ **Evento:** _SantaCreators: Missão Rosa_",
-    "┃ 📅 **Data:** _20/09/2025_  _(aceita “Sex, 20/09”)_",
+    "🩷 **Guia rápido — Como preencher (Formulário):**",
+    "┃ 🏷️ **Evento | Data:** _Missão Rosa | 20/09_",
     "┃ 👤 **Ganhador (Nome** ou **Nome |/\\ ID/Texto):** _Virtude_ **ou** _Virtude | 12345_ **ou** _Virtude / 12345_ **ou** _Virtude \\ 12345_",
-    "┃ 💰 **Pagante (Nome** ou **Nome |/\\ ID/Texto):** _Macedo_ **ou** _Macedo | 30_ **ou** _Macedo / 1000_ **ou** _Macedo \\ 1000_",
+    "┃  **Tipo:** _Vip Staff, Rolepass, Vip Ouro, etc_",
     "┃ 🎁 **Premiação:** _Valor: 10kk | VIP: Sim/Não_",
   ].join("\n");
 
@@ -470,6 +593,9 @@ export async function pagamentoSocialOnReady(client) {
     embeds: [criarEmbedMenu()],
     components: [criarRowMenu()],
   }).catch(() => {});
+
+  // Inicializa o Dashboard
+  await updateDashboard(client).catch(() => {});
 }
 
 // ============================================================================
@@ -540,11 +666,10 @@ export async function handlePagamentoSocial(interaction, client) {
           .setTitle("Pagamento Evento");
 
         const campos = [
-          { id: "eventoNome",  label: "Nome do evento",               exemplo: "Ex: SantaCreators: Missão Rosas",          style: TextInputStyle.Short },
-          { id: "eventoData",  label: "Data do evento",               exemplo: "Ex: 09/09/2025 (ou Sex, 09/09)",           style: TextInputStyle.Short },
-          { id: "ganhador",    label: "Ganhador (Nome ou Nome |/\\ ID)", exemplo: "Ex: Virtude | 12345  /  Virtude \\ 12345", style: TextInputStyle.Short },
-          { id: "pagante",     label: "Pagante (Nome ou Nome |/\\ ID)",  exemplo: "Ex: Macedo | 30  /  Macedo \\ 30",       style: TextInputStyle.Short },
-          { id: "premiacao",   label: "Informações de Premiação",     exemplo: "Valor: 10kk | VIP: Sim/Não",               style: TextInputStyle.Paragraph },
+          { id: "eventoInfo",  label: "Evento | Data",               exemplo: "Ex: Missão Rosa | 20/09",          style: TextInputStyle.Short },
+          { id: "ganhador",    label: "Ganhador (Nome | ID)", exemplo: "Ex: Virtude | 12345", style: TextInputStyle.Short },
+          { id: "tipoPremiacao", label: "Tipo (Vip Staff, Ouro, Pass...)", exemplo: "Ex: Vip Staff, Rolepass, Vip Evento...", style: TextInputStyle.Short },
+          { id: "premiacao",   label: "Link da Premiação / Comprovante",     exemplo: "Cole o link da imagem ou comprovante aqui",               style: TextInputStyle.Paragraph },
         ];
 
         campos.forEach((c) =>
@@ -699,11 +824,12 @@ if (id.startsWith("pago__") || id.startsWith("solicitado__") || id.startsWith("r
   }
 
 
-        const eventoNome = interaction.fields.getTextInputValue("eventoNome").trim();
-        const eventoData = normalizarDataEvento(interaction.fields.getTextInputValue("eventoData"));
+        const eventoInfo = interaction.fields.getTextInputValue("eventoInfo").trim();
+        const [eventoNomeRaw, eventoDataRaw] = eventoInfo.split("|").map(s => s.trim());
+        const eventoNome = eventoNomeRaw || PADRAO_INDEFINIDO;
+        const eventoData = normalizarDataEvento(eventoDataRaw);
 
         const { nome: ganhadorNome, id: ganhadorId } = parseNomeIdFlex(interaction.fields.getTextInputValue("ganhador"));
-        const { nome: paganteNome, id: paganteId } = parseNomeIdFlex(interaction.fields.getTextInputValue("pagante"));
 
         const premiacao = interaction.fields.getTextInputValue("premiacao").trim();
 
@@ -715,18 +841,23 @@ if (id.startsWith("pago__") || id.startsWith("solicitado__") || id.startsWith("r
 
         const registrador = interaction.user;
         const registradorAvatar = registrador.displayAvatarURL({ dynamic: true });
+        
+        const tipoInput = interaction.fields.getTextInputValue("tipoPremiacao");
+        const categoriaVip = normalizarTipoPremiacao(tipoInput);
 
         const embed = new EmbedBuilder()
   .setColor("#ff3399")
   .setAuthor({ name: `${registrador.tag} • Registro criado`, iconURL: registradorAvatar })
   .setTitle("🎉 Registro de Pagamento de Evento – SANTACREATORS")
-  .setDescription("📌 Registro obrigatório de pagamentos de eventos e ações especiais.")
+  .setDescription(
+    "📌 Registro obrigatório de pagamentos de eventos e ações especiais.\n\n" +
+    `**Tipo Identificado:** \`${categoriaVip}\``
+  )
   .addFields(
     { name: "🏷️ Evento", value: `${eventoNome || PADRAO_INDEFINIDO}`, inline: true },
     { name: "📅 Data do Evento", value: `${eventoData || PADRAO_INDEFINIDO}`, inline: true },
-    { name: "🎁 Premiação", value: `${premiacao || PADRAO_INDEFINIDO}`, inline: false },
-    { name: "👤 Ganhador", value: `${ganhadorNome} | ${ganhadorId}`, inline: true },
-    { name: "💰 Pagante", value: `${paganteNome} | ${paganteId}`, inline: true },
+    { name: "🔗 Premiação / Link", value: `${premiacao || PADRAO_INDEFINIDO}`, inline: false },
+    { name: "� Ganhador", value: `${ganhadorNome} | ${ganhadorId}`, inline: true },
 
     // ✅ FIXO PRA TRAVA / AUDITORIA
     { name: "🆔 Criador do Registro", value: `<@${registrador.id}> (\`${registrador.id}\`)`, inline: false },
@@ -775,8 +906,7 @@ if (id.startsWith("pago__") || id.startsWith("solicitado__") || id.startsWith("r
     `**Evento:** \`${eventoNome || PADRAO_INDEFINIDO}\``,
     `**Data do Evento:** \`${eventoData || PADRAO_INDEFINIDO}\``,
     `**Ganhador:** \`${ganhadorNome} | ${ganhadorId}\``,
-    `**Pagante:** \`${paganteNome} | ${paganteId}\``,
-    `**Premiação:** \`${premiacao || PADRAO_INDEFINIDO}\``,
+    `**Premiação:** Link`,
     ``,
     buildLogContext({
       registroMsg: mensagem,
@@ -869,6 +999,23 @@ if (id.startsWith("pago_desc_") || id.startsWith("solicitado_desc_") || id.start
     interaction.user.id,
     labelAuditoria
   );
+  
+  // Se aprovado (PAGO), atualiza estatísticas e dashboard
+  if (action === "pago") {
+    const stats = loadStats();
+    const creatorId = getCriadorIdFromEmbed(embedOriginal);
+    const tipoRaw = embedOriginal.data.description?.match(/Tipo Identificado:\s*`(.+?)`/)?.[1] || "Outros";
+    
+    stats.totalApproved += 1;
+    stats.approvers[interaction.user.id] = (stats.approvers[interaction.user.id] || 0) + 1;
+    if (creatorId) stats.creators[creatorId] = (stats.creators[creatorId] || 0) + 1;
+    
+    const catKey = normalizarTipoPremiacao(tipoRaw);
+    stats.categories[catKey] = (stats.categories[catKey] || 0) + 1;
+    
+    saveStats(stats);
+    await updateDashboard(client).catch(() => {});
+  }
 
   const msgNova = await canal.send({ embeds: [embedAtualizado] }).catch(() => null);
   if (!msgNova) {
