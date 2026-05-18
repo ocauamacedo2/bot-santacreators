@@ -317,7 +317,15 @@ function saveJSON_Dash(file, data) {
 
 function normalizarDataEvento(s) {
   const t = String(s || "").trim();
-  return t || PADRAO_INDEFINIDO;
+  if (!t || t === "undefined" || t === PADRAO_INDEFINIDO) {
+    const now = new Date();
+    const d = String(now.getDate()).padStart(2, '0');
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    const y = now.getFullYear();
+    // Retorna a data de hoje formatada: DD/MM/YYYY
+    return `${d}/${m}/${y}`;
+  }
+  return t;
 }
 
 // =============================
@@ -829,6 +837,8 @@ if (id.startsWith("pago__") || id.startsWith("solicitado__") || id.startsWith("r
         const eventoInfo = interaction.fields.getTextInputValue("eventoInfo").trim();
         const [eventoNomeRaw, eventoDataRaw] = eventoInfo.split("|").map(s => s.trim());
         const eventoNome = eventoNomeRaw || PADRAO_INDEFINIDO;
+        
+        // Se não houver data após o |, a função normalizarDataEvento colocará a data de hoje
         const eventoData = normalizarDataEvento(eventoDataRaw);
 
         const { nome: ganhadorNome, id: ganhadorId } = parseNomeIdFlex(interaction.fields.getTextInputValue("ganhador"));
@@ -889,6 +899,15 @@ if (id.startsWith("pago__") || id.startsWith("solicitado__") || id.startsWith("r
         // reposta o menu e limpa duplicados
         await canal.send({ embeds: [criarEmbedMenu()], components: [criarRowMenu()] }).catch(() => {});
         await limparBotoesAntigos(client, canal).catch(() => {});
+
+        // ✅ Atualiza as estatísticas de QUEM CRIOU e dispara o Dashboard
+        const stats = loadStats();
+        const creatorId = interaction.user.id;
+        stats.creators[creatorId] = (stats.creators[creatorId] || 0) + 1;
+        saveStats(stats);
+        
+        // Força a atualização do gráfico no canal 1505716526534103110
+        await updateDashboard(client).catch(() => {});
 
         await interaction.editReply({ content: "✅ Registro criado!" }).catch(() => {});
 
@@ -1010,7 +1029,10 @@ if (id.startsWith("pago_desc_") || id.startsWith("solicitado_desc_") || id.start
     
     stats.totalApproved += 1;
     stats.approvers[interaction.user.id] = (stats.approvers[interaction.user.id] || 0) + 1;
-    if (creatorId) stats.creators[creatorId] = (stats.creators[creatorId] || 0) + 1;
+    
+    // Removido o incremento de stats.creators aqui pois agora ele conta NO MOMENTO DA CRIAÇÃO.
+    // Isso garante que o dashboard mostre "quem mais fez ao todo" (registrou).
+    // if (creatorId) stats.creators[creatorId] = (stats.creators[creatorId] || 0) + 1;
     
     const catKey = normalizarTipoPremiacao(tipoRaw);
     stats.categories[catKey] = (stats.categories[catKey] || 0) + 1;
