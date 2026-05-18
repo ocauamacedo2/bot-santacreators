@@ -216,7 +216,8 @@ function normalizarTipoPremiacao(texto) {
 // LÓGICA DE ESTATÍSTICAS
 // =============================
 function getMonthKey() {
-  const now = new Date();
+  // Força o fuso horário de São Paulo para evitar virada de mês antecipada
+  const now = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 }
 
@@ -318,7 +319,8 @@ function saveJSON_Dash(file, data) {
 function normalizarDataEvento(s) {
   const t = String(s || "").trim();
   if (!t || t === "undefined" || t === PADRAO_INDEFINIDO) {
-    const now = new Date();
+    // Força o fuso horário de São Paulo para pegar o dia correto no Brasil
+    const now = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
     const d = String(now.getDate()).padStart(2, '0');
     const m = String(now.getMonth() + 1).padStart(2, '0');
     const y = now.getFullYear();
