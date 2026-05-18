@@ -12,6 +12,7 @@ import {
   TextInputStyle,
 } from "discord.js";
 import { dashEmit } from "../utils/dashHub.js";
+import { createWorker } from "tesseract.js";
 
 // ============================================================================
 // PAGAMENTOS SOCIAL MÍDIAS (SEM LISTENERS AQUI)
@@ -213,6 +214,180 @@ function normalizarTipoPremiacao(texto) {
 }
 
 // =============================
+// OCR / LEITURA DE COMPROVANTE
+// =============================
+const OCR_TIMEOUT_MS = 25000;
+
+function extrairPrimeiraUrlImagem(texto) {
+  const t = String(texto || "").trim();
+
+  const urls = t.match(/https?:\/\/[^\s<>()"'`]+/gi) || [];
+  const url = urls.find((u) =>
+    /\.(png|jpe?g|webp|gif)(\?|$)/i.test(u) ||
+    /media\.discordapp\.net/i.test(u) ||
+    /cdn\.discordapp\.com/i.test(u)
+  );
+
+  return url || null;
+}
+
+function limparTextoOCR(texto) {
+  return String(texto || "")
+    .replace(/\r/g, "\n")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function parseValorOCR(texto) {
+  const t = limparTextoOCR(texto);
+
+  const matches = [...t.matchAll(/R\$\s*([0-9]{1,3}(?:[.\s][0-9]{3})*(?:,[0-9]{2})?|[0-9]+(?:,[0-9]{2})?)/gi)];
+
+  if (!matches.length) return null;
+
+  const valores = matches
+    .map((m) => {
+      const raw = m[1].replace(/\s/g, ".");
+      const numero = Number(raw.replace(/\./g, "").replace(",", "."));
+      return {
+        raw: `R$ ${raw}`,
+        numero: Number.isFinite(numero) ? numero : 0,
+      };
+    })
+    .filter((v) => v.numero > 0)
+    .sort((a, b) => b.numero - a.numero);
+
+  return valores[0] || null;
+}
+
+function parseHorarioOCR(texto) {
+  const t = limparTextoOCR(texto);
+
+  const m = t.match(/\b([01]?\d|2[0-3])[:h]([0-5]\d)\b/i);
+  if (!m) return null;
+
+  return `${String(m[1]).padStart(2, "0")}:${m[2]}`;
+}
+
+function parseDataOCR(texto) {
+  const t = limparTextoOCR(texto);
+
+  const m = t.match(/\b([0-3]?\d)[\/.-]([01]?\d)[\/.-](20\d{2})\b/);
+  if (!m) return null;
+
+  return `${String(m[1]).padStart(2, "0")}/${String(m[2]).padStart(2, "0")}/${m[3]}`;
+}
+
+function parseNomeRecebedorOCR(texto) {
+  const t = limparTextoOCR(texto);
+
+  const mPara = t.match(/\bpara\s+([^\n\r]+?)(?:\s+Agora|\s+R\$|\n|$)/i);
+  if (mPara?.[1]) {
+    return mPara[1].replace(/[•·]/g, "").trim();
+  }
+
+  const mTransferencia = t.match(/Transfer[eê]ncia\s+de\s+([^\n\r]+?)(?:\s+R\$|\n|$)/i);
+  if (mTransferencia?.[1]) {
+    return mTransferencia[1].trim();
+  }
+
+  return null;
+}
+
+function corrigirNomeGanhadorPorOCR(nomeFormulario, nomeOCR) {
+  const form = String(nomeFormulario || "").trim();
+  const ocr = String(nomeOCR || "").trim();
+
+  if (!ocr) return form || PADRAO_INDEFINIDO;
+  if (!form || form === PADRAO_INDEFINIDO) return ocr;
+
+  const formNorm = form.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const ocrNorm = ocr.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
+  if (formNorm === ocrNorm) return form;
+
+  return ocr;
+}
+
+async function fetchImagemBuffer(url) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), OCR_TIMEOUT_MS);
+
+  try {
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "SantaCreatorsBot/1.0",
+      },
+    });
+
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+    const contentType = res.headers.get("content-type") || "";
+    if (!contentType.startsWith("image/")) {
+      throw new Error(`URL não é imagem: ${contentType || "sem content-type"}`);
+    }
+
+    const arrayBuffer = await res.arrayBuffer();
+    return Buffer.from(arrayBuffer);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function analisarComprovantePagamento(premiacao) {
+  const url = extrairPrimeiraUrlImagem(premiacao);
+
+  const resultado = {
+    ok: false,
+    url,
+    texto: "",
+    valorRaw: null,
+    valorNumero: 0,
+    nomeRecebedor: null,
+    horario: null,
+    data: null,
+    erro: null,
+  };
+
+  if (!url) {
+    resultado.erro = "Nenhuma URL de imagem encontrada.";
+    return resultado;
+  }
+
+  let worker = null;
+
+  try {
+    const buffer = await fetchImagemBuffer(url);
+
+    worker = await createWorker("por");
+
+    const { data } = await worker.recognize(buffer);
+    const texto = limparTextoOCR(data?.text || "");
+
+    const valor = parseValorOCR(texto);
+
+    resultado.ok = true;
+    resultado.texto = texto;
+    resultado.valorRaw = valor?.raw || null;
+    resultado.valorNumero = valor?.numero || 0;
+    resultado.nomeRecebedor = parseNomeRecebedorOCR(texto);
+    resultado.horario = parseHorarioOCR(texto);
+    resultado.data = parseDataOCR(texto);
+
+    return resultado;
+  } catch (err) {
+    resultado.erro = err?.message || String(err);
+    return resultado;
+  } finally {
+    if (worker) {
+      await worker.terminate().catch(() => {});
+    }
+  }
+}
+
+// =============================
 // LÓGICA DE ESTATÍSTICAS
 // =============================
 function getMonthKey() {
@@ -221,18 +396,47 @@ function getMonthKey() {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 }
 
+function makeEmptyStats(monthKey) {
+  return {
+    month: monthKey,
+    totalApproved: 0,
+    totalAmountPaid: 0,
+    approvers: {},
+    creators: {},
+    categories: {},
+    amountsByCreator: {},
+    amountsByApprover: {},
+    amountsByCategory: {},
+  };
+}
+
+function hydrateStats(stats, monthKey) {
+  const base = makeEmptyStats(monthKey);
+  return {
+    ...base,
+    ...stats,
+    approvers: stats?.approvers || {},
+    creators: stats?.creators || {},
+    categories: stats?.categories || {},
+    amountsByCreator: stats?.amountsByCreator || {},
+    amountsByApprover: stats?.amountsByApprover || {},
+    amountsByCategory: stats?.amountsByCategory || {},
+    totalAmountPaid: Number(stats?.totalAmountPaid || 0),
+  };
+}
+
 function loadStats() {
   const monthKey = getMonthKey();
-  if (!fs.existsSync(STATS_FILE)) return { month: monthKey, totalApproved: 0, approvers: {}, creators: {}, categories: {} };
+  if (!fs.existsSync(STATS_FILE)) return makeEmptyStats(monthKey);
   
   try {
     const data = JSON.parse(fs.readFileSync(STATS_FILE, "utf8"));
     if (data.month !== monthKey) {
-      return { month: monthKey, totalApproved: 0, approvers: {}, creators: {}, categories: {} };
+      return makeEmptyStats(monthKey);
     }
-    return data;
+    return hydrateStats(data, monthKey);
   } catch {
-    return { month: monthKey, totalApproved: 0, approvers: {}, creators: {}, categories: {} };
+    return makeEmptyStats(monthKey);
   }
 }
 
@@ -271,8 +475,9 @@ async function updateDashboard(client) {
     .setTitle("📊 Dashboard Analítico — Social Mídias")
     .setDescription(`Relatório consolidado do mês: **${stats.month}**`)
     .addFields(
-      { name: "📈 Total Aprovado", value: `\`${stats.totalApproved}\` registros`, inline: true },
-      { name: "🥇 Líder de Registros", value: topCreators[0] ? `<@${topCreators[0][0]}> (${topCreators[0][1]})` : "—", inline: true },
+  { name: "📈 Total Aprovado", value: `\`${stats.totalApproved}\` registros`, inline: true },
+  { name: "💰 Valor Pago no Mês", value: `\`R$ ${Number(stats.totalAmountPaid || 0).toLocaleString("pt-BR")}\``, inline: true },
+  { name: "🥇 Líder de Registros", value: topCreators[0] ? `<@${topCreators[0][0]}> (${topCreators[0][1]})` : "—", inline: true },
       { name: "\u200B", value: "━━━━━━━━━━━━━━━━━━━━━━" },
       { 
         name: "💎 Resumo de VIPs", 
@@ -843,11 +1048,27 @@ if (id.startsWith("pago__") || id.startsWith("solicitado__") || id.startsWith("r
         // Se não houver data após o |, a função normalizarDataEvento colocará a data de hoje
         const eventoData = normalizarDataEvento(eventoDataRaw);
 
-        const { nome: ganhadorNome, id: ganhadorId } = parseNomeIdFlex(interaction.fields.getTextInputValue("ganhador"));
+        const { nome: ganhadorNomeRaw, id: ganhadorId } = parseNomeIdFlex(interaction.fields.getTextInputValue("ganhador"));
 
-        const premiacao = interaction.fields.getTextInputValue("premiacao").trim();
+const premiacao = interaction.fields.getTextInputValue("premiacao").trim();
 
-        const canal = await client.channels.fetch(CANAL_PAGAMENTO).catch(() => null);
+await interaction.deferReply({ ephemeral: true }).catch(() => {});
+
+const analiseComprovante = await analisarComprovantePagamento(premiacao).catch((err) => ({
+  ok: false,
+  url: extrairPrimeiraUrlImagem(premiacao),
+  texto: "",
+  valorRaw: null,
+  valorNumero: 0,
+  nomeRecebedor: null,
+  horario: null,
+  data: null,
+  erro: err?.message || String(err),
+}));
+
+const ganhadorNome = corrigirNomeGanhadorPorOCR(ganhadorNomeRaw, analiseComprovante.nomeRecebedor);
+
+const canal = await client.channels.fetch(CANAL_PAGAMENTO).catch(() => null);
         if (!canal || !canal.isTextBased()) {
           await interaction.editReply({ content: "❌ Não achei o canal de pagamento." }).catch(() => {});
           return true;
@@ -868,12 +1089,16 @@ if (id.startsWith("pago__") || id.startsWith("solicitado__") || id.startsWith("r
     `**Tipo Identificado:** \`${categoriaVip}\``
   )
   .addFields(
-    { name: "🏷️ Evento", value: `${eventoNome || PADRAO_INDEFINIDO}`, inline: true },
-    { name: "📅 Data do Evento", value: `${eventoData || PADRAO_INDEFINIDO}`, inline: true },
-    { name: "🔗 Premiação / Link", value: `${premiacao || PADRAO_INDEFINIDO}`, inline: false },
-    { name: "� Ganhador", value: `${ganhadorNome} | ${ganhadorId}`, inline: true },
+  { name: "🏷️ Evento", value: `${eventoNome || PADRAO_INDEFINIDO}`, inline: true },
+  { name: "📅 Data do Evento", value: `${eventoData || PADRAO_INDEFINIDO}`, inline: true },
+  { name: "🔗 Premiação / Link", value: `${premiacao || PADRAO_INDEFINIDO}`, inline: false },
+  { name: "👤 Ganhador", value: `${ganhadorNome} | ${ganhadorId}`, inline: true },
+  { name: "💰 Valor Identificado", value: analiseComprovante.valorRaw ? `\`${analiseComprovante.valorRaw}\`` : "`Não identificado`", inline: true },
+  { name: "🕒 Horário do Print", value: analiseComprovante.horario ? `\`${analiseComprovante.horario}\`` : "`Não identificado`", inline: true },
+  { name: "📅 Data do Print", value: analiseComprovante.data ? `\`${analiseComprovante.data}\`` : "`Não identificada`", inline: true },
+  { name: "🧾 Nome no Comprovante", value: analiseComprovante.nomeRecebedor ? `\`${analiseComprovante.nomeRecebedor}\`` : "`Não identificado`", inline: true },
 
-    // ✅ FIXO PRA TRAVA / AUDITORIA
+  // ✅ FIXO PRA TRAVA / AUDITORIA
     { name: "🆔 Criador do Registro", value: `<@${registrador.id}> (\`${registrador.id}\`)`, inline: false },
 
     { name: "📝 Registro", value: `Feito por <@${registrador.id}>`, inline: false },
@@ -1029,15 +1254,27 @@ if (id.startsWith("pago_desc_") || id.startsWith("solicitado_desc_") || id.start
     const creatorId = getCriadorIdFromEmbed(embedOriginal);
     const tipoRaw = embedOriginal.data.description?.match(/Tipo Identificado:\s*`(.+?)`/)?.[1] || "Outros";
     
-    stats.totalApproved += 1;
-    stats.approvers[interaction.user.id] = (stats.approvers[interaction.user.id] || 0) + 1;
+    const valorIdentificadoRaw = getFieldValue(embedOriginal, "💰 Valor Identificado");
+const valorIdentificado = parseValorOCR(valorIdentificadoRaw)?.numero || 0;
+
+stats.totalApproved += 1;
+stats.totalAmountPaid = Number(stats.totalAmountPaid || 0) + valorIdentificado;
+
+stats.approvers[interaction.user.id] = (stats.approvers[interaction.user.id] || 0) + 1;
+
+if (creatorId) {
+  stats.amountsByCreator[creatorId] = Number(stats.amountsByCreator[creatorId] || 0) + valorIdentificado;
+}
+
+stats.amountsByApprover[interaction.user.id] = Number(stats.amountsByApprover[interaction.user.id] || 0) + valorIdentificado;
     
     // Removido o incremento de stats.creators aqui pois agora ele conta NO MOMENTO DA CRIAÇÃO.
     // Isso garante que o dashboard mostre "quem mais fez ao todo" (registrou).
     // if (creatorId) stats.creators[creatorId] = (stats.creators[creatorId] || 0) + 1;
     
     const catKey = normalizarTipoPremiacao(tipoRaw);
-    stats.categories[catKey] = (stats.categories[catKey] || 0) + 1;
+stats.categories[catKey] = (stats.categories[catKey] || 0) + 1;
+stats.amountsByCategory[catKey] = Number(stats.amountsByCategory[catKey] || 0) + valorIdentificado;
     
     saveStats(stats);
     await updateDashboard(client).catch(() => {});
