@@ -86,6 +86,8 @@ const loadState = () => { try { if (fs.existsSync(STATE_FILE)) return JSON.parse
 
 let state = loadState();
 
+const processingApprovals = new Set();
+
 function getHallScanKeySP() {
   return new Date().toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
 }
@@ -369,6 +371,65 @@ ${imageLines.join("\n")}`;
   return fixedMessage.trim();
 }
 
+function normalizeHallName(value = "") {
+  return cleanOneLine(value)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+async function findApprovalImagesForHall(client, hallMessage, parts) {
+  const approvalChannel = await client.channels.fetch(APPROVAL_CHANNEL_ID).catch(() => null);
+  if (!approvalChannel || !approvalChannel.isTextBased()) return [];
+
+  const messages = await approvalChannel.messages.fetch({ limit: 100 }).catch(() => null);
+  if (!messages) return [];
+
+  const hallEventName = normalizeHallName(parts.eventName);
+  const hallCreatedAt = hallMessage?.createdTimestamp || Date.now();
+
+  const candidates = messages
+    .filter(m => {
+      const diff = Math.abs((m.createdTimestamp || 0) - hallCreatedAt);
+      const withinSameWindow = diff <= 1000 * 60 * 60 * 12;
+
+      const embedText = m.embeds
+        .map(e => [
+          e.title,
+          e.description,
+          ...(e.fields || []).map(f => `${f.name} ${f.value}`)
+        ].flat().join(" "))
+        .join(" ");
+
+      return withinSameWindow && normalizeHallName(embedText).includes(hallEventName);
+    })
+    .sort((a, b) => Math.abs(a.createdTimestamp - hallCreatedAt) - Math.abs(b.createdTimestamp - hallCreatedAt));
+
+  const foundUrls = [];
+
+  for (const approvalMsg of candidates.values()) {
+    for (const emb of approvalMsg.embeds) {
+      if (emb.image?.url) foundUrls.push(emb.image.url);
+      if (emb.thumbnail?.url) foundUrls.push(emb.thumbnail.url);
+
+      for (const field of emb.fields || []) {
+        if (/imagem/i.test(field.name)) {
+          const urls = String(field.value).match(/https?:\/\/\S+/gi) || [];
+          foundUrls.push(...urls);
+        }
+      }
+    }
+
+    foundUrls.push(...[...approvalMsg.attachments.values()].map(a => a.url));
+
+    if (foundUrls.length > 0) break;
+  }
+
+  return [...new Set(foundUrls)].filter(Boolean);
+}
+
 async function autoCorrectDuplications(channel, client) {
   try {
     const messages = await channel.messages.fetch({ limit: 100 }).catch(() => null);
@@ -381,10 +442,21 @@ async function autoCorrectDuplications(channel, client) {
     );
 
     for (const msg of botHallMessages.values()) {
-      const attachmentUrls = [...msg.attachments.values()].map(a => a.url);
-      const fixed = fixDuplicatedHallContent(msg.content, attachmentUrls);
+      const parts = extractHallParts(msg.content);
 
-          if (fixed !== msg.content && fixed.length <= 2000) {
+      const attachmentUrls = [...msg.attachments.values()].map(a => a.url);
+      const contentUrls = msg.content.match(/https?:\/\/\S+/gi) || [];
+      const approvalUrls = await findApprovalImagesForHall(client, msg, parts);
+
+      const allImageUrls = [...new Set([
+        ...contentUrls,
+        ...attachmentUrls,
+        ...approvalUrls
+      ])].filter(Boolean);
+
+      const fixed = fixDuplicatedHallContent(msg.content, allImageUrls);
+
+      if (fixed !== msg.content && fixed.length <= 2000) {
         await msg.edit({
           content: fixed,
           files: [...msg.attachments.values()].map(a => a.url)
@@ -971,11 +1043,27 @@ const cityDisplayName = customCityInput || CITIES[cityKey].label;
       return interaction.reply({ content: "🚫 Você não tem permissão para aprovar.", ephemeral: true });
     }
 
-    await interaction.deferReply({ ephemeral: true });
     const reqId = interaction.customId.replace(BTN_APPROVE_PREFIX, "");
+
+    if (processingApprovals.has(reqId)) {
+      return interaction.reply({
+        content: "⏳ Esse Hall da Fama já está sendo aprovado. Aguarde finalizar.",
+        ephemeral: true
+      });
+    }
+
+    processingApprovals.add(reqId);
+
+    await interaction.deferReply({ ephemeral: true });
+
     const data = state.pendingRequests[reqId];
 
-    if (!data) return interaction.editReply("⚠️ Dados da solicitação expiraram.");
+    if (!data) {
+      processingApprovals.delete(reqId);
+      return interaction.editReply("⚠️ Dados da solicitação expiraram.");
+    }
+
+    await interaction.message.edit({ components: [] }).catch(() => {});
 
     const hallChannel = await client.channels.fetch(HALL_CHANNEL_ID).catch(() => null);
     if (!hallChannel) return interaction.editReply("❌ Canal do Hall da Fama não encontrado.");
@@ -1025,7 +1113,7 @@ ${data.imageUrl}${data.imageUrl2 ? `\n${data.imageUrl2}` : ''}`;
       approverId: interaction.user.id,
       at: Date.now()
     });
-    await autoCorrectDuplications(hallChannel, client);
+
 
     const embedApproved = EmbedBuilder.from(interaction.message.embeds[0])
       .setColor("#2ecc71")
@@ -1037,6 +1125,7 @@ ${data.imageUrl}${data.imageUrl2 ? `\n${data.imageUrl2}` : ''}`;
     
     delete state.pendingRequests[reqId];
     saveState(state);
+    processingApprovals.delete(reqId);
     await interaction.editReply("✅ Hall da Fama postado e pontos computados!");
     return true;
   }
