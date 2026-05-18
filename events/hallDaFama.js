@@ -338,16 +338,16 @@ function buildControlButtons() {
       .setStyle(ButtonStyle.Secondary)
       .setEmoji("💰"),
     new ButtonBuilder()
-      .setCustomId(BTN_EDIT_CITY)
-      .setLabel("🌆 Editar Cidade")
-      .setStyle(ButtonStyle.Secondary)
-      .setEmoji("🌆")
+  .setCustomId(BTN_EDIT_CITY)
+  .setLabel("🌆 Editar Última CDD")
+  .setStyle(ButtonStyle.Secondary)
+  .setEmoji("🌆")
   );
 }
 
 async function ensureButtonAtBottom(channel, client, force = true) {
   try {
-    const messages = await channel.messages.fetch({ limit: 20 }).catch(() => null);
+    const messages = await channel.messages.fetch({ limit: 50 }).catch(() => null);
     if (!messages) return;
 
   const myMsgs = messages.filter(
@@ -431,7 +431,7 @@ export async function hallDaFamaOnReady(client) {
   state = loadState();
   const channel = await client.channels.fetch(HALL_CHANNEL_ID).catch(() => null);
   if (channel && channel.isTextBased()) {
-    await ensureButtonAtBottom(channel, client, false);
+    await ensureButtonAtBottom(channel, client, true);
     await autoCorrectDuplications(channel, client);
   }
 }
