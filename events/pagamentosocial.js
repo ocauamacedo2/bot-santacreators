@@ -629,11 +629,25 @@ function getMonthKey() {
 function makeEmptyStats(monthKey) {
   return {
     month: monthKey,
+
+    totalCreated: 0,
     totalApproved: 0,
+    totalRejected: 0,
+    totalRequested: 0,
+
     totalAmountPaid: 0,
-    approvers: {},
+
     creators: {},
+
+    approvers: {},
+    rejecters: {},
+    requesters: {},
+
     categories: {},
+    categoriesApproved: {},
+    categoriesRejected: {},
+    categoriesRequested: {},
+
     amountsByCreator: {},
     amountsByApprover: {},
     amountsByCategory: {},
@@ -645,13 +659,28 @@ function hydrateStats(stats, monthKey) {
   return {
     ...base,
     ...stats,
-    approvers: stats?.approvers || {},
+
+    totalCreated: Number(stats?.totalCreated || 0),
+    totalApproved: Number(stats?.totalApproved || 0),
+    totalRejected: Number(stats?.totalRejected || 0),
+    totalRequested: Number(stats?.totalRequested || 0),
+
+    totalAmountPaid: Number(stats?.totalAmountPaid || 0),
+
     creators: stats?.creators || {},
+
+    approvers: stats?.approvers || {},
+    rejecters: stats?.rejecters || {},
+    requesters: stats?.requesters || {},
+
     categories: stats?.categories || {},
+    categoriesApproved: stats?.categoriesApproved || {},
+    categoriesRejected: stats?.categoriesRejected || {},
+    categoriesRequested: stats?.categoriesRequested || {},
+
     amountsByCreator: stats?.amountsByCreator || {},
     amountsByApprover: stats?.amountsByApprover || {},
     amountsByCategory: stats?.amountsByCategory || {},
-    totalAmountPaid: Number(stats?.totalAmountPaid || 0),
   };
 }
 
@@ -675,65 +704,185 @@ function saveStats(stats) {
   fs.writeFileSync(STATS_FILE, JSON.stringify(stats, null, 2));
 }
 
+function ordenarTop(obj, limit = 5) {
+  return Object.entries(obj || {})
+    .sort((a, b) => Number(b[1] || 0) - Number(a[1] || 0))
+    .slice(0, limit);
+}
+
+function somarObj(obj) {
+  return Object.values(obj || {}).reduce((acc, n) => acc + Number(n || 0), 0);
+}
+
+function formatarRankingUsuarios(obj, vazio = "_Nenhum dado ainda_") {
+  const lista = ordenarTop(obj, 10);
+
+  if (!lista.length) return vazio;
+
+  return lista
+    .map(([userId, count], index) => `**${index + 1}.** <@${userId}> — \`${count}\``)
+    .join("\n");
+}
+
+function formatarCategoriasProfissional(stats) {
+  const todas = new Set([
+    ...Object.keys(stats.categories || {}),
+    ...Object.keys(stats.categoriesApproved || {}),
+    ...Object.keys(stats.categoriesRejected || {}),
+    ...Object.keys(stats.categoriesRequested || {}),
+  ]);
+
+  if (!todas.size) return "_Nenhuma categoria registrada ainda_";
+
+  return [...todas]
+    .sort()
+    .map((cat) => {
+      const criados = Number(stats.categories?.[cat] || 0);
+      const aprovados = Number(stats.categoriesApproved?.[cat] || 0);
+      const reprovados = Number(stats.categoriesRejected?.[cat] || 0);
+      const solicitados = Number(stats.categoriesRequested?.[cat] || 0);
+
+      return [
+        `**${cat}**`,
+        `Criados: \`${criados}\``,
+        `Aprovados: \`${aprovados}\``,
+        `Reprovados: \`${reprovados}\``,
+        `Solicitados: \`${solicitados}\``,
+      ].join(" • ");
+    })
+    .join("\n");
+}
+
+function esconderCamposFinanceiros(categoriaVip, analiseComprovante) {
+  const cat = String(categoriaVip || "").toLowerCase();
+  const ehVipOuPass = cat.includes("vip") || cat.includes("pass");
+
+  return ehVipOuPass && !analiseComprovante?.valorRaw;
+}
+
 async function updateDashboard(client) {
   const stats = loadStats();
   const channel = await client.channels.fetch(CANAL_DASHBOARD_PAGAMENTO).catch(() => null);
   if (!channel || !channel.isTextBased()) return;
 
-  // Preparar dados para os gráficos
-  const topApprovers = Object.entries(stats.approvers).sort((a,b) => b[1] - a[1]).slice(0, 5);
-  const bottomApprovers = Object.entries(stats.approvers).sort((a,b) => a[1] - b[1]).slice(0, 5);
-  const topCreators = Object.entries(stats.creators).sort((a,b) => b[1] - a[1]).slice(0, 5);
-  const catEntries = Object.entries(stats.categories).sort((a,b) => b[1] - a[1]);
+  const topApprovers = ordenarTop(stats.approvers, 5);
+  const topRejecters = ordenarTop(stats.rejecters, 5);
+  const topCreators = ordenarTop(stats.creators, 5);
 
-  const labelsApprovers = topApprovers.map(x => x[0].slice(-5)); // IDs curtos
-  const dataApprovers = topApprovers.map(x => x[1]);
+  const totalCriados = Number(stats.totalCreated || somarObj(stats.creators));
+  const totalAprovados = Number(stats.totalApproved || 0);
+  const totalReprovados = Number(stats.totalRejected || 0);
+  const totalSolicitados = Number(stats.totalRequested || 0);
 
   const chartConfig = {
-    type: 'bar',
+    type: "bar",
     data: {
-      labels: topApprovers.map(x => `ID: ${x[0].slice(-4)}`),
-      datasets: [{ label: 'Aprovações', data: dataApprovers, backgroundColor: '#2ecc71' }]
+      labels: topApprovers.map(([userId]) => `@${userId.slice(-4)}`),
+      datasets: [
+        {
+          label: "Aprovações",
+          data: topApprovers.map(([, count]) => count),
+          backgroundColor: "#2ecc71",
+        },
+      ],
     },
-    options: { title: { display: true, text: 'Top 5 Aprovadores do Mês' } }
+    options: {
+      title: {
+        display: true,
+        text: "Top 5 Aprovadores do Mês",
+      },
+      legend: {
+        display: true,
+      },
+    },
   };
 
   const chartUrl = `https://quickchart.io/chart?c=${encodeURIComponent(JSON.stringify(chartConfig))}&backgroundColor=white`;
 
+  const taxaAprovacao = totalCriados > 0
+    ? ((totalAprovados / totalCriados) * 100).toFixed(1)
+    : "0.0";
+
+  const taxaReprovacao = totalCriados > 0
+    ? ((totalReprovados / totalCriados) * 100).toFixed(1)
+    : "0.0";
+
   const embed = new EmbedBuilder()
     .setColor("#ff3399")
     .setTitle("📊 Dashboard Analítico — Social Mídias")
-    .setDescription(`Relatório consolidado do mês: **${stats.month}**`)
+    .setDescription(
+      [
+        `Relatório mensal consolidado: **${stats.month}**`,
+        "",
+        "Painel oficial com registros criados, aprovações, reprovações, solicitações, categorias e responsáveis.",
+      ].join("\n")
+    )
     .addFields(
-  { name: "📈 Total Aprovado", value: `\`${stats.totalApproved}\` registros`, inline: true },
-  { name: "💰 Valor Pago no Mês", value: `\`R$ ${Number(stats.totalAmountPaid || 0).toLocaleString("pt-BR")}\``, inline: true },
-  { name: "🥇 Líder de Registros", value: topCreators[0] ? `<@${topCreators[0][0]}> (${topCreators[0][1]})` : "—", inline: true },
-      { name: "\u200B", value: "━━━━━━━━━━━━━━━━━━━━━━" },
-      { 
-        name: "💎 Resumo de VIPs", 
-        value: catEntries.map(([name, count]) => `• **${name}:** ${count}`).join("\n") || "_Nenhum VIP registrado_",
-        inline: false 
+      {
+        name: "📌 Visão Geral do Mês",
+        value: [
+          `🧾 **Registros criados:** \`${totalCriados}\``,
+          `✅ **Aprovados:** \`${totalAprovados}\``,
+          `❌ **Reprovados:** \`${totalReprovados}\``,
+          `📌 **Solicitados:** \`${totalSolicitados}\``,
+          `📈 **Taxa de aprovação:** \`${taxaAprovacao}%\``,
+          `📉 **Taxa de reprovação:** \`${taxaReprovacao}%\``,
+        ].join("\n"),
+        inline: false,
       },
       {
-        name: "⚖️ Ranking de Aprovação",
-        value: `**Mais aprova:** ${topApprovers[0] ? `<@${topApprovers[0][0]}>` : "—"}\n**Menos aprova:** ${bottomApprovers[0] ? `<@${bottomApprovers[0][0]}>` : "—"}`,
-        inline: false
+        name: "💰 Financeiro",
+        value: [
+          `💵 **Valor pago no mês:** \`R$ ${Number(stats.totalAmountPaid || 0).toLocaleString("pt-BR")}\``,
+          `🏆 **Maior aprovador:** ${topApprovers[0] ? `<@${topApprovers[0][0]}> — \`${topApprovers[0][1]}\`` : "—"}`,
+          `📝 **Maior registrador:** ${topCreators[0] ? `<@${topCreators[0][0]}> — \`${topCreators[0][1]}\`` : "—"}`,
+        ].join("\n"),
+        inline: false,
+      },
+      {
+        name: "💎 Categorias / VIPs / Passes",
+        value: formatarCategoriasProfissional(stats),
+        inline: false,
+      },
+      {
+        name: "🥇 Ranking de Aprovadores",
+        value: formatarRankingUsuarios(stats.approvers),
+        inline: true,
+      },
+      {
+        name: "🚫 Ranking de Reprovações",
+        value: formatarRankingUsuarios(stats.rejecters),
+        inline: true,
+      },
+      {
+        name: "📝 Ranking de Registros Criados",
+        value: formatarRankingUsuarios(stats.creators),
+        inline: false,
       }
     )
     .setImage(chartUrl)
-    .setFooter({ text: `${DASH_MARKER} • Atualizado automaticamente` })
+    .setFooter({ text: `${DASH_MARKER} • Mês ${stats.month} • Atualizado automaticamente` })
     .setTimestamp();
 
-  const state = readJSON(DASH_STATE_FILE, { messageId: null });
+  const state = readJSON(DASH_STATE_FILE, { messagesByMonth: {} });
+
+  if (!state.messagesByMonth) {
+    state.messagesByMonth = {};
+  }
+
   let msg = null;
-  if (state.messageId) msg = await channel.messages.fetch(state.messageId).catch(() => null);
+  const messageIdDoMes = state.messagesByMonth[stats.month];
+
+  if (messageIdDoMes) {
+    msg = await channel.messages.fetch(messageIdDoMes).catch(() => null);
+  }
 
   if (msg) {
     await msg.edit({ embeds: [embed] }).catch(() => {});
   } else {
     const newMsg = await channel.send({ embeds: [embed] }).catch(() => null);
     if (newMsg) {
-      state.messageId = newMsg.id;
+      state.messagesByMonth[stats.month] = newMsg.id;
       saveJSON_Dash(DASH_STATE_FILE, state);
     }
   }
@@ -1314,7 +1463,37 @@ const canal = await client.channels.fetch(CANAL_PAGAMENTO).catch(() => null);
         const tipoInput = interaction.fields.getTextInputValue("tipoPremiacao");
         const categoriaVip = normalizarTipoPremiacao(tipoInput);
 
-        const embed = new EmbedBuilder()
+const ocultarFinanceiro = esconderCamposFinanceiros(categoriaVip, analiseComprovante);
+
+const camposRegistro = [
+  { name: "🏷️ Evento", value: `${eventoNome || PADRAO_INDEFINIDO}`, inline: true },
+  { name: "📅 Data do Evento", value: `${eventoData || PADRAO_INDEFINIDO}`, inline: true },
+  { name: "🔗 Premiação / Link", value: `${premiacao || PADRAO_INDEFINIDO}`, inline: false },
+  { name: "👤 Ganhador", value: `${ganhadorNome} | ${ganhadorId}`, inline: true },
+];
+
+if (!ocultarFinanceiro) {
+  camposRegistro.push(
+    { name: "💰 Valor Identificado", value: analiseComprovante.valorRaw ? `\`${analiseComprovante.valorRaw}\`` : "`Não identificado`", inline: true },
+    { name: "🧾 Nome no Comprovante", value: analiseComprovante.nomeRecebedor ? `\`${analiseComprovante.nomeRecebedor}\`` : "`Não identificado`", inline: true }
+  );
+}
+
+camposRegistro.push(
+  { name: "🕒 Horário", value: analiseComprovante.horario ? `\`${analiseComprovante.horario}\` (${analiseComprovante.horarioFonte === "print" ? "print" : "registro"})` : "`Não identificado`", inline: true },
+  { name: "📅 Data", value: analiseComprovante.data ? `\`${analiseComprovante.data}\` (${analiseComprovante.dataFonte === "print" ? "print" : "registro"})` : "`Não identificada`", inline: true },
+
+  // ✅ FIXO PRA TRAVA / AUDITORIA
+  { name: "🆔 Criador do Registro", value: `<@${registrador.id}> (\`${registrador.id}\`)`, inline: false },
+
+  { name: "📝 Registro", value: `Feito por <@${registrador.id}>`, inline: false },
+  { name: "📌 Status", value: "`Aguardando confirmação...`", inline: false },
+
+  // ✅ vai ser preenchido quando aprovar/reprovar/solicitar
+  { name: "🧑‍⚖️ Última decisão", value: "`—`", inline: false }
+);
+
+const embed = new EmbedBuilder()
   .setColor("#ff3399")
   .setAuthor({ name: `${registrador.tag} • Registro criado`, iconURL: registradorAvatar })
   .setTitle("🎉 Registro de Pagamento de Evento – SANTACREATORS")
@@ -1322,25 +1501,7 @@ const canal = await client.channels.fetch(CANAL_PAGAMENTO).catch(() => null);
     "📌 Registro obrigatório de pagamentos de eventos e ações especiais.\n\n" +
     `**Tipo Identificado:** \`${categoriaVip}\``
   )
-  .addFields(
-  { name: "🏷️ Evento", value: `${eventoNome || PADRAO_INDEFINIDO}`, inline: true },
-  { name: "📅 Data do Evento", value: `${eventoData || PADRAO_INDEFINIDO}`, inline: true },
-  { name: "🔗 Premiação / Link", value: `${premiacao || PADRAO_INDEFINIDO}`, inline: false },
-  { name: "👤 Ganhador", value: `${ganhadorNome} | ${ganhadorId}`, inline: true },
-  { name: "💰 Valor Identificado", value: analiseComprovante.valorRaw ? `\`${analiseComprovante.valorRaw}\`` : "`Não identificado`", inline: true },
-  { name: "🕒 Horário", value: analiseComprovante.horario ? `\`${analiseComprovante.horario}\` (${analiseComprovante.horarioFonte === "print" ? "print" : "registro"})` : "`Não identificado`", inline: true },
-{ name: "📅 Data", value: analiseComprovante.data ? `\`${analiseComprovante.data}\` (${analiseComprovante.dataFonte === "print" ? "print" : "registro"})` : "`Não identificada`", inline: true },
-  { name: "🧾 Nome no Comprovante", value: analiseComprovante.nomeRecebedor ? `\`${analiseComprovante.nomeRecebedor}\`` : "`Não identificado`", inline: true },
-
-  // ✅ FIXO PRA TRAVA / AUDITORIA
-    { name: "🆔 Criador do Registro", value: `<@${registrador.id}> (\`${registrador.id}\`)`, inline: false },
-
-    { name: "📝 Registro", value: `Feito por <@${registrador.id}>`, inline: false },
-    { name: "📌 Status", value: "`Aguardando confirmação...`", inline: false },
-
-    // ✅ vai ser preenchido quando aprovar/reprovar/solicitar
-    { name: "🧑‍⚖️ Última decisão", value: "`—`", inline: false }
-  )
+  .addFields(camposRegistro)
   .setThumbnail(registradorAvatar)
   .setImage(
     "https://media.discordapp.net/attachments/1362477839944777889/1384245215249825832/standard_2rss.gif?width=515&height=66"
@@ -1362,10 +1523,15 @@ const canal = await client.channels.fetch(CANAL_PAGAMENTO).catch(() => null);
         await limparBotoesAntigos(client, canal).catch(() => {});
 
         // ✅ Atualiza as estatísticas de QUEM CRIOU e dispara o Dashboard
-        const stats = loadStats();
-        const creatorId = interaction.user.id;
-        stats.creators[creatorId] = (stats.creators[creatorId] || 0) + 1;
-        saveStats(stats);
+const stats = loadStats();
+const creatorId = interaction.user.id;
+
+stats.totalCreated = Number(stats.totalCreated || 0) + 1;
+
+stats.creators[creatorId] = (stats.creators[creatorId] || 0) + 1;
+stats.categories[categoriaVip] = (stats.categories[categoriaVip] || 0) + 1;
+
+saveStats(stats);
         
         // Força a atualização do gráfico no canal 1505716526534103110
         await updateDashboard(client).catch(() => {});
@@ -1482,36 +1648,49 @@ if (id.startsWith("pago_desc_") || id.startsWith("solicitado_desc_") || id.start
     labelAuditoria
   );
   
-  // Se aprovado (PAGO), atualiza estatísticas e dashboard
-  if (action === "pago") {
+  // Se aprovado/reprovado/solicitado, atualiza estatísticas e dashboard
+if (["pago", "reprovado", "solicitado"].includes(action)) {
     const stats = loadStats();
-    const creatorId = getCriadorIdFromEmbed(embedOriginal);
-    const tipoRaw = embedOriginal.data.description?.match(/Tipo Identificado:\s*`(.+?)`/)?.[1] || "Outros";
-    
-    const valorIdentificadoRaw = getFieldValue(embedOriginal, "💰 Valor Identificado");
+const creatorId = getCriadorIdFromEmbed(embedOriginal);
+const tipoRaw = embedOriginal.data.description?.match(/Tipo Identificado:\s*`(.+?)`/)?.[1] || "Outros";
+
+const valorIdentificadoRaw = getFieldValue(embedOriginal, "💰 Valor Identificado");
 const valorIdentificado = parseValorOCR(valorIdentificadoRaw)?.numero || 0;
 
-stats.totalApproved += 1;
-stats.totalAmountPaid = Number(stats.totalAmountPaid || 0) + valorIdentificado;
+const catKey = normalizarTipoPremiacao(tipoRaw);
 
-stats.approvers[interaction.user.id] = (stats.approvers[interaction.user.id] || 0) + 1;
+if (action === "pago") {
+  stats.totalApproved = Number(stats.totalApproved || 0) + 1;
+  stats.totalAmountPaid = Number(stats.totalAmountPaid || 0) + valorIdentificado;
 
-if (creatorId) {
-  stats.amountsByCreator[creatorId] = Number(stats.amountsByCreator[creatorId] || 0) + valorIdentificado;
+  stats.approvers[interaction.user.id] = (stats.approvers[interaction.user.id] || 0) + 1;
+
+  stats.categoriesApproved[catKey] = (stats.categoriesApproved[catKey] || 0) + 1;
+  stats.amountsByCategory[catKey] = Number(stats.amountsByCategory[catKey] || 0) + valorIdentificado;
+
+  if (creatorId) {
+    stats.amountsByCreator[creatorId] = Number(stats.amountsByCreator[creatorId] || 0) + valorIdentificado;
+  }
+
+  stats.amountsByApprover[interaction.user.id] = Number(stats.amountsByApprover[interaction.user.id] || 0) + valorIdentificado;
 }
 
-stats.amountsByApprover[interaction.user.id] = Number(stats.amountsByApprover[interaction.user.id] || 0) + valorIdentificado;
-    
-    // Removido o incremento de stats.creators aqui pois agora ele conta NO MOMENTO DA CRIAÇÃO.
-    // Isso garante que o dashboard mostre "quem mais fez ao todo" (registrou).
-    // if (creatorId) stats.creators[creatorId] = (stats.creators[creatorId] || 0) + 1;
-    
-    const catKey = normalizarTipoPremiacao(tipoRaw);
-stats.categories[catKey] = (stats.categories[catKey] || 0) + 1;
-stats.amountsByCategory[catKey] = Number(stats.amountsByCategory[catKey] || 0) + valorIdentificado;
-    
-    saveStats(stats);
-    await updateDashboard(client).catch(() => {});
+if (action === "reprovado") {
+  stats.totalRejected = Number(stats.totalRejected || 0) + 1;
+
+  stats.rejecters[interaction.user.id] = (stats.rejecters[interaction.user.id] || 0) + 1;
+  stats.categoriesRejected[catKey] = (stats.categoriesRejected[catKey] || 0) + 1;
+}
+
+if (action === "solicitado") {
+  stats.totalRequested = Number(stats.totalRequested || 0) + 1;
+
+  stats.requesters[interaction.user.id] = (stats.requesters[interaction.user.id] || 0) + 1;
+  stats.categoriesRequested[catKey] = (stats.categoriesRequested[catKey] || 0) + 1;
+}
+
+saveStats(stats);
+await updateDashboard(client).catch(() => {});
   }
 
   const msgNova = await canal.send({ embeds: [embedAtualizado] }).catch(() => null);
