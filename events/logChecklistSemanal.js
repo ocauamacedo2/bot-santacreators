@@ -347,6 +347,10 @@ function readChecklistWeek(weekKey = weekKeyFromDateSP()) {
   return checklist;
 }
 
+function weekHasResponsaveis(checklist, weekKey) {
+  return Object.keys(checklist?.weeks?.[weekKey]?.responsaveis || {}).length > 0;
+}
+
 function loadGiSource() {
   const dataFile = loadJSON(GI_DATA_FILE, null);
   if (dataFile && Array.isArray(dataFile.registros) && dataFile.registros.length > 0) {
@@ -976,8 +980,16 @@ async function sendSundayReminders(client) {
 }
 
 export async function checklistOnReady(client) {
-  // ✅ No restart do bot, NÃO sincroniza GI.
-  // Apenas recarrega o painel salvo para não zerar os checks da semana.
+  const weekKey = weekKeyFromDateSP();
+  const checklist = readChecklistWeek(weekKey);
+
+  // ✅ No restart do bot:
+  // - se a semana já tem responsáveis, NÃO sincroniza para não zerar checks.
+  // - se a semana está vazia, sincroniza uma vez para carregar os responsáveis.
+  if (!weekHasResponsaveis(checklist, weekKey)) {
+    await syncWeekData(client, true).catch(() => {});
+  }
+
   await refreshMainPanel(client).catch(() => {});
 
   // ✅ Cobrança no Domingo (0) para os pendentes da semana que iniciou no Sábado.
@@ -995,8 +1007,16 @@ export async function checklistHandleMessage(message, client) {
   }
 
   await message.delete().catch(() => {});
-  const payload = await buildMainPanel(client, message.guild);
-  const sent = await message.channel.send(payload);
+
+const weekKey = weekKeyFromDateSP();
+const checklist = readChecklistWeek(weekKey);
+
+if (!weekHasResponsaveis(checklist, weekKey)) {
+  await syncWeekData(client, true).catch(() => {});
+}
+
+const payload = await buildMainPanel(client, message.guild);
+const sent = await message.channel.send(payload);
 
   saveJSON(PANEL_CONFIG.STATE_FILE, {
     guildId: message.guild.id,
