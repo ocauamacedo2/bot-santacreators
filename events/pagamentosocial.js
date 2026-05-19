@@ -760,6 +760,15 @@ function esconderCamposFinanceiros(categoriaVip, analiseComprovante) {
   return ehVipOuPass && !analiseComprovante?.valorRaw;
 }
 
+function criarRowDashboardPagamento() {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId("pagamento_dash_atualizar")
+      .setLabel("🔄 Atualizar Dashboard")
+      .setStyle(ButtonStyle.Primary)
+  );
+}
+
 async function updateDashboard(client) {
   const stats = loadStats();
   const channel = await client.channels.fetch(CANAL_DASHBOARD_PAGAMENTO).catch(() => null);
@@ -964,9 +973,16 @@ async function updateDashboard(client) {
   }
 
   if (msg) {
-    await msg.edit({ embeds: [embed] }).catch(() => {});
+    await msg.edit({
+      embeds: [embed],
+      components: [criarRowDashboardPagamento()],
+    }).catch(() => {});
   } else {
-    const newMsg = await channel.send({ embeds: [embed] }).catch(() => null);
+    const newMsg = await channel.send({
+      embeds: [embed],
+      components: [criarRowDashboardPagamento()],
+    }).catch(() => null);
+
     if (newMsg) {
       state.messagesByMonth[stats.month] = newMsg.id;
       saveJSON_Dash(DASH_STATE_FILE, state);
@@ -1297,6 +1313,18 @@ export async function handlePagamentoSocial(interaction, client) {
     // =========================
     if (interaction.isButton()) {
       const id = interaction.customId;
+
+      if (id === "pagamento_dash_atualizar") {
+        await interaction.deferReply({ ephemeral: true }).catch(() => {});
+
+        await updateDashboard(client).catch(() => {});
+
+        await interaction.editReply({
+          content: "✅ Dashboard atualizado com sucesso!",
+        }).catch(() => {});
+
+        return true;
+      }
 
       // ✅ FILTROS
       if (id.startsWith("filtro_")) {
