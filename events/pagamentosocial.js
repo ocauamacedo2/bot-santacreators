@@ -774,30 +774,116 @@ async function updateDashboard(client) {
   const totalReprovados = Number(stats.totalRejected || 0);
   const totalSolicitados = Number(stats.totalRequested || 0);
 
+  const guild = channel.guild;
+
+  async function nomeBonitoUsuario(userId) {
+    const member = await guild.members.fetch(userId).catch(() => null);
+
+    if (member?.displayName) {
+      return member.displayName
+        .replace(/[^\p{L}\p{N}\s|._-]/gu, "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 22);
+    }
+
+    return `ID ${String(userId).slice(-4)}`;
+  }
+
+  const topApproversLabels = await Promise.all(
+    topApprovers.map(([userId]) => nomeBonitoUsuario(userId))
+  );
+
   const chartConfig = {
-    type: "bar",
+    type: "horizontalBar",
     data: {
-      labels: topApprovers.map(([userId]) => `@${userId.slice(-4)}`),
+      labels: topApproversLabels,
       datasets: [
         {
-          label: "Aprovações",
-          data: topApprovers.map(([, count]) => count),
-          backgroundColor: "#2ecc71",
+          label: "Aprovações no mês",
+          data: topApprovers.map(([, count]) => Number(count || 0)),
+          backgroundColor: [
+            "#ff3399",
+            "#8e44ff",
+            "#00d4ff",
+            "#2ecc71",
+            "#f1c40f",
+          ],
+          borderColor: "#ffffff",
+          borderWidth: 2,
+          borderRadius: 10,
+          barThickness: 34,
         },
       ],
     },
     options: {
+      indexAxis: "y",
+      responsive: true,
+      layout: {
+        padding: {
+          top: 28,
+          right: 45,
+          bottom: 24,
+          left: 20,
+        },
+      },
       title: {
         display: true,
-        text: "Top 5 Aprovadores do Mês",
+        text: "🏆 Top 5 Aprovadores do Mês",
+        fontSize: 24,
+        fontColor: "#ffffff",
+        fontStyle: "bold",
+        padding: 24,
       },
       legend: {
-        display: true,
+        display: false,
+      },
+      plugins: {
+        datalabels: {
+          anchor: "end",
+          align: "right",
+          color: "#ffffff",
+          font: {
+            size: 18,
+            weight: "bold",
+          },
+          formatter: function(value) {
+            return value + " aprovações";
+          },
+        },
+      },
+      scales: {
+        xAxes: [
+          {
+            ticks: {
+              beginAtZero: true,
+              precision: 0,
+              fontColor: "#dcdcdc",
+              fontSize: 14,
+            },
+            gridLines: {
+              color: "rgba(255,255,255,0.08)",
+              zeroLineColor: "rgba(255,255,255,0.25)",
+            },
+          },
+        ],
+        yAxes: [
+          {
+            ticks: {
+              fontColor: "#ffffff",
+              fontSize: 16,
+              fontStyle: "bold",
+            },
+            gridLines: {
+              display: false,
+            },
+          },
+        ],
       },
     },
   };
 
-  const chartUrl = `https://quickchart.io/chart?c=${encodeURIComponent(JSON.stringify(chartConfig))}&backgroundColor=white`;
+  const chartUrl = `https://quickchart.io/chart?width=1000&height=520&devicePixelRatio=2&backgroundColor=%23111118&c=${encodeURIComponent(JSON.stringify(chartConfig))}`;
 
   const taxaAprovacao = totalCriados > 0
     ? ((totalAprovados / totalCriados) * 100).toFixed(1)
