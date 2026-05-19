@@ -929,8 +929,10 @@ async function logAudit(client, actor, respId, memberId, status, weekKey, isBulk
 // LEMBRETES & CRON
 // ===============================
 async function sendSundayReminders(client) {
-  const checklist = await syncWeekData(client);
+  // ✅ Lembrete apenas lê o checklist salvo.
+  // Não sincroniza GI para não reconstruir/zerar checks.
   const weekKey = weekKeyFromDateSP();
+  const checklist = readChecklistWeek(weekKey);
   const data = checklist.weeks[weekKey];
   const range = getWeekRangeLabel(weekKey);
 
@@ -974,12 +976,15 @@ async function sendSundayReminders(client) {
 }
 
 export async function checklistOnReady(client) {
-  await syncWeekData(client);
+  // ✅ No restart do bot, NÃO sincroniza GI.
+  // Apenas recarrega o painel salvo para não zerar os checks da semana.
   await refreshMainPanel(client).catch(() => {});
+
   // ✅ Cobrança no Domingo (0) para os pendentes da semana que iniciou no Sábado.
   cron.schedule("0 12,16,20 * * 0", () => sendSundayReminders(client), { timezone: TZ });
+
   // ✅ O "reset" (início da nova semana) acontece rigorosamente no Sábado 00:00.
- cron.schedule("0 0 * * 6", () => syncWeekData(client, true), { timezone: TZ });
+  cron.schedule("0 0 * * 6", () => syncWeekData(client, true), { timezone: TZ });
 }
 export async function checklistHandleMessage(message, client) {
   if (!message.guild || message.author.bot) return false;
