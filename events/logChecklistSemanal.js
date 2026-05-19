@@ -504,7 +504,10 @@ function buildProgressBar(value, total) {
 async function buildMainPanel(client, sourceGuild = null) {
   const guild = resolveMainGuild(client, sourceGuild);
   const weekKey = weekKeyFromDateSP();
-  const checklist = await syncWeekData(client, false); // Usa o cache para carregar o painel rápido
+
+  // ✅ NÃO sincroniza automaticamente aqui.
+  // O painel deve apenas LER a semana atual para não zerar/reconstruir progresso.
+  const checklist = readChecklistWeek(weekKey);
   const data = checklist.weeks[weekKey] || { responsaveis: {}, lastSyncedAt: null };
   const isSunday = getNowSP().getDay() === 0;
 
@@ -635,10 +638,12 @@ if (customId === "logcheck_my_members") {
   
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-  const checklist = await syncWeekData(client, false); // Rápido (usa o que já tem)
-  const weekKey = weekKeyFromDateSP();
-  const data = checklist.weeks?.[weekKey] || { responsaveis: {} };
-  const myData = data.responsaveis?.[interaction.user.id];
+// ✅ Apenas lê a semana atual.
+// Não sincroniza aqui para não reconstruir/zerar ao abrir gerenciamento.
+const weekKey = weekKeyFromDateSP();
+const checklist = readChecklistWeek(weekKey);
+const data = checklist.weeks?.[weekKey] || { responsaveis: {} };
+const myData = data.responsaveis?.[interaction.user.id];
 
   if (!myData || Object.keys(myData.members || {}).length === 0) {
     return interaction.reply({ content: "❌ Você não possui membros vinculados a você nesta semana.", flags: MessageFlags.Ephemeral });
@@ -656,9 +661,11 @@ if (customId === "logcheck_my_members") {
   
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-  const checklist = await syncWeekData(client, false); // Rápido (usa o que já tem)
-  const weekKey = weekKeyFromDateSP();
-  const data = checklist.weeks?.[weekKey] || { responsaveis: {} };
+// ✅ Apenas lê a semana atual.
+// Não sincroniza aqui para não reconstruir/zerar progresso já marcado.
+const weekKey = weekKeyFromDateSP();
+const checklist = readChecklistWeek(weekKey);
+const data = checklist.weeks?.[weekKey] || { responsaveis: {} };
 
     // ✅ PRE-FETCH EM MASSA (Otimização de Performance)
     const respIds = Object.keys(data.responsaveis || {});
@@ -965,7 +972,7 @@ export async function checklistOnReady(client) {
   // ✅ Cobrança no Domingo (0) para os pendentes da semana que iniciou no Sábado.
   cron.schedule("0 12,16,20 * * 0", () => sendSundayReminders(client), { timezone: TZ });
   // ✅ O "reset" (início da nova semana) acontece rigorosamente no Sábado 00:00.
-  cron.schedule("0 0 * * 6", () => syncWeekData(client), { timezone: TZ });
+ cron.schedule("0 0 * * 6", () => syncWeekData(client, true), { timezone: TZ });
 }
 export async function checklistHandleMessage(message, client) {
   if (!message.guild || message.author.bot) return false;
