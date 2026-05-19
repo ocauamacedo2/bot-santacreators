@@ -646,8 +646,11 @@ const data = checklist.weeks?.[weekKey] || { responsaveis: {} };
 const myData = data.responsaveis?.[interaction.user.id];
 
   if (!myData || Object.keys(myData.members || {}).length === 0) {
-    return interaction.reply({ content: "❌ Você não possui membros vinculados a você nesta semana.", flags: MessageFlags.Ephemeral });
-  }
+  return interaction.editReply({
+    content: "❌ Você não possui membros vinculados a você nesta semana.",
+    components: []
+  });
+}
 
   return sendPersonalManager(interaction, interaction.user.id, weekKey, myData);
 }
@@ -717,12 +720,12 @@ if (interaction.isStringSelectMenu() && customId === "logcheck_admin_select") {
   const checklist = loadJSON(CHECKLIST_FILE, { weeks: {} });
   const data = checklist.weeks?.[weekKey]?.responsaveis?.[respId];
 
-  if (!data) {
-    return interaction.reply({
-      content: "❌ Não encontrei dados desse responsável na semana atual.",
-      flags: MessageFlags.Ephemeral
-    });
-  }
+ if (!data) {
+  return interaction.editReply({
+    content: "❌ Não encontrei dados desse responsável na semana atual.",
+    components: []
+  });
+}
 
   return sendPersonalManager(interaction, respId, weekKey, data, true);
 }
@@ -732,7 +735,9 @@ if (interaction.isStringSelectMenu() && customId === "logcheck_admin_select") {
     const [, respId, weekKey] = customId.split(":");
     const memberId = interaction.values[0];
 
-    await interaction.deferUpdate().catch(() => {});
+if (!interaction.deferred && !interaction.replied) {
+  await interaction.deferUpdate().catch(() => {});
+}
 
     const checklist = loadJSON(CHECKLIST_FILE, { weeks: {} });
     const weekData = checklist.weeks?.[weekKey];
@@ -769,7 +774,9 @@ return true;
   if (interaction.isButton() && customId.startsWith("logcheck_bulk:")) {
     const [, action, respId, weekKey] = customId.split(":");
 
-    await interaction.deferUpdate().catch(() => {});
+if (!interaction.deferred && !interaction.replied) {
+  await interaction.deferUpdate().catch(() => {});
+}
 
     const checklist = loadJSON(CHECKLIST_FILE, { weeks: {} });
     const weekData = checklist.weeks?.[weekKey];
