@@ -743,14 +743,14 @@ function formatarCategoriasProfissional(stats) {
       const solicitados = Number(stats.categoriesRequested?.[cat] || 0);
 
       return [
-        `**${cat}**`,
-        `Criados: \`${criados}\``,
-        `Aprovados: \`${aprovados}\``,
-        `Reprovados: \`${reprovados}\``,
-        `Solicitados: \`${solicitados}\``,
-      ].join(" • ");
+        `💠 **${cat}**`,
+        `> 🧾 Criados: \`${criados}\``,
+        `> ✅ Aprovados: \`${aprovados}\``,
+        `> ❌ Reprovados: \`${reprovados}\``,
+        `> 📌 Solicitados: \`${solicitados}\``,
+      ].join("\n");
     })
-    .join("\n");
+    .join("\n\n");
 }
 
 function esconderCamposFinanceiros(categoriaVip, analiseComprovante) {
@@ -933,12 +933,12 @@ async function updateDashboard(client) {
       {
         name: "🥇 Ranking de Aprovadores",
         value: formatarRankingUsuarios(stats.approvers),
-        inline: true,
+        inline: false,
       },
       {
         name: "🚫 Ranking de Reprovações",
         value: formatarRankingUsuarios(stats.rejecters),
-        inline: true,
+        inline: false,
       },
       {
         name: "📝 Ranking de Registros Criados",
