@@ -413,6 +413,9 @@ import {
 // Role Sync Module
 import { setupSyncCargos } from "../events/syncCargos.js";
 
+// IA Auto Chat
+import { setupIaChatAuto } from "../events/iaChatAuto.js";
+
 // =====================================================
 // Express + Mongo
 // =====================================================
@@ -513,6 +516,7 @@ const setupEventHandlers = () => {
   setupSyncCargos(client);
   setupSortChannels(client);
   setupTicketRenamer(client);
+  setupIaChatAuto(client);
 
   client.on("channelCreate", async (c) => {
     try {

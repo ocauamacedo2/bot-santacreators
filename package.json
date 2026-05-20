@@ -17,6 +17,7 @@
     "mongoose": "^7.6.0",
     "node-cron": "^3.0.2",
     "node-fetch": "^3.3.2",
+    "openai": "^6.38.0",
     "opusscript": "^0.0.8",
     "play-dl": "^1.9.7",
     "pm2": "^6.0.14",
