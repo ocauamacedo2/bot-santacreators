@@ -157,6 +157,9 @@ export async function rolePermissionGuardHandleRoleUpdate(oldRole, newRole, clie
   try {
     if (!oldRole || !newRole || !client) return;
 
+    // Esta trava de segurança deve funcionar apenas no servidor principal da SantaCreators
+    if (newRole.guild.id !== "1262262852782129183") return;
+
     // se o bot acabou de corrigir exatamente este cargo, ignora apenas o eco da própria correção
     const selfFixUntil = selfFixCache.get(newRole.id);
     if (selfFixUntil && Date.now() < selfFixUntil) {
