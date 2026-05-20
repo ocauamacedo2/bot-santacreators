@@ -79,12 +79,14 @@ export async function removerMassivoHandleMessage(message, client) {
     if (!message.guild) return false;
 
     const content = message.content || '';
-    if (!content.startsWith('!remover')) return false;
+    const parts = content.trim().split(/\s+/);
+    const cmd = parts[0].toLowerCase();
+
+    // ✅ Correção: Checa o comando exato para não confundir !remover com !removerperm ou !remperm
+    if (cmd !== '!remover') return false;
 
     const startedAt = Date.now();
-
-    // explode args
-    const [, ...args] = content.slice(1).trim().split(/\s+/);
+    const args = parts.slice(1);
 
     // permissão
     if (!hasPermissionToUse(message)) {

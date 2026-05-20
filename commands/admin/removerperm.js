@@ -179,24 +179,27 @@ export async function removerPermHandleMessage(message, client) {
     const prefix = "!";
     if (!message.content.startsWith(prefix)) return false;
 
-    const [cmd, ...args] = message.content.slice(prefix.length).trim().split(/\s+/);
-    if ((cmd || "").toLowerCase() !== "removerperm") return false;
+    const parts = message.content.slice(prefix.length).trim().split(/\s+/);
+    const cmd = (parts.shift() || "").toLowerCase();
+
+    // ✅ Aceita os dois formatos e garante que não pegue comandos parecidos por engano
+    if (cmd !== "removerperm" && cmd !== "remperm") return false;
 
     if (!isAllowedToUse(message)) {
-      setTimeout(() => message.delete().catch(() => {}), 1000);
+      if (message.deletable) setTimeout(() => message.delete().catch(() => {}), 1000);
       await message.reply(
         "❌ Você não tem permissão para usar este comando (requer **Gerenciar Canais** ou whitelisted)."
       ).then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
       return true;
     }
 
-    const categoryId = args.shift();
+    const categoryId = parts.shift();
     if (!categoryId || !/^\d{5,}$/.test(categoryId)) {
-      await message.reply("❓ Uso: `!removerperm <categoryId> <@cargo|roleId> [@cargo|roleId] ...`");
+      await message.reply(`❓ Uso: \`!${cmd} <categoryId> <@cargo|roleId> [@cargo|roleId] ...\``);
       return true;
     }
 
-    const roleIds = parseRolesFromArgs(message, args);
+    const roleIds = parseRolesFromArgs(message, parts);
     if (!roleIds.length) {
       await message.reply("❓ Informe pelo menos **um** cargo (menção ou ID).");
       return true;
