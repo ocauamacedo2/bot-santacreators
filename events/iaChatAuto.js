@@ -32,7 +32,7 @@ import { GoogleGenAI } from "@google/genai";
 const AI_CHANNEL_ID = "1506520202576400404";
 
 const GEMINI_MODEL =
-  process.env.GEMINI_MODEL || "gemini-2.5-flash-lite";
+  process.env.GEMINI_MODEL || "gemini-2.0-flash";
 
 const GEMINI_API_KEY =
   process.env.GEMINI_API_KEY || "";
@@ -188,6 +188,66 @@ function buildFallbackInstantResponse(message) {
   }
 
   return "Não consegui encontrar essa informação com segurança agora. Me manda o canal, cargo, ID ou print certo que eu respondo direto com base nisso.";
+}
+
+// =====================================================
+// RESPOSTAS DIRETAS DO DISCORD SEM GEMINI
+// =====================================================
+
+function messageAsksWhoRoleIs(message) {
+  const text = normalizeSearchText(message.content);
+
+  return (
+    text.includes("quem e") ||
+    text.includes("quem eh") ||
+    text.includes("quem sao") ||
+    text.includes("ver quem") ||
+    text.includes("veja quem") ||
+    text.includes("ver ai quem") ||
+    text.includes("meu resp") ||
+    text.includes("resp influ")
+  );
+}
+
+function buildRoleMembersAnswer(message) {
+  if (!message.guild) return null;
+
+  if (!message.mentions.roles.size) return null;
+
+  if (!messageAsksWhoRoleIs(message)) return null;
+
+  const role = message.mentions.roles.first();
+
+  if (!role) return null;
+
+  const members = role.members
+    .filter((member) => !member.user.bot)
+    .map((member) => {
+      return `- <@${member.id}> | ${member.user.tag}`;
+    })
+    .slice(0, 25);
+
+  if (!members.length) {
+    return `O cargo <@&${role.id}> existe, mas não encontrei nenhum membro humano com esse cargo agora.`;
+  }
+
+  return [
+    `Achei sim, Macedo 😎`,
+    ``,
+    `O cargo <@&${role.id}> tem ${role.members.size} membro(s):`,
+    ``,
+    members.join("\n"),
+  ].join("\n");
+}
+
+function buildDirectDiscordAnswer(message) {
+  const roleMembersAnswer = buildRoleMembersAnswer(message);
+
+  if (roleMembersAnswer) {
+    return roleMembersAnswer;
+  }
+
+  return null;
 }
 
 function rememberMessage(channelId, author, content) {
@@ -1080,17 +1140,28 @@ Mensagem: ${content}
           .sendTyping()
           .catch(() => {});
 
-        // =====================================================
-        // GERAÇÃO IA
-        // =====================================================
+       // =====================================================
+// RESPOSTA DIRETA DO DISCORD
+// =====================================================
 
-        const iaResponse =
-  await generateIAResponse({
-    message,
-    client,
-  });
+const directDiscordAnswer =
+  buildDirectDiscordAnswer(message);
 
-let safeIaResponse = iaResponse;
+let safeIaResponse = directDiscordAnswer;
+
+if (!safeIaResponse) {
+  // =====================================================
+  // GERAÇÃO IA
+  // =====================================================
+
+  const iaResponse =
+    await generateIAResponse({
+      message,
+      client,
+    });
+
+  safeIaResponse = iaResponse;
+}
 
 if (iaResponseLooksLikePending(safeIaResponse)) {
   console.warn(
