@@ -1,7 +1,9 @@
 // d:\santacreators-main\events\iaChatAuto.js
 
 import {
+  PermissionsBitField,
   AttachmentBuilder,
+  EmbedBuilder,
   ChannelType,
 } from "discord.js";
 
@@ -207,27 +209,29 @@ function normalizeSearchText(text) {
 
 function extractDiscordIdsFromText(text) {
   const raw = String(text || "");
-
   const ids = new Set();
 
   const patterns = [
-    /<#(\d{17,22})>/g,
-    /<@&(\d{17,22})>/g,
-    /<@!?(\d{17,22})>/g,
-    /discord\.com\/channels\/\d{17,22}\/(\d{17,22})/g,
-    /\b(\d{17,22})\b/g,
+    /<#(\d{17,22})>/g, // Menção de Canal
+    /<@&(\d{17,22})>/g, // Menção de Cargo
+    /<@!?(\d{17,22})>/g, // Menção de Usuário
+    /channels\/\d{17,22}\/(\d{17,22})/g, // Links de Canais/Mensagens
+    /\b(\d{17,22})\b/g, // ID Puro
   ];
 
   for (const pattern of patterns) {
     let match;
-
     while ((match = pattern.exec(raw)) !== null) {
       if (match[1]) ids.add(match[1]);
     }
   }
-
+  
+  // Log de IDs encontrados para depuração
+  if (ids.size > 0) console.log(`[IA CHAT AUTO] IDs Identificados no texto: ${[...ids].join(", ")}`);
+  
   return [...ids];
 }
+
 
 function messageWantsCronograma(message) {
   const text = normalizeSearchText(message.content);
@@ -243,19 +247,27 @@ function messageWantsCronograma(message) {
 
 function messageWantsRoles(message) {
   const text = normalizeSearchText(message.content);
-
+  // Foca na Hierarquia de ROLEPLAY / CDD
   return (
-    text.includes("cargo") ||
     text.includes("hierarquia") ||
-    text.includes("permissao") ||
-    text.includes("permissões") ||
-    text.includes("staff") ||
-    text.includes("resp") ||
-    text.includes("lider") ||
-    text.includes("influ") ||
-    text.includes("creator")
+    text.includes("cdd") ||
+    text.includes("regras") ||
+    text.includes("organizacao")
   );
 }
+
+function messageWantsDiscordRoles(message) {
+  const text = normalizeSearchText(message.content);
+  // Foca nos CARGOS técnicos do servidor
+  return (
+    text.includes("cargo") ||
+    text.includes("permissao") ||
+    text.includes("permissões") ||
+    text.includes("meus cargos") ||
+    text.includes("roles")
+  );
+}
+
 
 function messageWantsChannels(message) {
   const text = normalizeSearchText(message.content);
@@ -317,6 +329,12 @@ async function resolveMentionedChannels(message) {
 }
 
 async function readTextChannelMessages(channel, limit = 10) {
+  // Verifica permissão antes de ler
+  const me = channel.guild.members.me;
+  if (!channel.permissionsFor(me).has([PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ReadMessageHistory])) {
+    return `[ERRO] Sem permissão para ler o canal <#${channel.id}>. Avise o usuário para verificar minhas permissões de "Ver Canal" e "Ler Histórico".`;
+  }
+
   const messages = await channel.messages
     .fetch({ limit })
     .catch(() => null);
@@ -528,35 +546,47 @@ function buildChannelsContext(message) {
 
 async function buildServerIntelligenceContext(message) {
   const blocks = [];
+  const text = normalizeSearchText(message.content);
 
+  // 1. Prioridade: Canais mencionados/Links
   const hasChannelReference =
     message.mentions.channels.size > 0 ||
     extractDiscordIdsFromText(message.content).length > 0 ||
-    String(message.content || "").includes("discord.com/channels/");
+    text.includes("channels/");
 
   if (hasChannelReference) {
+    console.log("[IA CHAT AUTO] Detectada menção/link de canal. Buscando conteúdo...");
     blocks.push(await fetchMentionedChannelsContext(message));
   }
 
+  // 2. Cronograma
   if (messageWantsCronograma(message)) {
+    console.log("[IA CHAT AUTO] Intenção detectada: Cronograma.");
     blocks.push(await fetchCronogramaContext(message));
   }
 
+  // 3. Hierarquia RP
   if (messageWantsRoles(message)) {
-    blocks.push(buildRolesHierarchyContext(message));
+    console.log("[IA CHAT AUTO] Intenção detectada: Hierarquia RP.");
     blocks.push(await fetchHierarquiaContext(message));
   }
 
+  // 4. Cargos do Discord (Técnico)
+  if (messageWantsDiscordRoles(message)) {
+    console.log("[IA CHAT AUTO] Intenção detectada: Cargos do Discord.");
+    blocks.push(buildRolesHierarchyContext(message));
+  }
+
   if (messageWantsChannels(message)) {
+    console.log("[IA CHAT AUTO] Intenção detectada: Listagem de Canais.");
     blocks.push(buildChannelsContext(message));
   }
 
-  if (!blocks.length) {
-    return "Nenhuma busca extra necessária.";
-  }
+  if (!blocks.length) return "Nenhuma busca externa adicional foi necessária.";
 
   return blocks.join("\n\n====================\n\n");
 }
+
 
 // =====================================================
 // LEITURA PROFISSIONAL DISCORD
@@ -801,6 +831,17 @@ ${discordContext}
 INFORMAÇÕES REAIS BUSCADAS NO SERVIDOR:
 ${serverIntelligence}
 
+REGRAS OBRIGATÓRIAS:
+1. Se você recebeu dados reais no prompt (como cronograma ou histórico), use-os IMEDIATAMENTE.
+2. NUNCA diga "vou olhar", "vou verificar", "já volto" ou "só um minuto". Você já tem os dados agora.
+3. Se o usuário marcou um canal, foque no conteúdo lido desse canal, não no canal atual.
+4. Use sempre menções no formato <#ID> para canais e <@&ID> para cargos.
+5. Não invente regras, cargos ou eventos. Se não encontrou no servidor, diga que não encontrou.
+6. Se perguntarem algo administrativo sensível (permissões, cargos altos, bans), oriente a chamar um Responsável.
+
+COMPORTAMENTO:
+Responda de forma natural, informal e útil (vibe de Discord/RP). Seja conciso.
+
 REGRAS IMPORTANTES PARA RESPOSTA:
 - Se o usuário pedir cronograma e ele estiver nas informações reais, entregue o cronograma diretamente.
 - Se o usuário mandar um canal, ID de canal ou link de canal, use o conteúdo real lido desse canal.
@@ -1019,14 +1060,16 @@ Mensagem: ${content}
         // RESPOSTA
         // =====================================================
 
-        await message.reply({
+                await message.reply({
           content: finalText,
-
           allowedMentions: {
-            repliedUser: true,
-            parse: [],
+            repliedUser: true, // Responde mencionando quem perguntou
+            parse: [],         // Não converte @everyone/@here
+            users: [],         // Não pinga usuários citados no texto
+            roles: [],         // Não pinga cargos citados no texto
           },
         });
+
 
       } catch (err) {
         console.error(
