@@ -200,9 +200,33 @@ function normalizeSearchText(text) {
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^\w\s#@|-]/g, " ")
+    .replace(/[^\w\s#@<>&:./-]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function extractDiscordIdsFromText(text) {
+  const raw = String(text || "");
+
+  const ids = new Set();
+
+  const patterns = [
+    /<#(\d{17,22})>/g,
+    /<@&(\d{17,22})>/g,
+    /<@!?(\d{17,22})>/g,
+    /discord\.com\/channels\/\d{17,22}\/(\d{17,22})/g,
+    /\b(\d{17,22})\b/g,
+  ];
+
+  for (const pattern of patterns) {
+    let match;
+
+    while ((match = pattern.exec(raw)) !== null) {
+      if (match[1]) ids.add(match[1]);
+    }
+  }
+
+  return [...ids];
 }
 
 function messageWantsCronograma(message) {
@@ -255,6 +279,144 @@ function channelLooksLikeCronograma(channel) {
   );
 }
 
+function channelLooksLikeHierarquia(channel) {
+  const name = normalizeSearchText(channel?.name);
+
+  return (
+    name.includes("hierarquia") ||
+    name.includes("cdd") ||
+    name.includes("rp") ||
+    name.includes("regras") ||
+    name.includes("informacoes")
+  );
+}
+
+async function resolveMentionedChannels(message) {
+  const guild = message.guild;
+  const found = new Map();
+
+  for (const [, channel] of message.mentions.channels) {
+    if (channel?.id) found.set(channel.id, channel);
+  }
+
+  const ids = extractDiscordIdsFromText(message.content);
+
+  for (const id of ids) {
+    try {
+      const channel =
+        guild.channels.cache.get(id) ||
+        await guild.channels.fetch(id).catch(() => null);
+
+      if (channel?.id && channel.isTextBased?.()) {
+        found.set(channel.id, channel);
+      }
+    } catch {}
+  }
+
+  return [...found.values()];
+}
+
+async function readTextChannelMessages(channel, limit = 10) {
+  const messages = await channel.messages
+    .fetch({ limit })
+    .catch(() => null);
+
+  if (!messages || messages.size <= 0) {
+    return `Canal lido: <#${channel.id}> (${channel.id}), mas não encontrei mensagens recentes ou não tenho permissão para ler histórico.`;
+  }
+
+  const linhas = [];
+
+  linhas.push(`CANAL LIDO: <#${channel.id}>`);
+  linhas.push(`Nome real: #${channel.name}`);
+  linhas.push(`ID: ${channel.id}`);
+  linhas.push("");
+
+  const orderedMessages = [...messages.values()].reverse();
+
+  for (const msg of orderedMessages) {
+    const partes = [];
+
+    if (msg.content) {
+      partes.push(`Texto: ${cleanText(msg.content)}`);
+    }
+
+    if (msg.embeds?.length > 0) {
+      for (const embed of msg.embeds.slice(0, 4)) {
+        const embedText = formatEmbedForAI(embed.data || embed);
+
+        if (embedText) {
+          partes.push(`Embed:\n${embedText}`);
+        }
+      }
+    }
+
+    if (msg.attachments?.size > 0) {
+      partes.push(
+        `Anexos: ${[...msg.attachments.values()]
+          .map((a) => `${a.name || "arquivo"} | ${a.url}`)
+          .join(" | ")}`
+      );
+    }
+
+    if (partes.length > 0) {
+      linhas.push(`Mensagem de ${msg.author?.username || "desconhecido"}:`);
+      linhas.push(partes.join("\n"));
+      linhas.push("---");
+    }
+  }
+
+  return linhas.join("\n").slice(0, 7000);
+}
+
+async function fetchMentionedChannelsContext(message) {
+  const channels = await resolveMentionedChannels(message);
+
+  if (!channels.length) {
+    return "Nenhum canal mencionado por ID, link ou menção foi encontrado.";
+  }
+
+  const blocks = [];
+
+  for (const channel of channels.slice(0, 3)) {
+    blocks.push(await readTextChannelMessages(channel, 12));
+  }
+
+  return blocks.join("\n\n====================\n\n");
+}
+
+async function fetchHierarquiaContext(message) {
+  const guild = message.guild;
+  if (!guild) return "Servidor não encontrado.";
+
+  const mentionedChannels = await resolveMentionedChannels(message);
+
+  const targetChannels = mentionedChannels.length
+    ? mentionedChannels
+    : guild.channels.cache
+        .filter((channel) => {
+          return (
+            channel &&
+            channel.isTextBased?.() &&
+            channelLooksLikeHierarquia(channel)
+          );
+        })
+        .map((channel) => channel)
+        .slice(0, 3);
+
+  if (!targetChannels.length) {
+    return "Não encontrei canal de hierarquia por nome, ID, link ou menção.";
+  }
+
+  const blocks = [];
+
+  for (const channel of targetChannels) {
+    blocks.push(await readTextChannelMessages(channel, 12));
+  }
+
+  return blocks.join("\n\n====================\n\n");
+}
+
 function formatEmbedForAI(embed) {
   const lines = [];
 
@@ -279,62 +441,32 @@ async function fetchCronogramaContext(message) {
     const guild = message.guild;
     if (!guild) return "Servidor não encontrado.";
 
-    const channels = guild.channels.cache
-      .filter((channel) => {
-        return (
-          channel &&
-          channel.isTextBased?.() &&
-          channelLooksLikeCronograma(channel)
-        );
-      })
-      .map((channel) => channel);
+    const mentionedChannels = await resolveMentionedChannels(message);
+
+    const channels = mentionedChannels.length
+      ? mentionedChannels
+      : guild.channels.cache
+          .filter((channel) => {
+            return (
+              channel &&
+              channel.isTextBased?.() &&
+              channelLooksLikeCronograma(channel)
+            );
+          })
+          .map((channel) => channel)
+          .slice(0, 3);
 
     if (!channels.length) {
-      return "Nenhum canal parecido com cronograma foi encontrado.";
+      return "Nenhum canal parecido com cronograma foi encontrado por nome, ID, link ou menção.";
     }
 
-    const cronogramaChannel = channels[0];
+    const blocks = [];
 
-    const messages = await cronogramaChannel.messages
-      .fetch({ limit: 8 })
-      .catch(() => null);
-
-    if (!messages || messages.size <= 0) {
-      return `Canal encontrado: #${cronogramaChannel.name} (${cronogramaChannel.id}), mas não consegui ler mensagens recentes.`;
+    for (const channel of channels) {
+      blocks.push(await readTextChannelMessages(channel, 12));
     }
 
-    const linhas = [];
-
-    linhas.push(`CANAL DE CRONOGRAMA ENCONTRADO:`);
-    linhas.push(`#${cronogramaChannel.name} (${cronogramaChannel.id})`);
-    linhas.push("");
-
-    const orderedMessages = [...messages.values()].reverse();
-
-    for (const msg of orderedMessages) {
-      const partes = [];
-
-      if (msg.content) {
-        partes.push(`Texto: ${cleanText(msg.content)}`);
-      }
-
-      if (msg.embeds?.length > 0) {
-        for (const embed of msg.embeds.slice(0, 3)) {
-          const embedText = formatEmbedForAI(embed.data || embed);
-          if (embedText) {
-            partes.push(`Embed:\n${embedText}`);
-          }
-        }
-      }
-
-      if (partes.length > 0) {
-        linhas.push(`Mensagem de ${msg.author?.username || "bot"} em ${msg.createdAt?.toLocaleString("pt-BR") || "data desconhecida"}:`);
-        linhas.push(partes.join("\n"));
-        linhas.push("---");
-      }
-    }
-
-    return linhas.join("\n").slice(0, 5000);
+    return blocks.join("\n\n====================\n\n");
   } catch (err) {
     console.error("[IA CHAT AUTO] Erro ao buscar cronograma:", err);
     return "Tentei buscar o cronograma, mas deu erro ao acessar o canal.";
@@ -350,15 +482,15 @@ function buildRolesHierarchyContext(message) {
       .filter((role) => role.name !== "@everyone")
       .sort((a, b) => b.position - a.position)
       .map((role) => {
-        return `- ${role.name} | ID: ${role.id} | posição: ${role.position} | membros: ${role.members?.size || 0}`;
+        return `- <@&${role.id}> | nome: ${role.name} | ID: ${role.id} | posição: ${role.position} | membros: ${role.members?.size || 0}`;
       })
-      .slice(0, 35);
+      .slice(0, 45);
 
     if (!roles.length) {
       return "Nenhum cargo encontrado no cache.";
     }
 
-    return `HIERARQUIA DE CARGOS DO SERVIDOR:\n${roles.join("\n")}`;
+    return `HIERARQUIA DE CARGOS DO DISCORD:\n${roles.join("\n")}`;
   } catch (err) {
     console.error("[IA CHAT AUTO] Erro ao montar hierarquia:", err);
     return "Não consegui montar a hierarquia de cargos.";
@@ -379,9 +511,9 @@ function buildChannelsContext(message) {
       })
       .map((channel) => {
         const parentName = channel.parent?.name || "Sem categoria";
-        return `- #${channel.name} | ID: ${channel.id} | categoria: ${parentName}`;
+        return `- <#${channel.id}> | nome: #${channel.name} | ID: ${channel.id} | categoria: ${parentName}`;
       })
-      .slice(0, 60);
+      .slice(0, 80);
 
     if (!channels.length) {
       return "Nenhum canal encontrado no cache.";
@@ -397,12 +529,22 @@ function buildChannelsContext(message) {
 async function buildServerIntelligenceContext(message) {
   const blocks = [];
 
+  const hasChannelReference =
+    message.mentions.channels.size > 0 ||
+    extractDiscordIdsFromText(message.content).length > 0 ||
+    String(message.content || "").includes("discord.com/channels/");
+
+  if (hasChannelReference) {
+    blocks.push(await fetchMentionedChannelsContext(message));
+  }
+
   if (messageWantsCronograma(message)) {
     blocks.push(await fetchCronogramaContext(message));
   }
 
   if (messageWantsRoles(message)) {
     blocks.push(buildRolesHierarchyContext(message));
+    blocks.push(await fetchHierarquiaContext(message));
   }
 
   if (messageWantsChannels(message)) {
@@ -661,8 +803,14 @@ ${serverIntelligence}
 
 REGRAS IMPORTANTES PARA RESPOSTA:
 - Se o usuário pedir cronograma e ele estiver nas informações reais, entregue o cronograma diretamente.
+- Se o usuário mandar um canal, ID de canal ou link de canal, use o conteúdo real lido desse canal.
+- Nunca confunda o canal atual com o canal mencionado.
 - Nunca diga "vou olhar", "já volto", "só um minuto" ou "vou verificar" se você já recebeu as informações no prompt.
 - Se não encontrar algo, diga claramente que não encontrou.
+- Quando citar canal, use o formato <#ID>.
+- Quando citar cargo, use o formato <@&ID>.
+- Não invente cargo, canal, evento ou hierarquia.
+- Se a hierarquia pedida for de RP/CDD e existir um canal lido sobre isso, use o conteúdo do canal, não a hierarquia de cargos do Discord.
 - Entenda menções.
 - Entenda IDs.
 - Entenda replies.
