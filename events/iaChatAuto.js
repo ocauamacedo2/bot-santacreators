@@ -8,12 +8,12 @@ import { GoogleGenAI } from "@google/genai";
 
 const AI_CHANNEL_ID = "1506520202576400404";
 
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.0-flash";
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-1.5-flash";
 
-const COOLDOWN_MS = 10_000;
-const MAX_USER_MESSAGE_CHARS = 1200;
+const COOLDOWN_MS = 30_000;
+const MAX_USER_MESSAGE_CHARS = 250;
 const MAX_RESPONSE_CHARS = 1900;
-const MAX_HISTORY_MESSAGES = 8;
+const MAX_HISTORY_MESSAGES = 2;
 
 const cooldowns = new Map();
 const channelHistory = new Map();
@@ -218,7 +218,7 @@ async function generateIaResponse({ message, content }) {
     contents: prompt,
     config: {
       temperature: 0.8,
-      maxOutputTokens: 500,
+      maxOutputTokens: 80,
     },
   });
 
