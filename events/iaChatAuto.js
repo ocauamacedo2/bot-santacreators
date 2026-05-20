@@ -66,6 +66,9 @@ const MAX_MESSAGE_CHARS = 1200;
 const cooldowns = new Map();
 
 const channelHistory = new Map();
+
+const lastAiResponses = new Map();
+
 const guildKnowledgeCache =
   new Map();
 
@@ -224,6 +227,71 @@ function limitDiscordText(text) {
   }
 
   return `${finalText.slice(0, MAX_RESPONSE_CHARS - 3)}...`;
+}
+
+function normalizeAiCompareText(text) {
+  return normalizeSearchText(text)
+    .replace(/<@!?\d{17,22}>/g, "")
+    .replace(/<@&\d{17,22}>/g, "")
+    .replace(/<#\d{17,22}>/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function rememberAiResponse(channelId, text) {
+  const arr = lastAiResponses.get(channelId) || [];
+
+  arr.push({
+    text: normalizeAiCompareText(text),
+    timestamp: Date.now(),
+  });
+
+  while (arr.length > 6) {
+    arr.shift();
+  }
+
+  lastAiResponses.set(channelId, arr);
+}
+
+function iaResponseLooksRepeated(channelId, text) {
+  const arr = lastAiResponses.get(channelId) || [];
+
+  const normalized = normalizeAiCompareText(text);
+
+  if (!normalized) return false;
+
+  return arr.some((item) => {
+    if (!item?.text) return false;
+
+    return (
+      item.text === normalized ||
+      item.text.includes(normalized) ||
+      normalized.includes(item.text)
+    );
+  });
+}
+
+function buildNonRepeatedFallback(message) {
+  const content = normalizeSearchText(message.content);
+
+  if (
+    content.includes("teste") ||
+    content.includes("testando") ||
+    content.includes("funcionando")
+  ) {
+    return "Tá funcionando sim 😎 Recebi tua mensagem e respondi normal. Se quiser, manda uma pergunta real agora pra testar contexto, reply, menção ou canal.";
+  }
+
+  if (
+    content === "oi" ||
+    content === "oie" ||
+    content === "opa" ||
+    content === "salve"
+  ) {
+    return "Opa! Tô por aqui sim 😄 manda aí no que posso ajudar.";
+  }
+
+  return "Entendi 😎 me manda o que você quer saber exatamente que eu respondo direto, sem repetir a mesma coisa.";
 }
 
 // =====================================================
@@ -492,7 +560,7 @@ async function fetchRecentMemoryLogs(client) {
       return "Canal de memória não encontrado.";
     }
 
-    const messages = await logChannel.messages.fetch({ limit: 12 }).catch(() => null);
+const messages = await logChannel.messages.fetch({ limit: 5 }).catch(() => null);
 
     if (!messages?.size) {
       return "Sem registros anteriores no canal de memória.";
@@ -1268,6 +1336,10 @@ REGRAS IMPORTANTES PARA RESPOSTA:
 - Se o usuário marcar alguém, entenda que ele está falando sobre aquela pessoa.
 - Se a pergunta for simples, responda simples.
 - Se a pergunta for complexa, organize a resposta.
+- Não repita a mesma resposta anterior.
+- Se o usuário só estiver testando, diga apenas que está funcionando e peça um teste real.
+- Não responda toda mensagem como se fosse apresentação inicial.
+- Não fique perguntando "em que posso ajudar" toda hora se o usuário já explicou o contexto.
 Agora responda naturalmente:
 `;
 }
@@ -1516,12 +1588,22 @@ if (iaResponseLooksLikePending(safeIaResponse)) {
   safeIaResponse = buildFallbackInstantResponse(message);
 }
 
+if (iaResponseLooksRepeated(message.channelId, safeIaResponse)) {
+  console.warn(
+    "[IA CHAT AUTO] Resposta repetida detectada. Substituindo por fallback natural."
+  );
+
+  safeIaResponse = buildNonRepeatedFallback(message);
+}
+
 const finalText =
   limitDiscordText(
     safeIaResponse
   );
 
 if (!finalText) return;
+
+rememberAiResponse(message.channelId, finalText);
 
         // =====================================================
         // RESPOSTA
