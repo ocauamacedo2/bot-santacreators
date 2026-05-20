@@ -48,16 +48,6 @@ const AI_GI_DATA_FILE = path.resolve(process.cwd(), "data", "sc_gi_registros.jso
 
 const AI_INTERNAL_SCAN_LIMIT = 80;
 
-// =====================================================
-// CONSULTAS INTERNAS — SANTACREATORS
-// =====================================================
-
-const AI_ALINHAMENTOS_CHANNEL_ID = "1425256185707233301";
-const AI_FIVEM_GI_PANEL_CHANNEL_ID = "1501321157259956244";
-const AI_GI_DATA_FILE = path.resolve(process.cwd(), "data", "sc_gi_registros.json");
-
-const AI_INTERNAL_SCAN_LIMIT = 80;
-
 const AI_ALLOWED_CHANNEL_IDS = new Set([
   AI_CHANNEL_ID,
   AI_REPLY_ONLY_CHANNEL_ID,
