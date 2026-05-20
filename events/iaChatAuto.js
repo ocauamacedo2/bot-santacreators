@@ -1,5 +1,5 @@
 // d:\santacreators-main\events\iaChatAuto.js
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 // =====================================================
 // IA CHAT AUTO — SANTACREATORS
@@ -99,7 +99,7 @@ function getGeminiClient() {
     return null;
   }
 
-  gemini = new GoogleGenAI({ apiKey });
+  gemini = new GoogleGenerativeAI(apiKey);
   return gemini;
 }
 
@@ -205,24 +205,24 @@ function isGeminiKeyError(err) {
 }
 
 async function generateIaResponse({ message, content }) {
-  const client = getGeminiClient();
+  const genAI = getGeminiClient();
 
-  if (!client) {
+  if (!genAI) {
     return "Minha chave do Gemini ainda não está configurada. O Macedo precisa colocar `GEMINI_API_KEY` nas variáveis da Square Cloud e reiniciar o bot.";
   }
 
-  const prompt = buildPrompt({ message, content });
-
-  const response = await client.models.generateContent({
+  const model = genAI.getGenerativeModel({ 
     model: GEMINI_MODEL,
-    contents: prompt,
-    config: {
+    generationConfig: {
       temperature: 0.8,
-      maxOutputTokens: 80,
-    },
+      maxOutputTokens: 500,
+    }
   });
 
-  return response.text;
+  const prompt = buildPrompt({ message, content });
+  const result = await model.generateContent(prompt);
+  const response = await result.response;
+  return response.text();
 }
 
 // =====================================================
@@ -246,9 +246,12 @@ export function setupIaChatAuto(client) {
       if (shouldIgnoreMessage(message, client)) return;
 
       const content = cleanContent(message.content);
-      if (!content) return;
+if (!content) return;
 
-      rememberMessage(message.channelId, message.author.username, content);
+// Evita gastar IA com mensagens muito curtas tipo "oi", "kk", "eae"
+if (content.length < 8 && !content.includes("?")) return;
+
+rememberMessage(message.channelId, message.author.username, content);
 
       const remaining = getCooldownRemaining(message.author.id);
 
