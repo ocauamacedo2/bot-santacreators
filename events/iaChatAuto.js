@@ -1,5 +1,5 @@
 // d:\santacreators-main\events\iaChatAuto.js
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenAI } from "@google/genai";
 
 // =====================================================
 // IA CHAT AUTO — SANTACREATORS
@@ -8,7 +8,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 
 const AI_CHANNEL_ID = "1506520202576400404";
 
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-1.5-flash";
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash-lite";
 
 const COOLDOWN_MS = 30_000;
 const MAX_USER_MESSAGE_CHARS = 250;
@@ -25,34 +25,17 @@ let gemini = null;
 // =====================================================
 
 const SANTACREATORS_CONTEXT = `
-Você é a IA oficial da SantaCreators.
-
-CONTEXTO GERAL:
-- SantaCreators é uma organização de RP/FiveM focada em eventos, creators, social mídia, gestão e organização interna.
-- Você conversa no Discord de forma natural, informal, útil e com vibe de comunidade.
-- Você ajuda com ideias, mensagens, organização, dúvidas simples, textos, anúncios, eventos, cronogramas e explicações.
-- Você NÃO finge que executou ações no bot.
-- Você NÃO inventa regras internas se não tiver certeza.
-- Se o assunto for cargo, punição, banimento, decisão administrativa, permissão, pagamento, VIP, aprovação/reprovação, oriente a chamar um responsável.
-
-CIDADES/EVENTOS:
-- Cidades usadas com frequência: Santa, Nobre, Grande, Maresia.
-- Eventos podem envolver horários, equipes, anúncios, chamadas, missões, drogas, F3, armas brancas, arma de fogo e premiações.
-
-ESTILO:
-- Português do Brasil.
-- Natural, informal e direto.
-- Pode usar emoji com moderação.
-- Não responder como robô.
-- Não fazer textão sem necessidade.
-- Se a pessoa pedir algo curto, responda curto.
-- Se a pessoa pedir organização, deixe bonito e pronto para copiar.
-
-SEGURANÇA:
-- Não peça token, chave, senha, API key ou dados sensíveis.
-- Se alguém mandar chave/token, avise para revogar.
-- Não oriente burlar sistema, explorar falha, roubar conta ou prejudicar servidor.
+Você é a IA da SantaCreators.
+Responda em português do Brasil.
+Seja natural, curta, útil e divertida.
+Não faça textos gigantes.
+Se não souber algo interno, diga para confirmar com um responsável.
+Não peça senha, token, API key ou dados sensíveis.
 `;
+
+// =====================================================
+// PROMPT
+// =====================================================
 
 function buildPrompt({ message, content }) {
   const historyText = getHistoryText(message.channelId);
@@ -60,28 +43,15 @@ function buildPrompt({ message, content }) {
   return `
 ${SANTACREATORS_CONTEXT}
 
-REGRAS DE RESPOSTA:
-1. Responda como se estivesse conversando no chat da SantaCreators.
-2. Seja útil e interativo.
-3. Não diga que é ChatGPT/Gemini; você é a IA da SantaCreators.
-4. Se não souber algo interno, diga que não tem certeza e peça para confirmar com um responsável.
-5. Nunca exponha IDs internos sem necessidade.
-6. Não mande resposta gigante se a pergunta for simples.
-7. Se pedirem anúncio/mensagem, entregue já pronto para copiar.
-8. Se o usuário estiver brincando, pode brincar junto, mas sem perder o respeito.
-9. Se a mensagem parecer spam, responda curto ou ignore.
-10. Se perguntarem sobre sistemas do bot, explique simples, mas não invente implementação não fornecida.
-
-HISTÓRICO RECENTE DO CANAL:
+HISTÓRICO RECENTE:
 ${historyText}
 
 MENSAGEM ATUAL:
 Usuário: ${message.author.username}
-ID do usuário: ${message.author.id}
 Canal: ${message.channel?.name || message.channelId}
 Mensagem: ${content}
 
-Responda diretamente para esse usuário.
+Responda diretamente para esse usuário, em no máximo 4 linhas.
 `;
 }
 
@@ -99,7 +69,7 @@ function getGeminiClient() {
     return null;
   }
 
-  gemini = new GoogleGenerativeAI(apiKey);
+  gemini = new GoogleGenAI({ apiKey });
   return gemini;
 }
 
@@ -204,25 +174,36 @@ function isGeminiKeyError(err) {
   );
 }
 
-async function generateIaResponse({ message, content }) {
-  const genAI = getGeminiClient();
+function isGeminiModelError(err) {
+  const text = String(err?.message || err || "").toLowerCase();
 
-  if (!genAI) {
-    return "Minha chave do Gemini ainda não está configurada. O Macedo precisa colocar `GEMINI_API_KEY` nas variáveis da Square Cloud e reiniciar o bot.";
+  return (
+    text.includes("not_found") ||
+    text.includes("is not found") ||
+    text.includes("model") ||
+    text.includes("404")
+  );
+}
+
+async function generateIaResponse({ message, content }) {
+  const client = getGeminiClient();
+
+  if (!client) {
+    return "Minha chave do Gemini ainda não está configurada. O Macedo precisa colocar `GEMINI_API_KEY` na Square Cloud e reiniciar o bot.";
   }
 
-  const model = genAI.getGenerativeModel({ 
+  const prompt = buildPrompt({ message, content });
+
+  const response = await client.models.generateContent({
     model: GEMINI_MODEL,
-    generationConfig: {
-      temperature: 0.8,
-      maxOutputTokens: 500,
-    }
+    contents: prompt,
+    config: {
+      temperature: 0.7,
+      maxOutputTokens: 80,
+    },
   });
 
-  const prompt = buildPrompt({ message, content });
-  const result = await model.generateContent(prompt);
-  const response = await result.response;
-  return response.text();
+  return response.text;
 }
 
 // =====================================================
@@ -246,12 +227,12 @@ export function setupIaChatAuto(client) {
       if (shouldIgnoreMessage(message, client)) return;
 
       const content = cleanContent(message.content);
-if (!content) return;
+      if (!content) return;
 
-// Evita gastar IA com mensagens muito curtas tipo "oi", "kk", "eae"
-if (content.length < 8 && !content.includes("?")) return;
+      // Evita gastar IA com mensagens muito curtas tipo "oi", "kk", "eae"
+      if (content.length < 8 && !content.includes("?")) return;
 
-rememberMessage(message.channelId, message.author.username, content);
+      rememberMessage(message.channelId, message.author.username, content);
 
       const remaining = getCooldownRemaining(message.author.id);
 
@@ -271,7 +252,7 @@ rememberMessage(message.channelId, message.author.username, content);
       setCooldown(message.author.id);
 
       console.log(
-        `[IA CHAT AUTO] Mensagem recebida | user=${message.author.tag} | id=${message.author.id} | content=${content}`
+        `[IA CHAT AUTO] Mensagem recebida | user=${message.author.tag} | id=${message.author.id} | model=${GEMINI_MODEL} | content=${content}`
       );
 
       await message.channel.sendTyping().catch(() => {});
@@ -292,10 +273,19 @@ rememberMessage(message.channelId, message.author.username, content);
     } catch (err) {
       console.error("[IA CHAT AUTO] Erro ao gerar resposta Gemini:", err);
 
+      if (isGeminiModelError(err)) {
+        await message.reply({
+          content:
+            `O modelo Gemini configurado não está disponível: \`${GEMINI_MODEL}\`. Troca para \`gemini-2.5-flash-lite\` na variável GEMINI_MODEL ou no código.`,
+          allowedMentions: { repliedUser: true },
+        }).catch(() => {});
+        return;
+      }
+
       if (isGeminiQuotaError(err)) {
         await message.reply({
           content:
-            "A IA do Gemini bateu limite/cota agora. Espera um pouco ou verifica a cota da API Key no Google AI Studio.",
+            "A IA bateu limite/cota grátis agora. Pra evitar gastar, eu já estou ignorando mensagens muito curtas e usando resposta curta.",
           allowedMentions: { repliedUser: true },
         }).catch(() => {});
         return;
