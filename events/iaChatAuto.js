@@ -33,7 +33,7 @@ const AI_CHANNEL_ID = "1506520202576400404";
 
 const GEMINI_MODEL =
   process.env.GEMINI_MODEL ||
-  "gemini-1.5-flash";
+  "gemini-2.5-flash-lite";
 
 const GEMINI_API_KEY =
   process.env.GEMINI_API_KEY || "";
@@ -49,6 +49,8 @@ const MAX_MESSAGE_CHARS = 1200;
 const cooldowns = new Map();
 
 const channelHistory = new Map();
+const guildKnowledgeCache =
+  new Map();
 
 let gemini = null;
 
@@ -324,18 +326,37 @@ function rememberMessage(channelId, author, content) {
   channelHistory.set(channelId, history);
 }
 
+async function warmupGuildKnowledge(guild) {
+  try {
+    if (!guild || guildKnowledgeCache.has(guild.id)) return;
+    console.log(`[IA CHAT AUTO] Iniciando warmup inteligente do servidor ${guild.name}`);
+    const knowledge = [];
+    const channels = guild.channels.cache.filter((c) => c?.isTextBased?.()).first(25);
+    for (const channel of channels) {
+      try {
+        const messages = await channel.messages.fetch({ limit: 3 }).catch(() => null);
+        if (!messages) continue;
+        knowledge.push(`CANAL: #${channel.name}`);
+        for (const msg of messages.values()) {
+          if (msg.content) knowledge.push(cleanText(msg.content));
+          for (const embed of msg.embeds) {
+            const embedText = formatEmbedForAI(embed.data || embed);
+            if (embedText) knowledge.push(embedText);
+          }
+        }
+      } catch {}
+    }
+    guildKnowledgeCache.set(guild.id, knowledge.join("\n").slice(0, 15000));
+    console.log(`[IA CHAT AUTO] Warmup concluído.`);
+  } catch (err) {
+    console.error("[IA CHAT AUTO] Erro warmup:", err);
+  }
+}
+
 function getHistory(channelId) {
   const history = channelHistory.get(channelId) || [];
-
-  if (!history.length) {
-    return "Sem histórico.";
-  }
-
-  return history
-    .map((msg) => {
-      return `${msg.author}: ${msg.content}`;
-    })
-    .join("\n");
+  if (!history.length) return "Sem histórico.";
+  return history.map((msg) => `${msg.author}: ${msg.content}`).join("\n");
 }
 
 function getCooldownRemaining(userId) {
@@ -462,6 +483,116 @@ function channelLooksLikeHierarquia(channel) {
   );
 }
 
+function scoreChannelRelevance(channel, searchTerms = []) {
+  if (!channel?.name) return 0;
+
+  const normalized = normalizeSearchText(channel.name);
+
+  let score = 0;
+
+  for (const term of searchTerms) {
+    if (!term) continue;
+
+    const normalizedTerm = normalizeSearchText(term);
+
+    if (normalized.includes(normalizedTerm)) {
+      score += 10;
+    }
+  }
+
+  const parentName = normalizeSearchText(channel.parent?.name || "");
+
+  if (parentName.includes("entretenimento")) score += 3;
+  if (parentName.includes("avisos")) score += 4;
+  if (parentName.includes("controle")) score += 5;
+
+  return score;
+}
+
+function findRelevantChannels(guild, searchTerms = [], limit = 5) {
+  if (!guild) return [];
+
+  return guild.channels.cache
+    .filter((c) => c?.isTextBased?.())
+    .map((channel) => ({
+      channel,
+      score: scoreChannelRelevance(channel, searchTerms),
+    }))
+    .filter((x) => x.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map((x) => x.channel);
+}
+  if (!channel?.name) return 0;
+
+  const normalized =
+    normalizeSearchText(channel.name);
+
+  let score = 0;
+
+  for (const term of searchTerms) {
+    if (!term) continue;
+
+    const normalizedTerm =
+      normalizeSearchText(term);
+
+    if (normalized.includes(normalizedTerm)) {
+      score += 10;
+    }
+  }
+
+  // bônus categorias importantes
+  const parentName =
+    normalizeSearchText(
+      channel.parent?.name || ""
+    );
+
+  if (
+    parentName.includes("entretenimento")
+  ) {
+    score += 3;
+  }
+
+  if (
+    parentName.includes("avisos")
+  ) {
+    score += 4;
+  }
+
+  if (
+    parentName.includes("controle")
+  ) {
+    score += 5;
+  }
+
+  return score;
+
+
+function findRelevantChannels(
+  guild,
+  searchTerms = [],
+  limit = 5
+) {
+  if (!guild) return [];
+
+  return guild.channels.cache
+    .filter((c) =>
+      c?.isTextBased?.()
+    )
+    .map((channel) => ({
+      channel,
+      score:
+        scoreChannelRelevance(
+          channel,
+          searchTerms
+        ),
+    }))
+    .filter((x) => x.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map((x) => x.channel);
+}
+
 async function resolveMentionedChannels(message) {
   const guild = message.guild;
   const found = new Map();
@@ -568,18 +699,21 @@ async function fetchHierarquiaContext(message) {
 
   const mentionedChannels = await resolveMentionedChannels(message);
 
-  const targetChannels = mentionedChannels.length
+const targetChannels =
+  mentionedChannels.length
     ? mentionedChannels
-    : guild.channels.cache
-        .filter((channel) => {
-          return (
-            channel &&
-            channel.isTextBased?.() &&
-            channelLooksLikeHierarquia(channel)
-          );
-        })
-        .map((channel) => channel)
-        .slice(0, 3);
+    : findRelevantChannels(
+        guild,
+        [
+          "hierarquia",
+          "cdd",
+          "rp",
+          "regras",
+          "organizacao",
+          "informacoes",
+        ],
+        5
+      ).filter(c => c && c.isTextBased?.() && channelLooksLikeHierarquia(c)).slice(0, 3);
 
   if (!targetChannels.length) {
     return "Não encontrei canal de hierarquia por nome, ID, link ou menção.";
@@ -620,18 +754,19 @@ async function fetchCronogramaContext(message) {
 
     const mentionedChannels = await resolveMentionedChannels(message);
 
-    const channels = mentionedChannels.length
-      ? mentionedChannels
-      : guild.channels.cache
-          .filter((channel) => {
-            return (
-              channel &&
-              channel.isTextBased?.() &&
-              channelLooksLikeCronograma(channel)
-            );
-          })
-          .map((channel) => channel)
-          .slice(0, 3);
+const channels = mentionedChannels.length
+    ? mentionedChannels
+    : findRelevantChannels(
+        guild,
+        [
+          "cronograma",
+          "agenda",
+          "eventos",
+          "eventos-semanais",
+          "calendario",
+        ],
+        5
+      ).filter(c => c && c.isTextBased?.() && channelLooksLikeCronograma(c)).slice(0, 3);
 
     if (!channels.length) {
       return "Nenhum canal parecido com cronograma foi encontrado por nome, ID, link ou menção.";
@@ -977,6 +1112,7 @@ function buildPrompt({
   discordContext,
   history,
   serverIntelligence,
+  guildKnowledge,
 }) {
   return `
 ${SANTACREATORS_CONTEXT}
@@ -986,6 +1122,9 @@ ${history}
 
 CONTEXTO DISCORD:
 ${discordContext}
+
+CONHECIMENTO GERAL DO SERVIDOR:
+${guildKnowledge}
 
 INFORMAÇÕES REAIS BUSCADAS NO SERVIDOR:
 ${serverIntelligence}
@@ -1079,8 +1218,17 @@ async function generateIAResponse({
     return "Minha API Gemini ainda não foi configurada direito.";
   }
 
-  const history =
-    getHistory(message.channelId);
+await warmupGuildKnowledge(
+  message.guild
+);
+
+const history =
+  getHistory(message.channelId);
+
+const guildKnowledge =
+  guildKnowledgeCache.get(
+    message.guild.id
+  ) || "Sem conhecimento prévio.";
 
   const discordContext =
     await buildDiscordContext(message);
@@ -1088,11 +1236,12 @@ async function generateIAResponse({
   const serverIntelligence =
     await buildServerIntelligenceContext(message);
 
-  const prompt =
+const prompt =
     buildPrompt({
       discordContext,
       history,
       serverIntelligence,
+      guildKnowledge,
     });
 
   const result =
