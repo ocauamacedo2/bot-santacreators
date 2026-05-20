@@ -597,24 +597,24 @@ function buildHallDaFamaModal(cityKey, defaultEventName) {
         ),
         new ActionRowBuilder().addComponents(
       new TextInputBuilder()
-        .setCustomId("hf_top1")
-        .setLabel("🥇 TOP 1 (Nome | ID)")
-        .setPlaceholder("Ex: Macedo | 123")
-        .setStyle(TextInputStyle.Short)
+        .setCustomId("hf_tops")
+        .setLabel("Vencedores (Um por linha, TOP 1 no topo)")
+        .setPlaceholder("Ex:\nMacedo | 123\nJoao | 456\nMaria | 789")
+        .setStyle(TextInputStyle.Paragraph)
         .setRequired(true)
     ),
     new ActionRowBuilder().addComponents(
       new TextInputBuilder()
-        .setCustomId("hf_tops_extra")
-        .setLabel("🥈 TOP 2, 3... (Um por linha)")
-        .setPlaceholder("Ex: Joao | 456\nMaria | 789")
-        .setStyle(TextInputStyle.Paragraph)
+        .setCustomId("hf_image")
+        .setLabel("Link da Imagem 1")
+        .setPlaceholder("https://cdn.discordapp.com/...")
+        .setStyle(TextInputStyle.Short)
         .setRequired(false)
     ),
     new ActionRowBuilder().addComponents(
       new TextInputBuilder()
-        .setCustomId("hf_image")
-        .setLabel("Link da Imagem 1 (Banner/Print)")
+        .setCustomId("hf_image2")
+        .setLabel("Link da Imagem 2 (Opcional)")
         .setPlaceholder("https://cdn.discordapp.com/...")
         .setStyle(TextInputStyle.Short)
         .setRequired(false)
@@ -966,11 +966,10 @@ ${newImageUrl}${newImageUrl2 ? `\n${newImageUrl2}` : ''}`;
 
     // Pega inputs
     const eventNameInput = interaction.fields.getTextInputValue("hf_event_name");
-    const top1 = interaction.fields.getTextInputValue("hf_top1");
-    const topsExtra = interaction.fields.getTextInputValue("hf_tops_extra");
+    const topsInput = interaction.fields.getTextInputValue("hf_tops");
     const imageUrl = interaction.fields.getTextInputValue("hf_image");
+    const imageUrl2 = interaction.fields.getTextInputValue("hf_image2");
 const customCityInput = interaction.fields.getTextInputValue("hf_custom_city")?.trim() || "";
-const imageUrl2 = "";
 
 // Pega dados do cronograma (automático)
 const eventData = getTodayEventData();
@@ -982,9 +981,10 @@ const cityDisplayName = customCityInput || CITIES[cityKey].label;
     let winnersText = "";
 
   // ✅ NOVA LÓGICA DE PREMIAÇÃO (Cenários 1, 2 e 3)
-    const hasExtra = topsExtra && topsExtra.trim().length > 0;
-    const extraLines = hasExtra ? topsExtra.split('\n').map(l => l.trim()).filter(Boolean) : [];
-    const totalWinners = 1 + extraLines.length; // 1 (Top 1) + extras
+    const allTopLines = topsInput.split('\n').map(l => l.trim()).filter(Boolean);
+    const top1 = allTopLines[0] || "N/A";
+    const extraLines = allTopLines.slice(1);
+    const totalWinners = allTopLines.length;
 
     let prize1 = "";
 
@@ -1001,7 +1001,7 @@ const cityDisplayName = customCityInput || CITIES[cityKey].label;
     winnersText += `**TOP** <:novo_emoji:1381082106469290076> ${top1} ${prize1 ? `| **${prize1}**` : ""}\n`;
 
     // TOPS EXTRA
-    if (hasExtra) {
+    if (extraLines.length > 0) {
       extraLines.forEach((line, index) => {
         const rank = index + 2;
         const prize = extractPrizeForRank(prizesText, rank);
