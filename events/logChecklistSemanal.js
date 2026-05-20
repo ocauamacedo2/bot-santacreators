@@ -27,7 +27,7 @@ const GI_DATA_FILE_ROOT = path.resolve(process.cwd(), "sc_gi_registros.json");
 
 const TZ = "America/Sao_Paulo";
 const ROLE_PRIORITY = "1371733765243670538"; // Membros Prioritários
-const LOG_CHANNEL_ID = "1486009491702153349"; // Auditoria
+const LOG_CHANNEL_ID = "1506785173537292348"; // Auditoria
 
 const PANEL_CONFIG = {
   CHANNEL_ID: "1477800974574682242",
@@ -398,6 +398,9 @@ async function syncWeekData(client, force = false) {
   // 🛡️ PROTEÇÃO: Se a fonte estiver vazia (erro de leitura ou arquivo quebrado), 
   // não prossegue para não apagar o progresso da semana atual.
   if (rawRegistros.length === 0) return checklist;
+  // Se rawRegistros.length === 0, significa que não há registros GI elegíveis.
+  // Isso deve resultar em uma lista de responsáveis vazia, não manter a antiga.
+  // if (rawRegistros.length === 0) return checklist; // <-- REMOVER ESTA LINHA
 
   if (!currentWeek.responsaveis || typeof currentWeek.responsaveis !== "object") {
     currentWeek.responsaveis = {};
@@ -460,15 +463,15 @@ async function syncWeekData(client, force = false) {
     }
   }
 
-  // ✅ Nova lógica de merge: Reconstrói o mapa de responsáveis respeitando os checks existentes
+  // ✅ MERGE INTELIGENTE: Reconstrói o mapa de responsáveis respeitando os checks existentes
+  const currentResponsaveis = currentWeek.responsaveis || {};
   const newResponsaveis = {};
 
   for (const [respId, memberMap] of giMap.entries()) {
     newResponsaveis[respId] = { members: {} };
-
     for (const [memberId, memberData] of memberMap.entries()) {
-      // Tenta achar se esse membro já foi conferido em qualquer lugar desta semana
-      const existing = findExistingCheck(currentWeek.responsaveis, memberId);
+      // Tenta achar se esse membro já foi conferido na estrutura atual (preservando o log batido)
+      const existing = currentResponsaveis[respId]?.members?.[memberId] || findExistingCheck(currentResponsaveis, memberId);
 
       newResponsaveis[respId].members[memberId] = {
         checked: existing?.checked === true,
@@ -984,9 +987,9 @@ export async function checklistOnReady(client) {
   const checklist = readChecklistWeek(weekKey);
 
   // ✅ No restart do bot:
-  // - se a semana já tem responsáveis, NÃO sincroniza para não zerar checks.
-  // - se a semana está vazia, sincroniza uma vez para carregar os responsáveis.
-  if (!weekHasResponsaveis(checklist, weekKey)) {
+  // Verifica se a semana atual no estado está vazia ou nunca foi sincronizada.
+  const currentWeekData = checklist.weeks[weekKey];
+  if (!currentWeekData || !currentWeekData.lastSyncedAt || !weekHasResponsaveis(checklist, weekKey)) {
     await syncWeekData(client, true).catch(() => {});
   }
 
@@ -998,6 +1001,7 @@ export async function checklistOnReady(client) {
   // ✅ O "reset" (início da nova semana) acontece rigorosamente no Sábado 00:00.
   cron.schedule("0 0 * * 6", () => syncWeekData(client, true), { timezone: TZ });
 }
+
 export async function checklistHandleMessage(message, client) {
   if (!message.guild || message.author.bot) return false;
   if (message.content.toLowerCase() !== "!checklogs") return false;

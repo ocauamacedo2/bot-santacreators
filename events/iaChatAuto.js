@@ -31,9 +31,26 @@ import { GoogleGenAI } from "@google/genai";
 
 const AI_CHANNEL_ID = "1506520202576400404";
 
+const AI_REPLY_ONLY_CHANNEL_ID = "1381597720007151698";
+
+const AI_MEMORY_LOG_CHANNEL_ID = "1506786373687054396";
+
+const AI_ALLOWED_CHANNEL_IDS = new Set([
+  AI_CHANNEL_ID,
+  AI_REPLY_ONLY_CHANNEL_ID,
+]);
+
+const AI_REPLY_TTL_MS = 2 * 60 * 1000;
+
 const GEMINI_MODEL =
   process.env.GEMINI_MODEL ||
   "gemini-2.5-flash-lite";
+
+const GEMINI_MODEL_FALLBACKS = [
+  GEMINI_MODEL,
+  "gemini-2.5-flash",
+  "gemini-2.0-flash",
+];
 
 const GEMINI_API_KEY =
   process.env.GEMINI_API_KEY || "";
@@ -371,6 +388,130 @@ function getCooldownRemaining(userId) {
 
 function setCooldown(userId) {
   cooldowns.set(userId, Date.now() + COOLDOWN_MS);
+}
+
+async function sendTemporaryReply(message, payload) {
+  const sent = await message.reply(payload).catch(() => null);
+
+  if (sent) {
+    setTimeout(async () => {
+      try {
+        // =========================================
+        // APAGA RESPOSTA DA IA
+        // =========================================
+
+        await sent.delete().catch(() => {});
+
+        // =========================================
+        // APAGA MENSAGEM DO USUÁRIO
+        // =========================================
+
+        if (message.deletable) {
+          await message.delete().catch(() => {});
+        }
+
+      } catch (err) {
+        console.error(
+          "[IA CHAT AUTO] Erro ao apagar mensagens:",
+          err
+        );
+      }
+    }, AI_REPLY_TTL_MS);
+  }
+
+  return sent;
+}
+
+async function sendConversationMemoryLog(client, message, aiResponse) {
+  try {
+    const logChannel =
+      client.channels.cache.get(AI_MEMORY_LOG_CHANNEL_ID) ||
+      await client.channels.fetch(AI_MEMORY_LOG_CHANNEL_ID).catch(() => null);
+
+    if (!logChannel?.isTextBased?.()) return;
+
+    const embed = new EmbedBuilder()
+      .setColor(0x9b59ff)
+      .setTitle("🧠 Registro de conversa da IA")
+      .addFields(
+        {
+          name: "👤 Usuário",
+          value: `<@${message.author.id}> | ${message.author.tag}\nID: ${message.author.id}`,
+          inline: false,
+        },
+        {
+          name: "💬 Mensagem do usuário",
+          value: cleanText(message.content || "Sem texto").slice(0, 1000),
+          inline: false,
+        },
+        {
+          name: "🤖 Resposta da IA",
+          value: cleanText(aiResponse || "Sem resposta").slice(0, 1000),
+          inline: false,
+        },
+        {
+          name: "📍 Canal",
+          value: `<#${message.channelId}> | ID: ${message.channelId}`,
+          inline: false,
+        }
+      )
+      .setTimestamp();
+
+    if (message.reference?.messageId) {
+      embed.addFields({
+        name: "↩️ Reply",
+        value: `Mensagem respondida: ${message.reference.messageId}`,
+        inline: false,
+      });
+    }
+
+    if (message.attachments?.size > 0) {
+      embed.addFields({
+        name: "📎 Anexos",
+        value: [...message.attachments.values()]
+          .map((a) => `${a.name || "arquivo"} | ${a.url}`)
+          .join("\n")
+          .slice(0, 1000),
+        inline: false,
+      });
+    }
+
+    await logChannel.send({ embeds: [embed] }).catch(() => {});
+  } catch (err) {
+    console.error("[IA CHAT AUTO] Erro ao salvar memória/log:", err);
+  }
+}
+
+async function fetchRecentMemoryLogs(client) {
+  try {
+    const logChannel =
+      client.channels.cache.get(AI_MEMORY_LOG_CHANNEL_ID) ||
+      await client.channels.fetch(AI_MEMORY_LOG_CHANNEL_ID).catch(() => null);
+
+    if (!logChannel?.isTextBased?.()) {
+      return "Canal de memória não encontrado.";
+    }
+
+    const messages = await logChannel.messages.fetch({ limit: 12 }).catch(() => null);
+
+    if (!messages?.size) {
+      return "Sem registros anteriores no canal de memória.";
+    }
+
+    const linhas = [];
+
+    for (const msg of [...messages.values()].reverse()) {
+      for (const embed of msg.embeds || []) {
+        const text = formatEmbedForAI(embed.data || embed);
+        if (text) linhas.push(text);
+      }
+    }
+
+    return linhas.join("\n\n---\n\n").slice(0, 6000);
+  } catch (err) {
+    console.error("[IA CHAT AUTO] Erro ao buscar memória:", err);
+    return "Não consegui buscar a memória anterior.";
+  }
 }
 
 // =====================================================
@@ -980,7 +1121,7 @@ function shouldIgnoreMessage(message, client) {
 
   if (message.webhookId) return true;
 
-  if (message.channelId !== AI_CHANNEL_ID) {
+  if (!AI_ALLOWED_CHANNEL_IDS.has(message.channelId)) {
     return true;
   }
 
@@ -1035,6 +1176,34 @@ function isTalkingToAI(message, client) {
   );
 }
 
+async function shouldAnswerInThisChannel(message, client) {
+  if (message.channelId === AI_CHANNEL_ID) {
+    return true;
+  }
+
+  if (message.channelId !== AI_REPLY_ONLY_CHANNEL_ID) {
+    return false;
+  }
+
+  if (message.mentions.users.has(client.user.id)) {
+    return true;
+  }
+
+  if (!message.reference?.messageId) {
+    return false;
+  }
+
+  try {
+    const replied = await message.channel.messages.fetch(message.reference.messageId).catch(() => null);
+
+    if (!replied) return false;
+
+    return replied.author?.id === client.user.id;
+  } catch {
+    return false;
+  }
+}
+
 // =====================================================
 // PROMPT
 // =====================================================
@@ -1044,6 +1213,7 @@ function buildPrompt({
   history,
   serverIntelligence,
   guildKnowledge,
+  memoryLogs,
 }) {
   return `
 ${SANTACREATORS_CONTEXT}
@@ -1056,6 +1226,9 @@ ${discordContext}
 
 CONHECIMENTO GERAL DO SERVIDOR:
 ${guildKnowledge}
+
+MEMÓRIA REGISTRADA EM CANAL DE LOG:
+${memoryLogs}
 
 INFORMAÇÕES REAIS BUSCADAS NO SERVIDOR:
 ${serverIntelligence}
@@ -1089,7 +1262,12 @@ REGRAS IMPORTANTES PARA RESPOSTA:
 - Entenda canais.
 - Entenda contexto social.
 - Responda como alguém da SantaCreators.
-
+- Entenda gírias comuns do Discord e RP/FiveM.
+- Se o usuário disser "oi", responda de forma natural, curta e simpática.
+- Se o usuário disser "como assim", explique melhor sem agir como se tivesse perdido o contexto.
+- Se o usuário marcar alguém, entenda que ele está falando sobre aquela pessoa.
+- Se a pergunta for simples, responda simples.
+- Se a pergunta for complexa, organize a resposta.
 Agora responda naturalmente:
 `;
 }
@@ -1167,28 +1345,50 @@ const guildKnowledge =
   const serverIntelligence =
     await buildServerIntelligenceContext(message);
 
+const memoryLogs =
+  await fetchRecentMemoryLogs(client);
+
 const prompt =
     buildPrompt({
       discordContext,
       history,
       serverIntelligence,
       guildKnowledge,
+      memoryLogs,
     });
 
-  const result =
-    await geminiClient.models.generateContent({
-      model: GEMINI_MODEL,
-      contents: prompt,
+let lastError = null;
 
-      config: {
-        temperature: 0.75,
-        topP: 0.9,
-        topK: 40,
-        maxOutputTokens: 450,
-      },
-    });
+for (const modelName of GEMINI_MODEL_FALLBACKS) {
+  try {
+    const result =
+      await geminiClient.models.generateContent({
+        model: modelName,
+        contents: prompt,
 
-  return result.text;
+        config: {
+          temperature: 0.8,
+          topP: 0.92,
+          topK: 40,
+          maxOutputTokens: 550,
+        },
+      });
+
+    return result.text;
+  } catch (err) {
+    lastError = err;
+
+    if (!isGeminiModelError(err)) {
+      throw err;
+    }
+
+    console.warn(
+      `[IA CHAT AUTO] Modelo falhou: ${modelName}. Tentando próximo fallback...`
+    );
+  }
+}
+
+throw lastError;
 }
 
 // =====================================================
@@ -1225,14 +1425,21 @@ export function setupIaChatAuto(client) {
     "messageCreate",
     async (message) => {
       try {
-        if (
-          shouldIgnoreMessage(
-            message,
-            client
-          )
-        ) {
-          return;
-        }
+       if (
+  shouldIgnoreMessage(
+    message,
+    client
+  )
+) {
+  return;
+}
+
+const canAnswerHere =
+  await shouldAnswerInThisChannel(message, client);
+
+if (!canAnswerHere) {
+  return;
+}
 
         const content =
           cleanText(message.content);
@@ -1320,15 +1527,17 @@ if (!finalText) return;
         // RESPOSTA
         // =====================================================
 
-                await message.reply({
-          content: finalText,
-          allowedMentions: {
-            repliedUser: true, // Responde mencionando quem perguntou
-            parse: [],         // Não converte @everyone/@here
-            users: [],         // Não pinga usuários citados no texto
-            roles: [],         // Não pinga cargos citados no texto
-          },
-        });
+                await sendTemporaryReply(message, {
+  content: finalText,
+  allowedMentions: {
+    repliedUser: true,
+    parse: [],
+    users: [],
+    roles: [],
+  },
+});
+
+await sendConversationMemoryLog(client, message, finalText);
 
 
       } catch (err) {
@@ -1344,14 +1553,14 @@ if (!finalText) return;
         if (
           isGeminiModelError(err)
         ) {
-          await message.reply({
-            content:
-              "O modelo Gemini configurado não existe ou está inválido.",
+          await sendTemporaryReply(message, {
+  content:
+    "O modelo Gemini configurado não existe ou está inválido.",
 
-            allowedMentions: {
-              repliedUser: true,
-            },
-          }).catch(() => {});
+  allowedMentions: {
+    repliedUser: true,
+  },
+});
 
           return;
         }
@@ -1363,14 +1572,14 @@ if (!finalText) return;
         if (
           isGeminiQuotaError(err)
         ) {
-          await message.reply({
-            content:
-              "A IA bateu o limite da API agora 😭 tenta novamente daqui a pouco.",
+          await sendTemporaryReply(message, {
+  content:
+    "A IA bateu o limite da API agora 😭 tenta novamente daqui a pouco.",
 
-            allowedMentions: {
-              repliedUser: true,
-            },
-          }).catch(() => {});
+  allowedMentions: {
+    repliedUser: true,
+  },
+});
 
           return;
         }
@@ -1382,14 +1591,14 @@ if (!finalText) return;
         if (
           isGeminiKeyError(err)
         ) {
-          await message.reply({
-            content:
-              "A chave Gemini parece inválida ou sem permissão.",
+          await sendTemporaryReply(message, {
+  content:
+    "A chave Gemini parece inválida ou sem permissão.",
 
-            allowedMentions: {
-              repliedUser: true,
-            },
-          }).catch(() => {});
+  allowedMentions: {
+    repliedUser: true,
+  },
+});
 
           return;
         }
@@ -1398,14 +1607,14 @@ if (!finalText) return;
         // ERRO GERAL
         // =====================================================
 
-        await message.reply({
-          content:
-            "Deu um erro interno na IA agora, mas já registrei no console pra verificarem.",
+        await sendTemporaryReply(message, {
+  content:
+    "Deu um erro interno na IA agora, mas já registrei no console pra verificarem.",
 
-          allowedMentions: {
-            repliedUser: true,
-          },
-        }).catch(() => {});
+  allowedMentions: {
+    repliedUser: true,
+  },
+});
       }
     }
   );
