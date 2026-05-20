@@ -32,7 +32,8 @@ import { GoogleGenAI } from "@google/genai";
 const AI_CHANNEL_ID = "1506520202576400404";
 
 const GEMINI_MODEL =
-  process.env.GEMINI_MODEL || "gemini-2.0-flash";
+  process.env.GEMINI_MODEL ||
+  "gemini-1.5-flash";
 
 const GEMINI_API_KEY =
   process.env.GEMINI_API_KEY || "";
