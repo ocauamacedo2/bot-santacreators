@@ -1,5 +1,8 @@
 // d:\santacreators-main\events\iaChatAuto.js
 
+import fs from "node:fs";
+import path from "node:path";
+
 import {
   PermissionsBitField,
   AttachmentBuilder,
@@ -34,6 +37,26 @@ const AI_CHANNEL_ID = "1506520202576400404";
 const AI_REPLY_ONLY_CHANNEL_ID = "1381597720007151698";
 
 const AI_MEMORY_LOG_CHANNEL_ID = "1506786373687054396";
+
+// =====================================================
+// CONSULTAS INTERNAS — SANTACREATORS
+// =====================================================
+
+const AI_ALINHAMENTOS_CHANNEL_ID = "1425256185707233301";
+const AI_FIVEM_GI_PANEL_CHANNEL_ID = "1501321157259956244";
+const AI_GI_DATA_FILE = path.resolve(process.cwd(), "data", "sc_gi_registros.json");
+
+const AI_INTERNAL_SCAN_LIMIT = 80;
+
+// =====================================================
+// CONSULTAS INTERNAS — SANTACREATORS
+// =====================================================
+
+const AI_ALINHAMENTOS_CHANNEL_ID = "1425256185707233301";
+const AI_FIVEM_GI_PANEL_CHANNEL_ID = "1501321157259956244";
+const AI_GI_DATA_FILE = path.resolve(process.cwd(), "data", "sc_gi_registros.json");
+
+const AI_INTERNAL_SCAN_LIMIT = 80;
 
 const AI_ALLOWED_CHANNEL_IDS = new Set([
   AI_CHANNEL_ID,
@@ -978,9 +1001,302 @@ function buildChannelsContext(message) {
   }
 }
 
+
+// =====================================================
+// CONSULTAS INTERNAS — ALINHAMENTOS / GI
+// =====================================================
+
+function messageWantsAlinhamentos(message) {
+  const text = normalizeSearchText(message.content);
+
+  return (
+    text.includes("alinhou") ||
+    text.includes("alinhamento") ||
+    text.includes("alinhamentos") ||
+    text.includes("quem alinhou") ||
+    text.includes("foi alinhado") ||
+    text.includes("sobre o que alinharam")
+  );
+}
+
+function messageWantsGIStatus(message) {
+  const text = normalizeSearchText(message.content);
+
+  return (
+    text.includes("controle gi") ||
+    text.includes("gestao influencer") ||
+    text.includes("gestaoinfluencer") ||
+    text.includes("gi ativo") ||
+    text.includes("gi ativos") ||
+    text.includes("gi pausado") ||
+    text.includes("gi pausados") ||
+    text.includes("controles ativos") ||
+    text.includes("controles pausados")
+  );
+}
+
+function getEmbedFieldValue(embed, names = []) {
+  const fields = embed?.fields || embed?.data?.fields || [];
+
+  for (const field of fields) {
+    const fieldName = normalizeSearchText(field?.name || "");
+
+    if (names.some((name) => fieldName.includes(normalizeSearchText(name)))) {
+      return String(field?.value || "").trim();
+    }
+  }
+
+  return null;
+}
+
+function formatMessageLink(msg) {
+  try {
+    return `https://discord.com/channels/${msg.guildId}/${msg.channelId}/${msg.id}`;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchAlinhamentosContext(message) {
+  try {
+    const guild = message.guild;
+    if (!guild) return "Servidor não encontrado.";
+
+    const channel = await guild.channels.fetch(AI_ALINHAMENTOS_CHANNEL_ID).catch(() => null);
+
+    if (!channel?.isTextBased?.()) {
+      return `Canal de alinhamentos <#${AI_ALINHAMENTOS_CHANNEL_ID}> não encontrado ou inválido.`;
+    }
+
+    const messages = await channel.messages.fetch({ limit: AI_INTERNAL_SCAN_LIMIT }).catch(() => null);
+
+    if (!messages?.size) {
+      return `Canal <#${AI_ALINHAMENTOS_CHANNEL_ID}> lido, mas nenhum alinhamento recente foi encontrado.`;
+    }
+
+    const userQuestion = normalizeSearchText(message.content);
+    const mentionedIds = extractDiscordIdsFromText(message.content);
+
+    const registros = [];
+
+    for (const msg of [...messages.values()]) {
+      const emb = msg.embeds?.[0];
+      if (!emb) continue;
+
+      const title = normalizeSearchText(emb.title || emb.data?.title || "");
+      const footer = normalizeSearchText(emb.footer?.text || emb.data?.footer?.text || "");
+
+      const isAlinhamento =
+        title.includes("registro de alinhamento") ||
+        footer.includes("alinv1");
+
+      if (!isAlinhamento) continue;
+
+      const quemFoi = getEmbedFieldValue(emb, ["quem foi alinhado"]);
+      const quemAlinhou = getEmbedFieldValue(emb, ["quem alinhou"]);
+      const sobre = getEmbedFieldValue(emb, ["sobre"]);
+      const registradoPor = getEmbedFieldValue(emb, ["registrado por"]);
+      const quando = getEmbedFieldValue(emb, ["quando"]);
+      const status = getEmbedFieldValue(emb, ["status"]);
+
+      const haystack = normalizeSearchText([
+        quemFoi,
+        quemAlinhou,
+        sobre,
+        registradoPor,
+        quando,
+        status,
+        msg.content,
+      ].filter(Boolean).join(" "));
+
+      const matchesMentionedId =
+        mentionedIds.length > 0 &&
+        mentionedIds.some((id) => haystack.includes(id));
+
+      const matchesQuestion =
+        !mentionedIds.length ||
+        matchesMentionedId ||
+        userQuestion.split(" ").some((part) => part.length >= 4 && haystack.includes(part));
+
+      if (!matchesQuestion && registros.length >= 10) continue;
+
+      registros.push({
+        criadoEm: new Date(msg.createdTimestamp).toLocaleString("pt-BR", {
+          timeZone: "America/Sao_Paulo",
+        }),
+        quemFoi: quemFoi || "—",
+        quemAlinhou: quemAlinhou || "—",
+        sobre: sobre || "—",
+        registradoPor: registradoPor || "—",
+        quando: quando || "—",
+        status: status || "—",
+        link: formatMessageLink(msg) || "—",
+      });
+    }
+
+    if (!registros.length) {
+      return [
+        `CONSULTA INTERNA — ALINHAMENTOS`,
+        `Canal consultado: <#${AI_ALINHAMENTOS_CHANNEL_ID}>`,
+        `Resultado: nenhum registro compatível com a pergunta foi encontrado nas últimas ${AI_INTERNAL_SCAN_LIMIT} mensagens.`,
+      ].join("\n");
+    }
+
+    return [
+      `CONSULTA INTERNA — ALINHAMENTOS`,
+      `Canal consultado: <#${AI_ALINHAMENTOS_CHANNEL_ID}>`,
+      `Registros encontrados: ${registros.length}`,
+      "",
+      ...registros.slice(0, 15).map((r, i) => {
+        return [
+          `#${i + 1}`,
+          `Criado em: ${r.criadoEm}`,
+          `Quem foi alinhado: ${r.quemFoi}`,
+          `Quem alinhou: ${r.quemAlinhou}`,
+          `Sobre: ${r.sobre}`,
+          `Registrado por: ${r.registradoPor}`,
+          `Quando: ${r.quando}`,
+          `Status: ${r.status}`,
+          `Link: ${r.link}`,
+        ].join("\n");
+      }),
+    ].join("\n\n");
+  } catch (err) {
+    console.error("[IA CHAT AUTO] Erro ao buscar alinhamentos:", err);
+    return "Erro ao consultar alinhamentos.";
+  }
+}
+
+function readGiRecordsFromFile() {
+  try {
+    if (!fs.existsSync(AI_GI_DATA_FILE)) return [];
+
+    const raw = fs.readFileSync(AI_GI_DATA_FILE, "utf8");
+    const data = JSON.parse(raw || "{}");
+
+    if (!Array.isArray(data.registros)) return [];
+
+    return data.registros;
+  } catch (err) {
+    console.error("[IA CHAT AUTO] Erro ao ler sc_gi_registros.json:", err);
+    return [];
+  }
+}
+
+async function fetchGIStatusContext(message) {
+  try {
+    const records = readGiRecordsFromFile();
+
+    const ativos = [];
+    const pausados = [];
+
+    for (const rec of records) {
+      const item = {
+        targetId: String(rec.targetId || ""),
+        area: rec.area || "—",
+        active: rec.active !== false,
+        responsibleUserId: rec.responsibleUserId || null,
+        responsibleType: rec.responsibleType || "—",
+        pausedAtMs: rec.pausedAtMs || null,
+        createdAtMs: rec.createdAtMs || null,
+        messageId: rec.messageId || null,
+        channelId: rec.channelId || null,
+        guildId: rec.guildId || message.guild?.id || null,
+        note: rec.note || "",
+      };
+
+      if (!item.targetId) continue;
+
+      if (item.active) ativos.push(item);
+      else pausados.push(item);
+    }
+
+    const panelChannel = await message.guild.channels.fetch(AI_FIVEM_GI_PANEL_CHANNEL_ID).catch(() => null);
+    let panelContext = "";
+
+    if (panelChannel?.isTextBased?.()) {
+      const panelMessages = await panelChannel.messages.fetch({ limit: 8 }).catch(() => null);
+
+      if (panelMessages?.size) {
+        const lines = [];
+
+        for (const msg of [...panelMessages.values()].reverse()) {
+          for (const embed of msg.embeds || []) {
+            const embedText = formatEmbedForAI(embed.data || embed);
+            if (embedText) lines.push(embedText);
+          }
+
+          if (msg.content) lines.push(cleanText(msg.content));
+        }
+
+        panelContext = lines.join("\n\n---\n\n").slice(0, 5000);
+      }
+    }
+
+    const formatRec = (rec) => {
+      const pausedText = rec.pausedAtMs
+        ? new Date(rec.pausedAtMs).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })
+        : "—";
+
+      const createdText = rec.createdAtMs
+        ? new Date(rec.createdAtMs).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })
+        : "—";
+
+      const link =
+        rec.guildId && rec.channelId && rec.messageId
+          ? `https://discord.com/channels/${rec.guildId}/${rec.channelId}/${rec.messageId}`
+          : "—";
+
+      return [
+        `Membro: <@${rec.targetId}> (${rec.targetId})`,
+        `Status: ${rec.active ? "Ativo" : "Pausado"}`,
+        `Área: ${rec.area}`,
+        `Responsável: ${rec.responsibleUserId ? `<@${rec.responsibleUserId}>` : "—"} (${rec.responsibleType})`,
+        `Criado em: ${createdText}`,
+        `Pausado em: ${pausedText}`,
+        `Observação: ${rec.note || "—"}`,
+        `Registro: ${link}`,
+      ].join("\n");
+    };
+
+    return [
+      `CONSULTA INTERNA — CONTROLE GI`,
+      `Arquivo lido: ${AI_GI_DATA_FILE}`,
+      `Canal/painel consultado: <#${AI_FIVEM_GI_PANEL_CHANNEL_ID}>`,
+      `Total de registros: ${records.length}`,
+      `Ativos: ${ativos.length}`,
+      `Pausados: ${pausados.length}`,
+      "",
+      `GI ATIVOS:`,
+      ativos.slice(0, 20).map(formatRec).join("\n\n") || "Nenhum ativo encontrado.",
+      "",
+      `GI PAUSADOS:`,
+      pausados.slice(0, 20).map(formatRec).join("\n\n") || "Nenhum pausado encontrado.",
+      "",
+      `PAINEL/CANAL ${AI_FIVEM_GI_PANEL_CHANNEL_ID}:`,
+      panelContext || "Nenhuma mensagem recente útil encontrada no painel.",
+    ].join("\n\n");
+  } catch (err) {
+    console.error("[IA CHAT AUTO] Erro ao buscar status GI:", err);
+    return "Erro ao consultar controles GI.";
+  }
+}
+
+
 async function buildServerIntelligenceContext(message) {
   const blocks = [];
   const text = normalizeSearchText(message.content);
+
+  // 0. Consultas internas fixas da SantaCreators
+  if (messageWantsAlinhamentos(message)) {
+    console.log("[IA CHAT AUTO] Intenção detectada: Consulta de Alinhamentos.");
+    blocks.push(await fetchAlinhamentosContext(message));
+  }
+
+  if (messageWantsGIStatus(message)) {
+    console.log("[IA CHAT AUTO] Intenção detectada: Consulta de Controle GI.");
+    blocks.push(await fetchGIStatusContext(message));
+  }
 
   // 1. Prioridade: Canais mencionados/Links
   const hasChannelReference =
@@ -1308,6 +1624,9 @@ REGRAS OBRIGATÓRIAS:
 4. Use sempre menções no formato <#ID> para canais e <@&ID> para cargos.
 5. Não invente regras, cargos ou eventos. Se não encontrou no servidor, diga que não encontrou.
 6. Se perguntarem algo administrativo sensível (permissões, cargos altos, bans), oriente a chamar um Responsável.
+7. Se receber "CONSULTA INTERNA — ALINHAMENTOS", responda com base nos registros encontrados: quem foi alinhado, quem alinhou, sobre o quê, status, data e link.
+8. Se receber "CONSULTA INTERNA — CONTROLE GI", responda com base nos registros ativos/pausados, responsável, área, datas e observações.
+9. Nunca diga que "aprendeu" sem dados reais. Diga que encontrou ou não encontrou nas consultas internas.
 
 COMPORTAMENTO:
 Responda de forma natural, informal e útil (vibe de Discord/RP). Seja conciso.
