@@ -192,6 +192,231 @@ function setCooldown(userId) {
 }
 
 // =====================================================
+// INTELIGÊNCIA DO SERVIDOR / CANAIS / CARGOS
+// =====================================================
+
+function normalizeSearchText(text) {
+  return String(text || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\w\s#@|-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function messageWantsCronograma(message) {
+  const text = normalizeSearchText(message.content);
+
+  return (
+    text.includes("cronograma") ||
+    text.includes("conograma") ||
+    text.includes("agenda") ||
+    text.includes("evento semanal") ||
+    text.includes("eventos semanais")
+  );
+}
+
+function messageWantsRoles(message) {
+  const text = normalizeSearchText(message.content);
+
+  return (
+    text.includes("cargo") ||
+    text.includes("hierarquia") ||
+    text.includes("permissao") ||
+    text.includes("permissões") ||
+    text.includes("staff") ||
+    text.includes("resp") ||
+    text.includes("lider") ||
+    text.includes("influ") ||
+    text.includes("creator")
+  );
+}
+
+function messageWantsChannels(message) {
+  const text = normalizeSearchText(message.content);
+
+  return (
+    text.includes("canal") ||
+    text.includes("canais") ||
+    text.includes("onde fica") ||
+    text.includes("qual canal") ||
+    text.includes("ver canal")
+  );
+}
+
+function channelLooksLikeCronograma(channel) {
+  const name = normalizeSearchText(channel?.name);
+
+  return (
+    name.includes("cronograma") ||
+    name.includes("conograma") ||
+    name.includes("agenda")
+  );
+}
+
+function formatEmbedForAI(embed) {
+  const lines = [];
+
+  if (embed.title) lines.push(`Título: ${embed.title}`);
+  if (embed.description) lines.push(`Descrição: ${embed.description}`);
+
+  if (Array.isArray(embed.fields) && embed.fields.length > 0) {
+    lines.push("Campos:");
+
+    for (const field of embed.fields.slice(0, 12)) {
+      lines.push(`- ${field.name}: ${field.value}`);
+    }
+  }
+
+  if (embed.footer?.text) lines.push(`Rodapé: ${embed.footer.text}`);
+
+  return lines.join("\n");
+}
+
+async function fetchCronogramaContext(message) {
+  try {
+    const guild = message.guild;
+    if (!guild) return "Servidor não encontrado.";
+
+    const channels = guild.channels.cache
+      .filter((channel) => {
+        return (
+          channel &&
+          channel.isTextBased?.() &&
+          channelLooksLikeCronograma(channel)
+        );
+      })
+      .map((channel) => channel);
+
+    if (!channels.length) {
+      return "Nenhum canal parecido com cronograma foi encontrado.";
+    }
+
+    const cronogramaChannel = channels[0];
+
+    const messages = await cronogramaChannel.messages
+      .fetch({ limit: 8 })
+      .catch(() => null);
+
+    if (!messages || messages.size <= 0) {
+      return `Canal encontrado: #${cronogramaChannel.name} (${cronogramaChannel.id}), mas não consegui ler mensagens recentes.`;
+    }
+
+    const linhas = [];
+
+    linhas.push(`CANAL DE CRONOGRAMA ENCONTRADO:`);
+    linhas.push(`#${cronogramaChannel.name} (${cronogramaChannel.id})`);
+    linhas.push("");
+
+    const orderedMessages = [...messages.values()].reverse();
+
+    for (const msg of orderedMessages) {
+      const partes = [];
+
+      if (msg.content) {
+        partes.push(`Texto: ${cleanText(msg.content)}`);
+      }
+
+      if (msg.embeds?.length > 0) {
+        for (const embed of msg.embeds.slice(0, 3)) {
+          const embedText = formatEmbedForAI(embed.data || embed);
+          if (embedText) {
+            partes.push(`Embed:\n${embedText}`);
+          }
+        }
+      }
+
+      if (partes.length > 0) {
+        linhas.push(`Mensagem de ${msg.author?.username || "bot"} em ${msg.createdAt?.toLocaleString("pt-BR") || "data desconhecida"}:`);
+        linhas.push(partes.join("\n"));
+        linhas.push("---");
+      }
+    }
+
+    return linhas.join("\n").slice(0, 5000);
+  } catch (err) {
+    console.error("[IA CHAT AUTO] Erro ao buscar cronograma:", err);
+    return "Tentei buscar o cronograma, mas deu erro ao acessar o canal.";
+  }
+}
+
+function buildRolesHierarchyContext(message) {
+  try {
+    const guild = message.guild;
+    if (!guild) return "Servidor não encontrado.";
+
+    const roles = guild.roles.cache
+      .filter((role) => role.name !== "@everyone")
+      .sort((a, b) => b.position - a.position)
+      .map((role) => {
+        return `- ${role.name} | ID: ${role.id} | posição: ${role.position} | membros: ${role.members?.size || 0}`;
+      })
+      .slice(0, 35);
+
+    if (!roles.length) {
+      return "Nenhum cargo encontrado no cache.";
+    }
+
+    return `HIERARQUIA DE CARGOS DO SERVIDOR:\n${roles.join("\n")}`;
+  } catch (err) {
+    console.error("[IA CHAT AUTO] Erro ao montar hierarquia:", err);
+    return "Não consegui montar a hierarquia de cargos.";
+  }
+}
+
+function buildChannelsContext(message) {
+  try {
+    const guild = message.guild;
+    if (!guild) return "Servidor não encontrado.";
+
+    const channels = guild.channels.cache
+      .filter((channel) => channel && channel.name)
+      .sort((a, b) => {
+        const posA = typeof a.rawPosition === "number" ? a.rawPosition : 0;
+        const posB = typeof b.rawPosition === "number" ? b.rawPosition : 0;
+        return posA - posB;
+      })
+      .map((channel) => {
+        const parentName = channel.parent?.name || "Sem categoria";
+        return `- #${channel.name} | ID: ${channel.id} | categoria: ${parentName}`;
+      })
+      .slice(0, 60);
+
+    if (!channels.length) {
+      return "Nenhum canal encontrado no cache.";
+    }
+
+    return `LISTA DE CANAIS VISÍVEIS NO CACHE:\n${channels.join("\n")}`;
+  } catch (err) {
+    console.error("[IA CHAT AUTO] Erro ao montar canais:", err);
+    return "Não consegui montar a lista de canais.";
+  }
+}
+
+async function buildServerIntelligenceContext(message) {
+  const blocks = [];
+
+  if (messageWantsCronograma(message)) {
+    blocks.push(await fetchCronogramaContext(message));
+  }
+
+  if (messageWantsRoles(message)) {
+    blocks.push(buildRolesHierarchyContext(message));
+  }
+
+  if (messageWantsChannels(message)) {
+    blocks.push(buildChannelsContext(message));
+  }
+
+  if (!blocks.length) {
+    return "Nenhuma busca extra necessária.";
+  }
+
+  return blocks.join("\n\n====================\n\n");
+}
+
+// =====================================================
 // LEITURA PROFISSIONAL DISCORD
 // =====================================================
 
@@ -420,6 +645,7 @@ function isTalkingToAI(message, client) {
 function buildPrompt({
   discordContext,
   history,
+  serverIntelligence,
 }) {
   return `
 ${SANTACREATORS_CONTEXT}
@@ -430,7 +656,13 @@ ${history}
 CONTEXTO DISCORD:
 ${discordContext}
 
-IMPORTANTE:
+INFORMAÇÕES REAIS BUSCADAS NO SERVIDOR:
+${serverIntelligence}
+
+REGRAS IMPORTANTES PARA RESPOSTA:
+- Se o usuário pedir cronograma e ele estiver nas informações reais, entregue o cronograma diretamente.
+- Nunca diga "vou olhar", "já volto", "só um minuto" ou "vou verificar" se você já recebeu as informações no prompt.
+- Se não encontrar algo, diga claramente que não encontrou.
 - Entenda menções.
 - Entenda IDs.
 - Entenda replies.
@@ -505,10 +737,14 @@ async function generateIAResponse({
   const discordContext =
     await buildDiscordContext(message);
 
+  const serverIntelligence =
+    await buildServerIntelligenceContext(message);
+
   const prompt =
     buildPrompt({
       discordContext,
       history,
+      serverIntelligence,
     });
 
   const result =
@@ -517,10 +753,10 @@ async function generateIAResponse({
       contents: prompt,
 
       config: {
-        temperature: 0.9,
-        topP: 0.95,
+        temperature: 0.75,
+        topP: 0.9,
         topK: 40,
-        maxOutputTokens: 250,
+        maxOutputTokens: 450,
       },
     });
 
