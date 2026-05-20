@@ -1,16 +1,14 @@
 // d:\santacreators-main\events\iaChatAuto.js
-import OpenAI from "openai";
+import { GoogleGenAI } from "@google/genai";
 
 // =====================================================
 // IA CHAT AUTO — SANTACREATORS
-// Discord.js v14 | ESM | Square Cloud
+// Discord.js v14 | ESM | Square Cloud | Gemini API
 // =====================================================
 
 const AI_CHANNEL_ID = "1506520202576400404";
 
-// Modelo recomendado custo/benefício.
-// Se quiser trocar depois: "gpt-4.1-mini", "gpt-4o-mini", etc.
-const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.0-flash";
 
 const COOLDOWN_MS = 10_000;
 const MAX_USER_MESSAGE_CHARS = 1200;
@@ -20,10 +18,10 @@ const MAX_HISTORY_MESSAGES = 8;
 const cooldowns = new Map();
 const channelHistory = new Map();
 
-let openai = null;
+let gemini = null;
 
 // =====================================================
-// BASE DE CONHECIMENTO FIXA DA IA
+// BASE DE CONHECIMENTO FIXA
 // =====================================================
 
 const SANTACREATORS_CONTEXT = `
@@ -31,11 +29,11 @@ Você é a IA oficial da SantaCreators.
 
 CONTEXTO GERAL:
 - SantaCreators é uma organização de RP/FiveM focada em eventos, creators, social mídia, gestão e organização interna.
-- A IA conversa no Discord de forma natural, informal, útil e com vibe de comunidade.
-- Ela deve ajudar com ideias, mensagens, organização, dúvidas simples, textos, anúncios, eventos, cronogramas e explicações.
-- Ela NÃO deve fingir que executou ações no bot.
-- Ela NÃO deve inventar regras internas se não tiver certeza.
-- Se o assunto for cargo, punição, banimento, decisão administrativa, permissão, pagamento, VIP, aprovação/reprovação, ela deve orientar a chamar um responsável.
+- Você conversa no Discord de forma natural, informal, útil e com vibe de comunidade.
+- Você ajuda com ideias, mensagens, organização, dúvidas simples, textos, anúncios, eventos, cronogramas e explicações.
+- Você NÃO finge que executou ações no bot.
+- Você NÃO inventa regras internas se não tiver certeza.
+- Se o assunto for cargo, punição, banimento, decisão administrativa, permissão, pagamento, VIP, aprovação/reprovação, oriente a chamar um responsável.
 
 CIDADES/EVENTOS:
 - Cidades usadas com frequência: Santa, Nobre, Grande, Maresia.
@@ -47,70 +45,67 @@ ESTILO:
 - Pode usar emoji com moderação.
 - Não responder como robô.
 - Não fazer textão sem necessidade.
-- Se a pessoa pedir algo curto, responder curto.
-- Se a pessoa pedir organização, deixar bonito e pronto para copiar.
+- Se a pessoa pedir algo curto, responda curto.
+- Se a pessoa pedir organização, deixe bonito e pronto para copiar.
 
 SEGURANÇA:
-- Não pedir token, chave, senha, API key ou dados sensíveis.
-- Se alguém mandar chave/token, avisar para revogar.
-- Não orientar burlar sistema, explorar falha, roubar conta ou prejudicar servidor.
+- Não peça token, chave, senha, API key ou dados sensíveis.
+- Se alguém mandar chave/token, avise para revogar.
+- Não oriente burlar sistema, explorar falha, roubar conta ou prejudicar servidor.
 `;
 
-// =====================================================
-// PROMPT PRINCIPAL
-// =====================================================
+function buildPrompt({ message, content }) {
+  const historyText = getHistoryText(message.channelId);
 
-function buildSystemPrompt() {
   return `
 ${SANTACREATORS_CONTEXT}
 
 REGRAS DE RESPOSTA:
 1. Responda como se estivesse conversando no chat da SantaCreators.
 2. Seja útil e interativo.
-3. Não diga que é "ChatGPT"; você é a IA da SantaCreators.
+3. Não diga que é ChatGPT/Gemini; você é a IA da SantaCreators.
 4. Se não souber algo interno, diga que não tem certeza e peça para confirmar com um responsável.
 5. Nunca exponha IDs internos sem necessidade.
 6. Não mande resposta gigante se a pergunta for simples.
 7. Se pedirem anúncio/mensagem, entregue já pronto para copiar.
 8. Se o usuário estiver brincando, pode brincar junto, mas sem perder o respeito.
 9. Se a mensagem parecer spam, responda curto ou ignore.
-10. Se perguntarem sobre sistemas do bot, explique de forma simples, mas não invente implementação que não foi fornecida.
+10. Se perguntarem sobre sistemas do bot, explique simples, mas não invente implementação não fornecida.
+
+HISTÓRICO RECENTE DO CANAL:
+${historyText}
+
+MENSAGEM ATUAL:
+Usuário: ${message.author.username}
+ID do usuário: ${message.author.id}
+Canal: ${message.channel?.name || message.channelId}
+Mensagem: ${content}
+
+Responda diretamente para esse usuário.
 `;
+}
+
+// =====================================================
+// GEMINI CLIENT
+// =====================================================
+
+function getGeminiClient() {
+  if (gemini) return gemini;
+
+  const apiKey = process.env.GEMINI_API_KEY;
+
+  if (!apiKey) {
+    console.error("[IA CHAT AUTO] GEMINI_API_KEY não encontrada no process.env.");
+    return null;
+  }
+
+  gemini = new GoogleGenAI({ apiKey });
+  return gemini;
 }
 
 // =====================================================
 // HELPERS
 // =====================================================
-
-function getOpenAIClient() {
-  if (openai) return openai;
-
-  const apiKey = process.env.OPENAI_API_KEY;
-
-  if (!apiKey) {
-    console.error("[IA CHAT AUTO] OPENAI_API_KEY não encontrada no process.env.");
-    return null;
-  }
-
-  openai = new OpenAI({ apiKey });
-  return openai;
-}
-
-function isQuotaError(err) {
-  return (
-    err?.status === 429 ||
-    err?.code === "insufficient_quota" ||
-    err?.type === "insufficient_quota" ||
-    String(err?.message || "").toLowerCase().includes("quota")
-  );
-}
-
-function isRateLimitError(err) {
-  return (
-    err?.status === 429 ||
-    String(err?.message || "").toLowerCase().includes("rate limit")
-  );
-}
 
 function cleanContent(text) {
   return String(text || "")
@@ -185,45 +180,49 @@ function limitDiscordText(text) {
   return `${finalText.slice(0, MAX_RESPONSE_CHARS - 20)}...`;
 }
 
+function isGeminiQuotaError(err) {
+  const text = String(err?.message || err || "").toLowerCase();
+
+  return (
+    text.includes("quota") ||
+    text.includes("rate limit") ||
+    text.includes("resource_exhausted") ||
+    text.includes("429")
+  );
+}
+
+function isGeminiKeyError(err) {
+  const text = String(err?.message || err || "").toLowerCase();
+
+  return (
+    text.includes("api key") ||
+    text.includes("apikey") ||
+    text.includes("permission") ||
+    text.includes("unauthorized") ||
+    text.includes("403") ||
+    text.includes("401")
+  );
+}
+
 async function generateIaResponse({ message, content }) {
-  const client = getOpenAIClient();
+  const client = getGeminiClient();
 
   if (!client) {
-    return "Minha chave de IA não está configurada ainda. Chama o Macedo pra verificar a `OPENAI_API_KEY` na Square Cloud.";
+    return "Minha chave do Gemini ainda não está configurada. O Macedo precisa colocar `GEMINI_API_KEY` nas variáveis da Square Cloud e reiniciar o bot.";
   }
 
-  const historyText = getHistoryText(message.channelId);
+  const prompt = buildPrompt({ message, content });
 
-  const input = `
-CONTEXTO DO CANAL:
-${historyText}
-
-MENSAGEM ATUAL:
-Usuário: ${message.author.username}
-ID do usuário: ${message.author.id}
-Canal: ${message.channel?.name || message.channelId}
-Mensagem: ${content}
-
-Responda diretamente para esse usuário.
-`;
-
-  const response = await client.responses.create({
-    model: OPENAI_MODEL,
-    input: [
-      {
-        role: "system",
-        content: buildSystemPrompt(),
-      },
-      {
-        role: "user",
-        content: input,
-      },
-    ],
-    temperature: 0.8,
-    max_output_tokens: 500,
+  const response = await client.models.generateContent({
+    model: GEMINI_MODEL,
+    contents: prompt,
+    config: {
+      temperature: 0.8,
+      maxOutputTokens: 500,
+    },
   });
 
-  return response.output_text;
+  return response.text;
 }
 
 // =====================================================
@@ -238,9 +237,9 @@ export function setupIaChatAuto(client) {
 
   globalThis.__SC_IA_CHAT_AUTO_BOOTSTRAPPED__ = true;
 
-  console.log("[IA CHAT AUTO] Módulo iniciado com sucesso.");
+  console.log("[IA CHAT AUTO] Módulo iniciado com sucesso usando Gemini.");
   console.log(`[IA CHAT AUTO] Canal ativo: ${AI_CHANNEL_ID}`);
-  console.log(`[IA CHAT AUTO] Modelo configurado: ${OPENAI_MODEL}`);
+  console.log(`[IA CHAT AUTO] Modelo configurado: ${GEMINI_MODEL}`);
 
   client.on("messageCreate", async (message) => {
     try {
@@ -288,21 +287,21 @@ export function setupIaChatAuto(client) {
       });
 
     } catch (err) {
-      console.error("[IA CHAT AUTO] Erro ao gerar resposta:", err);
+      console.error("[IA CHAT AUTO] Erro ao gerar resposta Gemini:", err);
 
-      if (isQuotaError(err)) {
+      if (isGeminiQuotaError(err)) {
         await message.reply({
           content:
-            "Minha IA está configurada, mas a conta da API está sem crédito/limite agora. O Macedo precisa ativar billing/crédito da OpenAI API.",
+            "A IA do Gemini bateu limite/cota agora. Espera um pouco ou verifica a cota da API Key no Google AI Studio.",
           allowedMentions: { repliedUser: true },
         }).catch(() => {});
         return;
       }
 
-      if (isRateLimitError(err)) {
+      if (isGeminiKeyError(err)) {
         await message.reply({
           content:
-            "Recebi muita mensagem de uma vez e a IA limitou por alguns segundos. Tenta de novo daqui a pouco.",
+            "A chave do Gemini parece inválida, sem permissão ou não configurada direito. Verifica a variável `GEMINI_API_KEY` na Square Cloud.",
           allowedMentions: { repliedUser: true },
         }).catch(() => {});
         return;
