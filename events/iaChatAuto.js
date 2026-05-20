@@ -149,6 +149,47 @@ function limitDiscordText(text) {
   return `${finalText.slice(0, MAX_RESPONSE_CHARS - 3)}...`;
 }
 
+// =====================================================
+// BLOQUEIO DE RESPOSTAS "VOU VER / AGUENTA AÍ"
+// =====================================================
+
+function iaResponseLooksLikePending(text) {
+  const normalized = normalizeSearchText(text);
+
+  const forbiddenPhrases = [
+    "vou olhar",
+    "vou ver",
+    "vou verificar",
+    "deixa eu ver",
+    "deixa eu olhar",
+    "aguenta ai",
+    "aguarde",
+    "ja volto",
+    "so um minuto",
+    "um minuto",
+    "pera ai",
+    "vou dar uma olhada",
+  ];
+
+  return forbiddenPhrases.some((phrase) =>
+    normalized.includes(phrase)
+  );
+}
+
+function buildFallbackInstantResponse(message) {
+  const content = normalizeSearchText(message.content);
+
+  if (
+    content.includes("resp influ") ||
+    content.includes("responsavel influ") ||
+    content.includes("responsavel influencer")
+  ) {
+    return "Eu não consegui identificar com certeza quem é seu Resp Influ pelas informações disponíveis aqui. Me manda a menção do cargo, o canal da hierarquia ou o print certinho que eu respondo direto, sem enrolar.";
+  }
+
+  return "Não consegui encontrar essa informação com segurança agora. Me manda o canal, cargo, ID ou print certo que eu respondo direto com base nisso.";
+}
+
 function rememberMessage(channelId, author, content) {
   const history = channelHistory.get(channelId) || [];
 
@@ -833,7 +874,7 @@ ${serverIntelligence}
 
 REGRAS OBRIGATÓRIAS:
 1. Se você recebeu dados reais no prompt (como cronograma ou histórico), use-os IMEDIATAMENTE.
-2. NUNCA diga "vou olhar", "vou verificar", "já volto" ou "só um minuto". Você já tem os dados agora.
+2. NUNCA diga "vou olhar", "vou ver", "deixa eu ver", "deixa eu dar uma olhada", "vou verificar", "já volto", "aguenta aí", "pera aí" ou "só um minuto". Você precisa responder com o que já tem no prompt. Se não tiver dados suficientes, diga claramente que não encontrou.
 3. Se o usuário marcou um canal, foque no conteúdo lido desse canal, não no canal atual.
 4. Use sempre menções no formato <#ID> para canais e <@&ID> para cargos.
 5. Não invente regras, cargos ou eventos. Se não encontrou no servidor, diga que não encontrou.
@@ -1044,17 +1085,27 @@ Mensagem: ${content}
         // =====================================================
 
         const iaResponse =
-          await generateIAResponse({
-            message,
-            client,
-          });
+  await generateIAResponse({
+    message,
+    client,
+  });
 
-        const finalText =
-          limitDiscordText(
-            iaResponse
-          );
+let safeIaResponse = iaResponse;
 
-        if (!finalText) return;
+if (iaResponseLooksLikePending(safeIaResponse)) {
+  console.warn(
+    "[IA CHAT AUTO] Resposta pendente bloqueada. Substituindo por fallback direto."
+  );
+
+  safeIaResponse = buildFallbackInstantResponse(message);
+}
+
+const finalText =
+  limitDiscordText(
+    safeIaResponse
+  );
+
+if (!finalText) return;
 
         // =====================================================
         // RESPOSTA
