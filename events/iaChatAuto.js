@@ -2123,22 +2123,7 @@ Responda agora de forma natural, direta e baseada nos dados reais acima:
 `;
 }
 
-function buildPrompt({
-  discordContext,
-  history,
-  serverIntelligence,
-  guildKnowledge,
-  memoryLogs,
-  systemsIndex,
-}) {
-  return `
-${SANTACREATORS_CONTEXT}
 
-[IA FACTUAL MODE]
-...
-Responda agora de forma natural, direta e baseada nos dados reais acima:
-`;
-}
 
 // =====================================================
 // ERROS
