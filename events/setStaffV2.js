@@ -841,6 +841,9 @@ if (interaction.isButton() && interaction.customId.startsWith("ss2_nivel_")) {
   if (membro) {
     await membro.setNickname(`${nome} | ${passaporte}`).catch(() => {});
     await membro.roles.add(CFG.CARGO_CIDADAO).catch(() => {});
+
+    // ✅ Remove o cargo SEM WL imediatamente ao enviar o pedido
+    await membro.roles.remove(CFG.CARGO_SEM_WL).catch(() => {});
   }
 
   await interaction.reply({ content: "✅ Pedido enviado com sucesso!", ephemeral: true });
