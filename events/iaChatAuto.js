@@ -82,6 +82,86 @@ const channelHistory = new Map();
 
 const lastAiResponses = new Map();
 
+
+// =====================================================
+// ÍNDICE DE SISTEMAS E CLASSIFICAÇÃO DE INTENÇÃO
+// =====================================================
+
+const SC_INTERNAL_SYSTEMS_INDEX = {
+  ausencias: {
+    name: "Sistema de Ausências",
+    files: ["events/ausencias.js", "ausencias_stats.json"],
+    keywords: ["ausencia", "ausências", "ausente", "faltou", "justificativa"]
+  },
+  batePonto: {
+    name: "Bate Ponto (Ponto Eletrônico)",
+    files: ["events/batePonto.js"],
+    keywords: ["bate ponto", "bp", "ponto", "horas", "bater ponto"]
+  },
+  alinhamentos: {
+    name: "Registro de Alinhamentos",
+    files: ["events/alinhamentos.js", "sc_alinv1_dashboard_state.json"],
+    keywords: ["alinhamento", "alinhou", "alinhado"]
+  },
+  gi: {
+    name: "Gestão Influencer (Controle GI)",
+    files: ["events/gestaoinfluencer.js", "sc_gi_registros.json"],
+    keywords: ["gi", "gestao influencer", "controle gi", "influencer"]
+  },
+  ranking: {
+    name: "Ranking Semanal e Dashboard Geral",
+    files: ["events/scGeralWeeklyRanking.js", "events/scGeralDash.js"],
+    keywords: ["ranking", "pontos", "dashboard", "meta semanal", "top 3"]
+  },
+  pagamentos: {
+    name: "Pagamento Social e Financeiro",
+    files: ["events/pagamentosocial.js", "sc_pay_evt_dashboard_state.json"],
+    keywords: ["pagamento", "pago", "social", "vip", "battlepass", "comprovante"]
+  }
+};
+
+function classifyCurrentUserIntent(message) {
+  const text = normalizeSearchText(message.content);
+  
+  // Regex para saudações puras ou curtas
+  const isGreetingOnly = /^(oi|oie|ola|olá|opa|salve|bom dia|boa tarde|boa noite|oii vida|eae|eaí|e ai|tudo bem|tudo bom)$/i.test(String(message.content || "").trim().replace(/[?.!]/g, ""));
+
+  const intent = {
+    isGreetingOnly,
+    wantsAusencias: SC_INTERNAL_SYSTEMS_INDEX.ausencias.keywords.some(k => text.includes(k)),
+    wantsCronograma: messageWantsCronograma(message),
+    wantsAlinhamentos: messageWantsAlinhamentos(message),
+    wantsGI: messageWantsGIStatus(message),
+    wantsRoles: messageWantsRoles(message) || messageWantsDiscordRoles(message),
+    wantsChannels: messageWantsChannels(message),
+    hasSpecificReference: 
+      message.mentions.channels.size > 0 || 
+      message.mentions.roles.size > 0 || 
+      message.mentions.users.size > 0 || 
+      extractDiscordIdsFromText(message.content).length > 0 ||
+      String(message.content || "").includes("discord.com/channels/")
+  };
+
+  console.log(`[IA CHAT AUTO] Intenção atual:`, intent);
+  return intent;
+}
+
+function buildSystemsIndexContext(message) {
+  const text = normalizeSearchText(message.content);
+  const relevant = [];
+
+  for (const key in SC_INTERNAL_SYSTEMS_INDEX) {
+    const sys = SC_INTERNAL_SYSTEMS_INDEX[key];
+    if (sys.keywords.some(k => text.includes(k))) {
+      relevant.push(`- SISTEMA: ${sys.name} (Arquivos: ${sys.files.join(", ")})`);
+    }
+  }
+
+  if (!relevant.length) return "";
+  return `\nÍNDICE INTERNO RELEVANTE PARA A PERGUNTA:\n${relevant.join("\n")}\n`;
+}
+
+
 const guildKnowledgeCache =
   new Map();
 
@@ -1273,60 +1353,44 @@ async function fetchGIStatusContext(message) {
 }
 
 
-async function buildServerIntelligenceContext(message) {
+async function buildServerIntelligenceContext(message, intent) {
   const blocks = [];
-  const text = normalizeSearchText(message.content);
 
-  // 0. Consultas internas fixas da SantaCreators
-  if (messageWantsAlinhamentos(message)) {
-    console.log("[IA CHAT AUTO] Intenção detectada: Consulta de Alinhamentos.");
+  if (intent.isGreetingOnly) {
+    console.log("[IA CHAT AUTO] Consulta interna bloqueada: apenas saudação.");
+    return "O usuário apenas saudou. Responda amigavelmente sem dados técnicos.";
+  }
+
+  if (intent.wantsAlinhamentos) {
+    console.log("[IA CHAT AUTO] Consulta interna liberada: Alinhamentos.");
     blocks.push(await fetchAlinhamentosContext(message));
   }
 
-  if (messageWantsGIStatus(message)) {
-    console.log("[IA CHAT AUTO] Intenção detectada: Consulta de Controle GI.");
+  if (intent.wantsGI) {
+    console.log("[IA CHAT AUTO] Consulta interna liberada: Controle GI.");
     blocks.push(await fetchGIStatusContext(message));
   }
 
-  // 1. Prioridade: Canais mencionados/Links
-  const hasChannelReference =
-    message.mentions.channels.size > 0 ||
-    extractDiscordIdsFromText(message.content).length > 0 ||
-    text.includes("channels/");
-
-  if (hasChannelReference) {
-    console.log("[IA CHAT AUTO] Detectada menção/link de canal. Buscando conteúdo...");
-    blocks.push(await fetchMentionedChannelsContext(message));
-  }
-
-  // 2. Cronograma
-  if (messageWantsCronograma(message)) {
-    console.log("[IA CHAT AUTO] Intenção detectada: Cronograma.");
+  if (intent.wantsCronograma) {
+    console.log("[IA CHAT AUTO] Consulta interna liberada: Cronograma.");
     blocks.push(await fetchCronogramaContext(message));
   }
 
-  // 3. Hierarquia RP
-  if (messageWantsRoles(message)) {
-    console.log("[IA CHAT AUTO] Intenção detectada: Hierarquia RP.");
-    blocks.push(await fetchHierarquiaContext(message));
-  }
-
-  // 4. Cargos do Discord (Técnico)
-  if (messageWantsDiscordRoles(message)) {
-    console.log("[IA CHAT AUTO] Intenção detectada: Cargos do Discord.");
+  if (intent.wantsRoles || intent.hasSpecificReference) {
+    console.log("[IA CHAT AUTO] Consulta interna liberada: Cargos/Referências.");
     blocks.push(buildRolesHierarchyContext(message));
   }
 
-  if (messageWantsChannels(message)) {
-    console.log("[IA CHAT AUTO] Intenção detectada: Listagem de Canais.");
+  if (intent.wantsChannels || intent.hasSpecificReference) {
+    console.log("[IA CHAT AUTO] Consulta interna liberada: Canais.");
     blocks.push(buildChannelsContext(message));
+    blocks.push(await fetchMentionedChannelsContext(message));
   }
 
-  if (!blocks.length) return "Nenhuma busca externa adicional foi necessária.";
+  if (!blocks.length) return "Nenhum sistema específico foi solicitado na pergunta atual.";
 
   return blocks.join("\n\n====================\n\n");
 }
-
 
 // =====================================================
 // LEITURA PROFISSIONAL DISCORD
@@ -1588,68 +1652,36 @@ function buildPrompt({
   serverIntelligence,
   guildKnowledge,
   memoryLogs,
+  systemsIndex,
 }) {
   return `
 ${SANTACREATORS_CONTEXT}
 
-HISTÓRICO:
+REGRAS DE PRIORIDADE (OURO):
+1. A MENSAGEM ATUAL DO USUÁRIO TEM PRIORIDADE MÁXIMA.
+2. Se a mensagem atual for uma saudação simples ("oi", "olá", etc), APENAS SAUDE de volta de forma humana e pergunte como pode ajudar. NÃO use dados de histórico para responder algo que não foi perguntado agora.
+3. Histórico e Memória de Logs servem APENAS para contexto de continuidade, NUNCA para definir o assunto da resposta se o usuário mudou de assunto.
+4. Se você NÃO encontrar um dado real solicitado nas "INFORMAÇÕES REAIS" fornecidas abaixo, diga exatamente: "Não encontrei registro real disso nas informações que consegui consultar agora."
+5. PROIBIDO dizer: "vou olhar", "vou ver", "já volto", "um minuto", "deixa eu verificar". Se não está no prompt, você não tem acesso.
+
+${systemsIndex}
+
+HISTÓRICO RECENTE DO CANAL (Apenas contexto):
 ${history}
 
-CONTEXTO DISCORD:
+MEMÓRIA DE CONVERSAS ANTERIORES (Apenas contexto):
+${memoryLogs}
+
+CONTEXTO TÉCNICO DA MENSAGEM ATUAL:
 ${discordContext}
+
+INFORMAÇÕES REAIS BUSCADAS NO SERVIDOR (Fonte da Verdade):
+${serverIntelligence}
 
 CONHECIMENTO GERAL DO SERVIDOR:
 ${guildKnowledge}
 
-MEMÓRIA REGISTRADA EM CANAL DE LOG:
-${memoryLogs}
-
-INFORMAÇÕES REAIS BUSCADAS NO SERVIDOR:
-${serverIntelligence}
-
-REGRAS OBRIGATÓRIAS:
-1. Se você recebeu dados reais no prompt (como cronograma ou histórico), use-os IMEDIATAMENTE.
-2. NUNCA diga "vou olhar", "vou ver", "deixa eu ver", "deixa eu dar uma olhada", "vou verificar", "já volto", "aguenta aí", "pera aí" ou "só um minuto". Você precisa responder com o que já tem no prompt. Se não tiver dados suficientes, diga claramente que não encontrou.
-3. Se o usuário marcou um canal, foque no conteúdo lido desse canal, não no canal atual.
-4. Use sempre menções no formato <#ID> para canais e <@&ID> para cargos.
-5. Não invente regras, cargos ou eventos. Se não encontrou no servidor, diga que não encontrou.
-6. Se perguntarem algo administrativo sensível (permissões, cargos altos, bans), oriente a chamar um Responsável.
-7. Se receber "CONSULTA INTERNA — ALINHAMENTOS", responda com base nos registros encontrados: quem foi alinhado, quem alinhou, sobre o quê, status, data e link.
-8. Se receber "CONSULTA INTERNA — CONTROLE GI", responda com base nos registros ativos/pausados, responsável, área, datas e observações.
-9. Nunca diga que "aprendeu" sem dados reais. Diga que encontrou ou não encontrou nas consultas internas.
-
-COMPORTAMENTO:
-Responda de forma natural, informal e útil (vibe de Discord/RP). Seja conciso.
-
-REGRAS IMPORTANTES PARA RESPOSTA:
-- Se o usuário pedir cronograma e ele estiver nas informações reais, entregue o cronograma diretamente.
-- Se o usuário mandar um canal, ID de canal ou link de canal, use o conteúdo real lido desse canal.
-- Nunca confunda o canal atual com o canal mencionado.
-- Nunca diga "vou olhar", "já volto", "só um minuto" ou "vou verificar" se você já recebeu as informações no prompt.
-- Se não encontrar algo, diga claramente que não encontrou.
-- Quando citar canal, use o formato <#ID>.
-- Quando citar cargo, use o formato <@&ID>.
-- Não invente cargo, canal, evento ou hierarquia.
-- Se a hierarquia pedida for de RP/CDD e existir um canal lido sobre isso, use o conteúdo do canal, não a hierarquia de cargos do Discord.
-- Entenda menções.
-- Entenda IDs.
-- Entenda replies.
-- Entenda cargos.
-- Entenda links.
-- Entenda canais.
-- Entenda contexto social.
-- Responda como alguém da SantaCreators.
-- Entenda gírias comuns do Discord e RP/FiveM.
-- Se o usuário disser "oi", responda de forma natural, curta e simpática.
-- Se o usuário disser "como assim", explique melhor sem agir como se tivesse perdido o contexto.
-- Se o usuário marcar alguém, entenda que ele está falando sobre aquela pessoa.
-- Se a pergunta for simples, responda simples.
-- Se a pergunta for complexa, organize a resposta.
-- Não repita a mesma resposta anterior.
-- Se o usuário só estiver testando, diga apenas que está funcionando e peça um teste real.
-- Não responda toda mensagem como se fosse apresentação inicial.
-- Não fique perguntando "em que posso ajudar" toda hora se o usuário já explicou o contexto.
-Agora responda naturalmente:
+Responda agora de forma natural:
 `;
 }
 
@@ -1723,11 +1755,16 @@ const guildKnowledge =
   const discordContext =
     await buildDiscordContext(message);
 
-  const serverIntelligence =
-    await buildServerIntelligenceContext(message);
+  const intent = classifyCurrentUserIntent(message);
+  const serverIntelligence = await buildServerIntelligenceContext(message, intent);
+  const systemsIndex = buildSystemsIndexContext(message);
 
-const memoryLogs =
-  await fetchRecentMemoryLogs(client);
+  let memoryLogs = "Memória ignorada para focar na saudação.";
+  if (!intent.isGreetingOnly) {
+    memoryLogs = await fetchRecentMemoryLogs(client);
+  } else {
+    console.log("[IA CHAT AUTO] Saudação simples detectada, ignorando memória antiga.");
+  }
 
 const prompt =
     buildPrompt({
@@ -1736,6 +1773,7 @@ const prompt =
       serverIntelligence,
       guildKnowledge,
       memoryLogs,
+      systemsIndex,
     });
 
 let lastError = null;
@@ -1918,15 +1956,16 @@ rememberAiResponse(message.channelId, finalText);
         // RESPOSTA
         // =====================================================
 
-                await sendTemporaryReply(message, {
-  content: finalText,
-  allowedMentions: {
-    repliedUser: true,
-    parse: [],
-    users: [],
-    roles: [],
-  },
-});
+
+        // Resposta com menções limitadas para segurança
+        await sendTemporaryReply(message, {
+          content: finalText,
+          allowedMentions: {
+            repliedUser: true,
+            // Permite mencionar apenas o autor da reply e IDs explicitamente trazidos no texto
+            parse: ['users', 'roles'] 
+          },
+        });
 
 await sendConversationMemoryLog(client, message, finalText);
 
