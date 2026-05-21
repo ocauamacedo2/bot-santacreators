@@ -48,6 +48,87 @@ const AI_GI_DATA_FILE = path.resolve(process.cwd(), "data", "sc_gi_registros.jso
 
 const AI_INTERNAL_SCAN_LIMIT = 80;
 
+// =====================================================
+// [IA SMART PARSER] UTILITÁRIOS DE DATA E EMBEDS
+// =====================================================
+
+function parseDiscordTimestamp(text) {
+  const match = String(text || "").match(/<t:(\d+):[tTDFdRf]>/);
+  return match ? parseInt(match[1], 10) * 1000 : null;
+}
+
+function getRelativeTimeScope(text) {
+  const norm = normalizeSearchText(text);
+  const now = new Date();
+
+  if (norm.includes("hoje") || norm.includes("agora")) return "today";
+  if (norm.includes("ontem")) return "yesterday";
+  if (norm.includes("semana")) return "week";
+  if (norm.includes("mes") || norm.includes("mês")) return "month";
+
+  return "recent";
+}
+
+function isDateInScope(timestamp, scope) {
+  const date = new Date(timestamp);
+  const now = new Date();
+
+  if (Number.isNaN(date.getTime())) return false;
+
+  if (scope === "today") {
+    return date.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" }) ===
+      now.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
+  }
+
+  if (scope === "yesterday") {
+    const yesterday = new Date();
+    yesterday.setDate(now.getDate() - 1);
+
+    return date.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" }) ===
+      yesterday.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
+  }
+
+  if (scope === "week") {
+    const startOfWeek = new Date(now);
+    startOfWeek.setDate(now.getDate() - now.getDay());
+    startOfWeek.setHours(0, 0, 0, 0);
+
+    return date >= startOfWeek;
+  }
+
+  if (scope === "month") {
+    return date.getMonth() === now.getMonth() &&
+      date.getFullYear() === now.getFullYear();
+  }
+
+  return true;
+}
+
+function parseEmbedToFact(msg, emb) {
+  const fields = (emb.fields || emb.data?.fields || [])
+    .map((field) => `${field.name}: ${field.value}`)
+    .join(" | ");
+
+  const footer = emb.footer?.text || emb.data?.footer?.text || "";
+  const title = emb.title || emb.data?.title || "";
+  const description = emb.description || emb.data?.description || "";
+  const discordTs = parseDiscordTimestamp(`${title} ${description} ${fields} ${footer}`);
+
+  const timestamp =
+    discordTs ||
+    emb.timestamp ||
+    emb.data?.timestamp ||
+    msg.createdTimestamp ||
+    Date.now();
+
+  return {
+    fact: `[REGISTRO] ${title} | ${description} | ${fields} | Footer: ${footer}`,
+    timestamp: new Date(timestamp).getTime(),
+    author: msg.author?.username || "desconhecido",
+    link: `https://discord.com/channels/${msg.guildId}/${msg.channelId}/${msg.id}`,
+  };
+}
+
 const AI_ALLOWED_CHANNEL_IDS = new Set([
   AI_CHANNEL_ID,
   AI_REPLY_ONLY_CHANNEL_ID,
@@ -1353,12 +1434,358 @@ async function fetchGIStatusContext(message) {
 }
 
 
+// =====================================================
+// [IA INTERNAL QUERY] FETCHERS MODULARES
+// =====================================================
+
+async function fetchPoderesContext(message, scope) {
+  console.log(`[IA INTERNAL QUERY] Buscando Poderes Utilizados... Scope: ${scope}`);
+
+  const guild = message.guild;
+  const channel = await guild.channels.fetch("1374066813171929218").catch(() => null);
+
+  if (!channel?.isTextBased?.()) {
+    return "Sistema de Poderes: canal não encontrado ou sem acesso.";
+  }
+
+  const messages = await channel.messages.fetch({ limit: AI_INTERNAL_SCAN_LIMIT }).catch(() => null);
+
+  if (!messages?.size) {
+    return "Sistema de Poderes: nenhum registro recente encontrado.";
+  }
+
+  const facts = [];
+
+  for (const msg of messages.values()) {
+    const emb = msg.embeds?.[0];
+    if (!emb) continue;
+
+    const text = normalizeSearchText(formatEmbedForAI(emb.data || emb));
+
+    const isPoder =
+      text.includes("poderes utilizados") ||
+      text.includes("registro de poderes") ||
+      text.includes("setou poder") ||
+      text.includes("uso de poder");
+
+    if (!isPoder) continue;
+
+    const data = parseEmbedToFact(msg, emb);
+
+    if (isDateInScope(data.timestamp, scope)) {
+      facts.push(`- ${data.fact}\nLink: ${data.link}`);
+    }
+  }
+
+  return facts.length
+    ? `CONSULTA INTERNA — PODERES UTILIZADOS\nRegistros encontrados: ${facts.length}\n\n${facts.slice(0, 20).join("\n\n")}`
+    : "Nenhum registro de poderes encontrado para este período.";
+}
+
+async function fetchPoderesEventosContext(message, scope) {
+  console.log(`[IA INTERNAL QUERY] Buscando Poderes em Eventos... Scope: ${scope}`);
+
+  const guild = message.guild;
+  const channel = await guild.channels.fetch("1392618646630568076").catch(() => null);
+
+  if (!channel?.isTextBased?.()) {
+    return "Sistema de Poderes em Eventos: canal não encontrado ou sem acesso.";
+  }
+
+  const messages = await channel.messages.fetch({ limit: AI_INTERNAL_SCAN_LIMIT }).catch(() => null);
+
+  if (!messages?.size) {
+    return "Sistema de Poderes em Eventos: nenhum registro recente encontrado.";
+  }
+
+  const facts = [];
+
+  for (const msg of messages.values()) {
+    const emb = msg.embeds?.[0];
+    if (!emb) continue;
+
+    const text = normalizeSearchText(formatEmbedForAI(emb.data || emb));
+
+    const isPoderEvento =
+      text.includes("poder") &&
+      (
+        text.includes("evento") ||
+        text.includes("social") ||
+        text.includes("registrado por") ||
+        text.includes("registro de evento")
+      );
+
+    if (!isPoderEvento) continue;
+
+    const data = parseEmbedToFact(msg, emb);
+
+    if (isDateInScope(data.timestamp, scope)) {
+      facts.push(`- ${data.fact}\nLink: ${data.link}`);
+    }
+  }
+
+  return facts.length
+    ? `CONSULTA INTERNA — PODERES EM EVENTOS\nRegistros encontrados: ${facts.length}\n\n${facts.slice(0, 20).join("\n\n")}`
+    : "Nenhum registro de poderes em eventos encontrado para este período.";
+}
+
+async function fetchRankingContext(message) {
+  console.log("[IA INTERNAL QUERY] Consultando Ranking Semanal...");
+
+  try {
+    const { getWeeklyRankingDebug } = await import("./scGeralWeeklyRanking.js");
+
+    const rankData = await getWeeklyRankingDebug(message.client);
+
+    if (!rankData || !Array.isArray(rankData.top15) || !rankData.top15.length) {
+      return "O ranking semanal ainda não possui dados processados ou o export getWeeklyRankingDebug não retornou top15.";
+    }
+
+    const lines = rankData.top15.map((user, index) => {
+      return `${index + 1}º. <@${user.userId}>: ${user.points} pts`;
+    });
+
+    return [
+      "CONSULTA INTERNA — RANKING SEMANAL",
+      lines.join("\n"),
+      `Total de eventos registrados: ${rankData.totalItems || 0}`,
+    ].join("\n");
+  } catch (err) {
+    console.error("[IA INTERNAL QUERY] Erro ranking:", err);
+    return "Erro ao acessar o módulo de ranking. Verifique se scGeralWeeklyRanking.js exporta getWeeklyRankingDebug.";
+  }
+}
+
+async function fetchBatePontoContext(message, scope) {
+  console.log("[IA INTERNAL QUERY] Lendo Bate Ponto...");
+
+  const now = new Date();
+  const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const filePath = path.resolve(process.cwd(), "data", "sc_bp_monthly", `${monthKey}.json`);
+
+  if (!fs.existsSync(filePath)) {
+    return "Não encontrei arquivo de bate ponto para o mês atual.";
+  }
+
+  try {
+    const data = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    const results = [];
+
+    const targetDateKey =
+      scope === "today"
+        ? now.toISOString().slice(0, 10)
+        : null;
+
+    for (const [dayKey, entries] of Object.entries(data.days || {})) {
+      if (targetDateKey && dayKey !== targetDateKey) continue;
+      if (!Array.isArray(entries)) continue;
+
+      for (const entry of entries) {
+        results.push(`- <@${entry.uid || entry.userId}> (${entry.name || "sem nome"}) bateu ponto às ${entry.time || "horário não informado"} no time ${entry.team || "não informado"}`);
+      }
+    }
+
+    return results.length
+      ? `CONSULTA INTERNA — BATE PONTO\n${results.slice(-20).join("\n")}`
+      : "Sem pontos batidos neste período.";
+  } catch (err) {
+    console.error("[IA INTERNAL QUERY] Erro BP:", err);
+    return "Erro ao ler arquivo de bate ponto.";
+  }
+}
+
+async function fetchAusenciasContext(message) {
+  const filePath = path.resolve(process.cwd(), "ausencias_stats.json");
+
+  if (!fs.existsSync(filePath)) {
+    return "Sem estatísticas de ausência encontradas.";
+  }
+
+  try {
+    const data = JSON.parse(fs.readFileSync(filePath, "utf8"));
+
+    const sorted = Object.entries(data.byUser || {})
+      .sort((a, b) => Number(b[1]) - Number(a[1]))
+      .slice(0, 10);
+
+    if (!sorted.length) {
+      return "Nenhuma ausência encontrada nas estatísticas.";
+    }
+
+    const lines = sorted.map(([id, count]) => `- <@${id}>: ${count} ausência(s) registrada(s).`);
+
+    return `CONSULTA INTERNA — AUSÊNCIAS\n${lines.join("\n")}`;
+  } catch (err) {
+    console.error("[IA INTERNAL QUERY] Erro ausências:", err);
+    return "Erro ao ler estatísticas de ausência.";
+  }
+}
+
+async function fetchVendasContext(message) {
+  const filePath = path.resolve(process.cwd(), "data", "vendas_state.json");
+
+  if (!fs.existsSync(filePath)) {
+    return "Sem registros de vendas encontrados.";
+  }
+
+  try {
+    const data = JSON.parse(fs.readFileSync(filePath, "utf8"));
+
+    const sorted = Object.entries(data.sales || {})
+      .sort((a, b) => Number(b[1]?.total || 0) - Number(a[1]?.total || 0))
+      .slice(0, 10);
+
+    if (!sorted.length) {
+      return "Nenhuma venda encontrada.";
+    }
+
+    const lines = sorted.map(([id, value]) => {
+      return `- <@${id}>: $${Number(value?.total || 0).toLocaleString("pt-BR")} em vendas.`;
+    });
+
+    return `CONSULTA INTERNA — VENDAS\n${lines.join("\n")}`;
+  } catch (err) {
+    console.error("[IA INTERNAL QUERY] Erro vendas:", err);
+    return "Erro ao ler registros de vendas.";
+  }
+}
+
+async function fetchPagamentosContext(message, scope) {
+  const guild = message.guild;
+  const channel = await guild.channels.fetch("1387922662134775818").catch(() => null);
+
+  if (!channel?.isTextBased?.()) {
+    return "Canal de pagamentos não acessível.";
+  }
+
+  const messages = await channel.messages.fetch({ limit: AI_INTERNAL_SCAN_LIMIT }).catch(() => null);
+
+  if (!messages?.size) {
+    return "Nenhum pagamento recente encontrado.";
+  }
+
+  const facts = [];
+
+  for (const msg of messages.values()) {
+    const emb = msg.embeds?.[0];
+    if (!emb) continue;
+
+    const text = normalizeSearchText(formatEmbedForAI(emb.data || emb));
+
+    const isPagamento =
+      text.includes("pagamento") ||
+      text.includes("comprovante") ||
+      text.includes("pago") ||
+      text.includes("solicitado");
+
+    if (!isPagamento) continue;
+
+    const data = parseEmbedToFact(msg, emb);
+
+    if (isDateInScope(data.timestamp, scope)) {
+      facts.push(`- ${data.fact}\nLink: ${data.link}`);
+    }
+  }
+
+  return facts.length
+    ? `CONSULTA INTERNA — PAGAMENTOS\nRegistros encontrados: ${facts.length}\n\n${facts.slice(0, 20).join("\n\n")}`
+    : "Nenhum pagamento encontrado no período.";
+}
+// =====================================================
+// [IA QUERY ROUTER] ÍNDICE REAL DE SISTEMAS INTERNOS
+// =====================================================
+
+const SC_QUERY_SYSTEMS = {
+  poderes: {
+    keywords: ["poder", "poderes", "god", "nc", "tptome", "setou poder", "uso de poder"],
+    handler: fetchPoderesContext,
+  },
+  poderesEventos: {
+    keywords: ["poder evento", "poder em evento", "poderes eventos", "registro de evento", "social media", "poderes em evento"],
+    handler: fetchPoderesEventosContext,
+  },
+  batePonto: {
+    keywords: ["ponto", "bate ponto", "bp", "horas", "quem bateu", "trabalhou"],
+    handler: fetchBatePontoContext,
+  },
+  alinhamentos: {
+    keywords: ["alinhamento", "alinhou", "foi alinhado", "alinv1"],
+    handler: fetchAlinhamentosContext,
+  },
+  gi: {
+    keywords: ["gi", "gestao influencer", "controle gi", "ativo", "pausado", "desligado"],
+    handler: fetchGIStatusContext,
+  },
+  ranking: {
+    keywords: ["ranking", "top", "pontos", "pontuou", "quem mais", "semanal"],
+    handler: fetchRankingContext,
+  },
+  pagamentos: {
+    keywords: ["pagamento", "financeiro", "comprovante", "pago", "solicitado"],
+    handler: fetchPagamentosContext,
+  },
+  ausencias: {
+    keywords: ["ausencia", "ausências", "falta", "folga", "faltou", "justificativa"],
+    handler: fetchAusenciasContext,
+  },
+  vendas: {
+    keywords: ["venda", "vendeu", "ranking vendas", "valor depositado"],
+    handler: fetchVendasContext,
+  },
+};
+
+async function runSmartInternalQueryRouter(message) {
+  const text = normalizeSearchText(message.content);
+  const scope = getRelativeTimeScope(message.content);
+  const results = [];
+
+  console.log(`[IA QUERY ROUTER] Analisando pergunta: ${message.content}`);
+  console.log(`[IA QUERY ROUTER] Escopo temporal detectado: ${scope}`);
+
+  for (const [key, system] of Object.entries(SC_QUERY_SYSTEMS)) {
+    const matched = system.keywords.some((keyword) => {
+      return text.includes(normalizeSearchText(keyword));
+    });
+
+    if (!matched) continue;
+
+    console.log(`[IA QUERY MATCH] Sistema detectado: ${key}`);
+
+    try {
+      const result = await system.handler(message, scope);
+
+      if (result) {
+        results.push(`SISTEMA: ${key}\n${result}`);
+      }
+    } catch (err) {
+      console.error(`[IA SYSTEM RESULT] Erro no sistema ${key}:`, err);
+      results.push(`SISTEMA: ${key}\nErro ao consultar este sistema.`);
+    }
+  }
+
+  if (!results.length) {
+    return "";
+  }
+
+  return [
+    "CONSULTAS INTERNAS INTELIGENTES:",
+    results.join("\n\n====================\n\n"),
+  ].join("\n\n");
+}
+
 async function buildServerIntelligenceContext(message, intent) {
   const blocks = [];
 
   if (intent.isGreetingOnly) {
     console.log("[IA CHAT AUTO] Consulta interna bloqueada: apenas saudação.");
     return "O usuário apenas saudou. Responda amigavelmente sem dados técnicos.";
+  }
+
+  const smartRouterResult = await runSmartInternalQueryRouter(message);
+
+  if (smartRouterResult) {
+    console.log("[IA FACTUAL MODE] Resultado factual encontrado pelo router interno.");
+    blocks.push(smartRouterResult);
   }
 
   if (intent.wantsAlinhamentos) {
@@ -1657,31 +2084,39 @@ function buildPrompt({
   return `
 ${SANTACREATORS_CONTEXT}
 
+[IA FACTUAL MODE]
+Você está operando como a IA Administrativa da SantaCreators.
+Sua prioridade é a PRECISÃO DOS FATOS baseada na seção "INFORMAÇÕES REAIS" abaixo.
+
 REGRAS DE PRIORIDADE (OURO):
 1. A MENSAGEM ATUAL DO USUÁRIO TEM PRIORIDADE MÁXIMA.
 2. Se a mensagem atual for uma saudação simples ("oi", "olá", etc), APENAS SAUDE de volta de forma humana e pergunte como pode ajudar. NÃO use dados de histórico para responder algo que não foi perguntado agora.
 3. Histórico e Memória de Logs servem APENAS para contexto de continuidade, NUNCA para definir o assunto da resposta se o usuário mudou de assunto.
-4. Se você NÃO encontrar um dado real solicitado nas "INFORMAÇÕES REAIS" fornecidas abaixo, diga exatamente: "Não encontrei registro real disso nas informações que consegui consultar agora."
-5. PROIBIDO dizer: "vou olhar", "vou ver", "já volto", "um minuto", "deixa eu verificar". Se não está no prompt, você não tem acesso.
+4. Se a pergunta for técnica/administrativa (quem, quando, teve, quanto), use APENAS os dados da seção "INFORMAÇÕES REAIS".
+5. Se os dados reais dizem "Nenhum registro encontrado", responda exatamente isso. NÃO imagine que o evento aconteceu se ele não está no log.
+6. Não use o histórico de conversas antigas para confirmar fatos de hoje. O fato deve estar na seção "INFORMAÇÕES REAIS".
+7. Ao citar usuários que bateram ponto ou registraram algo, prefira usar a menção <@ID> se disponível.
+8. Se você encontrar dados divergentes, a prioridade é: 1º JSON, 2º Mensagens do Canal, 3º Conhecimento Geral.
+9. PROIBIDO dizer: "vou olhar", "vou ver", "já volto", "um minuto", "deixa eu verificar". Se não está no prompt, você não tem acesso.
 
 ${systemsIndex}
 
-HISTÓRICO RECENTE DO CANAL (Apenas contexto):
+### HISTÓRICO RECENTE DO CANAL:
 ${history}
 
-MEMÓRIA DE CONVERSAS ANTERIORES (Apenas contexto):
+### MEMÓRIA DE CONVERSAS ANTERIORES:
 ${memoryLogs}
 
-CONTEXTO TÉCNICO DA MENSAGEM ATUAL:
+### CONTEXTO TÉCNICO DA MENSAGEM ATUAL:
 ${discordContext}
 
-INFORMAÇÕES REAIS BUSCADAS NO SERVIDOR (Fonte da Verdade):
+### INFORMAÇÕES REAIS BUSCADAS NO SERVIDOR:
 ${serverIntelligence}
 
-CONHECIMENTO GERAL DO SERVIDOR:
+### CONHECIMENTO GERAL DO SERVIDOR:
 ${guildKnowledge}
 
-Responda agora de forma natural:
+Responda agora de forma natural, direta e baseada nos dados reais acima:
 `;
 }
 
