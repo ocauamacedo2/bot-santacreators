@@ -137,14 +137,17 @@ const AI_ALLOWED_CHANNEL_IDS = new Set([
 const AI_REPLY_TTL_MS = 2 * 60 * 1000;
 
 const GEMINI_MODEL =
-  process.env.GEMINI_MODEL ||
+  String(process.env.GEMINI_MODEL || "").trim() ||
   "gemini-2.5-flash-lite";
 
 const GEMINI_MODEL_FALLBACKS = [
   GEMINI_MODEL,
+  "gemini-2.5-flash-lite",
   "gemini-2.5-flash",
   "gemini-2.0-flash",
-];
+].filter((model, index, arr) => {
+  return model && arr.indexOf(model) === index;
+});
 
 const GEMINI_API_KEY =
   process.env.GEMINI_API_KEY || "";
@@ -2120,6 +2123,23 @@ Responda agora de forma natural, direta e baseada nos dados reais acima:
 `;
 }
 
+function buildPrompt({
+  discordContext,
+  history,
+  serverIntelligence,
+  guildKnowledge,
+  memoryLogs,
+  systemsIndex,
+}) {
+  return `
+${SANTACREATORS_CONTEXT}
+
+[IA FACTUAL MODE]
+...
+Responda agora de forma natural, direta e baseada nos dados reais acima:
+`;
+}
+
 // =====================================================
 // ERROS
 // =====================================================
@@ -2193,6 +2213,13 @@ const guildKnowledge =
   const intent = classifyCurrentUserIntent(message);
   const serverIntelligence = await buildServerIntelligenceContext(message, intent);
   const systemsIndex = buildSystemsIndexContext(message);
+
+  const directInternalAnswer =
+    buildDirectInternalQueryAnswer(message, serverIntelligence);
+
+  if (directInternalAnswer) {
+    return directInternalAnswer;
+  }
 
   let memoryLogs = "Memória ignorada para focar na saudação.";
   if (!intent.isGreetingOnly) {
