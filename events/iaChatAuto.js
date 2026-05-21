@@ -1560,37 +1560,47 @@ async function fetchRankingContext(message) {
 }
 
 async function fetchBatePontoContext(message, scope) {
-  console.log("[IA INTERNAL QUERY] Lendo Bate Ponto...");
+  console.log(`[IA DATA SOURCE] Consultando Bate Ponto. Escopo: ${scope}`);
 
   const now = new Date();
   const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-  const filePath = path.resolve(process.cwd(), "data", "sc_bp_monthly", `${monthKey}.json`);
 
-  if (!fs.existsSync(filePath)) {
-    return "Não encontrei arquivo de bate ponto para o mês atual.";
+  const possiblePaths = [
+    path.resolve(process.cwd(), "data", "sc_bp_monthly", `${monthKey}.json`),
+    path.resolve(process.cwd(), "sc_bp_monthly", `${monthKey}.json`),
+  ];
+
+  const filePath = possiblePaths.find((p) => fs.existsSync(p));
+
+  if (!filePath) {
+    return "Nenhum registro de bate ponto encontrado para o mês atual nos arquivos consultados.";
   }
 
   try {
     const data = JSON.parse(fs.readFileSync(filePath, "utf8"));
     const results = [];
 
-    const targetDateKey =
-      scope === "today"
-        ? now.toISOString().slice(0, 10)
-        : null;
+    const todayKey = now.toLocaleDateString("en-CA", {
+      timeZone: "America/Sao_Paulo",
+    });
 
     for (const [dayKey, entries] of Object.entries(data.days || {})) {
-      if (targetDateKey && dayKey !== targetDateKey) continue;
+      if (scope === "today" && dayKey !== todayKey) continue;
       if (!Array.isArray(entries)) continue;
 
       for (const entry of entries) {
-        results.push(`- <@${entry.uid || entry.userId}> (${entry.name || "sem nome"}) bateu ponto às ${entry.time || "horário não informado"} no time ${entry.team || "não informado"}`);
+        const userId = entry.uid || entry.userId || entry.id || "ID não informado";
+        const name = entry.name || entry.username || "sem nome";
+        const time = entry.time || entry.hora || "horário não informado";
+        const team = entry.team || entry.equipe || "não informado";
+
+        results.push(`- <@${userId}> (${name}) bateu ponto às ${time} no time ${team}`);
       }
     }
 
     return results.length
-      ? `CONSULTA INTERNA — BATE PONTO\n${results.slice(-20).join("\n")}`
-      : "Sem pontos batidos neste período.";
+      ? `CONSULTA INTERNA — BATE PONTO\nRegistros encontrados: ${results.length}\n\n${results.slice(-20).join("\n")}\n\nFonte: ${filePath}`
+      : "Nenhum registro de bate ponto encontrado hoje nos dados internos consultados.";
   } catch (err) {
     console.error("[IA INTERNAL QUERY] Erro BP:", err);
     return "Erro ao ler arquivo de bate ponto.";
@@ -1747,7 +1757,13 @@ async function runSmartInternalQueryRouter(message) {
 
   for (const [key, system] of Object.entries(SC_QUERY_SYSTEMS)) {
     const matched = system.keywords.some((keyword) => {
-      return text.includes(normalizeSearchText(keyword));
+      const normalizedKeyword = normalizeSearchText(keyword);
+
+      if (normalizedKeyword.length <= 3) {
+        return new RegExp(`\\b${normalizedKeyword}\\b`, "i").test(text);
+      }
+
+      return text.includes(normalizedKeyword);
     });
 
     if (!matched) continue;
@@ -1775,7 +1791,6 @@ async function runSmartInternalQueryRouter(message) {
     results.join("\n\n====================\n\n"),
   ].join("\n\n");
 }
-
 async function buildServerIntelligenceContext(message, intent) {
   const blocks = [];
 
@@ -2131,95 +2146,51 @@ function buildDirectInternalQueryAnswer(message, serverIntelligence) {
   const question = normalizeSearchText(message.content);
   const context = String(serverIntelligence || "");
 
-  const isInternalQuestion =
-    context.includes("CONSULTAS INTERNAS INTELIGENTES:") ||
-    context.includes("CONSULTA INTERNA");
-
-  if (!isInternalQuestion) {
+  if (!context || context.includes("Nenhum sistema específico foi solicitado")) {
     return null;
   }
 
-  const isQuestionAskingRecords =
-    question.includes("registrou") ||
-    question.includes("registro") ||
-    question.includes("teve") ||
-    question.includes("tem") ||
-    question.includes("alguem") ||
-    question.includes("alguém") ||
-    question.includes("quem") ||
-    question.includes("hoje") ||
-    question.includes("ontem") ||
-    question.includes("semana");
+  if (
+    question.includes("bate ponto") ||
+    question.includes("bp") ||
+    question.includes("ponto")
+  ) {
+    if (context.includes("Registros encontrados:")) {
+      return context;
+    }
 
-  if (!isQuestionAskingRecords) {
-    return null;
-  }
-
-  const noResultPhrases = [
-    "Nenhum registro de poderes em eventos encontrado para este período.",
-    "Nenhum registro de poderes encontrado para este período.",
-    "Sem pontos batidos neste período.",
-    "Nenhum pagamento encontrado no período.",
-    "Nenhuma ausência encontrada nas estatísticas.",
-    "Nenhuma venda encontrada.",
-    "nenhum registro compatível com a pergunta foi encontrado",
-  ];
-
-  const matchedNoResult = noResultPhrases.find((phrase) => {
-    return context.toLowerCase().includes(phrase.toLowerCase());
-  });
-
-  if (matchedNoResult) {
     if (
-      question.includes("poderes eventos") ||
-      question.includes("poder evento") ||
-      question.includes("poder em evento") ||
-      question.includes("poderes em evento")
+      context.includes("Nenhum registro de bate ponto") ||
+      context.includes("Sem pontos batidos")
     ) {
-      return "Não, Macedo. Pelo que consultei nos registros internos, não encontrei nenhum registro de poderes em eventos nesse período.";
+      return "Não encontrei nenhum registro de bate ponto hoje nos dados internos consultados.";
     }
-
-    if (question.includes("poder")) {
-      return "Não, Macedo. Pelo que consultei nos registros internos, não encontrei nenhum registro de poderes nesse período.";
-    }
-
-    return "Não encontrei registro compatível com essa pergunta nos dados internos consultados.";
   }
 
-  const registrosMatch = context.match(/Registros encontrados:\s*(\d+)/i);
-
-  if (registrosMatch) {
-    const total = Number(registrosMatch[1] || 0);
-
-    const linhas = context
-      .split("\n")
-      .filter((line) => {
-        const clean = line.trim();
-
-        return (
-          clean.startsWith("- [REGISTRO]") ||
-          clean.startsWith("Link:")
-        );
-      })
-      .slice(0, 12);
-
-    if (total > 0 && linhas.length > 0) {
-      return [
-        `Sim, Macedo. Encontrei ${total} registro(s) compatível(is) com sua pergunta.`,
-        "",
-        linhas.join("\n"),
-      ].join("\n");
+  if (
+    question.includes("poderes eventos") ||
+    question.includes("poder evento") ||
+    question.includes("poder em evento") ||
+    question.includes("poderes em evento")
+  ) {
+    if (context.includes("Registros encontrados:")) {
+      return context;
     }
 
-    if (total > 0) {
-      return `Sim, Macedo. Encontrei ${total} registro(s) compatível(is) com sua pergunta nos dados internos.`;
+    if (context.includes("Nenhum registro de poderes em eventos")) {
+      return "Não encontrei nenhum registro de poderes em eventos hoje nos dados internos consultados.";
     }
+  }
+
+  if (
+    context.includes("CONSULTAS INTERNAS INTELIGENTES:") &&
+    context.includes("Registros encontrados:")
+  ) {
+    return context;
   }
 
   return null;
 }
-
-
 
 // =====================================================
 // ERROS
@@ -2292,15 +2263,24 @@ const guildKnowledge =
     await buildDiscordContext(message);
 
   const intent = classifyCurrentUserIntent(message);
+    const intent = classifyCurrentUserIntent(message);
+  
+  // Busca inteligência interna
   const serverIntelligence = await buildServerIntelligenceContext(message, intent);
   const systemsIndex = buildSystemsIndexContext(message);
 
-  const directInternalAnswer =
-    buildDirectInternalQueryAnswer(message, serverIntelligence);
-
+  // PRIORIDADE 1: Se temos dados reais, respondemos direto
+  const directInternalAnswer = buildDirectInternalQueryAnswer(message, serverIntelligence);
   if (directInternalAnswer) {
     return directInternalAnswer;
   }
+
+  // PRIORIDADE 2: Se for apenas saudação, ignora memória e responde curto
+  let memoryLogs = "Memória ignorada.";
+  if (!intent.isGreetingOnly) {
+    memoryLogs = await fetchRecentMemoryLogs(client);
+  }
+
 
   let memoryLogs = "Memória ignorada para focar na saudação.";
   if (!intent.isGreetingOnly) {
