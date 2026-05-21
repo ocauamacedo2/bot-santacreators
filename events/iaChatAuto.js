@@ -2263,8 +2263,7 @@ const guildKnowledge =
     await buildDiscordContext(message);
 
   const intent = classifyCurrentUserIntent(message);
-    const intent = classifyCurrentUserIntent(message);
-  
+
   // Busca inteligência interna
   const serverIntelligence = await buildServerIntelligenceContext(message, intent);
   const systemsIndex = buildSystemsIndexContext(message);
@@ -2275,14 +2274,9 @@ const guildKnowledge =
     return directInternalAnswer;
   }
 
-  // PRIORIDADE 2: Se for apenas saudação, ignora memória e responde curto
-  let memoryLogs = "Memória ignorada.";
-  if (!intent.isGreetingOnly) {
-    memoryLogs = await fetchRecentMemoryLogs(client);
-  }
-
-
+  // PRIORIDADE 2: Se for apenas saudação, ignora memória antiga
   let memoryLogs = "Memória ignorada para focar na saudação.";
+
   if (!intent.isGreetingOnly) {
     memoryLogs = await fetchRecentMemoryLogs(client);
   } else {
