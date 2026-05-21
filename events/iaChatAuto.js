@@ -1716,7 +1716,7 @@ const SC_QUERY_SYSTEMS = {
     handler: fetchAlinhamentosContext,
   },
   gi: {
-    keywords: ["gi", "gestao influencer", "controle gi", "ativo", "pausado", "desligado"],
+    keywords: ["gestao influencer", "controle gi", "gi ativo", "gi ativos", "gi pausado", "gi pausados", "controles ativos", "controles pausados"],
     handler: fetchGIStatusContext,
   },
   ranking: {
@@ -2121,6 +2121,102 @@ ${guildKnowledge}
 
 Responda agora de forma natural, direta e baseada nos dados reais acima:
 `;
+}
+
+// =====================================================
+// RESPOSTA FACTUAL DIRETA SEM GEMINI
+// =====================================================
+
+function buildDirectInternalQueryAnswer(message, serverIntelligence) {
+  const question = normalizeSearchText(message.content);
+  const context = String(serverIntelligence || "");
+
+  const isInternalQuestion =
+    context.includes("CONSULTAS INTERNAS INTELIGENTES:") ||
+    context.includes("CONSULTA INTERNA");
+
+  if (!isInternalQuestion) {
+    return null;
+  }
+
+  const isQuestionAskingRecords =
+    question.includes("registrou") ||
+    question.includes("registro") ||
+    question.includes("teve") ||
+    question.includes("tem") ||
+    question.includes("alguem") ||
+    question.includes("alguém") ||
+    question.includes("quem") ||
+    question.includes("hoje") ||
+    question.includes("ontem") ||
+    question.includes("semana");
+
+  if (!isQuestionAskingRecords) {
+    return null;
+  }
+
+  const noResultPhrases = [
+    "Nenhum registro de poderes em eventos encontrado para este período.",
+    "Nenhum registro de poderes encontrado para este período.",
+    "Sem pontos batidos neste período.",
+    "Nenhum pagamento encontrado no período.",
+    "Nenhuma ausência encontrada nas estatísticas.",
+    "Nenhuma venda encontrada.",
+    "nenhum registro compatível com a pergunta foi encontrado",
+  ];
+
+  const matchedNoResult = noResultPhrases.find((phrase) => {
+    return context.toLowerCase().includes(phrase.toLowerCase());
+  });
+
+  if (matchedNoResult) {
+    if (
+      question.includes("poderes eventos") ||
+      question.includes("poder evento") ||
+      question.includes("poder em evento") ||
+      question.includes("poderes em evento")
+    ) {
+      return "Não, Macedo. Pelo que consultei nos registros internos, não encontrei nenhum registro de poderes em eventos nesse período.";
+    }
+
+    if (question.includes("poder")) {
+      return "Não, Macedo. Pelo que consultei nos registros internos, não encontrei nenhum registro de poderes nesse período.";
+    }
+
+    return "Não encontrei registro compatível com essa pergunta nos dados internos consultados.";
+  }
+
+  const registrosMatch = context.match(/Registros encontrados:\s*(\d+)/i);
+
+  if (registrosMatch) {
+    const total = Number(registrosMatch[1] || 0);
+
+    const linhas = context
+      .split("\n")
+      .filter((line) => {
+        const clean = line.trim();
+
+        return (
+          clean.startsWith("- [REGISTRO]") ||
+          clean.startsWith("Link:")
+        );
+      })
+      .slice(0, 12);
+
+    if (total > 0 && linhas.length > 0) {
+      return [
+        `Sim, Macedo. Encontrei ${total} registro(s) compatível(is) com sua pergunta.`,
+        "",
+        linhas.join("\n"),
+      ].join("\n");
+    }
+
+    if (total > 0) {
+      return `Sim, Macedo. Encontrei ${total} registro(s) compatível(is) com sua pergunta nos dados internos.`;
+    }
+  }
+
+  return null;
 }
 
 
