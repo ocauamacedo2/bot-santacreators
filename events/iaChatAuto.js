@@ -406,6 +406,39 @@ function limitDiscordText(text) {
   return `${finalText.slice(0, MAX_RESPONSE_CHARS - 3)}...`;
 }
 
+function fixBrokenDiscordMentions(text) {
+  return String(text || "")
+    .replace(/<@!?(\d{17,22})(?!>)/g, "<@$1>")
+    .replace(/<@&(\d{17,22})(?!>)/g, "<@&$1>")
+    .replace(/<#(\d{17,22})(?!>)/g, "<#$1>");
+}
+
+async function buildAllowedMentionUsers(message, client) {
+  const users = new Set();
+
+  if (message.author?.id) {
+    users.add(message.author.id);
+  }
+
+  for (const [, user] of message.mentions.users || []) {
+    if (user?.id && user.id !== client.user.id) {
+      users.add(user.id);
+    }
+  }
+
+  if (message.reference?.messageId) {
+    const replied = await message.channel.messages
+      .fetch(message.reference.messageId)
+      .catch(() => null);
+
+    if (replied?.author?.id && !replied.author.bot) {
+      users.add(replied.author.id);
+    }
+  }
+
+  return [...users];
+}
+
 function normalizeAiCompareText(text) {
   return normalizeSearchText(text)
     .replace(/<@!?\d{17,22}>/g, "")
@@ -1964,13 +1997,34 @@ ${attachments.join("\n\n")}`);
         );
 
       if (replied) {
+        const replyParts = [];
+
+        replyParts.push(`Autor: ${replied.author.username}`);
+        replyParts.push(`Autor ID: ${replied.author.id}`);
+        replyParts.push(`Menção correta do autor: <@${replied.author.id}>`);
+        replyParts.push(`Conteúdo: ${cleanText(replied.content || "Sem texto")}`);
+
+        if (replied.reference?.messageId) {
+          const parent =
+            await message.channel.messages.fetch(
+              replied.reference.messageId
+            ).catch(() => null);
+
+          if (parent) {
+            replyParts.push("");
+            replyParts.push("CONTEXTO ANTERIOR DA MENSAGEM RESPONDIDA:");
+            replyParts.push(`Autor anterior: ${parent.author.username}`);
+            replyParts.push(`Autor anterior ID: ${parent.author.id}`);
+            replyParts.push(`Menção correta do autor anterior: <@${parent.author.id}>`);
+            replyParts.push(`Conteúdo anterior: ${cleanText(parent.content || "Sem texto")}`);
+          }
+        }
+
         context.push(`RESPONDENDO MENSAGEM:
-Autor: ${replied.author.username}
-Conteúdo: ${cleanText(replied.content)}`);
+${replyParts.join("\n")}`);
       }
     } catch {}
   }
-
   // =====================================================
   // CARGOS DO AUTOR
   // =====================================================
@@ -2462,25 +2516,29 @@ if (iaResponseLooksRepeated(message.channelId, safeIaResponse)) {
 
 const finalText =
   limitDiscordText(
-    safeIaResponse
+    fixBrokenDiscordMentions(safeIaResponse)
   );
 
 if (!finalText) return;
 
 rememberAiResponse(message.channelId, finalText);
 
+const allowedMentionUsers =
+  await buildAllowedMentionUsers(message, client);
+
         // =====================================================
         // RESPOSTA
         // =====================================================
 
 
-        // Resposta com menções limitadas para segurança
+        // Resposta com menções controladas para segurança
         await sendTemporaryReply(message, {
           content: finalText,
           allowedMentions: {
             repliedUser: true,
-            // Permite mencionar apenas o autor da reply e IDs explicitamente trazidos no texto
-            parse: ['users', 'roles'] 
+            users: allowedMentionUsers,
+            roles: [],
+            parse: [],
           },
         });
 

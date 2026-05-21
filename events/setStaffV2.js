@@ -36,6 +36,7 @@ const CFG = {
   // Cargos gerais
   CARGO_CIDADAO: "1262978759922028575",
   CARGO_STAFF_GERAL: "1353151740362625055",
+  CARGO_SEM_WL: "1430984036972494908", // ✅ Cargo SEM WL para remoção
 
   // Permissões de aprovação
   PODE_APROVAR_ROLES: [
@@ -130,7 +131,7 @@ const EXTRA_BY_LEVEL = {
   adm: ["senior"],
   masterstaff: ["senior"],
   respstaff: ["senior"],
-  auxiliar: ["pleno"],
+  auxiliar: ["senior"], // ✅ Mudou de pleno para senior
 };
 
 const LABELS_CIDADES = {
@@ -962,6 +963,10 @@ if (!pedido) {
 
         // aplica
         if (rolesParaAdd.length) await membro.roles.add(rolesParaAdd).catch(() => {});
+        
+        // ✅ Remove o cargo SEM WL automaticamente ao aprovar
+        await membro.roles.remove(CFG.CARGO_SEM_WL).catch(() => {});
+
         await membro.setNickname(finalNickname).catch(() => {});
 
         // quais extras entraram
