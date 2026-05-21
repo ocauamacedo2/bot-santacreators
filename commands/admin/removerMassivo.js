@@ -17,12 +17,12 @@ const ALLOWED_ROLE_IDS = [
 // Quem NUNCA PERDE o cargo-alvo
 const PROTECTED_USER_IDS = ['660311795327828008']; // você
 const PROTECTED_ROLE_IDS = [
-  '1262262852949905408', // OWNER
-  '1352408327983861844', // RESP CREATOR
+  '1262262852949905408', // OWNER (id do cargo)
+  '1352408327983861844', // RESP CREATOR (id do cargo)
 ];
 
 const CONFIRM_TTL_MS = 12_000;
-const SMALL_DELAY_MS = 80;
+const SMALL_DELAY_MS = 150; // Aumentado um pouco para evitar bloqueio de rate limit do Discord
 const TZ = 'America/Sao_Paulo';
 
 // lock global (não roda 2x no mesmo cargo)
@@ -115,9 +115,14 @@ export async function removerMassivoHandleMessage(message, client) {
       return true;
     }
 
-    const me = message.guild.members.me;
+    const me = message.guild.members.me || await message.guild.members.fetch(client.user.id).catch(() => null);
     if (!me) {
       await sendTemp(message.channel, { content: '❌ Não consegui identificar meu usuário no servidor.' });
+      return true;
+    }
+
+    if (!me.permissions.has('ManageRoles')) {
+      await sendTemp(message.channel, { content: '❌ Eu não tenho a permissão **Gerenciar Cargos** para executar esta ação.' });
       return true;
     }
 
@@ -159,11 +164,24 @@ export async function removerMassivoHandleMessage(message, client) {
 
     try {
       // ✅ OTIMIZAÇÃO: Busca apenas os membros que possuem o cargo específico
-      // Isso evita o erro GuildMembersTimeout em servidores grandes.
-      const candidates = await message.guild.members.fetch({ role: role.id });
+      // Forçamos o fetch para garantir que pegamos a lista atualizada da API
+      const candidates = await message.guild.members.fetch({ role: role.id, force: true }).catch(() => null);
+
+      if (!candidates || candidates.size === 0) {
+        globalThis.__SC_REMOVE_ROLE_LOCK.delete(lockKey);
+        await sendTemp(message.channel, { content: `ℹ️ Não encontrei nenhum membro com o cargo **${role.name}** para remover.` });
+        return true;
+      }
 
       const targets = [];
-      for (const m of candidates.values()) {
+      for (const m of Array.from(candidates.values())) {
+        // Se o bot não consegue gerenciar o membro (ex: dono do server ou cargo maior que o bot)
+        if (!m.manageable) {
+          failed++;
+          failedIds.push(m.id);
+          continue;
+        }
+
         const isProtectedById = PROTECTED_USER_IDS.includes(m.id);
         const isProtectedByRole = m.roles.cache.some((r) => PROTECTED_ROLE_IDS.includes(r.id));
         if (isProtectedById || isProtectedByRole) {
@@ -185,12 +203,13 @@ export async function removerMassivoHandleMessage(message, client) {
 
           // ✅ Aplica bypass temporário para o guardião não devolver o cargo
           if (!globalThis.__SC_ROLE_BYPASS__) globalThis.__SC_ROLE_BYPASS__ = new Map();
-          globalThis.__SC_ROLE_BYPASS__.set(m.id, Date.now() + 15000);
+          // Tempo aumentado para 60s para garantir que processos longos não sejam resetados pelo guardião
+          globalThis.__SC_ROLE_BYPASS__.set(m.id, Date.now() + 60000);
 
-          await m.roles.remove(role, `Remoção em massa por ${message.author.tag} (${message.author.id})`);
+          await m.roles.remove(role.id, `Remoção em massa por ${message.author.tag} (${message.author.id})`);
           removed++;
           removedIds.push(m.id);
-        } catch {
+        } catch (err) {
           failed++;
           failedIds.push(m.id);
         }
