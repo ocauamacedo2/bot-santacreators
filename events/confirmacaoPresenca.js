@@ -125,6 +125,15 @@ function isWindowOpen() {
   // Verifica dia
   if (!ALLOWED_DAYS.includes(day)) return false;
 
+  // FIX: Na sexta-feira (dia 5), o horário é fixo das 19h às 21h
+  if (day === 5) {
+    if (hour >= 19 && hour < 21) {
+      return true;
+    }
+    return false;
+  }
+
+  // Para outros dias permitidos (Quinta, Sábado), usa a janela ativa
   const state = loadState();
   const window = state.activeWindow || 1;
 
@@ -201,7 +210,14 @@ function buildPanelEmbed(state) {
   const windowTxt = window === 1 ? "19h às 21h" : "22h às 00h";
 
   let description = `**📅 Data:** ${getNowSP().toLocaleDateString("pt-BR")}\n`;
-  description += `**⏰ Horário de Confirmação:** Qui/Sex/Sáb das ${windowTxt}\n\n`;
+  
+  const now = getNowSP();
+  const day = now.getDay();
+  if (day === 5) { // Friday
+    description += `**⏰ Horário de Confirmação:** Sexta das 19h às 21h (fixo)\n\n`;
+  } else {
+    description += `**⏰ Horário de Confirmação:** Qui/Sáb das ${windowTxt}\n\n`;
+  }
   
   const statusCount = { YES: 0, NO: 0, PENDING: 0 };
 
@@ -368,9 +384,18 @@ export async function confirmacaoPresencaHandleInteraction(interaction, client) 
     const isUserBypass = interaction.user.id === "660311795327828008";
 
     // Checa horário (Ignora para o seu ID)
-    if (!isWindowOpen() && !isUserBypass) {
-      const windowTxt = (state.activeWindow === 2) ? "22h às 00h" : "19h às 21h";
-      return interaction.reply({ content: `⏳ O sistema só aceita confirmações **Quinta, Sexta e Sábado das ${windowTxt}**.`, ephemeral: true });
+    if (!isWindowOpen() && !isUserBypass) { // Se a janela não está aberta e não é bypass
+      const now = getNowSP();
+      const day = now.getDay();
+      let replyMessage;
+
+      if (day === 5) { // Friday
+        replyMessage = "⏳ O sistema só aceita confirmações na **Sexta das 19h às 21h**.";
+      } else { // Thursday or Saturday
+        const windowTxt = (state.activeWindow === 2) ? "22h às 00h" : "19h às 21h";
+        replyMessage = `⏳ O sistema só aceita confirmações **Quinta e Sábado das ${windowTxt}**.`;
+      }
+      return interaction.reply({ content: replyMessage, ephemeral: true });
     }
 
     const isConfirm = interaction.customId === "presenca_confirmar";
@@ -403,9 +428,18 @@ export async function confirmacaoPresencaHandleInteraction(interaction, client) 
     const isUserBypass = interaction.user.id === "660311795327828008";
 
     // Re-checa horário no submit (Ignora para o seu ID)
-    if (!isWindowOpen() && !isUserBypass) {
-      const windowTxt = (state.activeWindow === 2) ? "22h às 00h" : "19h às 21h";
-      return interaction.editReply(`⏳ O sistema fechou para confirmações (${windowTxt}).`);
+    if (!isWindowOpen() && !isUserBypass) { // Se a janela não está aberta e não é bypass
+      const now = getNowSP();
+      const day = now.getDay();
+      let replyMessage;
+
+      if (day === 5) { // Friday
+        replyMessage = "⏳ O sistema fechou para confirmações na **Sexta das 19h às 21h**.";
+      } else { // Thursday or Saturday
+        const windowTxt = (state.activeWindow === 2) ? "22h às 00h" : "19h às 21h";
+        replyMessage = `⏳ O sistema fechou para confirmações (${windowTxt}).`;
+      }
+      return interaction.editReply(replyMessage);
     }
 
     const status = interaction.customId.split("_")[2]; // YES ou NO
