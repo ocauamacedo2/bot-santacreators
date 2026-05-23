@@ -1,0 +1,369 @@
+// d:\santacreators-main\events\antiFloodProtector.js
+import { EmbedBuilder, PermissionsBitField, Events, MessageFlags } from 'discord.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// =====================================================
+// CONFIGURAÇÃO DO PROTECTOR
+// =====================================================
+const CONFIG = {
+    enabled: true,
+    logChannelId: '1507676677927338107',
+    
+    // Usuários Isentos
+    bypassUserIds: [
+        '1262262852949905408', // Owner
+        '660311795327828008',  // Você
+    ],
+
+    // Cargos Isentos
+    ignoredRoles: [
+        '1262262852949905409', // Resp Influ
+        '1352408327983861844', // Resp Creators
+        '1352407252216184833', // Resp Líder
+        '1352385500614234134', // Coordenação
+    ],
+
+    // Limites de Detecção
+    flood: {
+        limit: 5,            // 5 mensagens
+        windowMs: 5000,      // em 5 segundos
+    },
+    repetition: {
+        limit: 3,            // 3 mensagens idênticas
+    },
+    mentions: {
+        limit: 8,            // máximo de menções por msg
+    },
+    links: {
+        limit: 4,            // máximo de links por msg
+    },
+
+    // Domínios Permitidos (Whitelist)
+    allowedDomains: [
+        'discord.com', 'discord.gg', 'tenor.com', 'giphy.com', 
+        'youtube.com', 'youtu.be', 'google.com', 'github.com',
+        'instagram.com', 'tiktok.com', 'twitch.tv'
+    ],
+
+    // Duração dos Castigos (Timeout)
+    punishments: {
+        level1: 60 * 1000,           // 1 minuto
+        level2: 10 * 60 * 1000,      // 10 minutos
+        level3: 60 * 60 * 1000,      // 1 hora
+        level4: 24 * 60 * 60 * 1000, // 1 dia
+        critical: 7 * 24 * 60 * 60 * 1000 // 1 semana
+    },
+
+    // Listas Negras (Regex/Strings)
+    pornWords: [/porn/i, /sexcam/i, /nude/i, /onlyfans/i, /xxx/i, /redtube/i, /xvideos/i, /sexo/i, /novinha/i],
+    scamWords: [/free nitro/i, /steam gift/i, /crypto bonus/i, /casino/i, /withdrawal/i, /claim bonus/i, /airdrop/i, /bet365/i, /ganhe dinheiro/i, /pix gratis/i],
+};
+
+// =====================================================
+// PERSISTÊNCIA DE DADOS
+// =====================================================
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const STATE_FILE = path.resolve(__dirname, '../data/anti_flood_protector_state.json');
+
+function loadState() {
+    try {
+        if (!fs.existsSync(STATE_FILE)) return { users: {}, enabled: true };
+        const data = fs.readFileSync(STATE_FILE, 'utf8');
+        return JSON.parse(data);
+    } catch {
+        return { users: {}, enabled: true };
+    }
+}
+
+function saveState(state) {
+    try {
+        const dir = path.dirname(STATE_FILE);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), 'utf8');
+    } catch (err) {
+        console.error('[ANTI FLOOD PROTECTOR] Erro ao salvar JSON:', err);
+    }
+}
+
+// =====================================================
+// MOTOR DE DETECÇÃO
+// =====================================================
+
+// Cache em memória para detecção rápida de flood (não precisa persistir tudo)
+const messageCache = new Map(); // userId -> [{ content, ts }]
+
+function checkBypass(member) {
+    if (!member || member.user.bot) return true;
+    if (CONFIG.bypassUserIds.includes(member.id)) return true;
+    if (member.permissions.has(PermissionsBitField.Flags.Administrator)) return true;
+    return member.roles.cache.some(r => CONFIG.ignoredRoles.includes(r.id));
+}
+
+async function logSecurityAction(client, guild, member, channel, reason, content, infractionCount, duration) {
+    const logChannel = await client.channels.fetch(CONFIG.logChannelId).catch(() => null);
+    if (!logChannel || !logChannel.isTextBased()) return;
+
+    const now = new Date();
+    const timestampSP = now.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+
+    const embed = new EmbedBuilder()
+        .setTitle('🛡️ Proteção Ativa: Mensagem Removida')
+        .setColor(infractionCount > 3 ? '#FF0000' : '#FFA500')
+        .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
+        .addFields(
+            { name: '👤 Usuário', value: `${member} (\`${member.id}\`)`, inline: true },
+            { name: '📍 Canal', value: `${channel} (Ir ao Canal)`, inline: true },
+            { name: '⚖️ Punição', value: `Timeout: \`${duration / 60000} min\``, inline: true },
+            { name: '🚩 Reincidência', value: `\`${infractionCount}ª infração\``, inline: true },
+            { name: '📝 Motivo Detectado', value: `\`${reason}\``, inline: false },
+            { name: '💬 Conteúdo Removido', value: `\`\`\`${content.slice(0, 1000) || '[Sem Texto/Apenas Mídia]'}\`\`\``, inline: false },
+            { name: '🕒 Horário (SP)', value: `\`${timestampSP}\``, inline: false },
+            { name: '🔗 Links Úteis', value: `Perfil do Usuário`, inline: false }
+        )
+        .setFooter({ text: 'Sistema de Segurança SantaCreators' })
+        .setTimestamp();
+
+    await logChannel.send({ embeds: [embed] }).catch(() => {});
+}
+
+async function applyPunishment(member, guild, reason, content, channel) {
+    const state = loadState();
+    const userId = member.id;
+
+    if (!state.users[userId]) {
+        state.users[userId] = { infractions: 0, lastInfractions: [] };
+    }
+
+    state.users[userId].infractions++;
+    const count = state.users[userId].infractions;
+
+    let duration = CONFIG.punishments.level1;
+    if (count === 2) duration = CONFIG.punishments.level2;
+    if (count === 3) duration = CONFIG.punishments.level3;
+    if (count === 4) duration = CONFIG.punishments.level4;
+    if (count >= 5) duration = CONFIG.punishments.critical;
+
+    state.users[userId].lastInfractions.push({
+        reason,
+        ts: Date.now(),
+        duration
+    });
+
+    saveState(state);
+
+    // Punição
+    const canTimeout = guild.members.me.permissions.has(PermissionsBitField.Flags.ModerateMembers) && member.moderatable;
+
+    if (canTimeout) {
+        await member.timeout(duration, `[ANTIFLOOD] ${reason}`).catch(() => {});
+    }
+
+    // Log
+    await logSecurityAction(guild.client, guild, member, channel, reason, content, count, duration);
+
+    // Aviso ao usuário
+    const alert = `⚠️ ${member}, sua mensagem foi removida e você recebeu um castigo de **${duration / 60000}min** por: **${reason}**.`;
+    const msg = await channel.send(alert).catch(() => null);
+    if (msg) setTimeout(() => msg.delete().catch(() => {}), 10000);
+}
+
+export function setupAntiFloodProtector(client) {
+    if (globalThis.__SC_ANTI_FLOOD_PROTECTOR__) return;
+    globalThis.__SC_ANTI_FLOOD_PROTECTOR__ = true;
+
+    client.on(Events.MessageCreate, async (message) => {
+        if (!message.guild || message.author.bot) return;
+        
+        const state = loadState();
+        if (state.enabled === false) return;
+
+        // Comandos Administrativos do Protector
+        if (message.content.startsWith('!protector')) {
+            await handleCommands(message, state);
+            return;
+        }
+
+        if (checkBypass(message.member)) return;
+
+        const content = message.content;
+        const userId = message.author.id;
+        const now = Date.now();
+
+        // Inicializa cache do usuário
+        if (!messageCache.has(userId)) messageCache.set(userId, []);
+        const userMsgs = messageCache.get(userId);
+        userMsgs.push({ content, ts: now });
+
+        // Limpa cache antigo (mais que 10s)
+        const filteredCache = userMsgs.filter(m => now - m.ts < 10000);
+        messageCache.set(userId, filteredCache);
+
+        let violation = null;
+
+        // 1. Detecção de Flood (Mensagens Rápidas)
+        const rapidMsgs = filteredCache.filter(m => now - m.ts < CONFIG.flood.windowMs);
+        if (rapidMsgs.length > CONFIG.flood.limit) {
+            violation = "Flood de mensagens (Envio muito rápido)";
+        }
+
+        // 2. Detecção de Mensagens Repetidas
+        const recentDuplicates = filteredCache.filter(m => m.content === content);
+        if (recentDuplicates.length >= CONFIG.repetition.limit && content.length > 3) {
+            violation = "Spam de mensagens repetidas";
+        }
+
+        // 3. Detecção de Menções Excessivas
+        const mentionCount = message.mentions.users.size + message.mentions.roles.size;
+        if (mentionCount > CONFIG.mentions.limit) {
+            violation = "Excesso de menções na mensagem";
+        }
+
+        // 4. Detecção de Links e Scams
+        const links = content.match(/https?:\/\/[^\s]+/gi) || [];
+        if (links.length > CONFIG.links.limit) {
+            violation = "Excesso de links na mensagem";
+        }
+
+        if (links.length > 0) {
+            for (const link of links) {
+                try {
+                    const url = new URL(link);
+                    const domain = url.hostname.replace('www.', '');
+                    
+                    if (!CONFIG.allowedDomains.includes(domain)) {
+                        // Checa se é convite de discord
+                        if (domain === 'discord.gg' || domain === 'discord.me') {
+                            violation = "Divulgação de link/convite não autorizado";
+                            break;
+                        }
+                        
+                        // Checa encurtadores
+                        const shorteners = ['bit.ly', 't.co', 'tinyurl.com', 'goo.gl', 'cutt.ly'];
+                        if (shorteners.includes(domain)) {
+                            violation = "Link encurtado suspeito detectado";
+                            break;
+                        }
+                    }
+                } catch {
+                    violation = "Link com formato malicioso detectado";
+                    break;
+                }
+            }
+        }
+
+        // 5. Palavras Proibidas (Porn/Scam)
+        const normalizedContent = content.toLowerCase()
+            .normalize("NFD").replace(/[\u0300-\u036f]/g, ""); // remove acentos
+
+        for (const regex of CONFIG.pornWords) {
+            if (regex.test(normalizedContent)) {
+                violation = "Conteúdo pornográfico detectado";
+                break;
+            }
+        }
+
+        if (!violation) {
+            for (const regex of CONFIG.scamWords) {
+                if (regex.test(normalizedContent)) {
+                    violation = "Tentativa de golpe (Scam/Phishing) detectada";
+                    break;
+                }
+            }
+        }
+
+        // 6. Caracteres Repetidos (AAAAAA...)
+        if (!violation && /(.)\1{14,}/.test(content)) {
+            violation = "Spam de caracteres repetidos";
+        }
+
+        // EXECUÇÃO DA PUNIÇÃO
+        if (violation) {
+            try {
+                if (message.deletable) await message.delete().catch(() => {});
+                await applyPunishment(message.member, message.guild, violation, content, message.channel);
+            } catch (err) {
+                console.error('[ANTI FLOOD PROTECTOR] Erro ao punir:', err);
+            }
+        }
+    });
+
+    console.log('[ANTI FLOOD PROTECTOR] Sistema inicializado com sucesso.');
+}
+
+/**
+ * Handler de comandos administrativos
+ */
+async function handleCommands(message, state) {
+    const args = message.content.split(/\s+/);
+    const subCommand = args[1]?.toLowerCase();
+
+    // Verifica se tem cargo autorizado para usar comandos do protector
+    const isAuth = message.author.id === '660311795327828008' || 
+                   message.member.roles.cache.some(r => CONFIG.ignoredRoles.includes(r.id));
+
+    if (!isAuth) return;
+
+    if (subCommand === 'status') {
+        const embed = new EmbedBuilder()
+            .setTitle('🛡️ Status do Protector')
+            .setColor(state.enabled ? 'Green' : 'Red')
+            .addFields(
+                { name: 'Estado', value: state.enabled ? '🟢 Ligado' : '🔴 Desligado', inline: true },
+                { name: 'Canais Protegidos', value: 'Todos (exceto bypass)', inline: true },
+                { name: 'Usuários com Infrações', value: `${Object.keys(state.users).length}`, inline: true }
+            );
+        return message.reply({ embeds: [embed] });
+    }
+
+    if (subCommand === 'on') {
+        state.enabled = true;
+        saveState(state);
+        return message.reply('✅ O sistema de proteção automática foi **ativado**.');
+    }
+
+    if (subCommand === 'off') {
+        state.enabled = false;
+        saveState(state);
+        return message.reply('⚠️ O sistema de proteção automática foi **desativado**.');
+    }
+
+    if (subCommand === 'user') {
+        const target = message.mentions.users.first() || (args[2] ? await message.client.users.fetch(args[2]).catch(() => null) : null);
+        if (!target) return message.reply('❌ Mencione um usuário ou forneça um ID.');
+
+        const userData = state.users[target.id];
+        if (!userData) return message.reply(`👤 **${target.tag}** não possui histórico de infrações.`);
+
+        const embed = new EmbedBuilder()
+            .setTitle(`Histórico: ${target.tag}`)
+            .setColor('Blue')
+            .addFields(
+                { name: 'Total de Infrações', value: `\`${userData.infractions}\``, inline: true },
+                { name: 'Última Atividade', value: userData.lastInfractions.length > 0 ? `<t:${Math.floor(userData.lastInfractions[userData.lastInfractions.length - 1].ts / 1000)}:R>` : 'Nenhuma', inline: true }
+            );
+        
+        if (userData.lastInfractions.length > 0) {
+            const list = userData.lastInfractions.slice(-5).map(i => `• **${i.reason}** (<t:${Math.floor(i.ts/1000)}:d>)`).join('\n');
+            embed.addFields({ name: 'Últimas 5 Infrações', value: list });
+        }
+
+        return message.reply({ embeds: [embed] });
+    }
+
+    if (subCommand === 'limpar') {
+        const target = message.mentions.users.first() || (args[2] ? { id: args[2] } : null);
+        if (!target) return message.reply('❌ Mencione um usuário para limpar o histórico.');
+
+        if (state.users[target.id]) {
+            delete state.users[target.id];
+            saveState(state);
+            return message.reply(`✅ Histórico de infrações de <@${target.id}> foi resetado.`);
+        } else {
+            return message.reply('❌ Este usuário não possui histórico.');
+        }
+    }
+    
+    return message.reply('❓ Comandos: `status`, `on`, `off`, `user @user`, `limpar @user`');
+}

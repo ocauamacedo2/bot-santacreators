@@ -415,6 +415,8 @@ import { setupSyncCargos } from "../events/syncCargos.js";
 
 // IA Auto Chat
 import { setupIaChatAuto } from "../events/iaChatAuto.js";
+import { setupAntiFloodProtector } from "../events/antiFloodProtector.js";
+import setupProtecaoBotsDeletarCanais from "../events/protecaoBotsDeletarCanais.js";
 
 // =====================================================
 // Express + Mongo
@@ -517,6 +519,8 @@ const setupEventHandlers = () => {
   setupSortChannels(client);
   setupTicketRenamer(client);
   setupIaChatAuto(client);
+  setupProtecaoBotsDeletarCanais(client);
+  setupAntiFloodProtector(client);
 
   client.on("channelCreate", async (c) => {
     try {

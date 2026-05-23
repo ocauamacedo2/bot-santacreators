@@ -24,6 +24,8 @@ import { iniciarAutoJoin } from './autojoinVoice.js';
 import { iniciarRegistroPoderes } from './registropoderes.js';
 import { iniciarRegistroEvento } from './registroevento.js';
 import { installChannelGuardian } from './channelGuardian.js';
+import { installMessageGuardian } from './messageGuardian.js';
+import { installServerConfigGuardian } from './serverConfigGuardian.js';
 import { pagamentoSocialOnReady } from './pagamentosocial.js';
 import * as memberJoinLog from './logs/memberJoinLog.js';
 
@@ -78,6 +80,8 @@ export default {
 
     installBotGuardian(client);
     installChannelGuardian(client); // Instala o novo guardião de canais
+    installMessageGuardian(client);
+    installServerConfigGuardian(client);
 
     console.log(`\n✅ Bot pronto como ${client.user.tag}`);
   }
