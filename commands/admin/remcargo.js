@@ -655,8 +655,6 @@ export function installRoleGuardian(client) {
         .filter(Boolean)
         .sort((a, b) => b.position - a.position);
 
-      if (removedRoles.length === 0) return;
-
       const logs = await guild.fetchAuditLogs({ type: AuditLogEvent.MemberRoleUpdate, limit: 5 }).catch(() => null);
       let entry = null;
 
