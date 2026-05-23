@@ -33,6 +33,30 @@ const DASH_MARKER = "SC_PAGAMENTO_DASH::V1";
 // Canal onde fica o menu + onde os registros são postados
 const CANAL_PAGAMENTO = "1387922662134775818";
 
+// Cidades / CDDs usadas para filtro dos pagamentos
+const CIDADES_PAGAMENTO = {
+  nobre: {
+    label: "Nobre",
+    roleId: "1379021805544804382",
+    emoji: "🏙️",
+  },
+  santa: {
+    label: "Santa",
+    roleId: "1379021888709464168",
+    emoji: "🌸",
+  },
+  grande: {
+    label: "Grande",
+    roleId: "1418691103397253322",
+    emoji: "🌆",
+  },
+  maresia: {
+    label: "Maresia",
+    roleId: "1379021994678288465",
+    emoji: "🌊",
+  },
+};
+
 // Canal de logs (auditoria) do sistema de pagamentos
 // ⚠️ Troca aqui pelo teu canal de logs real, se for outro.
 const CANAL_LOG_PAGAMENTO = "1486084352403312843";
@@ -677,6 +701,13 @@ function makeEmptyStats(monthKey) {
     amountsByCreator: {},
     amountsByApprover: {},
     amountsByCategory: {},
+
+    cities: {},
+    citiesApproved: {},
+    citiesRejected: {},
+    citiesRequested: {},
+    categoriesApprovedByCity: {},
+    amountsByCity: {},
   };
 }
 
@@ -707,6 +738,13 @@ categoriesRequested: normalizarMapaCategorias(stats?.categoriesRequested || {}),
 amountsByCreator: stats?.amountsByCreator || {},
 amountsByApprover: stats?.amountsByApprover || {},
 amountsByCategory: normalizarMapaCategorias(stats?.amountsByCategory || {}),
+
+cities: stats?.cities || {},
+citiesApproved: stats?.citiesApproved || {},
+citiesRejected: stats?.citiesRejected || {},
+citiesRequested: stats?.citiesRequested || {},
+categoriesApprovedByCity: stats?.categoriesApprovedByCity || {},
+amountsByCity: stats?.amountsByCity || {},
   };
 }
 
@@ -1060,6 +1098,11 @@ function criarRowMenu() {
     new ButtonBuilder()
       .setCustomId("filtro_naoclicados")
       .setLabel("🕗 Não clicados")
+      .setStyle(ButtonStyle.Secondary),
+
+    new ButtonBuilder()
+      .setCustomId("filtro_cidades")
+      .setLabel("🏙️ Cidades")
       .setStyle(ButtonStyle.Secondary)
   );
 }
@@ -1107,6 +1150,18 @@ function criarRowStatus(messageId) {
       .setCustomId(`reprovado__${messageId}`)
       .setLabel("❌ REPROVADO")
       .setStyle(ButtonStyle.Danger)
+  );
+}
+
+function criarRowCidadesPagamento(messageId) {
+  return new ActionRowBuilder().addComponents(
+    Object.entries(CIDADES_PAGAMENTO).map(([cidadeKey, cidade]) =>
+      new ButtonBuilder()
+        .setCustomId(`cidade_pagamento__${cidadeKey}__${messageId}`)
+        .setLabel(cidade.label)
+        .setEmoji(cidade.emoji)
+        .setStyle(ButtonStyle.Secondary)
+    )
   );
 }
 
@@ -1745,6 +1800,7 @@ camposRegistro.push(
   { name: "🆔 Criador do Registro", value: `<@${registrador.id}> (\`${registrador.id}\`)`, inline: false },
 
   { name: "📝 Registro", value: `Feito por <@${registrador.id}>`, inline: false },
+  { name: "🏙️ Cidade / CDD", value: "`Não definida`", inline: false },
   { name: "📌 Status", value: "`Aguardando confirmação...`", inline: false },
 
   // ✅ vai ser preenchido quando aprovar/reprovar/solicitar
@@ -1774,7 +1830,12 @@ const embed = new EmbedBuilder()
           return true;
         }
 
-        await mensagem.edit({ components: [criarRowStatus(mensagem.id)] }).catch(() => {});
+        await mensagem.edit({
+  components: [
+    criarRowStatus(mensagem.id),
+    criarRowCidadesPagamento(mensagem.id),
+  ],
+}).catch(() => {});
 
         // reposta o menu e limpa duplicados
         await canal.send({ embeds: [criarEmbedMenu()], components: [criarRowMenu()] }).catch(() => {});
