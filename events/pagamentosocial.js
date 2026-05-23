@@ -202,16 +202,42 @@ function parseNomeIdFlex(texto) {
 }
 
 function normalizarTipoPremiacao(texto) {
-  const t = String(texto || "").toLowerCase().trim()
-    .normalize("NFD").replace(/[\u0300-\u036f]/g, ""); // remove acentos
-    
+  const original = String(texto || "").trim();
+
+  const t = original
+    .toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const pareceDinheiro =
+    /\bdinheiro\b/i.test(t) ||
+    /\bgrana\b/i.test(t) ||
+    /\bcash\b/i.test(t) ||
+    /\b\d{1,3}(?:[.\s]\d{3})+(?:,\d{1,2})?\b/.test(t) ||
+    /\b\d+(?:[.,]\d+)?\s*(?:k|kk|m|mi|mil|milhao|milhoes)?\b/i.test(t);
+
+  if (pareceDinheiro) return "Dinheiro";
+
   if (t.includes("staff")) return "VIP Staff";
+  if (t.includes("rolepass")) return "Pass";
   if (t.includes("pass")) return "Pass";
   if (t.includes("ouro")) return "VIP Ouro";
   if (t.includes("vipevento") || t.includes("vip evento")) return "VIP Evento";
-  if (t.includes("lancamento")) return "VIP Lancamento";
-  
-  return "Outros";
+  if (t.includes("lancamento") || t.includes("lançamento")) return "VIP Lancamento";
+
+  return "Dinheiro";
+}
+
+function normalizarMapaCategorias(obj) {
+  const novo = {};
+
+  for (const [categoria, valor] of Object.entries(obj || {})) {
+    const catKey = normalizarTipoPremiacao(categoria);
+    novo[catKey] = Number(novo[catKey] || 0) + Number(valor || 0);
+  }
+
+  return novo;
 }
 
 // =============================
@@ -673,14 +699,14 @@ function hydrateStats(stats, monthKey) {
     rejecters: stats?.rejecters || {},
     requesters: stats?.requesters || {},
 
-    categories: stats?.categories || {},
-    categoriesApproved: stats?.categoriesApproved || {},
-    categoriesRejected: stats?.categoriesRejected || {},
-    categoriesRequested: stats?.categoriesRequested || {},
+    categories: normalizarMapaCategorias(stats?.categories || {}),
+categoriesApproved: normalizarMapaCategorias(stats?.categoriesApproved || {}),
+categoriesRejected: normalizarMapaCategorias(stats?.categoriesRejected || {}),
+categoriesRequested: normalizarMapaCategorias(stats?.categoriesRequested || {}),
 
-    amountsByCreator: stats?.amountsByCreator || {},
-    amountsByApprover: stats?.amountsByApprover || {},
-    amountsByCategory: stats?.amountsByCategory || {},
+amountsByCreator: stats?.amountsByCreator || {},
+amountsByApprover: stats?.amountsByApprover || {},
+amountsByCategory: normalizarMapaCategorias(stats?.amountsByCategory || {}),
   };
 }
 
@@ -1575,7 +1601,7 @@ const canal = await client.channels.fetch(CANAL_PAGAMENTO).catch(() => null);
         const registradorAvatar = registrador.displayAvatarURL({ dynamic: true });
         
         const tipoInput = interaction.fields.getTextInputValue("tipoPremiacao");
-        const categoriaVip = normalizarTipoPremiacao(tipoInput);
+const categoriaVip = normalizarTipoPremiacao(tipoInput);
 
 const ocultarFinanceiro = esconderCamposFinanceiros(categoriaVip, analiseComprovante);
 
