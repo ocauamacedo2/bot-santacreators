@@ -788,6 +788,39 @@ function formatarRankingUsuarios(obj, vazio = "_Nenhum dado ainda_") {
     .join("\n");
 }
 
+
+function formatarCidadesProfissional(stats) {
+  const linhas = [];
+
+  for (const [cidadeKey, cidade] of Object.entries(CIDADES_PAGAMENTO)) {
+    const categorias = stats.categoriesApprovedByCity?.[cidadeKey] || {};
+    const valorPago = Number(stats.amountsByCity?.[cidadeKey] || 0);
+
+    const temDados = Object.keys(categorias).length > 0 || valorPago > 0;
+
+    if (!temDados) {
+      linhas.push([
+        `${cidade.emoji} **${cidade.label}**`,
+        `> _Nenhum pagamento aprovado marcado ainda_`,
+      ].join("\n"));
+      continue;
+    }
+
+    const catsTexto = Object.entries(categorias)
+      .sort((a, b) => String(a[0]).localeCompare(String(b[0])))
+      .map(([cat, qtd]) => `> 💠 **${cat}:** \`${qtd}\``)
+      .join("\n");
+
+    linhas.push([
+      `${cidade.emoji} **${cidade.label}** — <@&${cidade.roleId}>`,
+      catsTexto || "> _Sem categorias_",
+      `> 💵 **Valor pago:** \`R$ ${valorPago.toLocaleString("pt-BR")}\``,
+    ].join("\n"));
+  }
+
+  return linhas.join("\n\n");
+}
+
 function formatarCategoriasProfissional(stats) {
   const todas = new Set([
     ...Object.keys(stats.categories || {}),
@@ -1001,6 +1034,11 @@ async function updateDashboard(client) {
       {
         name: "💎 Categorias / VIPs / Passes",
         value: formatarCategoriasProfissional(stats),
+        inline: false,
+      },
+      {
+        name: "🏙️ Pagamentos por Cidade / CDD",
+        value: formatarCidadesProfissional(stats),
         inline: false,
       },
       {
@@ -1288,6 +1326,59 @@ function getValorNumeroFromEmbed(embedLike) {
   return parseValorOCR(valorRaw)?.numero || 0;
 }
 
+function getCidadeKeyFromEmbed(embedLike) {
+  const cidadeRaw = getFieldValue(embedLike, "🏙️ Cidade / CDD");
+
+  for (const [cidadeKey, cidade] of Object.entries(CIDADES_PAGAMENTO)) {
+    if (cidadeRaw.includes(cidade.roleId)) return cidadeKey;
+    if (cidadeRaw.toLowerCase().includes(cidade.label.toLowerCase())) return cidadeKey;
+  }
+
+  return null;
+}
+
+function atualizarCampoCidade(embedBuilder, cidadeKey, actionByUserId = null) {
+  const cidade = CIDADES_PAGAMENTO[cidadeKey];
+  if (!cidade) return embedBuilder;
+
+  const data = embedBuilder.data ?? {};
+  const fields = Array.isArray(data.fields) ? [...data.fields] : [];
+
+  const textoCidade = [
+    `${cidade.emoji} **${cidade.label}**`,
+    `<@&${cidade.roleId}>`,
+    actionByUserId ? `Marcado por: <@${actionByUserId}>` : null,
+    `🕒 <t:${Math.floor(Date.now() / 1000)}:f>`,
+  ].filter(Boolean).join("\n");
+
+  const novoField = {
+    name: "🏙️ Cidade / CDD",
+    value: textoCidade,
+    inline: false,
+  };
+
+  const idx = fields.findIndex((f) => f.name === "🏙️ Cidade / CDD");
+
+  if (idx >= 0) fields[idx] = novoField;
+  else fields.splice(Math.max(fields.length - 2, 0), 0, novoField);
+
+  embedBuilder.setFields(fields);
+  return embedBuilder;
+}
+
+function mensagemEhDoMesAtualSP(msg) {
+  const monthKey = getMonthKey();
+
+  const dataSP = new Date(msg.createdTimestamp).toLocaleString("en-US", {
+    timeZone: "America/Sao_Paulo",
+  });
+
+  const d = new Date(dataSP);
+  const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+
+  return key === monthKey;
+}
+
 async function reconstruirStatsPorEmbeds(client, limiteBusca = 100) {
   const canal = await client.channels.fetch(CANAL_PAGAMENTO).catch(() => null);
   if (!canal || !canal.isTextBased()) return null;
@@ -1314,6 +1405,7 @@ async function reconstruirStatsPorEmbeds(client, limiteBusca = 100) {
     const criadorId = getCriadorIdFromEmbed(embed);
     const decisorId = getUserIdFromUltimaDecisao(embed);
     const valor = getValorNumeroFromEmbed(embed);
+    const cidadeKey = getCidadeKeyFromEmbed(embed);
 
     stats.totalCreated += 1;
     stats.categories[categoria] = Number(stats.categories[categoria] || 0) + 1;
@@ -1328,6 +1420,18 @@ async function reconstruirStatsPorEmbeds(client, limiteBusca = 100) {
 
       stats.categoriesApproved[categoria] = Number(stats.categoriesApproved[categoria] || 0) + 1;
       stats.amountsByCategory[categoria] = Number(stats.amountsByCategory[categoria] || 0) + valor;
+
+      if (cidadeKey) {
+        stats.citiesApproved[cidadeKey] = Number(stats.citiesApproved[cidadeKey] || 0) + 1;
+        stats.amountsByCity[cidadeKey] = Number(stats.amountsByCity[cidadeKey] || 0) + valor;
+
+        if (!stats.categoriesApprovedByCity[cidadeKey]) {
+          stats.categoriesApprovedByCity[cidadeKey] = {};
+        }
+
+        stats.categoriesApprovedByCity[cidadeKey][categoria] =
+          Number(stats.categoriesApprovedByCity[cidadeKey][categoria] || 0) + 1;
+      }
 
       if (decisorId) {
         stats.approvers[decisorId] = Number(stats.approvers[decisorId] || 0) + 1;
@@ -1417,6 +1521,59 @@ async function limparBotoesAntigos(client, canal) {
   }
 
   return ordenadas[0] || null;
+}
+
+async function adicionarBotoesCidadeNosRegistrosDoMes(client, canal) {
+  const mensagens = await canal.messages.fetch({ limit: 100 }).catch(() => null);
+  if (!mensagens) return { atualizados: 0, ignorados: 0 };
+
+  const lista = [...mensagens.values()]
+    .filter((m) => m.author?.id === client.user.id)
+    .filter((m) => m.embeds?.length > 0)
+    .filter((m) => {
+      const t = m.embeds?.[0]?.title || "";
+      return t.includes("Registro de Pagamento de Evento – SANTACREATORS");
+    })
+    .filter((m) => mensagemEhDoMesAtualSP(m));
+
+  let atualizados = 0;
+  let ignorados = 0;
+
+  for (const msg of lista) {
+    const jaTemCidade = msg.components?.some((row) =>
+      row.components?.some((c) => String(c.customId || "").startsWith("cidade_pagamento__"))
+    );
+
+    if (jaTemCidade) {
+      ignorados++;
+      continue;
+    }
+
+    const embedRaw = msg.embeds?.[0];
+    const embedOriginal = EmbedBuilder.from(embedRaw);
+
+    const statusValue = getStatusValueFromEmbed(embedOriginal);
+    const ehPagoFinal = /✅\s*\*\*PAGO\*\*/i.test(statusValue);
+    const ehReprovadoFinal = /❌\s*\*\*REPROVADO\*\*/i.test(statusValue);
+
+    const components = [];
+
+    if (ehPagoFinal || ehReprovadoFinal) {
+      components.push(criarRowCidadesPagamento(msg.id));
+    } else {
+      components.push(criarRowStatus(msg.id));
+      components.push(criarRowCidadesPagamento(msg.id));
+    }
+
+    await msg.edit({
+      embeds: [embedOriginal],
+      components,
+    }).catch(() => null);
+
+    atualizados++;
+  }
+
+  return { atualizados, ignorados };
 }
 
 // =============================
@@ -1525,6 +1682,44 @@ const statsRefeitos = await reconstruirStatsPorEmbeds(client, 100).catch(() => n
 
   return true;
 }
+      // ✅ BOTÃO CIDADES: adiciona botões Nobre/Santa/Grande/Maresia nos registros do mês atual
+      if (id === "filtro_cidades") {
+        if (!temPermissaoPagamento(interaction)) {
+          await interaction.reply({
+            content: "🚫 Você não tem permissão para usar o filtro de cidades.",
+            ephemeral: true,
+          }).catch(() => {});
+          return true;
+        }
+
+        await interaction.deferReply({ ephemeral: true }).catch(() => {});
+
+        const canal = await client.channels.fetch(CANAL_PAGAMENTO).catch(() => null);
+        if (!canal || !canal.isTextBased()) {
+          await interaction.editReply({ content: "❌ Não achei o canal de pagamentos." }).catch(() => {});
+          return true;
+        }
+
+        const { atualizados, ignorados } = await adicionarBotoesCidadeNosRegistrosDoMes(client, canal);
+
+        await canal.send({
+          embeds: [criarEmbedMenu()],
+          components: [criarRowMenu()],
+        }).catch(() => {});
+
+        await limparBotoesAntigos(client, canal).catch(() => {});
+
+        await interaction.editReply({
+          content: [
+            "✅ Botões de cidade aplicados nos registros do mês atual.",
+            `🏙️ Registros atualizados: **${atualizados}**`,
+            `↩️ Já tinham botão de cidade: **${ignorados}**`,
+          ].join("\n"),
+        }).catch(() => {});
+
+        return true;
+      }
+
       // ✅ FILTROS
       if (id.startsWith("filtro_")) {
         if (!temPermissaoPagamento(interaction)) {
@@ -1601,6 +1796,57 @@ const statsRefeitos = await reconstruirStatsPorEmbeds(client, 100).catch(() => n
 
         logPagamento(client, interaction, "🟣 Formulário aberto", `**Usuário:** <@${interaction.user.id}> abriu o formulário de pagamento.`)
           .catch(() => {});
+        return true;
+      }
+
+      // ✅ CIDADE DO REGISTRO
+      if (id.startsWith("cidade_pagamento__")) {
+        if (!temPermissaoPagamento(interaction)) {
+          await interaction.reply({
+            content: "🚫 Você não tem permissão para marcar cidade nesse registro.",
+            ephemeral: true,
+          }).catch(() => {});
+          return true;
+        }
+
+        await interaction.deferReply({ ephemeral: true }).catch(() => {});
+
+        const [, cidadeKey, messageId] = id.split("__");
+        const cidade = CIDADES_PAGAMENTO[cidadeKey];
+
+        if (!cidade) {
+          await interaction.editReply({ content: "❌ Cidade inválida." }).catch(() => {});
+          return true;
+        }
+
+        const registroMsg = interaction.message;
+        const embedRaw = registroMsg?.embeds?.[0];
+
+        if (!embedRaw) {
+          await interaction.editReply({ content: "❌ Não achei o embed desse registro." }).catch(() => {});
+          return true;
+        }
+
+        const embedAtualizado = atualizarCampoCidade(
+          EmbedBuilder.from(embedRaw),
+          cidadeKey,
+          interaction.user.id
+        );
+
+        await registroMsg.edit({
+          embeds: [embedAtualizado],
+          components: [
+            ...(registroMsg.components?.length ? registroMsg.components.map((row) => ActionRowBuilder.from(row)) : []),
+          ],
+        }).catch(() => {});
+
+        await reconstruirStatsPorEmbeds(client, 100).catch(() => null);
+        await updateDashboard(client).catch(() => {});
+
+        await interaction.editReply({
+          content: `✅ Cidade marcada como **${cidade.label}** nesse registro.`,
+        }).catch(() => {});
+
         return true;
       }
 
