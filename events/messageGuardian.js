@@ -113,26 +113,24 @@ async function sendChannelConfigLog(client, guild, member, channel, oldChannel, 
  */
 function isAuthorized(member) {
     if (!member) return false;
-    
-    // 1. Usuários isentos (Bypass total para Você e o Owner)
+
+    // 1. Owner e você possuem bypass total
     if (ALLOWED_USERS.includes(member.id)) return true;
 
-    // 2. Hierarquia: Qualquer cargo acima do bot no Discord está autorizado
     const botMember = member.guild.members.me;
-    if (botMember && member.roles.highest.position >= botMember.roles.highest.position) {
+    if (!botMember) return false;
+
+    // 2. Qualquer pessoa com cargo acima ou igual ao cargo mais alto do bot pode apagar
+    if (member.roles.highest.position >= botMember.roles.highest.position) {
         return true;
     }
 
-    // 3. Bloqueio por Limite: Ninguém abaixo do cargo SantaCreators pode apagar
-    const thresholdRole = member.guild.roles.cache.get(THRESHOLD_ROLE_ID);
-    if (thresholdRole && member.roles.highest.position < thresholdRole.position) {
-        return false;
-    }
+    // 3. Apenas esses cargos podem apagar mensagens do bot
+    const hasAllowedRole = member.roles.cache.some(role => ALLOWED_ROLES.includes(role.id));
+    if (hasAllowedRole) return true;
 
-    // 4. Acima do limite: Apenas os cargos autorizados (Resp Influ, Creators, Líder)
-    const hasWhitelistedRole = member.roles.cache.some(role => ALLOWED_ROLES.includes(role.id));
-    return hasWhitelistedRole;
-
+    // 4. Qualquer outro cargo abaixo do bot, mesmo com Administrador, NÃO pode apagar
+    return false;
 }
 
 async function sendSecurityLog(client, guild, perpetrator, punished, reason) {
@@ -157,11 +155,11 @@ async function sendSecurityLog(client, guild, perpetrator, punished, reason) {
 
 export async function installMessageGuardian(client) {
     client.on('messageDelete', async (message) => {
-        // Só nos interessa se a mensagem deletada for do próprio bot
-        if (!message.author || message.author.id !== client.user.id) return;
-        if (!message.guild) return;
+    if (!message.guild) return;
 
-        const guild = message.guild;
+    const guild = message.guild;
+
+    const deletedMessageAuthorId = message.author?.id || null;
 
         // Aguarda o Audit Log processar
         await new Promise(resolve => setTimeout(resolve, 2500));
@@ -169,15 +167,21 @@ export async function installMessageGuardian(client) {
         let executor = null;
         try {
             const fetchedLogs = await guild.fetchAuditLogs({
-                limit: 1,
-                type: AuditLogEvent.MessageDelete,
-            });
-            const logEntry = fetchedLogs.entries.first();
+    limit: 5,
+    type: AuditLogEvent.MessageDelete,
+});
 
-            // Verifica se o log condiz com a deleção (alvo bot e canal correto)
-            if (logEntry && logEntry.target.id === client.user.id && Date.now() - logEntry.createdTimestamp < 8000) {
-                executor = logEntry.executor;
-            }
+const logEntry = fetchedLogs.entries.find(entry => {
+    const isRecent = Date.now() - entry.createdTimestamp < 12000;
+    const isBotMessage = entry.target?.id === client.user.id || deletedMessageAuthorId === client.user.id;
+    const isSameChannel = entry.extra?.channel?.id === message.channel?.id;
+
+    return isRecent && isBotMessage && isSameChannel;
+});
+
+if (logEntry) {
+    executor = logEntry.executor;
+}
         } catch (error) {
             console.error('[MessageGuardian] Erro ao buscar Audit Logs:', error);
         }
