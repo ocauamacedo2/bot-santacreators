@@ -1833,11 +1833,17 @@ const statsRefeitos = await reconstruirStatsPorEmbeds(client, 100).catch(() => n
           interaction.user.id
         );
 
+        const componentsSemCidades = (registroMsg.components || [])
+          .filter((row) => {
+            return !row.components?.some((c) =>
+              String(c.customId || "").startsWith("cidade_pagamento__")
+            );
+          })
+          .map((row) => ActionRowBuilder.from(row));
+
         await registroMsg.edit({
           embeds: [embedAtualizado],
-          components: [
-            ...(registroMsg.components?.length ? registroMsg.components.map((row) => ActionRowBuilder.from(row)) : []),
-          ],
+          components: componentsSemCidades,
         }).catch(() => {});
 
         await reconstruirStatsPorEmbeds(client, 100).catch(() => null);
