@@ -1203,6 +1203,16 @@ function criarRowCidadesPagamento(messageId) {
   );
 }
 
+function removerRowsCidadePagamento(message) {
+  return (message.components || [])
+    .filter((row) => {
+      return !row.components?.some((c) =>
+        String(c.customId || "").startsWith("cidade_pagamento__")
+      );
+    })
+    .map((row) => ActionRowBuilder.from(row));
+}
+
 // =============================
 // Log visual completo
 // =============================
@@ -1549,7 +1559,19 @@ async function adicionarBotoesCidadeNosRegistrosDoMes(client, canal) {
       row.components?.some((c) => String(c.customId || "").startsWith("cidade_pagamento__"))
     );
 
-    if (cidadeJaDefinida || jaTemBotaoCidade) {
+    if (cidadeJaDefinida) {
+      const componentsSemCidades = removerRowsCidadePagamento(msg);
+
+      await msg.edit({
+        embeds: [EmbedBuilder.from(embedRaw)],
+        components: componentsSemCidades,
+      }).catch(() => null);
+
+      ignorados++;
+      continue;
+    }
+
+    if (jaTemBotaoCidade) {
       ignorados++;
       continue;
     }
@@ -1833,13 +1855,7 @@ const statsRefeitos = await reconstruirStatsPorEmbeds(client, 100).catch(() => n
         const cidadeJaDefinida = getCidadeKeyFromEmbed(embedRaw);
 
         if (cidadeJaDefinida) {
-          const componentsSemCidades = (registroMsg.components || [])
-            .filter((row) => {
-              return !row.components?.some((c) =>
-                String(c.customId || "").startsWith("cidade_pagamento__")
-              );
-            })
-            .map((row) => ActionRowBuilder.from(row));
+          const componentsSemCidades = removerRowsCidadePagamento(registroMsg);
 
           await registroMsg.edit({
             embeds: [EmbedBuilder.from(embedRaw)],
