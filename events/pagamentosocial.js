@@ -1540,16 +1540,19 @@ async function adicionarBotoesCidadeNosRegistrosDoMes(client, canal) {
   let ignorados = 0;
 
   for (const msg of lista) {
-    const jaTemCidade = msg.components?.some((row) =>
+    const embedRaw = msg.embeds?.[0];
+    if (!embedRaw) continue;
+
+    const cidadeJaDefinida = getCidadeKeyFromEmbed(embedRaw);
+
+    const jaTemBotaoCidade = msg.components?.some((row) =>
       row.components?.some((c) => String(c.customId || "").startsWith("cidade_pagamento__"))
     );
 
-    if (jaTemCidade) {
+    if (cidadeJaDefinida || jaTemBotaoCidade) {
       ignorados++;
       continue;
     }
-
-    const embedRaw = msg.embeds?.[0];
     const embedOriginal = EmbedBuilder.from(embedRaw);
 
     const statusValue = getStatusValueFromEmbed(embedOriginal);
@@ -1824,6 +1827,29 @@ const statsRefeitos = await reconstruirStatsPorEmbeds(client, 100).catch(() => n
 
         if (!embedRaw) {
           await interaction.editReply({ content: "❌ Não achei o embed desse registro." }).catch(() => {});
+          return true;
+        }
+
+        const cidadeJaDefinida = getCidadeKeyFromEmbed(embedRaw);
+
+        if (cidadeJaDefinida) {
+          const componentsSemCidades = (registroMsg.components || [])
+            .filter((row) => {
+              return !row.components?.some((c) =>
+                String(c.customId || "").startsWith("cidade_pagamento__")
+              );
+            })
+            .map((row) => ActionRowBuilder.from(row));
+
+          await registroMsg.edit({
+            embeds: [EmbedBuilder.from(embedRaw)],
+            components: componentsSemCidades,
+          }).catch(() => {});
+
+          await interaction.editReply({
+            content: "⚠️ Esse registro já tem uma cidade marcada. Os botões foram removidos.",
+          }).catch(() => {});
+
           return true;
         }
 
