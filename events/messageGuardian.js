@@ -5,7 +5,7 @@ import { EmbedBuilder, AuditLogEvent, PermissionsBitField } from 'discord.js';
 // CONFIGURAÇÃO DO GUARDIÃO DE MENSAGENS DO BOT
 // =====================================================
 
-const LOG_CHANNEL_ID = '1486006908056899748'; // Canal de logs de segurança
+const LOG_CHANNEL_ID = '1378206851467972778'; // Canal de logs de segurança
 
 // Usuários isentos (Bypass total)
 const ALLOWED_USERS = [
@@ -39,16 +39,11 @@ function isAuthorized(member) {
     const hasWhitelistedRole = member.roles.cache.some(role => ALLOWED_ROLES.includes(role.id));
     if (hasWhitelistedRole) return true;
 
-    // Verifica se está acima do cargo SantaCreators (Threshold)
-    // Se não tiver um cargo superior ao threshold, assume-se que não é autorizado 
-    // (a menos que já tenha passado na checagem de whitelist acima)
-    const thresholdRole = member.guild.roles.cache.get(THRESHOLD_ROLE_ID);
-    if (thresholdRole && member.roles.highest.position < thresholdRole.position) {
-        return false;
+    const botMember = member.guild.members.me;
+    if (botMember && member.roles.highest.position >= botMember.roles.highest.position) {
+        return true;
     }
 
-    // Se chegou aqui e não está na whitelist, mesmo sendo "admin" ou acima do threshold, 
-    // a regra diz que não pode apagar (conforme seu pedido).
     return false;
 }
 

@@ -650,6 +650,11 @@ export function installRoleGuardian(client) {
       const removedIds = [...oldSet].filter(id => !newSet.has(id));
       if (removedIds.length === 0) return;
 
+      const removedRoles = removedIds
+        .map(id => guild.roles.cache.get(id))
+        .filter(Boolean)
+        .sort((a, b) => b.position - a.position);
+
       const logs = await guild.fetchAuditLogs({ type: AuditLogEvent.MemberRoleUpdate, limit: 5 }).catch(() => null);
       let entry = null;
 

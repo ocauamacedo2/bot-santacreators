@@ -417,6 +417,8 @@ import { setupSyncCargos } from "../events/syncCargos.js";
 import { setupIaChatAuto } from "../events/iaChatAuto.js";
 import { setupAntiFloodProtector } from "../events/antiFloodProtector.js";
 import setupProtecaoBotsDeletarCanais from "../events/protecaoBotsDeletarCanais.js";
+import { installMessageGuardian } from "../events/messageGuardian.js";
+import { installServerConfigGuardian } from "../events/serverConfigGuardian.js";
 
 // =====================================================
 // Express + Mongo
@@ -521,6 +523,8 @@ const setupEventHandlers = () => {
   setupIaChatAuto(client);
   setupProtecaoBotsDeletarCanais(client);
   setupAntiFloodProtector(client);
+  installMessageGuardian(client);
+  installServerConfigGuardian(client);
 
   client.on("channelCreate", async (c) => {
     try {
