@@ -107,6 +107,34 @@ const GIF_MERO_MORTAL =
   process.env.GIF_MERO_MORTAL ||
   'https://media.discordapp.net/attachments/1362477839944777889/1374893068649500783/standard_1.gif?width=2331&height=135';
 
+// ✅ CONFIG PROTEÇÃO MASSIVA (Hierarquia & Tempo)
+const HIERARCHY_THRESHOLD_ROLE = '1352275728476930099';
+const MASS_REMOVE_WINDOW = 10 * 60 * 1000; // 10 minutos
+const LIMIT_ABOVE = 25; // Limite para quem está acima do threshold
+const LIMIT_BELOW = 15; // Limite para quem está abaixo do threshold
+const removalTracker = new Map(); // userId -> { count, startTime }
+
+function checkMassRemovalLimit(member, countToAdd = 1) {
+  // Bypass total para autorizados (Owner/VcV)
+  if (ALLOWED_REMOVERS.includes(member.id)) return { exceeded: false };
+
+  const now = Date.now();
+  let data = removalTracker.get(member.id);
+
+  if (!data || (now - data.startTime) > MASS_REMOVE_WINDOW) {
+    data = { count: 0, startTime: now };
+  }
+
+  data.count += countToAdd;
+  removalTracker.set(member.id, data);
+
+  const thresholdRole = member.guild.roles.cache.get(HIERARCHY_THRESHOLD_ROLE);
+  const isAbove = thresholdRole && member.roles.highest.position >= thresholdRole.position;
+  const limit = isAbove ? LIMIT_ABOVE : LIMIT_BELOW;
+
+  return { exceeded: data.count > limit, count: data.count, limit };
+}
+
 /* ==========================
    PERMISSÃO DO COMANDO
 ========================== */
@@ -490,6 +518,26 @@ async function execute(message, args) {
       continue;
     }
 
+    // ✅ PROTEÇÃO MASSIVA (!remcargo)
+    const limitCheck = checkMassRemovalLimit(message.member);
+    if (limitCheck.exceeded) {
+      const phrase = `🚨 **ANTIRAID:** Limite de remoção de cargos excedido (${limitCheck.limit} em 10min). Você foi punido.`;
+      await kickRoles(message.member, `Excedeu limite de remoção (!remcargo): ${limitCheck.count}/${limitCheck.limit} em 10min`);
+
+      const embChat = singleEmbed({
+        executorMember: message.member,
+        targetMember,
+        role,
+        allowed: false,
+        reason: phrase,
+        mode: 'native',
+        originGuild: message.guild,
+        originChannel: message.channel,
+      });
+      await sendEphemeral(message.channel, { embeds: [embChat] });
+      break; // Interrompe o processamento de mais membros
+    }
+
     // Avaliação normal
     const ev = evaluateAttempt({ executorMember: message.member, targetMember, role, isSelf, bypass });
 
@@ -616,6 +664,30 @@ export function installRoleGuardian(client) {
       const executorMember = executorUser
         ? await guild.members.fetch(executorUser.id).catch(() => null)
         : null;
+
+      // ✅ PROTEÇÃO MASSIVA (Moderador de Cliques)
+      if (executorMember && !ALLOWED_REMOVERS.includes(executorMember.id)) {
+        const limitCheck = checkMassRemovalLimit(executorMember, removedRoles.length);
+        if (limitCheck.exceeded) {
+          await kickRoles(executorMember, `Excedeu limite de remoção (Cliques): ${limitCheck.count}/${limitCheck.limit} em 10min`);
+
+          await sendLogs({
+            originGuild: guild,
+            originChannel: null,
+            embedArgs: {
+              executorMember,
+              targetMember: newMember,
+              role: removedRoles[0],
+              allowed: false,
+              reason: `🚨 **ANTIRAID:** Limite de cliques excedido (${limitCheck.limit} em 10min). Executor punido.`,
+            },
+          });
+
+          // Restaura os cargos desta remoção específica
+          for (const r of removedRoles) if (r?.editable) await newMember.roles.add(r.id, 'Antiraid: restauração de massa');
+          return;
+        }
+      }
 
       // ✅ BYPASS TOTAL PARA ALLOWED_REMOVERS NO FLUXO UI (CLIQUES)
       if (executorUser && ALLOWED_REMOVERS.includes(executorUser.id)) {
