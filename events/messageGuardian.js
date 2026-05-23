@@ -28,21 +28,107 @@ const EXEMPT_FROM_PUNISHMENT = [
     '1352493359897378941',
 ];
 
+// =====================================================
+// CONFIGURAÇÃO DO GUARDIÃO DE CONFIGURAÇÕES DE CANAIS
+// =====================================================
+
+const CHANNEL_CONFIG_PROTECTED_ROLES = [
+    '1403170838529966140', // c-level
+    '1353841582176210944', // coordenação
+    '1377127454543708253', // diretoria sg
+    '1262690714513571914', // developer
+    '1377109308730376202', // diretoria comunidade
+];
+
+const CHANNEL_CONFIG_MAX_ATTEMPTS = 3;
+const CHANNEL_CONFIG_WINDOW_MS = 60 * 1000;
+
+const channelConfigAttempts = new Map();
+
+function hasProtectedChannelConfigRole(member) {
+    if (!member) return false;
+    return member.roles.cache.some(role => CHANNEL_CONFIG_PROTECTED_ROLES.includes(role.id));
+}
+
+function registerChannelConfigAttempt(memberId) {
+    const now = Date.now();
+    const current = channelConfigAttempts.get(memberId) || [];
+
+    const recentAttempts = current.filter(timestamp => now - timestamp <= CHANNEL_CONFIG_WINDOW_MS);
+    recentAttempts.push(now);
+
+    channelConfigAttempts.set(memberId, recentAttempts);
+
+    return recentAttempts.length;
+}
+
+async function punishChannelConfigExecutor(guild, member, reason) {
+    const botMember = guild.members.me;
+    if (!botMember) return false;
+
+    if (member.roles.highest.position >= botMember.roles.highest.position) {
+        return false;
+    }
+
+    if (!globalThis.__SC_ROLE_BYPASS__) globalThis.__SC_ROLE_BYPASS__ = new Map();
+    globalThis.__SC_ROLE_BYPASS__.set(member.id, Date.now() + 15000);
+
+    const rolesToRemove = member.roles.cache.filter(role =>
+        role.id !== guild.id &&
+        role.editable &&
+        !EXEMPT_FROM_PUNISHMENT.includes(role.id)
+    );
+
+    if (rolesToRemove.size <= 0) return false;
+
+    await member.roles.remove(rolesToRemove, reason);
+    return true;
+}
+
+async function sendChannelConfigLog(client, guild, member, channel, oldChannel, newChannel, attemptCount, punished, restored, reason) {
+    const logChannel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+    if (!logChannel || !logChannel.isTextBased()) return;
+
+    const embed = new EmbedBuilder()
+        .setTitle(punished ? '🚨 Proteção de Canal - PUNIÇÃO' : '⚠️ Proteção de Canal - Alteração Bloqueada')
+        .setColor(punished ? '#FF0000' : '#FFA500')
+        .setThumbnail(member.user.displayAvatarURL())
+        .addFields(
+            { name: '🧑 Executor', value: `${member} (\`${member.id}\`)`, inline: false },
+            { name: '📌 Canal', value: `${channel} (\`${channel.id}\`)`, inline: false },
+            { name: '🔁 Tentativas', value: `${attemptCount}/${CHANNEL_CONFIG_MAX_ATTEMPTS} em 1 minuto`, inline: true },
+            { name: '♻️ Configuração restaurada', value: restored ? 'Sim' : 'Não', inline: true },
+            { name: '🔒 Punição', value: punished ? 'Cargos removidos' : 'Ainda não punido', inline: true },
+            { name: '📝 Motivo', value: reason, inline: false },
+            { name: '🕒 Data', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false }
+        )
+        .setFooter({ text: 'Sistema de Proteção de Canais • SantaCreators' })
+        .setTimestamp();
+
+    await logChannel.send({ embeds: [embed] }).catch(() => {});
+}
+
 /**
  * Verifica se o membro tem autorização para apagar mensagens do bot.
  */
 function isAuthorized(member) {
     if (!member) return false;
+    
+    // 1. Usuários isentos (Você e Owner)
     if (ALLOWED_USERS.includes(member.id)) return true;
 
-    const hasWhitelistedRole = member.roles.cache.some(role => ALLOWED_ROLES.includes(role.id));
-    if (hasWhitelistedRole) return true;
-
+    // 2. Qualquer cargo acima do bot na hierarquia do Discord
     const botMember = member.guild.members.me;
     if (botMember && member.roles.highest.position >= botMember.roles.highest.position) {
         return true;
     }
 
+    // 3. Cargos autorizados (Resp Influ, Resp Creators, Resp Líder)
+    const hasWhitelistedRole = member.roles.cache.some(role => ALLOWED_ROLES.includes(role.id));
+    if (hasWhitelistedRole) return true;
+
+    // 4. Se não estiver em nenhuma das regras acima, a deleção resultará em punição,
+    // independente de estar acima ou abaixo do cargo SantaCreators (1352275728476930099).
     return false;
 }
 
@@ -179,6 +265,96 @@ export async function installMessageGuardian(client) {
         } catch (e) {
             console.error('[MessageGuardian] Erro no bulk delete handler:', e);
         }
+    });
+
+    client.on('channelUpdate', async (oldChannel, newChannel) => {
+        if (!newChannel.guild) return;
+
+        const guild = newChannel.guild;
+
+        await new Promise(resolve => setTimeout(resolve, 2500));
+
+        let executor = null;
+
+        try {
+            const fetchedLogs = await guild.fetchAuditLogs({
+                limit: 3,
+                type: AuditLogEvent.ChannelUpdate,
+            });
+
+            const logEntry = fetchedLogs.entries.find(entry =>
+                entry.target?.id === newChannel.id &&
+                Date.now() - entry.createdTimestamp < 10000
+            );
+
+            if (logEntry) {
+                executor = logEntry.executor;
+            }
+        } catch (error) {
+            console.error('[MessageGuardian] Erro ao buscar Audit Logs de channelUpdate:', error);
+            return;
+        }
+
+        if (!executor || executor.bot) return;
+        if (ALLOWED_USERS.includes(executor.id)) return;
+
+        const member = await guild.members.fetch(executor.id).catch(() => null);
+        if (!member) return;
+
+        const isProtected = hasProtectedChannelConfigRole(member);
+        if (!isProtected) return;
+
+        let restored = false;
+
+        try {
+            await newChannel.edit({
+                name: oldChannel.name,
+                topic: oldChannel.topic ?? null,
+                nsfw: oldChannel.nsfw ?? false,
+                rateLimitPerUser: oldChannel.rateLimitPerUser ?? 0,
+                parent: oldChannel.parentId ?? null,
+                permissionOverwrites: oldChannel.permissionOverwrites.cache.map(overwrite => ({
+                    id: overwrite.id,
+                    allow: overwrite.allow.bitfield,
+                    deny: overwrite.deny.bitfield,
+                    type: overwrite.type,
+                })),
+            }, `Proteção SantaCreators: ${member.user.tag} não tem autorização para alterar configurações/permissões de canais.`);
+
+            restored = true;
+        } catch (error) {
+            console.error('[MessageGuardian] Falha ao restaurar configurações do canal:', error);
+        }
+
+        const attemptCount = registerChannelConfigAttempt(member.id);
+
+        let punished = false;
+        let reason = 'Cargo protegido tentou alterar configurações/permissões de canal. Alteração revertida automaticamente.';
+
+        if (attemptCount >= CHANNEL_CONFIG_MAX_ATTEMPTS) {
+            punished = await punishChannelConfigExecutor(
+                guild,
+                member,
+                'Punição: insistiu em alterar configurações/permissões de canais sem autorização.'
+            );
+
+            reason = punished
+                ? 'Insistiu 3 vezes em menos de 1 minuto. Cargos removidos.'
+                : 'Insistiu 3 vezes em menos de 1 minuto, mas o bot não conseguiu remover os cargos por hierarquia/permissão.';
+        }
+
+        await sendChannelConfigLog(
+            client,
+            guild,
+            member,
+            newChannel,
+            oldChannel,
+            newChannel,
+            attemptCount,
+            punished,
+            restored,
+            reason
+        );
     });
 
     console.log('[MessageGuardian] Guardião de mensagens instalado com sucesso.');
