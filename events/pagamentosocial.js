@@ -1193,11 +1193,20 @@ function getStatusValueFromEmbed(embed) {
 }
 
 function getTipoPagamentoFromEmbed(embedLike) {
-  const desc = embedLike?.description || embedLike?.data?.description || "";
-  const match = String(desc).match(/Tipo Identificado:\s*`([^`]+)`/i);
+  const desc = String(embedLike?.description || embedLike?.data?.description || "");
+
+  const match =
+    desc.match(/Tipo Identificado:\*\*\s*`([^`]+)`/i) ||
+    desc.match(/Tipo Identificado:\s*`([^`]+)`/i) ||
+    desc.match(/Tipo Identificado:\s*([^\n]+)/i);
 
   if (match?.[1]) {
-    return normalizarTipoPremiacao(match[1]);
+    return normalizarTipoPremiacao(
+      String(match[1])
+        .replace(/\*/g, "")
+        .replace(/`/g, "")
+        .trim()
+    );
   }
 
   return "Dinheiro";
@@ -1424,8 +1433,7 @@ export async function pagamentoSocialOnReady(client) {
     components: [criarRowMenu()],
   }).catch(() => {});
 
-// Inicializa o Dashboard recalculando pelos registros existentes
-await reconstruirStatsPorEmbeds(client, 100).catch(() => {});
+// Inicializa o Dashboard
 await updateDashboard(client).catch(() => {});
 }
 
@@ -1450,7 +1458,7 @@ export async function handlePagamentoSocial(interaction, client) {
       if (id === "pagamento_dash_atualizar") {
   await interaction.deferReply({ ephemeral: true }).catch(() => {});
 
-  const statsRefeitos = await reconstruirStatsPorEmbeds(client, 100).catch(() => null);
+const statsRefeitos = await reconstruirStatsPorEmbeds(client, 100).catch(() => null);
 
   await updateDashboard(client).catch(() => {});
 
