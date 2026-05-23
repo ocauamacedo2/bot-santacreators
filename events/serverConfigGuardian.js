@@ -68,6 +68,50 @@ async function punishMember(member, guild, reason) {
     return false;
 }
 
+async function findChannelConfigExecutor(guild, channelId) {
+    const auditTypes = [
+        AuditLogEvent.ChannelUpdate,
+        AuditLogEvent.ChannelOverwriteCreate,
+        AuditLogEvent.ChannelOverwriteUpdate,
+        AuditLogEvent.ChannelOverwriteDelete,
+    ];
+
+    for (const type of auditTypes) {
+        const fetchedLogs = await guild.fetchAuditLogs({ limit: 5, type }).catch(() => null);
+        if (!fetchedLogs) continue;
+
+        const logEntry = fetchedLogs.entries.find(entry =>
+            entry.target?.id === channelId &&
+            Date.now() - entry.createdTimestamp < 15000
+        );
+
+        if (logEntry) return logEntry;
+    }
+
+    return null;
+}
+
+function buildChannelRestoreData(oldChannel) {
+    const data = {
+        name: oldChannel.name,
+        parent: oldChannel.parentId ?? null,
+        permissionOverwrites: oldChannel.permissionOverwrites.cache.map(overwrite => ({
+            id: overwrite.id,
+            allow: overwrite.allow.bitfield,
+            deny: overwrite.deny.bitfield,
+            type: overwrite.type,
+        })),
+    };
+
+    if ('topic' in oldChannel) data.topic = oldChannel.topic ?? null;
+    if ('nsfw' in oldChannel) data.nsfw = oldChannel.nsfw ?? false;
+    if ('rateLimitPerUser' in oldChannel) data.rateLimitPerUser = oldChannel.rateLimitPerUser ?? 0;
+    if ('bitrate' in oldChannel) data.bitrate = oldChannel.bitrate;
+    if ('userLimit' in oldChannel) data.userLimit = oldChannel.userLimit;
+
+    return data;
+}
+
 export async function installServerConfigGuardian(client) {
     // --- Proteção de Canais ---
     client.on('channelUpdate', async (oldChannel, newChannel) => {
@@ -77,28 +121,20 @@ export async function installServerConfigGuardian(client) {
         await new Promise(r => setTimeout(r, 2000));
 
         try {
-            const fetchedLogs = await guild.fetchAuditLogs({ limit: 5, type: AuditLogEvent.ChannelUpdate }).catch(() => null);
-            if (!fetchedLogs) return;
-
-            const logEntry = fetchedLogs.entries.find(e => e.target.id === newChannel.id && Date.now() - e.createdTimestamp < 10000);
-            if (!logEntry || logEntry.executor.bot) return;
+            const logEntry = await findChannelConfigExecutor(guild, newChannel.id);
+if (!logEntry || logEntry.executor?.bot) return;
             if (BYPASS_USERS.includes(logEntry.executor.id)) return;
 
             const member = await guild.members.fetch(logEntry.executor.id).catch(() => null);
             if (!member || !member.roles.cache.some(r => FORBIDDEN_CHANGER_ROLES.includes(r.id))) return;
 
             // Reverte Propriedades e Overwrites (Permissões)
-            await newChannel.edit({
-                name: oldChannel.name,
-                topic: oldChannel.topic,
-                nsfw: oldChannel.nsfw,
-                parent: oldChannel.parent,
-                bitrate: oldChannel.bitrate,
-                userLimit: oldChannel.userLimit,
-                rateLimitPerUser: oldChannel.rateLimitPerUser,
-                permissionOverwrites: oldChannel.permissionOverwrites.cache,
-                reason: 'Proteção: Alteração de configuração de canal por cargo não autorizado.'
-            }).catch(() => {});
+await newChannel.edit(
+    buildChannelRestoreData(oldChannel),
+    'Proteção: Alteração de configuração/permissão de canal por cargo não autorizado.'
+).catch((error) => {
+    console.error('[ServerConfigGuardian] Falha ao reverter canal:', error);
+});
 
             const now = Date.now();
             const data = violationTracker.get(member.id) || { count: 0, firstTime: now };
