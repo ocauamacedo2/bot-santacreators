@@ -14,7 +14,8 @@ import mongoose from "mongoose";
 
 // ⚙️ CONFIG
 const FIVEM_PANEL_CHANNEL_ID = "1501321157259956244";
-const FIVEM_REFRESH_INTERVAL_MS = 2 * 60 * 1000; // 2 minutos
+const FIVEM_REFRESH_INTERVAL_MS = 2 * 60 * 1000; // coleta a cada 2 minutos
+const FIVEM_PANEL_REFRESH_INTERVAL_MS = 10 * 60 * 1000; // edita o painel a cada 10 minutos
 const FIVEM_HISTORY_MAX_DAYS = 30; // Limitar histórico a 30 dias
 const FIVEM_FETCH_TIMEOUT_MS = 10 * 1000; // 10 segundos
 const FIVEM_COMPARISON_TOLERANCE_MS = 10 * 60 * 1000; // 10 minutos
@@ -445,6 +446,17 @@ function isPrimeTimeSnapshot(snapshot) {
   const endTotalMinutes = window.endHour * 60 + (window.endMinute || 0);
 
   return currentTotalMinutes >= startTotalMinutes && currentTotalMinutes < endTotalMinutes;
+}
+
+function isInsideCurrentEventWindow(snapshot) {
+  const window = getPrimeTimeWindow(snapshot);
+  if (!window) return false;
+
+  const currentMinutes = snapshot.hour * 60 + snapshot.minute;
+  const startMinutes = window.startHour * 60 + (window.startMinute || 0);
+  const endMinutes = window.endHour * 60 + (window.endMinute || 0);
+
+  return currentMinutes >= startMinutes && currentMinutes < endMinutes;
 }
 
 async function updateDailyPeaks(currentSnapshot) {
@@ -950,13 +962,13 @@ async function buildEmbeds(client, currentSnapshot) {
      .setColor(baseColor)
      .setTitle("🕒 AUDITORIA DE RETENÇÃO — 21:00h")
      .setDescription(
-       `*Snapshot fixo capturado rigorosamente às 21:00:00*\n\n` +
+       `*Leitura fixa do começo do evento. Não é o pico da janela; é só o ponto das 21h para auditoria.*\n\n` +
        retentionData.map((item, idx) => {
          const medal = idx === 0 ? "🥇" : idx === 1 ? "🥈" : idx === 2 ? "🥉" : `${idx + 1}.`;
          return (
            `${medal} **BR ${item.city.name}**\n` +
-           `> **Ponto fixo:** \`${formatNumber(item.t)}\` players\n` +
-           `> **Vs Ontem:** ${formatDiff(item.diffY)}` +
+           `> **Ponto fixo das 21h:** \`${formatNumber(item.t)}\` players\n` +
+           `> **Vs Ontem:** ${formatDiff(item.diffY)}\n` +
            `> **Vs Semana Passada:** ${formatDiff(item.diffW)}`
          );
        }).join("\n\n") +
@@ -1122,11 +1134,25 @@ const compWPrimePeaks = peaks[
 
  // 7. PAINEL — COPA DE DESEMPENHO (RANKING DE EVOLUÇÃO VS SEMANA PASSADA)
  const performanceRanking = FIVEM_CITIES.map(city => {
-   const p = activePrimePeaks.cities?.[city.key]?.primePeak || 0;
-   const pw = compWPrimePeaks.cities?.[city.key]?.primePeak || 0;
+   const currentWindow = primeWindow?.eventKey
+     ? activePrimePeaks.eventWindows?.[primeWindow.eventKey]
+     : null;
+
+   const previousWindow = primeWindow?.eventKey
+     ? compWPrimePeaks.eventWindows?.[primeWindow.eventKey]
+     : null;
+
+   const isCurrentCityWindow = currentWindow?.cityKey === city.key;
+   const isPreviousCityWindow = previousWindow?.cityKey === city.key;
+
+   const p = isCurrentCityWindow ? currentWindow?.peak || 0 : 0;
+   const pw = isPreviousCityWindow ? previousWindow?.peak || 0 : 0;
+
    const stats = calculateDiff(p, pw);
    return { city, p, pw, stats };
  }).sort((a, b) => {
+   if (a.p === 0 && b.p > 0) return 1;
+   if (b.p === 0 && a.p > 0) return -1;
    if (a.stats.pct === 'sem base') return 1;
    if (b.stats.pct === 'sem base') return -1;
    return b.stats.pct - a.stats.pct;
@@ -1188,9 +1214,9 @@ const effectivePeakData = currentEventWindow ? [
        );
      }).join("\n\n") +
      `\n\n${UI.DIVIDER}\n` +
-     `**Máxima no Horário:** \`${formatNumber(activePrimePeaks.total?.primePeak)}\` players\n` +
-     `> **Vs Ontem:** ${formatDiff(totalPrimeDiffY)}\n` +
-     `> **Vs Semana Passada:** ${formatDiff(totalPrimeDiffW)}`
+     `**Maior pico salvo nessa janela:** \`${formatNumber(currentEventWindow?.peak || 0)}\` players\n` +
+`> **Vs Semana Passada:** ${formatDiff(calculateDiff(currentEventWindow?.peak || 0, previousEventWindow?.peak || 0))}\n` +
+`> **Status:** ${(currentEventWindow?.peak || 0) > 0 ? "coletando o maior pico da janela" : "aguardando coleta dessa janela"}`
    )
    .setFooter({ text: `${useYesterdayFocus ? "Resumo Consolidado" : "Monitoramento em Tempo Real"} • Ref: ${currentSnapshot.spTime}` });
  embeds.push(primeEmbed);
@@ -1307,14 +1333,20 @@ async function editPanel(channel, options = {}) {
  await addSnapshot(currentSnapshot);
  const hasNewPeak = await updateDailyPeaks(currentSnapshot);
 
- // 🚀 Inteligência: Só edita a mensagem se for forçado, novo pico, horário das 21h ou se passou 1 hora
+ // 🚀 Coleta sempre a cada 2min, mas edita o painel sem flood:
+ // - normal: a cada 10min
+ // - durante evento: a cada 2min
+ // - se tiver pico novo: edita na hora
+ // - se for forçado pelo botão: edita na hora
  const state = FIVEM_STATE.get(channel.id) || {};
  const lastEditAt = state.lastEditAt || 0;
  const timeSinceLastEdit = Date.now() - lastEditAt;
- const isHourlyUpdate = timeSinceLastEdit >= 60 * 60 * 1000;
 
+ const isPanelTimedUpdate = timeSinceLastEdit >= FIVEM_PANEL_REFRESH_INTERVAL_MS;
+ const isEventWindowNow = isInsideCurrentEventWindow(currentSnapshot);
  const is21h = isExact21hSnapshot(currentSnapshot);
- if (!options.force && !hasNewPeak && !is21h && !isHourlyUpdate) {
+
+ if (!options.force && !hasNewPeak && !is21h && !isEventWindowNow && !isPanelTimedUpdate) {
    return null;
  }
 
