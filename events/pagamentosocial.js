@@ -1192,6 +1192,112 @@ function getStatusValueFromEmbed(embed) {
   return status || "";
 }
 
+function getTipoPagamentoFromEmbed(embedLike) {
+  const desc = embedLike?.description || embedLike?.data?.description || "";
+  const match = String(desc).match(/Tipo Identificado:\s*`([^`]+)`/i);
+
+  if (match?.[1]) {
+    return normalizarTipoPremiacao(match[1]);
+  }
+
+  return "Dinheiro";
+}
+
+function getAcaoFinalFromEmbed(embedLike) {
+  const status = getStatusValueFromEmbed(embedLike);
+
+  if (/✅\s*\*{0,2}PAGO\*{0,2}/i.test(status)) return "pago";
+  if (/❌\s*\*{0,2}REPROVADO\*{0,2}/i.test(status)) return "reprovado";
+  if (/JÁ FOI SOLICITADO|JA FOI SOLICITADO/i.test(status)) return "solicitado";
+
+  return "aguardando";
+}
+
+function getUserIdFromUltimaDecisao(embedLike) {
+  const decisao = getFieldValue(embedLike, "🧑‍⚖️ Última decisão");
+  const match = decisao.match(/<@!?(\d{10,25})>/);
+  return match?.[1] || null;
+}
+
+function getValorNumeroFromEmbed(embedLike) {
+  const valorRaw = getFieldValue(embedLike, "💰 Valor Identificado");
+  return parseValorOCR(valorRaw)?.numero || 0;
+}
+
+async function reconstruirStatsPorEmbeds(client, limiteBusca = 100) {
+  const canal = await client.channels.fetch(CANAL_PAGAMENTO).catch(() => null);
+  if (!canal || !canal.isTextBased()) return null;
+
+  const monthKey = getMonthKey();
+  const stats = makeEmptyStats(monthKey);
+
+  const mensagens = await canal.messages.fetch({ limit: limiteBusca }).catch(() => null);
+  if (!mensagens) return null;
+
+  const registros = [...mensagens.values()]
+    .filter((m) => m.author?.id === client.user.id)
+    .filter((m) => m.embeds?.length > 0)
+    .filter((m) => {
+      const titulo = m.embeds?.[0]?.title || "";
+      return titulo.includes("Registro de Pagamento de Evento – SANTACREATORS");
+    });
+
+  for (const msg of registros) {
+    const embed = msg.embeds[0];
+
+    const categoria = getTipoPagamentoFromEmbed(embed);
+    const acao = getAcaoFinalFromEmbed(embed);
+    const criadorId = getCriadorIdFromEmbed(embed);
+    const decisorId = getUserIdFromUltimaDecisao(embed);
+    const valor = getValorNumeroFromEmbed(embed);
+
+    stats.totalCreated += 1;
+    stats.categories[categoria] = Number(stats.categories[categoria] || 0) + 1;
+
+    if (criadorId) {
+      stats.creators[criadorId] = Number(stats.creators[criadorId] || 0) + 1;
+    }
+
+    if (acao === "pago") {
+      stats.totalApproved += 1;
+      stats.totalAmountPaid += valor;
+
+      stats.categoriesApproved[categoria] = Number(stats.categoriesApproved[categoria] || 0) + 1;
+      stats.amountsByCategory[categoria] = Number(stats.amountsByCategory[categoria] || 0) + valor;
+
+      if (decisorId) {
+        stats.approvers[decisorId] = Number(stats.approvers[decisorId] || 0) + 1;
+        stats.amountsByApprover[decisorId] = Number(stats.amountsByApprover[decisorId] || 0) + valor;
+      }
+
+      if (criadorId) {
+        stats.amountsByCreator[criadorId] = Number(stats.amountsByCreator[criadorId] || 0) + valor;
+      }
+    }
+
+    if (acao === "reprovado") {
+      stats.totalRejected += 1;
+      stats.categoriesRejected[categoria] = Number(stats.categoriesRejected[categoria] || 0) + 1;
+
+      if (decisorId) {
+        stats.rejecters[decisorId] = Number(stats.rejecters[decisorId] || 0) + 1;
+      }
+    }
+
+    if (acao === "solicitado") {
+      stats.totalRequested += 1;
+      stats.categoriesRequested[categoria] = Number(stats.categoriesRequested[categoria] || 0) + 1;
+
+      if (decisorId) {
+        stats.requesters[decisorId] = Number(stats.requesters[decisorId] || 0) + 1;
+      }
+    }
+  }
+
+  saveStats(stats);
+  return stats;
+}
+
 function atualizarCampoStatus(embedBuilder, novoTexto, cor, actionByUserId = null, actionLabel = null) {
   const data = embedBuilder.data ?? {};
   const fields = Array.isArray(data.fields) ? [...data.fields] : [];
@@ -1318,8 +1424,9 @@ export async function pagamentoSocialOnReady(client) {
     components: [criarRowMenu()],
   }).catch(() => {});
 
-  // Inicializa o Dashboard
-  await updateDashboard(client).catch(() => {});
+// Inicializa o Dashboard recalculando pelos registros existentes
+await reconstruirStatsPorEmbeds(client, 100).catch(() => {});
+await updateDashboard(client).catch(() => {});
 }
 
 // ============================================================================
@@ -1341,17 +1448,20 @@ export async function handlePagamentoSocial(interaction, client) {
       const id = interaction.customId;
 
       if (id === "pagamento_dash_atualizar") {
-        await interaction.deferReply({ ephemeral: true }).catch(() => {});
+  await interaction.deferReply({ ephemeral: true }).catch(() => {});
 
-        await updateDashboard(client).catch(() => {});
+  const statsRefeitos = await reconstruirStatsPorEmbeds(client, 100).catch(() => null);
 
-        await interaction.editReply({
-          content: "✅ Dashboard atualizado com sucesso!",
-        }).catch(() => {});
+  await updateDashboard(client).catch(() => {});
 
-        return true;
-      }
+  await interaction.editReply({
+    content: statsRefeitos
+      ? "✅ Dashboard recalculado pelos registros do canal e atualizado com sucesso!"
+      : "⚠️ Dashboard atualizado, mas não consegui recalcular pelos registros do canal.",
+  }).catch(() => {});
 
+  return true;
+}
       // ✅ FILTROS
       if (id.startsWith("filtro_")) {
         if (!temPermissaoPagamento(interaction)) {
