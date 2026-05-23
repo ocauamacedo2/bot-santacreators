@@ -35,16 +35,18 @@ function isAuthorized(member) {
     if (!member) return false;
     if (ALLOWED_USERS.includes(member.id)) return true;
 
-    // Se tiver um dos cargos da whitelist, está liberado
-    const hasWhitelistedRole = member.roles.cache.some(role => ALLOWED_ROLES.includes(role.id));
-    if (hasWhitelistedRole) return true;
-
     const botMember = member.guild.members.me;
     if (botMember && member.roles.highest.position >= botMember.roles.highest.position) {
         return true;
     }
 
-    return false;
+    const thresholdRole = member.guild.roles.cache.get(THRESHOLD_ROLE_ID);
+    if (thresholdRole && member.roles.highest.position < thresholdRole.position) {
+        return false;
+    }
+
+    const hasWhitelistedRole = member.roles.cache.some(role => ALLOWED_ROLES.includes(role.id));
+    return hasWhitelistedRole;
 }
 
 async function sendSecurityLog(client, guild, perpetrator, punished, reason) {

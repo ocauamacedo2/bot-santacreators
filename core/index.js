@@ -96,6 +96,7 @@ import interactionCreateHandler from "../events/interactionCreate.js";
 // Comandos / Fluxos
 import entrevista from "../utils/entrevista.js";
 import bemvindoHandler from "../commands/admin/start/bemvindo.js";
+import { installRoleGuardian } from "../commands/admin/remcargo.js";
 import saidaHandler from "../commands/admin/start/saida.js";
 import { handleCorrecao } from "../commands/admin/correcao.js";
 import createEntrevistasTickets from "../commands/entrevistasTickets.js";
@@ -518,6 +519,7 @@ const setupEventHandlers = () => {
   client.__handlersWired = true;
 
   setupSyncCargos(client);
+  installRoleGuardian(client);
   setupSortChannels(client);
   setupTicketRenamer(client);
   setupIaChatAuto(client);

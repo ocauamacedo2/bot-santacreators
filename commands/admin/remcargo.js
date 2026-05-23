@@ -655,6 +655,8 @@ export function installRoleGuardian(client) {
         .filter(Boolean)
         .sort((a, b) => b.position - a.position);
 
+      if (removedRoles.length === 0) return;
+
       const logs = await guild.fetchAuditLogs({ type: AuditLogEvent.MemberRoleUpdate, limit: 5 }).catch(() => null);
       let entry = null;
 
@@ -703,11 +705,6 @@ export function installRoleGuardian(client) {
       if (executorUser && executorUser.id === client.user.id) {
         return; // Não restaura, não loga como bloqueado por este guardião.
       }
-
-      const removedRoles = removedIds
-        .map(id => guild.roles.cache.get(id))
-        .filter(Boolean)
-        .sort((a, b) => b.position - a.position);
 
       // ⚠️ UI não dá pra saber o canal com certeza
       const originChannel = null;
