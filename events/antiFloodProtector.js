@@ -41,11 +41,24 @@ const CONFIG = {
     },
 
     // Domínios Permitidos (Whitelist)
-    allowedDomains: [
-        'discord.com', 'discord.gg', 'tenor.com', 'giphy.com', 
-        'youtube.com', 'youtu.be', 'google.com', 'github.com',
-        'instagram.com', 'tiktok.com', 'twitch.tv'
-    ],
+allowedDomains: [
+    'discord.com',
+    'tenor.com',
+    'giphy.com',
+    'youtube.com',
+    'youtu.be',
+    'google.com',
+    'github.com',
+    'instagram.com',
+    'tiktok.com',
+    'twitch.tv'
+],
+
+blockedInviteDomains: [
+    'discord.gg',
+    'discord.me',
+    'discordapp.com',
+],
 
     // Duração dos Castigos (Timeout)
     punishments: {
@@ -57,8 +70,38 @@ const CONFIG = {
     },
 
     // Listas Negras (Regex/Strings)
-    pornWords: [/porn/i, /sexcam/i, /nude/i, /onlyfans/i, /xxx/i, /redtube/i, /xvideos/i, /sexo/i, /novinha/i],
-    scamWords: [/free nitro/i, /steam gift/i, /crypto bonus/i, /casino/i, /withdrawal/i, /claim bonus/i, /airdrop/i, /bet365/i, /ganhe dinheiro/i, /pix gratis/i],
+pornWords: [
+    /porn/i,
+    /porno/i,
+    /pornografia/i,
+    /sexcam/i,
+    /webcam\s*sex/i,
+    /nude/i,
+    /nudes/i,
+    /onlyfans/i,
+    /privacy/i,
+    /xxx/i,
+    /redtube/i,
+    /xvideos/i,
+    /sexo/i,
+    /conteudo\s*adulto/i,
+],
+
+scamWords: [
+    /free\s*nitro/i,
+    /nitro\s*gratis/i,
+    /steam\s*gift/i,
+    /crypto\s*bonus/i,
+    /casino/i,
+    /withdrawal/i,
+    /claim\s*bonus/i,
+    /airdrop/i,
+    /bet365/i,
+    /ganhe\s*dinheiro/i,
+    /pix\s*gratis/i,
+    /resgate\s*premio/i,
+    /clique\s*aqui/i,
+],
 };
 
 // =====================================================
@@ -94,10 +137,35 @@ function saveState(state) {
 // Cache em memória para detecção rápida de flood (não precisa persistir tudo)
 const messageCache = new Map(); // userId -> [{ content, ts }]
 
+function normalizeMessageContent(content) {
+    return String(content || '')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function hasSuspiciousAttachment(message) {
+    return message.attachments.some(attachment => {
+        const name = attachment.name?.toLowerCase() || '';
+        const contentType = attachment.contentType?.toLowerCase() || '';
+
+        return (
+            contentType.startsWith('image/') ||
+            contentType.startsWith('video/') ||
+            /\.(png|jpg|jpeg|gif|webp|mp4|mov|webm)$/i.test(name)
+        );
+    });
+}
+
 function checkBypass(member) {
     if (!member || member.user.bot) return true;
+
+    // Bypass total apenas para usuários definidos manualmente
     if (CONFIG.bypassUserIds.includes(member.id)) return true;
-    if (member.permissions.has(PermissionsBitField.Flags.Administrator)) return true;
+
+    // Cargos realmente isentos
     return member.roles.cache.some(r => CONFIG.ignoredRoles.includes(r.id));
 }
 
@@ -226,36 +294,46 @@ export function setupAntiFloodProtector(client) {
             violation = "Excesso de links na mensagem";
         }
 
-        if (links.length > 0) {
-            for (const link of links) {
-                try {
-                    const url = new URL(link);
-                    const domain = url.hostname.replace('www.', '');
-                    
-                    if (!CONFIG.allowedDomains.includes(domain)) {
-                        // Checa se é convite de discord
-                        if (domain === 'discord.gg' || domain === 'discord.me') {
-                            violation = "Divulgação de link/convite não autorizado";
-                            break;
-                        }
-                        
-                        // Checa encurtadores
-                        const shorteners = ['bit.ly', 't.co', 'tinyurl.com', 'goo.gl', 'cutt.ly'];
-                        if (shorteners.includes(domain)) {
-                            violation = "Link encurtado suspeito detectado";
-                            break;
-                        }
-                    }
-                } catch {
-                    violation = "Link com formato malicioso detectado";
-                    break;
-                }
+       if (links.length > 0) {
+    for (const link of links) {
+        try {
+            const url = new URL(link);
+            const domain = url.hostname.toLowerCase().replace(/^www\./, '');
+
+            if (CONFIG.blockedInviteDomains.includes(domain)) {
+                violation = "Divulgação de convite/link de Discord não autorizado";
+                break;
             }
+
+            const shorteners = [
+                'bit.ly',
+                't.co',
+                'tinyurl.com',
+                'goo.gl',
+                'cutt.ly',
+                'is.gd',
+                'shre.ink',
+                'rebrand.ly'
+            ];
+
+            if (shorteners.includes(domain)) {
+                violation = "Link encurtado suspeito detectado";
+                break;
+            }
+
+            if (!CONFIG.allowedDomains.includes(domain)) {
+                violation = "Link externo não autorizado detectado";
+                break;
+            }
+        } catch {
+            violation = "Link com formato malicioso detectado";
+            break;
         }
+    }
+}
 
         // 5. Palavras Proibidas (Porn/Scam)
-        const normalizedContent = content.toLowerCase()
-            .normalize("NFD").replace(/[\u0300-\u036f]/g, ""); // remove acentos
+        const normalizedContent = normalizeMessageContent(content);
 
         for (const regex of CONFIG.pornWords) {
             if (regex.test(normalizedContent)) {
@@ -273,10 +351,27 @@ export function setupAntiFloodProtector(client) {
             }
         }
 
-        // 6. Caracteres Repetidos (AAAAAA...)
-        if (!violation && /(.)\1{14,}/.test(content)) {
-            violation = "Spam de caracteres repetidos";
-        }
+        // 6. Mídia com legenda suspeita
+if (!violation && hasSuspiciousAttachment(message)) {
+    const suspiciousMediaText = [
+        /onlyfans/i,
+        /privacy/i,
+        /nudes?/i,
+        /porno/i,
+        /porn/i,
+        /xxx/i,
+        /sexo/i,
+        /conteudo\s*adulto/i,
+        /nitro\s*gratis/i,
+        /free\s*nitro/i,
+        /pix\s*gratis/i,
+        /clique\s*aqui/i,
+    ];
+
+    if (suspiciousMediaText.some(regex => regex.test(normalizedContent))) {
+        violation = "Mídia suspeita com conteúdo proibido";
+    }
+}
 
         // EXECUÇÃO DA PUNIÇÃO
         if (violation) {
