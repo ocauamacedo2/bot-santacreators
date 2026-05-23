@@ -114,22 +114,25 @@ async function sendChannelConfigLog(client, guild, member, channel, oldChannel, 
 function isAuthorized(member) {
     if (!member) return false;
     
-    // 1. Usuários isentos (Você e Owner)
+    // 1. Usuários isentos (Bypass total para Você e o Owner)
     if (ALLOWED_USERS.includes(member.id)) return true;
 
-    // 2. Qualquer cargo acima do bot na hierarquia do Discord
+    // 2. Hierarquia: Qualquer cargo acima do bot no Discord está autorizado
     const botMember = member.guild.members.me;
     if (botMember && member.roles.highest.position >= botMember.roles.highest.position) {
         return true;
     }
 
-    // 3. Cargos autorizados (Resp Influ, Resp Creators, Resp Líder)
-    const hasWhitelistedRole = member.roles.cache.some(role => ALLOWED_ROLES.includes(role.id));
-    if (hasWhitelistedRole) return true;
+    // 3. Bloqueio por Limite: Ninguém abaixo do cargo SantaCreators pode apagar
+    const thresholdRole = member.guild.roles.cache.get(THRESHOLD_ROLE_ID);
+    if (thresholdRole && member.roles.highest.position < thresholdRole.position) {
+        return false;
+    }
 
-    // 4. Se não estiver em nenhuma das regras acima, a deleção resultará em punição,
-    // independente de estar acima ou abaixo do cargo SantaCreators (1352275728476930099).
-    return false;
+    // 4. Acima do limite: Apenas os cargos autorizados (Resp Influ, Creators, Líder)
+    const hasWhitelistedRole = member.roles.cache.some(role => ALLOWED_ROLES.includes(role.id));
+    return hasWhitelistedRole;
+
 }
 
 async function sendSecurityLog(client, guild, perpetrator, punished, reason) {
