@@ -5,7 +5,7 @@ import { EmbedBuilder, AuditLogEvent, PermissionsBitField } from 'discord.js';
 // CONFIGURAÇÃO DO GUARDIÃO DE MENSAGENS DO BOT
 // =====================================================
 
-const LOG_CHANNEL_ID = '1378206851467972778'; // Canal de logs de segurança
+const LOG_CHANNEL_ID = '1507676677927338107'; // Canal de logs de segurança
 
 // Usuários isentos (Bypass total)
 const ALLOWED_USERS = [

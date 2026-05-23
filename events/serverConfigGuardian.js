@@ -5,7 +5,7 @@ import { EmbedBuilder, AuditLogEvent } from 'discord.js';
 // CONFIGURAÇÃO DO GUARDIÃO DE CONFIGURAÇÕES (SERVER)
 // =====================================================
 
-const LOG_CHANNEL_ID = '1378206851467972778';
+const LOG_CHANNEL_ID = '1507676677927338107';
 
 // Cargos proibidos de alterar qualquer configuração de canal ou cargo
 const FORBIDDEN_CHANGER_ROLES = [
@@ -16,7 +16,7 @@ const FORBIDDEN_CHANGER_ROLES = [
     '1377109308730376202'  // diretoria comunidade
 ];
 
-// Usuários com bypass total
+// Usuários com bypass total 
 const BYPASS_USERS = [
     '1262262852949905408', // Owner
     '660311795327828008',  // Você
