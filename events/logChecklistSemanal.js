@@ -117,10 +117,15 @@ function getWeekRangeLabel(weekKey) {
  */
 function resolveMainGuild(client, sourceGuild = null) {
   if (sourceGuild) return sourceGuild;
-  // Tenta pegar a guilda do cache do cliente, se houver apenas uma, ou a primeira.
-  // Isso é um fallback para contextos onde a guild não está diretamente disponível (ex: cron jobs).
+
+  const panelChannel = client.channels.cache.get(PANEL_CONFIG.CHANNEL_ID);
+  if (panelChannel?.guild) return panelChannel.guild;
+
+  const knownGuild = client.guilds.cache.get("1262262852782129183");
+  if (knownGuild) return knownGuild;
+
   if (client.guilds.cache.size === 1) return client.guilds.cache.first();
-  return null;
+  return client.guilds.cache.first() || null;
 }
 
 /**
@@ -376,6 +381,27 @@ function findExistingCheck(responsaveis, memberId) {
   return null;
 }
 
+function buildCheckedBackupByMemberId(responsaveis = {}) {
+  const backup = {};
+
+  for (const respData of Object.values(responsaveis || {})) {
+    for (const [memberId, memberData] of Object.entries(respData?.members || {})) {
+      if (memberData?.checked === true) {
+        backup[String(memberId)] = {
+          checked: true,
+          checkedAt: memberData.checkedAt || null,
+          checkedBy: memberData.checkedBy || null,
+          area: memberData.area || "Geral",
+          sourceMessageId: memberData.sourceMessageId || null,
+          sourceCreatedAtMs: memberData.sourceCreatedAtMs || null
+        };
+      }
+    }
+  }
+
+  return backup;
+}
+
 async function syncWeekData(client, force = false) {
   const checklist = loadJSON(CHECKLIST_FILE, { weeks: {} });
   const weekKey = weekKeyFromDateSP();
@@ -464,14 +490,19 @@ async function syncWeekData(client, force = false) {
   }
 
   // ✅ MERGE INTELIGENTE: Reconstrói o mapa de responsáveis respeitando os checks existentes
-  const currentResponsaveis = currentWeek.responsaveis || {};
+  const currentResponsaveis = cloneJSONSafe(currentWeek.responsaveis || {}, {});
+  const checkedBackupByMemberId = buildCheckedBackupByMemberId(currentResponsaveis);
   const newResponsaveis = {};
 
   for (const [respId, memberMap] of giMap.entries()) {
     newResponsaveis[respId] = { members: {} };
     for (const [memberId, memberData] of memberMap.entries()) {
-      // Tenta achar se esse membro já foi conferido na estrutura atual (preservando o log batido)
-      const existing = currentResponsaveis[respId]?.members?.[memberId] || findExistingCheck(currentResponsaveis, memberId);
+      // Tenta achar se esse membro já foi conferido na estrutura atual ou em outro responsável
+      const existing =
+        currentResponsaveis[respId]?.members?.[memberId] ||
+        findExistingCheck(currentResponsaveis, memberId) ||
+        checkedBackupByMemberId[String(memberId)] ||
+        null;
 
       newResponsaveis[respId].members[memberId] = {
         checked: existing?.checked === true,
@@ -482,6 +513,21 @@ async function syncWeekData(client, force = false) {
         sourceCreatedAtMs: memberData.sourceCreatedAtMs || existing?.sourceCreatedAtMs || null
       };
     }
+  }
+
+  const oldCheckedCount = Object.values(currentResponsaveis || {})
+    .flatMap(resp => Object.values(resp?.members || {}))
+    .filter(m => m?.checked === true).length;
+
+  const newCheckedCount = Object.values(newResponsaveis || {})
+    .flatMap(resp => Object.values(resp?.members || {}))
+    .filter(m => m?.checked === true).length;
+
+  if (oldCheckedCount > 0 && newCheckedCount === 0) {
+    console.warn("[ChecklistLogs] Sync bloqueado: havia checks salvos e o novo sync tentou zerar tudo.");
+    currentWeek.lastSyncedAt = Date.now();
+    saveJSON(CHECKLIST_FILE, checklist);
+    return checklist;
   }
 
   currentWeek.responsaveis = newResponsaveis;
