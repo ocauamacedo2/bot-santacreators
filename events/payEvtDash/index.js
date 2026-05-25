@@ -48,7 +48,7 @@ const SCAN_PAGES = 160;
 const SCAN_TTL_MS = 25 * 1000;
 
 // ✅ Otimização: parar de escanear se a mensagem for mais velha que 15 dias
-const MAX_AGE_MS = 15 * 24 * 60 * 60 * 1000;
+const MAX_AGE_MS = 45 * 24 * 60 * 60 * 1000;
 
 // Permissões para remover pontos
 const ALLOWED_MANAGE_IDS = [
@@ -245,6 +245,35 @@ function getPaymentStatus(emb) {
   return "UNKNOWN";
 }
 
+function getPaymentEventTimestamp(emb, fallbackTs) {
+  const fields = getFields(emb);
+
+  const campoData = fields.find((x) => {
+    const n = norm(x?.name);
+    return n.includes("data do evento") || n.includes("data") || n.includes("evento");
+  });
+
+  const texto = String(campoData?.value || emb?.description || emb?.data?.description || "");
+
+  const match = texto.match(/\b(\d{1,2})[\/.-](\d{1,2})(?:[\/.-](\d{2,4}))?\b/);
+  if (!match) return fallbackTs;
+
+  const dia = Number(match[1]);
+  const mes = Number(match[2]);
+
+  const agoraSP = nowSP();
+  let ano = match[3] ? Number(match[3]) : agoraSP.getFullYear();
+
+  if (ano < 100) ano = 2000 + ano;
+
+  if (!Number.isFinite(dia) || !Number.isFinite(mes) || !Number.isFinite(ano)) return fallbackTs;
+  if (dia < 1 || dia > 31 || mes < 1 || mes > 12) return fallbackTs;
+
+  const ts = new Date(`${ano}-${pad2(mes)}-${pad2(dia)}T12:00:00-03:00`).getTime();
+
+  return Number.isFinite(ts) ? ts : fallbackTs;
+}
+
 function isManualEventEmbed(emb) {
   const t = norm(emb?.title || emb?.data?.title || "");
   // ✅ FIX: Garante que NÃO pega pagamentos (evita duplicar no amarelo)
@@ -393,16 +422,17 @@ async function collectAll(client) {
         const uid = getPaymentRegistrarId(emb);
         if (!uid) continue;
 
-        const tsCreated = new Date(m.createdTimestamp);
-        const pAll = periodKeyFromDateSP(tsCreated);
-        DEBUG.payPeriodFoundAll[pAll.key] = (DEBUG.payPeriodFoundAll[pAll.key] || 0) + 1;
+        const paymentRealTs = getPaymentEventTimestamp(emb, m.createdTimestamp);
 
-        paymentsAll.push({ userId: String(uid), periodKey: pAll.key, kind: "pay_all" });
+const tsCreated = new Date(paymentRealTs);
+const pAll = periodKeyFromDateSP(tsCreated);
+DEBUG.payPeriodFoundAll[pAll.key] = (DEBUG.payPeriodFoundAll[pAll.key] || 0) + 1;
 
-        const st = getPaymentStatus(emb);
-        const statusBaseTs = (st === "APPROVED" || st === "REJECTED") ? (m.editedTimestamp || m.createdTimestamp) : m.createdTimestamp;
-        const tsStatus = new Date(statusBaseTs);
-        const pStatus = periodKeyFromDateSP(tsStatus);
+paymentsAll.push({ userId: String(uid), periodKey: pAll.key, kind: "pay_all" });
+
+const st = getPaymentStatus(emb);
+const tsStatus = new Date(paymentRealTs);
+const pStatus = periodKeyFromDateSP(tsStatus);
 
         if (st === "APPROVED") {
           DEBUG.payPeriodFound[pStatus.key] = (DEBUG.payPeriodFound[pStatus.key] || 0) + 1;
@@ -664,8 +694,8 @@ async function upsertDashboard(client, reason) {
   events.forEach(e => union.add(e.periodKey));
   const keys = [...union].sort((a, b) => (a > b ? -1 : 1));
   
-  const thisKey = keys[0];
-  const lastKey = keys[1];
+const thisKey = currentWk;
+const lastKey = periodKeyFromDateSP(addDaysUTC(new Date(`${currentWk}T12:00:00Z`), -7)).key;
 
   // Agregações (Pagamentos com Ajustes)
   const curPay = thisKey ? aggregate(payments, thisKey, true) : { total: 0, top: [] };
@@ -761,12 +791,17 @@ async function upsertDashboard(client, reason) {
     .setTimestamp();
 
   // Botão Remover Pontos
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId("PEV_REMOVE_POINTS")
-      .setLabel("➖ Remover Pontos (Pagamentos)")
-      .setStyle(ButtonStyle.Danger)
-  );
+const row = new ActionRowBuilder().addComponents(
+  new ButtonBuilder()
+    .setCustomId("PEV_FORCE_REFRESH")
+    .setLabel("🔄 Atualizar Semanal")
+    .setStyle(ButtonStyle.Primary),
+
+  new ButtonBuilder()
+    .setCustomId("PEV_REMOVE_POINTS")
+    .setLabel("➖ Remover Pontos (Pagamentos)")
+    .setStyle(ButtonStyle.Danger)
+);
 
   // Send/Edit
   let msg = st.dashboardMsgId ? await dash.messages.fetch(st.dashboardMsgId).catch(() => null) : null;
@@ -837,6 +872,24 @@ export async function payEvtDashHandleMessage(message, client) {
 // ✅ NEW EXPORT: Interaction Handler (Must be plugged into index.js interactionCreate)
 export async function payEvtDashHandleInteraction(interaction, client) {
   if (!interaction.isButton() && !interaction.isModalSubmit()) return false;
+
+  if (interaction.isButton() && interaction.customId === "PEV_FORCE_REFRESH") {
+    await interaction.deferReply({ ephemeral: true }).catch(() => {});
+
+    CACHE.payload = null;
+
+    const st = loadState();
+    st.lastFingerprint = "";
+    saveState(st);
+
+    await safeUpdate(client, "manual force refresh");
+
+    await interaction.editReply({
+      content: "✅ Dashboard semanal recalculado e atualizado com sucesso.",
+    }).catch(() => {});
+
+    return true;
+  }
 
   // Button: Open Modal
 if (interaction.isButton() && interaction.customId === "PEV_REMOVE_POINTS") {
