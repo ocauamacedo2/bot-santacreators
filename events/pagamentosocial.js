@@ -1128,20 +1128,20 @@ function criarRowMenu() {
       .setLabel("➕ Novo Pagamento")
       .setStyle(ButtonStyle.Primary),
 
-    new ButtonBuilder()
-      .setCustomId("filtro_solicitados")
-      .setLabel("📌 Solicitados")
-      .setStyle(ButtonStyle.Secondary),
+   new ButtonBuilder()
+  .setCustomId("pagamento_filtro_solicitados")
+  .setLabel("📌 Solicitados")
+  .setStyle(ButtonStyle.Secondary),
 
-    new ButtonBuilder()
-      .setCustomId("filtro_naoclicados")
-      .setLabel("🕗 Não clicados")
-      .setStyle(ButtonStyle.Secondary),
+new ButtonBuilder()
+  .setCustomId("pagamento_filtro_naoclicados")
+  .setLabel("🕗 Não clicados")
+  .setStyle(ButtonStyle.Secondary),
 
-    new ButtonBuilder()
-      .setCustomId("filtro_cidades")
-      .setLabel("🏙️ Cidades")
-      .setStyle(ButtonStyle.Secondary)
+new ButtonBuilder()
+  .setCustomId("pagamento_filtro_cidades")
+  .setLabel("🏙️ Cidades")
+  .setStyle(ButtonStyle.Secondary)
   );
 }
 
@@ -1708,7 +1708,7 @@ const statsRefeitos = await reconstruirStatsPorEmbeds(client, 100).catch(() => n
   return true;
 }
       // ✅ BOTÃO CIDADES: adiciona botões Nobre/Santa/Grande/Maresia nos registros do mês atual
-      if (id === "filtro_cidades") {
+      if (id === "pagamento_filtro_cidades") {
         if (!temPermissaoPagamento(interaction)) {
           await interaction.reply({
             content: "🚫 Você não tem permissão para usar o filtro de cidades.",
@@ -1746,7 +1746,7 @@ const statsRefeitos = await reconstruirStatsPorEmbeds(client, 100).catch(() => n
       }
 
       // ✅ FILTROS
-      if (id.startsWith("filtro_")) {
+      if (id.startsWith("pagamento_filtro_")) {
         if (!temPermissaoPagamento(interaction)) {
           await interaction.reply({
             content: "🚫 Você não tem permissão para usar esse filtro.",
@@ -1755,7 +1755,7 @@ const statsRefeitos = await reconstruirStatsPorEmbeds(client, 100).catch(() => n
           return true;
         }
 
-        const qual = id.split("_")[1]; // solicitados | naoclicados
+        const qual = id.replace("pagamento_filtro_", ""); // solicitados | naoclicados
         await interaction.deferReply({ ephemeral: true }).catch(() => {});
 
         const canal = await client.channels.fetch(CANAL_PAGAMENTO).catch(() => null);
@@ -2153,9 +2153,12 @@ saveStats(stats);
 
         try {
   dashEmit("pagamento:criado", {
-    __at: Date.now(),
+    __at: mensagem.createdTimestamp || Date.now(),
+    source: "pagamento_social",
     by: interaction.user.id,
     canal: CANAL_PAGAMENTO,
+    messageId: mensagem.id,
+    dedupeKey: `pagamento_social:criado:${mensagem.id}`,
   });
 } catch {}
 
@@ -2337,18 +2340,23 @@ await updateDashboard(client).catch(() => {});
 
   // ✅ EMITE EVENTO PRO GERALDASH (aqui!)
   try {
-    const map = {
-      pago: "pagamento:pago",
-      solicitado: "pagamento:solicitado",
-      reprovado: "pagamento:reprovado",
-    };
-    dashEmit(map[action] || "pagamento:status", {
-      __at: Date.now(),
-      by: interaction.user.id,
-      action,
-      canal: CANAL_PAGAMENTO,
-    });
-  } catch {}
+  const map = {
+    pago: "pagamento:pago",
+    solicitado: "pagamento:solicitado",
+    reprovado: "pagamento:reprovado",
+  };
+
+  dashEmit(map[action] || "pagamento:status", {
+    __at: msgOriginal.createdTimestamp || Date.now(),
+    source: "pagamento_social",
+    by: interaction.user.id,
+    action,
+    canal: CANAL_PAGAMENTO,
+    oldMessageId: msgOriginal.id,
+    newMessageId: msgNova.id,
+    dedupeKey: `pagamento_social:${action}:${msgOriginal.id}`,
+  });
+} catch {}
 
   const tituloLog =
     action === "pago" ? "💰 Pagamento confirmado"
