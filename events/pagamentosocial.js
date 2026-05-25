@@ -1118,6 +1118,26 @@ function normalizarDataEvento(s) {
   return t;
 }
 
+function dataEventoParaTimestampSP(dataEvento, fallback = Date.now()) {
+  const texto = String(dataEvento || "").trim();
+
+  const match = texto.match(/^(\d{1,2})[\/.-](\d{1,2})(?:[\/.-](\d{2,4}))?$/);
+  if (!match) return fallback;
+
+  const dia = Number(match[1]);
+  const mes = Number(match[2]);
+
+  const agoraSP = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
+  let ano = match[3] ? Number(match[3]) : agoraSP.getFullYear();
+
+  if (ano < 100) ano = 2000 + ano;
+
+  if (!Number.isFinite(dia) || !Number.isFinite(mes) || !Number.isFinite(ano)) return fallback;
+  if (dia < 1 || dia > 31 || mes < 1 || mes > 12) return fallback;
+
+  return new Date(`${ano}-${String(mes).padStart(2, "0")}-${String(dia).padStart(2, "0")}T12:00:00-03:00`).getTime();
+}
+
 // =============================
 // Helpers de UI
 // =============================
@@ -2152,12 +2172,15 @@ saveStats(stats);
         await interaction.editReply({ content: "✅ Registro criado!" }).catch(() => {});
 
         try {
+  const pagamentoAt = dataEventoParaTimestampSP(eventoData, mensagem.createdTimestamp || Date.now());
+
   dashEmit("pagamento:criado", {
-    __at: mensagem.createdTimestamp || Date.now(),
+    __at: pagamentoAt,
     source: "pagamento_social",
     by: interaction.user.id,
     canal: CANAL_PAGAMENTO,
     messageId: mensagem.id,
+    dataEvento: eventoData,
     dedupeKey: `pagamento_social:criado:${mensagem.id}`,
   });
 } catch {}
@@ -2339,21 +2362,33 @@ await updateDashboard(client).catch(() => {});
   await interaction.editReply({ content: "✅ Atualizado e jogado pro final do chat!" }).catch(() => {});
 
   // ✅ EMITE EVENTO PRO GERALDASH (aqui!)
-  try {
+try {
   const map = {
     pago: "pagamento:pago",
     solicitado: "pagamento:solicitado",
     reprovado: "pagamento:reprovado",
   };
 
+  const dataEventoEmbed =
+    getFieldValue(embedOriginal, "📅 Data do Evento") ||
+    getFieldValue(embedOriginal, "Data do Evento") ||
+    getFieldValue(embedOriginal, "📆 Data") ||
+    "";
+
+  const pagamentoAt = dataEventoParaTimestampSP(
+    dataEventoEmbed,
+    msgOriginal.createdTimestamp || Date.now()
+  );
+
   dashEmit(map[action] || "pagamento:status", {
-    __at: msgOriginal.createdTimestamp || Date.now(),
+    __at: pagamentoAt,
     source: "pagamento_social",
     by: interaction.user.id,
     action,
     canal: CANAL_PAGAMENTO,
     oldMessageId: msgOriginal.id,
     newMessageId: msgNova.id,
+    dataEvento: dataEventoEmbed,
     dedupeKey: `pagamento_social:${action}:${msgOriginal.id}`,
   });
 } catch {}
