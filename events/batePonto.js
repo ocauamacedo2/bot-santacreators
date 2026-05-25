@@ -37,16 +37,17 @@ export default async function setupBatePonto(client) {
   TIMEZONE: "America/Sao_Paulo",
 
   // ✅ JANELAS DE BATE-PONTO
-  // - 17:00–23:00 (23 exclusivo)
-  // - 01:00–04:00 (04 exclusivo)
+  // - 19:00–00:00
+  // - 00:30–03:30
   WINDOWS: [
-    { start: 17, end: 23 }, // 17..22
-    { start: 1,  end: 4  }, // 01..03
+    { start: "19:00", end: "00:00" },
+    { start: "00:30", end: "03:30" },
   ],
 
   // ✅ REGRA DO "DIA" (pra não bater 2x atravessando a madrugada)
-  // Se bater entre 01:00–03:59, conta como o "dia anterior" do turno.
-  LATE_NIGHT_ROLLOVER_HOUR: 4,
+  // Se bater entre 00:30–03:29, conta como o "dia anterior" do turno.
+  LATE_NIGHT_ROLLOVER_START_MINUTES: 30,  // 00:30
+  LATE_NIGHT_ROLLOVER_END_MINUTES: 210,   // 03:30
 
   CHANNELS: {
     sm: "1417601634644525147",
@@ -244,21 +245,55 @@ export default async function setupBatePonto(client) {
   };
 };
 
+const timeToMinutes = (value) => {
+  if (typeof value === "number") return value * 60;
+
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(value || "").trim());
+  if (!m) return 0;
+
+  return (+m[1] * 60) + (+m[2]);
+};
+
+const nowTotalMinutes = () => {
+  const { hh, mi } = nowParts();
+  return (hh * 60) + mi;
+};
+
 // ✅ "Dia efetivo" (pra travar 2x no mesmo turno atravessando a madrugada)
 const effectiveKeyParts = () => {
   const real = nowParts(); // hora real (SP)
-  // Se for 01:00–03:59, conta como dia anterior
-  if (real.hh >= 0 && real.hh < CFG.LATE_NIGHT_ROLLOVER_HOUR) {
+  const total = (real.hh * 60) + real.mi;
+
+  // Se for 00:30–03:29, conta como dia anterior
+  if (
+    total >= CFG.LATE_NIGHT_ROLLOVER_START_MINUTES &&
+    total < CFG.LATE_NIGHT_ROLLOVER_END_MINUTES
+  ) {
     const shifted = new Date(Date.now() - 24 * 60 * 60 * 1000);
     return nowParts(shifted);
   }
+
   return real;
 };
 
 // ✅ Checa se está em qualquer janela
 const withinWindow = () => {
-  const { hh } = nowParts();
-  return (CFG.WINDOWS || []).some((w) => hh >= w.start && hh < w.end);
+  const total = nowTotalMinutes();
+
+  return (CFG.WINDOWS || []).some((w) => {
+    const start = timeToMinutes(w.start);
+    const end = timeToMinutes(w.end);
+
+    if (start === end) return false;
+
+    // Janela normal: exemplo 00:30–03:30
+    if (start < end) {
+      return total >= start && total < end;
+    }
+
+    // Janela atravessando meia-noite: exemplo 19:00–00:00
+    return total >= start || total < end;
+  });
 };
 
 
@@ -462,7 +497,7 @@ const getAlreadyPunchedTime = (userId) => {
         .setColor(CFG.COLORS.primary)
         .setTitle(`🕒 Bater Ponto — ${team}`)
         .setDescription(
-          "Clique entre **17:00 e 23:00** ou entre **01:00 e 04:00** e informe **apenas seu primeiro nome**.\nO registro vai direto para a **Linha do Tempo Oficial**."
+          "Clique entre **19:00 e 00:00** ou entre **00:30 e 03:30** e informe **apenas seu primeiro nome**.\nO registro vai direto para a **Linha do Tempo Oficial**."
 
         )
         .setImage(GIF)
@@ -667,7 +702,12 @@ const getAlreadyPunchedTime = (userId) => {
       let y = +YYYY, mo = +MM, d = +DD, h = +HH, mi = +MI;
 
       // ✅ Aplica a mesma regra de "dia efetivo" no recovery para evitar duplicidade na madrugada
-      if (h >= 0 && h < CFG.LATE_NIGHT_ROLLOVER_HOUR) {
+      const totalMinutes = (h * 60) + mi;
+
+      if (
+        totalMinutes >= CFG.LATE_NIGHT_ROLLOVER_START_MINUTES &&
+        totalMinutes < CFG.LATE_NIGHT_ROLLOVER_END_MINUTES
+      ) {
         const dt = new Date(Date.UTC(y, mo - 1, d, h + 3, mi, 0)); 
         dt.setUTCDate(dt.getUTCDate() - 1);
         y = dt.getUTCFullYear();
@@ -974,7 +1014,7 @@ const getAlreadyPunchedTime = (userId) => {
           if (!withinWindow() && !isBypassUser) {
   return it.reply({
     flags: MessageFlags.Ephemeral,
-    embeds: [warn("Bate-ponto disponível **das 17:00 às 23:00** e **das 01:00 às 04:00**.")]
+    embeds: [warn("Bate-ponto disponível **das 19:00 às 00:00** e **das 00:30 às 03:30**.")]
   });
 }
 
@@ -1011,7 +1051,7 @@ const getAlreadyPunchedTime = (userId) => {
           if (!withinWindow() && !isBypassUser) {
   return it.reply({
     flags: MessageFlags.Ephemeral,
-    embeds: [warn("Bate-ponto disponível **das 17:00 às 23:00** e **das 01:00 às 04:00**.")]
+    embeds: [warn("Bate-ponto disponível **das 19:00 às 00:00** e **das 00:30 às 03:30**.")]
   });
 }
 
