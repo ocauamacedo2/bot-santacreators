@@ -22,7 +22,7 @@ import { dashEmit } from "../utils/dashHub.js";
 const VIP_MENU_CHANNEL_ID = "1414718336826081330"; // onde fica o MENU e os REGISTROS
 const VIP_NOTIFY_CHANNEL_ID = "1424489278615978114"; // notificação de novo registro
 const VIP_CHECK_MENU_CHAT_ID = "1387922662134775818"; // referência ao "outro menu" para checagem
-const VIP_LOGS_CHANNEL_ID = "1414726734472941708"; // logs de ações (tudo)
+const VIP_LOGS_CHANNEL_ID = "1486084363778261072"; // logs de ações (tudo)
 
 // ✅ Arquivo do cronograma para dados automáticos
 const __filename = fileURLToPath(import.meta.url);
@@ -481,7 +481,167 @@ async function VIP_sendDM_VIP(client, userId, content, guild) {
     return false;
   }
 }
+// ── Helpers de LOG/AUDITORIA VIP ────────────────────────────────
+function VIP_cut(value, max = 1024) {
+  const text = String(value ?? "—");
+  return text.length > max ? `${text.slice(0, max - 3)}...` : text;
+}
 
+function VIP_userTag(user) {
+  if (!user) return "—";
+  return `<@${user.id}> (\`${user.id}\`)`;
+}
+
+function VIP_channelTag(channel) {
+  if (!channel) return "—";
+  return `<#${channel.id}> (\`${channel.id}\`)`;
+}
+
+function VIP_formatDateSP(date = new Date()) {
+  return `${time(Math.floor(date.getTime() / 1000), TimestampStyles.LongDateTime)} (${time(
+    Math.floor(date.getTime() / 1000),
+    TimestampStyles.RelativeTime
+  )})`;
+}
+
+function VIP_extractEmbedFields(embedLike) {
+  const fields = embedLike?.data?.fields || embedLike?.fields || [];
+  if (!fields.length) return "—";
+
+  return fields
+    .map((f) => `**${f.name || "Campo"}:** ${f.value || "—"}`)
+    .join("\n")
+    .slice(0, 1000);
+}
+
+async function VIP_sendAuditLog(client, guild, payload = {}) {
+  try {
+    const logs = await client.channels.fetch(VIP_LOGS_CHANNEL_ID).catch(() => null);
+    if (!logs?.isTextBased()) return;
+
+    const now = new Date();
+    const actor = payload.actor || payload.interaction?.user || null;
+    const member = payload.interaction?.member || null;
+    const channel = payload.channel || payload.interaction?.channel || null;
+    const message = payload.message || payload.interaction?.message || null;
+
+    const guildIcon = guild?.iconURL({ size: 256, forceStatic: false }) ?? null;
+    const actorIcon = actor?.displayAvatarURL?.({ size: 256, forceStatic: false }) ?? null;
+
+    const serverLink = guild?.id ? `https://discord.com/channels/${guild.id}` : "—";
+    const channelLink = guild?.id && channel?.id ? `https://discord.com/channels/${guild.id}/${channel.id}` : "—";
+    const messageLink = message?.url || payload.messageUrl || "—";
+
+    const embed = new EmbedBuilder()
+      .setColor(payload.color ?? MENU_COLOR)
+      .setTitle(payload.title || "📋 Log VIP")
+      .setAuthor({
+        name: actor ? `${actor.tag || actor.username} • ${actor.id}` : "Sistema VIP",
+        iconURL: actorIcon ?? undefined,
+      })
+      .setThumbnail(actorIcon || guildIcon)
+      .addFields(
+        {
+          name: "👤 Usuário",
+          value: VIP_cut(
+            actor
+              ? [
+                  `Menção: ${VIP_userTag(actor)}`,
+                  `Tag: \`${actor.tag || actor.username || "—"}\``,
+                  `Avatar: ${actorIcon || "—"}`,
+                ].join("\n")
+              : "—"
+          ),
+          inline: false,
+        },
+        {
+          name: "🏠 Servidor",
+          value: VIP_cut(
+            [
+              `Nome: \`${guild?.name || "—"}\``,
+              `ID: \`${guild?.id || "—"}\``,
+              `Link: ${serverLink}`,
+              `Ícone: ${guildIcon || "—"}`,
+            ].join("\n")
+          ),
+          inline: false,
+        },
+        {
+          name: "📍 Canal / Local",
+          value: VIP_cut(
+            [
+              `Canal: ${VIP_channelTag(channel)}`,
+              `Categoria: ${channel?.parent ? `${channel.parent.name} (\`${channel.parent.id}\`)` : "—"}`,
+              `Link do canal: ${channelLink}`,
+              `Link da mensagem: ${messageLink}`,
+            ].join("\n")
+          ),
+          inline: false,
+        },
+        {
+          name: "⚙️ Interação",
+          value: VIP_cut(
+            [
+              `Ação: \`${payload.action || "—"}\``,
+              `CustomId: \`${payload.interaction?.customId || "—"}\``,
+              `Interaction ID: \`${payload.interaction?.id || "—"}\``,
+              `Data/Hora: ${VIP_formatDateSP(now)}`,
+            ].join("\n")
+          ),
+          inline: false,
+        }
+      )
+      .setFooter({
+        text: "SantaCreators • Auditoria VIP",
+        iconURL: guildIcon ?? undefined,
+      })
+      .setTimestamp(now);
+
+    if (member?.roles?.cache?.size) {
+      embed.addFields({
+        name: "🎭 Cargos do usuário",
+        value: VIP_cut(member.roles.cache.filter((r) => r.id !== guild?.id).map((r) => `<@&${r.id}>`).join(", ") || "—"),
+        inline: false,
+      });
+    }
+
+    if (payload.during) {
+      embed.addFields({
+        name: "🔄 Durante o processo",
+        value: VIP_cut(payload.during),
+        inline: false,
+      });
+    }
+
+    if (payload.before) {
+      embed.addFields({
+        name: "⬅️ Antes",
+        value: VIP_cut(payload.before),
+        inline: false,
+      });
+    }
+
+    if (payload.after) {
+      embed.addFields({
+        name: "➡️ Depois",
+        value: VIP_cut(payload.after),
+        inline: false,
+      });
+    }
+
+    if (payload.extra) {
+      embed.addFields({
+        name: "📌 Informações extras",
+        value: VIP_cut(payload.extra),
+        inline: false,
+      });
+    }
+
+    await logs.send({ embeds: [embed] }).catch(() => {});
+  } catch (err) {
+    console.error("[VIP LOG] Erro ao enviar auditoria:", err);
+  }
+}
 // ── MOVER REGISTROS POR FILTRO ──────────────────────────────────
 async function VIP_moverRegistrosPorFiltro(channel, filtro, client) {
   const msgs = await channel.messages.fetch({ limit: 100 }).catch(() => null);
@@ -621,11 +781,24 @@ export async function vipEventoHandleInteraction(i, client) {
         modal.setCustomId(`${VIP_MODAL_ID}:${cityKey}`);
 
         try {
-            await i.showModal(modal);
-        } catch (err) {
-            console.error('[VIP] showModal (city select) falhou:', err);
-        }
-        return true;
+    await i.showModal(modal);
+
+    await VIP_sendAuditLog(client, i.guild, {
+      title: "🌆 Modal de VIP aberto",
+      color: MENU_COLOR,
+      action: "ABRIU_MODAL_VIP",
+      interaction: i,
+      actor: i.user,
+      channel: i.channel,
+      during: "Usuário selecionou a cidade e o sistema abriu o modal de registro de VIP.",
+      before: "Antes: usuário estava no seletor de cidade.",
+      after: `Depois: modal aberto para preenchimento.\nCidade selecionada: **${CITIES[cityKey].label}** (\`${cityKey}\`)`,
+      extra: `Dados automáticos do cronograma:\n\`\`\`json\n${VIP_cut(JSON.stringify(eventData || {}, null, 2), 900)}\n\`\`\``,
+    });
+} catch (err) {
+    console.error('[VIP] showModal (city select) falhou:', err);
+}
+return true;
     }
 
     // ── 2) MODAL: Reprovar pagamento (submit) ─────────────────────
@@ -697,19 +870,24 @@ export async function vipEventoHandleInteraction(i, client) {
         );
       }
 
-      const logs = VIP_LOGS_CHANNEL_ID ? await client.channels.fetch(VIP_LOGS_CHANNEL_ID).catch(() => null) : null;
-      logs?.isTextBased() &&
-        logs
-          .send({
-            embeds: [
-              new EmbedBuilder()
-                .setColor(0xff0000)
-                .setTitle("⛔ Pagamento reprovado")
-                .setDescription(`Registro: ${msg.url}\nPor: <@${i.user.id}>\nMotivo: ${motivo.slice(0, 500)}`)
-                .setTimestamp(),
-            ],
-          })
-          .catch(() => {});
+      await VIP_sendAuditLog(client, guild, {
+  title: "⛔ Pagamento VIP reprovado",
+  color: 0xff0000,
+  action: "REPROVOU_PAGAMENTO",
+  interaction: i,
+  actor: i.user,
+  channel: msg.channel,
+  message: msg,
+  messageUrl: msg.url,
+  during: "Usuário enviou o modal de reprovação, o sistema registrou o motivo e desabilitou os botões do registro.",
+  before: `Antes:\n${VIP_extractEmbedFields(msg.embeds?.[0])}`,
+  after: `Depois:\n${VIP_extractEmbedFields(embed)}`,
+  extra: [
+    `Registrante original: ${registranteId ? `<@${registranteId}> (\`${registranteId}\`)` : "—"}`,
+    `Motivo: ${motivo}`,
+    `Link do registro: ${msg.url}`,
+  ].join("\n"),
+});
 
 
          dashEmit("vip:reprovado", {
@@ -787,19 +965,29 @@ export async function vipEventoHandleInteraction(i, client) {
         notify.send({ embeds: [aviso] }).catch(() => {});
       }
 
-      const logs = await guild.channels.fetch(VIP_LOGS_CHANNEL_ID).catch(() => null);
-      if (logs?.isTextBased()) {
-        const logE = new EmbedBuilder()
-          .setColor(REG_COLOR)
-          .setTitle("📝 Registro criado")
-          .addFields(
-            { name: "Autor", value: `<@${i.user.id}>`, inline: true },
-            { name: "Canal", value: `<#${VIP_MENU_CHANNEL_ID}>`, inline: true },
-            { name: "Link", value: `${msg.url}`, inline: false }
-          )
-          .setTimestamp();
-        logs.send({ embeds: [logE] }).catch(() => {});
-      }
+      await VIP_sendAuditLog(client, guild, {
+  title: "📝 Registro VIP criado",
+  color: REG_COLOR,
+  action: "CRIOU_REGISTRO_VIP",
+  interaction: i,
+  actor: i.user,
+  channel: menuCh,
+  message: msg,
+  messageUrl: msg.url,
+  during: "Usuário enviou o modal preenchido e o sistema criou uma nova mensagem de registro VIP com botões de ação.",
+  before: "Antes: o registro ainda não existia no canal.",
+  after: VIP_extractEmbedFields(embed),
+  extra: [
+    `Cidade: **${cityName}** (\`${cityKey}\`)`,
+    `Cargo da cidade: ${cityRoleMention || "—"}`,
+    `Evento: \`${evento}\``,
+    `Data do evento: \`${data}\``,
+    `Ganhador: <@${ganhadorId}> (\`${ganhadorId}\`)`,
+    `Organização: \`${org}\``,
+    `Premiação: ${premiacao || "—"}`,
+    `Link do registro: ${msg.url}`,
+  ].join("\n"),
+});
 
      dashEmit("vip:criado", {
   by: i.user.id,
@@ -896,23 +1084,24 @@ export async function vipEventoHandleInteraction(i, client) {
           );
         }
 
-        try {
-          const logs = VIP_LOGS_CHANNEL_ID
-            ? await client.channels.fetch(VIP_LOGS_CHANNEL_ID).catch(() => null)
-            : null;
-
-          if (logs?.isTextBased()) {
-            await logs.send({
-              embeds: [
-                new EmbedBuilder()
-                  .setColor(MENU_COLOR)
-                  .setTitle("📨 Marcado como solicitado")
-                  .setDescription(`Registro: ${msg.url}\nPor: <@${i.user.id}>`)
-                  .setTimestamp(),
-              ],
-            });
-          }
-        } catch {}
+        await VIP_sendAuditLog(client, guild, {
+  title: "📨 Registro marcado como solicitado",
+  color: MENU_COLOR,
+  action: "MARCOU_SOLICITADO",
+  interaction: i,
+  actor: i.user,
+  channel: msg.channel,
+  message: msg,
+  messageUrl: msg.url,
+  during: "Usuário clicou no botão 'Já foi solicitado' e o sistema adicionou uma linha no campo de solicitações.",
+  before: `Antes:\n${VIP_extractEmbedFields(msg.embeds?.[0])}`,
+  after: `Depois:\n${VIP_extractEmbedFields(embed)}`,
+  extra: [
+    `Registrante original: ${registranteId ? `<@${registranteId}> (\`${registranteId}\`)` : "—"}`,
+    `Linha adicionada: ${linha}`,
+    `Link do registro: ${msg.url}`,
+  ].join("\n"),
+});
 
         try {
           dashEmit("vip:solicitado", {
@@ -966,20 +1155,24 @@ export async function vipEventoHandleInteraction(i, client) {
           );
         }
 
-        try {
-          const logs = VIP_LOGS_CHANNEL_ID ? await client.channels.fetch(VIP_LOGS_CHANNEL_ID).catch(() => null) : null;
-          if (logs?.isTextBased()) {
-            await logs.send({
-              embeds: [
-                new EmbedBuilder()
-                  .setColor(REG_COLOR)
-                  .setTitle("💸 Marcado como pago")
-                  .setDescription(`Registro: ${msg.url}\nPor: <@${i.user.id}>`)
-                  .setTimestamp(),
-              ],
-            });
-          }
-        } catch {}
+        await VIP_sendAuditLog(client, guild, {
+  title: "💸 Registro marcado como pago",
+  color: REG_COLOR,
+  action: "MARCOU_PAGO",
+  interaction: i,
+  actor: i.user,
+  channel: msg.channel,
+  message: msg,
+  messageUrl: msg.url,
+  during: "Usuário clicou no botão 'Já foi pago', o sistema atualizou o campo de pagamento e desabilitou os botões.",
+  before: `Antes:\n${VIP_extractEmbedFields(msg.embeds?.[0])}`,
+  after: `Depois:\n${VIP_extractEmbedFields(embed)}`,
+  extra: [
+    `Registrante original: ${registranteId ? `<@${registranteId}> (\`${registranteId}\`)` : "—"}`,
+    `Linha adicionada: ${linha}`,
+    `Link do registro: ${msg.url}`,
+  ].join("\n"),
+});
 
         try {
           dashEmit("vip:pago", {
