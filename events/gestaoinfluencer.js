@@ -760,8 +760,8 @@ try {
     fcLink = await findFormsCreatorThreadLinkByUserId(client, rec.targetId, rec.guildId).catch(() => null);
   }
 
-  if (!fcLink && typeof findFormsCreatorThreadIdByUserId === 'function') {
-    const fcThreadId = await findFormsCreatorThreadIdByUserId(rec.targetId).catch(() => null);
+if (!fcLink && typeof findFormsCreatorThreadIdByUserId === 'function') {
+    const fcThreadId = await findFormsCreatorThreadIdByUserId(client, rec.targetId).catch(() => null);
     if (fcThreadId && rec.guildId) {
       fcLink = `https://discord.com/channels/${rec.guildId}/${fcThreadId}`;
     }

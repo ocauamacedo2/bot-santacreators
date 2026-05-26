@@ -875,16 +875,110 @@ state.registrations[topic.id] = {
     return { threadId: topic.id, messageId: registroMsg?.id };
 }
 
-export async function findFormsCreatorThreadIdByUserId(userId) {
-    const targetUserId = String(userId || "").trim();
+export async function findFormsCreatorThreadIdByUserId(clientOrUserId, maybeUserId = null) {
+    const client = maybeUserId ? clientOrUserId : null;
+    const targetUserId = String(maybeUserId || clientOrUserId || "").trim();
     if (!targetUserId) return null;
 
     const state = readState();
 
+    // 1) busca rápida pelo state salvo
     for (const [threadId, reg] of Object.entries(state.registrations || {})) {
         if (String(reg?.userId || "").trim() === targetUserId) {
             return threadId;
         }
+    }
+
+    // 2) fallback forte: varre tópicos reais do canal FormsCreator
+    if (!client) return null;
+
+    const channel = await client.channels.fetch(CREATOR_FORM_CHANNEL_ID).catch(() => null);
+    if (!channel || !channel.threads) return null;
+
+    const allThreads = [];
+
+    const activeThreads = await channel.threads.fetchActive().catch(() => null);
+    if (activeThreads?.threads) {
+        activeThreads.threads.forEach((thread) => allThreads.push(thread));
+    }
+
+    const fetchArchivedThreads = async (type) => {
+        let before = undefined;
+
+        for (let page = 0; page < 10; page++) {
+            const archived = await channel.threads.fetchArchived({
+                type,
+                limit: 100,
+                before,
+            }).catch(() => null);
+
+            if (!archived?.threads?.size) break;
+
+            archived.threads.forEach((thread) => allThreads.push(thread));
+
+            before = archived.threads.last()?.id;
+            if (!before || archived.threads.size < 100) break;
+
+            await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+    };
+
+    await fetchArchivedThreads("public");
+    await fetchArchivedThreads("private");
+
+    for (const thread of allThreads) {
+        const messages = await thread.messages.fetch({ limit: 20 }).catch(() => null);
+        if (!messages) continue;
+
+        const foundMsg = messages.find((msg) => {
+            if (msg.author?.bot !== true) return false;
+
+            const raw = [
+                msg.content || "",
+                ...msg.embeds.map((embed) => [
+                    embed.title || "",
+                    embed.description || "",
+                    ...(embed.fields || []).flatMap((field) => [
+                        field.name || "",
+                        field.value || "",
+                    ]),
+                    embed.footer?.text || "",
+                ].join("\n")),
+            ].join("\n");
+
+            return (
+                raw.includes(`<@${targetUserId}>`) ||
+                raw.includes(`<@!${targetUserId}>`) ||
+                raw.includes(targetUserId)
+            );
+        });
+
+        if (!foundMsg) continue;
+
+        const embed = foundMsg.embeds?.[0];
+
+        state.registrations[thread.id] = {
+            ...(state.registrations[thread.id] || {}),
+            userId: targetUserId,
+            nome: embed?.title?.replace("👤 ", "") || thread.name || targetUserId,
+            idCidade:
+                embed?.fields?.find((f) => f.name?.includes("ID/Passaporte"))?.value ||
+                state.registrations[thread.id]?.idCidade ||
+                "?",
+            area:
+                embed?.fields?.find((f) => f.name?.includes("Área de Interesse"))?.value ||
+                state.registrations[thread.id]?.area ||
+                "?",
+            active:
+                embed?.fields?.find((f) => f.name?.includes("Status do Projeto"))?.value?.includes("Ativo") ??
+                state.registrations[thread.id]?.active ??
+                true,
+            messageId: foundMsg.id,
+        };
+
+        writeState(state);
+
+        return thread.id;
     }
 
     return null;
