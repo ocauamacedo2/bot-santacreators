@@ -770,6 +770,8 @@ if (!fcLink && typeof findFormsCreatorThreadIdByUserId === 'function') {
   console.warn('[SC_GI] Falha ao buscar link do tópico FormsCreator:', e?.message || e);
 }
 
+
+///teste besta 
       emb.setDescription([
           `👤 **Membro:** <@${targetUser.id}>`,
           `🗓️ **Entrada:** \`${msToDDMMYYYY(joinDateMs)}\``,
