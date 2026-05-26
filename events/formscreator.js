@@ -655,16 +655,36 @@ function isFormsCreatorDuplicateStatusMessage(msg, client) {
 
 let isSyncing = false;
 
-async function syncLegacyThreads(client) {
+async function syncLegacyThreads(client, progressMsg = null) {
   if (isSyncing) {
     console.log("[FormsCreator] Sincronização já em andamento. Pulando.");
+
+    if (progressMsg) {
+      await progressMsg.edit(
+        "⚠️ **Já existe uma sincronização em andamento.**\n" +
+        "Aguarde ela terminar antes de rodar `!syncforms` novamente."
+      ).catch(() => {});
+    }
+
     return;
   }
+
   isSyncing = true;
+
   try {
   const state = readState();
   const channel = await client.channels.fetch(CREATOR_FORM_CHANNEL_ID).catch(() => null);
-  if (!channel) return;
+
+  if (!channel) {
+    if (progressMsg) {
+      await progressMsg.edit(
+        `❌ **Não achei o canal do FormsCreator.**\n` +
+        `Canal configurado: <#${CREATOR_FORM_CHANNEL_ID}>`
+      ).catch(() => {});
+    }
+
+    return;
+  }
 
   const allThreads = [];
 
@@ -700,8 +720,28 @@ async function syncLegacyThreads(client) {
 
   console.log(`[FormsCreator] Varrendo ${allThreads.length} threads (ativas + arquivadas)...`);
 
+  if (progressMsg) {
+    await progressMsg.edit(
+      "🔄 **Sincronização em andamento...**\n" +
+      `📁 Tópicos encontrados: **${allThreads.length}**\n` +
+      "⏳ Processando registros..."
+    ).catch(() => {});
+  }
+
   let updates = 0;
+  let checkedThreads = 0;
+
   for (const thread of allThreads) {
+    checkedThreads++;
+
+    if (progressMsg && (checkedThreads === 1 || checkedThreads % 10 === 0 || checkedThreads === allThreads.length)) {
+      await progressMsg.edit(
+        "🔄 **Sincronização em andamento...**\n" +
+        `📁 Tópicos encontrados: **${allThreads.length}**\n` +
+        `🔎 Tópicos verificados: **${checkedThreads}/${allThreads.length}**\n` +
+        `🛠️ Atualizações/limpezas feitas: **${updates}**`
+      ).catch(() => {});
+    }
     let reg = state.registrations[thread.id];
     let msg = null;
     let userId = null;
@@ -1099,6 +1139,22 @@ export async function formsCreatorOnReady(client) {
     // ✅ NOVO: Sincroniza registros antigos (adiciona botões e salva no state)
     await syncLegacyThreads(client);
 
+    // ✅ LISTENER RESERVA: garante que comandos como !syncforms funcionem
+    // mesmo se o index.js não estiver chamando formsCreatorHandleMessage.
+    if (!client.__FORMS_CREATOR_MESSAGE_LISTENER__) {
+      client.__FORMS_CREATOR_MESSAGE_LISTENER__ = true;
+
+      client.on("messageCreate", async (message) => {
+        try {
+          await formsCreatorHandleMessage(message, client);
+        } catch (err) {
+          console.error("❌ FormsCreator listener reserva falhou:", err);
+        }
+      });
+
+      console.log("✅ FormsCreator listener reserva de messageCreate instalado.");
+    }
+
     // todo dia às 16:00 (SP)
     cron.schedule("0 16 * * *", () => runReminderJob(client), {
       timezone: "America/Sao_Paulo",
@@ -1149,9 +1205,18 @@ export async function formsCreatorHandleMessage(message, client) {
       return true;
     }
 
-    await message.channel.send("🔄 Iniciando varredura de threads (ativas + arquivadas) para adicionar botões...");
-    await syncLegacyThreads(client);
-    await message.channel.send("✅ Sincronização finalizada.");
+    const progressMsg = await message.channel.send(
+      "🔄 **Iniciando sincronização do FormsCreator...**\n" +
+      "📌 Buscando tópicos ativos e arquivados..."
+    );
+
+    await syncLegacyThreads(client, progressMsg);
+
+    await progressMsg.edit(
+      "✅ **Sincronização finalizada.**\n" +
+      "📌 Se existiam mensagens duplicadas de status, o sistema tentou limpar automaticamente."
+    ).catch(() => {});
+
     return true;
   }
 
