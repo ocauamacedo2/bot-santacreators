@@ -278,7 +278,7 @@ const numeros = match[1]
       .setColor('#00ffff')
       .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
       .addFields(
-        { name: '🧑‍🏫 Staff que corrigiu', value: `${message.author} (\`${message.author.id}\`)`, inline: true },
+        { name: '🧑‍🏫 Creator que corrigiu', value: `${message.author} (\`${message.author.id}\`)`, inline: true },
         { name: '👤 Candidato (Opener)', value: openerId !== "Desconhecido" ? `<@${openerId}>` : "Desconhecido", inline: true },
         { name: '📍 Canal', value: `${message.channel}`, inline: true },
         {
