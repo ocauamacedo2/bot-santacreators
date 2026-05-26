@@ -2736,6 +2736,27 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
           return;
         }
 
+        // Atualizar controle
+        if (interaction.isButton() && interaction.customId.startsWith(BTN.REFRESH_PREFIX)) {
+          if (!hasAuth(interaction.member)) return interaction.reply({ content: '❌ Você não tem permissão.', flags: MessageFlags.Ephemeral });
+
+          const raw = interaction.customId.replace(BTN.REFRESH_PREFIX, '');
+          const { rec, id: messageId } = resolveRecordByInteraction(interaction, raw);
+          if (!rec) return interaction.reply({ content: 'Registro não encontrado.', flags: MessageFlags.Ephemeral });
+
+          await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+          try {
+            await assertCanManageGIRecord(guild, interaction.user, rec.targetId, 'atualizar o controle');
+            await refreshRegistroMessage(guild, interaction.user, messageId, 'Botão Atualizar Controle');
+            await interaction.editReply({ content: '✅ Controle atualizado com sucesso.' });
+          } catch (e) {
+            await interaction.editReply({ content: '⚠️ ' + e.message });
+          }
+
+          return;
+        }
+
         // Desligar
         if (interaction.isButton() && interaction.customId.startsWith(BTN.DESLIGAR_PREFIX)) {
           if (!hasAuth(interaction.member)) return interaction.reply({ content: '❌ Você não tem permissão.', flags: MessageFlags.Ephemeral });
