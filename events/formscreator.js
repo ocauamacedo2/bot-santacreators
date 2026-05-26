@@ -599,6 +599,60 @@ async function runReminderJob(client) {
   }
 }
 
+function isFormsCreatorMainRegisterMessage(msg, client) {
+  if (!msg || msg.author?.id !== client.user.id) return false;
+  if (!msg.embeds?.length) return false;
+
+  const embed = msg.embeds[0];
+
+  const description = String(embed.description || "").trim();
+
+  const hasMemberDescription = /^<@!?\d+>$/.test(description);
+
+  const hasIdField = embed.fields?.some((field) =>
+    String(field.name || "").includes("ID/Passaporte")
+  );
+
+  const hasAreaField = embed.fields?.some((field) =>
+    String(field.name || "").includes("Área de Interesse")
+  );
+
+  const hasStatusField = embed.fields?.some((field) =>
+    String(field.name || "") === "Status do Projeto"
+  );
+
+  return Boolean(hasMemberDescription && hasIdField && hasAreaField && hasStatusField);
+}
+
+function isFormsCreatorDuplicateStatusMessage(msg, client) {
+  if (!msg || msg.author?.id !== client.user.id) return false;
+  if (!msg.embeds?.length) return false;
+  if (isFormsCreatorMainRegisterMessage(msg, client)) return false;
+
+  const embed = msg.embeds[0];
+
+  const hasStatusField = embed.fields?.some((field) =>
+    String(field.name || "") === "Status do Projeto"
+  );
+
+  const hasIdField = embed.fields?.some((field) =>
+    String(field.name || "").includes("ID/Passaporte")
+  );
+
+  const hasAreaField = embed.fields?.some((field) =>
+    String(field.name || "").includes("Área de Interesse")
+  );
+
+  const hasFormsButtons = msg.components?.some((row) =>
+    row.components?.some((component) =>
+      String(component.customId || "").startsWith("editar_") ||
+      String(component.customId || "").startsWith("fc_toggle_status:")
+    )
+  );
+
+  return Boolean(hasStatusField && !hasIdField && !hasAreaField && hasFormsButtons);
+}
+
 let isSyncing = false;
 
 async function syncLegacyThreads(client) {
@@ -663,13 +717,9 @@ async function syncLegacyThreads(client) {
     // 2. Se não achou msg pelo registro, tenta varrer o canal
     if (!msg) {
       try {
-        const messages = await thread.messages.fetch({ limit: 10 }).catch(() => null);
+        const messages = await thread.messages.fetch({ limit: 25 }).catch(() => null);
         if (messages) {
-          msg = messages.find(m => 
-            m.author.id === client.user.id && 
-            m.embeds.length > 0 && 
-            m.embeds[0].description?.match(/^<@\d+>$/)
-          );
+          msg = messages.find((m) => isFormsCreatorMainRegisterMessage(m, client));
         }
       } catch {}
     }
@@ -695,6 +745,23 @@ async function syncLegacyThreads(client) {
 
     // 4. Processa atualização (Cargo, Icon, Botões)
     if (reg && msg && userId) {
+      try {
+        const recentMessages = await thread.messages.fetch({ limit: 25 }).catch(() => null);
+        if (recentMessages) {
+          const duplicates = recentMessages.filter((m) =>
+            m.id !== msg.id &&
+            isFormsCreatorDuplicateStatusMessage(m, client)
+          );
+
+          for (const duplicate of duplicates.values()) {
+            await duplicate.delete().catch(() => {});
+            updates++;
+          }
+        }
+      } catch (e) {
+        console.error(`[FormsCreator] Erro ao limpar duplicados na thread ${thread.name}:`, e);
+      }
+
       // ✅ REVALIDAÇÃO: Checa se o status do cargo mudou
       const member = await channel.guild.members.fetch(userId).catch(() => null);
       // Se membro existe E tem cargo => ATIVO. Se não existe (saiu) ou não tem cargo => INATIVO.
@@ -1508,12 +1575,12 @@ writeState(state);
         return true;
       }
 
-      const msgOriginal = mensagens.find(
-        (msg) => msg.author.id === client.user.id && msg.embeds?.length > 0
+      const msgOriginal = mensagens.find((msg) =>
+        isFormsCreatorMainRegisterMessage(msg, client)
       );
       if (!msgOriginal) {
         await interaction.reply({
-          content: "❌ Não encontrei a mensagem para editar.",
+          content: "❌ Não encontrei a mensagem principal do registro para editar.",
           ephemeral: true,
         });
         return true;
