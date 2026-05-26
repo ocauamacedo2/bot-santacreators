@@ -40,7 +40,12 @@
     } catch (e) {
         console.warn("[SC_GI] ⚠️ Aviso: o módulo formscreator.js não pôde ser carregado. A integração com ele estará desativada.", e.message);
     }
-    const { findFormsCreatorThreadIdByUserId, setFormsCreatorStatus, setFormsCreatorArea } = formsCreator;
+const {
+  findFormsCreatorThreadIdByUserId,
+  findFormsCreatorThreadLinkByUserId,
+  setFormsCreatorStatus,
+  setFormsCreatorArea
+} = formsCreator;
 
     if (client.__SC_GI_INSTALLED) {
       console.log('[SC_GI] Já instalado, pulando.');
@@ -748,16 +753,22 @@ async function resolveInitialRoleSetAtMs(guild, targetId) {
         .setFooter({ text: 'SantaCreators • gestaoinfluencer' })
         .setTimestamp(new Date());
 
-     // ✅ NOVO: Find and add link to formscreator thread
+// ✅ LINK DO TÓPICO DE EVOLUÇÃO / FORMSCREATOR
 let fcLink = null;
 try {
-  if (typeof findFormsCreatorThreadIdByUserId === 'function') {
+  if (typeof findFormsCreatorThreadLinkByUserId === 'function') {
+    fcLink = await findFormsCreatorThreadLinkByUserId(client, rec.targetId, rec.guildId).catch(() => null);
+  }
+
+  if (!fcLink && typeof findFormsCreatorThreadIdByUserId === 'function') {
     const fcThreadId = await findFormsCreatorThreadIdByUserId(rec.targetId).catch(() => null);
-    if (fcThreadId) {
+    if (fcThreadId && rec.guildId) {
       fcLink = `https://discord.com/channels/${rec.guildId}/${fcThreadId}`;
     }
   }
-} catch {}
+} catch (e) {
+  console.warn('[SC_GI] Falha ao buscar link do tópico FormsCreator:', e?.message || e);
+}
 
       emb.setDescription([
           `👤 **Membro:** <@${targetUser.id}>`,
@@ -768,7 +779,7 @@ try {
           `⏱️ **Semanas completas:** \`${weeks}\``,
           `🗓️ **Meses já na gestão:** \`${months}\``,
           '',
-          `🔗 **Evolução (Forms):** ${fcLink ? `Abrir Tópico` : 'Não encontrado'}`,
+          `🔗 **Evolução (Forms):** ${fcLink ? `[Abrir Tópico](${fcLink})` : 'Não encontrado'}`,
 
           `📌 **Status:** ${active ? 'Ativo' : 'Pausado'}`,
 `⏳ **Tempo ativo real:** \`${activeTimeText(rec)}\``,

@@ -876,13 +876,34 @@ state.registrations[topic.id] = {
 }
 
 export async function findFormsCreatorThreadIdByUserId(userId) {
+    const targetUserId = String(userId || "").trim();
+    if (!targetUserId) return null;
+
     const state = readState();
+
     for (const [threadId, reg] of Object.entries(state.registrations || {})) {
-        if (reg.userId === userId) {
+        if (String(reg?.userId || "").trim() === targetUserId) {
             return threadId;
         }
     }
+
     return null;
+}
+
+export async function findFormsCreatorThreadLinkByUserId(client, userId, guildId = null) {
+    const threadId = await findFormsCreatorThreadIdByUserId(userId);
+    if (!threadId) return null;
+
+    let resolvedGuildId = guildId;
+
+    if (!resolvedGuildId && client) {
+        const thread = await client.channels.fetch(threadId).catch(() => null);
+        resolvedGuildId = thread?.guild?.id || null;
+    }
+
+    if (!resolvedGuildId) return null;
+
+    return `https://discord.com/channels/${resolvedGuildId}/${threadId}`;
 }
 
 export async function setFormsCreatorStatus(client, { threadId, newStatus, actor }) {
