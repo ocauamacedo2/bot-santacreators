@@ -313,7 +313,7 @@ function startScheduler(client) {
           await logToChannel(client, guild, {
             title: "🚨 ALERTA DE VÁCUO ENVIADO",
             color: "#ff0000",
-            description: `O ticket está sem resposta há **${timeDiffMinutes} minutos**.\n\n📨 **Notificações enviadas:** ${count} staffs notificados no PV.\n💬 **Última msg:** ${isBotMsg ? "Bot (Sistema)" : "Usuário (Opener)"}`,
+            description: `O ticket está sem resposta há **${timeDiffMinutes} minutos**.\n\n📨 **Notificações enviadas:** ${count} Creators notificados no PV.\n💬 **Última msg:** ${isBotMsg ? "Bot (Sistema)" : "Usuário (Opener)"}`,
             channelId: channel.id,
             openerId: openerId,
             thumbnail: openerMember?.user?.displayAvatarURL()
