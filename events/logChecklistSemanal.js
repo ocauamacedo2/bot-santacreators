@@ -381,6 +381,27 @@ function findExistingCheck(responsaveis, memberId) {
   return null;
 }
 
+function buildCheckedBackupByMemberId(responsaveis = {}) {
+  const backup = {};
+
+  for (const respData of Object.values(responsaveis || {})) {
+    for (const [memberId, memberData] of Object.entries(respData?.members || {})) {
+      if (memberData?.checked === true) {
+        backup[String(memberId)] = {
+          checked: true,
+          checkedAt: memberData.checkedAt || null,
+          checkedBy: memberData.checkedBy || null,
+          area: memberData.area || "Geral",
+          sourceMessageId: memberData.sourceMessageId || null,
+          sourceCreatedAtMs: memberData.sourceCreatedAtMs || null
+        };
+      }
+    }
+  }
+
+  return backup;
+}
+
 function extractFirstMentionId(value) {
   const text = String(value || "");
   const mentionMatch = text.match(/<@!?(\d{5,25})>/);
