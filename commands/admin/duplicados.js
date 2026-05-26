@@ -2,7 +2,7 @@
 import { EmbedBuilder } from 'discord.js';
 
 // Configurações
-const LOG_CHANNEL_ID = '1469962433412989082';
+const LOG_CHANNEL_ID = '1486009506285748366';
 
 // IDs permitidos (Usuários e Cargos misturados conforme solicitado)
 const PERMITTED_IDS = [
@@ -17,6 +17,26 @@ function normalize(str) {
     return str.toLowerCase()
         .normalize('NFD').replace(/[\u0300-\u036f]/g, '') 
         .replace(/[^a-z0-9]/g, ''); 
+}
+
+function safeValue(value, fallback = 'Não encontrado') {
+    return value ?? fallback;
+}
+
+function getMessageLink(message) {
+    if (!message?.guild?.id || !message?.channel?.id || !message?.id) {
+        return null;
+    }
+
+    return `https://discord.com/channels/${message.guild.id}/${message.channel.id}/${message.id}`;
+}
+
+function getGuildLink(guild) {
+    if (!guild?.id) {
+        return null;
+    }
+
+    return `https://discord.com/channels/${guild.id}`;
 }
 
 export default {
@@ -120,17 +140,60 @@ export default {
         const logChannel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
 
         if (logChannel && logChannel.isTextBased()) {
+            const nowTimestamp = Math.floor(Date.now() / 1000);
+            const commandMessageLink = getMessageLink(message);
+            const responseMessageLink = getMessageLink(responseMsg);
+            const guildLink = getGuildLink(guild);
+            const category = message.channel?.parent ?? null;
+
             const logEmbed = new EmbedBuilder()
                 .setTitle('👾 LOG: Comando !duplicados')
                 .setColor('#8e44ad') // Roxo escuro
-                .setThumbnail(message.author.displayAvatarURL())
-                .setDescription(`**Executor:** ${message.author} (\`${message.author.id}\`)\n**Canal:** ${message.channel}\n**Data:** <t:${Math.floor(Date.now()/1000)}:F>`)
+                .setAuthor({
+                    name: `${message.author.tag} • ${message.author.id}`,
+                    iconURL: message.author.displayAvatarURL({ dynamic: true })
+                })
+                .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
+                .setDescription(
+                    `**Executor:** ${message.author} (\`${message.author.id}\`)\n` +
+                    `**Servidor:** ${safeValue(guild.name)} (\`${guild.id}\`)\n` +
+                    `**Canal:** ${message.channel} (\`${message.channel.id}\`)\n` +
+                    `**Categoria:** ${category ? `${category.name} (\`${category.id}\`)` : 'Sem categoria'}\n` +
+                    `**Data:** <t:${nowTimestamp}:F>\n` +
+                    `**Horário relativo:** <t:${nowTimestamp}:R>`
+                )
                 .addFields(
-                    { name: '🔍 Resultado', value: `Detectados **${duplicates.length}** grupos de duplicatas.`, inline: false },
-                    { name: '🔗 Link do Canal', value: `Ir para mensagem`, inline: false }
+                    {
+                        name: '🔍 Resultado',
+                        value: `Detectados **${duplicates.length}** grupos de duplicatas.`,
+                        inline: false
+                    },
+                    {
+                        name: '🔗 Link da Mensagem do Comando',
+                        value: commandMessageLink ? `[Ir para a mensagem](${commandMessageLink})` : 'Link não encontrado.',
+                        inline: false
+                    },
+                    {
+                        name: '🔗 Link da Resposta Gerada',
+                        value: responseMessageLink ? `[Ir para a resposta](${responseMessageLink})` : 'Link não encontrado.',
+                        inline: false
+                    },
+                    {
+                        name: '🌐 Link do Servidor',
+                        value: guildLink ? `[Abrir servidor](${guildLink})` : 'Link não encontrado.',
+                        inline: false
+                    },
+                    {
+                        name: '🖼️ Ícone do Executor',
+                        value: `[Abrir avatar](${message.author.displayAvatarURL({ dynamic: true, size: 1024 })})`,
+                        inline: false
+                    }
                 )
                 .setImage('https://media.discordapp.net/attachments/1362477839944777889/1384245215249825832/standard_2rss.gif') // Banner roxo
-                .setFooter({ text: 'Sistema de Auditoria • SantaCreators' })
+                .setFooter({
+                    text: `Sistema de Auditoria • SantaCreators • ${guild.name}`,
+                    iconURL: guild.iconURL({ dynamic: true }) ?? undefined
+                })
                 .setTimestamp();
 
             await logChannel.send({ embeds: [logEmbed] });
