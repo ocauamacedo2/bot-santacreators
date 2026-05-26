@@ -105,7 +105,7 @@ CHANNEL_RESTORE_LOG:      '1486006878914875412',
       GI_REMOVE_WINDOW_MS: 2 * 60 * 1000, // 2 minutos
       GI_RESTORE_AFTER_PUNISH_MS: 10 * 60 * 1000 // 10 minutos
     };
-
+    
     // ====================== STATE / PERSIST ======================
     const SC_GI_STATE = {
       menuMessageId: null,
@@ -117,7 +117,8 @@ CHANNEL_RESTORE_LOG:      '1486006878914875412',
       // avisos por remoção do cargo GI (mesmo sem registro)
       giWarningsByUser: new Map(), // userId -> { count:number, lastAtMs:number|null }
 
-      // NOVO: snapshots pra restauração após punição
+      // snapshots pra restauração após punição
+      // NOVO: lastCountdownWarningAt para evitar spam de DM
       roleSnapshots: new Map(), // userId -> { roleIds: string[], restoreAtMs:number, createdAtMs:number, recordMessageId:string|null }
 
       // timers em memória
@@ -160,6 +161,7 @@ CHANNEL_RESTORE_LOG:      '1486006878914875412',
           r.totalPausedMs      = (typeof r.totalPausedMs === 'number') ? r.totalPausedMs : 0;
           r.roleSetAtMs        = (typeof r.roleSetAtMs === 'number') ? r.roleSetAtMs : null;
           r.messageId          = String(r.messageId);
+          r.lastCountdownWarningAt = r.lastCountdownWarningAt || null; // NOVO
           r.passaporte         = r.passaporte || null; // ✅ Carrega passaporte se existir
 
           const prev = byUser.get(r.targetId);
@@ -219,6 +221,7 @@ CHANNEL_RESTORE_LOG:      '1486006878914875412',
             roleIds: Array.isArray(s.roleIds) ? s.roleIds : [],
             restoreAtMs: s.restoreAtMs ?? 0,
             createdAtMs: s.createdAtMs ?? 0,
+            // NOVO: recordMessageId para logs de restauração
             recordMessageId: s.recordMessageId ?? null
           }))
         };
@@ -344,7 +347,7 @@ function formatDurationFull(ms) {
   return `${days}d ${pad2(hours)}h ${pad2(minutes)}m ${pad2(seconds)}s`;
 }
 
-function getPausedTotalMs(rec, n = nowMs()) {
+    function getPausedTotalMs(rec, n = nowMs()) {
   const saved = Number(rec?.totalPausedMs || 0);
   const current = rec?.pausedAtMs ? Math.max(0, n - rec.pausedAtMs) : 0;
   return saved + current;
@@ -359,7 +362,7 @@ function getPauseCountdownMs(rec, n = nowMs()) {
   return Math.max(0, AUTO_DESLIGAR_PAUSA_MS - getPausedTotalMs(rec, n));
 }
 
-function pauseCountdownText(rec, n = nowMs()) {
+    function pauseCountdownText(rec, n = nowMs()) {
   if (rec?.active) return '—';
   return formatDurationFull(getPauseCountdownMs(rec, n));
 }
@@ -961,7 +964,7 @@ function registroButtons(messageId, active) {
       return dmOk;
     }
 
-    // ====================== MENU ======================
+    // ====================== MENU / LOGS ======================
     function messageHasOurMenuButton(msg) {
       try {
         for (const row of msg.components || []) {
@@ -2126,7 +2129,7 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
           const member = await fetchMemberCached(guild, userId);
           if (!member) return;
 
-          setRoleBypass(userId, 12000);
+          setRoleBypass(userId, 12000); // 12s de bypass
 
           // restaura roles anteriores (sem @everyone)
           const rolesToSet = (snap.roleIds || []).filter(Boolean);
@@ -2144,7 +2147,7 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
             const emb = new EmbedBuilder()
               .setColor(0x2ecc71)
               .setTitle('✅ Cargos restaurados')
-              .setDescription([
+              .setDescription([ // NOVO: link para o registro
                 `Pronto <@${userId}>, seus cargos foram **devolvidos**.`,
                 `Mas fica esperto(a): **não remove** o cargo <@&${GI_ROLE_ID}> enquanto sua contagem estiver **ativa**.`,
                 link ? `📌 Registro: ${link}` : ''
@@ -2175,7 +2178,7 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
         const currentRoles = member.roles.cache
           .filter(r => r.id !== guild.id)
           .map(r => r.id);
-
+          
         const restoreAt = nowMs() + SC_GI_CFG.GI_RESTORE_AFTER_PUNISH_MS;
 
         SC_GI_STATE.roleSnapshots.set(String(userId), {
@@ -2183,7 +2186,7 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
           restoreAtMs: restoreAt,
           createdAtMs: nowMs(),
           recordMessageId: rec?.messageId ? String(rec.messageId) : null
-        });
+          }); // NOVO: recordMessageId
         SC_GI_scheduleSave();
 
         // remove TODOS cargos
@@ -2193,7 +2196,7 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
         // DM punição (mas sem desligar do registro)
         const u = await fetchUserCached(userId);
         if (u) {
-          const link = rec ? recordLink(rec.guildId, rec.channelId, rec.messageId) : null;
+            const link = rec ? recordLink(rec.guildId, rec.channelId, rec.messageId) : null; // NOVO: link para o registro
           const emb = new EmbedBuilder()
             .setColor(0xe74c3c)
             .setTitle('⚠️ Atenção — remoção repetida do cargo')
@@ -2259,7 +2262,7 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
         await sendDM_andMirror(guild, u, emb, `<@${userId}>`);
       } catch {}
     }
-
+    
     async function handleGIRoleRemoved(guild, userId) {
   const rec = getLatestRecordByTarget(userId);
 
@@ -2289,7 +2292,7 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
       warn.lastAtMs = now;
       SC_GI_scheduleSave();
 
-      await warnAndReAddGI(guild, userId, rec);
+      await warnAndReAddGI(guild, userId, rec); // NOVO: passa o registro
     }
 
     // ====================== LOOP ======================
@@ -2299,6 +2302,29 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
       isTicking = true;
 
       try {
+        // NOVO: DM de aviso de auto-desligamento
+        for (const rec of SC_GI_STATE.registros.values()) {
+          if (!rec.active) {
+            const pauseCountdownMs = getPauseCountdownMs(rec, nowMs());
+            // Envia DM se faltar menos de 3 dias e não tiver avisado nas últimas 12h
+            if (pauseCountdownMs > 0 && pauseCountdownMs < 3 * 24 * 60 * 60 * 1000) {
+              if (!rec.lastCountdownWarningAt || (nowMs() - rec.lastCountdownWarningAt) > 12 * 60 * 60 * 1000) {
+                const targetUser = await fetchUserCached(rec.targetId);
+                if (targetUser) {
+                  const dmEmbed = new EmbedBuilder()
+                    .setColor(0xF1C40F)
+                    .setTitle('⚠️ Aviso: Auto-desligamento da Gestão Influencer')
+                    .setDescription(`Olá <@${rec.targetId}>, seu controle GI está pausado. Se não for retomado, você será **automaticamente desligado(a)** da gestão em **${pauseCountdownText(rec, nowMs())}**.`)
+                    .addFields({ name: '🔗 Seu Registro', value: recordLink(rec.guildId, rec.channelId, rec.messageId) || '—', inline: false })
+                    .setFooter({ text: 'SantaCreators • Gestaoinfluencer' }).setTimestamp(new Date());
+                  await sendDM_andMirror(guild, targetUser, dmEmbed, `<@${rec.targetId}>`);
+                  rec.lastCountdownWarningAt = nowMs();
+                  SC_GI_scheduleSave();
+                }
+              }
+            }
+          }
+        }
         const n = nowMs();
 
         for (const rec of SC_GI_STATE.registros.values()) {
@@ -2486,7 +2512,7 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
       }
     });
 
-    // ====================== INTERACTION HANDLER ======================
+    // ====================== INTERAÇÕES ======================
     client.on(Events.InteractionCreate, async (interaction) => {
       try {
         const guild = interaction.guild;
@@ -2611,7 +2637,7 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
           const { rec, id: messageId } = resolveRecordByInteraction(interaction, raw);
           if (!rec) return interaction.reply({ content: 'Registro não encontrado.', flags: MessageFlags.Ephemeral });
 
-          await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+          await interaction.deferReply({ flags: MessageFlags.Ephemeral }); // NOVO: defer para evitar timeout
           try {
             await toggleActive(guild, interaction.user, messageId);
             await interaction.editReply({ content: '✅ Estado da contagem atualizado!' });
@@ -2622,7 +2648,7 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
         }
 
         // Editar registro
-        if (interaction.isButton() && interaction.customId.startsWith(BTN.EDIT_PREFIX)) {
+        if (interaction.isButton() && interaction.customId.startsWith(BTN.EDIT_PREFIX)) { // NOVO: Botão de edição
           if (!hasAuth(interaction.member)) return interaction.reply({ content: '❌ Você não tem permissão.', flags: MessageFlags.Ephemeral });
           const raw = interaction.customId.replace(BTN.EDIT_PREFIX, '');
           const { rec, id: messageId } = resolveRecordByInteraction(interaction, raw);
@@ -2635,7 +2661,7 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
           const inpDate = new TextInputBuilder()
             .setCustomId('SC_GI_EDIT_DATE').setLabel('Data Entrada (DD/MM/AAAA)').setStyle(TextInputStyle.Short)
             .setPlaceholder('DD/MM/AAAA').setValue(msToDDMMYYYY(rec.joinDateMs)).setRequired(true);
-
+          
           const inpNote = new TextInputBuilder()
             .setCustomId('SC_GI_EDIT_NOTE').setLabel('Observação/Nota (opcional)').setStyle(TextInputStyle.Paragraph)
             .setPlaceholder('Ex.: destaque, mudança visual, etc.').setRequired(false);
@@ -2652,7 +2678,7 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
         }
 
         // Reenviar DM agora
-        if (interaction.isButton() && interaction.customId.startsWith(BTN.DMNOW_PREFIX)) {
+        if (interaction.isButton() && interaction.customId.startsWith(BTN.DMNOW_PREFIX)) { // NOVO: Botão de reenviar DM
           if (!hasAuth(interaction.member)) return interaction.reply({ content: '❌ Você não tem permissão.', flags: MessageFlags.Ephemeral });
           const raw = interaction.customId.replace(BTN.DMNOW_PREFIX, '');
           const { rec, id: messageId } = resolveRecordByInteraction(interaction, raw);
@@ -2668,7 +2694,7 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
           return;
         }
 
-        // Definir responsável (abrir select)
+        // Definir responsável (abrir select) // NOVO: Botão de definir responsável
         if (interaction.isButton() && interaction.customId.startsWith(BTN.RESP_PREFIX)) {
           if (!hasAuth(interaction.member)) return interaction.reply({ content: '❌ Você não tem permissão.', flags: MessageFlags.Ephemeral });
           const raw = interaction.customId.replace(BTN.RESP_PREFIX, '');
@@ -2732,7 +2758,7 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
           return;
         }
 
-        // Modal editar
+        // Modal editar // NOVO: Modal de edição
         if (interaction.isModalSubmit() && interaction.customId.startsWith('SC_GI_MODAL_EDIT_')) {
           if (!hasAuth(interaction.member)) return interaction.reply({ content: '❌ Você não tem permissão.', flags: MessageFlags.Ephemeral });
           const messageId = interaction.customId.replace('SC_GI_MODAL_EDIT_', '');
@@ -2770,6 +2796,75 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
           return;
         }
 
+        // NOVO: Botões de Undo no Log
+        if (interaction.isButton() && interaction.customId.startsWith('SC_GI_UNDO_')) {
+          if (!hasAuth(interaction.member)) return interaction.reply({ content: '❌ Você não tem permissão.', flags: MessageFlags.Ephemeral });
+          
+          const parts = interaction.customId.split(':');
+          const action = parts[0].replace('SC_GI_UNDO_', '');
+          const messageId = parts[1];
+          const oldValue = parts[2]; // Para toggle_active
+
+          const { rec, id: recordId } = resolveRecordByInteraction(interaction, messageId);
+          if (!rec) return interaction.reply({ content: 'Registro não encontrado.', flags: MessageFlags.Ephemeral });
+
+          await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+          try {
+            if (action === 'TOGGLE') {
+              const newStatus = oldValue === 'true'; // Reverte para o status anterior
+              rec.active = newStatus;
+              if (newStatus) { // Se está ativando
+                rec.pausedAtMs = null;
+                if (!rec.nextWeekTickMs) rec.nextWeekTickMs = computeNextWeekTick(rec.joinDateMs);
+                await addGIRole(guild, rec.targetId, 'Revertido: GI obrigatório');
+              } else { // Se está pausando
+                rec.pausedAtMs = nowMs();
+                await removeGIRole(guild, rec.targetId, 'Revertido: GI removido');
+              }
+              SC_GI_scheduleSave();
+              await refreshRegistroMessage(guild, interaction.user, recordId, 'Revertido status');
+              await interaction.editReply({ content: `✅ Status do registro de <@${rec.targetId}> revertido para **${newStatus ? 'Ativo' : 'Pausado'}**.` });
+            } else if (action === 'EDIT') {
+              // Para edição, abre o modal de edição novamente para o usuário preencher
+              const inpArea = new TextInputBuilder().setCustomId('SC_GI_EDIT_AREA').setLabel('Área (visual)').setStyle(TextInputStyle.Short).setPlaceholder(rec.area || 'SocialMedias').setValue(rec.area || 'SocialMedias').setRequired(true);
+              const inpDate = new TextInputBuilder().setCustomId('SC_GI_EDIT_DATE').setLabel('Data Entrada (DD/MM/AAAA)').setStyle(TextInputStyle.Short).setPlaceholder('DD/MM/AAAA').setValue(msToDDMMYYYY(rec.joinDateMs)).setRequired(true);
+              const inpNote = new TextInputBuilder().setCustomId('SC_GI_EDIT_NOTE').setLabel('Observação/Nota (opcional)').setStyle(TextInputStyle.Paragraph).setPlaceholder('Ex.: destaque, mudança visual, etc.').setRequired(false);
+
+              const modal = new ModalBuilder()
+                .setCustomId(`SC_GI_MODAL_EDIT_${recordId}`)
+                .setTitle('Re-editar Registro — Gestaoinfluencer')
+                .addComponents(new ActionRowBuilder().addComponents(inpArea), new ActionRowBuilder().addComponents(inpDate), new ActionRowBuilder().addComponents(inpNote));
+              
+              await interaction.showModal(modal); // Mostra o modal
+              await interaction.editReply({ content: '✅ Modal de edição aberto para reverter a edição.' }); // Responde a interação original
+            } else if (action === 'RESP') {
+              // Para responsável, abre o select novamente
+              const rows = [];
+              const candidates = await getRespCandidates(guild);
+              if (candidates.length > 0 && candidates.length <= 25) {
+                rows.push(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId(SEL.RESP_USER_PREFIX + recordId).setPlaceholder('Selecione o Responsável (lista filtrada por cargos)').addOptions(candidates.map(c => ({ label: c.label, value: c.id, emoji: '👤' })))));
+              } else if (typeof UserSelectMenuBuilder !== 'undefined') {
+                rows.push(new ActionRowBuilder().addComponents(new UserSelectMenuBuilder().setCustomId(SEL.RESP_USER_PREFIX + recordId).setPlaceholder('Selecione o Responsável (será validado pelos cargos)').setMinValues(1).setMaxValues(1)));
+              }
+              await interaction.editReply({ content: '🧭 **Re-defina o Responsável Direto** para reverter a alteração.', components: rows });
+            } else if (action === 'DESLIGAR') {
+              // Para desligamento, abre um modal de confirmação para restaurar
+              const modal = new ModalBuilder()
+                .setCustomId(`SC_GI_MODAL_RESTORE_DESLIGAR:${recordId}`)
+                .setTitle('Restaurar Desligamento?')
+                .addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('confirm').setLabel('Confirme digitando "RESTAURAR"').setStyle(TextInputStyle.Short).setRequired(true)));
+              await interaction.showModal(modal);
+              await interaction.editReply({ content: '✅ Modal de confirmação aberto para restaurar o desligamento.' });
+            }
+            // Desativa o botão de undo no log
+            await interaction.message.edit({ components: [] });
+          } catch (e) {
+            await interaction.editReply({ content: '⚠️ ' + (e.message || 'Falha ao tentar reverter a ação.') });
+          }
+          return;
+        }
+
         // Desligar
         if (interaction.isButton() && interaction.customId.startsWith(BTN.DESLIGAR_PREFIX)) {
           if (!hasAuth(interaction.member)) return interaction.reply({ content: '❌ Você não tem permissão.', flags: MessageFlags.Ephemeral });
@@ -2783,6 +2878,28 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
             await interaction.editReply({ content: '✅ Membro desligado (controle removido, DM/log enviados).' });
           } catch (e) {
             await interaction.editReply({ content: '⚠️ ' + e.message });
+          }
+          return;
+        }
+
+        // NOVO: Modal de confirmação para restaurar desligamento
+        if (interaction.isModalSubmit() && interaction.customId.startsWith('SC_GI_MODAL_RESTORE_DESLIGAR:')) {
+          if (!hasAuth(interaction.member)) return interaction.reply({ content: '❌ Você não tem permissão.', flags: MessageFlags.Ephemeral });
+          const messageId = interaction.customId.replace('SC_GI_MODAL_RESTORE_DESLIGAR:', '');
+          const confirmation = interaction.fields.getTextInputValue('confirm')?.trim();
+
+          if (confirmation.toLowerCase() !== 'restaurar') {
+            return interaction.reply({ content: '❌ Confirmação inválida. O desligamento não foi restaurado.', flags: MessageFlags.Ephemeral });
+          }
+
+          await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+          try {
+            await restoreDesligamento(guild, interaction.user, messageId);
+            await interaction.editReply({ content: '✅ Desligamento restaurado com sucesso!' });
+            // Desativa o botão de undo no log
+            await interaction.message.edit({ components: [] });
+          } catch (e) {
+            await interaction.editReply({ content: '⚠️ ' + (e.message || 'Falha ao restaurar desligamento.') });
           }
           return;
         }
