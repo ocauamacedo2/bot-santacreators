@@ -676,6 +676,31 @@ function isFormsCreatorDuplicateStatusMessage(msg, client) {
   );
 }
 
+async function cleanupFormsCreatorDuplicateMessagesInThread(thread, client) {
+  const messages = await thread.messages.fetch({ limit: 100 }).catch(() => null);
+  if (!messages) return 0;
+
+  const mainMessages = messages.filter((msg) =>
+    isFormsCreatorMainRegisterMessage(msg, client)
+  );
+
+  const mainMessageIds = new Set(mainMessages.map((msg) => msg.id));
+
+  const duplicates = messages.filter((msg) =>
+    !mainMessageIds.has(msg.id) &&
+    isFormsCreatorDuplicateStatusMessage(msg, client)
+  );
+
+  let deleted = 0;
+
+  for (const duplicate of duplicates.values()) {
+    await duplicate.delete().catch(() => {});
+    deleted++;
+  }
+
+  return deleted;
+}
+
 let isSyncing = false;
 
 async function syncLegacyThreads(client, progressMsg = null) {
