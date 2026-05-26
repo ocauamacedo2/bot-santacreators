@@ -381,25 +381,121 @@ function findExistingCheck(responsaveis, memberId) {
   return null;
 }
 
-function buildCheckedBackupByMemberId(responsaveis = {}) {
-  const backup = {};
+function extractFirstMentionId(value) {
+  const text = String(value || "");
+  const mentionMatch = text.match(/<@!?(\d{5,25})>/);
+  if (mentionMatch) return mentionMatch[1];
 
-  for (const respData of Object.values(responsaveis || {})) {
-    for (const [memberId, memberData] of Object.entries(respData?.members || {})) {
-      if (memberData?.checked === true) {
-        backup[String(memberId)] = {
-          checked: true,
-          checkedAt: memberData.checkedAt || null,
-          checkedBy: memberData.checkedBy || null,
-          area: memberData.area || "Geral",
-          sourceMessageId: memberData.sourceMessageId || null,
-          sourceCreatedAtMs: memberData.sourceCreatedAtMs || null
-        };
-      }
-    }
+  const rawMatch = text.match(/\b\d{5,25}\b/);
+  return rawMatch ? rawMatch[0] : null;
+}
+
+function getEmbedFieldValue(embed, fieldNameIncludes) {
+  const fields = embed?.fields || [];
+  const wanted = String(fieldNameIncludes || "").toLowerCase();
+
+  const found = fields.find(field => {
+    const name = String(field?.name || "").toLowerCase();
+    return name.includes(wanted);
+  });
+
+  return found?.value || null;
+}
+
+function parseChecklistAuditEmbed(message, weekKey) {
+  const embed = message.embeds?.[0];
+  if (!embed) return null;
+
+  const title = String(embed.title || "");
+  if (!title.includes("Checklist")) return null;
+
+  const weekValue = getEmbedFieldValue(embed, "semana");
+  if (String(weekValue || "").trim() !== String(weekKey)) return null;
+
+  const respValue = getEmbedFieldValue(embed, "responsável");
+  const memberValue = getEmbedFieldValue(embed, "membro");
+  const actionValue = getEmbedFieldValue(embed, "ação");
+  const actorValue = getEmbedFieldValue(embed, "alterado por");
+
+  const respId = extractFirstMentionId(respValue);
+  const actorId = extractFirstMentionId(actorValue);
+  const status = String(actionValue || "").includes("Marcou como Conferido");
+
+  if (!respId) return null;
+
+  const isBulk = String(memberValue || "").toLowerCase().includes("todos");
+  const memberId = isBulk ? "TODOS" : extractFirstMentionId(memberValue);
+
+  if (!isBulk && !memberId) return null;
+
+  return {
+    messageId: message.id,
+    createdTimestamp: Number(message.createdTimestamp || Date.now()),
+    respId,
+    memberId,
+    actorId,
+    status,
+    isBulk
+  };
+}
+
+async function recoverChecklistChecksFromAuditChannel(client, weekKey, responsaveis = {}) {
+  const channel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+  if (!channel?.messages?.fetch) {
+    console.warn("[ChecklistLogs] Canal de auditoria não encontrado para recuperação.");
+    return responsaveis;
   }
 
-  return backup;
+  const recovered = cloneJSONSafe(responsaveis || {}, {});
+  const auditActions = [];
+
+  let before = null;
+
+  for (let page = 0; page < 10; page++) {
+    const fetched = await channel.messages.fetch({
+      limit: 100,
+      ...(before ? { before } : {})
+    }).catch(() => null);
+
+    if (!fetched || fetched.size === 0) break;
+
+    const messages = [...fetched.values()];
+    before = messages[messages.length - 1]?.id || null;
+
+    for (const msg of messages) {
+      const parsed = parseChecklistAuditEmbed(msg, weekKey);
+      if (parsed) auditActions.push(parsed);
+    }
+
+    if (fetched.size < 100) break;
+  }
+
+  auditActions.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+
+  for (const action of auditActions) {
+    const respData = recovered[action.respId];
+    if (!respData?.members) continue;
+
+    if (action.isBulk) {
+      for (const memberData of Object.values(respData.members || {})) {
+        memberData.checked = action.status;
+        memberData.checkedAt = action.status ? action.createdTimestamp : null;
+        memberData.checkedBy = action.status ? action.actorId : null;
+      }
+
+      continue;
+    }
+
+    const memberData = respData.members?.[action.memberId];
+    if (!memberData) continue;
+
+    memberData.checked = action.status;
+    memberData.checkedAt = action.status ? action.createdTimestamp : null;
+    memberData.checkedBy = action.status ? action.actorId : null;
+  }
+
+  console.log(`[ChecklistLogs] Recuperação por auditoria aplicada: ${auditActions.length} ações da semana ${weekKey}.`);
+  return recovered;
 }
 
 async function syncWeekData(client, force = false) {
@@ -515,11 +611,13 @@ async function syncWeekData(client, force = false) {
     }
   }
 
+  const recoveredResponsaveis = await recoverChecklistChecksFromAuditChannel(client, weekKey, newResponsaveis);
+
   const oldCheckedCount = Object.values(currentResponsaveis || {})
     .flatMap(resp => Object.values(resp?.members || {}))
     .filter(m => m?.checked === true).length;
 
-  const newCheckedCount = Object.values(newResponsaveis || {})
+  const newCheckedCount = Object.values(recoveredResponsaveis || {})
     .flatMap(resp => Object.values(resp?.members || {}))
     .filter(m => m?.checked === true).length;
 
@@ -530,7 +628,7 @@ async function syncWeekData(client, force = false) {
     return checklist;
   }
 
-  currentWeek.responsaveis = newResponsaveis;
+  currentWeek.responsaveis = recoveredResponsaveis;
   currentWeek.lastSyncedAt = Date.now();
 
   saveJSON(CHECKLIST_FILE, checklist);
