@@ -231,12 +231,19 @@ function hasManagePermission(member, userId) {
 
 const BUTTON_CUSTOM_ID = "abrir_forms_equipecreator";
 
+const SYNC_FORMS_BUTTON_CUSTOM_ID = "sync_formscreator_threads";
+
 function buildButtonRow() {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(BUTTON_CUSTOM_ID)
       .setLabel("➕ Registrar Membro da Equipe Creator")
-      .setStyle(ButtonStyle.Primary)
+      .setStyle(ButtonStyle.Primary),
+
+    new ButtonBuilder()
+      .setCustomId(SYNC_FORMS_BUTTON_CUSTOM_ID)
+      .setLabel("🔄 Sincronizar/Limpar Tópicos")
+      .setStyle(ButtonStyle.Secondary)
   );
 }
 
@@ -1333,6 +1340,35 @@ export async function formsCreatorHandleMessage(message, client) {
 // 3) chama isso dentro do teu client.on('interactionCreate')
 export async function formsCreatorHandleInteraction(interaction, client) {
   try {
+
+
+        // BOTÃO -> sincroniza e limpa duplicados
+    if (interaction.isButton?.() && interaction.customId === SYNC_FORMS_BUTTON_CUSTOM_ID) {
+      const temPermissao = hasPermission(interaction.member, interaction.user.id);
+      if (!temPermissao) {
+        await interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
+        return true;
+      }
+
+      await interaction.reply({
+        content:
+          "🔄 **Iniciando sincronização do FormsCreator...**\n" +
+          "📌 Vou varrer tópicos ativos/arquivados e tentar remover mensagens duplicadas.",
+        ephemeral: true,
+      });
+
+      const progressMsg = await interaction.fetchReply().catch(() => null);
+
+      await syncLegacyThreads(client, progressMsg);
+
+      await interaction.editReply({
+        content:
+          "✅ **Sincronização finalizada.**\n" +
+          "📌 Agora confira os tópicos que estavam duplicados.",
+      }).catch(() => {});
+
+      return true;
+    }
     // BOTÃO -> abre modal
     if (interaction.isButton?.() && interaction.customId === BUTTON_CUSTOM_ID) {
       const temPermissao = hasPermission(interaction.member, interaction.user.id);
