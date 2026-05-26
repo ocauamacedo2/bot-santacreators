@@ -57,13 +57,13 @@
       TICK_MS: 60 * 1000,
       DATA_FILE: path.join(DATA_DIR, 'sc_gi_registros.json'),
 
-      CHANNEL_MENU_E_REGISTROS: '1417366889398796318',
-      CHANNEL_LOGS:            '1486006878914875412',
-      CHANNEL_AVISOS_1M:       '1486084383575113758',
-      CHANNEL_DM_MIRROR:       '1486006892105830400',
-      CHANNEL_RESP_BOARD:      '1427082727600947230',
-      CHANNEL_DESLIGAMENTOS:   '1427089183847223306',
-      CHANNEL_RESTORE_LOG:     '1410688804226076785',
+CHANNEL_MENU_E_REGISTROS: '1417366889398796318',
+CHANNEL_LOGS:             '1486006878914875412',
+CHANNEL_AVISOS_1M:        '1486084383575113758',
+CHANNEL_DM_MIRROR:        '1486006878914875412',
+CHANNEL_RESP_BOARD:       '1427082727600947230',
+CHANNEL_DESLIGAMENTOS:    '1427089183847223306',
+CHANNEL_RESTORE_LOG:      '1486006878914875412',
 
       ROLE_GESTAOINFLUENCER:   '1371733765243670538',
       ROLE_CREATOR_BASE:       '1352939011253076000',
@@ -325,6 +325,43 @@
     }
     const monthsSince = (joinMs, n = nowMs()) => Math.max(0, Math.floor(daysBetween(joinMs, n) / 30));
     const weeksSince  = (joinMs, n = nowMs()) => Math.max(0, Math.floor(daysBetween(joinMs, n) / 7));
+    const AUTO_DESLIGAR_PAUSA_MS = SC_GI_CFG.AUTO_DESLIGAR_PAUSA_DIAS * 24 * 60 * 60 * 1000;
+
+function formatDurationFull(ms) {
+  ms = Math.max(0, Number(ms || 0));
+
+  const totalSeconds = Math.floor(ms / 1000);
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  return `${days}d ${pad2(hours)}h ${pad2(minutes)}m ${pad2(seconds)}s`;
+}
+
+function getPausedTotalMs(rec, n = nowMs()) {
+  const saved = Number(rec?.totalPausedMs || 0);
+  const current = rec?.pausedAtMs ? Math.max(0, n - rec.pausedAtMs) : 0;
+  return saved + current;
+}
+
+function getActiveTotalMs(rec, n = nowMs()) {
+  const raw = Math.max(0, n - Number(rec?.joinDateMs || n));
+  return Math.max(0, raw - getPausedTotalMs(rec, n));
+}
+
+function getPauseCountdownMs(rec, n = nowMs()) {
+  return Math.max(0, AUTO_DESLIGAR_PAUSA_MS - getPausedTotalMs(rec, n));
+}
+
+function pauseCountdownText(rec, n = nowMs()) {
+  if (rec?.active) return '—';
+  return formatDurationFull(getPauseCountdownMs(rec, n));
+}
+
+function activeTimeText(rec, n = nowMs()) {
+  return formatDurationFull(getActiveTotalMs(rec, n));
+}
     function simpleHash (str) { let h=0; for (let i=0;i<str.length;i++) h = (h*31 + str.charCodeAt(i))|0; return String(h>>>0); }
 
     const _userCache = new Map();
@@ -350,6 +387,81 @@
       if (SC_GI_CFG.AUTH_USER_IDS.includes(member.id)) return true;
       return SC_GI_CFG.AUTH_ROLE_IDS.some(id => member.roles?.cache?.has?.(id));
     }
+
+    function hierarchyNameByRank(rank) {
+  if (rank === 0) return 'Owner';
+  if (rank === 1) return 'Resp Creators';
+  if (rank === 2) return 'Resp Influ';
+  if (rank === 3) return 'Resp Líder';
+  if (rank === 4) return 'Coord';
+  if (rank === 5) return 'Gestor';
+  if (rank === 6) return 'Manager';
+  if (rank === 7) return 'Social';
+  if (rank === 8) return 'Equipe Manager';
+  if (rank === 9) return 'Equipe Social';
+  if (rank === 10) return 'Equipe Creators';
+  return 'Sem cargo de hierarquia';
+}
+
+async function assertCanManageGIRecord(guild, actorUser, targetUserId, actionName = 'gerenciar este registro') {
+  const actorId = String(actorUser?.id || '');
+
+  if (!actorId) {
+    throw new Error('Não foi possível identificar quem tentou executar essa ação.');
+  }
+
+  const actorMember = await guild.members.fetch(actorId).catch(() => null);
+  const targetMember = await guild.members.fetch(String(targetUserId)).catch(() => null);
+
+  if (!actorMember) {
+    throw new Error('Não consegui encontrar seu membro no servidor para validar a hierarquia.');
+  }
+
+  if (!targetMember) {
+    throw new Error('Não consegui encontrar o membro alvo no servidor para validar a hierarquia.');
+  }
+
+  if (!hasAuth(actorMember)) {
+    throw new Error('Você não tem permissão para mexer nesse controle.');
+  }
+
+  if (SC_GI_CFG.AUTH_USER_IDS.includes(actorId)) {
+    return true;
+  }
+
+  const actorRank = getManagementRank(actorMember);
+  const targetRank = getManagementRank(targetMember);
+
+  if (actorRank === Infinity) {
+    throw new Error('Você até pode ter permissão, mas não possui cargo de hierarquia configurado.');
+  }
+
+  if (targetRank === Infinity) {
+    return true;
+  }
+
+  if (actorRank >= targetRank) {
+    await logMsg(
+      guild,
+      'Ação Bloqueada por Hierarquia (GI)',
+      [
+        `🛡️ Ação: ${actionName}`,
+        `👤 Autor: <@${actorId}>`,
+        `🎚️ Cargo do autor: \`${hierarchyNameByRank(actorRank)}\``,
+        `🎯 Alvo: <@${targetUserId}>`,
+        `🎚️ Cargo do alvo: \`${hierarchyNameByRank(targetRank)}\``,
+        '',
+        '❌ Resultado: bloqueado porque o autor não está acima do alvo na hierarquia.'
+      ].join('\n')
+    );
+
+    throw new Error(
+      `Hierarquia bloqueada: você só pode ${actionName} de alguém abaixo de você. Seu cargo: ${hierarchyNameByRank(actorRank)} | Alvo: ${hierarchyNameByRank(targetRank)}.`
+    );
+  }
+
+  return true;
+}
 
     function getLatestActiveRecordByTarget(targetId) {
       const arr = Array.from(SC_GI_STATE.registros.values()).filter(r => r.targetId === String(targetId));
@@ -577,14 +689,15 @@ async function resolveInitialRoleSetAtMs(guild, targetId) {
 
     // ====================== UI IDS ======================
     const BTN = {
-      OPEN_MODAL: 'SC_GI_OPEN_MODAL',
-      CHECK_RECORDS: 'SC_GI_CHECK_RECORDS',
-      STOP_COUNT_PREFIX: 'SC_GI_STOP_',
-      EDIT_PREFIX: 'SC_GI_EDIT_',
-      DMNOW_PREFIX: 'SC_GI_DMNOW_',
-      RESP_PREFIX: 'SC_GI_RESP_',
-      DESLIGAR_PREFIX: 'SC_GI_OFF_'
-    };
+  OPEN_MODAL: 'SC_GI_OPEN_MODAL',
+  CHECK_RECORDS: 'SC_GI_CHECK_RECORDS',
+  STOP_COUNT_PREFIX: 'SC_GI_STOP_',
+  EDIT_PREFIX: 'SC_GI_EDIT_',
+  DMNOW_PREFIX: 'SC_GI_DMNOW_',
+  RESP_PREFIX: 'SC_GI_RESP_',
+  REFRESH_PREFIX: 'SC_GI_REFRESH_',
+  DESLIGAR_PREFIX: 'SC_GI_OFF_'
+};
     const SEL = {
       RESP_USER_PREFIX: 'SC_GI_SELRESP_USER_'
     };
@@ -658,7 +771,10 @@ try {
           `🔗 **Evolução (Forms):** ${fcLink ? `Abrir Tópico` : 'Não encontrado'}`,
 
           `📌 **Status:** ${active ? 'Ativo' : 'Pausado'}`,
-          `🔒 **Cargo obrigatório enquanto ativo:** <@&${GI_ROLE_ID}>`,
+`⏳ **Tempo ativo real:** \`${activeTimeText(rec)}\``,
+!active ? `⏸️ **Tempo pausado acumulado:** \`${formatDurationFull(getPausedTotalMs(rec))}\`` : '',
+!active ? `🧨 **Auto-desligamento em:** \`${pauseCountdownText(rec)}\`` : '',
+`🔒 **Cargo obrigatório enquanto ativo:** <@&${GI_ROLE_ID}>`,
           rec?.warnNoRoleGI
   ? '\n⚠️ *Atenção:* este membro **não possui** GI/Creator base no momento do registro.'
   : (rec?.roleSetAtMs ? `\n✅ **Primeira setagem GI/Creator em:** \`${msToDDMMYYYY(rec.roleSetAtMs)}\`` : '')
@@ -669,18 +785,28 @@ try {
       if (rec?.note) emb.addFields({ name: '🗒️ Observação', value: rec.note.slice(0, 1024) });
       return emb;
     }
-    function registroButtons(messageId, active) {
-      return new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(BTN.EDIT_PREFIX   + messageId).setStyle(ButtonStyle.Secondary).setEmoji('✏️').setLabel('Editar Registro'),
-        new ButtonBuilder().setCustomId(BTN.RESP_PREFIX   + messageId).setStyle(ButtonStyle.Secondary).setEmoji('🧭').setLabel('Definir Responsável'),
-        new ButtonBuilder().setCustomId(BTN.DMNOW_PREFIX  + messageId).setStyle(ButtonStyle.Primary)  .setEmoji('📨').setLabel('Reenviar DM agora'),
-        new ButtonBuilder().setCustomId(BTN.STOP_COUNT_PREFIX + messageId)
-          .setStyle(active ? ButtonStyle.Danger : ButtonStyle.Success)
-          .setEmoji(active ? '⏸️' : '▶️')
-          .setLabel(active ? 'Parar Contagem' : 'Retomar Contagem'),
-        new ButtonBuilder().setCustomId(BTN.DESLIGAR_PREFIX + messageId).setStyle(ButtonStyle.Danger).setEmoji('🗑️').setLabel('Desligar da gestão')
-      );
-    }
+function registroButtons(messageId, active) {
+  const rowMain = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(BTN.EDIT_PREFIX + messageId).setStyle(ButtonStyle.Secondary).setEmoji('✏️').setLabel('Editar Registro'),
+    new ButtonBuilder().setCustomId(BTN.RESP_PREFIX + messageId).setStyle(ButtonStyle.Secondary).setEmoji('🧭').setLabel('Definir Responsável'),
+    new ButtonBuilder().setCustomId(BTN.REFRESH_PREFIX + messageId).setStyle(ButtonStyle.Secondary).setEmoji('🔄').setLabel('Atualizar Controle'),
+    new ButtonBuilder().setCustomId(BTN.DMNOW_PREFIX + messageId).setStyle(ButtonStyle.Primary).setEmoji('📨').setLabel('Reenviar DM agora'),
+    new ButtonBuilder().setCustomId(BTN.STOP_COUNT_PREFIX + messageId)
+      .setStyle(active ? ButtonStyle.Danger : ButtonStyle.Success)
+      .setEmoji(active ? '⏸️' : '▶️')
+      .setLabel(active ? 'Parar Contagem' : 'Retomar Contagem')
+  );
+
+  const rowDanger = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(BTN.DESLIGAR_PREFIX + messageId)
+      .setStyle(ButtonStyle.Danger)
+      .setEmoji('🗑️')
+      .setLabel('Desligar da gestão')
+  );
+
+  return [rowMain, rowDanger];
+}
 
     // ====================== HELPERS ======================
     function computeNextWeekTick(joinDateMs) {
@@ -1002,7 +1128,7 @@ try {
             const newMsg = await ch.send({
               content: `<@${rec.targetId}>`,
               embeds: [emb],
-              components: [registroButtons('TEMP', rec.active)]
+              components: registroButtons('TEMP', rec.active)
             });
 
             const oldId = rec.messageId;
@@ -1014,7 +1140,7 @@ try {
             
             SC_GI_scheduleSave();
 
-            await newMsg.edit({ components: [registroButtons(rec.messageId, rec.active)] }).catch(()=>{});
+            await newMsg.edit({ components: registroButtons(rec.messageId, rec.active) }).catch(()=>{});
 
             if (restoreLogCh && restoreLogCh.isTextBased()) {
                const logEmb = new EmbedBuilder()
@@ -1030,7 +1156,7 @@ try {
              if (msg.author.id !== client.user.id) return; // Ignora msg de outro bot no loop automático (usa o botão pra migrar)
              const hasButtons = (msg.components || []).some(r => (r.components || []).some(c => typeof c.customId === 'string' && (c.customId.startsWith(BTN.EDIT_PREFIX) || c.customId.startsWith(BTN.STOP_COUNT_PREFIX))));
              if (!hasButtons) {
-                await msg.edit({ components: [registroButtons(rec.messageId, rec.active)] }).catch(()=>{});
+                await msg.edit({ components: registroButtons(rec.messageId, rec.active) }).catch(()=>{});
              }
           }
         }
@@ -1134,7 +1260,7 @@ let roleSetAtMs = await resolveInitialRoleSetAtMs(guild, targetUser.id);
 const msg = await ch.send({
   content: `<@${targetUser.id}>`,
   embeds: [emb],
-  components: [registroButtons('TEMP', tempRec.active)]
+  components: registroButtons('TEMP', tempRec.active)
 });
 
 // agora fixa o ID real
@@ -1145,7 +1271,7 @@ SC_GI_scheduleSave();
 
 // 🔁 FAILSAFE: garante IDs corretos nos botões
 await msg.edit({
-  components: [registroButtons(record.messageId, record.active)]
+  components: registroButtons(record.messageId, record.active)
 }).catch(()=>{});
 
 
@@ -1252,7 +1378,7 @@ try {
       const months = monthsSince(rec.joinDateMs);
 
       const emb = await registroEmbed({ targetUser, registrarUser, joinDateMs: rec.joinDateMs, area: rec.area, weeks, months, active: rec.active, rec });
-      await msg.edit({ embeds: [emb], components: [registroButtons(messageId, rec.active)] });
+      await msg.edit({ embeds: [emb], components: registroButtons(messageId, rec.active) });
 
       await logMsg(
         guild,
@@ -1271,9 +1397,64 @@ try {
       await renderRespBoard(guild);
     }
 
-    async function toggleActive(guild, actor, messageId) {
-      const rec = SC_GI_STATE.registros.get(messageId);
-      if (!rec) throw new Error('Registro não encontrado.');
+
+    async function refreshRegistroMessage(guild, actor, messageId, reason = 'Atualização manual') {
+  const rec = SC_GI_STATE.registros.get(messageId);
+  if (!rec) throw new Error('Registro não encontrado.');
+
+  const ch = await guild.channels.fetch(rec.channelId).catch(() => null);
+  if (!ch) throw new Error('Canal indisponível.');
+
+  const msg = await ch.messages.fetch(rec.messageId).catch(() => null);
+  if (!msg) throw new Error('Mensagem do registro não encontrada.');
+
+  const targetUser = await fetchUserCached(rec.targetId);
+  const registrarUser = await fetchUserCached(rec.registrarId);
+
+  const emb = await registroEmbed({
+    targetUser,
+    registrarUser,
+    joinDateMs: rec.joinDateMs,
+    area: rec.area,
+    weeks: weeksSince(rec.joinDateMs),
+    months: monthsSince(rec.joinDateMs),
+    active: rec.active,
+    rec
+  });
+
+  await msg.edit({
+    embeds: [emb],
+    components: registroButtons(rec.messageId, rec.active)
+  });
+
+  await logMsg(
+    guild,
+    'Controle Atualizado (GI)',
+    [
+      `🔄 Motivo: ${reason}`,
+      `🔧 Por: <@${actor.id}>`,
+      `👤 Membro: <@${rec.targetId}>`,
+      `📌 Status: ${rec.active ? 'Ativo' : 'Pausado'}`,
+      `⏳ Tempo ativo real: \`${activeTimeText(rec)}\``,
+      !rec.active ? `⏸️ Pausado acumulado: \`${formatDurationFull(getPausedTotalMs(rec))}\`` : '',
+      !rec.active ? `🧨 Auto-desligamento em: \`${pauseCountdownText(rec)}\`` : '',
+      `🔗 Registro: ${recordLink(rec.guildId, rec.channelId, rec.messageId) || '—'}`
+    ].filter(Boolean).join('\n')
+  );
+
+  return rec;
+}
+
+   async function toggleActive(guild, actor, messageId) {
+  const rec = SC_GI_STATE.registros.get(messageId);
+  if (!rec) throw new Error('Registro não encontrado.');
+
+  await assertCanManageGIRecord(
+    guild,
+    actor,
+    rec.targetId,
+    rec.active ? 'pausar a contagem' : 'retomar a contagem'
+  );
       const ch  = await guild.channels.fetch(rec.channelId).catch(() => null);
       if (!ch) throw new Error('Canal indisponível.');
       const msg = await ch.messages.fetch(messageId).catch(() => null);
@@ -1334,7 +1515,7 @@ try {
       const months = monthsSince(rec.joinDateMs);
 
       const emb = await registroEmbed({ targetUser, registrarUser, joinDateMs: rec.joinDateMs, area: rec.area, weeks, months, active: rec.active, rec });
-      await msg.edit({ embeds: [emb], components: [registroButtons(messageId, rec.active)] });
+      await msg.edit({ embeds: [emb], components: registroButtons(messageId, rec.active) });
 
       // ✅ DM avisando pause/resume
       if (targetUser) {
@@ -1481,9 +1662,16 @@ try {
       } catch {}
     }
 
-    async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado manualmente') {
+async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado manualmente') {
   const rec = SC_GI_STATE.registros.get(messageId);
   if (!rec) throw new Error('Registro não encontrado.');
+
+  await assertCanManageGIRecord(
+    guild,
+    actor,
+    rec.targetId,
+    'desligar da gestão'
+  );
 
   const snapshot = { ...rec };
 
@@ -1690,7 +1878,7 @@ try {
           const weeks  = Math.max(0, Math.floor(daysBetween(rec.joinDateMs, nowMs()) / 7)); //
           const months = monthsSince(rec.joinDateMs);
           const emb = await registroEmbed({ targetUser, registrarUser, joinDateMs: rec.joinDateMs, area: rec.area, weeks, months, active: rec.active, rec });
-          await msg.edit({ embeds: [emb], components: [registroButtons(messageId, rec.active)] });
+          await msg.edit({ embeds: [emb], components: registroButtons(messageId, rec.active) });
         }
       } catch {}
 
@@ -2141,13 +2329,22 @@ try {
             SC_GI_scheduleSave();
           }
 
-          if (!rec.active && rec.pausedAtMs) {
-            const dias = Math.floor((n - rec.pausedAtMs) / (24*60*60*1000));
-            if (dias >= SC_GI_CFG.AUTO_DESLIGAR_PAUSA_DIAS) {
-              const guild = client.guilds.cache.get(rec.guildId);
-              if (guild) await desligarRegistro(guild, { id: client.user.id }, rec.messageId, `Auto-desligado após ${dias} dias pausado`);
-            }
-          }
+          if (!rec.active) {
+  const pausedTotalMs = getPausedTotalMs(rec, n);
+  const dias = Math.floor(pausedTotalMs / (24 * 60 * 60 * 1000));
+
+  if (pausedTotalMs >= AUTO_DESLIGAR_PAUSA_MS) {
+    const guild = client.guilds.cache.get(rec.guildId);
+    if (guild) {
+      await desligarRegistro(
+        guild,
+        { id: client.user.id },
+        rec.messageId,
+        `Auto-desligado após ${dias} dias pausado acumulado`
+      );
+    }
+  }
+}
         }
 
         for (const [, g] of client.guilds.cache) {
@@ -2191,6 +2388,11 @@ try {
           await ensureMenu(guild);
           markBoardDirty();
           await renderRespBoard(guild, { force: true });
+
+          for (const rec of SC_GI_STATE.registros.values()) {
+  if (rec.guildId !== guild.id) continue;
+  await refreshRegistroMessage(guild, client.user, rec.messageId, 'Atualização automática ao ligar o bot').catch(() => {});
+}
 
           // re-agenda restores pendentes na hora que o bot liga
           for (const [uid] of SC_GI_STATE.roleSnapshots.entries()) {
@@ -2352,7 +2554,7 @@ try {
               const newMsg = await ch.send({
                 content: `<@${rec.targetId}>`,
                 embeds: [emb],
-                components: [registroButtons('TEMP', rec.active)]
+                components: registroButtons('TEMP', rec.active)
               }).catch(() => null);
 
               if (newMsg) {
@@ -2367,7 +2569,7 @@ try {
 
                 SC_GI_scheduleSave();
 
-                await newMsg.edit({ components: [registroButtons(rec.messageId, rec.active)] }).catch(()=>{});
+                await newMsg.edit({ components: registroButtons(rec.messageId, rec.active) }).catch(()=>{});
                 fixedCount++;
 
                 if (restoreLogCh && restoreLogCh.isTextBased()) {
