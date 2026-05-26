@@ -633,22 +633,13 @@ function isFormsCreatorMainRegisterMessage(msg, client) {
 
 function isFormsCreatorDuplicateStatusMessage(msg, client) {
   if (!msg || msg.author?.id !== client.user.id) return false;
-  if (!msg.embeds?.length) return false;
   if (isFormsCreatorMainRegisterMessage(msg, client)) return false;
 
-  const embed = msg.embeds[0];
+  const content = String(msg.content || "");
 
-  const hasStatusField = embed.fields?.some((field) =>
-    String(field.name || "") === "Status do Projeto"
-  );
-
-  const hasIdField = embed.fields?.some((field) =>
-    String(field.name || "").includes("ID/Passaporte")
-  );
-
-  const hasAreaField = embed.fields?.some((field) =>
-    String(field.name || "").includes("Área de Interesse")
-  );
+  const hasWelcomeText =
+    content.includes("Este é seu tópico de acompanhamento individual") ||
+    content.includes("Bem-vindo(a)");
 
   const hasFormsButtons = msg.components?.some((row) =>
     row.components?.some((component) =>
@@ -657,7 +648,32 @@ function isFormsCreatorDuplicateStatusMessage(msg, client) {
     )
   );
 
-  return Boolean(hasStatusField && !hasIdField && !hasAreaField && hasFormsButtons);
+  const hasEmbed = msg.embeds?.length > 0;
+  const embed = msg.embeds?.[0];
+
+  const hasStatusField = embed?.fields?.some((field) =>
+    String(field.name || "") === "Status do Projeto"
+  );
+
+  const hasIdField = embed?.fields?.some((field) =>
+    String(field.name || "").includes("ID/Passaporte")
+  );
+
+  const hasAreaField = embed?.fields?.some((field) =>
+    String(field.name || "").includes("Área de Interesse")
+  );
+
+  const isStatusOnlyEmbed =
+    hasEmbed &&
+    hasStatusField &&
+    !hasIdField &&
+    !hasAreaField;
+
+  return Boolean(
+    hasWelcomeText ||
+    hasFormsButtons ||
+    isStatusOnlyEmbed
+  );
 }
 
 let isSyncing = false;
@@ -749,6 +765,20 @@ async function syncLegacyThreads(client, progressMsg = null) {
         `🛠️ Atualizações/limpezas feitas: **${updates}**`
       ).catch(() => {});
     }
+
+    try {
+      if (thread.archived) await thread.setArchived(false).catch(() => {});
+
+      const deletedDuplicates = await cleanupFormsCreatorDuplicateMessagesInThread(thread, client);
+
+      if (deletedDuplicates > 0) {
+        updates += deletedDuplicates;
+        console.log(`[FormsCreator] ${deletedDuplicates} duplicado(s) removido(s) da thread ${thread.name} (${thread.id}).`);
+      }
+    } catch (e) {
+      console.error(`[FormsCreator] Erro ao limpar duplicados da thread ${thread.name}:`, e);
+    }
+
     let reg = state.registrations[thread.id];
     let msg = null;
     let userId = null;
@@ -879,7 +909,15 @@ async function syncLegacyThreads(client, progressMsg = null) {
 
   if (updates > 0) {
     writeState(state);
-    console.log(`[FormsCreator] Sincronizados ${updates} registros antigos.`);
+    console.log(`[FormsCreator] Sincronizados/limpos ${updates} item(ns).`);
+  }
+
+  if (progressMsg) {
+    await progressMsg.edit(
+      "✅ **Sincronização finalizada.**\n" +
+      `📁 Tópicos verificados: **${checkedThreads}/${allThreads.length}**\n` +
+      `🧹 Itens atualizados/removidos: **${updates}**`
+    ).catch(() => {});
   }
   } finally {
     isSyncing = false;
