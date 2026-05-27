@@ -167,11 +167,15 @@ export async function roleProtectHandleGuildMemberUpdate(oldMember, newMember, c
     const guild = newMember.guild;
 
     // ✅ Aguarda um pouco mais a propagação do log do Discord
-    await sleep(3000);
+    await sleep(4000);
 
     const auditEntry = await fetchRecentRoleUpdateEntry(guild, newMember.id, removed);
     const executorUser = auditEntry?.executor ?? null;
     const executorId = executorUser?.id || null;
+
+    // ✅ Se não achou executor mas o bypass está ativo, ignore (foi o bot via comando)
+    if (!executorId && hasGlobalBypass(newMember.id)) return false;
+
 
     // 1) Se o executor for o próprio bot (remoção legítima programada), libera
     if (executorId === client.user.id) return false;

@@ -596,6 +596,11 @@ async function execute(message, args) {
     }
 
     // Executa a remoção
+    // ✅ Define bypass para que o roleProtect.js e o installRoleGuardian não interfiram
+    if (!globalThis.__SC_ROLE_BYPASS__) globalThis.__SC_ROLE_BYPASS__ = new Map();
+    // Define um tempo de 15 segundos para o bypass ser válido
+    globalThis.__SC_ROLE_BYPASS__.set(targetMember.id, Date.now() + 15000);
+
     await targetMember.roles.remove(role, `!remcargo por ${message.author.tag}`);
 
     const embChat = singleEmbed({
@@ -666,9 +671,13 @@ export function installRoleGuardian(client) {
       }
 
       const executorUser = entry?.executor || null;
-      const executorMember = executorUser
-        ? await guild.members.fetch(executorUser.id).catch(() => null)
-        : null;
+      // Se não achou no log mas tem bypass ativo, confia no bypass e encerra aqui
+      if (!executorUser && hasGlobalBypass(newMember.id)) return;
+
+      const executorMember = executorUser ? await guild.members.fetch(executorUser.id).catch(() => null) : null;
+
+      // ✅ Se o executor for o próprio bot, permite sempre
+      if (executorUser && executorUser.id === client.user.id) return;
 
       // ✅ PROTEÇÃO MASSIVA (Moderador de Cliques)
       if (executorMember && !ALLOWED_REMOVERS.includes(executorMember.id)) {
@@ -769,7 +778,7 @@ export function installRoleGuardian(client) {
         });
 
         // Se não for autorizado, restaura
-        if (!allowed || PROTECTED_ROLE_IDS.includes(role.id) || !executorMember) {
+        if (!allowed || PROTECTED_ROLE_IDS.includes(role.id)) {
           if (role?.editable) {
             await newMember.roles.add(role.id, 'Guardião: restauração de remoção não autorizada');
             RECENT_RESTORES.set(newMember.id, Date.now());
