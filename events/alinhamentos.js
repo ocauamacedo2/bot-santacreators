@@ -17,6 +17,9 @@ import {
 // ✅ HUB (pra contar no scGeralDash)
 import { dashEmit } from "../utils/dashHub.js";
 
+// ✅ Integração com FormsCreator
+import { findFormsCreatorThreadIdByUserId } from "./formscreator.js";
+
 // ======= ALINHAMENTOS (alinv1) — Menu + Modal + Registro + Validação + Anti-farm =======
 
 // -------- CONFIG --------
@@ -73,6 +76,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const STORAGE_DIR = path.join(__dirname, "..", "storage");
 const RL_PATH = path.join(STORAGE_DIR, "alinv1_rate_limit.json");
+
+// ✅ Dados do Controle GI
+const SC_GI_DATA_FILE = path.join(__dirname, "..", "data", "sc_gi_registros.json");
 
 // -------- Helpers --------
 
@@ -202,6 +208,128 @@ async function fetchAvatarFromMaybeId(client, idOrMention) {
     return user?.displayAvatarURL?.({ size: 256 }) ?? null;
   } catch {
     return null;
+  }
+}
+
+function clipText(value, max = 1800) {
+  const text = String(value || "").trim();
+  if (text.length <= max) return text;
+  return text.slice(0, max - 20) + "\n\n... [texto cortado]";
+}
+
+function readGIState() {
+  try {
+    if (!fs.existsSync(SC_GI_DATA_FILE)) return null;
+    return JSON.parse(fs.readFileSync(SC_GI_DATA_FILE, "utf8")) || null;
+  } catch (e) {
+    console.warn("[ALINV1] Falha ao ler dados do Controle GI:", e?.message || e);
+    return null;
+  }
+}
+
+function findGIRecordByTargetId(targetId) {
+  const data = readGIState();
+  const registros = Array.isArray(data?.registros) ? data.registros : [];
+
+  const found = registros
+    .filter((r) => String(r?.targetId || "") === String(targetId))
+    .sort((a, b) => Number(b?.createdAtMs || 0) - Number(a?.createdAtMs || 0))[0];
+
+  return found || null;
+}
+
+function makeDiscordMessageLink(guildId, channelId, messageId) {
+  if (!guildId || !channelId || !messageId) return null;
+  return `https://discord.com/channels/${guildId}/${channelId}/${messageId}`;
+}
+
+async function sendAlinhamentoToEvolutionThread(client, interaction, {
+  targetId,
+  rawSobre,
+  quemFoi,
+  quemFez,
+  registroMsg,
+}) {
+  try {
+    if (!targetId) {
+      return {
+        ok: false,
+        reason: "sem_id",
+        message: "⚠️ Não enviei na evolução porque o campo **Quem foi alinhado** não tinha um ID Discord válido.",
+      };
+    }
+
+    const giRecord = findGIRecordByTargetId(targetId);
+    if (!giRecord) {
+      return {
+        ok: false,
+        reason: "sem_gi",
+        message: `⚠️ Não achei Controle GI ativo/salvo para <@${targetId}>. O registro foi criado, mas não foi enviado no tópico de evolução.`,
+      };
+    }
+
+    const threadId = await findFormsCreatorThreadIdByUserId(client, targetId).catch(() => null);
+    if (!threadId) {
+      return {
+        ok: false,
+        reason: "sem_thread",
+        message: `⚠️ Achei o Controle GI de <@${targetId}>, mas não achei o tópico de evolução no FormsCreator.`,
+      };
+    }
+
+    const thread = await client.channels.fetch(threadId).catch(() => null);
+    if (!thread || !thread.isTextBased()) {
+      return {
+        ok: false,
+        reason: "thread_invalida",
+        message: `⚠️ O tópico de evolução de <@${targetId}> foi encontrado, mas não consegui acessar/enviar mensagem nele.`,
+      };
+    }
+
+    const registroLink = makeDiscordMessageLink(
+      registroMsg?.guildId,
+      registroMsg?.channelId,
+      registroMsg?.id
+    );
+
+    const authorIcon = interaction.user.displayAvatarURL?.({ size: 256 }) ?? null;
+
+    const evolutionEmbed = new EmbedBuilder()
+      .setColor(0x9b59b6)
+      .setAuthor({
+        name: `${interaction.user.tag} registrou um alinhamento`,
+        iconURL: authorIcon || undefined,
+      })
+      .setDescription(clipText(rawSobre || "—", 3500))
+      .addFields(
+        { name: "👤 Quem foi alinhado", value: quemFoi || `<@${targetId}>`, inline: false },
+        { name: "🧭 Quem alinhou", value: quemFez || `<@${interaction.user.id}>`, inline: false },
+        { name: "📌 Registrado por", value: `<@${interaction.user.id}> (\`${interaction.user.id}\`)`, inline: true },
+        { name: "🕒 Data/Hora", value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true },
+        { name: "🔗 Registro original", value: registroLink ? `[Abrir registro](${registroLink})` : "—", inline: false }
+      )
+      .setThumbnail(authorIcon)
+      .setFooter({ text: "SantaCreators • Evolução pessoal • Alinhamento" })
+      .setTimestamp();
+
+    const sent = await thread.send({
+      content: `🧾 **Novo alinhamento registrado para <@${targetId}>**`,
+      embeds: [evolutionEmbed],
+    });
+
+    return {
+      ok: true,
+      threadId,
+      messageId: sent?.id || null,
+      message: `✅ Também enviei o alinhamento no tópico de evolução: <#${threadId}>`,
+    };
+  } catch (e) {
+    console.error("[ALINV1] Erro ao enviar alinhamento para evolução:", e);
+    return {
+      ok: false,
+      reason: "erro",
+      message: "⚠️ O registro foi criado, mas deu erro ao tentar enviar no tópico de evolução.",
+    };
   }
 }
 
@@ -555,7 +683,22 @@ export async function alinhamentosHandleInteraction(interaction, client) {
         return true;
       }
 
-      await interaction.reply({ content: "✅ Alinhamento enviado para validação!", ephemeral: true }).catch(() => {});
+      const targetId = extractId(rawFoi);
+
+const evolutionResult = await sendAlinhamentoToEvolutionThread(client, interaction, {
+  targetId,
+  rawSobre,
+  quemFoi,
+  quemFez,
+  registroMsg: msg,
+});
+
+await interaction.reply({
+  content:
+    "✅ Alinhamento enviado para validação!\n" +
+    evolutionResult.message,
+  ephemeral: true,
+}).catch(() => {});
 
       // Renova o menu:
 // ✅ após registrar: se já tinha menu, apaga e manda o novo (igual hoje)

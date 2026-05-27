@@ -19,7 +19,7 @@ const CATEGORY_IDS = new Set([
 ]);
 
 const LIDER_ROLE_ID = "1353858422063239310";
-const LOG_CHANNEL_ID = "1415102820826349648";
+const LOG_CHANNEL_ID = "1486009598237212793";
 
 // Canais a ignorar SEMPRE
 const EXCLUDED_CHANNELS = new Set([
@@ -65,6 +65,66 @@ const GIF_URL =
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const trunc = (s, m = 1000) =>
   String(s ?? "").length > m ? String(s).slice(0, m - 1) + "…" : String(s ?? "");
+
+function fmtDateBR(ms = Date.now()) {
+  return new Date(ms).toLocaleString("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    dateStyle: "full",
+    timeStyle: "medium",
+  });
+}
+
+function userFullInfo(user) {
+  if (!user) return "`Usuário desconhecido`";
+  return [
+    `Menção: <@${user.id}>`,
+    `Tag: \`${user.tag ?? "sem tag"}\``,
+    `ID: \`${user.id}\``,
+    `Avatar: ${user.displayAvatarURL?.({ dynamic: true, size: 1024 }) ?? "—"}`,
+  ].join("\n");
+}
+
+function channelFullInfo(ch) {
+  if (!ch) return "`Canal desconhecido`";
+  return [
+    `Canal: <#${ch.id}>`,
+    `Nome: \`${ch.name ?? "sem nome"}\``,
+    `ID: \`${ch.id}\``,
+    `Categoria: ${ch.parentId ? `<#${ch.parentId}> / \`${ch.parentId}\`` : "—"}`,
+  ].join("\n");
+}
+
+function messageLinkOf(msg) {
+  return msg?.url ?? "—";
+}
+
+function chunkLines(lines, max = 950) {
+  const chunks = [];
+  let current = "";
+
+  for (const line of lines) {
+    const next = current ? `${current}\n${line}` : line;
+    if (next.length > max) {
+      if (current) chunks.push(current);
+      current = line;
+    } else {
+      current = next;
+    }
+  }
+
+  if (current) chunks.push(current);
+  return chunks.length ? chunks : ["—"];
+}
+
+async function sendAuditLog(client, guild, embeds) {
+  const log = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+  if (!log || !canSend(log)) return;
+
+  for (const emb of embeds) {
+    await log.send({ embeds: [emb] }).catch(() => {});
+    await wait(150);
+  }
+}
 
 /**
  * Discord limita content em 4000 chars.
@@ -154,33 +214,40 @@ function buildMentionChunksFromIds(userIds, maxLen = MAX_CONTENT) {
  * - demais: só menções (sem embed), pra não duplicar embed
  */
 async function sendInviteToChannel(ch, emb, mentionChunks) {
+  const sentMessages = [];
+
   // Se não tem menção nenhuma, manda só o embed
   if (!mentionChunks || mentionChunks.length === 0) {
-    await ch.send({
+    const msg = await ch.send({
       embeds: [emb],
       allowedMentions: { parse: ["users"], repliedUser: false },
     });
-    return 1;
+
+    sentMessages.push(msg);
+    return sentMessages;
   }
 
   // 1ª: embed + 1º bloco
-  await ch.send({
+  const firstMsg = await ch.send({
     content: mentionChunks[0],
     embeds: [emb],
     allowedMentions: { parse: ["users"], repliedUser: false },
   });
 
+  sentMessages.push(firstMsg);
+
   // resto: só content
   for (let idx = 1; idx < mentionChunks.length; idx++) {
-    await ch.send({
+    const msg = await ch.send({
       content: mentionChunks[idx],
       allowedMentions: { parse: ["users"], repliedUser: false },
     });
+
+    sentMessages.push(msg);
     await wait(120);
   }
 
-  // conta mensagens enviadas nesse canal
-  return mentionChunks.length;
+  return sentMessages;
 }
 
 // ======================= UI =======================
@@ -292,9 +359,12 @@ function categoryTargets(guild) {
 // ======================= LIMPEZA =======================
 // Apaga convites deste módulo (TAG) e, opcionalmente, convites antigos (legacy) sem TAG.
 async function cleanAllInvites(guild, { legacy = false } = {}) {
-  let deletedGuild = 0,
-    scannedGuild = 0,
-    deletedDM = 0;
+let deletedGuild = 0,
+  scannedGuild = 0,
+  deletedDM = 0;
+
+const deletedGuildDetails = [];
+const deletedDMDetails = [];
 
   // 1) Canais das categorias
   const targets = categoryTargets(guild);
@@ -322,10 +392,22 @@ async function cleanAllInvites(guild, { legacy = false } = {}) {
         const match = isTag || (legacy && isLikelyLegacyInvite(msg));
 
         if (isMine && !isMenu && match) {
-          await msg.delete().catch(() => {});
-          deletedGuild++;
-          await wait(80);
-        }
+  deletedGuildDetails.push({
+    channelId: ch.id,
+    channelName: ch.name,
+    parentId: ch.parentId,
+    messageId: msg.id,
+    messageUrl: msg.url,
+    createdAt: msg.createdTimestamp,
+    content: msg.content || "—",
+    embedTitle: msg.embeds?.[0]?.title || "—",
+    embedDescription: msg.embeds?.[0]?.description || "—",
+  });
+
+  await msg.delete().catch(() => {});
+  deletedGuild++;
+  await wait(80);
+}
       }
 
       lastId = batch.lastKey();
@@ -351,10 +433,21 @@ async function cleanAllInvites(guild, { legacy = false } = {}) {
           const isMine = msg.author?.id === guild.client.user.id;
           const isTag = msg.embeds?.some((e) => (e.footer?.text || "").includes(TAG));
           if (isMine && isTag) {
-            await msg.delete().catch(() => {});
-            deletedDM++;
-            await wait(80);
-          }
+  deletedDMDetails.push({
+    userId: m.id,
+    userTag: m.user?.tag,
+    messageId: msg.id,
+    messageUrl: msg.url,
+    createdAt: msg.createdTimestamp,
+    content: msg.content || "—",
+    embedTitle: msg.embeds?.[0]?.title || "—",
+    embedDescription: msg.embeds?.[0]?.description || "—",
+  });
+
+  await msg.delete().catch(() => {});
+  deletedDM++;
+  await wait(80);
+}
         }
 
         lastId = batch.lastKey();
@@ -364,7 +457,13 @@ async function cleanAllInvites(guild, { legacy = false } = {}) {
     } catch {}
   }
 
-  return { deletedGuild, deletedDM, scannedGuild };
+  return {
+  deletedGuild,
+  deletedDM,
+  scannedGuild,
+  deletedGuildDetails,
+  deletedDMDetails,
+};
 }
 
 // ======================= EXPORTS =======================
@@ -434,31 +533,85 @@ export async function lideresConvitesHandleInteraction(i, client) {
       return true;
     }
 
-    const { deletedGuild, deletedDM } = await cleanAllInvites(guild, { legacy: false }).catch(() => ({
-      deletedGuild: 0,
-      deletedDM: 0,
-    }));
+    const {
+  deletedGuild,
+  deletedDM,
+  scannedGuild,
+  deletedGuildDetails,
+  deletedDMDetails,
+} = await cleanAllInvites(guild, { legacy: false }).catch(() => ({
+  deletedGuild: 0,
+  deletedDM: 0,
+  scannedGuild: 0,
+  deletedGuildDetails: [],
+  deletedDMDetails: [],
+}));
 
-    // LOG
-    try {
-      const log = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
-      if (log && canSend(log)) {
-        const emb = new EmbedBuilder()
-          .setColor("#c0392b")
-          .setAuthor({
-            name: `${i.user.tag} • Limpeza de convites`,
-            iconURL: i.user.displayAvatarURL({ dynamic: true }),
-          })
-          .setTitle("🧹 Convites limpos")
-          .setDescription("Removidas mensagens **marcadas com TAG** deste módulo (categorias + DMs).")
-          .addFields(
-            { name: "🗑️ Apagadas nas categorias", value: String(deletedGuild), inline: true },
-            { name: "📬 Apagadas em DMs", value: String(deletedDM), inline: true }
-          )
-          .setTimestamp();
-        await log.send({ embeds: [emb] }).catch(() => {});
-      }
-    } catch {}
+  // LOG
+try {
+  const guildDetails = chunkLines(
+    (deletedGuildDetails ?? []).map(
+      (d) =>
+        `• <#${d.channelId}> | msg \`${d.messageId}\` | ${d.messageUrl}\n` +
+        `  Criada em: ${fmtDateBR(d.createdAt)}\n` +
+        `  Conteúdo antes de apagar: ${trunc(d.content, 180)}\n` +
+        `  Embed: ${trunc(d.embedTitle, 120)}`
+    )
+  );
+
+  const dmDetails = chunkLines(
+    (deletedDMDetails ?? []).map(
+      (d) =>
+        `• <@${d.userId}> | \`${d.userId}\` | msg \`${d.messageId}\`\n` +
+        `  Criada em: ${fmtDateBR(d.createdAt)}\n` +
+        `  Conteúdo antes de apagar: ${trunc(d.content, 180)}\n` +
+        `  Embed: ${trunc(d.embedTitle, 120)}`
+    )
+  );
+
+  const embeds = [
+    new EmbedBuilder()
+      .setColor("#c0392b")
+      .setAuthor({
+        name: `${i.user.tag} • Limpeza de convites`,
+        iconURL: i.user.displayAvatarURL({ dynamic: true }),
+      })
+      .setTitle("🧹 Auditoria completa — convites limpos")
+      .setDescription("Ação de limpeza executada em mensagens com TAG deste módulo.")
+      .addFields(
+        { name: "👤 Quem executou", value: userFullInfo(i.user), inline: false },
+        { name: "🏠 Servidor", value: `${guild.name}\n\`${guild.id}\``, inline: false },
+        { name: "🕒 Horário da ação", value: fmtDateBR(), inline: false },
+        { name: "🗑️ Apagadas nas categorias", value: String(deletedGuild), inline: true },
+        { name: "📬 Apagadas em DMs", value: String(deletedDM), inline: true },
+        { name: "🔎 Mensagens escaneadas", value: String(scannedGuild ?? 0), inline: true }
+      )
+      .setThumbnail(i.user.displayAvatarURL({ dynamic: true, size: 1024 }))
+      .setTimestamp(),
+  ];
+
+  guildDetails.forEach((txt, idx) => {
+    embeds.push(
+      new EmbedBuilder()
+        .setColor("#c0392b")
+        .setTitle(`🗑️ Detalhes apagados em canais — parte ${idx + 1}`)
+        .setDescription(txt)
+        .setTimestamp()
+    );
+  });
+
+  dmDetails.forEach((txt, idx) => {
+    embeds.push(
+      new EmbedBuilder()
+        .setColor("#c0392b")
+        .setTitle(`📬 Detalhes apagados em DMs — parte ${idx + 1}`)
+        .setDescription(txt)
+        .setTimestamp()
+    );
+  });
+
+  await sendAuditLog(client, guild, embeds);
+} catch {}
 
     await i
       .editReply({
@@ -541,10 +694,15 @@ export async function lideresConvitesHandleInteraction(i, client) {
 
     const targets = categoryTargets(guild);
     const perUser = new Map(); // userId -> Set(channels)
-    const channelLinks = [];
+const channelLinks = [];
 
-    let chSent = 0; // canais que receberam o embed
-    let dmSent = 0;
+const channelDeliveryDetails = [];
+const dmDeliveryDetails = [];
+const channelFailures = [];
+const dmFailures = [];
+
+let chSent = 0; // canais que receberam o embed
+let dmSent = 0;
 
     for (const ch of targets.values()) {
       try {
@@ -572,14 +730,34 @@ export async function lideresConvitesHandleInteraction(i, client) {
         const emb = channelEmbed(base, list[0] ?? null, guild.iconURL({ dynamic: true }));
 
         // envia (1 embed + menções chunkadas)
-        await sendInviteToChannel(ch, emb, mentionChunks);
+const sentMessages = await sendInviteToChannel(ch, emb, mentionChunks);
 
-        chSent++;
-        channelLinks.push(`<#${ch.id}>`);
-        if (chSent % 3 === 0) await wait(200);
+chSent++;
+channelLinks.push(`<#${ch.id}>`);
+
+channelDeliveryDetails.push({
+  channelId: ch.id,
+  channelName: ch.name,
+  parentId: ch.parentId,
+  leadersCount: list.length,
+  mentionChunksCount: mentionChunks.length,
+  messageIds: sentMessages.map((msg) => msg.id),
+  messageUrls: sentMessages.map((msg) => messageLinkOf(msg)),
+  sentAt: Date.now(),
+});
+
+if (chSent % 3 === 0) await wait(200);
       } catch (e) {
-        console.error("[Líderes] falha canal", ch?.id, e);
-      }
+  channelFailures.push({
+    channelId: ch?.id,
+    channelName: ch?.name,
+    parentId: ch?.parentId,
+    error: e?.message ?? String(e),
+    at: Date.now(),
+  });
+
+  console.error("[Líderes] falha canal", ch?.id, e);
+}
     }
 
     for (const [uid, setCh] of perUser.entries()) {
@@ -587,45 +765,145 @@ export async function lideresConvitesHandleInteraction(i, client) {
         const m = await guild.members.fetch(uid).catch(() => null);
         if (!m) continue;
         const emb = dmEmbed(base, m, [...setCh.values()]);
-        await m.send({
-          content: `👋 <@${uid}>`,
-          embeds: [emb],
-          allowedMentions: { parse: ["users"], repliedUser: false },
-        });
-        dmSent++;
-        if (dmSent % 5 === 0) await wait(200);
+        const dmMsg = await m.send({
+  content: `👋 <@${uid}>`,
+  embeds: [emb],
+  allowedMentions: { parse: ["users"], repliedUser: false },
+});
+
+dmDeliveryDetails.push({
+  userId: uid,
+  userTag: m.user?.tag,
+  avatar: m.user?.displayAvatarURL({ dynamic: true, size: 1024 }),
+  messageId: dmMsg.id,
+  messageUrl: messageLinkOf(dmMsg),
+  channels: [...setCh.values()].map((ch) => ({
+    id: ch.id,
+    name: ch.name,
+    parentId: ch.parentId,
+  })),
+  contentSent: `👋 <@${uid}>`,
+  embedTitle: `📌 ${titulo}`,
+  embedData: dataTxt,
+  embedBody: body,
+  sentAt: Date.now(),
+});
+
+dmSent++;
+if (dmSent % 5 === 0) await wait(200);
       } catch {}
     }
 
-    // log de envio
-    try {
-      const log = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
-      if (log && canSend(log)) {
-       const logEmb = new EmbedBuilder()
-  .setColor("#8e44ad")
-  .setAuthor({
-    name: `${i.user.tag} • Envio para Líderes`,
-    iconURL: i.user.displayAvatarURL({ dynamic: true }),
-  })
-  .setTitle("📣 Convite enviado")
-  .addFields(
-    {
-      name: "👤 Enviado por",
-      value: `<@${i.user.id}> \n\`${i.user.id}\``,
-      inline: false,
-    },
-    {
-      name: "📡 Canais entregues",
-      value: `**${chSent}**\n${trunc(channelLinks.join("  "), 1000)}`,
-      inline: false,
-    },
-    { name: "📬 DMs enviadas", value: String(dmSent), inline: true }
-  )
-  .setImage(GIF_URL)
-  .setTimestamp();
-        await log.send({ embeds: [logEmb] }).catch(() => {});
-      }
-    } catch {}
+   // log de envio
+try {
+  const channelLines = channelDeliveryDetails.map((d) => {
+    return (
+      `• <#${d.channelId}> | \`${d.channelId}\`\n` +
+      `  Categoria: ${d.parentId ? `<#${d.parentId}> / \`${d.parentId}\`` : "—"}\n` +
+      `  Líderes mencionados: **${d.leadersCount}** | mensagens: **${d.messageIds.length}**\n` +
+      `  Links: ${trunc(d.messageUrls.join(" | "), 350)}\n` +
+      `  Horário: ${fmtDateBR(d.sentAt)}`
+    );
+  });
+
+  const dmLines = dmDeliveryDetails.map((d) => {
+    return (
+      `• <@${d.userId}> | \`${d.userId}\` | ${d.userTag ?? "sem tag"}\n` +
+      `  DM enviada: \`${d.messageId}\`\n` +
+      `  Link DM: ${d.messageUrl}\n` +
+      `  Canais citados na DM: ${trunc(d.channels.map((ch) => `<#${ch.id}>`).join("  "), 250)}\n` +
+      `  Horário: ${fmtDateBR(d.sentAt)}`
+    );
+  });
+
+  const failChannelLines = channelFailures.map((f) => {
+    return (
+      `• ${f.channelId ? `<#${f.channelId}>` : "canal desconhecido"} | \`${f.channelId ?? "sem id"}\`\n` +
+      `  Erro: ${trunc(f.error, 300)}\n` +
+      `  Horário: ${fmtDateBR(f.at)}`
+    );
+  });
+
+  const failDmLines = dmFailures.map((f) => {
+    return (
+      `• <@${f.userId}> | \`${f.userId}\`\n` +
+      `  Erro: ${trunc(f.error, 300)}\n` +
+      `  Horário: ${fmtDateBR(f.at)}`
+    );
+  });
+
+  const embeds = [
+    new EmbedBuilder()
+      .setColor("#8e44ad")
+      .setAuthor({
+        name: `${i.user.tag} • Envio para Líderes`,
+        iconURL: i.user.displayAvatarURL({ dynamic: true }),
+      })
+      .setTitle("📣 Auditoria completa — convite enviado")
+      .setDescription("Registro completo do envio do convite para canais e DMs.")
+      .addFields(
+        { name: "👤 Enviado por", value: userFullInfo(i.user), inline: false },
+        { name: "🏠 Servidor", value: `${guild.name}\n\`${guild.id}\``, inline: false },
+        { name: "🕒 Horário do envio", value: fmtDateBR(), inline: false },
+        { name: "📝 Título enviado", value: trunc(titulo, 1000), inline: false },
+        { name: "📅 Data enviada no formulário", value: trunc(dataTxt, 1000), inline: false },
+        { name: "✍️ Conteúdo enviado", value: trunc(body, 1000), inline: false },
+        { name: "📡 Canais entregues", value: String(chSent), inline: true },
+        { name: "📬 DMs enviadas", value: String(dmSent), inline: true },
+        { name: "⚠️ Falhas em canais", value: String(channelFailures.length), inline: true },
+        { name: "⚠️ Falhas em DMs", value: String(dmFailures.length), inline: true }
+      )
+      .setThumbnail(i.user.displayAvatarURL({ dynamic: true, size: 1024 }))
+      .setImage(GIF_URL)
+      .setTimestamp(),
+  ];
+
+  chunkLines(channelLines).forEach((txt, idx) => {
+    embeds.push(
+      new EmbedBuilder()
+        .setColor("#8e44ad")
+        .setTitle(`📡 Entregas em canais — parte ${idx + 1}`)
+        .setDescription(txt)
+        .setTimestamp()
+    );
+  });
+
+  chunkLines(dmLines).forEach((txt, idx) => {
+    embeds.push(
+      new EmbedBuilder()
+        .setColor("#8e44ad")
+        .setTitle(`📬 Entregas em DMs — parte ${idx + 1}`)
+        .setDescription(txt)
+        .setTimestamp()
+    );
+  });
+
+  if (failChannelLines.length) {
+    chunkLines(failChannelLines).forEach((txt, idx) => {
+      embeds.push(
+        new EmbedBuilder()
+          .setColor("#e67e22")
+          .setTitle(`⚠️ Falhas em canais — parte ${idx + 1}`)
+          .setDescription(txt)
+          .setTimestamp()
+      );
+    });
+  }
+
+  if (failDmLines.length) {
+    chunkLines(failDmLines).forEach((txt, idx) => {
+      embeds.push(
+        new EmbedBuilder()
+          .setColor("#e67e22")
+          .setTitle(`⚠️ Falhas em DMs — parte ${idx + 1}`)
+          .setDescription(txt)
+          .setTimestamp()
+      );
+    });
+  }
+
+  await sendAuditLog(client, guild, embeds);
+} catch {}
 
 
    dashEmit("lideres:convite_enviado", {
