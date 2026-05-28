@@ -409,30 +409,22 @@ getMembersByRole(CONFIG.ROLES.RESP_LIDER, CONFIG.SLOTS.NONE) || "_Ninguém_",
 "┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅",
 "# 🏙️ DIVISÃO DE FOCO POR CIDADE",
 "",
-"## 🌊 CIDADE MARESIA — Segunda-feira",
-"**Responsável obrigatório:** 1 Resp. Líder + 1 Resp. Influ",
-"**Cargo/Cidade:** <@&1379021994678288465>",
+"🌊 **Maresia** — segunda-feira • <@&1379021994678288465>",
+"🏙️ **Grande** — terça-feira • <@&1418691103397253322>",
+"🎅 **Santa** — quarta-feira • <@&1379021888709464168>",
+"💎 **Nobre** — responsabilidade geral • <@&1379021805544804382>",
 "",
-"## 🏙️ CIDADE GRANDE — Terça-feira",
-"**Responsável obrigatório:** 1 Resp. Líder + 1 Resp. Influ",
-"**Cargo/Cidade:** <@&1418691103397253322>",
-"",
-"## 🎅 CIDADE SANTA — Quarta-feira",
-"**Responsável obrigatório:** 1 Resp. Líder + 1 Resp. Influ",
-"**Cargo/Cidade:** <@&1379021888709464168>",
-"",
-"## 💎 CIDADE NOBRE — Responsabilidade Geral",
-"**Responsáveis:** todos os Resp. Líder, Resp. Influ e Resp. Creators",
-"**Cargo/Cidade:** <@&1379021805544804382>",
+"> Cada cidade deve ter foco de **1 Resp. Líder + 1 Resp. Influ**.",
+"> Na **Cidade Nobre**, todos os responsáveis atuam juntos.",
 "",
 
 "┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅",
 `#  ${E.CROWN_GREEN}  COORD. CREATORS  ${E.CROWN_GREEN}`,
           "",
-          `### 🌅 HORÁRIO: 17:00 às 19:00`,
+          `### ${CONFIG.LABELS.evening}`,
           getMembersByRole(CONFIG.ROLES.COORD_CREATOR, CONFIG.SLOTS.EVENING) || "_Ninguém definido_",
           "",
-          `### 🌌 HORÁRIO: 01:00 às 03:00`,
+          `### ${CONFIG.LABELS.dawn}`,
           getMembersByRole(CONFIG.ROLES.COORD_CREATOR, CONFIG.SLOTS.DAWN) || "_Ninguém definido_",
           "",
           `### ⚪ Sem Horário Fixo / Flexível`,
@@ -466,11 +458,11 @@ getMembersByRole(CONFIG.ROLES.RESP_LIDER, CONFIG.SLOTS.NONE) || "_Ninguém_",
           .setImage(CONFIG.GIF_FOOTER);
 
         const row = new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setCustomId("hier_manage_slots")
-            .setLabel("⚙️ Gerenciar Horários (Coord+)")
-            .setStyle(ButtonStyle.Secondary)
-            .setEmoji("🕰️"),
+new ButtonBuilder()
+  .setCustomId("hier_manage_slots")
+  .setLabel("Gerenciar horários")
+  .setStyle(ButtonStyle.Secondary)
+  .setEmoji("🕰️"),
           new ButtonBuilder()
             .setCustomId("hier_refresh")
             .setLabel("🔄 Atualizar")
@@ -635,8 +627,11 @@ export async function hierarquiaHandleInteraction(interaction, client) {
     });
   }
 
-  // ✅ ACK IMEDIATO (responde antes de qualquer coisa pesada)
-  await interaction.deferReply({ ephemeral: true }).catch(() => {});
+// ✅ ACK IMEDIATO REAL: evita "Esta interação falhou"
+await interaction.reply({
+  content: "⏳ Abrindo gerenciador de horários...",
+  ephemeral: true,
+}).catch(() => {});
 
   try {
     // 🔥 NÃO FAZER guild.members.fetch() completo
@@ -738,16 +733,16 @@ export async function hierarquiaHandleInteraction(interaction, client) {
     const currentSlot = slots[targetId] || CONFIG.SLOTS.NONE;
 
     const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`hier_set:${targetId}:${CONFIG.SLOTS.EVENING}`)
-        .setLabel("🌅 17:00 - 19:00")
-        .setStyle(ButtonStyle.Primary)
-        .setDisabled(currentSlot === CONFIG.SLOTS.EVENING),
-      new ButtonBuilder()
-        .setCustomId(`hier_set:${targetId}:${CONFIG.SLOTS.DAWN}`)
-        .setLabel("🌌 01:00 - 03:00")
-        .setStyle(ButtonStyle.Primary)
-        .setDisabled(currentSlot === CONFIG.SLOTS.DAWN),
+  new ButtonBuilder()
+  .setCustomId(`hier_set:${targetId}:${CONFIG.SLOTS.EVENING}`)
+  .setLabel("🌆 19:00 - 22:00")
+  .setStyle(ButtonStyle.Primary)
+  .setDisabled(currentSlot === CONFIG.SLOTS.EVENING),
+new ButtonBuilder()
+  .setCustomId(`hier_set:${targetId}:${CONFIG.SLOTS.DAWN}`)
+  .setLabel("🌌 23:00 - 02:00")
+  .setStyle(ButtonStyle.Primary)
+  .setDisabled(currentSlot === CONFIG.SLOTS.DAWN),
       new ButtonBuilder()
         .setCustomId(`hier_set:${targetId}:${CONFIG.SLOTS.NONE}`)
         .setLabel("⚪ Remover Horário")
