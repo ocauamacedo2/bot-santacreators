@@ -157,6 +157,76 @@ function EVT3_buildMenuRow(mainThreadId, areas) {
   );
 }
 
+function EVT3_extractCreatorIdFromPanelMessage(message) {
+  try {
+    const embed = message?.embeds?.[0];
+    const text = `${embed?.description || ""} ${embed?.title || ""}`;
+    const mentionMatch = text.match(/<@!?(\d{15,25})>/);
+    if (mentionMatch?.[1]) return mentionMatch[1];
+
+    const rawIdMatch = text.match(/\b\d{15,25}\b/);
+    if (rawIdMatch?.[0]) return rawIdMatch[0];
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function EVT3_extractEventNameFromPanelMessage(message, fallbackName = "Evento") {
+  try {
+    const embedTitle = message?.embeds?.[0]?.title;
+    if (embedTitle) {
+      return String(embedTitle).replace(/^🎉\s*/g, "").trim() || fallbackName;
+    }
+
+    return fallbackName;
+  } catch {
+    return fallbackName;
+  }
+}
+
+function EVT3_buildDefaultAreas() {
+  return {
+    links: { done: false, threadId: null },
+    audios: { done: false, threadId: null },
+    adms: { done: false, threadId: null },
+    org: { done: false, threadId: null },
+  };
+}
+
+function EVT3_recoverEventStateFromInteraction(state, interaction, mainThreadId) {
+  const channel = interaction?.channel;
+  const message = interaction?.message;
+
+  if (!channel?.isThread?.()) return null;
+  if (String(channel.id) !== String(mainThreadId)) return null;
+  if (!message?.id) return null;
+
+  const eventName = EVT3_extractEventNameFromPanelMessage(
+    message,
+    String(channel.name || "Evento").replace(/^🎉\s*Evento\s*•\s*/i, "").trim() || "Evento"
+  );
+
+  const creatorId =
+    EVT3_extractCreatorIdFromPanelMessage(message) ||
+    interaction.user?.id ||
+    null;
+
+  const recovered = {
+    eventName,
+    creatorId,
+    panelMessageId: message.id,
+    areas: EVT3_buildDefaultAreas(),
+    recoveredAt: Date.now(),
+  };
+
+  state.evt3Events[mainThreadId] = recovered;
+  EVT3_writeState(state);
+
+  return recovered;
+}
+
 // =========================
 // BOTÃO FIXO (ANTI-SPAM)
 // =========================
@@ -499,12 +569,24 @@ export async function evt3EventsHandleInteraction(interaction, client) {
         return true;
       }
 
-      const state = EVT3_readState();
-      const evt = state.evt3Events?.[mainThreadId];
-      if (!evt) {
-        await interaction.reply({ content: "❌ Evento não encontrado no state.", ephemeral: true }).catch(() => {});
-        return true;
-      }
+    const state = EVT3_readState();
+let evt = state.evt3Events?.[mainThreadId];
+
+if (!evt) {
+  evt = EVT3_recoverEventStateFromInteraction(state, interaction, mainThreadId);
+
+  if (!evt) {
+    await interaction
+      .reply({
+        content:
+          "❌ Evento não encontrado no state e não consegui recuperar pela thread.\n" +
+          "⚠️ Provável causa: esse botão é de um evento antigo, ou o arquivo `data/evt3_events_state.json` foi apagado/zerado.",
+        ephemeral: true,
+      })
+      .catch(() => {});
+    return true;
+  }
+}
 
       const area = evt.areas?.[type];
       if (area?.done && area?.threadId) {
