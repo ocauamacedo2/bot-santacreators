@@ -72,17 +72,17 @@ const CONFIG = {
   ],
 
   // Slots de Horário
-  SLOTS: {
-    NONE: "none",
-    EVENING: "evening", // 17:00 - 19:00
-    DAWN: "dawn",       // 01:00 - 03:00
-  },
+SLOTS: {
+  NONE: "none",
+  EVENING: "evening", // 19:00 - 22:00
+  DAWN: "dawn",       // 23:00 - 02:00
+},
 
-  LABELS: {
-    evening: "🌅 17:00 às 19:00",
-    dawn: "🌌 01:00 às 03:00",
-    none: "⚪ Sem Horário Fixo",
-  },
+LABELS: {
+  evening: "🌆 19:00 às 22:00",
+  dawn: "🌌 23:00 às 02:00",
+  none: "⚪ Sem Horário Fixo",
+},
 
   // Visual
   GIF_FOOTER:
@@ -397,17 +397,37 @@ async function updateHierarchyPanel(client) {
           "┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅",
           `#  ${E.CROWN_CYAN}   RESP. LIDER ${E.CROWN_CYAN}`,
           "",
-          `### 🌅 HORÁRIO: 17:00 às 19:00`,
-          getMembersByRole(CONFIG.ROLES.RESP_LIDER, CONFIG.SLOTS.EVENING) || "_Ninguém definido_",
+`### ${CONFIG.LABELS.evening}`,
+getMembersByRole(CONFIG.ROLES.RESP_LIDER, CONFIG.SLOTS.EVENING) || "_Ninguém definido_",
+"",
+`### ${CONFIG.LABELS.dawn}`,
+getMembersByRole(CONFIG.ROLES.RESP_LIDER, CONFIG.SLOTS.DAWN) || "_Ninguém definido_",
           "",
-          `### 🌌 HORÁRIO: 01:00 às 03:00`,
-          getMembersByRole(CONFIG.ROLES.RESP_LIDER, CONFIG.SLOTS.DAWN) || "_Ninguém definido_",
-          "",
-          `### ⚪ Sem Horário Fixo / Flexível`,
-          getMembersByRole(CONFIG.ROLES.RESP_LIDER, CONFIG.SLOTS.NONE) || "_Ninguém_",
-          "",
-          "┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅",
-          `#  ${E.CROWN_GREEN}  COORD. CREATORS  ${E.CROWN_GREEN}`,
+`### ⚪ Sem Horário Fixo / Flexível`,
+getMembersByRole(CONFIG.ROLES.RESP_LIDER, CONFIG.SLOTS.NONE) || "_Ninguém_",
+"",
+"┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅",
+"# 🏙️ DIVISÃO DE FOCO POR CIDADE",
+"",
+"## 🌊 CIDADE MARESIA — Segunda-feira",
+"**Responsável obrigatório:** 1 Resp. Líder + 1 Resp. Influ",
+"**Cargo/Cidade:** <@&1379021994678288465>",
+"",
+"## 🏙️ CIDADE GRANDE — Terça-feira",
+"**Responsável obrigatório:** 1 Resp. Líder + 1 Resp. Influ",
+"**Cargo/Cidade:** <@&1418691103397253322>",
+"",
+"## 🎅 CIDADE SANTA — Quarta-feira",
+"**Responsável obrigatório:** 1 Resp. Líder + 1 Resp. Influ",
+"**Cargo/Cidade:** <@&1379021888709464168>",
+"",
+"## 💎 CIDADE NOBRE — Responsabilidade Geral",
+"**Responsáveis:** todos os Resp. Líder, Resp. Influ e Resp. Creators",
+"**Cargo/Cidade:** <@&1379021805544804382>",
+"",
+
+"┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅",
+`#  ${E.CROWN_GREEN}  COORD. CREATORS  ${E.CROWN_GREEN}`,
           "",
           `### 🌅 HORÁRIO: 17:00 às 19:00`,
           getMembersByRole(CONFIG.ROLES.COORD_CREATOR, CONFIG.SLOTS.EVENING) || "_Ninguém definido_",

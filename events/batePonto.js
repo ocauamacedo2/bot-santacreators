@@ -340,6 +340,13 @@ const getAlreadyPunchedTime = (userId) => {
   }
 };
 
+// ✅ CHECK GLOBAL PARA O SISTEMA DE LEMBRETES DE EVENTO
+try {
+  globalThis.SC_BP_hasPunchedEffective = (userId) => {
+    return Boolean(getAlreadyPunchedTime(userId));
+  };
+} catch {}
+
 
         const findOrCreateStateMsg = async (cal, monthKey) => {
       const sig = `"monthKey":"${monthKey}"`;

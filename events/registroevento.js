@@ -29,6 +29,18 @@ const USUARIOS_LIBERADOS = [
   '660311795327828008', // você
 ];
 
+// ✅ MEMÓRIA GLOBAL PARA O SISTEMA DE LEMBRETES SABER QUEM JÁ REGISTROU PODERES
+const SC_EVENT_POWER_MEMORY = globalThis.SC_EVENT_POWER_MEMORY || new Map();
+globalThis.SC_EVENT_POWER_MEMORY = SC_EVENT_POWER_MEMORY;
+
+function normalizePowerEventKey(userId, evento, data) {
+  return `${String(userId)}:${String(evento || "").trim().toLowerCase()}:${String(data || "").trim()}`;
+}
+
+globalThis.SC_EVENT_POWER_hasRegistered = (userId, evento, data) => {
+  return SC_EVENT_POWER_MEMORY.has(normalizePowerEventKey(userId, evento, data));
+};
+
 // =================== UI BUILDERS ===================
 const buildBotao = (label = '📋 Registrar Poderes em Evento') =>
   new ButtonBuilder()
@@ -228,18 +240,37 @@ function iniciarRegistroEvento(client) {
             .catch(() => {});
         }
 
-        const get = (id) =>
-          interaction.fields.getTextInputValue(id)?.trim().slice(0, 256) || "—";
+const get = (id) =>
+  interaction.fields.getTextInputValue(id)?.trim().slice(0, 256) || "—";
 
-        const embed = new EmbedBuilder()
-          .setTitle("📋 Registro de Poderes em Evento") // ✅ Ajustado para o Scanner do Dash reconhecer como Poderes
-          .addFields(
-            { name: "👤 Membro", value: get("jogador"), inline: true },
-            { name: "📌 Evento", value: get("evento"), inline: true },
-            { name: "⏰ Horário", value: get("horario"), inline: true },
-            { name: "📅 Data", value: get("data"), inline: true },
-            { name: "✍️ Registrado por", value: `<@${interaction.user.id}>` }
-          )
+const jogadorValue = get("jogador");
+const eventoValue = get("evento");
+const horarioValue = get("horario");
+const dataValue = get("data");
+
+// ✅ MARCA QUE ESSA PESSOA JÁ REGISTROU PODERES NESSE EVENTO
+try {
+  SC_EVENT_POWER_MEMORY.set(
+    normalizePowerEventKey(interaction.user.id, eventoValue, dataValue),
+    {
+      userId: interaction.user.id,
+      evento: eventoValue,
+      horario: horarioValue,
+      data: dataValue,
+      registeredAt: Date.now(),
+    }
+  );
+} catch {}
+
+const embed = new EmbedBuilder()
+  .setTitle("📋 Registro de Poderes em Evento") // ✅ Ajustado para o Scanner do Dash reconhecer como Poderes
+  .addFields(
+    { name: "👤 Membro", value: jogadorValue, inline: true },
+    { name: "📌 Evento", value: eventoValue, inline: true },
+    { name: "⏰ Horário", value: horarioValue, inline: true },
+    { name: "📅 Data", value: dataValue, inline: true },
+    { name: "✍️ Registrado por", value: `<@${interaction.user.id}>` }
+  )
           .setThumbnail(interaction.user.displayAvatarURL())
           .setColor("Blue")
           .setFooter({ text: `Registro por ${interaction.user.tag}` })

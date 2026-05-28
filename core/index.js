@@ -215,6 +215,12 @@ import {
   fivemRetentionStatusOnChannelDelete,
 } from "../events/fivemRetentionStatus.js";
 
+
+///lembrete evenntos checklist 
+
+import { eventosChecklistNotifierOnReady } from "../events/eventosChecklistNotifier.js";
+
+
 // Doação
 import {
   doacaoOnReady,
@@ -909,12 +915,19 @@ const setupEventHandlers = () => {
     try {
       await hallDaFamaOnReady(client);
     } catch (e) {}
-    try {
-      await eventosDiariosOnReady(client);
-    } catch (e) {}
-    try {
-      await cadastroManualOnReady(client);
-    } catch (e) {}
+try {
+  await eventosDiariosOnReady(client);
+} catch (e) {}
+
+try {
+  eventosChecklistNotifierOnReady(client);
+} catch (e) {
+  console.error("[CORE] Erro ao iniciar eventosChecklistNotifier:", e);
+}
+
+try {
+  await cadastroManualOnReady(client);
+} catch (e) {}
     try {
       await recrutamentoDashOnReady(client);
     } catch (e) {}
