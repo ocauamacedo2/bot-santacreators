@@ -1,4 +1,5 @@
 // ./events/roleProtect.js
+// Assuming channelResolver.js exists and exports resolveLogChannel
 import { AuditLogEvent, PermissionFlagsBits } from "discord.js";
 
 // ======================================================
@@ -38,6 +39,20 @@ const DM_TO_EXECUTOR = (executorTag, victimTag) =>
 
 const DM_TO_VICTIM = (victimTag, executorTag) =>
   `Alerta: ${executorTag} tentou remover seus cargos. Já reverti e tomei providências.`;
+
+// ===== MASS REMOVAL PROTECTION CONFIG =====
+const HIERARCHY_THRESHOLD_ROLE = '1352275728476930099'; // SantaCreators role
+const SPECIAL_ROLE_ID = '1371733765243670538'; // User-requested special role
+
+const DEFAULT_MASS_REMOVE_WINDOW = 10 * 60 * 1000; // 10 minutes
+const SPECIAL_MASS_REMOVE_WINDOW = 20 * 60 * 1000; // 20 minutes
+
+const DEFAULT_LIMIT_ABOVE_THRESHOLD = 50; // User-requested limit
+const DEFAULT_LIMIT_BELOW_THRESHOLD = 15; // Existing limit
+
+const SPECIAL_LIMIT = 50; // User-requested limit for special role
+
+const PUNISHMENT_NOTIFICATION_CHANNEL_ID = '1378206851467972778'; // User-requested notification channel
 
 const PUBLIC_MSG = (executorId, victimTag) =>
   `<@${executorId}> tentou remover cargos do ${victimTag} — nosso sistema não perdoa, mero mortal. 👑`;
@@ -127,6 +142,78 @@ async function fetchRecentRoleUpdateEntry(guild, targetUserId, removedRoleIds = 
     if (attempt < maxAttempts) await sleep(1000);
   }
   return null;
+}
+
+// Global tracker for mass role removals
+const removalTracker = new Map(); // userId -> { count: number, startTime: number }
+
+/**
+ * Checks if a member has exceeded the mass role removal limit.
+ * @param {import("discord.js").GuildMember} member The member performing the removal.
+ * @param {number} countToAdd The number of roles being removed in the current action.
+ * @returns {{ exceeded: boolean, count: number, limit: number, window: number }}
+ */
+export function checkMassRemovalLimit(member, countToAdd = 1) {
+  // Bypass total for allowed removers
+  if (ALLOWED_REMOVERS.includes(member.id)) return { exceeded: false, count: 0, limit: 0, window: 0 };
+
+  const now = Date.now();
+  let data = removalTracker.get(member.id);
+
+  let currentWindow = DEFAULT_MASS_REMOVE_WINDOW;
+  let currentLimit = DEFAULT_LIMIT_BELOW_THRESHOLD;
+
+  // Determine window and limit based on roles
+  if (member.roles.cache.has(SPECIAL_ROLE_ID)) {
+    currentWindow = SPECIAL_MASS_REMOVE_WINDOW;
+    currentLimit = SPECIAL_LIMIT;
+  } else {
+    const thresholdRole = member.guild.roles.cache.get(HIERARCHY_THRESHOLD_ROLE);
+    if (thresholdRole && member.roles.highest.position >= thresholdRole.position) {
+      currentLimit = DEFAULT_LIMIT_ABOVE_THRESHOLD;
+    }
+  }
+
+  if (!data || (now - data.startTime) > currentWindow) {
+    data = { count: 0, startTime: now };
+  }
+
+  data.count += countToAdd;
+  removalTracker.set(member.id, data);
+
+  return { exceeded: data.count > currentLimit, count: data.count, limit: currentLimit, window: currentWindow };
+}
+
+/**
+ * Sends a notification to the punishment channel.
+ * @param {import("discord.js").Client} client
+ * @param {import("discord.js").GuildMember} executorMember
+ * @param {string} reason
+ * @param {string[]} rolesRemovedIds
+ */
+async function sendPunishmentNotification(client, executorMember, reason, rolesRemovedIds) {
+  const notificationChannel = await client.channels.fetch(PUNISHMENT_NOTIFICATION_CHANNEL_ID).catch(() => null);
+  if (!notificationChannel || !notificationChannel.isTextBased()) {
+    console.warn(`[ROLE-PROTECT] Canal de notificação de punição ${PUNISHMENT_NOTIFICATION_CHANNEL_ID} não encontrado ou não é de texto.`);
+    return;
+  }
+
+  const rolesMention = rolesRemovedIds.map(id => `<@&${id}>`).join(', ') || 'Nenhum cargo';
+
+  const embed = new EmbedBuilder()
+    .setTitle('🚨 Punição por Remoção Massiva de Cargos')
+    .setColor('#FF0000')
+    .setThumbnail(executorMember.user.displayAvatarURL())
+    .addFields(
+      { name: '👤 Executor Punido', value: `${executorMember} (\`${executorMember.id}\`)`, inline: false },
+      { name: '📝 Motivo da Punição', value: reason, inline: false },
+      { name: '🗑️ Cargos Removidos do Executor', value: rolesMention, inline: false },
+      { name: '🕒 Data/Hora', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false }
+    )
+    .setFooter({ text: 'Sistema de Proteção de Cargos • SantaCreators' })
+    .setTimestamp();
+
+  await notificationChannel.send({ embeds: [embed] }).catch(console.error);
 }
 
 // ======================================================
@@ -251,6 +338,9 @@ export async function roleProtectHandleGuildMemberUpdate(oldMember, newMember, c
       await execMember.roles
         .remove(punishRoleIds, `Punição: tentativa de remover cargos de usuário protegido (${newMember.user.tag})`)
         .catch(() => {});
+
+      // Send punishment notification
+      await sendPunishmentNotification(client, execMember, `Punição: tentativa de remover cargos de usuário protegido (${newMember.user.tag})`, punishRoleIds);
     }
 
     // Notificações
@@ -311,6 +401,8 @@ export async function roleProtectHandleMessage(message, client) {
     const punishRoleIds = rolesRemoviveisDoExecutor(execMember);
     if (punishRoleIds.length > 0) {
       await execMember.roles.remove(punishRoleIds, "Tentou usar !remcargo em usuário protegido sem hierarquia");
+      // Send punishment notification
+      await sendPunishmentNotification(client, execMember, `Tentou usar !remcargo em usuário protegido (${targetUser?.tag || targetId}) sem hierarquia`, punishRoleIds);
     }
 
     await execMember.send(DM_TO_EXECUTOR(execMember.user.tag, `<@${targetId}>`)).catch(() => {});
