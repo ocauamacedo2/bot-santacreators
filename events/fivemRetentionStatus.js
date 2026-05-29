@@ -402,10 +402,16 @@ async function cleanupContinuationMessages(channel, botId) {
  }
 }
 
-async function sendContinuationMessages(channel, embedGroups) {
- for (const group of embedGroups) {
+async function sendContinuationMessages(channel, embedGroups, row = null) {
+ for (let i = 0; i < embedGroups.length; i++) {
+   const group = embedGroups[i];
+   const isLastGroup = i === embedGroups.length - 1;
    const markedGroup = markEmbedGroupWithFooterTag(group, FIVEM_CONT_MARKER_TAG);
-   await channel.send({ embeds: markedGroup, components: [] }).catch((e) => {
+
+   await channel.send({
+     embeds: markedGroup,
+     components: row && isLastGroup ? [row] : [],
+   }).catch((e) => {
      cn2LogApiError("[FIVEM_RETENTION] Falha ao enviar continuação do painel:", e);
    });
  }
@@ -1489,10 +1495,15 @@ async function ensureStickyMessage(channel) {
 const mainEmbeds = markEmbedGroupWithFooterTag(embedGroups[0] || [], FIVEM_RANK_MARKER_TAG);
 const continuationGroups = embedGroups.slice(1);
 
-msg = await channel.send({ embeds: mainEmbeds, components: [row] });
+const hasContinuation = continuationGroups.length > 0;
+
+msg = await channel.send({
+  embeds: mainEmbeds,
+  components: hasContinuation ? [] : [row],
+});
 
 await cleanupContinuationMessages(channel, botId);
-await sendContinuationMessages(channel, continuationGroups);
+await sendContinuationMessages(channel, continuationGroups, hasContinuation ? row : null);
 
      // ✅ Registra o ID da mensagem no estado assim que for criada
      const state = FIVEM_STATE.get(channel.id) || {};
@@ -1563,10 +1574,15 @@ const hasNewPeak = await updateDailyPeaks(currentSnapshot);
 const mainEmbeds = markEmbedGroupWithFooterTag(embedGroups[0] || [], FIVEM_RANK_MARKER_TAG);
 const continuationGroups = embedGroups.slice(1);
 
-const edited = await sticky.edit({ embeds: mainEmbeds, components: [row] });
+const hasContinuation = continuationGroups.length > 0;
+
+const edited = await sticky.edit({
+  embeds: mainEmbeds,
+  components: hasContinuation ? [] : [row],
+});
 
 await cleanupContinuationMessages(channel, botId);
-await sendContinuationMessages(channel, continuationGroups);
+await sendContinuationMessages(channel, continuationGroups, hasContinuation ? row : null);
    if (edited) FIVEM_DEBUG && console.log("[FIVEM_RETENTION] Sticky editada:", edited.id);
 
    if (edited) {
