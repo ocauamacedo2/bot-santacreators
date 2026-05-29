@@ -57,7 +57,7 @@ const EXEMPT_ROLE_IDS = new Set([
   "1352408327983861844", // RESP CREATORS (cargo)
 ]);
 
-const CANAL_LOGS_ID = "1486009647923200120"; // Forçado para o canal correto
+const CANAL_LOGS_ID = "1486009647923200120"; // ✅ ID FORÇADO - Não altere via .env
 const CANAL_RANK_ID = process.env.SCDOACAO_RANK_ID?.trim() || "1418098124924256378";
 
 const TEMPO_ATUALIZACAO = 24 * 60 * 60 * 1000; // 24h (refresh do botão no canal ativado)

@@ -753,7 +753,7 @@ export function installRoleGuardian(client) {
               .addFields(
                 { name: '👤 Executor', value: `${executorUser} (\`${executorUser.id}\`)`, inline: true },
                 { name: '🎯 Alvo', value: `${newMember} (\`${newMember.id}\`)`, inline: true },
-                { name: '📍 Local', value: `<#${newMember.guild.id}> (Sistema de Cliques)`, inline: true },
+                { name: '📍 Local', value: `<#${newMember.channelId || guild.id}> (Sistema de Cliques)`, inline: true },
                 { name: '⏱️ Detecção', value: `\`${limitCheck.count}\` cargos removidos em menos de 10 min.`, inline: false },
                 { name: '🏷️ Cargos do Alvo Removidos', value: removedRoles.map(r => `@${r.name}`).join(', ').slice(0, 1000), inline: false },
                 { name: '🕒 Data/Hora', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false }
