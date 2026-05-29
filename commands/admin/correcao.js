@@ -105,70 +105,155 @@ function checkCooldown(userId, member) {
 }
 
 const QUESTOES = {
-  1: { pergunta: "🧾 Qual o seu nome completo e, se tiver, como você costuma ser chamado dentro do RP?", resposta: "SantaCreators" },
-  2: { pergunta: "🎂 Sua idade?", resposta: "(resposta pessoal)" },
-  3: { pergunta: "🔍 Como você conheceu a SantaCreators? O que te chamou atenção na empresa e te motivou a querer fazer parte dela?", resposta: "(resposta pessoal)" },
+  1: {
+    pergunta: "📋 Entrevista Pré-Admissão – SantaCreators\n\n🔹 Regras Internas e Postura na Empresa\n\nQual o seu nome completo e, se tiver, como você costuma ser chamado dentro do RP?",
+    resposta: "Resposta pessoal."
+  },
+
+  2: {
+    pergunta: "🎂 Sua idade?",
+    resposta: "Resposta pessoal."
+  },
+
+  3: {
+    pergunta: "🔍 Como você conheceu a SantaCreators? O que te chamou atenção na empresa e te motivou a querer fazer parte dela?",
+    resposta: "Resposta pessoal."
+  },
+
   4: {
-  pergunta: "🧍‍♀️ Durante o RP, qual deve ser sua postura ao interagir com uma pessoa que utiliza preset e nome feminino, mesmo que você perceba diferenças entre o visual do personagem e a voz do jogador?",
-  resposta: "Agir com respeito e profissionalismo, tratando a pessoa pelo personagem no RP, sem questionamentos ou diferenciações por conta da voz ou de outras características."
-},
+    pergunta: "👥 Você veio até a SantaCreators por conta própria ou foi indicado por alguém? Se foi uma indicação, lembra quem te falou sobre a empresa ou te convidou?",
+    resposta: "Resposta pessoal. Exemplo: vim por indicação de um membro, conheci pela cidade ou por curiosidade."
+  },
 
-  5: { pergunta: "🧥 Você sabe qual é a importância do uso da jaqueta ou peças da SantaCreators ao entrar no prédio e ao circular nas redondezas? Por que isso é obrigatório?", resposta: "Para manter a ordem e identificação dos membros… evitando que pessoas de fora entrem e causem problemas ou usem algo de forma incorreta." },
-  6: { pergunta: "🚗 Ao utilizar a garagem da empresa, qual deve ser sua conduta em relação ao uniforme? E por que isso é exigido?", resposta: "Devo estar utilizando ao menos 1 peça de roupa da empresa, para identificação e segurança." },
-  7: { pergunta: "🔫 O que você faria se visse um membro utilizando um veículo que você sabe que é da empresa para participar de uma troca de tiro ou assalto de pista?", resposta: "Gravaria e reportaria para um superior. Se possível, chamaria para conversar em particular e alinhar que é errado." },
-  8: { pergunta: "🕵️‍♂️ Em que situação o uso dos veículos da empresa é permitido para ações ilegais no RP? Quais cuidados devem ser tomados nesses casos?", resposta: "Em sequestros organizados, seguindo regras da cidade. Também pode para vendas/entregas, desde que sem troca de tiros." },
-  9: { pergunta: "📦 Quantos baús existem dentro do prédio da SantaCreators e qual deles é proibido de ser mexido de forma alguma? E por quê?", resposta: "São 6 baús. O da liderança é restrito, assim como o de creators (apenas doações)." },
-  10:{ pergunta: "🎭 Se você presenciar um membro da empresa utilizando expressões ou referências do mundo de fora (vida real) sem qualquer contexto válido, quebrando a imersão, como você abordaria a situação?",
-     resposta: "Ignoraria e mudaria o assunto. Caso persistisse, registraria e reportaria a um superior. Se possível, chamaria para alinhar em call fora do RP." },
+  5: {
+    pergunta: "🧥 Você sabe qual é a importância do uso da jaqueta ou peças da SantaCreators ao entrar no prédio e ao circular nas redondezas? Por que isso é obrigatório?",
+    resposta: "Para manter a ordem e identificação dos membros, evitando que pessoas que não são da empresa atrapalhem, usem algo de forma incorreta ou gerem situações inconvenientes pela empresa ou redondezas."
+  },
 
-11:{ pergunta: "📋 Caso veja algum membro da empresa nas proximidades usando comandos de F8 para sentar no ar, flutuar ou realizar ações que claramente quebram a física do RP, ou até mesmo abusando de poderes, como vc reagiria e o que vc faria diante a essas situações?",
-     resposta: "Eu não utilizaria esses comandos de forma que não faça sentido dentro do cenário atual do meu RP. Caso eu presenciasse algum abuso de poder, eu gravaria (cliparia) a situação e encaminharia para um superior, coordenador ou responsável da empresa. No momento do ocorrido, também tentaria orientar a pessoa de forma imersiva, para que ela entendesse que a ação foi errada ou sem sentido dentro do RP." },
+  6: {
+    pergunta: "🚗 Ao utilizar a garagem da empresa, qual deve ser sua conduta em relação ao uniforme? E por que isso é exigido?",
+    resposta: "Devo estar utilizando ao menos 1 peça de roupa da empresa, para identificação e para mostrar que faço parte da empresa."
+  },
 
-12:{ pergunta: "📡 Se durante o RP um jogador disser algo como 'minha internet caiu' ou 'precisei sair do Discord', como você orientaria essa pessoa a se manter na imersão? Dê um exemplo de como reformular a frase.",
-     resposta: "Exemplo: 'Minha mente esteve pesada e tive uma dor de cabeça fortíssima'." },
+  7: {
+    pergunta: "🔫 O que você faria se visse um membro utilizando um veículo que você sabe que é da empresa para participar de uma troca de tiro ou assalto de pista?",
+    resposta: "Eu gravaria a situação e reportaria para algum superior. Caso tivesse oportunidade de falar com a pessoa a sós, tentaria chamar para um alinhamento e explicar que aquilo é errado."
+  },
 
-13:{ pergunta: "🧠 Como você lidaria com um membro novo que claramente não conhece as regras da empresa e está agindo de forma que compromete a imagem da SantaCreators?",
-     resposta: "Conversaria com ele e reportaria o ocorrido para um superior." },
+  8: {
+    pergunta: "🕵️‍♂️ Em que situação o uso dos veículos da empresa é permitido para ações ilegais no RP? Quais cuidados devem ser tomados nesses casos?",
+    resposta: "O uso pode acontecer em sequestros organizados, seguindo as regras da cidade, o horário correto de assalto e a conduta exigida para esse tipo de ação. Também pode ser usado para vendas ou entregas, desde que não seja para troca de tiros ou PVP."
+  },
 
-14:{ pergunta: "🛡️ Imagine que você esteja em um evento da SantaCreators representando a empresa, e um imprevisto ocorre. Qual seria sua postura?",
-     resposta: "Eu tentaria resolver a situação, porém, caso não estivesse ao meu alcance, me afastaria do problema e acionaria um superior, coordenador ou responsável para ajudar na resolução. Se eu tivesse autonomia para agir, com certeza buscaria resolver a situação da melhor forma possível." },
+  9: {
+    pergunta: "📦 Quantos baús existem dentro do prédio da SantaCreators e qual deles é proibido de ser mexido de forma alguma? E por quê?",
+    resposta: "Existem 6 baús. O baú da liderança não deve ser mexido por quem não tem acesso. O baú de Creators também não é para retirada, pois é voltado para doações."
+  },
 
-15:{ pergunta: "📑 Caso você perceba alguma atitude que vá contra as regras da SantaCreators, mas que não envolva diretamente você, qual deve ser sua postura?",
-     resposta: "Não confrontaria diretamente. Registraria a situação e reportaria a um superior para que a empresa avalie e tome as medidas necessárias." },
+  10: {
+    pergunta: "🎭 Imersão e Comportamento no RP\n\nSe você presenciar um membro da empresa utilizando expressões ou referências do mundo de fora (vida real) sem qualquer contexto válido, quebrando a imersão, como você abordaria a situação?",
+    resposta: "Eu tentaria agir de forma imersiva, me fazendo de desentendido e mudando o assunto. Caso persistisse, eu me afastaria e passaria para um superior com registros, pois quebra de imersão pode resultar em advertência. Se tivesse oportunidade, tentaria alinhar a pessoa em uma sala adequada ou em call fora da imersão."
+  },
 
-16:{ pergunta: "🎖️ Quais atitudes caracterizam abuso de poder dentro do RP e como você deve agir em casos de anti-rp contra você?",
-     resposta: "Abuso de poder é utilizar comandos ou poderes para benefício próprio ou para favorecer outro player dentro do RP. Em casos de anti-RP contra mim, eu cliparia a situação, enviaria para um superior e aguardaria o suporte necessário." },
+  11: {
+    pergunta: "📋 Caso veja algum membro da empresa nas proximidades usando comandos de F8 para sentar no ar, flutuar ou realizar ações que claramente quebram a física do RP, ou até mesmo abusando de poderes, como vc reagiria e o que vc faria diante a essas situações?",
+    resposta: "Eu não utilizaria esses comandos de forma que não faça sentido para o cenário atual do meu RP. Se eu visse abuso de poder, eu cliparia e mandaria para um superior, coordenador ou responsável da empresa. No momento do ocorrido, tentaria orientar de forma imersiva para a pessoa entender que aquilo foi errado ou sem sentido."
+  },
 
-18:{ pergunta: "🌟 Em quais situações o uso de poderes é permitido e qual é o objetivo principal desse uso dentro da SantaCreators?",
-     resposta: "O uso de poderes é permitido para fins relacionados aos projetos da empresa, como organização e realização de eventos ou outras atividades oficiais ligadas à SantaCreators." },
+  12: {
+    pergunta: "📡 Se durante o RP um jogador disser algo como 'minha internet caiu' ou 'precisei sair do Discord', como você orientaria essa pessoa a se manter na imersão? Dê um exemplo de como reformular a frase.",
+    resposta: "Um exemplo seria reformular para algo imersivo, como: 'minha mente esteve pesada e tive uma dor de cabeça fortíssima'."
+  },
 
-19:{ pergunta: "💬 A call é obrigatória para todos na SantaCreators? Em quais casos ela passa a ser necessária e por quê?",
-     resposta: "Não. A call é obrigatória apenas para os responsáveis. Porém, permanecer em call ajuda a tirar dúvidas, melhora a comunicação e aproxima ainda mais a equipe." },
+  13: {
+    pergunta: "🧠 Postura e Responsabilidade\n\nComo você lidaria com um membro novo que claramente não conhece as regras da empresa e está agindo de forma que compromete a imagem da SantaCreators?",
+    resposta: "Eu tentaria conversar com ele e repassaria o ocorrido para um superior. Caso tivesse clipes ou provas, também enviaria junto."
+  },
 
-20:{ pergunta: "🚀 Como o comprometimento diário (registro, bate ponto e organização) influencia sua evolução dentro da SantaCreators?",
-     resposta: "O comprometimento diário, como registro, bate ponto e organização, é contabilizado em pontos individuais. Isso serve para avaliar o desempenho dos membros, incentivar a evolução dentro da equipe e manter a organização da empresa." },
+  14: {
+    pergunta: "🛡️ Imagine que você esteja em um evento da SantaCreators representando a empresa, e um imprevisto ocorre (por exemplo, uma confusão no local ou alguém quebrando a imersão). Qual seria sua postura?",
+    resposta: "Eu tentaria resolver, mas caso não estivesse ao meu alcance, me afastaria e passaria para um superior, coordenador ou responsável, pedindo ajuda para resolver o problema. Se eu tivesse autonomia, tentaria resolver a situação da melhor forma possível."
+  },
 
-21:{ pergunta: "📸 É permitido gravar ou tirar prints dentro da empresa? Em quais situações isso é aceitável e quando se torna um problema?",
-     resposta: "É permitido apenas para fins administrativos, provas ou registros necessários. Qualquer gravação ou print fora desse contexto pode comprometer a privacidade e a imagem da empresa." },
+  15: {
+    pergunta: "📈 Na sua visão, quais atitudes e comportamentos são essenciais para que um membro da SantaCreators evolua na hierarquia e conquiste promoções dentro da empresa?",
+    resposta: "Demonstrar comprometimento, estar presente nos projetos da empresa, participar dos eventos, mostrar vontade de ajudar e manter uma boa postura dentro da equipe."
+  },
 
-22:{ pergunta: "🧾 Caso você cometa um erro dentro do RP representando a SantaCreators, qual deve ser sua postura após o ocorrido?",
-     resposta: "Assumir o erro, comunicar um superior e aguardar a orientação correta para resolver a situação da melhor forma possível." },
+  16: {
+    pergunta: "🎖️ Quais atitudes caracterizam abuso de poder dentro do RP e como você deve agir em casos de anti-rp contra você?",
+    resposta: "Abuso de poder é usar poderes para uso próprio dentro do RP, seja para se beneficiar ou beneficiar outro player. Em casos de anti-RP contra mim, devo clipar, enviar para um superior e esperar o suporte necessário."
+  },
 
-23:{ pergunta: "🗣️ Como você deve se portar ao falar da SantaCreators para pessoas de fora da empresa?",
-     resposta: "Sempre com respeito, sem expor assuntos internos, mantendo uma imagem positiva e profissional da empresa." },
+  17: {
+    pergunta: "🏢 Funcionamento da Empresa e Hierarquia\n\nPor que é importante respeitar a hierarquia dentro da empresa, mesmo que em alguns momentos você tenha mais experiência do que alguém de cargo superior?",
+    resposta: "Para manter a ordem, o respeito pelos superiores e uma boa relação com os demais membros da empresa."
+  },
 
-24:{ pergunta: "⚠️ Se você perceber que um conflito interno pode virar algo maior e prejudicar a empresa, o que você faria?",
-     resposta: "Evitaria discussões, me afastaria do conflito e comunicaria um superior para que a situação fosse resolvida internamente." },
+  18: {
+    pergunta: "🌟 Em quais situações o uso de poderes é permitido e qual é o objetivo principal desse uso dentro da SantaCreators?",
+    resposta: "O uso de poderes é permitido para fins relacionados aos projetos da empresa, como eventos, organização e atividades oficiais da SantaCreators."
+  },
 
-25:{ pergunta: "📡 Em que situações o uso de NOCLIP/NC é considerado abuso e qual é a alternativa correta?",
-     resposta: "O uso de NOCLIP/NC é considerado abuso quando utilizado para locomoção como se fosse um veículo ou para benefício próprio. A alternativa correta é utilizar apenas em projetos ou atividades oficiais da empresa, como eventos e ações organizacionais." },
+  19: {
+    pergunta: "💬 A call é obrigatória para todos na SantaCreators? Em quais casos ela passa a ser necessária e por quê?",
+    resposta: "Não. Somente responsáveis têm obrigação de ficar em call. Entretanto, ficar em call ajuda a tirar dúvidas e aproxima mais a pessoa da equipe."
+  },
 
+  20: {
+    pergunta: "🚀 Pergunta Bônus\n\nComo o comprometimento diário (registro, bate ponto e organização) influencia sua evolução dentro da SantaCreators?",
+    resposta: "O comprometimento diário parece ser contabilizado em pontos individuais, servindo para pontuar membros dentro da equipe, avaliar desempenho e manter a organização."
+  },
 
-  26:{ pergunta: "🚗 Se você for preso pela polícia e tiver seus itens apreendidos, mas depois conseguir fugir e tiver acesso aos comandos kitinf e kitinflu, o que você faria nessa situação?", resposta: "Não usaria, pois quebraria a imersão." },
-  27:{ pergunta: "🧥 Se acontecesse algum problema grave — quebra de imersão, falta de respeito ou atitude contra a cultura da empresa — você chamaria um staff? Por quê? E o que esperaria que acontecesse depois?", resposta: "Não, reportaria a alguém acima, para que a empresa resolva internamente." },
-  28:{ pergunta: "🔍 Qual deve ser sua conduta ao trocar de roupa dentro da empresa ou nos arredores do prédio?", resposta: "Certificar-se de que não há ninguém por perto e trocar em local adequado." },
-  29:{ pergunta: "🔫 Se você é um membro novo e tem uma dúvida, mas vê por perto alguém da coordenação e também um responsável, pra quem você recorre primeiro? E por quê?", resposta: "Para a coordenação, respeitando a hierarquia." },
-  30:{ pergunta: "🧾 Se um dia você decidir sair do projeto, como você comunicaria sua saída da forma certa e respeitosa?", resposta: "Falaria com alguém da empresa e pediria demissão dentro da cidade." }
+  21: {
+    pergunta: "📦 Qual é a função do Baú Creators?",
+    resposta: "O Baú Creators é utilizado para doações da empresa."
+  },
+
+  22: {
+    pergunta: "🧠 O que é MetaGame no RP?",
+    resposta: "MetaGame é utilizar meios externos para se beneficiar dentro do game."
+  },
+
+  23: {
+    pergunta: "⚠️ O que é considerada Má Conduta?",
+    resposta: "Má Conduta é infringir uma regra ou ignorar um pedido de um superior ao seu cargo."
+  },
+
+  24: {
+    pergunta: "🎭 O que é Quebra de Imersão?",
+    resposta: "Quebra de Imersão é falar coisas de fora dentro do jogo ou usar termos e expressões externas sem contexto válido, como falar do computador, teclado, Discord, internet ou qualquer informação de fora dentro do game."
+  },
+
+  25: {
+    pergunta: "📡 Em que situações o uso de NOCLIP/NC é considerado abuso e qual é a alternativa correta?",
+    resposta: "O uso de NOCLIP/NC é considerado abuso quando utilizado para se locomover como se fosse um veículo ou para benefício próprio. A forma correta é utilizar apenas em projetos, eventos ou atividades oficiais relacionadas à empresa."
+  },
+
+  26: {
+    pergunta: "🚗 Se você for preso pela polícia e tiver seus itens apreendidos, mas depois conseguir fugir e tiver acesso aos comandos kitinf e kitinflu, o que você faria nessa situação?",
+    resposta: "Eu não utilizaria os comandos, pois eles dariam arma e drogas do nada, o que quebraria o RP. O correto seria seguir o fluxo real da situação dentro do RP, evitando quebra de imersão."
+  },
+
+  27: {
+    pergunta: "🧥 Se acontecesse algum problema grave, como quebra de imersão, falta de respeito ou atitude totalmente contra a cultura da empresa — você chamaria um staff? Por quê? E o que esperaria que acontecesse depois?",
+    resposta: "Eu não chamaria staff diretamente, pois são assuntos internos da empresa. O correto seria passar para alguém com cargo acima do meu dentro da empresa e esperar que a situação fosse resolvida internamente."
+  },
+
+  28: {
+    pergunta: "🔍 Qual deve ser sua conduta ao trocar de roupa dentro da empresa ou nos arredores do prédio?",
+    resposta: "Eu devo me certificar de que não há ninguém por perto e trocar em um local indicado ou adequado para a situação. Não posso simplesmente trocar em qualquer lugar, pois isso pode gerar quebra de imersão."
+  },
+
+  29: {
+    pergunta: "🔫 Se você é um membro novo e tem uma dúvida, mas vê por perto alguém da coordenação e também um responsável, pra quem você recorre primeiro? E por quê?",
+    resposta: "Eu recorreria primeiro à coordenação, pois o responsável é um cargo mais alto e eu devo respeitar a hierarquia. Respeitar a hierarquia é fundamental para quem deseja crescer dentro da empresa."
+  },
+
+  30: {
+    pergunta: "🧾 Se um dia você decidir sair do projeto (painel da SantaCreators), como você comunicaria sua saída da forma certa e respeitosa?",
+    resposta: "Eu falaria com alguém da empresa sobre a minha saída e solicitaria a remoção de forma respeitosa e condizente com a empresa. Na SantaCreators, o correto é pedir demissão pela cidade, mantendo a imersão do RP. Caso futuramente queira voltar ao projeto, essa é a forma mais ideal de sair."
+  }
 };
 
 
