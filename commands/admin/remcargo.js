@@ -25,6 +25,11 @@ dotenv.config();
 const MAIN_GUILD_ID = '1262262852782129183';
 const MAIN_LOG_CHANNEL_ID = '1352491135339204649';
 
+// ✅ CANAL DE ALERTAS ANTI-RAID
+const ANTIRAID_LOG_CHANNEL_ID = '1389857160871280650';
+const antiRaidBypass24h = new Map(); // userId -> expiryTs
+const antiRaidSnapshots = new Map(); // snapshotId -> data
+
 // ✅ LOGS LOCAIS POR SERVIDOR (cada um no seu canal)
 const GUILD_LOG_CHANNEL_MAP = {
   // DC Principal
@@ -117,6 +122,9 @@ const removalTracker = new Map(); // userId -> { count, startTime }
 function checkMassRemovalLimit(member, countToAdd = 1) {
   // Bypass total para autorizados (Owner/VcV)
   if (ALLOWED_REMOVERS.includes(member.id)) return { exceeded: false };
+
+  const bypass24h = antiRaidBypass24h.get(member.id);
+  if (bypass24h && Date.now() < bypass24h) return { exceeded: false };
 
   const now = Date.now();
   let data = removalTracker.get(member.id);
@@ -233,11 +241,14 @@ async function kickRoles(executorMember, why) {
       !EXEMPT_ROLE_IDS.includes(r.id) &&
       r.editable
     );
+    const removedIds = [...removable.keys()];
     if (removable.size > 0) {
       await executorMember.roles.remove(removable, why);
     }
+    return removedIds;
   } catch (e) {
     console.error('[REM/KICK] erro limpando cargos do executor:', e);
+    return [];
   }
 }
 
@@ -683,7 +694,45 @@ export function installRoleGuardian(client) {
       if (executorMember && !ALLOWED_REMOVERS.includes(executorMember.id)) {
         const limitCheck = checkMassRemovalLimit(executorMember, removedRoles.length);
         if (limitCheck.exceeded) {
-          await kickRoles(executorMember, `Excedeu limite de remoção (Cliques): ${limitCheck.count}/${limitCheck.limit} em 10min`);
+          const removedFromExecutor = await kickRoles(executorMember, `Excedeu limite de remoção (Cliques): ${limitCheck.count}/${limitCheck.limit} em 10min`);
+          
+          // Criar Snapshot para Reversão
+          const snapshotId = `raid_${Date.now()}_${executorMember.id}`;
+          antiRaidSnapshots.set(snapshotId, {
+            executorId: executorMember.id,
+            targetId: newMember.id,
+            executorRoles: removedFromExecutor,
+            targetRoles: removedIds,
+            guildId: guild.id
+          });
+
+          // Log Detalhado no canal solicitado
+          const antiraidLog = await client.channels.fetch(ANTIRAID_LOG_CHANNEL_ID).catch(() => null);
+          if (antiraidLog) {
+            const raidEmbed = new EmbedBuilder()
+              .setTitle('🚨 PUNIÇÃO ANTI-RAID APLICADA')
+              .setColor('#ff0000')
+              .setThumbnail(executorUser.displayAvatarURL())
+              .addFields(
+                { name: '👤 Executor', value: `${executorUser} (\`${executorUser.id}\`)`, inline: true },
+                { name: '🎯 Alvo', value: `${newMember} (\`${newMember.id}\`)`, inline: true },
+                { name: '📍 Local', value: `<#${newMember.guild.id}> (Sistema de Cliques)`, inline: true },
+                { name: '⏱️ Detecção', value: `\`${limitCheck.count}\` cargos removidos em menos de 10 min.`, inline: false },
+                { name: '🏷️ Cargos do Alvo Removidos', value: removedRoles.map(r => `@${r.name}`).join(', ').slice(0, 1000), inline: false },
+                { name: '🕒 Data/Hora', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false }
+              )
+              .setFooter({ text: 'Proteção Automática SantaCreators' });
+
+            const raidRow = new ActionRowBuilder().addComponents(
+              new ButtonBuilder()
+                .setCustomId(`antiraid_revert:${snapshotId}`)
+                .setLabel('↩️ Reverter e Devolver Cargos')
+                .setStyle(ButtonStyle.Danger)
+                .setEmoji('🛡️')
+            );
+
+            await antiraidLog.send({ content: '⚠️ **ALERTA DE SEGURANÇA**', embeds: [raidEmbed], components: [raidRow] });
+          }
 
           await sendLogs({
             originGuild: guild,

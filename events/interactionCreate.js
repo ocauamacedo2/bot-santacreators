@@ -10,6 +10,7 @@ import { provasAdvHandleInteraction } from './provasAdv.js';
 import { blacklistFacsHandleInteraction } from './blacklistFacs.js';
 import { cronogramaCreatorsHandleInteraction } from './cronogramaCreators.js';
 import { confirmacaoPresencaHandleInteraction } from './confirmacaoPresenca.js';
+import { remcargoHandleInteraction } from '../commands/admin/remcargo.js';
 import { MessageFlags } from 'discord.js';
 
 // Ignora tudo do fluxo do Pedir Set (tratado no index.js)
@@ -35,6 +36,9 @@ export default {
     try {
       // ✅ não mexe no set flow
       if (isSetFlow(interaction)) return;
+
+      // ✅ Anti-Raid Revert (remcargo.js)
+      if (await remcargoHandleInteraction(interaction, interaction.client)) return;
 
       // ✅ Cronograma Creators
       if (await cronogramaCreatorsHandleInteraction(interaction, interaction.client)) return;
