@@ -1336,16 +1336,23 @@ try {
         guild,
         'Novo Registro (GI)',
         [
-          `👤 Membro: <@${targetUser.id}>`,
-          `🗓️ Entrada: \`${msToDDMMYYYY(joinMs)}\``,
-          `🧭 Área: \`${areaStr}\``,
+          `👤 **Membro:** <@${targetUser.id}> (\`${targetUser.id}\`)`,
+          `🗓️ **Entrada:** \`${msToDDMMYYYY(joinMs)}\``,
+          `🧭 **Área:** \`${areaStr}\``,
           record.active
-            ? `✅ Cargo GI setado automaticamente: <@&${GI_ROLE_ID}>`
-            : `⏸️ Registro criado pausado (sem setar o cargo GI agora).`,
-          `🧾 Por: <@${registrar.id}>`,
-          `Ir ao registro})`
+            ? `✅ **Cargo GI setado automaticamente:** <@&${GI_ROLE_ID}>`
+            : `⏸️ **Registro criado pausado** (sem setar o cargo GI agora).`,
+          `🧾 **Por:** <@${registrar.id}> (\`${registrar.id}\`)`,
+          `🔗 **Link:** Ir ao registro})`
         ].filter(Boolean).join('\n'),
-        { thumb: targetUser.displayAvatarURL?.({ size: 128 }) }
+        { 
+          thumb: targetUser.displayAvatarURL?.({ size: 128 }),
+          components: [
+            new ActionRowBuilder().addComponents(
+              new ButtonBuilder().setCustomId(`SC_GI_UNDO_DESLIGAR:${record.messageId}`).setLabel('Desfazer (Remover)').setStyle(ButtonStyle.Danger)
+            )
+          ]
+        }
       );
 
       await ensureMenu(guild);
@@ -1400,13 +1407,23 @@ try {
         guild,
         'Registro Editado (GI)',
         [
-          `🧾 Editor: <@${editor.id}>`,
-          `👤 Membro: <@${rec.targetId}>`,
-          `🧭 Nova área: \`${rec.area}\``,
-          `🗓️ Nova data: \`${msToDDMMYYYY(rec.joinDateMs)}\``,
-          rec.note ? `🗒️ Nota: ${rec.note}` : '',
-          `Ir ao registro})`
-        ].filter(Boolean).join('\n')
+          `🧾 **Editor:** <@${editor.id}> (\`${editor.id}\`)`,
+          `👤 **Membro:** <@${rec.targetId}> (\`${rec.targetId}\`)`,
+          `🧭 **Nova área:** \`${rec.area}\``,
+          `🗓️ **Nova data:** \`${msToDDMMYYYY(rec.joinDateMs)}\``,
+          rec.note ? `🗒️ **Nota:** ${rec.note}` : '',
+          `🔗 **Link:** Ir ao registro})`
+        ].filter(Boolean).join('\n'),
+        {
+          components: [
+            new ActionRowBuilder().addComponents(
+              new ButtonBuilder()
+                .setCustomId(`SC_GI_UNDO_EDIT:${messageId}`)
+                .setLabel('Reverter Edição')
+                .setStyle(ButtonStyle.Secondary)
+            )
+          ]
+        }
       );
 
       markBoardDirty();
@@ -1447,13 +1464,13 @@ try {
     guild,
     'Controle Atualizado (GI)',
     [
-      `🔄 Motivo: ${reason}`,
-      `🔧 Por: <@${actor.id}>`,
-      `👤 Membro: <@${rec.targetId}>`,
-      `📌 Status: ${rec.active ? 'Ativo' : 'Pausado'}`,
-      `⏳ Tempo ativo real: \`${activeTimeText(rec)}\``,
-      !rec.active ? `⏸️ Pausado acumulado: \`${formatDurationFull(getPausedTotalMs(rec))}\`` : '',
-      !rec.active ? `🧨 Auto-desligamento em: \`${pauseCountdownText(rec)}\`` : '',
+      `🔄 **Motivo:** ${reason}`,
+      `🔧 **Por:** <@${actor.id}>`,
+      `👤 **Membro:** <@${rec.targetId}>`,
+      `📌 **Status:** ${rec.active ? 'Ativo' : 'Pausado'}`,
+      `⏳ **Tempo ativo real:** \`${activeTimeText(rec)}\``,
+      !rec.active ? `⏸️ **Pausado acumulado:** \`${formatDurationFull(getPausedTotalMs(rec))}\`` : '',
+      !rec.active ? `🧨 **Auto-desligamento em:** \`${pauseCountdownText(rec)}\`` : '',
       `🔗 Registro: ${recordLink(rec.guildId, rec.channelId, rec.messageId) || '—'}`
     ].filter(Boolean).join('\n')
   );
@@ -1543,11 +1560,23 @@ try {
         guild,
         rec.active ? 'Contagem Retomada (GI)' : 'Contagem Pausada (GI)',
         [
-          `🔧 Por: <@${actor.id}>`,
-          `👤 Membro: <@${rec.targetId}>`,
-          rec.active ? `✅ Cargo GI setado novamente: <@&${GI_ROLE_ID}>` : `⛔ Cargo GI removido: <@&${GI_ROLE_ID}>`,
-          `Ir ao registro})`
-        ].join('\n')
+          `🔧 **Por:** <@${actor.id}> (\`${actor.id}\`)`,
+          `👤 **Membro:** <@${rec.targetId}> (\`${rec.targetId}\`)`,
+          rec.active 
+            ? `✅ **Cargo GI setado novamente:** <@&${GI_ROLE_ID}>` 
+            : `⛔ **Cargo GI removido:** <@&${GI_ROLE_ID}>`,
+          `⏳ **Tempo ativo real:** \`${activeTimeText(rec)}\``,
+          !rec.active ? `⏸️ **Tempo pausado acumulado:** \`${formatDurationFull(getPausedTotalMs(rec))}\`` : '',
+          `🔗 **Link:** Ir ao registro})`
+        ].join('\n'),
+        {
+          color: rec.active ? 0x2ecc71 : 0xe67e22,
+          components: [
+            new ActionRowBuilder().addComponents(
+              new ButtonBuilder().setCustomId(`SC_GI_UNDO_TOGGLE:${messageId}:${!rec.active}`).setLabel('Desfazer Alteração').setStyle(ButtonStyle.Secondary)
+            )
+          ]
+        }
       );
 
       markBoardDirty();
@@ -1580,7 +1609,13 @@ try {
 
       const dmEmb = await dmEmbedResumo(rec, targetUser, '📨 Reenvio — Atualização da gestão');
       await sendDM_andMirror(guild, targetUser, dmEmb, `<@${rec.targetId}>`, statsEmbed ? [statsEmbed] : []);
-      await logMsg(guild, 'DM Reenviada (GI)', [`📨 Enviado para: <@${rec.targetId}>`,`🔧 Por: <@${actor.id}>`].join('\n'));
+      await logMsg(guild, 'DM Reenviada (GI)', [
+        `📨 **Enviado para:** <@${rec.targetId}> (\`${rec.targetId}\`)`,
+        `🔧 **Por:** <@${actor.id}> (\`${actor.id}\`)`,
+        `🔗 **Link:** Ir ao registro})`
+      ].join('\n'), {
+        thumb: targetUser.displayAvatarURL?.({ size: 128 })
+      });
     }
 
     // Mantém SOMENTE o cargo Cidadão (conforme pedido do desligamento)
@@ -1814,19 +1849,27 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
             .setColor(0xe74c3c)
             .setTitle('🗑️ Desligamento — Gestaoinfluencer')
             .setDescription([
-              `👤 Membro: <@${snapshot.targetId}>`,
-              `🧭 Área: \`${snapshot.area}\``,
-              `🗓️ Entrada: \`${msToDDMMYYYY(snapshot.joinDateMs)}\``,
-              `⏱️ Semanas/Meses: \`${weeks}\` / \`${months}\``,
-              `🧾 Registrado por: <@${snapshot.registrarId}>`,
-              `🔧 Desligado por: <@${actor.id}>`,
-              `📝 Motivo: ${motivo}`,
+              `👤 **Membro:** <@${snapshot.targetId}> (\`${snapshot.targetId}\`)`,
+              `🧭 **Área:** \`${snapshot.area}\``,
+              `🗓️ **Entrada:** \`${msToDDMMYYYY(snapshot.joinDateMs)}\``,
+              `⏱️ **Semanas/Meses:** \`${weeks}\` / \`${months}\``,
+              `🧾 **Registrado por:** <@${snapshot.registrarId}>`,
+              `🔧 **Desligado por:** <@${actor.id}>`,
+              `📝 **Motivo:** ${motivo}`,
               '',
               `📚 Histórico de Responsáveis:\n${hist}`
             ].join('\n'))
             .setImage(GIF_SC_GI)
             .setTimestamp(new Date());
-          await ch.send({ embeds: [emb] });
+
+          const rowUndo = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId(`SC_GI_UNDO_DESLIGAR:${snapshot.messageId}`)
+              .setLabel('Restaurar Membro')
+              .setStyle(ButtonStyle.Success)
+          );
+
+          await ch.send({ embeds: [emb], components: [rowUndo] });
         }
       } catch {}
 
@@ -1902,10 +1945,21 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
         guild,
         'Responsável Direto Definido (GI)',
         [
-          `👤 Membro: <@${rec.targetId}>`,
-          `🧭 Tipo: ${TYPE_LABEL(rec.responsibleType) || '—'}`,
-          `👨‍✈️ Responsável: <@${rec.responsibleUserId}>`
-        ].join('\n')
+          `👤 **Membro:** <@${rec.targetId}> (\`${rec.targetId}\`)`,
+          `🧭 **Tipo:** ${TYPE_LABEL(rec.responsibleType) || '—'}`,
+          `👨‍✈️ **Responsável:** <@${rec.responsibleUserId}> (\`${rec.responsibleUserId}\`)`,
+          `🔗 **Link:** Ir ao registro})`
+        ].join('\n'),
+        {
+          components: [
+            new ActionRowBuilder().addComponents(
+              new ButtonBuilder()
+                .setCustomId(`SC_GI_UNDO_RESP:${messageId}`)
+                .setLabel('Alterar Responsável')
+                .setStyle(ButtonStyle.Secondary)
+            )
+          ]
+        }
       );
 
       markBoardDirty();
@@ -2100,7 +2154,7 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
 
         const emb = new EmbedBuilder()
           .setColor(0x8e44ad)
-          .setTitle('🧾 ' + title)
+          .setTitle('🧾 LOG — ' + title)
           .setDescription(description)
           .setImage(GIF_SC_GI)
           .setFooter({ text: 'SantaCreators • gestaoinfluencer' })
@@ -2108,8 +2162,12 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
 
         if (extra.footer) emb.setFooter({ text: extra.footer });
         if (extra.thumb)  emb.setThumbnail(extra.thumb);
+        if (extra.fields) emb.addFields(extra.fields);
 
-        await ch.send({ embeds: [emb] });
+        const payload = { embeds: [emb] };
+        if (extra.components) payload.components = extra.components;
+
+        await ch.send(payload);
       } catch {}
     }
 
