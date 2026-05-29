@@ -2317,7 +2317,11 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
                     .setDescription(`Olá <@${rec.targetId}>, seu controle GI está pausado. Se não for retomado, você será **automaticamente desligado(a)** da gestão em **${pauseCountdownText(rec, nowMs())}**.`)
                     .addFields({ name: '🔗 Seu Registro', value: recordLink(rec.guildId, rec.channelId, rec.messageId) || '—', inline: false })
                     .setFooter({ text: 'SantaCreators • Gestaoinfluencer' }).setTimestamp(new Date());
-                  await sendDM_andMirror(guild, targetUser, dmEmbed, `<@${rec.targetId}>`);
+                  
+                  const guild = client.guilds.cache.get(rec.guildId);
+                  if (guild) {
+                    await sendDM_andMirror(guild, targetUser, dmEmbed, `<@${rec.targetId}>`);
+                  }
                   rec.lastCountdownWarningAt = nowMs();
                   SC_GI_scheduleSave();
                 }
