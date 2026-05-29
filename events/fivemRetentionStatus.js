@@ -402,18 +402,41 @@ async function cleanupContinuationMessages(channel, botId) {
  }
 }
 
-async function sendContinuationMessages(channel, embedGroups, row = null) {
+async function syncContinuationMessages(channel, botId, embedGroups, row = null) {
+ const msgs = await channel.messages.fetch({ limit: 50 }).catch(() => null);
+
+ const existing = msgs
+   ? [...msgs.values()]
+       .filter(
+         (m) =>
+           m.author?.id === botId &&
+           m.embeds?.some(e => (e.footer?.text || "").includes(FIVEM_CONT_MARKER_TAG))
+       )
+       .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
+   : [];
+
  for (let i = 0; i < embedGroups.length; i++) {
    const group = embedGroups[i];
    const isLastGroup = i === embedGroups.length - 1;
    const markedGroup = markEmbedGroupWithFooterTag(group, FIVEM_CONT_MARKER_TAG);
-
-   await channel.send({
+   const payload = {
      embeds: markedGroup,
      components: row && isLastGroup ? [row] : [],
-   }).catch((e) => {
-     cn2LogApiError("[FIVEM_RETENTION] Falha ao enviar continuação do painel:", e);
-   });
+   };
+
+   if (existing[i]) {
+     await existing[i].edit(payload).catch((e) => {
+       cn2LogApiError("[FIVEM_RETENTION] Falha ao editar continuação do painel:", e);
+     });
+   } else {
+     await channel.send(payload).catch((e) => {
+       cn2LogApiError("[FIVEM_RETENTION] Falha ao criar continuação do painel:", e);
+     });
+   }
+ }
+
+ for (let i = embedGroups.length; i < existing.length; i++) {
+   await existing[i].delete().catch(() => {});
  }
 }
 // ---------- DATA PERSISTENCE (MONGODB) ----------
@@ -861,7 +884,9 @@ async function fetchCityStatus(city) {
    if (res.ok) {
      const data = await res.json().catch(() => null);
      if (data?.Data) {
-       const clients = safeNumber(data.Data.clients ?? data.Data.selfReportedClients, 0);
+const apiClients = safeNumber(data.Data.clients, 0);
+const selfReportedClients = safeNumber(data.Data.selfReportedClients, 0);
+const clients = Math.max(apiClients, selfReportedClients);
 const maxClients = safeNumber(data.Data.sv_maxclients ?? data.Data.svMaxclients, 0);
 
 return {
@@ -870,7 +895,7 @@ return {
   emoji: city.emoji,
   clients,
   maxClients,
-         selfReportedClients: typeof data.Data.selfReportedClients === 'number' ? data.Data.selfReportedClients : 0,
+        selfReportedClients,
          online: true,
          hostname: data.Data.hostname,
          discord: data.Data.vars?.["discord.gg"],
@@ -1502,8 +1527,7 @@ msg = await channel.send({
   components: hasContinuation ? [] : [row],
 });
 
-await cleanupContinuationMessages(channel, botId);
-await sendContinuationMessages(channel, continuationGroups, hasContinuation ? row : null);
+await syncContinuationMessages(channel, botId, continuationGroups, hasContinuation ? row : null);
 
      // ✅ Registra o ID da mensagem no estado assim que for criada
      const state = FIVEM_STATE.get(channel.id) || {};
@@ -1581,8 +1605,7 @@ const edited = await sticky.edit({
   components: hasContinuation ? [] : [row],
 });
 
-await cleanupContinuationMessages(channel, botId);
-await sendContinuationMessages(channel, continuationGroups, hasContinuation ? row : null);
+await syncContinuationMessages(channel, botId, continuationGroups, hasContinuation ? row : null);
    if (edited) FIVEM_DEBUG && console.log("[FIVEM_RETENTION] Sticky editada:", edited.id);
 
    if (edited) {
