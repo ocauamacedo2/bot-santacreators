@@ -955,7 +955,7 @@ function registroButtons(messageId, active) {
       } catch { dmOk = false; }
 
       try {
-        const mirror = await guild.channels.fetch(SC_GI_CFG.CHANNEL_DM_MIRROR).catch(() => null);
+        const mirror = await client.channels.fetch(SC_GI_CFG.CHANNEL_DM_MIRROR).catch(() => null);
         if (mirror && mirror.type === ChannelType.GuildText) {
           const mirrorEmb = EmbedBuilder.from(embed).setColor(dmOk ? 0x2ecc71 : 0xe67e22);
           await mirror.send({ content: baseContent, embeds: [mirrorEmb, ...extraEmbeds] });
@@ -1471,7 +1471,7 @@ try {
       `⏳ **Tempo ativo real:** \`${activeTimeText(rec)}\``,
       !rec.active ? `⏸️ **Pausado acumulado:** \`${formatDurationFull(getPausedTotalMs(rec))}\`` : '',
       !rec.active ? `🧨 **Auto-desligamento em:** \`${pauseCountdownText(rec)}\`` : '',
-      `🔗 **Registro:** Ir ao registro})`
+      `🔗 **Registro:** Ir ao registro || '—'})`
     ].filter(Boolean).join('\n')
   );
 
@@ -2149,7 +2149,7 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
     // ====================== LOG ======================
     async function logMsg(guild, title, description, extra = {}) {
       try {
-        const ch = await guild.channels.fetch(SC_GI_CFG.CHANNEL_LOGS).catch(() => null);
+        const ch = await client.channels.fetch(SC_GI_CFG.CHANNEL_LOGS).catch(() => null);
         if (!ch || ch.type !== ChannelType.GuildText) return;
 
         const emb = new EmbedBuilder()
@@ -2407,7 +2407,7 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
           if (!rec.oneMonthNotified && days >= 30) {
             try {
               const guild = client.guilds.cache.get(rec.guildId);
-              const chAviso = guild ? await guild.channels.fetch(SC_GI_CFG.CHANNEL_AVISOS_1M).catch(() => null) : null;
+              const chAviso = await client.channels.fetch(SC_GI_CFG.CHANNEL_AVISOS_1M).catch(() => null);
               if (chAviso && chAviso.type === ChannelType.GuildText) {
                 const emb = new EmbedBuilder()
                   .setColor(0xf1c40f)
