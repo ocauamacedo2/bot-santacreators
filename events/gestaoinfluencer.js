@@ -1471,7 +1471,7 @@ try {
       `⏳ **Tempo ativo real:** \`${activeTimeText(rec)}\``,
       !rec.active ? `⏸️ **Pausado acumulado:** \`${formatDurationFull(getPausedTotalMs(rec))}\`` : '',
       !rec.active ? `🧨 **Auto-desligamento em:** \`${pauseCountdownText(rec)}\`` : '',
-      `🔗 Registro: ${recordLink(rec.guildId, rec.channelId, rec.messageId) || '—'}`
+      `🔗 **Registro:** Ir ao registro})`
     ].filter(Boolean).join('\n')
   );
 
@@ -1568,7 +1568,7 @@ try {
           `⏳ **Tempo ativo real:** \`${activeTimeText(rec)}\``,
           !rec.active ? `⏸️ **Tempo pausado acumulado:** \`${formatDurationFull(getPausedTotalMs(rec))}\`` : '',
           `🔗 **Link:** Ir ao registro})`
-        ].join('\n'),
+        ].filter(Boolean).join('\n'),
         {
           color: rec.active ? 0x2ecc71 : 0xe67e22,
           components: [
@@ -2153,7 +2153,7 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
         if (!ch || ch.type !== ChannelType.GuildText) return;
 
         const emb = new EmbedBuilder()
-          .setColor(0x8e44ad)
+          .setColor(extra.color || 0x8e44ad)
           .setTitle('🧾 LOG — ' + title)
           .setDescription(description)
           .setImage(GIF_SC_GI)
