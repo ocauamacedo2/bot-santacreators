@@ -21,6 +21,9 @@ const FIVEM_FETCH_TIMEOUT_MS = 10 * 1000; // 10 segundos
 const FIVEM_COMPARISON_TOLERANCE_MS = 10 * 60 * 1000; // 10 minutos
 const FIVEM_TIMEZONE = "America/Sao_Paulo";
 const FIVEM_RANK_MARKER_TAG = "[FIVEM_RETENTION_STATUS]";
+const FIVEM_CONT_MARKER_TAG = "[FIVEM_RETENTION_STATUS_CONT]";
+const FIVEM_MAX_EMBED_CHARS_PER_MESSAGE = 5600;
+const FIVEM_MAX_EMBEDS_PER_MESSAGE = 10;
 
 // Semana A = Quinta 00:00-01:00 / Sábado 21:00-22:00
 // Semana B = Quinta 21:00-22:00 / Sábado 00:00-01:00
@@ -307,7 +310,106 @@ function formatDiff(diffObj) {
  const pctStr = diffObj.pct === 'sem base' ? 'sem base' : `${diffObj.pct.toFixed(1)}%`;
  return `${diffObj.arrow} ${diffStr} (${pctStr})`;
 }
+function getEmbedCharSize(embed) {
+ const data = typeof embed?.toJSON === "function" ? embed.toJSON() : embed;
+ if (!data) return 0;
 
+ let total = 0;
+
+ total += String(data.title || "").length;
+ total += String(data.description || "").length;
+ total += String(data.footer?.text || "").length;
+ total += String(data.author?.name || "").length;
+
+ if (Array.isArray(data.fields)) {
+   for (const field of data.fields) {
+     total += String(field.name || "").length;
+     total += String(field.value || "").length;
+   }
+ }
+
+ return total;
+}
+
+function packEmbedsForDiscord(embeds) {
+ const groups = [];
+ let currentGroup = [];
+ let currentSize = 0;
+
+ for (const embed of embeds) {
+   const embedSize = getEmbedCharSize(embed);
+
+   const wouldExceedSize = currentSize + embedSize > FIVEM_MAX_EMBED_CHARS_PER_MESSAGE;
+   const wouldExceedCount = currentGroup.length >= FIVEM_MAX_EMBEDS_PER_MESSAGE;
+
+   if (currentGroup.length > 0 && (wouldExceedSize || wouldExceedCount)) {
+     groups.push(currentGroup);
+     currentGroup = [];
+     currentSize = 0;
+   }
+
+   currentGroup.push(embed);
+   currentSize += embedSize;
+ }
+
+ if (currentGroup.length > 0) {
+   groups.push(currentGroup);
+ }
+
+ return groups;
+}
+
+function cloneEmbedWithFooterTag(embed, tag) {
+ const data = typeof embed?.toJSON === "function" ? embed.toJSON() : embed;
+ const cloned = new EmbedBuilder(data);
+
+ const oldFooter = data?.footer?.text || "";
+ const newFooter = oldFooter.includes(tag)
+   ? oldFooter
+   : oldFooter
+     ? `${oldFooter} • ${tag}`
+     : tag;
+
+ cloned.setFooter({
+   text: newFooter,
+   iconURL: data?.footer?.icon_url,
+ });
+
+ return cloned;
+}
+
+function markEmbedGroupWithFooterTag(group, tag) {
+ if (!group?.length) return group;
+
+ return group.map((embed, index) => {
+   if (index !== 0) return embed;
+   return cloneEmbedWithFooterTag(embed, tag);
+ });
+}
+
+async function cleanupContinuationMessages(channel, botId) {
+ const msgs = await channel.messages.fetch({ limit: 50 }).catch(() => null);
+ if (!msgs) return;
+
+ const continuations = msgs.filter(
+   (m) =>
+     m.author?.id === botId &&
+     m.embeds?.some(e => (e.footer?.text || "").includes(FIVEM_CONT_MARKER_TAG))
+ );
+
+ for (const msg of continuations.values()) {
+   await msg.delete().catch(() => {});
+ }
+}
+
+async function sendContinuationMessages(channel, embedGroups) {
+ for (const group of embedGroups) {
+   const markedGroup = markEmbedGroupWithFooterTag(group, FIVEM_CONT_MARKER_TAG);
+   await channel.send({ embeds: markedGroup, components: [] }).catch((e) => {
+     cn2LogApiError("[FIVEM_RETENTION] Falha ao enviar continuação do painel:", e);
+   });
+ }
+}
 // ---------- DATA PERSISTENCE (MONGODB) ----------
 async function addSnapshot(newSnapshot) {
   try {
@@ -1383,7 +1485,14 @@ async function ensureStickyMessage(channel) {
    await updateDailyPeaks(currentSnapshot);
    const { embeds, row } = await buildEmbeds(channel.client, currentSnapshot);
    try {
-     msg = await channel.send({ embeds, components: [row] });
+  const embedGroups = packEmbedsForDiscord(embeds);
+const mainEmbeds = markEmbedGroupWithFooterTag(embedGroups[0] || [], FIVEM_RANK_MARKER_TAG);
+const continuationGroups = embedGroups.slice(1);
+
+msg = await channel.send({ embeds: mainEmbeds, components: [row] });
+
+await cleanupContinuationMessages(channel, botId);
+await sendContinuationMessages(channel, continuationGroups);
 
      // ✅ Registra o ID da mensagem no estado assim que for criada
      const state = FIVEM_STATE.get(channel.id) || {};
@@ -1450,7 +1559,14 @@ const hasNewPeak = await updateDailyPeaks(currentSnapshot);
 
  const { embeds, row } = await buildEmbeds(channel.client, currentSnapshot);
  try {
-   const edited = await sticky.edit({ embeds, components: [row] });
+   const embedGroups = packEmbedsForDiscord(embeds);
+const mainEmbeds = markEmbedGroupWithFooterTag(embedGroups[0] || [], FIVEM_RANK_MARKER_TAG);
+const continuationGroups = embedGroups.slice(1);
+
+const edited = await sticky.edit({ embeds: mainEmbeds, components: [row] });
+
+await cleanupContinuationMessages(channel, botId);
+await sendContinuationMessages(channel, continuationGroups);
    if (edited) FIVEM_DEBUG && console.log("[FIVEM_RETENTION] Sticky editada:", edited.id);
 
    if (edited) {
