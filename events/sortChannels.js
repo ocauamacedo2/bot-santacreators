@@ -833,7 +833,7 @@ const currentCategoryId = resolveEffectiveCategoryId(channel);
 
         let targetCategory = null;
         for (const catId of INATIVO_CONFIG.TARGET_CATEGORIES) {
-          const cat = message.guild.channels.cache.get(catId);
+          const cat = await client.channels.fetch(catId).catch(() => null);
           if (
             cat &&
             cat.children.cache.filter(
@@ -854,8 +854,8 @@ const currentCategoryId = resolveEffectiveCategoryId(channel);
           return true;
         }
 
-        const oldCategory = currentCategoryId
-          ? message.guild.channels.cache.get(currentCategoryId)
+        const oldCategory = currentCategoryId 
+          ? await client.channels.fetch(currentCategoryId).catch(() => null) 
           : null;
         const oldCategoryName = oldCategory?.name || "Sem Categoria";
         // ✅ Só salva a origem real quando o canal ainda NÃO estiver em inativos.
@@ -949,7 +949,7 @@ const currentCategoryId = resolveEffectiveCategoryId(channel);
 
   storeChannelState(channel);
 
-  const specialInactiveCategory = await message.guild.channels
+  const specialInactiveCategory = await client.channels
     .fetch(INATIVO_CONFIG.SPECIAL_INACTIVE_CATEGORY)
     .catch(() => null);
 
@@ -1169,7 +1169,7 @@ if (isReactivateCmd) {
           return true;
         }
 
-        const oldCategory = await message.guild.channels
+        const oldCategory = await client.channels
           .fetch(state.oldParentId)
           .catch(() => null);
 

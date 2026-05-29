@@ -1072,11 +1072,14 @@ function registroButtons(messageId, active) {
     async function ensureRecordsConsistency(guild) {
       let didRestore = false;
       try {
-        const restoreLogCh = await guild.channels.fetch(SC_GI_CFG.CHANNEL_RESTORE_LOG).catch(() => null);
+        const restoreLogCh = await client.channels.fetch(SC_GI_CFG.CHANNEL_RESTORE_LOG).catch(() => null);
 
         // Usa Array.from para evitar problemas de modificação do Map durante iteração
         const records = Array.from(SC_GI_STATE.registros.values());
         for (const rec of records) {
+          // ✅ SEGURANÇA: ignora registros que não pertencem a este servidor no loop
+          if (rec.guildId !== guild.id) continue;
+
           // 🔧 Auto-atribuição de responsável se estiver vazio
           if (!rec.responsibleUserId) {
             const newBest = await findBestResponsible(guild, rec.targetId);
@@ -1471,7 +1474,7 @@ try {
       `⏳ **Tempo ativo real:** \`${activeTimeText(rec)}\``,
       !rec.active ? `⏸️ **Pausado acumulado:** \`${formatDurationFull(getPausedTotalMs(rec))}\`` : '',
       !rec.active ? `🧨 **Auto-desligamento em:** \`${pauseCountdownText(rec)}\`` : '',
-      `🔗 **Registro:** Ir ao registro || '—'})`
+      `🔗 **Registro:** Ir ao registro})`
     ].filter(Boolean).join('\n')
   );
 
@@ -2406,7 +2409,6 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
           const days = daysBetween(rec.joinDateMs, n);
           if (!rec.oneMonthNotified && days >= 30) {
             try {
-              const guild = client.guilds.cache.get(rec.guildId);
               const chAviso = await client.channels.fetch(SC_GI_CFG.CHANNEL_AVISOS_1M).catch(() => null);
               if (chAviso && chAviso.type === ChannelType.GuildText) {
                 const emb = new EmbedBuilder()

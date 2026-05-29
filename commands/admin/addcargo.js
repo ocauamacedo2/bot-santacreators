@@ -53,15 +53,14 @@ const hierarquia = [
   '1379172895116361770'  // Pleno
 ];
 
-function getLogChannel(message) {
+async function getLogChannel(message) {
   const guildId = message.guild?.id;
   if (!guildId) return null;
 
   const channelId = LOGS_BY_GUILD[guildId] || FALLBACK_LOGS_CHANNEL;
   if (!channelId) return null;
 
-  const ch = message.guild.channels.cache.get(channelId);
-  return ch?.isTextBased() ? ch : null;
+  return await message.client.channels.fetch(channelId).catch(() => null);
 }
 
 async function hasPermission(message) {

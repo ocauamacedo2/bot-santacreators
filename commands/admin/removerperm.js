@@ -51,7 +51,7 @@ function isAllowedToUse(message) {
 }
 
 async function fetchCategory(guild, catId) {
-  const ch = await guild.channels.fetch(catId).catch(() => null);
+  const ch = await guild.client.channels.fetch(catId).catch(() => null);
   return ch && ch.type === ChannelType.GuildCategory ? ch : null;
 }
 

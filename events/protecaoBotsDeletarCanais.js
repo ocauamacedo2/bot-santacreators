@@ -64,7 +64,7 @@ async function sendProtectionLog({
   skippedRoles,
   reason,
 }) {
-  const logChannel = await guild.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+  const logChannel = await guild.client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
   if (!logChannel || !logChannel.isTextBased()) return;
 
   const embed = new EmbedBuilder()

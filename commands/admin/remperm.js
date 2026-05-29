@@ -48,14 +48,14 @@ async function executarRemPerm(message) {
   const cargoARemoverId = extractId(args[1]);
 
   try {
-    const channel = await message.guild.channels.fetch(canalId).catch(() => null);
+    const channel = await message.client.channels.fetch(canalId).catch(() => null);
     if (!channel) {
       const msg = await safeSend(message.channel, '❌ Canal ou categoria não encontrado.');
       if (msg) setTimeout(() => msg.delete().catch(() => {}), 10000);
       return;
     }
 
-    const roleToRemove = await message.guild.roles.fetch(cargoARemoverId).catch(() => null);
+    const roleToRemove = await channel.guild.roles.fetch(cargoARemoverId).catch(() => null);
     if (!roleToRemove) {
       const msg = await safeSend(message.channel, '❌ O cargo fornecido é inválido.');
       if (msg) setTimeout(() => msg.delete().catch(() => {}), 10000);
