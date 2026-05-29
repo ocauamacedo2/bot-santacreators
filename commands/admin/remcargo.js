@@ -732,44 +732,6 @@ export function installRoleGuardian(client) {
 
             await antiraidLog.send({ content: '⚠️ **ALERTA DE SEGURANÇA**', embeds: [embed], components: [row] });
           }
-          
-          // Criar Snapshot para Reversão
-          const snapshotId = `raid_${Date.now()}_${executorMember.id}`;
-          antiRaidSnapshots.set(snapshotId, {
-            executorId: executorMember.id,
-            targetId: newMember.id,
-            executorRoles: removedFromExecutor,
-            targetRoles: removedIds,
-            guildId: guild.id
-          });
-
-          // Log Detalhado no canal solicitado
-          const antiraidLog = await client.channels.fetch(ANTIRAID_LOG_CHANNEL_ID).catch(() => null);
-          if (antiraidLog) {
-            const raidEmbed = new EmbedBuilder()
-              .setTitle('🚨 PUNIÇÃO ANTI-RAID APLICADA')
-              .setColor('#ff0000')
-              .setThumbnail(executorUser.displayAvatarURL())
-              .addFields(
-                { name: '👤 Executor', value: `${executorUser} (\`${executorUser.id}\`)`, inline: true },
-                { name: '🎯 Alvo', value: `${newMember} (\`${newMember.id}\`)`, inline: true },
-                { name: '📍 Local', value: `<#${newMember.channelId || guild.id}> (Sistema de Cliques)`, inline: true },
-                { name: '⏱️ Detecção', value: `\`${limitCheck.count}\` cargos removidos em menos de 10 min.`, inline: false },
-                { name: '🏷️ Cargos do Alvo Removidos', value: removedRoles.map(r => `@${r.name}`).join(', ').slice(0, 1000), inline: false },
-                { name: '🕒 Data/Hora', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false }
-              )
-              .setFooter({ text: 'Proteção Automática SantaCreators' });
-
-            const raidRow = new ActionRowBuilder().addComponents(
-              new ButtonBuilder()
-                .setCustomId(`antiraid_revert:${snapshotId}`)
-                .setLabel('↩️ Reverter e Devolver Cargos')
-                .setStyle(ButtonStyle.Danger)
-                .setEmoji('🛡️')
-            );
-
-            await antiraidLog.send({ content: '⚠️ **ALERTA DE SEGURANÇA**', embeds: [raidEmbed], components: [raidRow] });
-          }
 
           await sendLogs({
             originGuild: guild,
