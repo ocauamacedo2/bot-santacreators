@@ -844,6 +844,67 @@ export function installRoleGuardian(client) {
 }
 
 /* ==========================
+   HANDLER DE INTERAÇÃO (REVERTER)
+========================== */
+
+/**
+ * Processa o botão de reversão do Anti-Raid
+ */
+export async function remcargoHandleInteraction(interaction, client) {
+  if (!interaction.isButton()) return false;
+  if (!interaction.customId.startsWith('antiraid_revert:')) return false;
+
+  // Evita "Interação falhou"
+  await interaction.deferReply({ ephemeral: true }).catch(() => {});
+
+  const snapshotId = interaction.customId.split(':')[1];
+  const data = antiRaidSnapshots.get(snapshotId);
+
+  if (!data) {
+    await interaction.editReply('❌ Dados da reversão não encontrados ou já expiraram.').catch(() => {});
+    return true;
+  }
+
+  // Permissão: Verifica se quem clicou é staff autorizada
+  const owners = (process.env.OWNER || '').split(',').map(id => id.trim()).filter(Boolean);
+  const staff = (process.env.STAFF || '').split(',').map(id => id.trim()).filter(Boolean);
+  const isAuth = owners.includes(interaction.user.id) || interaction.member.roles.cache.some(id => staff.includes(id) || id === '1352493359897378941');
+
+  if (!isAuth) {
+    await interaction.editReply('❌ Você não tem permissão para reverter punições anti-raid.').catch(() => {});
+    return true;
+  }
+
+  const guild = interaction.guild;
+  const executorMember = await guild.members.fetch(data.executorId).catch(() => null);
+  const targetMember = await guild.members.fetch(data.targetId).catch(() => null);
+
+  // 1. Devolve cargos ao ALVO
+  if (targetMember && data.targetRoles.length > 0) {
+    for (const rid of data.targetRoles) {
+      const role = guild.roles.cache.get(rid);
+      if (role && role.editable) await targetMember.roles.add(rid, 'Anti-raid: reversão manual').catch(() => {});
+    }
+  }
+
+  // 2. Devolve cargos ao EXECUTOR (punido) e dá bypass
+  if (executorMember && data.executorRoles.length > 0) {
+    for (const rid of data.executorRoles) {
+      const role = guild.roles.cache.get(rid);
+      if (role && role.editable) await executorMember.roles.add(rid, 'Anti-raid: reversão manual').catch(() => {});
+    }
+    // Aplica o Bypass de 24 horas
+    antiRaidBypass24h.set(data.executorId, Date.now() + (24 * 60 * 60 * 1000));
+  }
+
+  antiRaidSnapshots.delete(snapshotId);
+  await interaction.message.edit({ components: [] }).catch(() => {});
+  await interaction.editReply(`✅ Punição revertida com sucesso! Cargos devolvidos e bypass de 24h aplicado para <@${data.executorId}>.`).catch(() => {});
+
+  return true;
+}
+
+/* ==========================
    AUTO-INSTALL opcional
 ========================== */
 try { if (globalThis.client) installRoleGuardian(globalThis.client); } catch {}
