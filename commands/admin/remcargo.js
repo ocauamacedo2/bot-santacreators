@@ -120,6 +120,9 @@ const LIMIT_BELOW = 15; // Limite para quem está abaixo do threshold
 const removalTracker = new Map(); // userId -> { count, startTime }
 
 function checkMassRemovalLimit(member, countToAdd = 1) {
+  // ✅ Bypass para o próprio bot (evita que o bot se bloqueie em comandos massivos)
+  if (member.id === member.client.user.id) return { exceeded: false };
+
   // Bypass total para autorizados (Owner/VcV)
   if (ALLOWED_REMOVERS.includes(member.id)) return { exceeded: false };
 

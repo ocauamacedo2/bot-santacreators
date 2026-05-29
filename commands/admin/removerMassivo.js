@@ -142,7 +142,7 @@ export async function removerMassivoHandleMessage(message, client) {
     globalThis.__SC_REMOVE_ROLE_LOCK.set(lockKey, true);
 
     // aviso inicial
-    await sendTemp(message.channel, {
+    const statusMsg = await message.channel.send({
       embeds: [
         {
           color: 0xffa500,
@@ -201,14 +201,20 @@ export async function removerMassivoHandleMessage(message, client) {
             continue;
           }
 
-          // ✅ Aplica bypass temporário para o guardião não devolver o cargo
+          // ✅ Aplica bypass temporário (3 minutos) para que as proteções não devolvam o cargo
           if (!globalThis.__SC_ROLE_BYPASS__) globalThis.__SC_ROLE_BYPASS__ = new Map();
-          // Tempo aumentado para 60s para garantir que processos longos não sejam resetados pelo guardião
-          globalThis.__SC_ROLE_BYPASS__.set(m.id, Date.now() + 60000);
+          globalThis.__SC_ROLE_BYPASS__.set(m.id, Date.now() + 180000);
 
-          await m.roles.remove(role.id, `Remoção em massa por ${message.author.tag} (${message.author.id})`);
+          await m.roles.remove(role.id, `Remoção massiva por ${message.author.tag}`);
           removed++;
           removedIds.push(m.id);
+
+          // Atualiza o status a cada 50 remoções para você não achar que travou
+          if (removed % 50 === 0 && statusMsg) {
+            await statusMsg.edit({ embeds: [
+              EmbedBuilder.from(statusMsg.embeds[0]).setDescription(`Alvo: ${role}\nSolicitado por: <@${message.author.id}>\n\n⏳ Progresso: **${removed}** membros processados...`)
+            ]}).catch(() => null);
+          }
         } catch (err) {
           failed++;
           failedIds.push(m.id);
@@ -217,6 +223,7 @@ export async function removerMassivoHandleMessage(message, client) {
       }
     } finally {
       globalThis.__SC_REMOVE_ROLE_LOCK.delete(lockKey);
+      if (statusMsg) statusMsg.delete().catch(() => null);
     }
 
     // resumo temporário no chat
