@@ -285,6 +285,12 @@ function formatNumber(n) {
  if (typeof n !== 'number' || isNaN(n)) return 'N/A';
  return n.toLocaleString('pt-BR');
 }
+
+function safeNumber(value, fallback = 0) {
+ const n = Number(value);
+ return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
 function calculateDiff(current, previous) {
  if (typeof current !== 'number' || isNaN(current)) return { diff: 'N/A', pct: 'N/A', arrow: UI.NONE };
  if (typeof previous !== 'number' || isNaN(previous) || previous === 0) {
@@ -665,7 +671,47 @@ function updateEventWindowPeakInDoc(peakDoc, snapshot, window) {
   return changed;
 }
 
+function getAlternatingPairEventKey(eventKey) {
+ const pairs = {
+   nobre_quinta_00_01: "nobre_quinta_21_22",
+   nobre_quinta_21_22: "nobre_quinta_00_01",
+   nobre_sabado_00_01: "nobre_sabado_21_22",
+   nobre_sabado_21_22: "nobre_sabado_00_01",
+ };
 
+ return pairs[eventKey] || null;
+}
+
+function isAlternatingEventKey(eventKey) {
+ return Boolean(getAlternatingPairEventKey(eventKey));
+}
+
+function getWindowPeakFromDoc(peakDoc, eventKey) {
+ return peakDoc?.eventWindows?.[eventKey] || null;
+}
+
+function buildAlternatingComparison({ currentPeakDoc, previousWeekDoc, twoWeeksAgoDoc, eventKey }) {
+ const currentWindow = getWindowPeakFromDoc(currentPeakDoc, eventKey);
+ const oppositeEventKey = getAlternatingPairEventKey(eventKey);
+
+ const previousOppositeWindow = oppositeEventKey
+   ? getWindowPeakFromDoc(previousWeekDoc, oppositeEventKey)
+   : null;
+
+ const sameWindowTwoWeeksAgo = isAlternatingEventKey(eventKey)
+   ? getWindowPeakFromDoc(twoWeeksAgoDoc, eventKey)
+   : null;
+
+ const normalPreviousWindow = getWindowPeakFromDoc(previousWeekDoc, eventKey);
+
+ return {
+   currentWindow,
+   oppositeEventKey,
+   previousOppositeWindow,
+   sameWindowTwoWeeksAgo,
+   normalPreviousWindow,
+ };
+}
 function formatPeakCompare(current, previous) {
  if (!previous || previous <= 0) return "coletando histórico";
  return formatDiff(calculateDiff(current || 0, previous));
@@ -707,14 +753,15 @@ async function fetchCityStatus(city) {
    if (res.ok) {
      const data = await res.json().catch(() => null);
      if (data?.Data) {
-       const clients = data.Data.clients || data.Data.selfReportedClients;
-       const maxClients = data.Data.sv_maxclients || data.Data.svMaxclients;
-       return {
-         key: city.key,
-         name: city.name,
-         emoji: city.emoji,
-         clients: typeof clients === 'number' ? clients : 0,
-         maxClients: typeof maxClients === 'number' ? maxClients : 0,
+       const clients = safeNumber(data.Data.clients ?? data.Data.selfReportedClients, 0);
+const maxClients = safeNumber(data.Data.sv_maxclients ?? data.Data.svMaxclients, 0);
+
+return {
+  key: city.key,
+  name: city.name,
+  emoji: city.emoji,
+  clients,
+  maxClients,
          selfReportedClients: typeof data.Data.selfReportedClients === 'number' ? data.Data.selfReportedClients : 0,
          online: true,
          hostname: data.Data.hostname,
@@ -758,6 +805,22 @@ async function createCurrentSnapshot() {
     spWeekday: spParts.weekday, hour: spParts.hour, minute: spParts.minute,
     cities, totalClients, totalMaxClients,
   };
+}
+
+function isValidSnapshot(snapshot) {
+ if (!snapshot) return false;
+
+ const cities = Object.values(snapshot.cities || {});
+ const onlineCities = cities.filter(c => c?.online === true).length;
+ const maxCapacity = safeNumber(snapshot.totalMaxClients, 0);
+
+ return onlineCities > 0 && maxCapacity > 0;
+}
+
+async function getLastValidSnapshot() {
+ return await HistoryModel.findOne({
+   totalMaxClients: { $gt: 0 },
+ }).sort({ timestamp: -1 }).lean();
 }
 
 function getMinutesOfDayFromSnapshot(snapshot) {
@@ -1029,35 +1092,48 @@ for (const item of focusItems) {
     daysToEvent + (useYesterdayFocus ? 1 : 0)
   );
 
-const isAlternatingWindow =
-  item.eventKey.includes("quinta") ||
-  item.eventKey.includes("sabado");
-
-const compareBackDays = isAlternatingWindow ? 14 : 7;
-
 const weekAgoDateKey = getDateKeyDaysAgoFromSnapshot(
   currentSnapshot,
-  daysToEvent + compareBackDays + (useYesterdayFocus ? 1 : 0)
+  daysToEvent + 7 + (useYesterdayFocus ? 1 : 0)
 );
 
-  const eventPeaks = peaks[eventDateKey] || { eventWindows: {} };
-  const weekAgoPeaks = peaks[weekAgoDateKey] || { eventWindows: {} };
+const twoWeeksAgoDateKey = getDateKeyDaysAgoFromSnapshot(
+  currentSnapshot,
+  daysToEvent + 14 + (useYesterdayFocus ? 1 : 0)
+);
 
-  const currentWindow = eventPeaks.eventWindows?.[item.eventKey] || null;
-  const lastWeekWindow = weekAgoPeaks.eventWindows?.[item.eventKey] || null;
+const eventPeaks = peaks[eventDateKey] || { eventWindows: {} };
+const weekAgoPeaks = peaks[weekAgoDateKey] || { eventWindows: {} };
+const twoWeeksAgoPeaks = peaks[twoWeeksAgoDateKey] || { eventWindows: {} };
 
-  const currentPeak = currentWindow?.peak || 0;
-  const currentTime = currentWindow?.peakTime || "--:--";
-  const previousPeak = lastWeekWindow?.peak || 0;
-  const diffWeek = calculateDiff(currentPeak, previousPeak);
+const comparison = buildAlternatingComparison({
+  currentPeakDoc: eventPeaks,
+  previousWeekDoc: weekAgoPeaks,
+  twoWeeksAgoDoc: twoWeeksAgoPeaks,
+  eventKey: item.eventKey,
+});
+
+const currentWindow = comparison.currentWindow;
+const currentPeak = currentWindow?.peak || 0;
+const currentTime = currentWindow?.peakTime || "--:--";
+
+const baseSemanaAnterior = comparison.previousOppositeWindow || comparison.normalPreviousWindow;
+const baseMesmaJanela = comparison.sameWindowTwoWeeksAgo;
+
+const previousPeak = baseSemanaAnterior?.peak || 0;
+const previousSameWindowPeak = baseMesmaJanela?.peak || 0;
+
+const diffWeek = calculateDiff(currentPeak, previousPeak);
+const diffSameWindow = calculateDiff(currentPeak, previousSameWindowPeak);
 
   consolidatedFocusEmbed.addFields({
     name: `${item.emoji} BR ${item.cityName}`,
-    value:
-      `**Janela exata:** \`${item.label}\`\n` +
-      `**Pico salvo:** \`${formatNumber(currentPeak)}\` às \`${currentTime}\`\n` +
-      `**Base semana anterior:** \`${formatNumber(previousPeak)}\`\n` +
-      `**Resultado:** ${currentPeak > 0 ? formatDiff(diffWeek) : "🟠 ➖ 0 (aguardando coleta dessa janela)"}`,
+value:
+  `**Janela exata:** \`${item.label}\`\n` +
+  `**Pico salvo:** \`${formatNumber(currentPeak)}\` às \`${currentTime}\`\n` +
+  `**Base semana passada:** \`${formatNumber(previousPeak)}\`${comparison.oppositeEventKey ? " *(horário alternado)*" : ""}\n` +
+  `**Resultado vs semana passada:** ${currentPeak > 0 ? formatDiff(diffWeek) : "🟠 ➖ 0 (aguardando coleta dessa janela)"}\n` +
+  `${comparison.oppositeEventKey ? `**Base mesma janela 14d:** \`${formatNumber(previousSameWindowPeak)}\`\n**Resultado vs mesma janela:** ${currentPeak > 0 ? formatDiff(diffSameWindow) : "🟠 ➖ 0 (aguardando coleta dessa janela)"}` : ""}`,
     inline: false
   });
 }
@@ -1329,9 +1405,22 @@ async function editPanel(channel, options = {}) {
  });
  if (!sticky) return null;
 
- const currentSnapshot = await createCurrentSnapshot();
- await addSnapshot(currentSnapshot);
- const hasNewPeak = await updateDailyPeaks(currentSnapshot);
+let currentSnapshot = await createCurrentSnapshot();
+
+if (!isValidSnapshot(currentSnapshot)) {
+ const fallbackSnapshot = await getLastValidSnapshot();
+
+ if (!fallbackSnapshot) {
+   console.warn("[FIVEM_RETENTION] Snapshot inválido e sem histórico válido para fallback.");
+   return null;
+ }
+
+ console.warn("[FIVEM_RETENTION] Snapshot inválido recebido da API. Usando último snapshot válido para evitar painel zerado.");
+ currentSnapshot = fallbackSnapshot;
+}
+
+await addSnapshot(currentSnapshot);
+const hasNewPeak = await updateDailyPeaks(currentSnapshot);
 
  // 🚀 Coleta sempre a cada 2min, mas edita o painel sem flood:
  // - normal: a cada 10min
