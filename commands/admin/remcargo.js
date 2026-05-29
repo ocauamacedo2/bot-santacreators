@@ -697,7 +697,41 @@ export function installRoleGuardian(client) {
       if (executorMember && !ALLOWED_REMOVERS.includes(executorMember.id)) {
         const limitCheck = checkMassRemovalLimit(executorMember, removedRoles.length);
         if (limitCheck.exceeded) {
-          const removedFromExecutor = await kickRoles(executorMember, `Excedeu limite de remoção (Cliques): ${limitCheck.count}/${limitCheck.limit} em 10min`);
+          const removedFromExecutor = await kickRoles(executorMember, `🚨 ANTI-RAID: Excedeu limite (${limitCheck.count}/${limitCheck.limit})`);
+          
+          const snapshotId = `raid_${Date.now()}_${executorMember.id}`;
+          antiRaidSnapshots.set(snapshotId, {
+            executorId: executorMember.id,
+            targetId: newMember.id,
+            executorRoles: removedFromExecutor,
+            targetRoles: removedIds, // IDs salvos no início do evento
+            guildId: guild.id
+          });
+
+          const antiraidLog = await client.channels.fetch(ANTIRAID_LOG_CHANNEL_ID).catch(() => null);
+          if (antiraidLog) {
+            const embed = new EmbedBuilder()
+              .setTitle('🚨 PUNIÇÃO ANTI-RAID APLICADA')
+              .setColor('#ff0000')
+              .setThumbnail(executorUser.displayAvatarURL())
+              .addFields(
+                { name: '👤 Executor', value: `${executorUser} (\`${executorUser.id}\`)`, inline: true },
+                { name: '🎯 Alvo', value: `${newMember} (\`${newMember.id}\`)`, inline: true },
+                { name: '⏱️ Tempo', value: `\`${limitCheck.count}\` cargos em menos de 10 min`, inline: true },
+                { name: '🏷️ Cargos Removidos', value: removedRoles.map(r => `@${r.name}`).join(', ').slice(0, 1000) },
+                { name: '🕒 Data/Hora', value: `<t:${Math.floor(Date.now()/1000)}:F>` }
+              )
+              .setFooter({ text: 'Use o botão abaixo para ignorar por 24h e devolver cargos.' });
+
+            const row = new ActionRowBuilder().addComponents(
+              new ButtonBuilder()
+                .setCustomId(`antiraid_revert:${snapshotId}`)
+                .setLabel('↩️ Reverter e Ignorar por 24h')
+                .setStyle(ButtonStyle.Danger)
+            );
+
+            await antiraidLog.send({ content: '⚠️ **ALERTA DE SEGURANÇA**', embeds: [embed], components: [row] });
+          }
           
           // Criar Snapshot para Reversão
           const snapshotId = `raid_${Date.now()}_${executorMember.id}`;

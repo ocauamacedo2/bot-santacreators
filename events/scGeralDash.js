@@ -73,8 +73,7 @@ const DASH_BANNER_URL =
 
 // 🔥 DOAÇÃO: canal onde o módulo doação.js manda os registros (embed "📦 Nova Doação Registrada")
 // - ele usa env SCDOACAO_LOGS_ID, fallback: "1486009647923200120"
-const DOACAO_LOGS_CHANNEL_ID =
-  process.env.SCDOACAO_LOGS_ID?.trim() || "1486009647923200120";
+const DOACAO_LOGS_CHANNEL_ID = "1486009647923200120"; // ✅ SINCRONIZADO
 
 // 🔥 CONVITES: canal LOG do módulo lideresConvites.js
 // - no teu arquivo lideresConvites.js: const LOG_CHANNEL_ID = "1415102820826349648";

@@ -82,6 +82,7 @@ export default {
     installChannelGuardian(client); // Instala o novo guardião de canais
     installMessageGuardian(client);
     installServerConfigGuardian(client);
+    installRoleGuardian(client); // ✅ ATIVA O MONITORAMENTO DE CARGOS (remcargo.js)
 
     console.log(`\n✅ Bot pronto como ${client.user.tag}`);
   }
