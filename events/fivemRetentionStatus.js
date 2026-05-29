@@ -1043,7 +1043,7 @@ async function buildEmbeds(client, currentSnapshot) {
    embeds.push(retentionEmbed);
  }
 
- // 5.1 PAINÉIS DE RETENÇÃO POR CIDADE (CONSOLIDADO EM UM ÚNICO EMBED)
+ // 5.1 PAINÉIS DE RETENÇÃO POR CIDADE (DIVIDIDO EM VÁRIOS EMBEDS PARA NÃO ESTOURAR 6000 CARACTERES)
 const weekMode = getWeekModeSP(new Date(currentSnapshot.timestamp));
 
 const focusItems = [
@@ -1056,16 +1056,14 @@ const focusItems = [
   getPrimeTimeWindow(currentSnapshot, 0),
 ].filter(Boolean);
 
-const consolidatedFocusEmbed = new EmbedBuilder()
-  .setColor(baseColor)
-  .setTitle(`🎯 RETENÇÃO DO EVENTO — CIDADES FOCADAS${useYesterdayFocus ? " (Resumo de Ontem)" : ""}`)
-  .setDescription(
-    `**Semana atual:** Semana ${weekMode}\n` +
-    `**Regra da semana:** ${weekMode === "A"
-      ? "Quinta 00:00–01:00 / Sábado 21:00–22:00"
-      : "Quinta 21:00–22:00 / Sábado 00:00–01:00"}\n\n` +
-    `Cada linha compara a mesma cidade e a mesma janela exata contra a semana anterior.\n\n`
-  );
+const focusHeader =
+  `**Semana atual:** Semana ${weekMode}\n` +
+  `**Regra da semana:** ${weekMode === "A"
+    ? "Quinta 00:00–01:00 / Sábado 21:00–22:00"
+    : "Quinta 21:00–22:00 / Sábado 00:00–01:00"}\n\n` +
+  `Cada linha compara a mesma cidade e a mesma janela exata contra a semana anterior.\n\n`;
+
+const focusFields = [];
 
 for (const item of focusItems) {
   const targetWeekday =
@@ -1092,59 +1090,70 @@ for (const item of focusItems) {
     daysToEvent + (useYesterdayFocus ? 1 : 0)
   );
 
-const weekAgoDateKey = getDateKeyDaysAgoFromSnapshot(
-  currentSnapshot,
-  daysToEvent + 7 + (useYesterdayFocus ? 1 : 0)
-);
+  const weekAgoDateKey = getDateKeyDaysAgoFromSnapshot(
+    currentSnapshot,
+    daysToEvent + 7 + (useYesterdayFocus ? 1 : 0)
+  );
 
-const twoWeeksAgoDateKey = getDateKeyDaysAgoFromSnapshot(
-  currentSnapshot,
-  daysToEvent + 14 + (useYesterdayFocus ? 1 : 0)
-);
+  const twoWeeksAgoDateKey = getDateKeyDaysAgoFromSnapshot(
+    currentSnapshot,
+    daysToEvent + 14 + (useYesterdayFocus ? 1 : 0)
+  );
 
-const eventPeaks = peaks[eventDateKey] || { eventWindows: {} };
-const weekAgoPeaks = peaks[weekAgoDateKey] || { eventWindows: {} };
-const twoWeeksAgoPeaks = peaks[twoWeeksAgoDateKey] || { eventWindows: {} };
+  const eventPeaks = peaks[eventDateKey] || { eventWindows: {} };
+  const weekAgoPeaks = peaks[weekAgoDateKey] || { eventWindows: {} };
+  const twoWeeksAgoPeaks = peaks[twoWeeksAgoDateKey] || { eventWindows: {} };
 
-const comparison = buildAlternatingComparison({
-  currentPeakDoc: eventPeaks,
-  previousWeekDoc: weekAgoPeaks,
-  twoWeeksAgoDoc: twoWeeksAgoPeaks,
-  eventKey: item.eventKey,
-});
+  const comparison = buildAlternatingComparison({
+    currentPeakDoc: eventPeaks,
+    previousWeekDoc: weekAgoPeaks,
+    twoWeeksAgoDoc: twoWeeksAgoPeaks,
+    eventKey: item.eventKey,
+  });
 
-const currentWindow = comparison.currentWindow;
-const currentPeak = currentWindow?.peak || 0;
-const currentTime = currentWindow?.peakTime || "--:--";
+  const currentWindow = comparison.currentWindow;
+  const currentPeak = currentWindow?.peak || 0;
+  const currentTime = currentWindow?.peakTime || "--:--";
 
-const baseSemanaAnterior = comparison.previousOppositeWindow || comparison.normalPreviousWindow;
-const baseMesmaJanela = comparison.sameWindowTwoWeeksAgo;
+  const baseSemanaAnterior = comparison.previousOppositeWindow || comparison.normalPreviousWindow;
+  const baseMesmaJanela = comparison.sameWindowTwoWeeksAgo;
 
-const previousPeak = baseSemanaAnterior?.peak || 0;
-const previousSameWindowPeak = baseMesmaJanela?.peak || 0;
+  const previousPeak = baseSemanaAnterior?.peak || 0;
+  const previousSameWindowPeak = baseMesmaJanela?.peak || 0;
 
-const diffWeek = calculateDiff(currentPeak, previousPeak);
-const diffSameWindow = calculateDiff(currentPeak, previousSameWindowPeak);
+  const diffWeek = calculateDiff(currentPeak, previousPeak);
+  const diffSameWindow = calculateDiff(currentPeak, previousSameWindowPeak);
 
-  consolidatedFocusEmbed.addFields({
+  focusFields.push({
     name: `${item.emoji} BR ${item.cityName}`,
-value:
-  `**Janela exata:** \`${item.label}\`\n` +
-  `**Pico salvo:** \`${formatNumber(currentPeak)}\` às \`${currentTime}\`\n` +
-  `**Base semana passada:** \`${formatNumber(previousPeak)}\`${comparison.oppositeEventKey ? " *(horário alternado)*" : ""}\n` +
-  `**Resultado vs semana passada:** ${currentPeak > 0 ? formatDiff(diffWeek) : "🟠 ➖ 0 (aguardando coleta dessa janela)"}\n` +
-  `${comparison.oppositeEventKey ? `**Base mesma janela 14d:** \`${formatNumber(previousSameWindowPeak)}\`\n**Resultado vs mesma janela:** ${currentPeak > 0 ? formatDiff(diffSameWindow) : "🟠 ➖ 0 (aguardando coleta dessa janela)"}` : ""}`,
+    value:
+      `**Janela exata:** \`${item.label}\`\n` +
+      `**Pico salvo:** \`${formatNumber(currentPeak)}\` às \`${currentTime}\`\n` +
+      `**Base semana passada:** \`${formatNumber(previousPeak)}\`${comparison.oppositeEventKey ? " *(horário alternado)*" : ""}\n` +
+      `**Resultado vs semana passada:** ${currentPeak > 0 ? formatDiff(diffWeek) : "🟠 ➖ 0 (aguardando coleta dessa janela)"}\n` +
+      `${comparison.oppositeEventKey ? `**Base mesma janela 14d:** \`${formatNumber(previousSameWindowPeak)}\`\n**Resultado vs mesma janela:** ${currentPeak > 0 ? formatDiff(diffSameWindow) : "🟠 ➖ 0 (aguardando coleta dessa janela)"}` : ""}`,
     inline: false
   });
 }
 
-consolidatedFocusEmbed.setFooter({
-  text: `Análise por janela exata • Sincronizado às ${currentSnapshot.spTime}`,
-  iconURL: client.user.displayAvatarURL()
-});
+const focusFieldsPerEmbed = 3;
 
-embeds.push(consolidatedFocusEmbed);
+for (let i = 0; i < focusFields.length; i += focusFieldsPerEmbed) {
+  const partNumber = Math.floor(i / focusFieldsPerEmbed) + 1;
+  const totalParts = Math.ceil(focusFields.length / focusFieldsPerEmbed);
 
+  const focusEmbed = new EmbedBuilder()
+    .setColor(baseColor)
+    .setTitle(`🎯 RETENÇÃO DO EVENTO — CIDADES FOCADAS${useYesterdayFocus ? " (Resumo de Ontem)" : ""} • Parte ${partNumber}/${totalParts}`)
+    .setDescription(partNumber === 1 ? focusHeader : `Continuação da análise por janela exata.\n\n`)
+    .addFields(focusFields.slice(i, i + focusFieldsPerEmbed))
+    .setFooter({
+      text: `Análise por janela exata • Sincronizado às ${currentSnapshot.spTime}`,
+      iconURL: client.user.displayAvatarURL()
+    });
+
+  embeds.push(focusEmbed);
+}
 // 6. PAINEL — DIFERENÇA DE PICOS (MÁXIMAS DO DIA)
  const peakAnalysisData = FIVEM_CITIES
    .map((cityConfig) => {
