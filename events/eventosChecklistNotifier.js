@@ -119,6 +119,7 @@ function getTodayEvents() {
 function getPhase(eventStartMinutes) {
   const now = minutesNowSP();
 
+  // Janelas de 5 minutos para evitar repetição no mesmo ciclo
   if (now >= eventStartMinutes - 60 && now < eventStartMinutes - 55) return "PRE_60";
   if (now >= eventStartMinutes - 30 && now < eventStartMinutes - 25) return "PRE_30";
   if (now >= eventStartMinutes + 25 && now < eventStartMinutes + 30) return "PONTO_25";
@@ -139,8 +140,14 @@ function markSent(state, key) {
 }
 
 function isOnline(member) {
+  // Fallback se a Intent de Presença estiver desligada
+  if (!member?.presence) {
+    console.log(`[EventosChecklistNotifier] ⚠️ Sem cache de presence para ${member?.user?.tag}. Ignorando status.`);
+    return true; 
+  }
   const status = member?.presence?.status;
-  return status === "online" || status === "idle" || status === "dnd";
+  const online = status === "online" || status === "idle" || status === "dnd";
+  return online;
 }
 
 async function getMembersByRoles(guild, roleIds) {
@@ -188,7 +195,7 @@ function checklistText(event) {
   ].join("\n");
 }
 
-async function logDmNotification(client, member, embed, status = "ENVIADO") {
+async function logDmNotification(client, member, embed, status = "ENVIADO", event = {}, type = "comum") {
   try {
     const logChannel = await client.channels.fetch(DM_LOG_CHANNEL_ID).catch(() => null);
     if (!logChannel || !logChannel.isTextBased()) return;
@@ -204,7 +211,9 @@ async function logDmNotification(client, member, embed, status = "ENVIADO") {
         { name: "👤 Usuário", value: `${member} \`${member.user.tag}\``, inline: false },
         { name: "🆔 ID Discord", value: `\`${member.id}\``, inline: true },
         { name: "🔗 Link da pessoa", value: `[Abrir perfil](${userLink})`, inline: true },
-        { name: "📌 Título da mensagem", value: embed?.data?.title || "Sem título", inline: false },
+        { name: "📌 Título", value: embed?.data?.title || "Sem título", inline: true },
+        { name: "🎯 Evento", value: `\`${event.eventName || "—"}\` (${event.city || "—"})`, inline: true },
+        { name: "🏷️ Tipo", value: `\`${type}\``, inline: true },
         { name: "📝 Conteúdo enviado", value: String(embed?.data?.description || "Sem descrição").slice(0, 1000), inline: false },
         { name: "⏰ Horário", value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false }
       )
@@ -220,13 +229,13 @@ async function logDmNotification(client, member, embed, status = "ENVIADO") {
   }
 }
 
-async function dm(client, member, embed) {
+async function dm(client, member, embed, event, type) {
   try {
     await member.send({ embeds: [embed] });
-    await logDmNotification(client, member, embed, "ENVIADO");
+    await logDmNotification(client, member, embed, "ENVIADO", event, type);
     return true;
   } catch {
-    await logDmNotification(client, member, embed, "FALHOU");
+    await logDmNotification(client, member, embed, "FALHOU", event, type);
     return false;
   }
 }
@@ -257,11 +266,7 @@ function buildPointEmbed(event) {
     .setColor("#f1c40f")
     .setTitle("🕒 Lembrete de Bate-Ponto")
     .setDescription(
-      [
-        `Eaiii, bora bater o ponto do evento **${event.eventName}**?`,
-        "",
-        "Se você colaborou com o evento atual, registra teu ponto aí pra eu parar de te encher o saco kkk 💜",
-      ].join("\n")
+      `eaiii <@${event.targetId}>, bora bater teu ponto do evento **${event.eventName}**? se você ajudou no evento atual, registra aí bonitinho pra eu parar de te lembrar kkkkk 💜`
     )
     .setTimestamp();
 }
@@ -271,12 +276,7 @@ function buildPowerEmbed(event) {
     .setColor("#3498db")
     .setTitle("⚡ Lembrete de Registro de Poderes")
     .setDescription(
-      [
-        `Eaiii? Bora registrar o uso de poderes no evento **${event.eventName}**?`,
-        "",
-        "Vi que o evento já acabou e ainda falta esse registro.",
-        "Registra lá bonitinho que eu paro de mandar mensagem, prometo kkkkk 💜",
-      ].join("\n")
+      `eaiii <@${event.targetId}>, bora registrar teu uso de poderes no evento **${event.eventName}** pra eu parar de te encher o saco? vi que o evento já acabou e ainda falta esse registro kkkkk registra lá queridão que eu PARO de mandar mensagem, prometo 💜`
     )
     .setTimestamp();
 }
@@ -310,10 +310,14 @@ function buildRespReportEmbed(event, onlineMembers, offlineMembers) {
 
 async function runNotifierTick(client) {
   const guild = client.guilds.cache.first();
-  if (!guild) return;
+  if (!guild) {
+    console.log("[EventosChecklistNotifier] Nenhuma guilda encontrada.");
+    return;
+  }
 
   const state = loadJson(NOTIFIER_STATE_FILE, { sent: {} });
   const events = getTodayEvents();
+  if (events.length > 0) console.log(`[EventosChecklistNotifier] Evento(s) encontrado(s): ${events.map(e => e.eventName).join(", ")}`);
 
   for (const event of events) {
     const start = hmToMinutes(event.time);
@@ -321,6 +325,7 @@ async function runNotifierTick(client) {
 
     const phase = getPhase(start);
     if (!phase) continue;
+    console.log(`[EventosChecklistNotifier] Fase detectada: ${phase} para o evento ${event.eventName}`);
 
     const uniqueBase = `${todayDateBR()}_${event.type}_${event.cityKey}_${event.eventName}_${phase}`;
     if (alreadySent(state, uniqueBase)) continue;
@@ -344,36 +349,47 @@ async function runNotifierTick(client) {
       const embed = buildPrepareEmbed(event, phase);
 
       for (const member of respMembers.filter(isOnline)) {
-        await dm(client, member, embed);
+        await dm(client, member, embed, event, phase === "PRE_60" ? "pré-evento" : "F3");
+        console.log(`[EventosChecklistNotifier] PV enviado (${phase}) para ${member.user.tag}`);
       }
     }
 
     if (phase === "PONTO_25") {
-      const pointEmbed = buildPointEmbed(event);
       const reportEmbed = buildRespReportEmbed(event, onlineEquipe, offlineEquipe);
 
       for (const member of onlineEquipe) {
         const already = globalThis.SC_BP_hasPunchedEffective?.(member.id);
-        if (!already) await dm(client, member, pointEmbed);
+        if (!already) {
+          const pointEmbed = buildPointEmbed({...event, targetId: member.id});
+          await dm(client, member, pointEmbed, event, "bate-ponto");
+          console.log(`[EventosChecklistNotifier] PV enviado (Ponto) para ${member.user.tag}`);
+        } else {
+          console.log(`[EventosChecklistNotifier] Usuário ${member.user.tag} já bateu ponto, ignorando.`);
+        }
       }
 
       for (const resp of respMembers.filter(isOnline)) {
-        await dm(client, resp, reportEmbed);
+        await dm(client, resp, reportEmbed, event, "Relatório Responsáveis");
       }
     }
 
     if (phase === "POS_60" || phase === "POS_80" || phase === "POS_100") {
-      const powerEmbed = buildPowerEmbed(event);
-
       for (const member of onlineEquipe) {
+        // Normalização de nome de evento para busca segura na memória global
+        const eventSearchName = event.eventName.toLowerCase().trim();
+        
         const hasPower = globalThis.SC_EVENT_POWER_hasRegistered?.(
           member.id,
-          event.eventName,
+          eventSearchName,
           todayDateBR()
         );
 
         if (!hasPower) {
-          await dm(client, member, powerEmbed);
+          const powerEmbed = buildPowerEmbed({...event, targetId: member.id});
+          await dm(client, member, powerEmbed, event, "registro de poderes");
+          console.log(`[EventosChecklistNotifier] PV enviado (Poderes) para ${member.user.tag}`);
+        } else {
+          console.log(`[EventosChecklistNotifier] Usuário ${member.user.tag} já registrou poderes, ignorando.`);
         }
       }
     }

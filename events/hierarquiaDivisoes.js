@@ -407,12 +407,12 @@ getMembersByRole(CONFIG.ROLES.RESP_LIDER, CONFIG.SLOTS.DAWN) || "_Ninguém defin
 getMembersByRole(CONFIG.ROLES.RESP_LIDER, CONFIG.SLOTS.NONE) || "_Ninguém_",
 "",
 "┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅",
-"# 🏙️ DIVISÃO DE FOCO POR CIDADE",
+"## 🏙️ DIVISÃO DE FOCO POR CIDADE",
 "",
-"🌊 **Maresia** — segunda-feira • <@&1379021994678288465>",
-"🏙️ **Grande** — terça-feira • <@&1418691103397253322>",
-"🎅 **Santa** — quarta-feira • <@&1379021888709464168>",
-"💎 **Nobre** — responsabilidade geral • <@&1379021805544804382>",
+"🌊 **Maresia** — segunda-feira — cargo <@&1379021994678288465>",
+"🏙️ **Grande** — terça-feira — cargo <@&1418691103397253322>",
+"🎅 **Santa** — quarta-feira — cargo <@&1379021888709464168>",
+"💎 **Nobre** — responsabilidade geral — cargo <@&1379021805544804382>",
 "",
 "> Cada cidade deve ter foco de **1 Resp. Líder + 1 Resp. Influ**.",
 "> Na **Cidade Nobre**, todos os responsáveis atuam juntos.",
@@ -735,12 +735,12 @@ await interaction.reply({
     const row = new ActionRowBuilder().addComponents(
   new ButtonBuilder()
   .setCustomId(`hier_set:${targetId}:${CONFIG.SLOTS.EVENING}`)
-  .setLabel("🌆 19:00 - 22:00")
+  .setLabel("19:00 - 22:00")
   .setStyle(ButtonStyle.Primary)
   .setDisabled(currentSlot === CONFIG.SLOTS.EVENING),
 new ButtonBuilder()
   .setCustomId(`hier_set:${targetId}:${CONFIG.SLOTS.DAWN}`)
-  .setLabel("🌌 23:00 - 02:00")
+  .setLabel("23:00 - 02:00")
   .setStyle(ButtonStyle.Primary)
   .setDisabled(currentSlot === CONFIG.SLOTS.DAWN),
       new ButtonBuilder()
