@@ -294,6 +294,14 @@ function safeNumber(value, fallback = 0) {
  return Number.isFinite(n) && n >= 0 ? n : fallback;
 }
 
+function resolveFiveMClients(data) {
+ const directClients = safeNumber(data?.Data?.clients, 0);
+ const selfReportedClients = safeNumber(data?.Data?.selfReportedClients, 0);
+ const playersLength = Array.isArray(data?.Data?.players) ? data.Data.players.length : 0;
+
+ return Math.max(directClients, selfReportedClients, playersLength);
+}
+
 function calculateDiff(current, previous) {
  if (typeof current !== 'number' || isNaN(current)) return { diff: 'N/A', pct: 'N/A', arrow: UI.NONE };
  if (typeof previous !== 'number' || isNaN(previous) || previous === 0) {
@@ -886,7 +894,8 @@ async function fetchCityStatus(city) {
      if (data?.Data) {
 const apiClients = safeNumber(data.Data.clients, 0);
 const selfReportedClients = safeNumber(data.Data.selfReportedClients, 0);
-const clients = apiClients + selfReportedClients;
+const playersLength = Array.isArray(data.Data.players) ? data.Data.players.length : 0;
+const clients = resolveFiveMClients(data);
 const maxClients = safeNumber(data.Data.sv_maxclients ?? data.Data.svMaxclients, 0);
 
 return {
@@ -895,8 +904,10 @@ return {
   emoji: city.emoji,
   clients,
   maxClients,
-        selfReportedClients,
-         online: true,
+selfReportedClients,
+apiClients,
+playersLength,
+ online: true,
          hostname: data.Data.hostname,
          discord: data.Data.vars?.["discord.gg"],
          projectName: data.Data.vars?.sv_projectName,
@@ -1107,7 +1118,7 @@ function formatOnlyCurrentLine(label, current, max, pct, index, yesterday = 0, c
 
  const statusEmoji = getStatusEmojiByYesterday(current, yesterday);
 
- return `${medal} **BR ${label.padEnd(8, " ")}** \n> \`${formatNumber(current)} / ${formatNumber(max)}\` players • **${pct}% da capacidade da cidade ocupada** ${statusEmoji}`;
+ return `${medal} **BR ${label.padEnd(8, " ")}** \n> \`${formatNumber(current)} / ${formatNumber(max)}\` players • **${pct}% da capacidade da cidade ocupada** ${statusEmoji}\n> Fonte: API clients \`${formatNumber(city?.apiClients || 0)}\` • selfReported \`${formatNumber(city?.selfReportedClients || 0)}\` • players[] \`${formatNumber(city?.playersLength || 0)}\``;
 }
 
 // ---------- EMBED BUILDER ----------
