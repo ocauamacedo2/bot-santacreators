@@ -885,10 +885,47 @@ function formatPrimePeakToday(value, time, currentSnapshot) {
 }
 
 // ---------- FIVEM API ----------
-async function fetchCityStatusFromDynamic(city) {
+async function getDynamicUrlsForCity(city) {
+ const urls = [...(city.dynamicUrls || [])];
+
  const fetchFn = await getFetch();
 
- for (const dynamicUrl of city.dynamicUrls || []) {
+ try {
+   const res = await fetchFn(city.url, {
+     method: "GET",
+     headers: {
+       "User-Agent": "Mozilla/5.0",
+       "Accept": "application/json",
+       "Cache-Control": "no-cache",
+       "Pragma": "no-cache",
+     },
+   });
+
+   if (res.ok) {
+     const json = await res.json().catch(() => null);
+     const endpoints = Array.isArray(json?.Data?.connectEndPoints)
+       ? json.Data.connectEndPoints
+       : [];
+
+     for (const endpoint of endpoints) {
+       if (!endpoint) continue;
+
+       urls.push(`http://${endpoint}/dynamic.json`);
+       urls.push(`https://${endpoint}/dynamic.json`);
+     }
+   }
+ } catch (err) {
+   console.error(`[FIVEM_RETENTION] Falha ao descobrir endpoint real de ${city.name}:`, err?.message || err);
+ }
+
+ return [...new Set(urls)];
+}
+
+async function fetchCityStatusFromDynamic(city) {
+ const fetchFn = await getFetch();
+ const dynamicUrls = await getDynamicUrlsForCity(city);
+
+ for (const dynamicUrl of dynamicUrls) {
    const controller = new AbortController();
    const timeout = setTimeout(() => controller.abort(), FIVEM_FETCH_TIMEOUT_MS);
 
@@ -999,7 +1036,16 @@ playersLength,
  } finally {
    clearTimeout(timeout);
  }
- return { key: city.key, name: city.name, emoji: city.emoji, clients: 0, maxClients: 0, selfReportedClients: 0, online: false };
+ return {
+ key: city.key,
+ name: city.name,
+ emoji: city.emoji,
+ clients: 0,
+ maxClients: 0,
+ selfReportedClients: 0,
+ online: false,
+ source: "failed_all_sources",
+};
 }
 async function fetchAllCities() {
  const results = await Promise.all(FIVEM_CITIES.map(fetchCityStatus));
@@ -1193,7 +1239,7 @@ function formatOnlyCurrentLine(label, current, max, pct, index, yesterday = 0, c
 
  const statusEmoji = getStatusEmojiByYesterday(current, yesterday);
 
- return `${medal} **BR ${label.padEnd(8, " ")}** \n> \`${formatNumber(current)} / ${formatNumber(max)}\` players • **${pct}% da capacidade da cidade ocupada** ${statusEmoji}`;
+ return `${medal} **BR ${label.padEnd(8, " ")}** \n> \`${formatNumber(current)} / ${formatNumber(max)}\` players • **${pct}% da capacidade da cidade ocupada** ${statusEmoji}\n> Fonte: \`${city?.source || "desconhecida"}\``;
 }
 
 // ---------- EMBED BUILDER ----------
