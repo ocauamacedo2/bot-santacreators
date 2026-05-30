@@ -1718,13 +1718,26 @@ if (
        return true;
      }
 
-     const edited = await editPanel(channel, { force: true });
-     
-     if (!edited) {
-       throw new Error("Não foi possível atualizar o painel. API lenta ou sem permissão.");
-     }
+if (interaction.customId === "fivem_retention_recreate_panel") {
+ const botId = client.user.id;
+ const deletedCount = await deleteAllRetentionPanelMessages(channel, botId);
+ const recreated = await editPanel(channel, { force: true });
 
-     await interaction.editReply("✅ Painel atualizado com sucesso!").catch(() => {});
+ if (!recreated) {
+   throw new Error("Painel antigo foi limpo, mas não consegui recriar agora. Tente novamente em alguns segundos.");
+ }
+
+ await interaction.editReply(`♻️ Painel recriado limpo com sucesso! Mensagens antigas removidas: ${deletedCount}`).catch(() => {});
+ return true;
+}
+
+const edited = await editPanel(channel, { force: true });
+     
+if (!edited) {
+  throw new Error("Não foi possível atualizar o painel. API lenta ou sem permissão.");
+}
+
+await interaction.editReply("✅ Painel atualizado com sucesso!").catch(() => {});
    } catch (e) {
      console.error("[FIVEM_RETENTION] Erro ao forçar atualização:", e);
      if (interaction.deferred || interaction.replied) {
