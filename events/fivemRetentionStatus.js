@@ -951,9 +951,11 @@ function isValidSnapshot(snapshot) {
 }
 
 async function getLastValidSnapshot() {
- return await HistoryModel.findOne({
+ const candidates = await HistoryModel.find({
    totalMaxClients: { $gt: 0 },
- }).sort({ timestamp: -1 }).lean();
+ }).sort({ timestamp: -1 }).limit(50).lean();
+
+ return candidates.find(isCompleteSnapshot) || candidates[0] || null;
 }
 
 function isCompleteSnapshot(snapshot) {
@@ -1092,8 +1094,17 @@ function getStatusEmojiByYesterday(current, previous) {
  return UI.STABLE;
 }
 
-function formatOnlyCurrentLine(label, current, max, pct, index, yesterday = 0) {
+function formatOnlyCurrentLine(label, current, max, pct, index, yesterday = 0, city = null) {
  const medal = index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : `${index + 1}.`;
+
+ if (city?.stale) {
+   return `${medal} **BR ${label.padEnd(8, " ")}**\n> ⚠️ API falhou agora. Mostrando último dado válido: \`${formatNumber(current)} / ${formatNumber(max)}\` players`;
+ }
+
+ if (!city?.online || max <= 0) {
+   return `${medal} **BR ${label.padEnd(8, " ")}**\n> ⚠️ API não retornou dados válidos agora. Não vou considerar como 0 real.`;
+ }
+
  const statusEmoji = getStatusEmojiByYesterday(current, yesterday);
 
  return `${medal} **BR ${label.padEnd(8, " ")}** \n> \`${formatNumber(current)} / ${formatNumber(max)}\` players • **${pct}% da capacidade da cidade ocupada** ${statusEmoji}`;
@@ -1188,14 +1199,15 @@ async function buildEmbeds(client, currentSnapshot) {
    .setDescription(
      sortedCurrent
        .map((item, index) => {
-         return formatOnlyCurrentLine(
-           item.current.name,
-           item.current.clients,
-           item.current.maxClients,
-           item.usage,
-           index,
-           item.yesterday
-         );
+return formatOnlyCurrentLine(
+  item.current.name,
+  item.current.clients,
+  item.current.maxClients,
+  item.usage,
+  index,
+  item.yesterday,
+  item.current
+);
        })
        .join("\n\n") +
      `\n\n${UI.SEP}\n` +
@@ -1247,10 +1259,20 @@ async function buildEmbeds(client, currentSnapshot) {
    lastWeek21h ||= { total: 0, cities: {} };
 
    const retentionData = FIVEM_CITIES.map(city => {
-     const t = today21h.cities?.[city.key]?.clients || 0;
-     const y = yesterday21h.cities?.[city.key]?.clients || 0;
-     const w = lastWeek21h.cities?.[city.key]?.clients || 0;
-     return { city, t, y, w, diffY: calculateDiff(t, y), diffW: calculateDiff(t, w) };
+const t = today21h.cities?.[city.key]?.clients || 0;
+const y = yesterday21h.cities?.[city.key]?.clients || 0;
+const w = lastWeek21h.cities?.[city.key]?.clients || 0;
+const hasToday21h = today21h.total > 0;
+
+return {
+  city,
+  t,
+  y,
+  w,
+  hasToday21h,
+  diffY: hasToday21h ? calculateDiff(t, y) : null,
+  diffW: hasToday21h ? calculateDiff(t, w) : null
+};
    }).sort((a,b) => b.t - a.t);
 
    const retentionEmbed = new EmbedBuilder()
@@ -1262,14 +1284,14 @@ async function buildEmbeds(client, currentSnapshot) {
          const medal = idx === 0 ? "🥇" : idx === 1 ? "🥈" : idx === 2 ? "🥉" : `${idx + 1}.`;
          return (
            `${medal} **BR ${item.city.name}**\n` +
-           `> **Ponto fixo das 21h:** \`${formatNumber(item.t)}\` players\n` +
-           `> **Vs Ontem:** ${formatDiff(item.diffY)}\n` +
-           `> **Vs Semana Passada:** ${formatDiff(item.diffW)}`
+          `> **Ponto fixo das 21h:** ${item.hasToday21h ? `\`${formatNumber(item.t)}\` players` : "`aguardando captura válida das 21h`"}\n` +
+`> **Vs Ontem:** ${item.hasToday21h ? formatDiff(item.diffY) : "não comparado ainda"}\n` +
+`> **Vs Semana Passada:** ${item.hasToday21h ? formatDiff(item.diffW) : "não comparado ainda"}`
          );
        }).join("\n\n") +
-       `\n\n**TOTAL GERAL ÀS 21:00:** \`${formatNumber(today21h.total)}\` players\n` +
-       `**Crescimento Diário:** ${formatDiff(calculateDiff(today21h.total, yesterday21h.total))}\n` +
-       `**Crescimento Semanal:** ${formatDiff(calculateDiff(today21h.total, lastWeek21h.total))}`
+       `\n\n**TOTAL GERAL ÀS 21:00:** ${today21h.total > 0 ? `\`${formatNumber(today21h.total)}\` players` : "`aguardando captura válida das 21h`"}\n` +
+`**Crescimento Diário:** ${today21h.total > 0 ? formatDiff(calculateDiff(today21h.total, yesterday21h.total)) : "não comparado ainda"}\n` +
+`**Crescimento Semanal:** ${today21h.total > 0 ? formatDiff(calculateDiff(today21h.total, lastWeek21h.total)) : "não comparado ainda"}`
      )
      .setFooter({ text: `Relatório de Retenção Nobre • 21:00h` });
    embeds.push(retentionEmbed);
@@ -1467,7 +1489,7 @@ const compWPrimePeaks = peaks[
 
    const stats = calculateDiff(p, pw);
    return { city, p, pw, stats };
- }).sort((a, b) => {
+}).sort((a, b) => {
    if (a.p === 0 && b.p > 0) return 1;
    if (b.p === 0 && a.p > 0) return -1;
    if (a.stats.pct === 'sem base') return 1;
@@ -1475,12 +1497,14 @@ const compWPrimePeaks = peaks[
    return b.stats.pct - a.stats.pct;
  });
 
+ const filteredPerformanceRanking = performanceRanking.filter(item => item.p > 0 || item.pw > 0);
+
  const perfEmbed = new EmbedBuilder()
    .setColor(0x0099ff)
    .setTitle("🏆 COPA DE DESEMPENHO — EVOLUÇÃO SEMANAL")
    .setDescription(
      `*Ranking baseado no crescimento % em relação ao pico do evento na semana passada*\n\n` +
-     performanceRanking.map((item, idx) => {
+     (filteredPerformanceRanking.length ? filteredPerformanceRanking : performanceRanking.slice(0, 1)).map((item, idx) => {
        const medal = idx === 0 ? "🔥" : idx === performanceRanking.length - 1 ? "⚠️" : "🔹";
        const trend = item.stats.pct > 0 ? "Melhorou" : (item.stats.pct < 0 ? "Caiu" : "Estável");
        
