@@ -901,11 +901,13 @@ async function getDynamicUrlsForCity(city) {
      },
    });
 
-   if (res.ok) {
+if (res.ok) {
      const json = await res.json().catch(() => null);
      const endpoints = Array.isArray(json?.Data?.connectEndPoints)
        ? json.Data.connectEndPoints
        : [];
+
+     console.log(`[FIVEM_RETENTION] Endpoints encontrados para ${city.name}:`, endpoints);
 
      for (const endpoint of endpoints) {
        if (!endpoint) continue;
@@ -968,8 +970,8 @@ async function fetchCityStatusFromDynamic(city) {
          dynamicUrl,
        };
      }
-   } catch (err) {
-     console.error(`[FIVEM_RETENTION] dynamic.json falhou em ${city.name}:`, err?.message || err);
+} catch (err) {
+     console.error(`[FIVEM_RETENTION] dynamic.json falhou em ${city.name} usando ${dynamicUrl}:`, err?.message || err);
    } finally {
      clearTimeout(timeout);
    }
