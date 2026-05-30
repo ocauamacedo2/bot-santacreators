@@ -634,13 +634,13 @@ if (!dayPeak.eventWindows) {
     }
 
     // Atualiza o pico exato das 21:00
-    if (isExact21hSnapshot(currentSnapshot)) {
-      if (dayPeak.exact21h.total !== currentSnapshot.totalClients) {
-        dayPeak.exact21h.total = currentSnapshot.totalClients || 0;
-        dayPeak.exact21h.cities = currentSnapshot.cities;
-        hasChange = true;
-      }
-    }
+if (isExact21hSnapshot(currentSnapshot) && isCompleteSnapshot(currentSnapshot)) {
+  if (dayPeak.exact21h.total !== currentSnapshot.totalClients) {
+    dayPeak.exact21h.total = currentSnapshot.totalClients || 0;
+    dayPeak.exact21h.cities = currentSnapshot.cities;
+    hasChange = true;
+  }
+}
 
     // 1. Atualização de Pico Geral (sempre no dia atual)
     if ((currentSnapshot.totalClients || 0) > (dayPeak.total.peak || 0)) {
@@ -954,6 +954,105 @@ async function getLastValidSnapshot() {
  return await HistoryModel.findOne({
    totalMaxClients: { $gt: 0 },
  }).sort({ timestamp: -1 }).lean();
+}
+
+function isCompleteSnapshot(snapshot) {
+ if (!snapshot?.cities) return false;
+
+ return FIVEM_CITIES.every((city) => {
+   const data = snapshot.cities?.[city.key];
+   return data?.online === true && safeNumber(data.clients, 0) > 0 && safeNumber(data.maxClients, 0) > 0;
+ });
+}
+
+function mergeSnapshotWithFallback(currentSnapshot, fallbackSnapshot) {
+ if (!currentSnapshot || !fallbackSnapshot) {
+   return {
+     snapshot: currentSnapshot,
+     usedFallback: false,
+   };
+ }
+
+ const mergedCities = {};
+ let usedFallback = false;
+
+ for (const city of FIVEM_CITIES) {
+   const currentCity = currentSnapshot.cities?.[city.key];
+   const fallbackCity = fallbackSnapshot.cities?.[city.key];
+
+   const currentIsValid =
+     currentCity?.online === true &&
+     safeNumber(currentCity.clients, 0) > 0 &&
+     safeNumber(currentCity.maxClients, 0) > 0;
+
+   if (currentIsValid) {
+     mergedCities[city.key] = currentCity;
+   } else if (fallbackCity) {
+     usedFallback = true;
+     mergedCities[city.key] = {
+       ...fallbackCity,
+       stale: true,
+       staleReason: "api_city_failed",
+       liveClientsFailed: safeNumber(currentCity?.clients, 0),
+       liveMaxClientsFailed: safeNumber(currentCity?.maxClients, 0),
+     };
+   } else {
+     mergedCities[city.key] = currentCity || {
+       key: city.key,
+       name: city.name,
+       emoji: city.emoji,
+       clients: 0,
+       maxClients: 0,
+       selfReportedClients: 0,
+       online: false,
+       stale: true,
+       staleReason: "api_city_failed_no_fallback",
+     };
+   }
+ }
+
+ const totalClients = Object.values(mergedCities).reduce((acc, city) => acc + safeNumber(city?.clients, 0), 0);
+ const totalMaxClients = Object.values(mergedCities).reduce((acc, city) => acc + safeNumber(city?.maxClients, 0), 0);
+
+ return {
+   snapshot: {
+     ...currentSnapshot,
+     cities: mergedCities,
+     totalClients,
+     totalMaxClients,
+     sourceStatus: usedFallback ? "partial_api_with_city_fallback" : "live_api_complete",
+   },
+   usedFallback,
+ };
+}
+
+async function createSafeCurrentSnapshot() {
+ const currentSnapshot = await createCurrentSnapshot();
+ const fallbackSnapshot = await getLastValidSnapshot();
+
+ if (!isValidSnapshot(currentSnapshot)) {
+   if (!fallbackSnapshot) {
+     return {
+       snapshot: null,
+       shouldPersist: false,
+       usedFallback: false,
+     };
+   }
+
+   return {
+     snapshot: fallbackSnapshot,
+     shouldPersist: false,
+     usedFallback: true,
+   };
+ }
+
+ const merged = mergeSnapshotWithFallback(currentSnapshot, fallbackSnapshot);
+
+ return {
+   snapshot: merged.snapshot,
+   shouldPersist: !merged.usedFallback && isCompleteSnapshot(merged.snapshot),
+   usedFallback: merged.usedFallback,
+ };
 }
 
 function getMinutesOfDayFromSnapshot(snapshot) {
@@ -1557,10 +1656,20 @@ async function ensureStickyMessage(channel) {
    if (!perms?.has(PermissionsBitField.Flags.EmbedLinks)) {
      throw new Error("[FIVEM_RETENTION] Bot sem permissão de Inserir Links Incorporados (Embed Links) no canal.");
    }
-   const currentSnapshot = await createCurrentSnapshot();
-   await addSnapshot(currentSnapshot);
-   await updateDailyPeaks(currentSnapshot);
-   const { embeds, row } = await buildEmbeds(channel.client, currentSnapshot);
+const safeSnapshot = await createSafeCurrentSnapshot();
+
+if (!safeSnapshot.snapshot) {
+ throw new Error("[FIVEM_RETENTION] Não consegui criar snapshot válido para criar o painel.");
+}
+
+const currentSnapshot = safeSnapshot.snapshot;
+
+if (safeSnapshot.shouldPersist) {
+ await addSnapshot(currentSnapshot);
+ await updateDailyPeaks(currentSnapshot);
+}
+
+const { embeds, row } = await buildEmbeds(channel.client, currentSnapshot);
    try {
   const embedGroups = packEmbedsForDiscord(embeds);
 const mainEmbeds = markEmbedGroupWithFooterTag(embedGroups[0] || [], FIVEM_RANK_MARKER_TAG);
@@ -1604,22 +1713,23 @@ async function editPanel(channel, options = {}) {
  });
  if (!sticky) return null;
 
-let currentSnapshot = await createCurrentSnapshot();
+const safeSnapshot = await createSafeCurrentSnapshot();
 
-if (!isValidSnapshot(currentSnapshot)) {
- const fallbackSnapshot = await getLastValidSnapshot();
-
- if (!fallbackSnapshot) {
-   console.warn("[FIVEM_RETENTION] Snapshot inválido e sem histórico válido para fallback.");
-   return null;
- }
-
- console.warn("[FIVEM_RETENTION] Snapshot inválido recebido da API. Usando último snapshot válido para evitar painel zerado.");
- currentSnapshot = fallbackSnapshot;
+if (!safeSnapshot.snapshot) {
+ console.warn("[FIVEM_RETENTION] Snapshot inválido e sem histórico válido para fallback.");
+ return null;
 }
 
-await addSnapshot(currentSnapshot);
-const hasNewPeak = await updateDailyPeaks(currentSnapshot);
+const currentSnapshot = safeSnapshot.snapshot;
+
+let hasNewPeak = false;
+
+if (safeSnapshot.shouldPersist) {
+ await addSnapshot(currentSnapshot);
+ hasNewPeak = await updateDailyPeaks(currentSnapshot);
+} else {
+ console.warn("[FIVEM_RETENTION] Snapshot parcial/fallback usado apenas para exibição. Histórico e picos não foram atualizados.");
+}
 
  // 🚀 Coleta sempre a cada 2min, mas edita o painel sem flood:
  // - normal: a cada 10min
