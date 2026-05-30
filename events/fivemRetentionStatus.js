@@ -295,11 +295,7 @@ function safeNumber(value, fallback = 0) {
 }
 
 function resolveFiveMClients(data) {
- const directClients = safeNumber(data?.Data?.clients, 0);
- const selfReportedClients = safeNumber(data?.Data?.selfReportedClients, 0);
- const playersLength = Array.isArray(data?.Data?.players) ? data.Data.players.length : 0;
-
- return Math.max(directClients, selfReportedClients, playersLength);
+ return safeNumber(data?.Data?.clients, 0);
 }
 
 function calculateDiff(current, previous) {
@@ -885,7 +881,12 @@ async function fetchCityStatus(city) {
    const res = await fetchFn(city.url, { 
      method: "GET", 
      signal: controller.signal,
-     headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }
+     headers: {
+  "User-Agent": "Mozilla/5.0",
+  "Accept": "application/json",
+  "Cache-Control": "no-cache",
+  "Pragma": "no-cache"
+}
    });
 
    clearTimeout(timeout);
@@ -895,7 +896,8 @@ async function fetchCityStatus(city) {
 const apiClients = safeNumber(data.Data.clients, 0);
 const selfReportedClients = safeNumber(data.Data.selfReportedClients, 0);
 const playersLength = Array.isArray(data.Data.players) ? data.Data.players.length : 0;
-const clients = resolveFiveMClients(data);
+
+const clients = apiClients;
 const maxClients = safeNumber(data.Data.sv_maxclients ?? data.Data.svMaxclients, 0);
 
 return {
@@ -1118,7 +1120,7 @@ function formatOnlyCurrentLine(label, current, max, pct, index, yesterday = 0, c
 
  const statusEmoji = getStatusEmojiByYesterday(current, yesterday);
 
- return `${medal} **BR ${label.padEnd(8, " ")}** \n> \`${formatNumber(current)} / ${formatNumber(max)}\` players • **${pct}% da capacidade da cidade ocupada** ${statusEmoji}\n> Fonte: API clients \`${formatNumber(city?.apiClients || 0)}\` • selfReported \`${formatNumber(city?.selfReportedClients || 0)}\` • players[] \`${formatNumber(city?.playersLength || 0)}\``;
+ return `${medal} **BR ${label.padEnd(8, " ")}** \n> \`${formatNumber(current)} / ${formatNumber(max)}\` players • **${pct}% da capacidade da cidade ocupada** ${statusEmoji}`;
 }
 
 // ---------- EMBED BUILDER ----------
@@ -1866,7 +1868,8 @@ if (
 if (interaction.customId === "fivem_retention_recreate_panel") {
  const botId = client.user.id;
  const deletedCount = await deleteAllRetentionPanelMessages(channel, botId);
- const recreated = await editPanel(channel, { force: true });
+ const recreated = await ensureStickyMessage(channel);
+await editPanel(channel, { force: true });
 
  if (!recreated) {
    throw new Error("Painel antigo foi limpo, mas não consegui recriar agora. Tente novamente em alguns segundos.");
