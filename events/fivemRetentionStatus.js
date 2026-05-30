@@ -76,16 +76,18 @@ const FIVEM_CITIES = [
    code: "ymkax5",
    url: "https://servers-frontend.fivem.net/api/servers/single/ymkax5",
    dynamicUrls: [
+     "http://45.40.99.253:30120/dynamic.json",
      "http://jogar.cidadesantarp.com/dynamic.json",
    ],
  },
-{
+ {
    key: "grande",
    name: "Grande",
    emoji: "🌆",
    code: "vre5mr",
    url: "https://servers-frontend.fivem.net/api/servers/single/vre5mr",
    dynamicUrls: [
+     "http://181.215.236.83:30120/dynamic.json",
      "http://jogar.cidadegrande.com/dynamic.json",
    ],
  },
@@ -96,6 +98,7 @@ const FIVEM_CITIES = [
    code: "ym86dj",
    url: "https://servers-frontend.fivem.net/api/servers/single/ym86dj",
    dynamicUrls: [
+     "http://172.84.94.92:30120/dynamic.json",
      "http://jogar.maresiarp.com/dynamic.json",
    ],
  },
