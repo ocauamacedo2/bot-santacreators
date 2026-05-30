@@ -886,7 +886,7 @@ async function fetchCityStatus(city) {
      if (data?.Data) {
 const apiClients = safeNumber(data.Data.clients, 0);
 const selfReportedClients = safeNumber(data.Data.selfReportedClients, 0);
-const clients = Math.max(apiClients, selfReportedClients);
+const clients = apiClients + selfReportedClients;
 const maxClients = safeNumber(data.Data.sv_maxclients ?? data.Data.svMaxclients, 0);
 
 return {
@@ -1440,14 +1440,60 @@ const effectivePeakData = currentEventWindow ? [
  embeds.push(primeEmbed);
 
  // Botão de atualização manual
- const row = new ActionRowBuilder().addComponents(
+const row = new ActionRowBuilder().addComponents(
    new ButtonBuilder()
      .setCustomId("fivem_retention_force_refresh")
      .setLabel("🔄 Forçar atualização")
-     .setStyle(ButtonStyle.Primary)
+     .setStyle(ButtonStyle.Primary),
+   new ButtonBuilder()
+     .setCustomId("fivem_retention_recreate_panel")
+     .setLabel("♻️ Recriar painel limpo")
+     .setStyle(ButtonStyle.Danger)
  );
 // TESTE MACEDO 123
  return { embeds, row };
+}
+
+
+
+async function deleteAllRetentionPanelMessages(channel, botId) {
+ const msgs = await channel.messages.fetch({ limit: 100 }).catch(() => null);
+ if (!msgs) return 0;
+
+ const panelMessages = msgs.filter(
+   (m) =>
+     m.author?.id === botId &&
+     m.embeds?.some((e) => {
+       const footer = e.footer?.text || "";
+       const title = e.title || "";
+
+       return (
+         footer.includes(FIVEM_RANK_MARKER_TAG) ||
+         footer.includes(FIVEM_CONT_MARKER_TAG) ||
+         title.includes("CENTRAL ANALÍTICA") ||
+         title.includes("STATUS EM TEMPO REAL") ||
+         title.includes("TRENDS") ||
+         title.includes("AUDITORIA DE RETENÇÃO") ||
+         title.includes("RETENÇÃO DO EVENTO") ||
+         title.includes("RECORDES") ||
+         title.includes("COPA DE DESEMPENHO") ||
+         title.includes("PRIME TIME")
+       );
+     })
+ );
+
+ for (const msg of panelMessages.values()) {
+   await msg.delete().catch(() => {});
+ }
+
+ const currentState = FIVEM_STATE.get(channel.id) || {};
+ FIVEM_STATE.set(channel.id, {
+   ...currentState,
+   messageId: null,
+   lastEditAt: 0,
+ });
+
+ return panelMessages.size;
 }
 // ---------- STICKY MESSAGE ----------
 async function cn2FindStickyMessage(channel, botId) {
@@ -1657,7 +1703,10 @@ export async function fivemRetentionStatusOnReady(client) {
 
 export async function fivemRetentionStatusHandleInteraction(interaction, client) {
  try {
-   if (!interaction.isButton?.() || interaction.customId !== "fivem_retention_force_refresh") return false;
+if (
+ !interaction.isButton?.() ||
+ !["fivem_retention_force_refresh", "fivem_retention_recreate_panel"].includes(interaction.customId)
+) return false;
 
    try {
      // Avisa o Discord que estamos processando (isso gera o "Thinking...")
