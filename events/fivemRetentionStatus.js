@@ -75,13 +75,19 @@ const FIVEM_CITIES = [
    emoji: "🏙️",
    code: "ymkax5",
    url: "https://servers-frontend.fivem.net/api/servers/single/ymkax5",
+   dynamicUrls: [
+     "http://jogar.cidadesantarp.com/dynamic.json",
+   ],
  },
- {
+{
    key: "grande",
    name: "Grande",
    emoji: "🌆",
    code: "vre5mr",
    url: "https://servers-frontend.fivem.net/api/servers/single/vre5mr",
+   dynamicUrls: [
+     "http://jogar.cidadegrande.com/dynamic.json",
+   ],
  },
  {
    key: "maresia",
@@ -89,6 +95,9 @@ const FIVEM_CITIES = [
    emoji: "🌊",
    code: "ym86dj",
    url: "https://servers-frontend.fivem.net/api/servers/single/ym86dj",
+   dynamicUrls: [
+     "http://jogar.maresiarp.com/dynamic.json",
+   ],
  },
  {
    key: "nobre",
@@ -96,6 +105,10 @@ const FIVEM_CITIES = [
    emoji: "👑",
    code: "vxz4gq",
    url: "https://servers-frontend.fivem.net/api/servers/single/vxz4gq",
+   dynamicUrls: [
+     "http://172.84.94.95:30120/dynamic.json",
+     "http://jogar.cidadenobre.com/dynamic.json",
+   ],
  },
 ];
 
@@ -872,7 +885,66 @@ function formatPrimePeakToday(value, time, currentSnapshot) {
 }
 
 // ---------- FIVEM API ----------
+async function fetchCityStatusFromDynamic(city) {
+ const fetchFn = await getFetch();
+
+ for (const dynamicUrl of city.dynamicUrls || []) {
+   const controller = new AbortController();
+   const timeout = setTimeout(() => controller.abort(), FIVEM_FETCH_TIMEOUT_MS);
+
+   try {
+     const res = await fetchFn(dynamicUrl, {
+       method: "GET",
+       signal: controller.signal,
+       headers: {
+         "User-Agent": "Mozilla/5.0",
+         "Accept": "application/json",
+         "Cache-Control": "no-cache",
+         "Pragma": "no-cache",
+       },
+     });
+
+     clearTimeout(timeout);
+
+     if (!res.ok) continue;
+
+     const data = await res.json().catch(() => null);
+
+     if (data && typeof data.clients !== "undefined" && typeof data.sv_maxclients !== "undefined") {
+       const clients = safeNumber(data.clients, 0);
+       const maxClients = safeNumber(data.sv_maxclients, 0);
+
+       if (clients <= 0 || maxClients <= 0) continue;
+
+       return {
+         key: city.key,
+         name: city.name,
+         emoji: city.emoji,
+         clients,
+         maxClients,
+         selfReportedClients: 0,
+         apiClients: clients,
+         playersLength: 0,
+         online: true,
+         hostname: data.hostname || city.name,
+         source: "dynamic.json",
+         dynamicUrl,
+       };
+     }
+   } catch (err) {
+     console.error(`[FIVEM_RETENTION] dynamic.json falhou em ${city.name}:`, err?.message || err);
+   } finally {
+     clearTimeout(timeout);
+   }
+ }
+
+ return null;
+}
+
 async function fetchCityStatus(city) {
+ const dynamicStatus = await fetchCityStatusFromDynamic(city);
+ if (dynamicStatus) return dynamicStatus;
+
  const fetchFn = await getFetch();
  const controller = new AbortController();
  const timeout = setTimeout(() => controller.abort(), FIVEM_FETCH_TIMEOUT_MS);
@@ -911,6 +983,7 @@ apiClients,
 playersLength,
  online: true,
          hostname: data.Data.hostname,
+         source: "cfx_fallback",
          discord: data.Data.vars?.["discord.gg"],
          projectName: data.Data.vars?.sv_projectName,
          banner: data.Data.vars?.banner_detail,
