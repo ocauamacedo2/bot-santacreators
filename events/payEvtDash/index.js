@@ -131,7 +131,11 @@ function saveJSON(file, data) {
 }
 
 function loadState() {
-  return loadJSON(STATE_PATH, { dashboardMsgId: null, lastFingerprint: "" });
+  return loadJSON(STATE_PATH, {
+    dashboardMsgId: null,
+    lastFingerprint: "",
+    lastPeriodKey: "",
+  });
 }
 
 function saveState(s) {
@@ -768,7 +772,14 @@ const lastKey = periodKeyFromDateSP(addDaysUTC(new Date(`${currentWk}T12:00:00Z`
     chart: { payData, evtData }
   });
 
-  if (st.lastFingerprint === fingerprint && reason !== "manual") return;
+  const periodChanged = st.lastPeriodKey && st.lastPeriodKey !== thisKey;
+
+  if (periodChanged) {
+    CACHE.payload = null;
+    st.lastFingerprint = "";
+  }
+
+  if (st.lastFingerprint === fingerprint && reason !== "manual" && !periodChanged) return;
 
   // Build Chart
   let files = [];
@@ -830,6 +841,7 @@ const row = new ActionRowBuilder().addComponents(
   if (msg) {
     st.dashboardMsgId = msg.id;
     st.lastFingerprint = fingerprint;
+    st.lastPeriodKey = thisKey;
     saveState(st);
   }
 }
@@ -872,8 +884,22 @@ export async function payEvtDashHandleMessage(message, client) {
     return false;
   }
 
-  if (message.content === "!pevdashrefresh") {
+  const content = String(message.content || "").trim().toLowerCase();
+
+  if (
+    content === "!pevdashrefresh" ||
+    content === "!pevdashrefresh" ||
+    content === "!pevdashrefresh" ||
+    content === "!pevdash" ||
+    content === "!pevrefresh"
+  ) {
     await message.reply("🔄 Atualizando...");
+    CACHE.payload = null;
+
+    const st = loadState();
+    st.lastFingerprint = "";
+    saveState(st);
+
     await safeUpdate(client, "manual");
     return true;
   }
