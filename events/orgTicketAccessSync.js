@@ -22,6 +22,15 @@ const ORG_TICKET_CATEGORY_IDS = [
   '1482874296685695118',
 ];
 
+const ROLE_SEM_WL_ID = '1430984036972494908';
+const ROLE_LIDERES_ID = '1353858422063239310';
+const ROLE_CIDADAO_ID = '1262978759922028575';
+
+const USERS_SEMPRE_PODEM = [
+  '660311795327828008',
+  '1422203191214477406',
+];
+
 const USERS_SEMPRE_PODEM = [
   '660311795327828008',
   '1422203191214477406',
@@ -341,6 +350,39 @@ async function getAuditExecutor(guild, targetId) {
   return entry?.executor || null;
 }
 
+async function applyOrgLeaderBaseRoles(member) {
+  const changes = [];
+
+  try {
+    if (member.roles.cache.has(ROLE_SEM_WL_ID)) {
+      await member.roles.remove(ROLE_SEM_WL_ID, 'OrgTicketAccessSync: recebeu cargo de org com ticket');
+      changes.push('removeu SEM WL');
+    }
+
+    const rolesToAdd = [];
+
+    if (!member.roles.cache.has(ROLE_LIDERES_ID)) {
+      rolesToAdd.push(ROLE_LIDERES_ID);
+      changes.push('setou Líderes');
+    }
+
+    if (!member.roles.cache.has(ROLE_CIDADAO_ID)) {
+      rolesToAdd.push(ROLE_CIDADAO_ID);
+      changes.push('setou Cidadão');
+    }
+
+    if (rolesToAdd.length > 0) {
+      await member.roles.add(rolesToAdd, 'OrgTicketAccessSync: recebeu cargo de org com ticket');
+    }
+
+    return changes.length > 0
+      ? changes.join(', ')
+      : 'membro já estava com os cargos base corretos';
+  } catch (error) {
+    return `não consegui ajustar cargos base: ${error.message}`;
+  }
+}
+
 async function sendOrgAccessLog({
   guild,
   action,
@@ -425,6 +467,8 @@ async function applyTicketPermission({ member, role, action, executor = null, so
         reason: `OrgTicketAccessSync: cargo ${role.name} adicionado`,
       });
 
+      const baseRolesResult = await applyOrgLeaderBaseRoles(member);
+
       rememberSystemAccess({
         guildId: guild.id,
         channelId: channel.id,
@@ -441,7 +485,7 @@ async function applyTicketPermission({ member, role, action, executor = null, so
         executor,
         source,
         success: true,
-        reason: match.reason,
+        reason: `${match.reason} Cargos base: ${baseRolesResult}.`,
         score: match.score,
       });
 
