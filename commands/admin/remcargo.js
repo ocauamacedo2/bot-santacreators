@@ -15,6 +15,7 @@
 import { EmbedBuilder, Collection, AuditLogEvent } from 'discord.js';
 import dotenv from 'dotenv';
 import { resolveLogChannel } from '../../events/channelResolver.js';
+import { syncOrgTicketAccessForRoleChange, orgTicketAccessHandleInteraction } from '../../events/orgTicketAccessSync.js';
 dotenv.config();
 
 /* ==========================
@@ -617,6 +618,14 @@ async function execute(message, args) {
 
     await targetMember.roles.remove(role, `!remcargo por ${message.author.tag}`);
 
+    await syncOrgTicketAccessForRoleChange({
+      member: targetMember,
+      role,
+      action: 'remove',
+      executor: message.author,
+      source: '!remcargo',
+    });
+
     const embChat = singleEmbed({
       executorMember: message.member,
       targetMember,
@@ -850,6 +859,8 @@ export function installRoleGuardian(client) {
  * Processa o botão de reversão do Anti-Raid
  */
 export async function remcargoHandleInteraction(interaction, client) {
+  if (await orgTicketAccessHandleInteraction(interaction)) return true;
+
   if (!interaction.isButton()) return false;
   if (!interaction.customId.startsWith('antiraid_revert:')) return false;
 

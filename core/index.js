@@ -426,6 +426,7 @@ import { setupAntiFloodProtector } from "../events/antiFloodProtector.js";
 import setupProtecaoBotsDeletarCanais from "../events/protecaoBotsDeletarCanais.js";
 import { installMessageGuardian } from "../events/messageGuardian.js";
 import { installServerConfigGuardian } from "../events/serverConfigGuardian.js";
+import { installOrgTicketAccessSync } from "../events/orgTicketAccessSync.js";
 
 // =====================================================
 // Express + Mongo
@@ -526,6 +527,7 @@ const setupEventHandlers = () => {
 
   setupSyncCargos(client);
   installRoleGuardian(client);
+  installOrgTicketAccessSync(client);
   setupSortChannels(client);
   setupTicketRenamer(client);
   setupIaChatAuto(client);

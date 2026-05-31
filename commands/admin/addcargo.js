@@ -1,5 +1,6 @@
 import { EmbedBuilder } from 'discord.js';
 import dotenv from 'dotenv';
+import { syncOrgTicketAccessForRoleChange } from '../../events/orgTicketAccessSync.js';
 
 dotenv.config();
 
@@ -161,6 +162,14 @@ async function execute(message, args) {
   for (const member of members.values()) {
     try {
       await member.roles.add(role);
+
+      await syncOrgTicketAccessForRoleChange({
+        member,
+        role,
+        action: 'add',
+        executor: message.author,
+        source: '!addcargo',
+      });
     } catch (error) {
       console.error(`Erro ao adicionar cargo a ${member.user.tag}:`, error);
       return message.channel.send({

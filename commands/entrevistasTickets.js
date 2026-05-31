@@ -16,6 +16,7 @@ import {
   OverwriteType,
 } from 'discord.js';
 import { resolveLogChannel } from '../events/channelResolver.js';
+import { logManualTicketAccessChange } from '../events/orgTicketAccessSync.js';
 
 export default function createEntrevistasTickets({ client, Transcript }) {
   ///!ENTREVISTA
@@ -1173,6 +1174,12 @@ if (interaction.isModalSubmit() && interaction.customId === 'modal_registro_lide
           AttachFiles: true
         });
 
+        await logManualTicketAccessChange({
+          interaction,
+          targetMember: membro,
+          action: 'add',
+        });
+
         await interaction.reply({ content: `<@${id}> adicionado com sucesso ao ticket.`, flags: 64 });
       } catch (e) {
         await interaction.reply({ content: `Erro ao adicionar: ${e.message}`, flags: 64 });
@@ -1192,7 +1199,18 @@ if (interaction.isModalSubmit() && interaction.customId === 'modal_registro_lide
           return true;
         }
 
+        const membro = await interaction.guild.members.fetch(id).catch(() => null);
+
         await channel.permissionOverwrites.delete(id);
+
+        if (membro) {
+          await logManualTicketAccessChange({
+            interaction,
+            targetMember: membro,
+            action: 'remove',
+          });
+        }
+
         await interaction.reply({ content: `<@${id}> removido com sucesso do ticket.`, flags: 64 });
       } catch (e) {
         await interaction.reply({ content: `Erro ao remover: ${e.message}`, flags: 64 });
