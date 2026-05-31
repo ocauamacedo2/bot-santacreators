@@ -203,8 +203,20 @@ function periodKeyFromDateSP(date) {
 function labelFromPeriodKey(key) {
   try {
     const [Y, M, D] = key.split("-").map(Number);
-    const fake = new Date(new Date(Date.UTC(Y, M - 1, D)).toLocaleString("en-US", { timeZone: TZ }));
-    return periodKeyFromDateSP(fake).label;
+
+    if (!Number.isFinite(Y) || !Number.isFinite(M) || !Number.isFinite(D)) {
+      return key;
+    }
+
+    const sundayUTC = new Date(Date.UTC(Y, M - 1, D));
+    const saturdayUTC = addDaysUTC(sundayUTC, 6);
+
+    const sDay = pad2(sundayUTC.getUTCDate());
+    const sMon = pad2(sundayUTC.getUTCMonth() + 1);
+    const eDay = pad2(saturdayUTC.getUTCDate());
+    const eMon = pad2(saturdayUTC.getUTCMonth() + 1);
+
+    return sMon === eMon ? `${sDay}-${eDay}/${eMon}` : `${sDay}/${sMon}-${eDay}/${eMon}`;
   } catch {
     return key;
   }
