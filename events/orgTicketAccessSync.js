@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import path from 'node:path';
+
 import {
   AuditLogEvent,
   ChannelType,
@@ -57,7 +60,71 @@ const IGNORE_ROLE_NAMES = [
 
 const recentActions = new Map();
 
+const ORG_ACCESS_STORAGE = path.resolve(process.cwd(), 'data', 'org_ticket_access_sync.json');
+
+function loadOrgAccessState() {
+  try {
+    if (!fs.existsSync(ORG_ACCESS_STORAGE)) return {};
+    const raw = fs.readFileSync(ORG_ACCESS_STORAGE, 'utf8');
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveOrgAccessState(state) {
+  try {
+    const dir = path.dirname(ORG_ACCESS_STORAGE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(ORG_ACCESS_STORAGE, JSON.stringify(state, null, 2));
+  } catch {}
+}
+
+function rememberSystemAccess({ guildId, channelId, memberId, roleId }) {
+  const state = loadOrgAccessState();
+
+  state[guildId] ??= {};
+  state[guildId][channelId] ??= {};
+  state[guildId][channelId][memberId] ??= [];
+
+  if (!state[guildId][channelId][memberId].includes(roleId)) {
+    state[guildId][channelId][memberId].push(roleId);
+  }
+
+  saveOrgAccessState(state);
+}
+
+function forgetSystemAccess({ guildId, channelId, memberId, roleId }) {
+  const state = loadOrgAccessState();
+
+  const list = state?.[guildId]?.[channelId]?.[memberId];
+  if (!Array.isArray(list)) return;
+
+  state[guildId][channelId][memberId] = list.filter(id => id !== roleId);
+
+  if (state[guildId][channelId][memberId].length === 0) {
+    delete state[guildId][channelId][memberId];
+  }
+
+  if (Object.keys(state[guildId][channelId] || {}).length === 0) {
+    delete state[guildId][channelId];
+  }
+
+  if (Object.keys(state[guildId] || {}).length === 0) {
+    delete state[guildId];
+  }
+
+  saveOrgAccessState(state);
+}
+
+function getRememberedMemberChannelRoles({ guildId, channelId, memberId }) {
+  const state = loadOrgAccessState();
+  return state?.[guildId]?.[channelId]?.[memberId] || [];
+}
+
 function normalizeName(value) {
+
+    
   return String(value || '')
     .normalize('NFKC')
     .normalize('NFD')
@@ -100,6 +167,8 @@ function levenshtein(a, b) {
 
   return matrix[b.length][a.length];
 }
+
+
 
 function similarity(a, b) {
   const na = normalizeName(a);
@@ -337,22 +406,10 @@ async function applyTicketPermission({ member, role, action, executor = null, so
   const channel = match.channel;
 
   if (!channel) {
-    await sendOrgAccessLog({
-      guild,
-      action,
-      member,
-      role,
-      channel: null,
-      executor,
-      source,
-      success: false,
-      reason: match.reason,
-      score: match.score,
-    });
-
     return {
       success: false,
       channel: null,
+      silent: true,
       reason: match.reason,
     };
   }
@@ -366,6 +423,13 @@ async function applyTicketPermission({ member, role, action, executor = null, so
         AttachFiles: true,
       }, {
         reason: `OrgTicketAccessSync: cargo ${role.name} adicionado`,
+      });
+
+      rememberSystemAccess({
+        guildId: guild.id,
+        channelId: channel.id,
+        memberId: member.id,
+        roleId: role.id,
       });
 
       await sendOrgAccessLog({
@@ -387,8 +451,32 @@ async function applyTicketPermission({ member, role, action, executor = null, so
     if (action === 'remove') {
       const overwrite = channel.permissionOverwrites.cache.get(member.id);
 
-      if (overwrite) {
+      forgetSystemAccess({
+        guildId: guild.id,
+        channelId: channel.id,
+        memberId: member.id,
+        roleId: role.id,
+      });
+
+      const remainingRoleIds = getRememberedMemberChannelRoles({
+        guildId: guild.id,
+        channelId: channel.id,
+        memberId: member.id,
+      });
+
+      const stillHasAnotherAccessRole = remainingRoleIds.some(roleId => member.roles.cache.has(roleId));
+
+      if (overwrite && !stillHasAnotherAccessRole) {
         await channel.permissionOverwrites.delete(member.id, `OrgTicketAccessSync: cargo ${role.name} removido`);
+      }
+
+      if (!overwrite) {
+        return {
+          success: false,
+          channel,
+          silent: true,
+          reason: 'Usuário não tinha permissão específica nesse canal.',
+        };
       }
 
       await sendOrgAccessLog({
@@ -400,9 +488,9 @@ async function applyTicketPermission({ member, role, action, executor = null, so
         executor,
         source,
         success: true,
-        reason: overwrite
-          ? `${match.reason} Permissão específica removida.`
-          : `${match.reason} Usuário não tinha overwrite específico no canal.`,
+        reason: stillHasAnotherAccessRole
+          ? `${match.reason} Usuário ainda possui outro cargo que mantém acesso ao mesmo canal.`
+          : `${match.reason} Permissão específica removida.`,
         score: match.score,
       });
 
@@ -454,7 +542,81 @@ export async function syncOrgTicketAccessForRoleChange({
   });
 }
 
+async function cleanRememberedOrgAccess(client) {
+  const state = loadOrgAccessState();
+
+  for (const [guildId, channels] of Object.entries(state)) {
+    const guild = client.guilds.cache.get(guildId);
+    if (!guild) continue;
+
+    for (const [channelId, members] of Object.entries(channels)) {
+      const channel = await guild.channels.fetch(channelId).catch(() => null);
+      if (!channel || channel.type !== ChannelType.GuildText) continue;
+
+      for (const [memberId, roleIds] of Object.entries(members)) {
+        const member = await guild.members.fetch(memberId).catch(() => null);
+
+        if (!member) {
+          await channel.permissionOverwrites
+            .delete(memberId, 'OrgTicketAccessSync: membro saiu do servidor')
+            .catch(() => {});
+
+          delete state[guildId][channelId][memberId];
+          continue;
+        }
+
+        const stillHasRole = Array.isArray(roleIds) && roleIds.some(roleId => member.roles.cache.has(roleId));
+
+        if (!stillHasRole) {
+          const overwrite = channel.permissionOverwrites.cache.get(memberId);
+
+          if (overwrite) {
+            await channel.permissionOverwrites
+              .delete(memberId, 'OrgTicketAccessSync: limpeza automática sem cargo necessário')
+              .catch(() => {});
+
+            await sendOrgAccessLog({
+              guild,
+              action: 'remove',
+              member,
+              role: null,
+              channel,
+              executor: client.user,
+              source: 'Limpeza automática',
+              success: true,
+              reason: 'Usuário estava com acesso automático salvo, mas não possui mais nenhum cargo necessário para este canal.',
+              score: null,
+            });
+          }
+
+          delete state[guildId][channelId][memberId];
+        }
+      }
+
+      if (Object.keys(state[guildId][channelId] || {}).length === 0) {
+        delete state[guildId][channelId];
+      }
+    }
+
+    if (Object.keys(state[guildId] || {}).length === 0) {
+      delete state[guildId];
+    }
+  }
+
+  saveOrgAccessState(state);
+}
+
 export function installOrgTicketAccessSync(client) {
+  cleanRememberedOrgAccess(client).catch(error => {
+    console.error('[ORG_TICKET_ACCESS_SYNC] Erro na limpeza inicial:', error);
+  });
+
+  setInterval(() => {
+    cleanRememberedOrgAccess(client).catch(error => {
+      console.error('[ORG_TICKET_ACCESS_SYNC] Erro na limpeza automática:', error);
+    });
+  }, 10 * 60 * 1000);
+
   client.on('guildMemberUpdate', async (oldMember, newMember) => {
     try {
       const oldRoles = new Set(oldMember.roles.cache.keys());
