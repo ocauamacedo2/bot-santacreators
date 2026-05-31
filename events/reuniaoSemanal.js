@@ -152,11 +152,19 @@ const TIME_LOCAL = (() => {
     const sunday = startOfDaySP(addDays(now, -dow));
     return sunday.toISOString().slice(0, 10);
   }
-  return { getCurrentWeekKey, nowInSP };
+  function getPreviousWeekKey() {
+    const currentWeekKey = getCurrentWeekKey();
+    const [year, month, day] = currentWeekKey.split("-").map(Number);
+    const currentSunday = new Date(Date.UTC(year, month - 1, day));
+    const previousSunday = addDays(currentSunday, -7);
+    return previousSunday.toISOString().slice(0, 10);
+  }
+
+  return { getCurrentWeekKey, getPreviousWeekKey, nowInSP };
 })();
 
-async function aggregateData(guild) {
-  const wk = TIME_LOCAL.getCurrentWeekKey();
+async function aggregateData(guild, forcedWeekKey = null) {
+  const wk = forcedWeekKey || TIME_LOCAL.getCurrentWeekKey();
   
   console.log(`[ReuniaoSemanal] Buscando dados para semana: ${wk}`);
 
@@ -535,7 +543,8 @@ function buildAdminRows() {
     ),
     new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId("reuniao_publish").setLabel("✅ Publicar & Aplicar Cargos").setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId("reuniao_publish_no_roles").setLabel("📢 Publicar (Sem Cargos)").setStyle(ButtonStyle.Primary), // ✅ NOVO
+      new ButtonBuilder().setCustomId("reuniao_publish_previous_week").setLabel("↩️ Publicar Semana Anterior").setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId("reuniao_publish_no_roles").setLabel("📢 Publicar (Sem Cargos)").setStyle(ButtonStyle.Primary),
       new ButtonBuilder().setCustomId("reuniao_force_roles").setLabel("⚡ Forçar Set de Cargos").setStyle(ButtonStyle.Danger)
     )
   ];
@@ -833,7 +842,94 @@ export async function reuniaoSemanalHandleInteraction(interaction, client) {
     await interaction.editReply({ content: finalLogMessage });
     return true;
   }
+  if (interaction.customId === "reuniao_publish_previous_week") {
+    await interaction.deferReply({ ephemeral: true });
 
+    const state = loadState();
+    const previousWeekKey = TIME_LOCAL.getPreviousWeekKey();
+
+    state.previousWeekPublished = state.previousWeekPublished || {};
+
+    if (state.previousWeekPublished[previousWeekKey]) {
+      await interaction.editReply({
+        content: `⚠️ A semana anterior \`${previousWeekKey}\` já foi publicada por esse botão.\nSe precisar refazer mesmo assim, use o botão normal ou limpe essa chave no arquivo de state.`
+      });
+      return true;
+    }
+
+    const data = await aggregateData(interaction.guild, previousWeekKey);
+    const winners = calculateWinners(data);
+    const logs = await applyRoles(interaction.guild, winners, state);
+
+    const registrarUser = interaction.user;
+    const winnerRecords = [
+      { winner: winners.winnerGeral, motivo: "Creator Destaque" },
+      { winner: winners.winnerManager, motivo: "Master Manager" },
+      { winner: winners.winnerSocial, motivo: "Master Eventos" }
+    ];
+
+    let vipLogs = [];
+
+    for (const record of winnerRecords) {
+      if (record.winner && record.winner.id) {
+        try {
+          const member = await interaction.guild.members.fetch(record.winner.id);
+          const nomeEquipe = `${member.displayName} | ${member.id}`;
+
+          await createVipRecordProgrammatically(client, {
+            registrarUser: registrarUser,
+            beneficiarioRaw: record.winner.id,
+            tipoRaw: "vipevento2",
+            cidadeRaw: "nobre",
+            motivoRegistro: `${record.motivo} | Semana anterior ${previousWeekKey}`,
+            nomeEquipe: nomeEquipe
+          });
+
+          vipLogs.push(`- Registro VIP para ${record.motivo}: <@${record.winner.id}>`);
+        } catch (e) {
+          console.error(`[ReuniaoSemanal] Falha ao registrar VIP para ${record.motivo}:`, e);
+          vipLogs.push(`- ❌ Falha ao registrar VIP para ${record.motivo}`);
+        }
+      }
+    }
+
+    let publicMessageSent = false;
+    let publicMessageError = "";
+
+    try {
+      const publicChannel = await client.channels.fetch(PUBLIC_CHANNEL_ID).catch(() => null);
+
+      if (publicChannel) {
+        const publicEmbed = await buildPublicEmbed(state, data, winners, interaction.guild);
+        await publicChannel.send({
+          content: `@everyone Resumo da Reunião Semanal — Semana anterior \`${previousWeekKey}\`:`,
+          embeds: [publicEmbed]
+        });
+
+        publicMessageSent = true;
+      } else {
+        publicMessageError = "Canal público não encontrado.";
+      }
+    } catch (e) {
+      console.error("[ReuniaoSemanal] Erro ao enviar mensagem pública da semana anterior:", e);
+      publicMessageError = e.message;
+    }
+
+    state.previousWeekPublished[previousWeekKey] = {
+      at: Date.now(),
+      by: interaction.user.id
+    };
+    saveState(state);
+
+    const finalLogMessage = `↩️ **Semana anterior publicada!**\n\n` +
+      `📅 **Semana recuperada:** \`${previousWeekKey}\`\n\n` +
+      `📜 **Logs de Cargos:**\n${logs.join("\n") || "Nenhuma alteração."}\n\n` +
+      `💎 **Registros de Premiação:**\n${vipLogs.join("\n") || "Nenhum prêmio registrado."}\n\n` +
+      `${publicMessageSent ? "📢 Resumo enviado no canal público." : `⚠️ **Falha ao enviar resumo no canal público.**\n> Motivo: ${publicMessageError}`}`;
+
+    await interaction.editReply({ content: finalLogMessage });
+    return true;
+  }
 
   if (interaction.customId === "reuniao_force_roles") {
     await interaction.deferReply({ ephemeral: true });
