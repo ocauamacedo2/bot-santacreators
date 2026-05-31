@@ -585,27 +585,66 @@ async function updateAdminPanel(client) {
   }
 }
 
+async function removeRewardRoleFromEveryoneExcept(guild, roleId, keepUserId, roleName, log) {
+  try {
+    const role = guild.roles.cache.get(roleId);
+    if (!role) {
+      log.push(`⚠️ Cargo **${roleName}** não encontrado no servidor.`);
+      return;
+    }
+
+    const membersWithRole = role.members;
+
+    for (const member of membersWithRole.values()) {
+      if (!member?.id) continue;
+
+      if (keepUserId && String(member.id) === String(keepUserId)) {
+        log.push(`🔒 Mantido **${roleName}** em <@${member.id}> porque é o vencedor atual.`);
+        continue;
+      }
+
+      await member.roles.remove(roleId).catch((e) => {
+        console.error(`[ReuniaoSemanal] Falha ao remover ${roleName} de ${member.id}:`, e);
+      });
+
+      log.push(`🔻 Removido **${roleName}** de <@${member.id}>`);
+    }
+  } catch (e) {
+    console.error(`[ReuniaoSemanal] Erro ao limpar cargo ${roleName}:`, e);
+    log.push(`❌ Erro ao limpar cargo **${roleName}**.`);
+  }
+}
+
 async function applyRoles(guild, winners, state) {
   const log = [];
-  
-  if (state.lastWinners) {
-    const oldGeral = state.lastWinners.geral;
-    const oldMgr = state.lastWinners.manager;
-    const oldSoc = state.lastWinners.social;
 
-    const remove = async (uid, roleId, name) => {
-      if (!uid) return;
-      const m = await guild.members.fetch(uid).catch(() => null);
-      if (m) {
-        await m.roles.remove(roleId).catch(() => {});
-        log.push(`🔻 Removido **${name}** de <@${uid}>`);
-      }
-    };
+  await guild.members.fetch().catch((e) => {
+    console.error("[ReuniaoSemanal] Falha ao carregar membros para limpar cargos antigos:", e);
+  });
 
-    await remove(oldGeral, ROLES_REWARD.CREATOR_DESTAQUE, "Creator Destaque");
-    await remove(oldMgr, ROLES_REWARD.MASTER_MANAGER, "Master Manager");
-    await remove(oldSoc, ROLES_REWARD.MASTER_EVENTOS, "Master Eventos");
-  }
+  await removeRewardRoleFromEveryoneExcept(
+    guild,
+    ROLES_REWARD.CREATOR_DESTAQUE,
+    winners.winnerGeral?.id || null,
+    "Creator Destaque",
+    log
+  );
+
+  await removeRewardRoleFromEveryoneExcept(
+    guild,
+    ROLES_REWARD.MASTER_MANAGER,
+    winners.winnerManager?.id || null,
+    "Master Manager",
+    log
+  );
+
+  await removeRewardRoleFromEveryoneExcept(
+    guild,
+    ROLES_REWARD.MASTER_EVENTOS,
+    winners.winnerSocial?.id || null,
+    "Master Eventos",
+    log
+  );
 
   const add = async (w, roleId, name) => {
     if (!w?.id) return;
