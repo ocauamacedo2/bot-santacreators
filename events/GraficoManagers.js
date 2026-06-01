@@ -65,6 +65,38 @@ const CHART_WEEKS = 4;
 // Meta semanal
 const WEEKLY_GOAL = 40;
 
+// ✅ Grupos de cargos prioritários para bater meta
+const GM_PRIORITY_GROUPS = [
+  {
+    key: "managers",
+    title: "👥 EQUIPE MANAGERS",
+    goal: 8,
+    roleIds: [
+      "1392678638176043029", // Equipe Manager
+      "1388976155830255697", // Manager Creator
+    ],
+  },
+  {
+    key: "coord_mkt",
+    title: "🎯 COORDENAÇÃO + MKT CREATOR",
+    goal: 4,
+    roleIds: [
+      "1282119104576098314", // MKT Creators
+      "1388976094920704141", // Social Medias
+      "1388975939161161728", // Gestor Creator
+    ],
+  },
+  {
+    key: "responsaveis",
+    title: "🛡️ RESPONSÁVEIS",
+    goal: 6,
+    roleIds: [
+      "1352407252216184833", // Resp Lider
+      "1262262852949905409", // Resp Influ
+      "1352408327983861844", // Resp. Creators
+    ],
+  },
+];
 
 
 // Botão ID
@@ -230,6 +262,51 @@ function pctDiff(cur, prev) {
   const raw = ((cur - prev) / prev) * 100;
   const sign = raw >= 0 ? "+" : "-";
   return { pct: Math.abs(raw), sign };
+}
+
+function formatSignedPct(cur, prev) {
+  const { pct, sign } = pctDiff(cur, prev);
+  const emoji = sign === "+" ? "🟢" : sign === "-" ? "🔴" : "⚪";
+  return `${emoji} **${sign}${pct.toFixed(1)}%**`;
+}
+
+function getTrendText(cur, prev) {
+  cur = safeNum(cur);
+  prev = safeNum(prev);
+
+  if (prev <= 0 && cur > 0) return "🟢 Evolução positiva em relação à semana passada.";
+  if (cur > prev) return "🟢 Subiu em relação à semana passada.";
+  if (cur < prev) return "🔴 Caiu em relação à semana passada.";
+  return "⚪ Mesmo resultado da semana passada.";
+}
+
+function getGoalVsPreviousText(cur, prev) {
+  cur = safeNum(cur);
+  prev = safeNum(prev);
+
+  const goalOk = cur >= WEEKLY_GOAL;
+  const trendOk = cur >= prev;
+
+  if (goalOk && trendOk) return "✅ Meta batida e evolução positiva/estável contra a semana anterior.";
+  if (goalOk && !trendOk) return "⚠️ Meta batida, porém abaixo da semana anterior.";
+  if (!goalOk && trendOk) return "🟡 Ainda não bateu a meta, mas evoluiu contra a semana anterior.";
+  return "🔴 Abaixo da meta e abaixo da semana anterior.";
+}
+
+function buildPriorityGroupText({ group, currentBucket, totalWeek }) {
+  const ids = group.roleIds.map(String);
+  const total = ids.reduce((acc, id) => acc + safeNum(currentBucket?.[id] || 0), 0);
+  const pctWeek = totalWeek > 0 ? ((total / totalWeek) * 100) : 0;
+  const pctGoal = group.goal > 0 ? Math.min(999, (total / group.goal) * 100) : 0;
+
+  const rolesText = ids.map((id) => `<@&${id}>`).join(" ");
+
+  return [
+    `${rolesText}`,
+    `**Total feito:** **${total}** registro(s)`,
+    `**Meta interna:** **${group.goal}** | **Progresso:** **${total}/${group.goal} (${pctGoal.toFixed(1)}%)**`,
+    `**Participação na semana:** **${pctWeek.toFixed(1)}%** do total atual`,
+  ].join("\n");
 }
 
 // ===============================
@@ -534,6 +611,7 @@ function buildEmbedsAndComponents({
   weekKey,
   currentTotal,
   prevTotal,
+  currentBucket,
   chartShortUrl,
   chartImageUrl,
   top3Current,
@@ -545,6 +623,8 @@ function buildEmbedsAndComponents({
 
   const status = getPerformanceStatus(currentTotal);
   const { pct, sign } = pctDiff(currentTotal, prevTotal);
+  const trendText = getTrendText(currentTotal, prevTotal);
+  const goalVsPreviousText = getGoalVsPreviousText(currentTotal, prevTotal);
 
   const top3Text =
     top3Current.length > 0
@@ -565,18 +645,32 @@ function buildEmbedsAndComponents({
     .setAuthor({ name: "Dashboard ORGs — Managers", iconURL: guildIconUrl })
     .setTitle(`Semana: ${weekLabel}`)
     .setDescription(
-      [
-        `**ID da semana:** \`${weekKey}\``,
-        `**Status:** ${status.emoji} **${status.label}**`,
-        `**Meta:** **${WEEKLY_GOAL}** | **Progresso:** **${progress}**`,
-        "",
-        `**Total atual:** **${currentTotal}**`,
-        `**Semana passada:** **${prevTotal}**`,
-        `**Diferença:** **${sign}${pct.toFixed(1)}%**`,
-        `**Total (últimas 4 semanas):** **${sumLast4}**`,
-      ].join("\n")
-    )
-    .addFields(
+  [
+    `**ID da semana:** \`${weekKey}\``,
+    `**Status:** ${status.emoji} **${status.label}**`,
+    `**Meta:** **${WEEKLY_GOAL}** | **Progresso:** **${progress}**`,
+    "",
+    `## 📌 Comparativo semanal`,
+    `**Total atual:** **${currentTotal}**`,
+    `**Semana passada:** **${prevTotal}**`,
+    `**Variação contra semana anterior:** ${formatSignedPct(currentTotal, prevTotal)}`,
+    `**Leitura:** ${trendText}`,
+    `**Resumo:** ${goalVsPreviousText}`,
+    "",
+    `**Total (últimas 4 semanas):** **${sumLast4}**`,
+  ].join("\n")
+)
+   .addFields(
+  { name: "🔥 Grupos prioritários para bater meta", value: "Esses grupos são a base principal pra manter a meta semanal forte e constante.", inline: false },
+  ...GM_PRIORITY_GROUPS.map((group) => ({
+    name: group.title,
+    value: buildPriorityGroupText({
+      group,
+      currentBucket,
+      totalWeek: currentTotal,
+    }),
+    inline: false,
+  })),
   { name: "🏆 Top 3 — Semana atual", value: top3Text, inline: false },
   { name: "👑 Top 1 — Semana passada", value: top1PrevText, inline: false },
   { name: "📊 Gráfico", value: "Clique no botão **Abrir gráfico** abaixo.", inline: false }
@@ -861,11 +955,12 @@ if (links && !links.error) {
   const guildIconUrl =
     dashChannel.guild?.iconURL?.({ dynamic: true, size: 256 }) || DASH_ICON_FALLBACK;
 
-  const { embeds, components } = buildEmbedsAndComponents({
+const { embeds, components } = buildEmbedsAndComponents({
   weekLabel,
   weekKey,
   currentTotal: cur.total,
   prevTotal: prev.total,
+  currentBucket: cur.approvedForManager,
   top3Current,
   top1Prev,
   chartShortUrl,
