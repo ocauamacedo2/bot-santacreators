@@ -68,12 +68,13 @@ const WEEKLY_GOAL = 40;
 // ✅ Grupos de cargos prioritários para bater meta
 const GM_PRIORITY_GROUPS = [
   {
-    key: "managers",
-    title: "👥 EQUIPE MANAGERS",
-    goal: 8,
+    key: "responsaveis",
+    title: "🛡️ RESPONSÁVEIS",
+    goal: 6,
     roleIds: [
-      "1392678638176043029", // Equipe Manager
-      "1388976155830255697", // Manager Creator
+      "1352407252216184833", // Resp Lider
+      "1262262852949905409", // Resp Influ
+      "1352408327983861844", // Resp. Creators
     ],
   },
   {
@@ -87,13 +88,12 @@ const GM_PRIORITY_GROUPS = [
     ],
   },
   {
-    key: "responsaveis",
-    title: "🛡️ RESPONSÁVEIS",
-    goal: 6,
+    key: "managers",
+    title: "👥 EQUIPE MANAGERS",
+    goal: 8,
     roleIds: [
-      "1352407252216184833", // Resp Lider
-      "1262262852949905409", // Resp Influ
-      "1352408327983861844", // Resp. Creators
+      "1392678638176043029", // Equipe Manager
+      "1388976155830255697", // Manager Creator
     ],
   },
 ];
@@ -326,6 +326,11 @@ async function buildPriorityGroupStats(guild, currentBucket) {
       ? [...member.roles.cache.keys()].map(String)
       : [];
 
+    // ✅ Conta apenas 1 vez, usando o maior grupo ENTRE OS LISTADOS acima.
+    // A prioridade vem da ordem do GM_PRIORITY_GROUPS:
+    // 1º Responsáveis
+    // 2º Coordenação + MKT Creator
+    // 3º Equipe Managers
     const matchedGroup = GM_PRIORITY_GROUPS.find((group) =>
       group.roleIds.some((roleId) => memberRoleIds.includes(String(roleId)))
     );
@@ -690,7 +695,6 @@ function buildEmbedsAndComponents({
   ].join("\n")
 )
 .addFields(
-  { name: "🔥 Grupos prioritários", value: "Contagem por cargo atual no servidor. Cada pessoa conta apenas uma vez, no maior grupo que ela tiver.", inline: false },
   ...GM_PRIORITY_GROUPS.map((group) => ({
     name: group.title,
     value: buildPriorityGroupText({
