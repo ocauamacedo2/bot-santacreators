@@ -115,6 +115,21 @@ const BTN_REFRESH_ID = "GM_REFRESH";
 
 const BTN_ADJUST_ID = "GM_ADJUST_POINTS";
 const BTN_ADD_POINTS_ID = "GM_ADD_POINTS";
+const BTN_GOAL_DM_ID = "GM_GOAL_DM_SEND";
+
+// State dos envios automáticos de meta
+const GM_GOAL_DM_STATE_PATH = "./grafico_managers_goal_dm_state.json";
+
+// Ordem de prioridade para cobrança da meta
+const GM_GOAL_DM_GROUP_ORDER = ["managers", "coord_mkt", "responsaveis"];
+
+// Horários automáticos em SP
+const GM_GOAL_DM_AUTO_SCHEDULE = [
+  { dow: 0, hour: 15, minute: 0 }, // domingo 15:00
+  { dow: 1, hour: 18, minute: 0 }, // segunda 18:00
+  { dow: 2, hour: 16, minute: 0 }, // terça 16:00
+  { dow: 3, hour: 14, minute: 0 }, // quarta 14:00
+];
 
 // ✅ QUEM PODE AJUSTAR (usuários específicos)
 const GM_ADJUST_ALLOWED_USERS = [
@@ -337,34 +352,7 @@ async function buildPriorityGroupStats(guild, currentBucket) {
       ? [...member.roles.cache.keys()].map(String)
       : [];
 
-    // ✅ Exceções específicas primeiro.
-    // Exemplo:
-    // Se a pessoa tiver Equipe Manager + MKT Creators,
-    // ela pontua em Equipe Managers, mesmo MKT estando acima na prioridade geral.
-    const exception = GM_PRIORITY_ROLE_EXCEPTIONS.find((rule) =>
-      rule.whenHasAllRoleIds.every((roleId) =>
-        memberRoleIds.includes(String(roleId))
-      )
-    );
-
-    let matchedGroup = null;
-
-    if (exception?.forceGroupKey) {
-      matchedGroup = GM_PRIORITY_GROUPS.find(
-        (group) => group.key === exception.forceGroupKey
-      );
-    }
-
-    // ✅ Se não caiu em nenhuma exceção, mantém a prioridade geral normal.
-    // A prioridade vem da ordem do GM_PRIORITY_GROUPS:
-    // 1º Responsáveis
-    // 2º Coordenação + MKT Creator
-    // 3º Equipe Managers
-    if (!matchedGroup) {
-      matchedGroup = GM_PRIORITY_GROUPS.find((group) =>
-        group.roleIds.some((roleId) => memberRoleIds.includes(String(roleId)))
-      );
-    }
+    const matchedGroup = getGoalGroupByRoleIds(memberRoleIds);
 
     if (!matchedGroup) continue;
 
@@ -372,6 +360,250 @@ async function buildPriorityGroupStats(guild, currentBucket) {
   }
 
   return result;
+}
+
+function getGoalGroupByRoleIds(memberRoleIds) {
+  const ids = Array.isArray(memberRoleIds) ? memberRoleIds.map(String) : [];
+
+  const exception = GM_PRIORITY_ROLE_EXCEPTIONS.find((rule) =>
+    rule.whenHasAllRoleIds.every((roleId) => ids.includes(String(roleId)))
+  );
+
+  if (exception?.forceGroupKey) {
+    const forced = GM_PRIORITY_GROUPS.find(
+      (group) => group.key === exception.forceGroupKey
+    );
+
+    if (forced) return forced;
+  }
+
+  return GM_PRIORITY_GROUPS.find((group) =>
+    group.roleIds.some((roleId) => ids.includes(String(roleId)))
+  ) || null;
+}
+
+function loadGoalDmState() {
+  return readJSON(GM_GOAL_DM_STATE_PATH, {
+    sentAutoKeys: {},
+  });
+}
+
+function saveGoalDmState(state) {
+  writeJSON(GM_GOAL_DM_STATE_PATH, state);
+}
+
+async function sendDMText(userOrMember, content) {
+  try {
+    const user = userOrMember?.user || userOrMember;
+    if (!user || user.bot) return false;
+
+    const parts = String(content || "").match(/[\s\S]{1,1900}/g) || [];
+    for (const part of parts) {
+      await user.send({ content: part }).catch(() => null);
+      await new Promise((resolve) => setTimeout(resolve, 350));
+    }
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function getGoalGroupSuggestion(groupKey) {
+  if (groupKey === "managers") return 2;
+  if (groupKey === "coord_mkt") return 2;
+  if (groupKey === "responsaveis") return 3;
+  return 2;
+}
+
+function getGoalGroupCallText(groupKey) {
+  if (groupKey === "managers") {
+    return "👥 **Equipe Managers**, vocês são a linha de frente dessa meta. Se cada um puxar 2 registros aprovados, o gráfico já muda de cara.";
+  }
+
+  if (groupKey === "coord_mkt") {
+    return "🎯 **Coordenação + MKT Creator**, vocês entram como reforço estratégico. Quando a equipe manager aperta e vocês completam, a semana vira muito mais fácil.";
+  }
+
+  if (groupKey === "responsaveis") {
+    return "🛡️ **Responsáveis**, a parte de vocês é mais estratégica: ajudar a positivar, puxar quem está parado e dar aquele gás final na equipe.";
+  }
+
+  return "📌 Bora ajudar a bater a meta semanal.";
+}
+
+function buildGoalDmMessage({
+  group,
+  currentTotal,
+  prevTotal,
+  userPoints,
+  groupTotal,
+  groupMembersCount,
+}) {
+  const suggestion = getGoalGroupSuggestion(group.key);
+  const contribution = Math.max(1, suggestion);
+  const projectedTotal = currentTotal + contribution;
+  const groupProjectedTotal = currentTotal + (groupMembersCount * suggestion);
+
+  const nowDiff = pctDiff(currentTotal, prevTotal);
+  const projectedDiff = pctDiff(projectedTotal, prevTotal);
+  const groupProjectedDiff = pctDiff(groupProjectedTotal, prevTotal);
+
+  const remainingToMeta = Math.max(0, WEEKLY_GOAL - currentTotal);
+  const remainingToPositive = Math.max(0, (prevTotal + 1) - currentTotal);
+
+  const personalLine =
+    userPoints > 0
+      ? `Você já contribuiu com **${userPoints}** registro(s) aprovado(s) essa semana. Brabo demais.`
+      : `Você ainda está com **0** registro(s) aprovado(s) nessa semana. Ainda dá tempo de mudar isso bonito.`;
+
+  return [
+    `🚀 **Bora positivar o gráfico das ORGs!**`,
+    "",
+    getGoalGroupCallText(group.key),
+    "",
+    `📊 **Situação atual da semana:**`,
+    `• Total atual: **${currentTotal}**`,
+    `• Semana passada: **${prevTotal}**`,
+    `• Meta mínima: **${WEEKLY_GOAL}**`,
+    `• Diferença atual: **${nowDiff.sign}${nowDiff.pct.toFixed(1)}%**`,
+    "",
+    `🎯 **Sua parte nessa virada:**`,
+    personalLine,
+    `Se você conseguir registrar **${suggestion}** ORG(s) aprovada(s), o total já sobe para **${projectedTotal}** e a diferença iria para **${projectedDiff.sign}${projectedDiff.pct.toFixed(1)}%**.`,
+    "",
+    `🔥 **Força do grupo:**`,
+    `O grupo **${group.title}** já fez **${groupTotal}** registro(s).`,
+    `Se cada pessoa desse grupo fizer **${suggestion}** registro(s), a semana pode chegar em **${groupProjectedTotal}** e a diferença iria para **${groupProjectedDiff.sign}${groupProjectedDiff.pct.toFixed(1)}%**.`,
+    "",
+    remainingToPositive > 0
+      ? `🟡 Faltam **${remainingToPositive}** registro(s) para virar positivo em relação à semana passada.`
+      : `🟢 A semana já está positiva em relação à semana passada. Agora é manter o ritmo.`,
+    remainingToMeta > 0
+      ? `⚠️ Faltam **${remainingToMeta}** registro(s) para bater a meta mínima.`
+      : `✅ A meta mínima já foi batida. Agora o foco é melhorar contra a semana anterior.`,
+    "",
+    `💜 Cada registro aprovado conta. Bora fazer esse gráfico sair do amarelo e ir pro verde.`
+  ].join("\n");
+}
+
+async function collectGoalDmTargets(guild, currentBucket) {
+  const allMembers = await guild.members.fetch().catch(() => null);
+  const targetsByGroup = {};
+
+  for (const group of GM_PRIORITY_GROUPS) {
+    targetsByGroup[group.key] = [];
+  }
+
+  if (!allMembers) return targetsByGroup;
+
+  for (const member of allMembers.values()) {
+    if (!member || member.user?.bot) continue;
+
+    const memberRoleIds = member.roles?.cache
+      ? [...member.roles.cache.keys()].map(String)
+      : [];
+
+    const group = getGoalGroupByRoleIds(memberRoleIds);
+    if (!group) continue;
+
+    targetsByGroup[group.key].push({
+      member,
+      points: safeNum(currentBucket?.[member.id] || 0),
+    });
+  }
+
+  return targetsByGroup;
+}
+
+async function sendGoalCampaignDMs(client, reason = "manual", causeUserId = null) {
+  const dashChannel = await client.channels.fetch(ORG_DASH_CHANNEL_ID).catch(() => null);
+  if (!dashChannel?.guild) return { ok: false, sent: 0, failed: 0 };
+
+  const stats = loadWeeklyStats();
+  const { weekKey } = getCurrentWeekSP();
+  const prevWeekKey = getPrevWeekKey();
+
+  const cur = getWeekData(stats, weekKey);
+  const prev = getWeekData(stats, prevWeekKey);
+
+  const priorityGroupStats = await buildPriorityGroupStats(
+    dashChannel.guild,
+    cur.approvedForManager
+  );
+
+  const targetsByGroup = await collectGoalDmTargets(
+    dashChannel.guild,
+    cur.approvedForManager
+  );
+
+  let sent = 0;
+  let failed = 0;
+
+  for (const groupKey of GM_GOAL_DM_GROUP_ORDER) {
+    const group = GM_PRIORITY_GROUPS.find((g) => g.key === groupKey);
+    if (!group) continue;
+
+    const targets = targetsByGroup[group.key] || [];
+    const groupStat = priorityGroupStats?.[group.key] || { total: 0 };
+
+    for (const target of targets) {
+      const msg = buildGoalDmMessage({
+        group,
+        currentTotal: cur.total,
+        prevTotal: prev.total,
+        userPoints: target.points,
+        groupTotal: safeNum(groupStat.total || 0),
+        groupMembersCount: targets.length,
+      });
+
+      const ok = await sendDMText(target.member, msg);
+      if (ok) sent++;
+      else failed++;
+    }
+  }
+
+  await sendLog(client, "📣 Campanha de meta enviada", [
+    `**Motivo:** \`${reason}\``,
+    `**Causador:** ${causeUserId ? `<@${causeUserId}>` : "automático"}`,
+    `**Semana:** \`${weekKey}\``,
+    `**Total atual:** **${cur.total}**`,
+    `**Semana passada:** **${prev.total}**`,
+    `**DMs enviadas:** **${sent}**`,
+    `**Falhas:** **${failed}**`,
+  ]);
+
+  return { ok: true, sent, failed };
+}
+
+function getAutoGoalDmKey(now, weekKey) {
+  return `${weekKey}:${now.getUTCDay()}:${now.getUTCHours()}`;
+}
+
+async function maybeSendAutoGoalCampaignDMs(client) {
+  const now = nowInSP();
+  const dow = now.getUTCDay();
+  const hour = now.getUTCHours();
+  const minute = now.getUTCMinutes();
+
+  const schedule = GM_GOAL_DM_AUTO_SCHEDULE.find(
+    (x) => x.dow === dow && x.hour === hour && minute >= x.minute && minute < x.minute + 10
+  );
+
+  if (!schedule) return;
+
+  const { weekKey } = getCurrentWeekSP();
+  const key = getAutoGoalDmKey(now, weekKey);
+
+  const state = loadGoalDmState();
+  state.sentAutoKeys ||= {};
+
+  if (state.sentAutoKeys[key]) return;
+
+  state.sentAutoKeys[key] = Date.now();
+  saveGoalDmState(state);
+
+  await sendGoalCampaignDMs(client, "auto", null);
 }
 
 // ===============================
@@ -803,11 +1035,16 @@ if (chartImageUrl) {
 
 
 
-  const row1 = new ActionRowBuilder().addComponents(
+const row1 = new ActionRowBuilder().addComponents(
   new ButtonBuilder()
     .setCustomId(BTN_REFRESH_ID)
     .setLabel("Atualizar")
     .setStyle(ButtonStyle.Primary),
+
+  new ButtonBuilder()
+    .setCustomId(BTN_GOAL_DM_ID)
+    .setLabel("📣 Cobrar meta")
+    .setStyle(ButtonStyle.Secondary),
 
   new ButtonBuilder()
     .setCustomId(BTN_ADD_POINTS_ID)
@@ -1285,11 +1522,12 @@ export async function graficoManagersOnReady(client) {
 
   // console.log("[GRAFICO_MANAGERS] updateDashboard(ready) disparado ✅");
 
-  if (!globalThis.__GM_TICK__) {
-    globalThis.__GM_TICK__ = setInterval(() => {
-      updateDashboard(client, null, "tick").catch(() => null);
-    }, 10 * 60 * 1000);
-  }
+ if (!globalThis.__GM_TICK__) {
+  globalThis.__GM_TICK__ = setInterval(() => {
+    updateDashboard(client, null, "tick").catch(() => null);
+    maybeSendAutoGoalCampaignDMs(client).catch(() => null);
+  }, 10 * 60 * 1000);
+}
 }
 
 
@@ -1301,13 +1539,40 @@ export async function graficoManagersHandleInteraction(interaction, client) {
     // =========================
     if (interaction?.isButton?.()) {
       // Atualizar normal
-      if (interaction.customId === BTN_REFRESH_ID) {
+if (interaction.customId === BTN_REFRESH_ID) {
   await interaction.deferReply({ ephemeral: true });
 
   // 🔥 força recriar gráfico e embeds
   await updateDashboard(client, interaction.user?.id || null, "force");
 
   await interaction.editReply("🔄 Dashboard e gráfico atualizados!");
+  return true;
+}
+
+
+if (interaction.customId === BTN_GOAL_DM_ID) {
+  if (!canAdjust(interaction)) {
+    await interaction.reply({
+      content: "⛔ Você não tem permissão pra enviar cobrança de meta.",
+      ephemeral: true,
+    }).catch(() => null);
+    return true;
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  const res = await sendGoalCampaignDMs(
+    client,
+    "button",
+    interaction.user?.id || null
+  );
+
+  await interaction.editReply(
+    `📣 Campanha de meta enviada!\n` +
+    `✅ DMs enviadas: **${res.sent || 0}**\n` +
+    `⚠️ Falhas: **${res.failed || 0}**`
+  ).catch(() => null);
+
   return true;
 }
 
