@@ -45,6 +45,9 @@ const ORG_DASH_CHANNEL_ID = "1457840340659736658";
 // Canal de LOGS do dashboard
 const ORG_DASH_LOG_CHANNEL_ID = "1486009491702153349";
 
+// Canal de LOGS das DMs de cobrança de meta
+const GM_GOAL_DM_LOG_CHANNEL_ID = "1486009690767757322";
+
 // ✅ ÍCONE / FOTO (vai lá em cima no author)
 const DASH_ICON_FALLBACK =
   "https://media.discordapp.net/attachments/1362477839944777889/1368084293905285170/sc2.png?format=webp&quality=lossless&width=953&height=953";
@@ -130,6 +133,10 @@ const GM_GOAL_DM_AUTO_SCHEDULE = [
   { dow: 2, hour: 16, minute: 0 }, // terça 16:00
   { dow: 3, hour: 14, minute: 0 }, // quarta 14:00
 ];
+
+if (globalThis.__GM_GOAL_DM_RUNNING__ == null) {
+  globalThis.__GM_GOAL_DM_RUNNING__ = false;
+}
 
 // ✅ QUEM PODE AJUSTAR (usuários específicos)
 const GM_ADJUST_ALLOWED_USERS = [
@@ -517,8 +524,20 @@ async function collectGoalDmTargets(guild, currentBucket) {
 }
 
 async function sendGoalCampaignDMs(client, reason = "manual", causeUserId = null) {
-  const dashChannel = await client.channels.fetch(ORG_DASH_CHANNEL_ID).catch(() => null);
-  if (!dashChannel?.guild) return { ok: false, sent: 0, failed: 0 };
+  if (globalThis.__GM_GOAL_DM_RUNNING__) {
+    await sendLog(client, "⚠️ Campanha de meta ignorada", [
+      `**Motivo:** já existe uma campanha em andamento.`,
+      `**Nova tentativa:** \`${reason}\``,
+      `**Causador:** ${causeUserId ? `<@${causeUserId}>` : "automático"}`,
+    ]);
+    return { ok: false, sent: 0, failed: 0, skipped: true };
+  }
+
+  globalThis.__GM_GOAL_DM_RUNNING__ = true;
+
+  try {
+    const dashChannel = await client.channels.fetch(ORG_DASH_CHANNEL_ID).catch(() => null);
+    if (!dashChannel?.guild) return { ok: false, sent: 0, failed: 0 };
 
   const stats = loadWeeklyStats();
   const { weekKey } = getCurrentWeekSP();
@@ -558,8 +577,21 @@ async function sendGoalCampaignDMs(client, reason = "manual", causeUserId = null
       });
 
       const ok = await sendDMText(target.member, msg);
+
+      await sendGoalDmLog(client, {
+        member: target.member,
+        group,
+        message: msg,
+        ok,
+        reason,
+        causeUserId,
+        weekKey,
+      });
+
       if (ok) sent++;
       else failed++;
+
+      await new Promise((resolve) => setTimeout(resolve, 700));
     }
   }
 
@@ -571,9 +603,13 @@ async function sendGoalCampaignDMs(client, reason = "manual", causeUserId = null
     `**Semana passada:** **${prev.total}**`,
     `**DMs enviadas:** **${sent}**`,
     `**Falhas:** **${failed}**`,
+    `**Logs das DMs:** <#${GM_GOAL_DM_LOG_CHANNEL_ID}>`,
   ]);
 
-  return { ok: true, sent, failed };
+    return { ok: true, sent, failed };
+  } finally {
+    globalThis.__GM_GOAL_DM_RUNNING__ = false;
+  }
 }
 
 function getAutoGoalDmKey(now, weekKey) {
@@ -909,6 +945,60 @@ async function sendLog(client, title, lines) {
       .setTitle(title)
       .setDescription(lines.join("\n"))
       .setColor(0x5865f2)
+      .setTimestamp(new Date());
+
+    await ch.send({ embeds: [embed] }).catch(() => null);
+  } catch {}
+}
+
+function clipLogText(value, max = 1800) {
+  const text = String(value || "").trim();
+  if (text.length <= max) return text;
+  return text.slice(0, max - 30) + "\n\n... [mensagem cortada]";
+}
+
+async function sendGoalDmLog(client, {
+  member,
+  group,
+  message,
+  ok,
+  reason,
+  causeUserId,
+  weekKey,
+}) {
+  try {
+    const ch = await client.channels.fetch(GM_GOAL_DM_LOG_CHANNEL_ID).catch(() => null);
+    if (!ch || !ch.isTextBased()) return;
+
+    const user = member?.user;
+    const avatar = user?.displayAvatarURL?.({ dynamic: true, size: 256 }) || null;
+    const profileLink = user?.id ? `https://discord.com/users/${user.id}` : "—";
+
+    const embed = new EmbedBuilder()
+      .setTitle(ok ? "✅ DM de meta enviada" : "❌ Falha ao enviar DM de meta")
+      .setColor(ok ? 0x57f287 : 0xed4245)
+      .setThumbnail(avatar)
+      .setDescription(
+        [
+          `**Status:** ${ok ? "Enviada com sucesso" : "Falhou / DM fechada"}`,
+          `**Motivo:** \`${reason}\``,
+          `**Semana:** \`${weekKey}\``,
+          `**Causador:** ${causeUserId ? `<@${causeUserId}>` : "automático"}`,
+          "",
+          `**Usuário:** ${user ? `<@${user.id}>` : "—"}`,
+          `**ID Discord:** \`${user?.id || "—"}\``,
+          `**Nome no Discord:** \`${user?.tag || user?.username || "—"}\``,
+          `**Nome no servidor:** \`${member?.displayName || "—"}\``,
+          `**Perfil:** ${profileLink}`,
+          `**Grupo:** ${group?.title || "—"}`,
+          "",
+          `**Mensagem enviada:**`,
+          "```",
+          clipLogText(message, 1500),
+          "```",
+        ].join("\n")
+      )
+      .setFooter({ text: "GRAFICO_MANAGERS • Log de cobrança por DM" })
       .setTimestamp(new Date());
 
     await ch.send({ embeds: [embed] }).catch(() => null);
@@ -1559,19 +1649,24 @@ if (interaction.customId === BTN_GOAL_DM_ID) {
     return true;
   }
 
-  await interaction.deferReply({ ephemeral: true });
+  await interaction.reply({
+    content:
+      `📣 Campanha de meta iniciada!\n` +
+      `As DMs serão enviadas em segundo plano e cada envio será registrado em <#${GM_GOAL_DM_LOG_CHANNEL_ID}>.`,
+    ephemeral: true,
+  }).catch(() => null);
 
-  const res = await sendGoalCampaignDMs(
+  sendGoalCampaignDMs(
     client,
     "button",
     interaction.user?.id || null
-  );
-
-  await interaction.editReply(
-    `📣 Campanha de meta enviada!\n` +
-    `✅ DMs enviadas: **${res.sent || 0}**\n` +
-    `⚠️ Falhas: **${res.failed || 0}**`
-  ).catch(() => null);
+  ).catch((e) => {
+    sendLog(client, "❌ Erro na campanha de meta", [
+      `**Motivo:** \`button\``,
+      `**Causador:** <@${interaction.user?.id}>`,
+      `**Erro:** \`${String(e?.message || e)}\``,
+    ]).catch(() => null);
+  });
 
   return true;
 }
