@@ -450,6 +450,99 @@ function getGoalGroupCallText(groupKey) {
   return "📌 Bora ajudar a bater a meta semanal.";
 }
 
+function getGoalMemberTone(memberRoleIds, groupKey, userPoints) {
+  const ids = Array.isArray(memberRoleIds) ? memberRoleIds.map(String) : [];
+  const points = safeNum(userPoints);
+
+  const isGestorCreator = ids.includes("1388975939161161728");
+  const isMktCreator = ids.includes("1282119104576098314");
+  const isEquipeManager = ids.includes("1392678638176043029");
+  const isManagerCreator = ids.includes("1388976155830255697");
+
+  if (groupKey === "responsaveis") {
+    if (points <= 0) {
+      return "🛡️ Como responsável, o foco é não deixar a semana queimar. Mesmo que vocês registrem menos, vocês têm o dever de puxar a galera e virar o jogo.";
+    }
+
+    return "🛡️ Você já ajudou nos registros, agora entra a parte estratégica: cobrar quem está parado e manter a equipe girando.";
+  }
+
+  if (groupKey === "coord_mkt") {
+    if (isGestorCreator) {
+      return points <= 0
+        ? "🎯 Como **Gestor Creator**, essa cobrança pesa um pouco mais: você é uma das peças que precisa ajudar a levantar o gráfico quando a semana fica amarela."
+        : "🎯 Como **Gestor Creator**, você já apareceu no gráfico. Agora é manter o ritmo e puxar mais gente junto.";
+    }
+
+    if (isMktCreator) {
+      return points <= 0
+        ? "🎯 Como **MKT Creator**, não é a cobrança mais pesada do mundo, mas sua ajuda faz diferença real pra positivar a semana."
+        : "🎯 Como **MKT Creator**, você já contribuiu. Se conseguir puxar mais 1 ou 2, ajuda demais a virar esse gráfico.";
+    }
+
+    return "🎯 Coordenação + MKT entra como reforço pra não deixar a meta depender só dos managers.";
+  }
+
+  if (groupKey === "managers") {
+    if (isEquipeManager || isManagerCreator) {
+      return points <= 0
+        ? "👥 Como **Manager**, você é prioridade nessa meta. Se a Equipe Managers não puxa, o gráfico sente na hora."
+        : "👥 Como **Manager**, você já carregou uma parte. Se puxar mais um pouco, ajuda muito a semana sair do amarelo.";
+    }
+
+    return "👥 Equipe Managers é a linha de frente dessa meta.";
+  }
+
+  return "📌 Cada registro aprovado ajuda a positivar a semana.";
+}
+
+function getGoalWeekPressureText() {
+  const now = nowInSP();
+  const dow = now.getUTCDay();
+
+  if (dow === 0) {
+    return "🗓️ Ainda é domingo, então dá pra começar a semana bonito e não deixar tudo pra última hora.";
+  }
+
+  if (dow === 1) {
+    return "🗓️ Segunda é o dia perfeito pra já criar vantagem e não chegar perto do evento no desespero.";
+  }
+
+  if (dow === 2) {
+    return "🗓️ Terça já é meio de preparação. Se deixar pra depois, quinta chega dando voadora.";
+  }
+
+  if (dow === 3) {
+    return "🗓️ Quarta é alerta real: os eventos começam a encostar, então agora é hora de acelerar.";
+  }
+
+  if (dow === 4) {
+    return "🔥 Quinta já é dia de evento. Agora não é mais aquecimento, é puxar ORG pra ontem.";
+  }
+
+  if (dow === 5) {
+    return "🔥 Sexta é reta final forte. Cada registro agora pesa muito no gráfico.";
+  }
+
+  return "🚨 Sábado é fechamento. Agora é modo emergência pra não deixar a semana morrer no amarelo.";
+}
+
+function getGoalJokeLine(memberId, weekKey) {
+  const jokes = [
+    "KKKK bora chamar ORG, pra isso aqui não flopar mais que F3 de resenha, PLMDDD.",
+    "Vocês não querem evento com menos gente que Rei do Crime em dia triste, né? kkkkk",
+    "Bora convidar, porque evento vazio dá mais medo que call mutada em reunião séria kkkk.",
+    "Se deixar parado, daqui a pouco tem menos gente que Eventos Da Cidade em dia de chuva kkkkk.",
+    "Partiu puxar ORG, porque gráfico amarelo é bonito só em semáforo, não aqui kkkkk.",
+    "VAMOS CONVIDARRR, antes que isso vire evento FAC sem FAC aparecendo kkkkk.",
+    "Bora movimentar, porque meta parada dá uma tristeza nível resenha sem áudio kkkkk.",
+  ];
+
+  const index = Math.floor(Math.random() * jokes.length);
+
+  return `😂 **Momento sincerão:** ${jokes[index]}`;
+}
+
 function buildGoalDmMessage({
   member,
   group,
@@ -459,6 +552,7 @@ function buildGoalDmMessage({
   groupTotal,
   groupMembersCount,
   priorityGroupStats,
+  weekKey,
 }) {
   const suggestion = getGoalGroupSuggestion(group.key);
   const contribution = Math.max(1, suggestion);
@@ -473,11 +567,19 @@ function buildGoalDmMessage({
   const remainingToPositive = Math.max(0, (prevTotal + 1) - currentTotal);
 
   const personalLine =
-    userPoints > 0
-      ? `Você já contribuiu com **${userPoints}** registro(s) aprovado(s) essa semana. Brabo demais.`
-      : `Você ainda está com **0** registro(s) aprovado(s) nessa semana. Ainda dá tempo de mudar isso bonito.`;
+  userPoints > 0
+    ? `Você já contribuiu com **${userPoints}** registro(s) aprovado(s) essa semana. Brabo demais.`
+    : `Você ainda está com **0** registro(s) aprovado(s) nessa semana. Ainda dá tempo de mudar isso bonito.`;
 
-      const managersTotal = safeNum(priorityGroupStats?.managers?.total || 0);
+const memberRoleIds = member?.roles?.cache
+  ? [...member.roles.cache.keys()].map(String)
+  : [];
+
+const memberToneLine = getGoalMemberTone(memberRoleIds, group.key, userPoints);
+const weekPressureLine = getGoalWeekPressureText();
+const jokeLine = getGoalJokeLine(member?.id, weekKey);
+
+const managersTotal = safeNum(priorityGroupStats?.managers?.total || 0);
 const coordMktTotal = safeNum(priorityGroupStats?.coord_mkt?.total || 0);
 
 const responsibleExtraLine =
@@ -491,30 +593,35 @@ return [
   "",
   getGoalGroupCallText(group.key),
   responsibleExtraLine ? `\n${responsibleExtraLine}` : "",
-    "",
-    `📊 **Situação atual da semana:**`,
-    `• Total atual: **${currentTotal}**`,
-    `• Semana passada: **${prevTotal}**`,
-    `• Meta mínima: **${WEEKLY_GOAL}**`,
-    `• Diferença atual: **${nowDiff.sign}${nowDiff.pct.toFixed(1)}%**`,
-    "",
-    `🎯 **Sua parte nessa virada:**`,
-    personalLine,
-    `Se você conseguir registrar **${suggestion}** ORG(s) aprovada(s), o total já sobe para **${projectedTotal}** e a diferença iria para **${projectedDiff.sign}${projectedDiff.pct.toFixed(1)}%**.`,
-    "",
-    `🔥 **Força do grupo:**`,
-    `O grupo **${group.title}** já fez **${groupTotal}** registro(s).`,
-    `Se cada pessoa desse grupo fizer **${suggestion}** registro(s), a semana pode chegar em **${groupProjectedTotal}** e a diferença iria para **${groupProjectedDiff.sign}${groupProjectedDiff.pct.toFixed(1)}%**.`,
-    "",
-    remainingToPositive > 0
-      ? `🟡 Faltam **${remainingToPositive}** registro(s) para virar positivo em relação à semana passada.`
-      : `🟢 A semana já está positiva em relação à semana passada. Agora é manter o ritmo.`,
-    remainingToMeta > 0
-      ? `⚠️ Faltam **${remainingToMeta}** registro(s) para bater a meta mínima.`
-      : `✅ A meta mínima já foi batida. Agora o foco é melhorar contra a semana anterior.`,
-    "",
-    `💜 Cada registro aprovado conta. Bora fazer esse gráfico sair do amarelo e ir pro verde.`
-  ].join("\n");
+  "",
+  memberToneLine,
+  weekPressureLine,
+  jokeLine,
+  "",
+  `📊 **Situação atual da semana:**`,
+  `• Total atual: **${currentTotal}**`,
+  `• Semana passada: **${prevTotal}**`,
+  `• Meta mínima: **${WEEKLY_GOAL}**`,
+  `• Diferença atual: **${nowDiff.sign}${nowDiff.pct.toFixed(1)}%**`,
+  "",
+  `🎯 **Sua parte nessa virada:**`,
+  `Você fez **${safeNum(userPoints)}** registro(s) aprovado(s) nessa semana.`,
+  personalLine,
+  `Se você conseguir registrar **${suggestion}** ORG(s) aprovada(s), o total já sobe para **${projectedTotal}** e a diferença iria para **${projectedDiff.sign}${projectedDiff.pct.toFixed(1)}%**.`,
+  "",
+  `🔥 **Força do grupo:**`,
+  `O grupo **${group.title}** já fez **${groupTotal}** registro(s).`,
+  `Se cada pessoa desse grupo fizer **${suggestion}** registro(s), a semana pode chegar em **${groupProjectedTotal}** e a diferença iria para **${groupProjectedDiff.sign}${groupProjectedDiff.pct.toFixed(1)}%**.`,
+  "",
+  remainingToPositive > 0
+    ? `🟡 Faltam **${remainingToPositive}** registro(s) para virar positivo em relação à semana passada.`
+    : `🟢 A semana já está positiva em relação à semana passada. Agora é manter o ritmo.`,
+  remainingToMeta > 0
+    ? `⚠️ Faltam **${remainingToMeta}** registro(s) para bater a meta mínima.`
+    : `✅ A meta mínima já foi batida. Agora o foco é melhorar contra a semana anterior.`,
+  "",
+  `💜 Cada registro aprovado conta. Bora fazer esse gráfico sair do amarelo e ir pro verde.`
+].join("\n");
 }
 
 async function collectGoalDmTargets(guild, currentBucket) {
@@ -643,6 +750,7 @@ const msg = buildGoalDmMessage({
   groupTotal: safeNum(groupStat.total || 0),
   groupMembersCount: targets.length,
   priorityGroupStats,
+  weekKey,
 });
 
       const ok = await sendDMText(target.member, msg, chartImageUrl);
