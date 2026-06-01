@@ -527,7 +527,7 @@ function getGoalWeekPressureText() {
   return "🚨 Sábado é fechamento. Agora é modo emergência pra não deixar a semana morrer no amarelo.";
 }
 
-function getGoalJokeLine(memberId, weekKey) {
+function getGoalJokeLine(memberId, weekKey, usedJokes = null) {
   const jokes = [
     "KKKK bora chamar ORG, pra isso aqui não flopar mais que F3 de resenha, PLMDDD.",
     "Vocês não querem evento com menos gente que Rei do Crime em dia triste, né? kkkkk",
@@ -538,9 +538,26 @@ function getGoalJokeLine(memberId, weekKey) {
     "Bora movimentar, porque meta parada dá uma tristeza nível resenha sem áudio kkkkk.",
   ];
 
-  const index = Math.floor(Math.random() * jokes.length);
+  let availableJokes = jokes;
 
-  return `😂 ${jokes[index]}`;
+  if (usedJokes instanceof Set) {
+    availableJokes = jokes.filter((joke) => !usedJokes.has(joke));
+
+    // se acabarem as piadas, libera repetir
+    if (!availableJokes.length) {
+      usedJokes.clear();
+      availableJokes = jokes;
+    }
+  }
+
+  const index = Math.floor(Math.random() * availableJokes.length);
+  const selected = availableJokes[index];
+
+  if (usedJokes instanceof Set) {
+    usedJokes.add(selected);
+  }
+
+  return `😂 ${selected}`;
 }
 
 function buildGoalDmMessage({
@@ -553,6 +570,7 @@ function buildGoalDmMessage({
   groupMembersCount,
   priorityGroupStats,
   weekKey,
+  usedJokes,
 }) {
   const suggestion = getGoalGroupSuggestion(group.key);
   const contribution = Math.max(1, suggestion);
@@ -577,7 +595,7 @@ const memberRoleIds = member?.roles?.cache
 
 const memberToneLine = getGoalMemberTone(memberRoleIds, group.key, userPoints);
 const weekPressureLine = getGoalWeekPressureText();
-const jokeLine = getGoalJokeLine(member?.id, weekKey);
+const jokeLine = getGoalJokeLine(member?.id, weekKey, usedJokes);
 
 const managersTotal = safeNum(priorityGroupStats?.managers?.total || 0);
 const coordMktTotal = safeNum(priorityGroupStats?.coord_mkt?.total || 0);
@@ -730,10 +748,11 @@ try {
     chartImageUrl = links.imageUrl || links.shortUrl || null;
   }
 } catch {}
-  let sent = 0;
-  let failed = 0;
+let sent = 0;
+let failed = 0;
+const usedJokes = new Set();
 
-  for (const groupKey of GM_GOAL_DM_GROUP_ORDER) {
+for (const groupKey of GM_GOAL_DM_GROUP_ORDER) {
     const group = GM_PRIORITY_GROUPS.find((g) => g.key === groupKey);
     if (!group) continue;
 
@@ -751,6 +770,7 @@ const msg = buildGoalDmMessage({
   groupMembersCount: targets.length,
   priorityGroupStats,
   weekKey,
+  usedJokes,
 });
 
       const ok = await sendDMText(target.member, msg, chartImageUrl);
