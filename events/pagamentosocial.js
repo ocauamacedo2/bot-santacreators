@@ -866,6 +866,29 @@ function criarRowDashboardPagamento() {
   );
 }
 
+async function encontrarDashboardPagamentoDoMes(channel, monthKey) {
+  const mensagens = await channel.messages.fetch({ limit: 50 }).catch(() => null);
+  if (!mensagens) return null;
+
+  const dashboards = [...mensagens.values()]
+    .filter((msg) => msg.author?.bot)
+    .filter((msg) => msg.embeds?.length > 0)
+    .filter((msg) => {
+      const embed = msg.embeds[0];
+      const titulo = embed?.title || "";
+      const footer = embed?.footer?.text || "";
+
+      return (
+        titulo.includes("Dashboard Analítico — Social Mídias") &&
+        footer.includes(DASH_MARKER) &&
+        footer.includes(`Mês ${monthKey}`)
+      );
+    })
+    .sort((a, b) => b.createdTimestamp - a.createdTimestamp);
+
+  return dashboards[0] || null;
+}
+
 async function updateDashboard(client) {
   const stats = loadStats();
   const channel = await client.channels.fetch(CANAL_DASHBOARD_PAGAMENTO).catch(() => null);
@@ -1074,11 +1097,18 @@ async function updateDashboard(client) {
     msg = await channel.messages.fetch(messageIdDoMes).catch(() => null);
   }
 
+  if (!msg) {
+    msg = await encontrarDashboardPagamentoDoMes(channel, stats.month).catch(() => null);
+  }
+
   if (msg) {
     await msg.edit({
       embeds: [embed],
       components: [criarRowDashboardPagamento()],
     }).catch(() => {});
+
+    state.messagesByMonth[stats.month] = msg.id;
+    saveJSON_Dash(DASH_STATE_FILE, state);
   } else {
     const newMsg = await channel.send({
       embeds: [embed],
@@ -1422,6 +1452,7 @@ async function reconstruirStatsPorEmbeds(client, limiteBusca = 100) {
   const registros = [...mensagens.values()]
     .filter((m) => m.author?.id === client.user.id)
     .filter((m) => m.embeds?.length > 0)
+    .filter((m) => mensagemEhDoMesAtualSP(m))
     .filter((m) => {
       const titulo = m.embeds?.[0]?.title || "";
       return titulo.includes("Registro de Pagamento de Evento – SANTACREATORS");
@@ -1631,6 +1662,7 @@ async function moverRegistrosPorFiltro(client, canal, filtro) {
   const lista = [...mensagens.values()]
     .filter((m) => m.author?.id === client.user.id)
     .filter((m) => m.embeds?.length > 0)
+    .filter((m) => mensagemEhDoMesAtualSP(m))
     .filter((m) => {
       const t = m.embeds?.[0]?.title || "";
       return t.includes("Registro de Pagamento de Evento – SANTACREATORS");
@@ -2287,51 +2319,6 @@ if (id.startsWith("pago_desc_") || id.startsWith("solicitado_desc_") || id.start
     labelAuditoria
   );
   
-  // Se aprovado/reprovado/solicitado, atualiza estatísticas e dashboard
-if (["pago", "reprovado", "solicitado"].includes(action)) {
-    const stats = loadStats();
-const creatorId = getCriadorIdFromEmbed(embedOriginal);
-const tipoRaw = embedOriginal.data.description?.match(/Tipo Identificado:\s*`(.+?)`/)?.[1] || "Outros";
-
-const valorIdentificadoRaw = getFieldValue(embedOriginal, "💰 Valor Identificado");
-const valorIdentificado = parseValorOCR(valorIdentificadoRaw)?.numero || 0;
-
-const catKey = normalizarTipoPremiacao(tipoRaw);
-
-if (action === "pago") {
-  stats.totalApproved = Number(stats.totalApproved || 0) + 1;
-  stats.totalAmountPaid = Number(stats.totalAmountPaid || 0) + valorIdentificado;
-
-  stats.approvers[interaction.user.id] = (stats.approvers[interaction.user.id] || 0) + 1;
-
-  stats.categoriesApproved[catKey] = (stats.categoriesApproved[catKey] || 0) + 1;
-  stats.amountsByCategory[catKey] = Number(stats.amountsByCategory[catKey] || 0) + valorIdentificado;
-
-  if (creatorId) {
-    stats.amountsByCreator[creatorId] = Number(stats.amountsByCreator[creatorId] || 0) + valorIdentificado;
-  }
-
-  stats.amountsByApprover[interaction.user.id] = Number(stats.amountsByApprover[interaction.user.id] || 0) + valorIdentificado;
-}
-
-if (action === "reprovado") {
-  stats.totalRejected = Number(stats.totalRejected || 0) + 1;
-
-  stats.rejecters[interaction.user.id] = (stats.rejecters[interaction.user.id] || 0) + 1;
-  stats.categoriesRejected[catKey] = (stats.categoriesRejected[catKey] || 0) + 1;
-}
-
-if (action === "solicitado") {
-  stats.totalRequested = Number(stats.totalRequested || 0) + 1;
-
-  stats.requesters[interaction.user.id] = (stats.requesters[interaction.user.id] || 0) + 1;
-  stats.categoriesRequested[catKey] = (stats.categoriesRequested[catKey] || 0) + 1;
-}
-
-saveStats(stats);
-await updateDashboard(client).catch(() => {});
-  }
-
   const msgNova = await canal.send({ embeds: [embedAtualizado] }).catch(() => null);
   if (!msgNova) {
     await interaction.editReply({ content: "❌ Falhei ao enviar a atualização." }).catch(() => {});
@@ -2353,6 +2340,13 @@ await updateDashboard(client).catch(() => {});
       content: "🧾 Registro movido/atualizado (mensagem antiga).",
       components: [],
     }).catch(() => {});
+  }
+
+  // Se aprovado/reprovado/solicitado, recalcula estatísticas apenas pelos registros do mês atual
+  // depois que a mensagem nova já existe e a antiga saiu do canal.
+  if (["pago", "reprovado", "solicitado"].includes(action)) {
+    await reconstruirStatsPorEmbeds(client, 100).catch(() => null);
+    await updateDashboard(client).catch(() => {});
   }
 
   // reposta menu e limpa duplicados
