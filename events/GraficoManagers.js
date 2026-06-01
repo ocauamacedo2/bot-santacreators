@@ -293,20 +293,49 @@ function getGoalVsPreviousText(cur, prev) {
   return "🔴 Abaixo da meta e abaixo da semana anterior.";
 }
 
-function buildPriorityGroupText({ group, currentBucket, totalWeek }) {
-  const ids = group.roleIds.map(String);
-  const total = ids.reduce((acc, id) => acc + safeNum(currentBucket?.[id] || 0), 0);
+function buildPriorityGroupText({ groupStat, totalWeek }) {
+  const total = safeNum(groupStat?.total || 0);
   const pctWeek = totalWeek > 0 ? ((total / totalWeek) * 100) : 0;
-  const pctGoal = group.goal > 0 ? Math.min(999, (total / group.goal) * 100) : 0;
-
-  const rolesText = ids.map((id) => `<@&${id}>`).join(" ");
 
   return [
-    `${rolesText}`,
     `**Total feito:** **${total}** registro(s)`,
-    `**Meta interna:** **${group.goal}** | **Progresso:** **${total}/${group.goal} (${pctGoal.toFixed(1)}%)**`,
     `**Participação na semana:** **${pctWeek.toFixed(1)}%** do total atual`,
   ].join("\n");
+}
+
+async function buildPriorityGroupStats(guild, currentBucket) {
+  const result = {};
+
+  for (const group of GM_PRIORITY_GROUPS) {
+    result[group.key] = {
+      ...group,
+      total: 0,
+    };
+  }
+
+  const entries = Object.entries(currentBucket || {});
+
+  for (const [userId, amount] of entries) {
+    const points = safeNum(amount);
+    if (points <= 0) continue;
+
+    const member = await guild.members.fetch(String(userId)).catch(() => null);
+    if (!member) continue;
+
+    const memberRoleIds = member.roles?.cache
+      ? [...member.roles.cache.keys()].map(String)
+      : [];
+
+    const matchedGroup = GM_PRIORITY_GROUPS.find((group) =>
+      group.roleIds.some((roleId) => memberRoleIds.includes(String(roleId)))
+    );
+
+    if (!matchedGroup) continue;
+
+    result[matchedGroup.key].total += points;
+  }
+
+  return result;
 }
 
 // ===============================
@@ -611,7 +640,7 @@ function buildEmbedsAndComponents({
   weekKey,
   currentTotal,
   prevTotal,
-  currentBucket,
+  priorityGroupStats,
   chartShortUrl,
   chartImageUrl,
   top3Current,
@@ -660,13 +689,12 @@ function buildEmbedsAndComponents({
     `**Total (últimas 4 semanas):** **${sumLast4}**`,
   ].join("\n")
 )
-   .addFields(
-  { name: "🔥 Grupos prioritários para bater meta", value: "Esses grupos são a base principal pra manter a meta semanal forte e constante.", inline: false },
+.addFields(
+  { name: "🔥 Grupos prioritários", value: "Contagem por cargo atual no servidor. Cada pessoa conta apenas uma vez, no maior grupo que ela tiver.", inline: false },
   ...GM_PRIORITY_GROUPS.map((group) => ({
     name: group.title,
     value: buildPriorityGroupText({
-      group,
-      currentBucket,
+      groupStat: priorityGroupStats?.[group.key],
       totalWeek: currentTotal,
     }),
     inline: false,
@@ -955,12 +983,17 @@ if (links && !links.error) {
   const guildIconUrl =
     dashChannel.guild?.iconURL?.({ dynamic: true, size: 256 }) || DASH_ICON_FALLBACK;
 
+const priorityGroupStats = await buildPriorityGroupStats(
+  dashChannel.guild,
+  cur.approvedForManager
+);
+
 const { embeds, components } = buildEmbedsAndComponents({
   weekLabel,
   weekKey,
   currentTotal: cur.total,
   prevTotal: prev.total,
-  currentBucket: cur.approvedForManager,
+  priorityGroupStats,
   top3Current,
   top1Prev,
   chartShortUrl,
@@ -974,16 +1007,17 @@ const { embeds, components } = buildEmbedsAndComponents({
   // hash do conteúdo principal pra não editar atoa
   const payloadHash = sha1(
     JSON.stringify({
-      weekKey,
-      curTotal: cur.total,
-      prevTotal: prev.total,
-      top3Current,
-      top1Prev,
-      labels,
-      totals,
-      sumLast4,
-      guildIconUrl,
-    })
+  weekKey,
+  curTotal: cur.total,
+  prevTotal: prev.total,
+  priorityGroupStats,
+  top3Current,
+  top1Prev,
+  labels,
+  totals,
+  sumLast4,
+  guildIconUrl,
+})
   );
 
   const dashMsg = await ensureDashMessage(dashChannel, state);
