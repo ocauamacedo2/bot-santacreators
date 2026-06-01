@@ -98,6 +98,17 @@ const GM_PRIORITY_GROUPS = [
   },
 ];
 
+// ✅ Exceções específicas de prioridade entre cargos
+const GM_PRIORITY_ROLE_EXCEPTIONS = [
+  {
+    whenHasAllRoleIds: [
+      "1392678638176043029", // Equipe Manager
+      "1282119104576098314", // MKT Creators
+    ],
+    forceGroupKey: "managers",
+  },
+];
+
 
 // Botão ID
 const BTN_REFRESH_ID = "GM_REFRESH";
@@ -326,14 +337,34 @@ async function buildPriorityGroupStats(guild, currentBucket) {
       ? [...member.roles.cache.keys()].map(String)
       : [];
 
-    // ✅ Conta apenas 1 vez, usando o maior grupo ENTRE OS LISTADOS acima.
+    // ✅ Exceções específicas primeiro.
+    // Exemplo:
+    // Se a pessoa tiver Equipe Manager + MKT Creators,
+    // ela pontua em Equipe Managers, mesmo MKT estando acima na prioridade geral.
+    const exception = GM_PRIORITY_ROLE_EXCEPTIONS.find((rule) =>
+      rule.whenHasAllRoleIds.every((roleId) =>
+        memberRoleIds.includes(String(roleId))
+      )
+    );
+
+    let matchedGroup = null;
+
+    if (exception?.forceGroupKey) {
+      matchedGroup = GM_PRIORITY_GROUPS.find(
+        (group) => group.key === exception.forceGroupKey
+      );
+    }
+
+    // ✅ Se não caiu em nenhuma exceção, mantém a prioridade geral normal.
     // A prioridade vem da ordem do GM_PRIORITY_GROUPS:
     // 1º Responsáveis
     // 2º Coordenação + MKT Creator
     // 3º Equipe Managers
-    const matchedGroup = GM_PRIORITY_GROUPS.find((group) =>
-      group.roleIds.some((roleId) => memberRoleIds.includes(String(roleId)))
-    );
+    if (!matchedGroup) {
+      matchedGroup = GM_PRIORITY_GROUPS.find((group) =>
+        group.roleIds.some((roleId) => memberRoleIds.includes(String(roleId)))
+      );
+    }
 
     if (!matchedGroup) continue;
 
