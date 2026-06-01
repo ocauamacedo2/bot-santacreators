@@ -399,18 +399,29 @@ function progressText(total) {
 // ===============================
 // CHART (QuickChart) — últimas 4 semanas, números em cima, cores por faixa
 // ===============================
-function barColorFor(v) {
-  const n = safeNum(v);
-  if (n <= 0) return "#6b7280";     // cinza
-  if (n < 20) return "#ed4245";     // vermelho
-  if (n < 30) return "#fee75c";     // amarelo
-  if (n < 40) return "#faa61a";     // laranja
-  return "#57f287";                 // verde
+function barColorFor(v, prev = 0) {
+  const cur = safeNum(v);
+  const last = safeNum(prev);
+
+  // 🔴 Crítico: abaixo da meta e pior que a semana anterior
+  if (cur < WEEKLY_GOAL && last > 0 && cur < last) return "#ed4245";
+
+  // 🟡 Atenção: bateu a meta, mas caiu comparado com a semana anterior
+  if (cur >= WEEKLY_GOAL && last > 0 && cur < last) return "#fee75c";
+
+  // 🟡 Atenção/melhorando: ainda abaixo da meta, mas não piorou
+  if (cur < WEEKLY_GOAL) return "#fee75c";
+
+  // 🟢 Positivo: bateu a meta e manteve/subiu contra a semana anterior
+  return "#57f287";
 }
 
 function buildChartConfig(labels, totals) {
   const sumLast4 = totals.reduce((a, b) => a + safeNum(b), 0);
-  const colors = totals.map(barColorFor);
+  const colors = totals.map((value, index) => {
+  const prevValue = index > 0 ? totals[index - 1] : 0;
+  return barColorFor(value, prevValue);
+});
 
   const safeTotals = totals.length ? totals : [0];
 
@@ -466,15 +477,36 @@ function buildChartConfig(labels, totals) {
     maintainAspectRatio: false,
 
     plugins: {
-  legend: {
-    display: true,
-    labels: { boxWidth: 18 },
+legend: {
+  display: true,
+  labels: {
+    boxWidth: 18,
+    color: "#ffffff",
+    font: {
+      size: 13,
+      weight: "bold",
+    },
   },
+},
+ title: {
+  display: true,
+  text: `ORGs aprovadas — últimas 4 semanas (Total: ${sumLast4})`,
+  color: "#ffffff",
+  font: {
+    size: 20,
+    weight: "bold",
+  },
+},
 
-  title: {
-    display: true,
-    text: `ORGs aprovadas — últimas 4 semanas (Total: ${sumLast4})`,
+subtitle: {
+  display: true,
+  text: "Verde: positivo • Amarelo: atenção/comparativo • Vermelho: crítico",
+  color: "#b9bbbe",
+  font: {
+    size: 13,
+    weight: "bold",
   },
+},
 
   // 🔥 NUMERAÇÃO APENAS NAS BARRAS (remove os "40" da meta)
   datalabels: {
@@ -502,23 +534,35 @@ function buildChartConfig(labels, totals) {
 
 
     scales: {
-      x: {
-        grid: { display: false },
-      },
-
-      y: {
-        beginAtZero: true,
-        min: 0,
-        suggestedMax: yMax,
-        ticks: {
-          stepSize: 5,
-          precision: 0,
-        },
-        grid: {
-          color: "rgba(255,255,255,0.08)",
-        },
+  x: {
+    grid: { display: false },
+    ticks: {
+      color: "#ffffff",
+      font: {
+        size: 13,
+        weight: "bold",
       },
     },
+  },
+
+  y: {
+    beginAtZero: true,
+    min: 0,
+    suggestedMax: yMax,
+    ticks: {
+      stepSize: 5,
+      precision: 0,
+      color: "#b9bbbe",
+      font: {
+        size: 12,
+        weight: "bold",
+      },
+    },
+    grid: {
+      color: "rgba(255,255,255,0.12)",
+    },
+  },
+},
   },
 };
 };
