@@ -540,7 +540,7 @@ function getGoalJokeLine(memberId, weekKey) {
 
   const index = Math.floor(Math.random() * jokes.length);
 
-  return `😂 **Momento sincerão:** ${jokes[index]}`;
+  return `😂 ${jokes[index]}`;
 }
 
 function buildGoalDmMessage({
