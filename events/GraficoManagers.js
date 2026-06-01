@@ -80,16 +80,15 @@ const GM_PRIORITY_GROUPS = [
       "1352408327983861844", // Resp. Creators
     ],
   },
-  {
-    key: "coord_mkt",
-    title: "🎯 COORDENAÇÃO + MKT CREATOR",
-    goal: 4,
-    roleIds: [
-      "1282119104576098314", // MKT Creators
-      "1388976094920704141", // Social Medias
-      "1388975939161161728", // Gestor Creator
-    ],
-  },
+ {
+  key: "coord_mkt",
+  title: "🎯 COORDENAÇÃO + MKT CREATOR",
+  goal: 4,
+  roleIds: [
+    "1282119104576098314", // MKT Creators
+    "1388975939161161728", // Gestor Creator
+  ],
+},
   {
     key: "managers",
     title: "👥 EQUIPE MANAGERS",
@@ -399,14 +398,26 @@ function saveGoalDmState(state) {
   writeJSON(GM_GOAL_DM_STATE_PATH, state);
 }
 
-async function sendDMText(userOrMember, content) {
+async function sendDMText(userOrMember, content, chartImageUrl = null) {
   try {
     const user = userOrMember?.user || userOrMember;
     if (!user || user.bot) return false;
 
     const parts = String(content || "").match(/[\s\S]{1,1900}/g) || [];
-    for (const part of parts) {
-      await user.send({ content: part }).catch(() => null);
+
+    for (let i = 0; i < parts.length; i++) {
+      const payload = { content: parts[i] };
+
+      if (i === 0 && chartImageUrl) {
+        payload.embeds = [
+          new EmbedBuilder()
+            .setTitle("📊 Gráfico atual da meta")
+            .setImage(chartImageUrl)
+            .setColor(0xfee75c)
+        ];
+      }
+
+      await user.send(payload).catch(() => null);
       await new Promise((resolve) => setTimeout(resolve, 350));
     }
 
@@ -440,12 +451,14 @@ function getGoalGroupCallText(groupKey) {
 }
 
 function buildGoalDmMessage({
+  member,
   group,
   currentTotal,
   prevTotal,
   userPoints,
   groupTotal,
   groupMembersCount,
+  priorityGroupStats,
 }) {
   const suggestion = getGoalGroupSuggestion(group.key);
   const contribution = Math.max(1, suggestion);
@@ -464,10 +477,20 @@ function buildGoalDmMessage({
       ? `Você já contribuiu com **${userPoints}** registro(s) aprovado(s) essa semana. Brabo demais.`
       : `Você ainda está com **0** registro(s) aprovado(s) nessa semana. Ainda dá tempo de mudar isso bonito.`;
 
-  return [
-    `🚀 **Bora positivar o gráfico das ORGs!**`,
-    "",
-    getGoalGroupCallText(group.key),
+      const managersTotal = safeNum(priorityGroupStats?.managers?.total || 0);
+const coordMktTotal = safeNum(priorityGroupStats?.coord_mkt?.total || 0);
+
+const responsibleExtraLine =
+  group.key === "responsaveis"
+    ? managersTotal >= coordMktTotal
+      ? "🛡️ Como responsável, além da sua parte, vale puxar a **Coordenação + MKT Creator**, porque a Equipe Managers já está carregando boa parte do gráfico."
+      : "🛡️ Como responsável, além da sua parte, vale cobrar principalmente a **Equipe Managers**, porque eles são a prioridade principal pra puxar essa meta."
+    : null;
+return [
+  `🚀 **Bora positivar o gráfico das ORGs, <@${member.id}>!**`,
+  "",
+  getGoalGroupCallText(group.key),
+  responsibleExtraLine ? `\n${responsibleExtraLine}` : "",
     "",
     `📊 **Situação atual da semana:**`,
     `• Total atual: **${currentTotal}**`,
@@ -555,7 +578,51 @@ async function sendGoalCampaignDMs(client, reason = "manual", causeUserId = null
     dashChannel.guild,
     cur.approvedForManager
   );
+let chartImageUrl = null;
 
+try {
+  const rawKeys = Object.keys(stats?.weeks || {});
+  rawKeys.sort();
+
+  const agg = {};
+
+  for (const rawKey of rawKeys) {
+    const y = Number(rawKey.slice(0, 4));
+    const m = Number(rawKey.slice(5, 7));
+    const d = Number(rawKey.slice(8, 10));
+    const dt = new Date(Date.UTC(y, m - 1, d, 0, 0, 0));
+    const dow = dt.getUTCDay();
+    const sunday = new Date(dt.getTime());
+    sunday.setUTCDate(sunday.getUTCDate() - dow);
+
+    const sundayKey = sunday.toISOString().slice(0, 10);
+    const dWeek = getWeekData(stats, rawKey);
+
+    agg[sundayKey] = (agg[sundayKey] || 0) + safeNum(dWeek.total);
+  }
+
+  const aggKeys = Object.keys(agg);
+  aggKeys.sort();
+
+  const lastKeys = aggKeys.slice(-CHART_WEEKS);
+
+  const labels = [];
+  const totals = [];
+
+  for (const wk of lastKeys) {
+    const mm = wk.slice(5, 7);
+    const dd = wk.slice(8, 10);
+    labels.push(`${dd}/${mm}`);
+    totals.push(safeNum(agg[wk]));
+  }
+
+  const chartConfig = buildChartConfig(labels, totals);
+  const links = await getQuickChartLinks(chartConfig);
+
+  if (links && !links.error) {
+    chartImageUrl = links.imageUrl || links.shortUrl || null;
+  }
+} catch {}
   let sent = 0;
   let failed = 0;
 
@@ -567,16 +634,18 @@ async function sendGoalCampaignDMs(client, reason = "manual", causeUserId = null
     const groupStat = priorityGroupStats?.[group.key] || { total: 0 };
 
     for (const target of targets) {
-      const msg = buildGoalDmMessage({
-        group,
-        currentTotal: cur.total,
-        prevTotal: prev.total,
-        userPoints: target.points,
-        groupTotal: safeNum(groupStat.total || 0),
-        groupMembersCount: targets.length,
-      });
+const msg = buildGoalDmMessage({
+  member: target.member,
+  group,
+  currentTotal: cur.total,
+  prevTotal: prev.total,
+  userPoints: target.points,
+  groupTotal: safeNum(groupStat.total || 0),
+  groupMembersCount: targets.length,
+  priorityGroupStats,
+});
 
-      const ok = await sendDMText(target.member, msg);
+      const ok = await sendDMText(target.member, msg, chartImageUrl);
 
       await sendGoalDmLog(client, {
         member: target.member,
