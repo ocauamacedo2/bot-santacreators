@@ -74,7 +74,7 @@ const WEEKLY_GOAL = 40;
 // semana passada 50 => meta 47
 // semana passada 64 => meta 60
 // nunca fica abaixo de 40.
-const WEEKLY_GOAL_PREV_REDUCTION_PCT = 6;
+const WEEKLY_GOAL_PREV_REDUCTION_PCT = 8;
 
 function getSmartWeeklyGoal(prevTotal) {
   const prev = safeNum(prevTotal);
@@ -82,7 +82,7 @@ function getSmartWeeklyGoal(prevTotal) {
 
   if (prev <= 0) return WEEKLY_GOAL;
 
-  const calculatedGoal = Math.round(prev * (1 - reductionPct / 100));
+  const calculatedGoal = Math.floor(prev * (1 - reductionPct / 100));
 
   return Math.max(WEEKLY_GOAL, calculatedGoal);
 }
@@ -336,16 +336,14 @@ function getGoalVsPreviousText(cur, prev, weeklyGoal = WEEKLY_GOAL) {
   prev = safeNum(prev);
 
   const goal = Math.max(WEEKLY_GOAL, safeNum(weeklyGoal));
-  const minGoalOk = cur >= WEEKLY_GOAL;
-  const smartGoalOk = cur >= goal;
+  const goalOk = cur >= goal;
   const trendOk = cur >= prev;
 
-  if (smartGoalOk && trendOk) return "✅ Meta inteligente batida e evolução positiva/estável contra a semana anterior.";
-  if (smartGoalOk && !trendOk) return "✅ Meta inteligente batida, mas ainda abaixo da semana anterior.";
-  if (minGoalOk && !smartGoalOk) return "🟡 Meta mínima batida, porém ainda abaixo da meta inteligente da semana.";
-  if (!minGoalOk && trendOk) return "🟡 Ainda não bateu a meta mínima, mas evoluiu contra a semana anterior.";
+  if (goalOk && trendOk) return "✅ Meta batida e evolução positiva/estável contra a semana anterior.";
+  if (goalOk && !trendOk) return "✅ Meta batida, mesmo com queda no comparativo da semana anterior.";
+  if (!goalOk && trendOk) return "🟡 Ainda não bateu a meta, mas evoluiu contra a semana anterior.";
 
-  return "🔴 Abaixo da meta mínima e abaixo da semana anterior.";
+  return "🟡 Ainda abaixo da meta da semana, mas o comparativo anterior continua separado.";
 }
 
 function buildPriorityGroupText({ groupStat, totalWeek }) {
@@ -871,8 +869,8 @@ function getPerformanceStatus(total, weeklyGoal = WEEKLY_GOAL) {
 
   if (t <= 0) return { label: "Nenhuma ORG", emoji: "⚫", color: 0x2b2d31 };
   if (t >= goal) return { label: "META BATIDA!", emoji: "🟢", color: 0x57f287 };
-  if (t >= WEEKLY_GOAL) return { label: "META MÍNIMA BATIDA", emoji: "🟡", color: 0xfee75c };
-  if (t >= Math.ceil(goal * 0.75)) return { label: "QUASE LÁ", emoji: "🟠", color: 0xfaa61a };
+  if (t >= Math.ceil(goal * 0.85)) return { label: "QUASE NA META", emoji: "🟡", color: 0xfee75c };
+  if (t >= Math.ceil(goal * 0.65)) return { label: "EM ANDAMENTO", emoji: "🟠", color: 0xfaa61a };
 
   return { label: "NEGATIVO", emoji: "🔴", color: 0xed4245 };
 }
@@ -1303,9 +1301,7 @@ function buildEmbedsAndComponents({
   [
     `**ID da semana:** \`${weekKey}\``,
     `**Status:** ${status.emoji} **${status.label}**`,
-    `**Meta inteligente:** **${weeklyGoal}** | **Progresso:** **${progress}**`,
-    `**Meta mínima:** **${WEEKLY_GOAL}** registro(s)`,
-    `**Filtro da meta:** semana passada com redução de **${WEEKLY_GOAL_PREV_REDUCTION_PCT}%**`,
+    `**Meta:** **${progress}**`,
     "",
     `## 📌 Comparativo semanal`,
     `**Total atual:** **${currentTotal}**`,
