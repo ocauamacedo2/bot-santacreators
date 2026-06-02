@@ -35,6 +35,7 @@ const ROLES = {
   RESP_CREATORS: "1352408327983861844",
   RESP_INFLU: "1262262852949905409",
   RESP_LIDER: "1352407252216184833",
+  COORD_CREATORS: "1352385500614234134",
   EQUIPE_CREATORS: "1352429001188180039",
 };
 
@@ -261,6 +262,81 @@ async function dm(client, member, embed, event, type) {
   }
 }
 
+async function sendProgressLog(client, title, description, color = "#9b59b6") {
+  try {
+    const logChannel = await client.channels.fetch(DM_LOG_CHANNEL_ID).catch(() => null);
+    if (!logChannel || !logChannel.isTextBased()) return;
+
+    const embed = new EmbedBuilder()
+      .setColor(color)
+      .setTitle(title)
+      .setDescription(description)
+      .addFields({
+        name: "⏰ Data/Hora",
+        value: `<t:${Math.floor(Date.now() / 1000)}:F>`,
+        inline: false,
+      })
+      .setFooter({ text: "SantaCreators • Progresso do Notifier" })
+      .setTimestamp();
+
+    await logChannel.send({ embeds: [embed] });
+  } catch (e) {
+    console.error("[EventosChecklistNotifier] erro ao enviar log de progresso:", e);
+  }
+}
+
+function memberListText(members) {
+  if (!members.length) return "Nenhum membro encontrado.";
+
+  return members
+    .map((m) => `• ${m} — \`${m.user.tag}\` — \`${m.id}\``)
+    .join("\n")
+    .slice(0, 1800);
+}
+
+function buildRespReminderEmbed(event) {
+  return new EmbedBuilder()
+    .setColor("#9b59b6")
+    .setTitle("📣 Relembra a equipe do evento")
+    .setDescription(
+      [
+        `Eaiii, responsável! 💜`,
+        "",
+        `O evento **${event.eventName}** da cidade **${event.city}** está no radar.`,
+        "",
+        "Passando pra te lembrar de puxar a galera e conferir se todo mundo fez o básico:",
+        "",
+        "☐ bater ponto se participou/ajudou no evento",
+        "☐ registrar poderes caso tenha usado",
+        "☐ conferir se a equipe ficou organizada",
+        "☐ lembrar a galera sem deixar virar bagunça kkkkk",
+        "",
+        `⏰ **Horário do evento:** ${event.time}`,
+      ].join("\n")
+    )
+    .setFooter({ text: "SantaCreators • Lembrete para responsáveis" })
+    .setTimestamp();
+}
+
+function buildTeamTestEmbed(event) {
+  return new EmbedBuilder()
+    .setColor("#3498db")
+    .setTitle("🧪 Teste de Notificação da Equipe")
+    .setDescription(
+      [
+        "Esse é um teste do notifier de eventos da SantaCreators.",
+        "",
+        `🎯 **Evento:** ${event.eventName}`,
+        `🏙️ **Cidade:** ${event.city}`,
+        `⏰ **Horário:** ${event.time}`,
+        "",
+        "No automático, essa mensagem vira lembrete de bate-ponto/registro quando cair na janela certa.",
+      ].join("\n")
+    )
+    .setFooter({ text: "SantaCreators • Teste de equipe" })
+    .setTimestamp();
+}
+
 function buildPrepareEmbed(event, phase) {
   const title =
     phase === "PRE_60"
@@ -361,12 +437,16 @@ async function runNotifierTick(client, options = {}) {
 
     const cityRole = CITY_ROLES[event.cityKey];
 
-    const respRoles =
-      event.cityKey === "nobre"
-        ? [ROLES.RESP_CREATORS, ROLES.RESP_INFLU, ROLES.RESP_LIDER]
-        : [ROLES.RESP_CREATORS, ROLES.RESP_INFLU, ROLES.RESP_LIDER, cityRole];
+    const respRoles = [
+      ROLES.RESP_CREATORS,
+      ROLES.RESP_INFLU,
+      ROLES.RESP_LIDER,
+    ];
 
-    const equipeRoles = [ROLES.EQUIPE_CREATORS, cityRole];
+    const equipeRoles = [
+      ROLES.COORD_CREATORS,
+      ROLES.EQUIPE_CREATORS,
+    ];
 
     const respMembers = await getMembersByRoles(guild, respRoles);
     const equipeMembers = await getMembersByRoles(guild, equipeRoles);
@@ -376,6 +456,25 @@ async function runNotifierTick(client, options = {}) {
 
     if (phase === "TESTE_MANUAL") {
       const testMember = testUserId ? await guild.members.fetch(testUserId).catch(() => null) : null;
+
+      await sendProgressLog(
+        client,
+        "🧪 Teste manual iniciado",
+        [
+          `👤 **Acionado por:** ${testMember || testUserId || "desconhecido"}`,
+          "",
+          `🎯 **Evento:** ${event.eventName}`,
+          `🏙️ **Cidade:** ${event.city}`,
+          `⏰ **Horário:** ${event.time}`,
+          "",
+          `👑 **Responsáveis encontrados:** ${respMembers.length}`,
+          memberListText(respMembers),
+          "",
+          `👥 **Equipe encontrada:** ${equipeMembers.length}`,
+          memberListText(equipeMembers),
+        ].join("\n"),
+        "#9b59b6"
+      );
 
       if (!testMember) {
         console.log("[EventosChecklistNotifier] Teste manual acionado, mas não consegui encontrar o membro que clicou.");
@@ -393,26 +492,69 @@ async function runNotifierTick(client, options = {}) {
             `🏙️ **Cidade:** ${event.city}`,
             `⏰ **Horário do evento:** ${event.time}`,
             "",
+            `👑 **Responsáveis encontrados:** ${respMembers.length}`,
             `👥 **Equipe encontrada:** ${equipeMembers.length}`,
             `🟢 **Equipe considerada online:** ${onlineEquipe.length}`,
-            `👑 **Responsáveis encontrados:** ${respMembers.length}`,
+            "",
+            "📌 **Cargos considerados responsáveis:**",
+            `• Resp Creators — \`${ROLES.RESP_CREATORS}\``,
+            `• Resp Influ — \`${ROLES.RESP_INFLU}\``,
+            `• Resp Líder — \`${ROLES.RESP_LIDER}\``,
+            "",
+            "📌 **Cargos considerados equipe:**",
+            `• Coordenação — \`${ROLES.COORD_CREATORS}\``,
+            `• Equipe Creators — \`${ROLES.EQUIPE_CREATORS}\``,
             "",
             "⚠️ O motivo de não enviar antes era simples:",
             "`o evento foi encontrado, mas o horário atual não estava dentro de nenhuma janela de disparo.`",
-            "",
-            "No modo automático, ele só envia em:",
-            "• 1 hora antes",
-            "• 30 minutos antes",
-            "• 25 minutos depois",
-            "• 60 minutos depois",
-            "• 80 minutos depois",
-            "• 100 minutos depois",
           ].join("\n")
         )
         .setFooter({ text: "SantaCreators • Teste manual do notifier" })
         .setTimestamp();
 
       await dm(client, testMember, testEmbed, event, "teste manual");
+
+      const respReminderEmbed = buildRespReminderEmbed(event);
+      const teamTestEmbed = buildTeamTestEmbed(event);
+
+      let sentResp = 0;
+      let failResp = 0;
+      let sentTeam = 0;
+      let failTeam = 0;
+
+      for (const member of respMembers) {
+        const ok = await dm(client, member, respReminderEmbed, event, "teste manual responsáveis");
+        if (ok) sentResp++;
+        else failResp++;
+      }
+
+      for (const member of equipeMembers) {
+        const ok = await dm(client, member, teamTestEmbed, event, "teste manual equipe");
+        if (ok) sentTeam++;
+        else failTeam++;
+      }
+
+      await sendProgressLog(
+        client,
+        "✅ Teste manual finalizado",
+        [
+          `🎯 **Evento:** ${event.eventName}`,
+          `🏙️ **Cidade:** ${event.city}`,
+          "",
+          `👤 **Teste enviado para quem clicou:** ${testMember}`,
+          "",
+          `👑 **Responsáveis:**`,
+          `✅ Enviados: **${sentResp}**`,
+          `❌ Falharam: **${failResp}**`,
+          "",
+          `👥 **Equipe:**`,
+          `✅ Enviados: **${sentTeam}**`,
+          `❌ Falharam: **${failTeam}**`,
+          "",
+          "📌 Cada PV enviado/falhado também cai como log individual nesse canal.",
+        ].join("\n"),
+        "#2ecc71"
+      );
 
       console.log(`[EventosChecklistNotifier] Teste manual enviado para ${testMember.user.tag}.`);
       continue;
