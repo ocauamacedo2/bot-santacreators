@@ -320,48 +320,51 @@ function progressBar(value) {
 function rankingLines(list, type) {
   if (!list.length) return "Sem dados suficientes ainda.";
 
-  return list.slice(0, 10).map((user, index) => {
+  return list.slice(0, 5).map((user, index) => {
     const pos =
       index === 0 ? "🥇" :
       index === 1 ? "🥈" :
       index === 2 ? "🥉" :
       `**${index + 1}.**`;
 
+    const base = `${pos} <@${user.id}>`;
+
     if (type === "approved") {
-      return `${pos} <@${user.id}> — **${user.approved}** aprovações • taxa **${percent(user.approvalRate)}**`;
+      return [
+        `${base}`,
+        `> ✅ **${user.approved}** aprovações`,
+        `> 📊 Taxa de aprovação: **${percent(user.approvalRate)}**`,
+      ].join("\n");
     }
 
     if (type === "rejected") {
-      return `${pos} <@${user.id}> — **${user.rejected}** reprovações • taxa **${percent(user.rejectRate)}**`;
+      return [
+        `${base}`,
+        `> ❌ **${user.rejected}** reprovações`,
+        `> 📊 Taxa de reprovação: **${percent(user.rejectRate)}**`,
+      ].join("\n");
     }
 
     if (type === "lessApproved") {
-      return `${pos} <@${user.id}> — **${user.approved}** aprovações • **${user.total}** decisões`;
+      return [
+        `${base}`,
+        `> 📉 **${user.approved}** aprovações`,
+        `> 📦 **${user.total}** decisões no mês`,
+      ].join("\n");
     }
 
-    return `${pos} <@${user.id}> — ✅ **${user.approved}** • ❌ **${user.rejected}** • aprovação **${percent(user.approvalRate)}**`;
-  }).join("\n");
+    return [
+      `${base}`,
+      `> ✅ **${user.approved}** aprovados • ❌ **${user.rejected}** reprovados`,
+      `> 🟢 Aprovação: **${percent(user.approvalRate)}** • 🔴 Reprovação: **${percent(user.rejectRate)}**`,
+    ].join("\n");
+  }).join("\n\n");
 }
 
-function buildChartUrl({ topApproved, topRejected }) {
-  const labels = [];
-  const approvedData = [];
-  const rejectedData = [];
-
-  const ids = new Set();
-
-  for (const user of topApproved.slice(0, 7)) ids.add(user.id);
-  for (const user of topRejected.slice(0, 7)) ids.add(user.id);
-
-  for (const id of ids) {
-    const fromApproved = topApproved.find((u) => u.id === id);
-    const fromRejected = topRejected.find((u) => u.id === id);
-    const user = fromApproved || fromRejected;
-
-    labels.push(String(id).slice(-4));
-    approvedData.push(user?.approved || 0);
-    rejectedData.push(user?.rejected || 0);
-  }
+function buildChartUrl({ chartUsers }) {
+  const labels = chartUsers.map((user) => user.chartName);
+  const approvedData = chartUsers.map((user) => user.approved || 0);
+  const rejectedData = chartUsers.map((user) => user.rejected || 0);
 
   const config = {
     type: "bar",
@@ -371,20 +374,44 @@ function buildChartUrl({ topApproved, topRejected }) {
         {
           label: "Aprovados",
           data: approvedData,
-          backgroundColor: "rgba(87, 242, 135, 0.85)",
+          backgroundColor: "rgba(87, 242, 135, 0.88)",
+          borderColor: "rgba(87, 242, 135, 1)",
+          borderWidth: 2,
+          borderRadius: 8,
+          barPercentage: 0.65,
+          categoryPercentage: 0.72,
         },
         {
           label: "Reprovados",
           data: rejectedData,
-          backgroundColor: "rgba(237, 66, 69, 0.85)",
+          backgroundColor: "rgba(237, 66, 69, 0.88)",
+          borderColor: "rgba(237, 66, 69, 1)",
+          borderWidth: 2,
+          borderRadius: 8,
+          barPercentage: 0.65,
+          categoryPercentage: 0.72,
         },
       ],
     },
     options: {
+      layout: {
+        padding: {
+          top: 35,
+          right: 30,
+          bottom: 25,
+          left: 20,
+        },
+      },
       plugins: {
         legend: {
+          position: "top",
           labels: {
             color: "#ffffff",
+            font: {
+              size: 18,
+              weight: "bold",
+            },
+            padding: 22,
           },
         },
         datalabels: {
@@ -392,6 +419,7 @@ function buildChartUrl({ topApproved, topRejected }) {
           align: "top",
           color: "#ffffff",
           font: {
+            size: 18,
             weight: "bold",
           },
         },
@@ -400,16 +428,26 @@ function buildChartUrl({ topApproved, topRejected }) {
         x: {
           ticks: {
             color: "#ffffff",
+            font: {
+              size: 15,
+              weight: "bold",
+            },
+            maxRotation: 35,
+            minRotation: 20,
           },
           grid: {
-            color: "rgba(255,255,255,0.08)",
+            display: false,
           },
         },
         y: {
           beginAtZero: true,
           ticks: {
             precision: 0,
-            color: "#ffffff",
+            color: "#b9bbbe",
+            font: {
+              size: 14,
+              weight: "bold",
+            },
           },
           grid: {
             color: "rgba(255,255,255,0.08)",
@@ -419,10 +457,9 @@ function buildChartUrl({ topApproved, topRejected }) {
     },
   };
 
-  return `https://quickchart.io/chart?width=1000&height=500&backgroundColor=transparent&c=${encodeURIComponent(JSON.stringify(config))}`;
+  return `https://quickchart.io/chart?width=1200&height=620&backgroundColor=%23000000&c=${encodeURIComponent(JSON.stringify(config))}`;
 }
-
-function buildDashboardPayload(client, stats, causeUserId, reason) {
+async function buildDashboardPayload(client, stats, causeUserId, reason) {
   const users = makeUserList(stats.users);
 
   const totalApproved = users.reduce((acc, user) => acc + user.approved, 0);
@@ -445,8 +482,21 @@ function buildDashboardPayload(client, stats, causeUserId, reason) {
   const worstRejectRate = [...users]
     .filter((user) => user.total >= 3)
     .sort((a, b) => b.rejectRate - a.rejectRate || b.total - a.total);
+  const chartBaseUsers = [...users]
+    .filter((user) => user.total > 0)
+    .sort((a, b) => b.total - a.total || b.approved - a.approved)
+    .slice(0, 7);
 
-  const chartUrl = buildChartUrl({ topApproved, topRejected });
+  const chartUsers = [];
+
+  for (const user of chartBaseUsers) {
+    chartUsers.push({
+      ...user,
+      chartName: await getChartName(client, user.id),
+    });
+  }
+
+  const chartUrl = buildChartUrl({ chartUsers });
 
   const guildIcon = client.user.displayAvatarURL();
 
@@ -479,29 +529,35 @@ function buildDashboardPayload(client, stats, causeUserId, reason) {
   const rankingEmbed = new EmbedBuilder()
     .setColor(0x57f287)
     .setTitle("🏆 Rankings do mês")
+    .setDescription(
+      [
+        "Ranking mensal separado por desempenho.",
+        "As listas abaixo mostram aprovações, reprovações, taxas e participação de cada aprovador.",
+      ].join("\n")
+    )
     .addFields(
       {
-        name: "✅ Quem mais aprovou",
+        name: "━━━━━━━━━━━━━━ ✅ MAIS APROVAÇÕES",
         value: rankingLines(topApproved, "approved"),
         inline: false,
       },
       {
-        name: "📈 Melhor taxa de aprovação",
+        name: "━━━━━━━━━━━━━━ 📈 MELHOR APROVEITAMENTO",
         value: rankingLines(bestApprovalRate, "mixed"),
         inline: false,
       },
       {
-        name: "❌ Quem mais reprovou",
-        value: rankingLines(topRejected, "rejected"),
+        name: "━━━━━━━━━━━━━━ ❌ MAIS REPROVAÇÕES",
+        value: rankingLines(topRejected.filter((user) => user.rejected > 0), "rejected"),
         inline: false,
       },
       {
-        name: "⚠️ Maior taxa de reprovação",
-        value: rankingLines(worstRejectRate, "mixed"),
+        name: "━━━━━━━━━━━━━━ ⚠️ MAIOR TAXA DE REPROVAÇÃO",
+        value: rankingLines(worstRejectRate.filter((user) => user.rejected > 0), "mixed"),
         inline: false,
       },
       {
-        name: "📉 Quem menos aprovou",
+        name: "━━━━━━━━━━━━━━ 📉 MENOS APROVAÇÕES",
         value: rankingLines(lessApproved, "lessApproved"),
         inline: false,
       }
@@ -511,7 +567,13 @@ function buildDashboardPayload(client, stats, causeUserId, reason) {
   const chartEmbed = new EmbedBuilder()
     .setColor(0x2b2d31)
     .setTitle("📊 Gráfico comparativo — Top aprovadores/reprovadores")
-    .setDescription("Os nomes aparecem pelo final do ID para o gráfico não ficar poluído. O ranking acima mostra as menções completas.")
+    .setDescription(
+      [
+        "Agora o gráfico mostra os **nomes reais**, não apenas o final do ID.",
+        "Verde = aprovações no mês.",
+        "Vermelho = reprovações no mês.",
+      ].join("\n")
+    )
     .setImage(chartUrl)
     .setTimestamp();
 
@@ -579,7 +641,7 @@ export async function rankingAprovadoresManagersEmitUpdate(client, causeUserId =
 
     const state = loadState();
     const stats = await scanRankingAprovadores(client);
-    const payload = buildDashboardPayload(client, stats, causeUserId, reason);
+    const payload = await buildDashboardPayload(client, stats, causeUserId, reason);
 
     const message = await ensureDashboardMessage(channel, state);
     if (!message) return false;
