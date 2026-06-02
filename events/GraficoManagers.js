@@ -156,7 +156,11 @@ if (globalThis.__GM_GOAL_DM_RUNNING__ == null) {
   globalThis.__GM_GOAL_DM_RUNNING__ = false;
 }
 
-// ✅ QUEM PODE AJUSTAR (usuários específicos)
+function isGoalDmCampaignRunning() {
+  return Boolean(globalThis.__GM_GOAL_DM_RUNNING__);
+}
+
+// ✅ QUEM PODE AJUSTAR
 const GM_ADJUST_ALLOWED_USERS = [
   "660311795327828008",
   // "outro_id",
@@ -586,6 +590,7 @@ function buildGoalDmMessage({
   group,
   currentTotal,
   prevTotal,
+  weeklyGoal,
   userPoints,
   groupTotal,
   groupMembersCount,
@@ -593,6 +598,8 @@ function buildGoalDmMessage({
   weekKey,
   usedJokes,
 }) {
+  const goal = Math.max(WEEKLY_GOAL, safeNum(weeklyGoal || getSmartWeeklyGoal(prevTotal)));
+
   const suggestion = getGoalGroupSuggestion(group.key);
   const contribution = Math.max(1, suggestion);
   const projectedTotal = currentTotal + contribution;
@@ -602,7 +609,7 @@ function buildGoalDmMessage({
   const projectedDiff = pctDiff(projectedTotal, prevTotal);
   const groupProjectedDiff = pctDiff(groupProjectedTotal, prevTotal);
 
-  const remainingToMeta = Math.max(0, WEEKLY_GOAL - currentTotal);
+  const remainingToMeta = Math.max(0, goal - currentTotal);
   const remainingToPositive = Math.max(0, (prevTotal + 1) - currentTotal);
 
   const personalLine =
@@ -640,7 +647,7 @@ return [
   `📊 **Situação atual da semana:**`,
   `• Total atual: **${currentTotal}**`,
   `• Semana passada: **${prevTotal}**`,
-  `• Meta mínima: **${WEEKLY_GOAL}**`,
+`• Meta mínima: **${goal}**`,
   `• Diferença atual: **${nowDiff.sign}${nowDiff.pct.toFixed(1)}%**`,
   "",
   `🎯 **Sua parte nessa virada:**`,
@@ -712,10 +719,11 @@ async function sendGoalCampaignDMs(client, reason = "manual", causeUserId = null
   const { weekKey } = getCurrentWeekSP();
   const prevWeekKey = getPrevWeekKey();
 
-  const cur = getWeekData(stats, weekKey);
-  const prev = getWeekData(stats, prevWeekKey);
+const cur = getWeekData(stats, weekKey);
+const prev = getWeekData(stats, prevWeekKey);
+const weeklyGoal = getSmartWeeklyGoal(prev.total);
 
-  const priorityGroupStats = await buildPriorityGroupStats(
+const priorityGroupStats = await buildPriorityGroupStats(
     dashChannel.guild,
     cur.approvedForManager
   );
@@ -786,6 +794,7 @@ const msg = buildGoalDmMessage({
   group,
   currentTotal: cur.total,
   prevTotal: prev.total,
+  weeklyGoal,
   userPoints: target.points,
   groupTotal: safeNum(groupStat.total || 0),
   groupMembersCount: targets.length,
@@ -1877,12 +1886,21 @@ if (interaction.customId === BTN_GOAL_DM_ID) {
     return true;
   }
 
-  await interaction.reply({
-    content:
-      `📣 Campanha de meta iniciada!\n` +
-      `As DMs serão enviadas em segundo plano e cada envio será registrado em <#${GM_GOAL_DM_LOG_CHANNEL_ID}>.`,
-    ephemeral: true,
-  }).catch(() => null);
+  await interaction.deferReply({ ephemeral: true }).catch(() => null);
+
+  if (isGoalDmCampaignRunning()) {
+    await interaction.editReply(
+      `⚠️ Já existe uma campanha de meta em andamento.\n` +
+      `Aguarda ela terminar antes de clicar de novo.`
+    ).catch(() => null);
+
+    return true;
+  }
+
+  await interaction.editReply(
+    `📣 Campanha de meta iniciada!\n` +
+    `As DMs serão enviadas em segundo plano e cada envio será registrado em <#${GM_GOAL_DM_LOG_CHANNEL_ID}>.`
+  ).catch(() => null);
 
   sendGoalCampaignDMs(
     client,
