@@ -39,6 +39,11 @@ import {
 
 import { dashEmit } from "../utils/dashHub.js";
 import { graficoManagersEmitUpdate } from "./GraficoManagers.js";
+import {
+  rankingAprovadoresManagersEmitUpdate,
+  rankingAprovadoresManagersHandleInteraction,
+  rankingAprovadoresManagersOnReady,
+} from "./RankingAprovadoresManagers.js";
 
 // ===============================
 // CONFIG
@@ -1636,6 +1641,9 @@ export async function registroManagerOnReady(client) {
   // ✅ 2) totais
   await updateTotalsMessage(canal);
 
+  // ✅ Dashboard mensal de aprovadores/reprovadores
+  await rankingAprovadoresManagersOnReady(client);
+
   // ✅ 2.1) REPARO: se existir registro pendente sem botões, recoloca
   setTimeout(async () => {
     try {
@@ -2011,6 +2019,9 @@ async function purgeRejectedAny(canal) {
 // ===============================
 export async function registroManagerHandleInteraction(interaction, client) {
   try {
+    const rankingAprovadoresHandled = await rankingAprovadoresManagersHandleInteraction(interaction, client);
+    if (rankingAprovadoresHandled) return true;
+
     // =======================
     // =======================
 // BOTÃO ABRIR MODAL
@@ -2596,6 +2607,12 @@ console.log("[SC_RM] ponto +1 =>", { pointsOwnerId, managerId, registrantId, msg
     console.error("[GRAFICO_MANAGERS] falha ao atualizar (approved):", e);
   }
 
+  try {
+    await rankingAprovadoresManagersEmitUpdate(client, interaction.user.id, "rm:approved");
+  } catch (e) {
+    console.error("[RANKING_APROVADORES_MANAGERS] falha ao atualizar (approved):", e);
+  }
+
   // =======================
 // DMs (registrante + manager) — sem duplicar quando for a mesma pessoa
 // =======================
@@ -2782,6 +2799,12 @@ if (
   try {
     await graficoManagersEmitUpdate(client, interaction.user.id, "rm:rejected");
   } catch {}
+
+  try {
+    await rankingAprovadoresManagersEmitUpdate(client, interaction.user.id, "rm:rejected");
+  } catch (e) {
+    console.error("[RANKING_APROVADORES_MANAGERS] falha ao atualizar (rejected):", e);
+  }
 
   const registrantId = parseRegistrantFromEmbed(emb) || getRegistrantIdFromMessage(msg, emb);
   const managerId = getManagerIdFromEmbed(emb) || null;
