@@ -329,12 +329,15 @@ function buildRespReportEmbed(event, onlineMembers, offlineMembers) {
     .setTimestamp();
 }
 
-async function runNotifierTick(client) {
+async function runNotifierTick(client, options = {}) {
   const guild = client.guilds.cache.first();
   if (!guild) {
     console.log("[EventosChecklistNotifier] Nenhuma guilda encontrada.");
     return;
   }
+
+  const forceTest = Boolean(options.forceTest);
+  const testUserId = options.testUserId || null;
 
   const state = loadJson(NOTIFIER_STATE_FILE, { sent: {} });
   const events = getTodayEvents();
@@ -344,8 +347,13 @@ async function runNotifierTick(client) {
     const start = hmToMinutes(event.time);
     if (start === null) continue;
 
-    const phase = getPhase(start);
-    if (!phase) continue;
+    const phase = forceTest ? "TESTE_MANUAL" : getPhase(start);
+
+    if (!phase) {
+      console.log(`[EventosChecklistNotifier] Evento ${event.eventName} encontrado, mas fora das janelas de notificação agora.`);
+      continue;
+    }
+
     console.log(`[EventosChecklistNotifier] Fase detectada: ${phase} para o evento ${event.eventName}`);
 
     const uniqueBase = `${todayDateBR()}_${event.type}_${event.cityKey}_${event.eventName}_${phase}`;
@@ -365,6 +373,50 @@ async function runNotifierTick(client) {
 
     const onlineEquipe = equipeMembers.filter(isOnline);
     const offlineEquipe = equipeMembers.filter((m) => !isOnline(m));
+
+    if (phase === "TESTE_MANUAL") {
+      const testMember = testUserId ? await guild.members.fetch(testUserId).catch(() => null) : null;
+
+      if (!testMember) {
+        console.log("[EventosChecklistNotifier] Teste manual acionado, mas não consegui encontrar o membro que clicou.");
+        continue;
+      }
+
+      const testEmbed = new EmbedBuilder()
+        .setColor("#9b59b6")
+        .setTitle("🧪 Teste Manual do Notifier")
+        .setDescription(
+          [
+            "Funcionou, Macedo! O botão conseguiu forçar um teste manual do notifier.",
+            "",
+            `🎯 **Evento encontrado:** ${event.eventName}`,
+            `🏙️ **Cidade:** ${event.city}`,
+            `⏰ **Horário do evento:** ${event.time}`,
+            "",
+            `👥 **Equipe encontrada:** ${equipeMembers.length}`,
+            `🟢 **Equipe considerada online:** ${onlineEquipe.length}`,
+            `👑 **Responsáveis encontrados:** ${respMembers.length}`,
+            "",
+            "⚠️ O motivo de não enviar antes era simples:",
+            "`o evento foi encontrado, mas o horário atual não estava dentro de nenhuma janela de disparo.`",
+            "",
+            "No modo automático, ele só envia em:",
+            "• 1 hora antes",
+            "• 30 minutos antes",
+            "• 25 minutos depois",
+            "• 60 minutos depois",
+            "• 80 minutos depois",
+            "• 100 minutos depois",
+          ].join("\n")
+        )
+        .setFooter({ text: "SantaCreators • Teste manual do notifier" })
+        .setTimestamp();
+
+      await dm(client, testMember, testEmbed, event, "teste manual");
+
+      console.log(`[EventosChecklistNotifier] Teste manual enviado para ${testMember.user.tag}.`);
+      continue;
+    }
 
     if (phase === "PRE_60" || phase === "PRE_30") {
       const embed = buildPrepareEmbed(event, phase);
@@ -508,7 +560,10 @@ export async function eventosChecklistNotifierOnInteraction(interaction, client)
 
   console.log(`[EventosChecklistNotifier] Teste manual acionado por ${interaction.user.tag} (${interaction.user.id}).`);
 
-  await runNotifierTick(client ?? interaction.client);
+  await runNotifierTick(client ?? interaction.client, {
+    forceTest: true,
+    testUserId: interaction.user.id,
+  });
 
   console.log(`[EventosChecklistNotifier] Teste manual finalizado por ${interaction.user.tag} (${interaction.user.id}).`);
 
