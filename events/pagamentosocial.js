@@ -354,24 +354,25 @@ function parseValorOCR(texto) {
     .replace(/RS\s*/gi, "R$ ")
     .replace(/R5\s*/gi, "R$ ")
     .replace(/R\§\s*/gi, "R$ ")
+    .replace(/R\$\s+/gi, "R$ ")
     .replace(/\bValor\b\s*[:\-]?\s*/gi, "Valor: ");
 
   const matches = [
-    ...t.matchAll(/R\$\s*([0-9]{1,3}(?:[.\s][0-9]{3})*(?:,[0-9]{2})?|[0-9]+(?:,[0-9]{2})?)/gi),
-
-    // fallback: quando o OCR lê "Valor 50.000" sem o R$
-    ...t.matchAll(/\bValor\s*[:\-]?\s*([0-9]{1,3}(?:[.\s][0-9]{3})*(?:,[0-9]{2})?|[0-9]+(?:,[0-9]{2})?)/gi),
-
-    // fallback: quando vem "Transferência ... 50.000" sem R$
-    ...t.matchAll(/\bTransfer[eê]ncia[\s\S]{0,180}?([0-9]{1,3}(?:[.\s][0-9]{3})+(?:,[0-9]{2})?)/gi),
+    ...t.matchAll(/R\$\s*([0-9]{1,3}(?:[.\s][0-9]{3})+(?:,[0-9]{2})?|[0-9]{4,12}(?:,[0-9]{2})?)/gi),
+    ...t.matchAll(/\bValor\s*[:\-]?\s*([0-9]{1,3}(?:[.\s][0-9]{3})+(?:,[0-9]{2})?|[0-9]{4,12}(?:,[0-9]{2})?)/gi),
+    ...t.matchAll(/\bPronto[\s\S]{0,180}?([0-9]{1,3}(?:[.\s][0-9]{3})+(?:,[0-9]{2})?|[0-9]{4,12}(?:,[0-9]{2})?)/gi),
+    ...t.matchAll(/\bTransfer[eê]ncia[\s\S]{0,220}?([0-9]{1,3}(?:[.\s][0-9]{3})+(?:,[0-9]{2})?|[0-9]{4,12}(?:,[0-9]{2})?)/gi),
+    ...t.matchAll(/\b([0-9]{1,3}(?:[.\s][0-9]{3}){2,}(?:,[0-9]{2})?)\b/gi),
   ];
 
   if (!matches.length) return null;
 
   const valores = matches
     .map((m) => {
-      const raw = String(m[1] || "")
-        .replace(/\s/g, ".")
+      const rawOriginal = String(m[1] || "").trim();
+
+      const raw = rawOriginal
+        .replace(/\s+/g, ".")
         .replace(/[^\d.,]/g, "");
 
       const numero = Number(raw.replace(/\./g, "").replace(",", "."));
@@ -381,29 +382,34 @@ function parseValorOCR(texto) {
         numero: Number.isFinite(numero) ? numero : 0,
       };
     })
-    .filter((v) => v.numero > 0)
+    .filter((v) => v.numero >= 1000)
     .sort((a, b) => b.numero - a.numero);
 
   return valores[0] || null;
 }
 
 function parseHorarioOCR(texto) {
-  const t = limparTextoOCR(texto);
+  const t = limparTextoOCR(texto)
+    .replace(/([0-2]?\d)\s*[nH]\s*([0-5]\d)/g, "$1h$2")
+    .replace(/([0-2]?\d)\s*h\s+([0-5]\d)/gi, "$1h$2")
+    .replace(/([0-2]?\d)\s*;\s*([0-5]\d)/g, "$1:$2");
 
   const padroesPrioritarios = [
     /Agora\s+mesmo\s*[•·\-\–\—:\s]*([0-2]?\d)\s*[hH:]\s*([0-5]\d)(?:\s*:\s*([0-5]\d))?/i,
-    /Agora\s+mesmo[\s\S]{0,40}?([0-2]?\d)\s*([0-5]\d)\b/i,
+    /Agora\s+mesmo[\s\S]{0,80}?([0-2]?\d)\s*[hH:]\s*([0-5]\d)\b/i,
+    /Agora\s+mesmo[\s\S]{0,80}?([0-2]?\d)\s*([0-5]\d)\b/i,
+
+    /Pronto[\s\S]{0,380}?Agora\s+mesmo[\s\S]{0,120}?([0-2]?\d)\s*[hH:]\s*([0-5]\d)/i,
+    /Pronto[\s\S]{0,380}?([0-2]?\d)\s*[hH:]\s*([0-5]\d)(?:\s*:\s*([0-5]\d))?/i,
+    /Pronto[\s\S]{0,380}?([0-2]?\d)\s*([0-5]\d)\b/i,
 
     /\b[0-3]?\d\s*[\/.\-]\s*[01]?\d\s*[\/.\-]\s*(?:20)?\d{2}\s+([0-2]?\d)\s*:\s*([0-5]\d)(?:\s*:\s*([0-5]\d))?\b/i,
     /\b[0-3]?\d\s*[\/.\-]\s*[01]?\d\s*[\/.\-]\s*(?:20)?\d{2}\s+([0-2]?\d)\s*([0-5]\d)\b/i,
 
-    /Transfer[eê]ncia\s+para[\s\S]{0,220}?([0-2]?\d)\s*:\s*([0-5]\d)(?:\s*:\s*([0-5]\d))?/i,
-    /Transfer[eê]ncia[\s\S]{0,260}?([0-2]?\d)\s*:\s*([0-5]\d)(?:\s*:\s*([0-5]\d))?/i,
+    /Transfer[eê]ncia\s+para[\s\S]{0,260}?([0-2]?\d)\s*[hH:]\s*([0-5]\d)(?:\s*:\s*([0-5]\d))?/i,
+    /Transfer[eê]ncia[\s\S]{0,300}?([0-2]?\d)\s*[hH:]\s*([0-5]\d)(?:\s*:\s*([0-5]\d))?/i,
 
-    /R\$\s*[0-9.\s]+[\s\S]{0,80}?([0-2]?\d)\s*:\s*([0-5]\d)(?:\s*:\s*([0-5]\d))?/i,
-
-    /Pronto[\s\S]{0,320}?([0-2]?\d)\s*[hH:]\s*([0-5]\d)(?:\s*:\s*([0-5]\d))?/i,
-    /Pronto[\s\S]{0,320}?([0-2]?\d)\s*([0-5]\d)\b/i,
+    /R\$\s*[0-9.\s]+[\s\S]{0,120}?([0-2]?\d)\s*[hH:]\s*([0-5]\d)(?:\s*:\s*([0-5]\d))?/i,
 
     /\bàs\s+([0-2]?\d)\s*[hH:]\s*([0-5]\d)(?:\s*:\s*([0-5]\d))?\b/i,
     /\bas\s+([0-2]?\d)\s*[hH:]\s*([0-5]\d)(?:\s*:\s*([0-5]\d))?\b/i,
@@ -500,16 +506,25 @@ function limparNomeRecebedorOCR(nome) {
 function parseNomeRecebedorOCR(texto) {
   const t = limparTextoOCR(texto);
 
-  const mPara = t.match(/\bpara\s+(.+?)(?:\n|Agora\s+mesmo|R\$|$)/i);
-  if (mPara?.[1]) {
-    const nome = limparNomeRecebedorOCR(mPara[1]);
-    if (nome) return nome;
-  }
+  const padroes = [
+    /\bpara\s+([^\n\r]+?)(?:\n|Agora\s+mesmo|R\$|Valor|$)/i,
+    /R\$\s*[0-9.\s,]+[\s\S]{0,80}?\bpara\s+([^\n\r]+?)(?:\n|Agora\s+mesmo|$)/i,
+    /Pronto[\s\S]{0,260}?\bpara\s+([^\n\r]+?)(?:\n|Agora\s+mesmo|$)/i,
+    /Transfer[eê]ncia\s+para\s+([^\n\r]+?)(?:\n|Agora\s+mesmo|R\$|$)/i,
+    /Transfer[eê]ncia\s+de\s+([^\n\r]+?)(?:\n|R\$|$)/i,
+  ];
 
-  const mTransferencia = t.match(/Transfer[eê]ncia\s+de\s+(.+?)(?:\n|R\$|$)/i);
-  if (mTransferencia?.[1]) {
-    const nome = limparNomeRecebedorOCR(mTransferencia[1]);
-    if (nome) return nome;
+  for (const regex of padroes) {
+    const m = t.match(regex);
+    if (m?.[1]) {
+      const nome = limparNomeRecebedorOCR(m[1])
+        .replace(/\bAgora\s+mesmo[\s\S]*$/i, "")
+        .replace(/\bR\$\s*[\d.,\s]+$/i, "")
+        .replace(/\s+/g, " ")
+        .trim();
+
+      if (nome && nome.length >= 2) return nome;
+    }
   }
 
   return null;
@@ -584,17 +599,125 @@ async function prepararImagemParaOCR(buffer) {
   }
 }
 
+async function gerarVariacoesImagemParaOCR(buffer) {
+  try {
+    const meta = await sharp(buffer).metadata();
+    const largura = meta.width || 0;
+    const altura = meta.height || 0;
+
+    const variacoes = [];
+
+    const base = await prepararImagemParaOCR(buffer);
+    variacoes.push(base);
+
+    const semBorda = await sharp(buffer)
+      .trim({ threshold: 18 })
+      .png()
+      .toBuffer()
+      .then((b) => prepararImagemParaOCR(b))
+      .catch(() => null);
+
+    if (semBorda) variacoes.push(semBorda);
+
+    if (largura > 0 && altura > 0) {
+      const top = Math.floor(altura * 0.18);
+      const height = Math.floor(altura * 0.52);
+
+      const blocoCentral = await sharp(buffer)
+        .extract({
+          left: Math.floor(largura * 0.03),
+          top,
+          width: Math.floor(largura * 0.94),
+          height,
+        })
+        .resize({
+          width: 2200,
+          withoutEnlargement: false,
+        })
+        .grayscale()
+        .normalize()
+        .sharpen()
+        .png()
+        .toBuffer()
+        .catch(() => null);
+
+      if (blocoCentral) variacoes.push(blocoCentral);
+    }
+
+    if (largura > 0 && altura > 0) {
+      const top = Math.floor(altura * 0.25);
+      const height = Math.floor(altura * 0.30);
+
+      const blocoValorNomeHora = await sharp(buffer)
+        .extract({
+          left: Math.floor(largura * 0.06),
+          top,
+          width: Math.floor(largura * 0.88),
+          height,
+        })
+        .resize({
+          width: 2400,
+          withoutEnlargement: false,
+        })
+        .grayscale()
+        .normalize()
+        .linear(1.55, -24)
+        .sharpen()
+        .png()
+        .toBuffer()
+        .catch(() => null);
+
+      if (blocoValorNomeHora) variacoes.push(blocoValorNomeHora);
+    }
+
+    const threshold = await sharp(buffer)
+      .resize({
+        width: largura ? Math.max(largura * 5, 2200) : undefined,
+        withoutEnlargement: false,
+      })
+      .grayscale()
+      .normalize()
+      .threshold(165)
+      .sharpen()
+      .png()
+      .toBuffer()
+      .catch(() => null);
+
+    if (threshold) variacoes.push(threshold);
+
+    return variacoes;
+  } catch (err) {
+    console.warn("[PAGAMENTO OCR] Falha ao gerar variações, usando preparação padrão:", err?.message || err);
+    return [await prepararImagemParaOCR(buffer)];
+  }
+}
+
 async function reconhecerTextoPagamentoReforcado(worker, buffer) {
+  await worker.setParameters({
+    preserve_interword_spaces: "1",
+    tessedit_pageseg_mode: "6",
+  });
+
   const leituraNormal = await worker.recognize(buffer);
   const textoNormal = limparTextoOCR(leituraNormal?.data?.text || "");
 
   await worker.setParameters({
-    tessedit_char_whitelist: "0123456789/:.-hH ",
+    tessedit_char_whitelist: "0123456789R$rS.,/:.-hH ",
     preserve_interword_spaces: "1",
+    tessedit_pageseg_mode: "6",
   });
 
-  const leituraDataHora = await worker.recognize(buffer);
-  const textoDataHora = limparTextoOCR(leituraDataHora?.data?.text || "");
+  const leituraValorHora = await worker.recognize(buffer);
+  const textoValorHora = limparTextoOCR(leituraValorHora?.data?.text || "");
+
+  await worker.setParameters({
+    tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÀÂÃÉÈÊÍÌÎÓÒÔÕÚÙÛÇáàâãéèêíìîóòôõúùûç0123456789 .,:/-",
+    preserve_interword_spaces: "1",
+    tessedit_pageseg_mode: "6",
+  });
+
+  const leituraNome = await worker.recognize(buffer);
+  const textoNome = limparTextoOCR(leituraNome?.data?.text || "");
 
   await worker.setParameters({
     tessedit_char_whitelist: "",
@@ -605,8 +728,11 @@ async function reconhecerTextoPagamentoReforcado(worker, buffer) {
     [
       textoNormal,
       "",
-      "=== OCR_DATA_HORA_REFORCADO ===",
-      textoDataHora,
+      "=== OCR_VALOR_HORA_REFORCADO ===",
+      textoValorHora,
+      "",
+      "=== OCR_NOME_REFORCADO ===",
+      textoNome,
     ].join("\n")
   );
 }
@@ -1675,12 +1801,113 @@ async function adicionarBotoesCidadeNosRegistrosDoMes(client, canal) {
   return { atualizados, ignorados };
 }
 
+function valorEhNaoIdentificado(valor) {
+  return !valor || /Não identificado|Nao identificado|—/i.test(String(valor));
+}
+
+function getPremiacaoLinkFromEmbed(embedLike) {
+  return getFieldValue(embedLike, "🔗 Premiação / Link") || null;
+}
+
+function atualizarCampoOCRPagamento(embedBuilder, analiseComprovante) {
+  const data = embedBuilder.data ?? {};
+  const fields = Array.isArray(data.fields) ? [...data.fields] : [];
+
+  function setField(name, value, inline = true) {
+    const idx = fields.findIndex((f) => f.name === name);
+    const novo = { name, value, inline };
+
+    if (idx >= 0) fields[idx] = novo;
+    else fields.push(novo);
+  }
+
+  if (analiseComprovante?.valorRaw) {
+    setField("💰 Valor Identificado", `\`${analiseComprovante.valorRaw}\``, true);
+  }
+
+  if (analiseComprovante?.nomeRecebedor) {
+    setField("🧾 Nome no Comprovante", `\`${analiseComprovante.nomeRecebedor}\``, true);
+  }
+
+  if (analiseComprovante?.horario) {
+    setField(
+      "🕒 Horário",
+      `\`${analiseComprovante.horario}\` (${analiseComprovante.horarioFonte === "print" ? "print" : "registro"})`,
+      true
+    );
+  }
+
+  if (analiseComprovante?.data) {
+    setField(
+      "📅 Data",
+      `\`${analiseComprovante.data}\` (${analiseComprovante.dataFonte === "print" ? "print" : "registro"})`,
+      true
+    );
+  }
+
+  embedBuilder.setFields(fields);
+  return embedBuilder;
+}
+
+async function tentarReprocessarOCRRegistro(embedBuilder) {
+  const premiacao = getPremiacaoLinkFromEmbed(embedBuilder);
+  if (!premiacao) {
+    return {
+      alterou: false,
+      motivo: "Sem link de premiação no embed.",
+    };
+  }
+
+  const valorAtual = getFieldValue(embedBuilder, "💰 Valor Identificado");
+  const nomeAtual = getFieldValue(embedBuilder, "🧾 Nome no Comprovante");
+
+  const precisaReler =
+    valorEhNaoIdentificado(valorAtual) ||
+    valorEhNaoIdentificado(nomeAtual);
+
+  if (!precisaReler) {
+    return {
+      alterou: false,
+      motivo: "Valor e nome já estavam identificados.",
+    };
+  }
+
+  const analiseComprovante = await analisarComprovantePagamento(premiacao).catch(() => null);
+
+  if (!analiseComprovante) {
+    return {
+      alterou: false,
+      motivo: "Falha ao analisar comprovante novamente.",
+    };
+  }
+
+  const achouAlgo =
+    Boolean(analiseComprovante.valorRaw) ||
+    Boolean(analiseComprovante.nomeRecebedor) ||
+    analiseComprovante.horarioFonte === "print" ||
+    analiseComprovante.dataFonte === "print";
+
+  if (!achouAlgo) {
+    return {
+      alterou: false,
+      motivo: "Releitura feita, mas nada novo foi identificado.",
+    };
+  }
+
+  atualizarCampoOCRPagamento(embedBuilder, analiseComprovante);
+
+  return {
+    alterou: true,
+    motivo: "Releitura OCR atualizada.",
+  };
+}
+
 // =============================
 // Mover registros pelo filtro
 // =============================
 async function moverRegistrosPorFiltro(client, canal, filtro) {
   const mensagens = await canal.messages.fetch({ limit: 100 }).catch(() => null);
-  if (!mensagens) return { movidos: 0 };
+  if (!mensagens) return { movidos: 0, relidos: 0, atualizadosOCR: 0 };
 
   const lista = [...mensagens.values()]
     .filter((m) => m.author?.id === client.user.id)
@@ -1692,6 +1919,8 @@ async function moverRegistrosPorFiltro(client, canal, filtro) {
     });
 
   let movidos = 0;
+  let relidos = 0;
+  let atualizadosOCR = 0;
 
   for (const msg of lista) {
     const embedRaw = msg.embeds?.[0];
@@ -1712,6 +1941,19 @@ async function moverRegistrosPorFiltro(client, canal, filtro) {
 
     if (!entra) continue;
 
+    if (filtro === "naoclicados") {
+      relidos++;
+
+      const resultadoReleitura = await tentarReprocessarOCRRegistro(embedOriginal).catch(() => ({
+        alterou: false,
+        motivo: "Erro interno na releitura OCR.",
+      }));
+
+      if (resultadoReleitura?.alterou) {
+        atualizadosOCR++;
+      }
+    }
+
     const msgNova = await canal.send({ embeds: [embedOriginal] }).catch(() => null);
     if (!msgNova) continue;
 
@@ -1725,7 +1967,7 @@ async function moverRegistrosPorFiltro(client, canal, filtro) {
     movidos++;
   }
 
-  return { movidos };
+  return { movidos, relidos, atualizadosOCR };
 }
 
 // ============================================================================
@@ -1839,20 +2081,34 @@ const statsRefeitos = await reconstruirStatsPorEmbeds(client, 100).catch(() => n
           return true;
         }
 
-        const { movidos } = await moverRegistrosPorFiltro(client, canal, qual);
+        const { movidos, relidos, atualizadosOCR } = await moverRegistrosPorFiltro(client, canal, qual);
 
-        // repostar menu e limpar duplicados
-        await canal.send({ embeds: [criarEmbedMenu()], components: [criarRowMenu()] }).catch(() => {});
-        await limparBotoesAntigos(client, canal).catch(() => {});
+// repostar menu e limpar duplicados
+await canal.send({ embeds: [criarEmbedMenu()], components: [criarRowMenu()] }).catch(() => {});
+await limparBotoesAntigos(client, canal).catch(() => {});
 
-        logPagamento(client, interaction, "🔎 Filtro aplicado", `Filtro: **${qual}**\nRegistros movidos: **${movidos}**`)
-          .catch(() => {});
+logPagamento(
+  client,
+  interaction,
+  "🔎 Filtro aplicado",
+  [
+    `Filtro: **${qual}**`,
+    `Registros movidos: **${movidos}**`,
+    qual === "naoclicados" ? `OCR relidos: **${relidos || 0}**` : null,
+    qual === "naoclicados" ? `OCR atualizados: **${atualizadosOCR || 0}**` : null,
+  ].filter(Boolean).join("\n")
+).catch(() => {});
 
-        await interaction.followUp({
-          content: `✅ Filtro aplicado: **${qual}**\n📦 Registros movidos: **${movidos}**`,
-          ephemeral: true,
-        }).catch(() => {});
-        return true;
+await interaction.followUp({
+  content: [
+    `✅ Filtro aplicado: **${qual}**`,
+    `📦 Registros movidos: **${movidos}**`,
+    qual === "naoclicados" ? `🔎 Comprovantes relidos: **${relidos || 0}**` : null,
+    qual === "naoclicados" ? `💰 Registros atualizados pelo OCR: **${atualizadosOCR || 0}**` : null,
+  ].filter(Boolean).join("\n"),
+  ephemeral: true,
+}).catch(() => {});
+return true;
       }
 
       // ✅ ABRIR FORM
