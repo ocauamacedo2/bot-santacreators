@@ -890,17 +890,19 @@ function progressText(total, weeklyGoal = WEEKLY_GOAL) {
 // ===============================
 function barColorFor(v, prev = 0, weeklyGoal = WEEKLY_GOAL) {
   const cur = safeNum(v);
-  const last = safeNum(prev);
   const goal = Math.max(WEEKLY_GOAL, safeNum(weeklyGoal));
 
-  // 🔴 Crítico: abaixo da meta e pior que a semana anterior
-  if (cur < goal && last > 0 && cur < last) return "#ed4245";
-
-  // 🟡 Atenção: ainda não bateu a meta inteligente
-  if (cur < goal) return "#fee75c";
-
   // 🟢 Positivo: bateu a meta inteligente
-  return "#57f287";
+  if (cur >= goal) return "#57f287";
+
+  // 🟡 Quase na meta: 85% ou mais da meta inteligente
+  if (cur >= Math.ceil(goal * 0.85)) return "#fee75c";
+
+  // 🟠 Em andamento: 65% ou mais da meta inteligente
+  if (cur >= Math.ceil(goal * 0.65)) return "#faa61a";
+
+  // 🔴 Crítico: muito abaixo da meta inteligente
+  return "#ed4245";
 }
 
 function buildChartConfig(labels, totals) {
