@@ -350,16 +350,32 @@ function normalizarDataOCR(dia, mes, ano) {
 }
 
 function parseValorOCR(texto) {
-  const t = limparTextoOCR(texto);
+  const t = limparTextoOCR(texto)
+    .replace(/RS\s*/gi, "R$ ")
+    .replace(/R5\s*/gi, "R$ ")
+    .replace(/R\§\s*/gi, "R$ ")
+    .replace(/\bValor\b\s*[:\-]?\s*/gi, "Valor: ");
 
-  const matches = [...t.matchAll(/R\$\s*([0-9]{1,3}(?:[.\s][0-9]{3})*(?:,[0-9]{2})?|[0-9]+(?:,[0-9]{2})?)/gi)];
+  const matches = [
+    ...t.matchAll(/R\$\s*([0-9]{1,3}(?:[.\s][0-9]{3})*(?:,[0-9]{2})?|[0-9]+(?:,[0-9]{2})?)/gi),
+
+    // fallback: quando o OCR lê "Valor 50.000" sem o R$
+    ...t.matchAll(/\bValor\s*[:\-]?\s*([0-9]{1,3}(?:[.\s][0-9]{3})*(?:,[0-9]{2})?|[0-9]+(?:,[0-9]{2})?)/gi),
+
+    // fallback: quando vem "Transferência ... 50.000" sem R$
+    ...t.matchAll(/\bTransfer[eê]ncia[\s\S]{0,180}?([0-9]{1,3}(?:[.\s][0-9]{3})+(?:,[0-9]{2})?)/gi),
+  ];
 
   if (!matches.length) return null;
 
   const valores = matches
     .map((m) => {
-      const raw = m[1].replace(/\s/g, ".");
+      const raw = String(m[1] || "")
+        .replace(/\s/g, ".")
+        .replace(/[^\d.,]/g, "");
+
       const numero = Number(raw.replace(/\./g, "").replace(",", "."));
+
       return {
         raw: `R$ ${raw}`,
         numero: Number.isFinite(numero) ? numero : 0,
@@ -623,7 +639,7 @@ const resultado = {
 
   try {
 const bufferOriginal = await fetchImagemBuffer(url);
-const bufferOCR = await prepararImagemParaOCR(bufferOriginal);
+const buffersOCR = await gerarVariacoesImagemParaOCR(bufferOriginal);
 
 worker = await createWorker("por");
 
@@ -631,7 +647,14 @@ await worker.setParameters({
   preserve_interword_spaces: "1",
 });
 
-const texto = await reconhecerTextoPagamentoReforcado(worker, bufferOCR);
+const textosOCR = [];
+
+for (const bufferOCR of buffersOCR) {
+  const textoParcial = await reconhecerTextoPagamentoReforcado(worker, bufferOCR).catch(() => "");
+  if (textoParcial) textosOCR.push(textoParcial);
+}
+
+const texto = limparTextoOCR(textosOCR.join("\n\n=== OCR_VARIACAO_IMAGEM ===\n\n"));
 
 console.log("[PAGAMENTO OCR] Texto identificado:", texto);
 
