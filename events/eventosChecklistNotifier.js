@@ -421,12 +421,32 @@ async function runNotifierTick(client) {
 }
 
 async function sendTestPanel(client) {
-  const channel = await client.channels.fetch(TEST_PANEL_CHANNEL_ID).catch(() => null);
+  try {
+    const channel = await client.channels.fetch(TEST_PANEL_CHANNEL_ID).catch((e) => {
+      console.error("[EventosChecklistNotifier] erro ao buscar canal do painel:", e);
+      return null;
+    });
 
-  if (!channel || !channel.isTextBased()) {
-    console.log("[EventosChecklistNotifier] Canal do painel de teste não encontrado ou não é texto.");
-    return;
-  }
+    if (!channel || !channel.isTextBased()) {
+      console.log("[EventosChecklistNotifier] Canal do painel de teste não encontrado ou não é texto.");
+      return;
+    }
+
+    const oldMessages = await channel.messages.fetch({ limit: 20 }).catch(() => null);
+
+    if (oldMessages) {
+      const alreadyPanel = oldMessages.find((msg) =>
+        msg.author?.id === client.user.id &&
+        msg.components?.some((row) =>
+          row.components?.some((btn) => btn.customId === TEST_BUTTON_ID)
+        )
+      );
+
+      if (alreadyPanel) {
+        console.log("[EventosChecklistNotifier] Painel de teste já existe, não vou duplicar.");
+        return;
+      }
+    }
 
   const embed = new EmbedBuilder()
     .setColor("#9b59b6")
@@ -452,12 +472,15 @@ async function sendTestPanel(client) {
       .setStyle(ButtonStyle.Secondary)
   );
 
-  await channel.send({
-    embeds: [embed],
-    components: [row],
-  });
+    await channel.send({
+      embeds: [embed],
+      components: [row],
+    });
 
-  console.log("[EventosChecklistNotifier] Painel de teste enviado.");
+    console.log("[EventosChecklistNotifier] Painel de teste enviado.");
+  } catch (e) {
+    console.error("[EventosChecklistNotifier] erro real ao enviar painel de teste:", e);
+  }
 }
 
 function canUseTestButton(member, userId) {
@@ -467,15 +490,15 @@ function canUseTestButton(member, userId) {
 }
 
 export async function eventosChecklistNotifierOnInteraction(interaction, client) {
-  if (!interaction.isButton()) return;
-  if (interaction.customId !== TEST_BUTTON_ID) return;
+  if (!interaction.isButton()) return false;
+  if (interaction.customId !== TEST_BUTTON_ID) return false;
 
   if (!canUseTestButton(interaction.member, interaction.user.id)) {
     await interaction.reply({
       content: "❌ Você não tem permissão para usar esse botão de teste.",
       ephemeral: true,
     });
-    return;
+    return true;
   }
 
   await interaction.reply({
@@ -488,10 +511,21 @@ export async function eventosChecklistNotifierOnInteraction(interaction, client)
   await runNotifierTick(client ?? interaction.client);
 
   console.log(`[EventosChecklistNotifier] Teste manual finalizado por ${interaction.user.tag} (${interaction.user.id}).`);
+
+  return true;
 }
 
 export function eventosChecklistNotifierOnReady(client) {
-  if (client.__SC_EVENT_CHECKLIST_NOTIFIER__) return;
+  if (client.__SC_EVENT_CHECKLIST_NOTIFIER__) {
+    console.log("[EventosChecklistNotifier] já iniciado, verificando painel de teste novamente.");
+
+    sendTestPanel(client).catch((e) => {
+      console.error("[EventosChecklistNotifier] erro ao verificar painel já iniciado:", e);
+    });
+
+    return;
+  }
+
   client.__SC_EVENT_CHECKLIST_NOTIFIER__ = true;
 
   console.log("[EventosChecklistNotifier] iniciado.");
@@ -499,6 +533,12 @@ export function eventosChecklistNotifierOnReady(client) {
   sendTestPanel(client).catch((e) => {
     console.error("[EventosChecklistNotifier] erro ao enviar painel de teste:", e);
   });
+
+  setTimeout(() => {
+    sendTestPanel(client).catch((e) => {
+      console.error("[EventosChecklistNotifier] erro ao reenviar painel de teste:", e);
+    });
+  }, 5000);
 
   runNotifierTick(client).catch((e) => {
     console.error("[EventosChecklistNotifier] erro no primeiro tick:", e);

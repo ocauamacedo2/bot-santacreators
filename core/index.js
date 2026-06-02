@@ -739,7 +739,6 @@ client.on("interactionCreate", async (interaction) => {
     if (await eventosChecklistNotifierOnInteraction(interaction, client)) return;
 
     // 🚀 PRIORIDADE MÁXIMA: Botões de Ticket e Entrevista (Resolve o Delay)
-      // 🚀 PRIORIDADE MÁXIMA: Botões de Ticket e Entrevista (Resolve o Delay)
       if (await entrevista.handleButtons(interaction).catch(() => false)) return;
       if (await entrevistasTickets.onInteractionCreate(interaction).catch(() => false)) return;
 
@@ -1017,6 +1016,11 @@ try {
       iniciarAutoJoin(client);
     } catch (e) {
       console.error("[CORE] Erro AutoJoin (Late):", e);
+    }
+    try {
+      eventosChecklistNotifierOnReady(client);
+    } catch (e) {
+      console.error("[CORE] Erro ao iniciar eventosChecklistNotifier no LateBoot:", e);
     }
     try {
       startTodosLembretes(client);
