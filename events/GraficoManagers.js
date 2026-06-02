@@ -888,33 +888,37 @@ function progressText(total, weeklyGoal = WEEKLY_GOAL) {
 // ===============================
 // CHART (QuickChart) — últimas 4 semanas, números em cima, cores por faixa
 // ===============================
-function barColorFor(v, prev = 0) {
+function barColorFor(v, prev = 0, weeklyGoal = WEEKLY_GOAL) {
   const cur = safeNum(v);
   const last = safeNum(prev);
+  const goal = Math.max(WEEKLY_GOAL, safeNum(weeklyGoal));
 
   // 🔴 Crítico: abaixo da meta e pior que a semana anterior
-  if (cur < WEEKLY_GOAL && last > 0 && cur < last) return "#ed4245";
+  if (cur < goal && last > 0 && cur < last) return "#ed4245";
 
-  // 🟡 Atenção: bateu a meta, mas caiu comparado com a semana anterior
-  if (cur >= WEEKLY_GOAL && last > 0 && cur < last) return "#fee75c";
+  // 🟡 Atenção: ainda não bateu a meta inteligente
+  if (cur < goal) return "#fee75c";
 
-  // 🟡 Atenção/melhorando: ainda abaixo da meta, mas não piorou
-  if (cur < WEEKLY_GOAL) return "#fee75c";
-
-  // 🟢 Positivo: bateu a meta e manteve/subiu contra a semana anterior
+  // 🟢 Positivo: bateu a meta inteligente
   return "#57f287";
 }
 
 function buildChartConfig(labels, totals) {
   const sumLast4 = totals.reduce((a, b) => a + safeNum(b), 0);
+
+  const lastPrevValue = totals.length >= 2 ? totals[totals.length - 2] : 0;
+  const chartWeeklyGoal = getSmartWeeklyGoal(lastPrevValue);
+
   const colors = totals.map((value, index) => {
-  const prevValue = index > 0 ? totals[index - 1] : 0;
-  return barColorFor(value, prevValue);
-});
+    const prevValue = index > 0 ? totals[index - 1] : 0;
+    const goalForBar = getSmartWeeklyGoal(prevValue);
+
+    return barColorFor(value, prevValue, goalForBar);
+  });
 
   const safeTotals = totals.length ? totals : [0];
 
-  const maxValue = Math.max(...safeTotals, WEEKLY_GOAL);
+  const maxValue = Math.max(...safeTotals, chartWeeklyGoal);
   const yMax = Math.ceil((maxValue + 5) / 5) * 5;
 
   return {
@@ -937,8 +941,8 @@ function buildChartConfig(labels, totals) {
 
       {
   type: "line",
-  label: `Meta (${WEEKLY_GOAL})`,
-  data: new Array(labels.length).fill(WEEKLY_GOAL),
+  label: `Meta (${chartWeeklyGoal})`,
+  data: new Array(labels.length).fill(chartWeeklyGoal),
 
   borderColor: "#ffffff",
   borderWidth: 2,
