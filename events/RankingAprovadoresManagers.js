@@ -158,7 +158,7 @@ function parseBRDateFromText(text) {
   }
 }
 
-function getCurrentMonthSP() {
+function getMonthSP(offsetMonths = 0) {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/Sao_Paulo",
     year: "numeric",
@@ -175,8 +175,8 @@ function getCurrentMonthSP() {
   const year = get("year");
   const month = get("month");
 
-  const start = new Date(Date.UTC(year, month - 1, 1, 0, 0, 0));
-  const end = new Date(Date.UTC(year, month, 1, 0, 0, 0));
+  const start = new Date(Date.UTC(year, month - 1 + offsetMonths, 1, 0, 0, 0));
+  const end = new Date(Date.UTC(year, month + offsetMonths, 1, 0, 0, 0));
 
   const label = start.toLocaleDateString("pt-BR", {
     timeZone: "America/Sao_Paulo",
@@ -185,11 +185,19 @@ function getCurrentMonthSP() {
   });
 
   return {
-    key: `${year}-${String(month).padStart(2, "0")}`,
+    key: `${start.getUTCFullYear()}-${String(start.getUTCMonth() + 1).padStart(2, "0")}`,
     label: label.charAt(0).toUpperCase() + label.slice(1),
     startMs: start.getTime(),
     endMs: end.getTime(),
   };
+}
+
+function getCurrentMonthSP() {
+  return getMonthSP(0);
+}
+
+function getPreviousMonthSP() {
+  return getMonthSP(-1);
 }
 
 function getRMDecisionKey(message, embed) {
@@ -226,8 +234,7 @@ function extractDecisionFromEmbed(message, embed) {
   return null;
 }
 
-async function scanRankingAprovadores(client) {
-  const month = getCurrentMonthSP();
+async function scanRankingAprovadores(client, month = getCurrentMonthSP()) {
 
   const decisions = new Map();
 
@@ -360,6 +367,23 @@ async function getChartName(client, userId) {
       .slice(0, 16) || String(userId).slice(-4);
   } catch {
     return String(userId).slice(-4);
+  }
+}
+
+async function getFooterUserName(client, userId) {
+  try {
+    if (!userId) return "sistema";
+
+    const user = await client.users.fetch(String(userId)).catch(() => null);
+
+    return (
+      user?.globalName ||
+      user?.displayName ||
+      user?.username ||
+      String(userId)
+    );
+  } catch {
+    return String(userId || "sistema");
   }
 }
 
@@ -501,6 +525,7 @@ async function buildDashboardPayload(client, stats, causeUserId, reason) {
   const chartUrl = buildChartUrl({ chartUsers });
 
   const guildIcon = client.user.displayAvatarURL();
+  const updaterName = await getFooterUserName(client, causeUserId);
 
   const resumoEmbed = new EmbedBuilder()
     .setColor(0x5865f2)
@@ -524,7 +549,7 @@ async function buildDashboardPayload(client, stats, causeUserId, reason) {
       ].join("\n")
     )
     .setFooter({
-      text: `Atualizado por: ${causeUserId ? causeUserId : "sistema"} • Motivo: ${reason || "auto"}`,
+      text: `Atualizado por: ${updaterName} • Motivo: ${reason || "auto"}`,
     })
     .setTimestamp();
 
@@ -675,6 +700,53 @@ export async function rankingAprovadoresManagersEmitUpdate(client, causeUserId =
     return false;
   } finally {
     globalThis.__SC_RANKING_APROVADORES_UPDATING__ = false;
+  }
+}
+
+export async function rankingAprovadoresManagersSendPreviousThenCurrent(client, causeUserId = null) {
+  try {
+    const channel = await client.channels.fetch(RANKING_APROVADORES_DASH_CHANNEL_ID).catch(() => null);
+    if (!channel?.isTextBased?.()) return false;
+
+    const state = loadState();
+
+    if (state.messageId) {
+      const oldMessage = await channel.messages.fetch(state.messageId).catch(() => null);
+      if (oldMessage) await oldMessage.delete().catch(() => {});
+      delete state.messageId;
+      delete state.lastHash;
+      saveState(state);
+    }
+
+    const previousStats = await scanRankingAprovadores(client, getPreviousMonthSP());
+    const previousPayload = await buildDashboardPayload(client, previousStats, causeUserId, "rankingpassado");
+
+    await channel.send({
+      content: "📦 **Ranking do mês passado — enviado manualmente**",
+      embeds: previousPayload.embeds,
+      components: [],
+    }).catch(() => null);
+
+    const currentStats = await scanRankingAprovadores(client, getCurrentMonthSP());
+    const currentPayload = await buildDashboardPayload(client, currentStats, causeUserId, "atual após rankingpassado");
+
+    const currentMessage = await channel.send({
+      content: "📊 **Ranking atual do mês — mensagem principal**",
+      embeds: currentPayload.embeds,
+      components: currentPayload.components,
+    }).catch(() => null);
+
+    if (currentMessage) {
+      state.messageId = currentMessage.id;
+      state.lastHash = currentPayload.hash;
+      state.lastUpdateAt = Date.now();
+      saveState(state);
+    }
+
+    return true;
+  } catch (error) {
+    console.error("[RANKING_APROVADORES_MANAGERS] erro no ranking passado:", error);
+    return false;
   }
 }
 

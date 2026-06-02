@@ -43,6 +43,7 @@ import {
   rankingAprovadoresManagersEmitUpdate,
   rankingAprovadoresManagersHandleInteraction,
   rankingAprovadoresManagersOnReady,
+  rankingAprovadoresManagersSendPreviousThenCurrent,
 } from "./RankingAprovadoresManagers.js";
 
 // ===============================
@@ -1839,6 +1840,34 @@ export async function registroManagerHandleMessage(message, client) {
             : "🧹⚠️ Tentei zerar, mas o **bridge do FACs** não respondeu."
         )
         .then((m) => setTimeout(() => m.delete().catch(() => {}), 7000))
+        .catch(() => {});
+
+      return true;
+    }
+
+    if (content === "!rankingpassado") {
+      const allowed = canUseRmRepostCommand(message.member, message.author.id);
+
+      if (!allowed) {
+        setTimeout(() => message.delete().catch(() => {}), 1000);
+        await message
+          .reply({ content: "❌ Você não tem permissão pra usar `!rankingpassado`." })
+          .then((m) => setTimeout(() => m.delete().catch(() => {}), 5000))
+          .catch(() => {});
+        return true;
+      }
+
+      await message.delete().catch(() => {});
+
+      const ok = await rankingAprovadoresManagersSendPreviousThenCurrent(client, message.author.id);
+
+      await message.channel
+        .send(
+          ok
+            ? "✅ Enviei o **ranking do mês passado** e depois repostei o **ranking atual** por baixo."
+            : "⚠️ Não consegui gerar o ranking passado agora."
+        )
+        .then((m) => setTimeout(() => m.delete().catch(() => {}), 8000))
         .catch(() => {});
 
       return true;
