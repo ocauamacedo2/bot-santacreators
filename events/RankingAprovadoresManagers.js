@@ -750,12 +750,85 @@ export async function rankingAprovadoresManagersSendPreviousThenCurrent(client, 
   }
 }
 
+export async function rankingAprovadoresManagersHandleMessage(message, client) {
+  try {
+    if (!message?.guild) return false;
+    if (message.author?.bot) return false;
+    if (message.channelId !== RANKING_APROVADORES_DASH_CHANNEL_ID) return false;
+
+    const content = String(message.content || "").trim().toLowerCase();
+    if (content !== "!rankingpassado") return false;
+
+    const allowed = canUseRankingAprovadores(message.member, message.author.id);
+
+    if (!allowed) {
+      await message
+        .reply({ content: "❌ Você não tem permissão pra usar `!rankingpassado`." })
+        .then((m) => setTimeout(() => m.delete().catch(() => {}), 5000))
+        .catch(() => {});
+
+      setTimeout(() => message.delete().catch(() => {}), 1000);
+      return true;
+    }
+
+    if (globalThis.__SC_RANKING_PASSADO_RUNNING__) {
+      await message
+        .reply({ content: "⏳ O ranking passado já está sendo gerado. Aguarde terminar." })
+        .then((m) => setTimeout(() => m.delete().catch(() => {}), 6000))
+        .catch(() => {});
+
+      return true;
+    }
+
+    globalThis.__SC_RANKING_PASSADO_RUNNING__ = true;
+
+    await message.delete().catch(() => {});
+
+    const aviso = await message.channel
+      .send("⏳ Gerando **ranking do mês passado** e repostando o **ranking atual** embaixo...")
+      .catch(() => null);
+
+    const ok = await rankingAprovadoresManagersSendPreviousThenCurrent(client, message.author.id);
+
+    if (aviso) {
+      await aviso
+        .edit(
+          ok
+            ? "✅ Ranking do mês passado enviado e ranking atual repostado embaixo."
+            : "⚠️ Não consegui gerar o ranking passado agora. Veja o console do bot."
+        )
+        .catch(() => {});
+
+      setTimeout(() => aviso.delete().catch(() => {}), 8000);
+    }
+
+    return true;
+  } catch (error) {
+    console.error("[RANKING_APROVADORES_MANAGERS] erro no comando !rankingpassado:", error);
+    return false;
+  } finally {
+    globalThis.__SC_RANKING_PASSADO_RUNNING__ = false;
+  }
+}
+
 export async function rankingAprovadoresManagersOnReady(client) {
   try {
     setTimeout(() => {
       rankingAprovadoresManagersEmitUpdate(client, null, "ready").catch(() => {});
     }, 5000);
   } catch {}
+
+  if (!globalThis.__SC_RANKING_APROVADORES_MESSAGE_LISTENER__) {
+    globalThis.__SC_RANKING_APROVADORES_MESSAGE_LISTENER__ = true;
+
+    client.on("messageCreate", async (message) => {
+      try {
+        await rankingAprovadoresManagersHandleMessage(message, client);
+      } catch (error) {
+        console.error("[RANKING_APROVADORES_MANAGERS] erro no listener messageCreate:", error);
+      }
+    });
+  }
 }
 
 export async function rankingAprovadoresManagersHandleInteraction(interaction, client) {
