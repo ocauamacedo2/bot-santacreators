@@ -621,26 +621,27 @@ async function buildDashboardPayload(client, stats, causeUserId, reason) {
   };
 }
 
-async function ensureDashboardMessage(channel, state) {
-  if (state.messageId) {
+async function ensureDashboardMessage(channel, state, monthKey) {
+  const savedMonthKey = state.currentMonthKey || null;
+  const isSameMonth = !savedMonthKey || String(savedMonthKey) === String(monthKey);
+
+  if (state.messageId && isSameMonth) {
     const existing = await channel.messages.fetch(state.messageId).catch(() => null);
-    if (existing) return existing;
+
+    if (existing) {
+      state.currentMonthKey = String(monthKey);
+      saveState(state);
+      return existing;
+    }
   }
 
-  const recent = await channel.messages.fetch({ limit: 30 }).catch(() => null);
-  if (recent) {
-    const found = [...recent.values()].find((message) => {
-      if (message.author?.id !== channel.client.user.id) return false;
-      return message.embeds?.some((embed) =>
-        normalizeText(embed?.title || embed?.data?.title || "").includes("dashboard mensal")
-      );
-    });
-
-    if (found) {
-      state.messageId = found.id;
-      saveState(state);
-      return found;
-    }
+  // ✅ Virou o mês:
+  // não apaga o painel antigo, apenas cria um painel novo para o mês atual.
+  if (state.messageId && savedMonthKey && String(savedMonthKey) !== String(monthKey)) {
+    delete state.messageId;
+    delete state.lastHash;
+    state.currentMonthKey = String(monthKey);
+    saveState(state);
   }
 
   const created = await channel.send({
@@ -649,6 +650,7 @@ async function ensureDashboardMessage(channel, state) {
 
   if (created) {
     state.messageId = created.id;
+    state.currentMonthKey = String(monthKey);
     saveState(state);
   }
 
@@ -667,7 +669,7 @@ export async function rankingAprovadoresManagersEmitUpdate(client, causeUserId =
     const stats = await scanRankingAprovadores(client);
     const payload = await buildDashboardPayload(client, stats, causeUserId, reason);
 
-    const message = await ensureDashboardMessage(channel, state);
+    const message = await ensureDashboardMessage(channel, state, stats.month.key);
     if (!message) return false;
 
     if (state.lastHash === payload.hash && reason !== "manual" && reason !== "force") {
@@ -692,6 +694,7 @@ export async function rankingAprovadoresManagersEmitUpdate(client, causeUserId =
 
     state.lastHash = payload.hash;
     state.lastUpdateAt = Date.now();
+    state.currentMonthKey = stats.month.key;
     saveState(state);
 
     return true;
@@ -710,13 +713,9 @@ export async function rankingAprovadoresManagersSendPreviousThenCurrent(client, 
 
     const state = loadState();
 
-    if (state.messageId) {
-      const oldMessage = await channel.messages.fetch(state.messageId).catch(() => null);
-      if (oldMessage) await oldMessage.delete().catch(() => {});
-      delete state.messageId;
-      delete state.lastHash;
-      saveState(state);
-    }
+    // ✅ Não apaga o painel atual.
+    // O ranking passado será enviado acima/como histórico,
+    // e o painel atual continuará sendo preservado.
 
     const previousStats = await scanRankingAprovadores(client, getPreviousMonthSP());
     const previousPayload = await buildDashboardPayload(client, previousStats, causeUserId, "rankingpassado");
@@ -740,6 +739,7 @@ export async function rankingAprovadoresManagersSendPreviousThenCurrent(client, 
       state.messageId = currentMessage.id;
       state.lastHash = currentPayload.hash;
       state.lastUpdateAt = Date.now();
+      state.currentMonthKey = currentStats.month.key;
       saveState(state);
     }
 
