@@ -218,7 +218,10 @@ import {
 
 ///lembrete evenntos checklist 
 
-import { eventosChecklistNotifierOnReady } from "../events/eventosChecklistNotifier.js";
+import {
+  eventosChecklistNotifierOnReady,
+  eventosChecklistNotifierOnInteraction,
+} from "../events/eventosChecklistNotifier.js";
 
 
 // Doação
@@ -729,10 +732,13 @@ const setupEventHandlers = () => {
     }
   });
 
-  client.on("interactionCreate", async (interaction) => {
-    if (interaction.isAutocomplete()) return;
+client.on("interactionCreate", async (interaction) => {
+  if (interaction.isAutocomplete()) return;
 
-    try {
+  try {
+    if (await eventosChecklistNotifierOnInteraction(interaction, client)) return;
+
+    // 🚀 PRIORIDADE MÁXIMA: Botões de Ticket e Entrevista (Resolve o Delay)
       // 🚀 PRIORIDADE MÁXIMA: Botões de Ticket e Entrevista (Resolve o Delay)
       if (await entrevista.handleButtons(interaction).catch(() => false)) return;
       if (await entrevistasTickets.onInteractionCreate(interaction).catch(() => false)) return;

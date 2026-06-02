@@ -1,6 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
-import { EmbedBuilder } from "discord.js";
+import {
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+} from "discord.js";
 
 const TZ = "America/Sao_Paulo";
 const DATA_DIR = path.resolve(process.cwd(), "data");
@@ -9,6 +14,22 @@ const NOTIFIER_STATE_FILE = path.join(DATA_DIR, "eventos_checklist_notifier_stat
 
 // ✅ CANAL DE LOG DE TODAS AS NOTIFICAÇÕES ENVIADAS NO PV
 const DM_LOG_CHANNEL_ID = "1486009690767757322";
+
+// ✅ CANAL ONDE VAI FICAR O BOTÃO DE TESTE
+const TEST_PANEL_CHANNEL_ID = "1416693217415663657";
+
+// ✅ BOTÃO DE TESTE DO NOTIFIER
+const TEST_BUTTON_ID = "sc_eventos_checklist_notifier_test";
+
+// ✅ QUEM PODE USAR O BOTÃO DE TESTE
+const TEST_ALLOWED_USERS = ["660311795327828008"];
+
+const TEST_ALLOWED_ROLES = [
+  "1262262852949905408",
+  "1352408327983861844",
+  "1262262852949905409",
+  "1352407252216184833",
+];
 
 const ROLES = {
   RESP_CREATORS: "1352408327983861844",
@@ -399,11 +420,89 @@ async function runNotifierTick(client) {
   }
 }
 
+async function sendTestPanel(client) {
+  const channel = await client.channels.fetch(TEST_PANEL_CHANNEL_ID).catch(() => null);
+
+  if (!channel || !channel.isTextBased()) {
+    console.log("[EventosChecklistNotifier] Canal do painel de teste não encontrado ou não é texto.");
+    return;
+  }
+
+  const embed = new EmbedBuilder()
+    .setColor("#9b59b6")
+    .setTitle("🧪 Teste do Notifier de Eventos")
+    .setDescription(
+      [
+        "Clique no botão abaixo para testar o sistema de notificações agora.",
+        "",
+        "Esse teste força o `runNotifierTick(client)` manualmente.",
+        "",
+        "✅ Se tiver evento dentro da janela certa, ele tenta enviar os PVs.",
+        "📋 Mesmo se não tiver evento/fase agora, ele vai registrar o teste no console.",
+      ].join("\n")
+    )
+    .setFooter({ text: "SantaCreators • Painel de teste do notifier" })
+    .setTimestamp();
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(TEST_BUTTON_ID)
+      .setLabel("Testar Notifier Agora")
+      .setEmoji("🧪")
+      .setStyle(ButtonStyle.Secondary)
+  );
+
+  await channel.send({
+    embeds: [embed],
+    components: [row],
+  });
+
+  console.log("[EventosChecklistNotifier] Painel de teste enviado.");
+}
+
+function canUseTestButton(member, userId) {
+  if (TEST_ALLOWED_USERS.includes(userId)) return true;
+
+  return TEST_ALLOWED_ROLES.some((roleId) => member?.roles?.cache?.has(roleId));
+}
+
+export async function eventosChecklistNotifierOnInteraction(interaction, client) {
+  if (!interaction.isButton()) return;
+  if (interaction.customId !== TEST_BUTTON_ID) return;
+
+  if (!canUseTestButton(interaction.member, interaction.user.id)) {
+    await interaction.reply({
+      content: "❌ Você não tem permissão para usar esse botão de teste.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  await interaction.reply({
+    content: "🧪 Teste iniciado. Vou rodar o notifier agora e registrar no console/log.",
+    ephemeral: true,
+  });
+
+  console.log(`[EventosChecklistNotifier] Teste manual acionado por ${interaction.user.tag} (${interaction.user.id}).`);
+
+  await runNotifierTick(client ?? interaction.client);
+
+  console.log(`[EventosChecklistNotifier] Teste manual finalizado por ${interaction.user.tag} (${interaction.user.id}).`);
+}
+
 export function eventosChecklistNotifierOnReady(client) {
   if (client.__SC_EVENT_CHECKLIST_NOTIFIER__) return;
   client.__SC_EVENT_CHECKLIST_NOTIFIER__ = true;
 
   console.log("[EventosChecklistNotifier] iniciado.");
+
+  sendTestPanel(client).catch((e) => {
+    console.error("[EventosChecklistNotifier] erro ao enviar painel de teste:", e);
+  });
+
+  runNotifierTick(client).catch((e) => {
+    console.error("[EventosChecklistNotifier] erro no primeiro tick:", e);
+  });
 
   setInterval(() => {
     runNotifierTick(client).catch((e) => {
