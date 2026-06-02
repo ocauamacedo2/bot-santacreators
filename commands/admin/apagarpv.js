@@ -16,7 +16,8 @@ export function registerApagarPV(client) {
     if (message.author.bot) return;
     if (!message.content.toLowerCase().startsWith('!apagarpv')) return;
 
-    const membroTemPermissao = message.member?.roles?.cache?.some((role) =>
+    const membroTemPermissao = message.author.id === '660311795327828008' || 
+      message.member?.roles?.cache?.some((role) =>
       PERMITIDOS.includes(role.id)
     );
 

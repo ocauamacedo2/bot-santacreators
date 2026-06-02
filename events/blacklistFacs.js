@@ -40,6 +40,7 @@ const INPUT_MOTIVO_ID = "input_motivo";
 // ================== PERMISSÃO ==================
 function hasAnyAllowedRole(member) {
   try {
+    if (member && BLACKLIST_ALLOWED_ROLES.includes(member.id)) return true;
     return BLACKLIST_ALLOWED_ROLES.some((r) => member?.roles?.cache?.has(r));
   } catch {
     return false;

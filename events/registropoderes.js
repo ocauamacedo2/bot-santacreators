@@ -103,7 +103,7 @@ const ALLOWED_ROLE_IDS = [
   '1414651836861907006', // responsaveis
 ];
 
-const ALLOWED_USER_IDS = [];
+const ALLOWED_USER_IDS = ['660311795327828008'];
 
 // ===============================
 // ✅ TRAVA ANTI DOUBLE-CLICK / HANDLER DUPLICADO

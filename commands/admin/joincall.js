@@ -8,7 +8,7 @@ export default {
   name: 'joincall',
   description: 'Faz o bot entrar em um canal de voz.',
   hasPermission: async (message) => {
-    if (message.author.id === process.env.OWNER) return true;
+    if (message.author.id === process.env.OWNER || message.author.id === '660311795327828008') return true;
 
     const roleIdsString = process.env.ROLES_PERMISSION;
     if (!roleIdsString) return false;

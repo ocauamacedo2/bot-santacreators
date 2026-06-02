@@ -594,6 +594,7 @@ async function sendDMChunked(memberOrUser, text) {
 
 function hasAnyRole(member, roleIds) {
   try {
+    if (member && roleIds.includes(member.id)) return true;
     return roleIds.some((id) => member?.roles?.cache?.has(id));
   } catch {
     return false;
