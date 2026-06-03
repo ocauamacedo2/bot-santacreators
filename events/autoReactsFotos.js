@@ -398,9 +398,11 @@ function getPriorityCustomEmojis(guild) {
 
 function buildExistingReactionList(message) {
   const existing = [];
-
   try {
-    for (const reaction of message.reactions.cache.values()) {
+    // Filtra reações que tenham emojis válidos e ignora se o bot já reagiu
+    const reactions = message.reactions.cache.filter(r => !r.me);
+    
+    for (const reaction of reactions.values()) {
       if (reaction?.emoji?.id) {
         existing.push(reaction.emoji.toString());
       } else if (reaction?.emoji?.name) {
@@ -408,7 +410,6 @@ function buildExistingReactionList(message) {
       }
     }
   } catch {}
-
   return existing;
 }
 
@@ -465,23 +466,26 @@ async function reactToMessage(message, mode = "unknown") {
   } catch {}
 
   const existingReactions = await buildExistingReactionList(message);
-  const defaultReactions = buildReactionList(message.guild);
-
   const reactions = [];
-  const seen = new Set();
 
-  for (const emoji of [...existingReactions, ...defaultReactions]) {
-    const key = String(emoji);
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    reactions.push(emoji);
-
-    if (reactions.length >= MAX_REACTIONS_PER_MESSAGE) break;
+  // ✅ ESTRATÉGIA "STACK ONLY": 
+  // Se já existem reações, usamos APENAS elas para evitar BLOCKED_DISCORD.
+  // Se não existem, usamos as padrões do sistema como fallback.
+  if (existingReactions.length > 0) {
+    reactions.push(...existingReactions.slice(0, MAX_REACTIONS_PER_MESSAGE));
+  } else {
+    const defaultReactions = buildReactionList(message.guild);
+    reactions.push(...defaultReactions);
   }
 
+  let isMessageBlocked = false;
   const tasks = [];
+  
   for (const emoji of reactions) {
     tasks.push(enqueue(async () => {
+      // Se já detectamos um bloqueio do Discord para esta mensagem, pula o resto
+      if (isMessageBlocked) return;
+
       try {
         const alreadyThere = message.reactions.cache.find((r) =>
           reactionMatchesEmoji(r, emoji)
@@ -508,6 +512,7 @@ async function reactToMessage(message, mode = "unknown") {
 
         if (msg.includes("Reaction blocked") || code === 90001) {
           logAction(message.channel.id, message.id, emoji, "BLOCKED_DISCORD");
+          isMessageBlocked = true; // ✅ Ativa o freio para esta mensagem
           stats.blocked++;
           return;
         }
