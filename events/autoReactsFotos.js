@@ -1,4 +1,5 @@
 import {
+  Events,
   ChannelType,
   PermissionsBitField,
 } from "discord.js";
@@ -109,7 +110,16 @@ export async function autoReactsFotosOnReady(client) {
   }
 
   client.__SC_AUTO_REACTS__ = true;
-  console.log("[SC_AUTO_REACTS] sistema inicializado.");
+
+  client.on(Events.MessageCreate, async (message) => {
+    try {
+      await autoReactsFotosHandleMessage(message, client);
+    } catch (err) {
+      console.error("[SC_AUTO_REACTS] erro no listener MessageCreate:", err?.message || err);
+    }
+  });
+
+  console.log("[SC_AUTO_REACTS] sistema inicializado e listener MessageCreate conectado.");
 }
 
 export async function autoReactsFotosHandleMessage(message, client, options = {}) {
@@ -277,7 +287,7 @@ async function handleManualBackfillCommand(message, client) {
     label = "canal geral";
   } else {
     await message.reply(
-      "⚠️ Usa assim:\n`!reagirsc fotos`\n`!reagirsc geral`\n`!reagirsc fotos 200`\n`!reagirsc geral 400`"
+      "⚠️ Usa assim:\n`!reagirsc fotos`\n`!reagirsc eventos`\n`!reagirsc geral`\n`!reagirsc eventos 1000`\n`!reagirsc fotos 200`\n`!reagirsc geral 400`"
     );
     return true;
   }
