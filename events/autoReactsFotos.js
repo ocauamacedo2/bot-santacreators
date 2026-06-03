@@ -31,7 +31,7 @@ const REACT_ONLY_IF_MESSAGE_ALREADY_HAS_REACTIONS = true;
 
 const MAX_REACTIONS_PER_MESSAGE = 20;
 const BACKFILL_FETCH_PER_PAGE = 100;
-const BACKFILL_MAX_MESSAGES = 400;
+const BACKFILL_MAX_MESSAGES = 1000;
 const IGNORE_BOT_MESSAGES = true;
 
 const MANUAL_BACKFILL_COMMANDS = ["!reagirscantigas", "!reagirsc"];
@@ -95,13 +95,44 @@ const UNICODE_REACTIONS = [
 
 let reactionQueue = Promise.resolve();
 
+/**
+ * Enfileira uma tarefa e retorna o resultado da execução.
+ */
 function enqueue(task) {
-  reactionQueue = reactionQueue
-    .then(() => task())
-    .catch(() => {});
-  return reactionQueue;
+  let resolve, reject;
+  const promise = new Promise((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+
+  reactionQueue = reactionQueue.then(async () => {
+    try {
+      const result = await task();
+      resolve(result);
+    } catch (e) {
+      reject(e);
+    }
+  }).catch(() => {});
+
+  return promise;
 }
 
+/**
+ * Gera logs padronizados conforme solicitado.
+ */
+function logAction(channelId, msgId, emoji, result, reason = "") {
+  console.log(
+    `[SC_AUTO_REACTS]\n` +
+    `canal=${channelId}\n` +
+    `msg=${msgId}\n` +
+    `emoji=${emoji}\n` +
+    `resultado=${result}${reason ? `\nmotivo=${reason}` : ""}\n`
+  );
+}
+
+/**
+ * Inicialização
+ */
 export async function autoReactsFotosOnReady(client) {
   if (!client) return;
 
@@ -137,52 +168,22 @@ export async function autoReactsFotosHandleMessage(message, client, options = {}
     ) {
       return false;
     }
-    // comando manual continua existindo, mas só se a mensagem começar com ele
-    if (!allowBotMessage && await handleManualBackfillCommand(message, client)) {
-      return true;
-    }
+
+    if (!allowBotMessage && await handleManualBackfillCommand(message, client)) return true;
 
     const channelId = message.channel.id;
+    if (!MEDIA_CHANNEL_IDS.includes(channelId) && channelId !== ALL_MESSAGES_CHANNEL_ID) return false;
 
-    // ignora tudo fora dos canais monitorados
-    if (
-      !MEDIA_CHANNEL_IDS.includes(channelId) &&
-      channelId !== ALL_MESSAGES_CHANNEL_ID
-    ) {
-      return false;
-    }
+    if (message.partial) await message.fetch().catch(() => {});
 
-    // canal geral -> reage em toda mensagem nova
     if (channelId === ALL_MESSAGES_CHANNEL_ID) {
       await reactToMessage(message, options.mode || "all");
       return false;
     }
 
-    // canal de fotos -> reage só se tiver mídia
     if (MEDIA_CHANNEL_IDS.includes(channelId)) {
-      if (message.author?.bot) {
-        for (let attempt = 0; attempt < 6; attempt++) {
-          if (attempt > 0) {
-            await new Promise((resolve) => setTimeout(resolve, 900));
-
-            try {
-              if (message.partial) {
-                await message.fetch();
-              }
-            } catch {}
-          }
-
-          if (hasMediaContent(message) && shouldReactByExistingReactionsRule(message)) {
-            await reactToMessage(message, options.mode || "media-bot");
-            return false;
-          }
-        }
-
-        return false;
-      }
-
-      if (hasMediaContent(message) && shouldReactByExistingReactionsRule(message)) {
-        await reactToMessage(message, options.mode || "media");
+      if (hasMediaContent(message) && (await shouldReactByExistingReactionsRule(message))) {
+        await reactToMessage(message, options.mode || (message.author.bot ? "media-bot" : "media"));
       }
     }
 
@@ -339,61 +340,35 @@ function hasMediaContent(message) {
     }
 
     for (const embed of message.embeds || []) {
-      if (
-        embed?.image?.url ||
-        embed?.thumbnail?.url ||
-        embed?.video?.url ||
-        embed?.type === "gifv"
-      ) {
-        return true;
-      }
+      const data = embed.data || embed;
+      if (data.image?.url || data.thumbnail?.url || data.video?.url || data.type === "gifv") return true;
     }
 
     const content = String(message.content || "").toLowerCase();
+    const mediaPatterns = [
+      "cdn.discordapp.com", "media.discordapp.net", "tenor.com", "giphy.com",
+      "image.png", "image.jpg", "image.jpeg", "image.webp",
+      ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".avif", ".heic",
+      ".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v"
+    ];
 
-    if (
-      content.includes("cdn.discordapp.com") ||
-      content.includes("media.discordapp.net") ||
-      content.includes("tenor.com") ||
-      content.includes("giphy.com") ||
-      content.includes("image.png") ||
-      content.includes("image.jpg") ||
-      content.includes("image.jpeg") ||
-      content.includes("image.webp") ||
-      content.includes(".png") ||
-      content.includes(".jpg") ||
-      content.includes(".jpeg") ||
-      content.includes(".gif") ||
-      content.includes(".webp") ||
-      content.includes(".bmp") ||
-      content.includes(".avif") ||
-      content.includes(".heic") ||
-      content.includes(".mp4") ||
-      content.includes(".mov") ||
-      content.includes(".webm") ||
-      content.includes(".mkv") ||
-      content.includes(".avi") ||
-      content.includes(".m4v")
-    ) {
-      return true;
-    }
+    if (mediaPatterns.some(p => content.includes(p))) return true;
   } catch {}
 
   return false;
 }
 
-function messageAlreadyHasReactions(message) {
-  try {
-    return Number(message?.reactions?.cache?.size || 0) > 0;
-  } catch {
-    return false;
-  }
-}
-
-function shouldReactByExistingReactionsRule(message) {
+async function shouldReactByExistingReactionsRule(message) {
   if (!REACT_ONLY_IF_MESSAGE_ALREADY_HAS_REACTIONS) return true;
   if (!EVENT_REACTION_CHANNEL_IDS.includes(message.channel?.id)) return true;
-  return messageAlreadyHasReactions(message);
+
+  // Força o fetch das reações para garantir que o bot as veja
+  const reactions = await message.reactions.cache;
+  if (reactions.size === 0) {
+    const fetched = await message.reactions.fetch().catch(() => null);
+    return (fetched?.size || 0) > 0;
+  }
+  return true;
 }
 
 function getPriorityCustomEmojis(guild) {
@@ -482,17 +457,14 @@ function reactionMatchesEmoji(reaction, emoji) {
 }
 
 async function reactToMessage(message, mode = "unknown") {
-  if (!message?.guild) {
-    return { added: 0, alreadyMine: 0, noSlot: 0, blocked: 0, failed: 0 };
-  }
+  const stats = { added: 0, alreadyMine: 0, noSlot: 0, blocked: 0, failed: 0 };
+  if (!message?.guild) return stats;
 
   try {
-    if (message.partial) {
-      await message.fetch();
-    }
+    if (message.partial) await message.fetch().catch(() => {});
   } catch {}
 
-  const existingReactions = buildExistingReactionList(message);
+  const existingReactions = await buildExistingReactionList(message);
   const defaultReactions = buildReactionList(message.guild);
 
   const reactions = [];
@@ -507,42 +479,38 @@ async function reactToMessage(message, mode = "unknown") {
     if (reactions.length >= MAX_REACTIONS_PER_MESSAGE) break;
   }
 
-  const stats = {
-    added: 0,
-    alreadyMine: 0,
-    noSlot: 0,
-    blocked: 0,
-    failed: 0,
-  };
-
+  const tasks = [];
   for (const emoji of reactions) {
-    await enqueue(async () => {
+    tasks.push(enqueue(async () => {
       try {
         const alreadyThere = message.reactions.cache.find((r) =>
           reactionMatchesEmoji(r, emoji)
         );
 
         if (alreadyThere?.me) {
+          logAction(message.channel.id, message.id, emoji, "BLOCKED_ALREADY_REACTED");
           stats.alreadyMine++;
           return;
         }
 
         if (message.reactions.cache.size >= 20 && !alreadyThere) {
+          logAction(message.channel.id, message.id, emoji, "MAX_REACTIONS_REACHED");
           stats.noSlot++;
           return;
         }
 
         await message.react(emoji);
+        logAction(message.channel.id, message.id, emoji, "SUCCESS");
         stats.added++;
       } catch (err) {
+        const code = err?.code || err?.rawError?.code;
         const msg = String(err?.message || err);
 
-        if (msg.includes("Reaction blocked")) {
+        if (msg.includes("Reaction blocked") || code === 90001) {
+          logAction(message.channel.id, message.id, emoji, "BLOCKED_DISCORD");
           stats.blocked++;
           return;
         }
-
-        stats.failed++;
 
         if (
           msg.includes("Unknown Emoji") ||
@@ -555,18 +523,21 @@ async function reactToMessage(message, mode = "unknown") {
           msg.includes("50013") ||
           msg.includes("10008") ||
           msg.includes("30010") ||
-          err?.code === 30010
+          code === 30010
         ) {
+          logAction(message.channel.id, message.id, emoji, "NO_PERMISSION", msg);
+          stats.failed++;
           return;
         }
 
-        console.error(
-          `[SC_AUTO_REACTS] erro ao reagir msg=${message.id} canal=${message.channel?.id} modo=${mode} emoji=${emoji}:`,
-          err?.message || err
-        );
+        logAction(message.channel.id, message.id, emoji, "ERROR", msg);
+        stats.failed++;
       }
-    });
+    }));
   }
+
+  // Aguarda todas as reações agendadas para esta mensagem para retornar stats precisos
+  await Promise.all(tasks).catch(() => {});
 
   return stats;
 }
@@ -652,7 +623,7 @@ async function backfillChannel(client, channelId, mode, options = {}) {
       ) continue;
 
       if (mode === "media" && !hasMediaContent(msg)) continue;
-      if (!shouldReactByExistingReactionsRule(msg)) continue;
+      if (!(await shouldReactByExistingReactionsRule(msg))) continue;
 
       const reactStats = await reactToMessage(msg, mode);
 
