@@ -2069,6 +2069,26 @@ function setCampoPagamento(fields, name, value, inline = false) {
   else fields.push(novo);
 }
 
+function categoriaEhVipOuPass(categoria) {
+  const t = String(categoria || "")
+    .toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
+  return t.includes("vip") || t.includes("pass");
+}
+
+function removerCamposFinanceirosSeVip(fields, categoria) {
+  if (!categoriaEhVipOuPass(categoria)) return fields;
+
+  return fields.filter((f) => {
+    const nome = String(f.name || "");
+    return (
+      nome !== "💰 Valor Identificado" &&
+      nome !== "🧾 Nome no Comprovante"
+    );
+  });
+}
+
 async function tentarCorrigirRegistroPorVipEvento(client, embedBuilder) {
   const dados = getDadosPagamentoParaBuscarVip(embedBuilder);
 
@@ -2124,7 +2144,9 @@ async function tentarCorrigirRegistroPorVipEvento(client, embedBuilder) {
     `**Tipo Identificado:** \`${categoriaVip}\``
   );
 
-  embedBuilder.setFields(fields);
+  const fieldsFinais = removerCamposFinanceirosSeVip(fields, categoriaVip);
+
+  embedBuilder.setFields(fieldsFinais);
 
   return {
     alterou: true,
@@ -2135,6 +2157,15 @@ async function tentarCorrigirRegistroPorVipEvento(client, embedBuilder) {
 }
 
 function atualizarCampoOCRPagamento(embedBuilder, analiseComprovante) {
+  const categoriaAtual = getTipoPagamentoFromEmbed(embedBuilder);
+
+  if (categoriaEhVipOuPass(categoriaAtual)) {
+    const data = embedBuilder.data ?? {};
+    const fields = Array.isArray(data.fields) ? [...data.fields] : [];
+    embedBuilder.setFields(removerCamposFinanceirosSeVip(fields, categoriaAtual));
+    return embedBuilder;
+  }
+
   const data = embedBuilder.data ?? {};
   const fields = Array.isArray(data.fields) ? [...data.fields] : [];
 
@@ -2175,6 +2206,15 @@ function atualizarCampoOCRPagamento(embedBuilder, analiseComprovante) {
 }
 
 async function tentarReprocessarOCRRegistro(embedBuilder) {
+  const categoriaAtual = getTipoPagamentoFromEmbed(embedBuilder);
+
+  if (categoriaEhVipOuPass(categoriaAtual)) {
+    return {
+      alterou: false,
+      motivo: "Registro VIP/Pass não precisa de OCR financeiro.",
+    };
+  }
+
   const premiacao = getPremiacaoLinkFromEmbed(embedBuilder);
   if (!premiacao) {
     return {
