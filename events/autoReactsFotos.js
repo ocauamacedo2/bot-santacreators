@@ -315,7 +315,12 @@ async function handleManualBackfillCommand(message, client) {
     await message.reply(
       `✅ Backfill manual SC concluído em ${label}.\n` +
       `• Vasculhadas: **${result?.scanned ?? 0}**\n` +
-      `• Processadas: **${result?.processed ?? 0}**`
+      `• Mensagens com reação nova: **${result?.processed ?? 0}**\n` +
+      `• Reações adicionadas: **${result?.added ?? 0}**\n` +
+      `• Já eram minhas: **${result?.alreadyMine ?? 0}**\n` +
+      `• Sem espaço para emoji novo: **${result?.noSlot ?? 0}**\n` +
+      `• Reações bloqueadas pelo Discord: **${result?.blocked ?? 0}**\n` +
+      `• Falhas ignoradas: **${result?.failed ?? 0}**`
     );
   } catch (err) {
     console.error("[SC_AUTO_REACTS] erro no backfill manual:", err?.message || err);
@@ -477,7 +482,9 @@ function reactionMatchesEmoji(reaction, emoji) {
 }
 
 async function reactToMessage(message, mode = "unknown") {
-  if (!message?.guild) return 0;
+  if (!message?.guild) {
+    return { added: 0, alreadyMine: 0, noSlot: 0, blocked: 0, failed: 0 };
+  }
 
   try {
     if (message.partial) {
@@ -500,9 +507,13 @@ async function reactToMessage(message, mode = "unknown") {
     if (reactions.length >= MAX_REACTIONS_PER_MESSAGE) break;
   }
 
-  if (!reactions.length) return 0;
-
-  let added = 0;
+  const stats = {
+    added: 0,
+    alreadyMine: 0,
+    noSlot: 0,
+    blocked: 0,
+    failed: 0,
+  };
 
   for (const emoji of reactions) {
     await enqueue(async () => {
@@ -511,16 +522,27 @@ async function reactToMessage(message, mode = "unknown") {
           reactionMatchesEmoji(r, emoji)
         );
 
-        if (alreadyThere?.me) return;
+        if (alreadyThere?.me) {
+          stats.alreadyMine++;
+          return;
+        }
 
         if (message.reactions.cache.size >= 20 && !alreadyThere) {
+          stats.noSlot++;
           return;
         }
 
         await message.react(emoji);
-        added++;
+        stats.added++;
       } catch (err) {
         const msg = String(err?.message || err);
+
+        if (msg.includes("Reaction blocked")) {
+          stats.blocked++;
+          return;
+        }
+
+        stats.failed++;
 
         if (
           msg.includes("Unknown Emoji") ||
@@ -546,22 +568,37 @@ async function reactToMessage(message, mode = "unknown") {
     });
   }
 
-  return added;
+  return stats;
 }
 
 async function backfillChannels(client, channelIds, mode, options = {}) {
   let totalScanned = 0;
   let totalProcessed = 0;
+  let totalAdded = 0;
+  let totalAlreadyMine = 0;
+  let totalNoSlot = 0;
+  let totalBlocked = 0;
+  let totalFailed = 0;
 
   for (const channelId of channelIds) {
     const result = await backfillChannel(client, channelId, mode, options);
     totalScanned += Number(result?.scanned || 0);
     totalProcessed += Number(result?.processed || 0);
+    totalAdded += Number(result?.added || 0);
+    totalAlreadyMine += Number(result?.alreadyMine || 0);
+    totalNoSlot += Number(result?.noSlot || 0);
+    totalBlocked += Number(result?.blocked || 0);
+    totalFailed += Number(result?.failed || 0);
   }
 
   return {
     scanned: totalScanned,
     processed: totalProcessed,
+    added: totalAdded,
+    alreadyMine: totalAlreadyMine,
+    noSlot: totalNoSlot,
+    blocked: totalBlocked,
+    failed: totalFailed,
   };
 }
 
@@ -583,6 +620,11 @@ async function backfillChannel(client, channelId, mode, options = {}) {
   let lastId;
   let scanned = 0;
   let processed = 0;
+  let totalAdded = 0;
+  let totalAlreadyMine = 0;
+  let totalNoSlot = 0;
+  let totalBlocked = 0;
+  let totalFailed = 0;
 
   while (scanned < maxMessages) {
     const remaining = maxMessages - scanned;
@@ -612,11 +654,17 @@ async function backfillChannel(client, channelId, mode, options = {}) {
       if (mode === "media" && !hasMediaContent(msg)) continue;
       if (!shouldReactByExistingReactionsRule(msg)) continue;
 
-      const added = await reactToMessage(msg, mode);
+      const reactStats = await reactToMessage(msg, mode);
 
-      if (added > 0) {
+      if (reactStats.added > 0) {
         processed++;
       }
+
+      totalAdded += reactStats.added;
+      totalAlreadyMine += reactStats.alreadyMine;
+      totalNoSlot += reactStats.noSlot;
+      totalBlocked += reactStats.blocked;
+      totalFailed += reactStats.failed;
     }
 
     lastId = ordered[0]?.id;
@@ -624,8 +672,16 @@ async function backfillChannel(client, channelId, mode, options = {}) {
   }
 
   console.log(
-    `[SC_AUTO_REACTS] backfill canal=${channelId} modo=${mode} finalizado | vasculhadas=${scanned} | reagidas=${processed}`
+     `[SC_AUTO_REACTS] backfill canal=${channelId} finalizado | vasculhadas=${scanned} | mensagens_reagidas=${processed} | reacoes_add=${totalAdded} | ja_eram_minhas=${totalAlreadyMine} | sem_slot=${totalNoSlot} | bloqueadas=${totalBlocked} | falhas=${totalFailed}`
   );
 
-  return { scanned, processed };
+  return {
+    scanned,
+    processed,
+    added: totalAdded,
+    alreadyMine: totalAlreadyMine,
+    noSlot: totalNoSlot,
+    blocked: totalBlocked,
+    failed: totalFailed,
+  };
 }
