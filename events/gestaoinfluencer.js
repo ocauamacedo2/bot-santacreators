@@ -1722,6 +1722,69 @@ try {
       } catch {}
     }
 
+async function removeControleRegistroDoChat(guild, snapshot, motivo = 'Desligamento') {
+  try {
+    const ch = await guild.channels.fetch(snapshot.channelId).catch(() => null);
+
+    if (!ch || !ch.isTextBased()) {
+      await logMsg(
+        guild,
+        'Falha ao remover controle GI',
+        [
+          `👤 **Membro:** <@${snapshot.targetId}> (\`${snapshot.targetId}\`)`,
+          `🧾 **Registro:** \`${snapshot.messageId}\``,
+          `⚠️ **Erro:** canal do controle não encontrado ou não é texto.`,
+          `📝 **Motivo:** ${motivo}`
+        ].join('\n')
+      );
+      return false;
+    }
+
+    const msg = await ch.messages.fetch(snapshot.messageId).catch(() => null);
+
+    if (!msg) {
+      return true;
+    }
+
+    const deleted = await msg.delete().then(() => true).catch(() => false);
+
+    if (deleted) {
+      return true;
+    }
+
+    await msg.edit({
+      content: `🗑️ <@${snapshot.targetId}> foi desligado(a) da gestão. Controle encerrado automaticamente.`,
+      components: []
+    }).catch(() => {});
+
+    await logMsg(
+      guild,
+      'Controle GI não pôde ser apagado',
+      [
+        `👤 **Membro:** <@${snapshot.targetId}> (\`${snapshot.targetId}\`)`,
+        `🧾 **Registro:** \`${snapshot.messageId}\``,
+        `⚠️ **Ação:** não consegui apagar a mensagem, então removi os botões e deixei como encerrado.`,
+        `📝 **Motivo:** ${motivo}`
+      ].join('\n')
+    );
+
+    return false;
+  } catch (e) {
+    await logMsg(
+      guild,
+      'Erro ao remover controle GI',
+      [
+        `👤 **Membro:** <@${snapshot.targetId}> (\`${snapshot.targetId}\`)`,
+        `🧾 **Registro:** \`${snapshot.messageId}\``,
+        `⚠️ **Erro:** \`${String(e?.message || e).slice(0, 900)}\``,
+        `📝 **Motivo:** ${motivo}`
+      ].join('\n')
+    ).catch(() => {});
+
+    return false;
+  }
+}
+
 async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado manualmente') {
   const rec = SC_GI_STATE.registros.get(messageId);
   if (!rec) throw new Error('Registro não encontrado.');
@@ -1777,11 +1840,7 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
     }
 
 
-      try {
-        const ch = await guild.channels.fetch(snapshot.channelId).catch(() => null);
-        const msg = ch ? await ch.messages.fetch(snapshot.messageId).catch(() => null) : null;
-        if (msg) await msg.delete().catch(() => {});
-      } catch {}
+      await removeControleRegistroDoChat(guild, snapshot, motivo);
 
       SC_GI_STATE.registros.delete(snapshot.messageId);
       
@@ -1841,7 +1900,19 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
 
       try {
         const ch = await guild.client.channels.fetch(SC_GI_CFG.CHANNEL_DESLIGAMENTOS).catch(() => null);
-        if (ch && ch.type === ChannelType.GuildText) {
+
+        if (!ch || ch.type !== ChannelType.GuildText) {
+          await logMsg(
+            guild,
+            'Falha ao enviar desligamento GI',
+            [
+              `👤 **Membro:** <@${snapshot.targetId}> (\`${snapshot.targetId}\`)`,
+              `🧾 **Registro:** \`${snapshot.messageId}\``,
+              `⚠️ **Erro:** canal de desligamentos não encontrado ou inválido.`,
+              `📌 **Canal esperado:** \`${SC_GI_CFG.CHANNEL_DESLIGAMENTOS}\``
+            ].join('\n')
+          );
+        } else {
           const weeks = weeksSince(snapshot.joinDateMs);
           const months = monthsSince(snapshot.joinDateMs);
           const hist = (snapshot.responsibleHistory || [])
@@ -1880,7 +1951,17 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
 
           await ch.send({ embeds: [emb], components: [rowUndo] });
         }
-      } catch {}
+      } catch (e) {
+        await logMsg(
+          guild,
+          'Erro ao enviar desligamento GI',
+          [
+            `👤 **Membro:** <@${snapshot.targetId}> (\`${snapshot.targetId}\`)`,
+            `🧾 **Registro:** \`${snapshot.messageId}\``,
+            `⚠️ **Erro:** \`${String(e?.message || e).slice(0, 900)}\``
+          ].join('\n')
+        ).catch(() => {});
+      }
 
       await renderRespBoard(guild, { force: true });
     }
