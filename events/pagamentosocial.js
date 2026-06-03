@@ -2048,6 +2048,92 @@ async function resolverVipEventoProfissional(client, texto, dados = {}) {
   return porLink || porBusca || null;
 }
 
+function getDadosPagamentoParaBuscarVip(embedLike) {
+  const ganhadorRaw = getFieldValue(embedLike, "👤 Ganhador");
+  const ganhadorParts = String(ganhadorRaw || "").split("|").map((p) => p.trim());
+
+  return {
+    eventoNome: getFieldValue(embedLike, "🏷️ Evento"),
+    eventoData: getFieldValue(embedLike, "📅 Data do Evento"),
+    ganhadorNome: ganhadorParts[0] || "",
+    ganhadorId: ganhadorParts[1] || "",
+    premiacao: getFieldValue(embedLike, "🔗 Premiação / Link"),
+  };
+}
+
+function setCampoPagamento(fields, name, value, inline = false) {
+  const idx = fields.findIndex((f) => f.name === name);
+  const novo = { name, value, inline };
+
+  if (idx >= 0) fields[idx] = novo;
+  else fields.push(novo);
+}
+
+async function tentarCorrigirRegistroPorVipEvento(client, embedBuilder) {
+  const dados = getDadosPagamentoParaBuscarVip(embedBuilder);
+
+  const vipEventoResolvido = await resolverVipEventoProfissional(
+    client,
+    dados.premiacao,
+    dados
+  ).catch(() => null);
+
+  if (!vipEventoResolvido?.ok) {
+    return {
+      alterou: false,
+      motivo: vipEventoResolvido?.erro || "Nenhum VIP Evento encontrado.",
+    };
+  }
+
+  const info = vipEventoResolvido.info || {};
+  const categoriaVip = normalizarTipoPremiacao(`${info.tipo || ""} ${info.premiacao || ""}`);
+
+  const data = embedBuilder.data ?? {};
+  const fields = Array.isArray(data.fields) ? [...data.fields] : [];
+
+  if (info.evento) {
+    setCampoPagamento(fields, "🏷️ Evento", info.evento, true);
+  }
+
+  if (info.data) {
+    setCampoPagamento(fields, "📅 Data do Evento", normalizarDataEvento(info.data), true);
+  }
+
+  if (info.ganhadorNome || info.ganhadorId) {
+    setCampoPagamento(
+      fields,
+      "👤 Ganhador",
+      `${info.ganhadorNome || dados.ganhadorNome || PADRAO_INDEFINIDO} | ${info.ganhadorId || dados.ganhadorId || PADRAO_INDEFINIDO}`,
+      true
+    );
+  }
+
+  setCampoPagamento(
+    fields,
+    "🔗 Premiação / Link",
+    [
+      `${info.premiacao || dados.premiacao || PADRAO_INDEFINIDO}`,
+      "",
+      `📎 **Origem VIP:** ${vipEventoResolvido.link?.url || "—"}`,
+    ].join("\n"),
+    false
+  );
+
+  embedBuilder.setDescription(
+    "📌 Registro obrigatório de pagamentos de eventos e ações especiais.\n\n" +
+    `**Tipo Identificado:** \`${categoriaVip}\``
+  );
+
+  embedBuilder.setFields(fields);
+
+  return {
+    alterou: true,
+    motivo: "Registro corrigido com dados do VIP Evento.",
+    categoriaVip,
+    link: vipEventoResolvido.link?.url || null,
+  };
+}
+
 function atualizarCampoOCRPagamento(embedBuilder, analiseComprovante) {
   const data = embedBuilder.data ?? {};
   const fields = Array.isArray(data.fields) ? [...data.fields] : [];
@@ -2157,9 +2243,10 @@ async function moverRegistrosPorFiltro(client, canal, filtro) {
       return t.includes("Registro de Pagamento de Evento – SANTACREATORS");
     });
 
-  let movidos = 0;
-  let relidos = 0;
-  let atualizadosOCR = 0;
+let movidos = 0;
+let relidos = 0;
+let atualizadosOCR = 0;
+let corrigidosVIP = 0;
 
   for (const msg of lista) {
     const embedRaw = msg.embeds?.[0];
@@ -2180,18 +2267,27 @@ async function moverRegistrosPorFiltro(client, canal, filtro) {
 
     if (!entra) continue;
 
-    if (filtro === "naoclicados") {
-      relidos++;
+ relidos++;
 
-      const resultadoReleitura = await tentarReprocessarOCRRegistro(embedOriginal).catch(() => ({
-        alterou: false,
-        motivo: "Erro interno na releitura OCR.",
-      }));
+const resultadoVip = await tentarCorrigirRegistroPorVipEvento(client, embedOriginal).catch(() => ({
+  alterou: false,
+  motivo: "Erro interno na correção VIP.",
+}));
 
-      if (resultadoReleitura?.alterou) {
-        atualizadosOCR++;
-      }
-    }
+if (resultadoVip?.alterou) {
+  corrigidosVIP++;
+}
+
+if (filtro === "naoclicados" && !resultadoVip?.alterou) {
+  const resultadoReleitura = await tentarReprocessarOCRRegistro(embedOriginal).catch(() => ({
+    alterou: false,
+    motivo: "Erro interno na releitura OCR.",
+  }));
+
+  if (resultadoReleitura?.alterou) {
+    atualizadosOCR++;
+  }
+}
 
     const msgNova = await canal.send({ embeds: [embedOriginal] }).catch(() => null);
     if (!msgNova) continue;
@@ -2206,7 +2302,7 @@ async function moverRegistrosPorFiltro(client, canal, filtro) {
     movidos++;
   }
 
-  return { movidos, relidos, atualizadosOCR };
+return { movidos, relidos, atualizadosOCR, corrigidosVIP };
 }
 
 // ============================================================================
@@ -2320,7 +2416,7 @@ const statsRefeitos = await reconstruirStatsPorEmbeds(client, 100).catch(() => n
           return true;
         }
 
-        const { movidos, relidos, atualizadosOCR } = await moverRegistrosPorFiltro(client, canal, qual);
+       const { movidos, relidos, atualizadosOCR, corrigidosVIP } = await moverRegistrosPorFiltro(client, canal, qual);
 
 // repostar menu e limpar duplicados
 await canal.send({ embeds: [criarEmbedMenu()], components: [criarRowMenu()] }).catch(() => {});
@@ -2333,8 +2429,9 @@ logPagamento(
   [
     `Filtro: **${qual}**`,
     `Registros movidos: **${movidos}**`,
-    qual === "naoclicados" ? `OCR relidos: **${relidos || 0}**` : null,
-    qual === "naoclicados" ? `OCR atualizados: **${atualizadosOCR || 0}**` : null,
+`Registros analisados: **${relidos || 0}**`,
+`Corrigidos pelo VIP Evento: **${corrigidosVIP || 0}**`,
+qual === "naoclicados" ? `OCR atualizados: **${atualizadosOCR || 0}**` : null,
   ].filter(Boolean).join("\n")
 ).catch(() => {});
 
@@ -2342,8 +2439,9 @@ await interaction.followUp({
   content: [
     `✅ Filtro aplicado: **${qual}**`,
     `📦 Registros movidos: **${movidos}**`,
-    qual === "naoclicados" ? `🔎 Comprovantes relidos: **${relidos || 0}**` : null,
-    qual === "naoclicados" ? `💰 Registros atualizados pelo OCR: **${atualizadosOCR || 0}**` : null,
+`🔎 Registros analisados: **${relidos || 0}**`,
+`💎 Corrigidos pelo VIP Evento: **${corrigidosVIP || 0}**`,
+qual === "naoclicados" ? `💰 Registros atualizados pelo OCR: **${atualizadosOCR || 0}**` : null,
   ].filter(Boolean).join("\n"),
   ephemeral: true,
 }).catch(() => {});
@@ -2439,11 +2537,13 @@ return true;
           return true;
         }
 
-        const embedAtualizado = atualizarCampoCidade(
-          EmbedBuilder.from(embedRaw),
-          cidadeKey,
-          interaction.user.id
-        );
+const embedAtualizado = atualizarCampoCidade(
+  EmbedBuilder.from(embedRaw),
+  cidadeKey,
+  interaction.user.id
+);
+
+await tentarCorrigirRegistroPorVipEvento(client, embedAtualizado).catch(() => null);
 
         const componentsSemCidades = (registroMsg.components || [])
           .filter((row) => {
@@ -2892,15 +2992,17 @@ if (id.startsWith("pago_desc_") || id.startsWith("solicitado_desc_") || id.start
         : "REPROVADO";
 
   // ✅ agora escreve também quem fez a ação no próprio registro
-  const embedAtualizado = atualizarCampoStatus(
-    embedOriginal,
-    statusTexto,
-    cor,
-    interaction.user.id,
-    labelAuditoria
-  );
+const embedAtualizado = atualizarCampoStatus(
+  embedOriginal,
+  statusTexto,
+  cor,
+  interaction.user.id,
+  labelAuditoria
+);
+
+await tentarCorrigirRegistroPorVipEvento(client, embedAtualizado).catch(() => null);
   
-  const msgNova = await canal.send({ embeds: [embedAtualizado] }).catch(() => null);
+const msgNova = await canal.send({ embeds: [embedAtualizado] }).catch(() => null);
   if (!msgNova) {
     await interaction.editReply({ content: "❌ Falhei ao enviar a atualização." }).catch(() => {});
     return true;
