@@ -607,6 +607,9 @@ const setupEventHandlers = () => {
         if (await ausenciasHandleMessage(message, client)) return;
         if (await hierarquiaHandleMessage(message, client)) return;
         if (await reuniaoSemanalHandleMessage(message, client)) return;
+
+        // ✅ Auto React precisa receber comandos como !reagirsc eventos 1000
+        if (await autoReactsFotosHandleMessage(message, client)) return;
         
         // Se chegou aqui sendo um comando, mas não foi tratado, não precisamos continuar nos listeners de texto
         return;
