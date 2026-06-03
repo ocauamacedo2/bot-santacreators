@@ -2362,6 +2362,63 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
       await warnAndReAddGI(guild, userId, rec); // NOVO: passa o registro
     }
 
+async function autoDesligarPausadosVencidos(guild, origem = 'tick') {
+  const n = nowMs();
+  const records = Array.from(SC_GI_STATE.registros.values());
+
+  for (const rec of records) {
+    if (!rec) continue;
+    if (rec.guildId !== guild.id) continue;
+    if (rec.active) continue;
+
+    const pausedTotalMs = getPausedTotalMs(rec, n);
+    const dias = Math.floor(pausedTotalMs / (24 * 60 * 60 * 1000));
+
+    if (pausedTotalMs < AUTO_DESLIGAR_PAUSA_MS) continue;
+
+    try {
+      await logMsg(
+        guild,
+        'Auto-desligamento detectado (GI)',
+        [
+          `👤 **Membro:** <@${rec.targetId}> (\`${rec.targetId}\`)`,
+          `⏸️ **Tempo pausado acumulado:** \`${formatDurationFull(pausedTotalMs)}\``,
+          `📅 **Dias pausado:** \`${dias}\``,
+          `🤖 **Origem:** \`${origem}\``,
+          `🧾 **Registro:** \`${rec.messageId}\``,
+          '',
+          '✅ Resultado: tentando desligar automaticamente agora.'
+        ].join('\n')
+      );
+
+      await desligarRegistro(
+        guild,
+        client.user,
+        rec.messageId,
+        `Auto-desligado após ${dias} dias pausado acumulado`
+      );
+    } catch (e) {
+      console.warn(
+        `[SC_GI] Falha ao auto-desligar ${rec.targetId} após ${dias} dias pausado:`,
+        e?.message || e
+      );
+
+      await logMsg(
+        guild,
+        'Falha no Auto-desligamento (GI)',
+        [
+          `👤 **Membro:** <@${rec.targetId}> (\`${rec.targetId}\`)`,
+          `⏸️ **Tempo pausado acumulado:** \`${formatDurationFull(pausedTotalMs)}\``,
+          `📅 **Dias pausado:** \`${dias}\``,
+          `🤖 **Origem:** \`${origem}\``,
+          `🧾 **Registro:** \`${rec.messageId}\``,
+          `⚠️ **Erro:** \`${String(e?.message || e).slice(0, 900)}\``
+        ].join('\n')
+      );
+    }
+  }
+}
+
     // ====================== LOOP ======================
     let isTicking = false; // ✅ Trava para evitar sobreposição de execuções
     async function tick() {
@@ -2369,6 +2426,10 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
       isTicking = true;
 
       try {
+        for (const [, guild] of client.guilds.cache) {
+          await autoDesligarPausadosVencidos(guild, 'tick');
+        }
+
         // NOVO: DM de aviso de auto-desligamento
         for (const rec of SC_GI_STATE.registros.values()) {
           if (!rec.active) {
@@ -2527,6 +2588,9 @@ if (!rec.active) {
         await SC_GI_load();
         for (const [, guild] of client.guilds.cache) {
           await ensureMenu(guild);
+
+          await autoDesligarPausadosVencidos(guild, 'client_ready');
+
           markBoardDirty();
           await renderRespBoard(guild, { force: true });
 
