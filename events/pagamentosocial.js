@@ -1949,6 +1949,105 @@ async function resolverVipEventoPorLink(client, texto) {
   };
 }
 
+function normalizarBuscaVip(texto) {
+  return String(texto || "")
+    .toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]/g, "");
+}
+
+function textoCompletoEmbedVip(embedLike) {
+  const fields = embedLike?.fields || embedLike?.data?.fields || [];
+
+  return [
+    embedLike?.title || embedLike?.data?.title || "",
+    embedLike?.description || embedLike?.data?.description || "",
+    ...fields.flatMap((f) => [f.name || "", f.value || ""]),
+    embedLike?.footer?.text || embedLike?.data?.footer?.text || "",
+  ].join("\n");
+}
+
+async function buscarVipEventoPorDados(client, dados = {}) {
+  const canal = await client.channels.fetch(CANAL_VIP_EVENTO).catch(() => null);
+
+  if (!canal?.isTextBased()) {
+    return {
+      ok: false,
+      erro: `Canal VIP indisponível: ${CANAL_VIP_EVENTO}`,
+    };
+  }
+
+  const mensagens = await canal.messages.fetch({ limit: 100 }).catch(() => null);
+
+  if (!mensagens) {
+    return {
+      ok: false,
+      erro: "Não consegui buscar mensagens no canal VIP.",
+    };
+  }
+
+  const alvoEvento = normalizarBuscaVip(dados.eventoNome);
+  const alvoData = normalizarBuscaVip(dados.eventoData);
+  const alvoId = normalizarBuscaVip(dados.ganhadorId);
+  const alvoNome = normalizarBuscaVip(dados.ganhadorNome);
+
+  const candidatos = [...mensagens.values()]
+    .filter((msg) => msg.author?.bot)
+    .filter((msg) => msg.embeds?.length > 0)
+    .filter((msg) => {
+      const titulo = msg.embeds?.[0]?.title || "";
+      return titulo.includes("Registro de VIP por Evento");
+    })
+    .sort((a, b) => b.createdTimestamp - a.createdTimestamp);
+
+  for (const msg of candidatos) {
+    const embed = msg.embeds[0];
+    const texto = normalizarBuscaVip(textoCompletoEmbedVip(embed));
+
+    const bateId = alvoId && texto.includes(alvoId);
+    const bateNome = alvoNome && texto.includes(alvoNome);
+    const bateEvento = alvoEvento && texto.includes(alvoEvento);
+    const bateData = alvoData && texto.includes(alvoData);
+
+    if (bateId || (bateEvento && bateData) || (bateNome && bateEvento)) {
+      return {
+        ok: true,
+        link: {
+          guildId: msg.guild?.id || null,
+          channelId: msg.channel?.id || null,
+          messageId: msg.id,
+          url: msg.url,
+        },
+        message: msg,
+        info: extrairInfoDoEmbedVipEvento(embed),
+      };
+    }
+  }
+
+  return {
+    ok: false,
+    erro: "Nenhum registro VIP compatível encontrado.",
+  };
+}
+
+async function resolverVipEventoProfissional(client, texto, dados = {}) {
+  const porLink = await resolverVipEventoPorLink(client, texto).catch((err) => ({
+    ok: false,
+    erro: err?.message || String(err),
+  }));
+
+  if (porLink?.ok) return porLink;
+
+  const porBusca = await buscarVipEventoPorDados(client, dados).catch((err) => ({
+    ok: false,
+    erro: err?.message || String(err),
+  }));
+
+  if (porBusca?.ok) return porBusca;
+
+  return porLink || porBusca || null;
+}
+
 function atualizarCampoOCRPagamento(embedBuilder, analiseComprovante) {
   const data = embedBuilder.data ?? {};
   const fields = Array.isArray(data.fields) ? [...data.fields] : [];
@@ -2511,7 +2610,16 @@ let premiacao = interaction.fields.getTextInputValue("premiacao").trim();
 
 await interaction.deferReply({ ephemeral: true }).catch(() => {});
 
-const vipEventoResolvido = await resolverVipEventoPorLink(client, premiacao).catch((err) => ({
+const vipEventoResolvido = await resolverVipEventoProfissional(
+  client,
+  premiacao,
+  {
+    eventoNome,
+    eventoData,
+    ganhadorNome: ganhadorNomeRaw,
+    ganhadorId: ganhadorIdRaw,
+  }
+).catch((err) => ({
   ok: false,
   erro: err?.message || String(err),
 }));
@@ -2570,8 +2678,11 @@ const canal = await client.channels.fetch(CANAL_PAGAMENTO).catch(() => null);
 
         const registrador = interaction.user;
         const registradorAvatar = registrador.displayAvatarURL({ dynamic: true });
-const tipoInput = vipEventoResolvido?.ok && vipEventoResolvido.info?.tipo
-  ? vipEventoResolvido.info.tipo
+const tipoInput = vipEventoResolvido?.ok
+  ? [
+      vipEventoResolvido.info?.tipo || "",
+      vipEventoResolvido.info?.premiacao || "",
+    ].join(" ")
   : interaction.fields.getTextInputValue("tipoPremiacao");
 
 const categoriaVip = normalizarTipoPremiacao(tipoInput);
@@ -2692,10 +2803,10 @@ logPagamento(
     `**Data do Evento:** \`${eventoData || PADRAO_INDEFINIDO}\``,
     `**Ganhador:** \`${ganhadorNome} | ${ganhadorId}\``,
     `**Tipo:** \`${categoriaVip}\``,
-    `**Origem:** ${vipEventoResolvido?.ok ? "Link do VIP Evento" : "Formulário / OCR"}`,
-    vipEventoResolvido?.ok
-      ? `**Link VIP lido:** ${vipEventoResolvido.link?.url || "—"}`
-      : `**Comprovante:** ${analiseComprovante?.url || "—"}`,
+`**Origem:** ${vipEventoResolvido?.ok ? "VIP Evento detectado automaticamente" : "Formulário / OCR"}`,
+vipEventoResolvido?.ok
+  ? `**Registro VIP encontrado:** ${vipEventoResolvido.link?.url || "—"}`
+  : `**Comprovante:** ${analiseComprovante?.url || "—"}`,
     ``,
     buildLogContext({
       registroMsg: mensagem,
