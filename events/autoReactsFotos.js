@@ -13,6 +13,13 @@ import {
 const PHOTO_CHANNEL_ID = "1432149017378426941";
 const ALL_MESSAGES_CHANNEL_ID = "1262262852949905414";
 
+const MEDIA_CHANNEL_IDS = [
+  PHOTO_CHANNEL_ID,
+  "1385003944803041371", // Eventos Diários
+  "1474605177771397223", // Cronograma / Agenda
+  "1386503496353976470", // Hall da Fama
+];
+
 const MAX_REACTIONS_PER_MESSAGE = 20;
 const BACKFILL_FETCH_PER_PAGE = 100;
 const BACKFILL_MAX_MESSAGES = 400;
@@ -104,10 +111,14 @@ export async function autoReactsFotosHandleMessage(message, client, options = {}
 
     const allowBotMessage = options.allowBotMessage === true;
 
-    if (IGNORE_BOT_MESSAGES && message.author?.bot && !allowBotMessage) {
+    if (
+      IGNORE_BOT_MESSAGES &&
+      message.author?.bot &&
+      !allowBotMessage &&
+      !MEDIA_CHANNEL_IDS.includes(message.channel.id)
+    ) {
       return false;
     }
-
     // comando manual continua existindo, mas só se a mensagem começar com ele
     if (!allowBotMessage && await handleManualBackfillCommand(message, client)) {
       return true;
@@ -117,7 +128,7 @@ export async function autoReactsFotosHandleMessage(message, client, options = {}
 
     // ignora tudo fora dos canais monitorados
     if (
-      channelId !== PHOTO_CHANNEL_ID &&
+      !MEDIA_CHANNEL_IDS.includes(channelId) &&
       channelId !== ALL_MESSAGES_CHANNEL_ID
     ) {
       return false;
@@ -130,8 +141,31 @@ export async function autoReactsFotosHandleMessage(message, client, options = {}
     }
 
     // canal de fotos -> reage só se tiver mídia
-    if (channelId === PHOTO_CHANNEL_ID && hasMediaContent(message)) {
-      await reactToMessage(message, options.mode || "media");
+    if (MEDIA_CHANNEL_IDS.includes(channelId)) {
+      if (message.author?.bot) {
+        for (let attempt = 0; attempt < 6; attempt++) {
+          if (attempt > 0) {
+            await new Promise((resolve) => setTimeout(resolve, 900));
+
+            try {
+              if (message.partial) {
+                await message.fetch();
+              }
+            } catch {}
+          }
+
+          if (hasMediaContent(message)) {
+            await reactToMessage(message, options.mode || "media-bot");
+            return false;
+          }
+        }
+
+        return false;
+      }
+
+      if (hasMediaContent(message)) {
+        await reactToMessage(message, options.mode || "media");
+      }
     }
 
     return false;
@@ -167,7 +201,7 @@ export async function autoReactsFotosProcessSentMessage(message, client, options
 
         // se for canal de foto e ainda não detectou mídia, tenta de novo nas próximas voltas
         if (
-          message.channel?.id === PHOTO_CHANNEL_ID &&
+          MEDIA_CHANNEL_IDS.includes(message.channel?.id) &&
           !hasMediaContent(message) &&
           attempt < retries - 1
         ) {
@@ -221,7 +255,7 @@ async function handleManualBackfillCommand(message, client) {
   let mode = null;
   let label = null;
 
-  if (["fotos", "foto", "media", "midia"].includes(targetRaw)) {
+  if (["fotos", "foto", "media", "midia", "eventos"].includes(targetRaw)) {
     targetChannelId = PHOTO_CHANNEL_ID;
     mode = "media";
     label = "canal de fotos/vídeos";
@@ -459,7 +493,12 @@ async function backfillChannel(client, channelId, mode, options = {}) {
       scanned++;
 
       if (!msg || msg.system) continue;
-      if (IGNORE_BOT_MESSAGES && msg.author?.bot) continue;
+      if (
+        IGNORE_BOT_MESSAGES &&
+        msg.author?.bot &&
+        !MEDIA_CHANNEL_IDS.includes(msg.channel.id)
+      ) continue;
+
       if (mode === "media" && !hasMediaContent(msg)) continue;
 
       await reactToMessage(msg, mode);
