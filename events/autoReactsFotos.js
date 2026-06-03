@@ -20,6 +20,14 @@ const MEDIA_CHANNEL_IDS = [
   "1386503496353976470", // Hall da Fama
 ];
 
+const EVENT_REACTION_CHANNEL_IDS = [
+  "1386503496353976470", // Hall da Fama
+  "1474605177771397223", // Cronograma / Agenda
+  "1385003944803041371", // Eventos Diários
+];
+
+const REACT_ONLY_IF_MESSAGE_ALREADY_HAS_REACTIONS = true;
+
 const MAX_REACTIONS_PER_MESSAGE = 20;
 const BACKFILL_FETCH_PER_PAGE = 100;
 const BACKFILL_MAX_MESSAGES = 400;
@@ -154,7 +162,7 @@ export async function autoReactsFotosHandleMessage(message, client, options = {}
             } catch {}
           }
 
-          if (hasMediaContent(message)) {
+          if (hasMediaContent(message) && shouldReactByExistingReactionsRule(message)) {
             await reactToMessage(message, options.mode || "media-bot");
             return false;
           }
@@ -163,7 +171,7 @@ export async function autoReactsFotosHandleMessage(message, client, options = {}
         return false;
       }
 
-      if (hasMediaContent(message)) {
+      if (hasMediaContent(message) && shouldReactByExistingReactionsRule(message)) {
         await reactToMessage(message, options.mode || "media");
       }
     }
@@ -255,10 +263,14 @@ async function handleManualBackfillCommand(message, client) {
   let mode = null;
   let label = null;
 
-  if (["fotos", "foto", "media", "midia", "eventos"].includes(targetRaw)) {
+  if (["fotos", "foto", "media", "midia"].includes(targetRaw)) {
     targetChannelId = PHOTO_CHANNEL_ID;
     mode = "media";
     label = "canal de fotos/vídeos";
+  } else if (["eventos", "evento", "chats", "canais"].includes(targetRaw)) {
+    targetChannelId = EVENT_REACTION_CHANNEL_IDS;
+    mode = "media";
+    label = "canais de eventos / cronograma / hall da fama";
   } else if (["geral", "all"].includes(targetRaw)) {
     targetChannelId = ALL_MESSAGES_CHANNEL_ID;
     mode = "all";
@@ -280,10 +292,15 @@ async function handleManualBackfillCommand(message, client) {
   );
 
   try {
-    const result = await backfillChannel(client, targetChannelId, mode, {
-      maxMessages: customMaxMessages,
-      manual: true,
-    });
+    const result = Array.isArray(targetChannelId)
+      ? await backfillChannels(client, targetChannelId, mode, {
+          maxMessages: customMaxMessages,
+          manual: true,
+        })
+      : await backfillChannel(client, targetChannelId, mode, {
+          maxMessages: customMaxMessages,
+          manual: true,
+        });
 
     await message.reply(
       `✅ Backfill manual SC concluído em ${label}.\n` +
@@ -318,7 +335,16 @@ function hasMediaContent(message) {
     }
 
     const content = String(message.content || "").toLowerCase();
+
     if (
+      content.includes("cdn.discordapp.com") ||
+      content.includes("media.discordapp.net") ||
+      content.includes("tenor.com") ||
+      content.includes("giphy.com") ||
+      content.includes("image.png") ||
+      content.includes("image.jpg") ||
+      content.includes("image.jpeg") ||
+      content.includes("image.webp") ||
       content.includes(".png") ||
       content.includes(".jpg") ||
       content.includes(".jpeg") ||
@@ -339,6 +365,20 @@ function hasMediaContent(message) {
   } catch {}
 
   return false;
+}
+
+function messageAlreadyHasReactions(message) {
+  try {
+    return Number(message?.reactions?.cache?.size || 0) > 0;
+  } catch {
+    return false;
+  }
+}
+
+function shouldReactByExistingReactionsRule(message) {
+  if (!REACT_ONLY_IF_MESSAGE_ALREADY_HAS_REACTIONS) return true;
+  if (!EVENT_REACTION_CHANNEL_IDS.includes(message.channel?.id)) return true;
+  return messageAlreadyHasReactions(message);
 }
 
 function getPriorityCustomEmojis(guild) {
@@ -455,6 +495,22 @@ async function reactToMessage(message, mode = "unknown") {
   }
 }
 
+async function backfillChannels(client, channelIds, mode, options = {}) {
+  let totalScanned = 0;
+  let totalProcessed = 0;
+
+  for (const channelId of channelIds) {
+    const result = await backfillChannel(client, channelId, mode, options);
+    totalScanned += Number(result?.scanned || 0);
+    totalProcessed += Number(result?.processed || 0);
+  }
+
+  return {
+    scanned: totalScanned,
+    processed: totalProcessed,
+  };
+}
+
 async function backfillChannel(client, channelId, mode, options = {}) {
   const channel = await client.channels.fetch(channelId).catch(() => null);
   if (!channel) {
@@ -500,6 +556,7 @@ async function backfillChannel(client, channelId, mode, options = {}) {
       ) continue;
 
       if (mode === "media" && !hasMediaContent(msg)) continue;
+      if (!shouldReactByExistingReactionsRule(msg)) continue;
 
       await reactToMessage(msg, mode);
       processed++;
