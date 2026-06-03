@@ -416,6 +416,22 @@ function getPriorityCustomEmojis(guild) {
   return selected;
 }
 
+function buildExistingReactionList(message) {
+  const existing = [];
+
+  try {
+    for (const reaction of message.reactions.cache.values()) {
+      if (reaction?.emoji?.id) {
+        existing.push(reaction.emoji.toString());
+      } else if (reaction?.emoji?.name) {
+        existing.push(reaction.emoji.name);
+      }
+    }
+  } catch {}
+
+  return existing;
+}
+
 function buildReactionList(guild) {
   const finalList = [];
   const seen = new Set();
@@ -461,10 +477,32 @@ function reactionMatchesEmoji(reaction, emoji) {
 }
 
 async function reactToMessage(message, mode = "unknown") {
-  if (!message?.guild) return;
+  if (!message?.guild) return 0;
 
-  const reactions = buildReactionList(message.guild);
-  if (!reactions.length) return;
+  try {
+    if (message.partial) {
+      await message.fetch();
+    }
+  } catch {}
+
+  const existingReactions = buildExistingReactionList(message);
+  const defaultReactions = buildReactionList(message.guild);
+
+  const reactions = [];
+  const seen = new Set();
+
+  for (const emoji of [...existingReactions, ...defaultReactions]) {
+    const key = String(emoji);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    reactions.push(emoji);
+
+    if (reactions.length >= MAX_REACTIONS_PER_MESSAGE) break;
+  }
+
+  if (!reactions.length) return 0;
+
+  let added = 0;
 
   for (const emoji of reactions) {
     await enqueue(async () => {
@@ -474,9 +512,13 @@ async function reactToMessage(message, mode = "unknown") {
         );
 
         if (alreadyThere?.me) return;
-        if (message.reactions.cache.size >= 20 && !alreadyThere) return;
+
+        if (message.reactions.cache.size >= 20 && !alreadyThere) {
+          return;
+        }
 
         await message.react(emoji);
+        added++;
       } catch (err) {
         const msg = String(err?.message || err);
 
@@ -497,12 +539,14 @@ async function reactToMessage(message, mode = "unknown") {
         }
 
         console.error(
-          `[SC_AUTO_REACTS] erro ao reagir msg=${message.id} canal=${message.channel?.id} modo=${mode}:`,
+          `[SC_AUTO_REACTS] erro ao reagir msg=${message.id} canal=${message.channel?.id} modo=${mode} emoji=${emoji}:`,
           err?.message || err
         );
       }
     });
   }
+
+  return added;
 }
 
 async function backfillChannels(client, channelIds, mode, options = {}) {
@@ -568,13 +612,20 @@ async function backfillChannel(client, channelId, mode, options = {}) {
       if (mode === "media" && !hasMediaContent(msg)) continue;
       if (!shouldReactByExistingReactionsRule(msg)) continue;
 
-      await reactToMessage(msg, mode);
-      processed++;
+      const added = await reactToMessage(msg, mode);
+
+      if (added > 0) {
+        processed++;
+      }
     }
 
     lastId = ordered[0]?.id;
     if (!lastId || messages.size < limit) break;
   }
+
+  console.log(
+    `[SC_AUTO_REACTS] backfill canal=${channelId} modo=${mode} finalizado | vasculhadas=${scanned} | reagidas=${processed}`
+  );
 
   return { scanned, processed };
 }
