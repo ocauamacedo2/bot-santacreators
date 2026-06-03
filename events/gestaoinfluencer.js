@@ -418,6 +418,12 @@ async function assertCanManageGIRecord(guild, actorUser, targetUserId, actionNam
     throw new Error('Não foi possível identificar quem tentou executar essa ação.');
   }
 
+  // ✅ PERMITE AÇÕES AUTOMÁTICAS DO PRÓPRIO BOT
+  // Exemplo: auto-desligamento após 30 dias pausado.
+  if (client?.user?.id && actorId === client.user.id) {
+    return true;
+  }
+
   const actorMember = await guild.members.fetch(actorId).catch(() => null);
   const targetMember = await guild.members.fetch(String(targetUserId)).catch(() => null);
 
@@ -2432,19 +2438,51 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
             SC_GI_scheduleSave();
           }
 
-          if (!rec.active) {
+if (!rec.active) {
   const pausedTotalMs = getPausedTotalMs(rec, n);
   const dias = Math.floor(pausedTotalMs / (24 * 60 * 60 * 1000));
 
   if (pausedTotalMs >= AUTO_DESLIGAR_PAUSA_MS) {
     const guild = client.guilds.cache.get(rec.guildId);
+
     if (guild) {
-      await desligarRegistro(
-        guild,
-        { id: client.user.id },
-        rec.messageId,
-        `Auto-desligado após ${dias} dias pausado acumulado`
-      );
+      try {
+        await desligarRegistro(
+          guild,
+          client.user,
+          rec.messageId,
+          `Auto-desligado após ${dias} dias pausado acumulado`
+        );
+
+        await logMsg(
+          guild,
+          'Auto-desligamento executado (GI)',
+          [
+            `👤 **Membro:** <@${rec.targetId}> (\`${rec.targetId}\`)`,
+            `⏸️ **Tempo pausado acumulado:** \`${formatDurationFull(pausedTotalMs)}\``,
+            `📅 **Dias pausado:** \`${dias}\``,
+            `🤖 **Ação:** executada automaticamente pelo bot`,
+            `🧾 **Registro:** \`${rec.messageId}\``
+          ].join('\n')
+        );
+      } catch (e) {
+        console.warn(
+          `[SC_GI] Falha ao auto-desligar ${rec.targetId} após ${dias} dias pausado:`,
+          e?.message || e
+        );
+
+        await logMsg(
+          guild,
+          'Falha no Auto-desligamento (GI)',
+          [
+            `👤 **Membro:** <@${rec.targetId}> (\`${rec.targetId}\`)`,
+            `⏸️ **Tempo pausado acumulado:** \`${formatDurationFull(pausedTotalMs)}\``,
+            `📅 **Dias pausado:** \`${dias}\``,
+            `🧾 **Registro:** \`${rec.messageId}\``,
+            `⚠️ **Erro:** \`${String(e?.message || e).slice(0, 900)}\``
+          ].join('\n')
+        );
+      }
     }
   }
 }
