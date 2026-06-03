@@ -29,9 +29,11 @@ const CANAL_DASHBOARD_PAGAMENTO = "1505716526534103110";
 const STATS_FILE = path.join(process.cwd(), "data", "pagamentos_social_stats.json");
 const DASH_STATE_FILE = path.join(process.cwd(), "data", "pagamentos_social_dash_state.json");
 const DASH_MARKER = "SC_PAGAMENTO_DASH::V1";
-
 // Canal onde fica o menu + onde os registros são postados
 const CANAL_PAGAMENTO = "1387922662134775818";
+
+// Canal onde o sistema vipEvento.js posta os registros de VIP por evento
+const CANAL_VIP_EVENTO = "1414718336826081330";
 
 // Cidades / CDDs usadas para filtro dos pagamentos
 const CIDADES_PAGAMENTO = {
@@ -1847,6 +1849,106 @@ function getPremiacaoLinkFromEmbed(embedLike) {
   return getFieldValue(embedLike, "🔗 Premiação / Link") || null;
 }
 
+function extrairLinkMensagemDiscord(texto) {
+  const match = String(texto || "").match(
+    /https?:\/\/(?:canary\.|ptb\.)?discord(?:app)?\.com\/channels\/(\d{10,25})\/(\d{10,25})\/(\d{10,25})/i
+  );
+
+  if (!match) return null;
+
+  return {
+    guildId: match[1],
+    channelId: match[2],
+    messageId: match[3],
+    url: match[0],
+  };
+}
+
+function getFieldValueStarts(embedLike, starts) {
+  const fields = embedLike?.fields || embedLike?.data?.fields || [];
+  const field = fields.find((f) => String(f.name || "").startsWith(starts));
+  return String(field?.value || "").trim();
+}
+
+function limparValorEmbedVip(texto) {
+  return String(texto || "")
+    .replace(/[`*_]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extrairInfoDoEmbedVipEvento(embedLike) {
+  const desc = String(embedLike?.description || embedLike?.data?.description || "");
+
+  const tipoMatch =
+    desc.match(/Tipo Identificado:\*\*\s*`([^`]+)`/i) ||
+    desc.match(/Tipo Identificado:\s*`([^`]+)`/i) ||
+    desc.match(/Tipo Identificado:\s*([^\n]+)/i);
+
+  const eventoRaw = getFieldValueStarts(embedLike, "🏁 Nome do evento ganho");
+  const dataRaw = getFieldValueStarts(embedLike, "📅 Dia do evento");
+  const ganhadorRaw = getFieldValueStarts(embedLike, "🆔 ID do ganhador");
+  const nomeRaw = getFieldValueStarts(embedLike, "👤 Nome do ganhador");
+  const premiacaoRaw = getFieldValueStarts(embedLike, "🎁 Premiação");
+  const cidadeRaw = getFieldValueStarts(embedLike, "🌆 Cidade");
+
+  const idMatch =
+    ganhadorRaw.match(/<@!?(\d{1,25})>/) ||
+    ganhadorRaw.match(/\(`?(\d{1,25})`?\)/) ||
+    ganhadorRaw.match(/\b(\d{1,25})\b/);
+
+  const tipoTexto = tipoMatch?.[1] || premiacaoRaw || "";
+
+  return {
+    evento: limparValorEmbedVip(eventoRaw),
+    data: limparValorEmbedVip(dataRaw),
+    ganhadorNome: limparValorEmbedVip(nomeRaw),
+    ganhadorId: idMatch?.[1] || "",
+    tipo: normalizarTipoPremiacao(tipoTexto),
+    premiacao: limparValorEmbedVip(premiacaoRaw),
+    cidade: limparValorEmbedVip(cidadeRaw),
+  };
+}
+
+async function resolverVipEventoPorLink(client, texto) {
+  const link = extrairLinkMensagemDiscord(texto);
+  if (!link) return null;
+
+  const canal = await client.channels.fetch(link.channelId).catch(() => null);
+  if (!canal?.isTextBased()) {
+    return {
+      ok: false,
+      erro: "Canal do link VIP não encontrado ou não é texto.",
+      link,
+    };
+  }
+
+  const msg = await canal.messages.fetch(link.messageId).catch(() => null);
+  if (!msg?.embeds?.[0]) {
+    return {
+      ok: false,
+      erro: "Mensagem VIP não encontrada ou sem embed.",
+      link,
+    };
+  }
+
+  const titulo = msg.embeds[0]?.title || "";
+  if (!titulo.includes("Registro de VIP por Evento")) {
+    return {
+      ok: false,
+      erro: "O link encontrado não parece ser de um registro VIP por evento.",
+      link,
+    };
+  }
+
+  return {
+    ok: true,
+    link,
+    message: msg,
+    info: extrairInfoDoEmbedVipEvento(msg.embeds[0]),
+  };
+}
+
 function atualizarCampoOCRPagamento(embedBuilder, analiseComprovante) {
   const data = embedBuilder.data ?? {};
   const fields = Array.isArray(data.fields) ? [...data.fields] : [];
@@ -2396,36 +2498,69 @@ if (id.startsWith("pago__") || id.startsWith("solicitado__") || id.startsWith("r
   }
 
 
-        const eventoInfo = interaction.fields.getTextInputValue("eventoInfo").trim();
-        const [eventoNomeRaw, eventoDataRaw] = eventoInfo.split("|").map(s => s.trim());
-        const eventoNome = eventoNomeRaw || PADRAO_INDEFINIDO;
-        
-        // Se não houver data após o |, a função normalizarDataEvento colocará a data de hoje
-        const eventoData = normalizarDataEvento(eventoDataRaw);
+const eventoInfo = interaction.fields.getTextInputValue("eventoInfo").trim();
+const [eventoNomeRaw, eventoDataRaw] = eventoInfo.split("|").map(s => s.trim());
+let eventoNome = eventoNomeRaw || PADRAO_INDEFINIDO;
 
-        const { nome: ganhadorNomeRaw, id: ganhadorId } = parseNomeIdFlex(interaction.fields.getTextInputValue("ganhador"));
+// Se não houver data após o |, a função normalizarDataEvento colocará a data de hoje
+let eventoData = normalizarDataEvento(eventoDataRaw);
 
-const premiacao = interaction.fields.getTextInputValue("premiacao").trim();
+const { nome: ganhadorNomeRaw, id: ganhadorIdRaw } = parseNomeIdFlex(interaction.fields.getTextInputValue("ganhador"));
+
+let premiacao = interaction.fields.getTextInputValue("premiacao").trim();
 
 await interaction.deferReply({ ephemeral: true }).catch(() => {});
 
-const agoraFallback = getAgoraSPParts();
-
-const analiseComprovante = await analisarComprovantePagamento(premiacao).catch((err) => ({
+const vipEventoResolvido = await resolverVipEventoPorLink(client, premiacao).catch((err) => ({
   ok: false,
-  url: extrairPrimeiraUrlImagem(premiacao),
-  texto: "",
-  valorRaw: null,
-  valorNumero: 0,
-  nomeRecebedor: null,
-  horario: agoraFallback.horario,
-  data: agoraFallback.data,
-  horarioFonte: "registro",
-  dataFonte: "registro",
   erro: err?.message || String(err),
 }));
 
-const ganhadorNome = corrigirNomeGanhadorPorOCR(ganhadorNomeRaw, analiseComprovante.nomeRecebedor);
+if (vipEventoResolvido?.ok) {
+  if (vipEventoResolvido.info?.evento) eventoNome = vipEventoResolvido.info.evento;
+  if (vipEventoResolvido.info?.data) eventoData = normalizarDataEvento(vipEventoResolvido.info.data);
+  if (vipEventoResolvido.info?.premiacao) premiacao = vipEventoResolvido.info.premiacao;
+}
+
+const agoraFallback = getAgoraSPParts();
+
+const deveUsarOCR = !vipEventoResolvido?.ok;
+
+const analiseComprovante = deveUsarOCR
+  ? await analisarComprovantePagamento(premiacao).catch((err) => ({
+      ok: false,
+      url: extrairPrimeiraUrlImagem(premiacao),
+      texto: "",
+      valorRaw: null,
+      valorNumero: 0,
+      nomeRecebedor: null,
+      horario: agoraFallback.horario,
+      data: agoraFallback.data,
+      horarioFonte: "registro",
+      dataFonte: "registro",
+      erro: err?.message || String(err),
+    }))
+  : {
+      ok: true,
+      url: vipEventoResolvido.link?.url || null,
+      texto: "Dados importados do registro VIP por evento.",
+      valorRaw: null,
+      valorNumero: 0,
+      nomeRecebedor: null,
+      horario: agoraFallback.horario,
+      data: agoraFallback.data,
+      horarioFonte: "registro",
+      dataFonte: "registro",
+      erro: null,
+    };
+
+const ganhadorNome = vipEventoResolvido?.ok && vipEventoResolvido.info?.ganhadorNome
+  ? vipEventoResolvido.info.ganhadorNome
+  : corrigirNomeGanhadorPorOCR(ganhadorNomeRaw, analiseComprovante.nomeRecebedor);
+
+const ganhadorId = vipEventoResolvido?.ok && vipEventoResolvido.info?.ganhadorId
+  ? vipEventoResolvido.info.ganhadorId
+  : ganhadorIdRaw;
 
 const canal = await client.channels.fetch(CANAL_PAGAMENTO).catch(() => null);
         if (!canal || !canal.isTextBased()) {
@@ -2435,8 +2570,10 @@ const canal = await client.channels.fetch(CANAL_PAGAMENTO).catch(() => null);
 
         const registrador = interaction.user;
         const registradorAvatar = registrador.displayAvatarURL({ dynamic: true });
-        
-        const tipoInput = interaction.fields.getTextInputValue("tipoPremiacao");
+const tipoInput = vipEventoResolvido?.ok && vipEventoResolvido.info?.tipo
+  ? vipEventoResolvido.info.tipo
+  : interaction.fields.getTextInputValue("tipoPremiacao");
+
 const categoriaVip = normalizarTipoPremiacao(tipoInput);
 
 const ocultarFinanceiro = esconderCamposFinanceiros(categoriaVip, analiseComprovante);
@@ -2444,7 +2581,17 @@ const ocultarFinanceiro = esconderCamposFinanceiros(categoriaVip, analiseComprov
 const camposRegistro = [
   { name: "🏷️ Evento", value: `${eventoNome || PADRAO_INDEFINIDO}`, inline: true },
   { name: "📅 Data do Evento", value: `${eventoData || PADRAO_INDEFINIDO}`, inline: true },
-  { name: "🔗 Premiação / Link", value: `${premiacao || PADRAO_INDEFINIDO}`, inline: false },
+  {
+    name: "🔗 Premiação / Link",
+    value: vipEventoResolvido?.ok
+      ? [
+          `${premiacao || PADRAO_INDEFINIDO}`,
+          "",
+          `📎 **Origem VIP:** ${vipEventoResolvido.link?.url || "—"}`,
+        ].join("\n")
+      : `${premiacao || PADRAO_INDEFINIDO}`,
+    inline: false,
+  },
   { name: "👤 Ganhador", value: `${ganhadorNome} | ${ganhadorId}`, inline: true },
 ];
 
@@ -2534,15 +2681,21 @@ saveStats(stats);
   });
 } catch {}
 
-        logPagamento(
+logPagamento(
   client,
   interaction,
-  "📩 Novo pagamento registrado",
+  vipEventoResolvido?.ok
+    ? "🔗 Novo pagamento registrado via VIP Evento"
+    : "📩 Novo pagamento registrado",
   [
     `**Evento:** \`${eventoNome || PADRAO_INDEFINIDO}\``,
     `**Data do Evento:** \`${eventoData || PADRAO_INDEFINIDO}\``,
     `**Ganhador:** \`${ganhadorNome} | ${ganhadorId}\``,
-    `**Premiação:** Link`,
+    `**Tipo:** \`${categoriaVip}\``,
+    `**Origem:** ${vipEventoResolvido?.ok ? "Link do VIP Evento" : "Formulário / OCR"}`,
+    vipEventoResolvido?.ok
+      ? `**Link VIP lido:** ${vipEventoResolvido.link?.url || "—"}`
+      : `**Comprovante:** ${analiseComprovante?.url || "—"}`,
     ``,
     buildLogContext({
       registroMsg: mensagem,
