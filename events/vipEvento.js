@@ -377,6 +377,14 @@ function VIP_buildReproveModal(messageId) {
 function VIP_buildRegistroEmbed(guild, registrante, payload, cityName) {
   const when = new Date();
   const avatar = registrante.displayAvatarURL({ size: 256 });
+
+  const tipoIdentificado = VIP_normalizarTipoPremiacao(payload.tipo || payload.premiacao);
+  const tipoBonito = VIP_formatTipoBonito(tipoIdentificado);
+
+  const fontePagamento = payload.pagamentoLink
+    ? `🔗 **Link analisado:** ${payload.pagamentoLink}`
+    : "—";
+
   return new EmbedBuilder()
     .setColor(REG_COLOR)
     .setTitle("💎 Registro de VIP por Evento")
@@ -387,15 +395,19 @@ function VIP_buildRegistroEmbed(guild, registrante, payload, cityName) {
 **Data/Hora:** ${time(Math.floor(when.getTime() / 1000), TimestampStyles.LongDateTime)} (${time(
         Math.floor(when.getTime() / 1000),
         TimestampStyles.RelativeTime
-      )})`
+      )})
+
+**Tipo Identificado:** \`${tipoIdentificado}\``
     )
     .addFields(
       { name: "🏁 Nome do evento ganho", value: `\`${payload.evento}\``, inline: false },
       { name: "📅 Dia do evento", value: `\`${payload.data}\``, inline: true },
       { name: "🆔 ID do ganhador", value: `<@${payload.ganhadorId}> (\`${payload.ganhadorId}\`)`, inline: true },
+      { name: "👤 Nome do ganhador", value: `\`${payload.ganhadorNome || "Não identificado"}\``, inline: true },
       { name: "🌆 Cidade", value: `**${cityName}**`, inline: true },
       { name: "🏢 Organização", value: `\`${payload.org}\``, inline: true },
-      { name: "🎁 Premiação", value: payload.premiacao || "—", inline: false },
+      { name: "🎁 Premiação", value: `${tipoBonito}\n\n${payload.premiacao || "—"}`, inline: false },
+      { name: "🔎 Fonte automática", value: fontePagamento, inline: false },
       { name: "📝 Solicitações", value: "—", inline: false },
       { name: "💸 Pagamento", value: "—", inline: false }
     )
@@ -502,6 +514,172 @@ function VIP_formatDateSP(date = new Date()) {
     Math.floor(date.getTime() / 1000),
     TimestampStyles.RelativeTime
   )})`;
+}
+
+function VIP_normalizarTipoPremiacao(texto) {
+  const t = String(texto || "")
+    .toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9\s$.,]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const pareceDinheiro =
+    /\bdinheiro\b/.test(t) ||
+    /\bgrana\b/.test(t) ||
+    /\bcash\b/.test(t) ||
+    /\bvalor\b/.test(t) ||
+    /\br\$\b/.test(t) ||
+    /\b\d{1,3}(?:[.\s]\d{3})+(?:,\d{1,2})?\b/.test(t) ||
+    /\b\d+(?:[.,]\d+)?\s*(?:k|kk|m|mi|mil|milhao|milhoes)?\b/.test(t);
+
+  if (pareceDinheiro && !t.includes("vip")) return "Dinheiro";
+
+  if (
+    t.includes("platinum") ||
+    t.includes("platinium") ||
+    t.includes("platnum") ||
+    t.includes("platinun") ||
+    t.includes("platibnum") ||
+    t.includes("platina") ||
+    t.includes("platino") ||
+    t.includes("platnao")
+  ) return "VIP Platinum";
+
+  if (t.includes("black")) return "VIP Black";
+  if (t.includes("bronze")) return "VIP Bronze";
+  if (t.includes("prata")) return "VIP Prata";
+  if (t.includes("ouro")) return "VIP Ouro";
+
+  if (t.includes("staff") || t.includes("gente boa") || t.includes("genteboa")) {
+    return "VIP Staff";
+  }
+
+  if (t.includes("lancamento") || t.includes("lançamento")) return "VIP Lancamento";
+  if (t.includes("evento") || t.includes("vipevento") || t.includes("vip evento")) return "VIP Evento";
+  if (t.includes("pass") || t.includes("rolepass")) return "Pass";
+
+  if (pareceDinheiro) return "Dinheiro";
+
+  return "Dinheiro";
+}
+
+function VIP_extractDiscordMessageUrl(texto) {
+  const match = String(texto || "").match(/https?:\/\/(?:canary\.|ptb\.)?discord(?:app)?\.com\/channels\/(\d{10,25})\/(\d{10,25})\/(\d{10,25})/i);
+  if (!match) return null;
+
+  return {
+    guildId: match[1],
+    channelId: match[2],
+    messageId: match[3],
+    url: match[0],
+  };
+}
+
+function VIP_getFieldValue(embedLike, fieldNameStarts) {
+  const fields = embedLike?.fields || embedLike?.data?.fields || [];
+  const field = fields.find((f) => String(f.name || "").startsWith(fieldNameStarts));
+  return String(field?.value || "").trim();
+}
+
+function VIP_extractPagamentoInfoFromEmbed(embedLike) {
+  const desc = String(embedLike?.description || embedLike?.data?.description || "");
+
+  const tipoMatch =
+    desc.match(/Tipo Identificado:\*\*\s*`([^`]+)`/i) ||
+    desc.match(/Tipo Identificado:\s*`([^`]+)`/i) ||
+    desc.match(/Tipo Identificado:\s*([^\n]+)/i);
+
+  const tipoRaw =
+    tipoMatch?.[1] ||
+    VIP_getFieldValue(embedLike, "🎁 Premiação") ||
+    VIP_getFieldValue(embedLike, "🔗 Premiação") ||
+    VIP_getFieldValue(embedLike, "🏷️ Tipo") ||
+    "";
+
+  const ganhadorRaw = VIP_getFieldValue(embedLike, "👤 Ganhador");
+  const idMatch =
+    ganhadorRaw.match(/<@!?(\d{10,25})>/) ||
+    ganhadorRaw.match(/\|\s*(\d{1,25})\b/) ||
+    ganhadorRaw.match(/\bID\s*[:\-]?\s*(\d{1,25})\b/i) ||
+    ganhadorRaw.match(/\b(\d{1,25})\b/);
+
+  const nomeGanhador = ganhadorRaw
+    .replace(/<@!?\d{10,25}>/g, "")
+    .replace(/\|\s*\d{1,25}\b/g, "")
+    .replace(/\bID\s*[:\-]?\s*\d{1,25}\b/gi, "")
+    .replace(/[`*_]/g, "")
+    .trim();
+
+  const eventoRaw =
+    VIP_getFieldValue(embedLike, "🏷️ Evento") ||
+    VIP_getFieldValue(embedLike, "🏁 Nome do evento ganho");
+
+  const dataRaw =
+    VIP_getFieldValue(embedLike, "📅 Data do Evento") ||
+    VIP_getFieldValue(embedLike, "📅 Dia do evento") ||
+    VIP_getFieldValue(embedLike, "📅 Data");
+
+  const premiacaoRaw =
+    VIP_getFieldValue(embedLike, "🔗 Premiação / Link") ||
+    VIP_getFieldValue(embedLike, "🎁 Premiação") ||
+    tipoRaw;
+
+  return {
+    tipo: VIP_normalizarTipoPremiacao(tipoRaw || premiacaoRaw),
+    nomeGanhador: nomeGanhador || null,
+    ganhadorId: idMatch?.[1] || null,
+    evento: eventoRaw || null,
+    data: dataRaw || null,
+    premiacao: premiacaoRaw || tipoRaw || null,
+  };
+}
+
+async function VIP_resolverPagamentoLink(client, texto) {
+  const link = VIP_extractDiscordMessageUrl(texto);
+  if (!link) return null;
+
+  const channel = await client.channels.fetch(link.channelId).catch(() => null);
+  if (!channel?.isTextBased()) {
+    return {
+      ok: false,
+      link,
+      erro: "Canal do link não encontrado ou não é texto.",
+    };
+  }
+
+  const msg = await channel.messages.fetch(link.messageId).catch(() => null);
+  if (!msg?.embeds?.[0]) {
+    return {
+      ok: false,
+      link,
+      erro: "Mensagem do link não encontrada ou sem embed.",
+    };
+  }
+
+  return {
+    ok: true,
+    link,
+    message: msg,
+    info: VIP_extractPagamentoInfoFromEmbed(msg.embeds[0]),
+  };
+}
+
+function VIP_formatTipoBonito(tipo) {
+  const normalizado = VIP_normalizarTipoPremiacao(tipo);
+
+  if (normalizado === "Dinheiro") return "💵 Dinheiro";
+  if (normalizado === "VIP Platinum") return "💎 VIP Platinum";
+  if (normalizado === "VIP Ouro") return "🥇 VIP Ouro";
+  if (normalizado === "VIP Prata") return "🥈 VIP Prata";
+  if (normalizado === "VIP Bronze") return "🥉 VIP Bronze";
+  if (normalizado === "VIP Black") return "🖤 VIP Black";
+  if (normalizado === "VIP Lancamento") return "🚀 VIP Lançamento";
+  if (normalizado === "VIP Staff") return "🛡️ VIP Staff / VIP Gente Boa";
+  if (normalizado === "VIP Evento") return "🎉 VIP Evento";
+  if (normalizado === "Pass") return "🎟️ Pass";
+
+  return normalizado;
 }
 
 function VIP_extractEmbedFields(embedLike) {
@@ -671,17 +849,55 @@ async function VIP_moverRegistrosPorFiltro(channel, filtro, client) {
 
     if (!entra) continue;
 
-    const nova = await channel.send({ embeds: [emb] });
+const fields = VIP_getFields(emb);
+const premiacaoField = fields.find((f) => String(f.name || "").startsWith("🎁 Premiação"));
+const premiacaoTexto = String(premiacaoField?.value || "");
 
-    const comps = ehReprovado
-      ? VIP_buildRegistroButtons(true, false, true)
-      : ehPago
-      ? VIP_buildRegistroButtons(true, true, false)
-      : VIP_buildRegistroButtons(false, false, false);
+const pagamentoResolvido = await VIP_resolverPagamentoLink(client, premiacaoTexto);
 
-    await nova.edit({ components: comps }).catch(() => {});
-    await msg.delete().catch(() => {});
-    movidos++;
+if (pagamentoResolvido?.ok) {
+  const tipoFinal = VIP_normalizarTipoPremiacao(pagamentoResolvido.info?.tipo || premiacaoTexto);
+  const tipoBonito = VIP_formatTipoBonito(tipoFinal);
+
+  const novosFields = fields.map((f) => {
+    if (String(f.name || "").startsWith("🎁 Premiação")) {
+      return {
+        ...f,
+        value: `${tipoBonito}\n\n${pagamentoResolvido.info?.premiacao || premiacaoTexto}`,
+      };
+    }
+
+    if (String(f.name || "").startsWith("🔎 Fonte automática")) {
+      return {
+        ...f,
+        value: `🔗 **Link analisado:** ${pagamentoResolvido.link.url}`,
+      };
+    }
+
+    return f;
+  });
+
+const descAtual = String(emb.data.description || "");
+const descSemFiltro = descAtual.replace(/\n\n\*\*Filtro automático:\*\* `[^`]+`/gi, "");
+
+emb.setDescription(
+  `${descSemFiltro}\n\n**Filtro automático:** \`${tipoFinal}\``
+);
+
+  emb.setFields(novosFields);
+}
+
+const nova = await channel.send({ embeds: [emb] });
+
+const comps = ehReprovado
+  ? VIP_buildRegistroButtons(true, false, true)
+  : ehPago
+  ? VIP_buildRegistroButtons(true, true, false)
+  : VIP_buildRegistroButtons(false, false, false);
+
+await nova.edit({ components: comps }).catch(() => {});
+await msg.delete().catch(() => {});
+movidos++;
   }
 
   return { movidos };
@@ -705,7 +921,9 @@ export async function vipEventoHandleInteraction(i, client) {
 
     const isVipCitySelect = i.isStringSelectMenu?.() && i.customId === VIP_SEL_CITY_ID;
 
-    const isVipModalCriar = i.isModalSubmit?.() && i.customId.startsWith(`${VIP_MODAL_ID}:`);
+const isVipModalCriar =
+  i.isModalSubmit?.() &&
+  (i.customId === VIP_MODAL_ID || i.customId.startsWith(`${VIP_MODAL_ID}:`));
     const isVipRegistroButtons = i.isButton?.() && [VIP_BTN_SOLICITADO_ID, VIP_BTN_PAGO_ID, VIP_BTN_REPROVAR_ID].includes(i.customId);
     const isVipModalReprovar = i.isModalSubmit?.() && i.customId?.startsWith(`${VIP_REPROVE_MODAL_ID}:`);
 
@@ -918,11 +1136,28 @@ return true;
           return true;
       }
 
-      const evento = i.fields.getTextInputValue("vip_evt_nome").trim();
-      const data = i.fields.getTextInputValue("vip_evt_data").trim();
-      const ganhadorId = i.fields.getTextInputValue("vip_ganhador_id").trim();
-      const org = i.fields.getTextInputValue("vip_org_nome").trim();
-      const premiacao = i.fields.getTextInputValue("vip_premiacao").trim();
+let evento = i.fields.getTextInputValue("vip_evt_nome").trim();
+let data = i.fields.getTextInputValue("vip_evt_data").trim();
+let ganhadorId = i.fields.getTextInputValue("vip_ganhador_id").trim();
+const org = i.fields.getTextInputValue("vip_org_nome").trim();
+let premiacao = i.fields.getTextInputValue("vip_premiacao").trim();
+
+const pagamentoResolvido = await VIP_resolverPagamentoLink(client, premiacao);
+
+let ganhadorNome = null;
+let tipo = VIP_normalizarTipoPremiacao(premiacao);
+let pagamentoLink = null;
+
+if (pagamentoResolvido?.ok) {
+  pagamentoLink = pagamentoResolvido.link.url;
+
+  if (pagamentoResolvido.info?.evento) evento = pagamentoResolvido.info.evento;
+  if (pagamentoResolvido.info?.data) data = pagamentoResolvido.info.data;
+  if (pagamentoResolvido.info?.ganhadorId) ganhadorId = pagamentoResolvido.info.ganhadorId;
+  if (pagamentoResolvido.info?.nomeGanhador) ganhadorNome = pagamentoResolvido.info.nomeGanhador;
+  if (pagamentoResolvido.info?.tipo) tipo = pagamentoResolvido.info.tipo;
+  if (pagamentoResolvido.info?.premiacao) premiacao = pagamentoResolvido.info.premiacao;
+}
 
       const guild = i.guild;
       const menuCh = await guild.channels.fetch(VIP_MENU_CHANNEL_ID).catch(() => null);
@@ -934,7 +1169,21 @@ return true;
       const cityName = CITIES[cityKey].label;
       const cityRoleMention = CITIES[cityKey] ? `<@&${CITIES[cityKey].roleId}>` : '';
 
-      const embed = VIP_buildRegistroEmbed(guild, i.user, { evento, data, ganhadorId, org, premiacao }, cityName);
+     const embed = VIP_buildRegistroEmbed(
+  guild,
+  i.user,
+  {
+    evento,
+    data,
+    ganhadorId,
+    ganhadorNome,
+    org,
+    premiacao,
+    tipo,
+    pagamentoLink,
+  },
+  cityName
+);
       const msg = await menuCh.send({
         content: `Novo registro de VIP para a ${cityName}! ${cityRoleMention}`,
         embeds: [embed],
@@ -977,16 +1226,24 @@ return true;
   during: "Usuário enviou o modal preenchido e o sistema criou uma nova mensagem de registro VIP com botões de ação.",
   before: "Antes: o registro ainda não existia no canal.",
   after: VIP_extractEmbedFields(embed),
-  extra: [
-    `Cidade: **${cityName}** (\`${cityKey}\`)`,
-    `Cargo da cidade: ${cityRoleMention || "—"}`,
-    `Evento: \`${evento}\``,
-    `Data do evento: \`${data}\``,
-    `Ganhador: <@${ganhadorId}> (\`${ganhadorId}\`)`,
-    `Organização: \`${org}\``,
-    `Premiação: ${premiacao || "—"}`,
-    `Link do registro: ${msg.url}`,
-  ].join("\n"),
+extra: [
+  `Cidade: **${cityName}** (\`${cityKey}\`)`,
+  `Cargo da cidade: ${cityRoleMention || "—"}`,
+  `Evento: \`${evento}\``,
+  `Data do evento: \`${data}\``,
+  `ID ganhador: \`${ganhadorId}\``,
+  `Nome ganhador: \`${ganhadorNome || "Não identificado"}\``,
+  `Organização: \`${org}\``,
+  `Tipo identificado: \`${tipo}\``,
+  `Premiação final: ${VIP_cut(premiacao || "—", 500)}`,
+  `Link analisado: ${pagamentoLink || "—"}`,
+  pagamentoResolvido?.ok
+    ? `Mensagem fonte: ${pagamentoResolvido.message?.url || pagamentoLink}`
+    : pagamentoResolvido?.erro
+    ? `Erro ao analisar link: \`${pagamentoResolvido.erro}\``
+    : "Sem link de pagamento vinculado.",
+  `Link do registro criado: ${msg.url}`,
+].join("\n"),
 });
 
      dashEmit("vip:criado", {

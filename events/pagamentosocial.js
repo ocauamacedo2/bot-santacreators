@@ -231,6 +231,7 @@ function normalizarTipoPremiacao(texto) {
   const t = original
     .toLowerCase()
     .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9\s$.,]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 
@@ -238,17 +239,54 @@ function normalizarTipoPremiacao(texto) {
     /\bdinheiro\b/i.test(t) ||
     /\bgrana\b/i.test(t) ||
     /\bcash\b/i.test(t) ||
+    /\bvalor\b/i.test(t) ||
+    /\br\$\b/i.test(t) ||
     /\b\d{1,3}(?:[.\s]\d{3})+(?:,\d{1,2})?\b/.test(t) ||
     /\b\d+(?:[.,]\d+)?\s*(?:k|kk|m|mi|mil|milhao|milhoes)?\b/i.test(t);
 
-  if (pareceDinheiro) return "Dinheiro";
+  if (pareceDinheiro && !/\bvip\b/i.test(t)) return "Dinheiro";
 
-  if (t.includes("staff")) return "VIP Staff";
+  if (
+    t.includes("platinum") ||
+    t.includes("platinium") ||
+    t.includes("platnum") ||
+    t.includes("platinun") ||
+    t.includes("platibnum") ||
+    t.includes("platina") ||
+    t.includes("platino") ||
+    t.includes("platnao") ||
+    t.includes("platnão")
+  ) return "VIP Platinum";
+
+  if (t.includes("black")) return "VIP Black";
+  if (t.includes("bronze")) return "VIP Bronze";
+  if (t.includes("prata")) return "VIP Prata";
+  if (t.includes("ouro")) return "VIP Ouro";
+
+  if (
+    t.includes("staff") ||
+    t.includes("gente boa") ||
+    t.includes("genteboa") ||
+    t.includes("vip gente")
+  ) return "VIP Staff";
+
   if (t.includes("rolepass")) return "Pass";
   if (t.includes("pass")) return "Pass";
-  if (t.includes("ouro")) return "VIP Ouro";
-  if (t.includes("vipevento") || t.includes("vip evento")) return "VIP Evento";
-  if (t.includes("lancamento") || t.includes("lançamento")) return "VIP Lancamento";
+
+  if (
+    t.includes("evento") ||
+    t.includes("vipevento") ||
+    t.includes("vip evento")
+  ) return "VIP Evento";
+
+  if (
+    t.includes("lancamento") ||
+    t.includes("lançamento") ||
+    t.includes("lancamnto") ||
+    t.includes("lançamento")
+  ) return "VIP Lancamento";
+
+  if (pareceDinheiro) return "Dinheiro";
 
   return "Dinheiro";
 }
