@@ -39,9 +39,9 @@ const REGISTRO_EVENTO_CHANNEL_ID = "1392618646630568076";
 const CRONOGRAMA_LOGS_CHANNEL_ID = "1387864036259004436";
 
 // Pagamentos — Regras da Semana
-const PAY_PERIOD_OK = 50;
-const PAY_PERIOD_GOAL = 60;
-const PAY_PERIOD_LIMIT = 80;
+const PAY_PERIOD_OK = 40;
+const PAY_PERIOD_GOAL = 50;
+const PAY_PERIOD_LIMIT = 60;
 
 // Scan
 const SCAN_PAGES = 160;
@@ -224,6 +224,61 @@ function labelFromPeriodKey(key) {
   } catch {
     return key;
   }
+}
+
+function monthKeyFromDateSP(date) {
+  const { y, m } = ymdSP(date);
+  return `${y}-${pad2(m)}`;
+}
+
+function labelFromMonthKey(key) {
+  try {
+    const [Y, M] = key.split("-").map(Number);
+    if (!Number.isFinite(Y) || !Number.isFinite(M)) return key;
+    return `${pad2(M)}/${Y}`;
+  } catch {
+    return key;
+  }
+}
+
+function periodInfoFromDateSP(date) {
+  return {
+    periodKey: periodKeyFromDateSP(date).key,
+    monthKey: monthKeyFromDateSP(date),
+  };
+}
+
+const SOURCE_LABELS = {
+  pay: "Pagamentos aprovados",
+  pay_all: "Pagamentos registrados",
+  pay_rejected: "Pagamentos reprovados",
+  evt_manual: "Registros manuais de eventos",
+  evt_poderes: "Registros de poderes",
+  evt: "Eventos EVT3",
+  evt_crono: "Cronograma / Hall / Eventos diários",
+};
+
+function aggregateMonth(items, monthKey) {
+  const only = items.filter((e) => e.monthKey === monthKey);
+  const byKind = {};
+
+  for (const item of only) {
+    byKind[item.kind] = (byKind[item.kind] || 0) + 1;
+  }
+
+  const total = only.length;
+
+  return { total, byKind };
+}
+
+function sourceLines(byKind, orderedKinds) {
+  return orderedKinds
+    .map((kind) => {
+      const label = SOURCE_LABELS[kind] || kind;
+      const value = byKind[kind] || 0;
+      return `• ${label}: **${value}**`;
+    })
+    .join("\n");
 }
 
 // =========================
@@ -444,7 +499,11 @@ const tsCreated = new Date(paymentRealTs);
 const pAll = periodKeyFromDateSP(tsCreated);
 DEBUG.payPeriodFoundAll[pAll.key] = (DEBUG.payPeriodFoundAll[pAll.key] || 0) + 1;
 
-paymentsAll.push({ userId: String(uid), periodKey: pAll.key, kind: "pay_all" });
+paymentsAll.push({
+  userId: String(uid),
+  ...periodInfoFromDateSP(tsCreated),
+  kind: "pay_all",
+});
 
 const st = getPaymentStatus(emb);
 const tsStatus = new Date(paymentRealTs);
@@ -453,10 +512,18 @@ const pStatus = periodKeyFromDateSP(tsStatus);
         if (st === "APPROVED") {
           DEBUG.payPeriodFound[pStatus.key] = (DEBUG.payPeriodFound[pStatus.key] || 0) + 1;
           DEBUG.payPeriodFoundApproved[pStatus.key] = (DEBUG.payPeriodFoundApproved[pStatus.key] || 0) + 1;
-          payments.push({ userId: String(uid), periodKey: pStatus.key, kind: "pay" });
+          payments.push({
+  userId: String(uid),
+  ...periodInfoFromDateSP(tsStatus),
+  kind: "pay",
+});
         } else if (st === "REJECTED") {
           DEBUG.payPeriodFoundRejected[pStatus.key] = (DEBUG.payPeriodFoundRejected[pStatus.key] || 0) + 1;
-          paymentsRejected.push({ userId: String(uid), periodKey: pStatus.key, kind: "pay_rejected" });
+          paymentsRejected.push({
+  userId: String(uid),
+  ...periodInfoFromDateSP(tsStatus),
+  kind: "pay_rejected",
+});
         }
       }
       if (stopScan) break;
@@ -504,7 +571,11 @@ const pStatus = periodKeyFromDateSP(tsStatus);
       lastUserTime.set(cand.userId, cand.ts);
       const p = periodKeyFromDateSP(new Date(cand.ts));
       DEBUG.evtPeriodFound[p.key] = (DEBUG.evtPeriodFound[p.key] || 0) + 1;
-      events.push({ userId: cand.userId, periodKey: p.key, kind: "evt_manual" });
+      events.push({
+  userId: cand.userId,
+  ...periodInfoFromDateSP(new Date(cand.ts)),
+  kind: "evt_manual",
+});
     }
   }
 
@@ -530,7 +601,11 @@ const pStatus = periodKeyFromDateSP(tsStatus);
         DEBUG.scannedPoderesMsgs++;
         const p = periodKeyFromDateSP(new Date(m.createdTimestamp));
         DEBUG.evtPeriodFound[p.key] = (DEBUG.evtPeriodFound[p.key] || 0) + 1;
-        events.push({ userId: String(uid), periodKey: p.key, kind: "evt_poderes" });
+        events.push({
+  userId: String(uid),
+  ...periodInfoFromDateSP(new Date(m.createdTimestamp)),
+  kind: "evt_poderes",
+});
       }
       if (stopScan) break;
       lastId = batch.last()?.id;
@@ -566,7 +641,11 @@ const pStatus = periodKeyFromDateSP(tsStatus);
 
     const p = periodKeyFromDateSP(createdAt);
     DEBUG.evtPeriodFound[p.key] = (DEBUG.evtPeriodFound[p.key] || 0) + 1;
-    events.push({ userId: creatorId, periodKey: p.key, kind: "evt" });
+    events.push({
+  userId: creatorId,
+  ...periodInfoFromDateSP(createdAt),
+  kind: "evt",
+});
   }
 
   // 4. CRONOGRAMA / HALL / DIÁRIOS (Yellow) - ✅ NOVO
@@ -592,7 +671,11 @@ const pStatus = periodKeyFromDateSP(tsStatus);
         const p = periodKeyFromDateSP(new Date(ts));
         
         DEBUG.evtPeriodFound[p.key] = (DEBUG.evtPeriodFound[p.key] || 0) + 1;
-        events.push({ userId: String(uid), periodKey: p.key, kind: "evt_crono" });
+        events.push({
+  userId: String(uid),
+  ...periodInfoFromDateSP(new Date(ts)),
+  kind: "evt_crono",
+});
       }
       if (stopScan) break;
       lastId = batch.last()?.id;
@@ -740,20 +823,53 @@ const lastKey = periodKeyFromDateSP(addDaysUTC(new Date(`${currentWk}T12:00:00Z`
   // Textos
   const ddPay = diff(curPay.total, prevPay.total);
   const ddEvt = diff(curEvt.total, prevEvt.total);
-  
+
+  const currentMonthKey = monthKeyFromDateSP(new Date());
+
+  const monthPayAll = aggregateMonth(paymentsAll, currentMonthKey);
+  const monthPayApproved = aggregateMonth(payments, currentMonthKey);
+  const monthPayRejected = aggregateMonth(paymentsRejected, currentMonthKey);
+  const monthEvents = aggregateMonth(events, currentMonthKey);
+
   const ps = payStatus(curPay.total);
   const pctLimit = Math.min(999, (curPay.total / PAY_PERIOD_LIMIT) * 100);
-  const bar = progressBarEmoji(curPay.total, PAY_PERIOD_LIMIT, 14, ps.fill);
+  const bar = progressBarEmoji(curPay.total, PAY_PERIOD_LIMIT, 12, ps.fill);
 
-  const goalLine = [
-    `${ps.icon} **Pagamentos Aprovados (SEMANA):** **${curPay.total}**`,
-    `🟡 **OK:** ${PAY_PERIOD_OK}  •  🟢 **META:** ${PAY_PERIOD_GOAL}  •  ⚠️ **LIMITE:** ${PAY_PERIOD_LIMIT}`,
-    `📌 **Progresso até o LIMITE:** **${curPay.total}/${PAY_PERIOD_LIMIT}** (**${pctLimit.toFixed(0)}%**)  ${bar} — **${ps.label}**`,
+  const weeklySummary = [
+    `📌 **Pagamentos aprovados:** **${curPay.total}**`,
+    `🎉 **Eventos / poderes:** **${curEvt.total}**`,
+    `📊 **Total semanal:** **${curAllTotal}**`,
+  ].join("\n");
+
+  const weeklyComparison = [
+    `💸 **Pagamentos:** ${prevPay.total} → **${curPay.total}** ${ddPay.mood} **${ddPay.sign}${Math.abs(ddPay.d)}** (${ddPay.pct.toFixed(1)}%)`,
+    `🎉 **Eventos:** ${prevEvt.total} → **${curEvt.total}** ${ddEvt.mood} **${ddEvt.sign}${Math.abs(ddEvt.d)}** (${ddEvt.pct.toFixed(1)}%)`,
+  ].join("\n");
+
+  const weeklyGoal = [
+    `${ps.icon} **Status atual:** **${ps.label}**`,
+    `🟡 **OK:** ${PAY_PERIOD_OK}  •  🟢 **Meta:** ${PAY_PERIOD_GOAL}  •  ⚠️ **Limite:** ${PAY_PERIOD_LIMIT}`,
+    `📈 **Progresso:** **${curPay.total}/${PAY_PERIOD_LIMIT}** (${pctLimit.toFixed(0)}%)`,
+    `${bar}`,
+  ].join("\n");
+
+  const monthlySummary = [
+    `🗓️ **Mês atual:** \`${labelFromMonthKey(currentMonthKey)}\``,
+    "",
+    `💸 **Pagamentos do mês**`,
+    `• Registrados: **${monthPayAll.total}**`,
+    `• Aprovados: **${monthPayApproved.total}**`,
+    `• Reprovados: **${monthPayRejected.total}**`,
+    "",
+    `🎉 **Eventos / fontes do mês**`,
+    sourceLines(monthEvents.byKind, ["evt_manual", "evt_poderes", "evt", "evt_crono"]),
+    "",
+    `📦 **Total geral do mês:** **${monthPayApproved.total + monthEvents.total}**`,
   ].join("\n");
 
   const top3Text = top3.length
-    ? top3.map((u, i) => `${i===0?'🥇':i===1?'🥈':'🥉'} <@${u.userId}> — **${u.count}**`).join("\n")
-    : "_(vazio)_";
+    ? top3.map((u, i) => `${i === 0 ? "🥇" : i === 1 ? "🥈" : "🥉"} <@${u.userId}> — **${u.count} registros**`).join("\n")
+    : "_Sem registros nesta semana._";
 
   // Chart Data (Últimas 4 semanas)
   const chartKeys = keys.slice(0, 4).reverse(); // Ascendente
@@ -794,23 +910,45 @@ const lastKey = periodKeyFromDateSP(addDaysUTC(new Date(`${currentWk}T12:00:00Z`
   // Embed
   const embed = new EmbedBuilder()
     .setColor(ps.color)
-    .setTitle("📈 Dashboard — Registros (Pagamentos + Eventos) • Semanal")
+    .setTitle("📊 Dashboard — Registros SantaCreators")
     .setDescription([
-      `🗓️ **Período Atual:** \`${labelFromPeriodKey(thisKey)}\``,
-      `🗓️ **Período Passado:** \`${labelFromPeriodKey(lastKey)}\``,
-      "",
-      ` **Pagamentos (APROVADOS):** **${curPay.total}**`,
-      `└─ Anterior: ${prevPay.total} • Dif: ${ddPay.mood} **${ddPay.sign}${Math.abs(ddPay.d)}** (${ddPay.pct.toFixed(1)}%)`,
-      "",
-      `🎉 **Eventos (TODOS):** **${curEvt.total}**`,
-      `└─ Anterior: ${prevEvt.total} • Dif: ${ddEvt.mood} **${ddEvt.sign}${Math.abs(ddEvt.d)}** (${ddEvt.pct.toFixed(1)}%)`,
-      "",
-      goalLine,
-      "",
-      `🏆 **Top 1 Pagamentos (Passado):** ${prevPay.top[0] ? `<@${prevPay.top[0].userId}> (${prevPay.top[0].count})` : "—"}`
+      `**Período semanal:** \`${labelFromPeriodKey(thisKey)}\``,
+      `**Comparação:** \`${labelFromPeriodKey(lastKey)}\` → \`${labelFromPeriodKey(thisKey)}\``,
     ].join("\n"))
-    .addFields({ name: "🏅 Top 3 — Ranking Geral (Soma)", value: top3Text, inline: false })
+    .addFields(
+      {
+        name: "📌 Resumo da semana",
+        value: weeklySummary,
+        inline: true,
+      },
+      {
+        name: "📈 Comparativo semanal",
+        value: weeklyComparison,
+        inline: true,
+      },
+      {
+        name: "🎯 Meta de pagamentos",
+        value: weeklyGoal,
+        inline: false,
+      },
+      {
+        name: "📦 Totais do mês por fonte",
+        value: monthlySummary,
+        inline: false,
+      },
+      {
+        name: "🏅 Top 3 — Ranking geral da semana",
+        value: top3Text,
+        inline: false,
+      },
+      {
+        name: "🏆 Destaque anterior",
+        value: `**Top 1 pagamentos da semana passada:** ${prevPay.top[0] ? `<@${prevPay.top[0].userId}> — **${prevPay.top[0].count}**` : "—"}`,
+        inline: false,
+      },
+    )
     .setImage("attachment://chart.png")
+    .setFooter({ text: "Atualização automática • Pagamentos + Eventos + Poderes" })
     .setTimestamp();
 
   // Botão Remover Pontos
