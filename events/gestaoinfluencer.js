@@ -1245,6 +1245,7 @@ let roleSetAtMs = await resolveInitialRoleSetAtMs(guild, targetUser.id);
       const months = monthsSince(joinMs);
 
       const initialActive = options.initialActive ?? false;
+      const createdNowMs = nowMs();
 
       const tempRec = {
         messageId: null,
@@ -1254,7 +1255,7 @@ let roleSetAtMs = await resolveInitialRoleSetAtMs(guild, targetUser.id);
         registrarId: registrar.id,
         area: areaStr,
         joinDateMs: joinMs,
-        createdAtMs: nowMs(),
+        createdAtMs: createdNowMs,
         active: initialActive,
         nextWeekTickMs: initialActive ? computeNextWeekTick(joinMs) : null,
         oneMonthNotified: false,
@@ -1264,8 +1265,8 @@ let roleSetAtMs = await resolveInitialRoleSetAtMs(guild, targetUser.id);
         responsibleType: options.responsibleType || autoResp?.type || null,
         warnNoRoleGI,
         responsibleHistory: [],
-        pausedAtMs: initialActive ? null : nowMs(),
-        totalPausedMs: 0,
+        pausedAtMs: initialActive ? null : createdNowMs,
+        totalPausedMs: initialActive ? 0 : Math.max(0, createdNowMs - joinMs),
         roleSetAtMs,
         passaporte: options.passaporte || null // ✅ Salva o ID se vier do pedirset
       };
