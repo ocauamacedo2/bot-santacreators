@@ -3543,10 +3543,7 @@ try {
     getFieldValue(embedOriginal, "📆 Data") ||
     "";
 
-  const pagamentoAt = dataEventoParaTimestampSP(
-    dataEventoEmbed,
-    msgOriginal.createdTimestamp || Date.now()
-  );
+  const pagamentoAt = Date.now();
 
   dashEmit(map[action] || "pagamento:status", {
     __at: pagamentoAt,
@@ -3557,6 +3554,10 @@ try {
     oldMessageId: msgOriginal.id,
     newMessageId: msgNova.id,
     dataEvento: dataEventoEmbed,
+    dataEventoTimestamp: dataEventoParaTimestampSP(
+      dataEventoEmbed,
+      msgOriginal.createdTimestamp || Date.now()
+    ),
     dedupeKey: `pagamento_social:${action}:${msgOriginal.id}`,
   });
 } catch {}
