@@ -3516,8 +3516,42 @@ const msgNova = await canal.send({ embeds: [embedAtualizado] }).catch(() => null
     }).catch(() => {});
   }
 
+  // ✅ EMITE EVENTO PRO GERALDASH ANTES DE ATUALIZAR O DASHBOARD
+  // assim o gráfico já recebe o pagamento atual antes de redesenhar
+  try {
+    const map = {
+      pago: "pagamento:pago",
+      solicitado: "pagamento:solicitado",
+      reprovado: "pagamento:reprovado",
+    };
+
+    const dataEventoEmbed =
+      getFieldValue(embedOriginal, "📅 Data do Evento") ||
+      getFieldValue(embedOriginal, "Data do Evento") ||
+      getFieldValue(embedOriginal, "📆 Data") ||
+      "";
+
+    const pagamentoAt = Date.now();
+
+    dashEmit(map[action] || "pagamento:status", {
+      __at: pagamentoAt,
+      source: "pagamento_social",
+      by: interaction.user.id,
+      action,
+      canal: CANAL_PAGAMENTO,
+      oldMessageId: msgOriginal.id,
+      newMessageId: msgNova.id,
+      dataEvento: dataEventoEmbed,
+      dataEventoTimestamp: dataEventoParaTimestampSP(
+        dataEventoEmbed,
+        msgOriginal.createdTimestamp || Date.now()
+      ),
+      dedupeKey: `pagamento_social:${action}:${msgOriginal.id}`,
+    });
+  } catch {}
+
   // Se aprovado/reprovado/solicitado, recalcula estatísticas apenas pelos registros do mês atual
-  // depois que a mensagem nova já existe e a antiga saiu do canal.
+  // depois que a mensagem nova já existe, a antiga saiu do canal e o geralDash recebeu o evento.
   if (["pago", "reprovado", "solicitado"].includes(action)) {
     await reconstruirStatsPorEmbeds(client, 100).catch(() => null);
     await updateDashboard(client).catch(() => {});
@@ -3528,39 +3562,6 @@ const msgNova = await canal.send({ embeds: [embedAtualizado] }).catch(() => null
   await limparBotoesAntigos(client, canal).catch(() => {});
 
   await interaction.editReply({ content: "✅ Atualizado e jogado pro final do chat!" }).catch(() => {});
-
-  // ✅ EMITE EVENTO PRO GERALDASH (aqui!)
-try {
-  const map = {
-    pago: "pagamento:pago",
-    solicitado: "pagamento:solicitado",
-    reprovado: "pagamento:reprovado",
-  };
-
-  const dataEventoEmbed =
-    getFieldValue(embedOriginal, "📅 Data do Evento") ||
-    getFieldValue(embedOriginal, "Data do Evento") ||
-    getFieldValue(embedOriginal, "📆 Data") ||
-    "";
-
-  const pagamentoAt = Date.now();
-
-  dashEmit(map[action] || "pagamento:status", {
-    __at: pagamentoAt,
-    source: "pagamento_social",
-    by: interaction.user.id,
-    action,
-    canal: CANAL_PAGAMENTO,
-    oldMessageId: msgOriginal.id,
-    newMessageId: msgNova.id,
-    dataEvento: dataEventoEmbed,
-    dataEventoTimestamp: dataEventoParaTimestampSP(
-      dataEventoEmbed,
-      msgOriginal.createdTimestamp || Date.now()
-    ),
-    dedupeKey: `pagamento_social:${action}:${msgOriginal.id}`,
-  });
-} catch {}
 
   const tituloLog =
     action === "pago" ? "💰 Pagamento confirmado"
