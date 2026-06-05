@@ -161,21 +161,25 @@ function getWeekDates() {
   // Cria data segura baseada no fuso horário
   const now = new Date(new Date().toLocaleString("en-US", { timeZone: TZ }));
   const day = now.getDay(); // 0 (Dom) a 6 (Sab)
-  
-  // Calcula o Domingo da semana atual
-  const sunday = new Date(now);
-  sunday.setDate(now.getDate() - day);
-  
+
+  // Calcula a SEGUNDA-FEIRA da semana atual
+  // Domingo (0) precisa voltar 6 dias, não 0, para manter a semana SEG → DOM.
+  const diffToMonday = day === 0 ? -6 : 1 - day;
+
+  const monday = new Date(now);
+  monday.setDate(now.getDate() + diffToMonday);
+
   const dates = {};
-  const daysMap = ["dom", "seg", "ter", "qua", "qui", "sex", "sab"];
+  const daysMap = ["seg", "ter", "qua", "qui", "sex", "sab", "dom"];
 
   for (let i = 0; i < 7; i++) {
-    const d = new Date(sunday);
-    d.setDate(sunday.getDate() + i);
+    const d = new Date(monday);
+    d.setDate(monday.getDate() + i);
     const dd = String(d.getDate()).padStart(2, "0");
     const mm = String(d.getMonth() + 1).padStart(2, "0");
     dates[daysMap[i]] = `${dd}/${mm}`;
   }
+
   return dates;
 }
 
@@ -214,7 +218,7 @@ function buildPanelContent(state) {
     dom: "DOMINGO",
   };
 
-  const range = `${dates.dom} → ${dates.sab}`;
+  const range = `${dates.seg} → ${dates.dom}`;
 
   // ✅ NOVAS MENÇÕES (invisíveis)
   const newMentions = [
