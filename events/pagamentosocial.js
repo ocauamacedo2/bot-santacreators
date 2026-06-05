@@ -2015,24 +2015,37 @@ async function buscarVipEventoPorDados(client, dados = {}) {
     const embed = msg.embeds[0];
     const texto = normalizarBuscaVip(textoCompletoEmbedVip(embed));
 
-    const bateId = alvoId && texto.includes(alvoId);
-    const bateNome = alvoNome && texto.includes(alvoNome);
-    const bateEvento = alvoEvento && texto.includes(alvoEvento);
-    const bateData = alvoData && texto.includes(alvoData);
+const infoVip = extrairInfoDoEmbedVipEvento(embed);
 
-    if (bateId || (bateEvento && bateData) || (bateNome && bateEvento)) {
-      return {
-        ok: true,
-        link: {
-          guildId: msg.guild?.id || null,
-          channelId: msg.channel?.id || null,
-          messageId: msg.id,
-          url: msg.url,
-        },
-        message: msg,
-        info: extrairInfoDoEmbedVipEvento(embed),
-      };
-    }
+const bateId = alvoId && texto.includes(alvoId);
+const bateNome = alvoNome && texto.includes(alvoNome);
+const bateEvento = alvoEvento && texto.includes(alvoEvento);
+const bateData = alvoData && texto.includes(alvoData);
+
+const eventoVipNorm = normalizarBuscaVip(infoVip.evento);
+const dataVipNorm = normalizarBuscaVip(infoVip.data);
+
+const mesmoEvento = alvoEvento && eventoVipNorm && eventoVipNorm.includes(alvoEvento);
+const mesmaData = alvoData && dataVipNorm && dataVipNorm.includes(alvoData);
+
+const vinculoSeguro =
+  (bateId && (mesmoEvento || mesmaData || bateEvento || bateData)) ||
+  (bateNome && mesmoEvento) ||
+  (mesmoEvento && mesmaData);
+
+if (vinculoSeguro) {
+  return {
+    ok: true,
+    link: {
+      guildId: msg.guild?.id || null,
+      channelId: msg.channel?.id || null,
+      messageId: msg.id,
+      url: msg.url,
+    },
+    message: msg,
+    info: infoVip,
+  };
+}
   }
 
   return {
@@ -2163,6 +2176,115 @@ async function marcarVipEventoComoPagoPorPagamentoSocial(client, vipEventoResolv
     url: msgVip.url,
     registranteId,
     ganhadorId,
+  };
+}
+
+function nomeVipEstaVazioOuGenerico(nome) {
+  const n = String(nome || "")
+    .toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[`*_]/g, "")
+    .trim();
+
+  return !n || n === "nao identificado" || n === "nao informado" || n === "-";
+}
+
+function validarMesmoEventoOuDataParaAtualizarVip(vipInfo = {}, dadosPagamento = {}) {
+  const eventoVip = normalizarBuscaVip(vipInfo.evento);
+  const dataVip = normalizarBuscaVip(vipInfo.data);
+
+  const eventoPagamento = normalizarBuscaVip(dadosPagamento.eventoNome);
+  const dataPagamento = normalizarBuscaVip(dadosPagamento.eventoData);
+
+  const mesmoEvento = eventoVip && eventoPagamento && eventoVip.includes(eventoPagamento);
+  const mesmaData = dataVip && dataPagamento && dataVip.includes(dataPagamento);
+
+  return Boolean(mesmoEvento || mesmaData);
+}
+
+async function atualizarNomeGanhadorNoVipEvento(client, vipEventoResolvido, dadosPagamento = {}) {
+  if (!vipEventoResolvido?.ok || !vipEventoResolvido?.message?.embeds?.[0]) {
+    return {
+      ok: false,
+      alterou: false,
+      motivo: "Nenhum Registro VIP vinculado encontrado.",
+    };
+  }
+
+  const nomePagamento = String(dadosPagamento.ganhadorNome || "").trim();
+  const idPagamento = String(dadosPagamento.ganhadorId || "").replace(/\D/g, "").trim();
+
+  if (!nomePagamento || nomePagamento === PADRAO_INDEFINIDO) {
+    return {
+      ok: false,
+      alterou: false,
+      motivo: "Pagamento Social sem nome válido para atualizar no VIP.",
+    };
+  }
+
+  const msgVip = vipEventoResolvido.message;
+  const embedVip = EmbedBuilder.from(msgVip.embeds[0]);
+  const infoVip = vipEventoResolvido.info || extrairInfoDoEmbedVipEvento(embedVip);
+
+  const idVip = String(infoVip.ganhadorId || "").replace(/\D/g, "").trim();
+
+  if (idPagamento && idVip && idPagamento !== idVip) {
+    return {
+      ok: false,
+      alterou: false,
+      motivo: `ID diferente entre Pagamento Social (${idPagamento}) e VIP (${idVip}).`,
+      url: msgVip.url,
+    };
+  }
+
+  if (!validarMesmoEventoOuDataParaAtualizarVip(infoVip, dadosPagamento)) {
+    return {
+      ok: false,
+      alterou: false,
+      motivo: "Não atualizei porque não bateu mesmo evento ou mesma data.",
+      url: msgVip.url,
+    };
+  }
+
+  if (!nomeVipEstaVazioOuGenerico(infoVip.ganhadorNome)) {
+    return {
+      ok: true,
+      alterou: false,
+      motivo: "O Registro VIP já tinha nome identificado.",
+      url: msgVip.url,
+    };
+  }
+
+  const fields = Array.isArray(embedVip.data.fields) ? [...embedVip.data.fields] : [];
+  const nomeIdx = fields.findIndex((f) => String(f.name || "").startsWith("👤 Nome do ganhador"));
+
+  if (nomeIdx >= 0) {
+    fields[nomeIdx] = {
+      ...fields[nomeIdx],
+      value: `\`${nomePagamento}\``,
+    };
+  } else {
+    fields.push({
+      name: "👤 Nome do ganhador",
+      value: `\`${nomePagamento}\``,
+      inline: true,
+    });
+  }
+
+  embedVip.setFields(fields);
+
+  await msgVip.edit({
+    embeds: [embedVip],
+    components: msgVip.components,
+  }).catch(() => null);
+
+  return {
+    ok: true,
+    alterou: true,
+    motivo: "Nome do ganhador atualizado no Registro VIP.",
+    url: msgVip.url,
+    nome: nomePagamento,
+    id: idPagamento || idVip || null,
   };
 }
 
@@ -2929,17 +3051,24 @@ const camposRegistro = [
 ];
 
 if (vipEventoResolvido?.ok) {
-  camposRegistro.push({
-    name: "📎 Registro VIP vinculado",
-    value: [
-      `🔗 ${vipEventoResolvido.link?.url || "—"}`,
-      `👤 Nome no VIP: \`${vipEventoResolvido.info?.ganhadorNome || PADRAO_INDEFINIDO}\``,
-      `🆔 ID no VIP: \`${vipEventoResolvido.info?.ganhadorId || PADRAO_INDEFINIDO}\``,
-    ].join("\n"),
-    inline: false,
-  });
+camposRegistro.push({
+  name: "📎 Registro VIP vinculado",
+  value: [
+    `🔗 ${vipEventoResolvido.link?.url || "—"}`,
+    `✅ Vinculado pelo sistema com evento/data conferidos.`,
+  ].join("\n"),
+  inline: false,
+});
 }
-
+if (vipEventoResolvido?.ok) {
+  await atualizarNomeGanhadorNoVipEvento(client, vipEventoResolvido, {
+    eventoNome,
+    eventoData,
+    ganhadorNome,
+    ganhadorId,
+    premiacao,
+  }).catch(() => null);
+}
 if (!ocultarFinanceiro) {
   camposRegistro.push(
     { name: "💰 Valor Identificado", value: analiseComprovante.valorRaw ? `\`${analiseComprovante.valorRaw}\`` : "`Não identificado`", inline: true },
