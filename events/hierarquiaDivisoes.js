@@ -1031,16 +1031,22 @@ await interaction.reply({
       divisions[targetId] = newDivision;
       saveDivisions(divisions);
 
-      await updateHierarchyPanel(client);
-
-      const targetUser = await client.users.fetch(targetId).catch(() => null);
-      if (targetUser) {
-        await logDivisionChange(client, interaction.user, targetUser, oldDivision, newDivision);
-      }
-
-      return interaction.editReply({
-        content: `✅ Divisão de <@${targetId}> alterada para **${getDivisionLabel(newDivision)}**.\n🧾 Painel atualizado.`,
+      await interaction.editReply({
+        content: `✅ Divisão de <@${targetId}> alterada para **${getDivisionLabel(newDivision)}**.\n🔄 Estou atualizando o painel em segundo plano.`,
       }).catch(() => {});
+
+      updateHierarchyPanel(client)
+        .then(async () => {
+          const targetUser = await client.users.fetch(targetId).catch(() => null);
+          if (targetUser) {
+            await logDivisionChange(client, interaction.user, targetUser, oldDivision, newDivision);
+          }
+        })
+        .catch((err) => {
+          console.error("[Hierarquia] ❌ Erro ao atualizar painel/log após divisão:", err);
+        });
+
+      return true;
     } catch (err) {
       console.error("[Hierarquia] ❌ Erro no hier_set_division:", err);
       return interaction.editReply({
