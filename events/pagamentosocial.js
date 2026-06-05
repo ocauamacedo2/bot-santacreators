@@ -2298,6 +2298,112 @@ if (!nomeVipEstaVazioOuGenerico(infoVip.ganhadorNome, infoVip.organizacao)) {
   };
 }
 
+async function atualizarTipoPremiacaoNoVipEvento(client, vipEventoResolvido, categoriaPagamentoSocial, dadosPagamento = {}) {
+  if (!vipEventoResolvido?.ok || !vipEventoResolvido?.message?.embeds?.[0]) {
+    return {
+      ok: false,
+      alterou: false,
+      motivo: "Nenhum Registro VIP vinculado encontrado.",
+    };
+  }
+
+  const categoriaFinal = normalizarTipoPremiacao(categoriaPagamentoSocial);
+
+  if (!categoriaFinal) {
+    return {
+      ok: false,
+      alterou: false,
+      motivo: "Categoria do Pagamento Social inválida.",
+    };
+  }
+
+  const msgVip = vipEventoResolvido.message;
+  const embedVip = EmbedBuilder.from(msgVip.embeds[0]);
+  const infoVip = vipEventoResolvido.info || extrairInfoDoEmbedVipEvento(embedVip);
+
+  if (!validarMesmoEventoOuDataParaAtualizarVip(infoVip, dadosPagamento)) {
+    return {
+      ok: false,
+      alterou: false,
+      motivo: "Não atualizei o tipo porque não bateu mesmo evento ou mesma data.",
+      url: msgVip.url,
+    };
+  }
+
+  const categoriaAtualVip = normalizarTipoPremiacao(`${infoVip.tipo || ""} ${infoVip.premiacao || ""}`);
+
+  if (categoriaAtualVip === categoriaFinal) {
+    return {
+      ok: true,
+      alterou: false,
+      motivo: "O Registro VIP já estava com o mesmo tipo do Pagamento Social.",
+      url: msgVip.url,
+      tipo: categoriaFinal,
+    };
+  }
+
+  const fields = Array.isArray(embedVip.data.fields) ? [...embedVip.data.fields] : [];
+
+  const tipoBonito = formatarTipoPremiacaoBonito(categoriaFinal);
+  const premiacaoIdx = fields.findIndex((f) => String(f.name || "").startsWith("🎁 Premiação"));
+
+  if (premiacaoIdx >= 0) {
+    const valorAtual = String(fields[premiacaoIdx]?.value || "—");
+
+    const linhas = valorAtual
+      .split("\n")
+      .map((linha) => linha.trim())
+      .filter(Boolean);
+
+    const linhasSemTipoAntigo = linhas.filter((linha, index) => {
+      if (index !== 0) return true;
+
+      const linhaNorm = normalizarTipoPremiacao(linha);
+      return linhaNorm === "Dinheiro" && !/dinheiro|grana|cash|valor|r\$|\d/i.test(linha)
+        ? true
+        : linhaNorm !== categoriaAtualVip;
+    });
+
+    fields[premiacaoIdx] = {
+      ...fields[premiacaoIdx],
+      value: [
+        tipoBonito,
+        "",
+        ...linhasSemTipoAntigo,
+      ].join("\n").slice(0, 1024),
+    };
+  } else {
+    fields.push({
+      name: "🎁 Premiação",
+      value: tipoBonito,
+      inline: false,
+    });
+  }
+
+  const descAtual = String(embedVip.data.description || "");
+  const descNovo = descAtual.replace(
+    /(\*\*Tipo Identificado:\*\*\s*`)[^`]+(`)/i,
+    `$1${categoriaFinal}$2`
+  );
+
+  embedVip.setDescription(descNovo);
+  embedVip.setFields(fields);
+
+  await msgVip.edit({
+    embeds: [embedVip],
+    components: msgVip.components,
+  }).catch(() => null);
+
+  return {
+    ok: true,
+    alterou: true,
+    motivo: `Tipo do Registro VIP atualizado para ${categoriaFinal}.`,
+    url: msgVip.url,
+    tipo: categoriaFinal,
+    tipoAnterior: categoriaAtualVip,
+  };
+}
+
 function getDadosPagamentoParaBuscarVip(embedLike) {
   const ganhadorRaw = getFieldValue(embedLike, "👤 Ganhador");
   const ganhadorParts = String(ganhadorRaw || "").split("|").map((p) => p.trim());
@@ -3046,14 +3152,19 @@ const canal = await client.channels.fetch(CANAL_PAGAMENTO).catch(() => null);
 
         const registrador = interaction.user;
         const registradorAvatar = registrador.displayAvatarURL({ dynamic: true });
-const tipoInput = vipEventoResolvido?.ok
-  ? [
-      vipEventoResolvido.info?.tipo || "",
-      vipEventoResolvido.info?.premiacao || "",
-    ].join(" ")
-  : interaction.fields.getTextInputValue("tipoPremiacao");
+const tipoInputPagamentoSocial = [
+  interaction.fields.getTextInputValue("tipoPremiacao"),
+  premiacao,
+].join(" ");
 
-const categoriaVip = normalizarTipoPremiacao(tipoInput);
+const tipoInputFallbackVip = [
+  vipEventoResolvido?.info?.tipo || "",
+  vipEventoResolvido?.info?.premiacao || "",
+].join(" ");
+
+const categoriaVip = normalizarTipoPremiacao(
+  tipoInputPagamentoSocial.trim() || tipoInputFallbackVip
+);
 
 const ocultarFinanceiro = esconderCamposFinanceiros(categoriaVip, analiseComprovante);
 
@@ -3080,6 +3191,14 @@ camposRegistro.push({
 }
 if (vipEventoResolvido?.ok) {
   await atualizarNomeGanhadorNoVipEvento(client, vipEventoResolvido, {
+    eventoNome,
+    eventoData,
+    ganhadorNome,
+    ganhadorId,
+    premiacao,
+  }).catch(() => null);
+
+  await atualizarTipoPremiacaoNoVipEvento(client, vipEventoResolvido, categoriaVip, {
     eventoNome,
     eventoData,
     ganhadorNome,
