@@ -161,10 +161,24 @@ CHANNEL_RESTORE_LOG:      '1486006878914875412',
           r.totalPausedMs      = (typeof r.totalPausedMs === 'number') ? r.totalPausedMs : 0;
           r.roleSetAtMs        = (typeof r.roleSetAtMs === 'number') ? r.roleSetAtMs : null;
           r.messageId          = String(r.messageId);
-          r.lastCountdownWarningAt = r.lastCountdownWarningAt || null; // NOVO
-          r.passaporte         = r.passaporte || null; // ✅ Carrega passaporte se existir
+r.lastCountdownWarningAt = r.lastCountdownWarningAt || null; // NOVO
+r.passaporte         = r.passaporte || null; // ✅ Carrega passaporte se existir
 
-          const prev = byUser.get(r.targetId);
+// ✅ MIGRAÇÃO/CORREÇÃO: registros pausados criados já com tempo acumulado errado.
+// Caso o registro tenha nascido pausado, com pausedAtMs igual ao createdAtMs,
+// e o totalPausedMs seja praticamente o tempo entre entrada e criação,
+// zera o acumulado para o contador começar corretamente em 30 dias.
+try {
+  const nasceuPausado = r.active === false;
+  const pausaComecouNaCriacao = r.pausedAtMs && r.createdAtMs && Math.abs(Number(r.pausedAtMs) - Number(r.createdAtMs)) <= 5000;
+  const acumuladoDoNascimento = r.joinDateMs && r.createdAtMs && Math.abs(Number(r.totalPausedMs || 0) - Math.max(0, Number(r.createdAtMs) - Number(r.joinDateMs))) <= 120000;
+
+  if (nasceuPausado && pausaComecouNaCriacao && acumuladoDoNascimento) {
+    r.totalPausedMs = 0;
+  }
+} catch {}
+
+const prev = byUser.get(r.targetId);
           if (!prev || (r.createdAtMs || 0) > (prev.createdAtMs || 0)) byUser.set(r.targetId, r);
         }
         SC_GI_STATE.registros.clear();
@@ -313,13 +327,16 @@ CHANNEL_RESTORE_LOG:      '1486006878914875412',
 
     const nowMs = () => Date.now();
     const pad2 = n => (n < 10 ? '0' + n : '' + n);
-    function fromDDMMYYYY_toMs(str) {
-      const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(String(str).trim());
-      if (!m) return null;
-      const d = Number(m[1]), mo = Number(m[2]) - 1, y = Number(m[3]);
-      const utcMs = Date.UTC(y, mo, d, 0, 0, 0);
-      return utcMs + (SC_GI_CFG.TZ_OFFSET_MIN * 60 * 1000);
-    }
+  function fromDDMMYYYY_toMs(str) {
+  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(String(str).trim());
+  if (!m) return null;
+  const d = Number(m[1]), mo = Number(m[2]) - 1, y = Number(m[3]);
+  const utcMs = Date.UTC(y, mo, d, 0, 0, 0);
+
+  // ✅ Converte 00:00 do horário local configurado para UTC corretamente.
+  // Ex.: SP -03 => 00:00 local = 03:00 UTC.
+  return utcMs - (SC_GI_CFG.TZ_OFFSET_MIN * 60 * 1000);
+}
     function msToDDMMYYYY(ms) {
       const dt = new Date(ms - (SC_GI_CFG.TZ_OFFSET_MIN * 60 * 1000));
       return `${pad2(dt.getUTCDate())}/${pad2(dt.getUTCMonth()+1)}/${dt.getUTCFullYear()}`;
@@ -1265,8 +1282,11 @@ let roleSetAtMs = await resolveInitialRoleSetAtMs(guild, targetUser.id);
         responsibleType: options.responsibleType || autoResp?.type || null,
         warnNoRoleGI,
         responsibleHistory: [],
-        pausedAtMs: initialActive ? null : createdNowMs,
-        totalPausedMs: initialActive ? 0 : Math.max(0, createdNowMs - joinMs),
+pausedAtMs: initialActive ? null : createdNowMs,
+
+// ✅ Registro criado pausado deve começar zerado.
+// O tempo pausado passa a contar a partir do createdNowMs.
+totalPausedMs: 0,
         roleSetAtMs,
         passaporte: options.passaporte || null // ✅ Salva o ID se vier do pedirset
       };
