@@ -246,7 +246,10 @@ function normalizarTipoPremiacao(texto) {
     /\b\d{1,3}(?:[.\s]\d{3})+(?:,\d{1,2})?\b/.test(t) ||
     /\b\d+(?:[.,]\d+)?\s*(?:k|kk|m|mi|mil|milhao|milhoes)?\b/i.test(t);
 
-  if (pareceDinheiro && !/\bvip\b/i.test(t)) return "Dinheiro";
+  // ✅ PRIORIDADE MÁXIMA: se escreveu rolepass/pass, nunca pode virar Dinheiro.
+  if (t.includes("rolepass")) return "Pass";
+  if (/\brole\s*pass\b/i.test(t)) return "Pass";
+  if (/\bpass\b/i.test(t)) return "Pass";
 
   if (
     t.includes("platinum") ||
@@ -291,6 +294,23 @@ function normalizarTipoPremiacao(texto) {
   if (pareceDinheiro) return "Dinheiro";
 
   return "Dinheiro";
+}
+
+function formatarTipoPremiacaoBonito(tipo) {
+  const normalizado = normalizarTipoPremiacao(tipo);
+
+  if (normalizado === "Dinheiro") return "💵 Dinheiro";
+  if (normalizado === "VIP Platinum") return "💎 VIP Platinum";
+  if (normalizado === "VIP Ouro") return "🥇 VIP Ouro";
+  if (normalizado === "VIP Prata") return "🥈 VIP Prata";
+  if (normalizado === "VIP Bronze") return "🥉 VIP Bronze";
+  if (normalizado === "VIP Black") return "🖤 VIP Black";
+  if (normalizado === "VIP Lancamento") return "🚀 VIP Lançamento";
+  if (normalizado === "VIP Staff") return "🛡️ VIP Staff / VIP Gente Boa";
+  if (normalizado === "VIP Evento") return "🎉 VIP Evento";
+  if (normalizado === "Pass") return "🎟️ Rolepass";
+
+  return `🎁 ${normalizado}`;
 }
 
 function normalizarMapaCategorias(obj) {
@@ -2307,7 +2327,17 @@ async function atualizarTipoPremiacaoNoVipEvento(client, vipEventoResolvido, cat
     };
   }
 
-  const categoriaFinal = normalizarTipoPremiacao(categoriaPagamentoSocial);
+  const tipoDigitadoPagamentoSocial = String(dadosPagamento.tipoDigitadoPagamentoSocial || "").trim();
+
+  if (!tipoDigitadoPagamentoSocial) {
+    return {
+      ok: false,
+      alterou: false,
+      motivo: "Pagamento Social sem tipo digitado. Não vou usar o tipo antigo do VIP para corrigir.",
+    };
+  }
+
+  const categoriaFinal = normalizarTipoPremiacao(tipoDigitadoPagamentoSocial);
 
   if (!categoriaFinal) {
     return {
@@ -2320,6 +2350,18 @@ async function atualizarTipoPremiacaoNoVipEvento(client, vipEventoResolvido, cat
   const msgVip = vipEventoResolvido.message;
   const embedVip = EmbedBuilder.from(msgVip.embeds[0]);
   const infoVip = vipEventoResolvido.info || extrairInfoDoEmbedVipEvento(embedVip);
+
+  const idPagamento = String(dadosPagamento.ganhadorId || "").replace(/\D/g, "").trim();
+  const idVip = String(infoVip.ganhadorId || "").replace(/\D/g, "").trim();
+
+  if (idPagamento && idVip && idPagamento !== idVip) {
+    return {
+      ok: false,
+      alterou: false,
+      motivo: `Não atualizei o tipo porque o ID do Pagamento Social (${idPagamento}) é diferente do ID do VIP (${idVip}).`,
+      url: msgVip.url,
+    };
+  }
 
   if (!validarMesmoEventoOuDataParaAtualizarVip(infoVip, dadosPagamento)) {
     return {
@@ -2343,7 +2385,6 @@ async function atualizarTipoPremiacaoNoVipEvento(client, vipEventoResolvido, cat
   }
 
   const fields = Array.isArray(embedVip.data.fields) ? [...embedVip.data.fields] : [];
-
   const tipoBonito = formatarTipoPremiacaoBonito(categoriaFinal);
   const premiacaoIdx = fields.findIndex((f) => String(f.name || "").startsWith("🎁 Premiação"));
 
@@ -2359,9 +2400,7 @@ async function atualizarTipoPremiacaoNoVipEvento(client, vipEventoResolvido, cat
       if (index !== 0) return true;
 
       const linhaNorm = normalizarTipoPremiacao(linha);
-      return linhaNorm === "Dinheiro" && !/dinheiro|grana|cash|valor|r\$|\d/i.test(linha)
-        ? true
-        : linhaNorm !== categoriaAtualVip;
+      return linhaNorm !== categoriaAtualVip;
     });
 
     fields[premiacaoIdx] = {
@@ -2392,12 +2431,12 @@ async function atualizarTipoPremiacaoNoVipEvento(client, vipEventoResolvido, cat
   await msgVip.edit({
     embeds: [embedVip],
     components: msgVip.components,
-  }).catch(() => null);
+  });
 
   return {
     ok: true,
     alterou: true,
-    motivo: `Tipo do Registro VIP atualizado para ${categoriaFinal}.`,
+    motivo: `Tipo do Registro VIP corrigido pelo Pagamento Social: ${categoriaAtualVip} → ${categoriaFinal}.`,
     url: msgVip.url,
     tipo: categoriaFinal,
     tipoAnterior: categoriaAtualVip,
@@ -3152,10 +3191,7 @@ const canal = await client.channels.fetch(CANAL_PAGAMENTO).catch(() => null);
 
         const registrador = interaction.user;
         const registradorAvatar = registrador.displayAvatarURL({ dynamic: true });
-const tipoInputPagamentoSocial = [
-  interaction.fields.getTextInputValue("tipoPremiacao"),
-  premiacao,
-].join(" ");
+const tipoDigitadoPagamentoSocial = interaction.fields.getTextInputValue("tipoPremiacao")?.trim() || "";
 
 const tipoInputFallbackVip = [
   vipEventoResolvido?.info?.tipo || "",
@@ -3163,9 +3199,8 @@ const tipoInputFallbackVip = [
 ].join(" ");
 
 const categoriaVip = normalizarTipoPremiacao(
-  tipoInputPagamentoSocial.trim() || tipoInputFallbackVip
+  tipoDigitadoPagamentoSocial || tipoInputFallbackVip
 );
-
 const ocultarFinanceiro = esconderCamposFinanceiros(categoriaVip, analiseComprovante);
 
 const camposRegistro = [
@@ -3198,13 +3233,16 @@ if (vipEventoResolvido?.ok) {
     premiacao,
   }).catch(() => null);
 
-  await atualizarTipoPremiacaoNoVipEvento(client, vipEventoResolvido, categoriaVip, {
-    eventoNome,
-    eventoData,
-    ganhadorNome,
-    ganhadorId,
-    premiacao,
-  }).catch(() => null);
+await atualizarTipoPremiacaoNoVipEvento(client, vipEventoResolvido, categoriaVip, {
+  eventoNome,
+  eventoData,
+  ganhadorNome,
+  ganhadorId,
+  premiacao,
+  tipoDigitadoPagamentoSocial,
+}).catch((err) => {
+  console.warn("[PagamentoSocial] Falha ao corrigir tipo do VIP Evento:", err?.message || err);
+});
 }
 if (!ocultarFinanceiro) {
   camposRegistro.push(
