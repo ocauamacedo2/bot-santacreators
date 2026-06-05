@@ -428,10 +428,10 @@ function VIP_parseGanhadorFlex(input, orgFallback = "Não identificado") {
   const unico = partes[0] || raw;
   const idUnico = extrairId(unico);
 
-  return {
-    id: idUnico,
-    nome: idUnico ? (orgFallback || "Não identificado") : unico,
-  };
+return {
+  id: idUnico,
+  nome: idUnico ? "Não identificado" : unico,
+};
 }
 
 function VIP_formatarCampoIdGanhador(ganhadorId) {
@@ -472,7 +472,7 @@ function VIP_buildRegistroEmbed(guild, registrante, payload, cityName) {
       { name: "🏁 Nome do evento ganho", value: `\`${payload.evento}\``, inline: false },
       { name: "📅 Dia do evento", value: `\`${payload.data}\``, inline: true },
       { name: "🆔 ID do ganhador", value: VIP_formatarCampoIdGanhador(payload.ganhadorId), inline: true },
-{ name: "👤 Nome do ganhador", value: `\`${payload.ganhadorNome || payload.org || "Não identificado"}\``, inline: true },
+      { name: "👤 Nome do ganhador", value: `\`${payload.ganhadorNome || "Não identificado"}\``, inline: true },
       { name: "🌆 Cidade", value: `**${cityName}**`, inline: true },
       { name: "🏢 Organização", value: `\`${payload.org}\``, inline: true },
       { name: "🎁 Premiação", value: `${tipoBonito}\n\n${payload.premiacao || "—"}`, inline: false },
