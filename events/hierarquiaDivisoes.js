@@ -84,6 +84,34 @@ LABELS: {
   none: "⚪ Sem Horário Fixo",
 },
 
+DIVISIONS: {
+  none: {
+    label: "⚪ Sem Cidade Definida",
+    emoji: "⚪",
+    roleId: null,
+  },
+  maresia: {
+    label: "🌊 Maresia",
+    emoji: "🌊",
+    roleId: "1379021994678288465",
+  },
+  grande: {
+    label: "🏙️ Grande",
+    emoji: "🏙️",
+    roleId: "1418691103397253322",
+  },
+  santa: {
+    label: "🎅 Santa",
+    emoji: "🎅",
+    roleId: "1379021888709464168",
+  },
+  nobre: {
+    label: "💎 Nobre",
+    emoji: "💎",
+    roleId: "1379021805544804382",
+  },
+},
+
   // Visual
   GIF_FOOTER:
     "https://media.discordapp.net/attachments/1362477839944777889/1374893068649500783/standard_1.gif?ex=69a18133&is=69a02fb3&hm=ea8c7358946665a87e0ec2b3caa3d7bb671c12fb854f9b88e251a67a0e80bc56&=&width=1867&height=108",
@@ -115,6 +143,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DATA_DIR = path.resolve(__dirname, "../data");
 const STATE_FILE = path.join(DATA_DIR, "hierarquia_slots.json");
+const DIVISIONS_FILE = path.join(DATA_DIR, "hierarquia_divisoes.json");
 const PANEL_STATE_FILE = path.join(DATA_DIR, "hierarquia_panel_state.json");
 
 function ensureDir() {
@@ -134,6 +163,21 @@ function loadSlots() {
 function saveSlots(data) {
   ensureDir();
   fs.writeFileSync(STATE_FILE, JSON.stringify(data, null, 2));
+}
+
+function loadDivisions() {
+  ensureDir();
+  try {
+    if (!fs.existsSync(DIVISIONS_FILE)) return {};
+    return JSON.parse(fs.readFileSync(DIVISIONS_FILE, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function saveDivisions(data) {
+  ensureDir();
+  fs.writeFileSync(DIVISIONS_FILE, JSON.stringify(data, null, 2));
 }
 
 function loadPanelState() {
@@ -158,6 +202,47 @@ function checkPermission(member) {
   if (member.roles?.cache?.some((r) => CONFIG.ADMIN_ROLES.includes(r.id))) return "ADMIN";
   if (member.roles?.cache?.some((r) => CONFIG.MOD_ROLES.includes(r.id))) return "MOD";
   return "NONE";
+}
+
+function hasRole(member, roleId) {
+  return Boolean(member?.roles?.cache?.has(roleId));
+}
+
+function isFullAdmin(member) {
+  if (!member) return false;
+  if (CONFIG.ADMIN_USERS.includes(member.id)) return true;
+  if (hasRole(member, CONFIG.ROLES.OWNER)) return true;
+  return false;
+}
+
+function canManageDivisionTarget(actorMember, targetMember) {
+  if (!actorMember || !targetMember) return false;
+
+  if (isFullAdmin(actorMember)) return true;
+
+  const actorIsRespCreator = hasRole(actorMember, CONFIG.ROLES.RESP_CREATOR);
+  const actorIsRespInflu = hasRole(actorMember, CONFIG.ROLES.RESP_INFLU);
+
+  const targetIsRespInflu = hasRole(targetMember, CONFIG.ROLES.RESP_INFLU);
+  const targetIsRespLider = hasRole(targetMember, CONFIG.ROLES.RESP_LIDER);
+
+  if (actorIsRespCreator && (targetIsRespInflu || targetIsRespLider)) return true;
+  if (actorIsRespInflu && targetIsRespLider) return true;
+
+  return false;
+}
+
+function isDivisionTargetRole(member) {
+  if (!member) return false;
+
+  return (
+    hasRole(member, CONFIG.ROLES.RESP_INFLU) ||
+    hasRole(member, CONFIG.ROLES.RESP_LIDER)
+  );
+}
+
+function getDivisionLabel(key) {
+  return CONFIG.DIVISIONS[key]?.label || CONFIG.DIVISIONS.none.label;
 }
 
 // Filtra membros que podem ser editados pelo executor
@@ -331,6 +416,7 @@ async function updateHierarchyPanel(client) {
         }
 
         const slots = loadSlots();
+        const divisions = loadDivisions();
 
         // Resolve emojis (com fallback)
         const E = {};
@@ -379,6 +465,44 @@ async function updateHierarchyPanel(client) {
         .join("\n") + countLine;
         };
 
+        const getDivisionLines = (divisionKey) => {
+          const respInfluRole = guild.roles.cache.get(CONFIG.ROLES.RESP_INFLU);
+          const respLiderRole = guild.roles.cache.get(CONFIG.ROLES.RESP_LIDER);
+
+          const respInfluMembers = respInfluRole
+            ? respInfluRole.members
+                .filter((m) => !m.user.bot && (divisions[m.id] || "none") === divisionKey)
+                .map((m) => m)
+                .sort((a, b) => a.displayName.localeCompare(b.displayName))
+            : [];
+
+          const respLiderMembers = respLiderRole
+            ? respLiderRole.members
+                .filter((m) => !m.user.bot && (divisions[m.id] || "none") === divisionKey)
+                .map((m) => m)
+                .sort((a, b) => a.displayName.localeCompare(b.displayName))
+            : [];
+
+          const influLine =
+            respInfluMembers.length > 0
+              ? respInfluMembers.map((m) => `${E.DOT} ${m.toString()}`).join("\n")
+              : "_Nenhum Resp. Influ definido_";
+
+          const liderLine =
+            respLiderMembers.length > 0
+              ? respLiderMembers.map((m) => `${E.DOT} ${m.toString()}`).join("\n")
+              : "_Nenhum Resp. Líder definido_";
+
+          return [
+            `### ${CONFIG.DIVISIONS[divisionKey].label}`,
+            `**Resp. Influ:**`,
+            influLine,
+            `**Resp. Líder:**`,
+            liderLine,
+            "",
+          ].join("\n");
+        };
+
         const sections = [
           `# ${E.CROWN_BLACK}   👑 HIERARQUIA OFICIAL — SANTACREATORS  ${E.CROWN_BLACK}`,
           "",
@@ -409,13 +533,13 @@ getMembersByRole(CONFIG.ROLES.RESP_LIDER, CONFIG.SLOTS.NONE) || "_Ninguém_",
 "┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅",
 "## 🏙️ DIVISÃO DE FOCO POR CIDADE",
 "",
-"🌊 **Maresia** — segunda-feira — cargo <@&1379021994678288465>",
-"🏙️ **Grande** — terça-feira — cargo <@&1418691103397253322>",
-"🎅 **Santa** — quarta-feira — cargo <@&1379021888709464168>",
-"💎 **Nobre** — responsabilidade geral — cargo <@&1379021805544804382>",
-"",
+getDivisionLines("maresia"),
+getDivisionLines("grande"),
+getDivisionLines("santa"),
+getDivisionLines("nobre"),
+getDivisionLines("none"),
 "> Cada cidade deve ter foco de **1 Resp. Líder + 1 Resp. Influ**.",
-"> Na **Cidade Nobre**, todos os responsáveis atuam juntos.",
+"> A divisão pode ser alterada apenas respeitando a hierarquia de cargos.",
 "",
 
 "┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅",
@@ -457,17 +581,22 @@ getMembersByRole(CONFIG.ROLES.RESP_LIDER, CONFIG.SLOTS.NONE) || "_Ninguém_",
           .setDescription(sections.join("\n"))
           .setImage(CONFIG.GIF_FOOTER);
 
-        const row = new ActionRowBuilder().addComponents(
-new ButtonBuilder()
-  .setCustomId("hier_manage_slots")
-  .setLabel("Gerenciar horários")
-  .setStyle(ButtonStyle.Secondary)
-  .setEmoji("🕰️"),
-          new ButtonBuilder()
-            .setCustomId("hier_refresh")
-            .setLabel("🔄 Atualizar")
-            .setStyle(ButtonStyle.Secondary)
-        );
+const row = new ActionRowBuilder().addComponents(
+  new ButtonBuilder()
+    .setCustomId("hier_manage_slots")
+    .setLabel("Gerenciar horários")
+    .setStyle(ButtonStyle.Secondary)
+    .setEmoji("🕰️"),
+  new ButtonBuilder()
+    .setCustomId("hier_manage_divisions")
+    .setLabel("Gerenciar divisões")
+    .setStyle(ButtonStyle.Secondary)
+    .setEmoji("🏙️"),
+  new ButtonBuilder()
+    .setCustomId("hier_refresh")
+    .setLabel("🔄 Atualizar")
+    .setStyle(ButtonStyle.Secondary)
+);
 
         // ✅ OTIMIZAÇÃO: Verifica se houve mudança real antes de editar (Anti-Flood)
         const payloadData = {
@@ -550,6 +679,28 @@ async function logChange(client, actor, targetUser, oldSlot, newSlot) {
   );
 
   await channel.send({ embeds: [embed], components: [row] });
+}
+
+async function logDivisionChange(client, actor, targetUser, oldDivision, newDivision) {
+  const channel = await client.channels.fetch(CONFIG.LOG_CHANNEL_ID).catch(() => null);
+  if (!channel) return;
+
+  const oldKey = oldDivision || "none";
+  const newKey = newDivision || "none";
+
+  const embed = new EmbedBuilder()
+    .setTitle("🏙️ Alteração de Divisão na Hierarquia")
+    .setColor(newKey === "none" ? "#e74c3c" : "#2ecc71")
+    .addFields(
+      { name: "👤 Membro", value: `${targetUser.toString()} (\`${targetUser.id}\`)`, inline: true },
+      { name: "👮 Alterado por", value: `${actor.toString()} (\`${actor.id}\`)`, inline: true },
+      { name: "📉 Antes", value: getDivisionLabel(oldKey), inline: true },
+      { name: "📈 Depois", value: getDivisionLabel(newKey), inline: true }
+    )
+    .setTimestamp()
+    .setFooter({ text: "Sistema de Divisões • SantaCreators" });
+
+  await channel.send({ embeds: [embed] });
 }
 
 // ================= AUTO-UPDATE (MUDANÇA DE CARGO) =================
@@ -709,6 +860,194 @@ await interaction.reply({
 
   return true;
 }
+
+  // 2.1) Botão Gerenciar Divisões
+  if (interaction.isButton() && interaction.customId === "hier_manage_divisions") {
+    await interaction.reply({
+      content: "⏳ Abrindo gerenciador de divisões...",
+      ephemeral: true,
+    }).catch(() => {});
+
+    try {
+      const guild = interaction.guild;
+
+      const targetRoles = [
+        CONFIG.ROLES.RESP_INFLU,
+        CONFIG.ROLES.RESP_LIDER,
+      ];
+
+      let members = [];
+
+      for (const roleId of targetRoles) {
+        const role = guild.roles.cache.get(roleId);
+        if (!role) continue;
+
+        const roleMembers = role.members.filter((m) => !m.user.bot);
+        members.push(...roleMembers.values());
+      }
+
+      members = [...new Map(members.map((m) => [m.id, m])).values()];
+      members = members.filter((m) => canManageDivisionTarget(interaction.member, m));
+
+      if (members.length === 0) {
+        return interaction.editReply({
+          content: "🚫 Você não tem nenhum Resp. Influ ou Resp. Líder disponível para alterar pela sua hierarquia.",
+        }).catch(() => {});
+      }
+
+      members.sort((a, b) => a.displayName.localeCompare(b.displayName));
+
+      const first25 = members.slice(0, 25);
+
+      const options = first25.map((m) =>
+        new StringSelectMenuOptionBuilder()
+          .setLabel(m.displayName.slice(0, 100))
+          .setValue(m.id)
+          .setDescription(m.roles.highest?.name?.slice(0, 100) || "Membro")
+          .setEmoji("👤")
+      );
+
+      const row = new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId("hier_select_division_user")
+          .setPlaceholder("Selecione o responsável para alterar a cidade")
+          .addOptions(options)
+      );
+
+      const extra =
+        members.length > 25
+          ? `\n⚠️ Mostrando 25 de ${members.length}.`
+          : "";
+
+      await interaction.editReply({
+        content: `👤 **Selecione o responsável** que deseja separar por cidade:${extra}`,
+        components: [row],
+      }).catch(() => {});
+    } catch (err) {
+      console.error("[Hierarquia] ❌ Erro no hier_manage_divisions:", err);
+      await interaction.editReply({
+        content: "❌ Deu erro ao abrir o gerenciador de divisões. Veja o console.",
+      }).catch(() => {});
+    }
+
+    return true;
+  }
+
+  // 2.2) Seleção de Usuário para Divisão
+  if (interaction.isStringSelectMenu() && interaction.customId === "hier_select_division_user") {
+    const targetId = interaction.values[0];
+
+    const targetMember = await interaction.guild.members.fetch(targetId).catch(() => null);
+    if (!targetMember) {
+      return interaction.reply({
+        content: "⚠️ Não encontrei esse membro no servidor.",
+        ephemeral: true,
+      });
+    }
+
+    if (!isDivisionTargetRole(targetMember)) {
+      return interaction.reply({
+        content: "⚠️ Esse membro não é Resp. Influ nem Resp. Líder.",
+        ephemeral: true,
+      });
+    }
+
+    if (!canManageDivisionTarget(interaction.member, targetMember)) {
+      return interaction.reply({
+        content: "🚫 Você não tem permissão de hierarquia para alterar a divisão desse responsável.",
+        ephemeral: true,
+      });
+    }
+
+    const divisions = loadDivisions();
+    const currentDivision = divisions[targetId] || "none";
+
+    const options = Object.entries(CONFIG.DIVISIONS).map(([key, data]) =>
+      new StringSelectMenuOptionBuilder()
+        .setLabel(data.label.slice(0, 100))
+        .setValue(key)
+        .setDescription(key === currentDivision ? "Divisão atual" : "Alterar para esta divisão")
+        .setEmoji(data.emoji)
+        .setDefault(key === currentDivision)
+    );
+
+    const row = new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(`hier_set_division:${targetId}`)
+        .setPlaceholder("Escolha a cidade do responsável")
+        .addOptions(options)
+    );
+
+    await interaction.update({
+      content: `🏙️ Editando divisão de <@${targetId}>\nAtualmente: **${getDivisionLabel(currentDivision)}**`,
+      components: [row],
+    }).catch(() => {});
+
+    return true;
+  }
+
+  // 2.3) Setar Divisão
+  if (interaction.isStringSelectMenu() && interaction.customId.startsWith("hier_set_division:")) {
+    await interaction.deferReply({ ephemeral: true }).catch(() => {});
+
+    try {
+      const [, targetId] = interaction.customId.split(":");
+      const newDivision = interaction.values[0];
+
+      if (!CONFIG.DIVISIONS[newDivision]) {
+        return interaction.editReply({
+          content: "⚠️ Divisão inválida.",
+        }).catch(() => {});
+      }
+
+      const targetMember = await interaction.guild.members.fetch(targetId).catch(() => null);
+      if (!targetMember) {
+        return interaction.editReply({
+          content: "⚠️ Não encontrei esse membro no servidor.",
+        }).catch(() => {});
+      }
+
+      if (!isDivisionTargetRole(targetMember)) {
+        return interaction.editReply({
+          content: "⚠️ Esse membro não é Resp. Influ nem Resp. Líder.",
+        }).catch(() => {});
+      }
+
+      if (!canManageDivisionTarget(interaction.member, targetMember)) {
+        return interaction.editReply({
+          content: "🚫 Você não tem permissão de hierarquia para alterar a divisão desse responsável.",
+        }).catch(() => {});
+      }
+
+      const divisions = loadDivisions();
+      const oldDivision = divisions[targetId] || "none";
+
+      if (oldDivision === newDivision) {
+        return interaction.editReply({
+          content: "⚠️ Esse responsável já está nessa divisão.",
+        }).catch(() => {});
+      }
+
+      divisions[targetId] = newDivision;
+      saveDivisions(divisions);
+
+      await updateHierarchyPanel(client);
+
+      const targetUser = await client.users.fetch(targetId).catch(() => null);
+      if (targetUser) {
+        await logDivisionChange(client, interaction.user, targetUser, oldDivision, newDivision);
+      }
+
+      return interaction.editReply({
+        content: `✅ Divisão de <@${targetId}> alterada para **${getDivisionLabel(newDivision)}**.\n🧾 Painel atualizado.`,
+      }).catch(() => {});
+    } catch (err) {
+      console.error("[Hierarquia] ❌ Erro no hier_set_division:", err);
+      return interaction.editReply({
+        content: "❌ Deu erro ao alterar a divisão. Olha o console pra ver o motivo.",
+      }).catch(() => {});
+    }
+  }
 
   // 3) Seleção de Usuário (Mostra botões de horário)
   if (interaction.isStringSelectMenu() && interaction.customId === "hier_select_user") {
