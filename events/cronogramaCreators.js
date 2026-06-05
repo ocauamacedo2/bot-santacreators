@@ -79,24 +79,24 @@ const DEFAULT_STATE = {
 
   footerImageUrl: "", // ✅ Imagem opcional no final
 
-  schedule: {
-    seg: { city: "Maresia", time: "19:00", active: true, eventName: "SANTA DO CRIME", prizes: "TOP 1:\n1 VIP GENTE BOA (30 DIAS) + 1 ROLEPASS + 2 VIP EVENTO (7 DIAS)" },
-    ter: { city: "Grande", time: "19:00", active: true, eventName: "SANTA APOCALIPSE", prizes: "TOP 1: VIP GENTE BOA\nTOP 2: VIP EVENTO (7 DIAS) + ROLEPASS\nTOP 3: VIP EVENTO (7 DIAS)" },
-    qua: { city: "Santa", time: "19:00", active: true, eventName: "FUGA ESPACIAL", prizes: "TOP 1: VIP GENTE BOA\nTOP 2: VIP EVENTO + ROLEPASS\nTOP 3: VIP EVENTO" },
-    qui: { city: "Nobre", time: "21:00", active: true, eventName: "MISSÃO ROSA", prizes: "TOP 1: 2 VIP GENTE BOA + 2 ROLEPASS + 100 MILHÕES\nTOP 2: 2 VIP EVENTO + 1 ROLEPASS + 50 MILHÕES" },
-    sex: { city: "Nobre", time: "21:00", active: true, eventName: "KARAMBIT WARS", prizes: "TOP 1: 1 VIP GENTE BOA + 100 MILHÕES\nTOP 2: ROLEPASS + VIP EVENTO (7 DIAS)\nTOP 3: VIP EVENTO + 25 MILHÕES" },
-    sab: { city: "Nobre", time: "21:00", active: true, eventName: "RESGATE O MACEDO", prizes: "TOP 1: 1 VIP GENTE BOA + ROLEPASS + 50 MILHÕES" },
-    dom: { city: "Folga", time: "—", active: false, eventName: "—", prizes: "—" },
-  },
-  madrugada: {
-    seg: { city: "—", time: "—", active: false, eventName: "F3 MADRUGADA", prizes: "—" },
-    ter: { city: "Nobre", time: "01:00 às 03:00", active: true, eventName: "F3 MADRUGADA", prizes: "—" },
-    qua: { city: "Nobre", time: "01:00 às 03:00", active: true, eventName: "F3 MADRUGADA", prizes: "—" },
-    qui: { city: "Nobre", time: "01:00 às 03:00", active: true, eventName: "F3 MADRUGADA", prizes: "—" },
-    sex: { city: "Nobre", time: "01:00 às 03:00", active: false, eventName: "F3 MADRUGADA", prizes: "—" },
-    sab: { city: "Nobre", time: "01:00 às 03:00", active: false, eventName: "F3 MADRUGADA", prizes: "—" },
-    dom: { city: "—", time: "—", active: false, eventName: "F3 MADRUGADA", prizes: "—" },
-  },
+schedule: {
+  seg: { city: "Maresia", time: "21:00", active: true, eventName: "EVENTO PICO", prizes: "—" },
+  ter: { city: "Grande", time: "23:30", active: true, eventName: "EVENTO PICO", prizes: "—" },
+  qua: { city: "Santa", time: "21:00", active: true, eventName: "EVENTO PICO", prizes: "—" },
+  qui: { city: "Nobre", time: "21:00 ou 00:00", active: true, eventName: "EVENTO PICO", prizes: "—" },
+  sex: { city: "Nobre", time: "21:00", active: true, eventName: "EVENTO PICO", prizes: "—" },
+  sab: { city: "Nobre", time: "21:00 ou 00:00", active: true, eventName: "EVENTO PICO", prizes: "—" },
+  dom: { city: "—", time: "—", active: false, eventName: "ORGANIZAÇÃO DE GESTÃO", prizes: "—" },
+},
+madrugada: {
+  seg: { city: "Nobre", time: "23:30 e 01:00", active: true, eventName: "VIRADA / MADRUGADA", prizes: "—" },
+  ter: { city: "Nobre", time: "01:00", active: true, eventName: "VIRADA / MADRUGADA", prizes: "—" },
+  qua: { city: "Maresia", time: "23:30", active: true, eventName: "VIRADA / MADRUGADA", prizes: "—" },
+  qui: { city: "Nobre", time: "21:00 ou 00:00", active: true, eventName: "VIRADA / MADRUGADA", prizes: "—" },
+  sex: { city: "Grande", time: "23:30", active: true, eventName: "VIRADA / MADRUGADA", prizes: "—" },
+  sab: { city: "Nobre", time: "21:00 ou 00:00 e 01:00", active: true, eventName: "VIRADA / MADRUGADA", prizes: "—" },
+  dom: { city: "Nobre", time: "23:30", active: true, eventName: "VIRADA / MADRUGADA", prizes: "—" },
+},
 };
 
 function ensureDir() {
@@ -231,8 +231,13 @@ function buildPanelContent(state) {
 
 `;
 
-  // ✅ Eventos 19:00 (tela toda)
-  let has19h = false;
+// ✅ Horários Picos (tela toda)
+text += `# 🔥 HORÁRIOS PICOS
+
+
+`;
+
+let has19h = false;
   for (const key of daysOrder) {
     const d = state.schedule[key];
     if (!d?.active) continue;
@@ -256,18 +261,17 @@ ${prizes}
 `;
   }
 
-  if (!has19h) {
-    text += `## EVENTOS 19:00
+if (!has19h) {
+  text += `## ❌ SEM PROGRAMAÇÃO (PICOS)
 _Nenhum agendado._
 
 ━━━━━━━━━━━━━━━━━━━━━━
 
 `;
-  }
+}
 
   // ✅ Madrugada
-  text += `# 🌌 EVENTOS MADRUGADAS 
-(CIDADE NOBRE)
+text += `# 🌌 HORÁRIOS VIRADA / MADRUGADA
 
 
 `;
@@ -687,10 +691,29 @@ async function logChange(client, guild, user, oldState, newState, changeType) {
 
 // ================= EXPORTS =================
 
+let cronogramaAutoRefreshStarted = false;
+
 export async function cronogramaCreatorsOnReady(client) {
   console.log("[Cronograma] Iniciando verificação do painel...");
   const state = loadState();
   state.panelChannelId = PANEL_CHANNEL_ID;
+
+  if (!cronogramaAutoRefreshStarted) {
+    cronogramaAutoRefreshStarted = true;
+
+    setInterval(async () => {
+      try {
+        const freshState = loadState();
+        freshState.panelChannelId = PANEL_CHANNEL_ID;
+
+        await updatePanel(client, freshState, { forceRecreate: false });
+
+        console.log("[Cronograma] ✅ Atualização automática de datas executada.");
+      } catch (e) {
+        console.error("[Cronograma] ❌ Erro na atualização automática de datas:", e);
+      }
+    }, 60 * 60 * 1000);
+  }
 
   try {
     const channel = await client.channels.fetch(PANEL_CHANNEL_ID).catch(() => null);
@@ -816,11 +839,11 @@ export async function cronogramaCreatorsHandleInteraction(interaction, client) {
         new StringSelectMenuBuilder()
           .setCustomId("crono_select_edit")
           .setPlaceholder("O que você quer editar?")
-          .addOptions([
-            { label: "Editar Horários 19:00", value: "edit_19h", emoji: "🌅" },
-            { label: "Editar Madrugada", value: "edit_madru", emoji: "🌌" },
-            { label: "Editar Imagem Final", value: "edit_footer_img", emoji: "🖼️" }
-          ])
+.addOptions([
+  { label: "Editar Horários Picos", value: "edit_19h", emoji: "🔥" },
+  { label: "Editar Virada / Madrugada", value: "edit_madru", emoji: "🌌" },
+  { label: "Editar Imagem Final", value: "edit_footer_img", emoji: "🖼️" }
+])
     );
     await interaction.reply({ content: "Selecione o que deseja editar:", components: [row], flags: MessageFlags.Ephemeral });
     return true;
@@ -989,7 +1012,7 @@ export async function cronogramaCreatorsHandleInteraction(interaction, client) {
           { label: "Domingo", value: "dom" }
         ])
     );
-    await interaction.update({ content: `Selecione o dia (${choice === "edit_19h" ? "19h" : "Madrugada"}):`, components: [rowDay] });
+    await interaction.update({ content: `Selecione o dia (${choice === "edit_19h" ? "Picos" : "Virada / Madrugada"}):`, components: [rowDay] });
     return true;
   }
 
@@ -1002,7 +1025,7 @@ export async function cronogramaCreatorsHandleInteraction(interaction, client) {
 
     const modal = new ModalBuilder()
       .setCustomId(`crono_save_${type}_${day}`)
-      .setTitle(`Editar ${day.toUpperCase()} - ${type === "schedule" ? "19h" : "Madrugada"}`);
+      .setTitle(`Editar ${day.toUpperCase()} - ${type === "schedule" ? "Picos" : "Virada/Madrugada"}`);
 
     const inputCity = new TextInputBuilder().setCustomId("city").setLabel("Cidade").setStyle(TextInputStyle.Short).setValue(currentData.city).setRequired(true);
     const inputTime = new TextInputBuilder().setCustomId("time").setLabel("Horário").setStyle(TextInputStyle.Short).setValue(currentData.time).setRequired(true);
