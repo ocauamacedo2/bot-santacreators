@@ -141,13 +141,22 @@ function getTodayEvents() {
 function getPhase(eventStartMinutes) {
   const now = minutesNowSP();
 
-  // Janelas de 5 minutos para evitar repetição no mesmo ciclo
-  if (now >= eventStartMinutes - 60 && now < eventStartMinutes - 55) return "PRE_60";
-  if (now >= eventStartMinutes - 30 && now < eventStartMinutes - 25) return "PRE_30";
-  if (now >= eventStartMinutes + 25 && now < eventStartMinutes + 30) return "PONTO_25";
-  if (now >= eventStartMinutes + 60 && now < eventStartMinutes + 65) return "POS_60";
-  if (now >= eventStartMinutes + 80 && now < eventStartMinutes + 85) return "POS_80";
-  if (now >= eventStartMinutes + 100 && now < eventStartMinutes + 105) return "POS_100";
+  // ✅ Janelas maiores para o notifier não perder o disparo caso o bot reinicie/trave alguns minutos.
+  // O state já impede envio duplicado por fase, então pode deixar a janela maior sem floodar.
+  if (now >= eventStartMinutes - 70 && now < eventStartMinutes - 45) return "PRE_60";
+  if (now >= eventStartMinutes - 40 && now < eventStartMinutes - 10) return "PRE_30";
+
+  // ✅ Durante o evento
+  if (now >= eventStartMinutes && now < eventStartMinutes + 20) return "DURANTE";
+
+  // ✅ Depois do início, lembrando bate-ponto
+  if (now >= eventStartMinutes + 20 && now < eventStartMinutes + 45) return "PONTO_25";
+
+  // ✅ Pós-evento/checklist final
+  if (now >= eventStartMinutes + 50 && now < eventStartMinutes + 85) return "POS_CHECKLIST";
+
+  // ✅ Cobrança extra de poderes depois
+  if (now >= eventStartMinutes + 90 && now < eventStartMinutes + 130) return "POS_PODERES";
 
   return null;
 }
@@ -358,6 +367,52 @@ function buildPrepareEmbed(event, phase) {
     .setTimestamp();
 }
 
+function buildDuringEmbed(event) {
+  return new EmbedBuilder()
+    .setColor("#f1c40f")
+    .setTitle("🎬 Evento em andamento")
+    .setDescription(
+      [
+        `O evento **${event.eventName}** da cidade **${event.city}** começou.`,
+        "",
+        "📋 **Checklist durante o evento:**",
+        "",
+        "☐ 👥 ADMs responsáveis acompanhando o evento.",
+        "☐ 🎙️ Áudio e organização geral sob controle.",
+        "☐ ⚡ Poderes usados apenas por quem realmente precisa.",
+        "☐ 🧍 Participantes e equipe organizados.",
+        "☐ 📌 Qualquer problema importante registrado para resolver no pós-evento.",
+        "",
+        `⏰ **Horário do evento:** ${event.time}`,
+      ].join("\n")
+    )
+    .setFooter({ text: "SantaCreators • Checklist durante o evento" })
+    .setTimestamp();
+}
+
+function buildPostChecklistEmbed(event) {
+  return new EmbedBuilder()
+    .setColor("#2ecc71")
+    .setTitle("🏆 Checklist pós-evento")
+    .setDescription(
+      [
+        `O evento **${event.eventName}** da cidade **${event.city}** já passou da fase principal.`,
+        "",
+        "Agora é obrigatório conferir o pós-evento:",
+        "",
+        "☐ ⭐ **Hall da Fama** registrado.",
+        "☐ 👑 **VIP/premiações** solicitados.",
+        "☐ 💳 **Pagamento do evento** liberado ou registrado.",
+        "☐ ⚡ **Poderes removidos** de quem recebeu para o evento.",
+        "☐ 📢 **GG oficial enviado na cidade** com vencedores/equipe vencedora.",
+        "",
+        "⚠️ Não deixa isso pra depois, porque é exatamente aqui que começa a virar bagunça kkk 💜",
+      ].join("\n")
+    )
+    .setFooter({ text: "SantaCreators • Checklist pós-evento" })
+    .setTimestamp();
+}
+
 function buildPointEmbed(event) {
   return new EmbedBuilder()
     .setColor("#f1c40f")
@@ -563,36 +618,159 @@ async function runNotifierTick(client, options = {}) {
     if (phase === "PRE_60" || phase === "PRE_30") {
       const embed = buildPrepareEmbed(event, phase);
 
+      let sent = 0;
+      let failed = 0;
+
       for (const member of respMembers.filter(isOnline)) {
-        await dm(client, member, embed, event, phase === "PRE_60" ? "pré-evento" : "F3");
+        const ok = await dm(client, member, embed, event, phase === "PRE_60" ? "pré-evento" : "F3");
+        if (ok) sent++;
+        else failed++;
+
         console.log(`[EventosChecklistNotifier] PV enviado (${phase}) para ${member.user.tag}`);
       }
+
+      await sendProgressLog(
+        client,
+        `📋 Checklist pré-evento disparado · ${phase}`,
+        [
+          `🎯 **Evento:** ${event.eventName}`,
+          `🏙️ **Cidade:** ${event.city}`,
+          `⏰ **Horário:** ${event.time}`,
+          "",
+          `✅ **Enviados:** ${sent}`,
+          `❌ **Falharam:** ${failed}`,
+          "",
+          "📌 Tipo de envio: responsáveis online.",
+        ].join("\n"),
+        "#9b59b6"
+      );
+    }
+
+    if (phase === "DURANTE") {
+      const duringEmbed = buildDuringEmbed(event);
+
+      let sent = 0;
+      let failed = 0;
+
+      for (const member of respMembers.filter(isOnline)) {
+        const ok = await dm(client, member, duringEmbed, event, "durante evento");
+        if (ok) sent++;
+        else failed++;
+
+        console.log(`[EventosChecklistNotifier] PV enviado (Durante) para ${member.user.tag}`);
+      }
+
+      await sendProgressLog(
+        client,
+        "🎬 Checklist durante o evento disparado",
+        [
+          `🎯 **Evento:** ${event.eventName}`,
+          `🏙️ **Cidade:** ${event.city}`,
+          `⏰ **Horário:** ${event.time}`,
+          "",
+          `✅ **Enviados:** ${sent}`,
+          `❌ **Falharam:** ${failed}`,
+          "",
+          "📌 Tipo de envio: responsáveis online.",
+        ].join("\n"),
+        "#f1c40f"
+      );
     }
 
     if (phase === "PONTO_25") {
       const reportEmbed = buildRespReportEmbed(event, onlineEquipe, offlineEquipe);
 
+      let sentPoint = 0;
+      let failedPoint = 0;
+      let ignoredPoint = 0;
+      let sentReport = 0;
+      let failedReport = 0;
+
       for (const member of onlineEquipe) {
         const already = globalThis.SC_BP_hasPunchedEffective?.(member.id);
+
         if (!already) {
-          const pointEmbed = buildPointEmbed({...event, targetId: member.id});
-          await dm(client, member, pointEmbed, event, "bate-ponto");
+          const pointEmbed = buildPointEmbed({ ...event, targetId: member.id });
+          const ok = await dm(client, member, pointEmbed, event, "bate-ponto");
+
+          if (ok) sentPoint++;
+          else failedPoint++;
+
           console.log(`[EventosChecklistNotifier] PV enviado (Ponto) para ${member.user.tag}`);
         } else {
+          ignoredPoint++;
           console.log(`[EventosChecklistNotifier] Usuário ${member.user.tag} já bateu ponto, ignorando.`);
         }
       }
 
       for (const resp of respMembers.filter(isOnline)) {
-        await dm(client, resp, reportEmbed, event, "Relatório Responsáveis");
+        const ok = await dm(client, resp, reportEmbed, event, "Relatório Responsáveis");
+
+        if (ok) sentReport++;
+        else failedReport++;
       }
+
+      await sendProgressLog(
+        client,
+        "🕒 Lembrete de bate-ponto disparado",
+        [
+          `🎯 **Evento:** ${event.eventName}`,
+          `🏙️ **Cidade:** ${event.city}`,
+          "",
+          "👥 **Equipe:**",
+          `✅ PVs enviados: **${sentPoint}**`,
+          `❌ PVs falharam: **${failedPoint}**`,
+          `⏭️ Ignorados por já terem batido ponto: **${ignoredPoint}**`,
+          "",
+          "👑 **Relatório para responsáveis:**",
+          `✅ Enviados: **${sentReport}**`,
+          `❌ Falharam: **${failedReport}**`,
+        ].join("\n"),
+        "#f1c40f"
+      );
     }
 
-    if (phase === "POS_60" || phase === "POS_80" || phase === "POS_100") {
+    if (phase === "POS_CHECKLIST") {
+      const postEmbed = buildPostChecklistEmbed(event);
+
+      let sent = 0;
+      let failed = 0;
+
+      for (const member of respMembers.filter(isOnline)) {
+        const ok = await dm(client, member, postEmbed, event, "checklist pós-evento");
+
+        if (ok) sent++;
+        else failed++;
+
+        console.log(`[EventosChecklistNotifier] PV enviado (Pós-evento) para ${member.user.tag}`);
+      }
+
+      await sendProgressLog(
+        client,
+        "🏆 Checklist pós-evento disparado",
+        [
+          `🎯 **Evento:** ${event.eventName}`,
+          `🏙️ **Cidade:** ${event.city}`,
+          `⏰ **Horário:** ${event.time}`,
+          "",
+          `✅ **Enviados:** ${sent}`,
+          `❌ **Falharam:** ${failed}`,
+          "",
+          "📌 Cobrança enviada para responsáveis online.",
+        ].join("\n"),
+        "#2ecc71"
+      );
+    }
+
+    if (phase === "POS_PODERES") {
+      let sentPower = 0;
+      let failedPower = 0;
+      let ignoredPower = 0;
+
       for (const member of onlineEquipe) {
         // Normalização de nome de evento para busca segura na memória global
         const eventSearchName = event.eventName.toLowerCase().trim();
-        
+
         const hasPower = globalThis.SC_EVENT_POWER_hasRegistered?.(
           member.id,
           eventSearchName,
@@ -600,13 +778,32 @@ async function runNotifierTick(client, options = {}) {
         );
 
         if (!hasPower) {
-          const powerEmbed = buildPowerEmbed({...event, targetId: member.id});
-          await dm(client, member, powerEmbed, event, "registro de poderes");
+          const powerEmbed = buildPowerEmbed({ ...event, targetId: member.id });
+          const ok = await dm(client, member, powerEmbed, event, "registro de poderes");
+
+          if (ok) sentPower++;
+          else failedPower++;
+
           console.log(`[EventosChecklistNotifier] PV enviado (Poderes) para ${member.user.tag}`);
         } else {
+          ignoredPower++;
           console.log(`[EventosChecklistNotifier] Usuário ${member.user.tag} já registrou poderes, ignorando.`);
         }
       }
+
+      await sendProgressLog(
+        client,
+        "⚡ Cobrança de registro de poderes disparada",
+        [
+          `🎯 **Evento:** ${event.eventName}`,
+          `🏙️ **Cidade:** ${event.city}`,
+          "",
+          `✅ PVs enviados: **${sentPower}**`,
+          `❌ PVs falharam: **${failedPower}**`,
+          `⏭️ Ignorados por já terem registrado: **${ignoredPower}**`,
+        ].join("\n"),
+        "#3498db"
+      );
     }
 
     markSent(state, uniqueBase);
