@@ -750,19 +750,71 @@ function chartUrlTwoDatasets({ labels, payData, evtData, title }) {
     data: {
       labels,
       datasets: [
-        { label: "Pagamentos", data: payData, backgroundColor: "#5865f2", barPercentage: 0.7, categoryPercentage: 0.8 },
-        { label: "Eventos/Poderes", data: evtData, backgroundColor: "#faa61a", barPercentage: 0.7, categoryPercentage: 0.8 },
+        {
+          label: "Pagamentos",
+          data: payData,
+          backgroundColor: "#5865f2",
+          barPercentage: 0.8,
+          categoryPercentage: 0.9,
+          minBarLength: 8,
+        },
+        {
+          label: "Eventos/Poderes",
+          data: evtData,
+          backgroundColor: "#faa61a",
+          barPercentage: 0.8,
+          categoryPercentage: 0.9,
+          minBarLength: 8,
+        },
       ],
     },
     options: {
-      plugins: {
-        title: { display: true, text: title, font: { size: 24 } },
-        datalabels: { anchor: "end", align: "end", offset: 4, clamp: true, font: { size: 16, weight: 'bold' }, color: '#000' },
-        legend: { display: true, labels: { font: { size: 16 } } },
+      title: {
+        display: true,
+        text: title,
+        fontSize: 24,
       },
-      scales: { y: { beginAtZero: true, ticks: { precision: 0, font: { size: 16 } } }, x: { ticks: { font: { size: 16 } } } },
+      legend: {
+        display: true,
+        labels: {
+          fontSize: 16,
+        },
+      },
+      plugins: {
+        datalabels: {
+          anchor: "end",
+          align: "end",
+          offset: 4,
+          clamp: true,
+          font: {
+            size: 16,
+            weight: "bold",
+          },
+          color: "#000",
+        },
+      },
+      scales: {
+        yAxes: [
+          {
+            ticks: {
+              beginAtZero: true,
+              min: 0,
+              precision: 0,
+              fontSize: 16,
+            },
+          },
+        ],
+        xAxes: [
+          {
+            ticks: {
+              fontSize: 16,
+            },
+          },
+        ],
+      },
     },
   };
+
   return `https://quickchart.io/chart?c=${encodeURIComponent(JSON.stringify(cfg))}&width=1200&height=600&backgroundColor=white&plugins=chartjs-plugin-datalabels`;
 }
 
