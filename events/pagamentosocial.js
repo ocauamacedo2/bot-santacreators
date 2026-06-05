@@ -2059,6 +2059,113 @@ async function resolverVipEventoProfissional(client, texto, dados = {}) {
   return porLink || porBusca || null;
 }
 
+function extrairRegistranteVipEvento(embedLike) {
+  const desc = String(embedLike?.description || embedLike?.data?.description || "");
+  const match = desc.match(/Registrado por:\*\*\s*<@!?(\d{10,25})>/i);
+  return match?.[1] || null;
+}
+
+function extrairIdGanhadorVipEvento(embedLike) {
+  const raw = getFieldValueStarts(embedLike, "🆔 ID do ganhador");
+  const mention = raw.match(/<@!?(\d{10,25})>/);
+  if (mention?.[1]) return mention[1];
+
+  const code = raw.match(/`(\d{1,25})`/);
+  if (code?.[1]) return code[1];
+
+  const plain = raw.match(/\b(\d{1,25})\b/);
+  return plain?.[1] || null;
+}
+
+async function enviarDmPagamentoSocialVip(client, userId, content) {
+  if (!userId) return false;
+
+  try {
+    const user = await client.users.fetch(userId);
+    await user.send({ content });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function marcarVipEventoComoPagoPorPagamentoSocial(client, vipEventoResolvido, interaction, descricao = PADRAO_INDEFINIDO) {
+  if (!vipEventoResolvido?.ok || !vipEventoResolvido?.message?.embeds?.[0]) {
+    return {
+      ok: false,
+      motivo: "Nenhum registro VIP vinculado.",
+    };
+  }
+
+  const msgVip = vipEventoResolvido.message;
+  const embedVip = EmbedBuilder.from(msgVip.embeds[0]);
+  const fields = Array.isArray(embedVip.data.fields) ? [...embedVip.data.fields] : [];
+
+  const pagamentoIdx = fields.findIndex((f) => String(f.name || "").startsWith("💸 Pagamento"));
+  const pagamentoAtual = pagamentoIdx >= 0 ? String(fields[pagamentoIdx]?.value || "—") : "—";
+
+  if (pagamentoAtual && pagamentoAtual !== "—") {
+    return {
+      ok: true,
+      jaEstavaPago: true,
+      motivo: "O registro VIP já estava marcado como pago.",
+      url: msgVip.url,
+    };
+  }
+
+  const reprovadoIdx = fields.findIndex((f) => String(f.name || "").startsWith("⛔ Reprovação"));
+  if (reprovadoIdx >= 0 && /REPROVADO/i.test(String(fields[reprovadoIdx]?.value || ""))) {
+    return {
+      ok: false,
+      motivo: "O registro VIP vinculado está reprovado.",
+      url: msgVip.url,
+    };
+  }
+
+  const linha = [
+    `• **PAGO** por <@${interaction.user.id}> via **Pagamento Social**`,
+    `• Descrição: ${descricao}`,
+    `• Origem: ${interaction.message?.url || "registro de pagamento social"}`,
+  ].join("\n");
+
+  if (pagamentoIdx >= 0) {
+    fields[pagamentoIdx].value = linha.slice(0, 1024);
+  } else {
+    fields.push({
+      name: "💸 Pagamento",
+      value: linha.slice(0, 1024),
+      inline: false,
+    });
+  }
+
+  embedVip.setFields(fields);
+
+  await msgVip.edit({
+    embeds: [embedVip],
+    components: [],
+  }).catch(() => null);
+
+  const registranteId = extrairRegistranteVipEvento(embedVip);
+  const ganhadorId = extrairIdGanhadorVipEvento(embedVip);
+
+  if (registranteId) {
+    await enviarDmPagamentoSocialVip(
+      client,
+      registranteId,
+      `💸 Sua premiação **foi paga**!\n\n• Registro VIP: ${msgVip.url}\n• Marcado por: <@${interaction.user.id}>\n• ID do beneficiado: ${ganhadorId ? `\`${ganhadorId}\`` : "—"}\n• Origem: Pagamento Social\n\nQualquer coisa, fale **no seu chat da empresa**!`
+    );
+  }
+
+  return {
+    ok: true,
+    jaEstavaPago: false,
+    motivo: "Registro VIP marcado como pago automaticamente.",
+    url: msgVip.url,
+    registranteId,
+    ganhadorId,
+  };
+}
+
 function getDadosPagamentoParaBuscarVip(embedLike) {
   const ganhadorRaw = getFieldValue(embedLike, "👤 Ganhador");
   const ganhadorParts = String(ganhadorRaw || "").split("|").map((p) => p.trim());
@@ -2122,48 +2229,25 @@ async function tentarCorrigirRegistroPorVipEvento(client, embedBuilder) {
   const data = embedBuilder.data ?? {};
   const fields = Array.isArray(data.fields) ? [...data.fields] : [];
 
-  if (info.evento) {
-    setCampoPagamento(fields, "🏷️ Evento", info.evento, true);
-  }
-
-  if (info.data) {
-    setCampoPagamento(fields, "📅 Data do Evento", normalizarDataEvento(info.data), true);
-  }
-
-  if (info.ganhadorNome || info.ganhadorId) {
-    setCampoPagamento(
-      fields,
-      "👤 Ganhador",
-      `${info.ganhadorNome || dados.ganhadorNome || PADRAO_INDEFINIDO} | ${info.ganhadorId || dados.ganhadorId || PADRAO_INDEFINIDO}`,
-      true
-    );
-  }
-
   setCampoPagamento(
     fields,
-    "🔗 Premiação / Link",
+    "📎 Registro VIP vinculado",
     [
-      `${info.premiacao || dados.premiacao || PADRAO_INDEFINIDO}`,
-      "",
-      `📎 **Origem VIP:** ${vipEventoResolvido.link?.url || "—"}`,
+      `🔗 ${vipEventoResolvido.link?.url || "—"}`,
+      `👤 Nome no VIP: \`${info.ganhadorNome || PADRAO_INDEFINIDO}\``,
+      `🆔 ID no VIP: \`${info.ganhadorId || PADRAO_INDEFINIDO}\``,
     ].join("\n"),
     false
   );
 
-  embedBuilder.setDescription(
-    "📌 Registro obrigatório de pagamentos de eventos e ações especiais.\n\n" +
-    `**Tipo Identificado:** \`${categoriaVip}\``
-  );
-
-  const fieldsFinais = removerCamposFinanceirosSeVip(fields, categoriaVip);
-
-  embedBuilder.setFields(fieldsFinais);
+  embedBuilder.setFields(fields);
 
   return {
     alterou: true,
-    motivo: "Registro corrigido com dados do VIP Evento.",
+    motivo: "Link do Registro VIP identificado e anexado ao pagamento.",
     categoriaVip,
     link: vipEventoResolvido.link?.url || null,
+    vipEventoResolvido,
   };
 }
 
@@ -2775,11 +2859,8 @@ const vipEventoResolvido = await resolverVipEventoProfissional(
   erro: err?.message || String(err),
 }));
 
-if (vipEventoResolvido?.ok) {
-  if (vipEventoResolvido.info?.evento) eventoNome = vipEventoResolvido.info.evento;
-  if (vipEventoResolvido.info?.data) eventoData = normalizarDataEvento(vipEventoResolvido.info.data);
-  if (vipEventoResolvido.info?.premiacao) premiacao = vipEventoResolvido.info.premiacao;
-}
+// Mantém exatamente o que foi preenchido no formulário.
+// Se achar o VIP Evento, o sistema só adiciona o link vinculado no embed.
 
 const agoraFallback = getAgoraSPParts();
 
@@ -2813,13 +2894,9 @@ const analiseComprovante = deveUsarOCR
       erro: null,
     };
 
-const ganhadorNome = vipEventoResolvido?.ok && vipEventoResolvido.info?.ganhadorNome
-  ? vipEventoResolvido.info.ganhadorNome
-  : corrigirNomeGanhadorPorOCR(ganhadorNomeRaw, analiseComprovante.nomeRecebedor);
+const ganhadorNome = corrigirNomeGanhadorPorOCR(ganhadorNomeRaw, analiseComprovante.nomeRecebedor);
 
-const ganhadorId = vipEventoResolvido?.ok && vipEventoResolvido.info?.ganhadorId
-  ? vipEventoResolvido.info.ganhadorId
-  : ganhadorIdRaw;
+const ganhadorId = ganhadorIdRaw;
 
 const canal = await client.channels.fetch(CANAL_PAGAMENTO).catch(() => null);
         if (!canal || !canal.isTextBased()) {
@@ -2845,17 +2922,23 @@ const camposRegistro = [
   { name: "📅 Data do Evento", value: `${eventoData || PADRAO_INDEFINIDO}`, inline: true },
   {
     name: "🔗 Premiação / Link",
-    value: vipEventoResolvido?.ok
-      ? [
-          `${premiacao || PADRAO_INDEFINIDO}`,
-          "",
-          `📎 **Origem VIP:** ${vipEventoResolvido.link?.url || "—"}`,
-        ].join("\n")
-      : `${premiacao || PADRAO_INDEFINIDO}`,
+    value: `${premiacao || PADRAO_INDEFINIDO}`,
     inline: false,
   },
   { name: "👤 Ganhador", value: `${ganhadorNome} | ${ganhadorId}`, inline: true },
 ];
+
+if (vipEventoResolvido?.ok) {
+  camposRegistro.push({
+    name: "📎 Registro VIP vinculado",
+    value: [
+      `🔗 ${vipEventoResolvido.link?.url || "—"}`,
+      `👤 Nome no VIP: \`${vipEventoResolvido.info?.ganhadorNome || PADRAO_INDEFINIDO}\``,
+      `🆔 ID no VIP: \`${vipEventoResolvido.info?.ganhadorId || PADRAO_INDEFINIDO}\``,
+    ].join("\n"),
+    inline: false,
+  });
+}
 
 if (!ocultarFinanceiro) {
   camposRegistro.push(
@@ -3051,8 +3134,58 @@ const embedAtualizado = atualizarCampoStatus(
   labelAuditoria
 );
 
-await tentarCorrigirRegistroPorVipEvento(client, embedAtualizado).catch(() => null);
-  
+const resultadoVip = await tentarCorrigirRegistroPorVipEvento(client, embedAtualizado).catch(() => null);
+
+if (action === "pago") {
+  const dadosVip = getDadosPagamentoParaBuscarVip(embedAtualizado);
+
+  const vipEventoResolvidoPagamento =
+    resultadoVip?.vipEventoResolvido ||
+    await resolverVipEventoProfissional(
+      client,
+      dadosVip.premiacao,
+      dadosVip
+    ).catch(() => null);
+
+  const resultadoPagamentoVip = await marcarVipEventoComoPagoPorPagamentoSocial(
+    client,
+    vipEventoResolvidoPagamento,
+    interaction,
+    descricao
+  ).catch((err) => ({
+    ok: false,
+    motivo: err?.message || String(err),
+  }));
+
+  if (resultadoPagamentoVip?.ok) {
+    setCampoPagamento(
+      Array.isArray(embedAtualizado.data.fields) ? embedAtualizado.data.fields : [],
+      "💎 VIP Evento",
+      [
+        resultadoPagamentoVip.jaEstavaPago
+          ? "✅ O Registro VIP vinculado já estava pago."
+          : "✅ Registro VIP vinculado marcado como pago automaticamente.",
+        `🔗 ${resultadoPagamentoVip.url || "—"}`,
+      ].join("\n"),
+      false
+    );
+
+    embedAtualizado.setFields(embedAtualizado.data.fields);
+  } else {
+    setCampoPagamento(
+      Array.isArray(embedAtualizado.data.fields) ? embedAtualizado.data.fields : [],
+      "💎 VIP Evento",
+      [
+        "⚠️ Não consegui marcar o Registro VIP vinculado automaticamente.",
+        `Motivo: \`${resultadoPagamentoVip?.motivo || "Não informado"}\``,
+      ].join("\n"),
+      false
+    );
+
+    embedAtualizado.setFields(embedAtualizado.data.fields);
+  }
+}
+
 const msgNova = await canal.send({ embeds: [embedAtualizado] }).catch(() => null);
   if (!msgNova) {
     await interaction.editReply({ content: "❌ Falhei ao enviar a atualização." }).catch(() => {});
