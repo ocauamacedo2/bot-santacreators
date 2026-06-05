@@ -1854,21 +1854,49 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
         timestamp: Date.now()
       });
 
-      // ✅ NOVO: Desliga o registro do formscreator
-      try {
-          if (typeof findFormsCreatorThreadIdByUserId === 'function' && typeof setFormsCreatorStatus === 'function') {
-              const fcThreadId = await findFormsCreatorThreadIdByUserId(snapshot.targetId).catch(() => null);
-              if (fcThreadId) {
-                  await setFormsCreatorStatus(client, {
-                      threadId: fcThreadId,
-                      newStatus: false, // false for inactive
-                      actor: actor
-                  });
-              }
-          }
-      } catch (e) {
-          console.error("[GI] Falha ao desligar registro no FormsCreator:", e);
-      }
+// ✅ NOVO: Desliga/inativa também o FormsCreator da pessoa
+try {
+  if (
+    typeof findFormsCreatorThreadIdByUserId === "function" &&
+    typeof setFormsCreatorStatus === "function"
+  ) {
+    const fcThreadId = await findFormsCreatorThreadIdByUserId(
+      guild.client,
+      snapshot.targetId
+    ).catch(() => null);
+
+    if (fcThreadId) {
+      await setFormsCreatorStatus(guild.client, {
+        threadId: fcThreadId,
+        newStatus: false,
+        actor,
+      });
+
+      await logMsg(
+        guild,
+        "FormsCreator inativado junto com desligamento GI",
+        [
+          `👤 Membro: <@${snapshot.targetId}>`,
+          `📌 FormsCreator: <#${fcThreadId}>`,
+          `🧾 Motivo: ${motivo}`,
+          `👮 Autor: <@${actor?.id || guild.client.user.id}>`,
+        ].join("\n")
+      );
+    } else {
+      await logMsg(
+        guild,
+        "FormsCreator não encontrado no desligamento GI",
+        [
+          `👤 Membro: <@${snapshot.targetId}>`,
+          `🧾 Motivo: ${motivo}`,
+          "⚠️ O GI foi desligado, mas não achei FormsCreator para inativar.",
+        ].join("\n")
+      );
+    }
+  }
+} catch (e) {
+  console.error("[GI] Falha ao desligar/inativar registro no FormsCreator:", e);
+}
 
       markBoardDirty();
 

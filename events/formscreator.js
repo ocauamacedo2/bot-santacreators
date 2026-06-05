@@ -75,11 +75,18 @@ const MANAGE_PERMS_USERS = [
   "1262262852949905408", // owner
 ];
 
-// ✅ Cargos para IGNORAR na cobrança de feedback
+// ✅ Cargos para IGNORAR no ranking/cobrança de feedback
 const EXCLUDE_FEEDBACK_ROLES = [
-  "1352407252216184833", // resp lider
+  "1262262852949905408", // owner
   "1352408327983861844", // resp creators
   "1262262852949905409", // resp influ
+  "1352407252216184833", // resp lider
+  "1388976314253312100", // coord. creators
+];
+
+// ✅ Usuários para IGNORAR no ranking/cobrança de feedback
+const EXCLUDE_FEEDBACK_USERS = [
+  "660311795327828008", // eu
 ];
 
 // ✅ Cargos que recebem lembrete no PV (dia alternado ao público)
@@ -406,12 +413,22 @@ async function getRankingText(guild, client) {
         continue;
       }
 
-      if (member.user?.bot) continue;
+  if (member.user?.bot) continue;
 
-      validMembers.push({
-        userId: String(user.userId),
-        points,
-      });
+const memberId = String(user.userId);
+
+if (EXCLUDE_FEEDBACK_USERS.includes(memberId)) continue;
+
+const hasExcludedRole = member.roles.cache.some((role) =>
+  EXCLUDE_FEEDBACK_ROLES.includes(role.id)
+);
+
+if (hasExcludedRole) continue;
+
+validMembers.push({
+  userId: memberId,
+  points,
+});
     }
 
     console.log("[FormsCreator] guild usada:", guild.id, guild.name);
@@ -436,20 +453,20 @@ async function getRankingText(guild, client) {
       ? top5.map((u, i) => `• ${i + 1}. <@${u.userId}> (${u.points} pontos)`).join("\n")
       : "• Ninguém no TOP 5.";
 
-    const bottomLines = bottom5.length
-      ? bottom5.map((u, i) => `• ${i + 1}. <@${u.userId}> (${u.points} pontos)`).join("\n")
-      : "• Ninguém no BOTTOM 5.";
+const bottomLines = bottom5.length
+  ? bottom5.map((u, i) => `• ${i + 1}. <@${u.userId}> (${u.points} pontos)`).join("\n")
+  : "• Ninguém nos 5 com menos pontos.";
 
     const topMentions = top5.map((u) => `<@${u.userId}>`).join(" ");
     const bottomMentions = bottom5.map((u) => `<@${u.userId}>`).join(" ");
 
     return {
-      publicText:
-        `**TOP 5 da semana (mais pontos):**\n${topLines}\n\n` +
-        `**BOTTOM 5 da semana (menos pontos):**\n${bottomLines}`,
-      dmText:
-        `**TOP 5 da semana (mais pontos):**\n${topLines}\n\n` +
-        `**BOTTOM 5 da semana (menos pontos):**\n${bottomLines}`,
+publicText:
+  `**5 maiores pontuações da semana:**\n${topLines}\n\n` +
+  `**5 menores pontuações da semana:**\n${bottomLines}`,
+dmText:
+  `**5 maiores pontuações da semana:**\n${topLines}\n\n` +
+  `**5 menores pontuações da semana:**\n${bottomLines}`,
       topMentions,
       bottomMentions,
     };
@@ -1162,7 +1179,7 @@ export async function findFormsCreatorThreadIdByUserId(clientOrUserId, maybeUser
 }
 
 export async function findFormsCreatorThreadLinkByUserId(client, userId, guildId = null) {
-    const threadId = await findFormsCreatorThreadIdByUserId(userId);
+    const threadId = await findFormsCreatorThreadIdByUserId(client, userId);
     if (!threadId) return null;
 
     let resolvedGuildId = guildId;

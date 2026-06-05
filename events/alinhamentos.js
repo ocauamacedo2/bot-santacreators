@@ -18,7 +18,10 @@ import {
 import { dashEmit } from "../utils/dashHub.js";
 
 // ✅ Integração com FormsCreator
-import { findFormsCreatorThreadIdByUserId } from "./formscreator.js";
+import {
+  findFormsCreatorThreadIdByUserId,
+  findFormsCreatorThreadLinkByUserId,
+} from "./formscreator.js";
 
 // ======= ALINHAMENTOS (alinv1) — Menu + Modal + Registro + Validação + Anti-farm =======
 
@@ -259,33 +262,6 @@ async function sendAlinhamentoToEvolutionThread(client, interaction, {
       };
     }
 
-    const giRecord = findGIRecordByTargetId(targetId);
-    if (!giRecord) {
-      return {
-        ok: false,
-        reason: "sem_gi",
-        message: `⚠️ Não achei Controle GI ativo/salvo para <@${targetId}>. O registro foi criado, mas não foi enviado no tópico de evolução.`,
-      };
-    }
-
-    const threadId = await findFormsCreatorThreadIdByUserId(client, targetId).catch(() => null);
-    if (!threadId) {
-      return {
-        ok: false,
-        reason: "sem_thread",
-        message: `⚠️ Achei o Controle GI de <@${targetId}>, mas não achei o tópico de evolução no FormsCreator.`,
-      };
-    }
-
-    const thread = await client.channels.fetch(threadId).catch(() => null);
-    if (!thread || !thread.isTextBased()) {
-      return {
-        ok: false,
-        reason: "thread_invalida",
-        message: `⚠️ O tópico de evolução de <@${targetId}> foi encontrado, mas não consegui acessar/enviar mensagem nele.`,
-      };
-    }
-
     const registroLink = makeDiscordMessageLink(
       registroMsg?.guildId,
       registroMsg?.channelId,
@@ -312,23 +288,84 @@ async function sendAlinhamentoToEvolutionThread(client, interaction, {
       .setFooter({ text: "SantaCreators • Evolução pessoal • Alinhamento" })
       .setTimestamp();
 
-    const sent = await thread.send({
-      content: `🧾 **Novo alinhamento registrado para <@${targetId}>**`,
+    // ✅ 1) PRIMEIRO tenta enviar no FormsCreator da pessoa
+    const threadId = await findFormsCreatorThreadIdByUserId(client, targetId).catch(() => null);
+
+    if (threadId) {
+      const thread = await client.channels.fetch(threadId).catch(() => null);
+
+      if (thread?.isTextBased?.()) {
+        const sent = await thread.send({
+          content: `🧾 **Novo alinhamento registrado para <@${targetId}>**`,
+          embeds: [evolutionEmbed],
+        });
+
+        const formsLink = await findFormsCreatorThreadLinkByUserId(
+          client,
+          targetId,
+          registroMsg?.guildId
+        ).catch(() => null);
+
+        return {
+          ok: true,
+          destination: "formscreator",
+          threadId,
+          messageId: sent?.id || null,
+          link: formsLink || `https://discord.com/channels/${registroMsg?.guildId}/${threadId}`,
+          message: `✅ Também enviei o alinhamento no Forms pessoal: <#${threadId}>`,
+        };
+      }
+    }
+
+    // ✅ 2) Se NÃO achar FormsCreator, cai no Controle GI antigo
+    const giRecord = findGIRecordByTargetId(targetId);
+
+    if (!giRecord) {
+      return {
+        ok: false,
+        reason: "sem_forms_sem_gi",
+        message: `⚠️ Não achei FormsCreator nem Controle GI para <@${targetId}>. O registro foi criado, mas não foi anexado em evolução.`,
+      };
+    }
+
+    const giChannel = await client.channels.fetch(giRecord.channelId).catch(() => null);
+
+    if (!giChannel?.isTextBased?.()) {
+      return {
+        ok: false,
+        reason: "gi_canal_invalido",
+        message: `⚠️ Achei o Controle GI de <@${targetId}>, mas não consegui acessar o canal do registro antigo.`,
+      };
+    }
+
+    const sent = await giChannel.send({
+      content: `🧾 **Novo alinhamento registrado para <@${targetId}>**\n📌 Vinculado ao Controle GI antigo.`,
       embeds: [evolutionEmbed],
+      reply: giRecord.messageId
+        ? { messageReference: giRecord.messageId, failIfNotExists: false }
+        : undefined,
     });
+
+    const giLink = makeDiscordMessageLink(
+      registroMsg?.guildId,
+      giRecord.channelId,
+      giRecord.messageId || sent?.id
+    );
 
     return {
       ok: true,
-      threadId,
+      destination: "gestaoinfluencer",
+      threadId: null,
       messageId: sent?.id || null,
-      message: `✅ Também enviei o alinhamento no tópico de evolução: <#${threadId}>`,
+      link: giLink,
+      message: `✅ Não achei Forms pessoal, então enviei no Controle GI antigo: ${giLink || "link indisponível"}`,
     };
   } catch (e) {
     console.error("[ALINV1] Erro ao enviar alinhamento para evolução:", e);
     return {
       ok: false,
       reason: "erro",
-      message: "⚠️ O registro foi criado, mas deu erro ao tentar enviar no tópico de evolução.",
+      message: "⚠️ O registro foi criado, mas deu erro ao enviar/linkar na evolução.",
     };
   }
 }
@@ -692,6 +729,29 @@ const evolutionResult = await sendAlinhamentoToEvolutionThread(client, interacti
   quemFez,
   registroMsg: msg,
 });
+
+// ✅ Linka no próprio registro do alinhamento onde ele foi anexado
+try {
+  const oldEmbed = EmbedBuilder.from(msg.embeds[0]);
+  const oldFields = oldEmbed.data.fields || [];
+
+  oldFields.push({
+    name: "🔗 Evolução vinculada",
+    value: evolutionResult.ok
+      ? `[Abrir evolução](${evolutionResult.link})\nDestino: \`${evolutionResult.destination === "formscreator" ? "FormsCreator" : "Controle GI"}\``
+      : `Não vinculado automaticamente.\nMotivo: \`${evolutionResult.reason || "desconhecido"}\``,
+    inline: false,
+  });
+
+  oldEmbed.setFields(oldFields);
+
+  await msg.edit({
+    embeds: [oldEmbed],
+    components: msg.components,
+  }).catch(() => {});
+} catch (e) {
+  console.warn("[ALINV1] Falha ao linkar evolução no registro:", e?.message || e);
+}
 
 await interaction.reply({
   content:
