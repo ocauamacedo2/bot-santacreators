@@ -117,7 +117,7 @@ function getNowSP() {
   return new Date(new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
 }
 
-function isWindowOpen() {
+function isWindowOpen(state) {
   const now = getNowSP();
   const day = now.getDay();
   const hour = now.getHours();
@@ -134,7 +134,6 @@ function isWindowOpen() {
   }
 
   // Para outros dias permitidos (Quinta, Sábado), usa a janela ativa
-  const state = loadState();
   const window = state.activeWindow || 1;
 
   // Janela 1: 19h às 21h | Janela 2: 22h às 00h
@@ -365,8 +364,10 @@ export async function confirmacaoPresencaOnReady(client) {
 export async function confirmacaoPresencaHandleInteraction(interaction, client) {
   if (!interaction.guild) return false;
 
+  const customId = interaction.customId || "";
+
   // 1. Botão Refresh
-  if (interaction.isButton() && interaction.customId === "presenca_refresh") {
+  if (interaction.isButton() && customId === "presenca_refresh") {
     await interaction.deferReply({ ephemeral: true });
     await updatePanel(client);
     await interaction.editReply("✅ Painel sincronizado e atualizado.");
@@ -374,7 +375,7 @@ export async function confirmacaoPresencaHandleInteraction(interaction, client) 
   }
 
   // 2. Botões de Ação (Confirmar/Negar)
-  if (interaction.isButton() && (interaction.customId === "presenca_confirmar" || interaction.customId === "presenca_negar")) {
+  if (interaction.isButton() && (customId === "presenca_confirmar" || customId === "presenca_negar")) {
     // Checa permissão
     if (!checkPerms(interaction.member, "CONFIRM")) {
       return interaction.reply({ content: "🚫 Você não tem permissão para alterar presenças.", ephemeral: true });
@@ -384,7 +385,7 @@ export async function confirmacaoPresencaHandleInteraction(interaction, client) 
     const isUserBypass = interaction.user.id === "660311795327828008";
 
     // Checa horário (Ignora para o seu ID)
-    if (!isWindowOpen() && !isUserBypass) { // Se a janela não está aberta e não é bypass
+    if (!isWindowOpen(state) && !isUserBypass) { // Se a janela não está aberta e não é bypass
       const now = getNowSP();
       const day = now.getDay();
       let replyMessage;
@@ -398,12 +399,12 @@ export async function confirmacaoPresencaHandleInteraction(interaction, client) 
       return interaction.reply({ content: replyMessage, ephemeral: true });
     }
 
-    const isConfirm = interaction.customId === "presenca_confirmar";
+    const isConfirm = customId === "presenca_confirmar";
     const actionLabel = isConfirm ? "Confirmar" : "Negar";
 
     const modal = new ModalBuilder()
-      .setCustomId(`modal_presenca_${isConfirm ? 'YES' : 'NO'}`)
-      .setTitle(` Presença`);
+      .setCustomId(`modal_presenca_${isConfirm ? "YES" : "NO"}`)
+      .setTitle(`${actionLabel} Presença`);
 
     modal.addComponents(
       new ActionRowBuilder().addComponents(
@@ -416,19 +417,28 @@ export async function confirmacaoPresencaHandleInteraction(interaction, client) 
       )
     );
 
-    await interaction.showModal(modal);
+    try {
+      await interaction.showModal(modal);
+    } catch (err) {
+      if (err.code === 10062) {
+        console.error("[ConfirmacaoPresenca] Erro 10062: A interação expirou antes de mostrar o modal. O bot pode estar lento.");
+      } else {
+        console.error("❌ Erro ao mostrar modal:", err);
+      }
+    }
+
     return true;
   }
 
   // 3. Modal Submit (Processar Confirmação)
-  if (interaction.isModalSubmit() && interaction.customId.startsWith("modal_presenca_")) {
+  if (interaction.isModalSubmit() && customId.startsWith("modal_presenca_")) {
     await interaction.deferReply({ ephemeral: true });
 
     let state = loadState();
     const isUserBypass = interaction.user.id === "660311795327828008";
 
     // Re-checa horário no submit (Ignora para o seu ID)
-    if (!isWindowOpen() && !isUserBypass) { // Se a janela não está aberta e não é bypass
+    if (!isWindowOpen(state) && !isUserBypass) { // Se a janela não está aberta e não é bypass
       const now = getNowSP();
       const day = now.getDay();
       let replyMessage;
@@ -442,7 +452,7 @@ export async function confirmacaoPresencaHandleInteraction(interaction, client) 
       return interaction.editReply(replyMessage);
     }
 
-    const status = interaction.customId.split("_")[2]; // YES ou NO
+    const status = customId.split("_")[2]; // YES ou NO
     const input = interaction.fields.getTextInputValue("org_input").trim().toLowerCase();
     
     // Removida redeclaração duplicada de 'state' que causava erro
@@ -494,7 +504,7 @@ export async function confirmacaoPresencaHandleInteraction(interaction, client) 
   }
 
   // 4. Botão Admin Reset Dia
-  if (interaction.isButton() && interaction.customId === "presenca_admin_reset") {
+  if (interaction.isButton() && customId === "presenca_admin_reset") {
     if (!checkPerms(interaction.member, "ADMIN")) {
       return interaction.reply({ content: "🚫 Apenas admins podem resetar o dia.", ephemeral: true });
     }
@@ -512,7 +522,7 @@ export async function confirmacaoPresencaHandleInteraction(interaction, client) 
   }
 
   // 5. Botão Admin Remover/Resetar Específico
-  if (interaction.isButton() && interaction.customId === "presenca_admin_remove") {
+  if (interaction.isButton() && customId === "presenca_admin_remove") {
     if (!checkPerms(interaction.member, "ADMIN")) {
       return interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
     }
@@ -536,7 +546,7 @@ export async function confirmacaoPresencaHandleInteraction(interaction, client) 
   }
 
   // 6. Modal Reset Específico
-  if (interaction.isModalSubmit() && interaction.customId === "modal_presenca_reset_one") {
+  if (interaction.isModalSubmit() && customId === "modal_presenca_reset_one") {
     const input = interaction.fields.getTextInputValue("org_input").trim().toLowerCase();
     let state = loadState();
     
@@ -560,13 +570,13 @@ export async function confirmacaoPresencaHandleInteraction(interaction, client) 
   }
 
   // 7. Botão Undo (Log)
-  if (interaction.isButton() && interaction.customId.startsWith("presenca_undo_")) {
+  if (interaction.isButton() && customId.startsWith("presenca_undo_")) {
     if (!checkPerms(interaction.member, "ADMIN")) {
       return interaction.reply({ content: "🚫 Apenas admins podem desfazer ações pelo log.", ephemeral: true });
     }
 
-    const encodedOrg = interaction.customId.replace("presenca_undo_", "");
-    const orgKey = Buffer.from(encodedOrg, 'base64').toString('utf-8');
+    const encodedOrg = customId.replace("presenca_undo_", "");
+    const orgKey = Buffer.from(encodedOrg, "base64").toString("utf-8");
 
     let state = loadState();
     if (state.statuses[orgKey]) {
@@ -580,7 +590,7 @@ export async function confirmacaoPresencaHandleInteraction(interaction, client) 
   }
 
   // 8. Botão Toggle Window (Admin)
-  if (interaction.isButton() && interaction.customId === "presenca_toggle_window") {
+  if (interaction.isButton() && customId === "presenca_toggle_window") {
     if (!checkPerms(interaction.member, "ADMIN")) {
       return interaction.reply({ content: "🚫 Apenas admins autorizados podem alternar o horário.", ephemeral: true });
     }
