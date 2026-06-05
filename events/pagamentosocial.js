@@ -1888,9 +1888,10 @@ function extrairInfoDoEmbedVipEvento(embedLike) {
   const eventoRaw = getFieldValueStarts(embedLike, "🏁 Nome do evento ganho");
   const dataRaw = getFieldValueStarts(embedLike, "📅 Dia do evento");
   const ganhadorRaw = getFieldValueStarts(embedLike, "🆔 ID do ganhador");
-  const nomeRaw = getFieldValueStarts(embedLike, "👤 Nome do ganhador");
-  const premiacaoRaw = getFieldValueStarts(embedLike, "🎁 Premiação");
-  const cidadeRaw = getFieldValueStarts(embedLike, "🌆 Cidade");
+const nomeRaw = getFieldValueStarts(embedLike, "👤 Nome do ganhador");
+const premiacaoRaw = getFieldValueStarts(embedLike, "🎁 Premiação");
+const cidadeRaw = getFieldValueStarts(embedLike, "🌆 Cidade");
+const orgRaw = getFieldValueStarts(embedLike, "🏢 Organização");
 
   const idMatch =
     ganhadorRaw.match(/<@!?(\d{1,25})>/) ||
@@ -1899,15 +1900,25 @@ function extrairInfoDoEmbedVipEvento(embedLike) {
 
   const tipoTexto = tipoMatch?.[1] || premiacaoRaw || "";
 
-  return {
-    evento: limparValorEmbedVip(eventoRaw),
-    data: limparValorEmbedVip(dataRaw),
-    ganhadorNome: limparValorEmbedVip(nomeRaw),
-    ganhadorId: idMatch?.[1] || "",
-    tipo: normalizarTipoPremiacao(tipoTexto),
-    premiacao: limparValorEmbedVip(premiacaoRaw),
-    cidade: limparValorEmbedVip(cidadeRaw),
-  };
+const nomeLimpo = limparValorEmbedVip(nomeRaw);
+const orgLimpa = limparValorEmbedVip(orgRaw);
+
+const nomeFinal =
+  nomeLimpo &&
+  !/^não identificado$/i.test(nomeLimpo)
+    ? nomeLimpo
+    : orgLimpa || PADRAO_INDEFINIDO;
+
+return {
+  evento: limparValorEmbedVip(eventoRaw),
+  data: limparValorEmbedVip(dataRaw),
+  ganhadorNome: nomeFinal,
+  ganhadorId: idMatch?.[1] || "",
+  tipo: normalizarTipoPremiacao(tipoTexto),
+  premiacao: limparValorEmbedVip(premiacaoRaw),
+  cidade: limparValorEmbedVip(cidadeRaw),
+  organizacao: orgLimpa,
+};
 }
 
 async function resolverVipEventoPorLink(client, texto) {

@@ -335,11 +335,12 @@ function VIP_buildModal(eventData = null) {
           .setRequired(true)
       ),
       new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId("vip_ganhador_id")
-          .setLabel("ID do ganhador")
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true)
+      new TextInputBuilder()
+  .setCustomId("vip_ganhador_id")
+  .setLabel("Nome | ID do ganhador")
+  .setPlaceholder("Ex: Lopess 7 | 209311 ou 209311 | Lopess 7")
+  .setStyle(TextInputStyle.Short)
+  .setRequired(true)
       ),
       new ActionRowBuilder().addComponents(
         new TextInputBuilder()
@@ -374,6 +375,74 @@ function VIP_buildReproveModal(messageId) {
     );
 }
 
+function VIP_parseGanhadorFlex(input, orgFallback = "Não identificado") {
+  const raw = String(input || "").trim();
+
+  if (!raw) {
+    return {
+      nome: orgFallback || "Não identificado",
+      id: "",
+    };
+  }
+
+  const partes = raw
+    .split(/[|\/\\]/g)
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  const extrairId = (texto) => {
+    const mention = String(texto || "").match(/<@!?(\d{1,25})>/);
+    if (mention?.[1]) return mention[1];
+
+    const numero = String(texto || "").match(/\b\d{1,25}\b/);
+    return numero?.[0] || "";
+  };
+
+  if (partes.length >= 2) {
+    const a = partes[0];
+    const b = partes.slice(1).join(" | ");
+
+    const idA = extrairId(a);
+    const idB = extrairId(b);
+
+    if (idA && !idB) {
+      return {
+        id: idA,
+        nome: b || orgFallback || "Não identificado",
+      };
+    }
+
+    if (idB) {
+      return {
+        id: idB,
+        nome: a || orgFallback || "Não identificado",
+      };
+    }
+
+    return {
+      nome: a || orgFallback || "Não identificado",
+      id: b || "",
+    };
+  }
+
+  const unico = partes[0] || raw;
+  const idUnico = extrairId(unico);
+
+  return {
+    id: idUnico,
+    nome: idUnico ? (orgFallback || "Não identificado") : unico,
+  };
+}
+
+function VIP_formatarCampoIdGanhador(ganhadorId) {
+  const id = String(ganhadorId || "").trim();
+
+  if (!id) return "`Não informado`";
+  if (/^\d{1,25}$/.test(id)) return `<@${id}> (\`${id}\`)`;
+
+  return `\`${id}\``;
+}
+
 function VIP_buildRegistroEmbed(guild, registrante, payload, cityName) {
   const when = new Date();
   const avatar = registrante.displayAvatarURL({ size: 256 });
@@ -402,8 +471,8 @@ function VIP_buildRegistroEmbed(guild, registrante, payload, cityName) {
     .addFields(
       { name: "🏁 Nome do evento ganho", value: `\`${payload.evento}\``, inline: false },
       { name: "📅 Dia do evento", value: `\`${payload.data}\``, inline: true },
-      { name: "🆔 ID do ganhador", value: `<@${payload.ganhadorId}> (\`${payload.ganhadorId}\`)`, inline: true },
-      { name: "👤 Nome do ganhador", value: `\`${payload.ganhadorNome || "Não identificado"}\``, inline: true },
+      { name: "🆔 ID do ganhador", value: VIP_formatarCampoIdGanhador(payload.ganhadorId), inline: true },
+{ name: "👤 Nome do ganhador", value: `\`${payload.ganhadorNome || payload.org || "Não identificado"}\``, inline: true },
       { name: "🌆 Cidade", value: `**${cityName}**`, inline: true },
       { name: "🏢 Organização", value: `\`${payload.org}\``, inline: true },
       { name: "🎁 Premiação", value: `${tipoBonito}\n\n${payload.premiacao || "—"}`, inline: false },
@@ -1138,13 +1207,16 @@ return true;
 
 let evento = i.fields.getTextInputValue("vip_evt_nome").trim();
 let data = i.fields.getTextInputValue("vip_evt_data").trim();
-let ganhadorId = i.fields.getTextInputValue("vip_ganhador_id").trim();
+const ganhadorInput = i.fields.getTextInputValue("vip_ganhador_id").trim();
 const org = i.fields.getTextInputValue("vip_org_nome").trim();
 let premiacao = i.fields.getTextInputValue("vip_premiacao").trim();
 
-const pagamentoResolvido = await VIP_resolverPagamentoLink(client, premiacao);
+const ganhadorFlex = VIP_parseGanhadorFlex(ganhadorInput, org);
 
-let ganhadorNome = null;
+let ganhadorId = ganhadorFlex.id;
+let ganhadorNome = ganhadorFlex.nome || org || "Não identificado";
+
+const pagamentoResolvido = await VIP_resolverPagamentoLink(client, premiacao);
 let tipo = VIP_normalizarTipoPremiacao(premiacao);
 let pagamentoLink = null;
 
