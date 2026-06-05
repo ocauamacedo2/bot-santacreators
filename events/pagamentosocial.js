@@ -2698,7 +2698,7 @@ if (resultadoVip?.alterou) {
   corrigidosVIP++;
 }
 
-if (filtro === "naoclicados" && !resultadoVip?.alterou) {
+if (filtro === "naoclicados") {
   const resultadoReleitura = await tentarReprocessarOCRRegistro(embedOriginal).catch(() => ({
     alterou: false,
     motivo: "Erro interno na releitura OCR.",
@@ -3149,7 +3149,20 @@ const vipEventoResolvido = await resolverVipEventoProfissional(
 
 const agoraFallback = getAgoraSPParts();
 
-const deveUsarOCR = !vipEventoResolvido?.ok;
+const tipoDigitadoPagamentoSocial = interaction.fields.getTextInputValue("tipoPremiacao")?.trim() || "";
+
+const tipoInputFallbackVip = [
+  vipEventoResolvido?.info?.tipo || "",
+  vipEventoResolvido?.info?.premiacao || "",
+].join(" ");
+
+const categoriaVip = normalizarTipoPremiacao(
+  tipoDigitadoPagamentoSocial || tipoInputFallbackVip
+);
+
+const deveUsarOCR =
+  categoriaVip === "Dinheiro" ||
+  !vipEventoResolvido?.ok;
 
 const analiseComprovante = deveUsarOCR
   ? await analisarComprovantePagamento(premiacao).catch((err) => ({
@@ -3191,16 +3204,6 @@ const canal = await client.channels.fetch(CANAL_PAGAMENTO).catch(() => null);
 
         const registrador = interaction.user;
         const registradorAvatar = registrador.displayAvatarURL({ dynamic: true });
-const tipoDigitadoPagamentoSocial = interaction.fields.getTextInputValue("tipoPremiacao")?.trim() || "";
-
-const tipoInputFallbackVip = [
-  vipEventoResolvido?.info?.tipo || "",
-  vipEventoResolvido?.info?.premiacao || "",
-].join(" ");
-
-const categoriaVip = normalizarTipoPremiacao(
-  tipoDigitadoPagamentoSocial || tipoInputFallbackVip
-);
 const ocultarFinanceiro = esconderCamposFinanceiros(categoriaVip, analiseComprovante);
 
 const camposRegistro = [
