@@ -200,6 +200,18 @@ function percentText(part, total) {
   return `${((p / t) * 100).toFixed(1)}%`;
 }
 
+function safeEmbedValue(value, max = 950) {
+  const text = String(value || "_Sem dados ainda._");
+
+  if (text.length <= max) return text;
+
+  return `${text.slice(0, max - 35)}\n...`;
+}
+
+function sectionLine() {
+  return "━━━━━━━━━━━━━━━━━━━━";
+}
+
 function loadState() {
   return readJSON(PRESENCA_DASH_STATE_PATH, {
     messageId: null,
@@ -808,64 +820,65 @@ function buildMainEmbed({ currentStats, previousStats, chartUrl }) {
   return new EmbedBuilder()
     .setColor(0x9b59b6)
     .setAuthor({
-      name: "SantaCreators • Dashboard Profissional de Presença",
+      name: "SantaCreators • Dashboard de Presença",
       iconURL: DASH_ICON,
     })
-    .setTitle("📊 Dashboard Mensal — Confirmação de ORGs nos Eventos")
+    .setTitle("📊 Presença das ORGs nos Eventos")
     .setDescription([
       `**Mês atual:** \`${getMonthLabelBR(currentStats.monthKey)}\``,
-      `**Canal analisado:** <#${PRESENCA_LOG_CHANNEL_ID}>`,
+      `**Canal lido:** <#${PRESENCA_LOG_CHANNEL_ID}>`,
       `**Última atualização:** <t:${updatedTs}:R>`,
       "",
-      "Este painel mostra o desempenho mensal das confirmações de presença das ORGs nos eventos.",
-      "🟢 Verde = confirmou que vai",
-      "🔴 Vermelho = informou que não vai / reprovada no evento",
+      sectionLine(),
+      "",
+      "🟢 **Confirmou que vai**",
+      "🔴 **Disse que não vai**",
     ].join("\n"))
     .addFields(
       {
-        name: "📌 Resumo geral do mês",
-        value: formatGeneralStatus(currentStats, previousStats),
+        name: "📌 Resumo geral",
+        value: safeEmbedValue(formatGeneralStatus(currentStats, previousStats)),
         inline: false,
       },
       {
-        name: "📆 Totais por semana do mês",
-        value: formatWeeklySummary(currentStats),
+        name: "📆 Totais por semana",
+        value: safeEmbedValue(formatWeeklySummary(currentStats)),
         inline: false,
       },
       {
-        name: "🏆 Top 3 — Quem mais confirma no mês",
-        value: formatTopUsers(currentStats, "YES", 3),
+        name: "🏆 Top confirmações",
+        value: safeEmbedValue(formatTopUsers(currentStats, "YES", 3)),
         inline: false,
       },
       {
-        name: "🚫 Top 3 — Quem mais diz que não vai no mês",
-        value: formatTopUsers(currentStats, "NO", 3),
+        name: "🚫 Top ausências",
+        value: safeEmbedValue(formatTopUsers(currentStats, "NO", 3)),
         inline: false,
       },
       {
-        name: "👑 Top 1 do mês passado",
-        value: formatTopLastMonth(previousStats),
+        name: "👑 Destaque do mês passado",
+        value: safeEmbedValue(formatTopLastMonth(previousStats)),
         inline: false,
       },
       {
         name: "🏢 ORGs com mais confirmações",
-        value: formatTopOrgs(currentStats, "YES", 5),
+        value: safeEmbedValue(formatTopOrgs(currentStats, "YES", 5)),
         inline: false,
       },
       {
-        name: "🚨 ORGs com mais reprovadas / não vai",
-        value: formatTopOrgs(currentStats, "NO", 5),
+        name: "🚨 ORGs com mais ausências",
+        value: safeEmbedValue(formatTopOrgs(currentStats, "NO", 5)),
         inline: false,
       },
       {
-        name: "📅 Controle diário do mês",
-        value: formatLastDays(currentStats),
+        name: "📅 Controle diário",
+        value: safeEmbedValue(formatLastDays(currentStats)),
         inline: false,
       }
     )
     .setImage(chartUrl || DASH_GIF)
     .setFooter({
-      text: "SantaCreators • Dashboard mensal automático • Verde confirma | Vermelho não vai",
+      text: "SantaCreators • Atualiza automático todo mês • Verde confirma | Vermelho não vai",
     })
     .setTimestamp();
 }
@@ -979,15 +992,18 @@ export async function graficoPresencaEventosHandleInteraction(interaction, clien
       return true;
     }
 
-    await interaction.deferReply({ ephemeral: true });
+const updated = await updatePresenceDashboard(
+  client,
+  interaction.user?.id || null,
+  "force"
+);
 
-    await updatePresenceDashboard(
-      client,
-      interaction.user?.id || null,
-      "force"
-    );
+if (!updated) {
+  await interaction.editReply("⚠️ Não consegui atualizar o dashboard. Veja o console/log para o motivo.");
+  return true;
+}
 
-    await interaction.editReply("✅ Dashboard de presença atualizado com sucesso.");
+await interaction.editReply("✅ Dashboard de presença atualizado com sucesso.");
 
     return true;
   } catch (e) {
@@ -1002,8 +1018,8 @@ export async function graficoPresencaEventosHandleInteraction(interaction, clien
       }
     } catch {}
 
-    console.error("[GraficoPresencaEventos] Erro no handler:", e);
-    return true;
+console.error("[GraficoPresencaEventos] Erro no handler:", e?.stack || e);
+return true;
   }
 }
 
