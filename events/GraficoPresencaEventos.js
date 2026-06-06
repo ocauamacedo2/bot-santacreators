@@ -136,10 +136,19 @@ function getPreviousMonthKeySP() {
   d.setUTCMonth(d.getUTCMonth() - 1);
   return getMonthKeySP(d);
 }
-
 function getMonthLabelBR(monthKey) {
   const [year, month] = String(monthKey).split("-");
   return `${month}/${year}`;
+}
+
+function formatDayBR(dayKey) {
+  const [year, month, day] = String(dayKey || "").split("-");
+
+  if (!year || !month || !day) {
+    return "Data inválida";
+  }
+
+  return `${day}/${month}/${year}`;
 }
 
 function getMessageMonthKeySP(message) {
@@ -928,23 +937,31 @@ async function updatePresenceDashboard(client, causeUserId = null, reason = "aut
     if (state.messageId) {
       const oldMsg = await dashChannel.messages.fetch(state.messageId).catch(() => null);
 
-      if (oldMsg) {
-        await oldMsg.edit({
-          embeds: [embed],
-          components,
-        }).catch(() => null);
-
-        state.lastHash = newHash;
-        state.lastUpdatedAt = Date.now();
-        saveState(state);
-        return true;
-      }
-    }
-
-    const sent = await dashChannel.send({
+   if (oldMsg) {
+  try {
+    await oldMsg.edit({
       embeds: [embed],
       components,
-    }).catch(() => null);
+    });
+
+    state.lastHash = newHash;
+    state.lastUpdatedAt = Date.now();
+    saveState(state);
+    return true;
+  } catch (e) {
+    console.error("[GraficoPresencaEventos] Falha ao editar dashboard antigo:", e?.stack || e);
+    return false;
+  }
+}
+    }
+
+const sent = await dashChannel.send({
+  embeds: [embed],
+  components,
+}).catch((e) => {
+  console.error("[GraficoPresencaEventos] Falha ao enviar novo dashboard:", e?.stack || e);
+  return null;
+});
 
     if (sent) {
       state.messageId = sent.id;
