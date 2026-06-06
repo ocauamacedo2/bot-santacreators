@@ -345,6 +345,13 @@ import {
   graficoManagersHandleInteraction,
 } from "../events/GraficoManagers.js";
 
+
+
+/// Dashboard Managers Confirmar
+import {
+  graficoPresencaEventosOnReady,
+  graficoPresencaEventosHandleInteraction,
+} from "./events/GraficoPresencaEventos.js";
 // Recrutamento Dash
 import {
   recrutamentoDashOnReady,
@@ -770,6 +777,7 @@ client.on("interactionCreate", async (interaction) => {
       if (await alinhamentosHandleInteraction(interaction, client)) return;
       if (await setStaffV2HandleInteraction(interaction, client)) return;
       if (await graficoManagersHandleInteraction(interaction, client)) return;
+      if (await graficoPresencaEventosHandleInteraction(interaction, client)) return;
       if (await recrutamentoDashHandleInteraction(interaction, client)) return;
       if (await blacklistEventosHandleInteraction(interaction, client)) return;
       if (await hallDaFamaHandleInteraction(interaction, client)) return;
@@ -845,6 +853,7 @@ client.on("interactionCreate", async (interaction) => {
     } catch (e) {}
     try {
       await graficoManagersOnReady(client);
+      await graficoPresencaEventosOnReady(client);
     } catch (e) {}
     try {
       await registroManagerOnReady(client);
