@@ -351,7 +351,7 @@ import {
 import {
   graficoPresencaEventosOnReady,
   graficoPresencaEventosHandleInteraction,
-} from "./events/GraficoPresencaEventos.js";
+} from "../events/GraficoPresencaEventos.js";
 // Recrutamento Dash
 import {
   recrutamentoDashOnReady,
