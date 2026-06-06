@@ -563,6 +563,52 @@ addPoint(result[monthKey], {
   return result;
 }
 
+async function collectAllTimeStatsFromLogs(client) {
+  const stats = emptyMonthStats("GERAL");
+
+  const logChannel = await client.channels.fetch(PRESENCA_LOG_CHANNEL_ID).catch(() => null);
+  if (!logChannel?.isTextBased?.()) {
+    return stats;
+  }
+
+  let before = undefined;
+  let safetyPages = 0;
+
+  while (safetyPages < 300) {
+    safetyPages++;
+
+    const messages = await logChannel.messages.fetch({
+      limit: 100,
+      before,
+    }).catch(() => null);
+
+    if (!messages || messages.size <= 0) break;
+
+    const ordered = [...messages.values()];
+
+    for (const msg of ordered) {
+      const parsed = parsePresenceLogMessage(msg);
+      if (!parsed) continue;
+
+      const dayKey = getMessageDayKeySP(msg);
+      if (!dayKey) continue;
+
+      addPoint(stats, {
+        userId: parsed.userId,
+        status: parsed.status,
+        orgName: parsed.orgName,
+        dayKey,
+        createdTimestamp: msg.createdTimestamp || null,
+      });
+    }
+
+    before = messages.last()?.id;
+    if (!before) break;
+  }
+
+  return stats;
+}
+
 function getTopUsers(stats, type = "YES", limit = 3) {
   return Object.entries(stats?.byUser || {})
     .map(([userId, data]) => ({
@@ -910,7 +956,7 @@ function buildDashboardRows() {
   ];
 }
 
-function buildMainEmbed({ currentStats, previousStats, chartUrl }) {
+function buildMainEmbed({ currentStats, previousStats, allTimeStats, chartUrl }) {
   const updatedTs = Math.floor(Date.now() / 1000);
 
   return new EmbedBuilder()
@@ -957,15 +1003,15 @@ function buildMainEmbed({ currentStats, previousStats, chartUrl }) {
         inline: false,
       },
       {
-        name: "🏢 ORGs com mais confirmações",
-        value: safeEmbedValue(formatTopOrgs(currentStats, "YES", 5)),
-        inline: false,
-      },
-      {
-        name: "🚨 ORGs com mais ausências",
-        value: safeEmbedValue(formatTopOrgs(currentStats, "NO", 5)),
-        inline: false,
-      },
+  name: "🏢 ORGs com mais confirmações — Totais",
+  value: safeEmbedValue(formatTopOrgs(allTimeStats, "YES", 10), 1000),
+  inline: false,
+},
+{
+  name: "🚨 ORGs com mais ausências — Totais",
+  value: safeEmbedValue(formatTopOrgs(allTimeStats, "NO", 10), 1000),
+  inline: false,
+},
       {
         name: "📅 Controle diário",
         value: safeEmbedValue(formatLastDays(currentStats)),
@@ -995,31 +1041,34 @@ async function updatePresenceDashboard(client, causeUserId = null, reason = "aut
       previousMonthKey,
     ]);
 
-    const currentStats = months[currentMonthKey] || emptyMonthStats(currentMonthKey);
-    const previousStats = months[previousMonthKey] || emptyMonthStats(previousMonthKey);
+const currentStats = months[currentMonthKey] || emptyMonthStats(currentMonthKey);
+const previousStats = months[previousMonthKey] || emptyMonthStats(previousMonthKey);
+const allTimeStats = await collectAllTimeStatsFromLogs(client);
 
-    const chartConfig = buildChartConfig(currentStats);
+const chartConfig = buildChartConfig(currentStats);
     const chartLinks = await getQuickChartLinks(chartConfig);
 
     const chartUrl = chartLinks && !chartLinks.error
       ? chartLinks.imageUrl
       : null;
 
-    const embed = buildMainEmbed({
-      currentStats,
-      previousStats,
-      chartUrl,
-    });
+const embed = buildMainEmbed({
+  currentStats,
+  previousStats,
+  allTimeStats,
+  chartUrl,
+});
 
     const components = buildDashboardRows();
 
     const state = loadState();
 
-    const newHash = sha1(JSON.stringify({
-      currentStats,
-      previousStats,
-      chartUrl,
-    }));
+const newHash = sha1(JSON.stringify({
+  currentStats,
+  previousStats,
+  allTimeStats,
+  chartUrl,
+}));
 
     if (state.messageId) {
       const oldMsg = await dashChannel.messages.fetch(state.messageId).catch(() => null);
