@@ -264,6 +264,93 @@ function cleanOrgName(raw) {
     .trim();
 }
 
+function normalizeOrgText(raw) {
+  return String(raw || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function stripFamilyNumberFromOrg(raw) {
+  return String(raw || "")
+    .replace(/^\s*\d+\s*[\|\-–—:]\s*/g, "")
+    .replace(/^\s*\d+\s+/g, "")
+    .trim();
+}
+
+function levenshteinDistance(a, b) {
+  const s = normalizeOrgText(a);
+  const t = normalizeOrgText(b);
+
+  if (s === t) return 0;
+  if (!s.length) return t.length;
+  if (!t.length) return s.length;
+
+  const dp = Array.from({ length: s.length + 1 }, () => []);
+
+  for (let i = 0; i <= s.length; i++) dp[i][0] = i;
+  for (let j = 0; j <= t.length; j++) dp[0][j] = j;
+
+  for (let i = 1; i <= s.length; i++) {
+    for (let j = 1; j <= t.length; j++) {
+      const cost = s[i - 1] === t[j - 1] ? 0 : 1;
+
+      dp[i][j] = Math.min(
+        dp[i - 1][j] + 1,
+        dp[i][j - 1] + 1,
+        dp[i - 1][j - 1] + cost
+      );
+    }
+  }
+
+  return dp[s.length][t.length];
+}
+
+const ORG_NAME_ALIASES = {
+  umbrella: [
+    "umbrella",
+    "umbrela",
+    "unbrella",
+    "unbrela",
+    "umbrelha",
+  ],
+};
+
+function canonicalOrgName(raw) {
+  const withoutFamily = stripFamilyNumberFromOrg(raw);
+  const normalized = normalizeOrgText(withoutFamily);
+
+  if (!normalized) return "ORG não identificada";
+
+  for (const [canonical, aliases] of Object.entries(ORG_NAME_ALIASES)) {
+    const allNames = [canonical, ...aliases];
+
+    for (const alias of allNames) {
+      const normalizedAlias = normalizeOrgText(alias);
+      const distance = levenshteinDistance(normalized, normalizedAlias);
+      const maxDistance = normalized.length <= 6 ? 1 : 2;
+
+      if (
+        normalized === normalizedAlias ||
+        normalized.includes(normalizedAlias) ||
+        normalizedAlias.includes(normalized) ||
+        distance <= maxDistance
+      ) {
+        return canonical.charAt(0).toUpperCase() + canonical.slice(1);
+      }
+    }
+  }
+
+  return withoutFamily
+    .split(" ")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(" ");
+}
+
 function emptyMonthStats(monthKey) {
   return {
     monthKey,
@@ -284,7 +371,7 @@ function addPoint(stats, { userId, status, orgName, dayKey, createdTimestamp = n
   if (!userId || !status || !dayKey) return;
 
   const weekKey = getWeekKeyFromDayKey(dayKey);
-  const orgKey = orgName || "ORG não identificada";
+  const orgKey = canonicalOrgName(orgName);
 
   if (!stats.byUser[userId]) {
     stats.byUser[userId] = {
