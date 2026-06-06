@@ -992,6 +992,8 @@ export async function graficoPresencaEventosHandleInteraction(interaction, clien
       return true;
     }
 
+await interaction.deferReply({ ephemeral: true });
+
 const updated = await updatePresenceDashboard(
   client,
   interaction.user?.id || null,
