@@ -176,9 +176,28 @@ function getMessageDayKeySP(message) {
   return `${year}-${month}-${day}`;
 }
 
-function formatDayBR(dayKey) {
-  const [year, month, day] = String(dayKey).split("-");
-  return `${day}/${month}/${year}`;
+function getWeekKeyFromDayKey(dayKey) {
+  const [year, month, day] = String(dayKey).split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day, 0, 0, 0));
+
+  const firstDay = new Date(Date.UTC(year, month - 1, 1, 0, 0, 0));
+  const weekNumber = Math.ceil((date.getUTCDate() + firstDay.getUTCDay()) / 7);
+
+  return `${year}-${String(month).padStart(2, "0")}-S${weekNumber}`;
+}
+
+function formatWeekBR(weekKey) {
+  const [year, month, week] = String(weekKey).split("-");
+  return `${week.replace("S", "Semana ")} • ${month}/${year}`;
+}
+
+function percentText(part, total) {
+  const p = safeNum(part);
+  const t = safeNum(total);
+
+  if (t <= 0) return "0.0%";
+
+  return `${((p / t) * 100).toFixed(1)}%`;
 }
 
 function loadState() {
@@ -230,14 +249,21 @@ function emptyMonthStats(monthKey) {
     yesTotal: 0,
     noTotal: 0,
     total: 0,
+
     byUser: {},
     byDay: {},
+    byWeek: {},
     orgs: {},
+
+    firstLogAt: null,
+    lastLogAt: null,
   };
 }
-
-function addPoint(stats, { userId, status, orgName, dayKey }) {
+function addPoint(stats, { userId, status, orgName, dayKey, createdTimestamp = null }) {
   if (!userId || !status || !dayKey) return;
+
+  const weekKey = getWeekKeyFromDayKey(dayKey);
+  const orgKey = orgName || "ORG não identificada";
 
   if (!stats.byUser[userId]) {
     stats.byUser[userId] = {
@@ -246,6 +272,7 @@ function addPoint(stats, { userId, status, orgName, dayKey }) {
       total: 0,
       orgs: {},
       days: {},
+      weeks: {},
     };
   }
 
@@ -257,7 +284,13 @@ function addPoint(stats, { userId, status, orgName, dayKey }) {
     };
   }
 
-  const orgKey = orgName || "ORG não identificada";
+  if (!stats.byWeek[weekKey]) {
+    stats.byWeek[weekKey] = {
+      yes: 0,
+      no: 0,
+      total: 0,
+    };
+  }
 
   if (!stats.orgs[orgKey]) {
     stats.orgs[orgKey] = {
@@ -283,30 +316,54 @@ function addPoint(stats, { userId, status, orgName, dayKey }) {
     };
   }
 
+  if (!stats.byUser[userId].weeks[weekKey]) {
+    stats.byUser[userId].weeks[weekKey] = {
+      yes: 0,
+      no: 0,
+      total: 0,
+    };
+  }
+
   if (status === "YES") {
     stats.yesTotal++;
     stats.byUser[userId].yes++;
     stats.byDay[dayKey].yes++;
+    stats.byWeek[weekKey].yes++;
     stats.orgs[orgKey].yes++;
     stats.byUser[userId].orgs[orgKey].yes++;
     stats.byUser[userId].days[dayKey].yes++;
+    stats.byUser[userId].weeks[weekKey].yes++;
   }
 
   if (status === "NO") {
     stats.noTotal++;
     stats.byUser[userId].no++;
     stats.byDay[dayKey].no++;
+    stats.byWeek[weekKey].no++;
     stats.orgs[orgKey].no++;
     stats.byUser[userId].orgs[orgKey].no++;
     stats.byUser[userId].days[dayKey].no++;
+    stats.byUser[userId].weeks[weekKey].no++;
   }
 
   stats.total++;
   stats.byUser[userId].total++;
   stats.byDay[dayKey].total++;
+  stats.byWeek[weekKey].total++;
   stats.orgs[orgKey].total++;
   stats.byUser[userId].orgs[orgKey].total++;
   stats.byUser[userId].days[dayKey].total++;
+  stats.byUser[userId].weeks[weekKey].total++;
+
+  if (createdTimestamp) {
+    if (!stats.firstLogAt || createdTimestamp < stats.firstLogAt) {
+      stats.firstLogAt = createdTimestamp;
+    }
+
+    if (!stats.lastLogAt || createdTimestamp > stats.lastLogAt) {
+      stats.lastLogAt = createdTimestamp;
+    }
+  }
 }
 
 function parsePresenceLogMessage(message) {
@@ -380,12 +437,13 @@ async function collectMonthStatsFromLogs(client, monthKeys) {
       const dayKey = getMessageDayKeySP(msg);
       if (!dayKey) continue;
 
-      addPoint(result[monthKey], {
-        userId: parsed.userId,
-        status: parsed.status,
-        orgName: parsed.orgName,
-        dayKey,
-      });
+addPoint(result[monthKey], {
+  userId: parsed.userId,
+  status: parsed.status,
+  orgName: parsed.orgName,
+  dayKey,
+  createdTimestamp: msg.createdTimestamp || null,
+});
     }
 
     before = messages.last()?.id;
@@ -477,6 +535,89 @@ function formatLastDays(stats) {
   return entries.map(([dayKey, data]) => {
     return `\`${formatDayBR(dayKey)}\` → 🟢 **${safeNum(data.yes)}** | 🔴 **${safeNum(data.no)}** | 📌 **${safeNum(data.total)}**`;
   }).join("\n");
+}
+
+function formatWeeklySummary(stats) {
+  const entries = Object.entries(stats?.byWeek || {})
+    .sort(([a], [b]) => a.localeCompare(b));
+
+  if (!entries.length) {
+    return "_Sem semanas registradas ainda._";
+  }
+
+  return entries.map(([weekKey, data]) => {
+    const total = safeNum(data.total);
+    const yes = safeNum(data.yes);
+    const no = safeNum(data.no);
+
+    return [
+      `**${formatWeekBR(weekKey)}**`,
+      `🟢 Confirmou: **${yes}**`,
+      `🔴 Não vai: **${no}**`,
+      `📌 Total: **${total}**`,
+      `📊 Taxa verde: **${percentText(yes, total)}**`,
+    ].join(" • ");
+  }).join("\n");
+}
+
+function formatTopOrgs(stats, type = "NO", limit = 5) {
+  const entries = Object.entries(stats?.orgs || {})
+    .map(([orgName, data]) => ({
+      orgName,
+      yes: safeNum(data.yes),
+      no: safeNum(data.no),
+      total: safeNum(data.total),
+    }))
+    .filter((item) => type === "YES" ? item.yes > 0 : item.no > 0)
+    .sort((a, b) => {
+      const av = type === "YES" ? a.yes : a.no;
+      const bv = type === "YES" ? b.yes : b.no;
+
+      if (bv !== av) return bv - av;
+      return b.total - a.total;
+    })
+    .slice(0, limit);
+
+  if (!entries.length) {
+    return "_Sem ORGs registradas ainda._";
+  }
+
+  return entries.map((item, index) => {
+    const medal = index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : "▫️";
+    const value = type === "YES" ? item.yes : item.no;
+    const label = type === "YES" ? "confirmou" : "não vai";
+
+    return `${medal} **${item.orgName}** — **${value}** ${label} | 📌 Total: **${item.total}**`;
+  }).join("\n");
+}
+
+function formatGeneralStatus(stats, previousStats) {
+  const currentTotal = safeNum(stats.total);
+  const currentYes = safeNum(stats.yesTotal);
+  const currentNo = safeNum(stats.noTotal);
+
+  const previousTotal = safeNum(previousStats?.total);
+  const previousYes = safeNum(previousStats?.yesTotal);
+  const previousNo = safeNum(previousStats?.noTotal);
+
+  const diffTotal = currentTotal - previousTotal;
+  const diffYes = currentYes - previousYes;
+  const diffNo = currentNo - previousNo;
+
+  const diffEmoji = diffTotal >= 0 ? "🟢" : "🔴";
+  const diffSignal = diffTotal >= 0 ? "+" : "";
+
+  return [
+    `📌 **Total do mês:** **${currentTotal}** resposta(s)`,
+    `🟢 **Confirmadas no mês:** **${currentYes}**`,
+    `🔴 **Reprovadas/Não vai no mês:** **${currentNo}**`,
+    `📊 **Taxa verde:** **${percentText(currentYes, currentTotal)}**`,
+    `📉 **Taxa vermelha:** **${percentText(currentNo, currentTotal)}**`,
+    "",
+    `📆 **Comparativo com mês passado:** ${diffEmoji} **${diffSignal}${diffTotal}** resposta(s)`,
+    `🟢 Diferença verde: **${diffYes >= 0 ? "+" : ""}${diffYes}**`,
+    `🔴 Diferença vermelha: **${diffNo >= 0 ? "+" : ""}${diffNo}**`,
+  ].join("\n");
 }
 
 function buildChartLabelsAndData(stats) {
@@ -667,20 +808,30 @@ function buildMainEmbed({ currentStats, previousStats, chartUrl }) {
   return new EmbedBuilder()
     .setColor(0x9b59b6)
     .setAuthor({
-      name: "SantaCreators • Dashboard de Presença",
+      name: "SantaCreators • Dashboard Profissional de Presença",
       iconURL: DASH_ICON,
     })
-    .setTitle("📊 Presença das ORGs nos Eventos")
+    .setTitle("📊 Dashboard Mensal — Confirmação de ORGs nos Eventos")
     .setDescription([
       `**Mês atual:** \`${getMonthLabelBR(currentStats.monthKey)}\``,
-      `**Canal lido:** <#${PRESENCA_LOG_CHANNEL_ID}>`,
+      `**Canal analisado:** <#${PRESENCA_LOG_CHANNEL_ID}>`,
       `**Última atualização:** <t:${updatedTs}:R>`,
       "",
-      `🟢 **Confirmaram que vão:** ${safeNum(currentStats.yesTotal)}`,
-      `🔴 **Disseram que não vão:** ${safeNum(currentStats.noTotal)}`,
-      `📌 **Total de respostas:** ${safeNum(currentStats.total)}`,
+      "Este painel mostra o desempenho mensal das confirmações de presença das ORGs nos eventos.",
+      "🟢 Verde = confirmou que vai",
+      "🔴 Vermelho = informou que não vai / reprovada no evento",
     ].join("\n"))
     .addFields(
+      {
+        name: "📌 Resumo geral do mês",
+        value: formatGeneralStatus(currentStats, previousStats),
+        inline: false,
+      },
+      {
+        name: "📆 Totais por semana do mês",
+        value: formatWeeklySummary(currentStats),
+        inline: false,
+      },
       {
         name: "🏆 Top 3 — Quem mais confirma no mês",
         value: formatTopUsers(currentStats, "YES", 3),
@@ -697,14 +848,24 @@ function buildMainEmbed({ currentStats, previousStats, chartUrl }) {
         inline: false,
       },
       {
-        name: "📅 Controle por dia",
+        name: "🏢 ORGs com mais confirmações",
+        value: formatTopOrgs(currentStats, "YES", 5),
+        inline: false,
+      },
+      {
+        name: "🚨 ORGs com mais reprovadas / não vai",
+        value: formatTopOrgs(currentStats, "NO", 5),
+        inline: false,
+      },
+      {
+        name: "📅 Controle diário do mês",
         value: formatLastDays(currentStats),
         inline: false,
       }
     )
     .setImage(chartUrl || DASH_GIF)
     .setFooter({
-      text: "SantaCreators • Atualiza automático todo mês",
+      text: "SantaCreators • Dashboard mensal automático • Verde confirma | Vermelho não vai",
     })
     .setTimestamp();
 }
