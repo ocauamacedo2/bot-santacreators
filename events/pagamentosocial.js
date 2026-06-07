@@ -1111,6 +1111,11 @@ async function sincronizarDashboardSocial(client, motivo = "manual", options = {
     }
 
     const stats = await reconstruirStatsPorEmbeds(client, 1000);
+
+    if (!stats) {
+      throw new Error("Não consegui reconstruir os dados pelos embeds do canal de pagamentos.");
+    }
+
     console.log("[PAGAMENTO_SOCIAL_DASH] reconstruido", {
       totalCreated: stats?.totalCreated,
       totalApproved: stats?.totalApproved,
@@ -1118,12 +1123,13 @@ async function sincronizarDashboardSocial(client, motivo = "manual", options = {
       totalRequested: stats?.totalRequested,
     });
 
-    await updateDashboard(client);
+    await updateDashboard(client, stats);
+
     console.log("[PAGAMENTO_SOCIAL_DASH] dashboard editado/enviado", { motivo });
 
     return {
       ok: true,
-      stats: loadStats(),
+      stats,
       message: "Dashboard Social Mídias sincronizado com sucesso.",
     };
   } catch (err) {
@@ -1171,10 +1177,16 @@ async function encontrarDashboardPagamentoDoMes(channel, monthKey) {
   return dashboards[0] || null;
 }
 
-async function updateDashboard(client) {
-  const stats = loadStats();
+async function updateDashboard(client, statsAtualizados = null) {
+  const stats = statsAtualizados || loadStats();
   const channel = await client.channels.fetch(CANAL_DASHBOARD_PAGAMENTO).catch(() => null);
-  if (!channel || !channel.isTextBased()) return;
+
+  if (!channel || !channel.isTextBased()) {
+    console.warn("[PAGAMENTO_SOCIAL_DASH] canal do dashboard não encontrado", {
+      canal: CANAL_DASHBOARD_PAGAMENTO,
+    });
+    return;
+  }
 
   const topApprovers = ordenarTop(stats.approvers, 5);
   const topRejecters = ordenarTop(stats.rejecters, 5);
@@ -2822,6 +2834,18 @@ export async function pagamentoSocialOnReady(client) {
 await sincronizarDashboardSocial(client, "ready", {
   forceUnlock: true,
 }).catch(() => null);
+
+if (!client.__SC_SOCIAL_DASH_INTERVAL__) {
+  client.__SC_SOCIAL_DASH_INTERVAL__ = setInterval(() => {
+    sincronizarDashboardSocial(client, "auto:5min", {
+      forceUnlock: false,
+    }).catch((err) => {
+      console.error("[PAGAMENTO_SOCIAL_DASH] erro no auto:5min", err);
+    });
+  }, 5 * 60 * 1000);
+
+  console.log("[PAGAMENTO_SOCIAL_DASH] auto atualização ativada: 5 minutos");
+}
 }
 
 
@@ -2837,10 +2861,18 @@ export async function pagamentoSocialHandleMessage(message, client) {
     const content = String(message.content || "").trim();
     if (!content.startsWith("!")) return false;
 
-    const cmd = content.slice(1).split(/\s+/)[0]?.toLowerCase();
+const cmd = content.slice(1).split(/\s+/)[0]?.toLowerCase();
 
-    if (!["socialrefresh", "criarsocial"].includes(cmd)) return false;
+const comandosSocial = [
+  "socialrefresh",
+  "criarsocial",
+  "socialdash",
+  "social",
+  "dashsocial",
+  "criardashsocial",
+];
 
+if (!comandosSocial.includes(cmd)) return false;
     const membro = message.member;
     const permitido =
       ALLOWED_IDS.includes(message.author.id) ||
@@ -2851,7 +2883,7 @@ export async function pagamentoSocialHandleMessage(message, client) {
       return true;
     }
 
-    const recriar = cmd === "criarsocial";
+  const recriar = ["criarsocial", "criardashsocial"].includes(cmd);
 
     const aviso = await message.reply(
       recriar
