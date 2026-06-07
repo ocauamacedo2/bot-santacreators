@@ -861,47 +861,109 @@ function medalha(i) {
   return i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : "▫️";
 }
 
-function topList(stats, field, limit = 5) {
-  const list = Object.values(stats.users || {})
-    .filter((u) => Number(u[field] || 0) > 0)
-    .sort((a, b) => Number(b[field] || 0) - Number(a[field] || 0))
+function rankingSemana(stats, periodKey, limit = 3) {
+  const mapa = new Map();
+
+  for (const p of stats.payments || []) {
+    if (p.periodKey !== periodKey) continue;
+    if (p.status !== "approved") continue;
+    if (!p.creatorId) continue;
+
+    mapa.set(p.creatorId, (mapa.get(p.creatorId) || 0) + 1);
+  }
+
+  for (const e of stats.events || []) {
+    if (e.periodKey !== periodKey) continue;
+    if (!e.userId) continue;
+
+    mapa.set(e.userId, (mapa.get(e.userId) || 0) + 1);
+  }
+
+  const lista = [...mapa.entries()]
+    .map(([userId, pontos]) => ({ userId, pontos }))
+    .sort((a, b) => b.pontos - a.pontos)
     .slice(0, limit);
 
-  if (!list.length) return "_Sem dados suficientes ainda._";
+  if (!lista.length) return "_Sem pontuação nesta semana._";
 
-  return list
-    .map((u, i) => {
-      const pontos = Number(u[field] || 0);
-      return `${medalha(i)} **${i + 1}.** <@${u.userId}>\n> **${pontos} pontos**`;
-    })
-    .join("\n\n");
+  return lista
+    .map((u, i) => `${medalha(i)} <@${u.userId}> — **${u.pontos} pontos**`)
+    .join("\n");
 }
 
-function weeklyHistory(stats, max = 4) {
-  const keys = Object.keys(stats.byWeek || {}).sort().slice(-max);
+function makeChartUrl(stats) {
+  const keys = Object.keys(stats.byWeek || {}).sort().slice(-4);
 
-  if (!keys.length) return "_Sem histórico suficiente ainda._";
+  const labels = [];
+  const pagamentos = [];
+  const eventos = [];
 
-  return keys
-    .map((key) => {
-      const b = stats.byWeek[key] || {};
-      const label = periodKeyFromDateSP(new Date(`${key}T12:00:00-03:00`)).label;
+  for (const key of keys) {
+    const b = stats.byWeek[key] || {};
+    const label = periodKeyFromDateSP(new Date(`${key}T12:00:00-03:00`)).label;
 
-      const pay = Number(b.paymentsApproved || 0);
-      const evt =
-        Number(b.eventsManual || 0) +
-        Number(b.eventsPoderes || 0) +
-        Number(b.eventsEvt3 || 0) +
-        Number(b.eventsCrono || 0);
+    labels.push(label);
+    pagamentos.push(Number(b.paymentsApproved || 0));
+    eventos.push(
+      Number(b.eventsManual || 0) +
+      Number(b.eventsPoderes || 0) +
+      Number(b.eventsEvt3 || 0) +
+      Number(b.eventsCrono || 0)
+    );
+  }
 
-      return [
-        `**${label}**`,
-        `> 💵 Pagamentos aprovados: **${pay}**`,
-        `> 🎉 Eventos/fontes: **${evt}**`,
-        `> \`${progressBar(pay, PAY_PERIOD_LIMIT, 12)}\``,
-      ].join("\n");
-    })
-    .join("\n\n");
+  const config = {
+    type: "bar",
+    data: {
+      labels,
+      datasets: [
+        {
+          label: "Pagamentos PAGO",
+          data: pagamentos,
+          backgroundColor: "#5865F2",
+        },
+        {
+          label: "Eventos/Poderes",
+          data: eventos,
+          backgroundColor: "#F59E0B",
+        },
+      ],
+    },
+    options: {
+      title: {
+        display: true,
+        text: "Histórico — Últimos 4 períodos (Dom → Sáb)",
+        fontSize: 22,
+      },
+      legend: {
+        display: true,
+        position: "top",
+      },
+      plugins: {
+        datalabels: {
+          anchor: "end",
+          align: "top",
+          color: "#111111",
+          font: {
+            weight: "bold",
+            size: 14,
+          },
+        },
+      },
+      scales: {
+        yAxes: [
+          {
+            ticks: {
+              beginAtZero: true,
+              precision: 0,
+            },
+          },
+        ],
+      },
+    },
+  };
+
+  return `https://quickchart.io/chart?width=1000&height=420&backgroundColor=white&c=${encodeURIComponent(JSON.stringify(config))}`;
 }
 
 function makeDashboardEmbed(stats) {
@@ -913,19 +975,15 @@ function makeDashboardEmbed(stats) {
   const w = stats.byWeek[thisWeek.key] || {};
   const last = stats.byWeek[lastWeekKey] || {};
   const m = stats.byMonth[monthKey] || {};
-const previousMonthKey = previousMonthKeySP(now);
-const previousMonth = stats.byMonth[previousMonthKey] || {};
 
-const payApproved = Number(w.paymentsApproved || 0);
-const payRejected = Number(w.paymentsRejected || 0);
-const payAnalyzed = payApproved + payRejected;
+  const payApproved = Number(w.paymentsApproved || 0);
+  const payRejected = Number(w.paymentsRejected || 0);
 
-  const eventsManual = Number(w.eventsManual || 0);
-  const eventsPoderes = Number(w.eventsPoderes || 0);
-  const eventsEvt3 = Number(w.eventsEvt3 || 0);
-  const eventsCrono = Number(w.eventsCrono || 0);
-
-  const eventsTotal = eventsManual + eventsPoderes + eventsEvt3 + eventsCrono;
+  const eventsTotal =
+    Number(w.eventsManual || 0) +
+    Number(w.eventsPoderes || 0) +
+    Number(w.eventsEvt3 || 0) +
+    Number(w.eventsCrono || 0);
 
   const lastPayApproved = Number(last.paymentsApproved || 0);
   const lastEventsTotal =
@@ -940,16 +998,16 @@ const payAnalyzed = payApproved + payRejected;
     Number(m.eventsEvt3 || 0) +
     Number(m.eventsCrono || 0);
 
-  const monthTotal = Number(m.paymentsApproved || 0) + monthEvents;
+  const monthPoints = Number(m.paymentsApproved || 0) + monthEvents;
 
   const status =
     payApproved >= PAY_PERIOD_LIMIT
-      ? "🚨 **Limite batido**"
+      ? "🚨 Limite"
       : payApproved >= PAY_PERIOD_GOAL
-        ? "🟢 **Meta batida**"
+        ? "🟢 Meta"
         : payApproved >= PAY_PERIOD_OK
-          ? "🟡 **Dentro do OK**"
-          : "🔴 **Abaixo do OK**";
+          ? "🟡 OK"
+          : "🔴 Abaixo";
 
   const color =
     payApproved >= PAY_PERIOD_GOAL
@@ -960,139 +1018,84 @@ const payAnalyzed = payApproved + payRejected;
 
   const embed = new EmbedBuilder()
     .setColor(color)
-    .setAuthor({
-      name: "SantaCreators • Central de Registros",
-      iconURL: "https://cdn.discordapp.com/emojis/1192314554524418068.png",
-    })
-    .setTitle("📊 Dashboard Profissional — Pagamentos & Eventos")
+    .setTitle("📊 Dashboard — Registros SantaCreators")
     .setDescription(
       [
-        "```ansi",
-        "[1;35mSANTACREATORS • CONTROLE OPERACIONAL[0m",
-        "```",
-        `> 📅 **Semana:** \`${thisWeek.label}\``,
-        `> 🗓️ **Mês:** \`${labelFromMonthKey(monthKey)}\``,
-        `> 🕒 **Atualizado:** <t:${Math.floor(Date.now() / 1000)}:R>`,
+        `**Período semanal:** \`${thisWeek.label}\``,
+        `**Mês atual:** \`${labelFromMonthKey(monthKey)}\``,
+        `**Atualizado:** <t:${Math.floor(Date.now() / 1000)}:R>`,
         "",
-        `**Status geral:** ${status}`,
+        `**Status:** ${status}`,
       ].join("\n")
     )
     .addFields(
       {
-        name: "━━━━━━━━━━━━━━━━━━━━━━\n📌 RESUMO DA SEMANA",
-value: [
-  "**Pagamentos**",
-  `> ✅ Aprovados/PAGO: **${payApproved}**`,
-  `> ❌ Reprovados: **${payRejected}**`,
-  `> 📋 Analisados: **${payAnalyzed}**`,
-  "",
-  "**Pontuação válida**",
-  `> 💵 Pontos de pagamentos: **${payApproved}**`,
-  `> 🎉 Pontos de eventos: **${eventsTotal}**`,
-  `> 📦 Total válido: **${payApproved + eventsTotal}**`,
-  "",
-  "> Só **PAGO** dá ponto para quem criou o registro.",
-].join("\n"),
-        inline: false,
+        name: "📌 Semana atual",
+        value: [
+          `✅ Pagamentos PAGO: **${payApproved}**`,
+          `❌ Reprovados: **${payRejected}**`,
+          `🎉 Eventos/Poderes: **${eventsTotal}**`,
+          `📦 Pontos válidos: **${payApproved + eventsTotal}**`,
+        ].join("\n"),
+        inline: true,
       },
       {
-        name: "━━━━━━━━━━━━━━━━━━━━━━\n📈 COMPARATIVO SEMANAL",
+        name: "📈 Comparativo",
         value: [
-          `💵 **Pagamentos aprovados:** \`${lastPayApproved}\` → \`${payApproved}\``,
-          `> ${diffText(payApproved, lastPayApproved)}`,
-          "",
-          `🎉 **Eventos/fontes:** \`${lastEventsTotal}\` → \`${eventsTotal}\``,
-          `> ${diffText(eventsTotal, lastEventsTotal)}`,
+          `💵 Pagamentos: **${lastPayApproved} → ${payApproved}** ${diffText(payApproved, lastPayApproved)}`,
+          `🎉 Eventos: **${lastEventsTotal} → ${eventsTotal}** ${diffText(eventsTotal, lastEventsTotal)}`,
+        ].join("\n"),
+        inline: true,
+      },
+      {
+        name: "🎯 Meta de pagamentos",
+        value: [
+          `🟡 OK: **${PAY_PERIOD_OK}** • 🟢 Meta: **${PAY_PERIOD_GOAL}** • 🚨 Limite: **${PAY_PERIOD_LIMIT}**`,
+          `\`${progressBar(payApproved, PAY_PERIOD_LIMIT, 18)}\``,
+          `Progresso: **${payApproved}/${PAY_PERIOD_LIMIT}**`,
         ].join("\n"),
         inline: false,
       },
       {
-        name: "━━━━━━━━━━━━━━━━━━━━━━\n🎯 META DE PAGAMENTOS",
+        name: "📦 Totais do mês",
         value: [
-          `**Progresso atual:** \`${payApproved}/${PAY_PERIOD_LIMIT}\``,
+          `✅ Pagamentos PAGO: **${Number(m.paymentsApproved || 0)}**`,
+          `❌ Reprovados: **${Number(m.paymentsRejected || 0)}**`,
           "",
-          `\`${progressBar(payApproved, PAY_PERIOD_LIMIT, 22)}\``,
+          `🎉 Eventos manuais: **${Number(m.eventsManual || 0)}**`,
+          `⚡ Poderes: **${Number(m.eventsPoderes || 0)}**`,
+          `🧩 EVT3: **${Number(m.eventsEvt3 || 0)}**`,
+          `📅 Cronograma/Hall/Diários: **${Number(m.eventsCrono || 0)}**`,
           "",
-          `🟡 **OK:** \`${PAY_PERIOD_OK}\``,
-          `🟢 **Meta:** \`${PAY_PERIOD_GOAL}\``,
-          `🚨 **Limite:** \`${PAY_PERIOD_LIMIT}\``,
+          `📦 Total de pontos do mês: **${monthPoints}**`,
         ].join("\n"),
         inline: false,
       },
- {
-  name: "━━━━━━━━━━━━━━━━━━━━━━\n📦 TOTAIS DO MÊS",
-  value: [
-    `**Mês atual:** \`${labelFromMonthKey(monthKey)}\``,
-    "",
-    "**Pagamentos contabilizados**",
-    `> ✅ Aprovados/PAGO: **${Number(m.paymentsApproved || 0)}**`,
-    `> ❌ Reprovados: **${Number(m.paymentsRejected || 0)}**`,
-    `> 📋 Analisados: **${Number(m.paymentsApproved || 0) + Number(m.paymentsRejected || 0)}**`,
-    "",
-    "**Eventos que dão ponto**",
-    `> 🎉 Eventos diários / manuais: **${Number(m.eventsManual || 0)}**`,
-    `> ⚡ Registros de poderes: **${Number(m.eventsPoderes || 0)}**`,
-    `> 🧩 EVT3: **${Number(m.eventsEvt3 || 0)}**`,
-    `> 📅 Cronograma / Hall / Diários: **${Number(m.eventsCrono || 0)}**`,
-    "",
-    `📦 **Total de pontos do mês:** \`${monthTotal}\``,
-    "",
-    "> Pagamento só pontua se estiver **PAGO**.",
-  ].join("\n"),
-  inline: false,
-},
-{
-  name: "━━━━━━━━━━━━━━━━━━━━━━\n📆 MÊS PASSADO",
-  value: [
-    `**Referência:** \`${labelFromMonthKey(previousMonthKey)}\``,
-    "",
-    `✅ Pagamentos aprovados/PAGO: **${Number(previousMonth.paymentsApproved || 0)}**`,
-    `❌ Pagamentos reprovados: **${Number(previousMonth.paymentsRejected || 0)}**`,
-    `📋 Pagamentos analisados: **${Number(previousMonth.paymentsApproved || 0) + Number(previousMonth.paymentsRejected || 0)}**`,
-    "",
-    "> O mês passado aparece só para comparação.",
-  ].join("\n"),
-  inline: false,
-},
-{
-  name: "━━━━━━━━━━━━━━━━━━━━━━\n🏆 RANKING GERAL",
-  value: topList(stats, "pointsTotal", 5),
-  inline: false,
-},
       {
-        name: "━━━━━━━━━━━━━━━━━━━━━━\n💵 TOP PAGAMENTOS",
-        value: topList(stats, "pointsPayment", 5),
+        name: "🏆 Top 3 — Semana atual",
+        value: rankingSemana(stats, thisWeek.key, 3),
         inline: false,
       },
       {
-        name: "━━━━━━━━━━━━━━━━━━━━━━\n🎉 TOP EVENTOS",
-        value: topList(stats, "pointsEvent", 5),
+        name: "🏅 Destaque anterior",
+        value: rankingSemana(stats, lastWeekKey, 1),
         inline: false,
       },
       {
-        name: "━━━━━━━━━━━━━━━━━━━━━━\n📊 HISTÓRICO DAS ÚLTIMAS SEMANAS",
-        value: weeklyHistory(stats, 4),
-        inline: false,
-      },
-      {
-        name: "━━━━━━━━━━━━━━━━━━━━━━\n🧪 AUDITORIA TÉCNICA",
+        name: "🧪 Auditoria",
         value: [
-          `> 💵 Canal pagamentos: **${stats.debug.scannedChannels[PAY_CHANNEL_ID] || 0} mensagens**`,
-          `> 🧾 Logs pagamentos: **${stats.debug.scannedChannels[PAY_LOG_CHANNEL_ID] || 0} mensagens**`,
-          `> 🔗 Recuperados por logs: **${stats.debug.recoveredFromLogs || 0}**`,
-          `> ♻️ Duplicados ignorados: **${stats.debug.duplicatesIgnored || 0}**`,
+          `Pagamentos lidos: **${stats.debug.scannedChannels[PAY_CHANNEL_ID] || 0} msgs**`,
+          `Logs lidos: **${stats.debug.scannedChannels[PAY_LOG_CHANNEL_ID] || 0} msgs**`,
+          `Recuperados por logs: **${stats.debug.recoveredFromLogs || 0}**`,
         ].join("\n"),
         inline: false,
       }
     )
+    .setImage(makeChartUrl(stats))
     .setFooter({
-      text: `${DASH_MARKER} • Dashboard automático • Pagamentos + Logs + Eventos`,
+      text: `${DASH_MARKER} • Azul = pagamentos PAGO • Laranja = eventos/poderes • Semana Dom→Sáb`,
     })
     .setTimestamp(new Date());
-
-  if (DASHBOARD_IMAGE_URL) {
-    embed.setImage(DASHBOARD_IMAGE_URL);
-  }
 
   return embed;
 }
