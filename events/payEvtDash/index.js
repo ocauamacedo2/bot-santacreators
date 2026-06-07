@@ -55,6 +55,10 @@ const SCAN_CONFIG = {
   pagesPerChannel: 8,
   fetchLimit: 100,
   maxAgeDays: 14,
+
+  // Evita travar tentando abrir centenas de links antigos dos logs
+  maxLinkedLogsToRecover: 80,
+  linkedFetchTimeoutMs: 2500,
 };
 
 let LOCK = false;
@@ -578,10 +582,18 @@ async function fetchChannelMessages(client, channelId, pages = SCAN_CONFIG.pages
 async function fetchLinkedMessage(client, link) {
   if (!link?.channelId || !link?.messageId) return null;
 
-  const channel = await client.channels.fetch(link.channelId).catch(() => null);
-  if (!channel || !channel.isTextBased()) return null;
+  const timeout = new Promise((resolve) => {
+    setTimeout(() => resolve(null), SCAN_CONFIG.linkedFetchTimeoutMs);
+  });
 
-  return await channel.messages.fetch(link.messageId).catch(() => null);
+  const task = (async () => {
+    const channel = await client.channels.fetch(link.channelId).catch(() => null);
+    if (!channel || !channel.isTextBased()) return null;
+
+    return await channel.messages.fetch(link.messageId).catch(() => null);
+  })();
+
+  return await Promise.race([task, timeout]);
 }
 
 async function scanPayments(client, stats, seen) {
@@ -620,17 +632,31 @@ async function scanPayments(client, stats, seen) {
 }
 
 async function scanPaymentLogs(client, stats, seen) {
+  console.log("[SC_PAY_EVT_DASH_V2] iniciando leitura dos logs de pagamento");
+
   const logMessages = await fetchChannelMessages(client, PAY_LOG_CHANNEL_ID);
   stats.debug.scannedChannels[PAY_LOG_CHANNEL_ID] = logMessages.length;
 
+  let linkedRecoveredAttempts = 0;
+  let processedLogs = 0;
+
   for (const msg of logMessages) {
+    processedLogs++;
+
+    if (processedLogs % 100 === 0) {
+      console.log("[SC_PAY_EVT_DASH_V2] logs processados:", processedLogs, "/", logMessages.length);
+    }
+
     const allText = [
       msg.content || "",
       ...(msg.embeds || []).map(getEmbedText),
     ].join("\n");
 
     const link = extractFirstDiscordLink(allText);
-    if (link) {
+
+    if (link && linkedRecoveredAttempts < SCAN_CONFIG.maxLinkedLogsToRecover) {
+      linkedRecoveredAttempts++;
+
       const linked = await fetchLinkedMessage(client, link);
       const embed = linked?.embeds?.[0];
 
@@ -691,6 +717,12 @@ async function scanPaymentLogs(client, stats, seen) {
       });
     }
   }
+
+  console.log("[SC_PAY_EVT_DASH_V2] logs de pagamento finalizados", {
+    totalLogs: logMessages.length,
+    linkedRecoveredAttempts,
+    recoveredFromLogs: stats.debug.recoveredFromLogs,
+  });
 }
 
 async function scanEventChannel(client, stats, seen, channelId, kind, matcher) {
@@ -733,12 +765,22 @@ async function collectDashboardData(client, force = false) {
   const stats = emptyStats();
   const seen = new Set();
 
+  console.log("[SC_PAY_EVT_DASH_V2] etapa 1/6: pagamentos");
   await scanPayments(client, stats, seen);
+
+  console.log("[SC_PAY_EVT_DASH_V2] etapa 2/6: logs pagamentos");
   await scanPaymentLogs(client, stats, seen);
 
+  console.log("[SC_PAY_EVT_DASH_V2] etapa 3/6: eventos manuais");
   await scanEventChannel(client, stats, seen, REGISTRO_EVENTO_CHANNEL_ID, "manual", isEventManualEmbed);
+
+  console.log("[SC_PAY_EVT_DASH_V2] etapa 4/6: poderes");
   await scanEventChannel(client, stats, seen, CH_PODERES_ID, "poderes", isPoderesEmbed);
+
+  console.log("[SC_PAY_EVT_DASH_V2] etapa 5/6: evt3");
   await scanEventChannel(client, stats, seen, EVT3_EVENT_CHANNEL_ID, "evt3", isEventManualEmbed);
+
+  console.log("[SC_PAY_EVT_DASH_V2] etapa 6/6: cronograma/hall/eventos diários");
   await scanEventChannel(client, stats, seen, CRONOGRAMA_LOGS_CHANNEL_ID, "crono", isCronoHallDailyEmbed);
 
   for (const user of Object.values(stats.users)) {
