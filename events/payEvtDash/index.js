@@ -14,6 +14,14 @@ import {
 import { dashOn } from "../../utils/dashHub.js"; // ✅ Caminho corrigido
 
 // =========================
+// ✅ MODULE GUARD (Evita carregar o bot 2x e duplicar logs)
+// =========================
+if (globalThis.__SC_PAY_EVT_DASH_LOADED__) {
+  // Módulo já carregado.
+} else {
+  globalThis.__SC_PAY_EVT_DASH_LOADED__ = true;
+
+// =========================
 // CONFIG
 // =========================
 const TZ = "America/Sao_Paulo";
@@ -1274,6 +1282,7 @@ async function safeUpdate(client, reason) {
     LOCK_TS = 0;
 
     if (PENDING_UPDATE) {
+      log("🔄 Iniciando atualização que estava na fila...");
       const nextReason = PENDING_REASON || "pending";
       PENDING_UPDATE = false;
       PENDING_REASON = "";
@@ -1344,6 +1353,8 @@ export async function payEvtDashHandleMessage(message, client) {
 
   return false;
 }
+
+} // Fim do guard
 
 // ✅ NEW EXPORT: Interaction Handler (Must be plugged into index.js interactionCreate)
 export async function payEvtDashHandleInteraction(interaction, client) {
