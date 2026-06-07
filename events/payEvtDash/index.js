@@ -29,7 +29,7 @@ const CRONOGRAMA_LOGS_CHANNEL_ID = "1387864036259004436";
 
 const PAY_PERIOD_OK = 40;
 const PAY_PERIOD_GOAL = 50;
-const PAY_PERIOD_LIMIT = 60;
+const PAY_PERIOD_LIMIT = 70;
 
 const DATA_DIR = path.resolve(process.cwd(), "data");
 const STATE_PATH = path.join(DATA_DIR, "sc_pay_evt_dashboard_v2_state.json");
@@ -488,10 +488,16 @@ function ensureUser(stats, userId) {
     paymentsApproved: 0,
     paymentsRejected: 0,
     paymentsRequested: 0,
-    eventsManual: 0,
-    eventsPoderes: 0,
-    eventsEvt3: 0,
-    eventsCrono: 0,
+eventsManual: 0,
+eventsPoderes: 0,
+eventsEvt3: 0,
+
+eventsHall: 0,
+eventsDiarios: 0,
+eventsCronograma: 0,
+eventsDmLideres: 0,
+eventsBatePonto: 0,
+eventsRegistrosPoderes: 0,
     pointsPayment: 0,
     pointsEvent: 0,
     pointsTotal: 0,
@@ -506,10 +512,16 @@ function ensureBucket(stats, periodKey, monthKey) {
     paymentsApproved: 0,
     paymentsRejected: 0,
     paymentsRequested: 0,
-    eventsManual: 0,
-    eventsPoderes: 0,
-    eventsEvt3: 0,
-    eventsCrono: 0,
+eventsManual: 0,
+eventsPoderes: 0,
+eventsEvt3: 0,
+
+eventsHall: 0,
+eventsDiarios: 0,
+eventsCronograma: 0,
+eventsDmLideres: 0,
+eventsBatePonto: 0,
+eventsRegistrosPoderes: 0,
   };
 
   stats.byMonth[monthKey] ??= {
@@ -517,10 +529,16 @@ function ensureBucket(stats, periodKey, monthKey) {
     paymentsApproved: 0,
     paymentsRejected: 0,
     paymentsRequested: 0, 
-    eventsManual: 0,
-    eventsPoderes: 0,
-    eventsEvt3: 0,
-    eventsCrono: 0,
+eventsManual: 0,
+eventsPoderes: 0,
+eventsEvt3: 0,
+
+eventsHall: 0,
+eventsDiarios: 0,
+eventsCronograma: 0,
+eventsDmLideres: 0,
+eventsBatePonto: 0,
+eventsRegistrosPoderes: 0,
   };
 
   return {
@@ -600,33 +618,30 @@ function addEvent(stats, item) {
 
   const buckets = ensureBucket(stats, period.key, monthKey);
 
-  if (item.kind === "manual") {
-    buckets.week.eventsManual++;
-    buckets.month.eventsManual++;
-  }
+const fieldByKind = {
+  manual: "eventsManual",
+  poderes: "eventsPoderes",
+  evt3: "eventsEvt3",
 
-  if (item.kind === "poderes") {
-    buckets.week.eventsPoderes++;
-    buckets.month.eventsPoderes++;
-  }
+  hall: "eventsHall",
+  diarios: "eventsDiarios",
+  cronograma: "eventsCronograma",
+  lideres: "eventsDmLideres",
+  bateponto: "eventsBatePonto",
+  registros_poderes: "eventsRegistrosPoderes",
+};
 
-  if (item.kind === "evt3") {
-    buckets.week.eventsEvt3++;
-    buckets.month.eventsEvt3++;
-  }
+const field = fieldByKind[item.kind];
 
-  if (item.kind === "crono") {
-    buckets.week.eventsCrono++;
-    buckets.month.eventsCrono++;
-  }
+if (field) {
+  buckets.week[field]++;
+  buckets.month[field]++;
+}
 
   const user = ensureUser(stats, item.userId);
 
   if (user) {
-    if (item.kind === "manual") user.eventsManual++;
-    if (item.kind === "poderes") user.eventsPoderes++;
-    if (item.kind === "evt3") user.eventsEvt3++;
-    if (item.kind === "crono") user.eventsCrono++;
+if (field) user[field]++;
 
     // Todo evento válido dá 1 ponto para quem criou/solicitou/registrou.
     user.pointsEvent += 1;
@@ -838,7 +853,7 @@ async function collectDashboardData(client, force = false) {
   await scanEventChannel(client, stats, seen, REGISTRO_EVENTO_CHANNEL_ID, "manual", isEventManualEmbed);
   await scanEventChannel(client, stats, seen, CH_PODERES_ID, "poderes", isPoderesEmbed);
   await scanEventChannel(client, stats, seen, EVT3_EVENT_CHANNEL_ID, "evt3", isEventManualEmbed);
-  await scanEventChannel(client, stats, seen, CRONOGRAMA_LOGS_CHANNEL_ID, "crono", isCronoHallDailyEmbed);
+  await scanEventChannel(client, stats, seen, CRONOGRAMA_LOGS_CHANNEL_ID, "cronograma", isCronoHallDailyEmbed);
 
   for (const user of Object.values(stats.users)) {
     user.pointsTotal = Number(user.pointsPayment || 0) + Number(user.pointsEvent || 0);
@@ -909,6 +924,61 @@ function rankingSemana(stats, periodKey, limit = 3) {
     .join("\n");
 }
 
+function getRegistrosTotal(bucket = {}) {
+  return (
+    Number(bucket.eventsManual || 0) +
+    Number(bucket.eventsPoderes || 0) +
+    Number(bucket.eventsEvt3 || 0) +
+    Number(bucket.eventsHall || 0) +
+    Number(bucket.eventsDiarios || 0) +
+    Number(bucket.eventsCronograma || 0) +
+    Number(bucket.eventsDmLideres || 0) +
+    Number(bucket.eventsBatePonto || 0) +
+    Number(bucket.eventsRegistrosPoderes || 0)
+  );
+}
+
+function getPontosPorFonte(bucket = {}) {
+  const pagamentos = Number(bucket.paymentsApproved || 0);
+  const hall = Number(bucket.eventsHall || 0);
+  const diarios = Number(bucket.eventsDiarios || 0);
+  const cronograma = Number(bucket.eventsCronograma || 0);
+  const dmLideres = Number(bucket.eventsDmLideres || 0);
+  const batePonto = Number(bucket.eventsBatePonto || 0);
+  const criarEvento = Number(bucket.eventsEvt3 || 0);
+  const poderesEventos = Number(bucket.eventsPoderes || 0);
+  const registrosPoderes = Number(bucket.eventsRegistrosPoderes || 0);
+  const eventosManuais = Number(bucket.eventsManual || 0);
+
+  const registrosTotal =
+    hall +
+    diarios +
+    cronograma +
+    dmLideres +
+    batePonto +
+    criarEvento +
+    poderesEventos +
+    registrosPoderes +
+    eventosManuais;
+
+  const totalGeral = pagamentos + registrosTotal;
+
+  return {
+    pagamentos,
+    hall,
+    diarios,
+    cronograma,
+    dmLideres,
+    batePonto,
+    criarEvento,
+    poderesEventos,
+    registrosPoderes,
+    eventosManuais,
+    registrosTotal,
+    totalGeral,
+  };
+}
+
 function makeChartUrl(stats) {
   const keys = Object.keys(stats.byWeek || {}).sort().slice(-4);
 
@@ -922,12 +992,7 @@ function makeChartUrl(stats) {
 
     labels.push(label);
     pagamentos.push(Number(b.paymentsApproved || 0));
-    eventos.push(
-      Number(b.eventsManual || 0) +
-      Number(b.eventsPoderes || 0) +
-      Number(b.eventsEvt3 || 0) +
-      Number(b.eventsCrono || 0)
-    );
+    eventos.push(getRegistrosTotal(b));
   }
 
   const config = {
@@ -941,7 +1006,7 @@ function makeChartUrl(stats) {
           backgroundColor: "#5865F2",
         },
         {
-          label: "Eventos/Poderes",
+          label: "Registros gerais",
           data: eventos,
           backgroundColor: "#F59E0B",
         },
@@ -989,34 +1054,25 @@ function makeDashboardEmbed(stats) {
   const thisWeek = periodKeyFromDateSP(now);
   const lastWeekKey = periodKeyFromDateSP(addDaysUTC(new Date(`${thisWeek.key}T12:00:00-03:00`), -7)).key;
   const monthKey = monthKeyFromDateSP(now);
-
+  const lastMonthKey = previousMonthKeySP(now);
   const w = stats.byWeek[thisWeek.key] || {};
   const last = stats.byWeek[lastWeekKey] || {};
   const m = stats.byMonth[monthKey] || {};
-
+  const lastMonth = stats.byMonth[lastMonthKey] || {};
   const payApproved = Number(w.paymentsApproved || 0);
   const payRejected = Number(w.paymentsRejected || 0);
 
-  const eventsTotal =
-    Number(w.eventsManual || 0) +
-    Number(w.eventsPoderes || 0) +
-    Number(w.eventsEvt3 || 0) +
-    Number(w.eventsCrono || 0);
+  const eventsTotal = getRegistrosTotal(w);
 
   const lastPayApproved = Number(last.paymentsApproved || 0);
-  const lastEventsTotal =
-    Number(last.eventsManual || 0) +
-    Number(last.eventsPoderes || 0) +
-    Number(last.eventsEvt3 || 0) +
-    Number(last.eventsCrono || 0);
+  const lastEventsTotal = getRegistrosTotal(last);
 
-  const monthEvents =
-    Number(m.eventsManual || 0) +
-    Number(m.eventsPoderes || 0) +
-    Number(m.eventsEvt3 || 0) +
-    Number(m.eventsCrono || 0);
+  const monthEvents = getRegistrosTotal(m);
 
   const monthPoints = Number(m.paymentsApproved || 0) + monthEvents;
+
+  const weekPointsBySource = getPontosPorFonte(w);
+  const monthPointsBySource = getPontosPorFonte(m);
 
   const status =
     payApproved >= PAY_PERIOD_LIMIT
@@ -1052,16 +1108,35 @@ function makeDashboardEmbed(stats) {
         value: [
           `✅ Pagamentos PAGO: **${payApproved}**`,
           `❌ Reprovados: **${payRejected}**`,
-          `🟠 Eventos/Poderes: **${eventsTotal}**`,
+          `🟠 Registros gerais: **${eventsTotal}**`,
           `📦 Pontos válidos: **${payApproved + eventsTotal}**`,
         ].join("\n"),
         inline: true,
       },
       {
+        name: "🧮 Pontos por fonte — Semana",
+        value: [
+          `✅ Pagamentos PAGO: **${weekPointsBySource.pagamentos}**`,
+          `🏆 Hall da Fama: **${weekPointsBySource.hall}**`,
+          `📆 Eventos diários: **${weekPointsBySource.diarios}**`,
+          `🗓️ Cronograma: **${weekPointsBySource.cronograma}**`,
+          `📩 DM líderes: **${weekPointsBySource.dmLideres}**`,
+          `🕒 Bate ponto: **${weekPointsBySource.batePonto}**`,
+          `🧩 Criar evento: **${weekPointsBySource.criarEvento}**`,
+          `⚡ Poderes eventos: **${weekPointsBySource.poderesEventos}**`,
+          `📋 Registros de poderes: **${weekPointsBySource.registrosPoderes}**`,
+          `📝 Eventos manuais: **${weekPointsBySource.eventosManuais}**`,
+          "",
+          `🟠 Total registros: **${weekPointsBySource.registrosTotal}**`,
+          `📦 Total geral: **${weekPointsBySource.totalGeral}**`,
+        ].join("\n"),
+        inline: false,
+      },
+      {
         name: "📈 Comparativo",
         value: [
           `💵 Pagamentos: **${lastPayApproved} → ${payApproved}** ${diffText(payApproved, lastPayApproved)}`,
-          `🎉 Eventos: **${lastEventsTotal} → ${eventsTotal}** ${diffText(eventsTotal, lastEventsTotal)}`,
+          `🟠 Registros gerais: **${lastEventsTotal} → ${eventsTotal}** ${diffText(eventsTotal, lastEventsTotal)}`,
         ].join("\n"),
         inline: true,
       },
@@ -1080,12 +1155,26 @@ function makeDashboardEmbed(stats) {
           `✅ Pagamentos PAGO: **${Number(m.paymentsApproved || 0)}**`,
           `❌ Reprovados: **${Number(m.paymentsRejected || 0)}**`,
           "",
-          `🎉 Eventos manuais: **${Number(m.eventsManual || 0)}**`,
-          `⚡ Poderes: **${Number(m.eventsPoderes || 0)}**`,
-          `🧩 CRIOU EVENTO!: **${Number(m.eventsEvt3 || 0)}**`,
-          `📅 Cronograma/Hall/Diários: **${Number(m.eventsCrono || 0)}**`,
+`🏆 Hall da Fama: **${Number(m.eventsHall || 0)}**`,
+`📆 Eventos diários: **${Number(m.eventsDiarios || 0)}**`,
+`🗓️ Cronograma: **${Number(m.eventsCronograma || 0)}**`,
+`📩 DM líderes: **${Number(m.eventsDmLideres || 0)}**`,
+`🕒 Bate ponto: **${Number(m.eventsBatePonto || 0)}**`,
+`🧩 Criar evento: **${Number(m.eventsEvt3 || 0)}**`,
+`⚡ Poderes eventos: **${Number(m.eventsPoderes || 0)}**`,
+`📋 Registros de poderes: **${Number(m.eventsRegistrosPoderes || 0)}**`,
           "",
-          `📦 Total de pontos do mês: **${monthPoints}**`,
+          `🟠 Total registros do mês: **${monthPointsBySource.registrosTotal}**`,
+          `📦 Total geral do mês: **${monthPointsBySource.totalGeral}**`,
+        ].join("\n"),
+        inline: false,
+      },
+      {
+        name: "📊 Comparativo mensal",
+        value: [
+          `✅ Aprovados: **${Number(lastMonth.paymentsApproved || 0)} → ${Number(m.paymentsApproved || 0)}** ${diffText(Number(m.paymentsApproved || 0), Number(lastMonth.paymentsApproved || 0))}`,
+          `❌ Reprovados: **${Number(lastMonth.paymentsRejected || 0)} → ${Number(m.paymentsRejected || 0)}** ${diffText(Number(m.paymentsRejected || 0), Number(lastMonth.paymentsRejected || 0))}`,
+          `🟠 Registros gerais: **${getRegistrosTotal(lastMonth)} → ${getRegistrosTotal(m)}** ${diffText(getRegistrosTotal(m), getRegistrosTotal(lastMonth))}`,
         ].join("\n"),
         inline: false,
       },
@@ -1110,9 +1199,9 @@ function makeDashboardEmbed(stats) {
       }
     )
     .setImage(makeChartUrl(stats))
-    .setFooter({
-      text: `${DASH_MARKER} • Azul = pagamentos PAGO • Laranja = eventos/poderes • Semana Dom→Sáb`,
-    })
+.setFooter({
+  text: `${DASH_MARKER} • Azul = pagamentos PAGO • Laranja = registros gerais • Semana Dom→Sáb`,
+})
     .setTimestamp(new Date());
 
   return embed;
@@ -1281,7 +1370,18 @@ async function sendDebug(interaction, client) {
       "",
       `✅ Aprovados semana: **${Number(w.paymentsApproved || 0)}**`,
       `📦 Criados semana: **${Number(w.paymentsCreated || 0)}**`,
-      `🎉 Eventos semana: **${Number(w.eventsManual || 0) + Number(w.eventsPoderes || 0) + Number(w.eventsEvt3 || 0) + Number(w.eventsCrono || 0)}**`,
+      `🟠 Registros gerais semana: **${getRegistrosTotal(w)}**`,
+      `📦 Total geral semana: **${getPontosPorFonte(w).totalGeral}**`,
+      "",
+      `🏆 Hall semana: **${Number(w.eventsHall || 0)}**`,
+      `📆 Diários semana: **${Number(w.eventsDiarios || 0)}**`,
+      `🗓️ Cronograma semana: **${Number(w.eventsCronograma || 0)}**`,
+      `📩 DM líderes semana: **${Number(w.eventsDmLideres || 0)}**`,
+      `🕒 Bate ponto semana: **${Number(w.eventsBatePonto || 0)}**`,
+      `🧩 Criar evento semana: **${Number(w.eventsEvt3 || 0)}**`,
+      `⚡ Poderes semana: **${Number(w.eventsPoderes || 0)}**`,
+      `📋 Registros poderes semana: **${Number(w.eventsRegistrosPoderes || 0)}**`,
+      `📝 Eventos manuais semana: **${Number(w.eventsManual || 0)}**`,
       "",
       `📦 Criados mês: **${Number(m.paymentsCreated || 0)}**`,
       `✅ Aprovados mês: **${Number(m.paymentsApproved || 0)}**`,
@@ -1305,6 +1405,11 @@ export async function payEvtDashOnReady(client) {
   dashOn("halldafama:aprovado", () => scheduleUpdate(client, "dashOn:halldafama"));
   dashOn("eventosdiarios:aprovado", () => scheduleUpdate(client, "dashOn:eventosdiarios"));
 
+  dashOn("lideres:convite_enviado", () => scheduleUpdate(client, "dashOn:lideres"));
+  dashOn("bp:punch", () => scheduleUpdate(client, "dashOn:bateponto"));
+  dashOn("bp:sync", () => scheduleUpdate(client, "dashOn:bateponto"));
+  dashOn("poderes:registrado", () => scheduleUpdate(client, "dashOn:poderes"));
+
   dashOn("pagamento:criado", () => scheduleUpdate(client, "dashOn:pagamento:criado"));
   dashOn("pagamento:pago", () => scheduleUpdate(client, "dashOn:pagamento:pago"));
   dashOn("pagamento:solicitado", () => scheduleUpdate(client, "dashOn:pagamento:solicitado"));
@@ -1313,11 +1418,9 @@ export async function payEvtDashOnReady(client) {
 
   await renderDashboard(client, "ready", { force: true });
 
-  if (!client.__SC_PAY_EVT_DASH_V2_INTERVAL__) {
-    client.__SC_PAY_EVT_DASH_V2_INTERVAL__ = setInterval(() => {
-      renderDashboard(client, "interval:5min", { force: true }).catch(() => null);
-    }, 5 * 60 * 1000);
-  }
+  // ✅ Sem atualização automática por tempo.
+  // O dashboard só atualiza quando algum sistema emitir dashEmit(...)
+  // ou quando alguém clicar no botão "Atualizar agora".
 }
 
 export async function payEvtDashHandleMessage(message, client) {
