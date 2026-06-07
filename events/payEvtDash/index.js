@@ -27,6 +27,11 @@ const EVT3_EVENT_CHANNEL_ID = "1457573495952248883";
 const REGISTRO_EVENTO_CHANNEL_ID = "1392618646630568076";
 const CRONOGRAMA_LOGS_CHANNEL_ID = "1387864036259004436";
 
+// ✅ NOVO: logs/canais auxiliares para auditoria real
+const LIDERES_LOG_CHANNEL_ID = "1486009598237212793";
+const BATEPONTO_LOG_CHANNEL_ID = "1427956344148852856";
+const PODERES_EVENTOS_LOG_CHANNEL_ID = "1392618646630568076";
+
 const PAY_PERIOD_OK = 40;
 const PAY_PERIOD_GOAL = 50;
 const PAY_PERIOD_LIMIT = 70;
@@ -34,6 +39,9 @@ const PAY_PERIOD_LIMIT = 70;
 const DATA_DIR = path.resolve(process.cwd(), "data");
 const STATE_PATH = path.join(DATA_DIR, "sc_pay_evt_dashboard_v2_state.json");
 const ADJUST_PATH = path.join(DATA_DIR, "sc_pay_evt_manual_adjusts.json");
+
+// ✅ NOVO: pontos recebidos via dashEmit para não sumirem no recálculo
+const HUB_POINTS_PATH = path.join(DATA_DIR, "sc_pay_evt_hub_points.json");
 
 const DASH_MARKER = "SC_PAY_EVT_DASH_V2";
 
@@ -124,6 +132,68 @@ function saveAdjustment(weekKey, userId, amount) {
   const current = Number(data.byWeek[weekKey][userId] || 0);
   data.byWeek[weekKey][userId] = current + Number(amount);
   saveJSON(ADJUST_PATH, data);
+}
+
+
+function loadHubPoints() {
+  return loadJSON(HUB_POINTS_PATH, { items: {} });
+}
+
+function saveHubPoints(data) {
+  saveJSON(HUB_POINTS_PATH, data);
+}
+
+function saveHubPoint(kind, payload = {}) {
+  const data = loadHubPoints();
+
+  const userId =
+    payload.userId ||
+    payload.by ||
+    payload.authorId ||
+    payload.creatorId ||
+    null;
+
+  if (!userId) return;
+
+  const ts = Number(payload.at || payload.__at || Date.now());
+
+  const key =
+    payload.messageId
+      ? `hub:${kind}:msg:${payload.messageId}`
+      : `hub:${kind}:${userId}:${ts}`;
+
+  data.items[key] = {
+    key,
+    kind,
+    userId,
+    ts,
+    payload,
+  };
+
+  saveHubPoints(data);
+}
+
+function applyHubPoints(stats, seen) {
+  const data = loadHubPoints();
+
+  for (const item of Object.values(data.items || {})) {
+    if (!item?.key || seen.has(item.key)) {
+      stats.debug.duplicatesIgnored++;
+      continue;
+    }
+
+    seen.add(item.key);
+
+    addEvent(stats, {
+      key: item.key,
+      source: "dashHub",
+      kind: item.kind,
+      messageId: item.payload?.messageId || null,
+      channelId: item.payload?.channelId || null,
+      ts: Number(item.ts || Date.now()),
+      userId: item.userId,
+    });
+  }
 }
 
 function norm(text) {
@@ -409,6 +479,119 @@ function isCronoHallDailyEmbed(embed) {
     text.includes("eventos diários") ||
     text.includes("aprovado")
   );
+}
+
+// ✅ NOVO: pega texto completo da mensagem, embed, campos e conteúdo
+function getMessageFullText(msg) {
+  return [
+    msg?.content || "",
+    ...(msg?.embeds || []).map(getEmbedText),
+  ].join("\n");
+}
+
+// ✅ NOVO: identifica se foi aprovado de verdade
+function isApprovedText(text) {
+  const t = norm(text);
+
+  if (
+    t.includes("reprovado") ||
+    t.includes("recusado") ||
+    t.includes("negado") ||
+    t.includes("rejeitado")
+  ) {
+    return false;
+  }
+
+  return (
+    t.includes("aprovado") ||
+    t.includes("aprovada") ||
+    t.includes("aprovacao") ||
+    t.includes("aprovação") ||
+    t.includes("✅ aprovado") ||
+    t.includes("status aprovado")
+  );
+}
+
+// ✅ NOVO: identifica a fonte correta dentro do canal de aprovação/log
+function inferEventKindFromText(text, fallbackKind = null) {
+  const t = norm(text);
+
+  if (t.includes("hall da fama") || t.includes("halldafama")) return "hall";
+
+  if (
+    t.includes("eventos diarios") ||
+    t.includes("eventos diários") ||
+    t.includes("evento diario") ||
+    t.includes("evento diário")
+  ) {
+    return "diarios";
+  }
+
+  if (t.includes("cronograma")) return "cronograma";
+
+  if (
+    t.includes("dm lideres") ||
+    t.includes("dm líderes") ||
+    t.includes("convite para lideres") ||
+    t.includes("convite para líderes")
+  ) {
+    return "lideres";
+  }
+
+  if (
+    t.includes("bate ponto") ||
+    t.includes("bate-ponto") ||
+    t.includes("bp:punch") ||
+    t.includes("linha do tempo")
+  ) {
+    return "bateponto";
+  }
+
+  if (
+    t.includes("registro de poderes em evento") ||
+    t.includes("poderes em evento") ||
+    t.includes("poder evento")
+  ) {
+    return "poderes";
+  }
+
+  if (
+    t.includes("registro de poder") ||
+    t.includes("poder utilizado") ||
+    t.includes("poderes utilizados")
+  ) {
+    return "registros_poderes";
+  }
+
+  if (
+    t.includes("criar evento") ||
+    t.includes("evento criado") ||
+    t.includes("novo evento")
+  ) {
+    return "evt3";
+  }
+
+  if (
+    t.includes("registro manual") ||
+    t.includes("registro de evento") ||
+    t.includes("evento aprovado")
+  ) {
+    return "manual";
+  }
+
+  return fallbackKind;
+}
+
+// ✅ NOVO: extrai usuário também de texto/log, não só embed
+function getActorIdFromText(text) {
+  const raw = String(text || "");
+
+  const labeled =
+    raw.match(/(?:solicitante|aberto por|criado por|registrado por|feito por|respons[aá]vel|autor|usu[aá]rio|user id|id do usu[aá]rio)\D{0,40}(\d{17,20})/i);
+
+  if (labeled?.[1]) return labeled[1];
+
+  return extractUserId(raw);
 }
 
 function getFooterUserId(embed) {
@@ -840,6 +1023,54 @@ async function scanEventChannel(client, stats, seen, channelId, kind, matcher) {
   }
 }
 
+// ✅ NOVO: scan completo de logs/canais com classificação automática
+async function scanAuditChannel(client, stats, seen, channelId, fallbackKind = null, options = {}) {
+  const {
+    onlyApproved = false,
+    allowBotAuthorFallback = false,
+  } = options;
+
+  const messages = await fetchChannelMessages(client, channelId);
+  stats.debug.scannedChannels[channelId] = messages.length;
+
+  for (const msg of messages) {
+    const fullText = getMessageFullText(msg);
+    const kind = inferEventKindFromText(fullText, fallbackKind);
+
+    if (!kind) continue;
+
+    if (onlyApproved && !isApprovedText(fullText)) continue;
+
+    const key = `audit:${channelId}:${kind}:${msg.id}`;
+
+    if (seen.has(key)) {
+      stats.debug.duplicatesIgnored++;
+      continue;
+    }
+
+    const userId =
+      getActorIdFromText(fullText) ||
+      getActorIdFromEventEmbed(msg.embeds?.[0]) ||
+      (!msg.author?.bot || allowBotAuthorFallback ? msg.author?.id : null);
+
+    if (!userId) continue;
+
+    seen.add(key);
+
+    const date = dateFromBR(fullText, msg.createdTimestamp);
+
+    addEvent(stats, {
+      key,
+      source: channelId,
+      kind,
+      messageId: msg.id,
+      channelId: msg.channelId,
+      ts: date.getTime(),
+      userId,
+    });
+  }
+}
+
 async function collectDashboardData(client, force = false) {
   if (!force && CACHE.payload && Date.now() - CACHE.at < CACHE_TTL_MS) {
     return CACHE.payload;
@@ -850,10 +1081,32 @@ async function collectDashboardData(client, force = false) {
 
   await scanPayments(client, stats, seen);
   await scanPaymentLogs(client, stats, seen);
+
+  // ✅ Canais oficiais
   await scanEventChannel(client, stats, seen, REGISTRO_EVENTO_CHANNEL_ID, "manual", isEventManualEmbed);
-  await scanEventChannel(client, stats, seen, CH_PODERES_ID, "poderes", isPoderesEmbed);
+  await scanEventChannel(client, stats, seen, CH_PODERES_ID, "registros_poderes", isPoderesEmbed);
   await scanEventChannel(client, stats, seen, EVT3_EVENT_CHANNEL_ID, "evt3", isEventManualEmbed);
-  await scanEventChannel(client, stats, seen, CRONOGRAMA_LOGS_CHANNEL_ID, "cronograma", isCronoHallDailyEmbed);
+
+  // ✅ Canal de aprovação: só pontua aprovado e classifica Hall/Diários/Cronograma corretamente
+  await scanAuditChannel(client, stats, seen, CRONOGRAMA_LOGS_CHANNEL_ID, null, {
+    onlyApproved: true,
+  });
+
+  // ✅ Logs auxiliares
+  await scanAuditChannel(client, stats, seen, LIDERES_LOG_CHANNEL_ID, "lideres", {
+    onlyApproved: false,
+  });
+
+  await scanAuditChannel(client, stats, seen, BATEPONTO_LOG_CHANNEL_ID, "bateponto", {
+    onlyApproved: false,
+  });
+
+  await scanAuditChannel(client, stats, seen, PODERES_EVENTOS_LOG_CHANNEL_ID, "poderes", {
+    onlyApproved: false,
+  });
+
+  // ✅ Pontos em tempo real salvos via dashEmit
+  applyHubPoints(stats, seen);
 
   for (const user of Object.values(stats.users)) {
     user.pointsTotal = Number(user.pointsPayment || 0) + Number(user.pointsEvent || 0);
@@ -1387,7 +1640,11 @@ async function sendDebug(interaction, client) {
       `✅ Aprovados mês: **${Number(m.paymentsApproved || 0)}**`,
       "",
       `Canal pagamentos: **${stats.debug.scannedChannels[PAY_CHANNEL_ID] || 0} msgs**`,
-      `Canal logs: **${stats.debug.scannedChannels[PAY_LOG_CHANNEL_ID] || 0} msgs**`,
+      `Canal logs pagamentos: **${stats.debug.scannedChannels[PAY_LOG_CHANNEL_ID] || 0} msgs**`,
+      `Canal aprovação geral: **${stats.debug.scannedChannels[CRONOGRAMA_LOGS_CHANNEL_ID] || 0} msgs**`,
+      `Logs líderes: **${stats.debug.scannedChannels[LIDERES_LOG_CHANNEL_ID] || 0} msgs**`,
+      `Logs bate ponto: **${stats.debug.scannedChannels[BATEPONTO_LOG_CHANNEL_ID] || 0} msgs**`,
+      `Logs poderes/eventos: **${stats.debug.scannedChannels[PODERES_EVENTOS_LOG_CHANNEL_ID] || 0} msgs**`,
       `Recuperados por logs: **${stats.debug.recoveredFromLogs || 0}**`,
       `Duplicados ignorados: **${stats.debug.duplicatesIgnored || 0}**`,
     ].join("\n"),
@@ -1401,14 +1658,39 @@ export async function payEvtDashOnReady(client) {
   if (client.__SC_PAY_EVT_DASH_V2_READY__) return;
   client.__SC_PAY_EVT_DASH_V2_READY__ = true;
 
-  dashOn("cronograma:aprovado", () => scheduleUpdate(client, "dashOn:cronograma"));
-  dashOn("halldafama:aprovado", () => scheduleUpdate(client, "dashOn:halldafama"));
-  dashOn("eventosdiarios:aprovado", () => scheduleUpdate(client, "dashOn:eventosdiarios"));
+  dashOn("cronograma:aprovado", (payload = {}) => {
+    saveHubPoint("cronograma", payload);
+    scheduleUpdate(client, "dashOn:cronograma");
+  });
 
-  dashOn("lideres:convite_enviado", () => scheduleUpdate(client, "dashOn:lideres"));
-  dashOn("bp:punch", () => scheduleUpdate(client, "dashOn:bateponto"));
-  dashOn("bp:sync", () => scheduleUpdate(client, "dashOn:bateponto"));
-  dashOn("poderes:registrado", () => scheduleUpdate(client, "dashOn:poderes"));
+  dashOn("halldafama:aprovado", (payload = {}) => {
+    saveHubPoint("hall", payload);
+    scheduleUpdate(client, "dashOn:halldafama");
+  });
+
+  dashOn("eventosdiarios:aprovado", (payload = {}) => {
+    saveHubPoint("diarios", payload);
+    scheduleUpdate(client, "dashOn:eventosdiarios");
+  });
+
+  dashOn("lideres:convite_enviado", (payload = {}) => {
+    saveHubPoint("lideres", payload);
+    scheduleUpdate(client, "dashOn:lideres");
+  });
+
+  dashOn("bp:punch", (payload = {}) => {
+    saveHubPoint("bateponto", payload);
+    scheduleUpdate(client, "dashOn:bateponto");
+  });
+
+  dashOn("bp:sync", () => {
+    scheduleUpdate(client, "dashOn:bateponto");
+  });
+
+  dashOn("poderes:registrado", (payload = {}) => {
+    saveHubPoint("registros_poderes", payload);
+    scheduleUpdate(client, "dashOn:poderes");
+  });
 
   dashOn("pagamento:criado", () => scheduleUpdate(client, "dashOn:pagamento:criado"));
   dashOn("pagamento:pago", () => scheduleUpdate(client, "dashOn:pagamento:pago"));
@@ -1433,6 +1715,11 @@ export async function payEvtDashHandleMessage(message, client) {
     EVT3_EVENT_CHANNEL_ID,
     REGISTRO_EVENTO_CHANNEL_ID,
     CRONOGRAMA_LOGS_CHANNEL_ID,
+
+    // ✅ NOVO: qualquer movimentação nesses logs atualiza o dashboard
+    LIDERES_LOG_CHANNEL_ID,
+    BATEPONTO_LOG_CHANNEL_ID,
+    PODERES_EVENTOS_LOG_CHANNEL_ID,
   ]);
 
   if (autoUpdateChannels.has(message.channelId)) {
