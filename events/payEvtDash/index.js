@@ -20,9 +20,11 @@ const TZ = "America/Sao_Paulo";
 
 // Dashboard
 const DASH_CHANNEL_ID = "1457985700312911912";
-
 // Pagamentos
 const PAY_CHANNEL_ID = "1387922662134775818";
+
+// Logs de auditoria dos pagamentos
+const PAY_LOG_CHANNEL_ID = "1486084352403312843";
 
 // ✅ NOVO: Poderes Utilizados (para somar no Amarelo)
 const CH_PODERES_ID = "1374066813171929218";
@@ -82,9 +84,10 @@ const DEBUG = {
   stage: "",
   error: "",
   dashMsgId: null,
-
   scannedPayMsgs: 0,
   scannedPayRegs: 0,
+  scannedPayLogMsgs: 0,
+  scannedPayLogRecovered: 0,
   scannedEvtManualMsgs: 0,
   scannedPoderesMsgs: 0, // ✅ Debug
   scannedCronoMsgs: 0,
@@ -186,12 +189,17 @@ function addDaysUTC(dateUTC, days) {
 }
 
 function periodKeyFromDateSP(date) {
-  const sp = new Date(new Date(date).toLocaleString("en-US", { timeZone: TZ }));
-  const wd = new Intl.DateTimeFormat("en-US", { timeZone: TZ, weekday: "short" }).format(sp);
+  const baseDate = new Date(date);
+
+  const wd = new Intl.DateTimeFormat("en-US", {
+    timeZone: TZ,
+    weekday: "short",
+  }).format(baseDate);
+
   const map = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
   const dow = map[wd] ?? 0;
 
-  const { y, m, d } = ymdSP(sp);
+  const { y, m, d } = ymdSP(baseDate);
   const todayUTC = new Date(Date.UTC(y, m - 1, d));
   const sundayUTC = addDaysUTC(todayUTC, -dow);
   const saturdayUTC = addDaysUTC(sundayUTC, 6);
@@ -205,7 +213,6 @@ function periodKeyFromDateSP(date) {
 
   return { key, label };
 }
-
 function labelFromPeriodKey(key) {
   try {
     const [Y, M, D] = key.split("-").map(Number);
@@ -362,6 +369,121 @@ function getPaymentEventTimestamp(emb, fallbackTs) {
   return Number.isFinite(ts) ? ts : fallbackTs;
 }
 
+function extractDiscordMessageLinksFromText(text) {
+  const raw = String(text || "");
+  const matches = [...raw.matchAll(/https?:\/\/(?:canary\.|ptb\.)?discord(?:app)?\.com\/channels\/(\d+)\/(\d+)\/(\d+)/gi)];
+
+  return matches.map((m) => ({
+    guildId: m[1],
+    channelId: m[2],
+    messageId: m[3],
+    url: m[0],
+  }));
+}
+
+function extractPaymentLogLinks(emb) {
+  const links = [];
+
+  const desc = String(emb?.description || emb?.data?.description || "");
+  links.push(...extractDiscordMessageLinksFromText(desc));
+
+  for (const field of getFields(emb)) {
+    links.push(...extractDiscordMessageLinksFromText(field?.value || ""));
+  }
+
+  const unique = new Map();
+  for (const link of links) {
+    unique.set(`${link.channelId}:${link.messageId}`, link);
+  }
+
+  return [...unique.values()];
+}
+
+function isPaymentAuditLogEmbed(emb) {
+  const title = norm(emb?.title || emb?.data?.title || "");
+  const desc = norm(emb?.description || emb?.data?.description || "");
+
+  return (
+    title.includes("pagamento") ||
+    title.includes("novo pagamento") ||
+    title.includes("pagamento confirmado") ||
+    title.includes("pagamento reprovado") ||
+    title.includes("marcado como solicitado") ||
+    desc.includes("data do evento") ||
+    desc.includes("ganhador") ||
+    desc.includes("registro:")
+  );
+}
+
+async function fetchLinkedPaymentMessage(client, link) {
+  try {
+    if (!link?.channelId || !link?.messageId) return null;
+
+    const ch = await client.channels.fetch(link.channelId).catch(() => null);
+    if (!ch?.isTextBased?.()) return null;
+
+    return await ch.messages.fetch(link.messageId).catch(() => null);
+  } catch {
+    return null;
+  }
+}
+
+function pushPaymentFromEmbed({
+  emb,
+  fallbackTs,
+  sourceMessageId,
+  payments,
+  paymentsAll,
+  paymentsRejected,
+  seenPaymentMessages,
+}) {
+  if (!emb || !isPaymentRecordEmbed(emb)) return false;
+
+  const dedupeKey = String(sourceMessageId || "");
+  if (dedupeKey && seenPaymentMessages.has(dedupeKey)) return false;
+  if (dedupeKey) seenPaymentMessages.add(dedupeKey);
+
+  const uid = getPaymentRegistrarId(emb);
+  if (!uid) return false;
+
+  const paymentRealTs = getPaymentEventTimestamp(emb, fallbackTs);
+
+  const tsCreated = new Date(paymentRealTs);
+  const pAll = periodKeyFromDateSP(tsCreated);
+  DEBUG.payPeriodFoundAll[pAll.key] = (DEBUG.payPeriodFoundAll[pAll.key] || 0) + 1;
+
+  paymentsAll.push({
+    userId: String(uid),
+    ...periodInfoFromDateSP(tsCreated),
+    kind: "pay_all",
+  });
+
+  const st = getPaymentStatus(emb);
+  const tsStatus = new Date(paymentRealTs);
+  const pStatus = periodKeyFromDateSP(tsStatus);
+
+  if (st === "APPROVED") {
+    DEBUG.payPeriodFound[pStatus.key] = (DEBUG.payPeriodFound[pStatus.key] || 0) + 1;
+    DEBUG.payPeriodFoundApproved[pStatus.key] = (DEBUG.payPeriodFoundApproved[pStatus.key] || 0) + 1;
+
+    payments.push({
+      userId: String(uid),
+      ...periodInfoFromDateSP(tsStatus),
+      kind: "pay",
+    });
+  } else if (st === "REJECTED") {
+    DEBUG.payPeriodFoundRejected[pStatus.key] = (DEBUG.payPeriodFoundRejected[pStatus.key] || 0) + 1;
+
+    paymentsRejected.push({
+      userId: String(uid),
+      ...periodInfoFromDateSP(tsStatus),
+      kind: "pay_rejected",
+    });
+  }
+
+  return true;
+}
+
 function isManualEventEmbed(emb) {
   const t = norm(emb?.title || emb?.data?.title || "");
   // ✅ FIX: Garante que NÃO pega pagamentos (evita duplicar no amarelo)
@@ -475,6 +597,8 @@ async function collectAll(client) {
 
   DEBUG.scannedPayMsgs = 0;
   DEBUG.scannedPayRegs = 0;
+  DEBUG.scannedPayLogMsgs = 0;
+  DEBUG.scannedPayLogRecovered = 0;
   DEBUG.scannedEvtManualMsgs = 0;
   DEBUG.scannedPoderesMsgs = 0;
   DEBUG.scannedCronoMsgs = 0;
@@ -491,6 +615,8 @@ async function collectAll(client) {
   const events = [];
 
   // 1. PAGAMENTOS (Blue)
+  const seenPaymentMessages = new Set();
+
   const payCh = await client.channels.fetch(PAY_CHANNEL_ID).catch(() => null);
   if (payCh?.isTextBased?.()) {
     let lastId;
@@ -503,46 +629,70 @@ async function collectAll(client) {
         if (isTooOld(m.createdTimestamp)) { stopScan = true; break; }
 
         DEBUG.scannedPayMsgs++;
+
         const emb = m.embeds?.[0];
         if (!emb || !isPaymentRecordEmbed(emb)) continue;
 
-        DEBUG.scannedPayRegs++;
-        const uid = getPaymentRegistrarId(emb);
-        if (!uid) continue;
+        const added = pushPaymentFromEmbed({
+          emb,
+          fallbackTs: m.createdTimestamp,
+          sourceMessageId: m.id,
+          payments,
+          paymentsAll,
+          paymentsRejected,
+          seenPaymentMessages,
+        });
 
-        const paymentRealTs = getPaymentEventTimestamp(emb, m.createdTimestamp);
+        if (added) DEBUG.scannedPayRegs++;
+      }
 
-const tsCreated = new Date(paymentRealTs);
-const pAll = periodKeyFromDateSP(tsCreated);
-DEBUG.payPeriodFoundAll[pAll.key] = (DEBUG.payPeriodFoundAll[pAll.key] || 0) + 1;
+      if (stopScan) break;
+      lastId = batch.last()?.id;
+      if (!lastId) break;
+    }
+  }
 
-paymentsAll.push({
-  userId: String(uid),
-  ...periodInfoFromDateSP(tsCreated),
-  kind: "pay_all",
-});
+  // 1.1 BACKFILL DE PAGAMENTOS PELOS LOGS
+  // Usa o canal 1486084352403312843 para recuperar registros que não entraram pela varredura principal.
+  const payLogCh = await client.channels.fetch(PAY_LOG_CHANNEL_ID).catch(() => null);
+  if (payLogCh?.isTextBased?.()) {
+    let lastId;
 
-const st = getPaymentStatus(emb);
-const tsStatus = new Date(paymentRealTs);
-const pStatus = periodKeyFromDateSP(tsStatus);
+    for (let page = 0; page < SCAN_PAGES; page++) {
+      const batch = await payLogCh.messages.fetch({ limit: 100, before: lastId }).catch(() => null);
+      if (!batch?.size) break;
 
-        if (st === "APPROVED") {
-          DEBUG.payPeriodFound[pStatus.key] = (DEBUG.payPeriodFound[pStatus.key] || 0) + 1;
-          DEBUG.payPeriodFoundApproved[pStatus.key] = (DEBUG.payPeriodFoundApproved[pStatus.key] || 0) + 1;
-          payments.push({
-  userId: String(uid),
-  ...periodInfoFromDateSP(tsStatus),
-  kind: "pay",
-});
-        } else if (st === "REJECTED") {
-          DEBUG.payPeriodFoundRejected[pStatus.key] = (DEBUG.payPeriodFoundRejected[pStatus.key] || 0) + 1;
-          paymentsRejected.push({
-  userId: String(uid),
-  ...periodInfoFromDateSP(tsStatus),
-  kind: "pay_rejected",
-});
+      let stopScan = false;
+
+      for (const m of batch.values()) {
+        if (isTooOld(m.createdTimestamp)) { stopScan = true; break; }
+
+        DEBUG.scannedPayLogMsgs++;
+
+        const embLog = m.embeds?.[0];
+        if (!embLog || !isPaymentAuditLogEmbed(embLog)) continue;
+
+        const links = extractPaymentLogLinks(embLog);
+        if (!links.length) continue;
+
+        for (const link of links) {
+          const linkedMsg = await fetchLinkedPaymentMessage(client, link);
+          const embPayment = linkedMsg?.embeds?.[0];
+
+          const added = pushPaymentFromEmbed({
+            emb: embPayment,
+            fallbackTs: linkedMsg?.createdTimestamp || m.createdTimestamp,
+            sourceMessageId: linkedMsg?.id || link.messageId,
+            payments,
+            paymentsAll,
+            paymentsRejected,
+            seenPaymentMessages,
+          });
+
+          if (added) DEBUG.scannedPayLogRecovered++;
         }
       }
+
       if (stopScan) break;
       lastId = batch.last()?.id;
       if (!lastId) break;
@@ -1195,9 +1345,8 @@ const ok = await safeUpdate(client, "manual force refresh");
 await interaction.editReply({
   content: ok
     ? "✅ Dashboard semanal recalculado e atualizado com sucesso."
-    : "⚠️ Já tinha uma atualização rodando. Tenta clicar novamente em alguns segundos.",
+    : "⏳ Já tinha uma atualização rodando. Deixei outra atualização pendente para rodar automaticamente em seguida.",
 }).catch(() => {});
-
     return true;
   }
 
