@@ -602,14 +602,27 @@ function pagamentos_getRegistrarId(emb) {
 // Helper para Pagamento Social (Backfill)
 function pagamento_getStatus(emb) {
   const fields = getFields(emb);
-  // ✅ FIX: Checa o VALOR do campo de status, não o nome.
-  const statusField = fields.find(f => norm(f.name).includes("status"));
-  const statusValue = norm(statusField?.value || "");
 
-  const isPago = statusValue.includes("pago");
-  const isReprovado = statusValue.includes("reprovado");
-  const isSolicitado = statusValue.includes("solicitado");
-  
+  // ✅ Checa SOMENTE o VALOR do campo Status.
+  // ✅ Pago só conta quando o status final for exatamente "✅ PAGO".
+  // ✅ Criado, aguardando, solicitado e reprovado NÃO contam como pago.
+  const statusField = fields.find((f) => norm(f?.name).includes("status"));
+  const rawStatusValue = String(statusField?.value || "");
+  const statusValue = norm(rawStatusValue);
+
+  const isPago =
+    /✅\s*\*{0,2}PAGO\*{0,2}/i.test(rawStatusValue) ||
+    /^pago\b/i.test(statusValue);
+
+  const isReprovado =
+    /❌\s*\*{0,2}REPROVADO\*{0,2}/i.test(rawStatusValue) ||
+    /^reprovado\b/i.test(statusValue);
+
+  const isSolicitado =
+    /JÁ FOI SOLICITADO|JA FOI SOLICITADO/i.test(rawStatusValue) ||
+    statusValue.includes("ja foi solicitado") ||
+    statusValue.includes("solicitado");
+
   return { isPago, isReprovado, isSolicitado };
 }
 

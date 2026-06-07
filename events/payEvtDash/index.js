@@ -72,6 +72,8 @@ const ADJUSTMENTS_PATH = path.join(DATA_DIR, "sc_pay_evt_adjustments.json");
 // =========================
 let LOCK = false;
 let LOCK_TS = 0;
+let PENDING_UPDATE = false;
+let PENDING_REASON = "";
 let CACHE = { at: 0, payload: null };
 
 const DEBUG = {
@@ -307,12 +309,27 @@ function getPaymentStatus(emb) {
   const fields = getFields(emb);
   const statusField = fields.find((x) => {
     const n = norm(x?.name);
-    return n.includes("status") || n.includes("situacao") || n.includes("aprov") || n.includes("resultado");
+    return n.includes("status") || n.includes("situacao") || n.includes("resultado");
   });
-  const raw = norm(statusField?.value || "");
+
+  const rawOriginal = String(statusField?.value || "");
+  const raw = norm(rawOriginal);
+
   if (!raw) return "UNKNOWN";
-  if (raw.includes("pago") || raw.includes("aprov") || raw.includes("confirmado")) return "APPROVED";
-  if (raw.includes("reprov") || raw.includes("recus") || raw.includes("negad")) return "REJECTED";
+
+  const isPago =
+    /✅\s*\*{0,2}PAGO\*{0,2}/i.test(rawOriginal) ||
+    /^pago\b/i.test(raw);
+
+  const isReprovado =
+    /❌\s*\*{0,2}REPROVADO\*{0,2}/i.test(rawOriginal) ||
+    /^reprovado\b/i.test(raw) ||
+    raw.includes("recus") ||
+    raw.includes("negad");
+
+  if (isPago) return "APPROVED";
+  if (isReprovado) return "REJECTED";
+
   return "UNKNOWN";
 }
 
@@ -414,7 +431,7 @@ function poderes_getUserId(emb) {
 // =========================
 // DASHBOARD MSG RECOVERY
 // =========================
-const DASH_EMBED_TITLE_MATCH = "Dashboard — Registros (Pagamentos + Eventos)";
+const DASH_EMBED_TITLE_MATCH = "Dashboard — Registros SantaCreators";
 
 function looksLikeOurDashMessage(msg, client) {
   try {
@@ -947,7 +964,18 @@ const lastKey = periodKeyFromDateSP(addDaysUTC(new Date(`${currentWk}T12:00:00Z`
     st.lastFingerprint = "";
   }
 
-  if (st.lastFingerprint === fingerprint && reason !== "manual" && !periodChanged) return;
+  const reasonText = String(reason || "");
+
+  const isForcedUpdate =
+    reasonText.includes("manual") ||
+    reasonText.includes("force") ||
+    reasonText.includes("message:") ||
+    reasonText.includes("pagamento:") ||
+    reasonText.includes("cronograma") ||
+    reasonText.includes("halldafama") ||
+    reasonText.includes("eventosdiarios");
+
+  if (st.lastFingerprint === fingerprint && !isForcedUpdate && !periodChanged) return;
 
   // Build Chart
   let files = [];
@@ -1037,15 +1065,55 @@ const row = new ActionRowBuilder().addComponents(
 }
 
 async function safeUpdate(client, reason) {
-  if (LOCK) return;
+  if (LOCK) {
+    PENDING_UPDATE = true;
+    PENDING_REASON = String(reason || "pending");
+    log("Update em andamento. Nova atualização ficou pendente:", reason);
+    return false;
+  }
+
   LOCK = true;
+  LOCK_TS = Date.now();
+
   try {
-    if (reason.includes("manual")) CACHE.payload = null; // Force refresh
+    const reasonText = String(reason || "");
+
+    if (
+      reasonText.includes("manual") ||
+      reasonText.includes("force") ||
+      reasonText.includes("message:") ||
+      reasonText.includes("pagamento:") ||
+      reasonText.includes("cronograma") ||
+      reasonText.includes("halldafama") ||
+      reasonText.includes("eventosdiarios") ||
+      PENDING_UPDATE
+    ) {
+      CACHE = { at: 0, payload: null };
+
+      const st = loadState();
+      st.lastFingerprint = "";
+      saveState(st);
+    }
+
     await upsertDashboard(client, reason);
+    return true;
   } catch (e) {
+    DEBUG.error = e?.stack || e?.message || String(e);
     console.error("[SC_PAY_EVT_DASH] Update error:", e);
+    return false;
   } finally {
     LOCK = false;
+    LOCK_TS = 0;
+
+    if (PENDING_UPDATE) {
+      const nextReason = PENDING_REASON || "pending";
+      PENDING_UPDATE = false;
+      PENDING_REASON = "";
+
+      setTimeout(() => {
+        safeUpdate(client, `pending:${nextReason}`).catch(() => {});
+      }, 1500);
+    }
   }
 }
 
@@ -1059,20 +1127,32 @@ export async function payEvtDashOnReady(client) {
   dashOn("cronograma:aprovado", () => safeUpdate(client, "cronograma"));
   dashOn("halldafama:aprovado", () => safeUpdate(client, "halldafama"));
   dashOn("eventosdiarios:aprovado", () => safeUpdate(client, "eventosdiarios"));
-  dashOn("pagamento:pago", () => safeUpdate(client, "pagamento"));
+
+  dashOn("pagamento:criado", () => safeUpdate(client, "pagamento:criado"));
+  dashOn("pagamento:pago", () => safeUpdate(client, "pagamento:pago"));
+  dashOn("pagamento:solicitado", () => safeUpdate(client, "pagamento:solicitado"));
+  dashOn("pagamento:reprovado", () => safeUpdate(client, "pagamento:reprovado"));
+  dashOn("pagamento:status", () => safeUpdate(client, "pagamento:status"));
 
   await safeUpdate(client, "ready");
   setInterval(() => safeUpdate(client, "interval"), 5 * 60 * 1000);
 }
 
 export async function payEvtDashHandleMessage(message, client) {
-  if (!message.guild || message.author.bot) return false;
-  
-  // Detecta novo registro manual de evento
-  if (message.channelId === REGISTRO_EVENTO_CHANNEL_ID && message.author.id === client.user.id) {
-    setTimeout(() => safeUpdate(client, "new manual event"), 2000);
-    return false;
+  if (!message.guild) return false;
+
+  const autoUpdateChannels = new Set([
+    PAY_CHANNEL_ID,
+    REGISTRO_EVENTO_CHANNEL_ID,
+    CH_PODERES_ID,
+    CRONOGRAMA_LOGS_CHANNEL_ID,
+  ]);
+
+  if (autoUpdateChannels.has(message.channelId)) {
+    setTimeout(() => safeUpdate(client, `message:${message.channelId}`), 2500);
   }
+
+  if (message.author.bot) return false;
 
   const content = String(message.content || "").trim().toLowerCase();
 
@@ -1110,11 +1190,13 @@ export async function payEvtDashHandleInteraction(interaction, client) {
     st.lastFingerprint = "";
     saveState(st);
 
-    await safeUpdate(client, "manual force refresh");
+const ok = await safeUpdate(client, "manual force refresh");
 
-    await interaction.editReply({
-      content: "✅ Dashboard semanal recalculado e atualizado com sucesso.",
-    }).catch(() => {});
+await interaction.editReply({
+  content: ok
+    ? "✅ Dashboard semanal recalculado e atualizado com sucesso."
+    : "⚠️ Já tinha uma atualização rodando. Tenta clicar novamente em alguns segundos.",
+}).catch(() => {});
 
     return true;
   }

@@ -3531,7 +3531,12 @@ const msgNova = await canal.send({ embeds: [embedAtualizado] }).catch(() => null
       getFieldValue(embedOriginal, "📆 Data") ||
       "";
 
-    const pagamentoAt = Date.now();
+    const dataEventoTimestamp = dataEventoParaTimestampSP(
+      dataEventoEmbed,
+      msgOriginal.createdTimestamp || Date.now()
+    );
+
+    const pagamentoAt = dataEventoTimestamp || Date.now();
 
     dashEmit(map[action] || "pagamento:status", {
       __at: pagamentoAt,
@@ -3542,10 +3547,7 @@ const msgNova = await canal.send({ embeds: [embedAtualizado] }).catch(() => null
       oldMessageId: msgOriginal.id,
       newMessageId: msgNova.id,
       dataEvento: dataEventoEmbed,
-      dataEventoTimestamp: dataEventoParaTimestampSP(
-        dataEventoEmbed,
-        msgOriginal.createdTimestamp || Date.now()
-      ),
+      dataEventoTimestamp,
       dedupeKey: `pagamento_social:${action}:${msgOriginal.id}`,
     });
   } catch {}
