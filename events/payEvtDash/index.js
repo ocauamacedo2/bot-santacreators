@@ -52,9 +52,9 @@ const ALLOWED_MANAGE_ROLES = [
 ];
 
 const SCAN_CONFIG = {
-  pagesPerChannel: 60,
+  pagesPerChannel: 8,
   fetchLimit: 100,
-  maxAgeDays: 60,
+  maxAgeDays: 14,
 };
 
 let LOCK = false;
@@ -532,8 +532,17 @@ function addEvent(stats, item) {
 }
 
 async function fetchChannelMessages(client, channelId, pages = SCAN_CONFIG.pagesPerChannel) {
-  const channel = await client.channels.fetch(channelId).catch(() => null);
-  if (!channel || !channel.isTextBased()) return [];
+  console.log("[SC_PAY_EVT_DASH_V2] lendo canal:", channelId);
+
+  const channel = await client.channels.fetch(channelId).catch((err) => {
+    console.warn("[SC_PAY_EVT_DASH_V2] falha ao buscar canal:", channelId, err?.message || err);
+    return null;
+  });
+
+  if (!channel || !channel.isTextBased()) {
+    console.warn("[SC_PAY_EVT_DASH_V2] canal inválido ou sem acesso:", channelId);
+    return [];
+  }
 
   const out = [];
   let before = null;
@@ -542,7 +551,13 @@ async function fetchChannelMessages(client, channelId, pages = SCAN_CONFIG.pages
     const options = { limit: SCAN_CONFIG.fetchLimit };
     if (before) options.before = before;
 
-    const batch = await channel.messages.fetch(options).catch(() => null);
+    console.log("[SC_PAY_EVT_DASH_V2] página:", page + 1, "/", pages, "canal:", channelId);
+
+    const batch = await channel.messages.fetch(options).catch((err) => {
+      console.warn("[SC_PAY_EVT_DASH_V2] falha ao buscar mensagens:", channelId, err?.message || err);
+      return null;
+    });
+
     if (!batch || batch.size === 0) break;
 
     const arr = [...batch.values()];
@@ -557,9 +572,9 @@ async function fetchChannelMessages(client, channelId, pages = SCAN_CONFIG.pages
     }
   }
 
+  console.log("[SC_PAY_EVT_DASH_V2] canal finalizado:", channelId, "mensagens:", out.length);
   return out;
 }
-
 async function fetchLinkedMessage(client, link) {
   if (!link?.channelId || !link?.messageId) return null;
 
