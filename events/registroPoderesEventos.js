@@ -18,6 +18,7 @@ const SC_PWR_LEMBRETES_CHANNEL_ID = "1486006779425853582";
 
 // ✅ NOVO: canal que o GeralDash / Ranking escaneiam para EVENTO / EVENTO PODER
 const SC_PWR_EVENTOS_LOG_CHANNEL_ID = "1392618646630568076";
+const SC_PWR_AUDIT_LOG_CH_ID = "1513320054568259835";
 
 const SC_PWR_ALLOWED_USER_IDS = new Set([
   "1262262852949905408", // owner
@@ -48,6 +49,33 @@ if (!globalThis.__SC_PWR_EVENTOS_MODULE_STATE__) {
 
 const SC_PWR_STATE = globalThis.__SC_PWR_EVENTOS_MODULE_STATE__;
 const SC_PWR_SUBMIT_LOCK_MS = 5000;
+
+async function sendAuditPowerLog(client, guild, member, data, msg) {
+  const ch = await client.channels.fetch(SC_PWR_AUDIT_LOG_CH_ID).catch(() => null);
+  if (!ch || !ch.isTextBased()) return;
+
+  const now = Date.now();
+  const embed = new EmbedBuilder()
+    .setTitle("📋 Log: Poder de Evento Setado")
+    .setColor("Green")
+    .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
+    .addFields(
+      { name: "👤 Autor", value: `${member} (\`${member.id}\`)`, inline: true },
+      { name: "🔗 Perfil", value: `Clique aqui`, inline: true },
+      { name: "📍 Mensagem", value: `Ir para mensagem`, inline: true },
+      { name: "👤 Alvo", value: `<@${data.alvoId}> (\`${data.alvoId}\`)`, inline: true },
+      { name: "⚡ Poder", value: `\`${data.poder}\``, inline: true },
+      { name: "🕒 Horário", value: `<t:${Math.floor(now / 1000)}:R>`, inline: true },
+      { name: "📝 Observações", value: `\`\`\`\n${data.obs || "Nenhuma"}\n\`\`\``, inline: false },
+      { name: "🔔 Lembrete", value: "Programado para 2h30 após o envio.", inline: false },
+      { name: "🕒 Enviado em", value: `<t:${Math.floor(now / 1000)}:F>`, inline: false }
+    )
+    .setFooter({ text: "SantaCreators • Auditoria de Poderes em Evento" })
+    .setTimestamp();
+
+  await ch.send({ content: `${member}`, embeds: [embed] }).catch(() => {});
+}
+
 
 // ======= HELPERS =======
 function SC_PWR_hasPermission(member) {
@@ -378,6 +406,9 @@ try {
 } catch (e) {
   console.error("[SC_PWR] Falha ao emitir dash event eventopoder:registrado:", e);
 }
+
+          // ✅ Envia o log de auditoria
+          if (registroMsg) await sendAuditPowerLog(client, guild, interaction.member, { alvoId: idStr, poder, obs }, registroMsg);
 
           await interaction.reply({
             content: `✅ Registro criado com sucesso para <@${alvoUser.id}> — **${poder}**.\nVocê ganhou **+1 ponto** no Geral/Semanal.\nUm lembrete será enviado em **2h30**.`,

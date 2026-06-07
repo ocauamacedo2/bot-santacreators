@@ -29,14 +29,30 @@ const CRONOGRAMA_LOGS_CHANNEL_ID = "1387864036259004436";
 
 // ✅ NOVO: logs/canais auxiliares para auditoria real
 const LIDERES_LOG_CHANNEL_ID = "1486009598237212793";
-const BATEPONTO_LOG_CHANNEL_ID = "1427956344148852856";
-const PODERES_EVENTOS_LOG_CHANNEL_ID = "1392618646630568076";
+
+// ✅ Bate ponto: canais individuais + canal calendário/log oficial
+const BATEPONTO_CHANNEL_IDS = [
+  "1417601634644525147",
+  "1417602111495077920",
+  "1417601906305536101",
+  "1417602334036463656",
+  "1425943893400227892",
+];
+
+const BATEPONTO_CALENDAR_LOG_CHANNEL_ID = "1486006809679364197";
+
+// ✅ Registro de poderes em evento vem do registroevento.js
+const PODERES_EVENTOS_LOG_CHANNEL_ID = "1513320054568259835";
 
 const PAY_PERIOD_OK = 40;
 const PAY_PERIOD_GOAL = 50;
 const PAY_PERIOD_LIMIT = 70;
 
 const DATA_DIR = path.resolve(process.cwd(), "data");
+
+// ✅ Fonte oficial em disco do bate ponto
+const BP_MONTHLY_DIR = path.join(DATA_DIR, "sc_bp_monthly");
+
 const STATE_PATH = path.join(DATA_DIR, "sc_pay_evt_dashboard_v2_state.json");
 const ADJUST_PATH = path.join(DATA_DIR, "sc_pay_evt_manual_adjusts.json");
 
@@ -594,6 +610,70 @@ function getActorIdFromText(text) {
   return extractUserId(raw);
 }
 
+
+function makeTextFingerprint(text) {
+  return norm(text)
+    .replace(/<@!?\d+>/g, "")
+    .replace(/\d{17,20}/g, "")
+    .replace(/https?:\/\/\S+/g, "")
+    .replace(/discord(?:app)?\.com\/channels\/\S+/g, "")
+    .replace(/\b\d{1,2}:\d{2}\b/g, "")
+    .replace(/\b\d{1,2}[\/.-]\d{1,2}(?:[\/.-]\d{2,4})?\b/g, "")
+    .replace(/[^a-z0-9 ]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 180);
+}
+
+function readJSONSafe(file, fallback) {
+  try {
+    if (!fs.existsSync(file)) return fallback;
+    return JSON.parse(fs.readFileSync(file, "utf8")) || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function scanBatePontoDisk(stats, seen) {
+  if (!fs.existsSync(BP_MONTHLY_DIR)) return;
+
+  const files = fs
+    .readdirSync(BP_MONTHLY_DIR)
+    .filter((f) => /^\d{4}-\d{2}\.json$/.test(f));
+
+  for (const file of files) {
+    const state = readJSONSafe(path.join(BP_MONTHLY_DIR, file), null);
+    if (!state?.days || typeof state.days !== "object") continue;
+
+    for (const [dayKey, arr] of Object.entries(state.days)) {
+      for (const entry of Array.isArray(arr) ? arr : []) {
+        const userId = entry.uid || entry.userId || entry.id;
+        if (!userId) continue;
+
+        const time = entry.time || entry.timeStr || entry.at || "sem-hora";
+        const key = `bp:disk:${dayKey}:${userId}:${time}`;
+
+        if (seen.has(key)) {
+          stats.debug.duplicatesIgnored++;
+          continue;
+        }
+
+        seen.add(key);
+
+        addEvent(stats, {
+          key,
+          source: "bp_disk",
+          kind: "bateponto",
+          messageId: null,
+          channelId: null,
+          ts: new Date(`${dayKey}T12:00:00-03:00`).getTime(),
+          userId,
+        });
+      }
+    }
+  }
+}
+
 function getFooterUserId(embed) {
   const footer = String(embed?.footer?.text || embed?.data?.footer?.text || "");
   const match = footer.match(/User ID:\s*(\d{17,20})/i);
@@ -1028,6 +1108,7 @@ async function scanAuditChannel(client, stats, seen, channelId, fallbackKind = n
   const {
     onlyApproved = false,
     allowBotAuthorFallback = false,
+    dedupeByContent = false,
   } = options;
 
   const messages = await fetchChannelMessages(client, channelId);
@@ -1038,15 +1119,7 @@ async function scanAuditChannel(client, stats, seen, channelId, fallbackKind = n
     const kind = inferEventKindFromText(fullText, fallbackKind);
 
     if (!kind) continue;
-
     if (onlyApproved && !isApprovedText(fullText)) continue;
-
-    const key = `audit:${channelId}:${kind}:${msg.id}`;
-
-    if (seen.has(key)) {
-      stats.debug.duplicatesIgnored++;
-      continue;
-    }
 
     const userId =
       getActorIdFromText(fullText) ||
@@ -1055,9 +1128,19 @@ async function scanAuditChannel(client, stats, seen, channelId, fallbackKind = n
 
     if (!userId) continue;
 
-    seen.add(key);
-
     const date = dateFromBR(fullText, msg.createdTimestamp);
+    const period = periodKeyFromDateSP(date).key;
+
+    const key = dedupeByContent
+      ? `audit:${channelId}:${kind}:${userId}:${period}:${makeTextFingerprint(fullText)}`
+      : `audit:${channelId}:${kind}:${msg.id}`;
+
+    if (seen.has(key)) {
+      stats.debug.duplicatesIgnored++;
+      continue;
+    }
+
+    seen.add(key);
 
     addEvent(stats, {
       key,
@@ -1093,14 +1176,20 @@ async function collectDashboardData(client, force = false) {
   });
 
   // ✅ Logs auxiliares
-  await scanAuditChannel(client, stats, seen, LIDERES_LOG_CHANNEL_ID, "lideres", {
+  // ✅ NÃO escanear logs de DM líderes aqui.
+  // O sistema de líderes envia 1 único dashEmit por disparo geral.
+  // Se escanear o log, vai contar cada DM individual e explodir o número.
+
+  // ✅ Bate ponto: fonte oficial em disco
+  scanBatePontoDisk(stats, seen);
+
+  // ✅ Bate ponto: fallback pelo canal calendário/log
+  await scanAuditChannel(client, stats, seen, BATEPONTO_CALENDAR_LOG_CHANNEL_ID, "bateponto", {
     onlyApproved: false,
+    dedupeByContent: true,
   });
 
-  await scanAuditChannel(client, stats, seen, BATEPONTO_LOG_CHANNEL_ID, "bateponto", {
-    onlyApproved: false,
-  });
-
+  // ✅ Poderes em evento: apenas registroevento.js
   await scanAuditChannel(client, stats, seen, PODERES_EVENTOS_LOG_CHANNEL_ID, "poderes", {
     onlyApproved: false,
   });
@@ -1642,9 +1731,9 @@ async function sendDebug(interaction, client) {
       `Canal pagamentos: **${stats.debug.scannedChannels[PAY_CHANNEL_ID] || 0} msgs**`,
       `Canal logs pagamentos: **${stats.debug.scannedChannels[PAY_LOG_CHANNEL_ID] || 0} msgs**`,
       `Canal aprovação geral: **${stats.debug.scannedChannels[CRONOGRAMA_LOGS_CHANNEL_ID] || 0} msgs**`,
-      `Logs líderes: **${stats.debug.scannedChannels[LIDERES_LOG_CHANNEL_ID] || 0} msgs**`,
-      `Logs bate ponto: **${stats.debug.scannedChannels[BATEPONTO_LOG_CHANNEL_ID] || 0} msgs**`,
-      `Logs poderes/eventos: **${stats.debug.scannedChannels[PODERES_EVENTOS_LOG_CHANNEL_ID] || 0} msgs**`,
+      `Logs líderes: **não escaneado para pontuação**`,
+      `Bate ponto calendário: **${stats.debug.scannedChannels[BATEPONTO_CALENDAR_LOG_CHANNEL_ID] || 0} msgs**`,
+      `Poderes eventos: **${stats.debug.scannedChannels[PODERES_EVENTOS_LOG_CHANNEL_ID] || 0} msgs**`,
       `Recuperados por logs: **${stats.debug.recoveredFromLogs || 0}**`,
       `Duplicados ignorados: **${stats.debug.duplicatesIgnored || 0}**`,
     ].join("\n"),
@@ -1718,7 +1807,8 @@ export async function payEvtDashHandleMessage(message, client) {
 
     // ✅ NOVO: qualquer movimentação nesses logs atualiza o dashboard
     LIDERES_LOG_CHANNEL_ID,
-    BATEPONTO_LOG_CHANNEL_ID,
+    BATEPONTO_CALENDAR_LOG_CHANNEL_ID,
+    ...BATEPONTO_CHANNEL_IDS,
     PODERES_EVENTOS_LOG_CHANNEL_ID,
   ]);
 

@@ -27,6 +27,7 @@ import {
 
 // -------- CONFIG --------
 const ALINV1_MENU_CHANNEL_ID = "1425256185707233301"; // Canal do botão/menu e onde os registros são postados
+const ALINV1_AUDIT_LOG_CH_ID = "1486006930492362893";
 const gifalinhamento =
   "https://media.discordapp.net/attachments/1362477839944777889/1384245215249825832/standard_2rss.gif?ex=68e6b3d1&is=68e56251&hm=01e02a1446b7db9171771335faa2c546889c6d60024dbd5d844b4e15079d99ae&=";
 
@@ -133,6 +134,31 @@ function hasPerm(member) {
   if (!member) return false;
   if (constpermalinhamento.has(member.id)) return true; // por ID de usuário
   return member.roles?.cache?.some((r) => constpermalinhamento.has(r.id)) || false;
+}
+
+async function sendAuditAlinhamentoLog(client, member, data, msg, evolutionResult) {
+  const ch = await client.channels.fetch(ALINV1_AUDIT_LOG_CH_ID).catch(() => null);
+  if (!ch || !ch.isTextBased()) return;
+
+  const now = Date.now();
+  const embed = new EmbedBuilder()
+    .setTitle("🔮 Log: Novo Alinhamento")
+    .setColor("Purple")
+    .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
+    .addFields(
+      { name: "👤 Autor", value: `${member} (\`${member.id}\`)`, inline: true },
+      { name: "🔗 Perfil", value: `Clique aqui`, inline: true },
+      { name: "📍 Mensagem", value: `Ir para mensagem`, inline: true },
+      { name: "👤 Alvo", value: `${data.quemFoi}`, inline: true },
+      { name: "📜 Assunto", value: `\`${data.assunto}\``, inline: true },
+      { name: "🕒 Horário", value: `<t:${Math.floor(now / 1000)}:R>`, inline: true },
+      { name: "🧬 Evolução", value: evolutionResult.ok ? `Enviado para <#${evolutionResult.threadId || "Controle GI"}>` : "Não vinculado", inline: false },
+      { name: "🕒 Enviado em", value: `<t:${Math.floor(now / 1000)}:F>`, inline: false }
+    )
+    .setFooter({ text: "SantaCreators • Auditoria de Alinhamentos" })
+    .setTimestamp();
+
+  await ch.send({ content: `${member}`, embeds: [embed] }).catch(() => {});
 }
 
 function brNow() {
@@ -758,6 +784,9 @@ oldFields.push({
 } catch (e) {
   console.warn("[ALINV1] Falha ao linkar evolução no registro:", e?.message || e);
 }
+
+// ✅ Log de Auditoria
+await sendAuditAlinhamentoLog(client, interaction.member, { quemFoi: rawFoi, assunto: rawSobre }, msg, evolutionResult);
 
 await interaction.reply({
   content:

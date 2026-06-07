@@ -19,6 +19,7 @@ import { dashEmit } from "../utils/dashHub.js";
 // ================= CONFIGURAÇÃO =================
 const HALL_CHANNEL_ID = "1386503496353976470"; // Canal Oficial do Hall da Fama
 const APPROVAL_CHANNEL_ID = "1387864036259004436"; // Canal de Aprovação
+const HALL_AUDIT_LOG_CH_ID = "1486006930492362893";
 
 // Cargos Fixos para Menção
 const ROLE_CIDADAO = "1262978759922028575";
@@ -83,6 +84,31 @@ const CRONO_FILE = path.join(DATA_DIR, "cronograma_state.json"); // Lê o arquiv
 const ensureDir = () => { if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true }); };
 const saveState = (data) => { ensureDir(); fs.writeFileSync(STATE_FILE, JSON.stringify(data, null, 2)); };
 const loadState = () => { try { if (fs.existsSync(STATE_FILE)) return JSON.parse(fs.readFileSync(STATE_FILE, "utf8")); } catch {} return { pendingRequests: {} }; };
+
+async function sendAuditHallLog(client, member, data, msg) {
+  const ch = await client.channels.fetch(HALL_AUDIT_LOG_CH_ID).catch(() => null);
+  if (!ch || !ch.isTextBased()) return;
+
+  const now = Date.now();
+  const embed = new EmbedBuilder()
+    .setTitle("⭐ Log: Hall da Fama Publicado")
+    .setColor("Gold")
+    .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
+    .addFields(
+      { name: "👤 Aprovador", value: `${member} (\`${member.id}\`)`, inline: true },
+      { name: "🔗 Perfil", value: `Clique aqui`, inline: true },
+      { name: "📍 Mensagem", value: `Ir para mensagem`, inline: true },
+      { name: "🏁 Evento", value: `\`${data.eventName}\``, inline: true },
+      { name: "🌆 Cidade", value: `\`${data.cityDisplayName}\``, inline: true },
+      { name: "🕒 Horário", value: `<t:${Math.floor(now / 1000)}:R>`, inline: true },
+      { name: "🏆 Vencedores", value: data.winnersText.slice(0, 1000), inline: false },
+      { name: "🕒 Enviado em", value: `<t:${Math.floor(now / 1000)}:F>`, inline: false }
+    )
+    .setFooter({ text: "SantaCreators • Auditoria Hall da Fama" })
+    .setTimestamp();
+
+  await ch.send({ content: `${member}`, embeds: [embed] }).catch(() => {});
+}
 
 let state = loadState();
 
@@ -1140,6 +1166,9 @@ ${data.imageUrl}${data.imageUrl2 ? `\n${data.imageUrl2}` : ''}`;
       approverId: interaction.user.id,
       at: Date.now()
     });
+
+    // ✅ Log de Auditoria
+    await sendAuditHallLog(client, interaction.member, data, sentMsg);
 
 
     const embedApproved = EmbedBuilder.from(interaction.message.embeds[0])
