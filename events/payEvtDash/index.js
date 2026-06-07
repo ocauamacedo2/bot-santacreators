@@ -33,6 +33,7 @@ const PAY_PERIOD_LIMIT = 60;
 
 const DATA_DIR = path.resolve(process.cwd(), "data");
 const STATE_PATH = path.join(DATA_DIR, "sc_pay_evt_dashboard_v2_state.json");
+const ADJUST_PATH = path.join(DATA_DIR, "sc_pay_evt_manual_adjusts.json");
 
 const DASH_MARKER = "SC_PAY_EVT_DASH_V2";
 
@@ -111,6 +112,18 @@ function loadState() {
 
 function saveState(state) {
   saveJSON(STATE_PATH, state);
+}
+
+function loadAdjustments() {
+  return loadJSON(ADJUST_PATH, { byWeek: {} });
+}
+
+function saveAdjustment(weekKey, userId, amount) {
+  const data = loadAdjustments();
+  data.byWeek[weekKey] ??= {};
+  const current = Number(data.byWeek[weekKey][userId] || 0);
+  data.byWeek[weekKey][userId] = current + Number(amount);
+  saveJSON(ADJUST_PATH, data);
 }
 
 function norm(text) {
@@ -214,11 +227,13 @@ function isDashboardMonthAllowed(monthKey) {
 function dateFromBR(text, fallbackTs) {
   const raw = String(text || "");
   const m = raw.match(/\b(\d{1,2})[\/.-](\d{1,2})(?:[\/.-](\d{2,4}))?\b/);
-  if (!m) return new Date(fallbackTs || Date.now());
+  const msgDate = new Date(fallbackTs || Date.now());
+  
+  if (!m) return msgDate;
 
   const dia = Number(m[1]);
   const mes = Number(m[2]);
-  let ano = m[3] ? Number(m[3]) : ymdSP(new Date()).y;
+  let ano = m[3] ? Number(m[3]) : ymdSP(msgDate).y;
 
   if (ano < 100) ano = 2000 + ano;
   if (!Number.isFinite(dia) || !Number.isFinite(mes) || !Number.isFinite(ano)) {
@@ -226,8 +241,14 @@ function dateFromBR(text, fallbackTs) {
   }
 
   const d = new Date(`${ano}-${pad2(mes)}-${pad2(dia)}T12:00:00-03:00`);
-  if (Number.isNaN(d.getTime())) return new Date(fallbackTs || Date.now());
-  return d;
+  if (Number.isNaN(d.getTime())) return msgDate;
+
+  // ✅ LÓGICA DE DATA INTELIGENTE:
+  // Se a data informada for no FUTURO em relação à mensagem, usa a data da mensagem.
+  // Se for no PASSADO, usa a data informada (permite retroativo).
+  if (d.getTime() > msgDate.getTime() + 86400000) return msgDate;
+
+  return d; 
 }
 
 function getEmbedText(embed) {
@@ -433,6 +454,31 @@ function emptyStats() {
   };
 }
 
+function applyManualAdjustments(stats) {
+  const adjData = loadAdjustments();
+  const thisWeek = periodKeyFromDateSP(nowSP()).key;
+  const weekAdj = adjData.byWeek[thisWeek] || {};
+
+  for (const [uid, amount] of Object.entries(weekAdj)) {
+    const penalty = Number(amount);
+    if (penalty <= 0) continue;
+
+    // 1. Afeta o Cubo Azul (Contador Global da Semana)
+    const weekBucket = stats.byWeek[thisWeek];
+    if (weekBucket) {
+      weekBucket.paymentsApproved = Math.max(0, weekBucket.paymentsApproved - penalty);
+    }
+
+    // 2. Afeta o Ranking da Pessoa
+    const user = stats.users[uid];
+    if (user) {
+      user.paymentsApproved = Math.max(0, user.paymentsApproved - penalty);
+      user.pointsPayment = Math.max(0, user.pointsPayment - penalty);
+      user.pointsTotal = Math.max(0, user.pointsTotal - penalty);
+    }
+  }
+}
+
 function ensureUser(stats, userId) {
   if (!userId) return null;
 
@@ -470,7 +516,7 @@ function ensureBucket(stats, periodKey, monthKey) {
     paymentsCreated: 0,
     paymentsApproved: 0,
     paymentsRejected: 0,
-    paymentsRequested: 0,
+    paymentsRequested: 0, 
     eventsManual: 0,
     eventsPoderes: 0,
     eventsEvt3: 0,
@@ -594,8 +640,6 @@ function addEvent(stats, item) {
 }
 
 async function fetchChannelMessages(client, channelId, pages = SCAN_CONFIG.pagesPerChannel) {
-  console.log("[SC_PAY_EVT_DASH_V2] lendo canal:", channelId);
-
   const channel = await client.channels.fetch(channelId).catch((err) => {
     console.warn("[SC_PAY_EVT_DASH_V2] falha ao buscar canal:", channelId, err?.message || err);
     return null;
@@ -612,8 +656,6 @@ async function fetchChannelMessages(client, channelId, pages = SCAN_CONFIG.pages
   for (let page = 0; page < pages; page++) {
     const options = { limit: SCAN_CONFIG.fetchLimit };
     if (before) options.before = before;
-
-    console.log("[SC_PAY_EVT_DASH_V2] página:", page + 1, "/", pages, "canal:", channelId);
 
     const batch = await channel.messages.fetch(options).catch((err) => {
       console.warn("[SC_PAY_EVT_DASH_V2] falha ao buscar mensagens:", channelId, err?.message || err);
@@ -634,7 +676,6 @@ async function fetchChannelMessages(client, channelId, pages = SCAN_CONFIG.pages
     }
   }
 
-  console.log("[SC_PAY_EVT_DASH_V2] canal finalizado:", channelId, "mensagens:", out.length);
   return out;
 }
 async function fetchLinkedMessage(client, link) {
@@ -690,8 +731,6 @@ async function scanPayments(client, stats, seen) {
 }
 
 async function scanPaymentLogs(client, stats, seen) {
-  console.log("[SC_PAY_EVT_DASH_V2] iniciando leitura dos logs de pagamento");
-
   const logMessages = await fetchChannelMessages(client, PAY_LOG_CHANNEL_ID);
   stats.debug.scannedChannels[PAY_LOG_CHANNEL_ID] = logMessages.length;
 
@@ -700,10 +739,6 @@ async function scanPaymentLogs(client, stats, seen) {
 
   for (const msg of logMessages) {
     processedLogs++;
-
-    if (processedLogs % 100 === 0) {
-      console.log("[SC_PAY_EVT_DASH_V2] logs processados:", processedLogs, "/", logMessages.length);
-    }
 
     const allText = [
       msg.content || "",
@@ -756,12 +791,6 @@ async function scanPaymentLogs(client, stats, seen) {
       decisionUserId,
     });
   }
-
-  console.log("[SC_PAY_EVT_DASH_V2] logs de pagamento finalizados", {
-    totalLogs: logMessages.length,
-    linkedRecoveredAttempts,
-    recoveredFromLogs: stats.debug.recoveredFromLogs,
-  });
 }
 
 async function scanEventChannel(client, stats, seen, channelId, kind, matcher) {
@@ -804,22 +833,11 @@ async function collectDashboardData(client, force = false) {
   const stats = emptyStats();
   const seen = new Set();
 
-  console.log("[SC_PAY_EVT_DASH_V2] etapa 1/6: pagamentos");
   await scanPayments(client, stats, seen);
-
-  console.log("[SC_PAY_EVT_DASH_V2] etapa 2/6: logs pagamentos");
   await scanPaymentLogs(client, stats, seen);
-
-  console.log("[SC_PAY_EVT_DASH_V2] etapa 3/6: eventos manuais");
   await scanEventChannel(client, stats, seen, REGISTRO_EVENTO_CHANNEL_ID, "manual", isEventManualEmbed);
-
-  console.log("[SC_PAY_EVT_DASH_V2] etapa 4/6: poderes");
   await scanEventChannel(client, stats, seen, CH_PODERES_ID, "poderes", isPoderesEmbed);
-
-  console.log("[SC_PAY_EVT_DASH_V2] etapa 5/6: evt3");
   await scanEventChannel(client, stats, seen, EVT3_EVENT_CHANNEL_ID, "evt3", isEventManualEmbed);
-
-  console.log("[SC_PAY_EVT_DASH_V2] etapa 6/6: cronograma/hall/eventos diários");
   await scanEventChannel(client, stats, seen, CRONOGRAMA_LOGS_CHANNEL_ID, "crono", isCronoHallDailyEmbed);
 
   for (const user of Object.values(stats.users)) {
@@ -1034,7 +1052,7 @@ function makeDashboardEmbed(stats) {
         value: [
           `✅ Pagamentos PAGO: **${payApproved}**`,
           `❌ Reprovados: **${payRejected}**`,
-          `🎉 Eventos/Poderes: **${eventsTotal}**`,
+          `🟠 Eventos/Poderes: **${eventsTotal}**`,
           `📦 Pontos válidos: **${payApproved + eventsTotal}**`,
         ].join("\n"),
         inline: true,
@@ -1064,7 +1082,7 @@ function makeDashboardEmbed(stats) {
           "",
           `🎉 Eventos manuais: **${Number(m.eventsManual || 0)}**`,
           `⚡ Poderes: **${Number(m.eventsPoderes || 0)}**`,
-          `🧩 EVT3: **${Number(m.eventsEvt3 || 0)}**`,
+          `🧩 CRIOU EVENTO!: **${Number(m.eventsEvt3 || 0)}**`,
           `📅 Cronograma/Hall/Diários: **${Number(m.eventsCrono || 0)}**`,
           "",
           `📦 Total de pontos do mês: **${monthPoints}**`,
@@ -1167,14 +1185,16 @@ async function renderDashboard(client, reason = "manual", options = {}) {
   LOCK_TS = Date.now();
 
   try {
-    console.log("[SC_PAY_EVT_DASH_V2] atualização iniciada:", reason);
-
     const channel = await client.channels.fetch(DASH_CHANNEL_ID).catch(() => null);
     if (!channel || !channel.isTextBased()) {
       throw new Error(`Canal do dashboard não encontrado: ${DASH_CHANNEL_ID}`);
     }
 
     if (recreate) {
+      // ✅ APAGA FÍSICAMENTE A MENSAGEM ANTERIOR PARA NÃO DUPLICAR
+      const oldMsg = await findExistingDashboard(channel, client);
+      if (oldMsg) await oldMsg.delete().catch(() => null);
+
       saveState({
         dashboardMsgId: null,
         lastFingerprint: "",
@@ -1183,6 +1203,9 @@ async function renderDashboard(client, reason = "manual", options = {}) {
     }
 
     const stats = await collectDashboardData(client, force);
+    // ✅ APLICA OS AJUSTES ANTES DE GERAR O EMBED
+    applyManualAdjustments(stats);
+
     const embed = makeDashboardEmbed(stats);
     const row = makeDashboardRow();
 
@@ -1212,13 +1235,6 @@ async function renderDashboard(client, reason = "manual", options = {}) {
       lastFingerprint: fingerprint,
       lastUpdatedAt: Date.now(),
       lastReason: reason,
-    });
-
-    console.log("[SC_PAY_EVT_DASH_V2] dashboard atualizado:", {
-      reason,
-      messageId: msg.id,
-      payments: stats.payments.length,
-      events: stats.events.length,
     });
 
     return {
@@ -1434,14 +1450,31 @@ export async function payEvtDashHandleInteraction(interaction, client) {
       .setCustomId("PEV_ADJUST_MODAL")
       .setTitle("Ajuste manual do Dashboard");
 
-    const input = new TextInputBuilder()
-      .setCustomId("adjust_text")
-      .setLabel("Anotação do ajuste")
-      .setPlaceholder("Ex: ajuste feito manualmente após conferência dos logs")
+    const inputUser = new TextInputBuilder()
+      .setCustomId("adjust_user_id")
+      .setLabel("ID do Usuário")
+      .setPlaceholder("ID para retirar os pontos")
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true);
+
+    const inputAmount = new TextInputBuilder()
+      .setCustomId("adjust_amount")
+      .setLabel("Quantidade de pontos a RETIRAR")
+      .setPlaceholder("Ex: 5 (serão removidos 5 aprovados)")
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true);
+
+    const inputReason = new TextInputBuilder()
+      .setCustomId("adjust_reason")
+      .setLabel("Motivo do ajuste")
       .setStyle(TextInputStyle.Paragraph)
       .setRequired(true);
 
-    modal.addComponents(new ActionRowBuilder().addComponents(input));
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(inputUser),
+      new ActionRowBuilder().addComponents(inputAmount),
+      new ActionRowBuilder().addComponents(inputReason)
+    );
 
     await interaction.showModal(modal).catch(() => {});
     return true;
@@ -1450,11 +1483,22 @@ export async function payEvtDashHandleInteraction(interaction, client) {
   if (interaction.isModalSubmit() && interaction.customId === "PEV_ADJUST_MODAL") {
     await interaction.deferReply({ ephemeral: true }).catch(() => {});
 
-    const text = interaction.fields.getTextInputValue("adjust_text");
+    const targetId = interaction.fields.getTextInputValue("adjust_user_id").trim();
+    const amount = parseInt(interaction.fields.getTextInputValue("adjust_amount").trim());
+    const reason = interaction.fields.getTextInputValue("adjust_reason");
+
+    if (isNaN(amount) || amount <= 0) {
+      return interaction.editReply("❌ Informe uma quantidade válida (número positivo).");
+    }
+
+    const thisWeek = periodKeyFromDateSP(nowSP()).key;
+    saveAdjustment(thisWeek, targetId, amount);
 
     console.log("[SC_PAY_EVT_DASH_V2] ajuste manual registrado:", {
       by: interaction.user.id,
-      text,
+      targetId,
+      amount,
+      reason
     });
 
     const result = await renderDashboard(client, "modal:adjust", {
@@ -1463,7 +1507,7 @@ export async function payEvtDashHandleInteraction(interaction, client) {
 
     await interaction.editReply({
       content: result.ok
-        ? "✅ Ajuste registrado em log e dashboard recalculado."
+        ? `✅ Removido **${amount}** ponto(s) de <@${targetId}>. Cubo de aprovados atualizado.`
         : `❌ Ajuste registrado, mas falhei ao recalcular.\nMotivo: \`${result.error || result.message || "erro desconhecido"}\``,
     }).catch(() => {});
 
