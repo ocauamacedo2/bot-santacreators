@@ -71,10 +71,19 @@ function nowSP() {
   return new Date(new Date().toLocaleString("en-US", { timeZone: TZ }));
 }
 
-function hmToMinutes(hm) {
-  const m = /^(\d{1,2}):(\d{2})/.exec(String(hm || "").trim());
-  if (!m) return null;
-  return Number(m[1]) * 60 + Number(m[2]);
+/**
+ * Extrai todos os horários de uma string (ex: "19:00 e 21:00") 
+ * e converte para minutos desde a meia-noite.
+ */
+function extractAllTimesInMinutes(timeStr) {
+  const matches = String(timeStr || "").match(/(\d{1,2}):(\d{2})/g);
+  if (!matches) return [];
+  
+  return matches.map(m => {
+    const [h, min] = m.split(":").map(Number);
+    if (isNaN(h) || isNaN(min)) return null;
+    return h * 60 + min;
+  }).filter(v => v !== null);
 }
 
 function minutesNowSP() {
@@ -138,27 +147,45 @@ function getTodayEvents() {
   return events;
 }
 
-function getPhase(eventStartMinutes) {
-  const now = minutesNowSP();
+/**
+ * Calcula a diferença em minutos entre agora e o alvo, 
+ * lidando corretamente com a virada do dia (1440 minutos).
+ */
+function getMinutesDiff(now, target) {
+  let diff = target - now;
+  if (diff < -720) diff += 1440; // O alvo é "amanhã" em relação a agora
+  if (diff > 720) diff -= 1440;  // O alvo foi "ontem" em relação a agora
+  return diff;
+}
 
-  // ✅ Janelas maiores para o notifier não perder o disparo caso o bot reinicie/trave alguns minutos.
-  // O state já impede envio duplicado por fase, então pode deixar a janela maior sem floodar.
-  if (now >= eventStartMinutes - 70 && now < eventStartMinutes - 45) return "PRE_60";
-  if (now >= eventStartMinutes - 40 && now < eventStartMinutes - 10) return "PRE_30";
+/**
+ * Determina a fase do evento baseada na distância em minutos para o início.
+ * @param {number} diff Diferença (Target - Agora). Positivo = Futuro, Negativo = Passado.
+ */
+function getPhaseByDiff(diff) {
+  // Antes do evento
+  if (diff <= 70 && diff > 45) return "PRE_60";
+  if (diff <= 40 && diff > 10) return "PRE_30";
 
-  // ✅ Durante o evento
-  if (now >= eventStartMinutes && now < eventStartMinutes + 20) return "DURANTE";
+  // Durante o evento (nos primeiros 20 minutos)
+  if (diff <= 0 && diff > -20) return "DURANTE";
 
-  // ✅ Depois do início, lembrando bate-ponto
-  if (now >= eventStartMinutes + 20 && now < eventStartMinutes + 45) return "PONTO_25";
+  // 20 a 45 minutos depois: Cobrança de Bate-Ponto
+  if (diff <= -25 && diff > -45) return "PONTO_25";
 
-  // ✅ Pós-evento/checklist final
-  if (now >= eventStartMinutes + 50 && now < eventStartMinutes + 85) return "POS_CHECKLIST";
+  // 50 a 85 minutos depois: Checklist Final
+  if (diff <= -50 && diff > -85) return "POS_CHECKLIST";
 
-  // ✅ Cobrança extra de poderes depois
-  if (now >= eventStartMinutes + 90 && now < eventStartMinutes + 130) return "POS_PODERES";
+  // 90 a 130 minutos depois: Cobrança de Poderes
+  if (diff <= -90 && diff > -130) return "POS_PODERES";
 
   return null;
+}
+
+function getPhase(eventStartMinutes) {
+  const now = minutesNowSP();
+  const diff = getMinutesDiff(now, eventStartMinutes);
+  return getPhaseByDiff(diff);
 }
 
 function alreadySent(state, key) {
@@ -461,6 +488,157 @@ function buildRespReportEmbed(event, onlineMembers, offlineMembers) {
 }
 
 async function runNotifierTick(client, options = {}) {
+  const guild = client.guilds.cache.first();
+  if (!guild) {
+    console.log("[EventosChecklistNotifier] Nenhuma guilda encontrada.");
+    return;
+  }
+
+  const forceTest = Boolean(options.forceTest);
+  const testUserId = options.testUserId || null;
+
+  const state = loadJson(NOTIFIER_STATE_FILE, { sent: {} });
+  const events = getTodayEvents();
+  if (events.length > 0) console.log(`[EventosChecklistNotifier] Evento(s) encontrado(s): ${events.map(e => e.eventName).join(", ")}`);
+  
+  const nowMinutes = minutesNowSP();
+
+  for (const event of events) {
+    // Extrai todos os horários possíveis (suporta "21:00 ou 00:00")
+    const startTimes = extractAllTimesInMinutes(event.time);
+
+    for (const start of startTimes) {
+      const phase = forceTest ? "TESTE_MANUAL" : getPhase(start);
+
+      if (!phase) {
+        // console.log(`[EventosChecklistNotifier] Evento ${event.eventName} às ${event.time} fora das janelas.`);
+        continue;
+      }
+
+      console.log(`[EventosChecklistNotifier] Fase detectada: ${phase} para ${event.eventName} às ${start}`);
+
+      const uniqueBase = `${todayDateBR()}_${event.type}_${event.cityKey}_${event.eventName}_${start}_${phase}`;
+      if (alreadySent(state, uniqueBase)) continue;
+
+      const respRoles = [ROLES.RESP_CREATORS, ROLES.RESP_INFLU, ROLES.RESP_LIDER];
+      const equipeRoles = [ROLES.COORD_CREATORS, ROLES.EQUIPE_CREATORS];
+
+      const respMembers = await getMembersByRoles(guild, respRoles);
+      const equipeMembers = await getMembersByRoles(guild, equipeRoles);
+
+      const onlineEquipe = equipeMembers.filter(isOnline);
+      const offlineEquipe = equipeMembers.filter((m) => !isOnline(m));
+
+      if (phase === "TESTE_MANUAL") {
+        const testMember = testUserId ? await guild.members.fetch(testUserId).catch(() => null) : null;
+
+        await sendProgressLog(
+          client,
+          "🧪 Teste manual iniciado",
+          [
+            `👤 **Acionado por:** ${testMember || testUserId || "desconhecido"}`,
+            "",
+            `🎯 **Evento:** ${event.eventName}`,
+            `🏙️ **Cidade:** ${event.city}`,
+            `⏰ **Horário do evento:** ${event.time}`,
+            "",
+            `👑 **Responsáveis encontrados:** ${respMembers.length}`,
+            memberListText(respMembers),
+            "",
+            `👥 **Equipe encontrada:** ${equipeMembers.length}`,
+            memberListText(equipeMembers),
+          ].join("\n")
+        );
+
+        if (!testMember) continue;
+
+        const testEmbed = new EmbedBuilder()
+          .setColor("#9b59b6")
+          .setTitle("🧪 Teste Manual do Notifier")
+          .setDescription(
+            [
+              "Funcionou! O sistema processou o evento e os horários corretamente.",
+              "",
+              `🎯 **Evento:** ${event.eventName}`,
+              `🏙️ **Cidade:** ${event.city}`,
+              `⏰ **Horário Configurado:** ${event.time}`,
+              `⏱️ **Minutos extraídos:** ${start}`,
+              "",
+              `🟢 **Equipe considerada online:** ${onlineEquipe.length}`,
+            ].join("\n")
+          );
+
+        await dm(client, testMember, testEmbed, event, "teste manual");
+
+        const respReminderEmbed = buildRespReminderEmbed(event);
+        const teamTestEmbed = buildTeamTestEmbed(event);
+
+        for (const member of respMembers) {
+          await dm(client, member, respReminderEmbed, event, "teste manual responsáveis");
+        }
+
+        for (const member of equipeMembers) {
+          await dm(client, member, teamTestEmbed, event, "teste manual equipe");
+        }
+
+        await sendProgressLog(
+          client,
+          "✅ Teste manual finalizado",
+          `🎯 **Evento:** ${event.eventName}\n\nPVs de teste enviados para equipe e responsáveis.`
+        );
+        
+        markSent(state, uniqueBase);
+        continue;
+      }
+
+      // Lógica de envio real das fases
+      if (phase === "PRE_60" || phase === "PRE_30") {
+        const embed = buildPrepareEmbed(event, phase);
+        for (const member of respMembers.filter(isOnline)) {
+          await dm(client, member, embed, event, phase);
+        }
+      } 
+      else if (phase === "DURANTE") {
+        const duringEmbed = buildDuringEmbed(event);
+        for (const member of respMembers.filter(isOnline)) {
+          await dm(client, member, duringEmbed, event, "durante");
+        }
+      }
+      else if (phase === "PONTO_25") {
+        const reportEmbed = buildRespReportEmbed(event, onlineEquipe, offlineEquipe);
+        for (const member of onlineEquipe) {
+          if (!globalThis.SC_BP_hasPunchedEffective?.(member.id)) {
+            const pointEmbed = buildPointEmbed({ ...event, targetId: member.id });
+            await dm(client, member, pointEmbed, event, "ponto");
+          }
+        }
+        for (const resp of respMembers.filter(isOnline)) {
+          await dm(client, resp, reportEmbed, event, "relatório");
+        }
+      }
+      else if (phase === "POS_CHECKLIST") {
+        const postEmbed = buildPostChecklistEmbed(event);
+        for (const member of respMembers.filter(isOnline)) {
+          await dm(client, member, postEmbed, event, "pós-checklist");
+        }
+      }
+      else if (phase === "POS_PODERES") {
+        for (const member of onlineEquipe) {
+          if (!globalThis.SC_EVENT_POWER_hasRegistered?.(member.id, event.eventName, todayDateBR())) {
+            const powerEmbed = buildPowerEmbed({ ...event, targetId: member.id });
+            await dm(client, member, powerEmbed, event, "poderes");
+          }
+        }
+      }
+
+      markSent(state, uniqueBase);
+    }
+  }
+
+  saveJson(NOTIFIER_STATE_FILE, state);
+}
+
+async function runNotifierTickOld(client, options = {}) {
   const guild = client.guilds.cache.first();
   if (!guild) {
     console.log("[EventosChecklistNotifier] Nenhuma guilda encontrada.");
