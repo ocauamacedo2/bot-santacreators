@@ -14,14 +14,6 @@ import {
 import { dashOn } from "../../utils/dashHub.js"; // ✅ Caminho corrigido
 
 // =========================
-// ✅ MODULE GUARD (Evita carregar o bot 2x e duplicar logs)
-// =========================
-if (globalThis.__SC_PAY_EVT_DASH_LOADED__) {
-  // Módulo já carregado.
-} else {
-  globalThis.__SC_PAY_EVT_DASH_LOADED__ = true;
-
-// =========================
 // CONFIG
 // =========================
 const TZ = "America/Sao_Paulo";
@@ -1353,8 +1345,6 @@ export async function payEvtDashHandleMessage(message, client) {
 
   return false;
 }
-
-} // Fim do guard
 
 // ✅ NEW EXPORT: Interaction Handler (Must be plugged into index.js interactionCreate)
 export async function payEvtDashHandleInteraction(interaction, client) {
