@@ -245,6 +245,45 @@ function getDivisionLabel(key) {
   return CONFIG.DIVISIONS[key]?.label || CONFIG.DIVISIONS.none.label;
 }
 
+function getMemberDivisions(divisions, memberId) {
+  const raw = divisions?.[memberId];
+
+  if (Array.isArray(raw)) {
+    const valid = raw.filter((key) => CONFIG.DIVISIONS[key]);
+    return valid.length > 0 ? valid : ["none"];
+  }
+
+  if (typeof raw === "string" && CONFIG.DIVISIONS[raw]) {
+    return [raw];
+  }
+
+  return ["none"];
+}
+
+function normalizeMemberDivisions(values, targetMember) {
+  const selected = Array.isArray(values) ? values : [values];
+
+  if (selected.includes("none")) return ["none"];
+
+  const valid = [...new Set(selected.filter((key) => key !== "none" && CONFIG.DIVISIONS[key]))];
+
+  if (valid.length === 0) return ["none"];
+
+  const isRespInflu = hasRole(targetMember, CONFIG.ROLES.RESP_INFLU);
+
+  return isRespInflu ? valid.slice(0, 2) : valid.slice(0, 1);
+}
+
+function memberHasDivision(divisions, memberId, divisionKey) {
+  return getMemberDivisions(divisions, memberId).includes(divisionKey);
+}
+
+function getDivisionLabels(keys) {
+  return getMemberDivisions({ temp: keys }, "temp")
+    .map((key) => getDivisionLabel(key))
+    .join(" + ");
+}
+
 // Filtra membros que podem ser editados pelo executor
 async function getEditableMembers(guild, permissionLevel) {
   await guild.members.fetch();
@@ -470,18 +509,18 @@ async function updateHierarchyPanel(client) {
           const respLiderRole = guild.roles.cache.get(CONFIG.ROLES.RESP_LIDER);
 
           const respInfluMembers = respInfluRole
-            ? respInfluRole.members
-                .filter((m) => !m.user.bot && (divisions[m.id] || "none") === divisionKey)
-                .map((m) => m)
-                .sort((a, b) => a.displayName.localeCompare(b.displayName))
-            : [];
+  ? respInfluRole.members
+      .filter((m) => !m.user.bot && memberHasDivision(divisions, m.id, divisionKey))
+      .map((m) => m)
+      .sort((a, b) => a.displayName.localeCompare(b.displayName))
+  : [];
 
-          const respLiderMembers = respLiderRole
-            ? respLiderRole.members
-                .filter((m) => !m.user.bot && (divisions[m.id] || "none") === divisionKey)
-                .map((m) => m)
-                .sort((a, b) => a.displayName.localeCompare(b.displayName))
-            : [];
+const respLiderMembers = respLiderRole
+  ? respLiderRole.members
+      .filter((m) => !m.user.bot && memberHasDivision(divisions, m.id, divisionKey))
+      .map((m) => m)
+      .sort((a, b) => a.displayName.localeCompare(b.displayName))
+  : [];
 
           const influLine =
             respInfluMembers.length > 0
@@ -685,18 +724,18 @@ async function logDivisionChange(client, actor, targetUser, oldDivision, newDivi
   const channel = await client.channels.fetch(CONFIG.LOG_CHANNEL_ID).catch(() => null);
   if (!channel) return;
 
-  const oldKey = oldDivision || "none";
-  const newKey = newDivision || "none";
+const oldKeys = Array.isArray(oldDivision) ? oldDivision : [oldDivision || "none"];
+const newKeys = Array.isArray(newDivision) ? newDivision : [newDivision || "none"];
 
-  const embed = new EmbedBuilder()
-    .setTitle("🏙️ Alteração de Divisão na Hierarquia")
-    .setColor(newKey === "none" ? "#e74c3c" : "#2ecc71")
-    .addFields(
-      { name: "👤 Membro", value: `${targetUser.toString()} (\`${targetUser.id}\`)`, inline: true },
-      { name: "👮 Alterado por", value: `${actor.toString()} (\`${actor.id}\`)`, inline: true },
-      { name: "📉 Antes", value: getDivisionLabel(oldKey), inline: true },
-      { name: "📈 Depois", value: getDivisionLabel(newKey), inline: true }
-    )
+const embed = new EmbedBuilder()
+  .setTitle("🏙️ Alteração de Divisão na Hierarquia")
+  .setColor(newKeys.includes("none") ? "#e74c3c" : "#2ecc71")
+  .addFields(
+    { name: "👤 Membro", value: `${targetUser.toString()} (\`${targetUser.id}\`)`, inline: true },
+    { name: "👮 Alterado por", value: `${actor.toString()} (\`${actor.id}\`)`, inline: true },
+    { name: "📉 Antes", value: getDivisionLabels(oldKeys), inline: true },
+    { name: "📈 Depois", value: getDivisionLabels(newKeys), inline: true }
+  )
     .setTimestamp()
     .setFooter({ text: "Sistema de Divisões • SantaCreators" });
 
@@ -960,28 +999,31 @@ await interaction.reply({
     }
 
     const divisions = loadDivisions();
-    const currentDivision = divisions[targetId] || "none";
+const currentDivisions = getMemberDivisions(divisions, targetId);
+const isRespInflu = hasRole(targetMember, CONFIG.ROLES.RESP_INFLU);
 
-    const options = Object.entries(CONFIG.DIVISIONS).map(([key, data]) =>
-      new StringSelectMenuOptionBuilder()
-        .setLabel(data.label.slice(0, 100))
-        .setValue(key)
-        .setDescription(key === currentDivision ? "Divisão atual" : "Alterar para esta divisão")
-        .setEmoji(data.emoji)
-        .setDefault(key === currentDivision)
-    );
+const options = Object.entries(CONFIG.DIVISIONS).map(([key, data]) =>
+  new StringSelectMenuOptionBuilder()
+    .setLabel(data.label.slice(0, 100))
+    .setValue(key)
+    .setDescription(currentDivisions.includes(key) ? "Divisão atual" : "Alterar para esta divisão")
+    .setEmoji(data.emoji)
+    .setDefault(currentDivisions.includes(key))
+);
 
-    const row = new ActionRowBuilder().addComponents(
-      new StringSelectMenuBuilder()
-        .setCustomId(`hier_set_division:${targetId}`)
-        .setPlaceholder("Escolha a cidade do responsável")
-        .addOptions(options)
-    );
+const row = new ActionRowBuilder().addComponents(
+  new StringSelectMenuBuilder()
+    .setCustomId(`hier_set_division:${targetId}`)
+    .setPlaceholder(isRespInflu ? "Escolha até 2 cidades do Resp. Influ" : "Escolha a cidade do responsável")
+    .setMinValues(1)
+    .setMaxValues(isRespInflu ? 2 : 1)
+    .addOptions(options)
+);
 
-    await interaction.update({
-      content: `🏙️ Editando divisão de <@${targetId}>\nAtualmente: **${getDivisionLabel(currentDivision)}**`,
-      components: [row],
-    }).catch(() => {});
+await interaction.update({
+  content: `🏙️ Editando divisão de <@${targetId}>\nAtualmente: **${getDivisionLabels(currentDivisions)}**\n${isRespInflu ? "ℹ️ Resp. Influ pode ficar em até **2 cidades**." : "ℹ️ Resp. Líder pode ficar em apenas **1 cidade**."}`,
+  components: [row],
+}).catch(() => {});
 
     return true;
   }
@@ -1020,26 +1062,27 @@ await interaction.reply({
       }
 
       const divisions = loadDivisions();
-      const oldDivision = divisions[targetId] || "none";
+const oldDivisions = getMemberDivisions(divisions, targetId);
+const newDivisions = normalizeMemberDivisions(interaction.values, targetMember);
 
-      if (oldDivision === newDivision) {
-        return interaction.editReply({
-          content: "⚠️ Esse responsável já está nessa divisão.",
-        }).catch(() => {});
-      }
+if (JSON.stringify(oldDivisions.sort()) === JSON.stringify([...newDivisions].sort())) {
+  return interaction.editReply({
+    content: "⚠️ Esse responsável já está nessa divisão.",
+  }).catch(() => {});
+}
 
-      divisions[targetId] = newDivision;
-      saveDivisions(divisions);
+divisions[targetId] = newDivisions;
+saveDivisions(divisions);
 
-      await interaction.editReply({
-        content: `✅ Divisão de <@${targetId}> alterada para **${getDivisionLabel(newDivision)}**.\n🔄 Estou atualizando o painel em segundo plano.`,
-      }).catch(() => {});
+await interaction.editReply({
+  content: `✅ Divisão de <@${targetId}> alterada para **${getDivisionLabels(newDivisions)}**.\n🔄 Estou atualizando o painel em segundo plano.`,
+}).catch(() => {});
 
       updateHierarchyPanel(client)
         .then(async () => {
           const targetUser = await client.users.fetch(targetId).catch(() => null);
           if (targetUser) {
-            await logDivisionChange(client, interaction.user, targetUser, oldDivision, newDivision);
+            await logDivisionChange(client, interaction.user, targetUser, oldDivisions, newDivisions);
           }
         })
         .catch((err) => {
