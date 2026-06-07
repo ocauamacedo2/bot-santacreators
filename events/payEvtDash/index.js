@@ -1187,16 +1187,7 @@ DEBUG.chartPeriods = keys.slice(0, 4);
     st.lastFingerprint = "";
   }
 
-  const reasonText = String(reason || "");
-
-  const isForcedUpdate =
-    reasonText.includes("manual") ||
-    reasonText.includes("force") ||
-    reasonText.includes("message:") ||
-    reasonText.includes("pagamento:") ||
-    reasonText.includes("cronograma") ||
-    reasonText.includes("halldafama") ||
-    reasonText.includes("eventosdiarios");
+  const isForcedUpdate = isFastUpdate;
 
   if (st.lastFingerprint === fingerprint && !isForcedUpdate && !periodChanged) return;
 
