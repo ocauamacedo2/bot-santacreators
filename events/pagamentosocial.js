@@ -2736,16 +2736,19 @@ export async function pagamentoSocialOnReady(client) {
 
   // se já existe, garante que só fica 1
   const existente = await limparBotoesAntigos(client, canal).catch(() => null);
-  if (existente) return;
 
   // se não existe, cria
-  await canal.send({
-    embeds: [criarEmbedMenu()],
-    components: [criarRowMenu()],
-  }).catch(() => {});
+  if (!existente) {
+    await canal.send({
+      embeds: [criarEmbedMenu()],
+      components: [criarRowMenu()],
+    }).catch(() => {});
+  }
 
-// Inicializa o Dashboard
-await updateDashboard(client).catch(() => {});
+  // ✅ SEMPRE recalcula e atualiza o dashboard ao ligar o bot.
+  // Antes, se o menu já existisse, dava return e o gráfico ficava travado.
+  await reconstruirStatsPorEmbeds(client, 1000).catch(() => null);
+  await updateDashboard(client).catch(() => {});
 }
 
 // ============================================================================
@@ -2766,10 +2769,10 @@ export async function handlePagamentoSocial(interaction, client) {
     if (interaction.isButton()) {
       const id = interaction.customId;
 
-      if (id === "pagamento_dash_atualizar") {
+if (id === "pagamento_dash_atualizar") {
   await interaction.deferReply({ ephemeral: true }).catch(() => {});
 
-const statsRefeitos = await reconstruirStatsPorEmbeds(client, 100).catch(() => null);
+  const statsRefeitos = await reconstruirStatsPorEmbeds(client, 1000).catch(() => null);
 
   await updateDashboard(client).catch(() => {});
 
@@ -3541,7 +3544,7 @@ const msgNova = await canal.send({ embeds: [embedAtualizado] }).catch(() => null
     const pagamentoAt = dataEventoTimestamp || Date.now();
 
     dashEmit(map[action] || "pagamento:status", {
-      __at: pagamentoAt,
+      __at: Date.now(), // ✅ clique real do botão
       source: "pagamento_social",
       by: interaction.user.id,
       action,
@@ -3550,16 +3553,28 @@ const msgNova = await canal.send({ embeds: [embedAtualizado] }).catch(() => null
       newMessageId: msgNova.id,
       dataEvento: dataEventoEmbed,
       dataEventoTimestamp,
-      dedupeKey: `pagamento_social:${action}:${msgOriginal.id}`,
+      dedupeKey: `pagamento_social:${action}:${msgNova.id}`,
+    });
+
+    // ✅ fallback geral para qualquer dashboard que esteja ouvindo status genérico
+    dashEmit("pagamento:status", {
+      __at: Date.now(),
+      source: "pagamento_social",
+      by: interaction.user.id,
+      action,
+      canal: CANAL_PAGAMENTO,
+      oldMessageId: msgOriginal.id,
+      newMessageId: msgNova.id,
+      dedupeKey: `pagamento_social:status:${msgNova.id}`,
     });
   } catch {}
 
   // Se aprovado/reprovado/solicitado, recalcula estatísticas apenas pelos registros do mês atual
   // depois que a mensagem nova já existe, a antiga saiu do canal e o geralDash recebeu o evento.
-  if (["pago", "reprovado", "solicitado"].includes(action)) {
-    await reconstruirStatsPorEmbeds(client, 100).catch(() => null);
-    await updateDashboard(client).catch(() => {});
-  }
+if (["pago", "reprovado", "solicitado"].includes(action)) {
+  await reconstruirStatsPorEmbeds(client, 1000).catch(() => null);
+  await updateDashboard(client).catch(() => {});
+}
 
   // reposta menu e limpa duplicados
   await canal.send({ embeds: [criarEmbedMenu()], components: [criarRowMenu()] }).catch(() => {});

@@ -459,9 +459,13 @@ function pushPaymentFromEmbed({
   const uid = getPaymentRegistrarId(emb);
   if (!uid) return false;
 
-  const paymentRealTs = getPaymentEventTimestamp(emb, fallbackTs);
+  // ✅ IMPORTANTE:
+  // Registrados / pagos / reprovados contam pela data REAL da mensagem atual.
+  // Como o sistema cria uma nova mensagem quando clica em PAGO/REPROVADO/SOLICITADO,
+  // isso faz o dashboard contar corretamente a semana em que o botão foi clicado.
+  const messageRealTs = Number(fallbackTs || Date.now());
 
-  const tsCreated = new Date(paymentRealTs);
+  const tsCreated = new Date(messageRealTs);
   const pAll = periodKeyFromDateSP(tsCreated);
   DEBUG.payPeriodFoundAll[pAll.key] = (DEBUG.payPeriodFoundAll[pAll.key] || 0) + 1;
 
@@ -472,7 +476,7 @@ function pushPaymentFromEmbed({
   });
 
   const st = getPaymentStatus(emb);
-  const tsStatus = new Date(paymentRealTs);
+  const tsStatus = new Date(messageRealTs);
   const pStatus = periodKeyFromDateSP(tsStatus);
 
   if (st === "APPROVED") {
@@ -1391,6 +1395,7 @@ export async function payEvtDashHandleMessage(message, client) {
 
   const autoUpdateChannels = new Set([
     PAY_CHANNEL_ID,
+    PAY_LOG_CHANNEL_ID, // ✅ logs dos botões/status de pagamento
     REGISTRO_EVENTO_CHANNEL_ID,
     CH_PODERES_ID,
     CRONOGRAMA_LOGS_CHANNEL_ID,

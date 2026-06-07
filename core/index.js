@@ -746,11 +746,16 @@ client.on("interactionCreate", async (interaction) => {
   if (interaction.isAutocomplete()) return;
 
   try {
-    if (await eventosChecklistNotifierOnInteraction(interaction, client)) return;
+if (await eventosChecklistNotifierOnInteraction(interaction, client)) return;
 
-    // 🚀 PRIORIDADE MÁXIMA: Botões de Ticket e Entrevista (Resolve o Delay)
-      if (await entrevista.handleButtons(interaction).catch(() => false)) return;
-      if (await entrevistasTickets.onInteractionCreate(interaction).catch(() => false)) return;
+// ✅ PRIORIDADE ALTA: botões/modais do Pagamento Social
+// Isso garante que "Atualizar Dashboard", "PAGO", "REPROVADO" e "SOLICITADO"
+// não sejam engolidos por outro handler antes.
+if (await handlePagamentoSocial(interaction, client).catch(() => false)) return;
+
+// 🚀 PRIORIDADE MÁXIMA: Botões de Ticket e Entrevista (Resolve o Delay)
+  if (await entrevista.handleButtons(interaction).catch(() => false)) return;
+  if (await entrevistasTickets.onInteractionCreate(interaction).catch(() => false)) return;
 
       // Outros handlers...
       if (await registroManagerHandleInteraction(interaction, client)) return;
@@ -802,7 +807,7 @@ client.on("interactionCreate", async (interaction) => {
       if (await hierarquiaHandleInteraction(interaction, client)) return;
       if (await checklistHandleInteraction(interaction, client)) return;
 
-      if (await handlePagamentoSocial(interaction, client).catch(() => false)) return;
+    
 
       if (
         interaction.isButton() &&
