@@ -593,16 +593,11 @@ function VIP_normalizarTipoPremiacao(texto) {
     .replace(/\s+/g, " ")
     .trim();
 
-  const pareceDinheiro =
-    /\bdinheiro\b/.test(t) ||
-    /\bgrana\b/.test(t) ||
-    /\bcash\b/.test(t) ||
-    /\bvalor\b/.test(t) ||
-    /\br\$\b/.test(t) ||
-    /\b\d{1,3}(?:[.\s]\d{3})+(?:,\d{1,2})?\b/.test(t) ||
-    /\b\d+(?:[.,]\d+)?\s*(?:k|kk|m|mi|mil|milhao|milhoes)?\b/.test(t);
-
-  if (pareceDinheiro && !t.includes("vip")) return "Dinheiro";
+  // ✅ PRIORIDADE MÁXIMA:
+  // Se tiver Rolepass/Pass/VIP escrito, número antes não pode virar dinheiro.
+  // Exemplo: "1 ROLEPASS" = Pass, não Dinheiro.
+  if (/\brole\s*pass\b/.test(t) || /\brolepass\b/.test(t)) return "Pass";
+  if (/\bpass\b/.test(t)) return "Pass";
 
   if (
     t.includes("platinum") ||
@@ -626,7 +621,15 @@ function VIP_normalizarTipoPremiacao(texto) {
 
   if (t.includes("lancamento") || t.includes("lançamento")) return "VIP Lancamento";
   if (t.includes("evento") || t.includes("vipevento") || t.includes("vip evento")) return "VIP Evento";
-  if (t.includes("pass") || t.includes("rolepass")) return "Pass";
+
+  const pareceDinheiro =
+    /\bdinheiro\b/.test(t) ||
+    /\bgrana\b/.test(t) ||
+    /\bcash\b/.test(t) ||
+    /\bvalor\b/.test(t) ||
+    /r\s*\$/.test(t) ||
+    /\b\d{1,3}(?:[.\s]\d{3})+(?:,\d{1,2})?\b/.test(t) ||
+    /\b\d+(?:[.,]\d+)?\s*(?:k|kk|m|mi|mil|milhao|milhoes)\b/.test(t);
 
   if (pareceDinheiro) return "Dinheiro";
 
@@ -734,21 +737,89 @@ async function VIP_resolverPagamentoLink(client, texto) {
   };
 }
 
-function VIP_formatTipoBonito(tipo) {
-  const normalizado = VIP_normalizarTipoPremiacao(tipo);
+function VIP_limparTextoAnalise(texto) {
+  return String(texto || "")
+    .replace(/<@!?\d{10,25}>/g, " ")
+    .replace(/<@&\d{10,25}>/g, " ")
+    .replace(/https?:\/\/\S+/gi, " ")
+    .replace(/[`*_~|]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
-  if (normalizado === "Dinheiro") return "💵 Dinheiro";
-  if (normalizado === "VIP Platinum") return "💎 VIP Platinum";
-  if (normalizado === "VIP Ouro") return "🥇 VIP Ouro";
-  if (normalizado === "VIP Prata") return "🥈 VIP Prata";
-  if (normalizado === "VIP Bronze") return "🥉 VIP Bronze";
-  if (normalizado === "VIP Black") return "🖤 VIP Black";
-  if (normalizado === "VIP Lancamento") return "🚀 VIP Lançamento";
-  if (normalizado === "VIP Staff") return "🛡️ VIP Staff / VIP Gente Boa";
-  if (normalizado === "VIP Evento") return "🎉 VIP Evento";
-  if (normalizado === "Pass") return "🎟️ Pass";
+function VIP_extrairQuantidadePremiacao(texto) {
+  const t = VIP_limparTextoAnalise(texto);
 
-  return normalizado;
+  const match =
+    t.match(/\b(\d{1,3})\s*(?:x|un|unidade|unidades)?\s*(role\s*pass|rolepass|pass|vip|platinum|ouro|prata|bronze|black|staff|evento)\b/i) ||
+    t.match(/\b(role\s*pass|rolepass|pass|vip|platinum|ouro|prata|bronze|black|staff|evento)\s*(?:x|un|unidade|unidades)?\s*(\d{1,3})\b/i);
+
+  if (!match) return null;
+
+  const quantidade = /^\d+$/.test(match[1]) ? match[1] : match[2];
+  return quantidade || null;
+}
+
+function VIP_formatarPremiacaoInteligente(texto, tipoForcado = null) {
+  const tipo = VIP_normalizarTipoPremiacao(tipoForcado || texto);
+  const tipoBonito = VIP_formatTipoBonito(tipo);
+  const quantidade = VIP_extrairQuantidadePremiacao(texto);
+
+  const bruto = String(texto || "—").trim();
+
+  if (quantidade && tipo !== "Dinheiro") {
+    return `${tipoBonito}\n\n**Quantidade:** \`${quantidade}\`\n**Item:** \`${tipo === "Pass" ? "Rolepass" : tipo}\``;
+  }
+
+  return `${tipoBonito}\n\n${bruto || "—"}`;
+}
+
+function VIP_getTextoCompletoEmbed(embedLike) {
+  const desc = String(embedLike?.description || embedLike?.data?.description || "");
+  const fields = embedLike?.fields || embedLike?.data?.fields || [];
+
+  const campos = fields
+    .map((f) => `${f.name || ""}\n${f.value || ""}`)
+    .join("\n");
+
+  return `${desc}\n${campos}`;
+}
+
+function VIP_reanalisarEmbedVip(embedBuilder) {
+  const fields = embedBuilder.data.fields ?? [];
+  const premiacaoField = fields.find((f) => String(f.name || "").startsWith("🎁 Premiação"));
+
+  const textoCompleto = VIP_getTextoCompletoEmbed(embedBuilder);
+  const textoPremiacao = String(premiacaoField?.value || "");
+  const baseAnalise = `${textoPremiacao}\n${textoCompleto}`;
+
+  const tipoFinal = VIP_normalizarTipoPremiacao(baseAnalise);
+  const premiacaoFinal = VIP_formatarPremiacaoInteligente(textoPremiacao || baseAnalise, tipoFinal);
+
+  const novosFields = fields.map((f) => {
+    if (String(f.name || "").startsWith("🎁 Premiação")) {
+      return {
+        ...f,
+        value: premiacaoFinal.slice(0, 1024),
+      };
+    }
+
+    return f;
+  });
+
+  const descAtual = String(embedBuilder.data.description || "");
+  const descCorrigida = descAtual.replace(
+    /\*\*Tipo Identificado:\*\*\s*`[^`]+`/i,
+    `**Tipo Identificado:** \`${tipoFinal}\``
+  );
+
+  embedBuilder.setDescription(descCorrigida);
+  embedBuilder.setFields(novosFields);
+
+  return {
+    tipoFinal,
+    premiacaoFinal,
+  };
 }
 
 function VIP_extractEmbedFields(embedLike) {
@@ -924,15 +995,21 @@ const premiacaoTexto = String(premiacaoField?.value || "");
 
 const pagamentoResolvido = await VIP_resolverPagamentoLink(client, premiacaoTexto);
 
-if (pagamentoResolvido?.ok) {
-  const tipoFinal = VIP_normalizarTipoPremiacao(pagamentoResolvido.info?.tipo || premiacaoTexto);
-  const tipoBonito = VIP_formatTipoBonito(tipoFinal);
+let analiseFinal = VIP_reanalisarEmbedVip(emb);
 
-  const novosFields = fields.map((f) => {
+if (pagamentoResolvido?.ok) {
+  const tipoFinal = VIP_normalizarTipoPremiacao(
+    `${pagamentoResolvido.info?.tipo || ""}\n${pagamentoResolvido.info?.premiacao || ""}\n${premiacaoTexto}`
+  );
+
+  const novosFields = VIP_getFields(emb).map((f) => {
     if (String(f.name || "").startsWith("🎁 Premiação")) {
       return {
         ...f,
-        value: `${tipoBonito}\n\n${pagamentoResolvido.info?.premiacao || premiacaoTexto}`,
+        value: VIP_formatarPremiacaoInteligente(
+          pagamentoResolvido.info?.premiacao || premiacaoTexto,
+          tipoFinal
+        ).slice(0, 1024),
       };
     }
 
@@ -946,15 +1023,20 @@ if (pagamentoResolvido?.ok) {
     return f;
   });
 
+  emb.setFields(novosFields);
+
+  analiseFinal = {
+    tipoFinal,
+    premiacaoFinal: pagamentoResolvido.info?.premiacao || premiacaoTexto,
+  };
+}
+
 const descAtual = String(emb.data.description || "");
 const descSemFiltro = descAtual.replace(/\n\n\*\*Filtro automático:\*\* `[^`]+`/gi, "");
 
 emb.setDescription(
-  `${descSemFiltro}\n\n**Filtro automático:** \`${tipoFinal}\``
+  `${descSemFiltro}\n\n**Filtro automático:** \`${analiseFinal.tipoFinal}\``
 );
-
-  emb.setFields(novosFields);
-}
 
 const nova = await channel.send({ embeds: [emb] });
 
@@ -1227,9 +1309,15 @@ if (pagamentoResolvido?.ok) {
   if (pagamentoResolvido.info?.data) data = pagamentoResolvido.info.data;
   if (pagamentoResolvido.info?.ganhadorId) ganhadorId = pagamentoResolvido.info.ganhadorId;
   if (pagamentoResolvido.info?.nomeGanhador) ganhadorNome = pagamentoResolvido.info.nomeGanhador;
-  if (pagamentoResolvido.info?.tipo) tipo = pagamentoResolvido.info.tipo;
+
+  tipo = VIP_normalizarTipoPremiacao(
+    `${pagamentoResolvido.info?.tipo || ""}\n${pagamentoResolvido.info?.premiacao || ""}\n${premiacao}`
+  );
+
   if (pagamentoResolvido.info?.premiacao) premiacao = pagamentoResolvido.info.premiacao;
 }
+
+premiacao = VIP_formatarPremiacaoInteligente(premiacao, tipo);
 
       const guild = i.guild;
       const menuCh = await guild.channels.fetch(VIP_MENU_CHANNEL_ID).catch(() => null);
