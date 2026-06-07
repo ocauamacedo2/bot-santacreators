@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { 
   Events, 
   EmbedBuilder, 
@@ -13,6 +16,65 @@ import {
 import { dashEmit } from "../utils/dashHub.js";
 // ========================== CONFIG ==========================
 const CANAL_REGISTRO_EVENTO = '1392618646630568076';
+const CANAL_LOG_AUDIT_EVENTO = '1513320054568259835';
+
+// ✅ __dirname no ESM
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// ✅ PERSISTÊNCIA para o log de poderes em evento
+const EVENT_POWER_STATE_PATH = path.resolve(__dirname, "../data/event_power_state.json");
+const REGEVT_COOLDOWN_MS = 1 * 60 * 60 * 1000; // 1 hora de cooldown sugerido
+
+function readEventPowerState() {
+  try {
+    const raw = fs.readFileSync(EVENT_POWER_STATE_PATH, "utf8");
+    return JSON.parse(raw);
+  } catch {
+    return { users: {} };
+  }
+}
+
+function writeEventPowerState(state) {
+  try {
+    const dir = path.dirname(EVENT_POWER_STATE_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(EVENT_POWER_STATE_PATH, JSON.stringify(state, null, 2), "utf8");
+  } catch {}
+}
+
+async function sendAuditEventLog(client, guild, member, data, msg, oldLastAt) {
+  const ch = await client.channels.fetch(CANAL_LOG_AUDIT_EVENTO).catch(() => null);
+  if (!ch || !ch.isTextBased()) return;
+
+  const now = Date.now();
+  const nextAt = now + REGEVT_COOLDOWN_MS;
+
+  const timeSinceLast = oldLastAt > 0 ? `<t:${Math.floor(oldLastAt / 1000)}:R>` : "Primeiro registro";
+  const nextAllowed = `<t:${Math.floor(nextAt / 1000)}:F> (<t:${Math.floor(nextAt / 1000)}:R>)`;
+
+  const embed = new EmbedBuilder()
+    .setTitle("📋 Log: Registro de Poderes em Evento")
+    .setColor("Blue")
+    .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
+    .addFields(
+      { name: "👤 Autor", value: `${member} (\`${member.id}\`)`, inline: true },
+      { name: "🔗 Perfil", value: `Clique aqui`, inline: true },
+      { name: "📍 Mensagem", value: `Ir para mensagem`, inline: true },
+      { name: "📅 Data Uso", value: `\`${data.data}\``, inline: true },
+      { name: "📌 Evento", value: `\`${data.evento}\``, inline: true },
+      { name: "⏰ Horário", value: `\`${data.horario}\``, inline: true },
+      { name: "👤 Alvo In-Game", value: `\`${data.jogador}\``, inline: true },
+      { name: "⏳ Último Registro", value: timeSinceLast, inline: true },
+      { name: "🕒 Registrado há", value: `<t:${Math.floor(now / 1000)}:R>`, inline: true },
+      { name: "🔓 Próximo Registro", value: nextAllowed, inline: false },
+      { name: "🕒 Enviado em", value: `<t:${Math.floor(now / 1000)}:F>`, inline: false }
+    )
+    .setFooter({ text: "SantaCreators • Auditoria de Eventos" })
+    .setTimestamp();
+
+  await ch.send({ content: `${member}`, embeds: [embed] }).catch(() => {});
+}
 
 const CARGOS_REGISTRO_EVENTO = [
   '1262262852949905408', // OWNER
@@ -248,6 +310,12 @@ const eventoValue = get("evento");
 const horarioValue = get("horario");
 const dataValue = get("data");
 
+// ✅ Pega o timestamp anterior para o log
+const stEv = readEventPowerState();
+const oldLastAt = Number(stEv?.users?.[interaction.user.id]?.lastRegisterAt || 0);
+stEv.users[interaction.user.id] = { lastRegisterAt: Date.now() };
+writeEventPowerState(stEv);
+
 // ✅ MARCA QUE ESSA PESSOA JÁ REGISTROU PODERES NESSE EVENTO
 try {
   SC_EVENT_POWER_MEMORY.set(
@@ -282,10 +350,13 @@ const embed = new EmbedBuilder()
         }
 
         // Envia o log no canal
-        await canal.send({
+        const registroMsg = await canal.send({
           content: `<@${interaction.user.id}>`,
           embeds: [embed],
         });
+
+        // ✅ Envia o log de auditoria completo
+        if (registroMsg) await sendAuditEventLog(client, guild, interaction.member, { jogador: jogadorValue, evento: eventoValue, horario: horarioValue, data: dataValue }, registroMsg, oldLastAt);
 
         // ✅ Dash: Emitir o nome correto para contar no GeralDash (Social Medias)
 try {

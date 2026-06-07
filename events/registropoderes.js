@@ -360,6 +360,10 @@ if (interaction.isButton() && interaction.customId === "abrir_registro") {
     }
   } catch {}
 
+  // ✅ Pega o timestamp anterior ANTES de marcar o novo
+  const stCd = readPoderesState();
+  const oldLastAt = Number(stCd?.users?.[interaction.user.id]?.lastRegisterAt || 0);
+
   const canal = await client.channels.fetch(CANAL_REGISTRO_ID).catch(() => null);
   if (!canal) {
     return interaction
@@ -401,7 +405,10 @@ if (interaction.isButton() && interaction.customId === "abrir_registro") {
         }
 
         // Envia o registro
-await canal.send({ content: `<@${user.id}>`, embeds: [embed] }).catch(() => {});
+const registroEnviado = await canal.send({ content: `<@${user.id}>`, embeds: [embed] }).catch(() => null);
+
+// ✅ Manda o LOG completo para o canal solicitado
+if (registroEnviado) await sendAuditLog(client, guild, interaction.member, { data, horario, poderes }, registroEnviado, oldLastAt);
 
 // ✅ NOVO: salva “último registro” (pra lembretes 24h/48h funcionarem)
 // Usa o LOCK para garantir que a escrita não seja sobrescrita pelo loop de lembretes
