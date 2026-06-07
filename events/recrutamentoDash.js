@@ -57,7 +57,9 @@ function getGIStatus() {
 // ================= TIME UTILS =================
 function getWeekKey(date = new Date()) {
   // Semana de Domingo a Sábado (padrão ISO YYYY-MM-DD do domingo)
-  const d = new Date(date.toLocaleString("en-US", { timeZone: TZ }));
+  const utc = date.getTime() + (date.getTimezoneOffset() * 60000);
+  const d = new Date(utc + (3600000 * -3));
+
   const day = d.getDay(); // 0=Dom
   const diff = d.getDate() - day; 
   const sunday = new Date(d.setDate(diff));

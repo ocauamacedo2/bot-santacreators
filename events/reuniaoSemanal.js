@@ -130,13 +130,9 @@ async function filterRankingByActiveRole(list, guild) {
 const TIME_LOCAL = (() => {
   const TZ = "America/Sao_Paulo";
   function nowInSP() {
-    const parts = new Intl.DateTimeFormat("en-CA", {
-      timeZone: TZ,
-      year: "numeric", month: "2-digit", day: "2-digit",
-      hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
-    }).formatToParts(new Date());
-    const get = (t) => Number(parts.find((p) => p.type === t)?.value || 0);
-    return new Date(Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second")));
+    const date = new Date();
+    const utc = date.getTime() + (date.getTimezoneOffset() * 60000);
+    return new Date(utc + (3600000 * -3));
   }
   function startOfDaySP(dateUTC) {
     return new Date(Date.UTC(dateUTC.getUTCFullYear(), dateUTC.getUTCMonth(), dateUTC.getUTCDate()));

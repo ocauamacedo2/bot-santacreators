@@ -554,8 +554,11 @@ function saveState(s) {
 }
 
 // ================== TIME HELPERS ==================
-const nowSP = () =>
-  new Date(new Date().toLocaleString("en-US", { timeZone: TZ }));
+function nowSP() {
+  const date = new Date();
+  const utc = date.getTime() + (date.getTimezoneOffset() * 60000);
+  return new Date(utc + (3600000 * -3)); 
+}
 
 function ymdSP(date) {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -1799,6 +1802,11 @@ function chooseWeeksUnion() {
     a > b ? -1 : 1
   );
   return { thisKey: keys[0] || null, lastKey: keys[1] || null, keys };
+  const currentWk = weekKeyFromDateSP(nowSP());
+  const union = new Set([currentWk]);
+  Object.keys(DEBUG.weekKeysFound || {}).forEach(k => union.add(k));
+  const keys = [...union].sort((a, b) => a > b ? -1 : 1);
+  return { thisKey: currentWk, lastKey: keys[1] || null, keys };
 }
 
 function aggregateByWeek(items, weekKey) {

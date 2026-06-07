@@ -46,10 +46,10 @@ const PAY_PERIOD_GOAL = 50; // 🟢
 const PAY_PERIOD_LIMIT = 60; // 🚨
 
 // Scan
-const SCAN_PAGES = 65; // Aumentado para cobrir histórico completo
-const SCAN_PAGES_FAST = 40; // Aumentado para garantir que atts em tempo real não percam dados
+const SCAN_PAGES = 30; // Reduzido para evitar timeout e travamento
+const SCAN_PAGES_FAST = 10; // Rápido para respostas em tempo real
 const SCAN_TTL_MS = 5 * 1000;
-const FETCH_TIMEOUT_MS = 12000;
+const FETCH_TIMEOUT_MS = 8000;
 const COLLECT_MAX_MS = 45000;
 
 // ✅ Otimização: parar de escanear se a mensagem for mais velha que 15 dias
@@ -168,7 +168,13 @@ function readEvt3State() {
 // =========================
 // TIME SAFE (SP)
 // =========================
-const nowSP = () => new Date(new Date().toLocaleString("en-US", { timeZone: TZ }));
+function nowSP() {
+  const date = new Date();
+  // ✅ Força o cálculo em UTC e subtrai 3 horas para Brasília, 
+  // ignorando o relógio interno do servidor da Square Cloud.
+  const utc = date.getTime() + (date.getTimezoneOffset() * 60000);
+  return new Date(utc + (3600000 * -3)); // Força UTC-3 (Brasília)
+}
 
 function ymdSP(date) {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -176,6 +182,7 @@ function ymdSP(date) {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
+    hour12: false
   }).formatToParts(date);
   return {
     y: +parts.find((p) => p.type === "year").value,
@@ -1066,20 +1073,14 @@ const { payments, paymentsAll, paymentsRejected, events } = await collectAll(cli
   fast: isFastUpdate,
 });
 
-  const currentWk = periodKeyFromDateSP(new Date()).key;
+  const currentWk = periodKeyFromDateSP(nowSP()).key;
   
   // União de chaves
   const union = new Set([currentWk]);
   payments.forEach(p => union.add(p.periodKey));
+  paymentsAll.forEach(p => union.add(p.periodKey));
   events.forEach(e => union.add(e.periodKey));
   const keys = [...union].sort((a, b) => (a > b ? -1 : 1));
-
-const hasDataInWeek = (weekKey) => {
-  return (
-    aggregate(payments, weekKey, true).total > 0 ||
-    aggregate(events, weekKey).total > 0
-  );
-};
 
 const thisKey = currentWk;
 const lastKey = periodKeyFromDateSP(addDaysUTC(new Date(`${thisKey}T12:00:00Z`), -7)).key;
@@ -1090,6 +1091,7 @@ DEBUG.chartPeriods = keys.slice(0, 4);
 
   // Agregações (Pagamentos com Ajustes)
   const curPay = thisKey ? aggregate(payments, thisKey, true) : { total: 0, top: [] };
+  const curPayAll = thisKey ? aggregate(paymentsAll, thisKey) : { total: 0, top: [] };
   const prevPay = lastKey ? aggregate(payments, lastKey, true) : { total: 0, top: [] };
   
   // Eventos (Sem ajustes por enquanto, ou adicione se quiser)
@@ -1128,6 +1130,7 @@ DEBUG.chartPeriods = keys.slice(0, 4);
   const bar = progressBarEmoji(curPay.total, PAY_PERIOD_LIMIT, 12, ps.fill);
 
   const weeklySummary = [
+    `📌 **Pagamentos registrados:** **${curPayAll.total}**`,
     `📌 **Pagamentos aprovados:** **${curPay.total}**`,
     `🎉 **Eventos / poderes:** **${curEvt.total}**`,
     `📊 **Total semanal:** **${curAllTotal}**`,
@@ -1283,7 +1286,7 @@ async function safeUpdate(client, reason) {
   const reasonText = String(reason || "");
 
   const isForceUpdate =
-    reasonText.includes("manual") ||
+    reasonText.includes("manual") || 
     reasonText.includes("force") ||
     reasonText.includes("message:") ||
     reasonText.includes("pagamento:") ||
@@ -1303,15 +1306,10 @@ async function safeUpdate(client, reason) {
   if (LOCK) {
     const lockAge = now - LOCK_TS;
 
-    if (lockAge <= UPDATE_STUCK_MS) {
+    // ✅ Se estiver travado há menos de 45s, coloca na fila.
+    if (lockAge <= 45000) { 
       PENDING_UPDATE = true;
       PENDING_REASON = reasonText || "pending";
-
-      log("⏳ Update já está rodando. Nova atualização ficou na fila:", {
-        reason,
-        lockAgeMs: lockAge,
-      });
-
       return false;
     }
 

@@ -881,7 +881,9 @@ if (dataOCR) {
 // =============================
 function getMonthKey() {
   // Força o fuso horário de São Paulo para evitar virada de mês antecipada
-  const now = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
+  const date = new Date();
+  const utc = date.getTime() + (date.getTimezoneOffset() * 60000);
+  const now = new Date(utc + (3600000 * -3));
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 }
 

@@ -430,7 +430,11 @@ function saveState(s) {
 }
 
 // ================== TIME HELPERS ==================
-const nowSP = () => new Date(new Date().toLocaleString("en-US", { timeZone: TZ }));
+function nowSP() {
+  const date = new Date();
+  const utc = date.getTime() + (date.getTimezoneOffset() * 60000);
+  return new Date(utc + (3600000 * -3));
+}
 
 function ymdSP(date) {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -2092,7 +2096,8 @@ return true; // ✅ Sucesso
 async function safeUpdate(client, reason, opts = {}) {
   // ✅ FIX: Auto-unlock local se travado > 2min
   if (LOCK) {
-    if (Date.now() - LOCK_TS > 120000) {
+    const age = Date.now() - LOCK_TS;
+    if (age > 45000) { // Reduzido de 120s para 45s para ser mais ágil
       console.warn("[SC_GERAL_WEEKLY_RANK] ⚠️ Local LOCK travado. Resetando.");
       LOCK = false;
     } else {
