@@ -46,11 +46,11 @@ const PAY_PERIOD_GOAL = 50; // 🟢
 const PAY_PERIOD_LIMIT = 60; // 🚨
 
 // Scan
-const SCAN_PAGES = 45; // Otimizado para não travar o bot
-const SCAN_PAGES_FAST = 15; // Rápido o suficiente para atualizações em tempo real
+const SCAN_PAGES = 25; // Reduzido para 2500 msgs por canal (mais rápido e estável)
+const SCAN_PAGES_FAST = 10; // Scan rápido de 1000 msgs para interações em tempo real
 const SCAN_TTL_MS = 5 * 1000;
-const FETCH_TIMEOUT_MS = 12000;
-const COLLECT_MAX_MS = 45000;
+const FETCH_TIMEOUT_MS = 8000;
+const COLLECT_MAX_MS = 75000; // Mais tempo para o scan terminar sem ser "chutado"
 
 // ✅ Otimização: parar de escanear se a mensagem for mais velha que 15 dias
 const MAX_AGE_MS = 45 * 24 * 60 * 60 * 1000;
@@ -169,7 +169,11 @@ function readEvt3State() {
 // TIME SAFE (SP)
 // =========================
 function nowSP() {
-  return new Date();
+  // ✅ Força Brasília (UTC-3) independente do fuso do servidor
+  // Isso garante que no Domingo às 00:01 o painel vire a semana na hora.
+  const date = new Date();
+  const utc = date.getTime() + (date.getTimezoneOffset() * 60000);
+  return new Date(utc + (3600000 * -3));
 }
 
 function ymdSP(date) {
@@ -211,9 +215,9 @@ function periodKeyFromDateSP(date) {
   const { y, m, d } = ymdSP(baseDate);
   const todayUTC = new Date(Date.UTC(y, m - 1, d));
   const sundayUTC = addDaysUTC(todayUTC, -dow);
-  const saturdayUTC = addDaysUTC(sundayUTC, 6);
+  const key = sundayUTC.toISOString().slice(0, 10);
 
-  const key = `${sundayUTC.getUTCFullYear()}-${pad2(sundayUTC.getUTCMonth() + 1)}-${pad2(sundayUTC.getUTCDate())}`;
+  const saturdayUTC = addDaysUTC(sundayUTC, 6);
   const sDay = pad2(sundayUTC.getUTCDate());
   const sMon = pad2(sundayUTC.getUTCMonth() + 1);
   const eDay = pad2(saturdayUTC.getUTCDate());
@@ -642,7 +646,7 @@ async function collectAll(client, options = {}) {
   const fast = Boolean(options.fast);
   const pagesLimit = fast ? SCAN_PAGES_FAST : SCAN_PAGES;
 
-  const currentPeriodKey = periodKeyFromDateSP(new Date()).key;
+  const currentPeriodKey = periodKeyFromDateSP(nowSP()).key;
   const cachedPeriodKey = CACHE.payload?.__periodKey || null;
 
   if (
@@ -1184,7 +1188,8 @@ DEBUG.chartPeriods = keys.slice(0, 4);
   const fingerprint = JSON.stringify({
     thisKey, lastKey,
     totals: { cur: curAllTotal, prev: prevAllTotal },
-    pay: { cur: curPay.total, prev: prevPay.total },
+    // ✅ Agora sente mudanças em registrados (all), não só em aprovados.
+    pay: { cur: curPay.total, prev: prevPay.total, all: curPayAll.total },
     evt: { cur: curEvt.total, prev: prevEvt.total },
     chart: { payData, evtData }
   });
@@ -1312,7 +1317,7 @@ async function safeUpdate(client, reason) {
   if (LOCK) {
     const lockAge = now - LOCK_TS;
 
-    if (lockAge <= UPDATE_STUCK_MS) {
+    if (lockAge <= 60000) { // Aumentado para 60s para evitar flood de "fila"
       PENDING_UPDATE = true;
       PENDING_REASON = reasonText || "pending";
 
