@@ -131,7 +131,11 @@ import {
 } from "../events/reminderManager.js";
 
 // Pagamento Social
-import { pagamentoSocialOnReady, handlePagamentoSocial } from "../events/pagamentosocial.js";
+import {
+  pagamentoSocialOnReady,
+  handlePagamentoSocial,
+  pagamentoSocialHandleMessage,
+} from "../events/pagamentosocial.js";
 
 // FormsCreator
 import {
@@ -614,6 +618,9 @@ const setupEventHandlers = () => {
         if (await ausenciasHandleMessage(message, client)) return;
         if (await hierarquiaHandleMessage(message, client)) return;
         if (await reuniaoSemanalHandleMessage(message, client)) return;
+       if (await payEvtDashHandleMessage(message, client)) return;
+       if (await pagamentoSocialHandleMessage(message, client)) return;
+       if (await geralDash.geralDashHandleMessage(message, client)) return;
 
         // ✅ Auto React precisa receber comandos como !reagirsc eventos 1000
         if (await autoReactsFotosHandleMessage(message, client)) return;
@@ -621,23 +628,6 @@ const setupEventHandlers = () => {
         // Se chegou aqui sendo um comando, mas não foi tratado, não precisamos continuar nos listeners de texto
         return;
       }
-
-      try {
-        if (
-          typeof geralDash?.geralDashHandleMessage === "function" &&
-          (await geralDash.geralDashHandleMessage(message, client))
-        ) {
-          return;
-        }
-      } catch (e) {}
-
-      if (!isCommand) {
-        if (await autoReactsFotosHandleMessage(message, client)) return;
-        if (await monitorCargosHandleMessage(message, client)) return;
-        if (await roleProtectHandleMessage(message, client)) return;
-      }
-
-      if (await payEvtDashHandleMessage(message, client)) return;
       if (await facsComparativoHandleMessage(message, client)) return;
       if (await dashRouterHandleMessage(message)) return;
       if (await facsSemanaisHandleMessage(message, client)) return;

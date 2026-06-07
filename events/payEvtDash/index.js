@@ -46,11 +46,11 @@ const PAY_PERIOD_GOAL = 50; // 🟢
 const PAY_PERIOD_LIMIT = 60; // 🚨
 
 // Scan
-const SCAN_PAGES = 20; // Otimizado para estabilidade
-const SCAN_PAGES_FAST = 5; // Scan ultra-rápido para eventos em tempo real
+const SCAN_PAGES = 45; // Otimizado para não travar o bot
+const SCAN_PAGES_FAST = 15; // Rápido o suficiente para atualizações em tempo real
 const SCAN_TTL_MS = 5 * 1000;
-const FETCH_TIMEOUT_MS = 6000;
-const COLLECT_MAX_MS = 45000; 
+const FETCH_TIMEOUT_MS = 12000;
+const COLLECT_MAX_MS = 45000;
 
 // ✅ Otimização: parar de escanear se a mensagem for mais velha que 15 dias
 const MAX_AGE_MS = 45 * 24 * 60 * 60 * 1000;
@@ -211,9 +211,9 @@ function periodKeyFromDateSP(date) {
   const { y, m, d } = ymdSP(baseDate);
   const todayUTC = new Date(Date.UTC(y, m - 1, d));
   const sundayUTC = addDaysUTC(todayUTC, -dow);
-  const key = sundayUTC.toISOString().slice(0, 10);
-
   const saturdayUTC = addDaysUTC(sundayUTC, 6);
+
+  const key = `${sundayUTC.getUTCFullYear()}-${pad2(sundayUTC.getUTCMonth() + 1)}-${pad2(sundayUTC.getUTCDate())}`;
   const sDay = pad2(sundayUTC.getUTCDate());
   const sMon = pad2(sundayUTC.getUTCMonth() + 1);
   const eDay = pad2(saturdayUTC.getUTCDate());
@@ -642,17 +642,7 @@ async function collectAll(client, options = {}) {
   const fast = Boolean(options.fast);
   const pagesLimit = fast ? SCAN_PAGES_FAST : SCAN_PAGES;
 
-  const currentPeriodKey = periodKeyFromDateSP(nowSP()).key;
-  const cachedPeriodKey = CACHE.payload?.__periodKey || null;
-
-  if (
-    CACHE.payload &&
-    now - CACHE.at < SCAN_TTL_MS &&
-    !fast &&
-    cachedPeriodKey === currentPeriodKey
-  ) {
-    return CACHE.payload;
-  }
+  if (CACHE.payload && now - CACHE.at < SCAN_TTL_MS && !fast) return CACHE.payload;
 
   DEBUG.scannedPayMsgs = 0;
   DEBUG.scannedPayRegs = 0;
@@ -1084,7 +1074,7 @@ async function upsertDashboard(client, reason) {
     reasonText.includes("pending:");
 
 const { payments, paymentsAll, paymentsRejected, events } = await collectAll(client, {
-  fast: isFastScan,
+    fast: isFastScan,
 });
 
   const currentWk = periodKeyFromDateSP(nowSP()).key;
@@ -1192,7 +1182,7 @@ DEBUG.chartPeriods = keys.slice(0, 4);
   const fingerprint = JSON.stringify({
     thisKey, lastKey,
     totals: { cur: curAllTotal, prev: prevAllTotal },
-    pay: { cur: curPay.total, prev: prevPay.total, all: curPayAll.total, rejected: monthPayRejected.total },
+    pay: { cur: curPay.total, prev: prevPay.total },
     evt: { cur: curEvt.total, prev: prevEvt.total },
     chart: { payData, evtData }
   });
@@ -1203,6 +1193,8 @@ DEBUG.chartPeriods = keys.slice(0, 4);
     CACHE.payload = null;
     st.lastFingerprint = "";
   }
+
+  const isForcedUpdate = isFastUpdate;
 
   if (st.lastFingerprint === fingerprint && !isForcedUpdate && !periodChanged) return;
 
@@ -1318,7 +1310,7 @@ async function safeUpdate(client, reason) {
   if (LOCK) {
     const lockAge = now - LOCK_TS;
 
-    if (lockAge <= 60000) { // Aumentado para 60s para evitar flood de "fila"
+    if (lockAge <= UPDATE_STUCK_MS) {
       PENDING_UPDATE = true;
       PENDING_REASON = reasonText || "pending";
 

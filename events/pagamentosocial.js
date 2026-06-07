@@ -1068,6 +1068,77 @@ function esconderCamposFinanceiros(categoriaVip, analiseComprovante) {
   return ehVipOuPass && !analiseComprovante?.valorRaw;
 }
 
+const SOCIAL_DASH_LOCK_MAX_MS = 2 * 60 * 1000;
+let SOCIAL_DASH_LOCK = false;
+let SOCIAL_DASH_LOCK_TS = 0;
+
+function resetSocialDashLockIfStuck(force = false) {
+  if (!SOCIAL_DASH_LOCK) return false;
+
+  const travado = Date.now() - Number(SOCIAL_DASH_LOCK_TS || 0) > SOCIAL_DASH_LOCK_MAX_MS;
+
+  if (force || travado) {
+    SOCIAL_DASH_LOCK = false;
+    SOCIAL_DASH_LOCK_TS = 0;
+    console.warn("[PAGAMENTO_SOCIAL_DASH] lock resetado", { force, travado });
+    return true;
+  }
+
+  return false;
+}
+
+async function sincronizarDashboardSocial(client, motivo = "manual", options = {}) {
+  const { forceUnlock = false, recreate = false } = options;
+
+  resetSocialDashLockIfStuck(forceUnlock);
+
+  if (SOCIAL_DASH_LOCK) {
+    return {
+      ok: false,
+      locked: true,
+      message: "Já existe uma atualização do Social Mídias rodando.",
+    };
+  }
+
+  SOCIAL_DASH_LOCK = true;
+  SOCIAL_DASH_LOCK_TS = Date.now();
+
+  try {
+    console.log("[PAGAMENTO_SOCIAL_DASH] inicio", { motivo, recreate });
+
+    if (recreate) {
+      saveJSON_Dash(DASH_STATE_FILE, { messagesByMonth: {} });
+    }
+
+    const stats = await reconstruirStatsPorEmbeds(client, 1000);
+    console.log("[PAGAMENTO_SOCIAL_DASH] reconstruido", {
+      totalCreated: stats?.totalCreated,
+      totalApproved: stats?.totalApproved,
+      totalRejected: stats?.totalRejected,
+      totalRequested: stats?.totalRequested,
+    });
+
+    await updateDashboard(client);
+    console.log("[PAGAMENTO_SOCIAL_DASH] dashboard editado/enviado", { motivo });
+
+    return {
+      ok: true,
+      stats: loadStats(),
+      message: "Dashboard Social Mídias sincronizado com sucesso.",
+    };
+  } catch (err) {
+    console.error("[PAGAMENTO_SOCIAL_DASH] erro", err);
+    return {
+      ok: false,
+      error: err?.message || String(err),
+      message: "Falha ao sincronizar Dashboard Social Mídias.",
+    };
+  } finally {
+    SOCIAL_DASH_LOCK = false;
+    SOCIAL_DASH_LOCK_TS = 0;
+  }
+}
+
 function criarRowDashboardPagamento() {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
@@ -2747,11 +2818,85 @@ export async function pagamentoSocialOnReady(client) {
 
   // ✅ SEMPRE recalcula e atualiza o dashboard ao ligar o bot.
   // Antes, se o menu já existisse, dava return e o gráfico ficava travado.
-  await reconstruirStatsPorEmbeds(client, 1000).catch(() => null);
-  await updateDashboard(client).catch(() => {});
+// ✅ SEMPRE recalcula e atualiza o dashboard ao ligar o bot.
+await sincronizarDashboardSocial(client, "ready", {
+  forceUnlock: true,
+}).catch(() => null);
 }
 
+
+
+
+
 // ============================================================================
+
+export async function pagamentoSocialHandleMessage(message, client) {
+  try {
+    if (!message || message.author?.bot) return false;
+
+    const content = String(message.content || "").trim();
+    if (!content.startsWith("!")) return false;
+
+    const cmd = content.slice(1).split(/\s+/)[0]?.toLowerCase();
+
+    if (!["socialrefresh", "criarsocial"].includes(cmd)) return false;
+
+    const membro = message.member;
+    const permitido =
+      ALLOWED_IDS.includes(message.author.id) ||
+      membro?.roles?.cache?.some((r) => ALLOWED_IDS.includes(r.id));
+
+    if (!permitido) {
+      await message.reply("🚫 Você não tem permissão para atualizar o Dashboard Social Mídias.").catch(() => {});
+      return true;
+    }
+
+    const recriar = cmd === "criarsocial";
+
+    const aviso = await message.reply(
+      recriar
+        ? "🔄 Recriando o Dashboard Social Mídias do zero e sincronizando os dados..."
+        : "🔄 Recalculando e atualizando o Dashboard Social Mídias..."
+    ).catch(() => null);
+
+    const result = await sincronizarDashboardSocial(client, `comando:${cmd}`, {
+      forceUnlock: true,
+      recreate: recriar,
+    });
+
+    if (!result.ok) {
+      await (aviso || message).reply?.(
+        `❌ Falhei ao atualizar o Dashboard Social Mídias.\nMotivo: \`${result.error || result.message || "erro desconhecido"}\``
+      ).catch(() => {});
+      return true;
+    }
+
+    const s = result.stats || loadStats();
+
+    await (aviso || message).edit?.({
+      content: [
+        recriar
+          ? "✅ Dashboard Social Mídias recriado e sincronizado."
+          : "✅ Dashboard Social Mídias recalculado e atualizado.",
+        "",
+        `🧾 Criados: **${Number(s.totalCreated || 0)}**`,
+        `✅ Aprovados: **${Number(s.totalApproved || 0)}**`,
+        `❌ Reprovados: **${Number(s.totalRejected || 0)}**`,
+        `📌 Solicitados: **${Number(s.totalRequested || 0)}**`,
+      ].join("\n"),
+    }).catch(async () => {
+      await message.reply("✅ Dashboard Social Mídias atualizado.").catch(() => {});
+    });
+
+    return true;
+  } catch (err) {
+    console.error("[PAGAMENTO_SOCIAL_DASH] comando erro:", err);
+    await message.reply(`❌ Erro no comando Social Mídias: \`${err?.message || String(err)}\``).catch(() => {});
+    return true;
+  }
+}
+
+
 // ✅ EXPORT 2: HANDLER DO ROTEADOR CENTRAL
 // - Retorna true se a interação era nossa
 // ============================================================================
@@ -2772,14 +2917,28 @@ export async function handlePagamentoSocial(interaction, client) {
 if (id === "pagamento_dash_atualizar") {
   await interaction.deferReply({ ephemeral: true }).catch(() => {});
 
-  const statsRefeitos = await reconstruirStatsPorEmbeds(client, 1000).catch(() => null);
+  const result = await sincronizarDashboardSocial(client, "botao:pagamento_dash_atualizar", {
+    forceUnlock: true,
+  });
 
-  await updateDashboard(client).catch(() => {});
+  if (!result.ok) {
+    await interaction.editReply({
+      content: `❌ Não consegui atualizar o Dashboard Social Mídias.\nMotivo: \`${result.error || result.message || "lock ativo"}\``,
+    }).catch(() => {});
+    return true;
+  }
+
+  const s = result.stats || loadStats();
 
   await interaction.editReply({
-    content: statsRefeitos
-      ? "✅ Dashboard recalculado pelos registros do canal e atualizado com sucesso!"
-      : "⚠️ Dashboard atualizado, mas não consegui recalcular pelos registros do canal.",
+    content: [
+      "✅ Dashboard Social Mídias recalculado e atualizado!",
+      "",
+      `🧾 Criados: **${Number(s.totalCreated || 0)}**`,
+      `✅ Aprovados: **${Number(s.totalApproved || 0)}**`,
+      `❌ Reprovados: **${Number(s.totalRejected || 0)}**`,
+      `📌 Solicitados: **${Number(s.totalRequested || 0)}**`,
+    ].join("\n"),
   }).catch(() => {});
 
   return true;
@@ -3572,8 +3731,9 @@ const msgNova = await canal.send({ embeds: [embedAtualizado] }).catch(() => null
   // Se aprovado/reprovado/solicitado, recalcula estatísticas apenas pelos registros do mês atual
   // depois que a mensagem nova já existe, a antiga saiu do canal e o geralDash recebeu o evento.
 if (["pago", "reprovado", "solicitado"].includes(action)) {
-  await reconstruirStatsPorEmbeds(client, 1000).catch(() => null);
-  await updateDashboard(client).catch(() => {});
+  await sincronizarDashboardSocial(client, `status:${action}`, {
+    forceUnlock: true,
+  }).catch(() => null);
 }
 
   // reposta menu e limpa duplicados

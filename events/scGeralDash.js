@@ -1534,15 +1534,19 @@ await scanChannelEmbeds(client, {
 
     if (!isAlinhamentoRecordEmbed(emb)) return;
 
-    // ✅ ponto vai para quem alinhou (campo 🧭)
-    const uid = alinhamento_getQuemAlinhouId(emb);
-    if (!uid) return;
+// ✅ alinhamento só pontua se estiver VÁLIDO/APROVADO
+const statusAlinhamento = getStatusValueFromEmbed(emb);
+if (!/VÁLIDO|VALIDO|aprovado por/i.test(statusAlinhamento)) return;
 
-    items.push({
-      userId: uid,
-      ts: new Date(m.createdTimestamp),
-      source: "alinhamentos",
-    });
+// ✅ ponto vai para quem alinhou (campo 🧭)
+const uid = alinhamento_getQuemAlinhouId(emb);
+if (!uid) return;
+
+items.push({
+  userId: uid,
+  ts: new Date(m.editedTimestamp || m.createdTimestamp),
+  source: "alinhamentos",
+});
   },
 });
 
@@ -2210,16 +2214,20 @@ for (const rmChannelId of [CH_MANAGER_ID, CH_MANAGER_MAIN_ID]) {
   });
 }
 
-    // -------- ALINHAMENTOS --------
-    if (CH_ALINHAMENTOS_ID) {
-      await scanCurrentWeekEmbeds(
-        client,
-        CH_ALINHAMENTOS_ID,
-        (emb) => isAlinhamentoRecordEmbed(emb),
-        async () => { alinhamentos += 1; },
-        25
-      );
-    }
+ // -------- ALINHAMENTOS --------
+if (CH_ALINHAMENTOS_ID) {
+  await scanCurrentWeekEmbeds(
+    client,
+    CH_ALINHAMENTOS_ID,
+    (emb) => {
+      if (!isAlinhamentoRecordEmbed(emb)) return false;
+      const statusAlinhamento = getStatusValueFromEmbed(emb);
+      return /VÁLIDO|VALIDO|aprovado por/i.test(statusAlinhamento);
+    },
+    async () => { alinhamentos += 1; },
+    25
+  );
+}
 
     // -------- PODERES EM EVENTO (Social Medias) --------
     if (CH_EVENTOS_ID) {
@@ -3450,18 +3458,18 @@ dashOn("rm:rejected", (p) => {
 });
 
 
-    // ✅ ALINHAMENTOS (ALINV1)
-  dashOn("alinhamento:registrado", (p) => {
-    try {
-      const st = loadState();
-      const wk = weekKeyFromDateSP(new Date(p.__at || Date.now()));
-      bumpWeekly(st, "alinhamentos", wk, 1);
-      saveState(st);
-    } catch {}
+// ✅ ALINHAMENTOS (ALINV1)
+// Só conta quando o registro foi VALIDADO no alinhamentos.js
+dashOn("alinhamento:validado", (p) => {
+  try {
+    const st = loadState();
+    const wk = weekKeyFromDateSP(new Date(p.__at || Date.now()));
+    bumpWeekly(st, "alinhamentos", wk, 1);
+    saveState(st);
+  } catch {}
 
-    // ✅ altera ranking/total do scan, então invalida cache
-    markDirty({ invalidateScanCache: true });
-  });
+  markDirty({ invalidateScanCache: true });
+});
 
   // ✅ REGISTRO DE PODERES EM EVENTO (via HUB)
   dashOn("eventopoder:registrado", (p) => {
