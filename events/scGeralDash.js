@@ -1798,14 +1798,10 @@ try {
 }
 
 function chooseWeeksUnion() {
-  const keys = Object.keys(DEBUG.weekKeysFound || {}).sort((a, b) =>
-    a > b ? -1 : 1
-  );
-  return { thisKey: keys[0] || null, lastKey: keys[1] || null, keys };
   const currentWk = weekKeyFromDateSP(nowSP());
   const union = new Set([currentWk]);
   Object.keys(DEBUG.weekKeysFound || {}).forEach(k => union.add(k));
-  const keys = [...union].sort((a, b) => a > b ? -1 : 1);
+  const keys = [...union].sort((a, b) => (a > b ? -1 : 1));
   return { thisKey: currentWk, lastKey: keys[1] || null, keys };
 }
 
