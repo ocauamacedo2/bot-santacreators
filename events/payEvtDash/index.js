@@ -46,10 +46,10 @@ const PAY_PERIOD_GOAL = 50; // 🟢
 const PAY_PERIOD_LIMIT = 60; // 🚨
 
 // Scan
-const SCAN_PAGES = 30; // Reduzido para evitar timeout e travamento
-const SCAN_PAGES_FAST = 10; // Rápido para respostas em tempo real
+const SCAN_PAGES = 45; // Otimizado para não travar o bot
+const SCAN_PAGES_FAST = 15; // Rápido o suficiente para atualizações em tempo real
 const SCAN_TTL_MS = 5 * 1000;
-const FETCH_TIMEOUT_MS = 8000;
+const FETCH_TIMEOUT_MS = 12000;
 const COLLECT_MAX_MS = 45000;
 
 // ✅ Otimização: parar de escanear se a mensagem for mais velha que 15 dias
@@ -169,11 +169,7 @@ function readEvt3State() {
 // TIME SAFE (SP)
 // =========================
 function nowSP() {
-  const date = new Date();
-  // ✅ Força o cálculo em UTC e subtrai 3 horas para Brasília, 
-  // ignorando o relógio interno do servidor da Square Cloud.
-  const utc = date.getTime() + (date.getTimezoneOffset() * 60000);
-  return new Date(utc + (3600000 * -3)); // Força UTC-3 (Brasília)
+  return new Date();
 }
 
 function ymdSP(date) {
@@ -459,13 +455,9 @@ function pushPaymentFromEmbed({
   const uid = getPaymentRegistrarId(emb);
   if (!uid) return false;
 
-  // ✅ IMPORTANTE:
-  // Registrados / pagos / reprovados contam pela data REAL da mensagem atual.
-  // Como o sistema cria uma nova mensagem quando clica em PAGO/REPROVADO/SOLICITADO,
-  // isso faz o dashboard contar corretamente a semana em que o botão foi clicado.
-  const messageRealTs = Number(fallbackTs || Date.now());
+  const paymentRealTs = getPaymentEventTimestamp(emb, fallbackTs);
 
-  const tsCreated = new Date(messageRealTs);
+  const tsCreated = new Date(paymentRealTs);
   const pAll = periodKeyFromDateSP(tsCreated);
   DEBUG.payPeriodFoundAll[pAll.key] = (DEBUG.payPeriodFoundAll[pAll.key] || 0) + 1;
 
@@ -476,7 +468,7 @@ function pushPaymentFromEmbed({
   });
 
   const st = getPaymentStatus(emb);
-  const tsStatus = new Date(messageRealTs);
+  const tsStatus = new Date(paymentRealTs);
   const pStatus = periodKeyFromDateSP(tsStatus);
 
   if (st === "APPROVED") {
@@ -650,7 +642,17 @@ async function collectAll(client, options = {}) {
   const fast = Boolean(options.fast);
   const pagesLimit = fast ? SCAN_PAGES_FAST : SCAN_PAGES;
 
-  if (CACHE.payload && now - CACHE.at < SCAN_TTL_MS && !fast) return CACHE.payload;
+  const currentPeriodKey = periodKeyFromDateSP(new Date()).key;
+  const cachedPeriodKey = CACHE.payload?.__periodKey || null;
+
+  if (
+    CACHE.payload &&
+    now - CACHE.at < SCAN_TTL_MS &&
+    !fast &&
+    cachedPeriodKey === currentPeriodKey
+  ) {
+    return CACHE.payload;
+  }
 
   DEBUG.scannedPayMsgs = 0;
   DEBUG.scannedPayRegs = 0;
@@ -1290,7 +1292,7 @@ async function safeUpdate(client, reason) {
   const reasonText = String(reason || "");
 
   const isForceUpdate =
-    reasonText.includes("manual") || 
+    reasonText.includes("manual") ||
     reasonText.includes("force") ||
     reasonText.includes("message:") ||
     reasonText.includes("pagamento:") ||
@@ -1310,10 +1312,15 @@ async function safeUpdate(client, reason) {
   if (LOCK) {
     const lockAge = now - LOCK_TS;
 
-    // ✅ Se estiver travado há menos de 45s, coloca na fila.
-    if (lockAge <= 45000) { 
+    if (lockAge <= UPDATE_STUCK_MS) {
       PENDING_UPDATE = true;
       PENDING_REASON = reasonText || "pending";
+
+      log("⏳ Update já está rodando. Nova atualização ficou na fila:", {
+        reason,
+        lockAgeMs: lockAge,
+      });
+
       return false;
     }
 
@@ -1395,7 +1402,6 @@ export async function payEvtDashHandleMessage(message, client) {
 
   const autoUpdateChannels = new Set([
     PAY_CHANNEL_ID,
-    PAY_LOG_CHANNEL_ID, // ✅ logs dos botões/status de pagamento
     REGISTRO_EVENTO_CHANNEL_ID,
     CH_PODERES_ID,
     CRONOGRAMA_LOGS_CHANNEL_ID,
