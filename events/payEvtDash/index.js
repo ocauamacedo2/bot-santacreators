@@ -1012,8 +1012,24 @@ async function upsertDashboard(client, reason) {
   events.forEach(e => union.add(e.periodKey));
   const keys = [...union].sort((a, b) => (a > b ? -1 : 1));
   
-const thisKey = currentWk;
-const lastKey = periodKeyFromDateSP(addDaysUTC(new Date(`${currentWk}T12:00:00Z`), -7)).key;
+const hasDataInWeek = (weekKey) => {
+  return (
+    aggregate(payments, weekKey, true).total > 0 ||
+    aggregate(events, weekKey).total > 0
+  );
+};
+
+const latestDataKey = keys.find((key) => hasDataInWeek(key));
+
+const thisKey = hasDataInWeek(currentWk)
+  ? currentWk
+  : latestDataKey || currentWk;
+
+const lastKey = periodKeyFromDateSP(addDaysUTC(new Date(`${thisKey}T12:00:00Z`), -7)).key;
+
+DEBUG.chosenThis = thisKey;
+DEBUG.chosenLast = lastKey;
+DEBUG.chartPeriods = keys.slice(0, 4);
 
   // Agregações (Pagamentos com Ajustes)
   const curPay = thisKey ? aggregate(payments, thisKey, true) : { total: 0, top: [] };
