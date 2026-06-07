@@ -76,7 +76,11 @@ let LOCK = false;
 let LOCK_TS = 0;
 let PENDING_UPDATE = false;
 let PENDING_REASON = "";
+let RUNNING_UPDATE_PROMISE = null;
 let CACHE = { at: 0, payload: null };
+
+const UPDATE_STUCK_MS = 120000;
+const FORCE_WAIT_MS = 90000;
 
 const DEBUG = {
   lastRunAt: null,
@@ -1227,61 +1231,94 @@ const row = new ActionRowBuilder().addComponents(
 
 async function safeUpdate(client, reason) {
   const now = Date.now();
-  if (LOCK) {
-    // ✅ Auto-unlock se a trava estiver presa por mais de 2 minutos
-    if (now - LOCK_TS > 120000) {
-      log("⚠️ Travamento detectado (>2min). Forçando destravamento.");
+  const reasonText = String(reason || "");
+
+  const isForceUpdate =
+    reasonText.includes("manual") ||
+    reasonText.includes("force") ||
+    reasonText.includes("message:") ||
+    reasonText.includes("pagamento:") ||
+    reasonText.includes("cronograma") ||
+    reasonText.includes("halldafama") ||
+    reasonText.includes("eventosdiarios") ||
+    reasonText.includes("pending:");
+
+  if (isForceUpdate) {
+    CACHE = { at: 0, payload: null };
+
+    const st = loadState();
+    st.lastFingerprint = "";
+    saveState(st);
+  }
+
+  if (LOCK && RUNNING_UPDATE_PROMISE) {
+    if (now - LOCK_TS > UPDATE_STUCK_MS) {
+      log("⚠️ Update travado por muito tempo. Liberando trava antiga e iniciando nova atualização.", {
+        reason,
+        lockAgeMs: now - LOCK_TS,
+      });
+
       LOCK = false;
+      LOCK_TS = 0;
+      RUNNING_UPDATE_PROMISE = null;
+      PENDING_UPDATE = false;
+      PENDING_REASON = "";
     } else {
       PENDING_UPDATE = true;
-      PENDING_REASON = String(reason || "pending");
-      log("Update em andamento. Nova atualização ficou pendente:", reason);
-      return false;
+      PENDING_REASON = reasonText || "pending";
+
+      log("Update em andamento. Aguardando terminar para rodar novamente:", reason);
+
+      if (isForceUpdate) {
+        try {
+          await Promise.race([
+            RUNNING_UPDATE_PROMISE,
+            new Promise((resolve) => setTimeout(resolve, FORCE_WAIT_MS)),
+          ]);
+        } catch {}
+
+        if (!LOCK) {
+          return await safeUpdate(client, `pending:${PENDING_REASON || reasonText || "manual"}`);
+        }
+      }
+
+      return true;
     }
   }
 
   LOCK = true;
   LOCK_TS = Date.now();
 
-  try {
-    const reasonText = String(reason || "");
-
-    if (
-      reasonText.includes("manual") ||
-      reasonText.includes("force") ||
-      reasonText.includes("message:") ||
-      reasonText.includes("pagamento:") ||
-      reasonText.includes("cronograma") ||
-      reasonText.includes("halldafama") ||
-      reasonText.includes("eventosdiarios") ||
-      PENDING_UPDATE
-    ) {
-      CACHE = { at: 0, payload: null };
-
-      const st = loadState();
-      st.lastFingerprint = "";
-      saveState(st);
+  RUNNING_UPDATE_PROMISE = (async () => {
+    try {
+      await upsertDashboard(client, reason);
+      return true;
+    } catch (e) {
+      DEBUG.error = e?.stack || e?.message || String(e);
+      console.error("[SC_PAY_EVT_DASH] Update error:", e);
+      return false;
     }
+  })();
 
-    await upsertDashboard(client, reason);
-    return true;
-  } catch (e) {
-    DEBUG.error = e?.stack || e?.message || String(e);
-    console.error("[SC_PAY_EVT_DASH] Update error:", e);
-    return false;
+  try {
+    return await RUNNING_UPDATE_PROMISE;
   } finally {
     LOCK = false;
     LOCK_TS = 0;
+    RUNNING_UPDATE_PROMISE = null;
 
     if (PENDING_UPDATE) {
-      log("🔄 Iniciando atualização que estava na fila...");
       const nextReason = PENDING_REASON || "pending";
       PENDING_UPDATE = false;
       PENDING_REASON = "";
 
+      log("🔄 Rodando atualização pendente agora:", nextReason);
+
       setTimeout(() => {
-        safeUpdate(client, `pending:${nextReason}`).catch(() => {});
-      }, 1500);
+        safeUpdate(client, `pending:${nextReason}`).catch((err) => {
+          console.error("[SC_PAY_EVT_DASH] Erro na atualização pendente:", err);
+        });
+      }, 800);
     }
   }
 }
@@ -1363,8 +1400,8 @@ const ok = await safeUpdate(client, "manual force refresh");
 
 await interaction.editReply({
   content: ok
-    ? "✅ Dashboard semanal recalculado e atualizado com sucesso."
-    : "⏳ Já tinha uma atualização rodando. Deixei outra atualização pendente para rodar automaticamente em seguida.",
+    ? "✅ Dashboard recalculado, cache limpo e atualização enviada para o painel."
+    : "❌ Não consegui atualizar agora. Veja o console para o erro em [SC_PAY_EVT_DASH] Update error.",
 }).catch(() => {});
     return true;
   }
