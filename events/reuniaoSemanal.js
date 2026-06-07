@@ -403,54 +403,145 @@ async function generateWeeklyChartUrl(data, guild) {
   return `https://quickchart.io/chart?c=${encodeURIComponent(JSON.stringify(config))}&width=1000&height=650&backgroundColor=white`;
 }
 
-// ================= UI BUILDERS =================
-function buildAdminEmbed(state, data, winners) {
-  const pautasTexto = state.pautas.length > 0
-    ? state.pautas.map((p, i) => `**${i + 1} - ${p.title}**\n${p.desc}`).join("\n\n")
-    : "_Nenhuma pauta registrada ainda._";
+// ================= EMBED SPLIT HELPERS =================
+const DISCORD_LIMITS = {
+  EMBED_DESCRIPTION: 3900,
+  MAX_EMBEDS_PER_MESSAGE: 10,
+};
 
+function splitTextIntoChunks(text, maxLength = DISCORD_LIMITS.EMBED_DESCRIPTION) {
+  const safeText = String(text || "").trim();
+  if (!safeText) return [];
+
+  const chunks = [];
+  let current = "";
+
+  const blocks = safeText.split(/\n{2,}/);
+
+  for (const block of blocks) {
+    const cleanBlock = block.trim();
+    if (!cleanBlock) continue;
+
+    const candidate = current ? `${current}\n\n${cleanBlock}` : cleanBlock;
+
+    if (candidate.length <= maxLength) {
+      current = candidate;
+      continue;
+    }
+
+    if (current.trim()) {
+      chunks.push(current.trim());
+      current = "";
+    }
+
+    if (cleanBlock.length <= maxLength) {
+      current = cleanBlock;
+      continue;
+    }
+
+    for (let i = 0; i < cleanBlock.length; i += maxLength) {
+      chunks.push(cleanBlock.slice(i, i + maxLength));
+    }
+  }
+
+  if (current.trim()) {
+    chunks.push(current.trim());
+  }
+
+  return chunks;
+}
+
+function buildPautasText(state, withNumbers = true) {
+  if (!state.pautas || state.pautas.length === 0) {
+    return "_Nenhuma pauta registrada ainda._";
+  }
+
+  return state.pautas
+    .map((p, i) => {
+      const title = String(p.title || `Pauta ${i + 1}`).trim();
+      const desc = String(p.desc || "—").trim();
+      const prefix = withNumbers ? `**${i + 1}. ${title}**` : `📌 **${title}**`;
+
+      return `${prefix}\n${desc}`;
+    })
+    .join("\n\n");
+}
+
+function buildPautasEmbeds(state, color = "#2b2d31") {
+  const pautasText = buildPautasText(state, true);
+  const chunks = splitTextIntoChunks(pautasText, DISCORD_LIMITS.EMBED_DESCRIPTION);
+  const safeChunks = chunks.slice(0, DISCORD_LIMITS.MAX_EMBEDS_PER_MESSAGE - 1);
+
+  return safeChunks.map((chunk, index) => {
+    return new EmbedBuilder()
+      .setTitle(safeChunks.length > 1 ? `📌 Pautas da Reunião — Parte ${index + 1}` : "📌 Pautas da Reunião")
+      .setColor(color)
+      .setDescription(chunk)
+      .setFooter({ text: "SantaCreators • Pautas completas da reunião" })
+      .setTimestamp();
+  });
+}
+
+// ================= UI BUILDERS =================
+function buildAdminEmbeds(state, data, winners) {
   const fmtUser = (w) => w ? `<@${w.id}> (**${w.pts}** pts)` : "—";
   
-  const fmtTop3 = (list) => {
+  const fmtTop = (list, limit = 5) => {
     if (!list || list.length === 0) return "_Sem dados_";
-    return list.slice(0, 3).map((x, i) => `\`${i+1}.\` <@${x.id}> (${x.pts})`).join("\n");
+    return list.slice(0, limit).map((x, i) => `\`${i + 1}.\` <@${x.id}> — **${x.pts} pts**`).join("\n");
   };
 
-  const top3Geral = fmtTop3(data.topGeral);
-  const top3Manager = fmtTop3(data.topManager);
-  const top3Social = fmtTop3(data.topSocial);
-  const top3Alinh = fmtTop3(data.topAlinh);
+  const totalPautas = state.pautas?.length || 0;
+  const totalGeral = data.topGeral?.length || 0;
+  const totalManager = data.topManager?.length || 0;
+  const totalSocial = data.topSocial?.length || 0;
+  const totalAlinh = data.topAlinh?.length || 0;
 
-  return new EmbedBuilder()
+  const mainEmbed = new EmbedBuilder()
     .setTitle("📢 Painel de Reunião Semanal (Admin)")
     .setColor("#2b2d31")
     .setDescription(
-      `**Semana:** ${data.wk}\n\n` +
-      `# 📌 Pautas da Reunião\n${pautasTexto}\n\n` +
-      `# 📊 Destaques Calculados (Prévia)\n` +
-      
+      `**Semana:** \`${data.wk}\`\n` +
+      `**Total de pautas registradas:** \`${totalPautas}\`\n\n` +
+
+      `# 📊 Dashboard Geral da Reunião\n\n` +
+
+      `## 🏆 Vencedores Calculados\n` +
       `🏆 **Creator Destaque (Geral):** ${fmtUser(winners.winnerGeral)}\n` +
-      `> **Top 3 Geral:**\n${top3Geral}\n\n` +
-      
       `📞 **Master Manager:** ${fmtUser(winners.winnerManager)}\n` +
-      `> **Top 3 Manager:**\n${top3Manager}\n\n` +
-      
-      `📢 **Master Eventos:** ${fmtUser(winners.winnerSocial)}\n` +
-      `> **Top 3 Social:**\n${top3Social}\n\n` +
-      
-      `🧩 **Top Alinhadores:**\n${top3Alinh}\n\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━\n` +
-      `**⚠️ Instruções Pós-Reunião:**\n` +
-      `1. Identificar quem subiu/desceu e ajustar permissões.\n` +
-      `2. Fazer alinhamento individual.\n` +
-      `3. Resolver pendências.\n` +
-      `4. **Clicar em "✅ Publicar & Aplicar Cargos"** para oficializar.`
+      `📢 **Master Eventos:** ${fmtUser(winners.winnerSocial)}\n\n` +
+
+      `## 📌 Totais Encontrados\n` +
+      `• **Ranking Geral:** \`${totalGeral}\` membro(s)\n` +
+      `• **Ranking Manager:** \`${totalManager}\` membro(s)\n` +
+      `• **Ranking Social/Eventos:** \`${totalSocial}\` membro(s)\n` +
+      `• **Ranking Alinhamentos:** \`${totalAlinh}\` membro(s)\n\n` +
+
+      `━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+
+      `## 🥇 Top 5 Geral\n${fmtTop(data.topGeral, 5)}\n\n` +
+      `## 📞 Top 5 Manager\n${fmtTop(data.topManager, 5)}\n\n` +
+      `## 📢 Top 5 Social/Eventos\n${fmtTop(data.topSocial, 5)}\n\n` +
+      `## 🧩 Top 5 Alinhadores\n${fmtTop(data.topAlinh, 5)}\n\n` +
+
+      `━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+
+      `## ⚠️ Instruções Pós-Reunião\n` +
+      `1. Conferir se os vencedores estão corretos.\n` +
+      `2. Verificar quem subiu, desceu ou precisa de alinhamento.\n` +
+      `3. Resolver pendências citadas nas pautas.\n` +
+      `4. Conferir cargos e permissões antes de publicar.\n` +
+      `5. Clicar em **"✅ Publicar & Aplicar Cargos"** apenas quando tudo estiver validado.`
     )
     .setFooter({ text: "Somente Responsáveis podem ver e editar isso." })
     .setTimestamp();
+
+  const pautaEmbeds = buildPautasEmbeds(state, "#2b2d31");
+
+  return [mainEmbed, ...pautaEmbeds];
 }
 
-async function buildPublicEmbed(state, data, winners, guild) {
+async function buildPublicEmbeds(state, data, winners, guild) {
   const fmtUser = (w) => (w ? `<@${w.id}>` : "—");
 
   const fmtTop3 = (list) => {
@@ -461,7 +552,7 @@ async function buildPublicEmbed(state, data, winners, guild) {
   const top3Alinh = fmtTop3(data.topAlinh);
   const chartUrl = await generateWeeklyChartUrl(data, guild);
 
-  const embed = new EmbedBuilder()
+  const mainEmbed = new EmbedBuilder()
     .setTitle("📝 Resumo da Reunião Semanal")
     .setColor("#9b59b6")
     .setImage(chartUrl)
@@ -480,57 +571,16 @@ async function buildPublicEmbed(state, data, winners, guild) {
       `*Recebe: VIP Evento (7 dias) + Cargo Master de Eventos*\n\n` +
       `## 🧩 Top Alinhadores\n${top3Alinh}\n\n` +
       `━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `## 📌 Pautas Abordadas\n` +
+      `As pautas completas estão nos embeds abaixo, separadas em partes para não cortar nenhuma informação.\n\n` +
       `*Parabéns a todos pelo empenho! Vamos com tudo para a próxima semana.* 🚀`
     )
     .setFooter({ text: "SantaCreators • Reunião Semanal" })
     .setTimestamp();
 
-  // Adiciona pautas em campos separados para evitar limite de descrição
-  const pautasTexto = state.pautas.length > 0
-    ? state.pautas.map((p) => `📌 **${p.title}**\n${p.desc}`).join("\n\n")
-    : null;
+  const pautaEmbeds = buildPautasEmbeds(state, "#9b59b6");
 
-  if (pautasTexto) {
-    const FIELD_VALUE_LIMIT = 1024;
-    if (pautasTexto.length <= FIELD_VALUE_LIMIT) {
-      embed.addFields({ name: "# 📌 Pautas Abordadas", value: pautasTexto, inline: false });
-    } else {
-      // Lógica de split segura
-      let currentPautaText = "";
-      let fieldCount = 1;
-
-      for (const pauta of state.pautas) {
-        // Corta pautas individuais gigantes para não quebrar o limite hard do Discord
-        let pautaString = `📌 **${pauta.title}**\n${pauta.desc}\n\n`;
-        if (pautaString.length > FIELD_VALUE_LIMIT) {
-           pautaString = pautaString.slice(0, FIELD_VALUE_LIMIT - 10) + "...\n\n";
-        }
-
-        // Se somar vai estourar o limite:
-        if (currentPautaText.length + pautaString.length > FIELD_VALUE_LIMIT) {
-          // Só adiciona se tiver algo acumulado (evita erro de campo vazio)
-          if (currentPautaText.trim().length > 0) {
-            embed.addFields({ name: `# 📌 Pautas Abordadas (Parte ${fieldCount})`, value: currentPautaText, inline: false });
-            fieldCount++;
-          }
-          // Começa novo acumulador com a pauta atual
-          currentPautaText = pautaString;
-        } else {
-          // Cabe no acumulador
-          currentPautaText += pautaString;
-        }
-      }
-      // Sobra final
-      if (currentPautaText.trim().length > 0) {
-        embed.addFields({ name: `# 📌 Pautas Abordadas (Parte ${fieldCount})`, value: currentPautaText, inline: false });
-      }
-    }
-  } else {
-    embed.addFields({ name: "# 📌 Pautas Abordadas", value: "—", inline: false });
-  }
-
-
-  return embed;
+  return [mainEmbed, ...pautaEmbeds];
 }
 
 
@@ -564,18 +614,18 @@ async function updateAdminPanel(client) {
     const data = await aggregateData(channel.guild);
     const winners = calculateWinners(data);
 
-    const embed = buildAdminEmbed(state, data, winners);
+    const embeds = buildAdminEmbeds(state, data, winners);
     const rows = buildAdminRows();
 
     if (state.panelMessageId) {
       const msg = await channel.messages.fetch(state.panelMessageId).catch(() => null);
       if (msg) {
-        await msg.edit({ embeds: [embed], components: rows });
+        await msg.edit({ embeds, components: rows });
         return true;
       }
     }
 
-    const newMsg = await channel.send({ embeds: [embed], components: rows });
+    const newMsg = await channel.send({ embeds, components: rows });
     state.panelMessageId = newMsg.id;
     saveState(state);
     return true;
@@ -830,8 +880,8 @@ export async function reuniaoSemanalHandleInteraction(interaction, client) {
     try {
       const publicChannel = await client.channels.fetch(PUBLIC_CHANNEL_ID).catch(() => null);
       if (publicChannel) {
-        const publicEmbed = await buildPublicEmbed(state, data, winners, interaction.guild);
-        await publicChannel.send({ content: "@everyone Resumo da Reunião Semanal:", embeds: [publicEmbed] });
+        const publicEmbeds = await buildPublicEmbeds(state, data, winners, interaction.guild);
+        await publicChannel.send({ content: "@everyone Resumo da Reunião Semanal:", embeds: publicEmbeds });
         publicMessageSent = true;
       } else {
         publicMessageError = "Canal público não encontrado.";
@@ -864,8 +914,8 @@ export async function reuniaoSemanalHandleInteraction(interaction, client) {
     try {
       const publicChannel = await client.channels.fetch(PUBLIC_CHANNEL_ID).catch(() => null);
       if (publicChannel) {
-        const publicEmbed = await buildPublicEmbed(state, data, winners, interaction.guild);
-        await publicChannel.send({ content: "@everyone Resumo da Reunião Semanal (Sem alteração de cargos):", embeds: [publicEmbed] });
+        const publicEmbeds = await buildPublicEmbeds(state, data, winners, interaction.guild);
+        await publicChannel.send({ content: "@everyone Resumo da Reunião Semanal (Sem alteração de cargos):", embeds: publicEmbeds });
         publicMessageSent = true;
       } else {
         publicMessageError = "Canal público não encontrado.";
@@ -939,10 +989,10 @@ export async function reuniaoSemanalHandleInteraction(interaction, client) {
       const publicChannel = await client.channels.fetch(PUBLIC_CHANNEL_ID).catch(() => null);
 
       if (publicChannel) {
-        const publicEmbed = await buildPublicEmbed(state, data, winners, interaction.guild);
+        const publicEmbeds = await buildPublicEmbeds(state, data, winners, interaction.guild);
         await publicChannel.send({
           content: `@everyone Resumo da Reunião Semanal — Semana anterior \`${previousWeekKey}\`:`,
-          embeds: [publicEmbed]
+          embeds: publicEmbeds
         });
 
         publicMessageSent = true;
