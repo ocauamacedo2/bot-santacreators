@@ -46,8 +46,11 @@ const PAY_PERIOD_GOAL = 50;
 const PAY_PERIOD_LIMIT = 60;
 
 // Scan
-const SCAN_PAGES = 160;
-const SCAN_TTL_MS = 25 * 1000;
+const SCAN_PAGES = 40;
+const SCAN_PAGES_FAST = 8;
+const SCAN_TTL_MS = 8 * 1000;
+const FETCH_TIMEOUT_MS = 12000;
+const COLLECT_MAX_MS = 45000;
 
 // ✅ Otimização: parar de escanear se a mensagem for mais velha que 15 dias
 const MAX_AGE_MS = 45 * 24 * 60 * 60 * 1000;
@@ -79,9 +82,8 @@ let PENDING_REASON = "";
 let RUNNING_UPDATE_PROMISE = null;
 let CACHE = { at: 0, payload: null };
 
-const UPDATE_STUCK_MS = 120000;
-const FORCE_WAIT_MS = 90000;
-
+const UPDATE_STUCK_MS = 30000;
+const FORCE_WAIT_MS = 15000;
 const DEBUG = {
   lastRunAt: null,
   lastReason: "",
@@ -592,12 +594,52 @@ function isTooOld(ts) {
   return (Date.now() - ts) > MAX_AGE_MS;
 }
 
+function isCollectTimedOut(startedAt) {
+  return Date.now() - startedAt > COLLECT_MAX_MS;
+}
+
+async function withTimeout(promise, ms, fallback = null) {
+  let timer = null;
+
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve(fallback), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function fetchMessagesSafe(channel, options) {
+  return await withTimeout(
+    channel.messages.fetch(options).catch(() => null),
+    FETCH_TIMEOUT_MS,
+    null
+  );
+}
+
+async function fetchChannelSafe(client, channelId) {
+  return await withTimeout(
+    client.channels.fetch(channelId).catch(() => null),
+    FETCH_TIMEOUT_MS,
+    null
+  );
+}
+
 // =========================
 // COLLECT DATA
 // =========================
-async function collectAll(client) {
+async function collectAll(client, options = {}) {
   const now = Date.now();
-  if (CACHE.payload && now - CACHE.at < SCAN_TTL_MS) return CACHE.payload;
+  const startedAt = Date.now();
+
+  const fast = Boolean(options.fast);
+  const pagesLimit = fast ? SCAN_PAGES_FAST : SCAN_PAGES;
+
+  if (CACHE.payload && now - CACHE.at < SCAN_TTL_MS && !fast) return CACHE.payload;
 
   DEBUG.scannedPayMsgs = 0;
   DEBUG.scannedPayRegs = 0;
@@ -621,11 +663,13 @@ async function collectAll(client) {
   // 1. PAGAMENTOS (Blue)
   const seenPaymentMessages = new Set();
 
-  const payCh = await client.channels.fetch(PAY_CHANNEL_ID).catch(() => null);
+  const payCh = await fetchChannelSafe(client, PAY_CHANNEL_ID);
   if (payCh?.isTextBased?.()) {
     let lastId;
-    for (let page = 0; page < SCAN_PAGES; page++) {
-      const batch = await payCh.messages.fetch({ limit: 100, before: lastId }).catch(() => null);
+ for (let page = 0; page < pagesLimit; page++) {
+  if (isCollectTimedOut(startedAt)) break;
+
+  const batch = await fetchMessagesSafe(payCh, { limit: 100, before: lastId });
       if (!batch?.size) break;
 
       let stopScan = false;
@@ -1006,7 +1050,21 @@ async function upsertDashboard(client, reason) {
   if (!dash?.isTextBased?.()) return;
 
   const st = loadState();
-  const { payments, paymentsAll, paymentsRejected, events } = await collectAll(client);
+  const reasonText = String(reason || "");
+
+const isFastUpdate =
+  reasonText.includes("manual") ||
+  reasonText.includes("force") ||
+  reasonText.includes("message:") ||
+  reasonText.includes("pagamento:") ||
+  reasonText.includes("cronograma") ||
+  reasonText.includes("halldafama") ||
+  reasonText.includes("eventosdiarios") ||
+  reasonText.includes("pending:");
+
+const { payments, paymentsAll, paymentsRejected, events } = await collectAll(client, {
+  fast: isFastUpdate,
+});
 
   const currentWk = periodKeyFromDateSP(new Date()).key;
   
@@ -1251,57 +1309,54 @@ async function safeUpdate(client, reason) {
     saveState(st);
   }
 
-  if (LOCK && RUNNING_UPDATE_PROMISE) {
-    if (now - LOCK_TS > UPDATE_STUCK_MS) {
-      log("⚠️ Update travado por muito tempo. Liberando trava antiga e iniciando nova atualização.", {
-        reason,
-        lockAgeMs: now - LOCK_TS,
-      });
+  if (LOCK) {
+    const lockAge = now - LOCK_TS;
 
-      LOCK = false;
-      LOCK_TS = 0;
-      RUNNING_UPDATE_PROMISE = null;
-      PENDING_UPDATE = false;
-      PENDING_REASON = "";
-    } else {
+    if (lockAge <= UPDATE_STUCK_MS) {
       PENDING_UPDATE = true;
       PENDING_REASON = reasonText || "pending";
 
-      log("Update em andamento. Aguardando terminar para rodar novamente:", reason);
+      log("⏳ Update já está rodando. Nova atualização ficou na fila:", {
+        reason,
+        lockAgeMs: lockAge,
+      });
 
-      if (isForceUpdate) {
-        try {
-          await Promise.race([
-            RUNNING_UPDATE_PROMISE,
-            new Promise((resolve) => setTimeout(resolve, FORCE_WAIT_MS)),
-          ]);
-        } catch {}
-
-        if (!LOCK) {
-          return await safeUpdate(client, `pending:${PENDING_REASON || reasonText || "manual"}`);
-        }
-      }
-
-      return true;
+      return false;
     }
+
+    log("⚠️ Update antigo travado. Forçando nova atualização:", {
+      reason,
+      lockAgeMs: lockAge,
+    });
+
+    LOCK = false;
+    LOCK_TS = 0;
+    RUNNING_UPDATE_PROMISE = null;
   }
 
   LOCK = true;
   LOCK_TS = Date.now();
 
-  RUNNING_UPDATE_PROMISE = (async () => {
-    try {
-      await upsertDashboard(client, reason);
-      return true;
-    } catch (e) {
-      DEBUG.error = e?.stack || e?.message || String(e);
-      console.error("[SC_PAY_EVT_DASH] Update error:", e);
-      return false;
-    }
-  })();
-
   try {
-    return await RUNNING_UPDATE_PROMISE;
+    RUNNING_UPDATE_PROMISE = upsertDashboard(client, reason);
+    await RUNNING_UPDATE_PROMISE;
+
+    log("✅ Dashboard atualizado:", {
+      reason,
+      scannedPayMsgs: DEBUG.scannedPayMsgs,
+      scannedPayRegs: DEBUG.scannedPayRegs,
+      scannedPayLogMsgs: DEBUG.scannedPayLogMsgs,
+      scannedPayLogRecovered: DEBUG.scannedPayLogRecovered,
+      scannedEvtManualMsgs: DEBUG.scannedEvtManualMsgs,
+      scannedPoderesMsgs: DEBUG.scannedPoderesMsgs,
+      scannedCronoMsgs: DEBUG.scannedCronoMsgs,
+    });
+
+    return true;
+  } catch (e) {
+    DEBUG.error = e?.stack || e?.message || String(e);
+    console.error("[SC_PAY_EVT_DASH] Update error:", e);
+    return false;
   } finally {
     LOCK = false;
     LOCK_TS = 0;
@@ -1312,13 +1367,11 @@ async function safeUpdate(client, reason) {
       PENDING_UPDATE = false;
       PENDING_REASON = "";
 
-      log("🔄 Rodando atualização pendente agora:", nextReason);
-
       setTimeout(() => {
         safeUpdate(client, `pending:${nextReason}`).catch((err) => {
           console.error("[SC_PAY_EVT_DASH] Erro na atualização pendente:", err);
         });
-      }, 800);
+      }, 1200);
     }
   }
 }
@@ -1396,12 +1449,16 @@ export async function payEvtDashHandleInteraction(interaction, client) {
     st.lastFingerprint = "";
     saveState(st);
 
+await interaction.editReply({
+  content: "🔄 Atualização manual iniciada. Estou limpando o cache e recalculando o dashboard...",
+}).catch(() => {});
+
 const ok = await safeUpdate(client, "manual force refresh");
 
 await interaction.editReply({
   content: ok
-    ? "✅ Dashboard recalculado, cache limpo e atualização enviada para o painel."
-    : "❌ Não consegui atualizar agora. Veja o console para o erro em [SC_PAY_EVT_DASH] Update error.",
+    ? "✅ Dashboard atualizado com sucesso. Cache limpo, painel recalculado e mensagem editada."
+    : "⏳ Já tinha uma atualização rodando. Deixei essa atualização na fila e ela vai rodar em seguida.",
 }).catch(() => {});
     return true;
   }
