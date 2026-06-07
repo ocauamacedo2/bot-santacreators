@@ -56,12 +56,12 @@ const ALLOWED_MANAGE_ROLES = [
 ];
 
 const SCAN_CONFIG = {
-  pagesPerChannel: 8,
+  pagesPerChannel: 12,
   fetchLimit: 100,
-  maxAgeDays: 14,
+  maxAgeDays: 70,
 
   // Evita travar tentando abrir centenas de links antigos dos logs
-  maxLinkedLogsToRecover: 80,
+  maxLinkedLogsToRecover: 120,
   linkedFetchTimeoutMs: 2500,
 };
 
@@ -190,6 +190,27 @@ function labelFromMonthKey(key) {
   return `${m}/${y}`;
 }
 
+function previousMonthKeySP(date = nowSP()) {
+  const { y, m } = ymdSP(date);
+
+  const prev = m === 1
+    ? { y: y - 1, m: 12 }
+    : { y, m: m - 1 };
+
+  return `${prev.y}-${pad2(prev.m)}`;
+}
+
+function dashboardAllowedMonthKeys() {
+  const current = monthKeyFromDateSP(nowSP());
+  const previous = previousMonthKeySP(nowSP());
+
+  return new Set([current, previous]);
+}
+
+function isDashboardMonthAllowed(monthKey) {
+  return dashboardAllowedMonthKeys().has(monthKey);
+}
+
 function dateFromBR(text, fallbackTs) {
   const raw = String(text || "");
   const m = raw.match(/\b(\d{1,2})[\/.-](\d{1,2})(?:[\/.-](\d{2,4}))?\b/);
@@ -256,7 +277,8 @@ function extractFirstDiscordLink(text) {
 }
 
 function statusFromText(text) {
-  const t = norm(text);
+  const raw = String(text || "");
+  const t = norm(raw);
 
   if (
     t.includes("reprovado") ||
@@ -275,11 +297,11 @@ function statusFromText(text) {
     return "requested";
   }
 
+  // APROVADO REAL DE PAGAMENTO:
+  // somente botão/status PAGO conta como aprovado.
   if (
-    t.includes("pago") ||
-    t.includes("aprovado") ||
-    t.includes("pagamento confirmado") ||
-    t.includes("confirmado")
+    /\bpago\b/i.test(t) ||
+    /✅\s*\*{0,2}pago\*{0,2}/i.test(raw)
   ) {
     return "approved";
   }
@@ -368,9 +390,29 @@ function isCronoHallDailyEmbed(embed) {
   );
 }
 
+function getFooterUserId(embed) {
+  const footer = String(embed?.footer?.text || embed?.data?.footer?.text || "");
+  const match = footer.match(/User ID:\s*(\d{17,20})/i);
+  return match ? match[1] : null;
+}
+
 function getActorIdFromEventEmbed(embed) {
+  // Prioridade: quem criou/solicitou/registrou.
+  // Aprovador NÃO deve ganhar ponto.
   return (
-    extractUserId(findFieldValue(embed, ["aprovado por", "registrado por", "responsavel", "responsável", "autor"])) ||
+    extractUserId(findFieldValue(embed, [
+      "solicitante",
+      "aberto por",
+      "criado por",
+      "registrado por",
+      "feito por",
+      "responsavel",
+      "responsável",
+      "autor",
+      "usuario",
+      "usuário",
+    ])) ||
+    getFooterUserId(embed) ||
     extractUserId(getEmbedText(embed))
   );
 }
@@ -446,8 +488,20 @@ function addPayment(stats, item) {
   const period = periodKeyFromDateSP(date);
   const monthKey = monthKeyFromDateSP(date);
 
+  // Só entra mês atual ou mês passado.
+  if (!isDashboardMonthAllowed(monthKey)) return;
+
+  // Só conta pagamento com decisão final.
+  // Solicitado / criado / avaliação NÃO entra no dashboard.
+  if (!["approved", "rejected"].includes(item.status)) return;
+
+  // Sem criador do registro, não conta ponto.
+  if (!item.creatorId) return;
+
   const buckets = ensureBucket(stats, period.key, monthKey);
 
+  // "paymentsCreated" aqui passa a representar registros analisados:
+  // aprovados + reprovados. Não entra solicitado.
   buckets.week.paymentsCreated++;
   buckets.month.paymentsCreated++;
 
@@ -461,31 +515,23 @@ function addPayment(stats, item) {
     buckets.month.paymentsRejected++;
   }
 
-  if (item.status === "requested") {
-    buckets.week.paymentsRequested++;
-    buckets.month.paymentsRequested++;
-  }
-
   const creator = ensureUser(stats, item.creatorId);
+
   if (creator) {
     creator.paymentsCreated++;
-    creator.pointsPayment += 1;
-  }
 
-  const decisionUser = ensureUser(stats, item.decisionUserId);
-  if (decisionUser && item.status === "approved") {
-    decisionUser.paymentsApproved++;
-    decisionUser.pointsPayment += 2;
-  }
+    if (item.status === "approved") {
+      creator.paymentsApproved++;
 
-  if (decisionUser && item.status === "rejected") {
-    decisionUser.paymentsRejected++;
-    decisionUser.pointsPayment += 1;
-  }
+      // Ponto de pagamento APENAS para quem criou o registro aprovado.
+      creator.pointsPayment += 1;
+    }
 
-  if (decisionUser && item.status === "requested") {
-    decisionUser.paymentsRequested++;
-    decisionUser.pointsPayment += 1;
+    if (item.status === "rejected") {
+      creator.paymentsRejected++;
+
+      // Reprovado aparece no relatório, mas NÃO dá ponto.
+    }
   }
 
   stats.payments.push({
@@ -499,6 +545,12 @@ function addEvent(stats, item) {
   const date = new Date(item.ts || Date.now());
   const period = periodKeyFromDateSP(date);
   const monthKey = monthKeyFromDateSP(date);
+
+  // Eventos também só entram mês atual ou mês passado.
+  if (!isDashboardMonthAllowed(monthKey)) return;
+
+  // Sem usuário dono/solicitante/criador, não dá ponto.
+  if (!item.userId) return;
 
   const buckets = ensureBucket(stats, period.key, monthKey);
 
@@ -523,12 +575,14 @@ function addEvent(stats, item) {
   }
 
   const user = ensureUser(stats, item.userId);
+
   if (user) {
     if (item.kind === "manual") user.eventsManual++;
     if (item.kind === "poderes") user.eventsPoderes++;
     if (item.kind === "evt3") user.eventsEvt3++;
     if (item.kind === "crono") user.eventsCrono++;
 
+    // Todo evento válido dá 1 ponto para quem criou/solicitou/registrou.
     user.pointsEvent += 1;
   }
 
@@ -658,68 +712,49 @@ async function scanPaymentLogs(client, stats, seen) {
 
     const link = extractFirstDiscordLink(allText);
 
-    if (link && linkedRecoveredAttempts < SCAN_CONFIG.maxLinkedLogsToRecover) {
-      linkedRecoveredAttempts++;
+    // Logs servem APENAS para recuperar a mensagem original do registro.
+    // O embed do log sozinho NÃO conta como pagamento.
+    if (!link) continue;
 
-      const linked = await fetchLinkedMessage(client, link);
-      const embed = linked?.embeds?.[0];
+    if (linkedRecoveredAttempts >= SCAN_CONFIG.maxLinkedLogsToRecover) continue;
 
-      if (embed && isPaymentEmbed(embed)) {
-        const key = `paymsg:${linked.id}`;
+    linkedRecoveredAttempts++;
 
-        if (!seen.has(key)) {
-          seen.add(key);
-          stats.debug.recoveredFromLogs++;
+    const linked = await fetchLinkedMessage(client, link);
+    const embed = linked?.embeds?.[0];
 
-          const status = getPaymentStatus(embed);
-          const date = getPaymentDate(embed, linked.createdTimestamp);
-          const creatorId = getPaymentCreatorId(embed);
-          const decisionUserId = getPaymentDecisionUserId(embed);
+    if (!embed || !isPaymentEmbed(embed)) continue;
 
-          addPayment(stats, {
-            key,
-            source: "payment_log_link",
-            messageId: linked.id,
-            channelId: linked.channelId,
-            logMessageId: msg.id,
-            ts: date.getTime(),
-            status,
-            creatorId,
-            decisionUserId,
-          });
-        }
+    const key = `paymsg:${linked.id}`;
 
-        continue;
-      }
+    if (seen.has(key)) {
+      stats.debug.duplicatesIgnored++;
+      continue;
     }
 
-    for (const embed of msg.embeds || []) {
-      if (!isPaymentLogEmbed(embed)) continue;
+    seen.add(key);
+    stats.debug.recoveredFromLogs++;
 
-      const key = `paylog:${msg.id}`;
-      if (seen.has(key)) {
-        stats.debug.duplicatesIgnored++;
-        continue;
-      }
+    const status = getPaymentStatus(embed);
 
-      seen.add(key);
+    // Só aprovado/reprovado entra.
+    if (!["approved", "rejected"].includes(status)) continue;
 
-      const status = statusFromText(getEmbedText(embed));
-      const date = getPaymentDate(embed, msg.createdTimestamp);
-      const creatorId = getPaymentCreatorId(embed);
-      const decisionUserId = getPaymentDecisionUserId(embed) || extractUserId(getEmbedText(embed));
+    const date = getPaymentDate(embed, linked.createdTimestamp);
+    const creatorId = getPaymentCreatorId(embed);
+    const decisionUserId = getPaymentDecisionUserId(embed);
 
-      addPayment(stats, {
-        key,
-        source: "payment_log",
-        messageId: msg.id,
-        channelId: msg.channelId,
-        ts: date.getTime(),
-        status,
-        creatorId,
-        decisionUserId,
-      });
-    }
+    addPayment(stats, {
+      key,
+      source: "payment_log_link",
+      messageId: linked.id,
+      channelId: linked.channelId,
+      logMessageId: msg.id,
+      ts: date.getTime(),
+      status,
+      creatorId,
+      decisionUserId,
+    });
   }
 
   console.log("[SC_PAY_EVT_DASH_V2] logs de pagamento finalizados", {
@@ -878,11 +913,12 @@ function makeDashboardEmbed(stats) {
   const w = stats.byWeek[thisWeek.key] || {};
   const last = stats.byWeek[lastWeekKey] || {};
   const m = stats.byMonth[monthKey] || {};
+const previousMonthKey = previousMonthKeySP(now);
+const previousMonth = stats.byMonth[previousMonthKey] || {};
 
-  const payApproved = Number(w.paymentsApproved || 0);
-  const payCreated = Number(w.paymentsCreated || 0);
-  const payRejected = Number(w.paymentsRejected || 0);
-  const payRequested = Number(w.paymentsRequested || 0);
+const payApproved = Number(w.paymentsApproved || 0);
+const payRejected = Number(w.paymentsRejected || 0);
+const payAnalyzed = payApproved + payRejected;
 
   const eventsManual = Number(w.eventsManual || 0);
   const eventsPoderes = Number(w.eventsPoderes || 0);
@@ -904,7 +940,7 @@ function makeDashboardEmbed(stats) {
     Number(m.eventsEvt3 || 0) +
     Number(m.eventsCrono || 0);
 
-  const monthTotal = Number(m.paymentsCreated || 0) + monthEvents;
+  const monthTotal = Number(m.paymentsApproved || 0) + monthEvents;
 
   const status =
     payApproved >= PAY_PERIOD_LIMIT
@@ -944,15 +980,19 @@ function makeDashboardEmbed(stats) {
     .addFields(
       {
         name: "━━━━━━━━━━━━━━━━━━━━━━\n📌 RESUMO DA SEMANA",
-        value: [
-          `💵 **Pagamentos criados:** \`${payCreated}\``,
-          `✅ **Pagamentos aprovados:** \`${payApproved}\``,
-          `📌 **Solicitados:** \`${payRequested}\``,
-          `❌ **Reprovados:** \`${payRejected}\``,
-          "",
-          `🎉 **Eventos/fontes:** \`${eventsTotal}\``,
-          `📦 **Total semanal:** \`${payCreated + eventsTotal}\``,
-        ].join("\n"),
+value: [
+  "**Pagamentos**",
+  `> ✅ Aprovados/PAGO: **${payApproved}**`,
+  `> ❌ Reprovados: **${payRejected}**`,
+  `> 📋 Analisados: **${payAnalyzed}**`,
+  "",
+  "**Pontuação válida**",
+  `> 💵 Pontos de pagamentos: **${payApproved}**`,
+  `> 🎉 Pontos de eventos: **${eventsTotal}**`,
+  `> 📦 Total válido: **${payApproved + eventsTotal}**`,
+  "",
+  "> Só **PAGO** dá ponto para quem criou o registro.",
+].join("\n"),
         inline: false,
       },
       {
@@ -979,30 +1019,46 @@ function makeDashboardEmbed(stats) {
         ].join("\n"),
         inline: false,
       },
-      {
-        name: "━━━━━━━━━━━━━━━━━━━━━━\n📦 TOTAIS DO MÊS",
-        value: [
-          "**Pagamentos**",
-          `> 💵 Criados: **${Number(m.paymentsCreated || 0)}**`,
-          `> ✅ Aprovados: **${Number(m.paymentsApproved || 0)}**`,
-          `> 📌 Solicitados: **${Number(m.paymentsRequested || 0)}**`,
-          `> ❌ Reprovados: **${Number(m.paymentsRejected || 0)}**`,
-          "",
-          "**Eventos e fontes**",
-          `> 🎉 Manuais: **${Number(m.eventsManual || 0)}**`,
-          `> ⚡ Poderes: **${Number(m.eventsPoderes || 0)}**`,
-          `> 🧩 EVT3: **${Number(m.eventsEvt3 || 0)}**`,
-          `> 📅 Cronograma / Hall / Diários: **${Number(m.eventsCrono || 0)}**`,
-          "",
-          `📦 **Total geral do mês:** \`${monthTotal}\``,
-        ].join("\n"),
-        inline: false,
-      },
-      {
-        name: "━━━━━━━━━━━━━━━━━━━━━━\n🏆 RANKING GERAL",
-        value: topList(stats, "pointsTotal", 5),
-        inline: false,
-      },
+ {
+  name: "━━━━━━━━━━━━━━━━━━━━━━\n📦 TOTAIS DO MÊS",
+  value: [
+    `**Mês atual:** \`${labelFromMonthKey(monthKey)}\``,
+    "",
+    "**Pagamentos contabilizados**",
+    `> ✅ Aprovados/PAGO: **${Number(m.paymentsApproved || 0)}**`,
+    `> ❌ Reprovados: **${Number(m.paymentsRejected || 0)}**`,
+    `> 📋 Analisados: **${Number(m.paymentsApproved || 0) + Number(m.paymentsRejected || 0)}**`,
+    "",
+    "**Eventos que dão ponto**",
+    `> 🎉 Eventos diários / manuais: **${Number(m.eventsManual || 0)}**`,
+    `> ⚡ Registros de poderes: **${Number(m.eventsPoderes || 0)}**`,
+    `> 🧩 EVT3: **${Number(m.eventsEvt3 || 0)}**`,
+    `> 📅 Cronograma / Hall / Diários: **${Number(m.eventsCrono || 0)}**`,
+    "",
+    `📦 **Total de pontos do mês:** \`${monthTotal}\``,
+    "",
+    "> Pagamento só pontua se estiver **PAGO**.",
+  ].join("\n"),
+  inline: false,
+},
+{
+  name: "━━━━━━━━━━━━━━━━━━━━━━\n📆 MÊS PASSADO",
+  value: [
+    `**Referência:** \`${labelFromMonthKey(previousMonthKey)}\``,
+    "",
+    `✅ Pagamentos aprovados/PAGO: **${Number(previousMonth.paymentsApproved || 0)}**`,
+    `❌ Pagamentos reprovados: **${Number(previousMonth.paymentsRejected || 0)}**`,
+    `📋 Pagamentos analisados: **${Number(previousMonth.paymentsApproved || 0) + Number(previousMonth.paymentsRejected || 0)}**`,
+    "",
+    "> O mês passado aparece só para comparação.",
+  ].join("\n"),
+  inline: false,
+},
+{
+  name: "━━━━━━━━━━━━━━━━━━━━━━\n🏆 RANKING GERAL",
+  value: topList(stats, "pointsTotal", 5),
+  inline: false,
+},
       {
         name: "━━━━━━━━━━━━━━━━━━━━━━\n💵 TOP PAGAMENTOS",
         value: topList(stats, "pointsPayment", 5),
