@@ -1011,7 +1011,7 @@ async function upsertDashboard(client, reason) {
   payments.forEach(p => union.add(p.periodKey));
   events.forEach(e => union.add(e.periodKey));
   const keys = [...union].sort((a, b) => (a > b ? -1 : 1));
-  
+
 const hasDataInWeek = (weekKey) => {
   return (
     aggregate(payments, weekKey, true).total > 0 ||
@@ -1019,12 +1019,7 @@ const hasDataInWeek = (weekKey) => {
   );
 };
 
-const latestDataKey = keys.find((key) => hasDataInWeek(key));
-
-const thisKey = hasDataInWeek(currentWk)
-  ? currentWk
-  : latestDataKey || currentWk;
-
+const thisKey = currentWk;
 const lastKey = periodKeyFromDateSP(addDaysUTC(new Date(`${thisKey}T12:00:00Z`), -7)).key;
 
 DEBUG.chosenThis = thisKey;
@@ -1231,11 +1226,18 @@ const row = new ActionRowBuilder().addComponents(
 }
 
 async function safeUpdate(client, reason) {
+  const now = Date.now();
   if (LOCK) {
-    PENDING_UPDATE = true;
-    PENDING_REASON = String(reason || "pending");
-    log("Update em andamento. Nova atualização ficou pendente:", reason);
-    return false;
+    // ✅ Auto-unlock se a trava estiver presa por mais de 2 minutos
+    if (now - LOCK_TS > 120000) {
+      log("⚠️ Travamento detectado (>2min). Forçando destravamento.");
+      LOCK = false;
+    } else {
+      PENDING_UPDATE = true;
+      PENDING_REASON = String(reason || "pending");
+      log("Update em andamento. Nova atualização ficou pendente:", reason);
+      return false;
+    }
   }
 
   LOCK = true;
