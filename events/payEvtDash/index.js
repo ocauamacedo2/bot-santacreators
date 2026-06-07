@@ -41,14 +41,14 @@ const REGISTRO_EVENTO_CHANNEL_ID = "1392618646630568076";
 const CRONOGRAMA_LOGS_CHANNEL_ID = "1387864036259004436";
 
 // Pagamentos — Regras da Semana
-const PAY_PERIOD_OK = 40;
-const PAY_PERIOD_GOAL = 50;
-const PAY_PERIOD_LIMIT = 60;
+const PAY_PERIOD_OK = 40; // 🟡
+const PAY_PERIOD_GOAL = 50; // 🟢
+const PAY_PERIOD_LIMIT = 60; // 🚨
 
 // Scan
-const SCAN_PAGES = 40;
-const SCAN_PAGES_FAST = 8;
-const SCAN_TTL_MS = 8 * 1000;
+const SCAN_PAGES = 65; // Aumentado para cobrir histórico completo
+const SCAN_PAGES_FAST = 40; // Aumentado para garantir que atts em tempo real não percam dados
+const SCAN_TTL_MS = 5 * 1000;
 const FETCH_TIMEOUT_MS = 12000;
 const COLLECT_MAX_MS = 45000;
 
