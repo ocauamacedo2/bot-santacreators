@@ -46,11 +46,11 @@ const PAY_PERIOD_GOAL = 50; // 🟢
 const PAY_PERIOD_LIMIT = 60; // 🚨
 
 // Scan
-const SCAN_PAGES = 25; // Reduzido para 2500 msgs por canal (mais rápido e estável)
-const SCAN_PAGES_FAST = 10; // Scan rápido de 1000 msgs para interações em tempo real
+const SCAN_PAGES = 20; // Otimizado para estabilidade
+const SCAN_PAGES_FAST = 5; // Scan ultra-rápido para eventos em tempo real
 const SCAN_TTL_MS = 5 * 1000;
-const FETCH_TIMEOUT_MS = 8000;
-const COLLECT_MAX_MS = 75000; // Mais tempo para o scan terminar sem ser "chutado"
+const FETCH_TIMEOUT_MS = 6000;
+const COLLECT_MAX_MS = 45000; 
 
 // ✅ Otimização: parar de escanear se a mensagem for mais velha que 15 dias
 const MAX_AGE_MS = 45 * 24 * 60 * 60 * 1000;
@@ -169,11 +169,7 @@ function readEvt3State() {
 // TIME SAFE (SP)
 // =========================
 function nowSP() {
-  // ✅ Força Brasília (UTC-3) independente do fuso do servidor
-  // Isso garante que no Domingo às 00:01 o painel vire a semana na hora.
-  const date = new Date();
-  const utc = date.getTime() + (date.getTimezoneOffset() * 60000);
-  return new Date(utc + (3600000 * -3));
+  return new Date();
 }
 
 function ymdSP(date) {
@@ -1069,18 +1065,26 @@ async function upsertDashboard(client, reason) {
   const st = loadState();
   const reasonText = String(reason || "");
 
-const isFastUpdate =
-  reasonText.includes("manual") ||
-  reasonText.includes("force") ||
-  reasonText.includes("message:") ||
-  reasonText.includes("pagamento:") ||
-  reasonText.includes("cronograma") ||
-  reasonText.includes("halldafama") ||
-  reasonText.includes("eventosdiarios") ||
-  reasonText.includes("pending:");
+  const isForcedUpdate =
+    reasonText.includes("manual") ||
+    reasonText.includes("force") ||
+    reasonText.includes("message:") ||
+    reasonText.includes("pagamento:") ||
+    reasonText.includes("cronograma") ||
+    reasonText.includes("halldafama") ||
+    reasonText.includes("eventosdiarios") ||
+    reasonText.includes("pending:");
+
+  const isFastScan =
+    reasonText.includes("message:") ||
+    reasonText.includes("pagamento:") ||
+    reasonText.includes("cronograma") ||
+    reasonText.includes("halldafama") ||
+    reasonText.includes("eventosdiarios") ||
+    reasonText.includes("pending:");
 
 const { payments, paymentsAll, paymentsRejected, events } = await collectAll(client, {
-  fast: isFastUpdate,
+  fast: isFastScan,
 });
 
   const currentWk = periodKeyFromDateSP(nowSP()).key;
@@ -1188,8 +1192,7 @@ DEBUG.chartPeriods = keys.slice(0, 4);
   const fingerprint = JSON.stringify({
     thisKey, lastKey,
     totals: { cur: curAllTotal, prev: prevAllTotal },
-    // ✅ Agora sente mudanças em registrados (all), não só em aprovados.
-    pay: { cur: curPay.total, prev: prevPay.total, all: curPayAll.total },
+    pay: { cur: curPay.total, prev: prevPay.total, all: curPayAll.total, rejected: monthPayRejected.total },
     evt: { cur: curEvt.total, prev: prevEvt.total },
     chart: { payData, evtData }
   });
@@ -1200,8 +1203,6 @@ DEBUG.chartPeriods = keys.slice(0, 4);
     CACHE.payload = null;
     st.lastFingerprint = "";
   }
-
-  const isForcedUpdate = isFastUpdate;
 
   if (st.lastFingerprint === fingerprint && !isForcedUpdate && !periodChanged) return;
 

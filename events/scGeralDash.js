@@ -555,9 +555,7 @@ function saveState(s) {
 
 // ================== TIME HELPERS ==================
 function nowSP() {
-  const date = new Date();
-  const utc = date.getTime() + (date.getTimezoneOffset() * 60000);
-  return new Date(utc + (3600000 * -3)); 
+  return new Date();
 }
 
 function ymdSP(date) {
@@ -1801,7 +1799,7 @@ function chooseWeeksUnion() {
   const currentWk = weekKeyFromDateSP(nowSP());
   const union = new Set([currentWk]);
   Object.keys(DEBUG.weekKeysFound || {}).forEach(k => union.add(k));
-  const keys = [...union].sort((a, b) => a > b ? -1 : 1);
+  const keys = [...union].sort((a, b) => (a > b ? -1 : 1));
   return { thisKey: currentWk, lastKey: keys[1] || null, keys };
 }
 
