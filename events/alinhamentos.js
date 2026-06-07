@@ -306,14 +306,20 @@ async function sendAlinhamentoToEvolutionThread(client, interaction, {
           registroMsg?.guildId
         ).catch(() => null);
 
-        return {
-          ok: true,
-          destination: "formscreator",
-          threadId,
-          messageId: sent?.id || null,
-          link: formsLink || `https://discord.com/channels/${registroMsg?.guildId}/${threadId}`,
-          message: `✅ Também enviei o alinhamento no Forms pessoal: <#${threadId}>`,
-        };
+        const threadLink = formsLink || `https://discord.com/channels/${registroMsg?.guildId}/${threadId}`;
+const messageLink = sent?.id
+  ? `https://discord.com/channels/${registroMsg?.guildId}/${threadId}/${sent.id}`
+  : threadLink;
+
+return {
+  ok: true,
+  destination: "formscreator",
+  threadId,
+  messageId: sent?.id || null,
+  threadLink,
+  link: messageLink,
+  message: `✅ Também enviei o alinhamento no Forms pessoal: <#${threadId}>`,
+};
       }
     }
 
@@ -735,13 +741,13 @@ try {
   const oldEmbed = EmbedBuilder.from(msg.embeds[0]);
   const oldFields = oldEmbed.data.fields || [];
 
-  oldFields.push({
-    name: "🔗 Evolução vinculada",
-    value: evolutionResult.ok
-      ? `[Abrir evolução](${evolutionResult.link})\nDestino: \`${evolutionResult.destination === "formscreator" ? "FormsCreator" : "Controle GI"}\``
-      : `Não vinculado automaticamente.\nMotivo: \`${evolutionResult.reason || "desconhecido"}\``,
-    inline: false,
-  });
+oldFields.push({
+  name: "🔗 Forms pessoal da pessoa",
+  value: evolutionResult.ok
+    ? `[Clique aqui para abrir o Forms pessoal](${evolutionResult.threadLink || evolutionResult.link})\n🧾 Alinhamento enviado sem botões no tópico da pessoa.`
+    : `Forms não encontrado automaticamente.\nMotivo: \`${evolutionResult.reason || "desconhecido"}\``,
+  inline: false,
+});
 
   oldEmbed.setFields(oldFields);
 
@@ -847,17 +853,22 @@ if (registradorMember && !canValidateByHierarchy(validatorMember, registradorMem
   }
 }
 
-  // clona embed (pra editar)
-  const newEmb = EmbedBuilder.from(emb);
+// ✅ Rebusca a mensagem atual para não apagar campos adicionados depois,
+// como o link do Forms pessoal da pessoa.
+const freshMsg = await msg.fetch().catch(() => msg);
+const freshEmb = freshMsg?.embeds?.[0] || emb;
+
+// clona embed atualizado
+const newEmb = EmbedBuilder.from(freshEmb);
 
   // atualiza cor pra dar leitura
   newEmb.setColor(isValid ? 0x2ecc71 : 0xe74c3c);
 
   // remove campo Status antigo e coloca um novo
-  const fields = readEmbedFields(emb).filter((f) => {
-    const name = String(f?.name || "");
-    return !name.toLowerCase().includes("status");
-  });
+const fields = readEmbedFields(freshEmb).filter((f) => {
+  const name = String(f?.name || "");
+  return !name.toLowerCase().includes("status");
+});
 
   fields.push({
     name: "✅ Status",
