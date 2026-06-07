@@ -1,9 +1,8 @@
-// d:\santacreators-main\events\payEvtDash\index.js
+// events/payEvtDash/index.js — Dashboard definitivo SantaCreators
 import fs from "node:fs";
 import path from "node:path";
 import {
   EmbedBuilder,
-  AttachmentBuilder,
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
@@ -11,124 +10,75 @@ import {
   TextInputBuilder,
   TextInputStyle,
 } from "discord.js";
-import { dashOn } from "../../utils/dashHub.js"; // ✅ Caminho corrigido
+
+import { dashOn } from "../../utils/dashHub.js";
 
 // =========================
 // CONFIG
 // =========================
 const TZ = "America/Sao_Paulo";
 
-// Dashboard
 const DASH_CHANNEL_ID = "1457985700312911912";
-// Pagamentos
 const PAY_CHANNEL_ID = "1387922662134775818";
-
-// Logs de auditoria dos pagamentos
 const PAY_LOG_CHANNEL_ID = "1486084352403312843";
 
-// ✅ NOVO: Poderes Utilizados (para somar no Amarelo)
 const CH_PODERES_ID = "1374066813171929218";
-
-// EVT3
 const EVT3_EVENT_CHANNEL_ID = "1457573495952248883";
-const EVT3_STATE_FILE =
-  process.env.EVT3_STATE_FILE || path.resolve(process.cwd(), "data", "evt3_events_state.json");
-
-// Registro Manual de Eventos (Botão/Modal)
 const REGISTRO_EVENTO_CHANNEL_ID = "1392618646630568076";
-
-// Cronograma / Hall da Fama / Eventos Diários (Aprovados)
 const CRONOGRAMA_LOGS_CHANNEL_ID = "1387864036259004436";
 
-// Pagamentos — Regras da Semana
-const PAY_PERIOD_OK = 40; // 🟡
-const PAY_PERIOD_GOAL = 50; // 🟢
-const PAY_PERIOD_LIMIT = 60; // 🚨
+const PAY_PERIOD_OK = 40;
+const PAY_PERIOD_GOAL = 50;
+const PAY_PERIOD_LIMIT = 60;
 
-// Scan
-const SCAN_PAGES = 45; // Otimizado para não travar o bot
-const SCAN_PAGES_FAST = 15; // Rápido o suficiente para atualizações em tempo real
-const SCAN_TTL_MS = 5 * 1000;
-const FETCH_TIMEOUT_MS = 12000;
-const COLLECT_MAX_MS = 45000;
-
-// ✅ Otimização: parar de escanear se a mensagem for mais velha que 15 dias
-const MAX_AGE_MS = 45 * 24 * 60 * 60 * 1000;
-
-// Permissões para remover pontos
-const ALLOWED_MANAGE_IDS = [
-  "660311795327828008", // você
-  "1262262852949905408", // owner
-];
-const ALLOWED_MANAGE_ROLES = [
-  "1352408327983861844", // Resp Creators
-  "1262262852949905409", // Resp Influ
-];
-
-// =========================
-// STATE & DATA PATHS
-// =========================
 const DATA_DIR = path.resolve(process.cwd(), "data");
-const STATE_PATH = path.join(DATA_DIR, "sc_pay_evt_dashboard_state.json");
-const ADJUSTMENTS_PATH = path.join(DATA_DIR, "sc_pay_evt_adjustments.json");
+const STATE_PATH = path.join(DATA_DIR, "sc_pay_evt_dashboard_v2_state.json");
 
-// =========================
-// Guards / cache
-// =========================
-let LOCK = false;
-let LOCK_TS = 0;
-let PENDING_UPDATE = false;
-let PENDING_REASON = "";
-let RUNNING_UPDATE_PROMISE = null;
-let CACHE = { at: 0, payload: null };
+const DASH_MARKER = "SC_PAY_EVT_DASH_V2";
 
-const UPDATE_STUCK_MS = 30000;
-const FORCE_WAIT_MS = 15000;
-const DEBUG = {
-  lastRunAt: null,
-  lastReason: "",
-  stage: "",
-  error: "",
-  dashMsgId: null,
-  scannedPayMsgs: 0,
-  scannedPayRegs: 0,
-  scannedPayLogMsgs: 0,
-  scannedPayLogRecovered: 0,
-  scannedEvtManualMsgs: 0,
-  scannedPoderesMsgs: 0, // ✅ Debug
-  scannedCronoMsgs: 0,
+const ALLOWED_MANAGE_IDS = [
+  "660311795327828008",
+  "1262262852949905408",
+];
 
-  payPeriodFound: {},
-  payPeriodFoundAll: {},
-  payPeriodFoundApproved: {},
-  payPeriodFoundRejected: {},
+const ALLOWED_MANAGE_ROLES = [
+  "1352408327983861844",
+  "1262262852949905409",
+  "1352407252216184833",
+  "1388976314253312100",
+  "1282119104576098314",
+  "1387253972661964840",
+  "1388976094920704141",
+];
 
-  evtPeriodFound: {},
-
-  chosenThis: null,
-  chosenLast: null,
-  chartPeriods: [],
+const SCAN_CONFIG = {
+  pagesPerChannel: 60,
+  fetchLimit: 100,
+  maxAgeDays: 60,
 };
 
-function log(...a) {
-  console.log("[SC_PAY_EVT_DASH]", ...a);
-}
+let LOCK = false;
+let LOCK_TS = 0;
+let CACHE = {
+  at: 0,
+  payload: null,
+};
+
+const LOCK_STUCK_MS = 2 * 60 * 1000;
+const CACHE_TTL_MS = 20 * 1000;
 
 // =========================
-// FS helpers
+// HELPERS
 // =========================
-function ensureDirForFile(file) {
-  try {
-    const dir = path.dirname(file);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  } catch {}
+function ensureDir() {
+  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
 function loadJSON(file, fallback) {
   try {
-    ensureDirForFile(file);
+    ensureDir();
     if (!fs.existsSync(file)) return fallback;
-    return JSON.parse(fs.readFileSync(file, "utf-8")) || fallback;
+    return JSON.parse(fs.readFileSync(file, "utf8")) || fallback;
   } catch {
     return fallback;
   }
@@ -136,38 +86,42 @@ function loadJSON(file, fallback) {
 
 function saveJSON(file, data) {
   try {
-    ensureDirForFile(file);
+    ensureDir();
     fs.writeFileSync(file, JSON.stringify(data, null, 2));
-  } catch {}
+  } catch (err) {
+    console.error("[SC_PAY_EVT_DASH_V2] saveJSON erro:", err);
+  }
 }
 
 function loadState() {
   return loadJSON(STATE_PATH, {
     dashboardMsgId: null,
     lastFingerprint: "",
-    lastPeriodKey: "",
+    lastUpdatedAt: null,
   });
 }
 
-function saveState(s) {
-  saveJSON(STATE_PATH, s);
+function saveState(state) {
+  saveJSON(STATE_PATH, state);
 }
 
-function loadAdjustments() {
-  return loadJSON(ADJUSTMENTS_PATH, { weeks: {} });
+function norm(text) {
+  return String(text || "")
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
 }
 
-function saveAdjustments(data) {
-  saveJSON(ADJUSTMENTS_PATH, data);
+function clean(text) {
+  return String(text || "").replace(/\s+/g, " ").trim();
 }
 
-function readEvt3State() {
-  return loadJSON(EVT3_STATE_FILE, null);
+function pad2(n) {
+  return String(n).padStart(2, "0");
 }
 
-// =========================
-// TIME SAFE (SP)
-// =========================
 function nowSP() {
   return new Date();
 }
@@ -178,17 +132,13 @@ function ymdSP(date) {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
-    hour12: false
   }).formatToParts(date);
-  return {
-    y: +parts.find((p) => p.type === "year").value,
-    m: +parts.find((p) => p.type === "month").value,
-    d: +parts.find((p) => p.type === "day").value,
-  };
-}
 
-function pad2(n) {
-  return String(n).padStart(2, "0");
+  return {
+    y: Number(parts.find((p) => p.type === "year")?.value || 0),
+    m: Number(parts.find((p) => p.type === "month")?.value || 0),
+    d: Number(parts.find((p) => p.type === "day")?.value || 0),
+  };
 }
 
 function addDaysUTC(dateUTC, days) {
@@ -214,34 +164,12 @@ function periodKeyFromDateSP(date) {
   const saturdayUTC = addDaysUTC(sundayUTC, 6);
 
   const key = `${sundayUTC.getUTCFullYear()}-${pad2(sundayUTC.getUTCMonth() + 1)}-${pad2(sundayUTC.getUTCDate())}`;
-  const sDay = pad2(sundayUTC.getUTCDate());
-  const sMon = pad2(sundayUTC.getUTCMonth() + 1);
-  const eDay = pad2(saturdayUTC.getUTCDate());
-  const eMon = pad2(saturdayUTC.getUTCMonth() + 1);
-  const label = sMon === eMon ? `${sDay}-${eDay}/${eMon}` : `${sDay}/${sMon}-${eDay}/${eMon}`;
+  const label =
+    sundayUTC.getUTCMonth() === saturdayUTC.getUTCMonth()
+      ? `${pad2(sundayUTC.getUTCDate())}-${pad2(saturdayUTC.getUTCDate())}/${pad2(saturdayUTC.getUTCMonth() + 1)}`
+      : `${pad2(sundayUTC.getUTCDate())}/${pad2(sundayUTC.getUTCMonth() + 1)}-${pad2(saturdayUTC.getUTCDate())}/${pad2(saturdayUTC.getUTCMonth() + 1)}`;
 
   return { key, label };
-}
-function labelFromPeriodKey(key) {
-  try {
-    const [Y, M, D] = key.split("-").map(Number);
-
-    if (!Number.isFinite(Y) || !Number.isFinite(M) || !Number.isFinite(D)) {
-      return key;
-    }
-
-    const sundayUTC = new Date(Date.UTC(Y, M - 1, D));
-    const saturdayUTC = addDaysUTC(sundayUTC, 6);
-
-    const sDay = pad2(sundayUTC.getUTCDate());
-    const sMon = pad2(sundayUTC.getUTCMonth() + 1);
-    const eDay = pad2(saturdayUTC.getUTCDate());
-    const eMon = pad2(saturdayUTC.getUTCMonth() + 1);
-
-    return sMon === eMon ? `${sDay}-${eDay}/${eMon}` : `${sDay}/${sMon}-${eDay}/${eMon}`;
-  } catch {
-    return key;
-  }
 }
 
 function monthKeyFromDateSP(date) {
@@ -250,1282 +178,1138 @@ function monthKeyFromDateSP(date) {
 }
 
 function labelFromMonthKey(key) {
-  try {
-    const [Y, M] = key.split("-").map(Number);
-    if (!Number.isFinite(Y) || !Number.isFinite(M)) return key;
-    return `${pad2(M)}/${Y}`;
-  } catch {
-    return key;
-  }
+  const [y, m] = String(key || "").split("-");
+  return `${m}/${y}`;
 }
 
-function periodInfoFromDateSP(date) {
+function dateFromBR(text, fallbackTs) {
+  const raw = String(text || "");
+  const m = raw.match(/\b(\d{1,2})[\/.-](\d{1,2})(?:[\/.-](\d{2,4}))?\b/);
+  if (!m) return new Date(fallbackTs || Date.now());
+
+  const dia = Number(m[1]);
+  const mes = Number(m[2]);
+  let ano = m[3] ? Number(m[3]) : ymdSP(new Date()).y;
+
+  if (ano < 100) ano = 2000 + ano;
+  if (!Number.isFinite(dia) || !Number.isFinite(mes) || !Number.isFinite(ano)) {
+    return new Date(fallbackTs || Date.now());
+  }
+
+  const d = new Date(`${ano}-${pad2(mes)}-${pad2(dia)}T12:00:00-03:00`);
+  if (Number.isNaN(d.getTime())) return new Date(fallbackTs || Date.now());
+  return d;
+}
+
+function getEmbedText(embed) {
+  const parts = [];
+
+  if (embed?.title) parts.push(embed.title);
+  if (embed?.description) parts.push(embed.description);
+  if (embed?.footer?.text) parts.push(embed.footer.text);
+
+  for (const f of embed?.fields || []) {
+    parts.push(f.name || "");
+    parts.push(f.value || "");
+  }
+
+  return parts.join("\n");
+}
+
+function getFields(embed) {
+  return embed?.fields || embed?.data?.fields || [];
+}
+
+function findFieldValue(embed, names = []) {
+  const wanted = names.map(norm);
+
+  for (const field of getFields(embed)) {
+    const n = norm(field?.name);
+    if (wanted.some((w) => n.includes(w))) return String(field?.value || "");
+  }
+
+  return "";
+}
+
+function extractUserId(text) {
+  const m = String(text || "").match(/<@!?(\d+)>/);
+  return m ? m[1] : null;
+}
+
+function extractFirstDiscordLink(text) {
+  const m = String(text || "").match(/discord(?:app)?\.com\/channels\/(\d+)\/(\d+)\/(\d+)/i);
+  if (!m) return null;
+
   return {
-    periodKey: periodKeyFromDateSP(date).key,
-    monthKey: monthKeyFromDateSP(date),
+    guildId: m[1],
+    channelId: m[2],
+    messageId: m[3],
   };
 }
 
-const SOURCE_LABELS = {
-  pay: "Pagamentos aprovados",
-  pay_all: "Pagamentos registrados",
-  pay_rejected: "Pagamentos reprovados",
-  evt_manual: "Registros manuais de eventos",
-  evt_poderes: "Registros de poderes",
-  evt: "Eventos EVT3",
-  evt_crono: "Cronograma / Hall / Eventos diários",
-};
+function statusFromText(text) {
+  const t = norm(text);
 
-function aggregateMonth(items, monthKey) {
-  const only = items.filter((e) => e.monthKey === monthKey);
-  const byKind = {};
-
-  for (const item of only) {
-    byKind[item.kind] = (byKind[item.kind] || 0) + 1;
+  if (
+    t.includes("reprovado") ||
+    t.includes("recusado") ||
+    t.includes("negado") ||
+    t.includes("pagamento reprovado")
+  ) {
+    return "rejected";
   }
 
-  const total = only.length;
+  if (
+    t.includes("solicitado") ||
+    t.includes("marcado como solicitado") ||
+    t.includes("aguardando pagamento")
+  ) {
+    return "requested";
+  }
 
-  return { total, byKind };
+  if (
+    t.includes("pago") ||
+    t.includes("aprovado") ||
+    t.includes("pagamento confirmado") ||
+    t.includes("confirmado")
+  ) {
+    return "approved";
+  }
+
+  return "created";
 }
 
-function sourceLines(byKind, orderedKinds) {
-  return orderedKinds
-    .map((kind) => {
-      const label = SOURCE_LABELS[kind] || kind;
-      const value = byKind[kind] || 0;
-      return `• ${label}: **${value}**`;
+function isPaymentEmbed(embed) {
+  const text = norm(getEmbedText(embed));
+
+  return (
+    text.includes("registro de pagamento") ||
+    text.includes("pagamento de evento") ||
+    text.includes("santacreators") && text.includes("ganhador") && text.includes("status")
+  );
+}
+
+function isPaymentLogEmbed(embed) {
+  const text = norm(getEmbedText(embed));
+
+  return (
+    text.includes("pagamento confirmado") ||
+    text.includes("pagamento reprovado") ||
+    text.includes("marcado como solicitado") ||
+    text.includes("novo pagamento") ||
+    text.includes("registro de pagamento") ||
+    text.includes("ganhador") && text.includes("data do evento")
+  );
+}
+
+function getPaymentDate(embed, fallbackTs) {
+  const field =
+    findFieldValue(embed, ["data do evento", "data", "evento"]) ||
+    embed?.description ||
+    getEmbedText(embed);
+
+  return dateFromBR(field, fallbackTs);
+}
+
+function getPaymentCreatorId(embed) {
+  return (
+    extractUserId(findFieldValue(embed, ["registrado por", "registro", "criador", "responsavel", "responsável"])) ||
+    extractUserId(getEmbedText(embed))
+  );
+}
+
+function getPaymentDecisionUserId(embed) {
+  return (
+    extractUserId(findFieldValue(embed, ["ultima decisao", "última decisão", "aprovado por", "reprovado por", "solicitado por"])) ||
+    null
+  );
+}
+
+function getPaymentStatus(embed) {
+  const status = findFieldValue(embed, ["status", "situação", "situacao", "resultado"]);
+  return statusFromText(status || getEmbedText(embed));
+}
+
+function isEventManualEmbed(embed) {
+  const text = norm(getEmbedText(embed));
+  return (
+    text.includes("registro de evento") ||
+    text.includes("evento aprovado") ||
+    text.includes("registro manual")
+  );
+}
+
+function isPoderesEmbed(embed) {
+  const text = norm(getEmbedText(embed));
+  return (
+    text.includes("registro de poder") ||
+    text.includes("poder utilizado") ||
+    text.includes("poderes utilizados") ||
+    text.includes("poderes")
+  );
+}
+
+function isCronoHallDailyEmbed(embed) {
+  const text = norm(getEmbedText(embed));
+  return (
+    text.includes("cronograma") ||
+    text.includes("hall da fama") ||
+    text.includes("eventos diarios") ||
+    text.includes("eventos diários") ||
+    text.includes("aprovado")
+  );
+}
+
+function getActorIdFromEventEmbed(embed) {
+  return (
+    extractUserId(findFieldValue(embed, ["aprovado por", "registrado por", "responsavel", "responsável", "autor"])) ||
+    extractUserId(getEmbedText(embed))
+  );
+}
+
+function emptyStats() {
+  return {
+    generatedAt: Date.now(),
+    payments: [],
+    events: [],
+    byWeek: {},
+    byMonth: {},
+    users: {},
+    debug: {
+      scannedChannels: {},
+      recoveredFromLogs: 0,
+      duplicatesIgnored: 0,
+    },
+  };
+}
+
+function ensureUser(stats, userId) {
+  if (!userId) return null;
+
+  stats.users[userId] ??= {
+    userId,
+    paymentsCreated: 0,
+    paymentsApproved: 0,
+    paymentsRejected: 0,
+    paymentsRequested: 0,
+    eventsManual: 0,
+    eventsPoderes: 0,
+    eventsEvt3: 0,
+    eventsCrono: 0,
+    pointsPayment: 0,
+    pointsEvent: 0,
+    pointsTotal: 0,
+  };
+
+  return stats.users[userId];
+}
+
+function ensureBucket(stats, periodKey, monthKey) {
+  stats.byWeek[periodKey] ??= {
+    paymentsCreated: 0,
+    paymentsApproved: 0,
+    paymentsRejected: 0,
+    paymentsRequested: 0,
+    eventsManual: 0,
+    eventsPoderes: 0,
+    eventsEvt3: 0,
+    eventsCrono: 0,
+  };
+
+  stats.byMonth[monthKey] ??= {
+    paymentsCreated: 0,
+    paymentsApproved: 0,
+    paymentsRejected: 0,
+    paymentsRequested: 0,
+    eventsManual: 0,
+    eventsPoderes: 0,
+    eventsEvt3: 0,
+    eventsCrono: 0,
+  };
+
+  return {
+    week: stats.byWeek[periodKey],
+    month: stats.byMonth[monthKey],
+  };
+}
+
+function addPayment(stats, item) {
+  const date = new Date(item.ts || Date.now());
+  const period = periodKeyFromDateSP(date);
+  const monthKey = monthKeyFromDateSP(date);
+
+  const buckets = ensureBucket(stats, period.key, monthKey);
+
+  buckets.week.paymentsCreated++;
+  buckets.month.paymentsCreated++;
+
+  if (item.status === "approved") {
+    buckets.week.paymentsApproved++;
+    buckets.month.paymentsApproved++;
+  }
+
+  if (item.status === "rejected") {
+    buckets.week.paymentsRejected++;
+    buckets.month.paymentsRejected++;
+  }
+
+  if (item.status === "requested") {
+    buckets.week.paymentsRequested++;
+    buckets.month.paymentsRequested++;
+  }
+
+  const creator = ensureUser(stats, item.creatorId);
+  if (creator) {
+    creator.paymentsCreated++;
+    creator.pointsPayment += 1;
+  }
+
+  const decisionUser = ensureUser(stats, item.decisionUserId);
+  if (decisionUser && item.status === "approved") {
+    decisionUser.paymentsApproved++;
+    decisionUser.pointsPayment += 2;
+  }
+
+  if (decisionUser && item.status === "rejected") {
+    decisionUser.paymentsRejected++;
+    decisionUser.pointsPayment += 1;
+  }
+
+  if (decisionUser && item.status === "requested") {
+    decisionUser.paymentsRequested++;
+    decisionUser.pointsPayment += 1;
+  }
+
+  stats.payments.push({
+    ...item,
+    periodKey: period.key,
+    monthKey,
+  });
+}
+
+function addEvent(stats, item) {
+  const date = new Date(item.ts || Date.now());
+  const period = periodKeyFromDateSP(date);
+  const monthKey = monthKeyFromDateSP(date);
+
+  const buckets = ensureBucket(stats, period.key, monthKey);
+
+  if (item.kind === "manual") {
+    buckets.week.eventsManual++;
+    buckets.month.eventsManual++;
+  }
+
+  if (item.kind === "poderes") {
+    buckets.week.eventsPoderes++;
+    buckets.month.eventsPoderes++;
+  }
+
+  if (item.kind === "evt3") {
+    buckets.week.eventsEvt3++;
+    buckets.month.eventsEvt3++;
+  }
+
+  if (item.kind === "crono") {
+    buckets.week.eventsCrono++;
+    buckets.month.eventsCrono++;
+  }
+
+  const user = ensureUser(stats, item.userId);
+  if (user) {
+    if (item.kind === "manual") user.eventsManual++;
+    if (item.kind === "poderes") user.eventsPoderes++;
+    if (item.kind === "evt3") user.eventsEvt3++;
+    if (item.kind === "crono") user.eventsCrono++;
+
+    user.pointsEvent += 1;
+  }
+
+  stats.events.push({
+    ...item,
+    periodKey: period.key,
+    monthKey,
+  });
+}
+
+async function fetchChannelMessages(client, channelId, pages = SCAN_CONFIG.pagesPerChannel) {
+  const channel = await client.channels.fetch(channelId).catch(() => null);
+  if (!channel || !channel.isTextBased()) return [];
+
+  const out = [];
+  let before = null;
+
+  for (let page = 0; page < pages; page++) {
+    const options = { limit: SCAN_CONFIG.fetchLimit };
+    if (before) options.before = before;
+
+    const batch = await channel.messages.fetch(options).catch(() => null);
+    if (!batch || batch.size === 0) break;
+
+    const arr = [...batch.values()];
+    out.push(...arr);
+
+    before = arr[arr.length - 1]?.id;
+    const oldest = arr[arr.length - 1];
+
+    if (oldest?.createdTimestamp) {
+      const age = Date.now() - oldest.createdTimestamp;
+      if (age > SCAN_CONFIG.maxAgeDays * 24 * 60 * 60 * 1000) break;
+    }
+  }
+
+  return out;
+}
+
+async function fetchLinkedMessage(client, link) {
+  if (!link?.channelId || !link?.messageId) return null;
+
+  const channel = await client.channels.fetch(link.channelId).catch(() => null);
+  if (!channel || !channel.isTextBased()) return null;
+
+  return await channel.messages.fetch(link.messageId).catch(() => null);
+}
+
+async function scanPayments(client, stats, seen) {
+  const payMessages = await fetchChannelMessages(client, PAY_CHANNEL_ID);
+  stats.debug.scannedChannels[PAY_CHANNEL_ID] = payMessages.length;
+
+  for (const msg of payMessages) {
+    for (const embed of msg.embeds || []) {
+      if (!isPaymentEmbed(embed)) continue;
+
+      const key = `paymsg:${msg.id}`;
+      if (seen.has(key)) {
+        stats.debug.duplicatesIgnored++;
+        continue;
+      }
+
+      seen.add(key);
+
+      const status = getPaymentStatus(embed);
+      const date = getPaymentDate(embed, msg.createdTimestamp);
+      const creatorId = getPaymentCreatorId(embed);
+      const decisionUserId = getPaymentDecisionUserId(embed);
+
+      addPayment(stats, {
+        key,
+        source: "payment_channel",
+        messageId: msg.id,
+        channelId: msg.channelId,
+        ts: date.getTime(),
+        status,
+        creatorId,
+        decisionUserId,
+      });
+    }
+  }
+}
+
+async function scanPaymentLogs(client, stats, seen) {
+  const logMessages = await fetchChannelMessages(client, PAY_LOG_CHANNEL_ID);
+  stats.debug.scannedChannels[PAY_LOG_CHANNEL_ID] = logMessages.length;
+
+  for (const msg of logMessages) {
+    const allText = [
+      msg.content || "",
+      ...(msg.embeds || []).map(getEmbedText),
+    ].join("\n");
+
+    const link = extractFirstDiscordLink(allText);
+    if (link) {
+      const linked = await fetchLinkedMessage(client, link);
+      const embed = linked?.embeds?.[0];
+
+      if (embed && isPaymentEmbed(embed)) {
+        const key = `paymsg:${linked.id}`;
+
+        if (!seen.has(key)) {
+          seen.add(key);
+          stats.debug.recoveredFromLogs++;
+
+          const status = getPaymentStatus(embed);
+          const date = getPaymentDate(embed, linked.createdTimestamp);
+          const creatorId = getPaymentCreatorId(embed);
+          const decisionUserId = getPaymentDecisionUserId(embed);
+
+          addPayment(stats, {
+            key,
+            source: "payment_log_link",
+            messageId: linked.id,
+            channelId: linked.channelId,
+            logMessageId: msg.id,
+            ts: date.getTime(),
+            status,
+            creatorId,
+            decisionUserId,
+          });
+        }
+
+        continue;
+      }
+    }
+
+    for (const embed of msg.embeds || []) {
+      if (!isPaymentLogEmbed(embed)) continue;
+
+      const key = `paylog:${msg.id}`;
+      if (seen.has(key)) {
+        stats.debug.duplicatesIgnored++;
+        continue;
+      }
+
+      seen.add(key);
+
+      const status = statusFromText(getEmbedText(embed));
+      const date = getPaymentDate(embed, msg.createdTimestamp);
+      const creatorId = getPaymentCreatorId(embed);
+      const decisionUserId = getPaymentDecisionUserId(embed) || extractUserId(getEmbedText(embed));
+
+      addPayment(stats, {
+        key,
+        source: "payment_log",
+        messageId: msg.id,
+        channelId: msg.channelId,
+        ts: date.getTime(),
+        status,
+        creatorId,
+        decisionUserId,
+      });
+    }
+  }
+}
+
+async function scanEventChannel(client, stats, seen, channelId, kind, matcher) {
+  const messages = await fetchChannelMessages(client, channelId);
+  stats.debug.scannedChannels[channelId] = messages.length;
+
+  for (const msg of messages) {
+    for (const embed of msg.embeds || []) {
+      if (!matcher(embed)) continue;
+
+      const key = `event:${kind}:${msg.id}`;
+      if (seen.has(key)) {
+        stats.debug.duplicatesIgnored++;
+        continue;
+      }
+
+      seen.add(key);
+
+      const userId = getActorIdFromEventEmbed(embed);
+      const date = dateFromBR(getEmbedText(embed), msg.createdTimestamp);
+
+      addEvent(stats, {
+        key,
+        source: channelId,
+        kind,
+        messageId: msg.id,
+        channelId: msg.channelId,
+        ts: date.getTime(),
+        userId,
+      });
+    }
+  }
+}
+
+async function collectDashboardData(client, force = false) {
+  if (!force && CACHE.payload && Date.now() - CACHE.at < CACHE_TTL_MS) {
+    return CACHE.payload;
+  }
+
+  const stats = emptyStats();
+  const seen = new Set();
+
+  await scanPayments(client, stats, seen);
+  await scanPaymentLogs(client, stats, seen);
+
+  await scanEventChannel(client, stats, seen, REGISTRO_EVENTO_CHANNEL_ID, "manual", isEventManualEmbed);
+  await scanEventChannel(client, stats, seen, CH_PODERES_ID, "poderes", isPoderesEmbed);
+  await scanEventChannel(client, stats, seen, EVT3_EVENT_CHANNEL_ID, "evt3", isEventManualEmbed);
+  await scanEventChannel(client, stats, seen, CRONOGRAMA_LOGS_CHANNEL_ID, "crono", isCronoHallDailyEmbed);
+
+  for (const user of Object.values(stats.users)) {
+    user.pointsTotal = Number(user.pointsPayment || 0) + Number(user.pointsEvent || 0);
+  }
+
+  CACHE = {
+    at: Date.now(),
+    payload: stats,
+  };
+
+  return stats;
+}
+
+function percent(current, previous) {
+  if (!previous) return current ? 100 : 0;
+  return ((current - previous) / previous) * 100;
+}
+
+function diffText(current, previous) {
+  const diff = current - previous;
+  const p = percent(current, previous);
+
+  if (diff > 0) return `🟢 +${diff} (${p.toFixed(1)}%)`;
+  if (diff < 0) return `🔴 ${diff} (${p.toFixed(1)}%)`;
+  return `⚪ 0 (0.0%)`;
+}
+
+function progressBar(value, limit = PAY_PERIOD_LIMIT, size = 12) {
+  const safeValue = Math.max(0, Number(value || 0));
+  const ratio = Math.min(1, safeValue / limit);
+  const filled = Math.round(ratio * size);
+
+  return "█".repeat(filled) + "░".repeat(Math.max(0, size - filled));
+}
+
+function topList(stats, field, limit = 5) {
+  const list = Object.values(stats.users || {})
+    .filter((u) => Number(u[field] || 0) > 0)
+    .sort((a, b) => Number(b[field] || 0) - Number(a[field] || 0))
+    .slice(0, limit);
+
+  if (!list.length) return "_Sem dados ainda_";
+
+  return list
+    .map((u, i) => `**${i + 1}.** <@${u.userId}> — **${Number(u[field] || 0)}**`)
+    .join("\n");
+}
+
+function weeklyHistory(stats, max = 4) {
+  const keys = Object.keys(stats.byWeek || {}).sort().slice(-max);
+
+  if (!keys.length) return "_Sem histórico ainda_";
+
+  return keys
+    .map((key) => {
+      const b = stats.byWeek[key] || {};
+      const label = periodKeyFromDateSP(new Date(`${key}T12:00:00-03:00`)).label;
+
+      const pay = Number(b.paymentsApproved || 0);
+      const evt =
+        Number(b.eventsManual || 0) +
+        Number(b.eventsPoderes || 0) +
+        Number(b.eventsEvt3 || 0) +
+        Number(b.eventsCrono || 0);
+
+      return `\`${label}\` 💵 ${pay.toString().padStart(3, " ")} ${progressBar(pay, PAY_PERIOD_LIMIT, 8)} | 🎉 ${evt}`;
     })
     .join("\n");
 }
 
-// =========================
-// PARSERS
-// =========================
-function norm(s) {
-  return String(s || "").normalize("NFD").replace(/\p{Diacritic}/gu, "").replace(/\s+/g, " ").trim().toLowerCase();
-}
-
-function getFields(emb) {
-  return emb?.fields || emb?.data?.fields || [];
-}
-
-function isPaymentRecordEmbed(emb) {
-  const t = String(emb?.title || emb?.data?.title || "");
-  return t.includes("Registro de Pagamento") && (t.includes("Evento") || t.includes("SANTACREATORS"));
-}
-
-function getPaymentRegistrarId(emb) {
-  const f = getFields(emb).find((x) => norm(x?.name).includes("registro"));
-  const m = /<@!?(\d+)>/.exec(f?.value || "");
-  return m ? m[1] : null;
-}
-
-function getPaymentStatus(emb) {
-  const fields = getFields(emb);
-  const statusField = fields.find((x) => {
-    const n = norm(x?.name);
-    return n.includes("status") || n.includes("situacao") || n.includes("resultado");
-  });
-
-  const rawOriginal = String(statusField?.value || "");
-  const raw = norm(rawOriginal);
-
-  if (!raw) return "UNKNOWN";
-
-  const isPago =
-    /✅\s*\*{0,2}PAGO\*{0,2}/i.test(rawOriginal) ||
-    /^pago\b/i.test(raw);
-
-  const isReprovado =
-    /❌\s*\*{0,2}REPROVADO\*{0,2}/i.test(rawOriginal) ||
-    /^reprovado\b/i.test(raw) ||
-    raw.includes("recus") ||
-    raw.includes("negad");
-
-  if (isPago) return "APPROVED";
-  if (isReprovado) return "REJECTED";
-
-  return "UNKNOWN";
-}
-
-function getPaymentEventTimestamp(emb, fallbackTs) {
-  const fields = getFields(emb);
-
-  const campoData = fields.find((x) => {
-    const n = norm(x?.name);
-    return n.includes("data do evento") || n.includes("data") || n.includes("evento");
-  });
-
-  const texto = String(campoData?.value || emb?.description || emb?.data?.description || "");
-
-  const match = texto.match(/\b(\d{1,2})[\/.-](\d{1,2})(?:[\/.-](\d{2,4}))?\b/);
-  if (!match) return fallbackTs;
-
-  const dia = Number(match[1]);
-  const mes = Number(match[2]);
-
-  const agoraSP = nowSP();
-  let ano = match[3] ? Number(match[3]) : agoraSP.getFullYear();
-
-  if (ano < 100) ano = 2000 + ano;
-
-  if (!Number.isFinite(dia) || !Number.isFinite(mes) || !Number.isFinite(ano)) return fallbackTs;
-  if (dia < 1 || dia > 31 || mes < 1 || mes > 12) return fallbackTs;
-
-  const ts = new Date(`${ano}-${pad2(mes)}-${pad2(dia)}T12:00:00-03:00`).getTime();
-
-  return Number.isFinite(ts) ? ts : fallbackTs;
-}
-
-function extractDiscordMessageLinksFromText(text) {
-  const raw = String(text || "");
-  const matches = [...raw.matchAll(/https?:\/\/(?:canary\.|ptb\.)?discord(?:app)?\.com\/channels\/(\d+)\/(\d+)\/(\d+)/gi)];
-
-  return matches.map((m) => ({
-    guildId: m[1],
-    channelId: m[2],
-    messageId: m[3],
-    url: m[0],
-  }));
-}
-
-function extractPaymentLogLinks(emb) {
-  const links = [];
-
-  const desc = String(emb?.description || emb?.data?.description || "");
-  links.push(...extractDiscordMessageLinksFromText(desc));
-
-  for (const field of getFields(emb)) {
-    links.push(...extractDiscordMessageLinksFromText(field?.value || ""));
-  }
-
-  const unique = new Map();
-  for (const link of links) {
-    unique.set(`${link.channelId}:${link.messageId}`, link);
-  }
-
-  return [...unique.values()];
-}
-
-function isPaymentAuditLogEmbed(emb) {
-  const title = norm(emb?.title || emb?.data?.title || "");
-  const desc = norm(emb?.description || emb?.data?.description || "");
-
-  return (
-    title.includes("pagamento") ||
-    title.includes("novo pagamento") ||
-    title.includes("pagamento confirmado") ||
-    title.includes("pagamento reprovado") ||
-    title.includes("marcado como solicitado") ||
-    desc.includes("data do evento") ||
-    desc.includes("ganhador") ||
-    desc.includes("registro:")
-  );
-}
-
-async function fetchLinkedPaymentMessage(client, link) {
-  try {
-    if (!link?.channelId || !link?.messageId) return null;
-
-    const ch = await client.channels.fetch(link.channelId).catch(() => null);
-    if (!ch?.isTextBased?.()) return null;
-
-    return await ch.messages.fetch(link.messageId).catch(() => null);
-  } catch {
-    return null;
-  }
-}
-
-function pushPaymentFromEmbed({
-  emb,
-  fallbackTs,
-  sourceMessageId,
-  payments,
-  paymentsAll,
-  paymentsRejected,
-  seenPaymentMessages,
-}) {
-  if (!emb || !isPaymentRecordEmbed(emb)) return false;
-
-  const dedupeKey = String(sourceMessageId || "");
-  if (dedupeKey && seenPaymentMessages.has(dedupeKey)) return false;
-  if (dedupeKey) seenPaymentMessages.add(dedupeKey);
-
-  const uid = getPaymentRegistrarId(emb);
-  if (!uid) return false;
-
-  const paymentRealTs = getPaymentEventTimestamp(emb, fallbackTs);
-
-  const tsCreated = new Date(paymentRealTs);
-  const pAll = periodKeyFromDateSP(tsCreated);
-  DEBUG.payPeriodFoundAll[pAll.key] = (DEBUG.payPeriodFoundAll[pAll.key] || 0) + 1;
-
-  paymentsAll.push({
-    userId: String(uid),
-    ...periodInfoFromDateSP(tsCreated),
-    kind: "pay_all",
-  });
-
-  const st = getPaymentStatus(emb);
-  const tsStatus = new Date(paymentRealTs);
-  const pStatus = periodKeyFromDateSP(tsStatus);
-
-  if (st === "APPROVED") {
-    DEBUG.payPeriodFound[pStatus.key] = (DEBUG.payPeriodFound[pStatus.key] || 0) + 1;
-    DEBUG.payPeriodFoundApproved[pStatus.key] = (DEBUG.payPeriodFoundApproved[pStatus.key] || 0) + 1;
-
-    payments.push({
-      userId: String(uid),
-      ...periodInfoFromDateSP(tsStatus),
-      kind: "pay",
-    });
-  } else if (st === "REJECTED") {
-    DEBUG.payPeriodFoundRejected[pStatus.key] = (DEBUG.payPeriodFoundRejected[pStatus.key] || 0) + 1;
-
-    paymentsRejected.push({
-      userId: String(uid),
-      ...periodInfoFromDateSP(tsStatus),
-      kind: "pay_rejected",
-    });
-  }
-
-  return true;
-}
-
-function isManualEventEmbed(emb) {
-  const t = norm(emb?.title || emb?.data?.title || "");
-  // ✅ FIX: Garante que NÃO pega pagamentos (evita duplicar no amarelo)
-  if (t.includes("pagamento")) return false;
-  return t.includes("registro") && (t.includes("poderes") || t.includes("evento") || t.includes("uso de"));
-}
-
-function getManualEventUserId(emb) {
-  const footer = emb?.footer?.text || emb?.data?.footer?.text || "";
-  const mFooter = /User ID:\s*(\d+)/.exec(footer);
-  if (mFooter) return mFooter[1];
-  const fields = getFields(emb);
-  const f = fields.find((x) => {
-    const n = norm(x?.name);
-    return n.includes("registrado por") || n.includes("criado por");
-  });
-  if (f) {
-    const m = /<@!?(\d+)>/.exec(f.value || "");
-    if (m) return m[1];
-  }
-  return null;
-}
-
-// ✅ Parser para Cronograma/Hall/EventosDiarios (Aprovados)
-function isApprovedEventEmbed(emb) {
-  const t = String(emb?.title || emb?.data?.title || "");
-  const f = String(emb?.footer?.text || emb?.data?.footer?.text || "");
-  const isApproved = t.includes("APROVADO") || f.includes("Aprovado por");
-  
-  // Filtra tipos específicos
-  const isCrono = t.includes("Cronograma") || t.includes("Solicitação de Aprovação");
-  const isHall = t.includes("Hall da Fama");
-  const isDaily = t.includes("Evento Diário");
-
-  return isApproved && (isCrono || isHall || isDaily);
-}
-
-function getApprovedEventUserId(emb) {
-  // Tenta pegar do campo "Solicitante" ou descrição
-  const desc = emb?.description || emb?.data?.description || "";
-  const mDesc = /Solicitante:.*?<@!?(\d+)>/i.exec(desc);
-  if (mDesc) return mDesc[1];
-
-  // Tenta pegar do campo "Aberto por" (se houver)
-  const fields = getFields(emb);
-  const f = fields.find(x => norm(x.name).includes("solicitante") || norm(x.name).includes("aberto por"));
-  if (f) {
-    const m = /<@!?(\d+)>/.exec(f.value || "");
-    if (m) return m[1];
-  }
-  return null;
-}
-
-// ✅ Parser para Poderes Utilizados (igual ao scGeralDash)
-function isPoderesRecordEmbed(emb) {
-  const t = norm(emb?.title || emb?.data?.title || "");
-  return (
-    t.includes("registro") && t.includes("poderes") && t.includes("utilizados")
-  );
-}
-function poderes_getUserId(emb) {
-  const f = getFields(emb).find((x) => norm(x?.name).includes("id"));
-  const v = String(f?.value || "").trim();
-  return /^\d{17,20}$/.test(v) ? v : null;
-}
-
-// =========================
-// DASHBOARD MSG RECOVERY
-// =========================
-const DASH_EMBED_TITLE_MATCH = "Dashboard — Registros SantaCreators";
-
-function looksLikeOurDashMessage(msg, client) {
-  try {
-    if (!msg || msg.author?.id !== client.user.id) return false;
-    const emb = msg.embeds?.[0];
-    if (!emb) return false;
-    return String(emb.title || "").includes(DASH_EMBED_TITLE_MATCH);
-  } catch {
-    return false;
-  }
-}
-
-async function findExistingDashboardMessage(dash, client) {
-  try {
-    const pins = await dash.messages.fetchPinned().catch(() => null);
-    if (pins?.size) {
-      const found = [...pins.values()].find((m) => looksLikeOurDashMessage(m, client));
-      if (found) return found;
-    }
-    const recent = await dash.messages.fetch({ limit: 50 }).catch(() => null);
-    if (recent?.size) {
-      const found = [...recent.values()].find((m) => looksLikeOurDashMessage(m, client));
-      if (found) return found;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-function isTooOld(ts) {
-  return (Date.now() - ts) > MAX_AGE_MS;
-}
-
-function isCollectTimedOut(startedAt) {
-  return Date.now() - startedAt > COLLECT_MAX_MS;
-}
-
-async function withTimeout(promise, ms, fallback = null) {
-  let timer = null;
-
-  try {
-    return await Promise.race([
-      promise,
-      new Promise((resolve) => {
-        timer = setTimeout(() => resolve(fallback), ms);
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
-async function fetchMessagesSafe(channel, options) {
-  return await withTimeout(
-    channel.messages.fetch(options).catch(() => null),
-    FETCH_TIMEOUT_MS,
-    null
-  );
-}
-
-async function fetchChannelSafe(client, channelId) {
-  return await withTimeout(
-    client.channels.fetch(channelId).catch(() => null),
-    FETCH_TIMEOUT_MS,
-    null
-  );
-}
-
-// =========================
-// COLLECT DATA
-// =========================
-async function collectAll(client, options = {}) {
-  const now = Date.now();
-  const startedAt = Date.now();
-
-  const fast = Boolean(options.fast);
-  const pagesLimit = fast ? SCAN_PAGES_FAST : SCAN_PAGES;
-
-  if (CACHE.payload && now - CACHE.at < SCAN_TTL_MS && !fast) return CACHE.payload;
-
-  DEBUG.scannedPayMsgs = 0;
-  DEBUG.scannedPayRegs = 0;
-  DEBUG.scannedPayLogMsgs = 0;
-  DEBUG.scannedPayLogRecovered = 0;
-  DEBUG.scannedEvtManualMsgs = 0;
-  DEBUG.scannedPoderesMsgs = 0;
-  DEBUG.scannedCronoMsgs = 0;
-
-  DEBUG.payPeriodFound = {};
-  DEBUG.payPeriodFoundAll = {};
-  DEBUG.payPeriodFoundApproved = {};
-  DEBUG.payPeriodFoundRejected = {};
-  DEBUG.evtPeriodFound = {};
-
-  const payments = [];
-  const paymentsAll = [];
-  const paymentsRejected = [];
-  const events = [];
-
-  // 1. PAGAMENTOS (Blue)
-  const seenPaymentMessages = new Set();
-
-  const payCh = await fetchChannelSafe(client, PAY_CHANNEL_ID);
-  if (payCh?.isTextBased?.()) {
-    let lastId;
- for (let page = 0; page < pagesLimit; page++) {
-  if (isCollectTimedOut(startedAt)) break;
-
-  const batch = await fetchMessagesSafe(payCh, { limit: 100, before: lastId });
-      if (!batch?.size) break;
-
-      let stopScan = false;
-      for (const m of batch.values()) {
-        if (isTooOld(m.createdTimestamp)) { stopScan = true; break; }
-
-        DEBUG.scannedPayMsgs++;
-
-        const emb = m.embeds?.[0];
-        if (!emb || !isPaymentRecordEmbed(emb)) continue;
-
-        const added = pushPaymentFromEmbed({
-          emb,
-          fallbackTs: m.createdTimestamp,
-          sourceMessageId: m.id,
-          payments,
-          paymentsAll,
-          paymentsRejected,
-          seenPaymentMessages,
-        });
-
-        if (added) DEBUG.scannedPayRegs++;
-      }
-
-      if (stopScan) break;
-      lastId = batch.last()?.id;
-      if (!lastId) break;
-    }
-  }
-
-  // 1.1 BACKFILL DE PAGAMENTOS PELOS LOGS
-  // Usa o canal 1486084352403312843 para recuperar registros que não entraram pela varredura principal.
-  const payLogCh = await client.channels.fetch(PAY_LOG_CHANNEL_ID).catch(() => null);
-  if (payLogCh?.isTextBased?.()) {
-    let lastId;
-
-    for (let page = 0; page < SCAN_PAGES; page++) {
-      const batch = await payLogCh.messages.fetch({ limit: 100, before: lastId }).catch(() => null);
-      if (!batch?.size) break;
-
-      let stopScan = false;
-
-      for (const m of batch.values()) {
-        if (isTooOld(m.createdTimestamp)) { stopScan = true; break; }
-
-        DEBUG.scannedPayLogMsgs++;
-
-        const embLog = m.embeds?.[0];
-        if (!embLog || !isPaymentAuditLogEmbed(embLog)) continue;
-
-        const links = extractPaymentLogLinks(embLog);
-        if (!links.length) continue;
-
-        for (const link of links) {
-          const linkedMsg = await fetchLinkedPaymentMessage(client, link);
-          const embPayment = linkedMsg?.embeds?.[0];
-
-          const added = pushPaymentFromEmbed({
-            emb: embPayment,
-            fallbackTs: linkedMsg?.createdTimestamp || m.createdTimestamp,
-            sourceMessageId: linkedMsg?.id || link.messageId,
-            payments,
-            paymentsAll,
-            paymentsRejected,
-            seenPaymentMessages,
-          });
-
-          if (added) DEBUG.scannedPayLogRecovered++;
-        }
-      }
-
-      if (stopScan) break;
-      lastId = batch.last()?.id;
-      if (!lastId) break;
-    }
-  }
-
-  // 2. EVENTOS MANUAIS (Yellow)
-  const regEvtCh = await client.channels.fetch(REGISTRO_EVENTO_CHANNEL_ID).catch(() => null);
-  const manualCandidates = [];
-  if (regEvtCh?.isTextBased?.()) {
-    let lastId;
-    for (let page = 0; page < 50; page++) {
-      const batch = await regEvtCh.messages.fetch({ limit: 100, before: lastId }).catch(() => null);
-      if (!batch?.size) break;
-
-      let stopScan = false;
-      for (const m of batch.values()) {
-        if (isTooOld(m.createdTimestamp)) { stopScan = true; break; }
-
-        const emb = m.embeds?.[0];
-        if (!emb || !isManualEventEmbed(emb)) continue;
-
-        let uid = /<@!?(\d+)>/.exec(m.content || "")?.[1] || getManualEventUserId(emb);
-        if (!uid) continue;
-
-        DEBUG.scannedEvtManualMsgs++;
-        manualCandidates.push({ userId: String(uid), ts: m.createdTimestamp });
-      }
-      if (stopScan) break;
-      lastId = batch.last()?.id;
-      if (!lastId) break;
-    }
-  }
-
-  // Cooldown 1h para manuais
-  manualCandidates.sort((a, b) => a.ts - b.ts);
-  const lastUserTime = new Map();
-  const MANUAL_COOLDOWN = 60 * 60 * 1000;
-
-  for (const cand of manualCandidates) {
-    const last = lastUserTime.get(cand.userId);
-    if (!last || cand.ts - last >= MANUAL_COOLDOWN) {
-      lastUserTime.set(cand.userId, cand.ts);
-      const p = periodKeyFromDateSP(new Date(cand.ts));
-      DEBUG.evtPeriodFound[p.key] = (DEBUG.evtPeriodFound[p.key] || 0) + 1;
-      events.push({
-  userId: cand.userId,
-  ...periodInfoFromDateSP(new Date(cand.ts)),
-  kind: "evt_manual",
-});
-    }
-  }
-
-  // ✅ 2.1 PODERES UTILIZADOS (Yellow) - Adicionado para somar no amarelo
-  // (Renomeado para podChScan para evitar erro de variável duplicada)
-  const podChScan = await client.channels.fetch(CH_PODERES_ID).catch(() => null);
-  if (podChScan?.isTextBased?.()) {
-    let lastId;
-    for (let page = 0; page < 50; page++) {
-      const batch = await podChScan.messages.fetch({ limit: 100, before: lastId }).catch(() => null);
-      if (!batch?.size) break;
-
-      let stopScan = false;
-      for (const m of batch.values()) {
-        if (isTooOld(m.createdTimestamp)) { stopScan = true; break; }
-
-        const emb = m.embeds?.[0];
-        if (!emb || !isPoderesRecordEmbed(emb)) continue;
-
-        const uid = poderes_getUserId(emb);
-        if (!uid) continue;
-
-        DEBUG.scannedPoderesMsgs++;
-        const p = periodKeyFromDateSP(new Date(m.createdTimestamp));
-        DEBUG.evtPeriodFound[p.key] = (DEBUG.evtPeriodFound[p.key] || 0) + 1;
-        events.push({
-  userId: String(uid),
-  ...periodInfoFromDateSP(new Date(m.createdTimestamp)),
-  kind: "evt_poderes",
-});
-      }
-      if (stopScan) break;
-      lastId = batch.last()?.id;
-      if (!lastId) break;
-    }
-  }
-
-  // 3. EVT3 (Yellow)
-  const st = readEvt3State();
-  const map = st?.evt3Events || {};
-  const parent = await client.channels.fetch(EVT3_EVENT_CHANNEL_ID).catch(() => null);
-
-  for (const [mainThreadId, info] of Object.entries(map)) {
-    const creatorId = String(info?.creatorId || "").trim();
-    if (!creatorId) continue;
-
-    let thread = await client.channels.fetch(mainThreadId).catch(() => null);
-    if (!thread && parent?.isTextBased?.()) {
-      try {
-        const active = await parent.threads.fetchActive().catch(() => null);
-        thread = active?.threads?.get(mainThreadId);
-      } catch {}
-      if (!thread) {
-        try {
-          const archived = await parent.threads.fetchArchived({ type: "public", limit: 100 }).catch(() => null);
-          thread = archived?.threads?.get(mainThreadId);
-        } catch {}
-      }
-    }
-
-    const createdAt = thread?.createdTimestamp ? new Date(thread.createdTimestamp) : null;
-    if (!createdAt) continue;
-
-    const p = periodKeyFromDateSP(createdAt);
-    DEBUG.evtPeriodFound[p.key] = (DEBUG.evtPeriodFound[p.key] || 0) + 1;
-    events.push({
-  userId: creatorId,
-  ...periodInfoFromDateSP(createdAt),
-  kind: "evt",
-});
-  }
-
-  // 4. CRONOGRAMA / HALL / DIÁRIOS (Yellow) - ✅ NOVO
-  const cronoCh = await client.channels.fetch(CRONOGRAMA_LOGS_CHANNEL_ID).catch(() => null);
-  if (cronoCh?.isTextBased?.()) {
-    let lastId;
-    for (let page = 0; page < 50; page++) {
-      const batch = await cronoCh.messages.fetch({ limit: 100, before: lastId }).catch(() => null);
-      if (!batch?.size) break;
-
-      let stopScan = false;
-      for (const m of batch.values()) {
-        if (isTooOld(m.createdTimestamp)) { stopScan = true; break; }
-
-        const emb = m.embeds?.[0];
-        if (!emb || !isApprovedEventEmbed(emb)) continue;
-
-        const uid = getApprovedEventUserId(emb);
-        if (!uid) continue;
-
-        DEBUG.scannedCronoMsgs++;
-        const ts = m.editedTimestamp || m.createdTimestamp;
-        const p = periodKeyFromDateSP(new Date(ts));
-        
-        DEBUG.evtPeriodFound[p.key] = (DEBUG.evtPeriodFound[p.key] || 0) + 1;
-        events.push({
-  userId: String(uid),
-  ...periodInfoFromDateSP(new Date(ts)),
-  kind: "evt_crono",
-});
-      }
-      if (stopScan) break;
-      lastId = batch.last()?.id;
-      if (!lastId) break;
-    }
-  }
-
-  const payload = { payments, paymentsAll, paymentsRejected, events };
-  CACHE = { at: now, payload };
-  return payload;
-}
-
-// =========================
-// AGGREGATION & ADJUSTMENTS
-// =========================
-function getAdjustmentsForWeek(weekKey) {
-  const data = loadAdjustments();
-  return data.weeks?.[weekKey] || {};
-}
-
-function aggregate(items, periodKey, applyAdjustments = false) {
-  const only = items.filter((e) => e.periodKey === periodKey);
-  const byUser = {};
-  for (const e of only) byUser[e.userId] = (byUser[e.userId] || 0) + 1;
-
-  // ✅ Aplica ajustes manuais (apenas se solicitado, ex: para pagamentos)
-  if (applyAdjustments) {
-    const adjustments = getAdjustmentsForWeek(periodKey);
-    for (const [userId, delta] of Object.entries(adjustments)) {
-      byUser[userId] = (byUser[userId] || 0) + delta;
-      if (byUser[userId] < 0) byUser[userId] = 0; // Não permite negativo
-    }
-  }
-
-  const total = Object.values(byUser).reduce((a, b) => a + b, 0);
-  const top = Object.entries(byUser)
-    .map(([userId, count]) => ({ userId, count }))
-    .sort((a, b) => b.count - a.count);
-
-  return { total, top };
-}
-
-function diff(a, b) {
-  const d = a - b;
-  const pct = b > 0 ? (d / b) * 100 : a > 0 ? 100 : 0;
-  const mood = d > 0 ? "🟢" : d < 0 ? "🔴" : "🟡";
-  const sign = d > 0 ? "+" : d < 0 ? "−" : "";
-  return { d, pct, mood, sign };
-}
-
-function payStatus(approved) {
-  if (approved > PAY_PERIOD_LIMIT) return { icon: "🚨", label: "ESTOUROU O LIMITE", color: 0xed4245, fill: "🟥" };
-  if (approved === PAY_PERIOD_LIMIT) return { icon: "⚠️", label: "NO LIMITE", color: 0xfaa61a, fill: "🟧" };
-  if (approved >= PAY_PERIOD_GOAL) return { icon: "🟢", label: "META BATIDA", color: 0x57f287, fill: "🟩" };
-  if (approved >= PAY_PERIOD_OK) return { icon: "🟡", label: "OK", color: 0xfee75c, fill: "🟨" };
-  return { icon: "🔴", label: "ABAIXO DO OK", color: 0xed4245, fill: "🟥" };
-}
-
-function progressBarEmoji(value, max, width = 14, fill = "🟩") {
-  const v = Math.max(0, value);
-  const m = Math.max(1, max);
-  const filled = Math.min(width, Math.round((v / m) * width));
-  return fill.repeat(filled) + "⬜".repeat(Math.max(0, width - filled));
-}
-
-// =========================
-// CHART
-// =========================
-function chartUrlTwoDatasets({ labels, payData, evtData, title }) {
-  const cfg = {
-    type: "bar",
-    data: {
-      labels,
-      datasets: [
-        {
-          label: "Pagamentos",
-          data: payData,
-          backgroundColor: "#5865f2",
-          barPercentage: 0.8,
-          categoryPercentage: 0.9,
-          minBarLength: 8,
-        },
-        {
-          label: "Eventos/Poderes",
-          data: evtData,
-          backgroundColor: "#faa61a",
-          barPercentage: 0.8,
-          categoryPercentage: 0.9,
-          minBarLength: 8,
-        },
-      ],
-    },
-    options: {
-      title: {
-        display: true,
-        text: title,
-        fontSize: 24,
-      },
-      legend: {
-        display: true,
-        labels: {
-          fontSize: 16,
-        },
-      },
-      plugins: {
-        datalabels: {
-          anchor: "end",
-          align: "end",
-          offset: 4,
-          clamp: true,
-          font: {
-            size: 16,
-            weight: "bold",
-          },
-          color: "#000",
-        },
-      },
-      scales: {
-        yAxes: [
-          {
-            ticks: {
-              beginAtZero: true,
-              min: 0,
-              precision: 0,
-              fontSize: 16,
-            },
-          },
-        ],
-        xAxes: [
-          {
-            ticks: {
-              fontSize: 16,
-            },
-          },
-        ],
-      },
-    },
-  };
-
-  return `https://quickchart.io/chart?c=${encodeURIComponent(JSON.stringify(cfg))}&width=1200&height=600&backgroundColor=white&plugins=chartjs-plugin-datalabels`;
-}
-
-async function fetchBuffer(url) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`fetch ${res.status}`);
-  return Buffer.from(await res.arrayBuffer());
-}
-
-// =========================
-// UPSERT DASHBOARD
-// =========================
-async function upsertDashboard(client, reason) {
-  DEBUG.lastRunAt = Date.now();
-  DEBUG.lastReason = reason;
-  
-  const dash = await client.channels.fetch(DASH_CHANNEL_ID).catch(() => null);
-  if (!dash?.isTextBased?.()) return;
-
-  const st = loadState();
-  const reasonText = String(reason || "");
-
-  const isForcedUpdate =
-    reasonText.includes("manual") ||
-    reasonText.includes("force") ||
-    reasonText.includes("message:") ||
-    reasonText.includes("pagamento:") ||
-    reasonText.includes("cronograma") ||
-    reasonText.includes("halldafama") ||
-    reasonText.includes("eventosdiarios") ||
-    reasonText.includes("pending:");
-
-  const isFastScan =
-    reasonText.includes("message:") ||
-    reasonText.includes("pagamento:") ||
-    reasonText.includes("cronograma") ||
-    reasonText.includes("halldafama") ||
-    reasonText.includes("eventosdiarios") ||
-    reasonText.includes("pending:");
-
-const { payments, paymentsAll, paymentsRejected, events } = await collectAll(client, {
-    fast: isFastScan,
-});
-
-  const currentWk = periodKeyFromDateSP(nowSP()).key;
-  
-  // União de chaves
-  const union = new Set([currentWk]);
-  payments.forEach(p => union.add(p.periodKey));
-  paymentsAll.forEach(p => union.add(p.periodKey));
-  events.forEach(e => union.add(e.periodKey));
-  const keys = [...union].sort((a, b) => (a > b ? -1 : 1));
-
-const thisKey = currentWk;
-const lastKey = periodKeyFromDateSP(addDaysUTC(new Date(`${thisKey}T12:00:00Z`), -7)).key;
-
-DEBUG.chosenThis = thisKey;
-DEBUG.chosenLast = lastKey;
-DEBUG.chartPeriods = keys.slice(0, 4);
-
-  // Agregações (Pagamentos com Ajustes)
-  const curPay = thisKey ? aggregate(payments, thisKey, true) : { total: 0, top: [] };
-  const curPayAll = thisKey ? aggregate(paymentsAll, thisKey) : { total: 0, top: [] };
-  const prevPay = lastKey ? aggregate(payments, lastKey, true) : { total: 0, top: [] };
-  
-  // Eventos (Sem ajustes por enquanto, ou adicione se quiser)
-  const curEvt = thisKey ? aggregate(events, thisKey) : { total: 0, top: [] };
-  const prevEvt = lastKey ? aggregate(events, lastKey) : { total: 0, top: [] };
-
-  // Total Geral (Pagamentos Ajustados + Eventos)
-  const curAllTotal = curPay.total + curEvt.total;
-  const prevAllTotal = prevPay.total + prevEvt.total;
-  
-  // Top 3 Geral (precisa mesclar os tops ajustados)
-  const mergeTops = (payTop, evtTop) => {
-    const map = {};
-    payTop.forEach(u => map[u.userId] = (map[u.userId] || 0) + u.count);
-    evtTop.forEach(u => map[u.userId] = (map[u.userId] || 0) + u.count);
-    return Object.entries(map)
-      .map(([userId, count]) => ({ userId, count }))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 3);
-  };
-  const top3 = mergeTops(curPay.top, curEvt.top);
-
-  // Textos
-  const ddPay = diff(curPay.total, prevPay.total);
-  const ddEvt = diff(curEvt.total, prevEvt.total);
-
-  const currentMonthKey = monthKeyFromDateSP(new Date());
-
-  const monthPayAll = aggregateMonth(paymentsAll, currentMonthKey);
-  const monthPayApproved = aggregateMonth(payments, currentMonthKey);
-  const monthPayRejected = aggregateMonth(paymentsRejected, currentMonthKey);
-  const monthEvents = aggregateMonth(events, currentMonthKey);
-
-  const ps = payStatus(curPay.total);
-  const pctLimit = Math.min(999, (curPay.total / PAY_PERIOD_LIMIT) * 100);
-  const bar = progressBarEmoji(curPay.total, PAY_PERIOD_LIMIT, 12, ps.fill);
-
-  const weeklySummary = [
-    `📌 **Pagamentos registrados:** **${curPayAll.total}**`,
-    `📌 **Pagamentos aprovados:** **${curPay.total}**`,
-    `🎉 **Eventos / poderes:** **${curEvt.total}**`,
-    `📊 **Total semanal:** **${curAllTotal}**`,
-  ].join("\n");
-
-  const weeklyComparison = [
-    `💸 **Pagamentos:** ${prevPay.total} → **${curPay.total}** ${ddPay.mood} **${ddPay.sign}${Math.abs(ddPay.d)}** (${ddPay.pct.toFixed(1)}%)`,
-    `🎉 **Eventos:** ${prevEvt.total} → **${curEvt.total}** ${ddEvt.mood} **${ddEvt.sign}${Math.abs(ddEvt.d)}** (${ddEvt.pct.toFixed(1)}%)`,
-  ].join("\n");
-
-  const weeklyGoal = [
-    `${ps.icon} **Status atual:** **${ps.label}**`,
-    `🟡 **OK:** ${PAY_PERIOD_OK}  •  🟢 **Meta:** ${PAY_PERIOD_GOAL}  •  ⚠️ **Limite:** ${PAY_PERIOD_LIMIT}`,
-    `📈 **Progresso:** **${curPay.total}/${PAY_PERIOD_LIMIT}** (${pctLimit.toFixed(0)}%)`,
-    `${bar}`,
-  ].join("\n");
-
-  const monthlySummary = [
-    `🗓️ **Mês atual:** \`${labelFromMonthKey(currentMonthKey)}\``,
-    "",
-    `💸 **Pagamentos do mês**`,
-    `• Registrados: **${monthPayAll.total}**`,
-    `• Aprovados: **${monthPayApproved.total}**`,
-    `• Reprovados: **${monthPayRejected.total}**`,
-    "",
-    `🎉 **Eventos / fontes do mês**`,
-    sourceLines(monthEvents.byKind, ["evt_manual", "evt_poderes", "evt", "evt_crono"]),
-    "",
-    `📦 **Total geral do mês:** **${monthPayApproved.total + monthEvents.total}**`,
-  ].join("\n");
-
-  const top3Text = top3.length
-    ? top3.map((u, i) => `${i === 0 ? "🥇" : i === 1 ? "🥈" : "🥉"} <@${u.userId}> — **${u.count} registros**`).join("\n")
-    : "_Sem registros nesta semana._";
-
-  // Chart Data (Últimas 4 semanas)
-  const chartKeys = keys.slice(0, 4).reverse(); // Ascendente
-  const labels = chartKeys.map(k => labelFromPeriodKey(k));
-  
-  // Aplica ajustes aos dados do gráfico também
-  const payData = chartKeys.map(k => aggregate(payments, k, true).total);
-  const evtData = chartKeys.map(k => aggregate(events, k).total);
-
-  // Fingerprint
-  const fingerprint = JSON.stringify({
-    thisKey, lastKey,
-    totals: { cur: curAllTotal, prev: prevAllTotal },
-    pay: { cur: curPay.total, prev: prevPay.total },
-    evt: { cur: curEvt.total, prev: prevEvt.total },
-    chart: { payData, evtData }
-  });
-
-  const periodChanged = st.lastPeriodKey && st.lastPeriodKey !== thisKey;
-
-  if (periodChanged) {
-    CACHE.payload = null;
-    st.lastFingerprint = "";
-  }
-
-  // const isForcedUpdate = isFastUpdate; // Removido: 'isForcedUpdate' já declarado e 'isFastUpdate' não existe mais
-
-  if (st.lastFingerprint === fingerprint && !isForcedUpdate && !periodChanged) return;
-
-  // Build Chart
-  let files = [];
-  try {
-    const url = chartUrlTwoDatasets({ labels, payData, evtData, title: "Histórico — Últimos 4 períodos (Dom→Sáb)" });
-    const buf = await fetchBuffer(url);
-    files = [new AttachmentBuilder(buf, { name: "chart.png" })];
-  } catch (e) {
-    console.error("[SC_PAY_EVT_DASH] Chart error:", e);
-  }
-
-  // Embed
-  const embed = new EmbedBuilder()
-    .setColor(ps.color)
+function makeDashboardEmbed(stats) {
+  const now = nowSP();
+  const thisWeek = periodKeyFromDateSP(now);
+  const lastWeekKey = periodKeyFromDateSP(addDaysUTC(new Date(`${thisWeek.key}T12:00:00-03:00`), -7)).key;
+  const monthKey = monthKeyFromDateSP(now);
+
+  const w = stats.byWeek[thisWeek.key] || {};
+  const last = stats.byWeek[lastWeekKey] || {};
+  const m = stats.byMonth[monthKey] || {};
+
+  const payApproved = Number(w.paymentsApproved || 0);
+  const payCreated = Number(w.paymentsCreated || 0);
+  const payRejected = Number(w.paymentsRejected || 0);
+  const payRequested = Number(w.paymentsRequested || 0);
+
+  const eventsTotal =
+    Number(w.eventsManual || 0) +
+    Number(w.eventsPoderes || 0) +
+    Number(w.eventsEvt3 || 0) +
+    Number(w.eventsCrono || 0);
+
+  const lastPayApproved = Number(last.paymentsApproved || 0);
+  const lastEventsTotal =
+    Number(last.eventsManual || 0) +
+    Number(last.eventsPoderes || 0) +
+    Number(last.eventsEvt3 || 0) +
+    Number(last.eventsCrono || 0);
+
+  const monthPayments =
+    Number(m.paymentsCreated || 0) +
+    Number(m.paymentsApproved || 0) +
+    Number(m.paymentsRejected || 0) +
+    Number(m.paymentsRequested || 0);
+
+  const monthEvents =
+    Number(m.eventsManual || 0) +
+    Number(m.eventsPoderes || 0) +
+    Number(m.eventsEvt3 || 0) +
+    Number(m.eventsCrono || 0);
+
+  const status =
+    payApproved >= PAY_PERIOD_LIMIT
+      ? "🚨 Limite batido"
+      : payApproved >= PAY_PERIOD_GOAL
+        ? "🟢 Meta batida"
+        : payApproved >= PAY_PERIOD_OK
+          ? "🟡 OK"
+          : "🔴 Abaixo do OK";
+
+  return new EmbedBuilder()
+    .setColor(payApproved >= PAY_PERIOD_GOAL ? 0x22c55e : payApproved >= PAY_PERIOD_OK ? 0xf59e0b : 0xef4444)
     .setTitle("📊 Dashboard — Registros SantaCreators")
-    .setDescription([
-      `**Período semanal:** \`${labelFromPeriodKey(thisKey)}\``,
-      `**Comparação:** \`${labelFromPeriodKey(lastKey)}\` → \`${labelFromPeriodKey(thisKey)}\``,
-    ].join("\n"))
+    .setDescription(
+      [
+        `**Período semanal:** \`${thisWeek.label}\``,
+        `**Mês atual:** \`${labelFromMonthKey(monthKey)}\``,
+        `**Atualizado:** <t:${Math.floor(Date.now() / 1000)}:f>`,
+        "",
+        `**Status:** ${status}`,
+      ].join("\n")
+    )
     .addFields(
       {
         name: "📌 Resumo da semana",
-        value: weeklySummary,
+        value: [
+          `💵 Pagamentos criados: **${payCreated}**`,
+          `✅ Pagamentos aprovados: **${payApproved}**`,
+          `📌 Solicitados: **${payRequested}**`,
+          `❌ Reprovados: **${payRejected}**`,
+          `🎉 Eventos / fontes: **${eventsTotal}**`,
+          `📦 Total semanal: **${payCreated + eventsTotal}**`,
+        ].join("\n"),
         inline: true,
       },
       {
         name: "📈 Comparativo semanal",
-        value: weeklyComparison,
+        value: [
+          `💵 Pagamentos: **${lastPayApproved} → ${payApproved}** ${diffText(payApproved, lastPayApproved)}`,
+          `🎉 Eventos: **${lastEventsTotal} → ${eventsTotal}** ${diffText(eventsTotal, lastEventsTotal)}`,
+        ].join("\n"),
         inline: true,
       },
       {
         name: "🎯 Meta de pagamentos",
-        value: weeklyGoal,
+        value: [
+          `**${status}**`,
+          `🟡 OK: **${PAY_PERIOD_OK}** • 🟢 Meta: **${PAY_PERIOD_GOAL}** • 🚨 Limite: **${PAY_PERIOD_LIMIT}**`,
+          `\`${progressBar(payApproved, PAY_PERIOD_LIMIT, 18)}\``,
+          `📈 Progresso: **${payApproved}/${PAY_PERIOD_LIMIT}**`,
+        ].join("\n"),
         inline: false,
       },
       {
         name: "📦 Totais do mês por fonte",
-        value: monthlySummary,
+        value: [
+          `💵 Pagamentos criados: **${Number(m.paymentsCreated || 0)}**`,
+          `✅ Pagamentos aprovados: **${Number(m.paymentsApproved || 0)}**`,
+          `📌 Solicitados: **${Number(m.paymentsRequested || 0)}**`,
+          `❌ Reprovados: **${Number(m.paymentsRejected || 0)}**`,
+          "",
+          `🎉 Registros manuais: **${Number(m.eventsManual || 0)}**`,
+          `⚡ Registros de poderes: **${Number(m.eventsPoderes || 0)}**`,
+          `🧩 Eventos EVT3: **${Number(m.eventsEvt3 || 0)}**`,
+          `📅 Cronograma / Hall / Eventos diários: **${Number(m.eventsCrono || 0)}**`,
+          "",
+          `📦 Total geral do mês: **${Number(m.paymentsCreated || 0) + monthEvents}**`,
+        ].join("\n"),
         inline: false,
       },
       {
-        name: "🏅 Top 3 — Ranking geral da semana",
-        value: top3Text,
+        name: "🏆 Ranking geral",
+        value: topList(stats, "pointsTotal", 5),
+        inline: true,
+      },
+      {
+        name: "💵 Top pagamentos",
+        value: topList(stats, "pointsPayment", 5),
+        inline: true,
+      },
+      {
+        name: "🎉 Top eventos",
+        value: topList(stats, "pointsEvent", 5),
+        inline: true,
+      },
+      {
+        name: "📊 Histórico — últimas semanas",
+        value: weeklyHistory(stats, 4),
         inline: false,
       },
       {
-        name: "🏆 Destaque anterior",
-        value: `**Top 1 pagamentos da semana passada:** ${prevPay.top[0] ? `<@${prevPay.top[0].userId}> — **${prevPay.top[0].count}**` : "—"}`,
+        name: "🧪 Auditoria técnica",
+        value: [
+          `Canal pagamentos: **${stats.debug.scannedChannels[PAY_CHANNEL_ID] || 0} msgs**`,
+          `Logs pagamentos: **${stats.debug.scannedChannels[PAY_LOG_CHANNEL_ID] || 0} msgs**`,
+          `Recuperados por logs: **${stats.debug.recoveredFromLogs || 0}**`,
+          `Duplicados ignorados: **${stats.debug.duplicatesIgnored || 0}**`,
+        ].join("\n"),
         inline: false,
-      },
+      }
     )
-    .setImage("attachment://chart.png")
-    .setFooter({ text: "Atualização automática • Pagamentos + Eventos + Poderes" })
-    .setTimestamp();
-
-  // Botão Remover Pontos
-const row = new ActionRowBuilder().addComponents(
-  new ButtonBuilder()
-    .setCustomId("PEV_FORCE_REFRESH")
-    .setLabel("🔄 Atualizar Semanal")
-    .setStyle(ButtonStyle.Primary),
-
-  new ButtonBuilder()
-    .setCustomId("PEV_REMOVE_POINTS")
-    .setLabel("➖ Remover Pontos (Pagamentos)")
-    .setStyle(ButtonStyle.Danger)
-);
-
-  // Send/Edit
-  let msg = st.dashboardMsgId ? await dash.messages.fetch(st.dashboardMsgId).catch(() => null) : null;
-  if (!msg) msg = await findExistingDashboardMessage(dash, client);
-
-  const payload = { content: "‎", embeds: [embed], files, components: [row] };
-
-  if (msg) {
-    await msg.edit(payload);
-  } else {
-    msg = await dash.send(payload);
-  }
-
-  if (msg) {
-    st.dashboardMsgId = msg.id;
-    st.lastFingerprint = fingerprint;
-    st.lastPeriodKey = thisKey;
-    saveState(st);
-  }
+    .setFooter({
+      text: `${DASH_MARKER} • Atualização automática + logs + registros antigos`,
+    })
+    .setTimestamp(new Date());
 }
 
-async function safeUpdate(client, reason) {
-  const now = Date.now();
-  const reasonText = String(reason || "");
+function makeDashboardRow() {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId("PEV_FORCE_REFRESH")
+      .setLabel("🔄 Atualizar agora")
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId("PEV_RECREATE")
+      .setLabel("🧹 Recriar painel")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId("PEV_DEBUG")
+      .setLabel("🧪 Debug")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId("PEV_ADJUST_OPEN")
+      .setLabel("✏️ Ajuste manual")
+      .setStyle(ButtonStyle.Success)
+  );
+}
 
-  const isForceUpdate =
-    reasonText.includes("manual") ||
-    reasonText.includes("force") ||
-    reasonText.includes("message:") ||
-    reasonText.includes("pagamento:") ||
-    reasonText.includes("cronograma") ||
-    reasonText.includes("halldafama") ||
-    reasonText.includes("eventosdiarios") ||
-    reasonText.includes("pending:");
+function hasPermission(memberOrInteraction, userId = null) {
+  const member = memberOrInteraction?.member || memberOrInteraction;
+  const id = userId || memberOrInteraction?.user?.id || member?.id;
 
-  if (isForceUpdate) {
-    CACHE = { at: 0, payload: null };
+  if (ALLOWED_MANAGE_IDS.includes(id)) return true;
 
-    const st = loadState();
-    st.lastFingerprint = "";
-    saveState(st);
+  return member?.roles?.cache?.some((r) => ALLOWED_MANAGE_ROLES.includes(r.id)) || false;
+}
+
+async function findExistingDashboard(channel, client) {
+  const state = loadState();
+
+  if (state.dashboardMsgId) {
+    const msg = await channel.messages.fetch(state.dashboardMsgId).catch(() => null);
+    if (msg) return msg;
+  }
+
+  const messages = await channel.messages.fetch({ limit: 50 }).catch(() => null);
+  if (!messages) return null;
+
+  return [...messages.values()]
+    .filter((m) => m.author?.id === client.user.id)
+    .filter((m) => m.embeds?.length)
+    .find((m) => String(m.embeds[0]?.footer?.text || "").includes(DASH_MARKER)) || null;
+}
+
+async function renderDashboard(client, reason = "manual", options = {}) {
+  const { force = false, recreate = false } = options;
+
+  if (LOCK && Date.now() - LOCK_TS > LOCK_STUCK_MS) {
+    console.warn("[SC_PAY_EVT_DASH_V2] lock travado resetado");
+    LOCK = false;
+    LOCK_TS = 0;
   }
 
   if (LOCK) {
-    const lockAge = now - LOCK_TS;
-
-    if (lockAge <= UPDATE_STUCK_MS) {
-      PENDING_UPDATE = true;
-      PENDING_REASON = reasonText || "pending";
-
-      log("⏳ Update já está rodando. Nova atualização ficou na fila:", {
-        reason,
-        lockAgeMs: lockAge,
-      });
-
-      return false;
-    }
-
-    log("⚠️ Update antigo travado. Forçando nova atualização:", {
-      reason,
-      lockAgeMs: lockAge,
-    });
-
-    LOCK = false;
-    LOCK_TS = 0;
-    RUNNING_UPDATE_PROMISE = null;
+    return {
+      ok: false,
+      message: "Já existe atualização em andamento.",
+    };
   }
 
   LOCK = true;
   LOCK_TS = Date.now();
 
   try {
-    RUNNING_UPDATE_PROMISE = upsertDashboard(client, reason);
-    await RUNNING_UPDATE_PROMISE;
+    console.log("[SC_PAY_EVT_DASH_V2] atualização iniciada:", reason);
 
-    log("✅ Dashboard atualizado:", {
-      reason,
-      scannedPayMsgs: DEBUG.scannedPayMsgs,
-      scannedPayRegs: DEBUG.scannedPayRegs,
-      scannedPayLogMsgs: DEBUG.scannedPayLogMsgs,
-      scannedPayLogRecovered: DEBUG.scannedPayLogRecovered,
-      scannedEvtManualMsgs: DEBUG.scannedEvtManualMsgs,
-      scannedPoderesMsgs: DEBUG.scannedPoderesMsgs,
-      scannedCronoMsgs: DEBUG.scannedCronoMsgs,
+    const channel = await client.channels.fetch(DASH_CHANNEL_ID).catch(() => null);
+    if (!channel || !channel.isTextBased()) {
+      throw new Error(`Canal do dashboard não encontrado: ${DASH_CHANNEL_ID}`);
+    }
+
+    if (recreate) {
+      saveState({
+        dashboardMsgId: null,
+        lastFingerprint: "",
+        lastUpdatedAt: null,
+      });
+    }
+
+    const stats = await collectDashboardData(client, force);
+    const embed = makeDashboardEmbed(stats);
+    const row = makeDashboardRow();
+
+    const fingerprint = JSON.stringify({
+      week: stats.byWeek,
+      month: stats.byMonth,
+      users: stats.users,
     });
 
-    return true;
-  } catch (e) {
-    DEBUG.error = e?.stack || e?.message || String(e);
-    console.error("[SC_PAY_EVT_DASH] Update error:", e);
-    return false;
+    const state = loadState();
+    let msg = recreate ? null : await findExistingDashboard(channel, client);
+
+    if (msg) {
+      await msg.edit({
+        embeds: [embed],
+        components: [row],
+      });
+    } else {
+      msg = await channel.send({
+        embeds: [embed],
+        components: [row],
+      });
+    }
+
+    saveState({
+      dashboardMsgId: msg.id,
+      lastFingerprint: fingerprint,
+      lastUpdatedAt: Date.now(),
+      lastReason: reason,
+    });
+
+    console.log("[SC_PAY_EVT_DASH_V2] dashboard atualizado:", {
+      reason,
+      messageId: msg.id,
+      payments: stats.payments.length,
+      events: stats.events.length,
+    });
+
+    return {
+      ok: true,
+      stats,
+      messageId: msg.id,
+    };
+  } catch (err) {
+    console.error("[SC_PAY_EVT_DASH_V2] erro:", err);
+    return {
+      ok: false,
+      error: err?.message || String(err),
+    };
   } finally {
     LOCK = false;
     LOCK_TS = 0;
-    RUNNING_UPDATE_PROMISE = null;
-
-    if (PENDING_UPDATE) {
-      const nextReason = PENDING_REASON || "pending";
-      PENDING_UPDATE = false;
-      PENDING_REASON = "";
-
-      setTimeout(() => {
-        safeUpdate(client, `pending:${nextReason}`).catch((err) => {
-          console.error("[SC_PAY_EVT_DASH] Erro na atualização pendente:", err);
-        });
-      }, 1200);
-    }
   }
+}
+
+function scheduleUpdate(client, reason) {
+  setTimeout(() => {
+    renderDashboard(client, reason, { force: true }).catch(() => null);
+  }, 2500);
+}
+
+async function sendDebug(interaction, client) {
+  const stats = await collectDashboardData(client, true);
+
+  const currentWeek = periodKeyFromDateSP(nowSP()).key;
+  const currentMonth = monthKeyFromDateSP(nowSP());
+
+  const w = stats.byWeek[currentWeek] || {};
+  const m = stats.byMonth[currentMonth] || {};
+
+  await interaction.editReply({
+    content: [
+      "🧪 **Debug do Dashboard SantaCreators**",
+      "",
+      `📌 Semana: \`${currentWeek}\``,
+      `📅 Mês: \`${currentMonth}\``,
+      "",
+      `💵 Pagamentos lidos: **${stats.payments.length}**`,
+      `🎉 Eventos lidos: **${stats.events.length}**`,
+      "",
+      `✅ Aprovados semana: **${Number(w.paymentsApproved || 0)}**`,
+      `📦 Criados semana: **${Number(w.paymentsCreated || 0)}**`,
+      `🎉 Eventos semana: **${Number(w.eventsManual || 0) + Number(w.eventsPoderes || 0) + Number(w.eventsEvt3 || 0) + Number(w.eventsCrono || 0)}**`,
+      "",
+      `📦 Criados mês: **${Number(m.paymentsCreated || 0)}**`,
+      `✅ Aprovados mês: **${Number(m.paymentsApproved || 0)}**`,
+      "",
+      `Canal pagamentos: **${stats.debug.scannedChannels[PAY_CHANNEL_ID] || 0} msgs**`,
+      `Canal logs: **${stats.debug.scannedChannels[PAY_LOG_CHANNEL_ID] || 0} msgs**`,
+      `Recuperados por logs: **${stats.debug.recoveredFromLogs || 0}**`,
+      `Duplicados ignorados: **${stats.debug.duplicatesIgnored || 0}**`,
+    ].join("\n"),
+  }).catch(() => {});
 }
 
 // =========================
 // EXPORTS
 // =========================
 export async function payEvtDashOnReady(client) {
-  if (client.__SC_PAY_EVT_DASH_READY__) return;
-  client.__SC_PAY_EVT_DASH_READY__ = true;
+  if (client.__SC_PAY_EVT_DASH_V2_READY__) return;
+  client.__SC_PAY_EVT_DASH_V2_READY__ = true;
 
-  dashOn("cronograma:aprovado", () => safeUpdate(client, "cronograma"));
-  dashOn("halldafama:aprovado", () => safeUpdate(client, "halldafama"));
-  dashOn("eventosdiarios:aprovado", () => safeUpdate(client, "eventosdiarios"));
+  dashOn("cronograma:aprovado", () => scheduleUpdate(client, "dashOn:cronograma"));
+  dashOn("halldafama:aprovado", () => scheduleUpdate(client, "dashOn:halldafama"));
+  dashOn("eventosdiarios:aprovado", () => scheduleUpdate(client, "dashOn:eventosdiarios"));
 
-  dashOn("pagamento:criado", () => safeUpdate(client, "pagamento:criado"));
-  dashOn("pagamento:pago", () => safeUpdate(client, "pagamento:pago"));
-  dashOn("pagamento:solicitado", () => safeUpdate(client, "pagamento:solicitado"));
-  dashOn("pagamento:reprovado", () => safeUpdate(client, "pagamento:reprovado"));
-  dashOn("pagamento:status", () => safeUpdate(client, "pagamento:status"));
+  dashOn("pagamento:criado", () => scheduleUpdate(client, "dashOn:pagamento:criado"));
+  dashOn("pagamento:pago", () => scheduleUpdate(client, "dashOn:pagamento:pago"));
+  dashOn("pagamento:solicitado", () => scheduleUpdate(client, "dashOn:pagamento:solicitado"));
+  dashOn("pagamento:reprovado", () => scheduleUpdate(client, "dashOn:pagamento:reprovado"));
+  dashOn("pagamento:status", () => scheduleUpdate(client, "dashOn:pagamento:status"));
 
-  await safeUpdate(client, "ready");
-  setInterval(() => safeUpdate(client, "interval"), 5 * 60 * 1000);
+  await renderDashboard(client, "ready", { force: true });
+
+  if (!client.__SC_PAY_EVT_DASH_V2_INTERVAL__) {
+    client.__SC_PAY_EVT_DASH_V2_INTERVAL__ = setInterval(() => {
+      renderDashboard(client, "interval:5min", { force: true }).catch(() => null);
+    }, 5 * 60 * 1000);
+  }
 }
 
 export async function payEvtDashHandleMessage(message, client) {
-  if (!message.guild) return false;
+  if (!message?.guild) return false;
 
   const autoUpdateChannels = new Set([
     PAY_CHANNEL_ID,
-    REGISTRO_EVENTO_CHANNEL_ID,
+    PAY_LOG_CHANNEL_ID,
     CH_PODERES_ID,
+    EVT3_EVENT_CHANNEL_ID,
+    REGISTRO_EVENTO_CHANNEL_ID,
     CRONOGRAMA_LOGS_CHANNEL_ID,
   ]);
 
   if (autoUpdateChannels.has(message.channelId)) {
-    setTimeout(() => safeUpdate(client, `message:${message.channelId}`), 2500);
+    scheduleUpdate(client, `message:${message.channelId}`);
   }
 
-  if (message.author.bot) return false;
+  if (message.author?.bot) return false;
 
   const content = String(message.content || "").trim().toLowerCase();
 
-  if (
-    content === "!pevdashrefresh" ||
-    content === "!pevdashrefresh" ||
-    content === "!pevdashrefresh" ||
-    content === "!pevdash" ||
-    content === "!pevrefresh"
-  ) {
-    await message.reply("🔄 Atualizando...");
-    CACHE.payload = null;
+  const commands = new Set([
+    "!pevdash",
+    "!pevdashrefresh",
+    "!pevdashforce",
+    "!criarsocial",
+    "!socialrefresh",
+    "!criardashsocial",
+  ]);
 
-    const st = loadState();
-    st.lastFingerprint = "";
-    saveState(st);
+  if (!commands.has(content)) return false;
 
-    await safeUpdate(client, "manual");
+  if (!hasPermission(message.member, message.author.id)) {
+    await message.reply("🚫 Você não tem permissão para atualizar esse dashboard.").catch(() => {});
     return true;
   }
 
-  return false;
+  const recreate = content === "!criarsocial" || content === "!criardashsocial";
+  const aviso = await message.reply(
+    recreate
+      ? "🧹 Recriando o Dashboard SantaCreators do zero e lendo pagamentos + logs + eventos..."
+      : "🔄 Atualizando o Dashboard SantaCreators e lendo pagamentos + logs + eventos..."
+  ).catch(() => null);
+
+  const result = await renderDashboard(client, `command:${content}`, {
+    force: true,
+    recreate,
+  });
+
+  if (!result.ok) {
+    await (aviso || message).reply?.(
+      `❌ Falhei ao atualizar o dashboard.\nMotivo: \`${result.error || result.message || "erro desconhecido"}\``
+    ).catch(() => {});
+    return true;
+  }
+
+  await (aviso || message).edit?.({
+    content: [
+      recreate
+        ? "✅ Dashboard recriado com sucesso."
+        : "✅ Dashboard atualizado com sucesso.",
+      "",
+      `💵 Pagamentos lidos: **${result.stats.payments.length}**`,
+      `🎉 Eventos lidos: **${result.stats.events.length}**`,
+      `🧾 Mensagem: <#${DASH_CHANNEL_ID}>`,
+    ].join("\n"),
+  }).catch(() => {});
+
+  return true;
 }
 
-// ✅ NEW EXPORT: Interaction Handler (Must be plugged into index.js interactionCreate)
 export async function payEvtDashHandleInteraction(interaction, client) {
   if (!interaction.isButton() && !interaction.isModalSubmit()) return false;
+
+  if (
+    interaction.isButton() &&
+    ["PEV_FORCE_REFRESH", "PEV_RECREATE", "PEV_DEBUG", "PEV_ADJUST_OPEN"].includes(interaction.customId)
+  ) {
+    if (!hasPermission(interaction, interaction.user.id)) {
+      await interaction.reply({
+        content: "🚫 Você não tem permissão para mexer nesse dashboard.",
+        ephemeral: true,
+      }).catch(() => {});
+      return true;
+    }
+  }
 
   if (interaction.isButton() && interaction.customId === "PEV_FORCE_REFRESH") {
     await interaction.deferReply({ ephemeral: true }).catch(() => {});
 
-    CACHE.payload = null;
+    const result = await renderDashboard(client, "button:force_refresh", {
+      force: true,
+    });
 
-    const st = loadState();
-    st.lastFingerprint = "";
-    saveState(st);
+    await interaction.editReply({
+      content: result.ok
+        ? `✅ Dashboard atualizado.\n💵 Pagamentos: **${result.stats.payments.length}**\n🎉 Eventos: **${result.stats.events.length}**`
+        : `❌ Falhei ao atualizar.\nMotivo: \`${result.error || result.message || "erro desconhecido"}\``,
+    }).catch(() => {});
 
-await interaction.editReply({
-  content: "🔄 Atualização manual iniciada. Estou limpando o cache e recalculando o dashboard...",
-}).catch(() => {});
-
-const ok = await safeUpdate(client, "manual force refresh");
-
-await interaction.editReply({
-  content: ok
-    ? "✅ Dashboard atualizado com sucesso. Cache limpo, painel recalculado e mensagem editada."
-    : "⏳ Já tinha uma atualização rodando. Deixei essa atualização na fila e ela vai rodar em seguida.",
-}).catch(() => {});
     return true;
   }
 
-  // Button: Open Modal
-if (interaction.isButton() && interaction.customId === "PEV_REMOVE_POINTS") {
-  const hasPerm =
-    ALLOWED_MANAGE_IDS.includes(interaction.user.id) ||
-    interaction.member?.roles?.cache?.some(r => ALLOWED_MANAGE_ROLES.includes(r.id));
+  if (interaction.isButton() && interaction.customId === "PEV_RECREATE") {
+    await interaction.deferReply({ ephemeral: true }).catch(() => {});
 
-  if (!hasPerm) {
-    await interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
+    const result = await renderDashboard(client, "button:recreate", {
+      force: true,
+      recreate: true,
+    });
+
+    await interaction.editReply({
+      content: result.ok
+        ? `✅ Dashboard recriado do zero.\n💵 Pagamentos: **${result.stats.payments.length}**\n🎉 Eventos: **${result.stats.events.length}**`
+        : `❌ Falhei ao recriar.\nMotivo: \`${result.error || result.message || "erro desconhecido"}\``,
+    }).catch(() => {});
+
     return true;
   }
 
-  const modal = new ModalBuilder()
-    .setCustomId("PEV_REMOVE_MODAL")
-    .setTitle("Remover Pontos (Pagamentos)");
-
-  modal.addComponents(
-    new ActionRowBuilder().addComponents(
-      new TextInputBuilder()
-        .setCustomId("userId")
-        .setLabel("ID do Usuário")
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true)
-    ),
-    new ActionRowBuilder().addComponents(
-      new TextInputBuilder()
-        .setCustomId("amount")
-        .setLabel("Quantidade a Remover")
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true)
-    )
-  );
-
-  await interaction.showModal(modal);
-  return true;
-}
-
-// Modal: Save Adjustment
-if (interaction.isModalSubmit() && interaction.customId === "PEV_REMOVE_MODAL") {
-  await interaction.deferReply({ ephemeral: true });
-
-  const userId = interaction.fields.getTextInputValue("userId").trim();
-  const amount = parseInt(interaction.fields.getTextInputValue("amount").trim(), 10);
-
-  if (!userId || isNaN(amount) || amount <= 0) {
-    await interaction.editReply({ content: "❌ Dados inválidos." });
+  if (interaction.isButton() && interaction.customId === "PEV_DEBUG") {
+    await interaction.deferReply({ ephemeral: true }).catch(() => {});
+    await sendDebug(interaction, client);
     return true;
   }
 
-  const { key: weekKey } = periodKeyFromDateSP(new Date());
-  const data = loadAdjustments();
+  if (interaction.isButton() && interaction.customId === "PEV_ADJUST_OPEN") {
+    const modal = new ModalBuilder()
+      .setCustomId("PEV_ADJUST_MODAL")
+      .setTitle("Ajuste manual do Dashboard");
 
-  if (!data.weeks[weekKey]) data.weeks[weekKey] = {};
-  data.weeks[weekKey][userId] = (data.weeks[weekKey][userId] || 0) - amount;
+    const input = new TextInputBuilder()
+      .setCustomId("adjust_text")
+      .setLabel("Anotação do ajuste")
+      .setPlaceholder("Ex: ajuste feito manualmente após conferência dos logs")
+      .setStyle(TextInputStyle.Paragraph)
+      .setRequired(true);
 
-  saveAdjustments(data);
+    modal.addComponents(new ActionRowBuilder().addComponents(input));
 
-  // Force update
-  CACHE.payload = null;
-  await safeUpdate(client, "manual adjustment");
+    await interaction.showModal(modal).catch(() => {});
+    return true;
+  }
 
-  await interaction.editReply({
-    content: `✅ Removidos **${amount}** pontos de <@${userId}> na semana atual (Pagamentos).`
-  });
-  return true;
-}
+  if (interaction.isModalSubmit() && interaction.customId === "PEV_ADJUST_MODAL") {
+    await interaction.deferReply({ ephemeral: true }).catch(() => {});
+
+    const text = interaction.fields.getTextInputValue("adjust_text");
+
+    console.log("[SC_PAY_EVT_DASH_V2] ajuste manual registrado:", {
+      by: interaction.user.id,
+      text,
+    });
+
+    const result = await renderDashboard(client, "modal:adjust", {
+      force: true,
+    });
+
+    await interaction.editReply({
+      content: result.ok
+        ? "✅ Ajuste registrado em log e dashboard recalculado."
+        : `❌ Ajuste registrado, mas falhei ao recalcular.\nMotivo: \`${result.error || result.message || "erro desconhecido"}\``,
+    }).catch(() => {});
+
+    return true;
+  }
 
   return false;
 }
