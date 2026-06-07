@@ -637,13 +637,24 @@ async function updateAdminPanel(client) {
 
 async function removeRewardRoleFromEveryoneExcept(guild, roleId, keepUserId, roleName, log) {
   try {
-    const role = guild.roles.cache.get(roleId);
+    const role = await guild.roles.fetch(roleId).catch(() => null);
     if (!role) {
       log.push(`⚠️ Cargo **${roleName}** não encontrado no servidor.`);
       return;
     }
 
-    const membersWithRole = role.members;
+    await guild.members.fetch().catch((e) => {
+      console.error(`[ReuniaoSemanal] Falha ao carregar membros antes de limpar ${roleName}:`, e);
+    });
+
+    const membersWithRole = guild.members.cache.filter((member) => {
+      return member?.roles?.cache?.has(roleId);
+    });
+
+    if (membersWithRole.size === 0) {
+      log.push(`ℹ️ Nenhum membro antigo encontrado com **${roleName}**.`);
+      return;
+    }
 
     for (const member of membersWithRole.values()) {
       if (!member?.id) continue;
@@ -653,11 +664,19 @@ async function removeRewardRoleFromEveryoneExcept(guild, roleId, keepUserId, rol
         continue;
       }
 
-      await member.roles.remove(roleId).catch((e) => {
-        console.error(`[ReuniaoSemanal] Falha ao remover ${roleName} de ${member.id}:`, e);
-      });
+      try {
+        await member.roles.remove(roleId, `[ReuniaoSemanal] Limpando cargo antigo de ${roleName}`);
 
-      log.push(`🔻 Removido **${roleName}** de <@${member.id}>`);
+        const updatedMember = await guild.members.fetch(member.id).catch(() => null);
+        if (updatedMember?.roles?.cache?.has(roleId)) {
+          log.push(`⚠️ Tentativa feita, mas **${roleName}** ainda está em <@${member.id}>. Verifique hierarquia/permissão do bot.`);
+        } else {
+          log.push(`🔻 Removido **${roleName}** de <@${member.id}>`);
+        }
+      } catch (e) {
+        console.error(`[ReuniaoSemanal] Falha ao remover ${roleName} de ${member.id}:`, e);
+        log.push(`❌ Falha ao remover **${roleName}** de <@${member.id}>. Verifique hierarquia/permissão do bot.`);
+      }
     }
   } catch (e) {
     console.error(`[ReuniaoSemanal] Erro ao limpar cargo ${roleName}:`, e);
@@ -946,9 +965,12 @@ export async function reuniaoSemanalHandleInteraction(interaction, client) {
       return true;
     }
 
-    const data = await aggregateData(interaction.guild, previousWeekKey);
-    const winners = calculateWinners(data);
-    const logs = await applyRoles(interaction.guild, winners, state);
+const data = await aggregateData(interaction.guild, previousWeekKey);
+const winners = calculateWinners(data);
+const logs = [
+  "ℹ️ Semana anterior publicada sem aplicar cargos.",
+  "✅ Os cargos de destaque permanecem reservados apenas para a semana atual."
+];
 
     const registrarUser = interaction.user;
     const winnerRecords = [
