@@ -1194,7 +1194,7 @@ DEBUG.chartPeriods = keys.slice(0, 4);
     st.lastFingerprint = "";
   }
 
-  const isForcedUpdate = isFastUpdate;
+  // const isForcedUpdate = isFastUpdate; // Removido: 'isForcedUpdate' já declarado e 'isFastUpdate' não existe mais
 
   if (st.lastFingerprint === fingerprint && !isForcedUpdate && !periodChanged) return;
 
