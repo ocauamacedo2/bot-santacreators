@@ -242,42 +242,9 @@ function iniciarRegistroPoderes(client) {
       const canal = await client.channels.fetch(CANAL_REGISTRO_ID).catch(() => null);
       if (!canal) return console.log('❌ Canal de Registro de Poderes não encontrado.');
 
-      // Limpa botões antigos do bot (deixa só 1)
-      const mensagensAntigas = await canal.messages.fetch({ limit: 20 }).catch(() => null);
-      if (mensagensAntigas) {
-        for (const msg of mensagensAntigas.values()) {
-          const btn = msg.components?.[0]?.components?.[0];
-          // Verifica se é mensagem do bot e se tem o botão específico
-          if (msg.author.id === client.user.id && btn?.customId === 'abrir_registro') {
-            await msg.delete().catch(() => {});
-          }
-        }
-      }
-
-      // Envia o botão atualizado
-      const embed = new EmbedBuilder()
-        .setColor('Purple')
-        .setTitle('📘 Registro de Poderes Utilizados — SantaCreators')
-        .setDescription(
-          '🔮 **Registre o uso de poderes com players durante interações, vídeos ou conteúdos.**\n\n' +
-          '📅 Informe **a data em que os poderes foram usados**.\n' +
-          '🧠 Descreva os **poderes utilizados**.\n' +
-          '⏰ Especifique o **horário aproximado de uso**.\n\n' +
-          '✅ Apenas membros autorizados podem registrar.\n' +
-          '🔁 Após cada envio, um **novo botão será gerado automaticamente** para facilitar novos registros.'
-        )
-        .setImage(GIF_PODERES_URL)
-        .setFooter({ text: 'SantaCreators – Sistema Oficial de Registro' });
-
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId('abrir_registro')
-          .setLabel('📘 Registrar Poderes Utilizados')
-          .setStyle(ButtonStyle.Primary)
-      );
-
-      await canal.send({ embeds: [embed], components: [row] });
-      console.log('✅ Botão de Registro de Poderes enviado.');
+await resetarBotaoRegistroPoderes(canal, client);
+console.log('✅ Botão de Registro de Poderes enviado.');
+return;
       // console.log('✅ Botão de Registro de Poderes enviado.');
 
     } catch (err) {
@@ -472,29 +439,8 @@ try {
 
 
 
-// Reenvia o botão logo abaixo
-const embedBtn = new EmbedBuilder()
-  .setColor("Purple")
-  .setTitle("📘 Registro de Poderes Utilizados — SantaCreators")
-  .setDescription(
-    "🔮 **Registre o uso de poderes com players durante interações, vídeos ou conteúdos.**\n\n" +
-      "📅 Informe **a data em que os poderes foram usados**.\n" +
-      "🧠 Descreva os **poderes utilizados**.\n" +
-      "⏰ Especifique o **horário aproximado de uso**.\n\n" +
-      "✅ Apenas membros autorizados podem registrar.\n" +
-      "🔁 Após cada envio, um **novo botão será gerado automaticamente** para facilitar novos registros."
-  )
-  .setImage(GIF_PODERES_URL)
-  .setFooter({ text: "SantaCreators – Sistema Oficial de Registro" });
-
-const rowBtn = new ActionRowBuilder().addComponents(
-  new ButtonBuilder()
-    .setCustomId("abrir_registro")
-    .setLabel("📘 Registrar Poderes Utilizados")
-    .setStyle(ButtonStyle.Primary)
-);
-
-await canal.send({ embeds: [embedBtn], components: [rowBtn] });
+// ✅ Envia o registro primeiro, depois apaga o botão antigo e cria outro embaixo
+await resetarBotaoRegistroPoderes(canal, client);
 
 await interaction.editReply("✅ Registro enviado com sucesso!");
 
