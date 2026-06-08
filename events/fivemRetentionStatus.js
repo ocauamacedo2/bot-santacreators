@@ -15,7 +15,7 @@ import mongoose from "mongoose";
 // ⚙️ CONFIG
 const FIVEM_PANEL_CHANNEL_ID = "1501321157259956244";
 const FIVEM_REFRESH_INTERVAL_MS = 2 * 60 * 1000; // coleta a cada 2 minutos
-const FIVEM_PANEL_REFRESH_INTERVAL_MS = 10 * 60 * 1000; // edita o painel a cada 10 minutos
+const FIVEM_PANEL_REFRESH_INTERVAL_MS = 2 * 60 * 1000; // edita o painel a cada 2 minutos
 const FIVEM_HISTORY_MAX_DAYS = 30; // Limitar histórico a 30 dias
 const FIVEM_FETCH_TIMEOUT_MS = 10 * 1000; // 10 segundos
 const FIVEM_COMPARISON_TOLERANCE_MS = 10 * 60 * 1000; // 10 minutos
@@ -2177,22 +2177,20 @@ if (safeSnapshot.shouldPersist) {
  console.warn("[FIVEM_RETENTION] Snapshot parcial/fallback usado apenas para exibição. Histórico e picos não foram atualizados.");
 }
 
- // 🚀 Coleta sempre a cada 2min, mas edita o painel sem flood:
- // - normal: a cada 10min
- // - durante evento: a cada 2min
- // - se tiver pico novo: edita na hora
- // - se for forçado pelo botão: edita na hora
- const state = FIVEM_STATE.get(channel.id) || {};
- const lastEditAt = state.lastEditAt || 0;
- const timeSinceLastEdit = Date.now() - lastEditAt;
+// 🚀 Coleta e edita o painel silenciosamente a cada 2min:
+// - normal: a cada 2min
+// - se tiver pico novo: edita na hora
+// - se for forçado pelo botão: edita na hora
+const state = FIVEM_STATE.get(channel.id) || {};
+const lastEditAt = state.lastEditAt || 0;
+const timeSinceLastEdit = Date.now() - lastEditAt;
 
- const isPanelTimedUpdate = timeSinceLastEdit >= FIVEM_PANEL_REFRESH_INTERVAL_MS;
- const isEventWindowNow = isInsideCurrentEventWindow(currentSnapshot);
- const is21h = isExact21hSnapshot(currentSnapshot);
+const isPanelTimedUpdate = timeSinceLastEdit >= FIVEM_PANEL_REFRESH_INTERVAL_MS;
+const is21h = isExact21hSnapshot(currentSnapshot);
 
- if (!options.force && !hasNewPeak && !is21h && !isEventWindowNow && !isPanelTimedUpdate) {
-   return null;
- }
+if (!options.force && !hasNewPeak && !is21h && !isPanelTimedUpdate) {
+  return null;
+}
 
  const { embeds, row } = await buildEmbeds(channel.client, currentSnapshot);
  try {
