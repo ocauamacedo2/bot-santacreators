@@ -2219,41 +2219,92 @@ await syncContinuationMessages(channel, botId, continuationGroups, hasContinuati
  }
 }
 // ---------- PUBLIC API ----------
+async function ensureFivemRetentionAutoLoop(client, options = {}) {
+ const channel = await client.channels.fetch(FIVEM_PANEL_CHANNEL_ID).catch(() => null);
+ if (!channel || !channel.isTextBased()) {
+   console.error("[FIVEM_RETENTION] Canal fixo não encontrado ou inválido:", FIVEM_PANEL_CHANNEL_ID);
+   return null;
+ }
+
+ const existing = FIVEM_STATE.get(channel.id);
+
+ if (existing?.intervalId) {
+   clearInterval(existing.intervalId);
+ }
+
+ if (options.forceInitialUpdate) {
+   editPanel(channel, { force: true }).catch(e => console.error("[FIVEM_RETENTION] Erro no update inicial:", e));
+ }
+
+ const intervalId = setInterval(async () => {
+   try {
+     await editPanel(channel, { auto: true });
+   } catch (e) {
+     console.error("[FIVEM_RETENTION] Erro no loop de atualização automática:", e);
+   }
+ }, FIVEM_REFRESH_INTERVAL_MS);
+
+ FIVEM_STATE.set(channel.id, {
+   ...existing,
+   intervalId,
+   messageId: existing?.messageId || null,
+   lastEditAt: existing?.lastEditAt || 0,
+ });
+
+ FIVEM_DEBUG && console.log("[FIVEM_RETENTION] Loop automático de 2min ativo no canal", channel.id);
+
+ return channel;
+}
+
+
+async function ensureFivemRetentionAutoLoop(client, options = {}) {
+ const channel = await client.channels.fetch(FIVEM_PANEL_CHANNEL_ID).catch(() => null);
+ if (!channel || !channel.isTextBased()) {
+   console.error("[FIVEM_RETENTION] Canal fixo não encontrado ou inválido:", FIVEM_PANEL_CHANNEL_ID);
+   return null;
+ }
+
+ const existing = FIVEM_STATE.get(channel.id);
+
+ if (existing?.intervalId) {
+   clearInterval(existing.intervalId);
+ }
+
+ if (options.forceInitialUpdate) {
+   editPanel(channel, { force: true }).catch(e => console.error("[FIVEM_RETENTION] Erro no update inicial:", e));
+ }
+
+ const intervalId = setInterval(async () => {
+   try {
+     await editPanel(channel, { auto: true });
+   } catch (e) {
+     console.error("[FIVEM_RETENTION] Erro no loop de atualização automática:", e);
+   }
+ }, FIVEM_REFRESH_INTERVAL_MS);
+
+ FIVEM_STATE.set(channel.id, {
+   ...existing,
+   intervalId,
+   messageId: existing?.messageId || null,
+   lastEditAt: existing?.lastEditAt || 0,
+ });
+
+ FIVEM_DEBUG && console.log("[FIVEM_RETENTION] Loop automático de 2min ativo no canal", channel.id);
+
+ return channel;
+}
+
 export async function fivemRetentionStatusOnReady(client) {
  try {
-   // ✅ Proteção global para impedir bootstrap duplicado (previne múltiplos loops e mensagens)
-   if (globalThis.__FIVEM_RETENTION_STATUS_BOOTSTRAPPED__) return;
+   const alreadyBootstrapped = globalThis.__FIVEM_RETENTION_STATUS_BOOTSTRAPPED__ === true;
+
+   const channel = await ensureFivemRetentionAutoLoop(client, {
+     forceInitialUpdate: !alreadyBootstrapped,
+   });
+
+   if (!channel) return;
+
    globalThis.__FIVEM_RETENTION_STATUS_BOOTSTRAPPED__ = true;
-
-   const channel = await client.channels.fetch(FIVEM_PANEL_CHANNEL_ID).catch(() => null);
-   if (!channel || !channel.isTextBased()) {
-     console.error("[FIVEM_RETENTION] Canal fixo não encontrado ou inválido:", FIVEM_PANEL_CHANNEL_ID);
-     return;
-   }
-
-   // Limpa intervalos antigos para evitar duplicidade no mesmo canal
-   const existing = FIVEM_STATE.get(channel.id);
-   if (existing?.intervalId) clearInterval(existing.intervalId);
-
-   // Tenta o primeiro update agora (sem travar o resto do bot)
-   editPanel(channel, { force: true }).catch(e => console.error("[FIVEM_RETENTION] Erro no update inicial:", e));
-
-   // Inicia o loop que roda a cada 2 minutos, faça chuva ou faça sol
-   const intervalId = setInterval(async () => {
-     try {
-       await editPanel(channel);
-     } catch (e) {
-       console.error("[FIVEM_RETENTION] Erro no loop de atualização automática:", e);
-     }
-   }, FIVEM_REFRESH_INTERVAL_MS);
-
-   // ✅ Inicializa o estado mantendo o messageId se ele já existia
-   FIVEM_STATE.set(channel.id, {
-  intervalId,
-  messageId: existing?.messageId || null,
-  lastEditAt: existing?.lastEditAt || 0,
-});
-   FIVEM_DEBUG && console.log("[FIVEM_RETENTION] Sistema pronto. Loop de 2min ativo no canal", channel.id);
  } catch (err) {
    console.error("[FIVEM_RETENTION] fivemRetentionStatusOnReady erro:", err?.message || err);
  }
@@ -2290,13 +2341,17 @@ await editPanel(channel, { force: true });
  return true;
 }
 
+await ensureFivemRetentionAutoLoop(client, {
+  forceInitialUpdate: false,
+});
+
 const edited = await editPanel(channel, { force: true });
      
 if (!edited) {
   throw new Error("Não foi possível atualizar o painel. API lenta ou sem permissão.");
 }
 
-await interaction.editReply("✅ Painel atualizado com sucesso!").catch(() => {});
+await interaction.editReply("✅ Painel atualizado com sucesso! Atualização automática de 2min conferida e ativa.");
    } catch (e) {
      console.error("[FIVEM_RETENTION] Erro ao forçar atualização:", e);
      if (interaction.deferred || interaction.replied) {
