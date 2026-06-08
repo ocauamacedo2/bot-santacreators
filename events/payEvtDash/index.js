@@ -26,6 +26,7 @@ const CH_PODERES_ID = "1374066813171929218";
 const EVT3_EVENT_CHANNEL_ID = "1457573495952248883";
 const REGISTRO_EVENTO_CHANNEL_ID = "1392618646630568076";
 const CRONOGRAMA_LOGS_CHANNEL_ID = "1387864036259004436";
+const CRONOGRAMA_AUDIT_LOG_CHANNEL_ID = "1486009619846529075";
 
 // ✅ NOVO: logs/canais auxiliares para auditoria real
 const LIDERES_LOG_CHANNEL_ID = "1486009598237212793";
@@ -41,8 +42,12 @@ const BATEPONTO_CHANNEL_IDS = [
 
 const BATEPONTO_CALENDAR_LOG_CHANNEL_ID = "1486006809679364197";
 
-// ✅ Registro de poderes em evento vem do registroevento.js
-const PODERES_EVENTOS_LOG_CHANNEL_ID = "1513320054568259835";
+// ✅ Registro de poderes em evento vem do registroevento.js / registroPoderesEventos.js
+const PODERES_EVENTOS_CHANNEL_IDS = [
+  "1392618646630568076",
+  "1513320054568259835",
+  "1513319923471089714",
+];
 
 const PAY_PERIOD_OK = 40;
 const PAY_PERIOD_GOAL = 50;
@@ -565,8 +570,14 @@ function inferEventKindFromText(text, fallbackKind = null) {
 
   if (
     t.includes("registro de poderes em evento") ||
+    t.includes("registro de uso de poder em evento") ||
     t.includes("poderes em evento") ||
-    t.includes("poder evento")
+    t.includes("poder de evento") ||
+    t.includes("poder evento") ||
+    t.includes("evento poder") ||
+    t.includes("sc pwr evento poder") ||
+    t.includes("sc_evento_poder") ||
+    t.includes("poder de evento setado")
   ) {
     return "poderes";
   }
@@ -1153,7 +1164,53 @@ async function scanAuditChannel(client, stats, seen, channelId, fallbackKind = n
     });
   }
 }
+async function scanLideresUnique(client, stats, seen) {
+  const messages = await fetchChannelMessages(client, LIDERES_LOG_CHANNEL_ID);
+  stats.debug.scannedChannels[LIDERES_LOG_CHANNEL_ID] = messages.length;
 
+  for (const msg of messages) {
+    for (const embed of msg.embeds || []) {
+      const text = getEmbedText(embed);
+      const t = norm(text);
+
+      // ✅ só conta o resumo principal, não partes de entrega/DM
+      if (!t.includes("auditoria completa") || !t.includes("convite enviado")) continue;
+
+      const userId =
+        extractUserId(findFieldValue(embed, ["enviado por"])) ||
+        getActorIdFromText(text);
+
+      if (!userId) continue;
+
+      const titulo = findFieldValue(embed, ["titulo enviado", "título enviado"]);
+      const data = findFieldValue(embed, ["data enviada"]);
+      const conteudo = findFieldValue(embed, ["conteudo enviado", "conteúdo enviado"]);
+
+      const date = dateFromBR(`${data}\n${text}`, msg.createdTimestamp);
+      const period = periodKeyFromDateSP(date).key;
+
+      // ✅ mesmo conteúdo na mesma semana = 1 ponto só
+      const key = `lideres:unique:${userId}:${period}:${makeTextFingerprint(`${titulo}\n${data}\n${conteudo}`)}`;
+
+      if (seen.has(key)) {
+        stats.debug.duplicatesIgnored++;
+        continue;
+      }
+
+      seen.add(key);
+
+      addEvent(stats, {
+        key,
+        source: LIDERES_LOG_CHANNEL_ID,
+        kind: "lideres",
+        messageId: msg.id,
+        channelId: msg.channelId,
+        ts: date.getTime(),
+        userId,
+      });
+    }
+  }
+}
 async function collectDashboardData(client, force = false) {
   if (!force && CACHE.payload && Date.now() - CACHE.at < CACHE_TTL_MS) {
     return CACHE.payload;
@@ -1171,14 +1228,16 @@ async function collectDashboardData(client, force = false) {
   await scanEventChannel(client, stats, seen, EVT3_EVENT_CHANNEL_ID, "evt3", isEventManualEmbed);
 
   // ✅ Canal de aprovação: só pontua aprovado e classifica Hall/Diários/Cronograma corretamente
-  await scanAuditChannel(client, stats, seen, CRONOGRAMA_LOGS_CHANNEL_ID, null, {
+  await scanAuditChannel(client, stats, seen, CRONOGRAMA_LOGS_CHANNEL_ID, "cronograma", {
     onlyApproved: true,
   });
 
-  // ✅ Logs auxiliares
-  // ✅ NÃO escanear logs de DM líderes aqui.
-  // O sistema de líderes envia 1 único dashEmit por disparo geral.
-  // Se escanear o log, vai contar cada DM individual e explodir o número.
+  await scanAuditChannel(client, stats, seen, CRONOGRAMA_AUDIT_LOG_CHANNEL_ID, "cronograma", {
+    onlyApproved: true,
+  });
+
+  // ✅ DM líderes: conta apenas o resumo único do envio, nunca cada DM individual
+  await scanLideresUnique(client, stats, seen);
 
   // ✅ Bate ponto: fonte oficial em disco
   scanBatePontoDisk(stats, seen);
@@ -1189,13 +1248,15 @@ async function collectDashboardData(client, force = false) {
     dedupeByContent: true,
   });
 
-  // ✅ Poderes em evento: apenas registroevento.js
-  await scanAuditChannel(client, stats, seen, PODERES_EVENTOS_LOG_CHANNEL_ID, "poderes", {
-    onlyApproved: false,
-  });
+  // ✅ Poderes em evento: lê todos os canais/logs oficiais e futuros
+  for (const channelId of PODERES_EVENTOS_CHANNEL_IDS) {
+    await scanAuditChannel(client, stats, seen, channelId, "poderes", {
+      onlyApproved: false,
+    });
+  }
 
-  // ✅ Pontos em tempo real salvos via dashEmit
-  applyHubPoints(stats, seen);
+  // ✅ Pontuação agora vem dos canais/logs oficiais.
+  // O dashEmit apenas força atualização do dashboard, sem salvar ponto duplicado.
 
   for (const user of Object.values(stats.users)) {
     user.pointsTotal = Number(user.pointsPayment || 0) + Number(user.pointsEvent || 0);
@@ -1320,7 +1381,37 @@ function getPontosPorFonte(bucket = {}) {
     totalGeral,
   };
 }
+function getLastWeekKeysFromCurrent(currentWeekKey, amount = 4) {
+  const keys = [];
 
+  for (let i = amount - 1; i >= 0; i--) {
+    const d = addDaysUTC(new Date(`${currentWeekKey}T12:00:00-03:00`), -7 * i);
+    keys.push(periodKeyFromDateSP(d).key);
+  }
+
+  return keys;
+}
+
+function sumBucketsByWeekKeys(stats, keys = []) {
+  const total = {
+    paymentsApproved: 0,
+    paymentsRejected: 0,
+    registros: 0,
+    geral: 0,
+  };
+
+  for (const key of keys) {
+    const b = stats.byWeek[key] || {};
+    const registros = getRegistrosTotal(b);
+
+    total.paymentsApproved += Number(b.paymentsApproved || 0);
+    total.paymentsRejected += Number(b.paymentsRejected || 0);
+    total.registros += registros;
+    total.geral += Number(b.paymentsApproved || 0) + registros;
+  }
+
+  return total;
+}
 function makeChartUrl(stats) {
   const keys = Object.keys(stats.byWeek || {}).sort().slice(-4);
 
@@ -1397,6 +1488,9 @@ function makeDashboardEmbed(stats) {
   const lastWeekKey = periodKeyFromDateSP(addDaysUTC(new Date(`${thisWeek.key}T12:00:00-03:00`), -7)).key;
   const monthKey = monthKeyFromDateSP(now);
   const lastMonthKey = previousMonthKeySP(now);
+
+  const chartWeekKeys = getLastWeekKeysFromCurrent(thisWeek.key, 4);
+  const chartTotals = sumBucketsByWeekKeys(stats, chartWeekKeys);
   const w = stats.byWeek[thisWeek.key] || {};
   const last = stats.byWeek[lastWeekKey] || {};
   const m = stats.byMonth[monthKey] || {};
@@ -1512,11 +1606,15 @@ function makeDashboardEmbed(stats) {
         inline: false,
       },
       {
-        name: "📊 Comparativo mensal",
+        name: "📊 Resumo do gráfico — últimas 4 semanas",
         value: [
-          `✅ Aprovados: **${Number(lastMonth.paymentsApproved || 0)} → ${Number(m.paymentsApproved || 0)}** ${diffText(Number(m.paymentsApproved || 0), Number(lastMonth.paymentsApproved || 0))}`,
-          `❌ Reprovados: **${Number(lastMonth.paymentsRejected || 0)} → ${Number(m.paymentsRejected || 0)}** ${diffText(Number(m.paymentsRejected || 0), Number(lastMonth.paymentsRejected || 0))}`,
-          `🟠 Registros gerais: **${getRegistrosTotal(lastMonth)} → ${getRegistrosTotal(m)}** ${diffText(getRegistrosTotal(m), getRegistrosTotal(lastMonth))}`,
+          `✅ Pagamentos no gráfico: **${chartTotals.paymentsApproved}**`,
+          `❌ Reprovados no gráfico: **${chartTotals.paymentsRejected}**`,
+          `🟠 Registros no gráfico: **${chartTotals.registros}**`,
+          `📦 Total geral no gráfico: **${chartTotals.geral}**`,
+          "",
+          `📅 Semana passada: **${lastPayApproved} pagamentos**`,
+          `📅 Semana atual: **${payApproved} pagamentos** ${diffText(payApproved, lastPayApproved)}`,
         ].join("\n"),
         inline: false,
       },
@@ -1733,7 +1831,7 @@ async function sendDebug(interaction, client) {
       `Canal aprovação geral: **${stats.debug.scannedChannels[CRONOGRAMA_LOGS_CHANNEL_ID] || 0} msgs**`,
       `Logs líderes: **não escaneado para pontuação**`,
       `Bate ponto calendário: **${stats.debug.scannedChannels[BATEPONTO_CALENDAR_LOG_CHANNEL_ID] || 0} msgs**`,
-      `Poderes eventos: **${stats.debug.scannedChannels[PODERES_EVENTOS_LOG_CHANNEL_ID] || 0} msgs**`,
+      `Poderes eventos: **${PODERES_EVENTOS_CHANNEL_IDS.map((id) => `${stats.debug.scannedChannels[id] || 0}`).join(" + ")} msgs**`,
       `Recuperados por logs: **${stats.debug.recoveredFromLogs || 0}**`,
       `Duplicados ignorados: **${stats.debug.duplicatesIgnored || 0}**`,
     ].join("\n"),
@@ -1747,38 +1845,32 @@ export async function payEvtDashOnReady(client) {
   if (client.__SC_PAY_EVT_DASH_V2_READY__) return;
   client.__SC_PAY_EVT_DASH_V2_READY__ = true;
 
-  dashOn("cronograma:aprovado", (payload = {}) => {
-    saveHubPoint("cronograma", payload);
+  dashOn("cronograma:aprovado", () => {
     scheduleUpdate(client, "dashOn:cronograma");
   });
 
-  dashOn("halldafama:aprovado", (payload = {}) => {
-    saveHubPoint("hall", payload);
+  dashOn("halldafama:aprovado", () => {
     scheduleUpdate(client, "dashOn:halldafama");
   });
 
-  dashOn("eventosdiarios:aprovado", (payload = {}) => {
-    saveHubPoint("diarios", payload);
+  dashOn("eventosdiarios:aprovado", () => {
     scheduleUpdate(client, "dashOn:eventosdiarios");
   });
 
-  dashOn("lideres:convite_enviado", (payload = {}) => {
-    saveHubPoint("lideres", payload);
+  dashOn("lideres:convite_enviado", () => {
     scheduleUpdate(client, "dashOn:lideres");
   });
 
-  dashOn("bp:punch", (payload = {}) => {
-    saveHubPoint("bateponto", payload);
+  dashOn("bp:punch", () => {
     scheduleUpdate(client, "dashOn:bateponto");
   });
 
-  dashOn("bp:sync", () => {
-    scheduleUpdate(client, "dashOn:bateponto");
-  });
-
-  dashOn("poderes:registrado", (payload = {}) => {
-    saveHubPoint("registros_poderes", payload);
+  dashOn("poderes:registrado", () => {
     scheduleUpdate(client, "dashOn:poderes");
+  });
+
+  dashOn("eventopoder:registrado", () => {
+    scheduleUpdate(client, "dashOn:eventopoder");
   });
 
   dashOn("pagamento:criado", () => scheduleUpdate(client, "dashOn:pagamento:criado"));
@@ -1807,9 +1899,10 @@ export async function payEvtDashHandleMessage(message, client) {
 
     // ✅ NOVO: qualquer movimentação nesses logs atualiza o dashboard
     LIDERES_LOG_CHANNEL_ID,
+    CRONOGRAMA_AUDIT_LOG_CHANNEL_ID,
     BATEPONTO_CALENDAR_LOG_CHANNEL_ID,
     ...BATEPONTO_CHANNEL_IDS,
-    PODERES_EVENTOS_LOG_CHANNEL_ID,
+    ...PODERES_EVENTOS_CHANNEL_IDS,
   ]);
 
   if (autoUpdateChannels.has(message.channelId)) {
