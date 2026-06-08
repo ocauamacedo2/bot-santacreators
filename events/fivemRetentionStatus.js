@@ -2256,44 +2256,6 @@ async function ensureFivemRetentionAutoLoop(client, options = {}) {
  return channel;
 }
 
-
-async function ensureFivemRetentionAutoLoop(client, options = {}) {
- const channel = await client.channels.fetch(FIVEM_PANEL_CHANNEL_ID).catch(() => null);
- if (!channel || !channel.isTextBased()) {
-   console.error("[FIVEM_RETENTION] Canal fixo não encontrado ou inválido:", FIVEM_PANEL_CHANNEL_ID);
-   return null;
- }
-
- const existing = FIVEM_STATE.get(channel.id);
-
- if (existing?.intervalId) {
-   clearInterval(existing.intervalId);
- }
-
- if (options.forceInitialUpdate) {
-   editPanel(channel, { force: true }).catch(e => console.error("[FIVEM_RETENTION] Erro no update inicial:", e));
- }
-
- const intervalId = setInterval(async () => {
-   try {
-     await editPanel(channel, { auto: true });
-   } catch (e) {
-     console.error("[FIVEM_RETENTION] Erro no loop de atualização automática:", e);
-   }
- }, FIVEM_REFRESH_INTERVAL_MS);
-
- FIVEM_STATE.set(channel.id, {
-   ...existing,
-   intervalId,
-   messageId: existing?.messageId || null,
-   lastEditAt: existing?.lastEditAt || 0,
- });
-
- FIVEM_DEBUG && console.log("[FIVEM_RETENTION] Loop automático de 2min ativo no canal", channel.id);
-
- return channel;
-}
-
 export async function fivemRetentionStatusOnReady(client) {
  try {
    const alreadyBootstrapped = globalThis.__FIVEM_RETENTION_STATUS_BOOTSTRAPPED__ === true;
