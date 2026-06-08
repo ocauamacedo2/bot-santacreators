@@ -646,6 +646,22 @@ function triLabelShortFromWeekKey(weekKey) {
 }
 
 // ================== TEXT HELPERS ==================
+function getEmbedText(embed) {
+  const data = embed?.data || embed || {};
+  const parts = [];
+
+  if (data.title) parts.push(data.title);
+  if (data.description) parts.push(data.description);
+  if (data.footer?.text) parts.push(data.footer.text);
+
+  for (const field of data.fields || []) {
+    parts.push(field?.name || "");
+    parts.push(field?.value || "");
+  }
+
+  return parts.join("\n");
+}
+
 function norm(s) {
   return String(s || "")
     .normalize("NFD")

@@ -156,8 +156,24 @@ if (globalThis.__GM_GOAL_DM_RUNNING__ == null) {
   globalThis.__GM_GOAL_DM_RUNNING__ = false;
 }
 
+if (globalThis.__GM_GOAL_DM_RUNNING_AT__ == null) {
+  globalThis.__GM_GOAL_DM_RUNNING_AT__ = 0;
+}
+
+const GM_GOAL_DM_STUCK_MS = 5 * 60 * 1000;
+
 function isGoalDmCampaignRunning() {
-  return Boolean(globalThis.__GM_GOAL_DM_RUNNING__);
+  if (!globalThis.__GM_GOAL_DM_RUNNING__) return false;
+
+  const startedAt = Number(globalThis.__GM_GOAL_DM_RUNNING_AT__ || 0);
+
+  if (startedAt > 0 && Date.now() - startedAt > GM_GOAL_DM_STUCK_MS) {
+    globalThis.__GM_GOAL_DM_RUNNING__ = false;
+    globalThis.__GM_GOAL_DM_RUNNING_AT__ = 0;
+    return false;
+  }
+
+  return true;
 }
 
 // ✅ QUEM PODE AJUSTAR
@@ -671,171 +687,228 @@ return [
 }
 
 async function collectGoalDmTargets(guild, currentBucket) {
-  const allMembers = await guild.members.fetch().catch(() => null);
   const targetsByGroup = {};
 
   for (const group of GM_PRIORITY_GROUPS) {
     targetsByGroup[group.key] = [];
   }
 
-  if (!allMembers) return targetsByGroup;
+  await guild.members.fetch().catch(() => null);
 
-  for (const member of allMembers.values()) {
-    if (!member || member.user?.bot) continue;
+  const addedUsers = new Set();
 
-    const memberRoleIds = member.roles?.cache
-      ? [...member.roles.cache.keys()].map(String)
-      : [];
+  for (const group of GM_PRIORITY_GROUPS) {
+    for (const roleId of group.roleIds) {
+      const role =
+        guild.roles.cache.get(String(roleId)) ||
+        await guild.roles.fetch(String(roleId)).catch(() => null);
 
-    const group = getGoalGroupByRoleIds(memberRoleIds);
-    if (!group) continue;
+      if (!role) continue;
 
-    targetsByGroup[group.key].push({
-      member,
-      points: safeNum(currentBucket?.[member.id] || 0),
-    });
+      for (const member of role.members.values()) {
+        if (!member || member.user?.bot) continue;
+        if (addedUsers.has(member.id)) continue;
+
+        const memberRoleIds = member.roles?.cache
+          ? [...member.roles.cache.keys()].map(String)
+          : [];
+
+        const finalGroup = getGoalGroupByRoleIds(memberRoleIds) || group;
+
+        targetsByGroup[finalGroup.key].push({
+          member,
+          points: safeNum(currentBucket?.[member.id] || 0),
+        });
+
+        addedUsers.add(member.id);
+      }
+    }
   }
 
   return targetsByGroup;
 }
 
+js
 async function sendGoalCampaignDMs(client, reason = "manual", causeUserId = null) {
-  if (globalThis.__GM_GOAL_DM_RUNNING__) {
+  if (isGoalDmCampaignRunning()) {
     await sendLog(client, "⚠️ Campanha de meta ignorada", [
       `**Motivo:** já existe uma campanha em andamento.`,
       `**Nova tentativa:** \`${reason}\``,
       `**Causador:** ${causeUserId ? `<@${causeUserId}>` : "automático"}`,
     ]);
-    return { ok: false, sent: 0, failed: 0, skipped: true };
+
+    return {
+      ok: false,
+      sent: 0,
+      failed: 0,
+      skipped: true,
+      error: "Já existe uma campanha em andamento.",
+    };
   }
 
   globalThis.__GM_GOAL_DM_RUNNING__ = true;
+  globalThis.__GM_GOAL_DM_RUNNING_AT__ = Date.now();
 
   try {
     const dashChannel = await client.channels.fetch(ORG_DASH_CHANNEL_ID).catch(() => null);
-    if (!dashChannel?.guild) return { ok: false, sent: 0, failed: 0 };
+    const guild = dashChannel?.guild || client.guilds.cache.first();
 
-  const stats = loadWeeklyStats();
-  const { weekKey } = getCurrentWeekSP();
-  const prevWeekKey = getPrevWeekKey();
-
-const cur = getWeekData(stats, weekKey);
-const prev = getWeekData(stats, prevWeekKey);
-const weeklyGoal = getSmartWeeklyGoal(prev.total);
-
-const priorityGroupStats = await buildPriorityGroupStats(
-    dashChannel.guild,
-    cur.approvedForManager
-  );
-
-  const targetsByGroup = await collectGoalDmTargets(
-    dashChannel.guild,
-    cur.approvedForManager
-  );
-let chartImageUrl = null;
-
-try {
-  const rawKeys = Object.keys(stats?.weeks || {});
-  rawKeys.sort();
-
-  const agg = {};
-
-  for (const rawKey of rawKeys) {
-    const y = Number(rawKey.slice(0, 4));
-    const m = Number(rawKey.slice(5, 7));
-    const d = Number(rawKey.slice(8, 10));
-    const dt = new Date(Date.UTC(y, m - 1, d, 0, 0, 0));
-    const dow = dt.getUTCDay();
-    const sunday = new Date(dt.getTime());
-    sunday.setUTCDate(sunday.getUTCDate() - dow);
-
-    const sundayKey = sunday.toISOString().slice(0, 10);
-    const dWeek = getWeekData(stats, rawKey);
-
-    agg[sundayKey] = (agg[sundayKey] || 0) + safeNum(dWeek.total);
-  }
-
-  const aggKeys = Object.keys(agg);
-  aggKeys.sort();
-
-  const lastKeys = aggKeys.slice(-CHART_WEEKS);
-
-  const labels = [];
-  const totals = [];
-
-  for (const wk of lastKeys) {
-    const mm = wk.slice(5, 7);
-    const dd = wk.slice(8, 10);
-    labels.push(`${dd}/${mm}`);
-    totals.push(safeNum(agg[wk]));
-  }
-
-  const chartConfig = buildChartConfig(labels, totals);
-  const links = await getQuickChartLinks(chartConfig);
-
-  if (links && !links.error) {
-    chartImageUrl = links.imageUrl || links.shortUrl || null;
-  }
-} catch {}
-let sent = 0;
-let failed = 0;
-const usedJokes = new Set();
-
-for (const groupKey of GM_GOAL_DM_GROUP_ORDER) {
-    const group = GM_PRIORITY_GROUPS.find((g) => g.key === groupKey);
-    if (!group) continue;
-
-    const targets = targetsByGroup[group.key] || [];
-    const groupStat = priorityGroupStats?.[group.key] || { total: 0 };
-
-    for (const target of targets) {
-const msg = buildGoalDmMessage({
-  member: target.member,
-  group,
-  currentTotal: cur.total,
-  prevTotal: prev.total,
-  weeklyGoal,
-  userPoints: target.points,
-  groupTotal: safeNum(groupStat.total || 0),
-  groupMembersCount: targets.length,
-  priorityGroupStats,
-  weekKey,
-  usedJokes,
-});
-
-      const ok = await sendDMText(target.member, msg, chartImageUrl);
-
-      await sendGoalDmLog(client, {
-        member: target.member,
-        group,
-        message: msg,
-        ok,
-        reason,
-        causeUserId,
-        weekKey,
-      });
-
-      if (ok) sent++;
-      else failed++;
-
-      await new Promise((resolve) => setTimeout(resolve, 700));
+    if (!guild) {
+      return {
+        ok: false,
+        sent: 0,
+        failed: 0,
+        error: "Servidor não encontrado para buscar membros.",
+      };
     }
-  }
 
-  await sendLog(client, "📣 Campanha de meta enviada", [
-    `**Motivo:** \`${reason}\``,
-    `**Causador:** ${causeUserId ? `<@${causeUserId}>` : "automático"}`,
-    `**Semana:** \`${weekKey}\``,
-    `**Total atual:** **${cur.total}**`,
-    `**Semana passada:** **${prev.total}**`,
-    `**DMs enviadas:** **${sent}**`,
-    `**Falhas:** **${failed}**`,
-    `**Logs das DMs:** <#${GM_GOAL_DM_LOG_CHANNEL_ID}>`,
-  ]);
+    const stats = loadWeeklyStats();
+    const { weekKey } = getCurrentWeekSP();
+    const prevWeekKey = getPrevWeekKey();
 
-    return { ok: true, sent, failed };
+    const cur = getWeekData(stats, weekKey);
+    const prev = getWeekData(stats, prevWeekKey);
+    const weeklyGoal = getSmartWeeklyGoal(prev.total);
+
+    const priorityGroupStats = await buildPriorityGroupStats(
+      guild,
+      cur.approvedForManager
+    );
+
+    const targetsByGroup = await collectGoalDmTargets(
+      guild,
+      cur.approvedForManager
+    );
+
+    const totalTargets = Object.values(targetsByGroup)
+      .reduce((acc, arr) => acc + arr.length, 0);
+
+    await sendLog(client, "🧪 Diagnóstico da campanha de meta", [
+      `**Motivo:** \`${reason}\``,
+      `**Causador:** ${causeUserId ? `<@${causeUserId}>` : "automático"}`,
+      `**Semana:** \`${weekKey}\``,
+      `**Total de alvos encontrados:** **${totalTargets}**`,
+      `**Managers:** **${targetsByGroup.managers?.length || 0}**`,
+      `**Coord + MKT:** **${targetsByGroup.coord_mkt?.length || 0}**`,
+      `**Responsáveis:** **${targetsByGroup.responsaveis?.length || 0}**`,
+    ]);
+
+    if (totalTargets <= 0) {
+      return {
+        ok: false,
+        sent: 0,
+        failed: 0,
+        error: "Nenhum alvo encontrado. Confira os IDs dos cargos em GM_PRIORITY_GROUPS.",
+      };
+    }
+
+    let chartImageUrl = null;
+
+    try {
+      const rawKeys = Object.keys(stats?.weeks || {});
+      rawKeys.sort();
+
+      const agg = {};
+
+      for (const rawKey of rawKeys) {
+        const y = Number(rawKey.slice(0, 4));
+        const m = Number(rawKey.slice(5, 7));
+        const d = Number(rawKey.slice(8, 10));
+        const dt = new Date(Date.UTC(y, m - 1, d, 0, 0, 0));
+        const dow = dt.getUTCDay();
+        const sunday = new Date(dt.getTime());
+        sunday.setUTCDate(sunday.getUTCDate() - dow);
+
+        const sundayKey = sunday.toISOString().slice(0, 10);
+        const dWeek = getWeekData(stats, rawKey);
+
+        agg[sundayKey] = (agg[sundayKey] || 0) + safeNum(dWeek.total);
+      }
+
+      const aggKeys = Object.keys(agg);
+      aggKeys.sort();
+
+      const lastKeys = aggKeys.slice(-CHART_WEEKS);
+
+      const labels = [];
+      const totals = [];
+
+      for (const wk of lastKeys) {
+        const mm = wk.slice(5, 7);
+        const dd = wk.slice(8, 10);
+        labels.push(`${dd}/${mm}`);
+        totals.push(safeNum(agg[wk]));
+      }
+
+      const chartConfig = buildChartConfig(labels, totals);
+      const links = await getQuickChartLinks(chartConfig);
+
+      if (links && !links.error) {
+        chartImageUrl = links.imageUrl || links.shortUrl || null;
+      }
+    } catch {}
+
+    let sent = 0;
+    let failed = 0;
+    const usedJokes = new Set();
+
+    for (const groupKey of GM_GOAL_DM_GROUP_ORDER) {
+      const group = GM_PRIORITY_GROUPS.find((g) => g.key === groupKey);
+      if (!group) continue;
+
+      const targets = targetsByGroup[group.key] || [];
+      const groupStat = priorityGroupStats?.[group.key] || { total: 0 };
+
+      for (const target of targets) {
+        const msg = buildGoalDmMessage({
+          member: target.member,
+          group,
+          currentTotal: cur.total,
+          prevTotal: prev.total,
+          weeklyGoal,
+          userPoints: target.points,
+          groupTotal: safeNum(groupStat.total || 0),
+          groupMembersCount: targets.length,
+          priorityGroupStats,
+          weekKey,
+          usedJokes,
+        });
+
+        const ok = await sendDMText(target.member, msg, chartImageUrl);
+
+        await sendGoalDmLog(client, {
+          member: target.member,
+          group,
+          message: msg,
+          ok,
+          reason,
+          causeUserId,
+          weekKey,
+        });
+
+        if (ok) sent++;
+        else failed++;
+
+        await new Promise((resolve) => setTimeout(resolve, 700));
+      }
+    }
+
+    await sendLog(client, "📣 Campanha de meta finalizada", [
+      `**Motivo:** \`${reason}\``,
+      `**Causador:** ${causeUserId ? `<@${causeUserId}>` : "automático"}`,
+      `**Semana:** \`${weekKey}\``,
+      `**Total atual:** **${cur.total}**`,
+      `**Semana passada:** **${prev.total}**`,
+      `**Alvos encontrados:** **${totalTargets}**`,
+      `**DMs enviadas:** **${sent}**`,
+      `**Falhas:** **${failed}**`,
+      `**Logs das DMs:** <#${GM_GOAL_DM_LOG_CHANNEL_ID}>`,
+    ]);
+
+    return { ok: sent > 0, sent, failed, totalTargets };
   } finally {
     globalThis.__GM_GOAL_DM_RUNNING__ = false;
+    globalThis.__GM_GOAL_DM_RUNNING_AT__ = 0;
   }
 }
 
