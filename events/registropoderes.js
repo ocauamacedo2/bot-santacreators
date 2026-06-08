@@ -151,7 +151,19 @@ const ALLOWED_ROLE_IDS = [
   '1414651836861907006', // responsaveis
 ];
 
-const ALLOWED_USER_IDS = ['660311795327828008'];
+const ALLOWED_USER_IDS = [
+  '660311795327828008',
+  '1262262852949905408',
+];
+
+const COOLDOWN_BYPASS_USER_IDS = [
+  '660311795327828008',
+  '1262262852949905408',
+];
+
+function podeIgnorarCooldown(userId) {
+  return COOLDOWN_BYPASS_USER_IDS.includes(String(userId));
+}
 
 // ===============================
 // ✅ TRAVA ANTI DOUBLE-CLICK / HANDLER DUPLICADO
@@ -278,7 +290,8 @@ if (interaction.isButton() && interaction.customId === "abrir_registro") {
       .catch(() => {});
   }
 
-  // ✅ COOLDOWN 12h: já bloqueia aqui pra nem abrir modal
+// ✅ COOLDOWN 12h: owner/bypass ignora cooldown
+if (!podeIgnorarCooldown(interaction.user.id)) {
   try {
     const stCd = readPoderesState();
     const last = Number(stCd?.users?.[interaction.user.id]?.lastRegisterAt || 0);
@@ -296,6 +309,7 @@ if (interaction.isButton() && interaction.customId === "abrir_registro") {
       }
     }
   } catch {}
+}
 
   const modal = new ModalBuilder()
     .setCustomId("formulario_registro")
@@ -360,7 +374,8 @@ if (interaction.isButton() && interaction.customId === "abrir_registro") {
       .catch(() => {});
   }
 
-  // ✅ COOLDOWN 12h: segurança (mesmo se alguém burlar o botão)
+// ✅ COOLDOWN 12h: segurança, mas owner/bypass ignora cooldown
+if (!podeIgnorarCooldown(interaction.user.id)) {
   try {
     const stCd = readPoderesState();
     const last = Number(stCd?.users?.[interaction.user.id]?.lastRegisterAt || 0);
@@ -375,6 +390,7 @@ if (interaction.isButton() && interaction.customId === "abrir_registro") {
       }
     }
   } catch {}
+}
 
   // ✅ Pega o timestamp anterior ANTES de marcar o novo
   const stCd = readPoderesState();
