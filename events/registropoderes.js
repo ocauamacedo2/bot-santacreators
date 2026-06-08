@@ -89,6 +89,8 @@ function markUserRegistered(userId, at = Date.now()) {
 
 // Configurações
 const CANAL_REGISTRO_ID = '1374066813171929218';
+const CANAL_LOG_REGISTRO_PODERES_ID = '1513319923471089714';
+
 const GIF_PODERES_URL = 'https://media.discordapp.net/attachments/1362477839944777889/1384245215249825832/standard_2rss.gif';
 
 
@@ -142,11 +144,10 @@ async function resetarBotaoRegistroPoderes(canal, client) {
 
 async function sendAuditLog(client, guild, member, data, registroMsg, oldLastAt) {
   try {
-    const canalLog = await client.channels.fetch(CANAL_REGISTRO_ID).catch(() => null);
+    const canalLog = await client.channels.fetch(CANAL_LOG_REGISTRO_PODERES_ID).catch(() => null);
     if (!canalLog?.isTextBased?.()) return;
 
     const now = Date.now();
-    const nextAt = now + REGPOD_COOLDOWN_MS;
 
     const ultimoRegistro =
       oldLastAt > 0
@@ -154,18 +155,25 @@ async function sendAuditLog(client, guild, member, data, registroMsg, oldLastAt)
         : "Primeiro registro";
 
     const embed = new EmbedBuilder()
-      .setColor("Purple")
-      .setTitle("📋 Log: Registro de Poderes Utilizados")
-      .addFields(
-        { name: "👤 Autor", value: `${member} (\`${member.id}\`)`, inline: true },
-        { name: "📍 Mensagem", value: registroMsg?.url ? `[Ir para mensagem](${registroMsg.url})` : "—", inline: true },
-        { name: "📅 Data de uso", value: `\`${data.data || "—"}\``, inline: true },
-        { name: "⏰ Horário", value: `\`${data.horario || "—"}\``, inline: true },
-        { name: "🔮 Poderes", value: `\`\`\`\n${data.poderes || "—"}\n\`\`\``, inline: false },
-        { name: "⏳ Último registro", value: ultimoRegistro, inline: true },
-        { name: "🔓 Próximo registro", value: `<t:${Math.floor(nextAt / 1000)}:R>`, inline: true }
+      .setColor("#8b5cf6")
+      .setTitle("📋 Auditoria — Registro de Poderes")
+      .setDescription(
+        [
+          `👤 **Registrado por:** ${member} (\`${member.id}\`)`,
+          `🔗 **Registro original:** ${registroMsg?.url ? `[Abrir mensagem](${registroMsg.url})` : "—"}`,
+          "",
+          `📅 **Data de uso:** \`${data.data || "—"}\``,
+          `⏰ **Horário aproximado:** \`${data.horario || "—"}\``,
+          "",
+          `🔮 **Poderes utilizados:**`,
+          `\`\`\`txt\n${data.poderes || "—"}\n\`\`\``,
+          "",
+          `⏳ **Último registro:** ${ultimoRegistro}`,
+          `🕒 **Log gerada:** <t:${Math.floor(now / 1000)}:F>`,
+        ].join("\n")
       )
-      .setFooter({ text: "SantaCreators • Auditoria de Poderes Utilizados" })
+      .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
+      .setFooter({ text: "SantaCreators • Registro de Poderes" })
       .setTimestamp();
 
     await canalLog.send({ embeds: [embed] }).catch(() => {});
