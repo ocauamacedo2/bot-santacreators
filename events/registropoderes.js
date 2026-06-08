@@ -337,6 +337,7 @@ if (interaction.isButton() && interaction.customId === "abrir_registro") {
   // ✅ ACK PRIMEIRO (pra nunca expirar)
   await interaction.deferReply({ ephemeral: true }).catch(() => {});
 
+  const guild = interaction.guild;
   const autorizado = await isAuthorized(interaction);
   if (!autorizado) {
     return interaction

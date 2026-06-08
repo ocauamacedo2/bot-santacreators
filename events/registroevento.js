@@ -296,6 +296,7 @@ function iniciarRegistroEvento(client) {
         // ✅ Ganha tempo imediatamente
         await interaction.deferReply({ ephemeral: true }).catch(() => {});
 
+        const guild = interaction.guild;
         if (!(await isAutorizado(interaction))) {
           return interaction
             .editReply({ content: "⚠️ Sem permissão." })
