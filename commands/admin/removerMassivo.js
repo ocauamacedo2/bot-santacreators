@@ -5,6 +5,8 @@
 // • Anti concorrência por guild+role (lock global)
 // • ESM / discord.js v14
 
+import { EmbedBuilder } from 'discord.js';
+
 const LOG_CHANNEL_ID = '1423088696835571804';
 
 // Quem PODE USAR o comando
@@ -22,7 +24,8 @@ const PROTECTED_ROLE_IDS = [
 ];
 
 const CONFIRM_TTL_MS = 12_000;
-const SMALL_DELAY_MS = 150; // Aumentado um pouco para evitar bloqueio de rate limit do Discord
+const SMALL_DELAY_MS = 350; // Mais seguro contra rate limit do Discord
+const STATUS_UPDATE_EVERY = 1; // Atualiza o painel a cada membro processado
 const TZ = 'America/Sao_Paulo';
 
 // lock global (não roda 2x no mesmo cargo)
@@ -71,6 +74,43 @@ async function sendTemp(channel, payload, ttl = CONFIRM_TTL_MS) {
   } catch {
     return null;
   }
+}
+
+async function editStatus(statusMsg, {
+  color = 0x3498db,
+  title = '⏳ Remoção em andamento',
+  role,
+  authorId,
+  candidatesTotal = 0,
+  targetsTotal = 0,
+  processed = 0,
+  removed = 0,
+  skippedProtected = 0,
+  failed = 0,
+  extra = ''
+}) {
+  if (!statusMsg) return;
+
+  await statusMsg.edit({
+    embeds: [
+      {
+        color,
+        title,
+        description:
+          `Alvo: ${role}\n` +
+          `Solicitado por: <@${authorId}>\n\n` +
+          `👥 Encontrados com o cargo: **${candidatesTotal}**\n` +
+          `🎯 Válidos para remoção: **${targetsTotal}**\n` +
+          `📊 Processados: **${processed}/${targetsTotal}**\n` +
+          `✅ Removidos: **${removed}**\n` +
+          `🛡️ Protegidos: **${skippedProtected}**\n` +
+          `❌ Falhas: **${failed}**` +
+          `${extra ? `\n\n${extra}` : ''}`,
+        footer: { text: 'SantaCreators • Remoção massiva em tempo real' },
+        timestamp: new Date().toISOString()
+      }
+    ]
+  }).catch(() => null);
 }
 
 export async function removerMassivoHandleMessage(message, client) {
@@ -168,10 +208,36 @@ export async function removerMassivoHandleMessage(message, client) {
       const candidates = await message.guild.members.fetch({ role: role.id, force: true }).catch(() => null);
 
       if (!candidates || candidates.size === 0) {
-        globalThis.__SC_REMOVE_ROLE_LOCK.delete(lockKey);
-        await sendTemp(message.channel, { content: `ℹ️ Não encontrei nenhum membro com o cargo **${role.name}** para remover.` });
+        await editStatus(statusMsg, {
+          color: 0x2ecc71,
+          title: '✅ Remoção finalizada',
+          role,
+          authorId: message.author.id,
+          candidatesTotal: 0,
+          targetsTotal: 0,
+          processed: 0,
+          removed,
+          skippedProtected,
+          failed,
+          extra: `ℹ️ Nenhum membro possui o cargo **${role.name}**.`
+        });
+
         return true;
       }
+
+      await editStatus(statusMsg, {
+        color: 0xf1c40f,
+        title: '🔍 Membros encontrados',
+        role,
+        authorId: message.author.id,
+        candidatesTotal: candidates.size,
+        targetsTotal: 0,
+        processed: 0,
+        removed,
+        skippedProtected,
+        failed,
+        extra: 'Filtrando protegidos, falhas de hierarquia e membros válidos...'
+      });
 
       const targets = [];
       for (const m of Array.from(candidates.values())) {
@@ -192,7 +258,26 @@ export async function removerMassivoHandleMessage(message, client) {
         targets.push(m);
       }
 
+      let processed = 0;
+
+      await editStatus(statusMsg, {
+        color: 0x3498db,
+        title: '⏳ Remoção em massa em andamento',
+        role,
+        authorId: message.author.id,
+        candidatesTotal: candidates.size,
+        targetsTotal: targets.length,
+        processed,
+        removed,
+        skippedProtected,
+        failed,
+        extra: targets.length === 0
+          ? 'Nenhum membro válido para remover após o filtro.'
+          : 'Iniciando remoção dos membros válidos...'
+      });
+
       for (const m of targets) {
+        processed++;
         try {
           // se mexeram na hierarquia durante o processo
           if (!roleEditableByBot(me, role)) {
@@ -209,25 +294,47 @@ export async function removerMassivoHandleMessage(message, client) {
           removed++;
           removedIds.push(m.id);
 
-          // Atualiza o status a cada 50 remoções para você não achar que travou
-          if (removed % 50 === 0 && statusMsg) {
-            await statusMsg.edit({ embeds: [
-              EmbedBuilder.from(statusMsg.embeds[0]).setDescription(`Alvo: ${role}\nSolicitado por: <@${message.author.id}>\n\n⏳ Progresso: **${removed}** membros processados...`)
-            ]}).catch(() => null);
+          if (processed % STATUS_UPDATE_EVERY === 0 || processed === targets.length) {
+            await editStatus(statusMsg, {
+              color: 0x3498db,
+              title: '⏳ Remoção em massa em andamento',
+              role,
+              authorId: message.author.id,
+              candidatesTotal: candidates.size,
+              targetsTotal: targets.length,
+              processed,
+              removed,
+              skippedProtected,
+              failed
+            });
           }
         } catch (err) {
           failed++;
           failedIds.push(m.id);
+
+          await editStatus(statusMsg, {
+            color: 0xe74c3c,
+            title: '⚠️ Remoção em andamento com falhas',
+            role,
+            authorId: message.author.id,
+            candidatesTotal: candidates.size,
+            targetsTotal: targets.length,
+            processed,
+            removed,
+            skippedProtected,
+            failed,
+            extra: `Última falha: <@${m.id}>`
+          });
         }
+
         await sleep(SMALL_DELAY_MS);
       }
     } finally {
       globalThis.__SC_REMOVE_ROLE_LOCK.delete(lockKey);
-      if (statusMsg) statusMsg.delete().catch(() => null);
     }
 
-    // resumo temporário no chat
-    await sendTemp(message.channel, {
+    // resumo final fixo no chat
+    await message.channel.send({
       embeds: [
         {
           color: 0x2ecc71,
