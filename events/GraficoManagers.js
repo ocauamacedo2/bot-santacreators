@@ -99,15 +99,6 @@ const GM_PRIORITY_GROUPS = [
       "1352408327983861844", // Resp. Creators
     ],
   },
- {
-  key: "coord_mkt",
-  title: "🎯 COORDENAÇÃO + MKT CREATOR",
-  goal: 4,
-  roleIds: [
-    "1282119104576098314", // MKT Creators
-    "1388975939161161728", // Gestor Creator
-  ],
-},
   {
     key: "managers",
     title: "👥 EQUIPE MANAGERS",
@@ -115,6 +106,16 @@ const GM_PRIORITY_GROUPS = [
     roleIds: [
       "1392678638176043029", // Equipe Manager
       "1388976155830255697", // Manager Creator
+    ],
+  },
+  {
+    key: "coord_mkt",
+    title: "🎯 COORDENAÇÃO + MKT CREATOR",
+    goal: 4,
+    roleIds: [
+      "1282119104576098314", // MKT Creators
+      "1388975939161161728", // Gestor Creator
+      "1388976314253312100", // Coord. Creators
     ],
   },
 ];
@@ -412,21 +413,40 @@ async function buildPriorityGroupStats(guild, currentBucket) {
 function getGoalGroupByRoleIds(memberRoleIds) {
   const ids = Array.isArray(memberRoleIds) ? memberRoleIds.map(String) : [];
 
-  const exception = GM_PRIORITY_ROLE_EXCEPTIONS.find((rule) =>
-    rule.whenHasAllRoleIds.every((roleId) => ids.includes(String(roleId)))
-  );
+  const hasEquipeManager = ids.includes("1392678638176043029");
+  const hasManagerCreator = ids.includes("1388976155830255697");
 
-  if (exception?.forceGroupKey) {
-    const forced = GM_PRIORITY_GROUPS.find(
-      (group) => group.key === exception.forceGroupKey
-    );
+  const hasMktCreator = ids.includes("1282119104576098314");
+  const hasGestorCreator = ids.includes("1388975939161161728");
+  const hasCoordCreator = ids.includes("1388976314253312100");
 
-    if (forced) return forced;
+  // ✅ PRIORIDADE 1:
+  // Se tiver Equipe Manager OU Manager Creator,
+  // soma SEMPRE para 👥 EQUIPE MANAGERS,
+  // mesmo que também tenha MKT Creator ou qualquer outro cargo.
+  if (hasEquipeManager || hasManagerCreator) {
+    return GM_PRIORITY_GROUPS.find((group) => group.key === "managers") || null;
   }
 
-  return GM_PRIORITY_GROUPS.find((group) =>
-    group.roleIds.some((roleId) => ids.includes(String(roleId)))
-  ) || null;
+  // ✅ PRIORIDADE 2:
+  // Só cai em Coordenação + MKT Creator se NÃO tiver cargo de Manager.
+  if (hasMktCreator || hasGestorCreator || hasCoordCreator) {
+    return GM_PRIORITY_GROUPS.find((group) => group.key === "coord_mkt") || null;
+  }
+
+  // ✅ PRIORIDADE 3:
+  // Responsáveis ficam separados.
+  const responsaveisGroup = GM_PRIORITY_GROUPS.find((group) => group.key === "responsaveis");
+
+  if (
+    responsaveisGroup?.roleIds?.some((roleId) =>
+      ids.includes(String(roleId))
+    )
+  ) {
+    return responsaveisGroup;
+  }
+
+  return null;
 }
 
 function loadGoalDmState() {
