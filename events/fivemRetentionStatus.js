@@ -202,48 +202,249 @@ function getWeekModeSP(date = new Date()) {
   return diffWeeks % 2 === 0 ? "A" : "B";
 }
 
+const FIVEM_EVENT_SCHEDULE = [
+  // NOBRE
+  {
+    cityKey: "nobre",
+    cityName: "Nobre",
+    emoji: "👑",
+    category: "Pico",
+    weekday: 4,
+    startHour: 21,
+    startMinute: 0,
+    endHour: 22,
+    endMinute: 0,
+    eventKey: "nobre_quinta_21_22",
+  },
+  {
+    cityKey: "nobre",
+    cityName: "Nobre",
+    emoji: "👑",
+    category: "Pico",
+    weekday: 4,
+    startHour: 0,
+    startMinute: 0,
+    endHour: 1,
+    endMinute: 0,
+    eventKey: "nobre_quinta_00_01",
+  },
+  {
+    cityKey: "nobre",
+    cityName: "Nobre",
+    emoji: "👑",
+    category: "Pico",
+    weekday: 5,
+    startHour: 21,
+    startMinute: 0,
+    endHour: 22,
+    endMinute: 0,
+    eventKey: "nobre_sexta_21_22",
+  },
+  {
+    cityKey: "nobre",
+    cityName: "Nobre",
+    emoji: "👑",
+    category: "Pico",
+    weekday: 6,
+    startHour: 21,
+    startMinute: 0,
+    endHour: 22,
+    endMinute: 0,
+    eventKey: "nobre_sabado_21_22",
+  },
+  {
+    cityKey: "nobre",
+    cityName: "Nobre",
+    emoji: "👑",
+    category: "Pico",
+    weekday: 6,
+    startHour: 0,
+    startMinute: 0,
+    endHour: 1,
+    endMinute: 0,
+    eventKey: "nobre_sabado_00_01",
+  },
+  {
+    cityKey: "nobre",
+    cityName: "Nobre",
+    emoji: "👑",
+    category: "Virada",
+    weekday: 1,
+    startHour: 23,
+    startMinute: 30,
+    endHour: 24,
+    endMinute: 30,
+    eventKey: "nobre_segunda_23_30_00_30",
+  },
+  {
+    cityKey: "nobre",
+    cityName: "Nobre",
+    emoji: "👑",
+    category: "Virada",
+    weekday: 0,
+    startHour: 23,
+    startMinute: 30,
+    endHour: 24,
+    endMinute: 30,
+    eventKey: "nobre_domingo_23_30_00_30",
+  },
+  {
+    cityKey: "nobre",
+    cityName: "Nobre",
+    emoji: "👑",
+    category: "Madrugada",
+    weekday: 1,
+    startHour: 1,
+    startMinute: 0,
+    endHour: 2,
+    endMinute: 0,
+    eventKey: "nobre_segunda_01_02",
+  },
+  {
+    cityKey: "nobre",
+    cityName: "Nobre",
+    emoji: "👑",
+    category: "Madrugada",
+    weekday: 2,
+    startHour: 1,
+    startMinute: 0,
+    endHour: 2,
+    endMinute: 0,
+    eventKey: "nobre_terca_01_02",
+  },
+  {
+    cityKey: "nobre",
+    cityName: "Nobre",
+    emoji: "👑",
+    category: "Madrugada",
+    weekday: 6,
+    startHour: 1,
+    startMinute: 0,
+    endHour: 2,
+    endMinute: 0,
+    eventKey: "nobre_sabado_01_02",
+  },
+  {
+    cityKey: "nobre",
+    cityName: "Nobre",
+    emoji: "👑",
+    category: "Madrugada",
+    weekday: 0,
+    startHour: 1,
+    startMinute: 0,
+    endHour: 2,
+    endMinute: 0,
+    eventKey: "nobre_domingo_01_02",
+  },
+
+  // GRANDE
+  {
+    cityKey: "grande",
+    cityName: "Grande",
+    emoji: "🌆",
+    category: "Virada",
+    weekday: 2,
+    startHour: 23,
+    startMinute: 30,
+    endHour: 24,
+    endMinute: 30,
+    eventKey: "grande_terca_23_30_00_30",
+  },
+  {
+    cityKey: "grande",
+    cityName: "Grande",
+    emoji: "🌆",
+    category: "Virada",
+    weekday: 5,
+    startHour: 23,
+    startMinute: 30,
+    endHour: 24,
+    endMinute: 30,
+    eventKey: "grande_sexta_23_30_00_30",
+  },
+
+  // MARESIA
+  {
+    cityKey: "maresia",
+    cityName: "Maresia",
+    emoji: "🌊",
+    category: "Pico",
+    weekday: 1,
+    startHour: 21,
+    startMinute: 0,
+    endHour: 22,
+    endMinute: 0,
+    eventKey: "maresia_segunda_21_22",
+  },
+  {
+    cityKey: "maresia",
+    cityName: "Maresia",
+    emoji: "🌊",
+    category: "Virada",
+    weekday: 3,
+    startHour: 23,
+    startMinute: 30,
+    endHour: 24,
+    endMinute: 30,
+    eventKey: "maresia_quarta_23_30_00_30",
+  },
+
+  // SANTA
+  {
+    cityKey: "santa",
+    cityName: "Santa",
+    emoji: "🏙️",
+    category: "Pico",
+    weekday: 3,
+    startHour: 21,
+    startMinute: 0,
+    endHour: 22,
+    endMinute: 0,
+    eventKey: "santa_quarta_21_22",
+  },
+];
+
+function getEventScheduleForWeekday(weekday) {
+  return FIVEM_EVENT_SCHEDULE.filter((event) => event.weekday === weekday);
+}
+
+function isCurrentTimeInsideEvent(snapshot, event) {
+  const currentMinutes = snapshot.hour * 60 + snapshot.minute;
+  const startMinutes = event.startHour * 60 + event.startMinute;
+  const endMinutes = event.endHour * 60 + event.endMinute;
+
+  return currentMinutes >= startMinutes && currentMinutes < endMinutes;
+}
+
+function formatEventWindowLabel(event) {
+  const startHour = String(event.startHour % 24).padStart(2, "0");
+  const startMinute = String(event.startMinute).padStart(2, "0");
+  const endHour = String(event.endHour % 24).padStart(2, "0");
+  const endMinute = String(event.endMinute).padStart(2, "0");
+
+  return `${startHour}:${startMinute} às ${endHour}:${endMinute}`;
+}
+
 export function getPrimeTimeWindow(snapshot, customWeekday = null) {
   const baseDate = snapshot?.timestamp ? new Date(snapshot.timestamp) : new Date();
   const weekday = customWeekday !== null ? customWeekday : getSaoPauloWeekday(baseDate);
   const weekMode = getWeekModeSP(baseDate);
+  const dayEvents = getEventScheduleForWeekday(weekday);
 
-  if (weekday === 0) {
-    return { startHour: 20, startMinute: 0, endHour: 23, endMinute: 0, label: "20:00 às 23:00", eventKey: "rede_domingo_20_23", cityKey: "total", cityName: "Geral (Rede)", emoji: "🌐", weekMode };
-  }
+  const activeEvent = dayEvents.find((event) => {
+    if (!snapshot) return false;
+    return isCurrentTimeInsideEvent(snapshot, event);
+  });
 
-  if (weekday === 1) {
-    return { startHour: 21, startMinute: 0, endHour: 22, endMinute: 0, label: "21:00 às 22:00", eventKey: "maresia_segunda_21_22", cityKey: "maresia", cityName: "Maresia", emoji: "🌊", weekMode };
-  }
+  const event = activeEvent || dayEvents[0];
 
-  if (weekday === 2) {
-    return { startHour: 23, startMinute: 0, endHour: 24, endMinute: 0, label: "23:00 às 00:00", eventKey: "grande_terca_23_00", cityKey: "grande", cityName: "Grande", emoji: "🌆", weekMode };
-  }
+  if (!event) return null;
 
-  if (weekday === 3) {
-    return { startHour: 21, startMinute: 0, endHour: 22, endMinute: 0, label: "21:00 às 22:00", eventKey: "santa_quarta_21_22", cityKey: "santa", cityName: "Santa", emoji: "🏙️", weekMode };
-  }
-
-  if (weekday === 4) {
-    if (weekMode === "A") {
-      return { startHour: 0, startMinute: 0, endHour: 1, endMinute: 0, label: "00:00 às 01:00", eventKey: "nobre_quinta_00_01", cityKey: "nobre", cityName: "Nobre (Qui)", emoji: "👑", weekMode };
-    }
-
-    return { startHour: 21, startMinute: 0, endHour: 22, endMinute: 0, label: "21:00 às 22:00", eventKey: "nobre_quinta_21_22", cityKey: "nobre", cityName: "Nobre (Qui)", emoji: "👑", weekMode };
-  }
-
-  if (weekday === 5) {
-    return { startHour: 21, startMinute: 0, endHour: 22, endMinute: 0, label: "21:00 às 22:00", eventKey: "nobre_sexta_21_22", cityKey: "nobre", cityName: "Nobre (Sex)", emoji: "👑", weekMode };
-  }
-
-  if (weekday === 6) {
-    if (weekMode === "A") {
-      return { startHour: 21, startMinute: 0, endHour: 22, endMinute: 0, label: "21:00 às 22:00", eventKey: "nobre_sabado_21_22", cityKey: "nobre", cityName: "Nobre (Sab)", emoji: "👑", weekMode };
-    }
-
-    return { startHour: 0, startMinute: 0, endHour: 1, endMinute: 0, label: "00:00 às 01:00", eventKey: "nobre_sabado_00_01", cityKey: "nobre", cityName: "Nobre (Sab)", emoji: "👑", weekMode };
-  }
-
-  return null;
+  return {
+    ...event,
+    label: formatEventWindowLabel(event),
+    weekMode,
+  };
 }
 
 /**
@@ -606,14 +807,12 @@ function isPrimeTimeSnapshot(snapshot) {
 }
 
 function isInsideCurrentEventWindow(snapshot) {
-  const window = getPrimeTimeWindow(snapshot);
-  if (!window) return false;
+  if (!snapshot) return false;
 
-  const currentMinutes = snapshot.hour * 60 + snapshot.minute;
-  const startMinutes = window.startHour * 60 + (window.startMinute || 0);
-  const endMinutes = window.endHour * 60 + (window.endMinute || 0);
+  const weekday = getSaoPauloWeekday(new Date(snapshot.timestamp));
+  const dayEvents = getEventScheduleForWeekday(weekday);
 
-  return currentMinutes >= startMinutes && currentMinutes < endMinutes;
+  return dayEvents.some((event) => isCurrentTimeInsideEvent(snapshot, event));
 }
 
 async function updateDailyPeaks(currentSnapshot) {
@@ -1232,19 +1431,84 @@ function getStatusEmojiByYesterday(current, previous) {
 }
 
 function formatOnlyCurrentLine(label, current, max, pct, index, yesterday = 0, city = null) {
- const medal = index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : `${index + 1}.`;
+  const medal = index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : `${index + 1}.`;
 
- if (city?.stale) {
-   return `${medal} **BR ${label.padEnd(8, " ")}**\n> ⚠️ API falhou agora. Mostrando último dado válido: \`${formatNumber(current)} / ${formatNumber(max)}\` players`;
- }
+  if (city?.stale) {
+    return `${medal} **BR ${label.padEnd(8, " ")}**\n> ⚠️ API falhou agora. Mostrando último dado válido: \`${formatNumber(current)} / ${formatNumber(max)}\` players`;
+  }
 
- if (!city?.online || max <= 0) {
-   return `${medal} **BR ${label.padEnd(8, " ")}**\n> ⚠️ API não retornou dados válidos agora. Não vou considerar como 0 real.`;
- }
+  if (!city?.online || max <= 0) {
+    return `${medal} **BR ${label.padEnd(8, " ")}**\n> ⚠️ API não retornou dados válidos agora. Não vou considerar como 0 real.`;
+  }
 
- const statusEmoji = getStatusEmojiByYesterday(current, yesterday);
+  const statusEmoji = getStatusEmojiByYesterday(current, yesterday);
 
- return `${medal} **BR ${label.padEnd(8, " ")}** \n> \`${formatNumber(current)} / ${formatNumber(max)}\` players • **${pct}% da capacidade da cidade ocupada** ${statusEmoji}\n> Fonte: \`${city?.source || "desconhecida"}\``;
+  return `${medal} **BR ${label.padEnd(8, " ")}** \n> \`${formatNumber(current)} / ${formatNumber(max)}\` players • **${pct}% da capacidade da cidade ocupada** ${statusEmoji}\n> Fonte: \`${city?.source || "desconhecida"}\``;
+}
+
+function buildCityEventPanelDescription(cityKey, cityName, emoji, peaks, currentSnapshot) {
+  const cityEvents = FIVEM_EVENT_SCHEDULE.filter((event) => event.cityKey === cityKey);
+
+  const lines = cityEvents.map((event) => {
+    const todayKey = currentSnapshot.spDate;
+    const yesterdayKey = getDateKeyDaysAgoFromSnapshot(currentSnapshot, 1);
+    const lastWeekKey = getDateKeyDaysAgoFromSnapshot(currentSnapshot, 7);
+
+    const todayWindow = peaks[todayKey]?.eventWindows?.[event.eventKey];
+    const yesterdayWindow = peaks[yesterdayKey]?.eventWindows?.[event.eventKey];
+    const lastWeekWindow = peaks[lastWeekKey]?.eventWindows?.[event.eventKey];
+
+    const currentPeak = todayWindow?.peak || 0;
+    const yesterdayPeak = yesterdayWindow?.peak || 0;
+    const lastWeekPeak = lastWeekWindow?.peak || 0;
+
+    const sameTimeCities = FIVEM_CITIES.map((city) => {
+      const sameTimeCityEvent = FIVEM_EVENT_SCHEDULE.find((scheduledEvent) => {
+        return (
+          scheduledEvent.cityKey === city.key &&
+          scheduledEvent.weekday === event.weekday &&
+          scheduledEvent.startHour === event.startHour &&
+          scheduledEvent.startMinute === event.startMinute
+        );
+      });
+
+      if (!sameTimeCityEvent) return null;
+
+      const sameWindow = peaks[todayKey]?.eventWindows?.[sameTimeCityEvent.eventKey];
+
+      return {
+        city,
+        peak: sameWindow?.peak || 0,
+        time: sameWindow?.peakTime || "--:--",
+      };
+    }).filter(Boolean);
+
+    const sameTimeComparison = sameTimeCities.length
+      ? sameTimeCities
+          .map((item) => {
+            const diff = calculateDiff(currentPeak, item.peak);
+            return `> ${item.city.emoji} **${item.city.name}:** \`${formatNumber(item.peak)}\` às \`${item.time}\` • ${formatDiff(diff)}`;
+          })
+          .join("\n")
+      : "> Sem outra cidade com evento no mesmo horário hoje.";
+
+    return (
+      `### ${emoji} ${event.category} — ${formatEventWindowLabel(event)}\n` +
+      `**Pico Atual:** \`${formatNumber(currentPeak)}\` às \`${todayWindow?.peakTime || "--:--"}\`\n` +
+      `**Pico Ontem:** \`${formatNumber(yesterdayPeak)}\` às \`${yesterdayWindow?.peakTime || "--:--"}\`\n` +
+      `**Diferença vs Ontem:** ${formatDiff(calculateDiff(currentPeak, yesterdayPeak))}\n` +
+      `**Pico 7 Dias Atrás:** \`${formatNumber(lastWeekPeak)}\` às \`${lastWeekWindow?.peakTime || "--:--"}\`\n` +
+      `**Diferença vs 7 Dias:** ${formatDiff(calculateDiff(currentPeak, lastWeekPeak))}\n\n` +
+      `**Comparação com cidades no mesmo horário:**\n${sameTimeComparison}`
+    );
+  });
+
+  return (
+    `**Cidade:** ${emoji} **${cityName}**\n` +
+    `**Leitura:** pico salvo dentro da janela exata de 1 hora do evento.\n` +
+    `**Atualização de dados:** coleta a cada 2 minutos, painel sem flood.\n\n` +
+    lines.join(`\n\n${UI.DIVIDER}\n\n`)
+  );
 }
 
 // ---------- EMBED BUILDER ----------
@@ -1373,7 +1637,32 @@ return formatOnlyCurrentLine(
    )
    .setFooter({ text: `Análise de Retenção Dinâmica • Ref: ${currentSnapshot.spTime}` });
  embeds.push(comparisonEmbed);
+const cityPanelConfigs = [
+  { key: "nobre", name: "Nobre", emoji: "👑", title: "👑 PAINEL NOBRE — EVENTOS 21:00 / 00:00 / 23:30 / 01:00" },
+  { key: "grande", name: "Grande", emoji: "🌆", title: "🌆 PAINEL GRANDE — EVENTOS 23:30" },
+  { key: "maresia", name: "Maresia", emoji: "🌊", title: "🌊 PAINEL MARESIA — EVENTOS 21:00 / 23:30" },
+  { key: "santa", name: "Santa", emoji: "🏙️", title: "🏙️ PAINEL SANTA — EVENTOS 21:00" },
+];
 
+for (const cityPanel of cityPanelConfigs) {
+  const cityEmbed = new EmbedBuilder()
+    .setColor(baseColor)
+    .setTitle(cityPanel.title)
+    .setDescription(
+      buildCityEventPanelDescription(
+        cityPanel.key,
+        cityPanel.name,
+        cityPanel.emoji,
+        peaks,
+        currentSnapshot
+      )
+    )
+    .setFooter({
+      text: `Comparação por cidade • Ontem + 7 dias atrás • Atualizado às ${currentSnapshot.spTime}`,
+    });
+
+  embeds.push(cityEmbed);
+}
  // 5. PAINEL — RETENÇÃO DAS 21:00 (EM PONTO)
  const weekday = getSaoPauloWeekday(new Date(currentSnapshot.timestamp));
  const isRelevant21hDay = (weekday >= 1 && weekday <= 6);
@@ -1437,15 +1726,11 @@ return {
  // 5.1 PAINÉIS DE RETENÇÃO POR CIDADE (DIVIDIDO EM VÁRIOS EMBEDS PARA NÃO ESTOURAR 6000 CARACTERES)
 const weekMode = getWeekModeSP(new Date(currentSnapshot.timestamp));
 
-const focusItems = [
-  getPrimeTimeWindow(currentSnapshot, 1),
-  getPrimeTimeWindow(currentSnapshot, 2),
-  getPrimeTimeWindow(currentSnapshot, 3),
-  getPrimeTimeWindow(currentSnapshot, 4),
-  getPrimeTimeWindow(currentSnapshot, 5),
-  getPrimeTimeWindow(currentSnapshot, 6),
-  getPrimeTimeWindow(currentSnapshot, 0),
-].filter(Boolean);
+const focusItems = FIVEM_EVENT_SCHEDULE.map((event) => ({
+  ...event,
+  label: formatEventWindowLabel(event),
+  weekMode,
+}));
 
 const focusHeader =
   `**Semana atual:** Semana ${weekMode}\n` +
@@ -1965,7 +2250,11 @@ export async function fivemRetentionStatusOnReady(client) {
    }, FIVEM_REFRESH_INTERVAL_MS);
 
    // ✅ Inicializa o estado mantendo o messageId se ele já existia
-   FIVEM_STATE.set(channel.id, { intervalId, messageId: existing?.messageId || null });
+   FIVEM_STATE.set(channel.id, {
+  intervalId,
+  messageId: existing?.messageId || null,
+  lastEditAt: existing?.lastEditAt || 0,
+});
    FIVEM_DEBUG && console.log("[FIVEM_RETENTION] Sistema pronto. Loop de 2min ativo no canal", channel.id);
  } catch (err) {
    console.error("[FIVEM_RETENTION] fivemRetentionStatusOnReady erro:", err?.message || err);
