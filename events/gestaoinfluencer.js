@@ -153,10 +153,13 @@ CHANNEL_RESTORE_LOG:      '1486006878914875412',
           r.oneMonthNotified   = !!r.oneMonthNotified;
           r.oneMonthNotifiedAt = r.oneMonthNotifiedAt || null;
           r.note               = r.note || '';
-          r.responsibleUserId  = r.responsibleUserId || null;
-          r.responsibleType    = r.responsibleType || null;
-          r.warnNoRoleGI       = !!r.warnNoRoleGI;
-          r.responsibleHistory = Array.isArray(r.responsibleHistory) ? r.responsibleHistory : [];
+r.responsibleUserId  = r.responsibleUserId || null;
+r.responsibleType    = r.responsibleType || null;
+r.responsibleManual  = !!r.responsibleManual;
+r.responsibleSetBy   = r.responsibleSetBy || null;
+r.responsibleUpdatedAtMs = typeof r.responsibleUpdatedAtMs === 'number' ? r.responsibleUpdatedAtMs : null;
+r.warnNoRoleGI       = !!r.warnNoRoleGI;
+r.responsibleHistory = Array.isArray(r.responsibleHistory) ? r.responsibleHistory : [];
           r.pausedAtMs         = (typeof r.pausedAtMs === 'number') ? r.pausedAtMs : null;
           r.totalPausedMs      = (typeof r.totalPausedMs === 'number') ? r.totalPausedMs : 0;
           r.roleSetAtMs        = (typeof r.roleSetAtMs === 'number') ? r.roleSetAtMs : null;
@@ -279,7 +282,12 @@ const prev = byUser.get(r.targetId);
         const targetMember = targetId ? await guild.members.fetch(targetId).catch(() => null) : null;
         const targetRank = getManagementRank(targetMember);
 
-        const eligibleRoles = [SC_GI_CFG.ROLE_RESP_INFLU, SC_GI_CFG.ROLE_RESP_LIDER];
+        const eligibleRoles = [
+  SC_GI_CFG.ROLE_RESP_CREATORS,
+  SC_GI_CFG.ROLE_RESP_INFLU,
+  SC_GI_CFG.ROLE_RESP_LIDER,
+  '1414651836861907006'
+];
         const candidates = new Map(); // userId -> { member, count }
 
         for (const roleId of eligibleRoles) {
@@ -1124,10 +1132,20 @@ function registroButtons(messageId, active) {
 
           // 🔧 Verificação de responsável desligado
           const respMem = rec.responsibleUserId ? await guild.members.fetch(rec.responsibleUserId).catch(() => null) : null;
-          const isRespStillValid = respMem && (respMem.roles.cache.has(SC_GI_CFG.ROLE_RESP_INFLU) || respMem.roles.cache.has(SC_GI_CFG.ROLE_RESP_LIDER));
-          
-          if (rec.responsibleUserId && !isRespStillValid) {
-            const newBest = await findBestResponsible(guild, rec.targetId);
+const targetMem = rec.targetId ? await guild.members.fetch(rec.targetId).catch(() => null) : null;
+
+const respType = getHighestTypeFromMember(respMem);
+const respRank = getManagementRank(respMem);
+const targetRank = getManagementRank(targetMem);
+
+const isRespStillValid =
+  respMem &&
+  respType &&
+  rec.responsibleUserId !== rec.targetId &&
+  (targetRank === Infinity || respRank < targetRank);
+
+if (rec.responsibleUserId && !isRespStillValid) {
+  const newBest = await findBestResponsible(guild, rec.targetId);
             if (newBest) {
               rec.responsibleUserId = newBest.userId;
               rec.responsibleType = newBest.type;
@@ -1278,10 +1296,13 @@ let roleSetAtMs = await resolveInitialRoleSetAtMs(guild, targetUser.id);
         oneMonthNotified: false,
         oneMonthNotifiedAt: null,
         note: '',
-        responsibleUserId: options.responsibleUserId || autoResp?.userId || null,
-        responsibleType: options.responsibleType || autoResp?.type || null,
-        warnNoRoleGI,
-        responsibleHistory: [],
+responsibleUserId: options.responsibleUserId || autoResp?.userId || null,
+responsibleType: options.responsibleType || autoResp?.type || null,
+responsibleManual: !!options.responsibleUserId,
+responsibleSetBy: options.responsibleUserId ? registrar.id : null,
+responsibleUpdatedAtMs: nowMs(),
+warnNoRoleGI,
+responsibleHistory: [],
 pausedAtMs: initialActive ? null : createdNowMs,
 
 // ✅ Registro criado pausado deve começar zerado.
@@ -2051,21 +2072,47 @@ try {
       : t === 'RESP_LIDER' ? 'Resp. Líder'
       : null;
 
-    async function setResponsibleAuto(guild, actorId, messageId, pickedUserId) {
-      const rec = SC_GI_STATE.registros.get(messageId);
-      if (!rec) throw new Error('Registro não encontrado.');
+async function setResponsibleAuto(guild, actorId, messageId, pickedUserId) {
+  const rec = SC_GI_STATE.registros.get(messageId);
+  if (!rec) throw new Error('Registro não encontrado.');
 
-      const mem = await fetchMemberCached(guild, pickedUserId);
-      if (!mem) throw new Error('Usuário inválido ou fora do servidor.');
-      const type = getHighestTypeFromMember(mem);
-      if (!type) throw new Error('Este usuário não possui cargos válidos de responsável.');
+  await assertCanManageGIRecord(guild, { id: actorId }, rec.targetId, 'definir responsável direto');
 
-      if (rec.responsibleUserId !== pickedUserId || rec.responsibleType !== type) {
-        rec.responsibleHistory.push({ atMs: nowMs(), userId: pickedUserId, type, setBy: actorId });
-      }
-      rec.responsibleUserId = pickedUserId;
-      rec.responsibleType   = type;
-      SC_GI_scheduleSave();
+  const mem = await fetchMemberCached(guild, pickedUserId);
+  if (!mem) throw new Error('Usuário inválido ou fora do servidor.');
+
+  const targetMem = await fetchMemberCached(guild, rec.targetId);
+  const type = getHighestTypeFromMember(mem);
+  if (!type) throw new Error('Este usuário não possui cargos válidos de responsável.');
+
+  const respRank = getManagementRank(mem);
+  const targetRank = getManagementRank(targetMem);
+
+  if (pickedUserId === rec.targetId) {
+    throw new Error('O membro não pode ser responsável por ele mesmo.');
+  }
+
+  if (targetRank !== Infinity && respRank >= targetRank) {
+    throw new Error('Hierarquia bloqueada: o responsável direto precisa estar acima do membro.');
+  }
+
+  if (rec.responsibleUserId !== pickedUserId || rec.responsibleType !== type) {
+    rec.responsibleHistory.push({
+      atMs: nowMs(),
+      userId: pickedUserId,
+      type,
+      setBy: actorId,
+      manual: true
+    });
+  }
+
+  rec.responsibleUserId = pickedUserId;
+  rec.responsibleType = type;
+  rec.responsibleManual = true;
+  rec.responsibleSetBy = actorId;
+  rec.responsibleUpdatedAtMs = nowMs();
+
+  SC_GI_scheduleSave();
 
       try {
         const ch  = await guild.channels.fetch(rec.channelId).catch(()=>null);
