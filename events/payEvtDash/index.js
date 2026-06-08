@@ -321,6 +321,49 @@ function norm(text) {
     .toLowerCase();
 }
 
+function normalizeNoPowerText(text = "") {
+  return String(text || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^\w\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isNoPowerEventRegisterText(text = "") {
+  const raw = normalizeNoPowerText(text);
+
+  return [
+    /\bnao usei\b/,
+    /\bn usei\b/,
+    /\bnn usei\b/,
+    /\bnao utilizei\b/,
+    /\bn utilizei\b/,
+    /\bnn utilizei\b/,
+    /\bnao fui\b/,
+    /\bn fui\b/,
+    /\bnn fui\b/,
+    /\bnao participei\b/,
+    /\bn participei\b/,
+    /\bnn participei\b/,
+    /\bnao loguei\b/,
+    /\bn loguei\b/,
+    /\bnn loguei\b/,
+    /\bnao entrei\b/,
+    /\bn entrei\b/,
+    /\bnn entrei\b/,
+    /\boff\b/,
+    /\bsem uso\b/,
+    /\bzero uso\b/,
+    /\b0 uso\b/,
+    /\bnao teve uso\b/,
+    /\bnada usado\b/,
+    /\bdesconsidera\b/,
+    /\bdesconsiderar\b/,
+  ].some((r) => r.test(raw));
+}
+
 function clean(text) {
   return String(text || "").replace(/\s+/g, " ").trim();
 }
@@ -1225,6 +1268,15 @@ async function scanAuditChannel(client, stats, seen, channelId, fallbackKind = n
     const kind = inferEventKindFromText(fullText, fallbackKind);
 
     if (!kind) continue;
+
+    if (
+      kind === "poderes" &&
+      PODERES_EVENTOS_CHANNEL_IDS.includes(String(channelId)) &&
+      isNoPowerEventRegisterText(fullText)
+    ) {
+      continue;
+    }
+
     if (onlyApproved && !isApprovedText(fullText)) continue;
 
     const userId =

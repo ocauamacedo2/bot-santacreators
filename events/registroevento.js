@@ -91,6 +91,55 @@ const USUARIOS_LIBERADOS = [
   '660311795327828008', // você
 ];
 
+
+
+function normalizeNoPowerText(text = "") {
+  return String(text || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^\w\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isNoPowerEventRegister(...texts) {
+  const raw = normalizeNoPowerText(texts.join(" "));
+
+  const patterns = [
+    /\bnao usei\b/,
+    /\bn usei\b/,
+    /\bnn usei\b/,
+    /\bnao utilizei\b/,
+    /\bn utilizei\b/,
+    /\bnn utilizei\b/,
+    /\bnao fui\b/,
+    /\bn fui\b/,
+    /\bnn fui\b/,
+    /\bnao participei\b/,
+    /\bn participei\b/,
+    /\bnn participei\b/,
+    /\bnao estava\b/,
+    /\bn estava\b/,
+    /\bnn estava\b/,
+    /\bnao loguei\b/,
+    /\bn loguei\b/,
+    /\bnn loguei\b/,
+    /\bnao entrei\b/,
+    /\bn entrei\b/,
+    /\bnn entrei\b/,
+    /\boff\b/,
+    /\bsem uso\b/,
+    /\bzero uso\b/,
+    /\b0 uso\b/,
+    /\bnao teve uso\b/,
+    /\bnada usado\b/,
+    /\bdesconsidera\b/,
+    /\bdesconsiderar\b/,
+  ];
+
+  return patterns.some((r) => r.test(raw));
+}
 // ✅ MEMÓRIA GLOBAL PARA O SISTEMA DE LEMBRETES SABER QUEM JÁ REGISTROU PODERES
 const SC_EVENT_POWER_MEMORY = globalThis.SC_EVENT_POWER_MEMORY || new Map();
 globalThis.SC_EVENT_POWER_MEMORY = SC_EVENT_POWER_MEMORY;
@@ -116,12 +165,15 @@ const buildEmbedBotao = () =>
     .setTitle('📋 Registro de Poderes em Evento – Social Medias')
     .setDescription(
       [
-        '🎯 **Registro obrigatório para uso de poderes com players.**',
+        '🎯 **Registro obrigatório para uso de poderes em eventos.**',
         '',
         '📅 Informe a **data do uso**',
         '🎥 Diga o **evento ou contexto**',
         '⏰ Informe o **horário**',
-        '👤 Quem **utilizou os poderes**',
+        '👤 Informe quem **utilizou os poderes**',
+        '',
+        '💜 Se não usou poderes, registra mesmo assim como: `não usei`.',
+        '🧠 Isso ajuda o bot a parar de cobrar errado.',
         '',
         '✅ Apenas membros autorizados',
         '🔁 Um novo botão é gerado após cada envio',
@@ -319,11 +371,40 @@ const eventoValue = get("evento");
 const horarioValue = get("horario");
 const dataValue = get("data");
 
+const isNoUseRegister = isNoPowerEventRegister(
+  jogadorValue,
+  eventoValue,
+  horarioValue,
+  dataValue
+);
+
 // ✅ Pega o timestamp anterior para o log
 const stEv = readEventPowerState();
 const oldLastAt = Number(stEv?.users?.[interaction.user.id]?.lastRegisterAt || 0);
 stEv.users[interaction.user.id] = { lastRegisterAt: Date.now() };
 writeEventPowerState(stEv);
+
+try {
+  if (typeof globalThis.SC_PODERES_hasRegisteredLastHours === "function") {
+    // força o sistema geral a reconhecer que houve registro recente
+  }
+
+  const poderesStatePath = path.resolve(__dirname, "../data/poderes_reminder_state.json");
+  let poderesState = { users: {} };
+
+  try {
+    poderesState = JSON.parse(fs.readFileSync(poderesStatePath, "utf8"));
+  } catch {}
+
+  poderesState.users ||= {};
+  poderesState.users[interaction.user.id] ||= {};
+  poderesState.users[interaction.user.id].lastRegisterAt = Date.now();
+  poderesState.users[interaction.user.id].lastReminderAt = 0;
+
+  fs.writeFileSync(poderesStatePath, JSON.stringify(poderesState, null, 2), "utf8");
+} catch (e) {
+  console.error("[RegistroEvento] Falha ao sincronizar registro com lembretes gerais:", e);
+}
 
 // ✅ MARCA QUE ESSA PESSOA JÁ REGISTROU PODERES NESSE EVENTO
 try {
@@ -341,13 +422,14 @@ try {
 
 const embed = new EmbedBuilder()
   .setTitle("📋 Registro de Poderes em Evento") // ✅ Ajustado para o Scanner do Dash reconhecer como Poderes
-  .addFields(
-    { name: "👤 Membro", value: jogadorValue, inline: true },
-    { name: "📌 Evento", value: eventoValue, inline: true },
-    { name: "⏰ Horário", value: horarioValue, inline: true },
-    { name: "📅 Data", value: dataValue, inline: true },
-    { name: "✍️ Registrado por", value: `<@${interaction.user.id}>` }
-  )
+.addFields(
+  { name: "👤 Membro", value: jogadorValue, inline: true },
+  { name: "📌 Evento", value: eventoValue, inline: true },
+  { name: "⏰ Horário", value: horarioValue, inline: true },
+  { name: "📅 Data", value: dataValue, inline: true },
+  { name: "📊 Pontuação", value: isNoUseRegister ? "🚫 Não pontuar — sem uso/ausente" : "✅ Pontuar normalmente", inline: false },
+  { name: "✍️ Registrado por", value: `<@${interaction.user.id}>` }
+)
           .setThumbnail(interaction.user.displayAvatarURL())
           .setColor("Blue")
           .setFooter({ text: `Registro por ${interaction.user.tag}` })
@@ -368,14 +450,16 @@ const embed = new EmbedBuilder()
         if (registroMsg) await sendAuditEventLog(client, guild, interaction.member, { jogador: jogadorValue, evento: eventoValue, horario: horarioValue, data: dataValue }, registroMsg, oldLastAt);
 
         // ✅ Dash: Emitir o nome correto para contar no GeralDash (Social Medias)
-try {
-          dashEmit("eventopoder:registrado", {
-    userId: interaction.user.id,
-    __at: Date.now(),
-    source: "registro_evento",
-    channelId: CANAL_REGISTRO_EVENTO,
-  });
-} catch {}
+if (!isNoUseRegister) {
+  try {
+    dashEmit("eventopoder:registrado", {
+      userId: interaction.user.id,
+      __at: Date.now(),
+      source: "registro_evento",
+      channelId: CANAL_REGISTRO_EVENTO,
+    });
+  } catch {}
+}
 
         // Responde para o usuário que clicou (ephemeral)
         await interaction.editReply({ content: "✅ Registro enviado com sucesso!" }).catch(() => {});

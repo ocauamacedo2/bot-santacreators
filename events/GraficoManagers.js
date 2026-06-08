@@ -1897,24 +1897,32 @@ if (interaction.customId === BTN_GOAL_DM_ID) {
     return true;
   }
 
-  await interaction.editReply(
-    `📣 Campanha de meta iniciada!\n` +
-    `As DMs serão enviadas em segundo plano e cada envio será registrado em <#${GM_GOAL_DM_LOG_CHANNEL_ID}>.`
-  ).catch(() => null);
+await interaction.editReply(
+  `📣 Campanha de meta iniciada!\n` +
+  `Vou enviar as DMs agora e te retorno o resultado aqui. Logs em <#${GM_GOAL_DM_LOG_CHANNEL_ID}>.`
+).catch(() => null);
 
-  sendGoalCampaignDMs(
-    client,
-    "button",
-    interaction.user?.id || null
-  ).catch((e) => {
-    sendLog(client, "❌ Erro na campanha de meta", [
-      `**Motivo:** \`button\``,
-      `**Causador:** <@${interaction.user?.id}>`,
-      `**Erro:** \`${String(e?.message || e)}\``,
-    ]).catch(() => null);
-  });
+const result = await sendGoalCampaignDMs(
+  client,
+  "button",
+  interaction.user?.id || null
+).catch(async (e) => {
+  await sendLog(client, "❌ Erro na campanha de meta", [
+    `**Motivo:** \`button\``,
+    `**Causador:** <@${interaction.user?.id}>`,
+    `**Erro:** \`${String(e?.message || e)}\``,
+  ]).catch(() => null);
 
-  return true;
+  return { ok: false, sent: 0, failed: 0, error: String(e?.message || e) };
+});
+
+await interaction.editReply(
+  result?.ok
+    ? `✅ Campanha finalizada!\n📨 DMs enviadas: **${result.sent}**\n⚠️ Falhas: **${result.failed}**\n📁 Logs: <#${GM_GOAL_DM_LOG_CHANNEL_ID}>`
+    : `❌ Campanha não conseguiu finalizar.\n📨 Enviadas: **${result?.sent || 0}**\n⚠️ Falhas: **${result?.failed || 0}**\nErro: \`${result?.error || "sem detalhe"}\``
+).catch(() => null);
+
+return true;
 }
 
 

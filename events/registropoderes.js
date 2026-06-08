@@ -85,7 +85,76 @@ function markUserRegistered(userId, at = Date.now()) {
   });
 }
 
+async function syncPowerRegisterFromMessage(message) {
+  try {
+    if (!message || message.author?.bot !== true) return;
 
+    const validChannels = [
+      CANAL_REGISTRO_ID,
+      CANAL_LOG_REGISTRO_PODERES_ID,
+    ];
+
+    if (!validChannels.includes(String(message.channelId))) return;
+
+    const raw = [
+      message.content || "",
+      ...(message.embeds || []).map((e) => {
+        const fields = e.fields?.map((f) => `${f.name}\n${f.value}`).join("\n") || "";
+        return `${e.title || ""}\n${e.description || ""}\n${fields}`;
+      }),
+    ].join("\n");
+
+    const mentionMatch = raw.match(/<@!?(\d{10,25})>/);
+    const idFieldMatch = raw.match(/(?:ID|Discord ID|Registrado por).*?(\d{10,25})/is);
+
+    const userId = mentionMatch?.[1] || idFieldMatch?.[1];
+    if (!userId) return;
+
+    await markUserRegistered(userId, message.createdTimestamp || Date.now());
+  } catch (e) {
+    console.error("[REGPOD] Falha ao sincronizar registro por mensagem:", e);
+  }
+}
+
+globalThis.SC_PODERES_hasRegisteredLastHours = async function SC_PODERES_hasRegisteredLastHours(client, userId, hours = 24) {
+  const since = Date.now() - hours * 60 * 60 * 1000;
+
+  const state = readPoderesState();
+  const last = Number(state?.users?.[userId]?.lastRegisterAt || 0);
+  if (last >= since) return true;
+
+  const channelsToScan = [
+    CANAL_REGISTRO_ID,
+    CANAL_LOG_REGISTRO_PODERES_ID,
+  ];
+
+  for (const channelId of channelsToScan) {
+    const channel = await client.channels.fetch(channelId).catch(() => null);
+    if (!channel?.isTextBased?.()) continue;
+
+    const messages = await channel.messages.fetch({ limit: 100 }).catch(() => null);
+    if (!messages) continue;
+
+    for (const msg of messages.values()) {
+      if ((msg.createdTimestamp || 0) < since) continue;
+
+      const raw = [
+        msg.content || "",
+        ...(msg.embeds || []).map((e) => {
+          const fields = e.fields?.map((f) => `${f.name}\n${f.value}`).join("\n") || "";
+          return `${e.title || ""}\n${e.description || ""}\n${fields}`;
+        }),
+      ].join("\n");
+
+      if (raw.includes(userId) || raw.includes(`<@${userId}>`) || raw.includes(`<@!${userId}>`)) {
+        await markUserRegistered(userId, msg.createdTimestamp || Date.now());
+        return true;
+      }
+    }
+  }
+
+  return false;
+};
 
 // Configurações
 const CANAL_REGISTRO_ID = '1374066813171929218';
@@ -314,7 +383,11 @@ return;
   }
 
   // ========= EVENTO: INTERACTION CREATE (Botão e Modal) =========
-  client.on(Events.InteractionCreate, async (interaction) => {
+  client.on(Events.MessageCreate, async (message) => {
+  await syncPowerRegisterFromMessage(message);
+});
+
+client.on(Events.InteractionCreate, async (interaction) => {
     try {
       // 1) BOTÃO -> ABRE MODAL (SEM await pesado antes do showModal)
 if (interaction.isButton() && interaction.customId === "abrir_registro") {
@@ -449,21 +522,22 @@ if (!podeIgnorarCooldown(interaction.user.id)) {
         const poderes = interaction.fields.getTextInputValue('poderes')?.trim().slice(0, 1024) ?? '';
         const data = interaction.fields.getTextInputValue('data_uso')?.trim().slice(0, 100) ?? '';
         const horario = interaction.fields.getTextInputValue('horario')?.trim().slice(0, 256) ?? '';
-        const ts = Math.floor(Date.now() / 1000);
+const ts = Math.floor(Date.now() / 1000);
+const nextAt = Date.now() + REGPOD_COOLDOWN_MS;
 
-
-        const embed = new EmbedBuilder()
-          .setTitle('📘 Registro de Poderes Utilizados')
-          .setColor('Purple')
-          .setThumbnail(user.displayAvatarURL({ dynamic: true }))
-          .addFields(
-            { name: '👤 Criado por', value: `<@${user.id}>`, inline: true },
-            { name: '📅 Data', value: data || '—', inline: true },
-            { name: '⏰ Horário aproximado', value: horario || '—' },
-            { name: '📨 Enviado em', value: `<t:${ts}:F>` },
-            { name: '🔮 Poderes Utilizados', value: poderes || '—' },
-            { name: '🆔 ID', value: user.id }
-          )
+const embed = new EmbedBuilder()
+  .setTitle('📘 Registro de Poderes Utilizados')
+  .setColor('Purple')
+  .setThumbnail(user.displayAvatarURL({ dynamic: true }))
+  .addFields(
+    { name: '👤 Criado por', value: `<@${user.id}>`, inline: true },
+    { name: '📅 Data', value: data || '—', inline: true },
+    { name: '⏰ Horário aproximado', value: horario || '—' },
+    { name: '📨 Enviado em', value: `<t:${ts}:F>` },
+    { name: '🔓 Próximo registro liberado', value: `<t:${Math.floor(nextAt / 1000)}:F> (<t:${Math.floor(nextAt / 1000)}:R>)` },
+    { name: '🔮 Poderes Utilizados', value: poderes || '—' },
+    { name: '🆔 ID', value: user.id }
+  )
           .setImage(GIF_PODERES_URL)
           .setFooter({ text: 'SantaCreators – Sistema Oficial de Registro' });
 

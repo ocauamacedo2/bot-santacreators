@@ -790,6 +790,49 @@ function poderes_getUserId(emb) {
   return /^\d{17,20}$/.test(v) ? v : null;
 }
 
+function normalizeNoPowerText(text = "") {
+  return String(text || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^\w\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isNoPowerEventRegisterText(text = "") {
+  const raw = normalizeNoPowerText(text);
+
+  return [
+    /\bnao usei\b/,
+    /\bn usei\b/,
+    /\bnn usei\b/,
+    /\bnao utilizei\b/,
+    /\bn utilizei\b/,
+    /\bnn utilizei\b/,
+    /\bnao fui\b/,
+    /\bn fui\b/,
+    /\bnn fui\b/,
+    /\bnao participei\b/,
+    /\bn participei\b/,
+    /\bnn participei\b/,
+    /\bnao loguei\b/,
+    /\bn loguei\b/,
+    /\bnn loguei\b/,
+    /\bnao entrei\b/,
+    /\bn entrei\b/,
+    /\bnn entrei\b/,
+    /\boff\b/,
+    /\bsem uso\b/,
+    /\bzero uso\b/,
+    /\b0 uso\b/,
+    /\bnao teve uso\b/,
+    /\bnada usado\b/,
+    /\bdesconsidera\b/,
+    /\bdesconsiderar\b/,
+  ].some((r) => r.test(raw));
+}
+
 function eventos_getRecordType(emb) {
   const t = norm(emb?.title || emb?.data?.title || "");
 
@@ -1446,26 +1489,32 @@ async function collectAllGeneral(client, mode = "light") {
 
 
       await scanChannelEmbeds(client, {
-    channelId: CH_EVENTOS_ID,
-    weekFloorKey,
-    maxPages: 80,
-    onMessage: async (m) => {
-      const emb = m.embeds?.[0];
-      if (!emb) return;
+  channelId: CH_EVENTOS_ID,
+  weekFloorKey,
+  maxPages: 80,
+  onMessage: async (m) => {
+    const emb = m.embeds?.[0];
+    if (!emb) return;
 
-      const type = eventos_getRecordType(emb);
-      if (!type) return;
+    const type = eventos_getRecordType(emb);
+    if (!type) return;
 
-      const uid = eventos_getRegistrarId(emb);
-      if (!uid) return;
+    const rawText = getEmbedText(emb);
 
-      items.push({
-        userId: uid,
-        ts: new Date(m.createdTimestamp),
-        source: type, // ✅ "eventos" ou "eventopoder"
-      });
-    },
-  });
+    if (type === "eventopoder" && isNoPowerEventRegisterText(rawText)) {
+      return;
+    }
+
+    const uid = eventos_getRegistrarId(emb);
+    if (!uid) return;
+
+    items.push({
+      userId: uid,
+      ts: new Date(m.createdTimestamp),
+      source: type, // ✅ "eventos" ou "eventopoder"
+    });
+  },
+});
 
 
 
@@ -2231,13 +2280,15 @@ if (CH_ALINHAMENTOS_ID) {
 
     // -------- PODERES EM EVENTO (Social Medias) --------
     if (CH_EVENTOS_ID) {
-      await scanCurrentWeekEmbeds(
-        client,
-        CH_EVENTOS_ID,
-        (emb) => eventos_getRecordType(emb) === "eventopoder",
-        async () => { eventosPoderes += 1; },
-        25
-      );
+await scanCurrentWeekEmbeds(
+  client,
+  CH_EVENTOS_ID,
+  (emb) =>
+    eventos_getRecordType(emb) === "eventopoder" &&
+    !isNoPowerEventRegisterText(getEmbedText(emb)),
+  async () => { eventosPoderes += 1; },
+  25
+);
     }
 
     // -------- PODERES UTILIZADOS (Geral) --------

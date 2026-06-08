@@ -455,7 +455,18 @@ function buildPowerEmbed(event) {
     .setColor("#3498db")
     .setTitle("⚡ Lembrete de Registro de Poderes")
     .setDescription(
-      `eaiii <@${event.targetId}>, bora registrar teu uso de poderes no evento **${event.eventName}** pra eu parar de te encher o saco? vi que o evento já acabou e ainda falta esse registro kkkkk registra lá queridão que eu PARO de mandar mensagem, prometo 💜`
+[
+  `Eaiii <@${event.targetId}>, td bm?? como tu tá? kkkkk 💜`,
+  "",
+  `Vi que você tem poderes e estava online no horário do evento **${event.eventName}**.`,
+  "",
+  `Tu participou desse evento e usou poderes?`,
+  `Se sim, registra lá bonitinho pra eu não ficar te enchendo o saco kkkkk`,
+  "",
+  `Se você não participou / não usou / nem logou, registra também como **"não usei"** ou desconsidera se realmente não era contigo, Eriese kkkkkkkk`,
+  "",
+  `📌 Registro: <#1374066813171929218>`,
+].join("\n")
     )
     .setTimestamp();
 }
@@ -622,14 +633,23 @@ async function runNotifierTick(client, options = {}) {
           await dm(client, member, postEmbed, event, "pós-checklist");
         }
       }
-      else if (phase === "POS_PODERES") {
-        for (const member of onlineEquipe) {
-          if (!globalThis.SC_EVENT_POWER_hasRegistered?.(member.id, event.eventName, todayDateBR())) {
-            const powerEmbed = buildPowerEmbed({ ...event, targetId: member.id });
-            await dm(client, member, powerEmbed, event, "poderes");
-          }
-        }
-      }
+else if (phase === "POS_PODERES") {
+  for (const member of onlineEquipe) {
+    const registered = await globalThis.SC_PODERES_hasRegisteredLastHours?.(
+      client,
+      member.id,
+      24
+    );
+
+    if (registered) {
+      console.log(`[EventosChecklistNotifier] ${member.user.tag} já registrou poderes nas últimas 24h. Ignorando.`);
+      continue;
+    }
+
+    const powerEmbed = buildPowerEmbed({ ...event, targetId: member.id });
+    await dm(client, member, powerEmbed, event, "poderes pós-evento");
+  }
+}
 
       markSent(state, uniqueBase);
     }
@@ -949,13 +969,12 @@ async function runNotifierTickOld(client, options = {}) {
         // Normalização de nome de evento para busca segura na memória global
         const eventSearchName = event.eventName.toLowerCase().trim();
 
-        const hasPower = globalThis.SC_EVENT_POWER_hasRegistered?.(
-          member.id,
-          eventSearchName,
-          todayDateBR()
-        );
+const hasPower =
+  typeof globalThis.SC_PODERES_hasRegisteredLastHours === "function"
+    ? await globalThis.SC_PODERES_hasRegisteredLastHours(client, member.id, 24)
+    : false;
 
-        if (!hasPower) {
+if (!hasPower) {
           const powerEmbed = buildPowerEmbed({ ...event, targetId: member.id });
           const ok = await dm(client, member, powerEmbed, event, "registro de poderes");
 
