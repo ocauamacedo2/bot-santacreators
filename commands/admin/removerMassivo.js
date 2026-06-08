@@ -76,6 +76,20 @@ async function sendTemp(channel, payload, ttl = CONFIRM_TTL_MS) {
   }
 }
 
+async function getMembersWithRoleOnly(guild, role) {
+  const byRoleCache = role.members?.filter((m) => m.roles.cache.has(role.id));
+
+  if (byRoleCache && byRoleCache.size > 0) {
+    return byRoleCache;
+  }
+
+  const byGuildCache = guild.members.cache.filter((m) => {
+    return m.roles.cache.has(role.id);
+  });
+
+  return byGuildCache;
+}
+
 async function editStatus(statusMsg, {
   color = 0x3498db,
   title = '⏳ Remoção em andamento',
@@ -203,11 +217,14 @@ export async function removerMassivoHandleMessage(message, client) {
     const failedIds = [];
 
     try {
-      // ✅ OTIMIZAÇÃO: Busca apenas os membros que possuem o cargo específico
-      // Forçamos o fetch para garantir que pegamos a lista atualizada da API
-      const candidates = await message.guild.members.fetch({ role: role.id, force: true }).catch(() => null);
+      // ✅ Busca somente membros que estão no cache com o cargo alvo
+      // Usa a mesma lógica rápida do comando !grupo
+      const candidates = await getMembersWithRoleOnly(message.guild, role);
 
       if (!candidates || candidates.size === 0) {
+        const cached = message.guild.members.cache.size;
+        const totalGuild = message.guild.memberCount ?? cached;
+
         await editStatus(statusMsg, {
           color: 0x2ecc71,
           title: '✅ Remoção finalizada',
@@ -219,7 +236,10 @@ export async function removerMassivoHandleMessage(message, client) {
           removed,
           skippedProtected,
           failed,
-          extra: `ℹ️ Nenhum membro possui o cargo **${role.name}**.`
+          extra:
+            cached < totalGuild
+              ? `⚠️ Nenhum membro com **${role.name}** foi encontrado no cache atual.\nCache atual: **${cached}/${totalGuild}** membros. Use \`!grupo ${role.id}\` antes ou tente novamente em alguns segundos.`
+              : `ℹ️ Nenhum membro possui o cargo **${role.name}**.`
         });
 
         return true;
@@ -241,6 +261,10 @@ export async function removerMassivoHandleMessage(message, client) {
 
       const targets = [];
       for (const m of Array.from(candidates.values())) {
+        if (!m.roles.cache.has(role.id)) {
+          continue;
+        }
+
         // Se o bot não consegue gerenciar o membro (ex: dono do server ou cargo maior que o bot)
         if (!m.manageable) {
           failed++;
@@ -255,6 +279,7 @@ export async function removerMassivoHandleMessage(message, client) {
           skippedIds.push(m.id);
           continue;
         }
+
         targets.push(m);
       }
 
@@ -279,6 +304,10 @@ export async function removerMassivoHandleMessage(message, client) {
       for (const m of targets) {
         processed++;
         try {
+          if (!m.roles.cache.has(role.id)) {
+            continue;
+          }
+
           // se mexeram na hierarquia durante o processo
           if (!roleEditableByBot(me, role)) {
             failed++;
