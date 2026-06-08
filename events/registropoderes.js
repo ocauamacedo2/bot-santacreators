@@ -139,6 +139,40 @@ async function resetarBotaoRegistroPoderes(canal, client) {
     return null;
   }
 }
+
+async function sendAuditLog(client, guild, member, data, registroMsg, oldLastAt) {
+  try {
+    const canalLog = await client.channels.fetch(CANAL_REGISTRO_ID).catch(() => null);
+    if (!canalLog?.isTextBased?.()) return;
+
+    const now = Date.now();
+    const nextAt = now + REGPOD_COOLDOWN_MS;
+
+    const ultimoRegistro =
+      oldLastAt > 0
+        ? `<t:${Math.floor(oldLastAt / 1000)}:R>`
+        : "Primeiro registro";
+
+    const embed = new EmbedBuilder()
+      .setColor("Purple")
+      .setTitle("📋 Log: Registro de Poderes Utilizados")
+      .addFields(
+        { name: "👤 Autor", value: `${member} (\`${member.id}\`)`, inline: true },
+        { name: "📍 Mensagem", value: registroMsg?.url ? `[Ir para mensagem](${registroMsg.url})` : "—", inline: true },
+        { name: "📅 Data de uso", value: `\`${data.data || "—"}\``, inline: true },
+        { name: "⏰ Horário", value: `\`${data.horario || "—"}\``, inline: true },
+        { name: "🔮 Poderes", value: `\`\`\`\n${data.poderes || "—"}\n\`\`\``, inline: false },
+        { name: "⏳ Último registro", value: ultimoRegistro, inline: true },
+        { name: "🔓 Próximo registro", value: `<t:${Math.floor(nextAt / 1000)}:R>`, inline: true }
+      )
+      .setFooter({ text: "SantaCreators • Auditoria de Poderes Utilizados" })
+      .setTimestamp();
+
+    await canalLog.send({ embeds: [embed] }).catch(() => {});
+  } catch (err) {
+    console.error("❌ Erro ao enviar log de Registro de Poderes:", err);
+  }
+}
 // Roles autorizados
 const ALLOWED_ROLE_IDS = [
   '1352429001188180039', // equipe creator
@@ -431,8 +465,11 @@ if (!podeIgnorarCooldown(interaction.user.id)) {
         // Envia o registro
 const registroEnviado = await canal.send({ content: `<@${user.id}>`, embeds: [embed] }).catch(() => null);
 
-// ✅ Manda o LOG completo para o canal solicitado
-if (registroEnviado) await sendAuditLog(client, guild, interaction.member, { data, horario, poderes }, registroEnviado, oldLastAt);
+// ✅ Manda o LOG completo sem quebrar o fluxo se der erro
+if (registroEnviado) {
+  await sendAuditLog(client, guild, interaction.member, { data, horario, poderes }, registroEnviado, oldLastAt)
+    .catch((err) => console.error("❌ Falha no sendAuditLog:", err));
+}
 
 // ✅ NOVO: salva “último registro” (pra lembretes 24h/48h funcionarem)
 // Usa o LOCK para garantir que a escrita não seja sobrescrita pelo loop de lembretes
