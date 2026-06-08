@@ -3734,18 +3734,24 @@ const msgNova = await canal.send({ embeds: [embedAtualizado] }).catch(() => null
 
     const pagamentoAt = dataEventoTimestamp || Date.now();
 
-    dashEmit(map[action] || "pagamento:status", {
-      __at: Date.now(), // ✅ clique real do botão
-      source: "pagamento_social",
-      by: interaction.user.id,
-      action,
-      canal: CANAL_PAGAMENTO,
-      oldMessageId: msgOriginal.id,
-      newMessageId: msgNova.id,
-      dataEvento: dataEventoEmbed,
-      dataEventoTimestamp,
-      dedupeKey: `pagamento_social:${action}:${msgNova.id}`,
-    });
+dashEmit(map[action] || "pagamento:status", {
+  __at: Date.now(),
+  source: "pagamento_social",
+  by: interaction.user.id,
+  action,
+  canal: CANAL_PAGAMENTO,
+  oldMessageId: msgOriginal.id,
+  newMessageId: msgNova.id,
+  messageId: msgNova.id,
+
+  // ✅ quem criou o registro e ganha/perde o ponto
+  creatorId: criadorId,
+  userId: criadorId,
+
+  dataEvento: dataEventoEmbed,
+  dataEventoTimestamp,
+  dedupeKey: `pagamento_social:${action}:${msgNova.id}`,
+});
 
     // ✅ fallback geral para qualquer dashboard que esteja ouvindo status genérico
     dashEmit("pagamento:status", {

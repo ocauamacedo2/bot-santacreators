@@ -62,7 +62,8 @@ const STATE_PATH = path.join(DATA_DIR, "sc_pay_evt_dashboard_v2_state.json");
 const ADJUST_PATH = path.join(DATA_DIR, "sc_pay_evt_manual_adjusts.json");
 
 // ✅ NOVO: pontos recebidos via dashEmit para não sumirem no recálculo
-const HUB_POINTS_PATH = path.join(DATA_DIR, "sc_pay_evt_hub_points.json");
+const PAYMENT_DECISIONS_PATH = path.join(DATA_DIR, "sc_pay_evt_payment_decisions.json");
+const CRONO_APPROVALS_PATH = path.join(DATA_DIR, "sc_pay_evt_crono_approvals.json");
 
 const DASH_MARKER = "SC_PAY_EVT_DASH_V2";
 
@@ -157,13 +158,107 @@ function saveAdjustment(weekKey, userId, amount) {
 
 
 function loadHubPoints() {
-  return loadJSON(HUB_POINTS_PATH, { items: {} });
+  return { items: {} };
 }
 
-function saveHubPoints(data) {
-  saveJSON(HUB_POINTS_PATH, data);
+function saveHubPoints() {
+  return;
+}
+function savePaymentDecision(action, payload = {}) {
+  const data = loadJSON(PAYMENT_DECISIONS_PATH, { items: {} });
+
+  const messageId = payload.newMessageId || payload.messageId || payload.oldMessageId;
+  const oldMessageId = payload.oldMessageId || null;
+  const creatorId = payload.creatorId || payload.registranteId || payload.userId || null;
+
+  if (!messageId || !creatorId) return;
+
+  // ✅ Remove decisão antiga do mesmo pagamento quando ele troca de status
+  for (const [key, item] of Object.entries(data.items || {})) {
+    if (
+      item?.messageId === oldMessageId ||
+      item?.messageId === messageId ||
+      key === `paymsg:${oldMessageId}` ||
+      key === `paymsg:${messageId}`
+    ) {
+      delete data.items[key];
+    }
+  }
+
+  data.items[`paymsg:${messageId}`] = {
+    key: `paymsg:${messageId}`,
+    status: action === "pago" ? "approved" : action === "reprovado" ? "rejected" : "requested",
+    creatorId,
+    decisionUserId: payload.by || payload.approverId || null,
+    ts: Number(payload.dataEventoTimestamp || payload.__at || Date.now()),
+    channelId: payload.canal || PAY_CHANNEL_ID,
+    messageId,
+    oldMessageId,
+  };
+
+  saveJSON(PAYMENT_DECISIONS_PATH, data);
 }
 
+function applyPaymentDecisions(stats, seen) {
+  const data = loadJSON(PAYMENT_DECISIONS_PATH, { items: {} });
+
+  for (const item of Object.values(data.items || {})) {
+    if (!item?.key || seen.has(item.key)) {
+      stats.debug.duplicatesIgnored++;
+      continue;
+    }
+
+    seen.add(item.key);
+
+    addPayment(stats, {
+      key: item.key,
+      source: "payment_button_decision",
+      messageId: item.messageId,
+      channelId: item.channelId,
+      ts: Number(item.ts || Date.now()),
+      status: item.status,
+      creatorId: item.creatorId,
+      decisionUserId: item.decisionUserId,
+    });
+  }
+}
+
+function saveCronogramaApproval(payload = {}) {
+  const data = loadJSON(CRONO_APPROVALS_PATH, { items: {} });
+  const userId = payload.userId || payload.targetId || null;
+  if (!userId) return;
+
+  const key = `cronograma:${userId}:${periodKeyFromDateSP(new Date(payload.at || Date.now())).key}`;
+
+  data.items[key] = {
+    key,
+    userId,
+    ts: Number(payload.at || Date.now()),
+  };
+
+  saveJSON(CRONO_APPROVALS_PATH, data);
+}
+
+function applyCronogramaApprovals(stats, seen) {
+  const data = loadJSON(CRONO_APPROVALS_PATH, { items: {} });
+
+  for (const item of Object.values(data.items || {})) {
+    if (!item?.key || seen.has(item.key)) {
+      stats.debug.duplicatesIgnored++;
+      continue;
+    }
+
+    seen.add(item.key);
+
+    addEvent(stats, {
+      key: item.key,
+      source: "cronograma_approval_state",
+      kind: "cronograma",
+      ts: Number(item.ts || Date.now()),
+      userId: item.userId,
+    });
+  }
+}
 function saveHubPoint(kind, payload = {}) {
   const data = loadHubPoints();
 
@@ -1254,7 +1349,8 @@ async function collectDashboardData(client, force = false) {
       onlyApproved: false,
     });
   }
-
+  applyPaymentDecisions(stats, seen);
+  applyCronogramaApprovals(stats, seen);
   // ✅ Pontuação agora vem dos canais/logs oficiais.
   // O dashEmit apenas força atualização do dashboard, sem salvar ponto duplicado.
 
@@ -1845,9 +1941,10 @@ export async function payEvtDashOnReady(client) {
   if (client.__SC_PAY_EVT_DASH_V2_READY__) return;
   client.__SC_PAY_EVT_DASH_V2_READY__ = true;
 
-  dashOn("cronograma:aprovado", () => {
-    scheduleUpdate(client, "dashOn:cronograma");
-  });
+dashOn("cronograma:aprovado", (payload = {}) => {
+  saveCronogramaApproval(payload);
+  scheduleUpdate(client, "dashOn:cronograma");
+});
 
   dashOn("halldafama:aprovado", () => {
     scheduleUpdate(client, "dashOn:halldafama");
@@ -1874,9 +1971,20 @@ export async function payEvtDashOnReady(client) {
   });
 
   dashOn("pagamento:criado", () => scheduleUpdate(client, "dashOn:pagamento:criado"));
-  dashOn("pagamento:pago", () => scheduleUpdate(client, "dashOn:pagamento:pago"));
-  dashOn("pagamento:solicitado", () => scheduleUpdate(client, "dashOn:pagamento:solicitado"));
-  dashOn("pagamento:reprovado", () => scheduleUpdate(client, "dashOn:pagamento:reprovado"));
+dashOn("pagamento:pago", (payload = {}) => {
+  savePaymentDecision("pago", payload);
+  scheduleUpdate(client, "dashOn:pagamento:pago");
+});
+
+dashOn("pagamento:solicitado", (payload = {}) => {
+  savePaymentDecision("solicitado", payload);
+  scheduleUpdate(client, "dashOn:pagamento:solicitado");
+});
+
+dashOn("pagamento:reprovado", (payload = {}) => {
+  savePaymentDecision("reprovado", payload);
+  scheduleUpdate(client, "dashOn:pagamento:reprovado");
+});
   dashOn("pagamento:status", () => scheduleUpdate(client, "dashOn:pagamento:status"));
 
   await renderDashboard(client, "ready", { force: true });

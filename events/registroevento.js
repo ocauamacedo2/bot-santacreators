@@ -209,23 +209,31 @@ function isAutorizadoFast(interaction) {
  */
 async function resetarBotao(channel, client) {
   try {
-    const msgs = await channel.messages.fetch({ limit: 20 }).catch(() => null);
+    if (!channel?.isTextBased?.()) return null;
+
+    const msgs = await channel.messages.fetch({ limit: 30 }).catch(() => null);
+
     if (msgs) {
       for (const msg of msgs.values()) {
         const btn = msg.components?.[0]?.components?.[0];
-        // Verifica se é msg do bot e se é o botão deste sistema
-        if (msg.author.id === client.user.id && btn?.customId === 'abrir_registro_evento') {
+
+        // ✅ apaga APENAS o botão antigo, nunca registros
+        if (msg.author?.id === client.user?.id && btn?.customId === "abrir_registro_evento") {
           await msg.delete().catch(() => {});
         }
       }
     }
 
-    await channel.send({
+    return await channel.send({
       embeds: [buildEmbedBotao()],
       components: [new ActionRowBuilder().addComponents(buildBotao())],
+    }).catch((err) => {
+      console.error("Erro ao enviar novo botão de evento:", err);
+      return null;
     });
   } catch (err) {
-    console.error('Erro ao resetar botão de evento:', err);
+    console.error("Erro ao resetar botão de evento:", err);
+    return null;
   }
 }
 

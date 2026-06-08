@@ -91,6 +91,54 @@ function markUserRegistered(userId, at = Date.now()) {
 const CANAL_REGISTRO_ID = '1374066813171929218';
 const GIF_PODERES_URL = 'https://media.discordapp.net/attachments/1362477839944777889/1384245215249825832/standard_2rss.gif';
 
+
+async function resetarBotaoRegistroPoderes(canal, client) {
+  try {
+    if (!canal?.isTextBased?.()) return null;
+
+    const mensagensAntigas = await canal.messages.fetch({ limit: 30 }).catch(() => null);
+
+    if (mensagensAntigas) {
+      for (const msg of mensagensAntigas.values()) {
+        const btn = msg.components?.[0]?.components?.[0];
+
+        // ✅ apaga APENAS o botão antigo, nunca registros
+        if (msg.author?.id === client.user?.id && btn?.customId === "abrir_registro") {
+          await msg.delete().catch(() => {});
+        }
+      }
+    }
+
+    const embedBtn = new EmbedBuilder()
+      .setColor("Purple")
+      .setTitle("📘 Registro de Poderes Utilizados — SantaCreators")
+      .setDescription(
+        "🔮 **Registre o uso de poderes com players durante interações, vídeos ou conteúdos.**\n\n" +
+        "📅 Informe **a data em que os poderes foram usados**.\n" +
+        "🧠 Descreva os **poderes utilizados**.\n" +
+        "⏰ Especifique o **horário aproximado de uso**.\n\n" +
+        "✅ Apenas membros autorizados podem registrar.\n" +
+        "🔁 Após cada envio, um **novo botão será gerado automaticamente** para facilitar novos registros."
+      )
+      .setImage(GIF_PODERES_URL)
+      .setFooter({ text: "SantaCreators – Sistema Oficial de Registro" });
+
+    const rowBtn = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId("abrir_registro")
+        .setLabel("📘 Registrar Poderes Utilizados")
+        .setStyle(ButtonStyle.Primary)
+    );
+
+    return await canal.send({ embeds: [embedBtn], components: [rowBtn] }).catch((err) => {
+      console.error("❌ Erro ao recriar botão de Registro de Poderes:", err);
+      return null;
+    });
+  } catch (err) {
+    console.error("❌ Erro ao resetar botão de Registro de Poderes:", err);
+    return null;
+  }
+}
 // Roles autorizados
 const ALLOWED_ROLE_IDS = [
   '1352429001188180039', // equipe creator
@@ -394,16 +442,8 @@ if (interaction.isButton() && interaction.customId === "abrir_registro") {
           .setImage(GIF_PODERES_URL)
           .setFooter({ text: 'SantaCreators – Sistema Oficial de Registro' });
 
-        // Remove botões antigos para manter o chat limpo
-        const mensagensAntigas = await canal.messages.fetch({ limit: 20 }).catch(() => null);
-        if (mensagensAntigas) {
-          for (const msg of mensagensAntigas.values()) {
-            const btn = msg.components?.[0]?.components?.[0];
-            if (msg.author.id === client.user.id && btn?.customId === 'abrir_registro') {
-              await msg.delete().catch(() => {});
-            }
-          }
-        }
+// ✅ Não apaga o botão antes do registro.
+// O botão antigo será apagado e recriado somente depois que o registro for enviado.
 
         // Envia o registro
 const registroEnviado = await canal.send({ content: `<@${user.id}>`, embeds: [embed] }).catch(() => null);

@@ -949,11 +949,39 @@ export async function cronogramaCreatorsHandleInteraction(interaction, client) {
       await interaction.message.edit({ embeds: [embed], components: [] });
 
       // Computa ponto
-      dashEmit("cronograma:aprovado", {
-        userId: targetId,
-        approverId: interaction.user.id,
-        at: Date.now()
-      });
+dashEmit("cronograma:aprovado", {
+  userId: targetId,
+  targetId,
+  approverId: interaction.user.id,
+  at: Date.now(),
+  source: "cronogramaCreators",
+  channelId: interaction.channelId,
+  messageId: interaction.message.id,
+});
+
+// ✅ LOG OFICIAL PARA O DASHBOARD CONSULTAR DEPOIS
+try {
+  const logChannel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+
+  if (logChannel?.isTextBased?.()) {
+    await logChannel.send({
+      embeds: [
+        new EmbedBuilder()
+          .setColor("#2ecc71")
+          .setTitle("✅ Cronograma aprovado — ponto computado")
+          .addFields(
+            { name: "👤 Solicitante", value: `<@${targetId}> (\`${targetId}\`)`, inline: false },
+            { name: "✅ Aprovado por", value: `<@${interaction.user.id}> (\`${interaction.user.id}\`)`, inline: false },
+            { name: "📍 Origem", value: `[Mensagem de aprovação](${interaction.message.url})`, inline: false },
+            { name: "🧾 Status", value: "`APROVADO`", inline: true }
+          )
+          .setTimestamp()
+      ]
+    });
+  }
+} catch (err) {
+  console.error("[Cronograma] erro ao enviar log de aprovação:", err);
+}
 
       // 3. Confirmação visual
       await interaction.followUp({ content: "✅ Cronograma aprovado e ponto computado!", flags: MessageFlags.Ephemeral });
