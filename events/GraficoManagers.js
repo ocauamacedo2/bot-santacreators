@@ -728,7 +728,6 @@ async function collectGoalDmTargets(guild, currentBucket) {
   return targetsByGroup;
 }
 
-js
 async function sendGoalCampaignDMs(client, reason = "manual", causeUserId = null) {
   if (isGoalDmCampaignRunning()) {
     await sendLog(client, "⚠️ Campanha de meta ignorada", [
