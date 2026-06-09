@@ -1225,6 +1225,46 @@ function formatPrimePeakToday(value, time, currentSnapshot) {
  return "`coletando agora`";
 }
 
+function buildCronogramaEventsCompactDescription(events, peaks, currentSnapshot, cronogramaState) {
+ if (!events?.length) {
+   return "⚠️ Nenhum evento relevante encontrado no cronograma ou nas janelas coletadas agora.";
+ }
+
+ const todayKey = currentSnapshot.spDate;
+ const yesterdayKey = getDateKeyDaysAgoFromSnapshot(currentSnapshot, 1);
+ const lastWeekKey = getDateKeyDaysAgoFromSnapshot(currentSnapshot, 7);
+
+ return events.map((event) => {
+   const todayWindow = peaks[todayKey]?.eventWindows?.[event.eventKey];
+   const yesterdayWindow = peaks[yesterdayKey]?.eventWindows?.[event.eventKey];
+   const lastWeekWindow = peaks[lastWeekKey]?.eventWindows?.[event.eventKey];
+
+   const currentPeak = todayWindow?.peak || 0;
+   const yesterdayPeak = yesterdayWindow?.peak || 0;
+   const lastWeekPeak = lastWeekWindow?.peak || 0;
+
+   const eventName = getFivemEventDisplayName(event, cronogramaState);
+   const weekdayLabel = formatEventWeekdayLabel(event);
+   const windowLabel = formatEventWindowLabel(event);
+
+   const diffYesterday = calculateDiff(currentPeak, yesterdayPeak);
+   const diffLastWeek = calculateDiff(currentPeak, lastWeekPeak);
+
+   const statusLine = currentPeak > 0
+     ? `✅ Pico coletado: \`${formatNumber(currentPeak)}\` players às \`${todayWindow?.peakTime || "--:--"}\``
+     : `🟠 Aguardando coleta válida nessa janela.`;
+
+   return (
+     `${event.emoji} **BR ${event.cityName} — ${eventName}**\n` +
+     `> 📅 **Dia:** \`${weekdayLabel}\`\n` +
+     `> 🕒 **Janela:** \`${windowLabel}\`\n` +
+     `> 📌 ${statusLine}\n` +
+     `> 🕒 **Vs. ontem:** ${formatDiff(diffYesterday)}\n` +
+     `> 📅 **Vs. 7 dias:** ${formatDiff(diffLastWeek)}`
+   );
+ }).join(`\n\n${UI.DIVIDER}\n\n`);
+}
+
 // ---------- FIVEM API ----------
 async function getDynamicUrlsForCity(city) {
  const urls = [...(city.dynamicUrls || [])];
