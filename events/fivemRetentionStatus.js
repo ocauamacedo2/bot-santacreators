@@ -1448,8 +1448,10 @@ return `${medal} **BR ${label.padEnd(8, " ")}**\n` +
   `> 📊 **Ocupação:** \`${pct}%\` da capacidade ${statusEmoji}`;
 }
 
-function buildCityEventPanelDescription(cityKey, cityName, emoji, peaks, currentSnapshot) {
-  const cityEvents = FIVEM_EVENT_SCHEDULE.filter((event) => event.cityKey === cityKey);
+function buildCityEventPanelDescription(cityKey, cityName, emoji, peaks, currentSnapshot, onlyEvent = null) {
+  const cityEvents = onlyEvent
+    ? [onlyEvent]
+    : FIVEM_EVENT_SCHEDULE.filter((event) => event.cityKey === cityKey);
 
   const todayKey = currentSnapshot.spDate;
   const yesterdayKey = getDateKeyDaysAgoFromSnapshot(currentSnapshot, 1);
@@ -1666,23 +1668,28 @@ const cityPanelConfigs = [
 ];
 
 for (const cityPanel of cityPanelConfigs) {
-  const cityEmbed = new EmbedBuilder()
-    .setColor(baseColor)
-    .setTitle(cityPanel.title)
-    .setDescription(
-      buildCityEventPanelDescription(
-        cityPanel.key,
-        cityPanel.name,
-        cityPanel.emoji,
-        peaks,
-        currentSnapshot
-      )
-    )
-    .setFooter({
-      text: `Comparação por cidade • Ontem + 7 dias atrás • Atualizado às ${currentSnapshot.spTime}`,
-    });
+  const cityEvents = FIVEM_EVENT_SCHEDULE.filter((event) => event.cityKey === cityPanel.key);
 
-  embeds.push(cityEmbed);
+  for (const event of cityEvents) {
+    const cityEmbed = new EmbedBuilder()
+      .setColor(baseColor)
+      .setTitle(`${cityPanel.emoji} BR ${cityPanel.name} — ${event.category} • ${formatEventWindowLabel(event)}`)
+      .setDescription(
+        buildCityEventPanelDescription(
+          cityPanel.key,
+          cityPanel.name,
+          cityPanel.emoji,
+          peaks,
+          currentSnapshot,
+          event
+        )
+      )
+      .setFooter({
+        text: `Comparação por cidade • Ontem + 7 dias atrás • Atualizado às ${currentSnapshot.spTime}`,
+      });
+
+    embeds.push(cityEmbed);
+  }
 }
  // 5. PAINEL — RETENÇÃO DAS 21:00 (EM PONTO)
  const weekday = getSaoPauloWeekday(new Date(currentSnapshot.timestamp));
@@ -2337,12 +2344,21 @@ if (
 
 if (interaction.customId === "fivem_retention_recreate_panel") {
  const botId = client.user.id;
+
+ const safeSnapshot = await createSafeCurrentSnapshot();
+
+ if (!safeSnapshot.snapshot) {
+   throw new Error("Não consegui gerar dados válidos para recriar o painel agora.");
+ }
+
+ await buildEmbeds(client, safeSnapshot.snapshot);
+
  const deletedCount = await deleteAllRetentionPanelMessages(channel, botId);
  const recreated = await ensureStickyMessage(channel);
-await editPanel(channel, { force: true });
+ const edited = await editPanel(channel, { force: true });
 
- if (!recreated) {
-   throw new Error("Painel antigo foi limpo, mas não consegui recriar agora. Tente novamente em alguns segundos.");
+ if (!recreated || !edited) {
+   throw new Error("Validei os dados, mas não consegui recriar o painel agora. Tente novamente em alguns segundos.");
  }
 
  await interaction.editReply(`♻️ Painel recriado limpo com sucesso! Mensagens antigas removidas: ${deletedCount}`).catch(() => {});
