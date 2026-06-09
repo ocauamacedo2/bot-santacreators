@@ -11,6 +11,9 @@ import {
   MessageFlags,
 } from "discord.js";
 import mongoose from "mongoose";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 // ⚙️ CONFIG
 const FIVEM_PANEL_CHANNEL_ID = "1501321157259956244";
@@ -28,6 +31,10 @@ const FIVEM_MAX_EMBEDS_PER_MESSAGE = 10;
 // Semana A = Quinta 00:00-01:00 / Sábado 21:00-22:00
 // Semana B = Quinta 21:00-22:00 / Sábado 00:00-01:00
 const FIVEM_EVENT_WEEK_A_START = "2026-05-17";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const CRONOGRAMA_STATE_FILE = path.resolve(__dirname, "../data/cronograma_state.json");
 
 // 🗄️ MONGODB MODELS
 const HistorySchema = new mongoose.Schema({
@@ -437,6 +444,87 @@ function formatEventWeekdayLabel(event) {
   };
 
   return labels[event?.weekday] || "Dia não definido";
+}
+
+function getCronogramaDayKeyByWeekday(weekday) {
+  const map = {
+    0: "dom",
+    1: "seg",
+    2: "ter",
+    3: "qua",
+    4: "qui",
+    5: "sex",
+    6: "sab",
+  };
+
+  return map[weekday] || null;
+}
+
+function normalizeTextForMatch(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase();
+}
+
+function cityNameToKey(value) {
+  const normalized = normalizeTextForMatch(value);
+
+  if (normalized.includes("santa")) return "santa";
+  if (normalized.includes("grande")) return "grande";
+  if (normalized.includes("maresia")) return "maresia";
+  if (normalized.includes("nobre")) return "nobre";
+
+  return null;
+}
+
+function loadCronogramaStateForFivem() {
+  try {
+    if (!fs.existsSync(CRONOGRAMA_STATE_FILE)) return null;
+    return JSON.parse(fs.readFileSync(CRONOGRAMA_STATE_FILE, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function cronogramaTimeMatchesEvent(cronoTime, event) {
+  const timeText = String(cronoTime || "");
+  const startHour = String(event.startHour % 24).padStart(2, "0");
+  const startMinute = String(event.startMinute).padStart(2, "0");
+  const startLabel = `${startHour}:${startMinute}`;
+
+  return timeText.includes(startLabel);
+}
+
+function findCronogramaEventForFivemEvent(event, cronogramaState) {
+  if (!event || !cronogramaState) return null;
+
+  const dayKey = getCronogramaDayKeyByWeekday(event.weekday);
+  if (!dayKey) return null;
+
+  const possibleBlocks = [
+    cronogramaState.schedule?.[dayKey],
+    cronogramaState.madrugada?.[dayKey],
+  ].filter(Boolean);
+
+  return possibleBlocks.find((item) => {
+    if (!item?.active) return false;
+
+    const itemCityKey = cityNameToKey(item.city);
+    if (itemCityKey !== event.cityKey) return false;
+
+    return cronogramaTimeMatchesEvent(item.time, event);
+  }) || null;
+}
+
+function getFivemEventDisplayName(event, cronogramaState) {
+  const cronogramaEvent = findCronogramaEventForFivemEvent(event, cronogramaState);
+  return cronogramaEvent?.eventName || event.category || "Evento não definido";
+}
+
+function isFivemEventInCronograma(event, cronogramaState) {
+  return Boolean(findCronogramaEventForFivemEvent(event, cronogramaState));
 }
 
 export function getPrimeTimeWindow(snapshot, customWeekday = null) {
@@ -1557,8 +1645,10 @@ function buildCityEventPanelDescription(cityKey, cityName, emoji, peaks, current
       .join("\n\n");
 
     return (
-      `## ${emoji} ${event.category.toUpperCase()} • ${formatEventWindowLabel(event)}\n` +
+      `## ${emoji} ${getFivemEventDisplayName(event, loadCronogramaStateForFivem()).toUpperCase()} • ${formatEventWindowLabel(event)}\n` +
       `📅 **Data analisada:** \`${todayKey}\`\n` +
+      `🎉 **Evento:** \`${getFivemEventDisplayName(event, loadCronogramaStateForFivem())}\`\n` +
+      `📌 **Categoria:** \`${event.category}\`\n` +
       `🏙️ **Cidade do evento:** ${emoji} **BR ${cityName}**\n` +
       `🕒 **Janela oficial:** \`${formatEventWindowLabel(event)}\`\n\n` +
 
@@ -1735,6 +1825,7 @@ const cityPanelConfigs = [
 ];
 
 const currentWeekday = getSaoPauloWeekday(new Date(currentSnapshot.timestamp));
+const cronogramaState = loadCronogramaStateForFivem();
 
 for (const cityPanel of cityPanelConfigs) {
   const cityEvents = FIVEM_EVENT_SCHEDULE.filter((event) => {
@@ -1744,8 +1835,9 @@ for (const cityPanel of cityPanelConfigs) {
     const hasPeakToday = (todayWindow?.peak || 0) > 0;
     const isEventFromToday = event.weekday === currentWeekday;
     const isEventHappeningNow = isCurrentTimeInsideEvent(currentSnapshot, event);
+    const isInCronograma = isFivemEventInCronograma(event, cronogramaState);
 
-    return isEventFromToday || hasPeakToday || isEventHappeningNow;
+    return isInCronograma || isEventFromToday || hasPeakToday || isEventHappeningNow;
   });
 
   const uniqueCityEvents = [...new Map(cityEvents.map((event) => [event.eventKey, event])).values()];
@@ -1760,11 +1852,13 @@ for (const cityPanel of cityPanelConfigs) {
       event
     );
 
+    const eventDisplayName = getFivemEventDisplayName(event, cronogramaState);
+
     const cityEmbed = new EmbedBuilder()
       .setColor(baseColor)
-      .setTitle(`${cityPanel.emoji} BR ${cityPanel.name} — ${event.category} • ${formatEventWeekdayLabel(event)} • ${formatEventWindowLabel(event)}`)
+      .setTitle(`${cityPanel.emoji} BR ${cityPanel.name} — ${eventDisplayName} • ${formatEventWeekdayLabel(event)} • ${formatEventWindowLabel(event)}`)
       .setFooter({
-        text: `Comparação por cidade • ${formatEventWeekdayLabel(event)} • Ontem + 7 dias atrás • Atualizado às ${currentSnapshot.spTime}`,
+        text: `Comparação por cidade • ${eventDisplayName} • ${formatEventWeekdayLabel(event)} • Atualizado às ${currentSnapshot.spTime}`,
       });
 
     pushSplitDescriptionEmbeds(embeds, cityEmbed, description);
