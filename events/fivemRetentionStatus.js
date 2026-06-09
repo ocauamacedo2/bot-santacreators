@@ -964,13 +964,57 @@ function isPrimeTimeSnapshot(snapshot) {
   return currentTotalMinutes >= startTotalMinutes && currentTotalMinutes < endTotalMinutes;
 }
 
-function isInsideCurrentEventWindow(snapshot) {
-  if (!snapshot) return false;
+function getActiveEventWindowsForSnapshot(snapshot) {
+  if (!snapshot) return [];
 
-  const weekday = getSaoPauloWeekday(new Date(snapshot.timestamp));
-  const dayEvents = getEventScheduleForWeekday(weekday);
+  const activeEvents = [];
+  const snapshotDate = new Date(snapshot.timestamp);
+  const weekday = getSaoPauloWeekday(snapshotDate);
+  const currentMinutes = snapshot.hour * 60 + snapshot.minute;
 
-  return dayEvents.some((event) => isCurrentTimeInsideEvent(snapshot, event));
+  const todayEvents = getEventScheduleForWeekday(weekday);
+
+  for (const event of todayEvents) {
+    const startMinutes = event.startHour * 60 + event.startMinute;
+    const endMinutes = event.endHour * 60 + event.endMinute;
+
+    if (currentMinutes >= startMinutes && currentMinutes < endMinutes) {
+      activeEvents.push({
+        ...event,
+        label: formatEventWindowLabel(event),
+        weekMode: getWeekModeSP(snapshotDate),
+        targetDateKey: snapshot.spDate,
+      });
+    }
+  }
+
+  if (snapshot.hour < 4) {
+    const yesterdayDate = new Date(snapshot.timestamp - 24 * 60 * 60 * 1000);
+    const yesterdayWeekday = getSaoPauloWeekday(yesterdayDate);
+    const yesterdayEvents = getEventScheduleForWeekday(yesterdayWeekday);
+
+    for (const event of yesterdayEvents) {
+      if (event.endHour <= 24) continue;
+
+      const rolloverMinutes = (snapshot.hour + 24) * 60 + snapshot.minute;
+      const startMinutes = event.startHour * 60 + event.startMinute;
+      const endMinutes = event.endHour * 60 + event.endMinute;
+
+      if (rolloverMinutes >= startMinutes && rolloverMinutes < endMinutes) {
+        const yParts = getSaoPauloParts(yesterdayDate);
+        const yKey = `${yParts.year}-${String(yParts.month).padStart(2, "0")}-${String(yParts.day).padStart(2, "0")}`;
+
+        activeEvents.push({
+          ...event,
+          label: formatEventWindowLabel(event),
+          weekMode: getWeekModeSP(yesterdayDate),
+          targetDateKey: yKey,
+        });
+      }
+    }
+  }
+
+  return activeEvents;
 }
 
 async function updateDailyPeaks(currentSnapshot) {
@@ -1011,7 +1055,7 @@ if (!dayPeak.eventWindows) {
     }
 
     // Atualiza o pico exato das 21:00
-if (isExact21hSnapshot(currentSnapshot) && isValidSnapshot(currentSnapshot)) {
+if (isExact21hSnapshot(currentSnapshot) && isReliableSnapshotForPersistence(currentSnapshot)) {
   if (!dayPeak.exact21h?.total || dayPeak.exact21h.total <= 0) {
     dayPeak.exact21h.total = currentSnapshot.totalClients || 0;
     dayPeak.exact21h.cities = currentSnapshot.cities;
@@ -1029,56 +1073,57 @@ if (isExact21hSnapshot(currentSnapshot) && isValidSnapshot(currentSnapshot)) {
       hasChange = true;
     }
 
-    // 2. Atualização de Pico Prime (Evento) com suporte a rollover
-    const weekday = getSaoPauloWeekday(new Date(nowTs));
-   const winToday = getPrimeTimeWindow(currentSnapshot, weekday);
-    const currentMins = currentSnapshot.hour * 60 + currentSnapshot.minute;
+    // 2. Atualização de picos das janelas oficiais de evento
+    const activeEventWindows = getActiveEventWindowsForSnapshot(currentSnapshot);
 
-    // Caso A: Janela de hoje
-    if (winToday && currentMins >= (winToday.startHour * 60 + winToday.startMinute) && currentMins < (winToday.endHour * 60 + winToday.endMinute)) {
-  if (updatePrimePeaksInDoc(dayPeak, currentSnapshot)) hasChange = true;
-  if (updateEventWindowPeakInDoc(dayPeak, currentSnapshot, winToday)) hasChange = true;
-}
-    // Caso B: Janela de ontem (rollover)
-    else if (currentSnapshot.hour < 4) {
-  const yesterday = new Date(nowTs - 24 * 60 * 60 * 1000);
-  const winY = getPrimeTimeWindow({ timestamp: yesterday.getTime() }, getSaoPauloWeekday(yesterday));
-
-  const isMidnightWindow = winY && winY.startHour === 0 && winY.endHour === 1;
-  const isRolloverWindow = winY && winY.endHour > 24;
-
-  if (winY && (isMidnightWindow || isRolloverWindow)) {
-    const minsRollover = isMidnightWindow
-      ? currentSnapshot.hour * 60 + currentSnapshot.minute
-      : (currentSnapshot.hour + 24) * 60 + currentSnapshot.minute;
-
-    const startMinutes = winY.startHour * 60 + winY.startMinute;
-    const endMinutes = winY.endHour * 60 + winY.endMinute;
-
-    if (minsRollover >= startMinutes && minsRollover < endMinutes) {
-           const yParts = getSaoPauloParts(yesterday);
-           const yKey = `${yParts.year}-${String(yParts.month).padStart(2, '0')}-${String(yParts.day).padStart(2, '0')}`;
-           const yDoc = await PeakModel.findOne({ date: yKey });
-           if (yDoc) {
-             let changedYesterdayDoc = false;
-
-if (updatePrimePeaksInDoc(yDoc, currentSnapshot)) {
-  changedYesterdayDoc = true;
-}
-
-if (updateEventWindowPeakInDoc(yDoc, currentSnapshot, winY)) {
-  changedYesterdayDoc = true;
-}
-
-if (changedYesterdayDoc) {
-  yDoc.markModified('total');
-  yDoc.markModified('cities');
-  yDoc.markModified('eventWindows');
-  await yDoc.save();
-}
-           }
-        }
+    for (const activeWindow of activeEventWindows) {
+      if (activeWindow.targetDateKey === dateKey) {
+        if (updatePrimePeaksInDoc(dayPeak, currentSnapshot)) hasChange = true;
+        if (updateEventWindowPeakInDoc(dayPeak, currentSnapshot, activeWindow)) hasChange = true;
+        continue;
       }
+
+let targetDoc = await PeakModel.findOne({ date: activeWindow.targetDateKey });
+
+if (!targetDoc) {
+  targetDoc = new PeakModel({
+    date: activeWindow.targetDateKey,
+    total: { peak: 0, peakTime: null, peakAt: 0, primePeak: 0, primePeakTime: null, primePeakAt: 0 },
+    cities: {},
+    exact21h: { total: 0, cities: {} },
+    eventWindows: {},
+  });
+
+  for (const city of FIVEM_CITIES) {
+    targetDoc.cities[city.key] = {
+      name: city.name,
+      emoji: city.emoji,
+      peak: 0,
+      peakTime: null,
+      peakAt: 0,
+      primePeak: 0,
+      primePeakTime: null,
+      primePeakAt: 0,
+    };
+  }
+}
+
+let changedTargetDoc = false;
+
+if (updatePrimePeaksInDoc(targetDoc, currentSnapshot)) {
+  changedTargetDoc = true;
+}
+
+if (updateEventWindowPeakInDoc(targetDoc, currentSnapshot, activeWindow)) {
+  changedTargetDoc = true;
+}
+
+if (changedTargetDoc) {
+  targetDoc.markModified("total");
+  targetDoc.markModified("cities");
+  targetDoc.markModified("eventWindows");
+  await targetDoc.save();
+}
     }
 
     for (const cityConfig of FIVEM_CITIES) {
@@ -1158,14 +1203,47 @@ function updateEventWindowPeakInDoc(peakDoc, snapshot, window) {
     dateKey: peakDoc.date,
     weekKey: getWeekKeySP(new Date(snapshot.timestamp)),
     weekMode: window.weekMode,
+    cityPeaks: {},
   };
 
+  const cityPeaks = { ...(currentStored.cityPeaks || {}) };
+
+  for (const city of FIVEM_CITIES) {
+    const cityValue = snapshot.cities?.[city.key]?.clients || 0;
+    const storedCityPeak = cityPeaks[city.key] || {
+      peak: 0,
+      peakTime: null,
+      peakAt: 0,
+      cityKey: city.key,
+      cityName: city.name,
+      emoji: city.emoji,
+    };
+
+    if (cityValue > (storedCityPeak.peak || 0)) {
+      cityPeaks[city.key] = {
+        ...storedCityPeak,
+        peak: cityValue,
+        peakTime: snapshot.spTime,
+        peakAt: snapshot.timestamp,
+        cityKey: city.key,
+        cityName: city.name,
+        emoji: city.emoji,
+      };
+
+      changed = true;
+    }
+  }
+
   if (currentValue > (currentStored.peak || 0)) {
+    currentStored.peak = currentValue;
+    currentStored.peakTime = snapshot.spTime;
+    currentStored.peakAt = snapshot.timestamp;
+    changed = true;
+  }
+
+  if (changed) {
     peakDoc.eventWindows[window.eventKey] = {
       ...currentStored,
-      peak: currentValue,
-      peakTime: snapshot.spTime,
-      peakAt: snapshot.timestamp,
       label: window.label,
       cityKey: window.cityKey,
       cityName: window.cityName,
@@ -1173,9 +1251,8 @@ function updateEventWindowPeakInDoc(peakDoc, snapshot, window) {
       dateKey: peakDoc.date,
       weekKey: getWeekKeySP(new Date(snapshot.timestamp)),
       weekMode: window.weekMode,
+      cityPeaks,
     };
-
-    changed = true;
   }
 
   return changed;
@@ -1486,6 +1563,19 @@ function isValidSnapshot(snapshot) {
  return onlineCities > 0 && maxCapacity > 0;
 }
 
+function isReliableSnapshotForPersistence(snapshot) {
+ if (!snapshot) return false;
+
+ const cities = Object.values(snapshot.cities || {});
+ const onlineCities = cities.filter(c =>
+   c?.online === true &&
+   safeNumber(c?.clients, 0) > 0 &&
+   safeNumber(c?.maxClients, 0) > 0
+ ).length;
+
+ return onlineCities >= 2;
+}
+
 async function getLastValidSnapshot() {
  const candidates = await HistoryModel.find({
    totalMaxClients: { $gt: 0 },
@@ -1589,7 +1679,7 @@ async function createSafeCurrentSnapshot() {
  return {
    snapshot: merged.snapshot,
    snapshotForPersistence: currentSnapshot,
-   shouldPersist: isValidSnapshot(currentSnapshot),
+   shouldPersist: isReliableSnapshotForPersistence(currentSnapshot),
    usedFallback: merged.usedFallback,
  };
 }
@@ -1670,29 +1760,17 @@ function buildCityEventPanelDescription(cityKey, cityName, emoji, peaks, current
     const diffPreviousDay = calculateDiff(currentPeak, previousDayPeak);
     const diffLastWeek = calculateDiff(currentPeak, lastWeekPeak);
 
-    const cityRankingSameWindow = FIVEM_CITIES.map((city) => {
-      const cityEvent = FIVEM_EVENT_SCHEDULE.find((scheduledEvent) => {
-        return (
-          scheduledEvent.cityKey === city.key &&
-          scheduledEvent.weekday === event.weekday &&
-          scheduledEvent.startHour === event.startHour &&
-          scheduledEvent.startMinute === event.startMinute
-        );
-      });
+const cityRankingSameWindow = FIVEM_CITIES.map((city) => {
+  const cityWindowData = currentWeekWindow?.cityPeaks?.[city.key] || null;
+  const value = cityWindowData?.peak || 0;
 
-      const windowData = cityEvent
-        ? peaks[eventDateKey]?.eventWindows?.[cityEvent.eventKey]
-        : null;
-
-      const value = windowData?.peak || 0;
-
-      return {
-        city,
-        value,
-        time: windowData?.peakTime || "--:--",
-        diffAgainstMain: calculateDiff(value, currentPeak),
-      };
-    }).sort((a, b) => b.value - a.value);
+  return {
+    city,
+    value,
+    time: cityWindowData?.peakTime || "--:--",
+    diffAgainstMain: calculateDiff(value, currentPeak),
+  };
+}).sort((a, b) => b.value - a.value);
 
     const cityRankingText = cityRankingSameWindow
       .map((item, index) => {
@@ -1729,7 +1807,7 @@ return (
 
   return (
     `# ${emoji} PAINEL DA BR ${cityName.toUpperCase()}\n\n` +
-    `📊 **Objetivo:** comparar o pico da semana atual com o dia anterior, semana passada e outras BRs no mesmo horário.\n\n` +
+    `📊 **Objetivo:** comparar o maior público salvo no horário oficial do evento contra o dia anterior, semana passada e outras BRs no mesmo horário.\n\n` +
     lines.join(`\n\n${UI.SEP}\n\n`)
   );
 }
@@ -2455,14 +2533,15 @@ if (!safeSnapshot.snapshot) {
 }
 
 const currentSnapshot = safeSnapshot.snapshot;
+const persistenceSnapshot = safeSnapshot.snapshotForPersistence || currentSnapshot;
 
 let hasNewPeak = false;
 
 if (safeSnapshot.shouldPersist) {
- await addSnapshot(currentSnapshot);
- hasNewPeak = await updateDailyPeaks(currentSnapshot);
+ await addSnapshot(persistenceSnapshot);
+ hasNewPeak = await updateDailyPeaks(persistenceSnapshot);
 } else {
- console.warn("[FIVEM_RETENTION] Snapshot parcial/fallback usado apenas para exibição. Histórico e picos não foram atualizados.");
+ console.warn("[FIVEM_RETENTION] Snapshot inválido usado apenas para exibição. Histórico e picos não foram atualizados.");
 }
 
 // 🚀 Coleta e edita o painel silenciosamente a cada 2min:
@@ -2601,7 +2680,7 @@ const intervalId = setInterval(async () => {
    }
  }, FIVEM_PANEL_REFRESH_INTERVAL_MS);
 
- FIVEM_STATE.set(channel.id, {
+FIVEM_STATE.set(channel.id, {
    ...existing,
    intervalId,
    messageId: existing?.messageId || null,
