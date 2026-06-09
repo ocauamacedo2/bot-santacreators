@@ -27,7 +27,11 @@ const __dirname = path.dirname(__filename);
 // ✅ STATE compartilhado com o módulo de lembretes
 const PODERES_STATE_PATH = path.resolve(__dirname, "../data/poderes_reminder_state.json");
 
-// ✅ COOLDOWN: 12 horas sem registrar de novo
+// ✅ STATE exclusivo do cooldown do Registro de Poderes
+// Evita conflito com outros sistemas que também escrevem em poderes_reminder_state.json
+const REGPOD_COOLDOWN_STATE_PATH = path.resolve(__dirname, "../data/registropoderes_cooldown_state.json");
+
+// ✅ COOLDOWN: 8 horas sem registrar de novo
 const REGPOD_COOLDOWN_MS = 8 * 60 * 60 * 1000;
 
 // 🔒 MUTEX GLOBAL PARA O ARQUIVO (Mesmo nome do outro arquivo para compartilhar no mesmo processo)
@@ -68,6 +72,40 @@ function writePoderesState(state) {
     fs.writeFileSync(tmp, JSON.stringify(state, null, 2), "utf8");
     fs.renameSync(tmp, PODERES_STATE_PATH);
   } catch {}
+}
+
+function readRegpodCooldownState() {
+  try {
+    const raw = fs.readFileSync(REGPOD_COOLDOWN_STATE_PATH, "utf8");
+    const json = JSON.parse(raw);
+    if (!json || typeof json !== "object") return { users: {} };
+    if (!json.users || typeof json.users !== "object") json.users = {};
+    return json;
+  } catch {
+    return { users: {} };
+  }
+}
+
+function writeRegpodCooldownState(state) {
+  try {
+    const dir = path.dirname(REGPOD_COOLDOWN_STATE_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+    const tmp = REGPOD_COOLDOWN_STATE_PATH + ".tmp";
+    fs.writeFileSync(tmp, JSON.stringify(state, null, 2), "utf8");
+    fs.renameSync(tmp, REGPOD_COOLDOWN_STATE_PATH);
+  } catch {}
+}
+
+function markRegpodCooldown(userId, at = Date.now()) {
+  return withPoderesLock(() => {
+    const state = readRegpodCooldownState();
+    if (!state.users[userId]) state.users[userId] = {};
+
+    state.users[userId].lastRegisterAt = at;
+
+    writeRegpodCooldownState(state);
+  });
 }
 
 // ✅ Atualiza estado com LOCK
@@ -405,11 +443,11 @@ if (interaction.isButton() && interaction.customId === "abrir_registro") {
       .catch(() => {});
   }
 
-// ✅ COOLDOWN 12h: owner/bypass ignora cooldown
+// ✅ COOLDOWN 8h: owner/bypass ignora cooldown
 if (!podeIgnorarCooldown(interaction.user.id)) {
   try {
-    const stCd = readPoderesState();
-    const last = Number(stCd?.users?.[interaction.user.id]?.lastRegisterAt || 0);
+const stCd = readRegpodCooldownState();
+const last = Number(stCd?.users?.[interaction.user.id]?.lastRegisterAt || 0);
     if (last > 0) {
       const now = Date.now();
       const nextAt = last + REGPOD_COOLDOWN_MS;
@@ -489,10 +527,10 @@ if (!podeIgnorarCooldown(interaction.user.id)) {
       .catch(() => {});
   }
 
-// ✅ COOLDOWN 12h: segurança, mas owner/bypass ignora cooldown
+// ✅ COOLDOWN 8h: segurança, mas owner/bypass ignora cooldown
 if (!podeIgnorarCooldown(interaction.user.id)) {
   try {
-    const stCd = readPoderesState();
+    const stCd = readRegpodCooldownState();
     const last = Number(stCd?.users?.[interaction.user.id]?.lastRegisterAt || 0);
     if (last > 0) {
       const now = Date.now();
@@ -507,9 +545,9 @@ if (!podeIgnorarCooldown(interaction.user.id)) {
   } catch {}
 }
 
-  // ✅ Pega o timestamp anterior ANTES de marcar o novo
-  const stCd = readPoderesState();
-  const oldLastAt = Number(stCd?.users?.[interaction.user.id]?.lastRegisterAt || 0);
+// ✅ Pega o timestamp anterior ANTES de marcar o novo
+const stCd = readRegpodCooldownState();
+const oldLastAt = Number(stCd?.users?.[interaction.user.id]?.lastRegisterAt || 0);
 
   const canal = await client.channels.fetch(CANAL_REGISTRO_ID).catch(() => null);
   if (!canal) {
@@ -556,7 +594,10 @@ if (registroEnviado) {
 // ✅ NOVO: salva “último registro” (pra lembretes 24h/48h funcionarem)
 // Usa o LOCK para garantir que a escrita não seja sobrescrita pelo loop de lembretes
 try {
-  await markUserRegistered(user.id, Date.now());
+  const nowRegister = Date.now();
+
+  await markUserRegistered(user.id, nowRegister);
+  await markRegpodCooldown(user.id, nowRegister);
 } catch (e) {
   console.error("Erro ao salvar registro de poderes:", e);
 }
