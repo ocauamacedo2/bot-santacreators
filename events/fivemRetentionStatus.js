@@ -1858,35 +1858,48 @@ return formatOnlyCurrentLine(
    .setFooter({ text: `Análise de Retenção Dinâmica • Ref: ${currentSnapshot.spTime}` });
  embeds.push(comparisonEmbed);
 const currentWeekday = getSaoPauloWeekday(new Date(currentSnapshot.timestamp));
-const cronogramaState = loadCronogramaStateForFivem();
 
-const cronogramaEvents = FIVEM_EVENT_SCHEDULE.filter((event) => {
-  const todayWindow = peaks[todayKey]?.eventWindows?.[event.eventKey];
-  const hasPeakToday = (todayWindow?.peak || 0) > 0;
-  const isEventFromToday = event.weekday === currentWeekday;
-  const isEventHappeningNow = isCurrentTimeInsideEvent(currentSnapshot, event);
-  const isInCronograma = isFivemEventInCronograma(event, cronogramaState);
+const cityPanelConfigs = [
+  { key: "nobre", name: "Nobre", emoji: "👑", title: "👑 PAINEL NOBRE — EVENTOS 21:00 / 00:00 / 23:30 / 01:00" },
+  { key: "grande", name: "Grande", emoji: "🌆", title: "🌆 PAINEL GRANDE — EVENTOS 23:30" },
+  { key: "maresia", name: "Maresia", emoji: "🌊", title: "🌊 PAINEL MARESIA — EVENTOS 21:00 / 23:30" },
+  { key: "santa", name: "Santa", emoji: "🏙️", title: "🏙️ PAINEL SANTA — EVENTOS 21:00" },
+];
 
-  return isInCronograma || isEventFromToday || hasPeakToday || isEventHappeningNow;
-});
+for (const cityPanel of cityPanelConfigs) {
+  const cityEvents = FIVEM_EVENT_SCHEDULE.filter((event) => {
+    if (event.cityKey !== cityPanel.key) return false;
 
-const uniqueCronogramaEvents = [...new Map(cronogramaEvents.map((event) => [event.eventKey, event])).values()];
+    const todayWindow = peaks[todayKey]?.eventWindows?.[event.eventKey];
+    const hasPeakToday = (todayWindow?.peak || 0) > 0;
+    const isEventFromToday = event.weekday === currentWeekday;
+    const isEventHappeningNow = isCurrentTimeInsideEvent(currentSnapshot, event);
 
-const cronogramaEventsEmbed = new EmbedBuilder()
-  .setColor(baseColor)
-  .setTitle("🎯 EVENTOS DO CRONOGRAMA — RESUMO DE RETENÇÃO")
-  .setDescription(
-    `📌 **Resumo limpo dos eventos ativos/relevantes do cronograma.**\n` +
-    `📅 **Hoje:** \`${todayKey}\`\n` +
-    `📆 **Ontem:** \`${yesterdayKey}\`\n` +
-    `📅 **7 dias atrás:** \`${lastWeekKey}\`\n\n` +
-    buildCronogramaEventsCompactDescription(uniqueCronogramaEvents, peaks, currentSnapshot, cronogramaState)
-  )
-  .setFooter({
-    text: `Eventos do cronograma • Atualizado às ${currentSnapshot.spTime}`,
+    return isEventFromToday || hasPeakToday || isEventHappeningNow;
   });
 
-embeds.push(cronogramaEventsEmbed);
+  const uniqueCityEvents = [...new Map(cityEvents.map((event) => [event.eventKey, event])).values()];
+
+  for (const event of uniqueCityEvents) {
+    const description = buildCityEventPanelDescription(
+      cityPanel.key,
+      cityPanel.name,
+      cityPanel.emoji,
+      peaks,
+      currentSnapshot,
+      event
+    );
+
+    const cityEmbed = new EmbedBuilder()
+      .setColor(baseColor)
+      .setTitle(`${cityPanel.emoji} BR ${cityPanel.name} — ${getFivemEventDisplayName(event, loadCronogramaStateForFivem())} • ${formatEventWeekdayLabel(event)} • ${formatEventWindowLabel(event)}`)
+      .setFooter({
+        text: `Comparação por cidade • ${formatEventWeekdayLabel(event)} • Ontem + 7 dias atrás • Atualizado às ${currentSnapshot.spTime}`,
+      });
+
+    pushSplitDescriptionEmbeds(embeds, cityEmbed, description);
+  }
+}
  // 5. PAINEL — RETENÇÃO DAS 21:00 (EM PONTO)
  const weekday = getSaoPauloWeekday(new Date(currentSnapshot.timestamp));
  const isRelevant21hDay = (weekday >= 1 && weekday <= 6);
