@@ -636,6 +636,23 @@ function VIP_normalizarTipoPremiacao(texto) {
   return "Dinheiro";
 }
 
+function VIP_formatTipoBonito(tipo) {
+  const t = String(tipo || "").trim();
+
+  if (t === "Pass") return "🎟️ **Tipo:** `Rolepass`";
+  if (t === "Dinheiro") return "💰 **Tipo:** `Dinheiro`";
+  if (t === "VIP Platinum") return "💎 **Tipo:** `VIP Platinum`";
+  if (t === "VIP Black") return "🖤 **Tipo:** `VIP Black`";
+  if (t === "VIP Bronze") return "🥉 **Tipo:** `VIP Bronze`";
+  if (t === "VIP Prata") return "🥈 **Tipo:** `VIP Prata`";
+  if (t === "VIP Ouro") return "🥇 **Tipo:** `VIP Ouro`";
+  if (t === "VIP Staff") return "🛡️ **Tipo:** `VIP Staff`";
+  if (t === "VIP Lancamento") return "🚀 **Tipo:** `VIP Lançamento`";
+  if (t === "VIP Evento") return "🎁 **Tipo:** `VIP Evento`";
+
+  return `🎁 **Tipo:** \`${t || "Não identificado"}\``;
+}
+
 function VIP_extractDiscordMessageUrl(texto) {
   const match = String(texto || "").match(/https?:\/\/(?:canary\.|ptb\.)?discord(?:app)?\.com\/channels\/(\d{10,25})\/(\d{10,25})\/(\d{10,25})/i);
   if (!match) return null;
@@ -760,12 +777,22 @@ function VIP_extrairQuantidadePremiacao(texto) {
   return quantidade || null;
 }
 
-function VIP_formatarPremiacaoInteligente(texto, tipoForcado = null) {
-  const tipo = VIP_normalizarTipoPremiacao(tipoForcado || texto);
-  const tipoBonito = VIP_formatTipoBonito(tipo);
-  const quantidade = VIP_extrairQuantidadePremiacao(texto);
+function VIP_limparPremiacaoFormatada(texto) {
+  return String(texto || "")
+    .replace(/^[^\n]*\*\*Tipo:\*\*\s*`[^`]+`\s*/i, "")
+    .replace(/\*\*Quantidade:\*\*\s*`[^`]+`\s*/gi, "")
+    .replace(/\*\*Item:\*\*\s*`[^`]+`\s*/gi, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
 
-  const bruto = String(texto || "—").trim();
+function VIP_formatarPremiacaoInteligente(texto, tipoForcado = null) {
+  const textoLimpo = VIP_limparPremiacaoFormatada(texto);
+  const tipo = VIP_normalizarTipoPremiacao(tipoForcado || textoLimpo);
+  const tipoBonito = VIP_formatTipoBonito(tipo);
+  const quantidade = VIP_extrairQuantidadePremiacao(textoLimpo);
+
+  const bruto = String(textoLimpo || "—").trim();
 
   if (quantidade && tipo !== "Dinheiro") {
     return `${tipoBonito}\n\n**Quantidade:** \`${quantidade}\`\n**Item:** \`${tipo === "Pass" ? "Rolepass" : tipo}\``;
@@ -1317,7 +1344,9 @@ if (pagamentoResolvido?.ok) {
   if (pagamentoResolvido.info?.premiacao) premiacao = pagamentoResolvido.info.premiacao;
 }
 
-premiacao = VIP_formatarPremiacaoInteligente(premiacao, tipo);
+// A premiação fica bruta aqui.
+// O formato bonito é aplicado dentro de VIP_buildRegistroEmbed,
+// evitando duplicar "Tipo" no campo de premiação.
 
       const guild = i.guild;
       const menuCh = await guild.channels.fetch(VIP_MENU_CHANNEL_ID).catch(() => null);
