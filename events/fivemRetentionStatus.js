@@ -1695,11 +1695,11 @@ function buildCityEventPanelDescription(cityKey, cityName, emoji, peaks, current
       .map((item, index) => {
         const medal = index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : `${index + 1}.`;
 
-        return (
-          `${medal} ${item.city.emoji} **BR ${item.city.name}**\n` +
-          `> 👥 Pico na janela: \`${formatNumber(item.value)}\` às \`${item.time}\`\n` +
-          `> 📌 Diferença contra BR ${cityName}: ${item.city.key === cityKey ? "`base principal`" : formatDiff(item.diffAgainstMain)}`
-        );
+return (
+  `${medal} ${item.city.emoji} **BR ${item.city.name}**\n` +
+  `> 👥 **Maior público registrado nesse horário:** \`${formatNumber(item.value)}\` às \`${item.time}\`\n` +
+  `> 📌 **Diferença contra BR ${cityName}:** ${item.city.key === cityKey ? "`cidade principal`" : formatDiff(item.diffAgainstMain)}`
+);
       })
       .join("\n\n");
 
@@ -2580,7 +2580,7 @@ async function ensureFivemRetentionAutoLoop(client, options = {}) {
  }
 const intervalId = setInterval(async () => {
    try {
-     const edited = await editPanel(channel, { auto: true });
+     const edited = await editPanel(channel, { auto: true, force: true });
 
      if (!edited) {
        await ensureFivemPanelExists(channel, client);
@@ -2594,7 +2594,7 @@ const intervalId = setInterval(async () => {
        console.error("[FIVEM_RETENTION] Falha ao tentar recuperar painel automaticamente:", recoveryError);
      }
    }
- }, FIVEM_REFRESH_INTERVAL_MS);
+ }, FIVEM_PANEL_REFRESH_INTERVAL_MS);
 
  FIVEM_STATE.set(channel.id, {
    ...existing,
