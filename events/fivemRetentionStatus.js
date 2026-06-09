@@ -552,6 +552,43 @@ function getEmbedCharSize(embed) {
  return total;
 }
 
+function splitTextIntoDiscordChunks(text, maxLength = 3900) {
+ const source = String(text || "");
+ const chunks = [];
+
+ for (let i = 0; i < source.length; i += maxLength) {
+   chunks.push(source.slice(i, i + maxLength));
+ }
+
+ return chunks.length ? chunks : [""];
+}
+
+function normalizeEmbedsForDiscord(embeds) {
+ const normalized = [];
+
+ for (const embed of embeds) {
+   const data = typeof embed?.toJSON === "function" ? embed.toJSON() : embed;
+   const description = String(data?.description || "");
+
+   if (description.length <= 4096) {
+     normalized.push(embed);
+     continue;
+   }
+
+   const chunks = splitTextIntoDiscordChunks(description, 3900);
+
+   chunks.forEach((chunk, index) => {
+     const cloned = new EmbedBuilder(data)
+       .setDescription(chunk)
+       .setTitle(`${data.title || "Painel"} • Parte ${index + 1}/${chunks.length}`);
+
+     normalized.push(cloned);
+   });
+ }
+
+ return normalized;
+}
+
 function packEmbedsForDiscord(embeds) {
  const groups = [];
  let currentGroup = [];
@@ -1534,6 +1571,22 @@ function buildCityEventPanelDescription(cityKey, cityName, emoji, peaks, current
   );
 }
 
+function pushSplitDescriptionEmbeds(embeds, baseEmbed, description, maxLength = 3900) {
+ const chunks = splitTextIntoDiscordChunks(description, maxLength);
+ const baseData = typeof baseEmbed?.toJSON === "function" ? baseEmbed.toJSON() : baseEmbed;
+
+ chunks.forEach((chunk, index) => {
+   const embed = new EmbedBuilder(baseData)
+     .setDescription(chunk);
+
+   if (chunks.length > 1) {
+     embed.setTitle(`${baseData.title || "Painel"} • Parte ${index + 1}/${chunks.length}`);
+   }
+
+   embeds.push(embed);
+ });
+}
+
 // ---------- EMBED BUILDER ----------
 async function buildEmbeds(client, currentSnapshot) {
  const embeds = [];
@@ -1671,24 +1724,23 @@ for (const cityPanel of cityPanelConfigs) {
   const cityEvents = FIVEM_EVENT_SCHEDULE.filter((event) => event.cityKey === cityPanel.key);
 
   for (const event of cityEvents) {
+    const description = buildCityEventPanelDescription(
+      cityPanel.key,
+      cityPanel.name,
+      cityPanel.emoji,
+      peaks,
+      currentSnapshot,
+      event
+    );
+
     const cityEmbed = new EmbedBuilder()
       .setColor(baseColor)
       .setTitle(`${cityPanel.emoji} BR ${cityPanel.name} — ${event.category} • ${formatEventWindowLabel(event)}`)
-      .setDescription(
-        buildCityEventPanelDescription(
-          cityPanel.key,
-          cityPanel.name,
-          cityPanel.emoji,
-          peaks,
-          currentSnapshot,
-          event
-        )
-      )
       .setFooter({
         text: `Comparação por cidade • Ontem + 7 dias atrás • Atualizado às ${currentSnapshot.spTime}`,
       });
 
-    embeds.push(cityEmbed);
+    pushSplitDescriptionEmbeds(embeds, cityEmbed, description);
   }
 }
  // 5. PAINEL — RETENÇÃO DAS 21:00 (EM PONTO)
@@ -2170,7 +2222,8 @@ if (safeSnapshot.shouldPersist) {
 
 const { embeds, row } = await buildEmbeds(channel.client, currentSnapshot);
    try {
-  const embedGroups = packEmbedsForDiscord(embeds);
+const safeEmbeds = normalizeEmbedsForDiscord(embeds);
+const embedGroups = packEmbedsForDiscord(safeEmbeds);
 const mainEmbeds = markEmbedGroupWithFooterTag(embedGroups[0] || [], FIVEM_RANK_MARKER_TAG);
 const continuationGroups = embedGroups.slice(1);
 
@@ -2247,7 +2300,8 @@ if (!options.force && !hasNewPeak && !is21h && !isPanelTimedUpdate) {
 
  const { embeds, row } = await buildEmbeds(channel.client, currentSnapshot);
  try {
-   const embedGroups = packEmbedsForDiscord(embeds);
+  const safeEmbeds = normalizeEmbedsForDiscord(embeds);
+const embedGroups = packEmbedsForDiscord(safeEmbeds);
 const mainEmbeds = markEmbedGroupWithFooterTag(embedGroups[0] || [], FIVEM_RANK_MARKER_TAG);
 const continuationGroups = embedGroups.slice(1);
 
@@ -2296,7 +2350,9 @@ async function recreateFivemRetentionPanel(channel, client, options = {}) {
  }
 
  // Valida os embeds ANTES de apagar qualquer coisa.
- await buildEmbeds(client, safeSnapshot.snapshot);
+ const validationPayload = await buildEmbeds(client, safeSnapshot.snapshot);
+ const safeEmbeds = normalizeEmbedsForDiscord(validationPayload.embeds);
+ packEmbedsForDiscord(safeEmbeds);
 
  let deletedCount = 0;
 

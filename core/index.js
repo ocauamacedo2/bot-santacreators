@@ -216,8 +216,9 @@ import {
 import {
   fivemRetentionStatusOnReady,
   fivemRetentionStatusHandleInteraction,
+  fivemRetentionStatusHandleMessage,
   fivemRetentionStatusOnChannelDelete,
-} from "../events/fivemRetentionStatus.js";
+} from "./events/fivemRetentionStatus.js";
 
 
 ///lembrete evenntos checklist 
@@ -597,6 +598,10 @@ const setupEventHandlers = () => {
       if (isCommand) {
         const args = content.slice(prefix.length).trim().split(/\s+/);
         const cmd = args.shift().toLowerCase();
+
+        // ✅ FiveM Retention precisa vir antes do roteador central,
+        // porque é um comando direto do módulo e não estava sendo chamado.
+        if (await fivemRetentionStatusHandleMessage(message, client)) return;
 
         // 🚀 ROTEADOR CENTRALIZADO: Tenta executar via messageCreateHandler primeiro.
         // Se o handler retornar true, significa que o comando foi processado e paramos aqui.
