@@ -1443,17 +1443,19 @@ function formatOnlyCurrentLine(label, current, max, pct, index, yesterday = 0, c
 
   const statusEmoji = getStatusEmojiByYesterday(current, yesterday);
 
-  return `${medal} **BR ${label.padEnd(8, " ")}** \n> \`${formatNumber(current)} / ${formatNumber(max)}\` players • **${pct}% da capacidade da cidade ocupada** ${statusEmoji}\n> Fonte: \`${city?.source || "desconhecida"}\``;
+return `${medal} **BR ${label.padEnd(8, " ")}**\n` +
+  `> 👥 **Online agora:** \`${formatNumber(current)} / ${formatNumber(max)}\` players\n` +
+  `> 📊 **Ocupação:** \`${pct}%\` da capacidade ${statusEmoji}`;
 }
 
 function buildCityEventPanelDescription(cityKey, cityName, emoji, peaks, currentSnapshot) {
   const cityEvents = FIVEM_EVENT_SCHEDULE.filter((event) => event.cityKey === cityKey);
 
-  const lines = cityEvents.map((event) => {
-    const todayKey = currentSnapshot.spDate;
-    const yesterdayKey = getDateKeyDaysAgoFromSnapshot(currentSnapshot, 1);
-    const lastWeekKey = getDateKeyDaysAgoFromSnapshot(currentSnapshot, 7);
+  const todayKey = currentSnapshot.spDate;
+  const yesterdayKey = getDateKeyDaysAgoFromSnapshot(currentSnapshot, 1);
+  const lastWeekKey = getDateKeyDaysAgoFromSnapshot(currentSnapshot, 7);
 
+  const lines = cityEvents.map((event) => {
     const todayWindow = peaks[todayKey]?.eventWindows?.[event.eventKey];
     const yesterdayWindow = peaks[yesterdayKey]?.eventWindows?.[event.eventKey];
     const lastWeekWindow = peaks[lastWeekKey]?.eventWindows?.[event.eventKey];
@@ -1462,8 +1464,11 @@ function buildCityEventPanelDescription(cityKey, cityName, emoji, peaks, current
     const yesterdayPeak = yesterdayWindow?.peak || 0;
     const lastWeekPeak = lastWeekWindow?.peak || 0;
 
-    const sameTimeCities = FIVEM_CITIES.map((city) => {
-      const sameTimeCityEvent = FIVEM_EVENT_SCHEDULE.find((scheduledEvent) => {
+    const diffYesterday = calculateDiff(currentPeak, yesterdayPeak);
+    const diffLastWeek = calculateDiff(currentPeak, lastWeekPeak);
+
+    const cityRankingSameWindow = FIVEM_CITIES.map((city) => {
+      const cityEvent = FIVEM_EVENT_SCHEDULE.find((scheduledEvent) => {
         return (
           scheduledEvent.cityKey === city.key &&
           scheduledEvent.weekday === event.weekday &&
@@ -1472,42 +1477,58 @@ function buildCityEventPanelDescription(cityKey, cityName, emoji, peaks, current
         );
       });
 
-      if (!sameTimeCityEvent) return null;
+      const windowData = cityEvent
+        ? peaks[todayKey]?.eventWindows?.[cityEvent.eventKey]
+        : null;
 
-      const sameWindow = peaks[todayKey]?.eventWindows?.[sameTimeCityEvent.eventKey];
+      const value = windowData?.peak || 0;
 
       return {
         city,
-        peak: sameWindow?.peak || 0,
-        time: sameWindow?.peakTime || "--:--",
+        value,
+        time: windowData?.peakTime || "--:--",
+        diffAgainstMain: calculateDiff(value, currentPeak),
       };
-    }).filter(Boolean);
+    }).sort((a, b) => b.value - a.value);
 
-    const sameTimeComparison = sameTimeCities.length
-      ? sameTimeCities
-          .map((item) => {
-            const diff = calculateDiff(currentPeak, item.peak);
-            return `> ${item.city.emoji} **${item.city.name}:** \`${formatNumber(item.peak)}\` às \`${item.time}\` • ${formatDiff(diff)}`;
-          })
-          .join("\n")
-      : "> Sem outra cidade com evento no mesmo horário hoje.";
+    const cityRankingText = cityRankingSameWindow
+      .map((item, index) => {
+        const medal = index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : `${index + 1}.`;
+
+        return (
+          `${medal} ${item.city.emoji} **BR ${item.city.name}**\n` +
+          `> 👥 Pico na janela: \`${formatNumber(item.value)}\` às \`${item.time}\`\n` +
+          `> 📌 Diferença contra BR ${cityName}: ${item.city.key === cityKey ? "`base principal`" : formatDiff(item.diffAgainstMain)}`
+        );
+      })
+      .join("\n\n");
 
     return (
-      `### ${emoji} ${event.category} — ${formatEventWindowLabel(event)}\n` +
-      `**Pico Atual:** \`${formatNumber(currentPeak)}\` às \`${todayWindow?.peakTime || "--:--"}\`\n` +
-      `**Pico Ontem:** \`${formatNumber(yesterdayPeak)}\` às \`${yesterdayWindow?.peakTime || "--:--"}\`\n` +
-      `**Diferença vs Ontem:** ${formatDiff(calculateDiff(currentPeak, yesterdayPeak))}\n` +
-      `**Pico 7 Dias Atrás:** \`${formatNumber(lastWeekPeak)}\` às \`${lastWeekWindow?.peakTime || "--:--"}\`\n` +
-      `**Diferença vs 7 Dias:** ${formatDiff(calculateDiff(currentPeak, lastWeekPeak))}\n\n` +
-      `**Comparação com cidades no mesmo horário:**\n${sameTimeComparison}`
+      `## ${emoji} ${event.category.toUpperCase()} • ${formatEventWindowLabel(event)}\n` +
+      `📅 **Data analisada:** \`${todayKey}\`\n` +
+      `🏙️ **Cidade do evento:** ${emoji} **BR ${cityName}**\n` +
+      `🕒 **Janela oficial:** \`${formatEventWindowLabel(event)}\`\n\n` +
+
+      `### 📌 Resultado da própria cidade\n` +
+      `> 👥 **Pico atual:** \`${formatNumber(currentPeak)}\` às \`${todayWindow?.peakTime || "--:--"}\`\n` +
+      `> 📆 **Ontem no mesmo horário:** \`${formatNumber(yesterdayPeak)}\` às \`${yesterdayWindow?.peakTime || "--:--"}\`\n` +
+      `> 📊 **Diferença vs ontem:** ${formatDiff(diffYesterday)}\n\n` +
+
+      `> 📅 **Semana passada no mesmo horário:** \`${formatNumber(lastWeekPeak)}\` às \`${lastWeekWindow?.peakTime || "--:--"}\`\n` +
+      `> 📈 **Diferença vs 7 dias:** ${formatDiff(diffLastWeek)}\n\n` +
+
+      `### 🏆 Comparação com cidades no mesmo horário\n` +
+      `${cityRankingText || "> Sem comparação disponível para essa janela."}`
     );
   });
 
   return (
-    `**Cidade:** ${emoji} **${cityName}**\n` +
-    `**Leitura:** pico salvo dentro da janela exata de 1 hora do evento.\n` +
-    `**Atualização de dados:** coleta a cada 2 minutos, painel sem flood.\n\n` +
-    lines.join(`\n\n${UI.DIVIDER}\n\n`)
+    `# ${emoji} PAINEL DA BR ${cityName.toUpperCase()}\n\n` +
+    `📊 **Objetivo:** comparar a cidade com ela mesma e com outras BRs no mesmo horário.\n` +
+    `📅 **Hoje:** \`${todayKey}\`\n` +
+    `📆 **Ontem:** \`${yesterdayKey}\`\n` +
+    `📅 **7 dias atrás:** \`${lastWeekKey}\`\n\n` +
+    lines.join(`\n\n${UI.SEP}\n\n`)
   );
 }
 
@@ -1800,19 +1821,40 @@ for (const item of focusItems) {
   const diffWeek = calculateDiff(currentPeak, previousPeak);
   const diffSameWindow = calculateDiff(currentPeak, previousSameWindowPeak);
 
-  focusFields.push({
-    name: `${item.emoji} BR ${item.cityName}`,
-    value:
-      `**Janela exata:** \`${item.label}\`\n` +
-      `**Pico salvo:** \`${formatNumber(currentPeak)}\` às \`${currentTime}\`\n` +
-      `**Base semana passada:** \`${formatNumber(previousPeak)}\`${comparison.oppositeEventKey ? " *(horário alternado)*" : ""}\n` +
-      `**Resultado vs semana passada:** ${currentPeak > 0 ? formatDiff(diffWeek) : "🟠 ➖ 0 (aguardando coleta dessa janela)"}\n` +
-      `${comparison.oppositeEventKey ? `**Base mesma janela 14d:** \`${formatNumber(previousSameWindowPeak)}\`\n**Resultado vs mesma janela:** ${currentPeak > 0 ? formatDiff(diffSameWindow) : "🟠 ➖ 0 (aguardando coleta dessa janela)"}` : ""}`,
-    inline: false
-  });
+const eventDateLabel = eventDateKey;
+const weekAgoDateLabel = weekAgoDateKey;
+const twoWeeksAgoDateLabel = twoWeeksAgoDateKey;
+
+focusFields.push({
+  name: `━━━━━━━━━━━━━━━━━━━━\n${item.emoji} BR ${item.cityName} • ${item.category}`,
+  value:
+    `📅 **Data do evento:** \`${eventDateLabel}\`\n` +
+    `🕒 **Horário oficial:** \`${item.label}\`\n` +
+    `🏙️ **Cidade analisada:** ${item.emoji} **BR ${item.cityName}**\n\n` +
+
+    `📌 **Pico salvo nessa janela:**\n` +
+    `> 👥 \`${formatNumber(currentPeak)}\` players às \`${currentTime}\`\n\n` +
+
+    `📊 **Comparação com semana passada:**\n` +
+    `> 📅 Base: \`${weekAgoDateLabel}\`\n` +
+    `> 👥 Players base: \`${formatNumber(previousPeak)}\`${comparison.oppositeEventKey ? " *(horário alternado da semana)*" : ""}\n` +
+    `> 📈 Resultado: ${currentPeak > 0 ? formatDiff(diffWeek) : "🟠 ➖ aguardando coleta dessa janela"}\n\n` +
+
+    `${comparison.oppositeEventKey ? 
+      `📊 **Comparação com mesma janela de 14 dias:**\n` +
+      `> 📅 Base: \`${twoWeeksAgoDateLabel}\`\n` +
+      `> 👥 Players base: \`${formatNumber(previousSameWindowPeak)}\`\n` +
+      `> 📈 Resultado: ${currentPeak > 0 ? formatDiff(diffSameWindow) : "🟠 ➖ aguardando coleta dessa janela"}\n\n`
+      : ""
+    }` +
+
+    `✅ **Leitura rápida:**\n` +
+    `> ${currentPeak <= 0 ? "Ainda não houve coleta válida nessa janela." : diffWeek.diff > 0 ? "Resultado positivo contra a base da semana passada." : diffWeek.diff < 0 ? "Resultado abaixo da base da semana passada." : "Resultado estável contra a base da semana passada."}`,
+  inline: false
+});
 }
 
-const focusFieldsPerEmbed = 3;
+const focusFieldsPerEmbed = 2;
 
 for (let i = 0; i < focusFields.length; i += focusFieldsPerEmbed) {
   const partNumber = Math.floor(i / focusFieldsPerEmbed) + 1;
@@ -1820,8 +1862,12 @@ for (let i = 0; i < focusFields.length; i += focusFieldsPerEmbed) {
 
   const focusEmbed = new EmbedBuilder()
     .setColor(baseColor)
-    .setTitle(`🎯 RETENÇÃO DO EVENTO — CIDADES FOCADAS${useYesterdayFocus ? " (Resumo de Ontem)" : ""} • Parte ${partNumber}/${totalParts}`)
-    .setDescription(partNumber === 1 ? focusHeader : `Continuação da análise por janela exata.\n\n`)
+   .setTitle(`🎯 ANÁLISE DE EVENTOS POR JANELA • Parte ${partNumber}/${totalParts}`)
+.setDescription(
+  partNumber === 1
+    ? focusHeader
+    : `📌 **Continuação da análise por janela oficial.**\n\n`
+)
     .addFields(focusFields.slice(i, i + focusFieldsPerEmbed))
     .setFooter({
       text: `Análise por janela exata • Sincronizado às ${currentSnapshot.spTime}`,
