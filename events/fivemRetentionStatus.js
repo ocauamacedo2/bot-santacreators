@@ -934,6 +934,25 @@ function getDateKeyDaysAgoFromSnapshot(currentSnapshot, days) {
  return `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
 }
 
+function getDateKeyFromWeekdayInCurrentWeek(currentSnapshot, weekday) {
+ const weekStartKey = getWeekKeySP(new Date(currentSnapshot.timestamp));
+ const base = new Date(`${weekStartKey}T12:00:00-03:00`);
+ base.setDate(base.getDate() + Number(weekday || 0));
+
+ const parts = getSaoPauloParts(base);
+
+ return `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
+}
+
+function getDateKeyOffsetFromDateKey(dateKey, days) {
+ const base = new Date(`${dateKey}T12:00:00-03:00`);
+ base.setDate(base.getDate() + Number(days || 0));
+
+ const parts = getSaoPauloParts(base);
+
+ return `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
+}
+
 function isPrimeTimeSnapshot(snapshot) {
   const window = getPrimeTimeWindow(snapshot);
   if (!window) return false;
@@ -1632,20 +1651,20 @@ function buildCityEventPanelDescription(cityKey, cityName, emoji, peaks, current
     ? [onlyEvent]
     : FIVEM_EVENT_SCHEDULE.filter((event) => event.cityKey === cityKey);
 
-  const todayKey = currentSnapshot.spDate;
-  const yesterdayKey = getDateKeyDaysAgoFromSnapshot(currentSnapshot, 1);
-  const lastWeekKey = getDateKeyDaysAgoFromSnapshot(currentSnapshot, 7);
-
   const lines = cityEvents.map((event) => {
-    const todayWindow = peaks[todayKey]?.eventWindows?.[event.eventKey];
-    const yesterdayWindow = peaks[yesterdayKey]?.eventWindows?.[event.eventKey];
+    const eventDateKey = getDateKeyFromWeekdayInCurrentWeek(currentSnapshot, event.weekday);
+    const previousDayKey = getDateKeyOffsetFromDateKey(eventDateKey, -1);
+    const lastWeekKey = getDateKeyOffsetFromDateKey(eventDateKey, -7);
+
+    const currentWeekWindow = peaks[eventDateKey]?.eventWindows?.[event.eventKey];
+    const previousDayWindow = peaks[previousDayKey]?.eventWindows?.[event.eventKey];
     const lastWeekWindow = peaks[lastWeekKey]?.eventWindows?.[event.eventKey];
 
-    const currentPeak = todayWindow?.peak || 0;
-    const yesterdayPeak = yesterdayWindow?.peak || 0;
+    const currentPeak = currentWeekWindow?.peak || 0;
+    const previousDayPeak = previousDayWindow?.peak || 0;
     const lastWeekPeak = lastWeekWindow?.peak || 0;
 
-    const diffYesterday = calculateDiff(currentPeak, yesterdayPeak);
+    const diffPreviousDay = calculateDiff(currentPeak, previousDayPeak);
     const diffLastWeek = calculateDiff(currentPeak, lastWeekPeak);
 
     const cityRankingSameWindow = FIVEM_CITIES.map((city) => {
@@ -1659,7 +1678,7 @@ function buildCityEventPanelDescription(cityKey, cityName, emoji, peaks, current
       });
 
       const windowData = cityEvent
-        ? peaks[todayKey]?.eventWindows?.[cityEvent.eventKey]
+        ? peaks[eventDateKey]?.eventWindows?.[cityEvent.eventKey]
         : null;
 
       const value = windowData?.peak || 0;
@@ -1686,19 +1705,19 @@ function buildCityEventPanelDescription(cityKey, cityName, emoji, peaks, current
 
     return (
       `## ${emoji} ${getFivemEventDisplayName(event, loadCronogramaStateForFivem()).toUpperCase()} • ${formatEventWindowLabel(event)}\n` +
-      `📅 **Data analisada:** \`${todayKey}\`\n` +
+      `📅 **Data do evento na semana atual:** \`${eventDateKey}\`\n` +
       `🎉 **Evento:** \`${getFivemEventDisplayName(event, loadCronogramaStateForFivem())}\`\n` +
-      `📌 **Categoria:** \`${event.category}\`\n` +
+      `📌 **Tipo de janela:** \`${event.category}\`\n` +
       `🏙️ **Cidade do evento:** ${emoji} **BR ${cityName}**\n` +
-      `🕒 **Janela oficial:** \`${formatEventWindowLabel(event)}\`\n\n` +
+      `🕒 **Horário oficial:** \`${formatEventWindowLabel(event)}\`\n\n` +
 
       `### 📌 Resultado da própria cidade\n` +
-      `> 👥 **Pico atual:** \`${formatNumber(currentPeak)}\` às \`${todayWindow?.peakTime || "--:--"}\`\n` +
-      `> 📆 **Ontem no mesmo horário:** \`${formatNumber(yesterdayPeak)}\` às \`${yesterdayWindow?.peakTime || "--:--"}\`\n` +
-      `> 📊 **Diferença vs ontem:** ${formatDiff(diffYesterday)}\n\n` +
+      `> 👥 **Pico da semana atual nessa janela:** \`${formatNumber(currentPeak)}\` às \`${currentWeekWindow?.peakTime || "--:--"}\`\n` +
+      `> 📆 **Dia anterior no mesmo horário:** \`${formatNumber(previousDayPeak)}\` às \`${previousDayWindow?.peakTime || "--:--"}\`\n` +
+      `> 📊 **Diferença contra o dia anterior:** ${formatDiff(diffPreviousDay)}\n\n` +
 
-      `> 📅 **Semana passada no mesmo horário:** \`${formatNumber(lastWeekPeak)}\` às \`${lastWeekWindow?.peakTime || "--:--"}\`\n` +
-      `> 📈 **Diferença vs 7 dias:** ${formatDiff(diffLastWeek)}\n\n` +
+      `> 📅 **Semana passada na mesma janela:** \`${formatNumber(lastWeekPeak)}\` às \`${lastWeekWindow?.peakTime || "--:--"}\`\n` +
+      `> 📈 **Diferença contra semana passada:** ${formatDiff(diffLastWeek)}\n\n` +
 
       `### 🏆 Comparação com cidades no mesmo horário\n` +
       `${cityRankingText || "> Sem comparação disponível para essa janela."}`
@@ -1707,10 +1726,7 @@ function buildCityEventPanelDescription(cityKey, cityName, emoji, peaks, current
 
   return (
     `# ${emoji} PAINEL DA BR ${cityName.toUpperCase()}\n\n` +
-    `📊 **Objetivo:** comparar a cidade com ela mesma e com outras BRs no mesmo horário.\n` +
-    `📅 **Hoje:** \`${todayKey}\`\n` +
-    `📆 **Ontem:** \`${yesterdayKey}\`\n` +
-    `📅 **7 dias atrás:** \`${lastWeekKey}\`\n\n` +
+    `📊 **Objetivo:** comparar o pico da semana atual com o dia anterior, semana passada e outras BRs no mesmo horário.\n\n` +
     lines.join(`\n\n${UI.SEP}\n\n`)
   );
 }
