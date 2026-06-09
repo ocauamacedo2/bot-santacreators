@@ -1870,12 +1870,7 @@ for (const cityPanel of cityPanelConfigs) {
   const cityEvents = FIVEM_EVENT_SCHEDULE.filter((event) => {
     if (event.cityKey !== cityPanel.key) return false;
 
-    const todayWindow = peaks[todayKey]?.eventWindows?.[event.eventKey];
-    const hasPeakToday = (todayWindow?.peak || 0) > 0;
-    const isEventFromToday = event.weekday === currentWeekday;
-    const isEventHappeningNow = isCurrentTimeInsideEvent(currentSnapshot, event);
-
-    return isEventFromToday || hasPeakToday || isEventHappeningNow;
+    return true;
   });
 
   const uniqueCityEvents = [...new Map(cityEvents.map((event) => [event.eventKey, event])).values()];
