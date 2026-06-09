@@ -2353,18 +2353,6 @@ await syncContinuationMessages(channel, botId, continuationGroups, hasContinuati
  }
 }
 
-async function cn2FindStickyMessage(channel, botId) {
- const msgs = await channel.messages.fetch({ limit: 100 }).catch(() => null);
- if (!msgs) return null;
-
- const found = msgs.find((m) =>
-   m.author?.id === botId &&
-   m.embeds?.some((e) => (e.footer?.text || "").includes(FIVEM_RANK_MARKER_TAG))
- );
-
- return found || null;
-}
-
 async function recreateFivemRetentionPanel(channel, client, options = {}) {
  const botId = client.user.id;
 
