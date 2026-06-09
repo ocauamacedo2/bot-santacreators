@@ -2457,6 +2457,37 @@ await interaction.editReply("✅ Painel atualizado com sucesso! Atualização au
    return false;
  }
 }
+
+export async function fivemRetentionStatusHandleMessage(message, client) {
+ try {
+   if (!message || message.author?.bot) return false;
+
+   const content = String(message.content || "").trim().toLowerCase();
+
+   if (!["!recriarfivem", "!recriarfivemstatus", "!recriarfivem"].includes(content)) {
+     return false;
+   }
+
+   if (message.channel?.id !== FIVEM_PANEL_CHANNEL_ID) {
+     await message.reply("❌ Use esse comando no canal do painel FiveM.").catch(() => {});
+     return true;
+   }
+
+   await message.reply("♻️ Recriando painel FiveM...").catch(() => {});
+
+   const result = await recreateFivemRetentionPanel(message.channel, client, {
+     deleteOldMessages: false,
+   });
+
+   await message.channel.send(`✅ Painel FiveM recriado com sucesso!`).catch(() => {});
+   return true;
+ } catch (e) {
+   console.error("[FIVEM_RETENTION] Erro no comando !recriarFivem:", e);
+   await message.channel?.send(`❌ Erro ao recriar painel FiveM: ${e.message || "erro desconhecido"}`).catch(() => {});
+   return true;
+ }
+}
+
 export function fivemRetentionStatusOnChannelDelete(channel) {
  const state = FIVEM_STATE.get(channel?.id);
  if (state?.intervalId) clearInterval(state.intervalId);
