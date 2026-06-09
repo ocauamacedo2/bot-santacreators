@@ -2271,6 +2271,77 @@ await syncContinuationMessages(channel, botId, continuationGroups, hasContinuati
    throw e;
  }
 }
+
+async function findExistingRetentionPanelMessage(channel, botId) {
+ const msgs = await channel.messages.fetch({ limit: 50 }).catch(() => null);
+ if (!msgs) return null;
+
+ const panels = [...msgs.values()]
+   .filter((m) =>
+     m.author?.id === botId &&
+     m.embeds?.some((e) => (e.footer?.text || "").includes(FIVEM_RANK_MARKER_TAG))
+   )
+   .sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+
+ return panels[0] || null;
+}
+
+async function recreateFivemRetentionPanel(channel, client, options = {}) {
+ const botId = client.user.id;
+
+ const safeSnapshot = await createSafeCurrentSnapshot();
+
+ if (!safeSnapshot.snapshot) {
+   throw new Error("Não consegui gerar dados válidos para recriar o painel agora.");
+ }
+
+ // Valida os embeds ANTES de apagar qualquer coisa.
+ await buildEmbeds(client, safeSnapshot.snapshot);
+
+ let deletedCount = 0;
+
+ if (options.deleteOldMessages) {
+   deletedCount = await deleteAllRetentionPanelMessages(channel, botId);
+ }
+
+ const recreated = await ensureStickyMessage(channel);
+ const edited = await editPanel(channel, { force: true, recovery: true });
+
+ if (!recreated || !edited) {
+   throw new Error("Não consegui recriar o painel agora. Nenhuma mensagem antiga foi apagada sem validação.");
+ }
+
+ return {
+   recreated,
+   edited,
+   deletedCount,
+ };
+}
+
+async function ensureFivemPanelExists(channel, client) {
+ const botId = client.user.id;
+
+ const existingPanel = await findExistingRetentionPanelMessage(channel, botId);
+
+ if (existingPanel) {
+   const state = FIVEM_STATE.get(channel.id) || {};
+   FIVEM_STATE.set(channel.id, {
+     ...state,
+     messageId: existingPanel.id,
+   });
+
+   return existingPanel;
+ }
+
+ console.warn("[FIVEM_RETENTION] Nenhum painel encontrado no canal. Tentando recriar automaticamente...");
+
+ const result = await recreateFivemRetentionPanel(channel, client, {
+   deleteOldMessages: false,
+ });
+
+ return result?.edited || result?.recreated || null;
+}
+
 // ---------- PUBLIC API ----------
 async function ensureFivemRetentionAutoLoop(client, options = {}) {
  const channel = await client.channels.fetch(FIVEM_PANEL_CHANNEL_ID).catch(() => null);
@@ -2288,12 +2359,21 @@ async function ensureFivemRetentionAutoLoop(client, options = {}) {
  if (options.forceInitialUpdate) {
    editPanel(channel, { force: true }).catch(e => console.error("[FIVEM_RETENTION] Erro no update inicial:", e));
  }
-
- const intervalId = setInterval(async () => {
+const intervalId = setInterval(async () => {
    try {
-     await editPanel(channel, { auto: true });
+     const edited = await editPanel(channel, { auto: true });
+
+     if (!edited) {
+       await ensureFivemPanelExists(channel, client);
+     }
    } catch (e) {
      console.error("[FIVEM_RETENTION] Erro no loop de atualização automática:", e);
+
+     try {
+       await ensureFivemPanelExists(channel, client);
+     } catch (recoveryError) {
+       console.error("[FIVEM_RETENTION] Falha ao tentar recuperar painel automaticamente:", recoveryError);
+     }
    }
  }, FIVEM_REFRESH_INTERVAL_MS);
 
@@ -2343,25 +2423,11 @@ if (
      }
 
 if (interaction.customId === "fivem_retention_recreate_panel") {
- const botId = client.user.id;
+ const result = await recreateFivemRetentionPanel(channel, client, {
+   deleteOldMessages: true,
+ });
 
- const safeSnapshot = await createSafeCurrentSnapshot();
-
- if (!safeSnapshot.snapshot) {
-   throw new Error("Não consegui gerar dados válidos para recriar o painel agora.");
- }
-
- await buildEmbeds(client, safeSnapshot.snapshot);
-
- const deletedCount = await deleteAllRetentionPanelMessages(channel, botId);
- const recreated = await ensureStickyMessage(channel);
- const edited = await editPanel(channel, { force: true });
-
- if (!recreated || !edited) {
-   throw new Error("Validei os dados, mas não consegui recriar o painel agora. Tente novamente em alguns segundos.");
- }
-
- await interaction.editReply(`♻️ Painel recriado limpo com sucesso! Mensagens antigas removidas: ${deletedCount}`).catch(() => {});
+ await interaction.editReply(`♻️ Painel recriado com sucesso! Mensagens antigas removidas: ${result.deletedCount}`).catch(() => {});
  return true;
 }
 
