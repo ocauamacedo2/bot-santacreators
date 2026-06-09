@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 const FIVEM_PANEL_CHANNEL_ID = "1501321157259956244";
 
 const FIVEM_CITY_PANEL_CHANNEL_IDS = {
-  nobre: "1501321157259956244",
+  nobre: "1513967298690420876",
   santa: "1513967343317942382",
   grande: "1513967375769272400",
   maresia: "1513967404059983913",
@@ -33,6 +33,7 @@ const FIVEM_ALL_PANEL_CHANNEL_IDS = [
 ];
 
 function getFivemPanelScopeByChannelId(channelId) {
+  if (channelId === FIVEM_CITY_PANEL_CHANNEL_IDS.nobre) return "nobre";
   if (channelId === FIVEM_CITY_PANEL_CHANNEL_IDS.santa) return "santa";
   if (channelId === FIVEM_CITY_PANEL_CHANNEL_IDS.grande) return "grande";
   if (channelId === FIVEM_CITY_PANEL_CHANNEL_IDS.maresia) return "maresia";
@@ -1990,7 +1991,7 @@ const cityPanelConfigs = [
   { key: "maresia", name: "Maresia", emoji: "🌊", title: "🌊 PAINEL MARESIA — EVENTOS 21:00 / 23:30" },
   { key: "santa", name: "Santa", emoji: "🏙️", title: "🏙️ PAINEL SANTA — EVENTOS 21:00" },
 ].filter((cityPanel) => {
-  if (panelScope === "main") return cityPanel.key === "nobre";
+  if (panelScope === "main") return false;
   return cityPanel.key === panelScope;
 });
 
