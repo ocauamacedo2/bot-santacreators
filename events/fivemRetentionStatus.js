@@ -2019,25 +2019,32 @@ focusFields.push({
 
 const focusFieldsPerEmbed = 2;
 
-for (let i = 0; i < focusFields.length; i += focusFieldsPerEmbed) {
-  const partNumber = Math.floor(i / focusFieldsPerEmbed) + 1;
-  const totalParts = Math.ceil(focusFields.length / focusFieldsPerEmbed);
+// Painel detalhado por janela desativado.
+// Essas informações já aparecem de forma mais limpa nos painéis de cronograma/prime time.
+// Se quiser reativar no futuro, troque false para true.
+const FIVEM_SHOW_DETAILED_WINDOW_ANALYSIS = false;
 
-  const focusEmbed = new EmbedBuilder()
-    .setColor(baseColor)
-   .setTitle(`🎯 ANÁLISE DE EVENTOS POR JANELA • Parte ${partNumber}/${totalParts}`)
-.setDescription(
-  partNumber === 1
-    ? focusHeader
-    : `📌 **Continuação da análise por janela oficial.**\n\n`
-)
-    .addFields(focusFields.slice(i, i + focusFieldsPerEmbed))
-    .setFooter({
-      text: `Análise por janela exata • Sincronizado às ${currentSnapshot.spTime}`,
-      iconURL: client.user.displayAvatarURL()
-    });
+if (FIVEM_SHOW_DETAILED_WINDOW_ANALYSIS) {
+  for (let i = 0; i < focusFields.length; i += focusFieldsPerEmbed) {
+    const partNumber = Math.floor(i / focusFieldsPerEmbed) + 1;
+    const totalParts = Math.ceil(focusFields.length / focusFieldsPerEmbed);
 
-  embeds.push(focusEmbed);
+    const focusEmbed = new EmbedBuilder()
+      .setColor(baseColor)
+      .setTitle(`🎯 ANÁLISE DE EVENTOS POR JANELA • Parte ${partNumber}/${totalParts}`)
+      .setDescription(
+        partNumber === 1
+          ? focusHeader
+          : `📌 **Continuação da análise por janela oficial.**\n\n`
+      )
+      .addFields(focusFields.slice(i, i + focusFieldsPerEmbed))
+      .setFooter({
+        text: `Análise por janela exata • Sincronizado às ${currentSnapshot.spTime}`,
+        iconURL: client.user.displayAvatarURL()
+      });
+
+    embeds.push(focusEmbed);
+  }
 }
 // 6. PAINEL — DIFERENÇA DE PICOS (MÁXIMAS DO DIA)
  const peakAnalysisData = FIVEM_CITIES
@@ -2229,6 +2236,8 @@ async function deleteAllRetentionPanelMessages(channel, botId) {
          title.includes("TRENDS") ||
          title.includes("AUDITORIA DE RETENÇÃO") ||
          title.includes("RETENÇÃO DO EVENTO") ||
+         title.includes("EVENTOS DO CRONOGRAMA") ||
+         title.includes("ANÁLISE DE EVENTOS POR JANELA") ||
          title.includes("RECORDES") ||
          title.includes("COPA DE DESEMPENHO") ||
          title.includes("PRIME TIME")
@@ -2621,9 +2630,9 @@ export async function fivemRetentionStatusHandleMessage(message, client) {
 
    await message.reply("♻️ Recriando painel FiveM...").catch(() => {});
 
-   const result = await recreateFivemRetentionPanel(message.channel, client, {
-     deleteOldMessages: false,
-   });
+const result = await recreateFivemRetentionPanel(message.channel, client, {
+  deleteOldMessages: true,
+});
 
    await message.channel.send(`✅ Painel FiveM recriado com sucesso!`).catch(() => {});
    return true;
