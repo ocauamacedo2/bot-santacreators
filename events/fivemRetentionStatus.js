@@ -17,6 +17,28 @@ import { fileURLToPath } from "node:url";
 
 // ⚙️ CONFIG
 const FIVEM_PANEL_CHANNEL_ID = "1501321157259956244";
+
+const FIVEM_CITY_PANEL_CHANNEL_IDS = {
+  nobre: "1501321157259956244",
+  santa: "1513967343317942382",
+  grande: "1513967375769272400",
+  maresia: "1513967404059983913",
+};
+
+const FIVEM_ALL_PANEL_CHANNEL_IDS = [
+  ...new Set([
+    FIVEM_PANEL_CHANNEL_ID,
+    ...Object.values(FIVEM_CITY_PANEL_CHANNEL_IDS),
+  ]),
+];
+
+function getFivemPanelScopeByChannelId(channelId) {
+  if (channelId === FIVEM_CITY_PANEL_CHANNEL_IDS.santa) return "santa";
+  if (channelId === FIVEM_CITY_PANEL_CHANNEL_IDS.grande) return "grande";
+  if (channelId === FIVEM_CITY_PANEL_CHANNEL_IDS.maresia) return "maresia";
+
+  return "main";
+}
 const FIVEM_REFRESH_INTERVAL_MS = 2 * 60 * 1000; // coleta a cada 2 minutos
 const FIVEM_PANEL_REFRESH_INTERVAL_MS = 2 * 60 * 1000; // edita o painel a cada 2 minutos
 const FIVEM_HISTORY_MAX_DAYS = 30; // Limitar histórico a 30 dias
@@ -1829,7 +1851,7 @@ function pushSplitDescriptionEmbeds(embeds, baseEmbed, description, maxLength = 
 }
 
 // ---------- EMBED BUILDER ----------
-async function buildEmbeds(client, currentSnapshot) {
+async function buildEmbeds(client, currentSnapshot, panelScope = "main") {
  const embeds = [];
  const baseColor = cn2ParseColor(process.env.BASE_COLORS, DEFAULT_COLOR);
  
@@ -1907,7 +1929,9 @@ async function buildEmbeds(client, currentSnapshot) {
    )
    .setFooter({ text: `Relatório de Inteligência • Sincronizado às ${currentSnapshot.spTime}` })
    .setTimestamp();
- embeds.push(dashboardEmbed);
+ if (panelScope === "main") {
+  embeds.push(dashboardEmbed);
+}
 
  // 3. PAINEL — STATUS GERAL FIVEM
  const sortedCurrent = [...cityData].sort((a, b) => b.current.clients - a.current.clients);
@@ -1935,7 +1959,9 @@ return formatOnlyCurrentLine(
    .setFooter({
      text: `Dados atualizados a cada 2min • ${FIVEM_RANK_MARKER_TAG}`,
    });
- embeds.push(summaryEmbed);
+ if (panelScope === "main") {
+  embeds.push(summaryEmbed);
+}
 
  // 4. PAINEL — COMPARAÇÃO TEMPORAL (ONTEM & SEMANA PASSADA)
  const comparisonEmbed = new EmbedBuilder()
@@ -1953,7 +1979,9 @@ return formatOnlyCurrentLine(
      `\n\n**🌐 PERFORMANCE REDE:** ${formatDiff(calculateDiff(totalCurrentClients, totalLastWeekClients))}\n`
    )
    .setFooter({ text: `Análise de Retenção Dinâmica • Ref: ${currentSnapshot.spTime}` });
- embeds.push(comparisonEmbed);
+ if (panelScope === "main") {
+  embeds.push(comparisonEmbed);
+}
 const currentWeekday = getSaoPauloWeekday(new Date(currentSnapshot.timestamp));
 
 const cityPanelConfigs = [
@@ -1961,7 +1989,10 @@ const cityPanelConfigs = [
   { key: "grande", name: "Grande", emoji: "🌆", title: "🌆 PAINEL GRANDE — EVENTOS 23:30" },
   { key: "maresia", name: "Maresia", emoji: "🌊", title: "🌊 PAINEL MARESIA — EVENTOS 21:00 / 23:30" },
   { key: "santa", name: "Santa", emoji: "🏙️", title: "🏙️ PAINEL SANTA — EVENTOS 21:00" },
-];
+].filter((cityPanel) => {
+  if (panelScope === "main") return cityPanel.key === "nobre";
+  return cityPanel.key === panelScope;
+});
 
 for (const cityPanel of cityPanelConfigs) {
   const cityEvents = FIVEM_EVENT_SCHEDULE.filter((event) => {
@@ -2049,7 +2080,9 @@ return {
 `**Crescimento Semanal:** ${today21h.total > 0 ? formatDiff(calculateDiff(today21h.total, lastWeek21h.total)) : "não comparado ainda"}`
      )
      .setFooter({ text: `Relatório de Retenção Nobre • 21:00h` });
-   embeds.push(retentionEmbed);
+   if (panelScope === "main") {
+  embeds.push(retentionEmbed);
+}
  }
 
  // 5.1 PAINÉIS DE RETENÇÃO POR CIDADE (DIVIDIDO EM VÁRIOS EMBEDS PARA NÃO ESTOURAR 6000 CARACTERES)
@@ -2232,7 +2265,9 @@ if (FIVEM_SHOW_DETAILED_WINDOW_ANALYSIS) {
      `**Recorde Geral Hoje:** ${formatPeakValue(todayPeaks.total?.peak, todayPeaks.total?.peakTime)}`
    )
    .setFooter({ text: `Relatório de Picos Diários • Hoje até ${currentSnapshot.spTime}` });
- embeds.push(peaksEmbed);
+ if (panelScope === "main") {
+  embeds.push(peaksEmbed);
+}
 
  const primeTimeLabel = primeWindow ? primeWindow.label : "sem horário específico";
  const activePrimePeaks = useYesterdayFocus ? yesterdayPeaks : todayPeaks;
@@ -2301,7 +2336,9 @@ const compWPrimePeaks = peaks[
    )
    .setFooter({ text: "O ranking considera apenas dados coletados dentro das janelas de pico alternadas." });
  
- embeds.push(perfEmbed);
+ if (panelScope === "main") {
+  embeds.push(perfEmbed);
+}
 
  // Mapeia os dados baseados nos picos ativos (hoje ou resumo de ontem)
 const currentEventWindow = primeWindow?.eventKey
@@ -2343,20 +2380,25 @@ const effectivePeakData = currentEventWindow ? [
 `> **Status:** ${(currentEventWindow?.peak || 0) > 0 ? "coletando o maior pico da janela" : "aguardando coleta dessa janela"}`
    )
    .setFooter({ text: `${useYesterdayFocus ? "Resumo Consolidado" : "Monitoramento em Tempo Real"} • Ref: ${currentSnapshot.spTime}` });
- embeds.push(primeEmbed);
+if (panelScope === "main") {
+  embeds.push(primeEmbed);
+}
 
  // Botão de atualização manual
 const row = new ActionRowBuilder().addComponents(
-   new ButtonBuilder()
-     .setCustomId("fivem_retention_force_refresh")
-     .setLabel("🔄 Forçar atualização")
-     .setStyle(ButtonStyle.Primary),
-   new ButtonBuilder()
-     .setCustomId("fivem_retention_recreate_panel")
-     .setLabel("♻️ Recriar painel limpo")
-     .setStyle(ButtonStyle.Danger)
- );
-// TESTE MACEDO 123
+  new ButtonBuilder()
+    .setCustomId("fivem_retention_force_refresh")
+    .setLabel("🔄 Atualizar painéis")
+    .setStyle(ButtonStyle.Primary),
+  ...(panelScope === "main"
+    ? [
+        new ButtonBuilder()
+          .setCustomId("fivem_retention_recreate_panel")
+          .setLabel("♻️ Recriar todos")
+          .setStyle(ButtonStyle.Danger),
+      ]
+    : [])
+);
  return { embeds, row };
 }
 
@@ -2480,7 +2522,8 @@ if (safeSnapshot.shouldPersist) {
  await updateDailyPeaks(persistenceSnapshot);
 }
 
-const { embeds, row } = await buildEmbeds(channel.client, currentSnapshot);
+const panelScope = getFivemPanelScopeByChannelId(channel.id);
+const { embeds, row } = await buildEmbeds(channel.client, currentSnapshot, panelScope);
    try {
 const safeEmbeds = normalizeEmbedsForDiscord(embeds);
 const embedGroups = packEmbedsForDiscord(safeEmbeds);
@@ -2559,7 +2602,8 @@ if (!options.force && !hasNewPeak && !is21h && !isPanelTimedUpdate) {
   return null;
 }
 
- const { embeds, row } = await buildEmbeds(channel.client, currentSnapshot);
+ const panelScope = getFivemPanelScopeByChannelId(channel.id);
+const { embeds, row } = await buildEmbeds(channel.client, currentSnapshot, panelScope);
  try {
   const safeEmbeds = normalizeEmbedsForDiscord(embeds);
 const embedGroups = packEmbedsForDiscord(safeEmbeds);
@@ -2597,7 +2641,8 @@ async function recreateFivemRetentionPanel(channel, client, options = {}) {
  }
 
  // Valida os embeds ANTES de apagar qualquer coisa.
- const validationPayload = await buildEmbeds(client, safeSnapshot.snapshot);
+ const panelScope = getFivemPanelScopeByChannelId(channel.id);
+const validationPayload = await buildEmbeds(client, safeSnapshot.snapshot, panelScope);
  const safeEmbeds = normalizeEmbedsForDiscord(validationPayload.embeds);
  packEmbedsForDiscord(safeEmbeds);
 
@@ -2645,52 +2690,52 @@ async function ensureFivemPanelExists(channel, client) {
  return result?.edited || result?.recreated || null;
 }
 
-// ---------- PUBLIC API ----------
 async function ensureFivemRetentionAutoLoop(client, options = {}) {
- const channel = await client.channels.fetch(FIVEM_PANEL_CHANNEL_ID).catch(() => null);
- if (!channel || !channel.isTextBased()) {
-   console.error("[FIVEM_RETENTION] Canal fixo não encontrado ou inválido:", FIVEM_PANEL_CHANNEL_ID);
-   return null;
- }
+  for (const channelId of FIVEM_ALL_PANEL_CHANNEL_IDS) {
+    const channel = await client.channels.fetch(channelId).catch(() => null);
 
- const existing = FIVEM_STATE.get(channel.id);
+    if (!channel || !channel.isTextBased()) {
+      console.error("[FIVEM_RETENTION] Canal fixo não encontrado ou inválido:", channelId);
+      continue;
+    }
 
- if (existing?.intervalId) {
-   clearInterval(existing.intervalId);
- }
+    const existing = FIVEM_STATE.get(channel.id);
 
- if (options.forceInitialUpdate) {
-   editPanel(channel, { force: true }).catch(e => console.error("[FIVEM_RETENTION] Erro no update inicial:", e));
- }
-const intervalId = setInterval(async () => {
-   try {
-     const edited = await editPanel(channel, { auto: true, force: true });
+    if (existing?.intervalId) {
+      clearInterval(existing.intervalId);
+    }
 
-     if (!edited) {
-       await ensureFivemPanelExists(channel, client);
-     }
-   } catch (e) {
-     console.error("[FIVEM_RETENTION] Erro no loop de atualização automática:", e);
+    if (options.forceInitialUpdate) {
+      editPanel(channel, { force: true }).catch((e) => {
+        console.error("[FIVEM_RETENTION] Erro no update inicial:", e);
+      });
+    }
 
-     try {
-       await ensureFivemPanelExists(channel, client);
-     } catch (recoveryError) {
-       console.error("[FIVEM_RETENTION] Falha ao tentar recuperar painel automaticamente:", recoveryError);
-     }
-   }
- }, FIVEM_PANEL_REFRESH_INTERVAL_MS);
+    const intervalId = setInterval(async () => {
+      try {
+        const edited = await editPanel(channel, { auto: true, force: true });
+
+        if (!edited) {
+          await ensureFivemPanelExists(channel, client);
+        }
+      } catch (e) {
+        console.error("[FIVEM_RETENTION] Erro no loop de atualização automática:", e);
+      }
+    }, FIVEM_PANEL_REFRESH_INTERVAL_MS);
 
 FIVEM_STATE.set(channel.id, {
-   ...existing,
-   intervalId,
-   messageId: existing?.messageId || null,
-   lastEditAt: existing?.lastEditAt || 0,
- });
+  ...existing,
+  intervalId,
+  messageId: existing?.messageId || null,
+  lastEditAt: existing?.lastEditAt || 0,
+});
+  }
 
- FIVEM_DEBUG && console.log("[FIVEM_RETENTION] Loop automático de 2min ativo no canal", channel.id);
-
- return channel;
+  return true;
 }
+
+// ---------- PUBLIC API ----------
+
 
 export async function fivemRetentionStatusOnReady(client) {
  try {
@@ -2706,6 +2751,55 @@ export async function fivemRetentionStatusOnReady(client) {
  } catch (err) {
    console.error("[FIVEM_RETENTION] fivemRetentionStatusOnReady erro:", err?.message || err);
  }
+}
+
+
+async function editAllFivemRetentionPanels(client, options = {}) {
+  let editedCount = 0;
+
+  for (const channelId of FIVEM_ALL_PANEL_CHANNEL_IDS) {
+    const channel = await client.channels.fetch(channelId).catch(() => null);
+
+    if (!channel?.isTextBased?.()) continue;
+
+    const edited = await editPanel(channel, {
+      ...options,
+      force: true,
+    }).catch((e) => {
+      cn2LogApiError(`[FIVEM_RETENTION] Falha ao atualizar canal ${channelId}:`, e);
+      return null;
+    });
+
+    if (edited) editedCount++;
+  }
+
+  return { editedCount };
+}
+
+async function recreateAllFivemRetentionPanels(client, options = {}) {
+  let deletedCount = 0;
+  let recreatedCount = 0;
+
+  for (const channelId of FIVEM_ALL_PANEL_CHANNEL_IDS) {
+    const channel = await client.channels.fetch(channelId).catch(() => null);
+
+    if (!channel?.isTextBased?.()) continue;
+
+    const result = await recreateFivemRetentionPanel(channel, client, {
+      ...options,
+      deleteOldMessages: true,
+    }).catch((e) => {
+      cn2LogApiError(`[FIVEM_RETENTION] Falha ao recriar canal ${channelId}:`, e);
+      return null;
+    });
+
+    if (result) {
+      deletedCount += result.deletedCount || 0;
+      recreatedCount++;
+    }
+  }
+
+  return { deletedCount, recreatedCount };
 }
 
 export async function fivemRetentionStatusHandleInteraction(interaction, client) {
@@ -2726,25 +2820,37 @@ if (
      }
 
 if (interaction.customId === "fivem_retention_recreate_panel") {
- const result = await recreateFivemRetentionPanel(channel, client, {
-   deleteOldMessages: true,
- });
+  if (channel.id !== FIVEM_PANEL_CHANNEL_ID) {
+    await interaction.editReply("❌ O botão de recriar todos só pode ser usado no canal principal.").catch(() => {});
+    return true;
+  }
 
- await interaction.editReply(`♻️ Painel recriado com sucesso! Mensagens antigas removidas: ${result.deletedCount}`).catch(() => {});
- return true;
+  const results = await recreateAllFivemRetentionPanels(client, {
+    deleteOldMessages: true,
+  });
+
+  await interaction.editReply(
+    `♻️ Todos os painéis foram recriados com sucesso!\n` +
+    `🧹 Mensagens antigas removidas: ${results.deletedCount}`
+  ).catch(() => {});
+
+  return true;
 }
 
 await ensureFivemRetentionAutoLoop(client, {
   forceInitialUpdate: false,
 });
 
-const edited = await editPanel(channel, { force: true });
-     
-if (!edited) {
-  throw new Error("Não foi possível atualizar o painel. API lenta ou sem permissão.");
+const results = await editAllFivemRetentionPanels(client, { force: true });
+
+if (!results.editedCount) {
+  throw new Error("Não foi possível atualizar os painéis. API lenta ou sem permissão.");
 }
 
-await interaction.editReply("✅ Painel atualizado com sucesso! Atualização automática de 2min conferida e ativa.");
+await interaction.editReply(
+  `✅ Todos os painéis foram atualizados com sucesso!\n` +
+  `📌 Canais atualizados: ${results.editedCount}`
+);
    } catch (e) {
      console.error("[FIVEM_RETENTION] Erro ao forçar atualização:", e);
      if (interaction.deferred || interaction.replied) {
@@ -2778,12 +2884,16 @@ export async function fivemRetentionStatusHandleMessage(message, client) {
 
    await message.reply("♻️ Recriando painel FiveM...").catch(() => {});
 
-const result = await recreateFivemRetentionPanel(message.channel, client, {
+const result = await recreateAllFivemRetentionPanels(client, {
   deleteOldMessages: true,
 });
 
-   await message.channel.send(`✅ Painel FiveM recriado com sucesso!`).catch(() => {});
-   return true;
+await message.channel.send(
+  `✅ Todos os painéis FiveM foram recriados com sucesso!\n` +
+  `🧹 Mensagens antigas removidas: ${result.deletedCount}\n` +
+  `📌 Canais recriados: ${result.recreatedCount}`
+).catch(() => {});
+return true;
  } catch (e) {
    console.error("[FIVEM_RETENTION] Erro no comando !recriarFivem:", e);
    await message.channel?.send(`❌ Erro ao recriar painel FiveM: ${e.message || "erro desconhecido"}`).catch(() => {});
