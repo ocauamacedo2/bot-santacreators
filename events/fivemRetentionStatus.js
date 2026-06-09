@@ -600,7 +600,7 @@ export function isExact21hSnapshot(snapshot) {
   const isRelevantDay = (weekday >= 1 && weekday <= 6);
 
   // Captura o primeiro snapshot da hora 21 (intervalo de 2min)
-  return isRelevantDay && snapshot.hour === 21 && snapshot.minute < 2;
+  return isRelevantDay && snapshot.hour === 21 && snapshot.minute < 8;
 }
 
 function formatNumber(n) {
@@ -1011,10 +1011,12 @@ if (!dayPeak.eventWindows) {
     }
 
     // Atualiza o pico exato das 21:00
-if (isExact21hSnapshot(currentSnapshot) && isCompleteSnapshot(currentSnapshot)) {
-  if (dayPeak.exact21h.total !== currentSnapshot.totalClients) {
+if (isExact21hSnapshot(currentSnapshot) && isValidSnapshot(currentSnapshot)) {
+  if (!dayPeak.exact21h?.total || dayPeak.exact21h.total <= 0) {
     dayPeak.exact21h.total = currentSnapshot.totalClients || 0;
     dayPeak.exact21h.cities = currentSnapshot.cities;
+    dayPeak.exact21h.capturedAt = currentSnapshot.timestamp;
+    dayPeak.exact21h.capturedTime = currentSnapshot.spTime;
     hasChange = true;
   }
 }
@@ -1586,7 +1588,8 @@ async function createSafeCurrentSnapshot() {
 
  return {
    snapshot: merged.snapshot,
-   shouldPersist: !merged.usedFallback && isCompleteSnapshot(merged.snapshot),
+   snapshotForPersistence: currentSnapshot,
+   shouldPersist: isValidSnapshot(currentSnapshot),
    usedFallback: merged.usedFallback,
  };
 }
@@ -1712,7 +1715,7 @@ return (
       `🕒 **Horário oficial:** \`${formatEventWindowLabel(event)}\`\n\n` +
 
       `### 📌 Resultado da própria cidade\n` +
-      `> 👥 **Pico da semana atual nessa janela:** \`${formatNumber(currentPeak)}\` às \`${currentWeekWindow?.peakTime || "--:--"}\`\n` +
+      `> 👥 **Maior público registrado no horário desse evento:** \`${formatNumber(currentPeak)}\` às \`${currentWeekWindow?.peakTime || "--:--"}\`\n` +
       `> 📆 **Dia anterior no mesmo horário:** \`${formatNumber(previousDayPeak)}\` às \`${previousDayWindow?.peakTime || "--:--"}\`\n` +
       `> 📊 **Diferença contra o dia anterior:** ${formatDiff(diffPreviousDay)}\n\n` +
 
@@ -2393,8 +2396,10 @@ if (!safeSnapshot.snapshot) {
 const currentSnapshot = safeSnapshot.snapshot;
 
 if (safeSnapshot.shouldPersist) {
- await addSnapshot(currentSnapshot);
- await updateDailyPeaks(currentSnapshot);
+ const persistenceSnapshot = safeSnapshot.snapshotForPersistence || currentSnapshot;
+
+ await addSnapshot(persistenceSnapshot);
+ await updateDailyPeaks(persistenceSnapshot);
 }
 
 const { embeds, row } = await buildEmbeds(channel.client, currentSnapshot);
