@@ -425,6 +425,20 @@ function formatEventWindowLabel(event) {
   return `${startHour}:${startMinute} às ${endHour}:${endMinute}`;
 }
 
+function formatEventWeekdayLabel(event) {
+  const labels = {
+    0: "Domingo",
+    1: "Segunda",
+    2: "Terça",
+    3: "Quarta",
+    4: "Quinta",
+    5: "Sexta",
+    6: "Sábado",
+  };
+
+  return labels[event?.weekday] || "Dia não definido";
+}
+
 export function getPrimeTimeWindow(snapshot, customWeekday = null) {
   const baseDate = snapshot?.timestamp ? new Date(snapshot.timestamp) : new Date();
   const weekday = customWeekday !== null ? customWeekday : getSaoPauloWeekday(baseDate);
@@ -646,7 +660,7 @@ function markEmbedGroupWithFooterTag(group, tag) {
 }
 
 async function cleanupContinuationMessages(channel, botId) {
- const msgs = await channel.messages.fetch({ limit: 50 }).catch(() => null);
+ const msgs = await channel.messages.fetch({ limit: 100 }).catch(() => null);
  if (!msgs) return;
 
  const continuations = msgs.filter(
@@ -661,7 +675,7 @@ async function cleanupContinuationMessages(channel, botId) {
 }
 
 async function syncContinuationMessages(channel, botId, embedGroups, row = null) {
- const msgs = await channel.messages.fetch({ limit: 50 }).catch(() => null);
+ const msgs = await channel.messages.fetch({ limit: 100 }).catch(() => null);
 
  const existing = msgs
    ? [...msgs.values()]
@@ -1720,10 +1734,23 @@ const cityPanelConfigs = [
   { key: "santa", name: "Santa", emoji: "🏙️", title: "🏙️ PAINEL SANTA — EVENTOS 21:00" },
 ];
 
-for (const cityPanel of cityPanelConfigs) {
-  const cityEvents = FIVEM_EVENT_SCHEDULE.filter((event) => event.cityKey === cityPanel.key);
+const currentWeekday = getSaoPauloWeekday(new Date(currentSnapshot.timestamp));
 
-  for (const event of cityEvents) {
+for (const cityPanel of cityPanelConfigs) {
+  const cityEvents = FIVEM_EVENT_SCHEDULE.filter((event) => {
+    if (event.cityKey !== cityPanel.key) return false;
+
+    const todayWindow = peaks[todayKey]?.eventWindows?.[event.eventKey];
+    const hasPeakToday = (todayWindow?.peak || 0) > 0;
+    const isEventFromToday = event.weekday === currentWeekday;
+    const isEventHappeningNow = isCurrentTimeInsideEvent(currentSnapshot, event);
+
+    return isEventFromToday || hasPeakToday || isEventHappeningNow;
+  });
+
+  const uniqueCityEvents = [...new Map(cityEvents.map((event) => [event.eventKey, event])).values()];
+
+  for (const event of uniqueCityEvents) {
     const description = buildCityEventPanelDescription(
       cityPanel.key,
       cityPanel.name,
@@ -1735,9 +1762,9 @@ for (const cityPanel of cityPanelConfigs) {
 
     const cityEmbed = new EmbedBuilder()
       .setColor(baseColor)
-      .setTitle(`${cityPanel.emoji} BR ${cityPanel.name} — ${event.category} • ${formatEventWindowLabel(event)}`)
+      .setTitle(`${cityPanel.emoji} BR ${cityPanel.name} — ${event.category} • ${formatEventWeekdayLabel(event)} • ${formatEventWindowLabel(event)}`)
       .setFooter({
-        text: `Comparação por cidade • Ontem + 7 dias atrás • Atualizado às ${currentSnapshot.spTime}`,
+        text: `Comparação por cidade • ${formatEventWeekdayLabel(event)} • Ontem + 7 dias atrás • Atualizado às ${currentSnapshot.spTime}`,
       });
 
     pushSplitDescriptionEmbeds(embeds, cityEmbed, description);
@@ -2326,18 +2353,16 @@ await syncContinuationMessages(channel, botId, continuationGroups, hasContinuati
  }
 }
 
-async function findExistingRetentionPanelMessage(channel, botId) {
- const msgs = await channel.messages.fetch({ limit: 50 }).catch(() => null);
+async function cn2FindStickyMessage(channel, botId) {
+ const msgs = await channel.messages.fetch({ limit: 100 }).catch(() => null);
  if (!msgs) return null;
 
- const panels = [...msgs.values()]
-   .filter((m) =>
-     m.author?.id === botId &&
-     m.embeds?.some((e) => (e.footer?.text || "").includes(FIVEM_RANK_MARKER_TAG))
-   )
-   .sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+ const found = msgs.find((m) =>
+   m.author?.id === botId &&
+   m.embeds?.some((e) => (e.footer?.text || "").includes(FIVEM_RANK_MARKER_TAG))
+ );
 
- return panels[0] || null;
+ return found || null;
 }
 
 async function recreateFivemRetentionPanel(channel, client, options = {}) {
