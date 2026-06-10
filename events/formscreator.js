@@ -648,7 +648,7 @@ function isFormsCreatorMainRegisterMessage(msg, client) {
   return Boolean(hasMemberDescription && hasIdField && hasAreaField && hasStatusField);
 }
 
-afunction isFormsCreatorProtectedMessage(msg, client) {
+function isFormsCreatorProtectedMessage(msg, client) {
   if (!msg || msg.author?.id !== client.user.id) return false;
 
   const content = String(msg.content || "");
