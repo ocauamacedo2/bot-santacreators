@@ -648,9 +648,30 @@ function isFormsCreatorMainRegisterMessage(msg, client) {
   return Boolean(hasMemberDescription && hasIdField && hasAreaField && hasStatusField);
 }
 
+afunction isFormsCreatorProtectedMessage(msg, client) {
+  if (!msg || msg.author?.id !== client.user.id) return false;
+
+  const content = String(msg.content || "");
+  const rawEmbedText = (msg.embeds || [])
+    .map((embed) => [
+      embed.title || "",
+      embed.description || "",
+      embed.footer?.text || "",
+      ...(embed.fields || []).flatMap((field) => [field.name || "", field.value || ""]),
+    ].join("\n"))
+    .join("\n");
+
+  return (
+    content.includes("🧾 **Novo alinhamento registrado") ||
+    rawEmbedText.includes("ALINV1_FORMS_KEEP") ||
+    rawEmbedText.includes("SantaCreators • Evolução pessoal • Alinhamento")
+  );
+}
+
 function isFormsCreatorDuplicateStatusMessage(msg, client) {
   if (!msg || msg.author?.id !== client.user.id) return false;
   if (isFormsCreatorMainRegisterMessage(msg, client)) return false;
+  if (isFormsCreatorProtectedMessage(msg, client)) return false;
 
   const content = String(msg.content || "");
 

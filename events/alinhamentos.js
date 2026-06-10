@@ -311,7 +311,7 @@ async function sendAlinhamentoToEvolutionThread(client, interaction, {
         { name: "🔗 Registro original", value: registroLink ? `[Abrir registro](${registroLink})` : "—", inline: false }
       )
       .setThumbnail(authorIcon)
-      .setFooter({ text: "SantaCreators • Evolução pessoal • Alinhamento" })
+      .setFooter({ text: "SantaCreators • Evolução pessoal • Alinhamento • ALINV1_FORMS_KEEP" })
       .setTimestamp();
 
     // ✅ 1) PRIMEIRO tenta enviar no FormsCreator da pessoa
@@ -754,36 +754,11 @@ export async function alinhamentosHandleInteraction(interaction, client) {
 
       const targetId = extractId(rawFoi);
 
-const evolutionResult = await sendAlinhamentoToEvolutionThread(client, interaction, {
-  targetId,
-  rawSobre,
-  quemFoi,
-  quemFez,
-  registroMsg: msg,
-});
-
-// ✅ Linka no próprio registro do alinhamento onde ele foi anexado
-try {
-  const oldEmbed = EmbedBuilder.from(msg.embeds[0]);
-  const oldFields = oldEmbed.data.fields || [];
-
-oldFields.push({
-  name: "🔗 Forms pessoal da pessoa",
-  value: evolutionResult.ok
-    ? `[Clique aqui para abrir o Forms pessoal](${evolutionResult.threadLink || evolutionResult.link})\n🧾 Alinhamento enviado sem botões no tópico da pessoa.`
-    : `Forms não encontrado automaticamente.\nMotivo: \`${evolutionResult.reason || "desconhecido"}\``,
-  inline: false,
-});
-
-  oldEmbed.setFields(oldFields);
-
-  await msg.edit({
-    embeds: [oldEmbed],
-    components: msg.components,
-  }).catch(() => {});
-} catch (e) {
-  console.warn("[ALINV1] Falha ao linkar evolução no registro:", e?.message || e);
-}
+      const evolutionResult = {
+        ok: false,
+        reason: "pendente_validacao",
+        message: "⏳ O alinhamento ainda está pendente. Ele só será enviado ao Forms pessoal quando for marcado como VÁLIDO.",
+      };
 
 // ✅ Log de Auditoria
 await sendAuditAlinhamentoLog(client, interaction.member, { quemFoi: rawFoi, assunto: rawSobre }, msg, evolutionResult);
@@ -791,7 +766,7 @@ await sendAuditAlinhamentoLog(client, interaction.member, { quemFoi: rawFoi, ass
 await interaction.reply({
   content:
     "✅ Alinhamento enviado para validação!\n" +
-    evolutionResult.message,
+    "⏳ Ele ainda NÃO foi enviado ao Forms pessoal. Será enviado somente se for aprovado como **ALINHAMENTO VÁLIDO**.",
   ephemeral: true,
 }).catch(() => {});
 
@@ -920,6 +895,46 @@ const fields = readEmbedFields(freshEmb).filter((f) => {
     return true;
   }
 
+  let evolutionResult = null;
+
+  if (isValid) {
+    const targetId = extractId(getFieldValueByNameIncludes(freshEmb, "quem foi alinhado"));
+    const rawSobre = getFieldValueByNameIncludes(freshEmb, "sobre");
+    const quemFoi = getFieldValueByNameIncludes(freshEmb, "quem foi alinhado");
+    const quemFez = getFieldValueByNameIncludes(freshEmb, "quem alinhou");
+
+    evolutionResult = await sendAlinhamentoToEvolutionThread(client, interaction, {
+      targetId,
+      rawSobre,
+      quemFoi,
+      quemFez,
+      registroMsg: msg,
+    });
+
+    try {
+      const latestMsg = await msg.fetch().catch(() => msg);
+      const latestEmbed = latestMsg?.embeds?.[0] || newEmb;
+      const linkedEmbed = EmbedBuilder.from(latestEmbed);
+      const linkedFields = readEmbedFields(latestEmbed).filter((f) => {
+        const name = String(f?.name || "").toLowerCase();
+        return !name.includes("forms pessoal da pessoa");
+      });
+
+      linkedFields.push({
+        name: "🔗 Forms pessoal da pessoa",
+        value: evolutionResult.ok
+          ? `Clique aqui para abrir o Forms pessoal\n🧾 Alinhamento aprovado e enviado para o tópico pessoal.`
+          : `Forms não encontrado automaticamente.\nMotivo: \`${evolutionResult.reason || "desconhecido"}\``,
+        inline: false,
+      });
+
+      linkedEmbed.setFields(linkedFields);
+      await msg.edit({ embeds: [linkedEmbed], components: rows }).catch(() => {});
+    } catch (e) {
+      console.warn("[ALINV1] Falha ao linkar Forms após validação:", e?.message || e);
+    }
+  }
+
   // ✅ NOVO: reage a mensagem do registro com ☑️ (válido) ou ❌ (não válido)
   try {
     const emoji = isValid ? ALINV1_REACT_VALID : ALINV1_REACT_INVALID;
@@ -944,8 +959,8 @@ const fields = readEmbedFields(freshEmb).filter((f) => {
 
   await interaction.editReply(
     isValid
-      ? `✅ Marcado como **VÁLIDO**. (ponto contado pro registrador)`
-      : `❌ Marcado como **NÃO VÁLIDO**. (sem ponto)`
+      ? `✅ Marcado como **VÁLIDO**. (ponto contado pro registrador)\n${evolutionResult?.message || "✅ Alinhamento enviado para o Forms pessoal."}`
+      : `❌ Marcado como **NÃO VÁLIDO**. Nenhum alinhamento foi enviado ao Forms pessoal.`
   ).catch(() => {});
 
   return true;
