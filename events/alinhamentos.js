@@ -324,7 +324,13 @@ async function sendAlinhamentoToEvolutionThread(client, interaction, {
         const sent = await thread.send({
           content: `🧾 **Novo alinhamento registrado para <@${targetId}>**`,
           embeds: [evolutionEmbed],
+            components: [], // ✅ Segurança extra: garante que esse alinhamento nunca fique com botões no Forms pessoal
         });
+
+          // ✅ Segurança extra: garante que esse alinhamento nunca fique com botões no Forms pessoal
+          await sent.edit({
+            components: [],
+          }).catch(() => {});
 
         const formsLink = await findFormsCreatorThreadLinkByUserId(
           client,
@@ -373,10 +379,15 @@ return {
     const sent = await giChannel.send({
       content: `🧾 **Novo alinhamento registrado para <@${targetId}>**\n📌 Vinculado ao Controle GI antigo.`,
       embeds: [evolutionEmbed],
+          components: [], // ✅ Segurança extra: garante que esse alinhamento nunca fique com botões
       reply: giRecord.messageId
         ? { messageReference: giRecord.messageId, failIfNotExists: false }
         : undefined,
     });
+        // ✅ Segurança extra: garante que esse alinhamento nunca fique com botões
+        await sent.edit({
+          components: [],
+        }).catch(() => {});
 
     const giLink = makeDiscordMessageLink(
       registroMsg?.guildId,

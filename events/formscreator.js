@@ -718,25 +718,35 @@ async function cleanupFormsCreatorDuplicateMessagesInThread(thread, client) {
   const messages = await thread.messages.fetch({ limit: 100 }).catch(() => null);
   if (!messages) return 0;
 
+  let fixedProtected = 0;
+
+  // ✅ Remove botões APENAS dos alinhamentos protegidos dentro do Forms pessoal
+  const protectedAlinhamentos = messages.filter((msg) =>
+    isFormsCreatorProtectedMessage(msg, client) &&
+    msg.components?.length > 0
+  );
+
+  for (const protectedMsg of protectedAlinhamentos.values()) {
+    await protectedMsg.edit({
+      components: [],
+    }).catch(() => {});
+    fixedProtected++;
+  }
+
   const mainMessages = messages.filter((msg) =>
     isFormsCreatorMainRegisterMessage(msg, client)
   );
-
   const mainMessageIds = new Set(mainMessages.map((msg) => msg.id));
-
   const duplicates = messages.filter((msg) =>
     !mainMessageIds.has(msg.id) &&
     isFormsCreatorDuplicateStatusMessage(msg, client)
   );
-
   let deleted = 0;
-
   for (const duplicate of duplicates.values()) {
     await duplicate.delete().catch(() => {});
     deleted++;
   }
-
-  return deleted;
+  return deleted + fixedProtected;
 }
 
 let isSyncing = false;
