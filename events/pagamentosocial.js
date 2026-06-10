@@ -278,20 +278,20 @@ function normalizarTipoPremiacao(texto) {
   if (t.includes("rolepass")) return "Pass";
   if (t.includes("pass")) return "Pass";
 
-  if (
-    t.includes("evento") ||
-    t.includes("vipevento") ||
-    t.includes("vip evento")
-  ) return "VIP Evento";
+if (
+  t.includes("lancamento") ||
+  t.includes("lançamento") ||
+  t.includes("lancamnto") ||
+  t.includes("lançamento")
+) return "VIP Lancamento";
 
-  if (
-    t.includes("lancamento") ||
-    t.includes("lançamento") ||
-    t.includes("lancamnto") ||
-    t.includes("lançamento")
-  ) return "VIP Lancamento";
+if (pareceDinheiro) return "Dinheiro";
 
-  if (pareceDinheiro) return "Dinheiro";
+if (
+  t.includes("evento") ||
+  t.includes("vipevento") ||
+  t.includes("vip evento")
+) return "VIP Evento";
 
   return "Dinheiro";
 }
@@ -2102,10 +2102,11 @@ async function buscarVipEventoPorDados(client, dados = {}) {
     };
   }
 
-  const alvoEvento = normalizarBuscaVip(dados.eventoNome);
-  const alvoData = normalizarBuscaVip(dados.eventoData);
-  const alvoId = normalizarBuscaVip(dados.ganhadorId);
-  const alvoNome = normalizarBuscaVip(dados.ganhadorNome);
+const alvoEvento = normalizarBuscaVip(dados.eventoNome);
+const alvoData = normalizarBuscaVip(dados.eventoData);
+const alvoId = normalizarBuscaVip(dados.ganhadorId);
+const alvoNome = normalizarBuscaVip(dados.ganhadorNome);
+const alvoTipo = normalizarTipoPremiacao(`${dados.tipo || ""}\n${dados.premiacao || ""}`);
 
   const candidatos = [...mensagens.values()]
     .filter((msg) => msg.author?.bot)
@@ -2116,45 +2117,68 @@ async function buscarVipEventoPorDados(client, dados = {}) {
     })
     .sort((a, b) => b.createdTimestamp - a.createdTimestamp);
 
+  const encontrados = [];
+
   for (const msg of candidatos) {
     const embed = msg.embeds[0];
     const texto = normalizarBuscaVip(textoCompletoEmbedVip(embed));
 
-const infoVip = extrairInfoDoEmbedVipEvento(embed);
+    const infoVip = extrairInfoDoEmbedVipEvento(embed);
 
-const bateId = alvoId && texto.includes(alvoId);
-const bateNome = alvoNome && texto.includes(alvoNome);
-const bateEvento = alvoEvento && texto.includes(alvoEvento);
-const bateData = alvoData && texto.includes(alvoData);
+    const bateId = alvoId && String(infoVip.ganhadorId || "").replace(/\D/g, "") === String(alvoId || "").replace(/\D/g, "");
+    const bateNome = alvoNome && texto.includes(alvoNome);
 
-const eventoVipNorm = normalizarBuscaVip(infoVip.evento);
-const dataVipNorm = normalizarBuscaVip(infoVip.data);
+    const eventoVipNorm = normalizarBuscaVip(infoVip.evento);
+    const dataVipNorm = normalizarBuscaVip(infoVip.data);
 
-const mesmoEvento = alvoEvento && eventoVipNorm && eventoVipNorm.includes(alvoEvento);
-const mesmaData = alvoData && dataVipNorm && dataVipNorm.includes(alvoData);
+    const mesmoEvento = alvoEvento && eventoVipNorm && eventoVipNorm.includes(alvoEvento);
+    const mesmaData = alvoData && dataVipNorm && dataVipNorm.includes(alvoData);
 
-const vinculoSeguro = alvoId
-  ? Boolean(bateId && (mesmoEvento || mesmaData || bateEvento || bateData))
-  : Boolean((bateNome && mesmoEvento) || (mesmoEvento && mesmaData));
+    const tipoVip = normalizarTipoPremiacao(`${infoVip.tipo || ""}\n${infoVip.premiacao || ""}`);
+    const mesmoTipo = alvoTipo && tipoVip && alvoTipo === tipoVip;
 
-if (vinculoSeguro) {
-  return {
-    ok: true,
-    link: {
-      guildId: msg.guild?.id || null,
-      channelId: msg.channel?.id || null,
-      messageId: msg.id,
-      url: msg.url,
-    },
-    message: msg,
-    info: infoVip,
-  };
-}
+    let score = 0;
+
+    if (bateId) score += 100;
+    if (bateNome) score += 20;
+    if (mesmoTipo) score += 80;
+    if (mesmoEvento) score += 25;
+    if (mesmaData) score += 25;
+
+    const vinculoSeguro = alvoId
+      ? Boolean(bateId && mesmoTipo && (mesmoEvento || mesmaData))
+      : Boolean(bateNome && mesmoTipo && (mesmoEvento || mesmaData));
+
+    if (!vinculoSeguro) continue;
+
+    encontrados.push({
+      score,
+      msg,
+      infoVip,
+    });
+  }
+
+  encontrados.sort((a, b) => b.score - a.score || b.msg.createdTimestamp - a.msg.createdTimestamp);
+
+  const melhor = encontrados[0];
+
+  if (melhor) {
+    return {
+      ok: true,
+      link: {
+        guildId: melhor.msg.guild?.id || null,
+        channelId: melhor.msg.channel?.id || null,
+        messageId: melhor.msg.id,
+        url: melhor.msg.url,
+      },
+      message: melhor.msg,
+      info: melhor.infoVip,
+    };
   }
 
   return {
     ok: false,
-    erro: "Nenhum registro VIP compatível encontrado.",
+    erro: "Nenhum registro VIP compatível encontrado com mesmo ID, tipo e evento/data.",
   };
 }
 
@@ -2532,13 +2556,14 @@ function getDadosPagamentoParaBuscarVip(embedLike) {
   const ganhadorRaw = getFieldValue(embedLike, "👤 Ganhador");
   const ganhadorParts = String(ganhadorRaw || "").split("|").map((p) => p.trim());
 
-  return {
-    eventoNome: getFieldValue(embedLike, "🏷️ Evento"),
-    eventoData: getFieldValue(embedLike, "📅 Data do Evento"),
-    ganhadorNome: ganhadorParts[0] || "",
-    ganhadorId: ganhadorParts[1] || "",
-    premiacao: getFieldValue(embedLike, "🔗 Premiação / Link"),
-  };
+return {
+  eventoNome: getFieldValue(embedLike, "🏷️ Evento"),
+  eventoData: getFieldValue(embedLike, "📅 Data do Evento"),
+  ganhadorNome: ganhadorParts[0] || "",
+  ganhadorId: ganhadorParts[1] || "",
+  premiacao: getFieldValue(embedLike, "🔗 Premiação / Link"),
+  tipo: getTipoPagamentoFromEmbed(embedLike) || "",
+};
 }
 
 function setCampoPagamento(fields, name, value, inline = false) {

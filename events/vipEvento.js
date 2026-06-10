@@ -620,18 +620,20 @@ function VIP_normalizarTipoPremiacao(texto) {
   }
 
   if (t.includes("lancamento") || t.includes("lançamento")) return "VIP Lancamento";
-  if (t.includes("evento") || t.includes("vipevento") || t.includes("vip evento")) return "VIP Evento";
 
-  const pareceDinheiro =
-    /\bdinheiro\b/.test(t) ||
-    /\bgrana\b/.test(t) ||
-    /\bcash\b/.test(t) ||
-    /\bvalor\b/.test(t) ||
-    /r\s*\$/.test(t) ||
-    /\b\d{1,3}(?:[.\s]\d{3})+(?:,\d{1,2})?\b/.test(t) ||
-    /\b\d+(?:[.,]\d+)?\s*(?:k|kk|m|mi|mil|milhao|milhoes)\b/.test(t);
+const pareceDinheiro =
+  /\bdinheiro\b/.test(t) ||
+  /\bgrana\b/.test(t) ||
+  /\bcash\b/.test(t) ||
+  /\bvalor\b/.test(t) ||
+  /r\s*\$/.test(t) ||
+  /\b\d{1,3}(?:[.\s]\d{3})+(?:,\d{1,2})?\b/.test(t) ||
+  /\b\d+(?:[.,]\d+)?\s*(?:k|kk|m|mi|mil|milhao|milhoes|milhao|milhoes)\b/.test(t) ||
+  /\b\d+\s*(?:mi|milhoes|milhoes|milhao|kk)\b/.test(t);
 
-  if (pareceDinheiro) return "Dinheiro";
+if (pareceDinheiro) return "Dinheiro";
+
+if (t.includes("evento") || t.includes("vipevento") || t.includes("vip evento")) return "VIP Evento";
 
   return "Dinheiro";
 }
@@ -679,12 +681,17 @@ function VIP_extractPagamentoInfoFromEmbed(embedLike) {
     desc.match(/Tipo Identificado:\s*`([^`]+)`/i) ||
     desc.match(/Tipo Identificado:\s*([^\n]+)/i);
 
-  const tipoRaw =
-    tipoMatch?.[1] ||
-    VIP_getFieldValue(embedLike, "🎁 Premiação") ||
-    VIP_getFieldValue(embedLike, "🔗 Premiação") ||
-    VIP_getFieldValue(embedLike, "🏷️ Tipo") ||
-    "";
+const premiacaoParaAnalise =
+  VIP_getFieldValue(embedLike, "🎁 Premiação") ||
+  VIP_getFieldValue(embedLike, "🔗 Premiação") ||
+  VIP_getFieldValue(embedLike, "🔗 Premiação / Link") ||
+  "";
+
+const tipoRaw = [
+  tipoMatch?.[1] || "",
+  premiacaoParaAnalise,
+  VIP_getFieldValue(embedLike, "🏷️ Tipo") || "",
+].join("\n").trim();
 
   const ganhadorRaw = VIP_getFieldValue(embedLike, "👤 Ganhador");
   const idMatch =
