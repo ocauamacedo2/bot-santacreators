@@ -1835,16 +1835,19 @@ if (CORRECAO_LOGS_CHANNEL_ID) { // Usa o mesmo canal de logs de correção
     weekFloorKey,
     maxPages: 80,
     onMessage: async (m) => {
-      if (seenMessageIds.has(m.id)) return;
-      seenMessageIds.add(m.id);
-      const emb = m.embeds?.[0];
-      if (!emb) return;
-      
-      // Procura pelo log de "Ponto de Entrevista Concluída"
-      if (!isEntrevistaConcluidaLogEmbed(emb)) return;
+const seenKey = `perguntas:${m.id}`;
+if (seenMessageIds.has(seenKey)) return;
 
-      const uid = entrevistaConcluida_getUserId(emb);
-      if (!uid) return;
+const emb = m.embeds?.[0];
+if (!emb) return;
+
+// Procura pelo log de "Ponto de Entrevista Concluída"
+if (!isEntrevistaConcluidaLogEmbed(emb)) return;
+
+seenMessageIds.add(seenKey);
+
+const uid = entrevistaConcluida_getUserId(emb);
+if (!uid) return;
 
       items.push({
         userId: uid,
@@ -1925,15 +1928,18 @@ if (CORRECAO_LOGS_CHANNEL_ID) {
     weekFloorKey,
     maxPages: 80,
     onMessage: async (m) => {
-      if (seenMessageIds.has(m.id)) return;
-      seenMessageIds.add(m.id);
-      const emb = m.embeds?.[0];
-      if (!emb) return;
-      if (!isCorrecaoLogEmbed(emb)) return;
-      if (!correcaoWasScored(emb)) return;
+const seenKey = `correcao:${m.id}`;
+if (seenMessageIds.has(seenKey)) return;
 
-      const uid = correcao_getUserId(emb);
-      if (!uid) return;
+const emb = m.embeds?.[0];
+if (!emb) return;
+if (!isCorrecaoLogEmbed(emb)) return;
+if (!correcaoWasScored(emb)) return;
+
+seenMessageIds.add(seenKey);
+
+const uid = correcao_getUserId(emb);
+if (!uid) return;
 
       items.push({
         userId: uid,
@@ -3046,9 +3052,10 @@ freezeLastWeekIfNeeded(items);
     const chartLabels = weekKeysAsc.map((k) => triLabelShortFromWeekKey(k));
 
 const chartData = weekKeysAsc.map((k) => {
-  // semana atual SEMPRE recalcula
+  // ✅ semana atual SEMPRE usa o mesmo total do texto do dashboard
+  // evita o gráfico mostrar 0 enquanto o embed mostra 241/246
   if (k === thisWeekKey) {
-    return aggregateByWeek(items, k).total;
+    return cur.total;
   }
 
   // semanas passadas usam snapshot congelado
@@ -3056,7 +3063,7 @@ const chartData = weekKeysAsc.map((k) => {
     return snap.totals[k];
   }
 
-  // fallback (caso antigo)
+  // fallback antigo
   return aggregateByWeek(items, k).total;
 });
 

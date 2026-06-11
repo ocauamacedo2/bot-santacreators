@@ -1397,15 +1397,19 @@ if (MANAGER_AUDIT_ENABLED) {
       weekFloorKey,
       maxPages: 80,
       onMessage: async (m) => {
-      if (seenMessageIds.has(m.id)) return;
-      seenMessageIds.add(m.id);
-        const emb = m.embeds?.[0];
-        if (!emb) return;
-        if (!isEntrevistaConcluidaLogEmbed(emb)) return;
+const seenKey = `perguntas:${m.id}`;
+if (seenMessageIds.has(seenKey)) return;
 
-        const uid = entrevistaConcluida_getUserId(emb);
-        if (!uid) return;
+const emb = m.embeds?.[0];
+if (!emb) return;
 
+// Procura pelo log de "Ponto de Entrevista Concluída"
+if (!isEntrevistaConcluidaLogEmbed(emb)) return;
+
+seenMessageIds.add(seenKey);
+
+const uid = entrevistaConcluida_getUserId(emb);
+if (!uid) return;
         pushItem({ userId: uid, ts: new Date(m.createdTimestamp), source: "perguntas" });
       },
     });
