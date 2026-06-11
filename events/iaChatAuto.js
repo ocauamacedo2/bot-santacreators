@@ -451,6 +451,14 @@ function fixBrokenDiscordMentions(text) {
     .replace(/<#(\d{17,22})(?!>)/g, "<#$1>");
 }
 
+function uniqueDiscordUserIds(...ids) {
+  return [...new Set(
+    ids
+      .map((id) => String(id || "").trim())
+      .filter((id) => /^\d{17,22}$/.test(id))
+  )];
+}
+
 async function buildAllowedMentionUsers(message, client) {
   const users = new Set();
 
@@ -2914,7 +2922,7 @@ await message.reply({
   content: finalText,
   allowedMentions: {
     repliedUser: true,
-    users: [openerId, message.author.id],
+    users: uniqueDiscordUserIds(openerId, message.author.id),
     roles: [],
     parse: [],
   },
