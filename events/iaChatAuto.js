@@ -2807,11 +2807,19 @@ export async function handleIaInterviewTicketMessage(message, client) {
 
   const member = message.member;
   const isOpener = String(message.author.id) === String(openerId);
+  const isStaff = memberIsIaInterviewStaff(member);
 
-    if (isStaff && !isOpener) {
+  const state = IA_ENTREVISTA_ACTIVE.get(message.channelId) || {
+    openerId,
+    startedAt: Date.now(),
+    active: true,
+    pausedByStaff: false,
+  };
+
+  if (isStaff && !isOpener) {
     if (!state.pausedByStaff) {
       IA_ENTREVISTA_ACTIVE.set(message.channelId, {
-        ...IA_ENTREVISTA_ACTIVE.get(message.channelId),
+        ...state,
         active: false,
         pausedByStaff: true,
         pausedAt: Date.now(),
@@ -2829,13 +2837,6 @@ export async function handleIaInterviewTicketMessage(message, client) {
   }
 
   if (!isOpener) return false;
-
-  const state = IA_ENTREVISTA_ACTIVE.get(message.channelId) || {
-    openerId,
-    startedAt: Date.now(),
-    active: true,
-  };
-
   if (state.pausedByStaff) return false;
 
   IA_ENTREVISTA_ACTIVE.set(message.channelId, {
