@@ -446,9 +446,15 @@ function limitDiscordText(text) {
 
 function fixBrokenDiscordMentions(text) {
   return String(text || "")
-    .replace(/<@!?(\d{17,22})(?!>)/g, "<@$1>")
-    .replace(/<@&(\d{17,22})(?!>)/g, "<@&$1>")
-    .replace(/<#(\d{17,22})(?!>)/g, "<#$1>");
+    // ✅ Mantém menções válidas intactas
+    .replace(/<@!?(\d{17,22})>/g, "<@$1>")
+    .replace(/<@&(\d{17,22})>/g, "<@&$1>")
+    .replace(/<#(\d{17,22})>/g, "<#$1>")
+
+    // ✅ Corrige menções sem fechar, mas NÃO quebra ID completo
+    .replace(/<@!?(\d{17,22})(?!\d)(?!>)/g, "<@$1>")
+    .replace(/<@&(\d{17,22})(?!\d)(?!>)/g, "<@&$1>")
+    .replace(/<#(\d{17,22})(?!\d)(?!>)/g, "<#$1>");
 }
 
 function uniqueDiscordUserIds(...ids) {
@@ -2927,11 +2933,7 @@ response =
 }
 
 const finalText =
-  limitDiscordText(
-    fixBrokenDiscordMentions(response)
-      .replace(/<@!?(\d{17,22})>\d+>/g, "<@$1>")
-      .replace(/<@!?(\d{17,22})\D+>/g, "<@$1>")
-  ) ||
+  limitDiscordText(fixBrokenDiscordMentions(response)) ||
   `Boaaa ${buildSafeUserMention(openerId)} 😄 me explica com suas palavras que eu vou te acompanhando por aqui.`;
 
 await message.reply({
