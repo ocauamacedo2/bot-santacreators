@@ -1785,15 +1785,33 @@ function buildCityEventPanelDescription(cityKey, cityName, emoji, peaks, current
 
 const cityRankingSameWindow = FIVEM_CITIES.map((city) => {
   const cityWindowData = currentWeekWindow?.cityPeaks?.[city.key] || null;
-  const value = cityWindowData?.peak || 0;
+  const lastWeekCityWindowData = lastWeekWindow?.cityPeaks?.[city.key] || null;
+
+  const currentValue = cityWindowData?.peak || 0;
+  const lastWeekValue = lastWeekCityWindowData?.peak || 0;
+
+  const diffAgainstOwnLastWeek = calculateDiff(currentValue, lastWeekValue);
 
   return {
     city,
-    value,
-    time: cityWindowData?.peakTime || "--:--",
-    diffAgainstMain: calculateDiff(value, currentPeak),
+    currentValue,
+    currentTime: cityWindowData?.peakTime || "--:--",
+    lastWeekValue,
+    lastWeekTime: lastWeekCityWindowData?.peakTime || "--:--",
+    diffAgainstOwnLastWeek,
   };
-}).sort((a, b) => b.value - a.value);
+}).sort((a, b) => {
+  const aHasBase = a.lastWeekValue > 0;
+  const bHasBase = b.lastWeekValue > 0;
+
+  if (aHasBase && !bHasBase) return -1;
+  if (!aHasBase && bHasBase) return 1;
+
+  const aDiff = typeof a.diffAgainstOwnLastWeek.diff === "number" ? a.diffAgainstOwnLastWeek.diff : -Infinity;
+  const bDiff = typeof b.diffAgainstOwnLastWeek.diff === "number" ? b.diffAgainstOwnLastWeek.diff : -Infinity;
+
+  return bDiff - aDiff;
+});
 
     const cityRankingText = cityRankingSameWindow
       .map((item, index) => {
@@ -1801,8 +1819,9 @@ const cityRankingSameWindow = FIVEM_CITIES.map((city) => {
 
 return (
   `${medal} ${item.city.emoji} **BR ${item.city.name}**\n` +
-  `> 👥 **Maior público registrado nesse horário:** \`${formatNumber(item.value)}\` às \`${item.time}\`\n` +
-  `> 📌 **Diferença contra BR ${cityName}:** ${item.city.key === cityKey ? "`cidade principal`" : formatDiff(item.diffAgainstMain)}`
+  `> 👥 **Maior público registrado nesse horário:** \`${formatNumber(item.currentValue)}\` às \`${item.currentTime}\`\n` +
+  `> 📅 **Semana passada da própria BR:** \`${formatNumber(item.lastWeekValue)}\` às \`${item.lastWeekTime}\`\n` +
+  `> 📈 **Evolução contra ela mesma:** ${formatDiff(item.diffAgainstOwnLastWeek)}`
 );
       })
       .join("\n\n");
@@ -1823,8 +1842,8 @@ return (
       `> 📅 **Semana passada na mesma janela:** \`${formatNumber(lastWeekPeak)}\` às \`${lastWeekWindow?.peakTime || "--:--"}\`\n` +
       `> 📈 **Diferença contra semana passada:** ${formatDiff(diffLastWeek)}\n\n` +
 
-      `### 🏆 Comparação com cidades no mesmo horário\n` +
-      `${cityRankingText || "> Sem comparação disponível para essa janela."}`
+`### 🏆 Evolução das cidades no mesmo horário\n` +
+`${cityRankingText || "> Sem comparação disponível para essa janela."}`
     );
   });
 
