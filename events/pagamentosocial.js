@@ -1739,14 +1739,15 @@ async function reconstruirStatsPorEmbeds(client, limiteBusca = 100) {
   if (!canal || !canal.isTextBased()) return null;
 
   const monthKey = getMonthKey();
-  const stats = makeEmptyStats(monthKey);
+    const stats = makeEmptyStats(monthKey);
 
-  // ✅ CORREÇÃO: Implementação de paginação para buscar mais de 100 mensagens
+  // ✅ CORREÇÃO: Implementação de paginação real (Discord limita fetch em 100)
   let mensagensTotal = [];
   let lastId = undefined;
-  const totalALer = Math.min(limiteBusca, 1000); // Segurança para não exceder 1000
+  const totalALer = Math.min(limiteBusca, 1000);
 
   while (mensagensTotal.length < totalALer) {
+
     const remaining = totalALer - mensagensTotal.length;
     const fetchLimit = Math.min(100, remaining);
     const batch = await canal.messages.fetch({ limit: fetchLimit, before: lastId }).catch(() => null);

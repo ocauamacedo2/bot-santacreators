@@ -1243,7 +1243,7 @@ await scanChannelEmbeds(client, {
     },
   });
 
-  // ALINHAMENTOS
+  // ALINHAMENTOS (Sincronizado com Dash: apenas Válidos/Aprovados)
   await scanChannelEmbeds(client, {
     channelId: CH_ALINHAMENTOS_ID,
     weekFloorKey,
@@ -1252,9 +1252,18 @@ await scanChannelEmbeds(client, {
       const emb = m.embeds?.[0];
       if (!emb) return;
       if (!isAlinhamentoRecordEmbed(emb)) return;
+
+      const statusAlinhamento = getStatusValueFromEmbed(emb);
+      if (!/VÁLIDO|VALIDO|aprovado por/i.test(statusAlinhamento)) return;
+
       const uid = alinhamento_getQuemAlinhouId(emb);
       if (!uid) return;
-      pushItem({ userId: uid, ts: new Date(m.createdTimestamp), source: "alinhamentos" });
+
+      pushItem({
+        userId: uid,
+        ts: new Date(m.editedTimestamp || m.createdTimestamp),
+        source: "alinhamentos"
+      });
     },
   });
 

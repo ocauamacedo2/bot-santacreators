@@ -1548,7 +1548,6 @@ async function collectAllGeneral(client, mode = "light") {
 
       const uid = pagamentos_getRegistrarId(emb);
       if (!uid) return;
-
       items.push({
         userId: uid,
         ts: new Date(m.createdTimestamp),
@@ -1557,6 +1556,33 @@ async function collectAllGeneral(client, mode = "light") {
     },
   });
 
+  // ✅ NOVO: VIP EVENTO (conta ponto só para quem clicou em PAGO)
+  await scanChannelEmbeds(client, {
+    channelId: VIP_MENU_CHANNEL_ID,
+    weekFloorKey,
+    maxPages: 80,
+    onMessage: async (m) => {
+      const emb = m.embeds?.[0];
+      if (!emb) return;
+      if (!isVipRecordEmbed(emb)) return;
+
+      const status = vip_getStatus(emb);
+      if (!status.isPago) return;
+
+      const uid = vip_getPagoByUserId(emb);
+      if (!uid) return;
+
+      const paidAt = vip_getPagoAtSP(emb);
+
+      items.push({
+        userId: uid,
+        ts: paidAt || new Date(m.createdTimestamp),
+        source: "vipPagos",
+      });
+    },
+  });
+
+ 
 
   // ✅ NÃO redeclare manager_getApprovedAtSP / manager_getRejectedAtSP aqui
   // ✅ usa as funções globais já declaradas na área de parsers
@@ -1691,6 +1717,39 @@ if (CORRECAO_LOGS_CHANNEL_ID) { // Usa o mesmo canal de logs de correção
     },
   });
 }
+
+// ✅ VENDAS (logs) — precisa entrar no items[] para bater com o Ranking Semanal
+if (VENDAS_LOGS_CHANNEL_ID) {
+  const vendasLastPointByUser = new Map();
+
+  await scanChannelEmbeds(client, {
+    channelId: VENDAS_LOGS_CHANNEL_ID,
+    weekFloorKey,
+    maxPages: 80,
+    onMessage: async (m) => {
+      const emb = m.embeds?.[0];
+      if (!emb) return;
+      if (!isVendaLogEmbed(emb)) return;
+
+      const uid = venda_getSellerId(emb);
+      if (!uid) return;
+
+      const ts = m.createdTimestamp;
+      const last = vendasLastPointByUser.get(uid) || 0;
+
+      if (!last || Math.abs(last - ts) >= 7 * 60 * 60 * 1000) {
+        vendasLastPointByUser.set(uid, ts);
+
+        items.push({
+          userId: uid,
+          ts: new Date(ts),
+          source: "vendas",
+        });
+      }
+    },
+  });
+}
+
 // ✅ CRONOGRAMA (Aprovados)
 if (CRONOGRAMA_LOGS_CHANNEL_ID) {
   await scanChannelEmbeds(client, {
@@ -1707,18 +1766,26 @@ if (CRONOGRAMA_LOGS_CHANNEL_ID) {
       if (!isGreen && !footer.includes("Aprovado por")) return;
 
       // Pega ID do solicitante na descrição: "**Solicitante:** <@123>"
+      const title = emb.title || "";
       const desc = emb.description || "";
       const match = desc.match(/Solicitante:.*?<@!?(\d+)>/i);
       if (!match) return;
 
-      items.push({
-        userId: match[1],
-        ts: new Date(m.createdTimestamp), // Data da criação do pedido de aprovação
-        source: "cronograma",
-      });
+      const userId = match[1];
+      const ts = new Date(m.editedTimestamp || m.createdTimestamp);
+
+      // Diferencia Cronograma, Hall da Fama e Eventos Diários pelo título/descrição
+      if (title.includes("Hall da Fama")) {
+        items.push({ userId, ts, source: "halldafama" });
+      } else if (title.includes("Evento Diário")) {
+        items.push({ userId, ts, source: "eventosdiarios" });
+      } else {
+        items.push({ userId, ts, source: "cronograma" });
+      }
     },
   });
 }
+
 
 // ✅ PRESENÇAS (Log)
 if (PRESENCA_LOGS_CHANNEL_ID) {
@@ -1816,8 +1883,32 @@ try {
     const cal = await client.channels.fetch(BP_CALENDAR_CHANNEL_ID).catch(() => null);
 
     if (cal?.isTextBased?.()) {
-      const stateMessages = await fetchAllBPStateMessages(cal, monthKeys, 60);
-      bpStates = stateMessages.map((x) => x.obj);
+      let pins = null;
+
+      if (typeof cal.messages?.fetchPinned === "function") {
+        pins = await cal.messages.fetchPinned().catch(() => null);
+      } else if (typeof cal.messages?.fetchPins === "function") {
+        pins = await cal.messages.fetchPins().catch(() => null);
+      }
+
+      const pinList = bpPinsToArray(pins);
+      const recent = await cal.messages.fetch({ limit: 300 }).catch(() => null);
+      const recList = recent?.values ? [...recent.values()] : [];
+
+      const pool = new Map();
+
+      for (const m of [...pinList, ...recList]) {
+        if (m?.id) pool.set(m.id, m);
+      }
+
+      bpStates = [];
+
+      for (const msg of pool.values()) {
+        const obj = safeParseJSONBlock(msg.content);
+        if (!obj?.monthKey || !obj?.days) continue;
+        if (!monthKeys.includes(obj.monthKey)) continue;
+        bpStates.push(obj);
+      }
     }
   }
 
