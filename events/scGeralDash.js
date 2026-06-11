@@ -406,6 +406,10 @@ let CACHE = { at: 0, payload: null };
 let DIRTY = false; // marcou que teve interação humana desde última atualização
 let NEXT_ALLOWED_AT = 0; // quando pode rodar scan novamente
 
+function clearGeneralDashCache() {
+  CACHE = { at: 0, payload: null };
+}
+
 const DEBUG = {
   lastRunAt: null,
   lastReason: "",
@@ -1548,6 +1552,7 @@ async function collectAllGeneral(client, mode = "light") {
 
       const uid = pagamentos_getRegistrarId(emb);
       if (!uid) return;
+
       items.push({
         userId: uid,
         ts: new Date(m.createdTimestamp),
@@ -1556,33 +1561,6 @@ async function collectAllGeneral(client, mode = "light") {
     },
   });
 
-  // ✅ NOVO: VIP EVENTO (conta ponto só para quem clicou em PAGO)
-  await scanChannelEmbeds(client, {
-    channelId: VIP_MENU_CHANNEL_ID,
-    weekFloorKey,
-    maxPages: 80,
-    onMessage: async (m) => {
-      const emb = m.embeds?.[0];
-      if (!emb) return;
-      if (!isVipRecordEmbed(emb)) return;
-
-      const status = vip_getStatus(emb);
-      if (!status.isPago) return;
-
-      const uid = vip_getPagoByUserId(emb);
-      if (!uid) return;
-
-      const paidAt = vip_getPagoAtSP(emb);
-
-      items.push({
-        userId: uid,
-        ts: paidAt || new Date(m.createdTimestamp),
-        source: "vipPagos",
-      });
-    },
-  });
-
- 
 
   // ✅ NÃO redeclare manager_getApprovedAtSP / manager_getRejectedAtSP aqui
   // ✅ usa as funções globais já declaradas na área de parsers
@@ -1598,23 +1576,26 @@ async function collectAllGeneral(client, mode = "light") {
       if (manager_isRejected(emb)) return;
       if (!manager_isApproved(emb)) return;
 
-      // ✅ dono do ponto = manager responsável (fallback registrante)
-      const uid = manager_getManagerId(emb) || manager_getRegistrarId(emb);
-      if (!uid) return;
+      // ✅ Sincronizado: busca em ambos os canais de manager
+      for (const rmChannelId of [CH_MANAGER_ID, CH_MANAGER_MAIN_ID]) {
+        if (!rmChannelId) continue;
+        
+        // dono do ponto = manager responsável (fallback registrante)
+        const uid = manager_getManagerId(emb) || manager_getRegistrarId(emb);
+        if (!uid) return;
 
-      // ✅ aqui é o FIX: conta na SEMANA DA APROVAÇÃO (se tiver no embed)
-      const approvedAt = manager_getApprovedAtSP(emb);
+        // ✅ conta na SEMANA DA APROVAÇÃO (se tiver no embed)
+        const approvedAt = manager_getApprovedAtSP(emb);
 
-      items.push({
-        userId: uid,
-        ts: approvedAt || new Date(m.createdTimestamp),
-        source: "manager",
-      });
+        items.push({
+          userId: uid,
+          ts: approvedAt || new Date(m.createdTimestamp),
+          source: "manager",
+        });
+      }
     },
   });
 
-
-  // ✅ ✅ ✅ ADD AQUI: ALINHAMENTOS (conta pro "quem alinhou")
 await scanChannelEmbeds(client, {
   channelId: CH_ALINHAMENTOS_ID,
   weekFloorKey,
@@ -1717,39 +1698,6 @@ if (CORRECAO_LOGS_CHANNEL_ID) { // Usa o mesmo canal de logs de correção
     },
   });
 }
-
-// ✅ VENDAS (logs) — precisa entrar no items[] para bater com o Ranking Semanal
-if (VENDAS_LOGS_CHANNEL_ID) {
-  const vendasLastPointByUser = new Map();
-
-  await scanChannelEmbeds(client, {
-    channelId: VENDAS_LOGS_CHANNEL_ID,
-    weekFloorKey,
-    maxPages: 80,
-    onMessage: async (m) => {
-      const emb = m.embeds?.[0];
-      if (!emb) return;
-      if (!isVendaLogEmbed(emb)) return;
-
-      const uid = venda_getSellerId(emb);
-      if (!uid) return;
-
-      const ts = m.createdTimestamp;
-      const last = vendasLastPointByUser.get(uid) || 0;
-
-      if (!last || Math.abs(last - ts) >= 7 * 60 * 60 * 1000) {
-        vendasLastPointByUser.set(uid, ts);
-
-        items.push({
-          userId: uid,
-          ts: new Date(ts),
-          source: "vendas",
-        });
-      }
-    },
-  });
-}
-
 // ✅ CRONOGRAMA (Aprovados)
 if (CRONOGRAMA_LOGS_CHANNEL_ID) {
   await scanChannelEmbeds(client, {
@@ -1785,7 +1733,6 @@ if (CRONOGRAMA_LOGS_CHANNEL_ID) {
     },
   });
 }
-
 
 // ✅ PRESENÇAS (Log)
 if (PRESENCA_LOGS_CHANNEL_ID) {
@@ -1884,7 +1831,6 @@ try {
 
     if (cal?.isTextBased?.()) {
       let pins = null;
-
       if (typeof cal.messages?.fetchPinned === "function") {
         pins = await cal.messages.fetchPinned().catch(() => null);
       } else if (typeof cal.messages?.fetchPins === "function") {
@@ -1894,15 +1840,10 @@ try {
       const pinList = bpPinsToArray(pins);
       const recent = await cal.messages.fetch({ limit: 300 }).catch(() => null);
       const recList = recent?.values ? [...recent.values()] : [];
-
       const pool = new Map();
-
-      for (const m of [...pinList, ...recList]) {
-        if (m?.id) pool.set(m.id, m);
-      }
+      for (const m of [...pinList, ...recList]) { if (m?.id) pool.set(m.id, m); }
 
       bpStates = [];
-
       for (const msg of pool.values()) {
         const obj = safeParseJSONBlock(msg.content);
         if (!obj?.monthKey || !obj?.days) continue;
@@ -3313,6 +3254,7 @@ function wireHub(client) {
 
   const markDirty = (opts = {}) => {
   DIRTY = true;
+  if (opts.invalidateScanCache) clearGeneralDashCache();
 
   // ✅ FIX: se a mudança pode afetar o Top 3 / total do scan,
   // invalida o cache pra atualizar "na hora".
@@ -4025,6 +3967,7 @@ if (low.startsWith("!removept")) {
     globalThis.__SC_GERAL_DASH_UPSERTING__ = false;
     globalThis.__SC_GERAL_DASH_LOCK_TS__ = 0;
 
+    clearGeneralDashCache();
     console.log("[SC_GERAL_DASH] 🔓 Desbloqueio forçado via comando.");
 
     DIRTY = false;
