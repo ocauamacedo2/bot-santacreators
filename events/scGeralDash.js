@@ -480,6 +480,8 @@ const DEBUG = {
   weekKeysFound: {},
 };
 
+const MANAGER_AUDIT_ENABLED = process.env.SC_MANAGER_AUDIT === "1";
+
 // ================== FILE HELPERS ==================
 function ensureDirForFile(filePath) {
   try {
@@ -1083,16 +1085,37 @@ function manager_getApprovedAtSP(emb) {
   }
 }
 
-function makeManagerStableDedupeKey(emb, uid, approvedAt) {
+function manager_getCanonicalRecordId(emb, msg) {
+  const text = getEmbedText(emb);
+
+  let m = /rm\s*msgid\s*:\s*(\d{17,20})/i.exec(text);
+  if (m) return m[1];
+
+  m = /discord\.com\/channels\/\d+\/1392680204517769277\/(\d{17,20})/i.exec(text);
+  if (m) return m[1];
+
+  m = /https?:\/\/discord\.com\/channels\/\d+\/\d+\/(\d{17,20})/i.exec(text);
+  if (m) return m[1];
+
+  return String(msg?.id || "").trim();
+}
+
+function makeManagerStableDedupeKey(emb, msg, uid, approvedAt) {
+  const recordId = manager_getCanonicalRecordId(emb, msg);
+
+  if (recordId) {
+    return `manager::record::${recordId}`;
+  }
+
   const approvedKey =
     approvedAt instanceof Date && !Number.isNaN(approvedAt.getTime())
       ? approvedAt.toISOString()
       : "sem-data-aprovacao";
 
   const safeUserId = String(uid || "").trim();
-  const safeEmbedText = norm(getEmbedText(emb)).slice(0, 1200);
+  const safeEmbedText = norm(getEmbedText(emb)).slice(0, 500);
 
-  return `manager::${safeUserId}::${approvedKey}::${safeEmbedText}`;
+  return `manager::fallback::${safeUserId}::${approvedKey}::${safeEmbedText}`;
 }
 
 function manager_getRejectedAtSP(emb) {
@@ -1673,12 +1696,7 @@ async function collectAllGeneral(client, mode = "light") {
   // ✅ NÃO redeclare manager_getApprovedAtSP / manager_getRejectedAtSP aqui
   // ✅ usa as funções globais já declaradas na área de parsers
 
-    // ✅ MANAGER: Escaneia agora os dois canais (Arquivo + Semanal) com deduplicação
-    let mgrTotalFound = 0;
-    let mgrTotalCounted = 0;
-    let mgrTotalDupIgnored = 0;
-    const mgrStatsByCh = {};
-
+    // ✅ MANAGER: Escaneia agora os dois canais (Arquivo + Semanal) com deduplicação real por RM MSGID
     for (const mgrCh of [CH_MANAGER_ID, CH_MANAGER_MAIN_ID]) {
       await scanChannelEmbeds(client, {
         channelId: mgrCh,
@@ -1694,52 +1712,36 @@ async function collectAllGeneral(client, mode = "light") {
           if (manager_isRejected(emb)) return;
           if (!manager_isApproved(emb)) return;
 
-          mgrTotalFound++;
-          mgrStatsByCh[mgrCh] = (mgrStatsByCh[mgrCh] || 0) + 1;
-
-          // dono do ponto = manager responsável (fallback registrante)
           const uid = manager_getManagerId(emb) || manager_getRegistrarId(emb);
           if (!uid) return;
 
-          // ✅ conta na SEMANA DA APROVAÇÃO (se tiver no embed)
           const approvedAt = manager_getApprovedAtSP(emb);
 
-          // ✅ dedupe real: evita contar o mesmo registro de Manager copiado em canais diferentes
-          const managerStableKey = makeManagerStableDedupeKey(emb, uid, approvedAt);
-          
-          let action = "CONTADO";
-          if (seenManagerStableKeys.has(managerStableKey)) {
-            action = "DUPLICADO_IGNORADO";
-            mgrTotalDupIgnored++;
-          } else {
-            seenManagerStableKeys.add(managerStableKey);
-            mgrTotalCounted++;
-            items.push({
-              userId: uid,
-              ts: approvedAt || new Date(m.createdTimestamp),
-              source: "manager",
-            });
-          }
+          const managerStableKey = makeManagerStableDedupeKey(emb, m, uid, approvedAt);
+          if (seenManagerStableKeys.has(managerStableKey)) return;
+          seenManagerStableKeys.add(managerStableKey);
 
-          console.log(
-            `[MANAGER_AUDIT] canal: ${mgrCh} | msgId: ${m.id} | userId: ${uid} | ` +
-            `approvedAt: ${approvedAt?.toISOString() || "n/a"} | ` +
-            `title: ${emb.title} | stableKey: ${managerStableKey} | ação: ${action}`
-          );
+          items.push({
+            userId: uid,
+            ts: approvedAt || new Date(m.createdTimestamp),
+            source: "manager",
+          });
         },
       });
     }
 
-    console.log([
-      `\n[MANAGER_AUDIT_SUMMARY - DASH]`,
-      `totalEncontrado: ${mgrTotalFound}`,
-      `totalContado: ${mgrTotalCounted}`,
-      `totalDuplicadoIgnorado: ${mgrTotalDupIgnored}`,
-      `porCanal:`,
-      `1486084441762693291 (Arquivo): ${mgrStatsByCh[CH_MANAGER_ID] || 0}`,
-      `1392680204517769277 (Weekly): ${mgrStatsByCh[CH_MANAGER_MAIN_ID] || 0}`,
-      `----------------------------\n`
-    ].join("\n"));
+if (MANAGER_AUDIT_ENABLED) {
+  console.log([
+    `\n[MANAGER_AUDIT_SUMMARY - DASH]`,
+    `totalEncontrado: ${mgrTotalFound}`,
+    `totalContado: ${mgrTotalCounted}`,
+    `totalDuplicadoIgnorado: ${mgrTotalDupIgnored}`,
+    `porCanal:`,
+    `1486084441762693291 (Arquivo): ${mgrStatsByCh[CH_MANAGER_ID] || 0}`,
+    `1392680204517769277 (Weekly): ${mgrStatsByCh[CH_MANAGER_MAIN_ID] || 0}`,
+    `----------------------------\n`
+  ].join("\n"));
+}
 
 
 await scanChannelEmbeds(client, {
