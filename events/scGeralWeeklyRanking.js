@@ -1129,7 +1129,7 @@ async function collectAllPoints(client, mode = "light") {
     }
     return CACHE.payload;
   }
-
+///teste
   DEBUG.weekKeysFound = {};
   const items = [];
   const counts = {}; // ✅ Debug: contagem por tipo
