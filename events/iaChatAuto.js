@@ -459,6 +459,16 @@ function uniqueDiscordUserIds(...ids) {
   )];
 }
 
+function buildSafeUserMention(id) {
+  const safeId = String(id || "").trim().match(/\d{17,22}/)?.[0];
+
+  if (!safeId) {
+    return "mano";
+  }
+
+  return `<@${safeId}>`;
+}
+
 async function buildAllowedMentionUsers(message, client) {
   const users = new Set();
 
@@ -2810,23 +2820,25 @@ function withIaTimeout(promise, ms = 12000, label = "IA ENTREVISTA") {
 
 function buildIaInterviewQuickAnswer(message, openerId) {
   const text = normalizeSearchText(message.content);
+  const mention = buildSafeUserMention(openerId);
 
   if (
     text.includes("como funciona") ||
     text.includes("queria fazer a entrevista") ||
     text.includes("fazer entrevista") ||
     text.includes("alguem ai") ||
-    text.includes("alguém ai")
+    text.includes("alguém ai") ||
+    text.includes("oi") ||
+    text.includes("oie") ||
+    text.includes("oiee") ||
+    text.includes("tem alguem") ||
+    text.includes("tem alguém")
   ) {
     return (
-      `Claro <@${openerId}> 😄\n\n` +
-      `A entrevista funciona assim: um membro da equipe vai te atender, explicar rapidinho e iniciar as perguntas.\n\n` +
-      `📌 **Pontos importantes:**\n` +
-      `• a entrevista deve ser feita em call;\n` +
-      `• responda com calma e com suas palavras;\n` +
-      `• respeite a hierarquia e quem estiver atendendo;\n` +
-      `• qualquer staff/creator disponível pode corrigir ou ajudar, não precisa esperar uma pessoa específica.\n\n` +
-      `Já já alguém da equipe aparece por aqui.`
+      `Opa ${mention} 😄 tô por aqui sim.\n\n` +
+      `Se tu quiser fazer a entrevista, é só avisar que a equipe já puxa certinho. Antes disso, só vai na calma: responde com tuas palavras, sem copiar regra e sem usar IA, fechou? kkk\n\n` +
+      `E só pra não confundir: a **SantaCreators** não é só “grupo de criador de conteúdo”. É uma empresa de RP estruturada, com eventos, organização, hierarquia e postura dentro da cidade.\n\n` +
+      `Tu quer começar a entrevista ou quer tirar alguma dúvida antes?`
     );
   }
 
@@ -2906,17 +2918,21 @@ if (!response) {
   } catch (err) {
     console.error("[IA ENTREVISTA] Falha/timeout ao gerar resposta:", err?.message || err);
 
-    response =
-      `Boaaa <@${openerId}> 😄 entendi.\n\n` +
-      `Antes da entrevista, só reforçando rapidinho: responde tudo com calma, com suas próprias palavras e sem copiar regra/usar IA, fechado?\n\n` +
-      `A SantaCreators não é só “grupo de criador de conteúdo”; é uma **empresa de RP estruturada**, com eventos, hierarquia, organização e postura dentro da cidade.\n\n` +
-      `Me fala: você quer começar a entrevista ou tirar alguma dúvida antes?`;
+response =
+  `Boaaa ${buildSafeUserMention(openerId)} 😄 entendi.\n\n` +
+  `Antes da entrevista, só reforçando rapidinho: responde tudo com calma, com suas próprias palavras e sem copiar regra/usar IA, fechado?\n\n` +
+  `A SantaCreators não é só “grupo de criador de conteúdo”; é uma **empresa de RP estruturada**, com eventos, hierarquia, organização e postura dentro da cidade.\n\n` +
+  `Me fala: você quer começar a entrevista ou tirar alguma dúvida antes?`;
   }
 }
 
 const finalText =
-  limitDiscordText(fixBrokenDiscordMentions(response)) ||
-  `Boaaa <@${openerId}> 😄 me explica com suas palavras que eu vou te acompanhando por aqui.`;
+  limitDiscordText(
+    fixBrokenDiscordMentions(response)
+      .replace(/<@!?(\d{17,22})>\d+>/g, "<@$1>")
+      .replace(/<@!?(\d{17,22})\D+>/g, "<@$1>")
+  ) ||
+  `Boaaa ${buildSafeUserMention(openerId)} 😄 me explica com suas palavras que eu vou te acompanhando por aqui.`;
 
 await message.reply({
   content: finalText,
