@@ -2698,10 +2698,135 @@ MISSÃO:
 - Explicar quando fizer sentido que SantaCreators NÃO é só para criadores de conteúdo.
 - Explicar quando fizer sentido que SantaCreators é empresa de RP estruturada, com eventos dinâmicos e interativos da Santa Group.
 
-TAMANHO DA RESPOSTA:
+TAMANHO E ESTILO DA RESPOSTA:
 - Máximo 3 linhas curtas.
-- Se for só "oi/eai", responda curto e puxe uma pergunta simples.
+- Não repetir a mesma abertura do histórico.
+- Não começar sempre com "Opa" ou "E aí".
+- Se o usuário já foi cumprimentado, NÃO cumprimente de novo.
+- Responda só o que ele perguntou.
+- Seja natural, com jeito de Discord.
+- Pode usar "kkk", "boaa", "fechou", "tranquilo", mas sem exagero.
 - Não mande lista grande sem necessidade.
+- Não fale de botão se o status informar que não existe botão.
+- Se a pessoa for da equipe, trate como teste/ajuda, não como candidato.
+
+COMPORTAMENTO NATURAL:
+- Varie as respostas para não parecer robô.
+- Não use sempre as mesmas palavras.
+- Não responda com frase pronta se a pessoa perguntou algo específico.
+- Se a pessoa mandar só "oi", "olá", "boa noite", "bom dia" ou algo parecido, cumprimente de forma curta e pergunte como pode ajudar.
+- Se a pessoa parecer perdida, explique com calma e sem textão.
+- Se a pessoa estiver nervosa, tranquilize.
+- Se a pessoa fizer brincadeira leve, pode responder leve também, sem perder o foco.
+- Se a pessoa mandar muitas mensagens seguidas, responda juntando o contexto, sem repetir tudo.
+- Se a pergunta já foi respondida no histórico, responda de novo de forma curta, sem reclamar.
+- Se a pessoa falar errado, com abreviação ou gíria, entenda pelo contexto.
+- Se não entender, peça para ela explicar de novo de forma simples.
+
+SOBRE A SANTACREATORS:
+- SantaCreators é uma empresa de RP estruturada ligada à Santa Group.
+- SantaCreators trabalha com creators, social medias, managers, responsáveis, eventos, organização e suporte de comunidade.
+- SantaCreators NÃO é apenas para quem grava vídeo ou faz live.
+- Pessoas que gostam de RP, eventos, organização, comunicação, criatividade ou comunidade também podem se encaixar.
+- Não diga que a pessoa já está aceita.
+- Não diga que a pessoa tem vaga garantida.
+- Não prometa cargo, pagamento, benefício, VIP ou aprovação.
+- Se perguntarem "o que é SantaCreators?", explique de forma curta e natural.
+- Se perguntarem "precisa ser famoso?", explique que não, o importante é ter interesse, postura e vontade de participar.
+- Se perguntarem "precisa fazer live?", explique que depende da função e da avaliação da equipe, sem prometer nada.
+- Se perguntarem "tem que ter experiência?", diga que experiência ajuda, mas não é obrigatório para todos os casos.
+
+SOBRE A ENTREVISTA:
+- A entrevista serve para conhecer melhor a pessoa.
+- Oriente a pessoa a responder com sinceridade e com as próprias palavras.
+- Não dê resposta pronta para perguntas da entrevista.
+- Não monte texto para a pessoa copiar.
+- Se ela pedir "me dá uma resposta boa", explique que pode ajudar a entender a pergunta, mas ela precisa responder do jeito dela.
+- Se ela perguntar "o que eu falo?", ajude com orientação geral, sem entregar resposta pronta.
+- Se ela perguntar se pode usar IA, diga que o ideal é responder com as próprias palavras.
+- Se ela perguntar se português perfeito é obrigatório, diga que não precisa ser perfeito, mas precisa dar para entender.
+- Se ela perguntar quanto tempo demora, diga que depende da equipe e do movimento do ticket.
+- Se ela perguntar quem avalia, diga que a equipe responsável analisa.
+- Se ela perguntar se foi aprovada, diga que a equipe vai avaliar e responder quando possível.
+- Se ela perguntar se pode refazer, diga para aguardar orientação da equipe.
+
+SOBRE BOTÃO, COMANDO E INÍCIO:
+- Se existir botão e a pessoa perguntar como começar, diga para usar o botão de iniciar entrevista.
+- Se existir botão, fale disso de forma curta, sem insistir.
+- Se NÃO existir botão, nunca mande clicar em botão.
+- Se NÃO existir botão e a pessoa quiser começar, diga para aguardar alguém da equipe ou usar o comando correto, se ela souber.
+- Se a pessoa disser que o botão sumiu, não apareceu ou deu erro, diga para aguardar a equipe verificar.
+- Se a pessoa disser que clicou e não aconteceu nada, diga para tentar aguardar um pouco e, se continuar, a equipe confere.
+- Não invente comando se ele não estiver no contexto real do servidor.
+
+SOBRE CANDIDATO CONFUSO:
+- Se a pessoa perguntar "como funciona?", explique resumido.
+- Se a pessoa perguntar "o que faço agora?", diga o próximo passo conforme o status do botão.
+- Se a pessoa perguntar "onde respondo?", diga para responder no próprio ticket quando a entrevista começar.
+- Se a pessoa perguntar "posso sair do ticket?", diga para aguardar a equipe se ainda estiver em atendimento.
+- Se a pessoa perguntar "posso chamar alguém?", diga que se for necessário a equipe será chamada.
+- Se a pessoa estiver mandando informações pessoais demais, oriente a não expor dados sensíveis desnecessários.
+- Se a pessoa mandar algo fora do assunto, responda curto e tente voltar para o atendimento.
+
+SOBRE PESSOA DA EQUIPE:
+- Se openerIsStaff for verdadeiro ou o contexto indicar que a pessoa já é da equipe, NÃO trate como candidato.
+- Pergunte se abriu por teste, dúvida, bug, ajuda com candidato ou algum atendimento.
+- Pode falar de forma leve.
+- Não peça para essa pessoa iniciar entrevista como candidato.
+- Não explique processo básico de entrevista para staff, a menos que ela pergunte.
+- Se staff pedir ajuda sobre candidato, responda como suporte interno.
+- Se staff estiver testando a IA, responda reconhecendo o teste de forma natural.
+- Se staff perguntar se está funcionando, diga que aparentemente sim, mas se tiver bug pode mandar o detalhe.
+
+SOBRE PROBLEMAS, BUGS E ERROS:
+- Se a pessoa relatar bug, responda curto e diga que a equipe pode verificar.
+- Se a pessoa falar que travou, sumiu, não apareceu, duplicou ou deu erro, peça uma descrição curta do que aconteceu.
+- Se for algo que depende de permissão, cargo, canal, botão ou sistema, não invente solução.
+- Se precisar chamar apoio, chame apenas UM cargo de apoio.
+- Não marque todos os cargos.
+- Não crie alarme sem necessidade.
+- Se o problema for simples, responda sem marcar ninguém.
+
+SOBRE LIMITES DA IA:
+- Não diga que você é humano.
+- Não finja ser membro real da equipe.
+- Pode falar como assistente da SantaCreators.
+- Se não souber algo, diga que não tem essa informação certinha e que a equipe pode confirmar.
+- Não invente datas, horários, cargos, salários, benefícios, regras ou aprovações.
+- Use o CONTEXTO REAL DO SERVIDOR como fonte principal.
+- Se o contexto real não tiver a resposta, responda com cuidado e sem afirmar certeza.
+
+VARIAÇÕES DE RESPOSTAS CURTAS QUE PODE USAR COMO BASE:
+- Para saudação inicial: "boaa, tudo certo? me fala no que posso te ajudar por aqui."
+- Para candidato querendo começar: "fechou, dá pra começar por aqui sim. segue o passo que aparecer no ticket."
+- Para quando tem botão: "boaa, pode usar o botão de iniciar entrevista aqui no ticket."
+- Para quando não tem botão: "aqui não apareceu botão pra mim, então aguarda alguém da equipe iniciar ou orientar certinho."
+- Para dúvida sobre SantaCreators: "a SantaCreators é uma empresa de RP da Santa Group, focada em creators, eventos e comunidade."
+- Para quem acha que precisa ser famoso: "não precisa ser famoso não kkk o importante é postura, interesse e vontade de somar."
+- Para quem não faz live: "não tem problema automaticamente. SantaCreators não é só live, tem várias áreas e perfis."
+- Para nervosismo: "relaxa kkk responde com calma e do teu jeito, não precisa ser perfeito."
+- Para pedido de resposta pronta: "não posso montar resposta pra copiar, mas posso te ajudar a entender a pergunta."
+- Para erro de português: "fica tranquilo, não precisa escrever perfeito, só precisa dar pra entender bem."
+- Para pergunta sobre aprovação: "quem confirma isso é a equipe depois da análise, eu não consigo aprovar por aqui."
+- Para demora: "depende do movimento e da equipe disponível, mas fica de olho aqui no ticket."
+- Para staff: "tu já é da equipe kkk abriu por teste ou precisa de ajuda com algum atendimento?"
+- Para bug: "entendi. me manda rapidinho o que aconteceu que a equipe consegue conferir melhor."
+- Para assunto confuso: "não entendi 100%, consegue me explicar de um jeito mais simples?"
+- Para encerrar leve: "fechou, qualquer coisa manda aqui no ticket."
+
+INTENÇÃO POR TIPO DE MENSAGEM:
+- Se a mensagem for cumprimento: responda cumprimento curto.
+- Se a mensagem for dúvida: responda a dúvida direto.
+- Se a mensagem for reclamação: acolha e encaminhe sem discutir.
+- Se a mensagem for pedido de aprovação: diga que só a equipe avalia.
+- Se a mensagem for pedido de resposta pronta: negue com leveza e oriente.
+- Se a mensagem for pergunta sobre regras: use apenas o contexto real.
+- Se a mensagem for pergunta sobre SantaCreators: explique curto.
+- Se a mensagem for pergunta sobre botão: respeite o status do botão.
+- Se a mensagem for de staff: trate como teste, ajuda ou suporte.
+- Se a mensagem for muito vaga: peça uma explicação curta.
+- Se a mensagem for provocação leve: responda sem entrar em briga.
+- Se a mensagem for ofensiva ou agressiva: mantenha calma e peça respeito.
 
 REGRAS IMPORTANTES:
 - Nunca incentive copiar e colar.
@@ -2933,29 +3058,293 @@ function withIaTimeout(promise, ms = 12000, label = "IA ENTREVISTA") {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
+function pickIaInterviewReply(list, channelId, fallback = null) {
+  if (!Array.isArray(list) || !list.length) return fallback;
+
+  const previous = lastAiResponses.get(channelId) || [];
+  const previousTexts = previous.map((item) => item.text);
+
+  const available = list.filter((text) => {
+    const normalized = normalizeAiCompareText(text);
+    return !previousTexts.some((oldText) =>
+      oldText === normalized ||
+      oldText.includes(normalized) ||
+      normalized.includes(oldText)
+    );
+  });
+
+  const pool = available.length ? available : list;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
+function textHasAny(text, words = []) {
+  return words.some((word) => text.includes(normalizeSearchText(word)));
+}
+
 function buildIaInterviewQuickAnswer(message, openerId) {
   const text = normalizeSearchText(message.content);
   const mention = buildSafeUserMention(openerId);
+  const channelId = message.channelId;
+
+  const respostas = {
+    saudacao: [
+      `E aí ${mention} 😄 tudo certinho por aqui. Me fala: tu veio pra entrevista ou queria tirar uma dúvida antes?`,
+      `Opa ${mention} 😄 cheguei. Quer que eu te explique rapidinho como funciona ou tu já quer seguir pra entrevista?`,
+      `Salve ${mention} 😄 tranquilo? Me diz só uma coisa: tu abriu pra entrevista mesmo ou foi pra tirar dúvida?`,
+      `E aíí ${mention} 😄 bem-vindo ao cantinho das entrevistas kkk. Quer começar pelo básico ou já sabe como funciona?`,
+      `Opa, tudo certo ${mention}? 😄 Antes de qualquer coisa: tu já leu as regras da SantaCreators ou quer que eu te dê um norte rápido?`,
+    ],
+
+    testeStaff: [
+      `Opa, tô respondendo sim 😄 Como tu já é da equipe, vou tratar isso como teste/ajuda e não como candidato comum.`,
+      `Tô funcionando por aqui sim kkk 😄 Como você já é da equipe, não vou te conduzir como entrevista normal.`,
+      `Boa, recebi certinho 😄 Se for teste da IA, tá ok. Se for atendimento real, me fala o cenário que eu adapto.`,
+      `Funcionando sim 😎 Só lembrando: como tu já é da equipe, eu posso ajudar no ticket, mas não vou fingir que tu é candidato.`,
+    ],
+
+    querComecar: [
+      `Boaa ${mention} 😄 pra começar de verdade, alguém da equipe precisa iniciar a entrevista por aqui. Enquanto isso, já deixa na mente: responde tudo com tuas palavras, sem copiar regra e sem usar IA.`,
+      `Fechou ${mention} 😄 a equipe já consegue puxar a entrevista por aqui. Vai tranquilo: o importante é mostrar que entendeu, não decorar texto.`,
+      `Boa ${mention} 😄 se tu quer começar, fica por aqui que alguém da equipe já inicia. Só não manda resposta copiada das regras, porque isso pesa muito.`,
+      `Show ${mention} 😄 a entrevista é pra entender tua postura no RP e na empresa, não pra testar português perfeito. Responde natural e com calma.`,
+    ],
+
+    comoFunciona: [
+      `Funciona assim ${mention}: a equipe inicia as perguntas, você responde com suas palavras e depois alguém corrige vendo sentido, postura e entendimento. Não precisa decorar texto.`,
+      `${mention}, a entrevista avalia se tu entendeu a SantaCreators como empresa de RP: hierarquia, conduta, imersão e responsabilidade. Resposta pessoal vale, cópia seca não.`,
+      `É bem de boa ${mention}: você responde pergunta por pergunta, sem pressa. Se fizer sentido e mostrar entendimento real, mesmo com erro de português, pode ser considerado certo.`,
+      `A entrevista não é prova de escola kkk. A ideia é ver se tu entendeu as regras e sabe agir dentro da SantaCreators sem quebrar RP nem hierarquia.`,
+    ],
+
+    criadorConteudo: [
+      `${mention}, ponto importante: a SantaCreators não é só pra quem grava ou faz live. Ela é uma empresa de RP estruturada, com eventos dinâmicos e organização dentro da Santa Group.`,
+      `Ter seguidores ajuda em algumas coisas, mas não é o foco principal. Aqui pesa mais postura, RP, compromisso, hierarquia e participação nos eventos.`,
+      `Se tu veio achando que é só “grupo de criador”, já te adianto: é bem mais que isso kkk. A SantaCreators funciona como empresa de RP organizada.`,
+      `Conteúdo é legal, mas SantaCreators não é só vitrine de influencer. A base é evento, organização, presença e postura dentro da cidade.`,
+    ],
+
+    duvidaRegras: [
+      `Boa pergunta ${mention}. Regra aqui é levada a sério, mas a correção não é robótica: se a pessoa explicou com as próprias palavras e fez sentido, isso conta bastante.`,
+      `${mention}, o principal é: não copiar regra, não usar IA pra responder e não fugir totalmente do assunto. Erro de português não reprova sozinho.`,
+      `Na entrevista, resposta incompleta pode virar ❓, errada vira ❌ e resposta com entendimento real vira 🆗. A equipe olha o sentido, não só palavra exata.`,
+      `Se a pessoa manda “não sei”, “não li” ou mostra que não viu as regras, aí pesa muito. A obrigação é chegar minimamente preparado.`,
+    ],
+
+    hierarquia: [
+      `${mention}, hierarquia é um dos pontos mais importantes. Problema da empresa se resolve com superiores da SantaCreators, não pulando direto pro topo nem chamando staff do servidor.`,
+      `Na SantaCreators, pular cargo é visto como erro grave. O certo é procurar quem está logo acima ou alguém responsável pela área.`,
+      `Se a resposta mostra que a pessoa acha normal ignorar superiores ou ir direto em dono/staff, isso já acende alerta forte na correção.`,
+    ],
+
+    staffEmpresa: [
+      `${mention}, só pra deixar claro: staff do servidor não é responsável pela empresa. Problema da SantaCreators se resolve com a hierarquia da SantaCreators.`,
+      `Esse ponto é importante: SantaCreators é uma empresa dentro do RP, com liderança própria. Confundir isso com staff/admin pode pesar na entrevista.`,
+      `Se a dúvida for da empresa, chama a equipe da SantaCreators. Staff do servidor só entra em coisa de servidor/regra geral, não gestão interna da empresa.`,
+    ],
+
+    iaCopiaCola: [
+      `${mention}, resposta com cara de IA/copia-cola chama atenção sim, principalmente se vier textão muito rápido ou igualzinho regra. O ideal é responder natural.`,
+      `A equipe consegue perceber quando a resposta parece colada. Melhor errar uma palavra sendo verdadeiro do que mandar texto perfeito sem interpretação.`,
+      `Se a pessoa copia regra sem explicar com as próprias palavras, isso não mostra entendimento. A entrevista quer interpretação, não Ctrl+C Ctrl+V.`,
+      `Textão perfeito em poucos segundos é suspeito kkk. A IA/correção deve olhar tempo, tamanho, sentido e se parece resposta humana mesmo.`,
+    ],
+
+    organizacaoPainelCidade: [
+      `${mention}, tu já tá em alguma organização/painel na cidade? Pergunto porque isso pode mudar o contexto e a forma que a equipe vai te orientar.`,
+      `Antes de seguir, só pra eu entender melhor: tu já participa de alguma org, painel ou área na cidade?`,
+      `Me diz uma coisa ${mention}: tu já tem alguma vivência na cidade ou tá chegando agora nesse lado de empresa/evento?`,
+    ],
+
+    esperaEquipe: [
+      `Já já alguém aparece por aqui ${mention} 😄 enquanto isso, fica tranquilo e não precisa spammar. Melhor responder com calma quando a entrevista começar.`,
+      `Tô por aqui acompanhando ${mention}. Se alguém da equipe entrar, eu paro de me meter e deixo a pessoa te atender kkk.`,
+      `Aguarda só um cadinho ${mention}. Se for algo urgente ou muito específico, eu chamo alguém da equipe de forma certa.`,
+    ],
+
+    confuso: [
+      `${mention}, acho que entendi mais ou menos kkk. Me explica com outras palavras: tu quer fazer entrevista, tirar dúvida ou testar o bot?`,
+      `Pera, deixa eu pegar o sentido: isso é sobre começar a entrevista ou sobre alguma dúvida da SantaCreators?`,
+      `Me dá um norte rapidinho ${mention}: tu quer atendimento, entrevista ou só entender como funciona a empresa?`,
+    ],
+
+    fallback: [
+      `Entendi ${mention} 😄 me fala só mais direto: é dúvida sobre a entrevista ou sobre a SantaCreators?`,
+      `Boa ${mention}. Me explica um pouco melhor pra eu não te responder torto kkk.`,
+      `${mention}, saquei. Quer que eu te responda pelo lado da entrevista ou pelo lado das regras da empresa?`,
+      `Certo 😄 me manda mais um detalhe que eu consigo te orientar melhor.`,
+    ],
+  };
+
+  if (
+    textHasAny(text, ["teste", "testando", "funcionando", "bugou", "bug", "ta funcionando", "tá funcionando"]) &&
+    memberIsIaInterviewStaff(message.member)
+  ) {
+    return pickIaInterviewReply(respostas.testeStaff, channelId);
+  }
 
   if (isShortGreeting(message.content)) {
-    return `E aí ${mention} 😄 tudo certinho? Quer tirar uma dúvida ou falar sobre a entrevista?`;
+    return pickIaInterviewReply(respostas.saudacao, channelId);
   }
 
   if (
-    text.includes("como funciona") ||
-    text.includes("queria fazer a entrevista") ||
-    text.includes("fazer entrevista") ||
-    text.includes("começo") ||
-    text.includes("comeco") ||
-    text.includes("começar") ||
-    text.includes("comecar") ||
-    text.includes("alguem ai") ||
-    text.includes("alguém ai")
+    textHasAny(text, [
+      "quero comecar",
+      "quero começar",
+      "posso começar",
+      "bora começar",
+      "iniciar entrevista",
+      "fazer entrevista",
+      "quero fazer entrevista",
+      "como eu começo",
+      "como eu comeco",
+      "começo entrevista",
+      "comeco entrevista",
+    ])
   ) {
-    return (
-      `Boaa ${mention} 😄 pra começar certinho, alguém da equipe precisa iniciar a entrevista por aqui.\n\n` +
-      `Enquanto isso, já vai na calma: responde tudo com tuas palavras, sem copiar regra e sem usar IA, fechado?`
-    );
+    return pickIaInterviewReply(respostas.querComecar, channelId);
+  }
+
+  if (
+    textHasAny(text, [
+      "como funciona",
+      "me explica",
+      "explica",
+      "como e",
+      "como é",
+      "como vai ser",
+      "quanto tempo",
+      "precisa call",
+      "precisa de call",
+    ])
+  ) {
+    return pickIaInterviewReply(respostas.comoFunciona, channelId);
+  }
+
+  if (
+    textHasAny(text, [
+      "seguidores",
+      "follower",
+      "criador",
+      "criadora",
+      "conteudo",
+      "conteúdo",
+      "live",
+      "stream",
+      "tiktok",
+      "youtube",
+      "instagram",
+      "gravo",
+      "gravar",
+      "faço live",
+      "faco live",
+    ])
+  ) {
+    return pickIaInterviewReply(respostas.criadorConteudo, channelId);
+  }
+
+  if (
+    textHasAny(text, [
+      "regra",
+      "regras",
+      "errar",
+      "errei",
+      "incompleto",
+      "errada",
+      "correcao",
+      "correção",
+      "reprova",
+      "aprova",
+      "portugues",
+      "português",
+    ])
+  ) {
+    return pickIaInterviewReply(respostas.duvidaRegras, channelId);
+  }
+
+  if (
+    textHasAny(text, [
+      "hierarquia",
+      "superior",
+      "responsavel",
+      "responsável",
+      "dono",
+      "coord",
+      "coordenação",
+      "coordenacao",
+      "pular cargo",
+    ])
+  ) {
+    return pickIaInterviewReply(respostas.hierarquia, channelId);
+  }
+
+  if (
+    textHasAny(text, [
+      "staff",
+      "admin",
+      "administrador",
+      "moderação",
+      "moderacao",
+      "chamar adm",
+      "chamar staff",
+    ])
+  ) {
+    return pickIaInterviewReply(respostas.staffEmpresa, channelId);
+  }
+
+  if (
+    textHasAny(text, [
+      "chatgpt",
+      "gpt",
+      "ia",
+      "inteligencia artificial",
+      "inteligência artificial",
+      "copiar",
+      "copiei",
+      "colar",
+      "colei",
+      "ctrl c",
+      "ctrl v",
+      "texto pronto",
+      "resposta pronta",
+    ])
+  ) {
+    return pickIaInterviewReply(respostas.iaCopiaCola, channelId);
+  }
+
+  if (
+    textHasAny(text, [
+      "organizacao",
+      "organização",
+      "org",
+      "painel",
+      "cidade",
+      "faccao",
+      "facção",
+      "empresa",
+    ])
+  ) {
+    return pickIaInterviewReply(respostas.organizacaoPainelCidade, channelId);
+  }
+
+  if (
+    textHasAny(text, [
+      "alguem ai",
+      "alguém ai",
+      "tem alguem",
+      "tem alguém",
+      "ninguem",
+      "ninguém",
+      "cade",
+      "cadê",
+      "demora",
+      "esperar",
+    ])
+  ) {
+    return pickIaInterviewReply(respostas.esperaEquipe, channelId);
+  }
+
+  if (text.length <= 8) {
+    return pickIaInterviewReply(respostas.confuso, channelId);
   }
 
   return null;
