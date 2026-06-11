@@ -9,6 +9,7 @@ import {
 } from 'discord.js';
 
 import { dashEmit } from './dashHub.js';
+import { iaInterviewEvaluateFinishedInterview } from '../events/iaChatAuto.js';
 
 // ===== CONFIG =====
 const ENTREVISTA_DURACAO_MIN = 180;
@@ -809,6 +810,31 @@ async function enviarLogFinalEntrevista(member, dados) {
     content: `🎯 Ações disponíveis para a entrevista de <@${member.id}>:`,
     components: [row]
   });
+
+  const parecerIa = await iaInterviewEvaluateFinishedInterview(member.guild.client, {
+    guild: member.guild,
+    channel: dados.channelId
+      ? await member.guild.client.channels.fetch(dados.channelId).catch(() => null)
+      : null,
+    candidateId: member.id,
+    entrevistadorId,
+    perguntas,
+    respostas,
+  }).catch((err) => {
+    console.error('[IA ENTREVISTA] Falha ao gerar parecer automático:', err);
+    return null;
+  });
+
+  if (parecerIa) {
+    await canalAvaliacao.send({
+      content: parecerIa,
+      allowedMentions: {
+        users: [member.id, entrevistadorId].filter(Boolean),
+        roles: [],
+        parse: [],
+      },
+    }).catch(() => {});
+  }
 }
 
 export default {

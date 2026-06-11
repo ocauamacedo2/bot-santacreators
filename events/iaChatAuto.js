@@ -39,6 +39,44 @@ const AI_REPLY_ONLY_CHANNEL_ID = "1381597720007151698";
 const AI_MEMORY_LOG_CHANNEL_ID = "1506786373687054396";
 
 // =====================================================
+// IA ENTREVISTAS — SANTACREATORS
+// =====================================================
+
+const IA_ENTREVISTA_CATEGORY_ID = "1359244725781266492";
+
+const IA_ENTREVISTA_LOG_PERGUNTAS_ID = "1486084237772718120";
+const IA_ENTREVISTA_LOG_PERGUNTAS_GABARITO_ID = "1463722335176753153";
+const IA_ENTREVISTA_LOG_PERGUNTAS_USADO_ID = "1486084393716941031";
+const IA_ENTREVISTA_LOG_CORRECAO_ID = "1486006908056899748";
+
+const IA_ENTREVISTA_STATE_FILE = path.resolve(
+  process.cwd(),
+  "data",
+  "ia_entrevistas_state.json"
+);
+
+const IA_ENTREVISTA_STAFF_ROLE_IDS = new Set([
+  "1414651836861907006",
+  "1352407252216184833",
+  "1262262852949905409",
+  "1352408327983861844",
+  "1262262852949905408",
+  "1388976314253312100",
+  "1282119104576098314",
+  "1372716303122567239",
+]);
+
+const IA_ENTREVISTA_HELP_ROLE_IDS = [
+  "1414651836861907006",
+  "1352407252216184833",
+  "1262262852949905409",
+  "1388976314253312100",
+  "1282119104576098314",
+];
+
+const IA_ENTREVISTA_ACTIVE = new Map();
+
+// =====================================================
 // CONSULTAS INTERNAS — SANTACREATORS
 // =====================================================
 
@@ -2382,6 +2420,419 @@ throw lastError;
 }
 
 // =====================================================
+// IA ENTREVISTAS — HELPERS
+// =====================================================
+
+function loadIaEntrevistaState() {
+  try {
+    if (!fs.existsSync(IA_ENTREVISTA_STATE_FILE)) return {};
+
+    const raw = fs.readFileSync(IA_ENTREVISTA_STATE_FILE, "utf8");
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveIaEntrevistaState() {
+  try {
+    const dir = path.dirname(IA_ENTREVISTA_STATE_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+    const data = Object.fromEntries(IA_ENTREVISTA_ACTIVE.entries());
+    fs.writeFileSync(IA_ENTREVISTA_STATE_FILE, JSON.stringify(data, null, 2), "utf8");
+  } catch (e) {
+    console.warn("[IA ENTREVISTA] Falha ao salvar estado:", e?.message || e);
+  }
+}
+
+function restoreIaEntrevistaState() {
+  const data = loadIaEntrevistaState();
+
+  for (const [channelId, payload] of Object.entries(data)) {
+    if (!payload?.openerId) continue;
+    IA_ENTREVISTA_ACTIVE.set(channelId, payload);
+  }
+}
+
+restoreIaEntrevistaState();
+
+function getOpenerIdFromChannel(channel) {
+  const topic = String(channel?.topic || "");
+  const match = topic.match(/aberto_por:(\d{17,20})/i);
+  return match ? match[1] : null;
+}
+
+function isIaInterviewChannel(channel) {
+  return String(channel?.parentId || "") === IA_ENTREVISTA_CATEGORY_ID;
+}
+
+function memberIsIaInterviewStaff(member) {
+  if (!member?.roles?.cache) return false;
+  if (member.user?.bot) return false;
+
+  if (
+    member.id === "660311795327828008" ||
+    member.id === "1262262852949905408"
+  ) {
+    return true;
+  }
+
+  return member.roles.cache.some((role) =>
+    IA_ENTREVISTA_STAFF_ROLE_IDS.has(role.id)
+  );
+}
+
+async function fetchChannelTextContext(client, channelId, limit = 20) {
+  const channel = await client.channels.fetch(channelId).catch(() => null);
+  if (!channel?.isTextBased?.()) return "Canal não encontrado.";
+
+  const messages = await channel.messages.fetch({ limit }).catch(() => null);
+  if (!messages?.size) return "Sem mensagens recentes.";
+
+  return [...messages.values()]
+    .reverse()
+    .map((msg) => {
+      const embeds = (msg.embeds || [])
+        .map((emb) => {
+          const title = emb.title || "";
+          const desc = emb.description || "";
+          const fields = (emb.fields || [])
+            .map((f) => `${f.name}: ${f.value}`)
+            .join(" | ");
+
+          return [title, desc, fields].filter(Boolean).join(" | ");
+        })
+        .filter(Boolean)
+        .join("\n");
+
+      const content = cleanText(msg.content || "");
+      const author = msg.author?.bot ? "BOT" : msg.author?.tag || msg.author?.id || "desconhecido";
+
+      return `[${author}] ${content}${embeds ? `\n${embeds}` : ""}`;
+    })
+    .join("\n\n")
+    .slice(0, 9000);
+}
+
+async function buildIaInterviewKnowledge(client) {
+  const [respostasRecentes, gabarito, logsPerguntas, logsCorrecao] =
+    await Promise.all([
+      fetchChannelTextContext(client, IA_ENTREVISTA_LOG_PERGUNTAS_ID, 25),
+      fetchChannelTextContext(client, IA_ENTREVISTA_LOG_PERGUNTAS_GABARITO_ID, 25),
+      fetchChannelTextContext(client, IA_ENTREVISTA_LOG_PERGUNTAS_USADO_ID, 15),
+      fetchChannelTextContext(client, IA_ENTREVISTA_LOG_CORRECAO_ID, 20),
+    ]);
+
+  return `
+BANCO REAL DE ENTREVISTAS DA SANTACREATORS
+
+[RESPOSTAS RECENTES DE CANDIDATOS]
+${respostasRecentes}
+
+[GABARITO / RESPOSTAS DO CRIADOR DAS QUESTÕES]
+${gabarito}
+
+[LOGS DE !PERGUNTAS]
+${logsPerguntas}
+
+[LOGS DE !CORRECAO]
+${logsCorrecao}
+`.slice(0, 22000);
+}
+
+function buildIaInterviewConversationPrompt({ message, history, knowledge, openerId }) {
+  return `
+Você é a IA de pré-atendimento da SantaCreators dentro de um ticket de entrevista.
+
+CANDIDATO DO TICKET:
+<@${openerId}>
+
+MISSÃO:
+- Conversar de forma humana, leve, descontraída e natural.
+- Preparar o candidato para a entrevista.
+- Explicar que SantaCreators NÃO é só para criadores de conteúdo.
+- Explicar que SantaCreators é uma empresa de RP estruturada, com eventos dinâmicos e interativos da Santa Group.
+- Não usar embed.
+- Não fazer textão.
+- Não aprovar, não reprovar e não prometer entrada.
+- Se o candidato quiser começar, conduza naturalmente para ele clicar/iniciar a entrevista ou responder ao aplicador.
+- Se a dúvida for confusa/delicada, chame UM cargo/pessoa de apoio de forma natural usando uma das opções:
+${IA_ENTREVISTA_HELP_ROLE_IDS.map((id) => `<@&${id}>`).join(", ")}
+
+REGRAS IMPORTANTES:
+- Nunca incentive copiar e colar.
+- Nunca incentive usar IA na entrevista.
+- Oriente a responder com as próprias palavras.
+- Seja tolerante com erro de português.
+- Não invente regra que não esteja no contexto.
+- Se não souber algo, improvise com base no contexto sem dizer "não sei".
+
+CONTEXTO REAL DO SERVIDOR:
+${knowledge}
+
+HISTÓRICO RECENTE DO CANAL:
+${history}
+
+MENSAGEM ATUAL:
+${message.author.tag}: ${message.content}
+
+Responda agora como mensagem normal de Discord:
+`;
+}
+
+async function generateIaInterviewConversation(message, client, openerId) {
+  const geminiClient = getGeminiClient();
+
+  if (!geminiClient) {
+    return `Opa <@${openerId}> 😄 seja bem-vind@ ao ticket da SantaCreators! Antes da entrevista, responde tudo com calma e com suas próprias palavras, fechado?`;
+  }
+
+  const history = getHistory(message.channelId);
+  const knowledge = await buildIaInterviewKnowledge(client);
+
+  const prompt = buildIaInterviewConversationPrompt({
+    message,
+    history,
+    knowledge,
+    openerId,
+  });
+
+  let lastError = null;
+
+  for (const modelName of GEMINI_MODEL_FALLBACKS) {
+    try {
+      const result = await geminiClient.models.generateContent({
+        model: modelName,
+        contents: prompt,
+        config: {
+          temperature: 0.9,
+          topP: 0.95,
+          topK: 40,
+          maxOutputTokens: 350,
+        },
+      });
+
+      return result.text;
+    } catch (err) {
+      lastError = err;
+      if (!isGeminiModelError(err)) throw err;
+    }
+  }
+
+  throw lastError;
+}
+
+export async function iaInterviewTicketOpened(channel, openerId) {
+  if (!channel?.isTextBased?.()) return false;
+  if (!isIaInterviewChannel(channel)) return false;
+  if (!openerId) return false;
+
+  IA_ENTREVISTA_ACTIVE.set(channel.id, {
+    openerId,
+    startedAt: Date.now(),
+    active: true,
+    pausedByStaff: false,
+  });
+
+  saveIaEntrevistaState();
+
+  await channel.send(
+    `Eai <@${openerId}> 😄 tudo certinho?\n\n` +
+    `Seja bem-vind@ ao ticket da **SantaCreators** 💖\n\n` +
+    `Antes de começar, só um papo rapidinho: a SantaCreators **não é simplesmente “grupo de criadores de conteúdo”**, tá? ` +
+    `A gente é uma **empresa de RP estruturada**, com eventos dinâmicos e interativos dentro da Santa Group.\n\n` +
+    `Me fala uma coisa: você já está em alguma organização, painel ou cidade? E o que te fez querer entrar na SantaCreators? 👀`
+  ).catch(() => {});
+
+  return true;
+}
+
+export async function iaInterviewEvaluateFinishedInterview(client, payload) {
+  const geminiClient = getGeminiClient();
+
+  if (!geminiClient) {
+    return null;
+  }
+
+  const {
+    guild,
+    channel,
+    candidateId,
+    entrevistadorId,
+    perguntas = [],
+    respostas = [],
+  } = payload || {};
+
+  const knowledge = await buildIaInterviewKnowledge(client);
+
+  const qa = perguntas.map((pergunta, index) => {
+    return [
+      `QUESTÃO ${index + 1}`,
+      `PERGUNTA: ${pergunta}`,
+      `RESPOSTA DO CANDIDATO: ${respostas[index] || "SEM RESPOSTA"}`,
+    ].join("\n");
+  }).join("\n\n");
+
+  const prompt = `
+Você é avaliador auxiliar da SantaCreators.
+
+IMPORTANTE:
+Você NÃO aprova nem reprova sozinho.
+Você gera um parecer para a equipe humana corrigir melhor.
+
+CRITÉRIOS:
+- 🆗 correto: resposta faz sentido, mesmo com erros de português ou palavras diferentes.
+- ❓ incompleto: respondeu parcialmente, faltou ponto importante, mas não fugiu totalmente.
+- ❌ errado: fugiu da pergunta, respondeu algo perigoso, contra regras ou sem sentido.
+- Resposta pessoal deve ser validada com flexibilidade.
+- Não cobre resposta idêntica ao gabarito.
+- Cópia literal de regra sem interpretação é motivo grave.
+- Uso de IA/copia-cola deve ser tratado como suspeita, não acusação absoluta.
+- Textão muito perfeito + tempo muito rápido = suspeito.
+- "não sei", "não li", "não vi essa parte", "acho que entendi errado" em regra importante = reprovação automática sugerida.
+- Quebra de hierarquia grave reprova.
+- Confundir staff do servidor com empresa reprova.
+- 7 erradas reprova.
+- 2 incompletas = 1 errada.
+- 3 incompletas = 1 errada e meia.
+- 4 incompletas = 2 erradas.
+- 5 incompletas = 2 erradas e meia.
+- 6 incompletas = 3 erradas.
+
+CONTEXTO REAL / BANCO DE DADOS:
+${knowledge}
+
+ENTREVISTA:
+Candidato: <@${candidateId}>
+Aplicador: ${entrevistadorId ? `<@${entrevistadorId}>` : "não identificado"}
+Canal: ${channel ? `<#${channel.id}>` : "não identificado"}
+
+PERGUNTAS E RESPOSTAS:
+${qa}
+
+FORMATO OBRIGATÓRIO DA RESPOSTA:
+🧠 **Parecer automático da IA**
+👤 Candidato: <@${candidateId}>
+
+📊 **Resumo**
+- Corretas:
+- Incompletas:
+- Erradas:
+- Peso final de erradas:
+- Resultado sugerido: APROVAR / ALINHAR / REPROVAR
+- Suspeita de IA/copia-cola: BAIXA / MÉDIA / ALTA
+
+🧾 **Questões**
+1. 🆗/❓/❌ — motivo curto
+2. ...
+
+⚠️ **Alertas**
+- Liste sinais suspeitos ou escreva "Nenhum alerta grave."
+
+📝 **Observação para o corretor humano**
+- Explique em poucas linhas o que a equipe deve conferir.
+`;
+
+  let lastError = null;
+
+  for (const modelName of GEMINI_MODEL_FALLBACKS) {
+    try {
+      const result = await geminiClient.models.generateContent({
+        model: modelName,
+        contents: prompt,
+        config: {
+          temperature: 0.35,
+          topP: 0.85,
+          topK: 30,
+          maxOutputTokens: 1400,
+        },
+      });
+
+      return limitDiscordText(fixBrokenDiscordMentions(result.text));
+    } catch (err) {
+      lastError = err;
+      if (!isGeminiModelError(err)) throw err;
+    }
+  }
+
+  throw lastError;
+}
+
+export async function handleIaInterviewTicketMessage(message, client) {
+  if (!message.guild || message.author.bot) return false;
+  if (!isIaInterviewChannel(message.channel)) return false;
+
+  const openerId =
+    getOpenerIdFromChannel(message.channel) ||
+    IA_ENTREVISTA_ACTIVE.get(message.channelId)?.openerId;
+
+  if (!openerId) return false;
+
+  const member = message.member;
+
+    if (memberIsIaInterviewStaff(member)) {
+    if (IA_ENTREVISTA_ACTIVE.has(message.channelId)) {
+      IA_ENTREVISTA_ACTIVE.set(message.channelId, {
+        ...IA_ENTREVISTA_ACTIVE.get(message.channelId),
+        active: false,
+        pausedByStaff: true,
+        pausedAt: Date.now(),
+      });
+
+      saveIaEntrevistaState();
+
+      await message.channel.send(
+        `Vi que ${message.author} apareceu kkk então vou deixar contigo por aqui 😄 qualquer coisa me chama.`
+      ).catch(() => {});
+    }
+
+    return false;
+  }
+
+  if (message.author.id !== openerId) return false;
+
+  const state = IA_ENTREVISTA_ACTIVE.get(message.channelId) || {
+    openerId,
+    startedAt: Date.now(),
+    active: true,
+  };
+
+  if (state.pausedByStaff) return false;
+
+  IA_ENTREVISTA_ACTIVE.set(message.channelId, {
+    ...state,
+    active: true,
+    lastCandidateMessageAt: Date.now(),
+  });
+
+  saveIaEntrevistaState();
+
+  const content = cleanText(message.content);
+  rememberMessage(message.channelId, message.author.username, content);
+
+  await message.channel.sendTyping().catch(() => {});
+
+  const response = await generateIaInterviewConversation(message, client, openerId);
+
+  const finalText =
+    limitDiscordText(fixBrokenDiscordMentions(response)) ||
+    `Boaaa <@${openerId}> 😄 me explica com suas palavras que eu vou te acompanhando por aqui.`;
+
+  await message.reply({
+    content: finalText,
+    allowedMentions: {
+      repliedUser: true,
+      users: [openerId, message.author.id],
+      roles: [],
+      parse: [],
+    },
+  }).catch(() => {});
+
+  return true;
+}
+
+// =====================================================
 // SETUP PRINCIPAL
 // =====================================================
 
@@ -2415,7 +2866,14 @@ export function setupIaChatAuto(client) {
     "messageCreate",
     async (message) => {
       try {
-       if (
+const handledIaInterview =
+  await handleIaInterviewTicketMessage(message, client);
+
+if (handledIaInterview) {
+  return;
+}
+
+if (
   shouldIgnoreMessage(
     message,
     client
