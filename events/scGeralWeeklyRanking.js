@@ -385,6 +385,11 @@ const DEBUG = {
 
 const MANAGER_AUDIT_ENABLED = process.env.SC_MANAGER_AUDIT === "1";
 
+function clearWeeklyRankCache() {
+  CACHE = { at: 0, payload: null };
+  DEBUG.weekKeysFound = {};
+}
+
 // ================== FILE HELPERS ==================
 function ensureDirForFile(filePath) {
   try {
@@ -2255,21 +2260,26 @@ return true; // ✅ Sucesso
 async function safeUpdate(client, reason, opts = {}) {
   // ✅ FIX: Auto-unlock local se travado > 2min
   if (LOCK) {
-    const age = Date.now() - LOCK_TS;
-    if (age > 45000) { // Reduzido de 120s para 45s para ser mais ágil
-      console.warn("[SC_GERAL_WEEKLY_RANK] ⚠️ Local LOCK travado. Resetando.");
-      LOCK = false;
-    } else {
-      return false;
-    }
+     if (Date.now() - LOCK_TS > 120000) {
+        console.warn("[SC_GERAL_WEEKLY_RANK] ⚠️ Local LOCK travado. Resetando.");
+        LOCK = false;
+     } else {
+        return false;
+     }
   }
-
-   if (LOCK) return false;
 
   LOCK = true;
   LOCK_TS = Date.now();
   try {
-    return await upsertWeeklyRank(client, reason, opts); // ✅ Retorna o resultado real (true/false)
+    // ✅ Se for update de painel, sempre limpa o cache para não reaproveitar contagem antiga
+    clearWeeklyRankCache();
+
+    const fixedOpts = {
+      ...opts,
+      scanMode: opts.scanMode === "light" ? "full" : (opts.scanMode || "full"),
+    };
+
+    return await upsertWeeklyRank(client, reason, fixedOpts);
   } finally {
     LOCK = false;
     LOCK_TS = 0;
@@ -2429,7 +2439,7 @@ function debugText() {
 // ✅ NOVO: Exporta o ranking semanal para outros módulos
 export async function getWeeklyRanking(client) {
   try {
-    const { items } = await collectAllPoints(client, "light");
+    const { items } = await collectAllPoints(client, "full");
     const wkNow = weekKeyFromDateSP(nowSP());
     const agg = aggregateWeekDetailed(items, wkNow);
 
@@ -2446,7 +2456,7 @@ export async function getWeeklyRanking(client) {
 
 export async function getWeeklyRankingDebug(client) {
   try {
-    const { items } = await collectAllPoints(client, "light");
+    const { items } = await collectAllPoints(client, "full");
     const wkNow = weekKeyFromDateSP(nowSP());
     const agg = aggregateWeekDetailed(items, wkNow);
 
