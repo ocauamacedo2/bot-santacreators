@@ -1083,6 +1083,18 @@ function manager_getApprovedAtSP(emb) {
   }
 }
 
+function makeManagerStableDedupeKey(emb, uid, approvedAt) {
+  const approvedKey =
+    approvedAt instanceof Date && !Number.isNaN(approvedAt.getTime())
+      ? approvedAt.toISOString()
+      : "sem-data-aprovacao";
+
+  const safeUserId = String(uid || "").trim();
+  const safeEmbedText = norm(getEmbedText(emb)).slice(0, 1200);
+
+  return `manager::${safeUserId}::${approvedKey}::${safeEmbedText}`;
+}
+
 function manager_getRejectedAtSP(emb) {
   try {
     const f = getFields(emb).find((x) => norm(x?.name).includes("reprovado por"));
@@ -1520,6 +1532,7 @@ async function resolveDashboardMessage(dashChannel, st) {
 async function collectAllGeneral(client, mode = "light") {
   const now = Date.now();
   const seenMessageIds = new Set(); // ✅ Declaração necessária para deduplicação
+  const seenManagerStableKeys = new Set(); // ✅ dedupe real para Manager copiado em canais diferentes
 
   // ✅ trava própria do scan (se quiser evitar scans simultâneos)
   if (SCAN_LOCK) {
@@ -1682,6 +1695,11 @@ async function collectAllGeneral(client, mode = "light") {
 
           // ✅ conta na SEMANA DA APROVAÇÃO (se tiver no embed)
           const approvedAt = manager_getApprovedAtSP(emb);
+
+          // ✅ dedupe real: evita contar o mesmo registro de Manager copiado em canais diferentes
+          const managerStableKey = makeManagerStableDedupeKey(emb, uid, approvedAt);
+          if (seenManagerStableKeys.has(managerStableKey)) return;
+          seenManagerStableKeys.add(managerStableKey);
 
           items.push({
             userId: uid,
