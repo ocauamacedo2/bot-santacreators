@@ -662,13 +662,15 @@ function rebuildPendingFromFormsMessage(message) {
         new ButtonBuilder().setCustomId('remover_membro').setLabel('➖ Remover Usuário').setStyle(ButtonStyle.Danger)
       );
 
-      await canal.send({ embeds: [embedTicket], components: [botoes] });
+await canal.send({ embeds: [embedTicket], components: [botoes] });
 
-      if (dados.nome === 'entrevista') {
-        await iaInterviewTicketOpened(canal, interaction.user.id).catch((err) => {
-          console.error('[IA ENTREVISTA] Falha ao iniciar pré-atendimento:', err);
-        });
-      }
+if (dados.nome === 'entrevista') {
+  setTimeout(() => {
+    iaInterviewTicketOpened(canal, interaction.user.id).catch((err) => {
+      console.error('[IA ENTREVISTA] Falha ao iniciar pré-atendimento:', err);
+    });
+  }, 1200);
+}
 
       if (dados.nome === 'lider') {
         try {

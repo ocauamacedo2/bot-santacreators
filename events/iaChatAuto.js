@@ -709,6 +709,8 @@ function setCooldown(userId) {
 async function sendTemporaryReply(message, payload) {
   const sent = await message.reply(payload).catch(() => null);
 
+  // ✅ Em ticket de entrevista, NUNCA apaga histórico.
+  // A conversa da IA precisa ficar salva para transcript, correção e análise.
   if (isIaInterviewChannel(message.channel)) {
     return sent;
   }
@@ -716,15 +718,7 @@ async function sendTemporaryReply(message, payload) {
   if (sent) {
     setTimeout(async () => {
       try {
-        // =========================================
-        // APAGA RESPOSTA DA IA
-        // =========================================
-
         await sent.delete().catch(() => {});
-
-        // =========================================
-        // APAGA MENSAGEM DO USUÁRIO
-        // =========================================
 
         if (message.deletable) {
           await message.delete().catch(() => {});
@@ -2857,13 +2851,13 @@ export async function handleIaInterviewTicketMessage(message, client) {
 
   if (isStaff && !isOpener) {
     if (!state.pausedByStaff) {
-      IA_ENTREVISTA_ACTIVE.set(message.channelId, {
-        ...state,
-        active: false,
-        pausedByStaff: true,
-        pausedAt: Date.now(),
-        pausedBy: message.author.id,
-      });
+IA_ENTREVISTA_ACTIVE.set(message.channelId, {
+  ...state,
+  active: false,
+  pausedByStaff: true,
+  pausedAt: Date.now(),
+  pausedBy: message.author.id,
+});
 
       saveIaEntrevistaState();
 
@@ -2878,51 +2872,55 @@ export async function handleIaInterviewTicketMessage(message, client) {
   if (!isOpener) return false;
   if (state.pausedByStaff) return false;
 
-  IA_ENTREVISTA_ACTIVE.set(message.channelId, {
-    ...state,
-    active: true,
-    lastCandidateMessageAt: Date.now(),
-  });
+IA_ENTREVISTA_ACTIVE.set(message.channelId, {
+  ...state,
+  active: true,
+  pausedByStaff: false,
+  lastCandidateMessageAt: Date.now(),
+});
 
   saveIaEntrevistaState();
 
   const content = cleanText(message.content);
   rememberMessage(message.channelId, message.author.username, content);
 
-  await message.channel.sendTyping().catch(() => {});
+await message.channel.sendTyping().catch(() => {});
 
-  let response = buildIaInterviewQuickAnswer(message, openerId);
+let response = buildIaInterviewQuickAnswer(message, openerId);
 
-  if (!response) {
-    try {
-      response = await withIaTimeout(
-        generateIaInterviewConversation(message, client, openerId),
-        12000,
-        "IA ENTREVISTA"
-      );
-    } catch (err) {
-      console.error("[IA ENTREVISTA] Falha/timeout ao gerar resposta:", err?.message || err);
+if (!response) {
+  try {
+    response = await withIaTimeout(
+      generateIaInterviewConversation(message, client, openerId),
+      9000,
+      "IA ENTREVISTA"
+    );
+  } catch (err) {
+    console.error("[IA ENTREVISTA] Falha/timeout ao gerar resposta:", err?.message || err);
 
-      response =
-        `Boaaa <@${openerId}> 😄\n\n` +
-        `A entrevista funciona assim: alguém da equipe vai te atender, explicar o processo e iniciar as perguntas.\n\n` +
-        `Ela deve ser feita em call, com respeito à hierarquia e às regras da SantaCreators. Já já alguém disponível aparece por aqui.`;
-    }
+    response =
+      `Boaaa <@${openerId}> 😄 entendi.\n\n` +
+      `Antes da entrevista, só reforçando rapidinho: responde tudo com calma, com suas próprias palavras e sem copiar regra/usar IA, fechado?\n\n` +
+      `A SantaCreators não é só “grupo de criador de conteúdo”; é uma **empresa de RP estruturada**, com eventos, hierarquia, organização e postura dentro da cidade.\n\n` +
+      `Me fala: você quer começar a entrevista ou tirar alguma dúvida antes?`;
   }
+}
 
-  const finalText =
-    limitDiscordText(fixBrokenDiscordMentions(response)) ||
-    `Boaaa <@${openerId}> 😄 me explica com suas palavras que eu vou te acompanhando por aqui.`;
+const finalText =
+  limitDiscordText(fixBrokenDiscordMentions(response)) ||
+  `Boaaa <@${openerId}> 😄 me explica com suas palavras que eu vou te acompanhando por aqui.`;
 
-  await message.reply({
-    content: finalText,
-    allowedMentions: {
-      repliedUser: true,
-      users: [openerId, message.author.id],
-      roles: [],
-      parse: [],
-    },
-  }).catch(() => {});
+await message.reply({
+  content: finalText,
+  allowedMentions: {
+    repliedUser: true,
+    users: [openerId, message.author.id],
+    roles: [],
+    parse: [],
+  },
+}).catch((err) => {
+  console.error("[IA ENTREVISTA] Falha ao responder no ticket:", err?.message || err);
+});
 
   return true;
 }
