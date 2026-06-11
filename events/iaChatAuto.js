@@ -2639,10 +2639,8 @@ export async function iaInterviewTicketOpened(channel, openerId) {
 
   await channel.send(
     `Eai <@${openerId}> 😄 tudo certinho?\n\n` +
-    `Seja bem-vind@ ao ticket da **SantaCreators** 💖\n\n` +
-    `Antes de começar, só um papo rapidinho: a SantaCreators **não é simplesmente “grupo de criadores de conteúdo”**, tá? ` +
-    `A gente é uma **empresa de RP estruturada**, com eventos dinâmicos e interativos dentro da Santa Group.\n\n` +
-    `Me fala uma coisa: você já está em alguma organização, painel ou cidade? E o que te fez querer entrar na SantaCreators? 👀`
+    `Seja bem-vind@ ao ticket da **SantaCreators** 💖\n` +
+    `Me fala uma coisa rapidinho: você já tá em alguma organização, painel ou cidade? 👀`
   ).catch(() => {});
 
   return true;
@@ -2770,8 +2768,9 @@ export async function handleIaInterviewTicketMessage(message, client) {
   if (!openerId) return false;
 
   const member = message.member;
+  const isOpener = String(message.author.id) === String(openerId);
 
-    if (memberIsIaInterviewStaff(member)) {
+  if (!isOpener && memberIsIaInterviewStaff(member)) {
     if (IA_ENTREVISTA_ACTIVE.has(message.channelId)) {
       IA_ENTREVISTA_ACTIVE.set(message.channelId, {
         ...IA_ENTREVISTA_ACTIVE.get(message.channelId),
@@ -2790,7 +2789,7 @@ export async function handleIaInterviewTicketMessage(message, client) {
     return false;
   }
 
-  if (message.author.id !== openerId) return false;
+  if (!isOpener) return false;
 
   const state = IA_ENTREVISTA_ACTIVE.get(message.channelId) || {
     openerId,

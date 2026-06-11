@@ -633,12 +633,6 @@ function rebuildPendingFromFormsMessage(message) {
 
         // 🔒 guarda o tipo + quem abriu no tópico (usado no fechamento)
         await canal.setTopic(`ticket_tipo:${dados.nome};aberto_por:${interaction.user.id}`);
-
-        if (dados.nome === 'entrevista') {
-          await iaInterviewTicketOpened(canal, interaction.user.id).catch((err) => {
-            console.error('[IA ENTREVISTA] Falha ao iniciar pré-atendimento:', err);
-          });
-        }
       } catch (e) {
         console.error('[TICKET] erro ao criar canal:', e);
         await interaction.editReply({ content: `❌ Erro ao criar o canal: ${e.message}` });
@@ -669,6 +663,12 @@ function rebuildPendingFromFormsMessage(message) {
       );
 
       await canal.send({ embeds: [embedTicket], components: [botoes] });
+
+      if (dados.nome === 'entrevista') {
+        await iaInterviewTicketOpened(canal, interaction.user.id).catch((err) => {
+          console.error('[IA ENTREVISTA] Falha ao iniciar pré-atendimento:', err);
+        });
+      }
 
       if (dados.nome === 'lider') {
         try {
