@@ -475,6 +475,71 @@ function buildSafeUserMention(id) {
   return `<@${safeId}>`;
 }
 
+async function channelHasInterviewStartButton(channel, client) {
+  const messages = await channel.messages.fetch({ limit: 25 }).catch(() => null);
+  if (!messages?.size) return false;
+
+  return messages.some((msg) =>
+    msg.author?.id === client.user.id &&
+    msg.components?.some((row) =>
+      row.components?.some((component) =>
+        String(component.customId || "").startsWith(`iniciar|${channel.id}`)
+      )
+    )
+  );
+}
+
+function isShortGreeting(text) {
+  const norm = normalizeSearchText(text);
+
+  return [
+    "oi",
+    "oie",
+    "oiee",
+    "ola",
+    "olá",
+    "eai",
+    "eaí",
+    "e ai",
+    "opa",
+    "salve",
+    "bom dia",
+    "boa tarde",
+    "boa noite",
+  ].includes(norm);
+}
+
+async function buildIaInterviewRecentHumanContext(message, openerId) {
+  const messages = await message.channel.messages.fetch({ limit: 20 }).catch(() => null);
+  if (!messages?.size) {
+    return {
+      historyText: "Sem histórico recente.",
+      hasHumanSupportRecently: false,
+    };
+  }
+
+  const ordered = [...messages.values()].reverse();
+
+  const humanMessages = ordered.filter((msg) => !msg.author.bot);
+  const hasHumanSupportRecently = humanMessages.some((msg) =>
+    msg.author.id !== openerId &&
+    Date.now() - msg.createdTimestamp <= 5 * 60 * 1000
+  );
+
+  const historyText = humanMessages
+    .slice(-10)
+    .map((msg) => {
+      const who = msg.author.id === openerId ? "CANDIDATO" : "OUTRO_HUMANO";
+      return `${who} ${msg.author.tag}: ${cleanText(msg.content || "")}`;
+    })
+    .join("\n");
+
+  return {
+    historyText: historyText || "Sem histórico recente.",
+    hasHumanSupportRecently,
+  };
+}
+
 async function buildAllowedMentionUsers(message, client) {
   const users = new Set();
 
@@ -2595,32 +2660,57 @@ ${logsCorrecao}
 `.slice(0, 22000);
 }
 
-function buildIaInterviewConversationPrompt({ message, history, knowledge, openerId }) {
+function buildIaInterviewConversationPrompt({
+  message,
+  history,
+  knowledge,
+  openerId,
+  hasStartButton,
+  openerIsStaff,
+}) {
   return `
 Você é a IA de pré-atendimento da SantaCreators dentro de um ticket de entrevista.
 
-CANDIDATO DO TICKET:
-<@${openerId}>
+CANDIDATO / PESSOA QUE ABRIU O TICKET:
+${buildSafeUserMention(openerId)}
+
+SE A PESSOA QUE ABRIU O TICKET JÁ FOR DA EQUIPE:
+- NÃO trate como candidato comum.
+- NÃO fale como se ela precisasse fazer entrevista.
+- Pode perguntar de forma leve por que ela abriu o ticket de entrevista.
+- Exemplo: "opa, vi que tu já é da equipe kkk abriu por teste ou precisa de ajuda com alguém?"
+
+STATUS DO BOTÃO DE INICIAR:
+${hasStartButton ? "EXISTE botão de iniciar entrevista no chat." : "NÃO existe botão de iniciar entrevista visível no chat."}
+
+REGRA SOBRE BOTÃO:
+- Se NÃO existir botão, é PROIBIDO falar para clicar em botão.
+- Se existir botão, pode mencionar o botão de forma curta.
+- Se a pessoa quiser começar e não tiver botão, diga para aguardar alguém da equipe iniciar ou usar o comando correto.
 
 MISSÃO:
-- Conversar de forma humana, leve, descontraída e natural.
-- Preparar o candidato para a entrevista.
-- Explicar que SantaCreators NÃO é só para criadores de conteúdo.
-- Explicar que SantaCreators é uma empresa de RP estruturada, com eventos dinâmicos e interativos da Santa Group.
-- Não usar embed.
+- Conversar como mensagem normal de Discord.
+- Ser humano, leve e direto.
+- Não repetir saudação se já cumprimentou antes no histórico.
 - Não fazer textão.
+- Responder só o que foi perguntado.
 - Não aprovar, não reprovar e não prometer entrada.
-- Se o candidato quiser começar, conduza naturalmente para ele clicar/iniciar a entrevista ou responder ao aplicador.
-- Se a dúvida for confusa/delicada, chame UM cargo/pessoa de apoio de forma natural usando uma das opções:
-${IA_ENTREVISTA_HELP_ROLE_IDS.map((id) => `<@&${id}>`).join(", ")}
+- Explicar quando fizer sentido que SantaCreators NÃO é só para criadores de conteúdo.
+- Explicar quando fizer sentido que SantaCreators é empresa de RP estruturada, com eventos dinâmicos e interativos da Santa Group.
+
+TAMANHO DA RESPOSTA:
+- Máximo 3 linhas curtas.
+- Se for só "oi/eai", responda curto e puxe uma pergunta simples.
+- Não mande lista grande sem necessidade.
 
 REGRAS IMPORTANTES:
 - Nunca incentive copiar e colar.
 - Nunca incentive usar IA na entrevista.
-- Oriente a responder com as próprias palavras.
+- Oriente a responder com as próprias palavras, mas só quando o assunto for entrevista.
 - Seja tolerante com erro de português.
-- Não invente regra que não esteja no contexto.
-- Se não souber algo, improvise com base no contexto sem dizer "não sei".
+- Não invente regra.
+- Se for confuso/delicado, chame só UM apoio, não todos:
+${IA_ENTREVISTA_HELP_ROLE_IDS.map((id) => `<@&${id}>`).join(", ")}
 
 CONTEXTO REAL DO SERVIDOR:
 ${knowledge}
@@ -2631,7 +2721,7 @@ ${history}
 MENSAGEM ATUAL:
 ${message.author.tag}: ${message.content}
 
-Responda agora como mensagem normal de Discord:
+Responda agora em português brasileiro, como conversa natural de Discord:
 `;
 }
 
@@ -2639,17 +2729,23 @@ async function generateIaInterviewConversation(message, client, openerId) {
   const geminiClient = getGeminiClient();
 
   if (!geminiClient) {
-    return `Opa <@${openerId}> 😄 seja bem-vind@ ao ticket da SantaCreators! Antes da entrevista, responde tudo com calma e com suas próprias palavras, fechado?`;
+    return `Opa ${buildSafeUserMention(openerId)} 😄 tô por aqui. Quer tirar uma dúvida ou começar a entrevista?`;
   }
 
-  const history = getHistory(message.channelId);
+  const recentContext = await buildIaInterviewRecentHumanContext(message, openerId);
+  const history = recentContext.historyText;
   const knowledge = await buildIaInterviewKnowledge(client);
+  const hasStartButton = await channelHasInterviewStartButton(message.channel, client);
+  const openerMember = await message.guild.members.fetch(openerId).catch(() => null);
+  const openerIsStaff = memberIsIaInterviewStaff(openerMember);
 
   const prompt = buildIaInterviewConversationPrompt({
     message,
     history,
     knowledge,
     openerId,
+    hasStartButton,
+    openerIsStaff,
   });
 
   let lastError = null;
@@ -2660,10 +2756,10 @@ async function generateIaInterviewConversation(message, client, openerId) {
         model: modelName,
         contents: prompt,
         config: {
-          temperature: 0.9,
-          topP: 0.95,
-          topK: 40,
-          maxOutputTokens: 350,
+          temperature: 0.75,
+          topP: 0.9,
+          topK: 35,
+          maxOutputTokens: 180,
         },
       });
 
@@ -2752,6 +2848,19 @@ CRITÉRIOS:
 - 5 incompletas = 2 erradas e meia.
 - 6 incompletas = 3 erradas.
 
+CRITÉRIO HUMANO DE CORREÇÃO:
+- Não corrija como robô.
+- Respostas pessoais são válidas se fizerem sentido.
+- Erro de português NÃO torna resposta errada.
+- Se a resposta estiver com palavras diferentes do gabarito, mas mostrar entendimento real, marque 🆗.
+- Se a resposta tiver uma parte certa, mas faltar ponto importante, marque ❓.
+- Se fugir totalmente, contrariar regra grave ou mostrar que não leu as regras, marque ❌.
+- Se responder "não sei", "não li", "não vi essa parte", "acho que entendi errado", considere reprovação automática.
+- Se copiar texto das regras sem interpretação pessoal, sinalize suspeita alta.
+- Se responder textão complexo rápido demais, sinalize suspeita de IA/copia-cola.
+- Se pular hierarquia, tratar staff como responsável pela empresa ou achar normal ir direto em dono/responsável, marque ❌.
+- 7 erradas reprova.
+
 CONTEXTO REAL / BANCO DE DADOS:
 ${knowledge}
 
@@ -2828,29 +2937,29 @@ function buildIaInterviewQuickAnswer(message, openerId) {
   const text = normalizeSearchText(message.content);
   const mention = buildSafeUserMention(openerId);
 
+  if (isShortGreeting(message.content)) {
+    return `E aí ${mention} 😄 tudo certinho? Quer tirar uma dúvida ou falar sobre a entrevista?`;
+  }
+
   if (
     text.includes("como funciona") ||
     text.includes("queria fazer a entrevista") ||
     text.includes("fazer entrevista") ||
+    text.includes("começo") ||
+    text.includes("comeco") ||
+    text.includes("começar") ||
+    text.includes("comecar") ||
     text.includes("alguem ai") ||
-    text.includes("alguém ai") ||
-    text.includes("oi") ||
-    text.includes("oie") ||
-    text.includes("oiee") ||
-    text.includes("tem alguem") ||
-    text.includes("tem alguém")
+    text.includes("alguém ai")
   ) {
     return (
-      `Opa ${mention} 😄 tô por aqui sim.\n\n` +
-      `Se tu quiser fazer a entrevista, é só avisar que a equipe já puxa certinho. Antes disso, só vai na calma: responde com tuas palavras, sem copiar regra e sem usar IA, fechou? kkk\n\n` +
-      `E só pra não confundir: a **SantaCreators** não é só “grupo de criador de conteúdo”. É uma empresa de RP estruturada, com eventos, organização, hierarquia e postura dentro da cidade.\n\n` +
-      `Tu quer começar a entrevista ou quer tirar alguma dúvida antes?`
+      `Boaa ${mention} 😄 pra começar certinho, alguém da equipe precisa iniciar a entrevista por aqui.\n\n` +
+      `Enquanto isso, já vai na calma: responde tudo com tuas palavras, sem copiar regra e sem usar IA, fechado?`
     );
   }
 
   return null;
 }
-
 export async function handleIaInterviewTicketMessage(message, client) {
   if (!message.guild || message.author.bot) return false;
   if (!isIaInterviewChannel(message.channel)) return false;
@@ -2895,15 +3004,33 @@ IA_ENTREVISTA_ACTIVE.set(message.channelId, {
     return true;
   }
 
-  if (!isOpener) return false;
+  if (!isOpener) {
+    IA_ENTREVISTA_ACTIVE.set(message.channelId, {
+      ...state,
+      active: false,
+      lastHumanHelperId: message.author.id,
+      lastHumanHelperAt: Date.now(),
+    });
+
+    saveIaEntrevistaState();
+    return false;
+  }
+
   if (state.pausedByStaff) return false;
 
-IA_ENTREVISTA_ACTIVE.set(message.channelId, {
-  ...state,
-  active: true,
-  pausedByStaff: false,
-  lastCandidateMessageAt: Date.now(),
-});
+  if (
+    state.lastHumanHelperId &&
+    Date.now() - Number(state.lastHumanHelperAt || 0) <= 5 * 60 * 1000
+  ) {
+    return false;
+  }
+
+  IA_ENTREVISTA_ACTIVE.set(message.channelId, {
+    ...state,
+    active: true,
+    pausedByStaff: false,
+    lastCandidateMessageAt: Date.now(),
+  });
 
   saveIaEntrevistaState();
 
