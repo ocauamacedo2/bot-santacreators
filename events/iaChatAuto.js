@@ -709,6 +709,10 @@ function setCooldown(userId) {
 async function sendTemporaryReply(message, payload) {
   const sent = await message.reply(payload).catch(() => null);
 
+  if (isIaInterviewChannel(message.channel)) {
+    return sent;
+  }
+
   if (sent) {
     setTimeout(async () => {
       try {
@@ -2459,8 +2463,40 @@ restoreIaEntrevistaState();
 
 function getOpenerIdFromChannel(channel) {
   const topic = String(channel?.topic || "");
-  const match = topic.match(/aberto_por:(\d{17,20})/i);
+  const match = topic.match(/aberto_por:(\d{17,22})/i);
   return match ? match[1] : null;
+}
+
+async function resolveIaInterviewOpenerId(message) {
+  const fromTopic = getOpenerIdFromChannel(message.channel);
+  if (fromTopic) return fromTopic;
+
+  const fromState = IA_ENTREVISTA_ACTIVE.get(message.channelId)?.openerId;
+  if (fromState) return fromState;
+
+  const recentMessages = await message.channel.messages.fetch({ limit: 10 }).catch(() => null);
+
+  if (recentMessages?.size) {
+    for (const msg of recentMessages.values()) {
+      for (const embed of msg.embeds || []) {
+        const raw = [
+          embed.title,
+          embed.description,
+          ...(embed.fields || []).flatMap((field) => [field.name, field.value]),
+        ].filter(Boolean).join(" ");
+
+        const match =
+          raw.match(/Aberto por:\s*<@!?(\d{17,22})>/i) ||
+          raw.match(/<@!?(\d{17,22})>/i);
+
+        if (match?.[1]) {
+          return match[1];
+        }
+      }
+    }
+  }
+
+  return message.author.id;
 }
 
 function isIaInterviewChannel(channel) {
@@ -2799,9 +2835,7 @@ export async function handleIaInterviewTicketMessage(message, client) {
   if (!message.guild || message.author.bot) return false;
   if (!isIaInterviewChannel(message.channel)) return false;
 
-  const openerId =
-    getOpenerIdFromChannel(message.channel) ||
-    IA_ENTREVISTA_ACTIVE.get(message.channelId)?.openerId;
+  const openerId = await resolveIaInterviewOpenerId(message);
 
   if (!openerId) return false;
 
@@ -2815,6 +2849,11 @@ export async function handleIaInterviewTicketMessage(message, client) {
     active: true,
     pausedByStaff: false,
   };
+
+  if (!IA_ENTREVISTA_ACTIVE.has(message.channelId)) {
+    IA_ENTREVISTA_ACTIVE.set(message.channelId, state);
+    saveIaEntrevistaState();
+  }
 
   if (isStaff && !isOpener) {
     if (!state.pausedByStaff) {
@@ -2833,7 +2872,7 @@ export async function handleIaInterviewTicketMessage(message, client) {
       ).catch(() => {});
     }
 
-    return false;
+    return true;
   }
 
   if (!isOpener) return false;
