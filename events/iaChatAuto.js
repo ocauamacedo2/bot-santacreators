@@ -2639,8 +2639,8 @@ export async function iaInterviewTicketOpened(channel, openerId) {
 
   await channel.send(
     `Eai <@${openerId}> 😄 tudo certinho?\n\n` +
-    `Seja bem-vind@ ao ticket da **SantaCreators** 💖\n` +
-    `Me fala uma coisa rapidinho: você já tá em alguma organização, painel ou cidade? 👀`
+    `Bem-vind@ ao ticket da **SantaCreators** 💖\n` +
+    `Me fala rapidinho: você quer fazer entrevista ou tirar alguma dúvida antes?`
   ).catch(() => {});
 
   return true;
@@ -2757,6 +2757,44 @@ FORMATO OBRIGATÓRIO DA RESPOSTA:
   throw lastError;
 }
 
+
+function withIaTimeout(promise, ms = 12000, label = "IA ENTREVISTA") {
+  let timer;
+
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`${label} demorou mais de ${ms}ms`));
+    }, ms);
+  });
+
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+function buildIaInterviewQuickAnswer(message, openerId) {
+  const text = normalizeSearchText(message.content);
+
+  if (
+    text.includes("como funciona") ||
+    text.includes("queria fazer a entrevista") ||
+    text.includes("fazer entrevista") ||
+    text.includes("alguem ai") ||
+    text.includes("alguém ai")
+  ) {
+    return (
+      `Claro <@${openerId}> 😄\n\n` +
+      `A entrevista funciona assim: um membro da equipe vai te atender, explicar rapidinho e iniciar as perguntas.\n\n` +
+      `📌 **Pontos importantes:**\n` +
+      `• a entrevista deve ser feita em call;\n` +
+      `• responda com calma e com suas palavras;\n` +
+      `• respeite a hierarquia e quem estiver atendendo;\n` +
+      `• qualquer staff/creator disponível pode corrigir ou ajudar, não precisa esperar uma pessoa específica.\n\n` +
+      `Já já alguém da equipe aparece por aqui.`
+    );
+  }
+
+  return null;
+}
+
 export async function handleIaInterviewTicketMessage(message, client) {
   if (!message.guild || message.author.bot) return false;
   if (!isIaInterviewChannel(message.channel)) return false;
@@ -2770,13 +2808,14 @@ export async function handleIaInterviewTicketMessage(message, client) {
   const member = message.member;
   const isOpener = String(message.author.id) === String(openerId);
 
-  if (!isOpener && memberIsIaInterviewStaff(member)) {
-    if (IA_ENTREVISTA_ACTIVE.has(message.channelId)) {
+    if (isStaff && !isOpener) {
+    if (!state.pausedByStaff) {
       IA_ENTREVISTA_ACTIVE.set(message.channelId, {
         ...IA_ENTREVISTA_ACTIVE.get(message.channelId),
         active: false,
         pausedByStaff: true,
         pausedAt: Date.now(),
+        pausedBy: message.author.id,
       });
 
       saveIaEntrevistaState();
@@ -2812,7 +2851,24 @@ export async function handleIaInterviewTicketMessage(message, client) {
 
   await message.channel.sendTyping().catch(() => {});
 
-  const response = await generateIaInterviewConversation(message, client, openerId);
+  let response = buildIaInterviewQuickAnswer(message, openerId);
+
+  if (!response) {
+    try {
+      response = await withIaTimeout(
+        generateIaInterviewConversation(message, client, openerId),
+        12000,
+        "IA ENTREVISTA"
+      );
+    } catch (err) {
+      console.error("[IA ENTREVISTA] Falha/timeout ao gerar resposta:", err?.message || err);
+
+      response =
+        `Boaaa <@${openerId}> 😄\n\n` +
+        `A entrevista funciona assim: alguém da equipe vai te atender, explicar o processo e iniciar as perguntas.\n\n` +
+        `Ela deve ser feita em call, com respeito à hierarquia e às regras da SantaCreators. Já já alguém disponível aparece por aqui.`;
+    }
+  }
 
   const finalText =
     limitDiscordText(fixBrokenDiscordMentions(response)) ||
