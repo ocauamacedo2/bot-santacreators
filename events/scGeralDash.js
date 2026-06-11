@@ -406,6 +406,69 @@ let CACHE = { at: 0, payload: null };
 let DIRTY = false; // marcou que teve interação humana desde última atualização
 let NEXT_ALLOWED_AT = 0; // quando pode rodar scan novamente
 
+/**
+ * ✅ CONFIGURAÇÃO ÚNICA DE FONTES (A Fonte da Verdade)
+ * Ambos os arquivos devem usar esta mesma lógica de canais e identificação.
+ */
+const GERAL_SOURCES_CONFIG = {
+  PODERES: { channelId: "1374066813171929218", type: "poderes" },
+  EVENTOS: { channelId: "1392618646630568076", type: "eventos" },
+  PAGAMENTOS: { channelId: "1387922662134775818", type: "pagamentos" },
+  MANAGER: { channelIds: ["1486084441762693291", "1392680204517769277"], type: "manager" },
+  ALINHAMENTOS: { channelId: "1425256185707233301", type: "alinhamentos" },
+  DOACOES: { channelId: "1486009647923200120", type: "doacoes" },
+  CONVITES: { channelId: "1415102820826349648", type: "convites" },
+  PERGUNTAS: { channelId: "1486084249755979950", type: "perguntas" }, // Via Entrevista Concluída
+  VENDAS: { channelId: "1486084262867370105", type: "vendas" },
+  CRONOGRAMA: { channelId: "1387864036259004436", type: "cronograma" },
+  PRESENCA: { channelId: "1486006866046615682", type: "presencas" },
+  VIP: { channelId: "1414718336826081330", type: "vipPagos" },
+  CORRECAO: { channelId: "1486084249755979950", type: "correcao" },
+};
+
+/**
+ * ✅ Rotina de Validação de Divergência
+ */
+async function validateSourceConsistency(client, items, weekKey) {
+  const scanStats = {};
+  for (const it of items) {
+    if (weekKeyFromDateSP(it.ts) !== weekKey) continue;
+    scanStats[it.source] = (scanStats[it.source] || 0) + 1;
+  }
+
+  const manual = loadManualAdjustments();
+  const adjs = manual.byWeek?.[weekKey] || {};
+  const totalAdj = Object.values(adjs).reduce((a, b) => a + Number(b), 0);
+
+  const report = [
+    `📊 MATRIZ DE VALIDAÇÃO — WK: ${weekKey}`,
+    `PODERES............. ${scanStats.poderes || 0}`,
+    `EVENTOS............. ${scanStats.eventos || 0}`,
+    `EVENTOS_PODER....... ${scanStats.eventopoder || 0}`,
+    `PAGAMENTOS.......... ${scanStats.pagamentos || 0}`,
+    `MANAGER............. ${scanStats.manager || 0}`,
+    `ALINHAMENTOS........ ${scanStats.alinhamentos || 0}`,
+    `VIP................. ${scanStats.vipPagos || 0}`,
+    `DOACOES............. ${scanStats.doacoes || 0}`,
+    `CONVITES............ ${scanStats.convites || 0}`,
+    `PERGUNTAS........... ${scanStats.perguntas || 0}`,
+    `VENDAS.............. ${scanStats.vendas || 0}`,
+    `CRONOGRAMA.......... ${scanStats.cronograma || 0}`,
+    `PRESENCA............ ${scanStats.presencas || 0}`,
+    `HALL................ ${scanStats.halldafama || 0}`,
+    `EVENTOS_DIARIOS..... ${scanStats.eventosdiarios || 0}`,
+    `CORRECAO............ ${scanStats.correcao || 0}`,
+    `EVT3................ ${scanStats.evt3 || 0}`,
+    `BATE_PONTO.......... ${scanStats.bateponto || 0}`,
+    `AJUSTES............. ${totalAdj}`,
+    `----------------------------`,
+    `TOTAL FINAL......... ${items.filter(x => weekKeyFromDateSP(x.ts) === weekKey).length + totalAdj}`
+  ].join("\n");
+
+  console.log(`[SC_GERAL_DASH] Auditoria Interna:\n${report}`);
+  return scanStats;
+}
+
 function clearGeneralDashCache() {
   CACHE = { at: 0, payload: null };
 }
@@ -1456,6 +1519,7 @@ async function resolveDashboardMessage(dashChannel, st) {
 
 async function collectAllGeneral(client, mode = "light") {
   const now = Date.now();
+  const seenMessageIds = new Set(); // ✅ Declaração necessária para deduplicação
 
   // ✅ trava própria do scan (se quiser evitar scans simultâneos)
   if (SCAN_LOCK) {
@@ -1494,6 +1558,8 @@ async function collectAllGeneral(client, mode = "light") {
     weekFloorKey,
     maxPages: 80,
     onMessage: async (m) => {
+      if (seenMessageIds.has(m.id)) return;
+      seenMessageIds.add(m.id);
       const emb = m.embeds?.[0];
       if (!emb) return;
       if (!isPoderesRecordEmbed(emb)) return;
@@ -1513,6 +1579,8 @@ async function collectAllGeneral(client, mode = "light") {
   weekFloorKey,
   maxPages: 80,
   onMessage: async (m) => {
+    if (seenMessageIds.has(m.id)) return;
+    seenMessageIds.add(m.id);
     const emb = m.embeds?.[0];
     if (!emb) return;
 
@@ -1540,6 +1608,8 @@ async function collectAllGeneral(client, mode = "light") {
     weekFloorKey,
     maxPages: 80,
     onMessage: async (m) => {
+      if (seenMessageIds.has(m.id)) return;
+      seenMessageIds.add(m.id);
       const emb = m.embeds?.[0];
       if (!emb) return;
       if (!isPaymentRecordEmbed(emb)) return;
@@ -1564,6 +1634,8 @@ async function collectAllGeneral(client, mode = "light") {
     weekFloorKey,
     maxPages: 80,
     onMessage: async (m) => {
+      if (seenMessageIds.has(m.id)) return;
+      seenMessageIds.add(m.id);
       const emb = m.embeds?.[0];
       if (!emb) return;
       if (!isVipRecordEmbed(emb)) return;
@@ -1588,37 +1660,45 @@ async function collectAllGeneral(client, mode = "light") {
   // ✅ NÃO redeclare manager_getApprovedAtSP / manager_getRejectedAtSP aqui
   // ✅ usa as funções globais já declaradas na área de parsers
 
-    await scanChannelEmbeds(client, {
-    channelId: CH_MANAGER_ID,
-    weekFloorKey,
-    maxPages: 80,
-    onMessage: async (m) => {
-      const emb = m.embeds?.[0];
-      if (!emb) return;
-      if (!isRegistroManagerEmbed(emb)) return;
-      if (manager_isRejected(emb)) return;
-      if (!manager_isApproved(emb)) return;
+    // ✅ MANAGER: Escaneia agora os dois canais (Arquivo + Semanal) com deduplicação
+    for (const mgrCh of [CH_MANAGER_ID, CH_MANAGER_MAIN_ID]) {
+      await scanChannelEmbeds(client, {
+        channelId: mgrCh,
+        weekFloorKey,
+        maxPages: 80,
+        onMessage: async (m) => {
+          if (seenMessageIds.has(m.id)) return;
+          seenMessageIds.add(m.id);
 
-      // dono do ponto = manager responsável (fallback registrante)
-      const uid = manager_getManagerId(emb) || manager_getRegistrarId(emb);
-      if (!uid) return;
+          const emb = m.embeds?.[0];
+          if (!emb) return;
+          if (!isRegistroManagerEmbed(emb)) return;
+          if (manager_isRejected(emb)) return;
+          if (!manager_isApproved(emb)) return;
 
-      // ✅ conta na SEMANA DA APROVAÇÃO (se tiver no embed)
-      const approvedAt = manager_getApprovedAtSP(emb);
+          // dono do ponto = manager responsável (fallback registrante)
+          const uid = manager_getManagerId(emb) || manager_getRegistrarId(emb);
+          if (!uid) return;
 
-      items.push({
-        userId: uid,
-        ts: approvedAt || new Date(m.createdTimestamp),
-        source: "manager",
+          // ✅ conta na SEMANA DA APROVAÇÃO (se tiver no embed)
+          const approvedAt = manager_getApprovedAtSP(emb);
+
+          items.push({
+            userId: uid,
+            ts: approvedAt || new Date(m.createdTimestamp),
+            source: "manager",
+          });
+        },
       });
-    },
-  });
+    }
 
 await scanChannelEmbeds(client, {
   channelId: CH_ALINHAMENTOS_ID,
   weekFloorKey,
   maxPages: 80,
   onMessage: async (m) => {
+    if (seenMessageIds.has(m.id)) return;
+    seenMessageIds.add(m.id);
     const emb = m.embeds?.[0];
     if (!emb) return;
 
@@ -1650,6 +1730,8 @@ await scanChannelEmbeds(client, {
   weekFloorKey,
   maxPages: 80,
   onMessage: async (m) => {
+    if (seenMessageIds.has(m.id)) return;
+    seenMessageIds.add(m.id);
     const emb = m.embeds?.[0];
     if (!emb) return;
 
@@ -1676,6 +1758,8 @@ await scanChannelEmbeds(client, {
   weekFloorKey,
   maxPages: 80,
   onMessage: async (m) => {
+      if (seenMessageIds.has(m.id)) return;
+      seenMessageIds.add(m.id);
     const emb = m.embeds?.[0];
     if (!emb) return;
 
@@ -1699,6 +1783,8 @@ if (CORRECAO_LOGS_CHANNEL_ID) { // Usa o mesmo canal de logs de correção
     weekFloorKey,
     maxPages: 80,
     onMessage: async (m) => {
+      if (seenMessageIds.has(m.id)) return;
+      seenMessageIds.add(m.id);
       const emb = m.embeds?.[0];
       if (!emb) return;
       
@@ -1723,6 +1809,8 @@ if (CRONOGRAMA_LOGS_CHANNEL_ID) {
     weekFloorKey,
     maxPages: 80,
     onMessage: async (m) => {
+      if (seenMessageIds.has(m.id)) return;
+      seenMessageIds.add(m.id);
       const emb = m.embeds?.[0];
       if (!emb) return;
 
@@ -1759,6 +1847,8 @@ if (PRESENCA_LOGS_CHANNEL_ID) {
     weekFloorKey,
     maxPages: 80,
     onMessage: async (m) => {
+      if (seenMessageIds.has(m.id)) return;
+      seenMessageIds.add(m.id);
       const emb = m.embeds?.[0];
       if (!emb) return;
       if (!isPresencaLogEmbed(emb)) return;
@@ -1783,6 +1873,8 @@ if (CORRECAO_LOGS_CHANNEL_ID) {
     weekFloorKey,
     maxPages: 80,
     onMessage: async (m) => {
+      if (seenMessageIds.has(m.id)) return;
+      seenMessageIds.add(m.id);
       const emb = m.embeds?.[0];
       if (!emb) return;
       if (!isCorrecaoLogEmbed(emb)) return;
@@ -1904,7 +1996,7 @@ try {
     const wk = weekKeyFromDateSP(it.ts);
     DEBUG.weekKeysFound[wk] = (DEBUG.weekKeysFound[wk] || 0) + 1;
   }
-
+  
      const payload = { items };
     CACHE = { at: now, payload };
     return payload;
@@ -1922,8 +2014,13 @@ function chooseWeeksUnion() {
   return { thisKey: currentWk, lastKey: keys[1] || null, keys };
 }
 
-function aggregateByWeek(items, weekKey) {
+async function aggregateByWeek(items, weekKey, client = null) {
   const only = items.filter((x) => weekKeyFromDateSP(x.ts) === weekKey);
+  
+  if (client) {
+    await validateSourceConsistency(client, items, weekKey);
+  }
+
   const byUser = {};
 
   for (const e of only) {
@@ -2854,11 +2951,12 @@ freezeLastWeekIfNeeded(items);
     const thisWeekKey = chosen.thisKey;
     const lastWeekKey = chosen.lastKey;
 
+    // Passa o client para executar a rotina de auditoria interna
     const cur = thisWeekKey
-      ? aggregateByWeek(items, thisWeekKey)
+      ? await aggregateByWeek(items, thisWeekKey, client)
       : { total: 0, top: [] };
     const prev = lastWeekKey
-      ? aggregateByWeek(items, lastWeekKey)
+      ? await aggregateByWeek(items, lastWeekKey)
       : { total: 0, top: [] };
 
     // ✅ FIX: Usa o snapshot (valor congelado) para o total passado, se existir.
@@ -3868,9 +3966,6 @@ if (interaction.isModalSubmit()) {
 
   return false;
 }
-
-
-
 
 export async function geralDashHandleMessage(message, client) {
   // ✅ proteção básica

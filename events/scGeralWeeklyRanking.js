@@ -1111,6 +1111,7 @@ function venda_getSellerId(emb) {
 // ================== COLLECT (MESMA IDEIA DO TEU items[]) ==================
 async function collectAllPoints(client, mode = "light") {
   const now = Date.now();
+  const seenMessageIds = new Set(); // ✅ Declaração necessária para deduplicação
 
   if (mode === "light" && CACHE.payload && now - CACHE.at < SCAN_TTL_MS) {
     // reconstrói debug weekkeys
@@ -1141,6 +1142,8 @@ async function collectAllPoints(client, mode = "light") {
     weekFloorKey,
     maxPages: 80,
     onMessage: async (m) => {
+    if (seenMessageIds.has(m.id)) return;
+    seenMessageIds.add(m.id);
       const emb = m.embeds?.[0];
       if (!emb) return;
       if (!isPoderesRecordEmbed(emb)) return;
@@ -1156,6 +1159,8 @@ await scanChannelEmbeds(client, {
   weekFloorKey,
   maxPages: 80,
   onMessage: async (m) => {
+    if (seenMessageIds.has(m.id)) return;
+    seenMessageIds.add(m.id);
     const emb = m.embeds?.[0];
     if (!emb) return;
 
@@ -1183,6 +1188,8 @@ await scanChannelEmbeds(client, {
     weekFloorKey,
     maxPages: 80,
     onMessage: async (m) => {
+      if (seenMessageIds.has(m.id)) return;
+      seenMessageIds.add(m.id);
       const emb = m.embeds?.[0];
       if (!emb) return;
       if (!isPaymentRecordEmbed(emb)) return;
@@ -1203,6 +1210,8 @@ await scanChannelEmbeds(client, {
   weekFloorKey,
   maxPages: 80,
   onMessage: async (m) => {
+    if (seenMessageIds.has(m.id)) return;
+    seenMessageIds.add(m.id);
     const emb = m.embeds?.[0];
     if (!emb) return;
     if (!isVipRecordEmbed(emb)) return;
@@ -1222,25 +1231,29 @@ await scanChannelEmbeds(client, {
     });
   },
 });
-  // MANAGER (só aprovados, na semana do approvedAt)
-  await scanChannelEmbeds(client, {
-    channelId: CH_MANAGER_ID,
-    weekFloorKey,
-    maxPages: 80,
-    onMessage: async (m) => {
-      const emb = m.embeds?.[0];
-      if (!emb) return;
-      if (!isRegistroManagerEmbed(emb)) return;
-      if (manager_isRejected(emb)) return;
-      if (!manager_isApproved(emb)) return;
+  // MANAGER: Escaneia os dois canais com deduplicação
+  for (const mgrCh of [CH_MANAGER_ID, CH_MANAGER_MAIN_ID]) {
+    await scanChannelEmbeds(client, {
+      channelId: mgrCh,
+      weekFloorKey,
+      maxPages: 80,
+      onMessage: async (m) => {
+        if (seenMessageIds.has(m.id)) return;
+        seenMessageIds.add(m.id);
+        const emb = m.embeds?.[0];
+        if (!emb) return;
+        if (!isRegistroManagerEmbed(emb)) return;
+        if (manager_isRejected(emb)) return;
+        if (!manager_isApproved(emb)) return;
 
-      const uid = manager_getManagerId(emb) || manager_getRegistrarId(emb);
-      if (!uid) return;
+        const uid = manager_getManagerId(emb) || manager_getRegistrarId(emb);
+        if (!uid) return;
 
-      const approvedAt = manager_getApprovedAtSP(emb);
-      pushItem({ userId: uid, ts: approvedAt || new Date(m.createdTimestamp), source: "manager" });
-    },
-  });
+        const approvedAt = manager_getApprovedAtSP(emb);
+        pushItem({ userId: uid, ts: approvedAt || new Date(m.createdTimestamp), source: "manager" });
+      },
+    });
+  }
 
   // ALINHAMENTOS (Sincronizado com Dash: apenas Válidos/Aprovados)
   await scanChannelEmbeds(client, {
@@ -1248,6 +1261,8 @@ await scanChannelEmbeds(client, {
     weekFloorKey,
     maxPages: 80,
     onMessage: async (m) => {
+      if (seenMessageIds.has(m.id)) return;
+      seenMessageIds.add(m.id);
       const emb = m.embeds?.[0];
       if (!emb) return;
       if (!isAlinhamentoRecordEmbed(emb)) return;
@@ -1272,6 +1287,8 @@ await scanChannelEmbeds(client, {
     weekFloorKey,
     maxPages: 80,
     onMessage: async (m) => {
+      if (seenMessageIds.has(m.id)) return;
+      seenMessageIds.add(m.id);
       const emb = m.embeds?.[0];
       if (!emb) return;
       if (!isDoacaoLogEmbed(emb)) return;
@@ -1290,6 +1307,8 @@ await scanChannelEmbeds(client, {
     weekFloorKey,
     maxPages: 80,
     onMessage: async (m) => {
+      if (seenMessageIds.has(m.id)) return;
+      seenMessageIds.add(m.id);
       const emb = m.embeds?.[0];
       if (!emb) return;
       if (!isConviteLogEmbed(emb)) return;
@@ -1308,6 +1327,8 @@ await scanChannelEmbeds(client, {
       weekFloorKey,
       maxPages: 80,
       onMessage: async (m) => {
+      if (seenMessageIds.has(m.id)) return;
+      seenMessageIds.add(m.id);
         const emb = m.embeds?.[0];
         if (!emb) return;
         if (!isEntrevistaConcluidaLogEmbed(emb)) return;
@@ -1328,6 +1349,8 @@ await scanChannelEmbeds(client, {
       weekFloorKey,
       maxPages: 80,
       onMessage: async (m) => {
+      if (seenMessageIds.has(m.id)) return;
+      seenMessageIds.add(m.id);
         const emb = m.embeds?.[0];
         if (!emb) return;
         if (!isVendaLogEmbed(emb)) return;
@@ -1352,6 +1375,8 @@ await scanChannelEmbeds(client, {
       weekFloorKey,
       maxPages: 80,
       onMessage: async (m) => {
+      if (seenMessageIds.has(m.id)) return;
+      seenMessageIds.add(m.id);
         const emb = m.embeds?.[0];
         if (!emb) return;
         
@@ -1385,20 +1410,14 @@ await scanChannelEmbeds(client, {
       weekFloorKey,
       maxPages: 80,
       onMessage: async (m) => {
+      if (seenMessageIds.has(m.id)) return;
+      seenMessageIds.add(m.id);
         // O Hall da Fama é texto puro, mas é enviado pelo bot.
         // Vamos procurar o padrão do texto.
         if (m.author.id !== client.user.id) return;
-        if (!m.content.includes("HALL DA FAMA")) return;
-
-        // O bot não marca quem enviou no texto final (só no log/aprovação).
-        // MAS, como o sistema emite evento, o ideal é confiar no evento em tempo real.
-        // Para persistência retroativa de texto puro, é difícil sem um ID no texto.
-        // PORÉM, o código do Hall da Fama que fiz NÃO coloca o ID do autor no texto final público.
-        // SOLUÇÃO: Vou adicionar um comentário invisível ou rodapé no código do Hall da Fama
-        // para permitir esse scan, OU confiamos apenas no dashOn em tempo real.
-        // Como o usuário pediu "igual cronograma", e cronograma tem scan...
-        // Vou assumir que o dashOn segura a onda por enquanto, ou você pode adicionar um log channel pro Hall.
-        // (O código do Hall da Fama já emite dashOn).
+      if (m.content && m.content.includes("HALL DA FAMA")) {
+        pushItem({ userId: m.author.id, ts: new Date(m.createdTimestamp), source: "halldafama" });
+      }
       },
     });
   }
@@ -1410,6 +1429,8 @@ await scanChannelEmbeds(client, {
       weekFloorKey,
       maxPages: 80,
       onMessage: async (m) => {
+      if (seenMessageIds.has(m.id)) return;
+      seenMessageIds.add(m.id);
         const emb = m.embeds?.[0];
         if (!emb) return;
         if (!isPresencaLogEmbed(emb)) return;
