@@ -40,10 +40,12 @@ function getFivemPanelScopeByChannelId(channelId) {
 
   return "main";
 }
-const FIVEM_REFRESH_INTERVAL_MS = 2 * 60 * 1000; // coleta a cada 2 minutos
-const FIVEM_PANEL_REFRESH_INTERVAL_MS = 2 * 60 * 1000; // edita o painel a cada 2 minutos
+const FIVEM_REFRESH_INTERVAL_MS = 1 * 60 * 1000; // coleta a cada 1 minuto
+const FIVEM_PANEL_REFRESH_INTERVAL_MS = 1 * 60 * 1000; // edita o painel a cada 1 minuto
 const FIVEM_HISTORY_MAX_DAYS = 30; // Limitar histórico a 30 dias
-const FIVEM_FETCH_TIMEOUT_MS = 10 * 1000; // 10 segundos
+const FIVEM_FETCH_TIMEOUT_MS = 8 * 1000; // 8 segundos
+const FIVEM_SNAPSHOT_CACHE_MS = 45 * 1000; // reaproveita a mesma coleta por 45 segundos
+const FIVEM_DYNAMIC_URL_CACHE_MS = 5 * 60 * 1000; // reaproveita endpoints por 5 minutos
 const FIVEM_COMPARISON_TOLERANCE_MS = 10 * 60 * 1000; // 10 minutos
 const FIVEM_TIMEZONE = "America/Sao_Paulo";
 const FIVEM_RANK_MARKER_TAG = "[FIVEM_RETENTION_STATUS]";
@@ -85,6 +87,11 @@ const PeakModel = mongoose.models.FivemRetentionPeak || mongoose.model("FivemRet
 
 const FIVEM_STATE = new Map(); // channelId -> { intervalId, messageId }
 const FIVEM_PANEL_BACKGROUND_JOBS = new Set(); // trava cliques repetidos enquanto já existe processo rodando
+const FIVEM_SNAPSHOT_CACHE = {
+  createdAt: 0,
+  value: null,
+};
+const FIVEM_DYNAMIC_URL_CACHE = new Map(); // cityKey -> { createdAt, urls }
 const FIVEM_DEBUG = false; // 🛑 Desativa os logs de depuração para evitar flood
 
 const DEFAULT_COLOR = 0x2b2d31;
@@ -1389,13 +1396,23 @@ function buildCronogramaEventsCompactDescription(events, peaks, currentSnapshot,
 
 // ---------- FIVEM API ----------
 async function getDynamicUrlsForCity(city) {
+ const cached = FIVEM_DYNAMIC_URL_CACHE.get(city.key);
+
+ if (cached?.urls?.length && Date.now() - cached.createdAt < FIVEM_DYNAMIC_URL_CACHE_MS) {
+   return cached.urls;
+ }
+
  const urls = [...(city.dynamicUrls || [])];
 
  const fetchFn = await getFetch();
 
  try {
+   const controller = new AbortController();
+   const timeout = setTimeout(() => controller.abort(), FIVEM_FETCH_TIMEOUT_MS);
+
    const res = await fetchFn(city.url, {
      method: "GET",
+     signal: controller.signal,
      headers: {
        "User-Agent": "Mozilla/5.0",
        "Accept": "application/json",
@@ -1404,13 +1421,15 @@ async function getDynamicUrlsForCity(city) {
      },
    });
 
-if (res.ok) {
+   clearTimeout(timeout);
+
+   if (res.ok) {
      const json = await res.json().catch(() => null);
      const endpoints = Array.isArray(json?.Data?.connectEndPoints)
        ? json.Data.connectEndPoints
        : [];
 
-     console.log(`[FIVEM_RETENTION] Endpoints encontrados para ${city.name}:`, endpoints);
+     FIVEM_DEBUG && console.log(`[FIVEM_RETENTION] Endpoints encontrados para ${city.name}:`, endpoints);
 
      for (const endpoint of endpoints) {
        if (!endpoint) continue;
@@ -1420,10 +1439,17 @@ if (res.ok) {
      }
    }
  } catch (err) {
-   console.error(`[FIVEM_RETENTION] Falha ao descobrir endpoint real de ${city.name}:`, err?.message || err);
+   FIVEM_DEBUG && console.error(`[FIVEM_RETENTION] Falha ao descobrir endpoint real de ${city.name}:`, err?.message || err);
  }
 
- return [...new Set(urls)];
+ const uniqueUrls = [...new Set(urls)];
+
+ FIVEM_DYNAMIC_URL_CACHE.set(city.key, {
+   createdAt: Date.now(),
+   urls: uniqueUrls,
+ });
+
+ return uniqueUrls;
 }
 
 async function fetchCityStatusFromDynamic(city) {
@@ -1678,34 +1704,55 @@ function mergeSnapshotWithFallback(currentSnapshot, fallbackSnapshot) {
  };
 }
 
-async function createSafeCurrentSnapshot() {
+async function createSafeCurrentSnapshot(options = {}) {
+ if (!options.forceFresh && FIVEM_SNAPSHOT_CACHE.value && Date.now() - FIVEM_SNAPSHOT_CACHE.createdAt < FIVEM_SNAPSHOT_CACHE_MS) {
+   return FIVEM_SNAPSHOT_CACHE.value;
+ }
+
  const currentSnapshot = await createCurrentSnapshot();
  const fallbackSnapshot = await getLastValidSnapshot();
 
+ let result;
+
  if (!isValidSnapshot(currentSnapshot)) {
    if (!fallbackSnapshot) {
-     return {
+     result = {
        snapshot: null,
        shouldPersist: false,
        usedFallback: false,
      };
+
+     FIVEM_SNAPSHOT_CACHE.createdAt = Date.now();
+     FIVEM_SNAPSHOT_CACHE.value = result;
+
+     return result;
    }
 
-   return {
+   result = {
      snapshot: fallbackSnapshot,
      shouldPersist: false,
      usedFallback: true,
    };
+
+   FIVEM_SNAPSHOT_CACHE.createdAt = Date.now();
+   FIVEM_SNAPSHOT_CACHE.value = result;
+
+   return result;
  }
 
  const merged = mergeSnapshotWithFallback(currentSnapshot, fallbackSnapshot);
 
- return {
+ result = {
    snapshot: merged.snapshot,
    snapshotForPersistence: currentSnapshot,
    shouldPersist: isReliableSnapshotForPersistence(currentSnapshot),
    usedFallback: merged.usedFallback,
  };
+
+ FIVEM_SNAPSHOT_CACHE.createdAt = Date.now();
+ FIVEM_SNAPSHOT_CACHE.value = result;
+
+ return result;
 }
 
 function getMinutesOfDayFromSnapshot(snapshot) {
@@ -2678,7 +2725,9 @@ async function editPanel(channel, options = {}) {
  });
  if (!sticky) return null;
 
-const safeSnapshot = await createSafeCurrentSnapshot();
+const safeSnapshot = options.safeSnapshot || await createSafeCurrentSnapshot({
+ forceFresh: options.forceFresh === true,
+});
 
 if (!safeSnapshot.snapshot) {
  console.warn("[FIVEM_RETENTION] Snapshot inválido e sem histórico válido para fallback.");
@@ -2697,10 +2746,11 @@ if (safeSnapshot.shouldPersist) {
  console.warn("[FIVEM_RETENTION] Snapshot inválido usado apenas para exibição. Histórico e picos não foram atualizados.");
 }
 
-// 🚀 Coleta e edita o painel silenciosamente a cada 2min:
-// - normal: a cada 2min
+// 🚀 Coleta e edita o painel silenciosamente a cada 1min:
+// - normal: a cada 1min
 // - se tiver pico novo: edita na hora
 // - se for forçado pelo botão: edita na hora
+// - reaproveita cache curto para não buscar API pesada repetida em todos os painéis
 const state = FIVEM_STATE.get(channel.id) || {};
 const lastEditAt = state.lastEditAt || 0;
 const timeSinceLastEdit = Date.now() - lastEditAt;
@@ -2823,7 +2873,10 @@ async function ensureFivemRetentionAutoLoop(client, options = {}) {
 
     const intervalId = setInterval(async () => {
       try {
-        const edited = await editPanel(channel, { auto: true, force: true });
+        const edited = await editPanel(channel, {
+  auto: true,
+  force: true,
+});
 
         if (!edited) {
           await ensureFivemPanelExists(channel, client);
@@ -2867,6 +2920,10 @@ export async function fivemRetentionStatusOnReady(client) {
 async function editAllFivemRetentionPanels(client, options = {}) {
   let editedCount = 0;
 
+  const safeSnapshot = await createSafeCurrentSnapshot({
+    forceFresh: options.forceFresh === true,
+  });
+
   for (const channelId of FIVEM_ALL_PANEL_CHANNEL_IDS) {
     const channel = await client.channels.fetch(channelId).catch(() => null);
 
@@ -2876,6 +2933,7 @@ async function editAllFivemRetentionPanels(client, options = {}) {
       ...options,
       force: true,
       cleanupDuplicates: true,
+      safeSnapshot,
     }).catch((e) => {
       cn2LogApiError(`[FIVEM_RETENTION] Falha ao atualizar canal ${channelId}:`, e);
       return null;
@@ -2993,10 +3051,10 @@ export async function fivemRetentionStatusHandleInteraction(interaction, client)
         forceInitialUpdate: false,
       });
 
-      const results = await editAllFivemRetentionPanels(client, {
-        force: true,
-      });
-
+     const results = await editAllFivemRetentionPanels(client, {
+  force: true,
+  forceFresh: true,
+});
       if (!results.editedCount) {
         throw new Error("Não foi possível atualizar nenhum painel. Verifique permissões, API ou embeds.");
       }
