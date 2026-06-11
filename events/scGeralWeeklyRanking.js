@@ -432,9 +432,7 @@ function saveState(s) {
 
 // ================== TIME HELPERS ==================
 function nowSP() {
-  const date = new Date();
-  const utc = date.getTime() + (date.getTimezoneOffset() * 60000);
-  return new Date(utc + (3600000 * -3));
+  return new Date();
 }
 
 function ymdSP(date) {

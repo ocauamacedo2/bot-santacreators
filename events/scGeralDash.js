@@ -1535,9 +1535,6 @@ async function collectAllGeneral(client, mode = "light") {
     });
   },
 });
-
-
-
   await scanChannelEmbeds(client, {
     channelId: CH_PAGAMENTOS_ID,
     weekFloorKey,
@@ -1561,6 +1558,32 @@ async function collectAllGeneral(client, mode = "light") {
     },
   });
 
+  // VIP EVENTO (conta ponto só para quem clicou em PAGO)
+  await scanChannelEmbeds(client, {
+    channelId: VIP_MENU_CHANNEL_ID,
+    weekFloorKey,
+    maxPages: 80,
+    onMessage: async (m) => {
+      const emb = m.embeds?.[0];
+      if (!emb) return;
+      if (!isVipRecordEmbed(emb)) return;
+
+      const status = vip_getStatus(emb);
+      if (!status.isPago) return;
+
+      const uid = vip_getPagoByUserId(emb);
+      if (!uid) return;
+
+      const paidAt = vip_getPagoAtSP(emb);
+
+      items.push({
+        userId: uid,
+        ts: paidAt || new Date(m.createdTimestamp),
+        source: "vipPagos",
+      });
+    },
+  });
+
 
   // ✅ NÃO redeclare manager_getApprovedAtSP / manager_getRejectedAtSP aqui
   // ✅ usa as funções globais já declaradas na área de parsers
@@ -1576,23 +1599,18 @@ async function collectAllGeneral(client, mode = "light") {
       if (manager_isRejected(emb)) return;
       if (!manager_isApproved(emb)) return;
 
-      // ✅ Sincronizado: busca em ambos os canais de manager
-      for (const rmChannelId of [CH_MANAGER_ID, CH_MANAGER_MAIN_ID]) {
-        if (!rmChannelId) continue;
-        
-        // dono do ponto = manager responsável (fallback registrante)
-        const uid = manager_getManagerId(emb) || manager_getRegistrarId(emb);
-        if (!uid) return;
+      // dono do ponto = manager responsável (fallback registrante)
+      const uid = manager_getManagerId(emb) || manager_getRegistrarId(emb);
+      if (!uid) return;
 
-        // ✅ conta na SEMANA DA APROVAÇÃO (se tiver no embed)
-        const approvedAt = manager_getApprovedAtSP(emb);
+      // ✅ conta na SEMANA DA APROVAÇÃO (se tiver no embed)
+      const approvedAt = manager_getApprovedAtSP(emb);
 
-        items.push({
-          userId: uid,
-          ts: approvedAt || new Date(m.createdTimestamp),
-          source: "manager",
-        });
-      }
+      items.push({
+        userId: uid,
+        ts: approvedAt || new Date(m.createdTimestamp),
+        source: "manager",
+      });
     },
   });
 
