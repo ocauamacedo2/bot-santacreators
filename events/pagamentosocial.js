@@ -10,6 +10,7 @@ import {
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
+  MessageFlags,
 } from "discord.js";
 import { dashEmit } from "../utils/dashHub.js";
 import { createWorker } from "tesseract.js";
@@ -1740,10 +1741,28 @@ async function reconstruirStatsPorEmbeds(client, limiteBusca = 100) {
   const monthKey = getMonthKey();
   const stats = makeEmptyStats(monthKey);
 
-  const mensagens = await canal.messages.fetch({ limit: limiteBusca }).catch(() => null);
-  if (!mensagens) return null;
+  // ✅ CORREÇÃO: Implementação de paginação para buscar mais de 100 mensagens
+  let mensagensTotal = [];
+  let lastId = undefined;
+  const totalALer = Math.min(limiteBusca, 1000); // Segurança para não exceder 1000
 
-  const registros = [...mensagens.values()]
+  while (mensagensTotal.length < totalALer) {
+    const remaining = totalALer - mensagensTotal.length;
+    const fetchLimit = Math.min(100, remaining);
+    const batch = await canal.messages.fetch({ limit: fetchLimit, before: lastId }).catch(() => null);
+    
+    if (!batch || batch.size === 0) break;
+    
+    mensagensTotal.push(...batch.values());
+    lastId = batch.last().id;
+    
+    if (batch.size < fetchLimit) break;
+  }
+
+  // Se mensagensTotal estiver vazio, retornamos stats vazios para o dashboard não quebrar
+  if (mensagensTotal.length === 0) return stats;
+
+  const registrosFiltrados = mensagensTotal
     .filter((m) => m.author?.id === client.user.id)
     .filter((m) => m.embeds?.length > 0)
     .filter((m) => mensagemEhDoMesAtualSP(m))
@@ -1752,7 +1771,7 @@ async function reconstruirStatsPorEmbeds(client, limiteBusca = 100) {
       return titulo.includes("Registro de Pagamento de Evento – SANTACREATORS");
     });
 
-  for (const msg of registros) {
+  for (const msg of registrosFiltrados) {
     const embed = msg.embeds[0];
 
     const categoria = getTipoPagamentoFromEmbed(embed);
@@ -2972,7 +2991,7 @@ export async function handlePagamentoSocial(interaction, client) {
       const id = interaction.customId;
 
 if (id === "pagamento_dash_atualizar") {
-  await interaction.deferReply({ ephemeral: true }).catch(() => {});
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
 
   const result = await sincronizarDashboardSocial(client, "botao:pagamento_dash_atualizar", {
     forceUnlock: true,
@@ -3005,12 +3024,12 @@ if (id === "pagamento_dash_atualizar") {
         if (!temPermissaoPagamento(interaction)) {
           await interaction.reply({
             content: "🚫 Você não tem permissão para usar o filtro de cidades.",
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           }).catch(() => {});
           return true;
         }
 
-        await interaction.deferReply({ ephemeral: true }).catch(() => {});
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
 
         const canal = await client.channels.fetch(CANAL_PAGAMENTO).catch(() => null);
         if (!canal || !canal.isTextBased()) {
@@ -3043,17 +3062,18 @@ if (id === "pagamento_dash_atualizar") {
         if (!temPermissaoPagamento(interaction)) {
           await interaction.reply({
             content: "🚫 Você não tem permissão para usar esse filtro.",
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           }).catch(() => {});
           return true;
         }
 
         const qual = id.replace("pagamento_filtro_", ""); // solicitados | naoclicados
-        await interaction.deferReply({ ephemeral: true }).catch(() => {});
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
 
         const canal = await client.channels.fetch(CANAL_PAGAMENTO).catch(() => null);
         if (!canal || !canal.isTextBased()) {
           await interaction.followUp({ content: "❌ Não achei o canal.", ephemeral: true }).catch(() => {});
+          await interaction.followUp({ content: "❌ Não achei o canal.", flags: MessageFlags.Ephemeral }).catch(() => {});
           return true;
         }
 
@@ -3085,6 +3105,7 @@ await interaction.followUp({
 qual === "naoclicados" ? `💰 Registros atualizados pelo OCR: **${atualizadosOCR || 0}**` : null,
   ].filter(Boolean).join("\n"),
   ephemeral: true,
+  flags: MessageFlags.Ephemeral,
 }).catch(() => {});
 return true;
       }
@@ -3094,7 +3115,7 @@ return true;
         if (!temPermissaoPagamento(interaction)) {
           await interaction.reply({
             content: "🚫 Você não tem permissão para usar este formulário.",
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           }).catch(() => {});
           return true;
         }
@@ -3138,12 +3159,12 @@ return true;
         if (!temPermissaoPagamento(interaction)) {
           await interaction.reply({
             content: "🚫 Você não tem permissão para marcar cidade nesse registro.",
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           }).catch(() => {});
           return true;
         }
 
-        await interaction.deferReply({ ephemeral: true }).catch(() => {});
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
 
         const [, cidadeKey, messageId] = id.split("__");
         const cidade = CIDADES_PAGAMENTO[cidadeKey];
@@ -3215,6 +3236,7 @@ if (id.startsWith("pago__") || id.startsWith("solicitado__") || id.startsWith("r
   // ✅ só aprovadores (coord/mkt) + chefões
   if (!temPermissaoAprovacao(interaction)) {
     await interaction.reply({ content: "🚫 Você não tem permissão para aprovar/reprovar registros.", ephemeral: true }).catch(() => {});
+    await interaction.reply({ content: "🚫 Você não tem permissão para aprovar/reprovar registros.", flags: MessageFlags.Ephemeral }).catch(() => {});
     return true;
   }
 
@@ -3229,7 +3251,7 @@ if (id.startsWith("pago__") || id.startsWith("solicitado__") || id.startsWith("r
     if (ehProprio && !podeAprovarProprio(interaction)) {
       await interaction.reply({
         content: "🚫 Você não pode aprovar/reprovar **o seu próprio registro**.",
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       }).catch(() => {});
 
       // loga tentativa
@@ -3302,7 +3324,7 @@ if (id.startsWith("pago__") || id.startsWith("solicitado__") || id.startsWith("r
       // ✅ CRIAR REGISTRO
       if (id === "form_pagamento") {
         if (!temPermissaoPagamento(interaction)) {
-          await interaction.reply({ content: "🚫 Você não tem permissão.", ephemeral: true }).catch(() => {});
+          await interaction.reply({ content: "🚫 Você não tem permissão.", flags: MessageFlags.Ephemeral }).catch(() => {});
           return true;
         }
 
@@ -3331,6 +3353,7 @@ if (id.startsWith("pago__") || id.startsWith("solicitado__") || id.startsWith("r
       // se já respondeu/deferiu em outro fluxo, só sai quieto
       try {
         await interaction.reply({ content: "🛑 Calma aí — já peguei teu envio. (anti duplicação)", ephemeral: true });
+        await interaction.reply({ content: "🛑 Calma aí — já peguei teu envio. (anti duplicação)", flags: MessageFlags.Ephemeral });
       } catch {}
       return true;
     }
@@ -3349,7 +3372,7 @@ const { nome: ganhadorNomeRaw, id: ganhadorIdRaw } = parseNomeIdFlex(interaction
 
 let premiacao = interaction.fields.getTextInputValue("premiacao").trim();
 
-await interaction.deferReply({ ephemeral: true }).catch(() => {});
+await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
 
 const vipEventoResolvido = await resolverVipEventoProfissional(
   client,
@@ -3584,13 +3607,13 @@ vipEventoResolvido?.ok
 
       // ✅ STATUS UPDATE
 if (id.startsWith("pago_desc_") || id.startsWith("solicitado_desc_") || id.startsWith("reprovado_desc_")) {
-  await interaction.deferReply({ ephemeral: true }).catch(() => {});
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
 
   // ✅ só aprovadores (coord/mkt) + chefões
   if (!temPermissaoAprovacao(interaction)) {
     await interaction.followUp({
       content: "🚫 Você não tem permissão para aprovar/reprovar registros.",
-      ephemeral: true
+      flags: MessageFlags.Ephemeral
     }).catch(() => {});
     return true;
   }
@@ -3623,7 +3646,7 @@ if (id.startsWith("pago_desc_") || id.startsWith("solicitado_desc_") || id.start
     if (ehProprio && !podeAprovarProprio(interaction)) {
       await interaction.followUp({
         content: "🚫 Você não pode aprovar/reprovar **o seu próprio registro**.",
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       }).catch(() => {});
 
       logPagamento(
