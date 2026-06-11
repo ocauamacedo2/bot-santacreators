@@ -2465,6 +2465,89 @@ async function deleteAllRetentionPanelMessages(channel, botId) {
 
  return panelMessages.size;
 }
+
+async function cleanupDuplicateRetentionPanelMessages(channel, botId, options = {}) {
+ const msgs = await channel.messages.fetch({ limit: 100 }).catch(() => null);
+ if (!msgs) return 0;
+
+ const panelMessages = [...msgs.values()]
+   .filter(
+     (m) =>
+       m.author?.id === botId &&
+       m.embeds?.some((e) => {
+         const footer = e.footer?.text || "";
+         const title = e.title || "";
+
+         return (
+           footer.includes(FIVEM_RANK_MARKER_TAG) ||
+           footer.includes(FIVEM_CONT_MARKER_TAG) ||
+           title.includes("CENTRAL ANALÍTICA") ||
+           title.includes("STATUS EM TEMPO REAL") ||
+           title.includes("TRENDS") ||
+           title.includes("AUDITORIA DE RETENÇÃO") ||
+           title.includes("RETENÇÃO DO EVENTO") ||
+           title.includes("EVENTOS DO CRONOGRAMA") ||
+           title.includes("ANÁLISE DE EVENTOS POR JANELA") ||
+           title.includes("RECORDES") ||
+           title.includes("COPA DE DESEMPENHO") ||
+           title.includes("PRIME TIME")
+         );
+       })
+   )
+   .sort((a, b) => b.createdTimestamp - a.createdTimestamp);
+
+ if (!panelMessages.length) return 0;
+
+ const state = FIVEM_STATE.get(channel.id) || {};
+ const keepMessageId = options.keepMessageId || state.messageId || null;
+
+ const mainPanelMessages = panelMessages.filter((m) =>
+   m.embeds?.some((e) => {
+     const footer = e.footer?.text || "";
+     return footer.includes(FIVEM_RANK_MARKER_TAG);
+   })
+ );
+
+ const continuationMessages = panelMessages.filter((m) =>
+   m.embeds?.some((e) => {
+     const footer = e.footer?.text || "";
+     return footer.includes(FIVEM_CONT_MARKER_TAG);
+   })
+ );
+
+ const preferredMain =
+   mainPanelMessages.find((m) => keepMessageId && m.id === keepMessageId) ||
+   mainPanelMessages[0] ||
+   panelMessages.find((m) => keepMessageId && m.id === keepMessageId) ||
+   panelMessages[0];
+
+ let deletedCount = 0;
+
+ for (const msg of panelMessages) {
+   const isPreferredMain = preferredMain && msg.id === preferredMain.id;
+   const isContinuation = continuationMessages.some((cont) => cont.id === msg.id);
+
+   if (isPreferredMain) continue;
+
+   if (isContinuation || mainPanelMessages.some((main) => main.id === msg.id)) {
+     const deleted = await msg.delete().then(() => true).catch(() => false);
+     if (deleted) deletedCount++;
+   }
+ }
+
+ if (preferredMain) {
+   FIVEM_STATE.set(channel.id, {
+     ...state,
+     messageId: preferredMain.id,
+   });
+ }
+
+ if (deletedCount > 0) {
+   console.log(`[FIVEM_RETENTION] Duplicados removidos no canal ${channel.id}: ${deletedCount}`);
+ }
+
+ return deletedCount;
+}
 // ---------- STICKY MESSAGE ----------
 async function cn2FindStickyMessage(channel, botId) {
  try {
@@ -2582,6 +2665,12 @@ async function editPanel(channel, options = {}) {
    FIVEM_DEBUG && console.log("[FIVEM_RETENTION] Sem Embed Links no canal", channel.id);
    return null;
  }
+ if (options.cleanupDuplicates) {
+   await cleanupDuplicateRetentionPanelMessages(channel, botId).catch((e) => {
+     cn2LogApiError("[FIVEM_RETENTION] Falha ao limpar duplicados antes de editar:", e);
+   });
+ }
+
  const sticky = await ensureStickyMessage(channel).catch((e) => {
    console.error("[FIVEM_RETENTION] ensureSticky falhou:", e?.message || e);
    return null;
@@ -2785,6 +2874,7 @@ async function editAllFivemRetentionPanels(client, options = {}) {
     const edited = await editPanel(channel, {
       ...options,
       force: true,
+      cleanupDuplicates: true,
     }).catch((e) => {
       cn2LogApiError(`[FIVEM_RETENTION] Falha ao atualizar canal ${channelId}:`, e);
       return null;
@@ -2823,15 +2913,25 @@ async function recreateAllFivemRetentionPanels(client, options = {}) {
 }
 
 
-function runFivemPanelJobInBackground(label, task) {
+function runFivemPanelJobInBackground(jobKey, label, task) {
+  if (FIVEM_PANEL_BACKGROUND_JOBS.has(jobKey)) {
+    return false;
+  }
+
+  FIVEM_PANEL_BACKGROUND_JOBS.add(jobKey);
+
   setImmediate(async () => {
     try {
       await task();
       console.log(`[FIVEM_RETENTION] ${label} finalizado com sucesso.`);
     } catch (e) {
       cn2LogApiError(`[FIVEM_RETENTION] ${label} falhou:`, e);
+    } finally {
+      FIVEM_PANEL_BACKGROUND_JOBS.delete(jobKey);
     }
   });
+
+  return true;
 }
 
 export async function fivemRetentionStatusHandleInteraction(interaction, client) {
@@ -2871,7 +2971,7 @@ export async function fivemRetentionStatusHandleInteraction(interaction, client)
         flags: MessageFlags.Ephemeral,
       }).catch(() => {});
 
-      runFivemPanelJobInBackground("Recriar todos os painéis", async () => {
+      const started = runFivemPanelJobInBackground("recreate_all", "Recriar todos os painéis", async () => {
         const results = await recreateAllFivemRetentionPanels(client, {
           deleteOldMessages: true,
         });
@@ -2880,6 +2980,10 @@ export async function fivemRetentionStatusHandleInteraction(interaction, client)
           `[FIVEM_RETENTION] Painéis recriados: ${results.recreatedCount} | mensagens removidas: ${results.deletedCount}`
         );
       });
+
+      if (!started) {
+        console.log("[FIVEM_RETENTION] Recriação ignorada: já existe um processo rodando.");
+      }
 
       return true;
     }
@@ -2890,8 +2994,7 @@ export async function fivemRetentionStatusHandleInteraction(interaction, client)
         "⏳ Vou atualizar em segundo plano para não travar no “pensando…”.",
       flags: MessageFlags.Ephemeral,
     }).catch(() => {});
-
-    runFivemPanelJobInBackground("Atualizar todos os painéis", async () => {
+    const started = runFivemPanelJobInBackground("refresh_all", "Atualizar todos os painéis", async () => {
       await ensureFivemRetentionAutoLoop(client, {
         forceInitialUpdate: false,
       });
@@ -2906,6 +3009,10 @@ export async function fivemRetentionStatusHandleInteraction(interaction, client)
 
       console.log(`[FIVEM_RETENTION] Painéis atualizados manualmente: ${results.editedCount}`);
     });
+
+    if (!started) {
+      console.log("[FIVEM_RETENTION] Atualização ignorada: já existe um processo rodando.");
+    }
 
     return true;
   } catch (e) {
