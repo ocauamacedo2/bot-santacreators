@@ -1674,6 +1674,11 @@ async function collectAllGeneral(client, mode = "light") {
   // ✅ usa as funções globais já declaradas na área de parsers
 
     // ✅ MANAGER: Escaneia agora os dois canais (Arquivo + Semanal) com deduplicação
+    let mgrTotalFound = 0;
+    let mgrTotalCounted = 0;
+    let mgrTotalDupIgnored = 0;
+    const mgrStatsByCh = {};
+
     for (const mgrCh of [CH_MANAGER_ID, CH_MANAGER_MAIN_ID]) {
       await scanChannelEmbeds(client, {
         channelId: mgrCh,
@@ -1689,6 +1694,9 @@ async function collectAllGeneral(client, mode = "light") {
           if (manager_isRejected(emb)) return;
           if (!manager_isApproved(emb)) return;
 
+          mgrTotalFound++;
+          mgrStatsByCh[mgrCh] = (mgrStatsByCh[mgrCh] || 0) + 1;
+
           // dono do ponto = manager responsável (fallback registrante)
           const uid = manager_getManagerId(emb) || manager_getRegistrarId(emb);
           if (!uid) return;
@@ -1698,17 +1706,41 @@ async function collectAllGeneral(client, mode = "light") {
 
           // ✅ dedupe real: evita contar o mesmo registro de Manager copiado em canais diferentes
           const managerStableKey = makeManagerStableDedupeKey(emb, uid, approvedAt);
-          if (seenManagerStableKeys.has(managerStableKey)) return;
-          seenManagerStableKeys.add(managerStableKey);
+          
+          let action = "CONTADO";
+          if (seenManagerStableKeys.has(managerStableKey)) {
+            action = "DUPLICADO_IGNORADO";
+            mgrTotalDupIgnored++;
+          } else {
+            seenManagerStableKeys.add(managerStableKey);
+            mgrTotalCounted++;
+            items.push({
+              userId: uid,
+              ts: approvedAt || new Date(m.createdTimestamp),
+              source: "manager",
+            });
+          }
 
-          items.push({
-            userId: uid,
-            ts: approvedAt || new Date(m.createdTimestamp),
-            source: "manager",
-          });
+          console.log(
+            `[MANAGER_AUDIT] canal: ${mgrCh} | msgId: ${m.id} | userId: ${uid} | ` +
+            `approvedAt: ${approvedAt?.toISOString() || "n/a"} | ` +
+            `title: ${emb.title} | stableKey: ${managerStableKey} | ação: ${action}`
+          );
         },
       });
     }
+
+    console.log([
+      `\n[MANAGER_AUDIT_SUMMARY - DASH]`,
+      `totalEncontrado: ${mgrTotalFound}`,
+      `totalContado: ${mgrTotalCounted}`,
+      `totalDuplicadoIgnorado: ${mgrTotalDupIgnored}`,
+      `porCanal:`,
+      `1486084441762693291 (Arquivo): ${mgrStatsByCh[CH_MANAGER_ID] || 0}`,
+      `1392680204517769277 (Weekly): ${mgrStatsByCh[CH_MANAGER_MAIN_ID] || 0}`,
+      `----------------------------\n`
+    ].join("\n"));
+
 
 await scanChannelEmbeds(client, {
   channelId: CH_ALINHAMENTOS_ID,

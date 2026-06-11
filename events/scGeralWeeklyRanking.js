@@ -1118,6 +1118,7 @@ function venda_getSellerId(emb) {
 async function collectAllPoints(client, mode = "light") {
   const now = Date.now();
   const seenMessageIds = new Set(); // ✅ Declaração necessária para deduplicação
+  const seenManagerStableKeys = new Set(); // ✅ Deduplicação real por conteúdo
 
   if (mode === "light" && CACHE.payload && now - CACHE.at < SCAN_TTL_MS) {
     // reconstrói debug weekkeys
@@ -1252,14 +1253,46 @@ await scanChannelEmbeds(client, {
         if (manager_isRejected(emb)) return;
         if (!manager_isApproved(emb)) return;
 
+        mgrTotalFound++;
+        mgrStatsByCh[mgrCh] = (mgrStatsByCh[mgrCh] || 0) + 1;
+
         const uid = manager_getManagerId(emb) || manager_getRegistrarId(emb);
         if (!uid) return;
 
         const approvedAt = manager_getApprovedAtSP(emb);
-        pushItem({ userId: uid, ts: approvedAt || new Date(m.createdTimestamp), source: "manager" });
+
+        // ✅ Deduplicação real: mesmo algoritmo do Dashboard
+        const managerStableKey = makeManagerStableDedupeKey(emb, uid, approvedAt);
+        
+        let action = "CONTADO";
+        if (seenManagerStableKeys.has(managerStableKey)) {
+          action = "DUPLICADO_IGNORADO";
+          mgrTotalDupIgnored++;
+        } else {
+          seenManagerStableKeys.add(managerStableKey);
+          mgrTotalCounted++;
+          pushItem({ userId: uid, ts: approvedAt || new Date(m.createdTimestamp), source: "manager" });
+        }
+
+        console.log(
+          `[MANAGER_AUDIT] canal: ${mgrCh} | msgId: ${m.id} | userId: ${uid} | ` +
+          `approvedAt: ${approvedAt?.toISOString() || "n/a"} | ` +
+          `title: ${emb.title} | stableKey: ${managerStableKey} | ação: ${action}`
+        );
       },
     });
   }
+
+  console.log([
+    `\n[MANAGER_AUDIT_SUMMARY - RANKING]`,
+    `totalEncontrado: ${mgrTotalFound}`,
+    `totalContado: ${mgrTotalCounted}`,
+    `totalDuplicadoIgnorado: ${mgrTotalDupIgnored}`,
+    `porCanal:`,
+    `1486084441762693291 (Arquivo): ${mgrStatsByCh[CH_MANAGER_ID] || 0}`,
+    `1392680204517769277 (Weekly): ${mgrStatsByCh[CH_MANAGER_MAIN_ID] || 0}`,
+    `----------------------------\n`
+  ].join("\n"));
 
   // ALINHAMENTOS (Sincronizado com Dash: apenas Válidos/Aprovados)
   await scanChannelEmbeds(client, {
