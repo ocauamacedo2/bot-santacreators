@@ -87,6 +87,7 @@ const PeakModel = mongoose.models.FivemRetentionPeak || mongoose.model("FivemRet
 
 const FIVEM_STATE = new Map(); // channelId -> { intervalId, messageId }
 const FIVEM_PANEL_BACKGROUND_JOBS = new Set(); // trava cliques repetidos enquanto já existe processo rodando
+const FIVEM_CHANNEL_LOCKS = new Map(); // channelId -> Promise, impede criar/editar/recriar ao mesmo tempo
 const FIVEM_SNAPSHOT_CACHE = {
   createdAt: 0,
   value: null,
@@ -2472,6 +2473,23 @@ const row = new ActionRowBuilder().addComponents(
 
 
 
+async function withFivemChannelLock(channelId, task) {
+ const previous = FIVEM_CHANNEL_LOCKS.get(channelId) || Promise.resolve();
+
+ const current = previous
+   .catch(() => {})
+   .then(task)
+   .finally(() => {
+     if (FIVEM_CHANNEL_LOCKS.get(channelId) === current) {
+       FIVEM_CHANNEL_LOCKS.delete(channelId);
+     }
+   });
+
+ FIVEM_CHANNEL_LOCKS.set(channelId, current);
+
+ return current;
+}
+
 async function deleteAllRetentionPanelMessages(channel, botId) {
  const msgs = await channel.messages.fetch({ limit: 100 }).catch(() => null);
  if (!msgs) return 0;
@@ -2703,6 +2721,15 @@ await syncContinuationMessages(channel, botId, continuationGroups, hasContinuati
  return msg;
 }
 async function editPanel(channel, options = {}) {
+ if (!options.skipChannelLock) {
+   return withFivemChannelLock(channel.id, () =>
+     editPanel(channel, {
+       ...options,
+       skipChannelLock: true,
+     })
+   );
+ }
+
  const botId = channel.client.user.id;
  const perms = channel.permissionsFor(botId);
  if (!perms?.has(PermissionsBitField.Flags.ViewChannel) || !perms?.has(PermissionsBitField.Flags.SendMessages)) {
@@ -2792,6 +2819,15 @@ await syncContinuationMessages(channel, botId, continuationGroups, hasContinuati
 }
 
 async function recreateFivemRetentionPanel(channel, client, options = {}) {
+ if (!options.skipChannelLock) {
+   return withFivemChannelLock(channel.id, () =>
+     recreateFivemRetentionPanel(channel, client, {
+       ...options,
+       skipChannelLock: true,
+     })
+   );
+ }
+
  const botId = client.user.id;
 
  const safeSnapshot = await createSafeCurrentSnapshot();
@@ -2829,7 +2865,7 @@ const validationPayload = await buildEmbeds(client, safeSnapshot.snapshot, panel
 async function ensureFivemPanelExists(channel, client) {
  const botId = client.user.id;
 
- const existingPanel = await findExistingRetentionPanelMessage(channel, botId);
+ const existingPanel = await cn2FindStickyMessage(channel, botId);
 
  if (existingPanel) {
    const state = FIVEM_STATE.get(channel.id) || {};
@@ -2871,20 +2907,21 @@ async function ensureFivemRetentionAutoLoop(client, options = {}) {
       });
     }
 
-    const intervalId = setInterval(async () => {
-      try {
-        const edited = await editPanel(channel, {
-  auto: true,
-  force: true,
-});
+const intervalId = setInterval(async () => {
+  try {
+    const edited = await editPanel(channel, {
+      auto: true,
+      force: true,
+      cleanupDuplicates: true,
+    });
 
-        if (!edited) {
-          await ensureFivemPanelExists(channel, client);
-        }
-      } catch (e) {
-        console.error("[FIVEM_RETENTION] Erro no loop de atualização automática:", e);
-      }
-    }, FIVEM_PANEL_REFRESH_INTERVAL_MS);
+    if (!edited) {
+      await ensureFivemPanelExists(channel, client);
+    }
+  } catch (e) {
+    console.error("[FIVEM_RETENTION] Erro no loop de atualização automática:", e);
+  }
+}, FIVEM_PANEL_REFRESH_INTERVAL_MS);
 
 FIVEM_STATE.set(channel.id, {
   ...existing,
@@ -2918,31 +2955,31 @@ export async function fivemRetentionStatusOnReady(client) {
 
 
 async function editAllFivemRetentionPanels(client, options = {}) {
-  let editedCount = 0;
-
   const safeSnapshot = await createSafeCurrentSnapshot({
     forceFresh: options.forceFresh === true,
   });
 
-  for (const channelId of FIVEM_ALL_PANEL_CHANNEL_IDS) {
-    const channel = await client.channels.fetch(channelId).catch(() => null);
+  const results = await Promise.all(
+    FIVEM_ALL_PANEL_CHANNEL_IDS.map(async (channelId) => {
+      const channel = await client.channels.fetch(channelId).catch(() => null);
 
-    if (!channel?.isTextBased?.()) continue;
+      if (!channel?.isTextBased?.()) return null;
 
-    const edited = await editPanel(channel, {
-      ...options,
-      force: true,
-      cleanupDuplicates: true,
-      safeSnapshot,
-    }).catch((e) => {
-      cn2LogApiError(`[FIVEM_RETENTION] Falha ao atualizar canal ${channelId}:`, e);
-      return null;
-    });
+      return editPanel(channel, {
+        ...options,
+        force: true,
+        cleanupDuplicates: true,
+        safeSnapshot,
+      }).catch((e) => {
+        cn2LogApiError(`[FIVEM_RETENTION] Falha ao atualizar canal ${channelId}:`, e);
+        return null;
+      });
+    })
+  );
 
-    if (edited) editedCount++;
-  }
-
-  return { editedCount };
+  return {
+    editedCount: results.filter(Boolean).length,
+  };
 }
 
 async function recreateAllFivemRetentionPanels(client, options = {}) {
@@ -2973,7 +3010,7 @@ async function recreateAllFivemRetentionPanels(client, options = {}) {
 
 
 function runFivemPanelJobInBackground(jobKey, label, task) {
-  if (FIVEM_PANEL_BACKGROUND_JOBS.has(jobKey)) {
+  if (FIVEM_PANEL_BACKGROUND_JOBS.size > 0) {
     return false;
   }
 

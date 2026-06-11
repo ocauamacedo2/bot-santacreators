@@ -1078,7 +1078,9 @@ try {
 
   // Modal Submit (Imagem Final)
   if (interaction.isModalSubmit() && interaction.customId === "crono_save_footer_img") {
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
+    if (!interaction.deferred && !interaction.replied) {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(console.error);
+    }
 
     const url = interaction.fields.getTextInputValue("footerImageUrl").trim();
     
@@ -1090,13 +1092,17 @@ try {
     await updatePanel(client, newState);
     await logChange(client, interaction.guild, interaction.user, oldState, newState, `Alterou Imagem Final`);
     
-    await interaction.editReply({ content: "✅ Imagem atualizada!" });
+    if (interaction.deferred || interaction.replied) {
+      await interaction.editReply({ content: "✅ Imagem atualizada!" }).catch(console.error);
+    }
     return true;
   }
 
   // Modal Submit
   if (interaction.isModalSubmit() && interaction.customId.startsWith("crono_save_")) {
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
+    if (!interaction.deferred && !interaction.replied) {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(console.error);
+    }
 
     const parts = interaction.customId.split("_");
     const type = parts[2];
@@ -1117,7 +1123,9 @@ try {
     await updatePanel(client, newState);
     await logChange(client, interaction.guild, interaction.user, oldState, newState, `Editou ${day.toUpperCase()} (${type})`);
 
-    await interaction.editReply({ content: "✅ Cronograma atualizado!" });
+    if (interaction.deferred || interaction.replied) {
+      await interaction.editReply({ content: "✅ Cronograma atualizado!" }).catch(console.error);
+    }
     return true;
   }
 
