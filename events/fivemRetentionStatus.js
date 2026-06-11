@@ -84,6 +84,7 @@ const PeakSchema = new mongoose.Schema({
 const PeakModel = mongoose.models.FivemRetentionPeak || mongoose.model("FivemRetentionPeak", PeakSchema);
 
 const FIVEM_STATE = new Map(); // channelId -> { intervalId, messageId }
+const FIVEM_PANEL_BACKGROUND_JOBS = new Set(); // trava cliques repetidos enquanto já existe processo rodando
 const FIVEM_DEBUG = false; // 🛑 Desativa os logs de depuração para evitar flood
 
 const DEFAULT_COLOR = 0x2b2d31;
@@ -2987,13 +2988,6 @@ export async function fivemRetentionStatusHandleInteraction(interaction, client)
 
       return true;
     }
-
-    await interaction.reply({
-      content:
-        "🔄 Atualização manual iniciada.\n" +
-        "⏳ Vou atualizar em segundo plano para não travar no “pensando…”.",
-      flags: MessageFlags.Ephemeral,
-    }).catch(() => {});
     const started = runFivemPanelJobInBackground("refresh_all", "Atualizar todos os painéis", async () => {
       await ensureFivemRetentionAutoLoop(client, {
         forceInitialUpdate: false,
@@ -3011,8 +3005,23 @@ export async function fivemRetentionStatusHandleInteraction(interaction, client)
     });
 
     if (!started) {
+      await interaction.reply({
+        content:
+          "⚠️ Já existe uma atualização rodando agora.\n" +
+          "🧹 Se tiver painel duplicado, ela vai limpar durante o processo atual.",
+        flags: MessageFlags.Ephemeral,
+      }).catch(() => {});
+
       console.log("[FIVEM_RETENTION] Atualização ignorada: já existe um processo rodando.");
+      return true;
     }
+
+    await interaction.reply({
+      content:
+        "🔄 Atualização manual iniciada.\n" +
+        "🧹 Vou conferir painel por painel e apagar duplicados antes de atualizar.",
+      flags: MessageFlags.Ephemeral,
+    }).catch(() => {});
 
     return true;
   } catch (e) {
