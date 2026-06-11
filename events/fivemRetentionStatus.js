@@ -2805,7 +2805,7 @@ async function recreateAllFivemRetentionPanels(client, options = {}) {
 
     if (!channel?.isTextBased?.()) continue;
 
-    const result = await recreateFivemRetentionPanel(channel, client, {
+   const result = await recreateFivemRetentionPanel(channel, client, {
       ...options,
       deleteOldMessages: true,
     }).catch((e) => {
@@ -2822,69 +2822,104 @@ async function recreateAllFivemRetentionPanels(client, options = {}) {
   return { deletedCount, recreatedCount };
 }
 
+
+function runFivemPanelJobInBackground(label, task) {
+  setImmediate(async () => {
+    try {
+      await task();
+      console.log(`[FIVEM_RETENTION] ${label} finalizado com sucesso.`);
+    } catch (e) {
+      cn2LogApiError(`[FIVEM_RETENTION] ${label} falhou:`, e);
+    }
+  });
+}
+
 export async function fivemRetentionStatusHandleInteraction(interaction, client) {
- try {
-if (
- !interaction.isButton?.() ||
- !["fivem_retention_force_refresh", "fivem_retention_recreate_panel"].includes(interaction.customId)
-) return false;
+  try {
+    if (
+      !interaction.isButton?.() ||
+      !["fivem_retention_force_refresh", "fivem_retention_recreate_panel"].includes(interaction.customId)
+    ) {
+      return false;
+    }
 
-   try {
-     // Avisa o Discord que estamos processando (isso gera o "Thinking...")
-     await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
+    const channel = interaction.channel;
 
-     const channel = interaction.channel;
-     if (!channel?.isTextBased?.()) {
-       if (interaction.deferred) await interaction.editReply("❌ Não consegui acessar o canal.");
-       return true;
-     }
+    if (!channel?.isTextBased?.()) {
+      await interaction.reply({
+        content: "❌ Não consegui acessar o canal desse painel.",
+        flags: MessageFlags.Ephemeral,
+      }).catch(() => {});
 
-if (interaction.customId === "fivem_retention_recreate_panel") {
-  if (channel.id !== FIVEM_PANEL_CHANNEL_ID) {
-    await interaction.editReply("❌ O botão de recriar todos só pode ser usado no canal principal.").catch(() => {});
+      return true;
+    }
+
+    if (interaction.customId === "fivem_retention_recreate_panel") {
+      if (channel.id !== FIVEM_PANEL_CHANNEL_ID) {
+        await interaction.reply({
+          content: "❌ O botão de recriar todos só pode ser usado no canal principal.",
+          flags: MessageFlags.Ephemeral,
+        }).catch(() => {});
+
+        return true;
+      }
+
+      await interaction.reply({
+        content:
+          "♻️ Recriação dos painéis iniciada.\n" +
+          "⏳ Vou recriar em segundo plano para não travar no “pensando…”.",
+        flags: MessageFlags.Ephemeral,
+      }).catch(() => {});
+
+      runFivemPanelJobInBackground("Recriar todos os painéis", async () => {
+        const results = await recreateAllFivemRetentionPanels(client, {
+          deleteOldMessages: true,
+        });
+
+        console.log(
+          `[FIVEM_RETENTION] Painéis recriados: ${results.recreatedCount} | mensagens removidas: ${results.deletedCount}`
+        );
+      });
+
+      return true;
+    }
+
+    await interaction.reply({
+      content:
+        "🔄 Atualização manual iniciada.\n" +
+        "⏳ Vou atualizar em segundo plano para não travar no “pensando…”.",
+      flags: MessageFlags.Ephemeral,
+    }).catch(() => {});
+
+    runFivemPanelJobInBackground("Atualizar todos os painéis", async () => {
+      await ensureFivemRetentionAutoLoop(client, {
+        forceInitialUpdate: false,
+      });
+
+      const results = await editAllFivemRetentionPanels(client, {
+        force: true,
+      });
+
+      if (!results.editedCount) {
+        throw new Error("Não foi possível atualizar nenhum painel. Verifique permissões, API ou embeds.");
+      }
+
+      console.log(`[FIVEM_RETENTION] Painéis atualizados manualmente: ${results.editedCount}`);
+    });
+
+    return true;
+  } catch (e) {
+    cn2LogApiError("[FIVEM_RETENTION] fivemRetentionStatusHandleInteraction erro:", e);
+
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({
+        content: "❌ Ocorreu um erro interno ao processar a ação.",
+        flags: MessageFlags.Ephemeral,
+      }).catch(() => {});
+    }
+
     return true;
   }
-
-  const results = await recreateAllFivemRetentionPanels(client, {
-    deleteOldMessages: true,
-  });
-
-  await interaction.editReply(
-    `♻️ Todos os painéis foram recriados com sucesso!\n` +
-    `🧹 Mensagens antigas removidas: ${results.deletedCount}`
-  ).catch(() => {});
-
-  return true;
-}
-
-await ensureFivemRetentionAutoLoop(client, {
-  forceInitialUpdate: false,
-});
-
-const results = await editAllFivemRetentionPanels(client, { force: true });
-
-if (!results.editedCount) {
-  throw new Error("Não foi possível atualizar os painéis. API lenta ou sem permissão.");
-}
-
-await interaction.editReply(
-  `✅ Todos os painéis foram atualizados com sucesso!\n` +
-  `📌 Canais atualizados: ${results.editedCount}`
-);
-   } catch (e) {
-     console.error("[FIVEM_RETENTION] Erro ao forçar atualização:", e);
-     if (interaction.deferred || interaction.replied) {
-       await interaction.editReply(`❌ Erro ao atualizar: ${e.message || "Tente novamente mais tarde."}`).catch(() => {});
-     }
-   }
-   return true;
- } catch (e) {
-   cn2LogApiError("[FIVEM_RETENTION] fivemRetentionStatusHandleInteraction erro:", e);
-   if (interaction.deferred || interaction.replied) {
-     await interaction.editReply("❌ Ocorreu um erro interno ao processar a ação.").catch(() => {});
-   }
-   return false;
- }
 }
 
 export async function fivemRetentionStatusHandleMessage(message, client) {
