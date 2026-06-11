@@ -549,6 +549,12 @@ function getFields(emb) {
   return emb?.fields || emb?.data?.fields || [];
 }
 
+function getStatusValueFromEmbed(emb) {
+  const fields = getFields(emb);
+  const f = fields.find((x) => x?.name === "📌 Status");
+  return String(f?.value || "");
+}
+
 // ================== SCAN HELPERS ==================
 async function scanChannelEmbeds(client, { channelId, weekFloorKey, maxPages = 60, onMessage }) {
   const ch = await client.channels.fetch(channelId).catch(() => null);
