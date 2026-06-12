@@ -559,9 +559,10 @@ const enviada = await interaction.channel.send({
 }
 
 
-  // ENVIAR (inicia as perguntas)
+// ENVIAR (inicia as perguntas)
   if (customId.startsWith('enviar|')) {
     const [, targetId] = customId.split('|');
+
     await interaction.deferUpdate().catch(() => {});
 
     const lockKey = String(channel.id);
@@ -575,13 +576,12 @@ const enviada = await interaction.channel.send({
     }
 
     entrevistasAtivas.delete(channel.id);
-    await setInterviewActiveTopic(channel, false);
-    await salvarEntrevistasEmDisco();
 
     const topicId = getAplicadorIdFromChannel(channel);
     const entrevistadorId = topicId || interaction.user.id;
 
     const membro = await channel.guild.members.fetch(targetId).catch(() => null);
+
     if (!membro) {
       await interaction.followUp({
         content: '❌ Não consegui encontrar o candidato para iniciar a entrevista.',
@@ -591,6 +591,7 @@ const enviada = await interaction.channel.send({
     }
 
     const timeoutEnd = Date.now() + ENTREVISTA_DURACAO_MS;
+
     const dadosBase = {
       respostas: [],
       index: 0,
@@ -604,26 +605,41 @@ const enviada = await interaction.channel.send({
 
     entrevistas.set(targetId, dadosBase);
     entrevistasAtivas.add(channel.id);
-    await setInterviewActiveTopic(channel, true);
-    await salvarEntrevistasEmDisco();
 
     try {
       await interaction.message.edit({ components: [] }).catch(() => {});
-      
-      await channel.send({ content: `<@${targetId}> Bora! Vamos começar sua entrevista agora ✨` });
 
-      await enviarPergunta(channel, membro, 0);
+      await channel.send({
+        content: `<@${targetId}> Bora! Vamos começar sua entrevista agora ✨`
+      }).catch(() => {});
 
-      // --- 🛠️ PROCESSAMENTO EM BACKGROUND ---
+      enviarPergunta(channel, membro, 0).catch(async (err) => {
+        console.error("[Entrevista] Falha ao enviar primeira pergunta:", err);
+
+        entrevistas.delete(targetId);
+        entrevistasAtivas.delete(channel.id);
+        entrevistasStartLocks.delete(lockKey);
+
+        await setInterviewActiveTopic(channel, false);
+        await salvarEntrevistasEmDisco();
+
+        await channel.send(
+          `❌ Não consegui enviar a primeira pergunta da entrevista. Verifique minhas permissões neste canal.`
+        ).catch(() => {});
+      });
+
+      setInterviewActiveTopic(channel, true).catch(() => {});
+      salvarEntrevistasEmDisco().catch(() => {});
+
       (async () => {
-        const globalTimer = await iniciarContadorGlobal(channel, targetId);
+        const globalTimer = await iniciarContadorGlobal(channel, targetId).catch(() => null);
         const dados = entrevistas.get(targetId);
+
         if (dados) {
           dados.globalTimer = globalTimer;
           entrevistas.set(targetId, dados);
+          await salvarEntrevistasEmDisco().catch(() => {});
         }
-        
-        salvarEntrevistasEmDisco(); // Sem await
 
         await logCompleto(interaction.client, {
           titulo: '🎬 Entrevista iniciada',
@@ -639,16 +655,21 @@ const enviada = await interaction.channel.send({
 
         const alertStartMsg = `📢 **ENTREVISTA INICIADA!**\n📍 **Canal:** ${channel}\n👤 **Candidato:** <@${targetId}>\n👮 **Aplicador:** <@${entrevistadorId}>`;
         const notifiedStartIds = new Set();
+
         for (const roleId of ALERT_ROLE_IDS) {
           const role = channel.guild.roles.cache.get(roleId);
           if (!role) continue;
+
           for (const [id, staff] of role.members) {
             if (staff.user.bot || notifiedStartIds.has(id)) continue;
+
             staff.send(alertStartMsg).catch(() => {});
             notifiedStartIds.add(id);
           }
         }
-      })();
+      })().catch((err) => {
+        console.error("[Entrevista] Falha no pós-processamento da entrevista:", err);
+      });
 
       entrevistasStartLocks.delete(lockKey);
       return true;
@@ -656,11 +677,20 @@ const enviada = await interaction.channel.send({
       entrevistasAtivas.delete(channel.id);
       entrevistas.delete(targetId);
       entrevistasStartLocks.delete(lockKey);
+
       await setInterviewActiveTopic(channel, false);
+      await salvarEntrevistasEmDisco();
+
       console.error("[Entrevista] Falha ao iniciar entrevista:", e);
+
+      await channel.send(
+        `❌ Não consegui iniciar a entrevista. Verifique minhas permissões neste canal.`
+      ).catch(() => {});
+
       return true;
     }
   }
+
 
   return false;
 }
