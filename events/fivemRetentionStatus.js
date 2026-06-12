@@ -2888,8 +2888,6 @@ let hasNewPeak = false;
 if (safeSnapshot.shouldPersist) {
  await addSnapshot(persistenceSnapshot);
  hasNewPeak = await updateDailyPeaks(persistenceSnapshot);
-} else {
- console.warn("[FIVEM_RETENTION] Snapshot inválido usado apenas para exibição. Histórico e picos não foram atualizados.");
 }
 
 // 🚀 Coleta e edita o painel silenciosamente a cada 1min:
@@ -3043,12 +3041,13 @@ async function ensureFivemRetentionAutoLoop(client, options = {}) {
     FIVEM_MASTER_INTERVAL_RUNNING = true;
 
     try {
-      const results = await editAllFivemRetentionPanels(client, {
-        auto: true,
-        force: true,
-        forceFresh: true,
-        cleanupDuplicates: false,
-      });
+const results = await editAllFivemRetentionPanels(client, {
+  auto: true,
+  force: true,
+  forceFresh: true,
+  cleanupDuplicates: false,
+  silentAutoLogs: true,
+});
 
       if (!results.editedCount) {
         for (const channelId of FIVEM_ALL_PANEL_CHANNEL_IDS) {
@@ -3059,7 +3058,9 @@ async function ensureFivemRetentionAutoLoop(client, options = {}) {
         }
       }
 
-      console.log(`[FIVEM_RETENTION] Auto update ${label}: ${results.editedCount}/${FIVEM_ALL_PANEL_CHANNEL_IDS.length} painéis atualizados com snapshot único.`);
+      if (!options.silentAutoLogs) {
+  console.log(`[FIVEM_RETENTION] Auto update ${label}: ${results.editedCount}/${FIVEM_ALL_PANEL_CHANNEL_IDS.length} painéis atualizados com snapshot único.`);
+}
     } catch (e) {
       console.error("[FIVEM_RETENTION] Erro no loop mestre de atualização automática:", e);
     } finally {
@@ -3115,10 +3116,22 @@ async function editAllFivemRetentionPanels(client, options = {}) {
     await updateDailyPeaks(safeSnapshot.snapshotForPersistence || safeSnapshot.snapshot);
   }
 
-  const sharedSnapshot = {
-    ...safeSnapshot,
-    shouldPersist: false,
-  };
+const sharedSnapshot = {
+  ...safeSnapshot,
+  shouldPersist: false,
+};
+
+if (!safeSnapshot.shouldPersist) {
+  const cities = Object.values(safeSnapshot.snapshot?.cities || {});
+  const onlineCities = cities.filter((city) => city?.online === true).length;
+  const totalClients = safeNumber(safeSnapshot.snapshot?.totalClients, 0);
+  const totalMaxClients = safeNumber(safeSnapshot.snapshot?.totalMaxClients, 0);
+
+  console.warn(
+    `[FIVEM_RETENTION] Snapshot atual não confiável. Painéis serão atualizados com fallback/exibição. ` +
+    `Online válidas: ${onlineCities}/${FIVEM_CITIES.length} | Total: ${totalClients}/${totalMaxClients}`
+  );
+}
 
   const results = await Promise.all(
     FIVEM_ALL_PANEL_CHANNEL_IDS.map(async (channelId) => {
@@ -3126,12 +3139,12 @@ async function editAllFivemRetentionPanels(client, options = {}) {
 
       if (!channel?.isTextBased?.()) return null;
 
-      return editPanel(channel, {
-        ...options,
-        force: true,
-        cleanupDuplicates: options.cleanupDuplicates === true,
-        safeSnapshot: sharedSnapshot,
-      }).catch((e) => {
+return editPanel(channel, {
+  ...options,
+  force: true,
+  cleanupDuplicates: options.cleanupDuplicates === true,
+  safeSnapshot: sharedSnapshot,
+}).catch((e) => {
         cn2LogApiError(`[FIVEM_RETENTION] Falha ao atualizar canal ${channelId}:`, e);
         return null;
       });
