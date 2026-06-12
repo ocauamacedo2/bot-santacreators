@@ -4464,7 +4464,7 @@ export async function handleIaInterviewTicketMessage(message, client) {
   if (!isIaInterviewChannel(message.channel)) return false;
 
   if (channelHasActiveInterviewRunning(message.channel)) {
-    return false;
+    return true;
   }
 
   const openerId = await resolveIaInterviewOpenerId(message);

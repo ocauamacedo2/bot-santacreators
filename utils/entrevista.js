@@ -508,13 +508,13 @@ const enviada = await interaction.channel.send({
 
     if (entrevistasStartLocks.has(lockKey)) {
       console.warn(`[Entrevista] Clique duplicado bloqueado no canal: ${channel.id}.`);
-      await interaction.followUp({ content: '⏳ A entrevista já está sendo iniciada. Aguarde alguns segundos.', ephemeral: true }).catch(() => {});
+      await interaction.followUp({ content: '⏳ A entrevista já está sendo iniciada. Aguarde alguns segundos.', flags: 64 }).catch(() => {});
       return true;
     }
 
     if (entrevistasAtivas.has(channel.id)) {
       console.warn(`[Entrevista] Tentativa de iniciar entrevista em canal já ativo: ${channel.id}. Ignorando.`);
-      await interaction.followUp({ content: '⚠️ Já existe uma entrevista ativa neste canal.', ephemeral: true }).catch(() => {});
+      await interaction.followUp({ content: '⚠️ Já existe uma entrevista ativa neste canal.', flags: 64 }).catch(() => {});
       return true;
     }
 
@@ -527,11 +527,29 @@ const enviada = await interaction.channel.send({
     const membro = await channel.guild.members.fetch(targetId).catch(() => null);
     if (!membro) {
       entrevistasStartLocks.delete(lockKey);
+      await interaction.followUp({
+        content: '❌ Não consegui encontrar o candidato para iniciar a entrevista.',
+        flags: 64
+      }).catch(() => {});
       return true;
     }
 
+    const timeoutEnd = Date.now() + ENTREVISTA_DURACAO_MS;
+    const dadosBase = {
+      respostas: [],
+      index: 0,
+      timeoutEnd,
+      entrevistadorId,
+      channelId: channel.id,
+      mensagens: [],
+      lastSent: 0,
+      globalTimer: null
+    };
+
+    entrevistas.set(targetId, dadosBase);
     entrevistasAtivas.add(channel.id);
     await setInterviewActiveTopic(channel, true);
+    await salvarEntrevistasEmDisco();
 
     // --- 🚀 RESPOSTA IMEDIATA AO DISCORD ---
     try {
@@ -541,22 +559,15 @@ const enviada = await interaction.channel.send({
       // Manda a mensagem de início imediatamente
       const aviso = await channel.send({ content: `<@${targetId}> Bora! Vamos começar sua entrevista agora ✨` });
 
-      // Configuração básica do estado
-      const timeoutEnd = Date.now() + ENTREVISTA_DURACAO_MS;
-      const dadosBase = {
-        respostas: [],
-        index: 0,
-        timeoutEnd,
-        entrevistadorId,
-        channelId: channel.id,
-        mensagens: [],
-        lastSent: 0,
-        globalTimer: null
-      };
-      entrevistas.set(targetId, dadosBase);
-
       // Dispara a primeira pergunta agora (sem esperar logs)
-      enviarPergunta(channel, membro, 0);
+      enviarPergunta(channel, membro, 0).catch(async (err) => {
+        console.error("[Entrevista] Falha ao enviar primeira pergunta:", err);
+        entrevistas.delete(targetId);
+        entrevistasAtivas.delete(channel.id);
+        entrevistasStartLocks.delete(lockKey);
+        await setInterviewActiveTopic(channel, false);
+        await salvarEntrevistasEmDisco();
+      });
 
       // --- 🛠️ PROCESSAMENTO EM BACKGROUND ---
       (async () => {
