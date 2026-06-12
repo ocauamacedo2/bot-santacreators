@@ -3595,6 +3595,406 @@ function buildIaInterviewInfluencerQuickAnswer(message, openerId) {
   return null;
 }
 
+function buildIaInterviewSantaCreatorsKnowledgeQuickAnswer(message, openerId) {
+  const text = normalizeSearchText(message.content);
+  const mention = buildSafeUserMention(openerId);
+  const channelId = message.channelId;
+
+  if (
+    textHasAny(text, [
+      "quais cidades",
+      "qual cidade",
+      "que cidades",
+      "que cidade",
+      "quais cdds",
+      "qual cdd",
+      "que cdds",
+      "que cdd",
+      "em quais cidades",
+      "em qual cidade",
+      "onde atua",
+      "onde atuam",
+      "onde acontece",
+      "onde acontecem",
+      "cidades da santa",
+      "cdds da santa",
+      "cidades da santacreators",
+      "cdds da santacreators",
+      "nobre grande maresia santa",
+      "nobre",
+      "grande",
+      "maresia",
+      "santa",
+    ])
+  ) {
+    return pickIaInterviewReply([
+      `${mention}, as CDDs da operação são Nobre, Grande, Maresia e Santa.`,
+      `a SantaCreators atua nas CDDs Nobre, Grande, Maresia e Santa.`,
+      `as cidades usadas na operação são: Nobre, Grande, Maresia e Santa.`,
+      `hoje a operação gira em Nobre, Grande, Maresia e Santa.`,
+      `os Mega Eventos acontecem dentro das CDDs Nobre, Grande, Maresia e Santa.`,
+      `${mention}, quando falamos de CDDs da SantaCreators, estamos falando de Nobre, Grande, Maresia e Santa.`,
+      `são quatro principais: Nobre, Grande, Maresia e Santa.`,
+      `as cidades são Nobre, Grande, Maresia e Santa. A Nobre costuma ser o centro mais forte da operação.`,
+      `a operação passa por Maresia, Grande, Santa e principalmente Nobre.`,
+      `Nobre, Grande, Maresia e Santa são as CDDs que entram no cronograma da SantaCreators.`,
+      `temos atuação em Nobre, Grande, Maresia e Santa, sempre seguindo o cronograma da operação.`,
+      `a resposta direta é: Nobre, Grande, Maresia e Santa.`,
+      `as CDDs são: Nobre, Grande, Maresia e Santa. Cada uma pode ter papel diferente no cronograma.`,
+      `${mention}, normalmente a semana envolve Maresia, Grande, Santa e Nobre.`,
+      `Nobre, Grande, Maresia e Santa. Essas são as cidades que você precisa conhecer pra entender a operação.`,
+    ], channelId);
+  }
+
+  if (
+    textHasAny(text, [
+      "o que é a santacreators",
+      "oq é a santacreators",
+      "oque é a santacreators",
+      "o que e a santacreators",
+      "oq e a santacreators",
+      "oque e a santacreators",
+      "como funciona a santacreators",
+      "como funciona isso",
+      "como funciona aqui",
+      "como funciona",
+      "quero entender",
+      "entender como funciona",
+      "o que voces fazem",
+      "oq voces fazem",
+      "o que vocês fazem",
+      "qual objetivo",
+      "qual o objetivo",
+      "pra que serve",
+      "sobre a santa",
+      "sobre a santacreators",
+      "me explica a santa",
+      "me explica a santacreators",
+    ])
+  ) {
+    return pickIaInterviewReply([
+      `${mention}, a SantaCreators é uma estrutura de RP focada em Mega Eventos, organização, experiências, movimentação das cidades e desenvolvimento de pessoas.`,
+      `a SantaCreators não é só uma empresa de evento e nem suporte de influencer. Ela existe pra criar experiências, movimentar CDDs e formar pessoas dentro do RP.`,
+      `funciona assim: a SantaCreators organiza Mega Eventos, movimenta as cidades e desenvolve membros pra crescerem dentro da estrutura.`,
+      `a empresa trabalha com eventos, organização, registros, liderança e desenvolvimento. Não é só aparecer em live ou usar cargo.`,
+      `a SantaCreators é uma equipe de RP com foco em entretenimento, eventos, organização e formação de lideranças.`,
+      `${mention}, resumindo bem: a SantaCreators cria experiências dentro do RP e usa os eventos como forma de movimentar cidades e desenvolver pessoas.`,
+      `a SantaCreators é uma estrutura completa. Tem base, gestão, managers, social medias, gestores, coords e responsáveis.`,
+      `a ideia da SantaCreators é movimentar cidades com eventos e desenvolver membros através de participação, responsabilidade e evolução.`,
+      `aqui não é só “entrar por entrar”. A pessoa aprende, participa, registra, evolui e pode crescer dentro da empresa.`,
+      `a SantaCreators trabalha com criação de experiências dentro do GTA RP. Os Mega Eventos são uma das partes mais importantes disso.`,
+      `o foco da empresa é organização, desenvolvimento, responsabilidade e registro.`,
+      `a SantaCreators existe pra criar eventos memoráveis, movimentar jogadores e formar lideranças.`,
+      `não é uma equipe feita pra distribuir cargo. É uma estrutura pra quem quer aprender, participar e somar.`,
+      `o coração da SantaCreators é: pessoas desenvolvem pessoas, eventos movimentam cidades e registros criam histórico.`,
+      `${mention}, se você quer entender a SantaCreators, pensa nela como uma empresa de RP que organiza Mega Eventos e desenvolve membros pra crescerem com responsabilidade.`,
+    ], channelId);
+  }
+
+  if (
+    textHasAny(text, [
+      "como entrar",
+      "como faço pra entrar",
+      "como faco pra entrar",
+      "quero entrar",
+      "posso entrar",
+      "entrar na santa",
+      "entrar pra santa",
+      "entrar na santacreators",
+      "entrar pra santacreators",
+      "fazer entrevista",
+      "iniciar entrevista",
+      "começar entrevista",
+      "comecar entrevista",
+      "participar da santa",
+      "participar da santacreators",
+    ])
+  ) {
+    return pickIaInterviewReply([
+      `${mention}, pra entrar você passa pela entrevista e precisa mostrar que entendeu a proposta: Mega Eventos, RP, organização, respeito e participação.`,
+      `pra entrar, o caminho é entrevista. A equipe vai avaliar postura, entendimento de RP, idade mínima e se você combina com a proposta da SantaCreators.`,
+      `você pode seguir pela entrevista, mas já sabendo: não é suporte de influencer. É equipe de Mega Eventos e desenvolvimento dentro do RP.`,
+      `pra entrar, responde tudo com sinceridade. A entrevista não quer texto bonito copiado, quer entender tua postura.`,
+      `o processo começa pela entrevista. O principal é mostrar que você quer somar com eventos, organização e comunidade.`,
+      `${mention}, se a ideia é participar dos Mega Eventos e respeitar a estrutura da empresa, segue a entrevista certinho.`,
+      `pra entrar precisa ter postura, respeito, vontade de participar e entender que a SantaCreators trabalha com Mega Eventos nas CDDs.`,
+      `a entrada não é por fama, seguidor ou live. É por encaixe com a equipe e com a proposta da SantaCreators.`,
+      `segue o fluxo da entrevista e responde com tuas palavras. A equipe quer ver sinceridade e entendimento.`,
+      `pra entrar, você precisa passar pelo processo normal e entender a cultura da empresa: participação, registro, respeito e responsabilidade.`,
+    ], channelId);
+  }
+
+  if (
+    textHasAny(text, [
+      "creator",
+      "o que é creator",
+      "oq é creator",
+      "oque é creator",
+      "o que e creator",
+      "creator faz o que",
+      "função de creator",
+      "funcao de creator",
+      "cargo creator",
+      "começa como o que",
+      "comeca como o que",
+      "primeiro cargo",
+      "cargo inicial",
+    ])
+  ) {
+    return pickIaInterviewReply([
+      `${mention}, Creator é a porta de entrada da SantaCreators. É onde a pessoa começa a aprender a cultura, participar e entender a empresa.`,
+      `todo mundo começa pela base. O Creator participa, interage, aprende regras e ajuda a movimentar a SantaCreators.`,
+      `Creator não é “ser influencer famoso”. Creator é ser membro da base, participar da operação e representar a empresa.`,
+      `o Creator é o primeiro cargo da estrutura. A pessoa começa aprendendo, participando e mostrando comprometimento.`,
+      `ser Creator é vestir a camisa da empresa, participar dos eventos e entender como a SantaCreators funciona.`,
+      `o Creator sustenta a comunidade. Sem Creator, não tem movimentação, crescimento nem retenção.`,
+      `${mention}, Creator é o início da jornada. Depois, com participação e confiança, a pessoa pode evoluir.`,
+      `Creator é quem começa na empresa e demonstra interesse, presença, respeito e vontade de aprender.`,
+      `não precisa entrar sabendo tudo. Como Creator, o importante é participar, aprender e respeitar a cultura.`,
+      `Creator é base. A pessoa aparece, ajuda, aprende e começa a construir histórico dentro da SantaCreators.`,
+    ], channelId);
+  }
+
+  if (
+    textHasAny(text, [
+      "social media",
+      "social medias",
+      "social faz o que",
+      "social media faz o que",
+      "função social",
+      "funcao social",
+      "função social media",
+      "funcao social media",
+      "eventos",
+      "criar evento",
+      "criação de evento",
+      "criacao de evento",
+      "cronograma",
+      "premiação",
+      "premiacao",
+      "hall da fama",
+    ])
+  ) {
+    return pickIaInterviewReply([
+      `${mention}, a área Social Media cuida da parte de eventos: cronograma, organização, premiação, pagamentos, Hall da Fama e registros.`,
+      `Social Media é uma das áreas que faz os eventos acontecerem de verdade. Ela organiza a experiência dos jogadores.`,
+      `a Social Media aprende e executa eventos, premiações, cronogramas, registros e Hall da Fama.`,
+      `sem Social Media, o evento não sai organizado. Essa área monta a estrutura do evento.`,
+      `Social Media não é postar foto. Dentro da SantaCreators, é área operacional de eventos.`,
+      `a Social Media trabalha nos bastidores dos Mega Eventos: planejamento, premiação, divulgação, pagamento e registro.`,
+      `${mention}, se a pessoa gosta de organizar eventos e experiências, Social Media é uma área importante da SantaCreators.`,
+      `a função da Social Media é transformar planejamento em evento funcionando.`,
+      `Social Media cuida da experiência do evento, não de suporte pra influencer.`,
+      `a área Social Media é essencial porque ela estrutura os Mega Eventos nas CDDs.`,
+    ], channelId);
+  }
+
+  if (
+    textHasAny(text, [
+      "manager",
+      "manager creators",
+      "manager faz o que",
+      "o que faz manager",
+      "função manager",
+      "funcao manager",
+      "registrar organização",
+      "registrar organizacao",
+      "organizações",
+      "organizacoes",
+      "facção",
+      "faccao",
+      "facções",
+      "faccoes",
+      "convidar",
+      "convidar org",
+      "contingente",
+    ])
+  ) {
+    return pickIaInterviewReply([
+      `${mention}, Manager é a área que traz organizações e participantes pros eventos. Sem Manager, o evento pode ficar vazio.`,
+      `a Social Media monta o evento; o Manager traz as organizações pra participar.`,
+      `Manager conversa com lideranças, registra organizações e ajuda a garantir contingente nos Mega Eventos.`,
+      `a função do Manager é conectar organizações aos eventos da SantaCreators.`,
+      `Manager não deve registrar organização sem confirmação de liderança. A confirmação precisa vir de líder válido.`,
+      `sem Manager, os eventos perdem força, porque faltam participantes e organizações.`,
+      `${mention}, Manager é comunicação, convite, registro e acompanhamento de organizações.`,
+      `o Manager garante que as CDDs tenham movimento nos eventos.`,
+      `a área Manager é essencial porque evento sem organização participante não segura retenção.`,
+      `Manager trabalha com líderes de organizações, não só com membros aleatórios.`,
+    ], channelId);
+  }
+
+  if (
+    textHasAny(text, [
+      "gestaoinfluencer",
+      "gestão influencer",
+      "gestao influencer",
+      "gi",
+      "o que é gi",
+      "oq é gi",
+      "oque é gi",
+      "o que e gi",
+      "como entra na gi",
+      "entrar na gi",
+      "gestão é staff",
+      "gestao é staff",
+      "gi é staff",
+      "gi e staff",
+      "painel",
+    ])
+  ) {
+    return pickIaInterviewReply([
+      `${mention}, a gestaoinfluencer não é staff. É o núcleo interno da própria SantaCreators, responsável por ajudar a gestão e a operação da empresa.`,
+      `GI não é equipe separada e não é staff da cidade. É a estrutura administrativa interna da SantaCreators.`,
+      `a pessoa não entra na GI por pedido. Ela evolui, participa, ajuda, ganha confiança e pode receber convite.`,
+      `a gestaoinfluencer existe pra organizar eventos, projetos, gravações, operações e lideranças da SantaCreators.`,
+      `SantaCreators é a empresa; gestaoinfluencer é a gestão interna que ajuda a empresa funcionar.`,
+      `GI não é poder pra benefício pessoal. As permissões existem pra auxiliar projetos, eventos e operações.`,
+      `${mention}, entrar na GI é consequência de evolução, não de insistência ou amizade.`,
+      `a GI acompanha a operação e ajuda a manter a SantaCreators organizada.`,
+      `o painel representa níveis de responsabilidade dentro da empresa, não status pra se achar melhor.`,
+      `a filosofia da GI é simples: quem participa, ajuda e demonstra confiança pode evoluir.`,
+    ], channelId);
+  }
+
+  if (
+    textHasAny(text, [
+      "hierarquia",
+      "cargos",
+      "ordem dos cargos",
+      "estrutura",
+      "quem manda",
+      "responsáveis",
+      "responsaveis",
+      "resp lider",
+      "resp líder",
+      "resp influ",
+      "resp creators",
+      "coord",
+      "gestor",
+      "evolução",
+      "evolucao",
+      "subir de cargo",
+    ])
+  ) {
+    return pickIaInterviewReply([
+      `${mention}, a estrutura é: Creator > Creator Líder > Social Media ou Manager > Gestor > Coord > Resp Líder > Resp Influ > Resp Creators.`,
+      `a hierarquia da SantaCreators não é sobre status. É sobre responsabilidade.`,
+      `quanto maior o cargo, maior a obrigação de ensinar, organizar e desenvolver pessoas.`,
+      `a evolução natural começa em Creator e pode ir até Responsáveis, mas tudo depende de participação, confiança e responsabilidade.`,
+      `ninguém sobe só por pedir. A pessoa precisa participar, ajudar, aprender e criar histórico.`,
+      `a SantaCreators valoriza quem aparece, ajuda, registra e fortalece a equipe.`,
+      `${mention}, cargo aqui é consequência de evolução. Primeiro a pessoa aprende, depois executa, depois ensina e lidera.`,
+      `a liderança observa postura, participação, responsabilidade, registros e evolução.`,
+      `a hierarquia organiza a empresa e evita bagunça. Cada cargo tem uma função.`,
+      `ser líder aqui não é mandar mais. É cuidar de mais pessoas e responder por mais coisas.`,
+    ], channelId);
+  }
+
+  if (
+    textHasAny(text, [
+      "registro",
+      "registrar",
+      "registrado",
+      "se não foi registrado",
+      "se nao foi registrado",
+      "não aconteceu",
+      "nao aconteceu",
+      "frase da empresa",
+      "regra mais importante",
+      "dashboard",
+      "pontuação",
+      "pontuacao",
+      "pontos",
+    ])
+  ) {
+    return pickIaInterviewReply([
+      `${mention}, uma das frases mais importantes da SantaCreators é: se não foi registrado, não aconteceu.`,
+      `registro é base da empresa. Evento, pagamento, poder, alinhamento, organização e feedback precisam ter histórico.`,
+      `sem registro, a liderança não consegue comprovar trabalho, acompanhar evolução nem tomar decisão justa.`,
+      `os registros alimentam dashboards, pontuação e histórico da equipe.`,
+      `na SantaCreators, não basta fazer. Precisa comprovar.`,
+      `organização gera histórico, histórico gera informação e informação gera decisões melhores.`,
+      `${mention}, quem quer crescer precisa entender a cultura de registro da empresa.`,
+      `pontuação ajuda, mas qualidade e consistência também importam.`,
+      `dashboard existe pra liderança acompanhar a operação com dados, não só percepção.`,
+      `se não tem registro, fica difícil reconhecer, corrigir ou avaliar qualquer coisa.`,
+    ], channelId);
+  }
+
+  if (
+    textHasAny(text, [
+      "idade",
+      "idade mínima",
+      "idade minima",
+      "quantos anos",
+      "tenho 14",
+      "tenho 13",
+      "menor de idade",
+      "menor",
+      "15 anos",
+    ])
+  ) {
+    return pickIaInterviewReply([
+      `${mention}, a idade mínima para participar da SantaCreators é 15 anos.`,
+      `pra entrar na SantaCreators precisa ter 15 anos ou mais.`,
+      `se tiver menos de 15 anos, infelizmente não pode participar agora.`,
+      `a regra de idade existe pra manter um ambiente mais seguro, maduro e organizado.`,
+      `15 anos é o mínimo pra seguir no processo da SantaCreators.`,
+    ], channelId);
+  }
+
+  if (
+    textHasAny(text, [
+      "uniforme",
+      "jaqueta",
+      "roupa",
+      "peça",
+      "peca",
+      "garagem",
+      "prédio",
+      "predio",
+      "sede",
+      "identificação",
+      "identificacao",
+    ])
+  ) {
+    return pickIaInterviewReply([
+      `${mention}, dentro do prédio o uso da jaqueta oficial é obrigatório.`,
+      `nas proximidades da sede ou usando garagem, precisa estar com pelo menos uma peça da SantaCreators.`,
+      `o uniforme existe pra fortalecer identidade, organização e reconhecimento da empresa.`,
+      `ficar perto da empresa sem identificação pode gerar advertência.`,
+      `ao vestir a peça da SantaCreators, a pessoa representa a empresa e precisa manter postura.`,
+    ], channelId);
+  }
+
+  if (
+    textHasAny(text, [
+      "poder",
+      "poderes",
+      "god",
+      "nc",
+      "noclip",
+      "tp",
+      "tptome",
+      "comando",
+      "permissão",
+      "permissao",
+      "vantagem",
+    ])
+  ) {
+    return pickIaInterviewReply([
+      `${mention}, poderes não são privilégio. São responsabilidade.`,
+      `os poderes da GI existem pra auxiliar eventos, gravações, projetos e operações da empresa, não pra vantagem pessoal.`,
+      `usar poder pra benefício próprio é abuso e pode gerar punição séria.`,
+      `se um jogador comum não pode fazer, quem tem poder também não deve fazer.`,
+      `poder usado em atividade da empresa precisa seguir processo e registro.`,
+    ], channelId);
+  }
+
+  return null;
+}
+
 function buildIaInterviewRulesQuickAnswer(message, openerId) {
   const text = normalizeSearchText(message.content);
   const mention = buildSafeUserMention(openerId);
@@ -3776,6 +4176,12 @@ function buildIaInterviewQuickAnswer(message, openerId) {
 
   if (influencerQuickAnswer) {
     return influencerQuickAnswer;
+  }
+
+  const santaCreatorsKnowledgeQuickAnswer = buildIaInterviewSantaCreatorsKnowledgeQuickAnswer(message, openerId);
+
+  if (santaCreatorsKnowledgeQuickAnswer) {
+    return santaCreatorsKnowledgeQuickAnswer;
   }
 
   const rulesQuickAnswer = buildIaInterviewRulesQuickAnswer(message, openerId);
