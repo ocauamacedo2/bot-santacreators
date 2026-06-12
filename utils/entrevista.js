@@ -566,71 +566,23 @@ const enviada = await interaction.channel.send({
 
     const lockKey = String(channel.id);
 
-    await clearGhostInterviewIfNeeded(channel, targetId, "antes de iniciar pelo botão ENVIAR");
+    entrevistasStartLocks.delete(lockKey);
 
-    const existePerguntaRealNoCanal = await channelHasRealInterviewQuestion(channel, targetId);
-
-    const entrevistaRealDoCanal = [...entrevistas.values()].some((dados) =>
-      String(dados?.channelId || "") === String(channel.id)
-    );
-
-    if ((entrevistasAtivas.has(channel.id) || entrevistaRealDoCanal) && !existePerguntaRealNoCanal) {
-      console.warn(`[Entrevista] Estado ativo sem pergunta real. Resetando canal: ${channel.id}`);
-
-      for (const [userId, dados] of entrevistas.entries()) {
-        if (String(dados?.channelId || "") === String(channel.id)) {
-          entrevistas.delete(userId);
-        }
-      }
-
-      entrevistasAtivas.delete(channel.id);
-      entrevistasStartLocks.delete(lockKey);
-      await setInterviewActiveTopic(channel, false);
-      await salvarEntrevistasEmDisco();
-    }
-
-    if (entrevistasStartLocks.has(lockKey)) {
-      console.warn(`[Entrevista] Clique duplicado bloqueado no canal: ${channel.id}.`);
-      await interaction.followUp({ content: '⏳ A entrevista já está sendo iniciada. Aguarde alguns segundos.', flags: 64 }).catch(() => {});
-      return true;
-    }
-
-    const existeEntrevistaDepoisDaLimpeza = [...entrevistas.values()].some((dados) =>
-      String(dados?.channelId || "") === String(channel.id)
-    );
-
-if (entrevistasAtivas.has(channel.id) || existeEntrevistaDepoisDaLimpeza || existePerguntaRealNoCanal) {
-      const aindaExistePerguntaReal = await channelHasRealInterviewQuestion(channel, targetId);
-
-      if (!aindaExistePerguntaReal) {
-        console.warn(`[Entrevista] Bloqueio falso detectado no canal ${channel.id}. Limpando e permitindo iniciar.`);
-
-        for (const [userId, dados] of entrevistas.entries()) {
-          if (String(dados?.channelId || "") === String(channel.id)) {
-            entrevistas.delete(userId);
-          }
-        }
-
-        entrevistasAtivas.delete(channel.id);
-        entrevistasStartLocks.delete(lockKey);
-        await setInterviewActiveTopic(channel, false);
-        await salvarEntrevistasEmDisco();
-      } else {
-        console.warn(`[Entrevista] Tentativa de iniciar entrevista em canal já ativo: ${channel.id}. Ignorando.`);
-        await interaction.followUp({ content: '⚠️ Já existe uma entrevista ativa neste canal.', flags: 64 }).catch(() => {});
-        return true;
+    for (const [userId, dados] of entrevistas.entries()) {
+      if (String(dados?.channelId || "") === String(channel.id)) {
+        entrevistas.delete(userId);
       }
     }
 
-    entrevistasStartLocks.add(lockKey);
-    setTimeout(() => entrevistasStartLocks.delete(lockKey), 10_000);
+    entrevistasAtivas.delete(channel.id);
+    await setInterviewActiveTopic(channel, false);
+    await salvarEntrevistasEmDisco();
 
     const topicId = getAplicadorIdFromChannel(channel);
     const entrevistadorId = topicId || interaction.user.id;
 
     const membro = await channel.guild.members.fetch(targetId).catch(() => null);
     if (!membro) {
-      entrevistasStartLocks.delete(lockKey);
       await interaction.followUp({
         content: '❌ Não consegui encontrar o candidato para iniciar a entrevista.',
         flags: 64
@@ -655,28 +607,12 @@ if (entrevistasAtivas.has(channel.id) || existeEntrevistaDepoisDaLimpeza || exis
     await setInterviewActiveTopic(channel, true);
     await salvarEntrevistasEmDisco();
 
-    // --- 🚀 RESPOSTA IMEDIATA AO DISCORD ---
     try {
-      // Remove botões na hora
       await interaction.message.edit({ components: [] }).catch(() => {});
       
-      // Manda a mensagem de início imediatamente
-      const aviso = await channel.send({ content: `<@${targetId}> Bora! Vamos começar sua entrevista agora ✨` });
+      await channel.send({ content: `<@${targetId}> Bora! Vamos começar sua entrevista agora ✨` });
 
-      // Dispara a primeira pergunta agora (sem esperar logs)
-      await enviarPergunta(channel, membro, 0).catch(async (err) => {
-        console.error("[Entrevista] Falha ao enviar primeira pergunta:", err);
-
-        entrevistas.delete(targetId);
-        entrevistasAtivas.delete(channel.id);
-        entrevistasStartLocks.delete(lockKey);
-        await setInterviewActiveTopic(channel, false);
-        await salvarEntrevistasEmDisco();
-
-        await channel.send(
-          `❌ Não consegui enviar a primeira pergunta da entrevista. Verifique minhas permissões de enviar mensagem e mencionar usuário neste canal.`
-        ).catch(() => {});
-      });
+      await enviarPergunta(channel, membro, 0);
 
       // --- 🛠️ PROCESSAMENTO EM BACKGROUND ---
       (async () => {

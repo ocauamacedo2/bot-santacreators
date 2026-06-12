@@ -47,6 +47,10 @@ export default {
       return message.channel.send("Esse comando só funciona dentro do servidor.");
     }
 
+    if (message.deletable) {
+      await message.delete().catch(() => {});
+    }
+
     await entrevista.resetInterviewChannelState?.(
       message.channel,
       "!perguntas usado antes de criar novo botão"
