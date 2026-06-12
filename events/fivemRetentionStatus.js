@@ -718,12 +718,39 @@ export function getEventDayFocusConfig(snapshot, customWeekday = null) {
  * (Captura o primeiro registro entre 21:00 e 21:01:59)
  */
 export function isExact21hSnapshot(snapshot) {
-  const weekday = getSaoPauloWeekday(new Date(snapshot.timestamp));
-  // Dias de Segunda a Sábado (1-6)
-  const isRelevantDay = (weekday >= 1 && weekday <= 6);
+  if (!snapshot?.timestamp) return false;
 
-  // Captura o primeiro snapshot da hora 21 (intervalo de 2min)
-  return isRelevantDay && snapshot.hour === 21 && snapshot.minute < 8;
+  const weekday = getSaoPauloWeekday(new Date(snapshot.timestamp));
+
+  // Segunda a sábado.
+  // Domingo fica fora porque não é ponto fixo principal de começo de evento 21h.
+  const isRelevantDay = weekday >= 1 && weekday <= 6;
+
+  // Janela profissional de tolerância:
+  // pega qualquer coleta entre 21:00 e 21:10.
+  // Isso evita perder a auditoria por atraso de API, lock, restart ou Discord rate limit.
+  return isRelevantDay && snapshot.hour === 21 && snapshot.minute >= 0 && snapshot.minute <= 10;
+}
+
+function buildExact21hFromSnapshot(snapshot) {
+  if (!snapshot) return null;
+
+  return {
+    total: snapshot.totalClients || 0,
+    cities: snapshot.cities || {},
+    capturedAt: snapshot.timestamp || Date.now(),
+    capturedTime: snapshot.spTime || "--:--",
+    source: "history_snapshot",
+  };
+}
+
+async function resolveExact21hForDate(dateKey, peakExact21h = null) {
+  if (peakExact21h?.total > 0) return peakExact21h;
+
+  const snap = await getExact21hHistory(dateKey);
+  const fromHistory = buildExact21hFromSnapshot(snap);
+
+  return fromHistory || { total: 0, cities: {} };
 }
 
 function formatNumber(n) {
@@ -926,7 +953,9 @@ async function syncContinuationMessages(channel, botId, embedGroups, row = null)
 async function addSnapshot(newSnapshot) {
   try {
     const last = await HistoryModel.findOne().sort({ timestamp: -1 });
-    if (last && (newSnapshot.timestamp - last.timestamp < 60 * 1000)) return false;
+
+    // Evita duplicar no mesmo minuto exato, mas não perde coleta por diferença de milissegundos.
+    if (last && last.spDate === newSnapshot.spDate && last.spTime === newSnapshot.spTime) return false;
 
     await HistoryModel.create(newSnapshot);
 
@@ -1177,13 +1206,21 @@ if (!dayPeak.eventWindows) {
       }
     }
 
-    // Atualiza o pico exato das 21:00
-if (isExact21hSnapshot(currentSnapshot) && isReliableSnapshotForPersistence(currentSnapshot)) {
-  if (!dayPeak.exact21h?.total || dayPeak.exact21h.total <= 0) {
-    dayPeak.exact21h.total = currentSnapshot.totalClients || 0;
-    dayPeak.exact21h.cities = currentSnapshot.cities;
-    dayPeak.exact21h.capturedAt = currentSnapshot.timestamp;
-    dayPeak.exact21h.capturedTime = currentSnapshot.spTime;
+    // Atualiza a auditoria fixa das 21:00.
+    // Não é pico: é a primeira leitura válida da janela 21:00-21:10.
+if (isExact21hSnapshot(currentSnapshot) && isValidSnapshot(currentSnapshot)) {
+  const currentTotal = currentSnapshot.totalClients || 0;
+  const alreadyCaptured = dayPeak.exact21h?.total > 0;
+
+  if (!alreadyCaptured && currentTotal > 0) {
+    dayPeak.exact21h = {
+      total: currentTotal,
+      cities: currentSnapshot.cities || {},
+      capturedAt: currentSnapshot.timestamp,
+      capturedTime: currentSnapshot.spTime,
+      source: currentSnapshot.sourceStatus || "live_api",
+    };
+
     hasChange = true;
   }
 }
@@ -2194,15 +2231,9 @@ const cityEvents = getAllFivemEventSchedule().filter((event) => {
  const primeWindow = getPrimeTimeWindow(currentSnapshot, effectiveWeekday);
 
  if (isRelevant21hDay) {
-   const today21h = todayPeaks.exact21h || { total: 0, cities: {} };
-   const yesterday21h = yesterdayPeaks.exact21h || { total: 0, cities: {} };
-   
-   let lastWeek21h = lastWeekPeaks.exact21h;
-   if (!lastWeek21h || lastWeek21h.total === 0) {
-     const snap = await getExact21hHistory(lastWeekKey);
-     if (snap) lastWeek21h = { total: snap.totalClients, cities: snap.cities };
-   }
-   lastWeek21h ||= { total: 0, cities: {} };
+   const today21h = await resolveExact21hForDate(todayKey, todayPeaks.exact21h);
+   const yesterday21h = await resolveExact21hForDate(yesterdayKey, yesterdayPeaks.exact21h);
+   const lastWeek21h = await resolveExact21hForDate(lastWeekKey, lastWeekPeaks.exact21h);
 
    const retentionData = FIVEM_CITIES.map(city => {
 const t = today21h.cities?.[city.key]?.clients || 0;
@@ -3003,6 +3034,7 @@ const intervalId = setInterval(async () => {
 const edited = await editPanel(channel, {
   auto: true,
   force: true,
+  forceFresh: true,
   cleanupDuplicates: false,
 });
 
