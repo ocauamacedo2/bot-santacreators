@@ -3379,6 +3379,92 @@ function textHasAny(text, words = []) {
   return words.some((word) => text.includes(normalizeSearchText(word)));
 }
 
+function buildIaInterviewInfluencerQuickAnswer(message, openerId) {
+  const text = normalizeSearchText(message.content);
+  const mention = buildSafeUserMention(openerId);
+  const channelId = message.channelId;
+
+  if (
+    textHasAny(text, [
+      "influenciador",
+      "influencer",
+      "influencer aqui",
+      "é de influenciador",
+      "e de influenciador",
+      "sou influencer",
+      "sou influenciador",
+      "quero ser influencer",
+      "quero ser influenciador",
+      "quero virar influencer",
+      "quero virar influenciador",
+      "quero crescer",
+      "quero divulgar",
+      "quero fazer live",
+      "faco live",
+      "faço live",
+      "streamer",
+      "stream",
+      "tiktoker",
+      "youtuber",
+      "instagram",
+      "tiktok",
+      "youtube",
+      "seguidores",
+      "famoso",
+      "fama",
+      "creator",
+      "criador",
+      "criadora",
+      "criador de conteudo",
+      "criadora de conteudo",
+      "conteudo",
+      "conteúdo",
+      "gravo video",
+      "gravo vídeo",
+      "posto video",
+      "posto vídeo",
+      "rede social",
+      "midia social",
+      "mídia social",
+    ])
+  ) {
+    return pickIaInterviewReply([
+      `${mention}, não é bem “ser influenciador” no sentido de fama, seguidores ou só fazer live. A SantaCreators é uma empresa de RP, com foco em postura, imersão, eventos, organização e criação de conteúdo dentro do projeto.`,
+      `boa pergunta. Aqui não é uma seleção pra virar famoso ou ganhar seguidor. A SantaCreators é uma empresa dentro do RP, então o que mais pesa é postura, responsabilidade e saber representar a organização.`,
+      `${mention}, a SantaCreators até tem ligação com conteúdo, mas não funciona como “agência de influencer”. A pessoa entra pra somar no RP, eventos, comunidade e organização.`,
+      `não precisa ser influencer pra entrar, e também não entra só por ser influencer. O foco é entender a empresa, respeitar hierarquia e agir certo dentro do RP.`,
+      `aqui não é “sou influencer, então entro”. A equipe olha se a pessoa tem postura, maturidade, vontade de aprender e se entende o propósito da SantaCreators.`,
+      `SantaCreators não é só live, TikTok ou seguidores. É uma empresa de RP com imagem, regras, hierarquia e responsabilidade.`,
+      `${mention}, se tu cria conteúdo, isso pode ajudar, mas não é o ponto principal. O principal é saber viver o RP, respeitar regras e representar a empresa bem.`,
+      `não é obrigatório fazer live nem ser conhecido. Tem espaço pra quem soma com evento, RP, organização, comunicação e presença na comunidade.`,
+      `se a dúvida é “isso aqui é de influencer?”, eu diria assim: tem creators, mas a SantaCreators é bem mais que isso. É uma organização dentro do RP.`,
+      `o foco não é número de seguidores. Uma pessoa pequena pode entrar se tiver postura; uma pessoa grande pode ser recusada se não tiver responsabilidade.`,
+      `${mention}, ser influencer não garante vaga, e não ser influencer também não elimina. A entrevista serve justamente pra entender tua postura.`,
+      `a SantaCreators trabalha com criação e comunidade, mas dentro do RP. Não é só chegar querendo mídia; precisa entender empresa, conduta e imersão.`,
+      `se tu quer entrar só pra se divulgar, talvez não seja o caminho certo. Se quer participar do RP e somar com a empresa, aí faz sentido.`,
+      `aqui a pessoa precisa vestir a camisa da organização, não só buscar palco.`,
+      `creator aqui não é só quem grava vídeo. É quem ajuda a movimentar RP, evento, comunidade e conteúdo com responsabilidade.`,
+      `dá pra ser tímido, pequeno ou sem rede social forte. O que não dá é entrar sem entender as regras e a imagem da empresa.`,
+      `não tratamos como “vaga de influencer”. Tratamos como entrada numa empresa de RP que também envolve conteúdo.`,
+      `se tu faz live, ótimo. Mas na entrevista responde tua realidade, sem aumentar nada. Honestidade pesa mais que parecer famoso.`,
+      `não precisa inventar que tem canal grande. Melhor falar a verdade e mostrar vontade de crescer com o projeto.`,
+      `a SantaCreators não é painel de fama. É empresa, RP e comunidade. Quem entra representa a marca dentro da cidade.`,
+      `${mention}, o melhor jeito de explicar é: aqui não é sobre ser celebridade, é sobre ter postura de membro da SantaCreators.`,
+      `tem gente que entra pela parte de conteúdo, tem gente que soma por evento, RP, organização e presença. Tudo depende do perfil e da avaliação.`,
+      `se a pessoa pergunta “vou ser influencer?”, a resposta certa é: você vai participar de uma empresa de RP; criar conteúdo pode ser parte disso, mas não é tudo.`,
+      `a equipe não procura só alguém que poste vídeo. Procura alguém que entenda RP, respeite hierarquia e não quebre a imagem da empresa.`,
+      `não é obrigatório ter TikTok, YouTube ou Instagram forte pra ser avaliado. Mas precisa ter maturidade e compromisso.`,
+      `se tu quer aprender a criar conteúdo, beleza. Só não entra achando que a SantaCreators é só divulgação pessoal.`,
+      `a SantaCreators é coletiva. Não é cada um por si tentando aparecer.`,
+      `o conteúdo é consequência de um RP bem feito. Primeiro vem postura, imersão e responsabilidade.`,
+      `se a pessoa só quer fama rápida, provavelmente vai se frustrar. Aqui tem regra, rotina e compromisso.`,
+      `dá pra crescer junto com a SantaCreators, mas precisa somar com o projeto, não usar o projeto só como vitrine.`,
+    ], channelId);
+  }
+
+  return null;
+}
+
 function buildIaInterviewRulesQuickAnswer(message, openerId) {
   const text = normalizeSearchText(message.content);
   const mention = buildSafeUserMention(openerId);
@@ -3555,6 +3641,12 @@ function buildIaInterviewQuickAnswer(message, openerId) {
   const text = normalizeSearchText(message.content);
   const mention = buildSafeUserMention(openerId);
   const channelId = message.channelId;
+
+  const influencerQuickAnswer = buildIaInterviewInfluencerQuickAnswer(message, openerId);
+
+  if (influencerQuickAnswer) {
+    return influencerQuickAnswer;
+  }
 
   const rulesQuickAnswer = buildIaInterviewRulesQuickAnswer(message, openerId);
 
