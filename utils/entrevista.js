@@ -700,17 +700,7 @@ async function enviarPergunta(channel, membro, index) {
   const dados = entrevistas.get(membro.id);
   if (!dados) return;
 
-  // ✅ DEBOUNCE: Se uma pergunta foi enviada no último segundo, ignora esta chamada.
-  // Isso previne a condição de corrida entre o reanexar e o setTimeout.
-  const now = Date.now();
-  if (now - (dados.lastSent || 0) < 1000) {
-    console.log(`[Entrevista] Chamada duplicada para ${membro.user.tag} bloqueada (debounce).`);
-    return;
-  }
-  // Atualiza o timestamp do último envio
-  dados.lastSent = now;
-
-    if (index >= perguntas.length) {
+  if (index >= perguntas.length) {
     if (dados.globalTimer?.timeout) clearTimeout(dados.globalTimer.timeout);
 
     // ✅ Validação estrita: O aplicador deve ser quem está registrado no tópico do canal
