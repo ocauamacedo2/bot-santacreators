@@ -4463,8 +4463,18 @@ function channelHasActiveInterviewRunning(channel) {
   );
 }
 
+function isDiscordCommandMessage(message) {
+  const content = String(message?.content || "").trim();
+  return content.startsWith("!");
+}
+
 export async function handleIaInterviewTicketMessage(message, client) {
   if (!message.guild || message.author.bot) return false;
+
+  if (isDiscordCommandMessage(message)) {
+    return false;
+  }
+
   if (!isIaInterviewChannel(message.channel)) return false;
 
   if (channelHasActiveInterviewRunning(message.channel)) {
