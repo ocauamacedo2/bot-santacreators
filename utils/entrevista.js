@@ -647,14 +647,26 @@ if (customId.startsWith('enviar|')) {
 
     console.log("[ENTREVISTA DEBUG] Disparando primeira pergunta...");
 
-    await enviarPergunta(channel, membro, 0);
+enviarPergunta(channel, membro, 0).catch(async (err) => {
+  console.error("[Entrevista] Falha real ao enviar/coletar perguntas:", err);
 
-    console.log("[ENTREVISTA DEBUG] Primeira pergunta enviada com sucesso.");
+  entrevistas.delete(targetId);
+  entrevistasAtivas.delete(channel.id);
 
-    Promise.allSettled([
-      withTimeout(setInterviewActiveTopic(channel, true), 5000, "setar tópico ativo"),
-      salvarEntrevistasEmDisco()
-    ]).catch(() => {});
+  await setInterviewActiveTopic(channel, false).catch(() => {});
+  await salvarEntrevistasEmDisco().catch(() => {});
+
+  await channel.send(
+    `❌ A entrevista travou ao enviar a primeira pergunta.\n\n**Erro:** \`${String(err?.message || err).slice(0, 800)}\``
+  ).catch(() => {});
+});
+
+console.log("[ENTREVISTA DEBUG] Primeira pergunta disparada em background.");
+
+Promise.allSettled([
+  withTimeout(setInterviewActiveTopic(channel, true), 5000, "setar tópico ativo"),
+  salvarEntrevistasEmDisco()
+]).catch(() => {});
 
     iniciarContadorGlobal(channel, targetId).then(async (globalTimer) => {
       const dadosAtualizados = entrevistas.get(targetId);

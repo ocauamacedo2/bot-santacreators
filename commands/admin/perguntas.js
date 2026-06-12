@@ -97,8 +97,14 @@ export default {
     // Envia o botão e seta o tópico ao mesmo tempo
 // Pega as informações do tópico para identificar o candidato
 const topic = String(message.channel?.topic || "");
-const m = topic.match(/aberto_por:(\d{5,})/i);
-const openerId = m ? m[1] : "Desconhecido";
+const m = topic.match(/aberto_por:(\d{17,20})/i);
+const openerId = m ? m[1] : null;
+
+if (!openerId) {
+  return message.channel.send(
+    "❌ Não consegui identificar quem abriu o ticket pelo tópico do canal. Verifique se o tópico tem `aberto_por:ID_DO_USUÁRIO`."
+  ).catch(() => {});
+}
 
     await Promise.all([
       message.channel.send({
