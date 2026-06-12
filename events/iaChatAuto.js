@@ -3379,10 +3379,188 @@ function textHasAny(text, words = []) {
   return words.some((word) => text.includes(normalizeSearchText(word)));
 }
 
+function buildIaInterviewRulesQuickAnswer(message, openerId) {
+  const text = normalizeSearchText(message.content);
+  const mention = buildSafeUserMention(openerId);
+  const channelId = message.channelId;
+
+  if (textHasAny(text, ["familia", "familiar", "parente", "irmao", "irma", "primo", "prima", "pai", "mae", "namorado", "namorada"])) {
+    return pickIaInterviewReply([
+      `${mention}, sobre familiares: a SantaCreators não permite familiares atuando juntos na equipe, por imparcialidade e organização interna.`,
+      `boa pergunta. Se tiver vínculo familiar com alguém da equipe, precisa avisar a liderança antes, pra evitar conflito de interesse.`,
+      `nesse caso, familiar na equipe junto não é permitido. O certo é ser transparente e chamar os responsáveis pra avaliar.`,
+      `sobre família: a regra existe pra evitar favorecimento, climão e conflito interno. Se tiver algum vínculo, avisa a equipe.`,
+      `fechou. A SantaCreators não aceita familiares juntos na equipe. Se existir esse caso, precisa informar imediatamente os responsáveis.`,
+      `não pode esconder vínculo familiar. Se a pessoa tem parente na equipe, precisa avisar a liderança antes de seguir.`,
+      `sim, isso é regra séria: familiares juntos podem comprometer a imparcialidade, então precisa ser comunicado.`,
+      `se for irmão, primo, pai, mãe ou qualquer vínculo familiar próximo, a equipe precisa saber antes.`,
+      `a transparência pesa bastante aqui. Se existe familiar na SantaCreators, o correto é avisar e não tentar passar escondido.`,
+      `familiares na equipe não são liberados justamente pra manter o ambiente justo pra todo mundo.`,
+    ], channelId);
+  }
+
+  if (textHasAny(text, ["idade", "anos", "tenho 14", "tenho 13", "menor", "15 anos", "quatorze", "treze"])) {
+    return pickIaInterviewReply([
+      `${mention}, a idade mínima pra participar da SantaCreators é 15 anos.`,
+      `sobre idade: só pode participar com 15 anos ou mais, tanto na GI quanto no painel.`,
+      `se tiver menos de 15 anos, infelizmente não pode entrar agora. É regra pra manter o ambiente mais seguro e maduro.`,
+      `a SantaCreators pede mínimo de 15 anos. Não é questão pessoal, é organização e segurança do projeto.`,
+      `pra entrar precisa ter 15+. Se ainda não tiver, o correto é aguardar.`,
+      `idade mínima é 15 anos, sem exceção comum no fluxo de entrevista.`,
+      `se a pessoa tem menos de 15, não segue pra participação na SantaCreators por enquanto.`,
+      `com 15 anos ou mais pode ser avaliado. Abaixo disso, a regra bloqueia a participação.`,
+    ], channelId);
+  }
+
+  if (textHasAny(text, ["uniforme", "jaqueta", "roupa", "peca", "peça", "garagem", "predio", "prédio", "sede"])) {
+    return pickIaInterviewReply([
+      `${mention}, dentro do prédio tem que usar a jaqueta da SantaCreators. Se entrar sem, vai pra uma sala sozinho e coloca.`,
+      `sobre uniforme: perto da sede precisa estar com pelo menos uma peça da SantaCreators.`,
+      `pra usar garagem da empresa, precisa estar com alguma peça da SantaCreators.`,
+      `a roupa identifica a organização. Dentro do prédio, jaqueta; nas proximidades, pelo menos uma peça.`,
+      `se estiver no prédio ou usando estrutura da empresa, não fica sem identificação da SantaCreators.`,
+      `se chegou sem jaqueta, não troca na frente dos outros. Vai pra um local privado e coloca certinho.`,
+      `o uniforme representa a empresa, então tem que usar com cuidado e no lugar certo.`,
+      `dentro e ao redor da sede, a identificação da SantaCreators é obrigatória.`,
+      `a regra é simples: entrou no prédio, usa jaqueta; tá por perto ou usando garagem, usa peça da empresa.`,
+    ], channelId);
+  }
+
+  if (textHasAny(text, ["ilegal", "droga", "venda", "entrega", "comprador", "crime", "criminoso", "fora da sede"])) {
+    return pickIaInterviewReply([
+      `${mention}, ação ilegal fora da sede não pode ser feita com uniforme da SantaCreators.`,
+      `dentro do prédio, o uniforme pode ser usado em negociação interna. Fora da sede, precisa trocar de roupa.`,
+      `se for entrega ou encontro fora da empresa, troca o uniforme antes. A ideia é não ligar a SantaCreators diretamente ao crime.`,
+      `uniforme em ação ilegal fora da sede compromete a fachada da empresa, então é proibido.`,
+      `pra manter o RP coerente, ação externa ilegal precisa ser feita sem uniforme da SantaCreators.`,
+      `se envolver venda, entrega ou comprador fora do prédio, nada de sair identificado como SantaCreators.`,
+      `dentro da empresa é uma coisa; fora dela, o uniforme não pode expor os bastidores da organização.`,
+      `a regra protege a imagem da SantaCreators: fora da sede, troca a roupa antes de qualquer ação ilegal.`,
+    ], channelId);
+  }
+
+  if (textHasAny(text, ["veiculo", "veículo", "carro", "garagem", "assalto", "tiro", "troca de tiro", "sequestro", "pista"])) {
+    return pickIaInterviewReply([
+      `${mention}, veículo da SantaCreators não pode ser usado pra troca de tiro nem assalto de pista.`,
+      `carro da empresa é recurso da organização, não é pra usar em qualquer ilegalidade.`,
+      `sequestro só entra se for RP organizado, planejado, no horário certo e coerente.`,
+      `veículo do prédio não é pra sair fazendo ação aleatória. Tem que preservar a imagem da empresa.`,
+      `troca de tiro e assalto de pista com carro da SantaCreators é proibido.`,
+      `usar garagem/veículo da empresa exige responsabilidade. Se for ação torta, dá punição.`,
+      `se for sequestro bem planejado e dentro das regras, pode ser analisado. Fora disso, não.`,
+      `a regra é evitar expor a SantaCreators por uso errado dos veículos.`,
+    ], channelId);
+  }
+
+  if (textHasAny(text, ["poder", "poderes", "admin", "god", "noclip", "nc", "tp", "tptome", "f8", "comando"])) {
+    return pickIaInterviewReply([
+      `${mention}, poderes da gestão não são benefício pessoal. Só podem ser usados pra demanda administrativa ou algo autorizado.`,
+      `regra de ouro: se um player comum não pode fazer, quem tem poder também não deve fazer.`,
+      `usar F8, tp, god ou NC pra vantagem no RP é abuso de poder.`,
+      `morreu em RP? Faz o RP certo: médico, bombeiro ou atendimento. Nada de /god pra voltar.`,
+      `NC não é transporte pessoal. Se não tá resolvendo demanda da empresa, usa veículo como qualquer player.`,
+      `sem alinhamento e sem autorização, não usa poder.`,
+      `poder existe pra gestão e empresa, não pra facilitar vida no RP.`,
+      `abusar de poder pode dar expulsão do projeto e até banimento da cidade.`,
+      `na dúvida, pergunta antes. Perguntar nunca dá punição; abusar dá.`,
+      `se for resolver problema pessoal ou ajudar amigo no RP com comando, é errado.`,
+    ], channelId);
+  }
+
+  if (textHasAny(text, ["anti rp", "antirp", "anti-rp", "bug", "crash", "caiu", "desconectei", "flutuando", "quebrou rp"])) {
+    return pickIaInterviewReply([
+      `${mention}, se fizerem anti-RP contra você, clipa tudo, pega passaporte e manda pro responsável da SantaCreators.`,
+      `não usa poder pra resolver anti-RP na hora. Junta prova e chama responsável.`,
+      `bug, crash ou queda precisa ser interpretado dentro do RP quando possível, sem quebrar a imersão.`,
+      `em vez de falar "meu Discord caiu" no RP, tenta adaptar como algo do personagem.`,
+      `se alguém abusou contra você, grava e reporta. Não vira salvador da pátria usando poder.`,
+      `perdeu item por anti-RP confirmado? A equipe avalia devolução e punição.`,
+      `a prioridade é fortalecer o RP, não resolver tudo no impulso.`,
+      `viu algo errado? Clipa, pega ID/passaporte e passa pra liderança.`,
+      `não entra na confusão. Registra prova e deixa a equipe cuidar.`,
+    ], channelId);
+  }
+
+  if (textHasAny(text, ["respeito", "racismo", "homofobia", "transfobia", "preconceito", "brincadeira", "ofensa", "zoeira", "toxica", "tóxica"])) {
+    return pickIaInterviewReply([
+      `${mention}, respeito aqui é obrigatório. Racismo, homofobia, transfobia, preconceito e ofensa não são tolerados.`,
+      `não vale esconder desrespeito atrás de "era brincadeira". Se ofendeu, tá errado.`,
+      `pode brincar, mas só se todo mundo estiver confortável. Na dúvida, não força.`,
+      `a vibe da SantaCreators é leve, mas com responsabilidade.`,
+      `comentário maldoso ou preconceituoso pode gerar punição séria.`,
+      `respeito vem antes da zoeira. Melhor perguntar do que causar climão.`,
+      `todo mundo precisa se sentir seguro no ambiente. Isso pesa muito na postura.`,
+      `não importa se foi sem intenção: se passou do limite, a equipe pode agir.`,
+      `educação e empatia contam muito mais do que tentar ser engraçado toda hora.`,
+    ], channelId);
+  }
+
+  if (textHasAny(text, ["hierarquia", "lideranca", "liderança", "responsavel", "responsável", "dm", "privado", "canal privado", "resolver problema"])) {
+    return pickIaInterviewReply([
+      `${mention}, hierarquia aqui não é enfeite. Cada cargo tem função e cada pessoa responde a alguém.`,
+      `problema da empresa não deve ser resolvido por DM. Usa os canais corretos pra manter transparência.`,
+      `cada membro tem canal privado com liderança pra tirar dúvida e resolver situação com calma.`,
+      `se tiver problema, procura sua liderança ou canal correto, não tenta resolver por fora.`,
+      `a estrutura existe pra evitar bagunça e proteger todo mundo.`,
+      `seguir hierarquia mostra maturidade e organização dentro da SantaCreators.`,
+      `se não souber quem chamar, pergunta no canal certo ou aciona um responsável.`,
+      `resolver tudo escondido por DM costuma virar confusão. Melhor deixar registrado.`,
+    ], channelId);
+  }
+
+  if (textHasAny(text, ["santacreators", "santa creators", "empresa", "projeto", "o que é", "oq é", "creator", "criador", "live", "tiktok", "conteudo", "conteúdo"])) {
+    return pickIaInterviewReply([
+      `${mention}, a SantaCreators é uma empresa de RP focada em criação de conteúdo, eventos, comunidade e organização.`,
+      `não precisa ser famoso pra fazer sentido aqui. Postura, presença e vontade contam bastante.`,
+      `SantaCreators não é só live. Tem espaço pra quem soma com RP, comunicação, eventos e criatividade.`,
+      `o projeto valoriza imersão, responsabilidade e crescimento coletivo.`,
+      `a equipe avalia perfil, postura e encaixe, não só número em rede social.`,
+      `ser creator pequeno não elimina ninguém. O que pesa é como a pessoa se comporta e soma.`,
+      `a SantaCreators é mais que um painel; é uma organização com regras, imagem e propósito.`,
+      `quem entra representa a empresa dentro do RP, então precisa ter consciência disso.`,
+    ], channelId);
+  }
+
+  if (textHasAny(text, ["como respondo", "me ajuda responder", "resposta", "copiar", "ctrl c", "ctrl v", "ia responder", "chatgpt", "não sei responder", "nao sei responder"])) {
+    return pickIaInterviewReply([
+      `${mention}, eu posso explicar a ideia da pergunta, mas a resposta precisa ser tua.`,
+      `não copia resposta pronta. A entrevista quer entender como você pensa.`,
+      `se não souber, fala com sinceridade e responde o que faria na prática.`,
+      `erro de português não reprova sozinho. Copiar sem entender pesa muito mais.`,
+      `responde simples, com tuas palavras. Não precisa parecer texto perfeito.`,
+      `não tenta decorar regra. Mostra que entendeu a lógica.`,
+      `se a pergunta for situação, imagina o cenário no RP e fala tua atitude.`,
+      `usar IA pra montar resposta pronta tira a naturalidade e pode pesar contra.`,
+      `melhor uma resposta simples e honesta do que uma resposta bonita e copiada.`,
+    ], channelId);
+  }
+
+  if (textHasAny(text, ["começar", "comecar", "iniciar", "entrevista", "quero entrar", "quero fazer", "entrar pra santa", "entrar na santa"])) {
+    return pickIaInterviewReply([
+      `${mention}, pra entrar você vai passar por entrevista. Responde com sinceridade e sem copiar regra.`,
+      `boaa, a entrevista é pra equipe conhecer teu perfil melhor, não pra pegar texto decorado.`,
+      `pra começar, segue o fluxo do ticket e responde do teu jeito.`,
+      `a equipe quer ver tua postura, entendimento de RP e vontade de somar.`,
+      `não precisa ficar nervoso. Responde com calma e clareza.`,
+      `se aparecer botão de iniciar, usa ele. Se não aparecer, aguarda alguém da equipe orientar.`,
+      `o importante é ser sincero sobre experiência, disponibilidade e motivo de querer entrar.`,
+      `a entrevista não é prova de português; é análise de postura e entendimento.`,
+    ], channelId);
+  }
+
+  return null;
+}
+
 function buildIaInterviewQuickAnswer(message, openerId) {
   const text = normalizeSearchText(message.content);
   const mention = buildSafeUserMention(openerId);
   const channelId = message.channelId;
+
+  const rulesQuickAnswer = buildIaInterviewRulesQuickAnswer(message, openerId);
+
+  if (rulesQuickAnswer) {
+    return rulesQuickAnswer;
+  }
 
   const respostas = {
     saudacao: [
