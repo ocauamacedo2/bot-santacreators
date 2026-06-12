@@ -609,6 +609,9 @@ const enviada = await interaction.channel.send({
     try {
       await interaction.message.edit({ components: [] }).catch(() => {});
 
+      await setInterviewActiveTopic(channel, true).catch(() => {});
+      await salvarEntrevistasEmDisco().catch(() => {});
+
       await channel.send({
         content: `<@${targetId}> Bora! Vamos começar sua entrevista agora ✨`
       }).catch(() => {});
@@ -627,9 +630,6 @@ const enviada = await interaction.channel.send({
           `❌ Não consegui enviar a primeira pergunta da entrevista. Verifique minhas permissões neste canal.`
         ).catch(() => {});
       });
-
-      setInterviewActiveTopic(channel, true).catch(() => {});
-      salvarEntrevistasEmDisco().catch(() => {});
 
       (async () => {
         const globalTimer = await iniciarContadorGlobal(channel, targetId).catch(() => null);

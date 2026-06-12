@@ -4463,6 +4463,26 @@ function channelHasActiveInterviewRunning(channel) {
   );
 }
 
+async function channelHasRecentInterviewQuestion(channel, client) {
+  const messages = await channel.messages.fetch({ limit: 15 }).catch(() => null);
+
+  if (!messages?.size) return false;
+
+  return messages.some((msg) => {
+    if (msg.author?.id !== client.user.id) return false;
+
+    const content = String(msg.content || "");
+
+    return (
+      /\*\*\d{1,2}\.\*\*\s*<@\d{17,22}>/i.test(content) ||
+      (
+        content.includes("Atenção!") &&
+        content.includes("concluir a entrevista inteira")
+      )
+    );
+  });
+}
+
 function isDiscordCommandMessage(message) {
   const content = String(message?.content || "").trim();
   return content.startsWith("!");
@@ -4477,7 +4497,10 @@ export async function handleIaInterviewTicketMessage(message, client) {
 
   if (!isIaInterviewChannel(message.channel)) return false;
 
-  if (channelHasActiveInterviewRunning(message.channel)) {
+  if (
+    channelHasActiveInterviewRunning(message.channel) ||
+    await channelHasRecentInterviewQuestion(message.channel, client)
+  ) {
     return true;
   }
 
