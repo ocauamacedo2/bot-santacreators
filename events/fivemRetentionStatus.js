@@ -86,6 +86,8 @@ const PeakSchema = new mongoose.Schema({
 const PeakModel = mongoose.models.FivemRetentionPeak || mongoose.model("FivemRetentionPeak", PeakSchema);
 
 const FIVEM_STATE = new Map(); // channelId -> { intervalId, messageId }
+let FIVEM_MASTER_INTERVAL_ID = null; // loop único para atualizar todos os painéis juntos
+let FIVEM_MASTER_INTERVAL_RUNNING = false; // trava para não sobrepor atualização automática
 const FIVEM_PANEL_BACKGROUND_JOBS = new Set(); // trava cliques repetidos enquanto já existe processo rodando
 const FIVEM_CHANNEL_LOCKS = new Map(); // channelId -> Promise, impede criar/editar/recriar ao mesmo tempo
 const FIVEM_SNAPSHOT_CACHE = {
@@ -3017,42 +3019,65 @@ async function ensureFivemRetentionAutoLoop(client, options = {}) {
       continue;
     }
 
-    const existing = FIVEM_STATE.get(channel.id);
+    const existing = FIVEM_STATE.get(channel.id) || {};
 
-    if (existing?.intervalId) {
-      clearInterval(existing.intervalId);
+    FIVEM_STATE.set(channel.id, {
+      ...existing,
+      intervalId: null,
+      messageId: existing?.messageId || null,
+      lastEditAt: existing?.lastEditAt || 0,
+    });
+  }
+
+  if (FIVEM_MASTER_INTERVAL_ID) {
+    clearInterval(FIVEM_MASTER_INTERVAL_ID);
+    FIVEM_MASTER_INTERVAL_ID = null;
+  }
+
+  const runMasterUpdate = async (label = "auto") => {
+    if (FIVEM_MASTER_INTERVAL_RUNNING) {
+      console.log("[FIVEM_RETENTION] Atualização automática ignorada: loop anterior ainda rodando.");
+      return;
     }
 
-    if (options.forceInitialUpdate) {
-      editPanel(channel, { force: true }).catch((e) => {
-        console.error("[FIVEM_RETENTION] Erro no update inicial:", e);
+    FIVEM_MASTER_INTERVAL_RUNNING = true;
+
+    try {
+      const results = await editAllFivemRetentionPanels(client, {
+        auto: true,
+        force: true,
+        forceFresh: true,
+        cleanupDuplicates: false,
       });
+
+      if (!results.editedCount) {
+        for (const channelId of FIVEM_ALL_PANEL_CHANNEL_IDS) {
+          const channel = await client.channels.fetch(channelId).catch(() => null);
+          if (channel?.isTextBased?.()) {
+            await ensureFivemPanelExists(channel, client);
+          }
+        }
+      }
+
+      console.log(`[FIVEM_RETENTION] Auto update ${label}: ${results.editedCount}/${FIVEM_ALL_PANEL_CHANNEL_IDS.length} painéis atualizados com snapshot único.`);
+    } catch (e) {
+      console.error("[FIVEM_RETENTION] Erro no loop mestre de atualização automática:", e);
+    } finally {
+      FIVEM_MASTER_INTERVAL_RUNNING = false;
     }
+  };
 
-const intervalId = setInterval(async () => {
-  try {
-const edited = await editPanel(channel, {
-  auto: true,
-  force: true,
-  forceFresh: true,
-  cleanupDuplicates: false,
-});
-
-    if (!edited) {
-      await ensureFivemPanelExists(channel, client);
-    }
-  } catch (e) {
-    console.error("[FIVEM_RETENTION] Erro no loop de atualização automática:", e);
+  if (options.forceInitialUpdate) {
+    runMasterUpdate("inicial").catch((e) => {
+      console.error("[FIVEM_RETENTION] Erro no update inicial mestre:", e);
+    });
   }
-}, FIVEM_PANEL_REFRESH_INTERVAL_MS);
 
-FIVEM_STATE.set(channel.id, {
-  ...existing,
-  intervalId,
-  messageId: existing?.messageId || null,
-  lastEditAt: existing?.lastEditAt || 0,
-});
-  }
+  FIVEM_MASTER_INTERVAL_ID = setInterval(() => {
+    runMasterUpdate("1min").catch((e) => {
+      console.error("[FIVEM_RETENTION] Erro no intervalo mestre:", e);
+    });
+  }, FIVEM_PANEL_REFRESH_INTERVAL_MS);
 
   return true;
 }
@@ -3062,15 +3087,13 @@ FIVEM_STATE.set(channel.id, {
 
 export async function fivemRetentionStatusOnReady(client) {
  try {
-   const alreadyBootstrapped = globalThis.__FIVEM_RETENTION_STATUS_BOOTSTRAPPED__ === true;
-
-   const channel = await ensureFivemRetentionAutoLoop(client, {
-     forceInitialUpdate: !alreadyBootstrapped,
+   await ensureFivemRetentionAutoLoop(client, {
+     forceInitialUpdate: true,
    });
 
-   if (!channel) return;
-
    globalThis.__FIVEM_RETENTION_STATUS_BOOTSTRAPPED__ = true;
+
+   console.log("[FIVEM_RETENTION] Sistema iniciado: loop mestre ativo, atualização inicial forçada.");
  } catch (err) {
    console.error("[FIVEM_RETENTION] fivemRetentionStatusOnReady erro:", err?.message || err);
  }
@@ -3082,6 +3105,21 @@ async function editAllFivemRetentionPanels(client, options = {}) {
     forceFresh: options.forceFresh === true,
   });
 
+  if (!safeSnapshot?.snapshot) {
+    console.warn("[FIVEM_RETENTION] Auto update cancelado: snapshot inválido.");
+    return { editedCount: 0 };
+  }
+
+  if (safeSnapshot.shouldPersist) {
+    await addSnapshot(safeSnapshot.snapshotForPersistence || safeSnapshot.snapshot);
+    await updateDailyPeaks(safeSnapshot.snapshotForPersistence || safeSnapshot.snapshot);
+  }
+
+  const sharedSnapshot = {
+    ...safeSnapshot,
+    shouldPersist: false,
+  };
+
   const results = await Promise.all(
     FIVEM_ALL_PANEL_CHANNEL_IDS.map(async (channelId) => {
       const channel = await client.channels.fetch(channelId).catch(() => null);
@@ -3091,8 +3129,8 @@ async function editAllFivemRetentionPanels(client, options = {}) {
       return editPanel(channel, {
         ...options,
         force: true,
-        cleanupDuplicates: true,
-        safeSnapshot,
+        cleanupDuplicates: options.cleanupDuplicates === true,
+        safeSnapshot: sharedSnapshot,
       }).catch((e) => {
         cn2LogApiError(`[FIVEM_RETENTION] Falha ao atualizar canal ${channelId}:`, e);
         return null;
