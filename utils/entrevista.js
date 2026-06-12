@@ -43,6 +43,7 @@ const PERGUNTAS_BYPASS_USER_IDS = new Set([
 // estado em memória
 const entrevistas = new Map();       // userId -> dados
 const entrevistasAtivas = new Set(); // channelId
+const entrevistasStartLocks = new Set(); // channelId -> trava curta anti clique/duplicidade
 
 // ===== PERGUNTAS =====
 const perguntas = [
@@ -481,10 +482,31 @@ const enviada = await interaction.channel.send({
 }
 
 
-  // ENIAR (inicia as perguntas)
+  // ENVIAR (inicia as perguntas)
   if (customId.startsWith('enviar|')) {
     const [, targetId] = customId.split('|');
     await interaction.deferUpdate().catch(() => {});
+
+    const lockKey = String(channel.id);
+
+    if (entrevistasStartLocks.has(lockKey)) {
+      console.warn(`[Entrevista] Clique duplicado bloqueado no canal: ${channel.id}.`);
+      return true;
+    }
+
+    entrevistasStartLocks.add(lockKey);
+    setTimeout(() => entrevistasStartLocks.delete(lockKey), 10_000);
+
+    const entrevistaRealDoCanal = [...entrevistas.values()].some((dados) =>
+      String(dados?.channelId || "") === String(channel.id)
+    );
+
+    if (entrevistasAtivas.has(channel.id) && !entrevistaRealDoCanal) {
+      console.warn(`[Entrevista] Limpando trava falsa de entrevista ativa no canal: ${channel.id}.`);
+
+      entrevistasAtivas.delete(channel.id);
+      await setInterviewActiveTopic(channel, false);
+    }
 
     if (entrevistasAtivas.has(channel.id)) {
       console.warn(`[Entrevista] Tentativa de iniciar entrevista em canal já ativo: ${channel.id}. Ignorando.`);
@@ -496,7 +518,10 @@ const enviada = await interaction.channel.send({
     const entrevistadorId = topicId || interaction.user.id;
 
     const membro = await channel.guild.members.fetch(targetId).catch(() => null);
-    if (!membro) return true;
+    if (!membro) {
+      entrevistasStartLocks.delete(lockKey);
+      return true;
+    }
 
     entrevistasAtivas.add(channel.id);
     await setInterviewActiveTopic(channel, true);
@@ -566,6 +591,8 @@ const enviada = await interaction.channel.send({
     } catch (e) {
       entrevistasAtivas.delete(channel.id);
       entrevistas.delete(targetId);
+      entrevistasStartLocks.delete(lockKey);
+      await setInterviewActiveTopic(channel, false);
       console.error("[Entrevista] Falha ao iniciar entrevista:", e);
       return true;
     }
