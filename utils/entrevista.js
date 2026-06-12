@@ -489,23 +489,27 @@ const enviada = await interaction.channel.send({
 
     const lockKey = String(channel.id);
 
-    if (entrevistasStartLocks.has(lockKey)) {
-      console.warn(`[Entrevista] Clique duplicado bloqueado no canal: ${channel.id}.`);
-      return true;
-    }
-
-    entrevistasStartLocks.add(lockKey);
-    setTimeout(() => entrevistasStartLocks.delete(lockKey), 10_000);
-
     const entrevistaRealDoCanal = [...entrevistas.values()].some((dados) =>
       String(dados?.channelId || "") === String(channel.id)
     );
+
+    if (entrevistasStartLocks.has(lockKey) && !entrevistaRealDoCanal && !entrevistasAtivas.has(channel.id)) {
+      console.warn(`[Entrevista] Limpando lock falso antes de iniciar no canal: ${channel.id}.`);
+      entrevistasStartLocks.delete(lockKey);
+    }
 
     if (entrevistasAtivas.has(channel.id) && !entrevistaRealDoCanal) {
       console.warn(`[Entrevista] Limpando trava falsa de entrevista ativa no canal: ${channel.id}.`);
 
       entrevistasAtivas.delete(channel.id);
+      entrevistasStartLocks.delete(lockKey);
       await setInterviewActiveTopic(channel, false);
+    }
+
+    if (entrevistasStartLocks.has(lockKey)) {
+      console.warn(`[Entrevista] Clique duplicado bloqueado no canal: ${channel.id}.`);
+      await interaction.followUp({ content: '⏳ A entrevista já está sendo iniciada. Aguarde alguns segundos.', ephemeral: true }).catch(() => {});
+      return true;
     }
 
     if (entrevistasAtivas.has(channel.id)) {
@@ -513,6 +517,9 @@ const enviada = await interaction.channel.send({
       await interaction.followUp({ content: '⚠️ Já existe uma entrevista ativa neste canal.', ephemeral: true }).catch(() => {});
       return true;
     }
+
+    entrevistasStartLocks.add(lockKey);
+    setTimeout(() => entrevistasStartLocks.delete(lockKey), 10_000);
 
     const topicId = getAplicadorIdFromChannel(channel);
     const entrevistadorId = topicId || interaction.user.id;
@@ -587,6 +594,7 @@ const enviada = await interaction.channel.send({
         }
       })();
 
+      entrevistasStartLocks.delete(lockKey);
       return true;
     } catch (e) {
       entrevistasAtivas.delete(channel.id);
