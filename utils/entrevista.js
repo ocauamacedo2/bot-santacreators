@@ -21,6 +21,7 @@ const ENTREVISTA_DURACAO_MS = ENTREVISTA_DURACAO_MIN * 60 * 1000;
 
 const CANAL_LOG_COMPLETO = '1486084393716941031';
 const LOG_CHANNEL_ID_NOVO = "1486084249755979950";
+const CANAL_AVALIACAO_ENTREVISTA = "1486084237772718120";
 const ENTREVISTA_POINT_LOG_MARKER = "SC_ENTREVISTA_POINT_V1";
 
 const ALERT_ROLE_IDS = [
@@ -862,8 +863,19 @@ if (logChannel) {
       ]
     });
 
-    await enviarLogFinalEntrevista(membro, { ...dados, entrevistadorId: aplicadorId || dados.entrevistadorId });
-    return;
+await enviarLogFinalEntrevista(membro, {
+  ...dados,
+  channelId: channel.id,
+  entrevistadorId: aplicadorId || dados.entrevistadorId
+}).catch(async (err) => {
+  console.error("[Entrevista] Falha ao enviar log final da entrevista:", err);
+
+  await channel.send(
+    `⚠️ A entrevista terminou, mas deu erro ao enviar o log final para <#${CANAL_AVALIACAO_ENTREVISTA}>.\n\n**Erro:** \`${String(err?.message || err).slice(0, 800)}\``
+  ).catch(() => {});
+});
+
+return;
   }
 
   const endUnix = Math.floor(dados.timeoutEnd / 1000);
@@ -942,8 +954,26 @@ async function iniciarContadorGlobal(channel, membroId, remainingMs = ENTREVISTA
 
 // ===== LOG FINAL (avaliação + botões) =====
 async function enviarLogFinalEntrevista(member, dados) {
-  const canalAvaliacao = await member.client.channels.fetch('1486084237772718120').catch(() => null);
-  if (!canalAvaliacao) return;
+  const canalAvaliacao = await member.client.channels.fetch(CANAL_AVALIACAO_ENTREVISTA).catch((err) => {
+    console.error("[Entrevista] Não consegui buscar o canal de avaliação:", err);
+    return null;
+  });
+
+  if (!canalAvaliacao || !canalAvaliacao.isTextBased?.()) {
+    console.error(`[Entrevista] Canal de avaliação inválido ou inacessível: ${CANAL_AVALIACAO_ENTREVISTA}`);
+
+    const canalOrigem = dados.channelId
+      ? await member.client.channels.fetch(dados.channelId).catch(() => null)
+      : null;
+
+    if (canalOrigem?.isTextBased?.()) {
+      await canalOrigem.send(
+        `⚠️ A entrevista terminou, mas eu não consegui enviar o log para <#${CANAL_AVALIACAO_ENTREVISTA}>.\nVerifique se o bot tem permissão de **Ver Canal**, **Enviar Mensagens** e **Anexar Arquivos** lá.`
+      ).catch(() => {});
+    }
+
+    return;
+  }
 
   const respostas = dados.respostas;
   const entrevistadorId = dados.entrevistadorId || 'none';
