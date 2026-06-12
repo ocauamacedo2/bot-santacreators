@@ -976,13 +976,18 @@ const fields = readEmbedFields(freshEmb).filter((f) => {
   } catch {}
 
   // ✅ SÓ CONTA PONTO SE FOR VÁLIDO
+  // ✅ Regra correta:
+  // - quem ganha ponto é a pessoa do campo "Quem alinhou?"
+  // - quem registrou só ganha se também for quem alinhou
+  // - se reprovar, ninguém pontua
   if (isValid) {
-    const registradorId = extractRegistradorIdFromEmbed(emb);
+    const quemAlinhouRaw = getFieldValueByNameIncludes(freshEmb, "quem alinhou");
+    const quemAlinhouId = extractId(quemAlinhouRaw);
 
-    if (registradorId) {
+    if (quemAlinhouId) {
       try {
         dashEmit("alinhamento:validado", {
-          userId: registradorId,
+          userId: quemAlinhouId,
           validatorId,
           __at: Date.now(),
           src: "alinv1",
@@ -993,8 +998,8 @@ const fields = readEmbedFields(freshEmb).filter((f) => {
 
   await interaction.editReply(
     isValid
-      ? `✅ Marcado como **VÁLIDO**. (ponto contado pro registrador)\n${evolutionResult?.message || "✅ Alinhamento enviado para o Forms pessoal."}`
-      : `❌ Marcado como **NÃO VÁLIDO**. Nenhum alinhamento foi enviado ao Forms pessoal.`
+      ? `✅ Marcado como **VÁLIDO**. (ponto contado para quem alinhou)\n${evolutionResult?.message || "✅ Alinhamento enviado para o Forms pessoal."}`
+      : `❌ Marcado como **NÃO VÁLIDO**. Nenhum alinhamento foi enviado ao Forms pessoal e ninguém pontuou.`
   ).catch(() => {});
 
   return true;

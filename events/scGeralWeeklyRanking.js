@@ -1034,7 +1034,7 @@ function doacaoWasScoredFromEmbed(emb) {
   try {
     const fields = getFields(emb);
 
-    // prioridade = regra do Geral/Semanal (12h)
+    // NOVO: prioridade para a regra específica do Geral/Semanal
     const geral = fields.find((f) => {
       const n = norm(f?.name);
       return n.includes("geraldash/semanal") || n.includes("geraldash") || n.includes("semanal");
@@ -1042,6 +1042,7 @@ function doacaoWasScoredFromEmbed(emb) {
 
     const vg = String(geral?.value || "");
     if (vg) {
+      if (/nao contou|não contou|cooldown|faltam/i.test(vg)) return false;
       if (/isento/i.test(vg)) return true;
       if (/\+1/.test(vg)) return true;
       if (/✅/.test(vg)) return true;
@@ -1051,12 +1052,57 @@ function doacaoWasScoredFromEmbed(emb) {
     // fallback para logs antigos
     const anti = fields.find((f) => norm(f?.name).includes("anti-farm"));
     const v = String(anti?.value || "");
+    if (/nao contou|não contou|faltam/i.test(v)) return false;
     if (/isento/i.test(v)) return true;
     if (/\+1/.test(v)) return true;
     return false;
   } catch {
     return false;
   }
+}
+
+const DOACAO_GERAL_SCAN_COOLDOWN_MS = 12 * 60 * 60 * 1000;
+
+function doacaoIsExemptFromEmbed(emb) {
+  try {
+    const fields = getFields(emb);
+
+    const geral = fields.find((f) => {
+      const n = norm(f?.name);
+      return n.includes("geraldash/semanal") || n.includes("geraldash") || n.includes("semanal");
+    });
+
+    const anti = fields.find((f) => norm(f?.name).includes("anti-farm"));
+
+    return /isento/i.test(String(geral?.value || "")) || /isento/i.test(String(anti?.value || ""));
+  } catch {
+    return false;
+  }
+}
+
+function getDoacaoScanTimestamp(m) {
+  return Number(m?.createdTimestamp || m?.editedTimestamp || Date.now());
+}
+
+function canCountDoacaoInGeralScan({ emb, message, lastDoacaoAtByUser, uid }) {
+  if (!uid) return false;
+  if (!isDoacaoLogEmbed(emb)) return false;
+
+  const ts = getDoacaoScanTimestamp(message);
+
+  // se o embed novo já diz claramente que não contou no Geral/Semanal, respeita
+  if (!doacaoWasScoredFromEmbed(emb)) return false;
+
+  // isento conta sempre
+  if (doacaoIsExemptFromEmbed(emb)) return true;
+
+  // regra forte: para GeralDash/Semanal, só 1 ponto a cada 12h por usuário
+  // ✅ usa Math.abs porque o Discord escaneia do mais novo para o mais antigo
+  const lastAt = Number(lastDoacaoAtByUser.get(uid) || 0);
+  if (lastAt && Math.abs(ts - lastAt) < DOACAO_GERAL_SCAN_COOLDOWN_MS) return false;
+
+  lastDoacaoAtByUser.set(uid, ts);
+  return true;
 }
 function isConviteLogEmbed(emb) {
   const t = norm(emb?.title || emb?.data?.title || "");
@@ -1413,7 +1459,7 @@ if (MANAGER_AUDIT_ENABLED) {
   await scanChannelEmbeds(client, {
     channelId: CH_ALINHAMENTOS_ID,
     weekFloorKey,
-    maxPages: 80,
+    maxPages: 150,
     onMessage: async (m) => {
       if (seenMessageIds.has(m.id)) return;
       seenMessageIds.add(m.id);
@@ -1435,23 +1481,41 @@ if (MANAGER_AUDIT_ENABLED) {
     },
   });
 
-  // DOAÇÕES (logs)
+// DOAÇÕES (logs)
+  // ✅ Recontagem forte:
+  // - lê todos os logs encontrados
+  // - respeita "Geral/Semanal: não contou"
+  // - para logs antigos, recalcula 12h por usuário
+  // - não interfere no ranking mensal próprio da doação, que continua 1h
+  const lastDoacaoAtByUser = new Map();
+
   await scanChannelEmbeds(client, {
     channelId: DOACAO_LOGS_CHANNEL_ID,
     weekFloorKey,
-    maxPages: 80,
+    maxPages: 150,
     onMessage: async (m) => {
       if (seenMessageIds.has(m.id)) return;
       seenMessageIds.add(m.id);
+
       const emb = m.embeds?.[0];
       if (!emb) return;
       if (!isDoacaoLogEmbed(emb)) return;
-      if (!doacaoWasScoredFromEmbed(emb)) return;
 
       const uid = doacao_getRegistrarId(emb);
       if (!uid) return;
 
-      pushItem({ userId: uid, ts: new Date(m.createdTimestamp), source: "doacoes" });
+      if (!canCountDoacaoInGeralScan({
+        emb,
+        message: m,
+        lastDoacaoAtByUser,
+        uid,
+      })) return;
+
+      pushItem({
+        userId: uid,
+        ts: new Date(m.createdTimestamp),
+        source: "doacoes",
+      });
     },
   });
 
@@ -2443,6 +2507,10 @@ dashOn("presenca:confirmada", () => markDirty({ invalidateScanCache: true }));
 dashOn("rm:approved", () => markDirty({ invalidateScanCache: true }));
 dashOn("rm:rejected", () => markDirty({ invalidateScanCache: true }));
 dashOn("alinhamento:registrado", () => markDirty({ invalidateScanCache: true }));
+
+// ✅ Alinhamento só pontua no ranking semanal quando for APROVADO/VÁLIDO.
+// O alinhamentos.js emite exatamente este evento ao clicar em "ALINHAMENTO VÁLIDO".
+dashOn("alinhamento:validado", () => markDirty({ invalidateScanCache: true }));
 dashOn("eventopoder:registrado", () => markDirty({ invalidateScanCache: true }));
 dashOn("poderes:registrado", () => markDirty({ invalidateScanCache: true }));
 dashOn("pagamento:criado", () => markDirty({ invalidateScanCache: true }));

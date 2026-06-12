@@ -2222,6 +2222,7 @@ function doacaoWasScoredFromEmbed(emb) {
 
     const vg = String(geral?.value || "");
     if (vg) {
+      if (/nao contou|não contou|cooldown|faltam/i.test(vg)) return false;
       if (/isento/i.test(vg)) return true;
       if (/\+1/.test(vg)) return true;
       if (/✅/.test(vg)) return true;
@@ -2231,12 +2232,57 @@ function doacaoWasScoredFromEmbed(emb) {
     // fallback para logs antigos
     const anti = fields.find((f) => norm(f?.name).includes("anti-farm"));
     const v = String(anti?.value || "");
+    if (/nao contou|não contou|faltam/i.test(v)) return false;
     if (/isento/i.test(v)) return true;
     if (/\+1/.test(v)) return true;
     return false;
   } catch {
     return false;
   }
+}
+
+const DOACAO_GERAL_SCAN_COOLDOWN_MS = 12 * 60 * 60 * 1000;
+
+function doacaoIsExemptFromEmbed(emb) {
+  try {
+    const fields = getFields(emb);
+
+    const geral = fields.find((f) => {
+      const n = norm(f?.name);
+      return n.includes("geraldash/semanal") || n.includes("geraldash") || n.includes("semanal");
+    });
+
+    const anti = fields.find((f) => norm(f?.name).includes("anti-farm"));
+
+    return /isento/i.test(String(geral?.value || "")) || /isento/i.test(String(anti?.value || ""));
+  } catch {
+    return false;
+  }
+}
+
+function getDoacaoScanTimestamp(m) {
+  return Number(m?.createdTimestamp || m?.editedTimestamp || Date.now());
+}
+
+function canCountDoacaoInGeralScan({ emb, message, lastDoacaoAtByUser, uid }) {
+  if (!uid) return false;
+  if (!isDoacaoLogEmbed(emb)) return false;
+
+  const ts = getDoacaoScanTimestamp(message);
+
+  // se o embed novo já diz claramente que não contou no Geral/Semanal, respeita
+  if (!doacaoWasScoredFromEmbed(emb)) return false;
+
+  // isento conta sempre
+  if (doacaoIsExemptFromEmbed(emb)) return true;
+
+  // regra forte: para GeralDash/Semanal, só 1 ponto a cada 12h por usuário
+  // ✅ usa Math.abs porque o Discord escaneia do mais novo para o mais antigo
+  const lastAt = Number(lastDoacaoAtByUser.get(uid) || 0);
+  if (lastAt && Math.abs(ts - lastAt) < DOACAO_GERAL_SCAN_COOLDOWN_MS) return false;
+
+  lastDoacaoAtByUser.set(uid, ts);
+  return true;
 }
 
 function isPagamentoSocialRecordEmbed(emb) {
@@ -3583,9 +3629,10 @@ dashOn("bp:sync", async (p) => {
       bumpWeekly(st, "doacoes", wk, 1);
       saveState(st);
     } catch {}
-    // ✅ altera ranking/total (agora entra em items via logs)
-  markDirty({ invalidateScanCache: true });
-});
+
+    // ✅ altera ranking/total via scan do log já enviado pelo doacao.js
+    markDirty({ invalidateScanCache: true });
+  });
   
 
   dashOn("lideres:convite_enviado", (p) => {

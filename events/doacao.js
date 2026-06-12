@@ -869,14 +869,10 @@ export async function doacaoHandleInteraction(interaction, client) {
           member
         );
 
-        // 📊 DASH (só conta quando pontua mesmo)
-        if (shouldEmitDash) {
-  dashEmit("doacao:registrada", {
-    userId: interaction.user.id,
-    __at: Date.now(),
-    source: "doacao",
-  });
-}
+        // 📊 DASH / GERAL SEMANAL
+        // Não emite aqui ainda.
+        // O evento será emitido depois que o log for enviado,
+        // porque scGeralDash/scGeralWeeklyRanking contam lendo o embed do canal de logs.
 
 
         const scoreLine = exempt
@@ -912,18 +908,33 @@ const embedBase = new EmbedBuilder()
 
         const canalLog = CANAL_LOGS_ID ? await client.channels.fetch(CANAL_LOGS_ID).catch(() => null) : null;
 
+        let logMsg = null;
+
         if (collectedMsg && collectedMsg.attachments.size > 0) {
           const att = collectedMsg.attachments.first();
           const fileName = att?.name || `doacao-${Date.now()}.png`;
           const file = { attachment: att.url, name: fileName };
           const embed = EmbedBuilder.from(embedBase).setImage(`attachment://${fileName}`);
 
-          if (canalLog) await canalLog.send({ embeds: [embed], files: [file] }).catch(() => {});
+          if (canalLog) logMsg = await canalLog.send({ embeds: [embed], files: [file] }).catch(() => null);
           await collectedMsg.delete().catch(() => {});
           await interaction.followUp({ content: "✅ Doação registrada **com imagem**!", ephemeral: true }).catch(() => {});
         } else {
-          if (canalLog) await canalLog.send({ embeds: [embedBase] }).catch(() => {});
+          if (canalLog) logMsg = await canalLog.send({ embeds: [embedBase] }).catch(() => null);
           await interaction.followUp({ content: "✅ Doação registrada **sem imagem**.", ephemeral: true }).catch(() => {});
+        }
+
+        // 📊 DASH / RANKING SEMANAL
+        // Só emite quando realmente contou no Geral/Semanal 12h
+        // e depois que o log já existe no canal.
+        if (shouldEmitDash && logMsg) {
+          dashEmit("doacao:registrada", {
+            userId: interaction.user.id,
+            __at: Date.now(),
+            source: "doacao",
+            logMessageId: logMsg.id,
+            logChannelId: logMsg.channelId,
+          });
         }
 
         // ✅ Ranking FIXO: atualiza sempre (mesmo se não pontuar, pra manter painel vivo)
