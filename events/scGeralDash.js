@@ -1585,6 +1585,24 @@ async function collectAllGeneral(client, mode = "light") {
     DEBUG.weekKeysFound = {};
     const items = [];
 
+    const pushItem = (item) => {
+      const userId = String(item?.userId || "").trim();
+      const source = String(item?.source || "").trim();
+
+      if (!userId || !source || !item?.ts) return;
+
+      if (client?.user?.id && userId === String(client.user.id)) {
+        console.warn(`[SC_GERAL_DASH] Ponto ignorado: tentativa de pontuar o próprio bot | source=${source}`);
+        return;
+      }
+
+      items.push({
+        ...item,
+        userId,
+        source,
+      });
+    };
+
   // ✅ floor = volta 5 semanas (4 semanas do gráfico + 1 semana de folga)
   const wkNow = weekKeyFromDateSP(nowSP());
   const weekFloorKey = addDaysToWeekKey(wkNow, -35);
@@ -1885,11 +1903,11 @@ if (CRONOGRAMA_LOGS_CHANNEL_ID) {
 
       // Diferencia Cronograma, Hall da Fama e Eventos Diários pelo título/descrição
       if (title.includes("Hall da Fama")) {
-        items.push({ userId, ts, source: "halldafama" });
+        pushItem({ userId, ts, source: "halldafama" });
       } else if (title.includes("Evento Diário")) {
-        items.push({ userId, ts, source: "eventosdiarios" });
+        pushItem({ userId, ts, source: "eventosdiarios" });
       } else {
-        items.push({ userId, ts, source: "cronograma" });
+        pushItem({ userId, ts, source: "cronograma" });
       }
     },
   });

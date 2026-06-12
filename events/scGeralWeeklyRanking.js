@@ -1175,8 +1175,25 @@ async function collectAllPoints(client, mode = "light") {
   const counts = {}; // ✅ Debug: contagem por tipo
 
   const pushItem = (item) => {
-    items.push(item);
-    counts[item.source] = (counts[item.source] || 0) + 1;
+    const userId = String(item?.userId || "").trim();
+    const source = String(item?.source || "").trim();
+
+    if (!userId || !source || !item?.ts) return;
+
+    // ✅ Segurança geral: o próprio bot NUNCA pode ganhar ponto.
+    // Isso impede o bug do Hall da Fama e qualquer outro ponto roubado pelo bot.
+    if (client?.user?.id && userId === String(client.user.id)) {
+      console.warn(`[SC_GERAL] Ponto ignorado: tentativa de pontuar o próprio bot | source=${source}`);
+      return;
+    }
+
+    items.push({
+      ...item,
+      userId,
+      source,
+    });
+
+    counts[source] = (counts[source] || 0) + 1;
   };
 
   // floor = volta 5 semanas (pra manter leve)
@@ -1505,6 +1522,51 @@ if (HALL_CHANNEL_ID) {
     });
   }
   */
+
+  // ✅ CRONOGRAMA / HALL DA FAMA / EVENTOS DIÁRIOS (Aprovados)
+  // Regra:
+  // - Só conta quando estiver aprovado.
+  // - O ponto vai para o "Solicitante", ou seja, quem fez/enviou o registro.
+  // - Quem aprovou NÃO ganha ponto.
+  // - Registro recusado NÃO ganha ponto.
+  if (CRONOGRAMA_LOGS_CHANNEL_ID) {
+    await scanChannelEmbeds(client, {
+      channelId: CRONOGRAMA_LOGS_CHANNEL_ID,
+      weekFloorKey,
+      maxPages: 80,
+      onMessage: async (m) => {
+        const seenKey = `aprovacao:${m.id}`;
+        if (seenMessageIds.has(seenKey)) return;
+
+        const emb = m.embeds?.[0];
+        if (!emb) return;
+
+        const isGreen = emb.color === 3066993;
+        const footer = emb.footer?.text || "";
+
+        if (!isGreen && !footer.includes("Aprovado por")) return;
+
+        const title = emb.title || "";
+        const desc = emb.description || "";
+        const match = desc.match(/Solicitante:.*?<@!?(\d+)>/i);
+
+        if (!match) return;
+
+        seenMessageIds.add(seenKey);
+
+        const userId = match[1];
+        const ts = new Date(m.editedTimestamp || m.createdTimestamp);
+
+        if (title.includes("Hall da Fama")) {
+          pushItem({ userId, ts, source: "halldafama" });
+        } else if (title.includes("Evento Diário")) {
+          pushItem({ userId, ts, source: "eventosdiarios" });
+        } else {
+          pushItem({ userId, ts, source: "cronograma" });
+        }
+      },
+    });
+  }
 
   // PRESENÇAS (logs)
   if (PRESENCA_LOGS_CHANNEL_ID) {
