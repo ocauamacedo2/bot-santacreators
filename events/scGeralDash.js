@@ -22,7 +22,21 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // ✅ pasta /data do projeto (ajuste os ".." se teu arquivo estiver em outro nível)
-const DATA_DIR = path.resolve(__dirname, "../data");
+function pickPersistRoot() {
+  const candidates = [
+    process.env.SQUARECLOUD_STORAGE_PATH?.trim(),
+    "/storage",
+    "/home/container/storage",
+    "/home/squarecloud/storage",
+  ].filter(Boolean);
+
+  for (const dir of candidates) {
+    try { if (fs.existsSync(dir)) return dir; } catch {}
+  }
+  return null;
+}
+
+const DATA_DIR = path.resolve(pickPersistRoot() || path.join(__dirname, ".."), "data");
 
 // ✅ GUARD GLOBAL REAL (se esse arquivo for importado 2x, a 2ª vez NÃO pode ligar nada)
 const __SC_GERAL_DASH_SKIP__ = Boolean(globalThis.__SC_GERAL_DASH_ALREADY_BOOTSTRAPPED__);

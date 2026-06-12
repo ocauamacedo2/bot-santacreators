@@ -821,16 +821,24 @@ if (await handlePagamentoSocial(interaction, client).catch(() => false)) return;
     }
   });
 
-  client.once("ready", async () => {
-    if (client.__coreBootState.readyBootExecuted) return;
-    client.__coreBootState.readyBootExecuted = true;
+client.once("ready", async () => {
+  if (client.__coreBootState.readyBootExecuted) return;
+  client.__coreBootState.readyBootExecuted = true;
 
-    try {
-      console.log("[CORE] Iniciando AutoJoin...");
-      iniciarAutoJoin(client);
-    } catch (e) {
-      console.error("[CORE] Erro AutoJoin:", e);
-    }
+  try {
+    console.log("[CORE] PRIORIDADE: iniciando FiveM Retention Status.");
+    await fivemRetentionStatusOnReady(client);
+    console.log("[CORE] FiveM Retention Status iniciado com prioridade.");
+  } catch (e) {
+    console.error("[FIVEM_RETENTION] Falha ao iniciar com prioridade no Ready:", e);
+  }
+
+  try {
+    console.log("[CORE] Iniciando AutoJoin.");
+    iniciarAutoJoin(client);
+  } catch (e) {
+    console.error("[CORE] Erro AutoJoin:", e);
+  }
 
     try {
       iniciarRegistroPoderes(client);
@@ -919,12 +927,6 @@ if (await handlePagamentoSocial(interaction, client).catch(() => false)) return;
     try {
       await lideresConvitesOnReady(client);
     } catch (e) {}
-    console.log("[CORE] Chamando fivemRetentionStatusOnReady..."); // Added log
-    try {
-      await fivemRetentionStatusOnReady(client);
-    } catch (e) {
-      console.error("[FIVEM_RETENTION] Falha ao iniciar no Ready:", e);
-    }
     try {
       await setStaffV2OnReady(client);
     } catch (e) {}

@@ -40,8 +40,22 @@ const ROLES_REWARD = {
 // Caminhos dos dados
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const ROOT_DIR = path.resolve(__dirname, ".."); // Raiz do projeto
-const DATA_DIR = path.join(ROOT_DIR, "data");   // Pasta data
+
+function pickPersistRoot() {
+  const candidates = [
+    process.env.SQUARECLOUD_STORAGE_PATH?.trim(),
+    "/storage",
+    "/home/container/storage",
+    "/home/squarecloud/storage",
+  ].filter(Boolean);
+
+  for (const dir of candidates) {
+    try { if (fs.existsSync(dir)) return dir; } catch {}
+  }
+  return null;
+}
+
+const DATA_DIR = path.resolve(pickPersistRoot() || path.join(__dirname, ".."), "data");
 
 // Arquivos fixos
 const FILES = {

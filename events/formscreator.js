@@ -107,7 +107,22 @@ const ROLE_REQUIRED_FOR_ACTIVE = "1352275728476930099";
 // =========================
 // PERSISTÊNCIA
 // =========================
-const DATA_DIR = path.join(__dirname, "../data"); // Ajustado para subir um nível se estiver em events/
+function pickPersistRoot() {
+  const candidates = [
+    process.env.SQUARECLOUD_STORAGE_PATH?.trim(),
+    "/storage",
+    "/home/container/storage",
+    "/home/squarecloud/storage",
+  ].filter(Boolean);
+
+  for (const dir of candidates) {
+    try { if (fs.existsSync(dir)) return dir; } catch {}
+  }
+  return null;
+}
+
+const PERSIST_ROOT = pickPersistRoot();
+const DATA_DIR = path.resolve(PERSIST_ROOT || path.join(__dirname, ".."), "data");
 const STATE_FILE = path.join(DATA_DIR, "formscreator_state.json");
 
 function ensureDataDir() {

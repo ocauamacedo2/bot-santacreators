@@ -3152,7 +3152,7 @@ async function recreateAllFivemRetentionPanels(client, options = {}) {
 
     if (!channel?.isTextBased?.()) continue;
 
-   const result = await recreateFivemRetentionPanel(channel, client, {
+const result = await recreateFivemRetentionPanel(channel, client, {
       ...options,
       deleteOldMessages: true,
     }).catch((e) => {

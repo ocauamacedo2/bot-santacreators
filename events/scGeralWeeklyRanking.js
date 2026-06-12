@@ -20,7 +20,21 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // ✅ pasta /data do projeto
-const DATA_DIR = path.resolve(__dirname, "../data");
+function pickPersistRoot() {
+  const candidates = [
+    process.env.SQUARECLOUD_STORAGE_PATH?.trim(),
+    "/storage",
+    "/home/container/storage",
+    "/home/squarecloud/storage",
+  ].filter(Boolean);
+
+  for (const dir of candidates) {
+    try { if (fs.existsSync(dir)) return dir; } catch {}
+  }
+  return null;
+}
+
+const DATA_DIR = path.resolve(pickPersistRoot() || path.join(__dirname, ".."), "data");
 // ================== AJUSTE MANUAL (CONFIG GLOBAL) ==================
 const ADJUSTMENTS_FILE = path.join(DATA_DIR, "sc_points_adjustments.json");
 
