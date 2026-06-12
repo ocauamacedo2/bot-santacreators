@@ -749,7 +749,11 @@ if (await eventosChecklistNotifierOnInteraction(interaction, client)) return;
 if (await handlePagamentoSocial(interaction, client).catch(() => false)) return;
 
 // 🚀 PRIORIDADE MÁXIMA: Botões de Ticket e Entrevista (Resolve o Delay)
-  if (await entrevista.handleButtons(interaction).catch(() => false)) return;
+if (await entrevista.handleButtons(interaction).catch((err) => {
+  console.error("[CORE] Erro em entrevista.handleButtons:", err);
+  return false;
+})) return;
+
   if (await entrevistasTickets.onInteractionCreate(interaction).catch(() => false)) return;
 
       // Outros handlers...

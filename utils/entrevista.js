@@ -573,35 +573,44 @@ const enviada = await interaction.channel.send({
   if (customId.startsWith('enviar|')) {
     const [, targetId] = customId.split('|');
 
+    // 1. Dar deferUpdate imediato
     await interaction.deferUpdate().catch(() => {});
 
+    // 2. Remover o botão imediatamente para evitar múltiplos cliques
+    await interaction.message.edit({ components: [] }).catch(() => {});
+
     const lockKey = String(channel.id);
+    // Trava anti-duplicidade para o canal
+    if (entrevistasStartLocks.has(lockKey)) return true;
+    entrevistasStartLocks.add(lockKey);
 
-    entrevistasStartLocks.delete(lockKey);
+    console.log("[ENTREVISTA DEBUG] Clique recebido no botão ENVIAR:", customId, "Canal:", channel.id);
 
+    // 3. Buscar candidato
+    const membro = await channel.guild.members.fetch(targetId).catch(() => null);
+
+    if (!membro) {
+      console.error("[ENTREVISTA DEBUG] Candidato não encontrado no servidor:", targetId);
+      entrevistasStartLocks.delete(lockKey);
+      await channel.send({
+        content: `❌ Não consegui encontrar o candidato <@${targetId}> para iniciar a entrevista.`
+      }).catch(() => {});
+      return true;
+    }
+
+    // Limpeza de estados fantasmas no mesmo canal
     for (const [userId, dados] of entrevistas.entries()) {
       if (String(dados?.channelId || "") === String(channel.id)) {
         entrevistas.delete(userId);
       }
     }
-
     entrevistasAtivas.delete(channel.id);
 
     const topicId = getAplicadorIdFromChannel(channel);
     const entrevistadorId = topicId || interaction.user.id;
 
-    const membro = await channel.guild.members.fetch(targetId).catch(() => null);
-
-    if (!membro) {
-      await channel.send({
-        content: `❌ Não consegui encontrar o candidato <@${targetId}> para iniciar a entrevista.`
-      }).catch(() => {});
-
-      return true;
-    }
-
+    // 4. Criar estado em memória
     const timeoutEnd = Date.now() + ENTREVISTA_DURACAO_MS;
-
     const dadosBase = {
       respostas: [],
       index: 0,
@@ -615,39 +624,44 @@ const enviada = await interaction.channel.send({
 
     entrevistas.set(targetId, dadosBase);
     entrevistasAtivas.add(channel.id);
+    
+    console.log("[ENTREVISTA DEBUG] Estado criado. targetId:", targetId, "membro.id:", membro.id);
 
     try {
-      await interaction.message.edit({ components: [] }).catch(() => {});
+      // 5. Marcar entrevista ativa no tópico
+      await setInterviewActiveTopic(channel, true).catch((e) => console.error("[Entrevista] Erro ao setar tópico:", e));
+      
+      // 6. Salvar em disco (sem travar se falhar)
+      await salvarEntrevistasEmDisco().catch(e => console.error("[Entrevista] Erro ao salvar disco:", e));
 
-      await setInterviewActiveTopic(channel, true).catch(() => {});
-      await salvarEntrevistasEmDisco();
-
+      // 7. Pausar IA
       iaInterviewPauseForManualInterview(channel, targetId, entrevistadorId);
 
+      // 8. Mandar mensagem “Bora”
       await channel.send({
         content: `<@${targetId}> Bora! Vamos começar sua entrevista agora ✨`
       });
 
+      // 9. Tentar iniciar timer (Seguro: não bloqueia a pergunta)
       const globalTimer = await iniciarContadorGlobal(channel, targetId).catch((err) => {
-        console.error("[Entrevista] Falha ao iniciar contador global:", err);
+        console.error("[Entrevista] Falha ao iniciar contador global (não crítico):", err);
         return null;
       });
 
       const dadosAtualizados = entrevistas.get(targetId);
-
       if (dadosAtualizados) {
         dadosAtualizados.globalTimer = globalTimer;
         entrevistas.set(targetId, dadosAtualizados);
-        await salvarEntrevistasEmDisco();
+        await salvarEntrevistasEmDisco().catch(() => {});
       }
 
+      // 10. Chamar enviarPergunta com catch visível (Primeira Pergunta)
+      console.log("[ENTREVISTA DEBUG] Disparando primeira pergunta...");
       enviarPergunta(channel, membro, 0).catch(async (err) => {
         console.error("[Entrevista] Falha real ao enviar/coletar perguntas:", err);
 
         entrevistas.delete(targetId);
         entrevistasAtivas.delete(channel.id);
-        entrevistasStartLocks.delete(lockKey);
-
         await setInterviewActiveTopic(channel, false).catch(() => {});
         await salvarEntrevistasEmDisco().catch(() => {});
 
@@ -656,6 +670,7 @@ const enviada = await interaction.channel.send({
         ).catch(() => {});
       });
 
+      // 11. Logar início da entrevista (Background)
       (async () => {
         await logCompleto(interaction.client, {
           titulo: '🎬 Entrevista iniciada',
@@ -687,23 +702,21 @@ const enviada = await interaction.channel.send({
         console.error("[Entrevista] Falha no pós-processamento da entrevista:", err);
       });
 
-      entrevistasStartLocks.delete(lockKey);
       return true;
     } catch (e) {
       entrevistasAtivas.delete(channel.id);
       entrevistas.delete(targetId);
-      entrevistasStartLocks.delete(lockKey);
-
       await setInterviewActiveTopic(channel, false).catch(() => {});
       await salvarEntrevistasEmDisco().catch(() => {});
 
       console.error("[Entrevista] Falha ao iniciar entrevista:", e);
-
       await channel.send(
         `❌ Não consegui iniciar a entrevista.\n\n**Erro:** \`${String(e?.message || e).slice(0, 800)}\``
       ).catch(() => {});
-
       return true;
+    } finally {
+      // Libera o lock após o processamento inicial
+      entrevistasStartLocks.delete(lockKey);
     }
   }
 
