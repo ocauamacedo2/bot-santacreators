@@ -593,10 +593,10 @@ const enviada = await interaction.channel.send({
     const membro = await channel.guild.members.fetch(targetId).catch(() => null);
 
     if (!membro) {
-      await interaction.followUp({
-        content: '❌ Não consegui encontrar o candidato para iniciar a entrevista.',
-        flags: 64
+      await channel.send({
+        content: `❌ Não consegui encontrar o candidato <@${targetId}> para iniciar a entrevista.`
       }).catch(() => {});
+
       return true;
     }
 
@@ -620,7 +620,7 @@ const enviada = await interaction.channel.send({
       await interaction.message.edit({ components: [] }).catch(() => {});
 
       await setInterviewActiveTopic(channel, true).catch(() => {});
-      await salvarEntrevistasEmDisco().catch(() => {});
+      await salvarEntrevistasEmDisco();
 
       iaInterviewPauseForManualInterview(channel, targetId, entrevistadorId);
 
@@ -628,34 +628,35 @@ const enviada = await interaction.channel.send({
         content: `<@${targetId}> Bora! Vamos começar sua entrevista agora ✨`
       });
 
-      const globalTimer = await iniciarContadorGlobal(channel, targetId).catch(() => null);
+      const globalTimer = await iniciarContadorGlobal(channel, targetId).catch((err) => {
+        console.error("[Entrevista] Falha ao iniciar contador global:", err);
+        return null;
+      });
+
       const dadosAtualizados = entrevistas.get(targetId);
 
       if (dadosAtualizados) {
         dadosAtualizados.globalTimer = globalTimer;
         entrevistas.set(targetId, dadosAtualizados);
-        await salvarEntrevistasEmDisco().catch(() => {});
+        await salvarEntrevistasEmDisco();
       }
 
-      setTimeout(() => {
-        enviarPergunta(channel, membro, 0).catch(async (err) => {
-          console.error("[Entrevista] Falha ao enviar primeira pergunta:", err);
+      enviarPergunta(channel, membro, 0).catch(async (err) => {
+        console.error("[Entrevista] Falha real ao enviar/coletar perguntas:", err);
 
-          entrevistas.delete(targetId);
-          entrevistasAtivas.delete(channel.id);
-          entrevistasStartLocks.delete(lockKey);
+        entrevistas.delete(targetId);
+        entrevistasAtivas.delete(channel.id);
+        entrevistasStartLocks.delete(lockKey);
 
-          await setInterviewActiveTopic(channel, false);
-          await salvarEntrevistasEmDisco();
+        await setInterviewActiveTopic(channel, false).catch(() => {});
+        await salvarEntrevistasEmDisco().catch(() => {});
 
-          await channel.send(
-            `❌ Não consegui enviar a primeira pergunta da entrevista. Verifique minhas permissões neste canal.`
-          ).catch(() => {});
-        });
-      }, 700);
+        await channel.send(
+          `❌ A entrevista travou ao enviar a primeira pergunta.\n\n**Erro:** \`${String(err?.message || err).slice(0, 800)}\``
+        ).catch(() => {});
+      });
 
       (async () => {
-
         await logCompleto(interaction.client, {
           titulo: '🎬 Entrevista iniciada',
           cor: 0x2ecc71,
@@ -693,18 +694,20 @@ const enviada = await interaction.channel.send({
       entrevistas.delete(targetId);
       entrevistasStartLocks.delete(lockKey);
 
-      await setInterviewActiveTopic(channel, false);
-      await salvarEntrevistasEmDisco();
+      await setInterviewActiveTopic(channel, false).catch(() => {});
+      await salvarEntrevistasEmDisco().catch(() => {});
 
       console.error("[Entrevista] Falha ao iniciar entrevista:", e);
 
       await channel.send(
-        `❌ Não consegui iniciar a entrevista. Verifique minhas permissões neste canal.`
+        `❌ Não consegui iniciar a entrevista.\n\n**Erro:** \`${String(e?.message || e).slice(0, 800)}\``
       ).catch(() => {});
 
       return true;
     }
   }
+
+
 
 
   return false;
@@ -715,14 +718,11 @@ async function enviarPergunta(channel, membro, index) {
   const dados = entrevistas.get(membro.id);
 
   if (!dados) {
-    console.warn(`[Entrevista] Nenhum estado encontrado para ${membro?.id} no canal ${channel?.id}.`);
-    await channel.send(
-      `❌ Não consegui localizar o estado da entrevista de <@${membro?.id}>. Use \`!perguntas\` novamente para recriar o botão.`
-    ).catch(() => {});
-    return;
+    throw new Error(`Estado da entrevista não encontrado para ${membro?.id} no canal ${channel?.id}.`);
   }
 
   if (index >= perguntas.length) {
+
     if (dados.globalTimer?.timeout) clearTimeout(dados.globalTimer.timeout);
 
     // ✅ Validação estrita: O aplicador deve ser quem está registrado no tópico do canal
