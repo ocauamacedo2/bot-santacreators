@@ -4464,8 +4464,11 @@ export async function handleIaInterviewTicketMessage(message, client) {
   const member = message.member;
   const isOpener = String(message.author.id) === String(openerId);
   const isStaff = memberIsIaInterviewStaff(member);
+  const mentionedBot = client?.user?.id
+    ? message.mentions.users.has(client.user.id)
+    : false;
 
-  const state = IA_ENTREVISTA_ACTIVE.get(message.channelId) || {
+  let state = IA_ENTREVISTA_ACTIVE.get(message.channelId) || {
     openerId,
     startedAt: Date.now(),
     active: true,
@@ -4477,15 +4480,30 @@ export async function handleIaInterviewTicketMessage(message, client) {
     saveIaEntrevistaState();
   }
 
+  if (isOpener && mentionedBot && (state.pausedByStaff || state.lastHumanHelperId)) {
+    state = {
+      ...state,
+      active: true,
+      pausedByStaff: false,
+      resumedByMention: true,
+      resumedAt: Date.now(),
+      lastHumanHelperId: null,
+      lastHumanHelperAt: null,
+    };
+
+    IA_ENTREVISTA_ACTIVE.set(message.channelId, state);
+    saveIaEntrevistaState();
+  }
+
   if (isStaff && !isOpener) {
     if (!state.pausedByStaff) {
-IA_ENTREVISTA_ACTIVE.set(message.channelId, {
-  ...state,
-  active: false,
-  pausedByStaff: true,
-  pausedAt: Date.now(),
-  pausedBy: message.author.id,
-});
+      IA_ENTREVISTA_ACTIVE.set(message.channelId, {
+        ...state,
+        active: false,
+        pausedByStaff: true,
+        pausedAt: Date.now(),
+        pausedBy: message.author.id,
+      });
 
       saveIaEntrevistaState();
 
