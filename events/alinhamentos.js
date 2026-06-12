@@ -321,10 +321,18 @@ async function sendAlinhamentoToEvolutionThread(client, interaction, {
       const thread = await client.channels.fetch(threadId).catch(() => null);
 
       if (thread?.isTextBased?.()) {
+        if (thread.archived) {
+          await thread.setArchived(false, "Reabrindo Forms pessoal para registrar alinhamento aprovado.").catch(() => {});
+        }
+
+        if (thread.locked) {
+          await thread.setLocked(false, "Destravando Forms pessoal para registrar alinhamento aprovado.").catch(() => {});
+        }
+
         const sent = await thread.send({
           content: `🧾 **Novo alinhamento registrado para <@${targetId}>**`,
           embeds: [evolutionEmbed],
-            components: [], // ✅ Segurança extra: garante que esse alinhamento nunca fique com botões no Forms pessoal
+          components: [], // ✅ Segurança extra: garante que esse alinhamento nunca fique com botões no Forms pessoal
         });
 
           // ✅ Segurança extra: garante que esse alinhamento nunca fique com botões no Forms pessoal
@@ -572,6 +580,17 @@ function buildValidationRow(disabled = false) {
       .setEmoji("❌")
       .setLabel("ALINHAMENTO NÃO VÁLIDO")
       .setDisabled(disabled)
+  );
+}
+
+function buildFormsLinkRow(formsUrl) {
+  if (!formsUrl) return null;
+
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setStyle(ButtonStyle.Link)
+      .setLabel("🔗 Abrir Forms pessoal")
+      .setURL(formsUrl)
   );
 }
 
@@ -931,16 +950,20 @@ const fields = readEmbedFields(freshEmb).filter((f) => {
         return !name.includes("forms pessoal da pessoa");
       });
 
+      const formsUrl = evolutionResult?.link || evolutionResult?.threadLink || null;
+      const formsButtonRow = buildFormsLinkRow(formsUrl);
+      const finalRows = formsButtonRow ? [...rows, formsButtonRow] : rows;
+
       linkedFields.push({
         name: "🔗 Forms pessoal da pessoa",
-        value: evolutionResult.ok
-          ? `Clique aqui para abrir o Forms pessoal\n🧾 Alinhamento aprovado e enviado para o tópico pessoal.`
-          : `Forms não encontrado automaticamente.\nMotivo: \`${evolutionResult.reason || "desconhecido"}\``,
+        value: evolutionResult.ok && formsUrl
+          ? `[Clique aqui para abrir o Forms pessoal](${formsUrl})\n🧾 Alinhamento aprovado e enviado para o tópico pessoal.`
+          : `Forms não encontrado automaticamente.\nMotivo: \`${evolutionResult?.reason || "desconhecido"}\``,
         inline: false,
       });
 
       linkedEmbed.setFields(linkedFields);
-      await msg.edit({ embeds: [linkedEmbed], components: rows }).catch(() => {});
+      await msg.edit({ embeds: [linkedEmbed], components: finalRows }).catch(() => {});
     } catch (e) {
       console.warn("[ALINV1] Falha ao linkar Forms após validação:", e?.message || e);
     }
