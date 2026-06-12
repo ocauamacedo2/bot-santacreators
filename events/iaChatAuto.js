@@ -4456,7 +4456,11 @@ function buildIaInterviewQuickAnswer(message, openerId) {
 
 function channelHasActiveInterviewRunning(channel) {
   const topic = String(channel?.topic || "");
-  return /\bentrevista_ativa:1\b/i.test(topic);
+
+  return (
+    /\bentrevista_ativa:1\b/i.test(topic) ||
+    /\bentrevista_starter:\d{17,20}\b/i.test(topic)
+  );
 }
 
 export async function handleIaInterviewTicketMessage(message, client) {
@@ -4491,16 +4495,15 @@ export async function handleIaInterviewTicketMessage(message, client) {
   }
 
   if (isOpener && mentionedBot && (state.pausedByStaff || state.lastHumanHelperId)) {
-    state = {
-      ...state,
-      active: true,
-      pausedByStaff: false,
-      resumedByMention: true,
-      resumedAt: Date.now(),
-      lastHumanHelperId: null,
-      lastHumanHelperAt: null,
-    };
-
+state = {
+  ...state,
+  active: true,
+  pausedByStaff: false,
+  resumedByMention: true,
+  resumedAt: Date.now(),
+  lastHumanHelperId: null,
+  lastHumanHelperAt: null,
+};
     IA_ENTREVISTA_ACTIVE.set(message.channelId, state);
     saveIaEntrevistaState();
   }

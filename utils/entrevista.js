@@ -351,6 +351,83 @@ async function setInterviewActiveTopic(channel, active) {
   } catch {}
 }
 
+async function clearGhostInterviewIfNeeded(channel, targetId, reason = "unknown") {
+  const channelId = String(channel?.id || "");
+  const target = String(targetId || "");
+
+  let cleaned = false;
+
+  for (const [userId, dados] of entrevistas.entries()) {
+    const sameChannel = String(dados?.channelId || "") === channelId;
+    const sameTarget = !target || String(userId) === target;
+    const hasNoQuestions = !Array.isArray(dados?.mensagens) || dados.mensagens.length === 0;
+    const isAtStart = Number(dados?.index || 0) === 0;
+    const hasNoAnswers = !Array.isArray(dados?.respostas) || dados.respostas.length === 0;
+
+    if (sameChannel && sameTarget && hasNoQuestions && isAtStart && hasNoAnswers) {
+      console.warn(`[Entrevista] Limpando entrevista fantasma no canal ${channelId}. Motivo: ${reason}`);
+      entrevistas.delete(userId);
+      cleaned = true;
+    }
+  }
+
+  if (cleaned) {
+    entrevistasAtivas.delete(channelId);
+    entrevistasStartLocks.delete(channelId);
+    await setInterviewActiveTopic(channel, false);
+    await salvarEntrevistasEmDisco();
+  }
+
+  return cleaned;
+}
+
+async function channelHasRealInterviewQuestion(channel, targetId) {
+  const target = String(targetId || "");
+
+  const messages = await channel.messages.fetch({ limit: 50 }).catch(() => null);
+
+  if (!messages?.size) return false;
+
+  return messages.some((msg) => {
+    if (!msg.author?.bot) return false;
+
+    const content = String(msg.content || "");
+
+    return (
+      content.includes(`**1.** <@${target}>`) ||
+      content.includes(`**2.** <@${target}>`) ||
+      content.includes(`**3.** <@${target}>`) ||
+      content.includes(`**4.** <@${target}>`) ||
+      content.includes(`**5.** <@${target}>`) ||
+      content.includes(`**6.** <@${target}>`) ||
+      content.includes(`**7.** <@${target}>`) ||
+      content.includes(`**8.** <@${target}>`) ||
+      content.includes(`**9.** <@${target}>`) ||
+      content.includes(`**10.** <@${target}>`) ||
+      content.includes(`**11.** <@${target}>`) ||
+      content.includes(`**12.** <@${target}>`) ||
+      content.includes(`**13.** <@${target}>`) ||
+      content.includes(`**14.** <@${target}>`) ||
+      content.includes(`**15.** <@${target}>`) ||
+      content.includes(`**16.** <@${target}>`) ||
+      content.includes(`**17.** <@${target}>`) ||
+      content.includes(`**18.** <@${target}>`) ||
+      content.includes(`**19.** <@${target}>`) ||
+      content.includes(`**20.** <@${target}>`) ||
+      content.includes(`**21.** <@${target}>`) ||
+      content.includes(`**22.** <@${target}>`) ||
+      content.includes(`**23.** <@${target}>`) ||
+      content.includes(`**24.** <@${target}>`) ||
+      content.includes(`**25.** <@${target}>`) ||
+      content.includes(`**26.** <@${target}>`) ||
+      content.includes(`**27.** <@${target}>`) ||
+      content.includes(`**28.** <@${target}>`) ||
+      content.includes(`**29.** <@${target}>`) ||
+      content.includes(`**30.** <@${target}>`)
+    );
+  });
+}
+
 function canInterviewPointCount(channel, aplicadorId) {
   const categoryId = String(channel?.parentId || "");
   if (PERGUNTAS_ALLOWED_CATEGORY_IDS.has(categoryId)) return true;
@@ -489,21 +566,27 @@ const enviada = await interaction.channel.send({
 
     const lockKey = String(channel.id);
 
+    await clearGhostInterviewIfNeeded(channel, targetId, "antes de iniciar pelo botão ENVIAR");
+
+    const existePerguntaRealNoCanal = await channelHasRealInterviewQuestion(channel, targetId);
+
     const entrevistaRealDoCanal = [...entrevistas.values()].some((dados) =>
       String(dados?.channelId || "") === String(channel.id)
     );
 
-    if (entrevistasStartLocks.has(lockKey) && !entrevistaRealDoCanal && !entrevistasAtivas.has(channel.id)) {
-      console.warn(`[Entrevista] Limpando lock falso antes de iniciar no canal: ${channel.id}.`);
-      entrevistasStartLocks.delete(lockKey);
-    }
+    if ((entrevistasAtivas.has(channel.id) || entrevistaRealDoCanal) && !existePerguntaRealNoCanal) {
+      console.warn(`[Entrevista] Estado ativo sem pergunta real. Resetando canal: ${channel.id}`);
 
-    if (entrevistasAtivas.has(channel.id) && !entrevistaRealDoCanal) {
-      console.warn(`[Entrevista] Limpando trava falsa de entrevista ativa no canal: ${channel.id}.`);
+      for (const [userId, dados] of entrevistas.entries()) {
+        if (String(dados?.channelId || "") === String(channel.id)) {
+          entrevistas.delete(userId);
+        }
+      }
 
       entrevistasAtivas.delete(channel.id);
       entrevistasStartLocks.delete(lockKey);
       await setInterviewActiveTopic(channel, false);
+      await salvarEntrevistasEmDisco();
     }
 
     if (entrevistasStartLocks.has(lockKey)) {
@@ -512,10 +595,31 @@ const enviada = await interaction.channel.send({
       return true;
     }
 
-    if (entrevistasAtivas.has(channel.id)) {
-      console.warn(`[Entrevista] Tentativa de iniciar entrevista em canal já ativo: ${channel.id}. Ignorando.`);
-      await interaction.followUp({ content: '⚠️ Já existe uma entrevista ativa neste canal.', flags: 64 }).catch(() => {});
-      return true;
+    const existeEntrevistaDepoisDaLimpeza = [...entrevistas.values()].some((dados) =>
+      String(dados?.channelId || "") === String(channel.id)
+    );
+
+if (entrevistasAtivas.has(channel.id) || existeEntrevistaDepoisDaLimpeza || existePerguntaRealNoCanal) {
+      const aindaExistePerguntaReal = await channelHasRealInterviewQuestion(channel, targetId);
+
+      if (!aindaExistePerguntaReal) {
+        console.warn(`[Entrevista] Bloqueio falso detectado no canal ${channel.id}. Limpando e permitindo iniciar.`);
+
+        for (const [userId, dados] of entrevistas.entries()) {
+          if (String(dados?.channelId || "") === String(channel.id)) {
+            entrevistas.delete(userId);
+          }
+        }
+
+        entrevistasAtivas.delete(channel.id);
+        entrevistasStartLocks.delete(lockKey);
+        await setInterviewActiveTopic(channel, false);
+        await salvarEntrevistasEmDisco();
+      } else {
+        console.warn(`[Entrevista] Tentativa de iniciar entrevista em canal já ativo: ${channel.id}. Ignorando.`);
+        await interaction.followUp({ content: '⚠️ Já existe uma entrevista ativa neste canal.', flags: 64 }).catch(() => {});
+        return true;
+      }
     }
 
     entrevistasStartLocks.add(lockKey);
@@ -560,13 +664,18 @@ const enviada = await interaction.channel.send({
       const aviso = await channel.send({ content: `<@${targetId}> Bora! Vamos começar sua entrevista agora ✨` });
 
       // Dispara a primeira pergunta agora (sem esperar logs)
-      enviarPergunta(channel, membro, 0).catch(async (err) => {
+      await enviarPergunta(channel, membro, 0).catch(async (err) => {
         console.error("[Entrevista] Falha ao enviar primeira pergunta:", err);
+
         entrevistas.delete(targetId);
         entrevistasAtivas.delete(channel.id);
         entrevistasStartLocks.delete(lockKey);
         await setInterviewActiveTopic(channel, false);
         await salvarEntrevistasEmDisco();
+
+        await channel.send(
+          `❌ Não consegui enviar a primeira pergunta da entrevista. Verifique minhas permissões de enviar mensagem e mencionar usuário neste canal.`
+        ).catch(() => {});
       });
 
       // --- 🛠️ PROCESSAMENTO EM BACKGROUND ---
@@ -906,8 +1015,49 @@ async function enviarLogFinalEntrevista(member, dados) {
   }
 }
 
+async function resetInterviewChannelState(channel, reason = "manual_reset") {
+  const channelId = String(channel?.id || "");
+
+  if (!channelId) return false;
+
+  let cleaned = false;
+
+  for (const [userId, dados] of entrevistas.entries()) {
+    if (String(dados?.channelId || "") === channelId) {
+      entrevistas.delete(userId);
+      cleaned = true;
+    }
+  }
+
+  entrevistasAtivas.delete(channelId);
+  entrevistasStartLocks.delete(channelId);
+
+  await setInterviewActiveTopic(channel, false);
+
+  try {
+    if (channel && typeof channel.setTopic === "function") {
+      const oldTopic = String(channel.topic || "");
+      const cleanedTopic = oldTopic
+        .replace(/\bentrevista_ativa:[01]\b/gi, "")
+        .replace(/\bentrevista_starter:\d{17,20}\b/gi, "")
+        .replace(/\s*\|\s*\|\s*/g, " | ")
+        .replace(/\s{2,}/g, " ")
+        .trim();
+
+      await channel.setTopic(cleanedTopic.slice(0, 1024)).catch(() => {});
+    }
+  } catch {}
+
+  await salvarEntrevistasEmDisco();
+
+  console.warn(`[Entrevista] Estado do canal ${channelId} resetado. Motivo: ${reason}`);
+
+  return cleaned;
+}
+
 export default {
   handleButtons,
   reanexar,
-  logCompleto
+  logCompleto,
+  resetInterviewChannelState
 };

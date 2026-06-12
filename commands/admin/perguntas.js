@@ -47,6 +47,11 @@ export default {
       return message.channel.send("Esse comando só funciona dentro do servidor.");
     }
 
+    await entrevista.resetInterviewChannelState?.(
+      message.channel,
+      "!perguntas usado antes de criar novo botão"
+    );
+
     const mensagensRecentes = await message.channel.messages.fetch({ limit: 15 }).catch(() => null);
     if (mensagensRecentes) {
       const jaExisteBotao = mensagensRecentes.some((msg) =>
@@ -74,7 +79,14 @@ export default {
     );
 
     const oldTopic = String(message.channel.topic || "");
-    const cleanedTopic = oldTopic.replace(/\bentrevista_aplicador:\d{17,20}\b/gi, "").replace(/\s{2,}/g, " ").trim();
+    const cleanedTopic = oldTopic
+      .replace(/\bentrevista_aplicador:\d{17,20}\b/gi, "")
+      .replace(/\bentrevista_starter:\d{17,20}\b/gi, "")
+      .replace(/\bentrevista_ativa:[01]\b/gi, "")
+      .replace(/\s*\|\s*\|\s*/g, " | ")
+      .replace(/\s{2,}/g, " ")
+      .trim();
+
     const nextTopic = `${cleanedTopic}${cleanedTopic ? " | " : ""}entrevista_aplicador:${message.author.id}`.slice(0, 1024);
 
     // Envia o botão e seta o tópico ao mesmo tempo
