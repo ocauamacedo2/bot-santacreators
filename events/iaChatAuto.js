@@ -4453,9 +4453,19 @@ function buildIaInterviewQuickAnswer(message, openerId) {
 
   return null;
 }
+
+function channelHasActiveInterviewRunning(channel) {
+  const topic = String(channel?.topic || "");
+  return /\bentrevista_ativa:1\b/i.test(topic);
+}
+
 export async function handleIaInterviewTicketMessage(message, client) {
   if (!message.guild || message.author.bot) return false;
   if (!isIaInterviewChannel(message.channel)) return false;
+
+  if (channelHasActiveInterviewRunning(message.channel)) {
+    return false;
+  }
 
   const openerId = await resolveIaInterviewOpenerId(message);
 

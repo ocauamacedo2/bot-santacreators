@@ -331,6 +331,25 @@ function getStarterIdFromChannel(channel) {
   return null;
 }
 
+async function setInterviewActiveTopic(channel, active) {
+  try {
+    if (!channel || typeof channel.setTopic !== "function") return;
+
+    const oldTopic = String(channel.topic || "");
+    const cleanedTopic = oldTopic
+      .replace(/\bentrevista_ativa:[01]\b/gi, "")
+      .replace(/\s*\|\s*\|\s*/g, " | ")
+      .replace(/\s{2,}/g, " ")
+      .trim();
+
+    const nextTopic = active
+      ? `${cleanedTopic}${cleanedTopic ? " | " : ""}entrevista_ativa:1`
+      : cleanedTopic;
+
+    await channel.setTopic(nextTopic.slice(0, 1024)).catch(() => {});
+  } catch {}
+}
+
 function canInterviewPointCount(channel, aplicadorId) {
   const categoryId = String(channel?.parentId || "");
   if (PERGUNTAS_ALLOWED_CATEGORY_IDS.has(categoryId)) return true;
@@ -480,6 +499,7 @@ const enviada = await interaction.channel.send({
     if (!membro) return true;
 
     entrevistasAtivas.add(channel.id);
+    await setInterviewActiveTopic(channel, true);
 
     // --- 🚀 RESPOSTA IMEDIATA AO DISCORD ---
     try {
@@ -583,6 +603,7 @@ async function enviarPergunta(channel, membro, index) {
 
     entrevistas.delete(membro.id);
     entrevistasAtivas.delete(channel.id);
+    await setInterviewActiveTopic(channel, false);
     await salvarEntrevistasEmDisco();
 
     const quemAtendeu = aplicadorId ? `<@${aplicadorId}>` : 'nossa equipe';
@@ -731,11 +752,12 @@ if (logChannel) {
   } catch (e) {
     entrevistas.delete(membro.id);
     entrevistasAtivas.delete(channel.id);
+    await setInterviewActiveTopic(channel, false);
     await salvarEntrevistasEmDisco();
 
     await channel.send(`⏰ <@${membro.id}>, entrevista cancelada por inatividade (passou de ${ENTREVISTA_DURACAO_MIN} min).`);
   }
-} 
+}
 
 // ===== TIMER GLOBAL =====
 async function iniciarContadorGlobal(channel, membroId, remainingMs = ENTREVISTA_DURACAO_MS) {
@@ -749,6 +771,7 @@ async function iniciarContadorGlobal(channel, membroId, remainingMs = ENTREVISTA
 
     entrevistas.delete(membroId);
     entrevistasAtivas.delete(channel.id);
+    await setInterviewActiveTopic(channel, false);
     await salvarEntrevistasEmDisco();
 
     await msg.edit('⛔ **Tempo esgotado!** Entrevista cancelada.').catch(() => {});
