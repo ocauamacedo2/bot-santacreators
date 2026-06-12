@@ -1442,59 +1442,69 @@ if (!uid) return;
     });
   }
 
-  // CRONOGRAMA (Aprovados)
-  if (CRONOGRAMA_LOGS_CHANNEL_ID) {
-    await scanChannelEmbeds(client, {
-      channelId: CRONOGRAMA_LOGS_CHANNEL_ID,
-      weekFloorKey,
-      maxPages: 80,
-      onMessage: async (m) => {
+// HALL DA FAMA (Scan do canal oficial)
+// ⚠️ DESATIVADO PARA PONTUAÇÃO
+// Motivo:
+// A mensagem oficial do Hall da Fama é enviada pelo BOT.
+// Se pontuar por m.author.id aqui, o ponto vai para o bot.
+//
+// O ponto correto do Hall da Fama já vem do canal de aprovação,
+// pelo campo "Solicitante", quando o registro é aprovado.
+//
+// Regra correta:
+// ✅ Aprovou Hall da Fama = ponto para quem FEZ o registro
+// ❌ Recusou Hall da Fama = não ganha ponto
+/*
+if (HALL_CHANNEL_ID) {
+  await scanChannelEmbeds(client, {
+    channelId: HALL_CHANNEL_ID,
+    weekFloorKey,
+    maxPages: 80,
+    onMessage: async (m) => {
       if (seenMessageIds.has(m.id)) return;
       seenMessageIds.add(m.id);
-        const emb = m.embeds?.[0];
-        if (!emb) return;
-        
-        const isGreen = emb.color === 3066993; 
-        const footer = emb.footer?.text || "";
-        if (!isGreen && !footer.includes("Aprovado por")) return;
-        
-        const title = emb.title || "";
-        const desc = emb.description || "";
-        const match = desc.match(/Solicitante:.*?<@!?(\d+)>/i);
-        if (!match) return;
-        const userId = match[1];
 
-        // Diferencia Cronograma, Hall da Fama e Eventos Diários pelo título/descrição
-        if (title.includes("Hall da Fama")) {
-           pushItem({ userId, ts: new Date(m.editedTimestamp || m.createdTimestamp), source: "halldafama" });
-        } else if (title.includes("Evento Diário")) {
-           pushItem({ userId, ts: new Date(m.editedTimestamp || m.createdTimestamp), source: "eventosdiarios" });
-        } else {
-           // Assume cronograma se não for os outros
-           pushItem({ userId, ts: new Date(m.editedTimestamp || m.createdTimestamp), source: "cronograma" });
-        }
-      },
-    });
-  }
+      if (m.author.id !== client.user.id) return;
+
+      if (m.content && m.content.includes("HALL DA FAMA")) {
+        pushItem({ userId: m.author.id, ts: new Date(m.createdTimestamp), source: "halldafama" });
+      }
+    },
+  });
+}
+*/
 
   // HALL DA FAMA (Scan do canal oficial)
+  // ⚠️ DESATIVADO PARA PONTUAÇÃO
+  // Motivo:
+  // A mensagem oficial do Hall da Fama é enviada pelo BOT.
+  // Se pontuar por m.author.id aqui, o ponto vai para o bot.
+  //
+  // O ponto correto do Hall da Fama já vem do canal de aprovação,
+  // pelo campo "Solicitante", quando o registro é aprovado.
+  //
+  // Regra correta:
+  // ✅ Aprovou Hall da Fama = ponto para quem FEZ o registro
+  // ❌ Recusou Hall da Fama = não ganha ponto
+  /*
   if (HALL_CHANNEL_ID) {
     await scanChannelEmbeds(client, {
       channelId: HALL_CHANNEL_ID,
       weekFloorKey,
       maxPages: 80,
       onMessage: async (m) => {
-      if (seenMessageIds.has(m.id)) return;
-      seenMessageIds.add(m.id);
-        // O Hall da Fama é texto puro, mas é enviado pelo bot.
-        // Vamos procurar o padrão do texto.
+        if (seenMessageIds.has(m.id)) return;
+        seenMessageIds.add(m.id);
+
         if (m.author.id !== client.user.id) return;
-      if (m.content && m.content.includes("HALL DA FAMA")) {
-        pushItem({ userId: m.author.id, ts: new Date(m.createdTimestamp), source: "halldafama" });
-      }
+
+        if (m.content && m.content.includes("HALL DA FAMA")) {
+          pushItem({ userId: m.author.id, ts: new Date(m.createdTimestamp), source: "halldafama" });
+        }
       },
     });
   }
+  */
 
   // PRESENÇAS (logs)
   if (PRESENCA_LOGS_CHANNEL_ID) {
