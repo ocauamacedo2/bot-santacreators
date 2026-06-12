@@ -443,8 +443,97 @@ const FIVEM_EVENT_SCHEDULE = [
   },
 ];
 
+function parseCronogramaTimes(value) {
+  const text = String(value || "");
+  const matches = [...text.matchAll(/\b([01]?\d|2[0-3]):([0-5]\d)\b/g)];
+
+  return [...new Set(
+    matches.map((match) => {
+      const hour = String(Number(match[1])).padStart(2, "0");
+      const minute = String(Number(match[2])).padStart(2, "0");
+      return `${hour}:${minute}`;
+    })
+  )];
+}
+
+function createFivemEventFromCronogramaBlock(block, dayKey, weekday, type, time) {
+  if (!block?.active) return null;
+
+  const cityKey = cityNameToKey(block.city);
+  if (!cityKey) return null;
+
+  const cityConfig = FIVEM_CITIES.find((city) => city.key === cityKey);
+  if (!cityConfig) return null;
+
+  const [hourRaw, minuteRaw] = String(time).split(":");
+  const startHour = Number(hourRaw);
+  const startMinute = Number(minuteRaw);
+
+  if (!Number.isFinite(startHour) || !Number.isFinite(startMinute)) return null;
+
+  const startTotalMinutes = startHour * 60 + startMinute;
+  const endTotalMinutes = startTotalMinutes + 60;
+
+  return {
+    cityKey,
+    cityName: cityConfig.name,
+    emoji: cityConfig.emoji,
+    category: type === "schedule" ? "Pico" : "Virada / Madrugada",
+    weekday,
+    startHour,
+    startMinute,
+    endHour: Math.floor(endTotalMinutes / 60),
+    endMinute: endTotalMinutes % 60,
+    eventKey: `cronograma_${type}_${dayKey}_${cityKey}_${String(startHour).padStart(2, "0")}_${String(startMinute).padStart(2, "0")}`,
+    cronogramaType: type,
+    cronogramaDayKey: dayKey,
+    cronogramaEventName: block.eventName || null,
+  };
+}
+
+function getFivemEventScheduleFromCronogramaState(cronogramaState = loadCronogramaStateForFivem()) {
+  if (!cronogramaState) return [];
+
+  const dayMap = {
+    dom: 0,
+    seg: 1,
+    ter: 2,
+    qua: 3,
+    qui: 4,
+    sex: 5,
+    sab: 6,
+  };
+
+  const events = [];
+
+  for (const [type, blocks] of Object.entries({
+    schedule: cronogramaState.schedule || {},
+    madrugada: cronogramaState.madrugada || {},
+  })) {
+    for (const [dayKey, block] of Object.entries(blocks)) {
+      const weekday = dayMap[dayKey];
+      if (weekday === undefined) continue;
+
+      const times = parseCronogramaTimes(block?.time);
+
+      for (const time of times) {
+        const event = createFivemEventFromCronogramaBlock(block, dayKey, weekday, type, time);
+        if (event) events.push(event);
+      }
+    }
+  }
+
+  return events;
+}
+
+function getAllFivemEventSchedule() {
+  const cronogramaEvents = getFivemEventScheduleFromCronogramaState();
+
+  return cronogramaEvents.length ? cronogramaEvents : FIVEM_EVENT_SCHEDULE;
+}
+
 function getEventScheduleForWeekday(weekday) {
-  return FIVEM_EVENT_SCHEDULE.filter((event) => event.weekday === weekday);
+  return getAllFivemEventSchedule().filter((event) => event.weekday === weekday);
 }
 
 function isCurrentTimeInsideEvent(snapshot, event) {
@@ -551,6 +640,8 @@ function findCronogramaEventForFivemEvent(event, cronogramaState) {
 }
 
 function getFivemEventDisplayName(event, cronogramaState) {
+  if (event?.cronogramaEventName) return event.cronogramaEventName;
+
   const cronogramaEvent = findCronogramaEventForFivemEvent(event, cronogramaState);
   return cronogramaEvent?.eventName || event.category || "Evento não definido";
 }
@@ -1812,9 +1903,9 @@ return `${medal} **BR ${label.padEnd(8, " ")}**\n` +
 }
 
 function buildCityEventPanelDescription(cityKey, cityName, emoji, peaks, currentSnapshot, onlyEvent = null) {
-  const cityEvents = onlyEvent
-    ? [onlyEvent]
-    : FIVEM_EVENT_SCHEDULE.filter((event) => event.cityKey === cityKey);
+const cityEvents = onlyEvent
+  ? [onlyEvent]
+  : getAllFivemEventSchedule().filter((event) => event.cityKey === cityKey);
 
   const lines = cityEvents.map((event) => {
     const eventDateKey = getDateKeyFromWeekdayInCurrentWeek(currentSnapshot, event.weekday);
@@ -2064,11 +2155,11 @@ const cityPanelConfigs = [
 });
 
 for (const cityPanel of cityPanelConfigs) {
-  const cityEvents = FIVEM_EVENT_SCHEDULE.filter((event) => {
-    if (event.cityKey !== cityPanel.key) return false;
+const cityEvents = getAllFivemEventSchedule().filter((event) => {
+  if (event.cityKey !== cityPanel.key) return false;
 
-    return true;
-  });
+  return true;
+});
 
   const uniqueCityEvents = [...new Map(cityEvents.map((event) => [event.eventKey, event])).values()];
 
@@ -2574,12 +2665,7 @@ async function cleanupDuplicateRetentionPanelMessages(channel, botId, options = 
    })
  );
 
- const continuationMessages = panelMessages.filter((m) =>
-   m.embeds?.some((e) => {
-     const footer = e.footer?.text || "";
-     return footer.includes(FIVEM_CONT_MARKER_TAG);
-   })
- );
+const continuationMessages = [];
 
  const preferredMain =
    mainPanelMessages.find((m) => keepMessageId && m.id === keepMessageId) ||
@@ -2848,8 +2934,13 @@ const validationPayload = await buildEmbeds(client, safeSnapshot.snapshot, panel
    deletedCount = await deleteAllRetentionPanelMessages(channel, botId);
  }
 
- const recreated = await ensureStickyMessage(channel);
- const edited = await editPanel(channel, { force: true, recovery: true });
+const recreated = await ensureStickyMessage(channel);
+const edited = await editPanel(channel, {
+  force: true,
+  recovery: true,
+  skipChannelLock: true,
+  safeSnapshot,
+});
 
  if (!recreated || !edited) {
    throw new Error("Não consegui recriar o painel agora. Nenhuma mensagem antiga foi apagada sem validação.");
@@ -2909,11 +3000,11 @@ async function ensureFivemRetentionAutoLoop(client, options = {}) {
 
 const intervalId = setInterval(async () => {
   try {
-    const edited = await editPanel(channel, {
-      auto: true,
-      force: true,
-      cleanupDuplicates: true,
-    });
+const edited = await editPanel(channel, {
+  auto: true,
+  force: true,
+  cleanupDuplicates: false,
+});
 
     if (!edited) {
       await ensureFivemPanelExists(channel, client);
