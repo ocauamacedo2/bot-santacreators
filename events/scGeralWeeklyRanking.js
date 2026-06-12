@@ -562,6 +562,59 @@ function getStatusValueFromEmbed(emb) {
   return String(f?.value || "");
 }
 
+function approval_getTextBag(emb) {
+  const title = String(emb?.title || emb?.data?.title || "");
+  const desc = String(emb?.description || emb?.data?.description || "");
+  const footer = String(emb?.footer?.text || emb?.data?.footer?.text || "");
+  const fields = getFields(emb)
+    .map((f) => `${f?.name || ""}\n${f?.value || ""}`)
+    .join("\n");
+
+  return `${title}\n${desc}\n${fields}\n${footer}`;
+}
+
+function approval_isApproved(emb) {
+  const text = approval_getTextBag(emb);
+  const raw = String(text || "");
+  const n = norm(raw);
+
+  const isRejected =
+    n.includes("recusado") ||
+    n.includes("reprovado") ||
+    n.includes("negado");
+
+  if (isRejected) return false;
+
+  return (
+    emb?.color === 3066993 ||
+    n.includes("aprovado por") ||
+    n.includes("hall da fama aprovado") ||
+    n.includes("evento diario aprovado") ||
+    n.includes("evento diário aprovado")
+  );
+}
+
+function approval_getSolicitanteId(emb) {
+  const text = approval_getTextBag(emb);
+
+  const solicitanteMatch = /solicitante[\s\S]{0,80}<@!?(\d{17,20})>/i.exec(text);
+  if (solicitanteMatch) return solicitanteMatch[1];
+
+  const mentionMatch = /<@!?(\d{17,20})>/.exec(String(emb?.description || emb?.data?.description || ""));
+  if (mentionMatch) return mentionMatch[1];
+
+  return null;
+}
+
+function approval_getSource(emb) {
+  const text = norm(approval_getTextBag(emb));
+
+  if (text.includes("hall da fama")) return "halldafama";
+  if (text.includes("evento diario") || text.includes("evento diário")) return "eventosdiarios";
+
+  return "cronograma";
+}
+
 // ================== SCAN HELPERS ==================
 async function scanChannelEmbeds(client, { channelId, weekFloorKey, maxPages = 60, onMessage }) {
   const ch = await client.channels.fetch(channelId).catch(() => null);
@@ -1529,44 +1582,35 @@ if (HALL_CHANNEL_ID) {
   // - O ponto vai para o "Solicitante", ou seja, quem fez/enviou o registro.
   // - Quem aprovou NÃO ganha ponto.
   // - Registro recusado NÃO ganha ponto.
-  if (CRONOGRAMA_LOGS_CHANNEL_ID) {
-    await scanChannelEmbeds(client, {
-      channelId: CRONOGRAMA_LOGS_CHANNEL_ID,
-      weekFloorKey,
-      maxPages: 80,
-      onMessage: async (m) => {
-        const seenKey = `aprovacao:${m.id}`;
-        if (seenMessageIds.has(seenKey)) return;
+if (CRONOGRAMA_LOGS_CHANNEL_ID) {
+  await scanChannelEmbeds(client, {
+    channelId: CRONOGRAMA_LOGS_CHANNEL_ID,
+    weekFloorKey,
+    maxPages: 120,
+    onMessage: async (m) => {
+      const seenKey = `approval:${m.id}`;
+      if (seenMessageIds.has(seenKey)) return;
 
-        const emb = m.embeds?.[0];
-        if (!emb) return;
+      const emb = m.embeds?.[0];
+      if (!emb) return;
 
-        const isGreen = emb.color === 3066993;
-        const footer = emb.footer?.text || "";
+      if (!approval_isApproved(emb)) return;
 
-        if (!isGreen && !footer.includes("Aprovado por")) return;
+      const userId = approval_getSolicitanteId(emb);
+      if (!userId) return;
 
-        const title = emb.title || "";
-        const desc = emb.description || "";
-        const match = desc.match(/Solicitante:.*?<@!?(\d+)>/i);
+      const source = approval_getSource(emb) || "cronograma";
 
-        if (!match) return;
+      seenMessageIds.add(seenKey);
 
-        seenMessageIds.add(seenKey);
-
-        const userId = match[1];
-        const ts = new Date(m.editedTimestamp || m.createdTimestamp);
-
-        if (title.includes("Hall da Fama")) {
-          pushItem({ userId, ts, source: "halldafama" });
-        } else if (title.includes("Evento Diário")) {
-          pushItem({ userId, ts, source: "eventosdiarios" });
-        } else {
-          pushItem({ userId, ts, source: "cronograma" });
-        }
-      },
-    });
-  }
+      pushItem({
+        userId,
+        ts: new Date(m.editedTimestamp || m.createdTimestamp),
+        source,
+      });
+    },
+  });
+}
 
   // PRESENÇAS (logs)
   if (PRESENCA_LOGS_CHANNEL_ID) {

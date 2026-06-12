@@ -743,6 +743,54 @@ function getFields(emb) {
   return emb?.fields || emb?.data?.fields || [];
 }
 
+function approval_getTextBag(emb) {
+  const title = String(emb?.title || emb?.data?.title || "");
+  const desc = String(emb?.description || emb?.data?.description || "");
+  const footer = String(emb?.footer?.text || emb?.data?.footer?.text || "");
+  const fields = getFields(emb)
+    .map((f) => `${f?.name || ""}\n${f?.value || ""}`)
+    .join("\n");
+
+  return `${title}\n${desc}\n${fields}\n${footer}`;
+}
+
+function approval_isApproved(emb) {
+  const text = approval_getTextBag(emb);
+  const n = norm(text);
+
+  if (
+    n.includes("recusado") ||
+    n.includes("reprovado") ||
+    n.includes("negado")
+  ) {
+    return false;
+  }
+
+  return (
+    emb?.color === 3066993 ||
+    n.includes("aprovado por") ||
+    n.includes("aprovado")
+  );
+}
+
+function approval_getSolicitanteId(emb) {
+  const text = approval_getTextBag(emb);
+
+  const solicitanteMatch = /solicitante[\s\S]{0,120}<@!?(\d{17,20})>/i.exec(text);
+  if (solicitanteMatch) return solicitanteMatch[1];
+
+  return null;
+}
+
+function approval_getSource(emb) {
+  const text = norm(approval_getTextBag(emb));
+
+  if (text.includes("hall da fama")) return "halldafama";
+  if (text.includes("evento diario") || text.includes("evento diário")) return "eventosdiarios";
+
+  return "cronograma";
+}
+
 function gradeLabel(total) {
   if (total >= 500) return { emoji: "🏆", label: "META BATIDA" };
   if (total >= 450) return { emoji: "✨", label: "MUITO BOM" };
@@ -1875,40 +1923,33 @@ if (!uid) return;
     },
   });
 }
-// ✅ CRONOGRAMA (Aprovados)
+// ✅ CRONOGRAMA / HALL DA FAMA / EVENTOS DIÁRIOS (Aprovados)
 if (CRONOGRAMA_LOGS_CHANNEL_ID) {
   await scanChannelEmbeds(client, {
     channelId: CRONOGRAMA_LOGS_CHANNEL_ID,
     weekFloorKey,
-    maxPages: 80,
+    maxPages: 120,
     onMessage: async (m) => {
-      if (seenMessageIds.has(m.id)) return;
-      seenMessageIds.add(m.id);
+      const seenKey = `approval:${m.id}`;
+      if (seenMessageIds.has(seenKey)) return;
+
       const emb = m.embeds?.[0];
       if (!emb) return;
 
-      // Verifica se está aprovado (Verde ou footer "Aprovado por")
-      const isGreen = emb.color === 3066993; // #2ecc71
-      const footer = emb.footer?.text || "";
-      if (!isGreen && !footer.includes("Aprovado por")) return;
+      if (!approval_isApproved(emb)) return;
 
-      // Pega ID do solicitante na descrição: "**Solicitante:** <@123>"
-      const title = emb.title || "";
-      const desc = emb.description || "";
-      const match = desc.match(/Solicitante:.*?<@!?(\d+)>/i);
-      if (!match) return;
+      const userId = approval_getSolicitanteId(emb);
+      if (!userId) return;
 
-      const userId = match[1];
-      const ts = new Date(m.editedTimestamp || m.createdTimestamp);
+      const source = approval_getSource(emb);
 
-      // Diferencia Cronograma, Hall da Fama e Eventos Diários pelo título/descrição
-      if (title.includes("Hall da Fama")) {
-        pushItem({ userId, ts, source: "halldafama" });
-      } else if (title.includes("Evento Diário")) {
-        pushItem({ userId, ts, source: "eventosdiarios" });
-      } else {
-        pushItem({ userId, ts, source: "cronograma" });
-      }
+      seenMessageIds.add(seenKey);
+
+      pushItem({
+        userId,
+        ts: new Date(m.editedTimestamp || m.createdTimestamp),
+        source,
+      });
     },
   });
 }
