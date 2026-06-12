@@ -747,20 +747,25 @@ async function enviarPergunta(channel, membro, index) {
     const categoryId = String(channel.parentId || "");
     const canCountPoint = canInterviewPointCount(channel, aplicadorId);
 
-    entrevistas.delete(membro.id);
-    entrevistasAtivas.delete(channel.id);
-    await setInterviewActiveTopic(channel, false);
-    iaInterviewMarkInterviewFinished(channel, membro.id, aplicadorId);
-    await salvarEntrevistasEmDisco();
+const quemAtendeu = aplicadorId ? `<@${aplicadorId}>` : 'nossa equipe';
 
-    const quemAtendeu = aplicadorId ? `<@${aplicadorId}>` : 'nossa equipe';
+const fim = await channel.send(
+  `**Seu formulário está em análise!** ${quemAtendeu}\n\n` +
+  `*A equipe já está avaliando suas respostas com atenção, e muito em breve você receberá um retorno com a aprovação — ou não — da sua entrada.*\n\n` +
+  `**Agradecemos pela paciência e interesse em fazer parte do projeto!**\n\n` +
+  `EQUIPE - <@&1352275728476930099>`
+);
 
-    const fim = await channel.send(
-      `**Seu formulário está em análise!** ${quemAtendeu}\n\n` +
-      `*A equipe já está avaliando suas respostas com atenção, e muito em breve você receberá um retorno com a aprovação — ou não — da sua entrada.*\n\n` +
-      `**Agradecemos pela paciência e interesse em fazer parte do projeto!**\n\n` +
-      `EQUIPE - <@&1352275728476930099>`
-    );
+entrevistas.delete(membro.id);
+entrevistasAtivas.delete(channel.id);
+await setInterviewActiveTopic(channel, false);
+await salvarEntrevistasEmDisco();
+
+try {
+  iaInterviewMarkInterviewFinished(channel, membro.id, aplicadorId);
+} catch (e) {
+  console.error("[Entrevista] Falha ao marcar entrevista finalizada na IA:", e);
+}
 
     // 📢 NOTIFICA EQUIPE NO PV (ENTREVISTA FINALIZADA)
     const alertMsg = `✅ **ENTREVISTA FINALIZADA!**\n\n` +
@@ -894,7 +899,14 @@ if (logChannel) {
     entrevistas.set(membro.id, dados);
     salvarEntrevistasEmDisco(); // Tira o await
 
-    setTimeout(() => enviarPergunta(channel, membro, dados.index), 300); // Reduz de 700 para 300ms
+    setTimeout(() => {
+  enviarPergunta(channel, membro, dados.index).catch((err) => {
+    console.error("[Entrevista] Falha ao avançar/finalizar entrevista:", err);
+    channel.send(
+      `❌ A entrevista chegou ao fim, mas travou ao finalizar.\n\n**Erro:** \`${String(err?.message || err).slice(0, 800)}\``
+    ).catch(() => {});
+  });
+}, 300); // Reduz de 700 para 300ms
 
   } catch (e) {
     entrevistas.delete(membro.id);
