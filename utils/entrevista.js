@@ -9,7 +9,11 @@ import {
 } from 'discord.js';
 
 import { dashEmit } from './dashHub.js';
-import { iaInterviewEvaluateFinishedInterview } from '../events/iaChatAuto.js';
+import {
+  iaInterviewEvaluateFinishedInterview,
+  iaInterviewMarkInterviewFinished,
+  iaInterviewPauseForManualInterview
+} from '../events/iaChatAuto.js';
 
 // ===== CONFIG =====
 const ENTREVISTA_DURACAO_MIN = 180;
@@ -504,9 +508,15 @@ if (customId.startsWith('iniciar|')) {
   const membro = interaction.member || null;
   const cargoEntrevista = interaction.guild.roles.cache.get('1353797415488196770');
 
+  const topic = String(interaction.channel?.topic || "");
+  const mOpener = topic.match(/aberto_por:(\d{17,20})/i);
+  const targetId = mOpener ? mOpener[1] : interaction.user.id;
+
+  iaInterviewPauseForManualInterview(interaction.channel, targetId, interaction.user.id);
+
   const row = new ActionRowBuilder().addComponents(
   new ButtonBuilder()
-    .setCustomId(`enviar|${interaction.user.id}|${channelId}`)
+    .setCustomId(`enviar|${targetId}|${channelId}`)
     .setLabel('📩 ENVIAR PERGUNTAS')
     .setStyle(ButtonStyle.Primary)
 );
@@ -612,11 +622,13 @@ const enviada = await interaction.channel.send({
       await setInterviewActiveTopic(channel, true).catch(() => {});
       await salvarEntrevistasEmDisco().catch(() => {});
 
+      iaInterviewPauseForManualInterview(channel, targetId, entrevistadorId);
+
       await channel.send({
         content: `<@${targetId}> Bora! Vamos começar sua entrevista agora ✨`
       }).catch(() => {});
 
-      enviarPergunta(channel, membro, 0).catch(async (err) => {
+      await enviarPergunta(channel, membro, 0).catch(async (err) => {
         console.error("[Entrevista] Falha ao enviar primeira pergunta:", err);
 
         entrevistas.delete(targetId);
@@ -715,6 +727,7 @@ async function enviarPergunta(channel, membro, index) {
     entrevistas.delete(membro.id);
     entrevistasAtivas.delete(channel.id);
     await setInterviewActiveTopic(channel, false);
+    iaInterviewMarkInterviewFinished(channel, membro.id, aplicadorId);
     await salvarEntrevistasEmDisco();
 
     const quemAtendeu = aplicadorId ? `<@${aplicadorId}>` : 'nossa equipe';

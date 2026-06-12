@@ -1,6 +1,7 @@
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from 'discord.js';
 import entrevista from '../../utils/entrevista.js';
 import { dashEmit } from "../../utils/dashHub.js";
+import { iaInterviewPauseForManualInterview } from "../../events/iaChatAuto.js";
 
 const ALERT_ROLE_IDS = [
   "1282119104576098314",
@@ -94,6 +95,11 @@ export default {
     const nextTopic = `${cleanedTopic}${cleanedTopic ? " | " : ""}entrevista_aplicador:${message.author.id}`.slice(0, 1024);
 
     // Envia o botão e seta o tópico ao mesmo tempo
+// Pega as informações do tópico para identificar o candidato
+const topic = String(message.channel?.topic || "");
+const m = topic.match(/aberto_por:(\d{5,})/i);
+const openerId = m ? m[1] : "Desconhecido";
+
     await Promise.all([
       message.channel.send({
         content: `Clique no botão abaixo para iniciar a entrevista 🎤`,
@@ -102,10 +108,7 @@ export default {
       typeof message.channel.setTopic === "function" ? message.channel.setTopic(nextTopic).catch(() => {}) : Promise.resolve()
     ]);
 
-// Pega as informações do tópico para identificar o candidato
-const topic = String(message.channel?.topic || "");
-const m = topic.match(/aberto_por:(\d{5,})/i);
-const openerId = m ? m[1] : "Desconhecido";
+    iaInterviewPauseForManualInterview(message.channel, openerId, message.author.id);
 
     // --- 🛠️ NOTIFICAÇÕES EM BACKGROUND ---
     (async () => {

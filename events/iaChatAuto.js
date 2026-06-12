@@ -3206,6 +3206,9 @@ export async function iaInterviewTicketOpened(channel, openerId) {
     startedAt: Date.now(),
     active: true,
     pausedByStaff: false,
+    interviewRunning: false,
+    finished: false,
+    onlyWhenMentioned: false,
   });
 
   saveIaEntrevistaState();
@@ -3216,6 +3219,46 @@ export async function iaInterviewTicketOpened(channel, openerId) {
     `Me fala rapidinho: você quer fazer entrevista ou tirar alguma dúvida antes?`
   ).catch(() => {});
 
+  return true;
+}
+
+export function iaInterviewPauseForManualInterview(channel, openerId, staffId = null) {
+  if (!channel?.id) return false;
+  if (!isIaInterviewChannel(channel)) return false;
+
+  IA_ENTREVISTA_ACTIVE.set(channel.id, {
+    openerId: openerId || getOpenerIdFromChannel(channel) || null,
+    staffId,
+    startedAt: Date.now(),
+    active: false,
+    pausedByStaff: true,
+    interviewRunning: true,
+    finished: false,
+    onlyWhenMentioned: false,
+    pausedAt: Date.now(),
+    pausedReason: "!perguntas",
+  });
+
+  saveIaEntrevistaState();
+  return true;
+}
+
+export function iaInterviewMarkInterviewFinished(channel, openerId = null, staffId = null) {
+  if (!channel?.id) return false;
+  if (!isIaInterviewChannel(channel)) return false;
+
+  IA_ENTREVISTA_ACTIVE.set(channel.id, {
+    openerId: openerId || getOpenerIdFromChannel(channel) || null,
+    staffId,
+    finishedAt: Date.now(),
+    active: false,
+    pausedByStaff: false,
+    interviewRunning: false,
+    finished: true,
+    onlyWhenMentioned: true,
+  });
+
+  saveIaEntrevistaState();
   return true;
 }
 
@@ -4497,10 +4540,21 @@ export async function handleIaInterviewTicketMessage(message, client) {
 
   if (!isIaInterviewChannel(message.channel)) return false;
 
-  if (
-    channelHasActiveInterviewRunning(message.channel) ||
-    await channelHasRecentInterviewQuestion(message.channel, client)
-  ) {
+  const mentionedBot = client?.user?.id
+    ? message.mentions.users.has(client.user.id)
+    : false;
+
+  const currentState = IA_ENTREVISTA_ACTIVE.get(message.channelId);
+
+  if (currentState?.interviewRunning || channelHasActiveInterviewRunning(message.channel)) {
+    return true;
+  }
+
+  if (currentState?.finished && currentState?.onlyWhenMentioned && !mentionedBot) {
+    return false;
+  }
+
+  if (await channelHasRecentInterviewQuestion(message.channel, client)) {
     return true;
   }
 
@@ -4511,9 +4565,7 @@ export async function handleIaInterviewTicketMessage(message, client) {
   const member = message.member;
   const isOpener = String(message.author.id) === String(openerId);
   const isStaff = memberIsIaInterviewStaff(member);
-  const mentionedBot = client?.user?.id
-    ? message.mentions.users.has(client.user.id)
-    : false;
+
 
   let state = IA_ENTREVISTA_ACTIVE.get(message.channelId) || {
     openerId,
