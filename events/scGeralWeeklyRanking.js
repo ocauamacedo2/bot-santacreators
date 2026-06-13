@@ -1485,59 +1485,12 @@ await scanChannelEmbeds(client, {
     });
   }
 
-if (MANAGER_AUDIT_ENABLED) {
-  console.log([
-    `\n[MANAGER_AUDIT_SUMMARY - RANKING]`,
-    `totalEncontrado: ${mgrTotalFound}`,
-    `totalContado: ${mgrTotalCounted}`,
-    `totalDuplicadoIgnorado: ${mgrTotalDupIgnored}`,
-    `porCanal:`,
-    `1486084441762693291 (Arquivo): ${mgrStatsByCh[CH_MANAGER_ID] || 0}`,
-    `1392680204517769277 (Weekly): ${mgrStatsByCh[CH_MANAGER_MAIN_ID] || 0}`,
-    `----------------------------\n`
-  ].join("\n"));
-}
-
-  for (const channelId of ALINHAMENTOS_LOGS_CHANNEL_IDS) {
-    await scanChannelEmbeds(client, {
-      channelId,
-      weekFloorKey,
-      maxPages: 120,
-      onMessage: async (m) => {
-        audit.totalFound++;
-        const seenKey = `alinhamentos:${m.id}`;
-        if (seenMessageIds.has(seenKey)) return;
-        const emb = m.embeds?.[0];
-        if (!emb) return;
-        if (!isAlinhamentoRecordEmbed(emb)) return;
-        const statusAlinhamento = getStatusValueFromEmbed(emb);
-        if (!/VÁLIDO|VALIDO|APROVADO|aprovado por/i.test(statusAlinhamento)) return;
-        let uid = alinhamento_getQuemAlinhouId(emb);
-        if (!uid) {
-          // Helper extractRegistradorIdFromEmbed implementado similarmente ao dash
-          const v = getFieldValueByPrefix(emb, "registrado por") || getFieldValueByPrefix(emb, "📌 registrado por");
-          uid = String(v || "").match(/\b(\d{17,20})\b/)?.[1];
-        }
-        if (!uid) return;
-        seenMessageIds.add(seenKey);
-        audit.extractedIds++;
-        pushItem({
-          userId: uid,
-          ts: new Date(m.editedTimestamp || m.createdTimestamp),
-          source: "alinhamentos",
-        });
-      },
-    });
-  }
-
 // DOAÇÕES (logs)
   // ✅ Recontagem forte:
   // - lê todos os logs encontrados
   // - respeita "Geral/Semanal: não contou"
   // - para logs antigos, recalcula 12h por usuário
   // - não interfere no ranking mensal próprio da doação, que continua 1h
-  const lastDoacaoAtByUser = new Map();
-
   const lastDoacaoAtByUser = new Map();
   for (const channelId of DOACAO_LOGS_CHANNEL_IDS) {
     await scanChannelEmbeds(client, {
