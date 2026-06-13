@@ -2189,6 +2189,64 @@ async function resolveRankMessageForWeek(rankChannel, st, wk) {
   }
 }
 
+function getEmbedSafeLength(embed) {
+  const data = embed?.data || embed || {};
+  let total = 0;
+
+  total += String(data.title || "").length;
+  total += String(data.description || "").length;
+  total += String(data.footer?.text || "").length;
+
+  for (const field of data.fields || []) {
+    total += String(field?.name || "").length;
+    total += String(field?.value || "").length;
+  }
+
+  return total;
+}
+
+function splitEmbedsForDiscord(embeds, maxChars = 5200, maxEmbeds = 9) {
+  const batches = [];
+  let current = [];
+  let currentChars = 0;
+
+  for (const embed of embeds || []) {
+    const len = getEmbedSafeLength(embed);
+
+    if (
+      current.length &&
+      (current.length >= maxEmbeds || currentChars + len > maxChars)
+    ) {
+      batches.push(current);
+      current = [];
+      currentChars = 0;
+    }
+
+    current.push(embed);
+    currentChars += len;
+  }
+
+  if (current.length) batches.push(current);
+  return batches;
+}
+
+async function resolveExtraRankMessagesForWeek(rankChannel, st, wk) {
+  st.weeklyExtraMsgIds = st.weeklyExtraMsgIds || {};
+  const savedIds = Array.isArray(st.weeklyExtraMsgIds[wk]) ? st.weeklyExtraMsgIds[wk] : [];
+
+  const messages = [];
+
+  for (const id of savedIds) {
+    const msg = await rankChannel.messages.fetch(id).catch(() => null);
+    if (msg) messages.push(msg);
+  }
+
+  st.weeklyExtraMsgIds[wk] = messages.map((m) => m.id);
+  saveState(st);
+
+  return messages;
+}
+
 
 // ================== BUILD EMBEDS (SEM IMAGENS) ==================
 function buildRankEmbeds({ wk, wkLabel, agg, minPoints, nameMap = {} }) {
@@ -2542,6 +2600,9 @@ const sig = JSON.stringify({
 let msg = await resolveRankMessageForWeek(ch, st, wk);
 
 const embeds = buildRankEmbeds({ wk, wkLabel, agg, minPoints: MIN_POINTS_WEEK, nameMap });
+const embedBatches = splitEmbedsForDiscord(embeds, 5200, 9);
+const mainEmbeds = embedBatches[0] || [];
+const extraEmbedBatches = embedBatches.slice(1);
 
 // 🔘 BOTÃO (UMA ÚNICA VEZ)
 const row = new ActionRowBuilder().addComponents(
@@ -2551,9 +2612,59 @@ const row = new ActionRowBuilder().addComponents(
     .setStyle(ButtonStyle.Danger)
 );
 
+async function upsertExtraRankMessages() {
+  const oldExtras = await resolveExtraRankMessagesForWeek(ch, st, wk);
+  const nextExtraIds = [];
+
+  for (let i = 0; i < extraEmbedBatches.length; i++) {
+    const batch = extraEmbedBatches[i];
+    const oldMsg = oldExtras[i] || null;
+
+    if (oldMsg?.editable) {
+      const edited = await oldMsg.edit({
+        embeds: batch,
+        components: [],
+      }).catch(async (e) => {
+        console.warn(`[SC_GERAL_WEEKLY_RANK] ⚠️ Falha ao editar continuação ${i + 1}. Recriando:`, e?.message || e);
+
+        return await ch.send({
+          embeds: batch,
+          components: [],
+        }).catch((err) => {
+          console.error(`[SC_GERAL_WEEKLY_RANK] ❌ Erro ao recriar continuação ${i + 1}:`, err);
+          return null;
+        });
+      });
+
+      if (edited?.id) nextExtraIds.push(edited.id);
+      continue;
+    }
+
+    const created = await ch.send({
+      embeds: batch,
+      components: [],
+    }).catch((e) => {
+      console.error(`[SC_GERAL_WEEKLY_RANK] ❌ Erro ao criar continuação ${i + 1}:`, e);
+      return null;
+    });
+
+    if (created?.id) nextExtraIds.push(created.id);
+  }
+
+  for (let i = extraEmbedBatches.length; i < oldExtras.length; i++) {
+    await oldExtras[i].delete().catch(() => {});
+  }
+
+  st.weeklyExtraMsgIds = st.weeklyExtraMsgIds || {};
+  st.weeklyExtraMsgIds[wk] = nextExtraIds;
+  saveState(st);
+
+  return true;
+}
+
 async function sendNewRankMessage() {
   const created = await ch.send({
-    embeds,
+    embeds: mainEmbeds,
     components: [row],
   }).catch((e) => {
     console.error("[SC_GERAL_WEEKLY_RANK] ❌ Erro ao criar nova msg:", e);
@@ -2567,6 +2678,8 @@ async function sendNewRankMessage() {
   st.sigByWeek[wk] = sig;
   saveState(st);
 
+  await upsertExtraRankMessages();
+
   return created;
 }
 
@@ -2576,17 +2689,19 @@ async function editRankMessageWithFallback(targetMsg, label = "edit") {
     return await sendNewRankMessage();
   }
 
-  // ✅ Se não mudou nada, não precisa editar.
-  // Isso evita PATCH desnecessário e evita erro 500 do Discord quando o painel já está igual.
   if (label === "sem mudança") {
+    await upsertExtraRankMessages();
     return targetMsg;
   }
 
   try {
-    return await targetMsg.edit({
-      embeds,
+    const edited = await targetMsg.edit({
+      embeds: mainEmbeds,
       components: [row],
     });
+
+    await upsertExtraRankMessages();
+    return edited;
   } catch (e) {
     console.warn(`[SC_GERAL_WEEKLY_RANK] ⚠️ Falha temporária ao editar msg (${label}). Tentando retry em 2.5s:`, e?.message || e);
   }
@@ -2594,10 +2709,13 @@ async function editRankMessageWithFallback(targetMsg, label = "edit") {
   await new Promise((resolve) => setTimeout(resolve, 2500));
 
   try {
-    return await targetMsg.edit({
-      embeds,
+    const edited = await targetMsg.edit({
+      embeds: mainEmbeds,
       components: [row],
     });
+
+    await upsertExtraRankMessages();
+    return edited;
   } catch (e2) {
     console.warn(`[SC_GERAL_WEEKLY_RANK] ⚠️ Retry falhou (${label}). Vou recriar msg:`, e2?.message || e2);
   }
@@ -2627,6 +2745,7 @@ if (editedOrRecreated.id && editedOrRecreated.id !== msg.id) {
 
 saveState(st);
 return true; // ✅ Sucesso
+
 
 
   } catch (e) {
