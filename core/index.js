@@ -831,6 +831,14 @@ client.once("ready", async () => {
   if (client.__coreBootState.readyBootExecuted) return;
   client.__coreBootState.readyBootExecuted = true;
 
+  // 🚀 PRIORIDADE MÁXIMA: Entrar na call antes de carregar módulos pesados
+  try {
+    console.log("[CORE] PRIORIDADE MÁXIMA: Iniciando AutoJoin.");
+    iniciarAutoJoin(client);
+  } catch (e) {
+    console.error("[CORE] Erro AutoJoin:", e);
+  }
+
   try {
     console.log("[CORE] PRIORIDADE: iniciando FiveM Retention Status.");
     await fivemRetentionStatusOnReady(client);
@@ -848,13 +856,6 @@ client.once("ready", async () => {
     console.log("[CORE] GeralDash + Ranking iniciados com prioridade.");
   } catch (e) {
     console.error("[BOOT] Erro ao iniciar GeralDash/Ranking com prioridade:", e);
-  }
-
-  try {
-    console.log("[CORE] Iniciando AutoJoin.");
-    iniciarAutoJoin(client);
-  } catch (e) {
-    console.error("[CORE] Erro AutoJoin:", e);
   }
 
     try {

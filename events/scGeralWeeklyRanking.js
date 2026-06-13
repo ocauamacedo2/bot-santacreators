@@ -2373,17 +2373,35 @@ const bottomLines = bottom.map((u, i) => {
   }
 
   // ===== MENOS PONTUARAM =====
-  embeds.push(
-    new EmbedBuilder()
-      .setColor(0xf59e0b)
-      .setTitle("⚠️ Menos pontuaram (mas pontuaram)")
-      .setDescription(bottomLines.length ? bottomLines.join("\n\n") : "_(vazio)_")
-      .addFields(
-        { name: "📌 Regra da semana", value: `Fez **${minPoints}+** = ✅ bateu o mínimo`, inline: true },
-        { name: "🔥 Dica rápida", value: "Mistura fontes (pagamentos + poderes + etc) pra subir rápido", inline: true }
-      )
-      .setFooter({ text: marker })
-  );
+  const pagesBottom = chunkLines(bottomLines, 3000);
+
+  if (!pagesBottom.length) {
+    embeds.push(
+      new EmbedBuilder()
+        .setColor(0xf59e0b)
+        .setTitle("⚠️ Menos pontuaram (mas pontuaram)")
+        .setDescription("_(vazio)_")
+        .addFields(
+          { name: "📌 Regra da semana", value: `Fez **${minPoints}+** = ✅ bateu o mínimo`, inline: true },
+          { name: "🔥 Dica rápida", value: "Mistura fontes (pagamentos + poderes + etc) pra subir rápido", inline: true }
+        )
+        .setFooter({ text: marker })
+    );
+  } else {
+    for (let i = 0; i < pagesBottom.length; i++) {
+      embeds.push(
+        new EmbedBuilder()
+          .setColor(0xf59e0b)
+          .setTitle(`⚠️ Menos pontuaram (mas pontuaram) — pág ${i + 1}/${pagesBottom.length}`)
+          .setDescription(pagesBottom[i])
+          .addFields(
+            { name: "📌 Regra da semana", value: `Fez **${minPoints}+** = ✅ bateu o mínimo`, inline: true },
+            { name: "🔥 Dica rápida", value: "Mistura fontes (pagamentos + poderes + etc) pra subir rápido", inline: true }
+          )
+          .setFooter({ text: marker })
+      );
+    }
+  }
 
   // ===== RANKING COMPLETO (compacto) — sem cortar com "..." =====
   const pagesFull = chunkLines(allLines, 3800);
@@ -2557,14 +2575,45 @@ if (!msg) {
   return true; // ✅ Sucesso
 }
 
-// ✅ AQUI É ONDE VOCÊ PERGUNTOU
-await msg.edit({
-  embeds,
-  components: [row],
-}).catch((e) => {
-  console.error("[SC_GERAL_WEEKLY_RANK] ❌ Erro ao editar msg final:", e);
-  return null;
-});
+// ✅ Edita com retry e fallback.
+// Se o Discord devolver 500, tenta de novo.
+// Se ainda falhar, cria uma nova mensagem e atualiza o state.
+let edited = null;
+
+try {
+  edited = await msg.edit({
+    embeds,
+    components: [row],
+  });
+} catch (e) {
+  console.error("[SC_GERAL_WEEKLY_RANK] ❌ Erro ao editar msg final. Tentando retry:", e);
+
+  await new Promise((resolve) => setTimeout(resolve, 2500));
+
+  try {
+    edited = await msg.edit({
+      embeds,
+      components: [row],
+    });
+  } catch (e2) {
+    console.error("[SC_GERAL_WEEKLY_RANK] ❌ Retry falhou. Vou criar nova msg:", e2);
+  }
+}
+
+if (!edited) {
+  const recreated = await ch.send({
+    embeds,
+    components: [row],
+  }).catch((e) => {
+    console.error("[SC_GERAL_WEEKLY_RANK] ❌ Erro ao recriar msg após falha no edit:", e);
+    return null;
+  });
+
+  if (!recreated) return false;
+
+  st.weeklyMsgIds = st.weeklyMsgIds || {};
+  st.weeklyMsgIds[wk] = recreated.id;
+}
 
 st.sigByWeek[wk] = sig;
 saveState(st);
