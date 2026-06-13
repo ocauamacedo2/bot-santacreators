@@ -1625,9 +1625,11 @@ async function collectAllGeneral(client, mode = "light") {
   const wkNow = weekKeyFromDateSP(nowSP());
   const weekFloorKey = addDaysToWeekKey(wkNow, -35);
   const now = Date.now();
-  const seenMessageIds = new Set(); // ✅ Declaração necessária para deduplicação
+
+  const seenMessageIds = new Set();
+  const seenManagerStableKeys = new Set();
+  const lastDoacaoAtByUser = new Map();
   const auditor = new GeralAudit();
-  const seenManagerStableKeys = new Set(); // ✅ dedupe real para Manager copiado em canais diferentes
 
   // ✅ trava própria do scan (se quiser evitar scans simultâneos)
   if (SCAN_LOCK) {

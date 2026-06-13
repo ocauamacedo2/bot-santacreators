@@ -1309,8 +1309,10 @@ function venda_getSellerId(emb) {
 // ================== COLLECT (MESMA IDEIA DO TEU items[]) ==================
 async function collectAllPoints(client, mode = "light") {
   const now = Date.now();
-  const seenMessageIds = new Set(); // ✅ Declaração necessária para deduplicação
-  const seenManagerStableKeys = new Set(); // ✅ Deduplicação real por conteúdo
+
+  const seenMessageIds = new Set();
+  const seenManagerStableKeys = new Set();
+  const lastDoacaoAtByUser = new Map();
 
   if (mode === "light" && CACHE.payload && now - CACHE.at < SCAN_TTL_MS) {
     // reconstrói debug weekkeys
@@ -1335,10 +1337,14 @@ const pushItem = (item) => {
 
   if (client?.user?.id && userId === String(client.user.id)) {
     auditor.reject(source, "bot_self_point");
+    audit.rejected.bot_self_point = (audit.rejected.bot_self_point || 0) + 1;
     return;
   }
 
   auditor.addStats(source, "counted");
+
+  audit.extractedIds++;
+  audit.sources[source] = (audit.sources[source] || 0) + 1;
 
   items.push({
     ...item,
@@ -1346,7 +1352,6 @@ const pushItem = (item) => {
     source,
   });
 };
-
   // floor = volta 5 semanas (pra manter leve)
   const wkNow = weekKeyFromDateSP(new Date());
   const weekFloorKey = addDaysToWeekKey(wkNow, -35);
@@ -1549,8 +1554,7 @@ for (const channelId of ALINHAMENTOS_LOGS_CHANNEL_IDS) {
   // - respeita "Geral/Semanal: não contou"
   // - para logs antigos, recalcula 12h por usuário
   // - não interfere no ranking mensal próprio da doação, que continua 1h
-  const lastDoacaoAtByUser = new Map();
-  for (const channelId of DOACAO_LOGS_CHANNEL_IDS) {
+for (const channelId of DOACAO_LOGS_CHANNEL_IDS) {
     await scanChannelEmbeds(client, {
       channelId,
       weekFloorKey,
