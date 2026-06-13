@@ -211,6 +211,139 @@ export const GERAL_PARSERS = {
             : GERAL_PARSERS.extractId(GERAL_PARSERS.getEmbedText(emb));
     },
 
+    isManagerApproved: (emb) => {
+        const text = GERAL_PARSERS.getEmbedText(emb);
+        const fields = GERAL_PARSERS.getFields(emb);
+
+        return (
+            fields.some((f) => GERAL_PARSERS.norm(f?.name).includes("aprovado por")) ||
+            text.includes("aprovado por") ||
+            text.includes("aprovado")
+        );
+    },
+
+    isManagerRejected: (emb) => {
+        const text = GERAL_PARSERS.getEmbedText(emb);
+        const fields = GERAL_PARSERS.getFields(emb);
+
+        return (
+            fields.some((f) => GERAL_PARSERS.norm(f?.name).includes("reprovado por")) ||
+            text.includes("reprovado por") ||
+            text.includes("reprovado") ||
+            text.includes("recusado") ||
+            text.includes("negado")
+        );
+    },
+
+    getEventoPoderRegistrarId: (emb) => {
+        return GERAL_PARSERS.getEventoRegistrarId(emb);
+    },
+
+    isConvite: (emb) => {
+        const text = GERAL_PARSERS.getEmbedText(emb);
+        const title = GERAL_PARSERS.norm(emb?.title || emb?.data?.title || "");
+
+        return (
+            title.includes("convite enviado") ||
+            text.includes("convite enviado") ||
+            text.includes("convites")
+        );
+    },
+
+    getConviteSenderId: (emb) => {
+        const fields = GERAL_PARSERS.getFields(emb);
+
+        const f =
+            fields.find((x) => GERAL_PARSERS.norm(x?.name).includes("quem convidou")) ||
+            fields.find((x) => GERAL_PARSERS.norm(x?.name).includes("enviado por")) ||
+            fields.find((x) => GERAL_PARSERS.norm(x?.name).includes("registrado por")) ||
+            fields.find((x) => GERAL_PARSERS.norm(x?.name).includes("autor"));
+
+        return f
+            ? GERAL_PARSERS.extractId(String(f.value || ""))
+            : GERAL_PARSERS.extractId(GERAL_PARSERS.getEmbedText(emb));
+    },
+
+    isPresenca: (emb) => {
+        const text = GERAL_PARSERS.getEmbedText(emb);
+        return (
+            text.includes("presenca") ||
+            text.includes("presença") ||
+            text.includes("confirmacao de presenca") ||
+            text.includes("confirmação de presença")
+        );
+    },
+
+    isPresencaConfirmed: (emb) => {
+        const text = GERAL_PARSERS.getEmbedText(emb);
+
+        if (
+            text.includes("cancelado") ||
+            text.includes("reprovado") ||
+            text.includes("nao confirmado") ||
+            text.includes("não confirmado")
+        ) {
+            return false;
+        }
+
+        return (
+            text.includes("confirmado") ||
+            text.includes("confirmada") ||
+            text.includes("presenca confirmada") ||
+            text.includes("presença confirmada")
+        );
+    },
+
+    isCronogramaApproved: (emb) => {
+        const text = GERAL_PARSERS.getEmbedText(emb);
+        const color = emb?.color || emb?.data?.color;
+
+        if (
+            text.includes("recusado") ||
+            text.includes("reprovado") ||
+            text.includes("negado")
+        ) {
+            return false;
+        }
+
+        return (
+            color === 3066993 ||
+            text.includes("aprovado por") ||
+            text.includes("aprovado") ||
+            text.includes("hall da fama aprovado") ||
+            text.includes("evento diario aprovado") ||
+            text.includes("evento diário aprovado")
+        );
+    },
+
+    isEntrevistaConcluida: (emb) => {
+        const text = GERAL_PARSERS.getEmbedText(emb);
+        const title = GERAL_PARSERS.norm(emb?.title || emb?.data?.title || "");
+
+        return (
+            title.includes("entrevista") ||
+            text.includes("entrevista concluida") ||
+            text.includes("entrevista concluída") ||
+            text.includes("entrevista iniciada") ||
+            text.includes("!perguntas usado")
+        );
+    },
+
+    getEntrevistaConcluidaUserId: (emb) => {
+        const fields = GERAL_PARSERS.getFields(emb);
+
+        const f =
+            fields.find((x) => GERAL_PARSERS.norm(x?.name).includes("responsavel")) ||
+            fields.find((x) => GERAL_PARSERS.norm(x?.name).includes("responsável")) ||
+            fields.find((x) => GERAL_PARSERS.norm(x?.name).includes("registrado por")) ||
+            fields.find((x) => GERAL_PARSERS.norm(x?.name).includes("autor")) ||
+            fields.find((x) => GERAL_PARSERS.norm(x?.name).includes("staff"));
+
+        return f
+            ? GERAL_PARSERS.extractId(String(f.value || ""))
+            : GERAL_PARSERS.extractId(GERAL_PARSERS.getEmbedText(emb));
+    },
+
     // --- DOACOES ---
     isDoacao: (emb) => {
         const text = GERAL_PARSERS.getEmbedText(emb);
