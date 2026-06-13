@@ -2247,6 +2247,40 @@ async function resolveExtraRankMessagesForWeek(rankChannel, st, wk) {
   return messages;
 }
 
+async function cleanupDuplicateRankMessagesForWeek(rankChannel, keepMsg, wk) {
+  try {
+    const marker = `${RANK_MARKER_PREFIX}${wk}`;
+    const keepId = String(keepMsg?.id || "");
+
+    let lastId;
+
+    for (let p = 0; p < RANK_FIND_PAGES; p++) {
+      const batch = await rankChannel.messages.fetch({ limit: 100, before: lastId }).catch(() => null);
+      if (!batch?.size) break;
+
+      for (const msg of batch.values()) {
+        if (String(msg.author?.id || "") !== String(rankChannel.client?.user?.id || "")) continue;
+        if (String(msg.id) === keepId) continue;
+
+        const embeds = Array.isArray(msg.embeds) ? msg.embeds : [];
+        const hasMarker = embeds.some((emb) => {
+          const footer = String(emb?.footer?.text || emb?.data?.footer?.text || "");
+          return footer.includes(marker);
+        });
+
+        if (hasMarker) {
+          await msg.delete().catch(() => {});
+        }
+      }
+
+      lastId = batch.last()?.id;
+      if (!lastId) break;
+    }
+  } catch (e) {
+    console.warn("[SC_GERAL_WEEKLY_RANK] Falha ao limpar duplicados:", e?.message || e);
+  }
+}
+
 
 // ================== BUILD EMBEDS (SEM IMAGENS) ==================
 function buildRankEmbeds({ wk, wkLabel, agg, minPoints, nameMap = {} }) {
@@ -2281,7 +2315,7 @@ const bottomLines = bottom.map((u, i) => {
   return `🔻 **${i + 1}.** <@${u.userId}> — ${fmtPts(u.points)}${extra}`;
 });
 
-  const allLines = list.map((u, i) => `**${i + 1}.** <@${u.userId}> — ${fmtPts(u.points)}`);
+js
 
   const embeds = [];
 
@@ -2460,28 +2494,6 @@ const bottomLines = bottom.map((u, i) => {
             { name: "📌 Regra da semana", value: `Fez **${minPoints}+** = ✅ bateu o mínimo`, inline: true },
             { name: "🔥 Dica rápida", value: "Mistura fontes (pagamentos + poderes + etc) pra subir rápido", inline: true }
           )
-          .setFooter({ text: marker })
-      );
-    }
-  }
-
-  // ===== RANKING COMPLETO (compacto) — sem cortar com "..." =====
-  const pagesFull = chunkLines(allLines, 3800);
-  if (!pagesFull.length) {
-    embeds.push(
-      new EmbedBuilder()
-        .setColor(0x2b2d31)
-        .setTitle("📜 Ranking completo (ordem)")
-        .setDescription("_(vazio)_")
-        .setFooter({ text: marker })
-    );
-  } else {
-    for (let i = 0; i < pagesFull.length; i++) {
-      embeds.push(
-        new EmbedBuilder()
-          .setColor(0x2b2d31)
-          .setTitle(`📜 Ranking completo (ordem) — pág ${i + 1}/${pagesFull.length}`)
-          .setDescription(pagesFull[i])
           .setFooter({ text: marker })
       );
     }
@@ -2734,6 +2746,8 @@ const editedOrRecreated = await editRankMessageWithFallback(
 );
 
 if (!editedOrRecreated) return false;
+
+await cleanupDuplicateRankMessagesForWeek(ch, editedOrRecreated, wk);
 
 st.sigByWeek = st.sigByWeek || {};
 st.sigByWeek[wk] = sig;
