@@ -1211,8 +1211,22 @@ function correcaoWasScored(emb) {
   return f && (f.value.includes("✅") || f.value.includes("+1"));
 }
 function correcao_getUserId(emb) {
-  const f = getFields(emb).find(x => norm(x?.name).includes("staff que corrigiu"));
-  return f ? (pickFirstMentionId(f.value) || pickFirstIdLoose(f.value)) : null;
+  const fields = getFields(emb);
+
+  const f = fields.find(x => {
+    const n = norm(x?.name);
+    return (
+      n.includes("creator que corrigiu") ||
+      n.includes("staff que corrigiu") ||
+      n.includes("quem corrigiu") ||
+      n.includes("corrigiu") ||
+      n.includes("corretor")
+    );
+  });
+
+  if (f) return pickFirstMentionId(f.value) || pickFirstIdLoose(f.value);
+
+  return pickFirstMentionId(getEmbedTextBag(emb)) || pickFirstIdLoose(getEmbedTextBag(emb));
 }
 
 function pickFirstMentionId(text) {
@@ -1906,14 +1920,24 @@ for (const it of weekItemsForAudit) {
   sourcesWeekAudit[it.source] = (sourcesWeekAudit[it.source] || 0) + 1;
 }
 
-console.log("━━━━━━━━━━━━━━━━━━━━━━━");
-console.log("🛡️ AUDITORIA FINAL DE SCAN (RANKING)");
-console.log(`TOTAL MSGS ANALISADAS: ${audit.totalFound}`);
-console.log(`TOTAL IDs EXTRAÍDOS BRUTO: ${audit.extractedIds}`);
-console.log(`TOTAL REAL DA SEMANA: ${weekItemsForAudit.length}`);
-console.log("RANKING POR FONTE DA SEMANA:", sourcesWeekAudit);
-console.log("REJEITADOS POR MOTIVO:", audit.rejected);
-console.log("━━━━━━━━━━━━━━━━━━━━━━━");
+globalThis.__SC_GERAL_RANK_LAST_AUDIT_LOG_AT__ =
+  globalThis.__SC_GERAL_RANK_LAST_AUDIT_LOG_AT__ || 0;
+
+const RANK_AUDIT_LOG_EVERY_MS = 30 * 60 * 1000;
+const nowAuditLog = Date.now();
+
+if (nowAuditLog - globalThis.__SC_GERAL_RANK_LAST_AUDIT_LOG_AT__ >= RANK_AUDIT_LOG_EVERY_MS) {
+  globalThis.__SC_GERAL_RANK_LAST_AUDIT_LOG_AT__ = nowAuditLog;
+
+  console.log("━━━━━━━━━━━━━━━━━━━━━━━");
+  console.log("🛡️ AUDITORIA FINAL DE SCAN (RANKING)");
+  console.log(`TOTAL MSGS ANALISADAS: ${audit.totalFound}`);
+  console.log(`TOTAL IDs EXTRAÍDOS BRUTO: ${audit.extractedIds}`);
+  console.log(`TOTAL REAL DA SEMANA: ${weekItemsForAudit.length}`);
+  console.log("RANKING POR FONTE DA SEMANA:", sourcesWeekAudit);
+  console.log("REJEITADOS POR MOTIVO:", audit.rejected);
+  console.log("━━━━━━━━━━━━━━━━━━━━━━━");
+}
 
   const payload = { items };
   CACHE = { at: now, payload };
@@ -1975,7 +1999,6 @@ function aggregateWeekDetailed(items, weekKey) {
     ...Object.keys(totalByUser),
     ...Object.keys(weekAdjustments),
   ]);
-
   const list = [];
   let totalPoints = 0;
 
@@ -2565,18 +2588,38 @@ function wireHub(client) {
   if (client.__scGeralWeeklyRankHubWired) return;
   client.__scGeralWeeklyRankHubWired = true;
 
-  const markDirty = (opts = {}) => {
-    DIRTY = true;
-    // se mexe no ranking (quase tudo), invalida cache
-    if (opts.invalidateScanCache) {
-      CACHE = { at: 0, payload: null };
-      DEBUG.weekKeysFound = {};
+const markDirty = (opts = {}) => {
+  DIRTY = true;
+  if (opts.invalidateScanCache) {
+    CACHE = { at: 0, payload: null };
+    DEBUG.weekKeysFound = {};
+  }
+};
+
+const scheduleFastSync = () => {
+  if (client.__SC_GERAL_RANK_FAST_SYNC_TIMER__) {
+    clearTimeout(client.__SC_GERAL_RANK_FAST_SYNC_TIMER__);
+  }
+
+  client.__SC_GERAL_RANK_FAST_SYNC_TIMER__ = setTimeout(async () => {
+    client.__SC_GERAL_RANK_FAST_SYNC_TIMER__ = null;
+
+    try {
+      clearWeeklyRankCache();
+      await safeUpdate(client, "hub fast sync", { scanMode: "full" });
+      DIRTY = false;
+    } catch (e) {
+      console.error("[SC_GERAL_WEEKLY_RANK] erro no fast sync:", e);
     }
-  };
+  }, 5000);
+};
 
   // eventos que mexem no ranking (tudo que vira log / msg / registro)
 dashOn("bp:punch", () => markDirty({ invalidateScanCache: true }));
-dashOn("doacao:registrada", () => markDirty({ invalidateScanCache: true }));
+dashOn("doacao:registrada", () => {
+  markDirty({ invalidateScanCache: true });
+  scheduleFastSync();
+});
 dashOn("lideres:convite_enviado", () => markDirty({ invalidateScanCache: true }));
 dashOn("entrevista:ponto_concluido", () => markDirty({ invalidateScanCache: true }));
 dashOn("presenca:confirmada", () => markDirty({ invalidateScanCache: true }));
@@ -2594,10 +2637,16 @@ dashOn("pagamento:solicitado", () => markDirty({ invalidateScanCache: true }));
 dashOn("pagamento:pago", () => markDirty({ invalidateScanCache: true }));
 dashOn("pagamento:reprovado", () => markDirty({ invalidateScanCache: true }));
 dashOn("venda:registrada", () => markDirty({ invalidateScanCache: true }));
-dashOn("cronograma:aprovado", () => markDirty({ invalidateScanCache: true }));
+dashOn("cronograma:aprovado", () => {
+  markDirty({ invalidateScanCache: true });
+  scheduleFastSync();
+});
 dashOn("halldafama:aprovado", () => markDirty({ invalidateScanCache: true }));
 dashOn("eventosdiarios:aprovado", () => markDirty({ invalidateScanCache: true }));
-dashOn("correcao:usado", () => markDirty({ invalidateScanCache: true }));
+dashOn("correcao:usado", () => {
+  markDirty({ invalidateScanCache: true });
+  scheduleFastSync();
+});
 dashOn("gi:desligado", () => markDirty({ invalidateScanCache: true }));
 dashOn("gi:retornou", () => markDirty({ invalidateScanCache: true }));
 
@@ -2952,7 +3001,7 @@ export async function geralWeeklyRankOnReady(client) {
   wireWeekFlipScheduler(client);
 
   // primeira render assim que subir
-  await safeUpdate(client, "boot (light)", { scanMode: "light" });
+  await safeUpdate(client, "boot full scan", { scanMode: "full" });
   DIRTY = false;
 }
 

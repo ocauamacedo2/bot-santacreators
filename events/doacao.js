@@ -928,17 +928,15 @@ const embedBase = new EmbedBuilder()
         // Só emite quando realmente contou no Geral/Semanal 12h
         // e depois que o log já existe no canal.
         if (shouldEmitDash && logMsg) {
-          if (shouldEmitDash) {
-            try {
-              dashEmit("doacao:registrada", {
-                userId: interaction.user.id,
-                __at: Date.now(),
-                source: "doacoes",
-                scored,
-                exempt,
-              });
-            } catch {}
-          }
+          try {
+            dashEmit("doacao:registrada", {
+              userId: interaction.user.id,
+              __at: Date.now(),
+              source: "doacoes",
+              scored,
+              exempt,
+            });
+          } catch {}
         }
 
         // ✅ Ranking FIXO: atualiza sempre (mesmo se não pontuar, pra manter painel vivo)

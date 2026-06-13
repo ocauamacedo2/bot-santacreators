@@ -486,7 +486,17 @@ async function validateSourceConsistency(client, items, weekKey) {
     `TOTAL FINAL......... ${items.filter(x => weekKeyFromDateSP(x.ts) === weekKey).length + totalAdj}`
   ].join("\n");
 
-  console.log(`[SC_GERAL_DASH] Auditoria Interna:\n${report}`);
+  const now = Date.now();
+  globalThis.__SC_GERAL_DASH_LAST_AUDIT_LOG_AT__ =
+    globalThis.__SC_GERAL_DASH_LAST_AUDIT_LOG_AT__ || 0;
+
+  const AUDIT_LOG_EVERY_MS = 30 * 60 * 1000;
+
+  if (now - globalThis.__SC_GERAL_DASH_LAST_AUDIT_LOG_AT__ >= AUDIT_LOG_EVERY_MS) {
+    globalThis.__SC_GERAL_DASH_LAST_AUDIT_LOG_AT__ = now;
+    console.log(`[SC_GERAL_DASH] Auditoria Interna:\n${report}`);
+  }
+
   return scanStats;
 }
 
@@ -2331,12 +2341,9 @@ function canCountDoacaoInGeralScan({ emb, message, lastDoacaoAtByUser, uid }) {
   const ts = getDoacaoScanTimestamp(message);
   const lastAt = Number(lastDoacaoAtByUser.get(uid) || 0);
 
-  // ✅ Correção Profissional: 
-  // Se mudou o dia (SP) OU se passou mais de 1 hora, deve contar.
-  const dateTs = new Date(ts).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
-  const dateLast = new Date(lastAt).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
-
-  if (lastAt && dateTs === dateLast && Math.abs(ts - lastAt) < (60 * 60 * 1000)) return false;
+  // ✅ GeralDash/Semanal: só conta 1 doação por pessoa a cada 12h.
+  // Usa Math.abs porque o Discord pode escanear do mais novo para o mais antigo.
+  if (lastAt && Math.abs(ts - lastAt) < DOACAO_GERAL_SCAN_COOLDOWN_MS) return false;
 
   lastDoacaoAtByUser.set(uid, ts);
   return true;
@@ -2533,8 +2540,22 @@ function correcaoWasScored(emb) {
   return f && (f.value.includes("✅") || f.value.includes("+1"));
 }
 function correcao_getUserId(emb) {
-  const f = getFields(emb).find(x => norm(x?.name).includes("staff que corrigiu"));
-  return f ? (pickFirstMentionId(f.value) || pickFirstIdLoose(f.value)) : null;
+  const fields = getFields(emb);
+
+  const f = fields.find(x => {
+    const n = norm(x?.name);
+    return (
+      n.includes("creator que corrigiu") ||
+      n.includes("staff que corrigiu") ||
+      n.includes("quem corrigiu") ||
+      n.includes("corrigiu") ||
+      n.includes("corretor")
+    );
+  });
+
+  if (f) return pickFirstMentionId(f.value) || pickFirstIdLoose(f.value);
+
+  return pickFirstMentionId(getEmbedTextBag(emb)) || pickFirstIdLoose(getEmbedTextBag(emb));
 }
 
 // ✅ NOVO: PARSERS PARA PONTO DE ENTREVISTA
@@ -3613,16 +3634,32 @@ function wireHub(client) {
   if (client.__scGeralDashHubWired) return;
   client.__scGeralDashHubWired = true;
 
-  const markDirty = (opts = {}) => {
+const markDirty = (opts = {}) => {
   DIRTY = true;
   if (opts.invalidateScanCache) clearGeneralDashCache();
 
-  // ✅ FIX: se a mudança pode afetar o Top 3 / total do scan,
-  // invalida o cache pra atualizar "na hora".
   if (opts.invalidateScanCache) {
     CACHE = { at: 0, payload: null };
     DEBUG.weekKeysFound = {};
   }
+};
+
+const scheduleFastSync = () => {
+  if (client.__SC_GERAL_DASH_FAST_SYNC_TIMER__) {
+    clearTimeout(client.__SC_GERAL_DASH_FAST_SYNC_TIMER__);
+  }
+
+  client.__SC_GERAL_DASH_FAST_SYNC_TIMER__ = setTimeout(async () => {
+    client.__SC_GERAL_DASH_FAST_SYNC_TIMER__ = null;
+
+    try {
+      clearGeneralDashCache();
+      await safeUpdate(client, "hub fast sync", { scanMode: "full", emitLog: false });
+      DIRTY = false;
+    } catch (e) {
+      console.error("[SC_GERAL_DASH] erro no fast sync:", e);
+    }
+  }, 5000);
 };
 
 // ✅ BATE PONTO -> altera ranking (scan)
@@ -3689,17 +3726,10 @@ dashOn("bp:sync", async (p) => {
 
 
 
-  dashOn("doacao:registrada", (p) => {
-    try {
-      const st = loadState();
-      const wk = weekKeyFromDateSP(new Date(p.__at || Date.now()));
-      bumpWeekly(st, "doacoes", wk, 1);
-      saveState(st);
-    } catch {}
-
-    // ✅ altera ranking/total via scan do log já enviado pelo doacao.js
-    markDirty({ invalidateScanCache: true });
-  });
+dashOn("doacao:registrada", () => {
+  markDirty({ invalidateScanCache: true });
+  scheduleFastSync();
+});
   
 
   dashOn("lideres:convite_enviado", (p) => {
@@ -3726,15 +3756,10 @@ dashOn("bp:sync", async (p) => {
   });
 
   // ✅ CRONOGRAMA
-  dashOn("cronograma:aprovado", (p) => {
-    try {
-      const st = loadState();
-      const wk = weekKeyFromDateSP(new Date(p.at || Date.now()));
-      bumpWeekly(st, "cronograma", wk, 1);
-      saveState(st);
-    } catch {}
-    markDirty({ invalidateScanCache: true });
-  });
+dashOn("cronograma:aprovado", () => {
+  markDirty({ invalidateScanCache: true });
+  scheduleFastSync();
+});
 
   // ✅ HALL DA FAMA
   dashOn("halldafama:aprovado", (p) => {
@@ -3770,15 +3795,10 @@ dashOn("bp:sync", async (p) => {
   });
 
   // ✅ CORREÇÃO
-  dashOn("correcao:usado", (p) => {
-    try {
-      const st = loadState();
-      const wk = weekKeyFromDateSP(new Date(p.__at || Date.now()));
-      bumpWeekly(st, "correcao", wk, 1);
-      saveState(st);
-    } catch {}
-    markDirty({ invalidateScanCache: true });
-  });
+dashOn("correcao:usado", () => {
+  markDirty({ invalidateScanCache: true });
+  scheduleFastSync();
+});
 
   dashOn("evt3:criado", (p) => {
     markDirty({ invalidateScanCache: true });

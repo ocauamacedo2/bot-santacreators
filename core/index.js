@@ -840,6 +840,17 @@ client.once("ready", async () => {
   }
 
   try {
+    console.log("[CORE] PRIORIDADE: iniciando GeralDash + Ranking.");
+    if (typeof geralDash?.geralDashOnReady === "function" && !client.__SC_GERAL_DASH_READY_RAN_V3__) {
+      await geralDash.geralDashOnReady(client);
+    }
+    await geralWeeklyRankOnReady(client);
+    console.log("[CORE] GeralDash + Ranking iniciados com prioridade.");
+  } catch (e) {
+    console.error("[BOOT] Erro ao iniciar GeralDash/Ranking com prioridade:", e);
+  }
+
+  try {
     console.log("[CORE] Iniciando AutoJoin.");
     iniciarAutoJoin(client);
   } catch (e) {
@@ -886,16 +897,6 @@ client.once("ready", async () => {
     } catch (e) {}
     try {
       await payEvtDashOnReady(client);
-    } catch (e) {}
-
-    try {
-      if (typeof geralDash?.geralDashOnReady === "function" && !client.__SC_GERAL_DASH_READY_RAN_V3__) {
-        await geralDash.geralDashOnReady(client);
-      }
-    } catch (e) {}
-
-    try {
-      await geralWeeklyRankOnReady(client);
     } catch (e) {}
 
     console.log(`✅ Bot pronto como ${client.user.tag}`);
