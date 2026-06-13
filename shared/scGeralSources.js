@@ -310,6 +310,8 @@ export const GERAL_PARSERS = {
             color === 3066993 ||
             text.includes("aprovado por") ||
             text.includes("aprovado") ||
+            text.includes("cronograma aprovado") ||
+            text.includes("ponto computado") ||
             text.includes("hall da fama aprovado") ||
             text.includes("evento diario aprovado") ||
             text.includes("evento diário aprovado")
@@ -353,7 +355,18 @@ export const GERAL_PARSERS = {
         const fields = GERAL_PARSERS.getFields(emb);
         const f = fields.find(x => {
             const n = GERAL_PARSERS.norm(x.name);
-            return n.includes("registrador") || n.includes("registrado por") || n.includes("autor") || n.includes("usuario") || n.includes("usuário");
+            return (
+                n.includes("registrador") ||
+                n.includes("registrado por") ||
+                n.includes("registrante") ||
+                n.includes("quem registrou") ||
+                n.includes("autor") ||
+                n.includes("usuario") ||
+                n.includes("usuário") ||
+                n.includes("doador") ||
+                n.includes("doado por") ||
+                n.includes("quem doou")
+            );
         });
         return f ? GERAL_PARSERS.extractId(f.value) : GERAL_PARSERS.extractId(GERAL_PARSERS.getEmbedText(emb)) || GERAL_PARSERS.extractId(emb?.description || "");
     },

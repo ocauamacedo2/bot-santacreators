@@ -641,6 +641,9 @@ function approval_isApproved(emb) {
   return (
     emb?.color === 3066993 ||
     n.includes("aprovado por") ||
+    n.includes("aprovado") ||
+    n.includes("cronograma aprovado") ||
+    n.includes("ponto computado") ||
     n.includes("hall da fama aprovado") ||
     n.includes("evento diario aprovado") ||
     n.includes("evento diário aprovado")
@@ -648,13 +651,28 @@ function approval_isApproved(emb) {
 }
 
 function approval_getSolicitanteId(emb) {
+  const fields = getFields(emb);
+
+  const f = fields.find((x) => {
+    const n = norm(x?.name);
+    return (
+      n.includes("solicitante") ||
+      n.includes("quem solicitou") ||
+      n.includes("pedido por") ||
+      n.includes("autor da solicitacao") ||
+      n.includes("autor da solicitação")
+    );
+  });
+
+  if (f) {
+    const v = String(f.value || "");
+    return pickFirstMentionId(v) || pickFirstIdLoose(v);
+  }
+
   const text = approval_getTextBag(emb);
 
-  const solicitanteMatch = /solicitante[\s\S]{0,80}<@!?(\d{17,20})>/i.exec(text);
+  const solicitanteMatch = /solicitante[\s\S]{0,180}<@!?(\d{17,22})>/i.exec(text);
   if (solicitanteMatch) return solicitanteMatch[1];
-
-  const mentionMatch = /<@!?(\d{17,20})>/.exec(String(emb?.description || emb?.data?.description || ""));
-  if (mentionMatch) return mentionMatch[1];
 
   return null;
 }
@@ -1073,7 +1091,6 @@ function doacaoWasScoredFromEmbed(emb) {
   try {
     const fields = getFields(emb);
 
-    // NOVO: prioridade para a regra específica do Geral/Semanal
     const geral = fields.find((f) => {
       const n = norm(f?.name);
       return n.includes("geraldash/semanal") || n.includes("geraldash") || n.includes("semanal");
@@ -1081,24 +1098,31 @@ function doacaoWasScoredFromEmbed(emb) {
 
     const vg = String(geral?.value || "");
     if (vg) {
-      if (/nao contou|não contou|cooldown|faltam/i.test(vg)) return false;
+      if (/nao contou|não contou|faltam/i.test(vg)) return false;
       if (/isento/i.test(vg)) return true;
       if (/\+1/.test(vg)) return true;
       if (/✅/.test(vg)) return true;
       return false;
     }
 
-    // fallback para logs antigos
     const anti = fields.find((f) => norm(f?.name).includes("anti-farm"));
     const v = String(anti?.value || "");
-    if (/nao contou|não contou|faltam/i.test(v)) return false;
-    if (/isento/i.test(v)) return true;
-    if (/\+1/.test(v)) return true;
-    return false;
+
+    if (v) {
+      if (/nao contou|não contou|faltam/i.test(v)) return false;
+      if (/isento/i.test(v)) return true;
+      if (/\+1/.test(v)) return true;
+      if (/✅/.test(v)) return true;
+    }
+
+    // Logs antigos sem campo GeralDash/Semanal:
+    // deixa o cooldown de 12h decidir se conta ou não.
+    return true;
   } catch {
     return false;
   }
 }
+
 
 const DOACAO_GERAL_SCAN_COOLDOWN_MS = 12 * 60 * 60 * 1000;
 
@@ -1251,14 +1275,22 @@ function doacao_getRegistrarId(emb) {
     const fields = getFields(emb);
     const f =
       fields.find(x => norm(x?.name).includes("registrado por")) ||
+      fields.find(x => norm(x?.name).includes("registrador")) ||
       fields.find(x => norm(x?.name).includes("registrante")) ||
       fields.find(x => norm(x?.name).includes("quem registrou")) ||
       fields.find(x => norm(x?.name).includes("autor")) ||
+      fields.find(x => norm(x?.name).includes("usuario")) ||
+      fields.find(x => norm(x?.name).includes("usuário")) ||
+      fields.find(x => norm(x?.name).includes("doador")) ||
+      fields.find(x => norm(x?.name).includes("doado por")) ||
+      fields.find(x => norm(x?.name).includes("quem doou")) ||
       null;
+
     if (f) {
       const v = String(f?.value || "");
       return pickFirstMentionId(v) || pickFirstIdLoose(v);
     }
+
     const bag = getEmbedTextBag(emb);
     return pickFirstMentionId(bag) || pickFirstIdLoose(bag);
   } catch {

@@ -800,14 +800,38 @@ function approval_isApproved(emb) {
   return (
     emb?.color === 3066993 ||
     n.includes("aprovado por") ||
-    n.includes("aprovado")
+    n.includes("aprovado") ||
+    n.includes("cronograma aprovado") ||
+    n.includes("ponto computado")
   );
 }
 
 function approval_getSolicitanteId(emb) {
+  const fields = getFields(emb);
+
+  const solicitanteField = fields.find((f) => {
+    const n = norm(f?.name);
+    return (
+      n.includes("solicitante") ||
+      n.includes("quem solicitou") ||
+      n.includes("pedido por") ||
+      n.includes("autor da solicitacao") ||
+      n.includes("autor da solicitação")
+    );
+  });
+
+  if (solicitanteField) {
+    const v = String(solicitanteField.value || "");
+    const mention = /<@!?(\d{17,22})>/.exec(v);
+    if (mention) return mention[1];
+
+    const looseId = /\b(\d{17,22})\b/.exec(v);
+    if (looseId) return looseId[1];
+  }
+
   const text = approval_getTextBag(emb);
 
-  const solicitanteMatch = /solicitante[\s\S]{0,120}<@!?(\d{17,20})>/i.exec(text);
+  const solicitanteMatch = /solicitante[\s\S]{0,180}<@!?(\d{17,22})>/i.exec(text);
   if (solicitanteMatch) return solicitanteMatch[1];
 
   return null;
@@ -2278,7 +2302,6 @@ function doacaoWasScoredFromEmbed(emb) {
   try {
     const fields = getFields(emb);
 
-    // NOVO: prioridade para a regra específica do Geral/Semanal
     const geral = fields.find((f) => {
       const n = norm(f?.name);
       return n.includes("geraldash/semanal") || n.includes("geraldash") || n.includes("semanal");
@@ -2286,20 +2309,26 @@ function doacaoWasScoredFromEmbed(emb) {
 
     const vg = String(geral?.value || "");
     if (vg) {
-      if (/nao contou|não contou|cooldown|faltam/i.test(vg)) return false;
+      if (/nao contou|não contou|faltam/i.test(vg)) return false;
       if (/isento/i.test(vg)) return true;
       if (/\+1/.test(vg)) return true;
       if (/✅/.test(vg)) return true;
       return false;
     }
 
-    // fallback para logs antigos
     const anti = fields.find((f) => norm(f?.name).includes("anti-farm"));
     const v = String(anti?.value || "");
-    if (/nao contou|não contou|faltam/i.test(v)) return false;
-    if (/isento/i.test(v)) return true;
-    if (/\+1/.test(v)) return true;
-    return false;
+
+    if (v) {
+      if (/nao contou|não contou|faltam/i.test(v)) return false;
+      if (/isento/i.test(v)) return true;
+      if (/\+1/.test(v)) return true;
+      if (/✅/.test(v)) return true;
+    }
+
+    // Logs antigos sem campo GeralDash/Semanal:
+    // deixa o cooldown de 12h decidir se conta ou não.
+    return true;
   } catch {
     return false;
   }
@@ -2412,12 +2441,15 @@ function getEmbedTextBag(emb) {
 function doacao_getRegistrarId(emb) {
   const fields = getFields(emb);
 
-  const f =
+    const f =
     fields.find((x) => norm(x?.name).includes("registrador")) ||
     fields.find((x) => norm(x?.name).includes("registrado por")) ||
     fields.find((x) => norm(x?.name).includes("autor")) ||
     fields.find((x) => norm(x?.name).includes("usuario")) ||
-    fields.find((x) => norm(x?.name).includes("usuário"));
+    fields.find((x) => norm(x?.name).includes("usuário")) ||
+    fields.find((x) => norm(x?.name).includes("doador")) ||
+    fields.find((x) => norm(x?.name).includes("doado por")) ||
+    fields.find((x) => norm(x?.name).includes("quem doou"));
 
   const raw = String(f?.value || getEmbedText(emb) || "");
 
@@ -2504,14 +2536,41 @@ function venda_getSellerId(emb) {
 // Helper para Cronograma (Backfill)
 function isCronogramaApprovedEmbed(emb) {
   const isGreen = emb.color === 3066993; // #2ecc71
-  const footer = emb.footer?.text || "";
-  return isGreen || footer.includes("Aprovado por");
+  const text = norm(getEmbedText(emb));
+  const footer = norm(emb.footer?.text || emb?.data?.footer?.text || "");
+
+  if (
+    text.includes("recusado") ||
+    text.includes("reprovado") ||
+    text.includes("negado")
+  ) {
+    return false;
+  }
+
+  return (
+    isGreen ||
+    footer.includes("aprovado por") ||
+    text.includes("cronograma aprovado") ||
+    text.includes("ponto computado") ||
+    text.includes("aprovado")
+  );
 }
 
 function cronograma_getUserId(emb) {
-  const desc = emb.description || "";
-  const match = desc.match(/Solicitante:.*?<@!?(\d+)>/i);
-  return match ? match[1] : null;
+  const fields = getFields(emb);
+
+  const f = fields.find((x) => {
+    const n = norm(x?.name);
+    return n.includes("solicitante") || n.includes("pedido por") || n.includes("autor");
+  });
+
+  if (f) return pickFirstMentionId(f.value) || pickFirstIdLoose(f.value);
+
+  const bag = getEmbedTextBag(emb);
+  const match = bag.match(/solicitante[\s\S]{0,120}<@!?(\d{17,22})>/i);
+  if (match) return match[1];
+
+  return pickFirstMentionId(bag) || pickFirstIdLoose(bag);
 }
 
 // Helper para Presença (Backfill/Scan)
