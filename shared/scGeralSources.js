@@ -62,6 +62,54 @@ export const GERAL_PARSERS = {
         return (val.includes("valido") || val.includes("aprovado")) && !val.includes("nao") && !val.includes("pendente") && !val.includes("aguardando");
     },
 
+    // --- PAGAMENTOS ---
+    isPagamento: (emb) => {
+        const text = GERAL_PARSERS.getEmbedText(emb);
+        return (
+            text.includes("registro de pagamento de evento") ||
+            text.includes("pagamento de evento") ||
+            text.includes("pagamento social") ||
+            text.includes("santacreators")
+        );
+    },
+
+    getPagamentoRegistrarId: (emb) => {
+        const fields = GERAL_PARSERS.getFields(emb);
+
+        const f =
+            fields.find((x) => GERAL_PARSERS.norm(x?.name).includes("criador do registro")) ||
+            fields.find((x) => GERAL_PARSERS.norm(x?.name).includes("registrado por")) ||
+            fields.find((x) => GERAL_PARSERS.norm(x?.name).includes("registro")) ||
+            fields.find((x) => GERAL_PARSERS.norm(x?.name).includes("autor"));
+
+        return f
+            ? GERAL_PARSERS.extractId(String(f.value || ""))
+            : GERAL_PARSERS.extractId(GERAL_PARSERS.getEmbedText(emb));
+    },
+
+    // --- MANAGER ---
+    isManager: (emb) => {
+        const text = GERAL_PARSERS.getEmbedText(emb);
+        return (
+            text.includes("registro de evento - manager") ||
+            text.includes("registro manager") ||
+            text.includes("log") && text.includes("manager")
+        );
+    },
+
+    getManagerId: (emb) => {
+        const fields = GERAL_PARSERS.getFields(emb);
+
+        const f =
+            fields.find((x) => GERAL_PARSERS.norm(x?.name).includes("manager responsavel")) ||
+            fields.find((x) => GERAL_PARSERS.norm(x?.name).includes("manager responsável")) ||
+            fields.find((x) => GERAL_PARSERS.norm(x?.name).includes("registrado por"));
+
+        return f
+            ? GERAL_PARSERS.extractId(String(f.value || ""))
+            : GERAL_PARSERS.extractId(GERAL_PARSERS.getEmbedText(emb));
+    },
+
     // --- DOACOES ---
     isDoacao: (emb) => {
         const text = GERAL_PARSERS.getEmbedText(emb);

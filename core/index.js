@@ -626,6 +626,7 @@ const setupEventHandlers = () => {
        if (await payEvtDashHandleMessage(message, client)) return;
        if (await pagamentoSocialHandleMessage(message, client)) return;
        if (await geralDash.geralDashHandleMessage(message, client)) return;
+       if (await geralWeeklyRankHandleMessage(message, client)) return;
 
         // ✅ Auto React precisa receber comandos como !reagirsc eventos 1000
         if (await autoReactsFotosHandleMessage(message, client)) return;
