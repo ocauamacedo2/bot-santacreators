@@ -374,11 +374,10 @@ export const GERAL_PARSERS = {
     // --- DOAÇÕES (Regras de contagem) ---
     getDoacaoScanTimestamp: (m) => Number(m?.createdTimestamp || m?.editedTimestamp || Date.now()),
 
-    doacaoWasScoredFromEmbed: (emb) => {
+doacaoWasScoredFromEmbed: (emb) => {
         try {
             const fields = GERAL_PARSERS.getFields(emb);
 
-            // NOVO: prioridade para a regra específica do Geral/Semanal
             const geral = fields.find((f) => {
                 const n = GERAL_PARSERS.norm(f?.name);
                 return n.includes("geraldash/semanal") || n.includes("geraldash") || n.includes("semanal");
@@ -393,13 +392,17 @@ export const GERAL_PARSERS = {
                 return false;
             }
 
-            // fallback para logs antigos
             const anti = fields.find((f) => GERAL_PARSERS.norm(f?.name).includes("anti-farm"));
             const v = String(anti?.value || "");
-            if (/nao contou|não contou|faltam/i.test(v)) return false;
-            if (/isento/i.test(v)) return true;
-            if (/\+1/.test(v)) return true;
-            return false;
+
+            if (v) {
+                if (/nao contou|não contou|faltam/i.test(v)) return false;
+                if (/isento/i.test(v)) return true;
+                if (/\+1/.test(v)) return true;
+                if (/✅/.test(v)) return true;
+            }
+
+            return true;
         } catch {
             return false;
         }
