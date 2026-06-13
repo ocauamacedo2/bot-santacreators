@@ -2572,31 +2572,43 @@ for (const rmChannelId of [CH_MANAGER_ID, CH_MANAGER_MAIN_ID]) {
 }
 
  // -------- ALINHAMENTOS --------
-if (CH_ALINHAMENTOS_ID) {
-  await scanCurrentWeekEmbeds(
-    client,
-    CH_ALINHAMENTOS_ID,
-    (emb) => {
-      if (!isAlinhamentoRecordEmbed(emb)) return false;
-      const statusAlinhamento = getStatusValueFromEmbed(emb);
-      return /VÁLIDO|VALIDO|aprovado por/i.test(statusAlinhamento);
-    },
-    async () => { alinhamentos += 1; },
-    25
-  );
+const seenAlinh = new Set();
+for (const channelId of ALINHAMENTOS_LOGS_CHANNEL_IDS) {
+  if (channelId) {
+    await scanCurrentWeekEmbeds(
+      client,
+      channelId,
+      (emb) => {
+        if (!isAlinhamentoRecordEmbed(emb)) return false;
+        const statusAlinhamento = getStatusValueFromEmbed(emb);
+        return /VÁLIDO|VALIDO|aprovado por/i.test(statusAlinhamento);
+      },
+      async (m) => {
+        if (seenAlinh.has(m.id)) return;
+        seenAlinh.add(m.id);
+        alinhamentos += 1;
+      },
+      25
+    );
+  }
 }
 
     // -------- PODERES EM EVENTO (Social Medias) --------
-    if (CH_EVENTOS_ID) {
-await scanCurrentWeekEmbeds(
-  client,
-  CH_EVENTOS_ID,
-  (emb) =>
-    eventos_getRecordType(emb) === "eventopoder" &&
-    !isNoPowerEventRegisterText(getEmbedText(emb)),
-  async () => { eventosPoderes += 1; },
-  25
-);
+    const seenEvtP = new Set();
+    for (const channelId of EVENTOS_PODER_CHANNEL_IDS) {
+      if (channelId) {
+        await scanCurrentWeekEmbeds(
+          client,
+          channelId,
+          (emb) => eventos_getRecordType(emb) === "eventopoder" && !isNoPowerEventRegisterText(getEmbedText(emb)),
+          async (m) => {
+            if (seenEvtP.has(m.id)) return;
+            seenEvtP.add(m.id);
+            eventosPoderes += 1;
+          },
+          25
+        );
+      }
     }
 
     // -------- PODERES UTILIZADOS (Geral) --------
@@ -2900,12 +2912,14 @@ async function backfillExtrasThisWeek(client) {
     }
 
     // -------- CORREÇÃO --------
-    if (CORRECAO_LOGS_CHANNEL_ID) {
+    for (const channelId of CORRECAO_LOGS_CHANNEL_IDS) {
       await scanCurrentWeekEmbeds(
         client,
-        CORRECAO_LOGS_CHANNEL_ID,
+        channelId,
         (emb) => isCorrecaoLogEmbed(emb) && correcaoWasScored(emb),
-        async () => {
+        async (m) => {
+          if (seen.has(m.id)) return;
+          seen.add(m.id);
           correcao += 1;
         },
         25
