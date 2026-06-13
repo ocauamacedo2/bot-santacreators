@@ -14,8 +14,8 @@ import {
   TextInputStyle,
 } from "discord.js";
 
-
 import { dashOn } from "../utils/dashHub.js";
+import { GERAL_PARSERS, GERAL_CHANNELS, GeralAudit } from "../shared/scGeralSources.js";
 
 // ✅ __dirname no ESM
 const __filename = fileURLToPath(import.meta.url);
@@ -1823,6 +1823,7 @@ if (MANAGER_AUDIT_ENABLED) {
   ].join("\n"));
 }
 
+  const auditor = new GeralAudit();
 
   for (const channelId of ALINHAMENTOS_LOGS_CHANNEL_IDS) {
     await scanChannelEmbeds(client, {
@@ -1830,45 +1831,33 @@ if (MANAGER_AUDIT_ENABLED) {
       weekFloorKey,
       maxPages: 120,
       onMessage: async (m) => {
-        audit.totalFound++;
+        auditor.addStats('alinhamentos', 'scanned');
         const seenKey = `alinhamentos:${m.id}`;
         if (seenMessageIds.has(seenKey)) return;
 
         const emb = m.embeds?.[0];
-        console.log(`[ALINHAMENTO_SCAN] Verificando msg ${m.id} em <#${channelId}>`);
-
         if (!emb) {
-          console.log(`[ALINHAMENTO_SCAN] Pulei: sem embed`);
-          audit.rejected["alinh_no_embed"] = (audit.rejected["alinh_no_embed"] || 0) + 1;
+          auditor.reject('alinhamentos', 'no_embed');
           return;
         }
-        if (!isAlinhamentoRecordEmbed(emb)) {
-          console.log(`[ALINHAMENTO_SCAN] Pulei: não é embed de registro`);
-          audit.rejected["alinh_not_record"] = (audit.rejected["alinh_not_record"] || 0) + 1;
+        if (!GERAL_PARSERS.isAlinhamento(emb)) {
+          auditor.reject('alinhamentos', 'not_alinhamento');
           return;
         }
-        console.log(`[ALINHAMENTO_FOUND] Encontrei embed de alinhamento em ${m.id}`);
+        auditor.addStats('alinhamentos', 'found');
 
-        const statusAlinhamento = getStatusValueFromEmbed(emb);
-        if (!/VÁLIDO|VALIDO|APROVADO|aprovado por/i.test(statusAlinhamento)) {
-          console.log(`[ALINHAMENTO_SCAN] Pulei: status inválido (${statusAlinhamento})`);
-          audit.rejected["alinh_not_valid"] = (audit.rejected["alinh_not_valid"] || 0) + 1;
+        if (!GERAL_PARSERS.isAlinhamentoValido(emb)) {
+          auditor.reject('alinhamentos', 'invalid_status');
           return;
         }
-        let uid = alinhamento_getQuemAlinhouId(emb);
+        const uid = GERAL_PARSERS.getAlinhadorId(emb);
         if (!uid) {
-          uid = alinhamento_getRegistradorId(emb);
-        }
-        console.log(`[ALINHAMENTO_UID] Usuário extraído: ${uid || "NULL"}`);
-
-        if (!uid) {
-          audit.rejected["alinh_uid_null"] = (audit.rejected["alinh_uid_null"] || 0) + 1;
+          auditor.reject('alinhamentos', 'uid_null');
           return;
         }
-        
+        auditor.addStats('alinhamentos', 'uidOk');
         seenMessageIds.add(seenKey);
-        audit.extractedIds++;
-        console.log(`[ALINHAMENTO_COUNTED] Pontuando alinhamento para ${uid}`);
+        auditor.addStats('alinhamentos', 'counted');
         pushItem({
           userId: uid,
           ts: new Date(m.editedTimestamp || m.createdTimestamp),
