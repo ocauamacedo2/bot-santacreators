@@ -14,7 +14,7 @@ import {
 } from "discord.js";
 
 import { dashOn } from "../utils/dashHub.js";
-import { GERAL_PARSERS, GeralAudit } from "../shared/scGeralSources.js";
+import { GERAL_PARSERS, GERAL_CHANNELS, GeralAudit } from "../shared/scGeralSources.js";
 
 
 // ✅ __dirname no ESM
@@ -1324,20 +1324,28 @@ async function collectAllPoints(client, mode = "light") {
 ///teste
   DEBUG.weekKeysFound = {};
   const items = [];
-  const audit = { totalFound: 0, rejected: {}, extractedIds: 0, sources: {} };
+const audit = { totalFound: 0, rejected: {}, extractedIds: 0, sources: {} };
+const auditor = new GeralAudit();
 
-  const pushItem = (item) => {
-    const userId = String(item?.userId || "").trim();
-    const source = String(item?.source || "").trim();
-    auditor.addStats(source, 'counted'); // Changed from `audit.sources[source] = (audit.sources[source] || 0) + 1;`
-    if (!userId || !source || !item?.ts) return;
-    if (client?.user?.id && userId === String(client.user.id)) { auditor.reject(source, 'bot_self_point'); return; } // Changed from `audit.rejected["bot_self_point"] = (audit.rejected["bot_self_point"] || 0) + 1;`
-    items.push({
-      ...item,
-      userId,
-      source,
-    });
-  };
+const pushItem = (item) => {
+  const userId = String(item?.userId || "").trim();
+  const source = String(item?.source || "").trim();
+
+  if (!userId || !source || !item?.ts) return;
+
+  if (client?.user?.id && userId === String(client.user.id)) {
+    auditor.reject(source, "bot_self_point");
+    return;
+  }
+
+  auditor.addStats(source, "counted");
+
+  items.push({
+    ...item,
+    userId,
+    source,
+  });
+};
 
   // floor = volta 5 semanas (pra manter leve)
   const wkNow = weekKeyFromDateSP(new Date());
@@ -2099,7 +2107,7 @@ function buildRankEmbeds({ wk, wkLabel, agg, minPoints, nameMap = {} }) {
   const top = list;
 
   // (mantém esse bloco se você curte “menos pontuaram”, não interfere em nada)
-  const bottom = [...list].sort((a, b) => a.points - b.points).slice(0, 8);
+const bottom = [...list].sort((a, b) => a.points - b.points).slice(0, 8);
 
   const marker = `${RANK_MARKER_PREFIX}${wk}`;
 
@@ -2682,7 +2690,7 @@ export async function getWeeklyRanking(client) {
     const wkNow = weekKeyFromDateSP(nowSP());
     const agg = aggregateWeekDetailed(items, wkNow);
 
-    return [...(agg.list || [])].sort((a, b) => {
+return [...(agg.list || [])].sort((a, b) => {
   const pa = Number(a?.points || 0);
   const pb = Number(b?.points || 0);
   return pb - pa;

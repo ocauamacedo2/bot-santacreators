@@ -1657,24 +1657,25 @@ async function collectAllGeneral(client, mode = "light") {
     DEBUG.weekKeysFound = {};
     const items = [];
 
-    const pushItem = (item) => {
-      const userId = String(item?.userId || "").trim();
-      const source = String(item?.source || "").trim();
-      auditor.addStats(source, 'counted');
+const pushItem = (item) => {
+  const userId = String(item?.userId || "").trim();
+  const source = String(item?.source || "").trim();
 
-      if (!userId || !source || !item?.ts) return;
+  if (!userId || !source || !item?.ts) return;
 
-      if (client?.user?.id && userId === String(client.user.id)) {
-        auditor.reject(source, 'bot_self_point');
-        return;
-      }
+  if (client?.user?.id && userId === String(client.user.id)) {
+    auditor.reject(source, "bot_self_point");
+    return;
+  }
 
-      items.push({
-        ...item,
-        userId,
-        source,
-      });
-    };
+  auditor.addStats(source, "counted");
+
+  items.push({
+    ...item,
+    userId,
+    source,
+  });
+};
 
   await scanChannelEmbeds(client, {
     channelId: CH_PODERES_ID,
@@ -1804,7 +1805,7 @@ async function collectAllGeneral(client, mode = "light") {
         if (seenManagerStableKeys.has(managerStableKey)) { auditor.reject('manager', 'duplicate'); return; }
         seenManagerStableKeys.add(managerStableKey);
         auditor.addStats('manager', 'uidOk');
-        pushItem({ userId: uid, ts: approvedAt || new Date(_m.createdTimestamp), source: "manager" });
+        pushItem({ userId: uid, ts: approvedAt || new Date(m.createdTimestamp), source: "manager" });
         },
       });
     }
@@ -1822,9 +1823,7 @@ if (MANAGER_AUDIT_ENABLED) {
   ].join("\n"));
 }
 
-  const auditor = new GeralAudit();
-
-  for (const channelId of ALINHAMENTOS_LOGS_CHANNEL_IDS) {
+for (const channelId of ALINHAMENTOS_LOGS_CHANNEL_IDS) {
     await scanChannelEmbeds(client, {
       channelId,
       weekFloorKey,
