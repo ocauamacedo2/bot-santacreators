@@ -2056,16 +2056,24 @@ function aggregateWeekDetailed(items, weekKey) {
 }
 
 
-function summarizeSources(bySource) {
+function summarizeSources(bySource, adjustment = 0) {
   const entries = Object.entries(bySource || {})
     .sort((a, b) => (b[1] || 0) - (a[1] || 0))
     .filter(([, v]) => (v || 0) > 0);
 
-  if (!entries.length) return "";
+  const lines = entries.map(([k, v], index) => {
+    const isLast = index === entries.length - 1 && !adjustment;
+    const prefix = isLast ? "┗" : "┃";
+    return `${prefix} **${SOURCE_LABEL[k] || k}:** ${v}`;
+  });
 
-  // mostra mais fontes para não esconder "Correção de Entrevista"
-  const top = entries.slice(0, 8).map(([k, v]) => `${SOURCE_LABEL[k] || k} ${v}`);
-  return top.join(" • ");
+  if (adjustment > 0) {
+    lines.push(`┗ **Ajuste manual:** +${adjustment}`);
+  } else if (adjustment < 0) {
+    lines.push(`┗ **Ajuste manual:** ${adjustment}`);
+  }
+
+  return lines.join("\n");
 }
 
 function chunkLines(lines, maxChars = 950) {
@@ -2198,31 +2206,15 @@ const bottom = [...list].sort((a, b) => a.points - b.points).slice(0, 8);
   const marker = `${RANK_MARKER_PREFIX}${wk}`;
 
 const topLines = top.map((u, i) => {
-  const src = summarizeSources(bySourceByUser[u.userId]);
-  const adj =
-    u.adjustment > 0
-      ? ` • Ajuste +${u.adjustment}`
-      : u.adjustment < 0
-      ? ` • Ajuste ${u.adjustment}`
-      : "";
-
-  const detail = [src, adj.replace(/^ • /, "")].filter(Boolean).join(" • ");
-  const extra = detail ? `\n└ ${detail}` : "";
+  const detail = summarizeSources(bySourceByUser[u.userId], u.adjustment);
+  const extra = detail ? `\n${detail}` : "";
 
   return `${medal(i)} **${i + 1}.** <@${u.userId}> — ${fmtPts(u.points)}${extra}`;
 });
 
 const bottomLines = bottom.map((u, i) => {
-  const src = summarizeSources(bySourceByUser[u.userId]);
-  const adj =
-    u.adjustment > 0
-      ? ` • Ajuste +${u.adjustment}`
-      : u.adjustment < 0
-      ? ` • Ajuste ${u.adjustment}`
-      : "";
-
-  const detail = [src, adj.replace(/^ • /, "")].filter(Boolean).join(" • ");
-  const extra = detail ? `\n└ ${detail}` : "";
+  const detail = summarizeSources(bySourceByUser[u.userId], u.adjustment);
+  const extra = detail ? `\n${detail}` : "";
 
   return `🔻 **${i + 1}.** <@${u.userId}> — ${fmtPts(u.points)}${extra}`;
 });
@@ -2359,7 +2351,7 @@ const bottomLines = bottom.map((u, i) => {
   }
 
   // ===== RANKING DA SEMANA (TODOS) — com paginação se precisar =====
-  const pagesTop = chunkLines(topLines, 3800); // 3800 pra ficar seguro no limite do Discord
+  const pagesTop = chunkLines(topLines, 3200); // mais seguro com ranking detalhado em várias linhas
   if (!pagesTop.length) {
     embeds.push(
       new EmbedBuilder()
