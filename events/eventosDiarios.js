@@ -611,6 +611,7 @@ ${mentions}`;
       userId: data.userId,
       approverId: interaction.user.id,
       at: Date.now()
+      // console.log(`[EVENTOS_DIARIOS] dashEmit: userId=${data.userId}, approverId=${interaction.user.id}`); // Debug
     });
 
     const embedApproved = EmbedBuilder.from(interaction.message.embeds[0])

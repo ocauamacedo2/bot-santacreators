@@ -356,24 +356,66 @@ const DOACAO_LOGS_CHANNEL_ID =
   process.env.SCDOACAO_LOGS_ID?.trim() || "1486009647923200120";
 
 // CONVITES logs
-const CONVITES_LOGS_CHANNEL_ID = "1415102820826349648";
+const CONVITES_LOGS_CHANNEL_ID = "1486009598237212793";
 
 // PERGUNTAS logs (env opcional)
 const PERGUNTAS_LOGS_CHANNEL_ID = process.env.SCPERGUNTAS_LOGS_ID?.trim() || "";
 const VENDAS_LOGS_CHANNEL_ID = "1486084262867370105";
-const CRONOGRAMA_LOGS_CHANNEL_ID = "1387864036259004436";
+const CRONOGRAMA_LOGS_CHANNEL_ID = "1486009619846529075";
 const PRESENCA_LOGS_CHANNEL_ID = "1486006866046615682";
-const CORRECAO_LOGS_CHANNEL_ID = "1486084249755979950"; // ✅ Canal de logs de correção
+const CORRECAO_LOGS_CHANNEL_ID = "1486006908056899748"; // ✅ Canal de logs de correção
 const HALL_CHANNEL_ID = "1386503496353976470"; // ✅ Canal do Hall da Fama
 const VIP_MENU_CHANNEL_ID = "1414718336826081330"; // ✅ registros VIP por evento
 
-// canais base
+const DOACAO_LOGS_CHANNEL_IDS = [
+  "1486009647923200120",
+];
+
+const CONVITES_LOGS_CHANNEL_IDS = [
+  "1486009598237212793",
+  "1415102820826349648",
+];
+
+const PERGUNTAS_LOGS_CHANNEL_IDS = [
+  process.env.SCPERGUNTAS_LOGS_ID?.trim(),
+  "1486084249755979950",
+].filter(Boolean);
+
+const VENDAS_LOGS_CHANNEL_IDS = [
+  "1486084262867370105",
+];
+
+const CRONOGRAMA_LOGS_CHANNEL_IDS = [
+  "1486009619846529075",
+  "1387864036259004436",
+];
+
+const PRESENCA_LOGS_CHANNEL_IDS = [
+  "1486006866046615682",
+];
+
+const CORRECAO_LOGS_CHANNEL_IDS = [
+  "1486006908056899748",
+  "1486084249755979950",
+];
+
+const ALINHAMENTOS_LOGS_CHANNEL_IDS = [
+  "1425256185707233301",
+  "1515132246728638574",
+];
+
+const EVENTOS_NORMAL_CHANNEL_IDS = [
+  "1515128485331468318",
+];
+
+const EVENTOS_PODER_CHANNEL_IDS = [
+  "1392618646630568076",
+];
+
 const CH_PODERES_ID = "1374066813171929218";
-const CH_EVENTOS_ID = "1392618646630568076";
 const CH_PAGAMENTOS_ID = "1387922662134775818";
-const CH_MANAGER_ID = "1486084441762693291"; 
+const CH_MANAGER_ID = "1486084441762693291";
 const CH_MANAGER_MAIN_ID = "1392680204517769277";
-const CH_ALINHAMENTOS_ID = "1425256185707233301";
 
 // EVT3
 const EVT3_STATE_FILE = path.join(DATA_DIR, "evt3_events_state.json");
@@ -1285,11 +1327,12 @@ async function collectAllPoints(client, mode = "light") {
 ///teste
   DEBUG.weekKeysFound = {};
   const items = [];
-  const counts = {}; // ✅ Debug: contagem por tipo
+  const audit = { totalFound: 0, rejected: {}, extractedIds: 0, sources: {} };
 
   const pushItem = (item) => {
     const userId = String(item?.userId || "").trim();
     const source = String(item?.source || "").trim();
+    audit.sources[source] = (audit.sources[source] || 0) + 1;
 
     if (!userId || !source || !item?.ts) return;
 
@@ -1305,8 +1348,6 @@ async function collectAllPoints(client, mode = "light") {
       userId,
       source,
     });
-
-    counts[source] = (counts[source] || 0) + 1;
   };
 
   // floor = volta 5 semanas (pra manter leve)
@@ -1319,43 +1360,41 @@ async function collectAllPoints(client, mode = "light") {
     weekFloorKey,
     maxPages: 80,
     onMessage: async (m) => {
+    audit.totalFound++;
     if (seenMessageIds.has(m.id)) return;
     seenMessageIds.add(m.id);
       const emb = m.embeds?.[0];
-      if (!emb) return;
-      if (!isPoderesRecordEmbed(emb)) return;
+      if (!emb) { audit.rejected["no_embed"] = (audit.rejected["no_embed"] || 0) + 1; return; }
+      if (!isPoderesRecordEmbed(emb)) { audit.rejected["invalid_poderes_embed"] = (audit.rejected["invalid_poderes_embed"] || 0) + 1; return; }
       const uid = poderes_getUserId(emb);
-      if (!uid) return;
+      if (!uid) { audit.rejected["uid_null"] = (audit.rejected["uid_null"] || 0) + 1; return; }
+      audit.extractedIds++;
       pushItem({ userId: uid, ts: new Date(m.createdTimestamp), source: "poderes" });
     },
   });
 
-// EVENTOS / EVENTOPODER
-await scanChannelEmbeds(client, {
-  channelId: CH_EVENTOS_ID,
+  for (const chEvt of [CH_EVENTOS_NORMAL_ID, CH_EVENTOS_PODER_ID]) {
+    await scanChannelEmbeds(client, {
+      channelId: chEvt,
   weekFloorKey,
   maxPages: 80,
   onMessage: async (m) => {
+    audit.totalFound++;
     if (seenMessageIds.has(m.id)) return;
     seenMessageIds.add(m.id);
     const emb = m.embeds?.[0];
-    if (!emb) return;
-
+    if (!emb) { audit.rejected["no_embed"] = (audit.rejected["no_embed"] || 0) + 1; return; }
     const type = eventos_getRecordType(emb);
-    if (!type) return;
-
+    if (!type) { audit.rejected["invalid_event_type"] = (audit.rejected["invalid_event_type"] || 0) + 1; return; }
     const rawText = getEmbedText(emb);
-
-    if (type === "eventopoder" && isNoPowerEventRegisterText(rawText)) {
-      return;
-    }
-
+    if (type === "eventopoder" && isNoPowerEventRegisterText(rawText)) { audit.rejected["nopower_text"] = (audit.rejected["nopower_text"] || 0) + 1; return; }
     const uid = eventos_getRegistrarId(emb);
-    if (!uid) return;
-
+    if (!uid) { audit.rejected["uid_null"] = (audit.rejected["uid_null"] || 0) + 1; return; }
+    audit.extractedIds++;
     pushItem({ userId: uid, ts: new Date(m.createdTimestamp), source: type });
   },
-});
+    });
+  }
 
   // PAGAMENTOS
   // ✅ Só pontua pagamento social quando estiver PAGO/APROVADO.
@@ -1365,18 +1404,17 @@ await scanChannelEmbeds(client, {
     weekFloorKey,
     maxPages: 80,
     onMessage: async (m) => {
+      audit.totalFound++;
       if (seenMessageIds.has(m.id)) return;
       seenMessageIds.add(m.id);
       const emb = m.embeds?.[0];
-      if (!emb) return;
-      if (!isPaymentRecordEmbed(emb)) return;
-
+      if (!emb) { audit.rejected["no_embed"] = (audit.rejected["no_embed"] || 0) + 1; return; }
+      if (!isPaymentRecordEmbed(emb)) { audit.rejected["invalid_payment_embed"] = (audit.rejected["invalid_payment_embed"] || 0) + 1; return; }
       const status = pagamento_getStatus(emb);
-      if (!status.isPago) return;
-
+      if (!status.isPago) { audit.rejected["payment_not_pago"] = (audit.rejected["payment_not_pago"] || 0) + 1; return; }
       const uid = pagamentos_getRegistrarId(emb);
-      if (!uid) return;
-
+      if (!uid) { audit.rejected["uid_null"] = (audit.rejected["uid_null"] || 0) + 1; return; }
+      audit.extractedIds++;
       pushItem({ userId: uid, ts: new Date(m.createdTimestamp), source: "pagamentos" });
     },
   });
@@ -1387,25 +1425,19 @@ await scanChannelEmbeds(client, {
   weekFloorKey,
   maxPages: 80,
   onMessage: async (m) => {
+    audit.totalFound++;
     if (seenMessageIds.has(m.id)) return;
     seenMessageIds.add(m.id);
     const emb = m.embeds?.[0];
-    if (!emb) return;
-    if (!isVipRecordEmbed(emb)) return;
-
+    if (!emb) { audit.rejected["no_embed"] = (audit.rejected["no_embed"] || 0) + 1; return; }
+    if (!isVipRecordEmbed(emb)) { audit.rejected["invalid_vip_embed"] = (audit.rejected["invalid_vip_embed"] || 0) + 1; return; }
     const status = vip_getStatus(emb);
-    if (!status.isPago) return;
-
+    if (!status.isPago) { audit.rejected["vip_not_pago"] = (audit.rejected["vip_not_pago"] || 0) + 1; return; }
     const uid = vip_getPagoByUserId(emb);
-    if (!uid) return;
-
+    if (!uid) { audit.rejected["uid_null"] = (audit.rejected["uid_null"] || 0) + 1; return; }
     const paidAt = vip_getPagoAtSP(emb);
-
-    pushItem({
-      userId: uid,
-      ts: paidAt || new Date(m.createdTimestamp),
-      source: "vipPagos",
-    });
+    audit.extractedIds++;
+    pushItem({ userId: uid, ts: paidAt || new Date(m.createdTimestamp), source: "vipPagos" });
   },
 });
   // MANAGER: Escaneia os dois canais com deduplicação real por RM MSGID
@@ -1415,29 +1447,22 @@ await scanChannelEmbeds(client, {
       weekFloorKey,
       maxPages: 80,
       onMessage: async (m) => {
+        audit.totalFound++;
         if (seenMessageIds.has(m.id)) return;
         seenMessageIds.add(m.id);
-
         const emb = m.embeds?.[0];
-        if (!emb) return;
-        if (!isRegistroManagerEmbed(emb)) return;
-        if (manager_isRejected(emb)) return;
-        if (!manager_isApproved(emb)) return;
-
+        if (!emb) { audit.rejected["no_embed"] = (audit.rejected["no_embed"] || 0) + 1; return; }
+        if (!isRegistroManagerEmbed(emb)) { audit.rejected["invalid_manager_embed"] = (audit.rejected["invalid_manager_embed"] || 0) + 1; return; }
+        if (manager_isRejected(emb)) { audit.rejected["manager_rejected"] = (audit.rejected["manager_rejected"] || 0) + 1; return; }
+        if (!manager_isApproved(emb)) { audit.rejected["manager_not_approved"] = (audit.rejected["manager_not_approved"] || 0) + 1; return; }
         const uid = manager_getManagerId(emb) || manager_getRegistrarId(emb);
-        if (!uid) return;
-
+        if (!uid) { audit.rejected["uid_null"] = (audit.rejected["uid_null"] || 0) + 1; return; }
         const approvedAt = manager_getApprovedAtSP(emb);
-
         const managerStableKey = makeManagerStableDedupeKey(emb, m, uid, approvedAt);
-        if (seenManagerStableKeys.has(managerStableKey)) return;
+        if (seenManagerStableKeys.has(managerStableKey)) { audit.rejected["manager_dup_key"] = (audit.rejected["manager_dup_key"] || 0) + 1; return; }
         seenManagerStableKeys.add(managerStableKey);
-
-        pushItem({
-          userId: uid,
-          ts: approvedAt || new Date(m.createdTimestamp),
-          source: "manager",
-        });
+        audit.extractedIds++;
+        pushItem({ userId: uid, ts: approvedAt || new Date(m.createdTimestamp), source: "manager" });
       },
     });
   }
@@ -1461,23 +1486,18 @@ if (MANAGER_AUDIT_ENABLED) {
     weekFloorKey,
     maxPages: 150,
     onMessage: async (m) => {
+      audit.totalFound++;
       if (seenMessageIds.has(m.id)) return;
       seenMessageIds.add(m.id);
       const emb = m.embeds?.[0];
-      if (!emb) return;
-      if (!isAlinhamentoRecordEmbed(emb)) return;
-
+      if (!emb) { audit.rejected["no_embed"] = (audit.rejected["no_embed"] || 0) + 1; return; }
+      if (!isAlinhamentoRecordEmbed(emb)) { audit.rejected["invalid_alinh_embed"] = (audit.rejected["invalid_alinh_embed"] || 0) + 1; return; }
       const statusAlinhamento = getStatusValueFromEmbed(emb);
-      if (!/VÁLIDO|VALIDO|aprovado por/i.test(statusAlinhamento)) return;
-
+      if (!/VÁLIDO|VALIDO|aprovado por/i.test(statusAlinhamento)) { audit.rejected["alinh_not_valid"] = (audit.rejected["alinh_not_valid"] || 0) + 1; return; }
       const uid = alinhamento_getQuemAlinhouId(emb);
-      if (!uid) return;
-
-      pushItem({
-        userId: uid,
-        ts: new Date(m.editedTimestamp || m.createdTimestamp),
-        source: "alinhamentos"
-      });
+      if (!uid) { audit.rejected["uid_null"] = (audit.rejected["uid_null"] || 0) + 1; return; }
+      audit.extractedIds++;
+      pushItem({ userId: uid, ts: new Date(m.editedTimestamp || m.createdTimestamp), source: "alinhamentos" });
     },
   });
 
@@ -1494,23 +1514,15 @@ if (MANAGER_AUDIT_ENABLED) {
     weekFloorKey,
     maxPages: 150,
     onMessage: async (m) => {
+      audit.totalFound++;
       if (seenMessageIds.has(m.id)) return;
       seenMessageIds.add(m.id);
-
       const emb = m.embeds?.[0];
-      if (!emb) return;
-      if (!isDoacaoLogEmbed(emb)) return;
-
+      if (!emb) { audit.rejected["no_embed"] = (audit.rejected["no_embed"] || 0) + 1; return; }
+      if (!isDoacaoLogEmbed(emb)) { audit.rejected["invalid_doacao_embed"] = (audit.rejected["invalid_doacao_embed"] || 0) + 1; return; }
       const uid = doacao_getRegistrarId(emb);
-      if (!uid) return;
-
-      if (!canCountDoacaoInGeralScan({
-        emb,
-        message: m,
-        lastDoacaoAtByUser,
-        uid,
-      })) return;
-
+      if (!uid) { audit.rejected["uid_null"] = (audit.rejected["uid_null"] || 0) + 1; return; }
+      if (!canCountDoacaoInGeralScan({ emb, message: m, lastDoacaoAtByUser, uid })) { audit.rejected["doacao_antifarm"] = (audit.rejected["doacao_antifarm"] || 0) + 1; return; }
       pushItem({
         userId: uid,
         ts: new Date(m.createdTimestamp),
@@ -1528,12 +1540,11 @@ if (MANAGER_AUDIT_ENABLED) {
       if (seenMessageIds.has(m.id)) return;
       seenMessageIds.add(m.id);
       const emb = m.embeds?.[0];
-      if (!emb) return;
-      if (!isConviteLogEmbed(emb)) return;
-
+      if (!emb) { audit.rejected["no_embed"] = (audit.rejected["no_embed"] || 0) + 1; return; }
+      if (!isConviteLogEmbed(emb)) { audit.rejected["invalid_convite_embed"] = (audit.rejected["invalid_convite_embed"] || 0) + 1; return; }
       const uid = convite_getSenderId(emb);
-      if (!uid) return;
-
+      if (!uid) { audit.rejected["uid_null"] = (audit.rejected["uid_null"] || 0) + 1; return; }
+      audit.extractedIds++;
       pushItem({ userId: uid, ts: new Date(m.createdTimestamp), source: "convites" });
     },
   });
@@ -1545,20 +1556,17 @@ if (MANAGER_AUDIT_ENABLED) {
       weekFloorKey,
       maxPages: 80,
       onMessage: async (m) => {
+        audit.totalFound++;
 const seenKey = `perguntas:${m.id}`;
 if (seenMessageIds.has(seenKey)) return;
-
 const emb = m.embeds?.[0];
-if (!emb) return;
-
-// Procura pelo log de "Ponto de Entrevista Concluída"
-if (!isEntrevistaConcluidaLogEmbed(emb)) return;
-
+if (!emb) { audit.rejected["no_embed"] = (audit.rejected["no_embed"] || 0) + 1; return; }
+if (!isEntrevistaConcluidaLogEmbed(emb)) { audit.rejected["invalid_entrevista_embed"] = (audit.rejected["invalid_entrevista_embed"] || 0) + 1; return; }
 seenMessageIds.add(seenKey);
-
 const uid = entrevistaConcluida_getUserId(emb);
-if (!uid) return;
-        pushItem({ userId: uid, ts: new Date(m.createdTimestamp), source: "perguntas" });
+if (!uid) { audit.rejected["uid_null"] = (audit.rejected["uid_null"] || 0) + 1; return; }
+audit.extractedIds++;
+pushItem({ userId: uid, ts: new Date(m.createdTimestamp), source: "perguntas" });
       },
     });
   }
@@ -1571,19 +1579,19 @@ if (!uid) return;
       weekFloorKey,
       maxPages: 80,
       onMessage: async (m) => {
+      audit.totalFound++;
       if (seenMessageIds.has(m.id)) return;
       seenMessageIds.add(m.id);
         const emb = m.embeds?.[0];
-        if (!emb) return;
-        if (!isVendaLogEmbed(emb)) return;
-
+        if (!emb) { audit.rejected["no_embed"] = (audit.rejected["no_embed"] || 0) + 1; return; }
+        if (!isVendaLogEmbed(emb)) { audit.rejected["invalid_venda_embed"] = (audit.rejected["invalid_venda_embed"] || 0) + 1; return; }
         const uid = venda_getSellerId(emb);
-        if (!uid) return;
-
+        if (!uid) { audit.rejected["uid_null"] = (audit.rejected["uid_null"] || 0) + 1; return; }
         const ts = m.createdTimestamp;
         const last = vendasLastPointByUser.get(uid) || 0;
         if (!last || Math.abs(last - ts) >= 7 * 60 * 60 * 1000) {
           vendasLastPointByUser.set(uid, ts);
+          audit.extractedIds++;
           pushItem({ userId: uid, ts: new Date(ts), source: "vendas" });
         }
       },
@@ -1665,22 +1673,18 @@ if (CRONOGRAMA_LOGS_CHANNEL_ID) {
     channelId: CRONOGRAMA_LOGS_CHANNEL_ID,
     weekFloorKey,
     maxPages: 120,
-    onMessage: async (m) => {
+    onMessage: async (m) => { // ✅ CRONOGRAMA / HALL DA FAMA / EVENTOS DIÁRIOS (Aprovados)
+      audit.totalFound++;
       const seenKey = `approval:${m.id}`;
       if (seenMessageIds.has(seenKey)) return;
-
       const emb = m.embeds?.[0];
-      if (!emb) return;
-
-      if (!approval_isApproved(emb)) return;
-
+      if (!emb) { audit.rejected["no_embed"] = (audit.rejected["no_embed"] || 0) + 1; return; }
+      if (!approval_isApproved(emb)) { audit.rejected["crono_not_approved"] = (audit.rejected["crono_not_approved"] || 0) + 1; return; }
       const userId = approval_getSolicitanteId(emb);
-      if (!userId) return;
-
+      if (!userId) { audit.rejected["uid_null"] = (audit.rejected["uid_null"] || 0) + 1; return; }
       const source = approval_getSource(emb) || "cronograma";
-
       seenMessageIds.add(seenKey);
-
+      audit.extractedIds++;
       pushItem({
         userId,
         ts: new Date(m.editedTimestamp || m.createdTimestamp),
@@ -1700,14 +1704,12 @@ if (CRONOGRAMA_LOGS_CHANNEL_ID) {
       if (seenMessageIds.has(m.id)) return;
       seenMessageIds.add(m.id);
         const emb = m.embeds?.[0];
-        if (!emb) return;
-        if (!isPresencaLogEmbed(emb)) return;
-        if (!presenca_isConfirmed(emb)) return;
-
+      if (!emb) { audit.rejected["no_embed"] = (audit.rejected["no_embed"] || 0) + 1; return; }
+      if (!isPresencaLogEmbed(emb) || !presenca_isConfirmed(emb)) { audit.rejected["invalid_presenca"] = (audit.rejected["invalid_presenca"] || 0) + 1; return; }
         const uid = presenca_getUserId(emb);
-        if (!uid) return;
-
-        pushItem({ userId: uid, ts: new Date(m.createdTimestamp), source: "presencas" });
+      if (!uid) { audit.rejected["uid_null"] = (audit.rejected["uid_null"] || 0) + 1; return; }
+      audit.extractedIds++;
+      pushItem({ userId: uid, ts: new Date(m.createdTimestamp), source: "presencas" });
       },
     });
   }
@@ -1719,25 +1721,21 @@ if (CRONOGRAMA_LOGS_CHANNEL_ID) {
       weekFloorKey,
       maxPages: 80,
       onMessage: async (m) => {
+        audit.totalFound++;
         const emb = m.embeds?.[0];
-        if (!emb) return;
-        if (!isCorrecaoLogEmbed(emb)) return;
-        if (!correcaoWasScored(emb)) return;
-
+        if (!emb) { audit.rejected["no_embed"] = (audit.rejected["no_embed"] || 0) + 1; return; }
+        if (!isCorrecaoLogEmbed(emb) || !correcaoWasScored(emb)) { audit.rejected["invalid_correcao"] = (audit.rejected["invalid_correcao"] || 0) + 1; return; }
         const uid = correcao_getUserId(emb);
-        if (!uid) return;
-
-        pushItem({
-          userId: uid,
-          ts: new Date(m.createdTimestamp),
-          source: "correcao"
-        });
+        if (!uid) { audit.rejected["uid_null"] = (audit.rejected["uid_null"] || 0) + 1; return; }
+        audit.extractedIds++;
+        pushItem({ userId: uid, ts: new Date(m.createdTimestamp), source: "correcao" });
       },
     });
   }
 
   // EVT3 (json + thread createdTimestamp)
   try {
+    audit.totalFound++; // Conta como "encontrado" no EVT3
     const st = readEvt3State();
     const map = st?.evt3Events || {};
     const entries = Object.entries(map);
@@ -1819,6 +1817,7 @@ if (CRONOGRAMA_LOGS_CHANNEL_ID) {
           const dt = parseBPTimeToDateSP(timeStr);
           if (!dt) continue;
 
+          audit.extractedIds++;
           pushItem({
             userId: uid,
             ts: dt,
@@ -1837,7 +1836,14 @@ if (CRONOGRAMA_LOGS_CHANNEL_ID) {
     DEBUG.weekKeysFound[wk] = (DEBUG.weekKeysFound[wk] || 0) + 1;
   }
 
-  console.log("[SC_GERAL_WEEKLY_RANK] Collect summary:", counts);
+    // Auditoria final da coleta
+    console.log("━━━━━━━━━━━━━━━━━━━━━━━");
+    console.log("🛡️ AUDITORIA FINAL DE SCAN (RANKING)");
+    console.log(`TOTAL MSGS ANALISADAS: ${audit.totalFound}`);
+    console.log(`TOTAL IDs EXTRAÍDOS: ${audit.extractedIds}`);
+    console.log("RANKING POR FONTE:", audit.sources);
+    console.log("REJEITADOS POR MOTIVO:", audit.rejected);
+    console.log("━━━━━━━━━━━━━━━━━━━━━━━");
 
   const payload = { items };
   CACHE = { at: now, payload };

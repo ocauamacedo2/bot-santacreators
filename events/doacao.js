@@ -934,6 +934,7 @@ const embedBase = new EmbedBuilder()
             source: "doacao",
             logMessageId: logMsg.id,
             logChannelId: logMsg.channelId,
+            // console.log(`[DOACAO] dashEmit: userId=${interaction.user.id}, logMsgId=${logMsg.id}`); // Debug
           });
         }
 

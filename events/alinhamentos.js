@@ -67,6 +67,7 @@ const ALINV1_BTN_INVALID_ID = "alinv1:invalid";
 // ✅ reações pós-decisão (na própria msg do registro)
 const ALINV1_REACT_VALID = "☑️";
 const ALINV1_REACT_INVALID = "❌";
+const ALINV1_FULL_AUDIT_CH_ID = "1515132246728638574";
 
 
 // ✅ anti-farm (mesmo registrador + mesma pessoa alinhada = 1 por hora)
@@ -967,6 +968,36 @@ const fields = readEmbedFields(freshEmb).filter((f) => {
     } catch (e) {
       console.warn("[ALINV1] Falha ao linkar Forms após validação:", e?.message || e);
     }
+  }
+
+  // ✅ NOVO: Auditoria Completa no Canal Solicitado
+  const fullAuditCh = await client.channels.fetch(ALINV1_FULL_AUDIT_CH_ID).catch(() => null);
+  if (fullAuditCh?.isTextBased()) {
+    const targetId = extractId(getFieldValueByNameIncludes(freshEmb, "quem foi alinhado"));
+    const targetMember = targetId ? await interaction.guild.members.fetch(targetId).catch(() => null) : null;
+    const quemAlinhouRaw = getFieldValueByNameIncludes(freshEmb, "quem alinhou");
+    const assunto = getFieldValueByNameIncludes(freshEmb, "sobre o que foi");
+    const dataReg = getFieldValueByNameIncludes(freshEmb, "quando");
+
+    const auditEmbed = new EmbedBuilder()
+      .setTitle("🔮 Auditoria Completa: Alinhamento Validado")
+      .setColor(isValid ? 0x2ecc71 : 0xe74c3c)
+      .setThumbnail(targetMember?.user.displayAvatarURL() || null)
+      .addFields(
+        { name: "🧭 Quem Alinhou", value: `<@${extractId(quemAlinhouRaw)}> (\`${extractId(quemAlinhouRaw)}\`)`, inline: true },
+        { name: "👤 Quem foi Alinhado", value: `<@${targetId}> (\`${targetId}\`)`, inline: true },
+        { name: "✍️ Registrado por", value: `<@${registradorId}> (\`${registradorId}\`)`, inline: true },
+        { name: "🧑‍⚖️ Quem Validou", value: `<@${validatorId}> (\`${validatorId}\`)`, inline: true },
+        { name: "📜 Assunto", value: `\`\`\`\n${assunto}\n\`\`\``, inline: false },
+        { name: "🔗 Forms pessoal", value: evolutionResult?.link || "Não vinculado", inline: false },
+        { name: "📍 Link do Registro", value: `Abrir Mensagem`, inline: false },
+        { name: "🕒 Data Registro", value: dataReg || "—", inline: true },
+        { name: "✅ Data Aprovação", value: quando, inline: true }
+      )
+      .setTimestamp()
+      .setFooter({ text: "SantaCreators • Alinhamentos Audit System", iconURL: interaction.user.displayAvatarURL() });
+
+    await fullAuditCh.send({ embeds: [auditEmbed] }).catch(() => {});
   }
 
   // ✅ NOVO: reage a mensagem do registro com ☑️ (válido) ou ❌ (não válido)

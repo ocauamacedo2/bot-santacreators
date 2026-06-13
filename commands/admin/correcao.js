@@ -391,6 +391,7 @@ const numeros = match[1]
       userId: message.author.id,
       __at: Date.now(),
       source: 'correcao'
+      // console.log(`[CORRECAO] dashEmit: userId=${message.author.id}`); // Debug
     });
   }
 

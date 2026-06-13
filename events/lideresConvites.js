@@ -912,6 +912,7 @@ try {
   canais: chSent,
   dms: dmSent,
   __at: Date.now(),
+  // console.log(`[CONVITES] dashEmit: by=${i.user.id}, canais=${chSent}, dms=${dmSent}`); // Debug
 });
 
 

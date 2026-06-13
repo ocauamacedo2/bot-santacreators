@@ -888,7 +888,7 @@ client.once("ready", async () => {
     } catch (e) {}
 
     try {
-      if (typeof geralDash?.geralDashOnReady === "function") {
+      if (typeof geralDash?.geralDashOnReady === "function" && !client.__SC_GERAL_DASH_READY_RAN_V3__) {
         await geralDash.geralDashOnReady(client);
       }
     } catch (e) {}

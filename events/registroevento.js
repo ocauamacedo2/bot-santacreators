@@ -457,6 +457,7 @@ if (!isNoUseRegister) {
       __at: Date.now(),
       source: "registro_evento",
       channelId: CANAL_REGISTRO_EVENTO,
+      // console.log(`[EVENTO_PODER] dashEmit: userId=${interaction.user.id}, channelId=${CANAL_REGISTRO_EVENTO}`); // Debug
     });
   } catch {}
 }

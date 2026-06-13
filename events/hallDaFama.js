@@ -1165,6 +1165,7 @@ ${data.imageUrl}${data.imageUrl2 ? `\n${data.imageUrl2}` : ''}`;
       userId: data.userId,
       approverId: interaction.user.id,
       at: Date.now()
+      // console.log(`[HALL_DA_FAMA] dashEmit: userId=${data.userId}, approverId=${interaction.user.id}`); // Debug
     });
 
     // ✅ Log de Auditoria

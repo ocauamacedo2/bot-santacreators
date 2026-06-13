@@ -956,6 +956,7 @@ dashEmit("cronograma:aprovado", {
   at: Date.now(),
   source: "cronogramaCreators",
   channelId: interaction.channelId,
+  // console.log(`[CRONOGRAMA] dashEmit: userId=${targetId}, approverId=${interaction.user.id}`); // Debug
   messageId: interaction.message.id,
 });
 
