@@ -1898,13 +1898,22 @@ if (HALL_CHANNEL_ID) {
   }
 
     // Auditoria final da coleta
-    console.log("━━━━━━━━━━━━━━━━━━━━━━━");
-    console.log("🛡️ AUDITORIA FINAL DE SCAN (RANKING)");
-    console.log(`TOTAL MSGS ANALISADAS: ${audit.totalFound}`);
-    console.log(`TOTAL IDs EXTRAÍDOS: ${audit.extractedIds}`);
-    console.log("RANKING POR FONTE:", audit.sources);
-    console.log("REJEITADOS POR MOTIVO:", audit.rejected);
-    console.log("━━━━━━━━━━━━━━━━━━━━━━━");
+const wkNowForAudit = weekKeyFromDateSP(nowSP());
+const weekItemsForAudit = items.filter((x) => weekKeyFromDateSP(x.ts) === wkNowForAudit);
+
+const sourcesWeekAudit = {};
+for (const it of weekItemsForAudit) {
+  sourcesWeekAudit[it.source] = (sourcesWeekAudit[it.source] || 0) + 1;
+}
+
+console.log("━━━━━━━━━━━━━━━━━━━━━━━");
+console.log("🛡️ AUDITORIA FINAL DE SCAN (RANKING)");
+console.log(`TOTAL MSGS ANALISADAS: ${audit.totalFound}`);
+console.log(`TOTAL IDs EXTRAÍDOS BRUTO: ${audit.extractedIds}`);
+console.log(`TOTAL REAL DA SEMANA: ${weekItemsForAudit.length}`);
+console.log("RANKING POR FONTE DA SEMANA:", sourcesWeekAudit);
+console.log("REJEITADOS POR MOTIVO:", audit.rejected);
+console.log("━━━━━━━━━━━━━━━━━━━━━━━");
 
   const payload = { items };
   CACHE = { at: now, payload };

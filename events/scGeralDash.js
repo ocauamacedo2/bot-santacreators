@@ -1974,24 +1974,41 @@ for (const channelId of CRONOGRAMA_LOGS_CHANNEL_IDS) {
   });
 }
 
-// ✅ PRESENÇAS (Log)
+// ✅ PRESENÇAS (Log) — usa helpers locais antigos, não GERAL_PARSERS
 for (const channelId of PRESENCA_LOGS_CHANNEL_IDS) {
   await scanChannelEmbeds(client, {
-    channelId: channelId,
+    channelId,
     weekFloorKey,
     maxPages: 80,
     onMessage: async (m) => {
-      auditor.addStats('presencas', 'scanned');
+      auditor.addStats("presencas", "scanned");
+
       const seenKey = `presencas:${m.id}`;
-      if (seenMessageIds.has(seenKey)) { auditor.reject('presencas', 'duplicate_message'); return; }
-      seenMessageIds.add(seenKey);
+      if (seenMessageIds.has(seenKey)) {
+        auditor.reject("presencas", "duplicate_message");
+        return;
+      }
+
       const emb = m.embeds?.[0];
-      if (!emb) { auditor.reject('presencas', 'no_embed'); return; }
-      if (!GERAL_PARSERS.isPresenca(emb) || !GERAL_PARSERS.isPresencaConfirmed(emb)) { auditor.reject('presencas', 'invalid_embed'); return; }
+      if (!emb) {
+        auditor.reject("presencas", "no_embed");
+        return;
+      }
+
+      if (!isPresencaLogEmbed(emb) || !presenca_isConfirmed(emb)) {
+        auditor.reject("presencas", "invalid_presenca");
+        return;
+      }
+
       const uid = presenca_getUserId(emb);
-      if (!uid) { auditor.reject('presencas', 'uid_null'); return; }
-      auditor.addStats('presencas', 'uidOk');
+      if (!uid) {
+        auditor.reject("presencas", "uid_null");
+        return;
+      }
+
       seenMessageIds.add(seenKey);
+      auditor.addStats("presencas", "uidOk");
+
       pushItem({
         userId: uid,
         ts: new Date(m.createdTimestamp),
