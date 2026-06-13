@@ -349,22 +349,6 @@ const COOLDOWN_FULL_MS = 4 * 60 * 60 * 1000; // 4h (igual teu dash, se quiser fu
 // quantas páginas procurar no canal de ranking (pra achar msg antiga)
 const RANK_FIND_PAGES = 10; // 1000 msgs
 
-// ================== FONTES (IGUAL TEU DASH) ==================
-
-// DOAÇÃO logs (env SCDOACAO_LOGS_ID fallback)
-const DOACAO_LOGS_CHANNEL_ID =
-  process.env.SCDOACAO_LOGS_ID?.trim() || "1486009647923200120";
-
-// CONVITES logs
-const CONVITES_LOGS_CHANNEL_ID = "1486009598237212793";
-
-// PERGUNTAS logs (env opcional)
-const PERGUNTAS_LOGS_CHANNEL_ID = process.env.SCPERGUNTAS_LOGS_ID?.trim() || "";
-const VENDAS_LOGS_CHANNEL_ID = "1486084262867370105";
-const CRONOGRAMA_LOGS_CHANNEL_ID = "1486009619846529075";
-const PRESENCA_LOGS_CHANNEL_ID = "1486006866046615682";
-const CORRECAO_LOGS_CHANNEL_ID = "1486006908056899748"; // ✅ Canal de logs de correção
-const HALL_CHANNEL_ID = "1386503496353976470"; // ✅ Canal do Hall da Fama
 const VIP_MENU_CHANNEL_ID = "1414718336826081330"; // ✅ registros VIP por evento
 
 const DOACAO_LOGS_CHANNEL_IDS = [
