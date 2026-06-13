@@ -2315,8 +2315,6 @@ const bottomLines = bottom.map((u, i) => {
   return `🔻 **${i + 1}.** <@${u.userId}> — ${fmtPts(u.points)}${extra}`;
 });
 
-js
-
   const embeds = [];
 
   // ===== CAPA / RESUMO =====
