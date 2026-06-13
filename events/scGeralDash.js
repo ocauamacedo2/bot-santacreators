@@ -1660,12 +1660,12 @@ async function collectAllGeneral(client, mode = "light") {
     const pushItem = (item) => {
       const userId = String(item?.userId || "").trim();
       const source = String(item?.source || "").trim();
-      audit.sources[source] = (audit.sources[source] || 0) + 1;
+      auditor.addStats(source, 'counted');
 
       if (!userId || !source || !item?.ts) return;
 
       if (client?.user?.id && userId === String(client.user.id)) {
-        audit.rejected["bot_self_point"] = (audit.rejected["bot_self_point"] || 0) + 1;
+        auditor.reject(source, 'bot_self_point');
         return;
       }
 
@@ -1876,7 +1876,6 @@ if (MANAGER_AUDIT_ENABLED) {
 // - respeita "Geral/Semanal: não contou"
 // - para logs antigos, recalcula 12h por usuário
 // - não interfere no ranking mensal próprio da doação, que continua 1h
-const lastDoacaoAtByUser = new Map();
 for (const channelId of DOACAO_LOGS_CHANNEL_IDS) {
   await scanChannelEmbeds(client, {
     channelId,

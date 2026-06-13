@@ -1340,7 +1340,7 @@ async function collectAllPoints(client, mode = "light") {
   };
 
   // floor = volta 5 semanas (pra manter leve)
-  const wkNow = weekKeyFromDateSP(nowSP());
+  const wkNow = weekKeyFromDateSP(new Date());
   const weekFloorKey = addDaysToWeekKey(wkNow, -35);
 
   // PODERES

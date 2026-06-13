@@ -40,6 +40,7 @@ const ROLES_REWARD = {
 // Caminhos dos dados
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const ROOT_DIR = process.cwd();
 
 function pickPersistRoot() {
   const candidates = [
