@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { EmbedBuilder } from "discord.js";
 
 export const GERAL_CHANNELS = {
@@ -30,11 +31,11 @@ export const GERAL_PARSERS = {
     },
 
     extractId: (raw) => {
-        let m = /<@!?(\d{17,20})>/.exec(raw);
+        let m = /<@!?(\d{17,22})>/.exec(raw);
         if (m) return m[1];
-        m = /`(\d{17,20})`/.exec(raw);
+        m = /`(\d{17,22})`/.exec(raw);
         if (m) return m[1];
-        m = /\b(\d{17,20})\b/.exec(raw);
+        m = /\b(\d{17,22})\b/.exec(raw);
         return m ? m[1] : null;
     },
 
@@ -79,9 +80,6 @@ export const GERAL_PARSERS = {
     }
 };
 
-/**
- * Centralizador de Logs e Debug Summary
- */
 export class GeralAudit {
     constructor() {
         this.verbose = process.env.SC_GERAL_VERBOSE_SCAN === '1';
@@ -108,6 +106,8 @@ export class GeralAudit {
 
     saveSummary() {
         try {
+            const dir = "./data";
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
             fs.writeFileSync(this.summaryPath, JSON.stringify(this.data, null, 2));
         } catch (e) {}
     }
