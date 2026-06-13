@@ -57,26 +57,31 @@ export const GERAL_PARSERS = {
     isAlinhamentoValido: (emb) => {
         const fields = GERAL_PARSERS.getFields(emb);
         const f = fields.find(x => GERAL_PARSERS.norm(x.name).includes("status"));
-        const val = GERAL_PARSERS.norm(f?.value || "");
-        return val.includes("valido") || val.includes("aprovado");
+        const val = GERAL_PARSERS.norm(f?.value || f?.name || "");
+        // ✅ Garante que "não válido" ou "reprovado" seja ignorado
+        return (val.includes("valido") || val.includes("aprovado")) && !val.includes("nao");
     },
 
     // --- DOACOES ---
     isDoacao: (emb) => {
         const text = GERAL_PARSERS.getEmbedText(emb);
-        return text.includes("doacao") || text.includes("scdoa") || text.includes("nova doacao registrada");
+        // ✅ Busca termos comuns do sistema de doação no texto total do embed
+        return text.includes("doacao") || text.includes("scdoa") || text.includes("doacao registrada");
     },
     getDoacaoRegistradorId: (emb) => {
         const fields = GERAL_PARSERS.getFields(emb);
         const f = fields.find(x => {
             const n = GERAL_PARSERS.norm(x.name);
-            return n.includes("registrador") || n.includes("registrado por") || n.includes("autor") || n.includes("usuario");
+            return n.includes("registrador") || n.includes("registrado por") || n.includes("autor") || n.includes("usuario") || n.includes("usuário");
         });
-        return f ? GERAL_PARSERS.extractId(f.value) : GERAL_PARSERS.extractId(GERAL_PARSERS.getEmbedText(emb));
+        return f ? GERAL_PARSERS.extractId(f.value) : GERAL_PARSERS.extractId(GERAL_PARSERS.getEmbedText(emb)) || GERAL_PARSERS.extractId(emb?.description || "");
     },
 
     // --- CORRECAO ---
-    isCorrecao: (emb) => GERAL_PARSERS.getEmbedText(emb).includes("log de correcao de entrevista"),
+    isCorrecao: (emb) => {
+        const text = GERAL_PARSERS.getEmbedText(emb);
+        return text.includes("log de correcao de entrevista") || text.includes("correcao de questoes");
+    },
     getCorretorId: (emb) => {
         const fields = GERAL_PARSERS.getFields(emb);
         const f = fields.find(x => GERAL_PARSERS.norm(x.name).includes("staff") || GERAL_PARSERS.norm(x.name).includes("corrigiu"));

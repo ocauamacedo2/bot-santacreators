@@ -14,7 +14,6 @@ import {
 } from "discord.js";
 
 import { dashOn } from "../utils/dashHub.js";
-import { GERAL_PARSERS, GERAL_CHANNELS, GeralAudit } from "../shared/scGeralSources.js";
 
 // ✅ __dirname no ESM
 const __filename = fileURLToPath(import.meta.url);
@@ -1492,7 +1491,6 @@ if (MANAGER_AUDIT_ENABLED) {
     `----------------------------\n`
   ].join("\n"));
 }
-  const auditor = new GeralAudit();
 
   for (const channelId of ALINHAMENTOS_LOGS_CHANNEL_IDS) {
     await scanChannelEmbeds(client, {
@@ -1500,20 +1498,23 @@ if (MANAGER_AUDIT_ENABLED) {
       weekFloorKey,
       maxPages: 120,
       onMessage: async (m) => {
-        auditor.addStats('alinhamentos', 'scanned');
+        audit.totalFound++;
         const seenKey = `alinhamentos:${m.id}`;
         if (seenMessageIds.has(seenKey)) return;
         const emb = m.embeds?.[0];
-        if (!emb || !GERAL_PARSERS.isAlinhamento(emb)) {
-            auditor.reject('alinhamentos', 'invalid_embed');
-            return;
+        if (!emb) return;
+        if (!isAlinhamentoRecordEmbed(emb)) return;
+        const statusAlinhamento = getStatusValueFromEmbed(emb);
+        if (!/VÁLIDO|VALIDO|APROVADO|aprovado por/i.test(statusAlinhamento)) return;
+        let uid = alinhamento_getQuemAlinhouId(emb);
+        if (!uid) {
+          // Helper extractRegistradorIdFromEmbed implementado similarmente ao dash
+          const v = getFieldValueByPrefix(emb, "registrado por") || getFieldValueByPrefix(emb, "📌 registrado por");
+          uid = String(v || "").match(/\b(\d{17,20})\b/)?.[1];
         }
-        if (!GERAL_PARSERS.isAlinhamentoValido(emb)) return;
-        const uid = GERAL_PARSERS.getAlinhadorId(emb);
-        if (!uid) { auditor.reject('alinhamentos', 'uid_null'); return; }
-
+        if (!uid) return;
         seenMessageIds.add(seenKey);
-        auditor.addStats('alinhamentos', 'counted');
+        audit.extractedIds++;
         pushItem({
           userId: uid,
           ts: new Date(m.editedTimestamp || m.createdTimestamp),
