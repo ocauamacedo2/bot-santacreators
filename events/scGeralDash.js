@@ -2630,27 +2630,22 @@ for (const rmChannelId of [CH_MANAGER_ID, CH_MANAGER_MAIN_ID]) {
   });
 }
 
- // -------- ALINHAMENTOS --------
-const seenAlinh = new Set();
-for (const channelId of ALINHAMENTOS_LOGS_CHANNEL_IDS) {
-  if (channelId) {
-    await scanCurrentWeekEmbeds(
-      client,
-      channelId,
-      (emb) => {
-        if (!isAlinhamentoRecordEmbed(emb)) return false;
-        const statusAlinhamento = getStatusValueFromEmbed(emb);
-        return /VÁLIDO|VALIDO|aprovado por/i.test(statusAlinhamento);
-      },
-      async (m) => {
-        if (seenAlinh.has(m.id)) return;
-        seenAlinh.add(m.id);
-        alinhamentos += 1;
-      },
-      25
-    );
-  }
-}
+    // -------- ALINHAMENTOS --------
+    for (const channelId of ALINHAMENTOS_LOGS_CHANNEL_IDS) {
+      await scanCurrentWeekEmbeds(
+        client,
+        channelId,
+        (emb) => {
+          if (!isAlinhamentoRecordEmbed(emb)) return false;
+          const statusAlinhamento = getStatusValueFromEmbed(emb);
+          return /VÁLIDO|VALIDO|APROVADO|aprovado por/i.test(statusAlinhamento);
+        },
+        async () => {
+          alinhamentos += 1;
+        },
+        25
+      );
+    }
 
     // -------- PODERES EM EVENTO (Social Medias) --------
     const seenEvtP = new Set();
