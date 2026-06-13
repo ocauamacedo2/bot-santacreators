@@ -94,6 +94,16 @@ const ALINHAMENTOS_LOGS_CHANNEL_IDS = ["1425256185707233301", "15151322467286385
 const EVENTOS_NORMAL_CHANNEL_IDS = ["1515128485331468318"];
 const EVENTOS_PODER_CHANNEL_IDS = ["1392618646630568076"];
 
+// aliases de compatibilidade para blocos antigos
+const DOACAO_LOGS_CHANNEL_ID = DOACAO_LOGS_CHANNEL_IDS[0];
+const CONVITES_LOGS_CHANNEL_ID = CONVITES_LOGS_CHANNEL_IDS[0];
+const PERGUNTAS_LOGS_CHANNEL_ID = PERGUNTAS_LOGS_CHANNEL_IDS[0] || "";
+const VENDAS_LOGS_CHANNEL_ID = VENDAS_LOGS_CHANNEL_IDS[0];
+const CRONOGRAMA_LOGS_CHANNEL_ID = CRONOGRAMA_LOGS_CHANNEL_IDS[0];
+const PRESENCA_LOGS_CHANNEL_ID = PRESENCA_LOGS_CHANNEL_IDS[0];
+const CORRECAO_LOGS_CHANNEL_ID = CORRECAO_LOGS_CHANNEL_IDS[0];
+const CH_ALINHAMENTOS_ID = ALINHAMENTOS_LOGS_CHANNEL_IDS[0];
+
 const CH_PODERES_ID = "1374066813171929218";
 const CH_PAGAMENTOS_ID = "1387922662134775818";
 const CH_MANAGER_ID = "1486084441762693291";
@@ -1840,7 +1850,7 @@ if (MANAGER_AUDIT_ENABLED) {
         }
         let uid = alinhamento_getQuemAlinhouId(emb);
         if (!uid) {
-          uid = extractRegistradorIdFromEmbed(emb);
+          uid = alinhamento_getRegistradorId(emb);
         }
         if (!uid) {
           audit.rejected["alinh_uid_null"] = (audit.rejected["alinh_uid_null"] || 0) + 1;
@@ -1946,9 +1956,9 @@ const uid = entrevistaConcluida_getUserId(emb);
   });
 }
 // ✅ CRONOGRAMA / HALL DA FAMA / EVENTOS DIÁRIOS (Aprovados)
-if (CRONOGRAMA_LOGS_CHANNEL_ID) {
+for (const channelId of CRONOGRAMA_LOGS_CHANNEL_IDS) {
   await scanChannelEmbeds(client, {
-    channelId: CRONOGRAMA_LOGS_CHANNEL_ID,
+    channelId: channelId,
     weekFloorKey,
     maxPages: 120,
     onMessage: async (m) => {
@@ -1973,9 +1983,9 @@ if (CRONOGRAMA_LOGS_CHANNEL_ID) {
 }
 
 // ✅ PRESENÇAS (Log)
-if (PRESENCA_LOGS_CHANNEL_ID) {
+for (const channelId of PRESENCA_LOGS_CHANNEL_IDS) {
   await scanChannelEmbeds(client, {
-    channelId: PRESENCA_LOGS_CHANNEL_ID,
+    channelId: channelId,
     weekFloorKey,
     maxPages: 80,
     onMessage: async (m) => {
@@ -2220,8 +2230,15 @@ function diff(a, b) {
 
 function isDoacaoLogEmbed(emb) {
   const t = norm(emb?.title || emb?.data?.title || "");
-  // doacao.js usa: .setTitle("📦 Nova Doação Registrada")
-  return t.includes("nova doacao registrada");
+  const bag = norm(getEmbedText(emb));
+
+  return (
+    t.includes("doacao") ||
+    bag.includes("nova doacao registrada") ||
+    bag.includes("doacao registrada") ||
+    bag.includes("sc_doacao") ||
+    bag.includes("scdoa")
+  );
 }
 
 function bumpWeekly(state, key, weekKey, inc = 1) {
@@ -2375,26 +2392,27 @@ function getEmbedTextBag(emb) {
 
 // DOAÇÃO: geralmente tem "Registrado por" / "Quem registrou" / algo assim
 function doacao_getRegistrarId(emb) {
-  try {
-    const fields = getFields(emb);
+  const fields = getFields(emb);
 
-    const f =
-      fields.find(x => norm(x?.name).includes("registrado por")) ||
-      fields.find(x => norm(x?.name).includes("registrante")) ||
-      fields.find(x => norm(x?.name).includes("quem registrou")) ||
-      fields.find(x => norm(x?.name).includes("autor")) ||
-      null;
+  const f =
+    fields.find((x) => norm(x?.name).includes("registrador")) ||
+    fields.find((x) => norm(x?.name).includes("registrado por")) ||
+    fields.find((x) => norm(x?.name).includes("autor")) ||
+    fields.find((x) => norm(x?.name).includes("usuario")) ||
+    fields.find((x) => norm(x?.name).includes("usuário"));
 
-    if (f) {
-      const v = String(f?.value || "");
-      return pickFirstMentionId(v) || pickFirstIdLoose(v);
-    }
+  const raw = String(f?.value || getEmbedText(emb) || "");
 
-    const bag = getEmbedTextBag(emb);
-    return pickFirstMentionId(bag) || pickFirstIdLoose(bag);
-  } catch {
-    return null;
-  }
+  let m = /<@!?(\d{17,20})>/.exec(raw);
+  if (m) return m[1];
+
+  m = /`(\d{17,20})`/.exec(raw);
+  if (m) return m[1];
+
+  m = /\b(\d{17,20})\b/.exec(raw);
+  if (m) return m[1];
+
+  return null;
 }
 
 // CONVITE: normalmente tem "Enviado por" / "Líder" / "Registrado por"
@@ -2815,10 +2833,10 @@ async function backfillVipAndOthersThisWeek(client) {
     }
 
     // 3. EVENTOS DIÁRIOS
-    if (CRONOGRAMA_LOGS_CHANNEL_ID) {
+    for (const channelId of CRONOGRAMA_LOGS_CHANNEL_IDS) {
       await scanCurrentWeekEmbeds(
         client,
-        CRONOGRAMA_LOGS_CHANNEL_ID,
+        channelId,
         (emb) => isEventoDiarioLogEmbed(emb) && isCronogramaApprovedEmbed(emb),
         async () => {
           eventosdiarios += 1;
@@ -2935,9 +2953,9 @@ async function backfillExtrasThisWeek(client) {
     }
 
     // -------- CRONOGRAMA --------
-    if (CRONOGRAMA_LOGS_CHANNEL_ID) {
+    for (const channelId of CRONOGRAMA_LOGS_CHANNEL_IDS) {
   await scanChannelEmbeds(client, {
-    channelId: CRONOGRAMA_LOGS_CHANNEL_ID,
+    channelId: channelId,
     weekFloorKey: addDaysToWeekKey(wkNow, -7),
     maxPages: 80,
     onMessage: async (_m) => {
