@@ -32,12 +32,82 @@ export const GERAL_PARSERS = {
     },
 
     extractId: (raw) => {
-        let m = /<@!?(\d{17,22})>/.exec(raw);
+        let m = /<@!?(\d{17,22})>/.exec(String(raw || ""));
         if (m) return m[1];
-        m = /`(\d{17,22})`/.exec(raw);
+        m = /`(\d{17,22})`/.exec(String(raw || ""));
         if (m) return m[1];
-        m = /\b(\d{17,22})\b/.exec(raw);
+        m = /\b(\d{17,22})\b/.exec(String(raw || ""));
         return m ? m[1] : null;
+    },
+
+    // --- PODERES ---
+    isPoderes: (emb) => {
+        const title = GERAL_PARSERS.norm(emb?.title || emb?.data?.title || "");
+        const text = GERAL_PARSERS.getEmbedText(emb);
+
+        return (
+            title.includes("registro") &&
+            title.includes("poderes") &&
+            title.includes("utilizados")
+        ) || (
+            text.includes("registro") &&
+            text.includes("poderes") &&
+            text.includes("utilizados")
+        );
+    },
+
+    getPoderesUserId: (emb) => {
+        const fields = GERAL_PARSERS.getFields(emb);
+
+        const f =
+            fields.find((x) => GERAL_PARSERS.norm(x?.name).includes("id")) ||
+            fields.find((x) => GERAL_PARSERS.norm(x?.name).includes("usuario")) ||
+            fields.find((x) => GERAL_PARSERS.norm(x?.name).includes("usuário"));
+
+        return f
+            ? GERAL_PARSERS.extractId(String(f.value || ""))
+            : GERAL_PARSERS.extractId(GERAL_PARSERS.getEmbedText(emb));
+    },
+
+    // --- EVENTOS ---
+    isEvento: (emb) => {
+        const title = GERAL_PARSERS.norm(emb?.title || emb?.data?.title || "");
+        const text = GERAL_PARSERS.getEmbedText(emb);
+
+        const isPoderEvento =
+            title.includes("uso de poderes") ||
+            text.includes("uso de poderes") ||
+            (text.includes("poderes") && text.includes("evento"));
+
+        return (
+            title.includes("registro") &&
+            title.includes("evento") &&
+            !isPoderEvento
+        );
+    },
+
+    isEventoPoder: (emb) => {
+        const title = GERAL_PARSERS.norm(emb?.title || emb?.data?.title || "");
+        const text = GERAL_PARSERS.getEmbedText(emb);
+
+        return (
+            title.includes("uso de poderes") ||
+            text.includes("uso de poderes") ||
+            (text.includes("registro") && text.includes("poderes") && text.includes("evento"))
+        );
+    },
+
+    getEventoRegistrarId: (emb) => {
+        const fields = GERAL_PARSERS.getFields(emb);
+
+        const f =
+            fields.find((x) => GERAL_PARSERS.norm(x?.name).includes("registrado por")) ||
+            fields.find((x) => GERAL_PARSERS.norm(x?.name).includes("registrador")) ||
+            fields.find((x) => GERAL_PARSERS.norm(x?.name).includes("autor"));
+
+        return f
+            ? GERAL_PARSERS.extractId(String(f.value || ""))
+            : GERAL_PARSERS.extractId(GERAL_PARSERS.getEmbedText(emb));
     },
 
     // --- ALINHAMENTOS ---
@@ -85,6 +155,37 @@ export const GERAL_PARSERS = {
         return f
             ? GERAL_PARSERS.extractId(String(f.value || ""))
             : GERAL_PARSERS.extractId(GERAL_PARSERS.getEmbedText(emb));
+    },
+
+    getPagamentoStatus: (emb) => {
+        const fields = GERAL_PARSERS.getFields(emb);
+
+        const statusField = fields.find((f) =>
+            GERAL_PARSERS.norm(f?.name).includes("status")
+        );
+
+        const raw = String(statusField?.value || "");
+        const n = GERAL_PARSERS.norm(raw);
+
+        const isPago =
+            /✅\s*\*{0,2}PAGO\*{0,2}/i.test(raw) ||
+            /^pago\b/i.test(n) ||
+            n.includes(" pago");
+
+        const isReprovado =
+            /❌\s*\*{0,2}REPROVADO\*{0,2}/i.test(raw) ||
+            n.includes("reprovado");
+
+        const isSolicitado =
+            n.includes("solicitado") ||
+            n.includes("ja foi solicitado") ||
+            n.includes("já foi solicitado");
+
+        return {
+            isPago,
+            isReprovado,
+            isSolicitado,
+        };
     },
 
     // --- MANAGER ---
@@ -194,6 +295,60 @@ export const GERAL_PARSERS = {
         lastDoacaoAtByUser.set(uid, ts);
         return true;
     },
+
+
+        // --- VIP EVENTO ---
+    isVip: (emb) => {
+        const text = GERAL_PARSERS.getEmbedText(emb);
+        return (
+            text.includes("registro de vip por evento") ||
+            text.includes("vip por evento") ||
+            text.includes("vip evento")
+        );
+    },
+
+    getVipStatus: (emb) => {
+        const fields = GERAL_PARSERS.getFields(emb);
+
+        const solValue = String(
+            fields.find((f) => GERAL_PARSERS.norm(f?.name).startsWith("solicitacoes"))?.value ||
+            fields.find((f) => GERAL_PARSERS.norm(f?.name).startsWith("solicitações"))?.value ||
+            ""
+        );
+
+        const pagValue = String(
+            fields.find((f) => GERAL_PARSERS.norm(f?.name).startsWith("pagamento"))?.value ||
+            ""
+        );
+
+        const repValue = String(
+            fields.find((f) => GERAL_PARSERS.norm(f?.name).startsWith("reprovacao"))?.value ||
+            fields.find((f) => GERAL_PARSERS.norm(f?.name).startsWith("reprovação"))?.value ||
+            ""
+        );
+
+        return {
+            isSolicitado: GERAL_PARSERS.norm(solValue).includes("solicitado"),
+            isPago: GERAL_PARSERS.norm(pagValue).includes("pago"),
+            isReprovado: GERAL_PARSERS.norm(repValue).includes("reprovado"),
+        };
+    },
+
+    getVipPagoByUserId: (emb) => {
+        const fields = GERAL_PARSERS.getFields(emb);
+
+        const f =
+            fields.find((x) => GERAL_PARSERS.norm(x?.name).startsWith("pagamento")) ||
+            fields.find((x) => GERAL_PARSERS.norm(x?.name).includes("pago por"));
+
+        const raw = String(f?.value || "");
+        const byMatch = /por\s+<@!?(\d{17,22})>/i.exec(raw);
+        if (byMatch) return byMatch[1];
+
+        return GERAL_PARSERS.extractId(raw);
+    },
+
+    // --- CORRECAO ---
 
     // --- CORRECAO ---
     isCorrecao: (emb) => {

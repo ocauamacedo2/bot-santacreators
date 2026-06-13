@@ -1493,37 +1493,55 @@ if (MANAGER_AUDIT_ENABLED) {
   ].join("\n"));
 }
 
-  for (const channelId of ALINHAMENTOS_LOGS_CHANNEL_IDS) {
-    await scanChannelEmbeds(client, {
-      channelId,
-      weekFloorKey,
-      maxPages: 120,
-      onMessage: async (m) => {
-        audit.totalFound++;
-        const seenKey = `alinhamentos:${m.id}`;
-        if (seenMessageIds.has(seenKey)) return;
-        const emb = m.embeds?.[0];
-        if (!emb) return;
-        if (!isAlinhamentoRecordEmbed(emb)) return;
-        const statusAlinhamento = getStatusValueFromEmbed(emb);
-        if (!/VÁLIDO|VALIDO|APROVADO|aprovado por/i.test(statusAlinhamento)) return;
-        let uid = alinhamento_getQuemAlinhouId(emb);
-        if (!uid) {
-          // Helper extractRegistradorIdFromEmbed implementado similarmente ao dash
-          const v = getFieldValueByPrefix(emb, "registrado por") || getFieldValueByPrefix(emb, "📌 registrado por");
-          uid = String(v || "").match(/\b(\d{17,20})\b/)?.[1];
-        }
-        if (!uid) return;
-        seenMessageIds.add(seenKey);
-        audit.extractedIds++;
-        pushItem({
-          userId: uid,
-          ts: new Date(m.editedTimestamp || m.createdTimestamp),
-          source: "alinhamentos",
-        });
-      },
-    });
-  }
+for (const channelId of ALINHAMENTOS_LOGS_CHANNEL_IDS) {
+  await scanChannelEmbeds(client, {
+    channelId,
+    weekFloorKey,
+    maxPages: 120,
+    onMessage: async (m) => {
+      auditor.addStats("alinhamentos", "scanned");
+
+      const seenKey = `alinhamentos:${m.id}`;
+      if (seenMessageIds.has(seenKey)) {
+        auditor.reject("alinhamentos", "duplicate_message");
+        return;
+      }
+
+      const emb = m.embeds?.[0];
+      if (!emb) {
+        auditor.reject("alinhamentos", "no_embed");
+        return;
+      }
+
+      if (!GERAL_PARSERS.isAlinhamento(emb)) {
+        auditor.reject("alinhamentos", "not_alinhamento");
+        return;
+      }
+
+      auditor.addStats("alinhamentos", "found");
+
+      if (!GERAL_PARSERS.isAlinhamentoValido(emb)) {
+        auditor.reject("alinhamentos", "invalid_status");
+        return;
+      }
+
+      const uid = GERAL_PARSERS.getAlinhadorId(emb);
+      if (!uid) {
+        auditor.reject("alinhamentos", "uid_null");
+        return;
+      }
+
+      seenMessageIds.add(seenKey);
+      auditor.addStats("alinhamentos", "uidOk");
+
+      pushItem({
+        userId: uid,
+        ts: new Date(m.editedTimestamp || m.createdTimestamp),
+        source: "alinhamentos",
+      });
+    },
+  });
+}
 
 // DOAÇÕES (logs)
   // ✅ Recontagem forte:
