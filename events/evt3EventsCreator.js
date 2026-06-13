@@ -22,9 +22,6 @@ import {
   TextInputStyle,
   ChannelType,
 } from "discord.js";
-import {
-  dashEmit
-} from "../utils/dashHub.js";
 
 // =========================
 // EVT3 CONFIG
@@ -551,30 +548,7 @@ export async function evt3EventsHandleInteraction(interaction, client) {
       // ✅ Quando cria NOVO EVENTO: aí sim troca o botão (apaga antigo e manda novo)
       await EVT3_ensureSingleCreateButton(client, { forceRefresh: true });
 
-      try {
-        const logCh = await client.channels.fetch("1515128485331468318").catch(() => null);
-        if (logCh?.isTextBased?.()) {
-          await logCh.send({
-            embeds: [
-              new EmbedBuilder()
-                .setTitle("🎉 Evento criado — EVT3")
-                .setColor("Purple")
-                .addFields(
-                  { name: "👤 Criador do evento", value: `<@${creatorId}> (\`${creatorId}\`)`, inline: false },
-                  { name: "🎉 Evento", value: `\`${eventName}\``, inline: true },
-                  { name: "🧵 Thread", value: `${mainThread}`, inline: true },
-                  { name: "📝 Criado por", value: `<@${interaction.user.id}> (\`${interaction.user.id}\`)`, inline: false },
-                  { name: "🕒 Data/Hora", value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false }
-                )
-                .setFooter({ text: `EVT3_EVENT_CREATED::CREATOR=${creatorId}::THREAD=${mainThread.id}` })
-                .setTimestamp()
-            ]
-          });
-        }
-      } catch (e) {
-        console.error("[EVT3] Erro ao enviar log de criação:", e);
-      }
-
+      // ✅ Dash: Emite para o GeralDash / Ranking contarem o ponto
       dashEmit("evt3:criado", {
         userId: creatorId,
         threadId: mainThread.id,

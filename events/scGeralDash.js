@@ -83,61 +83,23 @@ const DASH_BANNER_URL =
 //
 // A gente reconstrói a SEMANA ATUAL lendo os CANAIS DE LOG desses módulos.
 // Isso NÃO interfere em nenhum outro contador e NÃO mexe no fluxo do HUB.
-// ============================================================================
+const DOACAO_LOGS_CHANNEL_IDS = ["1486009647923200120"];
+const CONVITES_LOGS_CHANNEL_IDS = ["1486009598237212793", "1415102820826349648"];
+const PERGUNTAS_LOGS_CHANNEL_IDS = [process.env.SCPERGUNTAS_LOGS_ID?.trim(), "1486084249755979950"].filter(Boolean);
+const VENDAS_LOGS_CHANNEL_IDS = ["1486084262867370105"];
+const CRONOGRAMA_LOGS_CHANNEL_IDS = ["1486009619846529075", "1387864036259004436"];
+const PRESENCA_LOGS_CHANNEL_IDS = ["1486006866046615682"];
+const CORRECAO_LOGS_CHANNEL_IDS = ["1486006908056899748", "1486084249755979950"];
+const ALINHAMENTOS_LOGS_CHANNEL_IDS = ["1425256185707233301", "1515132246728638574"];
+const EVENTOS_NORMAL_CHANNEL_IDS = ["1515128485331468318"];
+const EVENTOS_PODER_CHANNEL_IDS = ["1392618646630568076"];
 
-// 🔥 DOAÇÃO: canal onde o módulo doação.js manda os registros (embed "📦 Nova Doação Registrada")
-// - ele usa env SCDOACAO_LOGS_ID, fallback: "1486009647923200120"
-const DOACAO_LOGS_CHANNEL_IDS = [
-  "1486009647923200120",
-];
-const DOACAO_LOGS_CHANNEL_ID = DOACAO_LOGS_CHANNEL_IDS[0];
-
-// 🔥 CONVITES: canal LOG do módulo lideresConvites.js
-// - no teu arquivo lideresConvites.js: const LOG_CHANNEL_ID = "1415102820826349648";
-const CONVITES_LOGS_CHANNEL_IDS = [
-  "1415102820826349648",
-  "1486009598237212793",
-];
-const CONVITES_LOGS_CHANNEL_ID = CONVITES_LOGS_CHANNEL_IDS[0];
-
-// 🔥 PERGUNTAS: canal onde entrevista.logCompleto manda o log do "!perguntas usado"
-// ✅ Aqui eu deixei via ENV pra você setar 1 vez e nunca mais mexer.
-// 👉 Coloca no .env / painel:
-//    SCPERGUNTAS_LOGS_ID=SEU_CANAL_AQUI
-//
-// Se não setar, o backfill de perguntas só será ignorado (não quebra nada).
-const VENDAS_LOGS_CHANNEL_ID = "1486084262867370105";
-
-// 🔥 VENDAS: canal de logs do registroVendas.js
-const VENDAS_LOGS_CHANNEL_ID = "1486084262867370105";
-
-// 🔥 CRONOGRAMA: canal de aprovação (onde fica o embed verde)
-const CRONOGRAMA_LOGS_CHANNEL_ID = "1486009619846529075";
-
-// 🔥 PRESENÇA: canal de logs do confirmacaoPresenca.js
-const PRESENCA_LOGS_CHANNEL_ID = "1486006866046615682";
-
-// 🔥 CORREÇÃO: canal de logs do correcao.js
-const CORRECAO_LOGS_CHANNEL_ID = "1486006908056899748";
-
-// ✅ NOVOS CANAIS PARA BACKFILL (VIP / HALL)
+const CH_PODERES_ID = "1374066813171929218";
+const CH_PAGAMENTOS_ID = "1387922662134775818";
+const CH_MANAGER_ID = "1486084441762693291";
+const CH_MANAGER_MAIN_ID = "1392680204517769277";
 const VIP_MENU_CHANNEL_ID = "1414718336826081330";
 const HALL_CHANNEL_ID = "1386503496353976470";
-
-// ✅ eventos normais ficam no canal novo
-const CH_EVENTOS_ID = "1515128485331468318";
-
-// ✅ mantém o canal antigo para não perder Poderes em Evento
-const CH_EVENTOS_PODER_ID = "1392618646630568076";
-
-// Fontes do teu scan “antigo”
-const CH_PODERES_ID = "1374066813171929218";
-const CH_EVENTOS_ID = "1392618646630568076";
-const CH_PAGAMENTOS_ID = "1387922662134775818";
-const CH_MANAGER_ID = "1486084441762693291"; // arquivo/log histórico
-const CH_MANAGER_MAIN_ID = "1392680204517769277"; // principal da semana
-// ✅ NOVO: Alinhamentos (é o mesmo canal onde ele posta os registros)
-const CH_ALINHAMENTOS_ID = "1425256185707233301";
 const EVT3_STATE_FILE = path.join(DATA_DIR, "evt3_events_state.json");
 const EVT3_EVENT_PARENT_ID = "1457573495952248883";
 const BP_CALENDAR_CHANNEL_ID = "1417602545953804328";
