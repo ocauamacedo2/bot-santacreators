@@ -2545,20 +2545,7 @@ const row = new ActionRowBuilder().addComponents(
     .setStyle(ButtonStyle.Danger)
 );
 
-// se não mudou e já existe msg, sai
-if (msg && oldSig === sig && msg.editable) {
-  await msg.edit({
-    embeds,
-    components: [row],
-  }).catch((e) => {
-    console.error("[SC_GERAL_WEEKLY_RANK] ❌ Erro ao editar msg existente:", e);
-    return null;
-  });
-  return true; // ✅ Sucesso
-}
-
-
-if (!msg) {
+async function sendNewRankMessage() {
   const created = await ch.send({
     embeds,
     components: [row],
@@ -2567,18 +2554,67 @@ if (!msg) {
     return null;
   });
 
-  if (!created) return false;
+  if (!created) return null;
+
   st.weeklyMsgIds = st.weeklyMsgIds || {};
   st.weeklyMsgIds[wk] = created.id;
   st.sigByWeek[wk] = sig;
   saveState(st);
-  return true; // ✅ Sucesso
+
+  return created;
 }
 
-// ✅ Edita com retry e fallback.
-// Se o Discord devolver 500, tenta de novo.
-// Se ainda falhar, cria uma nova mensagem e atualiza o state.
-let edited = null;
+async function editRankMessageWithFallback(targetMsg, label = "edit") {
+  if (!targetMsg?.editable) {
+    console.warn(`[SC_GERAL_WEEKLY_RANK] ⚠️ Msg sem permissão de edição (${label}). Recriando.`);
+    return await sendNewRankMessage();
+  }
+
+  try {
+    return await targetMsg.edit({
+      embeds,
+      components: [row],
+    });
+  } catch (e) {
+    console.error(`[SC_GERAL_WEEKLY_RANK] ❌ Erro ao editar msg (${label}). Tentando retry:`, e);
+  }
+
+  await new Promise((resolve) => setTimeout(resolve, 2500));
+
+  try {
+    return await targetMsg.edit({
+      embeds,
+      components: [row],
+    });
+  } catch (e2) {
+    console.error(`[SC_GERAL_WEEKLY_RANK] ❌ Retry falhou (${label}). Vou recriar msg:`, e2);
+  }
+
+  return await sendNewRankMessage();
+}
+
+if (!msg) {
+  const created = await sendNewRankMessage();
+  return Boolean(created);
+}
+
+const editedOrRecreated = await editRankMessageWithFallback(
+  msg,
+  oldSig === sig ? "sem mudança" : "com mudança"
+);
+
+if (!editedOrRecreated) return false;
+
+st.sigByWeek = st.sigByWeek || {};
+st.sigByWeek[wk] = sig;
+
+if (editedOrRecreated.id && editedOrRecreated.id !== msg.id) {
+  st.weeklyMsgIds = st.weeklyMsgIds || {};
+  st.weeklyMsgIds[wk] = editedOrRecreated.id;
+}
+
+saveState(st);
+return true; // ✅ Sucesso
 
 try {
   edited = await msg.edit({
