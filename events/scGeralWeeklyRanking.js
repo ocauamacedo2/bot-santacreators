@@ -1502,20 +1502,30 @@ if (MANAGER_AUDIT_ENABLED) {
     await scanChannelEmbeds(client, {
       channelId,
       weekFloorKey,
-      maxPages: 80,
+      maxPages: 120,
       onMessage: async (m) => {
         audit.totalFound++;
-        if (seenMessageIds.has(m.id)) return;
-        seenMessageIds.add(m.id);
+        const seenKey = `alinhamentos:${m.id}`;
+        if (seenMessageIds.has(seenKey)) return;
         const emb = m.embeds?.[0];
-        if (!emb) { audit.rejected["no_embed"] = (audit.rejected["no_embed"] || 0) + 1; return; }
-        if (!isAlinhamentoRecordEmbed(emb)) { audit.rejected["invalid_alinh_embed"] = (audit.rejected["invalid_alinh_embed"] || 0) + 1; return; }
+        if (!emb) return;
+        if (!isAlinhamentoRecordEmbed(emb)) return;
         const statusAlinhamento = getStatusValueFromEmbed(emb);
-        if (!/VÁLIDO|VALIDO|aprovado por/i.test(statusAlinhamento)) { audit.rejected["alinh_not_valid"] = (audit.rejected["alinh_not_valid"] || 0) + 1; return; }
-        const uid = alinhamento_getQuemAlinhouId(emb);
-        if (!uid) { audit.rejected["uid_null"] = (audit.rejected["uid_null"] || 0) + 1; return; }
+        if (!/VÁLIDO|VALIDO|APROVADO|aprovado por/i.test(statusAlinhamento)) return;
+        let uid = alinhamento_getQuemAlinhouId(emb);
+        if (!uid) {
+          // Helper extractRegistradorIdFromEmbed implementado similarmente ao dash
+          const v = getFieldValueByPrefix(emb, "registrado por") || getFieldValueByPrefix(emb, "📌 registrado por");
+          uid = String(v || "").match(/\b(\d{17,20})\b/)?.[1];
+        }
+        if (!uid) return;
+        seenMessageIds.add(seenKey);
         audit.extractedIds++;
-        pushItem({ userId: uid, ts: new Date(m.editedTimestamp || m.createdTimestamp), source: "alinhamentos" });
+        pushItem({
+          userId: uid,
+          ts: new Date(m.editedTimestamp || m.createdTimestamp),
+          source: "alinhamentos",
+        });
       },
     });
   }
@@ -1528,6 +1538,7 @@ if (MANAGER_AUDIT_ENABLED) {
   // - não interfere no ranking mensal próprio da doação, que continua 1h
   const lastDoacaoAtByUser = new Map();
 
+  const lastDoacaoAtByUser = new Map();
   for (const channelId of DOACAO_LOGS_CHANNEL_IDS) {
     await scanChannelEmbeds(client, {
       channelId,
@@ -1535,14 +1546,17 @@ if (MANAGER_AUDIT_ENABLED) {
       maxPages: 150,
       onMessage: async (m) => {
         audit.totalFound++;
-        if (seenMessageIds.has(m.id)) return;
-        seenMessageIds.add(m.id);
+        const seenKey = `doacoes:${m.id}`;
+        if (seenMessageIds.has(seenKey)) return;
         const emb = m.embeds?.[0];
-        if (!emb) { audit.rejected["no_embed"] = (audit.rejected["no_embed"] || 0) + 1; return; }
-        if (!isDoacaoLogEmbed(emb)) { audit.rejected["invalid_doacao_embed"] = (audit.rejected["invalid_doacao_embed"] || 0) + 1; return; }
+        if (!emb) return;
+        if (!isDoacaoLogEmbed(emb)) return;
         const uid = doacao_getRegistrarId(emb);
-        if (!uid) { audit.rejected["uid_null"] = (audit.rejected["uid_null"] || 0) + 1; return; }
-        if (!canCountDoacaoInGeralScan({ emb, message: m, lastDoacaoAtByUser, uid })) { audit.rejected["doacao_antifarm"] = (audit.rejected["doacao_antifarm"] || 0) + 1; return; }
+        if (!uid) return;
+        if (!canCountDoacaoInGeralScan({ emb, message: m, lastDoacaoAtByUser, uid })) {
+          return;
+        }
+        seenMessageIds.add(seenKey);
         audit.extractedIds++;
         pushItem({
           userId: uid,
@@ -1744,19 +1758,23 @@ if (HALL_CHANNEL_ID) {
     await scanChannelEmbeds(client, {
       channelId,
       weekFloorKey,
-      maxPages: 80,
+      maxPages: 120,
       onMessage: async (m) => {
         audit.totalFound++;
-        const seenKey = `correcao_v2:${m.id}`;
+        const seenKey = `correcao:${m.id}`;
         if (seenMessageIds.has(seenKey)) return;
         const emb = m.embeds?.[0];
-        if (!emb) { audit.rejected["no_embed"] = (audit.rejected["no_embed"] || 0) + 1; return; }
-        if (!isCorrecaoLogEmbed(emb) || !correcaoWasScored(emb)) { audit.rejected["invalid_correcao"] = (audit.rejected["invalid_correcao"] || 0) + 1; return; }
+        if (!emb) return;
+        if (!isCorrecaoLogEmbed(emb) || !correcaoWasScored(emb)) return;
         const uid = correcao_getUserId(emb);
-        if (!uid) { audit.rejected["uid_null"] = (audit.rejected["uid_null"] || 0) + 1; return; }
+        if (!uid) return;
         seenMessageIds.add(seenKey);
         audit.extractedIds++;
-        pushItem({ userId: uid, ts: new Date(m.createdTimestamp), source: "correcao" });
+        pushItem({
+          userId: uid,
+          ts: new Date(m.createdTimestamp),
+          source: "correcao",
+        });
       },
     });
   }

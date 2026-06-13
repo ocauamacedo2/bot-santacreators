@@ -398,19 +398,43 @@ let NEXT_ALLOWED_AT = 0; // quando pode rodar scan novamente
  * Ambos os arquivos devem usar esta mesma lógica de canais e identificação.
  */
 const GERAL_SOURCES_CONFIG = {
-  PODERES: { channelId: "1374066813171929218", type: "poderes" },
-  EVENTOS: { channelId: "1392618646630568076", type: "eventos" },
-  PAGAMENTOS: { channelId: "1387922662134775818", type: "pagamentos" },
+  PODERES: { channelIds: ["1374066813171929218"], type: "poderes" },
+
+  EVENTOS: { channelIds: ["1515128485331468318"], type: "eventos" },
+  EVENTOS_PODER: { channelIds: ["1392618646630568076"], type: "eventopoder" },
+
+  PAGAMENTOS: { channelIds: ["1387922662134775818"], type: "pagamentos" },
   MANAGER: { channelIds: ["1486084441762693291", "1392680204517769277"], type: "manager" },
-  ALINHAMENTOS: { channelId: "1425256185707233301", type: "alinhamentos" },
-  DOACOES: { channelId: "1486009647923200120", type: "doacoes" },
-  CONVITES: { channelId: "1415102820826349648", type: "convites" },
-  PERGUNTAS: { channelId: "1486084249755979950", type: "perguntas" }, // Via Entrevista Concluída
-  VENDAS: { channelId: "1486084262867370105", type: "vendas" },
-  CRONOGRAMA: { channelId: "1387864036259004436", type: "cronograma" },
-  PRESENCA: { channelId: "1486006866046615682", type: "presencas" },
-  VIP: { channelId: "1414718336826081330", type: "vipPagos" },
-  CORRECAO: { channelId: "1486084249755979950", type: "correcao" },
+
+  ALINHAMENTOS: {
+    channelIds: ["1425256185707233301", "1515132246728638574"],
+    type: "alinhamentos",
+  },
+
+  DOACOES: {
+    channelIds: ["1486009647923200120"],
+    type: "doacoes",
+  },
+
+  CONVITES: {
+    channelIds: ["1486009598237212793", "1415102820826349648"],
+    type: "convites",
+  },
+
+  PERGUNTAS: {
+    channelIds: [process.env.SCPERGUNTAS_LOGS_ID?.trim(), "1486084249755979950"].filter(Boolean),
+    type: "perguntas",
+  },
+
+  VENDAS: { channelIds: ["1486084262867370105"], type: "vendas" },
+  CRONOGRAMA: { channelIds: ["1486009619846529075", "1387864036259004436"], type: "cronograma" },
+  PRESENCA: { channelIds: ["1486006866046615682"], type: "presencas" },
+  VIP: { channelIds: ["1414718336826081330"], type: "vipPagos" },
+
+  CORRECAO: {
+    channelIds: ["1486006908056899748", "1486084249755979950"],
+    type: "correcao",
+  },
 };
 
 /**
@@ -1790,33 +1814,48 @@ if (MANAGER_AUDIT_ENABLED) {
 }
 
 
-await scanChannelEmbeds(client, {
-  channelId: CH_ALINHAMENTOS_ID,
-  weekFloorKey,
-  maxPages: 80,
-  onMessage: async (m) => {
-    if (seenMessageIds.has(m.id)) return;
-    seenMessageIds.add(m.id);
-    const emb = m.embeds?.[0];
-    if (!emb) return;
+  for (const channelId of ALINHAMENTOS_LOGS_CHANNEL_IDS) {
+    await scanChannelEmbeds(client, {
+      channelId,
+      weekFloorKey,
+      maxPages: 120,
+      onMessage: async (m) => {
+        audit.totalFound++;
+        const seenKey = `alinhamentos:${m.id}`;
+        if (seenMessageIds.has(seenKey)) return;
 
-    if (!isAlinhamentoRecordEmbed(emb)) return;
-
-// ✅ alinhamento só pontua se estiver VÁLIDO/APROVADO
-const statusAlinhamento = getStatusValueFromEmbed(emb);
-if (!/VÁLIDO|VALIDO|aprovado por/i.test(statusAlinhamento)) return;
-
-// ✅ ponto vai para quem alinhou (campo 🧭)
-const uid = alinhamento_getQuemAlinhouId(emb);
-if (!uid) return;
-
-items.push({
-  userId: uid,
-  ts: new Date(m.editedTimestamp || m.createdTimestamp),
-  source: "alinhamentos",
-});
-  },
-});
+        const emb = m.embeds?.[0];
+        if (!emb) {
+          audit.rejected["alinh_no_embed"] = (audit.rejected["alinh_no_embed"] || 0) + 1;
+          return;
+        }
+        if (!isAlinhamentoRecordEmbed(emb)) {
+          audit.rejected["alinh_not_record"] = (audit.rejected["alinh_not_record"] || 0) + 1;
+          return;
+        }
+        const statusAlinhamento = getStatusValueFromEmbed(emb);
+        if (!/VÁLIDO|VALIDO|APROVADO|aprovado por/i.test(statusAlinhamento)) {
+          audit.rejected["alinh_not_valid"] = (audit.rejected["alinh_not_valid"] || 0) + 1;
+          return;
+        }
+        let uid = alinhamento_getQuemAlinhouId(emb);
+        if (!uid) {
+          uid = extractRegistradorIdFromEmbed(emb);
+        }
+        if (!uid) {
+          audit.rejected["alinh_uid_null"] = (audit.rejected["alinh_uid_null"] || 0) + 1;
+          return;
+        }
+        seenMessageIds.add(seenKey);
+        audit.extractedIds++;
+        pushItem({
+          userId: uid,
+          ts: new Date(m.editedTimestamp || m.createdTimestamp),
+          source: "alinhamentos",
+        });
+      },
+    });
+  }
 
 
 // ================== ✅ ADD: EXTRAS NO RANKING (PESSOAL + GERAL) ==================
@@ -1829,29 +1868,39 @@ items.push({
 // - para logs antigos, recalcula 12h por usuário
 // - não interfere no ranking mensal próprio da doação, que continua 1h
 const lastDoacaoAtByUser = new Map();
-
-await scanChannelEmbeds(client, {
-  channelId: DOACAO_LOGS_CHANNEL_ID,
-  weekFloorKey,
-  maxPages: 150,
-  onMessage: async (m) => {
+for (const channelId of DOACAO_LOGS_CHANNEL_IDS) {
+  await scanChannelEmbeds(client, {
+    channelId,
+    weekFloorKey,
+    maxPages: 150,
+    onMessage: async (m) => {
       audit.totalFound++;
-    const seenKey = `doacoes:${m.id}`;
-    if (seenMessageIds.has(seenKey)) return;
-    const emb = m.embeds?.[0];
-      if (!emb) { audit.rejected["no_embed"] = (audit.rejected["no_embed"] || 0) + 1; return; }
-      if (!isDoacaoLogEmbed(emb)) { audit.rejected["invalid_doacao_embed"] = (audit.rejected["invalid_doacao_embed"] || 0) + 1; return; }
-    const uid = doacao_getRegistrarId(emb);
-      if (!uid) { audit.rejected["uid_null"] = (audit.rejected["uid_null"] || 0) + 1; return; }
+      const seenKey = `doacoes:${m.id}`;
+      if (seenMessageIds.has(seenKey)) return;
+      const emb = m.embeds?.[0];
+      if (!emb) {
+        audit.rejected["doacao_no_embed"] = (audit.rejected["doacao_no_embed"] || 0) + 1;
+        return;
+      }
+      if (!isDoacaoLogEmbed(emb)) {
+        audit.rejected["doacao_invalid_embed"] = (audit.rejected["doacao_invalid_embed"] || 0) + 1;
+        return;
+      }
+      const uid = doacao_getRegistrarId(emb);
+      if (!uid) {
+        audit.rejected["doacao_uid_null"] = (audit.rejected["doacao_uid_null"] || 0) + 1;
+        return;
+      }
       if (!canCountDoacaoInGeralScan({ emb, message: m, lastDoacaoAtByUser, uid })) {
         audit.rejected["doacao_antifarm"] = (audit.rejected["doacao_antifarm"] || 0) + 1;
         return;
       }
-    seenMessageIds.add(seenKey);
+      seenMessageIds.add(seenKey);
       audit.extractedIds++;
       pushItem({ userId: uid, ts: new Date(m.createdTimestamp), source: "doacoes" });
-  },
-});
+    },
+  });
+}
 
 
 // ✅ CONVITES (log do lideresConvites.js)
@@ -1963,26 +2012,36 @@ if (PRESENCA_LOGS_CHANNEL_ID) {
 }
 
 // ✅ CORREÇÃO (logs)
-if (CORRECAO_LOGS_CHANNEL_ID) {
+for (const channelId of CORRECAO_LOGS_CHANNEL_IDS) {
   await scanChannelEmbeds(client, {
-    channelId: CORRECAO_LOGS_CHANNEL_ID,
+    channelId,
     weekFloorKey,
-    maxPages: 80,
+    maxPages: 120,
     onMessage: async (m) => {
-const seenKey = `correcao:${m.id}`;
-if (seenMessageIds.has(seenKey)) return;
-
-const emb = m.embeds?.[0];
-if (!emb) return;
-if (!isCorrecaoLogEmbed(emb)) return;
-if (!correcaoWasScored(emb)) return;
-
-seenMessageIds.add(seenKey);
-
-const uid = correcao_getUserId(emb);
-if (!uid) return;
-
-      items.push({
+      audit.totalFound++;
+      const seenKey = `correcao:${m.id}`;
+      if (seenMessageIds.has(seenKey)) return;
+      const emb = m.embeds?.[0];
+      if (!emb) {
+        audit.rejected["correcao_no_embed"] = (audit.rejected["correcao_no_embed"] || 0) + 1;
+        return;
+      }
+      if (!isCorrecaoLogEmbed(emb)) {
+        audit.rejected["correcao_invalid_embed"] = (audit.rejected["correcao_invalid_embed"] || 0) + 1;
+        return;
+      }
+      if (!correcaoWasScored(emb)) {
+        audit.rejected["correcao_not_scored"] = (audit.rejected["correcao_not_scored"] || 0) + 1;
+        return;
+      }
+      const uid = correcao_getUserId(emb);
+      if (!uid) {
+        audit.rejected["correcao_uid_null"] = (audit.rejected["correcao_uid_null"] || 0) + 1;
+        return;
+      }
+      seenMessageIds.add(seenKey);
+      audit.extractedIds++;
+      pushItem({
         userId: uid,
         ts: new Date(m.createdTimestamp),
         source: "correcao",

@@ -1013,7 +1013,8 @@ const fields = readEmbedFields(freshEmb).filter((f) => {
   // - se reprovar, ninguém pontua
   if (isValid) {
     const quemAlinhouRaw = getFieldValueByNameIncludes(freshEmb, "quem alinhou");
-    const quemAlinhouId = extractId(quemAlinhouRaw);
+    const registradoPorRaw = getFieldValueByNameIncludes(freshEmb, "registrado por");
+    const quemAlinhouId = extractId(quemAlinhouRaw) || extractId(registradoPorRaw);
 
     if (quemAlinhouId) {
       try {
@@ -1021,6 +1022,7 @@ const fields = readEmbedFields(freshEmb).filter((f) => {
           userId: quemAlinhouId,
           validatorId,
           __at: Date.now(),
+          source: "alinhamentos",
           src: "alinv1",
         });
       } catch {}
