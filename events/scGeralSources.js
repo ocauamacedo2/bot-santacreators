@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { EmbedBuilder } from "discord.js";
+import path from "node:path";
 
 export const GERAL_CHANNELS = {
     PODERES: ["1374066813171929218"],
@@ -15,7 +15,8 @@ export const GERAL_CHANNELS = {
     CRONOGRAMA: ["1486009619846529075", "1387864036259004436"],
     PRESENCA: ["1486006866046615682"],
     CORRECAO: ["1486006908056899748", "1486084249755979950"],
-    VIP: ["1414718336826081330"]
+    VIP: ["1414718336826081330"],
+    HALL: ["1386503496353976470"]
 };
 
 export const GERAL_PARSERS = {
@@ -42,32 +43,40 @@ export const GERAL_PARSERS = {
     // --- ALINHAMENTOS ---
     isAlinhamento: (emb) => {
         const text = GERAL_PARSERS.getEmbedText(emb);
-        return text.includes("alinhamento") || text.includes("alinv1");
+        const title = GERAL_PARSERS.norm(emb?.title || emb?.data?.title || "");
+        return text.includes("alinhamento") || text.includes("alinv1") || (title.includes("registro") && title.includes("alinhamento"));
     },
     getAlinhadorId: (emb) => {
         const fields = GERAL_PARSERS.getFields(emb);
-        const f = fields.find(x => GERAL_PARSERS.norm(x.name).includes("quem alinhou") || GERAL_PARSERS.norm(x.name).includes("alinhou") || GERAL_PARSERS.norm(x.name).includes("registrado por") || GERAL_PARSERS.norm(x.name).includes("autor"));
-        return f ? GERAL_PARSERS.extractId(f.value) : null;
+        const f = fields.find(x => {
+            const n = GERAL_PARSERS.norm(x.name);
+            return n.includes("quem alinhou") || n.includes("alinhou") || n.includes("registrado por") || n.includes("autor") || n.includes("registrador");
+        });
+        return f ? GERAL_PARSERS.extractId(f.value) : GERAL_PARSERS.extractId(GERAL_PARSERS.getEmbedText(emb));
     },
     isAlinhamentoValido: (emb) => {
         const fields = GERAL_PARSERS.getFields(emb);
         const f = fields.find(x => GERAL_PARSERS.norm(x.name).includes("status"));
-        return /VÁLIDO|VALIDO|APROVADO/i.test(f?.value || "");
+        const val = GERAL_PARSERS.norm(f?.value || "");
+        return val.includes("valido") || val.includes("aprovado");
     },
 
     // --- DOACOES ---
     isDoacao: (emb) => {
         const text = GERAL_PARSERS.getEmbedText(emb);
-        return text.includes("doacao") || text.includes("scdoa");
+        return text.includes("doacao") || text.includes("scdoa") || text.includes("nova doacao registrada");
     },
     getDoacaoRegistradorId: (emb) => {
         const fields = GERAL_PARSERS.getFields(emb);
-        const f = fields.find(x => GERAL_PARSERS.norm(x.name).includes("registrador") || GERAL_PARSERS.norm(x.name).includes("autor") || GERAL_PARSERS.norm(x.name).includes("usuario"));
+        const f = fields.find(x => {
+            const n = GERAL_PARSERS.norm(x.name);
+            return n.includes("registrador") || n.includes("registrado por") || n.includes("autor") || n.includes("usuario");
+        });
         return f ? GERAL_PARSERS.extractId(f.value) : GERAL_PARSERS.extractId(GERAL_PARSERS.getEmbedText(emb));
     },
 
     // --- CORRECAO ---
-    isCorrecao: (emb) => GERAL_PARSERS.getEmbedText(emb).includes("log de correcao"),
+    isCorrecao: (emb) => GERAL_PARSERS.getEmbedText(emb).includes("log de correcao de entrevista"),
     getCorretorId: (emb) => {
         const fields = GERAL_PARSERS.getFields(emb);
         const f = fields.find(x => GERAL_PARSERS.norm(x.name).includes("staff") || GERAL_PARSERS.norm(x.name).includes("corrigiu"));
@@ -106,9 +115,11 @@ export class GeralAudit {
 
     saveSummary() {
         try {
-            const dir = "./data";
+            const dir = path.dirname(this.summaryPath);
             if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
             fs.writeFileSync(this.summaryPath, JSON.stringify(this.data, null, 2));
-        } catch (e) {}
+        } catch (e) {
+            console.error("[GeralAudit] Erro ao salvar sumário:", e.message);
+        }
     }
 }
