@@ -1903,24 +1903,26 @@ for (const channelId of DOACAO_LOGS_CHANNEL_IDS) {
 }
 
 
-// ✅ CONVITES (log do lideresConvites.js)
-await scanChannelEmbeds(client, {
-  channelId: CONVITES_LOGS_CHANNEL_ID,
-  weekFloorKey,
-  maxPages: 80,
-  onMessage: async (m) => {
-      audit.totalFound++;
-      if (seenMessageIds.has(m.id)) return;
-      seenMessageIds.add(m.id);
-    const emb = m.embeds?.[0];
-      if (!emb) { audit.rejected["no_embed"] = (audit.rejected["no_embed"] || 0) + 1; return; }
-      if (!isConviteLogEmbed(emb)) { audit.rejected["invalid_convite_embed"] = (audit.rejected["invalid_convite_embed"] || 0) + 1; return; }
-    const uid = convite_getSenderId(emb);
-      if (!uid) { audit.rejected["uid_null"] = (audit.rejected["uid_null"] || 0) + 1; return; }
-      audit.extractedIds++;
-      pushItem({ userId: uid, ts: new Date(m.createdTimestamp), source: "convites" });
-  },
-});
+  // ✅ CONVITES (log do lideresConvites.js) - LOOP CORRIGIDO
+  for (const channelId of CONVITES_LOGS_CHANNEL_IDS) {
+    await scanChannelEmbeds(client, {
+      channelId,
+      weekFloorKey,
+      maxPages: 80,
+      onMessage: async (m) => {
+          audit.totalFound++;
+          if (seenMessageIds.has(m.id)) return;
+          seenMessageIds.add(m.id);
+        const emb = m.embeds?.[0];
+          if (!emb) { audit.rejected["no_embed"] = (audit.rejected["no_embed"] || 0) + 1; return; }
+          if (!isConviteLogEmbed(emb)) { audit.rejected["invalid_convite_embed"] = (audit.rejected["invalid_convite_embed"] || 0) + 1; return; }
+        const uid = convite_getSenderId(emb);
+          if (!uid) { audit.rejected["uid_null"] = (audit.rejected["uid_null"] || 0) + 1; return; }
+          audit.extractedIds++;
+          pushItem({ userId: uid, ts: new Date(m.createdTimestamp), source: "convites" });
+      },
+    });
+  }
 
 // ✅ PONTO DE ENTREVISTA (log de conclusão)
 if (CORRECAO_LOGS_CHANNEL_ID) { // Usa o mesmo canal de logs de correção

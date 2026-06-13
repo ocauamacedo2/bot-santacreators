@@ -161,8 +161,18 @@ function readState() {
 }
 
 function writeState(state) {
-  ensureDataDir();
-  fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), "utf8");
+  try {
+    ensureDataDir();
+    const tmp = `${STATE_FILE}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(state, null, 2), "utf8");
+    fs.renameSync(tmp, STATE_FILE);
+  } catch (e) {
+    console.error("[FormsCreator] ❌ Falha crítica ao salvar state:", {
+      path: STATE_FILE,
+      error: e.message,
+      code: e.code
+    });
+  }
 }
 
 // =========================
