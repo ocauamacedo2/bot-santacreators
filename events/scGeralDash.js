@@ -1835,16 +1835,23 @@ if (MANAGER_AUDIT_ENABLED) {
         if (seenMessageIds.has(seenKey)) return;
 
         const emb = m.embeds?.[0];
+        console.log(`[ALINHAMENTO_SCAN] Verificando msg ${m.id} em <#${channelId}>`);
+
         if (!emb) {
+          console.log(`[ALINHAMENTO_SCAN] Pulei: sem embed`);
           audit.rejected["alinh_no_embed"] = (audit.rejected["alinh_no_embed"] || 0) + 1;
           return;
         }
         if (!isAlinhamentoRecordEmbed(emb)) {
+          console.log(`[ALINHAMENTO_SCAN] Pulei: não é embed de registro`);
           audit.rejected["alinh_not_record"] = (audit.rejected["alinh_not_record"] || 0) + 1;
           return;
         }
+        console.log(`[ALINHAMENTO_FOUND] Encontrei embed de alinhamento em ${m.id}`);
+
         const statusAlinhamento = getStatusValueFromEmbed(emb);
         if (!/VÁLIDO|VALIDO|APROVADO|aprovado por/i.test(statusAlinhamento)) {
+          console.log(`[ALINHAMENTO_SCAN] Pulei: status inválido (${statusAlinhamento})`);
           audit.rejected["alinh_not_valid"] = (audit.rejected["alinh_not_valid"] || 0) + 1;
           return;
         }
@@ -1852,12 +1859,16 @@ if (MANAGER_AUDIT_ENABLED) {
         if (!uid) {
           uid = alinhamento_getRegistradorId(emb);
         }
+        console.log(`[ALINHAMENTO_UID] Usuário extraído: ${uid || "NULL"}`);
+
         if (!uid) {
           audit.rejected["alinh_uid_null"] = (audit.rejected["alinh_uid_null"] || 0) + 1;
           return;
         }
+        
         seenMessageIds.add(seenKey);
         audit.extractedIds++;
+        console.log(`[ALINHAMENTO_COUNTED] Pontuando alinhamento para ${uid}`);
         pushItem({
           userId: uid,
           ts: new Date(m.editedTimestamp || m.createdTimestamp),
@@ -1887,6 +1898,8 @@ for (const channelId of DOACAO_LOGS_CHANNEL_IDS) {
       audit.totalFound++;
       const seenKey = `doacoes:${m.id}`;
       if (seenMessageIds.has(seenKey)) return;
+        console.log(`[DOACAO_SCAN] Verificando msg ${m.id}`);
+
       const emb = m.embeds?.[0];
       if (!emb) {
         audit.rejected["doacao_no_embed"] = (audit.rejected["doacao_no_embed"] || 0) + 1;
@@ -1896,17 +1909,24 @@ for (const channelId of DOACAO_LOGS_CHANNEL_IDS) {
         audit.rejected["doacao_invalid_embed"] = (audit.rejected["doacao_invalid_embed"] || 0) + 1;
         return;
       }
+        console.log(`[DOACAO_FOUND] Encontrei embed de doação em ${m.id}`);
+
       const uid = doacao_getRegistrarId(emb);
+        console.log(`[DOACAO_UID] Registrador: ${uid || "NULL"}`);
+
       if (!uid) {
         audit.rejected["doacao_uid_null"] = (audit.rejected["doacao_uid_null"] || 0) + 1;
         return;
       }
+
       if (!canCountDoacaoInGeralScan({ emb, message: m, lastDoacaoAtByUser, uid })) {
+          console.log(`[DOACAO_SCAN] Ignorado pelo cooldown/regra de pontuação`);
         audit.rejected["doacao_antifarm"] = (audit.rejected["doacao_antifarm"] || 0) + 1;
         return;
       }
       seenMessageIds.add(seenKey);
       audit.extractedIds++;
+        console.log(`[DOACAO_COUNTED] Pontuando doação para ${uid}`);
       pushItem({ userId: uid, ts: new Date(m.createdTimestamp), source: "doacoes" });
     },
   });
@@ -1942,15 +1962,22 @@ if (CORRECAO_LOGS_CHANNEL_ID) { // Usa o mesmo canal de logs de correção
     maxPages: 80,
     onMessage: async (m) => {
       audit.totalFound++;
+      console.log(`[PERGUNTA_SCAN] Verificando msg ${m.id} em <#${channelId}>`);
+
 const seenKey = `perguntas:${m.id}`;
 if (seenMessageIds.has(seenKey)) return;
 const emb = m.embeds?.[0];
       if (!emb) { audit.rejected["no_embed"] = (audit.rejected["no_embed"] || 0) + 1; return; }
       if (!isEntrevistaConcluidaLogEmbed(emb)) { audit.rejected["invalid_entrevista_embed"] = (audit.rejected["invalid_entrevista_embed"] || 0) + 1; return; }
+      console.log(`[PERGUNTA_FOUND] Registro de entrevista concluída achado.`);
+
 seenMessageIds.add(seenKey);
 const uid = entrevistaConcluida_getUserId(emb);
+      console.log(`[PERGUNTA_UID] Aplicador: ${uid || "NULL"}`);
+
       if (!uid) { audit.rejected["uid_null"] = (audit.rejected["uid_null"] || 0) + 1; return; }
       audit.extractedIds++;
+      console.log(`[PERGUNTA_COUNTED] Pontuando pergunta para ${uid}`);
       pushItem({ userId: uid, ts: new Date(m.createdTimestamp), source: "perguntas" });
     },
   });
@@ -2031,6 +2058,8 @@ for (const channelId of CORRECAO_LOGS_CHANNEL_IDS) {
     maxPages: 120,
     onMessage: async (m) => {
       audit.totalFound++;
+      console.log(`[CORRECAO_SCAN] Verificando msg ${m.id}`);
+
       const seenKey = `correcao:${m.id}`;
       if (seenMessageIds.has(seenKey)) return;
       const emb = m.embeds?.[0];
@@ -2042,17 +2071,24 @@ for (const channelId of CORRECAO_LOGS_CHANNEL_IDS) {
         audit.rejected["correcao_invalid_embed"] = (audit.rejected["correcao_invalid_embed"] || 0) + 1;
         return;
       }
+      console.log(`[CORRECAO_FOUND] Embed de correção achado.`);
+
       if (!correcaoWasScored(emb)) {
+        console.log(`[CORRECAO_SCAN] Ignorado: campo anti-farm não validado`);
         audit.rejected["correcao_not_scored"] = (audit.rejected["correcao_not_scored"] || 0) + 1;
         return;
       }
       const uid = correcao_getUserId(emb);
+      console.log(`[CORRECAO_UID] Corretor: ${uid || "NULL"}`);
+
       if (!uid) {
         audit.rejected["correcao_uid_null"] = (audit.rejected["correcao_uid_null"] || 0) + 1;
         return;
       }
+
       seenMessageIds.add(seenKey);
       audit.extractedIds++;
+      console.log(`[CORRECAO_COUNTED] Pontuando correção para ${uid}`);
       pushItem({
         userId: uid,
         ts: new Date(m.createdTimestamp),
@@ -2232,6 +2268,7 @@ function isDoacaoLogEmbed(emb) {
   const t = norm(emb?.title || emb?.data?.title || "");
   const bag = norm(getEmbedText(emb));
 
+  // ✅ Correção: Detecção mais flexível para doações
   return (
     t.includes("doacao") ||
     bag.includes("nova doacao registrada") ||
@@ -2252,7 +2289,8 @@ function getWeekly(state, key, weekKey) {
 
 function getStatusValueFromEmbed(emb) {
   const fields = emb?.fields || emb?.data?.fields || [];
-  const f = fields.find((x) => x?.name === "📌 Status");
+  // ✅ Correção: Aceita tanto o emoji de alfinete quanto o de check (usado no alinv1)
+  const f = fields.find((x) => norm(x?.name).includes("status"));
   return String(f?.value || "");
 }
 
