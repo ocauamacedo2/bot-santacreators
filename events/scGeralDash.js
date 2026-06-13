@@ -1925,24 +1925,45 @@ for (const channelId of DOACAO_LOGS_CHANNEL_IDS) {
   }
 
 // ✅ PONTO DE ENTREVISTA (log de conclusão)
-for (const channelId of PERGUNTAS_LOGS_CHANNEL_IDS) { 
+for (const channelId of PERGUNTAS_LOGS_CHANNEL_IDS) {
   await scanChannelEmbeds(client, {
-    channelId: channelId,
+    channelId,
     weekFloorKey,
     maxPages: 80,
     onMessage: async (m) => {
-      auditor.addStats('perguntas', 'scanned');
-const seenKey = `perguntas:${m.id}`;
-      if (seenMessageIds.has(seenKey)) { auditor.reject('perguntas', 'duplicate_message'); return; }
-      seenMessageIds.add(seenKey);
+      auditor.addStats("perguntas", "scanned");
+
+      const seenKey = `perguntas:${m.id}`;
+      if (seenMessageIds.has(seenKey)) {
+        auditor.reject("perguntas", "duplicate_message");
+        return;
+      }
+
       const emb = m.embeds?.[0];
-      if (!emb) { auditor.reject('perguntas', 'no_embed'); return; }
-      if (!GERAL_PARSERS.isEntrevistaConcluida(emb)) { auditor.reject('perguntas', 'invalid_embed'); return; }
-seenMessageIds.add(seenKey);
-      const uid = GERAL_PARSERS.getEntrevistaConcluidaUserId(emb);
-      if (!uid) { auditor.reject('perguntas', 'uid_null'); return; }
-      auditor.addStats('perguntas', 'uidOk');
-      pushItem({ userId: uid, ts: new Date(m.createdTimestamp), source: "perguntas" });
+      if (!emb) {
+        auditor.reject("perguntas", "no_embed");
+        return;
+      }
+
+      if (!isEntrevistaConcluidaLogEmbed(emb)) {
+        auditor.reject("perguntas", "invalid_entrevista_embed");
+        return;
+      }
+
+      const uid = entrevistaConcluida_getUserId(emb);
+      if (!uid) {
+        auditor.reject("perguntas", "uid_null");
+        return;
+      }
+
+      seenMessageIds.add(seenKey);
+      auditor.addStats("perguntas", "uidOk");
+
+      pushItem({
+        userId: uid,
+        ts: new Date(m.createdTimestamp),
+        source: "perguntas",
+      });
     },
   });
 }
