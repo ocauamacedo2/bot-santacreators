@@ -122,7 +122,7 @@ function pickPersistRoot() {
 }
 
 const PERSIST_ROOT = pickPersistRoot();
-const DATA_DIR = path.resolve(PERSIST_ROOT || path.join(__dirname, ".."), "data");
+const DATA_DIR = path.resolve(PERSIST_ROOT || process.cwd(), "data");
 const STATE_FILE = path.join(DATA_DIR, "formscreator_state.json");
 
 function ensureDataDir() {

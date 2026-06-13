@@ -1955,9 +1955,9 @@ for (const channelId of DOACAO_LOGS_CHANNEL_IDS) {
   }
 
 // ✅ PONTO DE ENTREVISTA (log de conclusão)
-if (CORRECAO_LOGS_CHANNEL_ID) { // Usa o mesmo canal de logs de correção
+for (const channelId of PERGUNTAS_LOGS_CHANNEL_IDS) { 
   await scanChannelEmbeds(client, {
-    channelId: CORRECAO_LOGS_CHANNEL_ID,
+    channelId: channelId,
     weekFloorKey,
     maxPages: 80,
     onMessage: async (m) => {
