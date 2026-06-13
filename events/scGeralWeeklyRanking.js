@@ -14,6 +14,8 @@ import {
 } from "discord.js";
 
 import { dashOn } from "../utils/dashHub.js";
+import { GERAL_PARSERS, GeralAudit } from "../shared/scGeralSources.js";
+
 
 // ✅ __dirname no ESM
 const __filename = fileURLToPath(import.meta.url);
@@ -35,6 +37,7 @@ function pickPersistRoot() {
 }
 
 const DATA_DIR = path.resolve(pickPersistRoot() || path.join(__dirname, ".."), "data");
+
 // ================== AJUSTE MANUAL (CONFIG GLOBAL) ==================
 const ADJUSTMENTS_FILE = path.join(DATA_DIR, "sc_points_adjustments.json");
 
@@ -1326,17 +1329,9 @@ async function collectAllPoints(client, mode = "light") {
   const pushItem = (item) => {
     const userId = String(item?.userId || "").trim();
     const source = String(item?.source || "").trim();
-    audit.sources[source] = (audit.sources[source] || 0) + 1;
-
+    auditor.addStats(source, 'counted'); // Changed from `audit.sources[source] = (audit.sources[source] || 0) + 1;`
     if (!userId || !source || !item?.ts) return;
-
-    // ✅ Segurança geral: o próprio bot NUNCA pode ganhar ponto.
-    // Isso impede o bug do Hall da Fama e qualquer outro ponto roubado pelo bot.
-    if (client?.user?.id && userId === String(client.user.id)) {
-      console.warn(`[SC_GERAL] Ponto ignorado: tentativa de pontuar o próprio bot | source=${source}`);
-      return;
-    }
-
+    if (client?.user?.id && userId === String(client.user.id)) { auditor.reject(source, 'bot_self_point'); return; } // Changed from `audit.rejected["bot_self_point"] = (audit.rejected["bot_self_point"] || 0) + 1;`
     items.push({
       ...item,
       userId,
@@ -1354,15 +1349,15 @@ async function collectAllPoints(client, mode = "light") {
     weekFloorKey,
     maxPages: 80,
     onMessage: async (m) => {
-    audit.totalFound++;
-    if (seenMessageIds.has(m.id)) return;
+    auditor.addStats('poderes', 'scanned');
+    if (seenMessageIds.has(m.id)) { auditor.reject('poderes', 'duplicate_message'); return; }
     seenMessageIds.add(m.id);
       const emb = m.embeds?.[0];
-      if (!emb) { audit.rejected["no_embed"] = (audit.rejected["no_embed"] || 0) + 1; return; }
-      if (!isPoderesRecordEmbed(emb)) { audit.rejected["invalid_poderes_embed"] = (audit.rejected["invalid_poderes_embed"] || 0) + 1; return; }
-      const uid = poderes_getUserId(emb);
-      if (!uid) { audit.rejected["uid_null"] = (audit.rejected["uid_null"] || 0) + 1; return; }
-      audit.extractedIds++;
+      if (!emb) { auditor.reject('poderes', 'no_embed'); return; }
+      if (!GERAL_PARSERS.isPoderes(emb)) { auditor.reject('poderes', 'invalid_embed'); return; }
+      const uid = GERAL_PARSERS.getPoderesUserId(emb);
+      if (!uid) { auditor.reject('poderes', 'uid_null'); return; }
+      auditor.addStats('poderes', 'uidOk');
       pushItem({ userId: uid, ts: new Date(m.createdTimestamp), source: "poderes" });
     },
   });
@@ -1373,16 +1368,15 @@ async function collectAllPoints(client, mode = "light") {
       weekFloorKey,
       maxPages: 80,
       onMessage: async (m) => {
-        audit.totalFound++;
-        if (seenMessageIds.has(m.id)) return;
+        auditor.addStats('eventos', 'scanned');
+        if (seenMessageIds.has(m.id)) { auditor.reject('eventos', 'duplicate_message'); return; }
         seenMessageIds.add(m.id);
         const emb = m.embeds?.[0];
-        if (!emb) return;
-        const bag = getEmbedTextBag(emb);
-        if (!/evento|criado|criador/i.test(bag)) return;
-        const uid = pickFirstMentionId(bag) || pickFirstIdLoose(bag);
-        if (!uid) return;
-        audit.extractedIds++;
+        if (!emb) { auditor.reject('eventos', 'no_embed'); return; }
+        if (!GERAL_PARSERS.isEvento(emb)) { auditor.reject('eventos', 'invalid_embed'); return; }
+        const uid = GERAL_PARSERS.getEventoRegistrarId(emb);
+        if (!uid) { auditor.reject('eventos', 'uid_null'); return; }
+        auditor.addStats('eventos', 'uidOk');
         pushItem({ userId: uid, ts: new Date(m.createdTimestamp), source: "eventos" });
       },
     });
@@ -1393,16 +1387,15 @@ async function collectAllPoints(client, mode = "light") {
       weekFloorKey,
       maxPages: 80,
       onMessage: async (m) => {
-        audit.totalFound++;
-        if (seenMessageIds.has(m.id)) return;
+        auditor.addStats('eventopoder', 'scanned');
+        if (seenMessageIds.has(m.id)) { auditor.reject('eventopoder', 'duplicate_message'); return; }
         seenMessageIds.add(m.id);
         const emb = m.embeds?.[0];
-        if (!emb) return;
-        const type = eventos_getRecordType(emb);
-        if (!type) return;
-        const uid = eventos_getRegistrarId(emb);
-        if (!uid) return;
-        audit.extractedIds++;
+        if (!emb) { auditor.reject('eventopoder', 'no_embed'); return; }
+        if (!GERAL_PARSERS.isEventoPoder(emb)) { auditor.reject('eventopoder', 'invalid_embed'); return; }
+        const uid = GERAL_PARSERS.getEventoPoderRegistrarId(emb);
+        if (!uid) { auditor.reject('eventopoder', 'uid_null'); return; }
+        auditor.addStats('eventopoder', 'uidOk');
         pushItem({ userId: uid, ts: new Date(m.createdTimestamp), source: "eventopoder" });
       },
     });
@@ -1416,17 +1409,17 @@ async function collectAllPoints(client, mode = "light") {
     weekFloorKey,
     maxPages: 80,
     onMessage: async (m) => {
-      audit.totalFound++;
-      if (seenMessageIds.has(m.id)) return;
+      auditor.addStats('pagamentos', 'scanned');
+      if (seenMessageIds.has(m.id)) { auditor.reject('pagamentos', 'duplicate_message'); return; }
       seenMessageIds.add(m.id);
       const emb = m.embeds?.[0];
-      if (!emb) { audit.rejected["no_embed"] = (audit.rejected["no_embed"] || 0) + 1; return; }
-      if (!isPaymentRecordEmbed(emb)) { audit.rejected["invalid_payment_embed"] = (audit.rejected["invalid_payment_embed"] || 0) + 1; return; }
-      const status = pagamento_getStatus(emb);
-      if (!status.isPago) { audit.rejected["payment_not_pago"] = (audit.rejected["payment_not_pago"] || 0) + 1; return; }
-      const uid = pagamentos_getRegistrarId(emb);
-      if (!uid) { audit.rejected["uid_null"] = (audit.rejected["uid_null"] || 0) + 1; return; }
-      audit.extractedIds++;
+      if (!emb) { auditor.reject('pagamentos', 'no_embed'); return; }
+      if (!GERAL_PARSERS.isPagamento(emb)) { auditor.reject('pagamentos', 'invalid_embed'); return; }
+      const status = GERAL_PARSERS.getPagamentoStatus(emb);
+      if (!status.isPago) { auditor.reject('pagamentos', 'not_pago'); return; }
+      const uid = GERAL_PARSERS.getPagamentoRegistrarId(emb);
+      if (!uid) { auditor.reject('pagamentos', 'uid_null'); return; }
+      auditor.addStats('pagamentos', 'uidOk');
       pushItem({ userId: uid, ts: new Date(m.createdTimestamp), source: "pagamentos" });
     },
   });
@@ -1437,18 +1430,18 @@ await scanChannelEmbeds(client, {
   weekFloorKey,
   maxPages: 80,
   onMessage: async (m) => {
-    audit.totalFound++;
-    if (seenMessageIds.has(m.id)) return;
-    seenMessageIds.add(m.id);
-    const emb = m.embeds?.[0];
-    if (!emb) { audit.rejected["no_embed"] = (audit.rejected["no_embed"] || 0) + 1; return; }
-    if (!isVipRecordEmbed(emb)) { audit.rejected["invalid_vip_embed"] = (audit.rejected["invalid_vip_embed"] || 0) + 1; return; }
-    const status = vip_getStatus(emb);
-    if (!status.isPago) { audit.rejected["vip_not_pago"] = (audit.rejected["vip_not_pago"] || 0) + 1; return; }
-    const uid = vip_getPagoByUserId(emb);
-    if (!uid) { audit.rejected["uid_null"] = (audit.rejected["uid_null"] || 0) + 1; return; }
+      auditor.addStats('vipPagos', 'scanned');
+      if (seenMessageIds.has(m.id)) { auditor.reject('vipPagos', 'duplicate_message'); return; }
+      seenMessageIds.add(m.id);
+      const emb = m.embeds?.[0];
+      if (!emb) { auditor.reject('vipPagos', 'no_embed'); return; }
+      if (!GERAL_PARSERS.isVip(emb)) { auditor.reject('vipPagos', 'invalid_embed'); return; }
+      const status = GERAL_PARSERS.getVipStatus(emb);
+      if (!status.isPago) { auditor.reject('vipPagos', 'not_pago'); return; }
+      const uid = GERAL_PARSERS.getVipPagoByUserId(emb);
+      if (!uid) { auditor.reject('vipPagos', 'uid_null'); return; }
     const paidAt = vip_getPagoAtSP(emb);
-    audit.extractedIds++;
+      auditor.addStats('vipPagos', 'uidOk');
     pushItem({ userId: uid, ts: paidAt || new Date(m.createdTimestamp), source: "vipPagos" });
   },
 });
@@ -1459,21 +1452,21 @@ await scanChannelEmbeds(client, {
       weekFloorKey,
       maxPages: 80,
       onMessage: async (m) => {
-        audit.totalFound++;
-        if (seenMessageIds.has(m.id)) return;
+        auditor.addStats('manager', 'scanned');
+          if (seenMessageIds.has(m.id)) { auditor.reject('manager', 'duplicate_message'); return; }
         seenMessageIds.add(m.id);
         const emb = m.embeds?.[0];
-        if (!emb) { audit.rejected["no_embed"] = (audit.rejected["no_embed"] || 0) + 1; return; }
-        if (!isRegistroManagerEmbed(emb)) { audit.rejected["invalid_manager_embed"] = (audit.rejected["invalid_manager_embed"] || 0) + 1; return; }
-        if (manager_isRejected(emb)) { audit.rejected["manager_rejected"] = (audit.rejected["manager_rejected"] || 0) + 1; return; }
-        if (!manager_isApproved(emb)) { audit.rejected["manager_not_approved"] = (audit.rejected["manager_not_approved"] || 0) + 1; return; }
+        if (!emb) { auditor.reject('manager', 'no_embed'); return; }
+        if (!GERAL_PARSERS.isManager(emb)) { auditor.reject('manager', 'invalid_embed'); return; }
+        if (GERAL_PARSERS.isManagerRejected(emb)) { auditor.reject('manager', 'rejected'); return; }
+        if (!GERAL_PARSERS.isManagerApproved(emb)) { auditor.reject('manager', 'not_approved'); return; }
         const uid = manager_getManagerId(emb) || manager_getRegistrarId(emb);
-        if (!uid) { audit.rejected["uid_null"] = (audit.rejected["uid_null"] || 0) + 1; return; }
+        if (!uid) { auditor.reject('manager', 'uid_null'); return; }
         const approvedAt = manager_getApprovedAtSP(emb);
         const managerStableKey = makeManagerStableDedupeKey(emb, m, uid, approvedAt);
-        if (seenManagerStableKeys.has(managerStableKey)) { audit.rejected["manager_dup_key"] = (audit.rejected["manager_dup_key"] || 0) + 1; return; }
+        if (seenManagerStableKeys.has(managerStableKey)) { auditor.reject('manager', 'duplicate'); return; }
         seenManagerStableKeys.add(managerStableKey);
-        audit.extractedIds++;
+        auditor.addStats('manager', 'uidOk');
         pushItem({ userId: uid, ts: approvedAt || new Date(m.createdTimestamp), source: "manager" });
       },
     });
@@ -1566,15 +1559,15 @@ if (MANAGER_AUDIT_ENABLED) {
       weekFloorKey,
       maxPages: 80,
       onMessage: async (m) => {
-        audit.totalFound++;
-        if (seenMessageIds.has(m.id)) return;
-        seenMessageIds.add(m.id);
+          auditor.addStats('convites', 'scanned');
+          if (seenMessageIds.has(m.id)) { auditor.reject('convites', 'duplicate_message'); return; }
+          seenMessageIds.add(m.id);
         const emb = m.embeds?.[0];
-        if (!emb) { audit.rejected["no_embed"] = (audit.rejected["no_embed"] || 0) + 1; return; }
-        if (!isConviteLogEmbed(emb)) { audit.rejected["invalid_convite_embed"] = (audit.rejected["invalid_convite_embed"] || 0) + 1; return; }
-        const uid = convite_getSenderId(emb);
-        if (!uid) { audit.rejected["uid_null"] = (audit.rejected["uid_null"] || 0) + 1; return; }
-        audit.extractedIds++;
+          if (!emb) { auditor.reject('convites', 'no_embed'); return; }
+          if (!GERAL_PARSERS.isConvite(emb)) { auditor.reject('convites', 'invalid_embed'); return; }
+        const uid = GERAL_PARSERS.getConviteSenderId(emb);
+          if (!uid) { auditor.reject('convites', 'uid_null'); return; }
+          auditor.addStats('convites', 'uidOk');
         pushItem({ userId: uid, ts: new Date(m.createdTimestamp), source: "convites" });
       },
     });
@@ -1705,17 +1698,17 @@ if (HALL_CHANNEL_ID) {
       weekFloorKey,
       maxPages: 120,
       onMessage: async (m) => {
-        audit.totalFound++;
+      auditor.addStats('cronograma', 'scanned');
         const seenKey = `approval:${m.id}`;
         if (seenMessageIds.has(seenKey)) return;
         const emb = m.embeds?.[0];
-        if (!emb) { audit.rejected["no_embed"] = (audit.rejected["no_embed"] || 0) + 1; return; }
-        if (!approval_isApproved(emb)) { audit.rejected["crono_not_approved"] = (audit.rejected["crono_not_approved"] || 0) + 1; return; }
+      if (!emb) { auditor.reject('cronograma', 'no_embed'); return; }
+      if (!approval_isApproved(emb)) { auditor.reject('cronograma', 'not_approved'); return; }
         const userId = approval_getSolicitanteId(emb);
-        if (!userId) { audit.rejected["uid_null"] = (audit.rejected["uid_null"] || 0) + 1; return; }
+      if (!userId) { auditor.reject('cronograma', 'uid_null'); return; }
         const source = approval_getSource(emb) || "cronograma";
         seenMessageIds.add(seenKey);
-        audit.extractedIds++;
+      auditor.addStats('cronograma', 'uidOk');
         pushItem({
           userId,
           ts: new Date(m.editedTimestamp || m.createdTimestamp),

@@ -57,16 +57,15 @@ export const GERAL_PARSERS = {
     isAlinhamentoValido: (emb) => {
         const fields = GERAL_PARSERS.getFields(emb);
         const f = fields.find(x => GERAL_PARSERS.norm(x.name).includes("status"));
-        const val = GERAL_PARSERS.norm(f?.value || f?.name || "");
-        // ✅ Garante que "não válido" ou "reprovado" seja ignorado
-        return (val.includes("valido") || val.includes("aprovado")) && !val.includes("nao");
+        const val = GERAL_PARSERS.norm(f?.value || "");
+        // ✅ Garante que "não válido", "reprovado", "pendente" ou "aguardando" seja ignorado
+        return (val.includes("valido") || val.includes("aprovado")) && !val.includes("nao") && !val.includes("pendente") && !val.includes("aguardando");
     },
 
     // --- DOACOES ---
     isDoacao: (emb) => {
         const text = GERAL_PARSERS.getEmbedText(emb);
-        // ✅ Busca termos comuns do sistema de doação no texto total do embed
-        return text.includes("doacao") || text.includes("scdoa") || text.includes("doacao registrada");
+        return text.includes("doacao") || text.includes("scdoa") || text.includes("doacao registrada") || text.includes("nova doacao registrada");
     },
     getDoacaoRegistradorId: (emb) => {
         const fields = GERAL_PARSERS.getFields(emb);
@@ -75,6 +74,77 @@ export const GERAL_PARSERS = {
             return n.includes("registrador") || n.includes("registrado por") || n.includes("autor") || n.includes("usuario") || n.includes("usuário");
         });
         return f ? GERAL_PARSERS.extractId(f.value) : GERAL_PARSERS.extractId(GERAL_PARSERS.getEmbedText(emb)) || GERAL_PARSERS.extractId(emb?.description || "");
+    },
+
+    // --- DOAÇÕES (Regras de contagem) ---
+    getDoacaoScanTimestamp: (m) => Number(m?.createdTimestamp || m?.editedTimestamp || Date.now()),
+
+    doacaoWasScoredFromEmbed: (emb) => {
+        try {
+            const fields = GERAL_PARSERS.getFields(emb);
+
+            // NOVO: prioridade para a regra específica do Geral/Semanal
+            const geral = fields.find((f) => {
+                const n = GERAL_PARSERS.norm(f?.name);
+                return n.includes("geraldash/semanal") || n.includes("geraldash") || n.includes("semanal");
+            });
+
+            const vg = String(geral?.value || "");
+            if (vg) {
+                if (/nao contou|não contou|cooldown|faltam/i.test(vg)) return false;
+                if (/isento/i.test(vg)) return true;
+                if (/\+1/.test(vg)) return true;
+                if (/✅/.test(vg)) return true;
+                return false;
+            }
+
+            // fallback para logs antigos
+            const anti = fields.find((f) => GERAL_PARSERS.norm(f?.name).includes("anti-farm"));
+            const v = String(anti?.value || "");
+            if (/nao contou|não contou|faltam/i.test(v)) return false;
+            if (/isento/i.test(v)) return true;
+            if (/\+1/.test(v)) return true;
+            return false;
+        } catch {
+            return false;
+        }
+    },
+
+    doacaoIsExemptFromEmbed: (emb) => {
+        try {
+            const fields = GERAL_PARSERS.getFields(emb);
+
+            const geral = fields.find((f) => {
+                const n = GERAL_PARSERS.norm(f?.name);
+                return n.includes("geraldash/semanal") || n.includes("geraldash") || n.includes("semanal");
+            });
+
+            const anti = fields.find((f) => GERAL_PARSERS.norm(f?.name).includes("anti-farm"));
+
+            return /isento/i.test(String(geral?.value || "")) || /isento/i.test(String(anti?.value || ""));
+        } catch {
+            return false;
+        }
+    },
+
+    canCountDoacaoInGeralScan: ({ emb, message, lastDoacaoAtByUser, uid }) => {
+        if (!uid) return false;
+        if (!GERAL_PARSERS.isDoacao(emb)) return false;
+        if (!GERAL_PARSERS.doacaoWasScoredFromEmbed(emb)) return false;
+        if (GERAL_PARSERS.doacaoIsExemptFromEmbed(emb)) return true;
+
+        const ts = GERAL_PARSERS.getDoacaoScanTimestamp(message);
+        const lastAt = Number(lastDoacaoAtByUser.get(uid) || 0);
+
+        // ✅ Correção Profissional:
+        // Se mudou o dia (SP) OU se passou mais de 1 hora, deve contar.
+        const dateTs = new Date(ts).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
+        const dateLast = new Date(lastAt).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
+
+        if (lastAt && dateTs === dateLast && Math.abs(ts - lastAt) < (60 * 60 * 1000)) return false;
+
+        lastDoacaoAtByUser.set(uid, ts);
+        return true;
     },
 
     // --- CORRECAO ---
