@@ -323,6 +323,10 @@ const TZ = "America/Sao_Paulo";
 const RANK_BANNER =
   "https://media.discordapp.net/attachments/1362477839944777889/1384245215249825832/standard_2rss.gif";
 
+// ✅ Mude esse número quando alterar o visual do ranking.
+// Isso força o bot a editar a mensagem mesmo se os pontos forem iguais.
+const RANK_RENDER_VERSION = 3;
+
 // medalhas bonitinhas
 function medal(i) {
   if (i === 0) return "🥇";
@@ -2519,13 +2523,15 @@ async function upsertWeeklyRank(client, reason, { scanMode = "light", targetWeek
       }));
     }
 
-    const sig = JSON.stringify({
-      wk,
-      min: MIN_POINTS_WEEK,
-      totalEvents: agg.totalEvents,
-      list: (agg.list || []).map((x) => [x.userId, x.points]),
-      nameMap // ✅ ADICIONA nameMap (para atualizar ao mudar nomes)
-    });
+const sig = JSON.stringify({
+  wk,
+  renderVersion: RANK_RENDER_VERSION,
+  min: MIN_POINTS_WEEK,
+  totalEvents: agg.totalEvents,
+  list: (agg.list || []).map((x) => [x.userId, x.points]),
+  bySourceByUser: agg.bySourceByUser,
+  nameMap // ✅ ADICIONA nameMap (para atualizar ao mudar nomes)
+});
 
     st.sigByWeek = st.sigByWeek || {};
     const oldSig = st.sigByWeek[wk];
@@ -2570,13 +2576,19 @@ async function editRankMessageWithFallback(targetMsg, label = "edit") {
     return await sendNewRankMessage();
   }
 
+  // ✅ Se não mudou nada, não precisa editar.
+  // Isso evita PATCH desnecessário e evita erro 500 do Discord quando o painel já está igual.
+  if (label === "sem mudança") {
+    return targetMsg;
+  }
+
   try {
     return await targetMsg.edit({
       embeds,
       components: [row],
     });
   } catch (e) {
-    console.error(`[SC_GERAL_WEEKLY_RANK] ❌ Erro ao editar msg (${label}). Tentando retry:`, e);
+    console.warn(`[SC_GERAL_WEEKLY_RANK] ⚠️ Falha temporária ao editar msg (${label}). Tentando retry em 2.5s:`, e?.message || e);
   }
 
   await new Promise((resolve) => setTimeout(resolve, 2500));
@@ -2587,7 +2599,7 @@ async function editRankMessageWithFallback(targetMsg, label = "edit") {
       components: [row],
     });
   } catch (e2) {
-    console.error(`[SC_GERAL_WEEKLY_RANK] ❌ Retry falhou (${label}). Vou recriar msg:`, e2);
+    console.warn(`[SC_GERAL_WEEKLY_RANK] ⚠️ Retry falhou (${label}). Vou recriar msg:`, e2?.message || e2);
   }
 
   return await sendNewRankMessage();
@@ -2616,44 +2628,7 @@ if (editedOrRecreated.id && editedOrRecreated.id !== msg.id) {
 saveState(st);
 return true; // ✅ Sucesso
 
-try {
-  edited = await msg.edit({
-    embeds,
-    components: [row],
-  });
-} catch (e) {
-  console.error("[SC_GERAL_WEEKLY_RANK] ❌ Erro ao editar msg final. Tentando retry:", e);
 
-  await new Promise((resolve) => setTimeout(resolve, 2500));
-
-  try {
-    edited = await msg.edit({
-      embeds,
-      components: [row],
-    });
-  } catch (e2) {
-    console.error("[SC_GERAL_WEEKLY_RANK] ❌ Retry falhou. Vou criar nova msg:", e2);
-  }
-}
-
-if (!edited) {
-  const recreated = await ch.send({
-    embeds,
-    components: [row],
-  }).catch((e) => {
-    console.error("[SC_GERAL_WEEKLY_RANK] ❌ Erro ao recriar msg após falha no edit:", e);
-    return null;
-  });
-
-  if (!recreated) return false;
-
-  st.weeklyMsgIds = st.weeklyMsgIds || {};
-  st.weeklyMsgIds[wk] = recreated.id;
-}
-
-st.sigByWeek[wk] = sig;
-saveState(st);
-return true; // ✅ Sucesso
   } catch (e) {
     console.error("[SC_GERAL_WEEKLY_RANK] upsert error:", e);
     return false;
