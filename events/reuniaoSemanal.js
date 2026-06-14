@@ -23,6 +23,16 @@ const WEEKLY_RANK_CHANNEL_ID = "1415387000416243722";
 const GERAL_DASH_CHANNEL_ID = "1458132388281585696";
 const WEEKLY_RANK_MARKER_PREFIX = "SC_GERAL_WEEKLY_RANK::WK=";
 
+// ✅ Canal dos logs de alteração de nickname
+const NICKNAME_LOG_CHANNEL_ID = "1377830103324688457";
+
+// ✅ Cargo que NUNCA pode ser usado como premiação
+// Obs: isso NÃO remove o cargo de ninguém.
+// Isso só impede que ele seja adicionado caso algum dia seja colocado por engano em ROLES_REWARD.
+const FORBIDDEN_REWARD_ROLE_IDS = new Set([
+  "1353858422063239310",
+]);
+
 // ✅ Cargo obrigatório para a pessoa ser considerada ativa na gestão/ranking
 const ROLE_REQUIRED_FOR_ACTIVE = "1352275728476930099";
 
@@ -955,7 +965,98 @@ async function removeRewardRoleFromEveryoneExcept(guild, roleId, keepUserId, rol
     log.push(`❌ Erro ao limpar cargo **${roleName}**.`);
   }
 }
+function extractNomeEquipeFromNickname(rawNick) {
+  const nick = String(rawNick || "").trim();
+  if (!nick) return null;
 
+  const parts = nick
+    .split("|")
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  if (parts.length >= 2) {
+    const possibleId = parts[parts.length - 1];
+    const possibleName = parts[parts.length - 2];
+
+    if (/^\d{1,10}$/.test(possibleId)) {
+      return `${possibleName} | ${possibleId}`;
+    }
+
+    return possibleName || nick;
+  }
+
+  return nick;
+}
+
+async function findNomeEquipeFromNicknameLogs(client, discordUserId) {
+  try {
+    const channel = await client.channels.fetch(NICKNAME_LOG_CHANNEL_ID).catch(() => null);
+    if (!channel?.isTextBased?.()) return null;
+
+    let lastId = null;
+
+    for (let page = 0; page < 5; page++) {
+      const batch = await channel.messages.fetch({
+        limit: 100,
+        before: lastId || undefined,
+      }).catch(() => null);
+
+      if (!batch?.size) break;
+
+      for (const msg of batch.values()) {
+        for (const emb of msg.embeds || []) {
+          const fields = emb?.fields || emb?.data?.fields || [];
+
+          const userField = fields.find((f) => String(f?.name || "").includes("Usuário alterado"));
+          const afterField = fields.find((f) => String(f?.name || "").includes("Depois"));
+
+          const userText = String(userField?.value || "");
+          const afterText = String(afterField?.value || "").replace(/`/g, "").trim();
+
+          if (userText.includes(discordUserId) && afterText) {
+            const parsed = extractNomeEquipeFromNickname(afterText);
+            if (parsed) return parsed;
+          }
+        }
+      }
+
+      lastId = batch.last()?.id;
+      if (!lastId) break;
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function buildNomeEquipeForVip(client, guild, discordUserId) {
+  const member = await guild.members.fetch(discordUserId).catch(() => null);
+
+  if (member?.displayName) {
+    const parsedFromCurrentNick = extractNomeEquipeFromNickname(member.displayName);
+
+    if (parsedFromCurrentNick) {
+      return parsedFromCurrentNick;
+    }
+  }
+
+  const parsedFromLogs = await findNomeEquipeFromNicknameLogs(client, discordUserId);
+
+  if (parsedFromLogs) {
+    return parsedFromLogs;
+  }
+
+  if (member?.displayName) {
+    return member.displayName;
+  }
+
+  return discordUserId;
+}
+
+function isForbiddenRewardRole(roleId) {
+  return FORBIDDEN_REWARD_ROLE_IDS.has(String(roleId || ""));
+}
 async function applyRoles(guild, winners, state) {
   const log = [];
   const rewardCandidateIds = buildRewardCandidateIds(winners, state);
@@ -991,6 +1092,11 @@ async function applyRoles(guild, winners, state) {
 
   const add = async (w, roleId, name) => {
     if (!w?.id) return;
+
+    if (isForbiddenRewardRole(roleId)) {
+      log.push(`🚫 **${name}** não aplicado porque o cargo configurado \`${roleId}\` está bloqueado para premiação.`);
+      return;
+    }
 
     const m = await guild.members.fetch(w.id).catch(() => null);
     if (!m) return;
@@ -1164,8 +1270,7 @@ export async function reuniaoSemanalHandleInteraction(interaction, client) {
     for (const record of winnerRecords) {
         if (record.winner && record.winner.id) {
             try {
-                const member = await interaction.guild.members.fetch(record.winner.id);
-                const nomeEquipe = `${member.displayName} | ${member.id}`;
+                const nomeEquipe = await buildNomeEquipeForVip(client, interaction.guild, record.winner.id);
 
                 await createVipRecordProgrammatically(client, {
                     registrarUser: registrarUser,
@@ -1278,10 +1383,7 @@ export async function reuniaoSemanalHandleInteraction(interaction, client) {
       for (const record of winnerRecords) {
         if (record.winner && record.winner.id) {
           try {
-            const member = await interaction.guild.members.fetch(record.winner.id).catch(() => null);
-            const nomeEquipe = member
-              ? `${member.displayName} | ${member.id}`
-              : `${record.winner.id}`;
+            const nomeEquipe = await buildNomeEquipeForVip(client, interaction.guild, record.winner.id);
 
             await createVipRecordProgrammatically(client, {
               registrarUser: registrarUser,
