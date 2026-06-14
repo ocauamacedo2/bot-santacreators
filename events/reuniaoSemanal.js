@@ -1238,11 +1238,13 @@ export async function reuniaoSemanalHandleInteraction(interaction, client) {
 
 const data = await getSyncedPreviousWeekData(client, interaction.guild, previousWeekKey);
 const winners = calculateWinners(data);
-const logs = [
-  "ℹ️ Semana anterior publicada sem aplicar cargos.",
+const logs = await applyRoles(interaction.guild, winners, state);
+
+logs.unshift(
+  "✅ Semana anterior publicada com aplicação de cargos.",
   "✅ Dados sincronizados com o Ranking Geral oficial da semana passada.",
-  "✅ Os cargos de destaque permanecem reservados apenas para a semana atual."
-];
+  "⚠️ Os cargos antigos serão removidos e os cargos da semana anterior serão aplicados nos vencedores recuperados."
+);
 
     const registrarUser = interaction.user;
     const winnerRecords = [
