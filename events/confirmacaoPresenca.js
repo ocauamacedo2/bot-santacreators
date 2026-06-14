@@ -68,10 +68,19 @@ function ensureDir() {
 function loadState() {
   ensureDir();
   try {
-    if (!fs.existsSync(PRESENCA_FILE)) return { messageId: null, statuses: {}, lastResetDate: null, activeWindow: 1 };
-    return JSON.parse(fs.readFileSync(PRESENCA_FILE, "utf8"));
+    if (!fs.existsSync(PRESENCA_FILE)) return { 
+      messageId: null, 
+      statuses: {}, 
+      lastResetDate: null, 
+      activeWindow: 1,
+      lastWeekKey: null 
+    };
+    const data = JSON.parse(fs.readFileSync(PRESENCA_FILE, "utf8"));
+    // ✅ Garante que o campo lastWeekKey exista para o reset offline-safe
+    if (!data.lastWeekKey) data.lastWeekKey = null;
+    return data;
   } catch {
-    return { messageId: null, statuses: {}, lastResetDate: null, activeWindow: 1 };
+    return { messageId: null, statuses: {}, lastResetDate: null, activeWindow: 1, lastWeekKey: null };
   }
 }
 
@@ -110,6 +119,17 @@ function loadFacsSource() {
     console.error("[ConfirmacaoPresenca] Erro ao ler facs_semanais.json:", e);
     return [];
   }
+}
+
+// ✅ Função para calcular a semana (Sincronizada com FACs e RM)
+function getCurrentWeekKeySP() {
+  const now = getNowSP();
+  const day = now.getDay(); // 0=Dom
+
+  // Início da semana = Domingo 00:00
+  const sunday = new Date(now);
+  sunday.setDate(now.getDate() - day);
+  return sunday.toISOString().slice(0, 10); // YYYY-MM-DD
 }
 
 // ================= HELPERS =================
@@ -169,17 +189,29 @@ function getOrgId(orgString) {
 
 // Sincroniza a lista do facsSemanais com o estado local
 function syncOrgs(state) {
-  const sourceList = loadFacsSource();
-  const todayKey = getNowSP().toISOString().slice(0, 10);
+  const now = getNowSP();
+  const todayKey = now.toISOString().slice(0, 10);
+  const weekKey = getCurrentWeekKeySP();
+  const day = now.getDay();
 
-  // Se mudou o dia, reseta status (opcional, ou mantém semanal)
-  // O pedido foi "toda quinta sexta sabado tem q dar pra confirmar novamente"
-  // Então resetamos se a data salva for diferente de hoje E hoje for um dia de evento
-  if (state.lastResetDate !== todayKey && ALLOWED_DAYS.includes(getNowSP().getDay())) {
+  // ✅ 1. Reset Semanal (Domingo 00:00 ou Mudança de Semana no Boot)
+  // Se entramos em uma nova semana, limpa TUDO imediatamente.
+  if (state.lastWeekKey !== weekKey) {
+    console.log(`[ConfirmacaoPresenca] Mudança de semana detectada (${weekKey}). Zerando painel.`);
+    state.statuses = {};
+    state.lastWeekKey = weekKey;
+    state.lastResetDate = todayKey;
+  }
+
+  // ✅ 2. Reset Diário (Quinta, Sexta, Sábado)
+  // Permite que as orgs confirmem presença novamente em cada dia de evento diferente.
+  if (state.lastResetDate !== todayKey && ALLOWED_DAYS.includes(day)) {
+    console.log(`[ConfirmacaoPresenca] Reset diário para novo dia de evento: ${todayKey}`);
     state.statuses = {};
     state.lastResetDate = todayKey;
   }
 
+  const sourceList = loadFacsSource();
   // Garante que todas as orgs da fonte estejam no objeto de status
   // E remove as que não estão mais na fonte
   const currentOrgs = new Set(sourceList);
