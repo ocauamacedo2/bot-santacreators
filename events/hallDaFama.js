@@ -138,25 +138,48 @@ function getTodayKey() {
 }
 
 // Lê o cronograma e retorna os dados de HOJE
-function getTodayEventData() {
+function getTodayEventOptions() {
   try {
-    if (!fs.existsSync(CRONO_FILE)) return null;
+    if (!fs.existsSync(CRONO_FILE)) return [];
+
     const crono = JSON.parse(fs.readFileSync(CRONO_FILE, "utf8"));
     const todayKey = getTodayKey();
-    
-    // Tenta pegar do schedule normal (19h)
+
+    const options = [];
+
     const normal = crono.schedule?.[todayKey];
-    if (normal && normal.active) return normal;
+    if (normal && normal.active) {
+      options.push({
+        ...normal,
+        sourceType: "schedule",
+        eventKey: `${todayKey}:schedule`,
+      });
+    }
 
-    // Se não tiver, tenta madrugada (se for madrugada agora, pega do dia anterior tecnicamente, mas vamos simplificar)
     const madru = crono.madrugada?.[todayKey];
-    if (madru && madru.active) return madru;
+    if (madru && madru.active) {
+      options.push({
+        ...madru,
+        sourceType: "madrugada",
+        eventKey: `${todayKey}:madrugada`,
+      });
+    }
 
-    return null;
+    return options;
   } catch (e) {
     console.error("Erro ao ler cronograma:", e);
-    return null;
+    return [];
   }
+}
+
+function getTodayEventData(preferredEventKey = null) {
+  const options = getTodayEventOptions();
+
+  if (preferredEventKey) {
+    return options.find((ev) => ev.eventKey === preferredEventKey) || null;
+  }
+
+  return options[0] || null;
 }
 
 // Extrai a premiação do texto do cronograma para uma posição específica (1, 2, 3)
@@ -173,7 +196,35 @@ function extractPrizeForRank(prizesText, rank) {
   }
   return "";
 }
+function getTodayPostKey() {
+  return new Date().toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
+}
 
+function getPostedEventKeys(scope = "hallDaFama") {
+  const key = getTodayPostKey();
+  state.postedEventKeys ??= {};
+  state.postedEventKeys[scope] ??= {};
+  state.postedEventKeys[scope][key] ??= [];
+  return state.postedEventKeys[scope][key];
+}
+
+function getNextTodayEventData(scope = "hallDaFama") {
+  const options = getTodayEventOptions();
+  const posted = getPostedEventKeys(scope);
+
+  return options.find((ev) => !posted.includes(ev.eventKey)) || options[options.length - 1] || null;
+}
+
+function markTodayEventPosted(eventKey, scope = "hallDaFama") {
+  if (!eventKey) return;
+
+  const posted = getPostedEventKeys(scope);
+
+  if (!posted.includes(eventKey)) {
+    posted.push(eventKey);
+    saveState(state);
+  }
+}
 // ================= TEMPLATES DE TEXTO (VARIAÇÃO) =================
 const INTRO_TEMPLATES = [
   "A disputa foi pesada e só os brabos ficaram de pé. Confira os vencedores:",
@@ -597,10 +648,10 @@ async function ensureButtonAtBottom(channel, client, force = true) {
   }
 }
 
-function buildHallDaFamaModal(cityKey, defaultEventName) {
+function buildHallDaFamaModal(cityKey, defaultEventName, eventKey = "auto") {
   const defaultCityName = CITIES[cityKey]?.label || "Cidade";
   const modal = new ModalBuilder()
-    .setCustomId(`${MODAL_SUBMIT}:${cityKey}`)
+    .setCustomId(`${MODAL_SUBMIT}:${cityKey}:${eventKey}`)
     .setTitle(`Hall da Fama - ${defaultCityName}`);
 
   modal.addComponents(
@@ -927,8 +978,8 @@ ${newImageUrl}${newImageUrl2 ? `\n${newImageUrl2}` : ''}`;
     }
 
     // ✅ Tenta detectar cidade automaticamente pelo cronograma
-    const eventData = getTodayEventData();
-    let autoCityKey = null;
+const eventData = getNextTodayEventData("hallDaFama");
+let autoCityKey = null;
 
     if (eventData && eventData.city) {
       const normalized = eventData.city.toLowerCase().trim();
@@ -940,12 +991,12 @@ ${newImageUrl}${newImageUrl2 ? `\n${newImageUrl2}` : ''}`;
       }
     }
 
-    if (autoCityKey) {
-      const defaultEventName = eventData ? eventData.eventName : "";
-      const modal = buildHallDaFamaModal(autoCityKey, defaultEventName);
-      await interaction.showModal(modal);
-      return true;
-    }
+if (autoCityKey) {
+  const defaultEventName = eventData ? eventData.eventName : "";
+  const modal = buildHallDaFamaModal(autoCityKey, defaultEventName, eventData?.eventKey || "auto");
+  await interaction.showModal(modal);
+  return true;
+}
 
     const select = new StringSelectMenuBuilder()
       .setCustomId(SEL_CITY)
@@ -974,10 +1025,31 @@ ${newImageUrl}${newImageUrl2 ? `\n${newImageUrl2}` : ''}`;
     const cityKey = interaction.values[0];
     
     // Tenta pegar dados automáticos
-    const eventData = getTodayEventData();
+    const eventOptions = getTodayEventOptions();
+    const posted = getPostedEventKeys("hallDaFama");
+
+    const eventData =
+      eventOptions.find((ev) => {
+        const cName = ev.city?.toLowerCase().trim();
+        return cName && !posted.includes(ev.eventKey) && (
+          cName === cityKey ||
+          CITIES[cityKey].label.toLowerCase().includes(cName) ||
+          cName.includes(cityKey)
+        );
+      }) ||
+      eventOptions.find((ev) => {
+        const cName = ev.city?.toLowerCase().trim();
+        return cName && (
+          cName === cityKey ||
+          CITIES[cityKey].label.toLowerCase().includes(cName) ||
+          cName.includes(cityKey)
+        );
+      }) ||
+      getNextTodayEventData("hallDaFama");
+
     const defaultEventName = eventData ? eventData.eventName : "";
     
-    const modal = buildHallDaFamaModal(cityKey, defaultEventName);
+    const modal = buildHallDaFamaModal(cityKey, defaultEventName, eventData?.eventKey || "auto");
 
     await interaction.showModal(modal);
     return true;
@@ -987,8 +1059,8 @@ ${newImageUrl}${newImageUrl2 ? `\n${newImageUrl2}` : ''}`;
   if (interaction.isModalSubmit() && interaction.customId.startsWith(MODAL_SUBMIT)) {
     await interaction.deferReply({ ephemeral: true });
 
-    const cityKey = interaction.customId.split(":")[1];
-    if (!cityKey || !CITIES[cityKey]) return interaction.editReply("❌ Erro: Cidade não identificada.");
+const [, cityKey, eventKeyFromModal] = interaction.customId.split(":");
+if (!cityKey || !CITIES[cityKey]) return interaction.editReply("❌ Erro: Cidade não identificada.");
 
     // Pega inputs
     const eventNameInput = interaction.fields.getTextInputValue("hf_event_name");
@@ -998,8 +1070,11 @@ ${newImageUrl}${newImageUrl2 ? `\n${newImageUrl2}` : ''}`;
 const customCityInput = interaction.fields.getTextInputValue("hf_custom_city")?.trim() || "";
 
 // Pega dados do cronograma (automático)
-const eventData = getTodayEventData();
-const eventName = eventNameInput; // Usa o input do usuário
+const eventData =
+  getTodayEventData(eventKeyFromModal !== "auto" ? eventKeyFromModal : null) ||
+  getNextTodayEventData("hallDaFama");
+
+const eventName = eventNameInput;
 const prizesText = eventData ? eventData.prizes : "";
 const cityDisplayName = customCityInput || CITIES[cityKey].label;
 
@@ -1042,14 +1117,15 @@ const cityDisplayName = customCityInput || CITIES[cityKey].label;
 
     const reqId = `${interaction.user.id}-${Date.now()}`;
     
-    state.pendingRequests[reqId] = {
+state.pendingRequests[reqId] = {
   userId: interaction.user.id,
   cityKey,
   cityDisplayName,
   eventName,
   winnersText,
   imageUrl,
-  imageUrl2
+  imageUrl2,
+  eventKey: eventData?.eventKey || null
 };
     saveState(state);
 
@@ -1180,11 +1256,13 @@ ${data.imageUrl}${data.imageUrl2 ? `\n${data.imageUrl2}` : ''}`;
 
     await interaction.message.edit({ embeds: [embedApproved], components: [] });
     
-    delete state.pendingRequests[reqId];
-    saveState(state);
-    processingApprovals.delete(reqId);
-    await interaction.editReply("✅ Hall da Fama postado e pontos computados!");
-    return true;
+   markTodayEventPosted(data.eventKey, "hallDaFama");
+
+delete state.pendingRequests[reqId];
+saveState(state);
+processingApprovals.delete(reqId);
+await interaction.editReply("✅ Hall da Fama postado e pontos computados!");
+return true;
   }
 
   // 5. Reprovação

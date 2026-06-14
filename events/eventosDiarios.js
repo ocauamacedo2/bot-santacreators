@@ -105,25 +105,48 @@ function getTodayKey() {
 }
 
 // Lê o cronograma e retorna os dados de HOJE
-function getTodayEventData() {
+function getTodayEventOptions() {
   try {
-    if (!fs.existsSync(CRONO_FILE)) return null;
+    if (!fs.existsSync(CRONO_FILE)) return [];
+
     const crono = JSON.parse(fs.readFileSync(CRONO_FILE, "utf8"));
     const todayKey = getTodayKey();
-    
-    // Tenta pegar do schedule normal (19h)
+
+    const options = [];
+
     const normal = crono.schedule?.[todayKey];
-    if (normal && normal.active) return normal;
+    if (normal && normal.active) {
+      options.push({
+        ...normal,
+        sourceType: "schedule",
+        eventKey: `${todayKey}:schedule`,
+      });
+    }
 
-    // Se não tiver, tenta madrugada
     const madru = crono.madrugada?.[todayKey];
-    if (madru && madru.active) return madru;
+    if (madru && madru.active) {
+      options.push({
+        ...madru,
+        sourceType: "madrugada",
+        eventKey: `${todayKey}:madrugada`,
+      });
+    }
 
-    return null;
+    return options;
   } catch (e) {
     console.error("[EventosDiarios] Erro ao ler cronograma:", e);
-    return null;
+    return [];
   }
+}
+
+function getTodayEventData(preferredEventKey = null) {
+  const options = getTodayEventOptions();
+
+  if (preferredEventKey) {
+    return options.find((ev) => ev.eventKey === preferredEventKey) || null;
+  }
+
+  return options[0] || null;
 }
 
 function splitText(text, maxLength = 2000) {
@@ -146,6 +169,37 @@ function splitText(text, maxLength = 2000) {
   if (currentChunk) chunks.push(currentChunk);
   return chunks;
 }
+
+function getTodayPostKey() {
+  return new Date().toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
+}
+
+function getPostedEventKeys(scope = "eventosDiarios") {
+  const key = getTodayPostKey();
+  state.postedEventKeys ??= {};
+  state.postedEventKeys[scope] ??= {};
+  state.postedEventKeys[scope][key] ??= [];
+  return state.postedEventKeys[scope][key];
+}
+
+function getNextTodayEventData(scope = "eventosDiarios") {
+  const options = getTodayEventOptions();
+  const posted = getPostedEventKeys(scope);
+
+  return options.find((ev) => !posted.includes(ev.eventKey)) || options[options.length - 1] || null;
+}
+
+function markTodayEventPosted(eventKey, scope = "eventosDiarios") {
+  if (!eventKey) return;
+
+  const posted = getPostedEventKeys(scope);
+
+  if (!posted.includes(eventKey)) {
+    posted.push(eventKey);
+    saveState(state);
+  }
+}
+
 // ================= HELPERS =================
 function hasPermission(member, userId) {
   if (ALLOWED_USERS.includes(userId)) return true;
@@ -175,6 +229,7 @@ function buildControlButtons() {
 function createEventModal(cityKey, eventData) {
   let defaultTitle = "";
   let defaultDescription = "";
+  const eventKey = eventData?.eventKey || "auto";
 
   // Verifica se o evento do dia bate com a cidade selecionada
   if (eventData && eventData.city) {
@@ -191,7 +246,7 @@ function createEventModal(cityKey, eventData) {
   }
 
   const modal = new ModalBuilder()
-    .setCustomId(`${MODAL_SUBMIT}:${cityKey}`)
+    .setCustomId(`${MODAL_SUBMIT}:${cityKey}:${eventKey}`)
     .setTitle(`Evento - ${CITIES[cityKey].label}`);
 
   modal.addComponents(
@@ -313,8 +368,8 @@ export async function eventosDiariosHandleInteraction(interaction, client) {
     }
 
     // ✅ Tenta detectar cidade automaticamente pelo cronograma
-    const eventData = getTodayEventData();
-    let autoCityKey = null;
+const eventData = getNextTodayEventData("eventosDiarios");
+let autoCityKey = null;
 
     if (eventData && eventData.city) {
       const normalized = eventData.city.toLowerCase().trim();
@@ -357,8 +412,29 @@ export async function eventosDiariosHandleInteraction(interaction, client) {
     const cityKey = interaction.values[0];
     
     // ✅ Pega dados do evento de hoje para pré-preencher
-    const eventData = getTodayEventData();
-    const modal = createEventModal(cityKey, eventData);
+const eventOptions = getTodayEventOptions();
+const posted = getPostedEventKeys("eventosDiarios");
+
+const eventData =
+  eventOptions.find((ev) => {
+    const cName = ev.city?.toLowerCase().trim();
+    return cName && !posted.includes(ev.eventKey) && (
+      cName === cityKey ||
+      CITIES[cityKey].label.toLowerCase().includes(cName) ||
+      cName.includes(cityKey)
+    );
+  }) ||
+  eventOptions.find((ev) => {
+    const cName = ev.city?.toLowerCase().trim();
+    return cName && (
+      cName === cityKey ||
+      CITIES[cityKey].label.toLowerCase().includes(cName) ||
+      cName.includes(cityKey)
+    );
+  }) ||
+  getNextTodayEventData("eventosDiarios");
+
+const modal = createEventModal(cityKey, eventData);
     await interaction.showModal(modal);
     return true;
   }
@@ -500,24 +576,29 @@ ${oldMentions}`;
   if (interaction.isModalSubmit() && interaction.customId.startsWith(MODAL_SUBMIT)) {
     await interaction.deferReply({ ephemeral: true });
 
-    const cityKey = interaction.customId.split(":")[1];
-    if (!cityKey || !CITIES[cityKey]) {
-      return interaction.editReply("❌ Erro: Cidade não identificada.");
-    }
+const [, cityKey, eventKeyFromModal] = interaction.customId.split(":");
+if (!cityKey || !CITIES[cityKey]) {
+  return interaction.editReply("❌ Erro: Cidade não identificada.");
+}
 
-    const title = interaction.fields.getTextInputValue("evd_title");
-    const description = interaction.fields.getTextInputValue("evd_description");
-    const imageUrl = interaction.fields.getTextInputValue("evd_image");
+const eventData =
+  getTodayEventData(eventKeyFromModal !== "auto" ? eventKeyFromModal : null) ||
+  getNextTodayEventData("eventosDiarios");
 
-    const reqId = `${interaction.user.id}-${Date.now()}`;
+const title = interaction.fields.getTextInputValue("evd_title");
+const description = interaction.fields.getTextInputValue("evd_description");
+const imageUrl = interaction.fields.getTextInputValue("evd_image");
+
+const reqId = `${interaction.user.id}-${Date.now()}`;
     
-    state.pendingRequests[reqId] = {
-      userId: interaction.user.id,
-      cityKey,
-      title,
-      description,
-      imageUrl
-    };
+state.pendingRequests[reqId] = {
+  userId: interaction.user.id,
+  cityKey,
+  title,
+  description,
+  imageUrl,
+  eventKey: eventData?.eventKey || null
+};
     saveState(state); // Salva no arquivo
 
     const approvalChannel = await client.channels.fetch(APPROVAL_CHANNEL_ID).catch(() => null);
@@ -622,10 +703,12 @@ ${mentions}`;
 
     await interaction.message.edit({ embeds: [embedApproved], components: [] }).catch(() => {});
     
-    delete state.pendingRequests[reqId];
-    saveState(state); // Salva a remoção
-    await interaction.editReply("✅ Evento postado e pontos computados!");
-    return true;
+markTodayEventPosted(data.eventKey, "eventosDiarios");
+
+delete state.pendingRequests[reqId];
+saveState(state); // Salva a remoção
+await interaction.editReply("✅ Evento postado e pontos computados!");
+return true;
   }
 
   if (interaction.isButton() && interaction.customId.startsWith(BTN_REJECT_PREFIX)) {

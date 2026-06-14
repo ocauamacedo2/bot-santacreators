@@ -290,12 +290,16 @@ text += `# 🌌 HORÁRIOS VIRADA / MADRUGADA
     const dateStr = dates[key];
     const eventName = (d.eventName || "F3 MADRUGADA").toUpperCase();
     const city = (d.city || "—").toUpperCase();
-    const time = d.time || "—";
+const time = d.time || "—";
+const prizes = d.prizes || "—";
 
-    text += `## 🌌 ${dayNames[key]} (${dateStr})
+text += `## 🌌 ${dayNames[key]} (${dateStr})
 **Evento:** ${eventName}
 **Local:** ${city}
 **Horário:** ${time}
+
+### 🏆 PREMIAÇÃO
+${prizes}
 
 ━━━━━━━━━━━━━━━━━━━━━━
 
@@ -395,14 +399,14 @@ function buildCronogramaEmbeds(state) {
     const dateStr = dates[key];
     const eventName = (d.eventName || "F3 MADRUGADA").toUpperCase();
     const city = (d.city || "—").toUpperCase();
-    const time = d.time || "—";
+const time = d.time || "—";
+const prizes = d.prizes || "—";
 
-    // ✅ Field name fica “maior” que o texto normal — bom pra chamar atenção
-    madru.addFields({
-      name: `🌌 ${dayNames[key]} (${dateStr})`,
-      value: `**Evento:** ${eventName}\n**Local:** ${city}\n**Horário:** ${time}`,
-      inline: true,
-    });
+madru.addFields({
+  name: `🌌 ${dayNames[key]} (${dateStr})`,
+  value: `**Evento:** ${eventName}\n**Local:** ${city}\n**Horário:** ${time}\n\n🏆 **Premiação:**\n${prizes}`,
+  inline: true,
+});
   }
 
   if (!hasMadru) {
