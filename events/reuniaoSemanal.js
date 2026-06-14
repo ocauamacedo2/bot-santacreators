@@ -890,7 +890,25 @@ async function updateAdminPanel(client) {
   }
 }
 
-async function removeRewardRoleFromEveryoneExcept(guild, roleId, keepUserId, roleName, log) {
+function buildRewardCandidateIds(winners, state) {
+  const ids = new Set();
+
+  const addId = (id) => {
+    if (id) ids.add(String(id));
+  };
+
+  addId(winners?.winnerGeral?.id);
+  addId(winners?.winnerManager?.id);
+  addId(winners?.winnerSocial?.id);
+
+  addId(state?.lastWinners?.geral);
+  addId(state?.lastWinners?.manager);
+  addId(state?.lastWinners?.social);
+
+  return [...ids];
+}
+
+async function removeRewardRoleFromEveryoneExcept(guild, roleId, keepUserId, roleName, log, candidateUserIds = []) {
   try {
     const role = await guild.roles.fetch(roleId).catch(() => null);
     if (!role) {
@@ -898,24 +916,23 @@ async function removeRewardRoleFromEveryoneExcept(guild, roleId, keepUserId, rol
       return;
     }
 
-    await guild.members.fetch().catch((e) => {
-      console.error(`[ReuniaoSemanal] Falha ao carregar membros antes de limpar ${roleName}:`, e);
-    });
+    const safeCandidateIds = [...new Set(candidateUserIds.map(String).filter(Boolean))];
 
-    const membersWithRole = guild.members.cache.filter((member) => {
-      return member?.roles?.cache?.has(roleId);
-    });
-
-    if (membersWithRole.size === 0) {
-      log.push(`ℹ️ Nenhum membro antigo encontrado com **${roleName}**.`);
+    if (safeCandidateIds.length === 0) {
+      log.push(`ℹ️ Nenhum candidato para verificar **${roleName}**.`);
       return;
     }
 
-    for (const member of membersWithRole.values()) {
-      if (!member?.id) continue;
+    for (const userId of safeCandidateIds) {
+      if (keepUserId && String(userId) === String(keepUserId)) {
+        log.push(`🔒 Mantido **${roleName}** em <@${userId}> porque é o vencedor atual.`);
+        continue;
+      }
 
-      if (keepUserId && String(member.id) === String(keepUserId)) {
-        log.push(`🔒 Mantido **${roleName}** em <@${member.id}> porque é o vencedor atual.`);
+      const member = await guild.members.fetch(userId).catch(() => null);
+      if (!member) continue;
+
+      if (!member.roles.cache.has(roleId)) {
         continue;
       }
 
@@ -941,17 +958,17 @@ async function removeRewardRoleFromEveryoneExcept(guild, roleId, keepUserId, rol
 
 async function applyRoles(guild, winners, state) {
   const log = [];
+  const rewardCandidateIds = buildRewardCandidateIds(winners, state);
 
-  await guild.members.fetch().catch((e) => {
-    console.error("[ReuniaoSemanal] Falha ao carregar membros para limpar cargos antigos:", e);
-  });
+  log.push(`🔎 Verificando cargos somente em ${rewardCandidateIds.length} pessoa(s) relacionadas aos destaques.`);
 
   await removeRewardRoleFromEveryoneExcept(
     guild,
     ROLES_REWARD.CREATOR_DESTAQUE,
     winners.winnerGeral?.id || null,
     "Creator Destaque",
-    log
+    log,
+    rewardCandidateIds
   );
 
   await removeRewardRoleFromEveryoneExcept(
@@ -959,7 +976,8 @@ async function applyRoles(guild, winners, state) {
     ROLES_REWARD.MASTER_MANAGER,
     winners.winnerManager?.id || null,
     "Master Manager",
-    log
+    log,
+    rewardCandidateIds
   );
 
   await removeRewardRoleFromEveryoneExcept(
@@ -967,7 +985,8 @@ async function applyRoles(guild, winners, state) {
     ROLES_REWARD.MASTER_EVENTOS,
     winners.winnerSocial?.id || null,
     "Master Eventos",
-    log
+    log,
+    rewardCandidateIds
   );
 
   const add = async (w, roleId, name) => {
@@ -1224,98 +1243,111 @@ export async function reuniaoSemanalHandleInteraction(interaction, client) {
   if (interaction.customId === "reuniao_publish_previous_week") {
     await interaction.deferReply({ ephemeral: true });
 
-    const state = loadState();
-    const previousWeekKey = TIME_LOCAL.getPreviousWeekKey();
+    try {
+      await interaction.editReply("🔄 Buscando ranking oficial da semana anterior...");
 
-    state.previousWeekPublished = state.previousWeekPublished || {};
+      const state = loadState();
+      const previousWeekKey = TIME_LOCAL.getPreviousWeekKey();
 
-    if (state.previousWeekPublished[previousWeekKey]) {
-      await interaction.editReply({
-        content: `⚠️ A semana anterior \`${previousWeekKey}\` já foi publicada por esse botão.\nSe precisar refazer mesmo assim, use o botão normal ou limpe essa chave no arquivo de state.`
-      });
-      return true;
-    }
+      state.previousWeekPublished = state.previousWeekPublished || {};
 
-const data = await getSyncedPreviousWeekData(client, interaction.guild, previousWeekKey);
-const winners = calculateWinners(data);
-const logs = await applyRoles(interaction.guild, winners, state);
+      const data = await getSyncedPreviousWeekData(client, interaction.guild, previousWeekKey);
+      const winners = calculateWinners(data);
 
-logs.unshift(
-  "✅ Semana anterior publicada com aplicação de cargos.",
-  "✅ Dados sincronizados com o Ranking Geral oficial da semana passada.",
-  "⚠️ Os cargos antigos serão removidos e os cargos da semana anterior serão aplicados nos vencedores recuperados."
-);
+      await interaction.editReply("🏷️ Aplicando cargos da semana anterior e removendo cargos antigos...");
 
-    const registrarUser = interaction.user;
-    const winnerRecords = [
-      { winner: winners.winnerGeral, motivo: "Creator Destaque" },
-      { winner: winners.winnerManager, motivo: "Master Manager" },
-      { winner: winners.winnerSocial, motivo: "Master Eventos" }
-    ];
+      const logs = await applyRoles(interaction.guild, winners, state);
 
-    let vipLogs = [];
+      logs.unshift(
+        "✅ Semana anterior publicada com aplicação de cargos.",
+        "✅ Dados sincronizados com o Ranking Geral oficial da semana passada.",
+        "⚠️ Os cargos antigos foram removidos conforme possível e os cargos da semana anterior foram aplicados nos vencedores recuperados."
+      );
 
-    for (const record of winnerRecords) {
-      if (record.winner && record.winner.id) {
-        try {
-          const member = await interaction.guild.members.fetch(record.winner.id);
-          const nomeEquipe = `${member.displayName} | ${member.id}`;
+      await interaction.editReply("💎 Criando registros de premiação/VIP...");
 
-          await createVipRecordProgrammatically(client, {
-            registrarUser: registrarUser,
-            beneficiarioRaw: record.winner.id,
-            tipoRaw: "vipevento2",
-            cidadeRaw: "nobre",
-            motivoRegistro: `${record.motivo} | Semana anterior ${previousWeekKey}`,
-            nomeEquipe: nomeEquipe
-          });
+      const registrarUser = interaction.user;
+      const winnerRecords = [
+        { winner: winners.winnerGeral, motivo: "Creator Destaque" },
+        { winner: winners.winnerManager, motivo: "Master Manager" },
+        { winner: winners.winnerSocial, motivo: "Master Eventos" }
+      ];
 
-          vipLogs.push(`- Registro VIP para ${record.motivo}: <@${record.winner.id}>`);
-        } catch (e) {
-          console.error(`[ReuniaoSemanal] Falha ao registrar VIP para ${record.motivo}:`, e);
-          vipLogs.push(`- ❌ Falha ao registrar VIP para ${record.motivo}`);
+      let vipLogs = [];
+
+      for (const record of winnerRecords) {
+        if (record.winner && record.winner.id) {
+          try {
+            const member = await interaction.guild.members.fetch(record.winner.id).catch(() => null);
+            const nomeEquipe = member
+              ? `${member.displayName} | ${member.id}`
+              : `${record.winner.id}`;
+
+            await createVipRecordProgrammatically(client, {
+              registrarUser: registrarUser,
+              beneficiarioRaw: record.winner.id,
+              tipoRaw: "vipevento2",
+              cidadeRaw: "nobre",
+              motivoRegistro: `${record.motivo} | Semana anterior ${previousWeekKey}`,
+              nomeEquipe: nomeEquipe
+            });
+
+            vipLogs.push(`- Registro VIP para ${record.motivo}: <@${record.winner.id}>`);
+          } catch (e) {
+            console.error(`[ReuniaoSemanal] Falha ao registrar VIP para ${record.motivo}:`, e);
+            vipLogs.push(`- ❌ Falha ao registrar VIP para ${record.motivo}`);
+          }
         }
       }
-    }
 
-    let publicMessageSent = false;
-    let publicMessageError = "";
+      await interaction.editReply("📢 Publicando resumo no canal público...");
 
-    try {
-      const publicChannel = await client.channels.fetch(PUBLIC_CHANNEL_ID).catch(() => null);
+      let publicMessageSent = false;
+      let publicMessageError = "";
 
-      if (publicChannel) {
-        const publicEmbeds = await buildPublicEmbeds(state, data, winners, interaction.guild);
-        await publicChannel.send({
-          content: `@everyone Resumo da Reunião Semanal — Semana anterior \`${previousWeekKey}\`:`,
-          embeds: publicEmbeds
-        });
+      try {
+        const publicChannel = await client.channels.fetch(PUBLIC_CHANNEL_ID).catch(() => null);
 
-        publicMessageSent = true;
-      } else {
-        publicMessageError = "Canal público não encontrado.";
+        if (publicChannel) {
+          const publicEmbeds = await buildPublicEmbeds(state, data, winners, interaction.guild);
+          await publicChannel.send({
+            content: `@everyone Resumo da Reunião Semanal — Semana anterior \`${previousWeekKey}\`:`,
+            embeds: publicEmbeds
+          });
+
+          publicMessageSent = true;
+        } else {
+          publicMessageError = "Canal público não encontrado.";
+        }
+      } catch (e) {
+        console.error("[ReuniaoSemanal] Erro ao enviar mensagem pública da semana anterior:", e);
+        publicMessageError = e.message;
       }
+
+      state.previousWeekPublished[previousWeekKey] = {
+        at: Date.now(),
+        by: interaction.user.id
+      };
+      saveState(state);
+
+      const finalLogMessage = `↩️ **Semana anterior publicada e aplicada!**\n\n` +
+        `📅 **Semana recuperada:** \`${previousWeekKey}\`\n\n` +
+        `📜 **Logs de Cargos:**\n${logs.join("\n") || "Nenhuma alteração."}\n\n` +
+        `💎 **Registros de Premiação:**\n${vipLogs.join("\n") || "Nenhum prêmio registrado."}\n\n` +
+        `${publicMessageSent ? "📢 Resumo enviado no canal público." : `⚠️ **Falha ao enviar resumo no canal público.**\n> Motivo: ${publicMessageError}`}`;
+
+      await interaction.editReply({ content: finalLogMessage });
+      return true;
     } catch (e) {
-      console.error("[ReuniaoSemanal] Erro ao enviar mensagem pública da semana anterior:", e);
-      publicMessageError = e.message;
+      console.error("[ReuniaoSemanal] Erro geral ao publicar semana anterior:", e);
+
+      await interaction.editReply({
+        content: `❌ Erro ao publicar/aplicar a semana anterior.\n\n\`\`\`${String(e?.stack || e?.message || e).slice(0, 1800)}\`\`\``
+      });
+
+      return true;
     }
-
-    state.previousWeekPublished[previousWeekKey] = {
-      at: Date.now(),
-      by: interaction.user.id
-    };
-    saveState(state);
-
-    const finalLogMessage = `↩️ **Semana anterior publicada!**\n\n` +
-      `📅 **Semana recuperada:** \`${previousWeekKey}\`\n\n` +
-      `📜 **Logs de Cargos:**\n${logs.join("\n") || "Nenhuma alteração."}\n\n` +
-      `💎 **Registros de Premiação:**\n${vipLogs.join("\n") || "Nenhum prêmio registrado."}\n\n` +
-      `${publicMessageSent ? "📢 Resumo enviado no canal público." : `⚠️ **Falha ao enviar resumo no canal público.**\n> Motivo: ${publicMessageError}`}`;
-
-    await interaction.editReply({ content: finalLogMessage });
-    return true;
   }
-
   if (interaction.customId === "reuniao_force_roles") {
     await interaction.deferReply({ ephemeral: true });
     const state = loadState();
