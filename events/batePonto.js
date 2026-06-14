@@ -1014,7 +1014,7 @@ try {
         if (!isMyInteraction) return;
 
         // ✅ ISENÇÃO DE REGRAS (HORÁRIO E LIMITE)
-        const isBypassUser = ["660311795327828008", "1262262852949905408"].includes(it.user.id);
+        const isBypassUser = it.user.id === process.env.OWNER || ["660311795327828008", "1262262852949905408"].includes(it.user.id);
 
         if (it.isButton() && it.customId === CFG.KEYS.BUTTON_PUNCH) {
           if (!canClick(it.member)) return it.reply({ ephemeral: true, embeds: [err("Você não tem permissão para bater ponto aqui.")] });
@@ -1090,13 +1090,21 @@ try {
           // ✅ 01:00–03:59 entra no dia efetivo anterior
           const dayKey = `${monthKey}-${String(eff.dd).padStart(2, "0")}`;
 
-          addIfMissing(dayKey, {
+          const punchData = {
             uid: it.user.id,
             mention: `<@${it.user.id}>`,
             name: firstName,
             time: timeStr,
             team
-          });
+          };
+
+          // ✅ Se for usuário bypass, ignora a trava de duplicidade (mesmo no mesmo minuto)
+          if (isBypassUser) {
+            STATE.days[dayKey] ??= [];
+            STATE.days[dayKey].push(punchData);
+          } else {
+            addIfMissing(dayKey, punchData);
+          }
 
           await it.reply({
             embeds: [embPunch({ user: it.user, channel: it.channel, team, timeStr, name: firstName })]
