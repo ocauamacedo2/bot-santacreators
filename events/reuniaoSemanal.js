@@ -266,23 +266,35 @@ function normalizeRankSourceLabel(label) {
   const key = String(label || "")
     .normalize("NFD")
     .replace(/\p{Diacritic}/gu, "")
+    .replace(/[^\p{L}\p{N}\s-]/gu, "")
     .toLowerCase()
+    .replace(/\s+/g, " ")
     .trim();
 
   const map = {
     "presenca": "presencas",
+    "presencas": "presencas",
     "manager": "manager",
+    "managers": "manager",
+    "pagamento": "pagamentos",
     "pagamentos": "pagamentos",
     "bate-ponto": "bateponto",
+    "bate ponto": "bateponto",
     "poderes": "poderes",
     "poderes do dia": "eventopoder",
+    "poder do dia": "eventopoder",
     "eventos diarios": "eventosdiarios",
+    "evento diario": "eventosdiarios",
     "correcao de entrevista": "correcao",
     "cronograma": "cronograma",
     "hall da fama": "halldafama",
+    "alinhamento": "alinhamentos",
     "alinhamentos": "alinhamentos",
+    "doacao": "doacoes",
     "doacoes": "doacoes",
+    "convite": "convites",
     "convites": "convites",
+    "pergunta": "perguntas",
     "perguntas": "perguntas",
   };
 
@@ -324,13 +336,15 @@ function parseWeeklyRankEmbedsToData(messages, wk) {
           continue;
         }
 
-        const sourceMatch = /^│\s*([^:]+):\s*(-?\d+)/i.exec(line);
+        const sourceMatch = /^(?:[│┃|▌]\s*)?(?:[-•]\s*)?(?:\*\*)?\s*([^:*]+?)\s*(?:\*\*)?\s*:\s*(?:\*\*)?\s*(-?\d+)\s*(?:\*\*)?/i.exec(line);
         if (sourceMatch && currentUserId) {
           const source = normalizeRankSourceLabel(sourceMatch[1]);
           const value = Number(sourceMatch[2] || 0);
 
-          bySourceByUser[currentUserId] = bySourceByUser[currentUserId] || {};
-          bySourceByUser[currentUserId][source] = value;
+          if (source) {
+            bySourceByUser[currentUserId] = bySourceByUser[currentUserId] || {};
+            bySourceByUser[currentUserId][source] = value;
+          }
         }
       }
     }
@@ -365,6 +379,7 @@ function parseWeeklyRankEmbedsToData(messages, wk) {
     "eventopoder",
     "cronograma",
     "eventosdiarios",
+    "poderes",
   ]);
 
   const topAlinh = buildSourceTop(["alinhamentos"]);
