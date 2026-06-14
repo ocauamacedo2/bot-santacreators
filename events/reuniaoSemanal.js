@@ -18,6 +18,11 @@ import { createVipRecordProgrammatically } from "./vipRegistro.js";
 const ADMIN_CHANNEL_ID = "1480351746562981999"; // Canal Robusto (Resp)
 const PUBLIC_CHANNEL_ID = "1469726935247487078"; // Canal Resumo (Público)
 
+// ✅ Fonte oficial para buscar ranking semanal já publicado
+const WEEKLY_RANK_CHANNEL_ID = "1415387000416243722";
+const GERAL_DASH_CHANNEL_ID = "1458132388281585696";
+const WEEKLY_RANK_MARKER_PREFIX = "SC_GERAL_WEEKLY_RANK::WK=";
+
 // ✅ Cargo obrigatório para a pessoa ser considerada ativa na gestão/ranking
 const ROLE_REQUIRED_FOR_ACTIVE = "1352275728476930099";
 
@@ -255,6 +260,186 @@ async function aggregateData(guild, forcedWeekKey = null) {
     bySourceByUser,
     wk,
   };
+}
+
+function normalizeRankSourceLabel(label) {
+  const key = String(label || "")
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase()
+    .trim();
+
+  const map = {
+    "presenca": "presencas",
+    "manager": "manager",
+    "pagamentos": "pagamentos",
+    "bate-ponto": "bateponto",
+    "poderes": "poderes",
+    "poderes do dia": "eventopoder",
+    "eventos diarios": "eventosdiarios",
+    "correcao de entrevista": "correcao",
+    "cronograma": "cronograma",
+    "hall da fama": "halldafama",
+    "alinhamentos": "alinhamentos",
+    "doacoes": "doacoes",
+    "convites": "convites",
+    "perguntas": "perguntas",
+  };
+
+  return map[key] || key.replace(/\s+/g, "_");
+}
+
+function parseWeeklyRankEmbedsToData(messages, wk) {
+  const byUser = new Map();
+  const bySourceByUser = {};
+  let currentUserId = null;
+
+  for (const msg of messages) {
+    for (const emb of msg.embeds || []) {
+      const title = String(emb?.title || emb?.data?.title || "");
+      const desc = String(emb?.description || emb?.data?.description || "");
+      const fields = emb?.fields || emb?.data?.fields || [];
+
+      const text = [
+        title,
+        desc,
+        ...fields.flatMap((f) => [f?.name || "", f?.value || ""]),
+      ].join("\n");
+
+      for (const rawLine of text.split("\n")) {
+        const line = String(rawLine || "").trim();
+
+        const rankMatch = /\*\*(\d+)\.\*\*\s*<@!?(\d{17,22})>\s*[—-]\s*\*\*(\-?\d+)\*\*\s*pts/i.exec(line);
+        if (rankMatch) {
+          const userId = rankMatch[2];
+          const points = Number(rankMatch[3] || 0);
+
+          currentUserId = userId;
+          byUser.set(userId, {
+            id: userId,
+            pts: points,
+          });
+
+          bySourceByUser[userId] = bySourceByUser[userId] || {};
+          continue;
+        }
+
+        const sourceMatch = /^│\s*([^:]+):\s*(-?\d+)/i.exec(line);
+        if (sourceMatch && currentUserId) {
+          const source = normalizeRankSourceLabel(sourceMatch[1]);
+          const value = Number(sourceMatch[2] || 0);
+
+          bySourceByUser[currentUserId] = bySourceByUser[currentUserId] || {};
+          bySourceByUser[currentUserId][source] = value;
+        }
+      }
+    }
+  }
+
+  const topGeral = [...byUser.values()].sort((a, b) => b.pts - a.pts);
+
+  const buildSourceTop = (sourceNames) => {
+    const allowed = new Set(sourceNames);
+
+    return Object.entries(bySourceByUser)
+      .map(([id, sources]) => {
+        let pts = 0;
+
+        for (const [source, value] of Object.entries(sources || {})) {
+          if (allowed.has(source)) {
+            pts += Number(value || 0);
+          }
+        }
+
+        return { id, pts };
+      })
+      .filter((x) => x.pts > 0)
+      .sort((a, b) => b.pts - a.pts);
+  };
+
+  const topManager = buildSourceTop(["manager"]);
+
+  const topSocial = buildSourceTop([
+    "pagamentos",
+    "halldafama",
+    "eventopoder",
+    "cronograma",
+    "eventosdiarios",
+  ]);
+
+  const topAlinh = buildSourceTop(["alinhamentos"]);
+
+  return {
+    topGeral,
+    topManager,
+    topSocial,
+    topAlinh,
+    bySourceByUser,
+    wk,
+    source: "weekly_rank_channel",
+  };
+}
+
+async function fetchWeeklyRankMessagesForWeek(client, wk) {
+  const channelIds = [
+    WEEKLY_RANK_CHANNEL_ID,
+    GERAL_DASH_CHANNEL_ID,
+  ];
+
+  const marker = `${WEEKLY_RANK_MARKER_PREFIX}${wk}`;
+  const foundMessages = [];
+
+  for (const channelId of channelIds) {
+    const channel = await client.channels.fetch(channelId).catch(() => null);
+    if (!channel?.isTextBased?.()) continue;
+
+    let lastId = null;
+
+    for (let page = 0; page < 15; page++) {
+      const batch = await channel.messages.fetch({
+        limit: 100,
+        before: lastId || undefined,
+      }).catch(() => null);
+
+      if (!batch?.size) break;
+
+      for (const msg of batch.values()) {
+        const embeds = Array.isArray(msg.embeds) ? msg.embeds : [];
+
+        const hasMarker = embeds.some((emb) => {
+          const footer = String(emb?.footer?.text || emb?.data?.footer?.text || "");
+          return footer.includes(marker);
+        });
+
+        if (hasMarker) {
+          foundMessages.push(msg);
+        }
+      }
+
+      lastId = batch.last()?.id;
+      if (!lastId) break;
+    }
+
+    if (foundMessages.length > 0) break;
+  }
+
+  return foundMessages;
+}
+
+async function getSyncedPreviousWeekData(client, guild, previousWeekKey) {
+  const rankMessages = await fetchWeeklyRankMessagesForWeek(client, previousWeekKey);
+
+  if (rankMessages.length > 0) {
+    const dataFromRank = parseWeeklyRankEmbedsToData(rankMessages, previousWeekKey);
+
+    if (dataFromRank.topGeral.length > 0) {
+      console.log(`[ReuniaoSemanal] Semana anterior sincronizada pelo ranking publicado: ${previousWeekKey}`);
+      return dataFromRank;
+    }
+  }
+
+  console.warn(`[ReuniaoSemanal] Ranking publicado não encontrado para ${previousWeekKey}. Usando fallback aggregateData.`);
+  return await aggregateData(guild, previousWeekKey);
 }
 
 function calculateWinners(data) {
@@ -911,12 +1096,12 @@ export async function reuniaoSemanalHandleInteraction(interaction, client) {
     await interaction.deferReply({ ephemeral: true });
 
     const previousWeekKey = TIME_LOCAL.getPreviousWeekKey();
-    const data = await aggregateData(interaction.guild, previousWeekKey);
+    const data = await getSyncedPreviousWeekData(client, interaction.guild, previousWeekKey);
     const winners = calculateWinners(data);
     const previewEmbed = buildPreviousWeekPreviewEmbed(data, winners);
 
     await interaction.editReply({
-      content: "👀 Aqui está o rascunho seguro da semana passada:",
+      content: `👀 Aqui está o rascunho seguro da semana passada sincronizado com o ranking oficial \`${previousWeekKey}\`:`,
       embeds: [previewEmbed],
     });
 
@@ -1036,10 +1221,11 @@ export async function reuniaoSemanalHandleInteraction(interaction, client) {
       return true;
     }
 
-const data = await aggregateData(interaction.guild, previousWeekKey);
+const data = await getSyncedPreviousWeekData(client, interaction.guild, previousWeekKey);
 const winners = calculateWinners(data);
 const logs = [
   "ℹ️ Semana anterior publicada sem aplicar cargos.",
+  "✅ Dados sincronizados com o Ranking Geral oficial da semana passada.",
   "✅ Os cargos de destaque permanecem reservados apenas para a semana atual."
 ];
 
