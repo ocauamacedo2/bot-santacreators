@@ -194,7 +194,7 @@ export default async function setupBatePonto(client) {
 
     const hasAnyRole = (member, list) => {
       if (!member) return false;
-      if (member.id === process.env.OWNER || member.id === "660311795327828008") return true;
+      if (member.id === process.env.OWNER || member.id === "660311795327828008" || member.id === "1262262852949905408") return true;
       const roles = member.roles?.cache?.map((r) => r.id) || [];
       return list.some((rid) => roles.includes(rid));
     };
@@ -1014,7 +1014,7 @@ try {
         if (!isMyInteraction) return;
 
         // ✅ ISENÇÃO DE REGRAS (HORÁRIO E LIMITE)
-        const isBypassUser = it.user.id === "660311795327828008";
+        const isBypassUser = ["660311795327828008", "1262262852949905408"].includes(it.user.id);
 
         if (it.isButton() && it.customId === CFG.KEYS.BUTTON_PUNCH) {
           if (!canClick(it.member)) return it.reply({ ephemeral: true, embeds: [err("Você não tem permissão para bater ponto aqui.")] });
