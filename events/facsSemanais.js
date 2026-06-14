@@ -104,7 +104,9 @@ const TIME_LOCAL = (() => {
 
   // início do dia (00:00) em SP, retornando Date em UTC
   function startOfDaySP(dateUTC) {
-    return new Date(Date.UTC(dateUTC.getUTCFullYear(), dateUTC.getUTCMonth(), dateUTC.getUTCDate()));
+    // ✅ FIX: 00:00 SP = 03:00 UTC (Brasília é UTC-3)
+    // Isso garante que a comparação de mensagens e picos seja precisa.
+    return new Date(Date.UTC(dateUTC.getUTCFullYear(), dateUTC.getUTCMonth(), dateUTC.getUTCDate(), 3, 0, 0));
   }
 
   function addDays(dateUTC, n) {
@@ -720,32 +722,21 @@ async function limparDomingoIfNeeded(client) {
   const now = nowInSP();
   const { weekKey } = getCurrentWeekSP();
 
-  // ✅ Se já limpou essa semana (persistente), não faz nada
+  // ✅ Se já limpou essa semana (persistente), interrompe
   if (String(facsState.lastCleanupKey || "") === String(weekKey)) return;
-
-  // ✅ OFFLINE-SAFE:
-  // Se a "weekKey" atual (domingo da semana) é diferente da weekKey que está salva,
-  // significa que entrou semana nova e a lista deve iniciar vazia.
-  //
-  // Isso resolve: bot offline na virada -> quando voltar, limpa 1x.
-  const weekChanged = String(facsState.weekKey || "") !== String(weekKey);
-
-  if (!weekChanged) return;
 
   try {
     pushBackup("auto_clear_week_changed_offline_safe");
 
-    // inicia semana nova
+    // ✅ Reset real da lista e atualização dos marcadores
     facsState.weekKey = weekKey;
     facsState.lista = "";
-
-    // ✅ marca e salva (persistente) para não repetir em restart
     facsState.lastCleanupKey = weekKey;
-    saveStore(facsState);
 
+    saveStore(facsState);
     await _refreshMenu(client);
 
-    console.log("[FACS_SEMANAIS] Semana limpa (offline-safe por weekChanged):", weekKey);
+    console.log("[FACS_SEMANAIS] Reset semanal executado com sucesso (Dom 00:00 SP):", weekKey);
   } catch (e) {
     console.error("[FACS_SEMANAIS] limparDomingo err (offline-safe):", e);
   }
@@ -930,29 +921,12 @@ function installBridge(client) {
     appendOrgToWeek: async (displayOrg, options = {}) => {
   try {
     if (!displayOrg || !String(displayOrg).trim() || displayOrg === "|") return false;
+    
+    // ✅ Garante que se a semana virou e o bot ainda não limpou, 
+    // ele limpa ANTES de adicionar a nova ORG.
+    await limparDomingoIfNeeded(client);
 
     const { weekKey } = getCurrentWeekSP();
-    const now = nowInSP();
-
-    // ✅ CORREÇÃO CRÍTICA:
-    // Se o weekKey mudou, SEMPRE alinhar
-    // MAS NUNCA DESCARTAR LISTA fora do domingo 00:00
-    if (facsState.weekKey !== weekKey) {
-      const isSundayMidnight =
-        now.getUTCDay() === 0 &&
-        now.getUTCHours() === 0 &&
-        now.getUTCMinutes() === 0;
-
-      if (isSundayMidnight) {
-        // ✅ domingo 00:00 → semana nova REAL
-        pushBackup("auto_clear_sunday");
-        facsState.lista = "";
-      }
-
-      // ✅ SEMPRE atualiza a weekKey
-      facsState.weekKey = weekKey;
-      saveStore(facsState);
-    }
 
     const before = facsState.lista;
     facsState.lista = _addLine(facsState.lista, displayOrg);
@@ -1153,17 +1127,13 @@ hasOrgNameInWeek: async (orgName) => {
 // EXPORTS (HOOKS)
 // ===============================
 export async function facsSemanaisOnReady(client) {
-  // ✅ NÃO limpa lista no restart.
-  // Só alinha weekKey SEM apagar, e deixa a limpeza pro domingo 00:00 (limparDomingoIfNeeded)
-  const { weekKey } = getCurrentWeekSP();
-
-  if (facsState.weekKey !== weekKey) {
-    // só atualiza weekKey, mas NÃO apaga lista
-    facsState.weekKey = weekKey;
-    saveStore(facsState);
-  }
-
   installBridge(client);
+
+  // ✅ Garante limpeza e DMs imediatamente ao ligar se a semana virou enquanto o bot estava OFF
+  try {
+    await limparDomingoIfNeeded(client);
+    await dmQuartaManagersIfNeeded(client);
+  } catch {}
 
   // tick leve (pega domingo 00:00 e quarta 15:00 mesmo se o host for zoado)
   setInterval(async () => {

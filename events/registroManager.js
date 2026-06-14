@@ -211,7 +211,9 @@ const TIME_LOCAL = (() => {
   }
 
   function startOfDaySP(dateUTC) {
-    return new Date(Date.UTC(dateUTC.getUTCFullYear(), dateUTC.getUTCMonth(), dateUTC.getUTCDate()));
+    // ✅ FIX: 00:00 SP = 03:00 UTC (Brasília é UTC-3). 
+    // Sem isso, o bot deixava mensagens das últimas 3h de sábado no canal.
+    return new Date(Date.UTC(dateUTC.getUTCFullYear(), dateUTC.getUTCMonth(), dateUTC.getUTCDate(), 3, 0, 0));
   }
 
   function addDays(dateUTC, n) {
@@ -1137,10 +1139,7 @@ async function maybeWeeklyCleanup(client) {
 
   const now = nowInSP();
 
-  // só faz sentido no domingo (o “momento de zerar”)
-  // (se quiser, dá pra tirar isso e deixar rodar qualquer dia, ele só apaga o antigo)
-  if (now.getUTCDay() !== 0) return;
-
+  // ✅ Removida a trava de "if day !== 0" para permitir reset no boot (offline-safe)
   const { sunday, weekKey } = getCurrentWeekSP();
 
   // início da semana atual = domingo 00:00 SP (em ms)
@@ -1641,6 +1640,9 @@ export async function registroManagerOnReady(client) {
 
   // ✅ 2) totais
   await updateTotalsMessage(canal);
+
+  // ✅ 2.1) Garante limpeza semanal (offline-safe)
+  await maybeWeeklyCleanup(client);
 
   // ✅ Dashboard mensal de aprovadores/reprovadores
   await rankingAprovadoresManagersOnReady(client);
