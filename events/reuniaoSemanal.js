@@ -594,13 +594,57 @@ async function buildPublicEmbeds(state, data, winners, guild) {
   return [mainEmbed, ...pautaEmbeds];
 }
 
+function buildPreviousWeekPreviewEmbed(data, winners) {
+  const fmtUser = (w) => {
+    if (!w?.id) return "—";
+    return `<@${w.id}> — **${w.pts} pts**`;
+  };
+
+  const fmtTop = (list, limit = 10) => {
+    if (!Array.isArray(list) || list.length === 0) return "_Sem dados encontrados._";
+
+    return list
+      .slice(0, limit)
+      .map((x, i) => `\`${i + 1}.\` <@${x.id}> — **${x.pts} pts**`)
+      .join("\n");
+  };
+
+  return new EmbedBuilder()
+    .setTitle("👀 Prévia da Semana Passada — Rascunho")
+    .setColor("#f1c40f")
+    .setDescription(
+      `**Semana analisada:** \`${data.wk}\`\n\n` +
+
+      `## 🏆 Vencedores que seriam publicados\n` +
+      `🏆 **Creator Destaque (Geral):** ${fmtUser(winners.winnerGeral)}\n` +
+      `📞 **Master Manager:** ${fmtUser(winners.winnerManager)}\n` +
+      `📢 **Master Eventos:** ${fmtUser(winners.winnerSocial)}\n\n` +
+
+      `━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+
+      `## 🥇 Top Geral\n${fmtTop(data.topGeral, 10)}\n\n` +
+      `## 📞 Top Manager\n${fmtTop(data.topManager, 10)}\n\n` +
+      `## 📢 Top Social/Eventos\n${fmtTop(data.topSocial, 10)}\n\n` +
+      `## 🧩 Top Alinhamentos\n${fmtTop(data.topAlinh, 10)}\n\n` +
+
+      `━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+
+      `⚠️ **Isso é apenas uma prévia.**\n` +
+      `Nenhum cargo foi setado.\n` +
+      `Nenhum VIP foi registrado.\n` +
+      `Nada foi publicado no canal público.`
+    )
+    .setFooter({ text: "SantaCreators • Prévia segura da semana passada" })
+    .setTimestamp();
+}
 
 function buildAdminRows() {
   return [
     new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId("reuniao_add_pauta").setLabel("➕ Adicionar Pauta").setStyle(ButtonStyle.Primary),
       new ButtonBuilder().setCustomId("reuniao_clear_pautas").setLabel("🧹 Limpar Pautas").setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId("reuniao_refresh").setLabel("🔄 Atualizar Dados").setStyle(ButtonStyle.Secondary)
+      new ButtonBuilder().setCustomId("reuniao_refresh").setLabel("🔄 Atualizar Dados").setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId("reuniao_preview_previous_week").setLabel("👀 Prévia Semana Passada").setStyle(ButtonStyle.Secondary)
     ),
     new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId("reuniao_publish").setLabel("✅ Publicar & Aplicar Cargos").setStyle(ButtonStyle.Success),
@@ -860,6 +904,22 @@ export async function reuniaoSemanalHandleInteraction(interaction, client) {
     await interaction.deferReply({ ephemeral: true });
     await updateAdminPanel(client);
     await interaction.editReply("✅ Dados atualizados.");
+    return true;
+  }
+
+  if (interaction.customId === "reuniao_preview_previous_week") {
+    await interaction.deferReply({ ephemeral: true });
+
+    const previousWeekKey = TIME_LOCAL.getPreviousWeekKey();
+    const data = await aggregateData(interaction.guild, previousWeekKey);
+    const winners = calculateWinners(data);
+    const previewEmbed = buildPreviousWeekPreviewEmbed(data, winners);
+
+    await interaction.editReply({
+      content: "👀 Aqui está o rascunho seguro da semana passada:",
+      embeds: [previewEmbed],
+    });
+
     return true;
   }
 
