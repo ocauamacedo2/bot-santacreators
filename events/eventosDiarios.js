@@ -92,16 +92,36 @@ const BTN_REJECT_PREFIX = "evd_reject_";
 // Carrega os pedidos pendentes do arquivo ao iniciar
 const BTN_EDIT_LAST = "evd_edit_last";
 const MODAL_EDIT_SUBMIT = "evd_modal_edit_submit";
+const BTN_EDIT_CITY = "evd_edit_city";
+const MODAL_CITY_SUBMIT = "evd_modal_city_submit";
 let state = loadState();
 
 // ================= LÓGICA INTELIGENTE (CRONOGRAMA) =================
 
 // Pega o dia da semana em SP (seg, ter, qua...)
-function getTodayKey() {
+function getTodayKey(sourceType = "schedule") {
   const now = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
-  // ✅ SEM ROLLOVER: Passou da meia-noite (00:00), já puxa o evento do dia novo.
+
+  if (sourceType === "madrugada" && now.getHours() < 3) {
+    now.setDate(now.getDate() - 1);
+  }
+
   const days = ["dom", "seg", "ter", "qua", "qui", "sex", "sab"];
   return days[now.getDay()];
+}
+
+function hasMadrugadaAgora(eventData) {
+  const now = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
+  const hour = now.getHours();
+
+  if (hour >= 3) return true;
+
+  const timeText = String(eventData?.time || "").toLowerCase();
+
+  return (
+    /\b0?1[:h]?00\b/i.test(timeText) ||
+    /\b0?0[:h]?00\b/i.test(timeText)
+  );
 }
 
 // Lê o cronograma e retorna os dados de HOJE
@@ -110,25 +130,26 @@ function getTodayEventOptions() {
     if (!fs.existsSync(CRONO_FILE)) return [];
 
     const crono = JSON.parse(fs.readFileSync(CRONO_FILE, "utf8"));
-    const todayKey = getTodayKey();
+    const scheduleKey = getTodayKey("schedule");
+    const madrugadaKey = getTodayKey("madrugada");
 
     const options = [];
 
-    const normal = crono.schedule?.[todayKey];
+    const madru = crono.madrugada?.[madrugadaKey];
+    if (madru && madru.active && hasMadrugadaAgora(madru)) {
+      options.push({
+        ...madru,
+        sourceType: "madrugada",
+        eventKey: `${madrugadaKey}:madrugada`,
+      });
+    }
+
+    const normal = crono.schedule?.[scheduleKey];
     if (normal && normal.active) {
       options.push({
         ...normal,
         sourceType: "schedule",
-        eventKey: `${todayKey}:schedule`,
-      });
-    }
-
-    const madru = crono.madrugada?.[todayKey];
-    if (madru && madru.active) {
-      options.push({
-        ...madru,
-        sourceType: "madrugada",
-        eventKey: `${todayKey}:madrugada`,
+        eventKey: `${scheduleKey}:schedule`,
       });
     }
 
@@ -222,7 +243,12 @@ function buildControlButtons() {
       .setCustomId(BTN_EDIT_LAST)
       .setLabel("✏️ Editar Último Evento")
       .setStyle(ButtonStyle.Secondary)
-      .setEmoji("✍️")
+      .setEmoji("✍️"),
+    new ButtonBuilder()
+      .setCustomId(BTN_EDIT_CITY)
+      .setLabel("🌆 Editar Última CDD")
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji("🌆")
   );
 }
 
@@ -286,12 +312,24 @@ async function ensureButtonAtBottom(channel, client, force = true) {
     const messages = await channel.messages.fetch({ limit: 20 }).catch(() => null);
     if (!messages) return;
 
-    const myMsgs = messages.filter(
-      (m) => m.author.id === client.user.id && m.components.length > 0 && m.components[0].components.some(c => c.customId === BTN_OPEN_MENU || c.customId === BTN_EDIT_LAST)
-    );
+    const myMsgs = messages.filter((m) => {
+      if (m.author.id !== client.user.id || m.components.length === 0) return false;
 
-    // ✅ Checa se já existe um painel de botões ATUALIZADO (com 2 botões)
-    const upToDateMsg = myMsgs.find(m => m.components[0]?.components?.length === 2);
+      const allButtons = m.components.flatMap(row => row.components || []);
+      return allButtons.some(c => [BTN_OPEN_MENU, BTN_EDIT_LAST, BTN_EDIT_CITY].includes(c.customId));
+    });
+
+    // ✅ Checa se já existe um painel de botões atualizado com os 3 botões
+    const upToDateMsg = myMsgs.find((m) => {
+      const allButtons = m.components.flatMap(row => row.components || []);
+      const ids = allButtons.map(c => c.customId);
+
+      return (
+        ids.includes(BTN_OPEN_MENU) &&
+        ids.includes(BTN_EDIT_LAST) &&
+        ids.includes(BTN_EDIT_CITY)
+      );
+    });
 
     // Se não for forçado e já existir um painel atualizado, não faz nada.
     if (!force && upToDateMsg) return;
@@ -436,6 +474,107 @@ const eventData =
 
 const modal = createEventModal(cityKey, eventData);
     await interaction.showModal(modal);
+    return true;
+  }
+
+  if (interaction.isButton() && interaction.customId === BTN_EDIT_CITY) {
+    if (!hasPermission(interaction.member, interaction.user.id)) {
+      return interaction.reply({ content: "🚫 Sem permissão para editar a cidade.", ephemeral: true });
+    }
+
+    const eventChannel = await client.channels.fetch(EVENTOS_CHANNEL_ID).catch(() => null);
+    if (!eventChannel) {
+      return interaction.reply({ content: "❌ Canal de Eventos não encontrado.", ephemeral: true });
+    }
+
+    const messages = await eventChannel.messages.fetch({ limit: 50 }).catch(() => null);
+    if (!messages) {
+      return interaction.reply({ content: "❌ Não foi possível buscar as mensagens do canal de eventos.", ephemeral: true });
+    }
+
+    const lastEventMessage = messages
+      .filter(m => m.author.id === client.user.id && m.content.includes("# 🎉 :  **Santa Creators :"))
+      .sort((a, b) => b.createdTimestamp - a.createdTimestamp)
+      .first();
+
+    if (!lastEventMessage) {
+      return interaction.reply({ content: "❌ Nenhum evento recente encontrado para editar a cidade.", ephemeral: true });
+    }
+
+    const modal = new ModalBuilder()
+      .setCustomId(`${MODAL_CITY_SUBMIT}:${lastEventMessage.id}`)
+      .setTitle("🌆 Editar Cidade do Evento");
+
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId("evd_city_key")
+          .setLabel("Cidade correta")
+          .setPlaceholder("nobre, santa, grande ou maresia")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+      )
+    );
+
+    await interaction.showModal(modal);
+    return true;
+  }
+
+  if (interaction.isModalSubmit() && interaction.customId.startsWith(MODAL_CITY_SUBMIT)) {
+    if (!hasPermission(interaction.member, interaction.user.id)) {
+      return interaction.reply({ content: "🚫 Sem permissão para editar a cidade.", ephemeral: true });
+    }
+
+    await interaction.deferReply({ ephemeral: true });
+
+    const messageId = interaction.customId.split(":")[1];
+    const rawCity = interaction.fields.getTextInputValue("evd_city_key").toLowerCase().trim();
+
+    const cityKey = Object.keys(CITIES).find(k =>
+      k === rawCity ||
+      CITIES[k].label.toLowerCase().includes(rawCity) ||
+      rawCity.includes(k)
+    );
+
+    if (!cityKey || !CITIES[cityKey]) {
+      return interaction.editReply("❌ Cidade inválida. Use: nobre, santa, grande ou maresia.");
+    }
+
+    const eventChannel = await client.channels.fetch(EVENTOS_CHANNEL_ID).catch(() => null);
+    if (!eventChannel) {
+      return interaction.editReply("❌ Canal de Eventos não encontrado.");
+    }
+
+    const messageToEdit = await eventChannel.messages.fetch(messageId).catch(() => null);
+    if (!messageToEdit) {
+      return interaction.editReply("❌ A mensagem do evento original não foi encontrada. Talvez tenha sido apagada.");
+    }
+
+    const cityData = CITIES[cityKey];
+
+    const oldContentWithoutMentions = messageToEdit.content
+      .split("\n")
+      .filter(line =>
+        !line.includes("@everyone") &&
+        !line.includes("@here") &&
+        !line.includes(`<@&${ROLE_CIDADAO}>`) &&
+        !line.includes(`<@&${ROLE_LIDERES}>`) &&
+        !Object.values(CITIES).some(city => line.includes(`<@&${city.roleId}>`))
+      )
+      .join("\n")
+      .trim();
+
+    const newMentions = `@everyone @here <@&${ROLE_CIDADAO}> <@&${ROLE_LIDERES}> <@&${cityData.roleId}>`;
+
+    const finalContent = `${oldContentWithoutMentions}\n\n${newMentions}`;
+
+    if (finalContent.length > 2000) {
+      return interaction.editReply("❌ A mensagem ficou maior que 2000 caracteres e não pode ser salva.");
+    }
+
+    await messageToEdit.edit({ content: finalContent });
+
+    await interaction.editReply(`✅ Cidade do último Evento Diário alterada para: **${cityData.label}**`);
     return true;
   }
 

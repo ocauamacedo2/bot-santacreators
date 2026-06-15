@@ -130,11 +130,29 @@ function markHallScanDoneToday() {
 // ================= LÓGICA INTELIGENTE (CRONOGRAMA) =================
 
 // Pega o dia da semana em SP (seg, ter, qua...)
-function getTodayKey() {
+function getTodayKey(sourceType = "schedule") {
   const now = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
-  // ✅ SEM ROLLOVER: Passou da meia-noite (00:00), já puxa o evento do dia novo.
+
+  if (sourceType === "madrugada" && now.getHours() < 3) {
+    now.setDate(now.getDate() - 1);
+  }
+
   const days = ["dom", "seg", "ter", "qua", "qui", "sex", "sab"];
   return days[now.getDay()];
+}
+
+function hasMadrugadaAgora(eventData) {
+  const now = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
+  const hour = now.getHours();
+
+  if (hour >= 3) return true;
+
+  const timeText = String(eventData?.time || "").toLowerCase();
+
+  return (
+    /\b0?1[:h]?00\b/i.test(timeText) ||
+    /\b0?0[:h]?00\b/i.test(timeText)
+  );
 }
 
 // Lê o cronograma e retorna os dados de HOJE
@@ -143,31 +161,32 @@ function getTodayEventOptions() {
     if (!fs.existsSync(CRONO_FILE)) return [];
 
     const crono = JSON.parse(fs.readFileSync(CRONO_FILE, "utf8"));
-    const todayKey = getTodayKey();
+    const scheduleKey = getTodayKey("schedule");
+    const madrugadaKey = getTodayKey("madrugada");
 
     const options = [];
 
-    const normal = crono.schedule?.[todayKey];
+    const madru = crono.madrugada?.[madrugadaKey];
+    if (madru && madru.active && hasMadrugadaAgora(madru)) {
+      options.push({
+        ...madru,
+        sourceType: "madrugada",
+        eventKey: `${madrugadaKey}:madrugada`,
+      });
+    }
+
+    const normal = crono.schedule?.[scheduleKey];
     if (normal && normal.active) {
       options.push({
         ...normal,
         sourceType: "schedule",
-        eventKey: `${todayKey}:schedule`,
-      });
-    }
-
-    const madru = crono.madrugada?.[todayKey];
-    if (madru && madru.active) {
-      options.push({
-        ...madru,
-        sourceType: "madrugada",
-        eventKey: `${todayKey}:madrugada`,
+        eventKey: `${scheduleKey}:schedule`,
       });
     }
 
     return options;
   } catch (e) {
-    console.error("Erro ao ler cronograma:", e);
+    console.error("[HallDaFama] Erro ao ler cronograma:", e);
     return [];
   }
 }
