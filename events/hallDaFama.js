@@ -423,14 +423,40 @@ ${imageLines.join("\n")}`;
   return fixedMessage.trim();
 }
 
+function resolveCityKeyFromName(value = "") {
+  const normalized = cleanOneLine(value)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+
+  return Object.keys(CITIES).find((key) => {
+    const cityLabel = CITIES[key].label
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "");
+
+    return (
+      normalized === key ||
+      normalized.includes(key) ||
+      cityLabel.includes(normalized) ||
+      normalized.includes(cityLabel)
+    );
+  }) || null;
+}
+
 function updateHallCityOnly(content = "", newCityName = "", attachmentUrls = []) {
   const cleanedContent = fixDuplicatedHallContent(content, attachmentUrls);
   const parts = extractHallParts(cleanedContent);
 
   if (!parts.winnersText) return cleanedContent;
 
-  const lines = cleanedContent.split("\n");
-  const mentionsLine = lines.find(l => l.includes("@everyone")) || "";
+  const cityKey = resolveCityKeyFromName(newCityName);
+  const cityData = cityKey ? CITIES[cityKey] : null;
+  const finalCityName = cityData?.label || cleanOneLine(newCityName) || parts.cityName;
+
+  const mentionsLine = cityData
+    ? `@everyone @here <@&${ROLE_CIDADAO}> <@&${ROLE_LIDERES}> <@&${cityData.roleId}>`
+    : cleanedContent.split("\n").find(l => l.includes("@everyone")) || "";
 
   const imageLinesFromContent = getImageUrlsFromContent(cleanedContent);
   const imageLines = uniqueImageUrls([
@@ -439,7 +465,7 @@ function updateHallCityOnly(content = "", newCityName = "", attachmentUrls = [])
   ]);
 
   const safeIntro = isBadHallIntro(parts.introText) ? getRandomIntro() : parts.introText;
-  const introLine = buildHallIntroLine(safeIntro, parts.eventName, newCityName);
+  const introLine = buildHallIntroLine(safeIntro, parts.eventName, finalCityName);
 
   const fixedMessage =
 `# 🎉 :  **Santa Creators : ${parts.eventName}** 🎉 
