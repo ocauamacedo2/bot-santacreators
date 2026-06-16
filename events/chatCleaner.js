@@ -20,7 +20,7 @@ export async function chatCleanerHandleMessage(message, client) {
   if (content === ".") {
     // Resposta humana imediata
     const reply = await message.reply({
-      content: `Opa <@${userId}>! Vi seu ponto aqui, mas o canal certo pra isso é o <#> kkkk. Já já eu apago o seu aqui pra deixar o chat limpinho, fechado? 😉`,
+      content: `Opa <@${userId}>! Vi seu ponto aqui, mas o canal certo pra isso é o <#${CORRECT_CHAT_CHANNEL_ID}> kkkk. Já já eu apago o seu aqui pra deixar o chat limpinho, fechado? 😉`,
       allowedMentions: { users: [userId] }
     }).catch(() => null);
 
@@ -44,7 +44,7 @@ export async function chatCleanerHandleMessage(message, client) {
   if (message.mentions.users.size > 0 && onlyMentionsRegex.test(content)) {
     // Resposta humana imediata
     const reply = await message.reply({
-      content: `Fala <@>! Vi que você marcou o pessoal aí, mas aqui não é o chat ideal pra isso não... tenta no <#>! Vou limpar sua mensagem daqui em 30 segundinhos. 💜`,
+      content: `Fala <@${userId}>! Vi que você marcou o pessoal aí, mas aqui não é o chat ideal pra isso não... tenta no <#${CORRECT_CHAT_CHANNEL_ID}>! Vou limpar sua mensagem daqui em 30 segundinhos. 💜`,
       allowedMentions: { users: [userId] }
     }).catch(() => null);
 
@@ -53,7 +53,7 @@ export async function chatCleanerHandleMessage(message, client) {
     if (logChannel?.isTextBased()) {
       const targets = message.mentions.users.map(u => `<@${u.id}>`).join(', ');
       await logChannel.send({
-        content: `⚠️ **Marcação em local incorreto**\nO usuário <@> marcou  no canal <#${message.channelId}>.`
+        content: `⚠️ **Marcação em local incorreto**\nO usuário <@${userId}> marcou ${targets} no canal <#${message.channelId}>.`
       }).catch(() => {});
     }
 
