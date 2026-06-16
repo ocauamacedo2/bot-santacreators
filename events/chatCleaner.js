@@ -40,8 +40,8 @@ export async function chatCleanerHandleMessage(message, client) {
 
   // 2. Caso seja APENAS menção(ões) sem texto nenhum
   // Regex: verifica se o texto contém apenas uma ou mais menções e espaços
-  const onlyMentionsRegex = /^(<@!?\d+>|\s)+$/;
-  if (message.mentions.users.size > 0 && onlyMentionsRegex.test(content)) {
+  const onlyMentionsRegex = /^(<@!?\d+>|<@&\d+>|\s)+$/;
+  if ((message.mentions.users.size > 0 || message.mentions.roles.size > 0) && onlyMentionsRegex.test(content)) {
     // Resposta humana imediata
     const reply = await message.reply({
       content: `Fala <@${userId}>! Vi que você marcou o pessoal aí, mas aqui não é o chat ideal pra isso não... tenta no <#${CORRECT_CHAT_CHANNEL_ID}>! Vou limpar sua mensagem daqui em 30 segundinhos. 💜`,
@@ -51,9 +51,13 @@ export async function chatCleanerHandleMessage(message, client) {
     // Redireciona para o canal de auditoria/log
     const logChannel = await client.channels.fetch(LOG_REDIRECT_CHANNEL_ID).catch(() => null);
     if (logChannel?.isTextBased()) {
-      const targets = message.mentions.users.map(u => `<@${u.id}>`).join(', ');
+      // Coleta todas as menções de usuários e cargos
+      const userTargets = message.mentions.users.map(u => `<@${u.id}>`);
+      const roleTargets = message.mentions.roles.map(r => `<@&${r.id}>`);
+      const allTargets = [...userTargets, ...roleTargets].join(', ');
+
       await logChannel.send({
-        content: `⚠️ **Marcação em local incorreto**\nO usuário <@${userId}> marcou ${targets} no canal <#${message.channelId}>.`
+        content: `⚠️ **Marcação em local incorreto**\nO usuário <@${userId}> marcou ${allTargets || "alguém"} no canal <#${message.channelId}>.`
       }).catch(() => {});
     }
 
