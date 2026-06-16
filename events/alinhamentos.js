@@ -975,24 +975,75 @@ const fields = readEmbedFields(freshEmb).filter((f) => {
   if (fullAuditCh?.isTextBased()) {
     const targetId = extractId(getFieldValueByNameIncludes(freshEmb, "quem foi alinhado"));
     const targetMember = targetId ? await interaction.guild.members.fetch(targetId).catch(() => null) : null;
+
     const quemAlinhouRaw = getFieldValueByNameIncludes(freshEmb, "quem alinhou");
-    const assunto = getFieldValueByNameIncludes(freshEmb, "sobre o que foi");
+    const quemAlinhouId = extractId(quemAlinhouRaw);
+
+    const assunto =
+      getFieldValueByNameIncludes(freshEmb, "sobre") ||
+      getFieldValueByNameIncludes(freshEmb, "assunto") ||
+      "—";
+
     const dataReg = getFieldValueByNameIncludes(freshEmb, "quando");
 
+    const registroUrl = makeDiscordMessageLink(
+      msg?.guildId,
+      msg?.channelId,
+      msg?.id
+    );
+
+    const formsUrl = evolutionResult?.link || evolutionResult?.threadLink || null;
+
     const auditEmbed = new EmbedBuilder()
-      .setTitle("🔮 Auditoria Completa: Alinhamento Validado")
+      .setTitle(isValid ? "🔮 Auditoria Completa: Alinhamento Validado" : "🔮 Auditoria Completa: Alinhamento Reprovado")
       .setColor(isValid ? 0x2ecc71 : 0xe74c3c)
       .setThumbnail(targetMember?.user.displayAvatarURL() || null)
       .addFields(
-        { name: "🧭 Quem Alinhou", value: `<@${extractId(quemAlinhouRaw)}> (\`${extractId(quemAlinhouRaw)}\`)`, inline: true },
-        { name: "👤 Quem foi Alinhado", value: `<@${targetId}> (\`${targetId}\`)`, inline: true },
-        { name: "✍️ Registrado por", value: `<@${registradorId}> (\`${registradorId}\`)`, inline: true },
-        { name: "🧑‍⚖️ Quem Validou", value: `<@${validatorId}> (\`${validatorId}\`)`, inline: true },
-        { name: "📜 Assunto", value: `\`\`\`\n${assunto}\n\`\`\``, inline: false },
-        { name: "🔗 Forms pessoal", value: evolutionResult?.link || "Não vinculado", inline: false },
-        { name: "📍 Link do Registro", value: `Abrir Mensagem`, inline: false },
-        { name: "🕒 Data Registro", value: dataReg || "—", inline: true },
-        { name: "✅ Data Aprovação", value: quando, inline: true }
+        {
+          name: "🧭 Quem Alinhou",
+          value: quemAlinhouId ? `<@${quemAlinhouId}> (\`${quemAlinhouId}\`)` : (quemAlinhouRaw || "—"),
+          inline: true,
+        },
+        {
+          name: "👤 Quem foi Alinhado",
+          value: targetId ? `<@${targetId}> (\`${targetId}\`)` : "—",
+          inline: true,
+        },
+        {
+          name: "✍️ Registrado por",
+          value: registradorId ? `<@${registradorId}> (\`${registradorId}\`)` : "—",
+          inline: true,
+        },
+        {
+          name: "🧑‍⚖️ Quem Validou",
+          value: `<@${validatorId}> (\`${validatorId}\`)`,
+          inline: true,
+        },
+        {
+          name: "📜 Assunto",
+          value: `\`\`\`\n${clipText(assunto, 900)}\n\`\`\``,
+          inline: false,
+        },
+        {
+          name: "🔗 Forms pessoal",
+          value: formsUrl ? `[Abrir Forms pessoal](${formsUrl})` : "Não vinculado",
+          inline: false,
+        },
+        {
+          name: "📍 Link do Registro",
+          value: registroUrl ? `[Abrir Mensagem](${registroUrl})` : "Link indisponível",
+          inline: false,
+        },
+        {
+          name: "🕒 Data Registro",
+          value: dataReg || "—",
+          inline: true,
+        },
+        {
+          name: "✅ Data Aprovação",
+          value: quando,
+          inline: true,
+        }
       )
       .setTimestamp()
       .setFooter({ text: "SantaCreators • Alinhamentos Audit System", iconURL: interaction.user.displayAvatarURL() });
