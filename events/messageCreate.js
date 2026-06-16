@@ -29,6 +29,7 @@ import { registroPoderesEventosHandleMessage } from './registroPoderesEventos.js
 import { provasAdvHandleMessage } from './provasAdv.js';
 import { focoSemanaisHandleMessage } from './focoSemanais.js';
 import { blacklistFacsHandleMessage } from './blacklistFacs.js';
+import { chatCleanerHandleMessage } from './chatCleaner.js';
 
 // Novos comandos de permissão
 import { removerPermHandleMessage } from '../commands/admin/removerperm.js';
@@ -119,6 +120,9 @@ export default {
         }
       }
     }
+
+    // ✅ Limpeza de Chat (Ponto e Menções vazias no canal de IA)
+    if (await chatCleanerHandleMessage(message, client)) return;
 
     // ✅ VIP/Rolepass (Comando !vipmenu)
     if (await vipRegistroHandleMessage(message, client)) return;
