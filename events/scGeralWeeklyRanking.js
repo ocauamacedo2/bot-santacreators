@@ -2038,21 +2038,22 @@ function aggregateWeekDetailed(items, weekKey) {
   const list = [];
   let totalPoints = 0;
 
-  for (const userId of allUserIds) {
-    const basePoints = Number(totalByUser[userId] || 0);
-    const adj = Number(weekAdjustments[userId] || 0);
-    const finalPoints = basePoints + adj;
+for (const userId of allUserIds) {
+  const basePoints = Number(totalByUser[userId] || 0);
+  const adj = Number(weekAdjustments[userId] || 0);
+  const rawFinalPoints = basePoints + adj;
+  const finalPoints = Math.max(0, rawFinalPoints);
 
-    if (finalPoints > 0) {
-      list.push({
-        userId,
-        points: finalPoints,
-        basePoints,
-        adjustment: adj,
-      });
-      totalPoints += finalPoints;
-    }
+  if (finalPoints > 0) {
+    list.push({
+      userId,
+      points: finalPoints,
+      basePoints,
+      adjustment: adj,
+    });
+    totalPoints += finalPoints;
   }
+}
 
   list.sort((a, b) => b.points - a.points);
 
@@ -3178,7 +3179,15 @@ if (interaction.isModalSubmit() && interaction.customId === "SC_REMOVE_POINTS_MO
     delta: -Math.abs(points),
   });
 
+  clearWeeklyRankCache();
+  CACHE = { at: 0, payload: null };
+  DEBUG.weekKeysFound = {};
   DIRTY = true;
+  LAST_LIGHT_AT = 0;
+
+  await safeUpdate(client, "manual remove points", {
+    scanMode: "full",
+  });
 
   await emitManualRemoveLog(client, {
     executorUserId: interaction.user.id,

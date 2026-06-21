@@ -85,10 +85,11 @@ const VIP_AUTH = new Set([
 ]);
 
 const CITY_ALIASES = [
-  { key: "grande", label: "Cidade Grande", aliases: ["grande", "cidade grande", "cg"] },
-  { key: "maresia", label: "Cidade Maresia", aliases: ["maresia", "cidade maresia", "cm"] },
-  { key: "santa", label: "Cidade Santa", aliases: ["santa", "cidade santa", "cs"] },
-  { key: "nobre", label: "Cidade Nobre", aliases: ["nobre", "cidade nobre", "cn"] },
+  { key: "grande", label: "Cidade Grande", aliases: ["grande", "cidade grande", "cg", "cdd grande", "cdd grande rp"] },
+  { key: "maresia", label: "Cidade Maresia", aliases: ["maresia", "cidade maresia", "cm", "cdd maresia"] },
+  { key: "santa", label: "Cidade Santa", aliases: ["santa", "cidade santa", "cs", "cdd santa", "santacreators", "santa creators"] },
+  { key: "nobre", label: "Cidade Nobre", aliases: ["nobre", "cidade nobre", "cn", "cdd nobre"] },
+  { key: "universo", label: "Cidade Universo", aliases: ["universo", "cidade universo", "cu", "cdd universo"] },
 ];
 
 // =============================
@@ -126,14 +127,42 @@ function vipNormalize(t) {
   return null;
 }
 
+function normalizeCityText(raw) {
+  return String(raw || "")
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .replace(/[^\p{Letter}\p{Number}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
 function normalizeCity(raw) {
-  const s = (raw || "").toString().trim().toLowerCase();
+  const s = normalizeCityText(raw);
   if (!s) return null;
+
   for (const city of CITY_ALIASES) {
-    if (city.aliases.some((a) => a === s)) {
+    const aliases = city.aliases.map(normalizeCityText);
+
+    if (aliases.some((a) => a === s)) {
+      return city.label;
+    }
+
+    if (aliases.some((a) => s.includes(a))) {
+      return city.label;
+    }
+
+    const semCidade = s
+      .replace(/\bcidade\b/g, "")
+      .replace(/\bcdd\b/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    if (aliases.some((a) => a === semCidade || semCidade.includes(a))) {
       return city.label;
     }
   }
+
   return null;
 }
 
@@ -143,6 +172,7 @@ function cityDecor(cityLabel) {
     case "Cidade Maresia": return "🌊";
     case "Cidade Santa": return "⛪";
     case "Cidade Nobre": return "👑";
+    case "Cidade Universo": return "🌌";
     default: return "📍";
   }
 }

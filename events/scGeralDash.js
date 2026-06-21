@@ -323,6 +323,11 @@ function applyManualAdjustment({ weekKey, userId, delta }) {
   return { before, after, data: manual };
 }
 
+function getManualAdjustmentForWeekUser(weekKey, userId) {
+  const manual = loadManualAdjustments();
+  return Number(manual.byWeek?.[weekKey]?.[String(userId)] || 0);
+}
+
 async function emitManualRemovePointLog(client, payload = {}) {
   try {
     const logChannelId =
@@ -4260,8 +4265,13 @@ if (interaction.isModalSubmit()) {
     delta: -qty,
   });
 
+  clearGeneralDashCache();
   CACHE = { at: 0, payload: null };
+  DEBUG.weekKeysFound = {};
   DIRTY = true;
+  NEXT_ALLOWED_AT = 0;
+  SCAN_LOCK = false;
+  SCAN_LOCK_TS = 0;
 
   await emitManualRemovePointLog(client, {
     executorUserId: interaction.user.id,
@@ -4349,9 +4359,13 @@ if (low.startsWith("!removept")) {
     userId,
     delta: -qty,
   });
-
+  clearGeneralDashCache();
   CACHE = { at: 0, payload: null };
+  DEBUG.weekKeysFound = {};
   DIRTY = true;
+  NEXT_ALLOWED_AT = 0;
+  SCAN_LOCK = false;
+  SCAN_LOCK_TS = 0;
 
   await emitManualRemovePointLog(client, {
     executorUserId: message.author.id,
