@@ -42,9 +42,7 @@ function getFivemPanelScopeByChannelId(channelId) {
 }
 const FIVEM_REFRESH_INTERVAL_MS = 1 * 60 * 1000; // coleta a cada 1 minuto
 const FIVEM_PANEL_REFRESH_INTERVAL_MS = 1 * 60 * 1000; // edita o painel a cada 1 minuto
-await HistoryModel.deleteMany({
-  timestamp: { $lt: thirtyDaysAgo }
-}); // Limitar histórico a 30 dias
+const FIVEM_HISTORY_MAX_DAYS = 30; // Limitar histórico a 30 dias
 const FIVEM_FETCH_TIMEOUT_MS = 8 * 1000; // 8 segundos
 const FIVEM_SNAPSHOT_CACHE_MS = 45 * 1000; // reaproveita a mesma coleta por 45 segundos
 const FIVEM_DYNAMIC_URL_CACHE_MS = 5 * 60 * 1000; // reaproveita endpoints por 5 minutos
