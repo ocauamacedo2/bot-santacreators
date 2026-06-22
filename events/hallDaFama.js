@@ -1373,6 +1373,15 @@ async function publishHallRankings(client, rankings) {
   await upsertSingleRankingMessage(playersChannel, buildPlayersRankingMessage(rankings));
 }
 
+async function ensureHallRankingsDashboards(client) {
+  try {
+    const rankings = loadHallRankings();
+    await publishHallRankings(client, rankings);
+  } catch (e) {
+    console.error("[HallDaFama] Erro ao garantir dashboards dos rankings:", e);
+  }
+}
+
 async function findApprovalImagesForHall(client, hallMessage, parts) {
   const approvalChannel = await client.channels.fetch(APPROVAL_CHANNEL_ID).catch(() => null);
   if (!approvalChannel || !approvalChannel.isTextBased()) return [];
@@ -1648,6 +1657,8 @@ export async function hallDaFamaOnReady(client) {
       await autoCorrectDuplications(channel, client);
       markHallScanDoneToday();
     }
+
+    await ensureHallRankingsDashboards(client);
   }
 }
 
