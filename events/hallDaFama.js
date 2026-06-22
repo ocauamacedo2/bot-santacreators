@@ -543,6 +543,28 @@ ${imageLines.join("\n")}`;
   return fixedMessage.trim();
 }
 
+function fixHallCityMentionByDetectedCity(content = "", attachmentUrls = []) {
+  const cityKey = detectHallCityKey(content);
+  const cityData = CITIES[cityKey] || CITIES.nobre;
+  const cityName = cityData.label;
+
+  let fixed = updateHallCityOnly(content, cityName, attachmentUrls);
+
+  const correctMentions = `||@everyone @here <@&${ROLE_CIDADAO}> <@&${ROLE_LIDERES}> <@&${cityData.roleId}>||`;
+
+  const mentionRegex = /\|\|@everyone[\s\S]*?\|\|/i;
+
+  if (mentionRegex.test(fixed)) {
+    fixed = fixed.replace(mentionRegex, correctMentions);
+  } else if (/@everyone|@here|<@&\d+>/i.test(fixed)) {
+    fixed = fixed.replace(/@everyone[\s\S]*?(?=\nhttps?:\/\/|\n*$)/i, correctMentions);
+  } else {
+    fixed = `${fixed.trim()}\n\n${correctMentions}`;
+  }
+
+  return fixed.trim();
+}
+
 function normalizeHallName(value = "") {
   return cleanOneLine(value)
     .toLowerCase()
@@ -581,7 +603,7 @@ function normalizeHallDisplay(value = "") {
 
 function stripDiscordNoise(value = "") {
   return String(value || "")
-    .replace(/<a?:[^:]+:\d+>/g, " ")
+    .replace(/<a?:[^:>\s]+:\d+>/g, " ")
     .replace(/:[a-zA-Z0-9_~]+:/g, " ")
     .replace(/<@&\d+>/g, " ")
     .replace(/<@!?\d+>/g, " ")
@@ -589,6 +611,7 @@ function stripDiscordNoise(value = "") {
     .replace(/\|\|/g, " ")
     .replace(/\*\*/g, " ")
     .replace(/https?:\/\/\S+/gi, " ")
+    .replace(/[🏆👑🎉👏⚠️✅❌⭐🌆📊📌🧹🔄✨🥇🥈🥉🎮🧠📥🤖✏️📅]/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -780,9 +803,11 @@ function getImageUrlsFromAttachments(message) {
 
 function cleanHallWinnerLine(line = "") {
   return stripDiscordNoise(line)
-    .replace(/^TOP\s*/i, "")
+    .replace(/^TOP\s*\d*\s*/i, "")
+    .replace(/^Top\s*\d+\s*[:\-]\s*/i, "")
     .replace(/^novo emoji\s*\d+/i, "")
     .replace(/^emoji\s*\d+/i, "")
+    .replace(/^GG\s*[:\-]\s*/i, "")
     .replace(/^\d+\s+/, "")
     .replace(/^Vencedores?/i, "")
     .replace(/^[:\-\s]+/, "")
@@ -937,6 +962,10 @@ function isAmbiguousHallWinner(winner) {
     return false;
   }
 
+  if (winner.type === "org") {
+    return false;
+  }
+
   if (
     raw.includes("vip") ||
     raw.includes("milhoes") ||
@@ -948,6 +977,30 @@ function isAmbiguousHallWinner(winner) {
   }
 
   return false;
+}
+
+async function clearOldHallManualReviewMessages(client) {
+  const reviewChannel = await client.channels.fetch(HALL_REVIEW_CHANNEL_ID).catch(() => null);
+  if (!reviewChannel || !reviewChannel.isTextBased()) return;
+
+  const messages = await reviewChannel.messages.fetch({ limit: 100 }).catch(() => null);
+  if (!messages) return;
+
+  const botReviewMessages = messages.filter((msg) => {
+    if (!msg.author.bot || msg.author.id !== client.user.id) return false;
+
+    const embedTitle = msg.embeds?.[0]?.title || "";
+    const embedDescription = msg.embeds?.[0]?.description || "";
+
+    return (
+      embedTitle.includes("Revisão Manual") ||
+      embedDescription.includes("Esse vencedor ficou confuso")
+    );
+  });
+
+  for (const msg of botReviewMessages.values()) {
+    await msg.delete().catch(() => {});
+  }
 }
 
 async function sendHallWinnerToManualReview(client, winner, hallMeta) {
@@ -1543,6 +1596,8 @@ async function autoCorrectDuplications(channel, client, options = {}) {
     let allMessages = [];
     let beforeId = null;
 
+    await clearOldHallManualReviewMessages(client);
+
     if (showProgress) {
       await updateHallScanProgress(client, {
         status: "Iniciando busca completa no canal de Hall da Fama...",
@@ -1689,7 +1744,7 @@ async function autoCorrectDuplications(channel, client, options = {}) {
         allImageUrls = uniqueImageUrls(approvalUrls);
       }
 
-      const fixed = fixDuplicatedHallContent(msg.content || text, allImageUrls);
+      const fixed = fixHallCityMentionByDetectedCity(msg.content || text, allImageUrls);
 
       if (fixed !== msg.content && fixed.length <= 2000) {
         await msg.edit({
