@@ -1018,14 +1018,26 @@ function pickBestHallEvidence(evidenceList = [], directEventName = "Evento") {
     }
   }
 
-  const winner = Object.values(scores)
+  const ordered = Object.values(scores)
     .sort((a, b) => {
       if (b.points !== a.points) return b.points - a.points;
       return b.bestConfidence - a.bestConfidence;
-    })
-    .at(0);
+    });
+
+  const winner = ordered.at(0);
+  const second = ordered.at(1);
 
   if (!winner) return null;
+
+  const winnerHasStrong = winner.hasOrg || winner.hasCrono || winner.hasEventosDiarios || winner.hasEventName;
+  const secondHasStrong = second && (second.hasOrg || second.hasCrono || second.hasEventosDiarios || second.hasEventName);
+
+  const isStrongConflict =
+    second &&
+    winnerHasStrong &&
+    secondHasStrong &&
+    winner.cityKey !== second.cityKey &&
+    Math.abs(winner.points - second.points) <= 45;
 
   const bestEvidence = winner.evidences
     .sort((a, b) => Number(b.confidence || 0) - Number(a.confidence || 0))
@@ -1035,8 +1047,12 @@ function pickBestHallEvidence(evidenceList = [], directEventName = "Evento") {
     ...bestEvidence,
     cityKey: winner.cityKey,
     cityName: CITIES[winner.cityKey]?.label || bestEvidence?.cityName || "Cidade Nobre",
-    confidence: Math.min(100, Math.max(winner.bestConfidence, winner.points)),
-    source: `voto_evidencias:${winner.evidences.map(e => e.source).join(" + ")}`
+    confidence: isStrongConflict ? 70 : Math.min(100, Math.max(winner.bestConfidence, winner.points)),
+    needsManualReview: isStrongConflict,
+    conflictWithCityKey: isStrongConflict ? second.cityKey : null,
+    source: isStrongConflict
+      ? `conflito_evidencias:${winner.evidences.map(e => e.source).join(" + ")} VS ${second.evidences.map(e => e.source).join(" + ")}`
+      : `voto_evidencias:${winner.evidences.map(e => e.source).join(" + ")}`
   };
 }
 
@@ -1550,7 +1566,8 @@ async function sendHallCityToManualReview(client, hallMessage, evidence, current
       `**Sugestão:** ${CITIES[evidence?.cityKey]?.label || "Sem sugestão"}\n` +
       `**Evento:** ${evidence?.eventName || "Evento"}\n` +
       `**Fonte:** ${evidence?.source || "não identificada"}\n` +
-      `**Confiança:** ${evidence?.confidence || 0}%`
+      `**Confiança:** ${evidence?.confidence || 0}%\n` +
+      `${evidence?.needsManualReview ? `\n⚠️ **Motivo:** conflito entre evidências fortes. Escolha a CDD correta nos botões abaixo.` : ""}`
     )
     .setTimestamp();
 
@@ -2416,13 +2433,19 @@ async function autoCorrectDuplications(channel, client, options = {}) {
         evidenceCityKey &&
         evidenceCityKey !== currentCityKey &&
         evidence?.confidence >= 90 &&
+        !evidence?.needsManualReview &&
         evidence?.source !== "texto_do_hall" &&
         !String(evidence?.source || "").includes("texto_do_hall + texto_do_hall");
 
       const needsManualCityReview =
         evidenceCityKey &&
-        evidenceCityKey !== currentCityKey &&
-        evidence?.confidence < 90;
+        (
+          evidence?.needsManualReview ||
+          (
+            evidenceCityKey !== currentCityKey &&
+            evidence?.confidence < 90
+          )
+        );
 
       const fixedBase = fixDuplicatedHallContent(msg.content || text, allImageUrls);
 
