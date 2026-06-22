@@ -939,41 +939,105 @@ function isSameNormalizedEventName(a = "", b = "") {
 }
 
 function pickBestHallEvidence(evidenceList = [], directEventName = "Evento") {
-  const valid = evidenceList.filter(Boolean);
+  const valid = evidenceList
+    .filter(Boolean)
+    .filter(item => item.cityKey);
 
-  const scheduleLike = valid
-    .filter(item => {
-      return (
-        item.cityKey &&
-        (
-          String(item.source || "").startsWith("canal:") ||
-          String(item.source || "").startsWith("cronograma_state:")
-        )
-      );
-    })
-    .map(item => {
-      const eventMatches = isSameNormalizedEventName(item.eventName, directEventName);
-      return {
-        ...item,
-        confidence: Number(item.confidence || 0) + (eventMatches ? 18 : 0),
-        eventMatches
-      };
-    })
-    .sort((a, b) => b.confidence - a.confidence);
+  if (!valid.length) return null;
 
-  const strongSchedule = scheduleLike.find(item => item.eventMatches && item.confidence >= 95);
+  const scores = {};
 
-  if (strongSchedule) {
-    return {
-      ...strongSchedule,
-      source: `${strongSchedule.source}:evento_e_horario_confirmados`
+  for (const item of valid) {
+    const cityKey = item.cityKey;
+    const source = String(item.source || "");
+    const eventMatches = isSameNormalizedEventName(item.eventName, directEventName);
+
+    scores[cityKey] ??= {
+      cityKey,
+      points: 0,
+      evidences: [],
+      bestConfidence: 0,
+      hasCrono: false,
+      hasEventosDiarios: false,
+      hasOrg: false,
+      hasEventName: false,
+      hasDirectHall: false,
+      eventMatches: false
     };
+
+    let points = 0;
+
+    if (source.startsWith("cronograma_state:")) {
+      points += eventMatches ? 55 : 32;
+      scores[cityKey].hasCrono = true;
+    } else if (source.startsWith(`canal:${EVENTOS_DIARIOS_CHANNEL_ID}:`)) {
+      points += eventMatches ? 55 : 32;
+      scores[cityKey].hasEventosDiarios = true;
+    } else if (source.startsWith("org_override:")) {
+      points += 45;
+      scores[cityKey].hasOrg = true;
+    } else if (source.startsWith("org_historico:")) {
+      points += 30;
+      scores[cityKey].hasOrg = true;
+    } else if (source.startsWith("evento_nome:")) {
+      points += 38;
+      scores[cityKey].hasEventName = true;
+    } else if (source === "texto_do_hall") {
+      // ⚠️ O Hall é justamente o que pode estar errado.
+      // Então ele só serve como desempate fraco.
+      points += 8;
+      scores[cityKey].hasDirectHall = true;
+    } else {
+      points += 15;
+    }
+
+    if (eventMatches) {
+      points += 12;
+      scores[cityKey].eventMatches = true;
+    }
+
+    scores[cityKey].points += points;
+    scores[cityKey].bestConfidence = Math.max(scores[cityKey].bestConfidence, Number(item.confidence || 0));
+    scores[cityKey].evidences.push(item);
   }
 
-  return valid
-    .filter(item => item.cityKey)
+  for (const score of Object.values(scores)) {
+    // ✅ Cronograma + Eventos Diários batendo juntos: prioridade máxima.
+    if (score.hasCrono && score.hasEventosDiarios && score.eventMatches) {
+      score.points += 80;
+    }
+
+    // ✅ ORG conhecida + Cronograma/Eventos Diários batendo: ganha do texto errado do Hall.
+    if (score.hasOrg && (score.hasCrono || score.hasEventosDiarios)) {
+      score.points += 45;
+    }
+
+    // ✅ Nome do evento + Cronograma/Eventos Diários batendo.
+    if (score.hasEventName && (score.hasCrono || score.hasEventosDiarios)) {
+      score.points += 35;
+    }
+  }
+
+  const winner = Object.values(scores)
+    .sort((a, b) => {
+      if (b.points !== a.points) return b.points - a.points;
+      return b.bestConfidence - a.bestConfidence;
+    })
+    .at(0);
+
+  if (!winner) return null;
+
+  const bestEvidence = winner.evidences
     .sort((a, b) => Number(b.confidence || 0) - Number(a.confidence || 0))
     .at(0);
+
+  return {
+    ...bestEvidence,
+    cityKey: winner.cityKey,
+    cityName: CITIES[winner.cityKey]?.label || bestEvidence?.cityName || "Cidade Nobre",
+    confidence: Math.min(100, Math.max(winner.bestConfidence, winner.points)),
+    source: `voto_evidencias:${winner.evidences.map(e => e.source).join(" + ")}`
+  };
 }
 
 async function resolveHallEvidence(client, hallMessage, fallbackContent = "") {
@@ -1009,7 +1073,7 @@ async function resolveHallEvidence(client, hallMessage, fallbackContent = "") {
       cityName: CITIES[directCityKey]?.label || "Cidade Nobre",
       eventName: directEventName,
       source: "texto_do_hall",
-      confidence: 35
+      confidence: 12
     }
   ].filter(Boolean);
 
@@ -2352,7 +2416,8 @@ async function autoCorrectDuplications(channel, client, options = {}) {
         evidenceCityKey &&
         evidenceCityKey !== currentCityKey &&
         evidence?.confidence >= 90 &&
-        evidence?.source !== "texto_do_hall";
+        evidence?.source !== "texto_do_hall" &&
+        !String(evidence?.source || "").includes("texto_do_hall + texto_do_hall");
 
       const needsManualCityReview =
         evidenceCityKey &&
