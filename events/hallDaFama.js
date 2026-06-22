@@ -127,6 +127,7 @@ const MODAL_CITY_SUBMIT = "hf_modal_city_submit";
 const BTN_SCAN_ALL = "hf_scan_all";
 const BTN_REVIEW_AS_ORG_PREFIX = "hf_review_org_";
 const BTN_REVIEW_AS_PLAYER_PREFIX = "hf_review_player_";
+const BTN_REVIEW_CITY_PREFIX = "hf_review_city_";
 
 // ================= PERSISTÊNCIA =================
 const __filename = fileURLToPath(import.meta.url);
@@ -1446,6 +1447,143 @@ async function sendHallWinnerToManualReview(client, winner, hallMeta) {
   }).catch(() => {});
 }
 
+async function sendHallCityToManualReview(client, hallMessage, evidence, currentCityKey) {
+  const reviewChannel = await client.channels.fetch(HALL_REVIEW_CHANNEL_ID).catch(() => null);
+  if (!reviewChannel || !reviewChannel.isTextBased()) return;
+
+  const already = state.pendingCityReviews?.[hallMessage.id];
+  if (already) return;
+
+  state.pendingCityReviews ??= {};
+  state.pendingCityReviews[hallMessage.id] = {
+    messageId: hallMessage.id,
+    suggestedCityKey: evidence?.cityKey || "",
+    currentCityKey: currentCityKey || "",
+    eventName: evidence?.eventName || "Evento",
+    source: evidence?.source || "não identificada",
+    confidence: evidence?.confidence || 0,
+    createdAt: Date.now()
+  };
+  saveState(state);
+
+  const row = new ActionRowBuilder().addComponents(
+    Object.entries(CITIES).map(([cityKey, city]) =>
+      new ButtonBuilder()
+        .setCustomId(`${BTN_REVIEW_CITY_PREFIX}${cityKey}_${hallMessage.id}`)
+        .setLabel(city.label.replace("Cidade ", ""))
+        .setStyle(cityKey === evidence?.cityKey ? ButtonStyle.Success : ButtonStyle.Secondary)
+        .setEmoji(city.emoji)
+    )
+  );
+
+  const embed = new EmbedBuilder()
+    .setTitle("⚠️ Revisão Manual — Cidade do Hall")
+    .setColor("#f1c40f")
+    .setDescription(
+      `A varredura ficou confusa e **não editou automaticamente**.\n\n` +
+      `**Mensagem:** \`${hallMessage.id}\`\n` +
+      `**Cidade atual:** ${CITIES[currentCityKey]?.label || currentCityKey || "Não identificada"}\n` +
+      `**Sugestão:** ${CITIES[evidence?.cityKey]?.label || "Sem sugestão"}\n` +
+      `**Evento:** ${evidence?.eventName || "Evento"}\n` +
+      `**Fonte:** ${evidence?.source || "não identificada"}\n` +
+      `**Confiança:** ${evidence?.confidence || 0}%`
+    )
+    .setTimestamp();
+
+  await reviewChannel.send({
+    embeds: [embed],
+    components: [row]
+  }).catch(() => {});
+}
+
+function replaceCityMentionsInContent(content = "", cityKey = "nobre") {
+  const cityData = CITIES[cityKey] || CITIES.nobre;
+  let fixed = String(content || "");
+
+  for (const city of Object.values(CITIES)) {
+    fixed = fixed.replace(new RegExp(`<@&${city.roleId}>`, "g"), `<@&${cityData.roleId}>`);
+  }
+
+  fixed = fixed
+    .replace(/\bCIDADE\s+NOBRE\b/gi, cityData.label.toUpperCase())
+    .replace(/\bCIDADE\s+SANTA\b/gi, cityData.label.toUpperCase())
+    .replace(/\bCIDADE\s+GRANDE\b/gi, cityData.label.toUpperCase())
+    .replace(/\bCIDADE\s+MARESIA\b/gi, cityData.label.toUpperCase())
+    .replace(/\bCidade\s+Nobre\b/g, cityData.label)
+    .replace(/\bCidade\s+Santa\b/g, cityData.label)
+    .replace(/\bCidade\s+Grande\b/g, cityData.label)
+    .replace(/\bCidade\s+Maresia\b/g, cityData.label);
+
+  if (!fixed.includes(`<@&${cityData.roleId}>`)) {
+    fixed = `${fixed.trim()}\n\n<@&${cityData.roleId}>`;
+  }
+
+  return fixed.trim();
+}
+
+async function findNearbyEventosDiariosMessage(client, hallMessage, eventName = "Evento") {
+  const channel = await client.channels.fetch(EVENTOS_DIARIOS_CHANNEL_ID).catch(() => null);
+  if (!channel || !channel.isTextBased()) return null;
+
+  const messages = await channel.messages.fetch({ limit: 100 }).catch(() => null);
+  if (!messages) return null;
+
+  const hallTs = hallMessage.createdTimestamp || Date.now();
+
+  return [...messages.values()]
+    .filter(msg => {
+      const diffMs = hallTs - (msg.createdTimestamp || 0);
+
+      // ✅ Eventos Diários precisa estar próximo do Hall:
+      // pode ser antes do Hall, no mesmo dia, ou virada/madrugada anterior.
+      if (diffMs < -1000 * 60 * 30) return false;
+      if (diffMs > 1000 * 60 * 60 * 10) return false;
+
+      const text = getHallMessageText(msg);
+      const rawEvent = extractRawHallEventName(text);
+
+      return isSameNormalizedEventName(rawEvent, eventName);
+    })
+    .sort((a, b) => Math.abs(hallTs - a.createdTimestamp) - Math.abs(hallTs - b.createdTimestamp))
+    .at(0) || null;
+}
+
+async function autoFixEventosDiariosCityIfNeeded(client, hallMessage, evidence) {
+  if (!evidence?.cityKey || !evidence?.eventName) return false;
+
+  const eventosMsg = await findNearbyEventosDiariosMessage(client, hallMessage, evidence.eventName);
+  if (!eventosMsg) return false;
+
+  const currentText = getHallMessageText(eventosMsg);
+  const currentCityKey = detectHallCityKey(currentText);
+
+  if (currentCityKey === evidence.cityKey) return false;
+
+  const fixedContent = replaceCityMentionsInContent(eventosMsg.content || currentText, evidence.cityKey);
+
+  if (!fixedContent || fixedContent.length > 2000 || fixedContent === eventosMsg.content) return false;
+
+  const editedMsg = await eventosMsg.edit({ content: fixedContent }).catch(() => null);
+  if (!editedMsg) return false;
+
+  await sendHallScanLog(client, {
+    title: "📅 Eventos Diários corrigido",
+    color: "#2ecc71",
+    description:
+      `A cidade/cargo do Eventos Diários também foi corrigida porque o Hall da Fama confirmou outra CDD.\n\n` +
+      `Mensagem Eventos Diários: \`${eventosMsg.id}\`\n` +
+      `Mensagem Hall da Fama: \`${hallMessage.id}\`\n` +
+      `Evento: **${evidence.eventName}**\n` +
+      `Cidade antiga: **${CITIES[currentCityKey]?.label || currentCityKey}**\n` +
+      `Cidade nova: **${CITIES[evidence.cityKey]?.label || evidence.cityKey}**\n` +
+      `Fonte: **${evidence.source || "não identificada"}**\n` +
+      `Confiança: **${evidence.confidence || 0}%**`,
+    phase: "Correção Eventos Diários"
+  });
+
+  return true;
+}
+
 function parseHallWinners(content = "", cityKey = "nobre") {
   const lines = extractHallWinnerLines(content);
   const winners = [];
@@ -2213,14 +2351,27 @@ async function autoCorrectDuplications(channel, client, options = {}) {
       const canAutoFixCity =
         evidenceCityKey &&
         evidenceCityKey !== currentCityKey &&
-        evidence?.confidence >= 80 &&
+        evidence?.confidence >= 90 &&
         evidence?.source !== "texto_do_hall";
+
+      const needsManualCityReview =
+        evidenceCityKey &&
+        evidenceCityKey !== currentCityKey &&
+        evidence?.confidence < 90;
 
       const fixedBase = fixDuplicatedHallContent(msg.content || text, allImageUrls);
 
       const fixed = canAutoFixCity
         ? updateHallCityOnly(fixedBase, CITIES[evidenceCityKey].label, allImageUrls)
         : fixedBase;
+
+      if (needsManualCityReview) {
+        await sendHallCityToManualReview(client, msg, evidence, currentCityKey);
+      }
+
+      if (canAutoFixCity) {
+        await autoFixEventosDiariosCityIfNeeded(client, msg, evidence);
+      }
 
       if (
         fixed !== msg.content &&
@@ -2240,7 +2391,7 @@ async function autoCorrectDuplications(channel, client, options = {}) {
           description:
             `Mensagem corrigida: \`${msg.id}\`\n` +
             `Cidade antiga: **${CITIES[currentCityKey]?.label || currentCityKey}**\n` +
-            `Cidade aplicada: **${CITIES[evidenceCityKey]?.label || evidenceCityKey}**\n` +
+            `Cidade aplicada: **${canAutoFixCity ? CITIES[evidenceCityKey]?.label || evidenceCityKey : CITIES[currentCityKey]?.label || currentCityKey}**\n` +
             `Fonte: **${evidence?.source || "não identificada"}**\n` +
             `Confiança: **${evidence?.confidence || 0}%**`,
           phase: "Correção automática",
@@ -2653,6 +2804,68 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
       ephemeral: true
     });
 
+    return true;
+  }
+
+  if (interaction.isButton() && interaction.customId.startsWith(BTN_REVIEW_CITY_PREFIX)) {
+    if (!hasPermission(interaction.member, interaction.user.id)) {
+      return interaction.reply({ content: "🚫 Sem permissão para revisar cidade.", ephemeral: true });
+    }
+
+    await interaction.deferReply({ ephemeral: true });
+
+    const raw = interaction.customId.replace(BTN_REVIEW_CITY_PREFIX, "");
+    const [cityKey, messageId] = raw.split("_");
+
+    if (!CITIES[cityKey] || !messageId) {
+      return interaction.editReply("❌ Revisão inválida.");
+    }
+
+    const hallChannel = await client.channels.fetch(HALL_CHANNEL_ID).catch(() => null);
+    if (!hallChannel || !hallChannel.isTextBased()) {
+      return interaction.editReply("❌ Canal do Hall da Fama não encontrado.");
+    }
+
+    const hallMessage = await hallChannel.messages.fetch(messageId).catch(() => null);
+    if (!hallMessage) {
+      return interaction.editReply("❌ Hall original não encontrado.");
+    }
+
+    const attachmentUrls = getImageUrlsFromAttachments(hallMessage);
+    const fixedContent = updateHallCityOnly(hallMessage.content, CITIES[cityKey].label, attachmentUrls);
+
+    if (fixedContent.length > 2000) {
+      return interaction.editReply("❌ O Hall ficou maior que 2000 caracteres.");
+    }
+
+    await hallMessage.edit({ content: fixedContent });
+
+    const evidence = {
+      cityKey,
+      cityName: CITIES[cityKey].label,
+      eventName: normalizeHallEventName(extractRawHallEventName(fixedContent), cityKey),
+      source: `revisao_manual:${interaction.user.id}`,
+      confidence: 100
+    };
+
+    await autoFixEventosDiariosCityIfNeeded(client, hallMessage, evidence);
+
+    state.pendingCityReviews ??= {};
+    delete state.pendingCityReviews[messageId];
+    saveState(state);
+
+    await interaction.message.edit({
+      components: [],
+      embeds: interaction.message.embeds.map(embed => {
+        return EmbedBuilder.from(embed)
+          .setColor("#2ecc71")
+          .setFooter({
+            text: `Cidade revisada como ${CITIES[cityKey].label} por ${interaction.user.tag}`
+          });
+      })
+    }).catch(() => {});
+
+    await interaction.editReply(`✅ Hall revisado como **${CITIES[cityKey].label}**. Eventos Diários também foi conferido.`);
     return true;
   }
 
