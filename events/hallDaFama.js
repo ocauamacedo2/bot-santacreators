@@ -26,6 +26,10 @@ const HALL_REVIEW_CHANNEL_ID = "1518707314901651576"; // Canal para revisão man
 const HALL_SCAN_PROGRESS_CHANNEL_ID = "1518723758574276750"; // Painel auto-editável do progresso da varredura
 const HALL_SCAN_LOG_CHANNEL_ID = "1518723758574276750"; // Logs robustos da varredura
 
+const CRONO_LOG_CHANNEL_ID = "1486009619846529075"; // Logs do cronograma
+const CRONO_PANEL_CHANNEL_ID = "1474605177771397223"; // Painel do cronograma
+const EVENTOS_DIARIOS_CHANNEL_ID = "1385003944803041371"; // Eventos diários
+
 // Cargos Fixos para Menção
 const ROLE_CIDADAO = "1262978759922028575";
 const ROLE_LIDERES = "1353858422063239310";
@@ -642,9 +646,187 @@ function detectHallCityName(content = "") {
   return CITIES[cityKey]?.label || "Cidade Nobre";
 }
 
+function getSPDateFromTimestamp(timestamp = Date.now()) {
+  return new Date(new Date(timestamp).toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
+}
+
+function getDayKeyFromSPDate(date) {
+  const days = ["dom", "seg", "ter", "qua", "qui", "sex", "sab"];
+  return days[date.getDay()];
+}
+
+function normalizeCityText(value = "") {
+  return normalizeHallName(value);
+}
+
+function resolveCityKeyFromAnyText(value = "") {
+  const normalized = normalizeCityText(value);
+
+  if (/\bnobre\b/.test(normalized)) return "nobre";
+  if (/\bsanta\b/.test(normalized)) return "santa";
+  if (/\bgrande\b/.test(normalized)) return "grande";
+  if (/\bmaresia\b/.test(normalized)) return "maresia";
+
+  return null;
+}
+
+function getCronoSlotForHallTimestamp(createdTimestamp = Date.now()) {
+  try {
+    if (!fs.existsSync(CRONO_FILE)) return null;
+
+    const crono = JSON.parse(fs.readFileSync(CRONO_FILE, "utf8"));
+    const spDate = getSPDateFromTimestamp(createdTimestamp);
+    const hour = spDate.getHours();
+
+    const baseDate = new Date(spDate);
+
+    if (hour < 3) {
+      baseDate.setDate(baseDate.getDate() - 1);
+    }
+
+    const dayKey = getDayKeyFromSPDate(baseDate);
+
+    const preferredType = hour < 3 || hour >= 23 ? "madrugada" : "schedule";
+    const fallbackType = preferredType === "madrugada" ? "schedule" : "madrugada";
+
+    const preferred = crono?.[preferredType]?.[dayKey];
+    const fallback = crono?.[fallbackType]?.[dayKey];
+
+    const slot = preferred?.active ? preferred : fallback?.active ? fallback : null;
+    if (!slot) return null;
+
+    const cityKey = resolveCityKeyFromAnyText(slot.city || "");
+    if (!cityKey) return null;
+
+    return {
+      cityKey,
+      cityName: CITIES[cityKey]?.label || slot.city,
+      eventName: normalizeHallEventName(slot.eventName || "Evento", cityKey),
+      source: `cronograma_state:${preferredType}:${dayKey}`,
+      confidence: preferred?.active ? 70 : 45
+    };
+  } catch (e) {
+    console.error("[HallDaFama] Erro ao cruzar cronograma_state:", e);
+    return null;
+  }
+}
+
+async function findNearbyEvidenceInChannel(client, channelId, hallMessage, options = {}) {
+  const ch = await client.channels.fetch(channelId).catch(() => null);
+  if (!ch || !ch.isTextBased()) return null;
+
+  const messages = await ch.messages.fetch({ limit: options.limit || 100 }).catch(() => null);
+  if (!messages) return null;
+
+  const hallTs = hallMessage.createdTimestamp || Date.now();
+  const maxDiffMs = options.maxDiffMs || 1000 * 60 * 60 * 6;
+
+  const candidates = [...messages.values()]
+    .filter(msg => {
+      const ts = msg.createdTimestamp || 0;
+      if (!ts) return false;
+      if (ts > hallTs + 1000 * 60 * 30) return false;
+      if (hallTs - ts > maxDiffMs) return false;
+      return true;
+    })
+    .map(msg => {
+      const text = getHallMessageText(msg);
+      const cityKey = resolveCityKeyFromAnyText(text);
+      const rawEventName = extractRawHallEventName(text);
+      const eventName = normalizeHallEventName(rawEventName, cityKey || "nobre");
+
+      return {
+        msg,
+        text,
+        cityKey,
+        cityName: cityKey ? CITIES[cityKey]?.label : "",
+        eventName,
+        diff: Math.abs(hallTs - (msg.createdTimestamp || 0))
+      };
+    })
+    .filter(item => item.cityKey || item.eventName !== "Evento")
+    .sort((a, b) => a.diff - b.diff);
+
+  const best = candidates[0];
+  if (!best) return null;
+
+  return {
+    cityKey: best.cityKey || null,
+    cityName: best.cityName || "",
+    eventName: best.eventName || "Evento",
+    source: `canal:${channelId}:msg:${best.msg.id}`,
+    confidence: best.cityKey ? 90 : 55
+  };
+}
+
+async function resolveHallEvidence(client, hallMessage, fallbackContent = "") {
+  const content = fallbackContent || getHallMessageText(hallMessage);
+
+  const directCityKey = detectHallCityKey(content);
+  const rawEventName = extractRawHallEventName(content);
+  const directEventName = normalizeHallEventName(rawEventName, directCityKey);
+
+  const eventosEvidence = await findNearbyEvidenceInChannel(client, EVENTOS_DIARIOS_CHANNEL_ID, hallMessage, {
+    limit: 100,
+    maxDiffMs: 1000 * 60 * 60 * 8
+  });
+
+  const cronoLogEvidence = await findNearbyEvidenceInChannel(client, CRONO_LOG_CHANNEL_ID, hallMessage, {
+    limit: 100,
+    maxDiffMs: 1000 * 60 * 60 * 24
+  });
+
+  const cronoStateEvidence = getCronoSlotForHallTimestamp(hallMessage.createdTimestamp || Date.now());
+
+  const evidenceList = [
+    eventosEvidence,
+    cronoStateEvidence,
+    cronoLogEvidence,
+    {
+      cityKey: directCityKey,
+      cityName: CITIES[directCityKey]?.label || "Cidade Nobre",
+      eventName: directEventName,
+      source: "texto_do_hall",
+      confidence: 35
+    }
+  ].filter(Boolean);
+
+  const best = evidenceList
+    .filter(item => item.cityKey)
+    .sort((a, b) => b.confidence - a.confidence)
+    .at(0);
+
+  const eventBest = evidenceList
+    .filter(item => item.eventName && item.eventName !== "Evento")
+    .sort((a, b) => b.confidence - a.confidence)
+    .at(0);
+
+  const finalCityKey = best?.cityKey || directCityKey || "nobre";
+
+  return {
+    cityKey: finalCityKey,
+    cityName: CITIES[finalCityKey]?.label || "Cidade Nobre",
+    eventName: eventBest?.eventName || directEventName || "Evento",
+    source: best?.source || "texto_do_hall",
+    confidence: best?.confidence || 35
+  };
+}
+
 function normalizeHallEventName(eventName = "", cityKey = "nobre") {
   const original = normalizeHallDisplay(eventName) || "Evento";
   const normalized = normalizeHallName(original);
+
+  if (
+    normalized.includes("vip") ||
+    normalized.includes("rolepass") ||
+    normalized.includes("milhoes") ||
+    normalized.includes("milhao") ||
+    normalized.includes("foi insano") ||
+    normalized.includes("vitoria so e possivel") ||
+    normalized.length > 80
+  ) {
+    return "Evento";
+  }
 
   if (
     normalized.includes("santa royale") ||
@@ -686,6 +868,13 @@ function normalizeHallEventName(eventName = "", cityKey = "nobre") {
   }
 
   if (
+    normalized.includes("santa pegando fogo") ||
+    normalized.includes("pegando fogo")
+  ) {
+    return "Pegando Fogo";
+  }
+
+  if (
     normalized.includes("karambit wars") ||
     normalized.includes("karambit")
   ) {
@@ -694,6 +883,7 @@ function normalizeHallEventName(eventName = "", cityKey = "nobre") {
 
   if (
     normalized.includes("santo caos") ||
+    normalized.includes("santa caos") ||
     normalized.includes("guerra dos herois") ||
     normalized.includes("guerra dos anti herois") ||
     normalized.includes("guerra dos antiherois")
@@ -1151,7 +1341,8 @@ function addOrgRankingPoint(rankings, orgWinner, hallMeta) {
 
   rankings.orgs[key].halls.push({
     messageId: hallMeta.messageId,
-    eventName: hallMeta.eventName,
+    eventName: normalizeHallEventName(hallMeta.eventName, cityKey),
+    cityKey,
     cityName,
     at: hallMeta.createdTimestamp || Date.now()
   });
@@ -1193,7 +1384,8 @@ function addPlayerRankingPoint(rankings, playerWinner, hallMeta) {
 
   rankings.players[key].halls.push({
     messageId: hallMeta.messageId,
-    eventName: hallMeta.eventName,
+    eventName: normalizeHallEventName(hallMeta.eventName, cityKey),
+    cityKey,
     cityName,
     at: hallMeta.createdTimestamp || Date.now()
   });
@@ -1211,15 +1403,26 @@ async function addHallToRankings(rankings, message, client = null) {
   if (normalizedContent.includes("revisao manual")) return rankings;
   if (normalizedContent.includes("varredura hall da fama")) return rankings;
 
-  const cityKey = detectHallCityKey(content);
-  const rawEventName = extractRawHallEventName(content);
-  const eventName = normalizeHallEventName(rawEventName, cityKey);
+  const evidence = client
+    ? await resolveHallEvidence(client, message, content)
+    : {
+        cityKey: detectHallCityKey(content),
+        cityName: detectHallCityName(content),
+        eventName: normalizeHallEventName(extractRawHallEventName(content), detectHallCityKey(content)),
+        source: "texto_do_hall",
+        confidence: 35
+      };
+
+  const cityKey = evidence.cityKey || "nobre";
+  const eventName = evidence.eventName || "Evento";
 
   const hallMeta = {
     messageId: message.id,
     cityKey,
     cityName: CITIES[cityKey]?.label || "Cidade Nobre",
     eventName,
+    evidenceSource: evidence.source,
+    evidenceConfidence: evidence.confidence,
     createdTimestamp: message.createdTimestamp || Date.now()
   };
 
@@ -1340,18 +1543,58 @@ async function addHallToRankings(rankings, message, client = null) {
 
 function formatRankingEventBreakdown(events = {}) {
   const sorted = Object.entries(events)
+    .map(([eventName, total]) => [normalizeHallEventName(eventName), total])
+    .filter(([eventName]) => eventName && eventName !== "Evento")
+    .reduce((acc, [eventName, total]) => {
+      acc[eventName] ??= 0;
+      acc[eventName] += total;
+      return acc;
+    }, {});
+
+  const finalSorted = Object.entries(sorted)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 3);
 
-  if (sorted.length === 0) return "Sem eventos";
+  if (finalSorted.length === 0) return "Sem eventos";
 
-  return sorted
+  return finalSorted
     .map(([eventName, total]) => `${eventName}: ${total}`)
     .join(" • ");
 }
 
+function getDominantCityFromHalls(halls = [], fallbackCityKey = "nobre") {
+  const counts = {};
+
+  for (const hall of halls || []) {
+    const key = hall.cityKey || resolveCityKeyFromName(hall.cityName || "");
+    if (!key) continue;
+
+    counts[key] ??= 0;
+    counts[key] += 1;
+  }
+
+  const dominant = Object.entries(counts)
+    .sort((a, b) => b[1] - a[1])
+    .at(0)?.[0];
+
+  return dominant || fallbackCityKey || "nobre";
+}
+
+function applyDominantCityToRankingItems(items = []) {
+  return items.map(item => {
+    const cityKey = getDominantCityFromHalls(item.halls || [], item.cityKey || "nobre");
+    const cityName = CITIES[cityKey]?.label || item.cityName || "Cidade Nobre";
+
+    return {
+      ...item,
+      cityKey,
+      cityName
+    };
+  });
+}
+
 function buildOrgsRankingMessage(rankings) {
-  const topOrgs = Object.values(rankings.orgs || {})
+  const topOrgs = applyDominantCityToRankingItems(Object.values(rankings.orgs || {}))
     .sort((a, b) => b.total - a.total)
     .slice(0, 10);
 
@@ -1389,7 +1632,7 @@ ${lines.length ? lines.join("\n\n") : "Ainda não há dados suficientes para mon
 }
 
 function buildPlayersRankingMessage(rankings) {
-  const topPlayers = Object.values(rankings.players || {})
+  const topPlayers = applyDominantCityToRankingItems(Object.values(rankings.players || {}))
     .sort((a, b) => b.total - a.total)
     .slice(0, 10);
 
@@ -1744,9 +1987,13 @@ async function autoCorrectDuplications(channel, client, options = {}) {
         allImageUrls = uniqueImageUrls(approvalUrls);
       }
 
-      const fixed = fixHallCityMentionByDetectedCity(msg.content || text, allImageUrls);
+      const fixed = fixDuplicatedHallContent(msg.content || text, allImageUrls);
 
-      if (fixed !== msg.content && fixed.length <= 2000) {
+      if (
+        fixed !== msg.content &&
+        fixed.length <= 2000 &&
+        fixed.includes("HALL DA FAMA")
+      ) {
         await msg.edit({
           content: fixed
         }).catch(() => {});
@@ -1779,9 +2026,9 @@ async function autoCorrectDuplications(channel, client, options = {}) {
 
     for (const msg of sortedHallMessages) {
       const text = getHallMessageText(msg);
-      const cityKey = detectHallCityKey(text);
-      const rawEventName = extractRawHallEventName(text);
-      const eventName = normalizeHallEventName(rawEventName, cityKey);
+      const evidence = await resolveHallEvidence(client, msg, text);
+      const cityKey = evidence.cityKey || "nobre";
+      const eventName = evidence.eventName || "Evento";
       const cityName = CITIES[cityKey]?.label || "Cidade Nobre";
 
       await addHallToRankings(rankings, msg, client);
@@ -1806,7 +2053,9 @@ async function autoCorrectDuplications(channel, client, options = {}) {
           description:
             `Progresso: **${processed}/${sortedHallMessages.length}**\n` +
             `Evento: **${eventName}**\n` +
-            `Cidade: **${cityName}**`,
+            `Cidade: **${cityName}**\n` +
+            `Fonte usada: **${evidence.source || "não identificada"}**\n` +
+            `Confiança: **${evidence.confidence || 0}%**`,
           totalMessages: allMessages.length,
           totalHalls: hallMessages.length,
           processed,
@@ -2134,7 +2383,19 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
       status: `Varredura manual iniciada por ${interaction.user.tag}...`
     });
 
-    await interaction.editReply("🧹 Varredura iniciada! Acompanhe o painel de progresso no canal de revisão.");
+    await sendHallScanLog(client, {
+      title: "🧹 Varredura Geral acionada",
+      color: "#9b59b6",
+      description:
+        `A varredura geral foi iniciada manualmente.\n\n` +
+        `👤 Acionada por: ${interaction.user} \`${interaction.user.id}\`\n` +
+        `📥 Canal analisado: <#${HALL_CHANNEL_ID}>\n` +
+        `🏢 Ranking ORGs: <#${HALL_ORGS_RANKING_CHANNEL_ID}>\n` +
+        `👤 Ranking Pessoas: <#${HALL_PLAYERS_RANKING_CHANNEL_ID}>`,
+      phase: "Botão manual"
+    });
+
+    await interaction.editReply(`🧹 Varredura iniciada! Acompanhe os logs em <#${HALL_SCAN_LOG_CHANNEL_ID}>.`);
 
     await autoCorrectDuplications(hallChannel, client, { showProgress: true });
 
