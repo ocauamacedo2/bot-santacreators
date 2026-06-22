@@ -93,6 +93,19 @@ function EVT3_writeState(state) {
 const EVT3_LOCKS = new Set(); // "mainThreadId:type"
 
 // =========================
+// EVT3 DASH EMIT SAFE
+// =========================
+function EVT3_dashEmitSafe(eventName, payload) {
+  try {
+    if (typeof globalThis.dashEmit === "function") {
+      globalThis.dashEmit(eventName, payload);
+    }
+  } catch (err) {
+    console.error("❌ [EVT3] dashEmit erro:", err);
+  }
+}
+
+// =========================
 // HELPERS
 // =========================
 function EVT3_hasPerm(member, userId) {
@@ -549,7 +562,7 @@ export async function evt3EventsHandleInteraction(interaction, client) {
       await EVT3_ensureSingleCreateButton(client, { forceRefresh: true });
 
       // ✅ Dash: Emite para o GeralDash / Ranking contarem o ponto
-      dashEmit("evt3:criado", {
+      EVT3_dashEmitSafe("evt3:criado", {
         userId: creatorId,
         threadId: mainThread.id,
         eventName,

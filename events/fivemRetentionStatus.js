@@ -42,7 +42,9 @@ function getFivemPanelScopeByChannelId(channelId) {
 }
 const FIVEM_REFRESH_INTERVAL_MS = 1 * 60 * 1000; // coleta a cada 1 minuto
 const FIVEM_PANEL_REFRESH_INTERVAL_MS = 1 * 60 * 1000; // edita o painel a cada 1 minuto
-const FIVEM_HISTORY_MAX_DAYS = 30; // Limitar histórico a 30 dias
+await HistoryModel.deleteMany({
+  timestamp: { $lt: thirtyDaysAgo }
+}); // Limitar histórico a 30 dias
 const FIVEM_FETCH_TIMEOUT_MS = 8 * 1000; // 8 segundos
 const FIVEM_SNAPSHOT_CACHE_MS = 45 * 1000; // reaproveita a mesma coleta por 45 segundos
 const FIVEM_DYNAMIC_URL_CACHE_MS = 5 * 60 * 1000; // reaproveita endpoints por 5 minutos
@@ -785,6 +787,53 @@ function formatDiff(diffObj) {
  const pctStr = diffObj.pct === 'sem base' ? 'sem base' : `${diffObj.pct.toFixed(1)}%`;
  return `${diffObj.arrow} ${diffStr} (${pctStr})`;
 }
+
+function getDiffValue(diffObj) {
+  return typeof diffObj?.diff === "number" ? diffObj.diff : -Infinity;
+}
+
+function getDiffPercentValue(diffObj) {
+  return typeof diffObj?.pct === "number" ? diffObj.pct : -Infinity;
+}
+
+function sortByBestDiff(a, b, diffKey = "diffLastWeek") {
+  const aDiff = getDiffValue(a?.[diffKey]);
+  const bDiff = getDiffValue(b?.[diffKey]);
+
+  if (bDiff !== aDiff) return bDiff - aDiff;
+
+  return getDiffPercentValue(b?.[diffKey]) - getDiffPercentValue(a?.[diffKey]);
+}
+
+function formatRetentionStatus(diffObj, contextLabel = "base") {
+  const diff = getDiffValue(diffObj);
+  const pct = getDiffPercentValue(diffObj);
+
+  if (diff === -Infinity) return `⚪ **Sem base:** ainda não tem histórico suficiente contra ${contextLabel}.`;
+  if (diff > 0 && pct >= 10) return `🟢 **Retenção muito boa:** crescimento forte contra ${contextLabel}.`;
+  if (diff > 0) return `🟢 **Retenção positiva:** acima de ${contextLabel}.`;
+  if (diff === 0) return `🟠 **Retenção estável:** igual a ${contextLabel}.`;
+  if (pct <= -20) return `🔴 **Estado crítico:** queda forte contra ${contextLabel}.`;
+  return `🔴 **Retenção negativa:** abaixo de ${contextLabel}.`;
+}
+
+function findEventWindowByTimeAndCity(peakDoc, event) {
+  const windows = Object.values(peakDoc?.eventWindows || {});
+  if (!windows.length || !event) return null;
+
+  const wantedLabel = formatEventWindowLabel(event);
+
+  return windows.find((window) => {
+    const sameCity = window?.cityKey === event.cityKey;
+    const sameLabel = window?.label === wantedLabel;
+    return sameCity && sameLabel;
+  }) || null;
+}
+
+function resolveEventWindowFromPeaks(peakDoc, event) {
+  return peakDoc?.eventWindows?.[event.eventKey] || findEventWindowByTimeAndCity(peakDoc, event);
+}
+
 function getEmbedCharSize(embed) {
  const data = typeof embed?.toJSON === "function" ? embed.toJSON() : embed;
  if (!data) return 0;
@@ -1495,9 +1544,9 @@ function buildCronogramaEventsCompactDescription(events, peaks, currentSnapshot,
  const lastWeekKey = getDateKeyDaysAgoFromSnapshot(currentSnapshot, 7);
 
  return events.map((event) => {
-   const todayWindow = peaks[todayKey]?.eventWindows?.[event.eventKey];
-   const yesterdayWindow = peaks[yesterdayKey]?.eventWindows?.[event.eventKey];
-   const lastWeekWindow = peaks[lastWeekKey]?.eventWindows?.[event.eventKey];
+const todayWindow = resolveEventWindowFromPeaks(peaks[todayKey], event);
+const yesterdayWindow = resolveEventWindowFromPeaks(peaks[yesterdayKey], event);
+const lastWeekWindow = resolveEventWindowFromPeaks(peaks[lastWeekKey], event);
 
    const currentPeak = todayWindow?.peak || 0;
    const yesterdayPeak = yesterdayWindow?.peak || 0;
@@ -1519,8 +1568,10 @@ function buildCronogramaEventsCompactDescription(events, peaks, currentSnapshot,
      `> 📅 **Dia:** \`${weekdayLabel}\`\n` +
      `> 🕒 **Janela:** \`${windowLabel}\`\n` +
      `> 📌 ${statusLine}\n` +
-     `> 🕒 **Vs. ontem:** ${formatDiff(diffYesterday)}\n` +
-     `> 📅 **Vs. 7 dias:** ${formatDiff(diffLastWeek)}`
+`> 🕒 **Vs. ontem:** ${formatDiff(diffYesterday)}\n` +
+`> 📅 **Vs. 7 dias:** ${formatDiff(diffLastWeek)}\n` +
+`> 🧠 **Leitura diária:** ${formatRetentionStatus(diffYesterday, "ontem")}\n` +
+`> 📊 **Leitura semanal:** ${formatRetentionStatus(diffLastWeek, "semana passada")}`
    );
  }).join(`\n\n${UI.DIVIDER}\n\n`);
 }
@@ -1934,11 +1985,13 @@ function formatOnlyCurrentLine(label, current, max, pct, index, yesterday = 0, c
     return `${medal} **BR ${label.padEnd(8, " ")}**\n> ⚠️ API não retornou dados válidos agora. Não vou considerar como 0 real.`;
   }
 
+  const diffYesterday = calculateDiff(current, yesterday);
   const statusEmoji = getStatusEmojiByYesterday(current, yesterday);
 
-return `${medal} **BR ${label.padEnd(8, " ")}**\n` +
-  `> 👥 **Online agora:** \`${formatNumber(current)} / ${formatNumber(max)}\` players\n` +
-  `> 📊 **Ocupação:** \`${pct}%\` da capacidade ${statusEmoji}`;
+  return `${medal} **BR ${label.padEnd(8, " ")}**\n` +
+    `> 👥 **Online agora:** \`${formatNumber(current)} / ${formatNumber(max)}\` players\n` +
+    `> 📊 **Ocupação:** \`${pct}%\` da capacidade ${statusEmoji}\n` +
+    `> 📈 **Leitura:** ${formatRetentionStatus(diffYesterday, "ontem")}`;
 }
 
 function buildCityEventPanelDescription(cityKey, cityName, emoji, peaks, currentSnapshot, onlyEvent = null) {
@@ -1951,9 +2004,9 @@ const cityEvents = onlyEvent
     const previousDayKey = getDateKeyOffsetFromDateKey(eventDateKey, -1);
     const lastWeekKey = getDateKeyOffsetFromDateKey(eventDateKey, -7);
 
-    const currentWeekWindow = peaks[eventDateKey]?.eventWindows?.[event.eventKey];
-    const previousDayWindow = peaks[previousDayKey]?.eventWindows?.[event.eventKey];
-    const lastWeekWindow = peaks[lastWeekKey]?.eventWindows?.[event.eventKey];
+const currentWeekWindow = resolveEventWindowFromPeaks(peaks[eventDateKey], event);
+const previousDayWindow = resolveEventWindowFromPeaks(peaks[previousDayKey], event);
+const lastWeekWindow = resolveEventWindowFromPeaks(peaks[lastWeekKey], event);
 
     const currentPeak = currentWeekWindow?.peak || 0;
     const previousDayPeak = previousDayWindow?.peak || 0;
@@ -1980,16 +2033,16 @@ const cityRankingSameWindow = FIVEM_CITIES.map((city) => {
     diffAgainstOwnLastWeek,
   };
 }).sort((a, b) => {
-  const aHasBase = a.lastWeekValue > 0;
-  const bHasBase = b.lastWeekValue > 0;
+  const aHasCurrent = a.currentValue > 0;
+  const bHasCurrent = b.currentValue > 0;
 
-  if (aHasBase && !bHasBase) return -1;
-  if (!aHasBase && bHasBase) return 1;
+  if (aHasCurrent && !bHasCurrent) return -1;
+  if (!aHasCurrent && bHasCurrent) return 1;
 
-  const aDiff = typeof a.diffAgainstOwnLastWeek.diff === "number" ? a.diffAgainstOwnLastWeek.diff : -Infinity;
-  const bDiff = typeof b.diffAgainstOwnLastWeek.diff === "number" ? b.diffAgainstOwnLastWeek.diff : -Infinity;
+  const byDiff = sortByBestDiff(a, b, "diffAgainstOwnLastWeek");
+  if (byDiff !== 0) return byDiff;
 
-  return bDiff - aDiff;
+  return b.currentValue - a.currentValue;
 });
 
     const cityRankingText = cityRankingSameWindow
@@ -2000,7 +2053,8 @@ return (
   `${medal} ${item.city.emoji} **BR ${item.city.name}**\n` +
   `> 👥 **Maior público registrado nesse horário:** \`${formatNumber(item.currentValue)}\` às \`${item.currentTime}\`\n` +
   `> 📅 **Semana passada da própria BR:** \`${formatNumber(item.lastWeekValue)}\` às \`${item.lastWeekTime}\`\n` +
-  `> 📈 **Evolução contra ela mesma:** ${formatDiff(item.diffAgainstOwnLastWeek)}`
+  `> 📈 **Evolução contra ela mesma:** ${formatDiff(item.diffAgainstOwnLastWeek)}\n` +
+`> 🧠 **Status:** ${formatRetentionStatus(item.diffAgainstOwnLastWeek, `a própria BR ${item.city.name}`)}`
 );
       })
       .join("\n\n");
@@ -2169,12 +2223,18 @@ return formatOnlyCurrentLine(
    .setDescription(
      `###  COMPARAÇÃO DIÁRIA (24H)\n` +
      `*Dados atuais vs. mesmo horário ontem*\n\n` +
-     cityData.map(c => `**${c.current.emoji} BR ${c.current.name.padEnd(8, " ")}**\n> \`${formatNumber(c.current.clients)}\` vs \`${formatNumber(c.yesterday)}\` | ${formatDiff(c.diffYesterday)}`).join("\n\n") +
+[...cityData]
+  .sort((a, b) => sortByBestDiff(a, b, "diffYesterday"))
+  .map(c => `**${c.current.emoji} BR ${c.current.name.padEnd(8, " ")}**\n> \`${formatNumber(c.current.clients)}\` vs \`${formatNumber(c.yesterday)}\` | ${formatDiff(c.diffYesterday)}\n> 🧠 ${formatRetentionStatus(c.diffYesterday, "ontem")}`)
+  .join("\n\n") +
      `\n\n**🌐 PERFORMANCE REDE:** ${formatDiff(calculateDiff(totalCurrentClients, totalYesterdayClients))}\n\n` +
      `${UI.DIVIDER}\n\n` +
      `### 📅 COMPARAÇÃO SEMANAL (7D)\n` +
      `*Dados atuais vs. mesmo dia/hora semana passada*\n\n` +
-     cityData.map(c => `**${c.current.emoji} BR ${c.current.name.padEnd(8, " ")}**\n> \`${formatNumber(c.current.clients)}\` vs \`${formatNumber(c.week)}\` | ${formatDiff(c.diffLastWeek)}`).join("\n\n") +
+[...cityData]
+  .sort((a, b) => sortByBestDiff(a, b, "diffLastWeek"))
+  .map(c => `**${c.current.emoji} BR ${c.current.name.padEnd(8, " ")}**\n> \`${formatNumber(c.current.clients)}\` vs \`${formatNumber(c.week)}\` | ${formatDiff(c.diffLastWeek)}\n> 🧠 ${formatRetentionStatus(c.diffLastWeek, "semana passada")}`)
+  .join("\n\n") +
      `\n\n**🌐 PERFORMANCE REDE:** ${formatDiff(calculateDiff(totalCurrentClients, totalLastWeekClients))}\n`
    )
    .setFooter({ text: `Análise de Retenção Dinâmica • Ref: ${currentSnapshot.spTime}` });
