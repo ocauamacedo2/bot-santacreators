@@ -1107,7 +1107,9 @@ async function resolveHallEvidence(client, hallMessage, fallbackContent = "") {
     cityName: CITIES[finalCityKey]?.label || "Cidade Nobre",
     eventName: eventBest?.eventName || directEventName || "Evento",
     source: best?.source || "texto_do_hall",
-    confidence: best?.confidence || 35
+    confidence: best?.confidence || 35,
+    needsManualReview: Boolean(best?.needsManualReview),
+    conflictWithCityKey: best?.conflictWithCityKey || null
   };
 }
 
@@ -1538,6 +1540,7 @@ async function sendHallCityToManualReview(client, hallMessage, evidence, current
   state.pendingCityReviews[hallMessage.id] = {
     messageId: hallMessage.id,
     suggestedCityKey: evidence?.cityKey || "",
+    conflictWithCityKey: evidence?.conflictWithCityKey || "",
     currentCityKey: currentCityKey || "",
     eventName: evidence?.eventName || "Evento",
     source: evidence?.source || "não identificada",
@@ -1564,10 +1567,11 @@ async function sendHallCityToManualReview(client, hallMessage, evidence, current
       `**Mensagem:** \`${hallMessage.id}\`\n` +
       `**Cidade atual:** ${CITIES[currentCityKey]?.label || currentCityKey || "Não identificada"}\n` +
       `**Sugestão:** ${CITIES[evidence?.cityKey]?.label || "Sem sugestão"}\n` +
+      `**Conflito com:** ${CITIES[evidence?.conflictWithCityKey]?.label || "Sem conflito identificado"}\n` +
       `**Evento:** ${evidence?.eventName || "Evento"}\n` +
       `**Fonte:** ${evidence?.source || "não identificada"}\n` +
       `**Confiança:** ${evidence?.confidence || 0}%\n` +
-      `${evidence?.needsManualReview ? `\n⚠️ **Motivo:** conflito entre evidências fortes. Escolha a CDD correta nos botões abaixo.` : ""}`
+      `${evidence?.needsManualReview ? `\n⚠️ **Motivo:** conflito entre evidências fortes. Exemplo: ORG aponta uma CDD, mas Eventos Diários/Cronograma apontam outra. Escolha a CDD correta nos botões abaixo.` : ""}`
     )
     .setTimestamp();
 
@@ -2438,13 +2442,11 @@ async function autoCorrectDuplications(channel, client, options = {}) {
         !String(evidence?.source || "").includes("texto_do_hall + texto_do_hall");
 
       const needsManualCityReview =
-        evidenceCityKey &&
+        Boolean(evidence?.needsManualReview) ||
         (
-          evidence?.needsManualReview ||
-          (
-            evidenceCityKey !== currentCityKey &&
-            evidence?.confidence < 90
-          )
+          evidenceCityKey &&
+          evidenceCityKey !== currentCityKey &&
+          evidence?.confidence < 90
         );
 
       const fixedBase = fixDuplicatedHallContent(msg.content || text, allImageUrls);
