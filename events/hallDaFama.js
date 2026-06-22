@@ -974,7 +974,7 @@ function pickBestHallEvidence(evidenceList = [], directEventName = "Evento") {
       points += eventMatches ? 55 : 32;
       scores[cityKey].hasEventosDiarios = true;
     } else if (source.startsWith("org_override:")) {
-      points += 45;
+      points += 65;
       scores[cityKey].hasOrg = true;
     } else if (source.startsWith("org_historico:")) {
       points += 30;
@@ -1037,7 +1037,11 @@ function pickBestHallEvidence(evidenceList = [], directEventName = "Evento") {
     winnerHasStrong &&
     secondHasStrong &&
     winner.cityKey !== second.cityKey &&
-    Math.abs(winner.points - second.points) <= 45;
+    (
+      Math.abs(winner.points - second.points) <= 65 ||
+      (winner.hasOrg && (second.hasCrono || second.hasEventosDiarios)) ||
+      (second.hasOrg && (winner.hasCrono || winner.hasEventosDiarios))
+    );
 
   const bestEvidence = winner.evidences
     .sort((a, b) => Number(b.confidence || 0) - Number(a.confidence || 0))
@@ -1529,6 +1533,37 @@ async function sendHallWinnerToManualReview(client, winner, hallMeta) {
   }).catch(() => {});
 }
 
+function getMessageJumpUrl(message) {
+  if (!message?.guildId || !message?.channelId || !message?.id) return "";
+  return `https://discord.com/channels/${message.guildId}/${message.channelId}/${message.id}`;
+}
+
+function shortenEvidenceSource(source = "") {
+  return String(source || "não identificada")
+    .replaceAll(`canal:${EVENTOS_DIARIOS_CHANNEL_ID}:msg:`, "Eventos Diários: ")
+    .replaceAll("cronograma_state:", "Cronograma: ")
+    .replaceAll("org_override:", "ORG fixa: ")
+    .replaceAll("org_historico:", "Histórico da ORG: ")
+    .replaceAll("texto_do_hall", "Texto do Hall")
+    .replaceAll("conflito_evidencias:", "Conflito: ")
+    .replaceAll("voto_evidencias:", "Votação: ")
+    .slice(0, 900);
+}
+
+async function findReviewContextMessages(client, hallMessage, eventName = "Evento") {
+  const eventosMsg = await findNearbyEventosDiariosMessage(client, hallMessage, eventName).catch(() => null);
+
+  const cronoChannel = await client.channels.fetch(CRONO_PANEL_CHANNEL_ID).catch(() => null);
+  const cronoMsg = cronoChannel?.isTextBased()
+    ? (await cronoChannel.messages.fetch({ limit: 20 }).catch(() => null))
+        ?.filter(m => m.author?.bot)
+        ?.sort((a, b) => b.createdTimestamp - a.createdTimestamp)
+        ?.first()
+    : null;
+
+  return { eventosMsg, cronoMsg };
+}
+
 async function sendHallCityToManualReview(client, hallMessage, evidence, currentCityKey) {
   const reviewChannel = await client.channels.fetch(HALL_REVIEW_CHANNEL_ID).catch(() => null);
   if (!reviewChannel || !reviewChannel.isTextBased()) return;
@@ -1559,20 +1594,40 @@ async function sendHallCityToManualReview(client, hallMessage, evidence, current
     )
   );
 
+  const { eventosMsg, cronoMsg } = await findReviewContextMessages(client, hallMessage, evidence?.eventName || "Evento");
+
+  const hallUrl = getMessageJumpUrl(hallMessage);
+  const eventosUrl = eventosMsg ? getMessageJumpUrl(eventosMsg) : "";
+  const cronoUrl = cronoMsg ? getMessageJumpUrl(cronoMsg) : "";
+
+  const hallText = normalizeHallDisplay(getHallMessageText(hallMessage)).slice(0, 900);
+  const eventosText = eventosMsg ? normalizeHallDisplay(getHallMessageText(eventosMsg)).slice(0, 700) : "Não encontrado próximo do Hall.";
+  const sourceText = shortenEvidenceSource(evidence?.source || "");
+
   const embed = new EmbedBuilder()
     .setTitle("⚠️ Revisão Manual — Cidade do Hall")
     .setColor("#f1c40f")
     .setDescription(
-      `A varredura ficou confusa e **não editou automaticamente**.\n\n` +
-      `**Mensagem:** \`${hallMessage.id}\`\n` +
-      `**Cidade atual:** ${CITIES[currentCityKey]?.label || currentCityKey || "Não identificada"}\n` +
-      `**Sugestão:** ${CITIES[evidence?.cityKey]?.label || "Sem sugestão"}\n` +
-      `**Conflito com:** ${CITIES[evidence?.conflictWithCityKey]?.label || "Sem conflito identificado"}\n` +
-      `**Evento:** ${evidence?.eventName || "Evento"}\n` +
-      `**Fonte:** ${evidence?.source || "não identificada"}\n` +
-      `**Confiança:** ${evidence?.confidence || 0}%\n` +
-      `${evidence?.needsManualReview ? `\n⚠️ **Motivo:** conflito entre evidências fortes. Exemplo: ORG aponta uma CDD, mas Eventos Diários/Cronograma apontam outra. Escolha a CDD correta nos botões abaixo.` : ""}`
+      `A varredura encontrou conflito e **não editou automaticamente**.\n\n` +
+      `🔗 **Links úteis**\n` +
+      `• Hall: ${hallUrl ? `[abrir Hall](${hallUrl})` : "`sem link`"}\n` +
+      `• Eventos Diários: ${eventosUrl ? `[abrir evento diário](${eventosUrl})` : "`não encontrado`"}\n` +
+      `• Cronograma: ${cronoUrl ? `[abrir cronograma](${cronoUrl})` : `<#${CRONO_PANEL_CHANNEL_ID}>`}\n\n` +
+      `📌 **Decisão sugerida**\n` +
+      `• Cidade atual no Hall: **${CITIES[currentCityKey]?.label || currentCityKey || "Não identificada"}**\n` +
+      `• Sugestão do filtro: **${CITIES[evidence?.cityKey]?.label || "Sem sugestão"}**\n` +
+      `• Conflito com: **${CITIES[evidence?.conflictWithCityKey]?.label || "Sem conflito identificado"}**\n` +
+      `• Evento: **${evidence?.eventName || "Evento"}**\n` +
+      `• Confiança: **${evidence?.confidence || 0}%**\n\n` +
+      `🧠 **Fonte resumida**\n` +
+      `\`\`\`${sourceText}\`\`\`\n` +
+      `📄 **Trecho do Hall**\n` +
+      `\`\`\`${hallText}\`\`\`\n` +
+      `📅 **Trecho do Eventos Diários**\n` +
+      `\`\`\`${eventosText}\`\`\`\n` +
+      `Escolha a CDD correta nos botões abaixo.`
     )
+    .setFooter({ text: `Mensagem Hall: ${hallMessage.id}` })
     .setTimestamp();
 
   await reviewChannel.send({
