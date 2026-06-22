@@ -56,8 +56,28 @@ const KNOWN_ORG_NAMES = [
   "bombeiros",
   "real odio",
   "visionario",
-  "visionarios"
+  "visionarios",
+  "trindade",
+  "morro do sacola"
 ];
+
+const ORG_CITY_OVERRIDES = {
+  [normalizeStaticKey("trindade")]: "grande",
+
+  [normalizeStaticKey("vidigal")]: "nobre",
+  [normalizeStaticKey("morro do sacola")]: "nobre",
+  [normalizeStaticKey("tropa do 7")]: "nobre",
+  [normalizeStaticKey("tropado7")]: "nobre"
+};
+
+function normalizeStaticKey(value = "") {
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "")
+    .trim();
+}
 
 // Permissões
 const ALLOWED_ROLES = [
@@ -597,6 +617,86 @@ function isKnownOrgName(value = "") {
   });
 }
 
+function getManualOrgCityKey(orgName = "") {
+  const key = normalizeHallKey(orgName);
+  if (!key) return null;
+
+  const direct = ORG_CITY_OVERRIDES[key];
+  if (direct) return direct;
+
+  const found = Object.entries(ORG_CITY_OVERRIDES).find(([orgKey]) => {
+    return key === orgKey || key.includes(orgKey) || orgKey.includes(key);
+  });
+
+  return found?.[1] || null;
+}
+
+function getHistoricalOrgCityKey(orgName = "") {
+  const key = normalizeHallKey(orgName);
+  if (!key) return null;
+
+  const rankings = loadHallRankings();
+  const counts = {};
+
+  for (const org of Object.values(rankings.orgs || {})) {
+    const orgKey = normalizeHallKey(org.name || "");
+
+    if (!orgKey) continue;
+    if (!(key === orgKey || key.includes(orgKey) || orgKey.includes(key))) continue;
+
+    const cityKey = org.cityKey || resolveCityKeyFromName(org.cityName || "");
+    if (!cityKey) continue;
+
+    counts[cityKey] ??= 0;
+    counts[cityKey] += Number(org.total || 0);
+  }
+
+  const winner = Object.entries(counts)
+    .sort((a, b) => b[1] - a[1])
+    .at(0);
+
+  if (!winner || winner[1] < 2) return null;
+
+  return winner[0];
+}
+
+function getOrgCityEvidenceFromHallContent(content = "") {
+  const baseCityKey = detectHallCityKey(content);
+  const winners = parseHallWinners(content, baseCityKey);
+  const deduped = dedupeHallWinners(winners);
+
+  const orgWinner =
+    deduped.orgs?.[0] ||
+    deduped.players?.find(player => player.orgName);
+
+  const orgName = orgWinner?.orgName || "";
+  if (!orgName) return null;
+
+  const manualCityKey = getManualOrgCityKey(orgName);
+  if (manualCityKey) {
+    return {
+      cityKey: manualCityKey,
+      cityName: CITIES[manualCityKey]?.label || "Cidade",
+      eventName: normalizeHallEventName(extractRawHallEventName(content), manualCityKey),
+      source: `org_override:${orgName}`,
+      confidence: 98
+    };
+  }
+
+  const historicalCityKey = getHistoricalOrgCityKey(orgName);
+  if (historicalCityKey) {
+    return {
+      cityKey: historicalCityKey,
+      cityName: CITIES[historicalCityKey]?.label || "Cidade",
+      eventName: normalizeHallEventName(extractRawHallEventName(content), historicalCityKey),
+      source: `org_historico:${orgName}`,
+      confidence: 92
+    };
+  }
+
+  return null;
+}
+
 function normalizeHallDisplay(value = "") {
   return cleanOneLine(value)
     .replace(/\*/g, "")
@@ -806,6 +906,8 @@ async function resolveHallEvidence(client, hallMessage, fallbackContent = "") {
   const rawEventName = extractRawHallEventName(content);
   const directEventName = normalizeHallEventName(rawEventName, directCityKey);
 
+  const orgEvidence = getOrgCityEvidenceFromHallContent(content);
+
   const eventosEvidence = await findNearbyEvidenceInChannel(client, EVENTOS_DIARIOS_CHANNEL_ID, hallMessage, {
     limit: 100,
     maxDiffMs: 1000 * 60 * 60 * 8
@@ -819,6 +921,7 @@ async function resolveHallEvidence(client, hallMessage, fallbackContent = "") {
   const cronoStateEvidence = getCronoSlotForHallTimestamp(hallMessage.createdTimestamp || Date.now());
 
   const evidenceList = [
+    orgEvidence,
     eventosEvidence,
     cronoStateEvidence,
     cronoLogEvidence,
