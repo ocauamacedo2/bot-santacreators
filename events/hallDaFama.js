@@ -625,9 +625,8 @@ function detectHallCityKey(content = "") {
   const cleaned = stripDiscordNoise(raw);
   const normalized = normalizeHallName(cleaned);
 
-  const roleCity = Object.entries(CITIES).find(([, data]) => raw.includes(data.roleId));
-  if (roleCity) return roleCity[0];
-
+  // ✅ PRIORIDADE 1: cidade escrita no Hall.
+  // Se o texto diz "na CIDADE GRANDE", isso vale mais que cargo mencionado errado.
   if (/\bcidade\s+nobre\b/.test(normalized)) return "nobre";
   if (/\bcidade\s+santa\b/.test(normalized)) return "santa";
   if (/\bcidade\s+grande\b/.test(normalized)) return "grande";
@@ -637,6 +636,11 @@ function detectHallCityKey(content = "") {
   if (/\bna\s+santa\b|\bda\s+santa\b|\bsanta\s+do\s+crime\b/.test(normalized)) return "santa";
   if (/\bna\s+grande\b|\bda\s+grande\b|\bgrande\s+do\s+crime\b/.test(normalized)) return "grande";
   if (/\bna\s+maresia\b|\bda\s+maresia\b|\bmaresia\s+do\s+crime\b/.test(normalized)) return "maresia";
+
+  // ✅ PRIORIDADE 2: cargo mencionado.
+  // Só usa cargo se não achou cidade escrita no Hall.
+  const roleCity = Object.entries(CITIES).find(([, data]) => raw.includes(data.roleId));
+  if (roleCity) return roleCity[0];
 
   return "nobre";
 }
@@ -670,41 +674,77 @@ function resolveCityKeyFromAnyText(value = "") {
   return null;
 }
 
+function parseCronoTimes(timeText = "") {
+  const text = String(timeText || "").toLowerCase();
+  const matches = [...text.matchAll(/\b([0-2]?\d)[:h]([0-5]\d)?\b/g)];
+
+  return matches
+    .map(match => {
+      const hour = Number(match[1]);
+      const minute = Number(match[2] || 0);
+
+      if (Number.isNaN(hour) || hour > 23) return null;
+
+      return { hour, minute };
+    })
+    .filter(Boolean);
+}
+
+function buildSlotDate(baseDate, hour, minute) {
+  const d = new Date(baseDate);
+  d.setHours(hour, minute, 0, 0);
+  return d;
+}
+
 function getCronoSlotForHallTimestamp(createdTimestamp = Date.now()) {
   try {
     if (!fs.existsSync(CRONO_FILE)) return null;
 
     const crono = JSON.parse(fs.readFileSync(CRONO_FILE, "utf8"));
-    const spDate = getSPDateFromTimestamp(createdTimestamp);
-    const hour = spDate.getHours();
+    const hallDate = getSPDateFromTimestamp(createdTimestamp);
 
-    const baseDate = new Date(spDate);
+    const candidates = [];
 
-    if (hour < 3) {
-      baseDate.setDate(baseDate.getDate() - 1);
+    for (let dayOffset = -1; dayOffset <= 0; dayOffset++) {
+      const baseDate = new Date(hallDate);
+      baseDate.setDate(baseDate.getDate() + dayOffset);
+
+      const dayKey = getDayKeyFromSPDate(baseDate);
+
+      for (const sourceType of ["schedule", "madrugada"]) {
+        const slot = crono?.[sourceType]?.[dayKey];
+        if (!slot?.active) continue;
+
+        const cityKey = resolveCityKeyFromAnyText(slot.city || "");
+        if (!cityKey) continue;
+
+        const times = parseCronoTimes(slot.time || "");
+
+        for (const time of times) {
+          const slotDate = buildSlotDate(baseDate, time.hour, time.minute);
+          const diffMs = hallDate.getTime() - slotDate.getTime();
+
+          // ✅ Não pega evento que ainda nem aconteceu.
+          // Ex: Hall 00:40 não pode pegar evento das 21:00 do mesmo dia.
+          if (diffMs < -1000 * 60 * 20) continue;
+
+          // ✅ Hall normalmente sai até algumas horas depois do evento.
+          if (diffMs > 1000 * 60 * 60 * 8) continue;
+
+          candidates.push({
+            cityKey,
+            cityName: CITIES[cityKey]?.label || slot.city,
+            eventName: normalizeHallEventName(slot.eventName || "Evento", cityKey),
+            source: `cronograma_state:${sourceType}:${dayKey}:${slot.time}`,
+            confidence: sourceType === "madrugada" ? 88 : 82,
+            diffMs: Math.abs(diffMs)
+          });
+        }
+      }
     }
 
-    const dayKey = getDayKeyFromSPDate(baseDate);
-
-    const preferredType = hour < 3 || hour >= 23 ? "madrugada" : "schedule";
-    const fallbackType = preferredType === "madrugada" ? "schedule" : "madrugada";
-
-    const preferred = crono?.[preferredType]?.[dayKey];
-    const fallback = crono?.[fallbackType]?.[dayKey];
-
-    const slot = preferred?.active ? preferred : fallback?.active ? fallback : null;
-    if (!slot) return null;
-
-    const cityKey = resolveCityKeyFromAnyText(slot.city || "");
-    if (!cityKey) return null;
-
-    return {
-      cityKey,
-      cityName: CITIES[cityKey]?.label || slot.city,
-      eventName: normalizeHallEventName(slot.eventName || "Evento", cityKey),
-      source: `cronograma_state:${preferredType}:${dayKey}`,
-      confidence: preferred?.active ? 70 : 45
-    };
+    const best = candidates.sort((a, b) => a.diffMs - b.diffMs)[0];
+    return best || null;
   } catch (e) {
     console.error("[HallDaFama] Erro ao cruzar cronograma_state:", e);
     return null;
@@ -1987,7 +2027,22 @@ async function autoCorrectDuplications(channel, client, options = {}) {
         allImageUrls = uniqueImageUrls(approvalUrls);
       }
 
-      const fixed = fixDuplicatedHallContent(msg.content || text, allImageUrls);
+      const evidence = await resolveHallEvidence(client, msg, text);
+
+      const currentCityKey = detectHallCityKey(msg.content || text);
+      const evidenceCityKey = evidence?.cityKey || currentCityKey;
+
+      const canAutoFixCity =
+        evidenceCityKey &&
+        evidenceCityKey !== currentCityKey &&
+        evidence?.confidence >= 80 &&
+        evidence?.source !== "texto_do_hall";
+
+      const fixedBase = fixDuplicatedHallContent(msg.content || text, allImageUrls);
+
+      const fixed = canAutoFixCity
+        ? updateHallCityOnly(fixedBase, CITIES[evidenceCityKey].label, allImageUrls)
+        : fixedBase;
 
       if (
         fixed !== msg.content &&
@@ -2000,6 +2055,19 @@ async function autoCorrectDuplications(channel, client, options = {}) {
 
         msg.content = fixed;
         edited++;
+
+        await sendHallScanLog(client, {
+          title: canAutoFixCity ? "✅ Hall corrigido com cidade/cargo certo" : "🧹 Hall limpo sem trocar cidade",
+          color: canAutoFixCity ? "#2ecc71" : "#5865f2",
+          description:
+            `Mensagem corrigida: \`${msg.id}\`\n` +
+            `Cidade antiga: **${CITIES[currentCityKey]?.label || currentCityKey}**\n` +
+            `Cidade aplicada: **${CITIES[evidenceCityKey]?.label || evidenceCityKey}**\n` +
+            `Fonte: **${evidence?.source || "não identificada"}**\n` +
+            `Confiança: **${evidence?.confidence || 0}%**`,
+          phase: "Correção automática",
+          currentHall: fixed
+        });
       }
 
       if (showProgress && (edited === 1 || edited % 10 === 0)) {
