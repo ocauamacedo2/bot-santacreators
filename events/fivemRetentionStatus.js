@@ -43,8 +43,8 @@ function getFivemPanelScopeByChannelId(channelId) {
 const FIVEM_REFRESH_INTERVAL_MS = 1 * 60 * 1000; // coleta a cada 1 minuto
 const FIVEM_PANEL_REFRESH_INTERVAL_MS = 1 * 60 * 1000; // edita o painel a cada 1 minuto
 const FIVEM_HISTORY_MAX_DAYS = 30; // Limitar histórico a 30 dias
-const FIVEM_FETCH_TIMEOUT_MS = 8 * 1000; // 8 segundos
-const FIVEM_SNAPSHOT_CACHE_MS = 45 * 1000; // reaproveita a mesma coleta por 45 segundos
+const FIVEM_FETCH_TIMEOUT_MS = 4 * 1000; // 4 segundos
+const FIVEM_SNAPSHOT_CACHE_MS = 10 * 1000; // reaproveita a mesma coleta por 10 segundos
 const FIVEM_DYNAMIC_URL_CACHE_MS = 5 * 60 * 1000; // reaproveita endpoints por 5 minutos
 const FIVEM_COMPARISON_TOLERANCE_MS = 10 * 60 * 1000; // 10 minutos
 const FIVEM_TIMEZONE = "America/Sao_Paulo";
@@ -3077,12 +3077,12 @@ async function ensureFivemRetentionAutoLoop(client, options = {}) {
 
     const existing = FIVEM_STATE.get(channel.id) || {};
 
-    FIVEM_STATE.set(channel.id, {
-      ...existing,
-      intervalId: null,
-      messageId: existing?.messageId || null,
-      lastEditAt: existing?.lastEditAt || 0,
-    });
+FIVEM_STATE.set(channel.id, {
+  ...existing,
+  intervalId: null,
+  messageId: existing?.messageId || null,
+  lastEditAt: existing?.lastEditAt || 0,
+});
   }
 
   if (FIVEM_MASTER_INTERVAL_ID) {
