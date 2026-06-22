@@ -58,11 +58,17 @@ const KNOWN_ORG_NAMES = [
   "visionario",
   "visionarios",
   "trindade",
-  "morro do sacola"
+  "morro do sacola",
+  "familia novaera",
+  "novaera",
+  "nova era"
 ];
 
 const ORG_CITY_OVERRIDES = {
   [normalizeStaticKey("trindade")]: "grande",
+  [normalizeStaticKey("familia novaera")]: "grande",
+  [normalizeStaticKey("novaera")]: "grande",
+  [normalizeStaticKey("nova era")]: "grande",
 
   [normalizeStaticKey("vidigal")]: "nobre",
   [normalizeStaticKey("morro do sacola")]: "nobre",
@@ -679,7 +685,7 @@ function getOrgCityEvidenceFromHallContent(content = "") {
       cityName: CITIES[manualCityKey]?.label || "Cidade",
       eventName: normalizeHallEventName(extractRawHallEventName(content), manualCityKey),
       source: `org_override:${orgName}`,
-      confidence: 98
+      confidence: 84
     };
   }
 
@@ -690,11 +696,33 @@ function getOrgCityEvidenceFromHallContent(content = "") {
       cityName: CITIES[historicalCityKey]?.label || "Cidade",
       eventName: normalizeHallEventName(extractRawHallEventName(content), historicalCityKey),
       source: `org_historico:${orgName}`,
-      confidence: 92
+      confidence: 78
     };
   }
 
   return null;
+}
+
+function getEventCityEvidenceFromHallContent(content = "") {
+  const rawEventName = extractRawHallEventName(content);
+  const normalized = normalizeHallName(rawEventName);
+
+  let cityKey = null;
+
+  if (normalized.includes("grande do crime")) cityKey = "grande";
+  if (normalized.includes("santa do crime")) cityKey = "santa";
+  if (normalized.includes("maresia do crime")) cityKey = "maresia";
+  if (normalized.includes("nobre do crime")) cityKey = "nobre";
+
+  if (!cityKey) return null;
+
+  return {
+    cityKey,
+    cityName: CITIES[cityKey]?.label || "Cidade",
+    eventName: normalizeHallEventName(rawEventName, cityKey),
+    source: `evento_nome:${rawEventName}`,
+    confidence: 94
+  };
 }
 
 function normalizeHallDisplay(value = "") {
@@ -899,6 +927,54 @@ async function findNearbyEvidenceInChannel(client, channelId, hallMessage, optio
   };
 }
 
+function isSameNormalizedEventName(a = "", b = "") {
+  const left = normalizeHallEventName(a);
+  const right = normalizeHallEventName(b);
+
+  if (!left || !right) return false;
+  if (left === "Evento" || right === "Evento") return false;
+
+  return normalizeHallName(left) === normalizeHallName(right);
+}
+
+function pickBestHallEvidence(evidenceList = [], directEventName = "Evento") {
+  const valid = evidenceList.filter(Boolean);
+
+  const scheduleLike = valid
+    .filter(item => {
+      return (
+        item.cityKey &&
+        (
+          String(item.source || "").startsWith("canal:") ||
+          String(item.source || "").startsWith("cronograma_state:")
+        )
+      );
+    })
+    .map(item => {
+      const eventMatches = isSameNormalizedEventName(item.eventName, directEventName);
+      return {
+        ...item,
+        confidence: Number(item.confidence || 0) + (eventMatches ? 18 : 0),
+        eventMatches
+      };
+    })
+    .sort((a, b) => b.confidence - a.confidence);
+
+  const strongSchedule = scheduleLike.find(item => item.eventMatches && item.confidence >= 95);
+
+  if (strongSchedule) {
+    return {
+      ...strongSchedule,
+      source: `${strongSchedule.source}:evento_e_horario_confirmados`
+    };
+  }
+
+  return valid
+    .filter(item => item.cityKey)
+    .sort((a, b) => Number(b.confidence || 0) - Number(a.confidence || 0))
+    .at(0);
+}
+
 async function resolveHallEvidence(client, hallMessage, fallbackContent = "") {
   const content = fallbackContent || getHallMessageText(hallMessage);
 
@@ -907,6 +983,7 @@ async function resolveHallEvidence(client, hallMessage, fallbackContent = "") {
   const directEventName = normalizeHallEventName(rawEventName, directCityKey);
 
   const orgEvidence = getOrgCityEvidenceFromHallContent(content);
+  const eventNameEvidence = getEventCityEvidenceFromHallContent(content);
 
   const eventosEvidence = await findNearbyEvidenceInChannel(client, EVENTOS_DIARIOS_CHANNEL_ID, hallMessage, {
     limit: 100,
@@ -922,6 +999,7 @@ async function resolveHallEvidence(client, hallMessage, fallbackContent = "") {
 
   const evidenceList = [
     orgEvidence,
+    eventNameEvidence,
     eventosEvidence,
     cronoStateEvidence,
     cronoLogEvidence,
@@ -934,14 +1012,11 @@ async function resolveHallEvidence(client, hallMessage, fallbackContent = "") {
     }
   ].filter(Boolean);
 
-  const best = evidenceList
-    .filter(item => item.cityKey)
-    .sort((a, b) => b.confidence - a.confidence)
-    .at(0);
+  const best = pickBestHallEvidence(evidenceList, directEventName);
 
   const eventBest = evidenceList
     .filter(item => item.eventName && item.eventName !== "Evento")
-    .sort((a, b) => b.confidence - a.confidence)
+    .sort((a, b) => Number(b.confidence || 0) - Number(a.confidence || 0))
     .at(0);
 
   const finalCityKey = best?.cityKey || directCityKey || "nobre";
