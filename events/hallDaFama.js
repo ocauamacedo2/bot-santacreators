@@ -23,6 +23,8 @@ const HALL_AUDIT_LOG_CH_ID = "1486006930492362893";
 const HALL_ORGS_RANKING_CHANNEL_ID = "1518696187237236816"; // Ranking de ORGs com mais GGs
 const HALL_PLAYERS_RANKING_CHANNEL_ID = "1518696133071863838"; // Ranking de Pessoas com mais GGs
 const HALL_REVIEW_CHANNEL_ID = "1518707314901651576"; // Canal para revisão manual de Halls confusos
+const HALL_SCAN_PROGRESS_CHANNEL_ID = "1518723758574276750"; // Painel auto-editável do progresso da varredura
+const HALL_SCAN_LOG_CHANNEL_ID = "1518723758574276750"; // Logs robustos da varredura
 
 // Cargos Fixos para Menção
 const ROLE_CIDADAO = "1262978759922028575";
@@ -788,6 +790,29 @@ function cleanHallWinnerLine(line = "") {
     .trim();
 }
 
+function getHallMessageText(message) {
+  const embedText = message?.embeds
+    ?.map(embed => {
+      const fieldsText = (embed.fields || [])
+        .map(field => `${field.name || ""}\n${field.value || ""}`)
+        .join("\n");
+
+      return [
+        embed.title || "",
+        embed.description || "",
+        fieldsText,
+        embed.footer?.text || "",
+        embed.author?.name || ""
+      ].filter(Boolean).join("\n");
+    })
+    .join("\n") || "";
+
+  return [
+    message?.content || "",
+    embedText
+  ].filter(Boolean).join("\n").trim();
+}
+
 function extractHallWinnerLines(content = "") {
   const raw = String(content || "");
   const lines = raw.split("\n").map(l => l.trim()).filter(Boolean);
@@ -1122,7 +1147,7 @@ function addPlayerRankingPoint(rankings, playerWinner, hallMeta) {
 }
 
 async function addHallToRankings(rankings, message, client = null) {
-  const content = message?.content || "";
+  const content = getHallMessageText(message);
   const normalizedContent = normalizeHallName(content);
 
   if (!content || !normalizedContent.includes("hall da fama")) return rankings;
@@ -1131,6 +1156,7 @@ async function addHallToRankings(rankings, message, client = null) {
   if (normalizedContent.includes("top 10 organizacoes")) return rankings;
   if (normalizedContent.includes("top 10 pessoas")) return rankings;
   if (normalizedContent.includes("revisao manual")) return rankings;
+  if (normalizedContent.includes("varredura hall da fama")) return rankings;
 
   const cityKey = detectHallCityKey(content);
   const rawEventName = extractRawHallEventName(content);
@@ -1286,17 +1312,16 @@ function buildOrgsRankingMessage(rankings) {
 
     return `${medal} **TOP ${position}** — **${org.name}**
 🌆 Cidade: **${org.cityName}**
-✅ GGs contabilizados: **${org.total}**
-🎮 Eventos mais ganhos: ${formatRankingEventBreakdown(org.events)}`;
+🏆 Vitórias registradas: **${org.total}**
+🎮 Destaques: ${formatRankingEventBreakdown(org.events)}`;
   });
 
   return `# 🏆 Ranking de ORGs — Hall da Fama
 
-📊 **TOP 10 organizações com mais GGs em eventos**
+📊 **TOP 10 organizações que mais venceram eventos**
 
-🧠 **Como o Ranking funciona**
-• Através da quantidades d Hall da Fama
-• Confere a cidade e nome do Evento 
+✨ **Suba no ranking vencendo eventos oficiais da SantaCreators.**
+Cada Hall da Fama aprovado fortalece a história da sua organização.
 
 📌 **Resumo**
 🏢 ORGs no ranking: **${totalOrgs}**
@@ -1305,6 +1330,8 @@ function buildOrgsRankingMessage(rankings) {
 
 ${lines.length ? lines.join("\n\n") : "Ainda não há dados suficientes para montar o ranking."}
 
+🔄 Atualização automática: sempre que um novo Hall é publicado.
+🧹 Varredura geral: 1 vez por dia.
 🕒 Atualizado em: <t:${Math.floor((rankings.lastUpdatedAt || Date.now()) / 1000)}:F>`;
 }
 
@@ -1324,19 +1351,16 @@ function buildPlayersRankingMessage(rankings) {
 
     return `${medal} **TOP ${position}** — **${player.name}**${idText}
 🌆 Cidade: **${player.cityName}**
-✅ GGs contabilizados: **${player.total}**
-🎮 Eventos mais ganhos: ${formatRankingEventBreakdown(player.events)}`;
+🏆 Vitórias registradas: **${player.total}**
+🎮 Destaques: ${formatRankingEventBreakdown(player.events)}`;
   });
 
   return `# 👑 Ranking de Pessoas — Hall da Fama
 
-📊 **TOP 10 pessoas com mais GGs em eventos**
+📊 **TOP 10 jogadores que mais venceram eventos**
 
-🧠 **Como o Ranking funciona**
-• Se tiver nome + ID, conta como pessoa
-• Pessoas com o mesmo ID são unificadas
-• Se não tiver ID e ficar confuso, vai para revisão manual
-• Não duplica a mesma pessoa dentro do mesmo Hall
+✨ **Ganhe eventos, apareça no Hall da Fama e marque seu nome na história da SantaCreators.**
+Cada vitória individual registrada fortalece sua posição no ranking.
 
 📌 **Resumo**
 👤 Pessoas no ranking: **${totalPlayers}**
@@ -1345,6 +1369,8 @@ function buildPlayersRankingMessage(rankings) {
 
 ${lines.length ? lines.join("\n\n") : "Ainda não há dados suficientes para montar o ranking."}
 
+🔄 Atualização automática: sempre que um novo Hall é publicado.
+🧹 Varredura geral: 1 vez por dia.
 🕒 Atualizado em: <t:${Math.floor((rankings.lastUpdatedAt || Date.now()) / 1000)}:F>`;
 }
 
@@ -1380,6 +1406,83 @@ async function ensureHallRankingsDashboards(client) {
   } catch (e) {
     console.error("[HallDaFama] Erro ao garantir dashboards dos rankings:", e);
   }
+}
+
+async function updateHallScanProgress(client, data = {}) {
+  const ch = await client.channels.fetch(HALL_SCAN_PROGRESS_CHANNEL_ID).catch(() => null);
+  if (!ch || !ch.isTextBased()) return null;
+
+  const marker = "HF_SCAN_PROGRESS_PANEL";
+  const messages = await ch.messages.fetch({ limit: 20 }).catch(() => null);
+
+  const oldMsg = messages
+    ?.filter(m => m.author.bot && m.author.id === client.user.id && m.content.includes(marker))
+    ?.sort((a, b) => b.createdTimestamp - a.createdTimestamp)
+    ?.first();
+
+  const totalHalls = Number(data.totalHalls ?? 0);
+  const processed = Number(data.processed ?? 0);
+  const percent = totalHalls > 0 ? Math.min(100, Math.floor((processed / totalHalls) * 100)) : 0;
+  const filled = Math.floor(percent / 10);
+  const progressBar = `${"🟩".repeat(filled)}${"⬛".repeat(10 - filled)} ${percent}%`;
+
+  const embed = new EmbedBuilder()
+    .setTitle("🧹 Varredura Hall da Fama")
+    .setColor("#9b59b6")
+    .setDescription(
+      `📌 **Status:** ${data.status || "Iniciando..."}\n\n` +
+      `${progressBar}`
+    )
+    .addFields(
+      { name: "📥 Mensagens buscadas", value: `**${data.totalMessages ?? 0}**`, inline: true },
+      { name: "🏆 Halls encontrados", value: `**${data.totalHalls ?? 0}**`, inline: true },
+      { name: "📊 Halls analisados", value: `**${data.processed ?? 0}/${data.totalHalls ?? 0}**`, inline: true },
+      { name: "🤖 Halls do bot", value: `**${data.botHalls ?? 0}**`, inline: true },
+      { name: "✏️ Halls editados", value: `**${data.edited ?? 0}**`, inline: true },
+      { name: "⚠️ Revisões pendentes", value: `**${data.pending ?? 0}**`, inline: true },
+      { name: "📅 Data atual analisada", value: data.currentDate || "Buscando...", inline: true },
+      { name: "🎮 Evento atual", value: data.currentEvent || "Buscando...", inline: true },
+      { name: "🌆 Cidade atual", value: data.currentCity || "Buscando...", inline: true }
+    )
+    .setFooter({ text: "SantaCreators • Painel auto-editável da varredura" })
+    .setTimestamp();
+
+  if (oldMsg) {
+    await oldMsg.edit({ content: `<!-- ${marker} -->`, embeds: [embed] }).catch(() => {});
+    return oldMsg;
+  }
+
+  return ch.send({ content: `<!-- ${marker} -->`, embeds: [embed] }).catch(() => null);
+}
+
+async function sendHallScanLog(client, data = {}) {
+  const ch = await client.channels.fetch(HALL_SCAN_LOG_CHANNEL_ID).catch(() => null);
+  if (!ch || !ch.isTextBased()) return;
+
+  const embed = new EmbedBuilder()
+    .setTitle(data.title || "📋 Log da Varredura Hall da Fama")
+    .setColor(data.color || "#5865f2")
+    .setDescription(data.description || "Atualização da varredura.")
+    .addFields(
+      { name: "📥 Mensagens buscadas", value: `**${data.totalMessages ?? 0}**`, inline: true },
+      { name: "🏆 Halls encontrados", value: `**${data.totalHalls ?? 0}**`, inline: true },
+      { name: "📊 Processados", value: `**${data.processed ?? 0}**`, inline: true },
+      { name: "✏️ Editados", value: `**${data.edited ?? 0}**`, inline: true },
+      { name: "⚠️ Revisões pendentes", value: `**${data.pending ?? 0}**`, inline: true },
+      { name: "🧩 Fase", value: data.phase || "Não informado", inline: true }
+    )
+    .setFooter({ text: "SantaCreators • Logs internos do Hall da Fama" })
+    .setTimestamp();
+
+  if (data.currentHall) {
+    embed.addFields({
+      name: "🔎 Hall atual",
+      value: String(data.currentHall).slice(0, 1000),
+      inline: false
+    });
+  }
+
+  await ch.send({ embeds: [embed] }).catch(() => {});
 }
 
 async function findApprovalImagesForHall(client, hallMessage, parts) {
@@ -1432,10 +1535,29 @@ async function findApprovalImagesForHall(client, hallMessage, parts) {
   return [...new Set(foundUrls)].filter(Boolean);
 }
 
-async function autoCorrectDuplications(channel, client) {
+async function autoCorrectDuplications(channel, client, options = {}) {
+  const showProgress = options.showProgress ?? true;
+  const scanStartedAt = Date.now();
+
   try {
     let allMessages = [];
     let beforeId = null;
+
+    if (showProgress) {
+      await updateHallScanProgress(client, {
+        status: "Iniciando busca completa no canal de Hall da Fama...",
+        currentDate: "Preparando...",
+        currentEvent: "Preparando...",
+        currentCity: "Preparando..."
+      });
+
+      await sendHallScanLog(client, {
+        title: "🚀 Varredura iniciada",
+        color: "#2ecc71",
+        description: "O bot começou a buscar mensagens antigas no canal oficial do Hall da Fama.",
+        phase: "Busca de mensagens"
+      });
+    }
 
     while (true) {
       const fetchOptions = beforeId
@@ -1449,16 +1571,55 @@ async function autoCorrectDuplications(channel, client) {
       allMessages.push(...messages.values());
       beforeId = messages.last()?.id;
 
+      if (showProgress && (allMessages.length === 100 || allMessages.length % 500 === 0)) {
+        const lastMsg = messages.last();
+
+        await updateHallScanProgress(client, {
+          status: "Buscando mensagens antigas do canal...",
+          totalMessages: allMessages.length,
+          currentDate: lastMsg?.createdTimestamp ? `<t:${Math.floor(lastMsg.createdTimestamp / 1000)}:F>` : "Não identificado",
+          currentEvent: "Ainda buscando mensagens...",
+          currentCity: "Ainda buscando mensagens..."
+        });
+
+        await sendHallScanLog(client, {
+          title: "📥 Busca em andamento",
+          description: `O bot já buscou **${allMessages.length}** mensagens.`,
+          totalMessages: allMessages.length,
+          phase: "Busca de mensagens",
+          currentHall: lastMsg?.content || "Mensagem sem conteúdo textual."
+        });
+      }
+
       if (messages.size < 100) break;
     }
 
-    if (allMessages.length === 0) return;
+    if (allMessages.length === 0) {
+      if (showProgress) {
+        await updateHallScanProgress(client, {
+          status: "Nenhuma mensagem encontrada no canal.",
+          totalMessages: 0,
+          currentDate: "Finalizado",
+          currentEvent: "Nenhum",
+          currentCity: "Nenhuma"
+        });
+
+        await sendHallScanLog(client, {
+          title: "⚠️ Nenhuma mensagem encontrada",
+          color: "#f1c40f",
+          description: "A varredura terminou sem encontrar mensagens no canal.",
+          phase: "Finalizado"
+        });
+      }
+      return;
+    }
 
     const previousRankings = loadHallRankings();
     let rankings = createEmptyHallRankingData(previousRankings);
 
     const hallMessages = allMessages.filter(m => {
-      const normalized = normalizeHallName(m.content || "");
+      const text = getHallMessageText(m);
+      const normalized = normalizeHallName(text);
 
       if (!normalized.includes("hall da fama")) return false;
       if (normalized.includes("ranking de orgs")) return false;
@@ -1466,20 +1627,56 @@ async function autoCorrectDuplications(channel, client) {
       if (normalized.includes("top 10 organizacoes")) return false;
       if (normalized.includes("top 10 pessoas")) return false;
       if (normalized.includes("revisao manual")) return false;
+      if (normalized.includes("varredura hall da fama")) return false;
 
       return true;
     });
 
-    const botHallMessages = hallMessages.filter(m =>
-      m.author.id === client.user.id &&
-      m.content.includes("Santa Creators :") &&
-      m.content.includes("HALL DA FAMA")
-    );
+    const botHallMessages = hallMessages.filter(m => {
+      const text = getHallMessageText(m);
+
+      return (
+        m.author.id === client.user.id &&
+        text.includes("Santa Creators :") &&
+        normalizeHallName(text).includes("hall da fama")
+      );
+    });
+
+    let edited = 0;
+
+    if (showProgress) {
+      await updateHallScanProgress(client, {
+        status: "Mensagens buscadas. Iniciando correção dos Halls do bot...",
+        totalMessages: allMessages.length,
+        totalHalls: hallMessages.length,
+        botHalls: botHallMessages.length,
+        edited,
+        processed: 0,
+        pending: Object.keys(rankings.pendingReview || {}).length,
+        currentDate: "Separando Halls...",
+        currentEvent: "Separando Halls...",
+        currentCity: "Separando Halls..."
+      });
+
+      await sendHallScanLog(client, {
+        title: "🏆 Halls encontrados",
+        color: "#3498db",
+        description:
+          `Busca concluída.\n\n` +
+          `📥 Mensagens buscadas: **${allMessages.length}**\n` +
+          `🏆 Halls encontrados: **${hallMessages.length}**\n` +
+          `🤖 Halls do bot corrigíveis: **${botHallMessages.length}**`,
+        totalMessages: allMessages.length,
+        totalHalls: hallMessages.length,
+        phase: "Filtro de Halls"
+      });
+    }
 
     for (const msg of botHallMessages.values()) {
-      const parts = extractHallParts(msg.content);
+      const text = getHallMessageText(msg);
+      const parts = extractHallParts(text);
 
-      const contentUrls = getImageUrlsFromContent(msg.content);
+      const contentUrls = getImageUrlsFromContent(msg.content || "");
       const attachmentUrls = getImageUrlsFromAttachments(msg);
 
       let allImageUrls = uniqueImageUrls([
@@ -1492,7 +1689,7 @@ async function autoCorrectDuplications(channel, client) {
         allImageUrls = uniqueImageUrls(approvalUrls);
       }
 
-      const fixed = fixDuplicatedHallContent(msg.content, allImageUrls);
+      const fixed = fixDuplicatedHallContent(msg.content || text, allImageUrls);
 
       if (fixed !== msg.content && fixed.length <= 2000) {
         await msg.edit({
@@ -1500,6 +1697,22 @@ async function autoCorrectDuplications(channel, client) {
         }).catch(() => {});
 
         msg.content = fixed;
+        edited++;
+      }
+
+      if (showProgress && (edited === 1 || edited % 10 === 0)) {
+        await updateHallScanProgress(client, {
+          status: "Corrigindo Halls do bot quando necessário...",
+          totalMessages: allMessages.length,
+          totalHalls: hallMessages.length,
+          botHalls: botHallMessages.length,
+          edited,
+          processed: 0,
+          pending: Object.keys(rankings.pendingReview || {}).length,
+          currentDate: msg.createdTimestamp ? `<t:${Math.floor(msg.createdTimestamp / 1000)}:F>` : "Não identificado",
+          currentEvent: parts.eventName || "Evento não identificado",
+          currentCity: parts.cityName || detectHallCityName(text)
+        });
       }
     }
 
@@ -1507,14 +1720,100 @@ async function autoCorrectDuplications(channel, client) {
       return (a.createdTimestamp || 0) - (b.createdTimestamp || 0);
     });
 
+    let processed = 0;
+
     for (const msg of sortedHallMessages) {
+      const text = getHallMessageText(msg);
+      const cityKey = detectHallCityKey(text);
+      const rawEventName = extractRawHallEventName(text);
+      const eventName = normalizeHallEventName(rawEventName, cityKey);
+      const cityName = CITIES[cityKey]?.label || "Cidade Nobre";
+
       await addHallToRankings(rankings, msg, client);
+      processed++;
+
+      if (showProgress && (processed === 1 || processed % 10 === 0 || processed === sortedHallMessages.length)) {
+        await updateHallScanProgress(client, {
+          status: "Analisando Halls e montando rankings...",
+          totalMessages: allMessages.length,
+          totalHalls: hallMessages.length,
+          botHalls: botHallMessages.length,
+          edited,
+          processed,
+          pending: Object.keys(rankings.pendingReview || {}).length,
+          currentDate: msg.createdTimestamp ? `<t:${Math.floor(msg.createdTimestamp / 1000)}:F>` : "Não identificado",
+          currentEvent: eventName,
+          currentCity: cityName
+        });
+
+        await sendHallScanLog(client, {
+          title: "📊 Hall processado",
+          description:
+            `Progresso: **${processed}/${sortedHallMessages.length}**\n` +
+            `Evento: **${eventName}**\n` +
+            `Cidade: **${cityName}**`,
+          totalMessages: allMessages.length,
+          totalHalls: hallMessages.length,
+          processed,
+          edited,
+          pending: Object.keys(rankings.pendingReview || {}).length,
+          phase: "Processamento de ranking",
+          currentHall: text
+        });
+      }
     }
 
     saveHallRankings(rankings);
     await publishHallRankings(client, rankings);
+
+    const durationSeconds = Math.floor((Date.now() - scanStartedAt) / 1000);
+
+    if (showProgress) {
+      await updateHallScanProgress(client, {
+        status: `Finalizado em ${durationSeconds}s. Dashboards atualizados.`,
+        totalMessages: allMessages.length,
+        totalHalls: hallMessages.length,
+        botHalls: botHallMessages.length,
+        edited,
+        processed,
+        pending: Object.keys(rankings.pendingReview || {}).length,
+        currentDate: "Finalizado",
+        currentEvent: "Todos os eventos processados",
+        currentCity: "Todas as cidades analisadas"
+      });
+
+      await sendHallScanLog(client, {
+        title: "✅ Varredura finalizada",
+        color: "#2ecc71",
+        description:
+          `A varredura foi finalizada com sucesso em **${durationSeconds}s**.\n\n` +
+          `🏆 Halls encontrados: **${hallMessages.length}**\n` +
+          `📊 Halls processados: **${processed}**\n` +
+          `✏️ Halls editados: **${edited}**\n` +
+          `⚠️ Revisões pendentes: **${Object.keys(rankings.pendingReview || {}).length}**`,
+        totalMessages: allMessages.length,
+        totalHalls: hallMessages.length,
+        processed,
+        edited,
+        pending: Object.keys(rankings.pendingReview || {}).length,
+        phase: "Finalizado"
+      });
+    }
   } catch (e) {
     console.error("[HallDaFama] Erro na varredura automática:", e);
+
+    if (showProgress) {
+      await updateHallScanProgress(client, {
+        status: "Erro durante a varredura. Veja o canal de logs.",
+      });
+
+      await sendHallScanLog(client, {
+        title: "❌ Erro na varredura",
+        color: "#e74c3c",
+        description: `Erro capturado:\n\`\`\`${String(e?.stack || e).slice(0, 1500)}\`\`\``,
+        phase: "Erro"
+      });
+    }
   }
 }
 
@@ -1648,17 +1947,25 @@ function buildHallDaFamaModal(cityKey, defaultEventName, eventKey = "auto") {
 // ================= EXPORTS =================
 
 export async function hallDaFamaOnReady(client) {
+  if (client.__HALL_DA_FAMA_READY_RAN__) return;
+  client.__HALL_DA_FAMA_READY_RAN__ = true;
+
   state = loadState();
   const channel = await client.channels.fetch(HALL_CHANNEL_ID).catch(() => null);
   if (channel && channel.isTextBased()) {
      await ensureButtonAtBottom(channel, client, true);
 
-    if (shouldRunHallScanToday()) {
-      await autoCorrectDuplications(channel, client);
-      markHallScanDoneToday();
-    }
-
     await ensureHallRankingsDashboards(client);
+
+    if (shouldRunHallScanToday()) {
+      autoCorrectDuplications(channel, client, { showProgress: true })
+        .then(() => {
+          markHallScanDoneToday();
+        })
+        .catch((e) => {
+          console.error("[HallDaFama] Erro ao rodar varredura em segundo plano:", e);
+        });
+    }
   }
 }
 
@@ -1768,12 +2075,22 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
       return interaction.editReply("❌ Canal do Hall da Fama não encontrado.");
     }
 
-    await autoCorrectDuplications(hallChannel, client);
+    await updateHallScanProgress(client, {
+      status: `Varredura manual iniciada por ${interaction.user.tag}...`
+    });
+
+    await interaction.editReply("🧹 Varredura iniciada! Acompanhe o painel de progresso no canal de revisão.");
+
+    await autoCorrectDuplications(hallChannel, client, { showProgress: true });
 
     state.lastAutoCorrectScanKey = "";
     saveState(state);
 
-    await interaction.editReply("✅ Varredura geral concluída. Os Halls duplicados foram corrigidos quando possível.");
+    await interaction.followUp({
+      content: "✅ Varredura geral finalizada! Rankings atualizados.",
+      ephemeral: true
+    });
+
     return true;
   }
 

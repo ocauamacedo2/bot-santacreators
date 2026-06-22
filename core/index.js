@@ -858,6 +858,14 @@ client.once("ready", async () => {
     console.error("[BOOT] Erro ao iniciar GeralDash/Ranking com prioridade:", e);
   }
 
+  try {
+    console.log("[CORE] PRIORIDADE: iniciando Hall da Fama + rankings.");
+    await hallDaFamaOnReady(client);
+    console.log("[CORE] Hall da Fama + rankings iniciados com prioridade.");
+  } catch (e) {
+    console.error("[BOOT] Erro ao iniciar Hall da Fama com prioridade:", e);
+  }
+
     try {
       iniciarRegistroPoderes(client);
     } catch (e) {}
