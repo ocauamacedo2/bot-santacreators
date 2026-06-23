@@ -1484,19 +1484,20 @@
     return uniqueImageUrls([...message.attachments.values()].map(a => a.url));
   }
 
-  function cleanHallWinnerLine(line = "") {
-    return stripDiscordNoise(line)
-      .replace(/^TOP\s*\d*\s*/i, "")
-      .replace(/^Top\s*\d+\s*[:\-]\s*/i, "")
-      .replace(/^novo emoji\s*\d+/i, "")
-      .replace(/^emoji\s*\d+/i, "")
-      .replace(/^GG\s*[:\-]\s*/i, "")
-      .replace(/^\d+\s+/, "")
-      .replace(/^Vencedores?/i, "")
-      .replace(/^[:\-\s]+/, "")
-      .replace(/\s+/g, " ")
-      .trim();
-  }
+function cleanHallWinnerLine(line = "") {
+  return stripDiscordNoise(line)
+    .replace(/^TOP\s*\d*\s*/i, "")
+    .replace(/^Top\s*\d+\s*[:\-]\s*/i, "")
+    .replace(/^novo emoji\s*\d+/i, "")
+    .replace(/^emoji\s*\d+/i, "")
+    .replace(/^GG\s*[:\-]\s*/i, "")
+    .replace(/^\d+\s+/, "")
+    .replace(/^Vencedores?/i, "")
+    .replace(/^[:\-\s|]+/, "")
+    .replace(/\s*\|\s*/g, " | ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
   function getHallMessageText(message) {
     const embedText = message?.embeds
@@ -1836,7 +1837,7 @@ function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento")
       .setColor("#f1c40f")
       .setDescription(
         `Esse vencedor ficou confuso para o filtro automático.\n\n` +
-        `**Linha original:**\n\`${normalizeHallDisplay(winner.rawLine || "Sem linha")}\`\n\n` +
+        `**Linha original:**\n\`${cleanHallWinnerLine(winner.rawLine || "Sem linha") || "Sem linha"}\`\n\n` +
         `**Evento:** ${hallMeta.eventName}\n` +
         `**Cidade:** ${hallMeta.cityName}\n` +
         `**Mensagem:** ${hallMeta.messageId}`
