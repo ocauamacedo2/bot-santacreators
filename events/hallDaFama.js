@@ -61,7 +61,16 @@
     "morro do sacola",
     "familia novaera",
     "novaera",
-    "nova era"
+    "nova era",
+    "big",
+    "espanha",
+    "familia espanha",
+    "dixavas",
+    "akuma",
+    "real trem",
+    "drift king",
+    "medellin",
+    "tropa do caos"
   ];
 
   const ORG_CITY_OVERRIDES = {
@@ -74,7 +83,16 @@
     [normalizeStaticKey("morro do sacola")]: "nobre",
     [normalizeStaticKey("morro do sacola")]: "nobre",
     [normalizeStaticKey("tropa do 7")]: "nobre",
-    [normalizeStaticKey("tropado7")]: "nobre"
+    [normalizeStaticKey("tropado7")]: "nobre",
+    [normalizeStaticKey("big")]: "nobre",
+    [normalizeStaticKey("espanha")]: "nobre",
+    [normalizeStaticKey("familia espanha")]: "nobre",
+    [normalizeStaticKey("dixavas")]: "nobre",
+    [normalizeStaticKey("akuma")]: "nobre",
+    [normalizeStaticKey("real trem")]: "nobre",
+    [normalizeStaticKey("drift king")]: "nobre",
+    [normalizeStaticKey("medellin")]: "nobre",
+    [normalizeStaticKey("tropa do caos")]: "nobre"
   };
 
   const PLAYER_CITY_OVERRIDES = {
@@ -1377,6 +1395,44 @@
       return "Nobre do Crime";
     }
 
+    if (
+      normalized.includes("rebeliao creators") ||
+      normalized.includes("rebeliao")
+    ) {
+      return "Rebelião Creators";
+    }
+
+    if (
+      normalized.includes("resgate o macedo") ||
+      normalized.includes("resgate macedo")
+    ) {
+      return "Resgate o Macedo";
+    }
+
+    if (
+      normalized.includes("esconde esconde") ||
+      normalized.includes("presidio") ||
+      normalized.includes("prisao")
+    ) {
+      return "Esconde Esconde";
+    }
+
+    if (
+      normalized.includes("fuja da onca") ||
+      normalized.includes("onca no labirinto") ||
+      normalized.includes("labirinto")
+    ) {
+      return "Fuja da Onça";
+    }
+
+    if (
+      normalized.includes("apocalypse") ||
+      normalized.includes("apocalipse") ||
+      normalized.includes("apoclypse")
+    ) {
+      return "Santa Apocalypse";
+    }
+
     return original;
   }
   function extractRawHallEventName(content = "") {
@@ -1491,7 +1547,6 @@ function cleanHallWinnerLine(line = "") {
     .replace(/^novo emoji\s*\d+/i, "")
     .replace(/^emoji\s*\d+/i, "")
     .replace(/^GG\s*[:\-]\s*/i, "")
-    .replace(/^\d+\s+/, "")
     .replace(/^Vencedores?/i, "")
     .replace(/^[:\-\s|]+/, "")
     .replace(/\s*\|\s*/g, " | ")
@@ -1652,6 +1707,50 @@ function getWinnerIdFromParts(parts = []) {
   return "";
 }
 
+function isOrgEventName(eventName = "", cityKey = "nobre") {
+  const normalizedEvent = normalizeHallEventName(eventName, cityKey);
+
+  return [
+    "Missão Rosa",
+    "Rebelião Creators",
+    "Resgate o Macedo",
+    "Pegando Fogo"
+  ].includes(normalizedEvent);
+}
+
+function extractWinnerIdentityFromParts(parts = []) {
+  const first = normalizeHallDisplay(parts[0] || "");
+
+  // Ex: 6142 Ciny Cruel | Dixavas : ROLEPASS
+  let match = first.match(/^(\d{2,})\s+(.+)$/);
+  if (match) {
+    return {
+      playerId: match[1],
+      playerName: normalizeHallDisplay(match[2])
+    };
+  }
+
+  // Ex: Vitória 313199 | Vip Evento
+  match = first.match(/^(.+?)\s+(\d{2,})$/);
+  if (match) {
+    return {
+      playerId: match[2],
+      playerName: normalizeHallDisplay(match[1])
+    };
+  }
+
+  const id = getWinnerIdFromParts(parts);
+  if (!id) return null;
+
+  const idIndex = parts.findIndex(p => p === id || p.startsWith(`${id} `));
+  const beforeId = parts.slice(0, idIndex).filter(p => !looksLikePrizeOnly(p));
+
+  return {
+    playerId: id,
+    playerName: normalizeHallDisplay(beforeId[0] || "")
+  };
+}
+
 function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento") {
     const originalLine = String(line || "");
 
@@ -1678,11 +1777,12 @@ function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento")
     }
 
     const parts = cleanLine
-      .split(/\s*\|\s*|\s*<\s*/g)
+      .split(/\s*\|\s*|\s*<\s*|\s*:\s*/g)
       .map(p => normalizeHallDisplay(p))
       .filter(Boolean);
 
-    const id = getWinnerIdFromParts(parts);
+    const identity = extractWinnerIdentityFromParts(parts);
+    const id = identity?.playerId || "";
     const hasId = Boolean(id);
 
     if (hasId) {
@@ -1697,6 +1797,7 @@ function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento")
       }
 
       const playerName =
+        identity?.playerName ||
         beforeId[0] ||
         cleanLine.match(/^(.+?)\s*\|\s*\d{2,}/)?.[1]?.trim() ||
         cleanLine.match(/^(.+?)\s*<\s*\d{2,}/)?.[1]?.trim() ||
@@ -1738,9 +1839,8 @@ function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento")
       return null;
     }
 
-    const normalizedEvent = normalizeHallEventName(eventName, cityKey);
     const shouldCountAsOrg =
-      normalizedEvent === "Missão Rosa" ||
+      isOrgEventName(eventName, cityKey) ||
       isKnownOrgName(nameOnly);
 
     if (shouldCountAsOrg) {
@@ -1752,11 +1852,21 @@ function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento")
       };
     }
 
+    const possibleOrgNoId = parts.find(p => {
+      if (!p) return false;
+      if (p === nameOnly) return false;
+      if (/^\d+$/.test(p)) return false;
+      if (looksLikePrizeOnly(p)) return false;
+      if (isInvalidWinnerName(p)) return false;
+
+      return isKnownOrgName(p) || getManualOrgCityKey(p);
+    });
+
     return {
       type: "player",
       playerName: normalizeHallDisplay(nameOnly),
       playerId: "",
-      orgName: braceOrgName,
+      orgName: braceOrgName || (possibleOrgNoId ? normalizeHallDisplay(possibleOrgNoId) : ""),
       cityKey,
       rawLine: originalLine
     };
