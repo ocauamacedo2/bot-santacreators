@@ -165,7 +165,9 @@
     "vidigal",
     "virtude",
     "visionarios",
-    "warlox"
+    "warlox",
+    "israel",
+    "antares"
   ];
   const ORG_CITY_OVERRIDES = {
     [normalizeStaticKey("trindade")]: "grande",
@@ -770,7 +772,15 @@
     [normalizeHallKey("sintonia")]: "Sintonia",
     [normalizeHallKey("tokyo")]: "Tokyo",
     [normalizeHallKey("toquio")]: "Tokyo",
-    [normalizeHallKey("tóquio")]: "Tokyo"
+    [normalizeHallKey("tóquio")]: "Tokyo",
+
+    [normalizeHallKey("tropado7")]: "Tropa do 7",
+    [normalizeHallKey("tropa do sete")]: "Tropa do 7",
+
+    [normalizeHallKey("egito")]: "Egito",
+    [normalizeHallKey("banzas")]: "Banzas",
+    [normalizeHallKey("israel")]: "Israel",
+    [normalizeHallKey("antares")]: "Antares"
   };
 
   function normalizeOrgDisplayName(orgName = "") {
@@ -805,12 +815,30 @@
     const exactOrg = KNOWN_ORG_NAMES.find(orgName => normalizeHallKey(orgName) === key);
     if (exactOrg) return normalizeOrgDisplayName(exactOrg);
 
+    const parts = clean
+      .split(/\s*[-–—_]\s*|\s*\(\s*|\s*\)\s*|\s*\|\s*|\s*«\s*|\s*»\s*/g)
+      .map(part => normalizeHallDisplay(part))
+      .filter(Boolean);
+
+    const foundPart = parts
+      .map(part => {
+        const partKey = normalizeHallKey(part);
+        const alias = ORG_NAME_ALIASES[partKey];
+        if (alias) return alias;
+
+        const exact = KNOWN_ORG_NAMES.find(orgName => normalizeHallKey(orgName) === partKey);
+        return exact ? normalizeOrgDisplayName(exact) : "";
+      })
+      .find(Boolean);
+
+    if (foundPart) return foundPart;
+
     const foundOrg = KNOWN_ORG_NAMES
       .map(orgName => ({
         raw: orgName,
         key: normalizeHallKey(orgName)
       }))
-      .filter(item => item.key && item.key.length >= 3)
+      .filter(item => item.key && item.key.length >= 5)
       .filter(item => key.includes(item.key))
       .sort((a, b) => b.key.length - a.key.length)
       .at(0);
@@ -828,13 +856,23 @@
 
     if (cleanKey === orgKey) return null;
 
-    const playerName = normalizeHallDisplay(
-      clean
-        .replace(new RegExp(orgName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"), "")
-        .replace(/[-–—_]+/g, " ")
-        .replace(/\s+/g, " ")
-        .trim()
-    );
+    const parts = clean
+      .split(/\s*[-–—_]\s*|\s*\(\s*|\s*\)\s*|\s*\|\s*|\s*«\s*|\s*»\s*/g)
+      .map(part => normalizeHallDisplay(part))
+      .filter(Boolean);
+
+    const playerPart = parts.find(part => {
+      const partKey = normalizeHallKey(part);
+      if (!partKey) return false;
+      if (partKey === orgKey) return false;
+      if (ORG_NAME_ALIASES[partKey]) return false;
+      if (isKnownOrgName(part)) return false;
+      if (looksLikePrizeOnly(part)) return false;
+      if (isInvalidWinnerName(part)) return false;
+      return true;
+    });
+
+    const playerName = normalizeHallDisplay(playerPart || "");
 
     if (!playerName) return null;
     if (looksLikePrizeOnly(playerName)) return null;
@@ -1784,11 +1822,13 @@ function normalizeHallEventName(eventName = "", cityKey = "nobre") {
 
 function cleanHallWinnerLine(line = "") {
   return stripDiscordNoise(line)
-    .replace(/^TOP\s*\d*\s*/i, "")
-    .replace(/^Top\s*\d+\s*[:\-]\s*/i, "")
+    .replace(/^#\s*/i, "")
+    .replace(/^TOP\s*#?\s*\d*\s*[:\-]?\s*/i, "")
+    .replace(/^Top\s*#?\s*\d+\s*[:\-]\s*/i, "")
     .replace(/^novo emoji\s*\d+/i, "")
     .replace(/^emoji\s*\d+/i, "")
     .replace(/^GG\s*[:\-]\s*/i, "")
+    .replace(/^Organiza[cç][aã]o\s*[:\-]\s*/i, "")
     .replace(/^Vencedores?\s*/i, "")
     .replace(/^(🥇|🥈|🥉)\s*/u, "")
     .replace(/^[º°ª\.\:\-\s|]+/, "")
@@ -1831,6 +1871,8 @@ function cleanHallWinnerLine(line = "") {
 
       const startsAsWinner =
         /^TOP\b/i.test(rawClean) ||
+        /^#?\s*TOP\b/i.test(rawClean) ||
+        /^Organiza[cç][aã]o\b/i.test(rawClean) ||
         /^Vencedores?\b/i.test(rawClean);
 
       if (!startsAsWinner) return false;
@@ -2571,9 +2613,11 @@ function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento")
 
     return `name:${normalizeHallKey(player.playerName)}:${player.cityKey}`;
   }
-
   function getOrgRankingKey(orgName = "", cityKey = "nobre") {
-    return `${cityKey}:${normalizeHallKey(orgName)}`;
+    const finalOrgName = normalizeOrgDisplayName(orgName);
+    const finalCityKey = getManualOrgCityKey(finalOrgName) || cityKey || "nobre";
+
+    return `${finalCityKey}:${normalizeHallKey(finalOrgName)}`;
   }
 
   function dedupeHallWinners(winners = []) {
@@ -2635,12 +2679,12 @@ function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento")
   }
 
 function addOrgRankingPoint(rankings, orgWinner, hallMeta) {
-  const orgName = normalizeHallDisplay(orgWinner.orgName);
+  const orgName = normalizeOrgDisplayName(orgWinner.orgName);
   if (!orgName) return;
   if (isInvalidWinnerName(orgName)) return;
   if (looksLikePrizeOnly(orgName)) return;
 
-    const cityKey = orgWinner.cityKey || hallMeta.cityKey || "nobre";
+    const cityKey = getManualOrgCityKey(orgName) || orgWinner.cityKey || hallMeta.cityKey || "nobre";
     const key = getOrgRankingKey(orgName, cityKey);
     const cityName = CITIES[cityKey]?.label || "Cidade Nobre";
 
@@ -3170,6 +3214,13 @@ function buildOrgsRankingEmbed(rankings) {
     });
   }
 
+  async function publishHallRankingsDuringScan(client, rankings) {
+    rankings.lastUpdatedAt = Date.now();
+
+    saveHallRankings(rankings);
+    await publishHallRankings(client, rankings);
+  }
+
   async function ensureHallRankingsDashboards(client) {
     try {
       const rankings = loadHallRankings();
@@ -3194,15 +3245,23 @@ function buildOrgsRankingEmbed(rankings) {
     const totalHalls = Number(data.totalHalls ?? 0);
     const processed = Number(data.processed ?? 0);
     const percent = totalHalls > 0 ? Math.min(100, Math.floor((processed / totalHalls) * 100)) : 0;
-    const filled = Math.floor(percent / 10);
-    const progressBar = `${"🟩".repeat(filled)}${"⬛".repeat(10 - filled)} ${percent}%`;
+    const filled = Math.floor(percent / 5);
+    const progressBar = `${"🟩".repeat(filled)}${"⬛".repeat(20 - filled)} ${processed}/${totalHalls}`;
+
+    const hallUrl = data.currentHallUrl || "";
+    const hallLine = hallUrl ? `[Abrir Hall atual](${hallUrl})` : "`aguardando link`";
+    const authorLine = data.currentHallAuthor || "Não identificado";
+    const postedLine = data.currentHallPostedAt || data.currentDate || "Buscando...";
 
     const embed = new EmbedBuilder()
       .setTitle("🧹 Varredura Hall da Fama")
       .setColor("#9b59b6")
       .setDescription(
         `📌 **Status:** ${data.status || "Iniciando..."}\n\n` +
-        `${progressBar}`
+        `📍 **Progresso:** ${progressBar}\n` +
+        `🔗 **Hall atual:** ${hallLine}\n` +
+        `👤 **Postado por:** ${authorLine}\n` +
+        `📅 **Postado em:** ${postedLine}`
       )
       .addFields(
         { name: "📥 Mensagens buscadas", value: `**${data.totalMessages ?? 0}**`, inline: true },
@@ -3211,49 +3270,171 @@ function buildOrgsRankingEmbed(rankings) {
         { name: "🤖 Halls do bot", value: `**${data.botHalls ?? 0}**`, inline: true },
         { name: "✏️ Halls editados", value: `**${data.edited ?? 0}**`, inline: true },
         { name: "⚠️ Revisões pendentes", value: `**${data.pending ?? 0}**`, inline: true },
-        { name: "📅 Data atual analisada", value: data.currentDate || "Buscando...", inline: true },
         { name: "🎮 Evento atual", value: data.currentEvent || "Buscando...", inline: true },
-        { name: "🌆 Cidade atual", value: data.currentCity || "Buscando...", inline: true }
+        { name: "🌆 Cidade atual", value: data.currentCity || "Buscando...", inline: true },
+        { name: "🧩 Fase", value: data.phase || "Varredura", inline: true }
       )
       .setFooter({ text: "SantaCreators • Painel auto-editável da varredura" })
       .setTimestamp();
 
+    const row = hallUrl
+      ? new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setLabel("🔗 Abrir Hall atual")
+            .setStyle(ButtonStyle.Link)
+            .setURL(hallUrl)
+        )
+      : null;
+
+    const payload = {
+      content: `<!-- ${marker} -->`,
+      embeds: [embed],
+      components: row ? [row] : []
+    };
+
+    let result = null;
+
     if (oldMsg) {
-      await oldMsg.edit({ content: `<!-- ${marker} -->`, embeds: [embed] }).catch(() => {});
-      return oldMsg;
+      result = await oldMsg.edit(payload).catch(() => null);
+    } else {
+      result = await ch.send(payload).catch(() => null);
     }
 
-    return ch.send({ content: `<!-- ${marker} -->`, embeds: [embed] }).catch(() => null);
+    await updateHallApprovalScanProgress(client, data).catch(() => {});
+
+    return result;
+  }
+
+  async function updateHallApprovalScanProgress(client, data = {}) {
+    const ch = await client.channels.fetch(APPROVAL_CHANNEL_ID).catch(() => null);
+    if (!ch || !ch.isTextBased()) return null;
+
+    const marker = "HF_SCAN_APPROVAL_PROGRESS_PANEL";
+    const messages = await ch.messages.fetch({ limit: 20 }).catch(() => null);
+
+    const oldMsg = messages
+      ?.filter(m => m.author.bot && m.author.id === client.user.id && m.content.includes(marker))
+      ?.sort((a, b) => b.createdTimestamp - a.createdTimestamp)
+      ?.first();
+
+    const totalHalls = Number(data.totalHalls ?? 0);
+    const processed = Number(data.processed ?? 0);
+    const percent = totalHalls > 0 ? Math.min(100, Math.floor((processed / totalHalls) * 100)) : 0;
+    const filled = Math.floor(percent / 5);
+    const progressBar = `${"🟥".repeat(filled)}${"⬛".repeat(20 - filled)} ${processed}/${totalHalls}`;
+
+    const hallUrl = data.currentHallUrl || "";
+    const hallLine = hallUrl ? `[abrir Hall atual](${hallUrl})` : "`aguardando Hall atual`";
+    const isFinished = data.phase === "Finalizado" || String(data.status || "").toLowerCase().includes("finalizado");
+
+    const embed = new EmbedBuilder()
+      .setTitle(isFinished ? "✅ Varredura Hall da Fama finalizada" : "🧹 Varredura Hall da Fama em andamento")
+      .setColor(isFinished ? "#2ecc71" : "#e74c3c")
+      .setDescription(
+        `📍 **Progresso:** ${progressBar}\n\n` +
+        `📌 **Status:** ${data.status || "Processando..."}\n` +
+        `🔗 **Hall atual:** ${hallLine}\n` +
+        `👤 **Postado por:** ${data.currentHallAuthor || "Não identificado"}\n` +
+        `📅 **Postado em:** ${data.currentHallPostedAt || data.currentDate || "Buscando..."}`
+      )
+      .addFields(
+        { name: "📥 Mensagens buscadas", value: `**${data.totalMessages ?? 0}**`, inline: true },
+        { name: "🏆 Halls encontrados", value: `**${data.totalHalls ?? 0}**`, inline: true },
+        { name: "📊 Processados", value: `**${data.processed ?? 0}/${data.totalHalls ?? 0}**`, inline: true },
+        { name: "✏️ Editados", value: `**${data.edited ?? 0}**`, inline: true },
+        { name: "⚠️ Revisões pendentes", value: `**${data.pending ?? 0}**`, inline: true },
+        { name: "🧩 Fase", value: data.phase || "Varredura", inline: true },
+        { name: "🎮 Evento atual", value: data.currentEvent || "Buscando...", inline: true },
+        { name: "🌆 Cidade atual", value: data.currentCity || "Buscando...", inline: true }
+      )
+      .setFooter({
+        text: isFinished
+          ? "SantaCreators • Esse painel será apagado em 10 minutos"
+          : "SantaCreators • Painel temporário da varredura"
+      })
+      .setTimestamp();
+
+    const row = hallUrl
+      ? new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setLabel("🔗 Abrir Hall atual")
+            .setStyle(ButtonStyle.Link)
+            .setURL(hallUrl)
+        )
+      : null;
+
+    const payload = {
+      content: `<!-- ${marker} -->`,
+      embeds: [embed],
+      components: row ? [row] : []
+    };
+
+    const progressMsg = oldMsg
+      ? await oldMsg.edit(payload).catch(() => null)
+      : await ch.send(payload).catch(() => null);
+
+    if (isFinished && progressMsg) {
+      setTimeout(() => {
+        progressMsg.delete().catch(() => {});
+      }, 10 * 60 * 1000);
+    }
+
+    return progressMsg;
   }
 
   async function sendHallScanLog(client, data = {}) {
     const ch = await client.channels.fetch(HALL_SCAN_LOG_CHANNEL_ID).catch(() => null);
     if (!ch || !ch.isTextBased()) return;
 
+    const hallUrl = data.currentHallUrl || "";
+    const hallLine = hallUrl ? `[Abrir Hall](${hallUrl})` : "`sem link`";
+    const authorLine = data.currentHallAuthor || "Não identificado";
+    const postedLine = data.currentHallPostedAt || "Não identificado";
+
     const embed = new EmbedBuilder()
       .setTitle(data.title || "📋 Log da Varredura Hall da Fama")
       .setColor(data.color || "#5865f2")
-      .setDescription(data.description || "Atualização da varredura.")
+      .setDescription(
+        `${data.description || "Atualização da varredura."}\n\n` +
+        `🔗 **Link:** ${hallLine}\n` +
+        `👤 **Postado por:** ${authorLine}\n` +
+        `📅 **Postado em:** ${postedLine}`
+      )
       .addFields(
         { name: "📥 Mensagens buscadas", value: `**${data.totalMessages ?? 0}**`, inline: true },
         { name: "🏆 Halls encontrados", value: `**${data.totalHalls ?? 0}**`, inline: true },
         { name: "📊 Processados", value: `**${data.processed ?? 0}**`, inline: true },
         { name: "✏️ Editados", value: `**${data.edited ?? 0}**`, inline: true },
         { name: "⚠️ Revisões pendentes", value: `**${data.pending ?? 0}**`, inline: true },
-        { name: "🧩 Fase", value: data.phase || "Não informado", inline: true }
+        { name: "🧩 Fase", value: data.phase || "Não informado", inline: true },
+        { name: "🎮 Evento", value: data.currentEvent || "Não identificado", inline: true },
+        { name: "🌆 Cidade", value: data.currentCity || "Não identificada", inline: true },
+        { name: "🧠 Confiança", value: data.confidence ? `**${data.confidence}%**` : "`não informada`", inline: true }
       )
       .setFooter({ text: "SantaCreators • Logs internos do Hall da Fama" })
       .setTimestamp();
 
     if (data.currentHall) {
       embed.addFields({
-        name: "🔎 Hall atual",
+        name: "🔎 Prévia do Hall",
         value: String(data.currentHall).slice(0, 1000),
         inline: false
       });
     }
 
-    await ch.send({ embeds: [embed] }).catch(() => {});
+    const row = hallUrl
+      ? new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setLabel("🔗 Abrir Hall")
+            .setStyle(ButtonStyle.Link)
+            .setURL(hallUrl)
+        )
+      : null;
+
+    await ch.send({
+      embeds: [embed],
+      components: row ? [row] : []
+    }).catch(() => {});
   }
 
 function extractWinnerNamesForApprovalMatch(text = "") {
@@ -3410,6 +3591,9 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
             status: "Buscando mensagens antigas do canal...",
             totalMessages: allMessages.length,
             currentDate: lastMsg?.createdTimestamp ? `<t:${Math.floor(lastMsg.createdTimestamp / 1000)}:F>` : "Não identificado",
+            currentHallPostedAt: lastMsg?.createdTimestamp ? `<t:${Math.floor(lastMsg.createdTimestamp / 1000)}:F>` : "Não identificado",
+            currentHallAuthor: lastMsg?.author ? `${lastMsg.author.tag || lastMsg.author.username} (\`${lastMsg.author.id}\`)` : "Não identificado",
+            currentHallUrl: getMessageJumpUrl(lastMsg),
             currentEvent: "Ainda buscando mensagens...",
             currentCity: "Ainda buscando mensagens..."
           });
@@ -3419,7 +3603,10 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
             description: `O bot já buscou **${allMessages.length}** mensagens.`,
             totalMessages: allMessages.length,
             phase: "Busca de mensagens",
-            currentHall: lastMsg?.content || "Mensagem sem conteúdo textual."
+            currentHall: lastMsg?.content || "Mensagem sem conteúdo textual.",
+            currentHallPostedAt: lastMsg?.createdTimestamp ? `<t:${Math.floor(lastMsg.createdTimestamp / 1000)}:F>` : "Não identificado",
+            currentHallAuthor: lastMsg?.author ? `${lastMsg.author.tag || lastMsg.author.username} (\`${lastMsg.author.id}\`)` : "Não identificado",
+            currentHallUrl: getMessageJumpUrl(lastMsg)
           });
         }
 
@@ -3582,7 +3769,13 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
               `Fonte: **${evidence?.source || "não identificada"}**\n` +
               `Confiança: **${evidence?.confidence || 0}%**`,
             phase: "Correção automática",
-            currentHall: fixed
+            currentHall: fixed,
+            currentHallPostedAt: msg.createdTimestamp ? `<t:${Math.floor(msg.createdTimestamp / 1000)}:F>` : "Não identificado",
+            currentHallAuthor: msg.author ? `${msg.author.tag || msg.author.username} (\`${msg.author.id}\`)` : "Não identificado",
+            currentHallUrl: getMessageJumpUrl(msg),
+            currentEvent: parts.eventName || "Evento não identificado",
+            currentCity: canAutoFixCity ? CITIES[evidenceCityKey]?.label || evidenceCityKey : CITIES[currentCityKey]?.label || currentCityKey,
+            confidence: evidence?.confidence || 0
           });
         }
 
@@ -3596,8 +3789,12 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
             processed: 0,
             pending: Object.keys(rankings.pendingReview || {}).length,
             currentDate: msg.createdTimestamp ? `<t:${Math.floor(msg.createdTimestamp / 1000)}:F>` : "Não identificado",
+            currentHallPostedAt: msg.createdTimestamp ? `<t:${Math.floor(msg.createdTimestamp / 1000)}:F>` : "Não identificado",
+            currentHallAuthor: msg.author ? `${msg.author.tag || msg.author.username} (\`${msg.author.id}\`)` : "Não identificado",
+            currentHallUrl: getMessageJumpUrl(msg),
             currentEvent: parts.eventName || "Evento não identificado",
-            currentCity: parts.cityName || detectHallCityName(text)
+            currentCity: parts.cityName || detectHallCityName(text),
+            phase: "Correção automática"
           });
         }
       }
@@ -3619,8 +3816,10 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
         processed++;
 
         if (showProgress && (processed === 1 || processed % 10 === 0 || processed === sortedHallMessages.length)) {
+          await publishHallRankingsDuringScan(client, rankings);
+
           await updateHallScanProgress(client, {
-            status: "Analisando Halls e montando rankings...",
+            status: "Analisando Halls e montando rankings.",
             totalMessages: allMessages.length,
             totalHalls: hallMessages.length,
             botHalls: botHallMessages.length,
@@ -3628,8 +3827,12 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
             processed,
             pending: Object.keys(rankings.pendingReview || {}).length,
             currentDate: msg.createdTimestamp ? `<t:${Math.floor(msg.createdTimestamp / 1000)}:F>` : "Não identificado",
+            currentHallPostedAt: msg.createdTimestamp ? `<t:${Math.floor(msg.createdTimestamp / 1000)}:F>` : "Não identificado",
+            currentHallAuthor: msg.author ? `${msg.author.tag || msg.author.username} (\`${msg.author.id}\`)` : "Não identificado",
+            currentHallUrl: getMessageJumpUrl(msg),
             currentEvent: eventName,
-            currentCity: cityName
+            currentCity: cityName,
+            phase: "Processamento de ranking"
           });
 
           await sendHallScanLog(client, {
@@ -3646,7 +3849,13 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
             edited,
             pending: Object.keys(rankings.pendingReview || {}).length,
             phase: "Processamento de ranking",
-            currentHall: text
+            currentHall: text,
+            currentHallPostedAt: msg.createdTimestamp ? `<t:${Math.floor(msg.createdTimestamp / 1000)}:F>` : "Não identificado",
+            currentHallAuthor: msg.author ? `${msg.author.tag || msg.author.username} (\`${msg.author.id}\`)` : "Não identificado",
+            currentHallUrl: getMessageJumpUrl(msg),
+            currentEvent: eventName,
+            currentCity: cityName,
+            confidence: evidence.confidence || 0
           });
         }
       }

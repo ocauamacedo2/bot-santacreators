@@ -827,9 +827,38 @@ function findEventWindowByTimeAndCity(peakDoc, event) {
     return sameCity && sameLabel;
   }) || null;
 }
-
 function resolveEventWindowFromPeaks(peakDoc, event) {
   return peakDoc?.eventWindows?.[event.eventKey] || findEventWindowByTimeAndCity(peakDoc, event);
+}
+
+function resolveComparableCityWindowFromPeaks(peakDoc, event, cityKey) {
+  if (!peakDoc || !event || !cityKey) return null;
+
+  const directWindow = resolveEventWindowFromPeaks(peakDoc, event);
+
+  if (directWindow?.cityPeaks?.[cityKey]) {
+    return directWindow.cityPeaks[cityKey];
+  }
+
+  if (directWindow?.cityKey === cityKey) {
+    return {
+      peak: directWindow.peak || 0,
+      peakTime: directWindow.peakTime || "--:--",
+      peakAt: directWindow.peakAt || 0,
+      cityKey,
+    };
+  }
+
+  const wantedLabel = formatEventWindowLabel(event);
+  const windows = Object.values(peakDoc.eventWindows || {});
+
+  const sameTimeWindow = windows.find((window) => window?.label === wantedLabel);
+
+  if (sameTimeWindow?.cityPeaks?.[cityKey]) {
+    return sameTimeWindow.cityPeaks[cityKey];
+  }
+
+  return null;
 }
 
 function getEmbedCharSize(embed) {
@@ -2003,12 +2032,14 @@ const cityEvents = onlyEvent
     const lastWeekKey = getDateKeyOffsetFromDateKey(eventDateKey, -7);
 
 const currentWeekWindow = resolveEventWindowFromPeaks(peaks[eventDateKey], event);
-const previousDayWindow = resolveEventWindowFromPeaks(peaks[previousDayKey], event);
-const lastWeekWindow = resolveEventWindowFromPeaks(peaks[lastWeekKey], event);
+const previousDayWindow = resolveComparableCityWindowFromPeaks(peaks[previousDayKey], event, cityKey);
+const lastWeekWindow = resolveComparableCityWindowFromPeaks(peaks[lastWeekKey], event, cityKey);
 
-    const currentPeak = currentWeekWindow?.peak || 0;
-    const previousDayPeak = previousDayWindow?.peak || 0;
-    const lastWeekPeak = lastWeekWindow?.peak || 0;
+const currentCityWindow = resolveComparableCityWindowFromPeaks(peaks[eventDateKey], event, cityKey);
+
+const currentPeak = currentCityWindow?.peak || currentWeekWindow?.peak || 0;
+const previousDayPeak = previousDayWindow?.peak || 0;
+const lastWeekPeak = lastWeekWindow?.peak || 0;
 
     const diffPreviousDay = calculateDiff(currentPeak, previousDayPeak);
     const diffLastWeek = calculateDiff(currentPeak, lastWeekPeak);
