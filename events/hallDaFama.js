@@ -1597,15 +1597,20 @@ function parseHallWinnerLine(line = "", cityKey = "nobre") {
     .map(p => normalizeHallDisplay(p))
     .filter(Boolean);
 
-  const numericParts = parts.filter(p => /^\d{2,}$/.test(p));
-  const hasId = numericParts.length > 0;
+  const idMatch = cleanLine.match(/(?:^|[\s|<])(\d{2,})(?=\s|$|[|>])/);
+  const id = idMatch?.[1] || "";
+  const hasId = Boolean(id);
 
   if (hasId) {
-    const id = numericParts[0];
-
-    const idIndex = parts.findIndex(p => p === id);
+    const idIndex = parts.findIndex(p => p === id || p.startsWith(`${id} `));
     const beforeId = parts.slice(0, idIndex).filter(p => !looksLikePrizeOnly(p));
     const afterId = parts.slice(idIndex + 1).filter(p => !looksLikePrizeOnly(p));
+
+    const idPart = parts[idIndex] || "";
+    const idPartRest = normalizeHallDisplay(idPart.replace(id, "")).trim();
+    if (idPartRest && !looksLikePrizeOnly(idPartRest)) {
+      afterId.unshift(idPartRest);
+    }
 
     const playerName =
       beforeId[0] ||
@@ -1630,9 +1635,10 @@ function parseHallWinnerLine(line = "", cityKey = "nobre") {
     };
   }
 
-  const nameOnly = parts.find(p => !looksLikePrizeOnly(p)) || cleanLine;
+  const nameOnly = parts.find(p => !looksLikePrizeOnly(p)) || "";
 
   if (!nameOnly) return null;
+  if (looksLikePrizeOnly(nameOnly)) return null;
 
   const badWinnerName = normalizeHallName(nameOnly);
   if (
