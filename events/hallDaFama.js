@@ -2753,55 +2753,73 @@ function buildOrgsRankingEmbed(rankings) {
     await ch.send({ embeds: [embed] }).catch(() => {});
   }
 
-  async function findApprovalImagesForHall(client, hallMessage, parts) {
-    const approvalChannel = await client.channels.fetch(APPROVAL_CHANNEL_ID).catch(() => null);
-    if (!approvalChannel || !approvalChannel.isTextBased()) return [];
+async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
+  const approvalChannel = await client.channels.fetch(APPROVAL_CHANNEL_ID).catch(() => null);
+  if (!approvalChannel || !approvalChannel.isTextBased()) return [];
 
-    const messages = await approvalChannel.messages.fetch({ limit: 100 }).catch(() => null);
-    if (!messages) return [];
+  const messages = await approvalChannel.messages.fetch({ limit: 100 }).catch(() => null);
+  if (!messages) return [];
 
-    const hallEventName = normalizeHallName(parts.eventName);
-    const hallCreatedAt = hallMessage?.createdTimestamp || Date.now();
+  const hallEventName = normalizeHallName(parts.eventName || "");
+  const hallCreatedAt = hallMessage?.createdTimestamp || Date.now();
 
-    const candidates = messages
-      .filter(m => {
-        const diff = Math.abs((m.createdTimestamp || 0) - hallCreatedAt);
-        const withinSameWindow = diff <= 1000 * 60 * 60 * 12;
-
-        const embedText = m.embeds
-          .map(e => [
-            e.title,
-            e.description,
-            ...(e.fields || []).map(f => `${f.name} ${f.value}`)
-          ].flat().join(" "))
-          .join(" ");
-
-        return withinSameWindow && normalizeHallName(embedText).includes(hallEventName);
-      })
-      .sort((a, b) => Math.abs(a.createdTimestamp - hallCreatedAt) - Math.abs(b.createdTimestamp - hallCreatedAt));
-
+  function extractImagesFromApprovalMessage(approvalMsg) {
     const foundUrls = [];
 
-    for (const approvalMsg of candidates.values()) {
-      for (const emb of approvalMsg.embeds) {
-        if (emb.image?.url) foundUrls.push(emb.image.url);
-        if (emb.thumbnail?.url) foundUrls.push(emb.thumbnail.url);
+    for (const emb of approvalMsg.embeds || []) {
+      if (emb.image?.url) foundUrls.push(emb.image.url);
+      if (emb.thumbnail?.url) foundUrls.push(emb.thumbnail.url);
 
-        for (const field of emb.fields || []) {
-          if (/imagem/i.test(field.name)) {
-            const urls = String(field.value).match(/https?:\/\/\S+/gi) || [];
-            foundUrls.push(...urls);
-          }
+      for (const field of emb.fields || []) {
+        if (/imagem/i.test(field.name) || /image/i.test(field.name)) {
+          const urls = String(field.value || "").match(/https?:\/\/\S+/gi) || [];
+          foundUrls.push(...urls);
         }
       }
-
-      foundUrls.push(...[...approvalMsg.attachments.values()].map(a => a.url));
-
-      if (foundUrls.length > 0) break;
     }
 
-    return [...new Set(foundUrls)].filter(Boolean);
+    foundUrls.push(...[...approvalMsg.attachments.values()].map(a => a.url));
+
+    return uniqueImageUrls(foundUrls);
   }
+
+  const candidates = [...messages.values()]
+    .map(m => {
+      const diff = Math.abs((m.createdTimestamp || 0) - hallCreatedAt);
+
+      const embedText = (m.embeds || [])
+        .map(e => [
+          e.title,
+          e.description,
+          ...(e.fields || []).map(f => `${f.name} ${f.value}`)
+        ].filter(Boolean).join(" "))
+        .join(" ");
+
+      const images = extractImagesFromApprovalMessage(m);
+      const eventMatches =
+        hallEventName &&
+        hallEventName !== "evento" &&
+        normalizeHallName(embedText).includes(hallEventName);
+
+      return {
+        msg: m,
+        diff,
+        images,
+        eventMatches
+      };
+    })
+    .filter(item => {
+      if (item.diff > 1000 * 60 * 60 * 12) return false;
+      if (!item.images.length) return false;
+      return true;
+    })
+    .sort((a, b) => {
+      if (a.eventMatches !== b.eventMatches) return a.eventMatches ? -1 : 1;
+      return a.diff - b.diff;
+    });
+
+  return candidates[0]?.images || [];
+}
 
   async function autoCorrectDuplications(channel, client, options = {}) {
     const showProgress = options.showProgress ?? true;
@@ -3706,16 +3724,39 @@ if (isPrizesOnly) {
   const titleLine = lines.find(l => l.startsWith('# 🎉 :'));
   const oldEventName = titleLine?.match(/# 🎉 :  \*\*Santa Creators : (.*?)\*\* 🎉/)?.[1] || 'Evento';
   newEventName = newEventNameInput || oldEventName;
+
   const cityMatch = oldContent.match(/na \*\*(.*?)\*\*!/);
-        newCityName = cityMatch ? cityMatch[1] : "CIDADE";
-        const introLineIndex = lines.findIndex(l => l.startsWith('# 🎉 :')) + 2;
-        newIntro = lines[introLineIndex]?.split(/\s+\*\*.*?\*\*\s+na\s+/)[0]?.trim() || getRandomIntro();
-        const imageLines = lines.filter(l => l.startsWith('https://'));
-        newImageUrl = imageLines[0] || '';
-        newImageUrl2 = imageLines[1] || '';
-      } else {
-        newImageUrl2 = oldContent.split('\n').filter(l => l.startsWith('https://'))[1] || '';
-      }
+  newCityName = cityMatch ? cityMatch[1] : "CIDADE";
+
+  const introLineIndex = lines.findIndex(l => l.startsWith('# 🎉 :')) + 2;
+  newIntro = lines[introLineIndex]?.split(/\s+\*\*.*?\*\*\s+na\s+/)[0]?.trim() || getRandomIntro();
+
+  const oldParts = extractHallParts(oldContent);
+  const contentImageUrls = getImageUrlsFromContent(oldContent);
+  const attachmentImageUrls = getImageUrlsFromAttachments(messageToEdit);
+  const approvalImageUrls = await findApprovalImagesForHall(client, messageToEdit, {
+    ...oldParts,
+    eventName: oldEventName
+  });
+
+  const imageLines = uniqueImageUrls([
+    ...contentImageUrls,
+    ...attachmentImageUrls,
+    ...approvalImageUrls
+  ]);
+
+  newImageUrl = imageLines[0] || '';
+  newImageUrl2 = imageLines[1] || '';
+} else {
+  const contentImageUrls = getImageUrlsFromContent(oldContent);
+  const attachmentImageUrls = getImageUrlsFromAttachments(messageToEdit);
+  const imageLines = uniqueImageUrls([
+    ...contentImageUrls,
+    ...attachmentImageUrls
+  ]);
+
+  newImageUrl2 = imageLines[1] || '';
+}
 
       const mentionsLine = lines.find(l => l.includes('@everyone')) || '';
 
