@@ -1625,23 +1625,31 @@ function looksLikeMoneyPrizeId(cleanLine = "", id = "") {
 }
 
 function getWinnerIdFromParts(parts = []) {
-  const candidate = parts.find(part => {
-    const match = String(part || "").match(/^(\d{2,})(?:\s+(.+))?$/);
-    if (!match) return false;
+  for (let index = 0; index < parts.length; index++) {
+    const raw = String(parts[index] || "");
+    const match = raw.match(/^(\d{2,})(?:\s+(.+))?$/);
+    if (!match) continue;
 
     const id = match[1];
     const rest = normalizeHallName(match[2] || "");
+    const prev = normalizeHallName(parts[index - 1] || "");
+    const next = normalizeHallName(parts[index + 1] || "");
 
-    if (!rest) return true;
+    if (/\b\d+\s*(kk|k|mil|milhao|milhoes)\b/i.test(normalizeHallName(raw))) {
+      continue;
+    }
 
-    // 125 milhões / 100 milhões / 50 KK = premiação, NÃO é ID.
-    if (/\b(kk|k|mil|milhao|milhoes)\b/i.test(rest)) return false;
+    if (!rest && Number(id) < 1000) {
+      if (prev && looksLikePrizeOnly(next)) return id;
+      continue;
+    }
 
-    // 240227 Vip Ouro = ID + prêmio grudado, pode contar.
-    return id.length >= 4 && looksLikePrizeOnly(rest);
-  });
+    if (!rest) return id;
 
-  return candidate?.match(/^(\d{2,})/)?.[1] || "";
+    if (id.length >= 4 && looksLikePrizeOnly(rest)) return id;
+  }
+
+  return "";
 }
 
 function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento") {
@@ -3034,9 +3042,7 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
 
         let allImageUrls = approvalUrls.length
           ? uniqueImageUrls([
-              ...approvalUrls,
-              ...contentUrls,
-              ...attachmentUrls
+              ...approvalUrls
             ])
           : uniqueImageUrls([
               ...contentUrls,
@@ -3816,12 +3822,16 @@ if (isPrizesOnly) {
     winnerNames: extractWinnerNamesForApprovalMatch(oldContent)
   });
 
-  const imageLines = uniqueImageUrls([
-    manualImageUrlInput,
-    ...approvalImageUrls,
-    ...contentImageUrls,
-    ...attachmentImageUrls
-  ]);
+  const imageLines = uniqueImageUrls(
+    manualImageUrlInput
+      ? [manualImageUrlInput]
+      : approvalImageUrls.length
+        ? [...approvalImageUrls]
+        : [
+            ...contentImageUrls,
+            ...attachmentImageUrls
+          ]
+  );
 
   newImageUrl = imageLines[0] || '';
   newImageUrl2 = imageLines[1] || '';
