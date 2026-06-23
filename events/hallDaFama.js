@@ -199,6 +199,9 @@
     "919": "nobre",    // Miau
     "96353": "nobre",  // Moretti
     "194675": "nobre", // Biel / biellxs
+    "140764": "nobre", // Russo
+    "83984": "nobre",  // Hz
+    "212828": "nobre", // Pacheco
     "1903": "nobre",   // Rayyan
     "1976": "nobre",   // Rafael
     "83601": "nobre",  // Caio
@@ -965,7 +968,15 @@
   function getPlayerCityEvidenceFromHallContent(content = "") {
     const baseCityKey = detectHallCityKey(content);
     const winners = parseHallWinners(content, baseCityKey);
-    const player = winners.find(w => w.type === "player" && w.playerId);
+
+    const player = winners.find(w => {
+      if (w.type !== "player") return false;
+
+      return (
+        getManualPlayerCityKey(w.playerId) ||
+        getManualPlayerCityKeyByName(w.playerName)
+      );
+    });
 
     const cityKey =
       getManualPlayerCityKey(player?.playerId) ||
@@ -977,7 +988,7 @@
       cityKey,
       cityName: CITIES[cityKey]?.label || "Cidade",
       eventName: normalizeHallEventName(extractRawHallEventName(content), cityKey),
-      source: `player_override:${player.playerId}`,
+      source: `player_override:${player.playerId || player.playerName}`,
       confidence: 96
     };
   }
@@ -3161,8 +3172,41 @@ function addPlayerRankingPoint(rankings, playerWinner, hallMeta) {
     return embed;
   }
 
+function mergeDuplicateOrgRankingItems(items = []) {
+  const merged = {};
+
+  for (const item of items) {
+    const finalName = normalizeOrgDisplayName(item.name || "");
+    const finalCityKey = getManualOrgCityKey(finalName) || item.cityKey || "nobre";
+    const key = `${finalCityKey}:${normalizeHallKey(finalName)}`;
+
+    merged[key] ??= {
+      ...item,
+      key,
+      name: finalName,
+      cityKey: finalCityKey,
+      cityName: CITIES[finalCityKey]?.label || item.cityName || "Cidade Nobre",
+      total: 0,
+      events: {},
+      halls: []
+    };
+
+    merged[key].total += Number(item.total || 0);
+
+    for (const [eventName, count] of Object.entries(item.events || {})) {
+      const finalEventName = normalizeHallEventName(eventName, finalCityKey);
+      merged[key].events[finalEventName] ??= 0;
+      merged[key].events[finalEventName] += Number(count || 0);
+    }
+
+    merged[key].halls.push(...(item.halls || []));
+  }
+
+  return Object.values(merged);
+}
+
 function buildOrgsRankingEmbed(rankings) {
-  const topOrgs = applyDominantCityToRankingItems(Object.values(rankings.orgs || {}))
+  const topOrgs = mergeDuplicateOrgRankingItems(applyDominantCityToRankingItems(Object.values(rankings.orgs || {})))
     .filter(org => !isInvalidWinnerName(org.name))
     .filter(org => !looksLikePrizeOnly(org.name))
     .sort((a, b) => b.total - a.total)
@@ -3191,6 +3235,8 @@ function buildOrgsRankingEmbed(rankings) {
 
   function buildPlayersRankingEmbed(rankings) {
     const topPlayers = applyDominantCityToRankingItems(Object.values(rankings.players || {}))
+      .filter(player => !isInvalidWinnerName(player.name))
+      .filter(player => !looksLikePrizeOnly(player.name))
       .sort((a, b) => b.total - a.total)
       .slice(0, 10);
 
@@ -3252,10 +3298,15 @@ function buildOrgsRankingEmbed(rankings) {
     const marker = "HF_SCAN_PROGRESS_PANEL";
     const messages = await ch.messages.fetch({ limit: 20 }).catch(() => null);
 
-    const oldMsg = messages
+    let oldMsg = messages
       ?.filter(m => m.author.bot && m.author.id === client.user.id && m.content.includes(marker))
       ?.sort((a, b) => b.createdTimestamp - a.createdTimestamp)
       ?.first();
+
+    if (data.forceNewApprovalPanel && oldMsg) {
+      await oldMsg.delete().catch(() => {});
+      oldMsg = null;
+    }
 
     const totalHalls = Number(data.totalHalls ?? 0);
 const processed = Number(data.processed ?? 0);
@@ -3331,10 +3382,15 @@ const progressBar = `${"🟩".repeat(filled)}${"⬛".repeat(20 - filled)} ${prog
     const marker = "HF_SCAN_APPROVAL_PROGRESS_PANEL";
     const messages = await ch.messages.fetch({ limit: 20 }).catch(() => null);
 
-    const oldMsg = messages
+    let oldMsg = messages
       ?.filter(m => m.author.bot && m.author.id === client.user.id && m.content.includes(marker))
       ?.sort((a, b) => b.createdTimestamp - a.createdTimestamp)
       ?.first();
+
+    if (data.forceNewApprovalPanel && oldMsg) {
+      await oldMsg.delete().catch(() => {});
+      oldMsg = null;
+    }
 
     const totalHalls = Number(data.totalHalls ?? 0);
     const processed = Number(data.processed ?? 0);
@@ -3582,6 +3638,7 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
       if (showProgress) {
         await updateHallScanProgress(client, {
           status: "Iniciando busca completa no canal de Hall da Fama...",
+          forceNewApprovalPanel: true,
           currentDate: "Preparando...",
           currentEvent: "Preparando...",
           currentCity: "Preparando..."
@@ -3684,7 +3741,11 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
         );
       });
 
+      saveHallRankings(rankings);
+      await publishHallRankings(client, rankings);
+
       let edited = 0;
+      let correctionProcessed = 0;
 
       if (showProgress) {
         await updateHallScanProgress(client, {
@@ -3715,6 +3776,8 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
       }
 
       for (const msg of botHallMessages.values()) {
+        correctionProcessed++;
+
         const text = getHallMessageText(msg);
         const parts = extractHallParts(text);
 
@@ -3802,7 +3865,7 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
           });
         }
 
-        if (showProgress && (edited === 1 || edited % 10 === 0)) {
+        if (showProgress && (correctionProcessed === 1 || correctionProcessed % 10 === 0 || correctionProcessed === botHallMessages.length)) {
           await updateHallScanProgress(client, {
             status: "Corrigindo Halls do bot quando necessário...",
             totalMessages: allMessages.length,
@@ -3810,7 +3873,7 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
             botHalls: botHallMessages.length,
             edited,
             processed: 0,
-            progressCurrent: edited,
+            progressCurrent: correctionProcessed,
             progressTotal: botHallMessages.length,
             pending: Object.keys(rankings.pendingReview || {}).length,
             currentDate: msg.createdTimestamp ? `<t:${Math.floor(msg.createdTimestamp / 1000)}:F>` : "Não identificado",
