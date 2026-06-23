@@ -2822,12 +2822,18 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
         .join(" ");
 
       const fullText = `${m.content || ""}\n${embedText}`;
+      const normalizedFullText = normalizeHallName(fullText);
       const images = extractImagesFromApprovalMessage(m);
+
+      const isApproval =
+        normalizedFullText.includes("hall da fama aprovado") ||
+        normalizedFullText.includes("nova solicitacao de hall da fama") ||
+        normalizedFullText.includes("vencedores formatado");
 
       const eventMatches =
         hallEventName &&
         hallEventName !== "evento" &&
-        normalizeHallName(fullText).includes(hallEventName);
+        normalizedFullText.includes(hallEventName);
 
       const winnerScore = scoreApprovalMessageForHall(fullText, hallWinnerNames);
 
@@ -2835,19 +2841,22 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
         msg: m,
         diff,
         images,
+        isApproval,
         eventMatches,
         winnerScore
       };
     })
     .filter(item => {
-      if (item.diff > 1000 * 60 * 60 * 12) return false;
       if (!item.images.length) return false;
+      if (!item.isApproval) return false;
+      if (item.diff > 1000 * 60 * 60 * 6) return false;
       return true;
     })
     .sort((a, b) => {
       if (b.winnerScore !== a.winnerScore) return b.winnerScore - a.winnerScore;
+      if (a.diff !== b.diff) return a.diff - b.diff;
       if (a.eventMatches !== b.eventMatches) return a.eventMatches ? -1 : 1;
-      return a.diff - b.diff;
+      return 0;
     });
 
   return candidates[0]?.images || [];
