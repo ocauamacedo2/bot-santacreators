@@ -2202,7 +2202,7 @@ function getDominantCityFromHalls(halls = [], fallbackCityKey = "nobre") {
 
   return dominant || fallbackCityKey || "nobre";
 }
-
+///teste
 function applyDominantCityToRankingItems(items = []) {
   return items.map(item => {
     const cityKey = getDominantCityFromHalls(item.halls || [], item.cityKey || "nobre");
