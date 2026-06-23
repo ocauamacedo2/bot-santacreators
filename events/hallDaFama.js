@@ -1837,6 +1837,16 @@ function cleanHallWinnerLine(line = "") {
     .trim();
 }
 
+function cleanRankingPlayerName(value = "") {
+  return normalizeHallDisplay(value)
+    .replace(/^#\s*/i, "")
+    .replace(/^TOP\s*#?\s*\d+\s*[:\-]?\s*/i, "")
+    .replace(/^Top\s*#?\s*\d+\s*[:\-]?\s*/i, "")
+    .replace(/^(🥇|🥈|🥉)\s*/u, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
   function getHallMessageText(message) {
     const embedText = message?.embeds
       ?.map(embed => {
@@ -1987,9 +1997,12 @@ function cleanHallWinnerLine(line = "") {
     if (normalized.includes("sangue nos olhos")) return true;
     if (normalized.includes("foi insano")) return true;
     if (normalized.includes("como ficou depois")) return true;
-    if (normalized.includes("cidade 1")) return true;
+if (normalized.includes("cidade 1")) return true;
+if (normalized === "organizacao") return true;
+if (normalized === "organização") return true;
+if (/^top\s*\d+$/i.test(normalized)) return true;
 
-    return false;
+return false;
   }
 
 function extractOrgBetweenBraces(value = "") {
@@ -2715,9 +2728,11 @@ function addOrgRankingPoint(rankings, orgWinner, hallMeta) {
     });
   }
 
-  function addPlayerRankingPoint(rankings, playerWinner, hallMeta) {
-    const playerName = normalizeHallDisplay(playerWinner.playerName);
-    if (!playerName) return;
+function addPlayerRankingPoint(rankings, playerWinner, hallMeta) {
+  const playerName = cleanRankingPlayerName(playerWinner.playerName);
+  if (!playerName) return;
+  if (isInvalidWinnerName(playerName)) return;
+  if (looksLikePrizeOnly(playerName)) return;
 
     const key = getPlayerRankingKey(playerWinner);
     const cityKey =
@@ -3243,10 +3258,14 @@ function buildOrgsRankingEmbed(rankings) {
       ?.first();
 
     const totalHalls = Number(data.totalHalls ?? 0);
-    const processed = Number(data.processed ?? 0);
-    const percent = totalHalls > 0 ? Math.min(100, Math.floor((processed / totalHalls) * 100)) : 0;
-    const filled = Math.floor(percent / 5);
-    const progressBar = `${"🟩".repeat(filled)}${"⬛".repeat(20 - filled)} ${processed}/${totalHalls}`;
+const processed = Number(data.processed ?? 0);
+
+const progressTotal = Number(data.progressTotal ?? totalHalls);
+const progressCurrent = Number(data.progressCurrent ?? processed);
+
+const percent = progressTotal > 0 ? Math.min(100, Math.floor((progressCurrent / progressTotal) * 100)) : 0;
+const filled = Math.floor(percent / 5);
+const progressBar = `${"🟩".repeat(filled)}${"⬛".repeat(20 - filled)} ${progressCurrent}/${progressTotal}`;
 
     const hallUrl = data.currentHallUrl || "";
     const hallLine = hallUrl ? `[Abrir Hall atual](${hallUrl})` : "`aguardando link`";
@@ -3319,9 +3338,13 @@ function buildOrgsRankingEmbed(rankings) {
 
     const totalHalls = Number(data.totalHalls ?? 0);
     const processed = Number(data.processed ?? 0);
-    const percent = totalHalls > 0 ? Math.min(100, Math.floor((processed / totalHalls) * 100)) : 0;
+
+    const progressTotal = Number(data.progressTotal ?? totalHalls);
+    const progressCurrent = Number(data.progressCurrent ?? processed);
+
+    const percent = progressTotal > 0 ? Math.min(100, Math.floor((progressCurrent / progressTotal) * 100)) : 0;
     const filled = Math.floor(percent / 5);
-    const progressBar = `${"🟥".repeat(filled)}${"⬛".repeat(20 - filled)} ${processed}/${totalHalls}`;
+    const progressBar = `${"🟥".repeat(filled)}${"⬛".repeat(20 - filled)} ${progressCurrent}/${progressTotal}`;
 
     const hallUrl = data.currentHallUrl || "";
     const hallLine = hallUrl ? `[abrir Hall atual](${hallUrl})` : "`aguardando Hall atual`";
@@ -3340,7 +3363,7 @@ function buildOrgsRankingEmbed(rankings) {
       .addFields(
         { name: "📥 Mensagens buscadas", value: `**${data.totalMessages ?? 0}**`, inline: true },
         { name: "🏆 Halls encontrados", value: `**${data.totalHalls ?? 0}**`, inline: true },
-        { name: "📊 Processados", value: `**${data.processed ?? 0}/${data.totalHalls ?? 0}**`, inline: true },
+        { name: "📊 Processados", value: `**${progressCurrent}/${progressTotal}**`, inline: true },
         { name: "✏️ Editados", value: `**${data.edited ?? 0}**`, inline: true },
         { name: "⚠️ Revisões pendentes", value: `**${data.pending ?? 0}**`, inline: true },
         { name: "🧩 Fase", value: data.phase || "Varredura", inline: true },
@@ -3787,6 +3810,8 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
             botHalls: botHallMessages.length,
             edited,
             processed: 0,
+            progressCurrent: edited,
+            progressTotal: botHallMessages.length,
             pending: Object.keys(rankings.pendingReview || {}).length,
             currentDate: msg.createdTimestamp ? `<t:${Math.floor(msg.createdTimestamp / 1000)}:F>` : "Não identificado",
             currentHallPostedAt: msg.createdTimestamp ? `<t:${Math.floor(msg.createdTimestamp / 1000)}:F>` : "Não identificado",
