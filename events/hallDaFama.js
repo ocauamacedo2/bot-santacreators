@@ -721,8 +721,8 @@ function getEventCityEvidenceFromHallContent(content = "") {
     cityKey,
     cityName: CITIES[cityKey]?.label || "Cidade",
     eventName: normalizeHallEventName(rawEventName, cityKey),
-    source: `evento_nome:${rawEventName}`,
-    confidence: 94
+    source: `evento_nome_forte:${rawEventName}`,
+    confidence: 99
   };
 }
 
@@ -979,6 +979,9 @@ function pickBestHallEvidence(evidenceList = [], directEventName = "Evento") {
     } else if (source.startsWith("org_historico:")) {
       points += 30;
       scores[cityKey].hasOrg = true;
+    } else if (source.startsWith("evento_nome_forte:")) {
+      points += 90;
+      scores[cityKey].hasEventName = true;
     } else if (source.startsWith("evento_nome:")) {
       points += 38;
       scores[cityKey].hasEventName = true;
@@ -1032,8 +1035,14 @@ function pickBestHallEvidence(evidenceList = [], directEventName = "Evento") {
   const winnerHasStrong = winner.hasOrg || winner.hasCrono || winner.hasEventosDiarios || winner.hasEventName;
   const secondHasStrong = second && (second.hasOrg || second.hasCrono || second.hasEventosDiarios || second.hasEventName);
 
+  const strongCityFromEventName =
+    winner.hasEventName &&
+    winner.hasDirectHall &&
+    winner.eventMatches;
+
   const isStrongConflict =
     second &&
+    !strongCityFromEventName &&
     winnerHasStrong &&
     secondHasStrong &&
     winner.cityKey !== second.cityKey &&
@@ -1121,6 +1130,12 @@ function normalizeHallEventName(eventName = "", cityKey = "nobre") {
   const original = normalizeHallDisplay(eventName) || "Evento";
   const normalized = normalizeHallName(original);
 
+  // ✅ Eventos que carregam cidade no próprio nome precisam vir ANTES do filtro de texto grande.
+  if (normalized.includes("maresia do crime")) return "Maresia do Crime";
+  if (normalized.includes("grande do crime")) return "Grande do Crime";
+  if (normalized.includes("santa do crime")) return "Santa do Crime";
+  if (normalized.includes("nobre do crime")) return "Nobre do Crime";
+
   if (
     normalized.includes("vip") ||
     normalized.includes("rolepass") ||
@@ -1128,7 +1143,7 @@ function normalizeHallEventName(eventName = "", cityKey = "nobre") {
     normalized.includes("milhao") ||
     normalized.includes("foi insano") ||
     normalized.includes("vitoria so e possivel") ||
-    normalized.length > 80
+    normalized.length > 120
   ) {
     return "Evento";
   }
@@ -1219,6 +1234,26 @@ function normalizeHallEventName(eventName = "", cityKey = "nobre") {
   return original;
 }
 function extractRawHallEventName(content = "") {
+  const originalContent = String(content || "");
+
+  // ✅ Primeiro tenta pegar o título real do Hall ANTES de limpar emojis/quebras.
+  const titleMatch =
+    originalContent.match(/Santa\s*Creators\s*:\s*\*\*([^*\n]+)\*\*/i)?.[1]?.trim() ||
+    originalContent.match(/Santa\s*Creators\s*:\s*([^🎉\n]+)/i)?.[1]?.replace(/\*/g, "").trim();
+
+  if (titleMatch) {
+    return titleMatch;
+  }
+
+  // ✅ Depois tenta pegar a linha do troféu.
+  const trophyMatch =
+    originalContent.match(/🏆\s*\*\*([^*\n]+)\*\*\s+na\s+\*\*CIDADE/i)?.[1]?.trim() ||
+    originalContent.match(/🏆\s*([^!\n]+?)\s+na\s+CIDADE/i)?.[1]?.replace(/\*/g, "").trim();
+
+  if (trophyMatch) {
+    return trophyMatch;
+  }
+
   const raw = stripDiscordNoise(content);
   const lines = raw.split("\n").map(l => cleanOneLine(l)).filter(Boolean);
 
