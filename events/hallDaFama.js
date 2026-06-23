@@ -3958,10 +3958,7 @@ new ButtonBuilder()
       if (!hasPermission(interaction.member, interaction.user.id)) {
         return interaction.reply({ content: "🚫 Sem permissão para fazer varredura geral.", ephemeral: true });
       }
-
       await interaction.deferReply({ ephemeral: true });
-
-      const oldRankings = loadHallRankings();
 
       const hallChannel = await client.channels.fetch(HALL_CHANNEL_ID).catch(() => null);
       if (!hallChannel) {
