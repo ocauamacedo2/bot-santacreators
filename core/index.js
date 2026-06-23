@@ -551,6 +551,15 @@ const setupEventHandlers = () => {
   installMessageGuardian(client);
   installServerConfigGuardian(client);
 
+  // ✅ PRIORIDADE MÁXIMA: registra o listener do botão/modal de poderes em evento cedo.
+  // Sem isso, durante o boot pesado o botão existe, mas o handler ainda não foi instalado,
+  // causando "Esta interação falhou".
+  try {
+    iniciarRegistroEvento(client);
+  } catch (e) {
+    console.error("[CORE] Erro ao iniciar Registro Evento com prioridade:", e);
+  }
+
   client.on("channelCreate", async (c) => {
     try {
       await channelCreateLog.execute(c);
