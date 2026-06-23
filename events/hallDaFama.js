@@ -1624,6 +1624,26 @@ function looksLikeMoneyPrizeId(cleanLine = "", id = "") {
   return new RegExp(`(?:^|[\\s|<])${id}\\s*(?:kk|k|milh[oõ]es|milh[aã]o)\\b`, "i").test(cleanLine);
 }
 
+function getWinnerIdFromParts(parts = []) {
+  const candidate = parts.find(part => {
+    const match = String(part || "").match(/^(\d{2,})(?:\s+(.+))?$/);
+    if (!match) return false;
+
+    const id = match[1];
+    const rest = normalizeHallName(match[2] || "");
+
+    if (!rest) return true;
+
+    // 125 milhões / 100 milhões / 50 KK = premiação, NÃO é ID.
+    if (/\b(kk|k|mil|milhao|milhoes)\b/i.test(rest)) return false;
+
+    // 240227 Vip Ouro = ID + prêmio grudado, pode contar.
+    return id.length >= 4 && looksLikePrizeOnly(rest);
+  });
+
+  return candidate?.match(/^(\d{2,})/)?.[1] || "";
+}
+
 function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento") {
     const originalLine = String(line || "");
 
@@ -1654,9 +1674,8 @@ function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento")
       .map(p => normalizeHallDisplay(p))
       .filter(Boolean);
 
-    const idMatch = cleanLine.match(/(?:^|[\s|<])(\d{2,})(?=\s|$|[|>])/);
-    const id = idMatch?.[1] || "";
-    const hasId = Boolean(id) && !looksLikeMoneyPrizeId(cleanLine, id);
+    const id = getWinnerIdFromParts(parts);
+    const hasId = Boolean(id);
 
     if (hasId) {
       const idIndex = parts.findIndex(p => p === id || p.startsWith(`${id} `));
@@ -3008,15 +3027,21 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
         const contentUrls = getImageUrlsFromContent(msg.content || "");
         const attachmentUrls = getImageUrlsFromAttachments(msg);
 
-        let allImageUrls = uniqueImageUrls([
-          ...contentUrls,
-          ...attachmentUrls
-        ]);
+        const approvalUrls = await findApprovalImagesForHall(client, msg, {
+          ...parts,
+          winnerNames: extractWinnerNamesForApprovalMatch(text)
+        });
 
-        if (allImageUrls.length === 0) {
-          const approvalUrls = await findApprovalImagesForHall(client, msg, parts);
-          allImageUrls = uniqueImageUrls(approvalUrls);
-        }
+        let allImageUrls = approvalUrls.length
+          ? uniqueImageUrls([
+              ...approvalUrls,
+              ...contentUrls,
+              ...attachmentUrls
+            ])
+          : uniqueImageUrls([
+              ...contentUrls,
+              ...attachmentUrls
+            ]);
 
         const evidence = await resolveHallEvidence(client, msg, text);
 
@@ -3717,6 +3742,15 @@ modal.addComponents(
       .setStyle(TextInputStyle.Paragraph)
       .setPlaceholder("Edite os TOPs aqui.")
       .setRequired(true)
+  ),
+  new ActionRowBuilder().addComponents(
+    new TextInputBuilder()
+      .setCustomId("hf_edit_image_link")
+      .setLabel("🖼️ Link da imagem correta")
+      .setValue(imageUrl || "")
+      .setStyle(TextInputStyle.Short)
+      .setPlaceholder("Cole aqui o link da imagem correta se quiser forçar")
+      .setRequired(false)
   )
 );
       
@@ -3736,6 +3770,7 @@ const isPrizesOnly = interaction.customId.startsWith(MODAL_PRIZES_SUBMIT);
 const messageId = interaction.customId.split(":")[1];
 const newEventNameInput = interaction.fields.getTextInputValue("hf_edit_event_name")?.trim();
 const newWinnersText = interaction.fields.getTextInputValue("hf_edit_winners");
+const manualImageUrlInput = interaction.fields.getTextInputValue("hf_edit_image_link")?.trim() || "";
 
 let newEventName, newImageUrl, newImageUrl2, newCityName, newIntro;
 
@@ -3782,9 +3817,10 @@ if (isPrizesOnly) {
   });
 
   const imageLines = uniqueImageUrls([
+    manualImageUrlInput,
+    ...approvalImageUrls,
     ...contentImageUrls,
-    ...attachmentImageUrls,
-    ...approvalImageUrls
+    ...attachmentImageUrls
   ]);
 
   newImageUrl = imageLines[0] || '';
