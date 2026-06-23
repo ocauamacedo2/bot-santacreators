@@ -196,6 +196,7 @@
     "125": "nobre",    // RJ7 White
     "919": "nobre",    // Miau
     "96353": "nobre",  // Moretti
+    "194675": "nobre", // Biel / biellxs
     "1903": "nobre",   // Rayyan
     "1976": "nobre",   // Rafael
     "83601": "nobre",  // Caio
@@ -791,6 +792,58 @@
 
       return key === orgKey || key.includes(orgKey) || orgKey.includes(key);
     });
+  }
+
+  function findKnownOrgInsideWinnerName(value = "") {
+    const clean = normalizeHallDisplay(value);
+    const key = normalizeHallKey(clean);
+    if (!key) return "";
+
+    const exactAlias = ORG_NAME_ALIASES[key];
+    if (exactAlias) return exactAlias;
+
+    const exactOrg = KNOWN_ORG_NAMES.find(orgName => normalizeHallKey(orgName) === key);
+    if (exactOrg) return normalizeOrgDisplayName(exactOrg);
+
+    const foundOrg = KNOWN_ORG_NAMES
+      .map(orgName => ({
+        raw: orgName,
+        key: normalizeHallKey(orgName)
+      }))
+      .filter(item => item.key && item.key.length >= 3)
+      .filter(item => key.includes(item.key))
+      .sort((a, b) => b.key.length - a.key.length)
+      .at(0);
+
+    return foundOrg ? normalizeOrgDisplayName(foundOrg.raw) : "";
+  }
+
+  function extractPlayerOrgByKnownOrgName(value = "") {
+    const clean = normalizeHallDisplay(value);
+    const orgName = findKnownOrgInsideWinnerName(clean);
+    if (!orgName) return null;
+
+    const cleanKey = normalizeHallKey(clean);
+    const orgKey = normalizeHallKey(orgName);
+
+    if (cleanKey === orgKey) return null;
+
+    const playerName = normalizeHallDisplay(
+      clean
+        .replace(new RegExp(orgName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"), "")
+        .replace(/[-–—_]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+    );
+
+    if (!playerName) return null;
+    if (looksLikePrizeOnly(playerName)) return null;
+    if (isInvalidWinnerName(playerName)) return null;
+
+    return {
+      playerName,
+      orgName
+    };
   }
 
   function getManualOrgCityKey(orgName = "") {
@@ -1755,8 +1808,33 @@ function cleanHallWinnerLine(line = "") {
     const lines = raw.split("\n").map(l => l.trim()).filter(Boolean);
 
     const topLines = lines.filter(line => {
-      const clean = stripDiscordNoise(line);
-      return /^TOP\b/i.test(clean) || /^Vencedores?\b/i.test(clean);
+      const rawClean = stripDiscordNoise(line);
+      const cleanWinner = cleanHallWinnerLine(line);
+      const clean = normalizeHallName(cleanWinner);
+
+      const startsAsWinner =
+        /^TOP\b/i.test(rawClean) ||
+        /^Vencedores?\b/i.test(rawClean);
+
+      if (!startsAsWinner) return false;
+      if (!clean) return false;
+      if (clean === "vencedores") return false;
+      if (clean.includes("hall da fama")) return false;
+      if (clean.includes("uma salva de palmas")) return false;
+      if (clean.includes("mostraram habilidade")) return false;
+      if (clean.includes("mostrou habilidade")) return false;
+      if (clean.includes("esperteza")) return false;
+      if (clean.includes("sangue nos olhos")) return false;
+      if (clean.includes("foi insano")) return false;
+      if (clean.includes("everyone")) return false;
+      if (clean.includes("cidade")) return false;
+      if (clean.includes("cidadao")) return false;
+      if (clean.includes("santacreators")) return false;
+      if (clean.includes("lideres")) return false;
+      if (looksLikePrizeOnly(clean)) return false;
+      if (isInvalidWinnerName(clean)) return false;
+
+      return true;
     });
 
     if (topLines.length > 0) {
@@ -1766,12 +1844,25 @@ function cleanHallWinnerLine(line = "") {
     const hallIndex = lines.findIndex(line => normalizeHallName(line).includes("hall da fama"));
     if (hallIndex === -1) return [];
 
+    const winnerHeaderIndex = lines.findIndex((line, index) => {
+      if (index <= hallIndex) return false;
+
+      const clean = normalizeHallName(stripDiscordNoise(line));
+
+      return clean === "vencedores";
+    });
+
+    const startIndex = winnerHeaderIndex !== -1
+      ? winnerHeaderIndex + 1
+      : hallIndex + 1;
+
     return lines
-      .slice(hallIndex + 1)
+      .slice(startIndex)
       .filter(line => {
         const clean = normalizeHallName(stripDiscordNoise(line));
         if (!clean) return false;
         if (clean === "vencedores") return false;
+        if (clean.includes("hall da fama")) return false;
         if (clean.includes("uma salva de palmas")) return false;
         if (clean.includes("mostraram habilidade")) return false;
         if (clean.includes("mostrou habilidade")) return false;
@@ -1780,6 +1871,9 @@ function cleanHallWinnerLine(line = "") {
         if (clean.includes("foi insano")) return false;
         if (clean.includes("everyone")) return false;
         if (clean.includes("cidade")) return false;
+        if (clean.includes("cidadao")) return false;
+        if (clean.includes("santacreators")) return false;
+        if (clean.includes("lideres")) return false;
         if (looksLikePrizeOnly(clean)) return false;
         if (isInvalidWinnerName(clean)) return false;
         return true;
@@ -1895,6 +1989,17 @@ function getWinnerIdFromParts(parts = []) {
     }
 
     if (!rest && Number(id) < 1000) {
+      const afterNext = normalizeHallName(parts[index + 2] || "");
+
+      if (
+        next &&
+        !looksLikePrizeOnly(next) &&
+        !isInvalidWinnerName(next) &&
+        looksLikePrizeOnly(afterNext)
+      ) {
+        return id;
+      }
+
       if (prev && looksLikePrizeOnly(next)) return id;
       continue;
     }
@@ -2037,6 +2142,19 @@ function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento")
       badWinnerName.includes("cidade 1")
     ) {
       return null;
+    }
+
+    const mixedPlayerOrg = extractPlayerOrgByKnownOrgName(nameOnly);
+
+    if (mixedPlayerOrg) {
+      return {
+        type: "player",
+        playerName: normalizeHallDisplay(mixedPlayerOrg.playerName),
+        playerId: "",
+        orgName: normalizeOrgDisplayName(mixedPlayerOrg.orgName),
+        cityKey,
+        rawLine: originalLine
+      };
     }
 
     const shouldCountAsOrg =
@@ -2184,7 +2302,8 @@ function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento")
         `**Linha original:**\n\`${cleanHallWinnerLine(winner.rawLine || "Sem linha") || "Sem linha"}\`\n\n` +
         `**Evento:** ${hallMeta.eventName}\n` +
         `**Cidade:** ${hallMeta.cityName}\n` +
-        `**Mensagem:** ${hallMeta.messageId}`
+        `**Mensagem:** ${hallMeta.messageId}\n` +
+        `**Link do Hall:** ${hallMeta.jumpUrl ? `[abrir Hall](${hallMeta.jumpUrl})` : "`sem link`"}`
       )
       .setTimestamp();
 
@@ -2198,6 +2317,15 @@ function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento")
         .setLabel("👤 Contar como PESSOA")
         .setStyle(ButtonStyle.Success)
     );
+
+    if (hallMeta.jumpUrl) {
+      row.addComponents(
+        new ButtonBuilder()
+          .setLabel("🔗 Abrir Hall")
+          .setStyle(ButtonStyle.Link)
+          .setURL(hallMeta.jumpUrl)
+      );
+    }
 
     await reviewChannel.send({
       embeds: [embed],
@@ -2450,7 +2578,7 @@ function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento")
         }
 
         if (winner.orgName) {
-          const orgKey = getOrgRankingKey(winner.orgName, winner.cityKey);
+          const orgKey = `${getOrgRankingKey(winner.orgName, winner.cityKey)}:${normalizeHallKey(winner.rawLine || "")}`;
 
           if (!seenOrgs.has(orgKey)) {
             seenOrgs.add(orgKey);
@@ -2465,9 +2593,8 @@ function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento")
 
         continue;
       }
-
       if (winner.type === "org") {
-        const orgKey = getOrgRankingKey(winner.orgName, winner.cityKey);
+        const orgKey = `${getOrgRankingKey(winner.orgName, winner.cityKey)}:${normalizeHallKey(winner.rawLine || "")}`;
 
         if (!seenOrgs.has(orgKey)) {
           seenOrgs.add(orgKey);
@@ -2532,7 +2659,13 @@ function addOrgRankingPoint(rankings, orgWinner, hallMeta) {
     if (!playerName) return;
 
     const key = getPlayerRankingKey(playerWinner);
-    const cityKey = playerWinner.cityKey || hallMeta.cityKey || "nobre";
+    const cityKey =
+      getManualPlayerCityKey(playerWinner.playerId) ||
+      getManualPlayerCityKeyByName(playerName) ||
+      playerWinner.cityKey ||
+      hallMeta.cityKey ||
+      "nobre";
+
     const cityName = CITIES[cityKey]?.label || "Cidade Nobre";
 
     rankings.players[key] ??= {
@@ -2597,6 +2730,9 @@ function addOrgRankingPoint(rankings, orgWinner, hallMeta) {
 
     const hallMeta = {
       messageId: message.id,
+      channelId: message.channelId,
+      guildId: message.guildId,
+      jumpUrl: getMessageJumpUrl(message),
       cityKey,
       cityName: CITIES[cityKey]?.label || "Cidade Nobre",
       eventName,
@@ -2643,6 +2779,9 @@ function addOrgRankingPoint(rankings, orgWinner, hallMeta) {
           rankings.pendingReview[reviewKey] = {
             reviewKey,
             messageId: message.id,
+            channelId: message.channelId,
+            guildId: message.guildId,
+            jumpUrl: hallMeta.jumpUrl || getMessageJumpUrl(message),
             type: "org",
             name: orgWinner.orgName,
             rawLine: orgWinner.rawLine,
@@ -2685,6 +2824,9 @@ function addOrgRankingPoint(rankings, orgWinner, hallMeta) {
           rankings.pendingReview[reviewKey] = {
             reviewKey,
             messageId: message.id,
+            channelId: message.channelId,
+            guildId: message.guildId,
+            jumpUrl: hallMeta.jumpUrl || getMessageJumpUrl(message),
             type: "player",
             name: playerWinner.playerName,
             playerId: playerWinner.playerId || "",
@@ -3736,6 +3878,9 @@ new ButtonBuilder()
 
       const hallMeta = {
         messageId: pendingEntry.messageId,
+        channelId: pendingEntry.channelId || "",
+        guildId: pendingEntry.guildId || interaction.guildId,
+        jumpUrl: pendingEntry.jumpUrl || "",
         cityKey: pendingEntry.cityKey || "nobre",
         cityName: pendingEntry.cityName || CITIES[pendingEntry.cityKey]?.label || "Cidade Nobre",
         eventName: pendingEntry.eventName || "Evento",
@@ -3798,6 +3943,17 @@ new ButtonBuilder()
       }
 
       await interaction.deferReply({ ephemeral: true });
+
+      const oldRankings = loadHallRankings();
+
+      saveHallRankings({
+        orgs: {},
+        players: {},
+        reviewedMessages: {},
+        pendingReview: {},
+        manualReviews: oldRankings.manualReviews || {},
+        lastUpdatedAt: Date.now()
+      });
 
       const hallChannel = await client.channels.fetch(HALL_CHANNEL_ID).catch(() => null);
       if (!hallChannel) {
