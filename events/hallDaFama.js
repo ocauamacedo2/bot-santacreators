@@ -899,6 +899,7 @@
     const nameOverrides = {
       [normalizeHallKey("Miau")]: "nobre",
       [normalizeHallKey("Moretti")]: "nobre",
+      [normalizeHallKey("Royal")]: "nobre",
       [normalizeHallKey("Amado")]: "nobre",
       [normalizeHallKey("RJ7 White")]: "nobre",
       [normalizeHallKey("pablo dybeck")]: "nobre"
@@ -1445,6 +1446,22 @@
     ].filter(Boolean);
 
     const best = pickBestHallEvidence(evidenceList, directEventName);
+
+    if (
+      playerEvidence?.cityKey &&
+      directHallEvidence?.cityKey &&
+      playerEvidence.cityKey !== directHallEvidence.cityKey
+    ) {
+      return {
+        cityKey: playerEvidence.cityKey,
+        cityName: CITIES[playerEvidence.cityKey]?.label || "Cidade",
+        eventName: playerEvidence.eventName || directEventName || "Evento",
+        source: `${playerEvidence.source} VS ${directHallEvidence.source}`,
+        confidence: 96,
+        needsManualReview: true,
+        conflictWithCityKey: directHallEvidence.cityKey
+      };
+    }
 
     const eventBest = evidenceList
       .filter(item => item.eventName && item.eventName !== "Evento")
@@ -3945,15 +3962,6 @@ new ButtonBuilder()
       await interaction.deferReply({ ephemeral: true });
 
       const oldRankings = loadHallRankings();
-
-      saveHallRankings({
-        orgs: {},
-        players: {},
-        reviewedMessages: {},
-        pendingReview: {},
-        manualReviews: oldRankings.manualReviews || {},
-        lastUpdatedAt: Date.now()
-      });
 
       const hallChannel = await client.channels.fetch(HALL_CHANNEL_ID).catch(() => null);
       if (!hallChannel) {
