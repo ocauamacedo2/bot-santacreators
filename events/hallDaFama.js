@@ -2753,6 +2753,28 @@ function buildOrgsRankingEmbed(rankings) {
     await ch.send({ embeds: [embed] }).catch(() => {});
   }
 
+function extractWinnerNamesForApprovalMatch(text = "") {
+  const winners = parseHallWinners(text, detectHallCityKey(text));
+
+  return winners
+    .map(w => normalizeHallName(w.playerName || w.orgName || ""))
+    .filter(Boolean)
+    .filter(name => name.length >= 3);
+}
+
+function scoreApprovalMessageForHall(approvalText = "", hallWinnerNames = []) {
+  const normalized = normalizeHallName(approvalText);
+  let score = 0;
+
+  for (const winnerName of hallWinnerNames) {
+    if (normalized.includes(winnerName)) {
+      score += 80;
+    }
+  }
+
+  return score;
+}
+
 async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
   const approvalChannel = await client.channels.fetch(APPROVAL_CHANNEL_ID).catch(() => null);
   if (!approvalChannel || !approvalChannel.isTextBased()) return [];
@@ -2761,6 +2783,10 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
   if (!messages) return [];
 
   const hallEventName = normalizeHallName(parts.eventName || "");
+  const hallWinnerNames = parts.winnerNames?.length
+    ? parts.winnerNames
+    : extractWinnerNamesForApprovalMatch(getHallMessageText(hallMessage));
+
   const hallCreatedAt = hallMessage?.createdTimestamp || Date.now();
 
   function extractImagesFromApprovalMessage(approvalMsg) {
@@ -2795,17 +2821,22 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
         ].filter(Boolean).join(" "))
         .join(" ");
 
+      const fullText = `${m.content || ""}\n${embedText}`;
       const images = extractImagesFromApprovalMessage(m);
+
       const eventMatches =
         hallEventName &&
         hallEventName !== "evento" &&
-        normalizeHallName(embedText).includes(hallEventName);
+        normalizeHallName(fullText).includes(hallEventName);
+
+      const winnerScore = scoreApprovalMessageForHall(fullText, hallWinnerNames);
 
       return {
         msg: m,
         diff,
         images,
-        eventMatches
+        eventMatches,
+        winnerScore
       };
     })
     .filter(item => {
@@ -2814,6 +2845,7 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
       return true;
     })
     .sort((a, b) => {
+      if (b.winnerScore !== a.winnerScore) return b.winnerScore - a.winnerScore;
       if (a.eventMatches !== b.eventMatches) return a.eventMatches ? -1 : 1;
       return a.diff - b.diff;
     });
@@ -3736,7 +3768,8 @@ if (isPrizesOnly) {
   const attachmentImageUrls = getImageUrlsFromAttachments(messageToEdit);
   const approvalImageUrls = await findApprovalImagesForHall(client, messageToEdit, {
     ...oldParts,
-    eventName: oldEventName
+    eventName: oldEventName,
+    winnerNames: extractWinnerNamesForApprovalMatch(oldContent)
   });
 
   const imageLines = uniqueImageUrls([
@@ -3755,6 +3788,7 @@ if (isPrizesOnly) {
     ...attachmentImageUrls
   ]);
 
+  newImageUrl = imageLines[0] || newImageUrl || '';
   newImageUrl2 = imageLines[1] || '';
 }
 
