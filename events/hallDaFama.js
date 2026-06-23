@@ -2461,21 +2461,58 @@ async function upsertSingleRankingMessage(channel, payload) {
   await channel.send(finalPayload).catch(() => {});
 }
 
+function splitEmbedFieldValue(text = "", maxLength = 1000) {
+  const chunks = [];
+  let current = "";
+
+  for (const block of String(text || "").split("\n\n")) {
+    const next = current ? `${current}\n\n${block}` : block;
+
+    if (next.length <= maxLength) {
+      current = next;
+      continue;
+    }
+
+    if (current) chunks.push(current);
+
+    if (block.length <= maxLength) {
+      current = block;
+      continue;
+    }
+
+    for (let i = 0; i < block.length; i += maxLength) {
+      chunks.push(block.slice(i, i + maxLength));
+    }
+
+    current = "";
+  }
+
+  if (current) chunks.push(current);
+
+  return chunks.length ? chunks : ["Ainda não há dados suficientes."];
+}
+
 function buildRankingEmbed(title, description, summary, lines, color = "#9b59b6") {
-  return new EmbedBuilder()
+  const topText = lines.length ? lines.join("\n\n") : "Ainda não há dados suficientes.";
+  const topChunks = splitEmbedFieldValue(topText, 1000);
+
+  const embed = new EmbedBuilder()
     .setTitle(title)
     .setColor(color)
     .setDescription(description)
-    .addFields(
-      { name: "📌 Resumo", value: summary, inline: false },
-      {
-        name: "🏆 TOP 10",
-        value: lines.length ? lines.join("\n\n").slice(0, 3900) : "Ainda não há dados suficientes.",
-        inline: false
-      }
-    )
+    .addFields({ name: "📌 Resumo", value: summary.slice(0, 1000) || "Sem resumo.", inline: false })
     .setFooter({ text: "SantaCreators • Hall da Fama" })
     .setTimestamp();
+
+  topChunks.slice(0, 20).forEach((chunk, index) => {
+    embed.addFields({
+      name: index === 0 ? "🏆 TOP 10" : `🏆 TOP 10 — continuação ${index + 1}`,
+      value: chunk.slice(0, 1000) || "—",
+      inline: false
+    });
+  });
+
+  return embed;
 }
 
 function buildOrgsRankingEmbed(rankings) {
@@ -3297,9 +3334,16 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
     state.lastAutoCorrectScanKey = "";
     saveState(state);
 
-    await interaction.followUp({
-      content: "✅ Varredura geral finalizada! Rankings atualizados.",
-      ephemeral: true
+    await interaction.editReply({
+      content: "✅ Varredura geral finalizada. Ranking atualizado e logs enviados.",
+      components: []
+    }).catch(async () => {
+      await sendHallScanLog(client, {
+        title: "✅ Varredura geral finalizada",
+        color: "#2ecc71",
+        description: `A varredura terminou, mas a resposta privada expirou antes do Discord aceitar a atualização.`,
+        phase: "Finalização"
+      });
     });
 
     return true;
