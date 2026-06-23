@@ -687,6 +687,19 @@ function getManualPlayerCityKey(playerId = "") {
   return PLAYER_CITY_OVERRIDES[String(playerId || "").trim()] || null;
 }
 
+function getManualPlayerCityKeyByName(playerName = "") {
+  const key = normalizeHallKey(playerName);
+
+  const nameOverrides = {
+    [normalizeHallKey("Miau")]: "nobre",
+    [normalizeHallKey("Moretti")]: "nobre",
+    [normalizeHallKey("Amado")]: "nobre",
+    [normalizeHallKey("RJ7 White")]: "nobre",
+    [normalizeHallKey("pablo dybeck")]: "nobre"
+  };
+
+  return nameOverrides[key] || null;
+}
 function getManualReviewCityKey(messageId = "") {
   return state.confirmedCityReviews?.[messageId]?.cityKey || null;
 }
@@ -709,7 +722,10 @@ function getPlayerCityEvidenceFromHallContent(content = "") {
   const winners = parseHallWinners(content, baseCityKey);
   const player = winners.find(w => w.type === "player" && w.playerId);
 
-  const cityKey = getManualPlayerCityKey(player?.playerId);
+  const cityKey =
+    getManualPlayerCityKey(player?.playerId) ||
+    getManualPlayerCityKeyByName(player?.playerName);
+
   if (!cityKey) return null;
 
   return {
@@ -777,6 +793,33 @@ function getEventCityEvidenceFromHallContent(content = "") {
     eventName: normalizeHallEventName(rawEventName, cityKey),
     source: `evento_nome_forte:${rawEventName}`,
     confidence: 99
+  };
+}
+
+function getDirectHallCityEvidence(content = "") {
+  const cityKey = detectHallCityKey(content);
+  const rawEventName = extractRawHallEventName(content);
+  const eventName = normalizeHallEventName(rawEventName, cityKey);
+
+  const normalized = normalizeHallName(content);
+  const hasExplicitCity =
+    normalized.includes("cidade nobre") ||
+    normalized.includes("cidade santa") ||
+    normalized.includes("cidade grande") ||
+    normalized.includes("cidade maresia") ||
+    normalized.includes(" na nobre") ||
+    normalized.includes(" na santa") ||
+    normalized.includes(" na grande") ||
+    normalized.includes(" na maresia");
+
+  if (!cityKey || !hasExplicitCity || eventName === "Evento") return null;
+
+  return {
+    cityKey,
+    cityName: CITIES[cityKey]?.label || "Cidade",
+    eventName,
+    source: "hall_evento_e_cidade",
+    confidence: 97
   };
 }
 
@@ -943,6 +986,7 @@ async function findNearbyEvidenceInChannel(client, channelId, hallMessage, optio
 
   const hallTs = hallMessage.createdTimestamp || Date.now();
   const maxDiffMs = options.maxDiffMs || 1000 * 60 * 60 * 6;
+  const requiredEventName = normalizeHallEventName(options.requiredEventName || "");
 
   const candidates = [...messages.values()]
     .filter(msg => {
@@ -967,7 +1011,22 @@ async function findNearbyEvidenceInChannel(client, channelId, hallMessage, optio
         diff: Math.abs(hallTs - (msg.createdTimestamp || 0))
       };
     })
-    .filter(item => item.cityKey || item.eventName !== "Evento")
+    .filter(item => {
+      if (!item.cityKey && item.eventName === "Evento") return false;
+
+      // ✅ Se estamos procurando evidência para um Hall específico,
+      // Eventos Diários/Logs só podem contar se for o MESMO evento.
+      if (
+        requiredEventName &&
+        requiredEventName !== "Evento" &&
+        item.eventName !== "Evento" &&
+        !isSameNormalizedEventName(item.eventName, requiredEventName)
+      ) {
+        return false;
+      }
+
+      return true;
+    })
     .sort((a, b) => a.diff - b.diff);
 
   const best = candidates[0];
@@ -1039,9 +1098,13 @@ function pickBestHallEvidence(evidenceList = [], directEventName = "Evento") {
     } else if (source.startsWith("evento_nome:")) {
       points += 38;
       scores[cityKey].hasEventName = true;
+    } else if (source === "hall_evento_e_cidade") {
+      points += 95;
+      scores[cityKey].hasDirectHall = true;
+      scores[cityKey].hasEventName = true;
     } else if (source === "texto_do_hall") {
-      // ⚠️ O Hall é justamente o que pode estar errado.
-      // Então ele só serve como desempate fraco.
+      // ⚠️ O Hall simples pode estar errado.
+      // Mas Hall com evento + cidade explícitos entra como hall_evento_e_cidade.
       points += 8;
       scores[cityKey].hasDirectHall = true;
     } else {
@@ -1092,7 +1155,8 @@ function pickBestHallEvidence(evidenceList = [], directEventName = "Evento") {
   const strongCityFromEventName =
     winner.hasEventName &&
     winner.hasDirectHall &&
-    winner.eventMatches;
+    winner.eventMatches &&
+    winner.evidences.some(e => e.source === "hall_evento_e_cidade" || String(e.source || "").startsWith("evento_nome_forte:"));
 
   const isStrongConflict =
     second &&
@@ -1134,15 +1198,18 @@ async function resolveHallEvidence(client, hallMessage, fallbackContent = "") {
   const playerEvidence = getPlayerCityEvidenceFromHallContent(content);
   const orgEvidence = getOrgCityEvidenceFromHallContent(content);
   const eventNameEvidence = getEventCityEvidenceFromHallContent(content);
+  const directHallEvidence = getDirectHallCityEvidence(content);
 
   const eventosEvidence = await findNearbyEvidenceInChannel(client, EVENTOS_DIARIOS_CHANNEL_ID, hallMessage, {
     limit: 100,
-    maxDiffMs: 1000 * 60 * 60 * 8
+    maxDiffMs: 1000 * 60 * 60 * 8,
+    requiredEventName: directEventName
   });
 
   const cronoLogEvidence = await findNearbyEvidenceInChannel(client, CRONO_LOG_CHANNEL_ID, hallMessage, {
     limit: 100,
-    maxDiffMs: 1000 * 60 * 60 * 24
+    maxDiffMs: 1000 * 60 * 60 * 24,
+    requiredEventName: directEventName
   });
 
   const cronoStateEvidence = getCronoSlotForHallTimestamp(hallMessage.createdTimestamp || Date.now());
@@ -1152,6 +1219,7 @@ async function resolveHallEvidence(client, hallMessage, fallbackContent = "") {
     playerEvidence,
     orgEvidence,
     eventNameEvidence,
+    directHallEvidence,
     eventosEvidence,
     cronoStateEvidence,
     cronoLogEvidence,
@@ -1227,6 +1295,13 @@ function normalizeHallEventName(eventName = "", cityKey = "nobre") {
     normalized.includes("pantano")
   ) {
     return "Missão Pântano";
+  }
+
+  if (
+    normalized.includes("free fire creators") ||
+    normalized.includes("free fire")
+  ) {
+    return "Free Fire Creators";
   }
 
   if (
@@ -2311,8 +2386,7 @@ Cada Hall da Fama aprovado fortalece a história da sua organização.
 
 ${lines.length ? lines.join("\n\n") : "Ainda não há dados suficientes para montar o ranking."}
 
-🔄 Atualização automática: sempre que um novo Hall é publicado.
-🧹 Varredura geral: 1 vez por dia.
+
 🕒 Atualizado em: <t:${Math.floor((rankings.lastUpdatedAt || Date.now()) / 1000)}:F>`;
 }
 
@@ -2350,8 +2424,7 @@ Cada vitória individual registrada fortalece sua posição no ranking.
 
 ${lines.length ? lines.join("\n\n") : "Ainda não há dados suficientes para montar o ranking."}
 
-🔄 Atualização automática: sempre que um novo Hall é publicado.
-🧹 Varredura geral: 1 vez por dia.
+
 🕒 Atualizado em: <t:${Math.floor((rankings.lastUpdatedAt || Date.now()) / 1000)}:F>`;
 }
 
