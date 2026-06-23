@@ -70,9 +70,94 @@
     "real trem",
     "drift king",
     "medellin",
-    "tropa do caos"
+    "tropa do caos",
+    "akuma",
+    "anjos",
+    "anonymous",
+    "arcade",
+    "azuis",
+    "ballas",
+    "banzas",
+    "barragem",
+    "bellagio",
+    "berlim",
+    "black rose",
+    "black-rose",
+    "bombeiros",
+    "carclube",
+    "car clube",
+    "caribe",
+    "casadasprimas",
+    "casadas primas",
+    "china",
+    "cinzas",
+    "civil nobre",
+    "colapso",
+    "conexao33",
+    "conexão 33",
+    "corleone",
+    "cpx",
+    "dixavas",
+    "dogringo",
+    "dragon",
+    "driftking",
+    "drift king",
+    "egito",
+    "exercito",
+    "fazenda magnatas",
+    "fazendinha",
+    "franca",
+    "galaxy",
+    "groove",
+    "helipa",
+    "hollywood",
+    "hospital",
+    "imperio",
+    "inglaterra",
+    "italia",
+    "japao",
+    "juridico",
+    "kamikaze",
+    "kings",
+    "kraken",
+    "luxor",
+    "marrons",
+    "master",
+    "mecanica",
+    "mercenarios",
+    "metgala",
+    "mexico",
+    "overdrive",
+    "palazzo",
+    "penha",
+    "pinkmans",
+    "playboy",
+    "policia nobre",
+    "prn",
+    "real trem",
+    "real odio",
+    "renegados",
+    "rj mt",
+    "rj-mt",
+    "sindicato",
+    "submundo",
+    "tacaballa",
+    "tatica",
+    "tequilas",
+    "the house",
+    "tropa do 7",
+    "tropa do caos",
+    "tropa do chefinho",
+    "tropa do facada",
+    "umbrella",
+    "turquia",
+    "velkov",
+    "verdes",
+    "vidigal",
+    "virtude",
+    "visionarios",
+    "warlox"
   ];
-
   const ORG_CITY_OVERRIDES = {
     [normalizeStaticKey("trindade")]: "grande",
     [normalizeStaticKey("familia novaera")]: "grande",
@@ -1276,7 +1361,37 @@
     };
   }
 
-  function normalizeHallEventName(eventName = "", cityKey = "nobre") {
+  function cleanExtractedHallEventName(value = "") {
+  let text = normalizeHallDisplay(stripDiscordNoise(value));
+
+  text = text.replace(/^evento\s*[:\-]\s*/i, "");
+
+  const cutPatterns = [
+    /\s+#?\s*hall\s+da\s+fama\b/i,
+    /\s+uma\s+salva\s+de\s+palmas\b/i,
+    /\s+\btop\s*\d*\b/i,
+    /\s+\bvencedores\b/i,
+    /\s+\bmostraram?\s+habilidade\b/i,
+    /\s+\bfoi\s+insano\b/i
+  ];
+
+  let cutIndex = -1;
+
+  for (const pattern of cutPatterns) {
+    const match = text.match(pattern);
+    if (match?.index !== undefined) {
+      cutIndex = cutIndex === -1 ? match.index : Math.min(cutIndex, match.index);
+    }
+  }
+
+  if (cutIndex !== -1) {
+    text = text.slice(0, cutIndex);
+  }
+
+  return normalizeHallDisplay(text);
+}
+
+function normalizeHallEventName(eventName = "", cityKey = "nobre") {
     const original = normalizeHallDisplay(eventName) || "Evento";
     const normalized = normalizeHallName(original);
 
@@ -1468,7 +1583,7 @@
       raw.match(/evento\s+([^:\n]+)/i)?.[1]?.trim();
 
     if (directMatch) {
-      return directMatch;
+      return cleanExtractedHallEventName(directMatch);
     }
 
     const eventLine = lines.find(line => {
@@ -1505,7 +1620,7 @@
       );
     });
 
-    return eventLine || "Evento";
+    return eventLine ? cleanExtractedHallEventName(eventLine) : "Evento";
   }
 
   function normalizeImageUrl(url = "") {
@@ -1673,6 +1788,22 @@ function removeOrgBetweenBraces(value = "") {
   return String(value || "").replace(/\{[^}]+\}/g, " ").trim();
 }
 
+function extractOrgBetweenAngles(value = "") {
+  const match = String(value || "").match(/>\s*([^<]+?)\s*</);
+  const orgName = normalizeHallDisplay(match?.[1] || "");
+
+  if (!orgName) return "";
+  if (looksLikePrizeOnly(orgName)) return "";
+  if (isInvalidWinnerName(orgName)) return "";
+  if (!isKnownOrgName(orgName) && !getManualOrgCityKey(orgName)) return "";
+
+  return orgName;
+}
+
+function removeOrgBetweenAngles(value = "") {
+  return String(value || "").replace(/>\s*[^<]+?\s*</g, " ").trim();
+}
+
 function looksLikeMoneyPrizeId(cleanLine = "", id = "") {
   if (!id) return false;
 
@@ -1689,6 +1820,9 @@ function getWinnerIdFromParts(parts = []) {
     const rest = normalizeHallName(match[2] || "");
     const prev = normalizeHallName(parts[index - 1] || "");
     const next = normalizeHallName(parts[index + 1] || "");
+    if (rest && id.length >= 4 && looksLikePrizeOnly(rest)) {
+      return id;
+    }
 
     if (/\b\d+\s*(kk|k|mil|milhao|milhoes)\b/i.test(normalizeHallName(raw))) {
       continue;
@@ -1700,8 +1834,6 @@ function getWinnerIdFromParts(parts = []) {
     }
 
     if (!rest) return id;
-
-    if (id.length >= 4 && looksLikePrizeOnly(rest)) return id;
   }
 
   return "";
@@ -1760,7 +1892,8 @@ function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento")
 
     const cleanLineRaw = cleanHallWinnerLine(originalLine);
     const braceOrgName = extractOrgBetweenBraces(cleanLineRaw);
-    const cleanLine = removeOrgBetweenBraces(cleanLineRaw);
+    const angleOrgName = extractOrgBetweenAngles(cleanLineRaw);
+    const cleanLine = removeOrgBetweenAngles(removeOrgBetweenBraces(cleanLineRaw));
 
     if (!cleanLine) return null;
 
@@ -1815,7 +1948,7 @@ function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento")
         type: "player",
         playerName: normalizeHallDisplay(playerName),
         playerId: id,
-        orgName: braceOrgName || (possibleOrg ? normalizeHallDisplay(possibleOrg) : ""),
+        orgName: braceOrgName || angleOrgName || (possibleOrg ? normalizeHallDisplay(possibleOrg) : ""),
         cityKey,
         rawLine: originalLine
       };
@@ -1866,7 +1999,7 @@ function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento")
       type: "player",
       playerName: normalizeHallDisplay(nameOnly),
       playerId: "",
-      orgName: braceOrgName || (possibleOrgNoId ? normalizeHallDisplay(possibleOrgNoId) : ""),
+      orgName: braceOrgName || angleOrgName || (possibleOrgNoId ? normalizeHallDisplay(possibleOrgNoId) : ""),
       cityKey,
       rawLine: originalLine
     };
@@ -1950,11 +2083,18 @@ function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento")
       const embedTitle = msg.embeds?.[0]?.title || "";
       const embedDescription = msg.embeds?.[0]?.description || "";
 
-      const alreadyResolved = msg.components.length === 0;
+      const hasReviewButtons = msg.components?.some(row =>
+        row.components?.some(btn =>
+          String(btn.customId || "").startsWith(BTN_REVIEW_AS_ORG_PREFIX) ||
+          String(btn.customId || "").startsWith(BTN_REVIEW_AS_PLAYER_PREFIX) ||
+          String(btn.customId || "").startsWith(BTN_REVIEW_CITY_PREFIX)
+        )
+      );
 
-      return !alreadyResolved && (
+      return hasReviewButtons && (
         embedTitle.includes("Revisão Manual") ||
-        embedDescription.includes("Esse vencedor ficou confuso")
+        embedDescription.includes("Esse vencedor ficou confuso") ||
+        embedDescription.includes("A varredura encontrou conflito")
       );
     });
 
