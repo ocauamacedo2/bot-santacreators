@@ -84,7 +84,10 @@ const PLAYER_CITY_OVERRIDES = {
   "125": "nobre",    // RJ7 White
   "919": "nobre",    // Miau
   "96353": "nobre",  // Moretti
-  "1903": "nobre"    // Rayyan
+  "1903": "nobre",   // Rayyan
+  "1976": "nobre",   // Rafael
+  "83601": "nobre",  // Caio
+  "71537": "nobre"   // Gael
 };
 
 function normalizeStaticKey(value = "") {
@@ -139,6 +142,8 @@ const BTN_SCAN_ALL = "hf_scan_all";
 const BTN_REVIEW_AS_ORG_PREFIX = "hf_review_org_";
 const BTN_REVIEW_AS_PLAYER_PREFIX = "hf_review_player_";
 const BTN_REVIEW_CITY_PREFIX = "hf_review_city_";
+const BTN_REVIEW_EVENT_PREFIX = "hf_review_event_";
+const MODAL_REVIEW_EVENT_SUBMIT = "hf_review_event_modal";
 
 // ================= PERSISTÊNCIA =================
 const __filename = fileURLToPath(import.meta.url);
@@ -1451,6 +1456,9 @@ function extractHallWinnerLines(content = "") {
       if (!clean) return false;
       if (clean.includes("uma salva de palmas")) return false;
       if (clean.includes("mostraram habilidade")) return false;
+      if (clean.includes("mostrou habilidade")) return false;
+      if (clean.includes("esperteza")) return false;
+      if (clean.includes("sangue nos olhos")) return false;
       if (clean.includes("foi insano")) return false;
       if (clean.includes("everyone")) return false;
       if (clean.includes("cidade")) return false;
@@ -1482,9 +1490,26 @@ function looksLikePrizeOnly(value = "") {
 
 function parseHallWinnerLine(line = "", cityKey = "nobre") {
   const originalLine = String(line || "");
+
+  // Se o vencedor for uma menção Discord, ignora.
+  // Ex: TOP 🥇 : | <@1420173743434498098>
+  if (/<@!?\d+>/i.test(originalLine)) return null;
+
   const cleanLine = cleanHallWinnerLine(originalLine);
 
   if (!cleanLine) return null;
+
+  const legacyPlayerOrg = cleanLine.match(/^(.+?)\s*\(([^)]+)\)\s*$/i);
+  if (legacyPlayerOrg) {
+    return {
+      type: "player",
+      playerName: normalizeHallDisplay(legacyPlayerOrg[1]),
+      playerId: "",
+      orgName: normalizeHallDisplay(legacyPlayerOrg[2]),
+      cityKey,
+      rawLine: originalLine
+    };
+  }
 
   const parts = cleanLine
     .split(/\s*\|\s*|\s*<\s*/g)
@@ -1545,6 +1570,38 @@ function parseHallWinnerLine(line = "", cityKey = "nobre") {
     orgName: normalizeHallDisplay(nameOnly),
     cityKey,
     rawLine: originalLine
+  };
+}
+
+function extractInlineApplauseWinner(content = "", cityKey = "nobre") {
+  const lines = String(content || "").split("\n").map(l => l.trim()).filter(Boolean);
+
+  const line = lines.find(l => {
+    const normalized = normalizeHallName(l);
+    return normalized.includes("uma salva de palmas") && normalized.includes("brabo");
+  });
+
+  if (!line) return null;
+  if (/<@!?\d+>/i.test(line)) return null;
+
+  const cleaned = normalizeHallDisplay(stripDiscordNoise(line));
+  const match =
+    cleaned.match(/brabo\(a\)\s+(.+?)\s*$/i) ||
+    cleaned.match(/brabo\s+(.+?)\s*$/i);
+
+  const name = normalizeHallDisplay(match?.[1] || "")
+    .replace(/👏/g, "")
+    .trim();
+
+  if (!name || name.length > 40) return null;
+
+  return {
+    type: "player",
+    playerName: name,
+    playerId: "",
+    orgName: "",
+    cityKey,
+    rawLine: line
   };
 }
 
@@ -1845,6 +1902,11 @@ function parseHallWinners(content = "", cityKey = "nobre") {
     if (!parsed) continue;
 
     winners.push(parsed);
+  }
+
+  if (winners.length === 0) {
+    const inlineWinner = extractInlineApplauseWinner(content, cityKey);
+    if (inlineWinner) winners.push(inlineWinner);
   }
 
   return winners;
@@ -2293,7 +2355,7 @@ ${lines.length ? lines.join("\n\n") : "Ainda não há dados suficientes para mon
 🕒 Atualizado em: <t:${Math.floor((rankings.lastUpdatedAt || Date.now()) / 1000)}:F>`;
 }
 
-async function upsertSingleRankingMessage(channel, content) {
+async function upsertSingleRankingMessage(channel, payload) {
   if (!channel || !channel.isTextBased()) return;
 
   const messages = await channel.messages.fetch({ limit: 20 }).catch(() => null);
@@ -2302,20 +2364,100 @@ async function upsertSingleRankingMessage(channel, content) {
     ?.sort((a, b) => b.createdTimestamp - a.createdTimestamp)
     ?.first();
 
+  const finalPayload =
+    typeof payload === "string"
+      ? { content: payload.slice(0, 2000) }
+      : { content: "", embeds: payload.embeds || [] };
+
   if (botMessage) {
-    await botMessage.edit({ content: content.slice(0, 2000) }).catch(() => {});
+    await botMessage.edit(finalPayload).catch(() => {});
     return;
   }
 
-  await channel.send({ content: content.slice(0, 2000) }).catch(() => {});
+  await channel.send(finalPayload).catch(() => {});
+}
+
+function buildRankingEmbed(title, description, summary, lines, color = "#9b59b6") {
+  return new EmbedBuilder()
+    .setTitle(title)
+    .setColor(color)
+    .setDescription(description)
+    .addFields(
+      { name: "📌 Resumo", value: summary, inline: false },
+      {
+        name: "🏆 TOP 10",
+        value: lines.length ? lines.join("\n\n").slice(0, 3900) : "Ainda não há dados suficientes.",
+        inline: false
+      }
+    )
+    .setFooter({ text: "SantaCreators • Hall da Fama" })
+    .setTimestamp();
+}
+
+function buildOrgsRankingEmbed(rankings) {
+  const topOrgs = applyDominantCityToRankingItems(Object.values(rankings.orgs || {}))
+    .sort((a, b) => b.total - a.total)
+    .slice(0, 10);
+
+  const lines = topOrgs.map((org, index) => {
+    const pos = index + 1;
+    const medal = pos === 1 ? "🥇" : pos === 2 ? "🥈" : pos === 3 ? "🥉" : "🏆";
+
+    return `${medal} **TOP ${pos} — ${org.name}**
+🌆 ${org.cityName}
+🏆 Vitórias: **${org.total}**
+🎮 ${formatRankingEventBreakdown(org.events)}`;
+  });
+
+  return buildRankingEmbed(
+    "🏆 Ranking de ORGs — Hall da Fama",
+    "TOP 10 organizações que mais venceram eventos oficiais.",
+    `🏢 ORGs no ranking: **${Object.keys(rankings.orgs || {}).length}**
+📜 Halls analisados: **${Object.keys(rankings.reviewedMessages || {}).length}**
+⚠️ Revisões pendentes: **${Object.keys(rankings.pendingReview || {}).length}**`,
+    lines,
+    "#f1c40f"
+  );
+}
+
+function buildPlayersRankingEmbed(rankings) {
+  const topPlayers = applyDominantCityToRankingItems(Object.values(rankings.players || {}))
+    .sort((a, b) => b.total - a.total)
+    .slice(0, 10);
+
+  const lines = topPlayers.map((player, index) => {
+    const pos = index + 1;
+    const medal = pos === 1 ? "🥇" : pos === 2 ? "🥈" : pos === 3 ? "🥉" : "⭐";
+    const idText = player.playerId ? `\n🆔 ID: **${player.playerId}**` : "";
+
+    return `${medal} **TOP ${pos} — ${player.name}**${idText}
+🌆 ${player.cityName}
+🏆 Vitórias: **${player.total}**
+🎮 ${formatRankingEventBreakdown(player.events)}`;
+  });
+
+  return buildRankingEmbed(
+    "👑 Ranking de Pessoas — Hall da Fama",
+    "TOP 10 jogadores que mais venceram eventos oficiais.",
+    `👤 Pessoas no ranking: **${Object.keys(rankings.players || {}).length}**
+📜 Halls analisados: **${Object.keys(rankings.reviewedMessages || {}).length}**
+⚠️ Revisões pendentes: **${Object.keys(rankings.pendingReview || {}).length}**`,
+    lines,
+    "#5865f2"
+  );
 }
 
 async function publishHallRankings(client, rankings) {
   const orgsChannel = await client.channels.fetch(HALL_ORGS_RANKING_CHANNEL_ID).catch(() => null);
   const playersChannel = await client.channels.fetch(HALL_PLAYERS_RANKING_CHANNEL_ID).catch(() => null);
 
-  await upsertSingleRankingMessage(orgsChannel, buildOrgsRankingMessage(rankings));
-  await upsertSingleRankingMessage(playersChannel, buildPlayersRankingMessage(rankings));
+  await upsertSingleRankingMessage(orgsChannel, {
+    embeds: [buildOrgsRankingEmbed(rankings)]
+  });
+
+  await upsertSingleRankingMessage(playersChannel, {
+    embeds: [buildPlayersRankingEmbed(rankings)]
+  });
 }
 
 async function ensureHallRankingsDashboards(client) {
