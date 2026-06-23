@@ -1434,11 +1434,18 @@
         normalized.includes("karambit") ||
         normalized.includes("naval") ||
         normalized.includes("fuga") ||
+        normalized.includes("fuja") ||
         normalized.includes("pressao") ||
         normalized.includes("crime") ||
         normalized.includes("caos") ||
         normalized.includes("herois") ||
-        normalized.includes("cross")
+        normalized.includes("cross") ||
+        normalized.includes("labirinto") ||
+        normalized.includes("battle royale") ||
+        normalized.includes("bate bate") ||
+        normalized.includes("corrida mortal") ||
+        normalized.includes("presidiarios") ||
+        normalized.includes("resgate")
       );
     });
 
@@ -1595,14 +1602,37 @@
     return false;
   }
 
-  function parseHallWinnerLine(line = "", cityKey = "nobre") {
+function extractOrgBetweenBraces(value = "") {
+  const match = String(value || "").match(/\{([^}]+)\}/);
+  const orgName = normalizeHallDisplay(match?.[1] || "");
+
+  if (!orgName) return "";
+  if (looksLikePrizeOnly(orgName)) return "";
+  if (isInvalidWinnerName(orgName)) return "";
+
+  return orgName;
+}
+
+function removeOrgBetweenBraces(value = "") {
+  return String(value || "").replace(/\{[^}]+\}/g, " ").trim();
+}
+
+function looksLikeMoneyPrizeId(cleanLine = "", id = "") {
+  if (!id) return false;
+
+  return new RegExp(`(?:^|[\\s|<])${id}\\s*(?:kk|k|milh[oõ]es|milh[aã]o)\\b`, "i").test(cleanLine);
+}
+
+function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento") {
     const originalLine = String(line || "");
 
     // Se o vencedor for uma menção Discord, ignora.
     // Ex: TOP 🥇 : | <@1420173743434498098>
     if (/<@!?\d+>/i.test(originalLine)) return null;
 
-    const cleanLine = cleanHallWinnerLine(originalLine);
+    const cleanLineRaw = cleanHallWinnerLine(originalLine);
+    const braceOrgName = extractOrgBetweenBraces(cleanLineRaw);
+    const cleanLine = removeOrgBetweenBraces(cleanLineRaw);
 
     if (!cleanLine) return null;
 
@@ -1625,7 +1655,7 @@
 
     const idMatch = cleanLine.match(/(?:^|[\s|<])(\d{2,})(?=\s|$|[|>])/);
     const id = idMatch?.[1] || "";
-    const hasId = Boolean(id);
+    const hasId = Boolean(id) && !looksLikeMoneyPrizeId(cleanLine, id);
 
     if (hasId) {
       const idIndex = parts.findIndex(p => p === id || p.startsWith(`${id} `));
@@ -1656,7 +1686,7 @@
         type: "player",
         playerName: normalizeHallDisplay(playerName),
         playerId: id,
-        orgName: possibleOrg ? normalizeHallDisplay(possibleOrg) : "",
+        orgName: braceOrgName || (possibleOrg ? normalizeHallDisplay(possibleOrg) : ""),
         cityKey,
         rawLine: originalLine
       };
@@ -1680,9 +1710,25 @@
       return null;
     }
 
+    const normalizedEvent = normalizeHallEventName(eventName, cityKey);
+    const shouldCountAsOrg =
+      normalizedEvent === "Missão Rosa" ||
+      isKnownOrgName(nameOnly);
+
+    if (shouldCountAsOrg) {
+      return {
+        type: "org",
+        orgName: normalizeHallDisplay(nameOnly),
+        cityKey,
+        rawLine: originalLine
+      };
+    }
+
     return {
-      type: "org",
-      orgName: normalizeHallDisplay(nameOnly),
+      type: "player",
+      playerName: normalizeHallDisplay(nameOnly),
+      playerId: "",
+      orgName: braceOrgName,
       cityKey,
       rawLine: originalLine
     };
@@ -2011,9 +2057,10 @@
   function parseHallWinners(content = "", cityKey = "nobre") {
     const lines = extractHallWinnerLines(content);
     const winners = [];
+    const eventName = normalizeHallEventName(extractRawHallEventName(content), cityKey);
 
     for (const line of lines) {
-      const parsed = parseHallWinnerLine(line, cityKey);
+      const parsed = parseHallWinnerLine(line, cityKey, eventName);
       if (!parsed) continue;
 
       winners.push(parsed);
@@ -2542,7 +2589,7 @@ function addOrgRankingPoint(rankings, orgWinner, hallMeta) {
 
   topChunks.slice(0, 20).forEach((chunk, index) => {
     embed.addFields({
-      name: index === 0 ? "🏆 TOP 10" : "🏆 TOP 10 — mais posições",
+      name: index === 0 ? "🏆 TOP 10" : "\u200B",
       value: chunk.slice(0, 1000) || "—",
       inline: false
     });
