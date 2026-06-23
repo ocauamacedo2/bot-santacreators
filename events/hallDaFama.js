@@ -71,6 +71,15 @@
     "drift king",
     "medellin",
     "tropa do caos",
+    "familia red",
+    "red",
+    "prn",
+    "sintonia",
+    "cpx",
+    "complexo do odio",
+    "complexo-do-odio",
+    "complexo do ódio",
+    "tokyo",
     "akuma",
     "anjos",
     "anonymous",
@@ -733,11 +742,52 @@
       .trim();
   }
 
+  const ORG_NAME_ALIASES = {
+    [normalizeHallKey("tropado7")]: "Tropa do 7",
+    [normalizeHallKey("tropa do 7")]: "Tropa do 7",
+    [normalizeHallKey("TROPA DO 7")]: "Tropa do 7",
+    [normalizeHallKey("tropa7")]: "Tropa do 7",
+
+    [normalizeHallKey("cpx")]: "CPX",
+    [normalizeHallKey("complexo do odio")]: "CPX",
+    [normalizeHallKey("complexo do ódio")]: "CPX",
+    [normalizeHallKey("complexo-do-odio")]: "CPX",
+    [normalizeHallKey("complexodoódio")]: "CPX",
+    [normalizeHallKey("complexodoodio")]: "CPX",
+
+    [normalizeHallKey("familia espanha")]: "Espanha",
+    [normalizeHallKey("família espanha")]: "Espanha",
+    [normalizeHallKey("espanha")]: "Espanha",
+
+    [normalizeHallKey("familia red")]: "Familia Red",
+    [normalizeHallKey("família red")]: "Familia Red",
+    [normalizeHallKey("red")]: "Familia Red",
+
+    [normalizeHallKey("morro do sacola")]: "Morro do Sacola",
+    [normalizeHallKey("morrodosacola")]: "Morro do Sacola",
+    [normalizeHallKey("prn")]: "PRN",
+    [normalizeHallKey("sintonia")]: "Sintonia",
+    [normalizeHallKey("tokyo")]: "Tokyo",
+    [normalizeHallKey("toquio")]: "Tokyo",
+    [normalizeHallKey("tóquio")]: "Tokyo"
+  };
+
+  function normalizeOrgDisplayName(orgName = "") {
+    const clean = normalizeHallDisplay(orgName);
+    const alias = ORG_NAME_ALIASES[normalizeHallKey(clean)];
+
+    return alias || clean;
+  }
+
   function isKnownOrgName(value = "") {
     const key = normalizeHallKey(value);
+    if (!key) return false;
+
+    if (ORG_NAME_ALIASES[key]) return true;
 
     return KNOWN_ORG_NAMES.some(orgName => {
       const orgKey = normalizeHallKey(orgName);
+      if (!orgKey) return false;
 
       return key === orgKey || key.includes(orgKey) || orgKey.includes(key);
     });
@@ -1444,6 +1494,13 @@ function normalizeHallEventName(eventName = "", cityKey = "nobre") {
     }
 
     if (
+      normalized.includes("resgate o macedo") ||
+      normalized.includes("resgate macedo")
+    ) {
+      return "Resgate o Macedo";
+    }
+
+    if (
       normalized.includes("socializar sc") ||
       normalized.includes("socializar")
     ) {
@@ -1662,8 +1719,9 @@ function cleanHallWinnerLine(line = "") {
     .replace(/^novo emoji\s*\d+/i, "")
     .replace(/^emoji\s*\d+/i, "")
     .replace(/^GG\s*[:\-]\s*/i, "")
-    .replace(/^Vencedores?/i, "")
-    .replace(/^[:\-\s|]+/, "")
+    .replace(/^Vencedores?\s*/i, "")
+    .replace(/^(🥇|🥈|🥉)\s*/u, "")
+    .replace(/^[º°ª\.\:\-\s|]+/, "")
     .replace(/\s*\|\s*/g, " | ")
     .replace(/\s+/g, " ")
     .trim();
@@ -1713,6 +1771,7 @@ function cleanHallWinnerLine(line = "") {
       .filter(line => {
         const clean = normalizeHallName(stripDiscordNoise(line));
         if (!clean) return false;
+        if (clean === "vencedores") return false;
         if (clean.includes("uma salva de palmas")) return false;
         if (clean.includes("mostraram habilidade")) return false;
         if (clean.includes("mostrou habilidade")) return false;
@@ -1721,6 +1780,8 @@ function cleanHallWinnerLine(line = "") {
         if (clean.includes("foi insano")) return false;
         if (clean.includes("everyone")) return false;
         if (clean.includes("cidade")) return false;
+        if (looksLikePrizeOnly(clean)) return false;
+        if (isInvalidWinnerName(clean)) return false;
         return true;
       })
       .slice(0, 8);
@@ -1731,19 +1792,24 @@ function cleanHallWinnerLine(line = "") {
 
     return (
       /\bvip\b/i.test(normalized) ||
+      /\bvips\b/i.test(normalized) ||
+      /\bpass\b/i.test(normalized) ||
       /\brolepass\b/i.test(normalized) ||
+      /\brole\s*pass\b/i.test(normalized) ||
       /\bmilhao\b/i.test(normalized) ||
       /\bmilhoes\b/i.test(normalized) ||
-      /\bmilhoes\b/i.test(normalized) ||
       /\bkk\b/i.test(normalized) ||
+      /\bk\b/i.test(normalized) ||
       /\b50k\b/i.test(normalized) ||
       /\b100k\b/i.test(normalized) ||
       /\bpremio\b/i.test(normalized) ||
+      /\bpremiacao\b/i.test(normalized) ||
       /\bouro\b/i.test(normalized) ||
       /\bprata\b/i.test(normalized) ||
       /\bbronze\b/i.test(normalized) ||
       /\blancamento\b/i.test(normalized) ||
-      /\bdias\b/i.test(normalized)
+      /\bdias\b/i.test(normalized) ||
+      /\b7\s*dias\b/i.test(normalized)
     );
   }
 
@@ -1876,10 +1942,11 @@ function extractWinnerIdentityFromParts(parts = []) {
 
   const idIndex = parts.findIndex(p => p === id || p.startsWith(`${id} `));
   const beforeId = parts.slice(0, idIndex).filter(p => !looksLikePrizeOnly(p));
+  const afterId = parts.slice(idIndex + 1).filter(p => !looksLikePrizeOnly(p) && !isInvalidWinnerName(p));
 
   return {
     playerId: id,
-    playerName: normalizeHallDisplay(beforeId[0] || "")
+    playerName: normalizeHallDisplay(beforeId[0] || afterId[0] || "")
   };
 }
 
@@ -1948,7 +2015,7 @@ function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento")
         type: "player",
         playerName: normalizeHallDisplay(playerName),
         playerId: id,
-        orgName: braceOrgName || angleOrgName || (possibleOrg ? normalizeHallDisplay(possibleOrg) : ""),
+        orgName: normalizeOrgDisplayName(braceOrgName || angleOrgName || (possibleOrg ? normalizeHallDisplay(possibleOrg) : "")),
         cityKey,
         rawLine: originalLine
       };
@@ -1979,7 +2046,7 @@ function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento")
     if (shouldCountAsOrg) {
       return {
         type: "org",
-        orgName: normalizeHallDisplay(nameOnly),
+        orgName: normalizeOrgDisplayName(nameOnly),
         cityKey,
         rawLine: originalLine
       };
@@ -1999,7 +2066,7 @@ function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento")
       type: "player",
       playerName: normalizeHallDisplay(nameOnly),
       playerId: "",
-      orgName: braceOrgName || angleOrgName || (possibleOrgNoId ? normalizeHallDisplay(possibleOrgNoId) : ""),
+      orgName: normalizeOrgDisplayName(braceOrgName || angleOrgName || (possibleOrgNoId ? normalizeHallDisplay(possibleOrgNoId) : "")),
       cityKey,
       rawLine: originalLine
     };
