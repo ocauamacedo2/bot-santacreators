@@ -922,7 +922,7 @@ function buildSlotDate(baseDate, hour, minute) {
   return d;
 }
 
-function getCronoSlotForHallTimestamp(createdTimestamp = Date.now()) {
+function getCronoSlotForHallTimestamp(createdTimestamp = Date.now(), requiredEventName = "Evento") {
   try {
     if (!fs.existsSync(CRONO_FILE)) return null;
 
@@ -957,10 +957,21 @@ function getCronoSlotForHallTimestamp(createdTimestamp = Date.now()) {
           // ✅ Hall normalmente sai até algumas horas depois do evento.
           if (diffMs > 1000 * 60 * 60 * 8) continue;
 
+          const slotEventName = normalizeHallEventName(slot.eventName || "Evento", cityKey);
+          const required = normalizeHallEventName(requiredEventName || "Evento", cityKey);
+
+          if (
+            required &&
+            required !== "Evento" &&
+            (!slotEventName || slotEventName === "Evento" || !isSameNormalizedEventName(slotEventName, required))
+          ) {
+            continue;
+          }
+
           candidates.push({
             cityKey,
             cityName: CITIES[cityKey]?.label || slot.city,
-            eventName: normalizeHallEventName(slot.eventName || "Evento", cityKey),
+            eventName: slotEventName,
             source: `cronograma_state:${sourceType}:${dayKey}:${slot.time}`,
             confidence: sourceType === "madrugada" ? 88 : 82,
             diffMs: Math.abs(diffMs)
@@ -1016,15 +1027,10 @@ async function findNearbyEvidenceInChannel(client, channelId, hallMessage, optio
 
       // ✅ Se estamos procurando evidência para um Hall específico,
       // Eventos Diários/Logs só podem contar se for o MESMO evento.
-      if (
-        requiredEventName &&
-        requiredEventName !== "Evento" &&
-        item.eventName !== "Evento" &&
-        !isSameNormalizedEventName(item.eventName, requiredEventName)
-      ) {
-        return false;
+      if (requiredEventName && requiredEventName !== "Evento") {
+        if (!item.eventName || item.eventName === "Evento") return false;
+        if (!isSameNormalizedEventName(item.eventName, requiredEventName)) return false;
       }
-
       return true;
     })
     .sort((a, b) => a.diff - b.diff);
@@ -1212,7 +1218,7 @@ async function resolveHallEvidence(client, hallMessage, fallbackContent = "") {
     requiredEventName: directEventName
   });
 
-  const cronoStateEvidence = getCronoSlotForHallTimestamp(hallMessage.createdTimestamp || Date.now());
+  const cronoStateEvidence = getCronoSlotForHallTimestamp(hallMessage.createdTimestamp || Date.now(), directEventName);
 
   const evidenceList = [
     manualReviewEvidence,
@@ -2342,7 +2348,12 @@ function getDominantCityFromHalls(halls = [], fallbackCityKey = "nobre") {
 ///teste
 function applyDominantCityToRankingItems(items = []) {
   return items.map(item => {
-    const cityKey = getDominantCityFromHalls(item.halls || [], item.cityKey || "nobre");
+    const forcedCityKey =
+      getManualPlayerCityKey(item.playerId || "") ||
+      getManualPlayerCityKeyByName(item.name || "") ||
+      getManualOrgCityKey(item.name || "");
+
+    const cityKey = forcedCityKey || getDominantCityFromHalls(item.halls || [], item.cityKey || "nobre");
     const cityName = CITIES[cityKey]?.label || item.cityName || "Cidade Nobre";
 
     return {
