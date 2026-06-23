@@ -72,8 +72,19 @@ const ORG_CITY_OVERRIDES = {
 
   [normalizeStaticKey("vidigal")]: "nobre",
   [normalizeStaticKey("morro do sacola")]: "nobre",
+  [normalizeStaticKey("morro do sacola")]: "nobre",
   [normalizeStaticKey("tropa do 7")]: "nobre",
   [normalizeStaticKey("tropado7")]: "nobre"
+};
+
+const PLAYER_CITY_OVERRIDES = {
+  "138153": "nobre", // Amado
+  "6641": "nobre",   // pablo dybeck
+  "2593": "nobre",   // Miri
+  "125": "nobre",    // RJ7 White
+  "919": "nobre",    // Miau
+  "96353": "nobre",  // Moretti
+  "1903": "nobre"    // Rayyan
 };
 
 function normalizeStaticKey(value = "") {
@@ -667,6 +678,44 @@ function getHistoricalOrgCityKey(orgName = "") {
   return winner[0];
 }
 
+function getManualPlayerCityKey(playerId = "") {
+  return PLAYER_CITY_OVERRIDES[String(playerId || "").trim()] || null;
+}
+
+function getManualReviewCityKey(messageId = "") {
+  return state.confirmedCityReviews?.[messageId]?.cityKey || null;
+}
+
+function getManualReviewCityEvidence(messageId = "", content = "") {
+  const cityKey = getManualReviewCityKey(messageId);
+  if (!cityKey) return null;
+
+  return {
+    cityKey,
+    cityName: CITIES[cityKey]?.label || "Cidade",
+    eventName: normalizeHallEventName(extractRawHallEventName(content), cityKey),
+    source: `cidade_revisada:${messageId}`,
+    confidence: 100
+  };
+}
+
+function getPlayerCityEvidenceFromHallContent(content = "") {
+  const baseCityKey = detectHallCityKey(content);
+  const winners = parseHallWinners(content, baseCityKey);
+  const player = winners.find(w => w.type === "player" && w.playerId);
+
+  const cityKey = getManualPlayerCityKey(player?.playerId);
+  if (!cityKey) return null;
+
+  return {
+    cityKey,
+    cityName: CITIES[cityKey]?.label || "Cidade",
+    eventName: normalizeHallEventName(extractRawHallEventName(content), cityKey),
+    source: `player_override:${player.playerId}`,
+    confidence: 96
+  };
+}
+
 function getOrgCityEvidenceFromHallContent(content = "") {
   const baseCityKey = detectHallCityKey(content);
   const winners = parseHallWinners(content, baseCityKey);
@@ -1076,6 +1125,8 @@ async function resolveHallEvidence(client, hallMessage, fallbackContent = "") {
   const rawEventName = extractRawHallEventName(content);
   const directEventName = normalizeHallEventName(rawEventName, directCityKey);
 
+  const manualReviewEvidence = getManualReviewCityEvidence(hallMessage.id, content);
+  const playerEvidence = getPlayerCityEvidenceFromHallContent(content);
   const orgEvidence = getOrgCityEvidenceFromHallContent(content);
   const eventNameEvidence = getEventCityEvidenceFromHallContent(content);
 
@@ -1092,6 +1143,8 @@ async function resolveHallEvidence(client, hallMessage, fallbackContent = "") {
   const cronoStateEvidence = getCronoSlotForHallTimestamp(hallMessage.createdTimestamp || Date.now());
 
   const evidenceList = [
+    manualReviewEvidence,
+    playerEvidence,
     orgEvidence,
     eventNameEvidence,
     eventosEvidence,
@@ -1131,10 +1184,17 @@ function normalizeHallEventName(eventName = "", cityKey = "nobre") {
   const normalized = normalizeHallName(original);
 
   // ✅ Eventos que carregam cidade no próprio nome precisam vir ANTES do filtro de texto grande.
-  if (normalized.includes("maresia do crime")) return "Maresia do Crime";
-  if (normalized.includes("grande do crime")) return "Grande do Crime";
-  if (normalized.includes("santa do crime")) return "Santa do Crime";
-  if (normalized.includes("nobre do crime")) return "Nobre do Crime";
+  if (
+    normalized.includes("maresia do crime") ||
+    normalized.includes("grande do crime") ||
+    normalized.includes("santa do crime") ||
+    normalized.includes("nobre do crime")
+  ) {
+    if (cityKey === "grande") return "Grande do Crime";
+    if (cityKey === "santa") return "Santa do Crime";
+    if (cityKey === "maresia") return "Maresia do Crime";
+    return "Nobre do Crime";
+  }
 
   if (
     normalized.includes("vip") ||
@@ -1468,6 +1528,18 @@ function parseHallWinnerLine(line = "", cityKey = "nobre") {
 
   if (!nameOnly) return null;
 
+  const badWinnerName = normalizeHallName(nameOnly);
+  if (
+    badWinnerName.includes("mostrou habilidade") ||
+    badWinnerName.includes("esperteza") ||
+    badWinnerName.includes("sangue nos olhos") ||
+    badWinnerName.includes("foi insano") ||
+    badWinnerName.includes("como ficou depois") ||
+    badWinnerName.includes("cidade 1")
+  ) {
+    return null;
+  }
+
   return {
     type: "org",
     orgName: normalizeHallDisplay(nameOnly),
@@ -1522,7 +1594,9 @@ async function clearOldHallManualReviewMessages(client) {
     const embedTitle = msg.embeds?.[0]?.title || "";
     const embedDescription = msg.embeds?.[0]?.description || "";
 
-    return (
+    const alreadyResolved = msg.components.length === 0;
+
+    return !alreadyResolved && (
       embedTitle.includes("Revisão Manual") ||
       embedDescription.includes("Esse vencedor ficou confuso")
     );
@@ -1602,6 +1676,9 @@ async function findReviewContextMessages(client, hallMessage, eventName = "Event
 async function sendHallCityToManualReview(client, hallMessage, evidence, currentCityKey) {
   const reviewChannel = await client.channels.fetch(HALL_REVIEW_CHANNEL_ID).catch(() => null);
   if (!reviewChannel || !reviewChannel.isTextBased()) return;
+
+  const confirmed = state.confirmedCityReviews?.[hallMessage.id];
+  if (confirmed) return;
 
   const already = state.pendingCityReviews?.[hallMessage.id];
   if (already) return;
@@ -2072,10 +2149,25 @@ async function addHallToRankings(rankings, message, client = null) {
   return rankings;
 }
 
+function isValidRankingEventName(eventName = "") {
+  const normalized = normalizeHallName(eventName);
+
+  if (!eventName || eventName === "Evento") return false;
+  if (normalized.includes("vip")) return false;
+  if (normalized.includes("rolepass")) return false;
+  if (normalized.includes("ouro")) return false;
+  if (normalized.includes("como ficou depois")) return false;
+  if (normalized.includes("cidade 1")) return false;
+  if (normalized.includes("foi insano")) return false;
+  if (normalized.length > 70) return false;
+
+  return true;
+}
+
 function formatRankingEventBreakdown(events = {}) {
   const sorted = Object.entries(events)
     .map(([eventName, total]) => [normalizeHallEventName(eventName), total])
-    .filter(([eventName]) => eventName && eventName !== "Evento")
+    .filter(([eventName]) => isValidRankingEventName(eventName))
     .reduce((acc, [eventName, total]) => {
       acc[eventName] ??= 0;
       acc[eventName] += total;
@@ -2086,7 +2178,7 @@ function formatRankingEventBreakdown(events = {}) {
     .sort((a, b) => b[1] - a[1])
     .slice(0, 3);
 
-  if (finalSorted.length === 0) return "Sem eventos";
+  if (finalSorted.length === 0) return "Evento não identificado";
 
   return finalSorted
     .map(([eventName, total]) => `${eventName}: ${total}`)
@@ -3032,6 +3124,16 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
 
     state.pendingCityReviews ??= {};
     delete state.pendingCityReviews[messageId];
+
+    state.confirmedCityReviews ??= {};
+    state.confirmedCityReviews[messageId] = {
+      messageId,
+      cityKey,
+      cityName: CITIES[cityKey].label,
+      reviewedBy: interaction.user.id,
+      reviewedAt: Date.now()
+    };
+
     saveState(state);
 
     await interaction.message.edit({
