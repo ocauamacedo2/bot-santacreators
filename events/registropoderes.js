@@ -431,7 +431,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
 if (interaction.isButton() && interaction.customId === "abrir_registro") {
   // ✅ trava anti double-click / handler duplicado
   const lockKey = `REGPOD::abrir_registro::${interaction.user.id}`;
-  if (!regpodAcquireLock(lockKey, 4500)) return;
+  if (!regpodAcquireLock(lockKey, 12000)) {
+    return interaction
+      .reply({
+        content: "⏳ Calma, já estou abrindo o formulário. Evite clicar várias vezes.",
+        ephemeral: true,
+      })
+      .catch(() => {});
+  }
 
    // ✅ checagem rápida (sem fetch)
   const fast = isAuthorizedFast(interaction);
