@@ -3157,11 +3157,11 @@ function buildOrgsRankingEmbed(rankings) {
         .setLabel("🏆 Registrar Hall da Fama")
         .setStyle(ButtonStyle.Success)
         .setEmoji("👑"),
-      new ButtonBuilder()
-    .setCustomId(BTN_EDIT_LAST)
-    .setLabel("✏️ Editar TOPs")
-    .setStyle(ButtonStyle.Secondary)
-    .setEmoji("✍️"),
+new ButtonBuilder()
+.setCustomId(BTN_EDIT_LAST)
+.setLabel("✏️ Editar Evento/TOPs")
+.setStyle(ButtonStyle.Secondary)
+.setEmoji("✍️"),
       new ButtonBuilder()
         .setCustomId(BTN_EDIT_PRIZES)
         .setLabel("🎁 Editar Premiações")
@@ -3640,17 +3640,26 @@ function buildOrgsRankingEmbed(rankings) {
         .setCustomId(`${MODAL_PRIZES_SUBMIT}:${lastHallMessage.id}`)
         .setTitle(`✏️ Editar TOPs do Hall`);
 
-      modal.addComponents(
-        new ActionRowBuilder().addComponents(
-          new TextInputBuilder()
-            .setCustomId("hf_edit_winners")
-            .setLabel("🏆 TOPs / Vencedores")
-            .setValue(winnersText)
-            .setStyle(TextInputStyle.Paragraph)
-            .setPlaceholder("Edite somente os TOPs aqui.")
-            .setRequired(true)
-        )
-      );
+modal.addComponents(
+  new ActionRowBuilder().addComponents(
+    new TextInputBuilder()
+      .setCustomId("hf_edit_event_name")
+      .setLabel("🎮 Nome do Evento")
+      .setValue(eventName || "Evento")
+      .setStyle(TextInputStyle.Short)
+      .setPlaceholder("Ex: Missão Pântano")
+      .setRequired(true)
+  ),
+  new ActionRowBuilder().addComponents(
+    new TextInputBuilder()
+      .setCustomId("hf_edit_winners")
+      .setLabel("🏆 TOPs / Vencedores")
+      .setValue(winnersText)
+      .setStyle(TextInputStyle.Paragraph)
+      .setPlaceholder("Edite os TOPs aqui.")
+      .setRequired(true)
+  )
+);
       
       await interaction.showModal(modal);
       return true;
@@ -3664,18 +3673,19 @@ function buildOrgsRankingEmbed(rankings) {
       
       await interaction.deferReply({ ephemeral: true });
 
-      const isPrizesOnly = interaction.customId.startsWith(MODAL_PRIZES_SUBMIT);
-      const messageId = interaction.customId.split(":")[1];
-      const newWinnersText = interaction.fields.getTextInputValue("hf_edit_winners");
-      
-      let newEventName, newImageUrl, newImageUrl2, newCityName, newIntro;
-      
-      if (!isPrizesOnly) {
-        newEventName = interaction.fields.getTextInputValue("hf_edit_event_name");
-        newCityName = interaction.fields.getTextInputValue("hf_edit_city");
-        newIntro = interaction.fields.getTextInputValue("hf_edit_intro");
-        newImageUrl = interaction.fields.getTextInputValue("hf_edit_image");
-      }
+const isPrizesOnly = interaction.customId.startsWith(MODAL_PRIZES_SUBMIT);
+const messageId = interaction.customId.split(":")[1];
+const newEventNameInput = interaction.fields.getTextInputValue("hf_edit_event_name")?.trim();
+const newWinnersText = interaction.fields.getTextInputValue("hf_edit_winners");
+
+let newEventName, newImageUrl, newImageUrl2, newCityName, newIntro;
+
+if (!isPrizesOnly) {
+  newEventName = newEventNameInput;
+  newCityName = interaction.fields.getTextInputValue("hf_edit_city");
+  newIntro = interaction.fields.getTextInputValue("hf_edit_intro");
+  newImageUrl = interaction.fields.getTextInputValue("hf_edit_image");
+}
 
       const hallChannel = await client.channels.fetch(HALL_CHANNEL_ID).catch(() => null);
       if (!hallChannel) {
@@ -3692,10 +3702,11 @@ function buildOrgsRankingEmbed(rankings) {
       const lines = oldContent.split('\n');
       
       // Se for apenas prêmios, extraímos o resto da mensagem original
-      if (isPrizesOnly) {
-        const titleLine = lines.find(l => l.startsWith('# 🎉 :'));
-        newEventName = titleLine?.match(/# 🎉 :  \*\*Santa Creators : (.*?)\*\* 🎉/)?.[1] || 'Evento';
-        const cityMatch = oldContent.match(/na \*\*(.*?)\*\*!/);
+if (isPrizesOnly) {
+  const titleLine = lines.find(l => l.startsWith('# 🎉 :'));
+  const oldEventName = titleLine?.match(/# 🎉 :  \*\*Santa Creators : (.*?)\*\* 🎉/)?.[1] || 'Evento';
+  newEventName = newEventNameInput || oldEventName;
+  const cityMatch = oldContent.match(/na \*\*(.*?)\*\*!/);
         newCityName = cityMatch ? cityMatch[1] : "CIDADE";
         const introLineIndex = lines.findIndex(l => l.startsWith('# 🎉 :')) + 2;
         newIntro = lines[introLineIndex]?.split(/\s+\*\*.*?\*\*\s+na\s+/)[0]?.trim() || getRandomIntro();
