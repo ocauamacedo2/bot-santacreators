@@ -23,6 +23,8 @@
   const HALL_ORGS_RANKING_CHANNEL_ID = "1518696187237236816"; // Ranking de ORGs com mais GGs
   const HALL_PLAYERS_RANKING_CHANNEL_ID = "1518696133071863838"; // Ranking de Pessoas com mais GGs
   const HALL_REVIEW_CHANNEL_ID = "1518707314901651576"; // Canal para revisão manual de Halls confusos
+  const PAYMENT_EVENTS_CHANNEL_ID = "1387922662134775818"; // Canal dos botões/registros de pagamento de evento
+  const PAYMENT_CITY_REVIEW_CHANNEL_ID = "1518707314901651576"; // Canal para decidir CDD de pagamento sem cidade
   const HALL_SCAN_PROGRESS_CHANNEL_ID = "1518723758574276750"; // Painel auto-editável do progresso da varredura
   const HALL_SCAN_LOG_CHANNEL_ID = "1518723758574276750"; // Logs robustos da varredura
 
@@ -210,7 +212,28 @@
     "1903": "nobre",   // Rayyan
     "1976": "nobre",   // Rafael
     "83601": "nobre",  // Caio
-    "71537": "nobre"   // Gael
+    "71537": "nobre",  // Gael
+
+    "2597": "nobre",   // Lukinhas
+    "865": "nobre",    // Biel
+    "2410": "nobre",   // Hugo
+    "2402": "nobre",   // Revolta
+    "7414": "nobre",   // Messias
+
+    "1629": "nobre",   // Gui
+    "1848": "nobre",   // Tteuw
+    "1647": "nobre",   // Carlos
+    "38": "nobre",     // Marcola
+    "304": "nobre",    // Wellingtom
+    "736": "nobre",    // Rick
+    "3033": "nobre",   // Windows 10
+    "14995": "nobre",  // Cauazn
+    "10544": "nobre",  // HEBERTH
+    "2795": "nobre",   // WL
+    "9979": "nobre",   // Velber
+    "16105": "nobre",  // dry style
+    "52": "nobre",     // duda / duda22k
+    "1557": "nobre"    // bob macedo
   };
 
   function normalizeStaticKey(value = "") {
@@ -294,8 +317,11 @@
         data.orgs ??= {};
         data.players ??= {};
         data.reviewedMessages ??= {};
-        data.pendingReview ??= {};
+        data.reviewedPaymentMessages ??= {};
+        data.paymentEventKeys ??= {};
+        data.pendingPaymentCityReview ??= {};
         data.manualReviews ??= {};
+        data.pendingReview ??= {};
         data.lastUpdatedAt ??= Date.now();
 
         return data;
@@ -306,6 +332,9 @@
       orgs: {},
       players: {},
       reviewedMessages: {},
+      reviewedPaymentMessages: {},
+      paymentEventKeys: {},
+      pendingPaymentCityReview: {},
       pendingReview: {},
       manualReviews: {},
       lastUpdatedAt: Date.now()
@@ -1645,10 +1674,33 @@ function normalizeHallEventName(eventName = "", cityKey = "nobre") {
     return "Evento";
   }
 
+  if (normalized.includes("mini rei do crime")) return "Nobre do Crime";
+
+  if (normalized.includes("santa do crime")) {
+    if (cityKey === "nobre") return "Nobre do Crime";
+    if (cityKey === "maresia") return "Maresia do Crime";
+    if (cityKey === "grande") return "Grande do Crime";
+    return "Santa do Crime";
+  }
+
   if (normalized.includes("grande do crime")) return "Grande do Crime";
-  if (normalized.includes("santa do crime")) return "Santa do Crime";
   if (normalized.includes("maresia do crime")) return "Maresia do Crime";
   if (normalized.includes("nobre do crime")) return "Nobre do Crime";
+
+  if (
+    normalized.includes("pvp de machado no navio") ||
+    normalized.includes("machado no navio")
+  ) {
+    return "PvP de Machado no Navio";
+  }
+
+  if (
+    normalized.includes("pvp de facao") ||
+    normalized.includes("pvp de facão") ||
+    normalized.includes("todas as armas")
+  ) {
+    return "PvP de Facão + Todas as Armas";
+  }
 
   if (normalized.includes("santa royale")) return "Missão Rosa";
   if (normalized.includes("missao rosa")) return "Missão Rosa";
@@ -2980,6 +3032,492 @@ function addPlayerRankingPoint(rankings, playerWinner, hallMeta) {
     });
   }
 
+  function getPaymentEmbedText(message) {
+    const embedText = message?.embeds
+      ?.map(embed => {
+        const fieldsText = (embed.fields || [])
+          .map(field => `${field.name || ""}\n${field.value || ""}`)
+          .join("\n");
+
+        return [
+          embed.title || "",
+          embed.description || "",
+          fieldsText,
+          embed.footer?.text || "",
+          embed.author?.name || ""
+        ].filter(Boolean).join("\n");
+      })
+      .join("\n") || "";
+
+    return [
+      message?.content || "",
+      embedText
+    ].filter(Boolean).join("\n").trim();
+  }
+
+  function extractPaymentValueFromText(text = "", labels = []) {
+    const lines = String(text || "")
+      .split("\n")
+      .map(line => cleanOneLine(stripDiscordNoise(line)))
+      .filter(Boolean);
+
+    for (let i = 0; i < lines.length; i++) {
+      const normalizedLine = normalizeHallName(lines[i]);
+
+      const found = labels.some(label => normalizedLine === normalizeHallName(label));
+
+      if (found) {
+        return cleanOneLine(lines[i + 1] || "");
+      }
+    }
+
+    return "";
+  }
+
+  function getPaymentFieldValue(message, labels = []) {
+    const embed = message?.embeds?.[0];
+    const labelList = Array.isArray(labels) ? labels : [labels];
+
+    const field = embed?.fields?.find(f => {
+      const fieldName = normalizeHallName(f.name || "");
+
+      return labelList.some(label => {
+        const wanted = normalizeHallName(label);
+        return fieldName === wanted || fieldName.includes(wanted);
+      });
+    });
+
+    if (field?.value) return cleanOneLine(field.value);
+
+    return extractPaymentValueFromText(getPaymentEmbedText(message), labelList);
+  }
+
+  function parsePaymentWinner(value = "") {
+    const clean = normalizeHallDisplay(stripDiscordNoise(value));
+
+    const nameThenId = clean.match(/^(.+?)\s*[|/\\]\s*(\d{1,12})\b/i);
+    if (nameThenId) {
+      return {
+        playerName: cleanRankingPlayerName(nameThenId[1]),
+        playerId: String(nameThenId[2] || "").trim()
+      };
+    }
+
+    const idThenName = clean.match(/^(\d{1,12})\s*[|/\\]\s*(.+?)$/i);
+    if (idThenName) {
+      return {
+        playerName: cleanRankingPlayerName(idThenName[2]),
+        playerId: String(idThenName[1] || "").trim()
+      };
+    }
+
+    return {
+      playerName: cleanRankingPlayerName(clean),
+      playerId: ""
+    };
+  }
+
+  function normalizePaymentDateKey(value = "", fallbackTimestamp = Date.now()) {
+    const raw = cleanOneLine(value);
+
+    let match = raw.match(/\b(\d{1,2})\/(\d{1,2})\/(20\d{2})\b/);
+    if (match) {
+      return `${String(match[1]).padStart(2, "0")}/${String(match[2]).padStart(2, "0")}/${match[3]}`;
+    }
+
+    match = raw.match(/\b(\d{1,2})\/(\d{1,2})\b/);
+    if (match) {
+      const year = new Date(fallbackTimestamp).toLocaleDateString("pt-BR", {
+        timeZone: "America/Sao_Paulo",
+        year: "numeric"
+      });
+
+      return `${String(match[1]).padStart(2, "0")}/${String(match[2]).padStart(2, "0")}/${year}`;
+    }
+
+    return new Date(fallbackTimestamp).toLocaleDateString("pt-BR", {
+      timeZone: "America/Sao_Paulo"
+    });
+  }
+
+  function paymentDateKeyToTimestamp(dateKey = "") {
+    const match = String(dateKey || "").match(/^(\d{2})\/(\d{2})\/(20\d{2})$/);
+    if (!match) return 0;
+
+    return new Date(`${match[3]}-${match[2]}-${match[1]}T12:00:00-03:00`).getTime();
+  }
+
+  function isSameOrClosePaymentDate(a = "", b = "") {
+    const timeA = paymentDateKeyToTimestamp(a);
+    const timeB = paymentDateKeyToTimestamp(b);
+
+    if (!timeA || !timeB) return a === b;
+
+    return Math.abs(timeA - timeB) <= 1000 * 60 * 60 * 36;
+  }
+
+  function getPaymentCityKey(message, winner = null) {
+    const text = getPaymentEmbedText(message);
+    const normalized = normalizeHallName(text);
+
+    if (
+      normalized.includes("cidade nobre") ||
+      normalized.includes(" nobre") ||
+      text.includes(CITIES.nobre.roleId)
+    ) return "nobre";
+
+    if (
+      normalized.includes("cidade santa") ||
+      normalized.includes(" santa") ||
+      text.includes(CITIES.santa.roleId)
+    ) return "santa";
+
+    if (
+      normalized.includes("cidade grande") ||
+      normalized.includes(" grande") ||
+      text.includes(CITIES.grande.roleId)
+    ) return "grande";
+
+    if (
+      normalized.includes("cidade maresia") ||
+      normalized.includes(" maresia") ||
+      text.includes(CITIES.maresia.roleId)
+    ) return "maresia";
+
+    const byId = getManualPlayerCityKey(winner?.playerId || "");
+    if (byId) return byId;
+
+    const byName = getManualPlayerCityKeyByName(winner?.playerName || "");
+    if (byName) return byName;
+
+    return null;
+  }
+
+  function isPaymentApproved(message) {
+    const rawText = getPaymentEmbedText(message);
+    const text = normalizeHallName(rawText);
+
+    if (!text.includes("registro de pagamento de evento")) return false;
+
+    if (text.includes("reprovado")) return false;
+    if (text.includes("recusado")) return false;
+    if (text.includes("nao pago")) return false;
+    if (text.includes("não pago")) return false;
+    if (text.includes("errado")) return false;
+    if (text.includes("fez errado")) return false;
+
+    const hasApprovedStatus =
+      /✅\s*pago/i.test(rawText) ||
+      /\bstatus\s+✅?\s*pago\b/i.test(text) ||
+      /\bultima decisao\s+pago por\b/i.test(text) ||
+      /\bultima decisão\s+pago por\b/i.test(rawText.toLowerCase()) ||
+      /\bpago por\b/i.test(text);
+
+    return hasApprovedStatus;
+  }
+
+  function getPaymentPlayerKey(playerId = "", playerName = "") {
+    return playerId
+      ? `id:${String(playerId).trim()}`
+      : `name:${normalizeHallKey(playerName)}`;
+  }
+
+  function getPaymentEventKey({ eventName, eventDateKey, cityKey, playerId, playerName, messageId, createdTimestamp }) {
+    const playerKey = getPaymentPlayerKey(playerId, playerName);
+
+    return [
+      normalizeHallKey(eventName),
+      eventDateKey,
+      cityKey || "sem-cidade",
+      playerKey,
+      messageId || createdTimestamp || Date.now()
+    ].join("|");
+  }
+
+  function findDuplicateNearbyPaymentEvent(rankings, { eventName, eventDateKey, cityKey, playerId, playerName, createdTimestamp, messageId }) {
+    const eventKey = normalizeHallKey(eventName);
+    const playerKey = getPaymentPlayerKey(playerId, playerName);
+    const currentTs = Number(createdTimestamp || 0);
+    const THREE_HOURS_MS = 1000 * 60 * 60 * 3;
+
+    for (const payment of Object.values(rankings.paymentEventKeys || {})) {
+      if (!payment) continue;
+      if (payment.messageId === messageId) continue;
+
+      const sameEvent = normalizeHallKey(payment.eventName || "") === eventKey;
+      const sameCity = payment.cityKey === cityKey;
+      const samePlayer = getPaymentPlayerKey(payment.playerId || "", payment.playerName || "") === playerKey;
+      const sameOrCloseDate = isSameOrClosePaymentDate(payment.eventDateKey || "", eventDateKey);
+
+      if (!sameEvent || !sameCity || !samePlayer || !sameOrCloseDate) continue;
+
+      const oldTs = Number(payment.createdTimestamp || payment.at || 0);
+
+      if (oldTs && currentTs) {
+        if (Math.abs(currentTs - oldTs) <= THREE_HOURS_MS) return payment;
+        continue;
+      }
+
+      return payment;
+    }
+
+    return null;
+  }
+
+  function playerAlreadyHasHallForEvent(rankings, { eventName, eventDateKey, cityKey, playerId, playerName }) {
+    const playerKey = getPlayerRankingKey({
+      playerName,
+      playerId,
+      cityKey
+    });
+
+    const player = rankings.players?.[playerKey];
+    if (!player?.halls?.length) return false;
+
+    const eventKey = normalizeHallKey(eventName);
+
+    return player.halls.some(hall => {
+      const hallEventKey = normalizeHallKey(hall.eventName || "");
+      const hallDateKey = new Date(hall.at || Date.now()).toLocaleDateString("pt-BR", {
+        timeZone: "America/Sao_Paulo"
+      });
+
+      return (
+        hallEventKey === eventKey &&
+        hall.cityKey === cityKey &&
+        isSameOrClosePaymentDate(hallDateKey, eventDateKey)
+      );
+    });
+  }
+
+  async function sendPaymentCityReviewOnce(client, rankings, message, winner, eventName, eventDateKey) {
+    const playerReviewKey = winner.playerId
+      ? `id:${winner.playerId}`
+      : `name:${normalizeHallKey(winner.playerName)}`;
+
+    if (!playerReviewKey) return;
+
+    rankings.pendingPaymentCityReview ??= {};
+
+    if (rankings.pendingPaymentCityReview[playerReviewKey]) return;
+
+    rankings.pendingPaymentCityReview[playerReviewKey] = {
+      playerReviewKey,
+      playerName: winner.playerName,
+      playerId: winner.playerId || "",
+      eventName,
+      eventDateKey,
+      messageId: message.id,
+      jumpUrl: getMessageJumpUrl(message),
+      createdAt: Date.now()
+    };
+
+    const ch = await client.channels.fetch(PAYMENT_CITY_REVIEW_CHANNEL_ID).catch(() => null);
+    if (!ch || !ch.isTextBased()) return;
+
+    await ch.send({
+      content:
+        `⚠️ **Pagamento sem CDD identificado**\n\n` +
+        `👤 Player: **${winner.playerName}** ${winner.playerId ? `| \`${winner.playerId}\`` : ""}\n` +
+        `🏁 Evento: **${eventName}**\n` +
+        `📅 Data do Evento: **${eventDateKey}**\n` +
+        `🔗 Registro: ${getMessageJumpUrl(message)}\n\n` +
+        `Macedo, decide a CDD desse player uma vez só. Depois coloca o ID dele no \`PLAYER_CITY_OVERRIDES\` pra não perguntar de novo.`
+    }).catch(() => {});
+  }
+
+  async function addPaymentEventsToPlayerRankings(rankings, client) {
+    const channel = await client.channels.fetch(PAYMENT_EVENTS_CHANNEL_ID).catch(() => null);
+    if (!channel || !channel.isTextBased()) return rankings;
+
+    rankings.reviewedPaymentMessages ??= {};
+    rankings.paymentEventKeys ??= {};
+    rankings.pendingPaymentCityReview ??= {};
+
+    let beforeId = null;
+    let scanned = 0;
+    let counted = 0;
+    let skipped = 0;
+
+    while (scanned < 3000) {
+      const batch = await channel.messages.fetch({
+        limit: 100,
+        ...(beforeId ? { before: beforeId } : {})
+      }).catch(() => null);
+
+      if (!batch?.size) break;
+
+      const messages = [...batch.values()];
+      beforeId = messages[messages.length - 1]?.id;
+
+      for (const message of messages) {
+        scanned++;
+
+        if (rankings.reviewedPaymentMessages[message.id]) continue;
+        if (!message.embeds?.length && !message.content) continue;
+
+        if (!isPaymentApproved(message)) {
+          skipped++;
+          continue;
+        }
+
+        const eventRaw = getPaymentFieldValue(message, [
+          "Evento",
+          "🏷️ Evento",
+          ":label: Evento"
+        ]) || "Evento";
+
+        const winnerRaw = getPaymentFieldValue(message, [
+          "Ganhador",
+          "👤 Ganhador",
+          ":bust_in_silhouette: Ganhador"
+        ]);
+
+        const dateRaw = getPaymentFieldValue(message, [
+          "Data do Evento",
+          "📅 Data do Evento",
+          ":date: Data do Evento"
+        ]);
+
+        const winner = parsePaymentWinner(winnerRaw);
+
+        if (!winner.playerName || isInvalidWinnerName(winner.playerName)) {
+          skipped++;
+          rankings.reviewedPaymentMessages[message.id] = {
+            skipped: true,
+            reason: "ganhador_invalido",
+            at: Date.now()
+          };
+          continue;
+        }
+
+        const cityKey = getPaymentCityKey(message, winner);
+        const eventDateKey = normalizePaymentDateKey(dateRaw, message.createdTimestamp || Date.now());
+        const eventName = normalizeHallEventName(eventRaw, cityKey || "nobre");
+
+        if (!cityKey) {
+          skipped++;
+          await sendPaymentCityReviewOnce(client, rankings, message, winner, eventName, eventDateKey);
+
+          rankings.reviewedPaymentMessages[message.id] = {
+            skipped: true,
+            reason: "sem_cidade",
+            playerName: winner.playerName,
+            playerId: winner.playerId || "",
+            eventName,
+            eventDateKey,
+            at: Date.now()
+          };
+          continue;
+        }
+
+        const paymentKey = getPaymentEventKey({
+          eventName,
+          eventDateKey,
+          cityKey,
+          playerId: winner.playerId,
+          playerName: winner.playerName,
+          messageId: message.id,
+          createdTimestamp: message.createdTimestamp || Date.now()
+        });
+
+        const duplicatePayment = findDuplicateNearbyPaymentEvent(rankings, {
+          eventName,
+          eventDateKey,
+          cityKey,
+          playerId: winner.playerId,
+          playerName: winner.playerName,
+          messageId: message.id,
+          createdTimestamp: message.createdTimestamp || Date.now()
+        });
+
+        if (duplicatePayment) {
+          skipped++;
+          rankings.reviewedPaymentMessages[message.id] = {
+            skipped: true,
+            reason: "pagamento_duplicado_ate_3h",
+            paymentKey,
+            duplicatedFromMessageId: duplicatePayment.messageId || "",
+            at: Date.now()
+          };
+          continue;
+        }
+
+        if (playerAlreadyHasHallForEvent(rankings, {
+          eventName,
+          eventDateKey,
+          cityKey,
+          playerId: winner.playerId,
+          playerName: winner.playerName
+        })) {
+          skipped++;
+          rankings.reviewedPaymentMessages[message.id] = {
+            skipped: true,
+            reason: "player_ja_contado_por_hall",
+            paymentKey,
+            at: Date.now()
+          };
+          continue;
+        }
+
+        addPlayerRankingPoint(rankings, {
+          type: "player",
+          playerName: winner.playerName,
+          playerId: winner.playerId || "",
+          cityKey,
+          rawLine: winnerRaw
+        }, {
+          messageId: message.id,
+          channelId: message.channelId,
+          guildId: message.guildId,
+          jumpUrl: getMessageJumpUrl(message),
+          cityKey,
+          cityName: CITIES[cityKey]?.label || "Cidade Nobre",
+          eventName,
+          evidenceSource: "botao_pagamento_pago",
+          evidenceConfidence: 92,
+          createdTimestamp: message.createdTimestamp || Date.now()
+        });
+
+        rankings.paymentEventKeys[paymentKey] = {
+          messageId: message.id,
+          eventName,
+          eventDateKey,
+          cityKey,
+          playerName: winner.playerName,
+          playerId: winner.playerId || "",
+          createdTimestamp: message.createdTimestamp || Date.now(),
+          at: Date.now()
+        };
+
+        rankings.reviewedPaymentMessages[message.id] = {
+          skipped: false,
+          paymentKey,
+          eventName,
+          eventDateKey,
+          cityKey,
+          playerName: winner.playerName,
+          playerId: winner.playerId || "",
+          at: Date.now()
+        };
+
+        counted++;
+      }
+
+      if (batch.size < 100) break;
+    }
+
+    rankings.lastPaymentScan = {
+      scanned,
+      counted,
+      skipped,
+      at: Date.now()
+    };
+
+    rankings.lastUpdatedAt = Date.now();
+    return rankings;
+  }
+
   async function addHallToRankings(rankings, message, client = null) {
     const content = getHallMessageText(message);
     const normalizedContent = normalizeHallName(content);
@@ -4206,6 +4744,8 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
           });
         }
       }
+
+      await addPaymentEventsToPlayerRankings(rankings, client);
 
       saveHallRankings(rankings);
       await publishHallRankings(client, rankings);
