@@ -42,7 +42,7 @@ function getFivemPanelScopeByChannelId(channelId) {
 }
 const FIVEM_REFRESH_INTERVAL_MS = 1 * 60 * 1000; // coleta a cada 1 minuto
 const FIVEM_PANEL_REFRESH_INTERVAL_MS = 1 * 60 * 1000; // edita o painel a cada 1 minuto
-const FIVEM_HISTORY_MAX_DAYS = 30; // Limitar histórico a 30 dias
+const FIVEM_HISTORY_MAX_DAYS = 120; // Mantém histórico suficiente para comparar semanas e meses sem perder base
 const FIVEM_FETCH_TIMEOUT_MS = 4 * 1000; // 4 segundos
 const FIVEM_SNAPSHOT_CACHE_MS = 10 * 1000; // reaproveita a mesma coleta por 10 segundos
 const FIVEM_DYNAMIC_URL_CACHE_MS = 5 * 60 * 1000; // reaproveita endpoints por 5 minutos
@@ -555,6 +555,17 @@ function formatEventWindowLabel(event) {
   return `${startHour}:${startMinute} às ${endHour}:${endMinute}`;
 }
 
+function getStableEventWindowKey(event) {
+  if (!event) return null;
+
+  const startHour = String(event.startHour % 24).padStart(2, "0");
+  const startMinute = String(event.startMinute).padStart(2, "0");
+  const endHour = String(event.endHour % 24).padStart(2, "0");
+  const endMinute = String(event.endMinute).padStart(2, "0");
+
+  return `stable_window_${event.weekday}_${startHour}_${startMinute}_${endHour}_${endMinute}`;
+}
+
 function formatEventWeekdayLabel(event) {
   const labels = {
     0: "Domingo",
@@ -828,7 +839,15 @@ function findEventWindowByTimeAndCity(peakDoc, event) {
   }) || null;
 }
 function resolveEventWindowFromPeaks(peakDoc, event) {
-  return peakDoc?.eventWindows?.[event.eventKey] || findEventWindowByTimeAndCity(peakDoc, event);
+  if (!peakDoc || !event) return null;
+
+  const stableKey = getStableEventWindowKey(event);
+
+  return (
+    peakDoc?.eventWindows?.[event.eventKey] ||
+    peakDoc?.eventWindows?.[stableKey] ||
+    findEventWindowByTimeAndCity(peakDoc, event)
+  );
 }
 
 function resolveComparableCityWindowFromPeaks(peakDoc, event, cityKey) {
@@ -846,16 +865,33 @@ function resolveComparableCityWindowFromPeaks(peakDoc, event, cityKey) {
       peakTime: directWindow.peakTime || "--:--",
       peakAt: directWindow.peakAt || 0,
       cityKey,
+      cityName: directWindow.cityName,
+      emoji: directWindow.emoji,
     };
   }
 
   const wantedLabel = formatEventWindowLabel(event);
   const windows = Object.values(peakDoc.eventWindows || {});
 
-  const sameTimeWindow = windows.find((window) => window?.label === wantedLabel);
+  const sameTimeWindow = windows.find((window) => {
+    if (window?.label !== wantedLabel) return false;
+    if (window?.cityPeaks?.[cityKey]) return true;
+    return window?.cityKey === cityKey;
+  });
 
   if (sameTimeWindow?.cityPeaks?.[cityKey]) {
     return sameTimeWindow.cityPeaks[cityKey];
+  }
+
+  if (sameTimeWindow?.cityKey === cityKey) {
+    return {
+      peak: sameTimeWindow.peak || 0,
+      peakTime: sameTimeWindow.peakTime || "--:--",
+      peakAt: sameTimeWindow.peakAt || 0,
+      cityKey,
+      cityName: sameTimeWindow.cityName,
+      emoji: sameTimeWindow.emoji,
+    };
   }
 
   return null;
@@ -1286,7 +1322,7 @@ if (!dayPeak.eventWindows) {
 
     // Atualiza a auditoria fixa das 21:00.
     // Não é pico: é a primeira leitura válida da janela 21:00-21:10.
-if (isExact21hSnapshot(currentSnapshot) && isValidSnapshot(currentSnapshot)) {
+if (isExact21hSnapshot(currentSnapshot) && isReliableSnapshotForPersistence(currentSnapshot) && !hasStaleCityData(currentSnapshot)) {
   const currentTotal = currentSnapshot.totalClients || 0;
   const alreadyCaptured = dayPeak.exact21h?.total > 0;
 
@@ -1304,7 +1340,8 @@ if (isExact21hSnapshot(currentSnapshot) && isValidSnapshot(currentSnapshot)) {
 }
 
     // 1. Atualização de Pico Geral (sempre no dia atual)
-    if ((currentSnapshot.totalClients || 0) > (dayPeak.total.peak || 0)) {
+    // Só atualiza pico geral quando todas as cidades usadas são dados reais da API, sem fallback stale.
+    if (!hasStaleCityData(currentSnapshot) && (currentSnapshot.totalClients || 0) > (dayPeak.total.peak || 0)) {
       dayPeak.total.peak = currentSnapshot.totalClients || 0;
       dayPeak.total.peakTime = currentSnapshot.spTime;
       dayPeak.total.peakAt = nowTs;
@@ -1317,7 +1354,9 @@ if (isExact21hSnapshot(currentSnapshot) && isValidSnapshot(currentSnapshot)) {
     for (const activeWindow of activeEventWindows) {
       if (activeWindow.targetDateKey === dateKey) {
         if (updatePrimePeaksInDoc(dayPeak, currentSnapshot)) hasChange = true;
-        if (updateEventWindowPeakInDoc(dayPeak, currentSnapshot, activeWindow)) hasChange = true;
+if (isReliableSnapshotForPersistence(currentSnapshot)) {
+  if (updateEventWindowPeakInDoc(dayPeak, currentSnapshot, activeWindow)) hasChange = true;
+}
         continue;
       }
 
@@ -1352,8 +1391,10 @@ if (updatePrimePeaksInDoc(targetDoc, currentSnapshot)) {
   changedTargetDoc = true;
 }
 
-if (updateEventWindowPeakInDoc(targetDoc, currentSnapshot, activeWindow)) {
-  changedTargetDoc = true;
+if (isReliableSnapshotForPersistence(currentSnapshot)) {
+  if (updateEventWindowPeakInDoc(targetDoc, currentSnapshot, activeWindow)) {
+    changedTargetDoc = true;
+  }
 }
 
 if (changedTargetDoc) {
@@ -1366,7 +1407,7 @@ if (changedTargetDoc) {
 
     for (const cityConfig of FIVEM_CITIES) {
       const cityData = currentSnapshot.cities?.[cityConfig.key];
-      if (!cityData) continue;
+      if (!cityData || cityData.stale === true) continue;
 
       const cityPeak = dayPeak.cities[cityConfig.key];
       if ((cityData.clients || 0) > (cityPeak.peak || 0)) {
@@ -1383,7 +1424,8 @@ dayPeak.markModified('exact21h'); // Marca o novo campo como modificado
 dayPeak.markModified('eventWindows');
 await dayPeak.save();
 
-    // Limpeza de picos antigos (opcional, para manter paridade com History)
+    // Limpeza de picos antigos conforme FIVEM_HISTORY_MAX_DAYS.
+    // Mantém bastante histórico para comparações semanais/mensais sem perder base.
     const thirtyDaysAgoDate = new Date(Date.now() - FIVEM_HISTORY_MAX_DAYS * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   await PeakModel.deleteMany({ date: { $lt: thirtyDaysAgoDate } });
 
@@ -1399,14 +1441,18 @@ return hasChange;
  */
 function updatePrimePeaksInDoc(peakDoc, snapshot) {
   let changed = false;
-  if ((snapshot.totalClients || 0) > (peakDoc.total.primePeak || 0)) {
+
+  if (!hasStaleCityData(snapshot) && (snapshot.totalClients || 0) > (peakDoc.total.primePeak || 0)) {
     peakDoc.total.primePeak = snapshot.totalClients || 0;
     peakDoc.total.primePeakTime = snapshot.spTime;
     peakDoc.total.primePeakAt = snapshot.timestamp;
     changed = true;
   }
+
   for (const cityKey in snapshot.cities) {
     const cityData = snapshot.cities[cityKey];
+    if (cityData?.stale === true) continue;
+
     const cityPeak = peakDoc.cities[cityKey];
     if (cityPeak && (cityData.clients || 0) > (cityPeak.primePeak || 0)) {
       cityPeak.primePeak = cityData.clients || 0;
@@ -1415,6 +1461,7 @@ function updatePrimePeaksInDoc(peakDoc, snapshot) {
       changed = true;
     }
   }
+
   return changed;
 }
 
@@ -1422,32 +1469,43 @@ function updateEventWindowPeakInDoc(peakDoc, snapshot, window) {
   if (!window?.eventKey) return false;
 
   let changed = false;
+  const stableKey = getStableEventWindowKey(window);
   const isTotal = window.cityKey === "total";
 
+  const windowCityData = snapshot.cities?.[window.cityKey];
+
   const currentValue = isTotal
-    ? snapshot.totalClients || 0
-    : snapshot.cities?.[window.cityKey]?.clients || 0;
+    ? hasStaleCityData(snapshot) ? 0 : snapshot.totalClients || 0
+    : windowCityData?.stale === true ? 0 : windowCityData?.clients || 0;
 
   if (!peakDoc.eventWindows) peakDoc.eventWindows = {};
 
-  const currentStored = peakDoc.eventWindows[window.eventKey] || {
-    peak: 0,
-    peakTime: null,
-    peakAt: 0,
-    label: window.label,
-    cityKey: window.cityKey,
-    cityName: window.cityName,
-    emoji: window.emoji,
-    dateKey: peakDoc.date,
-    weekKey: getWeekKeySP(new Date(snapshot.timestamp)),
-    weekMode: window.weekMode,
-    cityPeaks: {},
-  };
+  const currentStored =
+    peakDoc.eventWindows[window.eventKey] ||
+    peakDoc.eventWindows[stableKey] ||
+    {
+      peak: 0,
+      peakTime: null,
+      peakAt: 0,
+      label: window.label,
+      cityKey: window.cityKey,
+      cityName: window.cityName,
+      emoji: window.emoji,
+      dateKey: peakDoc.date,
+      weekKey: getWeekKeySP(new Date(snapshot.timestamp)),
+      weekMode: window.weekMode,
+      stableKey,
+      originalEventKeys: [],
+      cityPeaks: {},
+    };
 
   const cityPeaks = { ...(currentStored.cityPeaks || {}) };
 
   for (const city of FIVEM_CITIES) {
-    const cityValue = snapshot.cities?.[city.key]?.clients || 0;
+    const snapshotCityData = snapshot.cities?.[city.key];
+    if (snapshotCityData?.stale === true) continue;
+
+    const cityValue = snapshotCityData?.clients || 0;
     const storedCityPeak = cityPeaks[city.key] || {
       peak: 0,
       peakTime: null,
@@ -1479,8 +1537,15 @@ function updateEventWindowPeakInDoc(peakDoc, snapshot, window) {
     changed = true;
   }
 
-  if (changed) {
-    peakDoc.eventWindows[window.eventKey] = {
+  const originalEventKeys = [
+    ...new Set([
+      ...(currentStored.originalEventKeys || []),
+      window.eventKey,
+    ]),
+  ];
+
+  if (changed || !peakDoc.eventWindows[stableKey] || !peakDoc.eventWindows[window.eventKey]) {
+    const finalStored = {
       ...currentStored,
       label: window.label,
       cityKey: window.cityKey,
@@ -1489,8 +1554,18 @@ function updateEventWindowPeakInDoc(peakDoc, snapshot, window) {
       dateKey: peakDoc.date,
       weekKey: getWeekKeySP(new Date(snapshot.timestamp)),
       weekMode: window.weekMode,
+      stableKey,
+      originalEventKeys,
       cityPeaks,
     };
+
+    peakDoc.eventWindows[window.eventKey] = finalStored;
+
+    if (stableKey) {
+      peakDoc.eventWindows[stableKey] = finalStored;
+    }
+
+    changed = true;
   }
 
   return changed;
@@ -1828,11 +1903,17 @@ function isReliableSnapshotForPersistence(snapshot) {
  const cities = Object.values(snapshot.cities || {});
  const onlineCities = cities.filter(c =>
    c?.online === true &&
+   c?.stale !== true &&
    safeNumber(c?.clients, 0) > 0 &&
    safeNumber(c?.maxClients, 0) > 0
  ).length;
 
  return onlineCities >= 2;
+}
+
+function hasStaleCityData(snapshot) {
+ const cities = Object.values(snapshot?.cities || {});
+ return cities.some(c => c?.stale === true);
 }
 
 async function getLastValidSnapshot() {
@@ -1848,7 +1929,13 @@ function isCompleteSnapshot(snapshot) {
 
  return FIVEM_CITIES.every((city) => {
    const data = snapshot.cities?.[city.key];
-   return data?.online === true && safeNumber(data.clients, 0) > 0 && safeNumber(data.maxClients, 0) > 0;
+
+   return (
+     data?.online === true &&
+     data?.stale !== true &&
+     safeNumber(data.clients, 0) > 0 &&
+     safeNumber(data.maxClients, 0) > 0
+   );
  });
 }
 
@@ -1953,8 +2040,8 @@ async function createSafeCurrentSnapshot(options = {}) {
 
  result = {
    snapshot: merged.snapshot,
-   snapshotForPersistence: currentSnapshot,
-   shouldPersist: isReliableSnapshotForPersistence(currentSnapshot),
+   snapshotForPersistence: merged.snapshot,
+   shouldPersist: isReliableSnapshotForPersistence(merged.snapshot),
    usedFallback: merged.usedFallback,
  };
 
@@ -2038,6 +2125,7 @@ const lastWeekWindow = resolveComparableCityWindowFromPeaks(peaks[lastWeekKey], 
 const currentCityWindow = resolveComparableCityWindowFromPeaks(peaks[eventDateKey], event, cityKey);
 
 const currentPeak = currentCityWindow?.peak || currentWeekWindow?.peak || 0;
+const currentPeakTime = currentCityWindow?.peakTime || currentWeekWindow?.peakTime || "--:--";
 const previousDayPeak = previousDayWindow?.peak || 0;
 const lastWeekPeak = lastWeekWindow?.peak || 0;
 
@@ -2045,8 +2133,8 @@ const lastWeekPeak = lastWeekWindow?.peak || 0;
     const diffLastWeek = calculateDiff(currentPeak, lastWeekPeak);
 
 const cityRankingSameWindow = FIVEM_CITIES.map((city) => {
-  const cityWindowData = currentWeekWindow?.cityPeaks?.[city.key] || null;
-  const lastWeekCityWindowData = lastWeekWindow?.cityPeaks?.[city.key] || null;
+  const cityWindowData = resolveComparableCityWindowFromPeaks(peaks[eventDateKey], event, city.key);
+  const lastWeekCityWindowData = resolveComparableCityWindowFromPeaks(peaks[lastWeekKey], event, city.key);
 
   const currentValue = cityWindowData?.peak || 0;
   const lastWeekValue = lastWeekCityWindowData?.peak || 0;
@@ -2097,7 +2185,7 @@ return (
       `🕒 **Horário oficial:** \`${formatEventWindowLabel(event)}\`\n\n` +
 
       `### 📌 Resultado da própria cidade\n` +
-      `> 👥 **Maior público registrado no horário desse evento:** \`${formatNumber(currentPeak)}\` às \`${currentWeekWindow?.peakTime || "--:--"}\`\n` +
+`> 👥 **Maior público registrado no horário desse evento:** \`${formatNumber(currentPeak)}\` às \`${currentPeakTime}\`\n` +
       `> 📆 **Dia anterior no mesmo horário:** \`${formatNumber(previousDayPeak)}\` às \`${previousDayWindow?.peakTime || "--:--"}\`\n` +
       `> 📊 **Diferença contra o dia anterior:** ${formatDiff(diffPreviousDay)}\n\n` +
 
