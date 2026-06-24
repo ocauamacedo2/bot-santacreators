@@ -1903,7 +1903,8 @@ function cleanRankingPlayerName(value = "") {
         /^TOP\b/i.test(rawClean) ||
         /^#?\s*TOP\b/i.test(rawClean) ||
         /^Organiza[cç][aã]o\b/i.test(rawClean) ||
-        /^Vencedores?\s*[:\-]/i.test(rawClean);
+        /^Vencedores?\s*[:\-]/i.test(rawClean) ||
+        /^Vencedores?\s+[A-Za-zÀ-ÿ0-9]/i.test(rawClean);
 
       if (!startsAsWinner) return false;
       if (!clean) return false;
@@ -2336,7 +2337,6 @@ function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento")
       rawLine: originalLine
     };
   }
-
   function extractInlineApplauseWinner(content = "", cityKey = "nobre") {
     const lines = String(content || "").split("\n").map(l => l.trim()).filter(Boolean);
 
@@ -2369,14 +2369,31 @@ function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento")
     };
   }
 
-  function isAmbiguousHallWinner(winner) {
+  function isClearTopWinnerLine(rawLine = "") {
+    const raw = String(rawLine || "");
+    const clean = normalizeHallName(cleanHallWinnerLine(raw));
+
+    if (!clean) return false;
+    if (!/^(\*\*)?\s*TOP\b/i.test(raw) && !/^TOP\b/i.test(stripDiscordNoise(raw))) return false;
+    if (clean.includes("hall da fama")) return false;
+    if (clean.includes("uma salva de palmas")) return false;
+    if (clean.includes("foi insano")) return false;
+    if (clean.includes("everyone")) return false;
+    if (clean.includes("cidade")) return false;
+    if (clean.includes("santacreators")) return false;
+
+    return true;
+  }
+
+function isAmbiguousHallWinner(winner) {
     if (!winner) return false;
 
     if (winner.type === "player" && winner.playerId) {
       return false;
     }
 
-    const raw = normalizeHallName(winner.rawLine || "");
+    const rawLine = String(winner.rawLine || "");
+    const raw = normalizeHallName(rawLine);
     const name = normalizeHallDisplay(winner.orgName || winner.playerName || "");
 
     if (!name) return false;
@@ -2386,6 +2403,10 @@ function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento")
     }
 
     if (winner.type === "org") {
+      return false;
+    }
+
+    if (isClearTopWinnerLine(rawLine)) {
       return false;
     }
 
