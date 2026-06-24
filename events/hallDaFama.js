@@ -1613,258 +1613,207 @@
 }
 
 function normalizeHallEventName(eventName = "", cityKey = "nobre") {
-    const original = normalizeHallDisplay(eventName) || "Evento";
-    const normalized = normalizeHallName(original);
+  const original = normalizeHallDisplay(stripDiscordNoise(eventName)) || "Evento";
 
-    // ✅ Eventos que carregam cidade no próprio nome precisam vir ANTES do filtro de texto grande.
-    if (
-      normalized.includes("maresia do crime") ||
-      normalized.includes("grande do crime") ||
-      normalized.includes("santa do crime") ||
-      normalized.includes("nobre do crime")
-    ) {
-      if (cityKey === "grande") return "Grande do Crime";
-      if (cityKey === "santa") return "Santa do Crime";
-      if (cityKey === "maresia") return "Maresia do Crime";
-      return "Nobre do Crime";
-    }
+  let normalized = normalizeHallName(original)
+    .replace(/\btada\b/g, " ")
+    .replace(/\btrophy\b/g, " ")
+    .replace(/\bcoroa orange\b/g, " ")
+    .replace(/\bcherry blossom\b/g, " ")
+    .replace(/\bmilitary medal\b/g, " ")
+    .replace(/\bmotorcycle\b/g, " ")
+    .replace(/\bsanta creators\b/g, " ")
+    .replace(/\bhall da fama\b/g, " ")
+    .replace(/\bcidade nobre\b/g, " ")
+    .replace(/\bcidade santa\b/g, " ")
+    .replace(/\bcidade grande\b/g, " ")
+    .replace(/\bcidade maresia\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 
-    if (
-      normalized.includes("vip") ||
-      normalized.includes("rolepass") ||
-      normalized.includes("milhoes") ||
-      normalized.includes("milhao") ||
-      normalized.includes("foi insano") ||
-      normalized.includes("vitoria so e possivel") ||
-      normalized.length > 120
-    ) {
-      return "Evento";
-    }
+  if (
+    !normalized ||
+    normalized.includes("vip") ||
+    normalized.includes("rolepass") ||
+    normalized.includes("milhoes") ||
+    normalized.includes("milhao") ||
+    normalized.includes("foi insano") ||
+    normalized.includes("vitoria so e possivel") ||
+    normalized.length > 120
+  ) {
+    return "Evento";
+  }
 
-    if (
-      normalized.includes("santa royale") ||
-      normalized.includes("missao rosa")
-    ) {
-      return "Missão Rosa";
-    }
+  if (normalized.includes("grande do crime")) return "Grande do Crime";
+  if (normalized.includes("santa do crime")) return "Santa do Crime";
+  if (normalized.includes("maresia do crime")) return "Maresia do Crime";
+  if (normalized.includes("nobre do crime")) return "Nobre do Crime";
 
-    if (
-      normalized.includes("sonto pantano") ||
-      normalized.includes("santo pantano") ||
-      normalized.includes("missao pantano") ||
-      normalized.includes("pantano")
-    ) {
-      return "Missão Pântano";
-    }
+  if (normalized.includes("santa royale")) return "Missão Rosa";
+  if (normalized.includes("missao rosa")) return "Missão Rosa";
 
-    if (
-      normalized.includes("free fire creators") ||
-      normalized.includes("free fire")
-    ) {
-      return "Free Fire Creators";
-    }
+  if (
+    normalized.includes("missao pantano") ||
+    normalized.includes("santo pantano") ||
+    normalized.includes("sonto pantano") ||
+    normalized.includes("pantano")
+  ) {
+    return "Missão Pântano";
+  }
 
-    if (
-      normalized.includes("resgate o macedo") ||
-      normalized.includes("resgate macedo")
-    ) {
-      return "Resgate o Macedo";
-    }
+  if (normalized.includes("pegando fogo") || normalized.includes("santa pegando fogo")) {
+    return "Pegando Fogo";
+  }
 
-    if (
-      normalized.includes("battle royale") ||
-      normalized.includes("batalha royale")
-    ) {
-      return "Battle Royale";
-    }
+  if (
+    normalized.includes("sob pressao") ||
+    normalized.includes("sobre pressao") ||
+    normalized.includes("santa sob pressao") ||
+    normalized.includes("sobe pressao")
+  ) {
+    return "Sobre Pressão";
+  }
 
-    if (
-      normalized.includes("socializar sc") ||
-      normalized.includes("socializar")
-    ) {
-      return "Socializar";
-    }
+  if (
+    normalized.includes("fuga espacial") ||
+    normalized.includes("fuga expacial") ||
+    normalized.includes("santa fuga espacial")
+  ) {
+    return "Fuga Espacial";
+  }
 
-    if (
-      normalized.includes("batalha naval") ||
-      normalized.includes("naval creators") ||
-      normalized.includes("naval")
-    ) {
-      return "Naval Creators";
-    }
+  if (normalized.includes("socializar")) return "Socializar";
 
-    if (
-      normalized.includes("santa fuga espacial") ||
-      normalized.includes("fuga expacial") ||
-      normalized.includes("fuga espacial")
-    ) {
-      return "Fuga Espacial";
-    }
+  if (
+    normalized.includes("naval creators") ||
+    normalized.includes("batalha naval") ||
+    normalized === "naval"
+  ) {
+    return "Naval Creators";
+  }
 
-    if (
-      normalized.includes("santa pegando fogo") ||
-      normalized.includes("pegando fogo")
-    ) {
-      return "Pegando Fogo";
-    }
+  if (normalized.includes("resgate o macedo") || normalized.includes("resgate macedo")) {
+    return "Resgate o Macedo";
+  }
 
-    if (
-      normalized.includes("karambit wars") ||
-      normalized.includes("karambit")
-    ) {
-      return "Karambit";
-    }
+  if (normalized.includes("free fire creators") || normalized.includes("free fire")) {
+    return "Free Fire Creators";
+  }
 
-    if (
-      normalized.includes("santo caos") ||
-      normalized.includes("santa caos") ||
-      normalized.includes("guerra dos herois") ||
-      normalized.includes("guerra dos anti herois") ||
-      normalized.includes("guerra dos antiherois")
-    ) {
-      return "Guerra dos Heróis";
-    }
+  if (normalized.includes("rebeliao creators") || normalized.includes("rebeliao")) {
+    return "Rebelião Creators";
+  }
 
-    if (
+  if (normalized.includes("esconde esconde")) return "Esconde Esconde";
+
+  if (
+    normalized.includes("santacross") ||
+    normalized.includes("corrida de moto")
+  ) {
+    return "Santacross";
+  }
+
+  if (normalized.includes("karambit")) return "Karambit";
+
+  if (
+    normalized.includes("battle royale") ||
+    normalized.includes("batalha royale")
+  ) {
+    return "Battle Royale";
+  }
+
+  if (
+    normalized.includes("fuja da onca") ||
+    normalized.includes("onca no labirinto") ||
+    normalized.includes("labirinto")
+  ) {
+    return "Fuja da Onça";
+  }
+
+  if (
+    normalized.includes("apocalypse") ||
+    normalized.includes("apocalipse") ||
+    normalized.includes("apoclypse")
+  ) {
+    return "Santa Apocalypse";
+  }
+
+  return original;
+}
+
+function extractRawHallEventName(content = "") {
+  const originalContent = String(content || "");
+
+  const titleMatch =
+    originalContent.match(/\*\*\s*Santa\s*Creators\s*:\s*([^*\n]+?)\s*\*\*/i)?.[1]?.trim() ||
+    originalContent.match(/Santa\s*Creators\s*:\s*\*\*\s*([^*\n]+?)\s*\*\*/i)?.[1]?.trim() ||
+    originalContent.match(/Santa\s*Creators\s*:\s*([^🎉\n]+)/i)?.[1]?.replace(/\*/g, "").trim();
+
+  if (titleMatch) {
+    return cleanExtractedHallEventName(titleMatch);
+  }
+
+  const trophyMatch =
+    originalContent.match(/(?:🏆|:trophy:)\s*\*\*\s*([^*\n]+?)\s*\*\*\s+na\s+\*\*\s*CIDADE/i)?.[1]?.trim() ||
+    originalContent.match(/(?:🏆|:trophy:)\s*([^!\n]+?)\s+na\s+\*\*\s*CIDADE/i)?.[1]?.replace(/\*/g, "").trim() ||
+    originalContent.match(/(?:🏆|:trophy:)\s*([^!\n]+?)\s+na\s+CIDADE/i)?.[1]?.replace(/\*/g, "").trim();
+
+  if (trophyMatch) {
+    return cleanExtractedHallEventName(trophyMatch);
+  }
+
+  const raw = stripDiscordNoise(content);
+  const lines = raw.split("\n").map(l => cleanOneLine(l)).filter(Boolean);
+
+  const directMatch =
+    raw.match(/Santa\s*Creators\s*:\s*([^🎉\n]+)/i)?.[1]?.trim() ||
+    raw.match(/SantaCreators\s*:\s*([^:\n]+)/i)?.[1]?.trim() ||
+    raw.match(/evento\s+SantaCreators\s*:\s*([^:\n]+)/i)?.[1]?.trim() ||
+    raw.match(/evento\s+de\s+([^:\n]+)/i)?.[1]?.trim() ||
+    raw.match(/evento\s+[–-]\s*([^:\n]+)/i)?.[1]?.trim() ||
+    raw.match(/evento\s+([^:\n]+)/i)?.[1]?.trim();
+
+  if (directMatch) {
+    return cleanExtractedHallEventName(directMatch);
+  }
+
+  const eventLine = lines.find(line => {
+    const normalized = normalizeHallName(line);
+
+    if (!normalized) return false;
+    if (normalized.includes("parabens")) return false;
+    if (normalized.includes("lendarios")) return false;
+    if (normalized.includes("hall da fama")) return false;
+    if (normalized.includes("uma salva de palmas")) return false;
+    if (normalized.includes("muito orgulho")) return false;
+    if (normalized.startsWith("top")) return false;
+
+    return (
+      normalized.includes("missao") ||
+      normalized.includes("socializar") ||
+      normalized.includes("royale") ||
+      normalized.includes("naval") ||
+      normalized.includes("fuga") ||
+      normalized.includes("pegando fogo") ||
       normalized.includes("sob pressao") ||
       normalized.includes("sobre pressao") ||
-      normalized.includes("sobe pressao")
-    ) {
-      return "Sobre Pressão";
-    }
+      normalized.includes("santacross") ||
+      normalized.includes("resgate") ||
+      normalized.includes("rebeliao") ||
+      normalized.includes("esconde")
+    );
+  });
 
-    if (
-      normalized.includes("santa do crime") ||
-      normalized.includes("nobre do crime") ||
-      normalized.includes("grande do crime") ||
-      normalized.includes("maresia do crime")
-    ) {
-      if (cityKey === "grande") return "Grande do Crime";
-      if (cityKey === "santa") return "Santa do Crime";
-      if (cityKey === "maresia") return "Maresia do Crime";
-      return "Nobre do Crime";
-    }
+  return eventLine ? cleanExtractedHallEventName(eventLine) : "Evento";
+}
 
-    if (
-      normalized.includes("rebeliao creators") ||
-      normalized.includes("rebeliao")
-    ) {
-      return "Rebelião Creators";
-    }
+function normalizeImageUrl(url = "") {
+  return String(url)
+    .trim()
+    .replace(/[>)\]\s]+$/g, "");
+}
 
-    if (
-      normalized.includes("resgate o macedo") ||
-      normalized.includes("resgate macedo")
-    ) {
-      return "Resgate o Macedo";
-    }
-
-    if (
-      normalized.includes("esconde esconde") ||
-      normalized.includes("presidio") ||
-      normalized.includes("prisao")
-    ) {
-      return "Esconde Esconde";
-    }
-
-    if (
-      normalized.includes("fuja da onca") ||
-      normalized.includes("onca no labirinto") ||
-      normalized.includes("labirinto")
-    ) {
-      return "Fuja da Onça";
-    }
-
-    if (
-      normalized.includes("apocalypse") ||
-      normalized.includes("apocalipse") ||
-      normalized.includes("apoclypse")
-    ) {
-      return "Santa Apocalypse";
-    }
-
-    return original;
-  }
-  function extractRawHallEventName(content = "") {
-    const originalContent = String(content || "");
-
-    // ✅ Primeiro tenta pegar o título real do Hall ANTES de limpar emojis/quebras.
-    const titleMatch =
-      originalContent.match(/Santa\s*Creators\s*:\s*\*\*([^*\n]+)\*\*/i)?.[1]?.trim() ||
-      originalContent.match(/Santa\s*Creators\s*:\s*([^🎉\n]+)/i)?.[1]?.replace(/\*/g, "").trim();
-
-    if (titleMatch) {
-      return titleMatch;
-    }
-
-    // ✅ Depois tenta pegar a linha do troféu.
-    const trophyMatch =
-      originalContent.match(/🏆\s*\*\*([^*\n]+)\*\*\s+na\s+\*\*CIDADE/i)?.[1]?.trim() ||
-      originalContent.match(/🏆\s*([^!\n]+?)\s+na\s+CIDADE/i)?.[1]?.replace(/\*/g, "").trim();
-
-    if (trophyMatch) {
-      return trophyMatch;
-    }
-
-    const raw = stripDiscordNoise(content);
-    const lines = raw.split("\n").map(l => cleanOneLine(l)).filter(Boolean);
-
-    const directMatch =
-      raw.match(/Santa\s*Creators\s*:\s*([^🎉\n]+)/i)?.[1]?.trim() ||
-      raw.match(/SantaCreators\s*:\s*([^:\n]+)/i)?.[1]?.trim() ||
-      raw.match(/evento\s+SantaCreators\s*:\s*([^:\n]+)/i)?.[1]?.trim() ||
-      raw.match(/evento\s+de\s+([^:\n]+)/i)?.[1]?.trim() ||
-      raw.match(/evento\s+[–-]\s*([^:\n]+)/i)?.[1]?.trim() ||
-      raw.match(/evento\s+([^:\n]+)/i)?.[1]?.trim();
-
-    if (directMatch) {
-      return cleanExtractedHallEventName(directMatch);
-    }
-
-    const eventLine = lines.find(line => {
-      const normalized = normalizeHallName(line);
-
-      if (!normalized) return false;
-      if (normalized.includes("parabens")) return false;
-      if (normalized.includes("lendarios")) return false;
-      if (normalized.includes("hall da fama")) return false;
-      if (normalized.includes("uma salva de palmas")) return false;
-      if (normalized.includes("muito orgulho")) return false;
-      if (normalized.startsWith("top")) return false;
-
-      return (
-        normalized.includes("missao") ||
-        normalized.includes("socializar") ||
-        normalized.includes("royale") ||
-        normalized.includes("pantano") ||
-        normalized.includes("karambit") ||
-        normalized.includes("naval") ||
-        normalized.includes("fuga") ||
-        normalized.includes("fuja") ||
-        normalized.includes("pressao") ||
-        normalized.includes("crime") ||
-        normalized.includes("caos") ||
-        normalized.includes("herois") ||
-        normalized.includes("cross") ||
-        normalized.includes("labirinto") ||
-        normalized.includes("battle royale") ||
-        normalized.includes("bate bate") ||
-        normalized.includes("corrida mortal") ||
-        normalized.includes("presidiarios") ||
-        normalized.includes("resgate")
-      );
-    });
-
-    return eventLine ? cleanExtractedHallEventName(eventLine) : "Evento";
-  }
-
-  function normalizeImageUrl(url = "") {
-    return String(url)
-      .trim()
-      .replace(/[>)\]\s]+$/g, "");
-  }
-
-  function uniqueImageUrls(urls = []) {
+function uniqueImageUrls(urls = []) {
     const seen = new Set();
     const finalUrls = [];
 
@@ -2921,7 +2870,12 @@ function addPlayerRankingPoint(rankings, playerWinner, hallMeta) {
         };
 
     const cityKey = evidence.cityKey || "nobre";
-    const eventName = evidence.eventName || "Evento";
+
+    const directEventName = normalizeHallEventName(extractRawHallEventName(content), cityKey);
+    const eventName =
+      evidence.eventName && evidence.eventName !== "Evento"
+        ? normalizeHallEventName(evidence.eventName, cityKey)
+        : directEventName;
 
     const hallMeta = {
       messageId: message.id,
