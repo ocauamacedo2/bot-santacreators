@@ -1672,6 +1672,13 @@ function normalizeHallEventName(eventName = "", cityKey = "nobre") {
     }
 
     if (
+      normalized.includes("battle royale") ||
+      normalized.includes("batalha royale")
+    ) {
+      return "Battle Royale";
+    }
+
+    if (
       normalized.includes("socializar sc") ||
       normalized.includes("socializar")
     ) {
@@ -1947,7 +1954,8 @@ function cleanRankingPlayerName(value = "") {
         /^TOP\b/i.test(rawClean) ||
         /^#?\s*TOP\b/i.test(rawClean) ||
         /^Organiza[cç][aã]o\b/i.test(rawClean) ||
-        /^Vencedores?\b/i.test(rawClean);
+        /^Vencedores?\b/i.test(rawClean) ||
+        /\bVencedores?\s+[A-Za-zÀ-ÿ0-9]/i.test(rawClean);
 
       if (!startsAsWinner) return false;
       if (!clean) return false;
@@ -1964,8 +1972,21 @@ function cleanRankingPlayerName(value = "") {
       if (clean.includes("cidadao")) return false;
       if (clean.includes("santacreators")) return false;
       if (clean.includes("lideres")) return false;
-      if (looksLikePrizeOnly(clean)) return false;
-      if (isInvalidWinnerName(clean)) return false;
+
+      const cleanParts = cleanWinner
+        .split(/\s*\|\s*|\s*<\s*|\s*:\s*/g)
+        .map(part => normalizeHallDisplay(part))
+        .filter(Boolean);
+
+      const hasPossibleWinnerName = cleanParts.some(part => {
+        if (!part) return false;
+        if (/^\d+$/.test(part)) return false;
+        if (looksLikePrizeOnly(part)) return false;
+        if (isInvalidWinnerName(part)) return false;
+        return true;
+      });
+
+      if (!hasPossibleWinnerName) return false;
 
       return true;
     });
@@ -2792,6 +2813,8 @@ function addOrgRankingPoint(rankings, orgWinner, hallMeta) {
   if (!orgName) return;
   if (isInvalidWinnerName(orgName)) return;
   if (looksLikePrizeOnly(orgName)) return;
+  if (/^\d+\s*(kk|k|mil|milh[oõ]es|milh[aã]o)\b/i.test(normalizeHallName(orgName))) return;
+  if (/\b(vip|vips|rolepass|pass|gente boa|evento ouro|evento prata)\b/i.test(normalizeHallName(orgName))) return;
 
     const cityKey = getManualOrgCityKey(orgName) || orgWinner.cityKey || hallMeta.cityKey || "nobre";
     const key = getOrgRankingKey(orgName, cityKey);
