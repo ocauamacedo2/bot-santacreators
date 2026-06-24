@@ -264,6 +264,7 @@
   const BTN_SCAN_ALL = "hf_scan_all";
   const BTN_REVIEW_AS_ORG_PREFIX = "hf_review_org_";
   const BTN_REVIEW_AS_PLAYER_PREFIX = "hf_review_player_";
+  const BTN_REVIEW_AS_BOTH_PREFIX = "hf_review_both_";
   const BTN_REVIEW_CITY_PREFIX = "hf_review_city_";
   const BTN_REVIEW_EVENT_PREFIX = "hf_review_event_";
   const MODAL_REVIEW_EVENT_SUBMIT = "hf_review_event_modal";
@@ -2440,6 +2441,7 @@ function isAmbiguousHallWinner(winner) {
         row.components?.some(btn =>
           String(btn.customId || "").startsWith(BTN_REVIEW_AS_ORG_PREFIX) ||
           String(btn.customId || "").startsWith(BTN_REVIEW_AS_PLAYER_PREFIX) ||
+          String(btn.customId || "").startsWith(BTN_REVIEW_AS_BOTH_PREFIX) ||
           String(btn.customId || "").startsWith(BTN_REVIEW_CITY_PREFIX)
         )
       );
@@ -2456,11 +2458,51 @@ function isAmbiguousHallWinner(winner) {
     }
   }
 
+  function getManualReviewTargets(entry = {}) {
+    const rawLine = entry.rawLine || "";
+    const cleanLine = cleanHallWinnerLine(rawLine);
+    const both = extractPlayerOrgByKnownOrgName(cleanLine);
+
+    const orgName = normalizeOrgDisplayName(
+      both?.orgName ||
+      (entry.type === "org" ? entry.name : "") ||
+      findKnownOrgInsideWinnerName(cleanLine)
+    );
+
+    const playerName = cleanRankingPlayerName(
+      both?.playerName ||
+      (entry.type === "player" ? entry.name : "")
+    );
+
+    const playerId =
+      entry.playerId ||
+      cleanLine.match(/\|\s*(\d{1,10})\s*(?:\||$)/)?.[1] ||
+      "";
+
+    return {
+      orgName,
+      playerName,
+      playerId
+    };
+  }
+
   async function sendHallWinnerToManualReview(client, winner, hallMeta) {
     const reviewChannel = await client.channels.fetch(HALL_REVIEW_CHANNEL_ID).catch(() => null);
     if (!reviewChannel || !reviewChannel.isTextBased()) return;
 
     const reviewId = `${hallMeta.messageId}_${normalizeHallKey(winner.rawLine || winner.orgName || winner.playerName)}`.slice(0, 80);
+
+    const targets = getManualReviewTargets({
+      type: winner.type,
+      name: winner.orgName || winner.playerName || "",
+      playerId: winner.playerId || "",
+      rawLine: winner.rawLine || ""
+    });
+
+    const orgLine = targets.orgName || "Não identificado";
+    const playerLine = targets.playerName
+      ? `${targets.playerName}${targets.playerId ? ` | ID: ${targets.playerId}` : ""}`
+      : "Não identificado";
 
     const embed = new EmbedBuilder()
       .setTitle("⚠️ Revisão Manual — Hall da Fama")
@@ -2468,6 +2510,10 @@ function isAmbiguousHallWinner(winner) {
       .setDescription(
         `Esse vencedor ficou confuso para o filtro automático.\n\n` +
         `**Linha original:**\n\`${cleanHallWinnerLine(winner.rawLine || "Sem linha") || "Sem linha"}\`\n\n` +
+        `**Quem receberia ponto:**\n` +
+        `🏢 **ORG:** ${orgLine}\n` +
+        `👤 **Pessoa:** ${playerLine}\n` +
+        `🏢👤 **ORG + Pessoa:** ${orgLine} + ${playerLine}\n\n` +
         `**Evento:** ${hallMeta.eventName}\n` +
         `**Cidade:** ${hallMeta.cityName}\n` +
         `**Mensagem:** ${hallMeta.messageId}\n` +
@@ -2483,7 +2529,11 @@ function isAmbiguousHallWinner(winner) {
       new ButtonBuilder()
         .setCustomId(`${BTN_REVIEW_AS_PLAYER_PREFIX}${reviewId}`)
         .setLabel("👤 Contar como PESSOA")
-        .setStyle(ButtonStyle.Success)
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId(`${BTN_REVIEW_AS_BOTH_PREFIX}${reviewId}`)
+        .setLabel("🏢👤 Contar os 2")
+        .setStyle(ButtonStyle.Secondary)
     );
 
     if (hallMeta.jumpUrl) {
@@ -2992,10 +3042,42 @@ function addPlayerRankingPoint(rankings, playerWinner, hallMeta) {
         }
 
         if (manualReview?.resolvedAs === "player") {
+          const targets = getManualReviewTargets({
+            type: "org",
+            name: orgWinner.orgName,
+            playerId: "",
+            rawLine: orgWinner.rawLine
+          });
+
           addPlayerRankingPoint(rankings, {
             type: "player",
-            playerName: orgWinner.orgName,
+            playerName: targets.playerName || orgWinner.orgName,
+            playerId: targets.playerId || "",
+            cityKey,
+            rawLine: orgWinner.rawLine
+          }, hallMeta);
+          continue;
+        }
+
+        if (manualReview?.resolvedAs === "both") {
+          const targets = getManualReviewTargets({
+            type: "org",
+            name: orgWinner.orgName,
             playerId: "",
+            rawLine: orgWinner.rawLine
+          });
+
+          addOrgRankingPoint(rankings, {
+            type: "org",
+            orgName: targets.orgName || orgWinner.orgName,
+            cityKey,
+            rawLine: orgWinner.rawLine
+          }, hallMeta);
+
+          addPlayerRankingPoint(rankings, {
+            type: "player",
+            playerName: targets.playerName || orgWinner.orgName,
+            playerId: targets.playerId || "",
             cityKey,
             rawLine: orgWinner.rawLine
           }, hallMeta);
@@ -3038,9 +3120,41 @@ function addPlayerRankingPoint(rankings, playerWinner, hallMeta) {
         }
 
         if (manualReview?.resolvedAs === "org") {
+          const targets = getManualReviewTargets({
+            type: "player",
+            name: playerWinner.playerName,
+            playerId: playerWinner.playerId || "",
+            rawLine: playerWinner.rawLine
+          });
+
           addOrgRankingPoint(rankings, {
             type: "org",
-            orgName: playerWinner.playerName,
+            orgName: targets.orgName || playerWinner.playerName,
+            cityKey,
+            rawLine: playerWinner.rawLine
+          }, hallMeta);
+          continue;
+        }
+
+        if (manualReview?.resolvedAs === "both") {
+          const targets = getManualReviewTargets({
+            type: "player",
+            name: playerWinner.playerName,
+            playerId: playerWinner.playerId || "",
+            rawLine: playerWinner.rawLine
+          });
+
+          addPlayerRankingPoint(rankings, {
+            type: "player",
+            playerName: targets.playerName || playerWinner.playerName,
+            playerId: targets.playerId || playerWinner.playerId || "",
+            cityKey,
+            rawLine: playerWinner.rawLine
+          }, hallMeta);
+
+          addOrgRankingPoint(rankings, {
+            type: "org",
+            orgName: targets.orgName || playerWinner.orgName || playerWinner.playerName,
             cityKey,
             rawLine: playerWinner.rawLine
           }, hallMeta);
@@ -4302,7 +4416,8 @@ new ButtonBuilder()
       interaction.isButton() &&
       (
         interaction.customId.startsWith(BTN_REVIEW_AS_ORG_PREFIX) ||
-        interaction.customId.startsWith(BTN_REVIEW_AS_PLAYER_PREFIX)
+        interaction.customId.startsWith(BTN_REVIEW_AS_PLAYER_PREFIX) ||
+        interaction.customId.startsWith(BTN_REVIEW_AS_BOTH_PREFIX)
       )
     ) {
       if (!canApprove(interaction.member, interaction.user.id)) {
@@ -4315,9 +4430,13 @@ new ButtonBuilder()
       await interaction.deferReply({ ephemeral: true });
 
       const asOrg = interaction.customId.startsWith(BTN_REVIEW_AS_ORG_PREFIX);
+      const asPlayer = interaction.customId.startsWith(BTN_REVIEW_AS_PLAYER_PREFIX);
+      const asBoth = interaction.customId.startsWith(BTN_REVIEW_AS_BOTH_PREFIX);
+
       const reviewId = interaction.customId
         .replace(BTN_REVIEW_AS_ORG_PREFIX, "")
-        .replace(BTN_REVIEW_AS_PLAYER_PREFIX, "");
+        .replace(BTN_REVIEW_AS_PLAYER_PREFIX, "")
+        .replace(BTN_REVIEW_AS_BOTH_PREFIX, "");
 
       const rankings = loadHallRankings();
 
@@ -4341,18 +4460,22 @@ new ButtonBuilder()
         createdTimestamp: pendingEntry.createdAt || Date.now()
       };
 
-      if (asOrg) {
+      const targets = getManualReviewTargets(pendingEntry);
+
+      if (asOrg || asBoth) {
         addOrgRankingPoint(rankings, {
           type: "org",
-          orgName: pendingEntry.name,
+          orgName: targets.orgName || pendingEntry.name,
           cityKey: hallMeta.cityKey,
           rawLine: pendingEntry.rawLine
         }, hallMeta);
-      } else {
+      }
+
+      if (asPlayer || asBoth) {
         addPlayerRankingPoint(rankings, {
           type: "player",
-          playerName: pendingEntry.name,
-          playerId: pendingEntry.playerId || "",
+          playerName: targets.playerName || pendingEntry.name,
+          playerId: targets.playerId || pendingEntry.playerId || "",
           cityKey: hallMeta.cityKey,
           rawLine: pendingEntry.rawLine
         }, hallMeta);
@@ -4363,7 +4486,7 @@ new ButtonBuilder()
       rankings.manualReviews ??= {};
       rankings.manualReviews[pendingEntry.reviewKey] = {
         ...pendingEntry,
-        resolvedAs: asOrg ? "org" : "player",
+        resolvedAs: asBoth ? "both" : asOrg ? "org" : "player",
         resolvedBy: interaction.user.id,
         resolvedAt: Date.now()
       };
@@ -4377,16 +4500,16 @@ new ButtonBuilder()
         components: [],
         embeds: interaction.message.embeds.map(embed => {
           const fixed = EmbedBuilder.from(embed)
-            .setColor(asOrg ? "#3498db" : "#2ecc71")
+            .setColor(asBoth ? "#9b59b6" : asOrg ? "#3498db" : "#2ecc71")
             .setFooter({
-              text: `Resolvido como ${asOrg ? "ORG" : "PESSOA"} por ${interaction.user.tag}`
+              text: `Resolvido como ${asBoth ? "ORG + PESSOA" : asOrg ? "ORG" : "PESSOA"} por ${interaction.user.tag}`
             });
 
           return fixed;
         })
       }).catch(() => {});
 
-      await interaction.editReply(`✅ Revisão resolvida como **${asOrg ? "ORG" : "PESSOA"}** e ranking atualizado.`);
+      await interaction.editReply(`✅ Revisão resolvida como **${asBoth ? "ORG + PESSOA" : asOrg ? "ORG" : "PESSOA"}** e ranking atualizado.`);
       return true;
     }
 
