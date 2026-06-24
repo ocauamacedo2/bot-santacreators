@@ -683,7 +683,7 @@
     const finalCityName = cityData?.label || cleanOneLine(newCityName) || parts.cityName;
 
     const mentionsLine = cityData
-      ? `@everyone @here <@&${ROLE_CIDADAO}> <@&${ROLE_LIDERES}> <@&${cityData.roleId}>`
+      ? `||@everyone @here <@&${ROLE_CIDADAO}> <@&${ROLE_LIDERES}> <@&${cityData.roleId}>||`
       : cleanedContent.split("\n").find(l => l.includes("@everyone")) || "";
 
     const imageLinesFromContent = getImageUrlsFromContent(cleanedContent);
@@ -2676,8 +2676,13 @@ function isAmbiguousHallWinner(winner) {
       .replace(/\bCidade\s+Maresia\b/g, cityData.label);
 
     if (!fixed.includes(`<@&${cityData.roleId}>`)) {
-      fixed = `${fixed.trim()}\n\n<@&${cityData.roleId}>`;
+      fixed = `${fixed.trim()}\n\n||@everyone @here <@&${ROLE_CIDADAO}> <@&${ROLE_LIDERES}> <@&${cityData.roleId}>||`;
     }
+
+    fixed = fixed.replace(
+      /(?<!\|\|)(@everyone\s+@here\s+<@&\d+>\s+<@&\d+>\s+<@&\d+>)(?!\|\|)/gi,
+      "||$1||"
+    );
 
     return fixed.trim();
   }
