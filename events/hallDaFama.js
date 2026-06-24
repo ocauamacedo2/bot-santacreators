@@ -1903,8 +1903,7 @@ function cleanRankingPlayerName(value = "") {
         /^TOP\b/i.test(rawClean) ||
         /^#?\s*TOP\b/i.test(rawClean) ||
         /^Organiza[cç][aã]o\b/i.test(rawClean) ||
-        /^Vencedores?\b/i.test(rawClean) ||
-        /\bVencedores?\s+[A-Za-zÀ-ÿ0-9]/i.test(rawClean);
+        /^Vencedores?\s*[:\-]/i.test(rawClean);
 
       if (!startsAsWinner) return false;
       if (!clean) return false;
@@ -1921,6 +1920,11 @@ function cleanRankingPlayerName(value = "") {
       if (clean.includes("cidadao")) return false;
       if (clean.includes("santacreators")) return false;
       if (clean.includes("lideres")) return false;
+      if (clean.includes("grandes vencedores")) return false;
+      if (clean.includes("grande vencedores")) return false;
+      if (clean.includes("nosso evento")) return false;
+      if (clean.includes("anunciamos")) return false;
+      if (clean.includes("muito orgulho")) return false;
 
       const cleanParts = cleanWinner
         .split(/\s*\|\s*|\s*<\s*|\s*:\s*/g)
@@ -2030,8 +2034,13 @@ function cleanRankingPlayerName(value = "") {
     if (normalized.includes("esperteza")) return true;
     if (normalized.includes("sangue nos olhos")) return true;
     if (normalized.includes("foi insano")) return true;
-    if (normalized.includes("como ficou depois")) return true;
+if (normalized.includes("como ficou depois")) return true;
 if (normalized.includes("cidade 1")) return true;
+if (normalized.includes("grandes vencedores")) return true;
+if (normalized.includes("grande vencedores")) return true;
+if (normalized.includes("nosso evento")) return true;
+if (normalized.includes("anunciamos")) return true;
+if (normalized.includes("muito orgulho")) return true;
 if (normalized === "organizacao") return true;
 if (normalized === "organização") return true;
 if (/^top\s*\d+$/i.test(normalized)) return true;
