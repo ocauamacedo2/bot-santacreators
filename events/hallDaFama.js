@@ -2757,13 +2757,61 @@ function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento")
 
   function createEmptyHallRankingData(previousData = null) {
     return {
-      orgs: {},
-      players: {},
-      reviewedMessages: {},
+      orgs: previousData?.orgs || {},
+      players: previousData?.players || {},
+      reviewedMessages: previousData?.reviewedMessages || {},
       pendingReview: {},
       manualReviews: previousData?.manualReviews || {},
       lastUpdatedAt: Date.now()
     };
+  }
+
+  function removeFetchedHallRankingData(rankings, fetchedMessageIds = new Set()) {
+    if (!rankings || !fetchedMessageIds?.size) return rankings;
+
+    for (const key of Object.keys(rankings.orgs || {})) {
+      const org = rankings.orgs[key];
+
+      org.halls = (org.halls || []).filter(hall => !fetchedMessageIds.has(hall.messageId));
+
+      org.total = org.halls.length;
+      org.events = {};
+
+      for (const hall of org.halls) {
+        const eventName = normalizeHallEventName(hall.eventName, hall.cityKey || org.cityKey || "nobre");
+        org.events[eventName] ??= 0;
+        org.events[eventName] += 1;
+      }
+
+      if (org.total <= 0) {
+        delete rankings.orgs[key];
+      }
+    }
+
+    for (const key of Object.keys(rankings.players || {})) {
+      const player = rankings.players[key];
+
+      player.halls = (player.halls || []).filter(hall => !fetchedMessageIds.has(hall.messageId));
+
+      player.total = player.halls.length;
+      player.events = {};
+
+      for (const hall of player.halls) {
+        const eventName = normalizeHallEventName(hall.eventName, hall.cityKey || player.cityKey || "nobre");
+        player.events[eventName] ??= 0;
+        player.events[eventName] += 1;
+      }
+
+      if (player.total <= 0) {
+        delete rankings.players[key];
+      }
+    }
+
+    for (const messageId of fetchedMessageIds) {
+      delete rankings.reviewedMessages[messageId];
+    }
+
+    return rankings;
   }
 
 function addOrgRankingPoint(rankings, orgWinner, hallMeta) {
@@ -3786,6 +3834,9 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
 
       const previousRankings = loadHallRankings();
       let rankings = createEmptyHallRankingData(previousRankings);
+
+      const fetchedMessageIds = new Set(allMessages.map(m => m.id));
+      rankings = removeFetchedHallRankingData(rankings, fetchedMessageIds);
 
       const hallMessages = allMessages.filter(m => {
         const text = getHallMessageText(m);
