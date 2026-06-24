@@ -233,8 +233,88 @@
     "9979": "nobre",   // Velber
     "16105": "nobre",  // dry style
     "52": "nobre",     // duda / duda22k
-    "1557": "nobre"    // bob macedo
+    "1557": "nobre",   // bob macedo
+
+    "799": "nobre",    // Joker / Sarah
+    "16634": "nobre",  // Kaique
+    "1854": "nobre"    // sheik
   };
+
+  const PLAYER_NAME_OVERRIDES = {
+    "799": "Joker",
+    "1629": "Guiguxyz",
+    "6641": "Pablo",
+    "16634": "Kaique",
+    "1854": "sheik"
+  };
+
+  function getManualPlayerName(playerId = "", fallbackName = "") {
+    return PLAYER_NAME_OVERRIDES[String(playerId || "").trim()] || fallbackName;
+  }
+
+  function normalizeExistingPlayerRankingOverrides(rankings) {
+    if (!rankings?.players) return rankings;
+
+    const fixedPlayers = {};
+
+    for (const player of Object.values(rankings.players || {})) {
+      if (!player) continue;
+
+      const playerId = String(player.playerId || "").trim();
+      const fixedName = getManualPlayerName(playerId, player.name || "Sem nome");
+      const fixedCityKey =
+        getManualPlayerCityKey(playerId) ||
+        getManualPlayerCityKeyByName(fixedName) ||
+        player.cityKey ||
+        "nobre";
+
+      const fixedCityName = CITIES[fixedCityKey]?.label || "Cidade Nobre";
+      const fixedKey = getPlayerRankingKey({
+        playerName: fixedName,
+        playerId,
+        cityKey: fixedCityKey
+      });
+
+      fixedPlayers[fixedKey] ??= {
+        ...player,
+        key: fixedKey,
+        name: fixedName,
+        playerId,
+        cityKey: fixedCityKey,
+        cityName: fixedCityName,
+        total: 0,
+        events: {},
+        halls: []
+      };
+
+      fixedPlayers[fixedKey].name = fixedName;
+      fixedPlayers[fixedKey].playerId = playerId;
+      fixedPlayers[fixedKey].cityKey = fixedCityKey;
+      fixedPlayers[fixedKey].cityName = fixedCityName;
+
+      fixedPlayers[fixedKey].halls.push(
+        ...(player.halls || []).map(hall => ({
+          ...hall,
+          cityKey: fixedCityKey,
+          cityName: fixedCityName
+        }))
+      );
+    }
+
+    for (const player of Object.values(fixedPlayers)) {
+      player.total = player.halls.length;
+      player.events = {};
+
+      for (const hall of player.halls) {
+        const eventName = normalizeHallEventName(hall.eventName, player.cityKey || "nobre");
+        player.events[eventName] ??= 0;
+        player.events[eventName] += 1;
+      }
+    }
+
+    rankings.players = fixedPlayers;
+    return rankings;
+  }
 
   function normalizeStaticKey(value = "") {
     return String(value || "")
@@ -1025,7 +1105,13 @@
       [normalizeHallKey("Royal")]: "nobre",
       [normalizeHallKey("Amado")]: "nobre",
       [normalizeHallKey("RJ7 White")]: "nobre",
-      [normalizeHallKey("pablo dybeck")]: "nobre"
+      [normalizeHallKey("pablo dybeck")]: "nobre",
+      [normalizeHallKey("Sarah")]: "nobre",
+      [normalizeHallKey("Joker")]: "nobre",
+      [normalizeHallKey("Kaique")]: "nobre",
+      [normalizeHallKey("sheik")]: "nobre",
+      [normalizeHallKey("Guiguxyz")]: "nobre",
+      [normalizeHallKey("Pablo")]: "nobre"
     };
 
     return nameOverrides[key] || null;
@@ -2982,18 +3068,25 @@ function addOrgRankingPoint(rankings, orgWinner, hallMeta) {
   }
 
 function addPlayerRankingPoint(rankings, playerWinner, hallMeta) {
-  const playerName = cleanRankingPlayerName(playerWinner.playerName);
+  const rawPlayerName = cleanRankingPlayerName(playerWinner.playerName);
+  const playerName = getManualPlayerName(playerWinner.playerId, rawPlayerName);
+
   if (!playerName) return;
   if (isInvalidWinnerName(playerName)) return;
   if (looksLikePrizeOnly(playerName)) return;
 
-    const key = getPlayerRankingKey(playerWinner);
     const cityKey =
       getManualPlayerCityKey(playerWinner.playerId) ||
       getManualPlayerCityKeyByName(playerName) ||
       playerWinner.cityKey ||
       hallMeta.cityKey ||
       "nobre";
+
+    const key = getPlayerRankingKey({
+      ...playerWinner,
+      playerName,
+      cityKey
+    });
 
     const cityName = CITIES[cityKey]?.label || "Cidade Nobre";
 
@@ -3008,9 +3101,7 @@ function addPlayerRankingPoint(rankings, playerWinner, hallMeta) {
       halls: []
     };
 
-    if (!rankings.players[key].name || rankings.players[key].name === "Sem nome") {
-      rankings.players[key].name = playerName;
-    }
+    rankings.players[key].name = playerName;
 
     if (!rankings.players[key].playerId && playerWinner.playerId) {
       rankings.players[key].playerId = playerWinner.playerId;
@@ -4073,6 +4164,8 @@ function buildOrgsRankingEmbed(rankings) {
   }
 
   async function publishHallRankingsDuringScan(client, rankings) {
+    normalizeExistingPlayerRankingOverrides(rankings);
+
     rankings.lastUpdatedAt = Date.now();
 
     saveHallRankings(rankings);
@@ -4082,6 +4175,8 @@ function buildOrgsRankingEmbed(rankings) {
   async function ensureHallRankingsDashboards(client) {
     try {
       const rankings = loadHallRankings();
+      normalizeExistingPlayerRankingOverrides(rankings);
+      saveHallRankings(rankings);
       await publishHallRankings(client, rankings);
     } catch (e) {
       console.error("[HallDaFama] Erro ao garantir dashboards dos rankings:", e);
