@@ -167,7 +167,12 @@
     "visionarios",
     "warlox",
     "israel",
-    "antares"
+    "antares",
+    "familia playboy",
+    "playboy",
+    "nevoa.gg",
+    "nevoa",
+    "familia novaera"
   ];
   const ORG_CITY_OVERRIDES = {
     [normalizeStaticKey("trindade")]: "grande",
@@ -334,6 +339,7 @@
   let state = loadState();
 
   const processingApprovals = new Set();
+  let hallScanRunning = false;
 
   function getHallScanKeySP() {
     return new Date().toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
@@ -783,7 +789,20 @@
     [normalizeHallKey("egito")]: "Egito",
     [normalizeHallKey("banzas")]: "Banzas",
     [normalizeHallKey("israel")]: "Israel",
-    [normalizeHallKey("antares")]: "Antares"
+    [normalizeHallKey("antares")]: "Antares",
+
+    [normalizeHallKey("familia playboy")]: "Playboy",
+    [normalizeHallKey("família playboy")]: "Playboy",
+    [normalizeHallKey("playboy")]: "Playboy",
+
+    [normalizeHallKey("nevoa.gg")]: "Nevoa.gg",
+    [normalizeHallKey("nevoagg")]: "Nevoa.gg",
+    [normalizeHallKey("nevoa")]: "Nevoa.gg",
+
+    [normalizeHallKey("familia novaera")]: "Familia NovaEra",
+    [normalizeHallKey("família novaera")]: "Familia NovaEra",
+    [normalizeHallKey("novaera")]: "Familia NovaEra",
+    [normalizeHallKey("nova era")]: "Familia NovaEra"
   };
 
   function normalizeOrgDisplayName(orgName = "") {
@@ -805,6 +824,39 @@
 
       return key === orgKey || key.includes(orgKey) || orgKey.includes(key);
     });
+  }
+
+  function isExactKnownOrgName(value = "") {
+    const key = normalizeHallKey(value);
+    if (!key) return false;
+
+    if (ORG_NAME_ALIASES[key]) return true;
+
+    return KNOWN_ORG_NAMES.some(orgName => normalizeHallKey(orgName) === key);
+  }
+
+  function extractExplicitOrgNameFromWinnerLine(cleanLine = "", originalLine = "") {
+    const rawMarkerText = stripDiscordNoise(originalLine);
+    const hasOrgMarker =
+      /\bGG\s*[:\-]/i.test(originalLine) ||
+      /^Organiza[cç][aã]o\s*[:\-]/i.test(rawMarkerText) ||
+      /^Vencedores?\b/i.test(rawMarkerText);
+
+    const beforePrize = normalizeHallDisplay(String(cleanLine || "").split("|")[0] || "")
+      .replace(/\b\d+\s*(vip|vips|rolepass|pass|kk|k|milh[oõ]es|milh[aã]o)\b[\s\S]*$/i, "")
+      .replace(/\b(vip|vips|rolepass|pass|kk|k|milh[oõ]es|milh[aã]o)\b[\s\S]*$/i, "")
+      .trim();
+
+    const orgName = normalizeOrgDisplayName(beforePrize);
+
+    if (!orgName) return "";
+    if (looksLikePrizeOnly(orgName)) return "";
+    if (isInvalidWinnerName(orgName)) return "";
+
+    if (hasOrgMarker) return orgName;
+    if (isExactKnownOrgName(orgName)) return orgName;
+
+    return "";
   }
 
   function findKnownOrgInsideWinnerName(value = "") {
@@ -1835,10 +1887,11 @@ function cleanHallWinnerLine(line = "") {
   return stripDiscordNoise(line)
     .replace(/^#\s*/i, "")
     .replace(/^TOP\s*#?\s*\d*\s*[:\-]?\s*/i, "")
-    .replace(/^Top\s*#?\s*\d+\s*[:\-]\s*/i, "")
-    .replace(/^novo emoji\s*\d+/i, "")
-    .replace(/^emoji\s*\d+/i, "")
+    .replace(/^Top\s*#?\s*\d+\s*[:\-]?\s*/i, "")
+    .replace(/^novo[_\s-]*emoji\s*~?\s*\d+\s*[:\-]?\s*/i, "")
+    .replace(/^emoji\s*~?\s*\d+\s*[:\-]?\s*/i, "")
     .replace(/^GG\s*[:\-]\s*/i, "")
+    .replace(/\bGG\s*[:\-]\s*/i, "")
     .replace(/^Organiza[cç][aã]o\s*[:\-]\s*/i, "")
     .replace(/^Vencedores?\s*/i, "")
     .replace(/^(🥇|🥈|🥉)\s*/u, "")
@@ -2100,7 +2153,15 @@ function isOrgEventName(eventName = "", cityKey = "nobre") {
     "Missão Rosa",
     "Rebelião Creators",
     "Resgate o Macedo",
-    "Pegando Fogo"
+    "Pegando Fogo",
+    "Free Fire Creators",
+    "Naval Creators",
+    "Socializar",
+    "Missão Pântano",
+    "Grande do Crime",
+    "Santa do Crime",
+    "Maresia do Crime",
+    "Nobre do Crime"
   ].includes(normalizedEvent);
 }
 
@@ -2152,6 +2213,27 @@ function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento")
 
     if (!cleanLine) return null;
 
+    const explicitOrgName = extractExplicitOrgNameFromWinnerLine(cleanLine, originalLine);
+
+    if (
+      explicitOrgName &&
+      !looksLikePrizeOnly(explicitOrgName) &&
+      !isInvalidWinnerName(explicitOrgName) &&
+      (
+        isOrgEventName(eventName, cityKey) ||
+        isExactKnownOrgName(explicitOrgName) ||
+        getManualOrgCityKey(explicitOrgName) ||
+        /\bGG\s*[:\-]/i.test(originalLine)
+      )
+    ) {
+      return {
+        type: "org",
+        orgName: explicitOrgName,
+        cityKey,
+        rawLine: originalLine
+      };
+    }
+
     const legacyPlayerOrg = cleanLine.match(/^(.+?)\s*\(([^)]+)\)\s*$/i);
     if (legacyPlayerOrg) {
       return {
@@ -2191,17 +2273,20 @@ function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento")
         cleanLine.match(/^(.+?)\s*<\s*\d{2,}/)?.[1]?.trim() ||
         "Sem nome";
 
+      const finalPlayerName = normalizeHallDisplay(playerName);
+
       const possibleOrg = afterId.find(p => {
         if (!p) return false;
         if (/^\d+$/.test(p)) return false;
+        if (normalizeHallKey(p) === normalizeHallKey(finalPlayerName)) return false;
         if (looksLikePrizeOnly(p)) return false;
         if (isInvalidWinnerName(p)) return false;
-        return p.length >= 2;
+        return isKnownOrgName(p) || getManualOrgCityKey(p);
       });
 
       return {
         type: "player",
-        playerName: normalizeHallDisplay(playerName),
+        playerName: finalPlayerName,
         playerId: id,
         orgName: normalizeOrgDisplayName(braceOrgName || angleOrgName || (possibleOrg ? normalizeHallDisplay(possibleOrg) : "")),
         cityKey,
@@ -2663,7 +2748,7 @@ function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento")
         }
 
         if (winner.orgName) {
-          const orgKey = `${getOrgRankingKey(winner.orgName, winner.cityKey)}:${normalizeHallKey(winner.rawLine || "")}`;
+          const orgKey = getOrgRankingKey(winner.orgName, winner.cityKey);
 
           if (!seenOrgs.has(orgKey)) {
             seenOrgs.add(orgKey);
@@ -2679,7 +2764,7 @@ function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento")
         continue;
       }
       if (winner.type === "org") {
-        const orgKey = `${getOrgRankingKey(winner.orgName, winner.cityKey)}:${normalizeHallKey(winner.rawLine || "")}`;
+        const orgKey = getOrgRankingKey(winner.orgName, winner.cityKey);
 
         if (!seenOrgs.has(orgKey)) {
           seenOrgs.add(orgKey);
@@ -3741,9 +3826,6 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
         );
       });
 
-      saveHallRankings(rankings);
-      await publishHallRankings(client, rankings);
-
       let edited = 0;
       let correctionProcessed = 0;
 
@@ -4255,15 +4337,27 @@ new ButtonBuilder()
       if (!hasPermission(interaction.member, interaction.user.id)) {
         return interaction.reply({ content: "🚫 Sem permissão para fazer varredura geral.", ephemeral: true });
       }
+
+      if (hallScanRunning) {
+        return interaction.reply({
+          content: "⚠️ Já existe uma varredura geral em andamento. Aguarde ela finalizar antes de iniciar outra.",
+          ephemeral: true
+        });
+      }
+
+      hallScanRunning = true;
+
       await interaction.deferReply({ ephemeral: true });
 
       const hallChannel = await client.channels.fetch(HALL_CHANNEL_ID).catch(() => null);
       if (!hallChannel) {
+        hallScanRunning = false;
         return interaction.editReply("❌ Canal do Hall da Fama não encontrado.");
       }
 
       await updateHallScanProgress(client, {
-        status: `Varredura manual iniciada por ${interaction.user.tag}...`
+        status: `Varredura manual iniciada por ${interaction.user.tag}...`,
+        forceNewApprovalPanel: true
       });
 
       await sendHallScanLog(client, {
@@ -4278,24 +4372,28 @@ new ButtonBuilder()
         phase: "Botão manual"
       });
 
-      await interaction.editReply(`🧹 Varredura iniciada! Acompanhe os logs em <#${HALL_SCAN_LOG_CHANNEL_ID}>.`);
+      try {
+        await interaction.editReply(`🧹 Varredura iniciada! Acompanhe os logs em <#${HALL_SCAN_LOG_CHANNEL_ID}>.`);
 
-      await autoCorrectDuplications(hallChannel, client, { showProgress: true });
+        await autoCorrectDuplications(hallChannel, client, { showProgress: true });
 
-      state.lastAutoCorrectScanKey = "";
-      saveState(state);
+        state.lastAutoCorrectScanKey = "";
+        saveState(state);
 
-      await interaction.editReply({
-        content: "✅ Varredura geral finalizada. Ranking atualizado e logs enviados.",
-        components: []
-      }).catch(async () => {
-        await sendHallScanLog(client, {
-          title: "✅ Varredura geral finalizada",
-          color: "#2ecc71",
-          description: `A varredura terminou, mas a resposta privada expirou antes do Discord aceitar a atualização.`,
-          phase: "Finalização"
+        await interaction.editReply({
+          content: "✅ Varredura geral finalizada. Ranking atualizado e logs enviados.",
+          components: []
+        }).catch(async () => {
+          await sendHallScanLog(client, {
+            title: "✅ Varredura geral finalizada",
+            color: "#2ecc71",
+            description: `A varredura terminou, mas a resposta privada expirou antes do Discord aceitar a atualização.`,
+            phase: "Finalização"
+          });
         });
-      });
+      } finally {
+        hallScanRunning = false;
+      }
 
       return true;
     }
