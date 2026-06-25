@@ -2,17 +2,18 @@
   import fs from "node:fs";
   import path from "node:path";
   import { fileURLToPath } from "node:url";
-  import {
-    EmbedBuilder,
-    ActionRowBuilder,
-    ButtonBuilder,
-    ButtonStyle,
-    StringSelectMenuBuilder,
-    StringSelectMenuOptionBuilder,
-    ModalBuilder,
-    TextInputBuilder,
-    TextInputStyle,
-  } from "discord.js";
+import {
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  StringSelectMenuBuilder,
+  StringSelectMenuOptionBuilder,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
+  WebhookClient,
+} from "discord.js";
 
   import { dashEmit } from "../utils/dashHub.js";
 
@@ -20,9 +21,13 @@
   const HALL_CHANNEL_ID = "1386503496353976470"; // Canal Oficial do Hall da Fama
   const APPROVAL_CHANNEL_ID = "1387864036259004436"; // Canal de Aprovação
   const HALL_AUDIT_LOG_CH_ID = "1486006930492362893";
-  const HALL_ORGS_RANKING_CHANNEL_ID = "1518696187237236816"; // Ranking de ORGs com mais GGs
-  const HALL_PLAYERS_RANKING_CHANNEL_ID = "1518696133071863838"; // Ranking de Pessoas com mais GGs
-  const HALL_REVIEW_CHANNEL_ID = "1518707314901651576"; // Canal para revisão manual de Halls confusos
+const HALL_ORGS_RANKING_CHANNEL_ID = "1518696187237236816"; // Ranking de ORGs com mais GGs
+const HALL_PLAYERS_RANKING_CHANNEL_ID = "1518696133071863838"; // Ranking de Pessoas com mais GGs
+
+const HALL_ORGS_RANKING_WEBHOOK_URL = "COLE_AQUI_A_URL_DO_WEBHOOK_DE_ORGS";
+const HALL_PLAYERS_RANKING_WEBHOOK_URL = "COLE_AQUI_A_URL_DO_WEBHOOK_DE_PLAYERS";
+
+const HALL_REVIEW_CHANNEL_ID = "1518707314901651576"; // Canal para revisão manual de Halls confusos
   const PAYMENT_EVENTS_CHANNEL_ID = "1387922662134775818"; // Canal dos botões/registros de pagamento de evento
   const PAYMENT_CITY_REVIEW_CHANNEL_ID = "1518707314901651576"; // Canal para decidir CDD de pagamento sem cidade
   const HALL_SCAN_PROGRESS_CHANNEL_ID = "1518723758574276750"; // Painel auto-editável do progresso da varredura
@@ -4100,27 +4105,38 @@ function addPlayerRankingPoint(rankings, playerWinner, hallMeta) {
   🕒 Atualizado em: <t:${Math.floor((rankings.lastUpdatedAt || Date.now()) / 1000)}:F>`;
   }
 
-  async function upsertSingleRankingMessage(channel, payload) {
-    if (!channel || !channel.isTextBased()) return;
+async function upsertSingleRankingMessage(channel, payload) {
+  if (!channel || !channel.isTextBased()) return;
 
-    const messages = await channel.messages.fetch({ limit: 20 }).catch(() => null);
-    const botMessage = messages
-      ?.filter(m => m.author.bot && m.author.id === channel.client.user.id)
-      ?.sort((a, b) => b.createdTimestamp - a.createdTimestamp)
-      ?.first();
+  const messages = await channel.messages.fetch({ limit: 20 }).catch(() => null);
+  const botMessage = messages
+    ?.filter(m => m.author.bot && m.author.id === channel.client.user.id)
+    ?.sort((a, b) => b.createdTimestamp - a.createdTimestamp)
+    ?.first();
 
-    const finalPayload =
-      typeof payload === "string"
-        ? { content: payload.slice(0, 2000) }
-        : { content: "", embeds: payload.embeds || [] };
+  const finalPayload =
+    typeof payload === "string"
+      ? { content: payload.slice(0, 2000) }
+      : { content: "", embeds: payload.embeds || [] };
 
-    if (botMessage) {
-      await botMessage.edit(finalPayload).catch(() => {});
-      return;
-    }
-
-    await channel.send(finalPayload).catch(() => {});
+  if (botMessage) {
+    await botMessage.edit(finalPayload).catch(() => {});
+    return;
   }
+
+  await channel.send(finalPayload).catch(() => {});
+}
+
+async function sendRankingWebhookMirror(webhookUrl, payload) {
+  if (!webhookUrl || webhookUrl.includes("COLE_AQUI")) return;
+
+  const webhook = new WebhookClient({ url: webhookUrl });
+
+  await webhook.send({
+    content: payload.content || "",
+    embeds: payload.embeds || []
+  }).catch(() => {});
+}
 
   function splitEmbedFieldValue(text = "", maxLength = 1000) {
     const chunks = [];
@@ -4266,18 +4282,24 @@ function buildOrgsRankingEmbed(rankings) {
     );
   }
 
-  async function publishHallRankings(client, rankings) {
-    const orgsChannel = await client.channels.fetch(HALL_ORGS_RANKING_CHANNEL_ID).catch(() => null);
-    const playersChannel = await client.channels.fetch(HALL_PLAYERS_RANKING_CHANNEL_ID).catch(() => null);
+async function publishHallRankings(client, rankings) {
+  const orgsChannel = await client.channels.fetch(HALL_ORGS_RANKING_CHANNEL_ID).catch(() => null);
+  const playersChannel = await client.channels.fetch(HALL_PLAYERS_RANKING_CHANNEL_ID).catch(() => null);
 
-    await upsertSingleRankingMessage(orgsChannel, {
-      embeds: [buildOrgsRankingEmbed(rankings)]
-    });
+  const orgsPayload = {
+    embeds: [buildOrgsRankingEmbed(rankings)]
+  };
 
-    await upsertSingleRankingMessage(playersChannel, {
-      embeds: [buildPlayersRankingEmbed(rankings)]
-    });
-  }
+  const playersPayload = {
+    embeds: [buildPlayersRankingEmbed(rankings)]
+  };
+
+  await upsertSingleRankingMessage(orgsChannel, orgsPayload);
+  await upsertSingleRankingMessage(playersChannel, playersPayload);
+
+  await sendRankingWebhookMirror(HALL_ORGS_RANKING_WEBHOOK_URL, orgsPayload);
+  await sendRankingWebhookMirror(HALL_PLAYERS_RANKING_WEBHOOK_URL, playersPayload);
+}
 
   async function publishHallRankingsDuringScan(client, rankings) {
     normalizeExistingPlayerRankingOverrides(rankings);
