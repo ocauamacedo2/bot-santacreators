@@ -63,8 +63,11 @@ const FIVEM_SNAPSHOT_CACHE_MS = 10 * 1000; // reaproveita a mesma coleta por 10 
 const FIVEM_DYNAMIC_URL_CACHE_MS = 2 * 60 * 1000; // reaproveita endpoints por 2 minutos
 const FIVEM_COMPARISON_TOLERANCE_MS = 10 * 60 * 1000; // 10 minutos
 const FIVEM_TIMEZONE = "America/Sao_Paulo";
-const FIVEM_RANK_MARKER_TAG = "[FIVEM_RETENTION_STATUS]";
-const FIVEM_CONT_MARKER_TAG = "[FIVEM_RETENTION_STATUS_CONT]";
+const FIVEM_OLD_RANK_MARKER_TAG = "[FIVEM_RETENTION_STATUS]";
+const FIVEM_OLD_CONT_MARKER_TAG = "[FIVEM_RETENTION_STATUS_CONT]";
+
+const FIVEM_RANK_MARKER_TAG = "\u200B\u200C\u200D\u2060";
+const FIVEM_CONT_MARKER_TAG = "\u200B\u200C\u200D\u2061";
 const FIVEM_MAX_EMBED_CHARS_PER_MESSAGE = 5600;
 const FIVEM_MAX_EMBEDS_PER_MESSAGE = 10;
 
@@ -103,6 +106,7 @@ const PeakModel = mongoose.models.FivemRetentionPeak || mongoose.model("FivemRet
 const FIVEM_STATE = new Map(); // channelId -> { intervalId, messageId }
 let FIVEM_MASTER_INTERVAL_ID = null; // loop único para atualizar todos os painéis juntos
 let FIVEM_MASTER_INTERVAL_RUNNING = false; // trava para não sobrepor atualização automática
+let FIVEM_LAST_PANEL_BROADCAST_AT = 0; // força todos os painéis juntos a cada 10 minutos
 const FIVEM_PANEL_BACKGROUND_JOBS = new Set(); // trava cliques repetidos enquanto já existe processo rodando
 const FIVEM_CHANNEL_LOCKS = new Map(); // channelId -> Promise, impede criar/editar/recriar ao mesmo tempo
 const FIVEM_SNAPSHOT_CACHE = {
@@ -2478,7 +2482,7 @@ return {
      )
      .setFooter({ text: `Relatório de Retenção Nobre • 21:00h` });
   if (panelScope === "peaks") {
-   embeds.push(peaksEmbed);
+   embeds.push(retentionEmbed);
  }
  }
 
@@ -2644,25 +2648,31 @@ if (FIVEM_SHOW_DETAILED_WINDOW_ANALYSIS) {
    .sort((a, b) => b.todayPeak - a.todayPeak);
 
  const peaksEmbed = new EmbedBuilder()
-   .setColor(baseColor)
-   .setTitle("🏆 RECORDES — PICOS DE AUDIÊNCIA (DIA)")
+   .setColor(0xf1c40f)
+   .setTitle("🏆 Retenção SG — Picos de Audiência")
    .setDescription(
-     `*Maior volume de jogadores simultâneos registrados hoje*\n\n` +
+     `**Santa Creators • Recordes do dia**\n` +
+     `Maior volume de jogadores simultâneos registrados hoje.\n\n` +
      peakAnalysisData.map((item, index) => {
        const medal = index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : `${index + 1}.`;
        const diffY = calculateDiff(item.todayPeak, item.yesterdayPeak);
        const diffW = calculateDiff(item.todayPeak, item.weekPeak);
 
        return (
-         `${medal} **BR ${item.name}** • \`${formatNumber(item.todayPeak)}\` às \`${item.todayPeakTime}\`\n` +
-         `> **Histórico:** ${formatDiff(diffY)} (24h) | ${formatDiff(diffW)} (7d)`
+         `${medal} **BR ${item.name}**\n` +
+         `> Pico hoje: \`${formatNumber(item.todayPeak)}\` players às \`${item.todayPeakTime}\`\n` +
+         `> 24h: ${formatDiff(diffY)}\n` +
+         `> 7d: ${formatDiff(diffW)}`
        );
      }).join("\n\n") +
      `\n\n${UI.DIVIDER}\n` +
-     `**Recorde Geral Hoje:** ${formatPeakValue(todayPeaks.total?.peak, todayPeaks.total?.peakTime)}`
+     `🌐 **Recorde geral hoje:** ${formatPeakValue(todayPeaks.total?.peak, todayPeaks.total?.peakTime)}\n` +
+     `🕒 **Última leitura:** \`${currentSnapshot.spTime}\``
    )
-   .setFooter({ text: `Relatório de Picos Diários • Hoje até ${currentSnapshot.spTime}` });
- if (panelScope === "main") {
+   .setFooter({ text: `Retenção SG • Santa Creators • Picos diários ${FIVEM_RANK_MARKER_TAG}` })
+   .setTimestamp();
+
+ if (panelScope === "peaks") {
   embeds.push(peaksEmbed);
 }
 
@@ -2830,8 +2840,10 @@ async function deleteAllRetentionPanelMessages(channel, botId) {
        const title = e.title || "";
 
        return (
-         footer.includes(FIVEM_RANK_MARKER_TAG) ||
-         footer.includes(FIVEM_CONT_MARKER_TAG) ||
+footer.includes(FIVEM_RANK_MARKER_TAG) ||
+footer.includes(FIVEM_CONT_MARKER_TAG) ||
+footer.includes(FIVEM_OLD_RANK_MARKER_TAG) ||
+footer.includes(FIVEM_OLD_CONT_MARKER_TAG) ||
          title.includes("CENTRAL ANALÍTICA") ||
          title.includes("STATUS EM TEMPO REAL") ||
          title.includes("TRENDS") ||
@@ -2873,8 +2885,10 @@ async function cleanupDuplicateRetentionPanelMessages(channel, botId, options = 
          const title = e.title || "";
 
          return (
-           footer.includes(FIVEM_RANK_MARKER_TAG) ||
-           footer.includes(FIVEM_CONT_MARKER_TAG) ||
+          footer.includes(FIVEM_RANK_MARKER_TAG) ||
+          footer.includes(FIVEM_CONT_MARKER_TAG) ||
+          footer.includes(FIVEM_OLD_RANK_MARKER_TAG) ||
+          footer.includes(FIVEM_OLD_CONT_MARKER_TAG) ||
            title.includes("CENTRAL ANALÍTICA") ||
            title.includes("STATUS EM TEMPO REAL") ||
            title.includes("TRENDS") ||
@@ -3245,7 +3259,14 @@ FIVEM_STATE.set(channel.id, {
     FIVEM_MASTER_INTERVAL_RUNNING = true;
 
     try {
-const shouldForcePanelEdit = label === "inicial";
+const now = Date.now();
+const shouldForcePanelEdit =
+  label === "inicial" ||
+  now - FIVEM_LAST_PANEL_BROADCAST_AT >= FIVEM_PANEL_REFRESH_INTERVAL_MS;
+
+if (shouldForcePanelEdit) {
+  FIVEM_LAST_PANEL_BROADCAST_AT = now;
+}
 
 const results = await editAllFivemRetentionPanels(client, {
   auto: true,
@@ -3469,12 +3490,8 @@ export async function fivemRetentionStatusHandleInteraction(interaction, client)
 
       return true;
     }
-    const started = runFivemPanelJobInBackground("refresh_all", "Atualizar todos os painéis", async () => {
-      await ensureFivemRetentionAutoLoop(client, {
-        forceInitialUpdate: false,
-      });
-
-     const results = await editAllFivemRetentionPanels(client, {
+const started = runFivemPanelJobInBackground("refresh_all", "Atualizar todos os painéis", async () => {
+ const results = await editAllFivemRetentionPanels(client, {
   force: true,
   forceFresh: true,
 });
