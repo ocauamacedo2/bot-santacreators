@@ -238,13 +238,14 @@
     "1087": "nobre"    // Nicolas / PRN / Sheik antigo
   };
 
-  const PLAYER_NAME_OVERRIDES = {
-    "799": "Joker",
-    "1629": "Guiguxyz",
-    "6641": "Pablo",
-    "16634": "Kaique",
-    "1854": "sheik"
-  };
+const PLAYER_NAME_OVERRIDES = {
+  "799": "Joker",
+  "1629": "Guiguxyz",
+  "6641": "Pablo",
+  "2593": "Miri",
+  "16634": "Kaique",
+  "1854": "sheik"
+};
 
   function getManualPlayerName(playerId = "", fallbackName = "") {
     return PLAYER_NAME_OVERRIDES[String(playerId || "").trim()] || fallbackName;
@@ -328,6 +329,26 @@
     }
 
     for (const player of Object.values(fixedPlayers)) {
+      const uniqueHalls = [];
+      const seenHallKeys = new Set();
+
+      for (const hall of player.halls || []) {
+        const eventName = normalizeHallEventName(hall.eventName, hall.cityKey || player.cityKey || "nobre");
+        const cityKey = hall.cityKey || player.cityKey || "nobre";
+        const uniqueKey = `${hall.messageId || hall.jumpUrl || hall.at}:${eventName}:${cityKey}`;
+
+        if (seenHallKeys.has(uniqueKey)) continue;
+
+        seenHallKeys.add(uniqueKey);
+        uniqueHalls.push({
+          ...hall,
+          eventName,
+          cityKey,
+          cityName: CITIES[cityKey]?.label || player.cityName || "Cidade Nobre"
+        });
+      }
+
+      player.halls = uniqueHalls;
       player.total = player.halls.length;
       player.events = {};
 
@@ -2995,11 +3016,14 @@ function isAmbiguousHallWinner(winner) {
     return finalWinners;
   }
 
-  function createEmptyHallRankingData(previousData = null) {
+function createEmptyHallRankingData(previousData = null) {
     return {
       orgs: previousData?.orgs || {},
       players: previousData?.players || {},
       reviewedMessages: previousData?.reviewedMessages || {},
+      reviewedPaymentMessages: previousData?.reviewedPaymentMessages || {},
+      paymentEventKeys: previousData?.paymentEventKeys || {},
+      pendingPaymentCityReview: previousData?.pendingPaymentCityReview || {},
       pendingReview: {},
       manualReviews: previousData?.manualReviews || {},
       lastUpdatedAt: Date.now()
@@ -3138,14 +3162,28 @@ function addPlayerRankingPoint(rankings, playerWinner, hallMeta) {
 
     rankings.players[key].cityKey = cityKey;
     rankings.players[key].cityName = cityName;
+
+    const eventName = normalizeHallEventName(hallMeta.eventName, cityKey);
+    const uniqueKey = `${hallMeta.messageId || hallMeta.jumpUrl || hallMeta.createdTimestamp}:${eventName}:${cityKey}`;
+
+    const alreadyCounted = (rankings.players[key].halls || []).some(hall => {
+      const hallEventName = normalizeHallEventName(hall.eventName, hall.cityKey || cityKey);
+      const hallCityKey = hall.cityKey || cityKey;
+      const hallUniqueKey = `${hall.messageId || hall.jumpUrl || hall.at}:${hallEventName}:${hallCityKey}`;
+
+      return hallUniqueKey === uniqueKey;
+    });
+
+    if (alreadyCounted) return;
+
     rankings.players[key].total += 1;
 
-    rankings.players[key].events[hallMeta.eventName] ??= 0;
-    rankings.players[key].events[hallMeta.eventName] += 1;
+    rankings.players[key].events[eventName] ??= 0;
+    rankings.players[key].events[eventName] += 1;
 
     rankings.players[key].halls.push({
       messageId: hallMeta.messageId,
-      eventName: normalizeHallEventName(hallMeta.eventName, cityKey),
+      eventName,
       cityKey,
       cityName,
       at: hallMeta.createdTimestamp || Date.now()
@@ -3346,15 +3384,14 @@ function addPlayerRankingPoint(rankings, playerWinner, hallMeta) {
       : `name:${normalizeHallKey(fixedPlayerName)}`;
   }
 
-  function getPaymentEventKey({ eventName, eventDateKey, cityKey, playerId, playerName, messageId, createdTimestamp }) {
+  function getPaymentEventKey({ eventName, eventDateKey, cityKey, playerId, playerName }) {
     const playerKey = getPaymentPlayerKey(playerId, playerName);
 
     return [
       normalizeHallKey(eventName),
       eventDateKey,
       cityKey || "sem-cidade",
-      playerKey,
-      messageId || createdTimestamp || Date.now()
+      playerKey
     ].join("|");
   }
 
@@ -3414,6 +3451,38 @@ function addPlayerRankingPoint(rankings, playerWinner, hallMeta) {
     });
   }
 
+  function rebuildPaymentPlayerPointsFromZero(rankings) {
+    const paymentMessageIds = new Set();
+
+    for (const payment of Object.values(rankings.paymentEventKeys || {})) {
+      if (payment?.messageId) paymentMessageIds.add(payment.messageId);
+    }
+
+    for (const [messageId, review] of Object.entries(rankings.reviewedPaymentMessages || {})) {
+      if (review && review.skipped === false) paymentMessageIds.add(messageId);
+    }
+
+    if (paymentMessageIds.size) {
+      for (const player of Object.values(rankings.players || {})) {
+        player.halls = (player.halls || []).filter(hall => !paymentMessageIds.has(hall.messageId));
+
+        player.total = player.halls.length;
+        player.events = {};
+
+        for (const hall of player.halls) {
+          const eventName = normalizeHallEventName(hall.eventName, hall.cityKey || player.cityKey || "nobre");
+          player.events[eventName] ??= 0;
+          player.events[eventName] += 1;
+        }
+      }
+    }
+
+    rankings.reviewedPaymentMessages = {};
+    rankings.paymentEventKeys = {};
+
+    return rankings;
+  }
+
   async function sendPaymentCityReviewOnce(client, rankings, message, winner, eventName, eventDateKey) {
     const playerReviewKey = winner.playerId
       ? `id:${winner.playerId}`
@@ -3457,6 +3526,8 @@ function addPlayerRankingPoint(rankings, playerWinner, hallMeta) {
     rankings.reviewedPaymentMessages ??= {};
     rankings.paymentEventKeys ??= {};
     rankings.pendingPaymentCityReview ??= {};
+
+    rankings = rebuildPaymentPlayerPointsFromZero(rankings);
 
     let beforeId = null;
     let scanned = 0;
@@ -3544,6 +3615,18 @@ function addPlayerRankingPoint(rankings, playerWinner, hallMeta) {
           messageId: message.id,
           createdTimestamp: message.createdTimestamp || Date.now()
         });
+
+        if (rankings.paymentEventKeys[paymentKey]) {
+          skipped++;
+          rankings.reviewedPaymentMessages[message.id] = {
+            skipped: true,
+            reason: "pagamento_duplicado_mesmo_evento_player_dia",
+            paymentKey,
+            duplicatedFromMessageId: rankings.paymentEventKeys[paymentKey].messageId || "",
+            at: Date.now()
+          };
+          continue;
+        }
 
         const duplicatePayment = findDuplicateNearbyPaymentEvent(rankings, {
           eventName,
