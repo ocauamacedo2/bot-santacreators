@@ -23,9 +23,8 @@ import {
   const HALL_AUDIT_LOG_CH_ID = "1486006930492362893";
 const HALL_ORGS_RANKING_CHANNEL_ID = "1518696187237236816"; // Ranking de ORGs com mais GGs
 const HALL_PLAYERS_RANKING_CHANNEL_ID = "1518696133071863838"; // Ranking de Pessoas com mais GGs
-
-const HALL_ORGS_RANKING_WEBHOOK_URL = "COLE_AQUI_A_URL_DO_WEBHOOK_DE_ORGS";
-const HALL_PLAYERS_RANKING_WEBHOOK_URL = "COLE_AQUI_A_URL_DO_WEBHOOK_DE_PLAYERS";
+const HALL_ORGS_RANKING_WEBHOOK_URL = "https://discord.com/api/webhooks/1519547838957359155/TjDA5C-QquaAag2YBKqhfwR1szql7hooy-m53EAto6O37o3ZhP-PBIEduH64QodLBLGD";
+const HALL_PLAYERS_RANKING_WEBHOOK_URL = "";
 
 const HALL_REVIEW_CHANNEL_ID = "1518707314901651576"; // Canal para revisão manual de Halls confusos
   const PAYMENT_EVENTS_CHANNEL_ID = "1387922662134775818"; // Canal dos botões/registros de pagamento de evento
@@ -4298,7 +4297,6 @@ async function publishHallRankings(client, rankings) {
   await upsertSingleRankingMessage(playersChannel, playersPayload);
 
   await sendRankingWebhookMirror(HALL_ORGS_RANKING_WEBHOOK_URL, orgsPayload);
-  await sendRankingWebhookMirror(HALL_PLAYERS_RANKING_WEBHOOK_URL, playersPayload);
 }
 
   async function publishHallRankingsDuringScan(client, rankings) {
