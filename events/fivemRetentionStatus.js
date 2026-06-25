@@ -18,6 +18,10 @@ import { fileURLToPath } from "node:url";
 // ⚙️ CONFIG
 const FIVEM_PANEL_CHANNEL_ID = "1501321157259956244";
 
+const FIVEM_TRENDS_PANEL_CHANNEL_ID = "1519800998590283797";
+const FIVEM_PEAKS_PANEL_CHANNEL_ID = "1519802736592290013";
+const FIVEM_EXECUTIVE_PANEL_CHANNEL_ID = "1519803018827137085";
+
 const FIVEM_CITY_PANEL_CHANNEL_IDS = {
   nobre: "1513967298690420876",
   santa: "1513967343317942382",
@@ -25,14 +29,25 @@ const FIVEM_CITY_PANEL_CHANNEL_IDS = {
   maresia: "1513967404059983913",
 };
 
+const FIVEM_SPECIAL_PANEL_CHANNEL_IDS = {
+  trends: FIVEM_TRENDS_PANEL_CHANNEL_ID,
+  peaks: FIVEM_PEAKS_PANEL_CHANNEL_ID,
+  executive: FIVEM_EXECUTIVE_PANEL_CHANNEL_ID,
+};
+
 const FIVEM_ALL_PANEL_CHANNEL_IDS = [
   ...new Set([
     FIVEM_PANEL_CHANNEL_ID,
+    ...Object.values(FIVEM_SPECIAL_PANEL_CHANNEL_IDS),
     ...Object.values(FIVEM_CITY_PANEL_CHANNEL_IDS),
   ]),
 ];
 
 function getFivemPanelScopeByChannelId(channelId) {
+  if (channelId === FIVEM_SPECIAL_PANEL_CHANNEL_IDS.trends) return "trends";
+  if (channelId === FIVEM_SPECIAL_PANEL_CHANNEL_IDS.peaks) return "peaks";
+  if (channelId === FIVEM_SPECIAL_PANEL_CHANNEL_IDS.executive) return "executive";
+
   if (channelId === FIVEM_CITY_PANEL_CHANNEL_IDS.nobre) return "nobre";
   if (channelId === FIVEM_CITY_PANEL_CHANNEL_IDS.santa) return "santa";
   if (channelId === FIVEM_CITY_PANEL_CHANNEL_IDS.grande) return "grande";
@@ -40,12 +55,12 @@ function getFivemPanelScopeByChannelId(channelId) {
 
   return "main";
 }
-const FIVEM_REFRESH_INTERVAL_MS = 1 * 60 * 1000; // coleta a cada 1 minuto
-const FIVEM_PANEL_REFRESH_INTERVAL_MS = 1 * 60 * 1000; // edita o painel a cada 1 minuto
+const FIVEM_REFRESH_INTERVAL_MS = 1 * 60 * 1000; // coleta/salva histórico a cada 1 minuto
+const FIVEM_PANEL_REFRESH_INTERVAL_MS = 10 * 60 * 1000; // edita o painel a cada 10 minutos
 const FIVEM_HISTORY_MAX_DAYS = 120; // Mantém histórico suficiente para comparar semanas e meses sem perder base
-const FIVEM_FETCH_TIMEOUT_MS = 4 * 1000; // 4 segundos
+const FIVEM_FETCH_TIMEOUT_MS = 8 * 1000; // 8 segundos para reduzir falhas por API lenta
 const FIVEM_SNAPSHOT_CACHE_MS = 10 * 1000; // reaproveita a mesma coleta por 10 segundos
-const FIVEM_DYNAMIC_URL_CACHE_MS = 5 * 60 * 1000; // reaproveita endpoints por 5 minutos
+const FIVEM_DYNAMIC_URL_CACHE_MS = 2 * 60 * 1000; // reaproveita endpoints por 2 minutos
 const FIVEM_COMPARISON_TOLERANCE_MS = 10 * 60 * 1000; // 10 minutos
 const FIVEM_TIMEZONE = "America/Sao_Paulo";
 const FIVEM_RANK_MARKER_TAG = "[FIVEM_RETENTION_STATUS]";
@@ -96,6 +111,8 @@ const FIVEM_SNAPSHOT_CACHE = {
 };
 const FIVEM_DYNAMIC_URL_CACHE = new Map(); // cityKey -> { createdAt, urls }
 const FIVEM_DEBUG = false; // 🛑 Desativa os logs de depuração para evitar flood
+const FIVEM_UNRELIABLE_WARN_COOLDOWN_MS = 10 * 60 * 1000; // evita flood de aviso quando a API oscila
+let FIVEM_LAST_UNRELIABLE_WARN_AT = 0;
 
 const DEFAULT_COLOR = 0x2b2d31;
 
@@ -106,7 +123,9 @@ const UI = {
   GROWTH: "🟢",
   DROP: "🔴",
   STABLE: "🟠",
-  NONE: "⚪"
+  NONE: "⚪",
+  UP: "👍",
+  DOWN: "🔻"
 };
 
 const FIVEM_CITIES = [
@@ -788,7 +807,15 @@ function calculateDiff(current, previous) {
  const diff = current - previous;
  const pct = (diff / previous) * 100;
  // Correção: 🟢 = crescimento, 🔴 = queda, 🟠 = estabilidade
- return { diff, pct, arrow: diff > 0 ? UI.GROWTH + ' ▲' : (diff < 0 ? UI.DROP + ' ▼' : UI.STABLE + ' ➖') };
+return {
+  diff,
+  pct,
+  arrow: diff > 0
+    ? `${UI.GROWTH} ${UI.UP} ▲`
+    : diff < 0
+      ? `${UI.DROP} ${UI.DOWN} ▼`
+      : `${UI.STABLE} ➖`
+};
 }
 function formatDiff(diffObj) {
  if (diffObj.diff === 'N/A') return 'N/A';
@@ -2299,7 +2326,7 @@ async function buildEmbeds(client, currentSnapshot, panelScope = "main") {
    )
    .setFooter({ text: `Relatório de Inteligência • Sincronizado às ${currentSnapshot.spTime}` })
    .setTimestamp();
- if (panelScope === "main") {
+if (panelScope === "executive") {
   embeds.push(dashboardEmbed);
 }
 
@@ -2326,9 +2353,9 @@ return formatOnlyCurrentLine(
      `**Total da Rede:** \`${formatNumber(totalCurrentClients)} / ${formatNumber(totalMaxClients)}\` players\n` +
      `**Ocupação Geral:** \`${capacityPercent}%\` ${getStatusEmojiByYesterday(totalCurrentClients, totalYesterdayClients)}`
    )
-   .setFooter({
-     text: `Dados atualizados a cada 2min • ${FIVEM_RANK_MARKER_TAG}`,
-   });
+    .setFooter({
+      text: `Coleta a cada 1min • Painel atualizado a cada 10min • ${FIVEM_RANK_MARKER_TAG}`,
+    });
  if (panelScope === "main") {
   embeds.push(summaryEmbed);
 }
@@ -2355,7 +2382,7 @@ return formatOnlyCurrentLine(
      `\n\n**🌐 PERFORMANCE REDE:** ${formatDiff(calculateDiff(totalCurrentClients, totalLastWeekClients))}\n`
    )
    .setFooter({ text: `Análise de Retenção Dinâmica • Ref: ${currentSnapshot.spTime}` });
- if (panelScope === "main") {
+if (panelScope === "trends") {
   embeds.push(comparisonEmbed);
 }
 const currentWeekday = getSaoPauloWeekday(new Date(currentSnapshot.timestamp));
@@ -2450,9 +2477,9 @@ return {
 `**Crescimento Semanal:** ${today21h.total > 0 ? formatDiff(calculateDiff(today21h.total, lastWeek21h.total)) : "não comparado ainda"}`
      )
      .setFooter({ text: `Relatório de Retenção Nobre • 21:00h` });
-   if (panelScope === "main") {
-  embeds.push(retentionEmbed);
-}
+  if (panelScope === "peaks") {
+   embeds.push(peaksEmbed);
+ }
  }
 
  // 5.1 PAINÉIS DE RETENÇÃO POR CIDADE (DIVIDIDO EM VÁRIOS EMBEDS PARA NÃO ESTOURAR 6000 CARACTERES)
@@ -2706,9 +2733,9 @@ const compWPrimePeaks = peaks[
    )
    .setFooter({ text: "O ranking considera apenas dados coletados dentro das janelas de pico alternadas." });
  
- if (panelScope === "main") {
-  embeds.push(perfEmbed);
-}
+  if (panelScope === "peaks") {
+   embeds.push(perfEmbed);
+ }
 
  // Mapeia os dados baseados nos picos ativos (hoje ou resumo de ontem)
 const currentEventWindow = primeWindow?.eventKey
@@ -2750,16 +2777,16 @@ const effectivePeakData = currentEventWindow ? [
 `> **Status:** ${(currentEventWindow?.peak || 0) > 0 ? "coletando o maior pico da janela" : "aguardando coleta dessa janela"}`
    )
    .setFooter({ text: `${useYesterdayFocus ? "Resumo Consolidado" : "Monitoramento em Tempo Real"} • Ref: ${currentSnapshot.spTime}` });
-if (panelScope === "main") {
-  embeds.push(primeEmbed);
-}
+ if (panelScope === "peaks") {
+   embeds.push(primeEmbed);
+ }
 
  // Botão de atualização manual
 const row = new ActionRowBuilder().addComponents(
-  new ButtonBuilder()
-    .setCustomId("fivem_retention_force_refresh")
-    .setLabel("🔄 Atualizar painéis")
-    .setStyle(ButtonStyle.Primary),
+new ButtonBuilder()
+  .setCustomId("fivem_retention_force_refresh")
+  .setLabel("🔄 Atualizar agora")
+  .setStyle(ButtonStyle.Primary),
   ...(panelScope === "main"
     ? [
         new ButtonBuilder()
@@ -3218,9 +3245,11 @@ FIVEM_STATE.set(channel.id, {
     FIVEM_MASTER_INTERVAL_RUNNING = true;
 
     try {
+const shouldForcePanelEdit = label === "inicial";
+
 const results = await editAllFivemRetentionPanels(client, {
   auto: true,
-  force: true,
+  force: shouldForcePanelEdit,
   forceFresh: true,
   cleanupDuplicates: false,
   silentAutoLogs: true,
@@ -3251,11 +3280,11 @@ const results = await editAllFivemRetentionPanels(client, {
     });
   }
 
-  FIVEM_MASTER_INTERVAL_ID = setInterval(() => {
-    runMasterUpdate("1min").catch((e) => {
-      console.error("[FIVEM_RETENTION] Erro no intervalo mestre:", e);
-    });
-  }, FIVEM_PANEL_REFRESH_INTERVAL_MS);
+FIVEM_MASTER_INTERVAL_ID = setInterval(() => {
+  runMasterUpdate("1min/coleta").catch((e) => {
+    console.error("[FIVEM_RETENTION] Erro no intervalo mestre:", e);
+  });
+}, FIVEM_REFRESH_INTERVAL_MS);
 
   return true;
 }
@@ -3299,15 +3328,21 @@ const sharedSnapshot = {
 };
 
 if (!safeSnapshot.shouldPersist) {
-  const cities = Object.values(safeSnapshot.snapshot?.cities || {});
-  const onlineCities = cities.filter((city) => city?.online === true).length;
-  const totalClients = safeNumber(safeSnapshot.snapshot?.totalClients, 0);
-  const totalMaxClients = safeNumber(safeSnapshot.snapshot?.totalMaxClients, 0);
+  const now = Date.now();
 
-  console.warn(
-    `[FIVEM_RETENTION] Snapshot atual não confiável. Painéis serão atualizados com fallback/exibição. ` +
-    `Online válidas: ${onlineCities}/${FIVEM_CITIES.length} | Total: ${totalClients}/${totalMaxClients}`
-  );
+  if (now - FIVEM_LAST_UNRELIABLE_WARN_AT >= FIVEM_UNRELIABLE_WARN_COOLDOWN_MS) {
+    FIVEM_LAST_UNRELIABLE_WARN_AT = now;
+
+    const cities = Object.values(safeSnapshot.snapshot?.cities || {});
+    const onlineCities = cities.filter((city) => city?.online === true).length;
+    const totalClients = safeNumber(safeSnapshot.snapshot?.totalClients, 0);
+    const totalMaxClients = safeNumber(safeSnapshot.snapshot?.totalMaxClients, 0);
+
+    console.warn(
+      `[FIVEM_RETENTION] Snapshot atual não confiável. Painéis serão atualizados com fallback/exibição. ` +
+      `Online válidas: ${onlineCities}/${FIVEM_CITIES.length} | Total: ${totalClients}/${totalMaxClients}`
+    );
+  }
 }
 
   const results = await Promise.all(
@@ -3318,7 +3353,7 @@ if (!safeSnapshot.shouldPersist) {
 
 return editPanel(channel, {
   ...options,
-  force: true,
+  force: options.force === true,
   cleanupDuplicates: options.cleanupDuplicates === true,
   safeSnapshot: sharedSnapshot,
 }).catch((e) => {
