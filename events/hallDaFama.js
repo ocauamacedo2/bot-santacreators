@@ -184,9 +184,6 @@
 
     [normalizeStaticKey("vidigal")]: "nobre",
     [normalizeStaticKey("morro do sacola")]: "nobre",
-    [normalizeStaticKey("morro do sacola")]: "nobre",
-    [normalizeStaticKey("tropa do 7")]: "nobre",
-    [normalizeStaticKey("tropado7")]: "nobre",
     [normalizeStaticKey("big")]: "nobre",
     [normalizeStaticKey("espanha")]: "nobre",
     [normalizeStaticKey("familia espanha")]: "nobre",
