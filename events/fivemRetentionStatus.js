@@ -43,6 +43,15 @@ const FIVEM_ALL_PANEL_CHANNEL_IDS = [
   ]),
 ];
 
+const FIVEM_FAST_PANEL_CHANNEL_IDS = [
+  ...new Set([
+    FIVEM_PANEL_CHANNEL_ID,
+    FIVEM_SPECIAL_PANEL_CHANNEL_IDS.trends,
+    FIVEM_SPECIAL_PANEL_CHANNEL_IDS.peaks,
+    ...Object.values(FIVEM_CITY_PANEL_CHANNEL_IDS),
+  ]),
+];
+
 function getFivemPanelScopeByChannelId(channelId) {
   if (channelId === FIVEM_SPECIAL_PANEL_CHANNEL_IDS.trends) return "trends";
   if (channelId === FIVEM_SPECIAL_PANEL_CHANNEL_IDS.peaks) return "peaks";
@@ -56,7 +65,7 @@ function getFivemPanelScopeByChannelId(channelId) {
   return "main";
 }
 const FIVEM_REFRESH_INTERVAL_MS = 1 * 60 * 1000; // coleta/salva histórico a cada 1 minuto
-const FIVEM_PANEL_REFRESH_INTERVAL_MS = 10 * 60 * 1000; // edita o painel a cada 10 minutos
+const FIVEM_PANEL_REFRESH_INTERVAL_MS = 10 * 60 * 1000; // edita painéis pesados/executivos a cada 10 minutos
 const FIVEM_HISTORY_MAX_DAYS = 120; // Mantém histórico suficiente para comparar semanas e meses sem perder base
 const FIVEM_FETCH_TIMEOUT_MS = 8 * 1000; // 8 segundos para reduzir falhas por API lenta
 const FIVEM_SNAPSHOT_CACHE_MS = 10 * 1000; // reaproveita a mesma coleta por 10 segundos
@@ -3271,6 +3280,7 @@ if (shouldForcePanelEdit) {
 const results = await editAllFivemRetentionPanels(client, {
   auto: true,
   force: shouldForcePanelEdit,
+  fastRefreshChannelIds: FIVEM_FAST_PANEL_CHANNEL_IDS,
   forceFresh: true,
   cleanupDuplicates: false,
   silentAutoLogs: true,
@@ -3374,7 +3384,7 @@ if (!safeSnapshot.shouldPersist) {
 
 return editPanel(channel, {
   ...options,
-  force: options.force === true,
+  force: options.force === true || options.fastRefreshChannelIds?.includes(channelId),
   cleanupDuplicates: options.cleanupDuplicates === true,
   safeSnapshot: sharedSnapshot,
 }).catch((e) => {
