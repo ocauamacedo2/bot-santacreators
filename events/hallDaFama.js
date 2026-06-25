@@ -237,7 +237,8 @@
 
     "799": "nobre",    // Joker / Sarah
     "16634": "nobre",  // Kaique
-    "1854": "nobre"    // sheik
+    "1854": "nobre",   // sheik
+    "1087": "nobre"    // Nicolas / PRN / Sheik antigo
   };
 
   const PLAYER_NAME_OVERRIDES = {
@@ -252,6 +253,31 @@
     return PLAYER_NAME_OVERRIDES[String(playerId || "").trim()] || fallbackName;
   }
 
+  function resolvePlayerIdentityOverride(playerId = "", playerName = "") {
+    const id = String(playerId || "").trim();
+    const name = cleanRankingPlayerName(playerName || "");
+    const nameKey = normalizeHallKey(name);
+
+    if (
+      id === "1087" &&
+      (
+        nameKey === normalizeHallKey("sheik") ||
+        nameKey === normalizeHallKey("marcola") ||
+        nameKey === normalizeHallKey("marcola is king")
+      )
+    ) {
+      return {
+        playerId: "1854",
+        playerName: "sheik"
+      };
+    }
+
+    return {
+      playerId: id,
+      playerName: getManualPlayerName(id, name)
+    };
+  }
+
   function normalizeExistingPlayerRankingOverrides(rankings) {
     if (!rankings?.players) return rankings;
 
@@ -260,10 +286,13 @@
     for (const player of Object.values(rankings.players || {})) {
       if (!player) continue;
 
-      const playerId = String(player.playerId || "").trim();
-      const fixedName = getManualPlayerName(playerId, player.name || "Sem nome");
+      const currentPlayerId = String(player.playerId || "").trim();
+      const fixedIdentity = resolvePlayerIdentityOverride(currentPlayerId, player.name || "Sem nome");
+      const fixedName = fixedIdentity.playerName;
+      const fixedPlayerId = fixedIdentity.playerId;
+
       const fixedCityKey =
-        getManualPlayerCityKey(playerId) ||
+        getManualPlayerCityKey(fixedPlayerId) ||
         getManualPlayerCityKeyByName(fixedName) ||
         player.cityKey ||
         "nobre";
@@ -271,7 +300,7 @@
       const fixedCityName = CITIES[fixedCityKey]?.label || "Cidade Nobre";
       const fixedKey = getPlayerRankingKey({
         playerName: fixedName,
-        playerId,
+        playerId: fixedPlayerId,
         cityKey: fixedCityKey
       });
 
@@ -279,7 +308,7 @@
         ...player,
         key: fixedKey,
         name: fixedName,
-        playerId,
+        playerId: fixedPlayerId,
         cityKey: fixedCityKey,
         cityName: fixedCityName,
         total: 0,
@@ -288,7 +317,7 @@
       };
 
       fixedPlayers[fixedKey].name = fixedName;
-      fixedPlayers[fixedKey].playerId = playerId;
+      fixedPlayers[fixedKey].playerId = fixedPlayerId;
       fixedPlayers[fixedKey].cityKey = fixedCityKey;
       fixedPlayers[fixedKey].cityName = fixedCityName;
 
@@ -3069,14 +3098,16 @@ function addOrgRankingPoint(rankings, orgWinner, hallMeta) {
 
 function addPlayerRankingPoint(rankings, playerWinner, hallMeta) {
   const rawPlayerName = cleanRankingPlayerName(playerWinner.playerName);
-  const playerName = getManualPlayerName(playerWinner.playerId, rawPlayerName);
+  const fixedIdentity = resolvePlayerIdentityOverride(playerWinner.playerId, rawPlayerName);
+  const playerName = fixedIdentity.playerName;
+  const playerId = fixedIdentity.playerId;
 
   if (!playerName) return;
   if (isInvalidWinnerName(playerName)) return;
   if (looksLikePrizeOnly(playerName)) return;
 
     const cityKey =
-      getManualPlayerCityKey(playerWinner.playerId) ||
+      getManualPlayerCityKey(playerId) ||
       getManualPlayerCityKeyByName(playerName) ||
       playerWinner.cityKey ||
       hallMeta.cityKey ||
@@ -3085,6 +3116,7 @@ function addPlayerRankingPoint(rankings, playerWinner, hallMeta) {
     const key = getPlayerRankingKey({
       ...playerWinner,
       playerName,
+      playerId,
       cityKey
     });
 
@@ -3093,7 +3125,7 @@ function addPlayerRankingPoint(rankings, playerWinner, hallMeta) {
     rankings.players[key] ??= {
       key,
       name: playerName,
-      playerId: playerWinner.playerId || "",
+      playerId: playerId || "",
       cityKey,
       cityName,
       total: 0,
@@ -3103,8 +3135,8 @@ function addPlayerRankingPoint(rankings, playerWinner, hallMeta) {
 
     rankings.players[key].name = playerName;
 
-    if (!rankings.players[key].playerId && playerWinner.playerId) {
-      rankings.players[key].playerId = playerWinner.playerId;
+    if (!rankings.players[key].playerId && playerId) {
+      rankings.players[key].playerId = playerId;
     }
 
     rankings.players[key].cityKey = cityKey;
@@ -3308,9 +3340,13 @@ function addPlayerRankingPoint(rankings, playerWinner, hallMeta) {
   }
 
   function getPaymentPlayerKey(playerId = "", playerName = "") {
-    return playerId
-      ? `id:${String(playerId).trim()}`
-      : `name:${normalizeHallKey(playerName)}`;
+    const fixedIdentity = resolvePlayerIdentityOverride(playerId, playerName);
+    const fixedPlayerId = fixedIdentity.playerId;
+    const fixedPlayerName = fixedIdentity.playerName;
+
+    return fixedPlayerId
+      ? `id:${String(fixedPlayerId).trim()}`
+      : `name:${normalizeHallKey(fixedPlayerName)}`;
   }
 
   function getPaymentEventKey({ eventName, eventDateKey, cityKey, playerId, playerName, messageId, createdTimestamp }) {
