@@ -82,8 +82,9 @@ function getFivemPanelScopeByChannelId(channelId) {
 
   return "main";
 }
-const FIVEM_REFRESH_INTERVAL_MS = 30 * 1000; // tenta rodar o ciclo a cada 30 segundos para reduzir atraso visual
+const FIVEM_REFRESH_INTERVAL_MS = 30 * 1000; // painéis prioritários a cada 30 segundos
 const FIVEM_PANEL_REFRESH_INTERVAL_MS = 30 * 1000; // tenta editar os painéis prioritários com mais precisão
+const FIVEM_SECONDARY_REFRESH_INTERVAL_MS = 1 * 60 * 1000; // painéis secundários/cidades a cada 1 minuto
 const FIVEM_HISTORY_MAX_DAYS = 120; // Mantém histórico suficiente para comparar semanas e meses sem perder base
 const FIVEM_FETCH_TIMEOUT_MS = 4 * 1000; // 4 segundos para não travar o ciclo de 1 minuto em API lenta
 const FIVEM_SNAPSHOT_CACHE_MS = 2 * 1000; // cache mínimo só para evitar duplicidade no mesmo ciclo
@@ -131,15 +132,25 @@ const PeakSchema = new mongoose.Schema({
 const PeakModel = mongoose.models.FivemRetentionPeak || mongoose.model("FivemRetentionPeak", PeakSchema);
 
 const FIVEM_STATE = new Map(); // channelId -> { intervalId, messageId }
-let FIVEM_MASTER_INTERVAL_ID = null; // loop único para atualizar todos os painéis juntos
-let FIVEM_MASTER_INTERVAL_RUNNING = false; // trava para não sobrepor atualização automática
-let FIVEM_LAST_PANEL_BROADCAST_AT = 0; // força todos os painéis juntos a cada 10 minutos
+let FIVEM_MASTER_INTERVAL_ID = null; // loop rápido dos painéis prioritários
+let FIVEM_SECONDARY_INTERVAL_ID = null; // loop dos painéis secundários/cidades
+let FIVEM_SECONDARY_START_TIMEOUT_ID = null; // atraso inicial dos painéis secundários
+let FIVEM_MASTER_INTERVAL_RUNNING = false; // trava do loop prioritário
+let FIVEM_SECONDARY_INTERVAL_RUNNING = false; // trava do loop secundário
+let FIVEM_LAST_PANEL_BROADCAST_AT = 0; // controle interno de edição
 const FIVEM_PANEL_BACKGROUND_JOBS = new Set(); // trava cliques repetidos enquanto já existe processo rodando
 const FIVEM_CHANNEL_LOCKS = new Map(); // channelId -> Promise, impede criar/editar/recriar ao mesmo tempo
 const FIVEM_SNAPSHOT_CACHE = {
   createdAt: 0,
   value: null,
 };
+
+const FIVEM_LAST_PRIORITY_SAFE_SNAPSHOT = {
+  createdAt: 0,
+  value: null,
+};
+
+const FIVEM_SHARED_SNAPSHOT_MAX_AGE_MS = 45 * 1000;
 const FIVEM_DYNAMIC_URL_CACHE = new Map(); // cityKey -> { createdAt, urls }
 const FIVEM_DEBUG = false; // 🛑 Desativa os logs de depuração para evitar flood
 const FIVEM_UNRELIABLE_WARN_COOLDOWN_MS = 10 * 60 * 1000; // evita flood de aviso quando a API oscila
@@ -3278,35 +3289,63 @@ FIVEM_STATE.set(channel.id, {
     FIVEM_MASTER_INTERVAL_ID = null;
   }
 
-  const runMasterUpdate = async (label = "auto") => {
-    if (FIVEM_MASTER_INTERVAL_RUNNING) {
-      console.log("[FIVEM_RETENTION] Atualização automática ignorada: loop anterior ainda rodando.");
+  if (FIVEM_SECONDARY_INTERVAL_ID) {
+    clearInterval(FIVEM_SECONDARY_INTERVAL_ID);
+    FIVEM_SECONDARY_INTERVAL_ID = null;
+  }
+
+  if (FIVEM_SECONDARY_START_TIMEOUT_ID) {
+    clearTimeout(FIVEM_SECONDARY_START_TIMEOUT_ID);
+    FIVEM_SECONDARY_START_TIMEOUT_ID = null;
+  }
+
+  const runPanelUpdate = async (label = "auto", panelChannelIds = FIVEM_ORDERED_PANEL_CHANNEL_IDS, type = "priority") => {
+    const isSecondary = type === "secondary";
+
+    if (isSecondary ? FIVEM_SECONDARY_INTERVAL_RUNNING : FIVEM_MASTER_INTERVAL_RUNNING) {
+      console.log(`[FIVEM_RETENTION] Atualização ${label} ignorada: loop anterior ainda rodando.`);
       return;
     }
 
-    FIVEM_MASTER_INTERVAL_RUNNING = true;
+    if (isSecondary) {
+      FIVEM_SECONDARY_INTERVAL_RUNNING = true;
+    } else {
+      FIVEM_MASTER_INTERVAL_RUNNING = true;
+    }
 
     try {
 const now = Date.now();
 const shouldForcePanelEdit =
-  label === "inicial" ||
+  label === "inicial/prioridade" ||
+  label === "inicial/secundários" ||
   now - FIVEM_LAST_PANEL_BROADCAST_AT >= FIVEM_PANEL_REFRESH_INTERVAL_MS;
 
 if (shouldForcePanelEdit) {
   FIVEM_LAST_PANEL_BROADCAST_AT = now;
 }
 
+const sharedSafeSnapshot =
+  isSecondary &&
+  FIVEM_LAST_PRIORITY_SAFE_SNAPSHOT.value?.snapshot &&
+  Date.now() - FIVEM_LAST_PRIORITY_SAFE_SNAPSHOT.createdAt <= FIVEM_SHARED_SNAPSHOT_MAX_AGE_MS
+    ? FIVEM_LAST_PRIORITY_SAFE_SNAPSHOT.value
+    : null;
+
 const results = await editAllFivemRetentionPanels(client, {
   auto: true,
   force: true,
-  fastRefreshChannelIds: FIVEM_ALL_PANEL_CHANNEL_IDS,
-  forceFresh: true,
+  panelChannelIds,
+  fastRefreshChannelIds: panelChannelIds,
+  forceFresh: !isSecondary || !sharedSafeSnapshot,
   cleanupDuplicates: false,
   silentAutoLogs: true,
+  persistSnapshot: !isSecondary,
+  safeSnapshot: sharedSafeSnapshot,
+  rememberPrioritySnapshot: !isSecondary,
 });
 
       if (!results.editedCount) {
-        for (const channelId of FIVEM_ALL_PANEL_CHANNEL_IDS) {
+        for (const channelId of panelChannelIds) {
           const channel = await client.channels.fetch(channelId).catch(() => null);
           if (channel?.isTextBased?.()) {
             await ensureFivemPanelExists(channel, client);
@@ -3315,26 +3354,42 @@ const results = await editAllFivemRetentionPanels(client, {
       }
 
       if (!options.silentAutoLogs) {
-  console.log(`[FIVEM_RETENTION] Auto update ${label}: ${results.editedCount}/${FIVEM_ALL_PANEL_CHANNEL_IDS.length} painéis atualizados com snapshot único.`);
+  console.log(`[FIVEM_RETENTION] Auto update ${label}: ${results.editedCount}/${panelChannelIds.length} painéis atualizados com snapshot único.`);
 }
     } catch (e) {
-      console.error("[FIVEM_RETENTION] Erro no loop mestre de atualização automática:", e);
+      console.error(`[FIVEM_RETENTION] Erro no loop ${label}:`, e);
     } finally {
-      FIVEM_MASTER_INTERVAL_RUNNING = false;
+      if (isSecondary) {
+        FIVEM_SECONDARY_INTERVAL_RUNNING = false;
+      } else {
+        FIVEM_MASTER_INTERVAL_RUNNING = false;
+      }
     }
   };
 
   if (options.forceInitialUpdate) {
-    runMasterUpdate("inicial").catch((e) => {
-      console.error("[FIVEM_RETENTION] Erro no update inicial mestre:", e);
+    runPanelUpdate("inicial/prioridade", FIVEM_PRIORITY_PANEL_CHANNEL_IDS, "priority").catch((e) => {
+      console.error("[FIVEM_RETENTION] Erro no update inicial prioritário:", e);
     });
   }
 
 FIVEM_MASTER_INTERVAL_ID = setInterval(() => {
-  runMasterUpdate("1min/coleta").catch((e) => {
-    console.error("[FIVEM_RETENTION] Erro no intervalo mestre:", e);
+  runPanelUpdate("30s/prioridade", FIVEM_PRIORITY_PANEL_CHANNEL_IDS, "priority").catch((e) => {
+    console.error("[FIVEM_RETENTION] Erro no intervalo prioritário:", e);
   });
 }, FIVEM_REFRESH_INTERVAL_MS);
+
+FIVEM_SECONDARY_START_TIMEOUT_ID = setTimeout(() => {
+  runPanelUpdate("1min/secundários", FIVEM_SECONDARY_PANEL_CHANNEL_IDS, "secondary").catch((e) => {
+    console.error("[FIVEM_RETENTION] Erro no intervalo secundário:", e);
+  });
+
+  FIVEM_SECONDARY_INTERVAL_ID = setInterval(() => {
+    runPanelUpdate("1min/secundários", FIVEM_SECONDARY_PANEL_CHANNEL_IDS, "secondary").catch((e) => {
+      console.error("[FIVEM_RETENTION] Erro no intervalo secundário:", e);
+    });
+  }, FIVEM_SECONDARY_REFRESH_INTERVAL_MS);
+}, 15 * 1000);
 
   return true;
 }
@@ -3358,16 +3413,25 @@ export async function fivemRetentionStatusOnReady(client) {
 
 
 async function editAllFivemRetentionPanels(client, options = {}) {
-  const safeSnapshot = await createSafeCurrentSnapshot({
-    forceFresh: options.forceFresh === true,
-  });
+  let safeSnapshot = options.safeSnapshot || null;
+
+  if (!safeSnapshot?.snapshot) {
+    safeSnapshot = await createSafeCurrentSnapshot({
+      forceFresh: options.forceFresh === true,
+    });
+  }
+
+  if (options.rememberPrioritySnapshot === true && safeSnapshot?.snapshot) {
+    FIVEM_LAST_PRIORITY_SAFE_SNAPSHOT.createdAt = Date.now();
+    FIVEM_LAST_PRIORITY_SAFE_SNAPSHOT.value = safeSnapshot;
+  }
 
   if (!safeSnapshot?.snapshot) {
     console.warn("[FIVEM_RETENTION] Auto update cancelado: snapshot inválido.");
     return { editedCount: 0 };
   }
 
-  if (safeSnapshot.shouldPersist) {
+  if (safeSnapshot.shouldPersist && options.persistSnapshot !== false) {
     await addSnapshot(safeSnapshot.snapshotForPersistence || safeSnapshot.snapshot);
     await updateDailyPeaks(safeSnapshot.snapshotForPersistence || safeSnapshot.snapshot);
   }
@@ -3395,9 +3459,13 @@ if (!safeSnapshot.shouldPersist) {
   }
 }
 
+  const panelChannelIds = Array.isArray(options.panelChannelIds) && options.panelChannelIds.length
+    ? options.panelChannelIds
+    : FIVEM_ORDERED_PANEL_CHANNEL_IDS;
+
   const results = [];
 
-  for (const channelId of FIVEM_ORDERED_PANEL_CHANNEL_IDS) {
+  for (const channelId of panelChannelIds) {
     const channel = await client.channels.fetch(channelId).catch(() => null);
 
     if (!channel?.isTextBased?.()) {
