@@ -2148,7 +2148,7 @@ async function buscarVipEventoPorDados(client, dados = {}) {
     };
   }
 
-  const mensagens = await fetchMensagensRecentesCanal(canal, 500).catch(() => null);
+  const mensagens = await fetchMensagensRecentesCanal(canal, 800).catch(() => null);
 
   if (!mensagens || mensagens.length === 0) {
     return {
@@ -2165,11 +2165,11 @@ async function buscarVipEventoPorDados(client, dados = {}) {
   const registroTimestamp = Number(dados.registroTimestamp || Date.now());
 
   const candidatos = mensagens
-    .filter((msg) => msg.author?.bot)
     .filter((msg) => msg.embeds?.length > 0)
     .filter((msg) => {
       const titulo = msg.embeds?.[0]?.title || "";
-      return titulo.includes("Registro de VIP por Evento");
+      const texto = textoCompletoEmbedVip(msg.embeds?.[0] || "");
+      return titulo.includes("Registro de VIP por Evento") || texto.includes("Registro de VIP por Evento");
     })
     .sort((a, b) => b.createdTimestamp - a.createdTimestamp);
 
@@ -2204,24 +2204,27 @@ async function buscarVipEventoPorDados(client, dados = {}) {
     const mesmoTipo = Boolean(alvoTipo && tipoVip && alvoTipo === tipoVip);
 
     const diferencaMinutos = calcularDiferencaMinutosVip(registroTimestamp, msg.createdTimestamp);
-    const horarioProximo = diferencaMinutos !== null && diferencaMinutos <= 90;
+    const horarioProximo = diferencaMinutos !== null && diferencaMinutos <= 180;
 
     let score = 0;
 
-    if (bateId) score += 150;
-    if (bateNome) score += 30;
-    if (mesmaData) score += 60;
-    if (mesmoEvento) score += 50;
-    if (mesmoTipo) score += 20;
-    if (horarioProximo) score += 70;
+    if (bateId) score += 300;
+    if (bateNome) score += 80;
+    if (mesmaData) score += 90;
+    if (mesmoEvento) score += 90;
+    if (mesmoTipo) score += 40;
+    if (horarioProximo) score += 120;
 
     if (diferencaMinutos !== null) {
-      score += Math.max(0, 90 - Math.round(diferencaMinutos));
+      score += Math.max(0, 180 - Math.round(diferencaMinutos));
     }
 
-    const vinculoSeguro = alvoId
-      ? Boolean(bateId && (mesmoEvento || mesmaData || horarioProximo))
-      : Boolean(bateNome && mesmoTipo && (mesmoEvento || mesmaData || horarioProximo));
+    const vinculoSeguro = Boolean(
+      (bateId && (mesmoEvento || mesmaData || horarioProximo)) ||
+      (bateId && mesmoEvento && mesmaData) ||
+      (bateNome && mesmoTipo && (mesmoEvento || mesmaData || horarioProximo)) ||
+      (mesmoEvento && mesmaData && horarioProximo && (bateId || bateNome))
+    );
 
     if (!vinculoSeguro) continue;
 
@@ -2254,7 +2257,7 @@ async function buscarVipEventoPorDados(client, dados = {}) {
 
   return {
     ok: false,
-    erro: "Nenhum registro VIP compatível encontrado com mesmo ID/nome, evento/data ou horário próximo.",
+    erro: "Nenhum registro VIP compatível encontrado por ID/nome, evento/data ou horário próximo.",
   };
 }
 
@@ -2632,6 +2635,10 @@ function getDadosPagamentoParaBuscarVip(embedLike) {
   const ganhadorRaw = getFieldValue(embedLike, "👤 Ganhador");
   const ganhadorParts = String(ganhadorRaw || "").split("|").map((p) => p.trim());
 
+  const timestampEmbed =
+    Date.parse(embedLike?.timestamp || embedLike?.data?.timestamp || "") ||
+    Date.now();
+
 return {
   eventoNome: getFieldValue(embedLike, "🏷️ Evento"),
   eventoData: getFieldValue(embedLike, "📅 Data do Evento"),
@@ -2639,6 +2646,7 @@ return {
   ganhadorId: ganhadorParts[1] || "",
   premiacao: getFieldValue(embedLike, "🔗 Premiação / Link"),
   tipo: getTipoPagamentoFromEmbed(embedLike) || "",
+  registroTimestamp: timestampEmbed,
 };
 }
 
@@ -3747,6 +3755,8 @@ const resultadoVip = await tentarCorrigirRegistroPorVipEvento(client, embedAtual
 
 if (action === "pago") {
   const dadosVip = getDadosPagamentoParaBuscarVip(embedAtualizado);
+
+  dadosVip.registroTimestamp = msgOriginal.createdTimestamp || dadosVip.registroTimestamp || Date.now();
 
   const vipEventoResolvidoPagamento =
     resultadoVip?.vipEventoResolvido ||
