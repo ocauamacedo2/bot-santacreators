@@ -2103,6 +2103,41 @@ function textoCompletoEmbedVip(embedLike) {
   ].join("\n");
 }
 
+async function fetchMensagensRecentesCanal(canal, total = 500) {
+  const todas = [];
+  let before = null;
+
+  while (todas.length < total) {
+    const options = {
+      limit: Math.min(100, total - todas.length),
+    };
+
+    if (before) options.before = before;
+
+    const lote = await canal.messages.fetch(options).catch(() => null);
+    if (!lote || lote.size === 0) break;
+
+    const lista = [...lote.values()];
+    todas.push(...lista);
+
+    before = lista[lista.length - 1]?.id;
+    if (!before) break;
+  }
+
+  return todas;
+}
+
+function calcularDiferencaMinutosVip(a, b) {
+  const n1 = Number(a || 0);
+  const n2 = Number(b || 0);
+
+  if (!Number.isFinite(n1) || !Number.isFinite(n2) || n1 <= 0 || n2 <= 0) {
+    return null;
+  }
+
+  return Math.abs(n1 - n2) / 60000;
+}
+
 async function buscarVipEventoPorDados(client, dados = {}) {
   const canal = await client.channels.fetch(CANAL_VIP_EVENTO).catch(() => null);
 
@@ -2113,22 +2148,23 @@ async function buscarVipEventoPorDados(client, dados = {}) {
     };
   }
 
-  const mensagens = await canal.messages.fetch({ limit: 100 }).catch(() => null);
+  const mensagens = await fetchMensagensRecentesCanal(canal, 500).catch(() => null);
 
-  if (!mensagens) {
+  if (!mensagens || mensagens.length === 0) {
     return {
       ok: false,
       erro: "Não consegui buscar mensagens no canal VIP.",
     };
   }
 
-const alvoEvento = normalizarBuscaVip(dados.eventoNome);
-const alvoData = normalizarBuscaVip(dados.eventoData);
-const alvoId = normalizarBuscaVip(dados.ganhadorId);
-const alvoNome = normalizarBuscaVip(dados.ganhadorNome);
-const alvoTipo = normalizarTipoPremiacao(`${dados.tipo || ""}\n${dados.premiacao || ""}`);
+  const alvoEvento = normalizarBuscaVip(dados.eventoNome);
+  const alvoData = normalizarBuscaVip(dados.eventoData);
+  const alvoId = String(dados.ganhadorId || "").replace(/\D/g, "").trim();
+  const alvoNome = normalizarBuscaVip(dados.ganhadorNome);
+  const alvoTipo = normalizarTipoPremiacao(`${dados.tipo || ""}\n${dados.premiacao || ""}`);
+  const registroTimestamp = Number(dados.registroTimestamp || Date.now());
 
-  const candidatos = [...mensagens.values()]
+  const candidatos = mensagens
     .filter((msg) => msg.author?.bot)
     .filter((msg) => msg.embeds?.length > 0)
     .filter((msg) => {
@@ -2142,32 +2178,50 @@ const alvoTipo = normalizarTipoPremiacao(`${dados.tipo || ""}\n${dados.premiacao
   for (const msg of candidatos) {
     const embed = msg.embeds[0];
     const texto = normalizarBuscaVip(textoCompletoEmbedVip(embed));
-
     const infoVip = extrairInfoDoEmbedVipEvento(embed);
 
-    const bateId = alvoId && String(infoVip.ganhadorId || "").replace(/\D/g, "") === String(alvoId || "").replace(/\D/g, "");
-    const bateNome = alvoNome && texto.includes(alvoNome);
+    const idVip = String(infoVip.ganhadorId || "").replace(/\D/g, "").trim();
+
+    const bateId = Boolean(alvoId && idVip && alvoId === idVip);
+    const bateNome = Boolean(alvoNome && texto.includes(alvoNome));
 
     const eventoVipNorm = normalizarBuscaVip(infoVip.evento);
     const dataVipNorm = normalizarBuscaVip(infoVip.data);
 
-    const mesmoEvento = alvoEvento && eventoVipNorm && eventoVipNorm.includes(alvoEvento);
-    const mesmaData = alvoData && dataVipNorm && dataVipNorm.includes(alvoData);
+    const mesmoEvento = Boolean(
+      alvoEvento &&
+      eventoVipNorm &&
+      (eventoVipNorm.includes(alvoEvento) || alvoEvento.includes(eventoVipNorm))
+    );
+
+    const mesmaData = Boolean(
+      alvoData &&
+      dataVipNorm &&
+      (dataVipNorm.includes(alvoData) || alvoData.includes(dataVipNorm))
+    );
 
     const tipoVip = normalizarTipoPremiacao(`${infoVip.tipo || ""}\n${infoVip.premiacao || ""}`);
-    const mesmoTipo = alvoTipo && tipoVip && alvoTipo === tipoVip;
+    const mesmoTipo = Boolean(alvoTipo && tipoVip && alvoTipo === tipoVip);
+
+    const diferencaMinutos = calcularDiferencaMinutosVip(registroTimestamp, msg.createdTimestamp);
+    const horarioProximo = diferencaMinutos !== null && diferencaMinutos <= 90;
 
     let score = 0;
 
-    if (bateId) score += 100;
-    if (bateNome) score += 20;
-    if (mesmoTipo) score += 80;
-    if (mesmoEvento) score += 25;
-    if (mesmaData) score += 25;
+    if (bateId) score += 150;
+    if (bateNome) score += 30;
+    if (mesmaData) score += 60;
+    if (mesmoEvento) score += 50;
+    if (mesmoTipo) score += 20;
+    if (horarioProximo) score += 70;
+
+    if (diferencaMinutos !== null) {
+      score += Math.max(0, 90 - Math.round(diferencaMinutos));
+    }
 
     const vinculoSeguro = alvoId
-      ? Boolean(bateId && mesmoTipo && (mesmoEvento || mesmaData))
-      : Boolean(bateNome && mesmoTipo && (mesmoEvento || mesmaData));
+      ? Boolean(bateId && (mesmoEvento || mesmaData || horarioProximo))
+      : Boolean(bateNome && mesmoTipo && (mesmoEvento || mesmaData || horarioProximo));
 
     if (!vinculoSeguro) continue;
 
@@ -2175,6 +2229,7 @@ const alvoTipo = normalizarTipoPremiacao(`${dados.tipo || ""}\n${dados.premiacao
       score,
       msg,
       infoVip,
+      diferencaMinutos,
     });
   }
 
@@ -2193,12 +2248,13 @@ const alvoTipo = normalizarTipoPremiacao(`${dados.tipo || ""}\n${dados.premiacao
       },
       message: melhor.msg,
       info: melhor.infoVip,
+      diferencaMinutos: melhor.diferencaMinutos,
     };
   }
 
   return {
     ok: false,
-    erro: "Nenhum registro VIP compatível encontrado com mesmo ID, tipo e evento/data.",
+    erro: "Nenhum registro VIP compatível encontrado com mesmo ID/nome, evento/data ou horário próximo.",
   };
 }
 
@@ -3383,6 +3439,7 @@ const vipEventoResolvido = await resolverVipEventoProfissional(
     eventoData,
     ganhadorNome: ganhadorNomeRaw,
     ganhadorId: ganhadorIdRaw,
+    registroTimestamp: Date.now(),
   }
 ).catch((err) => ({
   ok: false,

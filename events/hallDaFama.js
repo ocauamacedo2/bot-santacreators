@@ -2029,6 +2029,25 @@ function uniqueImageUrls(urls = []) {
     return uniqueImageUrls([...message.attachments.values()].map(a => a.url));
   }
 
+  async function getSafeHallImageUrls(client, hallMessage, options = {}) {
+    const content = options.content ?? getHallMessageText(hallMessage);
+    const manualUrls = uniqueImageUrls(options.manualUrls || []);
+    const contentUrls = getImageUrlsFromContent(content);
+    const attachmentUrls = getImageUrlsFromAttachments(hallMessage);
+
+    const approvalUrls = await findApprovalImagesForHall(client, hallMessage, {
+      eventName: options.eventName || extractHallParts(content).eventName,
+      winnerNames: options.winnerNames || extractWinnerNamesForApprovalMatch(content)
+    }).catch(() => []);
+
+    return uniqueImageUrls([
+      ...manualUrls,
+      ...contentUrls,
+      ...attachmentUrls,
+      ...approvalUrls
+    ]);
+  }
+
 function cleanHallWinnerLine(line = "") {
   return stripDiscordNoise(line)
     .replace(/^#\s*/i, "")
@@ -4809,22 +4828,11 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
         const text = getHallMessageText(msg);
         const parts = extractHallParts(text);
 
-        const contentUrls = getImageUrlsFromContent(msg.content || "");
-        const attachmentUrls = getImageUrlsFromAttachments(msg);
-
-        const approvalUrls = await findApprovalImagesForHall(client, msg, {
-          ...parts,
+        const allImageUrls = await getSafeHallImageUrls(client, msg, {
+          content: msg.content || text,
+          eventName: parts.eventName,
           winnerNames: extractWinnerNamesForApprovalMatch(text)
         });
-
-        let allImageUrls = approvalUrls.length
-          ? uniqueImageUrls([
-              ...approvalUrls
-            ])
-          : uniqueImageUrls([
-              ...contentUrls,
-              ...attachmentUrls
-            ]);
 
         const evidence = await resolveHallEvidence(client, msg, text);
 
@@ -5379,7 +5387,10 @@ new ButtonBuilder()
         return interaction.editReply("❌ Hall original não encontrado.");
       }
 
-      const attachmentUrls = getImageUrlsFromAttachments(hallMessage);
+      const attachmentUrls = await getSafeHallImageUrls(client, hallMessage, {
+        content: hallMessage.content
+      });
+
       const fixedContent = updateHallCityOnly(hallMessage.content, CITIES[cityKey].label, attachmentUrls);
 
       if (fixedContent.length > 2000) {
@@ -5495,7 +5506,10 @@ new ButtonBuilder()
         return interaction.editReply("❌ A mensagem do Hall da Fama original não foi encontrada. Talvez tenha sido apagada.");
       }
 
-      const attachmentUrls = getImageUrlsFromAttachments(messageToEdit);
+      const attachmentUrls = await getSafeHallImageUrls(client, messageToEdit, {
+        content: messageToEdit.content
+      });
+
       const finalContent = updateHallCityOnly(messageToEdit.content, newCityName, attachmentUrls);
 
       if (finalContent.length > 2000) {
@@ -5644,39 +5658,27 @@ if (isPrizesOnly) {
   newIntro = lines[introLineIndex]?.split(/\s+\*\*.*?\*\*\s+na\s+/)[0]?.trim() || getRandomIntro();
 
   const oldParts = extractHallParts(oldContent);
-  const contentImageUrls = getImageUrlsFromContent(oldContent);
-  const attachmentImageUrls = getImageUrlsFromAttachments(messageToEdit);
-  const approvalImageUrls = await findApprovalImagesForHall(client, messageToEdit, {
-    ...oldParts,
-    eventName: oldEventName,
-    winnerNames: extractWinnerNamesForApprovalMatch(oldContent)
-  });
 
-  const imageLines = uniqueImageUrls(
-    manualImageUrlInput
-      ? [manualImageUrlInput]
-      : approvalImageUrls.length
-        ? [...approvalImageUrls]
-        : [
-            ...contentImageUrls,
-            ...attachmentImageUrls
-          ]
-  );
+  const imageLines = await getSafeHallImageUrls(client, messageToEdit, {
+    content: oldContent,
+    eventName: oldEventName,
+    winnerNames: extractWinnerNamesForApprovalMatch(oldContent),
+    manualUrls: manualImageUrlInput ? [manualImageUrlInput] : []
+  });
 
   newImageUrl = imageLines[0] || '';
   newImageUrl2 = imageLines[1] || '';
 } else {
-  const contentImageUrls = getImageUrlsFromContent(oldContent);
-  const attachmentImageUrls = getImageUrlsFromAttachments(messageToEdit);
-  const imageLines = uniqueImageUrls([
-    ...contentImageUrls,
-    ...attachmentImageUrls
-  ]);
+  const imageLines = await getSafeHallImageUrls(client, messageToEdit, {
+    content: oldContent,
+    eventName: newEventName,
+    winnerNames: extractWinnerNamesForApprovalMatch(oldContent),
+    manualUrls: newImageUrl ? [newImageUrl] : []
+  });
 
   newImageUrl = imageLines[0] || newImageUrl || '';
   newImageUrl2 = imageLines[1] || '';
 }
-
       const mentionsLine = lines.find(l => l.includes('@everyone')) || '';
 
     // Remonta a mensagem
