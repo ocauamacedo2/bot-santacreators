@@ -65,11 +65,11 @@ function getFivemPanelScopeByChannelId(channelId) {
   return "main";
 }
 const FIVEM_REFRESH_INTERVAL_MS = 1 * 60 * 1000; // coleta/salva histórico a cada 1 minuto
-const FIVEM_PANEL_REFRESH_INTERVAL_MS = 10 * 60 * 1000; // edita painéis pesados/executivos a cada 10 minutos
+const FIVEM_PANEL_REFRESH_INTERVAL_MS = 1 * 60 * 1000; // edita painéis também a cada 1 minuto
 const FIVEM_HISTORY_MAX_DAYS = 120; // Mantém histórico suficiente para comparar semanas e meses sem perder base
-const FIVEM_FETCH_TIMEOUT_MS = 8 * 1000; // 8 segundos para reduzir falhas por API lenta
-const FIVEM_SNAPSHOT_CACHE_MS = 10 * 1000; // reaproveita a mesma coleta por 10 segundos
-const FIVEM_DYNAMIC_URL_CACHE_MS = 2 * 60 * 1000; // reaproveita endpoints por 2 minutos
+const FIVEM_FETCH_TIMEOUT_MS = 4 * 1000; // 4 segundos para não travar o ciclo de 1 minuto em API lenta
+const FIVEM_SNAPSHOT_CACHE_MS = 2 * 1000; // cache mínimo só para evitar duplicidade no mesmo ciclo
+const FIVEM_DYNAMIC_URL_CACHE_MS = 1 * 60 * 1000; // atualiza endpoints com mais frequência
 const FIVEM_COMPARISON_TOLERANCE_MS = 10 * 60 * 1000; // 10 minutos
 const FIVEM_TIMEZONE = "America/Sao_Paulo";
 const FIVEM_OLD_RANK_MARKER_TAG = "[FIVEM_RETENTION_STATUS]";
@@ -1780,7 +1780,7 @@ async function fetchCityStatusFromDynamic(city) {
  const fetchFn = await getFetch();
  const dynamicUrls = await getDynamicUrlsForCity(city);
 
- for (const dynamicUrl of dynamicUrls) {
+ const attempts = dynamicUrls.map(async (dynamicUrl) => {
    const controller = new AbortController();
    const timeout = setTimeout(() => controller.abort(), FIVEM_FETCH_TIMEOUT_MS);
 
@@ -1796,9 +1796,7 @@ async function fetchCityStatusFromDynamic(city) {
        },
      });
 
-     clearTimeout(timeout);
-
-     if (!res.ok) continue;
+     if (!res.ok) return null;
 
      const data = await res.json().catch(() => null);
 
@@ -1806,7 +1804,7 @@ async function fetchCityStatusFromDynamic(city) {
        const clients = safeNumber(data.clients, 0);
        const maxClients = safeNumber(data.sv_maxclients, 0);
 
-       if (clients <= 0 || maxClients <= 0) continue;
+       if (clients <= 0 || maxClients <= 0) return null;
 
        return {
          key: city.key,
@@ -1823,14 +1821,17 @@ async function fetchCityStatusFromDynamic(city) {
          dynamicUrl,
        };
      }
-} catch (err) {
-     console.error(`[FIVEM_RETENTION] dynamic.json falhou em ${city.name} usando ${dynamicUrl}:`, err?.message || err);
+
+     return null;
+   } catch {
+     return null;
    } finally {
      clearTimeout(timeout);
    }
- }
+ });
 
- return null;
+ const results = await Promise.all(attempts);
+ return results.find(Boolean) || null;
 }
 
 async function fetchCityStatus(city) {
@@ -3279,8 +3280,8 @@ if (shouldForcePanelEdit) {
 
 const results = await editAllFivemRetentionPanels(client, {
   auto: true,
-  force: shouldForcePanelEdit,
-  fastRefreshChannelIds: FIVEM_FAST_PANEL_CHANNEL_IDS,
+  force: true,
+  fastRefreshChannelIds: FIVEM_ALL_PANEL_CHANNEL_IDS,
   forceFresh: true,
   cleanupDuplicates: false,
   silentAutoLogs: true,
