@@ -82,8 +82,8 @@ function getFivemPanelScopeByChannelId(channelId) {
 
   return "main";
 }
-const FIVEM_REFRESH_INTERVAL_MS = 30 * 1000; // painéis prioritários a cada 30 segundos
-const FIVEM_PANEL_REFRESH_INTERVAL_MS = 30 * 1000; // tenta editar os painéis prioritários com mais precisão
+const FIVEM_REFRESH_INTERVAL_MS = 1 * 60 * 1000; // painéis prioritários a cada 1 minuto real, sem atropelar loop anterior
+const FIVEM_PANEL_REFRESH_INTERVAL_MS = 1 * 60 * 1000; // evita reedição antes do ciclo anterior terminar
 const FIVEM_SECONDARY_REFRESH_INTERVAL_MS = 1 * 60 * 1000; // painéis secundários/cidades a cada 1 minuto
 const FIVEM_HISTORY_MAX_DAYS = 120; // Mantém histórico suficiente para comparar semanas e meses sem perder base
 const FIVEM_FETCH_TIMEOUT_MS = 4 * 1000; // 4 segundos para não travar o ciclo de 1 minuto em API lenta
@@ -3368,13 +3368,13 @@ const results = await editAllFivemRetentionPanels(client, {
   };
 
   if (options.forceInitialUpdate) {
-    runPanelUpdate("inicial/prioridade", FIVEM_PRIORITY_PANEL_CHANNEL_IDS, "priority").catch((e) => {
+    await runPanelUpdate("inicial/prioridade", FIVEM_PRIORITY_PANEL_CHANNEL_IDS, "priority").catch((e) => {
       console.error("[FIVEM_RETENTION] Erro no update inicial prioritário:", e);
     });
   }
 
 FIVEM_MASTER_INTERVAL_ID = setInterval(() => {
-  runPanelUpdate("30s/prioridade", FIVEM_PRIORITY_PANEL_CHANNEL_IDS, "priority").catch((e) => {
+  runPanelUpdate("1min/prioridade", FIVEM_PRIORITY_PANEL_CHANNEL_IDS, "priority").catch((e) => {
     console.error("[FIVEM_RETENTION] Erro no intervalo prioritário:", e);
   });
 }, FIVEM_REFRESH_INTERVAL_MS);
@@ -3389,7 +3389,7 @@ FIVEM_SECONDARY_START_TIMEOUT_ID = setTimeout(() => {
       console.error("[FIVEM_RETENTION] Erro no intervalo secundário:", e);
     });
   }, FIVEM_SECONDARY_REFRESH_INTERVAL_MS);
-}, 15 * 1000);
+}, 30 * 1000);
 
   return true;
 }
