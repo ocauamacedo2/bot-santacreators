@@ -697,7 +697,8 @@ const PLAYER_NAME_OVERRIDES = {
     const rawContent = String(content || "");
     const lines = rawContent.split("\n").map(l => l.trim()).filter(Boolean);
 
-    const imageUrl = rawContent.match(/https?:\/\/\S+/i)?.[0] || "";
+    const imageUrls = getImageUrlsFromContent(rawContent);
+const imageUrl = imageUrls[0] || "";
 
     const contentWithoutUrls = rawContent
       .replace(/https?:\/\/\S+/gi, "")
@@ -5594,13 +5595,13 @@ modal.addComponents(
       .setRequired(true)
   ),
   new ActionRowBuilder().addComponents(
-    new TextInputBuilder()
-      .setCustomId("hf_edit_image_link")
-      .setLabel("🖼️ Link da imagem correta")
-      .setValue(imageUrl || "")
-      .setStyle(TextInputStyle.Short)
-      .setPlaceholder("Cole aqui o link da imagem correta se quiser forçar")
-      .setRequired(false)
+new TextInputBuilder()
+  .setCustomId("hf_edit_image_link")
+  .setLabel("🖼️ Link(s) da imagem correta")
+  .setValue(imageUrl || "")
+  .setStyle(TextInputStyle.Paragraph)
+  .setPlaceholder("Cole 1 ou 2 links aqui, um por linha, se quiser forçar")
+  .setRequired(false)
   )
 );
       
@@ -5621,8 +5622,9 @@ const messageId = interaction.customId.split(":")[1];
 const newEventNameInput = interaction.fields.getTextInputValue("hf_edit_event_name")?.trim();
 const newWinnersText = interaction.fields.getTextInputValue("hf_edit_winners");
 const manualImageUrlInput = interaction.fields.getTextInputValue("hf_edit_image_link")?.trim() || "";
+const manualImageUrls = getImageUrlsFromContent(manualImageUrlInput);
 
-let newEventName, newImageUrl, newImageUrl2, newCityName, newIntro;
+let newEventName, newImageUrl, newImageUrl2, newCityName, newIntro, finalImageUrls = [];
 
 if (!isPrizesOnly) {
   newEventName = newEventNameInput;
@@ -5663,21 +5665,23 @@ if (isPrizesOnly) {
     content: oldContent,
     eventName: oldEventName,
     winnerNames: extractWinnerNamesForApprovalMatch(oldContent),
-    manualUrls: manualImageUrlInput ? [manualImageUrlInput] : []
+    manualUrls: manualImageUrls
   });
 
-  newImageUrl = imageLines[0] || '';
-  newImageUrl2 = imageLines[1] || '';
+  finalImageUrls = imageLines;
+  newImageUrl = finalImageUrls[0] || '';
+  newImageUrl2 = finalImageUrls[1] || '';
 } else {
   const imageLines = await getSafeHallImageUrls(client, messageToEdit, {
     content: oldContent,
     eventName: newEventName,
     winnerNames: extractWinnerNamesForApprovalMatch(oldContent),
-    manualUrls: newImageUrl ? [newImageUrl] : []
+    manualUrls: manualImageUrls.length ? manualImageUrls : (newImageUrl ? [newImageUrl] : [])
   });
 
-  newImageUrl = imageLines[0] || newImageUrl || '';
-  newImageUrl2 = imageLines[1] || '';
+  finalImageUrls = imageLines;
+  newImageUrl = finalImageUrls[0] || newImageUrl || '';
+  newImageUrl2 = finalImageUrls[1] || '';
 }
       const mentionsLine = lines.find(l => l.includes('@everyone')) || '';
 
@@ -5699,7 +5703,7 @@ if (isPrizesOnly) {
 
   ${mentionsLine}
 
-  ${newImageUrl}${newImageUrl2 ? `\n${newImageUrl2}` : ''}`;
+  ${finalImageUrls.join("\n")}`;
 
       if (finalMessage.length > 2000) {
         return interaction.editReply("❌ O conteúdo editado é muito longo (mais de 2000 caracteres) e não pode ser salvo. Por favor, reduza o texto dos vencedores.");
