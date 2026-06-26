@@ -52,9 +52,14 @@ const FIVEM_FAST_PANEL_CHANNEL_IDS = [
   ]),
 ];
 
-const FIVEM_PRIORITY_PANEL_CHANNEL_IDS = [
+const FIVEM_TRENDS_ONLY_PANEL_CHANNEL_IDS = [
   ...new Set([
     FIVEM_SPECIAL_PANEL_CHANNEL_IDS.trends,
+  ]),
+];
+
+const FIVEM_PRIORITY_PANEL_CHANNEL_IDS = [
+  ...new Set([
     FIVEM_SPECIAL_PANEL_CHANNEL_IDS.executive,
     FIVEM_PANEL_CHANNEL_ID,
     FIVEM_SPECIAL_PANEL_CHANNEL_IDS.peaks,
@@ -62,10 +67,13 @@ const FIVEM_PRIORITY_PANEL_CHANNEL_IDS = [
 ];
 
 const FIVEM_SECONDARY_PANEL_CHANNEL_IDS = FIVEM_ALL_PANEL_CHANNEL_IDS.filter(
-  (channelId) => !FIVEM_PRIORITY_PANEL_CHANNEL_IDS.includes(channelId)
+  (channelId) =>
+    !FIVEM_TRENDS_ONLY_PANEL_CHANNEL_IDS.includes(channelId) &&
+    !FIVEM_PRIORITY_PANEL_CHANNEL_IDS.includes(channelId)
 );
 
 const FIVEM_ORDERED_PANEL_CHANNEL_IDS = [
+  ...FIVEM_TRENDS_ONLY_PANEL_CHANNEL_IDS,
   ...FIVEM_PRIORITY_PANEL_CHANNEL_IDS,
   ...FIVEM_SECONDARY_PANEL_CHANNEL_IDS,
 ];
@@ -132,9 +140,12 @@ const PeakSchema = new mongoose.Schema({
 const PeakModel = mongoose.models.FivemRetentionPeak || mongoose.model("FivemRetentionPeak", PeakSchema);
 
 const FIVEM_STATE = new Map(); // channelId -> { intervalId, messageId }
+let FIVEM_TRENDS_INTERVAL_ID = null; // loop exclusivo do TRENDS — prioridade máxima
 let FIVEM_MASTER_INTERVAL_ID = null; // loop rápido dos painéis prioritários
+let FIVEM_MASTER_START_TIMEOUT_ID = null; // atraso inicial dos painéis prioritários
 let FIVEM_SECONDARY_INTERVAL_ID = null; // loop dos painéis secundários/cidades
 let FIVEM_SECONDARY_START_TIMEOUT_ID = null; // atraso inicial dos painéis secundários
+let FIVEM_TRENDS_INTERVAL_RUNNING = false; // trava exclusiva do TRENDS
 let FIVEM_MASTER_INTERVAL_RUNNING = false; // trava do loop prioritário
 let FIVEM_SECONDARY_INTERVAL_RUNNING = false; // trava do loop secundário
 let FIVEM_LAST_PANEL_BROADCAST_AT = 0; // controle interno de edição
@@ -3284,9 +3295,19 @@ FIVEM_STATE.set(channel.id, {
 });
   }
 
+  if (FIVEM_TRENDS_INTERVAL_ID) {
+    clearInterval(FIVEM_TRENDS_INTERVAL_ID);
+    FIVEM_TRENDS_INTERVAL_ID = null;
+  }
+
   if (FIVEM_MASTER_INTERVAL_ID) {
     clearInterval(FIVEM_MASTER_INTERVAL_ID);
     FIVEM_MASTER_INTERVAL_ID = null;
+  }
+
+  if (FIVEM_MASTER_START_TIMEOUT_ID) {
+    clearTimeout(FIVEM_MASTER_START_TIMEOUT_ID);
+    FIVEM_MASTER_START_TIMEOUT_ID = null;
   }
 
   if (FIVEM_SECONDARY_INTERVAL_ID) {
@@ -3300,14 +3321,23 @@ FIVEM_STATE.set(channel.id, {
   }
 
   const runPanelUpdate = async (label = "auto", panelChannelIds = FIVEM_ORDERED_PANEL_CHANNEL_IDS, type = "priority") => {
+    const isTrends = type === "trends";
     const isSecondary = type === "secondary";
 
-    if (isSecondary ? FIVEM_SECONDARY_INTERVAL_RUNNING : FIVEM_MASTER_INTERVAL_RUNNING) {
+    const isRunning = isTrends
+      ? FIVEM_TRENDS_INTERVAL_RUNNING
+      : isSecondary
+        ? FIVEM_SECONDARY_INTERVAL_RUNNING
+        : FIVEM_MASTER_INTERVAL_RUNNING;
+
+    if (isRunning) {
       console.log(`[FIVEM_RETENTION] Atualização ${label} ignorada: loop anterior ainda rodando.`);
       return;
     }
 
-    if (isSecondary) {
+    if (isTrends) {
+      FIVEM_TRENDS_INTERVAL_RUNNING = true;
+    } else if (isSecondary) {
       FIVEM_SECONDARY_INTERVAL_RUNNING = true;
     } else {
       FIVEM_MASTER_INTERVAL_RUNNING = true;
@@ -3359,7 +3389,9 @@ const results = await editAllFivemRetentionPanels(client, {
     } catch (e) {
       console.error(`[FIVEM_RETENTION] Erro no loop ${label}:`, e);
     } finally {
-      if (isSecondary) {
+      if (isTrends) {
+        FIVEM_TRENDS_INTERVAL_RUNNING = false;
+      } else if (isSecondary) {
         FIVEM_SECONDARY_INTERVAL_RUNNING = false;
       } else {
         FIVEM_MASTER_INTERVAL_RUNNING = false;
@@ -3368,16 +3400,28 @@ const results = await editAllFivemRetentionPanels(client, {
   };
 
   if (options.forceInitialUpdate) {
+    await runPanelUpdate("inicial/trends", FIVEM_TRENDS_ONLY_PANEL_CHANNEL_IDS, "trends").catch((e) => {
+      console.error("[FIVEM_RETENTION] Erro no update inicial do TRENDS:", e);
+    });
+
     await runPanelUpdate("inicial/prioridade", FIVEM_PRIORITY_PANEL_CHANNEL_IDS, "priority").catch((e) => {
       console.error("[FIVEM_RETENTION] Erro no update inicial prioritário:", e);
     });
   }
 
-FIVEM_MASTER_INTERVAL_ID = setInterval(() => {
-  runPanelUpdate("1min/prioridade", FIVEM_PRIORITY_PANEL_CHANNEL_IDS, "priority").catch((e) => {
-    console.error("[FIVEM_RETENTION] Erro no intervalo prioritário:", e);
+FIVEM_TRENDS_INTERVAL_ID = setInterval(() => {
+  runPanelUpdate("1min/trends", FIVEM_TRENDS_ONLY_PANEL_CHANNEL_IDS, "trends").catch((e) => {
+    console.error("[FIVEM_RETENTION] Erro no intervalo do TRENDS:", e);
   });
 }, FIVEM_REFRESH_INTERVAL_MS);
+
+FIVEM_MASTER_START_TIMEOUT_ID = setTimeout(() => {
+  FIVEM_MASTER_INTERVAL_ID = setInterval(() => {
+    runPanelUpdate("1min/prioridade", FIVEM_PRIORITY_PANEL_CHANNEL_IDS, "priority").catch((e) => {
+      console.error("[FIVEM_RETENTION] Erro no intervalo prioritário:", e);
+    });
+  }, FIVEM_REFRESH_INTERVAL_MS);
+}, 5 * 1000);
 
 FIVEM_SECONDARY_START_TIMEOUT_ID = setTimeout(() => {
   runPanelUpdate("1min/secundários", FIVEM_SECONDARY_PANEL_CHANNEL_IDS, "secondary").catch((e) => {
