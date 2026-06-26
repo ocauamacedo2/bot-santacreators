@@ -499,10 +499,30 @@ const PLAYER_NAME_OVERRIDES = {
 
   let state = loadState();
 
-  const processingApprovals = new Set();
-  let hallScanRunning = false;
+const processingApprovals = new Set();
+const processingHallModalSubmits = new Set();
+let hallScanRunning = false;
 
-  function getHallScanKeySP() {
+async function safeDeferHallInteraction(interaction) {
+  if (interaction.deferred || interaction.replied) return true;
+
+  try {
+    await interaction.deferReply({ ephemeral: true });
+    return true;
+  } catch (err) {
+    if (err?.code === 10062) {
+      console.warn("[HallDaFama] Interação expirada/duplicada ignorada:", {
+        customId: interaction.customId,
+        user: interaction.user?.id
+      });
+      return false;
+    }
+
+    throw err;
+  }
+}
+
+function getHallScanKeySP() {
     return new Date().toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
   }
 
@@ -697,7 +717,7 @@ const PLAYER_NAME_OVERRIDES = {
     const rawContent = String(content || "");
     const lines = rawContent.split("\n").map(l => l.trim()).filter(Boolean);
 
-    const imageUrls = getImageUrlsFromContent(rawContent);
+const imageUrls = getImageUrlsFromContent(rawContent);
 const imageUrl = imageUrls[0] || "";
 
     const contentWithoutUrls = rawContent
@@ -761,13 +781,14 @@ const imageUrl = imageUrls[0] || "";
       winnersText = "";
     }
 
-    return {
-      eventName: cleanOneLine(eventName) || "Evento",
-      cityName: cleanOneLine(cityName) || "Cidade",
-      introText: cleanOneLine(introText) || getRandomIntro(),
-      winnersText,
-      imageUrl
-    };
+return {
+  eventName: cleanOneLine(eventName) || "Evento",
+  cityName: cleanOneLine(cityName) || "Cidade",
+  introText: cleanOneLine(introText) || getRandomIntro(),
+  winnersText,
+  imageUrl,
+  imageUrls
+};
   }
 
   function buildHallIntroLine(intro, eventName, cityName) {
@@ -5561,6 +5582,7 @@ new ButtonBuilder()
   const introText = parts.introText;
   const winnersText = parts.winnersText;
   const imageUrl = parts.imageUrl;
+const imageUrls = parts.imageUrls || (imageUrl ? [imageUrl] : []);
 
   if (!winnersText) {
     return interaction.reply({
@@ -5598,7 +5620,7 @@ modal.addComponents(
 new TextInputBuilder()
   .setCustomId("hf_edit_image_link")
   .setLabel("🖼️ Link(s) da imagem correta")
-  .setValue(imageUrl || "")
+  .setValue(imageUrls.join("\n") || "")
   .setStyle(TextInputStyle.Paragraph)
   .setPlaceholder("Cole 1 ou 2 links aqui, um por linha, se quiser forçar")
   .setRequired(false)
@@ -5609,13 +5631,21 @@ new TextInputBuilder()
       return true;
     }
 
-    // ✅ Modal de edição de Hall da Fama
-    if (interaction.isModalSubmit() && (interaction.customId.startsWith(MODAL_EDIT_SUBMIT) || interaction.customId.startsWith(MODAL_PRIZES_SUBMIT))) {
-      if (!hasPermission(interaction.member, interaction.user.id)) {
-        return interaction.reply({ content: "🚫 Sem permissão para editar.", ephemeral: true });
-      }
-      
-      await interaction.deferReply({ ephemeral: true });
+// ✅ Modal de edição de Hall da Fama
+if (interaction.isModalSubmit() && (interaction.customId.startsWith(MODAL_EDIT_SUBMIT) || interaction.customId.startsWith(MODAL_PRIZES_SUBMIT))) {
+  if (processingHallModalSubmits.has(interaction.id)) {
+    return true;
+  }
+
+  processingHallModalSubmits.add(interaction.id);
+
+  try {
+    if (!hasPermission(interaction.member, interaction.user.id)) {
+      return interaction.reply({ content: "🚫 Sem permissão para editar.", ephemeral: true });
+    }
+
+    const canContinue = await safeDeferHallInteraction(interaction);
+    if (!canContinue) return true;
 
 const isPrizesOnly = interaction.customId.startsWith(MODAL_PRIZES_SUBMIT);
 const messageId = interaction.customId.split(":")[1];
@@ -5661,27 +5691,35 @@ if (isPrizesOnly) {
 
   const oldParts = extractHallParts(oldContent);
 
-  const imageLines = await getSafeHallImageUrls(client, messageToEdit, {
-    content: oldContent,
-    eventName: oldEventName,
-    winnerNames: extractWinnerNamesForApprovalMatch(oldContent),
-    manualUrls: manualImageUrls
-  });
+  const imageLines = manualImageUrls.length
+  ? uniqueImageUrls(manualImageUrls).slice(0, 2)
+  : await getSafeHallImageUrls(client, messageToEdit, {
+      content: oldContent,
+      eventName: oldEventName,
+      winnerNames: extractWinnerNamesForApprovalMatch(oldContent),
+      manualUrls: []
+    });
 
-  finalImageUrls = imageLines;
-  newImageUrl = finalImageUrls[0] || '';
-  newImageUrl2 = finalImageUrls[1] || '';
+finalImageUrls = imageLines;
+newImageUrl = finalImageUrls[0] || '';
+newImageUrl2 = finalImageUrls[1] || '';
 } else {
-  const imageLines = await getSafeHallImageUrls(client, messageToEdit, {
-    content: oldContent,
-    eventName: newEventName,
-    winnerNames: extractWinnerNamesForApprovalMatch(oldContent),
-    manualUrls: manualImageUrls.length ? manualImageUrls : (newImageUrl ? [newImageUrl] : [])
-  });
+const forcedImageUrls = manualImageUrls.length
+  ? manualImageUrls
+  : (newImageUrl ? [newImageUrl] : []);
 
-  finalImageUrls = imageLines;
-  newImageUrl = finalImageUrls[0] || newImageUrl || '';
-  newImageUrl2 = finalImageUrls[1] || '';
+const imageLines = forcedImageUrls.length
+  ? uniqueImageUrls(forcedImageUrls).slice(0, 2)
+  : await getSafeHallImageUrls(client, messageToEdit, {
+      content: oldContent,
+      eventName: newEventName,
+      winnerNames: extractWinnerNamesForApprovalMatch(oldContent),
+      manualUrls: []
+    });
+
+finalImageUrls = imageLines;
+newImageUrl = finalImageUrls[0] || newImageUrl || '';
+newImageUrl2 = finalImageUrls[1] || '';
 }
       const mentionsLine = lines.find(l => l.includes('@everyone')) || '';
 
@@ -5711,9 +5749,12 @@ if (isPrizesOnly) {
 
       await messageToEdit.edit({ content: finalMessage });
 
-      await interaction.editReply("✅ Hall da Fama editado com sucesso!");
-      return true;
-    }
+await interaction.editReply("✅ TOPs do Hall da Fama editados com sucesso!");
+return true;
+  } finally {
+    processingHallModalSubmits.delete(interaction.id);
+  }
+}
 
     // 1. Botão Inicial
     if (interaction.isButton() && interaction.customId === BTN_OPEN_MENU) {
