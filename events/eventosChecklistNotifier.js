@@ -35,8 +35,20 @@ const ROLES = {
   RESP_CREATORS: "1352408327983861844",
   RESP_INFLU: "1262262852949905409",
   RESP_LIDER: "1352407252216184833",
-  COORD_CREATORS: "1352385500614234134",
+  RESPONSAVEIS: "1414651836861907006",
+
+  COORDENACAO_GERAL: "1352385500614234134",
   EQUIPE_CREATORS: "1352429001188180039",
+  CREATOR_SENIOR: "1379172775905984703",
+
+  EQUIPE_MANAGER: "1392678638176043029",
+  MANAGER_CREATORS: "1388976155830255697",
+
+  EQUIPE_SOCIAL: "1387253972661964840",
+  SOCIAL_MEDIAS: "1388976094920704141",
+
+  GESTOR_CREATORS: "1388975939161161728",
+  COORD_CREATORS: "1388976314253312100",
 };
 
 const CITY_ROLES = {
@@ -44,6 +56,40 @@ const CITY_ROLES = {
   grande: "1418691103397253322",
   santa: "1379021888709464168",
   nobre: "1379021805544804382",
+};
+
+const CITY_CALLS = {
+  nobre: {
+    name: "Nobre",
+    call: "https://discord.com/channels/755203021490749530/1426780129236881519",
+    suporte: "https://discord.com/channels/755203021490749530/1445912045898698803",
+  },
+
+  santa: {
+    name: "Cidade Santa",
+    call: "https://discord.com/channels/690983940567334964/1437900173006077952",
+    suporte: "https://discord.com/channels/690983940567334964/1437900087438213211",
+  },
+
+  grande: {
+    name: "Cidade Grande",
+    call: "https://discord.com/channels/788905600699858944/1455260718021480560",
+    suporte: "https://discord.com/channels/788905600699858944/1407515329630048417",
+  },
+
+  maresia: {
+    name: "Maresia",
+    call: "https://discord.com/channels/798594785896038401/1471325919716048976",
+    suporte: "https://discord.com/channels/798594785896038401/1471325624713875547",
+  },
+};
+
+const POINT_CHANNELS = {
+  manager: "1417602111495077920",
+  social: "1417601634644525147",
+  gestor: "1417601906305536101",
+  coord: "1417602334036463656",
+  resp: "1425943893400227892",
 };
 
 const DAY_KEYS = ["dom", "seg", "ter", "qua", "qui", "sex", "sab"];
@@ -163,11 +209,14 @@ function getMinutesDiff(now, target) {
  * @param {number} diff Diferença (Target - Agora). Positivo = Futuro, Negativo = Passado.
  */
 function getPhaseByDiff(diff) {
+  // 2 horas antes do evento
+  if (diff <= 130 && diff > 105) return "PRE_120";
+
   // Antes do evento
   if (diff <= 70 && diff > 45) return "PRE_60";
   if (diff <= 40 && diff > 10) return "PRE_30";
 
-  // Durante o evento (nos primeiros 20 minutos)
+  // Durante o evento
   if (diff <= 0 && diff > -20) return "DURANTE";
 
   // 20 a 45 minutos depois: Cobrança de Bate-Ponto
@@ -198,14 +247,13 @@ function markSent(state, key) {
 }
 
 function isOnline(member) {
-  // Fallback se a Intent de Presença estiver desligada
   if (!member?.presence) {
-    console.log(`[EventosChecklistNotifier] ⚠️ Sem cache de presence para ${member?.user?.tag}. Ignorando status.`);
-    return true; 
+    console.log(`[EventosChecklistNotifier] ⚠️ Sem cache de presence para ${member?.user?.tag}. Considerando offline/invisível.`);
+    return false;
   }
-  const status = member?.presence?.status;
-  const online = status === "online" || status === "idle" || status === "dnd";
-  return online;
+
+  const status = member.presence.status;
+  return status === "online" || status === "idle" || status === "dnd";
 }
 
 async function getMembersByRoles(guild, roleIds) {
@@ -269,6 +317,7 @@ async function logDmNotification(client, member, embed, status = "ENVIADO", even
         { name: "👤 Usuário", value: `${member} \`${member.user.tag}\``, inline: false },
         { name: "🆔 ID Discord", value: `\`${member.id}\``, inline: true },
         { name: "🔗 Link da pessoa", value: `[Abrir perfil](${userLink})`, inline: true },
+        { name: "🎭 Cargos detectados", value: getMemberRoleNames(member).slice(0, 1000), inline: false },
         { name: "📌 Título", value: embed?.data?.title || "Sem título", inline: true },
         { name: "🎯 Evento", value: `\`${event.eventName || "—"}\` (${event.city || "—"})`, inline: true },
         { name: "🏷️ Tipo", value: `\`${type}\``, inline: true },
@@ -330,6 +379,553 @@ function memberListText(members) {
     .slice(0, 1800);
 }
 
+function getMemberRoleNames(member) {
+  return member.roles.cache
+    .filter((role) => role.id !== member.guild.id)
+    .map((role) => role.name)
+    .join(", ") || "Sem cargos detectados";
+}
+
+function hasAnyRole(member, roleIds) {
+  return roleIds.some((roleId) => member.roles.cache.has(roleId));
+}
+
+function isResponsible(member) {
+  return hasAnyRole(member, [
+    ROLES.RESPONSAVEIS,
+    ROLES.RESP_CREATORS,
+    ROLES.RESP_INFLU,
+    ROLES.RESP_LIDER,
+  ]);
+}
+
+function isCoordOrGestor(member) {
+  return hasAnyRole(member, [
+    ROLES.COORDENACAO_GERAL,
+    ROLES.COORD_CREATORS,
+    ROLES.GESTOR_CREATORS,
+  ]);
+}
+
+function getPointChannelId(member) {
+  if (isResponsible(member)) return POINT_CHANNELS.resp;
+
+  if (member.roles.cache.has(ROLES.COORD_CREATORS)) {
+    return POINT_CHANNELS.coord;
+  }
+
+  if (member.roles.cache.has(ROLES.GESTOR_CREATORS)) {
+    return POINT_CHANNELS.gestor;
+  }
+
+  if (
+    member.roles.cache.has(ROLES.EQUIPE_SOCIAL) ||
+    member.roles.cache.has(ROLES.SOCIAL_MEDIAS)
+  ) {
+    return POINT_CHANNELS.social;
+  }
+
+  if (
+    member.roles.cache.has(ROLES.EQUIPE_MANAGER) ||
+    member.roles.cache.has(ROLES.MANAGER_CREATORS)
+  ) {
+    return POINT_CHANNELS.manager;
+  }
+
+  return POINT_CHANNELS.manager;
+}
+
+function getCityCalls(event) {
+  return CITY_CALLS[event.cityKey] || {
+    name: event.city || "Cidade",
+    call: "Call da equipe não configurada.",
+    suporte: "Call de suporte não configurada.",
+  };
+}
+
+function getPresenceText(member) {
+  const status = member?.presence?.status;
+
+  if (!status) {
+    return "não consegui ver teu status certinho, então já vou te chamar mesmo assim kkkkk";
+  }
+
+  if (status === "offline" || status === "invisible") {
+    return "vi que você está offline/invisível, mas já deixei esse salve aqui pra quando você aparecer";
+  }
+
+  if (status === "idle") {
+    return "vi que você está ausente, mas bora acordar pra esse evento kkkkk";
+  }
+
+  if (status === "dnd") {
+    return "vi que você está no não perturbe, mas o evento tá chegando e preciso te cutucar";
+  }
+
+  return "vi que você está online, então já cola com a equipe e bora organizar isso bonito";
+}
+
+function buildChecklistAntesText(event) {
+  const calls = getCityCalls(event);
+
+  return [
+    "📋 **CHECKLIST · ANTES DO EVENTO**",
+    "━━━━━━━━━━━━━━━━━━━━",
+    "",
+    "☐ ⚡ **Setagem de poderes**",
+    "Setar os poderes necessários apenas para cargos abaixo de Coordenação.",
+    "Coordenadores também conseguem ajudar quando necessário.",
+    "",
+    "☐ ⚠️ **GestãoInfluencer correto**",
+    "Setar o GestãoInfluencer de acordo com o cargo correto da pessoa.",
+    "Nunca setar em quem não esteja apto/autorizado.",
+    "",
+    "☐ 👗 **Roupas verificadas**",
+    "Conferir roupas da temática do evento e registrar no chat creators da cidade.",
+    "",
+    "☐ 📍 **Local do evento verificado**",
+    "Checar se o local está correto e se não teve mudança/problema.",
+    "",
+    "☐ 📄 **F3 do evento enviado**",
+    "Garantir que o convite do evento foi divulgado corretamente.",
+    "",
+    "☐ 👥 **ADM do evento definidos**",
+    "Definir quem cuida da administração, controle, áudio e organização geral.",
+    "",
+    "☐ 🪪 **Cargos conferidos**",
+    "Setar cargos necessários em quem estiver sem cargo para ajudar no evento.",
+    "",
+    `📞 **Call da equipe:** ${calls.call}`,
+    `🆘 **Call suporte:** ${calls.suporte}`,
+  ].join("\n");
+}
+
+function buildChecklistPosText(event) {
+  const isNobre = event.cityKey === "nobre";
+
+  return [
+    "🏆 **CHECKLIST · PÓS EVENTO**",
+    "━━━━━━━━━━━━━━━━━━━━",
+    "",
+    "☐ ⭐ **Hall da Fama**",
+    "Registrar vencedores e destaques do evento.",
+    "",
+    "☐ 👑 **Solicitar VIP/premiações**",
+    "Enviar as solicitações de VIP ou premiações dos vencedores.",
+    "",
+    "☐ 💳 **Pagamento do evento**",
+    "Liberar ou registrar o pagamento referente ao evento.",
+    "",
+    "☐ 📢 **GG na cidade**",
+    "Enviar GG oficial com vencedores e organização/equipe vencedora.",
+    "",
+"☐ ⚡ **Remover poderes/wall**",
+"Remover poderes/wall de quem recebeu apenas para o evento.",
+"",
+"⚠️ **Exceção do wall:** não remover wall de Coord Creators, Gestor Creators e Responsáveis.",
+"Esses cargos precisam manter porque faz parte do poder/função deles.",
+    "",
+    isNobre
+      ? "📌 **Nobre:** foco total em remover wall/poderes usados no evento."
+      : [
+          "📌 **Outras cidades:** além do wall/poder, lembrar de remover GestãoInfluencer quando necessário.",
+          "",
+          "Coordenação geral:",
+          "`ungroup id gestaoinfluencer 4`",
+          "",
+          "Equipe Creators:",
+          "`ungroup id gestaoinfluencer 5`",
+        ].join("\n"),
+  ].join("\n");
+}
+
+function buildEquipeEventEmbed(member, event, phase) {
+  const calls = getCityCalls(event);
+  const pointChannel = getPointChannelId(member);
+  const presenceText = getPresenceText(member);
+
+  const titles = {
+    PRE_120: "💜 Faltam 2 horas · bora aparecer no evento",
+    PRE_60: "⏰ Falta 1 hora · esquenta da SantaCreators",
+    PRE_30: "🚨 Falta 30 minutos · urgência real oficial",
+    DURANTE: "🎬 Evento começou · cola e bate ponto",
+    PONTO_25: "🕒 Bate-ponto do evento",
+    POS_CHECKLIST: "🏆 Pós-evento · não some agora",
+    POS_PODERES: "⚡ Pós-evento · poderes, wall e GestãoInfluencer",
+  };
+
+  const descriptions = {
+    PRE_120: [
+      `Eaiii ${member}, ${presenceText}.`,
+      "",
+      `Bora positivar e se organizar para o evento das **${event.time}** na **${event.city}**.`,
+      "",
+      `🎯 **Evento de hoje:** ${event.eventName}`,
+      "",
+      "É muitooo importante você aparecer, sério mesmo.",
+      "",
+      `📞 **Call da equipe:** ${calls.call}`,
+      `🆘 **Sem acesso? Cola no suporte:** ${calls.suporte}`,
+      "",
+      "Assim que entrar e tiver responsável na call, pede um direcionamento:",
+      "• como funciona o evento",
+      "• onde você ajuda",
+      "• se precisa setar wall",
+      "• se precisa organizar F3, áudio, roupas ou local",
+      "",
+      "Se o responsável estiver AFK ou não estiver na call, relaxa: cobra no chat/grupo da tua equipe.",
+      "Aquele grupo de 10 pessoas mesmo kkkkk. Manager tem o seu, Social tem o seu. Bora usar isso.",
+    ],
+
+    PRE_60: [
+      `Ouuu ${member}, falta **1 hora** para **${event.eventName}** na **${event.city}**.`,
+      "",
+      "Agora não é hora de sumir não kkkkk.",
+      "",
+      `📞 Call da equipe: ${calls.call}`,
+      `🆘 Suporte: ${calls.suporte}`,
+      "",
+      "Já confere:",
+      "☐ roupa do evento",
+      "☐ se tem cargo certinho",
+      "☐ se sabe onde vai ficar",
+      "☐ se precisa de wall",
+      "☐ se alguém da equipe já está organizando",
+      "",
+      "Se ninguém chamou ainda, chama você mesmo no grupo. Quem puxa organização cresce demais.",
+    ],
+
+    PRE_30: [
+      `${member}, AGORA É URGÊNCIA kkkkk.`,
+      "",
+      `Faltam **30 minutos** para **${event.eventName}** na **${event.city}**.`,
+      "",
+      `📞 Entra na call: ${calls.call}`,
+      `🆘 Sem acesso? ${calls.suporte}`,
+      "",
+      "Quando entrar:",
+      "• pede direcionamento",
+      "• pergunta se precisa setar wall",
+      "• confirma tua função",
+      "• fica de olho no F3",
+      "• ajuda a puxar a equipe",
+      "",
+      "Se tu ficar esperando alguém te chamar, o evento começa e vira bagunça. Boraaaa 💜",
+    ],
+
+    DURANTE: [
+      `${member}, o evento **${event.eventName}** começou.`,
+      "",
+      `🏙️ Cidade: **${event.city}**`,
+      `📞 Call: ${calls.call}`,
+      "",
+      `📌 **Bate teu ponto aqui:** <#${pointChannel}>`,
+      "",
+      "Se você está ajudando no evento, bate ponto bonitinho.",
+      "Se usou poder/wall, depois registra também pra não virar cobrança.",
+    ],
+
+    PONTO_25: [
+      `${member}, lembrete de bate-ponto do evento **${event.eventName}**.`,
+      "",
+      `📌 Canal correto pra você: <#${pointChannel}>`,
+      "",
+      "Se você ajudou no evento, registra aí bonitinho.",
+      "Não deixa pra depois porque depois ninguém lembra e vira aquela novela kkkkk.",
+    ],
+
+    POS_CHECKLIST: [
+      `${member}, pós-evento também conta, viu?`,
+      "",
+      `O evento **${event.eventName}** da **${event.city}** já passou da fase principal.`,
+      "",
+      "Se você ajudou, confere se ficou algo pendente:",
+      "☐ bateu ponto",
+      "☐ avisou algo importante",
+      "☐ registrou poder se usou",
+      "☐ ajudou a fechar organização",
+      "",
+      "Não some do nada depois do evento não kkkkk.",
+    ],
+
+    POS_PODERES: [
+      `${member}, fechamento do evento **${event.eventName}**.`,
+      "",
+      event.cityKey === "nobre"
+        ? "Na Nobre, lembra de conferir principalmente wall/poderes que foram setados para o evento."
+        : [
+            "Como não é Nobre, além do wall/poder também tem GestãoInfluencer pra lembrar.",
+            "",
+            "Se for Coordenação geral:",
+            "`ungroup id gestaoinfluencer 4`",
+            "",
+            "Se for Equipe Creators:",
+            "`ungroup id gestaoinfluencer 5`",
+          ].join("\n"),
+      "",
+      "Se você recebeu algo só pro evento, confirma com responsável se precisa remover.",
+    ],
+  };
+
+  return new EmbedBuilder()
+    .setColor("#9b59b6")
+    .setTitle(titles[phase] || "📋 Lembrete SantaCreators")
+    .setDescription((descriptions[phase] || []).join("\n"))
+    .setFooter({ text: "SantaCreators • Lembrete personalizado da equipe" })
+    .setTimestamp();
+}
+
+function buildRespEventEmbed(member, event, phase) {
+  const calls = getCityCalls(event);
+  const pointChannel = getPointChannelId(member);
+
+  const titles = {
+    PRE_120: "🚨 Responsável, cadê você?",
+    PRE_60: "📋 Responsável · falta 1 hora",
+    PRE_30: "🚨 Responsável · falta 30 minutos",
+    DURANTE: "🎬 Responsável · evento começou",
+    PONTO_25: "🕒 Responsável · cobrança de bate-ponto",
+    POS_CHECKLIST: "🏆 Responsável · checklist pós-evento",
+    POS_PODERES: "⚡ Responsável · remover poderes e fechar evento",
+  };
+
+  const descriptions = {
+    PRE_120: [
+      `Ouuu ${member}, cadê você? kkkkk`,
+      "",
+      `O **${event.eventName}** de hoje, às **${event.time}**, na **${event.city}**, já tá chegando.`,
+      "",
+      "Tu como responsável vai viver dando ausência? pqp emmmm... logo mais é cobrança/rebaixamento mesmo kkkkk.",
+      "",
+      `📞 **Entra na call da equipe:** ${calls.call}`,
+      "",
+      "Mesmo que não tenha ninguém na call, fica lá.",
+      "Quando o povo ver alguém lá, eles entram também.",
+      "",
+      "Já começa agora:",
+      "☐ chamar equipe nos grupos",
+      "☐ organizar quem vai administrar",
+      "☐ orientar quem não sabe o evento",
+      "☐ ver wall/poderes",
+      "☐ lembrar F3",
+      "☐ conferir roupa/local",
+      "☐ alinhar áudio/controle",
+      "",
+      buildChecklistAntesText(event),
+    ],
+
+    PRE_60: [
+      `${member}, falta **1 hora** para **${event.eventName}**.`,
+      "",
+      `📞 Call: ${calls.call}`,
+      "",
+      "Já era pra você estar puxando organização:",
+      "☐ responsável em call",
+      "☐ equipe sendo chamada",
+      "☐ wall sendo visto",
+      "☐ F3 no radar",
+      "☐ roupas/local conferidos",
+      "☐ ADM do evento definido",
+      "",
+      "Não espera virar caos pra agir não kkkkk.",
+    ],
+
+    PRE_30: [
+      `${member}, agora é reta final.`,
+      "",
+      `Faltam **30 minutos** para **${event.eventName}** na **${event.city}**.`,
+      "",
+      `📞 Call da equipe: ${calls.call}`,
+      "",
+      "COBRA AGORA:",
+      "☐ quem tá sem wall",
+      "☐ quem tá sem cargo",
+      "☐ quem tá perdido",
+      "☐ quem precisa ir pra call",
+      "☐ quem vai controlar áudio",
+      "☐ quem vai administrar",
+      "",
+      "E já dá toque nos chats das equipes mandando bater presença e colar na call.",
+    ],
+
+    DURANTE: [
+      `${member}, o evento **${event.eventName}** começou.`,
+      "",
+      `📌 **Teu bate-ponto:** <#${pointChannel}>`,
+      "",
+      "Bate teu ponto e lembra a equipe de bater também.",
+      "",
+      "Na call, reforça:",
+      "☐ quem está administrando",
+      "☐ quem está no áudio",
+      "☐ quem está com wall",
+      "☐ quem está cuidando da organização",
+      "☐ qualquer problema precisa ser registrado",
+    ],
+
+    PONTO_25: [
+      `${member}, cobrança de bate-ponto.`,
+      "",
+      `📌 Teu canal: <#${pointChannel}>`,
+      "",
+      "Bate teu ponto e lembra geral nos chats/call:",
+      "• Manager/Equipe Manager no canal de Manager",
+      "• Social/Social Medias no canal de Social",
+      "• Gestor no canal de Gestor",
+      "• Coord no canal de Coord",
+      "• Responsável no canal de Responsável",
+      "",
+      "Fala na call também, porque sempre tem alguém que esquece kkkkk.",
+    ],
+
+    POS_CHECKLIST: [
+      `${member}, hora de fechar o evento sem deixar rastro de bagunça.`,
+      "",
+      buildChecklistPosText(event),
+      "",
+      "Confere isso e cobra quem precisa fazer. Pós-evento é onde a organização aparece de verdade.",
+    ],
+
+    POS_PODERES: [
+      `${member}, fechamento de poderes do evento **${event.eventName}**.`,
+      "",
+      "Responsável precisa cobrar e ajudar a remover o que foi setado só para o evento.",
+      "",
+      event.cityKey === "nobre"
+        ? "📌 **Nobre:** remover wall/poderes de quem recebeu para o evento."
+        : [
+            "📌 **Fora da Nobre:** remover wall/poderes e lembrar GestãoInfluencer.",
+            "",
+            "Coordenação geral:",
+            "`ungroup id gestaoinfluencer 4`",
+            "",
+            "Equipe Creators:",
+            "`ungroup id gestaoinfluencer 5`",
+          ].join("\n"),
+      "",
+      "Coordenação e Gestor também precisam ajudar nisso. Não deixa só um carregar tudo.",
+    ],
+  };
+
+  return new EmbedBuilder()
+    .setColor("#e74c3c")
+    .setTitle(titles[phase] || "🚨 Responsável · SantaCreators")
+    .setDescription((descriptions[phase] || []).join("\n"))
+    .setFooter({ text: "SantaCreators • Cobrança de responsáveis" })
+    .setTimestamp();
+}
+
+function buildCoordEventEmbed(member, event, phase) {
+  const calls = getCityCalls(event);
+  const pointChannel = getPointChannelId(member);
+
+  const titles = {
+    PRE_120: "⚡ Coord/Gestor · já ajuda a puxar organização",
+    PRE_60: "⏰ Coord/Gestor · falta 1 hora",
+    PRE_30: "🚨 Coord/Gestor · falta 30 minutos",
+    DURANTE: "🎬 Coord/Gestor · evento começou",
+    PONTO_25: "🕒 Coord/Gestor · bate-ponto",
+    POS_CHECKLIST: "🏆 Coord/Gestor · pós-evento",
+    POS_PODERES: "⚡ Coord/Gestor · ajuda a remover poderes",
+  };
+
+  const descriptions = {
+    PRE_120: [
+      `${member}, evento chegando e tu já pode ajudar muito.`,
+      "",
+      `🎯 **Evento:** ${event.eventName}`,
+      `🏙️ **Cidade:** ${event.city}`,
+      `⏰ **Horário:** ${event.time}`,
+      "",
+      `📞 Call: ${calls.call}`,
+      `🆘 Suporte: ${calls.suporte}`,
+      "",
+      "Ajuda os responsáveis com:",
+      "☐ chamar equipe",
+      "☐ orientar quem não sabe",
+      "☐ ver quem precisa de wall",
+      "☐ conferir organização do evento",
+      "☐ lembrar a galera de entrar na call",
+    ],
+
+    PRE_60: [
+      `${member}, falta 1 hora para **${event.eventName}**.`,
+      "",
+      `📞 Call: ${calls.call}`,
+      "",
+      "Já ajuda a puxar quem tá perdido e dá força pros responsáveis.",
+    ],
+
+    PRE_30: [
+      `${member}, falta 30 minutos.`,
+      "",
+      "Agora é ajudar pesado:",
+      "☐ chamar na call",
+      "☐ cobrar organização",
+      "☐ ver wall",
+      "☐ ajudar responsável",
+      "",
+      `📞 ${calls.call}`,
+    ],
+
+    DURANTE: [
+      `${member}, evento começou.`,
+      "",
+      `📌 Bate ponto aqui: <#${pointChannel}>`,
+      "",
+      "Ajuda a manter a call viva e a equipe orientada.",
+    ],
+
+    PONTO_25: [
+      `${member}, bate teu ponto e lembra a equipe também.`,
+      "",
+      `📌 Canal: <#${pointChannel}>`,
+    ],
+
+    POS_CHECKLIST: [
+      `${member}, ajuda no pós-evento também.`,
+      "",
+      buildChecklistPosText(event),
+    ],
+
+    POS_PODERES: [
+      `${member}, ajuda os responsáveis a remover poderes/wall.`,
+      "",
+      "Coordenação/Gestor não pode sumir nessa parte.",
+      "",
+      event.cityKey === "nobre"
+        ? "Na Nobre, foco em remover wall/poderes."
+        : [
+            "Fora da Nobre, lembra também GestãoInfluencer:",
+            "",
+            "Coordenação geral:",
+            "`ungroup id gestaoinfluencer 4`",
+            "",
+            "Equipe Creators:",
+            "`ungroup id gestaoinfluencer 5`",
+          ].join("\n"),
+    ],
+  };
+
+  return new EmbedBuilder()
+    .setColor("#3498db")
+    .setTitle(titles[phase] || "⚡ Coord/Gestor · SantaCreators")
+    .setDescription((descriptions[phase] || []).join("\n"))
+    .setFooter({ text: "SantaCreators • Coordenação/Gestão" })
+    .setTimestamp();
+}
+
+function buildPersonalEmbed(member, event, phase) {
+  if (isResponsible(member)) {
+    return buildRespEventEmbed(member, event, phase);
+  }
+
+  if (isCoordOrGestor(member)) {
+    return buildCoordEventEmbed(member, event, phase);
+  }
+
+  return buildEquipeEventEmbed(member, event, phase);
+}
 function buildRespReminderEmbed(event) {
   return new EmbedBuilder()
     .setColor("#9b59b6")
@@ -510,19 +1106,18 @@ async function runNotifierTick(client, options = {}) {
 
   const state = loadJson(NOTIFIER_STATE_FILE, { sent: {} });
   const events = getTodayEvents();
-  if (events.length > 0) console.log(`[EventosChecklistNotifier] Evento(s) encontrado(s): ${events.map(e => e.eventName).join(", ")}`);
-  
-  const nowMinutes = minutesNowSP();
+
+  if (events.length > 0) {
+    console.log(`[EventosChecklistNotifier] Evento(s) encontrado(s): ${events.map(e => e.eventName).join(", ")}`);
+  }
 
   for (const event of events) {
-    // Extrai todos os horários possíveis (suporta "21:00 ou 00:00")
     const startTimes = extractAllTimesInMinutes(event.time);
 
     for (const start of startTimes) {
       const phase = forceTest ? "TESTE_MANUAL" : getPhase(start);
 
       if (!phase) {
-        // console.log(`[EventosChecklistNotifier] Evento ${event.eventName} às ${event.time} fora das janelas.`);
         continue;
       }
 
@@ -531,12 +1126,39 @@ async function runNotifierTick(client, options = {}) {
       const uniqueBase = `${todayDateBR()}_${event.type}_${event.cityKey}_${event.eventName}_${start}_${phase}`;
       if (alreadySent(state, uniqueBase)) continue;
 
-      const respRoles = [ROLES.RESP_CREATORS, ROLES.RESP_INFLU, ROLES.RESP_LIDER];
-      const equipeRoles = [ROLES.COORD_CREATORS, ROLES.EQUIPE_CREATORS];
+      const respRoles = [
+        ROLES.RESPONSAVEIS,
+        ROLES.RESP_CREATORS,
+        ROLES.RESP_INFLU,
+        ROLES.RESP_LIDER,
+      ];
+
+      const equipeRoles = [
+        ROLES.COORDENACAO_GERAL,
+        ROLES.EQUIPE_CREATORS,
+        ROLES.CREATOR_SENIOR,
+        ROLES.EQUIPE_MANAGER,
+        ROLES.MANAGER_CREATORS,
+        ROLES.EQUIPE_SOCIAL,
+        ROLES.SOCIAL_MEDIAS,
+        ROLES.GESTOR_CREATORS,
+        ROLES.COORD_CREATORS,
+      ];
 
       const respMembers = await getMembersByRoles(guild, respRoles);
       const equipeMembers = await getMembersByRoles(guild, equipeRoles);
 
+      const allTargetsMap = new Map();
+
+      for (const member of equipeMembers) {
+        allTargetsMap.set(member.id, member);
+      }
+
+      for (const member of respMembers) {
+        allTargetsMap.set(member.id, member);
+      }
+
+      const allTargets = [...allTargetsMap.values()];
       const onlineEquipe = equipeMembers.filter(isOnline);
       const offlineEquipe = equipeMembers.filter((m) => !isOnline(m));
 
@@ -558,6 +1180,9 @@ async function runNotifierTick(client, options = {}) {
             "",
             `👥 **Equipe encontrada:** ${equipeMembers.length}`,
             memberListText(equipeMembers),
+            "",
+            `🟢 **Equipe online detectada:** ${onlineEquipe.length}`,
+            `⚫ **Equipe offline/invisível detectada:** ${offlineEquipe.length}`,
           ].join("\n")
         );
 
@@ -568,88 +1193,220 @@ async function runNotifierTick(client, options = {}) {
           .setTitle("🧪 Teste Manual do Notifier")
           .setDescription(
             [
-              "Funcionou! O sistema processou o evento e os horários corretamente.",
+              "Funcionou! O sistema processou o evento, cargos, cidade e horários.",
               "",
               `🎯 **Evento:** ${event.eventName}`,
               `🏙️ **Cidade:** ${event.city}`,
               `⏰ **Horário Configurado:** ${event.time}`,
               `⏱️ **Minutos extraídos:** ${start}`,
               "",
-              `🟢 **Equipe considerada online:** ${onlineEquipe.length}`,
+              `👑 **Responsáveis encontrados:** ${respMembers.length}`,
+              `👥 **Equipe encontrada:** ${equipeMembers.length}`,
+              `🟢 **Equipe online:** ${onlineEquipe.length}`,
+              `⚫ **Equipe offline/invisível:** ${offlineEquipe.length}`,
             ].join("\n")
-          );
+          )
+          .setFooter({ text: "SantaCreators • Teste manual do notifier" })
+          .setTimestamp();
 
         await dm(client, testMember, testEmbed, event, "teste manual");
 
-        const respReminderEmbed = buildRespReminderEmbed(event);
-        const teamTestEmbed = buildTeamTestEmbed(event);
+        let sentTest = 0;
+        let failedTest = 0;
 
-        for (const member of respMembers) {
-          await dm(client, member, respReminderEmbed, event, "teste manual responsáveis");
-        }
+        for (const member of allTargets) {
+          const embed = buildPersonalEmbed(member, event, "PRE_120");
+          const ok = await dm(client, member, embed, event, "teste manual personalizado");
 
-        for (const member of equipeMembers) {
-          await dm(client, member, teamTestEmbed, event, "teste manual equipe");
+          if (ok) sentTest++;
+          else failedTest++;
         }
 
         await sendProgressLog(
           client,
           "✅ Teste manual finalizado",
-          `🎯 **Evento:** ${event.eventName}\n\nPVs de teste enviados para equipe e responsáveis.`
+          [
+            `🎯 **Evento:** ${event.eventName}`,
+            `🏙️ **Cidade:** ${event.city}`,
+            "",
+            `✅ PVs enviados: **${sentTest}**`,
+            `❌ PVs falharam: **${failedTest}**`,
+            "",
+            "📌 Cada PV enviado/falhado também caiu como log individual nesse canal.",
+          ].join("\n"),
+          "#2ecc71"
         );
-        
+
         markSent(state, uniqueBase);
         continue;
       }
 
-      // Lógica de envio real das fases
-      if (phase === "PRE_60" || phase === "PRE_30") {
-        const embed = buildPrepareEmbed(event, phase);
-        for (const member of respMembers.filter(isOnline)) {
-          await dm(client, member, embed, event, phase);
-        }
-      } 
+      let targetsToSend = [];
+
+if (phase === "PRE_120" || phase === "PRE_60" || phase === "PRE_30") {
+  const targetsMap = new Map();
+
+  for (const member of respMembers) {
+    targetsMap.set(member.id, member);
+  }
+
+  for (const member of onlineEquipe) {
+    targetsMap.set(member.id, member);
+  }
+
+  targetsToSend = [...targetsMap.values()];
+}
+
       else if (phase === "DURANTE") {
-        const duringEmbed = buildDuringEmbed(event);
-        for (const member of respMembers.filter(isOnline)) {
-          await dm(client, member, duringEmbed, event, "durante");
+        const targetsMap = new Map();
+
+        for (const member of respMembers) {
+          targetsMap.set(member.id, member);
         }
-      }
-      else if (phase === "PONTO_25") {
-        const reportEmbed = buildRespReportEmbed(event, onlineEquipe, offlineEquipe);
+
         for (const member of onlineEquipe) {
-          if (!globalThis.SC_BP_hasPunchedEffective?.(member.id)) {
-            const pointEmbed = buildPointEmbed({ ...event, targetId: member.id });
-            await dm(client, member, pointEmbed, event, "ponto");
+          targetsMap.set(member.id, member);
+        }
+
+        targetsToSend = [...targetsMap.values()];
+      }
+
+      else if (phase === "PONTO_25") {
+        const targetsMap = new Map();
+
+        for (const member of respMembers) {
+          targetsMap.set(member.id, member);
+        }
+
+        for (const member of onlineEquipe) {
+          targetsMap.set(member.id, member);
+        }
+
+        targetsToSend = [...targetsMap.values()];
+      }
+
+      else if (phase === "POS_CHECKLIST") {
+        const targetsMap = new Map();
+
+        for (const member of respMembers) {
+          targetsMap.set(member.id, member);
+        }
+
+        for (const member of onlineEquipe) {
+          targetsMap.set(member.id, member);
+        }
+
+        targetsToSend = [...targetsMap.values()];
+      }
+
+      else if (phase === "POS_PODERES") {
+        const targetsMap = new Map();
+
+        for (const member of respMembers) {
+          targetsMap.set(member.id, member);
+        }
+
+        for (const member of onlineEquipe) {
+          targetsMap.set(member.id, member);
+        }
+
+        targetsToSend = [...targetsMap.values()];
+      }
+
+      let sent = 0;
+      let failed = 0;
+      let ignored = 0;
+
+      const failedMembers = [];
+      const sentMembers = [];
+      const ignoredMembers = [];
+
+      for (const member of targetsToSend) {
+        if (phase === "PONTO_25") {
+          const alreadyPunched =
+            typeof globalThis.SC_BP_hasPunchedEffective === "function"
+              ? globalThis.SC_BP_hasPunchedEffective(member.id)
+              : false;
+
+          if (alreadyPunched && !isResponsible(member)) {
+            ignored++;
+            ignoredMembers.push(member);
+            continue;
           }
         }
-        for (const resp of respMembers.filter(isOnline)) {
-          await dm(client, resp, reportEmbed, event, "relatório");
+
+        if (phase === "POS_PODERES" && !isResponsible(member)) {
+          const registered =
+            typeof globalThis.SC_PODERES_hasRegisteredLastHours === "function"
+              ? await globalThis.SC_PODERES_hasRegisteredLastHours(client, member.id, 24)
+              : false;
+
+          if (registered) {
+            ignored++;
+            ignoredMembers.push(member);
+            console.log(`[EventosChecklistNotifier] ${member.user.tag} já registrou poderes nas últimas 24h. Ignorando.`);
+            continue;
+          }
+        }
+
+        const embed = buildPersonalEmbed(member, event, phase);
+        const ok = await dm(client, member, embed, event, phase);
+
+        if (ok) {
+          sent++;
+          sentMembers.push(member);
+        } else {
+          failed++;
+          failedMembers.push(member);
         }
       }
-      else if (phase === "POS_CHECKLIST") {
-        const postEmbed = buildPostChecklistEmbed(event);
-        for (const member of respMembers.filter(isOnline)) {
-          await dm(client, member, postEmbed, event, "pós-checklist");
-        }
-      }
-else if (phase === "POS_PODERES") {
-  for (const member of onlineEquipe) {
-    const registered = await globalThis.SC_PODERES_hasRegisteredLastHours?.(
-      client,
-      member.id,
-      24
-    );
 
-    if (registered) {
-      console.log(`[EventosChecklistNotifier] ${member.user.tag} já registrou poderes nas últimas 24h. Ignorando.`);
-      continue;
-    }
+      const failedText = failedMembers.length
+        ? failedMembers
+            .map((member) => `• ${member} — ${member.user.tag} — cargos: ${getMemberRoleNames(member)}`)
+            .join("\n")
+            .slice(0, 1800)
+        : "Nenhum PV falhou.";
 
-    const powerEmbed = buildPowerEmbed({ ...event, targetId: member.id });
-    await dm(client, member, powerEmbed, event, "poderes pós-evento");
-  }
-}
+      const sentText = sentMembers.length
+        ? sentMembers
+            .map((member) => `• ${member} — ${member.user.tag} — cargos: ${getMemberRoleNames(member)}`)
+            .join("\n")
+            .slice(0, 1800)
+        : "Nenhum PV enviado.";
+
+      const ignoredText = ignoredMembers.length
+        ? ignoredMembers
+            .map((member) => `• ${member} — ${member.user.tag} — cargos: ${getMemberRoleNames(member)}`)
+            .join("\n")
+            .slice(0, 1800)
+        : "Nenhum membro ignorado.";
+
+      await sendProgressLog(
+        client,
+        `📨 Notifier disparado · ${phase}`,
+        [
+          `🎯 **Evento:** ${event.eventName}`,
+          `🏙️ **Cidade:** ${event.city}`,
+          `⏰ **Horário:** ${event.time}`,
+          "",
+          `✅ **Receberam:** ${sent}`,
+          `❌ **Não receberam:** ${failed}`,
+          `⏭️ **Ignorados:** ${ignored}`,
+          "",
+          "✅ **Quem recebeu:**",
+          sentText,
+          "",
+          "❌ **Quem não recebeu:**",
+          failedText,
+          "",
+          "⏭️ **Ignorados:**",
+          ignoredText,
+          "",
+          "📌 Nos logs individuais acima também aparece exatamente qual mensagem cada pessoa recebeu.",
+        ].join("\n"),
+        failed > 0 ? "#e74c3c" : "#2ecc71"
+      );
 
       markSent(state, uniqueBase);
     }
@@ -659,353 +1416,8 @@ else if (phase === "POS_PODERES") {
 }
 
 async function runNotifierTickOld(client, options = {}) {
-  const guild = client.guilds.cache.first();
-  if (!guild) {
-    console.log("[EventosChecklistNotifier] Nenhuma guilda encontrada.");
-    return;
-  }
-
-  const forceTest = Boolean(options.forceTest);
-  const testUserId = options.testUserId || null;
-
-  const state = loadJson(NOTIFIER_STATE_FILE, { sent: {} });
-  const events = getTodayEvents();
-  if (events.length > 0) console.log(`[EventosChecklistNotifier] Evento(s) encontrado(s): ${events.map(e => e.eventName).join(", ")}`);
-
-  for (const event of events) {
-    const start = hmToMinutes(event.time);
-    if (start === null) continue;
-
-    const phase = forceTest ? "TESTE_MANUAL" : getPhase(start);
-
-    if (!phase) {
-      console.log(`[EventosChecklistNotifier] Evento ${event.eventName} encontrado, mas fora das janelas de notificação agora.`);
-      continue;
-    }
-
-    console.log(`[EventosChecklistNotifier] Fase detectada: ${phase} para o evento ${event.eventName}`);
-
-    const uniqueBase = `${todayDateBR()}_${event.type}_${event.cityKey}_${event.eventName}_${phase}`;
-    if (alreadySent(state, uniqueBase)) continue;
-
-    const cityRole = CITY_ROLES[event.cityKey];
-
-    const respRoles = [
-      ROLES.RESP_CREATORS,
-      ROLES.RESP_INFLU,
-      ROLES.RESP_LIDER,
-    ];
-
-    const equipeRoles = [
-      ROLES.COORD_CREATORS,
-      ROLES.EQUIPE_CREATORS,
-    ];
-
-    const respMembers = await getMembersByRoles(guild, respRoles);
-    const equipeMembers = await getMembersByRoles(guild, equipeRoles);
-
-    const onlineEquipe = equipeMembers.filter(isOnline);
-    const offlineEquipe = equipeMembers.filter((m) => !isOnline(m));
-
-    if (phase === "TESTE_MANUAL") {
-      const testMember = testUserId ? await guild.members.fetch(testUserId).catch(() => null) : null;
-
-      await sendProgressLog(
-        client,
-        "🧪 Teste manual iniciado",
-        [
-          `👤 **Acionado por:** ${testMember || testUserId || "desconhecido"}`,
-          "",
-          `🎯 **Evento:** ${event.eventName}`,
-          `🏙️ **Cidade:** ${event.city}`,
-          `⏰ **Horário:** ${event.time}`,
-          "",
-          `👑 **Responsáveis encontrados:** ${respMembers.length}`,
-          memberListText(respMembers),
-          "",
-          `👥 **Equipe encontrada:** ${equipeMembers.length}`,
-          memberListText(equipeMembers),
-        ].join("\n"),
-        "#9b59b6"
-      );
-
-      if (!testMember) {
-        console.log("[EventosChecklistNotifier] Teste manual acionado, mas não consegui encontrar o membro que clicou.");
-        continue;
-      }
-
-      const testEmbed = new EmbedBuilder()
-        .setColor("#9b59b6")
-        .setTitle("🧪 Teste Manual do Notifier")
-        .setDescription(
-          [
-            "Funcionou, Macedo! O botão conseguiu forçar um teste manual do notifier.",
-            "",
-            `🎯 **Evento encontrado:** ${event.eventName}`,
-            `🏙️ **Cidade:** ${event.city}`,
-            `⏰ **Horário do evento:** ${event.time}`,
-            "",
-            `👑 **Responsáveis encontrados:** ${respMembers.length}`,
-            `👥 **Equipe encontrada:** ${equipeMembers.length}`,
-            `🟢 **Equipe considerada online:** ${onlineEquipe.length}`,
-            "",
-            "📌 **Cargos considerados responsáveis:**",
-            `• Resp Creators — \`${ROLES.RESP_CREATORS}\``,
-            `• Resp Influ — \`${ROLES.RESP_INFLU}\``,
-            `• Resp Líder — \`${ROLES.RESP_LIDER}\``,
-            "",
-            "📌 **Cargos considerados equipe:**",
-            `• Coordenação — \`${ROLES.COORD_CREATORS}\``,
-            `• Equipe Creators — \`${ROLES.EQUIPE_CREATORS}\``,
-            "",
-            "⚠️ O motivo de não enviar antes era simples:",
-            "`o evento foi encontrado, mas o horário atual não estava dentro de nenhuma janela de disparo.`",
-          ].join("\n")
-        )
-        .setFooter({ text: "SantaCreators • Teste manual do notifier" })
-        .setTimestamp();
-
-      await dm(client, testMember, testEmbed, event, "teste manual");
-
-      const respReminderEmbed = buildRespReminderEmbed(event);
-      const teamTestEmbed = buildTeamTestEmbed(event);
-
-      let sentResp = 0;
-      let failResp = 0;
-      let sentTeam = 0;
-      let failTeam = 0;
-
-      for (const member of respMembers) {
-        const ok = await dm(client, member, respReminderEmbed, event, "teste manual responsáveis");
-        if (ok) sentResp++;
-        else failResp++;
-      }
-
-      for (const member of equipeMembers) {
-        const ok = await dm(client, member, teamTestEmbed, event, "teste manual equipe");
-        if (ok) sentTeam++;
-        else failTeam++;
-      }
-
-      await sendProgressLog(
-        client,
-        "✅ Teste manual finalizado",
-        [
-          `🎯 **Evento:** ${event.eventName}`,
-          `🏙️ **Cidade:** ${event.city}`,
-          "",
-          `👤 **Teste enviado para quem clicou:** ${testMember}`,
-          "",
-          `👑 **Responsáveis:**`,
-          `✅ Enviados: **${sentResp}**`,
-          `❌ Falharam: **${failResp}**`,
-          "",
-          `👥 **Equipe:**`,
-          `✅ Enviados: **${sentTeam}**`,
-          `❌ Falharam: **${failTeam}**`,
-          "",
-          "📌 Cada PV enviado/falhado também cai como log individual nesse canal.",
-        ].join("\n"),
-        "#2ecc71"
-      );
-
-      console.log(`[EventosChecklistNotifier] Teste manual enviado para ${testMember.user.tag}.`);
-      continue;
-    }
-
-    if (phase === "PRE_60" || phase === "PRE_30") {
-      const embed = buildPrepareEmbed(event, phase);
-
-      let sent = 0;
-      let failed = 0;
-
-      for (const member of respMembers.filter(isOnline)) {
-        const ok = await dm(client, member, embed, event, phase === "PRE_60" ? "pré-evento" : "F3");
-        if (ok) sent++;
-        else failed++;
-
-        console.log(`[EventosChecklistNotifier] PV enviado (${phase}) para ${member.user.tag}`);
-      }
-
-      await sendProgressLog(
-        client,
-        `📋 Checklist pré-evento disparado · ${phase}`,
-        [
-          `🎯 **Evento:** ${event.eventName}`,
-          `🏙️ **Cidade:** ${event.city}`,
-          `⏰ **Horário:** ${event.time}`,
-          "",
-          `✅ **Enviados:** ${sent}`,
-          `❌ **Falharam:** ${failed}`,
-          "",
-          "📌 Tipo de envio: responsáveis online.",
-        ].join("\n"),
-        "#9b59b6"
-      );
-    }
-
-    if (phase === "DURANTE") {
-      const duringEmbed = buildDuringEmbed(event);
-
-      let sent = 0;
-      let failed = 0;
-
-      for (const member of respMembers.filter(isOnline)) {
-        const ok = await dm(client, member, duringEmbed, event, "durante evento");
-        if (ok) sent++;
-        else failed++;
-
-        console.log(`[EventosChecklistNotifier] PV enviado (Durante) para ${member.user.tag}`);
-      }
-
-      await sendProgressLog(
-        client,
-        "🎬 Checklist durante o evento disparado",
-        [
-          `🎯 **Evento:** ${event.eventName}`,
-          `🏙️ **Cidade:** ${event.city}`,
-          `⏰ **Horário:** ${event.time}`,
-          "",
-          `✅ **Enviados:** ${sent}`,
-          `❌ **Falharam:** ${failed}`,
-          "",
-          "📌 Tipo de envio: responsáveis online.",
-        ].join("\n"),
-        "#f1c40f"
-      );
-    }
-
-    if (phase === "PONTO_25") {
-      const reportEmbed = buildRespReportEmbed(event, onlineEquipe, offlineEquipe);
-
-      let sentPoint = 0;
-      let failedPoint = 0;
-      let ignoredPoint = 0;
-      let sentReport = 0;
-      let failedReport = 0;
-
-      for (const member of onlineEquipe) {
-        const already = globalThis.SC_BP_hasPunchedEffective?.(member.id);
-
-        if (!already) {
-          const pointEmbed = buildPointEmbed({ ...event, targetId: member.id });
-          const ok = await dm(client, member, pointEmbed, event, "bate-ponto");
-
-          if (ok) sentPoint++;
-          else failedPoint++;
-
-          console.log(`[EventosChecklistNotifier] PV enviado (Ponto) para ${member.user.tag}`);
-        } else {
-          ignoredPoint++;
-          console.log(`[EventosChecklistNotifier] Usuário ${member.user.tag} já bateu ponto, ignorando.`);
-        }
-      }
-
-      for (const resp of respMembers.filter(isOnline)) {
-        const ok = await dm(client, resp, reportEmbed, event, "Relatório Responsáveis");
-
-        if (ok) sentReport++;
-        else failedReport++;
-      }
-
-      await sendProgressLog(
-        client,
-        "🕒 Lembrete de bate-ponto disparado",
-        [
-          `🎯 **Evento:** ${event.eventName}`,
-          `🏙️ **Cidade:** ${event.city}`,
-          "",
-          "👥 **Equipe:**",
-          `✅ PVs enviados: **${sentPoint}**`,
-          `❌ PVs falharam: **${failedPoint}**`,
-          `⏭️ Ignorados por já terem batido ponto: **${ignoredPoint}**`,
-          "",
-          "👑 **Relatório para responsáveis:**",
-          `✅ Enviados: **${sentReport}**`,
-          `❌ Falharam: **${failedReport}**`,
-        ].join("\n"),
-        "#f1c40f"
-      );
-    }
-
-    if (phase === "POS_CHECKLIST") {
-      const postEmbed = buildPostChecklistEmbed(event);
-
-      let sent = 0;
-      let failed = 0;
-
-      for (const member of respMembers.filter(isOnline)) {
-        const ok = await dm(client, member, postEmbed, event, "checklist pós-evento");
-
-        if (ok) sent++;
-        else failed++;
-
-        console.log(`[EventosChecklistNotifier] PV enviado (Pós-evento) para ${member.user.tag}`);
-      }
-
-      await sendProgressLog(
-        client,
-        "🏆 Checklist pós-evento disparado",
-        [
-          `🎯 **Evento:** ${event.eventName}`,
-          `🏙️ **Cidade:** ${event.city}`,
-          `⏰ **Horário:** ${event.time}`,
-          "",
-          `✅ **Enviados:** ${sent}`,
-          `❌ **Falharam:** ${failed}`,
-          "",
-          "📌 Cobrança enviada para responsáveis online.",
-        ].join("\n"),
-        "#2ecc71"
-      );
-    }
-
-    if (phase === "POS_PODERES") {
-      let sentPower = 0;
-      let failedPower = 0;
-      let ignoredPower = 0;
-
-      for (const member of onlineEquipe) {
-        // Normalização de nome de evento para busca segura na memória global
-        const eventSearchName = event.eventName.toLowerCase().trim();
-
-const hasPower =
-  typeof globalThis.SC_PODERES_hasRegisteredLastHours === "function"
-    ? await globalThis.SC_PODERES_hasRegisteredLastHours(client, member.id, 24)
-    : false;
-
-if (!hasPower) {
-          const powerEmbed = buildPowerEmbed({ ...event, targetId: member.id });
-          const ok = await dm(client, member, powerEmbed, event, "registro de poderes");
-
-          if (ok) sentPower++;
-          else failedPower++;
-
-          console.log(`[EventosChecklistNotifier] PV enviado (Poderes) para ${member.user.tag}`);
-        } else {
-          ignoredPower++;
-          console.log(`[EventosChecklistNotifier] Usuário ${member.user.tag} já registrou poderes, ignorando.`);
-        }
-      }
-
-      await sendProgressLog(
-        client,
-        "⚡ Cobrança de registro de poderes disparada",
-        [
-          `🎯 **Evento:** ${event.eventName}`,
-          `🏙️ **Cidade:** ${event.city}`,
-          "",
-          `✅ PVs enviados: **${sentPower}**`,
-          `❌ PVs falharam: **${failedPower}**`,
-          `⏭️ Ignorados por já terem registrado: **${ignoredPower}**`,
-        ].join("\n"),
-        "#3498db"
-      );
-    }
-
-    markSent(state, uniqueBase);
-    saveJson(NOTIFIER_STATE_FILE, state);
-  }
+  console.log("[EventosChecklistNotifier] runNotifierTickOld chamado. Redirecionando para runNotifierTick atual.");
+  return runNotifierTick(client, options);
 }
 
 async function sendTestPanel(client) {
