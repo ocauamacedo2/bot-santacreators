@@ -52,6 +52,24 @@ const FIVEM_FAST_PANEL_CHANNEL_IDS = [
   ]),
 ];
 
+const FIVEM_PRIORITY_PANEL_CHANNEL_IDS = [
+  ...new Set([
+    FIVEM_SPECIAL_PANEL_CHANNEL_IDS.trends,
+    FIVEM_SPECIAL_PANEL_CHANNEL_IDS.executive,
+    FIVEM_PANEL_CHANNEL_ID,
+    FIVEM_SPECIAL_PANEL_CHANNEL_IDS.peaks,
+  ]),
+];
+
+const FIVEM_SECONDARY_PANEL_CHANNEL_IDS = FIVEM_ALL_PANEL_CHANNEL_IDS.filter(
+  (channelId) => !FIVEM_PRIORITY_PANEL_CHANNEL_IDS.includes(channelId)
+);
+
+const FIVEM_ORDERED_PANEL_CHANNEL_IDS = [
+  ...FIVEM_PRIORITY_PANEL_CHANNEL_IDS,
+  ...FIVEM_SECONDARY_PANEL_CHANNEL_IDS,
+];
+
 function getFivemPanelScopeByChannelId(channelId) {
   if (channelId === FIVEM_SPECIAL_PANEL_CHANNEL_IDS.trends) return "trends";
   if (channelId === FIVEM_SPECIAL_PANEL_CHANNEL_IDS.peaks) return "peaks";
@@ -64,8 +82,8 @@ function getFivemPanelScopeByChannelId(channelId) {
 
   return "main";
 }
-const FIVEM_REFRESH_INTERVAL_MS = 1 * 60 * 1000; // coleta/salva histórico a cada 1 minuto
-const FIVEM_PANEL_REFRESH_INTERVAL_MS = 1 * 60 * 1000; // edita painéis também a cada 1 minuto
+const FIVEM_REFRESH_INTERVAL_MS = 30 * 1000; // tenta rodar o ciclo a cada 30 segundos para reduzir atraso visual
+const FIVEM_PANEL_REFRESH_INTERVAL_MS = 30 * 1000; // tenta editar os painéis prioritários com mais precisão
 const FIVEM_HISTORY_MAX_DAYS = 120; // Mantém histórico suficiente para comparar semanas e meses sem perder base
 const FIVEM_FETCH_TIMEOUT_MS = 4 * 1000; // 4 segundos para não travar o ciclo de 1 minuto em API lenta
 const FIVEM_SNAPSHOT_CACHE_MS = 2 * 1000; // cache mínimo só para evitar duplicidade no mesmo ciclo
@@ -3377,23 +3395,28 @@ if (!safeSnapshot.shouldPersist) {
   }
 }
 
-  const results = await Promise.all(
-    FIVEM_ALL_PANEL_CHANNEL_IDS.map(async (channelId) => {
-      const channel = await client.channels.fetch(channelId).catch(() => null);
+  const results = [];
 
-      if (!channel?.isTextBased?.()) return null;
+  for (const channelId of FIVEM_ORDERED_PANEL_CHANNEL_IDS) {
+    const channel = await client.channels.fetch(channelId).catch(() => null);
 
-return editPanel(channel, {
-  ...options,
-  force: options.force === true || options.fastRefreshChannelIds?.includes(channelId),
-  cleanupDuplicates: options.cleanupDuplicates === true,
-  safeSnapshot: sharedSnapshot,
-}).catch((e) => {
-        cn2LogApiError(`[FIVEM_RETENTION] Falha ao atualizar canal ${channelId}:`, e);
-        return null;
-      });
-    })
-  );
+    if (!channel?.isTextBased?.()) {
+      results.push(null);
+      continue;
+    }
+
+    const result = await editPanel(channel, {
+      ...options,
+      force: options.force === true || options.fastRefreshChannelIds?.includes(channelId),
+      cleanupDuplicates: options.cleanupDuplicates === true,
+      safeSnapshot: sharedSnapshot,
+    }).catch((e) => {
+      cn2LogApiError(`[FIVEM_RETENTION] Falha ao atualizar canal ${channelId}:`, e);
+      return null;
+    });
+
+    results.push(result);
+  }
 
   return {
     editedCount: results.filter(Boolean).length,
