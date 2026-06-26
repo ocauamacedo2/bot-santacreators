@@ -6,8 +6,11 @@ import {
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
-  ChannelType
+  ChannelType,
+  AttachmentBuilder
 } from "discord.js";
+
+import sharp from "sharp";
 
 // Guard to prevent multiple initializations if imported multiple times
 if (globalThis.__AUSENCIAS_MINI_V3__) {
@@ -25,6 +28,7 @@ const CANAIS_REGISTRO = {
 };
 
 const AUSENCIAS_GERAIS_CHANNEL_ID = '1425945370621640704';
+const AUSENCIAS_DASHBOARD_CHANNEL_ID = '1520197927614677143';
 
 // cargos que PODEM abrir o modal
 const CARGOS_AUTORIZADOS_AUSENCIA = [
@@ -89,6 +93,275 @@ function registrarAusenciaIntervalo(userId, dtInicio, dtFim) {
   while (atual.getTime() <= fim) {
     registrarAusenciaMem(userId, dateToIso(atual));
     atual = addDias(atual, 1);
+  }
+}
+
+// ===== DASHBOARD MENSAL DE AUSÊNCIAS =====
+function escaparSvg(str) {
+  return String(str ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
+function nomeMesPtBr(mesIndex) {
+  const meses = [
+    'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
+    'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'
+  ];
+  return meses[mesIndex] || 'Mês';
+}
+
+function nomeSemanaMes(dia) {
+  if (dia <= 7) return 'Primeira semana do mês';
+  if (dia <= 14) return 'Segunda semana do mês';
+  if (dia <= 21) return 'Terceira semana do mês';
+  if (dia <= 28) return 'Quarta semana do mês';
+  return 'Quinta semana do mês';
+}
+
+function extrairCampoEmbed(embed, nomeCampo) {
+  const fields = embed?.fields || [];
+  const campo = fields.find(f => String(f.name || '').toLowerCase().includes(nomeCampo.toLowerCase()));
+  return campo?.value || null;
+}
+
+function extrairPrimeiraMencaoId(content) {
+  const match = String(content || '').match(/<@!?(\d+)>/);
+  return match?.[1] || null;
+}
+
+async function buscarMensagensMesAtual(canal, inicioMes, fimMes) {
+  const mensagens = [];
+  let before;
+
+  for (let pagina = 0; pagina < 20; pagina++) {
+    const lote = await canal.messages.fetch({
+      limit: 100,
+      ...(before ? { before } : {})
+    }).catch(() => null);
+
+    if (!lote || lote.size === 0) break;
+
+    for (const msg of lote.values()) {
+      if (msg.createdAt < inicioMes) return mensagens;
+      if (msg.createdAt <= fimMes) mensagens.push(msg);
+    }
+
+    before = lote.last()?.id;
+    if (!before) break;
+  }
+
+  return mensagens;
+}
+
+function adicionarDiaNoRanking(ranking, userId, data) {
+  if (!ranking.has(userId)) {
+    ranking.set(userId, {
+      total: 0,
+      semanas: {
+        'Primeira semana do mês': 0,
+        'Segunda semana do mês': 0,
+        'Terceira semana do mês': 0,
+        'Quarta semana do mês': 0,
+        'Quinta semana do mês': 0,
+      }
+    });
+  }
+
+  const semana = nomeSemanaMes(data.getDate());
+  ranking.get(userId).total += 1;
+  ranking.get(userId).semanas[semana] += 1;
+}
+
+function montarSvgDashboardAusencias({ mesNome, ano, rankingOrdenado, totalAusencias }) {
+  const largura = 1400;
+  const alturaBase = 430;
+  const alturaLinha = 128;
+  const altura = Math.max(900, alturaBase + rankingOrdenado.length * alturaLinha);
+
+  const maxTotal = Math.max(...rankingOrdenado.map(item => item.total), 1);
+
+  const linhas = rankingOrdenado.map((item, index) => {
+    const y = 330 + index * alturaLinha;
+    const larguraBarra = Math.max(40, Math.round((item.total / maxTotal) * 620));
+    const medalha = index === 0 ? '👑' : index === 1 ? '🥈' : index === 2 ? '🥉' : '◆';
+
+    const semanasTexto = Object.entries(item.semanas)
+      .filter(([, qtd]) => qtd > 0)
+      .map(([semana, qtd]) => `${semana}: marcou ${qtd} ${qtd === 1 ? 'ausência' : 'ausências'}`)
+      .join(' • ');
+
+    return `
+      <g>
+        <rect x="80" y="${y}" width="1240" height="104" rx="28" fill="rgba(255,255,255,0.075)" stroke="rgba(255,255,255,0.12)" />
+        <text x="115" y="${y + 43}" font-size="34" font-weight="800" fill="#ffffff">${medalha} TOP ${index + 1}</text>
+        <text x="315" y="${y + 43}" font-size="32" font-weight="800" fill="#ffffff">${escaparSvg(item.nome)}</text>
+        <text x="315" y="${y + 78}" font-size="22" font-weight="500" fill="#d8c7ff">${escaparSvg(semanasTexto || 'Sem divisão semanal encontrada')}</text>
+
+        <rect x="815" y="${y + 31}" width="640" height="28" rx="14" fill="rgba(255,255,255,0.14)" />
+        <rect x="815" y="${y + 31}" width="${larguraBarra}" height="28" rx="14" fill="url(#barraAusencia)" />
+
+        <text x="1210" y="${y + 78}" font-size="34" font-weight="900" fill="#ffffff" text-anchor="end">${item.total}</text>
+        <text x="1222" y="${y + 78}" font-size="22" font-weight="700" fill="#ff9bd3">ausências</text>
+      </g>
+    `;
+  }).join('');
+
+  const vazio = rankingOrdenado.length === 0 ? `
+    <text x="700" y="520" font-size="42" font-weight="900" fill="#ffffff" text-anchor="middle">Nenhuma ausência registrada neste mês.</text>
+    <text x="700" y="575" font-size="26" font-weight="600" fill="#d8c7ff" text-anchor="middle">Assim que alguém marcar ausência, o ranking aparece aqui.</text>
+  ` : '';
+
+  return `
+<svg width="${largura}" height="${altura}" viewBox="0 0 ${largura} ${altura}" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#170019"/>
+      <stop offset="42%" stop-color="#35002f"/>
+      <stop offset="100%" stop-color="#07000b"/>
+    </linearGradient>
+
+    <linearGradient id="barraAusencia" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#ff007f"/>
+      <stop offset="55%" stop-color="#b300ff"/>
+      <stop offset="100%" stop-color="#ffffff"/>
+    </linearGradient>
+
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="8" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1400" height="${altura}" fill="url(#bg)" />
+  <circle cx="1180" cy="120" r="230" fill="#ff007f" opacity="0.18" filter="url(#glow)" />
+  <circle cx="130" cy="760" r="260" fill="#7b00ff" opacity="0.16" filter="url(#glow)" />
+
+  <rect x="55" y="55" width="1290" height="${altura - 110}" rx="44" fill="rgba(0,0,0,0.25)" stroke="rgba(255,255,255,0.16)" />
+
+  <text x="700" y="125" font-size="58" font-weight="950" fill="#ffffff" text-anchor="middle">Dashboard Mensal de Ausências</text>
+  <text x="700" y="170" font-size="28" font-weight="700" fill="#ff9bd3" text-anchor="middle">${escaparSvg(mesNome)} de ${ano}</text>
+
+  <rect x="190" y="215" width="440" height="72" rx="24" fill="rgba(255,255,255,0.09)" />
+  <text x="410" y="260" font-size="28" font-weight="900" fill="#ffffff" text-anchor="middle">👥 ${rankingOrdenado.length} pessoas no ranking</text>
+
+  <rect x="770" y="215" width="440" height="72" rx="24" fill="rgba(255,255,255,0.09)" />
+  <text x="990" y="260" font-size="28" font-weight="900" fill="#ffffff" text-anchor="middle">📌 ${totalAusencias} ausências no mês</text>
+
+  ${linhas}
+  ${vazio}
+
+  <text x="700" y="${altura - 55}" font-size="22" font-weight="700" fill="#bda7ff" text-anchor="middle">
+    SantaCreators • Ranking automático do mês • Do maior número de ausências para o menor
+  </text>
+</svg>`;
+}
+
+async function atualizarDashboardAusenciasMensal(client) {
+  const canalFonte = await client.channels.fetch(AUSENCIAS_GERAIS_CHANNEL_ID).catch(() => null);
+  const canalDestino = await client.channels.fetch(AUSENCIAS_DASHBOARD_CHANNEL_ID).catch(() => null);
+
+  if (!canalFonte || !canalFonte.isTextBased()) return;
+  if (!canalDestino || !canalDestino.isTextBased()) return;
+
+  const agora = new Date();
+  const inicioMes = new Date(agora.getFullYear(), agora.getMonth(), 1, 0, 0, 0, 0);
+  const fimMes = new Date(agora.getFullYear(), agora.getMonth() + 1, 0, 23, 59, 59, 999);
+  const mesNome = nomeMesPtBr(agora.getMonth());
+
+  const mensagens = await buscarMensagensMesAtual(canalFonte, inicioMes, fimMes);
+  const ranking = new Map();
+
+  for (const msg of mensagens) {
+    const userId = extrairPrimeiraMencaoId(msg.content);
+    if (!userId) continue;
+
+    const embed = msg.embeds?.[0];
+    const dataTxt = extrairCampoEmbed(embed, 'Data');
+    const ateTxt = extrairCampoEmbed(embed, 'Até');
+
+    const dtInicio = parseDataBr(dataTxt);
+    const dtFim = ateTxt ? parseDataBr(ateTxt) : null;
+
+    if (!dtInicio) continue;
+
+    const inicio = dtInicio < inicioMes ? inicioMes : dtInicio;
+    const fim = dtFim && dtFim > dtInicio ? dtFim : dtInicio;
+    const fimLimitado = fim > fimMes ? fimMes : fim;
+
+    let atual = new Date(inicio.getTime());
+    while (atual.getTime() <= fimLimitado.getTime()) {
+      adicionarDiaNoRanking(ranking, userId, atual);
+      atual = addDias(atual, 1);
+    }
+  }
+
+  const rankingOrdenado = [];
+
+  for (const [userId, dados] of ranking.entries()) {
+    const membro = await canalDestino.guild.members.fetch(userId).catch(() => null);
+    rankingOrdenado.push({
+      userId,
+      nome: membro?.displayName || `@${userId}`,
+      total: dados.total,
+      semanas: dados.semanas,
+    });
+  }
+
+  rankingOrdenado.sort((a, b) => b.total - a.total);
+
+  const totalAusencias = rankingOrdenado.reduce((acc, item) => acc + item.total, 0);
+
+  const svg = montarSvgDashboardAusencias({
+    mesNome,
+    ano: agora.getFullYear(),
+    rankingOrdenado,
+    totalAusencias,
+  });
+
+  const pngBuffer = await sharp(Buffer.from(svg, 'utf8'))
+    .png()
+    .toBuffer();
+
+  const arquivo = new AttachmentBuilder(pngBuffer, {
+    name: 'dashboard-ausencias-mensal.png'
+  });
+
+  const embed = new EmbedBuilder()
+    .setColor('#ff007f')
+    .setTitle('📊 Dashboard Mensal de Ausências')
+    .setDescription(
+      [
+        `**Período:** ${mesNome} de ${agora.getFullYear()}`,
+        `**Ordem:** da pessoa que mais marcou ausência para a que menos marcou.`,
+        `**Fonte:** <#${AUSENCIAS_GERAIS_CHANNEL_ID}>`
+      ].join('\n')
+    )
+    .setImage('attachment://dashboard-ausencias-mensal.png')
+    .setTimestamp();
+
+  const mensagensDestino = await canalDestino.messages.fetch({ limit: 20 }).catch(() => null);
+  const msgExistente = mensagensDestino?.find(msg =>
+    msg.author.id === client.user.id &&
+    msg.embeds?.[0]?.title === '📊 Dashboard Mensal de Ausências'
+  );
+
+  if (msgExistente) {
+    await msgExistente.edit({
+      embeds: [embed],
+      files: [arquivo],
+      attachments: []
+    }).catch(async () => {
+      await canalDestino.send({ embeds: [embed], files: [arquivo] }).catch(() => {});
+    });
+  } else {
+    await canalDestino.send({ embeds: [embed], files: [arquivo] }).catch(() => {});
   }
 }
 
@@ -159,6 +432,18 @@ export async function ausenciasOnReady(client) {
   console.log('✅ [AUSÊNCIAS] (somente registro) online');
   for (const canalId of Object.values(CANAIS_REGISTRO)) {
     await enviarBotaoFixoPorCanal(client, canalId);
+  }
+
+  await atualizarDashboardAusenciasMensal(client).catch(err => {
+    console.error('[AUSÊNCIAS DASHBOARD] erro ao atualizar dashboard mensal:', err);
+  });
+
+  if (!globalThis.__AUSENCIAS_DASHBOARD_INTERVAL__) {
+    globalThis.__AUSENCIAS_DASHBOARD_INTERVAL__ = setInterval(() => {
+      atualizarDashboardAusenciasMensal(client).catch(err => {
+        console.error('[AUSÊNCIAS DASHBOARD] erro ao atualizar dashboard mensal:', err);
+      });
+    }, 60 * 60 * 1000);
   }
 }
 
@@ -351,6 +636,33 @@ export async function ausenciasHandleMessage(message, client) {
     }
 
     const reply = await message.channel.send("✅ Botões de ausência verificados/recriados nos canais configurados.").catch(() => {});
+    if (reply) setTimeout(() => reply.delete().catch(() => {}), 8000);
+
+    return true;
+  }
+
+  if (message.content.toLowerCase() === "!ausenciasdashboard") {
+    const member = message.member;
+
+    const isAuth = CARGOS_AUTORIZADOS_AUSENCIA.includes(message.author.id) ||
+                   member?.roles?.cache?.some(r => CARGOS_AUTORIZADOS_AUSENCIA.includes(r.id));
+
+    if (!isAuth) {
+      const reply = await message.reply("🚫 Você não tem permissão para atualizar o dashboard de ausências.").catch(() => {});
+      setTimeout(() => {
+        message.delete().catch(() => {});
+        if (reply) reply.delete().catch(() => {});
+      }, 5000);
+      return true;
+    }
+
+    await message.delete().catch(() => {});
+
+    await atualizarDashboardAusenciasMensal(client).catch(err => {
+      console.error('[AUSÊNCIAS DASHBOARD] erro no comando manual:', err);
+    });
+
+    const reply = await message.channel.send("✅ Dashboard mensal de ausências atualizado.").catch(() => {});
     if (reply) setTimeout(() => reply.delete().catch(() => {}), 8000);
 
     return true;
