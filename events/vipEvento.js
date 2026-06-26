@@ -600,6 +600,12 @@ function VIP_normalizarTipoPremiacao(texto) {
   if (/\bpass\b/.test(t)) return "Pass";
 
   if (
+    /\bvip\s*evento\b/.test(t) ||
+    /\bvipevento\b/.test(t) ||
+    /\bevento\s*vip\b/.test(t)
+  ) return "VIP Evento";
+
+  if (
     t.includes("platinum") ||
     t.includes("platinium") ||
     t.includes("platnum") ||
@@ -632,8 +638,6 @@ const pareceDinheiro =
   /\b\d+\s*(?:mi|milhoes|milhoes|milhao|kk)\b/.test(t);
 
 if (pareceDinheiro) return "Dinheiro";
-
-if (t.includes("evento") || t.includes("vipevento") || t.includes("vip evento")) return "VIP Evento";
 
   return "Dinheiro";
 }
