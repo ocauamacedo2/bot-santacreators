@@ -32,6 +32,11 @@ const CANAIS_REGISTRO = {
 const AUSENCIAS_GERAIS_CHANNEL_ID = '1425945370621640704';
 const AUSENCIAS_DASHBOARD_CHANNEL_ID = '1520197927614677143';
 
+const AUSENCIAS_DASHBOARD_FONTES_CHANNEL_IDS = [
+  AUSENCIAS_GERAIS_CHANNEL_ID,
+  '1425943951201796206',
+];
+
 // cargos que PODEM abrir o modal
 const CARGOS_AUTORIZADOS_AUSENCIA = [
   '1352429001188180039',
@@ -59,11 +64,23 @@ function pad(n) {
 
 function parseDataBr(str) {
   if (!str) return null;
-  const [dd, mm, yyyy] = str.split('/');
-  const d = Number(dd), m = Number(mm), y = Number(yyyy);
+
+  const texto = String(str).trim();
+  const match = texto.match(/(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?/);
+
+  if (!match) return null;
+
+  const d = Number(match[1]);
+  const m = Number(match[2]);
+
+  let y = match[3] ? Number(match[3]) : new Date().getFullYear();
+  if (y < 100) y += 2000;
+
   if (!d || !m || !y) return null;
+
   const dt = new Date(y, m - 1, d, 0, 0, 0, 0);
   if (isNaN(dt.getTime())) return null;
+
   return dt;
 }
 
@@ -134,7 +151,38 @@ function extrairPrimeiraMencaoId(content) {
   const match = String(content || '').match(/<@!?(\d+)>/);
   return match?.[1] || null;
 }
+function extrairPrimeiraMencaoId(content) {
+  const match = String(content || '').match(/<@!?(\d+)>/);
+  return match?.[1] || null;
+}
 
+function normalizarChaveAusencia(str) {
+  return String(str || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function extrairNomeAusencia(embed) {
+  const nome = extrairCampoEmbed(embed, 'Nome');
+  if (!nome) return null;
+
+  return String(nome)
+    .replace(/<@!?\d+>/g, '')
+    .replace(/`/g, '')
+    .trim();
+}
+
+function criarChaveRegistroAusencia({ userId, nome, dataTxt, horaTxt, motivoTxt }) {
+  return [
+    userId || normalizarChaveAusencia(nome),
+    normalizarChaveAusencia(dataTxt),
+    normalizarChaveAusencia(horaTxt),
+    normalizarChaveAusencia(motivoTxt),
+  ].join('|');
+}
 function limparNomeRanking(nome) {
   const texto = String(nome || '').trim();
 
@@ -381,16 +429,49 @@ async function atualizarDashboardAusenciasMensal(client) {
   const fimMes = new Date(agora.getFullYear(), agora.getMonth() + 1, 0, 23, 59, 59, 999);
   const mesNome = nomeMesPtBr(agora.getMonth());
 
-  const mensagens = await buscarMensagensMesAtual(canalFonte, inicioMes, fimMes);
+  const mensagens = [];
+  const idsMensagensColetadas = new Set();
+
+  for (const canalFonteId of AUSENCIAS_DASHBOARD_FONTES_CHANNEL_IDS) {
+    const canalColeta = await client.channels.fetch(canalFonteId).catch(() => null);
+    if (!canalColeta || !canalColeta.isTextBased()) continue;
+
+    const mensagensCanal = await buscarMensagensMesAtual(canalColeta, inicioMes, fimMes);
+
+    for (const msg of mensagensCanal) {
+      if (idsMensagensColetadas.has(msg.id)) continue;
+      idsMensagensColetadas.add(msg.id);
+      mensagens.push(msg);
+    }
+  }
+
   const ranking = new Map();
+  const registrosUnicos = new Set();
 
   for (const msg of mensagens) {
-    const userId = extrairPrimeiraMencaoId(msg.content);
-    if (!userId) continue;
-
     const embed = msg.embeds?.[0];
+    if (!embed) continue;
+
+    const userId = extrairPrimeiraMencaoId(msg.content);
+    const nomeAusencia = extrairNomeAusencia(embed);
+
+    if (!userId && !nomeAusencia) continue;
+
     const dataTxt = extrairCampoEmbed(embed, 'Data');
     const ateTxt = extrairCampoEmbed(embed, 'Até');
+    const horaTxt = extrairCampoEmbed(embed, 'Hora');
+    const motivoTxt = extrairCampoEmbed(embed, 'Motivo');
+
+    const chaveRegistro = criarChaveRegistroAusencia({
+      userId,
+      nome: nomeAusencia,
+      dataTxt,
+      horaTxt,
+      motivoTxt,
+    });
+
+    if (registrosUnicos.has(chaveRegistro)) continue;
+    registrosUnicos.add(chaveRegistro);
 
     const dtInicio = parseDataBr(dataTxt);
     const dtFim = ateTxt ? parseDataBr(ateTxt) : null;
@@ -401,20 +482,26 @@ async function atualizarDashboardAusenciasMensal(client) {
     const fim = dtFim && dtFim > dtInicio ? dtFim : dtInicio;
     const fimLimitado = fim > fimMes ? fimMes : fim;
 
+    const rankingId = userId || `nome:${normalizarChaveAusencia(nomeAusencia)}`;
+
     let atual = new Date(inicio.getTime());
     while (atual.getTime() <= fimLimitado.getTime()) {
-      adicionarDiaNoRanking(ranking, userId, atual);
+      adicionarDiaNoRanking(ranking, rankingId, atual);
       atual = addDias(atual, 1);
     }
   }
 
   const rankingOrdenado = [];
 
-  for (const [userId, dados] of ranking.entries()) {
-    const nomeResolvido = await resolverNomeDashboardAusencias(client, canalDestino.guild, userId);
+  for (const [rankingId, dados] of ranking.entries()) {
+    const isDiscordUser = !String(rankingId).startsWith('nome:');
+
+    const nomeResolvido = isDiscordUser
+      ? await resolverNomeDashboardAusencias(client, canalDestino.guild, rankingId)
+      : limparNomeRanking(String(rankingId).replace('nome:', ''));
 
     rankingOrdenado.push({
-      userId,
+      userId: rankingId,
       nome: nomeResolvido,
       total: dados.total,
       semanas: dados.semanas,
