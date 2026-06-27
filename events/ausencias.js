@@ -12,6 +12,8 @@ import {
 
 import sharp from "sharp";
 
+import { findFormsCreatorThreadIdByUserId } from "./formscreator.js";
+
 // Guard to prevent multiple initializations if imported multiple times
 if (globalThis.__AUSENCIAS_MINI_V3__) {
     // already loaded
@@ -133,11 +135,107 @@ function extrairPrimeiraMencaoId(content) {
   return match?.[1] || null;
 }
 
+function limparNomeRanking(nome) {
+  const texto = String(nome || '').trim();
+
+  if (!texto) return 'Usuário sem nome';
+
+  const partes = texto
+    .split('|')
+    .map(p => p.trim())
+    .filter(Boolean);
+
+  if (partes.length >= 3) {
+    return `${partes[partes.length - 2]} | ${partes[partes.length - 1]}`;
+  }
+
+  if (partes.length === 2) {
+    return `${partes[0]} | ${partes[1]}`;
+  }
+
+  return texto;
+}
+
+function limitarTexto(str, limite = 38) {
+  const texto = String(str || '').trim();
+  if (texto.length <= limite) return texto;
+  return texto.slice(0, limite - 3).trim() + '...';
+}
+
+async function buscarNomePorFormsCreator(client, userId) {
+  const threadId = await findFormsCreatorThreadIdByUserId(client, userId).catch(() => null);
+  if (!threadId) return null;
+
+  const thread = await client.channels.fetch(threadId).catch(() => null);
+  if (!thread || !thread.isTextBased()) return null;
+
+  const mensagens = await thread.messages.fetch({ limit: 50 }).catch(() => null);
+  if (!mensagens) return null;
+
+  const msgRegistro = mensagens.find(msg => {
+    const embed = msg.embeds?.[0];
+    if (!embed) return false;
+
+    const raw = [
+      embed.title || '',
+      embed.description || '',
+      ...(embed.fields || []).flatMap(field => [field.name || '', field.value || ''])
+    ].join('\n');
+
+    return raw.includes(`<@${userId}>`) || raw.includes(`<@!${userId}>`) || raw.includes(userId);
+  });
+
+  const embed = msgRegistro?.embeds?.[0];
+  if (!embed) return null;
+
+  const nome = String(embed.title || '')
+    .replace(/^👤\s*/i, '')
+    .trim();
+
+  const idCidade = embed.fields?.find(field =>
+    String(field.name || '').includes('ID/Passaporte')
+  )?.value;
+
+  if (nome && idCidade) return `${nome} | ${idCidade}`;
+  if (nome) return nome;
+
+  return null;
+}
+
+async function resolverNomeDashboardAusencias(client, guild, userId) {
+  const nomeForms = await buscarNomePorFormsCreator(client, userId).catch(() => null);
+
+  if (nomeForms) {
+    return limparNomeRanking(nomeForms);
+  }
+
+  const membro = await guild.members.fetch(userId).catch(() => null);
+  return limparNomeRanking(membro?.displayName || `Usuário ${userId}`);
+}
+
+function montarLinhasSemanaSvg(semanas, x, y) {
+  const textos = Object.entries(semanas)
+    .filter(([, qtd]) => qtd > 0)
+    .map(([semana, qtd]) => `${semana}: ${qtd} ${qtd === 1 ? 'ausência' : 'ausências'}`);
+
+  if (!textos.length) {
+    return `<text x="${x}" y="${y}" font-size="23" font-weight="600" fill="#d8c7ff">Sem divisão semanal encontrada</text>`;
+  }
+
+  const linha1 = textos.slice(0, 2).join(' • ');
+  const linha2 = textos.slice(2, 5).join(' • ');
+
+  return `
+    <text x="${x}" y="${y}" font-size="23" font-weight="600" fill="#d8c7ff">${escaparSvg(linha1)}</text>
+    ${linha2 ? `<text x="${x}" y="${y + 30}" font-size="21" font-weight="600" fill="#bfa8ff">${escaparSvg(linha2)}</text>` : ''}
+  `;
+}
+
 async function buscarMensagensMesAtual(canal, inicioMes, fimMes) {
   const mensagens = [];
   let before;
 
-  for (let pagina = 0; pagina < 20; pagina++) {
+  for (let pagina = 0; pagina < 80; pagina++) {
     const lote = await canal.messages.fetch({
       limit: 100,
       ...(before ? { before } : {})
@@ -145,10 +243,20 @@ async function buscarMensagensMesAtual(canal, inicioMes, fimMes) {
 
     if (!lote || lote.size === 0) break;
 
+    let encontrouMensagemAntesDoMes = false;
+
     for (const msg of lote.values()) {
-      if (msg.createdAt < inicioMes) return mensagens;
-      if (msg.createdAt <= fimMes) mensagens.push(msg);
+      if (msg.createdAt < inicioMes) {
+        encontrouMensagemAntesDoMes = true;
+        continue;
+      }
+
+      if (msg.createdAt <= fimMes) {
+        mensagens.push(msg);
+      }
     }
+
+    if (encontrouMensagemAntesDoMes) break;
 
     before = lote.last()?.id;
     if (!before) break;
@@ -177,61 +285,59 @@ function adicionarDiaNoRanking(ranking, userId, data) {
 }
 
 function montarSvgDashboardAusencias({ mesNome, ano, rankingOrdenado, totalAusencias }) {
-  const largura = 1400;
-  const alturaBase = 430;
-  const alturaLinha = 128;
-  const altura = Math.max(900, alturaBase + rankingOrdenado.length * alturaLinha);
+  const largura = 1800;
+  const alturaBase = 470;
+  const alturaLinha = 154;
+  const altura = Math.max(980, alturaBase + rankingOrdenado.length * alturaLinha);
 
   const maxTotal = Math.max(...rankingOrdenado.map(item => item.total), 1);
 
   const linhas = rankingOrdenado.map((item, index) => {
-    const y = 330 + index * alturaLinha;
-    const larguraBarra = Math.max(40, Math.round((item.total / maxTotal) * 620));
+    const y = 350 + index * alturaLinha;
+    const larguraBarra = Math.max(55, Math.round((item.total / maxTotal) * 500));
     const medalha = index === 0 ? '👑' : index === 1 ? '🥈' : index === 2 ? '🥉' : '◆';
-
-    const semanasTexto = Object.entries(item.semanas)
-      .filter(([, qtd]) => qtd > 0)
-      .map(([semana, qtd]) => `${semana}: marcou ${qtd} ${qtd === 1 ? 'ausência' : 'ausências'}`)
-      .join(' • ');
+    const nomeLimpo = limitarTexto(item.nome, 42);
 
     return `
       <g>
-        <rect x="80" y="${y}" width="1240" height="104" rx="28" fill="rgba(255,255,255,0.075)" stroke="rgba(255,255,255,0.12)" />
-        <text x="115" y="${y + 43}" font-size="34" font-weight="800" fill="#ffffff">${medalha} TOP ${index + 1}</text>
-        <text x="315" y="${y + 43}" font-size="32" font-weight="800" fill="#ffffff">${escaparSvg(item.nome)}</text>
-        <text x="315" y="${y + 78}" font-size="22" font-weight="500" fill="#d8c7ff">${escaparSvg(semanasTexto || 'Sem divisão semanal encontrada')}</text>
+        <rect x="90" y="${y}" width="1620" height="126" rx="30" fill="rgba(255,255,255,0.078)" stroke="rgba(255,255,255,0.14)" />
 
-        <rect x="815" y="${y + 31}" width="640" height="28" rx="14" fill="rgba(255,255,255,0.14)" />
-        <rect x="815" y="${y + 31}" width="${larguraBarra}" height="28" rx="14" fill="url(#barraAusencia)" />
+        <text x="135" y="${y + 50}" font-size="34" font-weight="900" fill="#ffffff">${medalha} TOP ${index + 1}</text>
+        <text x="365" y="${y + 50}" font-size="36" font-weight="900" fill="#ffffff">${escaparSvg(nomeLimpo)}</text>
 
-        <text x="1210" y="${y + 78}" font-size="34" font-weight="900" fill="#ffffff" text-anchor="end">${item.total}</text>
-        <text x="1222" y="${y + 78}" font-size="22" font-weight="700" fill="#ff9bd3">ausências</text>
+        ${montarLinhasSemanaSvg(item.semanas, 365, y + 86)}
+
+        <rect x="1090" y="${y + 40}" width="520" height="30" rx="15" fill="rgba(255,255,255,0.18)" />
+        <rect x="1090" y="${y + 40}" width="${larguraBarra}" height="30" rx="15" fill="url(#barraAusencia)" />
+
+        <text x="1600" y="${y + 102}" font-size="38" font-weight="950" fill="#ffffff" text-anchor="end">${item.total}</text>
+        <text x="1615" y="${y + 102}" font-size="24" font-weight="800" fill="#ff9bd3">${item.total === 1 ? 'ausência' : 'ausências'}</text>
       </g>
     `;
   }).join('');
 
   const vazio = rankingOrdenado.length === 0 ? `
-    <text x="700" y="520" font-size="42" font-weight="900" fill="#ffffff" text-anchor="middle">Nenhuma ausência registrada neste mês.</text>
-    <text x="700" y="575" font-size="26" font-weight="600" fill="#d8c7ff" text-anchor="middle">Assim que alguém marcar ausência, o ranking aparece aqui.</text>
+    <text x="900" y="560" font-size="46" font-weight="950" fill="#ffffff" text-anchor="middle">Nenhuma ausência registrada neste mês.</text>
+    <text x="900" y="620" font-size="28" font-weight="700" fill="#d8c7ff" text-anchor="middle">Assim que alguém marcar ausência, o ranking aparece aqui.</text>
   ` : '';
 
   return `
 <svg width="${largura}" height="${altura}" viewBox="0 0 ${largura} ${altura}" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#170019"/>
-      <stop offset="42%" stop-color="#35002f"/>
-      <stop offset="100%" stop-color="#07000b"/>
+      <stop offset="0%" stop-color="#160018"/>
+      <stop offset="42%" stop-color="#340031"/>
+      <stop offset="100%" stop-color="#08000d"/>
     </linearGradient>
 
     <linearGradient id="barraAusencia" x1="0" y1="0" x2="1" y2="0">
       <stop offset="0%" stop-color="#ff007f"/>
-      <stop offset="55%" stop-color="#b300ff"/>
+      <stop offset="50%" stop-color="#b300ff"/>
       <stop offset="100%" stop-color="#ffffff"/>
     </linearGradient>
 
     <filter id="glow">
-      <feGaussianBlur stdDeviation="8" result="coloredBlur"/>
+      <feGaussianBlur stdDeviation="10" result="coloredBlur"/>
       <feMerge>
         <feMergeNode in="coloredBlur"/>
         <feMergeNode in="SourceGraphic"/>
@@ -239,26 +345,26 @@ function montarSvgDashboardAusencias({ mesNome, ano, rankingOrdenado, totalAusen
     </filter>
   </defs>
 
-  <rect width="1400" height="${altura}" fill="url(#bg)" />
-  <circle cx="1180" cy="120" r="230" fill="#ff007f" opacity="0.18" filter="url(#glow)" />
-  <circle cx="130" cy="760" r="260" fill="#7b00ff" opacity="0.16" filter="url(#glow)" />
+  <rect width="${largura}" height="${altura}" fill="url(#bg)" />
+  <circle cx="1520" cy="150" r="310" fill="#ff007f" opacity="0.17" filter="url(#glow)" />
+  <circle cx="140" cy="820" r="340" fill="#7b00ff" opacity="0.17" filter="url(#glow)" />
 
-  <rect x="55" y="55" width="1290" height="${altura - 110}" rx="44" fill="rgba(0,0,0,0.25)" stroke="rgba(255,255,255,0.16)" />
+  <rect x="65" y="65" width="1670" height="${altura - 130}" rx="50" fill="rgba(0,0,0,0.28)" stroke="rgba(255,255,255,0.17)" />
 
-  <text x="700" y="125" font-size="58" font-weight="950" fill="#ffffff" text-anchor="middle">Dashboard Mensal de Ausências</text>
-  <text x="700" y="170" font-size="28" font-weight="700" fill="#ff9bd3" text-anchor="middle">${escaparSvg(mesNome)} de ${ano}</text>
+  <text x="900" y="145" font-size="72" font-weight="950" fill="#ffffff" text-anchor="middle">Dashboard Mensal de Ausências</text>
+  <text x="900" y="200" font-size="34" font-weight="800" fill="#ff9bd3" text-anchor="middle">${escaparSvg(mesNome)} de ${ano}</text>
 
-  <rect x="190" y="215" width="440" height="72" rx="24" fill="rgba(255,255,255,0.09)" />
-  <text x="410" y="260" font-size="28" font-weight="900" fill="#ffffff" text-anchor="middle">👥 ${rankingOrdenado.length} pessoas no ranking</text>
+  <rect x="240" y="245" width="520" height="78" rx="26" fill="rgba(255,255,255,0.095)" />
+  <text x="500" y="296" font-size="32" font-weight="950" fill="#ffffff" text-anchor="middle">👥 ${rankingOrdenado.length} pessoas no ranking</text>
 
-  <rect x="770" y="215" width="440" height="72" rx="24" fill="rgba(255,255,255,0.09)" />
-  <text x="990" y="260" font-size="28" font-weight="900" fill="#ffffff" text-anchor="middle">📌 ${totalAusencias} ausências no mês</text>
+  <rect x="1040" y="245" width="520" height="78" rx="26" fill="rgba(255,255,255,0.095)" />
+  <text x="1300" y="296" font-size="32" font-weight="950" fill="#ffffff" text-anchor="middle">📌 ${totalAusencias} ausências no mês</text>
 
   ${linhas}
   ${vazio}
 
-  <text x="700" y="${altura - 55}" font-size="22" font-weight="700" fill="#bda7ff" text-anchor="middle">
-    SantaCreators • Ranking automático do mês • Do maior número de ausências para o menor
+  <text x="900" y="${altura - 65}" font-size="25" font-weight="800" fill="#cbb4ff" text-anchor="middle">
+    SantaCreators • Ranking automático mensal • Maior número de ausências para o menor
   </text>
 </svg>`;
 }
@@ -305,10 +411,11 @@ async function atualizarDashboardAusenciasMensal(client) {
   const rankingOrdenado = [];
 
   for (const [userId, dados] of ranking.entries()) {
-    const membro = await canalDestino.guild.members.fetch(userId).catch(() => null);
+    const nomeResolvido = await resolverNomeDashboardAusencias(client, canalDestino.guild, userId);
+
     rankingOrdenado.push({
       userId,
-      nome: membro?.displayName || `@${userId}`,
+      nome: nomeResolvido,
       total: dados.total,
       semanas: dados.semanas,
     });
