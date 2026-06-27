@@ -593,16 +593,29 @@ function VIP_normalizarTipoPremiacao(texto) {
     .replace(/\s+/g, " ")
     .trim();
 
-  // ✅ PRIORIDADE MÁXIMA:
-  // Se tiver Rolepass/Pass/VIP escrito, número antes não pode virar dinheiro.
-  // Exemplo: "1 ROLEPASS" = Pass, não Dinheiro.
-  if (/\brole\s*pass\b/.test(t) || /\brolepass\b/.test(t)) return "Pass";
-  if (/\bpass\b/.test(t)) return "Pass";
+  const palavras = t.split(" ").filter(Boolean);
+  const textoColado = t.replace(/\s+/g, "");
 
+  // ✅ PRIORIDADE MÁXIMA REAL:
+  // Se tiver "VIP Evento" explícito ou parecido, isso manda mais que Rolepass/Pass.
+  // Exemplo: "Rolepass\nTipo: VIP Evento\n1 VIP EVENTO" = VIP Evento.
   if (
     /\bvip\s*evento\b/.test(t) ||
     /\bvipevento\b/.test(t) ||
-    /\bevento\s*vip\b/.test(t)
+    /\bevento\s*vip\b/.test(t) ||
+    /\bvip\s*event\b/.test(t) ||
+    /\bvip\s*evnto\b/.test(t) ||
+    /\bvip\s*eventu\b/.test(t) ||
+    /\bvip\s*eventos\b/.test(t) ||
+    /\bvip\s*por\s*evento\b/.test(t) ||
+    /\bpor\s*evento\b/.test(t) ||
+    /\bevento\b/.test(t) && /\bvip\b/.test(t) ||
+    textoColado.includes("vipevento") ||
+    textoColado.includes("vipporevento") ||
+    textoColado.includes("vipporvento") ||
+    textoColado.includes("vipevent") ||
+    textoColado.includes("vipevnto") ||
+    textoColado.includes("vipeventu")
   ) return "VIP Evento";
 
   if (
@@ -613,31 +626,60 @@ function VIP_normalizarTipoPremiacao(texto) {
     t.includes("platibnum") ||
     t.includes("platina") ||
     t.includes("platino") ||
-    t.includes("platnao")
+    t.includes("platnao") ||
+    t.includes("platinu") ||
+    t.includes("platin")
   ) return "VIP Platinum";
 
-  if (t.includes("black")) return "VIP Black";
-  if (t.includes("bronze")) return "VIP Bronze";
-  if (t.includes("prata")) return "VIP Prata";
-  if (t.includes("ouro")) return "VIP Ouro";
+  if (t.includes("black") || t.includes("blak") || t.includes("bleck")) return "VIP Black";
+  if (t.includes("bronze") || t.includes("bronz") || t.includes("bronzi")) return "VIP Bronze";
+  if (t.includes("prata") || t.includes("prataa")) return "VIP Prata";
+  if (t.includes("ouro") || t.includes("oru")) return "VIP Ouro";
 
-  if (t.includes("staff") || t.includes("gente boa") || t.includes("genteboa")) {
+  if (
+    t.includes("staff") ||
+    t.includes("gente boa") ||
+    t.includes("genteboa") ||
+    t.includes("gente boua") ||
+    t.includes("vip gente")
+  ) {
     return "VIP Staff";
   }
 
-  if (t.includes("lancamento") || t.includes("lançamento")) return "VIP Lancamento";
+  if (
+    t.includes("lancamento") ||
+    t.includes("lançamento") ||
+    t.includes("lancamnto") ||
+    t.includes("lancamento") ||
+    t.includes("lanca")
+  ) return "VIP Lancamento";
 
-const pareceDinheiro =
-  /\bdinheiro\b/.test(t) ||
-  /\bgrana\b/.test(t) ||
-  /\bcash\b/.test(t) ||
-  /\bvalor\b/.test(t) ||
-  /r\s*\$/.test(t) ||
-  /\b\d{1,3}(?:[.\s]\d{3})+(?:,\d{1,2})?\b/.test(t) ||
-  /\b\d+(?:[.,]\d+)?\s*(?:k|kk|m|mi|mil|milhao|milhoes|milhao|milhoes)\b/.test(t) ||
-  /\b\d+\s*(?:mi|milhoes|milhoes|milhao|kk)\b/.test(t);
+  // ✅ Rolepass só entra depois de VIP Evento.
+  if (
+    /\brole\s*pass\b/.test(t) ||
+    /\brolepass\b/.test(t) ||
+    /\brol\s*pass\b/.test(t) ||
+    /\brole\s*passe\b/.test(t) ||
+    /\brolipass\b/.test(t) ||
+    textoColado.includes("rolepass") ||
+    textoColado.includes("rolpass") ||
+    textoColado.includes("rolipass")
+  ) return "Pass";
 
-if (pareceDinheiro) return "Dinheiro";
+  if (/\bpass\b/.test(t) || /\bpasse\b/.test(t)) return "Pass";
+
+  const pareceDinheiro =
+    /\bdinheiro\b/.test(t) ||
+    /\bgrana\b/.test(t) ||
+    /\bcash\b/.test(t) ||
+    /\bvalor\b/.test(t) ||
+    /\breais\b/.test(t) ||
+    /r\s*\$/.test(t) ||
+    /\b\d{1,3}(?:[.\s]\d{3})+(?:,\d{1,2})?\b/.test(t) ||
+    /\b\d+(?:[.,]\d+)?\s*(?:k|kk|m|mi|mil|milhao|milhoes)\b/.test(t) ||
+    /\b\d+\s*(?:mi|milhoes|milhao|kk)\b/.test(t);
+
+  if (pareceDinheiro) return "Dinheiro";
 
   return "Dinheiro";
 }
@@ -860,6 +902,85 @@ function VIP_reanalisarEmbedVip(embedBuilder) {
   };
 }
 
+async function VIP_corrigirRegistroVipMensagem(msg, client) {
+  if (!msg?.embeds?.[0]) {
+    return {
+      ok: false,
+      corrigido: false,
+      motivo: "Mensagem sem embed.",
+    };
+  }
+
+  const embed = EmbedBuilder.from(msg.embeds[0]);
+  const antes = String(embed.data.description || "");
+
+  const analiseFinal = VIP_reanalisarEmbedVip(embed);
+
+  const fields = VIP_getFields(embed);
+  const premiacaoField = fields.find((f) => String(f.name || "").startsWith("🎁 Premiação"));
+  const premiacaoTexto = String(premiacaoField?.value || "");
+
+  const pagamentoResolvido = await VIP_resolverPagamentoLink(client, premiacaoTexto).catch(() => null);
+
+  if (pagamentoResolvido?.ok) {
+    const tipoFinal = VIP_normalizarTipoPremiacao(
+      [
+        pagamentoResolvido.info?.tipo || "",
+        pagamentoResolvido.info?.premiacao || "",
+        premiacaoTexto,
+      ].join("\n")
+    );
+
+    const novosFields = VIP_getFields(embed).map((f) => {
+      if (String(f.name || "").startsWith("🎁 Premiação")) {
+        return {
+          ...f,
+          value: VIP_formatarPremiacaoInteligente(
+            pagamentoResolvido.info?.premiacao || premiacaoTexto,
+            tipoFinal
+          ).slice(0, 1024),
+        };
+      }
+
+      if (String(f.name || "").startsWith("🔎 Fonte automática")) {
+        return {
+          ...f,
+          value: `🔗 **Link analisado:** ${pagamentoResolvido.link.url}`,
+        };
+      }
+
+      return f;
+    });
+
+    embed.setFields(novosFields);
+
+    const descAtual = String(embed.data.description || "");
+    const descCorrigida = descAtual.replace(
+      /\*\*Tipo Identificado:\*\*\s*`[^`]+`/i,
+      `**Tipo Identificado:** \`${tipoFinal}\``
+    );
+
+    embed.setDescription(descCorrigida);
+
+    analiseFinal.tipoFinal = tipoFinal;
+    analiseFinal.premiacaoFinal = pagamentoResolvido.info?.premiacao || premiacaoTexto;
+  }
+
+  const depois = String(embed.data.description || "");
+
+  await msg.edit({
+    embeds: [embed],
+    components: msg.components,
+  }).catch(() => null);
+
+  return {
+    ok: true,
+    corrigido: antes !== depois || Boolean(pagamentoResolvido?.ok),
+    tipoFinal: analiseFinal.tipoFinal,
+    vinculado: Boolean(pagamentoResolvido?.ok),
+  };
+}
+
 function VIP_extractEmbedFields(embedLike) {
   const fields = embedLike?.data?.fields || embedLike?.fields || [];
   if (!fields.length) return "—";
@@ -1027,47 +1148,20 @@ async function VIP_moverRegistrosPorFiltro(channel, filtro, client) {
 
     if (!entra) continue;
 
-const fields = VIP_getFields(emb);
-const premiacaoField = fields.find((f) => String(f.name || "").startsWith("🎁 Premiação"));
-const premiacaoTexto = String(premiacaoField?.value || "");
+const resultadoCorrecao = await VIP_corrigirRegistroVipMensagem(msg, client).catch(() => null);
 
-const pagamentoResolvido = await VIP_resolverPagamentoLink(client, premiacaoTexto);
+const rawCorrigido = msg.embeds?.[0];
+if (!rawCorrigido) continue;
 
-let analiseFinal = VIP_reanalisarEmbedVip(emb);
+const embCorrigido = EmbedBuilder.from(rawCorrigido);
 
-if (pagamentoResolvido?.ok) {
-  const tipoFinal = VIP_normalizarTipoPremiacao(
-    `${pagamentoResolvido.info?.tipo || ""}\n${pagamentoResolvido.info?.premiacao || ""}\n${premiacaoTexto}`
-  );
+let analiseFinal = {
+  tipoFinal: resultadoCorrecao?.tipoFinal || VIP_normalizarTipoPremiacao(VIP_getTextoCompletoEmbed(embCorrigido)),
+  premiacaoFinal: null,
+};
 
-  const novosFields = VIP_getFields(emb).map((f) => {
-    if (String(f.name || "").startsWith("🎁 Premiação")) {
-      return {
-        ...f,
-        value: VIP_formatarPremiacaoInteligente(
-          pagamentoResolvido.info?.premiacao || premiacaoTexto,
-          tipoFinal
-        ).slice(0, 1024),
-      };
-    }
-
-    if (String(f.name || "").startsWith("🔎 Fonte automática")) {
-      return {
-        ...f,
-        value: `🔗 **Link analisado:** ${pagamentoResolvido.link.url}`,
-      };
-    }
-
-    return f;
-  });
-
-  emb.setFields(novosFields);
-
-  analiseFinal = {
-    tipoFinal,
-    premiacaoFinal: pagamentoResolvido.info?.premiacao || premiacaoTexto,
-  };
-}
+emb.setDescription(embCorrigido.data.description || emb.data.description || "");
+emb.setFields(embCorrigido.data.fields || emb.data.fields || []);
 
 const descAtual = String(emb.data.description || "");
 const descSemFiltro = descAtual.replace(/\n\n\*\*Filtro automático:\*\* `[^`]+`/gi, "");
@@ -1511,27 +1605,30 @@ extra: [
         Math.floor(now.getTime() / 1000),
         TimestampStyles.RelativeTime
       )})`;
-
       // SOLICITADO
-        if (i.customId === VIP_BTN_SOLICITADO_ID) {
-        const idx = fields.findIndex((f) => (f.name || "").startsWith("📝 Solicitações"));
+      if (i.customId === VIP_BTN_SOLICITADO_ID) {
+        await VIP_corrigirRegistroVipMensagem(msg, client).catch(() => null);
+
+        const embedCorrigido = EmbedBuilder.from(msg.embeds[0]);
+        const fieldsCorrigidos = embedCorrigido.data.fields ?? [];
+
+        const idx = fieldsCorrigidos.findIndex((f) => (f.name || "").startsWith("📝 Solicitações"));
         const linha = `• Marcado como **SOLICITADO** por <@${i.user.id}> em ${whenTxt}`;
 
         if (idx >= 0) {
-          const atual = fields[idx]?.value || "—";
+          const atual = fieldsCorrigidos[idx]?.value || "—";
           const cur = atual === "—" ? "" : atual + "\n";
-          fields[idx].value = (cur + linha).slice(0, 1024);
+          fieldsCorrigidos[idx].value = (cur + linha).slice(0, 1024);
         } else {
-          fields.push({ name: "📝 Solicitações", value: linha.slice(0, 1024), inline: false });
+          fieldsCorrigidos.push({ name: "📝 Solicitações", value: linha.slice(0, 1024), inline: false });
         }
 
-        embed.setFields(fields);
+        embedCorrigido.setFields(fieldsCorrigidos);
 
         await msg.edit({
-          embeds: [embed],
+          embeds: [embedCorrigido],
           components: VIP_buildRegistroButtons(false, false, false),
         });
-
         if (registranteId) {
           await VIP_sendDM_VIP(
             client,
@@ -1550,9 +1647,9 @@ extra: [
   channel: msg.channel,
   message: msg,
   messageUrl: msg.url,
-  during: "Usuário clicou no botão 'Já foi solicitado' e o sistema adicionou uma linha no campo de solicitações.",
+  during: "Usuário clicou no botão 'Já foi solicitado', o sistema corrigiu/reanalisou o tipo da premiação e adicionou uma linha no campo de solicitações.",
   before: `Antes:\n${VIP_extractEmbedFields(msg.embeds?.[0])}`,
-  after: `Depois:\n${VIP_extractEmbedFields(embed)}`,
+  after: `Depois:\n${VIP_extractEmbedFields(embedCorrigido)}`,
   extra: [
     `Registrante original: ${registranteId ? `<@${registranteId}> (\`${registranteId}\`)` : "—"}`,
     `Linha adicionada: ${linha}`,
