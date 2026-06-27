@@ -151,10 +151,6 @@ function extrairPrimeiraMencaoId(content) {
   const match = String(content || '').match(/<@!?(\d+)>/);
   return match?.[1] || null;
 }
-function extrairPrimeiraMencaoId(content) {
-  const match = String(content || '').match(/<@!?(\d+)>/);
-  return match?.[1] || null;
-}
 
 function normalizarChaveAusencia(str) {
   return String(str || '')
@@ -164,7 +160,6 @@ function normalizarChaveAusencia(str) {
     .replace(/[^a-z0-9]+/g, ' ')
     .trim();
 }
-
 function extrairNomeAusencia(embed) {
   const nome = extrairCampoEmbed(embed, 'Nome');
   if (!nome) return null;
