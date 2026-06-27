@@ -37,6 +37,10 @@ const AUSENCIAS_DASHBOARD_FONTES_CHANNEL_IDS = [
   '1425943951201796206',
 ];
 
+const AUSENCIAS_NOMES_PARA_USER_IDS = {
+  'nox': '531702211387064330',
+};
+
 // cargos que PODEM abrir o modal
 const CARGOS_AUTORIZADOS_AUSENCIA = [
   '1352429001188180039',
@@ -168,6 +172,11 @@ function extrairNomeAusencia(embed) {
     .replace(/<@!?\d+>/g, '')
     .replace(/`/g, '')
     .trim();
+}
+
+function resolverUserIdPorNomeAusencia(nome) {
+  const chave = normalizarChaveAusencia(nome);
+  return AUSENCIAS_NOMES_PARA_USER_IDS[chave] || null;
 }
 
 function criarChaveRegistroAusencia({ userId, nome, dataTxt, horaTxt, motivoTxt }) {
@@ -447,8 +456,8 @@ async function atualizarDashboardAusenciasMensal(client) {
     const embed = msg.embeds?.[0];
     if (!embed) continue;
 
-    const userId = extrairPrimeiraMencaoId(msg.content);
     const nomeAusencia = extrairNomeAusencia(embed);
+    const userId = extrairPrimeiraMencaoId(msg.content) || resolverUserIdPorNomeAusencia(nomeAusencia);
 
     if (!userId && !nomeAusencia) continue;
 
