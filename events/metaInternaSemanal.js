@@ -87,13 +87,17 @@ function addDays(d, n) {
   return x;
 }
 
+function dateKeySP(date) {
+  return date.toLocaleDateString("en-CA", { timeZone: TZ });
+}
+
 function getWeekInfo() {
   const now = nowSP();
   const day = now.getDay();
   const sunday = startOfDay(addDays(now, -day));
   const saturday = startOfDay(addDays(sunday, 6));
   const end = addDays(sunday, 7);
-  const weekKey = sunday.toISOString().slice(0, 10);
+  const weekKey = dateKeySP(sunday);
 
   return {
     weekKey,
@@ -523,9 +527,9 @@ function esc(str) {
 }
 
 function statusEmoji(percent) {
-  if (percent >= 100) return "🟢";
-  if (percent >= 70) return "👍🏼";
-  return "🔻";
+  if (percent >= 100) return "OK";
+  if (percent >= 70) return "UP";
+  return "NEG";
 }
 
 async function makeDashboardImage(rows, weekLabel) {
@@ -538,7 +542,7 @@ async function makeDashboardImage(rows, weekLabel) {
     return `
       <text x="76" y="${y}" font-size="26" fill="#ffffff" font-weight="700">#${i + 1}</text>
       <text x="145" y="${y}" font-size="26" fill="#ffffff" font-weight="700">${esc(r.name)}</text>
-      <text x="850" y="${y}" font-size="26" fill="#ffffff" font-weight="700">${statusEmoji(r.percent)} ${r.percent}%</text>
+      <text x="850" y="${y}" font-size="26" fill="#ffffff" font-weight="700">${r.percent}%</text>
       <rect x="145" y="${y + 18}" width="700" height="16" rx="8" fill="#2b1748"/>
       <rect x="145" y="${y + 18}" width="${barW}" height="16" rx="8" fill="#a855f7"/>
     `;
@@ -627,6 +631,9 @@ async function updateMetaInterna(client, reason = "auto") {
 
   const week = getWeekInfo();
   const state = loadState();
+
+  // ✅ Recalcula a semana do zero para não carregar sujeira de outra data
+  state.users = {};
 
   injectVendasFromFile(state);
   injectGeralWeeklySources(state);
