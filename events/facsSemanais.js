@@ -1142,6 +1142,22 @@ hasOrgNameInWeek: async (orgName) => {
 export async function facsSemanaisOnReady(client) {
   installBridge(client);
 
+  // ✅ FALLBACK GLOBAL:
+  // Permite que o Registro Manager force um repopular automático caso o bridge direto falhe.
+  globalThis.__FACS_SEMANAIS_SYNC_FROM_RM__ = async (options = {}) => {
+    try {
+      const res = await syncFromRegistroManager(client);
+      console.log("[FACS_SEMANAIS] sync RM chamado por fallback:", {
+        ...res,
+        options,
+      });
+      return res;
+    } catch (e) {
+      console.error("[FACS_SEMANAIS] sync RM fallback falhou:", e);
+      return { added: 0, skipped: 0, scanned: 0, error: true };
+    }
+  };
+
   // ✅ Garante limpeza e DMs imediatamente ao ligar se a semana virou enquanto o bot estava OFF
   try {
     await limparDomingoIfNeeded(client);

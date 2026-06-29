@@ -1413,11 +1413,73 @@ function normalizeManagerIdOrRegistrant(raw, registrantId) {
 // ===============================
 async function bridgeAppendApproved(display, options = {}) {
   try {
-    if (display && display.trim() && display !== "|") {
-      await globalThis.__FACS_ONEBTN_BRIDGE__?.appendOrgToWeek?.(display, options);
+    if (!display || !display.trim() || display === "|") {
+      console.error("[SC_RM] bridge append ignorado: display inválido", { display, options });
+      return false;
     }
+
+    const bridge = globalThis.__FACS_ONEBTN_BRIDGE__;
+    const appendFn = bridge?.appendOrgToWeek;
+
+    if (typeof appendFn !== "function") {
+      console.error("[SC_RM] bridge FACs indisponível. Forçando sync RM -> FACs.", { display, options });
+
+      await globalThis.__FACS_SEMANAIS_SYNC_FROM_RM__?.({
+        ...options,
+        reason: "bridge_missing_on_approve",
+        display,
+      })?.catch(() => {});
+
+      return false;
+    }
+
+    const ok = await appendFn(display, options);
+
+    if (!ok) {
+      console.error("[SC_RM] bridge FACs retornou false. Forçando sync RM -> FACs.", { display, options });
+
+      await globalThis.__FACS_SEMANAIS_SYNC_FROM_RM__?.({
+        ...options,
+        reason: "bridge_returned_false_on_approve",
+        display,
+      })?.catch(() => {});
+
+      return false;
+    }
+
+    const orgName = _extractOrgNameFromDisplay(display);
+    if (bridge?.hasOrgNameInWeek && orgName) {
+      const existsAfterAppend = await bridge.hasOrgNameInWeek(orgName).catch(() => true);
+
+      if (!existsAfterAppend) {
+        console.error("[SC_RM] bridge disse OK, mas ORG não apareceu no FACs. Forçando sync RM -> FACs.", {
+          display,
+          orgName,
+          options,
+        });
+
+        await globalThis.__FACS_SEMANAIS_SYNC_FROM_RM__?.({
+          ...options,
+          reason: "bridge_ok_but_not_found_after_append",
+          display,
+          orgName,
+        })?.catch(() => {});
+
+        return false;
+      }
+    }
+
+    return true;
   } catch (e) {
     console.error("[SC_RM] bridge append falhou:", e);
+
+    await globalThis.__FACS_SEMANAIS_SYNC_FROM_RM__?.({
+      ...options,
+      reason: "bridge_exception_on_approve",
+      display,
+    })?.catch(() => {});
+
+    return false;
   }
 }
 
@@ -2586,10 +2648,23 @@ console.log("[SC_RM] ponto +1 =>", { pointsOwnerId, managerId, registrantId, msg
   if (registrantId) bumpWeekly(wk, "approvedForRegistrant", registrantId, +1);
   if (pointsOwnerId) bumpWeekly(wk, "approvedForManager", pointsOwnerId, +1);
 
-  // FACs: só aprovado
-  let display = RM_DISPLAY.get(msg.id);
-  if (!display || !display.trim() || display === "|") display = displayOrgFromEmbed(emb);
-  await bridgeAppendApproved(display, { byUserId: interaction.user.id, src: "rm_approve", rmMsgId: msg.id });
+// FACs: só aprovado
+let display = RM_DISPLAY.get(msg.id);
+if (!display || !display.trim() || display === "|") display = displayOrgFromEmbed(emb);
+
+const facsBridgeOk = await bridgeAppendApproved(display, {
+  byUserId: interaction.user.id,
+  src: "rm_approve",
+  rmMsgId: msg.id,
+});
+
+if (!facsBridgeOk) {
+  console.error("[SC_RM] aprovação feita, mas FACs precisou de fallback/sync.", {
+    display,
+    rmMsgId: msg.id,
+    byUserId: interaction.user.id,
+  });
+}
 
 
   // totals + log update
