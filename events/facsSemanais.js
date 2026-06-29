@@ -679,12 +679,22 @@ async function syncFromRegistroManager(client) {
     added = 0,
     skipped = 0;
 
-  for (let page = 0; page < 5; page++) {
+  // ✅ Antes varria só 500 mensagens.
+  // ✅ Agora varre até 3000, mas para sozinho quando chegar em mensagens antes da semana.
+  for (let page = 0; page < 30; page++) {
     const batch = await canal.messages.fetch({ limit: 100, before: lastId }).catch(() => null);
     if (!batch?.size) break;
 
+    let foundOlderThanWeek = false;
+
     for (const m of batch.values()) {
       const ts = +m.createdTimestamp;
+
+      if (ts < start) {
+        foundOlderThanWeek = true;
+        continue;
+      }
+
       if (!(ts >= start && ts < end)) continue;
 
       const emb = m.embeds?.[0];
@@ -706,10 +716,13 @@ async function syncFromRegistroManager(client) {
 
     lastId = batch.last()?.id;
     if (!lastId) break;
+    if (foundOlderThanWeek) break;
   }
 
   saveStore(facsState);
   await _refreshMenu(client);
+
+  await globalThis.__FACS_COMPARATIVO_FORCE_UPDATE__?.().catch(() => {});
 
   return { added, skipped, scanned };
 }
@@ -1134,6 +1147,22 @@ export async function facsSemanaisOnReady(client) {
     await limparDomingoIfNeeded(client);
     await dmQuartaManagersIfNeeded(client);
   } catch {}
+
+  // ✅ RECOVERY PÓS-RESTART:
+  // Se o bot reiniciou enquanto aprovaram registros, ele revarre o RM e reconstrói o FACs.
+  // Delay pequeno pra dar tempo do facsComparativoOnReady instalar o force update global.
+  if (!globalThis.__SC_FACS_SEMANAIS_BOOT_SYNC__) {
+    globalThis.__SC_FACS_SEMANAIS_BOOT_SYNC__ = true;
+
+    setTimeout(async () => {
+      try {
+        const res = await syncFromRegistroManager(client);
+        console.log("[FACS_SEMANAIS] boot sync RM concluído:", res);
+      } catch (e) {
+        console.error("[FACS_SEMANAIS] boot sync RM falhou:", e);
+      }
+    }, 15_000);
+  }
 
   // tick leve (pega domingo 00:00 e quarta 15:00 mesmo se o host for zoado)
   setInterval(async () => {
