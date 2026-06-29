@@ -598,11 +598,15 @@ async function updateMetaInterna(client, reason = "auto") {
 }
 
 export async function metaInternaSemanalOnReady(client) {
+  console.log("[MetaInternaSemanal] Iniciando...");
+
   setupDashHooks(client);
 
   await updateMetaInterna(client, "boot").catch((e) => {
     console.error("[MetaInternaSemanal] Erro boot:", e);
   });
+
+  console.log("[MetaInternaSemanal] Dashboard atualizado no boot.");
 
   if (client.__SC_META_INTERNA_INTERVAL__) return;
 
@@ -611,4 +615,59 @@ export async function metaInternaSemanalOnReady(client) {
       console.error("[MetaInternaSemanal] Erro intervalo:", e);
     });
   }, 2 * 60 * 1000);
+
+  console.log("[MetaInternaSemanal] Intervalo automático iniciado.");
+}
+
+export async function metaInternaSemanalHandleMessage(message, client) {
+  if (!message.guild || message.author.bot) return false;
+
+  const content = String(message.content || "").trim().toLowerCase();
+
+  if (
+    content !== "!metainterna" &&
+    content !== "!meta_interna" &&
+    content !== "!atualizarmeta"
+  ) {
+    return false;
+  }
+
+  const allowedUsers = new Set([
+    "660311795327828008",
+    "1262262852949905408",
+  ]);
+
+  const allowedRoles = new Set([
+    "1352408327983861844",
+    "1262262852949905409",
+    "1352407252216184833",
+    "1414651836861907006",
+  ]);
+
+  const hasPermission =
+    allowedUsers.has(message.author.id) ||
+    message.member?.roles?.cache?.some((role) => allowedRoles.has(role.id));
+
+  if (!hasPermission) {
+    await message.reply("🚫 Você não tem permissão para atualizar a meta interna.").catch(() => {});
+    return true;
+  }
+
+  const reply = await message.reply("🔄 Atualizando **Meta Interna Semanal**...").catch(() => null);
+
+  try {
+    await updateMetaInterna(client, `manual:${message.author.id}`);
+
+    if (reply) {
+      await reply.edit("✅ Meta Interna Semanal atualizada com sucesso.").catch(() => {});
+    }
+  } catch (e) {
+    console.error("[MetaInternaSemanal] Erro comando manual:", e);
+
+    if (reply) {
+      await reply.edit("❌ Erro ao atualizar a Meta Interna Semanal. Veja o console.").catch(() => {});
+    }
+  }
+
+  return true;
 }

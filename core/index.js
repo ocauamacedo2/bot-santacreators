@@ -400,6 +400,7 @@ import {
 // Meta Interna Semanal
 import {
   metaInternaSemanalOnReady,
+  metaInternaSemanalHandleMessage,
 } from "../events/metaInternaSemanal.js";
 
 // Auto React Fotos
@@ -645,6 +646,7 @@ const setupEventHandlers = () => {
         if (await reuniaoSemanalHandleMessage(message, client)) return;
        if (await payEvtDashHandleMessage(message, client)) return;
        if (await pagamentoSocialHandleMessage(message, client)) return;
+       if (await metaInternaSemanalHandleMessage(message, client)) return;
        if (await geralDash.geralDashHandleMessage(message, client)) return;
        if (await geralWeeklyRankHandleMessage(message, client)) return;
 
