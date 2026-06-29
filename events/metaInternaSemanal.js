@@ -412,14 +412,18 @@ function calcUserMeta({ userId, state, eventos, bpEntries }) {
 async function getEligibleMembers(guild) {
   await guild.members.fetch().catch(() => null);
 
-  return guild.members.cache.filter((m) => {
+  const members = guild.members.cache.filter((m) => {
     if (m.user.bot) return false;
 
     const hasSanta = m.roles.cache.has(ROLE_SANTA_CREATORS);
     const hasCidadao = m.roles.cache.has(ROLE_CIDADAO);
 
-    return hasSanta && hasCidadao;
+    return hasSanta || hasCidadao;
   });
+
+  console.log("[MetaInternaSemanal] Participantes encontrados:", members.size);
+
+  return members;
 }
 
 function esc(str) {
@@ -474,7 +478,7 @@ async function makeDashboardImage(rows, weekLabel) {
     <text x="70" y="135" font-size="24" fill="#d8b4fe">SantaCreators • ${esc(weekLabel)}</text>
     <text x="70" y="170" font-size="21" fill="#c084fc">Visível: porcentagem pública • Detalhes completos no canal de logs</text>
     ${rowSvg || `<text x="70" y="260" font-size="30" fill="#ffffff">Nenhum participante encontrado.</text>`}
-    <text x="70" y="1130" font-size="22" fill="#d8b4fe">🟢 positivo • 👍🏼 subindo • 🔻 negativo</text>
+    <text x="70" y="1130" font-size="22" fill="#d8b4fe">POSITIVO • SUBINDO • NEGATIVO</text>
   </svg>`;
 
   return await sharp(Buffer.from(svg)).png().toBuffer();
@@ -559,15 +563,15 @@ async function updateMetaInterna(client, reason = "auto") {
       .setTitle("💜 Dashboard — Meta Interna Semanal")
       .setDescription(publicDescription(rows))
       .setImage("attachment://meta-interna-semanal.png")
-      .setFooter({ text: `${DASH_MARKER} • Atualizado: ${reason}` })
-      .setTimestamp();
+.setFooter({ text: `SantaCreators • Meta Interna Semanal • Atualizado automaticamente` })
+.setTimestamp();
 
-    const msg = await upsertMessage(dashboardChannel, state.dashboardMessageId, {
-      content: `||${DASH_MARKER}||`,
-      embeds: [embed],
-      files: [file],
-      allowedMentions: { parse: [] },
-    });
+const msg = await upsertMessage(dashboardChannel, state.dashboardMessageId, {
+  content: "",
+  embeds: [embed],
+  files: [file],
+  allowedMentions: { parse: [] },
+});
 
     state.dashboardMessageId = msg.id;
   }
@@ -582,14 +586,14 @@ async function updateMetaInterna(client, reason = "auto") {
         { name: "🎮 Eventos usados", value: String(eventos.length || 0), inline: true },
         { name: "🕒 Regra BP", value: "21h: 19:00–22:30\n23:30/00/01: 23:30–01:00", inline: false },
       )
-      .setFooter({ text: `${DASH_MARKER}::LOG • Atualizado: ${reason}` })
-      .setTimestamp();
+      .setFooter({ text: `SantaCreators • Logs da Meta Interna • Atualizado automaticamente` })
+.setTimestamp();
 
-    const msg = await upsertMessage(logChannel, state.logMessageId, {
-      content: `||${DASH_MARKER}::LOG||`,
-      embeds: [embed],
-      allowedMentions: { parse: [] },
-    });
+const msg = await upsertMessage(logChannel, state.logMessageId, {
+  content: "",
+  embeds: [embed],
+  allowedMentions: { parse: [] },
+});
 
     state.logMessageId = msg.id;
   }
