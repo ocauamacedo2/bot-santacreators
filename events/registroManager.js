@@ -2652,17 +2652,38 @@ console.log("[SC_RM] ponto +1 =>", { pointsOwnerId, managerId, registrantId, msg
 let display = RM_DISPLAY.get(msg.id);
 if (!display || !display.trim() || display === "|") display = displayOrgFromEmbed(emb);
 
-const facsBridgeOk = await bridgeAppendApproved(display, {
+const facsPayload = {
   byUserId: interaction.user.id,
   src: "rm_approve",
   rmMsgId: msg.id,
-});
+  msgId: msg.id,
+  displayOrg: display,
+  orgName: _extractOrgNameFromDisplay(display),
+  orgId: getOrgIdFromEmbed(originalEmb) || getOrgIdFromEmbed(emb) || null,
+  __at: Date.now(),
+};
+
+const facsBridgeOk = await bridgeAppendApproved(display, facsPayload);
+
+try {
+  dashEmit("rm:approved", {
+    ...facsPayload,
+    by: interaction.user.id,
+  });
+} catch {}
 
 if (!facsBridgeOk) {
-  console.error("[SC_RM] aprovação feita, mas FACs precisou de fallback/sync.", {
+  console.error("[SC_RM] bridge direto falhou. Forçando sync automático RM -> FACs.", {
     display,
     rmMsgId: msg.id,
     byUserId: interaction.user.id,
+  });
+
+  await globalThis.__FACS_SEMANAIS_SYNC_FROM_RM__?.({
+    ...facsPayload,
+    reason: "rm_approve_bridge_failed_force_sync",
+  })?.catch((e) => {
+    console.error("[SC_RM] fallback sync RM -> FACs falhou:", e);
   });
 }
 
@@ -2671,17 +2692,8 @@ if (!facsBridgeOk) {
   await updateTotalsMessage(canal);
   await upsertLogForRMMessage(client, msg);
 
-  // scGeralDash hub
-try {
-  dashEmit("rm:approved", {
-    __at: Date.now(),
-    by: interaction.user.id,
-    msgId: msg.id,
-    displayOrg: display,
-    orgName: _extractOrgNameFromDisplay(display),
-    rmMsgId: msg.id,
-  });
-} catch {}
+// scGeralDash hub
+// ✅ Já emitido acima junto com o envio automático pro FACs.
 
 
    // ✅ ATUALIZA O DASHBOARD DO GRAFICO (instantâneo)

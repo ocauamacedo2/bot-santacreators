@@ -899,11 +899,29 @@ client.once("ready", async () => {
     } catch (e) {}
 
     try {
-      await facsSemanaisOnReady(client);
-    } catch (e) {}
-    try {
-      await facsComparativoOnReady(client);
-    } catch (e) {}
+  console.log("[CORE] Iniciando FACs Semanais...");
+  await facsSemanaisOnReady(client);
+
+  if (typeof globalThis.__FACS_ONEBTN_BRIDGE__?.appendOrgToWeek !== "function") {
+    console.error("[CORE] ❌ FACs Semanais iniciou, mas o BRIDGE NÃO foi instalado.");
+  } else {
+    console.log("[CORE] ✅ FACs Semanais bridge instalado.");
+  }
+
+  if (typeof globalThis.__FACS_SEMANAIS_SYNC_FROM_RM__ !== "function") {
+    console.error("[CORE] ❌ FACs Semanais iniciou, mas o SYNC RM -> FACs NÃO foi instalado.");
+  } else {
+    console.log("[CORE] ✅ FACs Semanais sync RM -> FACs instalado.");
+  }
+} catch (e) {
+  console.error("[CORE] ❌ Erro ao iniciar FACs Semanais:", e);
+}
+
+try {
+  await facsComparativoOnReady(client);
+} catch (e) {
+  console.error("[CORE] ❌ Erro ao iniciar FACs Comparativo:", e);
+}
     try {
       await confirmacaoPresencaOnReady(client);
     } catch (e) {}
@@ -1096,7 +1114,7 @@ export const initBot = async () => {
     setupEventHandlers();
     setupBatePonto(client);
     setupAlinhamentoDash(client);
-    await import("../events/gestaoinfluencer.js");
+   await import("../events/gestaoinfluencer.js");
 
     if (!client.__loggedIn) {
       client.__loggedIn = true;
