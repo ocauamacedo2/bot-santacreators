@@ -355,6 +355,15 @@ function adicionarDiaNoRanking(ranking, userId, data) {
   ranking.get(userId).semanas[semana] += 1;
 }
 
+function intervaloAusenciaDentroDoMes(dtInicio, dtFim, inicioMes, fimMes) {
+  const fimReal = dtFim && dtFim >= dtInicio ? dtFim : dtInicio;
+
+  if (fimReal < inicioMes) return false;
+  if (dtInicio > fimMes) return false;
+
+  return true;
+}
+
 function montarSvgDashboardAusencias({ mesNome, ano, rankingOrdenado, totalAusencias }) {
   const largura = 1800;
   const alturaBase = 470;
@@ -496,22 +505,26 @@ async function atualizarDashboardAusenciasMensal(client) {
     if (registrosUnicos.has(chaveRegistro)) continue;
     registrosUnicos.add(chaveRegistro);
 
-    const dtInicio = parseDataBr(dataTxt);
-    const dtFim = ateTxt ? parseDataBr(ateTxt) : null;
+const dtInicio = parseDataBr(dataTxt);
+const dtFim = ateTxt ? parseDataBr(ateTxt) : null;
 
-    if (!dtInicio) continue;
+if (!dtInicio) continue;
 
-    const inicio = dtInicio < inicioMes ? inicioMes : dtInicio;
-    const fim = dtFim && dtFim > dtInicio ? dtFim : dtInicio;
-    const fimLimitado = fim > fimMes ? fimMes : fim;
+if (!intervaloAusenciaDentroDoMes(dtInicio, dtFim, inicioMes, fimMes)) {
+  continue;
+}
 
-    const rankingId = userId || `nome:${normalizarChaveAusencia(nomeAusencia)}`;
+const inicio = dtInicio < inicioMes ? inicioMes : dtInicio;
+const fim = dtFim && dtFim >= dtInicio ? dtFim : dtInicio;
+const fimLimitado = fim > fimMes ? fimMes : fim;
 
-    let atual = new Date(inicio.getTime());
-    while (atual.getTime() <= fimLimitado.getTime()) {
-      adicionarDiaNoRanking(ranking, rankingId, atual);
-      atual = addDias(atual, 1);
-    }
+const rankingId = userId || `nome:${normalizarChaveAusencia(nomeAusencia)}`;
+
+let atual = new Date(inicio.getTime());
+while (atual.getTime() <= fimLimitado.getTime()) {
+  adicionarDiaNoRanking(ranking, rankingId, atual);
+  atual = addDias(atual, 1);
+}
   }
 
   const rankingOrdenado = [];
