@@ -397,6 +397,11 @@ import {
   registroVendasHandleInteraction,
 } from "../events/registroVendas.js";
 
+// Meta Interna Semanal
+import {
+  metaInternaSemanalOnReady,
+} from "../events/metaInternaSemanal.js";
+
 // Auto React Fotos
 import {
   autoReactsFotosOnReady,
@@ -908,11 +913,18 @@ client.once("ready", async () => {
       await registroManagerOnReady(client);
     } catch (e) {}
     try {
-      await registroVendasOnReady(client);
-    } catch (e) {}
-    try {
-      await evt3EventsOnReady(client);
-    } catch (e) {}
+  await registroVendasOnReady(client);
+} catch (e) {}
+
+try {
+  await metaInternaSemanalOnReady(client);
+} catch (e) {
+  console.error("[CORE] Erro ao iniciar Meta Interna Semanal:", e);
+}
+
+try {
+  await evt3EventsOnReady(client);
+} catch (e) {}
     try {
       dashDebugOnReady(client);
     } catch (e) {}
