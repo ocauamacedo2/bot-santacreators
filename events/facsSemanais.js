@@ -1139,6 +1139,76 @@ hasOrgNameInWeek: async (orgName) => {
 }
 
 // ===============================
+// APPEND DIRETO DO REGISTRO MANAGER
+// ===============================
+export async function facsSemanaisAppendFromRM(client, displayOrg, options = {}) {
+  try {
+    const cleanDisplay = String(displayOrg || "").trim();
+
+    if (!cleanDisplay || cleanDisplay === "|") {
+      console.error("[FACS_SEMANAIS] append direto RM ignorado: display inválido", {
+        displayOrg,
+        options,
+      });
+      return false;
+    }
+
+    const { weekKey } = getCurrentWeekSP();
+
+    if (String(facsState.weekKey || "") !== String(weekKey)) {
+      pushBackup("rm_append_week_changed_force");
+      facsState.weekKey = weekKey;
+      facsState.lista = "";
+      facsState.lastCleanupKey = weekKey;
+    }
+
+    const before = facsState.lista;
+    facsState.lista = _addLine(facsState.lista, cleanDisplay);
+    saveStore(facsState);
+
+    await _refreshMenu(client);
+
+    const added = before !== facsState.lista;
+
+    console.log("[FACS_SEMANAIS] append DIRETO RM executado:", {
+      added,
+      displayOrg: cleanDisplay,
+      beforeTotal: _countLines(before),
+      afterTotal: _countLines(facsState.lista),
+      rmMsgId: options?.rmMsgId || options?.msgId || null,
+    });
+
+    await logAudit(
+      client,
+      "ADD ORG (RM DIRETO FORÇADO)",
+      [
+        `ORG: ${cleanDisplay}`,
+        `Adicionou nova linha: ${added ? "SIM" : "NÃO / já existia"}`,
+        `Total antes: ${_countLines(before)}`,
+        `Total depois: ${_countLines(facsState.lista)}`,
+      ],
+      {
+        byUserId: options?.byUserId || null,
+        interaction: null,
+        beforeState: before,
+        afterState: facsState.lista,
+        extra: {
+          via: "rm_direct_forced",
+          options,
+        },
+      }
+    );
+
+    await globalThis.__FACS_COMPARATIVO_FORCE_UPDATE__?.().catch(() => {});
+
+    return true;
+  } catch (e) {
+    console.error("[FACS_SEMANAIS] erro no append direto RM:", e);
+    return false;
+  }
+}
+
+// ===============================
 // EXPORTS (HOOKS)
 // ===============================
 export async function facsSemanaisOnReady(client) {

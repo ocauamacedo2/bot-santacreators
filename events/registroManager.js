@@ -38,6 +38,7 @@ import {
 } from "discord.js";
 
 import { dashEmit } from "../utils/dashHub.js";
+import { facsSemanaisAppendFromRM } from "./facsSemanais.js";
 import { graficoManagersEmitUpdate } from "./GraficoManagers.js";
 import {
   rankingAprovadoresManagersEmitUpdate,
@@ -2663,7 +2664,11 @@ const facsPayload = {
   __at: Date.now(),
 };
 
-const facsBridgeOk = await bridgeAppendApproved(display, facsPayload);
+const facsDirectOk = await facsSemanaisAppendFromRM(client, display, facsPayload);
+
+const facsBridgeOk = facsDirectOk
+  ? true
+  : await bridgeAppendApproved(display, facsPayload);
 
 try {
   dashEmit("rm:approved", {
