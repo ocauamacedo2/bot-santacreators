@@ -21,6 +21,7 @@ const STATE_FILE = path.join(DATA_DIR, "meta_interna_semanal_state.json");
 const CRONO_FILE = path.join(DATA_DIR, "cronograma_state.json");
 const BP_DIR = path.join(DATA_DIR, "sc_bp_monthly");
 const VENDAS_FILE = path.join(DATA_DIR, "vendas_state.json");
+const GERAL_WEEKLY_SOURCES_FILE = path.join(DATA_DIR, "sc_geral_weekly_rank_sources.json");
 
 const DASH_MARKER = "SC_META_INTERNA_SEMANAL::V1";
 
@@ -345,6 +346,81 @@ function injectVendasFromFile(state) {
   }
 }
 
+function pushManyVirtual(arr, count, prefix) {
+  const total = Math.max(0, Number(count || 0));
+
+  for (let i = 0; i < total; i++) {
+    pushUnique(arr, { at: Date.now(), virtual: true }, `${prefix}:${i + 1}`);
+  }
+}
+
+function injectGeralWeeklySources(state) {
+  const week = getWeekInfo();
+  const all = readJson(GERAL_WEEKLY_SOURCES_FILE, {});
+  const sources = all?.[week.weekKey] || {};
+
+  const userIds = Object.keys(sources || {});
+
+  console.log("[MetaInternaSemanal] Fontes semanais carregadas:", {
+    weekKey: week.weekKey,
+    usuariosComFonte: userIds.length,
+  });
+
+  for (const [userIdRaw, bySource] of Object.entries(sources || {})) {
+    const userId = String(userIdRaw || "").trim();
+    if (!userId || !bySource || typeof bySource !== "object") continue;
+
+    const user = ensureUser(state, userId);
+
+    for (const [sourceRaw, amountRaw] of Object.entries(bySource || {})) {
+      const source = String(sourceRaw || "").toLowerCase();
+      const amount = Number(amountRaw || 0);
+
+      if (amount <= 0) continue;
+
+      const prefix = `geral-weekly:${week.weekKey}:${userId}:${source}`;
+
+      if (source === "manager" || source === "managers" || source === "registro_manager") {
+        pushManyVirtual(user.orgs, amount, prefix);
+      }
+
+      if (source === "presenca" || source === "presencas" || source === "confirmacao" || source === "confirmacoes") {
+        pushManyVirtual(user.confirmacoes, amount, prefix);
+      }
+
+      if (source === "eventopoder" || source === "eventos_poder" || source === "evento_poder") {
+        pushManyVirtual(user.poderesEventos, amount, prefix);
+      }
+
+      if (source === "poderes" || source === "registro_poderes") {
+        for (let i = 0; i < Math.max(0, amount); i++) {
+          user.poderesDias[`virtual-${week.weekKey}-${userId}-${source}-${i + 1}`] = true;
+        }
+      }
+
+      if (source === "doacoes" || source === "doacao") {
+        pushManyVirtual(user.doacoes, amount, prefix);
+      }
+
+      if (source === "vendas" || source === "venda") {
+        pushManyVirtual(user.vendas, amount, prefix);
+      }
+
+      if (source === "convites" || source === "lideres" || source === "dm_lideres") {
+        pushManyVirtual(user.dmLideres, amount, prefix);
+      }
+
+      if (source === "pagamentos" || source === "pagamento") {
+        pushManyVirtual(user.pagamentos, amount, prefix);
+      }
+
+      if (source === "eventosdiarios" || source === "eventos_diarios") {
+        pushManyVirtual(user.eventosDiarios, amount, prefix);
+      }
+    }
+  }
+}
+
 function clampPercent(n) {
   return Math.max(0, Math.min(100, Math.round(n)));
 }
@@ -410,7 +486,11 @@ function calcUserMeta({ userId, state, eventos, bpEntries }) {
 }
 
 async function getEligibleMembers(guild) {
-  await guild.members.fetch().catch(() => null);
+  await guild.members.fetch({ withPresences: false }).catch(() => null);
+
+  let totalSanta = 0;
+  let totalCidadao = 0;
+  let totalAmbos = 0;
 
   const members = guild.members.cache.filter((m) => {
     if (m.user.bot) return false;
@@ -418,10 +498,19 @@ async function getEligibleMembers(guild) {
     const hasSanta = m.roles.cache.has(ROLE_SANTA_CREATORS);
     const hasCidadao = m.roles.cache.has(ROLE_CIDADAO);
 
-    return hasSanta || hasCidadao;
+    if (hasSanta) totalSanta++;
+    if (hasCidadao) totalCidadao++;
+    if (hasSanta && hasCidadao) totalAmbos++;
+
+    return hasSanta && hasCidadao;
   });
 
-  console.log("[MetaInternaSemanal] Participantes encontrados:", members.size);
+  console.log("[MetaInternaSemanal] Cargos encontrados:", {
+    santaCreators: totalSanta,
+    cidadao: totalCidadao,
+    ambos: totalAmbos,
+    participantes: members.size,
+  });
 
   return members;
 }
@@ -530,12 +619,17 @@ async function upsertMessage(channel, messageId, payload) {
 }
 
 async function updateMetaInterna(client, reason = "auto") {
-  const guild = client.guilds.cache.first();
+  const dashboardChannel = await client.channels.fetch(DASHBOARD_CHANNEL_ID).catch(() => null);
+  const logChannel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+
+  const guild = dashboardChannel?.guild || logChannel?.guild || client.guilds.cache.first();
   if (!guild) return;
 
   const week = getWeekInfo();
   const state = loadState();
+
   injectVendasFromFile(state);
+  injectGeralWeeklySources(state);
 
   const eventos = buildCronogramaEventos();
   const bpEntries = loadBpEntriesForWeek();
@@ -550,9 +644,6 @@ async function updateMetaInterna(client, reason = "auto") {
   }).sort((a, b) => b.percent - a.percent);
 
   saveState(state);
-
-  const dashboardChannel = await client.channels.fetch(DASHBOARD_CHANNEL_ID).catch(() => null);
-  const logChannel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
 
   if (dashboardChannel?.isTextBased?.()) {
     const image = await makeDashboardImage(rows, week.label);
@@ -657,19 +748,23 @@ export async function metaInternaSemanalHandleMessage(message, client) {
     return true;
   }
 
-  const reply = await message.reply("🔄 Atualizando **Meta Interna Semanal**...").catch(() => null);
+  await message.delete().catch(() => {});
+
+  const reply = await message.channel.send("🔄 Atualizando **Meta Interna Semanal**...").catch(() => null);
 
   try {
     await updateMetaInterna(client, `manual:${message.author.id}`);
 
     if (reply) {
       await reply.edit("✅ Meta Interna Semanal atualizada com sucesso.").catch(() => {});
+      setTimeout(() => reply.delete().catch(() => {}), 8000);
     }
   } catch (e) {
     console.error("[MetaInternaSemanal] Erro comando manual:", e);
 
     if (reply) {
       await reply.edit("❌ Erro ao atualizar a Meta Interna Semanal. Veja o console.").catch(() => {});
+      setTimeout(() => reply.delete().catch(() => {}), 12000);
     }
   }
 
