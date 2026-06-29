@@ -2672,9 +2672,16 @@ if (!facsBridgeOk) {
   await upsertLogForRMMessage(client, msg);
 
   // scGeralDash hub
-  try {
-    dashEmit("rm:approved", { __at: Date.now(), by: interaction.user.id, msgId: msg.id });
-  } catch {}
+try {
+  dashEmit("rm:approved", {
+    __at: Date.now(),
+    by: interaction.user.id,
+    msgId: msg.id,
+    displayOrg: display,
+    orgName: _extractOrgNameFromDisplay(display),
+    rmMsgId: msg.id,
+  });
+} catch {}
 
 
    // ✅ ATUALIZA O DASHBOARD DO GRAFICO (instantâneo)

@@ -29,6 +29,8 @@ import {
   TextInputStyle,
 } from "discord.js";
 
+import { dashOn } from "../utils/dashHub.js";
+
 // ===============================
 // CONFIG
 // ===============================
@@ -1141,6 +1143,31 @@ hasOrgNameInWeek: async (orgName) => {
 // ===============================
 export async function facsSemanaisOnReady(client) {
   installBridge(client);
+
+  // ✅ ROTA AUTOMÁTICA EXTRA:
+  // Além do bridge global, o FACs também escuta o evento do RM pelo dashHub.
+  // Isso corrige casos onde o botão aprova, mas o global bridge falha/some no runtime.
+  if (!globalThis.__SC_FACS_RM_APPROVED_HUB__) {
+    globalThis.__SC_FACS_RM_APPROVED_HUB__ = true;
+
+    dashOn("rm:approved", async (payload = {}) => {
+      try {
+        const displayOrg = String(payload.displayOrg || "").trim();
+
+        if (displayOrg && displayOrg !== "|") {
+          await globalThis.__FACS_ONEBTN_BRIDGE__?.appendOrgToWeek?.(displayOrg, {
+            ...payload,
+            src: "rm_approved_dashhub",
+          });
+          return;
+        }
+
+        await syncFromRegistroManager(client);
+      } catch (e) {
+        console.error("[FACS_SEMANAIS] falha ao puxar aprovação RM via dashHub:", e);
+      }
+    });
+  }
 
   // ✅ FALLBACK GLOBAL:
   // Permite que o Registro Manager force um repopular automático caso o bridge direto falhe.
