@@ -154,13 +154,77 @@ function pushUnique(arr, item, key) {
   if (!arr.some((x) => x.key === key)) arr.push({ ...item, key });
 }
 
+function resolveSourceUserId(extra = {}) {
+  return (
+    extra.userId ||
+    extra.pointsOwnerId ||
+    extra.managerId ||
+    extra.registradorId ||
+    extra.creatorId ||
+    extra.createdBy ||
+    extra.targetId ||
+    extra.by ||
+    extra.byUserId ||
+    null
+  );
+}
+
+function isAtInCurrentWeek(at) {
+  const week = getWeekInfo();
+  const n = Number(at || 0);
+  return n >= week.start.getTime() && n < week.end.getTime();
+}
+
+function keepOnlyCurrentWeekUsers(users = {}) {
+  const out = {};
+
+  for (const [userId, data] of Object.entries(users || {})) {
+    const next = {
+      orgs: [],
+      confirmacoes: [],
+      poderesEventos: [],
+      poderesDias: {},
+      doacoes: [],
+      vendas: [],
+      dmLideres: [],
+      pagamentos: [],
+      eventosDiarios: [],
+    };
+
+    for (const key of ["orgs", "confirmacoes", "poderesEventos", "doacoes", "vendas", "dmLideres", "pagamentos", "eventosDiarios"]) {
+      next[key] = (Array.isArray(data?.[key]) ? data[key] : []).filter((x) => isAtInCurrentWeek(x.at));
+    }
+
+    for (const [dayKey, value] of Object.entries(data?.poderesDias || {})) {
+      if (value) next.poderesDias[dayKey] = true;
+    }
+
+    out[userId] = next;
+  }
+
+  return out;
+}
+
 function registerSource(userId, source, extra = {}) {
-  if (!userId) return;
+  const resolvedUserId = userId || resolveSourceUserId(extra);
+  if (!resolvedUserId) return;
 
   const state = loadState();
-  const user = ensureUser(state, String(userId));
+  const user = ensureUser(state, String(resolvedUserId));
   const at = Number(extra.__at || extra.at || Date.now());
-  const key = `${source}:${String(extra.messageId || extra.channelId || "")}:${at}:${Math.random().toString(36).slice(2, 8)}`;
+
+  if (!isAtInCurrentWeek(at)) return;
+
+  const stableId =
+    extra.dedupeKey ||
+    extra.messageId ||
+    extra.msgId ||
+    extra.newMessageId ||
+    extra.oldMessageId ||
+    extra.channelId ||
+    `${source}:${resolvedUserId}:${at}`;
+
+  const key = `${source}:${stableId}`;
 
   if (source === "orgs") pushUnique(user.orgs, { at }, key);
   if (source === "confirmacoes") pushUnique(user.confirmacoes, { at }, key);
@@ -182,15 +246,15 @@ function setupDashHooks(client) {
   if (client.__SC_META_INTERNA_HOOKS__) return;
   client.__SC_META_INTERNA_HOOKS__ = true;
 
-  dashOn("rm:approved", (p = {}) => registerSource(p.userId || p.managerId || p.targetId, "orgs", p));
-  dashOn("presenca:confirmada", (p = {}) => registerSource(p.userId || p.by || p.managerId, "confirmacoes", p));
-  dashOn("eventopoder:registrado", (p = {}) => registerSource(p.userId, "poderesEventos", p));
-  dashOn("poderes:registrado", (p = {}) => registerSource(p.userId, "poderesDias", p));
-  dashOn("doacao:registrada", (p = {}) => registerSource(p.userId, "doacoes", p));
-  dashOn("venda:registrada", (p = {}) => registerSource(p.userId, "vendas", p));
-  dashOn("lideres:convite_enviado", (p = {}) => registerSource(p.userId, "dmLideres", p));
-  dashOn("pagamento:pago", (p = {}) => registerSource(p.userId || p.registradorId || p.targetId, "pagamentos", p));
-  dashOn("eventosdiarios:aprovado", (p = {}) => registerSource(p.userId, "eventosDiarios", p));
+dashOn("rm:approved", (p = {}) => registerSource(null, "orgs", p));
+dashOn("presenca:confirmada", (p = {}) => registerSource(null, "confirmacoes", p));
+dashOn("eventopoder:registrado", (p = {}) => registerSource(null, "poderesEventos", p));
+dashOn("poderes:registrado", (p = {}) => registerSource(null, "poderesDias", p));
+dashOn("doacao:registrada", (p = {}) => registerSource(null, "doacoes", p));
+dashOn("venda:registrada", (p = {}) => registerSource(null, "vendas", p));
+dashOn("lideres:convite_enviado", (p = {}) => registerSource(null, "dmLideres", p));
+dashOn("pagamento:pago", (p = {}) => registerSource(null, "pagamentos", p));
+dashOn("eventosdiarios:aprovado", (p = {}) => registerSource(null, "eventosDiarios", p));
 }
 
 function parseTimes(str) {
@@ -665,8 +729,8 @@ async function updateMetaInterna(client, reason = "auto") {
   const week = getWeekInfo();
   const state = loadState();
 
-  // ✅ Recalcula a semana do zero para não carregar sujeira de outra data
-  state.users = {};
+  // ✅ Mantém os eventos ao vivo da semana atual e remove só sujeira antiga
+  state.users = keepOnlyCurrentWeekUsers(state.users);
 
   injectVendasFromFile(state);
   injectGeralWeeklySources(state);
