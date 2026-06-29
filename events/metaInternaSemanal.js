@@ -16,12 +16,43 @@ const LOG_CHANNEL_ID = "1521218191869739310";
 const ROLE_SANTA_CREATORS = "1352275728476930099";
 const ROLE_CIDADAO = "1262978759922028575";
 
-const DATA_DIR = path.resolve(__dirname, "../data");
-const STATE_FILE = path.join(DATA_DIR, "meta_interna_semanal_state.json");
-const CRONO_FILE = path.join(DATA_DIR, "cronograma_state.json");
-const BP_DIR = path.join(DATA_DIR, "sc_bp_monthly");
-const VENDAS_FILE = path.join(DATA_DIR, "vendas_state.json");
-const GERAL_WEEKLY_SOURCES_FILE = path.join(DATA_DIR, "sc_geral_weekly_rank_sources.json");
+function pickPersistRoot() {
+  const candidates = [
+    process.env.SQUARECLOUD_STORAGE_PATH?.trim(),
+    "/storage",
+    "/home/container/storage",
+    "/home/squarecloud/storage",
+  ].filter(Boolean);
+
+  for (const dir of candidates) {
+    try {
+      if (fs.existsSync(dir)) return dir;
+    } catch {}
+  }
+
+  return null;
+}
+
+const DATA_DIR = path.resolve(pickPersistRoot() || path.join(__dirname, ".."), "data");
+const FALLBACK_DATA_DIR = path.resolve(__dirname, "../data");
+
+function dataFile(name) {
+  const primary = path.join(DATA_DIR, name);
+  const fallback = path.join(FALLBACK_DATA_DIR, name);
+
+  if (fs.existsSync(primary)) return primary;
+  if (fs.existsSync(fallback)) return fallback;
+
+  return primary;
+}
+
+const STATE_FILE = dataFile("meta_interna_semanal_state.json");
+const CRONO_FILE = dataFile("cronograma_state.json");
+const BP_DIR = fs.existsSync(path.join(DATA_DIR, "sc_bp_monthly"))
+  ? path.join(DATA_DIR, "sc_bp_monthly")
+  : path.join(FALLBACK_DATA_DIR, "sc_bp_monthly");
+const VENDAS_FILE = dataFile("vendas_state.json");
+const GERAL_WEEKLY_SOURCES_FILE = dataFile("sc_geral_weekly_rank_sources.json");
 
 const DASH_MARKER = "SC_META_INTERNA_SEMANAL::V1";
 
@@ -72,30 +103,59 @@ function writeJson(file, data) {
 }
 
 function nowSP() {
-  return new Date(new Date().toLocaleString("en-US", { timeZone: TZ }));
+  return new Date();
 }
 
-function startOfDay(d) {
-  const x = new Date(d);
-  x.setHours(0, 0, 0, 0);
-  return x;
+function ymdSP(date) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+
+  return {
+    y: Number(parts.find((p) => p.type === "year")?.value || 0),
+    m: Number(parts.find((p) => p.type === "month")?.value || 0),
+    d: Number(parts.find((p) => p.type === "day")?.value || 0),
+  };
+}
+
+function startOfDaySP(date) {
+  const { y, m, d } = ymdSP(date);
+  return new Date(Date.UTC(y, m - 1, d, 3, 0, 0));
+}
+
+function dowSP(date) {
+  const wd = new Intl.DateTimeFormat("en-US", {
+    timeZone: TZ,
+    weekday: "short",
+  }).format(date);
+
+  const map = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  return map[wd] ?? 0;
 }
 
 function addDays(d, n) {
-  const x = new Date(d);
-  x.setDate(x.getDate() + n);
+  const x = new Date(d.getTime());
+  x.setUTCDate(x.getUTCDate() + n);
   return x;
 }
 
 function dateKeySP(date) {
-  return date.toLocaleDateString("en-CA", { timeZone: TZ });
+  return date.toISOString().slice(0, 10);
+}
+
+function labelDateSP(date) {
+  return date.toLocaleDateString("pt-BR", { timeZone: TZ });
 }
 
 function getWeekInfo() {
   const now = nowSP();
-  const day = now.getDay();
-  const sunday = startOfDay(addDays(now, -day));
-  const saturday = startOfDay(addDays(sunday, 6));
+  const todayStart = startOfDaySP(now);
+  const day = dowSP(now);
+  const sunday = addDays(todayStart, -day);
+  const saturday = addDays(sunday, 6);
   const end = addDays(sunday, 7);
   const weekKey = dateKeySP(sunday);
 
@@ -104,7 +164,7 @@ function getWeekInfo() {
     start: sunday,
     saturday,
     end,
-    label: `${sunday.toLocaleDateString("pt-BR")} até ${saturday.toLocaleDateString("pt-BR")}`,
+    label: `${labelDateSP(sunday)} até ${labelDateSP(saturday)}`,
   };
 }
 
@@ -426,6 +486,13 @@ function injectGeralWeeklySources(state) {
   const week = getWeekInfo();
   const all = readJson(GERAL_WEEKLY_SOURCES_FILE, {});
   const sources = all?.[week.weekKey] || {};
+
+  console.log("[MetaInternaSemanal] Arquivo de fontes:", {
+    file: GERAL_WEEKLY_SOURCES_FILE,
+    exists: fs.existsSync(GERAL_WEEKLY_SOURCES_FILE),
+    weekKey: week.weekKey,
+    semanasDisponiveis: Object.keys(all || {}).slice(-5),
+  });
 
   const userIds = Object.keys(sources || {});
 
