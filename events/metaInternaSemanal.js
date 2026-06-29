@@ -527,9 +527,9 @@ function esc(str) {
 }
 
 function statusEmoji(percent) {
-  if (percent >= 100) return "OK";
-  if (percent >= 70) return "UP";
-  return "NEG";
+  if (percent >= 100) return "🟢";
+  if (percent >= 70) return "👍";
+  return "🔻";
 }
 
 async function makeDashboardImage(rows, weekLabel) {
@@ -582,7 +582,7 @@ function publicDescription(rows) {
 
   return rows.slice(0, 30).map((r, i) => {
     const medal = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `#${i + 1}`;
-    const situacao = r.percent >= 100 ? "POSITIVO" : "NEGATIVO";
+    const situacao = r.percent >= 100 ? "POSITIVO" : r.percent >= 70 ? "SUBINDO" : "NEGATIVO";
     return `${medal} <@${r.userId}>\n${statusEmoji(r.percent)} **${r.percent}%** • ${situacao}`;
   }).join("\n\n");
 }
