@@ -569,7 +569,7 @@ async function makeDashboardImage(rows, weekLabel) {
     <circle cx="120" cy="980" r="220" fill="#a855f7" opacity="0.14"/>
     <text x="70" y="92" font-size="48" fill="#ffffff" font-weight="900" filter="url(#glow)">META INTERNA SEMANAL</text>
     <text x="70" y="135" font-size="24" fill="#d8b4fe">SantaCreators • ${esc(weekLabel)}</text>
-    <text x="70" y="170" font-size="21" fill="#c084fc">Visível: porcentagem pública • Detalhes completos no canal de logs</text>
+    <text x="70" y="170" font-size="21" fill="#c084fc">Metas internas semanais a serem batidas</text>
     ${rowSvg || `<text x="70" y="260" font-size="30" fill="#ffffff">Nenhum participante encontrado.</text>`}
     <text x="70" y="1130" font-size="22" fill="#d8b4fe">POSITIVO • SUBINDO • NEGATIVO</text>
   </svg>`;
@@ -691,9 +691,9 @@ async function updateMetaInterna(client, reason = "auto") {
 
     const embed = new EmbedBuilder()
       .setColor("#8a2be2")
-      .setTitle("💜 Dashboard — Meta Interna Semanal")
-      .setDescription(publicDescription(rows))
-      .setImage("attachment://meta-interna-semanal.png")
+.setTitle("💜 Dashboard — Meta Interna Semanal")
+.setDescription("📌 **Metas internas semanais a serem batidas.**\n\n" + publicDescription(rows))
+.setImage("attachment://meta-interna-semanal.png")
 .setFooter({ text: `SantaCreators • Meta Interna Semanal • Atualizado automaticamente` })
 .setTimestamp();
 
