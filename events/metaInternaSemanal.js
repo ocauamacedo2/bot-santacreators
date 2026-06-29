@@ -609,12 +609,45 @@ function logDescription(rows) {
   }).join("\n\n━━━━━━━━━━━━━━━━━━━━━━\n\n").slice(0, 3900);
 }
 
-async function upsertMessage(channel, messageId, payload) {
+async function upsertMessage(channel, messageId, payload, markerText) {
   if (messageId) {
     const old = await channel.messages.fetch(messageId).catch(() => null);
     if (old) {
       await old.edit(payload).catch(() => null);
       return old;
+    }
+  }
+
+  const messages = await channel.messages.fetch({ limit: 30 }).catch(() => null);
+
+  if (messages) {
+    const botMessages = messages
+      .filter((msg) => {
+        if (msg.author?.id !== channel.client.user.id) return false;
+
+        const content = String(msg.content || "");
+        const title = String(msg.embeds?.[0]?.title || "");
+        const footer = String(msg.embeds?.[0]?.footer?.text || "");
+
+        return (
+          content.includes(markerText) ||
+          title.includes(markerText) ||
+          footer.includes(markerText)
+        );
+      })
+      .sort((a, b) => b.createdTimestamp - a.createdTimestamp);
+
+    const principal = botMessages.first();
+
+    for (const msg of botMessages.values()) {
+      if (principal && msg.id !== principal.id) {
+        await msg.delete().catch(() => {});
+      }
+    }
+
+    if (principal) {
+      await principal.edit(payload).catch(() => null);
+      return principal;
     }
   }
 
@@ -664,12 +697,17 @@ async function updateMetaInterna(client, reason = "auto") {
 .setFooter({ text: `SantaCreators • Meta Interna Semanal • Atualizado automaticamente` })
 .setTimestamp();
 
-const msg = await upsertMessage(dashboardChannel, state.dashboardMessageId, {
-  content: "",
-  embeds: [embed],
-  files: [file],
-  allowedMentions: { parse: [] },
-});
+const msg = await upsertMessage(
+  dashboardChannel,
+  state.dashboardMessageId,
+  {
+    content: "",
+    embeds: [embed],
+    files: [file],
+    allowedMentions: { parse: [] },
+  },
+  "Dashboard — Meta Interna Semanal"
+);
 
     state.dashboardMessageId = msg.id;
   }
@@ -687,11 +725,16 @@ const msg = await upsertMessage(dashboardChannel, state.dashboardMessageId, {
       .setFooter({ text: `SantaCreators • Logs da Meta Interna • Atualizado automaticamente` })
 .setTimestamp();
 
-const msg = await upsertMessage(logChannel, state.logMessageId, {
-  content: "",
-  embeds: [embed],
-  allowedMentions: { parse: [] },
-});
+const msg = await upsertMessage(
+  logChannel,
+  state.logMessageId,
+  {
+    content: "",
+    embeds: [embed],
+    allowedMentions: { parse: [] },
+  },
+  "Logs completos — Meta Interna Semanal"
+);
 
     state.logMessageId = msg.id;
   }
@@ -728,6 +771,7 @@ export async function metaInternaSemanalHandleMessage(message, client) {
 
   if (
     content !== "!metainterna" &&
+    content !== "!metainternea" &&
     content !== "!meta_interna" &&
     content !== "!atualizarmeta"
   ) {
