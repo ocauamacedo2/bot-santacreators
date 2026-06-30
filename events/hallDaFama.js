@@ -2088,6 +2088,50 @@ function cleanHallWinnerLine(line = "") {
     .trim();
 }
 
+function parsePipePlayerOrgWinnerLine(cleanLine = "", cityKey = "nobre", originalLine = "") {
+  const parts = String(cleanLine || "")
+    .split(/\s*\|\s*/g)
+    .map(part => normalizeHallDisplay(part))
+    .filter(Boolean);
+
+  if (parts.length < 3) return null;
+
+  const idIndex = parts.findIndex(part => /^\d{2,}$/.test(part));
+  if (idIndex <= 0) return null;
+
+  const playerName = normalizeHallDisplay(parts[idIndex - 1]);
+  const playerId = normalizeHallDisplay(parts[idIndex]);
+
+  const orgName = parts
+    .slice(idIndex + 1)
+    .find(part => {
+      if (!part) return false;
+      if (/^\d+$/.test(part)) return false;
+      if (looksLikePrizeOnly(part)) return false;
+      if (isInvalidWinnerName(part)) return false;
+      if (normalizeHallKey(part) === normalizeHallKey(playerName)) return false;
+
+      return isKnownOrgName(part) || getManualOrgCityKey(part);
+    });
+
+  if (!playerName) return null;
+  if (!playerId) return null;
+  if (!orgName) return null;
+  if (looksLikePrizeOnly(playerName)) return null;
+  if (isInvalidWinnerName(playerName)) return null;
+  if (looksLikePrizeOnly(orgName)) return null;
+  if (isInvalidWinnerName(orgName)) return null;
+
+  return {
+    type: "player",
+    playerName,
+    playerId,
+    orgName: normalizeOrgDisplayName(orgName),
+    cityKey,
+    rawLine: originalLine
+  };
+}
+
 function cleanRankingPlayerName(value = "") {
   return normalizeHallDisplay(value)
     .replace(/^#\s*/i, "")
@@ -2423,6 +2467,9 @@ function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento")
     const cleanLine = removeOrgBetweenAngles(removeOrgBetweenBraces(cleanLineRaw));
 
     if (!cleanLine) return null;
+
+    const pipePlayerOrgWinner = parsePipePlayerOrgWinnerLine(cleanLine, cityKey, originalLine);
+    if (pipePlayerOrgWinner) return pipePlayerOrgWinner;
 
     const explicitOrgName = extractExplicitOrgNameFromWinnerLine(cleanLine, originalLine);
 
