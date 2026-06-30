@@ -40,13 +40,16 @@ function VIP_hasHandled(i) {
 const VIP_CANAL_ID = "1411814379162308688";
 const VIP_REPROVA_CANAL_ID = "1411819432862285854";
 
-const VIP_MAIN_REGISTER_ID = "vip_menu_registrar";
+const VIP_MAIN_REGISTER_ID = "vip_registro_menu_registrar";
 const VIP_MAIN_FILTER_SOLIC_ID = "vip_menu_solicitados";
 const VIP_MAIN_FILTER_NAOCLIC_ID = "vip_menu_naoclicados";
 const VIP_MAIN_MOTIVO_ID = "vip_menu_motivo";
 
 const VIP_MAIN_REGISTER_IDS = new Set([
   VIP_MAIN_REGISTER_ID,
+
+  // IDs antigos mantidos apenas para compatibilidade com mensagens antigas
+  "vip_menu_registrar",
   "vip_abrir_formulario",
   "vip_abrir_form",
   "vip_menu_abrir_formulario",
@@ -533,7 +536,7 @@ export async function vipRegistroHandleInteraction(interaction, client) {
       const cid = interaction.customId;
       if (isVipMainRegisterId(cid)) {
         if (!isAuth) return interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true }).catch(() => {});
-        const modal = new ModalBuilder().setCustomId("vip_modal_submit").setTitle("💎 Registrar VIP / Rolepass").addComponents(
+const modal = new ModalBuilder().setCustomId("vip_registro_modal_submit").setTitle("💎 Registrar VIP / Rolepass").addComponents(
           new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("vip_nome_id").setLabel("Nome | ID").setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder("Ex: Macedo | 1000")),
           new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("vip_beneficiario_discord").setLabel("ID Discord do beneficiário").setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder("Ex: 660311795327828008")),
           new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("vip_tipo").setLabel("Tipo (Ouro/Prata/Bronze/Rolepass)").setStyle(TextInputStyle.Short).setRequired(true)),
@@ -633,7 +636,10 @@ export async function vipRegistroHandleInteraction(interaction, client) {
     }
 
     if (interaction.isModalSubmit()) {
-      if (interaction.customId === "vip_modal_submit") {
+      if (
+  interaction.customId === "vip_registro_modal_submit" ||
+  interaction.customId === "vip_modal_submit"
+) {
         await interaction.deferReply({ ephemeral: true }).catch(() => {});
 
         console.log("[VIP Registro DEBUG] submit modal VIP:", {
