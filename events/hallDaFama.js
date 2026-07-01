@@ -5573,12 +5573,237 @@ new ButtonBuilder()
     }
   }
 
-  export async function hallDaFamaHandleInteraction(interaction, client) {
-    if (!interaction.guild) return false;
+export async function hallDaFamaHandleInteraction(interaction, client) {
+  if (!interaction.guild) return false;
 
-    // ✅ Botões de revisão manual dos Halls confusos
-    if (
-      interaction.isButton() &&
+  // ================= RANKING PRIVADO — ORG / PLAYER =================
+
+  if (interaction.isButton() && interaction.customId === BTN_RANK_ORG_SEARCH) {
+    const allowed = await ensureRankingAccessOrWL(interaction, "org_search");
+    if (!allowed) return true;
+
+    const modal = new ModalBuilder()
+      .setCustomId(MODAL_RANK_ORG_SEARCH)
+      .setTitle("Pesquisar ORG no Ranking");
+
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId("rank_org_nome")
+          .setLabel("Nome da ORG")
+          .setPlaceholder("Ex: Morro do Sacola")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+          .setMaxLength(50)
+      )
+    );
+
+    await sendRankingPrivateLog(client, interaction, {
+      action: "abriu_modal_pesquisa_org",
+      type: "org"
+    });
+
+    await interaction.showModal(modal);
+    return true;
+  }
+
+  if (interaction.isButton() && interaction.customId.startsWith(BTN_RANK_ORG_NEXT_PREFIX)) {
+    const allowed = await ensureRankingAccessOrWL(interaction, "org_next");
+    if (!allowed) return true;
+
+    await interaction.deferReply({ ephemeral: true });
+
+    const page = Number(interaction.customId.replace(BTN_RANK_ORG_NEXT_PREFIX, "")) || 0;
+    const rankings = loadHallRankings();
+    const result = buildPrivateRankingEmbed(rankings, "org", page);
+
+    await sendRankingPrivateLog(client, interaction, {
+      action: "proxima_pagina",
+      type: "org",
+      page: result.page + 1
+    });
+
+    await interaction.editReply({
+      embeds: [result.embed],
+      components: rankingButtons("org", result.page)
+    });
+
+    return true;
+  }
+
+  if (interaction.isButton() && interaction.customId === BTN_RANK_PLAYER_SEARCH) {
+    const allowed = await ensureRankingAccessOrWL(interaction, "player_search");
+    if (!allowed) return true;
+
+    const modal = new ModalBuilder()
+      .setCustomId(MODAL_RANK_PLAYER_SEARCH)
+      .setTitle("Pesquisar Pessoa no Ranking");
+
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId("rank_player_nome")
+          .setLabel("Nome")
+          .setPlaceholder("Ex: Macedo")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(false)
+          .setMaxLength(30)
+      ),
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId("rank_player_id")
+          .setLabel("ID")
+          .setPlaceholder("Ex: 1000")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(false)
+          .setMaxLength(10)
+      ),
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId("rank_player_cidade")
+          .setLabel("Cidade")
+          .setPlaceholder("Ex: Nobre, Santa, Grande ou Maresia")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(false)
+          .setMaxLength(20)
+      )
+    );
+
+    await sendRankingPrivateLog(client, interaction, {
+      action: "abriu_modal_pesquisa_player",
+      type: "player"
+    });
+
+    await interaction.showModal(modal);
+    return true;
+  }
+
+  if (interaction.isButton() && interaction.customId.startsWith(BTN_RANK_PLAYER_NEXT_PREFIX)) {
+    const allowed = await ensureRankingAccessOrWL(interaction, "player_next");
+    if (!allowed) return true;
+
+    await interaction.deferReply({ ephemeral: true });
+
+    const page = Number(interaction.customId.replace(BTN_RANK_PLAYER_NEXT_PREFIX, "")) || 0;
+    const rankings = loadHallRankings();
+    const result = buildPrivateRankingEmbed(rankings, "player", page);
+
+    await sendRankingPrivateLog(client, interaction, {
+      action: "proxima_pagina",
+      type: "player",
+      page: result.page + 1
+    });
+
+    await interaction.editReply({
+      embeds: [result.embed],
+      components: rankingButtons("player", result.page)
+    });
+
+    return true;
+  }
+
+  if (interaction.isModalSubmit() && interaction.customId === MODAL_RANK_ORG_SEARCH) {
+    await interaction.deferReply({ ephemeral: true });
+
+    const org = interaction.fields.getTextInputValue("rank_org_nome")?.trim();
+
+    const rankings = loadHallRankings();
+    const result = buildPrivateRankingEmbed(rankings, "org", 0, { org });
+
+    await sendRankingPrivateLog(client, interaction, {
+      action: "pesquisou_org",
+      type: "org",
+      org,
+      page: 1
+    });
+
+    await interaction.editReply({
+      embeds: [result.embed],
+      components: rankingButtons("org", result.page)
+    });
+
+    return true;
+  }
+
+  if (interaction.isModalSubmit() && interaction.customId === MODAL_RANK_PLAYER_SEARCH) {
+    const nome = interaction.fields.getTextInputValue("rank_player_nome")?.trim();
+    const id = interaction.fields.getTextInputValue("rank_player_id")?.trim();
+    const cidade = interaction.fields.getTextInputValue("rank_player_cidade")?.trim();
+
+    if (!nome && !id) {
+      return interaction.reply({
+        content: "⚠️ Coloque pelo menos **nome** ou **ID** para buscar.",
+        ephemeral: true
+      });
+    }
+
+    await interaction.deferReply({ ephemeral: true });
+
+    const rankings = loadHallRankings();
+    const result = buildPrivateRankingEmbed(rankings, "player", 0, { nome, id, cidade });
+
+    await sendRankingPrivateLog(client, interaction, {
+      action: "pesquisou_player",
+      type: "player",
+      nome,
+      id,
+      cidade,
+      page: 1
+    });
+
+    await interaction.editReply({
+      embeds: [result.embed],
+      components: rankingButtons("player", result.page)
+    });
+
+    return true;
+  }
+
+  if (interaction.isModalSubmit() && interaction.customId.startsWith(MODAL_RANK_WL_PREFIX)) {
+    await interaction.deferReply({ ephemeral: true });
+
+    const actionType = interaction.customId.replace(MODAL_RANK_WL_PREFIX, "");
+    const nome = interaction.fields.getTextInputValue("rank_wl_nome")?.trim();
+    const id = interaction.fields.getTextInputValue("rank_wl_id")?.trim();
+
+    let member = interaction.member;
+    try {
+      member = await interaction.guild.members.fetch(interaction.user.id);
+    } catch {}
+
+    const result = await applyRankingWL(member, nome, id);
+
+    await sendRankingPrivateLog(client, interaction, {
+      action: "fez_wl_pelo_ranking",
+      type: actionType,
+      nome,
+      id
+    });
+
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(actionType.includes("org") ? BTN_RANK_ORG_SEARCH : BTN_RANK_PLAYER_SEARCH)
+        .setLabel(actionType.includes("org") ? "Pesquisar ORG agora" : "Pesquisar Pessoa agora")
+        .setEmoji("🔎")
+        .setStyle(ButtonStyle.Success)
+    );
+
+    await interaction.editReply({
+      content:
+        `✅ WL processada!\n` +
+        `Nick: \`${result.nick}\`\n` +
+        `Cargo Cidadão: ${result.cidadaoOk ? "✅" : "⚠️"}\n` +
+        `Cargo SEM WL removido: ${result.semWlOk ? "✅" : "⚠️"}\n\n` +
+        `Agora aperta o botão abaixo pra abrir a pesquisa.`,
+      components: [row]
+    });
+
+    return true;
+  }
+
+  // ✅ Botões de revisão manual dos Halls confusos
+  if (
+    interaction.isButton() &&
       (
         interaction.customId.startsWith(BTN_REVIEW_AS_ORG_PREFIX) ||
         interaction.customId.startsWith(BTN_REVIEW_AS_PLAYER_PREFIX) ||
