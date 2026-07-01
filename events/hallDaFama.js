@@ -279,7 +279,7 @@ const HALL_REVIEW_CHANNEL_ID = "1518707314901651576";// Canal para revisão manu
     "320": "nobre",    // VOVO
     "1974": "nobre",   // Dedo
     "4335": "nobre",   // Ryan
-    "119": "nobre",    // Russin
+    // "119": "nobre", // REMOVIDO: ID compartilhado/conflitante entre nomes diferentes
     "34": "nobre",     // Barbie
     "5957": "nobre",   // Abaao
     "1171": "nobre",   // matchucaquentao
@@ -386,6 +386,38 @@ function isForcedIgnoredPaymentOrgName(value = "") {
   if (!key) return false;
 
   return HALL_FORCE_IGNORE_PAYMENT_ORG_NAMES.some(name => normalizeHallKey(name) === key);
+}
+
+const PLAYER_ID_NAME_SPLIT_IDS = [
+  "119"
+];
+
+function isConflictingPlayerId(playerId = "") {
+  return PLAYER_ID_NAME_SPLIT_IDS.includes(String(playerId || "").trim());
+}
+
+function getPlayerIdentityKey(playerId = "", playerName = "") {
+  const id = String(playerId || "").trim();
+  const nameKey = normalizeHallKey(playerName || "");
+
+  if (id && isConflictingPlayerId(id)) {
+    return nameKey ? `idname:${id}:${nameKey}` : `id:${id}`;
+  }
+
+  return id ? `id:${id}` : `name:${nameKey}`;
+}
+
+function getManualPlayerCityKeySmart(playerId = "", playerName = "") {
+  const id = String(playerId || "").trim();
+
+  if (id && isConflictingPlayerId(id)) {
+    return getManualPlayerCityKeyByName(playerName || "");
+  }
+
+  return (
+    getManualPlayerCityKey(id) ||
+    getManualPlayerCityKeyByName(playerName || "")
+  );
 }
 
   function getManualPlayerName(playerId = "", fallbackName = "") {
@@ -567,8 +599,9 @@ function isForcedIgnoredPaymentOrgName(value = "") {
   const BTN_REVIEW_AS_ORG_PREFIX = "hf_review_org_";
   const BTN_REVIEW_AS_PLAYER_PREFIX = "hf_review_player_";
   const BTN_REVIEW_AS_BOTH_PREFIX = "hf_review_both_";
-  const BTN_REVIEW_CITY_PREFIX = "hf_review_city_";
-  const BTN_REVIEW_EVENT_PREFIX = "hf_review_event_";
+const BTN_REVIEW_CITY_PREFIX = "hf_review_city_";
+const BTN_PAYMENT_CITY_PREFIX = "hf_payment_city_";
+const BTN_REVIEW_EVENT_PREFIX = "hf_review_event_";
   const MODAL_REVIEW_EVENT_SUBMIT = "hf_review_event_modal";
 
   // ================= PERSISTÊNCIA =================
@@ -1340,7 +1373,10 @@ function extractPlayerOrgByKnownOrgName(value = "") {
       [normalizeHallKey("Kaique")]: "nobre",
       [normalizeHallKey("sheik")]: "nobre",
       [normalizeHallKey("Guiguxyz")]: "nobre",
-      [normalizeHallKey("Pablo")]: "nobre"
+      [normalizeHallKey("Pablo")]: "nobre",
+      [normalizeHallKey("Victor Getas")]: "nobre",
+      [normalizeHallKey("Victor")]: "nobre",
+      [normalizeHallKey("Russin")]: "grande"
     };
 
     return nameOverrides[key] || null;
@@ -3234,11 +3270,17 @@ function isAmbiguousHallWinner(winner) {
   }
 
   function getPlayerRankingKey(player) {
-    if (player.playerId) {
-      return `id:${player.playerId}`;
+    const identityKey = getPlayerIdentityKey(player.playerId || "", player.playerName || "");
+
+    if (identityKey.startsWith("idname:")) {
+      return `${identityKey}:${player.cityKey || "sem-cidade"}`;
     }
 
-    return `name:${normalizeHallKey(player.playerName)}:${player.cityKey}`;
+    if (identityKey.startsWith("id:")) {
+      return identityKey;
+    }
+
+    return `${identityKey}:${player.cityKey || "sem-cidade"}`;
   }
   function getOrgRankingKey(orgName = "", cityKey = "nobre") {
     const finalOrgName = normalizeOrgDisplayName(orgName);
@@ -3406,8 +3448,7 @@ function addPlayerRankingPoint(rankings, playerWinner, hallMeta) {
   if (looksLikePrizeOnly(playerName)) return;
 
     const cityKey =
-      getManualPlayerCityKey(playerId) ||
-      getManualPlayerCityKeyByName(playerName) ||
+      getManualPlayerCityKeySmart(playerId, playerName) ||
       playerWinner.cityKey ||
       hallMeta.cityKey ||
       "nobre";
@@ -3620,11 +3661,12 @@ function addPlayerRankingPoint(rankings, playerWinner, hallMeta) {
       text.includes(CITIES.maresia.roleId)
     ) return "maresia";
 
-    const byId = getManualPlayerCityKey(winner?.playerId || "");
-    if (byId) return byId;
+    const bySmartIdentity = getManualPlayerCityKeySmart(
+      winner?.playerId || "",
+      winner?.playerName || ""
+    );
 
-    const byName = getManualPlayerCityKeyByName(winner?.playerName || "");
-    if (byName) return byName;
+    if (bySmartIdentity) return bySmartIdentity;
 
     return null;
   }
@@ -3657,9 +3699,7 @@ function addPlayerRankingPoint(rankings, playerWinner, hallMeta) {
     const fixedPlayerId = fixedIdentity.playerId;
     const fixedPlayerName = fixedIdentity.playerName;
 
-    return fixedPlayerId
-      ? `id:${String(fixedPlayerId).trim()}`
-      : `name:${normalizeHallKey(fixedPlayerName)}`;
+    return getPlayerIdentityKey(fixedPlayerId, fixedPlayerName);
   }
 
   function getPaymentEventKey({ eventName, eventDateKey, cityKey, playerId, playerName }) {
@@ -3786,15 +3826,26 @@ function addPlayerRankingPoint(rankings, playerWinner, hallMeta) {
     const ch = await client.channels.fetch(PAYMENT_CITY_REVIEW_CHANNEL_ID).catch(() => null);
     if (!ch || !ch.isTextBased()) return;
 
-    await ch.send({
-      content:
-        `⚠️ **Pagamento sem CDD identificado**\n\n` +
-        `👤 Player: **${winner.playerName}** ${winner.playerId ? `| \`${winner.playerId}\`` : ""}\n` +
-        `🏁 Evento: **${eventName}**\n` +
-        `📅 Data do Evento: **${eventDateKey}**\n` +
-        `🔗 Registro: ${getMessageJumpUrl(message)}\n\n` +
-        `Macedo, decide a CDD desse player uma vez só. Depois coloca o ID dele no \`PLAYER_CITY_OVERRIDES\` pra não perguntar de novo.`
-    }).catch(() => {});
+    const row = new ActionRowBuilder().addComponents(
+  Object.entries(CITIES).map(([cityKey, city]) =>
+    new ButtonBuilder()
+      .setCustomId(`${BTN_PAYMENT_CITY_PREFIX}${playerReviewKey}:${cityKey}`)
+      .setLabel(city.label.replace("Cidade ", ""))
+      .setEmoji(city.emoji)
+      .setStyle(ButtonStyle.Secondary)
+  )
+);
+
+await ch.send({
+  content:
+    `⚠️ **Pagamento sem CDD identificado**\n\n` +
+    `👤 Player: **${winner.playerName}** ${winner.playerId ? `| \`${winner.playerId}\`` : ""}\n` +
+    `🏁 Evento: **${eventName}**\n` +
+    `📅 Data do Evento: **${eventDateKey}**\n` +
+    `🔗 Registro: ${getMessageJumpUrl(message)}\n\n` +
+    `Escolha a cidade correta abaixo. O registro original será editado automaticamente.`,
+  components: [row]
+}).catch(() => {});
   }
 
   async function addPaymentEventsToPlayerRankings(rankings, client) {
@@ -6075,6 +6126,88 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
       }).catch(() => {});
 
       await interaction.editReply(`✅ Revisão resolvida como **${asBoth ? "ORG + PESSOA" : asOrg ? "ORG" : "PESSOA"}** e ranking atualizado.`);
+      return true;
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith(BTN_PAYMENT_CITY_PREFIX)) {
+      if (!hasPermission(interaction.member, interaction.user.id)) {
+        return interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
+      }
+
+      await interaction.deferReply({ ephemeral: true });
+
+      const raw = interaction.customId.slice(BTN_PAYMENT_CITY_PREFIX.length);
+      const parts = raw.split(":");
+      const cityKey = parts.pop();
+      const playerReviewKey = parts.join(":");
+
+      if (!CITIES[cityKey]) {
+        return interaction.editReply("❌ Cidade inválida.");
+      }
+
+      const rankings = loadHallRankings();
+      const pending = rankings.pendingPaymentCityReview?.[playerReviewKey];
+
+      if (!pending) {
+        return interaction.editReply("⚠️ Essa revisão já foi resolvida ou não existe mais.");
+      }
+
+      const paymentChannel = await client.channels.fetch(PAYMENT_EVENTS_CHANNEL_ID).catch(() => null);
+      const paymentMessage = paymentChannel?.isTextBased()
+        ? await paymentChannel.messages.fetch(pending.messageId).catch(() => null)
+        : null;
+
+      if (paymentMessage?.embeds?.[0]) {
+        const embed = EmbedBuilder.from(paymentMessage.embeds[0]);
+        const fields = Array.isArray(embed.data.fields) ? [...embed.data.fields] : [];
+
+        const alreadyHasCityField = fields.some(field => {
+          const fieldName = normalizeHallName(field.name || "");
+          return fieldName.includes("cidade") || fieldName.includes("cdd");
+        });
+
+        if (!alreadyHasCityField) {
+          fields.push({
+            name: "🏙️ Cidade / CDD",
+            value: `${CITIES[cityKey].emoji} ${CITIES[cityKey].label}\nMarcado por: <@${interaction.user.id}>`,
+            inline: false
+          });
+        }
+
+        embed.setFields(fields);
+
+        await paymentMessage.edit({
+          embeds: [embed],
+          components: paymentMessage.components
+        }).catch(() => {});
+      }
+
+      delete rankings.pendingPaymentCityReview[playerReviewKey];
+      delete rankings.reviewedPaymentMessages[pending.messageId];
+
+      rankings.manualPaymentCityReviews ??= {};
+      rankings.manualPaymentCityReviews[playerReviewKey] = {
+        ...pending,
+        cityKey,
+        cityName: CITIES[cityKey].label,
+        reviewedBy: interaction.user.id,
+        reviewedAt: Date.now()
+      };
+
+      rankings.lastUpdatedAt = Date.now();
+      saveHallRankings(rankings);
+
+      await interaction.message.edit({
+        components: [],
+        content:
+          `✅ **Pagamento revisado como ${CITIES[cityKey].label}**\n\n` +
+          `👤 Player: **${pending.playerName}** ${pending.playerId ? `| \`${pending.playerId}\`` : ""}\n` +
+          `🏁 Evento: **${pending.eventName}**\n` +
+          `🔗 Registro: ${pending.jumpUrl}\n\n` +
+          `Revisado por <@${interaction.user.id}>.`
+      }).catch(() => {});
+
+      await interaction.editReply("✅ Cidade aplicada no registro original. Rode a varredura novamente para contabilizar.");
       return true;
     }
 
