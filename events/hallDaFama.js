@@ -265,7 +265,45 @@ const HALL_REVIEW_CHANNEL_ID = "1518707314901651576";// Canal para revisão manu
     "799": "nobre",    // Joker / Sarah
     "16634": "nobre",  // Kaique
     "1854": "nobre",   // sheik
-    "1087": "nobre"    // Nicolas / PRN / Sheik antigo
+    "1087": "nobre",   // Nicolas / PRN / Sheik antigo
+
+    "540": "nobre",    // Royal oficial
+    "239": "nobre",    // Royal antigo -> junta no 540
+    "756": "nobre",    // Russo
+    "175943": "nobre", // Gigi
+    "34444": "nobre",  // Japa
+    "36168": "nobre",  // Crazy Fps
+    "32039": "nobre",  // Tio Venuz
+
+    "4460": "nobre",   // Gago
+    "320": "nobre",    // VOVO
+    "1974": "nobre",   // Dedo
+    "4335": "nobre",   // Ryan
+    "119": "nobre",    // Russin
+    "34": "nobre",     // Barbie
+    "5957": "nobre",   // Abaao
+    "1171": "nobre",   // matchucaquentao
+    "2438": "nobre",   // Screw
+    "9170": "nobre",   // miguel
+    "16814": "nobre",  // nan
+    "6260": "nobre",   // anonima
+    "138943": "nobre", // evandri
+    "298": "nobre",    // flash
+    "3658": "nobre",   // Barbosa
+    "4639": "nobre",   // Haridade
+    "236396": "nobre", // luis
+    "1397": "nobre",   // Popilo
+    "23352": "nobre",  // Lua
+    "114792": "nobre", // Pietro Melodia
+    "1541": "nobre",   // enrico
+    "2486": "nobre",   // Maciel
+    "96836": "nobre",  // rafinha
+    "1756": "nobre",   // Hitmaker
+    "2263": "nobre",   // Scott
+    "732": "nobre",    // Gnesis
+    "2232": "nobre",   // otavio
+    "18855": "nobre",  // player antigo
+    "1168": "nobre"    // guxta
   };
 
 const PLAYER_NAME_OVERRIDES = {
@@ -274,8 +312,81 @@ const PLAYER_NAME_OVERRIDES = {
   "6641": "Pablo",
   "2593": "Miri",
   "16634": "Kaique",
-  "1854": "sheik"
+  "1854": "sheik",
+  "540": "Royal",
+  "239": "Royal",
+  "125": "Royal",
+  "34": "Barbie"
 };
+
+const HALL_FORCE_PLAYER_NAMES = [
+  "Wellington",
+  "Carlinhos Balada",
+  "Menor Quente",
+  "Tropadu7",
+  "Japa",
+  "Crazy Fps",
+  "Tio Venuz",
+  "hugo",
+  "revolta",
+  "messias",
+  "Russo",
+  "Gigi",
+  "Jvgoat",
+  "Mk yagami",
+  "Turtuguita",
+  "SEEVEN",
+  "MANCHA",
+  "luix7",
+  "flash",
+  "Barbi",
+  "Barbie",
+  "Gago",
+  "VOVO",
+  "Dedo",
+  "Ryan",
+  "Russin",
+  "Abaao",
+  "matchucaquentao",
+  "Screw",
+  "miguel",
+  "nan",
+  "anonima",
+  "evandri",
+  "Barbosa",
+  "Haridade",
+  "luis",
+  "Popilo",
+  "Lua",
+  "Pietro Melodia",
+  "enrico",
+  "Maciel",
+  "rafinha",
+  "Hitmaker",
+  "Scott",
+  "Gnesis",
+  "otavio",
+  "guxta"
+];
+
+const HALL_FORCE_IGNORE_PAYMENT_ORG_NAMES = [
+  "Morro do Sacola",
+  "Morro-do-Sacola"
+];
+
+function isForcedPlayerName(value = "") {
+  const key = normalizeHallKey(value);
+  if (!key) return false;
+
+  return HALL_FORCE_PLAYER_NAMES.some(name => normalizeHallKey(name) === key);
+}
+
+function isForcedIgnoredPaymentOrgName(value = "") {
+  const key = normalizeHallKey(value);
+  if (!key) return false;
+
+  return HALL_FORCE_IGNORE_PAYMENT_ORG_NAMES.some(name => normalizeHallKey(name) === key);
+}
 
   function getManualPlayerName(playerId = "", fallbackName = "") {
     return PLAYER_NAME_OVERRIDES[String(playerId || "").trim()] || fallbackName;
@@ -297,6 +408,17 @@ const PLAYER_NAME_OVERRIDES = {
       return {
         playerId: "1854",
         playerName: "sheik"
+      };
+    }
+
+    if (
+      id === "125" ||
+      id === "239" ||
+      nameKey === normalizeHallKey("Royal")
+    ) {
+      return {
+        playerId: "540",
+        playerName: "Royal"
       };
     }
 
@@ -1110,7 +1232,7 @@ return {
     return foundOrg ? normalizeOrgDisplayName(foundOrg.raw) : "";
   }
 
-  function extractPlayerOrgByKnownOrgName(value = "") {
+function extractPlayerOrgByKnownOrgName(value = "") {
     const clean = normalizeHallDisplay(value);
     const orgName = findKnownOrgInsideWinnerName(clean);
     if (!orgName) return null;
@@ -1125,7 +1247,7 @@ return {
       .map(part => normalizeHallDisplay(part))
       .filter(Boolean);
 
-    const playerPart = parts.find(part => {
+    let playerPart = parts.find(part => {
       const partKey = normalizeHallKey(part);
       if (!partKey) return false;
       if (partKey === orgKey) return false;
@@ -1136,11 +1258,19 @@ return {
       return true;
     });
 
+    if (!playerPart && cleanKey.includes(orgKey)) {
+      playerPart = clean
+        .replace(new RegExp(`\\b${orgName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i"), "")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+
     const playerName = normalizeHallDisplay(playerPart || "");
 
     if (!playerName) return null;
     if (looksLikePrizeOnly(playerName)) return null;
     if (isInvalidWinnerName(playerName)) return null;
+    if (isKnownOrgName(playerName)) return null;
 
     return {
       playerName,
@@ -2227,6 +2357,14 @@ function cleanRankingPlayerName(value = "") {
       if (clean.includes("nosso evento")) return false;
       if (clean.includes("anunciamos")) return false;
       if (clean.includes("muito orgulho")) return false;
+      if (clean.includes("campeao absoluto")) return false;
+      if (clean.includes("desafiante implacavel")) return false;
+      if (clean.includes("sobrevivente de elite")) return false;
+      if (clean.includes("status no rp")) return false;
+      if (clean.includes("lenda viva")) return false;
+      if (clean.includes("rival direto")) return false;
+      if (clean.includes("nome forte no submundo")) return false;
+      if (clean.includes("o evento pvp na creators colocou")) return false;
 
       const cleanParts = cleanWinner
         .split(/\s*\|\s*|\s*<\s*|\s*:\s*/g)
@@ -2346,6 +2484,14 @@ if (normalized.includes("muito orgulho")) return true;
 if (normalized === "organizacao") return true;
 if (normalized === "organização") return true;
 if (/^top\s*\d+$/i.test(normalized)) return true;
+if (normalized.includes("campeao absoluto")) return true;
+if (normalized.includes("desafiante implacavel")) return true;
+if (normalized.includes("sobrevivente de elite")) return true;
+if (normalized.includes("status no rp")) return true;
+if (normalized.includes("o evento pvp na creators colocou")) return true;
+if (normalized.includes("dominou o campo de batalha")) return true;
+if (normalized.includes("chegou ate o fim")) return true;
+if (normalized.includes("resistiu adaptou se")) return true;
 
 return false;
   }
@@ -2609,8 +2755,22 @@ function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento")
       };
     }
 
+    const shouldForceAsPlayer = isForcedPlayerName(nameOnly);
+
+    if (shouldForceAsPlayer) {
+      const fixedIdentity = resolvePlayerIdentityOverride("", nameOnly);
+
+      return {
+        type: "player",
+        playerName: fixedIdentity.playerName || normalizeHallDisplay(nameOnly),
+        playerId: fixedIdentity.playerId || "",
+        orgName: normalizeOrgDisplayName(braceOrgName || angleOrgName || ""),
+        cityKey,
+        rawLine: originalLine
+      };
+    }
+
     const shouldCountAsOrg =
-      isOrgEventName(eventName, cityKey) ||
       isKnownOrgName(nameOnly);
 
     if (shouldCountAsOrg) {
@@ -3699,6 +3859,21 @@ function addPlayerRankingPoint(rankings, playerWinner, hallMeta) {
           rankings.reviewedPaymentMessages[message.id] = {
             skipped: true,
             reason: "ganhador_invalido",
+            at: Date.now()
+          };
+          continue;
+        }
+
+        if (
+          isForcedIgnoredPaymentOrgName(winner.playerName) ||
+          isExactKnownOrgName(winner.playerName)
+        ) {
+          skipped++;
+          rankings.reviewedPaymentMessages[message.id] = {
+            skipped: true,
+            reason: "pagamento_com_nome_de_org_nao_conta_como_player",
+            playerName: winner.playerName,
+            playerId: winner.playerId || "",
             at: Date.now()
           };
           continue;
