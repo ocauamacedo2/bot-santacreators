@@ -13,6 +13,7 @@ import {
   TextInputBuilder,
   TextInputStyle,
   WebhookClient,
+  InteractionType
 } from "discord.js";
 
   import { dashEmit } from "../utils/dashHub.js";
@@ -4228,8 +4229,12 @@ async function upsertSingleRankingMessage(channel, payload) {
 
   const finalPayload =
     typeof payload === "string"
-      ? { content: payload.slice(0, 2000) }
-      : { content: "", embeds: payload.embeds || [] };
+      ? { content: payload.slice(0, 2000), components: [] }
+      : {
+          content: payload.content || "",
+          embeds: payload.embeds || [],
+          components: payload.components || []
+        };
 
   if (botMessage) {
     await botMessage.edit(finalPayload).catch(() => {});
