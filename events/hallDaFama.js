@@ -26,7 +26,32 @@ const HALL_PLAYERS_RANKING_CHANNEL_ID = "1518696133071863838"; // Ranking de Pes
 const HALL_ORGS_RANKING_WEBHOOK_URL = "https://discord.com/api/webhooks/1519547838957359155/TjDA5C-QquaAag2YBKqhfwR1szql7hooy-m53EAto6O37o3ZhP-PBIEduH64QodLBLGD";
 const HALL_PLAYERS_RANKING_WEBHOOK_URL = "";
 
-const HALL_REVIEW_CHANNEL_ID = "1518707314901651576"; // Canal para revisão manual de Halls confusos
+const RANKING_PRIVATE_LOG_CHANNEL_ID = "1521946409207730347";
+
+const RANKING_ROLE_CIDADAO = "1262978759922028575";
+const RANKING_ROLE_SEM_WL = "1430984036972494908";
+
+const RANKING_FREE_USERS = [
+  "660311795327828008",
+  "1262262852949905408"
+];
+
+const RANKING_FREE_ROLES = [
+  "1262262852949905408",
+  "1352408327983861844",
+  "1262262852949905409",
+  "1352407252216184833"
+];
+
+const BTN_RANK_ORG_SEARCH = "hf_rank_org_search";
+const BTN_RANK_ORG_NEXT_PREFIX = "hf_rank_org_next:";
+const BTN_RANK_PLAYER_SEARCH = "hf_rank_player_search";
+const BTN_RANK_PLAYER_NEXT_PREFIX = "hf_rank_player_next:";
+const MODAL_RANK_ORG_SEARCH = "hf_rank_org_search_modal";
+const MODAL_RANK_PLAYER_SEARCH = "hf_rank_player_search_modal";
+const MODAL_RANK_WL_PREFIX = "hf_rank_wl:";
+
+const HALL_REVIEW_CHANNEL_ID = "1518707314901651576";// Canal para revisão manual de Halls confusos
   const PAYMENT_EVENTS_CHANNEL_ID = "1387922662134775818"; // Canal dos botões/registros de pagamento de evento
   const PAYMENT_CITY_REVIEW_CHANNEL_ID = "1518707314901651576"; // Canal para decidir CDD de pagamento sem cidade
   const HALL_SCAN_PROGRESS_CHANNEL_ID = "1518723758574276750"; // Painel auto-editável do progresso da varredura
@@ -4368,17 +4393,299 @@ function buildOrgsRankingEmbed(rankings) {
       "#5865f2"
     );
   }
+function sanitizeRankingNick(nome, id) {
+  const base = `${String(nome || "").trim()} | ${String(id || "").trim()}`.replace(/\s+/g, " ");
+  return base.length <= 32 ? base : base.slice(0, 32);
+}
 
+function getIdentityFromMemberNick(member) {
+  const nick = member?.nickname || member?.displayName || "";
+  const match = String(nick).match(/^(.+?)\s*\|\s*(\d{1,10})$/);
+
+  if (!match) return null;
+
+  return {
+    nome: match[1].trim(),
+    id: match[2].trim()
+  };
+}
+
+function canUseRankingPrivate(member, userId) {
+  if (!member) return false;
+  if (RANKING_FREE_USERS.includes(userId)) return true;
+  if (member.roles.cache.some(role => RANKING_FREE_ROLES.includes(role.id))) return true;
+
+  const hasCidadao = member.roles.cache.has(RANKING_ROLE_CIDADAO);
+  const hasSemWL = member.roles.cache.has(RANKING_ROLE_SEM_WL);
+
+  return hasCidadao && !hasSemWL;
+}
+
+async function setRankingRoleSafe(member, roleId) {
+  try {
+    const role = member.guild.roles.cache.get(roleId) || await member.guild.roles.fetch(roleId);
+    if (!role) return false;
+    await member.roles.add(role);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function removeRankingRoleSafe(member, roleId) {
+  try {
+    const role = member.guild.roles.cache.get(roleId) || await member.guild.roles.fetch(roleId);
+    if (!role) return true;
+    await member.roles.remove(role);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function applyRankingWL(member, nome, id) {
+  const nick = sanitizeRankingNick(nome, id);
+
+  let nickOk = false;
+  let cidadaoOk = false;
+  let semWlOk = false;
+
+  try {
+    if (member?.manageable) {
+      await member.setNickname(nick);
+      nickOk = true;
+    }
+  } catch {}
+
+  cidadaoOk = await setRankingRoleSafe(member, RANKING_ROLE_CIDADAO);
+  semWlOk = await removeRankingRoleSafe(member, RANKING_ROLE_SEM_WL);
+
+  return { nick, nickOk, cidadaoOk, semWlOk };
+}
+
+async function sendRankingPrivateLog(client, interaction, data = {}) {
+  const ch = await client.channels.fetch(RANKING_PRIVATE_LOG_CHANNEL_ID).catch(() => null);
+  if (!ch?.isTextBased()) return;
+
+  const user = interaction.user;
+  const member = interaction.member;
+  const now = Math.floor(Date.now() / 1000);
+
+  const embed = new EmbedBuilder()
+    .setTitle("🔎 Log de Consulta Privada — Ranking Hall")
+    .setColor("#ff009a")
+    .setThumbnail(user.displayAvatarURL({ extension: "png", size: 256 }))
+    .addFields(
+      {
+        name: "👤 Usuário",
+        value:
+          `${user} (**${user.tag}**)\n` +
+          `🆔 \`${user.id}\`\n` +
+          `🔗 https://discord.com/users/${user.id}`,
+        inline: false
+      },
+      {
+        name: "📌 Ação",
+        value: `\`${data.action || "consulta"}\``,
+        inline: true
+      },
+      {
+        name: "📊 Tipo",
+        value: `\`${data.type || "ranking"}\``,
+        inline: true
+      },
+      {
+        name: "📄 Página",
+        value: `\`${data.page ?? "N/A"}\``,
+        inline: true
+      },
+      {
+        name: "🔍 Pesquisa",
+        value:
+          `Nome: \`${data.nome || "—"}\`\n` +
+          `ID: \`${data.id || "—"}\`\n` +
+          `Cidade: \`${data.cidade || "—"}\`\n` +
+          `ORG: \`${data.org || "—"}\``,
+        inline: false
+      },
+      {
+        name: "🎭 Cargos",
+        value:
+          `Cidadão: \`${member?.roles?.cache?.has(RANKING_ROLE_CIDADAO) ? "sim" : "não"}\`\n` +
+          `SEM WL: \`${member?.roles?.cache?.has(RANKING_ROLE_SEM_WL) ? "sim" : "não"}\``,
+        inline: true
+      },
+      {
+        name: "🕒 Horário",
+        value: `<t:${now}:F> • <t:${now}:R>`,
+        inline: false
+      }
+    )
+    .setFooter({ text: `SantaCreators • ${interaction.guild?.name || "Guild"}` });
+
+  await ch.send({ embeds: [embed], allowedMentions: { parse: [] } }).catch(() => {});
+}
+
+function rankingButtons(type, page = 0) {
+  const isOrg = type === "org";
+
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(isOrg ? BTN_RANK_ORG_SEARCH : BTN_RANK_PLAYER_SEARCH)
+        .setLabel(isOrg ? "Pesquisar ORG" : "Pesquisar Pessoa")
+        .setEmoji("🔎")
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId(`${isOrg ? BTN_RANK_ORG_NEXT_PREFIX : BTN_RANK_PLAYER_NEXT_PREFIX}${page + 1}`)
+        .setLabel("Próxima página")
+        .setEmoji("➡️")
+        .setStyle(ButtonStyle.Secondary)
+    )
+  ];
+}
+
+function getSortedRankingList(rankings, type) {
+  const source = type === "org" ? rankings.orgs : rankings.players;
+
+  return Object.values(source || {})
+    .filter(Boolean)
+    .sort((a, b) => Number(b.total || 0) - Number(a.total || 0));
+}
+
+function formatRankingLine(item, pos, type) {
+  if (type === "org") {
+    return `🏆 **TOP ${pos} — ${item.name}**
+🌆 ${item.cityName || "Cidade Nobre"}
+🏆 Vitórias: **${item.total || 0}**
+🎮 ${formatRankingEventBreakdown(item.events || {})}`;
+  }
+
+  const idText = item.playerId ? `\n🆔 ID: **${item.playerId}**` : "";
+
+  return `⭐ **TOP ${pos} — ${item.name}**${idText}
+🌆 ${item.cityName || "Cidade Nobre"}
+🏆 Vitórias: **${item.total || 0}**
+🎮 ${formatRankingEventBreakdown(item.events || {})}`;
+}
+
+function buildPrivateRankingEmbed(rankings, type, page = 0, filters = {}) {
+  const pageSize = 10;
+  const list = getSortedRankingList(rankings, type);
+
+  let filtered = list;
+
+  if (type === "org" && filters.org) {
+    const q = normalizeHallKey(filters.org);
+    filtered = filtered.filter(item => normalizeHallKey(item.name || "").includes(q));
+  }
+
+  if (type === "player") {
+    const nome = normalizeHallKey(filters.nome || "");
+    const id = String(filters.id || "").trim();
+    const cidade = normalizeHallKey(filters.cidade || "");
+
+    filtered = filtered.filter(item => {
+      const okNome = !nome || normalizeHallKey(item.name || "").includes(nome);
+      const okId = !id || String(item.playerId || "").trim() === id;
+      const okCidade = !cidade || normalizeHallKey(item.cityName || item.cityKey || "").includes(cidade);
+      return okNome && okId && okCidade;
+    });
+  }
+
+  const maxPage = Math.max(0, Math.ceil(filtered.length / pageSize) - 1);
+  const safePage = Math.min(Math.max(Number(page || 0), 0), maxPage);
+  const start = safePage * pageSize;
+  const pageItems = filtered.slice(start, start + pageSize);
+
+  const lines = pageItems.map((item, index) => {
+    return formatRankingLine(item, start + index + 1, type);
+  });
+
+  const title = type === "org"
+    ? "🏆 Consulta Privada — Ranking de ORGs"
+    : "👑 Consulta Privada — Ranking de Pessoas";
+
+  return {
+    embed: buildRankingEmbed(
+      title,
+      "Resultado visível somente para você.",
+      `📄 Página: **${safePage + 1}/${maxPage + 1}**
+🔎 Resultados encontrados: **${filtered.length}**`,
+      lines.length ? lines : ["❌ Nenhum resultado encontrado com esses filtros."],
+      type === "org" ? "#f1c40f" : "#5865f2"
+    ),
+    page: safePage,
+    maxPage,
+    total: filtered.length
+  };
+}
+
+async function ensureRankingAccessOrWL(interaction, actionType) {
+  let member = interaction.member;
+
+  try {
+    member = await interaction.guild.members.fetch(interaction.user.id);
+  } catch {}
+
+  if (canUseRankingPrivate(member, interaction.user.id)) {
+    return true;
+  }
+
+  const nickIdentity = getIdentityFromMemberNick(member);
+
+  if (nickIdentity) {
+    await applyRankingWL(member, nickIdentity.nome, nickIdentity.id);
+
+    try {
+      member = await interaction.guild.members.fetch(interaction.user.id);
+    } catch {}
+
+    if (canUseRankingPrivate(member, interaction.user.id)) {
+      return true;
+    }
+  }
+
+  const modal = new ModalBuilder()
+    .setCustomId(`${MODAL_RANK_WL_PREFIX}${actionType}`)
+    .setTitle("Fazer WL para acessar");
+
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("rank_wl_nome")
+        .setLabel("Seu nome")
+        .setPlaceholder("Ex: Macedo")
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setMaxLength(25)
+    ),
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("rank_wl_id")
+        .setLabel("Seu ID")
+        .setPlaceholder("Ex: 1000")
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setMaxLength(10)
+    )
+  );
+
+  await interaction.showModal(modal);
+  return false;
+}
 async function publishHallRankings(client, rankings) {
   const orgsChannel = await client.channels.fetch(HALL_ORGS_RANKING_CHANNEL_ID).catch(() => null);
   const playersChannel = await client.channels.fetch(HALL_PLAYERS_RANKING_CHANNEL_ID).catch(() => null);
 
   const orgsPayload = {
-    embeds: [buildOrgsRankingEmbed(rankings)]
+    embeds: [buildOrgsRankingEmbed(rankings)],
+    components: rankingButtons("org", 0)
   };
 
   const playersPayload = {
-    embeds: [buildPlayersRankingEmbed(rankings)]
+    embeds: [buildPlayersRankingEmbed(rankings)],
+    components: rankingButtons("player", 0)
   };
 
   await upsertSingleRankingMessage(orgsChannel, orgsPayload);

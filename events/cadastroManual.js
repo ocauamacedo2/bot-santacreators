@@ -19,6 +19,9 @@ const CARGO_CIDADAO = '1262978759922028575';  // role "Cidadão"
 // cargo temporário que a pessoa tem ANTES do cadastro e deve ser removido DEPOIS de enviar o modal:
 const CARGO_TEMP_REMOVER = '1430984036972494908';
 
+// canal onde ficam as logs de alteração de nickname
+const NICKNAME_HISTORY_CHANNEL_ID = '1377830103324688457';
+
 const GIF_BANNER_SETARCARGO_CIDADAO = 'https://media.discordapp.net/attachments/1362477839944777889/1384245215249825832/standard_2rss.gif?ex=68fb2311&is=68f9d191&hm=eb8c8c6bc6fbf723af69152eb5fff67c0a39eea8c38ff7445b300befea2d93b7&=&width=515&height=66';
 
 // customId fixo pra localizar/remover mensagens antigas do bot
@@ -41,6 +44,7 @@ const ALLOWED_CLEAR_ROLES = [
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const BACKUP_FILE = path.resolve(__dirname, "../data/cadastro_backup.json");
+const CADASTRO_USERS_FILE = path.resolve(__dirname, "../data/cadastro_users.json");
 
 // ====== UTILS ======
 function sanitizeNick(nome, id) {
@@ -107,6 +111,131 @@ function loadBackup() {
   } catch {
     return null;
   }
+}
+
+function loadCadastroUsers() {
+  try {
+    if (!fs.existsSync(CADASTRO_USERS_FILE)) return {};
+    return JSON.parse(fs.readFileSync(CADASTRO_USERS_FILE, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function saveCadastroUsers(data) {
+  try {
+    const dir = path.dirname(CADASTRO_USERS_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(CADASTRO_USERS_FILE, JSON.stringify(data, null, 2));
+  } catch (e) {
+    console.error("Erro ao salvar histórico de cadastro:", e);
+  }
+}
+
+function saveCadastroUser(member, nome, id) {
+  if (!member?.id || !nome || !id) return;
+
+  const data = loadCadastroUsers();
+
+  data[member.id] = {
+    userId: member.id,
+    username: member.user?.tag || member.user?.username || "",
+    nome: String(nome || "").trim(),
+    id: String(id || "").trim(),
+    nick: sanitizeNick(nome, id),
+    updatedAt: Date.now()
+  };
+
+  saveCadastroUsers(data);
+}
+
+function extractNomeIdFromNick(nick = "") {
+  const match = String(nick || "").match(/^(.+?)\s*\|\s*(\d{1,10})$/);
+  if (!match) return null;
+
+  return {
+    nome: match[1].trim(),
+    id: match[2].trim()
+  };
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function findCadastroIdentityInNicknameLogs(client, guild, userId) {
+  try {
+    const channel = await guild.channels.fetch(NICKNAME_HISTORY_CHANNEL_ID).catch(() => null);
+    if (!channel?.isTextBased()) return null;
+
+    let before = undefined;
+
+    for (let page = 0; page < 10; page++) {
+      const messages = await channel.messages.fetch({
+        limit: 100,
+        ...(before ? { before } : {})
+      }).catch(() => null);
+
+      if (!messages?.size) break;
+
+      for (const msg of messages.values()) {
+        const embed = msg.embeds?.[0];
+        if (!embed) continue;
+
+        const allText = [
+          embed.title || '',
+          embed.description || '',
+          ...(embed.fields || []).flatMap(field => [field.name || '', field.value || ''])
+        ].join('\n');
+
+        if (!allText.includes(userId)) continue;
+
+        const depoisField = embed.fields?.find(field =>
+          String(field.name || '').toLowerCase().includes('depois')
+        );
+
+        const depoisValue = depoisField?.value || '';
+        const identity = extractNomeIdFromNick(depoisValue.replace(/`/g, '').trim());
+
+        if (identity?.nome && identity?.id) {
+          return identity;
+        }
+      }
+
+      before = messages.last()?.id;
+      if (!before) break;
+    }
+
+    return null;
+  } catch (e) {
+    console.warn('[cadastroManual] Falha ao buscar histórico nas logs:', e?.message || e);
+    return null;
+  }
+}
+
+async function forceOnlyCidadao(member) {
+  const cidadaoOk = await addRoleSafe(member, CARGO_CIDADAO);
+  const semWlOk = await removeRoleSafe(member, CARGO_TEMP_REMOVER);
+
+  await sleep(1500);
+
+  try {
+    member = await member.guild.members.fetch(member.id);
+  } catch {}
+
+  let semWlFinalOk = true;
+
+  if (member.roles.cache.has(CARGO_TEMP_REMOVER)) {
+    semWlFinalOk = await removeRoleSafe(member, CARGO_TEMP_REMOVER);
+  }
+
+  return {
+    cidadaoOk,
+    semWlOk,
+    semWlFinalOk,
+    hasCidadao: member.roles.cache.has(CARGO_CIDADAO),
+    hasSemWl: member.roles.cache.has(CARGO_TEMP_REMOVER)
+  };
 }
 
 // Remove mensagens antigas do bot no canal que tenham o botão esperado
@@ -180,6 +309,75 @@ async function postarMensagemCadastro(canal) {
 
 export async function cadastroManualOnReady(client) {
   // console.log(`🤖 Bot iniciado como ${client.user.tag}`);
+
+  if (!client.__cadastroAutoRestoreWired) {
+    client.__cadastroAutoRestoreWired = true;
+
+    client.on("guildMemberAdd", async (member) => {
+      try {
+        await sleep(4000);
+
+        member = await member.guild.members.fetch(member.id).catch(() => member);
+
+        const data = loadCadastroUsers();
+        let saved = data[member.id];
+
+        if (!saved?.nome || !saved?.id) {
+          const foundInLogs = await findCadastroIdentityInNicknameLogs(client, member.guild, member.id);
+
+          if (foundInLogs?.nome && foundInLogs?.id) {
+            saveCadastroUser(member, foundInLogs.nome, foundInLogs.id);
+
+            saved = {
+              nome: foundInLogs.nome,
+              id: foundInLogs.id
+            };
+          }
+        }
+
+        if (!saved?.nome || !saved?.id) {
+          console.log("[cadastroManual] Usuário entrou, mas não tem histórico salvo nem log encontrada:", {
+            userId: member.id,
+            tag: member.user?.tag
+          });
+          return;
+        }
+
+        const novoNick = sanitizeNick(saved.nome, saved.id);
+
+        const nickOk = await setNickSafe(member, novoNick);
+        const roleResult = await forceOnlyCidadao(member);
+
+        console.log("[cadastroManual] Cadastro restaurado automaticamente:", {
+          userId: member.id,
+          tag: member.user?.tag,
+          nick: novoNick,
+          nickOk,
+          cidadaoOk: roleResult.cidadaoOk,
+          semWlOk: roleResult.semWlOk,
+          semWlFinalOk: roleResult.semWlFinalOk,
+          hasCidadao: roleResult.hasCidadao,
+          hasSemWl: roleResult.hasSemWl
+        });
+      } catch (e) {
+        console.warn("[cadastroManual] Falha ao restaurar cadastro:", e?.message || e);
+      }
+    });
+
+    client.on("guildMemberUpdate", async (oldMember, newMember) => {
+      try {
+        const beforeNick = oldMember.nickname ?? oldMember.user?.username ?? "";
+        const afterNick = newMember.nickname ?? newMember.user?.username ?? "";
+
+        if (beforeNick === afterNick) return;
+
+        const identity = extractNomeIdFromNick(afterNick);
+        if (!identity) return;
+
+        saveCadastroUser(newMember, identity.nome, identity.id);
+      } catch {}
+    });
+  }
 
   try {
     const canal = await client.channels.fetch(CHANNEL_ID).catch(() => null);
@@ -370,30 +568,32 @@ export async function cadastroManualHandleInteraction(interaction, client) {
 
     // 1) Setar nickname
     const novoNick = sanitizeNick(nome, id);
-    const nickOk = await setNickSafe(member, novoNick);
-    if (nickOk) {
-      mensagens.push(`✅ Nome atualizado para \`${novoNick}\`.`);
-      ok = true;
-    } else {
-      mensagens.push('⚠️ Não consegui alterar seu nome (permissão/hierarquia).');
-    }
+const nickOk = await setNickSafe(member, novoNick);
 
-    // 2) Adicionar cargo Cidadão
-    const roleOk = await addRoleSafe(member, CARGO_CIDADAO);
-    if (roleOk) {
-      mensagens.push('✅ Cargo **Cidadão** adicionado.');
-      ok = true;
-    } else {
-      mensagens.push('⚠️ Não consegui adicionar o cargo **Cidadão** (hierarquia/permissão).');
-    }
+saveCadastroUser(member, nome, id);
 
-    // 3) REMOVER cargo temporário DEPOIS que enviou o modal
-    const tempRemovido = await removeRoleSafe(member, CARGO_TEMP_REMOVER);
-    if (tempRemovido) {
-      mensagens.push('🧹 Cargo temporário removido.');
-    } else {
-      mensagens.push('ℹ️ Não consegui remover o cargo temporário (ou ele já não estava aplicado).');
-    }
+if (nickOk) {
+  mensagens.push(`✅ Nome atualizado para \`${novoNick}\`.`);
+  ok = true;
+} else {
+  mensagens.push('⚠️ Não consegui alterar seu nome (permissão/hierarquia), mas salvei seu cadastro para futuras entradas.');
+}
+
+// 2) Adicionar Cidadão e garantir que SEM WL seja removido
+const roleResult = await forceOnlyCidadao(member);
+
+if (roleResult.cidadaoOk) {
+  mensagens.push('✅ Cargo **Cidadão** adicionado.');
+  ok = true;
+} else {
+  mensagens.push('⚠️ Não consegui adicionar o cargo **Cidadão** (hierarquia/permissão).');
+}
+
+if (!roleResult.hasSemWl) {
+  mensagens.push('🧹 Cargo **SEM WL** removido/confirmado.');
+} else {
+  mensagens.push('⚠️ O cargo **SEM WL** ainda ficou na pessoa. Revise a hierarquia do cargo do bot.');
+}
 
     // 4) DM (não bloqueia sucesso)
     try {
