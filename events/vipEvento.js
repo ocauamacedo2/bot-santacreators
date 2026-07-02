@@ -596,6 +596,9 @@ function VIP_normalizarTipoPremiacao(texto) {
   const palavras = t.split(" ").filter(Boolean);
   const textoColado = t.replace(/\s+/g, "");
 
+  // ✅ Se ficou vazio depois da limpeza, NÃO pode virar Dinheiro.
+  if (!t) return "Não identificado";
+
   // ✅ PRIORIDADE REAL:
   // Se tiver Rolepass/Pass escrito em qualquer linha da premiação,
   // ele ganha de "VIP Evento", "VIP Staff" e "VIP Gente Boa".
@@ -705,6 +708,7 @@ function VIP_formatTipoBonito(tipo) {
   if (t === "VIP Staff") return "🛡️ **Tipo:** `VIP Staff`";
   if (t === "VIP Lancamento") return "🚀 **Tipo:** `VIP Lançamento`";
   if (t === "VIP Evento") return "🎁 **Tipo:** `VIP Evento`";
+  if (t === "Não identificado") return "❔ **Tipo:** `Não identificado`";
 
   return `🎁 **Tipo:** \`${t || "Não identificado"}\``;
 }
@@ -840,16 +844,16 @@ function VIP_extrairQuantidadePremiacao(texto) {
 
 function VIP_limparPremiacaoFormatada(texto) {
   return String(texto || "")
-    // ✅ Remove qualquer linha antiga de tipo já formatado.
-    // Ex: "🎁 Tipo: VIP Evento", "🛡️ Tipo: VIP Staff", "🎟️ Tipo: Rolepass"
+    // ✅ Remove linhas automáticas antigas com "Tipo:"
     .replace(/^.*\*\*Tipo:\*\*\s*`[^`]+`\s*$/gim, "")
     .replace(/^.*Tipo:\s*`[^`]+`\s*$/gim, "")
     .replace(/^.*Tipo:\s*[^\n]+$/gim, "")
 
-    // ✅ Remove linha formatada antiga sem "Tipo:".
-    // Ex: "🎟️ Rolepass", "🎁 VIP Evento", "🛡️ VIP Staff"
-    // Importante: isso NÃO remove "rolepass" escrito puro pelo usuário.
-    .replace(/^\s*[^\w\s`]*\s*(role\s*pass|rolepass|vip\s*evento|vip\s*staff|vip\s*gente\s*boa|vip\s*platinum|vip\s*black|vip\s*bronze|vip\s*prata|vip\s*ouro|vip\s*lancamento)\s*$/gim, "")
+    // ✅ Remove linha formatada antiga SOMENTE se começar com emoji/símbolo.
+    // Remove: "🎟️ Rolepass"
+    // NÃO remove: "rolepass"
+    // NÃO remove: "vip gente boa"
+    .replace(/^\s*[^\w\s`]+\s*(role\s*pass|rolepass|vip\s*evento|vip\s*staff|vip\s*gente\s*boa|vip\s*platinum|vip\s*black|vip\s*bronze|vip\s*prata|vip\s*ouro|vip\s*lancamento)\s*$/gim, "")
 
     // ✅ Remove campos automáticos antigos.
     .replace(/\*\*Quantidade:\*\*\s*`[^`]+`\s*/gi, "")
@@ -859,6 +863,7 @@ function VIP_limparPremiacaoFormatada(texto) {
     // Ex: "GG : VIP GENTE BOA" vira "VIP GENTE BOA"
     .replace(/^\s*(gg|g\.g|premio|premiação|premiacao|tipo|item)\s*[:\-]\s*/gim, "")
 
+    .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
