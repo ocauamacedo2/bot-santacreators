@@ -169,6 +169,7 @@ async function findCadastroIdentityInNicknameLogs(client, guild, userId) {
     if (!channel?.isTextBased()) return null;
 
     let before = undefined;
+    const identities = [];
 
     for (let page = 0; page < 10; page++) {
       const messages = await channel.messages.fetch({
@@ -190,15 +191,30 @@ async function findCadastroIdentityInNicknameLogs(client, guild, userId) {
 
         if (!allText.includes(userId)) continue;
 
-        const depoisField = embed.fields?.find(field =>
-          String(field.name || '').toLowerCase().includes('depois')
-        );
+        const possibleTexts = [
+          embed.description || '',
+          ...(embed.fields || []).flatMap(field => [field.name || '', field.value || ''])
+        ];
 
-        const depoisValue = depoisField?.value || '';
-        const identity = extractNomeIdFromNick(depoisValue.replace(/`/g, '').trim());
+        for (const text of possibleTexts) {
+          const cleaned = String(text || '').replace(/`/g, '').trim();
 
-        if (identity?.nome && identity?.id) {
-          return identity;
+          const lines = cleaned
+            .split('\n')
+            .map(line => line.trim())
+            .filter(Boolean);
+
+          for (const line of lines) {
+            const identity = extractNomeIdFromNick(line);
+
+            if (identity?.nome && identity?.id) {
+              identities.push({
+                nome: identity.nome,
+                id: identity.id,
+                createdTimestamp: msg.createdTimestamp || 0
+              });
+            }
+          }
         }
       }
 
@@ -206,7 +222,14 @@ async function findCadastroIdentityInNicknameLogs(client, guild, userId) {
       if (!before) break;
     }
 
-    return null;
+    if (!identities.length) return null;
+
+    identities.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+
+    return {
+      nome: identities[0].nome,
+      id: identities[0].id
+    };
   } catch (e) {
     console.warn('[cadastroManual] Falha ao buscar histórico nas logs:', e?.message || e);
     return null;
@@ -345,20 +368,30 @@ export async function cadastroManualOnReady(client) {
 
         const novoNick = sanitizeNick(saved.nome, saved.id);
 
-        const nickOk = await setNickSafe(member, novoNick);
-        const roleResult = await forceOnlyCidadao(member);
+const nickOk = await setNickSafe(member, novoNick);
 
-        console.log("[cadastroManual] Cadastro restaurado automaticamente:", {
-          userId: member.id,
-          tag: member.user?.tag,
-          nick: novoNick,
-          nickOk,
-          cidadaoOk: roleResult.cidadaoOk,
-          semWlOk: roleResult.semWlOk,
-          semWlFinalOk: roleResult.semWlFinalOk,
-          hasCidadao: roleResult.hasCidadao,
-          hasSemWl: roleResult.hasSemWl
-        });
+if (!nickOk) {
+  console.warn("[cadastroManual] Histórico encontrado, mas o nick falhou. Cargo NÃO será alterado:", {
+    userId: member.id,
+    tag: member.user?.tag,
+    nick: novoNick
+  });
+  return;
+}
+
+const roleResult = await forceOnlyCidadao(member);
+
+console.log("[cadastroManual] Cadastro restaurado automaticamente:", {
+  userId: member.id,
+  tag: member.user?.tag,
+  nick: novoNick,
+  nickOk,
+  cidadaoOk: roleResult.cidadaoOk,
+  semWlOk: roleResult.semWlOk,
+  semWlFinalOk: roleResult.semWlFinalOk,
+  hasCidadao: roleResult.hasCidadao,
+  hasSemWl: roleResult.hasSemWl
+});
       } catch (e) {
         console.warn("[cadastroManual] Falha ao restaurar cadastro:", e?.message || e);
       }
