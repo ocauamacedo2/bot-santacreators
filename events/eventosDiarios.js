@@ -55,6 +55,32 @@ const CITIES = {
   maresia: { label: "Cidade Maresia", roleId: "1379021994678288465", emoji: "🌊" },
 };
 
+function normalizeCityText(value = "") {
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function resolveCityKey(value = "") {
+  const normalized = normalizeCityText(value);
+  if (!normalized) return null;
+
+  return Object.keys(CITIES).find((key) => {
+    const cityLabel = normalizeCityText(CITIES[key].label);
+
+    return (
+      normalized === key ||
+      normalized === cityLabel ||
+      normalized.includes(key) ||
+      cityLabel.includes(normalized) ||
+      normalized.includes(cityLabel)
+    );
+  }) || null;
+}
+
 // Permissões
 const ALLOWED_ROLES = [
   "1352408327983861844", // Resp Creators
@@ -301,6 +327,15 @@ function createEventModal(cityKey, eventData) {
         .setPlaceholder("https://cdn.discordapp.com/...")
         .setStyle(TextInputStyle.Short)
         .setRequired(true)
+    ),
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("evd_custom_city")
+        .setLabel("Cidade do Evento")
+        .setPlaceholder("Ex: Nobre, Cidade Nobre, Santa, Grande ou Maresia")
+        .setValue(CITIES[cityKey]?.label || "")
+        .setStyle(TextInputStyle.Short)
+        .setRequired(false)
     )
   );
   return modal;
@@ -727,12 +762,19 @@ const eventData =
 const title = interaction.fields.getTextInputValue("evd_title");
 const description = interaction.fields.getTextInputValue("evd_description");
 const imageUrl = interaction.fields.getTextInputValue("evd_image");
+const customCityInput = interaction.fields.getTextInputValue("evd_custom_city")?.trim() || "";
+
+const finalCityKey = resolveCityKey(customCityInput) || cityKey;
+
+if (!finalCityKey || !CITIES[finalCityKey]) {
+  return interaction.editReply("❌ Cidade inválida. Use: nobre, cidade nobre, santa, cidade santa, grande, cidade grande, maresia ou cidade maresia.");
+}
 
 const reqId = `${interaction.user.id}-${Date.now()}`;
     
 state.pendingRequests[reqId] = {
   userId: interaction.user.id,
-  cityKey,
+  cityKey: finalCityKey,
   title,
   description,
   imageUrl,
@@ -748,7 +790,7 @@ state.pendingRequests[reqId] = {
     const embed = new EmbedBuilder()
       .setTitle("🛡️ Aprovação: Evento Diário")
       .setColor("#9b59b6")
-      .setDescription(`**Solicitante:** <@${interaction.user.id}>\n**Cidade:** ${CITIES[cityKey].label}`)
+      .setDescription(`**Solicitante:** <@${interaction.user.id}>\n**Cidade:** ${CITIES[finalCityKey].label}`)
       .addFields(
         { name: "Título", value: title },
         { name: "Descrição (Preview)", value: description.slice(0, 1000) + (description.length > 1000 ? "..." : "") },

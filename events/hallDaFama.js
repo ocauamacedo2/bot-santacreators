@@ -1014,7 +1014,33 @@ return {
     return fixedMessage.trim();
   }
 
-  function resolveCityKeyFromName(value = "") {
+  function resolveCityKeyFromModalInput(value = "") {
+  const normalized = cleanOneLine(value)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+
+  if (!normalized) return null;
+
+  return Object.keys(CITIES).find((key) => {
+    const cityLabel = CITIES[key].label
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "");
+
+    return (
+      normalized === key ||
+      normalized === cityLabel ||
+      normalized.includes(key) ||
+      cityLabel.includes(normalized) ||
+      normalized.includes(cityLabel)
+    );
+  }) || null;
+}
+
+function resolveCityKeyFromName(value = "") {
     const normalized = cleanOneLine(value)
       .toLowerCase()
       .normalize("NFD")
@@ -6768,9 +6794,16 @@ return true;
     getTodayEventData(eventKeyFromModal !== "auto" ? eventKeyFromModal : null) ||
     getNextTodayEventData("hallDaFama");
 
-  const eventName = eventNameInput;
-  const prizesText = eventData ? eventData.prizes : "";
-  const cityDisplayName = customCityInput || CITIES[cityKey].label;
+const eventName = eventNameInput;
+const prizesText = eventData ? eventData.prizes : "";
+
+const finalCityKey = resolveCityKeyFromModalInput(customCityInput) || cityKey;
+
+if (!finalCityKey || !CITIES[finalCityKey]) {
+  return interaction.editReply("❌ Cidade inválida. Use: nobre, cidade nobre, santa, cidade santa, grande, cidade grande, maresia ou cidade maresia.");
+}
+
+const cityDisplayName = CITIES[finalCityKey].label;
 
       // Monta a string dos vencedores com premiação automática
       let winnersText = "";
@@ -6811,16 +6844,16 @@ return true;
 
       const reqId = `${interaction.user.id}-${Date.now()}`;
       
-  state.pendingRequests[reqId] = {
-    userId: interaction.user.id,
-    cityKey,
-    cityDisplayName,
-    eventName,
-    winnersText,
-    imageUrl,
-    imageUrl2,
-    eventKey: eventData?.eventKey || null
-  };
+state.pendingRequests[reqId] = {
+  userId: interaction.user.id,
+  cityKey: finalCityKey,
+  cityDisplayName,
+  eventName,
+  winnersText,
+  imageUrl,
+  imageUrl2,
+  eventKey: eventData?.eventKey || null
+};
       saveState(state);
 
       const approvalChannel = await client.channels.fetch(APPROVAL_CHANNEL_ID).catch(() => null);
