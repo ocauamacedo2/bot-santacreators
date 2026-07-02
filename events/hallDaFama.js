@@ -4615,7 +4615,7 @@ function buildOrgsRankingEmbed(rankings) {
   const topOrgs = mergeDuplicateOrgRankingItems(applyDominantCityToRankingItems(Object.values(rankings.orgs || {})))
     .filter(org => !isInvalidWinnerName(org.name))
     .filter(org => !looksLikePrizeOnly(org.name))
-    .sort((a, b) => b.total - a.total)
+    .sort(sortRankingByTotalAndRecent)
     .slice(0, 10);
 
     const lines = topOrgs.map((org, index) => {
@@ -4639,12 +4639,12 @@ function buildOrgsRankingEmbed(rankings) {
     );
   }
 
-  function buildPlayersRankingEmbed(rankings) {
-    const topPlayers = applyDominantCityToRankingItems(Object.values(rankings.players || {}))
-      .filter(player => !isInvalidWinnerName(player.name))
-      .filter(player => !looksLikePrizeOnly(player.name))
-      .sort((a, b) => b.total - a.total)
-      .slice(0, 10);
+function buildPlayersRankingEmbed(rankings) {
+  const topPlayers = applyDominantCityToRankingItems(Object.values(rankings.players || {}))
+    .filter(player => !isInvalidWinnerName(player.name))
+    .filter(player => !looksLikePrizeOnly(player.name))
+    .sort(sortRankingByTotalAndRecent)
+    .slice(0, 10);
 
     const lines = topPlayers.map((player, index) => {
       const pos = index + 1;
@@ -4829,7 +4829,7 @@ function getSortedRankingList(rankings, type) {
 
 function formatRankingLine(item, pos, type) {
   if (type === "org") {
-    return `🏆 **TOP ${pos} — ${item.name}**
+    return `🏆 **Ranking geral: #${pos} — ${item.name}**
 🌆 ${item.cityName || "Cidade Nobre"}
 🏆 Vitórias: **${item.total || 0}**
 🎮 ${formatRankingEventBreakdown(item.events || {})}`;
@@ -4837,7 +4837,7 @@ function formatRankingLine(item, pos, type) {
 
   const idText = item.playerId ? `\n🆔 ID: **${item.playerId}**` : "";
 
-  return `⭐ **TOP ${pos} — ${item.name}**${idText}
+  return `⭐ **Ranking geral: #${pos} — ${item.name}**${idText}
 🌆 ${item.cityName || "Cidade Nobre"}
 🏆 Vitórias: **${item.total || 0}**
 🎮 ${formatRankingEventBreakdown(item.events || {})}`;
