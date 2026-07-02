@@ -4351,28 +4351,45 @@ await ch.send({
     return dominant || fallbackCityKey || "nobre";
   }
   ///teste
-  function applyDominantCityToRankingItems(items = []) {
-    return items.map(item => {
-      const forcedCityKey =
-        getManualPlayerCityKey(item.playerId || "") ||
-        getManualPlayerCityKeyByName(item.name || "") ||
-        getManualOrgCityKey(item.name || "");
+function applyDominantCityToRankingItems(items = []) {
+  return items.map(item => {
+    const forcedCityKey =
+      getManualPlayerCityKey(item.playerId || "") ||
+      getManualPlayerCityKeyByName(item.name || "") ||
+      getManualOrgCityKey(item.name || "");
 
-      const cityKey = forcedCityKey || getDominantCityFromHalls(item.halls || [], item.cityKey || "nobre");
-      const cityName = CITIES[cityKey]?.label || item.cityName || "Cidade Nobre";
+    const cityKey = forcedCityKey || getDominantCityFromHalls(item.halls || [], item.cityKey || "nobre");
+    const cityName = CITIES[cityKey]?.label || item.cityName || "Cidade Nobre";
 
-      return {
-        ...item,
-        cityKey,
-        cityName
-      };
-    });
-  }
+    return {
+      ...item,
+      cityKey,
+      cityName
+    };
+  });
+}
 
-  function buildOrgsRankingMessage(rankings) {
-    const topOrgs = applyDominantCityToRankingItems(Object.values(rankings.orgs || {}))
-      .sort((a, b) => b.total - a.total)
-      .slice(0, 10);
+function getRankingLastWinAt(item = {}) {
+  return Math.max(
+    0,
+    ...(item.halls || []).map(hall => Number(hall.at || hall.createdTimestamp || hall.createdAt || 0))
+  );
+}
+
+function sortRankingByTotalAndRecent(a, b) {
+  const totalDiff = Number(b.total || 0) - Number(a.total || 0);
+  if (totalDiff !== 0) return totalDiff;
+
+  const recentDiff = getRankingLastWinAt(b) - getRankingLastWinAt(a);
+  if (recentDiff !== 0) return recentDiff;
+
+  return normalizeHallKey(a.name || "").localeCompare(normalizeHallKey(b.name || ""));
+}
+
+function buildOrgsRankingMessage(rankings) {
+  const topOrgs = applyDominantCityToRankingItems(Object.values(rankings.orgs || {}))
+    .sort(sortRankingByTotalAndRecent)
+    .slice(0, 10);
 
     const totalOrgs = Object.keys(rankings.orgs || {}).length;
     const totalHalls = Object.keys(rankings.reviewedMessages || {}).length;
@@ -4406,10 +4423,10 @@ await ch.send({
   🕒 Atualizado em: <t:${Math.floor((rankings.lastUpdatedAt || Date.now()) / 1000)}:F>`;
   }
 
-  function buildPlayersRankingMessage(rankings) {
-    const topPlayers = applyDominantCityToRankingItems(Object.values(rankings.players || {}))
-      .sort((a, b) => b.total - a.total)
-      .slice(0, 10);
+function buildPlayersRankingMessage(rankings) {
+  const topPlayers = applyDominantCityToRankingItems(Object.values(rankings.players || {}))
+    .sort(sortRankingByTotalAndRecent)
+    .slice(0, 10);
 
     const totalPlayers = Object.keys(rankings.players || {}).length;
     const totalHalls = Object.keys(rankings.reviewedMessages || {}).length;
@@ -4779,9 +4796,9 @@ function rankingButtons(type, page = 0) {
 function getSortedRankingList(rankings, type) {
   const source = type === "org" ? rankings.orgs : rankings.players;
 
-  return Object.values(source || {})
+  return applyDominantCityToRankingItems(Object.values(source || {}))
     .filter(Boolean)
-    .sort((a, b) => Number(b.total || 0) - Number(a.total || 0));
+    .sort(sortRankingByTotalAndRecent);
 }
 
 function formatRankingLine(item, pos, type) {
