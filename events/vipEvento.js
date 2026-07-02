@@ -840,9 +840,20 @@ function VIP_extrairQuantidadePremiacao(texto) {
 
 function VIP_limparPremiacaoFormatada(texto) {
   return String(texto || "")
-    .replace(/^[^\n]*\*\*Tipo:\*\*\s*`[^`]+`\s*/i, "")
+    // ✅ Remove qualquer linha antiga de tipo já formatado.
+    // Ex: "🎁 Tipo: VIP Evento", "🛡️ Tipo: VIP Staff", "🎟️ Tipo: Rolepass"
+    .replace(/^.*\*\*Tipo:\*\*\s*`[^`]+`\s*$/gim, "")
+    .replace(/^.*Tipo:\s*`[^`]+`\s*$/gim, "")
+    .replace(/^.*Tipo:\s*[^\n]+$/gim, "")
+
+    // ✅ Remove campos automáticos antigos.
     .replace(/\*\*Quantidade:\*\*\s*`[^`]+`\s*/gi, "")
     .replace(/\*\*Item:\*\*\s*`[^`]+`\s*/gi, "")
+
+    // ✅ Remove prefixos confusos antes dos dois pontos.
+    // Ex: "GG : VIP GENTE BOA" vira "VIP GENTE BOA"
+    .replace(/^\s*(gg|g\.g|premio|premiação|premiacao|tipo|item)\s*[:\-]\s*/gim, "")
+
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
@@ -877,13 +888,14 @@ function VIP_reanalisarEmbedVip(embedBuilder) {
   const premiacaoField = fields.find((f) => String(f.name || "").startsWith("🎁 Premiação"));
 
   const textoPremiacao = String(premiacaoField?.value || "");
+  const textoRealPremiacao = VIP_limparPremiacaoFormatada(textoPremiacao);
 
-  // ✅ Analisa PRIMEIRO apenas o campo Premiação.
-  // Isso evita o erro de pegar "Tipo Identificado: VIP Evento" da descrição
-  // e ignorar o item real escrito embaixo, tipo ROLEPASS.
-  const tipoFinal = VIP_normalizarTipoPremiacao(textoPremiacao);
+  // ✅ Analisa apenas o texto REAL da premiação.
+  // Ignora "Tipo: VIP Evento" antigo e lê coisas como:
+  // "GG : VIP GENTE BOA", "ROLEPASS", "VIP STAFF", etc.
+  const tipoFinal = VIP_normalizarTipoPremiacao(textoRealPremiacao);
 
-  const premiacaoFinal = VIP_formatarPremiacaoInteligente(textoPremiacao, tipoFinal);
+  const premiacaoFinal = VIP_formatarPremiacaoInteligente(textoRealPremiacao, tipoFinal);
 
   const novosFields = fields.map((f) => {
     if (String(f.name || "").startsWith("🎁 Premiação")) {
