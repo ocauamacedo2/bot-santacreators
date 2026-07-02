@@ -712,14 +712,6 @@ export async function cadastroManualOnReady(client) {
   if (!client.__cadastroAutoRestoreWired) {
     client.__cadastroAutoRestoreWired = true;
 
-    client.on("messageCreate", async (message) => {
-      try {
-        await handleSemWlCommand(message, client);
-      } catch (e) {
-        console.warn("[cadastroManual] Falha ao executar comando !semwl:", e?.message || e);
-      }
-    });
-
     client.on("guildMemberAdd", async (member) => {
       try {
         await sleep(4000);
@@ -813,6 +805,15 @@ console.log("[cadastroManual] Cadastro restaurado automaticamente:", {
 
   } catch (e) {
     console.error('Falha ao preparar o menu de cadastro:', e);
+  }
+}
+
+export async function cadastroManualHandleMessage(message, client) {
+  try {
+    return await handleSemWlCommand(message, client);
+  } catch (e) {
+    console.warn("[cadastroManual] Falha ao executar comando !semwl:", e?.message || e);
+    return false;
   }
 }
 

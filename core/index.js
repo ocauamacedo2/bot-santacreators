@@ -375,6 +375,7 @@ import {
 import {
   cadastroManualOnReady,
   cadastroManualHandleInteraction,
+  cadastroManualHandleMessage,
 } from "../events/cadastroManual.js";
 
 // Aulão
@@ -623,6 +624,9 @@ const setupEventHandlers = () => {
         // ✅ FiveM Retention precisa vir antes do roteador central,
         // porque é um comando direto do módulo e não estava sendo chamado.
         if (await fivemRetentionStatusHandleMessage(message, client)) return;
+
+        // ✅ Cadastro Manual: comando !semwl precisa passar antes do roteador central
+        if (await cadastroManualHandleMessage(message, client)) return;
 
         // 🚀 ROTEADOR CENTRALIZADO: Tenta executar via messageCreateHandler primeiro.
         // Se o handler retornar true, significa que o comando foi processado e paramos aqui.
