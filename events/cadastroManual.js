@@ -283,6 +283,82 @@ async function forceOnlyCidadao(member) {
   };
 }
 
+async function restaurarCadastroAutomatico(client, member, etapa = 'entrada') {
+  try {
+    member = await member.guild.members.fetch(member.id).catch(() => member);
+
+    const data = loadCadastroUsers();
+    let saved = data[member.id];
+
+    if (!saved?.nome || !saved?.id) {
+      const foundInLogs = await findCadastroIdentityInNicknameLogs(client, member.guild, member.id);
+
+      if (foundInLogs?.nome && foundInLogs?.id) {
+        saveCadastroUser(member, foundInLogs.nome, foundInLogs.id);
+
+        saved = {
+          nome: foundInLogs.nome,
+          id: foundInLogs.id
+        };
+      }
+    }
+
+    if (!saved?.nome || !saved?.id) {
+      if (member.roles.cache.has(CARGO_TEMP_REMOVER) && member.roles.cache.has(CARGO_CIDADAO)) {
+        await removeRoleSafe(member, CARGO_CIDADAO);
+
+        console.log("[cadastroManual] Usuário sem histórico estava com Cidadão + SEM WL. Cidadão removido:", {
+          etapa,
+          userId: member.id,
+          tag: member.user?.tag
+        });
+      }
+
+      console.log("[cadastroManual] Usuário analisado, mas sem histórico Nome | ID:", {
+        etapa,
+        userId: member.id,
+        tag: member.user?.tag
+      });
+
+      return false;
+    }
+
+    const novoNick = sanitizeNick(saved.nome, saved.id);
+
+    const nickOk = await setNickSafe(member, novoNick);
+
+    if (!nickOk) {
+      console.warn("[cadastroManual] Histórico encontrado, mas o nick falhou. Cargo NÃO será alterado:", {
+        etapa,
+        userId: member.id,
+        tag: member.user?.tag,
+        nick: novoNick
+      });
+      return false;
+    }
+
+    const roleResult = await forceOnlyCidadao(member);
+
+    console.log("[cadastroManual] Cadastro restaurado automaticamente:", {
+      etapa,
+      userId: member.id,
+      tag: member.user?.tag,
+      nick: novoNick,
+      nickOk,
+      cidadaoOk: roleResult.cidadaoOk,
+      semWlOk: roleResult.semWlOk,
+      semWlFinalOk: roleResult.semWlFinalOk,
+      hasCidadao: roleResult.hasCidadao,
+      hasSemWl: roleResult.hasSemWl
+    });
+
+    return true;
+  } catch (e) {
+    console.warn("[cadastroManual] Falha ao restaurar cadastro automático:", e?.message || e);
+    return false;
+  }
+}
+
 function chunkText(text, max = 950) {
   const value = String(text || '');
   if (value.length <= max) return [value];
@@ -715,59 +791,13 @@ export async function cadastroManualOnReady(client) {
     client.on("guildMemberAdd", async (member) => {
       try {
         await sleep(4000);
+        await restaurarCadastroAutomatico(client, member, 'entrada 4s');
 
-        member = await member.guild.members.fetch(member.id).catch(() => member);
+        await sleep(8000);
+        await restaurarCadastroAutomatico(client, member, 'rechecagem 12s');
 
-        const data = loadCadastroUsers();
-        let saved = data[member.id];
-
-        if (!saved?.nome || !saved?.id) {
-          const foundInLogs = await findCadastroIdentityInNicknameLogs(client, member.guild, member.id);
-
-          if (foundInLogs?.nome && foundInLogs?.id) {
-            saveCadastroUser(member, foundInLogs.nome, foundInLogs.id);
-
-            saved = {
-              nome: foundInLogs.nome,
-              id: foundInLogs.id
-            };
-          }
-        }
-
-        if (!saved?.nome || !saved?.id) {
-          console.log("[cadastroManual] Usuário entrou, mas não tem histórico salvo nem log encontrada:", {
-            userId: member.id,
-            tag: member.user?.tag
-          });
-          return;
-        }
-
-        const novoNick = sanitizeNick(saved.nome, saved.id);
-
-const nickOk = await setNickSafe(member, novoNick);
-
-if (!nickOk) {
-  console.warn("[cadastroManual] Histórico encontrado, mas o nick falhou. Cargo NÃO será alterado:", {
-    userId: member.id,
-    tag: member.user?.tag,
-    nick: novoNick
-  });
-  return;
-}
-
-const roleResult = await forceOnlyCidadao(member);
-
-console.log("[cadastroManual] Cadastro restaurado automaticamente:", {
-  userId: member.id,
-  tag: member.user?.tag,
-  nick: novoNick,
-  nickOk,
-  cidadaoOk: roleResult.cidadaoOk,
-  semWlOk: roleResult.semWlOk,
-  semWlFinalOk: roleResult.semWlFinalOk,
-  hasCidadao: roleResult.hasCidadao,
-  hasSemWl: roleResult.hasSemWl
-});
+        await sleep(13000);
+        await restaurarCadastroAutomatico(client, member, 'rechecagem 25s');
       } catch (e) {
         console.warn("[cadastroManual] Falha ao restaurar cadastro:", e?.message || e);
       }
