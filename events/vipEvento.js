@@ -642,19 +642,34 @@ function VIP_normalizarTipoPremiacao(texto) {
   ) return "VIP Evento";
 
   if (
-    t.includes("platinum") ||
-    t.includes("platinium") ||
-    t.includes("platnum") ||
-    t.includes("platinun") ||
-    t.includes("platibnum") ||
-    t.includes("platina") ||
-    t.includes("platino") ||
-    t.includes("platnao") ||
-    t.includes("platinu") ||
-    t.includes("platin")
+    /\bvip\s*platinum\b/.test(t) ||
+    /\bvip\s*platinium\b/.test(t) ||
+    /\bvip\s*platina\b/.test(t) ||
+    /\bplatinum\b/.test(t) ||
+    /\bplatinium\b/.test(t) ||
+    /\bplatnum\b/.test(t) ||
+    /\bplatinun\b/.test(t) ||
+    /\bplatibnum\b/.test(t) ||
+    /\bplatina\b/.test(t) ||
+    /\bplatino\b/.test(t) ||
+    /\bplatnao\b/.test(t) ||
+    /\bplatinu\b/.test(t) ||
+    /\bplatin\b/.test(t) ||
+    textoColado.includes("vipplatinum") ||
+    textoColado.includes("vipplatinium") ||
+    textoColado.includes("vipplatina")
   ) return "VIP Platinum";
 
-  if (t.includes("black") || t.includes("blak") || t.includes("bleck")) return "VIP Black";
+  if (
+    /\bvip\s*black\b/.test(t) ||
+    /\bblack\b/.test(t) ||
+    /\bblak\b/.test(t) ||
+    /\bbleck\b/.test(t) ||
+    /\bpreto\b/.test(t) ||
+    textoColado.includes("vipblack") ||
+    textoColado.includes("vipblak") ||
+    textoColado.includes("vipbleck")
+  ) return "VIP Black";
   if (t.includes("bronze") || t.includes("bronz") || t.includes("bronzi")) return "VIP Bronze";
   if (t.includes("prata") || t.includes("prataa")) return "VIP Prata";
   if (t.includes("ouro") || t.includes("oru")) return "VIP Ouro";
@@ -672,11 +687,18 @@ function VIP_normalizarTipoPremiacao(texto) {
   }
 
   if (
-    t.includes("lancamento") ||
-    t.includes("lançamento") ||
-    t.includes("lancamnto") ||
-    t.includes("lancamento") ||
-    t.includes("lanca")
+    /\bvip\s*lancamento\b/.test(t) ||
+    /\bvip\s*lançamento\b/.test(t) ||
+    /\blancamento\b/.test(t) ||
+    /\blançamento\b/.test(t) ||
+    /\blancamnto\b/.test(t) ||
+    /\blancameto\b/.test(t) ||
+    /\blancamento\b/.test(t) ||
+    /\blanca\b/.test(t) ||
+    textoColado.includes("viplancamento") ||
+    textoColado.includes("viplançamento") ||
+    textoColado.includes("viplancamnto") ||
+    textoColado.includes("viplancameto")
   ) return "VIP Lancamento";
 
   const pareceDinheiro =
@@ -1493,9 +1515,10 @@ if (pagamentoResolvido?.ok) {
   if (pagamentoResolvido.info?.ganhadorId) ganhadorId = pagamentoResolvido.info.ganhadorId;
   if (pagamentoResolvido.info?.nomeGanhador) ganhadorNome = pagamentoResolvido.info.nomeGanhador;
 
-  tipo = VIP_normalizarTipoPremiacao(
-    `${pagamentoResolvido.info?.tipo || ""}\n${pagamentoResolvido.info?.premiacao || ""}\n${premiacao}`
-  );
+  const premiacaoFonte = pagamentoResolvido.info?.premiacao || premiacao;
+  const premiacaoPrincipalFonte = VIP_pegarTextoPrincipalPremiacao(premiacaoFonte);
+
+  tipo = VIP_normalizarTipoPremiacao(premiacaoPrincipalFonte || premiacaoFonte || premiacao);
 
   if (pagamentoResolvido.info?.premiacao) premiacao = pagamentoResolvido.info.premiacao;
 }
