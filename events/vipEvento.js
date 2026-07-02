@@ -846,6 +846,11 @@ function VIP_limparPremiacaoFormatada(texto) {
     .replace(/^.*Tipo:\s*`[^`]+`\s*$/gim, "")
     .replace(/^.*Tipo:\s*[^\n]+$/gim, "")
 
+    // ✅ Remove linha formatada antiga sem "Tipo:".
+    // Ex: "🎟️ Rolepass", "🎁 VIP Evento", "🛡️ VIP Staff"
+    // Importante: isso NÃO remove "rolepass" escrito puro pelo usuário.
+    .replace(/^\s*[^\w\s`]*\s*(role\s*pass|rolepass|vip\s*evento|vip\s*staff|vip\s*gente\s*boa|vip\s*platinum|vip\s*black|vip\s*bronze|vip\s*prata|vip\s*ouro|vip\s*lancamento)\s*$/gim, "")
+
     // ✅ Remove campos automáticos antigos.
     .replace(/\*\*Quantidade:\*\*\s*`[^`]+`\s*/gi, "")
     .replace(/\*\*Item:\*\*\s*`[^`]+`\s*/gi, "")
@@ -1445,6 +1450,10 @@ let data = i.fields.getTextInputValue("vip_evt_data").trim();
 const ganhadorInput = i.fields.getTextInputValue("vip_ganhador_id").trim();
 const org = i.fields.getTextInputValue("vip_org_nome").trim();
 let premiacao = i.fields.getTextInputValue("vip_premiacao").trim();
+
+// ✅ Limpa tipo antigo/automático antes de identificar.
+// Ex: se vier "🎟️ Rolepass\n\nvip gente boa", ele considera só "vip gente boa".
+premiacao = VIP_limparPremiacaoFormatada(premiacao);
 
 const ganhadorFlex = VIP_parseGanhadorFlex(ganhadorInput, org);
 
