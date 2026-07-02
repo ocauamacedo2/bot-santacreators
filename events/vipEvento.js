@@ -596,9 +596,29 @@ function VIP_normalizarTipoPremiacao(texto) {
   const palavras = t.split(" ").filter(Boolean);
   const textoColado = t.replace(/\s+/g, "");
 
-  // ✅ PRIORIDADE MÁXIMA REAL:
-  // Se tiver "VIP Evento" explícito ou parecido, isso manda mais que Rolepass/Pass.
-  // Exemplo: "Rolepass\nTipo: VIP Evento\n1 VIP EVENTO" = VIP Evento.
+  // ✅ PRIORIDADE REAL:
+  // Se tiver Rolepass/Pass escrito em qualquer linha da premiação,
+  // ele ganha de "VIP Evento", "VIP Staff" e "VIP Gente Boa".
+  if (
+    /\brole\s*pass\b/.test(t) ||
+    /\brolepass\b/.test(t) ||
+    /\brol\s*pass\b/.test(t) ||
+    /\brole\s*passe\b/.test(t) ||
+    /\brolipass\b/.test(t) ||
+    /\broll\s*pass\b/.test(t) ||
+    /\brole\s*p\b/.test(t) ||
+    /\brol\s*passe\b/.test(t) ||
+    /\brp\b/.test(t) ||
+    textoColado.includes("rolepass") ||
+    textoColado.includes("rollpass") ||
+    textoColado.includes("rolpass") ||
+    textoColado.includes("rolipass") ||
+    textoColado.includes("rolepasse")
+  ) return "Pass";
+
+  if (/\bpass\b/.test(t) || /\bpasse\b/.test(t)) return "Pass";
+
+  // ✅ VIP Evento só entra se NÃO tiver Rolepass/Pass na premiação.
   if (
     /\bvip\s*evento\b/.test(t) ||
     /\bvipevento\b/.test(t) ||
@@ -609,7 +629,7 @@ function VIP_normalizarTipoPremiacao(texto) {
     /\bvip\s*eventos\b/.test(t) ||
     /\bvip\s*por\s*evento\b/.test(t) ||
     /\bpor\s*evento\b/.test(t) ||
-    /\bevento\b/.test(t) && /\bvip\b/.test(t) ||
+    (/\bevento\b/.test(t) && /\bvip\b/.test(t)) ||
     textoColado.includes("vipevento") ||
     textoColado.includes("vipporevento") ||
     textoColado.includes("vipporvento") ||
@@ -636,25 +656,7 @@ function VIP_normalizarTipoPremiacao(texto) {
   if (t.includes("prata") || t.includes("prataa")) return "VIP Prata";
   if (t.includes("ouro") || t.includes("oru")) return "VIP Ouro";
 
-  // ✅ Rolepass precisa ganhar de VIP Staff/Gente Boa.
-  // Exemplo: "VIP Staff / VIP Gente Boa\n\nROLEPASS" = Rolepass.
-  if (
-    /\brole\s*pass\b/.test(t) ||
-    /\brolepass\b/.test(t) ||
-    /\brol\s*pass\b/.test(t) ||
-    /\brole\s*passe\b/.test(t) ||
-    /\brolipass\b/.test(t) ||
-    /\broll\s*pass\b/.test(t) ||
-    /\brole\s*p\b/.test(t) ||
-    /\brol\s*passe\b/.test(t) ||
-    textoColado.includes("rolepass") ||
-    textoColado.includes("rollpass") ||
-    textoColado.includes("rolpass") ||
-    textoColado.includes("rolipass") ||
-    textoColado.includes("rolepasse")
-  ) return "Pass";
 
-  if (/\bpass\b/.test(t) || /\bpasse\b/.test(t)) return "Pass";
 
   if (
     t.includes("staff") ||
@@ -870,17 +872,18 @@ function VIP_getTextoCompletoEmbed(embedLike) {
 
   return `${desc}\n${campos}`;
 }
-
 function VIP_reanalisarEmbedVip(embedBuilder) {
   const fields = embedBuilder.data.fields ?? [];
   const premiacaoField = fields.find((f) => String(f.name || "").startsWith("🎁 Premiação"));
 
-  const textoCompleto = VIP_getTextoCompletoEmbed(embedBuilder);
   const textoPremiacao = String(premiacaoField?.value || "");
-  const baseAnalise = `${textoPremiacao}\n${textoCompleto}`;
 
-  const tipoFinal = VIP_normalizarTipoPremiacao(baseAnalise);
-  const premiacaoFinal = VIP_formatarPremiacaoInteligente(textoPremiacao || baseAnalise, tipoFinal);
+  // ✅ Analisa PRIMEIRO apenas o campo Premiação.
+  // Isso evita o erro de pegar "Tipo Identificado: VIP Evento" da descrição
+  // e ignorar o item real escrito embaixo, tipo ROLEPASS.
+  const tipoFinal = VIP_normalizarTipoPremiacao(textoPremiacao);
+
+  const premiacaoFinal = VIP_formatarPremiacaoInteligente(textoPremiacao, tipoFinal);
 
   const novosFields = fields.map((f) => {
     if (String(f.name || "").startsWith("🎁 Premiação")) {
