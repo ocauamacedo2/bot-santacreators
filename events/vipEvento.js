@@ -843,29 +843,38 @@ function VIP_extrairQuantidadePremiacao(texto) {
 }
 
 function VIP_limparPremiacaoFormatada(texto) {
-  return String(texto || "")
-    // ✅ Remove linhas automáticas antigas com "Tipo:"
-    .replace(/^.*\*\*Tipo:\*\*\s*`[^`]+`\s*$/gim, "")
-    .replace(/^.*Tipo:\s*`[^`]+`\s*$/gim, "")
-    .replace(/^.*Tipo:\s*[^\n]+$/gim, "")
+  const linhas = String(texto || "")
+    .split(/\r?\n/g)
+    .map((linha) => linha.trim())
+    .filter(Boolean);
 
-    // ✅ Remove linha formatada antiga SOMENTE se começar com emoji/símbolo.
+  const limpas = [];
+
+  for (const linhaOriginal of linhas) {
+    let linha = linhaOriginal;
+
+    // ✅ Remove linhas automáticas antigas do próprio bot.
+    if (/\*\*Tipo:\*\*\s*`[^`]+`/i.test(linha)) continue;
+    if (/^.*Tipo:\s*`[^`]+`\s*$/i.test(linha)) continue;
+    if (/^\*\*Quantidade:\*\*/i.test(linha)) continue;
+    if (/^\*\*Item:\*\*/i.test(linha)) continue;
+
+    // ✅ Remove linha formatada antiga SOMENTE se tiver emoji/símbolo no começo.
     // Remove: "🎟️ Rolepass"
-    // NÃO remove: "rolepass"
-    // NÃO remove: "vip gente boa"
-    .replace(/^\s*[^\w\s`]+\s*(role\s*pass|rolepass|vip\s*evento|vip\s*staff|vip\s*gente\s*boa|vip\s*platinum|vip\s*black|vip\s*bronze|vip\s*prata|vip\s*ouro|vip\s*lancamento)\s*$/gim, "")
+    // Mantém: "rolepass"
+    // Mantém: "vip gente boa"
+    if (/^[^\w\s`]+\s*(role\s*pass|rolepass|vip\s*evento|vip\s*staff|vip\s*gente\s*boa|vip\s*platinum|vip\s*black|vip\s*bronze|vip\s*prata|vip\s*ouro|vip\s*lancamento)\s*$/i.test(linha)) {
+      continue;
+    }
 
-    // ✅ Remove campos automáticos antigos.
-    .replace(/\*\*Quantidade:\*\*\s*`[^`]+`\s*/gi, "")
-    .replace(/\*\*Item:\*\*\s*`[^`]+`\s*/gi, "")
+    // ✅ Remove prefixos confusos.
+    // "GG : VIP GENTE BOA" vira "VIP GENTE BOA"
+    linha = linha.replace(/^\s*(gg|g\.g|premio|premiação|premiacao|tipo|item)\s*[:\-]\s*/i, "").trim();
 
-    // ✅ Remove prefixos confusos antes dos dois pontos.
-    // Ex: "GG : VIP GENTE BOA" vira "VIP GENTE BOA"
-    .replace(/^\s*(gg|g\.g|premio|premiação|premiacao|tipo|item)\s*[:\-]\s*/gim, "")
+    if (linha) limpas.push(linha);
+  }
 
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+  return limpas.join("\n").trim();
 }
 
 function VIP_formatarPremiacaoInteligente(texto, tipoForcado = null) {
@@ -899,13 +908,13 @@ function VIP_reanalisarEmbedVip(embedBuilder) {
 
   const textoPremiacao = String(premiacaoField?.value || "");
   const textoRealPremiacao = VIP_limparPremiacaoFormatada(textoPremiacao);
+  const textoPrincipalPremiacao = VIP_pegarTextoPrincipalPremiacao(textoPremiacao);
 
-  // ✅ Analisa apenas o texto REAL da premiação.
-  // Ignora "Tipo: VIP Evento" antigo e lê coisas como:
-  // "GG : VIP GENTE BOA", "ROLEPASS", "VIP STAFF", etc.
-  const tipoFinal = VIP_normalizarTipoPremiacao(textoRealPremiacao);
+  // ✅ Identifica pelo texto principal real.
+  // Se tiver várias linhas confusas, a última premiação real manda.
+  const tipoFinal = VIP_normalizarTipoPremiacao(textoPrincipalPremiacao || textoRealPremiacao);
 
-  const premiacaoFinal = VIP_formatarPremiacaoInteligente(textoRealPremiacao, tipoFinal);
+  const premiacaoFinal = VIP_formatarPremiacaoInteligente(textoRealPremiacao || textoPremiacao, tipoFinal);
 
   const novosFields = fields.map((f) => {
     if (String(f.name || "").startsWith("🎁 Premiação")) {
@@ -1456,17 +1465,13 @@ const ganhadorInput = i.fields.getTextInputValue("vip_ganhador_id").trim();
 const org = i.fields.getTextInputValue("vip_org_nome").trim();
 let premiacao = i.fields.getTextInputValue("vip_premiacao").trim();
 
-// ✅ Limpa tipo antigo/automático antes de identificar.
-// Ex: se vier "🎟️ Rolepass\n\nvip gente boa", ele considera só "vip gente boa".
-premiacao = VIP_limparPremiacaoFormatada(premiacao);
-
 const ganhadorFlex = VIP_parseGanhadorFlex(ganhadorInput, org);
 
 let ganhadorId = ganhadorFlex.id;
 let ganhadorNome = ganhadorFlex.nome || org || "Não identificado";
 
 const pagamentoResolvido = await VIP_resolverPagamentoLink(client, premiacao);
-let tipo = VIP_normalizarTipoPremiacao(premiacao);
+let tipo = VIP_normalizarTipoPremiacao(VIP_pegarTextoPrincipalPremiacao(premiacao) || premiacao);
 let pagamentoLink = null;
 
 if (pagamentoResolvido?.ok) {
