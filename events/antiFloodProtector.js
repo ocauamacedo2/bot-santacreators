@@ -41,25 +41,22 @@ const CONFIG = {
     },
 
     // Domínios Permitidos (Whitelist)
-allowedDomains: [
-    'discord.com',
-    'tenor.com',
-    'giphy.com',
-    'youtube.com',
-    'youtu.be',
-    'google.com',
-    'github.com',
-    'instagram.com',
-    'tiktok.com',
-    'twitch.tv'
+pornWords: [
+    /porn/i,
+    /porno/i,
+    /pornografia/i,
+    /sexcam/i,
+    /webcam\s*sex/i,
+    /nude/i,
+    /nudes/i,
+    /onlyfans/i,
+    /privacy/i,
+    /xxx/i,
+    /redtube/i,
+    /xvideos/i,
+    /sexo/i,
+    /conteudo\s*adulto/i,
 ],
-
-blockedInviteDomains: [
-    'discord.gg',
-    'discord.me',
-    'discordapp.com',
-],
-
     // Duração dos Castigos (Timeout)
     punishments: {
         level1: 60 * 1000,           // 1 minuto
@@ -157,6 +154,32 @@ function hasSuspiciousAttachment(message) {
             /\.(png|jpg|jpeg|gif|webp|mp4|mov|webm)$/i.test(name)
         );
     });
+}
+
+function isTicketChannel(message) {
+    const channelName = message.channel?.name?.toLowerCase() || '';
+    const parentName = message.channel?.parent?.name?.toLowerCase() || '';
+
+    return (
+        channelName.includes('ticket') ||
+        channelName.includes('suporte') ||
+        channelName.includes('atendimento') ||
+        parentName.includes('ticket') ||
+        parentName.includes('suporte') ||
+        parentName.includes('atendimento')
+    );
+}
+
+function isDiscordInviteLink(url) {
+    const domain = url.hostname.toLowerCase().replace(/^www\./, '');
+    const pathname = url.pathname.toLowerCase();
+
+    return (
+        domain === 'discord.gg' ||
+        domain === 'discord.me' ||
+        domain === 'discord.com' && pathname.startsWith('/invite/') ||
+        domain === 'discordapp.com' && pathname.startsWith('/invite/')
+    );
 }
 
 function checkBypass(member) {
@@ -300,9 +323,13 @@ export function setupAntiFloodProtector(client) {
             const url = new URL(link);
             const domain = url.hostname.toLowerCase().replace(/^www\./, '');
 
-            if (CONFIG.blockedInviteDomains.includes(domain)) {
-                violation = "Divulgação de convite/link de Discord não autorizado";
-                break;
+            if (isDiscordInviteLink(url)) {
+                if (!isTicketChannel(message)) {
+                    violation = "Divulgação de convite/link de Discord não autorizado";
+                    break;
+                }
+
+                continue;
             }
 
             const shorteners = [
@@ -360,7 +387,6 @@ if (!violation && hasSuspiciousAttachment(message)) {
         /porno/i,
         /porn/i,
         /xxx/i,
-        /sexo/i,
         /conteudo\s*adulto/i,
         /nitro\s*gratis/i,
         /free\s*nitro/i,
