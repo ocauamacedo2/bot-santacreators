@@ -636,6 +636,26 @@ function VIP_normalizarTipoPremiacao(texto) {
   if (t.includes("prata") || t.includes("prataa")) return "VIP Prata";
   if (t.includes("ouro") || t.includes("oru")) return "VIP Ouro";
 
+  // ✅ Rolepass precisa ganhar de VIP Staff/Gente Boa.
+  // Exemplo: "VIP Staff / VIP Gente Boa\n\nROLEPASS" = Rolepass.
+  if (
+    /\brole\s*pass\b/.test(t) ||
+    /\brolepass\b/.test(t) ||
+    /\brol\s*pass\b/.test(t) ||
+    /\brole\s*passe\b/.test(t) ||
+    /\brolipass\b/.test(t) ||
+    /\broll\s*pass\b/.test(t) ||
+    /\brole\s*p\b/.test(t) ||
+    /\brol\s*passe\b/.test(t) ||
+    textoColado.includes("rolepass") ||
+    textoColado.includes("rollpass") ||
+    textoColado.includes("rolpass") ||
+    textoColado.includes("rolipass") ||
+    textoColado.includes("rolepasse")
+  ) return "Pass";
+
+  if (/\bpass\b/.test(t) || /\bpasse\b/.test(t)) return "Pass";
+
   if (
     t.includes("staff") ||
     t.includes("gente boa") ||
@@ -653,20 +673,6 @@ function VIP_normalizarTipoPremiacao(texto) {
     t.includes("lancamento") ||
     t.includes("lanca")
   ) return "VIP Lancamento";
-
-  // ✅ Rolepass só entra depois de VIP Evento.
-  if (
-    /\brole\s*pass\b/.test(t) ||
-    /\brolepass\b/.test(t) ||
-    /\brol\s*pass\b/.test(t) ||
-    /\brole\s*passe\b/.test(t) ||
-    /\brolipass\b/.test(t) ||
-    textoColado.includes("rolepass") ||
-    textoColado.includes("rolpass") ||
-    textoColado.includes("rolipass")
-  ) return "Pass";
-
-  if (/\bpass\b/.test(t) || /\bpasse\b/.test(t)) return "Pass";
 
   const pareceDinheiro =
     /\bdinheiro\b/.test(t) ||
@@ -1671,29 +1677,34 @@ extra: [
       }
 
       // PAGO
-            if (i.customId === VIP_BTN_PAGO_ID) {
-        const pagoIdx = fields.findIndex((f) => (f.name || "").startsWith("💸 Pagamento"));
+      if (i.customId === VIP_BTN_PAGO_ID) {
+        await VIP_corrigirRegistroVipMensagem(msg, client).catch(() => null);
+
+        const embedPagoCorrigido = EmbedBuilder.from(msg.embeds[0]);
+        const fieldsPagoCorrigidos = embedPagoCorrigido.data.fields ?? [];
+
+        const pagoIdx = fieldsPagoCorrigidos.findIndex((f) => (f.name || "").startsWith("💸 Pagamento"));
 
         if (pagoIdx >= 0 && (fields[pagoIdx]?.value || "—") !== "—") {
           await safeReply(i, { content: "⚠️ Esse registro já está marcado como pago.", ephemeral: true });
           return true;
         }
 
-        const reprovadoIdx = fields.findIndex((f) => (f.name || "").startsWith("⛔ Reprovação"));
-        if (reprovadoIdx >= 0 && /REPROVADO/i.test(fields[reprovadoIdx]?.value || "")) {
+        const reprovadoIdx = fieldsPagoCorrigidos.findIndex((f) => (f.name || "").startsWith("⛔ Reprovação"));
+        if (reprovadoIdx >= 0 && /REPROVADO/i.test(fieldsPagoCorrigidos[reprovadoIdx]?.value || "")) {
           await safeReply(i, { content: "⚠️ Esse registro está reprovado.", ephemeral: true });
           return true;
         }
 
         const linha = `• **PAGO** por <@${i.user.id}> em ${whenTxt}`;
 
-        if (pagoIdx >= 0) fields[pagoIdx].value = linha.slice(0, 1024);
-        else fields.push({ name: "💸 Pagamento", value: linha.slice(0, 1024), inline: false });
+        if (pagoIdx >= 0) fieldsPagoCorrigidos[pagoIdx].value = linha.slice(0, 1024);
+        else fieldsPagoCorrigidos.push({ name: "💸 Pagamento", value: linha.slice(0, 1024), inline: false });
 
-        embed.setFields(fields);
+        embedPagoCorrigido.setFields(fieldsPagoCorrigidos);
 
         await msg.edit({
-          embeds: [embed],
+          embeds: [embedPagoCorrigido],
           components: VIP_buildRegistroButtons(true, true, false),
         });
 
