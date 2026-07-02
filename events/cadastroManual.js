@@ -32,12 +32,28 @@ const LOG_CHANNEL_ID = '1486009608765050940';
 const BOTAO_LIMPAR_ID = 'cadastro_limpar_registros';
 const BOTAO_RESTAURAR_ID = 'cadastro_restaurar_backup';
 
+// Log completo do comando !semwl
+const SEMWL_LOG_CHANNEL_ID = '1522308469682864198';
+const SEMWL_COMMAND_NAME = '!semwl';
+
 const ALLOWED_CLEAR_USERS = ['660311795327828008', '1262262852949905408'];
 const ALLOWED_CLEAR_ROLES = [
   '1352407252216184833', // resp lider
   '1352408327983861844', // resp creators
   '1262262852949905409', // resp influ
   '1282119104576098314', // mkt creators
+];
+
+// Permissões específicas do comando !semwl
+const ALLOWED_SEMWL_USERS = [
+  '660311795327828008', // Macedo
+  '1262262852949905408', // owner
+];
+
+const ALLOWED_SEMWL_ROLES = [
+  '1352408327983861844', // resp creators
+  '1352407252216184833', // resp lider
+  '1262262852949905409', // resp influ
 ];
 
 // Persistência do backup
@@ -92,6 +108,12 @@ function hasClearPermission(member) {
   if (!member) return false;
   if (ALLOWED_CLEAR_USERS.includes(member.id)) return true;
   return member.roles.cache.some(r => ALLOWED_CLEAR_ROLES.includes(r.id));
+}
+
+function hasSemWlCommandPermission(member) {
+  if (!member) return false;
+  if (ALLOWED_SEMWL_USERS.includes(member.id)) return true;
+  return member.roles.cache.some(r => ALLOWED_SEMWL_ROLES.includes(r.id));
 }
 
 function saveBackup(data) {
@@ -261,6 +283,360 @@ async function forceOnlyCidadao(member) {
   };
 }
 
+function chunkText(text, max = 950) {
+  const value = String(text || '');
+  if (value.length <= max) return [value];
+
+  const chunks = [];
+  let current = '';
+
+  for (const line of value.split('\n')) {
+    if ((current + '\n' + line).length > max) {
+      if (current) chunks.push(current);
+      current = line;
+    } else {
+      current = current ? `${current}\n${line}` : line;
+    }
+  }
+
+  if (current) chunks.push(current);
+  return chunks;
+}
+
+function buildSemWlProgressEmbed({ executor, channel, total, analyzed, found, changed, failed, skipped, status }) {
+  return new EmbedBuilder()
+    .setTitle('🔎 Verificação SEM WL em andamento')
+    .setColor('#ff009a')
+    .setThumbnail(executor.displayAvatarURL())
+    .setDescription(
+      [
+        `**Status:** ${status}`,
+        `**Executor:** ${executor}`,
+        `**Canal usado:** ${channel}`,
+        '',
+        `**Total com SEM WL:** \`${total}\``,
+        `**Analisados:** \`${analyzed}/${total}\``,
+        `**Histórico encontrado:** \`${found}\``,
+        `**Alterados:** \`${changed}\``,
+        `**Falharam:** \`${failed}\``,
+        `**Ignorados:** \`${skipped}\``,
+        '',
+        `🕒 **Início:** <t:${Math.floor(Date.now() / 1000)}:F>`
+      ].join('\n')
+    )
+    .setFooter({ text: 'A mensagem será apagada automaticamente 1 minuto após finalizar.' });
+}
+
+async function sendSemWlFinalLog(client, payload) {
+  const {
+    guild,
+    executor,
+    commandChannel,
+    startedAt,
+    finishedAt,
+    total,
+    analyzed,
+    found,
+    changed,
+    failed,
+    skipped,
+    changedLines,
+    failedLines,
+    skippedLines
+  } = payload;
+
+  const logChannel = await client.channels.fetch(SEMWL_LOG_CHANNEL_ID).catch(() => null);
+  if (!logChannel?.isTextBased()) return;
+
+  const durationSeconds = Math.max(1, Math.floor((finishedAt - startedAt) / 1000));
+
+  const embed = new EmbedBuilder()
+    .setTitle('✅ Relatório completo - Comando !semwl')
+    .setColor('#00ff88')
+    .setThumbnail(executor.displayAvatarURL())
+    .setDescription(
+      [
+        `**Servidor:** ${guild.name}`,
+        `**Executor:** ${executor} \`${executor.id}\``,
+        `**Canal usado:** ${commandChannel}`,
+        `**Comando:** \`${SEMWL_COMMAND_NAME}\``,
+        '',
+        `**Início:** <t:${Math.floor(startedAt / 1000)}:F>`,
+        `**Finalização:** <t:${Math.floor(finishedAt / 1000)}:F>`,
+        `**Duração:** \`${durationSeconds}s\``,
+        '',
+        `**Total com SEM WL encontrado:** \`${total}\``,
+        `**Total analisado:** \`${analyzed}\``,
+        `**Com histórico Nome | ID:** \`${found}\``,
+        `**Alterados com sucesso:** \`${changed}\``,
+        `**Falharam:** \`${failed}\``,
+        `**Ignorados sem histórico:** \`${skipped}\``
+      ].join('\n')
+    )
+    .setTimestamp(new Date(finishedAt))
+    .setFooter({ text: 'SantaCreators • Restauração automática SEM WL' });
+
+  await logChannel.send({ embeds: [embed] });
+
+  if (changedLines.length) {
+    for (const part of chunkText(changedLines.join('\n'), 950)) {
+      await logChannel.send({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle('🟢 Pessoas alteradas')
+            .setColor('#00ff88')
+            .setDescription(`\`\`\`\n${part}\n\`\`\``)
+        ]
+      });
+    }
+  }
+
+  if (failedLines.length) {
+    for (const part of chunkText(failedLines.join('\n'), 950)) {
+      await logChannel.send({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle('🔴 Pessoas com falha')
+            .setColor('#ff0000')
+            .setDescription(`\`\`\`\n${part}\n\`\`\``)
+        ]
+      });
+    }
+  }
+
+  if (skippedLines.length) {
+    for (const part of chunkText(skippedLines.join('\n'), 950)) {
+      await logChannel.send({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle('⚪ Pessoas ignoradas sem histórico')
+            .setColor('#aaaaaa')
+            .setDescription(`\`\`\`\n${part}\n\`\`\``)
+        ]
+      });
+    }
+  }
+}
+
+async function handleSemWlCommand(message, client) {
+  if (!message.guild || message.author.bot) return false;
+  if (String(message.content || '').trim().toLowerCase() !== SEMWL_COMMAND_NAME) return false;
+
+  const commandChannel = message.channel;
+  const executorMember = message.member;
+
+  try {
+    await message.delete().catch(() => null);
+  } catch {}
+
+  if (!hasSemWlCommandPermission(executorMember)) {
+    const deniedMsg = await commandChannel.send({
+      content: `🚫 ${message.author}, você não tem permissão para usar \`${SEMWL_COMMAND_NAME}\`.`
+    }).catch(() => null);
+
+    if (deniedMsg) {
+      setTimeout(() => deniedMsg.delete().catch(() => null), 15000);
+    }
+
+    return true;
+  }
+
+  const startedAt = Date.now();
+
+  let progressMessage = await commandChannel.send({
+    embeds: [
+      buildSemWlProgressEmbed({
+        executor: message.author,
+        channel: commandChannel,
+        total: 0,
+        analyzed: 0,
+        found: 0,
+        changed: 0,
+        failed: 0,
+        skipped: 0,
+        status: 'Buscando membros com cargo SEM WL...'
+      })
+    ]
+  }).catch(() => null);
+
+  const stats = {
+    total: 0,
+    analyzed: 0,
+    found: 0,
+    changed: 0,
+    failed: 0,
+    skipped: 0
+  };
+
+  const changedLines = [];
+  const failedLines = [];
+  const skippedLines = [];
+
+  try {
+    await message.guild.members.fetch();
+
+    const semWlMembers = message.guild.members.cache.filter(member =>
+      !member.user.bot && member.roles.cache.has(CARGO_TEMP_REMOVER)
+    );
+
+    stats.total = semWlMembers.size;
+
+    if (progressMessage) {
+      await progressMessage.edit({
+        embeds: [
+          buildSemWlProgressEmbed({
+            executor: message.author,
+            channel: commandChannel,
+            ...stats,
+            status: `Encontrados ${stats.total} membros com SEM WL. Iniciando análise das logs...`
+          })
+        ]
+      }).catch(() => null);
+    }
+
+    for (const member of semWlMembers.values()) {
+      stats.analyzed++;
+
+      const oldDisplayName = member.displayName;
+
+      const foundInLogs = await findCadastroIdentityInNicknameLogs(client, message.guild, member.id);
+
+      if (!foundInLogs?.nome || !foundInLogs?.id) {
+        stats.skipped++;
+
+        skippedLines.push(
+          `${stats.analyzed}. ${member.user.tag} | ${member.id} | sem histórico Nome | ID nas logs`
+        );
+      } else {
+        stats.found++;
+
+        const novoNick = sanitizeNick(foundInLogs.nome, foundInLogs.id);
+        const nickOk = await setNickSafe(member, novoNick);
+
+        if (!nickOk) {
+          stats.failed++;
+
+          failedLines.push(
+            `${stats.analyzed}. ${member.user.tag} | ${member.id} | histórico: ${novoNick} | falha ao alterar nick`
+          );
+        } else {
+          saveCadastroUser(member, foundInLogs.nome, foundInLogs.id);
+
+          const roleResult = await forceOnlyCidadao(member);
+
+          if (roleResult.cidadaoOk && !roleResult.hasSemWl) {
+            stats.changed++;
+
+            changedLines.push(
+              `${stats.analyzed}. ${member.user.tag} | ${member.id} | ${oldDisplayName} -> ${novoNick} | Cidadão: OK | SEM WL removido: OK`
+            );
+          } else {
+            stats.failed++;
+
+            failedLines.push(
+              `${stats.analyzed}. ${member.user.tag} | ${member.id} | nick: ${novoNick} | Cidadão: ${roleResult.cidadaoOk ? 'OK' : 'FALHOU'} | SEM WL ainda ficou: ${roleResult.hasSemWl ? 'SIM' : 'NÃO'}`
+            );
+          }
+        }
+      }
+
+      if (progressMessage && (stats.analyzed % 3 === 0 || stats.analyzed === stats.total)) {
+        await progressMessage.edit({
+          embeds: [
+            buildSemWlProgressEmbed({
+              executor: message.author,
+              channel: commandChannel,
+              ...stats,
+              status: `Analisando logs e restaurando cadastros... Último analisado: ${member.user.tag}`
+            })
+          ]
+        }).catch(() => null);
+      }
+
+      await sleep(1200);
+    }
+
+    const finishedAt = Date.now();
+
+    if (progressMessage) {
+      await progressMessage.edit({
+        embeds: [
+          buildSemWlProgressEmbed({
+            executor: message.author,
+            channel: commandChannel,
+            ...stats,
+            status: 'Finalizado. Log completo enviado para o canal de logs.'
+          })
+        ]
+      }).catch(() => null);
+
+      setTimeout(() => {
+        progressMessage?.delete().catch(() => null);
+      }, 60000);
+    }
+
+    await sendSemWlFinalLog(client, {
+      guild: message.guild,
+      executor: message.author,
+      commandChannel,
+      startedAt,
+      finishedAt,
+      total: stats.total,
+      analyzed: stats.analyzed,
+      found: stats.found,
+      changed: stats.changed,
+      failed: stats.failed,
+      skipped: stats.skipped,
+      changedLines,
+      failedLines,
+      skippedLines
+    });
+
+    return true;
+  } catch (e) {
+    const finishedAt = Date.now();
+
+    if (progressMessage) {
+      await progressMessage.edit({
+        embeds: [
+          buildSemWlProgressEmbed({
+            executor: message.author,
+            channel: commandChannel,
+            ...stats,
+            status: `Erro durante execução: ${e?.message || e}`
+          })
+        ]
+      }).catch(() => null);
+
+      setTimeout(() => {
+        progressMessage?.delete().catch(() => null);
+      }, 60000);
+    }
+
+    await sendSemWlFinalLog(client, {
+      guild: message.guild,
+      executor: message.author,
+      commandChannel,
+      startedAt,
+      finishedAt,
+      total: stats.total,
+      analyzed: stats.analyzed,
+      found: stats.found,
+      changed: stats.changed,
+      failed: stats.failed + 1,
+      skipped: stats.skipped,
+      changedLines,
+      failedLines: [
+        ...failedLines,
+        `ERRO GERAL: ${e?.message || e}`
+      ],
+      skippedLines
+    });
+
+    return true;
+  }
+}
+
 // Remove mensagens antigas do bot no canal que tenham o botão esperado
 async function limparMensagensAntigas(client, canal) {
   try {
@@ -335,6 +711,14 @@ export async function cadastroManualOnReady(client) {
 
   if (!client.__cadastroAutoRestoreWired) {
     client.__cadastroAutoRestoreWired = true;
+
+    client.on("messageCreate", async (message) => {
+      try {
+        await handleSemWlCommand(message, client);
+      } catch (e) {
+        console.warn("[cadastroManual] Falha ao executar comando !semwl:", e?.message || e);
+      }
+    });
 
     client.on("guildMemberAdd", async (member) => {
       try {
