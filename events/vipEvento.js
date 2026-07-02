@@ -877,6 +877,16 @@ function VIP_limparPremiacaoFormatada(texto) {
   return limpas.join("\n").trim();
 }
 
+function VIP_pegarTextoPrincipalPremiacao(texto) {
+  const limpo = VIP_limparPremiacaoFormatada(texto);
+  const linhas = limpo
+    .split(/\r?\n/g)
+    .map((linha) => linha.trim())
+    .filter(Boolean);
+
+  return linhas.length ? linhas[linhas.length - 1] : limpo;
+}
+
 function VIP_formatarPremiacaoInteligente(texto, tipoForcado = null) {
   const textoLimpo = VIP_limparPremiacaoFormatada(texto);
   const tipo = VIP_normalizarTipoPremiacao(tipoForcado || textoLimpo);
@@ -1471,7 +1481,8 @@ let ganhadorId = ganhadorFlex.id;
 let ganhadorNome = ganhadorFlex.nome || org || "Não identificado";
 
 const pagamentoResolvido = await VIP_resolverPagamentoLink(client, premiacao);
-let tipo = VIP_normalizarTipoPremiacao(VIP_pegarTextoPrincipalPremiacao(premiacao) || premiacao);
+const premiacaoPrincipal = VIP_pegarTextoPrincipalPremiacao(premiacao);
+let tipo = VIP_normalizarTipoPremiacao(premiacaoPrincipal || premiacao);
 let pagamentoLink = null;
 
 if (pagamentoResolvido?.ok) {
