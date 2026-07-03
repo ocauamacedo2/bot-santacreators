@@ -70,7 +70,7 @@ const PESOS = {
 };
 
 const METAS = {
-  eventosRatio: 0.9,
+  eventosRatio: 0.8,
   pontos: 50,
   poderesDias: 6,
   orgs: 10,
