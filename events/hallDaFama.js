@@ -208,9 +208,6 @@ const HALL_REVIEW_CHANNEL_ID = "1518707314901651576";// Canal para revisão manu
   ];
   const ORG_CITY_OVERRIDES = {
     [normalizeStaticKey("trindade")]: "grande",
-    [normalizeStaticKey("familia novaera")]: "grande",
-    [normalizeStaticKey("novaera")]: "grande",
-    [normalizeStaticKey("nova era")]: "grande",
 
     [normalizeStaticKey("vidigal")]: "nobre",
     [normalizeStaticKey("morro do sacola")]: "nobre",
@@ -371,7 +368,15 @@ const HALL_FORCE_PLAYER_NAMES = [
 
 const HALL_FORCE_IGNORE_PAYMENT_ORG_NAMES = [
   "Morro do Sacola",
-  "Morro-do-Sacola"
+  "Morro-do-Sacola",
+  "Tropa do 7",
+  "Tropa Do 7",
+  "Tropadu7",
+  "DriftKing",
+  "Drift King",
+  "Familia NovaEra",
+  "NovaEra",
+  "Nova Era"
 ];
 
 function isForcedPlayerName(value = "") {
@@ -1145,10 +1150,13 @@ function resolveCityKeyFromName(value = "") {
   }
 
   const ORG_NAME_ALIASES = {
-    [normalizeHallKey("tropado7")]: "Tropa do 7",
     [normalizeHallKey("tropa do 7")]: "Tropa do 7",
     [normalizeHallKey("TROPA DO 7")]: "Tropa do 7",
     [normalizeHallKey("tropa7")]: "Tropa do 7",
+    [normalizeHallKey("tropa do sete")]: "Tropa do 7",
+
+    [normalizeHallKey("tropadu7")]: "Tropadu7",
+    [normalizeHallKey("tropa du 7")]: "Tropadu7",
 
     [normalizeHallKey("cpx")]: "CPX",
     [normalizeHallKey("complexo do odio")]: "CPX",
@@ -1192,7 +1200,15 @@ function resolveCityKeyFromName(value = "") {
     [normalizeHallKey("familia novaera")]: "Familia NovaEra",
     [normalizeHallKey("família novaera")]: "Familia NovaEra",
     [normalizeHallKey("novaera")]: "Familia NovaEra",
-    [normalizeHallKey("nova era")]: "Familia NovaEra"
+    [normalizeHallKey("nova era")]: "Familia NovaEra",
+
+    [normalizeHallKey("driftking")]: "Drift King",
+    [normalizeHallKey("drift king")]: "Drift King",
+
+    [normalizeHallKey("visionario")]: "Visionarios",
+    [normalizeHallKey("visionário")]: "Visionarios",
+    [normalizeHallKey("visionarios")]: "Visionarios",
+    [normalizeHallKey("visionários")]: "Visionarios"
   };
 
   function normalizeOrgDisplayName(orgName = "") {
@@ -1496,9 +1512,15 @@ function extractPlayerOrgByKnownOrgName(value = "") {
     let cityKey = null;
 
     if (normalized.includes("grande do crime")) cityKey = "grande";
-    if (normalized.includes("santa do crime")) cityKey = "santa";
     if (normalized.includes("maresia do crime")) cityKey = "maresia";
     if (normalized.includes("nobre do crime")) cityKey = "nobre";
+
+    // ⚠️ Santa do Crime e Mini Rei do Crime são ambíguos:
+    // - Se a cidade final for Nobre, normalizeHallEventName já transforma em Nobre do Crime.
+    // - Se for Santa, transforma em Santa do Crime.
+    // Então aqui NÃO pode forçar cidade só pelo nome.
+    if (normalized.includes("santa do crime")) return null;
+    if (normalized.includes("mini rei do crime")) return null;
 
     if (!cityKey) return null;
 
@@ -2051,18 +2073,18 @@ function normalizeHallEventName(eventName = "", cityKey = "nobre") {
     return "Evento";
   }
 
-  if (normalized.includes("mini rei do crime")) return "Nobre do Crime";
-
-  if (normalized.includes("santa do crime")) {
-    if (cityKey === "nobre") return "Nobre do Crime";
+  if (
+    normalized.includes("mini rei do crime") ||
+    normalized.includes("santa do crime") ||
+    normalized.includes("nobre do crime") ||
+    normalized.includes("grande do crime") ||
+    normalized.includes("maresia do crime")
+  ) {
+    if (cityKey === "santa") return "Santa do Crime";
     if (cityKey === "maresia") return "Maresia do Crime";
     if (cityKey === "grande") return "Grande do Crime";
-    return "Santa do Crime";
+    return "Nobre do Crime";
   }
-
-  if (normalized.includes("grande do crime")) return "Grande do Crime";
-  if (normalized.includes("maresia do crime")) return "Maresia do Crime";
-  if (normalized.includes("nobre do crime")) return "Nobre do Crime";
 
   if (
     normalized.includes("pvp de machado no navio") ||
@@ -3874,6 +3896,63 @@ await ch.send({
 }).catch(() => {});
   }
 
+async function sendRequiredPlayerCityReviewIfNeeded(client, rankings, playerData, reason = "mais_de_2_vitorias") {
+  if (!client || !playerData?.playerId) return;
+
+  const playerId = String(playerData.playerId || "").trim();
+  const playerName = cleanRankingPlayerName(playerData.name || playerData.playerName || "");
+  if (!playerId) return;
+
+  const total = Number(playerData.total || 0);
+  if (total <= 2) return;
+
+  rankings.pendingPaymentCityReview ??= {};
+
+  const playerReviewKey = `id:${playerId}`;
+  if (rankings.pendingPaymentCityReview[playerReviewKey]) return;
+
+  const hasManualCity =
+    getManualPlayerCityKey(playerId) ||
+    getManualPlayerCityKeyByName(playerName);
+
+  if (hasManualCity) return;
+
+  rankings.pendingPaymentCityReview[playerReviewKey] = {
+    playerReviewKey,
+    playerName,
+    playerId,
+    eventName: "Revisão obrigatória por acúmulo de vitórias",
+    eventDateKey: new Date().toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" }),
+    messageId: playerData.halls?.at(-1)?.messageId || "",
+    jumpUrl: playerData.halls?.at(-1)?.jumpUrl || "",
+    createdAt: Date.now(),
+    reason
+  };
+
+  const ch = await client.channels.fetch(PAYMENT_CITY_REVIEW_CHANNEL_ID).catch(() => null);
+  if (!ch || !ch.isTextBased()) return;
+
+  const row = new ActionRowBuilder().addComponents(
+    Object.entries(CITIES).map(([cityKey, city]) =>
+      new ButtonBuilder()
+        .setCustomId(`${BTN_PAYMENT_CITY_PREFIX}${playerReviewKey}:${cityKey}`)
+        .setLabel(city.label.replace("Cidade ", ""))
+        .setEmoji(city.emoji)
+        .setStyle(ButtonStyle.Secondary)
+    )
+  );
+
+  await ch.send({
+    content:
+      `⚠️ **Revisão obrigatória de cidade do player**\n\n` +
+      `👤 Player: **${playerName || "Sem nome"}** | \`${playerId}\`\n` +
+      `🏆 Vitórias encontradas: **${total}**\n` +
+      `📌 Motivo: **${reason}**\n\n` +
+      `Esse ID passou de **2 vitórias** e precisa ser sinalizado manualmente antes de ficar confiável no ranking.`,
+    components: [row]
+  }).catch(() => {});
+}
+
   async function addPaymentEventsToPlayerRankings(rankings, client) {
     const channel = await client.channels.fetch(PAYMENT_EVENTS_CHANNEL_ID).catch(() => null);
     if (!channel || !channel.isTextBased()) return rankings;
@@ -4055,6 +4134,14 @@ await ch.send({
           evidenceConfidence: 92,
           createdTimestamp: message.createdTimestamp || Date.now()
         });
+
+        const playerKey = getPlayerRankingKey({
+          playerName: winner.playerName,
+          playerId: winner.playerId || "",
+          cityKey
+        });
+
+        await sendRequiredPlayerCityReviewIfNeeded(client, rankings, rankings.players[playerKey], "mais_de_2_vitorias_no_mesmo_id");
 
         rankings.paymentEventKeys[paymentKey] = {
           messageId: message.id,
@@ -4305,6 +4392,15 @@ await ch.send({
       }
 
       addPlayerRankingPoint(rankings, playerWinner, hallMeta);
+
+      const fixedIdentity = resolvePlayerIdentityOverride(playerWinner.playerId, playerWinner.playerName);
+      const playerKey = getPlayerRankingKey({
+        playerName: fixedIdentity.playerName,
+        playerId: fixedIdentity.playerId,
+        cityKey
+      });
+
+      await sendRequiredPlayerCityReviewIfNeeded(client, rankings, rankings.players[playerKey], "mais_de_2_vitorias_no_mesmo_id_hall");
     }
 
     rankings.reviewedMessages[message.id] = {
@@ -6209,12 +6305,21 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
           return fieldName.includes("cidade") || fieldName.includes("cdd");
         });
 
-        if (!alreadyHasCityField) {
-          fields.push({
-            name: "🏙️ Cidade / CDD",
-            value: `${CITIES[cityKey].emoji} ${CITIES[cityKey].label}\nMarcado por: <@${interaction.user.id}>`,
-            inline: false
-          });
+        const cityField = {
+          name: "🏙️ Cidade / CDD",
+          value: `${CITIES[cityKey].emoji} ${CITIES[cityKey].label}\nMarcado por: <@${interaction.user.id}>`,
+          inline: false
+        };
+
+        const cityFieldIndex = fields.findIndex(field => {
+          const fieldName = normalizeHallName(field.name || "");
+          return fieldName.includes("cidade") || fieldName.includes("cdd");
+        });
+
+        if (cityFieldIndex >= 0) {
+          fields[cityFieldIndex] = cityField;
+        } else {
+          fields.push(cityField);
         }
 
         embed.setFields(fields);

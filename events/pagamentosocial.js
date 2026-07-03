@@ -3249,7 +3249,7 @@ return true;
 
         const cidadeJaDefinida = getCidadeKeyFromEmbed(embedRaw);
 
-        if (cidadeJaDefinida) {
+        if (cidadeJaDefinida && cidadeJaDefinida !== cidadeKey) {
           const componentsSemCidades = removerRowsCidadePagamento(registroMsg);
 
           await registroMsg.edit({
@@ -3258,7 +3258,7 @@ return true;
           }).catch(() => {});
 
           await interaction.editReply({
-            content: "⚠️ Esse registro já tem uma cidade marcada. Os botões foram removidos.",
+            content: "⚠️ Esse registro já tinha outra cidade marcada. Os botões foram removidos para evitar conflito.",
           }).catch(() => {});
 
           return true;
