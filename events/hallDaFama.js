@@ -286,6 +286,9 @@ const HALL_REVIEW_CHANNEL_ID = "1518707314901651576";// Canal para revisão manu
     "6260": "nobre",   // anonima
     "138943": "nobre", // evandri
     "298": "nobre",    // flash
+    "2720": "nobre",   // Jota
+    "4335": "nobre",   // Joker antigo -> junta no 799
+    "578": "nobre",    // Flash antigo/suspeito -> revisão de identidade separada
     "3658": "nobre",   // Barbosa
     "4639": "nobre",   // Haridade
     "236396": "nobre", // luis
@@ -305,6 +308,9 @@ const HALL_REVIEW_CHANNEL_ID = "1518707314901651576";// Canal para revisão manu
 
 const PLAYER_NAME_OVERRIDES = {
   "799": "Joker",
+  "4335": "Joker",
+  "2720": "Jota",
+  "1171": "Matchuca",
   "1629": "Guiguxyz",
   "6641": "Pablo",
   "2593": "Miri",
@@ -459,6 +465,19 @@ function getManualPlayerCityKeySmart(playerId = "", playerName = "") {
       };
     }
 
+    if (
+      id === "4335" ||
+      (
+        id === "799" &&
+        nameKey === normalizeHallKey("Joker")
+      )
+    ) {
+      return {
+        playerId: "799",
+        playerName: "Joker"
+      };
+    }
+
     return {
       playerId: id,
       playerName: getManualPlayerName(id, name)
@@ -540,9 +559,10 @@ function getManualPlayerCityKeySmart(playerId = "", playerName = "") {
       player.halls = uniqueHalls;
       player.total = player.halls.length;
       player.events = {};
-
       for (const hall of player.halls) {
-        const eventName = normalizeHallEventName(hall.eventName, player.cityKey || "nobre");
+        const eventCityKey = hall.cityKey || player.cityKey || "nobre";
+        const eventName = normalizeHallEventName(hall.eventName, eventCityKey);
+
         player.events[eventName] ??= 0;
         player.events[eventName] += 1;
       }
@@ -606,6 +626,8 @@ function getManualPlayerCityKeySmart(playerId = "", playerName = "") {
   const BTN_REVIEW_AS_BOTH_PREFIX = "hf_review_both_";
 const BTN_REVIEW_CITY_PREFIX = "hf_review_city_";
 const BTN_PAYMENT_CITY_PREFIX = "hf_payment_city_";
+const BTN_PLAYER_IDENTITY_MERGE_PREFIX = "hf_identity_merge:";
+const BTN_PLAYER_IDENTITY_SEPARATE_PREFIX = "hf_identity_separate:";
 const BTN_REVIEW_EVENT_PREFIX = "hf_review_event_";
   const MODAL_REVIEW_EVENT_SUBMIT = "hf_review_event_modal";
 
@@ -636,26 +658,30 @@ const BTN_REVIEW_EVENT_PREFIX = "hf_review_event_";
         data.reviewedMessages ??= {};
         data.reviewedPaymentMessages ??= {};
         data.paymentEventKeys ??= {};
-        data.pendingPaymentCityReview ??= {};
-        data.manualReviews ??= {};
-        data.pendingReview ??= {};
-        data.lastUpdatedAt ??= Date.now();
+data.pendingPaymentCityReview ??= {};
+data.pendingPlayerIdentityReview ??= {};
+data.manualPlayerIdentityMerges ??= {};
+data.manualReviews ??= {};
+data.pendingReview ??= {};
+data.lastUpdatedAt ??= Date.now();
 
         return data;
       }
     } catch {}
 
-    return {
-      orgs: {},
-      players: {},
-      reviewedMessages: {},
-      reviewedPaymentMessages: {},
-      paymentEventKeys: {},
-      pendingPaymentCityReview: {},
-      pendingReview: {},
-      manualReviews: {},
-      lastUpdatedAt: Date.now()
-    };
+return {
+  orgs: {},
+  players: {},
+  reviewedMessages: {},
+  reviewedPaymentMessages: {},
+  paymentEventKeys: {},
+  pendingPaymentCityReview: {},
+  pendingPlayerIdentityReview: {},
+  manualPlayerIdentityMerges: {},
+  pendingReview: {},
+  manualReviews: {},
+  lastUpdatedAt: Date.now()
+};
   };
 
   async function sendAuditHallLog(client, member, data, msg) {
@@ -1208,7 +1234,12 @@ function resolveCityKeyFromName(value = "") {
     [normalizeHallKey("visionario")]: "Visionarios",
     [normalizeHallKey("visionário")]: "Visionarios",
     [normalizeHallKey("visionarios")]: "Visionarios",
-    [normalizeHallKey("visionários")]: "Visionarios"
+    [normalizeHallKey("visionários")]: "Visionarios",
+
+    [normalizeHallKey("mete gala")]: "Metgala",
+    [normalizeHallKey("metegala")]: "Metgala",
+    [normalizeHallKey("metgala")]: "Metgala",
+    [normalizeHallKey("meta gala")]: "Metgala"
   };
 
   function normalizeOrgDisplayName(orgName = "") {
@@ -2080,9 +2111,12 @@ function normalizeHallEventName(eventName = "", cityKey = "nobre") {
     normalized.includes("grande do crime") ||
     normalized.includes("maresia do crime")
   ) {
-    if (cityKey === "santa") return "Santa do Crime";
-    if (cityKey === "maresia") return "Maresia do Crime";
-    if (cityKey === "grande") return "Grande do Crime";
+    const finalCityKey = String(cityKey || "nobre").toLowerCase();
+
+    if (finalCityKey === "santa") return "Santa do Crime";
+    if (finalCityKey === "maresia") return "Maresia do Crime";
+    if (finalCityKey === "grande") return "Grande do Crime";
+
     return "Nobre do Crime";
   }
 
@@ -3942,15 +3976,308 @@ async function sendRequiredPlayerCityReviewIfNeeded(client, rankings, playerData
     )
   );
 
+  const reviewEmbed = new EmbedBuilder()
+    .setColor("#f1c40f")
+    .setTitle("⚠️ Revisão obrigatória de cidade do player")
+    .addFields(
+      {
+        name: "👤 Player",
+        value: `**${playerName || "Sem nome"}** | \`${playerId}\``,
+        inline: false
+      },
+      {
+        name: "🏆 Vitórias encontradas",
+        value: `**${total}**`,
+        inline: true
+      },
+      {
+        name: "📌 Motivo",
+        value: `\`${reason}\``,
+        inline: true
+      },
+      {
+        name: "🔗 Registro exemplo",
+        value: playerData.halls?.at(-1)?.jumpUrl
+          ? `[Abrir registro](${playerData.halls.at(-1).jumpUrl})`
+          : "Sem link encontrado",
+        inline: false
+      }
+    )
+    .setFooter({ text: "Clique na cidade correta abaixo. O ranking será atualizado depois da revisão." })
+    .setTimestamp();
+
   await ch.send({
-    content:
-      `⚠️ **Revisão obrigatória de cidade do player**\n\n` +
-      `👤 Player: **${playerName || "Sem nome"}** | \`${playerId}\`\n` +
-      `🏆 Vitórias encontradas: **${total}**\n` +
-      `📌 Motivo: **${reason}**\n\n` +
-      `Esse ID passou de **2 vitórias** e precisa ser sinalizado manualmente antes de ficar confiável no ranking.`,
+    embeds: [reviewEmbed],
     components: [row]
   }).catch(() => {});
+}
+
+function levenshteinDistance(a = "", b = "") {
+  const left = String(a || "");
+  const right = String(b || "");
+
+  const matrix = Array.from({ length: left.length + 1 }, () => []);
+
+  for (let i = 0; i <= left.length; i++) matrix[i][0] = i;
+  for (let j = 0; j <= right.length; j++) matrix[0][j] = j;
+
+  for (let i = 1; i <= left.length; i++) {
+    for (let j = 1; j <= right.length; j++) {
+      matrix[i][j] = left[i - 1] === right[j - 1]
+        ? matrix[i - 1][j - 1]
+        : Math.min(
+            matrix[i - 1][j - 1] + 1,
+            matrix[i][j - 1] + 1,
+            matrix[i - 1][j] + 1
+          );
+    }
+  }
+
+  return matrix[left.length][right.length];
+}
+
+function getPlayerSimilarityRatio(a = "", b = "") {
+  const left = normalizeHallKey(a);
+  const right = normalizeHallKey(b);
+
+  if (!left || !right) return 0;
+  if (left === right) return 1;
+
+  const maxLen = Math.max(left.length, right.length);
+  if (!maxLen) return 0;
+
+  return 1 - (levenshteinDistance(left, right) / maxLen);
+}
+
+function getPlayerLatestHall(player = {}) {
+  return [...(player.halls || [])]
+    .sort((a, b) => Number(b.createdTimestamp || b.at || 0) - Number(a.createdTimestamp || a.at || 0))
+    .at(0) || null;
+}
+
+function getPlayerLatestLink(player = {}) {
+  const hall = getPlayerLatestHall(player);
+  return hall?.jumpUrl || "";
+}
+
+function getPlayerLatestImage(player = {}) {
+  const hall = getPlayerLatestHall(player);
+  return hall?.imageUrl || hall?.image || "";
+}
+
+function buildPlayerIdentityReviewKey(playerA = {}, playerB = {}) {
+  const idA = String(playerA.playerId || "").trim() || normalizeHallKey(playerA.name || "");
+  const idB = String(playerB.playerId || "").trim() || normalizeHallKey(playerB.name || "");
+
+  return [idA, idB].sort().join("_");
+}
+
+function shouldSendPlayerIdentityReview(playerA = {}, playerB = {}) {
+  const idA = String(playerA.playerId || "").trim();
+  const idB = String(playerB.playerId || "").trim();
+
+  const nameA = cleanRankingPlayerName(playerA.name || "");
+  const nameB = cleanRankingPlayerName(playerB.name || "");
+
+  const keyA = normalizeHallKey(nameA);
+  const keyB = normalizeHallKey(nameB);
+
+  if (!keyA || !keyB) return false;
+  if (keyA.length < 3 || keyB.length < 3) return false;
+
+  const sameId = idA && idB && idA === idB;
+  const differentId = idA && idB && idA !== idB;
+
+  const similarity = getPlayerSimilarityRatio(nameA, nameB);
+
+  if (sameId && keyA !== keyB) return true;
+  if (differentId && similarity >= 0.72) return true;
+  if (differentId && (keyA.includes(keyB) || keyB.includes(keyA)) && Math.min(keyA.length, keyB.length) >= 4) return true;
+
+  return false;
+}
+
+function mergePlayerRankingInto(rankings, keepKey, removeKey, cityKey, reviewedBy) {
+  const keep = rankings.players?.[keepKey];
+  const remove = rankings.players?.[removeKey];
+
+  if (!keep || !remove) return false;
+
+  const finalCityKey = cityKey || keep.cityKey || remove.cityKey || "nobre";
+  const finalCityName = CITIES[finalCityKey]?.label || "Cidade Nobre";
+
+  keep.cityKey = finalCityKey;
+  keep.cityName = finalCityName;
+
+  keep.halls = [
+    ...(keep.halls || []),
+    ...(remove.halls || [])
+  ].map(hall => ({
+    ...hall,
+    cityKey: finalCityKey,
+    cityName: finalCityName,
+    eventName: normalizeHallEventName(hall.eventName, finalCityKey)
+  }));
+
+  const seen = new Set();
+  keep.halls = keep.halls.filter(hall => {
+    const uniqueKey = `${hall.messageId || hall.jumpUrl || hall.at}:${hall.eventName}:${finalCityKey}`;
+    if (seen.has(uniqueKey)) return false;
+    seen.add(uniqueKey);
+    return true;
+  });
+
+  keep.total = keep.halls.length;
+  keep.events = {};
+
+  for (const hall of keep.halls) {
+    const eventName = normalizeHallEventName(hall.eventName, finalCityKey);
+    keep.events[eventName] ??= 0;
+    keep.events[eventName] += 1;
+  }
+
+  delete rankings.players[removeKey];
+
+  rankings.manualPlayerIdentityMerges ??= {};
+  rankings.manualPlayerIdentityMerges[`${keepKey}__${removeKey}`] = {
+    keepKey,
+    removeKey,
+    cityKey: finalCityKey,
+    cityName: finalCityName,
+    reviewedBy,
+    reviewedAt: Date.now()
+  };
+
+  return true;
+}
+
+async function sendPlayerIdentitySimilarityReviews(client, rankings) {
+  if (!client || !rankings?.players) return;
+
+  rankings.pendingPlayerIdentityReview ??= {};
+  rankings.manualPlayerIdentityMerges ??= {};
+
+  const ch = await client.channels.fetch(PAYMENT_CITY_REVIEW_CHANNEL_ID).catch(() => null);
+  if (!ch || !ch.isTextBased()) return;
+
+  const players = Object.entries(rankings.players || {})
+    .map(([key, player]) => ({ key, ...player }))
+    .filter(player => player?.name && Number(player.total || 0) > 0);
+
+  let sent = 0;
+
+  for (let i = 0; i < players.length; i++) {
+    for (let j = i + 1; j < players.length; j++) {
+      if (sent >= 15) return;
+
+      const playerA = players[i];
+      const playerB = players[j];
+
+      if (!shouldSendPlayerIdentityReview(playerA, playerB)) continue;
+
+      const reviewKey = buildPlayerIdentityReviewKey(playerA, playerB);
+
+      if (rankings.pendingPlayerIdentityReview[reviewKey]) continue;
+      if (rankings.manualPlayerIdentityMerges[reviewKey]) continue;
+
+      const similarity = Math.round(getPlayerSimilarityRatio(playerA.name, playerB.name) * 100);
+
+      rankings.pendingPlayerIdentityReview[reviewKey] = {
+        reviewKey,
+        playerAKey: playerA.key,
+        playerBKey: playerB.key,
+        playerA: {
+          name: playerA.name,
+          playerId: playerA.playerId || "",
+          cityKey: playerA.cityKey || "nobre",
+          cityName: playerA.cityName || CITIES[playerA.cityKey]?.label || "Cidade Nobre",
+          total: playerA.total || 0,
+          link: getPlayerLatestLink(playerA),
+          image: getPlayerLatestImage(playerA)
+        },
+        playerB: {
+          name: playerB.name,
+          playerId: playerB.playerId || "",
+          cityKey: playerB.cityKey || "nobre",
+          cityName: playerB.cityName || CITIES[playerB.cityKey]?.label || "Cidade Nobre",
+          total: playerB.total || 0,
+          link: getPlayerLatestLink(playerB),
+          image: getPlayerLatestImage(playerB)
+        },
+        similarity,
+        createdAt: Date.now()
+      };
+
+      const cityButtons = Object.entries(CITIES).map(([cityKey, city]) =>
+        new ButtonBuilder()
+          .setCustomId(`${BTN_PLAYER_IDENTITY_MERGE_PREFIX}${reviewKey}:${cityKey}`)
+          .setLabel(`Juntar • ${city.label.replace("Cidade ", "")}`)
+          .setEmoji(city.emoji)
+          .setStyle(ButtonStyle.Success)
+      );
+
+      const row1 = new ActionRowBuilder().addComponents(cityButtons.slice(0, 2));
+      const row2 = new ActionRowBuilder().addComponents(cityButtons.slice(2, 4));
+      const row3 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`${BTN_PLAYER_IDENTITY_SEPARATE_PREFIX}${reviewKey}`)
+          .setLabel("Não são a mesma pessoa")
+          .setStyle(ButtonStyle.Danger)
+      );
+
+      const embed = new EmbedBuilder()
+        .setColor("#f39c12")
+        .setTitle("🧠 Revisão de identidade parecida")
+        .setDescription(
+          `O bot encontrou **nomes parecidos / IDs diferentes** ou **mesmo ID com nome diferente**.\n\n` +
+          `Confirma se são a mesma pessoa e qual cidade deve ficar.`
+        )
+        .addFields(
+          {
+            name: "👤 Pessoa A",
+            value:
+              `**Nome:** ${playerA.name || "Sem nome"}\n` +
+              `**ID:** \`${playerA.playerId || "Sem ID"}\`\n` +
+              `**Cidade atual:** ${playerA.cityName || "Não definida"}\n` +
+              `**Vitórias:** ${playerA.total || 0}\n` +
+              `**Registro:** ${getPlayerLatestLink(playerA) ? `[Abrir registro](${getPlayerLatestLink(playerA)})` : "Sem link encontrado"}`,
+            inline: false
+          },
+          {
+            name: "👤 Pessoa B",
+            value:
+              `**Nome:** ${playerB.name || "Sem nome"}\n` +
+              `**ID:** \`${playerB.playerId || "Sem ID"}\`\n` +
+              `**Cidade atual:** ${playerB.cityName || "Não definida"}\n` +
+              `**Vitórias:** ${playerB.total || 0}\n` +
+              `**Registro:** ${getPlayerLatestLink(playerB) ? `[Abrir registro](${getPlayerLatestLink(playerB)})` : "Sem link encontrado"}`,
+            inline: false
+          },
+          {
+            name: "📊 Parecido",
+            value: `**${similarity}%**`,
+            inline: true
+          },
+          {
+            name: "❓ Pergunta",
+            value: "São a mesma pessoa? Se sim, clique na cidade correta para juntar as vitórias.",
+            inline: false
+          }
+        )
+        .setFooter({ text: "SantaCreators • Revisão manual de identidade" })
+        .setTimestamp();
+
+      const thumb = getPlayerLatestImage(playerA) || getPlayerLatestImage(playerB);
+      if (thumb) embed.setThumbnail(thumb);
+
+      await ch.send({
+        embeds: [embed],
+        components: [row1, row2, row3]
+      }).catch(() => {});
+
+      sent++;
+    }
+  }
 }
 
   async function addPaymentEventsToPlayerRankings(rankings, client) {
@@ -5066,6 +5393,7 @@ async function publishHallRankings(client, rankings) {
 
   async function publishHallRankingsDuringScan(client, rankings) {
     normalizeExistingPlayerRankingOverrides(rankings);
+    await sendPlayerIdentitySimilarityReviews(client, rankings);
 
     rankings.lastUpdatedAt = Date.now();
 
@@ -5077,6 +5405,7 @@ async function publishHallRankings(client, rankings) {
     try {
       const rankings = loadHallRankings();
       normalizeExistingPlayerRankingOverrides(rankings);
+      await sendPlayerIdentitySimilarityReviews(client, rankings);
       saveHallRankings(rankings);
       await publishHallRankings(client, rankings);
     } catch (e) {
@@ -6268,6 +6597,133 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
       return true;
     }
 
+    if (interaction.isButton() && interaction.customId.startsWith(BTN_PLAYER_IDENTITY_MERGE_PREFIX)) {
+      if (!hasPermission(interaction.member, interaction.user.id)) {
+        return interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
+      }
+
+      await interaction.deferReply({ ephemeral: true });
+
+      const raw = interaction.customId.slice(BTN_PLAYER_IDENTITY_MERGE_PREFIX.length);
+      const parts = raw.split(":");
+      const cityKey = parts.pop();
+      const reviewKey = parts.join(":");
+
+      if (!CITIES[cityKey]) {
+        return interaction.editReply("❌ Cidade inválida.");
+      }
+
+      const rankings = loadHallRankings();
+      const pending = rankings.pendingPlayerIdentityReview?.[reviewKey];
+
+      if (!pending) {
+        return interaction.editReply("⚠️ Essa revisão já foi resolvida ou não existe mais.");
+      }
+
+      const merged = mergePlayerRankingInto(
+        rankings,
+        pending.playerAKey,
+        pending.playerBKey,
+        cityKey,
+        interaction.user.id
+      );
+
+      if (!merged) {
+        return interaction.editReply("❌ Não consegui juntar essas pessoas. Rode a varredura novamente e tente de novo.");
+      }
+
+      delete rankings.pendingPlayerIdentityReview[reviewKey];
+
+      rankings.lastUpdatedAt = Date.now();
+      saveHallRankings(rankings);
+      await publishHallRankings(client, rankings);
+
+      const doneEmbed = new EmbedBuilder()
+        .setColor("#2ecc71")
+        .setTitle(`✅ Identidade revisada e juntada em ${CITIES[cityKey].label}`)
+        .addFields(
+          {
+            name: "👤 Pessoa A",
+            value:
+              `**${pending.playerA?.name || "Sem nome"}** | \`${pending.playerA?.playerId || "Sem ID"}\`\n` +
+              `Cidade anterior: ${pending.playerA?.cityName || "Não definida"}\n` +
+              `Registro: ${pending.playerA?.link ? `[Abrir registro](${pending.playerA.link})` : "Sem link encontrado"}`,
+            inline: false
+          },
+          {
+            name: "👤 Pessoa B",
+            value:
+              `**${pending.playerB?.name || "Sem nome"}** | \`${pending.playerB?.playerId || "Sem ID"}\`\n` +
+              `Cidade anterior: ${pending.playerB?.cityName || "Não definida"}\n` +
+              `Registro: ${pending.playerB?.link ? `[Abrir registro](${pending.playerB.link})` : "Sem link encontrado"}`,
+            inline: false
+          },
+          {
+            name: "🏙️ Cidade final",
+            value: `${CITIES[cityKey].emoji} **${CITIES[cityKey].label}**`,
+            inline: true
+          },
+          {
+            name: "👮 Revisado por",
+            value: `<@${interaction.user.id}>`,
+            inline: true
+          }
+        )
+        .setTimestamp();
+
+      await interaction.message.edit({
+        content: "",
+        embeds: [doneEmbed],
+        components: []
+      }).catch(() => {});
+
+      await interaction.editReply("✅ Pessoas juntadas e ranking atualizado.");
+      return true;
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith(BTN_PLAYER_IDENTITY_SEPARATE_PREFIX)) {
+      if (!hasPermission(interaction.member, interaction.user.id)) {
+        return interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
+      }
+
+      await interaction.deferReply({ ephemeral: true });
+
+      const reviewKey = interaction.customId.slice(BTN_PLAYER_IDENTITY_SEPARATE_PREFIX.length);
+      const rankings = loadHallRankings();
+      const pending = rankings.pendingPlayerIdentityReview?.[reviewKey];
+
+      if (!pending) {
+        return interaction.editReply("⚠️ Essa revisão já foi resolvida ou não existe mais.");
+      }
+
+      rankings.manualPlayerIdentityMerges ??= {};
+      rankings.manualPlayerIdentityMerges[reviewKey] = {
+        ...pending,
+        separated: true,
+        reviewedBy: interaction.user.id,
+        reviewedAt: Date.now()
+      };
+
+      delete rankings.pendingPlayerIdentityReview[reviewKey];
+
+      rankings.lastUpdatedAt = Date.now();
+      saveHallRankings(rankings);
+
+      const doneEmbed = EmbedBuilder.from(interaction.message.embeds?.[0] || new EmbedBuilder())
+        .setColor("#e74c3c")
+        .setTitle("❌ Identidade revisada: não são a mesma pessoa")
+        .setFooter({ text: `Revisado por ${interaction.user.tag}` })
+        .setTimestamp();
+
+      await interaction.message.edit({
+        embeds: [doneEmbed],
+        components: []
+      }).catch(() => {});
+
+      await interaction.editReply("✅ Marcado como pessoas diferentes.");
+      return true;
+    }
+
     if (interaction.isButton() && interaction.customId.startsWith(BTN_PAYMENT_CITY_PREFIX)) {
       if (!hasPermission(interaction.member, interaction.user.id)) {
         return interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
@@ -6333,7 +6789,7 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
       delete rankings.pendingPaymentCityReview[playerReviewKey];
       delete rankings.reviewedPaymentMessages[pending.messageId];
 
-      rankings.manualPaymentCityReviews ??= {};
+            rankings.manualPaymentCityReviews ??= {};
       rankings.manualPaymentCityReviews[playerReviewKey] = {
         ...pending,
         cityKey,
@@ -6342,17 +6798,66 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
         reviewedAt: Date.now()
       };
 
+      for (const player of Object.values(rankings.players || {})) {
+        const sameId = pending.playerId && String(player.playerId || "") === String(pending.playerId);
+        const sameName = !pending.playerId && normalizeHallKey(player.name || "") === normalizeHallKey(pending.playerName || "");
+
+        if (!sameId && !sameName) continue;
+
+        player.cityKey = cityKey;
+        player.cityName = CITIES[cityKey].label;
+
+        player.halls = (player.halls || []).map(hall => ({
+          ...hall,
+          cityKey,
+          cityName: CITIES[cityKey].label,
+          eventName: normalizeHallEventName(hall.eventName, cityKey)
+        }));
+
+        player.events = {};
+
+        for (const hall of player.halls) {
+          const eventName = normalizeHallEventName(hall.eventName, cityKey);
+          player.events[eventName] ??= 0;
+          player.events[eventName] += 1;
+        }
+      }
+
       rankings.lastUpdatedAt = Date.now();
       saveHallRankings(rankings);
+      await publishHallRankings(client, rankings);
+
+      const reviewEmbed = new EmbedBuilder()
+        .setColor("#2ecc71")
+        .setTitle(`✅ Pagamento revisado como ${CITIES[cityKey].label}`)
+        .addFields(
+          {
+            name: "👤 Player",
+            value: `**${pending.playerName || "Sem nome"}** ${pending.playerId ? `| \`${pending.playerId}\`` : ""}`,
+            inline: false
+          },
+          {
+            name: "🏁 Evento",
+            value: `**${pending.eventName || "Revisão obrigatória por acúmulo de vitórias"}**`,
+            inline: false
+          },
+          {
+            name: "🔗 Registro",
+            value: pending.jumpUrl ? `[Abrir registro](${pending.jumpUrl})` : "Sem link encontrado",
+            inline: false
+          },
+          {
+            name: "👮 Revisado por",
+            value: `<@${interaction.user.id}>`,
+            inline: false
+          }
+        )
+        .setTimestamp();
 
       await interaction.message.edit({
-        components: [],
-        content:
-          `✅ **Pagamento revisado como ${CITIES[cityKey].label}**\n\n` +
-          `👤 Player: **${pending.playerName}** ${pending.playerId ? `| \`${pending.playerId}\`` : ""}\n` +
-          `🏁 Evento: **${pending.eventName}**\n` +
-          `🔗 Registro: ${pending.jumpUrl}\n\n` +
-          `Revisado por <@${interaction.user.id}>.`
+        content: "",
+        embeds: [reviewEmbed],
+        components: []
       }).catch(() => {});
 
       await interaction.editReply("✅ Cidade aplicada no registro original. Rode a varredura novamente para contabilizar.");
