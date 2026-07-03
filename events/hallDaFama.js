@@ -4092,6 +4092,54 @@ function getPlayerLatestLink(player = {}) {
   return buildDiscordMessageLink(hall || {});
 }
 
+async function findPaymentRegisterLinkByPlayer(client, player = {}) {
+  const playerId = String(player.playerId || "").trim();
+  const playerName = cleanRankingPlayerName(player.name || "");
+
+  if (!client || (!playerId && !playerName)) return "";
+
+  const ch = await client.channels.fetch(PAYMENT_EVENTS_CHANNEL_ID).catch(() => null);
+  if (!ch || !ch.isTextBased()) return "";
+
+  const messages = await ch.messages.fetch({ limit: 100 }).catch(() => null);
+  if (!messages?.size) return "";
+
+  const nameKey = normalizeHallKey(playerName);
+
+  const found = messages.find(msg => {
+    const text = [
+      msg.content || "",
+      ...(msg.embeds || []).flatMap(embed => [
+        embed.title || "",
+        embed.description || "",
+        ...(embed.fields || []).flatMap(field => [
+          field.name || "",
+          field.value || ""
+        ])
+      ])
+    ].join("\n");
+
+    const textKey = normalizeHallKey(text);
+
+    if (playerId && new RegExp(`\\b${playerId}\\b`).test(text)) return true;
+    if (nameKey && textKey.includes(nameKey)) return true;
+
+    return false;
+  });
+
+  return found?.url || "";
+}
+
+function getSafePlayerReviewCityName(player = {}) {
+  const manualCityKey = getManualPlayerCityKeySmart(player.playerId, player.name);
+
+  if (manualCityKey && CITIES[manualCityKey]) {
+    return CITIES[manualCityKey].label;
+  }
+
+  return "Cidade não confirmada";
+}
+
 function getPlayerLatestImage(player = {}) {
   const hall = getPlayerLatestHall(player);
   return hall?.imageUrl || hall?.image || "";
@@ -4213,6 +4261,9 @@ async function sendPlayerIdentitySimilarityReviews(client, rankings) {
 
       const similarity = Math.round(getPlayerSimilarityRatio(playerA.name, playerB.name) * 100);
 
+      const playerALink = getPlayerLatestLink(playerA) || await findPaymentRegisterLinkByPlayer(client, playerA);
+      const playerBLink = getPlayerLatestLink(playerB) || await findPaymentRegisterLinkByPlayer(client, playerB);
+
       rankings.pendingPlayerIdentityReview[reviewKey] = {
         reviewKey,
         playerAKey: playerA.key,
@@ -4220,19 +4271,19 @@ async function sendPlayerIdentitySimilarityReviews(client, rankings) {
         playerA: {
           name: playerA.name,
           playerId: playerA.playerId || "",
-          cityKey: playerA.cityKey || "nobre",
-          cityName: playerA.cityName || CITIES[playerA.cityKey]?.label || "Cidade Nobre",
+          cityKey: getManualPlayerCityKeySmart(playerA.playerId, playerA.name) || "",
+          cityName: getSafePlayerReviewCityName(playerA),
           total: playerA.total || 0,
-          link: getPlayerLatestLink(playerA),
+          link: playerALink,
           image: getPlayerLatestImage(playerA)
         },
         playerB: {
           name: playerB.name,
           playerId: playerB.playerId || "",
-          cityKey: playerB.cityKey || "nobre",
-          cityName: playerB.cityName || CITIES[playerB.cityKey]?.label || "Cidade Nobre",
+          cityKey: getManualPlayerCityKeySmart(playerB.playerId, playerB.name) || "",
+          cityName: getSafePlayerReviewCityName(playerB),
           total: playerB.total || 0,
-          link: getPlayerLatestLink(playerB),
+          link: playerBLink,
           image: getPlayerLatestImage(playerB)
         },
         similarity,
@@ -4269,9 +4320,9 @@ async function sendPlayerIdentitySimilarityReviews(client, rankings) {
             value:
               `**Nome:** ${playerA.name || "Sem nome"}\n` +
               `**ID:** \`${playerA.playerId || "Sem ID"}\`\n` +
-              `**Cidade atual:** ${playerA.cityName || "Não definida"}\n` +
-              `**Vitórias:** ${playerA.total || 0}\n` +
-              `**Registro:** ${getPlayerLatestLink(playerA) ? `[Abrir registro](${getPlayerLatestLink(playerA)})` : "Sem link encontrado"}`,
+ `**Cidade atual:** ${rankings.pendingPlayerIdentityReview[reviewKey].playerA.cityName || "Cidade não confirmada"}\n` +
+`**Vitórias:** ${playerA.total || 0}\n` +
+              `**Registro:** ${rankings.pendingPlayerIdentityReview[reviewKey].playerA.link ? `[Abrir registro](${rankings.pendingPlayerIdentityReview[reviewKey].playerA.link})` : "Sem link encontrado"}`,
             inline: false
           },
           {
@@ -4279,9 +4330,9 @@ async function sendPlayerIdentitySimilarityReviews(client, rankings) {
             value:
               `**Nome:** ${playerB.name || "Sem nome"}\n` +
               `**ID:** \`${playerB.playerId || "Sem ID"}\`\n` +
-              `**Cidade atual:** ${playerB.cityName || "Não definida"}\n` +
-              `**Vitórias:** ${playerB.total || 0}\n` +
-              `**Registro:** ${getPlayerLatestLink(playerB) ? `[Abrir registro](${getPlayerLatestLink(playerB)})` : "Sem link encontrado"}`,
+`**Cidade atual:** ${rankings.pendingPlayerIdentityReview[reviewKey].playerB.cityName || "Cidade não confirmada"}\n` +
+`**Vitórias:** ${playerB.total || 0}\n` +
+              `**Registro:** ${rankings.pendingPlayerIdentityReview[reviewKey].playerB.link ? `[Abrir registro](${rankings.pendingPlayerIdentityReview[reviewKey].playerB.link})` : "Sem link encontrado"}`,
             inline: false
           },
           {
