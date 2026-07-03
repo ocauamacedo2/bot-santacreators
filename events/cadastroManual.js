@@ -172,12 +172,27 @@ function saveCadastroUser(member, nome, id) {
 }
 
 function extractNomeIdFromNick(nick = "") {
-  const match = String(nick || "").match(/^(.+?)\s*\|\s*(\d{1,10})$/);
-  if (!match) return null;
+  const clean = String(nick || "")
+    .replace(/`/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const parts = clean
+    .split("|")
+    .map(part => part.trim())
+    .filter(Boolean);
+
+  if (parts.length < 2) return null;
+
+  const possibleId = parts[parts.length - 1];
+  if (!/^\d{1,10}$/.test(possibleId)) return null;
+
+  const possibleName = parts[parts.length - 2];
+  if (!possibleName) return null;
 
   return {
-    nome: match[1].trim(),
-    id: match[2].trim()
+    nome: possibleName.trim(),
+    id: possibleId.trim()
   };
 }
 
@@ -283,6 +298,32 @@ async function forceOnlyCidadao(member) {
   };
 }
 
+async function sendCadastroPendenteDm(member, motivo = "não encontrei seu histórico de cadastro") {
+  try {
+    const cadastroUrl = `https://discord.com/channels/${member.guild.id}/${CHANNEL_ID}`;
+
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setLabel('Fazer cadastro')
+        .setStyle(ButtonStyle.Link)
+        .setURL(cadastroUrl)
+        .setEmoji('📝')
+    );
+
+    await member.send({
+      content:
+        `👋 Olá! Vi que você entrou na **${member.guild.name}**, mas ${motivo}.\n\n` +
+        `Para liberar seu cargo corretamente, clique no botão abaixo e faça o cadastro com **Nome + ID**.\n\n` +
+        `Enquanto isso, você ficará apenas com o cargo **SEM WL**.`,
+      components: [row]
+    });
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function restaurarCadastroAutomatico(client, member, etapa = 'entrada') {
   try {
     member = await member.guild.members.fetch(member.id).catch(() => member);
@@ -314,6 +355,8 @@ async function restaurarCadastroAutomatico(client, member, etapa = 'entrada') {
         });
       }
 
+      await sendCadastroPendenteDm(member, "não encontrei nenhum nick antigo no formato Nome | ID nas logs");
+
       console.log("[cadastroManual] Usuário analisado, mas sem histórico Nome | ID:", {
         etapa,
         userId: member.id,
@@ -328,7 +371,13 @@ async function restaurarCadastroAutomatico(client, member, etapa = 'entrada') {
     const nickOk = await setNickSafe(member, novoNick);
 
     if (!nickOk) {
-      console.warn("[cadastroManual] Histórico encontrado, mas o nick falhou. Cargo NÃO será alterado:", {
+      if (member.roles.cache.has(CARGO_TEMP_REMOVER) && member.roles.cache.has(CARGO_CIDADAO)) {
+        await removeRoleSafe(member, CARGO_CIDADAO);
+      }
+
+      await sendCadastroPendenteDm(member, "encontrei seu histórico, mas não consegui alterar seu nome automaticamente");
+
+      console.warn("[cadastroManual] Histórico encontrado, mas o nick falhou. Cidadão removido se estava junto com SEM WL:", {
         etapa,
         userId: member.id,
         tag: member.user?.tag,
