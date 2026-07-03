@@ -122,6 +122,23 @@ const BTN_EDIT_CITY = "evd_edit_city";
 const MODAL_CITY_SUBMIT = "evd_modal_city_submit";
 let state = loadState();
 
+const processingApprovals = new Set();
+
+function buildDisabledApprovalButtons(reqId) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`${BTN_APPROVE_PREFIX}${reqId}`)
+      .setLabel("⏳ Postando...")
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(true),
+    new ButtonBuilder()
+      .setCustomId(`${BTN_REJECT_PREFIX}${reqId}`)
+      .setLabel("🔒 Travado")
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(true)
+  );
+}
+
 // ================= LÓGICA INTELIGENTE (CRONOGRAMA) =================
 
 // Pega o dia da semana em SP (seg, ter, qua...)
@@ -245,6 +262,26 @@ function markTodayEventPosted(eventKey, scope = "eventosDiarios") {
     posted.push(eventKey);
     saveState(state);
   }
+}
+
+function isRequestProcessing(reqId) {
+  state.processingRequests ??= {};
+  return Boolean(state.processingRequests[reqId]);
+}
+
+function lockRequestProcessing(reqId, userId) {
+  state.processingRequests ??= {};
+  state.processingRequests[reqId] = {
+    userId,
+    lockedAt: Date.now()
+  };
+  saveState(state);
+}
+
+function unlockRequestProcessing(reqId) {
+  state.processingRequests ??= {};
+  delete state.processingRequests[reqId];
+  saveState(state);
 }
 
 // ================= HELPERS =================
@@ -826,22 +863,38 @@ state.pendingRequests[reqId] = {
     }
 
     await interaction.deferReply({ ephemeral: true });
+
     const reqId = interaction.customId.replace(BTN_APPROVE_PREFIX, "");
+
+    if (isRequestProcessing(reqId)) {
+      return interaction.editReply("⏳ Essa solicitação já está sendo processada. Aguarde finalizar.");
+    }
+
     const data = state.pendingRequests[reqId];
 
     if (!data) {
       return interaction.editReply("⚠️ Dados da solicitação não encontrados (antigos ou expirados).");
     }
 
-    const eventChannel = await client.channels.fetch(EVENTOS_CHANNEL_ID).catch(() => null);
-    if (!eventChannel) return interaction.editReply("❌ Canal de Eventos não encontrado.");
+    lockRequestProcessing(reqId, interaction.user.id);
 
-    const cityData = CITIES[data.cityKey];
+    await interaction.message.edit({
+      components: []
+    }).catch(() => {});
 
-    const mentions = `@everyone @here <@&${ROLE_CIDADAO}> <@&${ROLE_LIDERES}> <@&${cityData.roleId}>`;
+    try {
+      const eventChannel = await client.channels.fetch(EVENTOS_CHANNEL_ID).catch(() => null);
+      if (!eventChannel) {
+        unlockRequestProcessing(reqId);
+        return interaction.editReply("❌ Canal de Eventos não encontrado.");
+      }
 
-    // ✅ ALTERAÇÃO: Volta a ser mensagem de texto, mas com 'split' para evitar erro de limite
-    const finalMessage = 
+      const cityData = CITIES[data.cityKey];
+
+      const mentions = `@everyone @here <@&${ROLE_CIDADAO}> <@&${ROLE_LIDERES}> <@&${cityData.roleId}>`;
+
+      // ✅ ALTERAÇÃO: Volta a ser mensagem de texto, mas com 'split' para evitar erro de limite
+      const finalMessage = 
 `# 🎉 :  **Santa Creators : ${data.title}** 🎉 
 
 ${data.description.trim()}
@@ -850,46 +903,55 @@ ${data.imageUrl}
 
 ${mentions}`;
 
-    const chunks = splitText(finalMessage);
-    let sentMsg;
-    for (const chunk of chunks) {
-        sentMsg = await eventChannel.send({ content: chunk });
+      const chunks = splitText(finalMessage);
+      let sentMsg;
+      for (const chunk of chunks) {
+          sentMsg = await eventChannel.send({ content: chunk });
+      }
+
+      if (!sentMsg) {
+        unlockRequestProcessing(reqId);
+        return interaction.editReply("❌ Falha ao enviar a mensagem do evento. O conteúdo pode estar vazio.");
+      }
+      
+      // ✅ Mais emojis
+      try {
+        const emojis = ["💜", "🔥", "🚀", "👏", "🎉", "🤩", "🤯", "🏆", "👑", "💸", "👀", "✨", "💯", "✅", "📸", "💎", "⚡", "💣", "🫡", "🤝", "👻", "💀", "👽", "👾", "🤖", "🎃", "😺"];
+        for (const e of emojis) await sentMsg.react(e).catch(() => {});
+      } catch {}
+
+      // ✅ Aqui passa true para forçar o botão a descer
+      await ensureButtonAtBottom(eventChannel, client, true);
+
+      dashEmit("eventosdiarios:aprovado", {
+        userId: data.userId,
+        approverId: interaction.user.id,
+        at: Date.now()
+        // console.log(`[EVENTOS_DIARIOS] dashEmit: userId=${data.userId}, approverId=${interaction.user.id}`); // Debug
+      });
+
+      const embedApproved = EmbedBuilder.from(interaction.message.embeds[0])
+        .setColor("#2ecc71")
+        .setTitle("✅ Evento Diário APROVADO")
+        .setFooter({ text: `Aprovado por ${interaction.user.tag}` })
+        .addFields({ name: '✅ Aprovado por', value: `${interaction.user} (\`${interaction.user.tag}\`)`, inline: false });
+
+      await interaction.message.edit({ embeds: [embedApproved], components: [] }).catch(() => {});
+      
+      markTodayEventPosted(data.eventKey, "eventosDiarios");
+
+      delete state.pendingRequests[reqId];
+      unlockRequestProcessing(reqId);
+      saveState(state); // Salva a remoção
+
+      await interaction.editReply("✅ Evento postado e pontos computados!");
+      return true;
+    } catch (e) {
+      console.error("[EventosDiarios] Erro ao aprovar evento diário:", e);
+      unlockRequestProcessing(reqId);
+      await interaction.editReply("❌ Erro ao aprovar/postar o Evento Diário. Verifique o console.");
+      return true;
     }
-
-    if (!sentMsg) {
-      return interaction.editReply("❌ Falha ao enviar a mensagem do evento. O conteúdo pode estar vazio.");
-    }
-    
-    // ✅ Mais emojis
-    try {
-      const emojis = ["💜", "🔥", "🚀", "👏", "🎉", "🤩", "🤯", "🏆", "👑", "💸", "👀", "✨", "💯", "✅", "📸", "💎", "⚡", "💣", "🫡", "🤝", "👻", "💀", "👽", "👾", "🤖", "🎃", "😺"];
-      for (const e of emojis) await sentMsg.react(e).catch(() => {});
-    } catch {}
-
-    // ✅ Aqui passa true para forçar o botão a descer
-    await ensureButtonAtBottom(eventChannel, client, true);
-
-    dashEmit("eventosdiarios:aprovado", {
-      userId: data.userId,
-      approverId: interaction.user.id,
-      at: Date.now()
-      // console.log(`[EVENTOS_DIARIOS] dashEmit: userId=${data.userId}, approverId=${interaction.user.id}`); // Debug
-    });
-
-    const embedApproved = EmbedBuilder.from(interaction.message.embeds[0])
-      .setColor("#2ecc71")
-      .setTitle("✅ Evento Diário APROVADO")
-      .setFooter({ text: `Aprovado por ${interaction.user.tag}` })
-      .addFields({ name: '✅ Aprovado por', value: `${interaction.user} (\`${interaction.user.tag}\`)`, inline: false });
-
-    await interaction.message.edit({ embeds: [embedApproved], components: [] }).catch(() => {});
-    
-markTodayEventPosted(data.eventKey, "eventosDiarios");
-
-delete state.pendingRequests[reqId];
-saveState(state); // Salva a remoção
-await interaction.editReply("✅ Evento postado e pontos computados!");
-return true;
   }
 
   if (interaction.isButton() && interaction.customId.startsWith(BTN_REJECT_PREFIX)) {
@@ -898,6 +960,12 @@ return true;
     }
 
     const reqId = interaction.customId.replace(BTN_REJECT_PREFIX, "");
+
+    if (isRequestProcessing(reqId)) {
+      return interaction.reply({ content: "⏳ Essa solicitação já está sendo processada. Aguarde finalizar.", ephemeral: true });
+    }
+
+    lockRequestProcessing(reqId, interaction.user.id);
     
     const embedRejected = EmbedBuilder.from(interaction.message.embeds[0])
       .setColor("#e74c3c")
@@ -907,6 +975,7 @@ return true;
     await interaction.message.edit({ embeds: [embedRejected], components: [] }).catch(() => {});
     
     delete state.pendingRequests[reqId];
+    unlockRequestProcessing(reqId);
     saveState(state); // Salva a remoção
     await interaction.reply({ content: "❌ Solicitação recusada.", ephemeral: true });
     return true;

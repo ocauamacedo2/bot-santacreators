@@ -2265,13 +2265,13 @@ return (
       `🏙️ **Cidade do evento:** ${emoji} **BR ${cityName}**\n` +
       `🕒 **Horário oficial:** \`${formatEventWindowLabel(event)}\`\n\n` +
 
-      `### 📌 Resultado da própria cidade\n` +
-`> 👥 **Maior público registrado no horário desse evento:** \`${formatNumber(currentPeak)}\` às \`${currentPeakTime}\`\n` +
-      `> 📆 **Dia anterior no mesmo horário:** \`${formatNumber(previousDayPeak)}\` às \`${previousDayWindow?.peakTime || "--:--"}\`\n` +
-      `> 📊 **Diferença contra o dia anterior:** ${formatDiff(diffPreviousDay)}\n\n` +
+      `### 📌 Resultado da própria cidade — PICO DA JANELA DO EVENTO\n` +
+`> 👥 **Maior público registrado dentro da janela desse evento:** \`${formatNumber(currentPeak)}\` às \`${currentPeakTime}\`\n` +
+      `> 📆 **Pico do dia anterior dentro da mesma janela:** \`${formatNumber(previousDayPeak)}\` às \`${previousDayWindow?.peakTime || "--:--"}\`\n` +
+      `> 📊 **Diferença contra o pico do dia anterior:** ${formatDiff(diffPreviousDay)}\n\n` +
 
-      `> 📅 **Semana passada na mesma janela:** \`${formatNumber(lastWeekPeak)}\` às \`${lastWeekWindow?.peakTime || "--:--"}\`\n` +
-      `> 📈 **Diferença contra semana passada:** ${formatDiff(diffLastWeek)}\n\n` +
+      `> 📅 **Pico da semana passada dentro da mesma janela:** \`${formatNumber(lastWeekPeak)}\` às \`${lastWeekWindow?.peakTime || "--:--"}\`\n` +
+      `> 📈 **Diferença contra o pico da semana passada:** ${formatDiff(diffLastWeek)}\n\n` +
 
 `### 🏆 Evolução das cidades no mesmo horário\n` +
 `${cityRankingText || "> Sem comparação disponível para essa janela."}`
@@ -2499,7 +2499,7 @@ const cityEvents = getAllFivemEventSchedule().filter((event) => {
 const t = today21h.cities?.[city.key]?.clients || 0;
 const y = yesterday21h.cities?.[city.key]?.clients || 0;
 const w = lastWeek21h.cities?.[city.key]?.clients || 0;
-const hasToday21h = today21h.total > 0;
+const hasToday21h = today21h.total > 0 && t > 0;
 
 return {
   city,
@@ -2507,6 +2507,9 @@ return {
   y,
   w,
   hasToday21h,
+  capturedTime: today21h.capturedTime || "--:--",
+  yesterdayCapturedTime: yesterday21h.capturedTime || "--:--",
+  lastWeekCapturedTime: lastWeek21h.capturedTime || "--:--",
   diffY: hasToday21h ? calculateDiff(t, y) : null,
   diffW: hasToday21h ? calculateDiff(t, w) : null
 };
@@ -2516,14 +2519,14 @@ return {
      .setColor(baseColor)
      .setTitle("🕒 AUDITORIA DE RETENÇÃO — 21:00h")
      .setDescription(
-       `*Leitura fixa do começo do evento. Não é o pico da janela; é só o ponto das 21h para auditoria.*\n\n` +
+       `*Leitura fixa do começo do evento. Não é o pico da janela; é somente a captura fixa das 21h para auditoria.*\n\n` +
        retentionData.map((item, idx) => {
          const medal = idx === 0 ? "🥇" : idx === 1 ? "🥈" : idx === 2 ? "🥉" : `${idx + 1}.`;
          return (
            `${medal} **BR ${item.city.name}**\n` +
-          `> **Ponto fixo das 21h:** ${item.hasToday21h ? `\`${formatNumber(item.t)}\` players` : "`aguardando captura válida das 21h`"}\n` +
-`> **Vs Ontem:** ${item.hasToday21h ? formatDiff(item.diffY) : "não comparado ainda"}\n` +
-`> **Vs Semana Passada:** ${item.hasToday21h ? formatDiff(item.diffW) : "não comparado ainda"}`
+          `> **Ponto fixo das 21h:** ${item.hasToday21h ? `\`${formatNumber(item.t)}\` players às \`${item.capturedTime}\`` : "`aguardando captura válida das 21h`"}\n` +
+`> **Vs Ontem no ponto fixo:** ${item.hasToday21h ? `${formatDiff(item.diffY)} | base às \`${item.yesterdayCapturedTime}\`` : "não comparado ainda"}\n` +
+`> **Vs Semana Passada no ponto fixo:** ${item.hasToday21h ? `${formatDiff(item.diffW)} | base às \`${item.lastWeekCapturedTime}\`` : "não comparado ainda"}`
          );
        }).join("\n\n") +
        `\n\n**TOTAL GERAL ÀS 21:00:** ${today21h.total > 0 ? `\`${formatNumber(today21h.total)}\` players` : "`aguardando captura válida das 21h`"}\n` +
