@@ -3023,14 +3023,21 @@ function isAmbiguousHallWinner(winner) {
           String(btn.customId || "").startsWith(BTN_REVIEW_AS_ORG_PREFIX) ||
           String(btn.customId || "").startsWith(BTN_REVIEW_AS_PLAYER_PREFIX) ||
           String(btn.customId || "").startsWith(BTN_REVIEW_AS_BOTH_PREFIX) ||
-          String(btn.customId || "").startsWith(BTN_REVIEW_CITY_PREFIX)
+          String(btn.customId || "").startsWith(BTN_REVIEW_CITY_PREFIX) ||
+          String(btn.customId || "").startsWith(BTN_PLAYER_IDENTITY_MERGE_PREFIX) ||
+          String(btn.customId || "").startsWith(BTN_PLAYER_IDENTITY_SEPARATE_PREFIX) ||
+          String(btn.customId || "").startsWith(BTN_PAYMENT_CITY_PREFIX)
         )
       );
 
       return hasReviewButtons && (
         embedTitle.includes("Revisão Manual") ||
+        embedTitle.includes("Revisão de identidade parecida") ||
+        embedTitle.includes("Revisão obrigatória de cidade do player") ||
         embedDescription.includes("Esse vencedor ficou confuso") ||
-        embedDescription.includes("A varredura encontrou conflito")
+        embedDescription.includes("A varredura encontrou conflito") ||
+        embedDescription.includes("mesmo nome com IDs diferentes") ||
+        embedDescription.includes("nomes parecidos / IDs diferentes")
       );
     });
 
@@ -4107,19 +4114,18 @@ function shouldSendPlayerIdentityReview(playerA = {}, playerB = {}) {
   const keyA = normalizeHallKey(nameA);
   const keyB = normalizeHallKey(nameB);
 
+  if (!idA || !idB) return false;
+  if (idA === idB) return false;
+
   if (!keyA || !keyB) return false;
   if (keyA.length < 3 || keyB.length < 3) return false;
 
-  const sameId = idA && idB && idA === idB;
-  const differentId = idA && idB && idA !== idB;
+  const totalA = Number(playerA.total || 0);
+  const totalB = Number(playerB.total || 0);
 
-  const similarity = getPlayerSimilarityRatio(nameA, nameB);
+  if (totalA < 3 || totalB < 3) return false;
 
-  if (sameId && keyA !== keyB) return true;
-  if (differentId && similarity >= 0.72) return true;
-  if (differentId && (keyA.includes(keyB) || keyB.includes(keyA)) && Math.min(keyA.length, keyB.length) >= 4) return true;
-
-  return false;
+  return keyA === keyB;
 }
 
 function mergePlayerRankingInto(rankings, keepKey, removeKey, cityKey, reviewedBy) {
@@ -4253,10 +4259,10 @@ async function sendPlayerIdentitySimilarityReviews(client, rankings) {
       const embed = new EmbedBuilder()
         .setColor("#f39c12")
         .setTitle("🧠 Revisão de identidade parecida")
-        .setDescription(
-          `O bot encontrou **nomes parecidos / IDs diferentes** ou **mesmo ID com nome diferente**.\n\n` +
-          `Confirma se são a mesma pessoa e qual cidade deve ficar.`
-        )
+.setDescription(
+  `O bot encontrou **mesmo nome com IDs diferentes** e ambos têm **3+ vitórias**.\n\n` +
+  `Confirma se são a mesma pessoa e qual cidade deve ficar.`
+)
         .addFields(
           {
             name: "👤 Pessoa A",
