@@ -3951,17 +3951,22 @@ async function sendRequiredPlayerCityReviewIfNeeded(client, rankings, playerData
 
   if (hasManualCity) return;
 
-  rankings.pendingPaymentCityReview[playerReviewKey] = {
-    playerReviewKey,
-    playerName,
-    playerId,
-    eventName: "Revisão obrigatória por acúmulo de vitórias",
-    eventDateKey: new Date().toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" }),
-    messageId: playerData.halls?.at(-1)?.messageId || "",
-    jumpUrl: playerData.halls?.at(-1)?.jumpUrl || "",
-    createdAt: Date.now(),
-    reason
-  };
+const latestHall = getPlayerLatestHall(playerData);
+const latestLink = getPlayerLatestLink(playerData);
+
+rankings.pendingPaymentCityReview[playerReviewKey] = {
+  playerReviewKey,
+  playerName,
+  playerId,
+  eventName: "Revisão obrigatória por acúmulo de vitórias",
+  eventDateKey: new Date().toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" }),
+  messageId: latestHall?.messageId || "",
+  channelId: latestHall?.channelId || "",
+  guildId: latestHall?.guildId || "",
+  jumpUrl: latestLink || "",
+  createdAt: Date.now(),
+  reason
+};
 
   const ch = await client.channels.fetch(PAYMENT_CITY_REVIEW_CHANNEL_ID).catch(() => null);
   if (!ch || !ch.isTextBased()) return;
@@ -3997,8 +4002,8 @@ async function sendRequiredPlayerCityReviewIfNeeded(client, rankings, playerData
       },
       {
         name: "🔗 Registro exemplo",
-        value: playerData.halls?.at(-1)?.jumpUrl
-          ? `[Abrir registro](${playerData.halls.at(-1).jumpUrl})`
+        value: getPlayerLatestLink(playerData)
+          ? `[Abrir registro](${getPlayerLatestLink(playerData)})`
           : "Sem link encontrado",
         inline: false
       }
@@ -4049,15 +4054,35 @@ function getPlayerSimilarityRatio(a = "", b = "") {
   return 1 - (levenshteinDistance(left, right) / maxLen);
 }
 
+function buildDiscordMessageLink(meta = {}) {
+  if (meta.jumpUrl) return meta.jumpUrl;
+
+  const guildId = meta.guildId || meta.guild_id;
+  const channelId = meta.channelId || meta.channel_id;
+  const messageId = meta.messageId || meta.message_id;
+
+  if (guildId && channelId && messageId) {
+    return `https://discord.com/channels/${guildId}/${channelId}/${messageId}`;
+  }
+
+  return "";
+}
+
 function getPlayerLatestHall(player = {}) {
   return [...(player.halls || [])]
+    .filter(hall =>
+      hall?.jumpUrl ||
+      hall?.messageId ||
+      hall?.channelId ||
+      hall?.guildId
+    )
     .sort((a, b) => Number(b.createdTimestamp || b.at || 0) - Number(a.createdTimestamp || a.at || 0))
     .at(0) || null;
 }
 
 function getPlayerLatestLink(player = {}) {
   const hall = getPlayerLatestHall(player);
-  return hall?.jumpUrl || "";
+  return buildDiscordMessageLink(hall || {});
 }
 
 function getPlayerLatestImage(player = {}) {
