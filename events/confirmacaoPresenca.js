@@ -187,12 +187,48 @@ function getOrgId(orgString) {
   return match ? match[1] : null;
 }
 
+function getOrgNameOnly(orgString) {
+  const raw = String(orgString || "").trim();
+  const parts = raw.split("|").map(p => p.trim()).filter(Boolean);
+  if (parts.length >= 2) return parts.slice(1).join(" | ").trim();
+  return raw;
+}
+
+function normalizeOrgName(orgString) {
+  return getOrgNameOnly(orgString)
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .replace(/\s+/g, " ")
+    .toLowerCase()
+    .trim();
+}
+
+function isPresenceBypass(member) {
+  if (!member) return false;
+
+  const userId = member.id;
+  const roles = member.roles?.cache;
+
+  // Você
+  if (userId === "660311795327828008") return true;
+
+  // Owner por ID ou cargo
+  if (userId === "1262262852949905408") return true;
+  if (roles && roles.some(r => r.id === "1262262852949905408")) return true;
+
+  return false;
+}
+
 // Sincroniza a lista do facsSemanais com o estado local
 function syncOrgs(state) {
   const now = getNowSP();
   const todayKey = now.toISOString().slice(0, 10);
   const weekKey = getCurrentWeekKeySP();
   const day = now.getDay();
+
+  if (!state.statuses || typeof state.statuses !== "object") {
+    state.statuses = {};
+  }
 
   // ✅ 1. Reset Semanal (Domingo 00:00 ou Mudança de Semana no Boot)
   // Se entramos em uma nova semana, limpa TUDO imediatamente.
@@ -212,24 +248,43 @@ function syncOrgs(state) {
   }
 
   const sourceList = loadFacsSource();
-  // Garante que todas as orgs da fonte estejam no objeto de status
-  // E remove as que não estão mais na fonte
-  const currentOrgs = new Set(sourceList);
-  
-  // Remove antigas
-  for (const org of Object.keys(state.statuses)) {
-    if (!currentOrgs.has(org)) {
-      delete state.statuses[org];
+
+  // ✅ Guarda confirmações antigas pelo NOME da ORG, ignorando a família ativa/ID.
+  // Exemplo: "47 | Tropa do Cold" e "48 | Tropa do Cold" viram a mesma chave.
+  const oldStatusByOrgName = new Map();
+
+  for (const [oldOrgKey, oldInfo] of Object.entries(state.statuses)) {
+    const orgNameKey = normalizeOrgName(oldOrgKey);
+    if (!orgNameKey) continue;
+
+    if (oldInfo && oldInfo.status && oldInfo.status !== "PENDING") {
+      oldStatusByOrgName.set(orgNameKey, {
+        ...oldInfo,
+        previousOrgKey: oldOrgKey
+      });
     }
   }
 
-  // Adiciona novas (como pendente)
+  const nextStatuses = {};
+
   for (const org of sourceList) {
-    if (!state.statuses[org]) {
-      state.statuses[org] = { status: "PENDING", by: null, time: null };
+    const orgNameKey = normalizeOrgName(org);
+
+    if (state.statuses[org]) {
+      nextStatuses[org] = state.statuses[org];
+      continue;
     }
+
+    if (orgNameKey && oldStatusByOrgName.has(orgNameKey)) {
+      nextStatuses[org] = oldStatusByOrgName.get(orgNameKey);
+      continue;
+    }
+
+    nextStatuses[org] = { status: "PENDING", by: null, time: null };
   }
-  
+
+  state.statuses = nextStatuses;
+
   return state;
 }
 
@@ -413,8 +468,8 @@ export async function confirmacaoPresencaHandleInteraction(interaction, client) 
       return interaction.reply({ content: "🚫 Você não tem permissão para alterar presenças.", ephemeral: true });
     }
 
-    let state = loadState();
-    const isUserBypass = interaction.user.id === "660311795327828008";
+let state = loadState();
+const isUserBypass = isPresenceBypass(interaction.member);
 
     // Checa horário (Ignora para o seu ID)
     if (!isWindowOpen(state) && !isUserBypass) { // Se a janela não está aberta e não é bypass
@@ -466,8 +521,8 @@ export async function confirmacaoPresencaHandleInteraction(interaction, client) 
   if (interaction.isModalSubmit() && customId.startsWith("modal_presenca_")) {
     await interaction.deferReply({ ephemeral: true });
 
-    let state = loadState();
-    const isUserBypass = interaction.user.id === "660311795327828008";
+let state = loadState();
+const isUserBypass = isPresenceBypass(interaction.member);
 
     // Re-checa horário no submit (Ignora para o seu ID)
     if (!isWindowOpen(state) && !isUserBypass) { // Se a janela não está aberta e não é bypass
@@ -490,24 +545,51 @@ export async function confirmacaoPresencaHandleInteraction(interaction, client) 
     // Removida redeclaração duplicada de 'state' que causava erro
     state = syncOrgs(state); // Garante sync antes de buscar
 
-    // Busca a ORG (pelo ID ou Nome)
-    const orgKey = Object.keys(state.statuses).find(key => {
-      const id = getOrgId(key);
-      if (id && id === input) return true; // Match exato de ID
-      return key.toLowerCase().includes(input); // Match parcial de nome
-    });
+// Busca a ORG (pelo ID ou Nome)
+const orgKey = Object.keys(state.statuses).find(key => {
+  const id = getOrgId(key);
+  if (id && id === input) return true; // Match exato de ID
+  return key.toLowerCase().includes(input); // Match parcial de nome
+});
 
-    if (!orgKey) {
-      return interaction.editReply("❌ ORG não encontrada na lista da semana. Verifique se ela foi registrada no menu de FACs.");
-    }
+if (!orgKey) {
+  return interaction.editReply("❌ ORG não encontrada na lista da semana. Verifique se ela foi registrada no menu de FACs.");
+}
 
-    // Atualiza estado
-    state.statuses[orgKey] = {
-      status: status,
-      by: interaction.user.id,
-      time: Date.now()
-    };
-    saveState(state);
+const orgNameKey = normalizeOrgName(orgKey);
+const alreadyConfirmedKey = Object.keys(state.statuses).find(key => {
+  const info = state.statuses[key];
+  if (!info || info.status === "PENDING") return false;
+  return normalizeOrgName(key) === orgNameKey;
+});
+
+if (alreadyConfirmedKey && alreadyConfirmedKey !== orgKey && !isPresenceBypass(interaction.member)) {
+  const info = state.statuses[alreadyConfirmedKey];
+  const statusTxt = info.status === "YES" ? "presença confirmada" : "ausência registrada";
+
+  return interaction.editReply(
+    `🚫 Essa ORG já teve ${statusTxt} hoje como **${alreadyConfirmedKey}** por <@${info.by}>.\n` +
+    `Se mudou apenas a família ativa/ID, a confirmação continua valendo e ninguém pode confirmar por cima.`
+  );
+}
+
+if (alreadyConfirmedKey && alreadyConfirmedKey === orgKey && state.statuses[orgKey]?.status !== "PENDING" && !isPresenceBypass(interaction.member)) {
+  const info = state.statuses[orgKey];
+  const statusTxt = info.status === "YES" ? "presença confirmada" : "ausência registrada";
+
+  return interaction.editReply(
+    `🚫 Essa ORG já teve ${statusTxt} hoje por <@${info.by}>.\n` +
+    `Apenas você ou a owner podem alterar por cima.`
+  );
+}
+
+// Atualiza estado
+state.statuses[orgKey] = {
+  status: status,
+  by: interaction.user.id,
+  time: Date.now()
+};
+saveState(state);
 
     // Atualiza painel
     await updatePanel(client);
@@ -527,9 +609,9 @@ export async function confirmacaoPresencaHandleInteraction(interaction, client) 
       } catch (e) {
         console.error("Erro ao emitir dashEmit:", e);
       }
-      await interaction.editReply(`✅ Presença de **** confirmada! (+1 ponto computado)`);
+      await interaction.editReply(`✅ Presença de **${orgKey}** confirmada! (+1 ponto computado)`);
     } else {
-      await interaction.editReply(`❌ Ausência de **** registrada.`);
+      await interaction.editReply(`❌ Ausência de **${orgKey}** registrada.`);
     }
 
     return true;
