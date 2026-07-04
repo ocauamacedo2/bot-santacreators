@@ -3776,50 +3776,46 @@ function addPlayerRankingPoint(rankings, playerWinner, hallMeta) {
   }
 
 function getPaymentCityKey(message, winner = null) {
-    const bySmartIdentity = getManualPlayerCityKeySmart(
-      winner?.playerId || "",
-      winner?.playerName || ""
-    );
-
-    if (bySmartIdentity) return bySmartIdentity;
-
     const embed = message?.embeds?.[0];
+
     const cityField = embed?.fields?.find(field => {
       const fieldName = normalizeHallName(field.name || "");
       return fieldName.includes("cidade") || fieldName.includes("cdd");
     });
 
-    const cityText = cityField?.value || "";
+    const cityText = String(cityField?.value || "").trim();
     const normalized = normalizeHallName(cityText);
 
-    if (!cityText || normalized.includes("nao definida") || normalized.includes("não definida")) {
-      return null;
+    // ✅ Se o botão/registro marcou cidade, isso manda.
+    // Não deixa override antigo do player trocar Grande por Santa/Nobre/etc.
+    if (cityText && !normalized.includes("nao definida") && !normalized.includes("não definida")) {
+      if (
+        cityText.includes(CITIES.grande.roleId) ||
+        /\bcidade\s+grande\b/.test(normalized) ||
+        /\bgrande\b/.test(normalized)
+      ) return "grande";
+
+      if (
+        cityText.includes(CITIES.nobre.roleId) ||
+        /\bcidade\s+nobre\b/.test(normalized) ||
+        /\bnobre\b/.test(normalized)
+      ) return "nobre";
+
+      if (
+        cityText.includes(CITIES.santa.roleId) ||
+        /\bcidade\s+santa\b/.test(normalized) ||
+        /\bsanta\b/.test(normalized)
+      ) return "santa";
+
+      if (
+        cityText.includes(CITIES.maresia.roleId) ||
+        /\bcidade\s+maresia\b/.test(normalized) ||
+        /\bmaresia\b/.test(normalized)
+      ) return "maresia";
     }
 
-    if (
-      /\bcidade\s+nobre\b/.test(normalized) ||
-      /\bnobre\b/.test(normalized) ||
-      cityText.includes(CITIES.nobre.roleId)
-    ) return "nobre";
-
-    if (
-      /\bcidade\s+santa\b/.test(normalized) ||
-      /\bsanta\b/.test(normalized) ||
-      cityText.includes(CITIES.santa.roleId)
-    ) return "santa";
-
-    if (
-      /\bcidade\s+grande\b/.test(normalized) ||
-      /\bgrande\b/.test(normalized) ||
-      cityText.includes(CITIES.grande.roleId)
-    ) return "grande";
-
-    if (
-      /\bcidade\s+maresia\b/.test(normalized) ||
-      /\bmaresia\b/.test(normalized) ||
-      cityText.includes(CITIES.maresia.roleId)
-    ) return "maresia";
-
+    // ✅ Se NÃO tiver cidade marcada no botão/registro, não inventa.
+    // Deixa sem cidade para cair na revisão manual.
     return null;
   }
 
