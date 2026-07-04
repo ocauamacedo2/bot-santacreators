@@ -70,6 +70,7 @@ const CIDADE_PAGAMENTO_POR_LINK_DISCORD = {
 // Canal de logs (auditoria) do sistema de pagamentos
 // ⚠️ Troca aqui pelo teu canal de logs real, se for outro.
 const CANAL_LOG_PAGAMENTO = "1486084352403312843";
+const CANAL_LOG_VARREDURA_PAGAMENTOS = "1523099386052214874";
 
 // Textos padrão (se teu arquivo já tem em outro lugar, pode remover daqui)
 // Mantive pra evitar ReferenceError se não existir no teu arquivo.
@@ -1706,26 +1707,53 @@ async function atualizarRegistroPagamentoAntigoNaMesmaMensagem(client, msg) {
   };
 }
 
-async function varreduraPesadaPagamentosEditandoMesmoBotao(client, limiteBusca = 5000) {
+async function varreduraPesadaPagamentosEditandoMesmoBotao(client, limiteBusca = 5000, callbacks = {}) {
   const canal = await client.channels.fetch(CANAL_PAGAMENTO).catch(() => null);
   if (!canal || !canal.isTextBased()) {
     return {
       lidos: 0,
+      encontrados: 0,
       atualizados: 0,
       cidades: 0,
       ocr: 0,
       erros: 0,
+      atual: "Canal não encontrado.",
     };
   }
 
   let lidos = 0;
+  let encontrados = 0;
   let atualizados = 0;
   let cidades = 0;
   let ocr = 0;
   let erros = 0;
   let lastId = undefined;
+  let ultimoUpdate = 0;
+  let atual = "Iniciando leitura dos registros antigos...";
 
   const totalALer = Math.min(Number(limiteBusca || 5000), 50000);
+
+  async function emitirProgresso(force = false) {
+    const agora = Date.now();
+
+    if (!force && agora - ultimoUpdate < 5000) return;
+    ultimoUpdate = agora;
+
+    if (typeof callbacks.onProgress === "function") {
+      await callbacks.onProgress({
+        lidos,
+        encontrados,
+        atualizados,
+        cidades,
+        ocr,
+        erros,
+        limite: totalALer,
+        atual,
+      }).catch(() => {});
+    }
+  }
+
+  await emitirProgresso(true);
 
   while (lidos < totalALer) {
     const remaining = totalALer - lidos;
@@ -1747,8 +1775,14 @@ async function varreduraPesadaPagamentosEditandoMesmoBotao(client, limiteBusca =
       const titulo = msg.embeds[0]?.title || "";
       if (!titulo.includes("Registro de Pagamento de Evento")) continue;
 
-      const resultado = await atualizarRegistroPagamentoAntigoNaMesmaMensagem(client, msg).catch(() => {
+      encontrados++;
+      atual = `Analisando registro ${msg.id}`;
+
+      await emitirProgresso(false);
+
+      const resultado = await atualizarRegistroPagamentoAntigoNaMesmaMensagem(client, msg).catch((err) => {
         erros++;
+        atual = `Erro no registro ${msg.id}: ${err?.message || err}`;
         return null;
       });
 
@@ -1758,6 +1792,23 @@ async function varreduraPesadaPagamentosEditandoMesmoBotao(client, limiteBusca =
       if (resultado.cidade) cidades++;
       if (resultado.ocr) ocr++;
 
+      atual = `Editado registro ${msg.id}`;
+
+      if (typeof callbacks.onEditLog === "function") {
+        await callbacks.onEditLog({
+          msg,
+          resultado,
+          lidos,
+          encontrados,
+          atualizados,
+          cidades,
+          ocr,
+          erros,
+          limite: totalALer,
+        }).catch(() => {});
+      }
+
+      await emitirProgresso(true);
       await new Promise(resolve => setTimeout(resolve, 900));
     }
 
@@ -1767,16 +1818,29 @@ async function varreduraPesadaPagamentosEditandoMesmoBotao(client, limiteBusca =
     if (batch.size < fetchLimit) break;
   }
 
-  return {
+  atual = "Varredura finalizada.";
+
+  const final = {
     lidos,
+    encontrados,
     atualizados,
     cidades,
     ocr,
     erros,
+    limite: totalALer,
+    atual,
   };
+
+  if (typeof callbacks.onProgress === "function") {
+    await callbacks.onProgress(final).catch(() => {});
+  }
+
+  return final;
 }
 
-async function iniciarVarreduraPesadaPagamentosSegundoPlano(client, avisoMsg, limiteBusca = 30000, origem = "manual") {
+async function iniciarVarreduraPesadaPagamentosSegundoPlano(client, avisoMsg, limiteBusca = 30000, origem = "manual", contexto = {}) {
+  const canalLog = await client.channels.fetch(CANAL_LOG_VARREDURA_PAGAMENTOS).catch(() => null);
+
   if (client.__SC_PAGAMENTOS_VARREDURA_RODANDO__) {
     await avisoMsg.edit({
       content: "⚠️ Já existe uma varredura de pagamentos rodando agora. Aguarde finalizar antes de iniciar outra.",
@@ -1786,32 +1850,167 @@ async function iniciarVarreduraPesadaPagamentosSegundoPlano(client, avisoMsg, li
 
   client.__SC_PAGAMENTOS_VARREDURA_RODANDO__ = true;
 
-  await avisoMsg.edit({
-    content: [
-      "🔎 **Varredura pesada de pagamentos iniciada.**",
+  const iniciadoEm = Date.now();
+  const solicitanteId = contexto?.userId || "desconhecido";
+  const comandoTexto = contexto?.comando || origem;
+  const canalOrigemId = contexto?.canalId || avisoMsg.channel?.id || "desconhecido";
+
+  let painelLogMsg = null;
+
+  const embedInicio = new EmbedBuilder()
+    .setColor("#ff3399")
+    .setTitle("🔎 Varredura pesada de pagamentos iniciada")
+    .setDescription("O sistema começou a revisar registros antigos e editar os botões na própria mensagem.")
+    .addFields(
+      { name: "👤 Solicitante", value: solicitanteId !== "desconhecido" ? `<@${solicitanteId}>` : "`desconhecido`", inline: true },
+      { name: "📌 Origem", value: `\`${origem}\``, inline: true },
+      { name: "📦 Limite", value: `\`${limiteBusca}\``, inline: true },
+      { name: "💬 Comando", value: `\`${comandoTexto}\``, inline: false },
+      { name: "📍 Canal de origem", value: canalOrigemId !== "desconhecido" ? `<#${canalOrigemId}>` : "`desconhecido`", inline: true },
+      { name: "🕒 Iniciado em", value: `<t:${Math.floor(iniciadoEm / 1000)}:F>`, inline: true }
+    )
+    .setFooter({ text: "SantaCreators • Logs de Varredura de Pagamentos" })
+    .setTimestamp();
+
+  if (canalLog?.isTextBased()) {
+    painelLogMsg = await canalLog.send({ embeds: [embedInicio] }).catch(() => null);
+  }
+
+  async function atualizarPainel(status = {}) {
+    const percentual = status.limite
+      ? Math.min(100, Math.floor((Number(status.lidos || 0) / Number(status.limite || 1)) * 100))
+      : 0;
+
+    const barraCheia = "█".repeat(Math.floor(percentual / 10));
+    const barraVazia = "░".repeat(10 - Math.floor(percentual / 10));
+
+    const textoPainel = [
+      "🔎 **Varredura pesada de pagamentos em andamento.**",
       "",
-      `📌 Origem: **${origem}**`,
-      `📦 Limite: **${limiteBusca}** registros`,
+      `📌 **Origem:** \`${origem}\``,
+      `👤 **Solicitante:** ${solicitanteId !== "desconhecido" ? `<@${solicitanteId}>` : "`desconhecido`"}`,
+      `📦 **Limite:** \`${status.limite || limiteBusca}\` registros`,
+      "",
+      `📊 **Progresso:** \`${barraCheia}${barraVazia}\` **${percentual}%**`,
+      "",
+      `📖 **Mensagens lidas:** \`${status.lidos || 0}\``,
+      `🔘 **Registros encontrados:** \`${status.encontrados || 0}\``,
+      `🛠️ **Registros editados:** \`${status.atualizados || 0}\``,
+      `🏙️ **Cidades corrigidas:** \`${status.cidades || 0}\``,
+      `🧾 **OCR atualizado:** \`${status.ocr || 0}\``,
+      `⚠️ **Erros:** \`${status.erros || 0}\``,
+      "",
+      `📍 **Atual:** ${status.atual ? `\`${String(status.atual).slice(0, 140)}\`` : "`aguardando...`"}`,
       "",
       "⏳ Vou editar os registros antigos na própria mensagem, sem recriar botão.",
-    ].join("\n"),
-  }).catch(() => {});
+    ].join("\n");
+
+    await avisoMsg.edit({ content: textoPainel }).catch(() => {});
+
+    if (painelLogMsg) {
+      const embedProgresso = EmbedBuilder.from(embedInicio)
+        .setTitle("🔎 Varredura pesada de pagamentos — em andamento")
+        .setFields(
+          { name: "👤 Solicitante", value: solicitanteId !== "desconhecido" ? `<@${solicitanteId}>` : "`desconhecido`", inline: true },
+          { name: "📌 Origem", value: `\`${origem}\``, inline: true },
+          { name: "📦 Limite", value: `\`${status.limite || limiteBusca}\``, inline: true },
+          { name: "📊 Progresso", value: `\`${barraCheia}${barraVazia}\` **${percentual}%**`, inline: false },
+          { name: "📖 Lidos", value: `\`${status.lidos || 0}\``, inline: true },
+          { name: "🔘 Encontrados", value: `\`${status.encontrados || 0}\``, inline: true },
+          { name: "🛠️ Editados", value: `\`${status.atualizados || 0}\``, inline: true },
+          { name: "🏙️ Cidades", value: `\`${status.cidades || 0}\``, inline: true },
+          { name: "🧾 OCR", value: `\`${status.ocr || 0}\``, inline: true },
+          { name: "⚠️ Erros", value: `\`${status.erros || 0}\``, inline: true },
+          { name: "📍 Atual", value: `\`${String(status.atual || "aguardando...").slice(0, 900)}\``, inline: false },
+          { name: "🕒 Iniciado em", value: `<t:${Math.floor(iniciadoEm / 1000)}:F>`, inline: true }
+        )
+        .setTimestamp();
+
+      await painelLogMsg.edit({ embeds: [embedProgresso] }).catch(() => {});
+    }
+  }
+
+  await atualizarPainel({
+    lidos: 0,
+    encontrados: 0,
+    atualizados: 0,
+    cidades: 0,
+    ocr: 0,
+    erros: 0,
+    limite: limiteBusca,
+    atual: "Preparando varredura...",
+  });
 
   setTimeout(async () => {
     try {
-      const res = await varreduraPesadaPagamentosEditandoMesmoBotao(client, limiteBusca);
+      const res = await varreduraPesadaPagamentosEditandoMesmoBotao(client, limiteBusca, {
+        onProgress: atualizarPainel,
 
-      await avisoMsg.edit({
-        content: [
-          "✅ **Varredura pesada de pagamentos finalizada.**",
-          "",
-          `📖 Mensagens lidas: **${res.lidos || 0}**`,
-          `🛠️ Registros atualizados: **${res.atualizados || 0}**`,
-          `🏙️ Cidades corrigidas: **${res.cidades || 0}**`,
-          `🧾 OCR atualizado: **${res.ocr || 0}**`,
-          `⚠️ Erros: **${res.erros || 0}**`,
-        ].join("\n"),
-      }).catch(() => {});
+        onEditLog: async ({ msg, resultado, lidos, encontrados, atualizados, cidades, ocr, erros, limite }) => {
+          if (!canalLog?.isTextBased()) return;
+
+          const embedEdit = new EmbedBuilder()
+            .setColor("#2ecc71")
+            .setTitle("🛠️ Registro antigo editado")
+            .setDescription("Um registro antigo foi atualizado na própria mensagem.")
+            .addFields(
+              { name: "🔗 Registro", value: msg.url || "`sem link`", inline: false },
+              { name: "🆔 Message ID", value: `\`${msg.id}\``, inline: true },
+              { name: "🏙️ Cidade corrigida", value: resultado?.cidade ? "`sim`" : "`não`", inline: true },
+              { name: "🧾 OCR atualizado", value: resultado?.ocr ? "`sim`" : "`não`", inline: true },
+              { name: "📊 Progresso", value: `Lidos: \`${lidos}\` • Encontrados: \`${encontrados}\` • Editados: \`${atualizados}\` / Limite: \`${limite}\``, inline: false },
+              { name: "📌 Totais", value: `Cidades: \`${cidades}\` • OCR: \`${ocr}\` • Erros: \`${erros}\``, inline: false },
+              { name: "🕒 Editado em", value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true }
+            )
+            .setFooter({ text: "SantaCreators • Log individual de edição" })
+            .setTimestamp();
+
+          await canalLog.send({ embeds: [embedEdit] }).catch(() => {});
+        },
+      });
+
+      const finalContent = [
+        "✅ **Varredura pesada de pagamentos finalizada.**",
+        "",
+        `📖 **Mensagens lidas:** \`${res.lidos || 0}\``,
+        `🔘 **Registros encontrados:** \`${res.encontrados || 0}\``,
+        `🛠️ **Registros editados:** \`${res.atualizados || 0}\``,
+        `🏙️ **Cidades corrigidas:** \`${res.cidades || 0}\``,
+        `🧾 **OCR atualizado:** \`${res.ocr || 0}\``,
+        `⚠️ **Erros:** \`${res.erros || 0}\``,
+        "",
+        "🗑️ Esta mensagem será apagada automaticamente em **10 minutos**.",
+      ].join("\n");
+
+      await avisoMsg.edit({ content: finalContent }).catch(() => {});
+
+      if (painelLogMsg) {
+        const embedFinal = new EmbedBuilder()
+          .setColor("#2ecc71")
+          .setTitle("✅ Varredura pesada de pagamentos finalizada")
+          .setDescription("A revisão dos registros antigos terminou.")
+          .addFields(
+            { name: "👤 Solicitante", value: solicitanteId !== "desconhecido" ? `<@${solicitanteId}>` : "`desconhecido`", inline: true },
+            { name: "📌 Origem", value: `\`${origem}\``, inline: true },
+            { name: "💬 Comando", value: `\`${comandoTexto}\``, inline: false },
+            { name: "📖 Mensagens lidas", value: `\`${res.lidos || 0}\``, inline: true },
+            { name: "🔘 Registros encontrados", value: `\`${res.encontrados || 0}\``, inline: true },
+            { name: "🛠️ Registros editados", value: `\`${res.atualizados || 0}\``, inline: true },
+            { name: "🏙️ Cidades corrigidas", value: `\`${res.cidades || 0}\``, inline: true },
+            { name: "🧾 OCR atualizado", value: `\`${res.ocr || 0}\``, inline: true },
+            { name: "⚠️ Erros", value: `\`${res.erros || 0}\``, inline: true },
+            { name: "🕒 Iniciado em", value: `<t:${Math.floor(iniciadoEm / 1000)}:F>`, inline: true },
+            { name: "🏁 Finalizado em", value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true }
+          )
+          .setFooter({ text: "SantaCreators • Logs de Varredura de Pagamentos" })
+          .setTimestamp();
+
+        await painelLogMsg.edit({ embeds: [embedFinal] }).catch(() => {});
+      }
+
+      setTimeout(() => {
+        avisoMsg.delete().catch(() => {});
+      }, 10 * 60 * 1000);
     } catch (err) {
       console.error("[PAGAMENTO_SOCIAL] Erro na varredura pesada manual:", err);
 
@@ -3337,12 +3536,24 @@ export async function pagamentoSocialHandleMessage(message, client) {
         limiteBusca = Math.min(Math.max(Number(limiteArg), 100), 50000);
       }
 
-      const avisoMsg = await message.reply({
+            await message.delete().catch(() => {});
+
+      const avisoMsg = await message.channel.send({
         content: "🔎 Preparando varredura pesada dos pagamentos antigos...",
       }).catch(() => null);
 
       if (avisoMsg) {
-        await iniciarVarreduraPesadaPagamentosSegundoPlano(client, avisoMsg, limiteBusca, "comando_atualizarpagamentos");
+        await iniciarVarreduraPesadaPagamentosSegundoPlano(
+          client,
+          avisoMsg,
+          limiteBusca,
+          "comando_atualizarpagamentos",
+          {
+            userId: message.author.id,
+            canalId: message.channel.id,
+            comando: content,
+          }
+        );
       }
 
       return true;
@@ -3531,11 +3742,21 @@ if (qual === "cidades") {
       : "✅ Varredura pesada iniciada.",
   }).catch(() => {});
 
-  if (avisoMsg) {
-    await iniciarVarreduraPesadaPagamentosSegundoPlano(client, avisoMsg, 30000, "botao_cidades");
-  }
+if (avisoMsg) {
+  await iniciarVarreduraPesadaPagamentosSegundoPlano(
+    client,
+    avisoMsg,
+    30000,
+    "botao_cidades",
+    {
+      userId: interaction.user.id,
+      canalId: interaction.channelId,
+      comando: "Botão 🏙️ Cidades",
+    }
+  );
+}
 
-  return true;
+return true;
 }
 
        const { movidos, relidos, atualizadosOCR, corrigidosVIP } = await moverRegistrosPorFiltro(client, canal, qual);
