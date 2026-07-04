@@ -124,6 +124,12 @@ function temPermissaoPagamento(interaction) {
   return hasRole || hasUser;
 }
 
+function temPermissaoPagamentoMensagem(message) {
+  const hasRole = message.member?.roles?.cache?.some((r) => ALLOWED_IDS.includes(r.id)) ?? false;
+  const hasUser = ALLOWED_IDS.includes(message.author?.id);
+  return hasRole || hasUser;
+}
+
 // ✅ Chefão = pode até aprovar o próprio
 function podeAprovarProprio(interaction) {
   const hasUser = SELF_APPROVE_USER_IDS.includes(interaction.user.id);
@@ -1770,6 +1776,56 @@ async function varreduraPesadaPagamentosEditandoMesmoBotao(client, limiteBusca =
   };
 }
 
+async function iniciarVarreduraPesadaPagamentosSegundoPlano(client, avisoMsg, limiteBusca = 30000, origem = "manual") {
+  if (client.__SC_PAGAMENTOS_VARREDURA_RODANDO__) {
+    await avisoMsg.edit({
+      content: "⚠️ Já existe uma varredura de pagamentos rodando agora. Aguarde finalizar antes de iniciar outra.",
+    }).catch(() => {});
+    return false;
+  }
+
+  client.__SC_PAGAMENTOS_VARREDURA_RODANDO__ = true;
+
+  await avisoMsg.edit({
+    content: [
+      "🔎 **Varredura pesada de pagamentos iniciada.**",
+      "",
+      `📌 Origem: **${origem}**`,
+      `📦 Limite: **${limiteBusca}** registros`,
+      "",
+      "⏳ Vou editar os registros antigos na própria mensagem, sem recriar botão.",
+    ].join("\n"),
+  }).catch(() => {});
+
+  setTimeout(async () => {
+    try {
+      const res = await varreduraPesadaPagamentosEditandoMesmoBotao(client, limiteBusca);
+
+      await avisoMsg.edit({
+        content: [
+          "✅ **Varredura pesada de pagamentos finalizada.**",
+          "",
+          `📖 Mensagens lidas: **${res.lidos || 0}**`,
+          `🛠️ Registros atualizados: **${res.atualizados || 0}**`,
+          `🏙️ Cidades corrigidas: **${res.cidades || 0}**`,
+          `🧾 OCR atualizado: **${res.ocr || 0}**`,
+          `⚠️ Erros: **${res.erros || 0}**`,
+        ].join("\n"),
+      }).catch(() => {});
+    } catch (err) {
+      console.error("[PAGAMENTO_SOCIAL] Erro na varredura pesada manual:", err);
+
+      await avisoMsg.edit({
+        content: "❌ A varredura pesada deu erro. Veja o console do bot.",
+      }).catch(() => {});
+    } finally {
+      client.__SC_PAGAMENTOS_VARREDURA_RODANDO__ = false;
+    }
+  }, 1000);
+
+  return true;
+}
+
 async function autoMarcarCidadesPendentesPagamento(client, limiteBusca = 500) {
   const canal = await client.channels.fetch(CANAL_PAGAMENTO).catch(() => null);
   if (!canal || !canal.isTextBased()) return 0;
@@ -3229,16 +3285,6 @@ export async function pagamentoSocialOnReady(client) {
 
 await autoMarcarCidadesPendentesPagamento(client, 1000).catch(() => null);
 
-setTimeout(() => {
-  varreduraPesadaPagamentosEditandoMesmoBotao(client, 30000)
-    .then((res) => {
-      console.log("[PAGAMENTO_SOCIAL] Varredura pesada finalizada:", res);
-    })
-    .catch((err) => {
-      console.error("[PAGAMENTO_SOCIAL] Erro na varredura pesada:", err);
-    });
-}, 15000);
-
   // ✅ SEMPRE recalcula e atualiza o dashboard ao ligar o bot.
   // Antes, se o menu já existisse, dava return e o gráfico ficava travado.
 // ✅ SEMPRE recalcula e atualiza o dashboard ao ligar o bot.
@@ -3271,6 +3317,36 @@ export async function pagamentoSocialHandleMessage(message, client) {
 
     const content = String(message.content || "").trim();
     if (!content.startsWith("!")) return false;
+
+    const lowerContent = content.toLowerCase();
+
+    if (lowerContent.startsWith("!atualizarpagamentos")) {
+      if (!temPermissaoPagamentoMensagem(message)) {
+        await message.reply("🚫 Você não tem permissão para usar esse comando.").catch(() => {});
+        return true;
+      }
+
+      const args = content.split(/\s+/).filter(Boolean);
+      const limiteArg = String(args[1] || "").toLowerCase();
+
+      let limiteBusca = 30000;
+
+      if (limiteArg === "tudo" || limiteArg === "todos") {
+        limiteBusca = 50000;
+      } else if (/^\d+$/.test(limiteArg)) {
+        limiteBusca = Math.min(Math.max(Number(limiteArg), 100), 50000);
+      }
+
+      const avisoMsg = await message.reply({
+        content: "🔎 Preparando varredura pesada dos pagamentos antigos...",
+      }).catch(() => null);
+
+      if (avisoMsg) {
+        await iniciarVarreduraPesadaPagamentosSegundoPlano(client, avisoMsg, limiteBusca, "comando_atualizarpagamentos");
+      }
+
+      return true;
+    }
 
 const cmd = content.slice(1).split(/\s+/)[0]?.toLowerCase();
 
@@ -3443,6 +3519,24 @@ if (id === "pagamento_dash_atualizar") {
           await interaction.followUp({ content: "❌ Não achei o canal.", flags: MessageFlags.Ephemeral }).catch(() => {});
           return true;
         }
+
+if (qual === "cidades") {
+  const avisoMsg = await canal.send({
+    content: `🔎 <@${interaction.user.id}> iniciou a varredura pesada dos pagamentos antigos pelo botão **🏙️ Cidades**.`,
+  }).catch(() => null);
+
+  await interaction.editReply({
+    content: avisoMsg
+      ? `✅ Varredura pesada iniciada: ${avisoMsg.url}`
+      : "✅ Varredura pesada iniciada.",
+  }).catch(() => {});
+
+  if (avisoMsg) {
+    await iniciarVarreduraPesadaPagamentosSegundoPlano(client, avisoMsg, 30000, "botao_cidades");
+  }
+
+  return true;
+}
 
        const { movidos, relidos, atualizadosOCR, corrigidosVIP } = await moverRegistrosPorFiltro(client, canal, qual);
 
