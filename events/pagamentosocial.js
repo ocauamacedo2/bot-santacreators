@@ -1666,7 +1666,7 @@ async function atualizarRegistroPagamentoAntigoNaMesmaMensagem(client, msg) {
     alterou = true;
   }
 
-  const resultadoOCR = await tentarReprocessarOCRRegistro(embedBuilder).catch(() => ({
+  const resultadoOCR = await tentarReprocessarOCRRegistro(embedBuilder, msg).catch(() => ({
     alterou: false,
     motivo: "Erro interno na releitura OCR.",
   }));
@@ -3324,7 +3324,33 @@ function atualizarCampoOCRPagamento(embedBuilder, analiseComprovante) {
   return embedBuilder;
 }
 
-async function tentarReprocessarOCRRegistro(embedBuilder) {
+function getImagemPagamentoDoRegistro(message, embedBuilder) {
+  const urls = [];
+
+  const data = embedBuilder?.data || {};
+  const embedOriginal = message?.embeds?.[0];
+
+  if (data.image?.url) urls.push(data.image.url);
+  if (data.thumbnail?.url) urls.push(data.thumbnail.url);
+
+  if (embedOriginal?.image?.url) urls.push(embedOriginal.image.url);
+  if (embedOriginal?.thumbnail?.url) urls.push(embedOriginal.thumbnail.url);
+
+  for (const attachment of message?.attachments?.values?.() || []) {
+    if (attachment?.url) urls.push(attachment.url);
+    if (attachment?.proxyURL) urls.push(attachment.proxyURL);
+  }
+
+  const primeiraImagem = urls.find((url) =>
+    /\.(png|jpe?g|webp|gif)(\?|$)/i.test(url) ||
+    /media\.discordapp\.net/i.test(url) ||
+    /cdn\.discordapp\.com/i.test(url)
+  );
+
+  return primeiraImagem || null;
+}
+
+async function tentarReprocessarOCRRegistro(embedBuilder, message = null) {
   const categoriaAtual = getTipoPagamentoFromEmbed(embedBuilder);
 
   if (categoriaEhVipOuPass(categoriaAtual)) {
@@ -3334,11 +3360,14 @@ async function tentarReprocessarOCRRegistro(embedBuilder) {
     };
   }
 
-  const premiacao = getPremiacaoLinkFromEmbed(embedBuilder);
+  const premiacaoOriginal = getPremiacaoLinkFromEmbed(embedBuilder);
+  const imagemRegistro = getImagemPagamentoDoRegistro(message, embedBuilder);
+  const premiacao = [premiacaoOriginal, imagemRegistro].filter(Boolean).join("\n");
+
   if (!premiacao) {
     return {
       alterou: false,
-      motivo: "Sem link de premiação no embed.",
+      motivo: "Sem link de premiação/imagem no embed.",
     };
   }
 
