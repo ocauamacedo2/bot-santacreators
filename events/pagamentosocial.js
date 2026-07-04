@@ -1625,6 +1625,151 @@ async function autoMarcarCidadePagamentoMensagem(client, message, motivo = "auto
   return true;
 }
 
+async function atualizarRegistroPagamentoAntigoNaMesmaMensagem(client, msg) {
+  if (!msg?.embeds?.[0]) {
+    return {
+      alterou: false,
+      cidade: false,
+      ocr: false,
+      motivo: "Sem embed.",
+    };
+  }
+
+  const titulo = msg.embeds[0]?.title || "";
+  if (!titulo.includes("Registro de Pagamento de Evento")) {
+    return {
+      alterou: false,
+      cidade: false,
+      ocr: false,
+      motivo: "Não é registro de pagamento.",
+    };
+  }
+
+  const embedBuilder = EmbedBuilder.from(msg.embeds[0]);
+
+  let alterou = false;
+  let cidadeAlterada = false;
+  let ocrAlterado = false;
+
+  const cidadeKey = detectarCidadeAutomaticaPagamento(msg);
+
+  if (cidadeKey && CIDADES_PAGAMENTO[cidadeKey]) {
+    atualizarCampoCidade(embedBuilder, cidadeKey, client.user.id);
+    cidadeAlterada = true;
+    alterou = true;
+  }
+
+  const resultadoOCR = await tentarReprocessarOCRRegistro(embedBuilder).catch(() => ({
+    alterou: false,
+    motivo: "Erro interno na releitura OCR.",
+  }));
+
+  if (resultadoOCR?.alterou) {
+    ocrAlterado = true;
+    alterou = true;
+  }
+
+  if (!alterou) {
+    return {
+      alterou: false,
+      cidade: false,
+      ocr: false,
+      motivo: "Nada para atualizar.",
+    };
+  }
+
+  const cidadeFinal = getCidadeKeyFromEmbed(embedBuilder);
+
+  const componentsAtualizados = cidadeFinal
+    ? removerRowsCidadePagamento(msg)
+    : [
+        criarRowStatus(msg.id),
+        criarRowCidadesPagamento(msg.id),
+      ];
+
+  await msg.edit({
+    embeds: [embedBuilder],
+    components: componentsAtualizados,
+  }).catch(() => null);
+
+  return {
+    alterou: true,
+    cidade: cidadeAlterada,
+    ocr: ocrAlterado,
+    motivo: "Mensagem antiga editada sem recriar.",
+  };
+}
+
+async function varreduraPesadaPagamentosEditandoMesmoBotao(client, limiteBusca = 5000) {
+  const canal = await client.channels.fetch(CANAL_PAGAMENTO).catch(() => null);
+  if (!canal || !canal.isTextBased()) {
+    return {
+      lidos: 0,
+      atualizados: 0,
+      cidades: 0,
+      ocr: 0,
+      erros: 0,
+    };
+  }
+
+  let lidos = 0;
+  let atualizados = 0;
+  let cidades = 0;
+  let ocr = 0;
+  let erros = 0;
+  let lastId = undefined;
+
+  const totalALer = Math.min(Number(limiteBusca || 5000), 50000);
+
+  while (lidos < totalALer) {
+    const remaining = totalALer - lidos;
+    const fetchLimit = Math.min(100, remaining);
+
+    const batch = await canal.messages.fetch({
+      limit: fetchLimit,
+      before: lastId,
+    }).catch(() => null);
+
+    if (!batch || batch.size === 0) break;
+
+    for (const msg of batch.values()) {
+      lidos++;
+
+      if (msg.author?.id !== client.user.id) continue;
+      if (!msg.embeds?.[0]) continue;
+
+      const titulo = msg.embeds[0]?.title || "";
+      if (!titulo.includes("Registro de Pagamento de Evento")) continue;
+
+      const resultado = await atualizarRegistroPagamentoAntigoNaMesmaMensagem(client, msg).catch(() => {
+        erros++;
+        return null;
+      });
+
+      if (!resultado?.alterou) continue;
+
+      atualizados++;
+      if (resultado.cidade) cidades++;
+      if (resultado.ocr) ocr++;
+
+      await new Promise(resolve => setTimeout(resolve, 900));
+    }
+
+    lastId = batch.last()?.id;
+
+    if (!lastId) break;
+    if (batch.size < fetchLimit) break;
+  }
+
+  return {
+    lidos,
+    atualizados,
+    cidades,
+    ocr,
+    erros,
+  };
+}
+
 async function autoMarcarCidadesPendentesPagamento(client, limiteBusca = 500) {
   const canal = await client.channels.fetch(CANAL_PAGAMENTO).catch(() => null);
   if (!canal || !canal.isTextBased()) return 0;
@@ -1644,6 +1789,7 @@ async function autoMarcarCidadesPendentesPagamento(client, limiteBusca = 500) {
     mensagensTotal.push(...batch.values());
     lastId = batch.last()?.id;
 
+    if (!lastId) break;
     if (batch.size < fetchLimit) break;
   }
 
@@ -3082,6 +3228,16 @@ export async function pagamentoSocialOnReady(client) {
   }
 
 await autoMarcarCidadesPendentesPagamento(client, 1000).catch(() => null);
+
+setTimeout(() => {
+  varreduraPesadaPagamentosEditandoMesmoBotao(client, 30000)
+    .then((res) => {
+      console.log("[PAGAMENTO_SOCIAL] Varredura pesada finalizada:", res);
+    })
+    .catch((err) => {
+      console.error("[PAGAMENTO_SOCIAL] Erro na varredura pesada:", err);
+    });
+}, 15000);
 
   // ✅ SEMPRE recalcula e atualiza o dashboard ao ligar o bot.
   // Antes, se o menu já existisse, dava return e o gráfico ficava travado.
