@@ -661,6 +661,7 @@ const BTN_REVIEW_EVENT_PREFIX = "hf_review_event_";
 data.pendingPaymentCityReview ??= {};
 data.pendingPlayerIdentityReview ??= {};
 data.manualPlayerIdentityMerges ??= {};
+data.manualPlayerCityOverrides ??= {};
 data.manualReviews ??= {};
 data.pendingReview ??= {};
 data.lastUpdatedAt ??= Date.now();
@@ -678,6 +679,7 @@ return {
   pendingPaymentCityReview: {},
   pendingPlayerIdentityReview: {},
   manualPlayerIdentityMerges: {},
+  manualPlayerCityOverrides: {},
   pendingReview: {},
   manualReviews: {},
   lastUpdatedAt: Date.now()
@@ -1454,6 +1456,54 @@ function extractPlayerOrgByKnownOrgName(value = "") {
 
     return nameOverrides[key] || null;
   }
+
+function getStoredManualPlayerCityKey(rankings, playerId = "", playerName = "") {
+  const id = String(playerId || "").trim();
+  const nameKey = normalizeHallKey(playerName || "");
+
+  rankings.manualPlayerCityOverrides ??= {};
+
+  return (
+    (id ? rankings.manualPlayerCityOverrides[`id:${id}`]?.cityKey : null) ||
+    (nameKey ? rankings.manualPlayerCityOverrides[`name:${nameKey}`]?.cityKey : null) ||
+    null
+  );
+}
+
+function findRankingPlayerByIdentity(rankings, playerId = "", playerName = "") {
+  const id = String(playerId || "").trim();
+  const nameKey = normalizeHallKey(playerName || "");
+
+  return Object.values(rankings.players || {}).find(player => {
+    const sameId = id && String(player.playerId || "").trim() === id;
+    const sameName = !id && nameKey && normalizeHallKey(player.name || "") === nameKey;
+
+    return sameId || sameName;
+  }) || null;
+}
+
+function applyCityToRankingPlayer(player, cityKey) {
+  if (!player || !CITIES[cityKey]) return;
+
+  player.cityKey = cityKey;
+  player.cityName = CITIES[cityKey].label;
+
+  player.halls = (player.halls || []).map(hall => ({
+    ...hall,
+    cityKey,
+    cityName: CITIES[cityKey].label,
+    eventName: normalizeHallEventName(hall.eventName, cityKey)
+  }));
+
+  player.events = {};
+
+  for (const hall of player.halls || []) {
+    const eventName = normalizeHallEventName(hall.eventName, cityKey);
+    player.events[eventName] ??= 0;
+    player.events[eventName] += 1;
+  }
+}
+
   function getManualReviewCityKey(messageId = "") {
     return state.confirmedCityReviews?.[messageId]?.cityKey || null;
   }
@@ -3433,6 +3483,9 @@ function createEmptyHallRankingData(previousData = null) {
       reviewedPaymentMessages: previousData?.reviewedPaymentMessages || {},
       paymentEventKeys: previousData?.paymentEventKeys || {},
       pendingPaymentCityReview: previousData?.pendingPaymentCityReview || {},
+      pendingPlayerIdentityReview: previousData?.pendingPlayerIdentityReview || {},
+      manualPlayerIdentityMerges: previousData?.manualPlayerIdentityMerges || {},
+      manualPlayerCityOverrides: previousData?.manualPlayerCityOverrides || {},
       pendingReview: {},
       manualReviews: previousData?.manualReviews || {},
       lastUpdatedAt: Date.now()
@@ -3722,40 +3775,50 @@ function addPlayerRankingPoint(rankings, playerWinner, hallMeta) {
     return Math.abs(timeA - timeB) <= 1000 * 60 * 60 * 36;
   }
 
-  function getPaymentCityKey(message, winner = null) {
-    const text = getPaymentEmbedText(message);
-    const normalized = normalizeHallName(text);
-
-    if (
-      normalized.includes("cidade nobre") ||
-      normalized.includes(" nobre") ||
-      text.includes(CITIES.nobre.roleId)
-    ) return "nobre";
-
-    if (
-      normalized.includes("cidade santa") ||
-      normalized.includes(" santa") ||
-      text.includes(CITIES.santa.roleId)
-    ) return "santa";
-
-    if (
-      normalized.includes("cidade grande") ||
-      normalized.includes(" grande") ||
-      text.includes(CITIES.grande.roleId)
-    ) return "grande";
-
-    if (
-      normalized.includes("cidade maresia") ||
-      normalized.includes(" maresia") ||
-      text.includes(CITIES.maresia.roleId)
-    ) return "maresia";
-
+function getPaymentCityKey(message, winner = null) {
     const bySmartIdentity = getManualPlayerCityKeySmart(
       winner?.playerId || "",
       winner?.playerName || ""
     );
 
     if (bySmartIdentity) return bySmartIdentity;
+
+    const embed = message?.embeds?.[0];
+    const cityField = embed?.fields?.find(field => {
+      const fieldName = normalizeHallName(field.name || "");
+      return fieldName.includes("cidade") || fieldName.includes("cdd");
+    });
+
+    const cityText = cityField?.value || "";
+    const normalized = normalizeHallName(cityText);
+
+    if (!cityText || normalized.includes("nao definida") || normalized.includes("não definida")) {
+      return null;
+    }
+
+    if (
+      /\bcidade\s+nobre\b/.test(normalized) ||
+      /\bnobre\b/.test(normalized) ||
+      cityText.includes(CITIES.nobre.roleId)
+    ) return "nobre";
+
+    if (
+      /\bcidade\s+santa\b/.test(normalized) ||
+      /\bsanta\b/.test(normalized) ||
+      cityText.includes(CITIES.santa.roleId)
+    ) return "santa";
+
+    if (
+      /\bcidade\s+grande\b/.test(normalized) ||
+      /\bgrande\b/.test(normalized) ||
+      cityText.includes(CITIES.grande.roleId)
+    ) return "grande";
+
+    if (
+      /\bcidade\s+maresia\b/.test(normalized) ||
+      /\bmaresia\b/.test(normalized) ||
+      cityText.includes(CITIES.maresia.roleId)
+    ) return "maresia";
 
     return null;
   }
@@ -3937,7 +4000,7 @@ await ch.send({
 }).catch(() => {});
   }
 
-async function sendRequiredPlayerCityReviewIfNeeded(client, rankings, playerData, reason = "mais_de_2_vitorias") {
+async function sendRequiredPlayerCityReviewIfNeeded(client, rankings, playerData, reason = "mais_de_3_vitorias") {
   if (!client || !playerData?.playerId) return;
 
   const playerId = String(playerData.playerId || "").trim();
@@ -4550,7 +4613,7 @@ async function sendPlayerIdentitySimilarityReviews(client, rankings) {
           cityKey
         });
 
-        await sendRequiredPlayerCityReviewIfNeeded(client, rankings, rankings.players[playerKey], "mais_de_2_vitorias_no_mesmo_id");
+        await sendRequiredPlayerCityReviewIfNeeded(client, rankings, rankings.players[playerKey], "mais_de_3_vitorias_no_mesmo_id_por_pagamento");
 
         rankings.paymentEventKeys[paymentKey] = {
           messageId: message.id,
@@ -6871,7 +6934,7 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
       delete rankings.pendingPaymentCityReview[playerReviewKey];
       delete rankings.reviewedPaymentMessages[pending.messageId];
 
-            rankings.manualPaymentCityReviews ??= {};
+      rankings.manualPaymentCityReviews ??= {};
       rankings.manualPaymentCityReviews[playerReviewKey] = {
         ...pending,
         cityKey,
@@ -6879,6 +6942,32 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
         reviewedBy: interaction.user.id,
         reviewedAt: Date.now()
       };
+
+      rankings.manualPlayerCityOverrides ??= {};
+
+      if (pending.playerId) {
+        rankings.manualPlayerCityOverrides[`id:${pending.playerId}`] = {
+          cityKey,
+          cityName: CITIES[cityKey].label,
+          playerName: pending.playerName || "",
+          playerId: pending.playerId,
+          source: "botao_pagamento_revisao_cidade",
+          reviewedBy: interaction.user.id,
+          reviewedAt: Date.now()
+        };
+      }
+
+      if (pending.playerName) {
+        rankings.manualPlayerCityOverrides[`name:${normalizeHallKey(pending.playerName)}`] = {
+          cityKey,
+          cityName: CITIES[cityKey].label,
+          playerName: pending.playerName,
+          playerId: pending.playerId || "",
+          source: "botao_pagamento_revisao_cidade",
+          reviewedBy: interaction.user.id,
+          reviewedAt: Date.now()
+        };
+      }
 
       for (const player of Object.values(rankings.players || {})) {
         const sameId = pending.playerId && String(player.playerId || "") === String(pending.playerId);
