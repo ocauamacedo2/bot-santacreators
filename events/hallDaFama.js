@@ -74,6 +74,13 @@ const HALL_REVIEW_CHANNEL_ID = "1518707314901651576";// Canal para revisão manu
     maresia: { label: "Cidade Maresia", roleId: "1379021994678288465", emoji: "🌊" },
   };
 
+const PAYMENT_CITY_BY_DISCORD_CHANNEL = {
+  "755203021490749530:1135417544862347357": "nobre",
+  "690983940567334964:1135340708799193128": "santa",
+  "788905600699858944:1399498294639595690": "grande",
+  "798594785896038401:1135417626663854080": "maresia"
+};
+
   const KNOWN_ORG_NAMES = [
     "tropa do 7",
     "tropado7",
@@ -3775,7 +3782,25 @@ function addPlayerRankingPoint(rankings, playerWinner, hallMeta) {
     return Math.abs(timeA - timeB) <= 1000 * 60 * 60 * 36;
   }
 
+function getPaymentCityKeyFromDiscordLinks(text = "") {
+  const raw = String(text || "");
+
+  const links = [...raw.matchAll(/discord\.com\/channels\/(\d+)\/(\d+)(?:\/\d+)?/gi)];
+
+  for (const match of links) {
+    const guildId = match[1];
+    const channelId = match[2];
+    const key = `${guildId}:${channelId}`;
+    const cityKey = PAYMENT_CITY_BY_DISCORD_CHANNEL[key];
+
+    if (cityKey && CITIES[cityKey]) return cityKey;
+  }
+
+  return null;
+}
+
 function getPaymentCityKey(message, winner = null) {
+    const fullText = getPaymentEmbedText(message);
     const embed = message?.embeds?.[0];
 
     const cityField = embed?.fields?.find(field => {
@@ -3786,36 +3811,16 @@ function getPaymentCityKey(message, winner = null) {
     const cityText = String(cityField?.value || "").trim();
     const normalized = normalizeHallName(cityText);
 
-    // ✅ Se o botão/registro marcou cidade, isso manda.
-    // Não deixa override antigo do player trocar Grande por Santa/Nobre/etc.
     if (cityText && !normalized.includes("nao definida") && !normalized.includes("não definida")) {
-      if (
-        cityText.includes(CITIES.grande.roleId) ||
-        /\bcidade\s+grande\b/.test(normalized) ||
-        /\bgrande\b/.test(normalized)
-      ) return "grande";
-
-      if (
-        cityText.includes(CITIES.nobre.roleId) ||
-        /\bcidade\s+nobre\b/.test(normalized) ||
-        /\bnobre\b/.test(normalized)
-      ) return "nobre";
-
-      if (
-        cityText.includes(CITIES.santa.roleId) ||
-        /\bcidade\s+santa\b/.test(normalized) ||
-        /\bsanta\b/.test(normalized)
-      ) return "santa";
-
-      if (
-        cityText.includes(CITIES.maresia.roleId) ||
-        /\bcidade\s+maresia\b/.test(normalized) ||
-        /\bmaresia\b/.test(normalized)
-      ) return "maresia";
+      if (cityText.includes(CITIES.nobre.roleId) || /\bnobre\b/.test(normalized)) return "nobre";
+      if (cityText.includes(CITIES.santa.roleId) || /\bsanta\b/.test(normalized)) return "santa";
+      if (cityText.includes(CITIES.grande.roleId) || /\bgrande\b/.test(normalized)) return "grande";
+      if (cityText.includes(CITIES.maresia.roleId) || /\bmaresia\b/.test(normalized)) return "maresia";
     }
 
-    // ✅ Se NÃO tiver cidade marcada no botão/registro, não inventa.
-    // Deixa sem cidade para cair na revisão manual.
+    const cityByDiscordLink = getPaymentCityKeyFromDiscordLinks(fullText);
+    if (cityByDiscordLink) return cityByDiscordLink;
+
     return null;
   }
 
@@ -3958,6 +3963,12 @@ function getPaymentCityKey(message, winner = null) {
 
     rankings.pendingPaymentCityReview ??= {};
 
+    const storedCityKey = getStoredManualPlayerCityKey(rankings, winner.playerId || "", winner.playerName || "");
+    if (storedCityKey) return;
+
+    const detectedCityKey = getPaymentCityKey(message, winner);
+    if (detectedCityKey) return;
+
     if (rankings.pendingPaymentCityReview[playerReviewKey]) return;
 
     rankings.pendingPaymentCityReview[playerReviewKey] = {
@@ -4004,7 +4015,7 @@ async function sendRequiredPlayerCityReviewIfNeeded(client, rankings, playerData
   if (!playerId) return;
 
   const total = Number(playerData.total || 0);
-  if (total <= 2) return;
+  if (total <= 5) return;
 
   rankings.pendingPaymentCityReview ??= {};
 

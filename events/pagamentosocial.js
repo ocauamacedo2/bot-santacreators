@@ -60,6 +60,13 @@ const CIDADES_PAGAMENTO = {
   },
 };
 
+const CIDADE_PAGAMENTO_POR_LINK_DISCORD = {
+  "755203021490749530:1135417544862347357": "nobre",
+  "690983940567334964:1135340708799193128": "santa",
+  "788905600699858944:1399498294639595690": "grande",
+  "798594785896038401:1135417626663854080": "maresia",
+};
+
 // Canal de logs (auditoria) do sistema de pagamentos
 // ⚠️ Troca aqui pelo teu canal de logs real, se for outro.
 const CANAL_LOG_PAGAMENTO = "1486084352403312843";
@@ -1517,6 +1524,143 @@ function criarEmbedMenu() {
     .setFooter({ text: "SantaCreators – Sistema Oficial de Registro" });
 }
 
+function getTextoCompletoRegistroPagamento(message) {
+  const embed = message?.embeds?.[0];
+  if (!embed) return String(message?.content || "");
+
+  const data = embed.data || {};
+  const fields = Array.isArray(data.fields) ? data.fields : [];
+
+  return [
+    message?.content || "",
+    data.title || "",
+    data.description || "",
+    data.footer?.text || "",
+    ...fields.flatMap((field) => [field.name || "", field.value || ""]),
+  ].join("\n");
+}
+
+function getCidadeKeyPorLinkDiscord(texto = "") {
+  const links = [...String(texto || "").matchAll(/discord\.com\/channels\/(\d+)\/(\d+)(?:\/\d+)?/gi)];
+
+  for (const match of links) {
+    const guildId = match[1];
+    const channelId = match[2];
+    const cityKey = CIDADE_PAGAMENTO_POR_LINK_DISCORD[`${guildId}:${channelId}`];
+
+    if (cityKey && CIDADES_PAGAMENTO[cityKey]) return cityKey;
+  }
+
+  return null;
+}
+
+function getCidadeKeyPorCamposSeguros(embedRaw) {
+  const data = embedRaw?.data || embedRaw || {};
+  const fields = Array.isArray(data.fields) ? data.fields : [];
+
+  const camposSeguros = fields.filter((field) => {
+    const nome = String(field.name || "")
+      .toLowerCase()
+      .normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
+    return (
+      nome.includes("cidade") ||
+      nome.includes("cdd") ||
+      nome.includes("premiacao") ||
+      nome.includes("premiação") ||
+      nome.includes("link")
+    );
+  });
+
+  const texto = camposSeguros.map((field) => String(field.value || "")).join("\n");
+
+  for (const [cidadeKey, cidade] of Object.entries(CIDADES_PAGAMENTO)) {
+    const normalizado = texto
+      .toLowerCase()
+      .normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
+    if (texto.includes(cidade.roleId)) return cidadeKey;
+    if (new RegExp(`\\b${cidadeKey}\\b`, "i").test(normalizado)) return cidadeKey;
+    if (new RegExp(`\\b${cidade.label.toLowerCase()}\\b`, "i").test(normalizado)) return cidadeKey;
+  }
+
+  return null;
+}
+
+function detectarCidadeAutomaticaPagamento(message) {
+  const embedRaw = message?.embeds?.[0];
+  if (!embedRaw) return null;
+
+  const cidadeJaDefinida = getCidadeKeyFromEmbed(embedRaw);
+  if (cidadeJaDefinida) return null;
+
+  const textoCompleto = getTextoCompletoRegistroPagamento(message);
+
+  return (
+    getCidadeKeyPorLinkDiscord(textoCompleto) ||
+    getCidadeKeyPorCamposSeguros(embedRaw) ||
+    null
+  );
+}
+
+async function autoMarcarCidadePagamentoMensagem(client, message, motivo = "auto") {
+  if (!message?.embeds?.[0]) return false;
+
+  const cidadeKey = detectarCidadeAutomaticaPagamento(message);
+  if (!cidadeKey) return false;
+
+  const embedAtualizado = atualizarCampoCidade(
+    EmbedBuilder.from(message.embeds[0]),
+    cidadeKey,
+    client.user.id
+  );
+
+  const componentsSemCidades = removerRowsCidadePagamento(message);
+
+  await message.edit({
+    embeds: [embedAtualizado],
+    components: componentsSemCidades,
+  }).catch(() => null);
+
+  return true;
+}
+
+async function autoMarcarCidadesPendentesPagamento(client, limiteBusca = 500) {
+  const canal = await client.channels.fetch(CANAL_PAGAMENTO).catch(() => null);
+  if (!canal || !canal.isTextBased()) return 0;
+
+  let totalEditados = 0;
+  let mensagensTotal = [];
+  let lastId = undefined;
+  const totalALer = Math.min(Number(limiteBusca || 500), 1000);
+
+  while (mensagensTotal.length < totalALer) {
+    const remaining = totalALer - mensagensTotal.length;
+    const fetchLimit = Math.min(100, remaining);
+    const batch = await canal.messages.fetch({ limit: fetchLimit, before: lastId }).catch(() => null);
+
+    if (!batch || batch.size === 0) break;
+
+    mensagensTotal.push(...batch.values());
+    lastId = batch.last()?.id;
+
+    if (batch.size < fetchLimit) break;
+  }
+
+  for (const msg of mensagensTotal) {
+    if (msg.author?.id !== client.user.id) continue;
+    if (!msg.embeds?.[0]) continue;
+
+    const titulo = msg.embeds[0]?.title || "";
+    if (!titulo.includes("Registro de Pagamento de Evento")) continue;
+
+    const editou = await autoMarcarCidadePagamentoMensagem(client, msg, "auto:varredura").catch(() => false);
+    if (editou) totalEditados++;
+  }
+
+  return totalEditados;
+}
+
 function criarRowStatus(messageId) {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
@@ -2937,6 +3081,8 @@ export async function pagamentoSocialOnReady(client) {
     }).catch(() => {});
   }
 
+await autoMarcarCidadesPendentesPagamento(client, 1000).catch(() => null);
+
   // ✅ SEMPRE recalcula e atualiza o dashboard ao ligar o bot.
   // Antes, se o menu já existisse, dava return e o gráfico ficava travado.
 // ✅ SEMPRE recalcula e atualiza o dashboard ao ligar o bot.
@@ -3602,12 +3748,14 @@ const embed = new EmbedBuilder()
           return true;
         }
 
-        await mensagem.edit({
+await mensagem.edit({
   components: [
     criarRowStatus(mensagem.id),
     criarRowCidadesPagamento(mensagem.id),
   ],
 }).catch(() => {});
+
+await autoMarcarCidadePagamentoMensagem(client, mensagem, "auto:novo_registro").catch(() => null);
 
         // reposta o menu e limpa duplicados
         await canal.send({ embeds: [criarEmbedMenu()], components: [criarRowMenu()] }).catch(() => {});
