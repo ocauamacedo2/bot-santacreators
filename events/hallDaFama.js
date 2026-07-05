@@ -3547,6 +3547,52 @@ function createEmptyHallRankingData(previousData = null) {
     return rankings;
   }
 
+  function removeSingleHallRankingData(rankings, messageId = "") {
+    if (!rankings || !messageId) return rankings;
+
+    for (const key of Object.keys(rankings.orgs || {})) {
+      const org = rankings.orgs[key];
+
+      org.halls = (org.halls || []).filter(hall => hall.messageId !== messageId);
+
+      org.total = org.halls.length;
+      org.events = {};
+
+      for (const hall of org.halls) {
+        const eventName = normalizeHallEventName(hall.eventName, hall.cityKey || org.cityKey || "nobre");
+        org.events[eventName] ??= 0;
+        org.events[eventName] += 1;
+      }
+
+      if (org.total <= 0) {
+        delete rankings.orgs[key];
+      }
+    }
+
+    for (const key of Object.keys(rankings.players || {})) {
+      const player = rankings.players[key];
+
+      player.halls = (player.halls || []).filter(hall => hall.messageId !== messageId);
+
+      player.total = player.halls.length;
+      player.events = {};
+
+      for (const hall of player.halls) {
+        const eventName = normalizeHallEventName(hall.eventName, hall.cityKey || player.cityKey || "nobre");
+        player.events[eventName] ??= 0;
+        player.events[eventName] += 1;
+      }
+
+      if (player.total <= 0) {
+        delete rankings.players[key];
+      }
+    }
+
+    delete rankings.reviewedMessages?.[messageId];
+
+    return rankings;
+  }
+
 function addOrgRankingPoint(rankings, orgWinner, hallMeta) {
   const orgName = normalizeOrgDisplayName(orgWinner.orgName);
   if (!orgName) return;
@@ -4708,12 +4754,14 @@ async function sendPlayerIdentitySimilarityReviews(client, rankings) {
     rankings.pendingReview ??= {};
     rankings.manualReviews ??= {};
 
-    if (rankings.reviewedMessages[message.id]) {
+    const parsed = parseHallWinners(content, cityKey);
+    const deduped = dedupeHallWinners(parsed);
+
+    if (!deduped.orgs.length && !deduped.players.length) {
       return rankings;
     }
 
-    const parsed = parseHallWinners(content, cityKey);
-    const deduped = dedupeHallWinners(parsed);
+    removeSingleHallRankingData(rankings, message.id);
 
     for (const orgWinner of deduped.orgs) {
       if (isAmbiguousHallWinner(orgWinner) && client) {
@@ -5983,9 +6031,6 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
 
       const previousRankings = loadHallRankings();
       let rankings = createEmptyHallRankingData(previousRankings);
-
-      const fetchedMessageIds = new Set(allMessages.map(m => m.id));
-      rankings = removeFetchedHallRankingData(rankings, fetchedMessageIds);
 
       const hallMessages = allMessages.filter(m => {
         const text = getHallMessageText(m);
