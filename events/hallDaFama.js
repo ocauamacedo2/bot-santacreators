@@ -326,7 +326,8 @@ const PLAYER_NAME_OVERRIDES = {
   "540": "Royal",
   "239": "Royal",
   "125": "Royal",
-  "34": "Barbie"
+  "34": "Barbie",
+  "1756": "Hitmaker"
 };
 
 const HALL_FORCE_PLAYER_NAMES = [
@@ -3866,6 +3867,33 @@ function getPaymentCityKey(message, winner = null) {
 
     const cityByDiscordLink = getPaymentCityKeyFromDiscordLinks(fullText);
     if (cityByDiscordLink) return cityByDiscordLink;
+
+    const winnerManualCity =
+      getManualPlayerCityKey(winner?.playerId || "") ||
+      getManualPlayerCityKeyByName(winner?.playerName || "");
+
+    if (winnerManualCity && CITIES[winnerManualCity]) return winnerManualCity;
+
+    const prizeText = getPaymentFieldValue(message, [
+      "Premiação",
+      "🎁 Premiação",
+      ":gift: Premiação",
+      "Premiação / Link",
+      "🔗 Premiação / Link",
+      ":link: Premiação / Link",
+      "Link",
+      "🔗 Link",
+      ":link: Link"
+    ]);
+
+    const normalizedPrize = normalizeHallName(prizeText);
+
+    if (prizeText && !normalizedPrize.includes("nao definida") && !normalizedPrize.includes("não definida")) {
+      if (prizeText.includes(CITIES.nobre.roleId) || /\bnobre\b/.test(normalizedPrize)) return "nobre";
+      if (prizeText.includes(CITIES.santa.roleId) || /\bsanta\b/.test(normalizedPrize)) return "santa";
+      if (prizeText.includes(CITIES.grande.roleId) || /\bgrande\b/.test(normalizedPrize)) return "grande";
+      if (prizeText.includes(CITIES.maresia.roleId) || /\bmaresia\b/.test(normalizedPrize)) return "maresia";
+    }
 
     return null;
   }
