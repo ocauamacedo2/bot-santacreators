@@ -4593,23 +4593,6 @@ async function sendPlayerIdentitySimilarityReviews(client, rankings) {
           continue;
         }
 
-        if (playerAlreadyHasHallForEvent(rankings, {
-          eventName,
-          eventDateKey,
-          cityKey,
-          playerId: winner.playerId,
-          playerName: winner.playerName
-        })) {
-          skipped++;
-          rankings.reviewedPaymentMessages[message.id] = {
-            skipped: true,
-            reason: "player_ja_contado_por_hall",
-            paymentKey,
-            at: Date.now()
-          };
-          continue;
-        }
-
         addPlayerRankingPoint(rankings, {
           type: "player",
           playerName: winner.playerName,
@@ -5558,15 +5541,11 @@ async function publishHallRankings(client, rankings) {
   await sendRankingWebhookMirror(HALL_ORGS_RANKING_WEBHOOK_URL, orgsPayload);
 }
 
-  async function publishHallRankingsDuringScan(client, rankings) {
-    normalizeExistingPlayerRankingOverrides(rankings);
-    await sendPlayerIdentitySimilarityReviews(client, rankings);
+async function publishHallRankingsDuringScan(client, rankings) {
+  rankings.lastUpdatedAt = Date.now();
 
-    rankings.lastUpdatedAt = Date.now();
-
-    saveHallRankings(rankings);
-    await publishHallRankings(client, rankings);
-  }
+  await publishHallRankings(client, rankings);
+}
 
   async function ensureHallRankingsDashboards(client) {
     try {
@@ -6171,17 +6150,43 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
 
       let processed = 0;
 
-      for (const msg of sortedHallMessages) {
-        const text = getHallMessageText(msg);
-        const evidence = await resolveHallEvidence(client, msg, text);
-        const cityKey = evidence.cityKey || "nobre";
-        const eventName = evidence.eventName || "Evento";
-        const cityName = CITIES[cityKey]?.label || "Cidade Nobre";
+for (const msg of sortedHallMessages) {
+  let text = "";
+  let evidence = {
+    cityKey: "nobre",
+    eventName: "Evento",
+    source: "erro_antes_de_ler",
+    confidence: 0
+  };
+  let cityKey = "nobre";
+  let eventName = "Evento";
+  let cityName = "Cidade Nobre";
 
-        await addHallToRankings(rankings, msg, client);
-        processed++;
+  try {
+    text = getHallMessageText(msg);
+    evidence = await resolveHallEvidence(client, msg, text);
+    cityKey = evidence.cityKey || "nobre";
+    eventName = evidence.eventName || "Evento";
+    cityName = CITIES[cityKey]?.label || "Cidade Nobre";
 
-        if (showProgress && (processed === 1 || processed % 10 === 0 || processed === sortedHallMessages.length)) {
+    await addHallToRankings(rankings, msg, client);
+  } catch (err) {
+    await sendHallScanLog(client, {
+      title: "⚠️ Hall ignorado por erro individual",
+      color: "#f1c40f",
+      description:
+        `Um Hall deu erro durante a leitura, mas a varredura continuou normalmente.\n\n` +
+        `Mensagem: \`${msg.id}\`\n` +
+        `Erro: \`${err?.message || err}\``,
+      phase: "Erro individual",
+      currentHall: text || getHallMessageText(msg),
+      currentHallUrl: getMessageJumpUrl(msg)
+    }).catch(() => {});
+  }
+
+  processed++;
+
+  if (showProgress && (processed === 1 || processed % 10 === 0 || processed === sortedHallMessages.length)) {
           await publishHallRankingsDuringScan(client, rankings);
 
           await updateHallScanProgress(client, {
@@ -6226,10 +6231,13 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
         }
       }
 
-      await addPaymentEventsToPlayerRankings(rankings, client);
+await addPaymentEventsToPlayerRankings(rankings, client);
 
-      saveHallRankings(rankings);
-      await publishHallRankings(client, rankings);
+normalizeExistingPlayerRankingOverrides(rankings);
+await sendPlayerIdentitySimilarityReviews(client, rankings);
+
+saveHallRankings(rankings);
+await publishHallRankings(client, rankings);
 
       const durationSeconds = Math.floor((Date.now() - scanStartedAt) / 1000);
 
