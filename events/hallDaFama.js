@@ -4015,35 +4015,42 @@ async function sendRequiredPlayerCityReviewIfNeeded(client, rankings, playerData
   if (!playerId) return;
 
   const total = Number(playerData.total || 0);
-  if (total <= 5) return;
+
+  // ✅ Mais de 3 vitórias = 4 ou mais
+  if (total <= 3) return;
 
   rankings.pendingPaymentCityReview ??= {};
+  rankings.manualPlayerCityOverrides ??= {};
 
   const playerReviewKey = `id:${playerId}`;
   if (rankings.pendingPaymentCityReview[playerReviewKey]) return;
 
   const hasManualCity =
     getManualPlayerCityKey(playerId) ||
-    getManualPlayerCityKeyByName(playerName);
+    getManualPlayerCityKeyByName(playerName) ||
+    getStoredManualPlayerCityKey(rankings, playerId, playerName);
 
   if (hasManualCity) return;
 
-const latestHall = getPlayerLatestHall(playerData);
-const latestLink = getPlayerLatestLink(playerData);
+  const suggestedCityKey = total >= 5 ? "nobre" : "";
+  const latestHall = getPlayerLatestHall(playerData);
+  const latestLink = getPlayerLatestLink(playerData);
 
-rankings.pendingPaymentCityReview[playerReviewKey] = {
-  playerReviewKey,
-  playerName,
-  playerId,
-  eventName: "Revisão obrigatória por acúmulo de vitórias",
-  eventDateKey: new Date().toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" }),
-  messageId: latestHall?.messageId || "",
-  channelId: latestHall?.channelId || "",
-  guildId: latestHall?.guildId || "",
-  jumpUrl: latestLink || "",
-  createdAt: Date.now(),
-  reason
-};
+  rankings.pendingPaymentCityReview[playerReviewKey] = {
+    playerReviewKey,
+    playerName,
+    playerId,
+    eventName: "Revisão obrigatória por acúmulo de vitórias",
+    eventDateKey: new Date().toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" }),
+    messageId: latestHall?.messageId || "",
+    channelId: latestHall?.channelId || "",
+    guildId: latestHall?.guildId || "",
+    jumpUrl: latestLink || "",
+    createdAt: Date.now(),
+    reason,
+    suggestedCityKey,
+    total
+  };
 
   const ch = await client.channels.fetch(PAYMENT_CITY_REVIEW_CHANNEL_ID).catch(() => null);
   if (!ch || !ch.isTextBased()) return;
@@ -4054,13 +4061,18 @@ rankings.pendingPaymentCityReview[playerReviewKey] = {
         .setCustomId(`${BTN_PAYMENT_CITY_PREFIX}${playerReviewKey}:${cityKey}`)
         .setLabel(city.label.replace("Cidade ", ""))
         .setEmoji(city.emoji)
-        .setStyle(ButtonStyle.Secondary)
+        .setStyle(cityKey === suggestedCityKey ? ButtonStyle.Success : ButtonStyle.Secondary)
     )
   );
 
   const reviewEmbed = new EmbedBuilder()
-    .setColor("#f1c40f")
+    .setColor(suggestedCityKey ? "#e74c3c" : "#f1c40f")
     .setTitle("⚠️ Revisão obrigatória de cidade do player")
+    .setDescription(
+      suggestedCityKey
+        ? "Esse ID tem 5+ vitórias. **Provavelmente é Cidade Nobre**, mas confirme no botão correto."
+        : "Esse ID passou de 3 vitórias. Confirme manualmente a cidade correta."
+    )
     .addFields(
       {
         name: "👤 Player",
@@ -4078,10 +4090,13 @@ rankings.pendingPaymentCityReview[playerReviewKey] = {
         inline: true
       },
       {
+        name: "🌆 Sugestão",
+        value: suggestedCityKey ? `${CITIES[suggestedCityKey].emoji} **${CITIES[suggestedCityKey].label}**` : "Sem sugestão automática",
+        inline: true
+      },
+      {
         name: "🔗 Registro exemplo",
-        value: getPlayerLatestLink(playerData)
-          ? `[Abrir registro](${getPlayerLatestLink(playerData)})`
-          : "Sem link encontrado",
+        value: latestLink ? `[Abrir registro](${latestLink})` : "Sem link encontrado",
         inline: false
       }
     )
@@ -4879,7 +4894,7 @@ async function sendPlayerIdentitySimilarityReviews(client, rankings) {
         cityKey
       });
 
-      await sendRequiredPlayerCityReviewIfNeeded(client, rankings, rankings.players[playerKey], "mais_de_2_vitorias_no_mesmo_id_hall");
+      await sendRequiredPlayerCityReviewIfNeeded(client, rankings, rankings.players[playerKey], "mais_de_3_vitorias_no_mesmo_id_hall");
     }
 
     rankings.reviewedMessages[message.id] = {

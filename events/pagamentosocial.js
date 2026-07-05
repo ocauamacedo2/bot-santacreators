@@ -349,11 +349,11 @@ function extrairPrimeiraUrlImagem(texto) {
 
   const urls = t.match(/https?:\/\/[^\s<>()"'`]+/gi) || [];
   const url = urls.find((u) =>
-    /\.(png|jpe?g|webp|gif)(\?|$)/i.test(u) ||
+    /\.(png|jpe?g|webp|gif)(\?|&|$)/i.test(u) ||
+    /[?&]format=(png|jpe?g|webp|gif)/i.test(u) ||
     /media\.discordapp\.net/i.test(u) ||
     /cdn\.discordapp\.com/i.test(u)
   );
-
   return url || null;
 }
 
@@ -706,17 +706,39 @@ async function gerarVariacoesImagemParaOCR(buffer) {
           height,
         })
         .resize({
-          width: 2200,
+          width: 2600,
           withoutEnlargement: false,
         })
         .grayscale()
         .normalize()
+        .linear(1.35, -10)
         .sharpen()
         .png()
         .toBuffer()
         .catch(() => null);
 
       if (blocoCentral) variacoes.push(blocoCentral);
+
+      const blocoComprovantePicpay = await sharp(buffer)
+        .extract({
+          left: Math.floor(largura * 0.04),
+          top: Math.floor(altura * 0.24),
+          width: Math.floor(largura * 0.92),
+          height: Math.floor(altura * 0.42),
+        })
+        .resize({
+          width: 3000,
+          withoutEnlargement: false,
+        })
+        .grayscale()
+        .normalize()
+        .linear(1.65, -32)
+        .sharpen()
+        .png()
+        .toBuffer()
+        .catch(() => null);
+
+      if (blocoComprovantePicpay) variacoes.push(blocoComprovantePicpay);
     }
 
     if (largura > 0 && altura > 0) {
@@ -3342,7 +3364,8 @@ function getImagemPagamentoDoRegistro(message, embedBuilder) {
   }
 
   const primeiraImagem = urls.find((url) =>
-    /\.(png|jpe?g|webp|gif)(\?|$)/i.test(url) ||
+    /\.(png|jpe?g|webp|gif)(\?|&|$)/i.test(url) ||
+    /[?&]format=(png|jpe?g|webp|gif)/i.test(url) ||
     /media\.discordapp\.net/i.test(url) ||
     /cdn\.discordapp\.com/i.test(url)
   );
@@ -3374,7 +3397,10 @@ async function tentarReprocessarOCRRegistro(embedBuilder, message = null) {
   const valorAtual = getFieldValue(embedBuilder, "💰 Valor Identificado");
   const nomeAtual = getFieldValue(embedBuilder, "🧾 Nome no Comprovante");
 
+  const temImagemRegistro = Boolean(imagemRegistro);
+
   const precisaReler =
+    temImagemRegistro ||
     valorEhNaoIdentificado(valorAtual) ||
     valorEhNaoIdentificado(nomeAtual);
 
