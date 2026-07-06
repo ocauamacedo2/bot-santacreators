@@ -300,7 +300,16 @@ async function ensurePanelMessage(client) {
   // tenta buscar a msg anterior
   if (st.messageId) {
     const prev = await ch.messages.fetch(st.messageId).catch(() => null);
-    if (prev) return prev;
+
+    if (prev && prev.author?.id === client.user.id) {
+      return prev;
+    }
+
+    if (prev && prev.author?.id !== client.user.id) {
+      console.warn("[FACS_COMPARATIVO] Painel antigo é de outro bot. Recriando com o bot atual.");
+    }
+
+    saveState({ channelId: COMP_CHANNEL_ID, messageId: null });
   }
 
   // cria nova
@@ -379,12 +388,30 @@ export async function facsComparativoHandleMessage(message, client) {
     if (message.author?.bot) return false;
 
     const content = String(message.content || "");
+const lower = content.trim().toLowerCase();
 
-    // comando
-    const isCmd = content.trim().toLowerCase().startsWith("!facs_master");
-    if (!isCmd) return false;
+if (lower === "!facscomparativo" || lower === "!facscomp") {
+  const allowed = canSetMaster(message.member, message.author.id);
+  if (!allowed) {
+    await message.reply("❌ Sem permissão pra recriar/atualizar o painel.").catch(() => {});
+    return true;
+  }
 
-    const allowed = canSetMaster(message.member, message.author.id);
+  await message.delete().catch(() => {});
+  await updatePanel(client).catch(() => {});
+
+  await message.channel.send(`✅ Painel FACS comparativo recriado/atualizado em <#${COMP_CHANNEL_ID}>.`)
+    .then((m) => setTimeout(() => m.delete().catch(() => {}), 8000))
+    .catch(() => {});
+
+  return true;
+}
+
+// comando
+const isCmd = lower.startsWith("!facs_master");
+if (!isCmd) return false;
+
+const allowed = canSetMaster(message.member, message.author.id);
     if (!allowed) {
       await message.reply("❌ Sem permissão pra usar `!facs_master`.").catch(() => {});
       return true;
