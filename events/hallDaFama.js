@@ -6470,22 +6470,15 @@ new ButtonBuilder()
           .setStyle(TextInputStyle.Paragraph)
           .setRequired(true)
       ),
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId("hf_image")
-          .setLabel("Link da Imagem 1")
-          .setPlaceholder("https://cdn.discordapp.com/...")
-          .setStyle(TextInputStyle.Short)
-          .setRequired(false)
-      ),
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId("hf_image2")
-          .setLabel("Link da Imagem 2 (Opcional)")
-          .setPlaceholder("https://cdn.discordapp.com/...")
-          .setStyle(TextInputStyle.Short)
-          .setRequired(false)
-      )
+new ActionRowBuilder().addComponents(
+  new TextInputBuilder()
+    .setCustomId("hf_images")
+    .setLabel("Links das Imagens (Opcional)")
+    .setPlaceholder("Opcional: cole até 4 links aqui, um por linha ou separados por espaço.")
+    .setStyle(TextInputStyle.Paragraph)
+    .setMaxLength(4000)
+    .setRequired(false)
+)
     );
     return modal;
   }
@@ -7441,8 +7434,9 @@ new TextInputBuilder()
   .setLabel("🖼️ Link(s) da imagem correta")
   .setValue(imageUrls.join("\n") || "")
   .setStyle(TextInputStyle.Paragraph)
-  .setPlaceholder("Cole 1 ou 2 links aqui, um por linha, se quiser forçar")
-  .setRequired(false)
+.setPlaceholder("Cole até 4 links aqui, um por linha ou separados por espaço.")
+.setMaxLength(4000)
+.setRequired(false)
   )
 );
       
@@ -7511,7 +7505,7 @@ if (isPrizesOnly) {
   const oldParts = extractHallParts(oldContent);
 
   const imageLines = manualImageUrls.length
-  ? uniqueImageUrls(manualImageUrls).slice(0, 2)
+  ? uniqueImageUrls(manualImageUrls).slice(0, 4)
   : await getSafeHallImageUrls(client, messageToEdit, {
       content: oldContent,
       eventName: oldEventName,
@@ -7528,7 +7522,7 @@ const forcedImageUrls = manualImageUrls.length
   : (newImageUrl ? [newImageUrl] : []);
 
 const imageLines = forcedImageUrls.length
-  ? uniqueImageUrls(forcedImageUrls).slice(0, 2)
+  ? uniqueImageUrls(forcedImageUrls).slice(0, 4)
   : await getSafeHallImageUrls(client, messageToEdit, {
       content: oldContent,
       eventName: newEventName,
@@ -7669,8 +7663,12 @@ return true;
       // Pega inputs
       const eventNameInput = interaction.fields.getTextInputValue("hf_event_name");
       const topsInput = interaction.fields.getTextInputValue("hf_tops");
-      const imageUrl = interaction.fields.getTextInputValue("hf_image");
-      const imageUrl2 = interaction.fields.getTextInputValue("hf_image2");
+const imagesInput = interaction.fields.getTextInputValue("hf_images")?.trim() || "";
+const imageUrls = uniqueImageUrls(getImageUrlsFromContent(imagesInput)).slice(0, 4);
+const imageUrl = imageUrls[0] || "";
+const imageUrl2 = imageUrls[1] || "";
+const imageUrl3 = imageUrls[2] || "";
+const imageUrl4 = imageUrls[3] || "";
   const customCityInput = interaction.fields.getTextInputValue("hf_custom_city")?.trim() || "";
 
   // Pega dados do cronograma (automático)
@@ -7736,6 +7734,9 @@ state.pendingRequests[reqId] = {
   winnersText,
   imageUrl,
   imageUrl2,
+  imageUrl3,
+  imageUrl4,
+  imageUrls,
   eventKey: eventData?.eventKey || null
 };
       saveState(state);
@@ -7743,18 +7744,25 @@ state.pendingRequests[reqId] = {
       const approvalChannel = await client.channels.fetch(APPROVAL_CHANNEL_ID).catch(() => null);
       if (!approvalChannel) return interaction.editReply("❌ Canal de aprovação não encontrado.");
 
-      const embed = new EmbedBuilder()
-        .setTitle("🛡️ Aprovação: Hall da Fama")
-        .setColor("#FFD700")
-        .setDescription(`**Solicitante:** <@${interaction.user.id}>\n**Cidade:** ${cityDisplayName}`)
-        .addFields(
-          { name: "Evento (Automático)", value: eventName },
-          { name: "Vencedores (Formatado)", value: winnersText },
-          { name: "Imagem 1", value: imageUrl },
-          { name: "Imagem 2", value: imageUrl2 || "—" }
-        )
-        .setImage(imageUrl)
-        .setTimestamp();
+const embed = new EmbedBuilder()
+  .setTitle("🛡️ Aprovação: Hall da Fama")
+  .setColor("#FFD700")
+  .setDescription(`**Solicitante:** <@${interaction.user.id}>\n**Cidade:** ${cityDisplayName}`)
+  .addFields(
+    { name: "Evento (Automático)", value: eventName },
+    { name: "Vencedores (Formatado)", value: winnersText },
+    {
+      name: "Imagens",
+      value: imageUrls.length
+        ? imageUrls.map((url, index) => `Imagem ${index + 1}: ${url}`).join("\n").slice(0, 1000)
+        : "—"
+    }
+  )
+  .setTimestamp();
+
+if (imageUrl) {
+  embed.setImage(imageUrl);
+}
 
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
@@ -7829,7 +7837,12 @@ state.pendingRequests[reqId] = {
 
   ||@everyone @here <@&${ROLE_CIDADAO}> <@&${ROLE_LIDERES}> <@&${cityData.roleId}>||
 
-  ${data.imageUrl}${data.imageUrl2 ? `\n${data.imageUrl2}` : ''}`;
+${uniqueImageUrls(data.imageUrls || [
+  data.imageUrl,
+  data.imageUrl2,
+  data.imageUrl3,
+  data.imageUrl4
+].filter(Boolean)).slice(0, 4).join("\n")}`;
 
       const chunks = splitText(finalMessage);
       let sentMsg;
