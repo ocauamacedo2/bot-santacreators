@@ -247,26 +247,37 @@ function markSent(state, key) {
 }
 
 function isOnline(member) {
-  if (!member?.presence) {
-    console.log(`[EventosChecklistNotifier] ⚠️ Sem cache de presence para ${member?.user?.tag}. Considerando offline/invisível.`);
+  const presence = member?.presence || member?.guild?.presences?.cache?.get(member.id);
+
+  if (!presence) {
+    console.log(`[EventosChecklistNotifier] ⚠️ Sem presence para ${member?.user?.tag}. Considerando offline/invisível.`);
     return false;
   }
 
-  const status = member.presence.status;
+  const status = presence.status;
   return status === "online" || status === "idle" || status === "dnd";
 }
 
 async function getMembersByRoles(guild, roleIds) {
   await guild.members.fetch().catch(() => null);
 
+  const allowedRoleIds = new Set(roleIds.filter(Boolean));
   const ids = new Set();
 
-  for (const roleId of roleIds.filter(Boolean)) {
-    const role = guild.roles.cache.get(roleId);
+  for (const roleId of allowedRoleIds) {
+    const role = guild.roles.cache.get(roleId) || await guild.roles.fetch(roleId).catch(() => null);
     if (!role) continue;
 
     for (const member of role.members.values()) {
-      if (!member.user.bot) ids.add(member.id);
+      if (member.user.bot) continue;
+
+      const hasAllowedRole = [...allowedRoleIds].some((id) =>
+        member.roles.cache.has(id)
+      );
+
+      if (!hasAllowedRole) continue;
+
+      ids.add(member.id);
     }
   }
 
@@ -769,6 +780,7 @@ function buildRespEventEmbed(member, event, phase) {
       `📌 Teu canal: <#${pointChannel}>`,
       "",
       "Bate teu ponto e lembra geral nos chats/call:",
+"⚠️ Responsável também bate ponto, sem essa de cobrar geral e esquecer o próprio kkkkk.",
       "• Manager/Equipe Manager no canal de Manager",
       "• Social/Social Medias no canal de Social",
       "• Gestor no canal de Gestor",
@@ -1133,17 +1145,14 @@ async function runNotifierTick(client, options = {}) {
         ROLES.RESP_LIDER,
       ];
 
-      const equipeRoles = [
-        ROLES.COORDENACAO_GERAL,
-        ROLES.EQUIPE_CREATORS,
-        ROLES.CREATOR_SENIOR,
-        ROLES.EQUIPE_MANAGER,
-        ROLES.MANAGER_CREATORS,
-        ROLES.EQUIPE_SOCIAL,
-        ROLES.SOCIAL_MEDIAS,
-        ROLES.GESTOR_CREATORS,
-        ROLES.COORD_CREATORS,
-      ];
+const equipeRoles = [
+  ROLES.COORDENACAO_GERAL,
+  ROLES.EQUIPE_CREATORS,
+];
+
+// ✅ SOMENTE esses cargos recebem como equipe:
+// <@&1352385500614234134> Coordenação Geral
+// <@&1352429001188180039> Equipe Creators
 
       const respMembers = await getMembersByRoles(guild, respRoles);
       const equipeMembers = await getMembersByRoles(guild, equipeRoles);
@@ -1158,9 +1167,10 @@ async function runNotifierTick(client, options = {}) {
         allTargetsMap.set(member.id, member);
       }
 
-      const allTargets = [...allTargetsMap.values()];
-      const onlineEquipe = equipeMembers.filter(isOnline);
-      const offlineEquipe = equipeMembers.filter((m) => !isOnline(m));
+const allTargets = [...allTargetsMap.values()];
+
+const onlineEquipe = equipeMembers.filter(isOnline);
+const offlineEquipe = equipeMembers.filter((m) => !isOnline(m));
 
       if (phase === "TESTE_MANUAL") {
         const testMember = testUserId ? await guild.members.fetch(testUserId).catch(() => null) : null;
@@ -1214,13 +1224,13 @@ async function runNotifierTick(client, options = {}) {
         let sentTest = 0;
         let failedTest = 0;
 
-        for (const member of allTargets) {
-          const embed = buildPersonalEmbed(member, event, "PRE_120");
-          const ok = await dm(client, member, embed, event, "teste manual personalizado");
+// ✅ Teste manual agora manda somente para quem clicou no botão.
+// Isso evita floodar o servidor inteiro por acidente.
+const embed = buildPersonalEmbed(testMember, event, "PRE_120");
+const ok = await dm(client, testMember, embed, event, "teste manual personalizado");
 
-          if (ok) sentTest++;
-          else failedTest++;
-        }
+if (ok) sentTest++;
+else failedTest++;
 
         await sendProgressLog(
           client,
@@ -1246,10 +1256,12 @@ async function runNotifierTick(client, options = {}) {
 if (phase === "PRE_120" || phase === "PRE_60" || phase === "PRE_30") {
   const targetsMap = new Map();
 
+  // ✅ Responsáveis recebem sempre, até offline/invisível
   for (const member of respMembers) {
     targetsMap.set(member.id, member);
   }
 
+  // ✅ Equipe/Coordenação só recebe se estiver online/ausente/dnd
   for (const member of onlineEquipe) {
     targetsMap.set(member.id, member);
   }

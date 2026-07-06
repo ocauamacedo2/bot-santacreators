@@ -597,21 +597,26 @@ async function updatePanel(client, state, options = {}) {
     }
     
     // Se a mensagem de controle não existe, recria
-    if (!ctrlMsg) {
-        ctrlMsg = await channel.send({
-            content: "🔧 **Painel de Controle**",
-            embeds: [buildControlEmbed()],
-            components: [buildControlRow()],
-        });
-        state.panelMessageId = ctrlMsg.id;
-    } else {
-        // Se existe, apenas edita
-        await ctrlMsg.edit({
-            content: "🔧 **Painel de Controle**",
-            embeds: [buildControlEmbed()],
-            components: [buildControlRow()],
-        });
-    }
+    if (ctrlMsg && ctrlMsg.author?.id !== client.user.id) {
+    console.warn("[Cronograma] Painel antigo é de outro bot. Recriando painel com o bot atual.");
+    ctrlMsg = null;
+    state.panelMessageId = null;
+}
+
+if (!ctrlMsg) {
+    ctrlMsg = await channel.send({
+        content: "🔧 **Painel de Controle**",
+        embeds: [buildControlEmbed()],
+        components: [buildControlRow()],
+    });
+    state.panelMessageId = ctrlMsg.id;
+} else {
+    await ctrlMsg.edit({
+        content: "🔧 **Painel de Controle**",
+        embeds: [buildControlEmbed()],
+        components: [buildControlRow()],
+    });
+}
 
     saveState(state);
   } catch (e) {

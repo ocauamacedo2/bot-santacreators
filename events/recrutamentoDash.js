@@ -193,14 +193,21 @@ async function updateDashboard(client) {
     new ButtonBuilder().setCustomId("recrut_refresh").setLabel("🔄 Atualizar").setStyle(ButtonStyle.Secondary)
   );
 
-  if (stats.messageId) {
-    const msg = await channel.messages.fetch(stats.messageId).catch(() => null);
-    if (msg) {
-      await msg.edit({ embeds: [embed], components: [row] });
-      saveStats(stats);
-      return;
-    }
+if (stats.messageId) {
+  const msg = await channel.messages.fetch(stats.messageId).catch(() => null);
+
+  if (msg && msg.author?.id === client.user.id) {
+    await msg.edit({ embeds: [embed], components: [row] });
+    saveStats(stats);
+    return;
   }
+
+  if (msg && msg.author?.id !== client.user.id) {
+    console.warn("[RecrutamentoDash] Painel antigo é de outro bot. Recriando painel com o bot atual.");
+    stats.messageId = null;
+    saveStats(stats);
+  }
+}
 
   const newMsg = await channel.send({ embeds: [embed], components: [row] });
   stats.messageId = newMsg.id;

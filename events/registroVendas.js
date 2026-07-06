@@ -231,13 +231,20 @@ async function updatePanel(client) {
   const embed = buildPanelEmbed(state);
   const row = buildPanelRow();
 
-  if (state.panelMsgId) {
-    const msg = await channel.messages.fetch(state.panelMsgId).catch(() => null);
-    if (msg) {
-      await msg.edit({ embeds: [embed], components: [row] });
-      return;
-    }
+if (state.panelMsgId) {
+  const msg = await channel.messages.fetch(state.panelMsgId).catch(() => null);
+
+  if (msg && msg.author?.id === client.user.id) {
+    await msg.edit({ embeds: [embed], components: [row] });
+    return;
   }
+
+  if (msg && msg.author?.id !== client.user.id) {
+    console.warn("[Vendas] Painel antigo é de outro bot. Recriando painel com o bot atual.");
+    state.panelMsgId = null;
+    saveState(state);
+  }
+}
 
   const newMsg = await channel.send({ embeds: [embed], components: [row] });
   state.panelMsgId = newMsg.id;
