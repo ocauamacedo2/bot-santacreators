@@ -1339,7 +1339,17 @@ async function sendGoalDmLog(client, {
 async function ensureDashMessage(channel, state) {
   if (state.messageId) {
     const msg = await channel.messages.fetch(state.messageId).catch(() => null);
-    if (msg) return msg;
+
+    if (msg && msg.author?.id === channel.client.user.id) {
+      return msg;
+    }
+
+    if (msg && msg.author?.id !== channel.client.user.id) {
+      console.warn("[GraficoManagers] Dashboard antigo é de outro bot. Recriando com o bot atual.");
+      state.messageId = null;
+      state.lastHash = null;
+      saveState(state);
+    }
   }
 
   const recent = await channel.messages.fetch({ limit: 20 }).catch(() => null);
@@ -1878,13 +1888,26 @@ if (!dashMsg && reason !== "force") {
 
 
   // edita msg
-  await dashMsg
-    .edit({
-      content: "",
-      embeds,
-      components,
-    })
-    .catch(() => null);
+const edited = await dashMsg
+  .edit({
+    content: "",
+    embeds,
+    components,
+  })
+  .then(() => true)
+  .catch((e) => {
+    console.error("[GraficoManagers] Falha ao editar dashboard:", e?.stack || e);
+    return false;
+  });
+
+if (!edited) {
+  state.messageId = null;
+  state.lastHash = null;
+  saveState(state);
+
+  await updateDashboard(client, causeUserId, "force").catch(() => null);
+  return;
+}
 
   // salva state
   state.lastHash = payloadHash;

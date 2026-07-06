@@ -1070,26 +1070,33 @@ const newHash = sha1(JSON.stringify({
   chartUrl,
 }));
 
-    if (state.messageId) {
-      const oldMsg = await dashChannel.messages.fetch(state.messageId).catch(() => null);
+if (state.messageId) {
+  const oldMsg = await dashChannel.messages.fetch(state.messageId).catch(() => null);
 
-   if (oldMsg) {
-  try {
-    await oldMsg.edit({
-      embeds: [embed],
-      components,
-    });
+  if (oldMsg && oldMsg.author?.id === client.user.id) {
+    try {
+      await oldMsg.edit({
+        embeds: [embed],
+        components,
+      });
 
-    state.lastHash = newHash;
-    state.lastUpdatedAt = Date.now();
-    saveState(state);
-    return true;
-  } catch (e) {
-    console.error("[GraficoPresencaEventos] Falha ao editar dashboard antigo:", e?.stack || e);
-    return false;
-  }
-}
+      state.lastHash = newHash;
+      state.lastUpdatedAt = Date.now();
+      saveState(state);
+      return true;
+    } catch (e) {
+      console.error("[GraficoPresencaEventos] Falha ao editar dashboard atual:", e?.stack || e);
     }
+  }
+
+  if (oldMsg && oldMsg.author?.id !== client.user.id) {
+    console.warn("[GraficoPresencaEventos] Dashboard antigo é de outro bot. Recriando com o bot atual.");
+  }
+
+  state.messageId = null;
+  state.lastHash = null;
+  saveState(state);
+}
 
 const sent = await dashChannel.send({
   embeds: [embed],

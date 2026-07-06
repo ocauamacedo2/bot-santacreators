@@ -395,18 +395,26 @@ async function updatePanel(client) {
   const components = buildPanelRows();
 
   if (state.messageId) {
-    const msg = await channel.messages.fetch(state.messageId).catch(() => null);
-    if (msg) {
-      await msg.edit({ embeds: [embed], components }).catch(() => {});
-      return;
-    }
+  const msg = await channel.messages.fetch(state.messageId).catch(() => null);
+
+  if (msg && msg.author?.id === client.user.id) {
+    await msg.edit({ embeds: [embed], components }).catch(() => {});
+    return;
   }
 
-  const newMsg = await channel.send({ embeds: [embed], components }).catch(() => null);
-  if (newMsg) {
-    state.messageId = newMsg.id;
-    saveState(state);
+  if (msg && msg.author?.id !== client.user.id) {
+    console.warn("[ConfirmacaoPresenca] Painel antigo é de outro bot. Recriando com o bot atual.");
   }
+
+  state.messageId = null;
+  saveState(state);
+}
+
+const newMsg = await channel.send({ embeds: [embed], components }).catch(() => null);
+if (newMsg) {
+  state.messageId = newMsg.id;
+  saveState(state);
+}
 }
 
 async function logAction(client, interaction, action, orgName, extra = "") {
