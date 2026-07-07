@@ -9,6 +9,7 @@ import {
 } from "discord.js";
 
 const LOG_RECRIAR_CHANNEL_ID = "1523901588828192798";
+const TRANSCRIPTS_CHANNEL_ID = "1358568999738409151";
 const TRANSCRIPTS_BASE_URL = "https://transcripts-santa.squareweb.app/transcript/";
 
 const RECRIA_PERMS = [
@@ -109,53 +110,70 @@ async function fetchTranscriptMessages(channel) {
   return collected.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
 }
 
-async function saveTranscript(Transcript, oldChannel, newChannel, openerId) {
-  if (!Transcript) return;
+async function saveTranscript(Transcript, oldChannel, newChannel, openerId, executorId) {
+  if (!Transcript) return 0;
 
   const messages = await fetchTranscriptMessages(oldChannel);
 
   const payload = {
     canalId: oldChannel.id,
     abertoPor: openerId ? `ID: ${openerId}` : "Desconhecido",
-    assumidoPor: "Canal recriado",
-    mensagens: messages.map((msg) => ({
-      autor: msg.member?.displayName || msg.author?.username || "Desconhecido",
-      idAutor: msg.author?.id || "0",
-      conteudo: msg.content || "[sem texto/anexo/embed]",
-      horario: msg.createdAt,
-      avatar: msg.author?.displayAvatarURL({ dynamic: true, size: 64 }) || "",
-    })),
+    assumidoPor: `Canal recriado por ID: ${executorId}`,
+    mensagens: [
+      ...messages.map((msg) => ({
+        autor: msg.member?.displayName || msg.author?.username || "Desconhecido",
+        idAutor: msg.author?.id || "0",
+        conteudo: msg.content || "[sem texto/anexo/embed]",
+        horario: msg.createdAt,
+        avatar: msg.author?.displayAvatarURL({ dynamic: true, size: 64 }) || "",
+      })),
+      {
+        autor: "SantaCreators",
+        idAutor: "BOT",
+        conteudo: `Ticket fechado automaticamente pelo recriador. Motivo: Canal recriado. Novo canal: ${newChannel.id}`,
+        horario: new Date(),
+        avatar: "",
+      },
+    ],
   };
 
-  await Transcript.create(payload).catch((err) => {
-    console.error("[RECRIAR_TICKET] Erro ao salvar transcript:", err);
-  });
+  await Transcript.create(payload);
+
+  return messages.length;
 }
 
-async function sendLog({ guild, executor, oldChannel, newChannel, tipo, openerId, totalPerms }) {
+async function sendLog({ guild, executor, oldChannel, newChannel, tipo, openerId, totalPerms, messagesCount }) {
   const logChannel = await guild.channels.fetch(LOG_RECRIAR_CHANNEL_ID).catch(() => null);
-  if (!logChannel?.isTextBased()) return;
+
+  if (!logChannel?.isTextBased()) {
+    throw new Error(`Canal de log ${LOG_RECRIAR_CHANNEL_ID} não encontrado ou sem permissão.`);
+  }
 
   const embed = new EmbedBuilder()
-    .setTitle("♻️ Ticket recriado com sucesso")
+    .setTitle("📁 LOGS DE TICKETS")
     .setColor("#ff009a")
     .setThumbnail(guild.iconURL({ dynamic: true }))
     .addFields(
-      { name: "🎫 Tipo", value: `\`${tipo}\``, inline: true },
-      { name: "👤 Quem usou", value: `<@${executor.id}>`, inline: true },
-      { name: "📨 Aberto por", value: openerId ? `<@${openerId}>` : "`Não identificado`", inline: true },
-      { name: "📌 Canal antigo", value: `\`${oldChannel.name}\`\n\`${oldChannel.id}\``, inline: false },
-      { name: "✅ Canal novo", value: `${newChannel}\n\`${newChannel.id}\``, inline: false },
-      { name: "🔐 Permissões copiadas", value: `\`${totalPerms}\` overwrites copiados`, inline: true },
-      { name: "📝 Motivo do fechamento", value: "`Canal recriado`", inline: true },
-      { name: "🕒 Data/Hora", value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false }
+      { name: "📝 TIPO DE TICKET", value: `\`${tipo.toUpperCase()}\``, inline: false },
+      { name: "📨 Ticket aberto por:", value: openerId ? `<@${openerId}>` : "`Não identificado`", inline: true },
+      { name: "✅ Ticket fechado por:", value: `<@${executor.id}>`, inline: true },
+      { name: "🎨 Creator que atendeu:", value: `<@${executor.id}>`, inline: true },
+      { name: "🆔 Canal antigo:", value: `\`${oldChannel.id}\``, inline: true },
+      { name: "♻️ Canal novo:", value: `${newChannel}\n\`${newChannel.id}\``, inline: true },
+      { name: "🔐 Permissões copiadas:", value: `\`${totalPerms}\` overwrites`, inline: true },
+      { name: "💬 Mensagens salvas:", value: `\`${messagesCount}\` mensagens`, inline: true },
+      { name: "🕒 Fechamento:", value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true },
+      { name: "📝 Qual foi o desenrolar/motivo? Foi resolvido?", value: "Canal recriado", inline: false }
     )
-    .setFooter({ text: "SantaCreators • Recriador de Tickets", iconURL: guild.iconURL({ dynamic: true }) });
+    .setFooter({
+      text: "SantaCreators",
+      iconURL: guild.iconURL({ dynamic: true })
+    });
 
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setStyle(ButtonStyle.Link)
-      .setLabel("📂 Abrir Transcript antigo")
+      .setLabel("📂 Abrir Transcript")
       .setURL(`${TRANSCRIPTS_BASE_URL}${oldChannel.id}`),
 
     new ButtonBuilder()
@@ -164,7 +182,44 @@ async function sendLog({ guild, executor, oldChannel, newChannel, tipo, openerId
       .setURL(`https://discord.com/channels/${guild.id}/${newChannel.id}`)
   );
 
-  await logChannel.send({ embeds: [embed], components: [row] }).catch(() => {});
+  await logChannel.send({ embeds: [embed], components: [row] });
+}
+
+async function sendTranscriptLog({ guild, executor, oldChannel, newChannel, tipo, openerId }) {
+  const transcriptChannel = await guild.channels.fetch(TRANSCRIPTS_CHANNEL_ID).catch(() => null);
+
+  if (!transcriptChannel?.isTextBased()) {
+    throw new Error(`Canal de transcript ${TRANSCRIPTS_CHANNEL_ID} não encontrado ou sem permissão.`);
+  }
+
+  const embed = new EmbedBuilder()
+    .setTitle("📁 LOGS DE TICKETS")
+    .setColor("#ff009a")
+    .setThumbnail(guild.iconURL({ dynamic: true }))
+    .addFields(
+      { name: "📝 TIPO DE TICKET", value: `\`${tipo.toUpperCase()}\``, inline: false },
+      { name: "📨 Ticket aberto por:", value: openerId ? `<@${openerId}>` : "`Não identificado`", inline: true },
+      { name: "✅ Ticket fechado por:", value: `<@${executor.id}>`, inline: true },
+      { name: "🎨 Creator que atendeu:", value: `<@${executor.id}>`, inline: true },
+      { name: "🆔 Canal do ticket:", value: `\`${oldChannel.id}\``, inline: false },
+      { name: "🕒 Abertura:", value: `<t:${Math.floor(oldChannel.createdTimestamp / 1000)}:F>`, inline: true },
+      { name: "🕓 Fechamento:", value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true },
+      { name: "♻️ Novo canal recriado:", value: `${newChannel}`, inline: false },
+      { name: "📝 Qual foi o desenrolar/motivo? Foi resolvido?", value: "Canal recriado", inline: false }
+    )
+    .setFooter({
+      text: "SantaCreators",
+      iconURL: guild.iconURL({ dynamic: true })
+    });
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setStyle(ButtonStyle.Link)
+      .setLabel("📂 Abrir Transcript")
+      .setURL(`${TRANSCRIPTS_BASE_URL}${oldChannel.id}`)
+  );
+
+  await transcriptChannel.send({ embeds: [embed], components: [row] });
 }
 
 async function recreateOneChannel({ oldChannel, message, client, Transcript, statusMessage, index, total }) {
@@ -253,7 +308,13 @@ async function recreateOneChannel({ oldChannel, message, client, Transcript, sta
       `⏳ Etapa: salvando transcript/log...`,
   }).catch(() => {});
 
-  await saveTranscript(Transcript, oldChannel, newChannel, openerId);
+  const messagesCount = await saveTranscript(
+    Transcript,
+    oldChannel,
+    newChannel,
+    openerId,
+    message.author.id
+  );
 
   await sendLog({
     guild,
@@ -263,6 +324,16 @@ async function recreateOneChannel({ oldChannel, message, client, Transcript, sta
     tipo,
     openerId,
     totalPerms: permissionOverwrites.length,
+    messagesCount,
+  });
+
+  await sendTranscriptLog({
+    guild,
+    executor: message.author,
+    oldChannel,
+    newChannel,
+    tipo,
+    openerId,
   });
 
   await statusMessage.edit({
@@ -270,10 +341,22 @@ async function recreateOneChannel({ oldChannel, message, client, Transcript, sta
       `♻️ **Recriando tickets...**\n\n` +
       `📌 Progresso: **${index}/${total}**\n` +
       `✅ Canal novo: ${newChannel}\n` +
+      `📁 Log enviado com sucesso.\n` +
+      `💬 Transcript salvo com **${messagesCount}** mensagens.\n` +
       `🗑️ Etapa: apagando canal antigo com segurança...`,
   }).catch(() => {});
 
-  await oldChannel.delete(`Canal recriado por ${message.author.tag} | Novo canal: ${newChannel.id}`);
+  await oldChannel.send({
+    content:
+      `✅ Este ticket foi fechado pelo sistema.\n\n` +
+      `📝 Motivo: **Canal recriado**\n` +
+      `♻️ Novo canal: ${newChannel}\n` +
+      `🕒 Fechando em alguns segundos...`,
+  }).catch(() => {});
+
+  await sleep(3000);
+
+  await oldChannel.delete(`Ticket fechado | Motivo: Canal recriado | Novo canal: ${newChannel.id}`);
 
   return newChannel;
 }
