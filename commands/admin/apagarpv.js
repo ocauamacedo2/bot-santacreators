@@ -537,18 +537,16 @@ export async function apagarPVHandleMessage(message, client) {
           );
         }
 
-        if (!forcarScanDM) {
-          if (apagadasRegistradas.tentadas === 0) {
-            detalhes.push(
-              `ℹ️ <@${user.id}> — nenhuma mensagem registrada ainda. ` +
-              `Use \`--scan\` para varrer se a DM estiver em cache. ` +
-              `Use \`--scan-force\` para tentar abrir a DM, mas o Discord pode bloquear por anti-spam.`
-            );
-          } else {
-            detalhes.push(
-              `ℹ️ <@${user.id}> — scan da DM ignorado para evitar bloqueio anti-spam. Use \`--scan\` se quiser forçar a varredura.`
-            );
-          }
+        const deveVarrerDM =
+          forcarScanDM ||
+          apagadasRegistradas.tentadas === 0 ||
+          apagadasRegistradas.apagadas === 0;
+
+        if (!deveVarrerDM) {
+          detalhes.push(
+            `ℹ️ <@${user.id}> — mensagens registradas processadas. ` +
+            `Scan da DM ignorado para evitar bloqueio anti-spam. Use \`--scan\` se quiser forçar a varredura.`
+          );
 
           continue;
         }
