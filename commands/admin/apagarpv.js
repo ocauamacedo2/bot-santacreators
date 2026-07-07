@@ -1,14 +1,12 @@
 // /application/commands/admin/apagarpv.js
-import { Events, EmbedBuilder, PermissionsBitField } from 'discord.js';
+import { EmbedBuilder, PermissionsBitField } from 'discord.js';
 
-// ✅ Canais e variáveis importantes
-const LOG_CHANNEL_ID = '1524041749905801216'; // Canal de logs completo
+const LOG_CHANNEL_ID = '1524041749905801216';
 
-// ✅ Permissões autorizadas
 const PERMITIDOS = [
-  '1262262852949905408', // OWNER
-  '1352408327983861844', // RESP CREATOR
-  '1262262852949905409', // RESP INFLU
+  '1262262852949905408',
+  '1352408327983861844',
+  '1262262852949905409',
 ];
 
 function getPrefix() {
@@ -32,429 +30,502 @@ function messageLink(guildId, channelId, messageId) {
 }
 
 function limparId(valor) {
-  return String(valor || '').replace(/[<@!>]/g, '');
+  return String(valor || '').replace(/[<@!>&]/g, '');
+}
+
+function extrairIdsMencionados(content) {
+  return [...String(content || '').matchAll(/<@!?(\d{17,22})>/g)].map(match => match[1]);
+}
+
+function cortarTexto(texto, limite = 950) {
+  const str = String(texto || '');
+  if (!str.trim()) return '*[sem texto]*';
+  if (str.length <= limite) return str;
+  return `${str.slice(0, limite - 20)}... [cortado]`;
 }
 
 async function resolveLogChannel(client) {
-  try {
-    const canal = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
-    if (!canal || !canal.isTextBased?.()) return null;
-    return canal;
-  } catch {
-    return null;
-  }
+  const canal = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+  if (!canal || !canal.isTextBased?.()) return null;
+  return canal;
+}
+
+async function enviarLog(client, payload) {
+  const canal = await resolveLogChannel(client).catch(() => null);
+  if (!canal) return false;
+  await canal.send(payload).catch(() => {});
+  return true;
 }
 
 async function editarStatus(statusMsg, embed) {
   if (!statusMsg) return;
-  await statusMsg.edit({ embeds: [embed] }).catch(() => {});
+  await statusMsg.edit({
+    embeds: [embed],
+    allowedMentions: { parse: [] }
+  }).catch(() => {});
 }
 
-async function buscarMensagensDoBotNaDM(dm, client, totalLimit = 1000) {
-  const allMessages = [];
-  let lastId = null;
+async function buscarDmDoUsuario(user) {
+  if (user.dmChannel) return user.dmChannel;
 
-  while (allMessages.length < totalLimit) {
-    const options = { limit: 100 };
-    if (lastId) options.before = lastId;
+  const dm = await user.createDM().catch((err) => {
+    throw new Error(`Não consegui abrir/criar DM: ${err?.code || ''} ${err?.message || err}`);
+  });
 
-    const fetchedMessages = await dm.messages.fetch(options).catch(() => null);
-
-    if (!fetchedMessages || fetchedMessages.size === 0) break;
-
-    fetchedMessages.forEach(msg => allMessages.push(msg));
-
-    lastId = fetchedMessages.last()?.id || null;
-
-    if (!lastId) break;
-    if (fetchedMessages.size < 100) break;
-
-    await sleep(350);
+  if (!dm) {
+    throw new Error('Não consegui abrir/criar DM: retorno vazio.');
   }
 
-  return allMessages.filter(msg => msg.author?.id === client.user.id);
+  return dm;
+}
+
+async function buscarMensagensDoBotNaDM(dm, client, totalLimit = 2000) {
+  const todas = [];
+  const erros = [];
+
+  let beforeId = null;
+  let paginas = 0;
+
+  while (todas.length < totalLimit) {
+    paginas++;
+
+    const options = { limit: 100 };
+    if (beforeId) options.before = beforeId;
+
+    const fetched = await dm.messages.fetch(options).catch((err) => {
+      erros.push(`Página ${paginas}: ${err?.code || ''} ${err?.message || err}`);
+      return null;
+    });
+
+    if (!fetched || fetched.size === 0) break;
+
+    for (const msg of fetched.values()) {
+      todas.push(msg);
+    }
+
+    beforeId = fetched.last()?.id || null;
+
+    if (!beforeId) break;
+    if (fetched.size < 100) break;
+
+    await sleep(400);
+  }
+
+  const mensagensDoBotAtual = todas.filter(msg => msg.author?.id === client.user.id);
+  const mensagensDeOutrosBots = todas.filter(msg => msg.author?.bot && msg.author?.id !== client.user.id);
+
+  return {
+    paginas,
+    totalLidas: todas.length,
+    mensagensDoBotAtual,
+    mensagensDeOutrosBots,
+    erros,
+    primeiraMensagemId: todas[0]?.id || 'nenhuma',
+    ultimaMensagemId: todas[todas.length - 1]?.id || 'nenhuma',
+  };
+}
+
+async function resolverMembros(message, alvo) {
+  const modoEveryone =
+    alvo === '@everyone' ||
+    alvo === 'everyone' ||
+    alvo === '@here' ||
+    alvo === 'here';
+
+  let membros = [];
+
+  if (modoEveryone) {
+    const todosMembros = await message.guild.members.fetch().catch(() => null);
+
+    if (!todosMembros) {
+      throw new Error('Não consegui buscar todos os membros. Ative a intent Guild Members no portal e no client.');
+    }
+
+    membros = [...todosMembros.values()].filter(m => !m.user.bot);
+  } else if (message.mentions.roles.size > 0) {
+    const cargo = message.mentions.roles.first();
+
+    const todosMembros = await message.guild.members.fetch().catch(() => null);
+
+    if (!todosMembros) {
+      throw new Error('Não consegui buscar os membros para filtrar o cargo.');
+    }
+
+    membros = [...todosMembros.values()].filter(m =>
+      !m.user.bot && m.roles.cache.has(cargo.id)
+    );
+  } else {
+    const idsMencionados = extrairIdsMencionados(message.content);
+
+    if (idsMencionados.length > 0) {
+      for (const id of idsMencionados) {
+        const membro = await message.guild.members.fetch(id).catch(() => null);
+        if (membro && !membro.user.bot) membros.push(membro);
+      }
+    } else {
+      const idLimpo = limparId(alvo);
+
+      if (/^\d{17,22}$/.test(idLimpo)) {
+        const membro = await message.guild.members.fetch(idLimpo).catch(() => null);
+        if (membro && !membro.user.bot) membros.push(membro);
+      }
+    }
+  }
+
+  membros = [...new Map(membros.map(m => [m.id, m])).values()];
+
+  return {
+    modoEveryone,
+    membros,
+  };
+}
+
+export async function apagarPVHandleMessage(message, client) {
+  try {
+    if (message.author.bot) return false;
+    if (!message.guild) return false;
+
+    const PREFIX = getPrefix();
+    const content = message.content?.trim() || '';
+    const contentLower = content.toLowerCase();
+
+    if (
+      contentLower !== `${PREFIX}apagarpv` &&
+      !contentLower.startsWith(`${PREFIX}apagarpv `)
+    ) {
+      return false;
+    }
+
+    const membroTemPermissao =
+      message.author.id === '660311795327828008' ||
+      message.member?.roles?.cache?.some(role => PERMITIDOS.includes(role.id));
+
+    if (!membroTemPermissao) {
+      setTimeout(() => message.delete().catch(() => {}), 1000);
+      const msg = await message.reply('🚫 Você não tem permissão para usar esse comando.').catch(() => null);
+      setTimeout(() => msg?.delete().catch(() => {}), 5000);
+      return true;
+    }
+
+    const me = await message.guild.members.fetchMe().catch(() => null);
+
+    if (!me) {
+      await message.reply('❌ Não consegui checar o bot no servidor.').catch(() => {});
+      return true;
+    }
+
+    const botPerms = message.channel.permissionsFor(me);
+
+    if (!botPerms?.has(PermissionsBitField.Flags.SendMessages)) {
+      return true;
+    }
+
+    const logChannel = await resolveLogChannel(client);
+
+    if (!logChannel) {
+      await message.reply('❌ Canal de log não encontrado ou inválido.').catch(() => {});
+      return true;
+    }
+
+    const args = content.split(/\s+/).slice(1);
+    const alvo = args.join(' ').trim();
+
+    if (!alvo) {
+      await message.reply(
+        `❌ Informe o ID, mencione a pessoa, mencione um cargo ou use \`${PREFIX}apagarpv @everyone\`.\n\n` +
+        `Ex: \`${PREFIX}apagarpv @usuario\`\n` +
+        `Ex: \`${PREFIX}apagarpv 123456789012345678\`\n` +
+        `Ex: \`${PREFIX}apagarpv @cargo\`\n` +
+        `Ex: \`${PREFIX}apagarpv @everyone\``
+      ).catch(() => {});
+      return true;
+    }
+
+    let modoEveryone = false;
+    let membros = [];
+
+    try {
+      const resolvido = await resolverMembros(message, alvo);
+      modoEveryone = resolvido.modoEveryone;
+      membros = resolvido.membros;
+    } catch (err) {
+      await message.reply(`❌ ${err?.message || err}`).catch(() => {});
+      return true;
+    }
+
+    if (membros.length === 0) {
+      await message.reply('❌ Nenhum membro válido encontrado.').catch(() => {});
+      return true;
+    }
+
+    const inicioMs = Date.now();
+    const inicioUnix = Math.floor(inicioMs / 1000);
+
+    const canalOrigemLink = channelLink(message.guild.id, message.channel.id);
+    const mensagemOrigemLink = messageLink(message.guild.id, message.channel.id, message.id);
+
+    await message.delete().catch(() => {});
+
+    const statusMsg = await message.channel.send({
+      embeds: [
+        new EmbedBuilder()
+          .setColor('#ff0066')
+          .setTitle('🧹 Apagamento de PV iniciado')
+          .setDescription(
+            `**Alvo:** ${modoEveryone ? '@everyone / todos os membros' : alvo}\n` +
+            `**Usuários na fila:** \`${membros.length}\`\n` +
+            `**Executor:** <@${message.author.id}>\n` +
+            `**Canal usado:** <#${message.channel.id}>\n` +
+            `**Bot atual:** <@${client.user.id}> \`${client.user.id}\`\n` +
+            `**Início:** <t:${inicioUnix}:F>`
+          )
+          .addFields(
+            { name: 'Progresso', value: `\`0/${membros.length}\``, inline: true },
+            { name: 'Apagadas', value: '`0`', inline: true },
+            { name: 'Falhas', value: '`0`', inline: true }
+          )
+          .setFooter({ text: 'SantaCreators | Processo em andamento' })
+          .setTimestamp()
+      ],
+      allowedMentions: { parse: [] }
+    }).catch(() => null);
+
+    await enviarLog(client, {
+      embeds: [
+        new EmbedBuilder()
+          .setColor('#ffcc00')
+          .setTitle('🧹 LOG — !apagarpv iniciado')
+          .setDescription(
+            `**Executor:** <@${message.author.id}> — \`${message.author.tag}\`\n` +
+            `**ID Executor:** \`${message.author.id}\`\n` +
+            `**Link do executor:** ${userLink(message.author.id)}\n\n` +
+            `**Bot atual:** <@${client.user.id}> — \`${client.user.tag}\` — \`${client.user.id}\`\n\n` +
+            `**Alvo informado:** \`${alvo}\`\n` +
+            `**Modo:** ${modoEveryone ? '`@everyone / todos os membros`' : '`alvo específico/cargo`'}\n` +
+            `**Usuários na fila:** \`${membros.length}\`\n\n` +
+            `**Servidor:** \`${message.guild.name}\` — \`${message.guild.id}\`\n` +
+            `**Canal usado:** <#${message.channel.id}>\n` +
+            `**Link do canal:** ${canalOrigemLink}\n` +
+            `**Link da mensagem original:** ${mensagemOrigemLink}\n\n` +
+            `**Data/Hora:** <t:${inicioUnix}:F> — <t:${inicioUnix}:R>`
+          )
+          .setTimestamp()
+      ],
+      allowedMentions: { parse: [] }
+    });
+
+    let totalApagadas = 0;
+    let totalProcessados = 0;
+    let totalDmInacessivel = 0;
+    let totalSemMensagemDoBotAtual = 0;
+    let totalMensagensLidas = 0;
+    let totalMensagensDeOutrosBots = 0;
+    let totalFalhas = 0;
+    let totalPaginas = 0;
+
+    const detalhes = [];
+    const erros = [];
+
+    for (const membro of membros) {
+      const user = membro.user;
+      totalProcessados++;
+
+      try {
+        const dm = await buscarDmDoUsuario(user);
+        const resultadoBusca = await buscarMensagensDoBotNaDM(dm, client, 2000);
+
+        totalPaginas += resultadoBusca.paginas;
+        totalMensagensLidas += resultadoBusca.totalLidas;
+        totalMensagensDeOutrosBots += resultadoBusca.mensagensDeOutrosBots.length;
+
+        if (resultadoBusca.erros.length > 0) {
+          erros.push(`⚠️ ${user.tag} (${user.id}) busca parcial: ${resultadoBusca.erros.slice(0, 2).join(' | ')}`);
+        }
+
+        if (resultadoBusca.mensagensDoBotAtual.length === 0) {
+          totalSemMensagemDoBotAtual++;
+
+          detalhes.push(
+            `ℹ️ <@${user.id}> — 0 msgs do bot atual | lidas: \`${resultadoBusca.totalLidas}\` | páginas: \`${resultadoBusca.paginas}\` | outros bots: \`${resultadoBusca.mensagensDeOutrosBots.length}\``
+          );
+
+          continue;
+        }
+
+        let apagadasUser = 0;
+        let falhasUser = 0;
+
+        for (const msg of resultadoBusca.mensagensDoBotAtual) {
+          const conteudo = cortarTexto(msg.content, 950);
+          const criadoUnix = Math.floor(msg.createdTimestamp / 1000);
+          const apagadoUnix = Math.floor(Date.now() / 1000);
+
+          const deletou = await msg.delete().then(() => true).catch((err) => {
+            falhasUser++;
+            totalFalhas++;
+            erros.push(`❌ Falha ao apagar msg \`${msg.id}\` no PV de ${user.tag} (${user.id}): ${err?.code || ''} ${err?.message || err}`);
+            return false;
+          });
+
+          if (deletou) {
+            apagadasUser++;
+            totalApagadas++;
+
+            await enviarLog(client, {
+              embeds: [
+                new EmbedBuilder()
+                  .setColor('#ff0066')
+                  .setTitle('🧹 Mensagem apagada no PV')
+                  .addFields(
+                    { name: '👤 Usuário', value: `<@${user.id}> \`(${user.id})\`\n${userLink(user.id)}` },
+                    { name: '🗑️ Apagado por', value: `<@${message.author.id}> \`(${message.author.id})\`\n${userLink(message.author.id)}` },
+                    { name: '🤖 Bot atual', value: `<@${client.user.id}> \`(${client.user.id})\`` },
+                    { name: '📍 Local usado', value: `<#${message.channel.id}>\n${canalOrigemLink}` },
+                    { name: '🕒 Criada em', value: `<t:${criadoUnix}:F>`, inline: true },
+                    { name: '🧹 Apagada em', value: `<t:${apagadoUnix}:F>`, inline: true },
+                    { name: '💬 Conteúdo', value: conteudo }
+                  )
+                  .setFooter({ text: `ID da mensagem apagada: ${msg.id}` })
+                  .setTimestamp()
+              ],
+              allowedMentions: { parse: [] }
+            });
+          }
+
+          await sleep(500);
+        }
+
+        detalhes.push(
+          `✅ <@${user.id}> — apagadas: \`${apagadasUser}\` | falhas: \`${falhasUser}\` | lidas: \`${resultadoBusca.totalLidas}\` | páginas: \`${resultadoBusca.paginas}\``
+        );
+
+      } catch (err) {
+        totalFalhas++;
+
+        const erroMsg = `${err?.code || ''} ${err?.message || err}`.trim();
+
+        if (
+          erroMsg.includes('50007') ||
+          erroMsg.toLowerCase().includes('cannot send messages to this user') ||
+          erroMsg.toLowerCase().includes('missing access')
+        ) {
+          totalDmInacessivel++;
+        }
+
+        erros.push(`❌ ${user.tag} (${user.id}): ${erroMsg}`);
+        detalhes.push(`❌ <@${user.id}> — ${erroMsg}`);
+      }
+
+      if (statusMsg && (totalProcessados % 1 === 0 || totalProcessados === membros.length)) {
+        await editarStatus(
+          statusMsg,
+          new EmbedBuilder()
+            .setColor('#ff0066')
+            .setTitle('🧹 Apagamento de PV em andamento')
+            .setDescription(
+              `**Alvo:** ${modoEveryone ? '@everyone / todos os membros' : alvo}\n` +
+              `**Executor:** <@${message.author.id}>\n` +
+              `**Canal usado:** <#${message.channel.id}>\n` +
+              `**Bot atual:** <@${client.user.id}> \`${client.user.id}\``
+            )
+            .addFields(
+              { name: 'Progresso', value: `\`${totalProcessados}/${membros.length}\``, inline: true },
+              { name: 'Apagadas', value: `\`${totalApagadas}\``, inline: true },
+              { name: 'Falhas', value: `\`${totalFalhas}\``, inline: true },
+              { name: 'Mensagens lidas', value: `\`${totalMensagensLidas}\``, inline: true },
+              { name: 'Páginas lidas', value: `\`${totalPaginas}\``, inline: true },
+              { name: 'Outros bots encontrados', value: `\`${totalMensagensDeOutrosBots}\``, inline: true },
+              { name: 'Sem msg do bot atual', value: `\`${totalSemMensagemDoBotAtual}\``, inline: true },
+              { name: 'DM inacessível', value: `\`${totalDmInacessivel}\``, inline: true },
+              { name: 'Usuário atual', value: `<@${user.id}> \`(${user.id})\``, inline: false }
+            )
+            .setTimestamp()
+        );
+      }
+    }
+
+    const fimMs = Date.now();
+    const fimUnix = Math.floor(fimMs / 1000);
+    const duracao = Math.ceil((fimMs - inicioMs) / 1000);
+
+    const resumoEmbed = new EmbedBuilder()
+      .setColor(totalApagadas > 0 ? '#00ff88' : '#ffcc00')
+      .setTitle('✅ Resumo do apagamento de PV')
+      .setDescription(
+        `O processo foi finalizado.\n\n` +
+        `**Alvo:** ${modoEveryone ? '@everyone / todos os membros' : alvo}\n` +
+        `**Executor:** <@${message.author.id}>\n` +
+        `**Bot atual:** <@${client.user.id}> \`${client.user.id}\`\n` +
+        `**Canal usado:** <#${message.channel.id}>`
+      )
+      .addFields(
+        { name: 'Usuários na fila', value: `\`${membros.length}\``, inline: true },
+        { name: 'Processados', value: `\`${totalProcessados}\``, inline: true },
+        { name: 'Apagadas', value: `\`${totalApagadas}\``, inline: true },
+        { name: 'Mensagens lidas', value: `\`${totalMensagensLidas}\``, inline: true },
+        { name: 'Páginas lidas', value: `\`${totalPaginas}\``, inline: true },
+        { name: 'Outros bots encontrados', value: `\`${totalMensagensDeOutrosBots}\``, inline: true },
+        { name: 'Sem msg do bot atual', value: `\`${totalSemMensagemDoBotAtual}\``, inline: true },
+        { name: 'DM inacessível', value: `\`${totalDmInacessivel}\``, inline: true },
+        { name: 'Falhas', value: `\`${totalFalhas}\``, inline: true },
+        { name: 'Tempo total', value: `\`${duracao}s\``, inline: true },
+        { name: 'Início', value: `<t:${inicioUnix}:F>`, inline: true },
+        { name: 'Fim', value: `<t:${fimUnix}:F>`, inline: true }
+      )
+      .setFooter({ text: 'Essa mensagem será apagada automaticamente.' })
+      .setTimestamp();
+
+    if (statusMsg) {
+      await statusMsg.edit({
+        embeds: [resumoEmbed],
+        allowedMentions: { parse: [] }
+      }).catch(() => {});
+
+      setTimeout(() => statusMsg.delete().catch(() => {}), 30000);
+    }
+
+    await enviarLog(client, {
+      embeds: [
+        EmbedBuilder.from(resumoEmbed)
+          .setTitle('✅ LOG — !apagarpv finalizado')
+          .addFields(
+            { name: 'Link do executor', value: userLink(message.author.id) },
+            { name: 'Link do canal usado', value: canalOrigemLink },
+            { name: 'Link da mensagem original', value: mensagemOrigemLink },
+            { name: 'Detalhes', value: detalhes.slice(0, 20).join('\n') || 'Nenhum detalhe.' },
+            { name: 'Erros', value: erros.slice(0, 15).join('\n') || 'Nenhum erro.' }
+          )
+      ],
+      allowedMentions: { parse: [] }
+    });
+
+    return true;
+
+  } catch (err) {
+    await enviarLog(client, {
+      embeds: [
+        new EmbedBuilder()
+          .setColor('#ff0000')
+          .setTitle('❌ LOG — !apagarpv crashou')
+          .setDescription(`Erro: \`${err?.code || ''} ${err?.message || err}\``)
+          .setTimestamp()
+      ],
+      allowedMentions: { parse: [] }
+    }).catch(() => {});
+
+    await message.reply(`❌ O comando crashou: \`${err?.code || ''} ${err?.message || err}\``)
+      .then(m => setTimeout(() => m.delete().catch(() => {}), 10000))
+      .catch(() => {});
+
+    return true;
+  }
 }
 
 export function registerApagarPV(client) {
-  client.on(Events.MessageCreate, async (message) => {
-    try {
-      if (message.author.bot) return;
-      if (!message.guild) return;
+  if (client.__apagarPvListenerRegistrado) return;
+  client.__apagarPvListenerRegistrado = true;
 
-      const PREFIX = getPrefix();
-      const content = message.content?.trim() || '';
-      const contentLower = content.toLowerCase();
-
-      const comandosAceitos = [
-        `${PREFIX}apagarpv`,
-      ];
-
-      const comandoUsado = comandosAceitos.find(cmd =>
-        contentLower === cmd || contentLower.startsWith(`${cmd} `)
-      );
-
-      if (!comandoUsado) return;
-
-      const membroTemPermissao =
-        message.author.id === '660311795327828008' ||
-        message.member?.roles?.cache?.some((role) => PERMITIDOS.includes(role.id));
-
-      if (!membroTemPermissao) {
-        setTimeout(() => message.delete().catch(() => {}), 1000);
-        const msg = await message.reply('🚫 Você não tem permissão para usar esse comando.');
-        setTimeout(() => msg.delete().catch(() => {}), 5000);
-        return;
-      }
-
-      const args = content.split(/\s+/).slice(1);
-      const alvo = args.join(' ').trim();
-
-      if (!alvo) {
-        return message.reply(
-          `❌ Informe o ID, mencione a pessoa, mencione um cargo ou use \`${PREFIX}apagarpv @everyone\`.\n\n` +
-          `Ex: \`${PREFIX}apagarpv @usuario\`\n` +
-          `Ex: \`${PREFIX}apagarpv 123456789012345678\`\n` +
-          `Ex: \`${PREFIX}apagarpv @cargo\`\n` +
-          `Ex: \`${PREFIX}apagarpv @everyone\``
-        );
-      }
-
-      const logChannel = await resolveLogChannel(client);
-
-      if (!logChannel) {
-        return message.reply('❌ Canal de log não encontrado ou inválido.');
-      }
-
-      const me = await message.guild.members.fetchMe().catch(() => null);
-
-      if (!me) {
-        return message.reply('❌ Não consegui checar o membro do bot no servidor.');
-      }
-
-      const botPerms = message.channel.permissionsFor(me);
-
-      if (!botPerms?.has(PermissionsBitField.Flags.SendMessages)) {
-        return;
-      }
-
-      const modoEveryone =
-        alvo === '@everyone' ||
-        alvo === 'everyone' ||
-        alvo === '@here' ||
-        alvo === 'here';
-
-      let membros = [];
-
-      if (modoEveryone) {
-        const statusFetch = await message.reply('🔎 Buscando todos os membros do servidor...').catch(() => null);
-
-        const todosMembros = await message.guild.members.fetch().catch(() => null);
-
-        if (statusFetch) {
-          await statusFetch.delete().catch(() => {});
-        }
-
-        if (!todosMembros) {
-          return message.reply('❌ Não consegui buscar os membros do servidor. Verifique se o bot tem a intent **Guild Members** ativada.');
-        }
-
-        membros = [...todosMembros.values()].filter(m => !m.user.bot);
-      } else if (message.mentions.roles.size > 0) {
-        const cargo = message.mentions.roles.first();
-
-        const todosMembros = await message.guild.members.fetch().catch(() => null);
-
-        if (!todosMembros) {
-          return message.reply('❌ Não consegui buscar os membros do servidor para filtrar o cargo.');
-        }
-
-        membros = [...todosMembros.values()].filter(m =>
-          !m.user.bot && m.roles.cache.has(cargo.id)
-        );
-      } else if (message.mentions.members.size > 0) {
-        membros = [...message.mentions.members.values()].filter(m => !m.user.bot);
-      } else if (/^\d+$/.test(alvo)) {
-        const membro = await message.guild.members.fetch(limparId(alvo)).catch(() => null);
-        if (membro && !membro.user.bot) membros.push(membro);
-      } else {
-        return message.reply('❌ Nenhum membro ou cargo válido foi identificado.');
-      }
-
-      if (membros.length === 0) {
-        return message.reply('❌ Nenhum membro válido encontrado para apagar PV.');
-      }
-
-      await message.delete().catch(() => {});
-
-      const inicioMs = Date.now();
-      const inicioUnix = Math.floor(inicioMs / 1000);
-
-      const canalOrigemLink = channelLink(message.guild.id, message.channel.id);
-      const mensagemOrigemLink = messageLink(message.guild.id, message.channel.id, message.id);
-
-      const statusMsg = await message.channel.send({
-        embeds: [
-          new EmbedBuilder()
-            .setColor('#ff0066')
-            .setTitle('🧹 Apagamento de PV iniciado')
-            .setDescription(
-              `Estou procurando mensagens enviadas pelo bot no privado dos usuários.\n\n` +
-              `**Alvo:** ${modoEveryone ? '@everyone / todos os membros' : alvo}\n` +
-              `**Total de membros na fila:** \`${membros.length}\`\n` +
-              `**Executor:** <@${message.author.id}>\n` +
-              `**Canal usado:** <#${message.channel.id}>\n` +
-              `**Início:** <t:${inicioUnix}:F>`
-            )
-            .addFields(
-              { name: 'Progresso', value: `\`0/${membros.length}\``, inline: true },
-              { name: 'Mensagens apagadas', value: '`0`', inline: true },
-              { name: 'Falhas', value: '`0`', inline: true }
-            )
-            .setFooter({ text: 'SantaCreators | Processo em andamento' })
-            .setTimestamp()
-        ],
-        allowedMentions: { parse: [] }
-      }).catch(() => null);
-
-      await logChannel.send({
-        embeds: [
-          new EmbedBuilder()
-            .setColor('#ffcc00')
-            .setTitle('🧹 LOG — !apagarpv iniciado')
-            .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
-            .setDescription(
-              `**Executor:** <@${message.author.id}> — \`${message.author.tag}\`\n` +
-              `**ID Executor:** \`${message.author.id}\`\n` +
-              `**Link do executor:** ${userLink(message.author.id)}\n\n` +
-              `**Alvo informado:** \`${alvo}\`\n` +
-              `**Modo:** ${modoEveryone ? '`@everyone / todos os membros`' : '`alvo específico/cargo`'}\n` +
-              `**Total de membros na fila:** \`${membros.length}\`\n\n` +
-              `**Servidor:** \`${message.guild.name}\` — \`${message.guild.id}\`\n` +
-              `**Canal usado:** <#${message.channel.id}>\n` +
-              `**Link do canal:** ${canalOrigemLink}\n` +
-              `**Link da mensagem original:** ${mensagemOrigemLink}\n\n` +
-              `**Data/Hora:** <t:${inicioUnix}:F> — <t:${inicioUnix}:R>`
-            )
-            .setFooter({ text: 'SantaCreators | Log completo de PV' })
-            .setTimestamp()
-        ],
-        allowedMentions: { parse: [] }
-      }).catch(() => {});
-
-      let totalApagadas = 0;
-      let totalUsuariosProcessados = 0;
-      let totalUsuariosComDMFechada = 0;
-      let totalUsuariosSemMensagem = 0;
-      let totalFalhas = 0;
-
-      const detalhesUsuarios = [];
-      const erros = [];
-
-      for (const membro of membros) {
-        const user = membro.user;
-        totalUsuariosProcessados++;
-
-        let apagadasDoUsuario = 0;
-
-        try {
-          const dm = await user.createDM().catch(() => null);
-
-          if (!dm) {
-            totalUsuariosComDMFechada++;
-            detalhesUsuarios.push(`🔒 <@${user.id}> — DM fechada ou inacessível.`);
-            continue;
-          }
-
-          const mensagensDoBot = await buscarMensagensDoBotNaDM(dm, client, 1000);
-
-          if (mensagensDoBot.length === 0) {
-            totalUsuariosSemMensagem++;
-            detalhesUsuarios.push(`ℹ️ <@${user.id}> — nenhuma mensagem do bot encontrada.`);
-            continue;
-          }
-
-          for (const msg of mensagensDoBot) {
-            const conteudo = msg.content?.slice(0, 1024) || '*[sem texto]*';
-            const criadoUnix = Math.floor(msg.createdTimestamp / 1000);
-            const apagadoUnix = Math.floor(Date.now() / 1000);
-
-            const logEmbed = new EmbedBuilder()
-              .setColor('#ff0066')
-              .setTitle('🧹 Mensagem apagada no PV')
-              .setThumbnail(user.displayAvatarURL({ dynamic: true }))
-              .addFields(
-                { name: '👤 Mensagem enviada para', value: `<@${user.id}> \`(${user.id})\`\n${userLink(user.id)}`, inline: false },
-                { name: '🗑️ Apagado por', value: `<@${message.author.id}> \`(${message.author.id})\`\n${userLink(message.author.id)}`, inline: false },
-                { name: '📍 Local usado', value: `<#${message.channel.id}>\n${canalOrigemLink}`, inline: false },
-                { name: '🕒 Mensagem criada em', value: `<t:${criadoUnix}:F>`, inline: true },
-                { name: '🧹 Apagada em', value: `<t:${apagadoUnix}:F>`, inline: true },
-                { name: '💬 Conteúdo apagado', value: conteudo, inline: false }
-              )
-              .setFooter({ text: `SantaCreators | ID da mensagem apagada: ${msg.id}` })
-              .setTimestamp();
-
-            await logChannel.send({
-              embeds: [logEmbed],
-              allowedMentions: { parse: [] }
-            }).catch(() => {});
-
-            const deletou = await msg.delete().then(() => true).catch((err) => {
-              erros.push(`❌ Falha ao apagar msg \`${msg.id}\` de ${user.tag} (${user.id}): ${err?.message || err}`);
-              return false;
-            });
-
-            if (deletou) {
-              apagadasDoUsuario++;
-              totalApagadas++;
-            }
-
-            await sleep(450);
-          }
-
-          detalhesUsuarios.push(`✅ <@${user.id}> — \`${apagadasDoUsuario}\` mensagem(ns) apagada(s).`);
-
-        } catch (err) {
-          totalFalhas++;
-          erros.push(`❌ ${user.tag} (${user.id}): ${err?.message || err}`);
-          detalhesUsuarios.push(`❌ <@${user.id}> — erro no processo.`);
-        }
-
-        if (statusMsg && (totalUsuariosProcessados % 3 === 0 || totalUsuariosProcessados === membros.length)) {
-          const agoraUnix = Math.floor(Date.now() / 1000);
-
-          await editarStatus(
-            statusMsg,
-            new EmbedBuilder()
-              .setColor('#ff0066')
-              .setTitle('🧹 Apagamento de PV em andamento')
-              .setDescription(
-                `**Alvo:** ${modoEveryone ? '@everyone / todos os membros' : alvo}\n` +
-                `**Executor:** <@${message.author.id}>\n` +
-                `**Canal usado:** <#${message.channel.id}>\n` +
-                `**Início:** <t:${inicioUnix}:F>\n` +
-                `**Atualizado:** <t:${agoraUnix}:T>`
-              )
-              .addFields(
-                { name: 'Progresso', value: `\`${totalUsuariosProcessados}/${membros.length}\``, inline: true },
-                { name: 'Mensagens apagadas', value: `\`${totalApagadas}\``, inline: true },
-                { name: 'Falhas', value: `\`${totalFalhas}\``, inline: true },
-                { name: 'DM fechada/inacessível', value: `\`${totalUsuariosComDMFechada}\``, inline: true },
-                { name: 'Sem mensagens do bot', value: `\`${totalUsuariosSemMensagem}\``, inline: true },
-                { name: 'Usuário atual', value: `<@${user.id}> \`(${user.id})\``, inline: false }
-              )
-              .setFooter({ text: 'SantaCreators | Processo em andamento' })
-              .setTimestamp()
-          );
-        }
-      }
-
-      const fimMs = Date.now();
-      const fimUnix = Math.floor(fimMs / 1000);
-      const duracao = Math.ceil((fimMs - inicioMs) / 1000);
-
-      const resumoEmbed = new EmbedBuilder()
-        .setColor(totalApagadas > 0 ? '#00ff88' : '#ffcc00')
-        .setTitle('✅ Resumo do apagamento de PV')
-        .setDescription(
-          `O processo foi finalizado.\n\n` +
-          `**Alvo:** ${modoEveryone ? '@everyone / todos os membros' : alvo}\n` +
-          `**Executor:** <@${message.author.id}>\n` +
-          `**Canal usado:** <#${message.channel.id}>`
-        )
-        .addFields(
-          { name: '👥 Usuários na fila', value: `\`${membros.length}\``, inline: true },
-          { name: '✅ Processados', value: `\`${totalUsuariosProcessados}\``, inline: true },
-          { name: '🧹 Mensagens apagadas', value: `\`${totalApagadas}\``, inline: true },
-          { name: '🔒 DM fechada/inacessível', value: `\`${totalUsuariosComDMFechada}\``, inline: true },
-          { name: 'ℹ️ Sem mensagens do bot', value: `\`${totalUsuariosSemMensagem}\``, inline: true },
-          { name: '❌ Falhas', value: `\`${totalFalhas}\``, inline: true },
-          { name: '⏱️ Tempo total', value: `\`${duracao}s\``, inline: true },
-          { name: '📅 Início', value: `<t:${inicioUnix}:F>`, inline: false },
-          { name: '📅 Fim', value: `<t:${fimUnix}:F>`, inline: false }
-        )
-        .setFooter({ text: 'SantaCreators | Resumo de apagamento privado' })
-        .setTimestamp();
-
-      if (statusMsg) {
-        await statusMsg.edit({
-          embeds: [resumoEmbed],
-          allowedMentions: { parse: [] }
-        }).catch(() => {});
-
-        setTimeout(() => statusMsg.delete().catch(() => {}), 30000);
-      } else {
-        const confirmMsg = await message.channel.send({
-          embeds: [resumoEmbed],
-          allowedMentions: { parse: [] }
-        }).catch(() => null);
-
-        setTimeout(() => {
-          confirmMsg?.delete().catch(() => {});
-        }, 30000);
-      }
-
-      const detalhesLimitados = detalhesUsuarios.slice(0, 25).join('\n') || 'Nenhum detalhe.';
-      const errosLimitados = erros.slice(0, 15).join('\n') || 'Nenhum erro.';
-
-      await logChannel.send({
-        embeds: [
-          new EmbedBuilder()
-            .setColor(totalApagadas > 0 ? '#00ff88' : '#ffcc00')
-            .setTitle('✅ LOG — !apagarpv finalizado')
-            .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
-            .setDescription(
-              `**Executor:** <@${message.author.id}> — \`${message.author.tag}\`\n` +
-              `**ID Executor:** \`${message.author.id}\`\n` +
-              `**Link do executor:** ${userLink(message.author.id)}\n\n` +
-              `**Alvo informado:** \`${alvo}\`\n` +
-              `**Modo:** ${modoEveryone ? '`@everyone / todos os membros`' : '`alvo específico/cargo`'}\n\n` +
-              `**Servidor:** \`${message.guild.name}\` — \`${message.guild.id}\`\n` +
-              `**Canal usado:** <#${message.channel.id}>\n` +
-              `**Link do canal:** ${canalOrigemLink}\n` +
-              `**Link da mensagem original:** ${mensagemOrigemLink}\n\n` +
-              `**Início:** <t:${inicioUnix}:F> — <t:${inicioUnix}:R>\n` +
-              `**Fim:** <t:${fimUnix}:F> — <t:${fimUnix}:R>\n` +
-              `**Tempo total:** \`${duracao}s\``
-            )
-            .addFields(
-              { name: '👥 Usuários na fila', value: `\`${membros.length}\``, inline: true },
-              { name: '✅ Processados', value: `\`${totalUsuariosProcessados}\``, inline: true },
-              { name: '🧹 Mensagens apagadas', value: `\`${totalApagadas}\``, inline: true },
-              { name: '🔒 DM fechada/inacessível', value: `\`${totalUsuariosComDMFechada}\``, inline: true },
-              { name: 'ℹ️ Sem mensagens do bot', value: `\`${totalUsuariosSemMensagem}\``, inline: true },
-              { name: '❌ Falhas', value: `\`${totalFalhas}\``, inline: true },
-              { name: '📋 Detalhes dos usuários', value: detalhesLimitados },
-              { name: '⚠️ Erros encontrados', value: errosLimitados }
-            )
-            .setFooter({ text: 'SantaCreators | Log completo de PV' })
-            .setTimestamp()
-        ],
-        allowedMentions: { parse: [] }
-      }).catch(() => {});
-
-    } catch (err) {
-      const logChannel = await resolveLogChannel(client).catch(() => null);
-
-      if (logChannel) {
-        await logChannel.send({
-          embeds: [
-            new EmbedBuilder()
-              .setColor('#ff0000')
-              .setTitle('❌ LOG — !apagarpv crashou')
-              .setDescription(
-                `**Executor:** ${message.author ? `<@${message.author.id}>` : 'desconhecido'}\n` +
-                `**Canal:** ${message.channel ? `<#${message.channel.id}>` : 'desconhecido'}\n` +
-                `**Erro:** \`${err?.message || err}\``
-              )
-              .setTimestamp()
-          ],
-          allowedMentions: { parse: [] }
-        }).catch(() => {});
-      }
-
-      await message.reply(`❌ O comando crashou: \`${err?.message || err}\``)
-        .then(m => setTimeout(() => m.delete().catch(() => {}), 10000))
-        .catch(() => {});
-    }
+  client.on('messageCreate', async (message) => {
+    await apagarPVHandleMessage(message, client);
   });
 }
