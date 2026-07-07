@@ -621,7 +621,7 @@ async function buildDashboardPayload(client, stats, causeUserId, reason) {
   };
 }
 
-async function ensureDashboardMessage(channel, state, monthKey) {
+async function ensureDashboardMessage(channel, state, monthKey, client = null) {
   const savedMonthKey = state.currentMonthKey || null;
   const isSameMonth = !savedMonthKey || String(savedMonthKey) === String(monthKey);
 
@@ -629,9 +629,22 @@ async function ensureDashboardMessage(channel, state, monthKey) {
     const existing = await channel.messages.fetch(state.messageId).catch(() => null);
 
     if (existing) {
+      const isMensagemDoBotAtual = client?.user?.id
+        ? String(existing.author?.id) === String(client.user.id)
+        : true;
+
+      if (isMensagemDoBotAtual) {
+        state.currentMonthKey = String(monthKey);
+        saveState(state);
+        return existing;
+      }
+
+      // ✅ Se trocou de bot, a mensagem antiga existe,
+      // mas não pertence ao bot atual. Então cria uma nova.
+      delete state.messageId;
+      delete state.lastHash;
       state.currentMonthKey = String(monthKey);
       saveState(state);
-      return existing;
     }
   }
 
@@ -669,9 +682,8 @@ export async function rankingAprovadoresManagersEmitUpdate(client, causeUserId =
     const stats = await scanRankingAprovadores(client);
     const payload = await buildDashboardPayload(client, stats, causeUserId, reason);
 
-    const message = await ensureDashboardMessage(channel, state, stats.month.key);
-    if (!message) return false;
-
+const message = await ensureDashboardMessage(channel, state, stats.month.key, client);
+if (!message) return false;
     if (state.lastHash === payload.hash && reason !== "manual" && reason !== "force") {
       return true;
     }
@@ -820,7 +832,7 @@ export async function rankingAprovadoresManagersHandleMessage(message, client) {
 export async function rankingAprovadoresManagersOnReady(client) {
   try {
     setTimeout(() => {
-      rankingAprovadoresManagersEmitUpdate(client, null, "ready").catch(() => {});
+      rankingAprovadoresManagersEmitUpdate(client, null, "force").catch(() => {});
     }, 5000);
   } catch {}
 

@@ -1783,6 +1783,18 @@ export async function registroManagerOnReady(client) {
       rmSalvarContagens({ byUser: __RM_CACHE__.byUser });
     } catch {}
   }, 1500);
+
+  // ✅ RECUPERA / RECRIA RANKING DE APROVADORES MANAGERS
+  // Quando troca de bot, ele não consegue editar a mensagem antiga.
+  // Então força o scan dos logs + chat e cria/edita o painel com o bot atual.
+  setTimeout(async () => {
+    try {
+      await rankingAprovadoresManagersOnReady(client);
+      await rankingAprovadoresManagersEmitUpdate(client, null, "force");
+    } catch (e) {
+      console.error("[SC_RM] Falha ao recuperar ranking managers no ready:", e);
+    }
+  }, 7000);
 }
 
 

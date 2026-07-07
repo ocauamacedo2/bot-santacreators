@@ -3550,8 +3550,12 @@ await autoMarcarCidadesPendentesPagamento(client, 1000).catch(() => null);
   // ✅ SEMPRE recalcula e atualiza o dashboard ao ligar o bot.
   // Antes, se o menu já existisse, dava return e o gráfico ficava travado.
 // ✅ SEMPRE recalcula e atualiza o dashboard ao ligar o bot.
-await sincronizarDashboardSocial(client, "ready", {
+// Antes, se o menu já existisse, dava return e o gráfico ficava travado.
+// ✅ SEMPRE recalcula e atualiza o dashboard ao ligar o bot.
+// ✅ recreate: true força criar uma mensagem nova quando trocou de bot.
+await sincronizarDashboardSocial(client, "ready:recriar_por_troca_de_bot", {
   forceUnlock: true,
+  recreate: true,
 }).catch(() => null);
 
 if (!client.__SC_SOCIAL_DASH_INTERVAL__) {
@@ -3710,8 +3714,9 @@ export async function handlePagamentoSocial(interaction, client) {
 if (id === "pagamento_dash_atualizar") {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
 
-  const result = await sincronizarDashboardSocial(client, "botao:pagamento_dash_atualizar", {
+  const result = await sincronizarDashboardSocial(client, "botao:pagamento_dash_atualizar_recriar", {
     forceUnlock: true,
+    recreate: true,
   });
 
   if (!result.ok) {
