@@ -630,12 +630,17 @@ const setupEventHandlers = () => {
         // ✅ Cadastro Manual: comando !semwl precisa passar antes do roteador central
         if (await cadastroManualHandleMessage(message, client)) return;
 
-        // 🚀 ROTEADOR CENTRALIZADO: Tenta executar via messageCreateHandler primeiro.
-        // Se o handler retornar true, significa que o comando foi processado e paramos aqui.
-        if (await messageCreateHandler.execute(message, args, client)) return;
+// ✅ Dashboard ORGs — Managers
+// Comandos: !graficomanagers, !gm, !recriargm, !recriargraficomanagers
+// Precisa vir ANTES do roteador central para não ser engolido por outro handler.
+if (await graficoManagersHandleMessage(message, client)) return;
 
-        // Fallback para handlers que ainda não foram movidos para o mapeamento central
-        if (cmd === "correcao") { if (await handleCorrecao(message, client)) return; }
+// 🚀 ROTEADOR CENTRALIZADO: Tenta executar via messageCreateHandler primeiro.
+// Se o handler retornar true, significa que o comando foi processado e paramos aqui.
+if (await messageCreateHandler.execute(message, args, client)) return;
+
+// Fallback para handlers que ainda não foram movidos para o mapeamento central
+if (cmd === "correcao") { if (await handleCorrecao(message, client)) return; }
         if (cmd === "clear" || cmd === "clearbotao") { if (await clearHandleMessage(message, client)) return; }
         if (cmd === "remover") { if (await removerMassivoHandleMessage(message, client)) return; }
         if (cmd === "criarcargo") { if (await criarCargoHandleMessage(message, client)) return; }
@@ -655,10 +660,6 @@ const setupEventHandlers = () => {
 if (await metaInternaSemanalHandleMessage(message, client)) return;
 if (await geralDash.geralDashHandleMessage(message, client)) return;
 if (await geralWeeklyRankHandleMessage(message, client)) return;
-
-// ✅ Dashboard ORGs — Managers
-// Comandos: !graficomanagers, !gm, !recriargm, !recriargraficomanagers
-if (await graficoManagersHandleMessage(message, client)) return;
 
 // ✅ Auto React precisa receber comandos como !reagirsc eventos 1000
 if (await autoReactsFotosHandleMessage(message, client)) return;
