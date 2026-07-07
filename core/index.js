@@ -450,6 +450,7 @@ import setupProtecaoBotsDeletarCanais from "../events/protecaoBotsDeletarCanais.
 import { installMessageGuardian } from "../events/messageGuardian.js";
 import { installServerConfigGuardian } from "../events/serverConfigGuardian.js";
 import { installOrgTicketAccessSync } from "../events/orgTicketAccessSync.js";
+import { recriarTicketsHandleMessage } from "../events/ticketRecreator.js";
 
 // =====================================================
 // Express + Mongo
@@ -668,7 +669,9 @@ if (await formsCreatorHandleMessage(message, client)) return;
 // ✅ Checklist Semanal de Logs
 // Comando: !checklogs
 if (await checklistHandleMessage(message, client)) return;
-        
+        // ✅ Recriador de tickets antigos do bot anterior
+// Comando: !recriar ID_DA_CATEGORIA_OU_CANAL
+if (await recriarTicketsHandleMessage(message, client, Transcript)) return;
         // Se chegou aqui sendo um comando, mas não foi tratado, não precisamos continuar nos listeners de texto
         return;
       }
