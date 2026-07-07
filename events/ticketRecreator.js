@@ -27,6 +27,18 @@ function isAdminAutorizado(message) {
   return message.member?.permissions?.has(PermissionsBitField.Flags.ManageChannels);
 }
 
+async function fetchTextChannelSafe(client, guild, channelId) {
+  const channel =
+    client.channels.cache.get(channelId) ||
+    guild.channels.cache.get(channelId) ||
+    await client.channels.fetch(channelId).catch(() => null) ||
+    await guild.channels.fetch(channelId).catch(() => null);
+
+  if (!channel || !channel.isTextBased()) return null;
+
+  return channel;
+}
+
 function getTicketTipo(channel) {
   const topic = channel.topic || "";
   const match = topic.match(/ticket_tipo:([^;]+)/i);
@@ -142,11 +154,12 @@ async function saveTranscript(Transcript, oldChannel, newChannel, openerId, exec
   return messages.length;
 }
 
-async function sendLog({ guild, executor, oldChannel, newChannel, tipo, openerId, totalPerms, messagesCount }) {
-  const logChannel = await guild.channels.fetch(LOG_RECRIAR_CHANNEL_ID).catch(() => null);
+async function sendLog({ client, guild, executor, oldChannel, newChannel, tipo, openerId, totalPerms, messagesCount }) {
+  const logChannel = await fetchTextChannelSafe(client, guild, LOG_RECRIAR_CHANNEL_ID);
 
-  if (!logChannel?.isTextBased()) {
-    throw new Error(`Canal de log ${LOG_RECRIAR_CHANNEL_ID} não encontrado ou sem permissão.`);
+  if (!logChannel) {
+    console.error(`[RECRIAR_TICKET] Canal de log ${LOG_RECRIAR_CHANNEL_ID} não encontrado ou sem permissão.`);
+    return false;
   }
 
   const embed = new EmbedBuilder()
@@ -183,13 +196,15 @@ async function sendLog({ guild, executor, oldChannel, newChannel, tipo, openerId
   );
 
   await logChannel.send({ embeds: [embed], components: [row] });
+  return true;
 }
 
-async function sendTranscriptLog({ guild, executor, oldChannel, newChannel, tipo, openerId }) {
-  const transcriptChannel = await guild.channels.fetch(TRANSCRIPTS_CHANNEL_ID).catch(() => null);
+async function sendTranscriptLog({ client, guild, executor, oldChannel, newChannel, tipo, openerId }) {
+  const transcriptChannel = await fetchTextChannelSafe(client, guild, TRANSCRIPTS_CHANNEL_ID);
 
-  if (!transcriptChannel?.isTextBased()) {
-    throw new Error(`Canal de transcript ${TRANSCRIPTS_CHANNEL_ID} não encontrado ou sem permissão.`);
+  if (!transcriptChannel) {
+    console.error(`[RECRIAR_TICKET] Canal de transcript ${TRANSCRIPTS_CHANNEL_ID} não encontrado ou sem permissão.`);
+    return false;
   }
 
   const embed = new EmbedBuilder()
@@ -220,6 +235,7 @@ async function sendTranscriptLog({ guild, executor, oldChannel, newChannel, tipo
   );
 
   await transcriptChannel.send({ embeds: [embed], components: [row] });
+  return true;
 }
 
 async function recreateOneChannel({ oldChannel, message, client, Transcript, statusMessage, index, total }) {
@@ -316,7 +332,8 @@ async function recreateOneChannel({ oldChannel, message, client, Transcript, sta
     message.author.id
   );
 
-  await sendLog({
+  const logEnviado = await sendLog({
+    client,
     guild,
     executor: message.author,
     oldChannel,
@@ -327,7 +344,8 @@ async function recreateOneChannel({ oldChannel, message, client, Transcript, sta
     messagesCount,
   });
 
-  await sendTranscriptLog({
+  const transcriptLogEnviado = await sendTranscriptLog({
+    client,
     guild,
     executor: message.author,
     oldChannel,
@@ -341,7 +359,8 @@ async function recreateOneChannel({ oldChannel, message, client, Transcript, sta
       `♻️ **Recriando tickets...**\n\n` +
       `📌 Progresso: **${index}/${total}**\n` +
       `✅ Canal novo: ${newChannel}\n` +
-      `📁 Log enviado com sucesso.\n` +
+      `${logEnviado ? "📁 Log enviado com sucesso." : "⚠️ Log principal não enviado: canal sem acesso/permissão."}\n` +
+      `${transcriptLogEnviado ? "📂 Log de transcript enviado com sucesso." : "⚠️ Log de transcript não enviado: canal sem acesso/permissão."}\n` +
       `💬 Transcript salvo com **${messagesCount}** mensagens.\n` +
       `🗑️ Etapa: apagando canal antigo com segurança...`,
   }).catch(() => {});
