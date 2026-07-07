@@ -1972,6 +1972,42 @@ export async function graficoManagersOnReady(client) {
 }
 }
 
+export async function graficoManagersHandleMessage(message, client) {
+  if (!message.guild || message.author.bot) return false;
+
+  const content = String(message.content || "").trim().toLowerCase();
+
+  if (
+    content !== "!graficomanagers" &&
+    content !== "!gm" &&
+    content !== "!recriargm" &&
+    content !== "!recriargraficomanagers"
+  ) {
+    return false;
+  }
+
+  if (!canAdjust({ user: message.author, member: message.member })) {
+    await message.reply("❌ Você não tem permissão para recriar o Dashboard ORGs — Managers.").catch(() => {});
+    return true;
+  }
+
+  await message.delete().catch(() => {});
+
+  const aviso = await message.channel.send("🔄 Recriando o Dashboard ORGs — Managers e gerando um gráfico novo...").catch(() => null);
+
+  await updateDashboard(client, message.author.id, "force").catch(async (e) => {
+    console.error("[GraficoManagers] Erro ao recriar via comando:", e?.stack || e);
+    await message.channel.send("❌ Deu erro ao recriar o gráfico. Olha o console/log do bot.").catch(() => {});
+  });
+
+  if (aviso) {
+    await aviso.edit(`✅ Dashboard ORGs — Managers recriado em <#${ORG_DASH_CHANNEL_ID}>.`).catch(() => {});
+    setTimeout(() => aviso.delete().catch(() => {}), 8000);
+  }
+
+  return true;
+}
+
 
 
 export async function graficoManagersHandleInteraction(interaction, client) {

@@ -348,6 +348,7 @@ import {
 import {
   graficoManagersOnReady,
   graficoManagersHandleInteraction,
+  graficoManagersHandleMessage,
 } from "../events/GraficoManagers.js";
 
 
@@ -650,12 +651,16 @@ const setupEventHandlers = () => {
         if (await reuniaoSemanalHandleMessage(message, client)) return;
        if (await payEvtDashHandleMessage(message, client)) return;
        if (await pagamentoSocialHandleMessage(message, client)) return;
-       if (await metaInternaSemanalHandleMessage(message, client)) return;
-       if (await geralDash.geralDashHandleMessage(message, client)) return;
-       if (await geralWeeklyRankHandleMessage(message, client)) return;
+if (await metaInternaSemanalHandleMessage(message, client)) return;
+if (await geralDash.geralDashHandleMessage(message, client)) return;
+if (await geralWeeklyRankHandleMessage(message, client)) return;
 
-        // ✅ Auto React precisa receber comandos como !reagirsc eventos 1000
-        if (await autoReactsFotosHandleMessage(message, client)) return;
+// ✅ Dashboard ORGs — Managers
+// Comandos: !graficomanagers, !gm, !recriargm, !recriargraficomanagers
+if (await graficoManagersHandleMessage(message, client)) return;
+
+// ✅ Auto React precisa receber comandos como !reagirsc eventos 1000
+if (await autoReactsFotosHandleMessage(message, client)) return;
         
         // Se chegou aqui sendo um comando, mas não foi tratado, não precisamos continuar nos listeners de texto
         return;
