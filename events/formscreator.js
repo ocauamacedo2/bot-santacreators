@@ -885,6 +885,15 @@ async function syncLegacyThreads(client, progressMsg = null) {
       userId = reg.userId;
       try {
         msg = await thread.messages.fetch(reg.messageId).catch(() => null);
+
+        // ✅ FIX: nunca tenta editar mensagem que não foi enviada por este bot
+        // Evita DiscordAPIError[50005]: Cannot edit a message authored by another user
+        if (msg && msg.author?.id !== client.user.id) {
+          console.warn(
+            `[FormsCreator] State apontava para msg de outro autor (${msg.id}) na thread ${thread.name}. Procurando mensagem válida do bot...`
+          );
+          msg = null;
+        }
       } catch {}
     }
 
@@ -896,6 +905,52 @@ async function syncLegacyThreads(client, progressMsg = null) {
           msg = messages.find((m) => isFormsCreatorMainRegisterMessage(m, client));
         }
       } catch {}
+    }
+
+    // ✅ FIX: se existe registro no state, mas não existe mensagem editável do bot,
+    // cria uma nova mensagem oficial do FormsCreator sem apagar nada antigo.
+    if (!msg && reg && userId) {
+      try {
+        const member = await channel.guild.members.fetch(userId).catch(() => null);
+        const avatarURL = member?.user?.displayAvatarURL({ size: 512 }) || "";
+
+        const embed = new EmbedBuilder()
+          .setTitle(`👤 ${reg.nome || thread.name || userId}`)
+          .setThumbnail(avatarURL)
+          .setDescription(`<@${userId}>`)
+          .addFields(
+            { name: "📌 ID/Passaporte", value: reg.idCidade || "?", inline: true },
+            { name: "📚 Área de Interesse", value: reg.area || "?", inline: true },
+            { name: "Status do Projeto", value: reg.active ? "🟢 Ativo" : "🔴 Inativo", inline: false }
+          )
+          .setColor("Purple");
+
+        const rowEdit = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(`editar_id_${thread.id}`).setLabel("✏️ Editar ID/Passaporte").setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder().setCustomId(`editar_area_${thread.id}`).setLabel("✏️ Editar Área de Interesse").setStyle(ButtonStyle.Secondary)
+        );
+
+        const rowStatus = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`fc_toggle_status:${thread.id}:${userId}:${reg.active ? 'inactive' : 'active'}`)
+            .setLabel(reg.active ? "Desligar do Projeto" : "Ligar ao Projeto")
+            .setStyle(reg.active ? ButtonStyle.Danger : ButtonStyle.Success)
+        );
+
+        msg = await thread.send({
+          embeds: [embed],
+          components: [rowEdit, rowStatus],
+        });
+
+        reg.messageId = msg.id;
+        state.registrations[thread.id] = reg;
+        writeState(state);
+        updates++;
+
+        console.log(`[FormsCreator] Recriei mensagem oficial na thread ${thread.name} (${thread.id}) porque a antiga não era editável.`);
+      } catch (e) {
+        console.error(`[FormsCreator] Erro ao recriar msg oficial na thread ${thread.name}:`, e);
+      }
     }
 
     // 3. Se achou msg mas não tinha registro, cria agora
@@ -1179,28 +1234,28 @@ export async function findFormsCreatorThreadIdByUserId(clientOrUserId, maybeUser
         const messages = await thread.messages.fetch({ limit: 20 }).catch(() => null);
         if (!messages) continue;
 
-        const foundMsg = messages.find((msg) => {
-            if (msg.author?.bot !== true) return false;
+const foundMsg = messages.find((msg) => {
+    if (msg.author?.id !== client.user.id) return false;
 
-            const raw = [
-                msg.content || "",
-                ...msg.embeds.map((embed) => [
-                    embed.title || "",
-                    embed.description || "",
-                    ...(embed.fields || []).flatMap((field) => [
-                        field.name || "",
-                        field.value || "",
-                    ]),
-                    embed.footer?.text || "",
-                ].join("\n")),
-            ].join("\n");
+    const raw = [
+        msg.content || "",
+        ...msg.embeds.map((embed) => [
+            embed.title || "",
+            embed.description || "",
+            ...(embed.fields || []).flatMap((field) => [
+                field.name || "",
+                field.value || "",
+            ]),
+            embed.footer?.text || "",
+        ].join("\n")),
+    ].join("\n");
 
-            return (
-                raw.includes(`<@${targetUserId}>`) ||
-                raw.includes(`<@!${targetUserId}>`) ||
-                raw.includes(targetUserId)
-            );
-        });
+    return (
+        raw.includes(`<@${targetUserId}>`) ||
+        raw.includes(`<@!${targetUserId}>`) ||
+        raw.includes(targetUserId)
+    );
+});
 
         if (!foundMsg) continue;
 
