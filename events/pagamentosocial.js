@@ -1147,7 +1147,7 @@ async function sincronizarDashboardSocial(client, motivo = "manual", options = {
       saveJSON_Dash(DASH_STATE_FILE, { messagesByMonth: {} });
     }
 
-    const stats = await reconstruirStatsPorEmbeds(client, 1000);
+    const stats = await reconstruirStatsPorEmbeds(client, 30000);
 
     if (!stats) {
       throw new Error("Não consegui reconstruir os dados pelos embeds do canal de pagamentos.");
@@ -2319,7 +2319,7 @@ async function reconstruirStatsPorEmbeds(client, limiteBusca = 100) {
   // ✅ CORREÇÃO: Implementação de paginação real (Discord limita fetch em 100)
   let mensagensTotal = [];
   let lastId = undefined;
-  const totalALer = Math.min(limiteBusca, 1000);
+  const totalALer = Math.min(Number(limiteBusca || 30000), 50000);
 
   while (mensagensTotal.length < totalALer) {
 
@@ -2330,8 +2330,9 @@ async function reconstruirStatsPorEmbeds(client, limiteBusca = 100) {
     if (!batch || batch.size === 0) break;
     
     mensagensTotal.push(...batch.values());
-    lastId = batch.last().id;
-    
+    lastId = batch.last()?.id;
+
+    if (!lastId) break;
     if (batch.size < fetchLimit) break;
   }
 
@@ -2339,7 +2340,7 @@ async function reconstruirStatsPorEmbeds(client, limiteBusca = 100) {
   if (mensagensTotal.length === 0) return stats;
 
   const registrosFiltrados = mensagensTotal
-    .filter((m) => m.author?.id === client.user.id)
+    .filter((m) => m.author?.bot)
     .filter((m) => m.embeds?.length > 0)
     .filter((m) => mensagemEhDoMesAtualSP(m))
     .filter((m) => {
