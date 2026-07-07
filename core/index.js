@@ -661,6 +661,9 @@ if (await graficoManagersHandleMessage(message, client)) return;
 
 // ✅ Auto React precisa receber comandos como !reagirsc eventos 1000
 if (await autoReactsFotosHandleMessage(message, client)) return;
+
+// ✅ FormsCreator precisa receber comandos como !formscreator, !syncforms, !testpublic, !testdm e !testrunreminder
+if (await formsCreatorHandleMessage(message, client)) return;
         
         // Se chegou aqui sendo um comando, mas não foi tratado, não precisamos continuar nos listeners de texto
         return;
