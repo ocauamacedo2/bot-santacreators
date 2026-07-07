@@ -672,6 +672,37 @@ function isFormsCreatorMainRegisterMessage(msg, client) {
   return Boolean(hasMemberDescription && hasIdField && hasAreaField && hasStatusField);
 }
 
+function isFormsCreatorLegacyRegisterMessage(msg) {
+  if (!msg?.embeds?.length) return false;
+
+  const embed = msg.embeds[0];
+
+  const raw = [
+    embed.title || "",
+    embed.description || "",
+    ...(embed.fields || []).flatMap((field) => [
+      field.name || "",
+      field.value || "",
+    ]),
+  ].join("\n");
+
+  const hasIdField = embed.fields?.some((field) =>
+    String(field.name || "").includes("ID/Passaporte")
+  );
+
+  const hasAreaField = embed.fields?.some((field) =>
+    String(field.name || "").includes("Área de Interesse")
+  );
+
+  const hasStatusField = embed.fields?.some((field) =>
+    String(field.name || "") === "Status do Projeto"
+  );
+
+  const hasMentionOrUserId = /<@!?\d+>/.test(raw) || /\b\d{17,22}\b/.test(raw);
+
+  return Boolean(hasIdField && hasAreaField && hasStatusField && hasMentionOrUserId);
+}
+
 function isFormsCreatorProtectedMessage(msg, client) {
   if (!msg || msg.author?.id !== client.user.id) return false;
 
@@ -898,13 +929,109 @@ async function syncLegacyThreads(client, progressMsg = null) {
     }
 
     // 2. Se não achou msg pelo registro, tenta varrer o canal
+    let legacyMsg = null;
+
     if (!msg) {
       try {
-        const messages = await thread.messages.fetch({ limit: 25 }).catch(() => null);
+        const messages = await thread.messages.fetch({ limit: 50 }).catch(() => null);
         if (messages) {
           msg = messages.find((m) => isFormsCreatorMainRegisterMessage(m, client));
+          legacyMsg = messages.find((m) => isFormsCreatorLegacyRegisterMessage(m));
         }
       } catch {}
+    }
+
+    // ✅ FIX: se achou mensagem antiga de outro bot/autor, recria uma mensagem oficial do bot atual
+    if (!msg && legacyMsg) {
+      try {
+        const legacyEmbed = legacyMsg.embeds[0];
+
+        const rawLegacyText = [
+          legacyEmbed.title || "",
+          legacyEmbed.description || "",
+          ...(legacyEmbed.fields || []).flatMap((field) => [
+            field.name || "",
+            field.value || "",
+          ]),
+        ].join("\n");
+
+        const mentionMatch = rawLegacyText.match(/<@!?(\d+)>/);
+        const idMatch = rawLegacyText.match(/\b\d{17,22}\b/);
+
+        userId = mentionMatch?.[1] || idMatch?.[0] || userId;
+
+        const member = userId
+          ? await channel.guild.members.fetch(userId).catch(() => null)
+          : null;
+
+        const nome =
+          legacyEmbed.title?.replace("👤 ", "").trim() ||
+          member?.displayName ||
+          thread.name ||
+          userId ||
+          "Membro";
+
+        const idCidade =
+          legacyEmbed.fields?.find((f) => String(f.name || "").includes("ID/Passaporte"))?.value ||
+          "?";
+
+        const area =
+          legacyEmbed.fields?.find((f) => String(f.name || "").includes("Área de Interesse"))?.value ||
+          "?";
+
+        const statusValue =
+          legacyEmbed.fields?.find((f) => String(f.name || "") === "Status do Projeto")?.value ||
+          "";
+
+        const active = statusValue.includes("Ativo") && !statusValue.includes("Inativo");
+
+        const avatarURL = member?.user?.displayAvatarURL({ size: 512 }) || "";
+
+        const embed = new EmbedBuilder()
+          .setTitle(`👤 ${nome}`)
+          .setThumbnail(avatarURL)
+          .setDescription(userId ? `<@${userId}>` : legacyEmbed.description || "")
+          .addFields(
+            { name: "📌 ID/Passaporte", value: idCidade, inline: true },
+            { name: "📚 Área de Interesse", value: area, inline: true },
+            { name: "Status do Projeto", value: active ? "🟢 Ativo" : "🔴 Inativo", inline: false }
+          )
+          .setColor("Purple");
+
+        const rowEdit = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(`editar_id_${thread.id}`).setLabel("✏️ Editar ID/Passaporte").setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder().setCustomId(`editar_area_${thread.id}`).setLabel("✏️ Editar Área de Interesse").setStyle(ButtonStyle.Secondary)
+        );
+
+        const rowStatus = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`fc_toggle_status:${thread.id}:${userId}:${active ? 'inactive' : 'active'}`)
+            .setLabel(active ? "Desligar do Projeto" : "Ligar ao Projeto")
+            .setStyle(active ? ButtonStyle.Danger : ButtonStyle.Success)
+        );
+
+        msg = await thread.send({
+          embeds: [embed],
+          components: [rowEdit, rowStatus],
+        });
+
+        reg = {
+          userId,
+          nome,
+          idCidade,
+          area,
+          active,
+          messageId: msg.id,
+        };
+
+        state.registrations[thread.id] = reg;
+        writeState(state);
+        updates++;
+
+        console.log(`[FormsCreator] Recriei mensagem oficial a partir de mensagem antiga na thread ${thread.name} (${thread.id}).`);
+      } catch (e) {
+        console.error(`[FormsCreator] Erro ao recriar mensagem oficial a partir da antiga na thread ${thread.name}:`, e);
+      }
     }
 
     // ✅ FIX: se existe registro no state, mas não existe mensagem editável do bot,
