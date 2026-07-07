@@ -220,9 +220,17 @@ async function enviarOuEditarBotaoSet(client, canal) {
   // 1) tenta editar pela ID salva
   if (BUTTON_MESSAGE_ID) {
     const existente = await canal.messages.fetch(BUTTON_MESSAGE_ID).catch(() => null);
-    if (existente) {
+
+    if (existente && existente.author?.id === client.user.id) {
       await existente.edit({ embeds: [embed], components: [row] }).catch(() => {});
       return existente;
+    }
+
+    // ✅ Se a mensagem salva for do bot antigo, o bot novo não consegue editar.
+    // Então limpa o ID salvo e continua o fluxo para criar uma nova mensagem.
+    if (existente && existente.author?.id !== client.user.id) {
+      BUTTON_MESSAGE_ID = null;
+      savePedirSetState();
     }
   }
 
@@ -331,7 +339,9 @@ export async function pedirSetOnReady(client) {
 // ================================
 export async function pedirSetHandleMessage(message, client) {
   if (message.author.bot) return false;
-  if (!message.content?.toLowerCase().startsWith('!pedirset')) return false;
+
+  const content = message.content?.toLowerCase().trim() || '';
+  if (!content.startsWith('!pedirset') && !content.startsWith('!recriarpedirset')) return false;
 
   const podeUsar =
     CARGOS_PODE_ENVIAR_COMANDO.includes(message.author.id) || // (isso aqui é meio inútil pq a lista é de cargos, mas mantive igual teu código)
@@ -348,10 +358,20 @@ export async function pedirSetHandleMessage(message, client) {
     return true;
   }
 
-    await enviarOuEditarBotaoSet(client, canal);
+  if (content.startsWith('!recriarpedirset')) {
+    BUTTON_MESSAGE_ID = null;
+    savePedirSetState();
+  }
+
+  await enviarOuEditarBotaoSet(client, canal);
   await startLimpeza(client, canal);
 
-  await safeReply(message, '✅ Botão de Set enviado/atualizado com sucesso!');
+  await safeReply(
+    message,
+    content.startsWith('!recriarpedirset')
+      ? '✅ Botão de Set recriado com o bot novo com sucesso!'
+      : '✅ Botão de Set enviado/atualizado com sucesso!'
+  );
   return true;
 
 }
