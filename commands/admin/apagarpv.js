@@ -51,6 +51,25 @@ export function registrarMensagemPV(userId, message) {
   salvarRegistroPV(data);
 }
 
+function registrarCanalPV(userId, channelId) {
+  if (!userId || !channelId) return;
+
+  const data = carregarRegistroPV();
+
+  data.__dmChannels ??= {};
+  data.__dmChannels[userId] = {
+    channelId,
+    updatedAt: Date.now(),
+  };
+
+  salvarRegistroPV(data);
+}
+
+function buscarCanalPVRegistrado(userId) {
+  const data = carregarRegistroPV();
+  return data.__dmChannels?.[userId]?.channelId || null;
+}
+
 export function instalarRegistroAutomaticoPV(client) {
   if (globalThis.__SC_PV_AUTO_REGISTRY_INSTALLED__) return;
   globalThis.__SC_PV_AUTO_REGISTRY_INSTALLED__ = true;
@@ -178,14 +197,22 @@ async function buscarDmDoUsuario(user, client, permitirAbrirDM = false) {
     dm = procurarDmNoCacheDoUsuario(client, user.id);
   }
 
+  if (!dm) {
+    const canalRegistradoId = buscarCanalPVRegistrado(user.id);
+
+    if (canalRegistradoId) {
+      dm = await client.channels.fetch(canalRegistradoId).catch(() => null);
+    }
+  }
+
   if (dm) {
     return dm;
   }
 
   if (!permitirAbrirDM) {
     throw new Error(
-      'DM não está no cache do bot. Para tentar abrir a DM mesmo assim, use --scan-force. ' +
-      'Aviso: o Discord pode bloquear por anti-spam/quarentena.'
+      'DM não está no cache nem no registro de canal PV. Peça para a pessoa mandar qualquer mensagem no PV do bot e tente de novo com --scan. ' +
+      'Para tentar abrir a DM mesmo assim, use --scan-force, mas o Discord pode bloquear por anti-spam/quarentena.'
     );
   }
 
@@ -765,6 +792,12 @@ export function registerApagarPV(client) {
   client.__apagarPvListenerRegistrado = true;
 
   client.on('messageCreate', async (message) => {
+    try {
+      if (!message.guild && !message.author?.bot && message.channelId) {
+        registrarCanalPV(message.author.id, message.channelId);
+      }
+    } catch {}
+
     await apagarPVHandleMessage(message, client);
   });
 }
