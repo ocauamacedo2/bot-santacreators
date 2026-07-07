@@ -48,6 +48,13 @@ export function registrarMensagemPV(userId, message) {
     .filter(item => item?.messageId && item?.channelId)
     .slice(-500);
 
+  data.__dmChannels ??= {};
+  data.__dmChannels[userId] = {
+    channelId: message.channelId,
+    updatedAt: Date.now(),
+    source: 'bot_send',
+  };
+
   salvarRegistroPV(data);
 }
 
@@ -211,8 +218,10 @@ async function buscarDmDoUsuario(user, client, permitirAbrirDM = false) {
 
   if (!permitirAbrirDM) {
     throw new Error(
-      'DM não está no cache nem no registro de canal PV. Peça para a pessoa mandar qualquer mensagem no PV do bot e tente de novo com --scan. ' +
-      'Para tentar abrir a DM mesmo assim, use --scan-force, mas o Discord pode bloquear por anti-spam/quarentena.'
+      'DM não está no cache nem no registro de canal PV. ' +
+      'Não dá para varrer mensagens antigas sem o ID do canal da DM. ' +
+      'A pessoa precisa mandar qualquer mensagem no PV do bot uma vez, ou o bot precisa ter enviado uma nova PV após o registro automático estar ativo. ' +
+      'Depois disso, use --scan.'
     );
   }
 
