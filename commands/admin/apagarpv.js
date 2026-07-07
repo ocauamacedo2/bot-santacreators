@@ -1,5 +1,5 @@
 // /application/commands/admin/apagarpv.js
-import { EmbedBuilder, PermissionsBitField } from 'discord.js';
+import { EmbedBuilder, PermissionsBitField, ChannelType } from 'discord.js';
 
 const LOG_CHANNEL_ID = '1524041749905801216';
 
@@ -44,6 +44,32 @@ function cortarTexto(texto, limite = 950) {
   return `${str.slice(0, limite - 20)}... [cortado]`;
 }
 
+function detectarErroDM(erroMsg) {
+  const texto = String(erroMsg || '').toLowerCase();
+
+  if (
+    texto.includes('anti-spam') ||
+    texto.includes('quarantine') ||
+    texto.includes('appeal this action') ||
+    texto.includes('flagged by our anti-spam')
+  ) {
+    return 'ANTI_SPAM_QUARENTENA';
+  }
+
+  if (
+    texto.includes('50007') ||
+    texto.includes('cannot send messages to this user') ||
+    texto.includes('missing access') ||
+    texto.includes('missing permissions') ||
+    texto.includes('unknown channel') ||
+    texto.includes('unknown message')
+  ) {
+    return 'DM_INACESSIVEL';
+  }
+
+  return 'ERRO_DESCONHECIDO';
+}
+
 async function resolveLogChannel(client) {
   const canal = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
   if (!canal || !canal.isTextBased?.()) return null;
@@ -65,17 +91,44 @@ async function editarStatus(statusMsg, embed) {
   }).catch(() => {});
 }
 
-async function buscarDmDoUsuario(user) {
+function procurarDmNoCacheDoUsuario(client, userId) {
+  return client.channels.cache.find((canal) => {
+    if (!canal) return false;
+
+    const isDM =
+      canal.type === ChannelType.DM ||
+      canal.type === 1 ||
+      canal.constructor?.name === 'DMChannel';
+
+    if (!isDM) return false;
+
+    return canal.recipient?.id === userId || canal.recipientId === userId;
+  }) || null;
+}
+
+async function buscarDmDoUsuario(user, client) {
   let dm = user.dmChannel || null;
 
   if (!dm) {
-    dm = await user.createDM(true).catch((err) => {
-      throw new Error(`Não consegui abrir/criar DM: ${err?.code || ''} ${err?.message || err}`);
-    });
+    dm = procurarDmNoCacheDoUsuario(client, user.id);
   }
+
+  if (dm) {
+    return dm;
+  }
+
+  dm = await user.createDM().catch((err) => {
+    throw new Error(
+      `Não consegui abrir/criar DM: ${err?.code || ''} ${err?.message || err}`
+    );
+  });
 
   if (!dm) {
     dm = user.dmChannel || null;
+  }
+
+  if (!dm) {
+    dm = procurarDmNoCacheDoUsuario(client, user.id);
   }
 
   if (!dm) {
@@ -328,6 +381,7 @@ export async function apagarPVHandleMessage(message, client) {
     let totalMensagensDeOutrosBots = 0;
     let totalFalhas = 0;
     let totalPaginas = 0;
+    let totalAntiSpamQuarentena = 0;
     let ultimoErroVisivel = 'Nenhum erro até agora.';
 
     const detalhes = [];
@@ -338,7 +392,7 @@ export async function apagarPVHandleMessage(message, client) {
       totalProcessados++;
 
       try {
-        const dm = await buscarDmDoUsuario(user);
+        const dm = await buscarDmDoUsuario(user, client);
         const resultadoBusca = await buscarMensagensDoBotNaDM(dm, client, 2000);
 
         totalPaginas += resultadoBusca.paginas;
@@ -411,26 +465,28 @@ export async function apagarPVHandleMessage(message, client) {
 
         const erroMsg = `${err?.code || ''} ${err?.message || err}`.trim();
         const erroStack = err?.stack ? String(err.stack).slice(0, 1500) : 'Sem stack disponível.';
+        const tipoErroDM = detectarErroDM(erroMsg);
 
         ultimoErroVisivel = `${user.tag} (${user.id}): ${erroMsg}`;
 
-        if (
-          erroMsg.includes('50007') ||
-          erroMsg.toLowerCase().includes('cannot send messages to this user') ||
-          erroMsg.toLowerCase().includes('missing access') ||
-          erroMsg.toLowerCase().includes('missing permissions') ||
-          erroMsg.toLowerCase().includes('unknown channel') ||
-          erroMsg.toLowerCase().includes('unknown message')
-        ) {
+        if (tipoErroDM === 'ANTI_SPAM_QUARENTENA') {
+          totalAntiSpamQuarentena++;
+          detalhes.push(
+            `🚫 <@${user.id}> — Discord bloqueou a abertura da DM por anti-spam/quarentena. ` +
+            `Se a DM não estiver no cache do bot, não dá para buscar mensagens antigas até o Discord liberar.`
+          );
+        } else if (tipoErroDM === 'DM_INACESSIVEL') {
           totalDmInacessivel++;
+          detalhes.push(`🔒 <@${user.id}> — DM inacessível.`);
+        } else {
+          detalhes.push(`❌ <@${user.id}> — ${erroMsg}`);
         }
 
         erros.push(
           `❌ ${user.tag} (${user.id}): ${erroMsg}\n` +
+          `Tipo: ${tipoErroDM}\n` +
           `Stack: ${erroStack}`
         );
-
-        detalhes.push(`❌ <@${user.id}> — ${erroMsg}`);
       }
 
       if (statusMsg && (totalProcessados % 1 === 0 || totalProcessados === membros.length)) {
@@ -454,6 +510,7 @@ export async function apagarPVHandleMessage(message, client) {
               { name: 'Outros bots encontrados', value: `\`${totalMensagensDeOutrosBots}\``, inline: true },
               { name: 'Sem msg do bot atual', value: `\`${totalSemMensagemDoBotAtual}\``, inline: true },
               { name: 'DM inacessível', value: `\`${totalDmInacessivel}\``, inline: true },
+              { name: 'Anti-spam/quarentena', value: `\`${totalAntiSpamQuarentena}\``, inline: true },
               { name: 'Usuário atual', value: `<@${user.id}> \`(${user.id})\``, inline: false },
               { name: 'Último erro', value: `\`${cortarTexto(ultimoErroVisivel, 950)}\``, inline: false }
             )
@@ -485,6 +542,7 @@ export async function apagarPVHandleMessage(message, client) {
         { name: 'Outros bots encontrados', value: `\`${totalMensagensDeOutrosBots}\``, inline: true },
         { name: 'Sem msg do bot atual', value: `\`${totalSemMensagemDoBotAtual}\``, inline: true },
         { name: 'DM inacessível', value: `\`${totalDmInacessivel}\``, inline: true },
+        { name: 'Anti-spam/quarentena', value: `\`${totalAntiSpamQuarentena}\``, inline: true },
         { name: 'Falhas', value: `\`${totalFalhas}\``, inline: true },
         { name: 'Tempo total', value: `\`${duracao}s\``, inline: true },
         { name: 'Início', value: `<t:${inicioUnix}:F>`, inline: true },
