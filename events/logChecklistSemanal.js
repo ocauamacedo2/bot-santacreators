@@ -1169,7 +1169,9 @@ export async function checklistOnReady(client) {
 
 export async function checklistHandleMessage(message, client) {
   if (!message.guild || message.author.bot) return false;
-  if (message.content.toLowerCase() !== "!checklogs") return false;
+
+  const content = message.content.toLowerCase().trim();
+  if (content !== "!checklogs" && content !== "!recriarchecklogs") return false;
 
   if (!hasPermission(message.member)) {
     return message.reply("❌ Sem permissão.").then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
