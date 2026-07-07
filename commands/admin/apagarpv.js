@@ -171,7 +171,7 @@ function procurarDmNoCacheDoUsuario(client, userId) {
   }) || null;
 }
 
-async function buscarDmDoUsuario(user, client) {
+async function buscarDmDoUsuario(user, client, permitirAbrirDM = false) {
   let dm = user.dmChannel || null;
 
   if (!dm) {
@@ -180,6 +180,13 @@ async function buscarDmDoUsuario(user, client) {
 
   if (dm) {
     return dm;
+  }
+
+  if (!permitirAbrirDM) {
+    throw new Error(
+      'DM não está no cache do bot. Para tentar abrir a DM mesmo assim, use --scan-force. ' +
+      'Aviso: o Discord pode bloquear por anti-spam/quarentena.'
+    );
   }
 
   dm = await user.createDM().catch((err) => {
@@ -511,6 +518,7 @@ export async function apagarPVHandleMessage(message, client) {
 
       try {
         const forcarScanDM = contentLower.includes('--scan');
+        const forcarAbrirDM = contentLower.includes('--scan-force');
         const apagadasRegistradas = await apagarMensagensRegistradasPV(user.id, client);
 
         if (apagadasRegistradas.apagadas > 0) {
@@ -533,7 +541,8 @@ export async function apagarPVHandleMessage(message, client) {
           if (apagadasRegistradas.tentadas === 0) {
             detalhes.push(
               `ℹ️ <@${user.id}> — nenhuma mensagem registrada ainda. ` +
-              `As próximas PVs serão registradas automaticamente. Use \`--scan\` apenas se quiser forçar a varredura da DM.`
+              `Use \`--scan\` para varrer se a DM estiver em cache. ` +
+              `Use \`--scan-force\` para tentar abrir a DM, mas o Discord pode bloquear por anti-spam.`
             );
           } else {
             detalhes.push(
@@ -544,7 +553,7 @@ export async function apagarPVHandleMessage(message, client) {
           continue;
         }
 
-        const dm = await buscarDmDoUsuario(user, client);
+        const dm = await buscarDmDoUsuario(user, client, forcarAbrirDM);
         const resultadoBusca = await buscarMensagensDoBotNaDM(dm, client, 2000);
 
         totalPaginas += resultadoBusca.paginas;
