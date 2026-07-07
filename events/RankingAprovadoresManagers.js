@@ -676,26 +676,32 @@ export async function rankingAprovadoresManagersEmitUpdate(client, causeUserId =
       return true;
     }
 
-    await message.edit({
-      content: "‎",
-      embeds: payload.embeds,
-      components: payload.components,
-    }).catch(async () => {
-      const recreated = await channel.send({
-        content: "‎",
-        embeds: payload.embeds,
-        components: payload.components,
-      }).catch(() => null);
+    const editado = await message.edit({
+  content: "‎",
+  embeds: payload.embeds,
+  components: payload.components,
+}).catch(() => null);
 
-      if (recreated) {
-        state.messageId = recreated.id;
-      }
-    });
+if (editado) {
+  state.messageId = editado.id;
+} else {
+  // ✅ Se o bot mudou e não consegue editar a mensagem antiga,
+  // cria uma nova mensagem principal com o bot atual.
+  const recreated = await channel.send({
+    content: "‎",
+    embeds: payload.embeds,
+    components: payload.components,
+  }).catch(() => null);
 
-    state.lastHash = payload.hash;
-    state.lastUpdateAt = Date.now();
-    state.currentMonthKey = stats.month.key;
-    saveState(state);
+  if (!recreated) return false;
+
+  state.messageId = recreated.id;
+}
+
+state.lastHash = payload.hash;
+state.lastUpdateAt = Date.now();
+state.currentMonthKey = stats.month.key;
+saveState(state);
 
     return true;
   } catch (error) {

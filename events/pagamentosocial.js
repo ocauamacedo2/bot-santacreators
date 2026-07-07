@@ -1432,25 +1432,33 @@ async function updateDashboard(client, statsAtualizados = null) {
     msg = await encontrarDashboardPagamentoDoMes(channel, stats.month).catch(() => null);
   }
 
-  if (msg) {
-    await msg.edit({
-      embeds: [embed],
-      components: [criarRowDashboardPagamento()],
-    }).catch(() => {});
+ if (msg) {
+  const editado = await msg.edit({
+    embeds: [embed],
+    components: [criarRowDashboardPagamento()],
+  }).catch(() => null);
 
-    state.messagesByMonth[stats.month] = msg.id;
+  if (editado) {
+    state.messagesByMonth[stats.month] = editado.id;
     saveJSON_Dash(DASH_STATE_FILE, state);
-  } else {
-    const newMsg = await channel.send({
-      embeds: [embed],
-      components: [criarRowDashboardPagamento()],
-    }).catch(() => null);
-
-    if (newMsg) {
-      state.messagesByMonth[stats.month] = newMsg.id;
-      saveJSON_Dash(DASH_STATE_FILE, state);
-    }
+    return;
   }
+
+  // ✅ Se o bot mudou e não consegue editar a mensagem antiga,
+  // cria uma nova mensagem do dashboard com o bot atual.
+  delete state.messagesByMonth[stats.month];
+  saveJSON_Dash(DASH_STATE_FILE, state);
+}
+
+const newMsg = await channel.send({
+  embeds: [embed],
+  components: [criarRowDashboardPagamento()],
+}).catch(() => null);
+
+if (newMsg) {
+  state.messagesByMonth[stats.month] = newMsg.id;
+  saveJSON_Dash(DASH_STATE_FILE, state);
+}
 }
 
 function readJSON(file, fallback) {
