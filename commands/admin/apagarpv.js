@@ -66,11 +66,17 @@ async function editarStatus(statusMsg, embed) {
 }
 
 async function buscarDmDoUsuario(user) {
-  if (user.dmChannel) return user.dmChannel;
+  let dm = user.dmChannel || null;
 
-  const dm = await user.createDM().catch((err) => {
-    throw new Error(`Não consegui abrir/criar DM: ${err?.code || ''} ${err?.message || err}`);
-  });
+  if (!dm) {
+    dm = await user.createDM(true).catch((err) => {
+      throw new Error(`Não consegui abrir/criar DM: ${err?.code || ''} ${err?.message || err}`);
+    });
+  }
+
+  if (!dm) {
+    dm = user.dmChannel || null;
+  }
 
   if (!dm) {
     throw new Error('Não consegui abrir/criar DM: retorno vazio.');
@@ -322,6 +328,7 @@ export async function apagarPVHandleMessage(message, client) {
     let totalMensagensDeOutrosBots = 0;
     let totalFalhas = 0;
     let totalPaginas = 0;
+    let ultimoErroVisivel = 'Nenhum erro até agora.';
 
     const detalhes = [];
     const erros = [];
@@ -403,16 +410,26 @@ export async function apagarPVHandleMessage(message, client) {
         totalFalhas++;
 
         const erroMsg = `${err?.code || ''} ${err?.message || err}`.trim();
+        const erroStack = err?.stack ? String(err.stack).slice(0, 1500) : 'Sem stack disponível.';
+
+        ultimoErroVisivel = `${user.tag} (${user.id}): ${erroMsg}`;
 
         if (
           erroMsg.includes('50007') ||
           erroMsg.toLowerCase().includes('cannot send messages to this user') ||
-          erroMsg.toLowerCase().includes('missing access')
+          erroMsg.toLowerCase().includes('missing access') ||
+          erroMsg.toLowerCase().includes('missing permissions') ||
+          erroMsg.toLowerCase().includes('unknown channel') ||
+          erroMsg.toLowerCase().includes('unknown message')
         ) {
           totalDmInacessivel++;
         }
 
-        erros.push(`❌ ${user.tag} (${user.id}): ${erroMsg}`);
+        erros.push(
+          `❌ ${user.tag} (${user.id}): ${erroMsg}\n` +
+          `Stack: ${erroStack}`
+        );
+
         detalhes.push(`❌ <@${user.id}> — ${erroMsg}`);
       }
 
@@ -437,7 +454,8 @@ export async function apagarPVHandleMessage(message, client) {
               { name: 'Outros bots encontrados', value: `\`${totalMensagensDeOutrosBots}\``, inline: true },
               { name: 'Sem msg do bot atual', value: `\`${totalSemMensagemDoBotAtual}\``, inline: true },
               { name: 'DM inacessível', value: `\`${totalDmInacessivel}\``, inline: true },
-              { name: 'Usuário atual', value: `<@${user.id}> \`(${user.id})\``, inline: false }
+              { name: 'Usuário atual', value: `<@${user.id}> \`(${user.id})\``, inline: false },
+              { name: 'Último erro', value: `\`${cortarTexto(ultimoErroVisivel, 950)}\``, inline: false }
             )
             .setTimestamp()
         );
@@ -470,7 +488,8 @@ export async function apagarPVHandleMessage(message, client) {
         { name: 'Falhas', value: `\`${totalFalhas}\``, inline: true },
         { name: 'Tempo total', value: `\`${duracao}s\``, inline: true },
         { name: 'Início', value: `<t:${inicioUnix}:F>`, inline: true },
-        { name: 'Fim', value: `<t:${fimUnix}:F>`, inline: true }
+        { name: 'Fim', value: `<t:${fimUnix}:F>`, inline: true },
+        { name: 'Último erro', value: `\`${cortarTexto(ultimoErroVisivel, 950)}\``, inline: false }
       )
       .setFooter({ text: 'Essa mensagem será apagada automaticamente.' })
       .setTimestamp();
