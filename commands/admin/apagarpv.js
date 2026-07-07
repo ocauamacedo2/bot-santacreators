@@ -513,30 +513,35 @@ export async function apagarPVHandleMessage(message, client) {
         const forcarScanDM = contentLower.includes('--scan');
         const apagadasRegistradas = await apagarMensagensRegistradasPV(user.id, client);
 
-        if (apagadasRegistradas.tentadas > 0) {
-          if (apagadasRegistradas.apagadas > 0) {
-            totalApagadas += apagadasRegistradas.apagadas;
+        if (apagadasRegistradas.apagadas > 0) {
+          totalApagadas += apagadasRegistradas.apagadas;
 
+          detalhes.push(
+            `✅ <@${user.id}> — \`${apagadasRegistradas.apagadas}\` mensagem(ns) apagada(s) pelo registro salvo.`
+          );
+        }
+
+        if (apagadasRegistradas.falhas > 0) {
+          totalFalhas += apagadasRegistradas.falhas;
+          erros.push(
+            `⚠️ Falhas no registro salvo de ${user.tag} (${user.id}): ` +
+            apagadasRegistradas.erros.slice(0, 5).join(' | ')
+          );
+        }
+
+        if (!forcarScanDM) {
+          if (apagadasRegistradas.tentadas === 0) {
             detalhes.push(
-              `✅ <@${user.id}> — \`${apagadasRegistradas.apagadas}\` mensagem(ns) apagada(s) pelo registro salvo.`
+              `ℹ️ <@${user.id}> — nenhuma mensagem registrada ainda. ` +
+              `As próximas PVs serão registradas automaticamente. Use \`--scan\` apenas se quiser forçar a varredura da DM.`
             );
-          }
-
-          if (apagadasRegistradas.falhas > 0) {
-            totalFalhas += apagadasRegistradas.falhas;
-            erros.push(
-              `⚠️ Falhas no registro salvo de ${user.tag} (${user.id}): ` +
-              apagadasRegistradas.erros.slice(0, 5).join(' | ')
-            );
-          }
-
-          if (!forcarScanDM) {
+          } else {
             detalhes.push(
               `ℹ️ <@${user.id}> — scan da DM ignorado para evitar bloqueio anti-spam. Use \`--scan\` se quiser forçar a varredura.`
             );
-
-            continue;
           }
+
+          continue;
         }
 
         const dm = await buscarDmDoUsuario(user, client);
