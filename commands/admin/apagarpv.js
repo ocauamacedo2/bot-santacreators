@@ -1,5 +1,7 @@
 // /application/commands/admin/apagarpv.js
-import { EmbedBuilder, PermissionsBitField, ChannelType } from 'discord.js';
+import { EmbedBuilder, PermissionsBitField, ChannelType, User } from 'discord.js';
+import fs from 'node:fs';
+import path from 'node:path';
 
 const LOG_CHANNEL_ID = '1524041749905801216';
 
@@ -8,6 +10,69 @@ const PERMITIDOS = [
   '1352408327983861844',
   '1262262852949905409',
 ];
+
+const PV_REGISTRY_PATH = path.resolve('data', 'pvMessages.json');
+
+function carregarRegistroPV() {
+  try {
+    if (!fs.existsSync('data')) fs.mkdirSync('data', { recursive: true });
+    if (!fs.existsSync(PV_REGISTRY_PATH)) fs.writeFileSync(PV_REGISTRY_PATH, '{}', 'utf8');
+    return JSON.parse(fs.readFileSync(PV_REGISTRY_PATH, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function salvarRegistroPV(data) {
+  try {
+    if (!fs.existsSync('data')) fs.mkdirSync('data', { recursive: true });
+    fs.writeFileSync(PV_REGISTRY_PATH, JSON.stringify(data, null, 2), 'utf8');
+  } catch {}
+}
+
+export function registrarMensagemPV(userId, message) {
+  if (!userId || !message?.id || !message?.channelId) return;
+
+  const data = carregarRegistroPV();
+
+  data[userId] ??= [];
+
+  data[userId].push({
+    messageId: message.id,
+    channelId: message.channelId,
+    createdAt: Date.now(),
+    authorId: message.author?.id || null,
+  });
+
+  data[userId] = data[userId]
+    .filter(item => item?.messageId && item?.channelId)
+    .slice(-500);
+
+  salvarRegistroPV(data);
+}
+
+export function instalarRegistroAutomaticoPV(client) {
+  if (globalThis.__SC_PV_AUTO_REGISTRY_INSTALLED__) return;
+  globalThis.__SC_PV_AUTO_REGISTRY_INSTALLED__ = true;
+
+  const originalSend = User.prototype.send;
+
+  User.prototype.send = async function (...args) {
+    const sentMessage = await originalSend.apply(this, args);
+
+    try {
+      if (
+        sentMessage?.id &&
+        sentMessage?.channelId &&
+        sentMessage?.author?.id === client.user?.id
+      ) {
+        registrarMensagemPV(this.id, sentMessage);
+      }
+    } catch {}
+
+    return sentMessage;
+  };
+}
 
 function getPrefix() {
   return (process.env.PREFIX || '!').trim() || '!';
@@ -136,6 +201,59 @@ async function buscarDmDoUsuario(user, client) {
   }
 
   return dm;
+}
+
+async function apagarMensagensRegistradasPV(userId, client) {
+  const data = carregarRegistroPV();
+  const registros = Array.isArray(data[userId]) ? data[userId] : [];
+
+  let apagadas = 0;
+  let falhas = 0;
+  const erros = [];
+  const restantes = [];
+
+  for (const item of registros) {
+    try {
+      const canal = await client.channels.fetch(item.channelId).catch(() => null);
+
+      if (!canal || !canal.isTextBased?.()) {
+        falhas++;
+        erros.push(`Canal DM não encontrado: ${item.channelId} / msg ${item.messageId}`);
+        restantes.push(item);
+        continue;
+      }
+
+      const msg = await canal.messages.fetch(item.messageId).catch(() => null);
+
+      if (!msg) {
+        continue;
+      }
+
+      if (msg.author?.id !== client.user.id) {
+        restantes.push(item);
+        continue;
+      }
+
+      await msg.delete();
+      apagadas++;
+
+      await sleep(350);
+    } catch (err) {
+      falhas++;
+      erros.push(`${item.channelId}/${item.messageId}: ${err?.code || ''} ${err?.message || err}`);
+      restantes.push(item);
+    }
+  }
+
+  data[userId] = restantes;
+  salvarRegistroPV(data);
+
+  return {
+    tentadas: registros.length,
+    apagadas,
+    falhas,
+    erros,
+  };
 }
 
 async function buscarMensagensDoBotNaDM(dm, client, totalLimit = 2000) {
@@ -392,6 +510,35 @@ export async function apagarPVHandleMessage(message, client) {
       totalProcessados++;
 
       try {
+        const forcarScanDM = contentLower.includes('--scan');
+        const apagadasRegistradas = await apagarMensagensRegistradasPV(user.id, client);
+
+        if (apagadasRegistradas.tentadas > 0) {
+          if (apagadasRegistradas.apagadas > 0) {
+            totalApagadas += apagadasRegistradas.apagadas;
+
+            detalhes.push(
+              `✅ <@${user.id}> — \`${apagadasRegistradas.apagadas}\` mensagem(ns) apagada(s) pelo registro salvo.`
+            );
+          }
+
+          if (apagadasRegistradas.falhas > 0) {
+            totalFalhas += apagadasRegistradas.falhas;
+            erros.push(
+              `⚠️ Falhas no registro salvo de ${user.tag} (${user.id}): ` +
+              apagadasRegistradas.erros.slice(0, 5).join(' | ')
+            );
+          }
+
+          if (!forcarScanDM) {
+            detalhes.push(
+              `ℹ️ <@${user.id}> — scan da DM ignorado para evitar bloqueio anti-spam. Use \`--scan\` se quiser forçar a varredura.`
+            );
+
+            continue;
+          }
+        }
+
         const dm = await buscarDmDoUsuario(user, client);
         const resultadoBusca = await buscarMensagensDoBotNaDM(dm, client, 2000);
 
@@ -599,6 +746,9 @@ export async function apagarPVHandleMessage(message, client) {
 }
 
 export function registerApagarPV(client) {
+  // Instala apenas uma vez o registro automático
+  instalarRegistroAutomaticoPV(client);
+
   if (client.__apagarPvListenerRegistrado) return;
   client.__apagarPvListenerRegistrado = true;
 
