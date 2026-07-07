@@ -23,8 +23,20 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+const RECRIAR_ALLOWED_USERS = new Set([
+  "660311795327828008", // Macedo
+]);
+
+const RECRIAR_ALLOWED_ROLES = new Set([
+  "1262262852949905408", // Owner
+]);
+
 function isAdminAutorizado(message) {
-  return message.member?.permissions?.has(PermissionsBitField.Flags.ManageChannels);
+  if (RECRIAR_ALLOWED_USERS.has(message.author.id)) return true;
+
+  return message.member?.roles?.cache?.some((role) =>
+    RECRIAR_ALLOWED_ROLES.has(role.id)
+  );
 }
 
 async function fetchTextChannelSafe(client, guild, channelId) {
@@ -37,6 +49,74 @@ async function fetchTextChannelSafe(client, guild, channelId) {
   if (!channel || !channel.isTextBased()) return null;
 
   return channel;
+}
+
+async function getOrCreateTempCategory(guild, originalCategory) {
+  const existing = guild.channels.cache.find((channel) =>
+    channel.type === ChannelType.GuildCategory &&
+    channel.name === "♻️・RECRIANDO-TICKETS"
+  );
+
+  if (existing) return existing;
+
+  const permissionOverwrites = originalCategory?.permissionOverwrites?.cache?.map((ow) => ({
+    id: ow.id,
+    allow: ow.allow.bitfield,
+    deny: ow.deny.bitfield,
+    type: ow.type,
+  })) || [];
+
+  return await guild.channels.create({
+    name: "♻️・RECRIANDO-TICKETS",
+    type: ChannelType.GuildCategory,
+    permissionOverwrites,
+    reason: "Categoria temporária para recriar tickets antigos",
+  });
+}
+
+async function moveOldChannelToTempIfNeeded(oldChannel, statusMessage) {
+  const originalParentId = oldChannel.parentId;
+  const originalParent = oldChannel.parent;
+
+  if (!originalParentId || !originalParent) {
+    return {
+      moved: false,
+      originalParentId,
+    };
+  }
+
+  const channelsInParent = oldChannel.guild.channels.cache.filter((channel) =>
+    channel.parentId === originalParentId
+  );
+
+  if (channelsInParent.size < 50) {
+    return {
+      moved: false,
+      originalParentId,
+    };
+  }
+
+  await statusMessage.edit({
+    content:
+      `♻️ **Recriando tickets...**\n\n` +
+      `⚠️ A categoria original está cheia com **50 canais**.\n` +
+      `📦 Movendo o canal antigo temporariamente para liberar espaço...\n` +
+      `🔎 Canal: ${oldChannel}`,
+  }).catch(() => {});
+
+  const tempCategory = await getOrCreateTempCategory(oldChannel.guild, originalParent);
+
+  await oldChannel.setParent(tempCategory.id, {
+    lockPermissions: false,
+    reason: "Movendo temporariamente para liberar vaga na categoria original",
+  });
+
+  await sleep(1200);
+
+  return {
+    moved: true,
+    originalParentId,
+  };
 }
 
 function getTicketTipo(channel) {
@@ -266,16 +346,32 @@ async function recreateOneChannel({ oldChannel, message, client, Transcript, sta
       `⏳ Etapa: criando canal novo...`,
   }).catch(() => {});
 
-  const newChannel = await guild.channels.create({
-    name: oldChannel.name,
-    type: ChannelType.GuildText,
-    parent: oldChannel.parentId || null,
-    topic: `${oldChannel.topic || ""};recriado_de:${oldChannel.id};recriado_por:${message.author.id}`.slice(0, 1024),
-    nsfw: oldChannel.nsfw,
-    rateLimitPerUser: oldChannel.rateLimitPerUser,
-    permissionOverwrites,
-    reason: `Ticket recriado por ${message.author.tag}`,
-  });
+  const originalParentId = oldChannel.parentId;
+  const moveInfo = await moveOldChannelToTempIfNeeded(oldChannel, statusMessage);
+
+  let newChannel;
+
+  try {
+    newChannel = await guild.channels.create({
+      name: oldChannel.name,
+      type: ChannelType.GuildText,
+      parent: originalParentId || null,
+      topic: `${oldChannel.topic || ""};recriado_de:${oldChannel.id};recriado_por:${message.author.id}`.slice(0, 1024),
+      nsfw: oldChannel.nsfw,
+      rateLimitPerUser: oldChannel.rateLimitPerUser,
+      permissionOverwrites,
+      reason: `Ticket recriado por ${message.author.tag}`,
+    });
+  } catch (err) {
+    if (moveInfo.moved && moveInfo.originalParentId) {
+      await oldChannel.setParent(moveInfo.originalParentId, {
+        lockPermissions: false,
+        reason: "Falha ao recriar ticket, voltando canal antigo para categoria original",
+      }).catch(() => {});
+    }
+
+    throw err;
+  }
 
   await newChannel.setPosition(oldChannel.position).catch(() => {});
 
@@ -387,7 +483,7 @@ export async function recriarTicketsHandleMessage(message, client, Transcript) {
   if (!content.toLowerCase().startsWith("!recriar")) return false;
 
   if (!isAdminAutorizado(message)) {
-    await message.reply("🚫 Você precisa da permissão **Gerenciar Canais** para usar esse comando.");
+    await message.reply("🚫 Apenas **Owner** ou **Macedo** podem usar esse comando.");
     return true;
   }
 
