@@ -2087,17 +2087,18 @@ function applyCityToRankingPlayer(player, cityKey) {
       .sort((a, b) => Number(b.confidence || 0) - Number(a.confidence || 0))
       .at(0);
 
-    const finalCityKey = best?.cityKey || directCityKey || "nobre";
+const finalCityKey = best?.cityKey || directCityKey || "nobre";
+const finalEventName = normalizeHallEventName(eventBest?.eventName || directEventName || "Evento", finalCityKey);
 
-    return {
-      cityKey: finalCityKey,
-      cityName: CITIES[finalCityKey]?.label || "Cidade Nobre",
-      eventName: eventBest?.eventName || directEventName || "Evento",
-      source: best?.source || "texto_do_hall",
-      confidence: best?.confidence || 35,
-      needsManualReview: Boolean(best?.needsManualReview),
-      conflictWithCityKey: best?.conflictWithCityKey || null
-    };
+return {
+  cityKey: finalCityKey,
+  cityName: CITIES[finalCityKey]?.label || "Cidade Nobre",
+  eventName: finalEventName,
+  source: best?.source || "texto_do_hall",
+  confidence: best?.confidence || 35,
+  needsManualReview: Boolean(best?.needsManualReview),
+  conflictWithCityKey: best?.conflictWithCityKey || null
+};
   }
 
   function cleanExtractedHallEventName(value = "") {
@@ -3602,9 +3603,13 @@ function addOrgRankingPoint(rankings, orgWinner, hallMeta) {
   if (/^\d+\s*(kk|k|mil|milh[oõ]es|milh[aã]o)\b/i.test(normalizeHallName(orgName))) return;
   if (/\b(vip|vips|rolepass|pass|gente boa|evento ouro|evento prata)\b/i.test(normalizeHallName(orgName))) return;
 
-    const cityKey = getManualOrgCityKey(orgName) || orgWinner.cityKey || hallMeta.cityKey || "nobre";
-    const key = getOrgRankingKey(orgName, cityKey);
-    const cityName = CITIES[cityKey]?.label || "Cidade Nobre";
+const cityKey =
+  getManualOrgCityKey(orgName) ||
+  resolveRankingCityKey(orgWinner.cityKey, orgWinner.cityName, hallMeta.cityKey);
+
+const key = getOrgRankingKey(orgName, cityKey);
+const cityName = CITIES[cityKey]?.label || "Cidade Nobre";
+const eventName = normalizeHallEventName(hallMeta.eventName, cityKey);
 
     rankings.orgs[key] ??= {
       key,
@@ -3621,12 +3626,12 @@ function addOrgRankingPoint(rankings, orgWinner, hallMeta) {
     rankings.orgs[key].cityName = cityName;
     rankings.orgs[key].total += 1;
 
-    rankings.orgs[key].events[hallMeta.eventName] ??= 0;
-    rankings.orgs[key].events[hallMeta.eventName] += 1;
+    rankings.orgs[key].events[eventName] ??= 0;
+    rankings.orgs[key].events[eventName] += 1;
 
     rankings.orgs[key].halls.push({
       messageId: hallMeta.messageId,
-      eventName: normalizeHallEventName(hallMeta.eventName, cityKey),
+      eventName,
       cityKey,
       cityName,
       at: hallMeta.createdTimestamp || Date.now()
@@ -4987,9 +4992,11 @@ async function sendPlayerIdentitySimilarityReviews(client, rankings) {
     return true;
   }
 
-  function formatRankingEventBreakdown(events = {}) {
+  function formatRankingEventBreakdown(events = {}, cityKey = "nobre") {
+    const finalCityKey = CITIES[cityKey] ? cityKey : "nobre";
+
     const sorted = Object.entries(events)
-      .map(([eventName, total]) => [normalizeHallEventName(eventName), total])
+      .map(([eventName, total]) => [normalizeHallEventName(eventName, finalCityKey), total])
       .filter(([eventName]) => isValidRankingEventName(eventName))
       .reduce((acc, [eventName, total]) => {
         acc[eventName] ??= 0;
@@ -5077,7 +5084,7 @@ function buildOrgsRankingMessage(rankings) {
       return `${medal} **TOP ${position}** — **${org.name}**
   🌆 Cidade: **${org.cityName}**
   🏆 Vitórias registradas: **${org.total}**
-  🎮 Destaques: ${formatRankingEventBreakdown(org.events)}`;
+  🎮 Destaques: ${formatRankingEventBreakdown(org.events, org.cityKey)}`;
     });
 
     return `# 🏆 Ranking de ORGs — Hall da Fama
@@ -5115,7 +5122,7 @@ function buildPlayersRankingMessage(rankings) {
       return `${medal} **TOP ${position}** — **${player.name}**${idText}
   🌆 Cidade: **${player.cityName}**
   🏆 Vitórias registradas: **${player.total}**
-  🎮 Destaques: ${formatRankingEventBreakdown(player.events)}`;
+  🎮 Destaques: ${formatRankingEventBreakdown(player.events, player.cityKey)}`;
     });
 
     return `# 👑 Ranking de Pessoas — Hall da Fama
@@ -5274,7 +5281,7 @@ function buildOrgsRankingEmbed(rankings) {
       return `${medal} **TOP ${pos} — ${org.name}**
   🌆 ${org.cityName}
   🏆 Vitórias: **${org.total}**
-  🎮 ${formatRankingEventBreakdown(org.events)}`;
+  🎮 ${formatRankingEventBreakdown(org.events, org.cityKey)}`;
     });
 
     return buildRankingEmbed(
@@ -5303,7 +5310,7 @@ function buildPlayersRankingEmbed(rankings) {
       return `${medal} **TOP ${pos} — ${player.name}**${idText}
   🌆 ${player.cityName}
   🏆 Vitórias: **${player.total}**
-  🎮 ${formatRankingEventBreakdown(player.events)}`;
+  🎮 ${formatRankingEventBreakdown(player.events, player.cityKey)}`;
     });
 
     return buildRankingEmbed(
@@ -5481,7 +5488,7 @@ function formatRankingLine(item, pos, type) {
     return `🏆 **Ranking geral: #${pos} — ${item.name}**
 🌆 ${item.cityName || "Cidade Nobre"}
 🏆 Vitórias: **${item.total || 0}**
-🎮 ${formatRankingEventBreakdown(item.events || {})}`;
+🎮 ${formatRankingEventBreakdown(item.events || {}, item.cityKey)}`;
   }
 
   const idText = item.playerId ? `\n🆔 ID: **${item.playerId}**` : "";
@@ -5489,7 +5496,7 @@ function formatRankingLine(item, pos, type) {
   return `⭐ **Ranking geral: #${pos} — ${item.name}**${idText}
 🌆 ${item.cityName || "Cidade Nobre"}
 🏆 Vitórias: **${item.total || 0}**
-🎮 ${formatRankingEventBreakdown(item.events || {})}`;
+🎮 ${formatRankingEventBreakdown(item.events || {}, item.cityKey)}`;
 }
 
 function buildPrivateRankingEmbed(rankings, type, page = 0, filters = {}) {
