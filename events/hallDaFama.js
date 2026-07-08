@@ -3595,6 +3595,27 @@ function createEmptyHallRankingData(previousData = null) {
     return rankings;
   }
 
+function resolveRankingCityKey(primaryCityKey = "", cityName = "", fallbackCityKey = "nobre") {
+  const directPrimary = String(primaryCityKey || "").trim().toLowerCase();
+
+  if (CITIES[directPrimary]) {
+    return directPrimary;
+  }
+
+  const byCityName = resolveCityKeyFromName(cityName || "");
+  if (byCityName && CITIES[byCityName]) {
+    return byCityName;
+  }
+
+  const directFallback = String(fallbackCityKey || "").trim().toLowerCase();
+
+  if (CITIES[directFallback]) {
+    return directFallback;
+  }
+
+  return "nobre";
+}
+
 function addOrgRankingPoint(rankings, orgWinner, hallMeta) {
   const orgName = normalizeOrgDisplayName(orgWinner.orgName);
   if (!orgName) return;
