@@ -132,6 +132,198 @@ function consumeUndoEntry(token) {
   return entry;
 }
 
+function extractLogField(embed, fieldName) {
+  const fields = embed?.fields || [];
+  const found = fields.find((field) => String(field.name || "").includes(fieldName));
+  return found ? String(found.value || "").trim() : "";
+}
+
+function cleanLogOrg(value) {
+  return String(value || "")
+    .replace(/\*\*/g, "")
+    .replace(/`/g, "")
+    .trim();
+}
+
+function extractLogUserId(value) {
+  const match = String(value || "").match(/`(\d{15,25})`|\((\d{15,25})\)|<@!?(\d{15,25})>/);
+  return match ? (match[1] || match[2] || match[3]) : null;
+}
+
+function getMessageLogTimestamp(message, embed) {
+  if (embed?.timestamp) {
+    const parsed = new Date(embed.timestamp).getTime();
+    if (Number.isFinite(parsed)) return parsed;
+  }
+
+  return message?.createdTimestamp || Date.now();
+}
+
+async function fetchPresenceLogMessagesBeforeReset(logChannel, resetMessage) {
+  const allMessages = [];
+  let before = resetMessage?.id || null;
+
+  for (let page = 0; page < 5; page++) {
+    const fetched = await logChannel.messages.fetch({
+      limit: 100,
+      ...(before ? { before } : {})
+    }).catch(() => null);
+
+    if (!fetched || fetched.size === 0) break;
+
+    const batch = [...fetched.values()];
+    allMessages.push(...batch);
+
+    before = batch[batch.length - 1]?.id;
+    if (!before) break;
+  }
+
+  return allMessages;
+}
+
+async function recoverStatusesFromPresenceLogs(client, resetMessage) {
+  const logChannel = LOG_CHANNEL_ID
+    ? await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null)
+    : null;
+
+  if (!logChannel || !logChannel.isTextBased()) {
+    return {
+      ok: false,
+      reason: "Não consegui acessar o canal de logs de presença."
+    };
+  }
+
+  const resetEmbed = resetMessage?.embeds?.[0];
+  const resetTimestamp = getMessageLogTimestamp(resetMessage, resetEmbed);
+  const resetDayKey = new Date(resetTimestamp).toLocaleDateString("en-CA", {
+    timeZone: "America/Sao_Paulo"
+  });
+
+  const messages = await fetchPresenceLogMessagesBeforeReset(logChannel, resetMessage);
+
+  if (!messages.length) {
+    return {
+      ok: false,
+      reason: "Não encontrei mensagens anteriores ao reset nesse canal de logs."
+    };
+  }
+
+  const orderedMessages = messages
+    .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
+    .filter((message) => {
+      const embed = message.embeds?.[0];
+      if (!embed) return false;
+
+      const title = String(embed.title || "");
+      if (!title.includes("Log de Presença:")) return false;
+
+      const timestamp = getMessageLogTimestamp(message, embed);
+      if (timestamp >= resetTimestamp) return false;
+
+      const dayKey = new Date(timestamp).toLocaleDateString("en-CA", {
+        timeZone: "America/Sao_Paulo"
+      });
+
+      return dayKey === resetDayKey;
+    });
+
+  if (!orderedMessages.length) {
+    return {
+      ok: false,
+      reason: "Encontrei logs antigos, mas nenhum log válido do mesmo dia antes desse reset."
+    };
+  }
+
+  let recoveredState = loadState();
+  recoveredState = syncOrgs(recoveredState);
+
+  const recoveredStatuses = JSON.parse(JSON.stringify(recoveredState.statuses || {}));
+  let recoveredCount = 0;
+
+  for (const message of orderedMessages) {
+    const embed = message.embeds?.[0];
+    const title = String(embed?.title || "");
+
+    const actionMatch = title.match(/Log de Presença:\s*(.+)$/i);
+    const action = actionMatch ? actionMatch[1].trim().toUpperCase() : "";
+
+    const orgValue = cleanLogOrg(extractLogField(embed, "Organização"));
+    const authorValue = extractLogField(embed, "Autor");
+    const userId = extractLogUserId(authorValue);
+    const logTime = getMessageLogTimestamp(message, embed);
+
+    if (!orgValue) continue;
+
+    if (action === "RESET GERAL") {
+      for (const orgKey of Object.keys(recoveredStatuses)) {
+        recoveredStatuses[orgKey] = { status: "PENDING", by: null, time: null };
+      }
+
+      recoveredCount = 0;
+      continue;
+    }
+
+    const orgNameKey = normalizeOrgName(orgValue);
+    const matchedOrgKey = Object.keys(recoveredStatuses).find((key) => {
+      if (key === orgValue) return true;
+
+      const keyId = getOrgId(key);
+      const orgId = getOrgId(orgValue);
+
+      if (keyId && orgId && keyId === orgId) return true;
+      return normalizeOrgName(key) === orgNameKey;
+    }) || orgValue;
+
+    if (action === "CONFIRMOU") {
+      recoveredStatuses[matchedOrgKey] = {
+        status: "YES",
+        by: userId,
+        time: logTime
+      };
+
+      recoveredCount++;
+      continue;
+    }
+
+    if (action === "NEGOU") {
+      recoveredStatuses[matchedOrgKey] = {
+        status: "NO",
+        by: userId,
+        time: logTime
+      };
+
+      recoveredCount++;
+      continue;
+    }
+
+    if (action === "RESET UNITÁRIO") {
+      recoveredStatuses[matchedOrgKey] = {
+        status: "PENDING",
+        by: null,
+        time: null
+      };
+
+      continue;
+    }
+  }
+
+  if (recoveredCount <= 0) {
+    return {
+      ok: false,
+      reason: "Li os logs, mas não encontrei nenhuma confirmação/ausência válida para restaurar."
+    };
+  }
+
+  recoveredState.statuses = recoveredStatuses;
+  saveState(recoveredState);
+  await updatePanel(client);
+
+  return {
+    ok: true,
+    recoveredCount
+  };
+}
+
 // Lê o arquivo do módulo facsSemanais.js para pegar a lista atualizada
 function loadFacsSource() {
   try {
@@ -829,10 +1021,21 @@ if (interaction.isButton() && customId.startsWith("presenca_undo_")) {
   const orgKey = Buffer.from(encodedOrg, "base64").toString("utf-8");
 
   if (orgKey === "TODAS" || orgKey === "TODOS") {
-    return interaction.reply({
-      content: "⚠️ Esse log de reset geral é antigo e não possui histórico salvo. A partir desta correção, os próximos resets gerais poderão ser desfeitos corretamente.",
-      ephemeral: true
-    });
+    await interaction.deferReply({ ephemeral: true });
+
+    const recovered = await recoverStatusesFromPresenceLogs(client, interaction.message);
+
+    if (recovered.ok) {
+      return interaction.editReply(
+        `✅ Reset geral antigo desfeito lendo os logs.\n` +
+        `Foram recuperadas **${recovered.recoveredCount}** ações de presença antes do reset.`
+      );
+    }
+
+    return interaction.editReply(
+      `⚠️ Não consegui desfazer esse reset geral antigo automaticamente.\n` +
+      `Motivo: ${recovered.reason}`
+    );
   }
 
   state.statuses[orgKey] = { status: "PENDING", by: null, time: null };
