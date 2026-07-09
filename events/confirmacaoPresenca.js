@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import crypto from "node:crypto";
 import {
   EmbedBuilder,
   ActionRowBuilder,
@@ -24,6 +25,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DATA_DIR = path.resolve(__dirname, "../data");
 const PRESENCA_FILE = path.join(DATA_DIR, "confirmacao_presenca_state.json");
+const PRESENCA_UNDO_FILE = path.join(DATA_DIR, "confirmacao_presenca_undo.json");
 
 // ✅ FIX: Procura o arquivo na raiz (padrão do facsSemanais.js) ou na pasta data
 const FACS_FILE_ROOT = path.resolve(process.cwd(), "facs_semanais.json");
@@ -87,6 +89,47 @@ function loadState() {
 function saveState(data) {
   ensureDir();
   fs.writeFileSync(PRESENCA_FILE, JSON.stringify(data, null, 2));
+}
+
+function loadUndoStore() {
+  ensureDir();
+
+  try {
+    if (!fs.existsSync(PRESENCA_UNDO_FILE)) return {};
+    return JSON.parse(fs.readFileSync(PRESENCA_UNDO_FILE, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function saveUndoStore(data) {
+  ensureDir();
+  fs.writeFileSync(PRESENCA_UNDO_FILE, JSON.stringify(data, null, 2));
+}
+
+function createUndoEntry(payload) {
+  const store = loadUndoStore();
+  const token = crypto.randomUUID();
+
+  store[token] = {
+    ...payload,
+    createdAt: Date.now()
+  };
+
+  saveUndoStore(store);
+  return token;
+}
+
+function consumeUndoEntry(token) {
+  const store = loadUndoStore();
+  const entry = store[token];
+
+  if (!entry) return null;
+
+  delete store[token];
+  saveUndoStore(store);
+
+  return entry;
 }
 
 // Lê o arquivo do módulo facsSemanais.js para pegar a lista atualizada
@@ -417,7 +460,7 @@ if (newMsg) {
 }
 }
 
-async function logAction(client, interaction, action, orgName, extra = "") {
+async function logAction(client, interaction, action, orgName, extra = "", undoPayload = null) {
   const channel = LOG_CHANNEL_ID ? await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null) : null;
   if (!channel) return;
 
@@ -437,10 +480,23 @@ async function logAction(client, interaction, action, orgName, extra = "") {
 
   if (extra) embed.setDescription(extra);
 
-  // Botão para desfazer (resetar status dessa org)
+  let undoCustomId;
+
+  if (undoPayload) {
+    const token = createUndoEntry({
+      action,
+      orgName,
+      ...undoPayload
+    });
+
+    undoCustomId = `presenca_undo_v2_${token}`;
+  } else {
+    undoCustomId = `presenca_undo_${Buffer.from(orgName).toString("base64")}`;
+  }
+
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId(`presenca_undo_${Buffer.from(orgName).toString('base64')}`) // Encode org name to safe ID
+      .setCustomId(undoCustomId)
       .setLabel("↩️ Desfazer Ação")
       .setStyle(ButtonStyle.Secondary)
   );
@@ -591,6 +647,10 @@ if (alreadyConfirmedKey && alreadyConfirmedKey === orgKey && state.statuses[orgK
   );
 }
 
+const previousInfo = state.statuses[orgKey]
+  ? { ...state.statuses[orgKey] }
+  : { status: "PENDING", by: null, time: null };
+
 // Atualiza estado
 state.statuses[orgKey] = {
   status: status,
@@ -599,12 +659,16 @@ state.statuses[orgKey] = {
 };
 saveState(state);
 
-    // Atualiza painel
-    await updatePanel(client);
+// Atualiza painel
+await updatePanel(client);
 
-    // Log e Pontos
-    const actionTxt = status === "YES" ? "CONFIRMOU" : "NEGOU";
-    await logAction(client, interaction, actionTxt, orgKey);
+// Log e Pontos
+const actionTxt = status === "YES" ? "CONFIRMOU" : "NEGOU";
+await logAction(client, interaction, actionTxt, orgKey, "", {
+  type: "SET_STATUS",
+  orgKey,
+  previousInfo
+});
 
     if (status === "YES") {
       // ✅ Emite evento para pontuação (GeralDash e WeeklyRanking escutam isso)
@@ -631,16 +695,23 @@ saveState(state);
       return interaction.reply({ content: "🚫 Apenas admins podem resetar o dia.", ephemeral: true });
     }
 
-    let state = loadState();
-    state.statuses = {}; // Limpa tudo
-    state.lastResetDate = getNowSP().toISOString().slice(0, 10); // Marca como resetado hoje
-    saveState(state);
-    
-    // Re-sincroniza para trazer as orgs como PENDING
-    await updatePanel(client);
+let state = loadState();
 
-    await logAction(client, interaction, "RESET GERAL", "TODAS", "O painel foi resetado manualmente.");
-    return interaction.reply({ content: "✅ Painel resetado para o dia de hoje.", ephemeral: true });
+const previousStatuses = JSON.parse(JSON.stringify(state.statuses || {}));
+
+state.statuses = {}; // Limpa tudo
+state.lastResetDate = getNowSP().toISOString().slice(0, 10); // Marca como resetado hoje
+saveState(state);
+
+// Re-sincroniza para trazer as orgs como PENDING
+await updatePanel(client);
+
+await logAction(client, interaction, "RESET GERAL", "TODAS", "O painel foi resetado manualmente.", {
+  type: "RESET_ALL",
+  previousStatuses
+});
+
+return interaction.reply({ content: "✅ Painel resetado para o dia de hoje.", ephemeral: true });
   }
 
   // 5. Botão Admin Remover/Resetar Específico
@@ -682,34 +753,97 @@ saveState(state);
       return interaction.reply({ content: "❌ ORG não encontrada.", ephemeral: true });
     }
 
-    // Reseta para PENDING
-    state.statuses[orgKey] = { status: "PENDING", by: null, time: null };
-    saveState(state);
-    await updatePanel(client);
+const previousInfo = state.statuses[orgKey]
+  ? { ...state.statuses[orgKey] }
+  : { status: "PENDING", by: null, time: null };
 
-    await logAction(client, interaction, "RESET UNITÁRIO", orgKey);
-    return interaction.reply({ content: `✅ Status de **** resetado para Pendente.`, ephemeral: true });
+// Reseta para PENDING
+state.statuses[orgKey] = { status: "PENDING", by: null, time: null };
+saveState(state);
+await updatePanel(client);
+
+await logAction(client, interaction, "RESET UNITÁRIO", orgKey, "", {
+  type: "RESET_ONE",
+  orgKey,
+  previousInfo
+});
+
+return interaction.reply({ content: `✅ Status de **${orgKey}** resetado para Pendente.`, ephemeral: true });
   }
 
-  // 7. Botão Undo (Log)
-  if (interaction.isButton() && customId.startsWith("presenca_undo_")) {
-    if (!checkPerms(interaction.member, "ADMIN")) {
-      return interaction.reply({ content: "🚫 Apenas admins podem desfazer ações pelo log.", ephemeral: true });
+// 7. Botão Undo (Log)
+if (interaction.isButton() && customId.startsWith("presenca_undo_")) {
+  if (!checkPerms(interaction.member, "ADMIN")) {
+    return interaction.reply({ content: "🚫 Apenas admins podem desfazer ações pelo log.", ephemeral: true });
+  }
+
+  let state = loadState();
+
+  if (customId.startsWith("presenca_undo_v2_")) {
+    const token = customId.replace("presenca_undo_v2_", "");
+    const undoEntry = consumeUndoEntry(token);
+
+    if (!undoEntry) {
+      return interaction.reply({
+        content: "❌ Esse botão de desfazer já foi usado ou o histórico não existe mais.",
+        ephemeral: true
+      });
     }
 
-    const encodedOrg = customId.replace("presenca_undo_", "");
-    const orgKey = Buffer.from(encodedOrg, "base64").toString("utf-8");
-
-    let state = loadState();
-    if (state.statuses[orgKey]) {
-      state.statuses[orgKey] = { status: "PENDING", by: null, time: null };
+    if (undoEntry.type === "RESET_ALL") {
+      state.statuses = undoEntry.previousStatuses || {};
       saveState(state);
       await updatePanel(client);
-      return interaction.reply({ content: `✅ Ação desfeita. **** voltou para Pendente.`, ephemeral: true });
-    } else {
-      return interaction.reply({ content: "❌ Essa ORG não está mais na lista ativa.", ephemeral: true });
+
+      return interaction.reply({
+        content: "✅ Reset geral desfeito. O painel voltou para o estado anterior.",
+        ephemeral: true
+      });
     }
+
+    if (undoEntry.type === "SET_STATUS" || undoEntry.type === "RESET_ONE") {
+      const orgKey = undoEntry.orgKey || undoEntry.orgName;
+
+      state.statuses[orgKey] = undoEntry.previousInfo || {
+        status: "PENDING",
+        by: null,
+        time: null
+      };
+
+      saveState(state);
+      await updatePanel(client);
+
+      return interaction.reply({
+        content: `✅ Ação desfeita. **${orgKey}** voltou para o estado anterior.`,
+        ephemeral: true
+      });
+    }
+
+    return interaction.reply({
+      content: "❌ Tipo de desfazer desconhecido.",
+      ephemeral: true
+    });
   }
+
+  const encodedOrg = customId.replace("presenca_undo_", "");
+  const orgKey = Buffer.from(encodedOrg, "base64").toString("utf-8");
+
+  if (orgKey === "TODAS" || orgKey === "TODOS") {
+    return interaction.reply({
+      content: "⚠️ Esse log de reset geral é antigo e não possui histórico salvo. A partir desta correção, os próximos resets gerais poderão ser desfeitos corretamente.",
+      ephemeral: true
+    });
+  }
+
+  state.statuses[orgKey] = { status: "PENDING", by: null, time: null };
+  saveState(state);
+  await updatePanel(client);
+
+  return interaction.reply({
+    content: `✅ Ação desfeita. **${orgKey}** voltou para Pendente.`,
+    ephemeral: true
+  });
+}
 
   // 8. Botão Toggle Window (Admin)
   if (interaction.isButton() && customId === "presenca_toggle_window") {
