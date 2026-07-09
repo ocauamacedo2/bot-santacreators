@@ -887,23 +887,67 @@ await logAction(client, interaction, actionTxt, orgKey, "", {
       return interaction.reply({ content: "🚫 Apenas admins podem resetar o dia.", ephemeral: true });
     }
 
-let state = loadState();
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId("presenca_admin_reset_confirmar")
+        .setLabel("✅ Sim, resetar o dia")
+        .setStyle(ButtonStyle.Danger),
+      new ButtonBuilder()
+        .setCustomId("presenca_admin_reset_cancelar")
+        .setLabel("❌ Cancelar")
+        .setStyle(ButtonStyle.Secondary)
+    );
 
-const previousStatuses = JSON.parse(JSON.stringify(state.statuses || {}));
+    return interaction.reply({
+      content:
+        "⚠️ **Confirmação necessária**\n\n" +
+        "Você tem certeza que deseja **resetar todas as presenças do dia**?\n" +
+        "Essa ação vai deixar todas as organizações como **pendentes**.",
+      components: [row],
+      ephemeral: true
+    });
+  }
 
-state.statuses = {}; // Limpa tudo
-state.lastResetDate = getNowSP().toISOString().slice(0, 10); // Marca como resetado hoje
-saveState(state);
+  // 4.1. Confirmar Reset Dia
+  if (interaction.isButton() && customId === "presenca_admin_reset_confirmar") {
+    if (!checkPerms(interaction.member, "ADMIN")) {
+      return interaction.reply({ content: "🚫 Apenas admins podem confirmar o reset do dia.", ephemeral: true });
+    }
 
-// Re-sincroniza para trazer as orgs como PENDING
-await updatePanel(client);
+    await interaction.deferUpdate();
 
-await logAction(client, interaction, "RESET GERAL", "TODAS", "O painel foi resetado manualmente.", {
-  type: "RESET_ALL",
-  previousStatuses
-});
+    let state = loadState();
 
-return interaction.reply({ content: "✅ Painel resetado para o dia de hoje.", ephemeral: true });
+    const previousStatuses = JSON.parse(JSON.stringify(state.statuses || {}));
+
+    state.statuses = {}; // Limpa tudo
+    state.lastResetDate = getNowSP().toISOString().slice(0, 10); // Marca como resetado hoje
+    saveState(state);
+
+    // Re-sincroniza para trazer as orgs como PENDING
+    await updatePanel(client);
+
+    await logAction(client, interaction, "RESET GERAL", "TODAS", "O painel foi resetado manualmente.", {
+      type: "RESET_ALL",
+      previousStatuses
+    });
+
+    return interaction.editReply({
+      content: "✅ Painel resetado para o dia de hoje.",
+      components: []
+    });
+  }
+
+  // 4.2. Cancelar Reset Dia
+  if (interaction.isButton() && customId === "presenca_admin_reset_cancelar") {
+    if (!checkPerms(interaction.member, "ADMIN")) {
+      return interaction.reply({ content: "🚫 Apenas admins podem cancelar essa ação.", ephemeral: true });
+    }
+
+    return interaction.update({
+      content: "❌ Reset cancelado. Nenhuma presença foi alterada.",
+      components: []
+    });
   }
 
   // 5. Botão Admin Remover/Resetar Específico
