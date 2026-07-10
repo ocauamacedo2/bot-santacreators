@@ -483,13 +483,64 @@ function getMessageText(message) {
   return pieces.join('\n');
 }
 
+function isNativeDiscordJoinMessage(
+  message,
+) {
+  if (!message) {
+    return false;
+  }
+
+  /*
+   * No discord.js v14, o tipo 7 representa a mensagem
+   * automática de entrada de usuário no servidor.
+   *
+   * Também utilizamos message.system como confirmação adicional.
+   */
+
+  const isUserJoinType =
+    message.type === 7;
+
+  const isSystemMessage =
+    message.system === true;
+
+  const isRealUser =
+    Boolean(
+      message.author?.id,
+    ) &&
+    message.author?.bot !== true;
+
+  return (
+    isUserJoinType &&
+    isSystemMessage &&
+    isRealUser
+  );
+}
+
 function extractUserIdFromMessage(
   message,
 ) {
   /*
-   * 1. Primeiro procura nos campos que realmente representam o usuário.
-   * Isso impede que o ID do servidor, executor ou convite seja contado
-   * como se fosse o ID do membro.
+   * MÉTODO 1:
+   * Mensagem nativa de entrada criada pelo próprio Discord.
+   *
+   * Nesse tipo de mensagem, o usuário correto é o autor da
+   * mensagem de sistema.
+   */
+
+  if (
+    isNativeDiscordJoinMessage(
+      message,
+    )
+  ) {
+    return (
+      message.author?.id ||
+      null
+    );
+  }
+
+  /*
+   * MÉTODO 2:
+   * Procura em campos específicos de usuário nos embeds.
    */
 
   for (
@@ -506,7 +557,9 @@ function extractUserIdFromMessage(
             String(
               field.name ||
               '',
-            ).toLowerCase();
+            )
+              .toLowerCase()
+              .trim();
 
           return (
             fieldName.includes(
@@ -529,20 +582,33 @@ function extractUserIdFromMessage(
       const field
       of userFields
     ) {
-      const mentionMatch =
-        /<@!?(\d{16,22})>/.exec(
+      const fieldValue =
+        String(
           field.value ||
           '',
+        );
+
+      const mentionMatch =
+        /<@!?(\d{16,22})>/.exec(
+          fieldValue,
         );
 
       if (mentionMatch) {
         return mentionMatch[1];
       }
 
+      const explicitUserIdMatch =
+        /(?:ID(?:\s+do)?\s+usu[aá]rio|usu[aá]rio\s*ID)\D{0,50}(\d{16,22})/i.exec(
+          fieldValue,
+        );
+
+      if (explicitUserIdMatch) {
+        return explicitUserIdMatch[1];
+      }
+
       const rawIdMatch =
         /\b(\d{16,22})\b/.exec(
-          field.value ||
-          '',
+          fieldValue,
         );
 
       if (rawIdMatch) {
@@ -552,7 +618,8 @@ function extractUserIdFromMessage(
   }
 
   /*
-   * 2. Depois procura na descrição do embed.
+   * MÉTODO 3:
+   * Procura na descrição dos embeds.
    */
 
   for (
@@ -565,6 +632,15 @@ function extractUserIdFromMessage(
         '',
       );
 
+    const explicitUserIdMatch =
+      /(?:ID(?:\s+do)?\s+usu[aá]rio|usu[aá]rio\s*ID)\D{0,50}(\d{16,22})/i.exec(
+        description,
+      );
+
+    if (explicitUserIdMatch) {
+      return explicitUserIdMatch[1];
+    }
+
     const mentionMatch =
       /<@!?(\d{16,22})>/.exec(
         description,
@@ -573,19 +649,11 @@ function extractUserIdFromMessage(
     if (mentionMatch) {
       return mentionMatch[1];
     }
-
-    const explicitIdMatch =
-      /(?:ID(?:\s+do)?\s+usu[aá]rio|usu[aá]rio\s*ID)\D{0,40}(\d{16,22})/i.exec(
-        description,
-      );
-
-    if (explicitIdMatch) {
-      return explicitIdMatch[1];
-    }
   }
 
   /*
-   * 3. Depois procura no conteúdo normal da mensagem.
+   * MÉTODO 4:
+   * Procura no conteúdo normal da mensagem.
    */
 
   const content =
@@ -603,8 +671,18 @@ function extractUserIdFromMessage(
     return contentMention[1];
   }
 
+  const explicitContentId =
+    /(?:ID(?:\s+do)?\s+usu[aá]rio|usu[aá]rio\s*ID)\D{0,50}(\d{16,22})/i.exec(
+      content,
+    );
+
+  if (explicitContentId) {
+    return explicitContentId[1];
+  }
+
   /*
-   * 4. Último fallback: usa o texto completo.
+   * MÉTODO 5:
+   * Último fallback utilizando todo o texto disponível.
    */
 
   return extractUserId(
@@ -1090,6 +1168,22 @@ async function getTextChannel(
     return null;
   }
 
+  /*
+   * Impede analisar um canal pertencente a outro servidor.
+   */
+
+  if (
+    channel.guildId &&
+    channel.guildId !==
+      GUILD_ID
+  ) {
+    console.warn(
+      `[MEMBER_FLOW] Canal ${channelId} ignorado porque pertence à guild ${channel.guildId}.`,
+    );
+
+    return null;
+  }
+
   return channel;
 }
 
@@ -1097,6 +1191,23 @@ function parseHistoryMessage(
   message,
   expectedKind,
 ) {
+  if (!message) {
+    return null;
+  }
+
+  /*
+   * Segurança adicional:
+   * somente mensagens que pertencem à guild principal.
+   */
+
+  if (
+    message.guildId &&
+    message.guildId !==
+      GUILD_ID
+  ) {
+    return null;
+  }
+
   const completeText =
     getMessageText(
       message,
@@ -1106,15 +1217,21 @@ function parseHistoryMessage(
     String(
       completeText ||
       '',
-    ).toLowerCase();
+    )
+      .toLowerCase()
+      .trim();
+
+  const nativeDiscordJoin =
+    isNativeDiscordJoinMessage(
+      message,
+    );
 
   /*
-   * Confirma se a mensagem realmente representa uma entrada ou saída.
-   * Não usa somente o fallback, porque isso poderia transformar qualquer
-   * mensagem comum em uma entrada ou saída.
+   * Detectores para logs de entrada.
    */
 
   const hasEntryText =
+    nativeDiscordJoin ||
     normalizedText.includes(
       'entrou no servidor',
     ) ||
@@ -1138,7 +1255,17 @@ function parseHistoryMessage(
     ) ||
     normalizedText.includes(
       'caiu de paraquedas',
+    ) ||
+    normalizedText.includes(
+      'chegou',
+    ) ||
+    normalizedText.includes(
+      'acabou de aterrissar',
     );
+
+  /*
+   * Detectores para logs de saída.
+   */
 
   const hasExitText =
     normalizedText.includes(
@@ -1161,6 +1288,12 @@ function parseHistoryMessage(
     ) ||
     normalizedText.includes(
       'foi banida',
+    ) ||
+    normalizedText.includes(
+      'membro removido',
+    ) ||
+    normalizedText.includes(
+      'member remove',
     );
 
   if (
@@ -1178,13 +1311,15 @@ function parseHistoryMessage(
   }
 
   const eventType =
-    detectEventType(
-      completeText,
+    nativeDiscordJoin
+      ? 'join'
+      : detectEventType(
+          completeText,
 
-      expectedKind === 'entry'
-        ? 'join'
-        : 'leave',
-    );
+          expectedKind === 'entry'
+            ? 'join'
+            : 'leave',
+        );
 
   const userId =
     extractUserIdFromMessage(
@@ -1203,8 +1338,8 @@ function parseHistoryMessage(
   }
 
   /*
-   * Procura o ID do servidor apenas em campos cujo nome representa
-   * realmente o servidor. Isso evita capturar o ID do usuário.
+   * Se for um embed de log, tenta confirmar a guild dentro
+   * dos campos do embed.
    */
 
   let loggedGuildId =
@@ -1222,27 +1357,34 @@ function parseHistoryMessage(
         String(
           field.name ||
           '',
-        ).toLowerCase();
+        )
+          .toLowerCase()
+          .trim();
 
-      if (
-        fieldName === '🏠 servidor' ||
-        fieldName === 'servidor' ||
+      const isGuildField =
+        fieldName ===
+          '🏠 servidor' ||
+        fieldName ===
+          'servidor' ||
         fieldName.includes(
           'id do servidor',
-        )
-      ) {
-        const guildIdMatch =
-          /\b(\d{16,22})\b/.exec(
-            field.value ||
-            '',
-          );
+        );
 
-        if (guildIdMatch) {
-          loggedGuildId =
-            guildIdMatch[1];
+      if (!isGuildField) {
+        continue;
+      }
 
-          break;
-        }
+      const guildIdMatch =
+        /\b(\d{16,22})\b/.exec(
+          field.value ||
+          '',
+        );
+
+      if (guildIdMatch) {
+        loggedGuildId =
+          guildIdMatch[1];
+
+        break;
       }
     }
 
@@ -1268,6 +1410,21 @@ function parseHistoryMessage(
   let executorId =
     null;
 
+  /*
+   * Para mensagem nativa, o nome vem diretamente do autor.
+   */
+
+  if (nativeDiscordJoin) {
+    displayName =
+      message.author?.globalName ||
+      message.author?.username ||
+      null;
+  }
+
+  /*
+   * Para embeds, coleta nome, motivo e executor.
+   */
+
   for (
     const embed
     of message.embeds || []
@@ -1280,7 +1437,9 @@ function parseHistoryMessage(
         String(
           field.name ||
           '',
-        ).toLowerCase();
+        )
+          .toLowerCase()
+          .trim();
 
       if (
         fieldName.includes(
@@ -1295,7 +1454,7 @@ function parseHistoryMessage(
             field.value ||
             '',
           ).trim() ||
-          null;
+          displayName;
       }
 
       if (
@@ -1340,10 +1499,13 @@ function parseHistoryMessage(
       eventType,
 
     occurredAt:
-      message.createdAt,
+      message.createdAt ||
+      new Date(),
 
     source:
-      'log_channel',
+      nativeDiscordJoin
+        ? 'system_message'
+        : 'log_channel',
 
     sourceChannelId:
       message.channelId,
@@ -1378,7 +1540,10 @@ async function importChannelHistory(
 
     return {
       scanned: 0,
+      recognized: 0,
       imported: 0,
+      duplicated: 0,
+      ignored: 0,
     };
   }
 
@@ -1386,7 +1551,13 @@ async function importChannelHistory(
 
   let scanned = 0;
 
+  let recognized = 0;
+
   let imported = 0;
+
+  let duplicated = 0;
+
+  let ignored = 0;
 
   while (true) {
     const page =
@@ -1401,7 +1572,16 @@ async function importChannelHistory(
               }
             : {}
         ),
-      }).catch(() => null);
+      }).catch(
+        (error) => {
+          console.error(
+            `[MEMBER_FLOW] Erro ao ler o canal ${channelId}:`,
+            error,
+          );
+
+          return null;
+        },
+      );
 
     if (
       !page ||
@@ -1444,8 +1624,12 @@ async function importChannelHistory(
         );
 
       if (!parsed) {
+        ignored += 1;
+
         continue;
       }
+
+      recognized += 1;
 
       const inserted =
         await saveMemberEvent(
@@ -1454,6 +1638,8 @@ async function importChannelHistory(
 
       if (inserted) {
         imported += 1;
+      } else {
+        duplicated += 1;
       }
     }
 
@@ -1475,12 +1661,24 @@ async function importChannelHistory(
   }
 
   console.log(
-    `[MEMBER_FLOW] Canal ${channelId} | tipo: ${expectedKind} | mensagens analisadas: ${scanned} | registros importados: ${imported}`,
+    [
+      '[MEMBER_FLOW]',
+      `Canal: ${channelId}`,
+      `Tipo: ${expectedKind}`,
+      `Analisadas: ${scanned}`,
+      `Reconhecidas: ${recognized}`,
+      `Importadas: ${imported}`,
+      `Duplicadas: ${duplicated}`,
+      `Ignoradas: ${ignored}`,
+    ].join(' | '),
   );
 
   return {
     scanned,
+    recognized,
     imported,
+    duplicated,
+    ignored,
   };
 }
 
@@ -2392,15 +2590,28 @@ async function createMonthPayload(
   selectedMonthKey,
   extraFooter = null,
 ) {
-  const metrics =
-    await getMonthMetrics(
-      selectedMonthKey,
-    );
+  /*
+   * Carrega simultaneamente:
+   * - dados do mês selecionado;
+   * - dados totais;
+   * - gráfico.
+   */
 
-  const chartUrl =
-    await createChartUrl(
+  const [
+    metrics,
+    total,
+    chartUrl,
+  ] = await Promise.all([
+    getMonthMetrics(
       selectedMonthKey,
-    );
+    ),
+
+    getAllTimeMetrics(),
+
+    createChartUrl(
+      selectedMonthKey,
+    ),
+  ]);
 
   const current =
     metrics.current;
@@ -2411,62 +2622,84 @@ async function createMonthPayload(
   const positiveBalance =
     current.netBalance >= 0;
 
-  const summaryEmbed =
+  const firstRecordText =
+    total.firstRecord
+      ? `<t:${Math.floor(
+          new Date(
+            total.firstRecord,
+          ).getTime() / 1000,
+        )}:D>`
+      : 'Nenhum registro';
+
+  const lastRecordText =
+    total.lastRecord
+      ? `<t:${Math.floor(
+          new Date(
+            total.lastRecord,
+          ).getTime() / 1000,
+        )}:R>`
+      : 'Nenhum registro';
+
+  /*
+   * FAIXA SUPERIOR.
+   */
+
+  const bannerEmbed =
+    new EmbedBuilder()
+      .setColor(
+        '#ff009a',
+      )
+
+      .setTitle(
+        '🌸 SANTACREATORS • MOVIMENTO DE MEMBROS',
+      )
+
+      .setDescription(
+        [
+          '```',
+          `PERÍODO: ${getMonthLabel(selectedMonthKey).toUpperCase()}`,
+          `SALDO DO MÊS: ${positiveBalance ? '+' : ''}${formatNumber(current.netBalance)}`,
+          `TOTAL HISTÓRICO: ${formatNumber(total.uniqueJoinUsers)} PESSOAS ÚNICAS`,
+          '```',
+          'Relatório consolidado com entradas nativas do Discord, logs de bots e eventos capturados em tempo real.',
+        ].join('\n'),
+      );
+
+  /*
+   * DADOS DO MÊS.
+   */
+
+  const monthEmbed =
     new EmbedBuilder()
       .setColor(
         DASHBOARD_COLOR,
       )
 
-      .setAuthor({
-        name:
-          'SantaCreators • Movimento de membros',
-      })
-
       .setTitle(
-        `📊 Relatório de ${getMonthLabel(selectedMonthKey)}`,
+        `📅 Dados de ${getMonthLabel(selectedMonthKey)}`,
       )
 
       .setDescription(
         [
-          `🏠 **Servidor analisado**`,
-          `\`${GUILD_ID}\``,
-
+          `**Servidor analisado:** \`${GUILD_ID}\``,
           '',
-
-          `📅 **Período atual**`,
-          `${getMonthLabel(selectedMonthKey)}`,
-
+          `**Comparação utilizada:** ${getMonthLabel(metrics.previousMonthKey)}`,
           '',
-
-          `🆚 **Comparado com**`,
-          `${getMonthLabel(metrics.previousMonthKey)}`,
-
-          '',
-
-          `${positiveBalance ? '📈' : '📉'} **Saldo do mês**`,
-          `**${positiveBalance ? '+' : ''}${formatNumber(current.netBalance)} membros**`,
+          `${positiveBalance ? '📈' : '📉'} **Saldo mensal:** ` +
+            `**${positiveBalance ? '+' : ''}${formatNumber(current.netBalance)} membros**`,
         ].join('\n'),
       )
 
       .addFields(
         {
           name:
-            '━━━━━━━━━━━━━━━━━━━━━━',
-          value:
-            '**RESUMO PRINCIPAL**',
-          inline:
-            false,
-        },
-
-        {
-          name:
-            '📥 Entradas',
+            '📥 ENTRADAS DO MÊS',
 
           value:
             [
-              `**Total registrado:** ${formatNumber(current.joins)}`,
-              `**Pessoas únicas:** ${formatNumber(current.uniqueJoinUsers)}`,
-              `**Diferença para o mês anterior:** ${formatComparison(current.joins, previous.joins)}`,
+              `> **Eventos registrados:** ${formatNumber(current.joins)}`,
+              `> **Pessoas únicas:** ${formatNumber(current.uniqueJoinUsers)}`,
+              `> **Comparativo:** ${formatComparison(current.joins, previous.joins)}`,
             ].join('\n'),
 
           inline:
@@ -2475,13 +2708,13 @@ async function createMonthPayload(
 
         {
           name:
-            '📤 Saídas',
+            '📤 SAÍDAS DO MÊS',
 
           value:
             [
-              `**Total registrado:** ${formatNumber(current.exits)}`,
-              `**Pessoas únicas:** ${formatNumber(current.uniqueExitUsers)}`,
-              `**Diferença para o mês anterior:** ${formatComparison(current.exits, previous.exits)}`,
+              `> **Eventos registrados:** ${formatNumber(current.exits)}`,
+              `> **Pessoas únicas:** ${formatNumber(current.uniqueExitUsers)}`,
+              `> **Comparativo:** ${formatComparison(current.exits, previous.exits)}`,
             ].join('\n'),
 
           inline:
@@ -2490,15 +2723,15 @@ async function createMonthPayload(
 
         {
           name:
-            '🔁 Retornos',
+            '🔁 RETORNOS DO MÊS',
 
           value:
             [
-              `**Retornos registrados:** ${formatNumber(current.returnEvents)}`,
-              `**Pessoas que retornaram:** ${formatNumber(current.returnedUsers)}`,
-              `**Taxa de retorno:** ${formatPercent(current.returnRate)}`,
-              `**Taxa no mês anterior:** ${formatPercent(previous.returnRate)}`,
-              `**Diferença de retornos:** ${formatComparison(current.returnEvents, previous.returnEvents)}`,
+              `> **Retornos registrados:** ${formatNumber(current.returnEvents)}`,
+              `> **Pessoas que retornaram:** ${formatNumber(current.returnedUsers)}`,
+              `> **Taxa de retorno:** ${formatPercent(current.returnRate)}`,
+              `> **Taxa do mês anterior:** ${formatPercent(previous.returnRate)}`,
+              `> **Comparativo:** ${formatComparison(current.returnEvents, previous.returnEvents)}`,
             ].join('\n'),
 
           inline:
@@ -2506,30 +2739,106 @@ async function createMonthPayload(
         },
       );
 
-  const detailsEmbed =
+  /*
+   * TOTAL HISTÓRICO SEMPRE VISÍVEL.
+   */
+
+  const totalEmbed =
+    new EmbedBuilder()
+      .setColor(
+        '#39d98a',
+      )
+
+      .setTitle(
+        '🌍 Total histórico desde os primeiros logs encontrados',
+      )
+
+      .setDescription(
+        [
+          `**Primeiro registro:** ${firstRecordText}`,
+          `**Registro mais recente:** ${lastRecordText}`,
+          '',
+          'Os números abaixo consideram todos os meses encontrados.',
+        ].join('\n'),
+      )
+
+      .addFields(
+        {
+          name:
+            '👥 PESSOAS ÚNICAS QUE JÁ ENTRARAM',
+
+          value:
+            `> **${formatNumber(total.uniqueJoinUsers)} pessoas**`,
+
+          inline:
+            false,
+        },
+
+        {
+          name:
+            '📥 TOTAL DE ENTRADAS REGISTRADAS',
+
+          value:
+            `> **${formatNumber(total.joins)} entradas**`,
+
+          inline:
+            false,
+        },
+
+        {
+          name:
+            '📤 TOTAL DE SAÍDAS REGISTRADAS',
+
+          value:
+            [
+              `> **Todas as saídas:** ${formatNumber(total.exits)}`,
+              `> **Pessoas únicas que saíram:** ${formatNumber(total.uniqueExitUsers)}`,
+            ].join('\n'),
+
+          inline:
+            false,
+        },
+
+        {
+          name:
+            '🔁 TOTAL DE PESSOAS QUE RETORNARAM',
+
+          value:
+            [
+              `> **Pessoas que retornaram:** ${formatNumber(total.returnedUsers)}`,
+              `> **Taxa histórica de retorno:** ${formatPercent(total.returnRate)}`,
+            ].join('\n'),
+
+          inline:
+            false,
+        },
+      );
+
+  /*
+   * DETALHAMENTO DAS SAÍDAS.
+   */
+
+  const exitsEmbed =
     new EmbedBuilder()
       .setColor(
         '#9b8cff',
       )
 
       .setTitle(
-        '📋 Detalhamento das saídas',
-      )
-
-      .setDescription(
-        'Separação das saídas detectadas pelo bot durante o período escolhido.',
+        '🚪 Detalhamento das saídas',
       )
 
       .addFields(
         {
           name:
-            '⛔ Banimentos',
+            '⛔ BANIMENTOS',
 
           value:
             [
-              `**Banimentos no mês:** ${formatNumber(current.bans)}`,
-              `**Percentual entre as saídas:** ${formatPercent(current.banRate)}`,
-              `**Banimentos no mês anterior:** ${formatNumber(previous.bans)}`,
+              `> **Neste mês:** ${formatNumber(current.bans)}`,
+              `> **Mês anterior:** ${formatNumber(previous.bans)}`,
+              `> **Percentual das saídas:** ${formatPercent(current.banRate)}`,
+              `> **Total histórico:** ${formatNumber(total.bans)}`,
             ].join('\n'),
 
           inline:
@@ -2538,12 +2847,13 @@ async function createMonthPayload(
 
         {
           name:
-            '🥾 Expulsões',
+            '🥾 EXPULSÕES',
 
           value:
             [
-              `**Expulsões no mês:** ${formatNumber(current.kicks)}`,
-              `**Expulsões no mês anterior:** ${formatNumber(previous.kicks)}`,
+              `> **Neste mês:** ${formatNumber(current.kicks)}`,
+              `> **Mês anterior:** ${formatNumber(previous.kicks)}`,
+              `> **Total histórico:** ${formatNumber(total.kicks)}`,
             ].join('\n'),
 
           inline:
@@ -2552,18 +2862,23 @@ async function createMonthPayload(
 
         {
           name:
-            '🚪 Saídas comuns',
+            '🚶 SAÍDAS COMUNS',
 
           value:
             [
-              `**Saídas comuns no mês:** ${formatNumber(current.leaves)}`,
-              `**Saídas comuns no mês anterior:** ${formatNumber(previous.leaves)}`,
+              `> **Neste mês:** ${formatNumber(current.leaves)}`,
+              `> **Mês anterior:** ${formatNumber(previous.leaves)}`,
+              `> **Total histórico:** ${formatNumber(total.leaves)}`,
             ].join('\n'),
 
           inline:
             false,
         },
       );
+
+  /*
+   * GRÁFICO.
+   */
 
   const chartEmbed =
     new EmbedBuilder()
@@ -2572,16 +2887,18 @@ async function createMonthPayload(
       )
 
       .setTitle(
-        '📈 Histórico dos últimos 6 meses',
+        '📈 Comparativo dos últimos 6 meses',
       )
 
       .setDescription(
         [
+          '**Legenda do gráfico**',
+          '',
           '🟩 Entradas',
           '🟥 Saídas',
           '🟪 Retornos',
           '🟧 Banimentos',
-        ].join(' • '),
+        ].join('\n'),
       )
 
       .setImage(
@@ -2594,7 +2911,7 @@ async function createMonthPayload(
 
           historyImportRunning
             ? 'importação histórica em andamento'
-            : null,
+            : 'histórico sincronizado',
 
           extraFooter,
         ]
@@ -2606,8 +2923,10 @@ async function createMonthPayload(
 
   return {
     embeds: [
-      summaryEmbed,
-      detailsEmbed,
+      bannerEmbed,
+      monthEmbed,
+      totalEmbed,
+      exitsEmbed,
       chartEmbed,
     ],
 
@@ -3309,8 +3628,34 @@ export async function memberFlowHandleMessage(
 
     const importMessage =
       await message.reply(
-        '⏳ Iniciando uma nova leitura completa dos canais de entrada e saída...',
+        '⏳ Limpando importações antigas e iniciando uma nova leitura completa...',
       );
+
+    /*
+     * Apaga somente registros vindos dos canais.
+     *
+     * Não apaga:
+     * - entradas capturadas ao vivo;
+     * - saídas capturadas ao vivo;
+     * - kicks e bans capturados pelo audit log.
+     */
+
+    const cleanupResult =
+      await MemberFlowEvent.deleteMany({
+        guildId:
+          GUILD_ID,
+
+        source: {
+          $in: [
+            'log_channel',
+            'system_message',
+          ],
+        },
+      });
+
+    console.log(
+      `[MEMBER_FLOW] Registros antigos importados removidos: ${cleanupResult.deletedCount || 0}`,
+    );
 
     await MemberFlowState.updateOne(
       {
@@ -3337,8 +3682,20 @@ export async function memberFlowHandleMessage(
     )
       .then(
         async () => {
+          const totalAfterImport =
+            await getAllTimeMetrics();
+
           await importMessage.edit(
-            `✅ Importação completa finalizada. Painel atualizado em <#${DASHBOARD_CHANNEL_ID}>.`,
+            [
+              '✅ **Importação completa finalizada!**',
+              '',
+              `👥 Pessoas únicas encontradas: **${formatNumber(totalAfterImport.uniqueJoinUsers)}**`,
+              `📥 Entradas encontradas: **${formatNumber(totalAfterImport.joins)}**`,
+              `📤 Saídas encontradas: **${formatNumber(totalAfterImport.exits)}**`,
+              `🔁 Pessoas que retornaram: **${formatNumber(totalAfterImport.returnedUsers)}**`,
+              '',
+              `📊 Painel atualizado em <#${DASHBOARD_CHANNEL_ID}>.`,
+            ].join('\n'),
           ).catch(() => {});
         },
       )
