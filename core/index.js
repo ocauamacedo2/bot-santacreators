@@ -452,6 +452,15 @@ import { installServerConfigGuardian } from "../events/serverConfigGuardian.js";
 import { installOrgTicketAccessSync } from "../events/orgTicketAccessSync.js";
 import { recriarTicketsHandleMessage } from "../events/ticketRecreator.js";
 
+// Dashboard de entradas, saídas, retornos e banimentos
+import {
+  memberFlowDashboardOnReady,
+  memberFlowHandleGuildMemberAdd,
+  memberFlowHandleGuildMemberRemove,
+  memberFlowHandleInteraction,
+  memberFlowHandleMessage,
+} from "../events/memberFlowDashboard.js";
+
 // =====================================================
 // Express + Mongo
 // =====================================================
@@ -630,6 +639,9 @@ const setupEventHandlers = () => {
         // ✅ Cadastro Manual: comando !semwl precisa passar antes do roteador central
         if (await cadastroManualHandleMessage(message, client)) return;
 
+        // ✅ Dashboard de membros: comandos precisam passar antes do roteador central
+        if (await memberFlowHandleMessage(message, client)) return;
+
 // ✅ Dashboard ORGs — Managers
 // Comandos: !graficomanagers, !gm, !recriargm, !recriargraficomanagers
 // Precisa vir ANTES do roteador central para não ser engolido por outro handler.
@@ -735,6 +747,12 @@ if (await recriarTicketsHandleMessage(message, client, Transcript)) return;
 
   client.on("guildMemberAdd", async (m) => {
     try {
+      await memberFlowHandleGuildMemberAdd(m);
+    } catch (e) {
+      console.error("[CORE] erro em memberFlowHandleGuildMemberAdd:", e);
+    }
+
+    try {
       await autoRoleOnJoin(m);
     } catch (e) {
       console.error("[CORE] erro em autoRoleOnJoin:", e);
@@ -752,6 +770,12 @@ if (await recriarTicketsHandleMessage(message, client, Transcript)) return;
   });
 
   client.on("guildMemberRemove", async (m) => {
+    try {
+      await memberFlowHandleGuildMemberRemove(m);
+    } catch (e) {
+      console.error("[CORE] erro em memberFlowHandleGuildMemberRemove:", e);
+    }
+
     try {
       await saidaHandler.execute(m);
     } catch (e) {}
@@ -785,6 +809,9 @@ client.on("interactionCreate", async (interaction) => {
 
   try {
 if (await eventosChecklistNotifierOnInteraction(interaction, client)) return;
+
+// ✅ Dashboard de membros: botões e modal do histórico mensal
+if (await memberFlowHandleInteraction(interaction, client)) return;
 
 // ✅ PRIORIDADE ALTA: botões/modais do Pagamento Social
 // Isso garante que "Atualizar Dashboard", "PAGO", "REPROVADO" e "SOLICITADO"
@@ -887,6 +914,14 @@ client.once("ready", async () => {
     console.log("[CORE] FiveM Retention Status iniciado com prioridade.");
   } catch (e) {
     console.error("[FIVEM_RETENTION] Falha ao iniciar com prioridade no Ready:", e);
+  }
+
+  try {
+    console.log("[CORE] PRIORIDADE: iniciando Dashboard de Membros.");
+    await memberFlowDashboardOnReady(client);
+    console.log("[CORE] Dashboard de Membros iniciado.");
+  } catch (e) {
+    console.error("[MEMBER_FLOW] Falha ao iniciar no Ready:", e);
   }
 
   try {
