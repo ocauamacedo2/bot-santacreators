@@ -432,35 +432,379 @@ function parseValorOCR(texto) {
     .replace(/R\$\s+/gi, "R$ ")
     .replace(/\bValor\b\s*[:\-]?\s*/gi, "Valor: ");
 
-  const matches = [
-    ...t.matchAll(/R\$\s*([0-9]{1,3}(?:[.\s][0-9]{3})+(?:,[0-9]{2})?|[0-9]{4,12}(?:,[0-9]{2})?)/gi),
-    ...t.matchAll(/\bValor\s*[:\-]?\s*([0-9]{1,3}(?:[.\s][0-9]{3})+(?:,[0-9]{2})?|[0-9]{4,12}(?:,[0-9]{2})?)/gi),
-    ...t.matchAll(/\bPronto[\s\S]{0,180}?([0-9]{1,3}(?:[.\s][0-9]{3})+(?:,[0-9]{2})?|[0-9]{4,12}(?:,[0-9]{2})?)/gi),
-    ...t.matchAll(/\bTransfer[eê]ncia[\s\S]{0,220}?([0-9]{1,3}(?:[.\s][0-9]{3})+(?:,[0-9]{2})?|[0-9]{4,12}(?:,[0-9]{2})?)/gi),
-    ...t.matchAll(/\b([0-9]{1,3}(?:[.\s][0-9]{3}){2,}(?:,[0-9]{2})?)\b/gi),
+  const PADRAO_NUMERO =
+    String.raw`[0-9]{1,3}(?:[.\s][0-9]{3})+(?:,[0-9]{1,2})?|[0-9]{4,15}(?:,[0-9]{1,2})?`;
+
+  const candidatos = [];
+
+  function normalizarCandidatoValor(rawOriginal) {
+    let bruto = String(rawOriginal || "")
+      .trim()
+      .replace(/[Oo]/g, "0")
+      .replace(/\s+/g, ".")
+      .replace(/[^\d.,]/g, "")
+      .replace(/\.{2,}/g, ".");
+
+    bruto = bruto
+      .replace(/^[.,]+/, "")
+      .replace(/[.,]+$/, "");
+
+    if (!bruto) return null;
+
+    const temPonto = bruto.includes(".");
+    const temVirgula = bruto.includes(",");
+
+    let parteInteira = bruto;
+    let parteDecimal = "";
+
+    if (temPonto && temVirgula) {
+      const ultimoPonto = bruto.lastIndexOf(".");
+      const ultimaVirgula = bruto.lastIndexOf(",");
+
+      if (ultimaVirgula > ultimoPonto) {
+        parteInteira = bruto
+          .slice(0, ultimaVirgula)
+          .replace(/\./g, "")
+          .replace(/,/g, "");
+
+        parteDecimal = bruto
+          .slice(ultimaVirgula + 1)
+          .replace(/\D/g, "")
+          .slice(0, 2);
+      } else {
+        parteInteira = bruto
+          .slice(0, ultimoPonto)
+          .replace(/[.,]/g, "");
+
+        const possivelDecimal = bruto
+          .slice(ultimoPonto + 1)
+          .replace(/\D/g, "");
+
+        if (possivelDecimal.length <= 2) {
+          parteDecimal = possivelDecimal;
+        } else {
+          parteInteira = bruto.replace(/[.,]/g, "");
+        }
+      }
+    } else if (temVirgula) {
+      const partes = bruto.split(",");
+
+      if (
+        partes.length === 2 &&
+        partes[1].length >= 1 &&
+        partes[1].length <= 2
+      ) {
+        parteInteira = partes[0].replace(/\D/g, "");
+        parteDecimal = partes[1].replace(/\D/g, "").slice(0, 2);
+      } else {
+        parteInteira = bruto.replace(/,/g, "").replace(/\D/g, "");
+      }
+    } else if (temPonto) {
+      const grupos = bruto.split(".").filter(Boolean);
+      const todosMilhares =
+        grupos.length > 1 &&
+        grupos.slice(1).every((grupo) => grupo.length === 3);
+
+      if (todosMilhares) {
+        parteInteira = grupos.join("");
+      } else if (
+        grupos.length === 2 &&
+        grupos[1].length >= 1 &&
+        grupos[1].length <= 2
+      ) {
+        parteInteira = grupos[0].replace(/\D/g, "");
+        parteDecimal = grupos[1].replace(/\D/g, "").slice(0, 2);
+      } else {
+        parteInteira = grupos.join("");
+      }
+    } else {
+      parteInteira = bruto.replace(/\D/g, "");
+    }
+
+    parteInteira = parteInteira.replace(/^0+(?=\d)/, "");
+
+    if (!parteInteira) return null;
+    if (parteInteira.length > 15) return null;
+
+    const numeroTexto = parteDecimal
+      ? `${parteInteira}.${parteDecimal}`
+      : parteInteira;
+
+    const numero = Number(numeroTexto);
+
+    if (!Number.isFinite(numero)) return null;
+    if (numero < 1000) return null;
+
+    const inteiroFormatado = Math.trunc(numero).toLocaleString("pt-BR");
+
+    const decimalFormatado =
+      parteDecimal && Number(parteDecimal) > 0
+        ? `,${parteDecimal.padEnd(2, "0")}`
+        : "";
+
+    return {
+      chave: numero.toFixed(2),
+      raw: `R$ ${inteiroFormatado}${decimalFormatado}`,
+      numero,
+      bruto,
+    };
+  }
+
+  function adicionarCandidato(rawOriginal, pontos, origem, contexto = "") {
+    const normalizado = normalizarCandidatoValor(rawOriginal);
+
+    if (!normalizado) return;
+
+    const contextoNormalizado = String(contexto || "")
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "");
+
+    let score = Number(pontos || 0);
+
+    if (contextoNormalizado.includes("r$")) score += 45;
+    if (contextoNormalizado.includes("valor")) score += 30;
+    if (contextoNormalizado.includes("pronto")) score += 15;
+    if (contextoNormalizado.includes("transferencia")) score += 15;
+    if (contextoNormalizado.includes("para")) score += 8;
+
+    if (
+      /\b(?:agora|mesmo|enviamos|transferencia|comprovante|pagamento)\b/i.test(
+        contextoNormalizado
+      )
+    ) {
+      score += 8;
+    }
+
+    const quantidadeGruposMilhar =
+      String(normalizado.bruto).match(/[.\s]\d{3}/g)?.length || 0;
+
+    if (quantidadeGruposMilhar >= 1) score += 10;
+    if (quantidadeGruposMilhar >= 2) score += 8;
+
+    const digitosInteiros = String(Math.trunc(normalizado.numero)).length;
+
+    if (digitosInteiros >= 5 && digitosInteiros <= 10) {
+      score += 8;
+    }
+
+    if (digitosInteiros >= 12) {
+      score -= 20;
+    }
+
+    candidatos.push({
+      ...normalizado,
+      score,
+      origem,
+      contexto: String(contexto || "").trim(),
+    });
+  }
+
+  const linhas = t
+    .split(/\n+/)
+    .map((linha) => linha.trim())
+    .filter(Boolean);
+
+  for (let indice = 0; indice < linhas.length; indice++) {
+    const linhaAnterior = linhas[indice - 1] || "";
+    const linhaAtual = linhas[indice] || "";
+    const linhaSeguinte = linhas[indice + 1] || "";
+
+    const blocoContexto = [
+      linhaAnterior,
+      linhaAtual,
+      linhaSeguinte,
+    ].join(" ");
+
+    const padroesLinha = [
+      {
+        regex: new RegExp(
+          String.raw`R\$\s*(${PADRAO_NUMERO})`,
+          "gi"
+        ),
+        pontos: 120,
+        origem: "r$",
+      },
+      {
+        regex: new RegExp(
+          String.raw`\bValor\s*[:\-]?\s*(${PADRAO_NUMERO})`,
+          "gi"
+        ),
+        pontos: 105,
+        origem: "valor",
+      },
+      {
+        regex: new RegExp(
+          String.raw`\b(?:enviamos|enviado|pagamento|transfer[eê]ncia)\b[\s\S]{0,100}?R?\$?\s*(${PADRAO_NUMERO})`,
+          "gi"
+        ),
+        pontos: 80,
+        origem: "contexto-pagamento",
+      },
+      {
+        regex: new RegExp(
+          String.raw`\b(${PADRAO_NUMERO})\b`,
+          "gi"
+        ),
+        pontos: 20,
+        origem: "numero-solto",
+      },
+    ];
+
+    for (const padrao of padroesLinha) {
+      for (const match of linhaAtual.matchAll(padrao.regex)) {
+        adicionarCandidato(
+          match[1],
+          padrao.pontos,
+          padrao.origem,
+          blocoContexto
+        );
+      }
+    }
+  }
+
+  const padroesBloco = [
+    {
+      regex: new RegExp(
+        String.raw`\bPronto[\s\S]{0,220}?R?\$?\s*(${PADRAO_NUMERO})`,
+        "gi"
+      ),
+      pontos: 80,
+      origem: "bloco-pronto",
+    },
+    {
+      regex: new RegExp(
+        String.raw`\bTransfer[eê]ncia[\s\S]{0,260}?R?\$?\s*(${PADRAO_NUMERO})`,
+        "gi"
+      ),
+      pontos: 75,
+      origem: "bloco-transferencia",
+    },
   ];
 
-  if (!matches.length) return null;
+  for (const padrao of padroesBloco) {
+    for (const match of t.matchAll(padrao.regex)) {
+      const inicio = Math.max(0, Number(match.index || 0) - 80);
+      const fim = Math.min(
+        t.length,
+        Number(match.index || 0) + String(match[0] || "").length + 80
+      );
 
-  const valores = matches
-    .map((m) => {
-      const rawOriginal = String(m[1] || "").trim();
+      adicionarCandidato(
+        match[1],
+        padrao.pontos,
+        padrao.origem,
+        t.slice(inicio, fim)
+      );
+    }
+  }
 
-      const raw = rawOriginal
-        .replace(/\s+/g, ".")
-        .replace(/[^\d.,]/g, "");
+  if (!candidatos.length) return null;
 
-      const numero = Number(raw.replace(/\./g, "").replace(",", "."));
+  const agrupados = new Map();
+
+  for (const candidato of candidatos) {
+    const atual = agrupados.get(candidato.chave) || {
+      raw: candidato.raw,
+      numero: candidato.numero,
+      scoreTotal: 0,
+      ocorrencias: 0,
+      origensFortes: 0,
+      melhorScoreIndividual: 0,
+      exemplos: [],
+    };
+
+    atual.scoreTotal += candidato.score;
+    atual.ocorrencias += 1;
+    atual.melhorScoreIndividual = Math.max(
+      atual.melhorScoreIndividual,
+      candidato.score
+    );
+
+    if (
+      candidato.origem === "r$" ||
+      candidato.origem === "valor" ||
+      candidato.origem === "contexto-pagamento"
+    ) {
+      atual.origensFortes += 1;
+    }
+
+    if (atual.exemplos.length < 3) {
+      atual.exemplos.push({
+        origem: candidato.origem,
+        contexto: candidato.contexto,
+      });
+    }
+
+    agrupados.set(candidato.chave, atual);
+  }
+
+  const valores = [...agrupados.values()]
+    .map((item) => {
+      const bonusRepeticao =
+        Math.min(item.ocorrencias, 8) * 28;
+
+      const bonusFontesFortes =
+        Math.min(item.origensFortes, 5) * 22;
+
+      const penalidadeIsoladoGigante =
+        item.numero >= 1_000_000_000 &&
+        item.ocorrencias === 1 &&
+        item.origensFortes === 0
+          ? 120
+          : 0;
+
+      const confianca =
+        item.scoreTotal +
+        bonusRepeticao +
+        bonusFontesFortes +
+        item.melhorScoreIndividual -
+        penalidadeIsoladoGigante;
 
       return {
-        raw: `R$ ${raw}`,
-        numero: Number.isFinite(numero) ? numero : 0,
+        ...item,
+        confianca,
       };
     })
-    .filter((v) => v.numero >= 1000)
-    .sort((a, b) => b.numero - a.numero);
+    .sort((a, b) => {
+      if (b.confianca !== a.confianca) {
+        return b.confianca - a.confianca;
+      }
 
-  return valores[0] || null;
+      if (b.ocorrencias !== a.ocorrencias) {
+        return b.ocorrencias - a.ocorrencias;
+      }
+
+      if (b.origensFortes !== a.origensFortes) {
+        return b.origensFortes - a.origensFortes;
+      }
+
+      return b.numero - a.numero;
+    });
+
+  const escolhido = valores[0];
+
+  if (!escolhido) return null;
+
+  console.log("[PAGAMENTO OCR] Valor escolhido por confiança:", {
+    raw: escolhido.raw,
+    numero: escolhido.numero,
+    confianca: escolhido.confianca,
+    ocorrencias: escolhido.ocorrencias,
+    origensFortes: escolhido.origensFortes,
+    candidatosEncontrados: valores.slice(0, 5).map((item) => ({
+      raw: item.raw,
+      numero: item.numero,
+      confianca: item.confianca,
+      ocorrencias: item.ocorrencias,
+      origensFortes: item.origensFortes,
+    })),
+  });
+
+  return {
+    raw: escolhido.raw,
+    numero: escolhido.numero,
+  };
 }
 
 function parseHorarioOCR(texto) {
