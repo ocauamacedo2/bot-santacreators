@@ -3797,9 +3797,255 @@ async function tentarReprocessarOCRRegistro(embedBuilder, message = null) {
 // =============================
 // Mover registros pelo filtro
 // =============================
+// ============================================================================
+// ✅ PROTEÇÃO DOS FILTROS / REMOÇÃO DE REGISTROS DUPLICADOS
+// ============================================================================
+
+const PAGAMENTO_FILTRO_LOCK_MAX_MS = 10 * 60 * 1000;
+
+function getPagamentoFiltroLock(client) {
+  if (!client.__SC_PAGAMENTO_FILTRO_LOCK__) {
+    client.__SC_PAGAMENTO_FILTRO_LOCK__ = {
+      ativo: false,
+      iniciadoEm: 0,
+      filtro: null,
+      usuarioId: null,
+    };
+  }
+
+  const lock = client.__SC_PAGAMENTO_FILTRO_LOCK__;
+
+  const lockExpirado =
+    lock.ativo &&
+    Date.now() - Number(lock.iniciadoEm || 0) > PAGAMENTO_FILTRO_LOCK_MAX_MS;
+
+  if (lockExpirado) {
+    lock.ativo = false;
+    lock.iniciadoEm = 0;
+    lock.filtro = null;
+    lock.usuarioId = null;
+  }
+
+  return lock;
+}
+
+function tentarIniciarPagamentoFiltro(client, filtro, usuarioId = null) {
+  const lock = getPagamentoFiltroLock(client);
+
+  if (lock.ativo) {
+    return {
+      ok: false,
+      filtro: lock.filtro,
+      usuarioId: lock.usuarioId,
+      iniciadoEm: lock.iniciadoEm,
+    };
+  }
+
+  lock.ativo = true;
+  lock.iniciadoEm = Date.now();
+  lock.filtro = String(filtro || "desconhecido");
+  lock.usuarioId = usuarioId || null;
+
+  return {
+    ok: true,
+    filtro: lock.filtro,
+    usuarioId: lock.usuarioId,
+    iniciadoEm: lock.iniciadoEm,
+  };
+}
+
+function finalizarPagamentoFiltro(client) {
+  const lock = getPagamentoFiltroLock(client);
+
+  lock.ativo = false;
+  lock.iniciadoEm = 0;
+  lock.filtro = null;
+  lock.usuarioId = null;
+}
+
+function normalizarTextoChaveDuplicado(valor) {
+  return String(valor || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function mensagemEhRegistroPagamento(message) {
+  if (!message?.embeds?.[0]) return false;
+
+  const titulo = String(message.embeds[0]?.title || "");
+
+  return titulo.includes(
+    "Registro de Pagamento de Evento – SANTACREATORS"
+  );
+}
+
+function criarChaveRegistroPagamentoDuplicado(message) {
+  const embed = message?.embeds?.[0];
+
+  if (!embed) return null;
+
+  const data = embed.data || {};
+  const fields = Array.isArray(data.fields) ? data.fields : [];
+
+  const camposNormalizados = fields.map((field) => {
+    return {
+      name: normalizarTextoChaveDuplicado(field?.name),
+      value: normalizarTextoChaveDuplicado(field?.value),
+      inline: Boolean(field?.inline),
+    };
+  });
+
+  const chave = {
+    title: normalizarTextoChaveDuplicado(data.title),
+    description: normalizarTextoChaveDuplicado(data.description),
+    fields: camposNormalizados,
+    image: String(data.image?.url || "").trim(),
+    thumbnail: String(data.thumbnail?.url || "").trim(),
+    footer: normalizarTextoChaveDuplicado(data.footer?.text),
+    timestamp: String(data.timestamp || "").trim(),
+  };
+
+  return JSON.stringify(chave);
+}
+
+async function buscarRegistrosPagamentoPaginados(
+  client,
+  canal,
+  limiteBusca = 5000
+) {
+  const registros = [];
+
+  let before = undefined;
+  let lidos = 0;
+
+  const limiteFinal = Math.min(
+    Math.max(Number(limiteBusca || 5000), 100),
+    50000
+  );
+
+  while (lidos < limiteFinal) {
+    const quantidade = Math.min(100, limiteFinal - lidos);
+
+    const lote = await canal.messages.fetch({
+      limit: quantidade,
+      before,
+    }).catch(() => null);
+
+    if (!lote || lote.size === 0) break;
+
+    for (const message of lote.values()) {
+      lidos++;
+
+      if (message.author?.id !== client.user.id) continue;
+      if (!mensagemEhRegistroPagamento(message)) continue;
+
+      registros.push(message);
+    }
+
+    before = lote.last()?.id;
+
+    if (!before) break;
+    if (lote.size < quantidade) break;
+  }
+
+  return {
+    registros,
+    lidos,
+  };
+}
+
+async function removerRegistrosPagamentoDuplicados(
+  client,
+  canal,
+  limiteBusca = 5000
+) {
+  const resultadoBusca = await buscarRegistrosPagamentoPaginados(
+    client,
+    canal,
+    limiteBusca
+  );
+
+  const registros = resultadoBusca.registros
+    .slice()
+    .sort((a, b) => b.createdTimestamp - a.createdTimestamp);
+
+  const chavesMantidas = new Map();
+
+  let encontrados = 0;
+  let removidos = 0;
+  let falhas = 0;
+
+  const detalhes = [];
+
+  for (const message of registros) {
+    const chave = criarChaveRegistroPagamentoDuplicado(message);
+
+    if (!chave) continue;
+
+    const mensagemMantida = chavesMantidas.get(chave);
+
+    if (!mensagemMantida) {
+      chavesMantidas.set(chave, message);
+      continue;
+    }
+
+    encontrados++;
+
+    const apagado = await message
+      .delete()
+      .then(() => true)
+      .catch((err) => {
+        console.warn(
+          "[PAGAMENTO DUPLICADOS] Não foi possível apagar duplicado:",
+          {
+            duplicadoId: message.id,
+            mantidoId: mensagemMantida.id,
+            erro: err?.message || String(err),
+          }
+        );
+
+        return false;
+      });
+
+    if (apagado) {
+      removidos++;
+
+      detalhes.push({
+        removidoId: message.id,
+        mantidoId: mensagemMantida.id,
+      });
+    } else {
+      falhas++;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 350));
+  }
+
+  return {
+    lidos: resultadoBusca.lidos,
+    registros: registros.length,
+    encontrados,
+    removidos,
+    falhas,
+    detalhes,
+  };
+}
+
 async function moverRegistrosPorFiltro(client, canal, filtro) {
   const mensagens = await canal.messages.fetch({ limit: 100 }).catch(() => null);
-  if (!mensagens) return { movidos: 0, relidos: 0, atualizadosOCR: 0 };
+  if (!mensagens) {
+  return {
+    movidos: 0,
+    relidos: 0,
+    atualizadosOCR: 0,
+    corrigidosVIP: 0,
+    falhasMovimento: 0,
+    rollbacks: 0,
+  };
+}
 
   const lista = [...mensagens.values()]
     .filter((m) => m.author?.id === client.user.id)
@@ -3814,6 +4060,8 @@ let movidos = 0;
 let relidos = 0;
 let atualizadosOCR = 0;
 let corrigidosVIP = 0;
+let falhasMovimento = 0;
+let rollbacks = 0;
 
   for (const msg of lista) {
     const embedRaw = msg.embeds?.[0];
@@ -3856,20 +4104,72 @@ if (filtro === "naoclicados") {
   }
 }
 
-    const msgNova = await canal.send({ embeds: [embedOriginal] }).catch(() => null);
-    if (!msgNova) continue;
+const msgNova = await canal.send({
+  embeds: [embedOriginal],
+}).catch(() => null);
 
-    if (ehPagoFinal || ehReprovadoFinal) {
-      await msgNova.edit({ components: [] }).catch(() => {});
-    } else {
-      await msgNova.edit({ components: [criarRowStatus(msgNova.id)] }).catch(() => {});
-    }
+if (!msgNova) {
+  falhasMovimento++;
+  continue;
+}
 
-    await msg.delete().catch(() => {});
-    movidos++;
+const componentsNova =
+  ehPagoFinal || ehReprovadoFinal
+    ? []
+    : [criarRowStatus(msgNova.id)];
+
+const mensagemNovaEditada = await msgNova
+  .edit({
+    embeds: [embedOriginal],
+    components: componentsNova,
+  })
+  .then(() => true)
+  .catch((err) => {
+    console.warn(
+      "[PAGAMENTO FILTRO] Falha ao preparar mensagem nova:",
+      {
+        filtro,
+        mensagemOriginalId: msg.id,
+        mensagemNovaId: msgNova.id,
+        erro: err?.message || String(err),
+      }
+    );
+
+    return false;
+  });
+
+if (!mensagemNovaEditada) {
+  await msgNova.delete().catch(() => {});
+
+  falhasMovimento++;
+  rollbacks++;
+  continue;
+}
+
+const mensagemOriginalApagada = await msg
+  .delete()
+  .then(() => true)
+  .catch(() => false);
+
+if (!mensagemOriginalApagada) {
+  await msgNova.delete().catch(() => {});
+
+  falhasMovimento++;
+  rollbacks++;
+  continue;
+}
+
+movidos++;
   }
 
-return { movidos, relidos, atualizadosOCR, corrigidosVIP };
+return {
+  movidos,
+  relidos,
+  atualizadosOCR,
+  corrigidosVIP,
+  falhasMovimento,
+  rollbacks,
+};
 }
 
 // ============================================================================
@@ -4086,44 +4386,6 @@ if (id === "pagamento_dash_atualizar") {
 
   return true;
 }
-      // ✅ BOTÃO CIDADES: adiciona botões Nobre/Santa/Grande/Maresia nos registros do mês atual
-      if (id === "pagamento_filtro_cidades") {
-        if (!temPermissaoPagamento(interaction)) {
-          await interaction.reply({
-            content: "🚫 Você não tem permissão para usar o filtro de cidades.",
-            flags: MessageFlags.Ephemeral,
-          }).catch(() => {});
-          return true;
-        }
-
-        await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
-
-        const canal = await client.channels.fetch(CANAL_PAGAMENTO).catch(() => null);
-        if (!canal || !canal.isTextBased()) {
-          await interaction.editReply({ content: "❌ Não achei o canal de pagamentos." }).catch(() => {});
-          return true;
-        }
-
-        const { atualizados, ignorados } = await adicionarBotoesCidadeNosRegistrosDoMes(client, canal);
-
-        await canal.send({
-          embeds: [criarEmbedMenu()],
-          components: [criarRowMenu()],
-        }).catch(() => {});
-
-        await limparBotoesAntigos(client, canal).catch(() => {});
-
-        await interaction.editReply({
-          content: [
-            "✅ Botões de cidade aplicados nos registros do mês atual.",
-            `🏙️ Registros atualizados: **${atualizados}**`,
-            `↩️ Já tinham botão de cidade: **${ignorados}**`,
-          ].join("\n"),
-        }).catch(() => {});
-
-        return true;
-      }
-
       // ✅ FILTROS
       if (id.startsWith("pagamento_filtro_")) {
         if (!temPermissaoPagamento(interaction)) {
@@ -4131,78 +4393,253 @@ if (id === "pagamento_dash_atualizar") {
             content: "🚫 Você não tem permissão para usar esse filtro.",
             flags: MessageFlags.Ephemeral,
           }).catch(() => {});
+
           return true;
         }
 
-        const qual = id.replace("pagamento_filtro_", ""); // solicitados | naoclicados
-        await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
+        const qual = id.replace("pagamento_filtro_", "");
 
-        const canal = await client.channels.fetch(CANAL_PAGAMENTO).catch(() => null);
-        if (!canal || !canal.isTextBased()) {
-          await interaction.followUp({ content: "❌ Não achei o canal.", ephemeral: true }).catch(() => {});
-          await interaction.followUp({ content: "❌ Não achei o canal.", flags: MessageFlags.Ephemeral }).catch(() => {});
+        await interaction.deferReply({
+          flags: MessageFlags.Ephemeral,
+        }).catch(() => {});
+
+        const inicioLock = tentarIniciarPagamentoFiltro(
+          client,
+          qual,
+          interaction.user.id
+        );
+
+        if (!inicioLock.ok) {
+          await interaction.editReply({
+            content: [
+              "⚠️ Já existe uma varredura de pagamentos rodando.",
+              `🔎 Filtro atual: **${inicioLock.filtro || "desconhecido"}**`,
+              inicioLock.usuarioId
+                ? `👤 Iniciado por: <@${inicioLock.usuarioId}>`
+                : null,
+              "Aguarde finalizar antes de apertar outro filtro.",
+            ].filter(Boolean).join("\n"),
+          }).catch(() => {});
+
           return true;
         }
 
-if (qual === "cidades") {
-  const avisoMsg = await canal.send({
-    content: `🔎 <@${interaction.user.id}> iniciou a varredura pesada dos pagamentos antigos pelo botão **🏙️ Cidades**.`,
-  }).catch(() => null);
+        try {
+          const canal = await client.channels
+            .fetch(CANAL_PAGAMENTO)
+            .catch(() => null);
 
-  await interaction.editReply({
-    content: avisoMsg
-      ? `✅ Varredura pesada iniciada: ${avisoMsg.url}`
-      : "✅ Varredura pesada iniciada.",
-  }).catch(() => {});
+          if (!canal || !canal.isTextBased()) {
+            await interaction.editReply({
+              content: "❌ Não achei o canal de pagamentos.",
+            }).catch(() => {});
 
-if (avisoMsg) {
-  await iniciarVarreduraPesadaPagamentosSegundoPlano(
-    client,
-    avisoMsg,
-    30000,
-    "botao_cidades",
-    {
-      userId: interaction.user.id,
-      canalId: interaction.channelId,
-      comando: "Botão 🏙️ Cidades",
-    }
-  );
-}
+            return true;
+          }
 
-return true;
-}
+          await interaction.editReply({
+            content: [
+              `🔎 Executando filtro **${qual}**...`,
+              "🧹 Primeiro estou verificando registros duplicados.",
+            ].join("\n"),
+          }).catch(() => {});
 
-       const { movidos, relidos, atualizadosOCR, corrigidosVIP } = await moverRegistrosPorFiltro(client, canal, qual);
+          const limpezaAntes =
+            await removerRegistrosPagamentoDuplicados(
+              client,
+              canal,
+              5000
+            ).catch((err) => {
+              console.warn(
+                "[PAGAMENTO FILTRO] Falha na limpeza inicial:",
+                err?.message || err
+              );
 
-// repostar menu e limpar duplicados
-await canal.send({ embeds: [criarEmbedMenu()], components: [criarRowMenu()] }).catch(() => {});
-await limparBotoesAntigos(client, canal).catch(() => {});
+              return {
+                lidos: 0,
+                registros: 0,
+                encontrados: 0,
+                removidos: 0,
+                falhas: 1,
+              };
+            });
 
-logPagamento(
-  client,
-  interaction,
-  "🔎 Filtro aplicado",
-  [
-    `Filtro: **${qual}**`,
-    `Registros movidos: **${movidos}**`,
-`Registros analisados: **${relidos || 0}**`,
-`Corrigidos pelo VIP Evento: **${corrigidosVIP || 0}**`,
-qual === "naoclicados" ? `OCR atualizados: **${atualizadosOCR || 0}**` : null,
-  ].filter(Boolean).join("\n")
-).catch(() => {});
+          if (qual === "cidades") {
+            const {
+              atualizados,
+              ignorados,
+            } = await adicionarBotoesCidadeNosRegistrosDoMes(
+              client,
+              canal
+            );
 
-await interaction.followUp({
-  content: [
-    `✅ Filtro aplicado: **${qual}**`,
-    `📦 Registros movidos: **${movidos}**`,
-`🔎 Registros analisados: **${relidos || 0}**`,
-`💎 Corrigidos pelo VIP Evento: **${corrigidosVIP || 0}**`,
-qual === "naoclicados" ? `💰 Registros atualizados pelo OCR: **${atualizadosOCR || 0}**` : null,
-  ].filter(Boolean).join("\n"),
-  ephemeral: true,
-  flags: MessageFlags.Ephemeral,
-}).catch(() => {});
-return true;
+            const limpezaDepois =
+              await removerRegistrosPagamentoDuplicados(
+                client,
+                canal,
+                5000
+              ).catch(() => ({
+                lidos: 0,
+                registros: 0,
+                encontrados: 0,
+                removidos: 0,
+                falhas: 0,
+              }));
+
+            await canal.send({
+              embeds: [criarEmbedMenu()],
+              components: [criarRowMenu()],
+            }).catch(() => {});
+
+            await limparBotoesAntigos(
+              client,
+              canal
+            ).catch(() => {});
+
+            await reconstruirStatsPorEmbeds(
+              client,
+              5000
+            ).catch(() => null);
+
+            await updateDashboard(client).catch(() => {});
+
+            await interaction.editReply({
+              content: [
+                "✅ Botões de cidade aplicados.",
+                `🏙️ Registros atualizados: **${atualizados || 0}**`,
+                `↩️ Já tinham cidade: **${ignorados || 0}**`,
+                "",
+                "🧹 **Limpeza de duplicados**",
+                `Antes do filtro: **${limpezaAntes.removidos || 0}** removidos`,
+                `Depois do filtro: **${limpezaDepois.removidos || 0}** removidos`,
+                `Falhas de exclusão: **${Number(limpezaAntes.falhas || 0) + Number(limpezaDepois.falhas || 0)}**`,
+              ].join("\n"),
+            }).catch(() => {});
+
+            return true;
+          }
+
+          const resultadoFiltro =
+            await moverRegistrosPorFiltro(
+              client,
+              canal,
+              qual
+            );
+
+          const {
+            movidos,
+            relidos,
+            atualizadosOCR,
+            corrigidosVIP,
+            falhasMovimento,
+            rollbacks,
+          } = resultadoFiltro;
+
+          const limpezaDepois =
+            await removerRegistrosPagamentoDuplicados(
+              client,
+              canal,
+              5000
+            ).catch((err) => {
+              console.warn(
+                "[PAGAMENTO FILTRO] Falha na limpeza final:",
+                err?.message || err
+              );
+
+              return {
+                lidos: 0,
+                registros: 0,
+                encontrados: 0,
+                removidos: 0,
+                falhas: 1,
+              };
+            });
+
+          await canal.send({
+            embeds: [criarEmbedMenu()],
+            components: [criarRowMenu()],
+          }).catch(() => {});
+
+          await limparBotoesAntigos(
+            client,
+            canal
+          ).catch(() => {});
+
+          await reconstruirStatsPorEmbeds(
+            client,
+            5000
+          ).catch(() => null);
+
+          await updateDashboard(client).catch(() => {});
+
+          const totalDuplicadosRemovidos =
+            Number(limpezaAntes.removidos || 0) +
+            Number(limpezaDepois.removidos || 0);
+
+          const totalFalhasDuplicados =
+            Number(limpezaAntes.falhas || 0) +
+            Number(limpezaDepois.falhas || 0);
+
+          logPagamento(
+            client,
+            interaction,
+            "🔎 Filtro aplicado com proteção contra duplicados",
+            [
+              `Filtro: **${qual}**`,
+              `Registros analisados: **${relidos || 0}**`,
+              `Registros movidos: **${movidos || 0}**`,
+              `Falhas ao mover: **${falhasMovimento || 0}**`,
+              `Rollbacks executados: **${rollbacks || 0}**`,
+              `Duplicados removidos: **${totalDuplicadosRemovidos}**`,
+              `Falhas ao remover duplicados: **${totalFalhasDuplicados}**`,
+              `Corrigidos pelo VIP Evento: **${corrigidosVIP || 0}**`,
+              qual === "naoclicados"
+                ? `OCR atualizados: **${atualizadosOCR || 0}**`
+                : null,
+            ].filter(Boolean).join("\n")
+          ).catch(() => {});
+
+          await interaction.editReply({
+            content: [
+              `✅ Filtro aplicado: **${qual}**`,
+              "",
+              `🔎 Registros analisados: **${relidos || 0}**`,
+              `📦 Registros movidos: **${movidos || 0}**`,
+              `⚠️ Falhas ao mover: **${falhasMovimento || 0}**`,
+              `↩️ Cópias desfeitas automaticamente: **${rollbacks || 0}**`,
+              `💎 Corrigidos pelo VIP Evento: **${corrigidosVIP || 0}**`,
+              qual === "naoclicados"
+                ? `💰 Atualizados pelo OCR: **${atualizadosOCR || 0}**`
+                : null,
+              "",
+              "🧹 **Varredura de duplicados**",
+              `Antes do filtro: **${limpezaAntes.removidos || 0}** removidos`,
+              `Depois do filtro: **${limpezaDepois.removidos || 0}** removidos`,
+              `Total removido: **${totalDuplicadosRemovidos}**`,
+              `Falhas de exclusão: **${totalFalhasDuplicados}**`,
+            ].filter(Boolean).join("\n"),
+          }).catch(() => {});
+
+          return true;
+        } catch (err) {
+          console.error(
+            "[PAGAMENTO FILTRO] Erro durante execução:",
+            err
+          );
+
+          await interaction.editReply({
+            content: [
+              "❌ O filtro encontrou um erro durante a execução.",
+              "Nenhuma cópia nova será mantida quando a mensagem original não puder ser apagada.",
+              "",
+              `Motivo: \`${err?.message || String(err)}\``,
+            ].join("\n"),
+          }).catch(() => {});
+
+          return true;
+        } finally {
+          finalizarPagamentoFiltro(client);
+        }
       }
 
       // ✅ ABRIR FORM
