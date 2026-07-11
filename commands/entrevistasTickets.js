@@ -349,6 +349,65 @@ function rebuildPendingFromFormsMessage(message) {
 
   const responsaveisOficiais = new Map(); // canalId => userId do responsável
 
+  /*
+   * Controle da atualização do cache de membros.
+   *
+   * Impede que vários tickets abertos ao mesmo tempo executem diversas
+   * buscas completas de membros simultaneamente.
+   */
+  let membersFetchPromise = null;
+  let membersLastFetchAt = 0;
+
+  async function atualizarCacheMembrosComSeguranca(guild) {
+    const agora = Date.now();
+    const CACHE_MEMBROS_TTL = 5 * 60 * 1000;
+
+    /*
+     * Se a lista completa foi atualizada nos últimos cinco minutos,
+     * utiliza o cache já carregado.
+     */
+    if (
+      membersLastFetchAt > 0 &&
+      agora - membersLastFetchAt < CACHE_MEMBROS_TTL &&
+      guild.members.cache.size > 0
+    ) {
+      return {
+        atualizado: false,
+        cacheReutilizado: true,
+        total: guild.members.cache.size
+      };
+    }
+
+    /*
+     * Se outra notificação já está buscando os membros,
+     * aguarda a mesma busca em vez de iniciar outra.
+     */
+    if (membersFetchPromise) {
+      await membersFetchPromise;
+
+      return {
+        atualizado: false,
+        cacheReutilizado: true,
+        total: guild.members.cache.size
+      };
+    }
+
+    membersFetchPromise = guild.members.fetch();
+
+    try {
+      await membersFetchPromise;
+      membersLastFetchAt = Date.now();
+
+      return {
+        atualizado: true,
+        cacheReutilizado: false,
+        total: guild.members.cache.size
+      };
+    } finally {
+      membersFetchPromise = null;
+    }
+  }
+
   function criarMenuEmbed(guild) {
     return new EmbedBuilder()
       .setTitle('📋 | Ticket - SantaCreators')
@@ -430,70 +489,324 @@ function rebuildPendingFromFormsMessage(message) {
     menuMessageId = novaMsg.id;
   }
 
-  // ✅ Função que notifica os cargos autorizados via DM conforme o tipo
-  async function notificarEquipeEntrevista(guild, canal, tipo) {
+// ✅ Função que notifica os cargos autorizados via DM conforme o tipo
+async function notificarEquipeEntrevista(guild, canal, tipo) {
+  try {
+    if (!guild) {
+      console.error('[TICKET DM] Guild não informada para a notificação.');
+      return {
+        encontrados: 0,
+        enviados: 0,
+        bloqueados: 0,
+        erros: 1
+      };
+    }
+
+    if (!canal) {
+      console.error('[TICKET DM] Canal não informado para a notificação.');
+      return {
+        encontrados: 0,
+        enviados: 0,
+        bloqueados: 0,
+        erros: 1
+      };
+    }
+
+    console.log(
+      `[TICKET DM] Iniciando notificações do tipo "${tipo}" no canal ${canal.name} (${canal.id}).`
+    );
+
+    /*
+     * Atualiza o cache de membros antes de procurar os cargos.
+     *
+     * A atualização utiliza uma trava para evitar várias buscas completas
+     * simultâneas quando mais de um ticket é aberto.
+     */
     try {
-      if (tipo !== 'roupas' && tipo !== 'designer') {
-        const membrosParaNotificar = guild.members.cache.filter(membro =>
-          NOTIFY_ROLES.some(roleId => membro.roles.cache.has(roleId))
+      const resultadoCache = await atualizarCacheMembrosComSeguranca(guild);
+
+      if (resultadoCache.atualizado) {
+        console.log(
+          `[TICKET DM] Lista de membros atualizada. Membros disponíveis: ${resultadoCache.total}.`
+        );
+      } else if (resultadoCache.cacheReutilizado) {
+        console.log(
+          `[TICKET DM] Cache recente de membros reutilizado. Membros disponíveis: ${resultadoCache.total}.`
+        );
+      }
+    } catch (fetchError) {
+      console.error(
+        '[TICKET DM] Não foi possível atualizar todos os membros do servidor.',
+        {
+          mensagem: fetchError?.message || String(fetchError),
+          codigo: fetchError?.code ?? 'SEM_CODIGO'
+        }
+      );
+
+      console.warn(
+        `[TICKET DM] A notificação continuará utilizando o cache atual com ${guild.members.cache.size} membros.`
+      );
+    }
+
+    const textos = {
+      entrevista: {
+        titulo: '🎙️ Um novo ticket de **entrevista** foi aberto!',
+        subtitulo:
+          'Por favor, entre no canal, dê as boas-vindas e atenda a entrevista o quanto antes.'
+      },
+      suporte: {
+        titulo: '🛠️ Um novo ticket de **suporte** foi aberto!',
+        subtitulo:
+          'Verifique se é necessário dar assistência técnica ou responder alguma dúvida urgente.'
+      },
+      lider: {
+        titulo: '🧭 Um novo ticket de **Líder de Organização** foi aberto!',
+        subtitulo:
+          'O solicitante é um líder de organização, dê as permissões e dê as boas-vindas.'
+      },
+      ideias: {
+        titulo: '🎬 Um novo ticket de **ideia para gravação/evento** foi aberto!',
+        subtitulo:
+          'Veja se dá pra transformar em conteúdo pra SantaCreators!'
+      }
+    };
+
+    let membrosParaNotificar = [];
+
+    if (tipo === 'roupas') {
+      membrosParaNotificar = [
+        ...guild.members.cache
+          .filter(
+            membro =>
+              !membro.user.bot &&
+              ROUPAS_NOTIFY_ROLES.some(roleId =>
+                membro.roles.cache.has(roleId)
+              )
+          )
+          .values()
+      ];
+    } else if (tipo === 'designer') {
+      const EQUIPE_BANNERS_ROLE_ID = '1404348293374541834';
+      const equipeBanners = guild.roles.cache.get(EQUIPE_BANNERS_ROLE_ID);
+
+      if (!equipeBanners) {
+        console.error(
+          `[TICKET DM] O cargo de banners/designer ${EQUIPE_BANNERS_ROLE_ID} não foi encontrado no servidor.`
         );
 
-        const textos = {
-          entrevista: {
-            titulo: '🎙️ Um novo ticket de **entrevista** foi aberto!',
-            subtitulo: 'Por favor, entre no canal, dê as boas-vindas e atenda a entrevista o quanto antes.'
-          },
-          suporte: {
-            titulo: '🛠️ Um novo ticket de **suporte** foi aberto!',
-            subtitulo: 'Verifique se é necessário dar assistência técnica ou responder alguma dúvida urgente.'
-          },
-          lider: {
-            titulo: '🧭 Um novo ticket de **Líder de Organização** foi aberto!',
-            subtitulo: 'O solicitante é um líder de organização, dê as permissões e dê as boas-vindas.'
-          },
-          ideias: {
-            titulo: '🎬 Um novo ticket de **ideia para gravação/evento** foi aberto!',
-            subtitulo: 'Veja se dá pra transformar em conteúdo pra SantaCreators!'
-          }
+        return {
+          encontrados: 0,
+          enviados: 0,
+          bloqueados: 0,
+          erros: 1
         };
-
-        const aviso = textos[tipo] || textos['suporte'];
-
-        // Envia DMs sem dar await para não travar a criação do canal
-        membrosParaNotificar.forEach(membro => {
-          membro.send({
-            content: `${aviso.titulo}\n\n📎 Link: ${canal.toString()} <@${membro.id}>\n\n${aviso.subtitulo}`
-          }).catch(() => {});
-        });
       }
+
+      membrosParaNotificar = [
+        ...equipeBanners.members
+          .filter(membro => !membro.user.bot)
+          .values()
+      ];
+    } else {
+      membrosParaNotificar = [
+        ...guild.members.cache
+          .filter(
+            membro =>
+              !membro.user.bot &&
+              NOTIFY_ROLES.some(roleId =>
+                membro.roles.cache.has(roleId)
+              )
+          )
+          .values()
+      ];
+    }
+
+    /*
+     * Remove pessoas duplicadas.
+     *
+     * Uma pessoa pode possuir vários cargos da lista NOTIFY_ROLES.
+     * Mesmo assim, ela deverá receber somente uma notificação.
+     */
+    membrosParaNotificar = [
+      ...new Map(
+        membrosParaNotificar.map(membro => [membro.id, membro])
+      ).values()
+    ];
+
+    console.log(
+      `[TICKET DM] ${membrosParaNotificar.length} membro(s) encontrado(s) para o tipo "${tipo}".`
+    );
+
+    if (membrosParaNotificar.length === 0) {
+      console.warn(
+        `[TICKET DM] Nenhum membro encontrado com os cargos configurados para o tipo "${tipo}".`
+      );
+
+      console.warn('[TICKET DM] Cargos gerais configurados:', NOTIFY_ROLES);
+      console.warn(
+        '[TICKET DM] Cargos de roupas configurados:',
+        ROUPAS_NOTIFY_ROLES
+      );
+
+      return {
+        encontrados: 0,
+        enviados: 0,
+        bloqueados: 0,
+        erros: 0
+      };
+    }
+
+    const aviso = textos[tipo] || textos.suporte;
+
+    const enviarNotificacao = async membro => {
+      let conteudo;
 
       if (tipo === 'roupas') {
-        // ✅ Lógica alterada para usar a nova lista
-        const membrosParaNotificar = guild.members.cache.filter(membro =>
-          !membro.user.bot && ROUPAS_NOTIFY_ROLES.some(roleId => membro.roles.cache.has(roleId))
+        conteudo =
+          `🧵 Um novo ticket de **roupas** foi aberto!\n\n` +
+          `📎 Link: ${canal.toString()}\n\n` +
+          `Solicite os detalhes do design e acompanhe o pedido.`;
+      } else if (tipo === 'designer') {
+        conteudo =
+          `🖼 Um novo ticket de **banners/designer** foi aberto!\n\n` +
+          `📎 Link: ${canal.toString()}\n\n` +
+          `Verifique os detalhes e responda o cliente.`;
+      } else {
+        conteudo =
+          `${aviso.titulo}\n\n` +
+          `📎 Link: ${canal.toString()}\n\n` +
+          `${aviso.subtitulo}`;
+      }
+
+      try {
+        await membro.send({
+          content: conteudo,
+          allowedMentions: {
+            parse: []
+          }
+        });
+
+        console.log(
+          `[TICKET DM] ✅ Notificação enviada para ${membro.user.tag} (${membro.id}).`
         );
 
-        membrosParaNotificar.forEach(membro => {
-          membro.send({
-            content: `🧵 Um novo ticket de **roupas** foi aberto!\n\n📎 Link: ${canal.toString()} <@${membro.id}>\n\nSolicite os detalhes do design e acompanhe o pedido.`
-          }).catch(() => {});
-        });
+        return {
+          status: 'enviado',
+          membroId: membro.id
+        };
+      } catch (erro) {
+        const codigo = erro?.code;
+        const mensagem = erro?.message || String(erro);
+
+        /*
+         * Código 50007:
+         * Discord não permitiu enviar mensagem para esse usuário.
+         *
+         * Normalmente acontece quando:
+         * - o usuário bloqueou o bot;
+         * - o usuário desativou DMs de membros do servidor;
+         * - o usuário não compartilha mais servidor com o bot;
+         * - configurações de privacidade impedem a DM.
+         */
+        if (codigo === 50007) {
+          console.warn(
+            `[TICKET DM] ⚠️ Não foi possível enviar DM para ${membro.user.tag} (${membro.id}). ` +
+            'O usuário bloqueou o bot ou desativou mensagens privadas do servidor.'
+          );
+
+          return {
+            status: 'bloqueado',
+            membroId: membro.id,
+            codigo,
+            mensagem
+          };
+        }
+
+        console.error(
+          `[TICKET DM] ❌ Erro ao enviar DM para ${membro.user.tag} (${membro.id}).`,
+          {
+            codigo: codigo ?? 'SEM_CODIGO',
+            mensagem
+          }
+        );
+
+        return {
+          status: 'erro',
+          membroId: membro.id,
+          codigo: codigo ?? null,
+          mensagem
+        };
+      }
+    };
+
+    /*
+     * Aguarda todos os envios.
+     *
+     * Promise.all não é usado porque uma única falha poderia interromper
+     * o resultado geral. Promise.allSettled garante que todos sejam tentados.
+     */
+    const resultados = await Promise.allSettled(
+      membrosParaNotificar.map(membro =>
+        enviarNotificacao(membro)
+      )
+    );
+
+    let enviados = 0;
+    let bloqueados = 0;
+    let erros = 0;
+
+    for (const resultado of resultados) {
+      if (resultado.status === 'rejected') {
+        erros++;
+        console.error(
+          '[TICKET DM] Uma tentativa de envio terminou com rejeição inesperada:',
+          resultado.reason
+        );
+        continue;
       }
 
-      if (tipo === 'designer') {
-        const equipeBanners = guild.roles.cache.get('1404348293374541834');
-        if (equipeBanners) {
-          for (const [_, membro] of equipeBanners.members) {
-            membro.send({
-              content: `🖼 Um novo ticket de **banners/designer** foi aberto!\n\n📎 Link: ${canal.toString()} <@${membro.id}>\n\nVerifique os detalhes e responda o cliente.`
-            }).catch(() => {});
-          }
-        }
+      if (resultado.value?.status === 'enviado') {
+        enviados++;
+        continue;
       }
-    } catch (err) {
-      console.error('Erro ao notificar equipe de ticket:', err);
+
+      if (resultado.value?.status === 'bloqueado') {
+        bloqueados++;
+        continue;
+      }
+
+      erros++;
     }
+
+    console.log(
+      `[TICKET DM] Finalizado para "${tipo}": ` +
+      `${membrosParaNotificar.length} encontrado(s), ` +
+      `${enviados} enviado(s), ` +
+      `${bloqueados} bloqueado(s) e ` +
+      `${erros} erro(s).`
+    );
+
+    return {
+      encontrados: membrosParaNotificar.length,
+      enviados,
+      bloqueados,
+      erros
+    };
+  } catch (err) {
+    console.error('[TICKET DM] Erro geral ao notificar a equipe:', {
+      mensagem: err?.message || String(err),
+      codigo: err?.code ?? 'SEM_CODIGO',
+      stack: err?.stack
+    });
+
+    return {
+      encontrados: 0,
+      enviados: 0,
+      bloqueados: 0,
+      erros: 1
+    };
   }
+}
 
   // ✅ Util: busca GuildMember com fallback
   async function safeFetchMember(guild, userId) {
@@ -639,18 +952,46 @@ function rebuildPendingFromFormsMessage(message) {
         return true;
       }
 
-      // Notifica em background
-      await interaction.editReply({ content: `✅ Canal criado com sucesso: ${canal}` });
-      
-      await notificarEquipeEntrevista(interaction.guild, canal, dados.nome);
+      await interaction.editReply({
+        content: `✅ Canal criado com sucesso: ${canal}`
+      });
+
+      /*
+       * Inicia as notificações em segundo plano.
+       *
+       * Não usamos "await" aqui porque a busca de membros e o envio das DMs
+       * podem demorar. O ticket continuará sendo montado normalmente enquanto
+       * as notificações são enviadas.
+       *
+       * Qualquer erro inesperado continua sendo registrado no console.
+       */
+      void notificarEquipeEntrevista(
+        interaction.guild,
+        canal,
+        dados.nome
+      ).catch(err => {
+        console.error('[TICKET DM] Falha inesperada na notificação em segundo plano:', {
+          mensagem: err?.message || String(err),
+          codigo: err?.code ?? 'SEM_CODIGO',
+          stack: err?.stack
+        });
+      });
 
       const embedTicket = new EmbedBuilder()
         .setTitle(dados.nome.charAt(0).toUpperCase() + dados.nome.slice(1))
         .setColor('#ff009a')
         .setThumbnail(interaction.guild.iconURL())
         .addFields(
-          { name: 'Aberto por:',   value: `<@${interaction.user.id}> <t:${Math.floor(Date.now() / 1000)}:R>`, inline: true },
-          { name: 'Assumido por:', value: '`Ninguém`', inline: true }
+          {
+            name: 'Aberto por:',
+            value: `<@${interaction.user.id}> <t:${Math.floor(Date.now() / 1000)}:R>`,
+            inline: true
+          },
+          {
+            name: 'Assumido por:',
+            value: '`Ninguém`',
+            inline: true
+          }
         )
         .setFooter({ text: 'SantaCreators - Tickets' });
 
