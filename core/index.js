@@ -138,6 +138,7 @@ import {
   pagamentoSocialOnReady,
   handlePagamentoSocial,
   pagamentoSocialHandleMessage,
+  isPagamentoSocialInteraction,
 } from "../events/pagamentosocial.js";
 
 // FormsCreator
@@ -954,24 +955,42 @@ client.on("interactionCreate", async (interaction) => {
   if (interaction.isAutocomplete()) return;
 
   try {
-if (await eventosChecklistNotifierOnInteraction(interaction, client)) return;
+    // =====================================================
+    // 🚀 ROTEAMENTO DIRETO — PAGAMENTO SOCIAL
+    // =====================================================
+    // Quando o customId pertence ao Pagamento Social,
+    // chama somente o handler correto e encerra o roteador.
+    //
+    // Isso impede o clique de passar primeiro por Checklist,
+    // Dashboard de membros e dezenas de outros sistemas.
+    if (isPagamentoSocialInteraction(interaction)) {
+      await handlePagamentoSocial(interaction, client).catch((error) => {
+        console.error("[CORE] Erro no Pagamento Social:", error);
+        return false;
+      });
 
-// ✅ Dashboard de membros: botões e modal do histórico mensal
-if (await memberFlowHandleInteraction(interaction, client)) return;
-
-// ✅ PRIORIDADE ALTA: botões/modais do Pagamento Social
-// Isso garante que "Atualizar Dashboard", "PAGO", "REPROVADO" e "SOLICITADO"
-// não sejam engolidos por outro handler antes.
-if (await handlePagamentoSocial(interaction, client).catch(() => false)) return;
-
-// 🚀 PRIORIDADE MÁXIMA: Botões de Ticket e Entrevista (Resolve o Delay)
-if (await entrevista.handleButtons(interaction).catch((err) => {
-  console.error("[CORE] Erro crítico em entrevista.handleButtons:", err);
-  return false;
-})) return;
+      return;
+    }
 
 
-  if (await entrevistasTickets.onInteractionCreate(interaction).catch(() => false)) return;
+    if (await eventosChecklistNotifierOnInteraction(interaction, client)) return;
+
+    // ✅ Dashboard de membros: botões e modal do histórico mensal
+    if (await memberFlowHandleInteraction(interaction, client)) return;
+
+
+    // 🚀 PRIORIDADE MÁXIMA: Botões de Ticket e Entrevista
+    if (await entrevista.handleButtons(interaction).catch((err) => {
+      console.error("[CORE] Erro crítico em entrevista.handleButtons:", err);
+      return false;
+    })) return;
+
+
+    if (
+      await entrevistasTickets
+        .onInteractionCreate(interaction)
+        .catch(() => false)
+    ) return;
 
       // Outros handlers...
       if (await registroManagerHandleInteraction(interaction, client)) return;

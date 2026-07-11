@@ -4339,11 +4339,52 @@ if (!comandosSocial.includes(cmd)) return false;
 }
 
 
+// ============================================================================
+// ✅ IDENTIFICADOR RÁPIDO DAS INTERAÇÕES DO PAGAMENTO SOCIAL
+// - Evita executar este sistema em botões e modais de outros módulos.
+// - Não responde, não faz fetch e não executa tarefas pesadas.
+// ============================================================================
+export function isPagamentoSocialInteraction(interaction) {
+  if (!interaction) return false;
+
+  if (!interaction.isButton?.() && !interaction.isModalSubmit?.()) {
+    return false;
+  }
+
+  const id = String(interaction.customId || "");
+
+  if (!id) return false;
+
+  return (
+    id === "abrirform" ||
+    id === "form_pagamento" ||
+    id === "pagamento_dash_atualizar" ||
+
+    id.startsWith("pagamento_filtro_") ||
+    id.startsWith("cidade_pagamento__") ||
+
+    id.startsWith("pago__") ||
+    id.startsWith("solicitado__") ||
+    id.startsWith("reprovado__") ||
+
+    id.startsWith("pago_desc_") ||
+    id.startsWith("solicitado_desc_") ||
+    id.startsWith("reprovado_desc_")
+  );
+}
+
+
 // ✅ EXPORT 2: HANDLER DO ROTEADOR CENTRAL
 // - Retorna true se a interação era nossa
 // ============================================================================
 export async function handlePagamentoSocial(interaction, client) {
   try {
+    // ✅ SAÍDA IMEDIATA:
+    // Não executa dedupe, logs, fetch ou qualquer outra tarefa
+    // quando a interação pertence a outro sistema.
+    if (!isPagamentoSocialInteraction(interaction)) {
+      return false;
+    }
 
 
     // ✅ ANTI DUPLICAÇÃO (dedupe)
@@ -4747,19 +4788,31 @@ await tentarCorrigirRegistroPorVipEvento(client, embedAtualizado).catch(() => nu
           })
           .map((row) => ActionRowBuilder.from(row));
 
-        await registroMsg.edit({
-          embeds: [embedAtualizado],
-          components: componentsSemCidades,
-        }).catch(() => {});
+await registroMsg.edit({
+  embeds: [embedAtualizado],
+  components: componentsSemCidades,
+}).catch(() => {});
 
-        await reconstruirStatsPorEmbeds(client, 100).catch(() => null);
-        await updateDashboard(client).catch(() => {});
+// ✅ Confirma imediatamente após editar o registro.
+await interaction.editReply({
+  content: `✅ Cidade marcada como **${cidade.label}** nesse registro.`,
+}).catch(() => {});
 
-        await interaction.editReply({
-          content: `✅ Cidade marcada como **${cidade.label}** nesse registro.`,
-        }).catch(() => {});
+// ✅ Reconstrução e dashboard continuam normalmente,
+// mas não seguram mais a resposta do botão.
+void (async () => {
+  try {
+    await reconstruirStatsPorEmbeds(client, 100).catch(() => null);
+    await updateDashboard(client).catch(() => {});
+  } catch (error) {
+    console.error(
+      "[PagamentoSocial] Erro ao atualizar estatísticas após marcar cidade:",
+      error
+    );
+  }
+})();
 
-        return true;
+return true;
       }
 
       // ✅ STATUS (abre modal)
@@ -5092,11 +5145,22 @@ stats.creators[creatorId] = (stats.creators[creatorId] || 0) + 1;
 stats.categories[categoriaVip] = (stats.categories[categoriaVip] || 0) + 1;
 
 saveStats(stats);
-        
-        // Força a atualização do gráfico no canal 1505716526534103110
-        await updateDashboard(client).catch(() => {});
 
-        await interaction.editReply({ content: "✅ Registro criado!" }).catch(() => {});
+// ✅ Responde imediatamente ao usuário.
+// O registro já foi enviado e salvo neste ponto.
+await interaction.editReply({
+  content: "✅ Registro criado!",
+}).catch(() => {});
+
+// ✅ Atualiza o dashboard depois da resposta.
+// A atualização continua acontecendo normalmente,
+// mas não deixa o usuário esperando.
+updateDashboard(client).catch((error) => {
+  console.error(
+    "[PagamentoSocial] Erro ao atualizar dashboard após criar registro:",
+    error
+  );
+});
 
         try {
   const pagamentoAt = dataEventoParaTimestampSP(eventoData, mensagem.createdTimestamp || Date.now());
@@ -5351,19 +5415,38 @@ dashEmit(map[action] || "pagamento:status", {
     });
   } catch {}
 
-  // Se aprovado/reprovado/solicitado, recalcula estatísticas apenas pelos registros do mês atual
-  // depois que a mensagem nova já existe, a antiga saiu do canal e o geralDash recebeu o evento.
-if (["pago", "reprovado", "solicitado"].includes(action)) {
-  await sincronizarDashboardSocial(client, `status:${action}`, {
-    forceUnlock: true,
-  }).catch(() => null);
-}
+// ✅ A mensagem do registro já foi atualizada neste ponto.
+// Confirma imediatamente para quem clicou.
+await interaction.editReply({
+  content: "✅ Atualizado e jogado pro final do chat!",
+}).catch(() => {});
 
-  // reposta menu e limpa duplicados
-  await canal.send({ embeds: [criarEmbedMenu()], components: [criarRowMenu()] }).catch(() => {});
-  await limparBotoesAntigos(client, canal).catch(() => {});
+// ✅ Sincronização do dashboard e organização do menu
+// continuam sendo executadas sem prender a resposta.
+void (async () => {
+  try {
+    // Se aprovado/reprovado/solicitado,
+    // recalcula estatísticas pelos registros do mês atual.
+    if (["pago", "reprovado", "solicitado"].includes(action)) {
+      await sincronizarDashboardSocial(client, `status:${action}`, {
+        forceUnlock: true,
+      }).catch(() => null);
+    }
 
-  await interaction.editReply({ content: "✅ Atualizado e jogado pro final do chat!" }).catch(() => {});
+    // Reposta o menu e limpa menus duplicados.
+    await canal.send({
+      embeds: [criarEmbedMenu()],
+      components: [criarRowMenu()],
+    }).catch(() => {});
+
+    await limparBotoesAntigos(client, canal).catch(() => {});
+  } catch (error) {
+    console.error(
+      `[PagamentoSocial] Erro nas tarefas posteriores ao status ${action}:`,
+      error
+    );
+  }
+})();
 
   const tituloLog =
     action === "pago" ? "💰 Pagamento confirmado"
