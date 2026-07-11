@@ -383,28 +383,47 @@ const intervalosPorCanal = new Map(); // canalId -> interval
 
 async function limparDuplicatasDoBotao(client, canal, keepMessageId = null) {
   try {
-    const historico = await canal.messages.fetch({ limit: 50 }).catch(() => null);
+    const historico = await canal.messages.fetch({ limit: 100 }).catch(() => null);
     if (!historico) return;
 
     const duplicadas = historico.filter((m) => {
       if (keepMessageId && m.id === keepMessageId) return false;
 
-      return (
-        m.author?.id === client.user.id &&
+      const possuiBotaoDoacao =
         (m.components?.length || 0) > 0 &&
         m.components.some((row) =>
           row.components?.some((c) => {
             const cid = c.customId || c.data?.custom_id || "";
             return cid.startsWith(`${PREFIXO}:open:`);
           })
-        )
-      );
+        );
+
+      /*
+       * Não limita mais pelo autor da mensagem.
+       *
+       * Isso permite que o bot atual remova o painel deixado
+       * pelo bot anterior durante a troca de aplicação.
+       *
+       * A identificação continua segura porque somente mensagens
+       * que possuem o customId exclusivo "scdoa:open:" são removidas.
+       */
+      return possuiBotaoDoacao;
     });
 
     for (const [, msg] of duplicadas) {
-      await msg.delete().catch(() => {});
+      await msg.delete().catch((erro) => {
+        console.error(
+          `[SC_DOACAO] Não foi possível remover painel duplicado ${msg.id}:`,
+          erro?.message || erro
+        );
+      });
     }
-  } catch {}
+  } catch (erro) {
+    console.error(
+      "[SC_DOACAO] Erro ao procurar botões duplicados:",
+      erro?.message || erro
+    );
+  }
 }
 
 async function upsertBotaoNoCanal(client, canal) {
@@ -611,6 +630,15 @@ function buildRankEmbed(rankState) {
 async function upsertRankingMessage(client) {
   const canalRank = await client.channels.fetch(CANAL_RANK_ID).catch(() => null);
   if (!canalRank?.isTextBased?.()) return;
+
+  /*
+   * Durante uma troca de bot, a mensagem antiga continua pertencendo
+   * à aplicação anterior e não pode ser editada pelo bot atual.
+   *
+   * Por isso, removemos primeiro qualquer ranking identificado pelo
+   * marcador SC_DOACAO_RANK::V1 que pertença ao bot anterior.
+   */
+  await limparRankingDoBotAnterior(client, canalRank);
 
   // 1) carrega do arquivo
   let rank = loadRank();

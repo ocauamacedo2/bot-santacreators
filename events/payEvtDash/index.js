@@ -1829,17 +1829,72 @@ async function findExistingDashboard(channel, client) {
   const state = loadState();
 
   if (state.dashboardMsgId) {
-    const msg = await channel.messages.fetch(state.dashboardMsgId).catch(() => null);
-    if (msg) return msg;
+    const msg = await channel.messages
+      .fetch(state.dashboardMsgId)
+      .catch(() => null);
+
+    /*
+     * Só retorna a mensagem salva se ela realmente pertencer
+     * ao bot atual. Uma mensagem do bot anterior não pode ser editada.
+     */
+    if (msg && msg.author?.id === client.user.id) {
+      return msg;
+    }
   }
 
-  const messages = await channel.messages.fetch({ limit: 50 }).catch(() => null);
+  const messages = await channel.messages
+    .fetch({ limit: 100 })
+    .catch(() => null);
+
   if (!messages) return null;
 
-  return [...messages.values()]
-    .filter((m) => m.author?.id === client.user.id)
-    .filter((m) => m.embeds?.length)
-    .find((m) => String(m.embeds[0]?.footer?.text || "").includes(DASH_MARKER)) || null;
+  return (
+    [...messages.values()]
+      .filter((m) => m.author?.id === client.user.id)
+      .filter((m) => m.embeds?.length)
+      .find((m) =>
+        String(m.embeds[0]?.footer?.text || "").includes(DASH_MARKER)
+      ) || null
+  );
+}
+
+async function limparDashboardsDoBotAnterior(channel, client) {
+  try {
+    const mensagens = await channel.messages
+      .fetch({ limit: 100 })
+      .catch(() => null);
+
+    if (!mensagens) return;
+
+    const paineisLegados = mensagens.filter((mensagem) => {
+      /*
+       * Mantém mensagens criadas pelo bot atual.
+       * Remove somente painéis pertencentes ao bot anterior.
+       */
+      if (mensagem.author?.id === client.user.id) return false;
+      if (!mensagem.embeds?.length) return false;
+
+      const footer = String(
+        mensagem.embeds?.[0]?.footer?.text || ""
+      );
+
+      return footer.includes(DASH_MARKER);
+    });
+
+    for (const [, painel] of paineisLegados) {
+      await painel.delete().catch((erro) => {
+        console.error(
+          `[SC_PAY_EVT_DASH_V2] Não foi possível remover painel legado ${painel.id}:`,
+          erro?.message || erro
+        );
+      });
+    }
+  } catch (erro) {
+    console.error(
+      "[SC_PAY_EVT_DASH_V2] Erro ao limpar painéis do bot anterior:",
+      erro?.message || erro
+    );
+  }
 }
 
 async function renderDashboard(client, reason = "manual", options = {}) {
@@ -1862,14 +1917,23 @@ async function renderDashboard(client, reason = "manual", options = {}) {
   LOCK_TS = Date.now();
 
   try {
-    const channel = await client.channels.fetch(DASH_CHANNEL_ID).catch(() => null);
-    if (!channel || !channel.isTextBased()) {
-      throw new Error(`Canal do dashboard não encontrado: ${DASH_CHANNEL_ID}`);
-    }
+const channel = await client.channels.fetch(DASH_CHANNEL_ID).catch(() => null);
+if (!channel || !channel.isTextBased()) {
+  throw new Error(`Canal do dashboard não encontrado: ${DASH_CHANNEL_ID}`);
+}
 
-    if (recreate) {
-      // ✅ APAGA FÍSICAMENTE A MENSAGEM ANTERIOR PARA NÃO DUPLICAR
-      const oldMsg = await findExistingDashboard(channel, client);
+/*
+ * Remove Dashboard deixado pela aplicação anterior.
+ *
+ * O bot atual não consegue editar mensagens do bot antigo.
+ * Portanto, durante o boot ou atualização, removemos o painel legado
+ * pelo marcador e deixamos o bot atual publicar uma nova mensagem.
+ */
+await limparDashboardsDoBotAnterior(channel, client);
+
+if (recreate) {
+  // ✅ APAGA FÍSICAMENTE A MENSAGEM ANTERIOR PARA NÃO DUPLICAR
+  const oldMsg = await findExistingDashboard(channel, client);
       if (oldMsg) await oldMsg.delete().catch(() => null);
 
       saveState({
@@ -2073,23 +2137,28 @@ export async function payEvtDashHandleMessage(message, client) {
 
   const content = String(message.content || "").trim().toLowerCase();
 
-  const commands = new Set([
-    "!pevdash",
-    "!pevdashrefresh",
-    "!pevdashforce",
-    "!criarsocial",
-    "!socialrefresh",
-    "!criardashsocial",
-  ]);
+const commands = new Set([
+  "!pevdash",
+  "!pevdashrefresh",
+  "!pevdashforce",
+  "!criarsocial",
+  "!socialrefresh",
+  "!criardashsocial",
+  "!dashboard",
+  "!recriardashboard",
+]);
 
-  if (!commands.has(content)) return false;
+if (!commands.has(content)) return false;
 
   if (!hasPermission(message.member, message.author.id)) {
     await message.reply("🚫 Você não tem permissão para atualizar esse dashboard.").catch(() => {});
     return true;
   }
 
-  const recreate = content === "!criarsocial" || content === "!criardashsocial";
+  const recreate =
+  content === "!criarsocial" ||
+  content === "!criardashsocial" ||
+  content === "!recriardashboard";
   const aviso = await message.reply(
     recreate
       ? "🧹 Recriando o Dashboard SantaCreators do zero e lendo pagamentos + logs + eventos..."

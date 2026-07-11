@@ -4035,143 +4035,367 @@ async function removerRegistrosPagamentoDuplicados(
 }
 
 async function moverRegistrosPorFiltro(client, canal, filtro) {
-  const mensagens = await canal.messages.fetch({ limit: 100 }).catch(() => null);
-  if (!mensagens) {
-  return {
-    movidos: 0,
-    relidos: 0,
-    atualizadosOCR: 0,
-    corrigidosVIP: 0,
-    falhasMovimento: 0,
-    rollbacks: 0,
-  };
-}
+  /*
+   * Responsabilidade desta função:
+   *
+   * 1. Ler as mensagens recentes do canal;
+   * 2. Identificar os registros solicitados ou não clicados;
+   * 3. Reenviar os registros mantendo a ordem original;
+   * 4. Preparar os botões com concorrência controlada;
+   * 5. Apagar as mensagens antigas com concorrência controlada;
+   * 6. Desfazer automaticamente qualquer cópia incompleta.
+   *
+   * Não executa:
+   *
+   * - OCR;
+   * - Correção VIP;
+   * - Reconstrução de estatísticas;
+   * - Atualização de dashboard;
+   * - Varredura pesada de mensagens;
+   * - Limpeza pesada de duplicados.
+   */
 
-  const lista = [...mensagens.values()]
-    .filter((m) => m.author?.id === client.user.id)
-    .filter((m) => m.embeds?.length > 0)
-    .filter((m) => mensagemEhDoMesAtualSP(m))
-    .filter((m) => {
-      const t = m.embeds?.[0]?.title || "";
-      return t.includes("Registro de Pagamento de Evento – SANTACREATORS");
+  const mensagens = await canal.messages
+    .fetch({
+      limit: 100,
+      cache: false,
+    })
+    .catch((erro) => {
+      console.error(
+        "[PAGAMENTO FILTRO OTIMIZADO] Não foi possível carregar as mensagens:",
+        erro
+      );
+
+      return null;
     });
 
-let movidos = 0;
-let relidos = 0;
-let atualizadosOCR = 0;
-let corrigidosVIP = 0;
-let falhasMovimento = 0;
-let rollbacks = 0;
-
-  for (const msg of lista) {
-    const embedRaw = msg.embeds?.[0];
-    if (!embedRaw) continue;
-
-    const embedOriginal = EmbedBuilder.from(embedRaw);
-    const statusValue = getStatusValueFromEmbed(embedOriginal);
-
-    const ehSolicitado = /JÁ FOI SOLICITADO/i.test(statusValue);
-    const ehAguardando = /Aguardando confirmação/i.test(statusValue);
-
-    const ehPagoFinal = /✅\s*\*\*PAGO\*\*/i.test(statusValue);
-    const ehReprovadoFinal = /❌\s*\*\*REPROVADO\*\*/i.test(statusValue);
-
-    const entra =
-      (filtro === "solicitados" && ehSolicitado) ||
-      (filtro === "naoclicados" && ehAguardando);
-
-    if (!entra) continue;
-
- relidos++;
-
-const resultadoVip = await tentarCorrigirRegistroPorVipEvento(client, embedOriginal).catch(() => ({
-  alterou: false,
-  motivo: "Erro interno na correção VIP.",
-}));
-
-if (resultadoVip?.alterou) {
-  corrigidosVIP++;
-}
-
-if (filtro === "naoclicados") {
-  const resultadoReleitura = await tentarReprocessarOCRRegistro(embedOriginal).catch(() => ({
-    alterou: false,
-    motivo: "Erro interno na releitura OCR.",
-  }));
-
-  if (resultadoReleitura?.alterou) {
-    atualizadosOCR++;
+  if (!mensagens) {
+    return {
+      movidos: 0,
+      relidos: 0,
+      falhasMovimento: 1,
+      rollbacks: 0,
+    };
   }
-}
 
-const msgNova = await canal.send({
-  embeds: [embedOriginal],
-}).catch(() => null);
+  /*
+   * Filtra somente registros válidos.
+   *
+   * A ordenação da mensagem mais antiga para a mais nova
+   * preserva a ordem correta no final do canal.
+   */
+  const lista = [...mensagens.values()]
+    .filter((mensagem) => {
+      if (mensagem.author?.id !== client.user?.id) {
+        return false;
+      }
 
-if (!msgNova) {
-  falhasMovimento++;
-  continue;
-}
+      const embed = mensagem.embeds?.[0];
 
-const componentsNova =
-  ehPagoFinal || ehReprovadoFinal
-    ? []
-    : [criarRowStatus(msgNova.id)];
+      if (!embed) {
+        return false;
+      }
 
-const mensagemNovaEditada = await msgNova
-  .edit({
-    embeds: [embedOriginal],
-    components: componentsNova,
-  })
-  .then(() => true)
-  .catch((err) => {
-    console.warn(
-      "[PAGAMENTO FILTRO] Falha ao preparar mensagem nova:",
-      {
-        filtro,
-        mensagemOriginalId: msg.id,
-        mensagemNovaId: msgNova.id,
-        erro: err?.message || String(err),
+      if (!mensagemEhDoMesAtualSP(mensagem)) {
+        return false;
+      }
+
+      const titulo = String(embed.title || "");
+
+      if (
+        !titulo.includes(
+          "Registro de Pagamento de Evento – SANTACREATORS"
+        )
+      ) {
+        return false;
+      }
+
+      const status = getStatusValueFromEmbed(embed);
+
+      if (filtro === "solicitados") {
+        return /JÁ FOI SOLICITADO/i.test(status);
+      }
+
+      if (filtro === "naoclicados") {
+        return /Aguardando confirmação/i.test(status);
+      }
+
+      return false;
+    })
+    .sort((mensagemA, mensagemB) => {
+      return (
+        Number(mensagemA.createdTimestamp || 0) -
+        Number(mensagemB.createdTimestamp || 0)
+      );
+    });
+
+  const relidos = lista.length;
+
+  let movidos = 0;
+  let falhasMovimento = 0;
+  let rollbacks = 0;
+
+  /*
+   * Guarda as cópias criadas.
+   *
+   * Cada item terá:
+   * - mensagem antiga;
+   * - mensagem nova;
+   * - embed novo.
+   */
+  const copiasCriadas = [];
+
+  /*
+   * ETAPA 1 — CRIAÇÃO DAS NOVAS MENSAGENS
+   *
+   * O envio continua sequencial para garantir que a ordem
+   * dos registros seja preservada corretamente no canal.
+   */
+  for (const mensagemOriginal of lista) {
+    const embedRaw = mensagemOriginal.embeds?.[0];
+
+    if (!embedRaw) {
+      falhasMovimento++;
+      continue;
+    }
+
+    const embedNovo = EmbedBuilder.from(embedRaw);
+
+    const mensagemNova = await canal
+      .send({
+        embeds: [embedNovo],
+      })
+      .catch((erro) => {
+        console.error(
+          "[PAGAMENTO FILTRO OTIMIZADO] Erro ao reenviar registro:",
+          {
+            filtro,
+            mensagemOriginalId: mensagemOriginal.id,
+            erro: erro?.message || String(erro),
+          }
+        );
+
+        return null;
+      });
+
+    if (!mensagemNova) {
+      falhasMovimento++;
+      continue;
+    }
+
+    copiasCriadas.push({
+      mensagemOriginal,
+      mensagemNova,
+      embedNovo,
+    });
+  }
+
+  /*
+   * Executa operações com limite de concorrência.
+   *
+   * O limite 3 permite processar três mensagens ao mesmo tempo,
+   * sem disparar requisições demais para a API do Discord.
+   */
+  async function executarComConcorrencia(
+    itens,
+    limite,
+    executar
+  ) {
+    if (!Array.isArray(itens) || itens.length === 0) {
+      return [];
+    }
+
+    const resultados = new Array(itens.length);
+    let proximoIndice = 0;
+
+    const quantidadeWorkers = Math.min(
+      Math.max(1, Number(limite || 1)),
+      itens.length
+    );
+
+    async function worker() {
+      while (true) {
+        const indiceAtual = proximoIndice;
+        proximoIndice++;
+
+        if (indiceAtual >= itens.length) {
+          return;
+        }
+
+        try {
+          resultados[indiceAtual] = await executar(
+            itens[indiceAtual],
+            indiceAtual
+          );
+        } catch (erro) {
+          resultados[indiceAtual] = {
+            ok: false,
+            rollback: false,
+            erro,
+          };
+        }
+      }
+    }
+
+    await Promise.all(
+      Array.from(
+        {
+          length: quantidadeWorkers,
+        },
+        () => worker()
+      )
+    );
+
+    return resultados;
+  }
+
+  /*
+   * ETAPA 2 — ADIÇÃO DOS BOTÕES
+   *
+   * Até três mensagens novas são editadas simultaneamente.
+   */
+  const resultadosPreparacao =
+    await executarComConcorrencia(
+      copiasCriadas,
+      3,
+      async ({
+        mensagemOriginal,
+        mensagemNova,
+        embedNovo,
+      }) => {
+        const mensagemNovaPreparada = await mensagemNova
+          .edit({
+            embeds: [embedNovo],
+            components: [
+              criarRowStatus(mensagemNova.id),
+            ],
+          })
+          .then(() => true)
+          .catch((erro) => {
+            console.error(
+              "[PAGAMENTO FILTRO OTIMIZADO] Erro ao adicionar os botões:",
+              {
+                filtro,
+                mensagemOriginalId: mensagemOriginal.id,
+                mensagemNovaId: mensagemNova.id,
+                erro: erro?.message || String(erro),
+              }
+            );
+
+            return false;
+          });
+
+        if (!mensagemNovaPreparada) {
+          await mensagemNova.delete().catch(() => {});
+
+          return {
+            ok: false,
+            rollback: true,
+          };
+        }
+
+        return {
+          ok: true,
+          mensagemOriginal,
+          mensagemNova,
+        };
       }
     );
 
-    return false;
-  });
+  /*
+   * Mantém somente cópias que receberam os botões corretamente.
+   */
+  const copiasPreparadas = [];
 
-if (!mensagemNovaEditada) {
-  await msgNova.delete().catch(() => {});
+  for (const resultado of resultadosPreparacao) {
+    if (!resultado?.ok) {
+      falhasMovimento++;
 
-  falhasMovimento++;
-  rollbacks++;
-  continue;
-}
+      if (resultado?.rollback) {
+        rollbacks++;
+      }
 
-const mensagemOriginalApagada = await msg
-  .delete()
-  .then(() => true)
-  .catch(() => false);
+      continue;
+    }
 
-if (!mensagemOriginalApagada) {
-  await msgNova.delete().catch(() => {});
-
-  falhasMovimento++;
-  rollbacks++;
-  continue;
-}
-
-movidos++;
+    copiasPreparadas.push({
+      mensagemOriginal: resultado.mensagemOriginal,
+      mensagemNova: resultado.mensagemNova,
+    });
   }
 
-return {
-  movidos,
-  relidos,
-  atualizadosOCR,
-  corrigidosVIP,
-  falhasMovimento,
-  rollbacks,
-};
-}
+  /*
+   * ETAPA 3 — EXCLUSÃO DAS MENSAGENS ANTIGAS
+   *
+   * Até três mensagens antigas são apagadas simultaneamente.
+   *
+   * A mensagem nova já está pronta antes da exclusão.
+   */
+  const resultadosExclusao =
+    await executarComConcorrencia(
+      copiasPreparadas,
+      3,
+      async ({
+        mensagemOriginal,
+        mensagemNova,
+      }) => {
+        const mensagemOriginalApagada =
+          await mensagemOriginal
+            .delete()
+            .then(() => true)
+            .catch((erro) => {
+              console.error(
+                "[PAGAMENTO FILTRO OTIMIZADO] Não foi possível apagar o registro antigo:",
+                {
+                  filtro,
+                  mensagemOriginalId: mensagemOriginal.id,
+                  mensagemNovaId: mensagemNova.id,
+                  erro: erro?.message || String(erro),
+                }
+              );
 
+              return false;
+            });
+
+        if (!mensagemOriginalApagada) {
+          /*
+           * Se a mensagem antiga não puder ser apagada,
+           * a cópia nova é removida para impedir duplicação.
+           */
+          await mensagemNova.delete().catch(() => {});
+
+          return {
+            ok: false,
+            rollback: true,
+          };
+        }
+
+        return {
+          ok: true,
+        };
+      }
+    );
+
+  for (const resultado of resultadosExclusao) {
+    if (resultado?.ok) {
+      movidos++;
+      continue;
+    }
+
+    falhasMovimento++;
+
+    if (resultado?.rollback) {
+      rollbacks++;
+    }
+  }
+
+  return {
+    movidos,
+    relidos,
+    falhasMovimento,
+    rollbacks,
+  };
+}
 // ============================================================================
 // ✅ EXPORT 1: CHAMA NO READY
 // ============================================================================
@@ -4427,175 +4651,90 @@ if (id === "pagamento_dash_atualizar") {
 
   return true;
 }
-      // ✅ FILTROS
-      if (id.startsWith("pagamento_filtro_")) {
-        if (!temPermissaoPagamento(interaction)) {
-          await interaction.reply({
-            content: "🚫 Você não tem permissão para usar esse filtro.",
-            flags: MessageFlags.Ephemeral,
-          }).catch(() => {});
+// ✅ FILTROS
+if (id.startsWith("pagamento_filtro_")) {
+  if (!temPermissaoPagamento(interaction)) {
+    await interaction.reply({
+      content: "🚫 Você não tem permissão para usar esse filtro.",
+      flags: MessageFlags.Ephemeral,
+    }).catch(() => {});
 
-          return true;
-        }
+    return true;
+  }
 
-        const qual = id.replace("pagamento_filtro_", "");
+  const qual = id.replace("pagamento_filtro_", "");
 
-        await interaction.deferReply({
-          flags: MessageFlags.Ephemeral,
-        }).catch(() => {});
+  await interaction.deferReply({
+    flags: MessageFlags.Ephemeral,
+  }).catch(() => {});
 
-        const inicioLock = tentarIniciarPagamentoFiltro(
-          client,
-          qual,
-          interaction.user.id
-        );
+  const inicioLock = tentarIniciarPagamentoFiltro(
+    client,
+    qual,
+    interaction.user.id
+  );
 
-        if (!inicioLock.ok) {
-          await interaction.editReply({
-            content: [
-              "⚠️ Já existe uma varredura de pagamentos rodando.",
-              `🔎 Filtro atual: **${inicioLock.filtro || "desconhecido"}**`,
-              inicioLock.usuarioId
-                ? `👤 Iniciado por: <@${inicioLock.usuarioId}>`
-                : null,
-              "Aguarde finalizar antes de apertar outro filtro.",
-            ].filter(Boolean).join("\n"),
-          }).catch(() => {});
+  if (!inicioLock.ok) {
+    await interaction.editReply({
+      content: [
+        "⚠️ Já existe uma organização de pagamentos em andamento.",
+        `🔎 Filtro atual: **${inicioLock.filtro || "desconhecido"}**`,
+        inicioLock.usuarioId
+          ? `👤 Iniciado por: <@${inicioLock.usuarioId}>`
+          : null,
+        "Aguarde finalizar antes de apertar outro filtro.",
+      ].filter(Boolean).join("\n"),
+    }).catch(() => {});
 
-          return true;
-        }
+    return true;
+  }
 
-        try {
-          const canal = await client.channels
+  try {
+    const canal =
+      interaction.channel?.id === CANAL_PAGAMENTO
+        ? interaction.channel
+        : await client.channels
             .fetch(CANAL_PAGAMENTO)
             .catch(() => null);
 
-          if (!canal || !canal.isTextBased()) {
-            await interaction.editReply({
-              content: "❌ Não achei o canal de pagamentos.",
-            }).catch(() => {});
+    if (!canal || !canal.isTextBased()) {
+      await interaction.editReply({
+        content: "❌ Não achei o canal de pagamentos.",
+      }).catch(() => {});
 
-            return true;
-          }
+      return true;
+    }
 
-          await interaction.editReply({
-            content: [
-              `🔎 Executando filtro **${qual}**...`,
-              "🧹 Primeiro estou verificando registros duplicados.",
-            ].join("\n"),
-          }).catch(() => {});
+    /*
+     * O filtro de cidades permanece separado porque sua função
+     * é adicionar componentes aos registros.
+     */
+    if (qual === "cidades") {
+      await interaction.editReply({
+        content: "🏙️ Verificando os registros que ainda não possuem cidade...",
+      }).catch(() => {});
 
-          const limpezaAntes =
-            await removerRegistrosPagamentoDuplicados(
-              client,
-              canal,
-              5000
-            ).catch((err) => {
-              console.warn(
-                "[PAGAMENTO FILTRO] Falha na limpeza inicial:",
-                err?.message || err
-              );
+      const {
+        atualizados,
+        ignorados,
+      } = await adicionarBotoesCidadeNosRegistrosDoMes(
+        client,
+        canal
+      );
 
-              return {
-                lidos: 0,
-                registros: 0,
-                encontrados: 0,
-                removidos: 0,
-                falhas: 1,
-              };
-            });
+      await interaction.editReply({
+        content: [
+          "✅ Botões de cidade verificados.",
+          `🏙️ Registros atualizados: **${atualizados || 0}**`,
+          `↩️ Já estavam corretos: **${ignorados || 0}**`,
+        ].join("\n"),
+      }).catch(() => {});
 
-          if (qual === "cidades") {
-            const {
-              atualizados,
-              ignorados,
-            } = await adicionarBotoesCidadeNosRegistrosDoMes(
-              client,
-              canal
-            );
-
-            const limpezaDepois =
-              await removerRegistrosPagamentoDuplicados(
-                client,
-                canal,
-                5000
-              ).catch(() => ({
-                lidos: 0,
-                registros: 0,
-                encontrados: 0,
-                removidos: 0,
-                falhas: 0,
-              }));
-
-            await canal.send({
-              embeds: [criarEmbedMenu()],
-              components: [criarRowMenu()],
-            }).catch(() => {});
-
-            await limparBotoesAntigos(
-              client,
-              canal
-            ).catch(() => {});
-
-            await reconstruirStatsPorEmbeds(
-              client,
-              5000
-            ).catch(() => null);
-
-            await updateDashboard(client).catch(() => {});
-
-            await interaction.editReply({
-              content: [
-                "✅ Botões de cidade aplicados.",
-                `🏙️ Registros atualizados: **${atualizados || 0}**`,
-                `↩️ Já tinham cidade: **${ignorados || 0}**`,
-                "",
-                "🧹 **Limpeza de duplicados**",
-                `Antes do filtro: **${limpezaAntes.removidos || 0}** removidos`,
-                `Depois do filtro: **${limpezaDepois.removidos || 0}** removidos`,
-                `Falhas de exclusão: **${Number(limpezaAntes.falhas || 0) + Number(limpezaDepois.falhas || 0)}**`,
-              ].join("\n"),
-            }).catch(() => {});
-
-            return true;
-          }
-
-          const resultadoFiltro =
-            await moverRegistrosPorFiltro(
-              client,
-              canal,
-              qual
-            );
-
-          const {
-            movidos,
-            relidos,
-            atualizadosOCR,
-            corrigidosVIP,
-            falhasMovimento,
-            rollbacks,
-          } = resultadoFiltro;
-
-          const limpezaDepois =
-            await removerRegistrosPagamentoDuplicados(
-              client,
-              canal,
-              5000
-            ).catch((err) => {
-              console.warn(
-                "[PAGAMENTO FILTRO] Falha na limpeza final:",
-                err?.message || err
-              );
-
-              return {
-                lidos: 0,
-                registros: 0,
-                encontrados: 0,
-                removidos: 0,
-                falhas: 1,
-              };
-            });
-
+      /*
+       * Mantém o menu organizado sem segurar a resposta.
+       */
+      void (async () => {
+        try {
           await canal.send({
             embeds: [criarEmbedMenu()],
             components: [criarRowMenu()],
@@ -4605,83 +4744,133 @@ if (id === "pagamento_dash_atualizar") {
             client,
             canal
           ).catch(() => {});
-
-          await reconstruirStatsPorEmbeds(
-            client,
-            5000
-          ).catch(() => null);
-
-          await updateDashboard(client).catch(() => {});
-
-          const totalDuplicadosRemovidos =
-            Number(limpezaAntes.removidos || 0) +
-            Number(limpezaDepois.removidos || 0);
-
-          const totalFalhasDuplicados =
-            Number(limpezaAntes.falhas || 0) +
-            Number(limpezaDepois.falhas || 0);
-
-          logPagamento(
-            client,
-            interaction,
-            "🔎 Filtro aplicado com proteção contra duplicados",
-            [
-              `Filtro: **${qual}**`,
-              `Registros analisados: **${relidos || 0}**`,
-              `Registros movidos: **${movidos || 0}**`,
-              `Falhas ao mover: **${falhasMovimento || 0}**`,
-              `Rollbacks executados: **${rollbacks || 0}**`,
-              `Duplicados removidos: **${totalDuplicadosRemovidos}**`,
-              `Falhas ao remover duplicados: **${totalFalhasDuplicados}**`,
-              `Corrigidos pelo VIP Evento: **${corrigidosVIP || 0}**`,
-              qual === "naoclicados"
-                ? `OCR atualizados: **${atualizadosOCR || 0}**`
-                : null,
-            ].filter(Boolean).join("\n")
-          ).catch(() => {});
-
-          await interaction.editReply({
-            content: [
-              `✅ Filtro aplicado: **${qual}**`,
-              "",
-              `🔎 Registros analisados: **${relidos || 0}**`,
-              `📦 Registros movidos: **${movidos || 0}**`,
-              `⚠️ Falhas ao mover: **${falhasMovimento || 0}**`,
-              `↩️ Cópias desfeitas automaticamente: **${rollbacks || 0}**`,
-              `💎 Corrigidos pelo VIP Evento: **${corrigidosVIP || 0}**`,
-              qual === "naoclicados"
-                ? `💰 Atualizados pelo OCR: **${atualizadosOCR || 0}**`
-                : null,
-              "",
-              "🧹 **Varredura de duplicados**",
-              `Antes do filtro: **${limpezaAntes.removidos || 0}** removidos`,
-              `Depois do filtro: **${limpezaDepois.removidos || 0}** removidos`,
-              `Total removido: **${totalDuplicadosRemovidos}**`,
-              `Falhas de exclusão: **${totalFalhasDuplicados}**`,
-            ].filter(Boolean).join("\n"),
-          }).catch(() => {});
-
-          return true;
-        } catch (err) {
+        } catch (erro) {
           console.error(
-            "[PAGAMENTO FILTRO] Erro durante execução:",
-            err
+            "[PAGAMENTO FILTRO CIDADES] Erro na organização posterior:",
+            erro
           );
-
-          await interaction.editReply({
-            content: [
-              "❌ O filtro encontrou um erro durante a execução.",
-              "Nenhuma cópia nova será mantida quando a mensagem original não puder ser apagada.",
-              "",
-              `Motivo: \`${err?.message || String(err)}\``,
-            ].join("\n"),
-          }).catch(() => {});
-
-          return true;
-        } finally {
-          finalizarPagamentoFiltro(client);
         }
+      })();
+
+      return true;
+    }
+
+    if (
+      qual !== "solicitados" &&
+      qual !== "naoclicados"
+    ) {
+      await interaction.editReply({
+        content: `❌ Filtro inválido: \`${qual}\`.`,
+      }).catch(() => {});
+
+      return true;
+    }
+
+    const nomeFiltro =
+      qual === "solicitados"
+        ? "Solicitados"
+        : "Não clicados";
+
+    await interaction.editReply({
+      content: [
+        `🔎 Organizando **${nomeFiltro}**...`,
+        "📦 Lendo os registros e movendo os encontrados para o final.",
+      ].join("\n"),
+    }).catch(() => {});
+
+    const resultadoFiltro =
+      await moverRegistrosPorFiltro(
+        client,
+        canal,
+        qual
+      );
+
+    const {
+      movidos,
+      relidos,
+      falhasMovimento,
+      rollbacks,
+    } = resultadoFiltro;
+
+    /*
+     * A operação principal já terminou.
+     * Responde imediatamente sem reconstruir dashboard,
+     * executar OCR ou procurar duplicados em 5.000 mensagens.
+     */
+    await interaction.editReply({
+      content: [
+        `✅ **${nomeFiltro} organizados!**`,
+        "",
+        `🔎 Registros encontrados: **${relidos || 0}**`,
+        `📦 Registros movidos: **${movidos || 0}**`,
+        `⚠️ Falhas: **${falhasMovimento || 0}**`,
+        `↩️ Cópias desfeitas por segurança: **${rollbacks || 0}**`,
+        "",
+        movidos > 0
+          ? "Os registros foram colocados no final do canal mantendo a ordem."
+          : "Nenhum registro correspondente foi encontrado nas últimas 100 mensagens.",
+      ].join("\n"),
+    }).catch(() => {});
+
+    logPagamento(
+      client,
+      interaction,
+      "⚡ Filtro rápido aplicado",
+      [
+        `Filtro: **${qual}**`,
+        `Registros encontrados: **${relidos || 0}**`,
+        `Registros movidos: **${movidos || 0}**`,
+        `Falhas: **${falhasMovimento || 0}**`,
+        `Rollbacks: **${rollbacks || 0}**`,
+      ].join("\n")
+    ).catch(() => {});
+
+    /*
+     * Organiza somente o menu depois da resposta.
+     *
+     * Não reconstrói estatísticas porque apenas mover mensagens
+     * não altera pagamento, status, valor, cidade ou responsável.
+     */
+    void (async () => {
+      try {
+        await canal.send({
+          embeds: [criarEmbedMenu()],
+          components: [criarRowMenu()],
+        }).catch(() => {});
+
+        await limparBotoesAntigos(
+          client,
+          canal
+        ).catch(() => {});
+      } catch (erro) {
+        console.error(
+          "[PAGAMENTO FILTRO RÁPIDO] Erro ao organizar o menu:",
+          erro
+        );
       }
+    })();
+
+    return true;
+  } catch (err) {
+    console.error(
+      "[PAGAMENTO FILTRO RÁPIDO] Erro durante execução:",
+      err
+    );
+
+    await interaction.editReply({
+      content: [
+        "❌ O filtro encontrou um erro durante a execução.",
+        "Nenhuma cópia será mantida quando a mensagem antiga não puder ser apagada.",
+        "",
+        `Motivo: \`${err?.message || String(err)}\``,
+      ].join("\n"),
+    }).catch(() => {});
+
+    return true;
+  } finally {
+    finalizarPagamentoFiltro(client);
+  }
+}
 
       // ✅ ABRIR FORM
       if (id === "abrirform") {

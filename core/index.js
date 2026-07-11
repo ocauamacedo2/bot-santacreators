@@ -794,6 +794,19 @@ if (isCommand) {
 // Precisa vir ANTES do roteador central para não ser engolido por outro handler.
 if (await graficoManagersHandleMessage(message, client)) return;
 
+// ✅ Doações SantaCreators
+// Comandos: !doacao e !desligardoacao
+// Precisa executar ANTES do roteador central, porque o roteador pode encerrar
+// o processamento antes que o módulo de doações receba o comando.
+if (await doacaoHandleMessage(message, client)) return;
+
+// ✅ Dashboard de pagamentos e registros SantaCreators
+// Comandos: !pevdash, !pevdashrefresh, !pevdashforce,
+// !criarsocial, !socialrefresh, !criardashsocial,
+// !dashboard e !recriardashboard
+// Precisa executar ANTES do roteador central para não ser engolido.
+if (await payEvtDashHandleMessage(message, client)) return;
+
 // 🚀 ROTEADOR CENTRALIZADO: Tenta executar via messageCreateHandler primeiro.
 // Se o handler retornar true, significa que o comando foi processado e paramos aqui.
 if (await messageCreateHandler.execute(message, args, client)) return;
@@ -808,14 +821,13 @@ if (cmd === "correcao") { if (await handleCorrecao(message, client)) return; }
         if (cmd === "duplicarperm") { if (await duplicarPermHandleMessage(message, client)) return; }
 
         // 🚀 Fallbacks para comandos de módulos (estavam fora do roteador e não funcionavam)
-        if (await aulaoHandleMessage(message, client)) return;
-        if (await pedirSetHandleMessage(message, client)) return;
-        if (await cronogramaCreatorsHandleMessage(message, client)) return;
-        if (await ausenciasHandleMessage(message, client)) return;
-        if (await hierarquiaHandleMessage(message, client)) return;
-        if (await reuniaoSemanalHandleMessage(message, client)) return;
-       if (await payEvtDashHandleMessage(message, client)) return;
-       if (await pagamentoSocialHandleMessage(message, client)) return;
+if (await aulaoHandleMessage(message, client)) return;
+if (await pedirSetHandleMessage(message, client)) return;
+if (await cronogramaCreatorsHandleMessage(message, client)) return;
+if (await ausenciasHandleMessage(message, client)) return;
+if (await hierarquiaHandleMessage(message, client)) return;
+if (await reuniaoSemanalHandleMessage(message, client)) return;
+if (await pagamentoSocialHandleMessage(message, client)) return;
 if (await metaInternaSemanalHandleMessage(message, client)) return;
 if (await geralDash.geralDashHandleMessage(message, client)) return;
 if (await geralWeeklyRankHandleMessage(message, client)) return;
