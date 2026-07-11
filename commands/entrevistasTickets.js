@@ -534,19 +534,36 @@ async function notificarEquipeEntrevista(guild, canal, tipo) {
           `[TICKET DM] Cache recente de membros reutilizado. Membros disponíveis: ${resultadoCache.total}.`
         );
       }
-    } catch (fetchError) {
-      console.error(
-        '[TICKET DM] Não foi possível atualizar todos os membros do servidor.',
-        {
-          mensagem: fetchError?.message || String(fetchError),
-          codigo: fetchError?.code ?? 'SEM_CODIGO'
-        }
-      );
-
-      console.warn(
-        `[TICKET DM] A notificação continuará utilizando o cache atual com ${guild.members.cache.size} membros.`
-      );
+} catch (fetchError) {
+  console.error(
+    '[TICKET DM] Não foi possível atualizar todos os membros do servidor.',
+    {
+      mensagem: fetchError?.message || String(fetchError),
+      codigo: fetchError?.code ?? 'SEM_CODIGO',
+      cacheAtual: guild.members.cache.size,
+      guildId: guild.id,
+      guildNome: guild.name
     }
+  );
+
+  if (guild.members.cache.size === 0) {
+    console.error(
+      '[TICKET DM] Notificação cancelada porque a busca de membros falhou e o cache está vazio. ' +
+      'Verifique se Server Members Intent está ativado no Developer Portal do bot novo.'
+    );
+
+    return {
+      encontrados: 0,
+      enviados: 0,
+      bloqueados: 0,
+      erros: 1
+    };
+  }
+
+  console.warn(
+    `[TICKET DM] A notificação continuará utilizando o cache atual com ${guild.members.cache.size} membros.`
+  );
+}
 
     const textos = {
       entrevista: {
@@ -679,22 +696,38 @@ async function notificarEquipeEntrevista(guild, canal, tipo) {
       }
 
       try {
-        await membro.send({
-          content: conteudo,
-          allowedMentions: {
-            parse: []
-          }
-        });
+  const resultadoEnvio = await globalThis.enviarMensagemPrivadaSegura(
+    membro,
+    {
+      content: conteudo,
+      allowedMentions: {
+        parse: []
+      }
+    },
+    `TICKET_${String(tipo).toUpperCase()}:${canal.id}`
+  );
 
-        console.log(
-          `[TICKET DM] ✅ Notificação enviada para ${membro.user.tag} (${membro.id}).`
-        );
+  if (!resultadoEnvio?.sucesso) {
+    const erroEnvio = new Error(
+      resultadoEnvio?.mensagem ||
+      'Não foi possível enviar a mensagem privada.'
+    );
 
-        return {
-          status: 'enviado',
-          membroId: membro.id
-        };
-      } catch (erro) {
+    erroEnvio.code = resultadoEnvio?.codigo ?? null;
+    erroEnvio.dmStatus = resultadoEnvio?.status ?? 'erro_desconhecido';
+
+    throw erroEnvio;
+  }
+
+  console.log(
+    `[TICKET DM] ✅ Notificação enviada para ${membro.user.tag} (${membro.id}).`
+  );
+
+  return {
+    status: 'enviado',
+    membroId: membro.id
+  };
+} catch (erro) {
         const codigo = erro?.code;
         const mensagem = erro?.message || String(erro);
 

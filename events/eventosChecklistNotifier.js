@@ -349,11 +349,75 @@ async function logDmNotification(client, member, embed, status = "ENVIADO", even
 
 async function dm(client, member, embed, event, type) {
   try {
-    await member.send({ embeds: [embed] });
-    await logDmNotification(client, member, embed, "ENVIADO", event, type);
+    const resultado = await globalThis.enviarMensagemPrivadaSegura(
+      member,
+      {
+        embeds: [embed],
+      },
+      `EVENTOS_CHECKLIST:${String(type || "SEM_TIPO")}:${member.id}`
+    );
+
+    if (!resultado?.sucesso) {
+      console.error(
+        `[EventosChecklistNotifier] Falha ao enviar PV para ${member.user.tag} (${member.id}).`,
+        {
+          status: resultado?.status ?? "SEM_STATUS",
+          codigo: resultado?.codigo ?? "SEM_CODIGO",
+          mensagem: resultado?.mensagem ?? "SEM_MENSAGEM",
+          tipo,
+          evento: event?.eventName ?? "SEM_EVENTO",
+        }
+      );
+
+      await logDmNotification(
+        client,
+        member,
+        embed,
+        "FALHOU",
+        event,
+        type
+      );
+
+      return false;
+    }
+
+    await logDmNotification(
+      client,
+      member,
+      embed,
+      "ENVIADO",
+      event,
+      type
+    );
+
     return true;
-  } catch {
-    await logDmNotification(client, member, embed, "FALHOU", event, type);
+  } catch (erro) {
+    console.error(
+      `[EventosChecklistNotifier] Erro inesperado ao enviar PV para ${member.user.tag} (${member.id}).`,
+      {
+        codigo:
+          erro?.code ??
+          erro?.rawError?.code ??
+          "SEM_CODIGO",
+        mensagem:
+          erro?.rawError?.message ??
+          erro?.message ??
+          String(erro),
+        stack: erro?.stack,
+        tipo,
+        evento: event?.eventName ?? "SEM_EVENTO",
+      }
+    );
+
+    await logDmNotification(
+      client,
+      member,
+      embed,
+      "FALHOU",
+      event,
+      type
+    );
+
     return false;
   }
 }
@@ -1256,74 +1320,74 @@ else failedTest++;
 if (phase === "PRE_120" || phase === "PRE_60" || phase === "PRE_30") {
   const targetsMap = new Map();
 
-  // ✅ Responsáveis recebem sempre, até offline/invisível
+  // ✅ Responsáveis recebem sempre, independentemente da presença
   for (const member of respMembers) {
     targetsMap.set(member.id, member);
   }
 
-  // ✅ Equipe/Coordenação só recebe se estiver online/ausente/dnd
-  for (const member of onlineEquipe) {
+  // ✅ Equipe/Coordenação também recebe sempre, mesmo offline ou invisível
+  for (const member of equipeMembers) {
     targetsMap.set(member.id, member);
   }
 
   targetsToSend = [...targetsMap.values()];
 }
 
-      else if (phase === "DURANTE") {
-        const targetsMap = new Map();
+else if (phase === "DURANTE") {
+  const targetsMap = new Map();
 
-        for (const member of respMembers) {
-          targetsMap.set(member.id, member);
-        }
+  for (const member of respMembers) {
+    targetsMap.set(member.id, member);
+  }
 
-        for (const member of onlineEquipe) {
-          targetsMap.set(member.id, member);
-        }
+  for (const member of equipeMembers) {
+    targetsMap.set(member.id, member);
+  }
 
-        targetsToSend = [...targetsMap.values()];
-      }
+  targetsToSend = [...targetsMap.values()];
+}
 
-      else if (phase === "PONTO_25") {
-        const targetsMap = new Map();
+else if (phase === "PONTO_25") {
+  const targetsMap = new Map();
 
-        for (const member of respMembers) {
-          targetsMap.set(member.id, member);
-        }
+  for (const member of respMembers) {
+    targetsMap.set(member.id, member);
+  }
 
-        for (const member of onlineEquipe) {
-          targetsMap.set(member.id, member);
-        }
+  for (const member of equipeMembers) {
+    targetsMap.set(member.id, member);
+  }
 
-        targetsToSend = [...targetsMap.values()];
-      }
+  targetsToSend = [...targetsMap.values()];
+}
 
-      else if (phase === "POS_CHECKLIST") {
-        const targetsMap = new Map();
+else if (phase === "POS_CHECKLIST") {
+  const targetsMap = new Map();
 
-        for (const member of respMembers) {
-          targetsMap.set(member.id, member);
-        }
+  for (const member of respMembers) {
+    targetsMap.set(member.id, member);
+  }
 
-        for (const member of onlineEquipe) {
-          targetsMap.set(member.id, member);
-        }
+  for (const member of equipeMembers) {
+    targetsMap.set(member.id, member);
+  }
 
-        targetsToSend = [...targetsMap.values()];
-      }
+  targetsToSend = [...targetsMap.values()];
+}
 
-      else if (phase === "POS_PODERES") {
-        const targetsMap = new Map();
+else if (phase === "POS_PODERES") {
+  const targetsMap = new Map();
 
-        for (const member of respMembers) {
-          targetsMap.set(member.id, member);
-        }
+  for (const member of respMembers) {
+    targetsMap.set(member.id, member);
+  }
 
-        for (const member of onlineEquipe) {
-          targetsMap.set(member.id, member);
-        }
+  for (const member of equipeMembers) {
+    targetsMap.set(member.id, member);
+  }
 
-        targetsToSend = [...targetsMap.values()];
-      }
+  targetsToSend = [...targetsMap.values()];
+}
 
       let sent = 0;
       let failed = 0;

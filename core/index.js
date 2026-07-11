@@ -22,7 +22,10 @@ import {
 } from "discord.js";
 
 // Importa o Client configurado
-import { client } from "./client.js";
+import {
+  client,
+  enviarMensagemPrivadaSegura,
+} from "./client.js";
 
 // =====================================================
 // ESM compat
@@ -551,6 +554,146 @@ const loadRegistros = () => {
   }
 };
 
+
+
+
+// =====================================================
+// Comando de diagnóstico das mensagens privadas
+// =====================================================
+
+async function testarMensagemPrivadaHandleMessage(message) {
+  if (!message?.guild || !message?.author) return false;
+  if (message.author.bot) return false;
+
+  const conteudo = message.content?.trim() || "";
+
+  if (!conteudo.toLowerCase().startsWith("!testarpv")) {
+    return false;
+  }
+
+  /*
+   * Segurança:
+   * somente o proprietário configurado poderá testar qualquer usuário.
+   *
+   * Outras pessoas, caso o comando seja liberado futuramente,
+   * somente conseguiriam testar o próprio privado.
+   */
+  const USUARIOS_AUTORIZADOS = new Set([
+    "660311795327828008",
+  ]);
+
+  if (!USUARIOS_AUTORIZADOS.has(message.author.id)) {
+    await message.reply({
+      content: "🚫 Você não possui permissão para utilizar este diagnóstico.",
+      allowedMentions: {
+        repliedUser: false,
+        parse: [],
+      },
+    });
+
+    return true;
+  }
+
+  const argumentos = conteudo.split(/\s+/).slice(1);
+
+  const idInformado =
+    message.mentions.users.first()?.id ||
+    argumentos
+      .join(" ")
+      .match(/\d{17,20}/)?.[0] ||
+    message.author.id;
+
+  const usuario = await client.users.fetch(idInformado, {
+    force: true,
+  }).catch(erro => {
+    console.error("[TESTAR PV] Não foi possível localizar o usuário.", {
+      usuarioId: idInformado,
+      codigo: erro?.code ?? "SEM_CODIGO",
+      mensagem: erro?.message || String(erro),
+    });
+
+    return null;
+  });
+
+  if (!usuario) {
+    await message.reply({
+      content:
+        `❌ Não consegui localizar o usuário de ID \`${idInformado}\`.\n\n` +
+        "Confira se o ID foi informado corretamente.",
+      allowedMentions: {
+        repliedUser: false,
+        parse: [],
+      },
+    });
+
+    return true;
+  }
+
+  const resultado = await enviarMensagemPrivadaSegura(
+    usuario,
+    {
+      content:
+        `✅ **Teste de mensagem privada realizado com sucesso!**\n\n` +
+        `🤖 Bot conectado: **${client.user?.tag || client.user?.username || "Desconhecido"}**\n` +
+        `🆔 ID do bot: \`${client.user?.id || "Desconhecido"}\`\n` +
+        `📅 Testado em: <t:${Math.floor(Date.now() / 1000)}:F>\n\n` +
+        "Se você recebeu esta mensagem, o sistema de mensagens privadas está funcionando para sua conta.",
+    },
+    `COMANDO_TESTAR_PV:${message.author.id}`
+  );
+
+  if (resultado.sucesso) {
+    await message.reply({
+      content:
+        `✅ Mensagem privada enviada com sucesso para ` +
+        `<@${usuario.id}>.\n\n` +
+        `🤖 Bot utilizado: **${client.user?.tag || client.user?.username}**\n` +
+        `🆔 ID do bot: \`${client.user?.id}\``,
+      allowedMentions: {
+        repliedUser: false,
+        users: [usuario.id],
+      },
+    });
+
+    return true;
+  }
+
+  if (resultado.codigo === 50007) {
+    await message.reply({
+      content:
+        `⚠️ O Discord recusou a mensagem privada para <@${usuario.id}>.\n\n` +
+        `**Código:** \`50007\`\n` +
+        `**Resposta:** \`${resultado.mensagem || "Cannot send messages to this user"}\`\n\n` +
+        "Isso significa que o código executou corretamente, mas o Discord não autorizou o bot novo a enviar a mensagem para essa pessoa.\n\n" +
+        "A pessoa deverá:\n" +
+        "1. Abrir as configurações de privacidade do servidor;\n" +
+        "2. Ativar mensagens diretas de membros do servidor;\n" +
+        "3. Verificar se bloqueou o bot novo;\n" +
+        "4. Tentar abrir o perfil do bot e enviar uma mensagem primeiro.",
+      allowedMentions: {
+        repliedUser: false,
+        users: [usuario.id],
+      },
+    });
+
+    return true;
+  }
+
+  await message.reply({
+    content:
+      `❌ O teste de mensagem privada falhou para <@${usuario.id}>.\n\n` +
+      `**Código:** \`${resultado.codigo ?? "SEM_CODIGO"}\`\n` +
+      `**Status:** \`${resultado.status}\`\n` +
+      `**Erro:** \`${resultado.mensagem || "Erro desconhecido"}\`\n\n` +
+      "O erro completo também foi registrado no console da hospedagem.",
+    allowedMentions: {
+      repliedUser: false,
+      users: [usuario.id],
+    },
+  });
+
+  return true;
+}
 // =====================================================
 // Setup Handlers
 // =====================================================
@@ -625,16 +768,19 @@ const setupEventHandlers = () => {
 
       // --- ROTEADOR RÁPIDO DE COMANDOS (AUDITORIA DE PERFORMANCE) ---
       const content = message.content || "";
-      const prefix = "!";
-      const isCommand = content.startsWith(prefix);
+const prefix = "!";
+const isCommand = content.startsWith(prefix);
 
-      if (isCommand) {
-        const args = content.slice(prefix.length).trim().split(/\s+/);
-        const cmd = args.shift().toLowerCase();
+if (isCommand) {
+  const args = content.slice(prefix.length).trim().split(/\s+/);
+  const cmd = args.shift().toLowerCase();
 
-        // ✅ FiveM Retention precisa vir antes do roteador central,
-        // porque é um comando direto do módulo e não estava sendo chamado.
-        if (await fivemRetentionStatusHandleMessage(message, client)) return;
+  // ✅ Diagnóstico de mensagens privadas deve executar antes do roteador central.
+  if (await testarMensagemPrivadaHandleMessage(message)) return;
+
+  // ✅ FiveM Retention precisa vir antes do roteador central,
+  // porque é um comando direto do módulo e não estava sendo chamado.
+  if (await fivemRetentionStatusHandleMessage(message, client)) return;
 
         // ✅ Cadastro Manual: comando !semwl precisa passar antes do roteador central
         if (await cadastroManualHandleMessage(message, client)) return;
