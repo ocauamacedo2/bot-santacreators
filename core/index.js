@@ -808,6 +808,19 @@ if (await doacaoHandleMessage(message, client)) return;
 // Precisa executar ANTES do roteador central para não ser engolido.
 if (await payEvtDashHandleMessage(message, client)) return;
 
+// =====================================================
+// ✅ FACs Semanais
+// =====================================================
+// Comandos:
+// !menueventos
+// !recriarmenueventos
+// !recriarfacs
+//
+// Precisa executar ANTES do roteador central.
+// Caso fique depois do bloco de comandos, o código nunca chega
+// ao facsSemanaisHandleMessage, pois existe um return no final.
+if (await facsSemanaisHandleMessage(message, client)) return;
+
 // 🚀 ROTEADOR CENTRALIZADO: Tenta executar via messageCreateHandler primeiro.
 // Se o handler retornar true, significa que o comando foi processado e paramos aqui.
 if (await messageCreateHandler.execute(message, args, client)) return;
@@ -848,12 +861,11 @@ if (await recriarTicketsHandleMessage(message, client, Transcript)) return;
         // Se chegou aqui sendo um comando, mas não foi tratado, não precisamos continuar nos listeners de texto
         return;
       }
-      if (await facsComparativoHandleMessage(message, client)) return;
-      if (await dashRouterHandleMessage(message)) return;
-      if (await facsSemanaisHandleMessage(message, client)) return;
-      if (await evt3EventsHandleMessage(message, client)) return;
-      if (await recrutamentoDashHandleMessage(message, client)) return;
-      if (await registroManagerHandleMessage(message, client)) return;
+if (await facsComparativoHandleMessage(message, client)) return;
+if (await dashRouterHandleMessage(message)) return;
+if (await evt3EventsHandleMessage(message, client)) return;
+if (await recrutamentoDashHandleMessage(message, client)) return;
+if (await registroManagerHandleMessage(message, client)) return;
       if (await registroVendasHandleMessage(message, client)) return;
       if (await apagarChatHandleMessage(message, client)) return;
       if (await verPermsHandleMessage(message)) return;
