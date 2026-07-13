@@ -108,27 +108,88 @@ function buildBlacklistModal() {
 }
 
 async function sendFreshBlacklistButton(channel, clientUser) {
-  // limpa botões antigos do próprio bot (não apaga registros)
+  /*
+   * Procura painéis antigos de blacklist.
+   *
+   * Remove:
+   * - painel enviado pelo bot atual;
+   * - painel enviado pelo bot antigo;
+   * - qualquer mensagem de bot que possua o botão abrir_blacklist.
+   *
+   * Não remove registros de blacklist, pois os registros não possuem
+   * o botão com customId abrir_blacklist.
+   */
   try {
-    const messages = await channel.messages.fetch({ limit: 30 });
-    for (const msg of messages.values()) {
-      const btn = msg.components?.[0]?.components?.[0];
-      if (msg.author?.id === clientUser.id && btn?.customId === BTN_ID) {
-        await msg.delete().catch(() => {});
+    let beforeId = null;
+    let paginasLidas = 0;
+
+    while (paginasLidas < 5) {
+      const messages = await channel.messages
+        .fetch({
+          limit: 100,
+          before: beforeId || undefined,
+        })
+        .catch(() => null);
+
+      if (!messages || messages.size === 0) {
+        break;
+      }
+
+      for (const msg of messages.values()) {
+        const possuiBotaoBlacklist = msg.components?.some((row) =>
+          row.components?.some(
+            (component) => component.customId === BTN_ID
+          )
+        );
+
+        if (msg.author?.bot && possuiBotaoBlacklist) {
+          await msg.delete().catch((error) => {
+            console.warn(
+              `[Blacklist] Não consegui apagar o painel antigo ${msg.id}:`,
+              error?.message || error
+            );
+          });
+        }
+      }
+
+      beforeId = messages.last()?.id || null;
+      paginasLidas++;
+
+      if (!beforeId || messages.size < 100) {
+        break;
       }
     }
-  } catch {}
+  } catch (error) {
+    console.error(
+      "[Blacklist] Erro ao procurar painéis antigos:",
+      error
+    );
+  }
 
   const embed = new EmbedBuilder()
     .setTitle("🛑 Blacklist – Registro")
-    .setDescription("Clique no botão abaixo para abrir o formulário e registrar uma blacklist.")
+    .setDescription(
+      "Clique no botão abaixo para abrir o formulário e registrar uma blacklist."
+    )
     .setImage(BLACKLIST_GIF)
     .setColor(0x8a2be2)
     .setFooter({ text: "SantaCreators • Blacklist" });
 
-  await channel
-    .send({ embeds: [embed], components: [buildBlacklistButtonRow()] })
-    .catch(() => null);
+  const painel = await channel
+    .send({
+      embeds: [embed],
+      components: [buildBlacklistButtonRow()],
+    })
+    .catch((error) => {
+      console.error(
+        "[Blacklist] Não consegui enviar o novo painel:",
+        error
+      );
+
+      return null;
+    });
+
+  return painel;
 }
 
 // ================== EXPORTS ==================
@@ -136,12 +197,36 @@ async function sendFreshBlacklistButton(channel, clientUser) {
 // 1. Chamado no 'ready'
 export async function blacklistFacsOnReady(client) {
   try {
-    const ch = await client.channels.fetch(BLACKLIST_BUTTON_CHANNEL_ID).catch(() => null);
-    if (!ch || !ch.isTextBased()) return;
-    await sendFreshBlacklistButton(ch, client.user);
-    console.log("[Blacklist] Botão inicial pronto.");
+    const ch = await client.channels
+      .fetch(BLACKLIST_BUTTON_CHANNEL_ID)
+      .catch(() => null);
+
+    if (!ch || !ch.isTextBased()) {
+      console.error(
+        `[Blacklist] Canal inválido ou não encontrado: ${BLACKLIST_BUTTON_CHANNEL_ID}`
+      );
+
+      return false;
+    }
+
+    const painel = await sendFreshBlacklistButton(ch, client.user);
+
+    if (!painel) {
+      console.error(
+        "[Blacklist] O canal foi encontrado, mas o painel não pôde ser criado."
+      );
+
+      return false;
+    }
+
+    console.log(
+      `[Blacklist] ✅ Painel recriado automaticamente no canal ${ch.id}.`
+    );
+
+    return true;
   } catch (err) {
     console.error("[Blacklist] Erro no ready:", err);
+    return false;
   }
 }
 
@@ -149,22 +234,42 @@ export async function blacklistFacsOnReady(client) {
 export async function blacklistFacsHandleMessage(message, client) {
   try {
     if (!message.guild || message.author.bot) return false;
-    if (!/^!blacklistbtn\b/i.test(message.content || "")) return false;
+
+    const comandoValido =
+      /^!blacklistbtn\b/i.test(message.content || "") ||
+      /^!recriarblacklist\b/i.test(message.content || "");
+
+    if (!comandoValido) return false;
 
     if (!hasAnyAllowedRole(message.member)) {
-        // Opcional: Avisar sem permissão
-        return true; 
+      await message
+        .reply("❌ Você não tem permissão para recriar o painel de blacklist.")
+        .catch(() => {});
+
+      return true;
     }
-    
+
     await message.delete().catch(() => {});
 
-    const ch = await client.channels.fetch(BLACKLIST_BUTTON_CHANNEL_ID).catch(() => null);
-    if (!ch || !ch.isTextBased()) return true;
+    const ch = await client.channels
+      .fetch(BLACKLIST_BUTTON_CHANNEL_ID)
+      .catch(() => null);
 
-    await sendFreshBlacklistButton(ch, client.user);
+    if (!ch || !ch.isTextBased()) {
+      return true;
+    }
+
+    const painel = await sendFreshBlacklistButton(ch, client.user);
+
+    if (!painel) {
+      console.error(
+        "[Blacklist] Não foi possível recriar o painel manualmente."
+      );
+    }
+
     return true;
   } catch (err) {
-    console.error("[Blacklist] erro no comando !blacklistbtn:", err);
+    console.error("[Blacklist] erro no comando de recriação:", err);
     return false;
   }
 }

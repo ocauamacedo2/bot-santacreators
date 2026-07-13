@@ -3,7 +3,7 @@ import { EmbedBuilder, Events } from 'discord.js';
 import dotenv from 'dotenv';
 dotenv.config();
 
-const TTL_MS = Number(process.env.BEMVINDO_TTL_MS || 86_400_000); // 24h
+const TTL_MS = Number(process.env.BEMVINDO_TTL_MS || 0); // 0 = nunca apagar
 const COLOR = process.env.BASE_COLORS || '#ff009a';
 const CANAL_BEMVINDO = process.env.CANAL_BEMVINDO; // fallback (SantaCreators original)
 
@@ -90,15 +90,15 @@ export default {
 
       const msg = await canal.send({ embeds: [embed] });
 
-      if (TTL_MS > 0) {
-        setTimeout(() => {
-          msg.delete().catch(() => {});
-        }, TTL_MS);
-      }
+if (TTL_MS > 0) {
+  setTimeout(() => {
+    msg.delete().catch(() => {});
+  }, TTL_MS);
+}
 
-      console.log(
-        `[bemvindo] ✅ Mensagem enviada para ${member.user.tag} em #${canal.name} (guild ${guildId})`
-      );
+console.log(
+  `[bemvindo] ✅ Mensagem enviada para ${member.user.tag} em #${canal.name} (guild ${guildId})`
+);
     } catch (err) {
       console.error('[bemvindo] Erro ao enviar mensagem de boas-vindas:', err);
     }

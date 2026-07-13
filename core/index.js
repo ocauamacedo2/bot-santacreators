@@ -261,9 +261,10 @@ import {
 
 // Blacklist Eventos
 import {
-  blacklistEventosOnReady,
-  blacklistEventosHandleInteraction,
-} from "../events/blacklistEventos.js";
+  blacklistFacsOnReady,
+  blacklistFacsHandleMessage,
+  blacklistFacsHandleInteraction,
+} from "./application/events/blacklistFacs.js";
 
 // Hall da Fama & Eventos Diários
 import {

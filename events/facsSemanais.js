@@ -56,6 +56,11 @@ const PERMS_MANAGE = [
 const FACSMENU_ROLES_MENTION = ["1388976155830255697", "1392678638176043029"];
 
 const FACSMENU_LOG_DM_CHANNEL_ID = "1486009690767757322";
+
+// ✅ CANAL FIXO DO PAINEL FACs SEMANAIS
+const FACSMENU_CHANNEL_ID =
+  process.env.FACSMENU_CHANNEL_ID || "COLOQUE_AQUI_O_ID_DO_CANAL";
+
 // ✅ LOG AUDITORIA (todas mudanças do painel FACs Semanais)
 const FACSMENU_AUDIT_LOG_CHANNEL_ID = "1486009703258652683";
 
@@ -623,39 +628,270 @@ async function sendOrUpdateMenu(channel) {
   const components = buildButtons();
 
   if (facsState.messageId) {
-    const prev = await channel.messages.fetch(facsState.messageId).catch(() => null);
+    const prev = await channel.messages
+      .fetch(facsState.messageId)
+      .catch(() => null);
+
     if (prev) {
-      await prev.edit({ content: mentionRoles(), embeds: [embed], components }).catch(() => {});
+      await prev
+        .edit({
+          content: mentionRoles(),
+          embeds: [embed],
+          components
+        })
+        .catch(() => {});
+
       return prev;
     }
   }
 
-  const msg = await channel.send({ content: mentionRoles(), embeds: [embed], components }).catch(() => null);
+  const msg = await channel
+    .send({
+      content: mentionRoles(),
+      embeds: [embed],
+      components
+    })
+    .catch(() => null);
+
   if (!msg) return null;
 
   const wk = getCurrentWeekSP().weekKey;
+
   facsState.channelId = channel.id;
   facsState.messageId = msg.id;
   facsState.weekKey = wk;
+
   saveStore(facsState);
 
   return msg;
 }
 
+// =====================================================
+// RECRIAÇÃO AUTOMÁTICA DO PAINEL FACs SEMANAIS
+// =====================================================
+async function ensureFacsSemanaisPanel(client) {
+  try {
+    const targetChannelId =
+      FACSMENU_CHANNEL_ID ||
+      facsState.channelId;
+
+    if (!targetChannelId) {
+      console.error(
+        "[FACS_SEMANAIS] ❌ Nenhum canal configurado para o painel."
+      );
+
+      return null;
+    }
+
+    const channel = await client.channels
+      .fetch(targetChannelId)
+      .catch(() => null);
+
+    if (!channel || !channel.isTextBased()) {
+      console.error(
+        `[FACS_SEMANAIS] ❌ Canal inválido ou não encontrado: ${targetChannelId}`
+      );
+
+      return null;
+    }
+
+    /*
+     * Primeiro tenta encontrar a mensagem salva.
+     */
+    if (facsState.messageId) {
+      const savedMessage = await channel.messages
+        .fetch(facsState.messageId)
+        .catch(() => null);
+
+      if (savedMessage) {
+        await savedMessage
+          .edit({
+            content: mentionRoles(),
+            embeds: [buildEmbed()],
+            components: buildButtons()
+          })
+          .catch(() => {});
+
+        facsState.channelId = channel.id;
+        facsState.messageId = savedMessage.id;
+
+        saveStore(facsState);
+
+        console.log(
+          `[FACS_SEMANAIS] ✅ Painel existente atualizado: ${savedMessage.id}`
+        );
+
+        return savedMessage;
+      }
+    }
+
+    /*
+     * Se a mensagem salva não existir, procura um painel antigo
+     * nas últimas mensagens do canal.
+     */
+    let painelAtual = null;
+    let beforeId = null;
+
+    for (let page = 0; page < 5; page++) {
+      const messages = await channel.messages
+        .fetch({
+          limit: 100,
+          before: beforeId || undefined
+        })
+        .catch(() => null);
+
+      if (!messages || messages.size === 0) {
+        break;
+      }
+
+      for (const message of messages.values()) {
+        const possuiBotaoFacs = message.components?.some((row) =>
+          row.components?.some((component) =>
+            String(component.customId || "").startsWith("facs_semana_")
+          )
+        );
+
+        const possuiTituloFacs = message.embeds?.some((embed) =>
+          String(embed.title || "")
+            .toLowerCase()
+            .includes("facs — orgs da semana")
+        );
+
+        /*
+         * Só reutiliza uma mensagem enviada pelo bot atual,
+         * pois o bot novo não consegue editar mensagem do bot antigo.
+         */
+        if (
+          message.author?.id === client.user.id &&
+          (possuiBotaoFacs || possuiTituloFacs)
+        ) {
+          painelAtual = message;
+          break;
+        }
+      }
+
+      if (painelAtual) {
+        break;
+      }
+
+      beforeId = messages.last()?.id || null;
+
+      if (!beforeId || messages.size < 100) {
+        break;
+      }
+    }
+
+    /*
+     * Se encontrou painel do bot atual, atualiza.
+     */
+    if (painelAtual) {
+      await painelAtual
+        .edit({
+          content: mentionRoles(),
+          embeds: [buildEmbed()],
+          components: buildButtons()
+        })
+        .catch(() => {});
+
+      facsState.channelId = channel.id;
+      facsState.messageId = painelAtual.id;
+      facsState.weekKey = getCurrentWeekSP().weekKey;
+
+      saveStore(facsState);
+
+      console.log(
+        `[FACS_SEMANAIS] ✅ Painel encontrado e atualizado: ${painelAtual.id}`
+      );
+
+      return painelAtual;
+    }
+
+    /*
+     * Nenhuma mensagem encontrada:
+     * cria um painel novo automaticamente.
+     */
+    facsState.channelId = channel.id;
+    facsState.messageId = null;
+    facsState.weekKey = getCurrentWeekSP().weekKey;
+
+    saveStore(facsState);
+
+    const novoPainel = await sendOrUpdateMenu(channel);
+
+    if (!novoPainel) {
+      console.error(
+        "[FACS_SEMANAIS] ❌ Não foi possível criar o painel automaticamente."
+      );
+
+      return null;
+    }
+
+    console.log(
+      `[FACS_SEMANAIS] ✅ Novo painel recriado automaticamente: ${novoPainel.id}`
+    );
+
+    return novoPainel;
+  } catch (error) {
+    console.error(
+      "[FACS_SEMANAIS] ❌ Erro ao garantir painel automático:",
+      error
+    );
+
+    return null;
+  }
+}
+
 async function _refreshMenu(client) {
   try {
-    if (!facsState.channelId) return;
-    const ch = await client.channels.fetch(facsState.channelId).catch(() => null);
-    if (!ch?.isTextBased?.()) return;
+    const targetChannelId =
+      facsState.channelId ||
+      FACSMENU_CHANNEL_ID;
 
-    const msg = facsState.messageId ? await ch.messages.fetch(facsState.messageId).catch(() => null) : null;
-    if (msg) {
-      await msg.edit({ content: mentionRoles(), embeds: [buildEmbed()], components: buildButtons() }).catch(() => {});
-    } else {
-      await sendOrUpdateMenu(ch);
+    if (!targetChannelId) {
+      console.error(
+        "[FACS_SEMANAIS] refresh ignorado: nenhum canal configurado."
+      );
+
+      return null;
     }
+
+    const ch = await client.channels
+      .fetch(targetChannelId)
+      .catch(() => null);
+
+    if (!ch?.isTextBased?.()) {
+      console.error(
+        `[FACS_SEMANAIS] refresh ignorado: canal inválido ${targetChannelId}`
+      );
+
+      return null;
+    }
+
+    facsState.channelId = ch.id;
+    saveStore(facsState);
+
+    const msg = facsState.messageId
+      ? await ch.messages
+          .fetch(facsState.messageId)
+          .catch(() => null)
+      : null;
+
+    if (msg) {
+      await msg
+        .edit({
+          content: mentionRoles(),
+          embeds: [buildEmbed()],
+          components: buildButtons()
+        })
+        .catch(() => {});
+
+      return msg;
+    }
+
+    return await ensureFacsSemanaisPanel(client);
   } catch (e) {
     console.error("[FACS_SEMANAIS] refresh err:", e);
+    return null;
   }
 }
 
@@ -1214,6 +1450,23 @@ export async function facsSemanaisAppendFromRM(client, displayOrg, options = {})
 export async function facsSemanaisOnReady(client) {
   installBridge(client);
 
+  /*
+   * Garante o painel imediatamente ao ligar.
+   * Se existir, atualiza.
+   * Se não existir, recria.
+   */
+  const painelInicial = await ensureFacsSemanaisPanel(client);
+
+  if (painelInicial) {
+    console.log(
+      `[FACS_SEMANAIS] ✅ Painel garantido no ready: ${painelInicial.id}`
+    );
+  } else {
+    console.error(
+      "[FACS_SEMANAIS] ❌ O painel não pôde ser garantido no ready."
+    );
+  }
+
   // ✅ ROTA AUTOMÁTICA EXTRA:
   // Além do bridge global, o FACs também escuta o evento do RM pelo dashHub.
   // Isso corrige casos onde o botão aprova, mas o global bridge falha/some no runtime.
@@ -1290,27 +1543,101 @@ export async function facsSemanaisOnReady(client) {
 
 export async function facsSemanaisHandleMessage(message, client) {
   try {
-    if (!message?.guild || message.author?.bot) return false;
+    if (!message?.guild || message.author?.bot) {
+      return false;
+    }
 
-    const content = String(message.content || "").trim().toLowerCase();
-    if (!content.startsWith("!menueventos")) return false;
+    const content = String(message.content || "")
+      .trim()
+      .toLowerCase();
 
-    if (!checkPerms(message.member, PERMS_REGISTER)) return true;
+    const comandoMenuAtual =
+      content === "!menueventos";
+
+    const comandoRecriarAutomatico =
+      content === "!recriarmenueventos" ||
+      content === "!recriarfacs";
+
+    if (!comandoMenuAtual && !comandoRecriarAutomatico) {
+      return false;
+    }
+
     if (!checkPerms(message.member, PERMS_REGISTER)) {
-      setTimeout(() => message.delete().catch(() => {}), 1000);
-      const msg = await message.reply("❌ Você não tem permissão para usar este comando.");
-      setTimeout(() => msg.delete().catch(() => {}), 5000);
+      const resposta = await message
+        .reply("❌ Você não tem permissão para usar este comando.")
+        .catch(() => null);
+
+      setTimeout(() => {
+        message.delete().catch(() => {});
+        resposta?.delete().catch(() => {});
+      }, 5000);
+
       return true;
     }
 
     await message.delete().catch(() => {});
-    const menuMsg = await sendOrUpdateMenu(message.channel);
 
-    if (menuMsg) {
-      message.channel
-        .send({ content: `✅ Menu das FACs (semana) ativo: [ir à mensagem](${menuMsg.url})` })
-        .then((m) => setTimeout(() => m.delete().catch(() => {}), 15000));
+    /*
+     * !menueventos:
+     * mantém o funcionamento antigo e usa o canal atual.
+     */
+    if (comandoMenuAtual) {
+      facsState.channelId = message.channel.id;
+      facsState.messageId = null;
+
+      saveStore(facsState);
+
+      const menuMsg = await sendOrUpdateMenu(message.channel);
+
+      if (menuMsg) {
+        message.channel
+          .send({
+            content:
+              `✅ Menu das FACs ativo: ` +
+              `[ir à mensagem](${menuMsg.url})`
+          })
+          .then((msg) =>
+            setTimeout(() => msg.delete().catch(() => {}), 15000)
+          )
+          .catch(() => {});
+      }
+
+      return true;
     }
+
+    /*
+     * !recriarmenueventos ou !recriarfacs:
+     * usa o canal fixo e força a recriação.
+     */
+    facsState.channelId = FACSMENU_CHANNEL_ID;
+    facsState.messageId = null;
+
+    saveStore(facsState);
+
+    const painel = await ensureFacsSemanaisPanel(client);
+
+    if (!painel) {
+      await message.channel
+        .send(
+          `❌ Não consegui recriar o painel. ` +
+          `Confira o canal configurado: \`${FACSMENU_CHANNEL_ID}\`.`
+        )
+        .catch(() => {});
+
+      return true;
+    }
+
+    await message.channel
+      .send({
+        content:
+          `✅ Painel FACs recriado automaticamente em <#${painel.channel.id}>.\n` +
+          `[Ir ao painel](${painel.url})`
+      })
+      .then((msg) =>
+        setTimeout(() => msg.delete().catch(() => {}), 15000)
+      )
+      .catch(() => {});
+
     return true;
   } catch (e) {
     console.error("[FACS_SEMANAIS] handleMessage err:", e);
