@@ -1044,7 +1044,7 @@ client.on("interactionCreate", async (interaction) => {
       if (await graficoManagersHandleInteraction(interaction, client)) return;
       if (await graficoPresencaEventosHandleInteraction(interaction, client)) return;
       if (await recrutamentoDashHandleInteraction(interaction, client)) return;
-      if (await blacklistEventosHandleInteraction(interaction, client)) return;
+      if (await blacklistFacsHandleInteraction(interaction, client)) return;
       if (await hallDaFamaHandleInteraction(interaction, client)) return;
       if (await eventosDiariosHandleInteraction(interaction, client)) return;
       if (await sortChannelsHandleInteraction(interaction, client)) return;
@@ -1239,7 +1239,7 @@ try {
       await setStaffV2OnReady(client);
     } catch (e) {}
     try {
-      await blacklistEventosOnReady(client);
+      await blacklistFacsOnReady(client);
     } catch (e) {}
     try {
       await hallDaFamaOnReady(client);
