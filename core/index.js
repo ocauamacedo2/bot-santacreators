@@ -264,7 +264,7 @@ import {
   blacklistFacsOnReady,
   blacklistFacsHandleMessage,
   blacklistFacsHandleInteraction,
-} from "./application/events/blacklistFacs.js";
+} from "../events/blacklistFacs.js";
 
 // Hall da Fama & Eventos Diários
 import {
