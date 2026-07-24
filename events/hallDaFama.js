@@ -1667,7 +1667,7 @@ function applyCityToRankingPlayer(player, cityKey) {
       .replace(/\|\|/g, " ")
       .replace(/\*\*/g, " ")
       .replace(/https?:\/\/\S+/gi, " ")
-      .replace(/[🏆👑🎉👏⚠️✅❌⭐🌆📊📌🧹🔄✨🥇🥈🥉🎮🧠📥🤖✏️📅]/gu, " ")
+      .replace(/[🏆👑🎉👏⚠️✅❌⭐🌆📊📌🧹🔄✨🥇🥈🥉🏅🎮🧠📥🤖✏️📅]/gu, " ")
       .replace(/\s+/g, " ")
       .trim();
   }
@@ -2803,12 +2803,64 @@ function extractWinnerIdentityFromParts(parts = []) {
   };
 }
 
+function parseTopEmojiOrgWinnerLine(line = "", cityKey = "nobre") {
+  const originalLine = String(line || "").trim();
+
+  if (!originalLine) return null;
+
+  const hasTopPrefix =
+    /^#?\s*TOP\b/i.test(originalLine) ||
+    /^#?\s*TOP\s*:/i.test(originalLine);
+
+  if (!hasTopPrefix) return null;
+
+  const cleanedLine = stripDiscordNoise(originalLine)
+    .replace(/^#\s*/i, "")
+    .replace(/^TOP\s*#?\s*\d*\s*[:\-]?\s*/i, "")
+    .replace(/^novo[_\s-]*emoji\s*~?\s*\d+\s*[:\-]?\s*/i, "")
+    .replace(/^emoji\s*~?\s*\d+\s*[:\-]?\s*/i, "")
+    .replace(/^[º°ª\.\:\-\s|]+/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!cleanedLine) return null;
+
+  const beforePrize = normalizeHallDisplay(
+    cleanedLine.split(/\s*\|\s*/g)[0] || ""
+  );
+
+  if (!beforePrize) return null;
+  if (looksLikePrizeOnly(beforePrize)) return null;
+  if (isInvalidWinnerName(beforePrize)) return null;
+
+  const orgName = normalizeOrgDisplayName(beforePrize);
+
+  if (!orgName) return null;
+
+  const isRecognizedOrg =
+    isExactKnownOrgName(orgName) ||
+    isKnownOrgName(orgName) ||
+    Boolean(getManualOrgCityKey(orgName));
+
+  if (!isRecognizedOrg) return null;
+
+  return {
+    type: "org",
+    orgName,
+    cityKey,
+    rawLine: originalLine
+  };
+}
+
 function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento") {
     const originalLine = String(line || "");
 
     // Se o vencedor for uma menção Discord, ignora.
     // Ex: TOP 🥇 : | <@1420173743434498098>
     if (/<@!?\d+>/i.test(originalLine)) return null;
+
+    const topEmojiOrgWinner = parseTopEmojiOrgWinnerLine(originalLine, cityKey);
+    if (topEmojiOrgWinner) return topEmojiOrgWinner;
 
     const cleanLineRaw = cleanHallWinnerLine(originalLine);
     const braceOrgName = extractOrgBetweenBraces(cleanLineRaw);
