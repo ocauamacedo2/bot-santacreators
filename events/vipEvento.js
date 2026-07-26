@@ -995,12 +995,16 @@ async function VIP_corrigirRegistroVipMensagem(msg, client) {
   const pagamentoResolvido = await VIP_resolverPagamentoLink(client, premiacaoTexto).catch(() => null);
 
   if (pagamentoResolvido?.ok) {
+    const premiacaoFonte =
+      pagamentoResolvido.info?.premiacao ||
+      premiacaoTexto;
+
+    const premiacaoPrincipalFonte =
+      VIP_pegarTextoPrincipalPremiacao(premiacaoFonte);
+
     const tipoFinal = VIP_normalizarTipoPremiacao(
-      [
-        pagamentoResolvido.info?.tipo || "",
-        pagamentoResolvido.info?.premiacao || "",
-        premiacaoTexto,
-      ].join("\n")
+      premiacaoPrincipalFonte ||
+      premiacaoFonte
     );
 
     const novosFields = VIP_getFields(embed).map((f) => {
@@ -1008,7 +1012,7 @@ async function VIP_corrigirRegistroVipMensagem(msg, client) {
         return {
           ...f,
           value: VIP_formatarPremiacaoInteligente(
-            pagamentoResolvido.info?.premiacao || premiacaoTexto,
+            premiacaoFonte,
             tipoFinal
           ).slice(0, 1024),
         };
@@ -1035,7 +1039,7 @@ async function VIP_corrigirRegistroVipMensagem(msg, client) {
     embed.setDescription(descCorrigida);
 
     analiseFinal.tipoFinal = tipoFinal;
-    analiseFinal.premiacaoFinal = pagamentoResolvido.info?.premiacao || premiacaoTexto;
+    analiseFinal.premiacaoFinal = premiacaoFonte;
   }
 
   const depois = String(embed.data.description || "");
