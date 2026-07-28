@@ -997,6 +997,12 @@ function isNoPowerEventRegisterText(text = "") {
   const raw = normalizeNoPowerText(text);
 
   return [
+    /\bnao pontuar\b/,
+    /\bnao conta ponto\b/,
+    /\bnao contar ponto\b/,
+    /\bsem pontuacao\b/,
+    /\bsem ponto\b/,
+    /\bsem uso ausente\b/,
     /\bnao usei\b/,
     /\bn usei\b/,
     /\bnn usei\b/,
@@ -1009,6 +1015,9 @@ function isNoPowerEventRegisterText(text = "") {
     /\bnao participei\b/,
     /\bn participei\b/,
     /\bnn participei\b/,
+    /\bnao estava\b/,
+    /\bn estava\b/,
+    /\bnn estava\b/,
     /\bnao loguei\b/,
     /\bn loguei\b/,
     /\bnn loguei\b/,
@@ -1758,26 +1767,59 @@ const pushItem = (item) => {
     });
   }
 
-  for (const chEvt of EVENTOS_PODER_CHANNEL_IDS) {
-    await scanChannelEmbeds(client, {
-      channelId: chEvt,
-      weekFloorKey,
-      maxPages: 80,
-      onMessage: async (m) => {
-        auditor.addStats('eventos', 'scanned');
-        if (seenMessageIds.has(m.id)) return;
+for (const chEvt of EVENTOS_PODER_CHANNEL_IDS) {
+  await scanChannelEmbeds(client, {
+    channelId: chEvt,
+    weekFloorKey,
+    maxPages: 80,
+    onMessage: async (m) => {
+      auditor.addStats('eventopoder', 'scanned');
+
+      if (seenMessageIds.has(m.id)) {
+        auditor.reject('eventopoder', 'duplicate_message');
+        return;
+      }
+
+      const emb = m.embeds?.[0];
+
+      if (!emb) {
+        auditor.reject('eventopoder', 'no_embed');
+        return;
+      }
+
+      const type = eventos_getRecordType(emb);
+
+      if (type !== "eventopoder") {
+        auditor.reject('eventopoder', 'invalid_embed');
+        return;
+      }
+
+      const embedText = getEmbedText(emb);
+
+      if (isNoPowerEventRegisterText(embedText)) {
+        auditor.reject('eventopoder', 'no_use_or_absent');
         seenMessageIds.add(m.id);
-        const emb = m.embeds?.[0];
-        if (!emb) return;
-        const type = eventos_getRecordType(emb);
-        if (!type) return;
-        const uid = eventos_getRegistrarId(emb); // Corrigido para extrair o registrante
-        if (!uid) return;
-        auditor.addStats('eventopoder', 'uidOk');
-        pushItem({ userId: uid, ts: new Date(m.createdTimestamp), source: "eventopoder" });
-      },
-    });
-  }
+        return;
+      }
+
+      const uid = eventos_getRegistrarId(emb); // Corrigido para extrair o registrante
+
+      if (!uid) {
+        auditor.reject('eventopoder', 'uid_null');
+        return;
+      }
+
+      seenMessageIds.add(m.id);
+      auditor.addStats('eventopoder', 'uidOk');
+
+      pushItem({
+        userId: uid,
+        ts: new Date(m.createdTimestamp),
+        source: "eventopoder",
+      });
+    },
+  });
+}
   await scanChannelEmbeds(client, {
     channelId: CH_PAGAMENTOS_ID,
     weekFloorKey,
