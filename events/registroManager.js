@@ -69,6 +69,8 @@ const CARGOS_PODE_REGISTRAR = [
 
 const CARGOS_PODE_APROVAR = [
   "1262262852949905409", // resp influ
+  "1435325004471336990", // tier 3
+  "1508258904826445944", // tier 4
   "1388976314253312100", // coord creators
   "1352408327983861844", // resp creators
   "1352407252216184833", // resp lider
@@ -105,12 +107,14 @@ function canUseRmPurgeRejected(member, userId) {
 // quem pode aprovar o PRÓPRIO registro (exceção do bloqueio)
 const SELF_APPROVE_ALLOWED = {
   userIds: new Set([
-    "1262262852949905408", // owner
-    "660311795327828008",  // você (garantia)
+    "660311795327828008", // você (garantia)
   ]),
   roleIds: new Set([
     "1262262852949905409", // resp influ
+    "1435325004471336990", // tier 3
+    "1508258904826445944", // tier 4
     "1352408327983861844", // resp creators
+    "1262262852949905408", // owner
   ]),
 };
 
@@ -624,11 +628,11 @@ function canSelfApprove(interactionMember, interactionUserId) {
 // ===============================
 const RM_GLOBAL_BYPASS = {
   userIds: new Set([
-    "660311795327828008",  // você
-    "1262262852949905408", // owner
+    "660311795327828008", // você
   ]),
   roleIds: new Set([
     "1352408327983861844", // resp creators
+    "1262262852949905408", // owner
   ]),
 };
 
@@ -2453,47 +2457,54 @@ const registrantId =
 // =======================
 // 🔒 TRAVA DE HIERARQUIA
 // quem tem cargo IGUAL ou MAIOR que o registrante NÃO pode aprovar
+// EXCEÇÃO: autoaprovação autorizada em SELF_APPROVE_ALLOWED
 // =======================
 if (isApprove && registrantId) {
+  const isOwnRegistration =
+    String(registrantId) === String(interaction.user.id);
+
+  const selfApproveAllowed =
+    isOwnRegistration &&
+    canSelfApprove(interaction.member, interaction.user.id);
 
   // 🔓 bypass total (owner / você / resp creators)
   const bypass = hasGlobalBypass(interaction.member, interaction.user.id);
 
-  if (!bypass) {
+  if (!bypass && !selfApproveAllowed) {
     const registrantMember = await interaction.guild.members
       .fetch(registrantId)
       .catch(() => null);
 
     if (registrantMember) {
       const blockedByHierarchy = cannotApproveByHierarchy(
-  interaction.member,
-  registrantMember
-);
+        interaction.member,
+        registrantMember
+      );
 
-if (blockedByHierarchy) {
-  await interaction.reply({
-    content:
-      "❌ Você não pode aprovar este registro porque o registrante possui **cargo igual ou superior** ao seu.",
-    ephemeral: true,
-  });
-  return true;
-}
-
+      if (blockedByHierarchy) {
+        await interaction.reply({
+          content:
+            "❌ Você não pode aprovar este registro porque o registrante possui **cargo igual ou superior** ao seu.",
+          ephemeral: true,
+        });
+        return true;
+      }
     }
   }
 }
 
 
-  // anti self-approve
-  if (
+// anti self-approve
+if (
   isApprove &&
   registrantId &&
   String(registrantId) === String(interaction.user.id)
 ) {
   const bypass = hasGlobalBypass(interaction.member, interaction.user.id);
 
-  if (!bypass) {
+  if (!bypass && !selfApproveAllowed) {
     const allowed = canSelfApprove(interaction.member, interaction.user.id);
+
     if (!allowed) {
       await interaction.reply({
         content: "❌ Você **não pode aprovar** o seu próprio registro.",

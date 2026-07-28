@@ -16,6 +16,7 @@ const MENU_CHANNEL_ID = "1414718856542421052"; // canal do menu (não envia lá)
 const CATEGORY_IDS = new Set([
   "1414687963161559180", // categoria 1
   "1428572742051168378", // categoria 2
+  "1482874296685695118", // categoria 3
 ]);
 
 const LIDER_ROLE_ID = "1353858422063239310";

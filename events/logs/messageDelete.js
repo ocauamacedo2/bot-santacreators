@@ -1034,17 +1034,62 @@ export default {
 
       const embedsToSend = [mainEmbed, ...reconstructedEmbeds].slice(0, 10);
 
-     const deleteLogChannelId = resolveDeleteLogChannelId({ guild, deletionByBot });
+const deleteLogChannelId = resolveDeleteLogChannelId({ guild, deletionByBot });
 
 if (deleteLogChannelId) {
-  const deleteLogChannel = await client.channels.fetch(deleteLogChannelId).catch(() => null);
+  const deleteLogChannel = await client.channels
+    .fetch(deleteLogChannelId)
+    .catch(() => null);
 
   if (deleteLogChannel?.isTextBased()) {
-    const embedsForDeleteLog = embedsToSend.map(e => new EmbedBuilder(e.toJSON()));
-    await deleteLogChannel.send({
+    const embedsForDeleteLog = embedsToSend.map(
+      embed => new EmbedBuilder(embed.toJSON())
+    );
+
+    const sentDeleteLogMessage = await deleteLogChannel.send({
       embeds: embedsForDeleteLog,
       files: attachments.length ? attachments.slice(0, 10) : undefined,
-    }).catch(console.error);
+    }).catch(error => {
+      console.error(
+        "[MessageDelete] Falha ao enviar log profissional da mensagem apagada:",
+        error
+      );
+
+      return null;
+    });
+
+    if (sentDeleteLogMessage) {
+      if (!globalThis.__SC_DELETED_MESSAGE_LOGS__) {
+        globalThis.__SC_DELETED_MESSAGE_LOGS__ = new Map();
+      }
+
+      globalThis.__SC_DELETED_MESSAGE_LOGS__.set(message.id, {
+        guildId: guild.id,
+        channelId: channel?.id ?? null,
+        deletedMessageId: message.id,
+        deletedMessageAuthorId: authorObj?.id ?? null,
+        deletedMessageContent: contentForLog,
+        deletedMessageCreatedAt: createdTs,
+        deletedAt,
+        logChannelId: sentDeleteLogMessage.channelId,
+        logMessageId: sentDeleteLogMessage.id,
+        logMessageUrl: sentDeleteLogMessage.url,
+        deletionByBot,
+        storedAt: Date.now(),
+      });
+
+      setTimeout(() => {
+        const storedLog =
+          globalThis.__SC_DELETED_MESSAGE_LOGS__?.get(message.id);
+
+        if (
+          storedLog &&
+          storedLog.logMessageId === sentDeleteLogMessage.id
+        ) {
+          globalThis.__SC_DELETED_MESSAGE_LOGS__.delete(message.id);
+        }
+      }, 10 * 60 * 1000);
+    }
   }
 }
 

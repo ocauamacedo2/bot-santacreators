@@ -46,7 +46,18 @@ export default function createEntrevistasTickets({ client, Transcript }) {
     setInterval(async () => {
       const now = Date.now();
       const state = loadInactivityState();
-      const targetCats = [CATEGORIES.entrevista, '1444857594517913742'];
+
+      const targetCats = [
+        ...new Set([
+          ...Object.values(CATEGORIES),
+          '1444857594517913742'
+        ])
+      ];
+
+      const inactivityCats = new Set([
+        CATEGORIES.entrevista,
+        '1444857594517913742'
+      ]);
       
       for (const catId of targetCats) {
         const category = client.channels.cache.get(catId);
@@ -68,6 +79,15 @@ export default function createEntrevistasTickets({ client, Transcript }) {
             await finalizarTicketComConclusao(null, "Ticket fechado automaticamente (usuário saiu/banido).", {
               channel, guild, isAuto: true, reasonType: "saida"
             });
+            if (state[channel.id]) delete state[channel.id];
+            continue;
+          }
+
+          /*
+           * As categorias abaixo participam da verificação de saída ou banimento,
+           * mas não participam das regras específicas de inatividade da entrevista.
+           */
+          if (!inactivityCats.has(catId)) {
             if (state[channel.id]) delete state[channel.id];
             continue;
           }
@@ -134,7 +154,6 @@ export default function createEntrevistasTickets({ client, Transcript }) {
       saveInactivityState(state);
     }, 10 * 60 * 1000); // Executa a cada 10 minutos
   }
-
   // ── 🔒 Trava anti double-click / concorrência ─────────────────────
   const HANDLED_INTERACTIONS = new Set();
   function hasHandled(i) {
@@ -868,16 +887,33 @@ async function notificarEquipeEntrevista(guild, canal, tipo) {
 
     // Regra #7: Monitor de Saída/Banimento
     client.on('guildMemberRemove', async member => {
-      const targetCats = [CATEGORIES.entrevista, '1444857594517913742'];
+      const targetCats = [
+        ...new Set([
+          ...Object.values(CATEGORIES),
+          '1444857594517913742'
+        ])
+      ];
+
       for (const catId of targetCats) {
         const cat = member.guild.channels.cache.get(catId);
-        if (!cat) continue;
+        if (!cat || cat.type !== ChannelType.GuildCategory) continue;
+
         for (const channel of cat.children.cache.values()) {
+          if (channel.type !== ChannelType.GuildText) continue;
+
           const topic = channel.topic || "";
+
           if (topic.includes(`aberto_por:${member.id}`)) {
-            await finalizarTicketComConclusao(null, "Ticket fechado automaticamente (usuário saiu/banido).", {
-              channel, guild: member.guild, isAuto: true, reasonType: "saida"
-            });
+            await finalizarTicketComConclusao(
+              null,
+              "Ticket fechado automaticamente (usuário saiu/banido).",
+              {
+                channel,
+                guild: member.guild,
+                isAuto: true,
+                reasonType: "saida"
+              }
+            );
           }
         }
       }

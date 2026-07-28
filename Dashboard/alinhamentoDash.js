@@ -413,33 +413,49 @@ globalThis.__SC_ALINV1_DASH_BOOTSTRAPPED__ = true;
       return String(f?.value || "").trim();
     }
 
-    function cleanMentionOrText(v) {
-      const s = String(v || "").trim();
-      if (!s || s === "—") return null;
-      const m = s.match(/<@!?(\d{17,20})>/);
-      if (m) return { type: "user", id: m[1], raw: `<@${m[1]}>` };
-      const id = s.match(/^\d{17,20}$/);
-      if (id) return { type: "user", id: id[0], raw: `<@${id[0]}>` };
-      return { type: "text", id: null, raw: s };
-    }
+function cleanMentionOrText(v) {
+  const s = String(v || "").trim();
+  if (!s || s === "—") return null;
+  const m = s.match(/<@!?(\d{17,20})>/);
+  if (m) return { type: "user", id: m[1], raw: `<@${m[1]}>` };
+  const id = s.match(/^\d{17,20}$/);
+  if (id) return { type: "user", id: id[0], raw: `<@${id[0]}>` };
+  return { type: "text", id: null, raw: s };
+}
 
-    // ✅ NOVO: só contar quando o registro estiver VALIDADO
-    function isRegistroValidado(emb) {
-      const st = norm(getFieldByNameContains(emb, "status"));
-      // no teu alinhamentos.js validado vira:
-      // "VÁLIDO — aprovado por <@id> ..."
-      if (st.includes("valido") || st.includes("aprov")) return true;
-      return false;
-    }
+// ✅ NOVO: só contar quando o registro estiver VALIDADO
+function isRegistroValidado(emb) {
+  const st = norm(getFieldByNameContains(emb, "status"));
 
-    // ----------------- SCAN -----------------
-    async function collectAlinhamentos() {
-      const now = Date.now();
-      if (CACHE.payload && now - CACHE.at < SCAN_TTL_MS) return CACHE.payload;
+  // ✅ Segurança: registros sem status nunca contam
+  if (!st) return false;
 
-      DEBUG.scannedMsgs = 0;
-      DEBUG.scannedRegs = 0;
-      DEBUG.weekKeysFound = {};
+  // ❌ Reprovado, não válido ou pendente nunca pode contar
+  if (
+    st.includes("nao valido") ||
+    st.includes("invalido") ||
+    st.includes("reprov") ||
+    st.includes("pendente")
+  ) {
+    return false;
+  }
+
+  // ✅ Só conta quando estiver explicitamente aprovado como válido
+  if (st.includes("valido") && st.includes("aprov")) {
+    return true;
+  }
+
+  return false;
+}
+
+// ----------------- SCAN -----------------
+async function collectAlinhamentos() {
+  const now = Date.now();
+  if (CACHE.payload && now - CACHE.at < SCAN_TTL_MS) return CACHE.payload;
+
+  DEBUG.scannedMsgs = 0;
+  DEBUG.scannedRegs = 0;
+  DEBUG.weekKeysFound = {};
 
       const ch = await client.channels.fetch(ALINV1_MENU_CHANNEL_ID).catch(() => null);
       if (!ch) return { items: [] };
