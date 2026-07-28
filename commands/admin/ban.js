@@ -43,9 +43,26 @@ export default {
 
         const reason = args.slice(1).join(' ') || 'Sem motivo especificado';
 
+        /*
+         * O Discord registra no log de auditoria o bot como executor,
+         * porque é o bot que efetivamente realiza o banimento.
+         *
+         * Por isso, adicionamos o ID de quem solicitou o comando dentro
+         * do motivo interno enviado ao Discord.
+         *
+         * O log de banimento removerá essa identificação do motivo
+         * apresentado e mostrará o solicitante em um campo separado.
+         */
+        const auditReasonPrefix = `[SOLICITANTE:${message.author.id}]`;
+        const maximumReasonLength = 512;
+        const maximumOriginalReasonLength =
+            maximumReasonLength - auditReasonPrefix.length - 1;
+
+        const auditReason = `${auditReasonPrefix} ${reason.slice(0, maximumOriginalReasonLength)}`;
+
         try {
             const member = await message.guild.members.fetch(userToBan.id);
-            await member.ban({ reason });
+            await member.ban({ reason: auditReason });
 
             const banEmbed = new EmbedBuilder()
                 .setColor('#ff0000')
