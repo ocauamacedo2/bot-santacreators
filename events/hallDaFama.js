@@ -2805,72 +2805,123 @@ async function downloadUniqueApprovedHallImages(
   const files = [];
   const seenHashes = new Set();
 
-  for (
-    let index = 0;
-    index < urls.length;
-    index++
+  function getDownloadCandidates(
+    originalUrl
   ) {
-    const imageUrl =
-      urls[index];
+    const normalizedUrl =
+      normalizeImageUrl(
+        originalUrl
+      );
+
+    if (!normalizedUrl) {
+      return [];
+    }
+
+    const candidates = [
+      normalizedUrl
+    ];
 
     try {
       const parsedUrl =
-        new URL(imageUrl);
+        new URL(
+          normalizedUrl
+        );
 
+      const pathname =
+        parsedUrl.pathname;
+
+      /*
+       * URLs antigas de anexos do Discord podem
+       * possuir parâmetros assinados expirados.
+       *
+       * Tentamos também o endereço equivalente
+       * no domínio de mídia e a rota sem os
+       * parâmetros antigos.
+       */
       if (
-        ![
-          "http:",
-          "https:"
-        ].includes(
-          parsedUrl.protocol
-        )
+        parsedUrl.hostname ===
+          "cdn.discordapp.com" ||
+        parsedUrl.hostname ===
+          "media.discordapp.net"
       ) {
-        console.warn(
-          `[HallDaFama] Protocolo de imagem aprovada não permitido: ${imageUrl}`
+        candidates.push(
+          `https://cdn.discordapp.com${pathname}`
         );
 
-        continue;
+        candidates.push(
+          `https://media.discordapp.net${pathname}`
+        );
+
+        candidates.push(
+          `https://media.discordapp.net${pathname}?width=4096&height=4096`
+        );
       }
+    } catch {
+      return [];
+    }
 
-      const controller =
-        new AbortController();
+    return [
+      ...new Set(
+        candidates
+          .map(candidate =>
+            normalizeImageUrl(
+              candidate
+            )
+          )
+          .filter(Boolean)
+      )
+    ];
+  }
 
-      const timeout =
-        setTimeout(
-          () =>
-            controller.abort(),
-          15000
-        );
+  async function downloadCandidate(
+    candidateUrl
+  ) {
+    const parsedUrl =
+      new URL(
+        candidateUrl
+      );
 
-      let response;
+    if (
+      ![
+        "http:",
+        "https:"
+      ].includes(
+        parsedUrl.protocol
+      )
+    ) {
+      return null;
+    }
 
-      try {
-        response =
-          await fetch(
-            imageUrl,
-            {
-              method: "GET",
-              redirect: "follow",
-              signal:
-                controller.signal,
-              headers: {
-                "User-Agent":
-                  "SantaCreators-HallDaFama/1.0"
-              }
+    const controller =
+      new AbortController();
+
+    const timeout =
+      setTimeout(
+        () =>
+          controller.abort(),
+        15000
+      );
+
+    try {
+      const response =
+        await fetch(
+          candidateUrl,
+          {
+            method: "GET",
+            redirect: "follow",
+            signal:
+              controller.signal,
+            headers: {
+              "User-Agent":
+                "SantaCreators-HallDaFama/1.0",
+              "Accept":
+                "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
             }
-          );
-      } finally {
-        clearTimeout(
-          timeout
+          }
         );
-      }
 
       if (!response.ok) {
-        console.warn(
-          `[HallDaFama] Imagem aprovada indisponível: ${imageUrl}. Status: ${response.status}`
-        );
-
-        continue;
+        return null;
       }
 
       const contentType =
@@ -2889,11 +2940,7 @@ async function downloadUniqueApprovedHallImages(
           "image/"
         )
       ) {
-        console.warn(
-          `[HallDaFama] A URL aprovada não retornou uma imagem: ${imageUrl}`
-        );
-
-        continue;
+        return null;
       }
 
       const arrayBuffer =
@@ -2905,55 +2952,110 @@ async function downloadUniqueApprovedHallImages(
         );
 
       if (!buffer.length) {
-        console.warn(
-          `[HallDaFama] A imagem aprovada retornou vazia: ${imageUrl}`
-        );
-
-        continue;
+        return null;
       }
 
-      const imageHash =
-        createHash("sha256")
-          .update(buffer)
-          .digest("hex");
-
-      if (
-        seenHashes.has(
-          imageHash
-        )
-      ) {
-        continue;
-      }
-
-      seenHashes.add(
-        imageHash
-      );
-
-      const extension =
-        getHallImageExtension(
-          contentType,
-          imageUrl
-        );
-
-      files.push(
-        new AttachmentBuilder(
-          buffer,
-          {
-            name:
-              `hall-restaurado-${Date.now()}-${files.length + 1}.${extension}`,
-
-            description:
-              `Imagem ${files.length + 1} do Hall da Fama`
-          }
-        )
-      );
-    } catch (error) {
-      console.warn(
-        `[HallDaFama] Não foi possível baixar a imagem aprovada ${imageUrl}:`,
-        error?.message ||
-          error
+      return {
+        buffer,
+        contentType,
+        finalUrl:
+          candidateUrl
+      };
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(
+        timeout
       );
     }
+  }
+
+  for (
+    let index = 0;
+    index < urls.length;
+    index++
+  ) {
+    const originalUrl =
+      urls[index];
+
+    const candidates =
+      getDownloadCandidates(
+        originalUrl
+      );
+
+    let downloadedImage =
+      null;
+
+    for (
+      const candidateUrl of
+      candidates
+    ) {
+      downloadedImage =
+        await downloadCandidate(
+          candidateUrl
+        );
+
+      if (downloadedImage) {
+        break;
+      }
+    }
+
+    if (!downloadedImage) {
+      console.warn(
+        `[HallDaFama] Nenhuma versão recuperável foi encontrada para a imagem aprovada ${index + 1}: ${originalUrl}`
+      );
+
+      continue;
+    }
+
+    const imageHash =
+      createHash("sha256")
+        .update(
+          downloadedImage.buffer
+        )
+        .digest("hex");
+
+    /*
+     * Só elimina quando o conteúdo real é
+     * exatamente igual.
+     *
+     * Duas imagens diferentes, mesmo chamadas
+     * image.png, terão hashes diferentes.
+     */
+    if (
+      seenHashes.has(
+        imageHash
+      )
+    ) {
+      console.warn(
+        `[HallDaFama] A imagem aprovada ${index + 1} é idêntica a outra imagem do mesmo registro e não será duplicada.`
+      );
+
+      continue;
+    }
+
+    seenHashes.add(
+      imageHash
+    );
+
+    const extension =
+      getHallImageExtension(
+        downloadedImage.contentType,
+        downloadedImage.finalUrl
+      );
+
+    files.push(
+      new AttachmentBuilder(
+        downloadedImage.buffer,
+        {
+          name:
+            `hall-restaurado-${Date.now()}-${files.length + 1}.${extension}`,
+
+          description:
+            `Imagem ${files.length + 1} do Hall da Fama`
+        }
+      )
+    );
   }
 
   return files;
@@ -6728,8 +6830,20 @@ async function findApprovalImagesForHall(
     hallMessage?.createdTimestamp ||
     Date.now();
 
+  /*
+   * Alguns registros de aprovação foram criados
+   * ou reconstruídos vários dias depois do Hall.
+   *
+   * A correspondência continua exigindo:
+   * - mesmo evento;
+   * - mesma cidade;
+   * - mesmos vencedores.
+   *
+   * Portanto, podemos ampliar o período sem
+   * selecionar livremente qualquer aprovação.
+   */
   const maximumDifference =
-    1000 * 60 * 90;
+    1000 * 60 * 60 * 30 * 24;
 
   const minimumTimestamp =
     hallCreatedAt -
