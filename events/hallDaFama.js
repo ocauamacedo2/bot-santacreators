@@ -6819,18 +6819,6 @@ async function findApprovalImagesForHall(
           .filter(Boolean)
       ).slice(0, 4);
 
-    /*
-     * Quando o registro possui anexos reais,
-     * eles são a fonte oficial.
-     *
-     * Não é necessário misturar a imagem do
-     * embed, pois ela normalmente aponta para
-     * um dos próprios anexos.
-     */
-    if (attachmentUrls.length > 0) {
-      return attachmentUrls;
-    }
-
     const embedImageUrls = [];
     const imageFieldUrls = [];
 
@@ -6872,10 +6860,46 @@ async function findApprovalImagesForHall(
       }
     }
 
-    return uniqueImageUrls([
-      ...embedImageUrls,
-      ...imageFieldUrls
-    ]).slice(0, 4);
+    const officialFieldImageUrls =
+      uniqueImageUrls(
+        imageFieldUrls
+      ).slice(0, 4);
+
+    /*
+     * Os links presentes no campo "Imagens"
+     * representam exatamente as fotos enviadas
+     * na solicitação original.
+     *
+     * Exemplo:
+     * Imagem 1: link da primeira foto
+     * Imagem 2: link da segunda foto
+     *
+     * Por isso, quando esses links existem,
+     * eles devem ter prioridade sobre a imagem
+     * principal do embed e sobre os anexos.
+     */
+    if (
+      officialFieldImageUrls.length > 0
+    ) {
+      return officialFieldImageUrls;
+    }
+
+    /*
+     * Registros novos armazenam todos os arquivos
+     * como anexos reais. Se o campo não possuir
+     * URLs recuperáveis, usamos os anexos.
+     */
+    if (attachmentUrls.length > 0) {
+      return attachmentUrls;
+    }
+
+    /*
+     * Último recurso para registros antigos que
+     * possuem apenas a imagem principal do embed.
+     */
+    return uniqueImageUrls(
+      embedImageUrls
+    ).slice(0, 4);
   }
 
   const candidates =
