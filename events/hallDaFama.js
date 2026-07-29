@@ -2584,30 +2584,56 @@ async function prepareHallImageEdit(
   imageUrls = [],
   options = {}
 ) {
-  const replaceExisting = options.replaceExisting === true;
+  const replaceExisting =
+    options.replaceExisting === true;
 
-  const existingAttachments = replaceExisting
+  const forceReuploadExisting =
+    options.forceReuploadExisting === true;
+
+  const currentAttachments = [
+    ...(message?.attachments?.values?.() || [])
+  ];
+
+  const currentAttachmentUrls = uniqueImageUrls(
+    currentAttachments
+      .map(attachment => attachment.url)
+      .filter(Boolean)
+  );
+
+  const preservedAttachments = replaceExisting
     ? []
-    : [...(message?.attachments?.values?.() || [])];
+    : currentAttachments;
 
   const existingUrlKeys = new Set(
-    existingAttachments.map(attachment =>
+    preservedAttachments.map(attachment =>
       getHallImageUrlKey(attachment.url)
     )
   );
 
-  const urlsToDownload = uniqueImageUrls(imageUrls)
-    .filter(imageUrl => {
-      return !existingUrlKeys.has(
-        getHallImageUrlKey(imageUrl)
-      );
-    })
-    .slice(0, 4);
+  const allCandidateUrls = uniqueImageUrls([
+    ...(forceReuploadExisting
+      ? currentAttachmentUrls
+      : []),
+    ...imageUrls
+  ]);
 
-  const availableSlots = Math.max(
-    0,
-    4 - existingAttachments.length
-  );
+  const urlsToDownload = forceReuploadExisting
+    ? allCandidateUrls.slice(0, 4)
+    : allCandidateUrls
+        .filter(imageUrl => {
+          return !existingUrlKeys.has(
+            getHallImageUrlKey(imageUrl)
+          );
+        })
+        .slice(0, 4);
+
+  const availableSlots =
+    replaceExisting || forceReuploadExisting
+      ? 4
+      : Math.max(
+          0,
+          4 - preservedAttachments.length
+        );
 
   const files = availableSlots > 0
     ? await downloadHallImageAttachments(
@@ -2615,15 +2641,28 @@ async function prepareHallImageEdit(
       )
     : [];
 
-  const attachments = existingAttachments.map(attachment => ({
-    id: attachment.id
-  }));
+  const shouldReplaceAttachments =
+    (
+      replaceExisting ||
+      forceReuploadExisting
+    ) &&
+    files.length > 0;
+
+  const attachments = shouldReplaceAttachments
+    ? []
+    : preservedAttachments.map(attachment => ({
+        id: attachment.id
+      }));
 
   return {
     attachments,
     files,
+    shouldReplaceAttachments,
+    reuploadedExisting:
+      forceReuploadExisting &&
+      files.length > 0,
     hasImages:
-      existingAttachments.length > 0 ||
+      attachments.length > 0 ||
       files.length > 0
   };
 }
@@ -6501,11 +6540,12 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
             )
           : fixedBase;
 
-        const imageEditData = await prepareHallImageEdit(
+             const imageEditData = await prepareHallImageEdit(
           msg,
           allImageUrls,
           {
-            replaceExisting: false
+            replaceExisting: false,
+            forceReuploadExisting: true
           }
         );
 
@@ -6548,7 +6588,10 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
             content: fixed
           };
 
-          if (imageEditData.attachments.length > 0) {
+          if (
+            imageEditData.shouldReplaceAttachments ||
+            imageEditData.attachments.length > 0
+          ) {
             editPayload.attachments =
               imageEditData.attachments;
           }
