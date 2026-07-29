@@ -13,7 +13,8 @@ import {
   TextInputBuilder,
   TextInputStyle,
   WebhookClient,
-  InteractionType
+  InteractionType,
+  AttachmentBuilder
 } from "discord.js";
 
   import { dashEmit } from "../utils/dashHub.js";
@@ -2359,49 +2360,307 @@ function normalizeImageUrl(url = "") {
 }
 
 function uniqueImageUrls(urls = []) {
-    const seen = new Set();
-    const finalUrls = [];
+  const seen = new Set();
+  const finalUrls = [];
 
-    for (const rawUrl of urls) {
-      const url = normalizeImageUrl(rawUrl);
-      if (!url) continue;
+  for (const rawUrl of urls) {
+    const url = normalizeImageUrl(rawUrl);
+    if (!url) continue;
 
-      const key = url.split("?")[0].toLowerCase();
+    const key = url.split("?")[0].toLowerCase();
 
-      if (seen.has(key)) continue;
-      seen.add(key);
-      finalUrls.push(url);
+    if (seen.has(key)) continue;
+
+    seen.add(key);
+    finalUrls.push(url);
+  }
+
+  return finalUrls;
+}
+
+function getImageUrlsFromContent(content = "") {
+  return uniqueImageUrls(String(content).match(/https?:\/\/\S+/gi) || []);
+}
+
+function getImageUrlsFromAttachments(message) {
+  if (!message?.attachments) return [];
+
+  return uniqueImageUrls(
+    [...message.attachments.values()].map(attachment => attachment.url)
+  );
+}
+
+function getHallImageUrlKey(url = "") {
+  return normalizeImageUrl(url)
+    .split("?")[0]
+    .toLowerCase();
+}
+
+function removeHallImageUrlsFromContent(content = "", imageUrls = []) {
+  let finalContent = String(content || "");
+
+  const urlsToRemove = uniqueImageUrls([
+    ...imageUrls,
+    ...getImageUrlsFromContent(finalContent)
+  ]);
+
+  for (const imageUrl of urlsToRemove) {
+    finalContent = finalContent.replaceAll(imageUrl, "");
+  }
+
+  return finalContent
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function getHallImageExtension(contentType = "", imageUrl = "") {
+  const normalizedContentType = String(contentType || "")
+    .toLowerCase()
+    .split(";")[0]
+    .trim();
+
+  const extensionByContentType = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/webp": "webp",
+    "image/gif": "gif"
+  };
+
+  if (extensionByContentType[normalizedContentType]) {
+    return extensionByContentType[normalizedContentType];
+  }
+
+  try {
+    const pathname = new URL(imageUrl).pathname.toLowerCase();
+    const extensionMatch = pathname.match(/\.(png|jpe?g|webp|gif)$/i);
+
+    if (extensionMatch) {
+      const extension = extensionMatch[1].toLowerCase();
+      return extension === "jpeg" ? "jpg" : extension;
     }
+  } catch {}
 
-    return finalUrls;
+  return "png";
+}
+
+async function downloadHallImageAttachments(imageUrls = [], options = {}) {
+  const urls = uniqueImageUrls(imageUrls).slice(0, 4);
+  const files = [];
+
+  const maximumSingleImageSize =
+    Number(options.maximumSingleImageSize) ||
+    10 * 1024 * 1024;
+
+  const maximumTotalImageSize =
+    Number(options.maximumTotalImageSize) ||
+    24 * 1024 * 1024;
+
+  let totalDownloadedSize = 0;
+
+  for (let index = 0; index < urls.length; index++) {
+    const imageUrl = urls[index];
+
+    try {
+      const parsedUrl = new URL(imageUrl);
+
+      if (!["http:", "https:"].includes(parsedUrl.protocol)) {
+        console.warn(
+          `[HallDaFama] Protocolo de imagem não permitido: ${imageUrl}`
+        );
+        continue;
+      }
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
+
+      let response;
+
+      try {
+        response = await fetch(imageUrl, {
+          method: "GET",
+          redirect: "follow",
+          signal: controller.signal,
+          headers: {
+            "User-Agent": "SantaCreators-HallDaFama/1.0"
+          }
+        });
+      } finally {
+        clearTimeout(timeout);
+      }
+
+      if (!response.ok) {
+        console.warn(
+          `[HallDaFama] Não foi possível baixar a imagem ${imageUrl}. Status: ${response.status}`
+        );
+        continue;
+      }
+
+      const contentType = String(
+        response.headers.get("content-type") || ""
+      )
+        .toLowerCase()
+        .split(";")[0]
+        .trim();
+
+      if (contentType && !contentType.startsWith("image/")) {
+        console.warn(
+          `[HallDaFama] O link não retornou uma imagem: ${imageUrl}. Content-Type: ${contentType}`
+        );
+        continue;
+      }
+
+      const declaredContentLength = Number(
+        response.headers.get("content-length") || 0
+      );
+
+      if (
+        declaredContentLength > 0 &&
+        declaredContentLength > maximumSingleImageSize
+      ) {
+        console.warn(
+          `[HallDaFama] Imagem ignorada por exceder o limite individual: ${imageUrl}`
+        );
+        continue;
+      }
+
+      const arrayBuffer = await response.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+
+      if (!buffer.length) {
+        console.warn(
+          `[HallDaFama] Imagem vazia ignorada: ${imageUrl}`
+        );
+        continue;
+      }
+
+      if (buffer.length > maximumSingleImageSize) {
+        console.warn(
+          `[HallDaFama] Imagem ignorada por exceder o limite individual após download: ${imageUrl}`
+        );
+        continue;
+      }
+
+      if (
+        totalDownloadedSize + buffer.length >
+        maximumTotalImageSize
+      ) {
+        console.warn(
+          `[HallDaFama] Limite total de imagens atingido. Imagem ignorada: ${imageUrl}`
+        );
+        continue;
+      }
+
+      const extension = getHallImageExtension(
+        contentType,
+        imageUrl
+      );
+
+      const attachmentName =
+        `hall-da-fama-${Date.now()}-${index + 1}.${extension}`;
+
+      files.push(
+        new AttachmentBuilder(buffer, {
+          name: attachmentName,
+          description: `Imagem ${index + 1} do Hall da Fama`
+        })
+      );
+
+      totalDownloadedSize += buffer.length;
+    } catch (error) {
+      console.error(
+        `[HallDaFama] Erro ao baixar a imagem ${imageUrl}:`,
+        error
+      );
+    }
   }
 
-  function getImageUrlsFromContent(content = "") {
-    return uniqueImageUrls(String(content).match(/https?:\/\/\S+/gi) || []);
-  }
+  return files;
+}
 
-  function getImageUrlsFromAttachments(message) {
-    return uniqueImageUrls([...message.attachments.values()].map(a => a.url));
-  }
+async function prepareHallImageEdit(
+  message,
+  imageUrls = [],
+  options = {}
+) {
+  const replaceExisting = options.replaceExisting === true;
 
-  async function getSafeHallImageUrls(client, hallMessage, options = {}) {
-    const content = options.content ?? getHallMessageText(hallMessage);
-    const manualUrls = uniqueImageUrls(options.manualUrls || []);
-    const contentUrls = getImageUrlsFromContent(content);
-    const attachmentUrls = getImageUrlsFromAttachments(hallMessage);
+  const existingAttachments = replaceExisting
+    ? []
+    : [...(message?.attachments?.values?.() || [])];
 
-    const approvalUrls = await findApprovalImagesForHall(client, hallMessage, {
-      eventName: options.eventName || extractHallParts(content).eventName,
-      winnerNames: options.winnerNames || extractWinnerNamesForApprovalMatch(content)
+  const existingUrlKeys = new Set(
+    existingAttachments.map(attachment =>
+      getHallImageUrlKey(attachment.url)
+    )
+  );
+
+  const urlsToDownload = uniqueImageUrls(imageUrls)
+    .filter(imageUrl => {
+      return !existingUrlKeys.has(
+        getHallImageUrlKey(imageUrl)
+      );
+    })
+    .slice(0, 4);
+
+  const availableSlots = Math.max(
+    0,
+    4 - existingAttachments.length
+  );
+
+  const files = availableSlots > 0
+    ? await downloadHallImageAttachments(
+        urlsToDownload.slice(0, availableSlots)
+      )
+    : [];
+
+  const attachments = existingAttachments.map(attachment => ({
+    id: attachment.id
+  }));
+
+  return {
+    attachments,
+    files,
+    hasImages:
+      existingAttachments.length > 0 ||
+      files.length > 0
+  };
+}
+
+async function getSafeHallImageUrls(client, hallMessage, options = {}) {
+  const content =
+    options.content ??
+    getHallMessageText(hallMessage);
+
+  const manualUrls = uniqueImageUrls(
+    options.manualUrls || []
+  );
+
+  const contentUrls =
+    getImageUrlsFromContent(content);
+
+  const attachmentUrls =
+    getImageUrlsFromAttachments(hallMessage);
+
+  const approvalUrls =
+    await findApprovalImagesForHall(client, hallMessage, {
+      eventName:
+        options.eventName ||
+        extractHallParts(content).eventName,
+
+      winnerNames:
+        options.winnerNames ||
+        extractWinnerNamesForApprovalMatch(content)
     }).catch(() => []);
 
-    return uniqueImageUrls([
-      ...manualUrls,
-      ...contentUrls,
-      ...attachmentUrls,
-      ...approvalUrls
-    ]);
-  }
+  return uniqueImageUrls([
+    ...manualUrls,
+    ...contentUrls,
+    ...attachmentUrls,
+    ...approvalUrls
+  ]);
+}
 
 function cleanHallWinnerLine(line = "") {
   return stripDiscordNoise(line)
@@ -6229,28 +6488,82 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
             evidence?.confidence < 90
           );
 
-        const fixedBase = fixDuplicatedHallContent(msg.content || text, allImageUrls);
+        const fixedBase = fixDuplicatedHallContent(
+          msg.content || text,
+          allImageUrls
+        );
 
-        const fixed = canAutoFixCity
-          ? updateHallCityOnly(fixedBase, CITIES[evidenceCityKey].label, allImageUrls)
+        const fixedWithUrls = canAutoFixCity
+          ? updateHallCityOnly(
+              fixedBase,
+              CITIES[evidenceCityKey].label,
+              allImageUrls
+            )
           : fixedBase;
 
+        const imageEditData = await prepareHallImageEdit(
+          msg,
+          allImageUrls,
+          {
+            replaceExisting: false
+          }
+        );
+
+        const fixed = imageEditData.hasImages
+          ? removeHallImageUrlsFromContent(
+              fixedWithUrls,
+              allImageUrls
+            )
+          : fixedWithUrls;
+
         if (needsManualCityReview) {
-          await sendHallCityToManualReview(client, msg, evidence, currentCityKey);
+          await sendHallCityToManualReview(
+            client,
+            msg,
+            evidence,
+            currentCityKey
+          );
         }
 
         if (canAutoFixCity) {
-          await autoFixEventosDiariosCityIfNeeded(client, msg, evidence);
+          await autoFixEventosDiariosCityIfNeeded(
+            client,
+            msg,
+            evidence
+          );
         }
 
+        const needsContentUpdate =
+          fixed !== msg.content;
+
+        const needsImageConversion =
+          imageEditData.files.length > 0;
+
         if (
-          fixed !== msg.content &&
+          (needsContentUpdate || needsImageConversion) &&
           fixed.length <= 2000 &&
           fixed.includes("HALL DA FAMA")
         ) {
-          await msg.edit({
+          const editPayload = {
             content: fixed
-          }).catch(() => {});
+          };
+
+          if (imageEditData.attachments.length > 0) {
+            editPayload.attachments =
+              imageEditData.attachments;
+          }
+
+          if (imageEditData.files.length > 0) {
+            editPayload.files =
+              imageEditData.files;
+          }
+
+          await msg.edit(editPayload).catch(error => {
+            console.error(
+              `[HallDaFama] Não foi possível corrigir a mensagem ${msg.id}:`,
+              error
+            );
+          });
 
           msg.content = fixed;
           edited++;
@@ -7301,17 +7614,56 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
         return interaction.editReply("❌ Hall original não encontrado.");
       }
 
-      const attachmentUrls = await getSafeHallImageUrls(client, hallMessage, {
-        content: hallMessage.content
-      });
+      const attachmentUrls = await getSafeHallImageUrls(
+        client,
+        hallMessage,
+        {
+          content: hallMessage.content
+        }
+      );
 
-      const fixedContent = updateHallCityOnly(hallMessage.content, CITIES[cityKey].label, attachmentUrls);
+      const fixedContentWithUrls = updateHallCityOnly(
+        hallMessage.content,
+        CITIES[cityKey].label,
+        attachmentUrls
+      );
+
+      const imageEditData = await prepareHallImageEdit(
+        hallMessage,
+        attachmentUrls,
+        {
+          replaceExisting: false
+        }
+      );
+
+      const fixedContent = imageEditData.hasImages
+        ? removeHallImageUrlsFromContent(
+            fixedContentWithUrls,
+            attachmentUrls
+          )
+        : fixedContentWithUrls;
 
       if (fixedContent.length > 2000) {
-        return interaction.editReply("❌ O Hall ficou maior que 2000 caracteres.");
+        return interaction.editReply(
+          "❌ O Hall ficou maior que 2000 caracteres."
+        );
       }
 
-      await hallMessage.edit({ content: fixedContent });
+      const editPayload = {
+        content: fixedContent
+      };
+
+      if (imageEditData.attachments.length > 0) {
+        editPayload.attachments =
+          imageEditData.attachments;
+      }
+
+      if (imageEditData.files.length > 0) {
+        editPayload.files =
+          imageEditData.files;
+      }
+
+      await hallMessage.edit(editPayload);
 
       const evidence = {
         cityKey,
@@ -7420,21 +7772,61 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
         return interaction.editReply("❌ A mensagem do Hall da Fama original não foi encontrada. Talvez tenha sido apagada.");
       }
 
-      const attachmentUrls = await getSafeHallImageUrls(client, messageToEdit, {
-        content: messageToEdit.content
-      });
+      const attachmentUrls = await getSafeHallImageUrls(
+        client,
+        messageToEdit,
+        {
+          content: messageToEdit.content
+        }
+      );
 
-      const finalContent = updateHallCityOnly(messageToEdit.content, newCityName, attachmentUrls);
+      const finalContentWithUrls = updateHallCityOnly(
+        messageToEdit.content,
+        newCityName,
+        attachmentUrls
+      );
+
+      const imageEditData = await prepareHallImageEdit(
+        messageToEdit,
+        attachmentUrls,
+        {
+          replaceExisting: false
+        }
+      );
+
+      const finalContent = imageEditData.hasImages
+        ? removeHallImageUrlsFromContent(
+            finalContentWithUrls,
+            attachmentUrls
+          )
+        : finalContentWithUrls;
 
       if (finalContent.length > 2000) {
-        return interaction.editReply("❌ O Hall ficou maior que 2000 caracteres e não pode ser salvo.");
+        return interaction.editReply(
+          "❌ O Hall ficou maior que 2000 caracteres e não pode ser salvo."
+        );
       }
 
-      await messageToEdit.edit({
+      const editPayload = {
         content: finalContent
-      });
+      };
 
-      await interaction.editReply(`✅ Cidade alterada com sucesso para: **${newCityName}**`);
+      if (imageEditData.attachments.length > 0) {
+        editPayload.attachments =
+          imageEditData.attachments;
+      }
+
+      if (imageEditData.files.length > 0) {
+        editPayload.files =
+          imageEditData.files;
+      }
+
+      await messageToEdit.edit(editPayload);
+
+      await interaction.editReply(
+        `✅ Cidade alterada com sucesso para: **${newCityName}**`
+      );
+
       return true;
     }
 
@@ -7619,7 +8011,7 @@ newImageUrl2 = finalImageUrls[1] || '';
     // Remonta a mensagem
   const introLine = buildHallIntroLine(newIntro, newEventName, newCityName);
 
-  const finalMessage = 
+  const finalMessageWithUrls =
   `# 🎉 :  **Santa Creators : ${newEventName}** 🎉 
 
   ${introLine}
@@ -7632,18 +8024,56 @@ newImageUrl2 = finalImageUrls[1] || '';
 
   **Foi insano, mas mais uma vez os vencedores mostraram que a vitória só é possível com raça! <:__:1357520048318709840>**
 
-  ${mentionsLine}
+  ${mentionsLine}`;
 
-  ${finalImageUrls.join("\n")}`;
+  const replacingExistingImages =
+    manualImageUrls.length > 0;
 
-      if (finalMessage.length > 2000) {
-        return interaction.editReply("❌ O conteúdo editado é muito longo (mais de 2000 caracteres) e não pode ser salvo. Por favor, reduza o texto dos vencedores.");
-      }
+  const imageEditData = await prepareHallImageEdit(
+    messageToEdit,
+    finalImageUrls,
+    {
+      replaceExisting: replacingExistingImages
+    }
+  );
 
-      await messageToEdit.edit({ content: finalMessage });
+  const finalMessage = imageEditData.hasImages
+    ? removeHallImageUrlsFromContent(
+        finalMessageWithUrls,
+        finalImageUrls
+      )
+    : finalMessageWithUrls;
 
-await interaction.editReply("✅ TOPs do Hall da Fama editados com sucesso!");
-return true;
+  if (finalMessage.length > 2000) {
+    return interaction.editReply(
+      "❌ O conteúdo editado é muito longo (mais de 2000 caracteres) e não pode ser salvo. Por favor, reduza o texto dos vencedores."
+    );
+  }
+
+  const editPayload = {
+    content: finalMessage
+  };
+
+  if (
+    replacingExistingImages ||
+    imageEditData.attachments.length > 0
+  ) {
+    editPayload.attachments =
+      imageEditData.attachments;
+  }
+
+  if (imageEditData.files.length > 0) {
+    editPayload.files =
+      imageEditData.files;
+  }
+
+  await messageToEdit.edit(editPayload);
+
+  await interaction.editReply(
+    "✅ TOPs do Hall da Fama editados com sucesso!"
+  );
+
+  return true;
   } finally {
     processingHallModalSubmits.delete(interaction.id);
   }
@@ -7901,8 +8331,20 @@ if (imageUrl) {
   const intro = getRandomIntro(); // Frase aleatória
   const introLine = buildHallIntroLine(intro, data.eventName, cityName);
 
+  const finalImageUrls = uniqueImageUrls(
+    data.imageUrls || [
+      data.imageUrl,
+      data.imageUrl2,
+      data.imageUrl3,
+      data.imageUrl4
+    ].filter(Boolean)
+  ).slice(0, 4);
+
+  const hallImageFiles =
+    await downloadHallImageAttachments(finalImageUrls);
+
   // Montagem da mensagem final (Estilo Diva/Grande)
-  const finalMessage = 
+  const finalMessage =
   `# 🎉 :  **Santa Creators : ${data.eventName}** 🎉 
 
   ${introLine}
@@ -7915,24 +8357,30 @@ if (imageUrl) {
 
   **Foi insano, mas mais uma vez os vencedores mostraram que a vitória só é possível com raça! <:__:1357520048318709840>**
 
-  ||@everyone @here <@&${ROLE_CIDADAO}> <@&${ROLE_LIDERES}> <@&${cityData.roleId}>||
+  ||@everyone @here <@&${ROLE_CIDADAO}> <@&${ROLE_LIDERES}> <@&${cityData.roleId}>||`;
 
-${uniqueImageUrls(data.imageUrls || [
-  data.imageUrl,
-  data.imageUrl2,
-  data.imageUrl3,
-  data.imageUrl4
-].filter(Boolean)).slice(0, 4).join("\n")}`;
+  const chunks = splitText(finalMessage);
+  let sentMsg;
 
-      const chunks = splitText(finalMessage);
-      let sentMsg;
-      for (const chunk of chunks) {
-          sentMsg = await hallChannel.send({ content: chunk });
-      }
+  for (let index = 0; index < chunks.length; index++) {
+    const isLastChunk = index === chunks.length - 1;
 
-      if (!sentMsg) {
-        return interaction.editReply("❌ Falha ao enviar a mensagem do Hall da Fama. O conteúdo pode estar vazio.");
-      }
+    const sendPayload = {
+      content: chunks[index]
+    };
+
+    if (isLastChunk && hallImageFiles.length > 0) {
+      sendPayload.files = hallImageFiles;
+    }
+
+    sentMsg = await hallChannel.send(sendPayload);
+  }
+
+  if (!sentMsg) {
+    return interaction.editReply(
+      "❌ Falha ao enviar a mensagem do Hall da Fama. O conteúdo pode estar vazio."
+    );
+  }
       
       try {
         const emojis = ["💜", "🔥", "🚀", "👏", "🎉", "🤩", "🏆", "👑", "💸", "✨", "💯", "✅", "💎", "🫡", "🤝", "🤯", "👀", "📸", "⚡", "💣", "👻", "💀", "👽", "👾", "🤖", "🎃", "😺"];
