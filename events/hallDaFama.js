@@ -1,7 +1,9 @@
   // d:\santacreators-main\events\hallDaFama.js
-  import fs from "node:fs";
-  import path from "node:path";
-  import { fileURLToPath } from "node:url";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
+
 import {
   EmbedBuilder,
   ActionRowBuilder,
@@ -2394,6 +2396,219 @@ function getHallImageUrlKey(url = "") {
   return normalizeImageUrl(url)
     .split("?")[0]
     .toLowerCase();
+}
+
+async function inspectHallAttachmentsForScan(message) {
+  const currentAttachments = [
+    ...(message?.attachments?.values?.() || [])
+  ];
+
+  if (currentAttachments.length === 0) {
+    return {
+      attachments: [],
+      imageUrls: [],
+      originalCount: 0,
+      finalCount: 0,
+      duplicateCount: 0,
+      brokenCount: 0,
+      changed: false,
+      verified: true
+    };
+  }
+
+  const verifiedAttachments = [];
+  const brokenAttachments = [];
+  const seenContentHashes = new Set();
+
+  for (const attachment of currentAttachments) {
+    const attachmentUrl =
+      attachment.url ||
+      attachment.proxyURL ||
+      "";
+
+    if (!attachmentUrl) {
+      brokenAttachments.push(attachment);
+      continue;
+    }
+
+    try {
+      const controller =
+        new AbortController();
+
+      const timeout = setTimeout(
+        () => controller.abort(),
+        15000
+      );
+
+      let response;
+
+      try {
+        response = await fetch(
+          attachmentUrl,
+          {
+            method: "GET",
+            redirect: "follow",
+            signal: controller.signal,
+            headers: {
+              "User-Agent":
+                "SantaCreators-HallDaFama/1.0"
+            }
+          }
+        );
+      } finally {
+        clearTimeout(timeout);
+      }
+
+      if (!response.ok) {
+        brokenAttachments.push(attachment);
+        continue;
+      }
+
+      const contentType = String(
+        response.headers.get("content-type") || ""
+      )
+        .toLowerCase()
+        .split(";")[0]
+        .trim();
+
+      if (
+        contentType &&
+        !contentType.startsWith("image/")
+      ) {
+        brokenAttachments.push(attachment);
+        continue;
+      }
+
+      const arrayBuffer =
+        await response.arrayBuffer();
+
+      const buffer =
+        Buffer.from(arrayBuffer);
+
+      if (!buffer.length) {
+        brokenAttachments.push(attachment);
+        continue;
+      }
+
+      const contentHash =
+        createHash("sha256")
+          .update(buffer)
+          .digest("hex");
+
+      if (seenContentHashes.has(contentHash)) {
+        continue;
+      }
+
+      seenContentHashes.add(contentHash);
+
+      verifiedAttachments.push({
+        attachment,
+        contentHash
+      });
+    } catch (error) {
+      console.warn(
+        `[HallDaFama] Não foi possível verificar o anexo ${attachment.id} da mensagem ${message?.id}:`,
+        error?.message || error
+      );
+
+      brokenAttachments.push(attachment);
+    }
+  }
+
+  /*
+   * Se nenhum anexo conseguiu ser verificado, não removemos nada.
+   * Isso evita apagar todas as fotos de um Hall quando o Discord
+   * estiver temporariamente indisponível ou a CDN estiver instável.
+   */
+  if (verifiedAttachments.length === 0) {
+    return {
+      attachments: currentAttachments.map(
+        attachment => ({
+          id: attachment.id
+        })
+      ),
+
+      imageUrls: uniqueImageUrls(
+        currentAttachments
+          .map(attachment => attachment.url)
+          .filter(Boolean)
+      ),
+
+      originalCount:
+        currentAttachments.length,
+
+      finalCount:
+        currentAttachments.length,
+
+      duplicateCount: 0,
+
+      brokenCount:
+        brokenAttachments.length,
+
+      changed: false,
+
+      verified: false
+    };
+  }
+
+  const finalAttachments =
+    verifiedAttachments.map(
+      item => item.attachment
+    );
+
+  const finalAttachmentIds =
+    new Set(
+      finalAttachments.map(
+        attachment => attachment.id
+      )
+    );
+
+  const removedCount =
+    currentAttachments.filter(
+      attachment =>
+        !finalAttachmentIds.has(
+          attachment.id
+        )
+    ).length;
+
+  const duplicateCount =
+    Math.max(
+      0,
+      removedCount -
+      brokenAttachments.length
+    );
+
+  return {
+    attachments:
+      finalAttachments.map(
+        attachment => ({
+          id: attachment.id
+        })
+      ),
+
+    imageUrls: uniqueImageUrls(
+      finalAttachments
+        .map(attachment => attachment.url)
+        .filter(Boolean)
+    ),
+
+    originalCount:
+      currentAttachments.length,
+
+    finalCount:
+      finalAttachments.length,
+
+    duplicateCount,
+
+    brokenCount:
+      brokenAttachments.length,
+
+    changed:
+      finalAttachments.length !==
+      currentAttachments.length,
+
+    verified: true
+  };
 }
 
 function removeHallImageUrlsFromContent(content = "", imageUrls = []) {
@@ -6678,43 +6893,18 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
         const parts =
           extractHallParts(text);
 
-        const currentAttachmentUrls =
-          getImageUrlsFromAttachments(
+        const attachmentInspection =
+          await inspectHallAttachmentsForScan(
             msg
-          ).slice(0, 4);
-
-        const contentImageUrls =
-          getImageUrlsFromContent(
-            msg.content || ""
-          ).slice(0, 4);
-
-        const approvedImageUrls =
-          await findApprovalImagesForHall(
-            client,
-            msg,
-            {
-              eventName:
-                parts.eventName,
-
-              winnerNames:
-                extractWinnerNamesForApprovalMatch(
-                  text
-                )
-            }
-          ).catch(() => []);
-
-        const hasApprovedImageRecord =
-          approvedImageUrls.length > 0;
+          );
 
         const originalImageUrls =
-          hasApprovedImageRecord
-            ? uniqueImageUrls(
-                approvedImageUrls
-              ).slice(0, 4)
-            : uniqueImageUrls([
-                ...currentAttachmentUrls,
-                ...contentImageUrls
-              ]).slice(0, 4);
+          uniqueImageUrls([
+            ...attachmentInspection.imageUrls,
+            ...getImageUrlsFromContent(
+              msg.content || ""
+            )
+          ]);
 
         const evidence =
           await resolveHallEvidence(
@@ -6757,35 +6947,21 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
               )
             : fixedBase;
 
-        const imageEditData =
-          hasApprovedImageRecord
-            ? await prepareHallImageEdit(
-                msg,
-                originalImageUrls,
-                {
-                  replaceExisting: true,
-                  forceReuploadExisting: false
-                }
-              )
-            : {
-                attachments: [
-                  ...msg.attachments.values()
-                ]
-                  .slice(0, 4)
-                  .map(attachment => ({
-                    id: attachment.id
-                  })),
+        const imageEditData = {
+          attachments:
+            attachmentInspection.attachments,
 
-                files: [],
+          files: [],
 
-                shouldReplaceAttachments: false,
+          shouldReplaceAttachments:
+            attachmentInspection.changed,
 
-                reuploadedExisting: false,
+          reuploadedExisting: false,
 
-                hasImages:
-                  msg.attachments.size > 0 ||
-                  originalImageUrls.length > 0
-              };
+          hasImages:
+            attachmentInspection.finalCount > 0 ||
+            originalImageUrls.length > 0
+        };
 
         const fixed =
           imageEditData.hasImages
@@ -6818,8 +6994,15 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
         const needsImageConversion =
           imageEditData.files.length > 0;
 
+        const needsAttachmentCleanup =
+          attachmentInspection.changed;
+
         if (
-          (needsContentUpdate || needsImageConversion) &&
+          (
+            needsContentUpdate ||
+            needsImageConversion ||
+            needsAttachmentCleanup
+          ) &&
           fixed.length <= 2000 &&
           fixed.includes("HALL DA FAMA")
         ) {
