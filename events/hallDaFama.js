@@ -6778,6 +6778,7 @@ async function findApprovalImagesForHall(
       found: false,
       messageId: null,
       images: [],
+      expectedImageCount: 0,
       reason:
         "Canal de aprovação indisponível"
     };
@@ -6935,6 +6936,7 @@ async function findApprovalImagesForHall(
 
     const embedImageUrls = [];
     const imageFieldUrls = [];
+    let expectedImageCount = 0;
 
     for (
       const embed of
@@ -6960,16 +6962,30 @@ async function findApprovalImagesForHall(
             field.name || ""
           )
         ) {
-          const urls =
+          const fieldValue =
             String(
               field.value || ""
-            ).match(
+            );
+
+          const urls =
+            fieldValue.match(
               /https?:\/\/\S+/gi
             ) || [];
 
           imageFieldUrls.push(
             ...urls
           );
+
+          const numberedImages =
+            fieldValue.match(
+              /Imagem\s+\d+\s*:/gi
+            ) || [];
+
+          expectedImageCount =
+            Math.max(
+              expectedImageCount,
+              numberedImages.length
+            );
         }
       }
     }
@@ -6980,40 +6996,47 @@ async function findApprovalImagesForHall(
       ).slice(0, 4);
 
     /*
-     * Os links presentes no campo "Imagens"
-     * representam exatamente as fotos enviadas
-     * na solicitação original.
+     * Os registros antigos podem possuir parte
+     * das imagens no campo "Imagens" e outra
+     * parte como anexos reais da mensagem.
      *
-     * Exemplo:
-     * Imagem 1: link da primeira foto
-     * Imagem 2: link da segunda foto
-     *
-     * Por isso, quando esses links existem,
-     * eles devem ter prioridade sobre a imagem
-     * principal do embed e sobre os anexos.
+     * Por isso, não podemos retornar apenas uma
+     * das fontes. Precisamos juntar as duas.
      */
+    const primaryImageUrls =
+      uniqueImageUrls([
+        ...officialFieldImageUrls,
+        ...attachmentUrls
+      ]).slice(0, 4);
+
     if (
-      officialFieldImageUrls.length > 0
+      primaryImageUrls.length > 0
     ) {
-      return officialFieldImageUrls;
+      return {
+        images:
+          primaryImageUrls,
+
+        expectedImageCount:
+          expectedImageCount > 0
+            ? expectedImageCount
+            : primaryImageUrls.length
+      };
     }
 
-    /*
-     * Registros novos armazenam todos os arquivos
-     * como anexos reais. Se o campo não possuir
-     * URLs recuperáveis, usamos os anexos.
-     */
-    if (attachmentUrls.length > 0) {
-      return attachmentUrls;
-    }
+    const fallbackImageUrls =
+      uniqueImageUrls(
+        embedImageUrls
+      ).slice(0, 4);
 
-    /*
-     * Último recurso para registros antigos que
-     * possuem apenas a imagem principal do embed.
-     */
-    return uniqueImageUrls(
-      embedImageUrls
-    ).slice(0, 4);
+    return {
+      images:
+        fallbackImageUrls,
+
+      expectedImageCount:
+        expectedImageCount > 0
+          ? expectedImageCount
+          : fallbackImageUrls.length
+    };
   }
 
   const candidates =
@@ -7125,10 +7148,17 @@ async function findApprovalImagesForHall(
               "hall da fama aprovado"
             );
 
-        const images =
+        const approvalImages =
           getApprovalImages(
             message
           );
+
+        const images =
+          approvalImages.images;
+
+        const expectedImageCount =
+          approvalImages
+            .expectedImageCount;
 
         const diff =
           Math.abs(
@@ -7143,6 +7173,7 @@ async function findApprovalImagesForHall(
           message,
           diff,
           images,
+          expectedImageCount,
           isApproved,
           eventMatches,
           cityMatches,
@@ -7217,11 +7248,11 @@ async function findApprovalImagesForHall(
       found: false,
       messageId: null,
       images: [],
+      expectedImageCount: 0,
       reason:
         "Nenhuma aprovação exata encontrada"
     };
   }
-
   return {
     found: true,
 
@@ -7233,6 +7264,10 @@ async function findApprovalImagesForHall(
     images:
       selectedCandidate
         .images,
+
+    expectedImageCount:
+      selectedCandidate
+        .expectedImageCount,
 
     reason:
       "Aprovação exata encontrada"
@@ -7424,7 +7459,13 @@ async function findApprovalImagesForHall(
 
         const expectedApprovedImageCount =
           approvalImageData.found
-            ? approvalImageData.images.length
+            ? (
+                approvalImageData
+                  .expectedImageCount ||
+                approvalImageData
+                  .images
+                  .length
+              )
             : 0;
 
         const downloadedApprovedImageCount =
