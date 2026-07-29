@@ -1016,6 +1016,47 @@ return {
 };
   }
 
+  function countHallTopLines(content = "") {
+    const text =
+      String(
+        content || ""
+      );
+
+    const topNumbers =
+      [
+        ...text.matchAll(
+          /(?:^|\n)\s*(?:\*\*)?TOP(?:\*\*)?\s*[:\-]?\s*(?:<a?:[^:>\s]+:\d+>|:[a-zA-Z0-9_~]+:)?\s*(\d+)/gi
+        )
+      ]
+        .map(match =>
+          Number(
+            match[1]
+          )
+        )
+        .filter(number =>
+          Number.isInteger(number) &&
+          number >= 1 &&
+          number <= 4
+        );
+
+    if (topNumbers.length > 0) {
+      return new Set(
+        topNumbers
+      ).size;
+    }
+
+    const genericTopLines =
+      text
+        .split("\n")
+        .filter(line =>
+          /^\s*(?:\*\*)?TOP(?:\*\*)?\b/i.test(
+            line
+          )
+        );
+
+    return genericTopLines.length;
+  }
+
   function buildHallIntroLine(intro, eventName, cityName) {
     return `${cleanOneLine(intro)}\n\n🏆 **${cleanOneLine(eventName).toUpperCase()}** na **${cleanOneLine(cityName).toUpperCase()}**! <:coroa_orange:1353939359144870019>`;
   }
@@ -7447,14 +7488,9 @@ async function findApprovalImagesForHall(
 
         const originalImageUrls =
           approvalImageData.found
-            ? approvalImageData.images
-            : [];
-
-        const approvedImageFiles =
-          approvalImageData.found
-            ? await downloadUniqueApprovedHallImages(
-                originalImageUrls
-              )
+            ? uniqueImageUrls(
+                approvalImageData.images
+              ).slice(0, 4)
             : [];
 
         const expectedApprovedImageCount =
@@ -7462,20 +7498,40 @@ async function findApprovalImagesForHall(
             ? (
                 approvalImageData
                   .expectedImageCount ||
-                approvalImageData
-                  .images
-                  .length
+                originalImageUrls.length
               )
             : 0;
+
+        const hallTopCount =
+          countHallTopLines(
+            parts.winnersText ||
+            text
+          );
+
+        const shouldKeepImagesAsLinks =
+          approvalImageData.found &&
+          originalImageUrls.length > 0 &&
+          (
+            expectedApprovedImageCount > 1 ||
+            hallTopCount > 1
+          );
+
+        const approvedImageFiles =
+          approvalImageData.found &&
+          !shouldKeepImagesAsLinks
+            ? await downloadUniqueApprovedHallImages(
+                originalImageUrls
+              )
+            : [];
 
         const downloadedApprovedImageCount =
           approvedImageFiles.length;
 
         const canRestoreApprovedImages =
           approvalImageData.found &&
-          expectedApprovedImageCount > 0 &&
-          downloadedApprovedImageCount ===
-            expectedApprovedImageCount;
+          !shouldKeepImagesAsLinks &&
+          expectedApprovedImageCount === 1 &&
+          downloadedApprovedImageCount === 1;
 
         const evidence =
           await resolveHallEvidence(
@@ -7574,16 +7630,25 @@ async function findApprovalImagesForHall(
 
                 hasImages:
                   currentAttachments.length >
-                  0
+                    0 ||
+                  (
+                    shouldKeepImagesAsLinks &&
+                    originalImageUrls.length >
+                      0
+                  )
               };
 
         const fixed =
-          imageEditData.hasImages
-            ? removeHallImageUrlsFromContent(
-                fixedWithUrls,
-                originalImageUrls
-              )
-            : fixedWithUrls;
+          shouldKeepImagesAsLinks
+            ? fixedWithUrls
+            : (
+                imageEditData.hasImages
+                  ? removeHallImageUrlsFromContent(
+                      fixedWithUrls,
+                      originalImageUrls
+                    )
+                  : fixedWithUrls
+              );
 
         if (needsManualCityReview) {
           await sendHallCityToManualReview(
@@ -7601,7 +7666,6 @@ async function findApprovalImagesForHall(
             evidence
           );
         }
-
         const needsContentUpdate =
           fixed !== msg.content;
 
@@ -7611,11 +7675,23 @@ async function findApprovalImagesForHall(
         const needsAttachmentCleanup =
           canRestoreApprovedImages;
 
+        const needsImageLinkRecovery =
+          shouldKeepImagesAsLinks &&
+          originalImageUrls.some(
+            imageUrl =>
+              !String(
+                msg.content || ""
+              ).includes(
+                imageUrl
+              )
+          );
+
         if (
           (
             needsContentUpdate ||
             needsImageConversion ||
-            needsAttachmentCleanup
+            needsAttachmentCleanup ||
+            needsImageLinkRecovery
           ) &&
           fixed.length <= 2000 &&
           fixed.includes(
@@ -9163,6 +9239,17 @@ const currentAttachmentUrls =
     messageToEdit
   ).slice(0, 4);
 
+const currentContentImageUrls =
+  getImageUrlsFromContent(
+    oldContent
+  ).slice(0, 4);
+
+const currentHallImageUrls =
+  uniqueImageUrls([
+    ...currentContentImageUrls,
+    ...currentAttachmentUrls
+  ]).slice(0, 4);
+
 if (isPrizesOnly) {
   const titleLine = lines.find(
     line =>
@@ -9207,7 +9294,7 @@ if (isPrizesOnly) {
       ? uniqueImageUrls(
           manualImageUrls
         ).slice(0, 4)
-      : currentAttachmentUrls;
+      : currentHallImageUrls;
 
   newImageUrl =
     finalImageUrls[0] ||
@@ -9231,7 +9318,7 @@ if (isPrizesOnly) {
       ? uniqueImageUrls(
           forcedImageUrls
         ).slice(0, 4)
-      : currentAttachmentUrls;
+      : currentHallImageUrls;
 
   newImageUrl =
     finalImageUrls[0] ||
@@ -9287,12 +9374,32 @@ if (isPrizesOnly) {
             messageToEdit.attachments.size > 0
         };
 
-  const finalMessage = imageEditData.hasImages
-    ? removeHallImageUrlsFromContent(
-        finalMessageWithUrls,
-        finalImageUrls
-      )
-    : finalMessageWithUrls;
+  const editedTopCount =
+    countHallTopLines(
+      newWinnersText
+    );
+
+  const shouldKeepEditedImagesAsLinks =
+    finalImageUrls.length > 1 ||
+    editedTopCount > 1;
+
+  const finalMessageBase =
+    shouldKeepEditedImagesAsLinks &&
+    finalImageUrls.length > 0
+      ? `${finalMessageWithUrls.trim()}\n\n${finalImageUrls.join("\n")}`
+      : finalMessageWithUrls;
+
+  const finalMessage =
+    shouldKeepEditedImagesAsLinks
+      ? finalMessageBase
+      : (
+          imageEditData.hasImages
+            ? removeHallImageUrlsFromContent(
+                finalMessageBase,
+                finalImageUrls
+              )
+            : finalMessageBase
+        );
 
   if (finalMessage.length > 2000) {
     return interaction.editReply(
@@ -9636,8 +9743,26 @@ if (approvalImageReferences.length > 0) {
     ].filter(Boolean)
   ).slice(0, 4);
 
+  const hallTopCount =
+    countHallTopLines(
+      data.winnersText
+    );
+
+  const shouldKeepImagesAsLinks =
+    finalImageUrls.length > 1 ||
+    hallTopCount > 1;
+
   const hallImageFiles =
-    await downloadHallImageAttachments(finalImageUrls);
+    shouldKeepImagesAsLinks
+      ? []
+      : await downloadHallImageAttachments(
+          finalImageUrls
+        );
+
+  const hallImageLinks =
+    shouldKeepImagesAsLinks
+      ? finalImageUrls.join("\n")
+      : "";
 
   // Montagem da mensagem final (Estilo Diva/Grande)
   const finalMessage =
@@ -9653,7 +9778,9 @@ if (approvalImageReferences.length > 0) {
 
   **Foi insano, mas mais uma vez os vencedores mostraram que a vitória só é possível com raça! <:__:1357520048318709840>**
 
-  ||@everyone @here <@&${ROLE_CIDADAO}> <@&${ROLE_LIDERES}> <@&${cityData.roleId}>||`;
+  ||@everyone @here <@&${ROLE_CIDADAO}> <@&${ROLE_LIDERES}> <@&${cityData.roleId}>||
+
+  ${hallImageLinks}`;
 
   const chunks = splitText(finalMessage);
   let sentMsg;
