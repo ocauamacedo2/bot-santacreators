@@ -6817,7 +6817,19 @@ async function findApprovalImagesForHall(
             attachment.url
           )
           .filter(Boolean)
-      );
+      ).slice(0, 4);
+
+    /*
+     * Quando o registro possui anexos reais,
+     * eles são a fonte oficial.
+     *
+     * Não é necessário misturar a imagem do
+     * embed, pois ela normalmente aponta para
+     * um dos próprios anexos.
+     */
+    if (attachmentUrls.length > 0) {
+      return attachmentUrls;
+    }
 
     const embedImageUrls = [];
     const imageFieldUrls = [];
@@ -6861,7 +6873,6 @@ async function findApprovalImagesForHall(
     }
 
     return uniqueImageUrls([
-      ...attachmentUrls,
       ...embedImageUrls,
       ...imageFieldUrls
     ]).slice(0, 4);
@@ -7273,9 +7284,19 @@ async function findApprovalImagesForHall(
               )
             : [];
 
+        const expectedApprovedImageCount =
+          approvalImageData.found
+            ? approvalImageData.images.length
+            : 0;
+
+        const downloadedApprovedImageCount =
+          approvedImageFiles.length;
+
         const canRestoreApprovedImages =
           approvalImageData.found &&
-          approvedImageFiles.length > 0;
+          expectedApprovedImageCount > 0 &&
+          downloadedApprovedImageCount ===
+            expectedApprovedImageCount;
 
         const evidence =
           await resolveHallEvidence(
@@ -7485,7 +7506,9 @@ async function findApprovalImagesForHall(
                 `Fonte da cidade: **${evidence?.source || "não identificada"}**\n` +
                 `Confiança: **${evidence?.confidence || 0}%**\n` +
                 `Registro aprovado: **${approvalImageData.found ? approvalImageData.messageId : "não encontrado"}**\n` +
-                `Imagens restauradas: **${canRestoreApprovedImages ? approvedImageFiles.length : 0}**`,
+                `Imagens esperadas: **${expectedApprovedImageCount}**\n` +
+                `Imagens baixadas: **${downloadedApprovedImageCount}**\n` +
+                `Imagens restauradas: **${canRestoreApprovedImages ? downloadedApprovedImageCount : 0}**`,
 
               phase:
                 "Correção automática",
@@ -9302,24 +9325,58 @@ state.pendingRequests[reqId] = {
       const approvalChannel = await client.channels.fetch(APPROVAL_CHANNEL_ID).catch(() => null);
       if (!approvalChannel) return interaction.editReply("❌ Canal de aprovação não encontrado.");
 
+const approvalImageFiles =
+  await downloadHallImageAttachments(
+    imageUrls
+  );
+
+const approvalImageReferences =
+  approvalImageFiles.map(
+    (file, index) => ({
+      index,
+      name:
+        file.name ||
+        `hall-aprovacao-${index + 1}.png`
+    })
+  );
+
 const embed = new EmbedBuilder()
   .setTitle("🛡️ Aprovação: Hall da Fama")
   .setColor("#FFD700")
-  .setDescription(`**Solicitante:** <@${interaction.user.id}>\n**Cidade:** ${cityDisplayName}`)
+  .setDescription(
+    `**Solicitante:** <@${interaction.user.id}>\n` +
+    `**Cidade:** ${cityDisplayName}`
+  )
   .addFields(
-    { name: "Evento (Automático)", value: eventName },
-    { name: "Vencedores (Formatado)", value: winnersText },
+    {
+      name: "Evento (Automático)",
+      value: eventName
+    },
+    {
+      name: "Vencedores (Formatado)",
+      value: winnersText
+    },
     {
       name: "Imagens",
-      value: imageUrls.length
-        ? imageUrls.map((url, index) => `Imagem ${index + 1}: ${url}`).join("\n").slice(0, 1000)
-        : "—"
+      value:
+        approvalImageReferences.length > 0
+          ? approvalImageReferences
+              .map(
+                image =>
+                  `Imagem ${image.index + 1}: ` +
+                  `[${image.name}](attachment://${image.name})`
+              )
+              .join("\n")
+              .slice(0, 1000)
+          : "—"
     }
   )
   .setTimestamp();
 
-if (imageUrl) {
-  embed.setImage(imageUrl);
+if (approvalImageReferences.length > 0) {
+  embed.setImage(
+    `attachment://${approvalImageReferences[0].name}`
+  );
 }
 
       const row = new ActionRowBuilder().addComponents(
@@ -9333,11 +9390,23 @@ if (imageUrl) {
           .setStyle(ButtonStyle.Danger)
       );
 
-      await approvalChannel.send({
-        content: "Nova solicitação de Hall da Fama pendente.",
+      const approvalPayload = {
+        content:
+          "Nova solicitação de Hall da Fama pendente.",
+
         embeds: [embed],
+
         components: [row]
-      });
+      };
+
+      if (approvalImageFiles.length > 0) {
+        approvalPayload.files =
+          approvalImageFiles;
+      }
+
+      await approvalChannel.send(
+        approvalPayload
+      );
 
       await interaction.editReply("✅ Solicitação enviada para aprovação!");
       return true;
@@ -9457,13 +9526,49 @@ if (imageUrl) {
       await sendAuditHallLog(client, interaction.member, data, sentMsg);
 
 
-      const embedApproved = EmbedBuilder.from(interaction.message.embeds[0])
-        .setColor("#2ecc71")
-        .setTitle("✅ Hall da Fama APROVADO")
-        .setFooter({ text: `Aprovado por ${interaction.user.tag}` })
-        .addFields({ name: '✅ Aprovado por', value: `${interaction.user} (\`${interaction.user.tag}\`)`, inline: false });
+      const embedApproved =
+        EmbedBuilder.from(
+          interaction.message.embeds[0]
+        )
+          .setColor("#2ecc71")
+          .setTitle(
+            "✅ Hall da Fama APROVADO"
+          )
+          .setFooter({
+            text:
+              `Aprovado por ${interaction.user.tag}`
+          })
+          .addFields({
+            name:
+              "✅ Aprovado por",
 
-      await interaction.message.edit({ embeds: [embedApproved], components: [] });
+            value:
+              `${interaction.user} ` +
+              `(\`${interaction.user.tag}\`)`,
+
+            inline: false
+          });
+
+      const approvalAttachments = [
+        ...interaction.message
+          .attachments
+          .values()
+      ].map(
+        attachment => ({
+          id: attachment.id
+        })
+      );
+
+      await interaction.message.edit({
+        embeds: [
+          embedApproved
+        ],
+
+        components: [],
+
+        attachments:
+          approvalAttachments
+      });
       
     markTodayEventPosted(data.eventKey, "hallDaFama");
 
