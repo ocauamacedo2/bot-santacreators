@@ -2794,6 +2794,172 @@ async function downloadHallImageAttachments(imageUrls = [], options = {}) {
   return files;
 }
 
+async function downloadUniqueApprovedHallImages(
+  imageUrls = []
+) {
+  const urls =
+    uniqueImageUrls(
+      imageUrls
+    ).slice(0, 4);
+
+  const files = [];
+  const seenHashes = new Set();
+
+  for (
+    let index = 0;
+    index < urls.length;
+    index++
+  ) {
+    const imageUrl =
+      urls[index];
+
+    try {
+      const parsedUrl =
+        new URL(imageUrl);
+
+      if (
+        ![
+          "http:",
+          "https:"
+        ].includes(
+          parsedUrl.protocol
+        )
+      ) {
+        console.warn(
+          `[HallDaFama] Protocolo de imagem aprovada não permitido: ${imageUrl}`
+        );
+
+        continue;
+      }
+
+      const controller =
+        new AbortController();
+
+      const timeout =
+        setTimeout(
+          () =>
+            controller.abort(),
+          15000
+        );
+
+      let response;
+
+      try {
+        response =
+          await fetch(
+            imageUrl,
+            {
+              method: "GET",
+              redirect: "follow",
+              signal:
+                controller.signal,
+              headers: {
+                "User-Agent":
+                  "SantaCreators-HallDaFama/1.0"
+              }
+            }
+          );
+      } finally {
+        clearTimeout(
+          timeout
+        );
+      }
+
+      if (!response.ok) {
+        console.warn(
+          `[HallDaFama] Imagem aprovada indisponível: ${imageUrl}. Status: ${response.status}`
+        );
+
+        continue;
+      }
+
+      const contentType =
+        String(
+          response.headers.get(
+            "content-type"
+          ) || ""
+        )
+          .toLowerCase()
+          .split(";")[0]
+          .trim();
+
+      if (
+        contentType &&
+        !contentType.startsWith(
+          "image/"
+        )
+      ) {
+        console.warn(
+          `[HallDaFama] A URL aprovada não retornou uma imagem: ${imageUrl}`
+        );
+
+        continue;
+      }
+
+      const arrayBuffer =
+        await response.arrayBuffer();
+
+      const buffer =
+        Buffer.from(
+          arrayBuffer
+        );
+
+      if (!buffer.length) {
+        console.warn(
+          `[HallDaFama] A imagem aprovada retornou vazia: ${imageUrl}`
+        );
+
+        continue;
+      }
+
+      const imageHash =
+        createHash("sha256")
+          .update(buffer)
+          .digest("hex");
+
+      if (
+        seenHashes.has(
+          imageHash
+        )
+      ) {
+        continue;
+      }
+
+      seenHashes.add(
+        imageHash
+      );
+
+      const extension =
+        getHallImageExtension(
+          contentType,
+          imageUrl
+        );
+
+      files.push(
+        new AttachmentBuilder(
+          buffer,
+          {
+            name:
+              `hall-restaurado-${Date.now()}-${files.length + 1}.${extension}`,
+
+            description:
+              `Imagem ${files.length + 1} do Hall da Fama`
+          }
+        )
+      );
+    } catch (error) {
+      console.warn(
+        `[HallDaFama] Não foi possível baixar a imagem aprovada ${imageUrl}:`,
+        error?.message ||
+          error
+      );
+    }
+  }
+
+  return files;
+}
+
+
 async function prepareHallImageEdit(
   message,
   imageUrls = [],
@@ -2897,16 +3063,31 @@ async function getSafeHallImageUrls(client, hallMessage, options = {}) {
   const attachmentUrls =
     getImageUrlsFromAttachments(hallMessage);
 
-  const approvalUrls =
-    await findApprovalImagesForHall(client, hallMessage, {
-      eventName:
-        options.eventName ||
-        extractHallParts(content).eventName,
+  const approvalImageData =
+    await findApprovalImagesForHall(
+      client,
+      hallMessage,
+      {
+        eventName:
+          options.eventName ||
+          extractHallParts(content).eventName,
 
-      winnerNames:
-        options.winnerNames ||
-        extractWinnerNamesForApprovalMatch(content)
-    }).catch(() => []);
+        winnerNames:
+          options.winnerNames ||
+          extractWinnerNamesForApprovalMatch(content)
+      }
+    ).catch(() => ({
+      found: false,
+      messageId: null,
+      images: [],
+      reason:
+        "Erro ao procurar aprovação"
+    }));
+
+  const approvalUrls =
+    approvalImageData.found
+      ? approvalImageData.images
+      : [];
 
   return uniqueImageUrls([
     ...manualUrls,
@@ -6475,54 +6656,109 @@ function scoreApprovalMessageForHall(approvalText = "", hallWinnerNames = []) {
   return score;
 }
 
-async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
-  const approvalChannel = await client.channels
-    .fetch(APPROVAL_CHANNEL_ID)
-    .catch(() => null);
+async function findApprovalImagesForHall(
+  client,
+  hallMessage,
+  parts = {}
+) {
+  const approvalChannel =
+    await client.channels
+      .fetch(
+        APPROVAL_CHANNEL_ID
+      )
+      .catch(() => null);
 
-  if (!approvalChannel || !approvalChannel.isTextBased()) {
-    return [];
+  if (
+    !approvalChannel ||
+    !approvalChannel.isTextBased()
+  ) {
+    return {
+      found: false,
+      messageId: null,
+      images: [],
+      reason:
+        "Canal de aprovação indisponível"
+    };
   }
 
-  const hallEventName = normalizeHallName(
-    parts.eventName || ""
-  );
+  const hallText =
+    getHallMessageText(
+      hallMessage
+    );
 
-  const hallWinnerNames = parts.winnerNames?.length
-    ? parts.winnerNames
-    : extractWinnerNamesForApprovalMatch(
-        getHallMessageText(hallMessage)
-      );
+  const hallParts =
+    extractHallParts(
+      hallText
+    );
+
+  const hallEventName =
+    normalizeHallName(
+      parts.eventName ||
+      hallParts.eventName ||
+      ""
+    );
+
+  const hallCityKey =
+    detectHallCityKey(
+      hallText
+    );
+
+  const normalizedHallWinners =
+    [
+      ...new Set(
+        (
+          parts.winnerNames?.length
+            ? parts.winnerNames
+            : extractWinnerNamesForApprovalMatch(
+                hallText
+              )
+        )
+          .map(winnerName =>
+            normalizeHallName(
+              winnerName
+            )
+          )
+          .filter(winnerName =>
+            winnerName.length >= 3
+          )
+      )
+    ];
 
   const hallCreatedAt =
     hallMessage?.createdTimestamp ||
     Date.now();
 
+  const maximumDifference =
+    1000 * 60 * 90;
+
   const minimumTimestamp =
     hallCreatedAt -
-    1000 * 60 * 60 * 6;
+    maximumDifference;
 
   const maximumTimestamp =
     hallCreatedAt +
-    1000 * 60 * 60 * 6;
+    maximumDifference;
 
   const allApprovalMessages = [];
   let beforeId = null;
   let reachedHallPeriod = false;
 
   while (true) {
-    const fetchOptions = beforeId
-      ? {
-          limit: 100,
-          before: beforeId
-        }
-      : {
-          limit: 100
-        };
+    const fetchOptions =
+      beforeId
+        ? {
+            limit: 100,
+            before: beforeId
+          }
+        : {
+            limit: 100
+          };
 
     const fetchedMessages =
       await approvalChannel.messages
-        .fetch(fetchOptions)
+        .fetch(
+          fetchOptions
+        )
         .catch(() => null);
 
     if (
@@ -6560,181 +6796,298 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
       break;
     }
 
-    if (fetchedMessages.size < 100) {
+    if (
+      fetchedMessages.size < 100
+    ) {
       break;
     }
   }
 
-  function extractImagesFromApprovalMessage(
-    approvalMsg
+  function getApprovalImages(
+    approvalMessage
   ) {
-    const attachmentUrls = uniqueImageUrls(
-      [...approvalMsg.attachments.values()]
-        .map(attachment => attachment.url)
-        .filter(Boolean)
-    );
+    const attachmentUrls =
+      uniqueImageUrls(
+        [
+          ...approvalMessage
+            .attachments
+            .values()
+        ]
+          .map(attachment =>
+            attachment.url
+          )
+          .filter(Boolean)
+      );
 
     const embedImageUrls = [];
     const imageFieldUrls = [];
-    const thumbnailUrls = [];
 
-    for (const embed of approvalMsg.embeds || []) {
-      if (embed.image?.url) {
+    for (
+      const embed of
+        approvalMessage.embeds || []
+    ) {
+      if (
+        embed.image?.url
+      ) {
         embedImageUrls.push(
           embed.image.url
         );
       }
 
-      if (embed.thumbnail?.url) {
-        thumbnailUrls.push(
-          embed.thumbnail.url
-        );
-      }
-
-      for (const field of embed.fields || []) {
+      for (
+        const field of
+          embed.fields || []
+      ) {
         if (
-          /imagem/i.test(field.name || "") ||
-          /image/i.test(field.name || "")
+          /imagem/i.test(
+            field.name || ""
+          ) ||
+          /image/i.test(
+            field.name || ""
+          )
         ) {
-          const urls = String(
-            field.value || ""
-          ).match(/https?:\/\/\S+/gi) || [];
+          const urls =
+            String(
+              field.value || ""
+            ).match(
+              /https?:\/\/\S+/gi
+            ) || [];
 
-          imageFieldUrls.push(...urls);
+          imageFieldUrls.push(
+            ...urls
+          );
         }
       }
     }
 
-    const primaryImages = uniqueImageUrls([
+    return uniqueImageUrls([
       ...attachmentUrls,
       ...embedImageUrls,
       ...imageFieldUrls
     ]).slice(0, 4);
-
-    if (primaryImages.length > 0) {
-      return primaryImages;
-    }
-
-    return uniqueImageUrls(
-      thumbnailUrls
-    ).slice(0, 4);
   }
 
-  const candidates = allApprovalMessages
-    .map(message => {
-      const diff = Math.abs(
-        (message.createdTimestamp || 0) -
-        hallCreatedAt
-      );
-
-      const embedText = (
-        message.embeds || []
-      )
-        .map(embed => [
-          embed.title,
-          embed.description,
-          ...(embed.fields || []).map(
-            field =>
-              `${field.name} ${field.value}`
+  const candidates =
+    allApprovalMessages
+      .map(message => {
+        const embedText =
+          (
+            message.embeds || []
           )
-        ]
-          .filter(Boolean)
-          .join(" ")
-        )
-        .join(" ");
+            .map(embed =>
+              [
+                embed.title,
+                embed.description,
+                ...(
+                  embed.fields || []
+                ).map(field =>
+                  `${field.name}\n${field.value}`
+                )
+              ]
+                .filter(Boolean)
+                .join("\n")
+            )
+            .join("\n");
 
-      const fullText =
-        `${message.content || ""}\n${embedText}`;
+        const fullText =
+          `${message.content || ""}\n${embedText}`;
 
-      const normalizedFullText =
-        normalizeHallName(fullText);
+        const normalizedFullText =
+          normalizeHallName(
+            fullText
+          );
 
-      const images =
-        extractImagesFromApprovalMessage(
-          message
-        );
+        const messageCityKey =
+          resolveCityKeyFromAnyText(
+            fullText
+          );
 
-      const isApproval =
-        normalizedFullText.includes(
-          "hall da fama aprovado"
-        ) ||
-        normalizedFullText.includes(
-          "nova solicitacao de hall da fama"
-        ) ||
-        normalizedFullText.includes(
-          "vencedores formatado"
-        );
+        const messageEventField =
+          (
+            message.embeds || []
+          )
+            .flatMap(embed =>
+              embed.fields || []
+            )
+            .find(field =>
+              /evento/i.test(
+                field.name || ""
+              )
+            );
 
-      const eventMatches =
-        hallEventName &&
-        hallEventName !== "evento" &&
-        normalizedFullText.includes(
-          hallEventName
-        );
+        const messageEventName =
+          normalizeHallName(
+            messageEventField?.value ||
+            ""
+          );
 
-      const winnerScore =
-        scoreApprovalMessageForHall(
-          fullText,
-          hallWinnerNames
-        );
+        const winnerField =
+          (
+            message.embeds || []
+          )
+            .flatMap(embed =>
+              embed.fields || []
+            )
+            .find(field =>
+              /vencedores/i.test(
+                field.name || ""
+              )
+            );
 
-      return {
-        msg: message,
-        diff,
-        images,
-        isApproval,
-        eventMatches,
-        winnerScore
-      };
-    })
-    .filter(item => {
-      if (!item.images.length) {
-        return false;
-      }
+        const normalizedWinnerText =
+          normalizeHallName(
+            winnerField?.value ||
+            fullText
+          );
 
-      if (!item.isApproval) {
-        return false;
-      }
+        const matchedWinners =
+          normalizedHallWinners
+            .filter(winnerName =>
+              normalizedWinnerText
+                .includes(
+                  winnerName
+                )
+            );
 
-      if (
-        item.diff >
-        1000 * 60 * 60 * 6
-      ) {
-        return false;
-      }
+        const allWinnersMatch =
+          normalizedHallWinners.length === 0 ||
+          matchedWinners.length ===
+            normalizedHallWinners.length;
 
-      return true;
-    })
-    .sort((a, b) => {
-      if (
-        b.winnerScore !==
-        a.winnerScore
-      ) {
+        const eventMatches =
+          hallEventName &&
+          hallEventName !== "evento" &&
+          (
+            messageEventName ===
+              hallEventName ||
+            normalizedFullText
+              .includes(
+                hallEventName
+              )
+          );
+
+        const cityMatches =
+          messageCityKey ===
+            hallCityKey;
+
+        const isApproved =
+          normalizedFullText
+            .includes(
+              "hall da fama aprovado"
+            );
+
+        const images =
+          getApprovalImages(
+            message
+          );
+
+        const diff =
+          Math.abs(
+            (
+              message.createdTimestamp ||
+              0
+            ) -
+            hallCreatedAt
+          );
+
+        return {
+          message,
+          diff,
+          images,
+          isApproved,
+          eventMatches,
+          cityMatches,
+          allWinnersMatch,
+          matchedWinnerCount:
+            matchedWinners.length
+        };
+      })
+      .filter(candidate => {
+        if (
+          !candidate.isApproved
+        ) {
+          return false;
+        }
+
+        if (
+          candidate.diff >
+          maximumDifference
+        ) {
+          return false;
+        }
+
+        if (
+          !candidate.eventMatches
+        ) {
+          return false;
+        }
+
+        if (
+          !candidate.cityMatches
+        ) {
+          return false;
+        }
+
+        if (
+          !candidate.allWinnersMatch
+        ) {
+          return false;
+        }
+
+        if (
+          candidate.images.length === 0
+        ) {
+          return false;
+        }
+
+        return true;
+      })
+      .sort((a, b) => {
+        if (
+          b.matchedWinnerCount !==
+          a.matchedWinnerCount
+        ) {
+          return (
+            b.matchedWinnerCount -
+            a.matchedWinnerCount
+          );
+        }
+
         return (
-          b.winnerScore -
-          a.winnerScore
+          a.diff -
+          b.diff
         );
-      }
+      });
 
-      if (
-        a.eventMatches !==
-        b.eventMatches
-      ) {
-        return a.eventMatches
-          ? -1
-          : 1;
-      }
+  const selectedCandidate =
+    candidates[0] ||
+    null;
 
-      if (a.diff !== b.diff) {
-        return a.diff - b.diff;
-      }
+  if (!selectedCandidate) {
+    return {
+      found: false,
+      messageId: null,
+      images: [],
+      reason:
+        "Nenhuma aprovação exata encontrada"
+    };
+  }
 
-      return 0;
-    });
+  return {
+    found: true,
 
-  return uniqueImageUrls(
-    candidates[0]?.images || []
-  ).slice(0, 4);
+    messageId:
+      selectedCandidate
+        .message
+        .id,
+
+    images:
+      selectedCandidate
+        .images,
+
+    reason:
+      "Aprovação exata encontrada"
+  };
 }
 
   async function autoCorrectDuplications(channel, client, options = {}) {
@@ -6893,18 +7246,36 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
         const parts =
           extractHallParts(text);
 
-        const attachmentInspection =
-          await inspectHallAttachmentsForScan(
-            msg
+        const approvalImageData =
+          await findApprovalImagesForHall(
+            client,
+            msg,
+            {
+              eventName:
+                parts.eventName,
+
+              winnerNames:
+                extractWinnerNamesForApprovalMatch(
+                  text
+                )
+            }
           );
 
         const originalImageUrls =
-          uniqueImageUrls([
-            ...attachmentInspection.imageUrls,
-            ...getImageUrlsFromContent(
-              msg.content || ""
-            )
-          ]);
+          approvalImageData.found
+            ? approvalImageData.images
+            : [];
+
+        const approvedImageFiles =
+          approvalImageData.found
+            ? await downloadUniqueApprovedHallImages(
+                originalImageUrls
+              )
+            : [];
+
+        const canRestoreApprovedImages =
+          approvalImageData.found &&
+          approvedImageFiles.length > 0;
 
         const evidence =
           await resolveHallEvidence(
@@ -6913,8 +7284,15 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
             text
           );
 
-        const currentCityKey = detectHallCityKey(msg.content || text);
-        const evidenceCityKey = evidence?.cityKey || currentCityKey;
+        const currentCityKey =
+          detectHallCityKey(
+            msg.content ||
+            text
+          );
+
+        const evidenceCityKey =
+          evidence?.cityKey ||
+          currentCityKey;
 
         const canAutoFixCity =
           evidenceCityKey &&
@@ -6922,10 +7300,16 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
           evidence?.confidence >= 90 &&
           !evidence?.needsManualReview &&
           evidence?.source !== "texto_do_hall" &&
-          !String(evidence?.source || "").includes("texto_do_hall + texto_do_hall");
+          !String(
+            evidence?.source || ""
+          ).includes(
+            "texto_do_hall + texto_do_hall"
+          );
 
         const needsManualCityReview =
-          Boolean(evidence?.needsManualReview) ||
+          Boolean(
+            evidence?.needsManualReview
+          ) ||
           (
             evidenceCityKey &&
             evidenceCityKey !== currentCityKey &&
@@ -6942,26 +7326,56 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
           canAutoFixCity
             ? updateHallCityOnly(
                 fixedBase,
-                CITIES[evidenceCityKey].label,
+                CITIES[
+                  evidenceCityKey
+                ].label,
                 originalImageUrls
               )
             : fixedBase;
 
-        const imageEditData = {
-          attachments:
-            attachmentInspection.attachments,
+        const currentAttachments = [
+          ...msg.attachments.values()
+        ];
 
-          files: [],
+        const imageEditData =
+          canRestoreApprovedImages
+            ? {
+                attachments: [],
 
-          shouldReplaceAttachments:
-            attachmentInspection.changed,
+                files:
+                  approvedImageFiles,
 
-          reuploadedExisting: false,
+                shouldReplaceAttachments:
+                  true,
 
-          hasImages:
-            attachmentInspection.finalCount > 0 ||
-            originalImageUrls.length > 0
-        };
+                reuploadedExisting:
+                  true,
+
+                hasImages:
+                  approvedImageFiles.length >
+                  0
+              }
+            : {
+                attachments:
+                  currentAttachments.map(
+                    attachment => ({
+                      id:
+                        attachment.id
+                    })
+                  ),
+
+                files: [],
+
+                shouldReplaceAttachments:
+                  false,
+
+                reuploadedExisting:
+                  false,
+
+                hasImages:
+                  currentAttachments.length >
+                  0
+              };
 
         const fixed =
           imageEditData.hasImages
@@ -6992,10 +7406,10 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
           fixed !== msg.content;
 
         const needsImageConversion =
-          imageEditData.files.length > 0;
+          canRestoreApprovedImages;
 
         const needsAttachmentCleanup =
-          attachmentInspection.changed;
+          canRestoreApprovedImages;
 
         if (
           (
@@ -7004,7 +7418,9 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
             needsAttachmentCleanup
           ) &&
           fixed.length <= 2000 &&
-          fixed.includes("HALL DA FAMA")
+          fixed.includes(
+            "HALL DA FAMA"
+          )
         ) {
           const editPayload = {
             content: fixed
@@ -7012,66 +7428,178 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
 
           if (
             imageEditData.shouldReplaceAttachments ||
-            imageEditData.attachments.length > 0
+            imageEditData.attachments.length >
+              0
           ) {
             editPayload.attachments =
               imageEditData.attachments;
           }
 
-          if (imageEditData.files.length > 0) {
+          if (
+            imageEditData.files.length >
+            0
+          ) {
             editPayload.files =
               imageEditData.files;
           }
 
-          await msg.edit(editPayload).catch(error => {
+          await msg.edit(
+            editPayload
+          ).catch(error => {
             console.error(
               `[HallDaFama] Não foi possível corrigir a mensagem ${msg.id}:`,
               error
             );
           });
 
-          msg.content = fixed;
+          msg.content =
+            fixed;
+
           edited++;
 
-          await sendHallScanLog(client, {
-            title: canAutoFixCity ? "✅ Hall corrigido com cidade/cargo certo" : "🧹 Hall limpo sem trocar cidade",
-            color: canAutoFixCity ? "#2ecc71" : "#5865f2",
-            description:
-              `Mensagem corrigida: \`${msg.id}\`\n` +
-              `Cidade antiga: **${CITIES[currentCityKey]?.label || currentCityKey}**\n` +
-              `Cidade aplicada: **${canAutoFixCity ? CITIES[evidenceCityKey]?.label || evidenceCityKey : CITIES[currentCityKey]?.label || currentCityKey}**\n` +
-              `Fonte: **${evidence?.source || "não identificada"}**\n` +
-              `Confiança: **${evidence?.confidence || 0}%**`,
-            phase: "Correção automática",
-            currentHall: fixed,
-            currentHallPostedAt: msg.createdTimestamp ? `<t:${Math.floor(msg.createdTimestamp / 1000)}:F>` : "Não identificado",
-            currentHallAuthor: msg.author ? `${msg.author.tag || msg.author.username} (\`${msg.author.id}\`)` : "Não identificado",
-            currentHallUrl: getMessageJumpUrl(msg),
-            currentEvent: parts.eventName || "Evento não identificado",
-            currentCity: canAutoFixCity ? CITIES[evidenceCityKey]?.label || evidenceCityKey : CITIES[currentCityKey]?.label || currentCityKey,
-            confidence: evidence?.confidence || 0
-          });
+          await sendHallScanLog(
+            client,
+            {
+              title:
+                canRestoreApprovedImages
+                  ? "🖼️ Hall restaurado pela aprovação original"
+                  : (
+                      canAutoFixCity
+                        ? "✅ Hall corrigido com cidade/cargo certo"
+                        : "🧹 Hall limpo sem trocar cidade"
+                    ),
+
+              color:
+                canRestoreApprovedImages
+                  ? "#2ecc71"
+                  : (
+                      canAutoFixCity
+                        ? "#2ecc71"
+                        : "#5865f2"
+                    ),
+
+              description:
+                `Mensagem corrigida: \`${msg.id}\`\n` +
+                `Cidade antiga: **${CITIES[currentCityKey]?.label || currentCityKey}**\n` +
+                `Cidade aplicada: **${canAutoFixCity ? CITIES[evidenceCityKey]?.label || evidenceCityKey : CITIES[currentCityKey]?.label || currentCityKey}**\n` +
+                `Fonte da cidade: **${evidence?.source || "não identificada"}**\n` +
+                `Confiança: **${evidence?.confidence || 0}%**\n` +
+                `Registro aprovado: **${approvalImageData.found ? approvalImageData.messageId : "não encontrado"}**\n` +
+                `Imagens restauradas: **${canRestoreApprovedImages ? approvedImageFiles.length : 0}**`,
+
+              phase:
+                "Correção automática",
+
+              currentHall:
+                fixed,
+
+              currentHallPostedAt:
+                msg.createdTimestamp
+                  ? `<t:${Math.floor(msg.createdTimestamp / 1000)}:F>`
+                  : "Não identificado",
+
+              currentHallAuthor:
+                msg.author
+                  ? `${msg.author.tag || msg.author.username} (\`${msg.author.id}\`)`
+                  : "Não identificado",
+
+              currentHallUrl:
+                getMessageJumpUrl(
+                  msg
+                ),
+
+              currentEvent:
+                parts.eventName ||
+                "Evento não identificado",
+
+              currentCity:
+                canAutoFixCity
+                  ? CITIES[evidenceCityKey]?.label ||
+                    evidenceCityKey
+                  : CITIES[currentCityKey]?.label ||
+                    currentCityKey,
+
+              confidence:
+                evidence?.confidence ||
+                0
+            }
+          );
         }
 
-        if (showProgress && (correctionProcessed === 1 || correctionProcessed % 10 === 0 || correctionProcessed === botHallMessages.length)) {
-          await updateHallScanProgress(client, {
-            status: "Corrigindo Halls do bot quando necessário...",
-            totalMessages: allMessages.length,
-            totalHalls: hallMessages.length,
-            botHalls: botHallMessages.length,
-            edited,
-            processed: 0,
-            progressCurrent: correctionProcessed,
-            progressTotal: botHallMessages.length,
-            pending: Object.keys(rankings.pendingReview || {}).length,
-            currentDate: msg.createdTimestamp ? `<t:${Math.floor(msg.createdTimestamp / 1000)}:F>` : "Não identificado",
-            currentHallPostedAt: msg.createdTimestamp ? `<t:${Math.floor(msg.createdTimestamp / 1000)}:F>` : "Não identificado",
-            currentHallAuthor: msg.author ? `${msg.author.tag || msg.author.username} (\`${msg.author.id}\`)` : "Não identificado",
-            currentHallUrl: getMessageJumpUrl(msg),
-            currentEvent: parts.eventName || "Evento não identificado",
-            currentCity: parts.cityName || detectHallCityName(text),
-            phase: "Correção automática"
-          });
+        if (
+          showProgress &&
+          (
+            correctionProcessed === 1 ||
+            correctionProcessed % 10 === 0 ||
+            correctionProcessed ===
+              botHallMessages.length
+          )
+        ) {
+          await updateHallScanProgress(
+            client,
+            {
+              status:
+                "Corrigindo Halls do bot quando necessário...",
+
+              totalMessages:
+                allMessages.length,
+
+              totalHalls:
+                hallMessages.length,
+
+              botHalls:
+                botHallMessages.length,
+
+              edited,
+
+              processed: 0,
+
+              progressCurrent:
+                correctionProcessed,
+
+              progressTotal:
+                botHallMessages.length,
+
+              pending:
+                Object.keys(
+                  rankings.pendingReview ||
+                  {}
+                ).length,
+
+              currentDate:
+                msg.createdTimestamp
+                  ? `<t:${Math.floor(msg.createdTimestamp / 1000)}:F>`
+                  : "Não identificado",
+
+              currentHallPostedAt:
+                msg.createdTimestamp
+                  ? `<t:${Math.floor(msg.createdTimestamp / 1000)}:F>`
+                  : "Não identificado",
+
+              currentHallAuthor:
+                msg.author
+                  ? `${msg.author.tag || msg.author.username} (\`${msg.author.id}\`)`
+                  : "Não identificado",
+
+              currentHallUrl:
+                getMessageJumpUrl(
+                  msg
+                ),
+
+              currentEvent:
+                parts.eventName ||
+                "Evento não identificado",
+
+              currentCity:
+                parts.cityName ||
+                detectHallCityName(
+                  text
+                ),
+
+              phase:
+                "Correção automática"
+            }
+          );
         }
       }
 
