@@ -6261,69 +6261,210 @@ function scoreApprovalMessageForHall(approvalText = "", hallWinnerNames = []) {
 }
 
 async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
-  const approvalChannel = await client.channels.fetch(APPROVAL_CHANNEL_ID).catch(() => null);
-  if (!approvalChannel || !approvalChannel.isTextBased()) return [];
+  const approvalChannel = await client.channels
+    .fetch(APPROVAL_CHANNEL_ID)
+    .catch(() => null);
 
-  const messages = await approvalChannel.messages.fetch({ limit: 100 }).catch(() => null);
-  if (!messages) return [];
+  if (!approvalChannel || !approvalChannel.isTextBased()) {
+    return [];
+  }
 
-  const hallEventName = normalizeHallName(parts.eventName || "");
+  const hallEventName = normalizeHallName(
+    parts.eventName || ""
+  );
+
   const hallWinnerNames = parts.winnerNames?.length
     ? parts.winnerNames
-    : extractWinnerNamesForApprovalMatch(getHallMessageText(hallMessage));
+    : extractWinnerNamesForApprovalMatch(
+        getHallMessageText(hallMessage)
+      );
 
-  const hallCreatedAt = hallMessage?.createdTimestamp || Date.now();
+  const hallCreatedAt =
+    hallMessage?.createdTimestamp ||
+    Date.now();
 
-  function extractImagesFromApprovalMessage(approvalMsg) {
-    const foundUrls = [];
+  const minimumTimestamp =
+    hallCreatedAt -
+    1000 * 60 * 60 * 6;
 
-    for (const emb of approvalMsg.embeds || []) {
-      if (emb.image?.url) foundUrls.push(emb.image.url);
-      if (emb.thumbnail?.url) foundUrls.push(emb.thumbnail.url);
+  const maximumTimestamp =
+    hallCreatedAt +
+    1000 * 60 * 60 * 6;
 
-      for (const field of emb.fields || []) {
-        if (/imagem/i.test(field.name) || /image/i.test(field.name)) {
-          const urls = String(field.value || "").match(/https?:\/\/\S+/gi) || [];
-          foundUrls.push(...urls);
+  const allApprovalMessages = [];
+  let beforeId = null;
+  let reachedHallPeriod = false;
+
+  while (true) {
+    const fetchOptions = beforeId
+      ? {
+          limit: 100,
+          before: beforeId
+        }
+      : {
+          limit: 100
+        };
+
+    const fetchedMessages =
+      await approvalChannel.messages
+        .fetch(fetchOptions)
+        .catch(() => null);
+
+    if (
+      !fetchedMessages ||
+      fetchedMessages.size === 0
+    ) {
+      break;
+    }
+
+    allApprovalMessages.push(
+      ...fetchedMessages.values()
+    );
+
+    const oldestMessage =
+      fetchedMessages.last();
+
+    beforeId =
+      oldestMessage?.id ||
+      null;
+
+    if (
+      oldestMessage?.createdTimestamp &&
+      oldestMessage.createdTimestamp <=
+        maximumTimestamp
+    ) {
+      reachedHallPeriod = true;
+    }
+
+    if (
+      reachedHallPeriod &&
+      oldestMessage?.createdTimestamp &&
+      oldestMessage.createdTimestamp <
+        minimumTimestamp
+    ) {
+      break;
+    }
+
+    if (fetchedMessages.size < 100) {
+      break;
+    }
+  }
+
+  function extractImagesFromApprovalMessage(
+    approvalMsg
+  ) {
+    const attachmentUrls = uniqueImageUrls(
+      [...approvalMsg.attachments.values()]
+        .map(attachment => attachment.url)
+        .filter(Boolean)
+    );
+
+    const embedImageUrls = [];
+    const imageFieldUrls = [];
+    const thumbnailUrls = [];
+
+    for (const embed of approvalMsg.embeds || []) {
+      if (embed.image?.url) {
+        embedImageUrls.push(
+          embed.image.url
+        );
+      }
+
+      if (embed.thumbnail?.url) {
+        thumbnailUrls.push(
+          embed.thumbnail.url
+        );
+      }
+
+      for (const field of embed.fields || []) {
+        if (
+          /imagem/i.test(field.name || "") ||
+          /image/i.test(field.name || "")
+        ) {
+          const urls = String(
+            field.value || ""
+          ).match(/https?:\/\/\S+/gi) || [];
+
+          imageFieldUrls.push(...urls);
         }
       }
     }
 
-    foundUrls.push(...[...approvalMsg.attachments.values()].map(a => a.url));
+    const primaryImages = uniqueImageUrls([
+      ...attachmentUrls,
+      ...embedImageUrls,
+      ...imageFieldUrls
+    ]).slice(0, 4);
 
-    return uniqueImageUrls(foundUrls);
+    if (primaryImages.length > 0) {
+      return primaryImages;
+    }
+
+    return uniqueImageUrls(
+      thumbnailUrls
+    ).slice(0, 4);
   }
 
-  const candidates = [...messages.values()]
-    .map(m => {
-      const diff = Math.abs((m.createdTimestamp || 0) - hallCreatedAt);
+  const candidates = allApprovalMessages
+    .map(message => {
+      const diff = Math.abs(
+        (message.createdTimestamp || 0) -
+        hallCreatedAt
+      );
 
-      const embedText = (m.embeds || [])
-        .map(e => [
-          e.title,
-          e.description,
-          ...(e.fields || []).map(f => `${f.name} ${f.value}`)
-        ].filter(Boolean).join(" "))
+      const embedText = (
+        message.embeds || []
+      )
+        .map(embed => [
+          embed.title,
+          embed.description,
+          ...(embed.fields || []).map(
+            field =>
+              `${field.name} ${field.value}`
+          )
+        ]
+          .filter(Boolean)
+          .join(" ")
+        )
         .join(" ");
 
-      const fullText = `${m.content || ""}\n${embedText}`;
-      const normalizedFullText = normalizeHallName(fullText);
-      const images = extractImagesFromApprovalMessage(m);
+      const fullText =
+        `${message.content || ""}\n${embedText}`;
+
+      const normalizedFullText =
+        normalizeHallName(fullText);
+
+      const images =
+        extractImagesFromApprovalMessage(
+          message
+        );
 
       const isApproval =
-        normalizedFullText.includes("hall da fama aprovado") ||
-        normalizedFullText.includes("nova solicitacao de hall da fama") ||
-        normalizedFullText.includes("vencedores formatado");
+        normalizedFullText.includes(
+          "hall da fama aprovado"
+        ) ||
+        normalizedFullText.includes(
+          "nova solicitacao de hall da fama"
+        ) ||
+        normalizedFullText.includes(
+          "vencedores formatado"
+        );
 
       const eventMatches =
         hallEventName &&
         hallEventName !== "evento" &&
-        normalizedFullText.includes(hallEventName);
+        normalizedFullText.includes(
+          hallEventName
+        );
 
-      const winnerScore = scoreApprovalMessageForHall(fullText, hallWinnerNames);
+      const winnerScore =
+        scoreApprovalMessageForHall(
+          fullText,
+          hallWinnerNames
+        );
 
       return {
-        msg: m,
+        msg: message,
         diff,
         images,
         isApproval,
@@ -6332,19 +6473,53 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
       };
     })
     .filter(item => {
-      if (!item.images.length) return false;
-      if (!item.isApproval) return false;
-      if (item.diff > 1000 * 60 * 60 * 6) return false;
+      if (!item.images.length) {
+        return false;
+      }
+
+      if (!item.isApproval) {
+        return false;
+      }
+
+      if (
+        item.diff >
+        1000 * 60 * 60 * 6
+      ) {
+        return false;
+      }
+
       return true;
     })
     .sort((a, b) => {
-      if (b.winnerScore !== a.winnerScore) return b.winnerScore - a.winnerScore;
-      if (a.diff !== b.diff) return a.diff - b.diff;
-      if (a.eventMatches !== b.eventMatches) return a.eventMatches ? -1 : 1;
+      if (
+        b.winnerScore !==
+        a.winnerScore
+      ) {
+        return (
+          b.winnerScore -
+          a.winnerScore
+        );
+      }
+
+      if (
+        a.eventMatches !==
+        b.eventMatches
+      ) {
+        return a.eventMatches
+          ? -1
+          : 1;
+      }
+
+      if (a.diff !== b.diff) {
+        return a.diff - b.diff;
+      }
+
       return 0;
     });
 
-  return candidates[0]?.images || [];
+  return uniqueImageUrls(
+    candidates[0]?.images || []
+  ).slice(0, 4);
 }
 
   async function autoCorrectDuplications(channel, client, options = {}) {
@@ -6497,16 +6672,56 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
       for (const msg of botHallMessages.values()) {
         correctionProcessed++;
 
-        const text = getHallMessageText(msg);
-        const parts = extractHallParts(text);
+        const text =
+          getHallMessageText(msg);
 
-        const allImageUrls = await getSafeHallImageUrls(client, msg, {
-          content: msg.content || text,
-          eventName: parts.eventName,
-          winnerNames: extractWinnerNamesForApprovalMatch(text)
-        });
+        const parts =
+          extractHallParts(text);
 
-        const evidence = await resolveHallEvidence(client, msg, text);
+        const currentAttachmentUrls =
+          getImageUrlsFromAttachments(
+            msg
+          ).slice(0, 4);
+
+        const contentImageUrls =
+          getImageUrlsFromContent(
+            msg.content || ""
+          ).slice(0, 4);
+
+        const approvedImageUrls =
+          await findApprovalImagesForHall(
+            client,
+            msg,
+            {
+              eventName:
+                parts.eventName,
+
+              winnerNames:
+                extractWinnerNamesForApprovalMatch(
+                  text
+                )
+            }
+          ).catch(() => []);
+
+        const hasApprovedImageRecord =
+          approvedImageUrls.length > 0;
+
+        const originalImageUrls =
+          hasApprovedImageRecord
+            ? uniqueImageUrls(
+                approvedImageUrls
+              ).slice(0, 4)
+            : uniqueImageUrls([
+                ...currentAttachmentUrls,
+                ...contentImageUrls
+              ]).slice(0, 4);
+
+        const evidence =
+          await resolveHallEvidence(
+            client,
+            msg,
+            text
+          );
 
         const currentCityKey = detectHallCityKey(msg.content || text);
         const evidenceCityKey = evidence?.cityKey || currentCityKey;
@@ -6527,34 +6742,58 @@ async function findApprovalImagesForHall(client, hallMessage, parts = {}) {
             evidence?.confidence < 90
           );
 
-        const fixedBase = fixDuplicatedHallContent(
-          msg.content || text,
-          allImageUrls
-        );
+        const fixedBase =
+          fixDuplicatedHallContent(
+            msg.content || text,
+            originalImageUrls
+          );
 
-        const fixedWithUrls = canAutoFixCity
-          ? updateHallCityOnly(
-              fixedBase,
-              CITIES[evidenceCityKey].label,
-              allImageUrls
-            )
-          : fixedBase;
+        const fixedWithUrls =
+          canAutoFixCity
+            ? updateHallCityOnly(
+                fixedBase,
+                CITIES[evidenceCityKey].label,
+                originalImageUrls
+              )
+            : fixedBase;
 
-             const imageEditData = await prepareHallImageEdit(
-          msg,
-          allImageUrls,
-          {
-            replaceExisting: false,
-            forceReuploadExisting: true
-          }
-        );
+        const imageEditData =
+          hasApprovedImageRecord
+            ? await prepareHallImageEdit(
+                msg,
+                originalImageUrls,
+                {
+                  replaceExisting: true,
+                  forceReuploadExisting: false
+                }
+              )
+            : {
+                attachments: [
+                  ...msg.attachments.values()
+                ]
+                  .slice(0, 4)
+                  .map(attachment => ({
+                    id: attachment.id
+                  })),
 
-        const fixed = imageEditData.hasImages
-          ? removeHallImageUrlsFromContent(
-              fixedWithUrls,
-              allImageUrls
-            )
-          : fixedWithUrls;
+                files: [],
+
+                shouldReplaceAttachments: false,
+
+                reuploadedExisting: false,
+
+                hasImages:
+                  msg.attachments.size > 0 ||
+                  originalImageUrls.length > 0
+              };
+
+        const fixed =
+          imageEditData.hasImages
+            ? removeHallImageUrlsFromContent(
+                fixedWithUrls,
+                originalImageUrls
+              )
+            : fixedWithUrls;
 
         if (needsManualCityReview) {
           await sendHallCityToManualReview(
@@ -8006,48 +8245,89 @@ if (!isPrizesOnly) {
       const lines = oldContent.split('\n');
       
       // Se for apenas prêmios, extraímos o resto da mensagem original
+const currentAttachmentUrls =
+  getImageUrlsFromAttachments(
+    messageToEdit
+  ).slice(0, 4);
+
 if (isPrizesOnly) {
-  const titleLine = lines.find(l => l.startsWith('# 🎉 :'));
-  const oldEventName = titleLine?.match(/# 🎉 :  \*\*Santa Creators : (.*?)\*\* 🎉/)?.[1] || 'Evento';
-  newEventName = newEventNameInput || oldEventName;
+  const titleLine = lines.find(
+    line =>
+      line.startsWith("# 🎉 :")
+  );
 
-  const cityMatch = oldContent.match(/na \*\*(.*?)\*\*!/);
-  newCityName = cityMatch ? cityMatch[1] : "CIDADE";
+  const oldEventName =
+    titleLine?.match(
+      /# 🎉 :  \*\*Santa Creators : (.*?)\*\* 🎉/
+    )?.[1] ||
+    "Evento";
 
-  const introLineIndex = lines.findIndex(l => l.startsWith('# 🎉 :')) + 2;
-  newIntro = lines[introLineIndex]?.split(/\s+\*\*.*?\*\*\s+na\s+/)[0]?.trim() || getRandomIntro();
+  newEventName =
+    newEventNameInput ||
+    oldEventName;
 
-  const oldParts = extractHallParts(oldContent);
+  const cityMatch =
+    oldContent.match(
+      /na \*\*(.*?)\*\*!/
+    );
 
-  const imageLines = manualImageUrls.length
-  ? uniqueImageUrls(manualImageUrls).slice(0, 4)
-  : await getSafeHallImageUrls(client, messageToEdit, {
-      content: oldContent,
-      eventName: oldEventName,
-      winnerNames: extractWinnerNamesForApprovalMatch(oldContent),
-      manualUrls: []
-    });
+  newCityName = cityMatch
+    ? cityMatch[1]
+    : "CIDADE";
 
-finalImageUrls = imageLines;
-newImageUrl = finalImageUrls[0] || '';
-newImageUrl2 = finalImageUrls[1] || '';
+  const introLineIndex =
+    lines.findIndex(
+      line =>
+        line.startsWith("# 🎉 :")
+    ) + 2;
+
+  newIntro =
+    lines[introLineIndex]
+      ?.split(
+        /\s+\*\*.*?\*\*\s+na\s+/
+      )[0]
+      ?.trim() ||
+    getRandomIntro();
+
+  finalImageUrls =
+    manualImageUrls.length > 0
+      ? uniqueImageUrls(
+          manualImageUrls
+        ).slice(0, 4)
+      : currentAttachmentUrls;
+
+  newImageUrl =
+    finalImageUrls[0] ||
+    "";
+
+  newImageUrl2 =
+    finalImageUrls[1] ||
+    "";
 } else {
-const forcedImageUrls = manualImageUrls.length
-  ? manualImageUrls
-  : (newImageUrl ? [newImageUrl] : []);
+  const forcedImageUrls =
+    manualImageUrls.length > 0
+      ? manualImageUrls
+      : (
+          newImageUrl
+            ? [newImageUrl]
+            : []
+        );
 
-const imageLines = forcedImageUrls.length
-  ? uniqueImageUrls(forcedImageUrls).slice(0, 4)
-  : await getSafeHallImageUrls(client, messageToEdit, {
-      content: oldContent,
-      eventName: newEventName,
-      winnerNames: extractWinnerNamesForApprovalMatch(oldContent),
-      manualUrls: []
-    });
+  finalImageUrls =
+    forcedImageUrls.length > 0
+      ? uniqueImageUrls(
+          forcedImageUrls
+        ).slice(0, 4)
+      : currentAttachmentUrls;
 
-finalImageUrls = imageLines;
-newImageUrl = finalImageUrls[0] || newImageUrl || '';
-newImageUrl2 = finalImageUrls[1] || '';
+  newImageUrl =
+    finalImageUrls[0] ||
+    newImageUrl ||
+    "";
+
+  newImageUrl2 =
+    finalImageUrls[1] ||
+    "";
 }
       const mentionsLine = lines.find(l => l.includes('@everyone')) || '';
 
@@ -8072,13 +8352,27 @@ newImageUrl2 = finalImageUrls[1] || '';
   const replacingExistingImages =
     manualImageUrls.length > 0;
 
-  const imageEditData = await prepareHallImageEdit(
-    messageToEdit,
-    finalImageUrls,
-    {
-      replaceExisting: replacingExistingImages
-    }
-  );
+  const imageEditData =
+    replacingExistingImages
+      ? await prepareHallImageEdit(
+          messageToEdit,
+          finalImageUrls,
+          {
+            replaceExisting: true
+          }
+        )
+      : {
+          attachments: [
+            ...messageToEdit.attachments.values()
+          ].map(attachment => ({
+            id: attachment.id
+          })),
+          files: [],
+          shouldReplaceAttachments: false,
+          reuploadedExisting: false,
+          hasImages:
+            messageToEdit.attachments.size > 0
+        };
 
   const finalMessage = imageEditData.hasImages
     ? removeHallImageUrlsFromContent(
