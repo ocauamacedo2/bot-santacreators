@@ -1327,10 +1327,40 @@ if (removedCount <= 0) return false;
 hasOrgIdInWeek: async (orgId) => {
   try {
     const id = String(orgId || "").trim();
-if (!/^\d{2}$/.test(id)) return false;
-return _hasOrgId(facsState.lista, id);
 
-  } catch {
+    if (!/^\d{2}$/.test(id)) return false;
+
+    // ✅ Sempre relê o JSON antes da verificação.
+    // Evita bloquear usando uma lista antiga mantida na memória.
+    const currentWeekKey = getCurrentWeekSP().weekKey;
+    const storeAtual = loadStore();
+
+    // ✅ Se o arquivo ainda pertence a outra semana,
+    // nenhuma ORG dele pode bloquear a semana atual.
+    if (String(storeAtual.weekKey || "") !== String(currentWeekKey)) {
+      return false;
+    }
+
+    // ✅ Sincroniza a memória com a fonte persistida.
+    facsState = storeAtual;
+
+    const exists = _hasOrgId(facsState.lista, id);
+
+    console.log("[FACS_SEMANAIS] checagem de duplicidade por ID:", {
+      id,
+      currentWeekKey,
+      storeWeekKey: facsState.weekKey,
+      exists,
+      lista: facsState.lista,
+    });
+
+    return exists;
+  } catch (e) {
+    console.error(
+      "[FACS_SEMANAIS] erro ao verificar duplicidade por ID:",
+      e
+    );
+
     return false;
   }
 },
@@ -1339,9 +1369,40 @@ return _hasOrgId(facsState.lista, id);
 hasOrgNameInWeek: async (orgName) => {
   try {
     const name = String(orgName || "").trim();
+
     if (!name) return false;
-    return _hasOrgName(facsState.lista, name);
-  } catch {
+
+    // ✅ Sempre relê o JSON antes da verificação.
+    // Evita bloquear usando uma lista antiga mantida na memória.
+    const currentWeekKey = getCurrentWeekSP().weekKey;
+    const storeAtual = loadStore();
+
+    // ✅ Se o arquivo ainda pertence a outra semana,
+    // nenhuma ORG dele pode bloquear a semana atual.
+    if (String(storeAtual.weekKey || "") !== String(currentWeekKey)) {
+      return false;
+    }
+
+    // ✅ Sincroniza a memória com a fonte persistida.
+    facsState = storeAtual;
+
+    const exists = _hasOrgName(facsState.lista, name);
+
+    console.log("[FACS_SEMANAIS] checagem de duplicidade por nome:", {
+      name,
+      currentWeekKey,
+      storeWeekKey: facsState.weekKey,
+      exists,
+      lista: facsState.lista,
+    });
+
+    return exists;
+  } catch (e) {
+    console.error(
+      "[FACS_SEMANAIS] erro ao verificar duplicidade por nome:",
+      e
+    );
+
     return false;
   }
 },
