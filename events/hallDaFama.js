@@ -3102,6 +3102,25 @@ async function downloadUniqueApprovedHallImages(
   return files;
 }
 
+function haveSameHallImageUrls(firstUrls = [], secondUrls = []) {
+  const firstKeys = uniqueImageUrls(firstUrls)
+    .map(imageUrl => getHallImageUrlKey(imageUrl))
+    .filter(Boolean)
+    .sort();
+
+  const secondKeys = uniqueImageUrls(secondUrls)
+    .map(imageUrl => getHallImageUrlKey(imageUrl))
+    .filter(Boolean)
+    .sort();
+
+  if (firstKeys.length !== secondKeys.length) {
+    return false;
+  }
+
+  return firstKeys.every((key, index) => {
+    return key === secondKeys[index];
+  });
+}
 
 async function prepareHallImageEdit(
   message,
@@ -9129,15 +9148,19 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
         return interaction.reply({ content: "❌ Nenhum post recente do Hall da Fama encontrado para editar.", ephemeral: true });
       }
 
-    // Parse inteligente do conteúdo da mensagem
-  const parts = extractHallParts(lastHallMessage.content);
+// Parse inteligente do conteúdo da mensagem
+const parts = extractHallParts(lastHallMessage.content);
 
-  const eventName = parts.eventName;
-  const cityName = parts.cityName;
-  const introText = parts.introText;
-  const winnersText = parts.winnersText;
-  const imageUrl = parts.imageUrl;
-const imageUrls = parts.imageUrls || (imageUrl ? [imageUrl] : []);
+const eventName = parts.eventName;
+const cityName = parts.cityName;
+const introText = parts.introText;
+const winnersText = parts.winnersText;
+const imageUrl = parts.imageUrl;
+
+const imageUrls = uniqueImageUrls([
+  ...(parts.imageUrls || (imageUrl ? [imageUrl] : [])),
+  ...getImageUrlsFromAttachments(lastHallMessage)
+]).slice(0, 4);
 
   if (!winnersText) {
     return interaction.reply({
@@ -9349,30 +9372,49 @@ if (isPrizesOnly) {
 
   ${mentionsLine}`;
 
-  const replacingExistingImages =
-    manualImageUrls.length > 0;
+const manualImageFieldWasFilled =
+  manualImageUrlInput.length > 0;
 
-  const imageEditData =
-    replacingExistingImages
-      ? await prepareHallImageEdit(
-          messageToEdit,
-          finalImageUrls,
-          {
-            replaceExisting: true
-          }
-        )
-      : {
-          attachments: [
-            ...messageToEdit.attachments.values()
-          ].map(attachment => ({
-            id: attachment.id
-          })),
-          files: [],
-          shouldReplaceAttachments: false,
-          reuploadedExisting: false,
-          hasImages:
-            messageToEdit.attachments.size > 0
-        };
+const manualImagesWereChanged =
+  manualImageFieldWasFilled &&
+  !haveSameHallImageUrls(
+    manualImageUrls,
+    currentHallImageUrls
+  );
+
+const manualImagesWereRemoved =
+  !manualImageFieldWasFilled &&
+  currentHallImageUrls.length > 0;
+
+const replacingExistingImages =
+  manualImagesWereChanged ||
+  manualImagesWereRemoved;
+
+const imageEditData =
+  manualImagesWereChanged
+    ? await prepareHallImageEdit(
+        messageToEdit,
+        finalImageUrls,
+        {
+          replaceExisting: true
+        }
+      )
+    : {
+        attachments: manualImagesWereRemoved
+          ? []
+          : [
+              ...messageToEdit.attachments.values()
+            ].map(attachment => ({
+              id: attachment.id
+            })),
+        files: [],
+        shouldReplaceAttachments:
+          manualImagesWereRemoved,
+        reuploadedExisting: false,
+        hasImages:
+          !manualImagesWereRemoved &&
+          messageToEdit.attachments.size > 0
+      };
 
   const editedTopCount =
     countHallTopLines(
@@ -9411,7 +9453,9 @@ if (isPrizesOnly) {
     content: finalMessage
   };
 
-  if (
+  if (shouldKeepEditedImagesAsLinks) {
+    editPayload.attachments = [];
+  } else if (
     replacingExistingImages ||
     imageEditData.attachments.length > 0
   ) {
@@ -9419,7 +9463,10 @@ if (isPrizesOnly) {
       imageEditData.attachments;
   }
 
-  if (imageEditData.files.length > 0) {
+  if (
+    !shouldKeepEditedImagesAsLinks &&
+    imageEditData.files.length > 0
+  ) {
     editPayload.files =
       imageEditData.files;
   }
