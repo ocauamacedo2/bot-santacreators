@@ -2450,9 +2450,29 @@ if (
     return true;
   }
 
-  const originalEmb = msg.embeds[0];
+const originalEmb = msg.embeds[0];
 const registrantId =
   getRegistrantIdFromMessage(msg, originalEmb) || parseRegistrantFromEmbed(originalEmb);
+
+// =======================
+// 🔐 DADOS DE PERMISSÃO DA APROVAÇÃO
+// ficam fora dos blocos para poderem ser usados
+// tanto na hierarquia quanto no anti self-approve
+// =======================
+const isOwnRegistration =
+  Boolean(
+    isApprove &&
+    registrantId &&
+    String(registrantId) === String(interaction.user.id)
+  );
+
+const selfApproveAllowed =
+  isOwnRegistration &&
+  canSelfApprove(interaction.member, interaction.user.id);
+
+const bypass =
+  isApprove &&
+  hasGlobalBypass(interaction.member, interaction.user.id);
 
 // =======================
 // 🔒 TRAVA DE HIERARQUIA
@@ -2460,16 +2480,6 @@ const registrantId =
 // EXCEÇÃO: autoaprovação autorizada em SELF_APPROVE_ALLOWED
 // =======================
 if (isApprove && registrantId) {
-  const isOwnRegistration =
-    String(registrantId) === String(interaction.user.id);
-
-  const selfApproveAllowed =
-    isOwnRegistration &&
-    canSelfApprove(interaction.member, interaction.user.id);
-
-  // 🔓 bypass total (owner / você / resp creators)
-  const bypass = hasGlobalBypass(interaction.member, interaction.user.id);
-
   if (!bypass && !selfApproveAllowed) {
     const registrantMember = await interaction.guild.members
       .fetch(registrantId)
@@ -2486,33 +2496,24 @@ if (isApprove && registrantId) {
           content:
             "❌ Você não pode aprovar este registro porque o registrante possui **cargo igual ou superior** ao seu.",
           ephemeral: true,
-        });
+        }).catch(() => {});
         return true;
       }
     }
   }
 }
 
+// =======================
+// 🔒 ANTI SELF-APPROVE
+// bloqueia somente quem não está autorizado
+// =======================
+if (isOwnRegistration && !bypass && !selfApproveAllowed) {
+  await interaction.reply({
+    content: "❌ Você **não pode aprovar** o seu próprio registro.",
+    ephemeral: true,
+  }).catch(() => {});
 
-// anti self-approve
-if (
-  isApprove &&
-  registrantId &&
-  String(registrantId) === String(interaction.user.id)
-) {
-  const bypass = hasGlobalBypass(interaction.member, interaction.user.id);
-
-  if (!bypass && !selfApproveAllowed) {
-    const allowed = canSelfApprove(interaction.member, interaction.user.id);
-
-    if (!allowed) {
-      await interaction.reply({
-        content: "❌ Você **não pode aprovar** o seu próprio registro.",
-        ephemeral: true,
-      }).catch(() => {});
-      return true;
-    }
-  }
+  return true;
 }
 
 
