@@ -446,6 +446,158 @@ function _hasOrgName(current, orgName) {
 }
 
 
+// =====================================================
+// FONTE DE VERDADE — LISTA VISÍVEL NO PAINEL DO DISCORD
+// =====================================================
+async function readVisibleFacsListFromPanel(client) {
+  try {
+    const currentWeekKey = getCurrentWeekSP().weekKey;
+    const storeAtual = loadStore();
+
+    const channelId =
+      storeAtual.channelId ||
+      facsState.channelId ||
+      FACSMENU_CHANNEL_ID;
+
+    const messageId =
+      storeAtual.messageId ||
+      facsState.messageId;
+
+    if (!channelId || !messageId) {
+      console.error(
+        "[FACS_SEMANAIS] Não foi possível ler o painel: channelId ou messageId ausente.",
+        {
+          channelId,
+          messageId,
+          currentWeekKey,
+        }
+      );
+
+      return null;
+    }
+
+    const channel = await client.channels
+      .fetch(channelId)
+      .catch(() => null);
+
+    if (!channel?.isTextBased?.()) {
+      console.error(
+        "[FACS_SEMANAIS] Não foi possível ler o painel: canal inválido.",
+        {
+          channelId,
+          messageId,
+          currentWeekKey,
+        }
+      );
+
+      return null;
+    }
+
+    const message = await channel.messages
+      .fetch(messageId)
+      .catch(() => null);
+
+    if (!message) {
+      console.error(
+        "[FACS_SEMANAIS] Não foi possível ler o painel: mensagem não encontrada.",
+        {
+          channelId,
+          messageId,
+          currentWeekKey,
+        }
+      );
+
+      return null;
+    }
+
+    const embed = message.embeds?.[0];
+
+    if (!embed) {
+      console.error(
+        "[FACS_SEMANAIS] Não foi possível ler o painel: embed não encontrado.",
+        {
+          channelId,
+          messageId,
+          currentWeekKey,
+        }
+      );
+
+      return null;
+    }
+
+    const footerText = String(
+      embed.footer?.text ||
+      embed.data?.footer?.text ||
+      ""
+    );
+
+    if (!footerText.includes(`weekKey=${currentWeekKey}`)) {
+      console.error(
+        "[FACS_SEMANAIS] O painel encontrado não pertence à semana atual.",
+        {
+          channelId,
+          messageId,
+          currentWeekKey,
+          footerText,
+        }
+      );
+
+      return null;
+    }
+
+    const fields =
+      embed.fields ||
+      embed.data?.fields ||
+      [];
+
+    const parts = [];
+
+    for (const field of fields) {
+      const fieldName = String(field?.name || "")
+        .toLowerCase();
+
+      if (!fieldName.includes("orgs aprovadas da semana")) {
+        continue;
+      }
+
+      const fieldValue = String(field?.value || "")
+        .replace(/```txt/gi, "")
+        .replace(/```/g, "")
+        .trim();
+
+      if (
+        fieldValue &&
+        fieldValue !== "_(vazio)_"
+      ) {
+        parts.push(fieldValue);
+      }
+    }
+
+    const listaVisivel = parts.join("\n").trim();
+
+    console.log(
+      "[FACS_SEMANAIS] Lista atual lida diretamente do painel:",
+      {
+        channelId,
+        messageId,
+        currentWeekKey,
+        total: _countLines(listaVisivel),
+        listaVisivel,
+      }
+    );
+
+    return listaVisivel;
+  } catch (e) {
+    console.error(
+      "[FACS_SEMANAIS] Erro ao ler a lista visível no painel:",
+      e
+    );
+
+    return null;
+  }
+}
+
+
 
 // ===============================
 // RM EMBED HELPERS (repop)
@@ -1330,31 +1482,81 @@ hasOrgIdInWeek: async (orgId) => {
 
     if (!/^\d{2}$/.test(id)) return false;
 
-    // ✅ Sempre relê o JSON antes da verificação.
-    // Evita bloquear usando uma lista antiga mantida na memória.
     const currentWeekKey = getCurrentWeekSP().weekKey;
+
+    // =====================================================
+    // 1) FONTE PRINCIPAL: PAINEL VISÍVEL NO DISCORD
+    // =====================================================
+    const listaVisivel = await readVisibleFacsListFromPanel(client);
+
+    if (listaVisivel !== null) {
+      const existsInPanel = _hasOrgId(
+        listaVisivel,
+        id
+      );
+
+      console.log(
+        "[FACS_SEMANAIS] Checagem de ID usando o PAINEL:",
+        {
+          id,
+          currentWeekKey,
+          exists: existsInPanel,
+          listaVisivel,
+        }
+      );
+
+      // ✅ Mantém memória e JSON iguais ao painel atual.
+      const storeAtual = loadStore();
+
+      facsState = {
+        ...storeAtual,
+        channelId:
+          storeAtual.channelId ||
+          facsState.channelId ||
+          FACSMENU_CHANNEL_ID,
+        messageId:
+          storeAtual.messageId ||
+          facsState.messageId,
+        weekKey: currentWeekKey,
+        lista: listaVisivel,
+      };
+
+      saveStore(facsState);
+
+      return existsInPanel;
+    }
+
+    // =====================================================
+    // 2) FALLBACK: JSON, SOMENTE SE O PAINEL NÃO FOR LIDO
+    // =====================================================
     const storeAtual = loadStore();
 
-    // ✅ Se o arquivo ainda pertence a outra semana,
-    // nenhuma ORG dele pode bloquear a semana atual.
-    if (String(storeAtual.weekKey || "") !== String(currentWeekKey)) {
+    if (
+      String(storeAtual.weekKey || "") !==
+      String(currentWeekKey)
+    ) {
       return false;
     }
 
-    // ✅ Sincroniza a memória com a fonte persistida.
     facsState = storeAtual;
 
-    const exists = _hasOrgId(facsState.lista, id);
+    const existsInStore = _hasOrgId(
+      facsState.lista,
+      id
+    );
 
-    console.log("[FACS_SEMANAIS] checagem de duplicidade por ID:", {
-      id,
-      currentWeekKey,
-      storeWeekKey: facsState.weekKey,
-      exists,
-      lista: facsState.lista,
-    });
+    console.log(
+      "[FACS_SEMANAIS] Checagem de ID usando o JSON:",
+      {
+        id,
+        currentWeekKey,
+        storeWeekKey: facsState.weekKey,
+        exists: existsInStore,
+        lista: facsState.lista,
+      }
+    );
 
-    return exists;
+    return existsInStore;
   } catch (e) {
     console.error(
       "[FACS_SEMANAIS] erro ao verificar duplicidade por ID:",
@@ -1365,38 +1567,168 @@ hasOrgIdInWeek: async (orgId) => {
   }
 },
 
-// ✅ NOVO: checar se ORG (por nome) já existe no LISTÃO (fallback)
+// ✅ NOVO: checar se ORG por nome já existe no LISTÃO
 hasOrgNameInWeek: async (orgName) => {
   try {
     const name = String(orgName || "").trim();
 
     if (!name) return false;
 
-    // ✅ Sempre relê o JSON antes da verificação.
-    // Evita bloquear usando uma lista antiga mantida na memória.
     const currentWeekKey = getCurrentWeekSP().weekKey;
     const storeAtual = loadStore();
 
-    // ✅ Se o arquivo ainda pertence a outra semana,
-    // nenhuma ORG dele pode bloquear a semana atual.
+    // ✅ Registro de outra semana nunca pode bloquear a semana atual.
     if (String(storeAtual.weekKey || "") !== String(currentWeekKey)) {
+      console.log(
+        "[FACS_SEMANAIS] nome não bloqueado porque o store pertence a outra semana:",
+        {
+          name,
+          currentWeekKey,
+          storeWeekKey: storeAtual.weekKey,
+        }
+      );
+
       return false;
     }
 
-    // ✅ Sincroniza a memória com a fonte persistida.
+    // =====================================================
+    // ✅ FONTE PRINCIPAL: PAINEL ATUAL EXIBIDO NO DISCORD
+    // =====================================================
+    const panelChannelId =
+      storeAtual.channelId ||
+      facsState.channelId ||
+      FACSMENU_CHANNEL_ID;
+
+    const panelMessageId =
+      storeAtual.messageId ||
+      facsState.messageId;
+
+    let listaVisivelNoPainel = null;
+
+    if (panelChannelId && panelMessageId) {
+      const panelChannel = await client.channels
+        .fetch(panelChannelId)
+        .catch(() => null);
+
+      if (panelChannel?.isTextBased?.()) {
+        const panelMessage = await panelChannel.messages
+          .fetch(panelMessageId)
+          .catch(() => null);
+
+        const panelEmbed = panelMessage?.embeds?.[0];
+
+        if (panelEmbed) {
+          const panelWeekKeyText = String(
+            panelEmbed.footer?.text ||
+            panelEmbed.data?.footer?.text ||
+            ""
+          );
+
+          const panelIsCurrentWeek = panelWeekKeyText.includes(
+            `weekKey=${currentWeekKey}`
+          );
+
+          if (panelIsCurrentWeek) {
+            const fields =
+              panelEmbed.fields ||
+              panelEmbed.data?.fields ||
+              [];
+
+            const visibleLines = [];
+
+            for (const field of fields) {
+              const fieldName = String(field?.name || "");
+
+              if (
+                !fieldName
+                  .toLowerCase()
+                  .includes("orgs aprovadas da semana")
+              ) {
+                continue;
+              }
+
+              const fieldValue = String(field?.value || "")
+                .replace(/```(?:txt)?/gi, "")
+                .replace(/```/g, "")
+                .trim();
+
+              if (fieldValue && fieldValue !== "_(vazio)_") {
+                visibleLines.push(fieldValue);
+              }
+            }
+
+            listaVisivelNoPainel = visibleLines.join("\n");
+          }
+        }
+      }
+    }
+
+    // ✅ Se conseguiu ler o painel atual, ele é a fonte de verdade.
+    if (listaVisivelNoPainel !== null) {
+      const existsInPanel = _hasOrgName(
+        listaVisivelNoPainel,
+        name
+      );
+
+      console.log(
+        "[FACS_SEMANAIS] checagem de duplicidade por nome no PAINEL:",
+        {
+          name,
+          currentWeekKey,
+          exists: existsInPanel,
+          listaVisivelNoPainel,
+        }
+      );
+
+      // ✅ Sincroniza o JSON e a memória com o painel visível.
+      if (
+        String(storeAtual.lista || "").trim() !==
+        String(listaVisivelNoPainel || "").trim()
+      ) {
+        facsState = {
+          ...storeAtual,
+          weekKey: currentWeekKey,
+          lista: listaVisivelNoPainel,
+        };
+
+        saveStore(facsState);
+
+        console.log(
+          "[FACS_SEMANAIS] JSON sincronizado com o painel visível:",
+          {
+            currentWeekKey,
+            totalPainel: _countLines(listaVisivelNoPainel),
+          }
+        );
+      } else {
+        facsState = storeAtual;
+      }
+
+      return existsInPanel;
+    }
+
+    // =====================================================
+    // ✅ FALLBACK: JSON, SOMENTE SE O PAINEL NÃO FOR LIDO
+    // =====================================================
     facsState = storeAtual;
 
-    const exists = _hasOrgName(facsState.lista, name);
+    const existsInStore = _hasOrgName(
+      facsState.lista,
+      name
+    );
 
-    console.log("[FACS_SEMANAIS] checagem de duplicidade por nome:", {
-      name,
-      currentWeekKey,
-      storeWeekKey: facsState.weekKey,
-      exists,
-      lista: facsState.lista,
-    });
+    console.log(
+      "[FACS_SEMANAIS] checagem de duplicidade por nome no JSON:",
+      {
+        name,
+        currentWeekKey,
+        storeWeekKey: facsState.weekKey,
+        exists: existsInStore,
+        lista: facsState.lista,
+      }
+    );
 
-    return exists;
+    return existsInStore;
   } catch (e) {
     console.error(
       "[FACS_SEMANAIS] erro ao verificar duplicidade por nome:",
