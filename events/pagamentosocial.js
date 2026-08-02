@@ -1,6 +1,7 @@
 // ./application/events/pagamentosocial.js
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -33,6 +34,20 @@ const DASH_MARKER = "SC_PAGAMENTO_DASH::V1";
 // Canal onde fica o menu + onde os registros são postados
 const CANAL_PAGAMENTO = "1387922662134775818";
 
+// Canal onde o bot do Quiz envia as solicitações automáticas.
+const CANAL_PENDENCIAS_QUIZ_PAGAMENTO = "1518707314901651576";
+
+// Senha compartilhada entre os dois bots.
+const QUIZ_PAYMENT_BRIDGE_SECRET =
+  String(process.env.SC_QUIZ_PAYMENT_BRIDGE_SECRET || "").trim();
+
+// Persistência para impedir criação duplicada.
+const QUIZ_PAYMENT_BRIDGE_STATE_FILE = path.join(
+  process.cwd(),
+  "data",
+  "quiz_payment_bridge_state.json"
+);
+
 // Canal onde o sistema vipEvento.js posta os registros de VIP por evento
 const CANAL_VIP_EVENTO = "1414718336826081330";
 
@@ -58,6 +73,11 @@ const CIDADES_PAGAMENTO = {
     roleId: "1379021994678288465",
     emoji: "🌊",
   },
+malta: {
+  label: "Malta",
+  roleId: "1379022050403815454",
+  emoji: "🏝️",
+},
 };
 
 const CIDADE_PAGAMENTO_POR_LINK_DISCORD = {
@@ -2466,7 +2486,601 @@ function criarRowCidadesPagamento(messageId) {
     )
   );
 }
+// ===================================================================
+// PONTE AUTOMÁTICA — QUIZ → PAGAMENTOS
+// ===================================================================
 
+const QUIZ_CITY_PREFIXES = {
+  NB: "nobre",
+  NBR: "nobre",
+  NOBRE: "nobre",
+
+  ST: "santa",
+  STA: "santa",
+  SANTA: "santa",
+
+  MRS: "maresia",
+  MARESIA: "maresia",
+
+  GRD: "grande",
+  GRANDE: "grande",
+
+  MLT: "malta",
+  MALTA: "malta",
+};
+
+function loadQuizPaymentBridgeState() {
+  try {
+    if (!fs.existsSync(QUIZ_PAYMENT_BRIDGE_STATE_FILE)) {
+      return {
+        processedKeys: {},
+      };
+    }
+
+    const raw = fs.readFileSync(QUIZ_PAYMENT_BRIDGE_STATE_FILE, "utf8");
+    const json = JSON.parse(raw);
+
+    return {
+      processedKeys:
+        json?.processedKeys && typeof json.processedKeys === "object"
+          ? json.processedKeys
+          : {},
+    };
+  } catch (error) {
+    console.error(
+      "[QUIZ_PAYMENT_BRIDGE] Erro ao carregar persistência:",
+      error
+    );
+
+    return {
+      processedKeys: {},
+    };
+  }
+}
+
+function saveQuizPaymentBridgeState(state) {
+  try {
+    fs.mkdirSync(path.dirname(QUIZ_PAYMENT_BRIDGE_STATE_FILE), {
+      recursive: true,
+    });
+
+    const tempPath = `${QUIZ_PAYMENT_BRIDGE_STATE_FILE}.tmp`;
+
+    fs.writeFileSync(
+      tempPath,
+      JSON.stringify(state, null, 2),
+      "utf8"
+    );
+
+    fs.renameSync(tempPath, QUIZ_PAYMENT_BRIDGE_STATE_FILE);
+  } catch (error) {
+    console.error(
+      "[QUIZ_PAYMENT_BRIDGE] Erro ao salvar persistência:",
+      error
+    );
+  }
+}
+
+function normalizeQuizNicknamePart(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function parseQuizWinnerDisplayName(displayName) {
+  const original = normalizeQuizNicknamePart(displayName);
+
+  const parts = original
+    .split("|")
+    .map(normalizeQuizNicknamePart)
+    .filter(Boolean);
+
+  let gameId = null;
+  let gameIdIndex = -1;
+
+  for (let index = parts.length - 1; index >= 0; index--) {
+    if (/^\d+$/.test(parts[index])) {
+      gameId = parts[index];
+      gameIdIndex = index;
+      break;
+    }
+  }
+
+  let cityKey = null;
+  let cityPrefix = null;
+
+  if (parts.length >= 2) {
+    const firstPart = parts[0]
+      .toUpperCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "");
+
+    if (QUIZ_CITY_PREFIXES[firstPart]) {
+      cityPrefix = firstPart;
+      cityKey = QUIZ_CITY_PREFIXES[firstPart];
+    }
+  }
+
+  let name = original;
+
+  if (gameIdIndex >= 0) {
+    if (gameIdIndex >= 1) {
+      name = parts[gameIdIndex - 1];
+    }
+  } else if (cityPrefix && parts.length >= 2) {
+    name = parts[1];
+  } else if (parts.length === 2) {
+    name = parts[0];
+  } else if (parts.length >= 1) {
+    name = parts[parts.length - 1];
+  }
+
+  return {
+    original,
+    parts,
+    name: normalizeQuizNicknamePart(name) || PADRAO_INDEFINIDO,
+    gameId,
+    cityKey,
+    cityPrefix,
+  };
+}
+
+async function inferQuizWinnerCityByRoles(guild, discordUserId) {
+  if (!guild || !discordUserId) {
+    return {
+      cityKey: null,
+      matches: [],
+    };
+  }
+
+  const member = await guild.members.fetch(discordUserId).catch(() => null);
+
+  if (!member) {
+    return {
+      cityKey: null,
+      matches: [],
+    };
+  }
+
+  const matches = Object.entries(CIDADES_PAGAMENTO)
+    .filter(([, city]) => {
+      return city.roleId && member.roles.cache.has(city.roleId);
+    })
+    .map(([cityKey]) => cityKey);
+
+  return {
+    cityKey: matches.length === 1 ? matches[0] : null,
+    matches,
+  };
+}
+
+function extractQuizBridgePayload(message) {
+  const content = String(message?.content || "");
+
+  const match = content.match(
+    /```SC_QUIZ_PAYMENT_BRIDGE_V1\s*([\s\S]*?)\s*([a-f0-9]{64})\s*```/i
+  );
+
+  if (!match) {
+    return {
+      ok: false,
+      reason: "Mensagem não possui o marcador da ponte.",
+    };
+  }
+
+  const payloadBase64 = String(match[1] || "").trim();
+  const signatureReceived = String(match[2] || "").trim().toLowerCase();
+
+  if (!payloadBase64 || !signatureReceived) {
+    return {
+      ok: false,
+      reason: "Payload ou assinatura ausente.",
+    };
+  }
+
+  let payloadText;
+
+  try {
+    payloadText = Buffer.from(payloadBase64, "base64").toString("utf8");
+  } catch {
+    return {
+      ok: false,
+      reason: "Payload Base64 inválido.",
+    };
+  }
+
+  if (!QUIZ_PAYMENT_BRIDGE_SECRET) {
+    return {
+      ok: false,
+      reason: "SC_QUIZ_PAYMENT_BRIDGE_SECRET não configurada.",
+    };
+  }
+
+  const signatureExpected = crypto
+    .createHmac("sha256", QUIZ_PAYMENT_BRIDGE_SECRET)
+    .update(payloadText)
+    .digest("hex");
+
+  const expectedBuffer = Buffer.from(signatureExpected, "hex");
+  const receivedBuffer = Buffer.from(signatureReceived, "hex");
+
+  if (
+    expectedBuffer.length !== receivedBuffer.length ||
+    !crypto.timingSafeEqual(expectedBuffer, receivedBuffer)
+  ) {
+    return {
+      ok: false,
+      reason: "Assinatura inválida.",
+    };
+  }
+
+  let payload;
+
+  try {
+    payload = JSON.parse(payloadText);
+  } catch {
+    return {
+      ok: false,
+      reason: "JSON da ponte inválido.",
+    };
+  }
+
+  if (
+    payload?.version !== 1 ||
+    payload?.source !== "santa_creators_quiz"
+  ) {
+    return {
+      ok: false,
+      reason: "Origem da solicitação inválida.",
+    };
+  }
+
+  return {
+    ok: true,
+    payload,
+  };
+}
+
+function quizPaymentDedupeKey(payload, payment, paymentIndex) {
+  return [
+    payload.resetKey,
+    payload.discordUserId,
+    payload.position,
+    paymentIndex,
+    payment.tipo,
+    payment.premiacao,
+  ].join(":");
+}
+
+function quizCityLabel(cityKey) {
+  return CIDADES_PAGAMENTO[cityKey]?.label || PADRAO_INDEFINIDO;
+}
+
+async function sendQuizPaymentPending(client, payload, parsedName, reason) {
+  const channel = await client.channels
+    .fetch(CANAL_PENDENCIAS_QUIZ_PAGAMENTO)
+    .catch(() => null);
+
+  if (!channel?.isTextBased()) return null;
+
+  const cityFromName = parsedName.cityKey
+    ? quizCityLabel(parsedName.cityKey)
+    : "Não identificada";
+
+  return channel.send({
+    content: `<@${payload.discordUserId}>`,
+    embeds: [
+      new EmbedBuilder()
+        .setColor("#f39c12")
+        .setTitle("⚠️ Pagamento do Quiz aguardando informação")
+        .setDescription(
+          [
+            `O pagamento de **${payload.positionLabel}** ainda não foi criado.`,
+            "",
+            `**Motivo:** ${reason}`,
+            "",
+            `👤 **Discord:** <@${payload.discordUserId}>`,
+            `🏷️ **Apelido encontrado:** \`${payload.displayName}\``,
+            `📝 **Nome interpretado:** \`${parsedName.name}\``,
+            `🆔 **ID interpretado:** \`${parsedName.gameId || "Não encontrado"}\``,
+            `🏙️ **Cidade interpretada:** \`${cityFromName}\``,
+            `🎁 **Premiação:** \`${payload.rewardText}\``,
+            "",
+            "Ajuste o apelido da pessoa com o ID numérico e, se necessário, informe a cidade.",
+            "",
+            "Exemplos válidos:",
+            "`Enrico | 1541`",
+            "`NB | Enrico | 1541`",
+            "`ST | Enrico | 1541`",
+            "`MRS | Enrico | 1541`",
+            "`GRD | Enrico | 1541`",
+            "`MLT | Enrico | 1541`",
+          ].join("\n")
+        )
+        .setFooter({
+          text: `QUIZ_PAYMENT_PENDING:${payload.resetKey}:${payload.discordUserId}:${payload.position}`,
+        })
+        .setTimestamp(),
+    ],
+    allowedMentions: {
+      users: [payload.discordUserId],
+      parse: [],
+    },
+  });
+}
+
+async function createQuizAutomaticPaymentRecord(
+  client,
+  {
+    payload,
+    parsedName,
+    cityKey,
+    payment,
+    paymentIndex,
+    sourceMessage,
+  }
+) {
+  const paymentChannel = await client.channels
+    .fetch(CANAL_PAGAMENTO)
+    .catch(() => null);
+
+  if (!paymentChannel?.isTextBased()) {
+    throw new Error("Canal oficial de pagamentos não encontrado.");
+  }
+
+  const category = normalizarTipoPremiacao(payment.tipo);
+  const city = CIDADES_PAGAMENTO[cityKey];
+
+  const winnerMention = `<@${payload.discordUserId}>`;
+  const creatorMention = `<@${sourceMessage.author.id}>`;
+
+  const embed = new EmbedBuilder()
+    .setColor("#ff3399")
+    .setTitle("💸 Registro de Pagamento de Evento")
+    .setDescription(
+      [
+        "🤖 **Registro criado automaticamente pelo Ranking Semanal do Quiz.**",
+        "",
+        `🏆 **${payload.positionLabel}**`,
+        `👤 **Ganhador:** ${winnerMention}`,
+      ].join("\n")
+    )
+    .addFields(
+      {
+        name: "🏁 Evento",
+        value: `\`${payload.eventName}\``,
+        inline: true,
+      },
+      {
+        name: "📅 Data do Evento",
+        value: `\`${payload.eventDate}\``,
+        inline: true,
+      },
+      {
+        name: "🏆 Colocação",
+        value: `\`${payload.positionLabel}\``,
+        inline: true,
+      },
+      {
+        name: "👤 Ganhador",
+        value: `${winnerMention}\n\`${parsedName.name}\``,
+        inline: true,
+      },
+      {
+        name: "🆔 ID do Ganhador",
+        value: `\`${parsedName.gameId}\``,
+        inline: true,
+      },
+      {
+        name: "🌆 Cidade",
+        value: `${city?.emoji || "🏙️"} \`${city?.label || PADRAO_INDEFINIDO}\``,
+        inline: true,
+      },
+      {
+        name: "🎁 Tipo",
+        value: `\`${category}\``,
+        inline: true,
+      },
+      {
+        name: "🔗 Premiação / Link",
+        value: `\`${payment.premiacao}\`\nOrigem: ${sourceMessage.url}`,
+        inline: false,
+      },
+      {
+        name: "📌 Status",
+        value: "🕗 **AGUARDANDO ANÁLISE**",
+        inline: false,
+      },
+      {
+        name: "🧾 Registrado por",
+        value: `${creatorMention}\nSistema automático do Quiz`,
+        inline: false,
+      }
+    )
+    .setFooter({
+      text: [
+        "SC_PAGAMENTO_QUIZ",
+        payload.resetKey,
+        payload.discordUserId,
+        payload.position,
+        paymentIndex,
+      ].join(":"),
+    })
+    .setTimestamp();
+
+  const sent = await paymentChannel.send({
+    content: winnerMention,
+    embeds: [embed],
+    allowedMentions: {
+      users: [payload.discordUserId],
+      parse: [],
+    },
+  });
+
+  await sent.edit({
+    components: [
+      criarRowStatus(sent.id),
+    ],
+  });
+
+  const stats = loadStats();
+
+  stats.totalCreated = Number(stats.totalCreated || 0) + 1;
+  stats.creators[sourceMessage.author.id] =
+    Number(stats.creators[sourceMessage.author.id] || 0) + 1;
+  stats.categories[category] =
+    Number(stats.categories[category] || 0) + 1;
+
+  saveStats(stats);
+
+  try {
+    const paymentAt = dataEventoParaTimestampSP(
+      payload.eventDate,
+      sent.createdTimestamp || Date.now()
+    );
+
+    dashEmit("pagamento:criado", {
+      __at: paymentAt,
+      source: "quiz_semanal_automatico",
+      by: sourceMessage.author.id,
+      canal: CANAL_PAGAMENTO,
+      messageId: sent.id,
+      dataEvento: payload.eventDate,
+      creatorId: sourceMessage.author.id,
+      userId: sourceMessage.author.id,
+      dedupeKey: `pagamento_quiz:criado:${sent.id}`,
+    });
+  } catch {}
+
+  updateDashboard(client).catch((error) => {
+    console.error(
+      "[QUIZ_PAYMENT_BRIDGE] Erro ao atualizar dashboard:",
+      error
+    );
+  });
+
+  await limparBotoesAntigos(client, paymentChannel).catch(() => {});
+
+  return sent;
+}
+
+async function handleQuizPaymentBridgeMessage(message, client) {
+  if (!message?.guild) return false;
+
+  if (message.channelId !== CANAL_PENDENCIAS_QUIZ_PAGAMENTO) {
+    return false;
+  }
+
+  // Esta ponte aceita somente mensagens enviadas por bots.
+  if (!message.author?.bot) {
+    return false;
+  }
+
+  const extracted = extractQuizBridgePayload(message);
+
+  if (!extracted.ok) {
+    return false;
+  }
+
+  const payload = extracted.payload;
+
+  if (
+    !payload.discordUserId ||
+    !payload.displayName ||
+    !Array.isArray(payload.payments)
+  ) {
+    console.error(
+      "[QUIZ_PAYMENT_BRIDGE] Payload incompleto:",
+      payload
+    );
+    return true;
+  }
+
+  const parsedName = parseQuizWinnerDisplayName(payload.displayName);
+
+  const roleResult = await inferQuizWinnerCityByRoles(
+    message.guild,
+    payload.discordUserId
+  );
+
+  let cityKey = parsedName.cityKey;
+
+  if (!cityKey && roleResult.matches.length === 1) {
+    cityKey = roleResult.cityKey;
+  }
+
+  if (!parsedName.gameId) {
+    await sendQuizPaymentPending(
+      client,
+      payload,
+      parsedName,
+      "O apelido não possui um ID numérico."
+    );
+
+    return true;
+  }
+
+  if (!cityKey) {
+    const roleReason =
+      roleResult.matches.length > 1
+        ? "A pessoa possui cargos de mais de uma cidade."
+        : "Não encontrei prefixo nem um único cargo de cidade.";
+
+    await sendQuizPaymentPending(
+      client,
+      payload,
+      parsedName,
+      roleReason
+    );
+
+    return true;
+  }
+
+  const state = loadQuizPaymentBridgeState();
+
+  for (
+    let paymentIndex = 0;
+    paymentIndex < payload.payments.length;
+    paymentIndex++
+  ) {
+    const payment = payload.payments[paymentIndex];
+
+    const dedupeKey = quizPaymentDedupeKey(
+      payload,
+      payment,
+      paymentIndex
+    );
+
+    if (state.processedKeys[dedupeKey]) {
+      continue;
+    }
+
+    const sent = await createQuizAutomaticPaymentRecord(
+      client,
+      {
+        payload,
+        parsedName,
+        cityKey,
+        payment,
+        paymentIndex,
+        sourceMessage: message,
+      }
+    );
+
+    state.processedKeys[dedupeKey] = {
+      createdAt: Date.now(),
+      messageId: sent.id,
+      channelId: sent.channelId,
+      sourceMessageId: message.id,
+    };
+
+    saveQuizPaymentBridgeState(state);
+  }
+
+  await message.react("✅").catch(() => {});
+
+  return true;
+}
 function removerRowsCidadePagamento(message) {
   return (message.components || [])
     .filter((row) => {
@@ -4400,6 +5014,21 @@ async function moverRegistrosPorFiltro(client, canal, filtro) {
 // ✅ EXPORT 1: CHAMA NO READY
 // ============================================================================
 export async function pagamentoSocialOnReady(client) {
+  if (!client.__SC_QUIZ_PAYMENT_BRIDGE_LISTENER__) {
+    client.__SC_QUIZ_PAYMENT_BRIDGE_LISTENER__ = true;
+
+    client.on("messageCreate", async (message) => {
+      try {
+        await handleQuizPaymentBridgeMessage(message, client);
+      } catch (error) {
+        console.error(
+          "[QUIZ_PAYMENT_BRIDGE] Erro ao processar mensagem:",
+          error
+        );
+      }
+    });
+  }
+
   const canal = await client.channels.fetch(CANAL_PAGAMENTO).catch(() => null);
   if (!canal || !canal.isTextBased()) return;
 
