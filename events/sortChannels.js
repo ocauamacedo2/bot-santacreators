@@ -204,6 +204,163 @@ function resolveEffectiveCategoryId(channel) {
 const runningLocks = new Map();
 const debouncers = new Map();
 
+// =====================================================
+// FORMATAÇÃO AUTOMÁTICA DOS CANAIS DE LÍDERES
+// =====================================================
+
+// ✅ Somente os canais que estiverem nestas categorias receberão
+// o nome formatado com caracteres Unicode Mathematical Monospace.
+const LEADER_NAME_FORMAT_CATEGORY_IDS = new Set([
+  "1414687963161559180",
+  "1428572742051168378",
+  "1482874296685695118",
+]);
+
+// ✅ Converte caracteres Mathematical Monospace já existentes
+// de volta para letras e números normais.
+//
+// Isso permite corrigir nomes que estejam:
+// • parcialmente formatados;
+// • com letras maiúsculas ou minúsculas erradas;
+// • misturando caracteres normais e Mathematical Monospace.
+function mathematicalMonospaceToPlainText(value) {
+  const text = String(value ?? "");
+  let result = "";
+
+  for (const character of text) {
+    const codePoint = character.codePointAt(0);
+
+    // Mathematical Monospace Capital A-Z
+    if (codePoint >= 0x1D670 && codePoint <= 0x1D689) {
+      result += String.fromCodePoint(
+        "A".codePointAt(0) + (codePoint - 0x1D670)
+      );
+      continue;
+    }
+
+    // Mathematical Monospace Small a-z
+    if (codePoint >= 0x1D68A && codePoint <= 0x1D6A3) {
+      result += String.fromCodePoint(
+        "a".codePointAt(0) + (codePoint - 0x1D68A)
+      );
+      continue;
+    }
+
+    // Mathematical Monospace Digit 0-9
+    if (codePoint >= 0x1D7F6 && codePoint <= 0x1D7FF) {
+      result += String.fromCodePoint(
+        "0".codePointAt(0) + (codePoint - 0x1D7F6)
+      );
+      continue;
+    }
+
+    result += character;
+  }
+
+  return result;
+}
+
+// ✅ Converte letras e números normais para
+// Unicode Mathematical Monospace.
+//
+// A normalização NFD separa letras de seus acentos.
+// Exemplo:
+// ã passa a ser "a" + "~"
+//
+// Assim, a letra recebe o formato Mathematical Monospace
+// enquanto o acento continua sendo preservado.
+function plainTextToMathematicalMonospace(value) {
+  const text = String(value ?? "").normalize("NFD");
+  let result = "";
+
+  for (const character of text) {
+    const codePoint = character.codePointAt(0);
+
+    // Letras maiúsculas A-Z
+    if (codePoint >= 65 && codePoint <= 90) {
+      result += String.fromCodePoint(0x1D670 + (codePoint - 65));
+      continue;
+    }
+
+    // Letras minúsculas a-z
+    if (codePoint >= 97 && codePoint <= 122) {
+      result += String.fromCodePoint(0x1D68A + (codePoint - 97));
+      continue;
+    }
+
+    // Números 0-9
+    if (codePoint >= 48 && codePoint <= 57) {
+      result += String.fromCodePoint(0x1D7F6 + (codePoint - 48));
+      continue;
+    }
+
+    // Mantém hífens, acentos, símbolos e demais caracteres.
+    result += character;
+  }
+
+  return result;
+}
+
+// ✅ Deixa a primeira letra de cada parte separada por hífen
+// em maiúscula e o restante em minúscula.
+//
+// Exemplos:
+// morro-do-sacola   -> Morro-Do-Sacola
+// MORRO-DO-SACOLA   -> Morro-Do-Sacola
+// Morro-do-Sacola   -> Morro-Do-Sacola
+function formatLeaderPlainChannelName(value) {
+  const plainName = mathematicalMonospaceToPlainText(value)
+    .normalize("NFC")
+    .trim();
+
+  // ✅ Preserva qualquer prefixo existente antes do nome.
+  //
+  // Exemplos preservados:
+  // 🎫┋Galaxy
+  // 📁┋Logs
+  // 🔒┋Privado
+  //
+  // O prefixo não recebe alteração e não é removido.
+  const prefixMatch = plainName.match(/^([^A-Za-zÀ-ÖØ-öø-ÿ0-9]*)(.*)$/u);
+
+  const preservedPrefix = prefixMatch?.[1] || "";
+  const nameWithoutPrefix = prefixMatch?.[2] || plainName;
+
+  const formattedName = nameWithoutPrefix
+    .split("-")
+    .map((part) => {
+      if (!part) return part;
+
+      const lowerPart = part.toLocaleLowerCase("pt-BR");
+      const characters = Array.from(lowerPart);
+
+      if (characters.length === 0) return part;
+
+      const firstCharacter = characters
+        .shift()
+        .toLocaleUpperCase("pt-BR");
+
+      return firstCharacter + characters.join("");
+    })
+    .join("-");
+
+  return preservedPrefix + formattedName;
+}
+
+// ✅ Retorna o nome final que será aplicado ao canal.
+function formatLeaderChannelName(value) {
+  const formattedPlainName = formatLeaderPlainChannelName(value);
+  return plainTextToMathematicalMonospace(formattedPlainName);
+}
+
+// ✅ Retorna uma versão normal do nome para comparação alfabética.
+//
+// Dessa forma, canais com nomes normais e canais que já possuem
+// Mathematical Monospace continuam sendo organizados corretamente.
+function getLeaderChannelSortName(value) {
+  return formatLeaderPlainChannelName(value);
+}
+
 // Função de ordenação (exposta para uso interno do comando)
 async function safeSortCategory(guild, categoryId) {
   // ✅ Verifica se a categoria pertence a um GRUPO (Inativos ou Líderes)
@@ -270,11 +427,23 @@ function isTextChannelLike(ch) {
       if (!stickyIds.includes(ch.id)) regularChannels.push(ch);
     }
 
-    // 3. Ordena Regular de A a Z
-    regularChannels.sort((a, b) => collator.compare(a.name, b.name));
+// 3. Ordena Regular de A a Z
+regularChannels.sort((a, b) => {
+  // ✅ No grupo de líderes, compara os nomes sem os caracteres
+  // Mathematical Monospace para preservar a ordem alfabética correta.
+  if (groupConfig.id === "LIDERES") {
+    return collator.compare(
+      getLeaderChannelSortName(a.name),
+      getLeaderChannelSortName(b.name)
+    );
+  }
 
-    // 4. Lista Final Combinada (Fixos primeiro)
-    const sortedAll = [...stickyChannels, ...regularChannels];
+  // ✅ Os demais grupos continuam exatamente com a lógica anterior.
+  return collator.compare(a.name, b.name);
+});
+
+// 4. Lista Final Combinada (Fixos primeiro)
+const sortedAll = [...stickyChannels, ...regularChannels];
 
     // 5. Distribuição Inteligente (Lógica + Física)
     const assignments = new Map(); // ChannelID -> TargetCatID (lógica)
@@ -502,6 +671,40 @@ for (const ch of sortedAll) {
   const catConfig = groupConfig.categories.find((c) => c.id === targetCatId);
   const targetPos = catPositionCounters.get(targetCatId);
   catPositionCounters.set(targetCatId, targetPos + 1);
+
+  // =====================================================
+  // ✅ FORMATAÇÃO AUTOMÁTICA DOS NOMES DOS CANAIS DE LÍDERES
+  // =====================================================
+  //
+  // A formatação é aplicada somente quando o destino final do canal
+  // for uma das três categorias de líderes configuradas.
+  //
+  // Exemplos:
+  // morro-do-sacola -> 𝙼𝚘𝚛𝚛𝚘-𝙳𝚘-𝚂𝚊𝚌𝚘𝚕𝚊
+  // TROPA-DO-GORDÃO -> 𝚃𝚛𝚘𝚙𝚊-𝙳𝚘-𝙶𝚘𝚛𝚍𝚊̃𝚘
+  if (LEADER_NAME_FORMAT_CATEGORY_IDS.has(targetCatId)) {
+    const currentName = ch.name;
+    const formattedName = formatLeaderChannelName(currentName);
+
+    if (formattedName && formattedName !== currentName) {
+      try {
+        await ch.setName(formattedName);
+        changesCount++;
+
+        console.log(
+          `[SC_SORT] Canal de líderes renomeado: ${currentName} -> ${formattedName}`
+        );
+
+        // ✅ Evita excesso de solicitações à API do Discord.
+        await new Promise((r) => setTimeout(r, 1500));
+      } catch (e) {
+        console.warn(
+          `[SC_SORT] Falha ao aplicar a formatação no canal ${currentName} (${ch.id}):`,
+          e
+        );
+      }
+    }
+  }
 
   // ✅ Renomeia se tiver prefixo configurado
   if (catConfig.prefix) {
