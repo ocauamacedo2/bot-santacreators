@@ -824,6 +824,27 @@ if (await payEvtDashHandleMessage(message, client)) return;
 // ao facsSemanaisHandleMessage, pois existe um return no final.
 if (await facsSemanaisHandleMessage(message, client)) return;
 
+// =====================================================
+// 🧠 REMOVER E REMOVER GERAL
+// =====================================================
+// Estes dois comandos precisam executar antes do roteador central.
+//
+// Isso impede que a mesma mensagem seja tratada uma vez pelo
+// messageCreateHandler e novamente pelo fallback do core.
+if (
+  cmd === "remover" ||
+  cmd === "removergeral"
+) {
+  if (
+    await removerMassivoHandleMessage(
+      message,
+      client
+    )
+  ) {
+    return;
+  }
+}
+
 // 🚀 ROTEADOR CENTRALIZADO: Tenta executar via messageCreateHandler primeiro.
 // Se o handler retornar true, significa que o comando foi processado e paramos aqui.
 if (await messageCreateHandler.execute(message, args, client)) return;
@@ -831,7 +852,6 @@ if (await messageCreateHandler.execute(message, args, client)) return;
 // Fallback para handlers que ainda não foram movidos para o mapeamento central
 if (cmd === "correcao") { if (await handleCorrecao(message, client)) return; }
         if (cmd === "clear" || cmd === "clearbotao") { if (await clearHandleMessage(message, client)) return; }
-        if (cmd === "remover" || cmd === "removergeral") { if (await removerMassivoHandleMessage(message, client)) return; }
         if (cmd === "criarcargo") { if (await criarCargoHandleMessage(message, client)) return; }
         if (cmd === "verid") { if (await verIdHandleMessage(message, client)) return; }
         if (cmd === "removerperm") { if (await removerPermHandleMessage(message, client)) return; }
