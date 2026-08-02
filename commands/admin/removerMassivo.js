@@ -133,6 +133,180 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+/*
+ * Executa uma Promise com tempo máximo.
+ *
+ * Isso impede que o comando fique travado indefinidamente
+ * enquanto aguarda o Discord entregar todos os membros.
+ */
+async function withTimeout(promise, milliseconds) {
+  let timeoutId;
+
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(
+        new Error(
+          `MEMBER_FETCH_TIMEOUT_${milliseconds}`
+        )
+      );
+    }, milliseconds);
+  });
+
+  try {
+    return await Promise.race([
+      promise,
+      timeoutPromise
+    ]);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+/*
+ * Carrega todos os membros do servidor antes da limpeza.
+ *
+ * O !removergeral não pode trabalhar com cache parcial,
+ * porque isso faria apenas parte das pessoas ser processada.
+ */
+async function fetchAllGuildMembersForGeneral(
+  guild,
+  timeoutMs = 30_000
+) {
+  const cachedBefore =
+    guild.members.cache.size;
+
+  const expectedTotal =
+    guild.memberCount ??
+    cachedBefore;
+
+  /*
+   * Se o cache já possui todos os membros conhecidos
+   * pelo servidor, não precisa fazer outra requisição.
+   */
+  if (
+    expectedTotal > 0 &&
+    cachedBefore >= expectedTotal
+  ) {
+    return {
+      success: true,
+      complete: true,
+      cachedBefore,
+      cachedAfter: cachedBefore,
+      expectedTotal,
+      reason: null
+    };
+  }
+
+  try {
+    /*
+     * Sem query e sem limit:
+     * solicita todos os membros pelo Gateway.
+     *
+     * Para funcionar corretamente, o bot precisa possuir
+     * o Server Members Intent ativado.
+     */
+    await withTimeout(
+      guild.members.fetch({
+        withPresences: false
+      }),
+      timeoutMs
+    );
+  } catch (error) {
+    const errorText =
+      String(
+        error?.message ||
+        error ||
+        ''
+      ).toLowerCase();
+
+    const cachedAfterError =
+      guild.members.cache.size;
+
+    if (
+      errorText.includes('missing intents') ||
+      errorText.includes('privileged intent') ||
+      errorText.includes('guild_members')
+    ) {
+      return {
+        success: false,
+        complete: false,
+        cachedBefore,
+        cachedAfter: cachedAfterError,
+        expectedTotal,
+        reason: 'MISSING_MEMBERS_INTENT',
+        error
+      };
+    }
+
+    if (
+      errorText.includes('member_fetch_timeout')
+    ) {
+      return {
+        success: false,
+        complete:
+          expectedTotal > 0 &&
+          cachedAfterError >= expectedTotal,
+        cachedBefore,
+        cachedAfter: cachedAfterError,
+        expectedTotal,
+        reason: 'TIMEOUT',
+        error
+      };
+    }
+
+    return {
+      success: false,
+      complete:
+        expectedTotal > 0 &&
+        cachedAfterError >= expectedTotal,
+      cachedBefore,
+      cachedAfter: cachedAfterError,
+      expectedTotal,
+      reason: 'FETCH_ERROR',
+      error
+    };
+  }
+
+  const cachedAfter =
+    guild.members.cache.size;
+
+  /*
+   * A busca só será considerada completa quando
+   * o cache possuir pelo menos a quantidade informada
+   * pelo memberCount do servidor.
+   */
+  const complete =
+    expectedTotal === 0 ||
+    cachedAfter >= expectedTotal;
+
+  return {
+    success: complete,
+    complete,
+    cachedBefore,
+    cachedAfter,
+    expectedTotal,
+    reason:
+      complete
+        ? null
+        : 'PARTIAL_CACHE'
+  };
+}
+
+/*
+ * Coleta todos os membros que possuem o cargo informado.
+ *
+ * Essa função deve ser utilizada somente depois de
+ * fetchAllGuildMembersForGeneral confirmar o cache completo.
+ */
+function getAllMembersWithRoleFromCache(
+  guild,
+  roleId
+) {
+  return guild.members.cache.filter((member) => {
+    return member.roles.cache.has(roleId);
+  });
+}
+
 function hasPermissionToUse(message) {
   if (!message?.member) return false;
 
@@ -1044,7 +1218,7 @@ async function runRemoveGeneral(
     stats.phaseIndex = 1;
 
     stats.extra =
-      'Buscando todos os membros do servidor para evitar depender apenas do cache.';
+      'Carregando todos os membros do servidor antes de iniciar a limpeza. Nenhuma remoção parcial será executada.';
 
     await editGeneralStatus(
       statusMsg,
@@ -1052,19 +1226,91 @@ async function runRemoveGeneral(
       true
     );
 
-    await message.guild.members
-      .fetch()
-      .catch(() => null);
+    /*
+     * Tenta carregar todos os membros.
+     *
+     * Não existe limite fixo de 100 pessoas aqui.
+     * O processo continuará somente quando o cache
+     * estiver completo em relação ao memberCount.
+     */
+    const membersFetchResult =
+      await fetchAllGuildMembersForGeneral(
+        message.guild,
+        30_000
+      );
 
     /*
-     * Filtra somente quem possui o cargo-alvo.
+     * O bot não inicia uma ação destrutiva
+     * enquanto o cache estiver parcial.
+     */
+    if (!membersFetchResult.complete) {
+      stats.finished = true;
+      stats.color = 0xe74c3c;
+      stats.title =
+        '❌ Remover Geral cancelado por cache incompleto';
+
+      if (
+        membersFetchResult.reason ===
+        'MISSING_MEMBERS_INTENT'
+      ) {
+        stats.extra =
+          'O bot não conseguiu carregar todos os membros porque o **Server Members Intent** não está disponível.\n\n' +
+          'Ative no Discord Developer Portal:\n' +
+          '**Bot → Privileged Gateway Intents → Server Members Intent**\n\n' +
+          `Cache atual: **${membersFetchResult.cachedAfter}/${membersFetchResult.expectedTotal}** membros.\n` +
+          'Nenhum membro foi alterado.';
+      } else if (
+        membersFetchResult.reason ===
+        'TIMEOUT'
+      ) {
+        stats.extra =
+          'O Discord não terminou de entregar todos os membros dentro de 30 segundos.\n\n' +
+          `Cache atual: **${membersFetchResult.cachedAfter}/${membersFetchResult.expectedTotal}** membros.\n` +
+          'Nenhum membro foi alterado. Tente novamente em alguns segundos.';
+      } else {
+        stats.extra =
+          'Não foi possível confirmar o carregamento completo dos membros.\n\n' +
+          `Cache atual: **${membersFetchResult.cachedAfter}/${membersFetchResult.expectedTotal}** membros.\n` +
+          'Nenhum membro foi alterado para evitar uma limpeza parcial.';
+      }
+
+      await editGeneralStatus(
+        statusMsg,
+        stats,
+        true
+      );
+
+      setTimeout(() => {
+        statusMsg.delete().catch(() => {});
+      }, GENERAL_FINAL_DELETE_MS);
+
+      return true;
+    }
+
+    /*
+     * Agora que o cache foi confirmado como completo,
+     * coleta todos os membros que possuem o cargo-alvo.
+     *
+     * Não usa .first(100), limit: 100 ou paginação parcial.
      */
     const candidates =
-      message.guild.members.cache.filter((member) => {
-        return member.roles.cache.has(role.id);
-      });
+      getAllMembersWithRoleFromCache(
+        message.guild,
+        role.id
+      );
 
-    stats.total = candidates.size;
+    stats.total =
+      candidates.size;
+
+    stats.extra =
+      `Cache completo confirmado: **${membersFetchResult.cachedAfter}/${membersFetchResult.expectedTotal}** membros carregados.\n` +
+      `Pessoas encontradas com o cargo-alvo: **${stats.total}**.`;
+
+    await editGeneralStatus(
+      statusMsg,
+      stats,
+      true
+    );
 
     /*
      * Descobre os cargos relacionados aos tickets.
@@ -1113,24 +1359,6 @@ async function runRemoveGeneral(
 
       const nameInfo =
         analyzeMemberName(member);
-
-      const hadCitizen =
-        member.roles.cache.has(
-          CITIZEN_ROLE_ID
-        );
-
-      const hadNoWl =
-        member.roles.cache.has(
-          NO_WL_ROLE_ID
-        );
-
-      /*
-       * WL bugada:
-       * membro possui Cidadão e Sem WL ao mesmo tempo.
-       */
-      const wlBug =
-        hadCitizen &&
-        hadNoWl;
 
       const detail = {
         memberId: member.id,
@@ -1351,16 +1579,51 @@ async function runRemoveGeneral(
         stats.phaseIndex = 4;
 
         /*
-         * Se havia Cidadão e Sem WL juntos,
-         * envia uma solicitação de correção.
+         * Busca novamente o membro depois da limpeza.
+         *
+         * Essa atualização é obrigatória para conferir
+         * os cargos que realmente permaneceram.
+         *
+         * Antes, o código utilizava o estado antigo do membro
+         * e podia enviar uma revisão de WL mesmo depois de
+         * o cargo Sem WL já ter sido removido automaticamente.
          */
-        if (wlBug) {
+        const freshMember =
+          await message.guild.members
+            .fetch(member.id, {
+              force: true
+            })
+            .catch(() => member);
+
+        /*
+         * Confere a WL usando os cargos atuais,
+         * depois de todas as remoções e adições.
+         */
+        const stillHasCitizen =
+          freshMember.roles.cache.has(
+            CITIZEN_ROLE_ID
+          );
+
+        const stillHasNoWl =
+          freshMember.roles.cache.has(
+            NO_WL_ROLE_ID
+          );
+
+        const stillHasWlBug =
+          stillHasCitizen &&
+          stillHasNoWl;
+
+        /*
+         * Só envia a revisão quando a WL continua
+         * realmente bugada depois da limpeza.
+         */
+        if (stillHasWlBug) {
           stats.wlBugged++;
 
           const review =
             await sendReviewRequest(
               client,
-              member,
+              freshMember,
               'WL_BUG',
               {
                 channelId:
@@ -1390,7 +1653,7 @@ async function runRemoveGeneral(
           const review =
             await sendReviewRequest(
               client,
-              member,
+              freshMember,
               'PLAIN_NAME',
               {
                 channelId:
@@ -1408,13 +1671,9 @@ async function runRemoveGeneral(
         }
 
         /*
-         * Busca novamente o membro após as alterações,
-         * garantindo que a log mostre o estado real.
+         * O freshMember já foi buscado acima depois
+         * de todas as alterações.
          */
-        const freshMember =
-          await message.guild.members
-            .fetch(member.id)
-            .catch(() => member);
 
         const rolesAfter =
           roleSnapshot(freshMember);
