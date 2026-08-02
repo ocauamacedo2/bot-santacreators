@@ -331,16 +331,42 @@ function formatLeaderPlainChannelName(value) {
     .map((part) => {
       if (!part) return part;
 
-      const lowerPart = part.toLocaleLowerCase("pt-BR");
-      const characters = Array.from(lowerPart);
+      const trimmedPart = part.trim();
+      if (!trimmedPart) return part;
 
-      if (characters.length === 0) return part;
+      const characters = Array.from(trimmedPart);
 
-      const firstCharacter = characters
+      // ✅ Quando a parte possui apenas uma letra,
+      // força essa letra a permanecer maiúscula.
+      //
+      // Exemplos:
+      // p-c-j -> P-C-J
+      // P-c-j -> P-C-J
+      // p-C-J -> P-C-J
+      if (
+        characters.length === 1 &&
+        /^[A-Za-zÀ-ÖØ-öø-ÿ]$/u.test(trimmedPart)
+      ) {
+        return trimmedPart.toLocaleUpperCase("pt-BR");
+      }
+
+      // ✅ Para nomes normais, mantém somente a primeira letra
+      // maiúscula e o restante em minúsculo.
+      //
+      // Exemplos:
+      // morro -> Morro
+      // DO -> Do
+      // SACOLA -> Sacola
+      const lowerPart = trimmedPart.toLocaleLowerCase("pt-BR");
+      const lowerCharacters = Array.from(lowerPart);
+
+      if (lowerCharacters.length === 0) return trimmedPart;
+
+      const firstCharacter = lowerCharacters
         .shift()
         .toLocaleUpperCase("pt-BR");
 
-      return firstCharacter + characters.join("");
+      return firstCharacter + lowerCharacters.join("");
     })
     .join("-");
 
