@@ -4,6 +4,9 @@
 // • !removergeral @Cargo  -> limpa cargos, normaliza nomes, corrige WL e gera log completo
 // • ESM / discord.js v14
 
+import fs from 'node:fs';
+import path from 'node:path';
+
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -120,14 +123,40 @@ const REVIEW_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 const TZ = 'America/Sao_Paulo';
 
+/*
+ * Arquivo permanente das solicitações de correção.
+ *
+ * Como o caminho usa process.cwd(), o arquivo ficará em:
+ *
+ * data/removerGeralReviews.json
+ */
+const REVIEW_STORE_DIRECTORY =
+  path.resolve(
+    process.cwd(),
+    'data'
+  );
+
+const REVIEW_STORE_FILE =
+  path.join(
+    REVIEW_STORE_DIRECTORY,
+    'removerGeralReviews.json'
+  );
+
 // Lock do comando antigo por servidor + cargo
 globalThis.__SC_REMOVE_ROLE_LOCK ??= new Map();
 
 // Lock do !removergeral por servidor
 globalThis.__SC_REMOVE_GENERAL_LOCK ??= new Map();
 
-// Armazena temporariamente solicitações de correção por botão/modal
+// Solicitações de correção carregadas na memória
 globalThis.__SC_REMOVE_GENERAL_REVIEWS ??= new Map();
+
+// Impede carregar o mesmo arquivo várias vezes
+globalThis.__SC_REMOVE_GENERAL_REVIEWS_LOADED ??= false;
+
+// Impede duas gravações simultâneas no arquivo
+globalThis.__SC_REMOVE_GENERAL_REVIEWS_SAVE_QUEUE ??=
+  Promise.resolve();
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -579,6 +608,269 @@ function makeReviewKey(guildId, memberId, nonce) {
   return `${guildId}:${memberId}:${nonce}`;
 }
 
+/*
+ * Garante que a pasta data exista.
+ */
+function ensureReviewStoreDirectory() {
+  if (
+    !fs.existsSync(
+      REVIEW_STORE_DIRECTORY
+    )
+  ) {
+    fs.mkdirSync(
+      REVIEW_STORE_DIRECTORY,
+      {
+        recursive: true
+      }
+    );
+  }
+}
+
+/*
+ * Remove solicitações expiradas.
+ *
+ * Retorna true quando alguma entrada foi removida.
+ */
+function cleanupExpiredReviews() {
+  const now = Date.now();
+  let changed = false;
+
+  for (
+    const [key, review] of
+    globalThis.__SC_REMOVE_GENERAL_REVIEWS.entries()
+  ) {
+    const expiresAt =
+      Number(
+        review?.expiresAt ||
+        (
+          Number(review?.createdAt || 0) +
+          REVIEW_TTL_MS
+        )
+      );
+
+    if (
+      !expiresAt ||
+      expiresAt <= now
+    ) {
+      globalThis.__SC_REMOVE_GENERAL_REVIEWS.delete(
+        key
+      );
+
+      changed = true;
+    }
+  }
+
+  return changed;
+}
+
+/*
+ * Salva todas as solicitações pendentes em disco.
+ *
+ * As gravações entram em uma fila para impedir que duas
+ * alterações escrevam o arquivo ao mesmo tempo.
+ */
+async function saveReviewStore() {
+  globalThis.__SC_REMOVE_GENERAL_REVIEWS_SAVE_QUEUE =
+    globalThis.__SC_REMOVE_GENERAL_REVIEWS_SAVE_QUEUE
+      .catch(() => {})
+      .then(async () => {
+        ensureReviewStoreDirectory();
+
+        cleanupExpiredReviews();
+
+        const records = Array.from(
+          globalThis.__SC_REMOVE_GENERAL_REVIEWS.entries()
+        ).map(([key, review]) => {
+          return {
+            key,
+            ...review
+          };
+        });
+
+        const temporaryFile =
+          `${REVIEW_STORE_FILE}.tmp`;
+
+        fs.writeFileSync(
+          temporaryFile,
+          JSON.stringify(
+            records,
+            null,
+            2
+          ),
+          'utf8'
+        );
+
+        fs.renameSync(
+          temporaryFile,
+          REVIEW_STORE_FILE
+        );
+      })
+      .catch((error) => {
+        console.error(
+          '[removerGeral] erro ao salvar solicitações:',
+          error
+        );
+      });
+
+  return globalThis.__SC_REMOVE_GENERAL_REVIEWS_SAVE_QUEUE;
+}
+
+/*
+ * Carrega as solicitações salvas anteriormente.
+ *
+ * Essa função permite que os botões continuem funcionando
+ * mesmo depois de reiniciar o bot.
+ */
+async function loadReviewStore() {
+  if (
+    globalThis.__SC_REMOVE_GENERAL_REVIEWS_LOADED
+  ) {
+    return;
+  }
+
+  globalThis.__SC_REMOVE_GENERAL_REVIEWS_LOADED =
+    true;
+
+  ensureReviewStoreDirectory();
+
+  if (
+    !fs.existsSync(
+      REVIEW_STORE_FILE
+    )
+  ) {
+    fs.writeFileSync(
+      REVIEW_STORE_FILE,
+      '[]',
+      'utf8'
+    );
+
+    return;
+  }
+
+  try {
+    const raw =
+      fs.readFileSync(
+        REVIEW_STORE_FILE,
+        'utf8'
+      );
+
+    const parsed =
+      JSON.parse(
+        raw || '[]'
+      );
+
+    if (!Array.isArray(parsed)) {
+      throw new Error(
+        'O arquivo de solicitações não contém uma lista válida.'
+      );
+    }
+
+    for (const record of parsed) {
+      if (
+        !record?.key ||
+        !record?.guildId ||
+        !record?.memberId ||
+        !record?.nonce
+      ) {
+        continue;
+      }
+
+      globalThis.__SC_REMOVE_GENERAL_REVIEWS.set(
+        record.key,
+        {
+          guildId:
+            record.guildId,
+
+          memberId:
+            record.memberId,
+
+          nonce:
+            record.nonce,
+
+          reason:
+            record.reason,
+
+          sourceChannelId:
+            record.sourceChannelId,
+
+          executorId:
+            record.executorId,
+
+          reviewChannelId:
+            record.reviewChannelId,
+
+          reviewMessageId:
+            record.reviewMessageId,
+
+          createdAt:
+            Number(
+              record.createdAt ||
+              Date.now()
+            ),
+
+          expiresAt:
+            Number(
+              record.expiresAt ||
+              (
+                Number(record.createdAt || Date.now()) +
+                REVIEW_TTL_MS
+              )
+            ),
+
+          used:
+            Boolean(
+              record.used
+            ),
+
+          usedBy:
+            record.usedBy ||
+            null,
+
+          usedAt:
+            record.usedAt ||
+            null
+        }
+      );
+    }
+
+    const removedExpired =
+      cleanupExpiredReviews();
+
+    if (removedExpired) {
+      await saveReviewStore();
+    }
+  } catch (error) {
+    console.error(
+      '[removerGeral] erro ao carregar solicitações:',
+      error
+    );
+
+    /*
+     * Preserva o arquivo problemático para análise.
+     */
+    const backupFile =
+      `${REVIEW_STORE_FILE}.corrompido-${Date.now()}`;
+
+    try {
+      fs.copyFileSync(
+        REVIEW_STORE_FILE,
+        backupFile
+      );
+
+      fs.writeFileSync(
+        REVIEW_STORE_FILE,
+        '[]',
+        'utf8'
+      );
+    } catch (backupError) {
+      console.error(
+        '[removerGeral] erro ao criar backup:',
+        backupError
+      );
+    }
+  }
+}
+
 function createNonce() {
   const timestampPart = Date.now().toString(36);
   const randomPart = Math.random()
@@ -764,6 +1056,12 @@ async function sendReviewRequest(
   reason,
   sourceContext
 ) {
+  /*
+   * Garante que solicitações antigas sejam recuperadas
+   * antes de criar uma nova.
+   */
+  await loadReviewStore();
+
   const reviewChannel = await client.channels
     .fetch(REVIEW_CHANNEL_ID)
     .catch(() => null);
@@ -785,23 +1083,75 @@ async function sendReviewRequest(
 
   const beforeRoles = roleSnapshot(member);
 
-  globalThis.__SC_REMOVE_GENERAL_REVIEWS.set(key, {
-    guildId: member.guild.id,
-    memberId: member.id,
-    nonce,
-    reason,
-    sourceChannelId: sourceContext.channelId,
-    executorId: sourceContext.executorId,
-    createdAt: Date.now(),
-    used: false
-  });
+  const createdAt =
+    Date.now();
 
-  setTimeout(() => {
+  globalThis.__SC_REMOVE_GENERAL_REVIEWS.set(
+    key,
+    {
+      guildId:
+        member.guild.id,
+
+      memberId:
+        member.id,
+
+      nonce,
+
+      reason,
+
+      sourceChannelId:
+        sourceContext.channelId,
+
+      executorId:
+        sourceContext.executorId,
+
+      reviewChannelId:
+        REVIEW_CHANNEL_ID,
+
+      reviewMessageId:
+        null,
+
+      createdAt,
+
+      expiresAt:
+        createdAt +
+        REVIEW_TTL_MS,
+
+      used:
+        false,
+
+      usedBy:
+        null,
+
+      usedAt:
+        null
+    }
+  );
+
+  /*
+   * Salva antes mesmo de enviar a mensagem.
+   *
+   * Assim, uma reinicialização logo depois da criação
+   * não apaga o processo.
+   */
+  await saveReviewStore();
+
+  setTimeout(async () => {
     const item =
-      globalThis.__SC_REMOVE_GENERAL_REVIEWS.get(key);
+      globalThis.__SC_REMOVE_GENERAL_REVIEWS.get(
+        key
+      );
 
-    if (item && !item.used) {
-      globalThis.__SC_REMOVE_GENERAL_REVIEWS.delete(key);
+    if (
+      item &&
+      !item.used &&
+      Number(item.expiresAt) <= Date.now()
+    ) {
+      globalThis.__SC_REMOVE_GENERAL_REVIEWS.delete(
+        key
+      );
+
+      await saveReviewStore();
     }
   }, REVIEW_TTL_MS);
 
@@ -865,12 +1215,36 @@ async function sendReviewRequest(
   }).catch(() => null);
 
   if (!sent) {
-    globalThis.__SC_REMOVE_GENERAL_REVIEWS.delete(key);
+    globalThis.__SC_REMOVE_GENERAL_REVIEWS.delete(
+      key
+    );
+
+    await saveReviewStore();
 
     return {
       sent: false,
       reason: 'Falha ao enviar a mensagem'
     };
+  }
+
+  const savedReview =
+    globalThis.__SC_REMOVE_GENERAL_REVIEWS.get(
+      key
+    );
+
+  if (savedReview) {
+    savedReview.reviewChannelId =
+      sent.channel.id;
+
+    savedReview.reviewMessageId =
+      sent.id;
+
+    globalThis.__SC_REMOVE_GENERAL_REVIEWS.set(
+      key,
+      savedReview
+    );
+
+    await saveReviewStore();
   }
 
   return {
@@ -2290,6 +2664,12 @@ export async function removerGeralHandleInteraction(
     }
 
     /*
+     * Recupera solicitações pendentes salvas antes
+     * de uma possível reinicialização do bot.
+     */
+    await loadReviewStore();
+
+    /*
      * =====================================================
      * BOTÃO: ABRE O MODAL
      * =====================================================
@@ -2342,13 +2722,30 @@ export async function removerGeralHandleInteraction(
        * - ter expirado;
        * - ter sido perdida após reinício do bot.
        */
-      if (
-        !review ||
-        review.used
-      ) {
+      if (!review) {
         await interaction.reply({
           content:
-            '⚠️ Esta solicitação já foi concluída, expirou ou o bot foi reiniciado.',
+            '⚠️ Esta solicitação não existe mais ou ultrapassou o prazo de 7 dias.',
+          ephemeral: true
+        });
+
+        return true;
+      }
+
+      if (review.used) {
+        /*
+         * Caso exista um botão antigo em uma mensagem
+         * que já foi concluída, remove o botão.
+         */
+        await interaction.message
+          ?.edit({
+            components: []
+          })
+          .catch(() => {});
+
+        await interaction.reply({
+          content:
+            '✅ Esta correção já foi concluída anteriormente.',
           ephemeral: true
         });
 
@@ -2483,13 +2880,20 @@ export async function removerGeralHandleInteraction(
       /*
        * Impede utilizar o mesmo modal duas vezes.
        */
-      if (
-        !review ||
-        review.used
-      ) {
+      if (!review) {
         await interaction.reply({
           content:
-            '⚠️ Esta solicitação já foi usada, expirou ou o bot foi reiniciado.',
+            '⚠️ Esta solicitação não existe mais ou ultrapassou o prazo de 7 dias.',
+          ephemeral: true
+        });
+
+        return true;
+      }
+
+      if (review.used) {
+        await interaction.reply({
+          content:
+            '✅ Esta correção já foi concluída anteriormente.',
           ephemeral: true
         });
 
@@ -2635,8 +3039,10 @@ export async function removerGeralHandleInteraction(
        * não poderão aplicar outra alteração.
        */
       review.used = true;
+
       review.usedBy =
         interaction.user.id;
+
       review.usedAt =
         Date.now();
 
@@ -2646,27 +3052,12 @@ export async function removerGeralHandleInteraction(
       );
 
       /*
-       * Cria o botão desativado.
+       * Salva a conclusão em disco.
+       *
+       * Mesmo que o bot reinicie depois deste ponto,
+       * a solicitação continuará marcada como concluída.
        */
-      const disabledButton =
-        new ButtonBuilder()
-          .setCustomId(
-            `rg_done:${memberId}:${nonce}`
-          )
-          .setLabel(
-            'Correção concluída'
-          )
-          .setEmoji('✅')
-          .setStyle(
-            ButtonStyle.Success
-          )
-          .setDisabled(true);
-
-      const disabledRow =
-        new ActionRowBuilder()
-          .addComponents(
-            disabledButton
-          );
+      await saveReviewStore();
 
       /*
        * Busca o estado atualizado do membro.
@@ -2716,9 +3107,10 @@ export async function removerGeralHandleInteraction(
                 new Date().toISOString()
             }
           ],
-          components: [
-            disabledRow
-          ]
+          /*
+           * Remove completamente o botão da mensagem.
+           */
+          components: []
         }).catch(() => {});
       }
 
