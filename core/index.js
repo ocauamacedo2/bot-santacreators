@@ -280,7 +280,10 @@ import {
 import { registerApagarPV } from "../commands/admin/apagarpv.js";
 import { criarCargoHandleMessage } from "../commands/admin/criarcargo.js";
 import { verIdHandleMessage } from "../commands/admin/verid.js";
-import { removerMassivoHandleMessage } from "../commands/admin/removerMassivo.js";
+import {
+  removerMassivoHandleMessage,
+  removerGeralHandleInteraction,
+} from "../commands/admin/removerMassivo.js";
 import { apagarChatHandleMessage } from "../commands/admin/apagarchat.js";
 import { clearHandleMessage } from "../commands/admin/clearHandler.js";
 import { removerPermHandleMessage } from "../commands/admin/removerperm.js";
@@ -828,7 +831,7 @@ if (await messageCreateHandler.execute(message, args, client)) return;
 // Fallback para handlers que ainda não foram movidos para o mapeamento central
 if (cmd === "correcao") { if (await handleCorrecao(message, client)) return; }
         if (cmd === "clear" || cmd === "clearbotao") { if (await clearHandleMessage(message, client)) return; }
-        if (cmd === "remover") { if (await removerMassivoHandleMessage(message, client)) return; }
+        if (cmd === "remover" || cmd === "removergeral") { if (await removerMassivoHandleMessage(message, client)) return; }
         if (cmd === "criarcargo") { if (await criarCargoHandleMessage(message, client)) return; }
         if (cmd === "verid") { if (await verIdHandleMessage(message, client)) return; }
         if (cmd === "removerperm") { if (await removerPermHandleMessage(message, client)) return; }
@@ -980,6 +983,14 @@ client.on("interactionCreate", async (interaction) => {
   if (interaction.isAutocomplete()) return;
 
   try {
+    // =====================================================
+    // 🧠 REMOVER GERAL — BOTÃO E MODAL DE CORREÇÃO
+    // =====================================================
+    // Precisa executar antes dos outros handlers para capturar:
+    // • rg_fix:
+    // • rg_modal:
+    if (await removerGeralHandleInteraction(interaction)) return;
+
     // =====================================================
     // 🚀 ROTEAMENTO DIRETO — PAGAMENTO SOCIAL
     // =====================================================
