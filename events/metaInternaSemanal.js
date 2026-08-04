@@ -4,6 +4,9 @@ import { fileURLToPath } from "node:url";
 import { EmbedBuilder, AttachmentBuilder } from "discord.js";
 import sharp from "sharp";
 import { dashOn } from "../utils/dashHub.js";
+import {
+  registerOperationalMetricProvider,
+} from "../utils/operationalMetricsHub.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -619,6 +622,233 @@ function calcUserMeta({ userId, state, eventos, bpEntries }) {
     raw,
   };
 }
+
+// ============================================================================
+// PROVEDOR DE MÉTRICAS PARA O NPS OPERACIONAL
+// ============================================================================
+
+function buildMetaInternaOperationalSnapshot() {
+  const state =
+    loadState();
+
+  const users =
+    Object.keys(
+      state.users || {}
+    );
+
+  const results =
+    users.map(
+      userId =>
+        calculateUserResult(
+          userId,
+          state
+        )
+    );
+
+  const validResults =
+    results.filter(
+      result =>
+        result &&
+        Number.isFinite(
+          Number(result.percent)
+        )
+    );
+
+  if (!validResults.length) {
+    return {
+      id:
+        "meta_interna",
+      label:
+        "Metas Internas",
+      available:
+        false,
+      score:
+        null,
+      confidence:
+        0,
+      volume:
+        0,
+      positivePoints: [],
+      attentionPoints: [
+        "Ainda não existem participantes com dados suficientes para avaliar as metas internas.",
+      ],
+      recommendations: [
+        "Aguardar novos registros ou verificar se os eventos dos sistemas estão chegando à Meta Interna.",
+      ],
+      details: {},
+    };
+  }
+
+  const averagePercent =
+    validResults.reduce(
+      (
+        total,
+        result
+      ) =>
+        total +
+        Number(
+          result.percent || 0
+        ),
+      0
+    ) /
+    validResults.length;
+
+  const completed =
+    validResults.filter(
+      result =>
+        result.percent >= 100
+    ).length;
+
+  const attention =
+    validResults.filter(
+      result =>
+        result.percent < 60
+    ).length;
+
+  const completionRate =
+    (
+      completed /
+      validResults.length
+    ) *
+    100;
+
+  const confidence =
+    Math.min(
+      100,
+      35 +
+      validResults.length * 5
+    );
+
+  const positivePoints = [];
+  const attentionPoints = [];
+  const recommendations = [];
+
+  if (completionRate >= 70) {
+    positivePoints.push(
+      `${completionRate.toFixed(1)}% dos participantes já alcançaram integralmente suas metas internas.`
+    );
+  } else if (completionRate >= 40) {
+    positivePoints.push(
+      `${completionRate.toFixed(1)}% dos participantes já concluíram todas as metas internas da semana.`
+    );
+  }
+
+  if (averagePercent >= 80) {
+    positivePoints.push(
+      `O cumprimento médio das metas internas está em ${averagePercent.toFixed(1)}%, indicando bom avanço operacional.`
+    );
+  }
+
+  if (attention > 0) {
+    attentionPoints.push(
+      `${attention} participante(s) permanecem abaixo de 60% das metas internas.`
+    );
+  }
+
+  if (completionRate < 50) {
+    attentionPoints.push(
+      `Menos da metade da equipe concluiu integralmente as metas internas até o momento.`
+    );
+  }
+
+  if (completionRate < 50) {
+    recommendations.push(
+      "Identificar quais metas apresentam menor conclusão e direcionar o acompanhamento da equipe para esses pontos."
+    );
+  }
+
+  if (attention > 0) {
+    recommendations.push(
+      "Acompanhar individualmente os participantes abaixo de 60%, verificando ausências, capacidade disponível e dificuldades operacionais."
+    );
+  }
+
+  if (!positivePoints.length) {
+    positivePoints.push(
+      "A Meta Interna está registrando atividades e permite acompanhar a evolução individual da equipe."
+    );
+  }
+
+  if (!attentionPoints.length) {
+    attentionPoints.push(
+      "Nenhum problema dominante foi identificado no cumprimento das metas internas."
+    );
+  }
+
+  if (!recommendations.length) {
+    recommendations.push(
+      "Manter o acompanhamento atual e observar a evolução até o encerramento da semana."
+    );
+  }
+
+  return {
+    id:
+      "meta_interna",
+
+    label:
+      "Metas Internas",
+
+    available:
+      true,
+
+    score:
+      Math.max(
+        0,
+        Math.min(
+          100,
+          averagePercent
+        )
+      ),
+
+    confidence,
+
+    volume:
+      validResults.length,
+
+    goal:
+      100,
+
+    current:
+      averagePercent,
+
+    previous:
+      null,
+
+    difference:
+      null,
+
+    positivePoints,
+
+    attentionPoints,
+
+    recommendations,
+
+    details: {
+      participants:
+        validResults.length,
+
+      completed,
+
+      attention,
+
+      completionRate,
+
+      averagePercent,
+
+      goals:
+        METAS,
+
+      weights:
+        PESOS,
+    },
+  };
+}
+
+registerOperationalMetricProvider(
+  "meta_interna",
+  async () =>
+    buildMetaInternaOperationalSnapshot()
+);
 
 async function getEligibleMembers(guild) {
   await guild.members.fetch({ withPresences: false }).catch(() => null);

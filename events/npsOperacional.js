@@ -34,6 +34,10 @@ import {
   dashOnAny,
 } from "../utils/dashHub.js";
 
+import {
+  collectOperationalMetrics,
+} from "../utils/operationalMetricsHub.js";
+
 // ============================================================================
 // CONFIGURAÇÃO PRINCIPAL
 // ============================================================================
@@ -215,6 +219,13 @@ const DEFAULT_CONFIG = {
   ],
 
   categories: {
+    meta_interna: {
+      label: "Cumprimento das Metas Internas",
+      weight: 14,
+      enabled: true,
+      weeklyGoal: 100,
+    },
+
     registro_manager: {
       label: "Registro Manager",
       weight: 12,
@@ -2707,7 +2718,8 @@ function calculateDisplayedCurrentScore(
 function buildDiagnosis(
   current,
   previous,
-  displayed
+  displayed,
+  providerMetrics = []
 ) {
   const categoryComparisons =
     current.categories
@@ -2793,6 +2805,43 @@ function buildDiagnosis(
   const positives = [];
   const attentions = [];
   const recommendations = [];
+
+  for (
+    const metric of providerMetrics
+  ) {
+    if (
+      metric.available === false
+    ) {
+      continue;
+    }
+
+    for (
+      const point of
+      metric.positivePoints || []
+    ) {
+      positives.push(
+        `${metric.label}: ${point}`
+      );
+    }
+
+    for (
+      const point of
+      metric.attentionPoints || []
+    ) {
+      attentions.push(
+        `${metric.label}: ${point}`
+      );
+    }
+
+    for (
+      const recommendation of
+      metric.recommendations || []
+    ) {
+      recommendations.push(
+        `${metric.label}: ${recommendation}`
+      );
+    }
+  }
 
   if (improved.length) {
     positives.push(
@@ -3674,18 +3723,113 @@ function buildDashboardComponents() {
 }
 
 // ============================================================================
+// RECÁLCULO APÓS APLICAÇÃO DAS MÉTRICAS REAIS
+// ============================================================================
+
+function recalculateWeekResult(
+  result
+) {
+  const validCategories =
+    result.categories.filter(
+      category =>
+        category.hasData &&
+        Number.isFinite(
+          Number(
+            category.score
+          )
+        )
+    );
+
+  const totalWeight =
+    validCategories.reduce(
+      (
+        total,
+        category
+      ) =>
+        total +
+        Number(
+          category.weight || 0
+        ),
+      0
+    );
+
+  const rawScore =
+    totalWeight > 0
+      ? validCategories.reduce(
+          (
+            total,
+            category
+          ) =>
+            total +
+            Number(
+              category.score || 0
+            ) *
+            Number(
+              category.weight || 0
+            ),
+          0
+        ) / totalWeight
+      : 0;
+
+  const providerVolume =
+    validCategories.reduce(
+      (
+        total,
+        category
+      ) =>
+        total +
+        Number(
+          category.raw
+            ?.providerMetric
+            ?.volume || 0
+        ),
+      0
+    );
+
+  result.validCategories =
+    validCategories;
+
+  result.rawScore =
+    clamp(
+      rawScore,
+      0,
+      100
+    );
+
+  result.totalEvents =
+    Math.max(
+      Number(
+        result.totalEvents || 0
+      ),
+      providerVolume
+    );
+
+  return result;
+}
+
+// ============================================================================
 // GERAÇÃO DOS RESULTADOS
 // ============================================================================
 
-function generateResults() {
+async function generateResults() {
   const config = loadConfig();
   const state = loadState();
 
-  // Recupera os dados que já existiam antes do NPS
-  // e também atualiza os totais consolidados mais recentes.
   syncConsolidatedWeeklySources(
     state
   );
+
+  const providerCollection =
+    await collectOperationalMetrics({
+      client:
+        activeClient,
+
+      currentWeek:
+        getWeekInfo(),
+
+      previousWeek:
+        getPreviousWeekInfo(),
+    });
 
   const currentWeekInfo =
     getWeekInfo();
@@ -3703,37 +3847,103 @@ function generateResults() {
       }
     );
 
-  const previous =
-    calculateWeek(
-      state,
-      previousWeekInfo,
-      config,
-      {
-        currentWeek: false,
-      }
+const previous =
+  calculateWeek(
+    state,
+    previousWeekInfo,
+    config,
+    {
+      currentWeek: false,
+    }
+  );
+
+for (
+  const providerMetric of
+  providerCollection.results
+) {
+  if (
+    providerMetric.available === false ||
+    !Number.isFinite(
+      Number(
+        providerMetric.score
+      )
+    )
+  ) {
+    continue;
+  }
+
+  const category =
+    current.categories.find(
+      item =>
+        item.categoryId ===
+        providerMetric.id
     );
 
-  const displayed =
-    calculateDisplayedCurrentScore(
-      current,
-      previous
+  if (!category) {
+    continue;
+  }
+
+  category.hasData = true;
+  category.score =
+    clamp(
+      Number(
+        providerMetric.score
+      ),
+      0,
+      100
     );
+
+  category.raw = {
+    ...category.raw,
+
+    events:
+      Math.max(
+        Number(
+          category.raw?.events || 0
+        ),
+        Number(
+          providerMetric.volume || 0
+        )
+      ),
+
+    providerMetric,
+  };
+}
+
+// Recalcula as categorias válidas, os pesos,
+// o volume e o NPS Geral após aplicar as métricas reais.
+recalculateWeekResult(
+  current
+);
+
+const displayed =
+  calculateDisplayedCurrentScore(
+    current,
+    previous
+  );
 
   const diagnosis =
     buildDiagnosis(
       current,
       previous,
-      displayed
+      displayed,
+      providerCollection.results
     );
 
   return {
-    config,
-    state,
-    current,
-    previous,
-    displayed,
-    diagnosis,
-  };
+  config,
+  state,
+  current,
+  previous,
+  displayed,
+  diagnosis,
+
+  providerMetrics:
+    providerCollection.results,
+
+  providerErrors:
+    providerCollection.errors,
+};
 }
 
 // ============================================================================
@@ -3814,7 +4024,7 @@ async function updateDashboard(
     ]);
 
     const results =
-      generateResults();
+      await generateResults();
 
     const components =
       buildDashboardComponents();
@@ -4206,9 +4416,9 @@ function buildWeeklySummaryEmbeds({
   ];
 }
 
-function generateCurrentSummary() {
+async function generateCurrentSummary() {
   const results =
-    generateResults();
+    await generateResults();
 
   return {
     ...results,
@@ -4217,14 +4427,19 @@ function generateCurrentSummary() {
       buildWeeklySummaryEmbeds({
         selected:
           results.current,
+
         comparison:
           results.previous,
+
         displayScore:
           results.displayed.score,
+
         diagnosis:
           results.diagnosis,
+
         config:
           results.config,
+
         titleSuffix:
           "Semana Atual",
       }),
@@ -4341,7 +4556,7 @@ async function sendAutomaticWeeklyReport(
   }
 
   const summary =
-    generateCurrentSummary();
+    await generateCurrentSummary();
 
   await channel.send({
     content:
@@ -4384,7 +4599,7 @@ async function sendSummaryToUser(
   const summary =
     type === "previous"
       ? generatePreviousSummary()
-      : generateCurrentSummary();
+      : await generateCurrentSummary();
 
   try {
     await interaction.user.send({
@@ -4513,7 +4728,7 @@ export async function npsOperacionalHandleInteraction(
   ) {
     try {
       const results =
-        generateResults();
+        await generateResults();
 
       const executiveEmbeds =
         buildExecutiveDashboardEmbeds(

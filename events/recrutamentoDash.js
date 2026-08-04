@@ -4,6 +4,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from "discord.js";
 import { dashOn } from "../utils/dashHub.js";
+import {
+  registerOperationalMetricProvider,
+} from "../utils/operationalMetricsHub.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -44,15 +47,260 @@ function getGIStatus() {
     if (!fs.existsSync(GI_DATA_FILE)) return { active: 0, paused: 0, total: 0 };
     const data = JSON.parse(fs.readFileSync(GI_DATA_FILE, "utf8"));
     const regs = data.registros || [];
-    
+
     const active = regs.filter(r => r.active).length;
     const paused = regs.filter(r => !r.active).length;
-    
+
     return { active, paused, total: active + paused };
   } catch {
     return { active: 0, paused: 0, total: 0 };
   }
 }
+
+// ============================================================================
+// PROVEDOR DE MÉTRICAS PARA O NPS OPERACIONAL
+// ============================================================================
+
+function buildGestaoOperationalSnapshot() {
+  const stats =
+    loadStats();
+
+  const giStatus =
+    getGIStatus();
+
+  const weekKey =
+    getWeekKey();
+
+  const previousWeekKey =
+    getPreviousWeekKey(
+      weekKey
+    );
+
+  const current =
+    stats.weeks?.[weekKey] || {
+      entrou: 0,
+      saiu: 0,
+    };
+
+  const previous =
+    stats.weeks?.[previousWeekKey] || {
+      entrou: 0,
+      saiu: 0,
+    };
+
+  const capacityRate =
+    META_GI_TOTAL > 0
+      ? (
+          giStatus.total /
+          META_GI_TOTAL
+        ) *
+        100
+      : 0;
+
+  const activeRate =
+    giStatus.total > 0
+      ? (
+          giStatus.active /
+          giStatus.total
+        ) *
+        100
+      : 0;
+
+  const currentBalance =
+    Number(
+      current.entrou || 0
+    ) -
+    Number(
+      current.saiu || 0
+    );
+
+  const previousBalance =
+    Number(
+      previous.entrou || 0
+    ) -
+    Number(
+      previous.saiu || 0
+    );
+
+  const balanceDifference =
+    currentBalance -
+    previousBalance;
+
+  /*
+   * A capacidade não é utilizada sozinha.
+   *
+   * Uma equipe abaixo da meta ainda pode receber boa nota
+   * caso a maioria esteja ativa e o saldo semanal esteja saudável.
+   */
+  const capacityScore =
+    Math.min(
+      100,
+      capacityRate
+    );
+
+  const balanceScore =
+    currentBalance > 0
+      ? 100
+      : currentBalance === 0
+        ? 75
+        : Math.max(
+            0,
+            75 +
+            currentBalance * 15
+          );
+
+  const score =
+    capacityScore * 0.35 +
+    activeRate * 0.4 +
+    balanceScore * 0.25;
+
+  const positivePoints = [];
+  const attentionPoints = [];
+  const recommendations = [];
+
+  if (activeRate >= 80) {
+    positivePoints.push(
+      `${activeRate.toFixed(1)}% dos controles cadastrados estão ativos.`
+    );
+  }
+
+  if (currentBalance > 0) {
+    positivePoints.push(
+      `A Gestão cresceu em ${currentBalance} controle(s) nesta semana.`
+    );
+  }
+
+  if (capacityRate < 60) {
+    attentionPoints.push(
+      `A Gestão possui ${giStatus.total} de ${META_GI_TOTAL} controles previstos, equivalente a ${capacityRate.toFixed(1)}% da capacidade planejada.`
+    );
+  }
+
+  if (giStatus.paused > 0) {
+    attentionPoints.push(
+      `${giStatus.paused} controle(s) estão pausados atualmente.`
+    );
+  }
+
+  if (current.saiu > current.entrou) {
+    attentionPoints.push(
+      `Os desligamentos superaram as contratações nesta semana: ${current.saiu} saída(s) contra ${current.entrou} entrada(s).`
+    );
+  }
+
+  if (capacityRate < 100) {
+    recommendations.push(
+      `A Gestão ainda pode crescer em ${Math.max(0, META_GI_TOTAL - giStatus.total)} controle(s), mantendo o padrão de atividade atual.`
+    );
+  }
+
+  if (giStatus.paused > 0) {
+    recommendations.push(
+      "Revisar os controles pausados e verificar quais possuem previsão de retorno."
+    );
+  }
+
+  if (!positivePoints.length) {
+    positivePoints.push(
+      "A Gestão permanece sendo acompanhada por registros reais de contratação, desligamento, atividade e pausa."
+    );
+  }
+
+  if (!attentionPoints.length) {
+    attentionPoints.push(
+      "Nenhum ponto crítico dominante foi identificado na Gestão."
+    );
+  }
+
+  if (!recommendations.length) {
+    recommendations.push(
+      "Manter o acompanhamento da capacidade e do equilíbrio entre entradas e desligamentos."
+    );
+  }
+
+  return {
+    id:
+      "gestao",
+
+    label:
+      "Gestão e Recrutamento",
+
+    available:
+      giStatus.total > 0 ||
+      current.entrou > 0 ||
+      current.saiu > 0,
+
+    score:
+      Math.max(
+        0,
+        Math.min(
+          100,
+          score
+        )
+      ),
+
+    confidence:
+      Math.min(
+        100,
+        50 +
+        giStatus.total * 2
+      ),
+
+    volume:
+      giStatus.total +
+      current.entrou +
+      current.saiu,
+
+    goal:
+      META_GI_TOTAL,
+
+    current:
+      giStatus.total,
+
+    previous:
+      previousBalance,
+
+    difference:
+      balanceDifference,
+
+    positivePoints,
+
+    attentionPoints,
+
+    recommendations,
+
+    details: {
+      total:
+        giStatus.total,
+
+      active:
+        giStatus.active,
+
+      paused:
+        giStatus.paused,
+
+      activeRate,
+
+      capacityRate,
+
+      entered:
+        current.entrou,
+
+      left:
+        current.saiu,
+
+      currentBalance,
+
+      previousBalance,
+    },
+  };
+}
+
+registerOperationalMetricProvider(
+  "gestao",
+  async () =>
+    buildGestaoOperationalSnapshot()
+);
 
 // ================= TIME UTILS =================
 function getWeekKey(date = new Date()) {
