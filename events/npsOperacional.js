@@ -62,6 +62,34 @@ const BUTTON_CURRENT_DM_ID = "sc_nps_operacional_current_dm";
 const BUTTON_PREVIOUS_DM_ID = "sc_nps_operacional_previous_dm";
 const BUTTON_EXECUTIVE_DM_ID = "sc_nps_operacional_executive_dm";
 
+/*
+ * Estas categorias somente podem influenciar o NPS quando
+ * o respectivo sistema entregar uma métrica operacional real.
+ *
+ * O arquivo consolidado continuará fornecendo volume e histórico,
+ * mas não poderá transformar quantidade em desempenho positivo
+ * automaticamente.
+ */
+const PROVIDER_REQUIRED_CATEGORY_IDS = new Set([
+  "meta_interna",
+  "desempenho_geral",
+  "participacao_equipe",
+  "registro_manager",
+  "social_media",
+  "gestao",
+  "bate_ponto",
+  "presencas",
+  "alinhamentos",
+  "organizacoes",
+  "pagamentos",
+  "eventos",
+  "quiz",
+  "comunidade",
+  "ausencias",
+  "qualidade",
+  "tempo_resposta",
+]);
+
 const ALLOWED_MANAGE_USERS = new Set([
   "660311795327828008",
   "1262262852949905408",
@@ -3871,6 +3899,64 @@ const previous =
     }
   );
 
+/*
+ * Remove as notas genéricas das categorias que exigem
+ * dados reais fornecidos pelos próprios sistemas.
+ *
+ * Os totais consolidados permanecem guardados em raw,
+ * mas não participam do NPS até existir um provedor válido.
+ */
+for (const category of current.categories) {
+  if (
+    !PROVIDER_REQUIRED_CATEGORY_IDS.has(
+      category.categoryId
+    )
+  ) {
+    continue;
+  }
+
+  category.hasData = false;
+  category.score = null;
+
+  category.productivityScore = null;
+  category.qualityScore = null;
+  category.completionScore = null;
+
+  category.raw = {
+    ...category.raw,
+    awaitingProvider: true,
+  };
+}
+
+/*
+ * A semana anterior também não deve utilizar uma nota
+ * genérica para comparar com uma métrica real da semana atual.
+ *
+ * A comparação será liberada quando o provedor daquele módulo
+ * também entregar seu histórico próprio.
+ */
+for (const category of previous.categories) {
+  if (
+    !PROVIDER_REQUIRED_CATEGORY_IDS.has(
+      category.categoryId
+    )
+  ) {
+    continue;
+  }
+
+  category.hasData = false;
+  category.score = null;
+
+  category.productivityScore = null;
+  category.qualityScore = null;
+  category.completionScore = null;
+
+  category.raw = {
+    ...category.raw,
+    awaitingProvider: true,
+  };
+}
+
 for (
   const providerMetric of
   providerCollection.results
@@ -3898,6 +3984,7 @@ for (
   }
 
   category.hasData = true;
+
   category.score =
     clamp(
       Number(
@@ -3920,6 +4007,7 @@ for (
         )
       ),
 
+    awaitingProvider: false,
     providerMetric,
   };
 }

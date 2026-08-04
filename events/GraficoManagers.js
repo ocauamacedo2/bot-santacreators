@@ -27,6 +27,10 @@ import {
   TextInputStyle,
 } from "discord.js";
 
+import {
+  registerOperationalMetricProvider,
+} from "../utils/operationalMetricsHub.js";
+
 // ✅ MODULE GUARD: Evita que o sistema de gráficos inicialize duplicado na memória
 const __GM_DASH_SKIP__ = Boolean(globalThis.__GM_DASH_ALREADY_BOOTSTRAPPED__);
 if (__GM_DASH_SKIP__) {
@@ -313,10 +317,445 @@ function safeNum(n) {
 
 function sumBucket(obj) {
   if (!obj || typeof obj !== "object") return 0;
+
   let s = 0;
-  for (const k of Object.keys(obj)) s += safeNum(obj[k]);
+
+  for (const k of Object.keys(obj)) {
+    s += safeNum(obj[k]);
+  }
+
   return s;
 }
+
+// ============================================================================
+// MÉTRICA OPERACIONAL — REGISTRO MANAGER
+// ============================================================================
+
+function clampOperationalScore(
+  value,
+  minimum = 0,
+  maximum = 100
+) {
+  return Math.max(
+    minimum,
+    Math.min(
+      maximum,
+      safeNum(value)
+    )
+  );
+}
+
+function buildRegistroManagerOperationalMetric() {
+  const stats =
+    loadWeeklyStats();
+
+  const {
+    weekKey:
+      currentWeekKey,
+  } =
+    getCurrentWeekSP();
+
+  const previousWeekKey =
+    getPrevWeekKey();
+
+  const currentWeek =
+    stats.weeks?.[
+      currentWeekKey
+    ] || {};
+
+  const previousWeek =
+    stats.weeks?.[
+      previousWeekKey
+    ] || {};
+
+  /*
+   * approvedForManager representa os registros
+   * aprovados que alimentam o dashboard semanal.
+   */
+  const currentApproved =
+    sumBucket(
+      currentWeek.approvedForManager
+    );
+
+  const currentRejected =
+    sumBucket(
+      currentWeek.rejectedForManager
+    );
+
+  const currentCreated =
+    sumBucket(
+      currentWeek.createdBy
+    );
+
+  const previousApproved =
+    sumBucket(
+      previousWeek.approvedForManager
+    );
+
+  const previousRejected =
+    sumBucket(
+      previousWeek.rejectedForManager
+    );
+
+  /*
+   * A meta real é definida pelo próprio sistema:
+   *
+   * • mínimo absoluto de 40;
+   * • ou semana passada menos 8%;
+   * • utiliza o maior dos dois valores.
+   */
+  const smartGoal =
+    getSmartWeeklyGoal(
+      previousApproved
+    );
+
+  const totalDecisions =
+    currentApproved +
+    currentRejected;
+
+  const approvalRate =
+    totalDecisions > 0
+      ? (
+          currentApproved /
+          totalDecisions
+        ) *
+        100
+      : 0;
+
+  /*
+   * Progresso final da meta semanal.
+   *
+   * Exemplo:
+   * 37 registros de uma meta de 48
+   * = 77,1%.
+   */
+  const goalCompletion =
+    smartGoal > 0
+      ? clampOperationalScore(
+          (
+            currentApproved /
+            smartGoal
+          ) *
+          100
+        )
+      : 0;
+
+  /*
+   * Progresso esperado conforme o momento da semana.
+   *
+   * Usa domingo como início e sábado como encerramento.
+   */
+  const now =
+    nowInSP();
+
+  const dayOfWeek =
+    now.getUTCDay();
+
+  const minutesToday =
+    now.getUTCHours() * 60 +
+    now.getUTCMinutes();
+
+  const elapsedWeek =
+    dayOfWeek +
+    minutesToday / 1440;
+
+  const expectedProgress =
+    clampOperationalScore(
+      elapsedWeek / 7,
+      8,
+      100
+    ) / 100;
+
+  const expectedApprovedNow =
+    smartGoal *
+    expectedProgress;
+
+  const paceScore =
+    expectedApprovedNow > 0
+      ? clampOperationalScore(
+          (
+            currentApproved /
+            expectedApprovedNow
+          ) *
+          100
+        )
+      : 0;
+
+  /*
+   * Comparativo com a semana anterior.
+   *
+   * Este arquivo possui o fechamento semanal,
+   * mas ainda não guarda snapshots por horário.
+   * Portanto, o comparativo exato de quarta 20h
+   * será implementado futuramente com snapshots.
+   */
+  const historicalScore =
+    previousApproved > 0
+      ? clampOperationalScore(
+          (
+            currentApproved /
+            previousApproved
+          ) *
+          100
+        )
+      : (
+          currentApproved > 0
+            ? 75
+            : 0
+        );
+
+  /*
+   * Distribuição do trabalho.
+   *
+   * Evita premiar uma semana em que quase todos os
+   * registros ficaram concentrados em uma única pessoa.
+   */
+  const byManager =
+    currentWeek.approvedForManager || {};
+
+  const activeManagers =
+    Object.values(
+      byManager
+    ).filter(
+      amount =>
+        safeNum(amount) > 0
+    ).length;
+
+  const largestContribution =
+    Math.max(
+      0,
+      ...Object.values(
+        byManager
+      ).map(
+        safeNum
+      )
+    );
+
+  const concentrationRate =
+    currentApproved > 0
+      ? (
+          largestContribution /
+          currentApproved
+        ) *
+        100
+      : 100;
+
+  const distributionScore =
+    currentApproved <= 0
+      ? 0
+      : clampOperationalScore(
+          100 -
+          Math.max(
+            0,
+            concentrationRate - 35
+          ) *
+          1.35
+        );
+
+  /*
+   * Nota final do Registro Manager:
+   *
+   * 45% cumprimento da meta dinâmica;
+   * 20% ritmo esperado para o momento da semana;
+   * 20% taxa de aprovação;
+   * 10% comparação com a semana anterior;
+   *  5% distribuição do trabalho.
+   *
+   * A meta completa continua importante mesmo quando
+   * a equipe está adiantada no começo da semana.
+   */
+  const score =
+    goalCompletion * 0.45 +
+    paceScore * 0.20 +
+    approvalRate * 0.20 +
+    historicalScore * 0.10 +
+    distributionScore * 0.05;
+
+  const difference =
+    currentApproved -
+    previousApproved;
+
+  const positivePoints = [];
+  const attentionPoints = [];
+  const recommendations = [];
+
+  if (paceScore >= 100) {
+    positivePoints.push(
+      `O Registro Manager está adiantado em relação ao ritmo esperado para o momento atual da semana.`
+    );
+  }
+
+  if (approvalRate >= 90) {
+    positivePoints.push(
+      `A taxa de aprovação está em ${approvalRate.toFixed(1)}%, indicando boa qualidade dos registros concluídos.`
+    );
+  }
+
+  if (activeManagers >= 3) {
+    positivePoints.push(
+      `${activeManagers} responsáveis contribuíram com registros aprovados nesta semana.`
+    );
+  }
+
+  if (goalCompletion < 100) {
+    attentionPoints.push(
+      `Foram concluídos ${currentApproved} de ${smartGoal} registros esperados, equivalente a ${goalCompletion.toFixed(1)}% da meta dinâmica.`
+    );
+  }
+
+  if (
+    previousApproved > 0 &&
+    currentApproved <
+      previousApproved
+  ) {
+    attentionPoints.push(
+      `O total atual está ${Math.abs(difference)} registro(s) abaixo dos ${previousApproved} registros da semana anterior.`
+    );
+  }
+
+  if (currentRejected > 0) {
+    attentionPoints.push(
+      `${currentRejected} registro(s) foram reprovados nesta semana.`
+    );
+  }
+
+  if (concentrationRate > 50) {
+    attentionPoints.push(
+      `${concentrationRate.toFixed(1)}% dos registros aprovados ficaram concentrados no responsável com maior produção.`
+    );
+  }
+
+  const missingToGoal =
+    Math.max(
+      0,
+      smartGoal -
+      currentApproved
+    );
+
+  if (missingToGoal > 0) {
+    recommendations.push(
+      `Ainda são necessários ${missingToGoal} registro(s) aprovados para alcançar a meta dinâmica de ${smartGoal}.`
+    );
+  }
+
+  if (concentrationRate > 50) {
+    recommendations.push(
+      "Distribuir melhor os registros entre Managers, Coordenação e responsáveis para reduzir a concentração operacional."
+    );
+  }
+
+  if (currentRejected > 0) {
+    recommendations.push(
+      "Revisar os motivos das reprovações para evitar reincidências nos próximos registros."
+    );
+  }
+
+  if (!positivePoints.length) {
+    positivePoints.push(
+      "O Registro Manager possui dados semanais suficientes para acompanhar meta, qualidade e participação."
+    );
+  }
+
+  if (!attentionPoints.length) {
+    attentionPoints.push(
+      "Nenhum problema crítico dominante foi identificado no Registro Manager."
+    );
+  }
+
+  if (!recommendations.length) {
+    recommendations.push(
+      "Manter o ritmo atual e acompanhar a meta dinâmica até o encerramento da semana."
+    );
+  }
+
+  return {
+    id:
+      "registro_manager",
+
+    label:
+      "Registro Manager",
+
+    available:
+      currentApproved > 0 ||
+      currentRejected > 0 ||
+      currentCreated > 0,
+
+    score:
+      clampOperationalScore(
+        score
+      ),
+
+    confidence:
+      clampOperationalScore(
+        45 +
+        totalDecisions * 2
+      ),
+
+    volume:
+      Math.max(
+        currentCreated,
+        totalDecisions,
+        currentApproved
+      ),
+
+    goal:
+      smartGoal,
+
+    current:
+      currentApproved,
+
+    previous:
+      previousApproved,
+
+    difference,
+
+    positivePoints,
+
+    attentionPoints,
+
+    recommendations,
+
+    details: {
+      currentWeekKey,
+      previousWeekKey,
+
+      minimumGoal:
+        WEEKLY_GOAL,
+
+      smartGoal,
+
+      previousReductionPercent:
+        WEEKLY_GOAL_PREV_REDUCTION_PCT,
+
+      currentCreated,
+      currentApproved,
+      currentRejected,
+
+      previousApproved,
+      previousRejected,
+
+      goalCompletion,
+      expectedProgress,
+      expectedApprovedNow,
+      paceScore,
+
+      approvalRate,
+      historicalScore,
+
+      activeManagers,
+      largestContribution,
+      concentrationRate,
+      distributionScore,
+    },
+  };
+}
+
+registerOperationalMetricProvider(
+  "registro_manager",
+  async () =>
+    buildRegistroManagerOperationalMetric()
+);
+
 function topN(bucketObj, n = 3) {
   return Object.entries(bucketObj || {})
     .map(([id, val]) => ({ id: String(id), v: safeNum(val) }))
