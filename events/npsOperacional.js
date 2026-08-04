@@ -41,16 +41,22 @@ import {
 const TZ = "America/Sao_Paulo";
 
 const NPS_DASHBOARD_CHANNEL_ID = "1534295811117154404";
+
+// Painel executivo completo, organizado em vários embeds.
+const NPS_EXECUTIVE_CHANNEL_ID = "1534315364152905959";
+
 const NPS_WEEKLY_REPORT_CHANNEL_ID = "1387864036259004436";
 
 const ROLE_LIDER_ID = "1353858422063239310";
 const ROLE_CIDADAO_ID = "1262978759922028575";
 
 const NPS_DASH_MARKER = "SC_NPS_OPERACIONAL::V1";
+const NPS_EXECUTIVE_MARKER = "SC_NPS_EXECUTIVO::V1";
 
 const BUTTON_REFRESH_ID = "sc_nps_operacional_refresh";
 const BUTTON_CURRENT_DM_ID = "sc_nps_operacional_current_dm";
 const BUTTON_PREVIOUS_DM_ID = "sc_nps_operacional_previous_dm";
+const BUTTON_EXECUTIVE_DM_ID = "sc_nps_operacional_executive_dm";
 
 const ALLOWED_MANAGE_USERS = new Set([
   "660311795327828008",
@@ -357,7 +363,11 @@ function createEmptyState() {
   return {
     version: 1,
 
+    // Mensagem do painel rápido.
     dashboardMessageId: null,
+
+    // Mensagem do painel executivo completo.
+    executiveDashboardMessageId: null,
 
     weeks: {},
 
@@ -367,6 +377,7 @@ function createEmptyState() {
       createdAt: Date.now(),
       updatedAt: Date.now(),
       lastDashboardUpdateAt: null,
+      lastExecutiveDashboardUpdateAt: null,
       lastAutomaticReportWeek: null,
     },
   };
@@ -380,6 +391,7 @@ function loadState() {
 
   state.version ||= 1;
   state.dashboardMessageId ||= null;
+  state.executiveDashboardMessageId ||= null;
   state.weeks ||= {};
   state.pendingOperations ||= {};
 
@@ -2968,58 +2980,44 @@ function buildDashboardEmbed({
       config
     );
 
-  const previousClassification =
-    getClassification(
-      previous.rawScore,
-      config
-    );
+  const difference =
+    diagnosis.generalDifference;
 
-  const arrow =
-    diagnosis.generalDifference > 1
-      ? "⬆️"
-      : (
-          diagnosis.generalDifference < -1
-            ? "⬇️"
-            : "➡️"
-        );
+  const movementEmoji =
+    difference > 1
+      ? "📈"
+      : difference < -1
+        ? "📉"
+        : "➡️";
+
+  const movementText =
+    difference > 1
+      ? `melhora de ${Math.abs(difference).toFixed(1)} pontos`
+      : difference < -1
+        ? `queda de ${Math.abs(difference).toFixed(1)} pontos`
+        : "resultado praticamente estável";
+
+  const validCategories =
+    current.validCategories
+      .slice()
+      .sort(
+        (a, b) =>
+          b.score - a.score
+      );
+
+  const strongest =
+    validCategories[0] || null;
+
+  const weakest =
+    validCategories[
+      validCategories.length - 1
+    ] || null;
 
   const categoryLines =
-    current.categories
-      .filter(
-        category =>
-          config.categories[
-            category.categoryId
-          ]?.enabled !== false
-      )
-      .sort(
-        (a, b) => {
-          if (
-            a.score == null &&
-            b.score == null
-          ) {
-            return 0;
-          }
-
-          if (a.score == null) {
-            return 1;
-          }
-
-          if (b.score == null) {
-            return -1;
-          }
-
-          return b.score - a.score;
-        }
-      )
+    validCategories
+      .slice(0, 8)
       .map(
         category => {
-          if (!category.hasData) {
-            return (
-              `⚪ **${category.label}**\n` +
-              "└ Amostra insuficiente"
-            );
-          }
-
           const categoryClassification =
             getClassification(
               category.score,
@@ -3033,92 +3031,44 @@ function buildDashboardEmbed({
                 category.categoryId
             );
 
-          const difference =
-            previousCategory?.hasData
-              ? category.score -
-                previousCategory.score
-              : null;
+          let comparisonText =
+            "primeira leitura disponível";
 
-          const changeText =
-            difference == null
-              ? "sem comparativo"
-              : `${formatSigned(difference)} pts`;
+          if (
+            previousCategory?.hasData &&
+            Number.isFinite(
+              previousCategory.score
+            )
+          ) {
+            const categoryDifference =
+              category.score -
+              previousCategory.score;
+
+            comparisonText =
+              categoryDifference > 1
+                ? `subiu ${categoryDifference.toFixed(1)} pts`
+                : categoryDifference < -1
+                  ? `caiu ${Math.abs(categoryDifference).toFixed(1)} pts`
+                  : "permaneceu estável";
+          }
 
           return (
-            `${categoryClassification.emoji} **${category.label}** — ` +
-            `**${category.score.toFixed(1)}%**\n` +
-            `└ ${changeText} • ` +
-            `${category.raw.events} eventos`
+            `${categoryClassification.emoji} ` +
+            `**${category.label}**\n` +
+            `└ **${category.score.toFixed(1)}%** • ` +
+            `${comparisonText} • ` +
+            `${category.raw.events} atividades`
           );
         }
-      );
-
-  const topPositive =
-    diagnosis.strongest[0];
-
-  const topAttention =
-    diagnosis.weakest[0];
-
-  const currentTimestamp =
-    Math.floor(
-      Date.now() / 1000
-    );
-
-  const description = [
-    `\`${NPS_DASH_MARKER}\``,
-    "",
-    `## ${classification.emoji} ${score.toFixed(1)}% — ${classification.label}`,
-    `\`${progressBar(score)}\``,
-    "",
-    `📅 **Semana:** ${current.weekInfo.label}`,
-    `${arrow} **Comparação:** ${formatSigned(diagnosis.generalDifference)} pontos`,
-    `📊 **Semana anterior:** ${previous.rawScore.toFixed(1)}% — ${previousClassification.label}`,
-    `🧠 **Peso atual:** ${(displayed.currentWeight * 100).toFixed(0)}% dados desta semana`,
-    "",
-    `📈 **Tendência:** ${diagnosis.trend}`,
-    "",
-    `🏆 **Destaque:** ${
-      topPositive
-        ? `${topPositive.label} — ${topPositive.score.toFixed(1)}%`
-        : "Aguardando dados"
-    }`,
-    `⚠️ **Maior atenção:** ${
-      topAttention
-        ? `${topAttention.label} — ${topAttention.score.toFixed(1)}%`
-        : "Aguardando dados"
-    }`,
-  ].join("\n");
-
-  const firstCategoryBlock =
-    categoryLines
-      .slice(0, 8)
+      )
       .join("\n\n") ||
-    "Nenhuma categoria possui dados suficientes.";
+    "Ainda não existem categorias com dados suficientes.";
 
-  const secondCategoryBlock =
-    categoryLines
-      .slice(8)
-      .join("\n\n") ||
-    "—";
+  const weekCurrentInfluence =
+    displayed.currentWeight * 100;
 
-  const responseCategory =
-    current.categories.find(
-      category =>
-        category.categoryId ===
-        "tempo_resposta"
-    );
-
-  const responseText =
-    responseCategory?.response
-      ? [
-          `**Média:** ${formatDuration(responseCategory.response.average)}`,
-          `**Mediana:** ${formatDuration(responseCategory.response.median)}`,
-          `**P90:** ${formatDuration(responseCategory.response.p90)}`,
-          `**Mínimo:** ${formatDuration(responseCategory.response.minimum)}`,
-          `**Máximo:** ${formatDuration(responseCategory.response.maximum)}`,
-          `**Amostras:** ${responseCategory.response.samples}`,
-        ].join("\n")
-      : "Ainda não existem pares suficientes entre criação e conclusão para calcular os tempos.";
+  const previousInfluence =
+    displayed.historicalWeight * 100;
 
   return new EmbedBuilder()
     .setColor(
@@ -3132,92 +3082,540 @@ function buildDashboardEmbed({
               ? 0xe67e22
               : 0xed4245
     )
+    .setAuthor({
+      name:
+        "SantaCreators • Visão rápida da operação",
+    })
     .setTitle(
-      "📊 NPS Operacional — SantaCreators"
+      `${classification.emoji} Saúde operacional: ${score.toFixed(1)}%`
     )
     .setDescription(
-      description
+      [
+        `\`${NPS_DASH_MARKER}\``,
+        "",
+        `### ${classification.label}`,
+        `\`${progressBar(score, 14)}\``,
+        "",
+        `📅 **Período analisado:** ${current.weekInfo.label}`,
+        `${movementEmoji} **Comparação:** ${movementText}`,
+        `📊 **Semana passada:** ${previous.rawScore.toFixed(1)}%`,
+        "",
+        `A nota atual utiliza **${weekCurrentInfluence.toFixed(0)}% de informações desta semana** e **${previousInfluence.toFixed(0)}% da semana passada** para evitar uma queda artificial na virada semanal.`,
+      ].join("\n")
     )
     .addFields(
       {
         name:
-          "📋 Categorias — Parte 1",
+          "🏆 Melhor resultado",
         value:
-          truncate(
-            firstCategoryBlock,
-            1024
-          ),
-        inline:
-          false,
-      },
-      {
-        name:
-          "📋 Categorias — Parte 2",
-        value:
-          truncate(
-            secondCategoryBlock,
-            1024
-          ),
-        inline:
-          false,
-      },
-      {
-        name:
-          "⏱️ Eficiência e tempo de resposta",
-        value:
-          truncate(
-            responseText,
-            1024
-          ),
-        inline:
-          false,
-      },
-      {
-        name:
-          "👑 Liderança",
-        value: [
-          `**Entradas:** ${current.leadership.entered}`,
-          `**Remoções:** ${current.leadership.removed}`,
-          `**Saídas do servidor:** ${current.leadership.leftServer}`,
-          `**Retornos:** ${current.leadership.returned}`,
-          `**Retenção estimada:** ${current.leadership.retention.toFixed(1)}%`,
-        ].join("\n"),
+          strongest
+            ? `**${strongest.label}**\n${strongest.score.toFixed(1)}%`
+            : "Aguardando informações.",
         inline:
           true,
       },
       {
         name:
-          "📡 Dados utilizados",
-        value: [
-          `**Eventos atuais:** ${current.totalEvents}`,
-          `**Categorias válidas:** ${current.validCategories.length}`,
-          `**Progresso temporal:** ${(current.expectedProgress * 100).toFixed(0)}%`,
-          `**Histórico no cálculo:** ${(displayed.historicalWeight * 100).toFixed(0)}%`,
-        ].join("\n"),
+          "⚠️ Maior atenção",
+        value:
+          weakest
+            ? `**${weakest.label}**\n${weakest.score.toFixed(1)}%`
+            : "Aguardando informações.",
         inline:
           true,
       },
       {
         name:
-          "🧠 Diagnóstico rápido",
+          "📌 Situação da semana",
+        value:
+          diagnosis.trend,
+        inline:
+          false,
+      },
+      {
+        name:
+          "📊 Resultados por área",
         value:
           truncate(
-            diagnosis.attentions[0],
+            categoryLines,
             1024
           ),
+        inline:
+          false,
+      },
+      {
+        name:
+          "📡 Informações utilizadas",
+        value: [
+          `**Atividades analisadas:** ${current.totalEvents}`,
+          `**Áreas com informações suficientes:** ${current.validCategories.length}`,
+          `**Semana concluída:** ${(current.expectedProgress * 100).toFixed(0)}%`,
+        ].join("\n"),
         inline:
           false,
       }
     )
     .setFooter({
       text:
-        "NPS Operacional SantaCreators • Atualização automática",
+        "Atualização automática • Use os botões abaixo para consultar os relatórios",
     })
-    .setTimestamp(
-      new Date(
-        currentTimestamp * 1000
-      )
+    .setTimestamp();
+}
+
+// ============================================================================
+// PAINEL EXECUTIVO COMPLETO
+// ============================================================================
+
+function buildExecutiveDashboardEmbeds({
+  current,
+  previous,
+  displayed,
+  diagnosis,
+  config,
+}) {
+  const score =
+    displayed.score;
+
+  const classification =
+    getClassification(
+      score,
+      config
     );
+
+  const difference =
+    diagnosis.generalDifference;
+
+  const validCategories =
+    current.validCategories
+      .slice()
+      .sort(
+        (a, b) =>
+          b.score - a.score
+      );
+
+  const strongest =
+    validCategories.slice(
+      0,
+      3
+    );
+
+  const weakest =
+    validCategories
+      .slice()
+      .sort(
+        (a, b) =>
+          a.score - b.score
+      )
+      .slice(
+        0,
+        3
+      );
+
+  const movementText =
+    difference > 1
+      ? `A operação melhorou ${difference.toFixed(1)} pontos em relação à semana passada.`
+      : difference < -1
+        ? `A operação caiu ${Math.abs(difference).toFixed(1)} pontos em relação à semana passada.`
+        : "A operação permanece próxima do resultado da semana passada.";
+
+  const currentInfluence =
+    displayed.currentWeight * 100;
+
+  const previousInfluence =
+    displayed.historicalWeight * 100;
+
+  const overviewEmbed =
+    new EmbedBuilder()
+      .setColor(
+        score >= 90
+          ? 0x2ecc71
+          : score >= 80
+            ? 0x57f287
+            : score >= 70
+              ? 0xf1c40f
+              : score >= 60
+                ? 0xe67e22
+                : 0xed4245
+      )
+      .setAuthor({
+        name:
+          "SantaCreators • Centro de Inteligência Operacional",
+      })
+      .setTitle(
+        "📊 Visão geral da operação"
+      )
+      .setDescription(
+        [
+          `\`${NPS_EXECUTIVE_MARKER}\``,
+          "",
+          `## ${classification.emoji} ${score.toFixed(1)}% — ${classification.label}`,
+          `\`${progressBar(score, 18)}\``,
+          "",
+          `📅 **Semana analisada:** ${current.weekInfo.label}`,
+          `📌 **Leitura geral:** ${movementText}`,
+          `📈 **Direção da semana:** ${diagnosis.trend}`,
+          "",
+          "A nota reúne produtividade, qualidade, participação, liderança, aprovações e demais atividades registradas pelos sistemas da SantaCreators.",
+        ].join("\n")
+      )
+      .addFields(
+        {
+          name:
+            "🗓️ Semana atual",
+          value:
+            `${current.rawScore.toFixed(1)}%`,
+          inline:
+            true,
+        },
+        {
+          name:
+            "📆 Semana passada",
+          value:
+            `${previous.rawScore.toFixed(1)}%`,
+          inline:
+            true,
+        },
+        {
+          name:
+            "🔄 Diferença",
+          value:
+            `${formatSigned(difference)} pontos`,
+          inline:
+            true,
+        },
+        {
+          name:
+            "🧠 Como a nota foi formada",
+          value: [
+            `**Informações desta semana:** ${currentInfluence.toFixed(0)}%`,
+            `**Referência da semana passada:** ${previousInfluence.toFixed(0)}%`,
+            "",
+            "Essa combinação evita que a nota despenque no começo de uma nova semana.",
+          ].join("\n"),
+          inline:
+            false,
+        },
+        {
+          name:
+            "📡 Tamanho da análise",
+          value: [
+            `**Atividades consideradas:** ${current.totalEvents}`,
+            `**Áreas avaliadas:** ${current.validCategories.length}`,
+            `**Progresso da semana:** ${(current.expectedProgress * 100).toFixed(0)}%`,
+          ].join("\n"),
+          inline:
+            false,
+        }
+      )
+      .setFooter({
+        text:
+          "Painel executivo • Atualização automática",
+      })
+      .setTimestamp();
+
+  const categoryLines =
+    validCategories
+      .map(
+        category => {
+          const status =
+            getClassification(
+              category.score,
+              config
+            );
+
+          const previousCategory =
+            previous.categories.find(
+              item =>
+                item.categoryId ===
+                category.categoryId
+            );
+
+          let comparisonText =
+            "sem comparação anterior";
+
+          if (
+            previousCategory?.hasData &&
+            Number.isFinite(
+              previousCategory.score
+            )
+          ) {
+            const categoryDifference =
+              category.score -
+              previousCategory.score;
+
+            comparisonText =
+              categoryDifference > 1
+                ? `cresceu ${categoryDifference.toFixed(1)} pontos`
+                : categoryDifference < -1
+                  ? `caiu ${Math.abs(categoryDifference).toFixed(1)} pontos`
+                  : "permaneceu estável";
+          }
+
+          return (
+            `${status.emoji} **${category.label} — ${category.score.toFixed(1)}%**\n` +
+            `└ ${comparisonText} • ${category.raw.events} atividades analisadas`
+          );
+        }
+      )
+      .join("\n\n") ||
+    "Ainda não existem áreas com informações suficientes.";
+
+  const categoriesEmbed =
+    new EmbedBuilder()
+      .setColor(
+        0x5865f2
+      )
+      .setTitle(
+        "🏢 Resultado por área"
+      )
+      .setDescription(
+        "Cada área possui sua própria nota. Isso permite descobrir exatamente onde a operação está forte e onde precisa de acompanhamento."
+      )
+      .addFields(
+        {
+          name:
+            "📋 Áreas avaliadas",
+          value:
+            truncate(
+              categoryLines,
+              4000
+            ),
+          inline:
+            false,
+        }
+      )
+      .setFooter({
+        text:
+          "As áreas sem dados suficientes não reduzem a nota geral",
+      });
+
+  const strongestLines =
+    strongest.length
+      ? strongest
+          .map(
+            (
+              category,
+              index
+            ) =>
+              `${index + 1}. **${category.label}** — ${category.score.toFixed(1)}%`
+          )
+          .join("\n")
+      : "Ainda não existem destaques suficientes.";
+
+  const weakestLines =
+    weakest.length
+      ? weakest
+          .map(
+            (
+              category,
+              index
+            ) =>
+              `${index + 1}. **${category.label}** — ${category.score.toFixed(1)}%`
+          )
+          .join("\n")
+      : "Nenhum ponto de atenção identificado.";
+
+  const improvedLines =
+    diagnosis.improved.length
+      ? diagnosis.improved
+          .slice(
+            0,
+            5
+          )
+          .map(
+            category =>
+              `📈 **${category.label}:** aumentou ${category.difference.toFixed(1)} pontos`
+          )
+          .join("\n")
+      : "Nenhuma melhora comparável foi identificada até o momento.";
+
+  const worsenedLines =
+    diagnosis.worsened.length
+      ? diagnosis.worsened
+          .slice(
+            0,
+            5
+          )
+          .map(
+            category =>
+              `📉 **${category.label}:** caiu ${Math.abs(category.difference).toFixed(1)} pontos`
+          )
+          .join("\n")
+      : "Nenhuma queda comparável foi identificada até o momento.";
+
+  const performanceEmbed =
+    new EmbedBuilder()
+      .setColor(
+        0xf1c40f
+      )
+      .setTitle(
+        "📈 Evolução e impacto no resultado"
+      )
+      .addFields(
+        {
+          name:
+            "🏆 Áreas com melhor desempenho",
+          value:
+            strongestLines,
+          inline:
+            false,
+        },
+        {
+          name:
+            "⚠️ Áreas que mais precisam de atenção",
+          value:
+            weakestLines,
+          inline:
+            false,
+        },
+        {
+          name:
+            "⬆️ O que melhorou",
+          value:
+            truncate(
+              improvedLines,
+              1024
+            ),
+          inline:
+            false,
+        },
+        {
+          name:
+            "⬇️ O que piorou",
+          value:
+            truncate(
+              worsenedLines,
+              1024
+            ),
+          inline:
+            false,
+        }
+      );
+
+  const positiveLines =
+    diagnosis.positives
+      .map(
+        text =>
+          `✅ ${text}`
+      )
+      .join("\n\n");
+
+  const attentionLines =
+    diagnosis.attentions
+      .map(
+        text =>
+          `⚠️ ${text}`
+      )
+      .join("\n\n");
+
+  const recommendationLines =
+    diagnosis.recommendations
+      .map(
+        text =>
+          `🎯 ${text}`
+      )
+      .join("\n\n");
+
+  const responseCategory =
+    current.categories.find(
+      category =>
+        category.categoryId ===
+        "tempo_resposta"
+    );
+
+  const responseText =
+    responseCategory?.response
+      ? [
+          `**Tempo médio:** ${formatDuration(responseCategory.response.average)}`,
+          `**Tempo mais comum:** ${formatDuration(responseCategory.response.median)}`,
+          `**90% dos casos concluídos em até:** ${formatDuration(responseCategory.response.p90)}`,
+          `**Mais rápido:** ${formatDuration(responseCategory.response.minimum)}`,
+          `**Mais demorado:** ${formatDuration(responseCategory.response.maximum)}`,
+          `**Processos analisados:** ${responseCategory.response.samples}`,
+        ].join("\n")
+      : "Ainda não existem registros suficientes ligando a criação de uma solicitação à sua conclusão.";
+
+  const analysisEmbed =
+    new EmbedBuilder()
+      .setColor(
+        0x3498db
+      )
+      .setTitle(
+        "🧠 Leitura inteligente da semana"
+      )
+      .setDescription(
+        "Esta seção transforma os números em uma leitura simples para apoiar as decisões da gestão."
+      )
+      .addFields(
+        {
+          name:
+            "🟢 O que está funcionando bem",
+          value:
+            truncate(
+              positiveLines,
+              1024
+            ),
+          inline:
+            false,
+        },
+        {
+          name:
+            "🟠 O que precisa ser acompanhado",
+          value:
+            truncate(
+              attentionLines,
+              1024
+            ),
+          inline:
+            false,
+        },
+        {
+          name:
+            "🎯 Próximas ações recomendadas",
+          value:
+            truncate(
+              recommendationLines,
+              1024
+            ),
+          inline:
+            false,
+        },
+        {
+          name:
+            "⏱️ Agilidade dos processos",
+          value:
+            truncate(
+              responseText,
+              1024
+            ),
+          inline:
+            false,
+        },
+        {
+          name:
+            "👑 Movimento da liderança",
+          value: [
+            `**Novos líderes:** ${current.leadership.entered}`,
+            `**Cargos removidos:** ${current.leadership.removed}`,
+            `**Líderes que saíram do servidor:** ${current.leadership.leftServer}`,
+            `**Retornos:** ${current.leadership.returned}`,
+            `**Permanência estimada:** ${current.leadership.retention.toFixed(1)}%`,
+          ].join("\n"),
+          inline:
+            false,
+        }
+      )
+      .setFooter({
+        text:
+          "As análises são atualizadas conforme novas atividades são registradas",
+      });
+
+  return [
+    overviewEmbed,
+    categoriesEmbed,
+    performanceEmbed,
+    analysisEmbed,
+  ];
 }
 
 function buildDashboardComponents() {
@@ -3229,7 +3627,7 @@ function buildDashboardComponents() {
             BUTTON_REFRESH_ID
           )
           .setLabel(
-            "Atualizar painel"
+            "Atualizar dados"
           )
           .setEmoji("🔄")
           .setStyle(
@@ -3241,9 +3639,9 @@ function buildDashboardComponents() {
             BUTTON_CURRENT_DM_ID
           )
           .setLabel(
-            "Resumo atual no PV"
+            "Semana atual"
           )
-          .setEmoji("📩")
+          .setEmoji("📊")
           .setStyle(
             ButtonStyle.Success
           ),
@@ -3253,9 +3651,21 @@ function buildDashboardComponents() {
             BUTTON_PREVIOUS_DM_ID
           )
           .setLabel(
-            "Resumo anterior no PV"
+            "Semana passada"
           )
           .setEmoji("📅")
+          .setStyle(
+            ButtonStyle.Secondary
+          ),
+
+        new ButtonBuilder()
+          .setCustomId(
+            BUTTON_EXECUTIVE_DM_ID
+          )
+          .setLabel(
+            "Relatório completo"
+          )
+          .setEmoji("🧠")
           .setStyle(
             ButtonStyle.Secondary
           )
@@ -3332,14 +3742,13 @@ function generateResults() {
 
 async function findExistingDashboardMessage(
   channel,
-  state
+  messageId,
+  marker
 ) {
-  if (
-    state.dashboardMessageId
-  ) {
+  if (messageId) {
     const existing =
       await channel.messages.fetch(
-        state.dashboardMessageId
+        messageId
       ).catch(
         () => null
       );
@@ -3369,7 +3778,7 @@ async function findExistingDashboardMessage(
           safeString(
             embed.description
           ).includes(
-            NPS_DASH_MARKER
+            marker
           )
       )
   ) || null;
@@ -3387,59 +3796,125 @@ async function updateDashboard(
   dashboardUpdating = true;
 
   try {
-    const channel =
-      await client.channels.fetch(
+    const [
+      quickChannel,
+      executiveChannel,
+    ] = await Promise.all([
+      client.channels.fetch(
         NPS_DASHBOARD_CHANNEL_ID
       ).catch(
         () => null
-      );
+      ),
 
-    if (
-      !channel ||
-      !channel.isTextBased()
-    ) {
-      console.error(
-        `[NPS Operacional] Canal do painel inválido: ${NPS_DASHBOARD_CHANNEL_ID}`
-      );
-
-      return;
-    }
+      client.channels.fetch(
+        NPS_EXECUTIVE_CHANNEL_ID
+      ).catch(
+        () => null
+      ),
+    ]);
 
     const results =
       generateResults();
 
-    const embed =
-      buildDashboardEmbed(
-        results
-      );
-
     const components =
       buildDashboardComponents();
 
-    const existing =
-      await findExistingDashboardMessage(
-        channel,
-        results.state
-      );
+    // ==================================================
+    // PAINEL RÁPIDO
+    // ==================================================
 
-    let dashboardMessage;
+    if (
+      quickChannel &&
+      quickChannel.isTextBased()
+    ) {
+      const quickEmbed =
+        buildDashboardEmbed(
+          results
+        );
 
-    if (existing) {
-      dashboardMessage =
-        await existing.edit({
-          embeds: [embed],
-          components,
-        });
+      const existingQuick =
+        await findExistingDashboardMessage(
+          quickChannel,
+          results.state.dashboardMessageId,
+          NPS_DASH_MARKER
+        );
+
+      let quickMessage;
+
+      if (existingQuick) {
+        quickMessage =
+          await existingQuick.edit({
+            embeds: [
+              quickEmbed,
+            ],
+            components,
+          });
+      } else {
+        quickMessage =
+          await quickChannel.send({
+            embeds: [
+              quickEmbed,
+            ],
+            components,
+          });
+      }
+
+      results.state.dashboardMessageId =
+        quickMessage.id;
     } else {
-      dashboardMessage =
-        await channel.send({
-          embeds: [embed],
-          components,
-        });
+      console.error(
+        `[NPS Operacional] Canal rápido inválido: ${NPS_DASHBOARD_CHANNEL_ID}`
+      );
     }
 
-    results.state.dashboardMessageId =
-      dashboardMessage.id;
+    // ==================================================
+    // PAINEL EXECUTIVO
+    // ==================================================
+
+    if (
+      executiveChannel &&
+      executiveChannel.isTextBased()
+    ) {
+      const executiveEmbeds =
+        buildExecutiveDashboardEmbeds(
+          results
+        );
+
+      const existingExecutive =
+        await findExistingDashboardMessage(
+          executiveChannel,
+          results.state.executiveDashboardMessageId,
+          NPS_EXECUTIVE_MARKER
+        );
+
+      let executiveMessage;
+
+      if (existingExecutive) {
+        executiveMessage =
+          await existingExecutive.edit({
+            embeds:
+              executiveEmbeds,
+            components,
+          });
+      } else {
+        executiveMessage =
+          await executiveChannel.send({
+            embeds:
+              executiveEmbeds,
+            components,
+          });
+      }
+
+      results.state.executiveDashboardMessageId =
+        executiveMessage.id;
+
+      results.state.metadata.lastExecutiveDashboardUpdateAt =
+        Date.now();
+    } else {
+      console.error(
+        `[NPS Operacional] Canal executivo inválido: ${NPS_EXECUTIVE_CHANNEL_ID}`
+      );
+    }
 
     results.state.metadata.lastDashboardUpdateAt =
       Date.now();
@@ -3957,6 +4432,7 @@ export async function npsOperacionalHandleInteraction(
     BUTTON_REFRESH_ID,
     BUTTON_CURRENT_DM_ID,
     BUTTON_PREVIOUS_DM_ID,
+    BUTTON_EXECUTIVE_DM_ID,
   ].includes(customId);
 
   if (!isNpsButton) {
@@ -4027,6 +4503,47 @@ export async function npsOperacionalHandleInteraction(
       interaction,
       "previous"
     );
+
+    return true;
+  }
+
+  if (
+    customId ===
+    BUTTON_EXECUTIVE_DM_ID
+  ) {
+    try {
+      const results =
+        generateResults();
+
+      const executiveEmbeds =
+        buildExecutiveDashboardEmbeds(
+          results
+        );
+
+      await interaction.user.send({
+        content:
+          "🧠 **Relatório completo da saúde operacional da SantaCreators**",
+        embeds:
+          executiveEmbeds,
+      });
+
+      await interaction.editReply({
+        content:
+          "✅ O relatório completo foi enviado para o seu privado.",
+      });
+    } catch (error) {
+      const code =
+        error?.code ||
+        error?.rawError?.code ||
+        null;
+
+      await interaction.editReply({
+        content:
+          code === 50007
+            ? "⚠️ O Discord bloqueou o envio no seu privado. Ative as mensagens diretas deste servidor e tente novamente."
+            : `❌ Não consegui enviar o relatório completo.\nErro: \`${truncate(error?.message || error, 500)}\``,
+      });
+    }
 
     return true;
   }
