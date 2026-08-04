@@ -3033,7 +3033,7 @@ function debugText() {
 // MÉTRICA OPERACIONAL — PARTICIPAÇÃO E DISTRIBUIÇÃO DA EQUIPE
 // ============================================================================
 
-async function buildWeeklyRankingOperationalMetric(
+export async function buildWeeklyRankingOperationalMetric(
   context = {}
 ) {
   const client =

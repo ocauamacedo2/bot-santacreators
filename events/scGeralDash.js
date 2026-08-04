@@ -2386,7 +2386,7 @@ function getGeneralExpectedProgress() {
   );
 }
 
-async function buildGeneralDashOperationalMetric(
+export async function buildGeneralDashOperationalMetric(
   context = {}
 ) {
   const client =

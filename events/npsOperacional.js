@@ -38,6 +38,14 @@ import {
   collectOperationalMetrics,
 } from "../utils/operationalMetricsHub.js";
 
+import {
+  buildWeeklyRankingOperationalMetric,
+} from "./scGeralWeeklyRanking.js";
+
+import {
+  buildGeneralDashOperationalMetric,
+} from "./scGeralDash.js";
+
 // ============================================================================
 // CONFIGURAÇÃO PRINCIPAL
 // ============================================================================
@@ -256,14 +264,14 @@ categories: {
 
   desempenho_geral: {
     label: "Ritmo Geral da Operação",
-    weight: 10,
+    weight: 18,
     enabled: true,
     weeklyGoal: 500,
   },
 
   participacao_equipe: {
     label: "Participação da Equipe",
-    weight: 10,
+    weight: 16,
     enabled: true,
     weeklyGoal: 25,
   },
@@ -3850,6 +3858,131 @@ function recalculateWeekResult(
 }
 
 // ============================================================================
+// GARANTIA DAS MÉTRICAS GERAIS
+// ============================================================================
+
+async function ensureCoreOperationalMetrics(
+  providerCollection,
+  context
+) {
+  providerCollection.results ||=
+    [];
+
+  providerCollection.errors ||=
+    [];
+
+  const requiredProviders = [
+    {
+      id:
+        "desempenho_geral",
+
+      label:
+        "Ritmo Geral da Operação",
+
+      provider:
+        buildGeneralDashOperationalMetric,
+    },
+
+    {
+      id:
+        "participacao_equipe",
+
+      label:
+        "Participação da Equipe",
+
+      provider:
+        buildWeeklyRankingOperationalMetric,
+    },
+  ];
+
+  for (
+    const requiredProvider of
+    requiredProviders
+  ) {
+    const existingMetric =
+      providerCollection.results.find(
+        metric =>
+          metric.id ===
+            requiredProvider.id ||
+          metric.providerId ===
+            requiredProvider.id
+      );
+
+    /*
+     * Caso a métrica já tenha sido coletada pelo Hub,
+     * não executa novamente.
+     */
+    if (existingMetric) {
+      continue;
+    }
+
+    try {
+      const metric =
+        await requiredProvider.provider(
+          context
+        );
+
+      if (!metric) {
+        providerCollection.errors.push({
+          providerId:
+            requiredProvider.id,
+
+          message:
+            "O provedor não retornou nenhuma informação.",
+        });
+
+        continue;
+      }
+
+      providerCollection.results.push({
+        providerId:
+          requiredProvider.id,
+
+        ...metric,
+      });
+
+      console.log(
+        `[NPS Operacional] Métrica central recuperada diretamente: ${requiredProvider.id}`,
+        {
+          available:
+            metric.available,
+
+          score:
+            metric.score,
+
+          volume:
+            metric.volume,
+
+          current:
+            metric.current,
+
+          previous:
+            metric.previous,
+        }
+      );
+    } catch (error) {
+      const message =
+        error?.message ||
+        String(error);
+
+      providerCollection.errors.push({
+        providerId:
+          requiredProvider.id,
+
+        message,
+      });
+
+      console.error(
+        `[NPS Operacional] Falha ao recuperar diretamente "${requiredProvider.id}":`,
+        error
+      );
+    }
+  }
+
+  return providerCollection;
+}
+
+// ============================================================================
 // GERAÇÃO DOS RESULTADOS
 // ============================================================================
 
@@ -3861,17 +3994,59 @@ async function generateResults() {
     state
   );
 
+  const providerContext = {
+    client:
+      activeClient,
+
+    currentWeek:
+      getWeekInfo(),
+
+    previousWeek:
+      getPreviousWeekInfo(),
+  };
+
   const providerCollection =
-    await collectOperationalMetrics({
-      client:
-        activeClient,
+    await collectOperationalMetrics(
+      providerContext
+    );
 
-      currentWeek:
-        getWeekInfo(),
+  /*
+   * Garante que as duas métricas gerais mais importantes
+   * sempre participem do cálculo.
+   *
+   * Se o Hub já as coletou, nada será executado novamente.
+   * Se não coletou, o NPS consulta diretamente os módulos.
+   */
+  await ensureCoreOperationalMetrics(
+    providerCollection,
+    providerContext
+  );
 
-      previousWeek:
-        getPreviousWeekInfo(),
-    });
+  console.log(
+    "[NPS Operacional] Resultado da coleta de métricas:",
+    {
+      metrics:
+        providerCollection.results.map(
+          metric => ({
+            id:
+              metric.id ||
+              metric.providerId,
+
+            available:
+              metric.available,
+
+            score:
+              metric.score,
+
+            volume:
+              metric.volume,
+          })
+        ),
+
+      errors:
+        providerCollection.errors,
+    }
+  );
 
   const currentWeekInfo =
     getWeekInfo();
