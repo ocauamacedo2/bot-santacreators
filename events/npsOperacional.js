@@ -103,6 +103,14 @@ const CONFIG_FILE = path.join(
   "sc_nps_operacional_config.json"
 );
 
+// Fonte consolidada gerada pelo Ranking Geral Semanal.
+// Ela contém os registros já existentes da semana atual
+// e de semanas anteriores.
+const GERAL_WEEKLY_SOURCES_FILE = path.join(
+  DATA_DIR,
+  "sc_geral_weekly_rank_sources.json"
+);
+
 function ensureDataDir() {
   try {
     if (!fs.existsSync(DATA_DIR)) {
@@ -543,6 +551,11 @@ function ensureWeek(state, weekInfo) {
 
       categories: {},
 
+      // Totais consolidados vindos do Ranking Geral Semanal.
+      // Estes valores funcionam como uma base mínima.
+      // Eventos recebidos em tempo real não serão somados duas vezes.
+      consolidatedSources: {},
+
       leaders: {
         entered: [],
         removed: [],
@@ -564,6 +577,26 @@ function ensureWeek(state, weekInfo) {
     };
   }
 
+  // Compatibilidade com estados criados antes desta atualização.
+  state.weeks[weekInfo.key].events ||= [];
+  state.weeks[weekInfo.key].categories ||= {};
+  state.weeks[weekInfo.key].consolidatedSources ||= {};
+
+  state.weeks[weekInfo.key].leaders ||= {
+    entered: [],
+    removed: [],
+    leftServer: [],
+    returned: [],
+  };
+
+  state.weeks[weekInfo.key].members ||= {
+    entered: [],
+    left: [],
+  };
+
+  state.weeks[weekInfo.key].approvals ||= [];
+  state.weeks[weekInfo.key].snapshots ||= [];
+
   return state.weeks[weekInfo.key];
 }
 
@@ -576,6 +609,314 @@ function getWeekForTimestamp(state, timestamp) {
     state,
     info
   );
+}
+
+// ============================================================================
+// IMPORTAÇÃO DAS FONTES SEMANAIS EXISTENTES
+// ============================================================================
+
+function normalizeSourceName(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[\s-]+/g, "_");
+}
+
+function resolveConsolidatedCategory(sourceName) {
+  const source = normalizeSourceName(
+    sourceName
+  );
+
+  if (
+    source === "manager" ||
+    source === "managers" ||
+    source === "registro_manager" ||
+    source === "rm"
+  ) {
+    return "registro_manager";
+  }
+
+  if (
+    source.includes("social")
+  ) {
+    return "social_media";
+  }
+
+  if (
+    source === "presenca" ||
+    source === "presencas" ||
+    source === "confirmacao" ||
+    source === "confirmacoes" ||
+    source.includes("presenca")
+  ) {
+    return "presencas";
+  }
+
+  if (
+    source === "bate_ponto" ||
+    source === "bateponto" ||
+    source === "bp" ||
+    source.includes("punch")
+  ) {
+    return "bate_ponto";
+  }
+
+  if (
+    source.includes("alinhamento")
+  ) {
+    return "alinhamentos";
+  }
+
+  if (
+    source.includes("facs") ||
+    source.includes("organizacao") ||
+    source.includes("org")
+  ) {
+    return "organizacoes";
+  }
+
+  if (
+    source.includes("pagamento")
+  ) {
+    return "pagamentos";
+  }
+
+  if (
+    source.includes("quiz") ||
+    source.includes("pergunta")
+  ) {
+    return "quiz";
+  }
+
+  if (
+    source.includes("convite") ||
+    source.includes("lider") ||
+    source.includes("dm_lideres")
+  ) {
+    return "lideranca";
+  }
+
+  if (
+    source.includes("ausencia")
+  ) {
+    return "ausencias";
+  }
+
+  if (
+    source.includes("correcao") ||
+    source.includes("reprovado") ||
+    source.includes("rejeitado")
+  ) {
+    return "qualidade";
+  }
+
+  if (
+    source.includes("evento") ||
+    source.includes("cronograma") ||
+    source.includes("hall") ||
+    source.includes("poder")
+  ) {
+    return "eventos";
+  }
+
+  if (
+    source.includes("entrevista") ||
+    source.includes("comunidade")
+  ) {
+    return "comunidade";
+  }
+
+  if (
+    source.includes("gestao") ||
+    source.startsWith("gi")
+  ) {
+    return "gestao";
+  }
+
+  if (
+    source.includes("venda") ||
+    source.includes("doacao")
+  ) {
+    return "gestao";
+  }
+
+  return null;
+}
+
+function buildConsolidatedCategoryData(
+  sourceWeek
+) {
+  const consolidated = {};
+
+  for (
+    const bySource of Object.values(
+      sourceWeek || {}
+    )
+  ) {
+    if (
+      !bySource ||
+      typeof bySource !== "object"
+    ) {
+      continue;
+    }
+
+    for (
+      const [
+        sourceName,
+        amountRaw,
+      ] of Object.entries(
+        bySource
+      )
+    ) {
+      const amount = Math.max(
+        0,
+        Number(amountRaw || 0)
+      );
+
+      if (
+        !Number.isFinite(amount) ||
+        amount <= 0
+      ) {
+        continue;
+      }
+
+      const categoryId =
+        resolveConsolidatedCategory(
+          sourceName
+        );
+
+      if (!categoryId) {
+        continue;
+      }
+
+      consolidated[categoryId] ||= {
+        events: 0,
+        points: 0,
+        positive: 0,
+        negative: 0,
+        neutral: 0,
+        sources: {},
+      };
+
+      consolidated[categoryId].events +=
+        amount;
+
+      consolidated[categoryId].points +=
+        amount;
+
+      consolidated[categoryId].positive +=
+        amount;
+
+      const normalizedSource =
+        normalizeSourceName(
+          sourceName
+        );
+
+      consolidated[categoryId].sources[
+        normalizedSource
+      ] =
+        (
+          consolidated[categoryId].sources[
+            normalizedSource
+          ] || 0
+        ) + amount;
+    }
+  }
+
+  return consolidated;
+}
+
+function syncConsolidatedWeeklySources(
+  state
+) {
+  const allSources = readJson(
+    GERAL_WEEKLY_SOURCES_FILE,
+    {}
+  );
+
+  const availableWeeks =
+    Object.keys(
+      allSources || {}
+    );
+
+  let importedWeeks = 0;
+  let importedEvents = 0;
+
+  for (
+    const weekKey of availableWeeks
+  ) {
+    const weekDate =
+      new Date(
+        `${weekKey}T03:00:00.000Z`
+      );
+
+    if (
+      Number.isNaN(
+        weekDate.getTime()
+      )
+    ) {
+      continue;
+    }
+
+    const weekInfo =
+      getWeekInfo(
+        weekDate
+      );
+
+    const week =
+      ensureWeek(
+        state,
+        weekInfo
+      );
+
+    const consolidated =
+      buildConsolidatedCategoryData(
+        allSources[weekKey]
+      );
+
+    week.consolidatedSources =
+      consolidated;
+
+    importedWeeks += 1;
+
+    importedEvents +=
+      Object.values(
+        consolidated
+      ).reduce(
+        (
+          total,
+          category
+        ) =>
+          total +
+          Number(
+            category.events || 0
+          ),
+        0
+      );
+  }
+
+  console.log(
+    "[NPS Operacional] Fontes consolidadas sincronizadas:",
+    {
+      file:
+        GERAL_WEEKLY_SOURCES_FILE,
+      exists:
+        fs.existsSync(
+          GERAL_WEEKLY_SOURCES_FILE
+        ),
+      weeks:
+        importedWeeks,
+      events:
+        importedEvents,
+    }
+  );
+
+  return {
+    importedWeeks,
+    importedEvents,
+  };
 }
 
 // ============================================================================
@@ -1831,9 +2172,10 @@ function calculateCategoryResult({
   categoryId,
   categoryConfig,
   categoryData,
+  consolidatedData,
   expectedProgress,
 }) {
-  const data =
+  const liveData =
     categoryData || {
       events: 0,
       points: 0,
@@ -1848,6 +2190,98 @@ function calculateCategoryResult({
       approved: 0,
       rejected: 0,
     };
+
+  const consolidated =
+    consolidatedData || {
+      events: 0,
+      points: 0,
+      positive: 0,
+      negative: 0,
+      neutral: 0,
+      sources: {},
+    };
+
+  /*
+   * O consolidado funciona como um piso.
+   *
+   * Exemplo:
+   * - arquivo semanal informa 30 registros;
+   * - o NPS recebeu 4 desses registros em tempo real;
+   * - resultado utilizado: 30, e não 34.
+   *
+   * Assim o painel recupera dados anteriores sem duplicar
+   * acontecimentos recebidos após a inicialização.
+   */
+  const data = {
+    ...liveData,
+
+    events:
+      Math.max(
+        Number(
+          liveData.events || 0
+        ),
+        Number(
+          consolidated.events || 0
+        )
+      ),
+
+    points:
+      Math.max(
+        Number(
+          liveData.points || 0
+        ),
+        Number(
+          consolidated.points || 0
+        )
+      ),
+
+    positive:
+      Math.max(
+        Number(
+          liveData.positive || 0
+        ),
+        Number(
+          consolidated.positive || 0
+        )
+      ),
+
+    negative:
+      Math.max(
+        Number(
+          liveData.negative || 0
+        ),
+        Number(
+          consolidated.negative || 0
+        )
+      ),
+
+    neutral:
+      Math.max(
+        Number(
+          liveData.neutral || 0
+        ),
+        Number(
+          consolidated.neutral || 0
+        )
+      ),
+
+    uniqueUsers:
+      Array.isArray(
+        liveData.uniqueUsers
+      )
+        ? liveData.uniqueUsers
+        : [],
+
+    responseTimes:
+      Array.isArray(
+        liveData.responseTimes
+      )
+        ? liveData.responseTimes
+        : [],
+
+    consolidatedSources:
+      consolidated.sources || {},
+  };
 
   const weeklyGoal = Math.max(
     1,
@@ -2065,10 +2499,17 @@ function calculateWeek(
       calculateCategoryResult({
         categoryId,
         categoryConfig,
+
         categoryData:
           week.categories[
             categoryId
           ],
+
+        consolidatedData:
+          week.consolidatedSources?.[
+            categoryId
+          ],
+
         expectedProgress,
       })
     );
@@ -2130,6 +2571,43 @@ function calculateWeek(
         ) / totalWeight
       : 0;
 
+  const consolidatedEvents =
+    Object.values(
+      week.consolidatedSources || {}
+    ).reduce(
+      (
+        total,
+        category
+      ) =>
+        total +
+        Number(
+          category?.events || 0
+        ),
+      0
+    );
+
+  const liveEvents =
+    Array.isArray(
+      week.events
+    )
+      ? week.events.length
+      : 0;
+
+  /*
+   * Utiliza o maior total entre:
+   *
+   * • eventos consolidados recuperados do Ranking Geral;
+   * • eventos recebidos em tempo real pelo NPS.
+   *
+   * Isso evita exibir zero após importar o histórico
+   * e também evita somar os mesmos acontecimentos duas vezes.
+   */
+  const totalEvents =
+    Math.max(
+      consolidatedEvents,
+      liveEvents
+    );
+
   return {
     week,
     weekInfo,
@@ -2143,8 +2621,7 @@ function calculateWeek(
         100
       ),
     leadership,
-    totalEvents:
-      week.events.length,
+    totalEvents,
   };
 }
 
@@ -2793,6 +3270,12 @@ function buildDashboardComponents() {
 function generateResults() {
   const config = loadConfig();
   const state = loadState();
+
+  // Recupera os dados que já existiam antes do NPS
+  // e também atualiza os totais consolidados mais recentes.
+  syncConsolidatedWeeklySources(
+    state
+  );
 
   const currentWeekInfo =
     getWeekInfo();
@@ -3584,6 +4067,12 @@ export async function npsOperacionalOnReady(
   ensureWeek(
     state,
     getPreviousWeekInfo()
+  );
+
+  // Importa imediatamente os dados que já estavam
+  // registrados nos sistemas antes da instalação do NPS.
+  syncConsolidatedWeeklySources(
+    state
   );
 
   saveState(state);
