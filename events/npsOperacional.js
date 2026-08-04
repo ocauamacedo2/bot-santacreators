@@ -218,15 +218,29 @@ const DEFAULT_CONFIG = {
     },
   ],
 
-  categories: {
-    meta_interna: {
-      label: "Cumprimento das Metas Internas",
-      weight: 14,
-      enabled: true,
-      weeklyGoal: 100,
-    },
+categories: {
+  meta_interna: {
+    label: "Cumprimento das Metas Internas",
+    weight: 14,
+    enabled: true,
+    weeklyGoal: 100,
+  },
 
-    registro_manager: {
+  desempenho_geral: {
+    label: "Ritmo Geral da Operação",
+    weight: 10,
+    enabled: true,
+    weeklyGoal: 500,
+  },
+
+  participacao_equipe: {
+    label: "Participação da Equipe",
+    weight: 10,
+    enabled: true,
+    weeklyGoal: 25,
+  },
+
+  registro_manager: {
       label: "Registro Manager",
       weight: 12,
       enabled: true,

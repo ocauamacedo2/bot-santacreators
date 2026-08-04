@@ -14,7 +14,16 @@ import {
 } from "discord.js";
 
 import { dashOn } from "../utils/dashHub.js";
-import { GERAL_PARSERS, GERAL_CHANNELS, GeralAudit } from "../shared/scGeralSources.js";
+
+import {
+  registerOperationalMetricProvider,
+} from "../utils/operationalMetricsHub.js";
+
+import {
+  GERAL_PARSERS,
+  GERAL_CHANNELS,
+  GeralAudit,
+} from "../shared/scGeralSources.js";
 
 
 // ✅ __dirname no ESM
@@ -3019,6 +3028,392 @@ function debugText() {
     `• nextFullAllowedAt: ${st.nextFullAllowedAt ? new Date(st.nextFullAllowedAt).toLocaleString("pt-BR") : "—"}`,
   ].join("\n");
 }
+
+// ============================================================================
+// MÉTRICA OPERACIONAL — PARTICIPAÇÃO E DISTRIBUIÇÃO DA EQUIPE
+// ============================================================================
+
+async function buildWeeklyRankingOperationalMetric(
+  context = {}
+) {
+  const client =
+    context.client;
+
+  if (!client) {
+    return {
+      id:
+        "participacao_equipe",
+
+      label:
+        "Participação da Equipe",
+
+      available:
+        false,
+
+      score:
+        null,
+
+      confidence:
+        0,
+
+      volume:
+        0,
+
+      positivePoints: [],
+
+      attentionPoints: [
+        "O cliente do Discord não estava disponível para consultar o ranking semanal.",
+      ],
+
+      recommendations: [],
+
+      details: {},
+    };
+  }
+
+  const {
+    items,
+  } =
+    await collectAllPoints(
+      client,
+      "light"
+    );
+
+  const currentWeekKey =
+    weekKeyFromDateSP(
+      nowSP()
+    );
+
+  const previousWeekKey =
+    addDaysToWeekKey(
+      currentWeekKey,
+      -7
+    );
+
+  const current =
+    aggregateWeekDetailed(
+      items,
+      currentWeekKey
+    );
+
+  const previous =
+    previousWeekKey
+      ? aggregateWeekDetailed(
+          items,
+          previousWeekKey
+        )
+      : {
+          totalEvents: 0,
+          list: [],
+          bySourceByUser: {},
+        };
+
+  const participants =
+    current.list.length;
+
+  const participantsPrevious =
+    previous.list.length;
+
+  const reachedMinimum =
+    current.list.filter(
+      participant =>
+        Number(
+          participant.points || 0
+        ) >=
+        MIN_POINTS_WEEK
+    ).length;
+
+  const belowMinimum =
+    Math.max(
+      0,
+      participants -
+      reachedMinimum
+    );
+
+  const hitRate =
+    participants > 0
+      ? (
+          reachedMinimum /
+          participants
+        ) *
+        100
+      : 0;
+
+  const averagePoints =
+    participants > 0
+      ? current.totalEvents /
+        participants
+      : 0;
+
+  const averageGoalRate =
+    Math.min(
+      100,
+      (
+        averagePoints /
+        Math.max(
+          1,
+          MIN_POINTS_WEEK
+        )
+      ) *
+      100
+    );
+
+  /*
+   * 70% da nota depende da quantidade de pessoas
+   * que alcançaram o mínimo individual.
+   *
+   * 30% depende da média de pontos da equipe.
+   *
+   * Assim, poucos usuários com muitos pontos não conseguem
+   * esconder uma equipe inteira abaixo da meta.
+   */
+  const score =
+    hitRate * 0.7 +
+    averageGoalRate * 0.3;
+
+  const previousReachedMinimum =
+    previous.list.filter(
+      participant =>
+        Number(
+          participant.points || 0
+        ) >=
+        MIN_POINTS_WEEK
+    ).length;
+
+  const previousHitRate =
+    participantsPrevious > 0
+      ? (
+          previousReachedMinimum /
+          participantsPrevious
+        ) *
+        100
+      : 0;
+
+  const difference =
+    hitRate -
+    previousHitRate;
+
+  const sourceTotals = {};
+
+  for (
+    const sources of
+    Object.values(
+      current.bySourceByUser || {}
+    )
+  ) {
+    for (
+      const [
+        source,
+        amount,
+      ] of Object.entries(
+        sources || {}
+      )
+    ) {
+      sourceTotals[source] =
+        (
+          sourceTotals[source] || 0
+        ) +
+        Number(
+          amount || 0
+        );
+    }
+  }
+
+  const strongestSources =
+    Object.entries(
+      sourceTotals
+    )
+      .sort(
+        (a, b) =>
+          b[1] - a[1]
+      )
+      .slice(
+        0,
+        5
+      );
+
+  const positivePoints = [];
+  const attentionPoints = [];
+  const recommendations = [];
+
+  if (hitRate >= 70) {
+    positivePoints.push(
+      `${reachedMinimum} de ${participants} participantes alcançaram o mínimo semanal de ${MIN_POINTS_WEEK} pontos.`
+    );
+  }
+
+  if (
+    current.totalEvents >
+    previous.totalEvents
+  ) {
+    positivePoints.push(
+      `A equipe somou ${current.totalEvents} pontos, superando os ${previous.totalEvents} pontos da semana anterior.`
+    );
+  }
+
+  if (
+    strongestSources.length
+  ) {
+    positivePoints.push(
+      `As fontes com maior contribuição foram: ${strongestSources
+        .map(
+          (
+            [
+              source,
+              amount,
+            ]
+          ) =>
+            `${SOURCE_LABEL[source] || source} (${amount})`
+        )
+        .join(", ")}.`
+    );
+  }
+
+  if (
+    belowMinimum > 0
+  ) {
+    attentionPoints.push(
+      `${belowMinimum} de ${participants} participantes ainda estão abaixo do mínimo de ${MIN_POINTS_WEEK} pontos.`
+    );
+  }
+
+  if (
+    hitRate < 50 &&
+    participants > 0
+  ) {
+    attentionPoints.push(
+      `Apenas ${hitRate.toFixed(1)}% dos participantes alcançaram o mínimo individual da semana.`
+    );
+  }
+
+  if (
+    participants > 0 &&
+    averagePoints <
+      MIN_POINTS_WEEK
+  ) {
+    attentionPoints.push(
+      `A média atual é de ${averagePoints.toFixed(1)} pontos por participante, abaixo dos ${MIN_POINTS_WEEK} pontos esperados.`
+    );
+  }
+
+  if (
+    belowMinimum > 0
+  ) {
+    recommendations.push(
+      `Acompanhar individualmente os ${belowMinimum} participantes abaixo do mínimo e verificar quais fontes de atividade ainda não foram realizadas.`
+    );
+  }
+
+  if (
+    hitRate < 50
+  ) {
+    recommendations.push(
+      "Distribuir melhor as atividades entre a equipe para reduzir a concentração dos pontos em poucos membros."
+    );
+  }
+
+  if (!positivePoints.length) {
+    positivePoints.push(
+      "O Ranking Geral está registrando as atividades realizadas pela equipe durante a semana."
+    );
+  }
+
+  if (!attentionPoints.length) {
+    attentionPoints.push(
+      "Nenhum problema relevante de participação foi identificado no ranking semanal."
+    );
+  }
+
+  if (!recommendations.length) {
+    recommendations.push(
+      "Manter o acompanhamento do mínimo individual até o fechamento da semana."
+    );
+  }
+
+  return {
+    id:
+      "participacao_equipe",
+
+    label:
+      "Participação da Equipe",
+
+    available:
+      participants > 0,
+
+    score:
+      Math.max(
+        0,
+        Math.min(
+          100,
+          score
+        )
+      ),
+
+    confidence:
+      Math.min(
+        100,
+        45 +
+        participants * 5
+      ),
+
+    volume:
+      current.totalEvents,
+
+    goal:
+      MIN_POINTS_WEEK,
+
+    current:
+      hitRate,
+
+    previous:
+      previousHitRate,
+
+    difference,
+
+    positivePoints,
+
+    attentionPoints,
+
+    recommendations,
+
+    details: {
+      weekKey:
+        currentWeekKey,
+
+      previousWeekKey,
+
+      participants,
+
+      participantsPrevious,
+
+      reachedMinimum,
+
+      belowMinimum,
+
+      hitRate,
+
+      previousHitRate,
+
+      averagePoints,
+
+      minimumPerParticipant:
+        MIN_POINTS_WEEK,
+
+      totalPoints:
+        current.totalEvents,
+
+      previousTotalPoints:
+        previous.totalEvents,
+
+      strongestSources,
+    },
+  };
+}
+
+registerOperationalMetricProvider(
+  "participacao_equipe",
+  buildWeeklyRankingOperationalMetric
+);
 
 // ✅ NOVO: Exporta o ranking semanal para outros módulos
 export async function getWeeklyRanking(client) {

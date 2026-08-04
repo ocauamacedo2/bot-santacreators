@@ -15,7 +15,16 @@ import {
 } from "discord.js";
 
 import { dashOn } from "../utils/dashHub.js";
-import { GERAL_PARSERS, GERAL_CHANNELS, GeralAudit } from "../shared/scGeralSources.js"; // Ensure this import is correct
+
+import {
+  registerOperationalMetricProvider,
+} from "../utils/operationalMetricsHub.js";
+
+import {
+  GERAL_PARSERS,
+  GERAL_CHANNELS,
+  GeralAudit,
+} from "../shared/scGeralSources.js";
 
 // ✅ __dirname no ESM
 const __filename = fileURLToPath(import.meta.url);
@@ -2302,6 +2311,419 @@ async function aggregateByWeek(items, weekKey, client = null) {
   return { total, top };
 }
 
+// ============================================================================
+// MÉTRICA OPERACIONAL — RITMO GERAL DA SEMANA
+// ============================================================================
+
+function getGeneralExpectedProgress() {
+  const parts =
+    new Intl.DateTimeFormat(
+      "en-US",
+      {
+        timeZone:
+          TZ,
+        weekday:
+          "short",
+        hour:
+          "2-digit",
+        minute:
+          "2-digit",
+        hourCycle:
+          "h23",
+      }
+    ).formatToParts(
+      new Date()
+    );
+
+  const get =
+    type =>
+      parts.find(
+        part =>
+          part.type === type
+      )?.value;
+
+  const weekDays = {
+    Sun: 0,
+    Mon: 1,
+    Tue: 2,
+    Wed: 3,
+    Thu: 4,
+    Fri: 5,
+    Sat: 6,
+  };
+
+  const weekday =
+    weekDays[
+      get("weekday")
+    ] ?? 0;
+
+  const hour =
+    Number(
+      get("hour") || 0
+    );
+
+  const minute =
+    Number(
+      get("minute") || 0
+    );
+
+  const elapsedDays =
+    weekday +
+    (
+      (
+        hour * 60 +
+        minute
+      ) /
+      1440
+    );
+
+  return Math.max(
+    0.08,
+    Math.min(
+      1,
+      elapsedDays / 7
+    )
+  );
+}
+
+async function buildGeneralDashOperationalMetric(
+  context = {}
+) {
+  const client =
+    context.client;
+
+  if (!client) {
+    return {
+      id:
+        "desempenho_geral",
+
+      label:
+        "Ritmo Geral da Operação",
+
+      available:
+        false,
+
+      score:
+        null,
+
+      confidence:
+        0,
+
+      volume:
+        0,
+
+      positivePoints: [],
+
+      attentionPoints: [
+        "O cliente do Discord não estava disponível para consultar o GeralDash.",
+      ],
+
+      recommendations: [],
+
+      details: {},
+    };
+  }
+
+  /*
+   * Utiliza o modo light para reaproveitar o cache do GeralDash.
+   * Não cria um novo scan pesado a cada atualização do NPS.
+   */
+  const {
+    items,
+  } =
+    await collectAllGeneral(
+      client,
+      "light"
+    );
+
+  const currentWeekKey =
+    weekKeyFromDateSP(
+      nowSP()
+    );
+
+  const previousWeekKey =
+    addDaysToWeekKey(
+      currentWeekKey,
+      -7
+    );
+
+  const current =
+    await aggregateByWeek(
+      items,
+      currentWeekKey
+    );
+
+  const previousRaw =
+    previousWeekKey
+      ? await aggregateByWeek(
+          items,
+          previousWeekKey
+        )
+      : {
+          total: 0,
+          top: [],
+        };
+
+  const snapshots =
+    loadWeeklySnapshot();
+
+  const previousTotal =
+    previousWeekKey &&
+    snapshots.totals?.[
+      previousWeekKey
+    ] != null
+      ? Number(
+          snapshots.totals[
+            previousWeekKey
+          ]
+        )
+      : Number(
+          previousRaw.total || 0
+        );
+
+  const expectedProgress =
+    getGeneralExpectedProgress();
+
+  const expectedPointsNow =
+    BAR_MAX *
+    expectedProgress;
+
+  /*
+   * A nota avalia o ritmo, e não apenas o total bruto.
+   *
+   * Exemplo:
+   * • 40% da semana concluída;
+   * • esperado neste momento: 200 pontos;
+   * • realizado: 119;
+   * • ritmo atual: aproximadamente 59,5%.
+   */
+  const paceScore =
+    expectedPointsNow > 0
+      ? Math.min(
+          100,
+          (
+            current.total /
+            expectedPointsNow
+          ) *
+          100
+        )
+      : 0;
+
+  const finalProgress =
+    Math.min(
+      100,
+      (
+        current.total /
+        Math.max(
+          1,
+          BAR_MAX
+        )
+      ) *
+      100
+    );
+
+  const weeklyDifference =
+    current.total -
+    previousTotal;
+
+  const weeklyDifferencePercent =
+    previousTotal > 0
+      ? (
+          weeklyDifference /
+          previousTotal
+        ) *
+        100
+      : (
+          current.total > 0
+            ? 100
+            : 0
+        );
+
+  const positivePoints = [];
+  const attentionPoints = [];
+  const recommendations = [];
+
+  if (
+    paceScore >= 100
+  ) {
+    positivePoints.push(
+      `A operação está no ritmo necessário para alcançar a meta semanal de ${BAR_MAX} pontos.`
+    );
+  }
+
+  if (
+    weeklyDifference > 0
+  ) {
+    positivePoints.push(
+      `O total atual está ${weeklyDifference} ponto(s) acima da semana anterior no comparativo disponível.`
+    );
+  }
+
+  if (
+    current.top.length > 0
+  ) {
+    positivePoints.push(
+      `O GeralDash já identificou ${current.top.length} participante(s) com atividade nesta semana.`
+    );
+  }
+
+  if (
+    paceScore < 70
+  ) {
+    attentionPoints.push(
+      `A operação está em ${paceScore.toFixed(1)}% do ritmo necessário para alcançar os ${BAR_MAX} pontos até o final da semana.`
+    );
+  }
+
+  if (
+    current.total <
+    expectedPointsNow
+  ) {
+    attentionPoints.push(
+      `Para o momento atual da semana, seriam esperados aproximadamente ${Math.round(expectedPointsNow)} pontos, mas foram registrados ${current.total}.`
+    );
+  }
+
+  if (
+    weeklyDifference < 0
+  ) {
+    attentionPoints.push(
+      `O resultado atual está ${Math.abs(weeklyDifference)} ponto(s) abaixo da semana anterior, uma variação de ${weeklyDifferencePercent.toFixed(1)}%.`
+    );
+  }
+
+  if (
+    paceScore < 100
+  ) {
+    const missingToExpected =
+      Math.max(
+        0,
+        Math.ceil(
+          expectedPointsNow -
+          current.total
+        )
+      );
+
+    recommendations.push(
+      `Buscar pelo menos mais ${missingToExpected} ponto(s) no curto prazo para retornar ao ritmo esperado da semana.`
+    );
+  }
+
+  if (
+    finalProgress < 100
+  ) {
+    recommendations.push(
+      `Ainda faltam ${Math.max(0, BAR_MAX - current.total)} ponto(s) para concluir a meta geral de ${BAR_MAX}.`
+    );
+  }
+
+  if (!positivePoints.length) {
+    positivePoints.push(
+      "O GeralDash permanece coletando as fontes operacionais e atualizando o resultado da semana."
+    );
+  }
+
+  if (!attentionPoints.length) {
+    attentionPoints.push(
+      "Nenhum atraso relevante foi identificado no ritmo geral da semana."
+    );
+  }
+
+  if (!recommendations.length) {
+    recommendations.push(
+      "Manter o ritmo atual e acompanhar a distribuição das atividades entre os membros."
+    );
+  }
+
+  return {
+    id:
+      "desempenho_geral",
+
+    label:
+      "Ritmo Geral da Operação",
+
+    available:
+      current.total > 0,
+
+    score:
+      Math.max(
+        0,
+        Math.min(
+          100,
+          paceScore
+        )
+      ),
+
+    confidence:
+      Math.min(
+        100,
+        50 +
+        current.top.length * 4
+      ),
+
+    volume:
+      current.total,
+
+    goal:
+      BAR_MAX,
+
+    current:
+      current.total,
+
+    previous:
+      previousTotal,
+
+    difference:
+      weeklyDifference,
+
+    positivePoints,
+
+    attentionPoints,
+
+    recommendations,
+
+    details: {
+      weekKey:
+        currentWeekKey,
+
+      previousWeekKey,
+
+      total:
+        current.total,
+
+      previousTotal,
+
+      weeklyDifference,
+
+      weeklyDifferencePercent,
+
+      expectedProgress,
+
+      expectedPointsNow,
+
+      paceScore,
+
+      finalProgress,
+
+      goal:
+        BAR_MAX,
+
+      participants:
+        current.top.length,
+
+      top:
+        current.top.slice(
+          0,
+          10
+        ),
+    },
+  };
+}
+
+registerOperationalMetricProvider(
+  "desempenho_geral",
+  buildGeneralDashOperationalMetric
+);
 
 function diff(a, b) {
   const d = a - b;
