@@ -413,6 +413,15 @@ import {
   metaInternaSemanalHandleMessage,
 } from "../events/metaInternaSemanal.js";
 
+// NPS Operacional
+import {
+  npsOperacionalOnReady,
+  npsOperacionalHandleInteraction,
+  npsOperacionalHandleGuildMemberAdd,
+  npsOperacionalHandleGuildMemberRemove,
+  npsOperacionalHandleGuildMemberUpdate,
+} from "../events/npsOperacional.js";
+
 // Auto React Fotos
 import {
   autoReactsFotosOnReady,
@@ -948,6 +957,12 @@ if (await registroManagerHandleMessage(message, client)) return;
     }
 
     try {
+      await npsOperacionalHandleGuildMemberAdd(m, client);
+    } catch (e) {
+      console.error("[CORE] erro em npsOperacionalHandleGuildMemberAdd:", e);
+    }
+
+    try {
       await autoRoleOnJoin(m);
     } catch (e) {
       console.error("[CORE] erro em autoRoleOnJoin:", e);
@@ -972,6 +987,12 @@ if (await registroManagerHandleMessage(message, client)) return;
     }
 
     try {
+      await npsOperacionalHandleGuildMemberRemove(m, client);
+    } catch (e) {
+      console.error("[CORE] erro em npsOperacionalHandleGuildMemberRemove:", e);
+    }
+
+    try {
       await saidaHandler.execute(m);
     } catch (e) {}
   });
@@ -983,12 +1004,20 @@ if (await registroManagerHandleMessage(message, client)) return;
     try {
       await roleProtectHandleGuildMemberUpdate(o, n, client);
     } catch (e) {}
+
     try {
       await monitorCargosHandleUpdate(o, n, client);
     } catch (e) {}
+
     try {
       await hierarquiaHandleGuildMemberUpdate(o, n, client);
     } catch (e) {}
+
+    try {
+      await npsOperacionalHandleGuildMemberUpdate(o, n, client);
+    } catch (e) {
+      console.error("[CORE] erro em npsOperacionalHandleGuildMemberUpdate:", e);
+    }
   });
 
   client.on("roleUpdate", async (oldRole, newRole) => {
@@ -1034,6 +1063,8 @@ client.on("interactionCreate", async (interaction) => {
     // ✅ Dashboard de membros: botões e modal do histórico mensal
     if (await memberFlowHandleInteraction(interaction, client)) return;
 
+    // ✅ NPS Operacional: atualizar painel e enviar resumos no privado
+    if (await npsOperacionalHandleInteraction(interaction, client)) return;
 
     // 🚀 PRIORIDADE MÁXIMA: Botões de Ticket e Entrevista
     if (await entrevista.handleButtons(interaction).catch((err) => {
@@ -1216,6 +1247,12 @@ try {
   await metaInternaSemanalOnReady(client);
 } catch (e) {
   console.error("[CORE] Erro ao iniciar Meta Interna Semanal:", e);
+}
+
+try {
+  await npsOperacionalOnReady(client);
+} catch (e) {
+  console.error("[CORE] Erro ao iniciar NPS Operacional:", e);
 }
 
 try {

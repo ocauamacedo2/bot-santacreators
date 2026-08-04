@@ -5,7 +5,7 @@ import { EventEmitter } from "node:events";
  * HUB global de eventos para dashboards.
  * - dashEmit(event, payload)
  * - dashOn(event, handler)
- * - dashOnAny(handler)  ✅ NOVO
+ * - dashOnAny(handler)
  */
 if (!globalThis.__SC_DASH_HUB__) {
   globalThis.__SC_DASH_HUB__ = new EventEmitter();
@@ -13,6 +13,43 @@ if (!globalThis.__SC_DASH_HUB__) {
 }
 
 const hub = globalThis.__SC_DASH_HUB__;
+
+// =====================================================
+// ✅ LISTA GLOBAL DE OBSERVADORES DE TODOS OS EVENTOS
+// =====================================================
+// Mantém múltiplos handlers registrados pelo NPS, debug,
+// router e outros sistemas, sem permitir duplicações.
+if (!globalThis.__SC_DASH_ANY_HANDLERS__) {
+  globalThis.__SC_DASH_ANY_HANDLERS__ = new Set();
+}
+
+const anyHandlers = globalThis.__SC_DASH_ANY_HANDLERS__;
+
+// =====================================================
+// ✅ INSTALA A INTERCEPTAÇÃO GLOBAL APENAS UMA VEZ
+// =====================================================
+if (!hub.__anyHooked) {
+  const originalEmit = hub.emit.bind(hub);
+
+  hub.__anyHooked = true;
+
+  hub.emit = (eventName, ...args) => {
+    const payload = args?.[0];
+
+    for (const handler of anyHandlers) {
+      try {
+        handler(eventName, payload);
+      } catch (error) {
+        console.error(
+          `[dashHub] Erro em observador global do evento "${eventName}":`,
+          error
+        );
+      }
+    }
+
+    return originalEmit(eventName, ...args);
+  };
+}
 
 // =====================================================
 // Emitir evento
@@ -23,7 +60,12 @@ export function dashEmit(eventName, payload = {}) {
       ...payload,
       __at: Date.now(),
     });
-  } catch {}
+  } catch (error) {
+    console.error(
+      `[dashHub] Erro ao emitir o evento "${eventName}":`,
+      error
+    );
+  }
 }
 
 // =====================================================
@@ -31,26 +73,29 @@ export function dashEmit(eventName, payload = {}) {
 // =====================================================
 export function dashOn(eventName, handler) {
   try {
+    if (typeof handler !== "function") return;
+
     hub.on(eventName, handler);
-  } catch {}
+  } catch (error) {
+    console.error(
+      `[dashHub] Erro ao registrar o evento "${eventName}":`,
+      error
+    );
+  }
 }
 
 // =====================================================
-// ✅ Escutar TODOS os eventos (debug / router)
+// Escutar TODOS os eventos
 // =====================================================
 export function dashOnAny(handler) {
   try {
-    // Padrão Node.js: intercepta emit
-    const originalEmit = hub.emit.bind(hub);
+    if (typeof handler !== "function") return;
 
-    if (hub.__anyHooked) return;
-    hub.__anyHooked = true;
-
-    hub.emit = (eventName, ...args) => {
-      try {
-        handler(eventName, args?.[0]);
-      } catch {}
-      return originalEmit(eventName, ...args);
-    };
-  } catch {}
+    anyHandlers.add(handler);
+  } catch (error) {
+    console.error(
+      "[dashHub] Erro ao registrar observador global:",
+      error
+    );
+  }
 }
