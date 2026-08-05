@@ -26,6 +26,10 @@ import {
   listOperationalMetricProviders,
 } from "../utils/operationalMetricsHub.js";
 
+import {
+  collectPayEvtOperationalData,
+} from "./payEvtDash/index.js";
+
 // ============================================================================
 // CONFIGURAÇÃO
 // ============================================================================
@@ -38,6 +42,21 @@ const MINIMUM_POINTS_PER_USER =
 
 const GENERAL_WEEKLY_GOAL =
   500;
+
+/*
+ * Presenças corresponde ao sistema oficial de Bate Ponto.
+ *
+ * A meta representa a quantidade semanal mínima de registros
+ * esperados para que a operação seja considerada saudável.
+ */
+const PRESENCE_WEEKLY_GOAL =
+  15;
+
+/*
+ * Meta semanal de pagamentos aprovados.
+ */
+const PAYMENT_WEEKLY_GOAL =
+  10;
 
 // ============================================================================
 // PERSISTÊNCIA
@@ -77,6 +96,23 @@ const WEEKLY_SOURCES_FILE =
   path.join(
     DATA_DIRECTORY,
     "sc_geral_weekly_rank_sources.json"
+  );
+
+/*
+ * Fonte oficial do sistema confirmacaoPresenca.js.
+ *
+ * Esse arquivo contém:
+ *
+ * • organizações confirmadas;
+ * • organizações ausentes;
+ * • organizações pendentes;
+ * • usuário responsável;
+ * • horário da resposta.
+ */
+const ORGANIZATION_CONFIRMATION_FILE =
+  path.join(
+    DATA_DIRECTORY,
+    "confirmacao_presenca_state.json"
   );
 
 // ============================================================================
@@ -1008,9 +1044,1193 @@ function buildGeneralPerformanceMetric() {
 }
 
 // ============================================================================
-// REGISTRO DOS PROVEDORES
+// MÉTRICA: PRESENÇAS / BATE PONTO
 // ============================================================================
 
+async function buildPresenceMetric(
+  context = {}
+) {
+  const client =
+    context.client ||
+    null;
+
+  const currentWeekKey =
+    context.currentWeek?.key ||
+    getWeekKeySP();
+
+  const previousWeekKey =
+    context.previousWeek?.key ||
+    addDaysToWeekKey(
+      currentWeekKey,
+      -7
+    );
+
+  const operationalData =
+    await collectPayEvtOperationalData(
+      client,
+      false
+    );
+
+  const currentBucket =
+    operationalData.byWeek?.[
+      currentWeekKey
+    ] || {};
+
+  const previousBucket =
+    operationalData.byWeek?.[
+      previousWeekKey
+    ] || {};
+
+  const currentRecords =
+    Math.max(
+      0,
+      Number(
+        currentBucket.eventsBatePonto ||
+        0
+      )
+    );
+
+  const previousRecords =
+    Math.max(
+      0,
+      Number(
+        previousBucket.eventsBatePonto ||
+        0
+      )
+    );
+
+  const weekProgress =
+    Math.max(
+      0.08,
+      Number(
+        context.currentMoment
+          ?.progress ||
+        getCurrentWeekProgress()
+      )
+    );
+
+  const expectedNow =
+    PRESENCE_WEEKLY_GOAL *
+    weekProgress;
+
+  const paceScore =
+    expectedNow > 0
+      ? clamp(
+          (
+            currentRecords /
+            expectedNow
+          ) *
+          100
+        )
+      : (
+          currentRecords > 0
+            ? 100
+            : 0
+        );
+
+  const finalCompletion =
+    clamp(
+      (
+        currentRecords /
+        PRESENCE_WEEKLY_GOAL
+      ) *
+      100
+    );
+
+  /*
+   * A nota dá prioridade ao ritmo da semana.
+   *
+   * 75% = ritmo diante do momento atual;
+   * 25% = conclusão efetiva da meta semanal.
+   */
+  const score =
+    paceScore *
+      0.75 +
+    finalCompletion *
+      0.25;
+
+  const difference =
+    currentRecords -
+    previousRecords;
+
+  const projectedTotal =
+    currentRecords /
+    Math.max(
+      0.08,
+      weekProgress
+    );
+
+  const currentEvents =
+    Array.isArray(
+      operationalData.events
+    )
+      ? operationalData.events.filter(
+          event =>
+            event?.kind ===
+              "bateponto" &&
+            event?.periodKey ===
+              currentWeekKey
+        )
+      : [];
+
+  const previousEvents =
+    Array.isArray(
+      operationalData.events
+    )
+      ? operationalData.events.filter(
+          event =>
+            event?.kind ===
+              "bateponto" &&
+            event?.periodKey ===
+              previousWeekKey
+        )
+      : [];
+
+  const currentParticipants =
+    new Set(
+      currentEvents
+        .map(
+          event =>
+            String(
+              event?.userId ||
+              ""
+            )
+        )
+        .filter(Boolean)
+    );
+
+  const previousParticipants =
+    new Set(
+      previousEvents
+        .map(
+          event =>
+            String(
+              event?.userId ||
+              ""
+            )
+        )
+        .filter(Boolean)
+    );
+
+  const teamTotals = {};
+
+  for (
+    const event of
+    currentEvents
+  ) {
+    const team =
+      String(
+        event?.team ||
+        event?.payload?.team ||
+        "Equipe não identificada"
+      ).trim();
+
+    teamTotals[team] =
+      Number(
+        teamTotals[team] ||
+        0
+      ) +
+      1;
+  }
+
+  const positivePoints = [];
+  const attentionPoints = [];
+  const recommendations = [];
+
+  if (
+    currentRecords >=
+    expectedNow
+  ) {
+    positivePoints.push(
+      `O Bate Ponto está acompanhando o ritmo esperado para este momento da semana, com ${currentRecords} registro(s) realizados.`
+    );
+  }
+
+  if (
+    difference > 0
+  ) {
+    positivePoints.push(
+      `Foram registrados ${difference} ponto(s) a mais do que na semana anterior.`
+    );
+  }
+
+  if (
+    currentParticipants.size > 0
+  ) {
+    positivePoints.push(
+      `${currentParticipants.size} participante(s) diferente(s) já registraram presença nesta semana.`
+    );
+  }
+
+  if (
+    currentRecords <
+    expectedNow
+  ) {
+    attentionPoints.push(
+      `Para o momento atual da semana, o ritmo esperado seria de aproximadamente ${Math.round(expectedNow)} registros. O total atual é ${currentRecords}.`
+    );
+  }
+
+  if (
+    difference < 0
+  ) {
+    attentionPoints.push(
+      `O volume atual está ${Math.abs(difference)} registro(s) abaixo da semana anterior.`
+    );
+  }
+
+  if (
+    projectedTotal <
+    PRESENCE_WEEKLY_GOAL
+  ) {
+    attentionPoints.push(
+      `Mantendo o ritmo atual, a projeção de fechamento é de aproximadamente ${Math.round(projectedTotal)} registros de presença.`
+    );
+  }
+
+  recommendations.push(
+    projectedTotal >=
+      PRESENCE_WEEKLY_GOAL
+      ? "Manter os lembretes e acompanhar se os registros permanecem distribuídos entre todas as equipes."
+      : `Reforçar os lembretes de Bate Ponto para buscar pelo menos ${PRESENCE_WEEKLY_GOAL} registros até o encerramento da semana.`
+  );
+
+  return {
+    id:
+      "presencas",
+
+    label:
+      "Presenças / Bate Ponto",
+
+    available:
+      currentRecords > 0 ||
+      previousRecords > 0,
+
+    score:
+      clamp(
+        score
+      ),
+
+    confidence:
+      clamp(
+        55 +
+        currentRecords *
+        3
+      ),
+
+    volume:
+      currentRecords,
+
+    goal:
+      PRESENCE_WEEKLY_GOAL,
+
+    current:
+      currentRecords,
+
+    previous:
+      previousRecords,
+
+    difference,
+
+    positivePoints,
+
+    attentionPoints,
+
+    recommendations,
+
+    details: {
+      currentWeekKey,
+
+      previousWeekKey,
+
+      currentRecords,
+
+      previousRecords,
+
+      participants:
+        currentParticipants.size,
+
+      previousParticipants:
+        previousParticipants.size,
+
+      expectedNow,
+
+      paceScore,
+
+      finalCompletion,
+
+      projectedTotal,
+
+      remaining:
+        Math.max(
+          0,
+          PRESENCE_WEEKLY_GOAL -
+          currentRecords
+        ),
+
+      teamTotals,
+
+      byUser:
+        currentEvents.reduce(
+          (
+            result,
+            event
+          ) => {
+            const userId =
+              String(
+                event?.userId ||
+                ""
+              );
+
+            if (!userId) {
+              return result;
+            }
+
+            result[userId] =
+              Number(
+                result[userId] ||
+                0
+              ) +
+              1;
+
+            return result;
+          },
+          {}
+        ),
+    },
+  };
+}
+
+// ============================================================================
+// MÉTRICA: CONFIRMAÇÃO DE ORGANIZAÇÕES
+// ============================================================================
+
+function buildOrganizationConfirmationMetric() {
+  const state =
+    readJson(
+      ORGANIZATION_CONFIRMATION_FILE,
+      {
+        statuses:
+          {},
+
+        lastWeekKey:
+          null,
+
+        lastResetDate:
+          null,
+      }
+    );
+
+  const statuses =
+    state?.statuses &&
+    typeof state.statuses ===
+      "object"
+      ? state.statuses
+      : {};
+
+  const organizations =
+    Object.entries(
+      statuses
+    );
+
+  const confirmed =
+    organizations.filter(
+      (
+        [
+          ,
+          information,
+        ]
+      ) =>
+        information?.status ===
+        "YES"
+    );
+
+  const absent =
+    organizations.filter(
+      (
+        [
+          ,
+          information,
+        ]
+      ) =>
+        information?.status ===
+        "NO"
+    );
+
+  const pending =
+    organizations.filter(
+      (
+        [
+          ,
+          information,
+        ]
+      ) =>
+        !information ||
+        information.status ===
+          "PENDING"
+    );
+
+  const totalOrganizations =
+    organizations.length;
+
+  const answered =
+    confirmed.length +
+    absent.length;
+
+  const responseRate =
+    totalOrganizations > 0
+      ? (
+          answered /
+          totalOrganizations
+        ) *
+        100
+      : 0;
+
+  const attendanceRate =
+    answered > 0
+      ? (
+          confirmed.length /
+          answered
+        ) *
+        100
+      : 0;
+
+  /*
+   * A confirmação precisa avaliar duas coisas diferentes:
+   *
+   * 65% = organizações que responderam, independentemente
+   *       de terem informado presença ou ausência;
+   *
+   * 35% = proporção das respostas positivas.
+   *
+   * Dessa forma, uma organização que informa ausência
+   * não é tratada como se tivesse ignorado o painel.
+   */
+  const score =
+    responseRate *
+      0.65 +
+    attendanceRate *
+      0.35;
+
+  const responsibleUsers =
+    new Set(
+      organizations
+        .map(
+          (
+            [
+              ,
+              information,
+            ]
+          ) =>
+            String(
+              information?.by ||
+              ""
+            )
+        )
+        .filter(Boolean)
+    );
+
+  const positivePoints = [];
+  const attentionPoints = [];
+  const recommendations = [];
+
+  if (
+    answered > 0
+  ) {
+    positivePoints.push(
+      `${answered} de ${totalOrganizations} organizações já responderam ao painel de confirmação.`
+    );
+  }
+
+  if (
+    confirmed.length > 0
+  ) {
+    positivePoints.push(
+      `${confirmed.length} organização(ões) confirmaram presença até o momento.`
+    );
+  }
+
+  if (
+    responseRate >= 80
+  ) {
+    positivePoints.push(
+      `A taxa de resposta está em ${responseRate.toFixed(1)}%, indicando boa adesão ao processo de confirmação.`
+    );
+  }
+
+  if (
+    pending.length > 0
+  ) {
+    attentionPoints.push(
+      `${pending.length} organização(ões) ainda não responderam ao painel.`
+    );
+  }
+
+  if (
+    absent.length > 0
+  ) {
+    attentionPoints.push(
+      `${absent.length} organização(ões) informaram ausência nesta janela.`
+    );
+  }
+
+  if (
+    responseRate < 60 &&
+    totalOrganizations > 0
+  ) {
+    attentionPoints.push(
+      `A taxa de resposta está em ${responseRate.toFixed(1)}%, o que ainda deixa uma parte importante das organizações sem posicionamento.`
+    );
+  }
+
+  recommendations.push(
+    pending.length > 0
+      ? `Entrar em contato com as ${pending.length} organização(ões) pendentes antes do fechamento da janela de confirmação.`
+      : "Manter o acompanhamento atual, pois todas as organizações cadastradas já apresentaram uma resposta."
+  );
+
+  if (
+    absent.length > 0
+  ) {
+    recommendations.push(
+      "Avaliar as ausências informadas para identificar se existe concentração por cidade, horário ou tipo de evento."
+    );
+  }
+
+  return {
+    id:
+      "organizacoes",
+
+    label:
+      "Confirmação de Organizações",
+
+    available:
+      totalOrganizations > 0,
+
+    score:
+      clamp(
+        score
+      ),
+
+    confidence:
+      clamp(
+        50 +
+        totalOrganizations *
+        2
+      ),
+
+    volume:
+      answered,
+
+    goal:
+      totalOrganizations,
+
+    current:
+      answered,
+
+    /*
+     * O arquivo atual é reiniciado por dia e por semana.
+     *
+     * O histórico será construído pelos snapshots do próprio
+     * NPS a partir desta implementação.
+     */
+    previous:
+      null,
+
+    difference:
+      null,
+
+    positivePoints,
+
+    attentionPoints,
+
+    recommendations,
+
+    details: {
+      weekKey:
+        state.lastWeekKey ||
+        null,
+
+      lastResetDate:
+        state.lastResetDate ||
+        null,
+
+      totalOrganizations,
+
+      answered,
+
+      approved:
+        confirmed.length,
+
+      confirmed:
+        confirmed.length,
+
+      rejected:
+        absent.length,
+
+      absent:
+        absent.length,
+
+      pending:
+        pending.length,
+
+      responseRate,
+
+      attendanceRate,
+
+      participants:
+        responsibleUsers.size,
+
+      responsibleUsers:
+        [
+          ...responsibleUsers,
+        ],
+
+      confirmedOrganizations:
+        confirmed.map(
+          (
+            [
+              organization,
+            ]
+          ) =>
+            organization
+        ),
+
+      absentOrganizations:
+        absent.map(
+          (
+            [
+              organization,
+            ]
+          ) =>
+            organization
+        ),
+
+      pendingOrganizations:
+        pending.map(
+          (
+            [
+              organization,
+            ]
+          ) =>
+            organization
+        ),
+
+      byUser:
+        organizations.reduce(
+          (
+            result,
+            [
+              ,
+              information,
+            ]
+          ) => {
+            const userId =
+              String(
+                information?.by ||
+                ""
+              );
+
+            if (!userId) {
+              return result;
+            }
+
+            result[userId] =
+              Number(
+                result[userId] ||
+                0
+              ) +
+              1;
+
+            return result;
+          },
+          {}
+        ),
+    },
+  };
+}
+
+// ============================================================================
+// MÉTRICA: PAGAMENTOS
+// ============================================================================
+
+async function buildPaymentMetric(
+  context = {}
+) {
+  const client =
+    context.client ||
+    null;
+
+  const currentWeekKey =
+    context.currentWeek?.key ||
+    getWeekKeySP();
+
+  const previousWeekKey =
+    context.previousWeek?.key ||
+    addDaysToWeekKey(
+      currentWeekKey,
+      -7
+    );
+
+  const operationalData =
+    await collectPayEvtOperationalData(
+      client,
+      false
+    );
+
+  const currentBucket =
+    operationalData.byWeek?.[
+      currentWeekKey
+    ] || {};
+
+  const previousBucket =
+    operationalData.byWeek?.[
+      previousWeekKey
+    ] || {};
+
+  const approved =
+    Math.max(
+      0,
+      Number(
+        currentBucket.paymentsApproved ||
+        0
+      )
+    );
+
+  const rejected =
+    Math.max(
+      0,
+      Number(
+        currentBucket.paymentsRejected ||
+        0
+      )
+    );
+
+  const requested =
+    Math.max(
+      0,
+      Number(
+        currentBucket.paymentsRequested ||
+        0
+      )
+    );
+
+  const previousApproved =
+    Math.max(
+      0,
+      Number(
+        previousBucket.paymentsApproved ||
+        0
+      )
+    );
+
+  const previousRejected =
+    Math.max(
+      0,
+      Number(
+        previousBucket.paymentsRejected ||
+        0
+      )
+    );
+
+  const previousRequested =
+    Math.max(
+      0,
+      Number(
+        previousBucket.paymentsRequested ||
+        0
+      )
+    );
+
+  const decided =
+    approved +
+    rejected;
+
+  const previousDecided =
+    previousApproved +
+    previousRejected;
+
+  const approvalRate =
+    decided > 0
+      ? (
+          approved /
+          decided
+        ) *
+        100
+      : 0;
+
+  const previousApprovalRate =
+    previousDecided > 0
+      ? (
+          previousApproved /
+          previousDecided
+        ) *
+        100
+      : 0;
+
+  const weekProgress =
+    Math.max(
+      0.08,
+      Number(
+        context.currentMoment
+          ?.progress ||
+        getCurrentWeekProgress()
+      )
+    );
+
+  const expectedNow =
+    PAYMENT_WEEKLY_GOAL *
+    weekProgress;
+
+  const paceScore =
+    expectedNow > 0
+      ? clamp(
+          (
+            approved /
+            expectedNow
+          ) *
+          100
+        )
+      : (
+          approved > 0
+            ? 100
+            : 0
+        );
+
+  /*
+   * A nota de pagamentos considera:
+   *
+   * 70% = qualidade das decisões, medida pela aprovação;
+   * 30% = ritmo de pagamentos aprovados diante da meta.
+   */
+  const score =
+    approvalRate *
+      0.70 +
+    paceScore *
+      0.30;
+
+  const difference =
+    approved -
+    previousApproved;
+
+  const projectedApproved =
+    approved /
+    Math.max(
+      0.08,
+      weekProgress
+    );
+
+  const currentPayments =
+    Array.isArray(
+      operationalData.payments
+    )
+      ? operationalData.payments.filter(
+          payment =>
+            payment?.periodKey ===
+              currentWeekKey
+        )
+      : [];
+
+  const responsibleCreators =
+    new Set(
+      currentPayments
+        .map(
+          payment =>
+            String(
+              payment?.creatorId ||
+              ""
+            )
+        )
+        .filter(Boolean)
+    );
+
+  const decisionUsers =
+    new Set(
+      currentPayments
+        .map(
+          payment =>
+            String(
+              payment?.decisionUserId ||
+              ""
+            )
+        )
+        .filter(Boolean)
+    );
+
+  const positivePoints = [];
+  const attentionPoints = [];
+  const recommendations = [];
+
+  if (
+    approved > 0
+  ) {
+    positivePoints.push(
+      `${approved} pagamento(s) foram aprovados nesta semana.`
+    );
+  }
+
+  if (
+    approvalRate >= 85 &&
+    decided > 0
+  ) {
+    positivePoints.push(
+      `A taxa de aprovação está em ${approvalRate.toFixed(1)}%, indicando boa qualidade nos registros enviados.`
+    );
+  }
+
+  if (
+    difference > 0
+  ) {
+    positivePoints.push(
+      `A semana atual possui ${difference} pagamento(s) aprovado(s) a mais do que a semana anterior.`
+    );
+  }
+
+  if (
+    responsibleCreators.size > 0
+  ) {
+    positivePoints.push(
+      `${responsibleCreators.size} responsável(is) diferente(s) contribuíram com registros de pagamento.`
+    );
+  }
+
+  if (
+    requested > 0
+  ) {
+    attentionPoints.push(
+      `${requested} pagamento(s) permanecem solicitados e ainda aguardam uma decisão final.`
+    );
+  }
+
+  if (
+    rejected > 0
+  ) {
+    attentionPoints.push(
+      `${rejected} pagamento(s) foram reprovados nesta semana.`
+    );
+  }
+
+  if (
+    approvalRate < 80 &&
+    decided > 0
+  ) {
+    attentionPoints.push(
+      `A taxa de aprovação está em ${approvalRate.toFixed(1)}%. As reprovações estão reduzindo a qualidade do processo.`
+    );
+  }
+
+  if (
+    approved <
+    expectedNow
+  ) {
+    attentionPoints.push(
+      `Para este momento da semana, seriam esperados aproximadamente ${Math.round(expectedNow)} pagamentos aprovados. O total atual é ${approved}.`
+    );
+  }
+
+  if (
+    projectedApproved <
+    PAYMENT_WEEKLY_GOAL
+  ) {
+    attentionPoints.push(
+      `Mantendo o ritmo atual, a projeção é encerrar a semana com aproximadamente ${Math.round(projectedApproved)} pagamentos aprovados.`
+    );
+  }
+
+  if (
+    requested > 0
+  ) {
+    recommendations.push(
+      `Revisar os ${requested} pagamento(s) solicitados para reduzir a fila pendente e evitar acúmulo próximo ao fechamento.`
+    );
+  }
+
+  if (
+    rejected > 0
+  ) {
+    recommendations.push(
+      "Revisar os motivos das reprovações e orientar os responsáveis sobre os erros mais recorrentes."
+    );
+  }
+
+  recommendations.push(
+    projectedApproved >=
+      PAYMENT_WEEKLY_GOAL
+      ? "Manter o ritmo atual de análise, preservando a qualidade das aprovações."
+      : `Aumentar o ritmo de análise para buscar pelo menos ${PAYMENT_WEEKLY_GOAL} pagamentos aprovados até o encerramento da semana.`
+  );
+
+  return {
+    id:
+      "pagamentos",
+
+    label:
+      "Pagamentos",
+
+    available:
+      approved > 0 ||
+      rejected > 0 ||
+      requested > 0 ||
+      previousApproved > 0 ||
+      previousRejected > 0 ||
+      previousRequested > 0,
+
+    score:
+      clamp(
+        score
+      ),
+
+    confidence:
+      clamp(
+        55 +
+        decided *
+        4
+      ),
+
+    volume:
+      approved +
+      rejected +
+      requested,
+
+    goal:
+      PAYMENT_WEEKLY_GOAL,
+
+    current:
+      approved,
+
+    previous:
+      previousApproved,
+
+    difference,
+
+    positivePoints,
+
+    attentionPoints,
+
+    recommendations,
+
+    details: {
+      currentWeekKey,
+
+      previousWeekKey,
+
+      approved,
+
+      rejected,
+
+      requested,
+
+      pending:
+        requested,
+
+      decided,
+
+      approvalRate,
+
+      previousApproved,
+
+      previousRejected,
+
+      previousRequested,
+
+      previousDecided,
+
+      previousApprovalRate,
+
+      expectedNow,
+
+      paceScore,
+
+      projectedApproved,
+
+      remaining:
+        Math.max(
+          0,
+          PAYMENT_WEEKLY_GOAL -
+          approved
+        ),
+
+      participants:
+        responsibleCreators.size,
+
+      responsibleCreators:
+        [
+          ...responsibleCreators,
+        ],
+
+      decisionUsers:
+        [
+          ...decisionUsers,
+        ],
+
+      byUser:
+        currentPayments.reduce(
+          (
+            result,
+            payment
+          ) => {
+            const userId =
+              String(
+                payment?.creatorId ||
+                ""
+              );
+
+            if (!userId) {
+              return result;
+            }
+
+            result[userId] ||= {
+              total:
+                0,
+
+              approved:
+                0,
+
+              rejected:
+                0,
+
+              requested:
+                0,
+            };
+
+            result[userId].total +=
+              1;
+
+            if (
+              payment.status ===
+              "approved"
+            ) {
+              result[userId].approved +=
+                1;
+            }
+
+            if (
+              payment.status ===
+              "rejected"
+            ) {
+              result[userId].rejected +=
+                1;
+            }
+
+            if (
+              payment.status ===
+              "requested"
+            ) {
+              result[userId].requested +=
+                1;
+            }
+
+            return result;
+          },
+          {}
+        ),
+    },
+  };
+}
+
+// ============================================================================
+// REGISTRO DOS PROVEDORES
+// ============================================================================
 registerOperationalMetricProvider(
   "participacao_equipe",
   async () =>
@@ -1023,10 +2243,31 @@ registerOperationalMetricProvider(
     buildGeneralPerformanceMetric()
 );
 
+registerOperationalMetricProvider(
+  "presencas",
+  async context =>
+    buildPresenceMetric(
+      context
+    )
+);
+
+registerOperationalMetricProvider(
+  "organizacoes",
+  async () =>
+    buildOrganizationConfirmationMetric()
+);
+
+registerOperationalMetricProvider(
+  "pagamentos",
+  async context =>
+    buildPaymentMetric(
+      context
+    )
+);
+
 // ============================================================================
 // CONTROLE GLOBAL
 // ============================================================================
-
 if (
   !globalThis.__SC_NPS_OPERATIONAL_PROVIDERS_LOADED__
 ) {

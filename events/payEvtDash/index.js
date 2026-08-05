@@ -960,59 +960,169 @@ eventsRegistrosPoderes: 0,
 }
 
 function addPayment(stats, item) {
-  const date = new Date(item.ts || Date.now());
-  const period = periodKeyFromDateSP(date);
-  const monthKey = monthKeyFromDateSP(date);
+  const date =
+    new Date(
+      item.ts ||
+      Date.now()
+    );
+
+  const period =
+    periodKeyFromDateSP(
+      date
+    );
+
+  const monthKey =
+    monthKeyFromDateSP(
+      date
+    );
 
   // Só entra mês atual ou mês passado.
-  if (!isDashboardMonthAllowed(monthKey)) return;
+  if (
+    !isDashboardMonthAllowed(
+      monthKey
+    )
+  ) {
+    return;
+  }
 
-  // Só conta pagamento com decisão final.
-  // Solicitado / criado / avaliação NÃO entra no dashboard.
-  if (!["approved", "rejected"].includes(item.status)) return;
+  /*
+   * O dashboard e o NPS precisam conhecer:
+   *
+   * • pagamentos aprovados;
+   * • pagamentos reprovados;
+   * • pagamentos solicitados e ainda aguardando decisão.
+   *
+   * O status solicitado será contabilizado como pendência,
+   * mas não entregará ponto ao criador.
+   */
+  if (
+    ![
+      "approved",
+      "rejected",
+      "requested",
+    ].includes(
+      item.status
+    )
+  ) {
+    return;
+  }
 
-  // Sem criador do registro, não conta ponto.
-  if (!item.creatorId) return;
+  // Sem criador do registro, não é possível atribuir a atividade.
+  if (!item.creatorId) {
+    return;
+  }
 
-  const buckets = ensureBucket(stats, period.key, monthKey);
+  const buckets =
+    ensureBucket(
+      stats,
+      period.key,
+      monthKey
+    );
 
-  // "paymentsCreated" aqui passa a representar registros analisados:
-  // aprovados + reprovados. Não entra solicitado.
-  buckets.week.paymentsCreated++;
-  buckets.month.paymentsCreated++;
+  /*
+   * paymentsCreated representa registros que receberam
+   * uma decisão final:
+   *
+   * • aprovado;
+   * • reprovado.
+   *
+   * Solicitado permanece separado como pendência.
+   */
+  if (
+    item.status ===
+      "approved" ||
+    item.status ===
+      "rejected"
+  ) {
+    buckets.week.paymentsCreated++;
+    buckets.month.paymentsCreated++;
+  }
 
-  if (item.status === "approved") {
+  if (
+    item.status ===
+    "approved"
+  ) {
     buckets.week.paymentsApproved++;
     buckets.month.paymentsApproved++;
   }
 
-  if (item.status === "rejected") {
+  if (
+    item.status ===
+    "rejected"
+  ) {
     buckets.week.paymentsRejected++;
     buckets.month.paymentsRejected++;
   }
 
-  const creator = ensureUser(stats, item.creatorId);
+  if (
+    item.status ===
+    "requested"
+  ) {
+    buckets.week.paymentsRequested++;
+    buckets.month.paymentsRequested++;
+  }
+
+  const creator =
+    ensureUser(
+      stats,
+      item.creatorId
+    );
 
   if (creator) {
-    creator.paymentsCreated++;
-
-    if (item.status === "approved") {
-      creator.paymentsApproved++;
-
-      // Ponto de pagamento APENAS para quem criou o registro aprovado.
-      creator.pointsPayment += 1;
+    if (
+      item.status ===
+        "approved" ||
+      item.status ===
+        "rejected"
+    ) {
+      creator.paymentsCreated++;
     }
 
-    if (item.status === "rejected") {
+    if (
+      item.status ===
+      "approved"
+    ) {
+      creator.paymentsApproved++;
+
+      /*
+       * O ponto continua sendo entregue somente
+       * ao criador de um registro aprovado.
+       */
+      creator.pointsPayment +=
+        1;
+    }
+
+    if (
+      item.status ===
+      "rejected"
+    ) {
       creator.paymentsRejected++;
 
-      // Reprovado aparece no relatório, mas NÃO dá ponto.
+      /*
+       * Reprovado aparece no diagnóstico,
+       * mas não entrega ponto.
+       */
+    }
+
+    if (
+      item.status ===
+      "requested"
+    ) {
+      creator.paymentsRequested++;
+
+      /*
+       * Solicitado representa uma pendência.
+       * Ele não entrega ponto enquanto não houver aprovação.
+       */
     }
   }
 
   stats.payments.push({
     ...item,
-    periodKey: period.key,
+
+    periodKey:
+      period.key,
+
     monthKey,
   });
 }
@@ -2053,6 +2163,57 @@ async function sendDebug(interaction, client) {
 // =========================
 // EXPORTS
 // =========================
+
+/**
+ * Entrega ao NPS Operacional uma cópia dos dados consolidados
+ * pelas fontes oficiais do dashboard.
+ *
+ * Esta função não cria listeners, não envia mensagens e não
+ * altera o painel. Ela apenas executa a coleta já existente.
+ */
+export async function collectPayEvtOperationalData(
+  client,
+  force = false
+) {
+  if (!client) {
+    return {
+      generatedAt:
+        Date.now(),
+
+      payments:
+        [],
+
+      events:
+        [],
+
+      byWeek:
+        {},
+
+      byMonth:
+        {},
+
+      users:
+        {},
+
+      debug: {
+        scannedChannels:
+          {},
+
+        recoveredFromLogs:
+          0,
+
+        duplicatesIgnored:
+          0,
+      },
+    };
+  }
+
+  return collectDashboardData(
+    client,
+    force
+  );
+}
+
 export async function payEvtDashOnReady(client) {
   if (client.__SC_PAY_EVT_DASH_V2_READY__) return;
   client.__SC_PAY_EVT_DASH_V2_READY__ = true;

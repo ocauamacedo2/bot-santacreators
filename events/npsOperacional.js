@@ -369,19 +369,19 @@ categories: {
       weeklyGoal: 15,
     },
 
-    bate_ponto: {
-      label: "Bate Ponto",
-      weight: 8,
-      enabled: true,
-      weeklyGoal: 20,
-    },
+bate_ponto: {
+  label: "Bate Ponto",
+  weight: 0,
+  enabled: false,
+  weeklyGoal: 15,
+},
 
-    presencas: {
-      label: "Presenças",
-      weight: 8,
-      enabled: true,
-      weeklyGoal: 15,
-    },
+presencas: {
+  label: "Presenças / Bate Ponto",
+  weight: 8,
+  enabled: true,
+  weeklyGoal: 15,
+},
 
     alinhamentos: {
       label: "Alinhamentos",
@@ -3621,7 +3621,6 @@ function progressBar(
     )
   );
 }
-
 function buildDashboardEmbed({
   current,
   previous,
@@ -3650,83 +3649,94 @@ function buildDashboardEmbed({
 
   const movementText =
     difference > 1
-      ? `melhora de ${Math.abs(difference).toFixed(1)} pontos`
+      ? `+${Math.abs(difference).toFixed(1)} pts`
       : difference < -1
-        ? `queda de ${Math.abs(difference).toFixed(1)} pontos`
-        : "resultado praticamente estável";
+        ? `-${Math.abs(difference).toFixed(1)} pts`
+        : "estável";
 
   const validCategories =
     current.validCategories
       .slice()
       .sort(
-        (a, b) =>
-          b.score - a.score
+        (firstCategory, secondCategory) =>
+          secondCategory.score -
+          firstCategory.score
       );
 
   const strongest =
-    validCategories[0] || null;
+    validCategories[0] ||
+    null;
 
   const weakest =
     validCategories[
       validCategories.length - 1
-    ] || null;
+    ] ||
+    null;
 
-  const categoryLines =
-    validCategories
-      .slice(0, 8)
-      .map(
-        category => {
-          const categoryClassification =
-            getClassification(
-              category.score,
-              config
-            );
+  const strongestClassification =
+    strongest
+      ? getClassification(
+          strongest.score,
+          config
+        )
+      : null;
 
-          const previousCategory =
-            previous.categories.find(
-              item =>
-                item.categoryId ===
-                category.categoryId
-            );
+  const weakestClassification =
+    weakest
+      ? getClassification(
+          weakest.score,
+          config
+        )
+      : null;
 
-          let comparisonText =
-            "primeira leitura disponível";
-
-          if (
-            previousCategory?.hasData &&
-            Number.isFinite(
-              previousCategory.score
-            )
-          ) {
-            const categoryDifference =
-              category.score -
-              previousCategory.score;
-
-            comparisonText =
-              categoryDifference > 1
-                ? `subiu ${categoryDifference.toFixed(1)} pts`
-                : categoryDifference < -1
-                  ? `caiu ${Math.abs(categoryDifference).toFixed(1)} pts`
-                  : "permaneceu estável";
-          }
-
-          return (
-            `${categoryClassification.emoji} ` +
-            `**${category.label}**\n` +
-            `└ **${category.score.toFixed(1)}%** • ` +
-            `${comparisonText} • ` +
-            `${category.raw.events} atividades`
-          );
-        }
+  const currentWeekProgress =
+    Math.max(
+      0,
+      Math.min(
+        100,
+        Number(
+          current.expectedProgress ||
+          0
+        ) * 100
       )
-      .join("\n\n") ||
-    "Ainda não existem categorias com dados suficientes.";
+    );
 
-  const weekCurrentInfluence =
-    displayed.currentWeight * 100;
+  const previousScore =
+    Number.isFinite(
+      Number(
+        previous.rawScore
+      )
+    )
+      ? Number(
+          previous.rawScore
+        )
+      : 0;
 
-  const previousInfluence =
-    displayed.historicalWeight * 100;
+  const summaryLines = [
+    `\`${NPS_DASH_MARKER}\``,
+    "",
+    `\`${progressBar(score, 14)}\``,
+    "",
+    `📅 **${current.weekInfo.label}**`,
+    `${movementEmoji} **${movementText}** em relação à semana passada`,
+    "",
+    `🏆 ${strongestClassification?.emoji || "⚪"} **Melhor:** ${
+      strongest
+        ? `${strongest.label} · ${strongest.score.toFixed(1)}%`
+        : "Aguardando dados"
+    }`,
+    `⚠️ ${weakestClassification?.emoji || "⚪"} **Atenção:** ${
+      weakest
+        ? `${weakest.label} · ${weakest.score.toFixed(1)}%`
+        : "Aguardando dados"
+    }`,
+    "",
+    `📦 **${current.totalEvents}** atividades analisadas`,
+    `📊 **${current.validCategories.length}** áreas avaliadas`,
+    `🗓️ **${currentWeekProgress.toFixed(0)}%** da semana concluída`,
+    "",
+    `Semana passada: **${previousScore.toFixed(1)}%**`,
+  ];
 
   return new EmbedBuilder()
     .setColor(
@@ -3742,80 +3752,19 @@ function buildDashboardEmbed({
     )
     .setAuthor({
       name:
-        "SantaCreators • Visão rápida da operação",
+        "SantaCreators • NPS Operacional",
     })
     .setTitle(
-      `${classification.emoji} Saúde operacional: ${score.toFixed(1)}%`
+      `${classification.emoji} ${score.toFixed(1)}% · ${classification.label}`
     )
     .setDescription(
-      [
-        `\`${NPS_DASH_MARKER}\``,
-        "",
-        `### ${classification.label}`,
-        `\`${progressBar(score, 14)}\``,
-        "",
-        `📅 **Período analisado:** ${current.weekInfo.label}`,
-        `${movementEmoji} **Comparação:** ${movementText}`,
-        `📊 **Semana passada:** ${previous.rawScore.toFixed(1)}%`,
-        "",
-        `A nota atual utiliza **${weekCurrentInfluence.toFixed(0)}% de informações desta semana** e **${previousInfluence.toFixed(0)}% da semana passada** para evitar uma queda artificial na virada semanal.`,
-      ].join("\n")
-    )
-    .addFields(
-      {
-        name:
-          "🏆 Melhor resultado",
-        value:
-          strongest
-            ? `**${strongest.label}**\n${strongest.score.toFixed(1)}%`
-            : "Aguardando informações.",
-        inline:
-          true,
-      },
-      {
-        name:
-          "⚠️ Maior atenção",
-        value:
-          weakest
-            ? `**${weakest.label}**\n${weakest.score.toFixed(1)}%`
-            : "Aguardando informações.",
-        inline:
-          true,
-      },
-      {
-        name:
-          "📌 Situação da semana",
-        value:
-          diagnosis.trend,
-        inline:
-          false,
-      },
-      {
-        name:
-          "📊 Resultados por área",
-        value:
-          truncate(
-            categoryLines,
-            1024
-          ),
-        inline:
-          false,
-      },
-      {
-        name:
-          "📡 Informações utilizadas",
-        value: [
-          `**Atividades analisadas:** ${current.totalEvents}`,
-          `**Áreas com informações suficientes:** ${current.validCategories.length}`,
-          `**Semana concluída:** ${(current.expectedProgress * 100).toFixed(0)}%`,
-        ].join("\n"),
-        inline:
-          false,
-      }
+      summaryLines.join(
+        "\n"
+      )
     )
     .setFooter({
       text:
-        "Atualização automática • Use os botões abaixo para consultar os relatórios",
+        "Atualização automática • Consulte os botões para abrir as análises",
     })
     .setTimestamp();
 }
