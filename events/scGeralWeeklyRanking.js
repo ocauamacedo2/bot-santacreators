@@ -3243,22 +3243,173 @@ if (
     }
   }
 
-  const strongestSources =
-    Object.entries(
-      sourceTotals
-    )
-      .sort(
-        (a, b) =>
-          b[1] - a[1]
-      )
-      .slice(
-        0,
-        5
-      );
+  const sortedSourceEntries =
+  Object.entries(
+    sourceTotals
+  )
+    .sort(
+      (
+        firstSource,
+        secondSource
+      ) =>
+        Number(
+          secondSource[1] ||
+          0
+        ) -
+        Number(
+          firstSource[1] ||
+          0
+        )
+    );
 
-  const positivePoints = [];
-  const attentionPoints = [];
-  const recommendations = [];
+const strongestSources =
+  sortedSourceEntries
+    .slice(
+      0,
+      5
+    );
+
+/*
+ * Estrutura completa por usuário.
+ *
+ * Ela será usada pelo NPS para:
+ *
+ * • separar Responsáveis, Gestão e Equipe Creators;
+ * • calcular a participação de cada grupo;
+ * • identificar quem está carregando a operação;
+ * • localizar concentração de trabalho;
+ * • descobrir quais fontes cada pessoa utilizou.
+ */
+const byUser =
+  Object.fromEntries(
+    current.list.map(
+      participant => {
+        const userId =
+          String(
+            participant?.userId ||
+            participant?.id ||
+            ""
+          );
+
+        const userSources =
+          current.bySourceByUser?.[
+            userId
+          ] || {};
+
+        return [
+          userId,
+
+          {
+            total:
+              Number(
+                participant?.points ||
+                0
+              ),
+
+            points:
+              Number(
+                participant?.points ||
+                0
+              ),
+
+            sources: {
+              ...userSources,
+            },
+          },
+        ];
+      }
+    ).filter(
+      (
+        [
+          userId,
+        ]
+      ) =>
+        Boolean(
+          userId
+        )
+    )
+  );
+
+/*
+ * Fontes completas da semana com nome e quantidade.
+ *
+ * Não limita ao Top 5 porque o relatório precisa encontrar
+ * também fontes pequenas que podem estar atrasadas.
+ */
+const sortedSources =
+  sortedSourceEntries.map(
+    (
+      [
+        source,
+        amount,
+      ]
+    ) => ({
+      source,
+
+      label:
+        SOURCE_LABEL[
+          source
+        ] ||
+        source,
+
+      amount:
+        Number(
+          amount ||
+          0
+        ),
+    })
+  );
+
+const topUsers =
+  current.list
+    .slice()
+    .sort(
+      (
+        firstParticipant,
+        secondParticipant
+      ) =>
+        Number(
+          secondParticipant?.points ||
+          0
+        ) -
+        Number(
+          firstParticipant?.points ||
+          0
+        )
+    )
+    .map(
+      participant => ({
+        userId:
+          String(
+            participant?.userId ||
+            participant?.id ||
+            ""
+          ),
+
+        points:
+          Number(
+            participant?.points ||
+            0
+          ),
+
+        sources: {
+          ...(
+            current.bySourceByUser?.[
+              String(
+                participant?.userId ||
+                participant?.id ||
+                ""
+              )
+            ] ||
+            {}
+          ),
+        },
+      })
+    );
+
+const positivePoints = [];
+const attentionPoints = [];
+const recommendations = [];
 
   if (hitRate >= 70) {
     positivePoints.push(
@@ -3401,36 +3552,55 @@ if (
     recommendations,
 
     details: {
-      weekKey:
-        currentWeekKey,
+  weekKey:
+    currentWeekKey,
 
-      previousWeekKey,
+  previousWeekKey,
 
-      participants,
+  participants,
 
-      participantsPrevious,
+  participantsPrevious,
 
-      reachedMinimum,
+  reachedMinimum,
 
-      belowMinimum,
+  belowMinimum,
 
-      hitRate,
+  hitRate,
 
-      previousHitRate,
+  previousHitRate,
 
-      averagePoints,
+  averagePoints,
 
-      minimumPerParticipant:
-        MIN_POINTS_WEEK,
+  /*
+   * Mantém os dois nomes para compatibilidade.
+   *
+   * O relatório humano atualmente procura minimumPerUser,
+   * enquanto algumas partes antigas usam minimumPerParticipant.
+   */
+  minimumPerUser:
+    MIN_POINTS_WEEK,
 
-      totalPoints:
-        current.totalEvents,
+  minimumPerParticipant:
+    MIN_POINTS_WEEK,
 
-      previousTotalPoints:
-        previous.totalEvents,
+  totalPoints:
+    current.totalEvents,
 
-      strongestSources,
-    },
+  previousTotalPoints:
+    previous.totalEvents,
+
+  strongestSources,
+
+  sortedSources,
+
+  byUser,
+
+  topUsers,
+
+  sourceTotals: {
+    ...sourceTotals,
+  },
+},
   };
 }
 

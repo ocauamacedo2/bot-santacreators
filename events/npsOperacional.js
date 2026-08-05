@@ -46,6 +46,18 @@ import {
   logRegisteredNpsOperationalProviders,
 } from "./npsOperationalProviders.js";
 
+/*
+ * Carrega o módulo do Set Staff antes da primeira coleta do NPS.
+ *
+ * O módulo registra o provedor "set_staff" no
+ * operationalMetricsHub durante sua importação.
+ *
+ * Isso não inicia listeners extras e não executa o fluxo do menu.
+ * Apenas garante que o provedor esteja disponível quando o
+ * relatório da semana atual for solicitado.
+ */
+import "./setStaffV2.js";
+
 import {
   PROCESS_SLA_MINUTES,
   getOperationalWeekMoment,
@@ -5225,17 +5237,84 @@ function buildHumanWeeklyAnalysisText({
   providerMetrics = [],
   operationalRoleAnalysis = null,
 }) {
-  const findMetric =
-    metricId =>
-      providerMetrics.find(
-        metric =>
-          String(
-            metric?.id ||
-            metric?.providerId ||
-            ""
-          ) === metricId &&
-          metric?.available !== false
-      ) || null;
+const findMetric =
+  metricId => {
+    const matchingMetrics =
+      providerMetrics
+        .filter(
+          metric =>
+            String(
+              metric?.id ||
+              metric?.providerId ||
+              ""
+            ) ===
+              metricId &&
+            metric?.available !==
+              false
+        )
+        .sort(
+          (
+            firstMetric,
+            secondMetric
+          ) => {
+            const firstPriority =
+              (
+                firstMetric?.officialSource
+                  ? 100
+                  : 0
+              ) +
+              (
+                firstMetric?.details &&
+                Object.keys(
+                  firstMetric.details
+                ).length > 0
+                  ? 20
+                  : 0
+              ) +
+              (
+                firstMetric?.details?.byUser &&
+                Object.keys(
+                  firstMetric.details.byUser
+                ).length > 0
+                  ? 10
+                  : 0
+              );
+
+            const secondPriority =
+              (
+                secondMetric?.officialSource
+                  ? 100
+                  : 0
+              ) +
+              (
+                secondMetric?.details &&
+                Object.keys(
+                  secondMetric.details
+                ).length > 0
+                  ? 20
+                  : 0
+              ) +
+              (
+                secondMetric?.details?.byUser &&
+                Object.keys(
+                  secondMetric.details.byUser
+                ).length > 0
+                  ? 10
+                  : 0
+              );
+
+            return (
+              secondPriority -
+              firstPriority
+            );
+          }
+        );
+
+    return (
+      matchingMetrics[0] ||
+      null
+    );
+  };
 
   const participationMetric =
     findMetric(
@@ -5270,12 +5349,154 @@ const participationDetails =
   participationMetric?.details ||
   {};
 
-  const generalPerformanceDetails =
-    generalPerformanceMetric?.details ||
-    {};
+const generalPerformanceDetails =
+  generalPerformanceMetric?.details ||
+  {};
 
-  const leadership =
-    selected?.leadership || {
+/*
+ * Dados individuais do Ranking Semanal Geral.
+ *
+ * Esses dados permitem descobrir:
+ *
+ * • quem convidou organizações;
+ * • quantos convites cada pessoa realizou;
+ * • em qual grupo hierárquico ela está;
+ * • se toda a atividade ficou concentrada em uma pessoa.
+ */
+const rankingByUser =
+  participationDetails.byUser &&
+  typeof participationDetails.byUser ===
+    "object"
+    ? participationDetails.byUser
+    : {};
+
+const organizationInviteByUser =
+  Object.entries(
+    rankingByUser
+  )
+    .map(
+      (
+        [
+          userId,
+          userData,
+        ]
+      ) => {
+        const sources =
+          userData?.sources &&
+          typeof userData.sources ===
+            "object"
+            ? userData.sources
+            : {};
+
+        const inviteCount =
+          Object.entries(
+            sources
+          ).reduce(
+            (
+              total,
+              [
+                sourceName,
+                amountRaw,
+              ]
+            ) => {
+              const normalizedSource =
+                String(
+                  sourceName ||
+                  ""
+                )
+                  .toLowerCase()
+                  .normalize(
+                    "NFD"
+                  )
+                  .replace(
+                    /[\u0300-\u036f]/g,
+                    ""
+                  )
+                  .replace(
+                    /[\s_-]+/g,
+                    ""
+                  );
+
+              if (
+                normalizedSource !==
+                  "convites" &&
+                !normalizedSource.includes(
+                  "convite"
+                )
+              ) {
+                return total;
+              }
+
+              return (
+                total +
+                Number(
+                  amountRaw ||
+                  0
+                )
+              );
+            },
+            0
+          );
+
+        return {
+          userId,
+
+          inviteCount,
+        };
+      }
+    )
+    .filter(
+      item =>
+        item.inviteCount > 0
+    )
+    .sort(
+      (
+        firstUser,
+        secondUser
+      ) =>
+        secondUser.inviteCount -
+        firstUser.inviteCount
+    );
+
+const totalOrganizationInvites =
+  organizationInviteByUser.reduce(
+    (
+      total,
+      user
+    ) =>
+      total +
+      Number(
+        user.inviteCount ||
+        0
+      ),
+    0
+  );
+
+const organizationInviters =
+  organizationInviteByUser.length;
+
+/*
+ * Meta mínima para o início da semana.
+ *
+ * Domingo, segunda e terça são considerados a janela
+ * principal de convite das organizações.
+ *
+ * Ajuste somente este número caso a meta oficial seja diferente.
+ */
+const EARLY_WEEK_ORGANIZATION_INVITE_GOAL =
+  10;
+
+const currentSPParts =
+  getSPParts(
+    new Date()
+  );
+
+const earlyWeekInviteWindowEnded =
+  currentSPParts.weekday >=
+  3;
+
+const leadership =
+  selected?.leadership || {
       entered: 0,
       removed: 0,
       leftServer: 0,
@@ -5704,30 +5925,6 @@ paragraphs.push(
 
 const criticalPoints = [];
 
-if (
-  operationalRoleAnalysis
-    ?.concentration
-    ?.overloaded
-) {
-  criticalPoints.push(
-    `O trabalho está concentrado em poucas pessoas. Os três membros com maior volume reúnem **${operationalRoleAnalysis.concentration.topThreePercentage.toFixed(1)}% das atividades da semana**.`
-  );
-}
-
-if (
-  Array.isArray(
-    operationalRoleAnalysis
-      ?.conflicts
-  ) &&
-  operationalRoleAnalysis
-    .conflicts
-    .length > 0
-) {
-  criticalPoints.push(
-    `Foram encontrados **${operationalRoleAnalysis.conflicts.length} membro(s)** com cargo de Responsável junto com Gestão ou Equipe Creators. Como Responsáveis já representam o nível mais alto desta análise, essa mistura pode indicar desorganização na setagem dos cargos.`
-  );
-}
-
 const participationParticipants =
   Number(
     participationDetails.participants ||
@@ -5740,6 +5937,55 @@ const participationReached =
     0
   );
 
+const participationBelow =
+  Number(
+    participationDetails.belowMinimum ||
+    Math.max(
+      0,
+      participationParticipants -
+      participationReached
+    )
+  );
+
+const participationAverage =
+  Number(
+    participationDetails.averagePoints ||
+    0
+  );
+
+const generalCurrentPoints =
+  Number(
+    generalPerformanceMetric?.current ??
+    generalPerformanceDetails.total ??
+    participationDetails.totalPoints ??
+    0
+  );
+
+const generalGoal =
+  Number(
+    generalPerformanceMetric?.goal ??
+    generalPerformanceDetails.goal ??
+    500
+  );
+
+const generalExpectedNow =
+  Number(
+    generalPerformanceDetails.expectedPointsNow ??
+    generalPerformanceDetails.expectedNow ??
+    generalPerformanceMetric?.progress?.expectedNow ??
+    0
+  );
+
+const generalProjectedTotal =
+  Number(
+    generalPerformanceMetric?.prediction?.projectedTotal ??
+    generalPerformanceDetails.projectedTotal ??
+    0
+  );
+
+/*
+ * Participação individual muito baixa.
+ */
 if (
   participationParticipants > 0 &&
   participationReached /
@@ -5747,7 +5993,116 @@ if (
     0.4
 ) {
   criticalPoints.push(
-    `Somente **${participationReached} de ${participationParticipants} participantes** atingiram o mínimo individual. Isso mostra que o resultado ainda depende de uma parte pequena da equipe.`
+    `A participação está muito concentrada: somente **${participationReached} de ${participationParticipants} pessoas** atingiram o mínimo individual de 25 pontos. **${participationBelow} participantes** ainda estão abaixo da meta.`
+  );
+}
+
+/*
+ * Média da equipe abaixo do mínimo individual.
+ */
+if (
+  participationParticipants > 0 &&
+  participationAverage < 25
+) {
+  criticalPoints.push(
+    `A média da equipe está em **${participationAverage.toFixed(1)} pontos por pessoa**, abaixo dos 25 pontos esperados. Isso mostra que o resultado geral está sendo sustentado principalmente pelos primeiros colocados.`
+  );
+}
+
+/*
+ * Meta geral atrasada em relação ao momento da semana.
+ */
+if (
+  generalExpectedNow > 0 &&
+  generalCurrentPoints <
+    generalExpectedNow
+) {
+  criticalPoints.push(
+    `A meta geral está atrasada para este momento da semana. O GeralDash registra **${generalCurrentPoints} pontos**, enquanto o ritmo esperado seria de aproximadamente **${Math.round(generalExpectedNow)} pontos**.`
+  );
+}
+
+/*
+ * Projeção abaixo da meta semanal.
+ */
+if (
+  generalProjectedTotal > 0 &&
+  generalProjectedTotal <
+    generalGoal
+) {
+  criticalPoints.push(
+    `Mantendo o ritmo atual, a projeção é encerrar a semana com aproximadamente **${Math.round(generalProjectedTotal)} pontos**, abaixo da meta de **${generalGoal} pontos**.`
+  );
+}
+
+/*
+ * Convites de organizações abaixo da meta inicial.
+ *
+ * A análise começa a ser crítica depois da janela principal
+ * de domingo, segunda e terça-feira.
+ */
+if (
+  earlyWeekInviteWindowEnded &&
+  totalOrganizationInvites <
+    EARLY_WEEK_ORGANIZATION_INVITE_GOAL
+) {
+  criticalPoints.push(
+    `A meta inicial de convites para organizações ainda não foi alcançada. Foram registrados **${totalOrganizationInvites} convite(s)** até agora, abaixo da meta mínima de **${EARLY_WEEK_ORGANIZATION_INVITE_GOAL}** prevista para domingo, segunda e terça-feira.`
+  );
+}
+
+/*
+ * Convites realizados por apenas uma pessoa.
+ */
+if (
+  totalOrganizationInvites > 0 &&
+  organizationInviters === 1
+) {
+  criticalPoints.push(
+    `Todos os **${totalOrganizationInvites} convites de organizações** foram realizados por apenas **uma pessoa**. Os Responsáveis, a Gestão e a Equipe Creators precisam dividir melhor essa tarefa para que o processo não dependa de um único membro.`
+  );
+}
+
+/*
+ * Existem convites, mas poucas pessoas participaram.
+ */
+if (
+  totalOrganizationInvites > 0 &&
+  organizationInviters > 1 &&
+  organizationInviters <= 2
+) {
+  criticalPoints.push(
+    `Os convites de organizações estão concentrados em apenas **${organizationInviters} pessoas**. Mesmo havendo atividade, a participação dos grupos responsáveis ainda está baixa.`
+  );
+}
+
+/*
+ * Concentração geral das atividades.
+ */
+if (
+  operationalRoleAnalysis
+    ?.concentration
+    ?.overloaded
+) {
+  criticalPoints.push(
+    `O trabalho geral está concentrado em poucas pessoas. Os três membros com maior volume reúnem **${Number(operationalRoleAnalysis.concentration.topThreePercentage || 0).toFixed(1)}% das atividades da semana**.`
+  );
+}
+
+/*
+ * Conflitos de cargos.
+ */
+if (
+  Array.isArray(
+    operationalRoleAnalysis
+      ?.conflicts
+  ) &&
+  operationalRoleAnalysis
+    .conflicts
+    .length > 0
+) {
+  criticalPoints.push(
+    `Foram encontrados **${operationalRoleAnalysis.conflicts.length} membro(s)** com cargo de Responsável junto com Gestão ou Equipe Creators. Como Responsável já é o nível mais alto desta leitura, essa combinação pode indicar desorganização na setagem dos cargos.`
   );
 }
 
@@ -5792,7 +6147,7 @@ if (
   }
 } else {
   paragraphs.push(
-    "• Nenhum problema grave foi encontrado nos dados disponíveis até agora."
+    "• Nenhum ponto crítico foi confirmado com os dados disponíveis até este momento."
   );
 }
 
@@ -5807,28 +6162,72 @@ paragraphs.push(
 );
 
   const sortedSources =
-    Array.isArray(
-      participationDetails.sortedSources
-    )
-      ? participationDetails.sortedSources
-      : [];
+  Array.isArray(
+    participationDetails.sortedSources
+  ) &&
+  participationDetails.sortedSources.length
+    ? participationDetails.sortedSources
+    : (
+        Array.isArray(
+          participationDetails.strongestSources
+        )
+          ? participationDetails.strongestSources.map(
+              source => {
+                if (
+                  Array.isArray(
+                    source
+                  )
+                ) {
+                  return {
+                    source:
+                      source[0],
 
-  if (
-    sortedSources.length
-  ) {
-    for (
-      const source of
-      sortedSources
-    ) {
-      paragraphs.push(
-        `• **${source.label}:** ${Number(source.amount || 0)} registro(s)`
+                    label:
+                      source[0],
+
+                    amount:
+                      Number(
+                        source[1] ||
+                        0
+                      ),
+                  };
+                }
+
+                return source;
+              }
+            )
+          : []
       );
-    }
-  } else {
+
+if (
+  sortedSources.length
+) {
+  for (
+    const source of
+    sortedSources
+  ) {
+    const sourceLabel =
+      String(
+        source?.label ||
+        source?.source ||
+        "Outra atividade"
+      );
+
+    const sourceAmount =
+      Number(
+        source?.amount ||
+        0
+      );
+
     paragraphs.push(
-      "Ainda não foi possível separar os registros por fonte."
+      `• **${sourceLabel}:** ${sourceAmount} registro(s)`
     );
   }
+} else {
+  paragraphs.push(
+    "O Ranking Geral possui pontos registrados, mas ainda não entregou a separação por fonte para esta leitura."
+  );
+}
 
   paragraphs.push("");
 
