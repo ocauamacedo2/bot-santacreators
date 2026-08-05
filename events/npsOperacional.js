@@ -96,8 +96,23 @@ const ROLE_CIDADAO_ID = "1262978759922028575";
 const ROLE_EQUIPE_CREATOR_ID =
   "1352429001188180039";
 
+const ROLE_EQUIPE_MANAGER_ID =
+  "1392678638176043029";
+
+const ROLE_MANAGER_CREATOR_ID =
+  "1388976155830255697";
+
 const ROLE_COORDENACAO_ID =
   "1352385500614234134";
+
+const ROLE_COORDENACAO_CREATORS_ID =
+  "1388976314253312100";
+
+const ROLE_GESTOR_CREATOR_ID =
+  "1388975939161161728";
+
+const ROLE_MKT_CREATORS_ID =
+  "1282119104576098314";
 
 const ROLE_RESPONSAVEIS_GERAIS_ID =
   "1414651836861907006";
@@ -195,6 +210,48 @@ const OPERATIONAL_ROLE_GROUPS = [
 
   {
     id:
+      ROLE_COORDENACAO_CREATORS_ID,
+
+    key:
+      "coordenacao",
+
+    label:
+      "Gestão",
+
+    mention:
+      `<@&${ROLE_COORDENACAO_CREATORS_ID}>`,
+  },
+
+  {
+    id:
+      ROLE_GESTOR_CREATOR_ID,
+
+    key:
+      "coordenacao",
+
+    label:
+      "Gestão",
+
+    mention:
+      `<@&${ROLE_GESTOR_CREATOR_ID}>`,
+  },
+
+  {
+    id:
+      ROLE_MKT_CREATORS_ID,
+
+    key:
+      "coordenacao",
+
+    label:
+      "Gestão",
+
+    mention:
+      `<@&${ROLE_MKT_CREATORS_ID}>`,
+  },
+
+  {
+    id:
       ROLE_EQUIPE_CREATOR_ID,
 
     key:
@@ -205,6 +262,34 @@ const OPERATIONAL_ROLE_GROUPS = [
 
     mention:
       `<@&${ROLE_EQUIPE_CREATOR_ID}>`,
+  },
+
+  {
+    id:
+      ROLE_EQUIPE_MANAGER_ID,
+
+    key:
+      "equipe_creator",
+
+    label:
+      "Equipe Creators",
+
+    mention:
+      `<@&${ROLE_EQUIPE_MANAGER_ID}>`,
+  },
+
+  {
+    id:
+      ROLE_MANAGER_CREATOR_ID,
+
+    key:
+      "equipe_creator",
+
+    label:
+      "Equipe Creators",
+
+    mention:
+      `<@&${ROLE_MANAGER_CREATOR_ID}>`,
   },
 ];
 
@@ -4630,6 +4715,338 @@ async function ensureCoreOperationalMetrics(
   return providerCollection;
 }
 
+function normalizeOperationalSourceName(
+  value
+) {
+  return String(
+    value || ""
+  )
+    .trim()
+    .toLowerCase()
+    .normalize(
+      "NFD"
+    )
+    .replace(
+      /[\u0300-\u036f]/g,
+      ""
+    )
+    .replace(
+      /[\s_-]+/g,
+      ""
+    );
+}
+
+function resolveOperationalUserAmount(
+  value
+) {
+  if (
+    Number.isFinite(
+      Number(value)
+    )
+  ) {
+    return Math.max(
+      0,
+      Number(value)
+    );
+  }
+
+  if (
+    !value ||
+    typeof value !==
+      "object"
+  ) {
+    return 0;
+  }
+
+  return Math.max(
+    0,
+    Number(
+      value.total ??
+      value.points ??
+      value.count ??
+      value.records ??
+      value.events ??
+      value.approved ??
+      value.completed ??
+      0
+    )
+  );
+}
+
+function buildConsolidatedOperationalUsers({
+  providerMetrics = [],
+  preferredMetric = null,
+} = {}) {
+  const consolidatedUsers =
+    {};
+
+  const ensureUser =
+    userId => {
+      const normalizedUserId =
+        String(
+          userId ||
+          ""
+        ).trim();
+
+      if (
+        !normalizedUserId
+      ) {
+        return null;
+      }
+
+      consolidatedUsers[
+        normalizedUserId
+      ] ||= {
+        total:
+          0,
+
+        sources:
+          {},
+      };
+
+      return consolidatedUsers[
+        normalizedUserId
+      ];
+    };
+
+  const applyUserSource =
+    (
+      userId,
+      sourceName,
+      amountRaw
+    ) => {
+      const user =
+        ensureUser(
+          userId
+        );
+
+      if (!user) {
+        return;
+      }
+
+      const normalizedSource =
+        normalizeOperationalSourceName(
+          sourceName
+        );
+
+      const amount =
+        Math.max(
+          0,
+          Number(
+            amountRaw ||
+            0
+          )
+        );
+
+      if (
+        !normalizedSource ||
+        !Number.isFinite(
+          amount
+        ) ||
+        amount <= 0
+      ) {
+        return;
+      }
+
+      /*
+       * Usa o maior valor encontrado para a mesma
+       * pessoa e fonte.
+       *
+       * Isso permite complementar fontes ausentes sem
+       * duplicar um registro que apareceu tanto no
+       * Ranking Geral quanto no provedor individual.
+       */
+      user.sources[
+        normalizedSource
+      ] =
+        Math.max(
+          Number(
+            user.sources[
+              normalizedSource
+            ] ||
+            0
+          ),
+          amount
+        );
+    };
+
+  const applyMetric =
+    (
+      metric,
+      {
+        preferred =
+          false,
+      } = {}
+    ) => {
+      const byUser =
+        metric?.details?.byUser &&
+        typeof metric.details.byUser ===
+          "object"
+          ? metric.details.byUser
+          : {};
+
+      const metricSource =
+        normalizeOperationalSourceName(
+          metric?.details?.source ||
+          metric?.source ||
+          metric?.id ||
+          metric?.providerId ||
+          "outraatividade"
+        );
+
+      for (
+        const [
+          userId,
+          userData,
+        ] of Object.entries(
+          byUser
+        )
+      ) {
+        const userSources =
+          userData &&
+          typeof userData ===
+            "object" &&
+          userData.sources &&
+          typeof userData.sources ===
+            "object"
+            ? userData.sources
+            : null;
+
+        if (
+          userSources &&
+          Object.keys(
+            userSources
+          ).length > 0
+        ) {
+          for (
+            const [
+              sourceName,
+              sourceAmount,
+            ] of Object.entries(
+              userSources
+            )
+          ) {
+            applyUserSource(
+              userId,
+              sourceName,
+              sourceAmount
+            );
+          }
+
+          continue;
+        }
+
+        /*
+         * As métricas gerais representam a soma de várias
+         * fontes e não podem ser adicionadas novamente
+         * como se fossem uma atividade própria.
+         */
+        const ignoredMetricIds =
+          new Set([
+            "participacaoequipe",
+            "desempenhogeral",
+            "metainterna",
+          ]);
+
+        if (
+          ignoredMetricIds.has(
+            metricSource
+          )
+        ) {
+          continue;
+        }
+
+        const amount =
+          resolveOperationalUserAmount(
+            userData
+          );
+
+        if (
+          amount <= 0
+        ) {
+          continue;
+        }
+
+        applyUserSource(
+          userId,
+          metricSource,
+          amount
+        );
+      }
+    };
+
+  /*
+   * O Ranking Semanal Geral é aplicado primeiro porque
+   * contém a visão consolidada oficial das atividades.
+   */
+  if (
+    preferredMetric
+  ) {
+    applyMetric(
+      preferredMetric,
+      {
+        preferred:
+          true,
+      }
+    );
+  }
+
+  /*
+   * Os provedores individuais completam somente os dados
+   * que não estiverem disponíveis no Ranking.
+   */
+  for (
+    const metric of
+    providerMetrics
+  ) {
+    if (
+      metric ===
+      preferredMetric ||
+      metric?.available ===
+        false
+    ) {
+      continue;
+    }
+
+    applyMetric(
+      metric
+    );
+  }
+
+  /*
+   * Recalcula o total de cada usuário a partir das fontes
+   * consolidadas, garantindo que o total seja coerente.
+   */
+  for (
+    const user of
+    Object.values(
+      consolidatedUsers
+    )
+  ) {
+    user.total =
+      Object.values(
+        user.sources ||
+        {}
+      ).reduce(
+        (
+          total,
+          amount
+        ) =>
+          total +
+          Math.max(
+            0,
+            Number(
+              amount ||
+              0
+            )
+          ),
+        0
+      );
+  }
+
+  return consolidatedUsers;
+}
+
 // ============================================================================
 // GERAÇÃO DOS RESULTADOS
 // ============================================================================
@@ -4836,11 +5253,13 @@ if (
  * }
  */
 const rankingUsersForRoles =
-  participationMetric?.details?.byUser &&
-  typeof participationMetric.details.byUser ===
-    "object"
-    ? participationMetric.details.byUser
-    : {};
+  buildConsolidatedOperationalUsers({
+    providerMetrics:
+      providerCollection.results,
+
+    preferredMetric:
+      participationMetric,
+  });
 
 /*
  * Classifica cada participante de acordo com os cargos
@@ -6055,8 +6474,14 @@ const roleGroups = [
             first,
             second
           ) =>
-            second[1] -
-            first[1]
+            Number(
+              second[1] ||
+              0
+            ) -
+            Number(
+              first[1] ||
+              0
+            )
         )
         .slice(
           0,
@@ -6072,14 +6497,54 @@ const roleGroups = [
                   sourceName,
                   amount,
                 ]
-              ) =>
-                `${sourceName}: ${amount}`
+              ) => {
+                const sourceInformation =
+                  participationDetails
+                    .sortedSources
+                    ?.find(
+                      source =>
+                        normalizeOperationalSourceName(
+                          source?.source
+                        ) ===
+                        normalizeOperationalSourceName(
+                          sourceName
+                        )
+                    );
+
+                const sourceLabel =
+                  sourceInformation?.label ||
+                  sourceName;
+
+                return (
+                  `**${sourceLabel}** com ${Number(amount || 0)}`
+                );
+              }
             )
-            .join(", ")
-        : "nenhuma fonte com atividade";
+            .join(
+              ", "
+            )
+        : "nenhuma atividade específica identificada";
+
+    if (
+      Number(
+        group.records ||
+        0
+      ) <= 0
+    ) {
+      paragraphs.push(
+        `• **${group.label}:** nenhuma atividade foi localizada para este grupo nesta semana.`
+      );
+
+      continue;
+    }
+
+    const participationDescription =
+      group.activeMembers === 1
+        ? "Apenas uma pessoa deste grupo participou"
+        : `${group.activeMembers} pessoas deste grupo participaram`;
 
     paragraphs.push(
-      `• **${group.label}:** ${group.records} atividade(s), representando **${group.percentage.toFixed(1)}% do trabalho registrado**. Participaram ${group.activeMembers} pessoa(s). Principais fontes: ${sourceText}.`
+      `• **${group.label} realizou ${group.records} atividade(s)**, o equivalente a **${group.percentage.toFixed(1)}% de todo o trabalho registrado**. ${participationDescription}. As atividades mais frequentes foram ${sourceText}.`
     );
   }
 
@@ -6435,10 +6900,30 @@ paragraphs.push(
 if (
   sortedSources.length
 ) {
+  const roleGroupsForSources = [
+    operationalRoleAnalysis
+      ?.responsaveis,
+
+    operationalRoleAnalysis
+      ?.coordenacao,
+
+    operationalRoleAnalysis
+      ?.equipe_creator,
+
+    operationalRoleAnalysis
+      ?.outros,
+  ].filter(Boolean);
+
   for (
     const source of
     sortedSources
   ) {
+    const sourceKey =
+      normalizeOperationalSourceName(
+        source?.source ||
+        source?.label
+      );
+
     const sourceLabel =
       String(
         source?.label ||
@@ -6447,14 +6932,168 @@ if (
       );
 
     const sourceAmount =
-      Number(
-        source?.amount ||
-        0
+      Math.max(
+        0,
+        Number(
+          source?.amount ||
+          0
+        )
       );
 
+    const groupDistribution =
+      roleGroupsForSources
+        .map(
+          group => {
+            const groupSourceAmount =
+              Object.entries(
+                group.sources ||
+                {}
+              ).reduce(
+                (
+                  total,
+                  [
+                    groupSourceName,
+                    groupSourceAmountRaw,
+                  ]
+                ) => {
+                  const normalizedGroupSource =
+                    normalizeOperationalSourceName(
+                      groupSourceName
+                    );
+
+                  if (
+                    normalizedGroupSource !==
+                    sourceKey
+                  ) {
+                    return total;
+                  }
+
+                  return (
+                    total +
+                    Math.max(
+                      0,
+                      Number(
+                        groupSourceAmountRaw ||
+                        0
+                      )
+                    )
+                  );
+                },
+                0
+              );
+
+            return {
+              label:
+                group.label,
+
+              amount:
+                groupSourceAmount,
+            };
+          }
+        )
+        .filter(
+          group =>
+            group.amount > 0
+        );
+
     paragraphs.push(
-      `• **${sourceLabel}:** ${sourceAmount} registro(s)`
+      `• **${sourceLabel}: ${sourceAmount} registro(s)**`
     );
+
+    if (
+      groupDistribution.length
+    ) {
+      const identifiedAmount =
+        groupDistribution.reduce(
+          (
+            total,
+            group
+          ) =>
+            total +
+            Number(
+              group.amount ||
+              0
+            ),
+          0
+        );
+
+      const distributionText =
+        groupDistribution
+          .map(
+            group =>
+              `${group.amount} por ${group.label}`
+          )
+          .join(
+            ", "
+          );
+
+      paragraphs.push(
+        `  ↳ Foram identificados ${distributionText}.`
+      );
+
+      if (
+        identifiedAmount <
+        sourceAmount
+      ) {
+        const unidentifiedAmount =
+          Math.max(
+            0,
+            sourceAmount -
+            identifiedAmount
+          );
+
+        paragraphs.push(
+          `  ↳ ${unidentifiedAmount} registro(s) ainda não puderam ser ligados com segurança a um grupo operacional.`
+        );
+      }
+
+      const highestGroup =
+        groupDistribution
+          .slice()
+          .sort(
+            (
+              first,
+              second
+            ) =>
+              second.amount -
+              first.amount
+          )[0];
+
+      const lowestOperationalGroups =
+        groupDistribution.filter(
+          group =>
+            group.label !==
+            "Outros" &&
+            group.amount <
+              highestGroup.amount
+        );
+
+      if (
+        highestGroup &&
+        sourceAmount > 0 &&
+        highestGroup.amount /
+          sourceAmount >=
+          0.6
+      ) {
+        paragraphs.push(
+          `  ↳ A atividade está concentrada em ${highestGroup.label}, que realizou ${((highestGroup.amount / sourceAmount) * 100).toFixed(1)}% dos registros. Uma divisão maior ajudaria a reduzir a sobrecarga.`
+        );
+      } else if (
+        lowestOperationalGroups.length > 0
+      ) {
+        paragraphs.push(
+          `  ↳ Existe participação de mais de um grupo, mas ainda há espaço para equilibrar melhor essa atividade entre Responsáveis, Gestão e Equipe Creators.`
+        );
+      } else {
+        paragraphs.push(
+          `  ↳ A distribuição desta atividade está relativamente equilibrada entre os grupos que participaram.`
+        );
+      }
+    } else {
+      paragraphs.push(
+        "  ↳ O total foi encontrado, mas os registros ainda não possuem autor suficiente para separar Responsáveis, Gestão e Equipe Creators."
+      );
+    }
   }
 } else {
   paragraphs.push(
