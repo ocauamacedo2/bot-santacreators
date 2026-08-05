@@ -39,6 +39,17 @@ import {
 } from "../utils/operationalMetricsHub.js";
 
 import {
+  PROCESS_SLA_MINUTES,
+  getOperationalWeekMoment,
+  createOperationalMetricSnapshot,
+  buildSameMomentComparison,
+  buildGoalProgress,
+  buildOperationalProjection,
+  buildResponseTimeStatistics,
+  buildOperationalRoleBreakdown,
+} from "../utils/operationalIntelligence.js";
+
+import {
   buildWeeklyRankingOperationalMetric,
 } from "./scGeralWeeklyRanking.js";
 
@@ -61,6 +72,59 @@ const NPS_WEEKLY_REPORT_CHANNEL_ID = "1387864036259004436";
 
 const ROLE_LIDER_ID = "1353858422063239310";
 const ROLE_CIDADAO_ID = "1262978759922028575";
+
+const ROLE_EQUIPE_CREATOR_ID =
+  "1352429001188180039";
+
+const ROLE_COORDENACAO_ID =
+  "1352385500614234134";
+
+const ROLE_RESPONSAVEIS_ID =
+  "1414651836861907006";
+
+const OPERATIONAL_ROLE_GROUPS = [
+  {
+    id:
+      ROLE_COORDENACAO_ID,
+
+    key:
+      "coordenacao",
+
+    label:
+      "Coordenação",
+
+    mention:
+      `<@&${ROLE_COORDENACAO_ID}>`,
+  },
+
+  {
+    id:
+      ROLE_RESPONSAVEIS_ID,
+
+    key:
+      "responsaveis",
+
+    label:
+      "Responsáveis",
+
+    mention:
+      `<@&${ROLE_RESPONSAVEIS_ID}>`,
+  },
+
+  {
+    id:
+      ROLE_EQUIPE_CREATOR_ID,
+
+    key:
+      "equipe_creator",
+
+    label:
+      "Equipe Creator",
+
+    mention:
+      `<@&${ROLE_EQUIPE_CREATOR_ID}>`,
+  },
+];
 
 const NPS_DASH_MARKER = "SC_NPS_OPERACIONAL::V1";
 const NPS_EXECUTIVE_MARKER = "SC_NPS_EXECUTIVO::V1";
@@ -629,6 +693,22 @@ function ensureWeek(state, weekInfo) {
       // Eventos recebidos em tempo real não serão somados duas vezes.
       consolidatedSources: {},
 
+      /*
+       * Snapshots separados por provedor.
+       *
+       * Formato:
+       *
+       * {
+       *   registro_manager: [],
+       *   pagamentos: [],
+       *   presencas: [],
+       * }
+       *
+       * Isso permitirá comparar terça-feira às 20h com
+       * terça-feira às 20h da semana anterior.
+       */
+      providerSnapshots: {},
+
       leaders: {
         entered: [],
         removed: [],
@@ -643,6 +723,7 @@ function ensureWeek(state, weekInfo) {
 
       approvals: [],
 
+      // Snapshots gerais da nota do NPS.
       snapshots: [],
 
       closedAt: null,
@@ -654,6 +735,7 @@ function ensureWeek(state, weekInfo) {
   state.weeks[weekInfo.key].events ||= [];
   state.weeks[weekInfo.key].categories ||= {};
   state.weeks[weekInfo.key].consolidatedSources ||= {};
+  state.weeks[weekInfo.key].providerSnapshots ||= {};
 
   state.weeks[weekInfo.key].leaders ||= {
     entered: [],
@@ -682,6 +764,241 @@ function getWeekForTimestamp(state, timestamp) {
     state,
     info
   );
+}
+
+// ============================================================================
+// SNAPSHOTS DOS PROVEDORES
+// ============================================================================
+
+function syncProviderMetricSnapshots({
+  state,
+  currentWeekInfo,
+  previousWeekInfo,
+  providerMetrics,
+  timestamp = Date.now(),
+}) {
+  const currentWeek =
+    ensureWeek(
+      state,
+      currentWeekInfo
+    );
+
+  const previousWeek =
+    ensureWeek(
+      state,
+      previousWeekInfo
+    );
+
+  currentWeek.providerSnapshots ||= {};
+  previousWeek.providerSnapshots ||= {};
+
+  const referenceDate =
+    new Date(
+      timestamp
+    );
+
+  const currentMoment =
+    getOperationalWeekMoment(
+      referenceDate,
+      TZ
+    );
+
+  for (
+    const metric of
+    providerMetrics || []
+  ) {
+    const metricId =
+      safeString(
+        metric?.id ||
+        metric?.providerId
+      );
+
+    if (
+      !metricId
+    ) {
+      continue;
+    }
+
+    currentWeek.providerSnapshots[
+      metricId
+    ] ||= [];
+
+    previousWeek.providerSnapshots[
+      metricId
+    ] ||= [];
+
+    /*
+     * Compara o valor atual com o snapshot mais próximo
+     * do mesmo momento da semana anterior.
+     */
+    metric.sameMomentComparison =
+      buildSameMomentComparison({
+        currentMetric:
+          metric,
+
+        previousSnapshots:
+          previousWeek.providerSnapshots[
+            metricId
+          ],
+
+        reference:
+          referenceDate,
+
+        timezone:
+          TZ,
+
+        toleranceMinutes:
+          180,
+      });
+
+    /*
+     * Enriquece automaticamente provedores que já enviam
+     * os campos current e goal.
+     */
+    if (
+      Number.isFinite(
+        Number(
+          metric.current
+        )
+      ) &&
+      Number.isFinite(
+        Number(
+          metric.goal
+        )
+      ) &&
+      Number(
+        metric.goal
+      ) > 0
+    ) {
+      metric.progress =
+        metric.progress ||
+        buildGoalProgress({
+          current:
+            metric.current,
+
+          goal:
+            metric.goal,
+
+          reference:
+            referenceDate,
+
+          timezone:
+            TZ,
+        });
+
+      metric.prediction =
+        metric.prediction ||
+        buildOperationalProjection({
+          current:
+            metric.current,
+
+          goal:
+            metric.goal,
+
+          reference:
+            referenceDate,
+
+          timezone:
+            TZ,
+        });
+    }
+
+    /*
+     * Enriquece provedores que entregam uma lista de
+     * tempos em milissegundos.
+     */
+    const responseDurations =
+      metric.responseTimes ||
+      metric.details?.responseTimes ||
+      [];
+
+    if (
+      Array.isArray(
+        responseDurations
+      ) &&
+      responseDurations.length
+    ) {
+      const idealMinutes =
+        metric.idealMinutes ??
+        PROCESS_SLA_MINUTES[
+          metricId
+        ] ??
+        null;
+
+      metric.responseTime =
+        metric.responseTime ||
+        buildResponseTimeStatistics({
+          durations:
+            responseDurations,
+
+          idealMinutes,
+        });
+    }
+
+    const snapshot =
+      createOperationalMetricSnapshot(
+        metric,
+        referenceDate,
+        TZ
+      );
+
+    const snapshotList =
+      currentWeek.providerSnapshots[
+        metricId
+      ];
+
+    const lastSnapshot =
+      snapshotList[
+        snapshotList.length -
+        1
+      ];
+
+    /*
+     * Apenas um snapshot por janela de dez minutos.
+     *
+     * Caso o painel seja atualizado várias vezes dentro
+     * da mesma janela, substitui o snapshot anterior.
+     */
+    if (
+      lastSnapshot &&
+      lastSnapshot.snapshotBucket ===
+        currentMoment.snapshotBucket
+    ) {
+      snapshotList[
+        snapshotList.length -
+        1
+      ] =
+        snapshot;
+    } else {
+      snapshotList.push(
+        snapshot
+      );
+    }
+
+    /*
+     * Limite máximo de sete dias com um snapshot
+     * a cada dez minutos:
+     *
+     * 7 × 24 × 6 = 1008 snapshots.
+     */
+    if (
+      snapshotList.length >
+      1008
+    ) {
+      currentWeek.providerSnapshots[
+        metricId
+      ] =
+        snapshotList.slice(
+          -1008
+        );
+    }
+  }
+
+  return {
+    currentWeek,
+    previousWeek,
+    currentMoment,
+  };
 }
 
 // ============================================================================
@@ -2699,6 +3016,181 @@ function calculateWeek(
 }
 
 // ============================================================================
+// TRAVA DE REALIDADE OPERACIONAL
+// ============================================================================
+
+function applyOperationalRealityGate(
+  displayed,
+  current,
+  providerMetrics = []
+) {
+  const findMetric =
+    metricId =>
+      providerMetrics.find(
+        metric =>
+          (
+            metric.id ||
+            metric.providerId
+          ) === metricId &&
+          metric.available !== false &&
+          Number.isFinite(
+            Number(
+              metric.score
+            )
+          )
+      );
+
+  const generalPerformance =
+    findMetric(
+      "desempenho_geral"
+    );
+
+  const teamParticipation =
+    findMetric(
+      "participacao_equipe"
+    );
+
+  const availableCoreMetrics = [
+    generalPerformance,
+    teamParticipation,
+  ].filter(Boolean);
+
+  /*
+   * Sem os indicadores centrais, a confiança geral é insuficiente
+   * para declarar que toda a operação está em nível excelente
+   * ou muito bom.
+   */
+  if (!availableCoreMetrics.length) {
+    return {
+      ...displayed,
+
+      score:
+        Math.min(
+          displayed.score,
+          69.9
+        ),
+
+      operationalGate: {
+        applied:
+          true,
+
+        reason:
+          "core_metrics_missing",
+
+        coreScore:
+          null,
+
+        originalScore:
+          displayed.score,
+
+        finalScore:
+          Math.min(
+            displayed.score,
+            69.9
+          ),
+      },
+    };
+  }
+
+  const generalScore =
+    generalPerformance
+      ? Number(
+          generalPerformance.score
+        )
+      : null;
+
+  const participationScore =
+    teamParticipation
+      ? Number(
+          teamParticipation.score
+        )
+      : null;
+
+  let coreScore;
+
+  if (
+    generalScore != null &&
+    participationScore != null
+  ) {
+    /*
+     * O ritmo geral possui 55% da leitura central.
+     * A distribuição da participação possui 45%.
+     */
+    coreScore =
+      generalScore * 0.55 +
+      participationScore * 0.45;
+  } else {
+    coreScore =
+      generalScore ??
+      participationScore ??
+      0;
+  }
+
+  let maximumAllowedScore =
+    100;
+
+  /*
+   * As categorias individuais podem melhorar a nota,
+   * mas não podem esconder uma operação geral crítica.
+   */
+  if (coreScore < 40) {
+    maximumAllowedScore =
+      59.9;
+  } else if (coreScore < 55) {
+    maximumAllowedScore =
+      64.9;
+  } else if (coreScore < 70) {
+    maximumAllowedScore =
+      74.9;
+  } else if (coreScore < 80) {
+    maximumAllowedScore =
+      84.9;
+  }
+
+  const finalScore =
+    Math.min(
+      displayed.score,
+      maximumAllowedScore
+    );
+
+  return {
+    ...displayed,
+
+    score:
+      clamp(
+        finalScore,
+        0,
+        100
+      ),
+
+    operationalGate: {
+      applied:
+        finalScore <
+        displayed.score,
+
+      reason:
+        finalScore <
+        displayed.score
+          ? "core_metrics_below_general_score"
+          : "not_required",
+
+      coreScore,
+
+      generalScore,
+
+      participationScore,
+
+      originalScore:
+        displayed.score,
+
+      maximumAllowedScore,
+
+      finalScore,
+    },
+  };
+}
+
+// ============================================================================
 // TRANSIÇÃO INTELIGENTE ENTRE SEMANAS
 // ============================================================================
 
@@ -2855,6 +3347,23 @@ function buildDiagnosis(
   const positives = [];
   const attentions = [];
   const recommendations = [];
+
+  if (
+    displayed.operationalGate?.applied
+  ) {
+    const gate =
+      displayed.operationalGate;
+
+    attentions.push(
+      gate.coreScore != null
+        ? `Os indicadores gerais da operação estão em ${gate.coreScore.toFixed(1)}%. Por esse motivo, a nota geral foi limitada de ${gate.originalScore.toFixed(1)}% para ${gate.finalScore.toFixed(1)}%.`
+        : `Os indicadores centrais do Ranking Geral e do GeralDash ainda não estavam disponíveis. Por segurança, a nota geral foi limitada a ${gate.finalScore.toFixed(1)}%.`
+    );
+
+    recommendations.push(
+      "Priorizar o ritmo da meta geral e aumentar a quantidade de participantes que atingem o mínimo individual antes de classificar a operação como saudável."
+    );
+  }
 
   for (
     const metric of providerMetrics
@@ -3899,8 +4408,8 @@ async function ensureCoreOperationalMetrics(
     const requiredProvider of
     requiredProviders
   ) {
-    const existingMetric =
-      providerCollection.results.find(
+    const existingMetricIndex =
+      providerCollection.results.findIndex(
         metric =>
           metric.id ===
             requiredProvider.id ||
@@ -3908,11 +4417,33 @@ async function ensureCoreOperationalMetrics(
             requiredProvider.id
       );
 
+    const existingMetric =
+      existingMetricIndex >= 0
+        ? providerCollection.results[
+            existingMetricIndex
+          ]
+        : null;
+
     /*
-     * Caso a métrica já tenha sido coletada pelo Hub,
-     * não executa novamente.
+     * A métrica somente é considerada utilizável quando:
+     *
+     * • existe;
+     * • não está marcada como indisponível;
+     * • possui uma nota numérica válida.
+     *
+     * Uma métrica existente com available: false não pode
+     * bloquear a consulta direta do módulo.
      */
-    if (existingMetric) {
+    const existingMetricIsUsable =
+      existingMetric &&
+      existingMetric.available !== false &&
+      Number.isFinite(
+        Number(
+          existingMetric.score
+        )
+      );
+
+    if (existingMetricIsUsable) {
       continue;
     }
 
@@ -3934,12 +4465,33 @@ async function ensureCoreOperationalMetrics(
         continue;
       }
 
-      providerCollection.results.push({
+      const normalizedMetric = {
         providerId:
           requiredProvider.id,
 
         ...metric,
-      });
+
+        id:
+          metric.id ||
+          requiredProvider.id,
+      };
+
+      /*
+       * Caso o Hub tenha devolvido uma versão indisponível,
+       * substitui essa versão pela métrica recuperada diretamente.
+       *
+       * Caso não existisse nenhuma versão, adiciona normalmente.
+       */
+      if (existingMetricIndex >= 0) {
+        providerCollection.results[
+          existingMetricIndex
+        ] =
+          normalizedMetric;
+      } else {
+        providerCollection.results.push(
+          normalizedMetric
+        );
+      }
 
       console.log(
         `[NPS Operacional] Métrica central recuperada diretamente: ${requiredProvider.id}`,
@@ -4003,6 +4555,26 @@ async function generateResults() {
 
     previousWeek:
       getPreviousWeekInfo(),
+
+    currentMoment:
+      getOperationalWeekMoment(
+        new Date(),
+        TZ
+      ),
+
+    roleGroups:
+      OPERATIONAL_ROLE_GROUPS,
+
+    processSlas:
+      PROCESS_SLA_MINUTES,
+
+    intelligence: {
+      getOperationalWeekMoment,
+      buildGoalProgress,
+      buildOperationalProjection,
+      buildResponseTimeStatistics,
+      buildOperationalRoleBreakdown,
+    },
   };
 
   const providerCollection =
@@ -4022,25 +4594,75 @@ async function generateResults() {
     providerContext
   );
 
+  /*
+   * Salva snapshots separados por módulo e adiciona:
+   *
+   * • comparação no mesmo momento;
+   * • progresso da meta;
+   * • previsão;
+   * • estatísticas de tempo, quando disponíveis.
+   */
+  syncProviderMetricSnapshots({
+    state,
+
+    currentWeekInfo:
+      providerContext.currentWeek,
+
+    previousWeekInfo:
+      providerContext.previousWeek,
+
+    providerMetrics:
+      providerCollection.results,
+
+    timestamp:
+      Date.now(),
+  });
+
   console.log(
     "[NPS Operacional] Resultado da coleta de métricas:",
     {
       metrics:
         providerCollection.results.map(
-          metric => ({
-            id:
-              metric.id ||
-              metric.providerId,
+         metric => ({
+  id:
+    metric.id ||
+    metric.providerId,
 
-            available:
-              metric.available,
+  available:
+    metric.available,
 
-            score:
-              metric.score,
+  score:
+    metric.score,
 
-            volume:
-              metric.volume,
-          })
+  volume:
+    metric.volume,
+
+  current:
+    metric.current,
+
+  goal:
+    metric.goal,
+
+  paceScore:
+    metric.progress
+      ?.paceScore ??
+      null,
+
+  projectedTotal:
+    metric.prediction
+      ?.projectedTotal ??
+      null,
+
+  sameMomentAvailable:
+    metric.sameMomentComparison
+      ?.available ??
+      false,
+
+  sameMomentPrevious:
+    metric.sameMomentComparison
+      ?.previous ??
+      null,
+})
         ),
 
       errors:
@@ -4147,11 +4769,17 @@ for (
     continue;
   }
 
+  const providerMetricId =
+    safeString(
+      providerMetric.id ||
+      providerMetric.providerId
+    );
+
   const category =
     current.categories.find(
       item =>
         item.categoryId ===
-        providerMetric.id
+        providerMetricId
     );
 
   if (!category) {
@@ -4193,19 +4821,26 @@ recalculateWeekResult(
   current
 );
 
-const displayed =
+const displayedBase =
   calculateDisplayedCurrentScore(
     current,
     previous
   );
 
-  const diagnosis =
-    buildDiagnosis(
-      current,
-      previous,
-      displayed,
-      providerCollection.results
-    );
+const displayed =
+  applyOperationalRealityGate(
+    displayedBase,
+    current,
+    providerCollection.results
+  );
+
+const diagnosis =
+  buildDiagnosis(
+    current,
+    previous,
+    displayed,
+    providerCollection.results
+  );
 
   return {
   config,
