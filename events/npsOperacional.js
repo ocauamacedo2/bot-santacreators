@@ -4694,17 +4694,106 @@ await ensureCoreOperationalMetrics(
  * Usa a distribuição oficial do Ranking Semanal Geral
  * para calcular o desempenho por hierarquia.
  */
-const participationMetric =
-  providerCollection.results.find(
-    metric =>
+/*
+ * Procura todas as versões disponíveis da métrica de participação
+ * e prioriza aquela que realmente possui dados individuais.
+ */
+const participationMetricsForRoles =
+  providerCollection.results
+    .filter(
+      metric =>
+        String(
+          metric?.id ||
+          metric?.providerId ||
+          ""
+        ) ===
+          "participacao_equipe" &&
+        metric?.available !==
+          false
+    )
+    .sort(
       (
-        metric.id ||
-        metric.providerId
-      ) ===
-      "participacao_equipe" &&
-      metric.available !== false
-  ) ||
+        firstMetric,
+        secondMetric
+      ) => {
+        const firstUserCount =
+          firstMetric?.details?.byUser &&
+          typeof firstMetric.details.byUser ===
+            "object"
+            ? Object.keys(
+                firstMetric.details.byUser
+              ).length
+            : 0;
+
+        const secondUserCount =
+          secondMetric?.details?.byUser &&
+          typeof secondMetric.details.byUser ===
+            "object"
+            ? Object.keys(
+                secondMetric.details.byUser
+              ).length
+            : 0;
+
+        return (
+          secondUserCount -
+          firstUserCount
+        );
+      }
+    );
+
+let participationMetric =
+  participationMetricsForRoles[0] ||
   null;
+
+/*
+ * Caso o Hub não tenha entregue os usuários individuais,
+ * consulta diretamente o Ranking Semanal oficial.
+ */
+if (
+  !participationMetric?.details?.byUser ||
+  Object.keys(
+    participationMetric.details.byUser
+  ).length === 0
+) {
+  try {
+    const directParticipationMetric =
+      await buildWeeklyRankingOperationalMetric(
+        providerContext
+      );
+
+    if (
+      directParticipationMetric?.details?.byUser &&
+      Object.keys(
+        directParticipationMetric.details.byUser
+      ).length > 0
+    ) {
+      participationMetric = {
+        providerId:
+          "participacao_equipe",
+
+        ...directParticipationMetric,
+
+        id:
+          "participacao_equipe",
+
+        officialSource:
+          true,
+      };
+    }
+  } catch (error) {
+    console.error(
+      "[NPS Operacional] Não foi possível recuperar os usuários do Ranking Geral:",
+      error
+    );
+  }
+}
+
+const rankingUsersForRoles =
+  participationMetric?.details?.byUser &&
+  typeof participationMetric.details.byUser ===
+    "object"
+    ? participationMetric.details.byUser
+    : {};
 
 const operationalRoleAnalysis =
   await buildOperationalRoleBreakdown({
@@ -4715,10 +4804,7 @@ const operationalRoleAnalysis =
       "1262262852782129183",
 
     byUser:
-      participationMetric
-        ?.details
-        ?.byUser ||
-      {},
+      rankingUsersForRoles,
 
     roleGroups:
       OPERATIONAL_ROLE_GROUPS,
@@ -4726,6 +4812,45 @@ const operationalRoleAnalysis =
 
 providerCollection.operationalRoleAnalysis =
   operationalRoleAnalysis;
+
+console.log(
+  "[NPS Operacional] Separação por equipe:",
+  {
+    rankingUsers:
+      Object.keys(
+        rankingUsersForRoles
+      ).length,
+
+    totalRecords:
+      operationalRoleAnalysis
+        ?.totalRecords ||
+      0,
+
+    responsaveis:
+      operationalRoleAnalysis
+        ?.responsaveis
+        ?.records ||
+      0,
+
+    gestao:
+      operationalRoleAnalysis
+        ?.coordenacao
+        ?.records ||
+      0,
+
+    equipeCreators:
+      operationalRoleAnalysis
+        ?.equipe_creator
+        ?.records ||
+      0,
+
+    outros:
+      operationalRoleAnalysis
+        ?.outros
+        ?.records ||
+      0,
+  }
+);
 
 /*
  * Salva snapshots separados por módulo e adiciona:
@@ -5611,40 +5736,6 @@ if (
       500
     );
 
-  const weeklyDifference =
-    currentPoints -
-    previousPoints;
-
-  const weeklyDifferencePercent =
-    previousPoints > 0
-      ? (
-          weeklyDifference /
-          previousPoints
-        ) *
-        100
-      : (
-          currentPoints > 0
-            ? 100
-            : 0
-        );
-
-  const expectedNow =
-    Number(
-      generalPerformanceDetails.expectedPointsNow ??
-      generalPerformanceDetails.expectedNow ??
-      generalPerformanceMetric.progress
-        ?.expectedNow ??
-      0
-    );
-
-  const projectedTotal =
-    Number(
-      generalPerformanceMetric.prediction
-        ?.projectedTotal ??
-      generalPerformanceDetails.projectedTotal ??
-      0
-    );
-
   const missingToGoal =
     Math.max(
       0,
@@ -5652,71 +5743,83 @@ if (
       currentPoints
     );
 
+  const sameMomentComparison =
+    generalPerformanceMetric
+      ?.sameMomentComparison ||
+    null;
+
   paragraphs.push(
-    `A equipe somou **${currentPoints} pontos nesta semana**, dentro da meta geral de **${goal} pontos**. Ainda faltam **${missingToGoal} pontos** para completar a meta.`
+    `O GeralDash registra **${currentPoints} pontos reais nesta semana**. A meta semanal é de **${goal} pontos**, portanto ainda faltam **${missingToGoal} pontos** para completar a meta.`
   );
 
+  /*
+   * A semana passada já terminou, enquanto a semana atual
+   * ainda está em andamento.
+   *
+   * Por isso, o total final anterior aparece apenas como
+   * referência e não como uma comparação direta.
+   */
   if (
     previousPoints > 0
   ) {
+    paragraphs.push(
+      `A semana passada encerrou com **${previousPoints} pontos**. Esse valor é apenas uma referência de fechamento, porque a semana atual ainda não terminou.`
+    );
+  }
+
+  /*
+   * A comparação realmente justa é com o mesmo momento
+   * da semana anterior.
+   */
+  if (
+    sameMomentComparison?.available &&
+    Number.isFinite(
+      Number(
+        sameMomentComparison.previous
+      )
+    )
+  ) {
+    const previousSameMoment =
+      Number(
+        sameMomentComparison.previous
+      );
+
+    const sameMomentDifference =
+      currentPoints -
+      previousSameMoment;
+
     if (
-      weeklyDifference > 0
+      sameMomentDifference > 0
     ) {
       paragraphs.push(
-        `No mesmo comparativo semanal, a semana passada tinha fechado com **${previousPoints} pontos**. O resultado atual está **${weeklyDifference} pontos acima**, uma melhora de **${Math.abs(weeklyDifferencePercent).toFixed(1)}%**.`
+        `Comparando com o mesmo dia e horário da semana passada, a equipe está **${sameMomentDifference} ponto(s) acima**.`
       );
     } else if (
-      weeklyDifference < 0
+      sameMomentDifference < 0
     ) {
       paragraphs.push(
-        `A semana passada terminou com **${previousPoints} pontos**. O total atual está **${Math.abs(weeklyDifference)} pontos abaixo**, uma diferença de **${Math.abs(weeklyDifferencePercent).toFixed(1)}%**. Essa comparação considera o total geral registrado pelo GeralDash, não apenas uma fonte isolada.`
+        `Comparando com o mesmo dia e horário da semana passada, a equipe está **${Math.abs(sameMomentDifference)} ponto(s) abaixo**.`
       );
     } else {
       paragraphs.push(
-        `A semana atual está com o mesmo total da semana passada: **${currentPoints} pontos**.`
+        "Comparando com o mesmo dia e horário da semana passada, o resultado está igual."
       );
     }
+  } else {
+    paragraphs.push(
+      "Ainda não existe um registro da semana passada próximo deste mesmo horário para fazer uma comparação justa."
+    );
   }
 
-  if (
-    expectedNow > 0
-  ) {
-    if (
-      currentPoints >=
-      expectedNow
-    ) {
-      paragraphs.push(
-        `Para este momento da semana, o ritmo esperado era de aproximadamente **${Math.round(expectedNow)} pontos**. A equipe está acompanhando ou superando esse ritmo.`
-      );
-    } else {
-      paragraphs.push(
-        `Para este momento da semana, o ritmo esperado era de aproximadamente **${Math.round(expectedNow)} pontos**. O resultado atual está **${Math.round(expectedNow - currentPoints)} pontos atrás desse ritmo**.`
-      );
-    }
-  }
-
-  if (
-    projectedTotal > 0
-  ) {
-    if (
-      projectedTotal >=
-      goal
-    ) {
-      paragraphs.push(
-        `Se a equipe mantiver o ritmo atual, a projeção aponta para aproximadamente **${Math.round(projectedTotal)} pontos**, o que mantém a meta ao alcance.`
-      );
-    } else {
-      paragraphs.push(
-        `Se o ritmo continuar igual, a projeção é fechar a semana com aproximadamente **${Math.round(projectedTotal)} pontos**. Nesse cenário, será necessário aumentar a participação para alcançar os **${goal} pontos**.`
-      );
-    }
-  }
+  /*
+   * A projeção continua sendo calculada internamente,
+   * mas não será apresentada como se fosse pontuação real.
+   */
 } else {
   paragraphs.push(
     "O GeralDash ainda não entregou uma leitura válida da meta semanal de 500 pontos."
   );
 }
-
   paragraphs.push("");
 
   // ==========================================================================
@@ -5818,11 +5921,12 @@ if (
     0
   ) > 0
 ) {
-  const roleGroups = [
-    operationalRoleAnalysis.responsaveis,
-    operationalRoleAnalysis.coordenacao,
-    operationalRoleAnalysis.equipe_creator,
-  ].filter(Boolean);
+const roleGroups = [
+  operationalRoleAnalysis.responsaveis,
+  operationalRoleAnalysis.coordenacao,
+  operationalRoleAnalysis.equipe_creator,
+  operationalRoleAnalysis.outros,
+].filter(Boolean);
 
   for (
     const group of
@@ -6030,31 +6134,27 @@ if (
 }
 
 /*
- * Meta geral atrasada em relação ao momento da semana.
+ * A meta geral ainda não foi concluída.
+ *
+ * Mostra somente os pontos realmente registrados e
+ * quantos ainda faltam. Não utiliza projeção como se
+ * fosse uma pontuação confirmada.
  */
 if (
-  generalExpectedNow > 0 &&
   generalCurrentPoints <
-    generalExpectedNow
+  generalGoal
 ) {
+  const remainingGeneralPoints =
+    Math.max(
+      0,
+      generalGoal -
+      generalCurrentPoints
+    );
+
   criticalPoints.push(
-    `A meta geral está atrasada para este momento da semana. O GeralDash registra **${generalCurrentPoints} pontos**, enquanto o ritmo esperado seria de aproximadamente **${Math.round(generalExpectedNow)} pontos**.`
+    `A meta geral ainda não foi concluída. O GeralDash registra **${generalCurrentPoints} pontos reais**, e ainda faltam **${remainingGeneralPoints} pontos** para alcançar os **${generalGoal} pontos da semana**.`
   );
 }
-
-/*
- * Projeção abaixo da meta semanal.
- */
-if (
-  generalProjectedTotal > 0 &&
-  generalProjectedTotal <
-    generalGoal
-) {
-  criticalPoints.push(
-    `Mantendo o ritmo atual, a projeção é encerrar a semana com aproximadamente **${Math.round(generalProjectedTotal)} pontos**, abaixo da meta de **${generalGoal} pontos**.`
-  );
-}
-
 /*
  * Convites de organizações abaixo da meta inicial.
  *
@@ -6256,104 +6356,136 @@ if (
   // ==========================================================================
 
   if (
-    managerMetric
-  ) {
-    const details =
-      managerMetric.details ||
-      {};
+  managerMetric
+) {
+  const details =
+    managerMetric.details ||
+    {};
 
-    paragraphs.push(
-      "🗂️ **Registro Manager**",
-      `Foram concluídos **${Number(managerMetric.current || 0)} de ${Number(managerMetric.goal || 0)} registros esperados**.`,
-      `A nota atual do setor é **${Number(managerMetric.score || 0).toFixed(1)}%**.`
+  const approved =
+    Number(
+      details.approved ??
+      managerMetric.current ??
+      0
     );
 
-    if (
-      Number.isFinite(
-        Number(
-          details.approvalRate
-        )
-      )
-    ) {
-      paragraphs.push(
-        `A taxa de aprovação está em **${Number(details.approvalRate).toFixed(1)}%**.`
-      );
-    }
+  const rejected =
+    Number(
+      details.rejected ||
+      0
+    );
 
-    if (
-      Number.isFinite(
-        Number(
-          details.approved
-        )
-      )
-    ) {
-      paragraphs.push(
-        `Registros aprovados: **${Number(details.approved)}**.`
-      );
-    }
+  const analyzed =
+    approved +
+    rejected;
 
-    if (
-      Number.isFinite(
-        Number(
-          details.rejected
-        )
-      )
-    ) {
-      paragraphs.push(
-        `Registros reprovados: **${Number(details.rejected)}**.`
-      );
-    }
+  const responsibleCount =
+    Number(
+      details.responsibleCount ||
+      details.participants ||
+      0
+    );
 
-    paragraphs.push("");
+  paragraphs.push(
+    "🗂️ **Registro Manager**",
+    `Nesta semana, o Registro Manager analisou **${analyzed} registro(s)**. Desse total, **${approved} foram aprovados** e **${rejected} foram reprovados**.`
+  );
+
+  if (
+    Number.isFinite(
+      Number(
+        details.approvalRate
+      )
+    )
+  ) {
+    paragraphs.push(
+      `A taxa de aprovação está em **${Number(details.approvalRate).toFixed(1)}%**.`
+    );
   }
+
+  if (
+    responsibleCount > 0
+  ) {
+    paragraphs.push(
+      `Os registros aprovados foram distribuídos entre **${responsibleCount} responsável(is)**.`
+    );
+  }
+
+  paragraphs.push(
+    `A leitura atual do setor está em **${Number(managerMetric.score || 0).toFixed(1)}%**.`
+  );
+
+  paragraphs.push("");
+}
 
   // ==========================================================================
   // GESTÃO
   // ==========================================================================
 
   if (
-    managementMetric
-  ) {
-    const details =
-      managementMetric.details ||
-      {};
+  managementMetric
+) {
+  const details =
+    managementMetric.details ||
+    {};
 
-    paragraphs.push(
-      "👔 **Gestão e recrutamento**",
-      `A nota atual da Gestão é **${Number(managementMetric.score || 0).toFixed(1)}%**.`
+  const active =
+    Number(
+      details.active ||
+      0
     );
 
-    if (
-      Number.isFinite(
-        Number(
-          details.active
-        )
-      ) &&
-      Number.isFinite(
-        Number(
-          details.total
-        )
-      )
-    ) {
-      paragraphs.push(
-        `Existem **${Number(details.active)} controles ativos de ${Number(details.total)} cadastrados**.`
-      );
-    }
+  const total =
+    Number(
+      details.total ||
+      0
+    );
 
-    if (
-      Number.isFinite(
-        Number(
-          details.paused
-        )
-      )
-    ) {
-      paragraphs.push(
-        `Controles pausados atualmente: **${Number(details.paused)}**.`
-      );
-    }
+  const paused =
+    Number(
+      details.paused ||
+      0
+    );
 
-    paragraphs.push("");
+  const activeRate =
+    total > 0
+      ? (
+          active /
+          total
+        ) *
+        100
+      : 0;
+
+  paragraphs.push(
+    "👔 **Gestão e recrutamento**"
+  );
+
+  if (
+    total > 0
+  ) {
+    paragraphs.push(
+      `A Gestão possui **${active} controles ativos de ${total} cadastrados**, o que representa **${activeRate.toFixed(1)}% dos controles em atividade**.`
+    );
   }
+
+  if (
+    paused > 0
+  ) {
+    paragraphs.push(
+      `Existem **${paused} controle(s) pausado(s)**. Eles ajudam a explicar por que o resultado da Gestão ainda não está no nível máximo.`
+    );
+  } else {
+    paragraphs.push(
+      "Nenhum controle está pausado neste momento."
+    );
+  }
+
+  paragraphs.push(
+    `Com esses dados, a leitura atual da Gestão ficou em **${Number(managementMetric.score || 0).toFixed(1)}%**.`
+  );
+
+  paragraphs.push("");
+}
 
   // ==========================================================================
   // SET STAFF
