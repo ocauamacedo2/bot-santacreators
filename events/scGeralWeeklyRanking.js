@@ -3552,55 +3552,55 @@ const recommendations = [];
     recommendations,
 
     details: {
-  weekKey:
-    currentWeekKey,
+      weekKey:
+        currentWeekKey,
 
-  previousWeekKey,
+      previousWeekKey,
 
-  participants,
+      participants,
 
-  participantsPrevious,
+      participantsPrevious,
 
-  reachedMinimum,
+      reachedMinimum,
 
-  belowMinimum,
+      belowMinimum,
 
-  hitRate,
+      hitRate,
 
-  previousHitRate,
+      previousHitRate,
 
-  averagePoints,
+      averagePoints,
 
-  /*
-   * Mantém os dois nomes para compatibilidade.
-   *
-   * O relatório humano atualmente procura minimumPerUser,
-   * enquanto algumas partes antigas usam minimumPerParticipant.
-   */
-  minimumPerUser:
-    MIN_POINTS_WEEK,
+      /*
+       * Mantém os dois nomes para compatibilidade.
+       *
+       * O relatório humano atualmente procura minimumPerUser,
+       * enquanto algumas partes antigas usam minimumPerParticipant.
+       */
+      minimumPerUser:
+        MIN_POINTS_WEEK,
 
-  minimumPerParticipant:
-    MIN_POINTS_WEEK,
+      minimumPerParticipant:
+        MIN_POINTS_WEEK,
 
-  totalPoints:
-    current.totalEvents,
+      totalPoints:
+        current.totalEvents,
 
-  previousTotalPoints:
-    previous.totalEvents,
+      previousTotalPoints:
+        previous.totalEvents,
 
-  strongestSources,
+      strongestSources,
 
-  sortedSources,
+      sortedSources,
 
-  byUser,
+      byUser,
 
-  topUsers,
+      topUsers,
 
-  sourceTotals: {
-    ...sourceTotals,
-  },
-},
+      sourceTotals: {
+        ...sourceTotals,
+      },
+    },
   };
 }
 

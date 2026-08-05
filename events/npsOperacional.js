@@ -4975,7 +4975,7 @@ const diagnosis =
     providerCollection.results
   );
 
-  return {
+return {
   config,
   state,
   current,
@@ -4983,11 +4983,31 @@ const diagnosis =
   displayed,
   diagnosis,
 
+  /*
+   * Métricas reais coletadas dos sistemas.
+   */
   providerMetrics:
     providerCollection.results,
 
+  /*
+   * Erros encontrados durante a coleta.
+   */
   providerErrors:
     providerCollection.errors,
+
+  /*
+   * Separação das atividades entre:
+   *
+   * • Responsáveis;
+   * • Gestão;
+   * • Equipe Creators;
+   * • Outros.
+   */
+  operationalRoleAnalysis:
+    providerCollection
+      .operationalRoleAnalysis ||
+    operationalRoleAnalysis ||
+    null,
 };
 }
 
@@ -6957,30 +6977,39 @@ async function generateCurrentSummary() {
         titleSuffix:
           "Semana Atual",
       }),
-analysisText:
-  buildHumanWeeklyAnalysisText({
-    selected:
-      results.current,
 
-    comparison:
-      results.previous,
+    analysisText:
+      buildHumanWeeklyAnalysisText({
+        selected:
+          results.current,
 
-    displayScore:
-      results.displayed.score,
+        comparison:
+          results.previous,
 
-    diagnosis:
-      results.diagnosis,
+        displayScore:
+          results.displayed.score,
 
-    providerMetrics:
-      results.providerCollection
-        ?.results ||
-      [],
+        diagnosis:
+          results.diagnosis,
 
-    operationalRoleAnalysis:
-      results.providerCollection
-        ?.operationalRoleAnalysis ||
-      null,
-  }),
+        /*
+         * generateResults() já retorna as métricas diretamente
+         * na propriedade providerMetrics.
+         *
+         * Não existe results.providerCollection no retorno atual.
+         */
+        providerMetrics:
+          results.providerMetrics ||
+          [],
+
+        /*
+         * A análise por hierarquia também será retornada
+         * diretamente por generateResults().
+         */
+        operationalRoleAnalysis:
+          results.operationalRoleAnalysis ||
+          null,
+      }),
   };
 }
 
