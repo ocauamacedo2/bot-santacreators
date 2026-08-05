@@ -5146,6 +5146,614 @@ async function updateDashboard(
 // RESUMO SEMANAL
 // ============================================================================
 
+function buildHumanWeeklyAnalysisText({
+  selected,
+  comparison,
+  displayScore,
+  diagnosis,
+  providerMetrics = [],
+}) {
+  const findMetric =
+    metricId =>
+      providerMetrics.find(
+        metric =>
+          String(
+            metric?.id ||
+            metric?.providerId ||
+            ""
+          ) === metricId &&
+          metric?.available !== false
+      ) || null;
+
+  const participationMetric =
+    findMetric(
+      "participacao_equipe"
+    );
+
+  const generalPerformanceMetric =
+    findMetric(
+      "desempenho_geral"
+    );
+
+  const managerMetric =
+    findMetric(
+      "registro_manager"
+    );
+
+  const managementMetric =
+    findMetric(
+      "gestao"
+    );
+
+  const participationDetails =
+    participationMetric?.details ||
+    {};
+
+  const generalPerformanceDetails =
+    generalPerformanceMetric?.details ||
+    {};
+
+  const leadership =
+    selected?.leadership || {
+      entered: 0,
+      removed: 0,
+      leftServer: 0,
+      returned: 0,
+      retention: 100,
+    };
+
+  const memberEntries =
+    Array.isArray(
+      selected?.week?.members?.entered
+    )
+      ? selected.week.members.entered.length
+      : 0;
+
+  const memberExits =
+    Array.isArray(
+      selected?.week?.members?.left
+    )
+      ? selected.week.members.left.length
+      : 0;
+
+  const paragraphs = [];
+
+  paragraphs.push(
+    "🧠 **Análise inteligente da semana**",
+    "",
+    "Esta leitura reúne o ritmo geral da operação, a participação da equipe e o desempenho dos sistemas que já entregaram dados confiáveis ao NPS.",
+    ""
+  );
+
+  // ==========================================================================
+  // VISÃO GERAL
+  // ==========================================================================
+
+  paragraphs.push(
+    "📌 **Visão geral**"
+  );
+
+  if (
+    generalPerformanceMetric
+  ) {
+    const currentPoints =
+      Number(
+        generalPerformanceMetric.current ||
+        0
+      );
+
+    const goal =
+      Number(
+        generalPerformanceMetric.goal ||
+        500
+      );
+
+    const expectedNow =
+      Number(
+        generalPerformanceDetails.expectedNow ||
+        0
+      );
+
+    const projectedTotal =
+      Number(
+        generalPerformanceDetails.projectedTotal ||
+        0
+      );
+
+    paragraphs.push(
+      `A operação soma **${currentPoints} de ${goal} pontos** na meta geral da semana.`
+    );
+
+    if (
+      currentPoints >= expectedNow
+    ) {
+      paragraphs.push(
+        `O ritmo atual está acima ou dentro do esperado para este momento da semana, que seria aproximadamente **${Math.round(expectedNow)} pontos**.`
+      );
+    } else {
+      paragraphs.push(
+        `Para este momento da semana, o esperado seria aproximadamente **${Math.round(expectedNow)} pontos**. Atualmente faltam **${Math.max(0, Math.round(expectedNow - currentPoints))} pontos** para alcançar esse ritmo.`
+      );
+    }
+
+    if (
+      projectedTotal > 0
+    ) {
+      if (
+        projectedTotal >= goal
+      ) {
+        paragraphs.push(
+          `Mantendo o ritmo atual, a projeção indica fechamento próximo de **${Math.round(projectedTotal)} pontos**, com possibilidade de atingir a meta.`
+        );
+      } else {
+        paragraphs.push(
+          `Mantendo o ritmo atual, a projeção de fechamento é de aproximadamente **${Math.round(projectedTotal)} pontos**, abaixo da meta semanal.`
+        );
+      }
+    }
+  } else {
+    paragraphs.push(
+      "Ainda não existem dados suficientes do desempenho geral para analisar o ritmo da meta de 500 pontos."
+    );
+  }
+
+  paragraphs.push("");
+
+  // ==========================================================================
+  // PARTICIPAÇÃO DA EQUIPE
+  // ==========================================================================
+
+  paragraphs.push(
+    "👥 **Participação da equipe**"
+  );
+
+  if (
+    participationMetric
+  ) {
+    const participants =
+      Number(
+        participationDetails.participants ||
+        0
+      );
+
+    const reachedMinimum =
+      Number(
+        participationDetails.reachedMinimum ||
+        0
+      );
+
+    const belowMinimum =
+      Number(
+        participationDetails.belowMinimum ||
+        0
+      );
+
+    const minimumPerUser =
+      Number(
+        participationDetails.minimumPerUser ||
+        participationMetric.goal ||
+        25
+      );
+
+    const averagePoints =
+      Number(
+        participationDetails.averagePoints ||
+        0
+      );
+
+    paragraphs.push(
+      `Foram encontrados **${participants} participantes** no Ranking Semanal Geral.`,
+      `Até agora, **${reachedMinimum} atingiram o mínimo de ${minimumPerUser} pontos** e **${belowMinimum} ainda estão abaixo da meta individual**.`,
+      `A média atual é de **${averagePoints.toFixed(1)} pontos por participante**.`
+    );
+
+    if (
+      participants > 0
+    ) {
+      const hitRate =
+        (
+          reachedMinimum /
+          participants
+        ) *
+        100;
+
+      if (
+        hitRate >= 70
+      ) {
+        paragraphs.push(
+          `A distribuição do trabalho está saudável, pois **${hitRate.toFixed(1)}% da equipe** já alcançou o mínimo semanal.`
+        );
+      } else if (
+        hitRate >= 40
+      ) {
+        paragraphs.push(
+          `A participação está em desenvolvimento, mas ainda existe uma parte importante da equipe abaixo do mínimo.`
+        );
+      } else {
+        paragraphs.push(
+          `O principal ponto de atenção é a distribuição do trabalho: apenas **${hitRate.toFixed(1)}% da equipe** atingiu o mínimo semanal.`
+        );
+      }
+    }
+  } else {
+    paragraphs.push(
+      "Ainda não existem dados suficientes do Ranking Geral para avaliar a participação da equipe."
+    );
+  }
+
+  paragraphs.push("");
+
+  // ==========================================================================
+  // FONTES DA SEMANA
+  // ==========================================================================
+
+  paragraphs.push(
+    "📦 **Atividades registradas nesta semana**"
+  );
+
+  const sortedSources =
+    Array.isArray(
+      participationDetails.sortedSources
+    )
+      ? participationDetails.sortedSources
+      : [];
+
+  if (
+    sortedSources.length
+  ) {
+    for (
+      const source of
+      sortedSources
+    ) {
+      paragraphs.push(
+        `• **${source.label}:** ${Number(source.amount || 0)} registro(s)`
+      );
+    }
+  } else {
+    paragraphs.push(
+      "Ainda não foi possível separar os registros por fonte."
+    );
+  }
+
+  paragraphs.push("");
+
+  // ==========================================================================
+  // REGISTRO MANAGER
+  // ==========================================================================
+
+  if (
+    managerMetric
+  ) {
+    const details =
+      managerMetric.details ||
+      {};
+
+    paragraphs.push(
+      "🗂️ **Registro Manager**",
+      `Foram concluídos **${Number(managerMetric.current || 0)} de ${Number(managerMetric.goal || 0)} registros esperados**.`,
+      `A nota atual do setor é **${Number(managerMetric.score || 0).toFixed(1)}%**.`
+    );
+
+    if (
+      Number.isFinite(
+        Number(
+          details.approvalRate
+        )
+      )
+    ) {
+      paragraphs.push(
+        `A taxa de aprovação está em **${Number(details.approvalRate).toFixed(1)}%**.`
+      );
+    }
+
+    if (
+      Number.isFinite(
+        Number(
+          details.approved
+        )
+      )
+    ) {
+      paragraphs.push(
+        `Registros aprovados: **${Number(details.approved)}**.`
+      );
+    }
+
+    if (
+      Number.isFinite(
+        Number(
+          details.rejected
+        )
+      )
+    ) {
+      paragraphs.push(
+        `Registros reprovados: **${Number(details.rejected)}**.`
+      );
+    }
+
+    paragraphs.push("");
+  }
+
+  // ==========================================================================
+  // GESTÃO
+  // ==========================================================================
+
+  if (
+    managementMetric
+  ) {
+    const details =
+      managementMetric.details ||
+      {};
+
+    paragraphs.push(
+      "👔 **Gestão e recrutamento**",
+      `A nota atual da Gestão é **${Number(managementMetric.score || 0).toFixed(1)}%**.`
+    );
+
+    if (
+      Number.isFinite(
+        Number(
+          details.active
+        )
+      ) &&
+      Number.isFinite(
+        Number(
+          details.total
+        )
+      )
+    ) {
+      paragraphs.push(
+        `Existem **${Number(details.active)} controles ativos de ${Number(details.total)} cadastrados**.`
+      );
+    }
+
+    if (
+      Number.isFinite(
+        Number(
+          details.paused
+        )
+      )
+    ) {
+      paragraphs.push(
+        `Controles pausados atualmente: **${Number(details.paused)}**.`
+      );
+    }
+
+    paragraphs.push("");
+  }
+
+  // ==========================================================================
+  // PONTOS POSITIVOS
+  // ==========================================================================
+
+  paragraphs.push(
+    "🟢 **Principais pontos positivos**"
+  );
+
+  if (
+    Array.isArray(
+      diagnosis?.positives
+    ) &&
+    diagnosis.positives.length
+  ) {
+    for (
+      const positive of
+      diagnosis.positives
+    ) {
+      paragraphs.push(
+        `• ${positive}`
+      );
+    }
+  } else {
+    paragraphs.push(
+      "• Ainda não existe um destaque positivo forte o suficiente para ser confirmado."
+    );
+  }
+
+  paragraphs.push("");
+
+  // ==========================================================================
+  // PONTOS DE ATENÇÃO
+  // ==========================================================================
+
+  paragraphs.push(
+    "🟠 **O que precisa de atenção**"
+  );
+
+  if (
+    Array.isArray(
+      diagnosis?.attentions
+    ) &&
+    diagnosis.attentions.length
+  ) {
+    for (
+      const attention of
+      diagnosis.attentions
+    ) {
+      paragraphs.push(
+        `• ${attention}`
+      );
+    }
+  } else {
+    paragraphs.push(
+      "• Nenhum problema urgente foi identificado até o momento."
+    );
+  }
+
+  paragraphs.push("");
+
+  // ==========================================================================
+  // RECOMENDAÇÕES
+  // ==========================================================================
+
+  paragraphs.push(
+    "🎯 **Ações recomendadas**"
+  );
+
+  if (
+    Array.isArray(
+      diagnosis?.recommendations
+    ) &&
+    diagnosis.recommendations.length
+  ) {
+    for (
+      const recommendation of
+      diagnosis.recommendations
+    ) {
+      paragraphs.push(
+        `• ${recommendation}`
+      );
+    }
+  } else {
+    paragraphs.push(
+      "• Manter o acompanhamento atual até o encerramento da semana."
+    );
+  }
+
+  paragraphs.push("");
+
+  // ==========================================================================
+  // LIDERANÇA
+  // ==========================================================================
+
+  paragraphs.push(
+    "👑 **Movimento da liderança**",
+    `• Novos líderes: **${Number(leadership.entered || 0)}**`,
+    `• Cargos de líder removidos: **${Number(leadership.removed || 0)}**`,
+    `• Líderes que saíram do servidor: **${Number(leadership.leftServer || 0)}**`,
+    `• Líderes que retornaram: **${Number(leadership.returned || 0)}**`,
+    `• Retenção estimada: **${Number(leadership.retention || 0).toFixed(1)}%**`,
+    ""
+  );
+
+  // ==========================================================================
+  // COMUNIDADE
+  // ==========================================================================
+
+  paragraphs.push(
+    "🏙️ **Movimento geral da comunidade**",
+    `• Entradas registradas pelo NPS: **${memberEntries}**`,
+    `• Saídas registradas pelo NPS: **${memberExits}**`
+  );
+
+  if (
+    memberEntries === 0 &&
+    memberExits === 0
+  ) {
+    paragraphs.push(
+      "",
+      "Ainda não existem movimentações gerais suficientes registradas pelo NPS para comparar entradas e saídas com segurança."
+    );
+  }
+
+  paragraphs.push(
+    "",
+    `📊 **Leitura final:** ${Number(displayScore || 0).toFixed(1)}%`,
+    diagnosis?.trend ||
+      "A tendência ainda não pôde ser determinada com segurança.",
+    "",
+    "*Esta análise é atualizada automaticamente conforme novos registros chegam aos sistemas.*"
+  );
+
+  return paragraphs
+    .join("\n")
+    .trim();
+}
+
+function splitDiscordText(
+  text,
+  maximumLength = 1900
+) {
+  const normalizedText =
+    String(
+      text || ""
+    ).trim();
+
+  if (
+    !normalizedText
+  ) {
+    return [];
+  }
+
+  const lines =
+    normalizedText.split(
+      "\n"
+    );
+
+  const chunks = [];
+  let currentChunk = "";
+
+  for (
+    const line of
+    lines
+  ) {
+    const candidate =
+      currentChunk
+        ? `${currentChunk}\n${line}`
+        : line;
+
+    if (
+      candidate.length <=
+      maximumLength
+    ) {
+      currentChunk =
+        candidate;
+
+      continue;
+    }
+
+    if (
+      currentChunk
+    ) {
+      chunks.push(
+        currentChunk
+      );
+    }
+
+    if (
+      line.length <=
+      maximumLength
+    ) {
+      currentChunk =
+        line;
+
+      continue;
+    }
+
+    let remainingLine =
+      line;
+
+    while (
+      remainingLine.length >
+      maximumLength
+    ) {
+      chunks.push(
+        remainingLine.slice(
+          0,
+          maximumLength
+        )
+      );
+
+      remainingLine =
+        remainingLine.slice(
+          maximumLength
+        );
+    }
+
+    currentChunk =
+      remainingLine;
+  }
+
+  if (
+    currentChunk
+  ) {
+    chunks.push(
+      currentChunk
+    );
+  }
+
+  return chunks;
+}
+
 function buildWeeklySummaryEmbeds({
   selected,
   comparison,
