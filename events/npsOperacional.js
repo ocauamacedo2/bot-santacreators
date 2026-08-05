@@ -38,6 +38,14 @@ import {
   collectOperationalMetrics,
 } from "../utils/operationalMetricsHub.js";
 
+/*
+ * Carrega os provedores individuais dos sistemas antes
+ * de o NPS iniciar a coleta das métricas.
+ */
+import {
+  logRegisteredNpsOperationalProviders,
+} from "./npsOperationalProviders.js";
+
 import {
   PROCESS_SLA_MINUTES,
   getOperationalWeekMoment,
@@ -5717,6 +5725,12 @@ export async function npsOperacionalOnReady(
   ensureDataDir();
 
   loadConfig();
+
+  /*
+   * Mostra exatamente quais sistemas possuem provedor
+   * registrado e podem alimentar o NPS.
+   */
+  logRegisteredNpsOperationalProviders();
 
   const state =
     loadState();
