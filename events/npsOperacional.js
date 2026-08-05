@@ -4693,10 +4693,10 @@ await ensureCoreOperationalMetrics(
 /*
  * Usa a distribuição oficial do Ranking Semanal Geral
  * para calcular o desempenho por hierarquia.
- */
-/*
- * Procura todas as versões disponíveis da métrica de participação
- * e prioriza aquela que realmente possui dados individuais.
+ *
+ * Pode existir mais de uma versão da métrica
+ * "participacao_equipe". Por isso, esta etapa prioriza
+ * a versão que realmente possui os dados individuais.
  */
 const participationMetricsForRoles =
   providerCollection.results
@@ -4746,8 +4746,8 @@ let participationMetric =
   null;
 
 /*
- * Caso o Hub não tenha entregue os usuários individuais,
- * consulta diretamente o Ranking Semanal oficial.
+ * Caso nenhuma das métricas coletadas possua a divisão
+ * por usuário, consulta diretamente o Ranking Semanal oficial.
  */
 if (
   !participationMetric?.details?.byUser ||
@@ -4779,15 +4779,62 @@ if (
         officialSource:
           true,
       };
+
+      /*
+       * Substitui também a versão antiga dentro da coleção.
+       *
+       * Sem esta etapa, o relatório humano pode continuar
+       * recebendo a métrica incompleta, mesmo depois de a
+       * leitura direta encontrar os usuários corretamente.
+       */
+      const participationMetricIndex =
+        providerCollection.results.findIndex(
+          metric =>
+            String(
+              metric?.id ||
+              metric?.providerId ||
+              ""
+            ) ===
+            "participacao_equipe"
+        );
+
+      if (
+        participationMetricIndex >=
+        0
+      ) {
+        providerCollection.results[
+          participationMetricIndex
+        ] =
+          participationMetric;
+      } else {
+        providerCollection.results.push(
+          participationMetric
+        );
+      }
     }
   } catch (error) {
     console.error(
-      "[NPS Operacional] Não foi possível recuperar os usuários do Ranking Geral:",
+      "[NPS Operacional] Não foi possível recuperar os usuários individuais do Ranking Geral:",
       error
     );
   }
 }
 
+/*
+ * Estrutura individual do Ranking.
+ *
+ * Exemplo:
+ *
+ * {
+ *   userId: {
+ *     total: 41,
+ *     sources: {
+ *       manager: 5,
+ *       pagamentos: 22
+ *     }
+ *   }
+ * }
+ */
 const rankingUsersForRoles =
   participationMetric?.details?.byUser &&
   typeof participationMetric.details.byUser ===
@@ -4795,6 +4842,17 @@ const rankingUsersForRoles =
     ? participationMetric.details.byUser
     : {};
 
+/*
+ * Classifica cada participante de acordo com os cargos
+ * reais encontrados no servidor.
+ *
+ * Prioridade:
+ *
+ * 1. Responsáveis;
+ * 2. Gestão;
+ * 3. Equipe Creators;
+ * 4. Outros.
+ */
 const operationalRoleAnalysis =
   await buildOperationalRoleBreakdown({
     client:
@@ -4816,39 +4874,94 @@ providerCollection.operationalRoleAnalysis =
 console.log(
   "[NPS Operacional] Separação por equipe:",
   {
+    activeClientAvailable:
+      Boolean(
+        activeClient
+      ),
+
     rankingUsers:
       Object.keys(
         rankingUsersForRoles
       ).length,
 
     totalRecords:
-      operationalRoleAnalysis
-        ?.totalRecords ||
-      0,
+      Number(
+        operationalRoleAnalysis
+          ?.totalRecords ||
+        0
+      ),
 
-    responsaveis:
-      operationalRoleAnalysis
-        ?.responsaveis
-        ?.records ||
-      0,
+    responsaveis: {
+      records:
+        Number(
+          operationalRoleAnalysis
+            ?.responsaveis
+            ?.records ||
+          0
+        ),
 
-    gestao:
-      operationalRoleAnalysis
-        ?.coordenacao
-        ?.records ||
-      0,
+      activeMembers:
+        Number(
+          operationalRoleAnalysis
+            ?.responsaveis
+            ?.activeMembers ||
+          0
+        ),
+    },
 
-    equipeCreators:
-      operationalRoleAnalysis
-        ?.equipe_creator
-        ?.records ||
-      0,
+    gestao: {
+      records:
+        Number(
+          operationalRoleAnalysis
+            ?.coordenacao
+            ?.records ||
+          0
+        ),
 
-    outros:
-      operationalRoleAnalysis
-        ?.outros
-        ?.records ||
-      0,
+      activeMembers:
+        Number(
+          operationalRoleAnalysis
+            ?.coordenacao
+            ?.activeMembers ||
+          0
+        ),
+    },
+
+    equipeCreators: {
+      records:
+        Number(
+          operationalRoleAnalysis
+            ?.equipe_creator
+            ?.records ||
+          0
+        ),
+
+      activeMembers:
+        Number(
+          operationalRoleAnalysis
+            ?.equipe_creator
+            ?.activeMembers ||
+          0
+        ),
+    },
+
+    outros: {
+      records:
+        Number(
+          operationalRoleAnalysis
+            ?.outros
+            ?.records ||
+          0
+        ),
+
+      activeMembers:
+        Number(
+          operationalRoleAnalysis
+            ?.outros
+            ?.activeMembers ||
+          0
+        ),
+    },
   }
 );
 
