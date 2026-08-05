@@ -18,6 +18,10 @@ import {
   TextInputStyle,
 } from "discord.js";
 
+import {
+  registerOperationalMetricProvider,
+} from "../utils/operationalMetricsHub.js";
+
 // =====================================================
 // CONFIG FIXA (SEM .env)
 // =====================================================
@@ -48,6 +52,23 @@ const CFG = {
   PODE_APROVAR_USERS: [
     "660311795327828008", // você
   ],
+
+  /*
+   * Meta semanal utilizada pelo NPS Operacional.
+   *
+   * Ela representa a quantidade de pedidos de Set Staff
+   * que a equipe deve conseguir concluir durante a semana.
+   */
+  NPS_WEEKLY_GOAL:
+    10,
+
+  /*
+   * Tempo considerado saudável para analisar um pedido.
+   *
+   * 240 minutos correspondem a quatro horas.
+   */
+  NPS_IDEAL_RESPONSE_MINUTES:
+    240,
 };
 
 // =====================================================
@@ -276,6 +297,133 @@ function updateByMsgIdStatus(msgId, status) {
   saveAll(all);
 }
 
+/**
+ * Registra os dados completos da decisão de um pedido.
+ *
+ * Além de atualizar o índice por mensagem, a função também
+ * localiza o mesmo pedido no histórico do usuário.
+ */
+function updateSetStaffDecision({
+  userId,
+  msgId,
+  status,
+  decision,
+  decisionBy,
+  decidedAt,
+}) {
+  if (
+    !userId ||
+    !msgId
+  ) {
+    return;
+  }
+
+  const all =
+    loadAll();
+
+  const normalizedStatus =
+    String(
+      status ||
+      ""
+    ).trim();
+
+  const normalizedDecision =
+    String(
+      decision ||
+      normalizedStatus
+    ).trim();
+
+  const numericDecidedAt =
+    Number(
+      decidedAt ||
+      Date.now()
+    );
+
+  const decisionPayload = {
+    status:
+      normalizedStatus,
+
+    decision:
+      normalizedDecision,
+
+    decisionBy:
+      decisionBy
+        ? String(
+            decisionBy
+          )
+        : null,
+
+    decidedAt:
+      Number.isFinite(
+        numericDecidedAt
+      )
+        ? numericDecidedAt
+        : Date.now(),
+  };
+
+  all.byMsgId ||=
+    {};
+
+  if (
+    all.byMsgId[msgId]
+  ) {
+    all.byMsgId[msgId] = {
+      ...all.byMsgId[msgId],
+      ...decisionPayload,
+    };
+  }
+
+  all.users ||=
+    {};
+
+  const userHistory =
+    Array.isArray(
+      all.users[userId]
+    )
+      ? all.users[userId]
+      : [];
+
+  const historyIndex =
+    userHistory.findIndex(
+      item =>
+        String(
+          item?.msgId ||
+          ""
+        ) ===
+        String(
+          msgId
+        )
+    );
+
+  if (
+    historyIndex >= 0
+  ) {
+    userHistory[
+      historyIndex
+    ] = {
+      ...userHistory[
+        historyIndex
+      ],
+
+      ...decisionPayload,
+    };
+  } else if (
+    all.byMsgId[msgId]
+  ) {
+    userHistory.push({
+      ...all.byMsgId[msgId],
+      ...decisionPayload,
+    });
+  }
+
+  all.users[userId] =
+    userHistory;
+
+  saveAll(
+    all
+  );
+}
+
 function getPedidoPendente(userId) {
   const historico = getHistorico(userId);
   if (!historico.length) return null;
@@ -293,6 +441,851 @@ function getPedidoPendente(userId) {
 function hasPedidoPendente(userId) {
   return !!getPedidoPendente(userId);
 }
+
+// =====================================================
+// MÉTRICAS OPERACIONAIS DO SET STAFF
+// =====================================================
+
+const SET_STAFF_TIMEZONE =
+  "America/Sao_Paulo";
+
+function getSetStaffWeekKey(
+  reference = new Date()
+) {
+  const parts =
+    new Intl.DateTimeFormat(
+      "en-CA",
+      {
+        timeZone:
+          SET_STAFF_TIMEZONE,
+
+        year:
+          "numeric",
+
+        month:
+          "2-digit",
+
+        day:
+          "2-digit",
+
+        weekday:
+          "short",
+      }
+    ).formatToParts(
+      reference
+    );
+
+  const get =
+    type =>
+      parts.find(
+        part =>
+          part.type ===
+          type
+      )?.value;
+
+  const weekdayMap = {
+    Sun: 0,
+    Mon: 1,
+    Tue: 2,
+    Wed: 3,
+    Thu: 4,
+    Fri: 5,
+    Sat: 6,
+  };
+
+  const year =
+    Number(
+      get("year")
+    );
+
+  const month =
+    Number(
+      get("month")
+    );
+
+  const day =
+    Number(
+      get("day")
+    );
+
+  const weekday =
+    weekdayMap[
+      get("weekday")
+    ] ?? 0;
+
+  const localDay =
+    new Date(
+      Date.UTC(
+        year,
+        month - 1,
+        day,
+        3,
+        0,
+        0
+      )
+    );
+
+  localDay.setUTCDate(
+    localDay.getUTCDate() -
+    weekday
+  );
+
+  return localDay
+    .toISOString()
+    .slice(
+      0,
+      10
+    );
+}
+
+function addSetStaffDays(
+  weekKey,
+  amount
+) {
+  const date =
+    new Date(
+      `${weekKey}T03:00:00.000Z`
+    );
+
+  date.setUTCDate(
+    date.getUTCDate() +
+    Number(
+      amount ||
+      0
+    )
+  );
+
+  return date
+    .toISOString()
+    .slice(
+      0,
+      10
+    );
+}
+
+function parseSetStaffLegacyDate(
+  value
+) {
+  const raw =
+    String(
+      value ||
+      ""
+    ).trim();
+
+  const match =
+    raw.match(
+      /(\d{1,2})\/(\d{1,2})\/(\d{4}),?\s*(\d{1,2}):(\d{2})(?::(\d{2}))?/
+    );
+
+  if (!match) {
+    return null;
+  }
+
+  const day =
+    Number(
+      match[1]
+    );
+
+  const month =
+    Number(
+      match[2]
+    );
+
+  const year =
+    Number(
+      match[3]
+    );
+
+  const hour =
+    Number(
+      match[4]
+    );
+
+  const minute =
+    Number(
+      match[5]
+    );
+
+  const second =
+    Number(
+      match[6] ||
+      0
+    );
+
+  const parsed =
+    new Date(
+      Date.UTC(
+        year,
+        month - 1,
+        day,
+        hour + 3,
+        minute,
+        second
+      )
+    );
+
+  return Number.isNaN(
+    parsed.getTime()
+  )
+    ? null
+    : parsed.getTime();
+}
+
+function resolveSetStaffCreatedAt(
+  item
+) {
+  const numeric =
+    Number(
+      item?.createdAt
+    );
+
+  if (
+    Number.isFinite(
+      numeric
+    ) &&
+    numeric > 0
+  ) {
+    return numeric;
+  }
+
+  return parseSetStaffLegacyDate(
+    item?.dataHora
+  );
+}
+
+function collectSetStaffRequests() {
+  const all =
+    loadAll();
+
+  const requestsByMessage =
+    Object.values(
+      all.byMsgId ||
+      {}
+    );
+
+  const requestsWithoutMessage =
+    Object.values(
+      all.users ||
+      {}
+    )
+      .flatMap(
+        history =>
+          Array.isArray(
+            history
+          )
+            ? history
+            : []
+      )
+      .filter(
+        item =>
+          !item?.msgId
+      );
+
+  const uniqueRequests =
+    new Map();
+
+  for (
+    const request of [
+      ...requestsByMessage,
+      ...requestsWithoutMessage,
+    ]
+  ) {
+    const createdAt =
+      resolveSetStaffCreatedAt(
+        request
+      );
+
+    const identity =
+      request?.msgId
+        ? `message:${request.msgId}`
+        : [
+            "legacy",
+            request?.userId ||
+              "unknown",
+            createdAt ||
+              request?.dataHora ||
+              "unknown",
+            request?.cidade ||
+              "unknown",
+            request?.nivel ||
+              "unknown",
+          ].join(":");
+
+    uniqueRequests.set(
+      identity,
+      {
+        ...request,
+        createdAt,
+      }
+    );
+  }
+
+  return [
+    ...uniqueRequests.values(),
+  ];
+}
+
+function averageSetStaffValues(
+  values = []
+) {
+  const valid =
+    values
+      .map(Number)
+      .filter(
+        value =>
+          Number.isFinite(
+            value
+          ) &&
+          value >= 0
+      );
+
+  if (!valid.length) {
+    return 0;
+  }
+
+  return valid.reduce(
+    (
+      total,
+      value
+    ) =>
+      total +
+      value,
+    0
+  ) / valid.length;
+}
+
+async function buildSetStaffOperationalMetric() {
+  const currentWeekKey =
+    getSetStaffWeekKey();
+
+  const previousWeekKey =
+    addSetStaffDays(
+      currentWeekKey,
+      -7
+    );
+
+  const requests =
+    collectSetStaffRequests();
+
+  const currentRequests =
+    requests.filter(
+      request =>
+        request.createdAt &&
+        getSetStaffWeekKey(
+          new Date(
+            request.createdAt
+          )
+        ) ===
+          currentWeekKey
+    );
+
+  const previousRequests =
+    requests.filter(
+      request =>
+        request.createdAt &&
+        getSetStaffWeekKey(
+          new Date(
+            request.createdAt
+          )
+        ) ===
+          previousWeekKey
+    );
+
+  const approved =
+    currentRequests.filter(
+      request =>
+        String(
+          request?.status ||
+          ""
+        ).toLowerCase() ===
+          "aprovado"
+    );
+
+  const rejected =
+    currentRequests.filter(
+      request =>
+        String(
+          request?.status ||
+          ""
+        ).toLowerCase() ===
+          "reprovado"
+    );
+
+  const pending =
+    currentRequests.filter(
+      request =>
+        String(
+          request?.status ||
+          "pendente"
+        ).toLowerCase() ===
+          "pendente"
+    );
+
+  const previousApproved =
+    previousRequests.filter(
+      request =>
+        String(
+          request?.status ||
+          ""
+        ).toLowerCase() ===
+          "aprovado"
+    ).length;
+
+  const previousRejected =
+    previousRequests.filter(
+      request =>
+        String(
+          request?.status ||
+          ""
+        ).toLowerCase() ===
+          "reprovado"
+    ).length;
+
+  const previousPending =
+    previousRequests.filter(
+      request =>
+        String(
+          request?.status ||
+          "pendente"
+        ).toLowerCase() ===
+          "pendente"
+    ).length;
+
+  const decided =
+    approved.length +
+    rejected.length;
+
+  const approvalRate =
+    decided > 0
+      ? (
+          approved.length /
+          decided
+        ) *
+        100
+      : 0;
+
+  const responseTimes =
+    currentRequests
+      .map(
+        request => {
+          const createdAt =
+            Number(
+              request?.createdAt
+            );
+
+          const decidedAt =
+            Number(
+              request?.decidedAt
+            );
+
+          if (
+            !Number.isFinite(
+              createdAt
+            ) ||
+            !Number.isFinite(
+              decidedAt
+            ) ||
+            decidedAt <
+              createdAt
+          ) {
+            return null;
+          }
+
+          return (
+            decidedAt -
+            createdAt
+          );
+        }
+      )
+      .filter(
+        value =>
+          Number.isFinite(
+            value
+          )
+      );
+
+  const averageResponseMilliseconds =
+    averageSetStaffValues(
+      responseTimes
+    );
+
+  const idealResponseMilliseconds =
+    CFG.NPS_IDEAL_RESPONSE_MINUTES *
+    60000;
+
+  const responseScore =
+    responseTimes.length > 0
+      ? Math.max(
+          0,
+          Math.min(
+            100,
+            (
+              idealResponseMilliseconds /
+              Math.max(
+                idealResponseMilliseconds,
+                averageResponseMilliseconds
+              )
+            ) *
+              100
+          )
+        )
+      : (
+          pending.length > 0
+            ? 40
+            : 100
+        );
+
+  const completionRate =
+    currentRequests.length > 0
+      ? (
+          decided /
+          currentRequests.length
+        ) *
+        100
+      : 0;
+
+  /*
+   * A nota considera:
+   *
+   * 45% conclusão dos pedidos;
+   * 35% qualidade das decisões;
+   * 20% velocidade das análises.
+   */
+  const score =
+    completionRate *
+      0.45 +
+    approvalRate *
+      0.35 +
+    responseScore *
+      0.20;
+
+  const decisionUsers = {};
+
+  for (
+    const request of
+    currentRequests
+  ) {
+    const decisionBy =
+      String(
+        request?.decisionBy ||
+        ""
+      );
+
+    if (!decisionBy) {
+      continue;
+    }
+
+    decisionUsers[
+      decisionBy
+    ] ||= {
+      total:
+        0,
+
+      approved:
+        0,
+
+      rejected:
+        0,
+    };
+
+    decisionUsers[
+      decisionBy
+    ].total +=
+      1;
+
+    if (
+      String(
+        request.status ||
+        ""
+      ).toLowerCase() ===
+        "aprovado"
+    ) {
+      decisionUsers[
+        decisionBy
+      ].approved +=
+        1;
+    }
+
+    if (
+      String(
+        request.status ||
+        ""
+      ).toLowerCase() ===
+        "reprovado"
+    ) {
+      decisionUsers[
+        decisionBy
+      ].rejected +=
+        1;
+    }
+  }
+
+  const positivePoints = [];
+  const attentionPoints = [];
+  const recommendations = [];
+
+  if (
+    currentRequests.length > 0
+  ) {
+    positivePoints.push(
+      `Foram recebidos ${currentRequests.length} pedido(s) de Set Staff nesta semana.`
+    );
+  }
+
+  if (
+    approved.length > 0
+  ) {
+    positivePoints.push(
+      `${approved.length} pedido(s) foram aprovados pelos responsáveis.`
+    );
+  }
+
+  if (
+    decided > 0
+  ) {
+    positivePoints.push(
+      `${Object.keys(decisionUsers).length} responsável(is) diferente(s) participaram das decisões.`
+    );
+  }
+
+  if (
+    responseTimes.length > 0 &&
+    averageResponseMilliseconds <=
+      idealResponseMilliseconds
+  ) {
+    positivePoints.push(
+      `O tempo médio de análise está em ${(averageResponseMilliseconds / 3600000).toFixed(1)} hora(s), dentro do limite esperado de ${(CFG.NPS_IDEAL_RESPONSE_MINUTES / 60).toFixed(1)} hora(s).`
+    );
+  }
+
+  if (
+    pending.length > 0
+  ) {
+    attentionPoints.push(
+      `${pending.length} pedido(s) ainda aguardam análise dos responsáveis.`
+    );
+  }
+
+  if (
+    rejected.length > 0
+  ) {
+    attentionPoints.push(
+      `${rejected.length} pedido(s) foram reprovados nesta semana.`
+    );
+  }
+
+  if (
+    responseTimes.length > 0 &&
+    averageResponseMilliseconds >
+      idealResponseMilliseconds
+  ) {
+    attentionPoints.push(
+      `O tempo médio de análise está em ${(averageResponseMilliseconds / 3600000).toFixed(1)} hora(s), acima do limite esperado de ${(CFG.NPS_IDEAL_RESPONSE_MINUTES / 60).toFixed(1)} hora(s).`
+    );
+  }
+
+  if (
+    pending.length > 0
+  ) {
+    recommendations.push(
+      `Revisar os ${pending.length} pedido(s) pendentes e distribuir as análises entre os responsáveis disponíveis.`
+    );
+  }
+
+  if (
+    responseTimes.length > 0 &&
+    averageResponseMilliseconds >
+      idealResponseMilliseconds
+  ) {
+    recommendations.push(
+      "Reduzir o intervalo entre o envio do pedido e a decisão final, evitando acúmulo no canal de análise."
+    );
+  }
+
+  if (
+    !recommendations.length
+  ) {
+    recommendations.push(
+      "Manter o ritmo atual de análise e acompanhar se os pedidos permanecem distribuídos entre os responsáveis."
+    );
+  }
+
+  return {
+    id:
+      "set_staff",
+
+    label:
+      "Set Staff",
+
+    available:
+      currentRequests.length > 0 ||
+      previousRequests.length > 0,
+
+    score:
+      Math.max(
+        0,
+        Math.min(
+          100,
+          score
+        )
+      ),
+
+    confidence:
+      Math.max(
+        0,
+        Math.min(
+          100,
+          50 +
+          currentRequests.length *
+            5
+        )
+      ),
+
+    volume:
+      currentRequests.length,
+
+    goal:
+      CFG.NPS_WEEKLY_GOAL,
+
+    current:
+      decided,
+
+    previous:
+      previousApproved +
+      previousRejected,
+
+    difference:
+      decided -
+      (
+        previousApproved +
+        previousRejected
+      ),
+
+    responseTimes,
+
+    idealMinutes:
+      CFG.NPS_IDEAL_RESPONSE_MINUTES,
+
+    positivePoints,
+
+    attentionPoints,
+
+    recommendations,
+
+    details: {
+      currentWeekKey,
+
+      previousWeekKey,
+
+      requested:
+        currentRequests.length,
+
+      approved:
+        approved.length,
+
+      rejected:
+        rejected.length,
+
+      pending:
+        pending.length,
+
+      decided,
+
+      approvalRate,
+
+      completionRate,
+
+      averageResponseMilliseconds,
+
+      averageResponseMinutes:
+        averageResponseMilliseconds /
+        60000,
+
+      previousRequested:
+        previousRequests.length,
+
+      previousApproved,
+
+      previousRejected,
+
+      previousPending,
+
+      responsibleCount:
+        Object.keys(
+          decisionUsers
+        ).length,
+
+      decisionUsers,
+
+      byUser:
+        currentRequests.reduce(
+          (
+            result,
+            request
+          ) => {
+            const userId =
+              String(
+                request?.userId ||
+                ""
+              );
+
+            if (!userId) {
+              return result;
+            }
+
+            result[userId] ||= {
+              total:
+                0,
+
+              approved:
+                0,
+
+              rejected:
+                0,
+
+              pending:
+                0,
+            };
+
+            result[userId].total +=
+              1;
+
+            const status =
+              String(
+                request?.status ||
+                "pendente"
+              ).toLowerCase();
+
+            if (
+              status ===
+              "aprovado"
+            ) {
+              result[userId].approved +=
+                1;
+            } else if (
+              status ===
+              "reprovado"
+            ) {
+              result[userId].rejected +=
+                1;
+            } else {
+              result[userId].pending +=
+                1;
+            }
+
+            return result;
+          },
+          {}
+        ),
+    },
+  };
+}
+
+registerOperationalMetricProvider(
+  "set_staff",
+  async () =>
+    buildSetStaffOperationalMetric()
+);
 
 async function resolveLogChannel(client, channelId) {
   try {
@@ -762,29 +1755,84 @@ if (interaction.isButton() && interaction.customId.startsWith("ss2_nivel_")) {
     return true;
   }
 
-  const nome = interaction.fields.getTextInputValue("nome")?.trim();
-  const pasta = interaction.fields.getTextInputValue("pasta")?.trim();
-  const passaporte = interaction.fields.getTextInputValue("id")?.trim();
-  const dataHora = new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" });
+  const nome =
+  interaction.fields
+    .getTextInputValue(
+      "nome"
+    )
+    ?.trim();
 
-  if (!nome || !pasta || !passaporte) {
-    await interaction.reply({
-      content: "❌ Preencha nome, pasta e passaporte corretamente.",
-      ephemeral: true,
-    });
-    return true;
-  }
+const pasta =
+  interaction.fields
+    .getTextInputValue(
+      "pasta"
+    )
+    ?.trim();
 
-  const payload = {
-    userId,
-    cidade,
-    nivel,
-    nome,
-    pasta,
-    passaporte,
-    dataHora,
-    status: "pendente",
-  };
+const passaporte =
+  interaction.fields
+    .getTextInputValue(
+      "id"
+    )
+    ?.trim();
+
+const createdAt =
+  Date.now();
+
+const dataHora =
+  new Date(
+    createdAt
+  ).toLocaleString(
+    "pt-BR",
+    {
+      timeZone:
+        "America/Sao_Paulo",
+    }
+  );
+
+if (
+  !nome ||
+  !pasta ||
+  !passaporte
+) {
+  await interaction.reply({
+    content:
+      "❌ Preencha nome, pasta e passaporte corretamente.",
+
+    ephemeral:
+      true,
+  });
+
+  return true;
+}
+
+const payload = {
+  userId,
+  cidade,
+  nivel,
+  nome,
+  pasta,
+  passaporte,
+  dataHora,
+
+  /*
+   * Timestamp numérico usado pelo NPS para localizar
+   * a semana do pedido e calcular o tempo de análise.
+   */
+  createdAt,
+
+  status:
+    "pendente",
+
+  decidedAt:
+    null,
+
+  decisionBy:
+    null,
+
+  decision:
+    null,
+};
 
   const embed = buildEmbedPedido(payload);
   const row = buildRowAprovacao(userId);
@@ -943,10 +1991,25 @@ if (!pedido) {
       const abrevCidade = ABREVIACOES_CIDADES[cidade] || String(cidade || "").toUpperCase();
       const finalNickname = ehADM ? `${abrevCidade} | ${nome}` : `${abrevCidade} | ${nome} | ${passaporte}`;
 
-      const agora = new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" });
+const decidedAt =
+  Date.now();
 
-      let dmFalhou = false;
-      let extrasAplicados = [];
+const agora =
+  new Date(
+    decidedAt
+  ).toLocaleString(
+    "pt-BR",
+    {
+      timeZone:
+        "America/Sao_Paulo",
+    }
+  );
+
+let dmFalhou =
+  false;
+
+let extrasAplicados =
+  [];
 
       if (acao === "aprovar") {
         const rolesParaAdd = [];
@@ -991,8 +2054,34 @@ if (!pedido) {
             dmFalhou = true;
           });
 
-        updateUltimoStatus(userIdTarget, "aprovado");
-updateByMsgIdStatus(interaction.message?.id, "aprovado");
+updateUltimoStatus(
+  userIdTarget,
+  "aprovado"
+);
+
+updateByMsgIdStatus(
+  interaction.message?.id,
+  "aprovado"
+);
+
+updateSetStaffDecision({
+  userId:
+    userIdTarget,
+
+  msgId:
+    interaction.message?.id,
+
+  status:
+    "aprovado",
+
+  decision:
+    "approved",
+
+  decisionBy:
+    interaction.user.id,
+
+  decidedAt,
+});
 
       } else {
         await membro
@@ -1005,8 +2094,34 @@ updateByMsgIdStatus(interaction.message?.id, "aprovado");
             dmFalhou = true;
           });
 
-        updateUltimoStatus(userIdTarget, "reprovado");
-updateByMsgIdStatus(interaction.message?.id, "reprovado");
+updateUltimoStatus(
+  userIdTarget,
+  "reprovado"
+);
+
+updateByMsgIdStatus(
+  interaction.message?.id,
+  "reprovado"
+);
+
+updateSetStaffDecision({
+  userId:
+    userIdTarget,
+
+  msgId:
+    interaction.message?.id,
+
+  status:
+    "reprovado",
+
+  decision:
+    "rejected",
+
+  decisionBy:
+    interaction.user.id,
+
+  decidedAt,
+});
 
       }
 

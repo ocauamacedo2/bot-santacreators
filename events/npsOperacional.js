@@ -87,27 +87,33 @@ const ROLE_EQUIPE_CREATOR_ID =
 const ROLE_COORDENACAO_ID =
   "1352385500614234134";
 
-const ROLE_RESPONSAVEIS_ID =
+const ROLE_RESPONSAVEIS_GERAIS_ID =
   "1414651836861907006";
 
+const ROLE_RESPONSAVEIS_CREATORS_ID =
+  "1352408327983861844";
+
+const ROLE_RESPONSAVEIS_INFLUENCIADORES_ID =
+  "1262262852949905409";
+
+const ROLE_RESPONSAVEIS_LIDERES_ID =
+  "1352407252216184833";
+
+/*
+ * A ordem representa a hierarquia operacional.
+ *
+ * Quando uma pessoa possuir mais de um desses cargos,
+ * ela será considerada somente no grupo mais alto:
+ *
+ * 1. Responsáveis;
+ * 2. Gestão;
+ * 3. Equipe Creators;
+ * 4. Outros.
+ */
 const OPERATIONAL_ROLE_GROUPS = [
   {
     id:
-      ROLE_COORDENACAO_ID,
-
-    key:
-      "coordenacao",
-
-    label:
-      "Coordenação",
-
-    mention:
-      `<@&${ROLE_COORDENACAO_ID}>`,
-  },
-
-  {
-    id:
-      ROLE_RESPONSAVEIS_ID,
+      ROLE_RESPONSAVEIS_GERAIS_ID,
 
     key:
       "responsaveis",
@@ -116,7 +122,63 @@ const OPERATIONAL_ROLE_GROUPS = [
       "Responsáveis",
 
     mention:
-      `<@&${ROLE_RESPONSAVEIS_ID}>`,
+      `<@&${ROLE_RESPONSAVEIS_GERAIS_ID}>`,
+  },
+
+  {
+    id:
+      ROLE_RESPONSAVEIS_CREATORS_ID,
+
+    key:
+      "responsaveis",
+
+    label:
+      "Responsáveis",
+
+    mention:
+      `<@&${ROLE_RESPONSAVEIS_CREATORS_ID}>`,
+  },
+
+  {
+    id:
+      ROLE_RESPONSAVEIS_INFLUENCIADORES_ID,
+
+    key:
+      "responsaveis",
+
+    label:
+      "Responsáveis",
+
+    mention:
+      `<@&${ROLE_RESPONSAVEIS_INFLUENCIADORES_ID}>`,
+  },
+
+  {
+    id:
+      ROLE_RESPONSAVEIS_LIDERES_ID,
+
+    key:
+      "responsaveis",
+
+    label:
+      "Responsáveis",
+
+    mention:
+      `<@&${ROLE_RESPONSAVEIS_LIDERES_ID}>`,
+  },
+
+  {
+    id:
+      ROLE_COORDENACAO_ID,
+
+    key:
+      "coordenacao",
+
+    label:
+      "Gestão",
+
+    mention:
+      `<@&${ROLE_COORDENACAO_ID}>`,
   },
 
   {
@@ -127,7 +189,7 @@ const OPERATIONAL_ROLE_GROUPS = [
       "equipe_creator",
 
     label:
-      "Equipe Creator",
+      "Equipe Creators",
 
     mention:
       `<@&${ROLE_EQUIPE_CREATOR_ID}>`,
@@ -168,6 +230,7 @@ const PROVIDER_REQUIRED_CATEGORY_IDS = new Set([
   "ausencias",
   "qualidade",
   "tempo_resposta",
+  "set_staff",
 ]);
 
 const ALLOWED_MANAGE_USERS = new Set([
@@ -398,18 +461,25 @@ presencas: {
     },
 
     pagamentos: {
-      label: "Pagamentos",
-      weight: 7,
-      enabled: true,
-      weeklyGoal: 10,
-    },
+  label: "Pagamentos",
+  weight: 7,
+  enabled: true,
+  weeklyGoal: 10,
+},
 
-    eventos: {
-      label: "Eventos",
-      weight: 7,
-      enabled: true,
-      weeklyGoal: 10,
-    },
+set_staff: {
+  label: "Set Staff",
+  weight: 7,
+  enabled: true,
+  weeklyGoal: 10,
+},
+
+eventos: {
+  label: "Eventos",
+  weight: 7,
+  enabled: true,
+  weeklyGoal: 10,
+},
 
     quiz: {
       label: "Quiz e Engajamento",
@@ -3415,42 +3485,73 @@ function buildDiagnosis(
     );
   }
 
-  for (
-    const metric of providerMetrics
+ /*
+ * Estas métricas possuem seções próprias no relatório humano.
+ *
+ * Por isso, seus textos não devem ser copiados novamente para
+ * os blocos genéricos de pontos positivos, atenção e recomendações.
+ *
+ * A Meta Interna também é ignorada porque está desabilitada e
+ * não participa do NPS Operacional Geral.
+ */
+const metricsWithDedicatedAnalysis =
+  new Set([
+    "participacao_equipe",
+    "desempenho_geral",
+    "meta_interna",
+    "set_staff",
+  ]);
+
+for (
+  const metric of providerMetrics
+) {
+  if (
+    metric.available === false
   ) {
-    if (
-      metric.available === false
-    ) {
-      continue;
-    }
-
-    for (
-      const point of
-      metric.positivePoints || []
-    ) {
-      positives.push(
-        `${metric.label}: ${point}`
-      );
-    }
-
-    for (
-      const point of
-      metric.attentionPoints || []
-    ) {
-      attentions.push(
-        `${metric.label}: ${point}`
-      );
-    }
-
-    for (
-      const recommendation of
-      metric.recommendations || []
-    ) {
-      recommendations.push(
-        `${metric.label}: ${recommendation}`
-      );
-    }
+    continue;
   }
+
+  const metricId =
+    safeString(
+      metric?.id ||
+      metric?.providerId
+    );
+
+  if (
+    metricsWithDedicatedAnalysis.has(
+      metricId
+    )
+  ) {
+    continue;
+  }
+
+  for (
+    const point of
+    metric.positivePoints || []
+  ) {
+    positives.push(
+      `${metric.label}: ${point}`
+    );
+  }
+
+  for (
+    const point of
+    metric.attentionPoints || []
+  ) {
+    attentions.push(
+      `${metric.label}: ${point}`
+    );
+  }
+
+  for (
+    const recommendation of
+    metric.recommendations || []
+  ) {
+    recommendations.push(
+      `${metric.label}: ${recommendation}`
+    );
+  }
+}
 
   if (improved.length) {
     positives.push(
@@ -4379,6 +4480,15 @@ async function ensureCoreOperationalMetrics(
   providerCollection.errors ||=
     [];
 
+  /*
+   * Estas são as duas fontes oficiais da régua principal:
+   *
+   * • scGeralDash.js para a meta geral de 500 pontos;
+   * • scGeralWeeklyRanking.js para participação individual.
+   *
+   * Mesmo que exista outro provedor com o mesmo ID no Hub,
+   * a versão oficial abaixo sempre substituirá a anterior.
+   */
   const requiredProviders = [
     {
       id:
@@ -4416,49 +4526,22 @@ async function ensureCoreOperationalMetrics(
             requiredProvider.id
       );
 
-    const existingMetric =
-      existingMetricIndex >= 0
-        ? providerCollection.results[
-            existingMetricIndex
-          ]
-        : null;
-
-    /*
-     * A métrica somente é considerada utilizável quando:
-     *
-     * • existe;
-     * • não está marcada como indisponível;
-     * • possui uma nota numérica válida.
-     *
-     * Uma métrica existente com available: false não pode
-     * bloquear a consulta direta do módulo.
-     */
-    const existingMetricIsUsable =
-      existingMetric &&
-      existingMetric.available !== false &&
-      Number.isFinite(
-        Number(
-          existingMetric.score
-        )
-      );
-
-    if (existingMetricIsUsable) {
-      continue;
-    }
-
     try {
       const metric =
         await requiredProvider.provider(
           context
         );
 
-      if (!metric) {
+      if (
+        !metric ||
+        metric.available === false
+      ) {
         providerCollection.errors.push({
           providerId:
             requiredProvider.id,
 
           message:
-            "O provedor não retornou nenhuma informação.",
+            `A fonte oficial de ${requiredProvider.label} não retornou dados disponíveis.`,
         });
 
         continue;
@@ -4473,15 +4556,14 @@ async function ensureCoreOperationalMetrics(
         id:
           metric.id ||
           requiredProvider.id,
+
+        officialSource:
+          true,
       };
 
-      /*
-       * Caso o Hub tenha devolvido uma versão indisponível,
-       * substitui essa versão pela métrica recuperada diretamente.
-       *
-       * Caso não existisse nenhuma versão, adiciona normalmente.
-       */
-      if (existingMetricIndex >= 0) {
+      if (
+        existingMetricIndex >= 0
+      ) {
         providerCollection.results[
           existingMetricIndex
         ] =
@@ -4493,22 +4575,25 @@ async function ensureCoreOperationalMetrics(
       }
 
       console.log(
-        `[NPS Operacional] Métrica central recuperada diretamente: ${requiredProvider.id}`,
+        `[NPS Operacional] Métrica oficial aplicada: ${requiredProvider.id}`,
         {
           available:
-            metric.available,
+            normalizedMetric.available,
 
           score:
-            metric.score,
+            normalizedMetric.score,
 
           volume:
-            metric.volume,
+            normalizedMetric.volume,
 
           current:
-            metric.current,
+            normalizedMetric.current,
 
           previous:
-            metric.previous,
+            normalizedMetric.previous,
+
+          difference:
+            normalizedMetric.difference,
         }
       );
     } catch (error) {
@@ -4524,7 +4609,7 @@ async function ensureCoreOperationalMetrics(
       });
 
       console.error(
-        `[NPS Operacional] Falha ao recuperar diretamente "${requiredProvider.id}":`,
+        `[NPS Operacional] Falha ao consultar a fonte oficial "${requiredProvider.id}":`,
         error
       );
     }
@@ -4588,13 +4673,50 @@ async function generateResults() {
    * Se o Hub já as coletou, nada será executado novamente.
    * Se não coletou, o NPS consulta diretamente os módulos.
    */
-  await ensureCoreOperationalMetrics(
-    providerCollection,
-    providerContext
-  );
+await ensureCoreOperationalMetrics(
+  providerCollection,
+  providerContext
+);
 
-  /*
-   * Salva snapshots separados por módulo e adiciona:
+/*
+ * Usa a distribuição oficial do Ranking Semanal Geral
+ * para calcular o desempenho por hierarquia.
+ */
+const participationMetric =
+  providerCollection.results.find(
+    metric =>
+      (
+        metric.id ||
+        metric.providerId
+      ) ===
+      "participacao_equipe" &&
+      metric.available !== false
+  ) ||
+  null;
+
+const operationalRoleAnalysis =
+  await buildOperationalRoleBreakdown({
+    client:
+      activeClient,
+
+    guildId:
+      "1262262852782129183",
+
+    byUser:
+      participationMetric
+        ?.details
+        ?.byUser ||
+      {},
+
+    roleGroups:
+      OPERATIONAL_ROLE_GROUPS,
+  });
+
+providerCollection.operationalRoleAnalysis =
+  operationalRoleAnalysis;
+
+/*
+ * Salva snapshots separados por módulo e adiciona:
    *
    * • comparação no mesmo momento;
    * • progresso da meta;
@@ -5101,6 +5223,7 @@ function buildHumanWeeklyAnalysisText({
   displayScore,
   diagnosis,
   providerMetrics = [],
+  operationalRoleAnalysis = null,
 }) {
   const findMetric =
     metricId =>
@@ -5129,14 +5252,23 @@ function buildHumanWeeklyAnalysisText({
       "registro_manager"
     );
 
-  const managementMetric =
-    findMetric(
-      "gestao"
-    );
+const managementMetric =
+  findMetric(
+    "gestao"
+  );
 
-  const participationDetails =
-    participationMetric?.details ||
-    {};
+const setStaffMetric =
+  findMetric(
+    "set_staff"
+  );
+
+const setStaffDetails =
+  setStaffMetric?.details ||
+  {};
+
+const participationDetails =
+  participationMetric?.details ||
+  {};
 
   const generalPerformanceDetails =
     generalPerformanceMetric?.details ||
@@ -5151,21 +5283,53 @@ function buildHumanWeeklyAnalysisText({
       retention: 100,
     };
 
-  const memberEntries =
-    Array.isArray(
-      selected?.week?.members?.entered
-    )
-      ? selected.week.members.entered.length
-      : 0;
+const memberEntryRecords =
+  Array.isArray(
+    selected?.week?.members?.entered
+  )
+    ? selected.week.members.entered
+    : [];
 
-  const memberExits =
-    Array.isArray(
-      selected?.week?.members?.left
-    )
-      ? selected.week.members.left.length
-      : 0;
+const memberExitRecords =
+  Array.isArray(
+    selected?.week?.members?.left
+  )
+    ? selected.week.members.left
+    : [];
 
-  const paragraphs = [];
+const memberEntries =
+  memberEntryRecords.length;
+
+const memberExits =
+  memberExitRecords.length;
+
+/*
+ * Pessoas que entraram no servidor já possuindo
+ * o cargo oficial de líder.
+ *
+ * Isso é diferente de receber o cargo depois da entrada.
+ */
+const membersEnteredAsLeader =
+  memberEntryRecords.filter(
+    item =>
+      item?.leader === true
+  ).length;
+
+/*
+ * Pessoas que saíram do servidor enquanto ainda
+ * possuíam o cargo oficial de líder.
+ */
+const membersExitedAsLeader =
+  memberExitRecords.filter(
+    item =>
+      item?.leader === true
+  ).length;
+
+const communityBalance =
+  memberEntries -
+  memberExits;
+
+const paragraphs = [];
 
   paragraphs.push(
     "🧠 **Análise inteligente da semana**",
@@ -5182,69 +5346,135 @@ function buildHumanWeeklyAnalysisText({
     "📌 **Visão geral**"
   );
 
-  if (
-    generalPerformanceMetric
-  ) {
-    const currentPoints =
-      Number(
-        generalPerformanceMetric.current ||
-        0
-      );
-
-    const goal =
-      Number(
-        generalPerformanceMetric.goal ||
-        500
-      );
-
-    const expectedNow =
-      Number(
-        generalPerformanceDetails.expectedNow ||
-        0
-      );
-
-    const projectedTotal =
-      Number(
-        generalPerformanceDetails.projectedTotal ||
-        0
-      );
-
-    paragraphs.push(
-      `A operação soma **${currentPoints} de ${goal} pontos** na meta geral da semana.`
+if (
+  generalPerformanceMetric
+) {
+  const currentPoints =
+    Number(
+      generalPerformanceMetric.current ??
+      generalPerformanceDetails.total ??
+      0
     );
 
+  const previousPoints =
+    Number(
+      generalPerformanceMetric.previous ??
+      generalPerformanceDetails.previousTotal ??
+      0
+    );
+
+  const goal =
+    Number(
+      generalPerformanceMetric.goal ||
+      generalPerformanceDetails.goal ||
+      500
+    );
+
+  const weeklyDifference =
+    currentPoints -
+    previousPoints;
+
+  const weeklyDifferencePercent =
+    previousPoints > 0
+      ? (
+          weeklyDifference /
+          previousPoints
+        ) *
+        100
+      : (
+          currentPoints > 0
+            ? 100
+            : 0
+        );
+
+  const expectedNow =
+    Number(
+      generalPerformanceDetails.expectedPointsNow ??
+      generalPerformanceDetails.expectedNow ??
+      generalPerformanceMetric.progress
+        ?.expectedNow ??
+      0
+    );
+
+  const projectedTotal =
+    Number(
+      generalPerformanceMetric.prediction
+        ?.projectedTotal ??
+      generalPerformanceDetails.projectedTotal ??
+      0
+    );
+
+  const missingToGoal =
+    Math.max(
+      0,
+      goal -
+      currentPoints
+    );
+
+  paragraphs.push(
+    `A equipe somou **${currentPoints} pontos nesta semana**, dentro da meta geral de **${goal} pontos**. Ainda faltam **${missingToGoal} pontos** para completar a meta.`
+  );
+
+  if (
+    previousPoints > 0
+  ) {
     if (
-      currentPoints >= expectedNow
+      weeklyDifference > 0
     ) {
       paragraphs.push(
-        `O ritmo atual está acima ou dentro do esperado para este momento da semana, que seria aproximadamente **${Math.round(expectedNow)} pontos**.`
+        `No mesmo comparativo semanal, a semana passada tinha fechado com **${previousPoints} pontos**. O resultado atual está **${weeklyDifference} pontos acima**, uma melhora de **${Math.abs(weeklyDifferencePercent).toFixed(1)}%**.`
+      );
+    } else if (
+      weeklyDifference < 0
+    ) {
+      paragraphs.push(
+        `A semana passada terminou com **${previousPoints} pontos**. O total atual está **${Math.abs(weeklyDifference)} pontos abaixo**, uma diferença de **${Math.abs(weeklyDifferencePercent).toFixed(1)}%**. Essa comparação considera o total geral registrado pelo GeralDash, não apenas uma fonte isolada.`
       );
     } else {
       paragraphs.push(
-        `Para este momento da semana, o esperado seria aproximadamente **${Math.round(expectedNow)} pontos**. Atualmente faltam **${Math.max(0, Math.round(expectedNow - currentPoints))} pontos** para alcançar esse ritmo.`
+        `A semana atual está com o mesmo total da semana passada: **${currentPoints} pontos**.`
       );
     }
-
-    if (
-      projectedTotal > 0
-    ) {
-      if (
-        projectedTotal >= goal
-      ) {
-        paragraphs.push(
-          `Mantendo o ritmo atual, a projeção indica fechamento próximo de **${Math.round(projectedTotal)} pontos**, com possibilidade de atingir a meta.`
-        );
-      } else {
-        paragraphs.push(
-          `Mantendo o ritmo atual, a projeção de fechamento é de aproximadamente **${Math.round(projectedTotal)} pontos**, abaixo da meta semanal.`
-        );
-      }
-    }
-  } else {
-    paragraphs.push(
-      "Ainda não existem dados suficientes do desempenho geral para analisar o ritmo da meta de 500 pontos."
-    );
   }
+
+  if (
+    expectedNow > 0
+  ) {
+    if (
+      currentPoints >=
+      expectedNow
+    ) {
+      paragraphs.push(
+        `Para este momento da semana, o ritmo esperado era de aproximadamente **${Math.round(expectedNow)} pontos**. A equipe está acompanhando ou superando esse ritmo.`
+      );
+    } else {
+      paragraphs.push(
+        `Para este momento da semana, o ritmo esperado era de aproximadamente **${Math.round(expectedNow)} pontos**. O resultado atual está **${Math.round(expectedNow - currentPoints)} pontos atrás desse ritmo**.`
+      );
+    }
+  }
+
+  if (
+    projectedTotal > 0
+  ) {
+    if (
+      projectedTotal >=
+      goal
+    ) {
+      paragraphs.push(
+        `Se a equipe mantiver o ritmo atual, a projeção aponta para aproximadamente **${Math.round(projectedTotal)} pontos**, o que mantém a meta ao alcance.`
+      );
+    } else {
+      paragraphs.push(
+        `Se o ritmo continuar igual, a projeção é fechar a semana com aproximadamente **${Math.round(projectedTotal)} pontos**. Nesse cenário, será necessário aumentar a participação para alcançar os **${goal} pontos**.`
+      );
+    }
+  }
+} else {
+  paragraphs.push(
+    "O GeralDash ainda não entregou uma leitura válida da meta semanal de 500 pontos."
+  );
+}
 
   paragraphs.push("");
 
@@ -5330,15 +5560,251 @@ function buildHumanWeeklyAnalysisText({
     );
   }
 
-  paragraphs.push("");
+paragraphs.push("");
 
-  // ==========================================================================
-  // FONTES DA SEMANA
-  // ==========================================================================
+// ==========================================================================
+// DESEMPENHO POR HIERARQUIA
+// ==========================================================================
 
+paragraphs.push(
+  "🏅 **Desempenho por equipe**"
+);
+
+if (
+  operationalRoleAnalysis &&
+  Number(
+    operationalRoleAnalysis.totalRecords ||
+    0
+  ) > 0
+) {
+  const roleGroups = [
+    operationalRoleAnalysis.responsaveis,
+    operationalRoleAnalysis.coordenacao,
+    operationalRoleAnalysis.equipe_creator,
+  ].filter(Boolean);
+
+  for (
+    const group of
+    roleGroups
+  ) {
+    const strongestSources =
+      Object.entries(
+        group.sources ||
+        {}
+      )
+        .sort(
+          (
+            first,
+            second
+          ) =>
+            second[1] -
+            first[1]
+        )
+        .slice(
+          0,
+          3
+        );
+
+    const sourceText =
+      strongestSources.length
+        ? strongestSources
+            .map(
+              (
+                [
+                  sourceName,
+                  amount,
+                ]
+              ) =>
+                `${sourceName}: ${amount}`
+            )
+            .join(", ")
+        : "nenhuma fonte com atividade";
+
+    paragraphs.push(
+      `• **${group.label}:** ${group.records} atividade(s), representando **${group.percentage.toFixed(1)}% do trabalho registrado**. Participaram ${group.activeMembers} pessoa(s). Principais fontes: ${sourceText}.`
+    );
+  }
+
+  const sortedGroups =
+    roleGroups
+      .slice()
+      .sort(
+        (
+          first,
+          second
+        ) =>
+          second.records -
+          first.records
+      );
+
+  const highestGroup =
+    sortedGroups[0];
+
+  const lowestGroup =
+    sortedGroups[
+      sortedGroups.length -
+      1
+    ];
+
+  if (
+    highestGroup &&
+    highestGroup.records > 0
+  ) {
+    paragraphs.push(
+      `Nesta semana, **${highestGroup.label}** é o grupo com maior participação, concentrando **${highestGroup.percentage.toFixed(1)}% das atividades**.`
+    );
+  }
+
+  if (
+    lowestGroup &&
+    highestGroup &&
+    highestGroup.records >
+      lowestGroup.records * 2
+  ) {
+    paragraphs.push(
+      `A diferença entre **${highestGroup.label}** e **${lowestGroup.label}** está alta. Vale dividir melhor algumas tarefas para que o trabalho não fique preso em apenas uma parte da equipe.`
+    );
+  }
+
+  const topUser =
+    operationalRoleAnalysis
+      .topUsers?.[0] ||
+    null;
+
+  if (topUser) {
+    paragraphs.push(
+      `A pessoa com maior volume realizou **${topUser.amount} atividades**, equivalente a **${operationalRoleAnalysis.concentration.topUserPercentage.toFixed(1)}% de tudo o que foi registrado**.`
+    );
+  }
+
+  if (
+    operationalRoleAnalysis
+      .concentration
+      ?.overloaded
+  ) {
+    paragraphs.push(
+      "Foi percebido que uma parte grande do trabalho está concentrada em poucas pessoas. Isso não significa que alguém esteja fazendo algo errado, mas pode causar cansaço e deixar a operação dependente sempre dos mesmos membros."
+    );
+  }
+} else {
   paragraphs.push(
-    "📦 **Atividades registradas nesta semana**"
+    "Ainda não foi possível separar as atividades entre Responsáveis, Gestão e Equipe Creators."
   );
+}
+
+paragraphs.push("");
+
+// ==========================================================================
+// PONTOS CRÍTICOS
+// ==========================================================================
+
+paragraphs.push(
+  "🚨 **Pontos críticos**"
+);
+
+const criticalPoints = [];
+
+if (
+  operationalRoleAnalysis
+    ?.concentration
+    ?.overloaded
+) {
+  criticalPoints.push(
+    `O trabalho está concentrado em poucas pessoas. Os três membros com maior volume reúnem **${operationalRoleAnalysis.concentration.topThreePercentage.toFixed(1)}% das atividades da semana**.`
+  );
+}
+
+if (
+  Array.isArray(
+    operationalRoleAnalysis
+      ?.conflicts
+  ) &&
+  operationalRoleAnalysis
+    .conflicts
+    .length > 0
+) {
+  criticalPoints.push(
+    `Foram encontrados **${operationalRoleAnalysis.conflicts.length} membro(s)** com cargo de Responsável junto com Gestão ou Equipe Creators. Como Responsáveis já representam o nível mais alto desta análise, essa mistura pode indicar desorganização na setagem dos cargos.`
+  );
+}
+
+const participationParticipants =
+  Number(
+    participationDetails.participants ||
+    0
+  );
+
+const participationReached =
+  Number(
+    participationDetails.reachedMinimum ||
+    0
+  );
+
+if (
+  participationParticipants > 0 &&
+  participationReached /
+    participationParticipants <
+    0.4
+) {
+  criticalPoints.push(
+    `Somente **${participationReached} de ${participationParticipants} participantes** atingiram o mínimo individual. Isso mostra que o resultado ainda depende de uma parte pequena da equipe.`
+  );
+}
+
+const setStaffPending =
+  Number(
+    setStaffDetails.pending ||
+    0
+  );
+
+const setStaffAverageMinutes =
+  Number(
+    setStaffDetails.averageResponseMinutes ||
+    0
+  );
+
+if (
+  setStaffPending > 0
+) {
+  criticalPoints.push(
+    `Existem **${setStaffPending} pedido(s) de Set Staff pendentes**, aguardando análise dos responsáveis.`
+  );
+}
+
+if (
+  setStaffAverageMinutes > 240
+) {
+  criticalPoints.push(
+    `Os pedidos de Set Staff estão levando, em média, **${(setStaffAverageMinutes / 60).toFixed(1)} hora(s)** para receber uma decisão. A referência atual é de quatro horas.`
+  );
+}
+
+if (
+  criticalPoints.length
+) {
+  for (
+    const point of
+    criticalPoints
+  ) {
+    paragraphs.push(
+      `• ${point}`
+    );
+  }
+} else {
+  paragraphs.push(
+    "• Nenhum problema grave foi encontrado nos dados disponíveis até agora."
+  );
+}
+
+paragraphs.push("");
+
+// ==========================================================================
+// FONTES DA SEMANA
+// ==========================================================================
+
+paragraphs.push(
+  "📦 **Atividades registradas nesta semana**"
+);
 
   const sortedSources =
     Array.isArray(
@@ -5471,6 +5937,108 @@ function buildHumanWeeklyAnalysisText({
   }
 
   // ==========================================================================
+  // SET STAFF
+  // ==========================================================================
+
+  paragraphs.push(
+    "🛠️ **Pedidos de Set Staff**"
+  );
+
+  if (
+    setStaffMetric
+  ) {
+    const requested =
+      Number(
+        setStaffDetails.requested ||
+        0
+      );
+
+    const approved =
+      Number(
+        setStaffDetails.approved ||
+        0
+      );
+
+    const rejected =
+      Number(
+        setStaffDetails.rejected ||
+        0
+      );
+
+    const pending =
+      Number(
+        setStaffDetails.pending ||
+        0
+      );
+
+    const responsibleCount =
+      Number(
+        setStaffDetails.responsibleCount ||
+        0
+      );
+
+    const averageMinutes =
+      Number(
+        setStaffDetails.averageResponseMinutes ||
+        0
+      );
+
+    paragraphs.push(
+      `Nesta semana foram recebidos **${requested} pedido(s) de Set Staff**. Até o momento, **${approved} foram aprovados**, **${rejected} foram reprovados** e **${pending} continuam aguardando análise**.`
+    );
+
+    if (
+      responsibleCount > 0
+    ) {
+      paragraphs.push(
+        `As decisões foram realizadas por **${responsibleCount} responsável(is) diferente(s)**, permitindo acompanhar se a análise está distribuída ou concentrada em poucas pessoas.`
+      );
+    } else if (
+      pending > 0
+    ) {
+      paragraphs.push(
+        "Ainda não existe uma decisão registrada por responsável nesta semana, embora existam pedidos aguardando análise."
+      );
+    }
+
+    if (
+      averageMinutes > 0
+    ) {
+      const averageHours =
+        averageMinutes /
+        60;
+
+      paragraphs.push(
+        `O tempo médio entre o envio e a decisão está em aproximadamente **${averageHours.toFixed(1)} hora(s)**.`
+      );
+
+      if (
+        averageMinutes <= 240
+      ) {
+        paragraphs.push(
+          "Esse tempo está dentro da referência operacional de quatro horas e indica que os pedidos estão sendo acompanhados com boa agilidade."
+        );
+      } else {
+        paragraphs.push(
+          "Esse tempo está acima da referência operacional de quatro horas e pode indicar acúmulo de pedidos ou distribuição insuficiente entre os responsáveis."
+        );
+      }
+    } else if (
+      requested > 0
+    ) {
+      paragraphs.push(
+        "Ainda não existem decisões novas com horário completo suficiente para calcular o tempo médio de análise."
+      );
+    }
+  } else {
+    paragraphs.push(
+      "Ainda não existem dados suficientes do Set Staff para avaliar pedidos, decisões e tempo de resposta."
+    );
+  }
+
+  paragraphs.push("");
+
+  // ==========================================================================
   // PONTOS POSITIVOS
   // ==========================================================================
 
@@ -5560,39 +6128,68 @@ function buildHumanWeeklyAnalysisText({
 
   paragraphs.push("");
 
-  // ==========================================================================
-  // LIDERANÇA
-  // ==========================================================================
+// ==========================================================================
+// LIDERANÇA
+// ==========================================================================
 
-  paragraphs.push(
-    "👑 **Movimento da liderança**",
-    `• Novos líderes: **${Number(leadership.entered || 0)}**`,
-    `• Cargos de líder removidos: **${Number(leadership.removed || 0)}**`,
-    `• Líderes que saíram do servidor: **${Number(leadership.leftServer || 0)}**`,
-    `• Líderes que retornaram: **${Number(leadership.returned || 0)}**`,
-    `• Retenção estimada: **${Number(leadership.retention || 0).toFixed(1)}%**`,
-    ""
-  );
+paragraphs.push(
+  "👑 **Movimento da liderança**",
+  `• Pessoas que receberam o cargo de líder nesta semana: **${Number(leadership.entered || 0)}**`,
+  `• Pessoas que perderam o cargo de líder nesta semana: **${Number(leadership.removed || 0)}**`,
+  `• Líderes que saíram do servidor ainda com o cargo: **${Number(leadership.leftServer || 0)}**`,
+  `• Pessoas que retornaram ao servidor já com o cargo de líder: **${Number(leadership.returned || 0)}**`,
+  `• Retenção estimada da liderança: **${Number(leadership.retention || 0).toFixed(1)}%**`,
+  ""
+);
 
-  // ==========================================================================
-  // COMUNIDADE
-  // ==========================================================================
+// ==========================================================================
+// COMUNIDADE
+// ==========================================================================
 
-  paragraphs.push(
-    "🏙️ **Movimento geral da comunidade**",
-    `• Entradas registradas pelo NPS: **${memberEntries}**`,
-    `• Saídas registradas pelo NPS: **${memberExits}**`
-  );
+paragraphs.push(
+  "🏙️ **Movimento geral da comunidade**",
+  `• Novos membros que entraram no servidor: **${memberEntries}**`,
+  `• Membros que saíram do servidor: **${memberExits}**`,
+  `• Saldo de membros na semana: **${communityBalance >= 0 ? "+" : ""}${communityBalance}**`,
+  `• Membros que entraram já com o cargo de líder: **${membersEnteredAsLeader}**`,
+  `• Membros que saíram ainda com o cargo de líder: **${membersExitedAsLeader}**`
+);
 
+if (
+  memberEntries > 0 ||
+  memberExits > 0
+) {
   if (
-    memberEntries === 0 &&
-    memberExits === 0
+    communityBalance > 0
   ) {
     paragraphs.push(
       "",
-      "Ainda não existem movimentações gerais suficientes registradas pelo NPS para comparar entradas e saídas com segurança."
+      `A comunidade apresenta saldo positivo de **${communityBalance} membro(s)** nesta semana, pois as entradas superaram as saídas.`
+    );
+  } else if (
+    communityBalance < 0
+  ) {
+    paragraphs.push(
+      "",
+      `A comunidade apresenta saldo negativo de **${Math.abs(communityBalance)} membro(s)** nesta semana, pois as saídas superaram as entradas.`
+    );
+  } else {
+    paragraphs.push(
+      "",
+      "A quantidade de entradas e saídas está equilibrada nesta semana."
     );
   }
+}
+
+if (
+  memberEntries === 0 &&
+  memberExits === 0
+) {
+  paragraphs.push(
+    "",
+    "Ainda não existem movimentações gerais suficientes registradas pelo NPS para comparar entradas e saídas com segurança."
+  );
+}
 
   paragraphs.push(
     "",
@@ -5961,26 +6558,30 @@ async function generateCurrentSummary() {
         titleSuffix:
           "Semana Atual",
       }),
+analysisText:
+  buildHumanWeeklyAnalysisText({
+    selected:
+      results.current,
 
-    analysisText:
-      buildHumanWeeklyAnalysisText({
-        selected:
-          results.current,
+    comparison:
+      results.previous,
 
-        comparison:
-          results.previous,
+    displayScore:
+      results.displayed.score,
 
-        displayScore:
-          results.displayed.score,
+    diagnosis:
+      results.diagnosis,
 
-        diagnosis:
-          results.diagnosis,
+    providerMetrics:
+      results.providerCollection
+        ?.results ||
+      [],
 
-        providerMetrics:
-          results.providerCollection
-            ?.results ||
-          [],
-      }),
+    operationalRoleAnalysis:
+      results.providerCollection
+        ?.operationalRoleAnalysis ||
+      null,
+  }),
   };
 }
 

@@ -1597,157 +1597,167 @@ function buildOrganizationConfirmationMetric() {
     );
   }
 
-  return {
-    id:
-      "organizacoes",
+return {
+  id:
+    "organizacoes",
 
-    label:
-      "Confirmação de Organizações",
+  label:
+    "Confirmação de Organizações",
 
-    available:
-      totalOrganizations > 0,
+  /*
+   * A existência de organizações cadastradas não significa
+   * que a janela de confirmação já produziu dados válidos.
+   *
+   * A métrica somente participa da nota quando pelo menos
+   * uma organização confirmar presença ou informar ausência.
+   *
+   * Enquanto todas permanecerem pendentes, o provedor continua
+   * entregando os detalhes, mas não influencia o NPS Geral.
+   */
+  available:
+    answered > 0,
 
-    score:
-      clamp(
-        score
-      ),
+  score:
+    clamp(
+      score
+    ),
 
-    confidence:
-      clamp(
-        50 +
-        totalOrganizations *
-        2
-      ),
+  confidence:
+    clamp(
+      50 +
+      answered *
+      3
+    ),
 
-    volume:
-      answered,
+  volume:
+    answered,
 
-    goal:
-      totalOrganizations,
+  goal:
+    totalOrganizations,
 
-    current:
-      answered,
+  current:
+    answered,
 
-    /*
-     * O arquivo atual é reiniciado por dia e por semana.
-     *
-     * O histórico será construído pelos snapshots do próprio
-     * NPS a partir desta implementação.
-     */
-    previous:
+  /*
+   * O arquivo atual é reiniciado por dia e por semana.
+   *
+   * O histórico será construído pelos snapshots do próprio
+   * NPS a partir desta implementação.
+   */
+  previous:
+    null,
+
+  difference:
+    null,
+
+  positivePoints,
+
+  attentionPoints,
+
+  recommendations,
+
+  details: {
+    weekKey:
+      state.lastWeekKey ||
       null,
 
-    difference:
+    lastResetDate:
+      state.lastResetDate ||
       null,
 
-    positivePoints,
+    totalOrganizations,
 
-    attentionPoints,
+    answered,
 
-    recommendations,
+    approved:
+      confirmed.length,
 
-    details: {
-      weekKey:
-        state.lastWeekKey ||
-        null,
+    confirmed:
+      confirmed.length,
 
-      lastResetDate:
-        state.lastResetDate ||
-        null,
+    rejected:
+      absent.length,
 
-      totalOrganizations,
+    absent:
+      absent.length,
 
-      answered,
+    pending:
+      pending.length,
 
-      approved:
-        confirmed.length,
+    responseRate,
 
-      confirmed:
-        confirmed.length,
+    attendanceRate,
 
-      rejected:
-        absent.length,
+    participants:
+      responsibleUsers.size,
 
-      absent:
-        absent.length,
+    responsibleUsers:
+      [
+        ...responsibleUsers,
+      ],
 
-      pending:
-        pending.length,
+    confirmedOrganizations:
+      confirmed.map(
+        (
+          [
+            organization,
+          ]
+        ) =>
+          organization
+      ),
 
-      responseRate,
+    absentOrganizations:
+      absent.map(
+        (
+          [
+            organization,
+          ]
+        ) =>
+          organization
+      ),
 
-      attendanceRate,
+    pendingOrganizations:
+      pending.map(
+        (
+          [
+            organization,
+          ]
+        ) =>
+          organization
+      ),
 
-      participants:
-        responsibleUsers.size,
+    byUser:
+      organizations.reduce(
+        (
+          result,
+          [
+            ,
+            information,
+          ]
+        ) => {
+          const userId =
+            String(
+              information?.by ||
+              ""
+            );
 
-      responsibleUsers:
-        [
-          ...responsibleUsers,
-        ],
-
-      confirmedOrganizations:
-        confirmed.map(
-          (
-            [
-              organization,
-            ]
-          ) =>
-            organization
-        ),
-
-      absentOrganizations:
-        absent.map(
-          (
-            [
-              organization,
-            ]
-          ) =>
-            organization
-        ),
-
-      pendingOrganizations:
-        pending.map(
-          (
-            [
-              organization,
-            ]
-          ) =>
-            organization
-        ),
-
-      byUser:
-        organizations.reduce(
-          (
-            result,
-            [
-              ,
-              information,
-            ]
-          ) => {
-            const userId =
-              String(
-                information?.by ||
-                ""
-              );
-
-            if (!userId) {
-              return result;
-            }
-
-            result[userId] =
-              Number(
-                result[userId] ||
-                0
-              ) +
-              1;
-
+          if (!userId) {
             return result;
-          },
-          {}
-        ),
-    },
-  };
+          }
+
+          result[userId] =
+            Number(
+              result[userId] ||
+              0
+            ) +
+            1;
+
+          return result;
+        },
+        {}
+      ),
+  },
+};
 }
 
 // ============================================================================

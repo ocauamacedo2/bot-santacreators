@@ -836,73 +836,75 @@ export async function buildOperationalRoleBreakdown({
   byUser = {},
   roleGroups = [],
 } = {}) {
+  const createGroup =
+    (
+      label,
+      priority
+    ) => ({
+      label,
+      priority,
+      members:
+        0,
+      activeMembers:
+        0,
+      records:
+        0,
+      percentage:
+        0,
+      averagePerActiveMember:
+        0,
+      sources:
+        {},
+      users:
+        {},
+    });
+
   const result = {
-    coordenacao: {
-      label:
-        "Coordenação",
-
-      members:
-        0,
-
-      activeMembers:
-        0,
-
-      records:
-        0,
-
-      users:
-        {},
-    },
-
-    responsaveis: {
-      label:
+    responsaveis:
+      createGroup(
         "Responsáveis",
+        1
+      ),
 
-      members:
-        0,
+    coordenacao:
+      createGroup(
+        "Gestão",
+        2
+      ),
 
-      activeMembers:
-        0,
+    equipe_creator:
+      createGroup(
+        "Equipe Creators",
+        3
+      ),
 
-      records:
-        0,
-
-      users:
-        {},
-    },
-
-    equipe_creator: {
-      label:
-        "Equipe Creator",
-
-      members:
-        0,
-
-      activeMembers:
-        0,
-
-      records:
-        0,
-
-      users:
-        {},
-    },
-
-    outros: {
-      label:
+    outros:
+      createGroup(
         "Outros",
+        4
+      ),
 
-      members:
+    totalRecords:
+      0,
+
+    activeUsers:
+      0,
+
+    conflicts:
+      [],
+
+    topUsers:
+      [],
+
+    concentration: {
+      topUserPercentage:
         0,
 
-      activeMembers:
+      topThreePercentage:
         0,
 
-      records:
-        0,
-
-      users:
-        {},
+      overloaded:
+        false,
     },
   };
 
@@ -920,9 +922,7 @@ export async function buildOperationalRoleBreakdown({
       () => null
     );
 
-  if (
-    !guild
-  ) {
+  if (!guild) {
     return result;
   }
 
@@ -947,6 +947,29 @@ export async function buildOperationalRoleBreakdown({
         () => null
       );
 
+    const matchedGroups =
+      roleGroups.filter(
+        group => {
+          try {
+            return member?.roles?.cache?.has(
+              group.id
+            );
+          } catch {
+            return false;
+          }
+        }
+      );
+
+    const uniqueMatchedKeys =
+      [
+        ...new Set(
+          matchedGroups.map(
+            group =>
+              group.key
+          )
+        ),
+      ];
+
     const roleGroup =
       resolveOperationalRoleGroup(
         member,
@@ -967,32 +990,223 @@ export async function buildOperationalRoleBreakdown({
         )
       );
 
-    group.members += 1;
+    const sources =
+      activityData &&
+      typeof activityData ===
+        "object" &&
+      activityData.sources &&
+      typeof activityData.sources ===
+        "object"
+        ? activityData.sources
+        : {};
+
+    const displayName =
+      member?.displayName ||
+      member?.user?.globalName ||
+      member?.user?.username ||
+      userId;
+
+    group.members +=
+      1;
 
     if (
       amount > 0
     ) {
-      group.activeMembers += 1;
+      group.activeMembers +=
+        1;
+
+      result.activeUsers +=
+        1;
     }
 
     group.records +=
       amount;
 
+    result.totalRecords +=
+      amount;
+
+    for (
+      const [
+        sourceName,
+        sourceAmountRaw,
+      ] of Object.entries(
+        sources
+      )
+    ) {
+      const sourceAmount =
+        Math.max(
+          0,
+          Number(
+            sourceAmountRaw ||
+            0
+          )
+        );
+
+      if (
+        !Number.isFinite(
+          sourceAmount
+        ) ||
+        sourceAmount <= 0
+      ) {
+        continue;
+      }
+
+      group.sources[
+        sourceName
+      ] =
+        Number(
+          group.sources[
+            sourceName
+          ] ||
+          0
+        ) +
+        sourceAmount;
+    }
+
     group.users[
       userId
     ] = {
+      userId,
       amount,
-
-      displayName:
-        member?.displayName ||
-        member?.user?.globalName ||
-        member?.user?.username ||
-        userId,
+      sources,
+      displayName,
 
       roleGroup:
         roleGroup.key,
+
+      matchedGroups:
+        uniqueMatchedKeys,
     };
+
+    /*
+     * Responsável junto com Gestão ou Equipe Creators
+     * indica possível conflito de setagem.
+     *
+     * A pessoa permanece classificada no cargo mais alto,
+     * mas o conflito aparece no relatório.
+     */
+    if (
+      uniqueMatchedKeys.includes(
+        "responsaveis"
+      ) &&
+      (
+        uniqueMatchedKeys.includes(
+          "coordenacao"
+        ) ||
+        uniqueMatchedKeys.includes(
+          "equipe_creator"
+        )
+      )
+    ) {
+      result.conflicts.push({
+        userId,
+        displayName,
+        matchedGroups:
+          uniqueMatchedKeys,
+      });
+    }
   }
+
+  const groupKeys = [
+    "responsaveis",
+    "coordenacao",
+    "equipe_creator",
+    "outros",
+  ];
+
+  for (
+    const groupKey of
+    groupKeys
+  ) {
+    const group =
+      result[groupKey];
+
+    group.percentage =
+      result.totalRecords > 0
+        ? (
+            group.records /
+            result.totalRecords
+          ) *
+          100
+        : 0;
+
+    group.averagePerActiveMember =
+      group.activeMembers > 0
+        ? group.records /
+          group.activeMembers
+        : 0;
+  }
+
+  result.topUsers =
+    groupKeys
+      .flatMap(
+        groupKey =>
+          Object.values(
+            result[groupKey].users
+          )
+      )
+      .sort(
+        (
+          first,
+          second
+        ) =>
+          second.amount -
+          first.amount
+      );
+
+  const topUserRecords =
+    Number(
+      result.topUsers[0]?.amount ||
+      0
+    );
+
+  const topThreeRecords =
+    result.topUsers
+      .slice(
+        0,
+        3
+      )
+      .reduce(
+        (
+          total,
+          user
+        ) =>
+          total +
+          Number(
+            user.amount ||
+            0
+          ),
+        0
+      );
+
+  result.concentration
+    .topUserPercentage =
+      result.totalRecords > 0
+        ? (
+            topUserRecords /
+            result.totalRecords
+          ) *
+          100
+        : 0;
+
+  result.concentration
+    .topThreePercentage =
+      result.totalRecords > 0
+        ? (
+            topThreeRecords /
+            result.totalRecords
+          ) *
+          100
+        : 0;
+
+  result.concentration
+    .overloaded =
+      result.concentration
+        .topUserPercentage >=
+        35 ||
+      result.concentration
+        .topThreePercentage >=
+        70;
 
   return result;
 }
