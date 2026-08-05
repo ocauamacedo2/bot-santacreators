@@ -2428,13 +2428,37 @@ export async function buildGeneralDashOperationalMetric(
    * Utiliza o modo light para reaproveitar o cache do GeralDash.
    * Não cria um novo scan pesado a cada atualização do NPS.
    */
-  const {
-    items,
-  } =
+let {
+  items,
+} =
+  await collectAllGeneral(
+    client,
+    "light"
+  );
+
+if (
+  !Array.isArray(
+    items
+  ) ||
+  items.length === 0
+) {
+  console.warn(
+    "[SC_GERAL_DASH][NPS] Cache light vazio. Executando coleta full."
+  );
+
+  const fullResult =
     await collectAllGeneral(
       client,
-      "light"
+      "full"
     );
+
+  items =
+    Array.isArray(
+      fullResult?.items
+    )
+      ? fullResult.items
+      : [];
+}
 
   const currentWeekKey =
     weekKeyFromDateSP(

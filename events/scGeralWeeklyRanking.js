@@ -3071,13 +3071,37 @@ export async function buildWeeklyRankingOperationalMetric(
     };
   }
 
-  const {
-    items,
-  } =
+let {
+  items,
+} =
+  await collectAllPoints(
+    client,
+    "light"
+  );
+
+if (
+  !Array.isArray(
+    items
+  ) ||
+  items.length === 0
+) {
+  console.warn(
+    "[SC_GERAL_WEEKLY_RANK][NPS] Cache light vazio. Executando coleta full."
+  );
+
+  const fullResult =
     await collectAllPoints(
       client,
-      "light"
+      "full"
     );
+
+  items =
+    Array.isArray(
+      fullResult?.items
+    )
+      ? fullResult.items
+      : [];
+}
 
   const currentWeekKey =
     weekKeyFromDateSP(

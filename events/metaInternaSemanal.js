@@ -631,6 +631,42 @@ function buildMetaInternaOperationalSnapshot() {
   const state =
     loadState();
 
+  /*
+   * Mantém somente os registros da semana atual.
+   *
+   * Essa é a mesma limpeza utilizada pelo dashboard
+   * oficial da Meta Interna.
+   */
+  state.users =
+    keepOnlyCurrentWeekUsers(
+      state.users
+    );
+
+  /*
+   * Recupera as fontes persistidas que podem existir
+   * mesmo após reinício do bot.
+   *
+   * Isso inclui vendas e registros já consolidados pelo
+   * Ranking Geral Semanal.
+   */
+  injectVendasFromFile(
+    state
+  );
+
+  injectGeralWeeklySources(
+    state
+  );
+
+  /*
+   * calcUserMeta precisa dessas duas fontes para calcular
+   * presença nos eventos e cumprimento da meta semanal.
+   */
+  const eventos =
+    buildCronogramaEventos();
+
+  const bpEntries =
+    loadBpEntriesForWeek();
+
   const users =
     Object.keys(
       state.users || {}
@@ -639,18 +675,30 @@ function buildMetaInternaOperationalSnapshot() {
   const results =
     users.map(
       userId =>
-        calculateUserResult(
+        calcUserMeta({
           userId,
-          state
-        )
+          state,
+          eventos,
+          bpEntries,
+        })
     );
+
+  /*
+   * Persiste os dados recuperados pelas funções de
+   * backfill, mantendo o dashboard e o NPS alinhados.
+   */
+  saveState(
+    state
+  );
 
   const validResults =
     results.filter(
       result =>
         result &&
         Number.isFinite(
-          Number(result.percent)
+          Number(
+            result.percent
+          )
         )
     );
 
@@ -658,24 +706,42 @@ function buildMetaInternaOperationalSnapshot() {
     return {
       id:
         "meta_interna",
+
       label:
         "Metas Internas",
+
       available:
         false,
+
       score:
         null,
+
       confidence:
         0,
+
       volume:
         0,
+
       positivePoints: [],
+
       attentionPoints: [
         "Ainda não existem participantes com dados suficientes para avaliar as metas internas.",
       ],
+
       recommendations: [
         "Aguardar novos registros ou verificar se os eventos dos sistemas estão chegando à Meta Interna.",
       ],
-      details: {},
+
+      details: {
+        participants:
+          0,
+
+        eventsAvailable:
+          eventos.length,
+
+        punchEntriesAvailable:
+          bpEntries.length,
+      },
     };
   }
 
@@ -723,59 +789,79 @@ function buildMetaInternaOperationalSnapshot() {
   const attentionPoints = [];
   const recommendations = [];
 
-  if (completionRate >= 70) {
+  if (
+    completionRate >= 70
+  ) {
     positivePoints.push(
       `${completionRate.toFixed(1)}% dos participantes já alcançaram integralmente suas metas internas.`
     );
-  } else if (completionRate >= 40) {
+  } else if (
+    completionRate >= 40
+  ) {
     positivePoints.push(
       `${completionRate.toFixed(1)}% dos participantes já concluíram todas as metas internas da semana.`
     );
   }
 
-  if (averagePercent >= 80) {
+  if (
+    averagePercent >= 80
+  ) {
     positivePoints.push(
       `O cumprimento médio das metas internas está em ${averagePercent.toFixed(1)}%, indicando bom avanço operacional.`
     );
   }
 
-  if (attention > 0) {
+  if (
+    attention > 0
+  ) {
     attentionPoints.push(
       `${attention} participante(s) permanecem abaixo de 60% das metas internas.`
     );
   }
 
-  if (completionRate < 50) {
+  if (
+    completionRate < 50
+  ) {
     attentionPoints.push(
-      `Menos da metade da equipe concluiu integralmente as metas internas até o momento.`
+      "Menos da metade da equipe concluiu integralmente as metas internas até o momento."
     );
   }
 
-  if (completionRate < 50) {
+  if (
+    completionRate < 50
+  ) {
     recommendations.push(
       "Identificar quais metas apresentam menor conclusão e direcionar o acompanhamento da equipe para esses pontos."
     );
   }
 
-  if (attention > 0) {
+  if (
+    attention > 0
+  ) {
     recommendations.push(
       "Acompanhar individualmente os participantes abaixo de 60%, verificando ausências, capacidade disponível e dificuldades operacionais."
     );
   }
 
-  if (!positivePoints.length) {
+  if (
+    !positivePoints.length
+  ) {
     positivePoints.push(
       "A Meta Interna está registrando atividades e permite acompanhar a evolução individual da equipe."
     );
   }
 
-  if (!attentionPoints.length) {
+  if (
+    !attentionPoints.length
+  ) {
     attentionPoints.push(
       "Nenhum problema dominante foi identificado no cumprimento das metas internas."
     );
   }
 
-  if (!recommendations.length) {
+  if (
+    !recommendations.length
+  ) {
     recommendations.push(
       "Manter o acompanhamento atual e observar a evolução até o encerramento da semana."
     );
@@ -835,11 +921,36 @@ function buildMetaInternaOperationalSnapshot() {
 
       averagePercent,
 
+      eventsAvailable:
+        eventos.length,
+
+      punchEntriesAvailable:
+        bpEntries.length,
+
       goals:
         METAS,
 
       weights:
         PESOS,
+
+      users:
+        Object.fromEntries(
+          validResults.map(
+            result => [
+              result.userId,
+              {
+                percent:
+                  result.percent,
+
+                completed:
+                  result.ok,
+
+                raw:
+                  result.raw,
+              },
+            ]
+          )
+        ),
     },
   };
 }

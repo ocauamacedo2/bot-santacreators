@@ -807,21 +807,39 @@ function syncProviderMetricSnapshots({
     const metric of
     providerMetrics || []
   ) {
-    const metricId =
-      safeString(
-        metric?.id ||
-        metric?.providerId
-      );
+const metricId =
+  safeString(
+    metric?.id ||
+    metric?.providerId
+  );
 
-    if (
-      !metricId
-    ) {
-      continue;
-    }
+if (
+  !metricId
+) {
+  continue;
+}
 
-    currentWeek.providerSnapshots[
-      metricId
-    ] ||= [];
+/*
+ * Não grava snapshots vazios ou indisponíveis.
+ *
+ * Isso evita salvar falsos zeros quando um módulo
+ * ainda não terminou a coleta ou quando o cache
+ * temporário está vazio.
+ */
+if (
+  metric.available === false ||
+  !Number.isFinite(
+    Number(
+      metric.score
+    )
+  )
+) {
+  continue;
+}
+
+currentWeek.providerSnapshots[
+  metricId
+] ||= [];
 
     previousWeek.providerSnapshots[
       metricId
