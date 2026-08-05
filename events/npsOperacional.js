@@ -329,8 +329,8 @@ const DEFAULT_CONFIG = {
 categories: {
   meta_interna: {
     label: "Cumprimento das Metas Internas",
-    weight: 14,
-    enabled: true,
+    weight: 0,
+    enabled: false,
     weeklyGoal: 100,
   },
 
@@ -472,7 +472,7 @@ function loadConfig() {
     );
   }
 
-  return {
+  const mergedConfig = {
     ...structuredClone(DEFAULT_CONFIG),
     ...saved,
 
@@ -486,6 +486,30 @@ function loadConfig() {
         ? saved.classifications
         : structuredClone(DEFAULT_CONFIG.classifications),
   };
+
+  /*
+   * A Meta Interna possui seu próprio painel e sua própria régua.
+   *
+   * Ela permanece disponível no projeto, mas não influencia
+   * o NPS Operacional Geral.
+   */
+  mergedConfig.categories.meta_interna = {
+    ...mergedConfig.categories.meta_interna,
+
+    label:
+      "Cumprimento das Metas Internas",
+
+    weight:
+      0,
+
+    enabled:
+      false,
+
+    weeklyGoal:
+      100,
+  };
+
+  return mergedConfig;
 }
 
 // ============================================================================
@@ -5350,7 +5374,6 @@ function buildWeeklySummaryEmbeds({
 
   return [
     mainEmbed,
-    analysisEmbed,
   ];
 }
 
@@ -5380,6 +5403,26 @@ async function generateCurrentSummary() {
 
         titleSuffix:
           "Semana Atual",
+      }),
+
+    analysisText:
+      buildHumanWeeklyAnalysisText({
+        selected:
+          results.current,
+
+        comparison:
+          results.previous,
+
+        displayScore:
+          results.displayed.score,
+
+        diagnosis:
+          results.diagnosis,
+
+        providerMetrics:
+          results.providerCollection
+            ?.results ||
+          [],
       }),
   };
 }
@@ -5540,18 +5583,47 @@ async function sendSummaryToUser(
       : await generateCurrentSummary();
 
   try {
+    /*
+     * Primeiro envia apenas o resumo principal como embed.
+     */
     await interaction.user.send({
       content:
         type === "previous"
           ? "📅 **Resumo do NPS Operacional da semana anterior**"
           : "📊 **Resumo parcial do NPS Operacional da semana atual**",
+
       embeds:
         summary.embeds,
     });
 
+    /*
+     * Na semana atual, envia a análise completa abaixo
+     * como texto normal, dividida em mensagens seguras
+     * para o limite do Discord.
+     */
+    if (
+      type !== "previous" &&
+      summary.analysisText
+    ) {
+      const textChunks =
+        splitDiscordText(
+          summary.analysisText
+        );
+
+      for (
+        const textChunk of
+        textChunks
+      ) {
+        await interaction.user.send({
+          content:
+            textChunk,
+        });
+      }
+    }
+
     await interaction.editReply({
       content:
-        "✅ O resumo foi enviado para o seu privado.",
+        "✅ O resumo e a análise completa foram enviados para o seu privado.",
     });
   } catch (error) {
     const code =
