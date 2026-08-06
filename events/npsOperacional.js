@@ -3931,12 +3931,498 @@ function buildDashboardEmbed({
 // PAINEL EXECUTIVO COMPLETO
 // ============================================================================
 
+function buildOperationalParticipationAuditEmbed({
+  providerMetrics = [],
+  operationalRoleAnalysis = null,
+} = {}) {
+  const roleGroups = [
+    operationalRoleAnalysis?.responsaveis,
+    operationalRoleAnalysis?.coordenacao,
+    operationalRoleAnalysis?.equipe_creator,
+    operationalRoleAnalysis?.outros,
+  ].filter(Boolean);
+
+  const users =
+    roleGroups.flatMap(
+      group =>
+        Object.values(
+          group.users || {}
+        ).map(
+          user => ({
+            ...user,
+            groupLabel:
+              group.label,
+          })
+        )
+    );
+
+  const getSourceAmount =
+    (
+      user,
+      acceptedSources
+    ) =>
+      Object.entries(
+        user?.sources || {}
+      ).reduce(
+        (
+          total,
+          [
+            sourceName,
+            amountRaw,
+          ]
+        ) => {
+          const normalizedSource =
+            normalizeOperationalSourceName(
+              sourceName
+            );
+
+          if (
+            !acceptedSources.has(
+              normalizedSource
+            )
+          ) {
+            return total;
+          }
+
+          return (
+            total +
+            Math.max(
+              0,
+              Number(
+                amountRaw ||
+                0
+              )
+            )
+          );
+        },
+        0
+      );
+
+  /*
+   * Bate Ponto representa a presença da equipe inteira.
+   *
+   * Presenças e Bate Ponto são tratados como evidência
+   * de que a pessoa marcou presença durante a semana.
+   */
+  const attendanceSources =
+    new Set([
+      "bateponto",
+      "presencas",
+    ]);
+
+  /*
+   * Poderes e Poderes Dias representam evidências de que
+   * a pessoa registrou o uso dos poderes durante a semana.
+   */
+  const powerSources =
+    new Set([
+      "poderes",
+      "poderesdias",
+    ]);
+
+  /*
+   * Bate Ponto e Poderes não entram como tarefa operacional
+   * neste cruzamento.
+   *
+   * Todas as outras fontes são consideradas trabalho:
+   *
+   * • Registro Manager;
+   * • Pagamentos;
+   * • Hall da Fama;
+   * • Eventos Diários;
+   * • Eventos;
+   * • Cronograma;
+   * • Convites;
+   * • Organizações;
+   * • Correções;
+   * • Set Staff;
+   * • demais fontes registradas pelo Ranking Geral.
+   */
+  const ignoredWorkSources =
+    new Set([
+      ...attendanceSources,
+      ...powerSources,
+    ]);
+
+  const userAudit =
+    users.map(
+      user => {
+        const attendance =
+          getSourceAmount(
+            user,
+            attendanceSources
+          );
+
+        const powers =
+          getSourceAmount(
+            user,
+            powerSources
+          );
+
+        const work =
+          Object.entries(
+            user?.sources || {}
+          ).reduce(
+            (
+              total,
+              [
+                sourceName,
+                amountRaw,
+              ]
+            ) => {
+              const normalizedSource =
+                normalizeOperationalSourceName(
+                  sourceName
+                );
+
+              if (
+                ignoredWorkSources.has(
+                  normalizedSource
+                )
+              ) {
+                return total;
+              }
+
+              return (
+                total +
+                Math.max(
+                  0,
+                  Number(
+                    amountRaw ||
+                    0
+                  )
+                )
+              );
+            },
+            0
+          );
+
+        return {
+          ...user,
+          attendance,
+          powers,
+          work,
+        };
+      }
+    );
+
+  /*
+   * Pessoas que possuem pelo menos um registro
+   * de Bate Ponto ou Presença.
+   */
+  const presentUsers =
+    userAudit.filter(
+      user =>
+        user.attendance > 0
+    );
+
+  /*
+   * Pessoas que realizaram pelo menos uma atividade
+   * operacional diferente de Bate Ponto e Poderes.
+   */
+  const activeUsers =
+    userAudit.filter(
+      user =>
+        user.work > 0
+    );
+
+  /*
+   * Fez Manager, Pagamento, Hall, Evento ou outra tarefa,
+   * mas não apareceu no Bate Ponto.
+   */
+  const workedWithoutAttendance =
+    userAudit.filter(
+      user =>
+        user.work > 0 &&
+        user.attendance <= 0
+    );
+
+  /*
+   * Possui atividade operacional registrada,
+   * mas não registrou uso de poderes.
+   */
+  const workedWithoutPowers =
+    userAudit.filter(
+      user =>
+        user.work > 0 &&
+        user.powers <= 0
+    );
+
+  /*
+   * Bateu ponto, mas nenhuma outra atividade foi localizada.
+   *
+   * Isso não significa automaticamente que a pessoa não trabalhou.
+   * Pode significar que ela ajudou e não registrou a atividade
+   * no sistema correspondente.
+   */
+  const attendanceOnly =
+    userAudit.filter(
+      user =>
+        user.attendance > 0 &&
+        user.work <= 0
+    );
+
+  /*
+   * Quantidade de pagamentos separada pelos cargos atuais.
+   */
+  const paymentsByGroup =
+    roleGroups
+      .map(
+        group => ({
+          label:
+            group.label,
+
+          amount:
+            Object.entries(
+              group.sources || {}
+            ).reduce(
+              (
+                total,
+                [
+                  sourceName,
+                  amountRaw,
+                ]
+              ) =>
+                normalizeOperationalSourceName(
+                  sourceName
+                ) ===
+                  "pagamentos"
+                  ? total +
+                    Math.max(
+                      0,
+                      Number(
+                        amountRaw ||
+                        0
+                      )
+                    )
+                  : total,
+              0
+            ),
+        })
+      )
+      .filter(
+        group =>
+          group.amount > 0
+      )
+      .sort(
+        (
+          first,
+          second
+        ) =>
+          second.amount -
+          first.amount
+      );
+
+  /*
+   * Ranking individual de quem mais registrou pagamentos.
+   */
+  const paymentUsers =
+    userAudit
+      .map(
+        user => ({
+          ...user,
+
+          paymentAmount:
+            getSourceAmount(
+              user,
+              new Set([
+                "pagamentos",
+              ])
+            ),
+        })
+      )
+      .filter(
+        user =>
+          user.paymentAmount > 0
+      )
+      .sort(
+        (
+          first,
+          second
+        ) =>
+          second.paymentAmount -
+          first.paymentAmount
+      );
+
+  const formatUsers =
+    (
+      list,
+      amountKey
+    ) =>
+      list.length
+        ? list
+            .slice(
+              0,
+              8
+            )
+            .map(
+              user =>
+                `• **${user.displayName}** (${user.groupLabel}) — ${Number(user[amountKey] || 0)} registro(s)`
+            )
+            .join(
+              "\n"
+            )
+        : "Nenhuma pessoa foi encontrada nesta situação.";
+
+  const attendanceText = [
+    `**Pessoas com Bate Ponto:** ${presentUsers.length}`,
+    `**Pessoas com alguma atividade operacional:** ${activeUsers.length}`,
+    `**Trabalharam sem Bate Ponto:** ${workedWithoutAttendance.length}`,
+    `**Trabalharam sem registrar uso de poderes:** ${workedWithoutPowers.length}`,
+    `**Bateram ponto sem outra atividade localizada:** ${attendanceOnly.length}`,
+  ].join(
+    "\n"
+  );
+
+  const paymentGroupText =
+    paymentsByGroup.length
+      ? paymentsByGroup
+          .map(
+            group =>
+              `• **${group.label}:** ${group.amount} pagamento(s)`
+          )
+          .join(
+            "\n"
+          )
+      : "Ainda não foi possível separar os pagamentos por grupo operacional.";
+
+  const paymentTopText =
+    paymentUsers.length
+      ? paymentUsers
+          .slice(
+            0,
+            5
+          )
+          .map(
+            (
+              user,
+              index
+            ) =>
+              `${index + 1}. **${user.displayName}** (${user.groupLabel}) — ${user.paymentAmount}`
+          )
+          .join(
+            "\n"
+          )
+      : "Nenhum autor de pagamento foi localizado na fonte semanal.";
+
+  return new EmbedBuilder()
+    .setColor(
+      0x9b59b6
+    )
+    .setTitle(
+      "🔎 Participação real e registros obrigatórios"
+    )
+    .setDescription(
+      "Esta leitura cruza o Bate Ponto com as atividades registradas por cada pessoa e separa o trabalho pelos cargos atuais do servidor."
+    )
+    .addFields(
+      {
+        name:
+          "🕒 Presença x trabalho registrado",
+
+        value:
+          truncate(
+            attendanceText,
+            1024
+          ),
+
+        inline:
+          false,
+      },
+
+      {
+        name:
+          "⚠️ Trabalharam sem Bate Ponto",
+
+        value:
+          truncate(
+            formatUsers(
+              workedWithoutAttendance,
+              "work"
+            ),
+            1024
+          ),
+
+        inline:
+          false,
+      },
+
+      {
+        name:
+          "⚡ Trabalharam sem registrar poderes",
+
+        value:
+          truncate(
+            formatUsers(
+              workedWithoutPowers,
+              "work"
+            ),
+            1024
+          ),
+
+        inline:
+          false,
+      },
+
+      {
+        name:
+          "💤 Bateram ponto sem outra atividade localizada",
+
+        value:
+          truncate(
+            formatUsers(
+              attendanceOnly,
+              "attendance"
+            ),
+            1024
+          ),
+
+        inline:
+          false,
+      },
+
+      {
+        name:
+          "💰 Pagamentos por equipe",
+
+        value:
+          truncate(
+            paymentGroupText,
+            1024
+          ),
+
+        inline:
+          false,
+      },
+
+      {
+        name:
+          "🏆 Quem mais registrou pagamentos",
+
+        value:
+          truncate(
+            paymentTopText,
+            1024
+          ),
+
+        inline:
+          false,
+      }
+    )
+    .setFooter({
+      text:
+        "Bate Ponto representa presença da equipe inteira • Confirmação de organização representa presença das organizações nos eventos",
+    });
+}
+
 function buildExecutiveDashboardEmbeds({
   current,
   previous,
   displayed,
   diagnosis,
   config,
+  providerMetrics = [],
+  operationalRoleAnalysis = null,
 }) {
   const score =
     displayed.score;
@@ -3947,8 +4433,22 @@ function buildExecutiveDashboardEmbeds({
       config
     );
 
+  /*
+   * A comparação exibida entre semana atual e semana passada
+   * precisa usar as duas notas brutas mostradas no próprio painel.
+   *
+   * A nota suavizada continua sendo usada no título principal,
+   * mas não é apresentada como se fosse a nota bruta desta semana.
+   */
   const difference =
-    diagnosis.generalDifference;
+    Number(
+      current.rawScore ||
+      0
+    ) -
+    Number(
+      previous.rawScore ||
+      0
+    );
 
   const validCategories =
     current.validCategories
@@ -4375,11 +4875,18 @@ function buildExecutiveDashboardEmbeds({
           "As análises são atualizadas conforme novas atividades são registradas",
       });
 
+  const participationAuditEmbed =
+    buildOperationalParticipationAuditEmbed({
+      providerMetrics,
+      operationalRoleAnalysis,
+    });
+
   return [
     overviewEmbed,
     categoriesEmbed,
     performanceEmbed,
     analysisEmbed,
+    participationAuditEmbed,
   ];
 }
 
