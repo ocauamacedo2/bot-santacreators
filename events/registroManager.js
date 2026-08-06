@@ -2577,23 +2577,69 @@ const orgNameForCheck = _extractOrgNameFromDisplay(displayForCheck);
 // ✅ REGRA: ID 00 = pode repetir (org do legal)
 const isLegalOrg = orgIdForCheck === "00";
 
-// ✅ helper: checa no FACs (se tiver bridge), senão cai pro scan antigo do RM
+// ✅ helper: checa SOMENTE no FACs.
+// O Registro Manager não pode voltar a usar registros verdes antigos como fonte,
+// pois uma ORG removida do FACs precisa ficar imediatamente liberada para nova aprovação.
 async function _isDuplicateByIdConsideringFacs(orgId) {
-  const b = globalThis.__FACS_ONEBTN_BRIDGE__;
-  if (b?.hasOrgIdInWeek) {
-    return await b.hasOrgIdInWeek(orgId);
+  const bridge = globalThis.__FACS_ONEBTN_BRIDGE__;
+
+  if (bridge?.hasOrgIdInWeek) {
+    try {
+      return await bridge.hasOrgIdInWeek(orgId);
+    } catch (error) {
+      console.error(
+        "[SC_RM] Falha ao consultar duplicidade por ID diretamente no FACs:",
+        {
+          orgId,
+          rmMsgId: msg.id,
+          error,
+        }
+      );
+
+      return false;
+    }
   }
-  // fallback antigo: scan no RM
-  return await hasOtherApprovedSameOrgIdThisWeek(canal, orgId, msg.id);
+
+  console.error(
+    "[SC_RM] Bridge do FACs indisponível na checagem por ID. Aprovação não será bloqueada por registros antigos do RM.",
+    {
+      orgId,
+      rmMsgId: msg.id,
+    }
+  );
+
+  return false;
 }
 
 async function _isDuplicateByNameConsideringFacs(name) {
-  const b = globalThis.__FACS_ONEBTN_BRIDGE__;
-  if (b?.hasOrgNameInWeek) {
-    return await b.hasOrgNameInWeek(name);
+  const bridge = globalThis.__FACS_ONEBTN_BRIDGE__;
+
+  if (bridge?.hasOrgNameInWeek) {
+    try {
+      return await bridge.hasOrgNameInWeek(name);
+    } catch (error) {
+      console.error(
+        "[SC_RM] Falha ao consultar duplicidade por nome diretamente no FACs:",
+        {
+          name,
+          rmMsgId: msg.id,
+          error,
+        }
+      );
+
+      return false;
+    }
   }
-  // fallback antigo: scan no RM
-  return await hasOtherApprovedSameOrgThisWeek(canal, name, msg.id);
+
+  console.error(
+    "[SC_RM] Bridge do FACs indisponível na checagem por nome. Aprovação não será bloqueada por registros antigos do RM.",
+    {
+      name,
+      rmMsgId: msg.id,
+    }
+  );
+
+  return false;
 }
 
 // ✅ se tiver ID (e não for 00), bloqueia por ID

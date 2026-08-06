@@ -1907,21 +1907,20 @@ export async function facsSemanaisOnReady(client) {
     await dmQuartaManagersIfNeeded(client);
   } catch {}
 
-  // ✅ RECOVERY PÓS-RESTART:
-  // Se o bot reiniciou enquanto aprovaram registros, ele revarre o RM e reconstrói o FACs.
-  // Delay pequeno pra dar tempo do facsComparativoOnReady instalar o force update global.
-  if (!globalThis.__SC_FACS_SEMANAIS_BOOT_SYNC__) {
-    globalThis.__SC_FACS_SEMANAIS_BOOT_SYNC__ = true;
-
-    setTimeout(async () => {
-      try {
-        const res = await syncFromRegistroManager(client);
-        console.log("[FACS_SEMANAIS] boot sync RM concluído:", res);
-      } catch (e) {
-        console.error("[FACS_SEMANAIS] boot sync RM falhou:", e);
-      }
-    }, 15_000);
-  }
+  // ✅ PÓS-RESTART:
+  // O FACs permanece exatamente como foi salvo no facs_semanais.json.
+  // Não repopula automaticamente pelo Registro Manager, pois registros antigos
+  // ainda aprovados no RM poderiam restaurar ORGs removidas ou corrigidas manualmente.
+  //
+  // A reconstrução completa continua disponível somente pelo botão:
+  // "🔄 Repopular (aprovados RM)".
+  console.log(
+    "[FACS_SEMANAIS] FACs carregado sem repopulação automática pelo RM.",
+    {
+      weekKey: facsState.weekKey,
+      total: _countLines(facsState.lista),
+    }
+  );
 
   // tick leve (pega domingo 00:00 e quarta 15:00 mesmo se o host for zoado)
   setInterval(async () => {
