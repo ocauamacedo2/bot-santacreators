@@ -5188,12 +5188,27 @@ function buildConsolidatedOperationalUsers({
 // GERAÇÃO DOS RESULTADOS
 // ============================================================================
 
-async function generateResults() {
+async function generateResults(
+  client =
+    activeClient
+) {
   const config =
     loadConfig();
 
   const state =
     loadState();
+
+  /*
+   * Utiliza primeiro o cliente recebido diretamente pelo
+   * fluxo que solicitou a atualização.
+   *
+   * O activeClient permanece como fallback para chamadas
+   * internas que não recebem o cliente como argumento.
+   */
+  const operationalClient =
+    client ||
+    activeClient ||
+    null;
 
   /*
    * As informações das semanas precisam ser criadas
@@ -5212,7 +5227,7 @@ async function generateResults() {
 
   const providerContext = {
     client:
-      activeClient,
+      operationalClient,
 
     currentWeek:
       currentWeekInfo,
@@ -5434,7 +5449,7 @@ const rankingUsersForRoles =
 const operationalRoleAnalysis =
   await buildOperationalRoleBreakdown({
     client:
-      activeClient,
+      operationalClient,
 
     guildId:
       "1262262852782129183",
@@ -5452,10 +5467,10 @@ providerCollection.operationalRoleAnalysis =
 console.log(
   "[NPS Operacional] Separação por equipe:",
   {
-    activeClientAvailable:
-      Boolean(
-        activeClient
-      ),
+operationalClientAvailable:
+  Boolean(
+    operationalClient
+  ),
 
     directRankingUsers:
       Object.keys(
@@ -8508,9 +8523,14 @@ function buildWeeklySummaryEmbeds({
   ];
 }
 
-async function generateCurrentSummary() {
+async function generateCurrentSummary(
+  client =
+    activeClient
+) {
   const results =
-    await generateResults();
+    await generateResults(
+      client
+    );
 
   return {
     ...results,
@@ -8823,55 +8843,63 @@ async function sendAutomaticWeeklyReport(
 
 async function sendSummaryToUser(
   interaction,
-  type
+  type,
+  client
 ) {
-  const summary =
-    type === "previous"
-      ? generatePreviousSummary()
-      : await generateCurrentSummary();
-
   try {
+    if (
+      type ===
+      "previous"
+    ) {
+      const previousSummary =
+        generatePreviousSummary();
+
+      await interaction.user.send({
+        content:
+          "📅 **Resumo do NPS Operacional da semana anterior**",
+
+        embeds:
+          previousSummary.embeds,
+      });
+
+      await interaction.editReply({
+        content:
+          "✅ O resumo da semana anterior foi enviado para o seu privado.",
+      });
+
+      return;
+    }
+
     /*
-     * Primeiro envia apenas o resumo principal como embed.
+     * O botão de resumo envia somente a análise curta,
+     * com meta, maior participação, pontos de atenção,
+     * pontos positivos e foco da próxima semana.
+     *
+     * O relatório completo continua separado no botão
+     * executivo e no envio automático das 23:40.
      */
+    const results =
+      await generateResults(
+        client
+      );
+
+    const focusSummary =
+      buildOperationalFocusSummary({
+        results,
+      });
+
     await interaction.user.send({
       content:
-        type === "previous"
-          ? "📅 **Resumo do NPS Operacional da semana anterior**"
-          : "📊 **Resumo parcial do NPS Operacional da semana atual**",
+        "📊 **Resumo parcial do NPS Operacional da semana atual**",
 
-      embeds:
-        summary.embeds,
+      embeds: [
+        focusSummary.embed,
+      ],
     });
-
-    /*
-     * Na semana atual, envia a análise completa abaixo
-     * como texto normal, dividida em mensagens seguras
-     * para o limite do Discord.
-     */
-    if (
-      type !== "previous" &&
-      summary.analysisText
-    ) {
-      const textChunks =
-        splitDiscordText(
-          summary.analysisText
-        );
-
-      for (
-        const textChunk of
-        textChunks
-      ) {
-        await interaction.user.send({
-          content:
-            textChunk,
-        });
-      }
-    }
 
     await interaction.editReply({
       content:
-        "✅ O resumo e a análise completa foram enviados para o seu privado.",
+        "✅ O resumo direto da semana atual foi enviado para o seu privado.",
     });
   } catch (error) {
     const code =
@@ -8956,29 +8984,31 @@ export async function npsOperacionalHandleInteraction(
     return true;
   }
 
-  if (
-    customId ===
-    BUTTON_CURRENT_DM_ID
-  ) {
-    await sendSummaryToUser(
-      interaction,
-      "current"
-    );
+if (
+  customId ===
+  BUTTON_CURRENT_DM_ID
+) {
+  await sendSummaryToUser(
+    interaction,
+    "current",
+    client
+  );
 
-    return true;
-  }
+  return true;
+}
 
-  if (
-    customId ===
-    BUTTON_PREVIOUS_DM_ID
-  ) {
-    await sendSummaryToUser(
-      interaction,
-      "previous"
-    );
+if (
+  customId ===
+  BUTTON_PREVIOUS_DM_ID
+) {
+  await sendSummaryToUser(
+    interaction,
+    "previous",
+    client
+  );
 
-    return true;
-  }
+  return true;
+}
 
   if (
     customId ===

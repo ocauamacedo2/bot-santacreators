@@ -908,23 +908,53 @@ export async function buildOperationalRoleBreakdown({
     },
   };
 
-  if (
-    !client ||
-    !guildId
-  ) {
-    return result;
-  }
+if (
+  !client ||
+  !guildId
+) {
+  console.error(
+    "[OperationalIntelligence] Não foi possível separar os cargos porque o cliente ou o ID do servidor não foi informado.",
+    {
+      clientAvailable:
+        Boolean(
+          client
+        ),
 
-  const guild =
-    await client.guilds.fetch(
-      guildId
-    ).catch(
-      () => null
-    );
+      guildId:
+        guildId ||
+        null,
 
-  if (!guild) {
-    return result;
-  }
+      usersReceived:
+        Object.keys(
+          byUser ||
+          {}
+        ).length,
+    }
+  );
+
+  return result;
+}
+
+const guild =
+  client.guilds?.cache?.get(
+    guildId
+  ) ||
+  await client.guilds.fetch(
+    guildId
+  ).catch(
+    error => {
+      console.error(
+        `[OperationalIntelligence] Não foi possível acessar o servidor ${guildId}:`,
+        error
+      );
+
+      return null;
+    }
+  );
+
+if (!guild) {
+  return result;
+}
 
   const userEntries =
     Object.entries(
@@ -937,15 +967,23 @@ export async function buildOperationalRoleBreakdown({
       activityData,
     ] of userEntries
   ) {
-    const member =
-      guild.members.cache.get(
-        userId
-      ) ||
-      await guild.members.fetch(
-        userId
-      ).catch(
-        () => null
+const member =
+  guild.members.cache.get(
+    userId
+  ) ||
+  await guild.members.fetch(
+    userId
+  ).catch(
+    error => {
+      console.error(
+        `[OperationalIntelligence] Não foi possível buscar o membro ${userId} para a separação operacional:`,
+        error?.message ||
+        error
       );
+
+      return null;
+    }
+  );
 
     const matchedGroups =
       roleGroups.filter(
