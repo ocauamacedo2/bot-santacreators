@@ -59,9 +59,223 @@ const PAYMENT_WEEKLY_GOAL =
   10;
 
 // ============================================================================
-// PERSISTÊNCIA
+// COLETA HISTÓRICA COMPARTILHADA DO PAY EVENT DASH
 // ============================================================================
 
+let payEvtOperationalCollection = {
+  client:
+    null,
+
+  promise:
+    null,
+
+  collectedAt:
+    0,
+
+  payload:
+    null,
+};
+
+const PAY_EVT_OPERATIONAL_CACHE_MS =
+  60 * 1000;
+
+/**
+ * Executa uma varredura histórica real dos canais e arquivos oficiais.
+ *
+ * Durante a mesma atualização do NPS, Presenças, Pagamentos,
+ * Poderes, Hall da Fama, Eventos Diários e Cronograma utilizam
+ * exatamente a mesma coleta.
+ *
+ * Isso evita:
+ *
+ * • executar o scanner várias vezes;
+ * • receber um cache incompleto criado antes do Discord estar pronto;
+ * • encontrar totais diferentes entre áreas da mesma atualização.
+ */
+async function getFreshPayEvtOperationalData(
+  context = {}
+) {
+  const client =
+    context.client ||
+    null;
+
+  if (!client) {
+    return collectPayEvtOperationalData(
+      null,
+      false
+    );
+  }
+
+  const now =
+    Date.now();
+
+  const sameClient =
+    payEvtOperationalCollection.client ===
+    client;
+
+  const cacheIsValid =
+    sameClient &&
+    payEvtOperationalCollection.payload &&
+    now -
+      Number(
+        payEvtOperationalCollection.collectedAt ||
+        0
+      ) <
+      PAY_EVT_OPERATIONAL_CACHE_MS;
+
+  if (
+    cacheIsValid
+  ) {
+    return payEvtOperationalCollection.payload;
+  }
+
+  if (
+    sameClient &&
+    payEvtOperationalCollection.promise
+  ) {
+    return payEvtOperationalCollection.promise;
+  }
+
+  payEvtOperationalCollection.client =
+    client;
+
+  /*
+   * force = true:
+   *
+   * ignora o cache interno antigo do payEvtDash
+   * e manda reler os canais, logs e arquivos.
+   */
+  payEvtOperationalCollection.promise =
+    collectPayEvtOperationalData(
+      client,
+      true
+    )
+      .then(
+        payload => {
+          payEvtOperationalCollection.payload =
+            payload;
+
+          payEvtOperationalCollection.collectedAt =
+            Date.now();
+
+          console.log(
+            "[NPS Providers] Varredura histórica compartilhada concluída:",
+            {
+              payments:
+                Array.isArray(
+                  payload?.payments
+                )
+                  ? payload.payments.length
+                  : 0,
+
+              events:
+                Array.isArray(
+                  payload?.events
+                )
+                  ? payload.events.length
+                  : 0,
+
+              users:
+                Object.keys(
+                  payload?.users ||
+                  {}
+                ).length,
+
+              scannedChannels: {
+                ...(
+                  payload?.debug
+                    ?.scannedChannels ||
+                  {}
+                ),
+              },
+
+              recoveredFromLogs:
+                Number(
+                  payload?.debug
+                    ?.recoveredFromLogs ||
+                  0
+                ),
+
+              duplicatesIgnored:
+                Number(
+                  payload?.debug
+                    ?.duplicatesIgnored ||
+                  0
+                ),
+            }
+          );
+
+          return payload;
+        }
+      )
+      .catch(
+        error => {
+          console.error(
+            "[NPS Providers] Falha na varredura histórica compartilhada:",
+            error
+          );
+
+          /*
+           * Se uma coleta anterior válida existir,
+           * ela é utilizada somente como fallback.
+           */
+          if (
+            payEvtOperationalCollection.payload
+          ) {
+            return payEvtOperationalCollection.payload;
+          }
+
+          return {
+            generatedAt:
+              Date.now(),
+
+            payments:
+              [],
+
+            events:
+              [],
+
+            byWeek:
+              {},
+
+            byMonth:
+              {},
+
+            users:
+              {},
+
+            debug: {
+              scannedChannels:
+                {},
+
+              recoveredFromLogs:
+                0,
+
+              duplicatesIgnored:
+                0,
+
+              error:
+                error?.message ||
+                String(
+                  error
+                ),
+            },
+          };
+        }
+      )
+      .finally(
+        () => {
+          payEvtOperationalCollection.promise =
+            null;
+        }
+      );
+
+  return payEvtOperationalCollection.promise;
+}
+
+// ============================================================================
+// PERSISTÊNCIA
+// ============================================================================
 function pickPersistRoot() {
   const candidates = [
     process.env.SQUARECLOUD_STORAGE_PATH?.trim(),
@@ -1065,10 +1279,15 @@ async function buildPresenceMetric(
       -7
     );
 
+  /*
+   * Reutiliza a varredura histórica compartilhada.
+   *
+   * Ela lê os canais e arquivos oficiais uma única vez
+   * durante esta atualização do NPS.
+   */
   const operationalData =
-    await collectPayEvtOperationalData(
-      client,
-      false
+    await getFreshPayEvtOperationalData(
+      context
     );
 
   const currentBucket =
@@ -1557,9 +1776,8 @@ async function buildPayEvtSourceMetric(
    * Não utiliza o Ranking Geral como fonte primária.
    */
   const operationalData =
-    await collectPayEvtOperationalData(
-      client,
-      false
+    await getFreshPayEvtOperationalData(
+      context
     );
 
   const allEvents =
@@ -1743,6 +1961,71 @@ async function buildPayEvtSourceMetric(
         definition.sourceName,
     });
 
+  const scanDiagnostic = {
+    metricId,
+
+    label:
+      definition.label,
+
+    currentWeekKey,
+
+    previousWeekKey,
+
+    acceptedKinds:
+      [
+        ...definition.eventKinds,
+      ],
+
+    allEvents:
+      allEvents.length,
+
+    currentEvents:
+      currentEvents.length,
+
+    previousEvents:
+      previousEvents.length,
+
+    knownKinds:
+      [
+        ...new Set(
+          allEvents.map(
+            event =>
+              String(
+                event?.kind ||
+                "sem_kind"
+              )
+          )
+        ),
+      ],
+
+    scannedChannels: {
+      ...(
+        operationalData?.debug
+          ?.scannedChannels ||
+        {}
+      ),
+    },
+
+    recoveredFromLogs:
+      Number(
+        operationalData?.debug
+          ?.recoveredFromLogs ||
+        0
+      ),
+
+    duplicatesIgnored:
+      Number(
+        operationalData?.debug
+          ?.duplicatesIgnored ||
+        0
+      ),
+  };
+
+  console.log(
+    `[NPS Providers] Diagnóstico da fonte ${metricId}:`,
+    scanDiagnostic
+  );
+
   return {
     id:
       metricId,
@@ -1814,6 +2097,8 @@ async function buildPayEvtSourceMetric(
 
       previousRecords:
         previousEvents,
+
+      scanDiagnostic,
 
       scanDebug: {
         scannedChannels: {
@@ -2223,10 +2508,15 @@ async function buildPaymentMetric(
       -7
     );
 
+  /*
+   * Reutiliza a varredura histórica compartilhada.
+   *
+   * Ela lê os canais e arquivos oficiais uma única vez
+   * durante esta atualização do NPS.
+   */
   const operationalData =
-    await collectPayEvtOperationalData(
-      client,
-      false
+    await getFreshPayEvtOperationalData(
+      context
     );
 
   const currentBucket =

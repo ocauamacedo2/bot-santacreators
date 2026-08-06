@@ -5672,6 +5672,75 @@ async function ensureCoreOperationalMetrics(
             `A fonte oficial de ${requiredProvider.label} não retornou dados disponíveis.`,
         });
 
+        /*
+         * Uma métrica antiga com o mesmo ID não pode permanecer
+         * no relatório quando a fonte oficial falhar.
+         *
+         * Isso impediria o NPS de apresentar informações antigas
+         * ou semanticamente erradas, como chamar todos os
+         * participantes do Registro Manager de responsáveis.
+         */
+        if (
+          existingMetricIndex >=
+          0
+        ) {
+          providerCollection.results[
+            existingMetricIndex
+          ] = {
+            providerId:
+              requiredProvider.id,
+
+            id:
+              requiredProvider.id,
+
+            label:
+              requiredProvider.label,
+
+            available:
+              false,
+
+            officialSource:
+              true,
+
+            score:
+              null,
+
+            confidence:
+              0,
+
+            volume:
+              0,
+
+            current:
+              0,
+
+            previous:
+              null,
+
+            difference:
+              null,
+
+            positivePoints:
+              [],
+
+            attentionPoints: [
+              `A fonte histórica oficial de ${requiredProvider.label} não pôde ser concluída nesta atualização.`,
+            ],
+
+            recommendations: [
+              "Verificar no console o diagnóstico da varredura e as permissões do bot no canal oficial.",
+            ],
+
+            details: {
+              sourceUnavailable:
+                true,
+
+              reason:
+                "official_provider_unavailable",
+            },
+          };
+        }
+
         continue;
       }
 
@@ -6494,7 +6563,7 @@ const directRankingUsers =
     currentWeekInfo.key
   );
 
-const rankingUsersForRoles =
+let rankingUsersForRoles =
   buildConsolidatedOperationalUsers({
     providerMetrics:
       providerCollection.results,
@@ -6507,15 +6576,122 @@ const rankingUsersForRoles =
   });
 
 /*
+ * Fallback direto pela métrica oficial do Ranking.
+ *
+ * Se o arquivo consolidado ainda não tiver sido gravado
+ * ou estiver em outro caminho de persistência, utiliza
+ * details.byUser entregue pelo próprio Ranking Semanal.
+ */
+if (
+  Object.keys(
+    rankingUsersForRoles ||
+    {}
+  ).length === 0 &&
+  participationMetric
+    ?.details
+    ?.byUser &&
+  typeof participationMetric
+    .details
+    .byUser ===
+    "object"
+) {
+  rankingUsersForRoles =
+    buildConsolidatedOperationalUsers({
+      providerMetrics:
+        [
+          participationMetric,
+        ],
+
+      preferredMetric:
+        participationMetric,
+
+      directByUser:
+        participationMetric
+          .details
+          .byUser,
+    });
+}
+
+/*
+ * Última recuperação direta.
+ *
+ * Executa novamente o provedor oficial do Ranking quando
+ * nenhuma das estruturas anteriores entregou usuários.
+ */
+if (
+  Object.keys(
+    rankingUsersForRoles ||
+    {}
+  ).length === 0
+) {
+  try {
+    const directRankingMetric =
+      await buildWeeklyRankingOperationalMetric(
+        providerContext
+      );
+
+    if (
+      directRankingMetric
+        ?.details
+        ?.byUser &&
+      typeof directRankingMetric
+        .details
+        .byUser ===
+        "object"
+    ) {
+      rankingUsersForRoles =
+        buildConsolidatedOperationalUsers({
+          providerMetrics: [
+            directRankingMetric,
+          ],
+
+          preferredMetric:
+            directRankingMetric,
+
+          directByUser:
+            directRankingMetric
+              .details
+              .byUser,
+        });
+    }
+  } catch (
+    rankingUsersError
+  ) {
+    console.error(
+      "[NPS Operacional] Falha na recuperação direta dos participantes:",
+      rankingUsersError
+    );
+  }
+}
+
+console.log(
+  "[NPS Operacional] Usuários preparados para separação por cargo:",
+  {
+    directFileUsers:
+      Object.keys(
+        directRankingUsers ||
+        {}
+      ).length,
+
+    providerUsers:
+      Object.keys(
+        participationMetric
+          ?.details
+          ?.byUser ||
+        {}
+      ).length,
+
+    finalUsers:
+      Object.keys(
+        rankingUsersForRoles ||
+        {}
+      ).length,
+  }
+);
+
+/*
  * Classifica cada participante de acordo com os cargos
  * reais encontrados no servidor.
- *
- * Prioridade:
- *
- * 1. Responsáveis;
- * 2. Gestão;
- * 3. Equipe Creators;
- * 4. Outros.
  */
 const operationalRoleAnalysis =
   await buildOperationalRoleBreakdown({

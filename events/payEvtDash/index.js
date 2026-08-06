@@ -87,13 +87,42 @@ const ALLOWED_MANAGE_ROLES = [
 ];
 
 const SCAN_CONFIG = {
-  pagesPerChannel: 12,
-  fetchLimit: 100,
-  maxAgeDays: 70,
+  /*
+   * Até 25 páginas por canal.
+   *
+   * Como cada página possui até 100 mensagens,
+   * o scanner poderá examinar até 2.500 mensagens
+   * em cada fonte oficial.
+   *
+   * Isso é importante porque o canal de aprovação
+   * reúne Hall da Fama, Eventos Diários, Cronograma
+   * e outros sistemas no mesmo histórico.
+   */
+  pagesPerChannel:
+    25,
 
-  // Evita travar tentando abrir centenas de links antigos dos logs
-  maxLinkedLogsToRecover: 120,
-  linkedFetchTimeoutMs: 2500,
+  fetchLimit:
+    100,
+
+  /*
+   * Mantém capacidade de reconstruir aproximadamente
+   * três meses de histórico.
+   */
+  maxAgeDays:
+    100,
+
+  /*
+   * Os logs de Pagamentos podem possuir muitas mensagens.
+   *
+   * O limite anterior de 120 links podia encerrar a
+   * recuperação antes de chegar aos registros antigos
+   * da semana analisada.
+   */
+  maxLinkedLogsToRecover:
+    400,
+
+  linkedFetchTimeoutMs:
+    3500,
 };
 
 let LOCK = false;
