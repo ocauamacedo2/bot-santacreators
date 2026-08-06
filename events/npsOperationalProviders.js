@@ -1402,6 +1402,447 @@ async function buildPresenceMetric(
 }
 
 // ============================================================================
+// MÉTRICAS COMPROVADAS PELO PAY EVENT DASH
+// ============================================================================
+
+const PAY_EVT_SOURCE_METRICS = {
+  registro_poderes: {
+    label:
+      "Registro de Poderes",
+
+    goal:
+      15,
+
+    sourceName:
+      "poderes",
+
+    eventKinds:
+      new Set([
+        "poderes",
+        "registros_poderes",
+      ]),
+  },
+
+  hall_da_fama: {
+    label:
+      "Hall da Fama",
+
+    goal:
+      10,
+
+    sourceName:
+      "halldafama",
+
+    eventKinds:
+      new Set([
+        "hall",
+      ]),
+  },
+
+  eventos_diarios: {
+    label:
+      "Eventos Diários",
+
+    goal:
+      10,
+
+    sourceName:
+      "eventosdiarios",
+
+    eventKinds:
+      new Set([
+        "diarios",
+      ]),
+  },
+
+  cronograma: {
+    label:
+      "Cronograma",
+
+    goal:
+      10,
+
+    sourceName:
+      "cronograma",
+
+    eventKinds:
+      new Set([
+        "cronograma",
+      ]),
+  },
+};
+
+function buildPayEvtUsersBySource({
+  events = [],
+  sourceName,
+} = {}) {
+  return events.reduce(
+    (
+      result,
+      event
+    ) => {
+      const userId =
+        String(
+          event?.userId ||
+          ""
+        ).trim();
+
+      if (!userId) {
+        return result;
+      }
+
+      result[userId] ||= {
+        total:
+          0,
+
+        points:
+          0,
+
+        sources: {
+          [sourceName]:
+            0,
+        },
+      };
+
+      result[userId].total +=
+        1;
+
+      result[userId].points +=
+        1;
+
+      result[userId]
+        .sources[
+          sourceName
+        ] +=
+        1;
+
+      return result;
+    },
+    {}
+  );
+}
+
+async function buildPayEvtSourceMetric(
+  metricId,
+  context = {}
+) {
+  const definition =
+    PAY_EVT_SOURCE_METRICS[
+      metricId
+    ];
+
+  if (!definition) {
+    return null;
+  }
+
+  const client =
+    context.client ||
+    null;
+
+  const currentWeekKey =
+    context.currentWeek?.key ||
+    getWeekKeySP();
+
+  const previousWeekKey =
+    context.previousWeek?.key ||
+    addDaysToWeekKey(
+      currentWeekKey,
+      -7
+    );
+
+  /*
+   * Esta coleta executa os scanners oficiais do payEvtDash.
+   *
+   * Ela lê canais, logs e arquivos persistentes.
+   * Não utiliza o Ranking Geral como fonte primária.
+   */
+  const operationalData =
+    await collectPayEvtOperationalData(
+      client,
+      false
+    );
+
+  const allEvents =
+    Array.isArray(
+      operationalData?.events
+    )
+      ? operationalData.events
+      : [];
+
+  const currentEvents =
+    allEvents.filter(
+      event =>
+        event?.periodKey ===
+          currentWeekKey &&
+        definition.eventKinds.has(
+          String(
+            event?.kind ||
+            ""
+          )
+        )
+    );
+
+  const previousEvents =
+    allEvents.filter(
+      event =>
+        event?.periodKey ===
+          previousWeekKey &&
+        definition.eventKinds.has(
+          String(
+            event?.kind ||
+            ""
+          )
+        )
+    );
+
+  const current =
+    currentEvents.length;
+
+  const previous =
+    previousEvents.length;
+
+  const difference =
+    current -
+    previous;
+
+  const weekProgress =
+    Math.max(
+      0.08,
+      Number(
+        context.currentMoment
+          ?.progress ||
+        getCurrentWeekProgress()
+      )
+    );
+
+  const expectedNow =
+    definition.goal *
+    weekProgress;
+
+  const paceScore =
+    expectedNow > 0
+      ? clamp(
+          (
+            current /
+            expectedNow
+          ) *
+          100
+        )
+      : current > 0
+        ? 100
+        : 0;
+
+  const completionScore =
+    definition.goal > 0
+      ? clamp(
+          (
+            current /
+            definition.goal
+          ) *
+          100
+        )
+      : 0;
+
+  /*
+   * 75% considera o ritmo proporcional ao momento da semana.
+   * 25% considera o cumprimento efetivo da meta.
+   */
+  const score =
+    paceScore *
+      0.75 +
+    completionScore *
+      0.25;
+
+  const projectedTotal =
+    current /
+    Math.max(
+      0.08,
+      weekProgress
+    );
+
+  const participants =
+    new Set(
+      currentEvents
+        .map(
+          event =>
+            String(
+              event?.userId ||
+              ""
+            )
+        )
+        .filter(Boolean)
+    );
+
+  const positivePoints = [];
+  const attentionPoints = [];
+  const recommendations = [];
+
+  if (
+    current > 0
+  ) {
+    positivePoints.push(
+      `${current} atividade(s) foram comprovadas diretamente pelos canais e logs oficiais nesta semana.`
+    );
+  }
+
+  if (
+    participants.size > 0
+  ) {
+    positivePoints.push(
+      `${participants.size} pessoa(s) diferente(s) contribuíram nesta atividade.`
+    );
+  }
+
+  if (
+    difference > 0
+  ) {
+    positivePoints.push(
+      `A semana atual possui ${difference} atividade(s) a mais do que a semana anterior.`
+    );
+  }
+
+  if (
+    difference < 0
+  ) {
+    attentionPoints.push(
+      `O volume atual está ${Math.abs(difference)} atividade(s) abaixo da semana anterior.`
+    );
+  }
+
+  if (
+    current <
+    expectedNow
+  ) {
+    attentionPoints.push(
+      `Para o momento atual da semana, seriam esperadas aproximadamente ${Math.round(expectedNow)} atividade(s). O total comprovado é ${current}.`
+    );
+  }
+
+  if (
+    projectedTotal <
+    definition.goal
+  ) {
+    attentionPoints.push(
+      `Mantendo o ritmo atual, a projeção é encerrar a semana com aproximadamente ${Math.round(projectedTotal)} atividade(s).`
+    );
+  }
+
+  recommendations.push(
+    projectedTotal >=
+      definition.goal
+      ? "Manter o ritmo atual e distribuir a atividade entre mais integrantes da equipe."
+      : `Reforçar esta atividade para buscar pelo menos ${definition.goal} registros comprovados até o fechamento semanal.`
+  );
+
+  const byUser =
+    buildPayEvtUsersBySource({
+      events:
+        currentEvents,
+
+      sourceName:
+        definition.sourceName,
+    });
+
+  return {
+    id:
+      metricId,
+
+    label:
+      definition.label,
+
+    available:
+      current > 0 ||
+      previous > 0,
+
+    officialSource:
+      true,
+
+    sourceType:
+      "discord_logs_and_persistent_dashboard",
+
+    source:
+      definition.sourceName,
+
+    score:
+      clamp(
+        score
+      ),
+
+    confidence:
+      clamp(
+        55 +
+        current *
+        4
+      ),
+
+    volume:
+      current,
+
+    goal:
+      definition.goal,
+
+    current,
+
+    previous,
+
+    difference,
+
+    positivePoints,
+    attentionPoints,
+    recommendations,
+
+    details: {
+      currentWeekKey,
+      previousWeekKey,
+
+      current,
+      previous,
+      difference,
+
+      expectedNow,
+      paceScore,
+      completionScore,
+      projectedTotal,
+
+      participants:
+        participants.size,
+
+      byUser,
+
+      records:
+        currentEvents,
+
+      previousRecords:
+        previousEvents,
+
+      scanDebug: {
+        scannedChannels: {
+          ...(
+            operationalData?.debug
+              ?.scannedChannels ||
+            {}
+          ),
+        },
+
+        recoveredFromLogs:
+          Number(
+            operationalData?.debug
+              ?.recoveredFromLogs ||
+            0
+          ),
+
+        duplicatesIgnored:
+          Number(
+            operationalData?.debug
+              ?.duplicatesIgnored ||
+            0
+          ),
+      },
+    },
+  };
+}
+
+// ============================================================================
 // MÉTRICA: CONFIRMAÇÃO DE ORGANIZAÇÕES
 // ============================================================================
 
@@ -2000,7 +2441,7 @@ async function buildPaymentMetric(
     responsibleCreators.size > 0
   ) {
     positivePoints.push(
-      `${responsibleCreators.size} responsável(is) diferente(s) contribuíram com registros de pagamento.`
+      `${responsibleCreators.size} pessoa(s) diferente(s) criaram registros de pagamento nesta semana.`
     );
   }
 
@@ -2075,7 +2516,22 @@ async function buildPaymentMetric(
       "pagamentos",
 
     label:
-      "Pagamentos",
+      "Pagamentos Social Media",
+
+    source:
+      "pagamentos",
+
+    officialSource:
+      true,
+
+    sourceType:
+      "discord_logs_and_persistent_dashboard",
+
+    sourceChannelId:
+      "1387922662134775818",
+
+    sourceLogChannelId:
+      "1486084352403312843",
 
     available:
       approved > 0 ||
@@ -2173,6 +2629,15 @@ async function buildPaymentMetric(
           ...decisionUsers,
         ],
 
+      /*
+       * Distribuição por criador do registro.
+       *
+       * Somente pagamentos aprovados entram em "sources.pagamentos",
+       * porque somente eles entregam ponto operacional.
+       *
+       * Reprovados e solicitados continuam disponíveis para
+       * diagnóstico, mas não contam como produtividade concluída.
+       */
       byUser:
         currentPayments.reduce(
           (
@@ -2183,7 +2648,7 @@ async function buildPaymentMetric(
               String(
                 payment?.creatorId ||
                 ""
-              );
+              ).trim();
 
             if (!userId) {
               return result;
@@ -2191,6 +2656,9 @@ async function buildPaymentMetric(
 
             result[userId] ||= {
               total:
+                0,
+
+              points:
                 0,
 
               approved:
@@ -2201,6 +2669,11 @@ async function buildPaymentMetric(
 
               requested:
                 0,
+
+              sources: {
+                pagamentos:
+                  0,
+              },
             };
 
             result[userId].total +=
@@ -2211,6 +2684,14 @@ async function buildPaymentMetric(
               "approved"
             ) {
               result[userId].approved +=
+                1;
+
+              result[userId].points +=
+                1;
+
+              result[userId]
+                .sources
+                .pagamentos +=
                 1;
             }
 
@@ -2227,6 +2708,85 @@ async function buildPaymentMetric(
               "requested"
             ) {
               result[userId].requested +=
+                1;
+            }
+
+            return result;
+          },
+          {}
+        ),
+
+      /*
+       * Distribuição das decisões.
+       *
+       * Esta estrutura não entrega pontos.
+       * Ela serve para identificar quem está analisando
+       * e concluindo os pagamentos.
+       */
+      decisionsByUser:
+        currentPayments.reduce(
+          (
+            result,
+            payment
+          ) => {
+            const decisionUserId =
+              String(
+                payment?.decisionUserId ||
+                ""
+              ).trim();
+
+            if (!decisionUserId) {
+              return result;
+            }
+
+            result[
+              decisionUserId
+            ] ||= {
+              total:
+                0,
+
+              approved:
+                0,
+
+              rejected:
+                0,
+
+              requested:
+                0,
+            };
+
+            result[
+              decisionUserId
+            ].total +=
+              1;
+
+            if (
+              payment.status ===
+              "approved"
+            ) {
+              result[
+                decisionUserId
+              ].approved +=
+                1;
+            }
+
+            if (
+              payment.status ===
+              "rejected"
+            ) {
+              result[
+                decisionUserId
+              ].rejected +=
+                1;
+            }
+
+            if (
+              payment.status ===
+              "requested"
+            ) {
+              result[
+                decisionUserId
+              ].requested +=
                 1;
             }
 
@@ -2271,6 +2831,42 @@ registerOperationalMetricProvider(
   "pagamentos",
   async context =>
     buildPaymentMetric(
+      context
+    )
+);
+
+registerOperationalMetricProvider(
+  "registro_poderes",
+  async context =>
+    buildPayEvtSourceMetric(
+      "registro_poderes",
+      context
+    )
+);
+
+registerOperationalMetricProvider(
+  "hall_da_fama",
+  async context =>
+    buildPayEvtSourceMetric(
+      "hall_da_fama",
+      context
+    )
+);
+
+registerOperationalMetricProvider(
+  "eventos_diarios",
+  async context =>
+    buildPayEvtSourceMetric(
+      "eventos_diarios",
+      context
+    )
+);
+
+registerOperationalMetricProvider(
+  "cronograma",
+  async context =>
+    buildPayEvtSourceMetric(
+      "cronograma",
       context
     )
 );

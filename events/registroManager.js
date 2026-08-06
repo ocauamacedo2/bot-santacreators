@@ -1320,6 +1320,816 @@ async function upsertLogForRMMessage(client, rmMsg) {
   }
 }
 
+// ============================================================================
+// COLETA OPERACIONAL HISTÓRICA PARA O NPS
+// ============================================================================
+
+function getRMLogFields(embed) {
+  return (
+    embed?.fields ||
+    embed?.data?.fields ||
+    []
+  );
+}
+
+function getRMLogFieldValue(
+  embed,
+  fieldName
+) {
+  const normalizedTarget =
+    _norm(
+      fieldName
+    );
+
+  const field =
+    getRMLogFields(
+      embed
+    ).find(
+      currentField =>
+        _norm(
+          currentField?.name
+        ).includes(
+          normalizedTarget
+        )
+    );
+
+  return String(
+    field?.value ||
+    ""
+  ).trim();
+}
+
+function extractFirstDiscordUserId(
+  value
+) {
+  const text =
+    String(
+      value ||
+      ""
+    );
+
+  const mentionMatch =
+    text.match(
+      /<@!?(\d{17,20})>/
+    );
+
+  if (
+    mentionMatch?.[1]
+  ) {
+    return mentionMatch[1];
+  }
+
+  const codeMatch =
+    text.match(
+      /`(\d{17,20})`/
+    );
+
+  if (
+    codeMatch?.[1]
+  ) {
+    return codeMatch[1];
+  }
+
+  const rawMatch =
+    text.match(
+      /\b(\d{17,20})\b/
+    );
+
+  return (
+    rawMatch?.[1] ||
+    null
+  );
+}
+
+function getRMLogOriginalMessageId(
+  embed,
+  fallbackMessageId = null
+) {
+  const footerText =
+    String(
+      embed?.footer?.text ||
+      embed?.data?.footer?.text ||
+      ""
+    );
+
+  const match =
+    footerText.match(
+      /RM\s*MsgID:\s*(\d{17,20})/i
+    );
+
+  return (
+    match?.[1] ||
+    fallbackMessageId ||
+    null
+  );
+}
+
+function getRMLogStatus(
+  embed
+) {
+  const description =
+    _norm(
+      embed?.description ||
+      embed?.data?.description ||
+      ""
+    );
+
+  if (
+    description.includes(
+      "aprovado"
+    )
+  ) {
+    return "approved";
+  }
+
+  if (
+    description.includes(
+      "reprovado"
+    )
+  ) {
+    return "rejected";
+  }
+
+  return "pending";
+}
+
+function getRMLogTimestamp(
+  message,
+  embed
+) {
+  const embedTimestamp =
+    embed?.timestamp ||
+    embed?.data?.timestamp ||
+    null;
+
+  if (
+    embedTimestamp
+  ) {
+    const parsedTimestamp =
+      new Date(
+        embedTimestamp
+      ).getTime();
+
+    if (
+      Number.isFinite(
+        parsedTimestamp
+      )
+    ) {
+      return parsedTimestamp;
+    }
+  }
+
+  return Number(
+    message?.createdTimestamp ||
+    0
+  );
+}
+
+function createEmptyRMOperationalBucket() {
+  return {
+    created:
+      0,
+
+    approved:
+      0,
+
+    rejected:
+      0,
+
+    pending:
+      0,
+
+    analyzed:
+      0,
+
+    byRegistrant:
+      {},
+
+    byPointOwner:
+      {},
+
+    byApprover:
+      {},
+
+    byRejector:
+      {},
+
+    byUser:
+      {},
+
+    responseTimes:
+      [],
+
+    records:
+      [],
+  };
+}
+
+function incrementRMUserBucket(
+  object,
+  userId,
+  amount = 1
+) {
+  const normalizedId =
+    String(
+      userId ||
+      ""
+    ).trim();
+
+  if (
+    !normalizedId
+  ) {
+    return;
+  }
+
+  object[
+    normalizedId
+  ] =
+    Number(
+      object[
+        normalizedId
+      ] ||
+      0
+    ) +
+    Number(
+      amount ||
+      0
+    );
+}
+
+function addRMPointOwnerActivity(
+  bucket,
+  userId,
+  status
+) {
+  const normalizedId =
+    String(
+      userId ||
+      ""
+    ).trim();
+
+  if (
+    !normalizedId
+  ) {
+    return;
+  }
+
+  bucket.byUser[
+    normalizedId
+  ] ||= {
+    total:
+      0,
+
+    approved:
+      0,
+
+    rejected:
+      0,
+
+    pending:
+      0,
+
+    sources: {
+      manager:
+        0,
+    },
+  };
+
+  const userBucket =
+    bucket.byUser[
+      normalizedId
+    ];
+
+  userBucket.total +=
+    1;
+
+  if (
+    status ===
+    "approved"
+  ) {
+    userBucket.approved +=
+      1;
+
+    userBucket.sources.manager +=
+      1;
+  } else if (
+    status ===
+    "rejected"
+  ) {
+    userBucket.rejected +=
+      1;
+  } else {
+    userBucket.pending +=
+      1;
+  }
+}
+
+function classifyRMLogIntoBucket(
+  bucket,
+  {
+    message,
+    embed,
+    timestamp,
+    originalMessageId,
+  }
+) {
+  const status =
+    getRMLogStatus(
+      embed
+    );
+
+  const registrantId =
+    extractFirstDiscordUserId(
+      getRMLogFieldValue(
+        embed,
+        "registrado por"
+      )
+    );
+
+  const managerId =
+    extractFirstDiscordUserId(
+      getRMLogFieldValue(
+        embed,
+        "manager responsável"
+      )
+    );
+
+  const approverId =
+    extractFirstDiscordUserId(
+      getRMLogFieldValue(
+        embed,
+        "aprovado por"
+      )
+    );
+
+  const rejectorId =
+    extractFirstDiscordUserId(
+      getRMLogFieldValue(
+        embed,
+        "reprovado por"
+      )
+    );
+
+  /*
+   * O dono do ponto é o Manager responsável.
+   *
+   * Quando o campo não existir, usa o registrante,
+   * seguindo a mesma regra usada durante a aprovação.
+   */
+  const pointOwnerId =
+    managerId ||
+    registrantId ||
+    null;
+
+  bucket.created +=
+    1;
+
+  incrementRMUserBucket(
+    bucket.byRegistrant,
+    registrantId
+  );
+
+  if (
+    status ===
+    "approved"
+  ) {
+    bucket.approved +=
+      1;
+
+    bucket.analyzed +=
+      1;
+
+    incrementRMUserBucket(
+      bucket.byPointOwner,
+      pointOwnerId
+    );
+
+    incrementRMUserBucket(
+      bucket.byApprover,
+      approverId
+    );
+  } else if (
+    status ===
+    "rejected"
+  ) {
+    bucket.rejected +=
+      1;
+
+    bucket.analyzed +=
+      1;
+
+    incrementRMUserBucket(
+      bucket.byRejector,
+      rejectorId
+    );
+  } else {
+    bucket.pending +=
+      1;
+  }
+
+  addRMPointOwnerActivity(
+    bucket,
+    pointOwnerId,
+    status
+  );
+
+  bucket.records.push({
+    originalMessageId,
+    logMessageId:
+      message.id,
+
+    timestamp,
+    status,
+    registrantId,
+    managerId,
+    pointOwnerId,
+    approverId,
+    rejectorId,
+
+    channelId:
+      message.channelId,
+
+    url:
+      message.url ||
+      null,
+  });
+}
+
+/**
+ * Varre o canal histórico oficial do Registro Manager.
+ *
+ * Esta função:
+ *
+ * • não altera mensagens;
+ * • não cria registros;
+ * • não soma pontos novamente;
+ * • apenas lê e reconstrói as métricas;
+ * • elimina duplicações pelo RM MsgID;
+ * • separa semana atual e semana anterior.
+ */
+export async function collectRegistroManagerOperationalData(
+  client,
+  {
+    currentWeek,
+    previousWeek,
+    maxPages = 120,
+  } = {}
+) {
+  const emptyResult = {
+    available:
+      false,
+
+    channelId:
+      CANAL_REGISTRO_MANAGER_ARQUIVO,
+
+    current:
+      createEmptyRMOperationalBucket(),
+
+    previous:
+      createEmptyRMOperationalBucket(),
+
+    debug: {
+      pagesRead:
+        0,
+
+      messagesRead:
+        0,
+
+      validLogs:
+        0,
+
+      duplicatesIgnored:
+        0,
+
+      invalidLogs:
+        0,
+
+      stoppedByDate:
+        false,
+    },
+  };
+
+  if (
+    !client
+  ) {
+    return emptyResult;
+  }
+
+  const archiveChannel =
+    await client.channels
+      .fetch(
+        CANAL_REGISTRO_MANAGER_ARQUIVO
+      )
+      .catch(
+        () =>
+          null
+      );
+
+  if (
+    !archiveChannel?.isTextBased?.()
+  ) {
+    return emptyResult;
+  }
+
+  const currentStart =
+    Number(
+      currentWeek?.start?.getTime?.() ||
+      currentWeek?.startAt ||
+      0
+    );
+
+  const currentEnd =
+    Number(
+      currentWeek?.endExclusive?.getTime?.() ||
+      currentWeek?.endAt ||
+      0
+    );
+
+  const previousStart =
+    Number(
+      previousWeek?.start?.getTime?.() ||
+      previousWeek?.startAt ||
+      0
+    );
+
+  const previousEnd =
+    Number(
+      previousWeek?.endExclusive?.getTime?.() ||
+      previousWeek?.endAt ||
+      currentStart ||
+      0
+    );
+
+  if (
+    !currentStart ||
+    !currentEnd ||
+    !previousStart ||
+    !previousEnd
+  ) {
+    console.error(
+      "[SC_RM_NPS_SCAN] Intervalos semanais inválidos.",
+      {
+        currentStart,
+        currentEnd,
+        previousStart,
+        previousEnd,
+      }
+    );
+
+    return emptyResult;
+  }
+
+  const seenOriginalMessageIds =
+    new Set();
+
+  let beforeMessageId =
+    undefined;
+
+  for (
+    let page = 0;
+    page < maxPages;
+    page++
+  ) {
+    const batch =
+      await archiveChannel.messages
+        .fetch({
+          limit:
+            100,
+
+          before:
+            beforeMessageId,
+        })
+        .catch(
+          error => {
+            console.error(
+              "[SC_RM_NPS_SCAN] Erro ao buscar lote do arquivo:",
+              error?.message ||
+              error
+            );
+
+            return null;
+          }
+        );
+
+    if (
+      !batch?.size
+    ) {
+      break;
+    }
+
+    emptyResult.debug.pagesRead +=
+      1;
+
+    emptyResult.debug.messagesRead +=
+      batch.size;
+
+    let oldestTimestamp =
+      Number.POSITIVE_INFINITY;
+
+    for (
+      const message of
+      batch.values()
+    ) {
+      const embed =
+        message.embeds?.[0];
+
+      if (
+        !embed
+      ) {
+        continue;
+      }
+
+      const title =
+        _norm(
+          embed?.title ||
+          embed?.data?.title ||
+          ""
+        );
+
+      if (
+        !title.includes(
+          "log"
+        ) ||
+        !title.includes(
+          "registro manager"
+        )
+      ) {
+        continue;
+      }
+
+      const timestamp =
+        getRMLogTimestamp(
+          message,
+          embed
+        );
+
+      if (
+        !Number.isFinite(
+          timestamp
+        ) ||
+        timestamp <= 0
+      ) {
+        emptyResult.debug.invalidLogs +=
+          1;
+
+        continue;
+      }
+
+      oldestTimestamp =
+        Math.min(
+          oldestTimestamp,
+          timestamp
+        );
+
+      const originalMessageId =
+        getRMLogOriginalMessageId(
+          embed,
+          message.id
+        );
+
+      if (
+        seenOriginalMessageIds.has(
+          originalMessageId
+        )
+      ) {
+        emptyResult.debug.duplicatesIgnored +=
+          1;
+
+        continue;
+      }
+
+      seenOriginalMessageIds.add(
+        originalMessageId
+      );
+
+      let targetBucket =
+        null;
+
+      if (
+        timestamp >=
+          currentStart &&
+        timestamp <
+          currentEnd
+      ) {
+        targetBucket =
+          emptyResult.current;
+      } else if (
+        timestamp >=
+          previousStart &&
+        timestamp <
+          previousEnd
+      ) {
+        targetBucket =
+          emptyResult.previous;
+      }
+
+      if (
+        !targetBucket
+      ) {
+        continue;
+      }
+
+      classifyRMLogIntoBucket(
+        targetBucket,
+        {
+          message,
+          embed,
+          timestamp,
+          originalMessageId,
+        }
+      );
+
+      emptyResult.debug.validLogs +=
+        1;
+    }
+
+    beforeMessageId =
+      batch.last()?.id;
+
+    if (
+      !beforeMessageId
+    ) {
+      break;
+    }
+
+    /*
+     * As mensagens são percorridas da mais nova para a mais antiga.
+     *
+     * Quando o lote inteiro já está antes do começo da semana anterior,
+     * nenhuma mensagem seguinte poderá ser usada nesta comparação.
+     */
+    if (
+      Number.isFinite(
+        oldestTimestamp
+      ) &&
+      oldestTimestamp <
+        previousStart
+    ) {
+      emptyResult.debug.stoppedByDate =
+        true;
+
+      break;
+    }
+  }
+
+  emptyResult.available =
+    emptyResult.current.created >
+      0 ||
+    emptyResult.previous.created >
+      0;
+
+  console.log(
+    "[SC_RM_NPS_SCAN] Varredura histórica concluída:",
+    {
+      channelId:
+        CANAL_REGISTRO_MANAGER_ARQUIVO,
+
+      current: {
+        created:
+          emptyResult.current.created,
+
+        approved:
+          emptyResult.current.approved,
+
+        rejected:
+          emptyResult.current.rejected,
+
+        pending:
+          emptyResult.current.pending,
+
+        pointOwners:
+          Object.keys(
+            emptyResult.current.byPointOwner
+          ).length,
+
+        approvers:
+          Object.keys(
+            emptyResult.current.byApprover
+          ).length,
+      },
+
+      previous: {
+        created:
+          emptyResult.previous.created,
+
+        approved:
+          emptyResult.previous.approved,
+
+        rejected:
+          emptyResult.previous.rejected,
+
+        pending:
+          emptyResult.previous.pending,
+      },
+
+      debug:
+        emptyResult.debug,
+    }
+  );
+
+  return emptyResult;
+}
+
 // ===============================
 // DECISÕES (DM + canal decisões)
 // ===============================
@@ -2743,7 +3553,57 @@ const facsBridgeOk = facsDirectOk
 try {
   dashEmit("rm:approved", {
     ...facsPayload,
-    by: interaction.user.id,
+
+    /*
+     * Quem criou o registro.
+     */
+    registrantId:
+      registrantId ||
+      null,
+
+    /*
+     * Manager informado no registro.
+     */
+    managerId:
+      managerId ||
+      null,
+
+    /*
+     * Pessoa que recebeu o ponto.
+     */
+    pointsOwnerId:
+      pointsOwnerId ||
+      null,
+
+    /*
+     * Pessoa que clicou em aprovar.
+     */
+    approverId:
+      interaction.user.id,
+
+    /*
+     * Compatibilidade com códigos antigos.
+     */
+    by:
+      interaction.user.id,
+
+    byUserId:
+      interaction.user.id,
+
+    executorId:
+      interaction.user.id,
+
+    decision:
+      "approved",
+
+    status:
+      "approved",
+
+    approvedAt:
+      Date.now(),
+
+    __at:
+      Date.now(),
   });
 } catch {}
 

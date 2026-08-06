@@ -77,10 +77,13 @@ import {
   buildGeneralDashOperationalMetric,
 } from "./scGeralDash.js";
 
+import {
+  collectRegistroManagerOperationalData,
+} from "./registroManager.js";
+
 // ============================================================================
 // CONFIGURAÇÃO PRINCIPAL
 // ============================================================================
-
 const TZ = "America/Sao_Paulo";
 
 const NPS_DASHBOARD_CHANNEL_ID = "1534295811117154404";
@@ -139,55 +142,13 @@ const OPERATIONAL_ROLE_GROUPS = [
 
   {
     id:
-      ROLE_RESPONSAVEIS_LIDERES_ID,
-
-    key:
-      "responsaveis",
-
-    label:
-      "Responsáveis",
-
-    mention:
-      `<@&${ROLE_RESPONSAVEIS_LIDERES_ID}>`,
-  },
-
-  {
-    id:
-      ROLE_RESPONSAVEIS_INFLUENCIADORES_ID,
-
-    key:
-      "responsaveis",
-
-    label:
-      "Responsáveis",
-
-    mention:
-      `<@&${ROLE_RESPONSAVEIS_INFLUENCIADORES_ID}>`,
-  },
-
-  {
-    id:
-      ROLE_RESPONSAVEIS_CREATORS_ID,
-
-    key:
-      "responsaveis",
-
-    label:
-      "Responsáveis",
-
-    mention:
-      `<@&${ROLE_RESPONSAVEIS_CREATORS_ID}>`,
-  },
-
-  {
-    id:
       ROLE_COORDENACAO_ID,
 
     key:
       "coordenacao",
 
     label:
-      "Gestão",
+      "Gestão / Coordenação",
 
     mention:
       `<@&${ROLE_COORDENACAO_ID}>`,
@@ -201,7 +162,7 @@ const OPERATIONAL_ROLE_GROUPS = [
       "equipe_creator",
 
     label:
-      "Equipe Creators",
+      "Equipe Creator",
 
     mention:
       `<@&${ROLE_EQUIPE_CREATOR_ID}>`,
@@ -236,6 +197,12 @@ const PROVIDER_REQUIRED_CATEGORY_IDS = new Set([
   "alinhamentos",
   "organizacoes",
   "pagamentos",
+
+  "registro_poderes",
+  "hall_da_fama",
+  "eventos_diarios",
+  "cronograma",
+
   "eventos",
   "quiz",
   "comunidade",
@@ -430,10 +397,18 @@ categories: {
       weeklyGoal: 25,
     },
 
+    /*
+     * Social Media e Pagamentos representam o mesmo sistema.
+     *
+     * Esta categoria antiga permanece no arquivo apenas para
+     * compatibilidade com estados e configurações anteriores.
+     *
+     * A categoria oficial utilizada pelo NPS será "pagamentos".
+     */
     social_media: {
-      label: "Registro Social Media",
-      weight: 10,
-      enabled: true,
+      label: "Pagamentos Social Media — Legado",
+      weight: 0,
+      enabled: false,
       weeklyGoal: 20,
     },
 
@@ -473,18 +448,53 @@ presencas: {
     },
 
     pagamentos: {
-  label: "Pagamentos",
-  weight: 7,
-  enabled: true,
-  weeklyGoal: 10,
-},
+      label: "Pagamentos Social Media",
+      weight: 7,
+      enabled: true,
+      weeklyGoal: 10,
+    },
 
-set_staff: {
-  label: "Set Staff",
-  weight: 7,
-  enabled: true,
-  weeklyGoal: 10,
-},
+    registro_poderes: {
+      label: "Registro de Poderes",
+      weight: 5,
+      enabled: true,
+      weeklyGoal: 15,
+    },
+
+    hall_da_fama: {
+      label: "Hall da Fama",
+      weight: 4,
+      enabled: true,
+      weeklyGoal: 10,
+    },
+
+    eventos_diarios: {
+      label: "Eventos Diários",
+      weight: 4,
+      enabled: true,
+      weeklyGoal: 10,
+    },
+
+    cronograma: {
+      label: "Cronograma",
+      weight: 4,
+      enabled: true,
+      weeklyGoal: 10,
+    },
+
+    set_staff: {
+      label: "Set Staff",
+      weight: 7,
+      enabled: true,
+      weeklyGoal: 10,
+    },
+
+    eventos: {
+      label: "Eventos",
+      weight: 7,
+      enabled: true,
+      weeklyGoal: 10,
+    },
 
 eventos: {
   label: "Eventos",
@@ -589,6 +599,32 @@ function loadConfig() {
 
     weeklyGoal:
       100,
+  };
+
+  /*
+   * Registro Social Media e Pagamentos representam
+   * o mesmo sistema operacional.
+   *
+   * A categoria antiga permanece disponível apenas
+   * para compatibilidade com arquivos salvos anteriormente.
+   *
+   * Todos os pagamentos passam a ser analisados exclusivamente
+   * pela categoria oficial "pagamentos".
+   */
+  mergedConfig.categories.social_media = {
+    ...mergedConfig.categories.social_media,
+
+    label:
+      "Pagamentos Social Media — Legado",
+
+    weight:
+      0,
+
+    enabled:
+      false,
+
+    weeklyGoal:
+      20,
   };
 
   return mergedConfig;
@@ -3950,11 +3986,75 @@ function buildOperationalParticipationAuditEmbed({
         ).map(
           user => ({
             ...user,
+
             groupLabel:
               group.label,
           })
         )
     );
+
+  const roleAnalysisAvailable =
+    Boolean(
+      operationalRoleAnalysis &&
+      roleGroups.length > 0 &&
+      users.length > 0
+    );
+
+  if (
+    !roleAnalysisAvailable
+  ) {
+    return new EmbedBuilder()
+      .setColor(
+        0xf1c40f
+      )
+      .setTitle(
+        "🔎 Participação real e registros obrigatórios"
+      )
+      .setDescription(
+        "Os sistemas possuem atividades registradas, mas a identificação individual por cargo não foi concluída nesta atualização."
+      )
+      .addFields(
+        {
+          name:
+            "⚠️ Leitura individual indisponível",
+
+          value: [
+            "O painel não irá apresentar valores zerados como se nenhuma pessoa tivesse trabalhado.",
+            "",
+            "A causa provável é uma destas situações:",
+            "• o cliente do Discord ainda não estava disponível;",
+            "• o arquivo semanal ainda não havia sido atualizado;",
+            "• os usuários não foram localizados no servidor;",
+            "• a estrutura por usuário não chegou ao painel executivo.",
+          ].join(
+            "\n"
+          ),
+
+          inline:
+            false,
+        },
+
+        {
+          name:
+            "📌 O que permanece válido",
+
+          value: [
+            "• Os totais gerais das atividades continuam válidos.",
+            "• As notas das áreas continuam sendo exibidas.",
+            "• A separação por Responsáveis, Gestão e Equipe Creator será exibida quando os autores forem identificados.",
+          ].join(
+            "\n"
+          ),
+
+          inline:
+            false,
+        }
+      )
+      .setFooter({
+        text:
+          "Nenhum zero individual é tratado como ausência sem confirmação dos dados",
+      });
+  }
 
   const getSourceAmount =
     (
@@ -5031,9 +5131,462 @@ function recalculateWeekResult(
 }
 
 // ============================================================================
-// GARANTIA DAS MÉTRICAS GERAIS
+// MÉTRICA OFICIAL DO REGISTRO MANAGER PELOS LOGS
 // ============================================================================
 
+async function buildRegistroManagerLogMetric(
+  context = {}
+) {
+  const scan =
+    await collectRegistroManagerOperationalData(
+      context.client,
+      {
+        currentWeek:
+          context.currentWeek,
+
+        previousWeek:
+          context.previousWeek,
+
+        maxPages:
+          120,
+      }
+    );
+
+  const current =
+    scan.current || {};
+
+  const previous =
+    scan.previous || {};
+
+  const approved =
+    Number(
+      current.approved ||
+      0
+    );
+
+  const rejected =
+    Number(
+      current.rejected ||
+      0
+    );
+
+  const pending =
+    Number(
+      current.pending ||
+      0
+    );
+
+  const analyzed =
+    approved +
+    rejected;
+
+  const previousApproved =
+    Number(
+      previous.approved ||
+      0
+    );
+
+  const previousRejected =
+    Number(
+      previous.rejected ||
+      0
+    );
+
+  const previousAnalyzed =
+    previousApproved +
+    previousRejected;
+
+  const approvalRate =
+    analyzed > 0
+      ? (
+          approved /
+          analyzed
+        ) *
+        100
+      : 0;
+
+  const previousApprovalRate =
+    previousAnalyzed > 0
+      ? (
+          previousApproved /
+          previousAnalyzed
+        ) *
+        100
+      : null;
+
+  /*
+   * A nota mede qualidade das decisões.
+   *
+   * O volume continua sendo mostrado separadamente,
+   * sem transformar quantidade alta automaticamente
+   * em qualidade perfeita.
+   */
+  const score =
+    analyzed > 0
+      ? approvalRate
+      : 0;
+
+  const positivePoints =
+    [];
+
+  const attentionPoints =
+    [];
+
+  const recommendations =
+    [];
+
+  if (
+    approvalRate >=
+      90 &&
+    analyzed > 0
+  ) {
+    positivePoints.push(
+      `O Registro Manager possui taxa de aprovação de ${approvalRate.toFixed(1)}%, calculada diretamente pelos logs oficiais.`
+    );
+  }
+
+  if (
+    approved > 0
+  ) {
+    positivePoints.push(
+      `${approved} registro(s) aprovado(s) foram comprovados no canal histórico do Registro Manager.`
+    );
+  }
+
+  if (
+    Object.keys(
+      current.byPointOwner ||
+      {}
+    ).length > 0
+  ) {
+    positivePoints.push(
+      `Os pontos aprovados foram distribuídos entre ${Object.keys(current.byPointOwner || {}).length} pessoa(s).`
+    );
+  }
+
+  if (
+    Object.keys(
+      current.byApprover ||
+      {}
+    ).length > 0
+  ) {
+    positivePoints.push(
+      `${Object.keys(current.byApprover || {}).length} aprovador(es) diferente(s) realizaram decisões nesta semana.`
+    );
+  }
+
+  if (
+    rejected > 0
+  ) {
+    attentionPoints.push(
+      `${rejected} registro(s) foram reprovados nesta semana.`
+    );
+
+    recommendations.push(
+      "Revisar os motivos das reprovações registradas no arquivo oficial e orientar os Managers sobre os erros recorrentes."
+    );
+  }
+
+  if (
+    pending > 0
+  ) {
+    attentionPoints.push(
+      `${pending} registro(s) permanecem pendentes de decisão.`
+    );
+
+    recommendations.push(
+      "Acompanhar os registros pendentes para evitar acúmulo próximo ao fechamento semanal."
+    );
+  }
+
+  if (
+    scan.available ===
+    false
+  ) {
+    attentionPoints.push(
+      "A varredura do canal histórico não encontrou registros utilizáveis para a semana atual ou anterior."
+    );
+  }
+
+  const byUser =
+    Object.fromEntries(
+      Object.entries(
+        current.byUser ||
+        {}
+      ).map(
+        (
+          [
+            userId,
+            userData,
+          ]
+        ) => [
+          userId,
+
+          {
+            total:
+              Number(
+                userData?.approved ||
+                0
+              ),
+
+            points:
+              Number(
+                userData?.approved ||
+                0
+              ),
+
+            approved:
+              Number(
+                userData?.approved ||
+                0
+              ),
+
+            rejected:
+              Number(
+                userData?.rejected ||
+                0
+              ),
+
+            pending:
+              Number(
+                userData?.pending ||
+                0
+              ),
+
+            sources: {
+              manager:
+                Number(
+                  userData?.sources
+                    ?.manager ||
+                  userData?.approved ||
+                  0
+                ),
+            },
+          },
+        ]
+      )
+    );
+
+  return {
+    id:
+      "registro_manager",
+
+    label:
+      "Registro Manager",
+
+    available:
+      scan.available &&
+      (
+        analyzed > 0 ||
+        pending > 0
+      ),
+
+    officialSource:
+      true,
+
+    sourceType:
+      "discord_log_archive",
+
+    sourceChannelId:
+      scan.channelId,
+
+    score:
+      Math.max(
+        0,
+        Math.min(
+          100,
+          score
+        )
+      ),
+
+    confidence:
+      scan.available
+        ? 100
+        : 0,
+
+    volume:
+      analyzed,
+
+    goal:
+      25,
+
+    current:
+      approved,
+
+    previous:
+      previousApproved,
+
+    difference:
+      approved -
+      previousApproved,
+
+    positivePoints,
+    attentionPoints,
+    recommendations,
+
+    responseTimes:
+      Array.isArray(
+        current.responseTimes
+      )
+        ? current.responseTimes
+        : [],
+
+    details: {
+      source:
+        "Canal histórico oficial do Registro Manager",
+
+      sourceChannelId:
+        scan.channelId,
+
+      created:
+        Number(
+          current.created ||
+          0
+        ),
+
+      approved,
+
+      rejected,
+
+      pending,
+
+      analyzed,
+
+      approvalRate,
+
+      previousCreated:
+        Number(
+          previous.created ||
+          0
+        ),
+
+      previousApproved,
+
+      previousRejected,
+
+      previousPending:
+        Number(
+          previous.pending ||
+          0
+        ),
+
+      previousAnalyzed,
+
+      previousApprovalRate,
+
+      pointOwnersCount:
+        Object.keys(
+          current.byPointOwner ||
+          {}
+        ).length,
+
+      responsibleCount:
+        Object.keys(
+          current.byPointOwner ||
+          {}
+        ).length,
+
+      participants:
+        Object.keys(
+          current.byPointOwner ||
+          {}
+        ).length,
+
+      approversCount:
+        Object.keys(
+          current.byApprover ||
+          {}
+        ).length,
+
+      approvedByCount:
+        Object.keys(
+          current.byApprover ||
+          {}
+        ).length,
+
+      rejectorsCount:
+        Object.keys(
+          current.byRejector ||
+          {}
+        ).length,
+
+      registrantsCount:
+        Object.keys(
+          current.byRegistrant ||
+          {}
+        ).length,
+
+      byRegistrant: {
+        ...(
+          current.byRegistrant ||
+          {}
+        ),
+      },
+
+      byPointOwner: {
+        ...(
+          current.byPointOwner ||
+          {}
+        ),
+      },
+
+      byApprover: {
+        ...(
+          current.byApprover ||
+          {}
+        ),
+      },
+
+      byRejector: {
+        ...(
+          current.byRejector ||
+          {}
+        ),
+      },
+
+      byUser,
+
+      records:
+        Array.isArray(
+          current.records
+        )
+          ? current.records
+          : [],
+
+      previousByRegistrant: {
+        ...(
+          previous.byRegistrant ||
+          {}
+        ),
+      },
+
+      previousByPointOwner: {
+        ...(
+          previous.byPointOwner ||
+          {}
+        ),
+      },
+
+      previousByApprover: {
+        ...(
+          previous.byApprover ||
+          {}
+        ),
+      },
+
+      scanDebug: {
+        ...(
+          scan.debug ||
+          {}
+        ),
+      },
+    },
+  };
+}
+
+// ============================================================================
+// GARANTIA DAS MÉTRICAS GERAIS
+// ============================================================================
 async function ensureCoreOperationalMetrics(
   providerCollection,
   context
@@ -5074,6 +5627,17 @@ async function ensureCoreOperationalMetrics(
 
       provider:
         buildWeeklyRankingOperationalMetric,
+    },
+
+    {
+      id:
+        "registro_manager",
+
+      label:
+        "Registro Manager",
+
+      provider:
+        buildRegistroManagerLogMetric,
     },
   ];
 
@@ -5970,6 +6534,123 @@ const operationalRoleAnalysis =
 
 providerCollection.operationalRoleAnalysis =
   operationalRoleAnalysis;
+
+const operationalRoleDiagnostic = {
+  generatedAt:
+    Date.now(),
+
+  clientAvailable:
+    Boolean(
+      operationalClient
+    ),
+
+  guildId:
+    "1262262852782129183",
+
+  rankingUsers:
+    Object.keys(
+      rankingUsersForRoles ||
+      {}
+    ).length,
+
+  totalRecords:
+    Number(
+      operationalRoleAnalysis
+        ?.totalRecords ||
+      0
+    ),
+
+  groups: {
+    responsaveis: {
+      roleId:
+        ROLE_RESPONSAVEIS_GERAIS_ID,
+
+      users:
+        Object.keys(
+          operationalRoleAnalysis
+            ?.responsaveis
+            ?.users ||
+          {}
+        ).length,
+
+      records:
+        Number(
+          operationalRoleAnalysis
+            ?.responsaveis
+            ?.records ||
+          0
+        ),
+    },
+
+    gestao: {
+      roleId:
+        ROLE_COORDENACAO_ID,
+
+      users:
+        Object.keys(
+          operationalRoleAnalysis
+            ?.coordenacao
+            ?.users ||
+          {}
+        ).length,
+
+      records:
+        Number(
+          operationalRoleAnalysis
+            ?.coordenacao
+            ?.records ||
+          0
+        ),
+    },
+
+    equipeCreator: {
+      roleId:
+        ROLE_EQUIPE_CREATOR_ID,
+
+      users:
+        Object.keys(
+          operationalRoleAnalysis
+            ?.equipe_creator
+            ?.users ||
+          {}
+        ).length,
+
+      records:
+        Number(
+          operationalRoleAnalysis
+            ?.equipe_creator
+            ?.records ||
+          0
+        ),
+    },
+
+    outros: {
+      users:
+        Object.keys(
+          operationalRoleAnalysis
+            ?.outros
+            ?.users ||
+          {}
+        ).length,
+
+      records:
+        Number(
+          operationalRoleAnalysis
+            ?.outros
+            ?.records ||
+          0
+        ),
+    },
+  },
+};
+
+providerCollection.operationalRoleDiagnostic =
+  operationalRoleDiagnostic;
+
+console.log(
+  "[NPS Operacional] Diagnóstico individual por equipe:",
+  operationalRoleDiagnostic
+);
 
 console.log(
   "[NPS Operacional] Separação por equipe:",
@@ -7832,10 +8513,18 @@ if (
     approved +
     rejected;
 
-  const responsibleCount =
+  const pointOwnersCount =
     Number(
-      details.responsibleCount ||
-      details.participants ||
+      details.pointOwnersCount ??
+      details.responsibleCount ??
+      details.participants ??
+      0
+    );
+
+  const approversCount =
+    Number(
+      details.approversCount ??
+      details.approvedByCount ??
       0
     );
 
@@ -7857,10 +8546,22 @@ if (
   }
 
   if (
-    responsibleCount > 0
+    pointOwnersCount > 0
   ) {
     paragraphs.push(
-      `Os registros aprovados foram distribuídos entre **${responsibleCount} responsável(is)**.`
+      `Os pontos dos registros aprovados foram distribuídos entre **${pointOwnersCount} pessoa(s)**. Esse número representa quem recebeu o ponto como Manager responsável ou registrante, e não necessariamente quem clicou em aprovar.`
+    );
+  }
+
+  if (
+    approversCount > 0
+  ) {
+    paragraphs.push(
+      `As decisões de aprovação e reprovação foram realizadas por **${approversCount} aprovador(es) diferente(s)**.`
+    );
+  } else {
+    paragraphs.push(
+      "Ainda não foi possível identificar com segurança quantas pessoas diferentes realizaram as decisões."
     );
   }
 

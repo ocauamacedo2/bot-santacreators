@@ -5979,16 +5979,72 @@ updateDashboard(client).catch((error) => {
 });
 
         try {
-  const pagamentoAt = dataEventoParaTimestampSP(eventoData, mensagem.createdTimestamp || Date.now());
+  const pagamentoAt =
+    dataEventoParaTimestampSP(
+      eventoData,
+      mensagem.createdTimestamp ||
+      Date.now()
+    );
 
   dashEmit("pagamento:criado", {
-    __at: pagamentoAt,
-    source: "pagamento_social",
-    by: interaction.user.id,
-    canal: CANAL_PAGAMENTO,
-    messageId: mensagem.id,
-    dataEvento: eventoData,
-    dedupeKey: `pagamento_social:criado:${mensagem.id}`,
+    /*
+     * Momento operacional do pagamento.
+     *
+     * Quando a data do evento puder ser identificada,
+     * ela será usada como referência do relatório.
+     */
+    __at:
+      pagamentoAt,
+
+    /*
+     * Momento real em que o registro foi criado.
+     *
+     * Este campo permite calcular quanto tempo passou
+     * entre a criação e a decisão final.
+     */
+    createdAt:
+      mensagem.createdTimestamp ||
+      Date.now(),
+
+    source:
+      "pagamento_social",
+
+    /*
+     * Usuário que criou o registro.
+     */
+    by:
+      interaction.user.id,
+
+    creatorId:
+      interaction.user.id,
+
+    userId:
+      interaction.user.id,
+
+    /*
+     * ID permanente utilizado para relacionar
+     * a criação com a aprovação ou reprovação.
+     */
+    operationId:
+      mensagem.id,
+
+    recordId:
+      mensagem.id,
+
+    canal:
+      CANAL_PAGAMENTO,
+
+    channelId:
+      CANAL_PAGAMENTO,
+
+    messageId:
+      mensagem.id,
+
+    dataEvento:
+      eventoData,
+
+    dedupeKey:
+      `pagamento_social:criado:${mensagem.id}`,
   });
 } catch {}
 
@@ -6200,22 +6256,105 @@ const msgNova = await canal.send({ embeds: [embedAtualizado] }).catch(() => null
     const pagamentoAt = dataEventoTimestamp || Date.now();
 
 dashEmit(map[action] || "pagamento:status", {
-  __at: Date.now(),
-  source: "pagamento_social",
-  by: interaction.user.id,
+  /*
+   * Momento real em que a decisão foi realizada.
+   */
+  __at:
+    Date.now(),
+
+  decidedAt:
+    Date.now(),
+
+  source:
+    "pagamento_social",
+
+  /*
+   * Pessoa que clicou em:
+   *
+   * • Pago;
+   * • Solicitado;
+   * • Reprovado.
+   */
+  by:
+    interaction.user.id,
+
+  decisionUserId:
+    interaction.user.id,
+
+  executorId:
+    interaction.user.id,
+
+  approverId:
+    action ===
+      "pago"
+      ? interaction.user.id
+      : null,
+
+  rejectorId:
+    action ===
+      "reprovado"
+      ? interaction.user.id
+      : null,
+
   action,
-  canal: CANAL_PAGAMENTO,
-  oldMessageId: msgOriginal.id,
-  newMessageId: msgNova.id,
-  messageId: msgNova.id,
 
-  // ✅ quem criou o registro e ganha/perde o ponto
-  creatorId: criadorId,
-  userId: criadorId,
+  status:
+    action ===
+      "pago"
+      ? "approved"
+      : action ===
+          "reprovado"
+        ? "rejected"
+        : "requested",
 
-  dataEvento: dataEventoEmbed,
+  canal:
+    CANAL_PAGAMENTO,
+
+  channelId:
+    CANAL_PAGAMENTO,
+
+  /*
+   * A mensagem antiga representa o registro
+   * que recebeu a decisão.
+   */
+  operationId:
+    msgOriginal.id,
+
+  recordId:
+    msgOriginal.id,
+
+  oldMessageId:
+    msgOriginal.id,
+
+  newMessageId:
+    msgNova.id,
+
+  messageId:
+    msgNova.id,
+
+  /*
+   * Quem criou o registro e recebe o ponto
+   * quando o pagamento for aprovado.
+   */
+  creatorId:
+    criadorId,
+
+  userId:
+    criadorId,
+
+  pointOwnerId:
+    criadorId,
+
+  dataEvento:
+    dataEventoEmbed,
+
   dataEventoTimestamp,
-  dedupeKey: `pagamento_social:${action}:${msgNova.id}`,
+
+  operationalTimestamp:
+    pagamentoAt,
+
+  dedupeKey:
+    `pagamento_social:${action}:${msgNova.id}`,
 });
 
     // ✅ fallback geral para qualquer dashboard que esteja ouvindo status genérico
