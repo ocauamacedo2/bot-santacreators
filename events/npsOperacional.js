@@ -96,23 +96,8 @@ const ROLE_CIDADAO_ID = "1262978759922028575";
 const ROLE_EQUIPE_CREATOR_ID =
   "1352429001188180039";
 
-const ROLE_EQUIPE_MANAGER_ID =
-  "1392678638176043029";
-
-const ROLE_MANAGER_CREATOR_ID =
-  "1388976155830255697";
-
 const ROLE_COORDENACAO_ID =
   "1352385500614234134";
-
-const ROLE_COORDENACAO_CREATORS_ID =
-  "1388976314253312100";
-
-const ROLE_GESTOR_CREATOR_ID =
-  "1388975939161161728";
-
-const ROLE_MKT_CREATORS_ID =
-  "1282119104576098314";
 
 const ROLE_RESPONSAVEIS_GERAIS_ID =
   "1414651836861907006";
@@ -154,7 +139,7 @@ const OPERATIONAL_ROLE_GROUPS = [
 
   {
     id:
-      ROLE_RESPONSAVEIS_CREATORS_ID,
+      ROLE_RESPONSAVEIS_LIDERES_ID,
 
     key:
       "responsaveis",
@@ -163,7 +148,7 @@ const OPERATIONAL_ROLE_GROUPS = [
       "Responsáveis",
 
     mention:
-      `<@&${ROLE_RESPONSAVEIS_CREATORS_ID}>`,
+      `<@&${ROLE_RESPONSAVEIS_LIDERES_ID}>`,
   },
 
   {
@@ -182,7 +167,7 @@ const OPERATIONAL_ROLE_GROUPS = [
 
   {
     id:
-      ROLE_RESPONSAVEIS_LIDERES_ID,
+      ROLE_RESPONSAVEIS_CREATORS_ID,
 
     key:
       "responsaveis",
@@ -191,7 +176,7 @@ const OPERATIONAL_ROLE_GROUPS = [
       "Responsáveis",
 
     mention:
-      `<@&${ROLE_RESPONSAVEIS_LIDERES_ID}>`,
+      `<@&${ROLE_RESPONSAVEIS_CREATORS_ID}>`,
   },
 
   {
@@ -210,48 +195,6 @@ const OPERATIONAL_ROLE_GROUPS = [
 
   {
     id:
-      ROLE_COORDENACAO_CREATORS_ID,
-
-    key:
-      "coordenacao",
-
-    label:
-      "Gestão",
-
-    mention:
-      `<@&${ROLE_COORDENACAO_CREATORS_ID}>`,
-  },
-
-  {
-    id:
-      ROLE_GESTOR_CREATOR_ID,
-
-    key:
-      "coordenacao",
-
-    label:
-      "Gestão",
-
-    mention:
-      `<@&${ROLE_GESTOR_CREATOR_ID}>`,
-  },
-
-  {
-    id:
-      ROLE_MKT_CREATORS_ID,
-
-    key:
-      "coordenacao",
-
-    label:
-      "Gestão",
-
-    mention:
-      `<@&${ROLE_MKT_CREATORS_ID}>`,
-  },
-
-  {
-    id:
       ROLE_EQUIPE_CREATOR_ID,
 
     key:
@@ -262,34 +205,6 @@ const OPERATIONAL_ROLE_GROUPS = [
 
     mention:
       `<@&${ROLE_EQUIPE_CREATOR_ID}>`,
-  },
-
-  {
-    id:
-      ROLE_EQUIPE_MANAGER_ID,
-
-    key:
-      "equipe_creator",
-
-    label:
-      "Equipe Creators",
-
-    mention:
-      `<@&${ROLE_EQUIPE_MANAGER_ID}>`,
-  },
-
-  {
-    id:
-      ROLE_MANAGER_CREATOR_ID,
-
-    key:
-      "equipe_creator",
-
-    label:
-      "Equipe Creators",
-
-    mention:
-      `<@&${ROLE_MANAGER_CREATOR_ID}>`,
   },
 ];
 
@@ -698,11 +613,30 @@ function createEmptyState() {
     pendingOperations: {},
 
     metadata: {
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      lastDashboardUpdateAt: null,
-      lastExecutiveDashboardUpdateAt: null,
-      lastAutomaticReportWeek: null,
+      createdAt:
+        Date.now(),
+
+      updatedAt:
+        Date.now(),
+
+      lastDashboardUpdateAt:
+        null,
+
+      lastExecutiveDashboardUpdateAt:
+        null,
+
+      lastAutomaticSummaryWeek:
+        null,
+
+      lastAutomaticCompleteReportWeek:
+        null,
+
+      /*
+       * Campo antigo mantido para compatibilidade com
+       * estados salvos anteriormente.
+       */
+      lastAutomaticReportWeek:
+        null,
     },
   };
 }
@@ -720,11 +654,37 @@ function loadState() {
   state.pendingOperations ||= {};
 
   state.metadata ||= {
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-    lastDashboardUpdateAt: null,
-    lastAutomaticReportWeek: null,
+    createdAt:
+      Date.now(),
+
+    updatedAt:
+      Date.now(),
+
+    lastDashboardUpdateAt:
+      null,
+
+    lastExecutiveDashboardUpdateAt:
+      null,
+
+    lastAutomaticSummaryWeek:
+      null,
+
+    lastAutomaticCompleteReportWeek:
+      null,
+
+    lastAutomaticReportWeek:
+      null,
   };
+
+  state.metadata.lastAutomaticSummaryWeek ||=
+    null;
+
+  state.metadata.lastAutomaticCompleteReportWeek ||=
+    state.metadata.lastAutomaticReportWeek ||
+    null;
+
+  state.metadata.lastAutomaticReportWeek ||=
+    null;
 
   return state;
 }
@@ -4773,9 +4733,146 @@ function resolveOperationalUserAmount(
   );
 }
 
+function readOperationalUsersFromWeeklyFile(
+  weekKey
+) {
+  const weeklyData =
+    readJson(
+      GERAL_WEEKLY_SOURCES_FILE,
+      {}
+    );
+
+  const weekData =
+    weeklyData?.[
+      weekKey
+    ];
+
+  if (
+    !weekData ||
+    typeof weekData !==
+      "object" ||
+    Array.isArray(
+      weekData
+    )
+  ) {
+    return {};
+  }
+
+  const byUser =
+    {};
+
+  for (
+    const [
+      userIdRaw,
+      userSourcesRaw,
+    ] of Object.entries(
+      weekData
+    )
+  ) {
+    const userId =
+      String(
+        userIdRaw ||
+        ""
+      ).trim();
+
+    if (
+      !userId ||
+      !/^\d{15,25}$/.test(
+        userId
+      )
+    ) {
+      continue;
+    }
+
+    if (
+      !userSourcesRaw ||
+      typeof userSourcesRaw !==
+        "object" ||
+      Array.isArray(
+        userSourcesRaw
+      )
+    ) {
+      continue;
+    }
+
+    const sources =
+      {};
+
+    let total =
+      0;
+
+    for (
+      const [
+        sourceNameRaw,
+        amountRaw,
+      ] of Object.entries(
+        userSourcesRaw
+      )
+    ) {
+      const sourceName =
+        normalizeOperationalSourceName(
+          sourceNameRaw
+        );
+
+      const amount =
+        Math.max(
+          0,
+          Number(
+            amountRaw ||
+            0
+          )
+        );
+
+      if (
+        !sourceName ||
+        !Number.isFinite(
+          amount
+        ) ||
+        amount <= 0
+      ) {
+        continue;
+      }
+
+      sources[
+        sourceName
+      ] =
+        (
+          Number(
+            sources[
+              sourceName
+            ] ||
+            0
+          ) +
+          amount
+        );
+
+      total +=
+        amount;
+    }
+
+    if (
+      total <= 0
+    ) {
+      continue;
+    }
+
+    byUser[
+      userId
+    ] = {
+      total,
+      points:
+        total,
+      sources,
+    };
+  }
+
+  return byUser;
+}
+
 function buildConsolidatedOperationalUsers({
   providerMetrics = [],
   preferredMetric = null,
+  directByUser = {},
 } = {}) {
   const consolidatedUsers =
     {};
@@ -4976,8 +5073,48 @@ function buildConsolidatedOperationalUsers({
     };
 
   /*
-   * O Ranking Semanal Geral é aplicado primeiro porque
-   * contém a visão consolidada oficial das atividades.
+   * Primeiro aplica a leitura direta do arquivo oficial.
+   *
+   * Essa leitura é a principal garantia de que cada
+   * atividade será ligada ao usuário que a realizou.
+   */
+  for (
+    const [
+      userId,
+      userData,
+    ] of Object.entries(
+      directByUser ||
+      {}
+    )
+  ) {
+    const userSources =
+      userData?.sources &&
+      typeof userData.sources ===
+        "object"
+        ? userData.sources
+        : {};
+
+    for (
+      const [
+        sourceName,
+        sourceAmount,
+      ] of Object.entries(
+        userSources
+      )
+    ) {
+      applyUserSource(
+        userId,
+        sourceName,
+        sourceAmount
+      );
+    }
+  }
+
+  /*
+   * Depois aplica a métrica oficial do Ranking.
+   *
+   * Como a função mantém o maior valor encontrado para
+   * a mesma pessoa e atividade, não haverá duplicação.
    */
   if (
     preferredMetric
@@ -5252,6 +5389,11 @@ if (
  *   }
  * }
  */
+const directRankingUsers =
+  readOperationalUsersFromWeeklyFile(
+    currentWeekInfo.key
+  );
+
 const rankingUsersForRoles =
   buildConsolidatedOperationalUsers({
     providerMetrics:
@@ -5259,6 +5401,9 @@ const rankingUsersForRoles =
 
     preferredMetric:
       participationMetric,
+
+    directByUser:
+      directRankingUsers,
   });
 
 /*
@@ -5297,6 +5442,31 @@ console.log(
       Boolean(
         activeClient
       ),
+
+    directRankingUsers:
+      Object.keys(
+        directRankingUsers
+      ).length,
+
+    consolidatedRankingUsers:
+      Object.keys(
+        rankingUsersForRoles
+      ).length,
+
+    directRankingSources:
+      [
+        ...new Set(
+          Object.values(
+            directRankingUsers
+          ).flatMap(
+            user =>
+              Object.keys(
+                user?.sources ||
+                {}
+              )
+          )
+        ),
+      ],
 
     rankingUsers:
       Object.keys(
@@ -7603,6 +7773,501 @@ function splitDiscordText(
   return chunks;
 }
 
+function getOperationalRoleGroupsForReport(
+  operationalRoleAnalysis
+) {
+  return [
+    operationalRoleAnalysis
+      ?.responsaveis,
+
+    operationalRoleAnalysis
+      ?.coordenacao,
+
+    operationalRoleAnalysis
+      ?.equipe_creator,
+  ].filter(Boolean);
+}
+
+function getOperationalSourceLabel(
+  sourceName,
+  providerMetrics = []
+) {
+  const normalizedSource =
+    normalizeOperationalSourceName(
+      sourceName
+    );
+
+  const participationMetric =
+    providerMetrics.find(
+      metric =>
+        String(
+          metric?.id ||
+          metric?.providerId ||
+          ""
+        ) ===
+        "participacao_equipe"
+    );
+
+  const sortedSources =
+    participationMetric
+      ?.details
+      ?.sortedSources ||
+    [];
+
+  const sourceInformation =
+    sortedSources.find(
+      source =>
+        normalizeOperationalSourceName(
+          source?.source ||
+          source?.label
+        ) ===
+        normalizedSource
+    );
+
+  return String(
+    sourceInformation?.label ||
+    sourceName ||
+    "Atividade"
+  );
+}
+
+function buildOperationalFocusSummary({
+  results,
+} = {}) {
+  const providerMetrics =
+    results?.providerMetrics ||
+    [];
+
+  const operationalRoleAnalysis =
+    results?.operationalRoleAnalysis ||
+    null;
+
+  const generalPerformanceMetric =
+    providerMetrics.find(
+      metric =>
+        String(
+          metric?.id ||
+          metric?.providerId ||
+          ""
+        ) ===
+        "desempenho_geral"
+    );
+
+  const participationMetric =
+    providerMetrics.find(
+      metric =>
+        String(
+          metric?.id ||
+          metric?.providerId ||
+          ""
+        ) ===
+        "participacao_equipe"
+    );
+
+  const currentPoints =
+    Math.max(
+      0,
+      Number(
+        generalPerformanceMetric
+          ?.current ||
+        participationMetric
+          ?.details
+          ?.totalPoints ||
+        results?.current
+          ?.totalEvents ||
+        0
+      )
+    );
+
+  const weeklyGoal =
+    Math.max(
+      1,
+      Number(
+        generalPerformanceMetric
+          ?.goal ||
+        500
+      )
+    );
+
+  const remainingPoints =
+    Math.max(
+      0,
+      weeklyGoal -
+      currentPoints
+    );
+
+  const completionPercentage =
+    (
+      currentPoints /
+      weeklyGoal
+    ) *
+    100;
+
+  const roleGroups =
+    getOperationalRoleGroupsForReport(
+      operationalRoleAnalysis
+    )
+      .slice()
+      .sort(
+        (
+          first,
+          second
+        ) =>
+          Number(
+            second?.records ||
+            0
+          ) -
+          Number(
+            first?.records ||
+            0
+          )
+      );
+
+  const strongestGroup =
+    roleGroups[0] ||
+    null;
+
+  const weakestGroup =
+    roleGroups
+      .slice()
+      .reverse()
+      .find(
+        group =>
+          Number(
+            group?.records ||
+            0
+          ) >= 0
+      ) ||
+    null;
+
+  const sortedSources =
+    participationMetric
+      ?.details
+      ?.sortedSources ||
+    [];
+
+  const strongestSource =
+    sortedSources[0] ||
+    null;
+
+  const secondStrongestSource =
+    sortedSources[1] ||
+    null;
+
+  const activeUsers =
+    Math.max(
+      0,
+      Number(
+        operationalRoleAnalysis
+          ?.activeUsers ||
+        participationMetric
+          ?.details
+          ?.participants ||
+        0
+      )
+    );
+
+  const reachedMinimum =
+    Math.max(
+      0,
+      Number(
+        participationMetric
+          ?.details
+          ?.reachedMinimum ||
+        0
+      )
+    );
+
+  const belowMinimum =
+    Math.max(
+      0,
+      Number(
+        participationMetric
+          ?.details
+          ?.belowMinimum ||
+        0
+      )
+    );
+
+  const concentration =
+    operationalRoleAnalysis
+      ?.concentration ||
+    {};
+
+  const positivePoints =
+    [];
+
+  const attentionPoints =
+    [];
+
+  const actions =
+    [];
+
+  if (
+    currentPoints >=
+    weeklyGoal
+  ) {
+    positivePoints.push(
+      `A meta principal foi alcançada com ${currentPoints} pontos.`
+    );
+  } else if (
+    completionPercentage >=
+    85
+  ) {
+    positivePoints.push(
+      `A operação terminou próxima da meta principal, alcançando ${completionPercentage.toFixed(1)}% dos 500 pontos.`
+    );
+  } else {
+    attentionPoints.push(
+      `A operação encerrou com ${currentPoints} de ${weeklyGoal} pontos. Faltaram ${remainingPoints} pontos para a meta principal.`
+    );
+  }
+
+  if (
+    strongestSource
+  ) {
+    positivePoints.push(
+      `${strongestSource.label || strongestSource.source} foi a atividade que mais sustentou o resultado, com ${Number(strongestSource.amount || 0)} registros.`
+    );
+  }
+
+  if (
+    secondStrongestSource
+  ) {
+    positivePoints.push(
+      `${secondStrongestSource.label || secondStrongestSource.source} também teve participação relevante, com ${Number(secondStrongestSource.amount || 0)} registros.`
+    );
+  }
+
+  if (
+    strongestGroup &&
+    Number(
+      strongestGroup.records ||
+      0
+    ) > 0
+  ) {
+    const strongestGroupPercentage =
+      Number(
+        strongestGroup.percentage ||
+        0
+      );
+
+    if (
+      strongestGroupPercentage >=
+      60
+    ) {
+      attentionPoints.push(
+        `${strongestGroup.label} carregou ${strongestGroupPercentage.toFixed(1)}% de todo o trabalho identificado. A operação está excessivamente concentrada nesse grupo.`
+      );
+    } else {
+      positivePoints.push(
+        `${strongestGroup.label} teve a maior participação, com ${Number(strongestGroup.records || 0)} registros.`
+      );
+    }
+  }
+
+  if (
+    weakestGroup &&
+    strongestGroup &&
+    weakestGroup !==
+      strongestGroup &&
+    Number(
+      weakestGroup.records ||
+      0
+    ) <
+      Number(
+        strongestGroup.records ||
+        0
+      ) *
+      0.5
+  ) {
+    attentionPoints.push(
+      `${weakestGroup.label} participou bem menos do que ${strongestGroup.label}. É necessário distribuir melhor os registros entre os grupos.`
+    );
+  }
+
+  if (
+    belowMinimum > 0
+  ) {
+    attentionPoints.push(
+      `${belowMinimum} participante(s) ficaram abaixo do mínimo individual de 25 pontos.`
+    );
+  }
+
+  if (
+    concentration.overloaded
+  ) {
+    attentionPoints.push(
+      `Poucas pessoas concentraram grande parte dos registros da semana, aumentando o risco de sobrecarga.`
+    );
+  }
+
+  actions.push(
+    currentPoints >=
+      weeklyGoal
+      ? "Manter a operação próxima ou acima dos 500 pontos, sem depender sempre das mesmas pessoas."
+      : `Recuperar os ${remainingPoints} pontos que faltaram, incentivando mais registros nas atividades com baixa participação.`
+  );
+
+  if (
+    strongestSource
+  ) {
+    actions.push(
+      `Manter o bom volume de ${strongestSource.label || strongestSource.source}, mas incentivar a equipe a registrar também as demais atividades.`
+    );
+  }
+
+  actions.push(
+    "Cobrar participação de Responsáveis, Gestão e Equipe Creators sem deixar um único grupo sustentar a semana sozinho."
+  );
+
+  const score =
+    Number(
+      results?.displayed?.score ||
+      0
+    );
+
+  const scoreDifference =
+    Number(
+      results?.diagnosis
+        ?.generalDifference ||
+      0
+    );
+
+  const scoreSignal =
+    score >= 80
+      ? "🟢"
+      : score >= 60
+        ? "🟡"
+        : "🔴";
+
+  const summaryEmbed =
+    new EmbedBuilder()
+      .setColor(
+        score >= 80
+          ? 0x57f287
+          : score >= 60
+            ? 0xfee75c
+            : 0xed4245
+      )
+      .setTitle(
+        "📊 Análise Semanal Operacional"
+      )
+      .setDescription(
+        [
+          `📅 **Período:** ${results.current.weekInfo.label}`,
+          "",
+          `## ${scoreSignal} ${score.toFixed(1)}%`,
+          `🎯 **Meta principal:** ${currentPoints}/${weeklyGoal} pontos`,
+          `📈 **Comparação:** ${formatSigned(scoreDifference)} pontos`,
+          "",
+          "📌 **Visão geral**",
+          currentPoints >=
+            weeklyGoal
+            ? "A operação atingiu a meta principal. O próximo foco é manter o resultado com uma divisão mais saudável do trabalho."
+            : `A operação ainda não alcançou os ${weeklyGoal} pontos. O principal foco deve ser aumentar os registros sem concentrar a cobrança nas mesmas pessoas.`,
+          "",
+          strongestGroup
+            ? `👥 **Maior participação:** ${strongestGroup.label}, com ${Number(strongestGroup.records || 0)} registros.`
+            : "👥 **Equipes:** ainda não foi possível identificar a divisão completa.",
+          strongestSource
+            ? `🚀 **Maior contribuição:** ${strongestSource.label || strongestSource.source}, com ${Number(strongestSource.amount || 0)} registros.`
+            : "🚀 **Maior contribuição:** ainda não identificada.",
+          `🙋 **Participação:** ${activeUsers} pessoa(s) registraram atividades; ${reachedMinimum} atingiram o mínimo individual.`,
+        ].join(
+          "\n"
+        )
+      )
+      .addFields(
+        {
+          name:
+            "🔴 Pontos de atenção",
+
+          value:
+            attentionPoints.length
+              ? attentionPoints
+                  .slice(
+                    0,
+                    3
+                  )
+                  .map(
+                    point =>
+                      `• ${point}`
+                  )
+                  .join(
+                    "\n"
+                  )
+              : "• Nenhum risco crítico foi identificado no fechamento.",
+        },
+
+        {
+          name:
+            "🟢 Pontos positivos",
+
+          value:
+            positivePoints.length
+              ? positivePoints
+                  .slice(
+                    0,
+                    3
+                  )
+                  .map(
+                    point =>
+                      `• ${point}`
+                  )
+                  .join(
+                    "\n"
+                  )
+              : "• A operação manteve registros durante a semana.",
+        },
+
+        {
+          name:
+            "📌 Foco da próxima semana",
+
+          value:
+            actions
+              .slice(
+                0,
+                3
+              )
+              .map(
+                action =>
+                  `• ${action}`
+              )
+              .join(
+                "\n"
+              ),
+        }
+      )
+      .setFooter({
+        text:
+          "Resumo automático • O relatório completo será enviado às 23:40",
+      })
+      .setTimestamp();
+
+  return {
+    embed:
+      summaryEmbed,
+
+    currentPoints,
+
+    weeklyGoal,
+
+    remainingPoints,
+
+    strongestGroup,
+
+    strongestSource,
+
+    positivePoints,
+
+    attentionPoints,
+
+    actions,
+  };
+}
+
 function buildWeeklySummaryEmbeds({
   selected,
   comparison,
@@ -7972,7 +8637,7 @@ function generatePreviousSummary() {
 // ENVIO AUTOMÁTICO
 // ============================================================================
 
-async function sendAutomaticWeeklyReport(
+async function sendAutomaticWeeklySummary(
   client
 ) {
   const currentWeek =
@@ -7982,7 +8647,8 @@ async function sendAutomaticWeeklyReport(
     loadState();
 
   if (
-    state.metadata.lastAutomaticReportWeek ===
+    state.metadata
+      .lastAutomaticSummaryWeek ===
     currentWeek.key
   ) {
     return;
@@ -8006,16 +8672,113 @@ async function sendAutomaticWeeklyReport(
     return;
   }
 
-  const summary =
-    await generateCurrentSummary();
+  const results =
+    await generateResults();
+
+  const focusSummary =
+    buildOperationalFocusSummary({
+      results,
+    });
 
   await channel.send({
     content:
-      "📊 **Fechamento semanal automático do NPS Operacional da SantaCreators**",
-    embeds:
-      summary.embeds,
+      "📊 **Resumo semanal da operação SantaCreators**",
+
+    embeds: [
+      focusSummary.embed,
+    ],
   });
 
+  state.metadata
+    .lastAutomaticSummaryWeek =
+      currentWeek.key;
+
+  saveState(
+    state
+  );
+
+  console.log(
+    `[NPS Operacional] Resumo semanal enviado para a semana ${currentWeek.key}.`
+  );
+}
+
+async function sendAutomaticWeeklyReport(
+  client
+) {
+  const currentWeek =
+    getWeekInfo();
+
+  const state =
+    loadState();
+
+  if (
+    state.metadata
+      .lastAutomaticCompleteReportWeek ===
+    currentWeek.key
+  ) {
+    return;
+  }
+
+  const channel =
+    await client.channels.fetch(
+      NPS_WEEKLY_REPORT_CHANNEL_ID
+    ).catch(
+      () => null
+    );
+
+  if (
+    !channel ||
+    !channel.isTextBased()
+  ) {
+    console.error(
+      `[NPS Operacional] Canal do relatório semanal inválido: ${NPS_WEEKLY_REPORT_CHANNEL_ID}`
+    );
+
+    return;
+  }
+
+  const summary =
+    await generateCurrentSummary();
+
+  const executiveEmbeds =
+    buildExecutiveDashboardEmbeds(
+      summary
+    );
+
+  await channel.send({
+    content:
+      "🧠 **Relatório semanal completo da operação SantaCreators**",
+
+    embeds:
+      executiveEmbeds,
+  });
+
+  if (
+    summary.analysisText
+  ) {
+    const textChunks =
+      splitDiscordText(
+        summary.analysisText
+      );
+
+    for (
+      const textChunk of
+      textChunks
+    ) {
+      await channel.send({
+        content:
+          textChunk,
+      });
+    }
+  }
+
+  state.metadata
+    .lastAutomaticCompleteReportWeek =
+      currentWeek.key;
+
+  /*
+   * Mantém o campo antigo atualizado para compatibilidade.
+   */
   state.metadata.lastAutomaticReportWeek =
     currentWeek.key;
 
@@ -8031,11 +8794,17 @@ async function sendAutomaticWeeklyReport(
   currentStoredWeek.finalScore =
     summary.displayed.score;
 
-  saveState(state);
+  saveState(
+    state
+  );
 
   await updateDashboard(
     client,
-    "automatic_weekly_report"
+    "automatic_complete_weekly_report"
+  );
+
+  console.log(
+    `[NPS Operacional] Relatório completo enviado para a semana ${currentWeek.key}.`
   );
 }
 
@@ -8338,7 +9107,35 @@ export async function npsOperacionalOnReady(
     }
   );
 
-  // Resumo automático todo sábado às 23:40.
+  /*
+   * Resumo direto e focado.
+   *
+   * Enviado todo sábado às 23:30.
+   */
+  cron.schedule(
+    "30 23 * * 6",
+    () => {
+      sendAutomaticWeeklySummary(
+        client
+      ).catch(
+        error =>
+          console.error(
+            "[NPS Operacional] Erro no resumo semanal:",
+            error
+          )
+      );
+    },
+    {
+      timezone:
+        TZ,
+    }
+  );
+
+  /*
+   * Relatório completo.
+   *
+   * Enviado todo sábado às 23:40.
+   */
   cron.schedule(
     "40 23 * * 6",
     () => {
@@ -8347,7 +9144,7 @@ export async function npsOperacionalOnReady(
       ).catch(
         error =>
           console.error(
-            "[NPS Operacional] Erro no relatório semanal:",
+            "[NPS Operacional] Erro no relatório semanal completo:",
             error
           )
       );
@@ -8374,5 +9171,10 @@ export async function npsOperacionalOnReady(
 
 export {
   updateDashboard as npsOperacionalUpdateDashboard,
-  sendAutomaticWeeklyReport as npsOperacionalSendWeeklyReport,
+
+  sendAutomaticWeeklySummary as
+    npsOperacionalSendWeeklySummary,
+
+  sendAutomaticWeeklyReport as
+    npsOperacionalSendWeeklyReport,
 };
