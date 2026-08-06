@@ -5189,8 +5189,22 @@ function buildConsolidatedOperationalUsers({
 // ============================================================================
 
 async function generateResults() {
-  const config = loadConfig();
-  const state = loadState();
+  const config =
+    loadConfig();
+
+  const state =
+    loadState();
+
+  /*
+   * As informações das semanas precisam ser criadas
+   * antes de qualquer leitura que utilize currentWeekInfo
+   * ou previousWeekInfo.
+   */
+  const currentWeekInfo =
+    getWeekInfo();
+
+  const previousWeekInfo =
+    getPreviousWeekInfo();
 
   syncConsolidatedWeeklySources(
     state
@@ -5201,10 +5215,10 @@ async function generateResults() {
       activeClient,
 
     currentWeek:
-      getWeekInfo(),
+      currentWeekInfo,
 
     previousWeek:
-      getPreviousWeekInfo(),
+      previousWeekInfo,
 
     currentMoment:
       getOperationalWeekMoment(
@@ -5583,46 +5597,46 @@ console.log(
     {
       metrics:
         providerCollection.results.map(
-         metric => ({
-  id:
-    metric.id ||
-    metric.providerId,
+          metric => ({
+            id:
+              metric.id ||
+              metric.providerId,
 
-  available:
-    metric.available,
+            available:
+              metric.available,
 
-  score:
-    metric.score,
+            score:
+              metric.score,
 
-  volume:
-    metric.volume,
+            volume:
+              metric.volume,
 
-  current:
-    metric.current,
+            current:
+              metric.current,
 
-  goal:
-    metric.goal,
+            goal:
+              metric.goal,
 
-  paceScore:
-    metric.progress
-      ?.paceScore ??
-      null,
+            paceScore:
+              metric.progress
+                ?.paceScore ??
+              null,
 
-  projectedTotal:
-    metric.prediction
-      ?.projectedTotal ??
-      null,
+            projectedTotal:
+              metric.prediction
+                ?.projectedTotal ??
+              null,
 
-  sameMomentAvailable:
-    metric.sameMomentComparison
-      ?.available ??
-      false,
+            sameMomentAvailable:
+              metric.sameMomentComparison
+                ?.available ??
+              false,
 
-  sameMomentPrevious:
-    metric.sameMomentComparison
-      ?.previous ??
-      null,
-})
+            sameMomentPrevious:
+              metric.sameMomentComparison
+                ?.previous ??
+              null,
+          })
         ),
 
       errors:
@@ -5630,32 +5644,27 @@ console.log(
     }
   );
 
-  const currentWeekInfo =
-    getWeekInfo();
-
-  const previousWeekInfo =
-    getPreviousWeekInfo();
-
   const current =
     calculateWeek(
       state,
       currentWeekInfo,
       config,
       {
-        currentWeek: true,
+        currentWeek:
+          true,
       }
     );
 
-const previous =
-  calculateWeek(
-    state,
-    previousWeekInfo,
-    config,
-    {
-      currentWeek: false,
-    }
-  );
-
+  const previous =
+    calculateWeek(
+      state,
+      previousWeekInfo,
+      config,
+      {
+        currentWeek:
+          false,
+      }
+    );
 /*
  * Remove as notas genéricas das categorias que exigem
  * dados reais fornecidos pelos próprios sistemas.
