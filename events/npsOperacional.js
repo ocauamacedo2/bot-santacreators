@@ -5149,11 +5149,420 @@ function buildExecutiveDashboardEmbeds({
         }
       );
 
+  /*
+   * ==========================================================================
+   * TEXTO HUMANO DO FEEDBACK SEMANAL
+   * ==========================================================================
+   *
+   * Os cálculos e métricas continuam exatamente iguais.
+   *
+   * Esta função altera somente a forma como algumas informações
+   * são apresentadas no relatório completo.
+   *
+   * O objetivo é transformar frases técnicas em feedbacks curtos,
+   * diretos e fáceis de entender.
+   */
+  function simplifyOperationalFeedbackText(
+    value
+  ) {
+    let text =
+      String(
+        value ||
+        ""
+      ).trim();
+
+    if (
+      !text
+    ) {
+      return "";
+    }
+
+    /*
+     * ------------------------------------------------------------------------
+     * RESULTADO GERAL
+     * ------------------------------------------------------------------------
+     */
+
+    text =
+      text.replace(
+        /Os indicadores gerais da operação estão em ([\d.]+)%\. Por esse motivo, a nota geral foi limitada de ([\d.]+)% para ([\d.]+)%\./i,
+        (
+          _match,
+          operationalScore,
+          _originalScore,
+          finalScore
+        ) =>
+          `A operação ainda está abaixo do ideal, com ${operationalScore}%. Por isso, a nota final ficou em ${finalScore}%.`
+      );
+
+    text =
+      text.replace(
+        /Priorizar o ritmo da meta geral e aumentar a quantidade de participantes que atingem o mínimo individual antes de classificar a operação como saudável\./i,
+        "Aumentar o ritmo das atividades e fazer mais pessoas atingirem a meta individual."
+      );
+
+    /*
+     * ------------------------------------------------------------------------
+     * REGISTRO MANAGER
+     * ------------------------------------------------------------------------
+     */
+
+    text =
+      text.replace(
+        /Registro Manager: (\d+) registro\(s\) foram aprovados nesta semana, com ([\d.]+)% de aprovação\./i,
+        (
+          _match,
+          approved,
+          approvalRate
+        ) =>
+          `Registro Manager teve ${approved} aprovações nesta semana, com ${approvalRate}% de aproveitamento.`
+      );
+
+    text =
+      text.replace(
+        /Registro Manager por cargo: Responsáveis (\d+), Coordenação (\d+), Equipe Creators (\d+) contribuíram com registros aprovados\./i,
+        (
+          _match,
+          responsaveis,
+          coordenacao,
+          equipeCreators
+        ) => {
+          const parts = [];
+
+          const responsaveisAmount =
+            Number(
+              responsaveis ||
+              0
+            );
+
+          const coordenacaoAmount =
+            Number(
+              coordenacao ||
+              0
+            );
+
+          const equipeCreatorsAmount =
+            Number(
+              equipeCreators ||
+              0
+            );
+
+          if (
+            responsaveisAmount >
+            0
+          ) {
+            parts.push(
+              `${responsaveisAmount} Responsável(is)`
+            );
+          }
+
+          if (
+            coordenacaoAmount >
+            0
+          ) {
+            parts.push(
+              `${coordenacaoAmount} da Coordenação`
+            );
+          }
+
+          if (
+            equipeCreatorsAmount >
+            0
+          ) {
+            parts.push(
+              `${equipeCreatorsAmount} da Equipe Creators`
+            );
+          }
+
+          if (
+            parts.length ===
+            0
+          ) {
+            return "Registro Manager não teve participação localizada entre Responsáveis, Coordenação e Equipe Creators.";
+          }
+
+          let result =
+            `Registro Manager teve participação de ${parts.join(", ")}.`;
+
+          if (
+            equipeCreatorsAmount ===
+            0
+          ) {
+            result +=
+              " Nenhum membro da Equipe Creators apareceu nessa atividade.";
+          }
+
+          return result;
+        }
+      );
+
+    text =
+      text.replace(
+        /Registro Manager mantém desempenho forte, alcançando ([\d.]+)%\./i,
+        (
+          _match,
+          score
+        ) =>
+          `Registro Manager foi um dos destaques da semana, com nota de ${score}%.`
+      );
+
+    /*
+     * ------------------------------------------------------------------------
+     * PARTICIPAÇÃO POR CARGO
+     * ------------------------------------------------------------------------
+     */
+
+    text =
+      text.replace(
+        /(Responsáveis|Gestão|Gestão \/ Coordenação|Coordenação|Equipe Creators): (\d+) de (\d+) membro\(s\) do cargo participaram da operação nesta semana, somando (\d+) atividade\(s\)\./i,
+        (
+          _match,
+          groupName,
+          activeMembers,
+          totalMembers,
+          records
+        ) => {
+          const active =
+            Number(
+              activeMembers ||
+              0
+            );
+
+          const total =
+            Number(
+              totalMembers ||
+              0
+            );
+
+          const inactive =
+            Math.max(
+              0,
+              total -
+              active
+            );
+
+          let result =
+            `${groupName}: ${active} de ${total} participaram nesta semana e fizeram ${records} atividade(s).`;
+
+          if (
+            inactive >
+            0
+          ) {
+            result +=
+              ` ${inactive} membro(s) não tiveram atividade localizada.`;
+          }
+
+          return result;
+        }
+      );
+
+    text =
+      text.replace(
+        /(Responsáveis|Gestão|Gestão \/ Coordenação|Coordenação|Equipe Creators): somente (\d+) de (\d+) membro\(s\) do cargo tiveram atividade localizada nesta semana \(([\d.]+)%\)\./i,
+        (
+          _match,
+          groupName,
+          activeMembers,
+          totalMembers,
+          percentage
+        ) => {
+          const active =
+            Number(
+              activeMembers ||
+              0
+            );
+
+          const total =
+            Number(
+              totalMembers ||
+              0
+            );
+
+          const inactive =
+            Math.max(
+              0,
+              total -
+              active
+            );
+
+          return `${groupName} teve baixa participação: apenas ${active} de ${total} participaram nesta semana (${percentage}%). ${inactive} membro(s) ficaram sem atividade localizada.`;
+        }
+      );
+
+    text =
+      text.replace(
+        /(Responsáveis|Gestão|Gestão \/ Coordenação|Coordenação|Equipe Creators): nenhuma das (\d+) pessoa\(s\) atualmente classificadas neste cargo teve atividade localizada nesta semana\./i,
+        (
+          _match,
+          groupName,
+          totalMembers
+        ) =>
+          `${groupName} não teve participação nesta semana. Nenhum dos ${totalMembers} membros apareceu nas atividades analisadas.`
+      );
+
+    text =
+      text.replace(
+        /(Responsáveis|Gestão|Gestão \/ Coordenação|Coordenação|Equipe Creators): distribuir melhor as tarefas na próxima semana para aumentar a quantidade de membros realmente participantes\./i,
+        (
+          _match,
+          groupName
+        ) =>
+          `${groupName}: envolver mais membros nas atividades da próxima semana.`
+      );
+
+    text =
+      text.replace(
+        /(Responsáveis|Gestão|Gestão \/ Coordenação|Coordenação|Equipe Creators): aumentar a participação operacional na próxima semana e verificar por que nenhum membro do grupo apareceu nos registros\./i,
+        (
+          _match,
+          groupName
+        ) =>
+          `${groupName}: verificar por que ninguém participou e aumentar a atividade do grupo na próxima semana.`
+      );
+
+    /*
+     * ------------------------------------------------------------------------
+     * GESTÃO E RECRUTAMENTO
+     * ------------------------------------------------------------------------
+     */
+
+    text =
+      text.replace(
+        /Gestão e Recrutamento: A Gestão cresceu em (\d+) controle\(s\) nesta semana\./i,
+        (
+          _match,
+          amount
+        ) =>
+          `Gestão teve ${amount} novo(s) controle(s) nesta semana.`
+      );
+
+    text =
+      text.replace(
+        /Gestão e Recrutamento: A Gestão possui (\d+) de (\d+) controles previstos, equivalente a ([\d.]+)% da capacidade planejada\./i,
+        (
+          _match,
+          active,
+          total,
+          percentage
+        ) => {
+          const missing =
+            Math.max(
+              0,
+              Number(total) -
+              Number(active)
+            );
+
+          return `Gestão está com ${active} de ${total} controles ativos (${percentage}%). Ainda faltam ${missing} para completar o previsto.`;
+        }
+      );
+
+    text =
+      text.replace(
+        /Gestão e Recrutamento: (\d+) controle\(s\) estão pausados atualmente\./i,
+        (
+          _match,
+          paused
+        ) =>
+          `Gestão tem ${paused} controle(s) pausado(s) neste momento.`
+      );
+
+    text =
+      text.replace(
+        /Gestão e Recrutamento: A Gestão ainda pode crescer em (\d+) controle\(s\), mantendo o padrão de atividade atual\./i,
+        (
+          _match,
+          amount
+        ) =>
+          `Gestão: buscar ativar os ${amount} controle(s) que ainda faltam.`
+      );
+
+    text =
+      text.replace(
+        /Gestão e Recrutamento: Revisar os controles pausados e verificar quais possuem previsão de retorno\./i,
+        "Gestão: verificar quais controles pausados podem voltar à atividade."
+      );
+
+    /*
+     * ------------------------------------------------------------------------
+     * PARTICIPAÇÃO DA EQUIPE
+     * ------------------------------------------------------------------------
+     */
+
+    text =
+      text.replace(
+        /Participação da Equipe está em nível crítico, com ([\d.]+)%\./i,
+        (
+          _match,
+          score
+        ) =>
+          `A participação da equipe foi um dos principais problemas da semana: ${score}%.`
+      );
+
+    /*
+     * ------------------------------------------------------------------------
+     * LIDERANÇA
+     * ------------------------------------------------------------------------
+     */
+
+    text =
+      text.replace(
+        /A liderança apresentou retenção estimada de ([\d.]+)%, indicando boa permanência dos novos líderes\./i,
+        (
+          _match,
+          retention
+        ) =>
+          `A liderança teve boa estabilidade nesta semana: ${retention}% dos líderes permaneceram.`
+      );
+
+    /*
+     * ------------------------------------------------------------------------
+     * COMPARAÇÃO ENTRE SEMANAS
+     * ------------------------------------------------------------------------
+     */
+
+    text =
+      text.replace(
+        /(.+) apresentou a maior evolução da semana, com avanço de ([+\-\d.]+) pontos\./i,
+        (
+          _match,
+          category,
+          difference
+        ) =>
+          `${category} foi a área que mais melhorou nesta semana: ${difference} pontos.`
+      );
+
+    text =
+      text.replace(
+        /(.+) registrou a maior queda, com variação de ([+\-\d.]+) pontos\./i,
+        (
+          _match,
+          category,
+          difference
+        ) =>
+          `${category} foi a área que mais caiu nesta semana: ${difference} pontos.`
+      );
+
+    text =
+      text.replace(
+        /(.+) está em nível crítico, com ([\d.]+)%\./i,
+        (
+          _match,
+          category,
+          score
+        ) =>
+          `${category} precisa de atenção imediata: nota atual de ${score}%.`
+      );
+
+    return text;
+  }
+
   const positiveLines =
     diagnosis.positives
       .map(
         text =>
-          `✅ ${text}`
+          `✅ ${simplifyOperationalFeedbackText(
+            text
+          )}`
       )
       .join("\n\n");
 
@@ -5161,7 +5570,9 @@ function buildExecutiveDashboardEmbeds({
     diagnosis.attentions
       .map(
         text =>
-          `⚠️ ${text}`
+          `🚨 ${simplifyOperationalFeedbackText(
+            text
+          )}`
       )
       .join("\n\n");
 
@@ -5169,7 +5580,9 @@ function buildExecutiveDashboardEmbeds({
     diagnosis.recommendations
       .map(
         text =>
-          `🎯 ${text}`
+          `🎯 ${simplifyOperationalFeedbackText(
+            text
+          )}`
       )
       .join("\n\n");
 
@@ -5183,30 +5596,29 @@ function buildExecutiveDashboardEmbeds({
   const responseText =
     responseCategory?.response
       ? [
-          `**Tempo médio:** ${formatDuration(responseCategory.response.average)}`,
+          `**Tempo médio para concluir:** ${formatDuration(responseCategory.response.average)}`,
           `**Tempo mais comum:** ${formatDuration(responseCategory.response.median)}`,
-          `**90% dos casos concluídos em até:** ${formatDuration(responseCategory.response.p90)}`,
+          `**Maioria concluída em até:** ${formatDuration(responseCategory.response.p90)}`,
           `**Mais rápido:** ${formatDuration(responseCategory.response.minimum)}`,
           `**Mais demorado:** ${formatDuration(responseCategory.response.maximum)}`,
-          `**Processos analisados:** ${responseCategory.response.samples}`,
+          `**Casos analisados:** ${responseCategory.response.samples}`,
         ].join("\n")
-      : "Ainda não existem registros suficientes ligando a criação de uma solicitação à sua conclusão.";
-
+      : "Ainda não há dados suficientes para saber quanto tempo os processos estão levando.";
   const analysisEmbed =
     new EmbedBuilder()
       .setColor(
         0x3498db
       )
       .setTitle(
-        "🧠 Leitura inteligente da semana"
+        "📊 Feedback da semana"
       )
       .setDescription(
-        "Esta seção transforma os números em uma leitura simples para apoiar as decisões da gestão."
+        "Resumo direto do que foi bem, do que deixou a desejar e do que precisa melhorar na próxima semana."
       )
       .addFields(
         {
           name:
-            "✅ Pontos positivos desta semana",
+            "🟢 O que foi bem",
           value:
             truncate(
               positiveLines,
@@ -5217,7 +5629,7 @@ function buildExecutiveDashboardEmbeds({
         },
         {
           name:
-            "🚨 Pontos críticos desta semana",
+            "🔴 O que deixou a desejar",
           value:
             truncate(
               attentionLines,
@@ -5228,7 +5640,7 @@ function buildExecutiveDashboardEmbeds({
         },
         {
           name:
-            "🎯 Foco para a próxima semana",
+            "🎯 O que melhorar na próxima semana",
           value:
             truncate(
               recommendationLines,
@@ -5239,7 +5651,7 @@ function buildExecutiveDashboardEmbeds({
         },
         {
           name:
-            "⏱️ Agilidade dos processos",
+            "⏱️ Tempo dos processos",
           value:
             truncate(
               responseText,
