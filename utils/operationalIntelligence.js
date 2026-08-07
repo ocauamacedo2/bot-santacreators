@@ -843,8 +843,27 @@ export async function buildOperationalRoleBreakdown({
     ) => ({
       label,
       priority,
+
+      /*
+       * Quantidade de pessoas da análise semanal
+       * classificadas neste grupo.
+       */
       members:
         0,
+
+      /*
+       * Quantidade real de membros que possuem atualmente
+       * este cargo no servidor.
+       *
+       * A classificação respeita a prioridade:
+       *
+       * 1. Responsáveis;
+       * 2. Gestão / Coordenação;
+       * 3. Equipe Creators.
+       */
+      serverMembers:
+        0,
+
       activeMembers:
         0,
       records:
@@ -954,6 +973,82 @@ const guild =
 
 if (!guild) {
   return result;
+}
+
+/*
+ * Atualiza a lista de membros antes da classificação.
+ *
+ * Isso garante que a separação operacional utilize
+ * os cargos que as pessoas possuem AGORA no Discord,
+ * e não dependa somente de membros previamente
+ * existentes no cache do bot.
+ *
+ * Se a atualização completa falhar, o restante da
+ * análise continua funcionando normalmente e cada
+ * participante ainda poderá ser buscado individualmente.
+ */
+let operationalRoleRosterAvailable =
+  false;
+
+try {
+  await guild.members.fetch();
+
+  operationalRoleRosterAvailable =
+    true;
+} catch (error) {
+  console.error(
+    "[OperationalIntelligence] Não foi possível atualizar a lista completa de membros antes da separação por cargos:",
+    error?.message ||
+    error
+  );
+}
+
+result.roleRosterAvailable =
+  operationalRoleRosterAvailable;
+
+/*
+ * Conta quantas pessoas existem atualmente
+ * em cada grupo operacional.
+ *
+ * A mesma função utilizada para classificar as atividades
+ * é utilizada aqui. Portanto, se uma pessoa possuir mais
+ * de um cargo operacional, ela permanece somente no
+ * grupo de maior prioridade.
+ */
+if (
+  operationalRoleRosterAvailable
+) {
+  for (
+    const member of
+    guild.members.cache.values()
+  ) {
+    const memberRoleGroup =
+      resolveOperationalRoleGroup(
+        member,
+        roleGroups
+      );
+
+    if (
+      memberRoleGroup.key ===
+        "outros"
+    ) {
+      continue;
+    }
+
+    const serverGroup =
+      result[
+        memberRoleGroup.key
+      ];
+
+    if (
+      !serverGroup
+    ) {
+      continue;
+    }
+
+    serverGroup.serverMembers +=
+      1;
+  }
 }
 
   const userEntries =

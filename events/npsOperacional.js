@@ -3503,7 +3503,8 @@ function buildDiagnosis(
   current,
   previous,
   displayed,
-  providerMetrics = []
+  providerMetrics = [],
+  operationalRoleAnalysis = null
 ) {
   const categoryComparisons =
     current.categories
@@ -3622,6 +3623,15 @@ const metricsWithDedicatedAnalysis =
     "desempenho_geral",
     "meta_interna",
     "set_staff",
+
+    /*
+     * Registro Manager possui análise própria por cargo.
+     *
+     * Não utiliza os positivePoints genéricos porque
+     * quantidade de point owners não representa
+     * quantidade de Responsáveis do Discord.
+     */
+    "registro_manager",
   ]);
 
 for (
@@ -3672,6 +3682,259 @@ for (
     recommendations.push(
       `${metric.label}: ${recommendation}`
     );
+  }
+}
+
+/*
+ * ============================================================================
+ * REGISTRO MANAGER — LEITURA REAL POR CARGO
+ * ============================================================================
+ *
+ * Não utiliza:
+ *
+ * • responsibleCount;
+ * • pointOwnersCount;
+ * • nome ou apelido do usuário;
+ * • texto do registro para adivinhar o cargo.
+ *
+ * A categoria operacional vem exclusivamente de
+ * operationalRoleAnalysis, que foi montada usando
+ * os cargos atuais do membro no Discord.
+ */
+const registroManagerMetric =
+  providerMetrics.find(
+    metric =>
+      safeString(
+        metric?.id ||
+        metric?.providerId
+      ) ===
+      "registro_manager" &&
+      metric?.available !== false
+  ) ||
+  null;
+
+if (
+  registroManagerMetric
+) {
+  const registroManagerDetails =
+    registroManagerMetric.details ||
+    {};
+
+  const registroManagerApproved =
+    Math.max(
+      0,
+      Number(
+        registroManagerDetails.approved ??
+        registroManagerMetric.current ??
+        0
+      )
+    );
+
+  const registroManagerRejected =
+    Math.max(
+      0,
+      Number(
+        registroManagerDetails.rejected ||
+        0
+      )
+    );
+
+  const registroManagerApprovalRate =
+    Number(
+      registroManagerDetails.approvalRate ||
+      0
+    );
+
+  /*
+   * Conta pessoas que possuem atividade "manager"
+   * dentro de cada grupo já validado por cargo.
+   */
+  const countManagerContributors =
+    group =>
+      Object.values(
+        group?.users ||
+        {}
+      ).filter(
+        user =>
+          Number(
+            user?.sources?.manager ||
+            0
+          ) > 0
+      ).length;
+
+  const managerResponsaveis =
+    countManagerContributors(
+      operationalRoleAnalysis
+        ?.responsaveis
+    );
+
+  const managerCoordenacao =
+    countManagerContributors(
+      operationalRoleAnalysis
+        ?.coordenacao
+    );
+
+  const managerEquipeCreators =
+    countManagerContributors(
+      operationalRoleAnalysis
+        ?.equipe_creator
+    );
+
+  const managerOutros =
+    countManagerContributors(
+      operationalRoleAnalysis
+        ?.outros
+    );
+
+  const totalManagerContributors =
+    managerResponsaveis +
+    managerCoordenacao +
+    managerEquipeCreators +
+    managerOutros;
+
+  /*
+   * Ponto positivo direto.
+   */
+  if (
+    registroManagerApproved > 0
+  ) {
+    positives.push(
+      `Registro Manager: ${registroManagerApproved} registro(s) foram aprovados nesta semana, com ${registroManagerApprovalRate.toFixed(1)}% de aprovação.`
+    );
+  }
+
+  /*
+   * Distribuição REAL por cargo.
+   */
+  if (
+    totalManagerContributors > 0
+  ) {
+    positives.push(
+      `Registro Manager por cargo: Responsáveis ${managerResponsaveis}, Coordenação ${managerCoordenacao}, Equipe Creators ${managerEquipeCreators}${managerOutros > 0 ? ` e Outros ${managerOutros}` : ""} contribuíram com registros aprovados.`
+    );
+  }
+
+  /*
+   * Reprovações passam a aparecer como ponto crítico direto.
+   */
+  if (
+    registroManagerRejected > 0
+  ) {
+    attentions.push(
+      `Registro Manager deixou ${registroManagerRejected} registro(s) reprovado(s) nesta semana.`
+    );
+
+    recommendations.push(
+      `Registro Manager: revisar os motivos das ${registroManagerRejected} reprovação(ões) e reduzir reincidências na próxima semana.`
+    );
+  }
+}
+
+/*
+ * ============================================================================
+ * PARTICIPAÇÃO OPERACIONAL REAL POR CARGO
+ * ============================================================================
+ *
+ * Compara quem pertence atualmente ao grupo com quem
+ * realmente teve atividade encontrada na semana.
+ */
+if (
+  operationalRoleAnalysis
+) {
+  const operationalGroupsForDiagnosis = [
+    operationalRoleAnalysis.responsaveis,
+    operationalRoleAnalysis.coordenacao,
+    operationalRoleAnalysis.equipe_creator,
+  ].filter(Boolean);
+
+  for (
+    const group of
+    operationalGroupsForDiagnosis
+  ) {
+    const serverMembers =
+      Math.max(
+        0,
+        Number(
+          group.serverMembers ||
+          0
+        )
+      );
+
+    const activeMembers =
+      Math.max(
+        0,
+        Number(
+          group.activeMembers ||
+          0
+        )
+      );
+
+    const records =
+      Math.max(
+        0,
+        Number(
+          group.records ||
+          0
+        )
+      );
+
+    /*
+     * Só compara quantidade de membros do cargo
+     * quando a lista completa do servidor foi carregada.
+     */
+    if (
+      operationalRoleAnalysis
+        .roleRosterAvailable &&
+      serverMembers > 0
+    ) {
+      const participationRate =
+        (
+          activeMembers /
+          serverMembers
+        ) *
+        100;
+
+      if (
+        activeMembers === 0
+      ) {
+        attentions.push(
+          `${group.label}: nenhuma das ${serverMembers} pessoa(s) atualmente classificadas neste cargo teve atividade localizada nesta semana.`
+        );
+
+        recommendations.push(
+          `${group.label}: aumentar a participação operacional na próxima semana e verificar por que nenhum membro do grupo apareceu nos registros.`
+        );
+      } else if (
+        participationRate <
+        50
+      ) {
+        attentions.push(
+          `${group.label}: somente ${activeMembers} de ${serverMembers} membro(s) do cargo tiveram atividade localizada nesta semana (${participationRate.toFixed(1)}%).`
+        );
+
+        recommendations.push(
+          `${group.label}: distribuir melhor as tarefas na próxima semana para aumentar a quantidade de membros realmente participantes.`
+        );
+      } else {
+        positives.push(
+          `${group.label}: ${activeMembers} de ${serverMembers} membro(s) do cargo participaram da operação nesta semana, somando ${records} atividade(s).`
+        );
+      }
+
+      continue;
+    }
+
+    /*
+     * Se não foi possível obter a lista inteira do servidor,
+     * apresenta somente o que foi comprovado pelos registros.
+     */
+    if (
+      activeMembers > 0
+    ) {
+      positives.push(
+        `${group.label}: ${activeMembers} pessoa(s) com atividade comprovada nesta semana, somando ${records} registro(s).`
+      );
+    }
   }
 }
 
@@ -4943,7 +5206,7 @@ function buildExecutiveDashboardEmbeds({
       .addFields(
         {
           name:
-            "🟢 O que está funcionando bem",
+            "✅ Pontos positivos desta semana",
           value:
             truncate(
               positiveLines,
@@ -4954,7 +5217,7 @@ function buildExecutiveDashboardEmbeds({
         },
         {
           name:
-            "🟠 O que precisa ser acompanhado",
+            "🚨 Pontos críticos desta semana",
           value:
             truncate(
               attentionLines,
@@ -4965,7 +5228,7 @@ function buildExecutiveDashboardEmbeds({
         },
         {
           name:
-            "🎯 Próximas ações recomendadas",
+            "🎯 Foco para a próxima semana",
           value:
             truncate(
               recommendationLines,
@@ -7320,7 +7583,8 @@ const diagnosis =
     current,
     previous,
     displayed,
-    providerCollection.results
+    providerCollection.results,
+    operationalRoleAnalysis
   );
 
 return {
