@@ -370,8 +370,11 @@ const SOURCE_LABELS = {
   cronograma:
     "Cronograma",
 
+  presenca:
+    "Bate Ponto",
+
   presencas:
-    "Presenças",
+    "Bate Ponto",
 
   alinhamentos:
     "Alinhamentos",

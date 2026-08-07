@@ -437,7 +437,7 @@ bate_ponto: {
 },
 
 presencas: {
-  label: "Presenças / Bate Ponto",
+  label: "Bate Ponto",
   weight: 8,
   enabled: true,
   weeklyGoal: 15,
@@ -2109,6 +2109,25 @@ let activeClient = null;
 let dashboardUpdateTimer = null;
 let dashboardUpdating = false;
 let dashboardNeedsUpdate = false;
+
+/*
+ * Mantém em memória exatamente o último resultado
+ * utilizado para montar o painel rápido do NPS.
+ *
+ * Os botões de resumo e relatório completo utilizam
+ * esta mesma leitura em vez de executar uma nova
+ * coleta pesada.
+ *
+ * Dessa forma:
+ *
+ * • a nota enviada no privado é a mesma do painel;
+ * • o clique responde praticamente imediatamente;
+ * • nenhuma nova varredura histórica é iniciada;
+ * • o botão "Atualizar dados" continua sendo o responsável
+ *   por solicitar uma nova leitura.
+ */
+let latestDashboardResults =
+  null;
 
 function scheduleDashboardUpdate(
   client,
@@ -7378,7 +7397,9 @@ async function updateDashboard(
     ]);
 
     const results =
-      await generateResults();
+      await generateResults(
+        client
+      );
 
     const components =
       buildDashboardComponents();
@@ -7425,6 +7446,17 @@ async function updateDashboard(
 
       results.state.dashboardMessageId =
         quickMessage.id;
+
+      /*
+       * Somente depois de o painel rápido ter sido
+       * enviado ou atualizado com sucesso este resultado
+       * passa a ser considerado a leitura oficial visível.
+       *
+       * Os botões de privado utilizarão exatamente
+       * este mesmo objeto.
+       */
+      latestDashboardResults =
+        results;
     } else {
       console.error(
         `[NPS Operacional] Canal rápido inválido: ${NPS_DASHBOARD_CHANNEL_ID}`
@@ -10296,6 +10328,47 @@ async function sendAutomaticWeeklyReport(
 }
 
 // ============================================================================
+// RESULTADO ATUAL VISÍVEL DO PAINEL
+// ============================================================================
+
+async function getCurrentDashboardResults(
+  client
+) {
+  /*
+   * Prioridade absoluta:
+   *
+   * retornar exatamente os dados que atualmente
+   * estão sendo exibidos no painel.
+   *
+   * Isso garante que:
+   *
+   * painel = resumo privado = relatório completo.
+   */
+  if (
+    latestDashboardResults
+  ) {
+    return latestDashboardResults;
+  }
+
+  /*
+   * Fallback de segurança.
+   *
+   * Normalmente esta condição somente poderá acontecer
+   * durante uma inicialização incompleta ou caso a geração
+   * inicial do painel tenha falhado.
+   *
+   * Nesse cenário ainda permitimos a geração direta para
+   * não remover nenhuma funcionalidade existente.
+   */
+  const results =
+    await generateResults(
+      client
+    );
+
+  return results;
+}
+
+// ============================================================================
 // INTERAÇÕES
 // ============================================================================
 
@@ -10335,9 +10408,12 @@ async function sendSummaryToUser(
      *
      * O relatório completo continua separado no botão
      * executivo e no envio automático das 23:40.
+     *
+     * A leitura utilizada é exatamente a mesma que
+     * está atualmente exibida no painel.
      */
     const results =
-      await generateResults(
+      await getCurrentDashboardResults(
         client
       );
 
@@ -10473,8 +10549,15 @@ if (
     BUTTON_EXECUTIVE_DM_ID
   ) {
     try {
+      /*
+       * O relatório privado utiliza exatamente
+       * a mesma leitura que gerou o painel atual.
+       *
+       * Nenhuma nova coleta operacional é executada
+       * somente por causa deste clique.
+       */
       const results =
-        await generateResults(
+        await getCurrentDashboardResults(
           client
         );
 
