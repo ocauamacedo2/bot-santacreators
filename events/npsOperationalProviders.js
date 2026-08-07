@@ -140,15 +140,21 @@ async function getFreshPayEvtOperationalData(
     client;
 
   /*
-   * force = true:
+   * force = false:
    *
-   * ignora o cache interno antigo do payEvtDash
-   * e manda reler os canais, logs e arquivos.
+   * permite que o payEvtDash reutilize a coleta já disponível
+   * quando ela ainda puder ser utilizada.
+   *
+   * Isso evita obrigar uma nova varredura histórica completa
+   * de canais, logs e arquivos sempre que o NPS for consultado.
+   *
+   * A camada deste provedor continua controlando seu próprio
+   * cache e sua Promise compartilhada normalmente.
    */
   payEvtOperationalCollection.promise =
     collectPayEvtOperationalData(
       client,
-      true
+      false
     )
       .then(
         payload => {

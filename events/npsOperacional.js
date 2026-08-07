@@ -178,6 +178,16 @@ const BUTTON_PREVIOUS_DM_ID = "sc_nps_operacional_previous_dm";
 const BUTTON_EXECUTIVE_DM_ID = "sc_nps_operacional_executive_dm";
 
 /*
+ * Limite máximo para varreduras oficiais pesadas executadas
+ * durante a geração manual do NPS.
+ *
+ * Nenhuma fonte individual deve impedir indefinidamente
+ * que o resumo ou relatório seja entregue ao usuário.
+ */
+const NPS_HEAVY_PROVIDER_TIMEOUT_MS =
+  8 * 1000;
+
+/*
  * Estas categorias somente podem influenciar o NPS quando
  * o respectivo sistema entregar uma métrica operacional real.
  *
@@ -5131,6 +5141,66 @@ function recalculateWeekResult(
 }
 
 // ============================================================================
+// TIMEOUT DE PROTEÇÃO PARA FONTES PESADAS
+// ============================================================================
+
+async function runNpsHeavyOperationWithTimeout(
+  operationName,
+  operation
+) {
+  let timeoutHandle =
+    null;
+
+  try {
+    const operationPromise =
+      Promise.resolve()
+        .then(
+          () =>
+            operation()
+        );
+
+    const timeoutPromise =
+      new Promise(
+        (
+          _resolve,
+          reject
+        ) => {
+          timeoutHandle =
+            setTimeout(
+              () => {
+                const error =
+                  new Error(
+                    `A operação "${operationName}" excedeu o limite de ${NPS_HEAVY_PROVIDER_TIMEOUT_MS / 1000} segundos.`
+                  );
+
+                error.code =
+                  "SC_NPS_HEAVY_OPERATION_TIMEOUT";
+
+                reject(
+                  error
+                );
+              },
+              NPS_HEAVY_PROVIDER_TIMEOUT_MS
+            );
+        }
+      );
+
+    return await Promise.race([
+      operationPromise,
+      timeoutPromise,
+    ]);
+  } finally {
+    if (
+      timeoutHandle
+    ) {
+      clearTimeout(
+        timeoutHandle
+      );
+    }
+  }
+}
+
+// ============================================================================
 // MÉTRICA OFICIAL DO REGISTRO MANAGER PELOS LOGS
 // ============================================================================
 
@@ -5138,18 +5208,22 @@ async function buildRegistroManagerLogMetric(
   context = {}
 ) {
   const scan =
-    await collectRegistroManagerOperationalData(
-      context.client,
-      {
-        currentWeek:
-          context.currentWeek,
+    await runNpsHeavyOperationWithTimeout(
+      "Registro Manager",
+      () =>
+        collectRegistroManagerOperationalData(
+          context.client,
+          {
+            currentWeek:
+              context.currentWeek,
 
-        previousWeek:
-          context.previousWeek,
+            previousWeek:
+              context.previousWeek,
 
-        maxPages:
-          120,
-      }
+            maxPages:
+              120,
+          }
+        )
     );
 
   const current =
@@ -10400,7 +10474,9 @@ if (
   ) {
     try {
       const results =
-        await generateResults();
+        await generateResults(
+          client
+        );
 
       const executiveEmbeds =
         buildExecutiveDashboardEmbeds(
