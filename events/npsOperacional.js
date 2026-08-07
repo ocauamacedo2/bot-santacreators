@@ -3875,11 +3875,21 @@ function buildDiagnosis(
     const gate =
       displayed.operationalGate;
 
-    attentions.push(
-      gate.coreScore != null
-        ? `Os indicadores gerais da operação estão em ${gate.coreScore.toFixed(1)}%. Por esse motivo, a nota geral foi limitada de ${gate.originalScore.toFixed(1)}% para ${gate.finalScore.toFixed(1)}%.`
-        : `Os indicadores centrais do Ranking Geral e do GeralDash ainda não estavam disponíveis. Por segurança, a nota geral foi limitada a ${gate.finalScore.toFixed(1)}%.`
-    );
+    if (
+      gate.coreScore != null &&
+      gate.generalScore != null &&
+      gate.participationScore != null
+    ) {
+      attentions.push(
+        `A leitura central da semana ficou em ${gate.coreScore.toFixed(1)}%. Esse valor é calculado com 55% do Ritmo Geral da Operação (${gate.generalScore.toFixed(1)}%) e 45% da Participação da Equipe (${gate.participationScore.toFixed(1)}%). Pela faixa atual dessa leitura central, a nota geral pode chegar no máximo a ${gate.maximumAllowedScore.toFixed(1)}%. A nota calculada antes desse limite era ${gate.originalScore.toFixed(1)}% e, por isso, a nota final ficou em ${gate.finalScore.toFixed(1)}%.`
+      );
+    } else {
+      attentions.push(
+        gate.coreScore != null
+          ? `A leitura central da semana está em ${gate.coreScore.toFixed(1)}%. Como uma das duas métricas principais não estava disponível, o sistema utilizou somente a métrica central disponível e limitou a nota final a ${gate.finalScore.toFixed(1)}%.`
+          : `Os indicadores centrais do Ranking Geral e do GeralDash ainda não estavam disponíveis. Por segurança, a nota geral foi limitada a ${gate.finalScore.toFixed(1)}%.`
+      );
+    }
 
     recommendations.push(
       "Priorizar o ritmo da meta geral e aumentar a quantidade de participantes que atingem o mínimo individual antes de classificar a operação como saudável."
@@ -6399,30 +6409,83 @@ function buildCompleteOperationalTextReport(
   );
 
   if (
-    managerMetric
+    managerMetric &&
+    managerMetric.available !==
+      false
   ) {
     const details =
       managerMetric.details ||
       {};
 
-    lines.push(
-      `**Aprovados:** ${Number(details.approved || 0)}`,
-      `**Reprovados:** ${Number(details.rejected || 0)}`,
-      `**Pendentes:** ${Number(details.pending || 0)}`,
-      `**Taxa de aprovação:** ${Number(details.approvalRate || 0).toFixed(1)}%`
-    );
+    const approved =
+      Number(
+        details.approved ||
+        0
+      );
+
+    const rejected =
+      Number(
+        details.rejected ||
+        0
+      );
+
+    const pending =
+      Number(
+        details.pending ||
+        0
+      );
+
+    const analyzed =
+      approved +
+      rejected;
+
+    if (
+      analyzed >
+        0
+    ) {
+      const approvalRate =
+        (
+          approved /
+          analyzed
+        ) *
+        100;
+
+      lines.push(
+        `Nesta semana, o Registro Manager analisou **${analyzed} registro(s)**: **${approved} aprovado(s)** e **${rejected} reprovado(s)**.`,
+        approvalRate >=
+          90
+          ? `✅ O aproveitamento das decisões ficou em **${approvalRate.toFixed(1)}%**, indicando um resultado positivo nas análises realizadas.`
+          : approvalRate >=
+              70
+            ? `⚠️ O aproveitamento das decisões ficou em **${approvalRate.toFixed(1)}%**. O resultado é razoável, mas as reprovações ainda merecem acompanhamento.`
+            : `🚨 O aproveitamento das decisões ficou em **${approvalRate.toFixed(1)}%**. É importante revisar os principais motivos de reprovação.`
+      );
+    } else {
+      lines.push(
+        "Ainda não houve aprovações ou reprovações válidas do Registro Manager nesta semana. Por isso, nenhuma taxa de aprovação é exibida."
+      );
+    }
+
+    if (
+      pending >
+      0
+    ) {
+      lines.push(
+        `⚠️ Ainda existem **${pending} registro(s) pendente(s)** aguardando decisão.`
+      );
+    }
 
     const response =
       managerMetric.responseTime ||
       null;
 
     if (
-      response
+      response &&
+      analyzed >
+        0
     ) {
       lines.push(
-        `**Tempo médio para decidir:** ${formatDuration(response.average)}`,
-        `**Mediana:** ${formatDuration(response.median)}`,
-        `**90% decididos em até:** ${formatDuration(response.p90)}`
+        `O tempo médio para decidir está em **${formatDuration(response.average)}**; a mediana é **${formatDuration(response.median)}** e 90% das decisões ocorreram em até **${formatDuration(response.p90)}**.`
       );
     }
 
@@ -6472,6 +6535,10 @@ function buildCompleteOperationalTextReport(
         }
       );
     }
+  } else {
+    lines.push(
+      "Ainda não houve aprovações, reprovações ou pendências válidas do Registro Manager nesta semana. A taxa de aprovação permanece sem cálculo até existir pelo menos uma decisão."
+    );
   }
 
   /*
@@ -7146,7 +7213,125 @@ function buildCompleteOperationalTextReport(
 
     lines.push("");
   }
+  /*
+   * ================================================================
+   * DIVISÃO FINAL DAS ATIVIDADES
+   * ================================================================
+   */
+  const finalActivityDivision = [
+    {
+      label:
+        "Responsáveis",
 
+      group:
+        operationalRoleAnalysis
+          ?.responsaveis,
+    },
+    {
+      label:
+        "Coordenação",
+
+      group:
+        operationalRoleAnalysis
+          ?.coordenacao,
+    },
+    {
+      label:
+        "Equipe Creator",
+
+      group:
+        operationalRoleAnalysis
+          ?.equipe_creator,
+    },
+  ].map(
+    item => ({
+      ...item,
+
+      records:
+        Math.max(
+          0,
+          Number(
+            item.group?.records ||
+            0
+          )
+        ),
+    })
+  );
+
+  const finalActivityTotal =
+    finalActivityDivision.reduce(
+      (
+        total,
+        item
+      ) =>
+        total +
+        item.records,
+      0
+    );
+
+  if (
+    finalActivityTotal >
+    0
+  ) {
+    const finalActivityPercentages =
+      finalActivityDivision.map(
+        item => ({
+          ...item,
+
+          percentage:
+            (
+              item.records /
+              finalActivityTotal
+            ) *
+            100,
+        })
+      );
+
+    const strongestActivityGroup =
+      finalActivityPercentages
+        .slice()
+        .sort(
+          (
+            first,
+            second
+          ) =>
+            second.records -
+            first.records
+        )[0];
+
+    const responsaveisPercentage =
+      finalActivityPercentages.find(
+        item =>
+          item.label ===
+          "Responsáveis"
+      )?.percentage ||
+      0;
+
+    const coordenacaoPercentage =
+      finalActivityPercentages.find(
+        item =>
+          item.label ===
+          "Coordenação"
+      )?.percentage ||
+      0;
+
+    const equipeCreatorPercentage =
+      finalActivityPercentages.find(
+        item =>
+          item.label ===
+          "Equipe Creator"
+      )?.percentage ||
+      0;
+
+    lines.push(
+      "## 📊 DIVISÃO DAS ATIVIDADES DA SANTA CREATORS",
+      "",
+      `Considerando todas as atividades desta semana que puderam ser ligadas aos três grupos principais, a divisão do trabalho ficou em **${responsaveisPercentage.toFixed(1)}% para Responsáveis**, **${coordenacaoPercentage.toFixed(1)}% para Coordenação** e **${equipeCreatorPercentage.toFixed(1)}% para Equipe Creator**.`,
+      `🏆 **${strongestActivityGroup.label}** teve a maior participação no volume de atividades, com **${strongestActivityGroup.percentage.toFixed(1)}%** do trabalho identificado entre esses três grupos.`,
+      "Esse percentual representa a divisão do volume de atividades registradas, e não uma nota isolada de qualidade.",
+      ""
+    );
+  }
   /*
    * ================================================================
    * PRÓXIMA SEMANA

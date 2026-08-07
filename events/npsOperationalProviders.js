@@ -361,10 +361,18 @@ const ORGANIZATION_CONFIRMATION_FILE =
     "confirmacao_presenca_state.json"
   );
 
+/*
+ * Canal oficial de logs do confirmacaoPresenca.js.
+ *
+ * Diferente do arquivo de estado, este canal preserva o histórico
+ * mesmo depois dos resets diários do painel e dos reinícios do bot.
+ */
+const ORGANIZATION_CONFIRMATION_LOG_CHANNEL_ID =
+  "1486006866046615682";
+
 // ============================================================================
 // NOMES AMIGÁVEIS DAS FONTES
 // ============================================================================
-
 const SOURCE_LABELS = {
   manager:
     "Registro Manager",
@@ -2378,10 +2386,1180 @@ async function buildPayEvtSourceMetric(
   };
 }
 
-// ============================================================================
-// MÉTRICA: CONFIRMAÇÃO DE ORGANIZAÇÕES
-// ============================================================================
+function normalizeOrganizationPresenceKey(
+  value
+) {
+  return String(
+    value ||
+    ""
+  )
+    .replace(
+      /\*\*/g,
+      ""
+    )
+    .replace(
+      /`/g,
+      ""
+    )
+    .trim()
+    .replace(
+      /^\d+\s*\|\s*/,
+      ""
+    )
+    .normalize(
+      "NFD"
+    )
+    .replace(
+      /[\u0300-\u036f]/g,
+      ""
+    )
+    .replace(
+      /\s+/g,
+      " "
+    )
+    .toLowerCase();
+}
 
+function extractOrganizationPresenceLogField(
+  embed,
+  fieldName
+) {
+  const normalizedFieldName =
+    String(
+      fieldName ||
+      ""
+    ).toLowerCase();
+
+  const field =
+    (
+      embed?.fields ||
+      []
+    ).find(
+      item =>
+        String(
+          item?.name ||
+          ""
+        )
+          .toLowerCase()
+          .includes(
+            normalizedFieldName
+          )
+    );
+
+  return String(
+    field?.value ||
+    ""
+  ).trim();
+}
+
+function extractOrganizationPresenceLogUserId(
+  value
+) {
+  const match =
+    String(
+      value ||
+      ""
+    ).match(
+      /`(\d{15,25})`|\((\d{15,25})\)|<@!?(\d{15,25})>/
+    );
+
+  return match
+    ? (
+        match[1] ||
+        match[2] ||
+        match[3] ||
+        null
+      )
+    : null;
+}
+
+function getOrganizationPresenceLogTimestamp(
+  message,
+  embed
+) {
+  if (
+    embed?.timestamp
+  ) {
+    const timestamp =
+      new Date(
+        embed.timestamp
+      ).getTime();
+
+    if (
+      Number.isFinite(
+        timestamp
+      )
+    ) {
+      return timestamp;
+    }
+  }
+
+  return Number(
+    message?.createdTimestamp ||
+    Date.now()
+  );
+}
+
+function getOrganizationPresenceDayKeySP(
+  reference =
+    Date.now()
+) {
+  const date =
+    reference instanceof Date
+      ? reference
+      : new Date(
+          Number(
+            reference
+          )
+        );
+
+  const parts =
+    new Intl.DateTimeFormat(
+      "en-CA",
+      {
+        timeZone:
+          TZ,
+
+        year:
+          "numeric",
+
+        month:
+          "2-digit",
+
+        day:
+          "2-digit",
+      }
+    ).formatToParts(
+      date
+    );
+
+  const get =
+    type =>
+      parts.find(
+        part =>
+          part.type ===
+          type
+      )?.value;
+
+  return [
+    get("year"),
+    get("month"),
+    get("day"),
+  ].join("-");
+}
+
+function addDaysToOrganizationPresenceDayKey(
+  dayKey,
+  amount
+) {
+  const date =
+    new Date(
+      `${dayKey}T12:00:00.000Z`
+    );
+
+  date.setUTCDate(
+    date.getUTCDate() +
+    Number(
+      amount ||
+      0
+    )
+  );
+
+  return date
+    .toISOString()
+    .slice(
+      0,
+      10
+    );
+}
+
+function parseOrganizationPresenceLogMessage(
+  message
+) {
+  const embed =
+    message?.embeds?.[0] ||
+    null;
+
+  if (
+    !embed
+  ) {
+    return null;
+  }
+
+  const title =
+    String(
+      embed.title ||
+      ""
+    );
+
+  const actionMatch =
+    title.match(
+      /Log de Presença:\s*(CONFIRMOU|NEGOU|RESET GERAL|RESET UNITÁRIO)/i
+    );
+
+  if (
+    !actionMatch
+  ) {
+    return null;
+  }
+
+  const action =
+    String(
+      actionMatch[1] ||
+      ""
+    )
+      .trim()
+      .toUpperCase();
+
+  const organization =
+    extractOrganizationPresenceLogField(
+      embed,
+      "Organização"
+    )
+      .replace(
+        /\*\*/g,
+        ""
+      )
+      .replace(
+        /`/g,
+        ""
+      )
+      .trim();
+
+  const author =
+    extractOrganizationPresenceLogField(
+      embed,
+      "Autor"
+    );
+
+  const userId =
+    extractOrganizationPresenceLogUserId(
+      author
+    );
+
+  const timestamp =
+    getOrganizationPresenceLogTimestamp(
+      message,
+      embed
+    );
+
+  return {
+    action,
+    organization,
+    organizationKey:
+      normalizeOrganizationPresenceKey(
+        organization
+      ),
+    userId,
+    timestamp,
+    dayKey:
+      getOrganizationPresenceDayKeySP(
+        timestamp
+      ),
+  };
+}
+
+async function collectOrganizationPresenceLogs(
+  client,
+  dayKeys = []
+) {
+  const wantedDayKeys =
+    new Set(
+      dayKeys
+        .map(
+          value =>
+            String(
+              value ||
+              ""
+            ).trim()
+        )
+        .filter(Boolean)
+    );
+
+  const byDay =
+    {};
+
+  for (
+    const dayKey of
+    wantedDayKeys
+  ) {
+    byDay[
+      dayKey
+    ] = {
+      statuses:
+        new Map(),
+
+      parsedLogs:
+        0,
+    };
+  }
+
+  if (
+    !client ||
+    wantedDayKeys.size ===
+      0
+  ) {
+    return {
+      available:
+        false,
+      byDay,
+    };
+  }
+
+  const channel =
+    await client.channels.fetch(
+      ORGANIZATION_CONFIRMATION_LOG_CHANNEL_ID
+    ).catch(
+      () =>
+        null
+    );
+
+  if (
+    !channel ||
+    !channel.isTextBased?.()
+  ) {
+    return {
+      available:
+        false,
+      byDay,
+    };
+  }
+
+  const orderedLogs =
+    [];
+
+  const oldestWantedDayKey =
+    [
+      ...wantedDayKeys,
+    ].sort()[0];
+
+  let before;
+  let pages =
+    0;
+  let reachedOlderDay =
+    false;
+
+  while (
+    pages <
+      80 &&
+    !reachedOlderDay
+  ) {
+    pages++;
+
+    const messages =
+      await channel.messages.fetch({
+        limit:
+          100,
+
+        ...(before
+          ? {
+              before,
+            }
+          : {}),
+      }).catch(
+        () =>
+          null
+      );
+
+    if (
+      !messages ||
+      messages.size ===
+        0
+    ) {
+      break;
+    }
+
+    for (
+      const message of
+      messages.values()
+    ) {
+      const parsed =
+        parseOrganizationPresenceLogMessage(
+          message
+        );
+
+      if (
+        !parsed
+      ) {
+        continue;
+      }
+
+      if (
+        parsed.dayKey <
+        oldestWantedDayKey
+      ) {
+        reachedOlderDay =
+          true;
+        continue;
+      }
+
+      if (
+        wantedDayKeys.has(
+          parsed.dayKey
+        )
+      ) {
+        orderedLogs.push(
+          parsed
+        );
+      }
+    }
+
+    before =
+      messages.last()?.id;
+
+    if (
+      !before
+    ) {
+      break;
+    }
+  }
+
+  orderedLogs.sort(
+    (
+      first,
+      second
+    ) =>
+      first.timestamp -
+      second.timestamp
+  );
+
+  for (
+    const log of
+    orderedLogs
+  ) {
+    const day =
+      byDay[
+        log.dayKey
+      ];
+
+    if (
+      !day
+    ) {
+      continue;
+    }
+
+    day.parsedLogs++;
+
+    if (
+      log.action ===
+      "RESET GERAL"
+    ) {
+      day.statuses.clear();
+      continue;
+    }
+
+    if (
+      !log.organizationKey
+    ) {
+      continue;
+    }
+
+    if (
+      log.action ===
+      "RESET UNITÁRIO"
+    ) {
+      day.statuses.delete(
+        log.organizationKey
+      );
+      continue;
+    }
+
+    if (
+      log.action ===
+      "CONFIRMOU" ||
+      log.action ===
+      "NEGOU"
+    ) {
+      day.statuses.set(
+        log.organizationKey,
+        {
+          organization:
+            log.organization,
+
+          status:
+            log.action ===
+            "CONFIRMOU"
+              ? "YES"
+              : "NO",
+
+          by:
+            log.userId,
+
+          time:
+            log.timestamp,
+        }
+      );
+    }
+  }
+
+  return {
+    available:
+      true,
+
+    byDay,
+  };
+}
+
+async function buildOrganizationConfirmationMetric(
+  context = {}
+) {
+  const state =
+    readJson(
+      ORGANIZATION_CONFIRMATION_FILE,
+      {
+        statuses:
+          {},
+
+        lastWeekKey:
+          null,
+
+        lastResetDate:
+          null,
+      }
+    );
+
+  const statuses =
+    state?.statuses &&
+    typeof state.statuses ===
+      "object"
+      ? state.statuses
+      : {};
+
+  const organizations =
+    Object.entries(
+      statuses
+    );
+
+  const currentWeekKey =
+    context.currentWeek?.key ||
+    getWeekKeySP();
+
+  const previousWeekKey =
+    context.previousWeek?.key ||
+    addDaysToWeekKey(
+      currentWeekKey,
+      -7
+    );
+
+  const todayKey =
+    getOrganizationPresenceDayKeySP();
+
+  const currentDayKey =
+    state.lastResetDate &&
+    String(
+      state.lastResetDate
+    ) >=
+      currentWeekKey
+      ? String(
+          state.lastResetDate
+        )
+      : todayKey;
+
+  const previousDayKey =
+    addDaysToOrganizationPresenceDayKey(
+      currentDayKey,
+      -7
+    );
+
+  const logHistory =
+    await collectOrganizationPresenceLogs(
+      context.client,
+      [
+        currentDayKey,
+        previousDayKey,
+      ]
+    );
+
+  const currentLogDay =
+    logHistory.byDay?.[
+      currentDayKey
+    ] || {
+      statuses:
+        new Map(),
+      parsedLogs:
+        0,
+    };
+
+  const previousLogDay =
+    logHistory.byDay?.[
+      previousDayKey
+    ] || {
+      statuses:
+        new Map(),
+      parsedLogs:
+        0,
+    };
+
+  const currentOrganizationKeys =
+    new Set(
+      organizations
+        .map(
+          (
+            [
+              organization,
+            ]
+          ) =>
+            normalizeOrganizationPresenceKey(
+              organization
+            )
+        )
+        .filter(Boolean)
+    );
+
+  const effectiveStatuses =
+    new Map();
+
+  for (
+    const [
+      organizationKey,
+      information,
+    ] of currentLogDay.statuses
+      .entries()
+  ) {
+    if (
+      currentOrganizationKeys.size >
+        0 &&
+      !currentOrganizationKeys.has(
+        organizationKey
+      )
+    ) {
+      continue;
+    }
+
+    effectiveStatuses.set(
+      organizationKey,
+      {
+        ...information,
+      }
+    );
+  }
+
+  for (
+    const [
+      organization,
+      information,
+    ] of
+    organizations
+  ) {
+    const organizationKey =
+      normalizeOrganizationPresenceKey(
+        organization
+      );
+
+    if (
+      !organizationKey ||
+      ![
+        "YES",
+        "NO",
+      ].includes(
+        information?.status
+      )
+    ) {
+      continue;
+    }
+
+    effectiveStatuses.set(
+      organizationKey,
+      {
+        organization,
+        status:
+          information.status,
+        by:
+          information.by ||
+          null,
+        time:
+          information.time ||
+          null,
+      }
+    );
+  }
+
+  const effectiveRecords =
+    [
+      ...effectiveStatuses.values(),
+    ];
+
+  const confirmed =
+    effectiveRecords.filter(
+      information =>
+        information?.status ===
+        "YES"
+    );
+
+  const absent =
+    effectiveRecords.filter(
+      information =>
+        information?.status ===
+        "NO"
+    );
+
+  const effectiveConfirmed =
+    confirmed.length;
+
+  const effectiveAbsent =
+    absent.length;
+
+  const totalOrganizations =
+    organizations.length >
+      0
+      ? organizations.length
+      : effectiveStatuses.size;
+
+  const answered =
+    Math.min(
+      totalOrganizations,
+      effectiveConfirmed +
+      effectiveAbsent
+    );
+
+  const effectivePending =
+    Math.max(
+      0,
+      totalOrganizations -
+      answered
+    );
+
+  const responseRate =
+    totalOrganizations > 0
+      ? (
+          answered /
+          totalOrganizations
+        ) *
+        100
+      : 0;
+
+  const attendanceRate =
+    answered > 0
+      ? (
+          effectiveConfirmed /
+          answered
+        ) *
+        100
+      : 0;
+
+  const previousRecords =
+    [
+      ...previousLogDay.statuses
+        .values(),
+    ];
+
+  const previousConfirmed =
+    previousLogDay.parsedLogs >
+      0
+      ? previousRecords.filter(
+          information =>
+            information?.status ===
+            "YES"
+        ).length
+      : null;
+
+  const difference =
+    previousConfirmed !==
+      null
+      ? effectiveConfirmed -
+        previousConfirmed
+      : null;
+
+  const currentWeekday =
+    new Intl.DateTimeFormat(
+      "en-US",
+      {
+        timeZone:
+          TZ,
+
+        weekday:
+          "short",
+      }
+    ).format(
+      new Date()
+    );
+
+  const confirmationWindowOpen =
+    [
+      "Thu",
+      "Fri",
+      "Sat",
+    ].includes(
+      currentWeekday
+    );
+
+  const confirmationWindowDay =
+    currentWeekday ===
+      "Thu"
+      ? "quinta-feira"
+      : currentWeekday ===
+          "Fri"
+        ? "sexta-feira"
+        : currentWeekday ===
+            "Sat"
+          ? "sábado"
+          : null;
+
+  const score =
+    responseRate *
+      0.65 +
+    attendanceRate *
+      0.35;
+
+  const byUser =
+    {};
+
+  for (
+    const information of
+    effectiveRecords
+  ) {
+    const userId =
+      String(
+        information?.by ||
+        ""
+      ).trim();
+
+    if (
+      !userId
+    ) {
+      continue;
+    }
+
+    byUser[
+      userId
+    ] ||= {
+      total:
+        0,
+
+      confirmed:
+        0,
+
+      absent:
+        0,
+
+      sources: {
+        presencas:
+          0,
+      },
+    };
+
+    byUser[
+      userId
+    ].total++;
+
+    byUser[
+      userId
+    ].sources.presencas++;
+
+    if (
+      information.status ===
+      "YES"
+    ) {
+      byUser[
+        userId
+      ].confirmed++;
+    }
+
+    if (
+      information.status ===
+      "NO"
+    ) {
+      byUser[
+        userId
+      ].absent++;
+    }
+  }
+
+  const responsibleUsers =
+    Object.keys(
+      byUser
+    );
+
+  const positivePoints =
+    [];
+
+  const attentionPoints =
+    [];
+
+  const recommendations =
+    [];
+
+  if (
+    effectiveConfirmed > 0
+  ) {
+    positivePoints.push(
+      `Presença das ORGs: ${effectiveConfirmed} de ${totalOrganizations} organizações confirmaram participação na janela atual.`
+    );
+  }
+
+  if (
+    responseRate >=
+      80
+  ) {
+    positivePoints.push(
+      `A confirmação das ORGs está em bom nível: ${responseRate.toFixed(1)}% das organizações já se posicionaram.`
+    );
+  }
+
+  if (
+    difference !==
+      null &&
+    difference >
+      0
+  ) {
+    positivePoints.push(
+      `Na mesma janela da semana passada havia ${previousConfirmed} confirmação(ões). A janela atual possui ${effectiveConfirmed}, uma diferença positiva de ${difference}.`
+    );
+  }
+
+  if (
+    difference !==
+      null &&
+    difference <
+      0
+  ) {
+    attentionPoints.push(
+      `Na mesma janela da semana passada havia ${previousConfirmed} confirmação(ões). A janela atual possui ${effectiveConfirmed}, uma diferença de ${Math.abs(difference)} a menos.`
+    );
+  }
+
+  if (
+    difference ===
+      0 &&
+    previousConfirmed !==
+      null
+  ) {
+    positivePoints.push(
+      `A janela atual possui as mesmas ${effectiveConfirmed} confirmação(ões) registradas na mesma janela da semana passada.`
+    );
+  }
+
+  if (
+    effectivePending >
+      0 &&
+    confirmationWindowOpen
+  ) {
+    attentionPoints.push(
+      `A janela de confirmação acontece de quinta-feira até sábado. Hoje é ${confirmationWindowDay} e ainda existem ${effectivePending} ORG(s) sem resposta. A janela ainda não terminou, mas essas organizações precisam ser acompanhadas até o fechamento.`
+    );
+  }
+
+  if (
+    effectivePending >
+      0 &&
+    !confirmationWindowOpen
+  ) {
+    attentionPoints.push(
+      `A última janela de confirmação terminou com ${effectivePending} ORG(s) sem resposta registrada.`
+    );
+  }
+
+  if (
+    effectiveAbsent > 0
+  ) {
+    attentionPoints.push(
+      `${effectiveAbsent} ORG(s) informaram ausência na janela atual.`
+    );
+  }
+
+  if (
+    responseRate <
+      60 &&
+    totalOrganizations >
+      0 &&
+    confirmationWindowOpen
+  ) {
+    attentionPoints.push(
+      `A confirmação ainda está baixa para o momento da janela: apenas ${responseRate.toFixed(1)}% das ORGs já responderam.`
+    );
+  }
+
+  if (
+    effectivePending >
+    0
+  ) {
+    recommendations.push(
+      confirmationWindowOpen
+        ? `Acompanhar as ${effectivePending} ORG(s) que ainda não responderam e reforçar a confirmação antes do encerramento de sábado.`
+        : `Revisar por que ${effectivePending} ORG(s) encerraram a última janela sem responder.`
+    );
+  } else {
+    recommendations.push(
+      "Todas as ORGs cadastradas já possuem uma resposta registrada nesta janela."
+    );
+  }
+
+  if (
+    effectiveAbsent > 0
+  ) {
+    recommendations.push(
+      "Acompanhar as ausências informadas para verificar se existe algum padrão recorrente."
+    );
+  }
+
+  const confirmedOrganizationNames =
+    confirmed.map(
+      information =>
+        information.organization
+    );
+
+  const absentOrganizationNames =
+    absent.map(
+      information =>
+        information.organization
+    );
+
+  const answeredKeys =
+    new Set(
+      effectiveStatuses.keys()
+    );
+
+  const pendingOrganizations =
+    organizations
+      .filter(
+        (
+          [
+            organization,
+          ]
+        ) =>
+          !answeredKeys.has(
+            normalizeOrganizationPresenceKey(
+              organization
+            )
+          )
+      )
+      .map(
+        (
+          [
+            organization,
+          ]
+        ) =>
+          organization
+      );
+
+  return {
+    id:
+      "presencas",
+
+    label:
+      "Presença das ORGs nos Eventos",
+
+    available:
+      answered >
+      0,
+
+    officialSource:
+      true,
+
+    sourceType:
+      "discord_log_archive_and_current_state",
+
+    sourceChannelId:
+      ORGANIZATION_CONFIRMATION_LOG_CHANNEL_ID,
+
+    score:
+      clamp(
+        score
+      ),
+
+    confidence:
+      clamp(
+        50 +
+        answered *
+        3
+      ),
+
+    volume:
+      answered,
+
+    goal:
+      totalOrganizations,
+
+    current:
+      effectiveConfirmed,
+
+    previous:
+      previousConfirmed,
+
+    difference,
+
+    positivePoints,
+    attentionPoints,
+    recommendations,
+
+    details: {
+      weekKey:
+        currentWeekKey,
+
+      previousWeekKey,
+
+      currentDayKey,
+
+      previousDayKey,
+
+      lastResetDate:
+        state.lastResetDate ||
+        null,
+
+      totalOrganizations,
+      answered,
+
+      approved:
+        effectiveConfirmed,
+
+      confirmed:
+        effectiveConfirmed,
+
+      rejected:
+        effectiveAbsent,
+
+      absent:
+        effectiveAbsent,
+
+      pending:
+        effectivePending,
+
+      responseRate,
+      attendanceRate,
+
+      previousConfirmed,
+      difference,
+
+      confirmationWindowOpen,
+      confirmationWindowDay,
+
+      source:
+        logHistory.available
+          ? "logs_oficiais_e_estado_atual"
+          : "estado_atual",
+
+      historicalLogsAvailable:
+        logHistory.available,
+
+      currentParsedLogs:
+        Number(
+          currentLogDay.parsedLogs ||
+          0
+        ),
+
+      previousParsedLogs:
+        Number(
+          previousLogDay.parsedLogs ||
+          0
+        ),
+
+      participants:
+        responsibleUsers.length,
+
+      responsibleUsers,
+
+      confirmedOrganizations:
+        confirmedOrganizationNames,
+
+      absentOrganizations:
+        absentOrganizationNames,
+
+      pendingOrganizations,
+
+      byUser,
+    },
+  };
+}
 function buildOrganizationConfirmationMetric() {
   const state =
     readJson(
@@ -4576,8 +5754,10 @@ registerOperationalMetricProvider(
 
 registerOperationalMetricProvider(
   "presencas",
-  async () =>
-    buildOrganizationConfirmationMetric()
+  async context =>
+    buildOrganizationConfirmationMetric(
+      context
+    )
 );
 
 registerOperationalMetricProvider(
