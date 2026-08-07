@@ -2955,40 +2955,49 @@ async function buildOrganizationConfirmationMetric(
         )
       : todayKey;
 
-  const previousDayKey =
-    addDaysToOrganizationPresenceDayKey(
-      currentDayKey,
-      -7
+  /*
+   * A confirmação das ORGs acontece em janelas que podem ser
+   * resetadas entre quinta, sexta e sábado.
+   *
+   * Por isso, o NPS não pode analisar somente o último dia.
+   * Ele reconstrói todos os dias oficiais já alcançados nesta semana.
+   */
+  const currentPresenceDayKeys =
+    [
+      4,
+      5,
+      6,
+    ]
+      .map(
+        offset =>
+          addDaysToOrganizationPresenceDayKey(
+            currentWeekKey,
+            offset
+          )
+      )
+      .filter(
+        dayKey =>
+          dayKey <=
+          currentDayKey
+      );
+
+  const previousPresenceDayKeys =
+    currentPresenceDayKeys.map(
+      dayKey =>
+        addDaysToOrganizationPresenceDayKey(
+          dayKey,
+          -7
+        )
     );
 
   const logHistory =
     await collectOrganizationPresenceLogs(
       context.client,
       [
-        currentDayKey,
-        previousDayKey,
+        ...currentPresenceDayKeys,
+        ...previousPresenceDayKeys,
       ]
     );
-
-  const currentLogDay =
-    logHistory.byDay?.[
-      currentDayKey
-    ] || {
-      statuses:
-        new Map(),
-      parsedLogs:
-        0,
-    };
-
-  const previousLogDay =
-    logHistory.byDay?.[
-      previousDayKey
-    ] || {
-      statuses:
-        new Map(),
-      parsedLogs:
-        0,
-    };
 
   const currentOrganizationKeys =
     new Set(
@@ -3006,34 +3015,69 @@ async function buildOrganizationConfirmationMetric(
         .filter(Boolean)
     );
 
+  /*
+   * Guarda o último posicionamento conhecido de cada ORG
+   * dentro da semana atual.
+   *
+   * Se uma ORG respondeu em uma janela anterior e o painel
+   * foi resetado depois, a resposta histórica continua existindo
+   * para a análise semanal.
+   */
   const effectiveStatuses =
     new Map();
 
-  for (
-    const [
-      organizationKey,
-      information,
-    ] of currentLogDay.statuses
-      .entries()
-  ) {
-    if (
-      currentOrganizationKeys.size >
-        0 &&
-      !currentOrganizationKeys.has(
-        organizationKey
-      )
-    ) {
-      continue;
-    }
+  let currentParsedLogs =
+    0;
 
-    effectiveStatuses.set(
-      organizationKey,
-      {
-        ...information,
+  for (
+    const dayKey of
+    currentPresenceDayKeys
+  ) {
+    const day =
+      logHistory.byDay?.[
+        dayKey
+      ] || {
+        statuses:
+          new Map(),
+        parsedLogs:
+          0,
+      };
+
+    currentParsedLogs +=
+      Number(
+        day.parsedLogs ||
+        0
+      );
+
+    for (
+      const [
+        organizationKey,
+        information,
+      ] of day.statuses.entries()
+    ) {
+      if (
+        currentOrganizationKeys.size >
+          0 &&
+        !currentOrganizationKeys.has(
+          organizationKey
+        )
+      ) {
+        continue;
       }
-    );
+
+      effectiveStatuses.set(
+        organizationKey,
+        {
+          ...information,
+        }
+      );
+    }
   }
 
+  /*
+   * O arquivo de estado representa a janela mais recente.
+   * Ele tem prioridade sobre o histórico para a mesma ORG.
+   */
   for (
     const [
       organization,
@@ -3072,6 +3116,51 @@ async function buildOrganizationConfirmationMetric(
           null,
       }
     );
+  }
+
+  /*
+   * Reconstrói também a mesma quantidade de dias da semana anterior.
+   * A comparação deixa de misturar totais semanais com apenas um dia.
+   */
+  const previousStatuses =
+    new Map();
+
+  let previousParsedLogs =
+    0;
+
+  for (
+    const dayKey of
+    previousPresenceDayKeys
+  ) {
+    const day =
+      logHistory.byDay?.[
+        dayKey
+      ] || {
+        statuses:
+          new Map(),
+        parsedLogs:
+          0,
+      };
+
+    previousParsedLogs +=
+      Number(
+        day.parsedLogs ||
+        0
+      );
+
+    for (
+      const [
+        organizationKey,
+        information,
+      ] of day.statuses.entries()
+    ) {
+      previousStatuses.set(
+        organizationKey,
+        {
+          ...information,
+        }
+      );
+    }
   }
 
   const effectiveRecords =
@@ -3139,12 +3228,11 @@ async function buildOrganizationConfirmationMetric(
 
   const previousRecords =
     [
-      ...previousLogDay.statuses
-        .values(),
+      ...previousStatuses.values(),
     ];
 
   const previousConfirmed =
-    previousLogDay.parsedLogs >
+    previousParsedLogs >
       0
       ? previousRecords.filter(
           information =>
@@ -3490,7 +3578,9 @@ async function buildOrganizationConfirmationMetric(
 
       currentDayKey,
 
-      previousDayKey,
+      currentPresenceDayKeys,
+
+      previousPresenceDayKeys,
 
       lastResetDate:
         state.lastResetDate ||
@@ -3531,17 +3621,9 @@ async function buildOrganizationConfirmationMetric(
       historicalLogsAvailable:
         logHistory.available,
 
-      currentParsedLogs:
-        Number(
-          currentLogDay.parsedLogs ||
-          0
-        ),
+      currentParsedLogs,
 
-      previousParsedLogs:
-        Number(
-          previousLogDay.parsedLogs ||
-          0
-        ),
+      previousParsedLogs,
 
       participants:
         responsibleUsers.length,

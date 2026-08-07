@@ -40,6 +40,10 @@ const CONFIRM_ROLES = [
   "1388976155830255697", // Manager Creators
   "1392678638176043029", // Equipe Manager
   "1388976314253312100", // Coord. Creators
+
+  "1352407252216184833", // Resp. Líder
+  "1262262852949905409", // Resp. Influ
+  "1352408327983861844", // Resp. Creator
 ];
 
 // Permissões: Admin (Resetar, Gerenciar)

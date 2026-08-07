@@ -6243,6 +6243,270 @@ function buildCompleteOperationalTextReport(
       "log_checklist"
     );
 
+  /*
+   * ================================================================
+   * LEITURA HUMANA DAS ATIVIDADES POR EQUIPE
+   * ================================================================
+   *
+   * A separação já foi calculada pelo operationalRoleAnalysis.
+   * Este helper apenas transforma os números existentes em feedback.
+   */
+  const reportRoleGroups = [
+    {
+      key:
+        "responsaveis",
+
+      label:
+        "Responsáveis",
+
+      group:
+        operationalRoleAnalysis
+          ?.responsaveis,
+    },
+    {
+      key:
+        "coordenacao",
+
+      label:
+        "Coordenação",
+
+      group:
+        operationalRoleAnalysis
+          ?.coordenacao,
+    },
+    {
+      key:
+        "equipe_creator",
+
+      label:
+        "Equipe Creator",
+
+      group:
+        operationalRoleAnalysis
+          ?.equipe_creator,
+    },
+  ].filter(
+    item =>
+      item.group
+  );
+
+  const getMetricSourceNames =
+    metric => {
+      const metricId =
+        normalizeOperationalSourceName(
+          metric?.id ||
+          metric?.providerId ||
+          ""
+        );
+
+      const sourceNames =
+        new Set(
+          [
+            metric?.source,
+            metric?.details?.source,
+            metric?.id,
+            metric?.providerId,
+          ]
+            .map(
+              value =>
+                normalizeOperationalSourceName(
+                  value
+                )
+            )
+            .filter(Boolean)
+        );
+
+      const aliases = {
+        hall_da_fama: [
+          "halldafama",
+          "hall",
+        ],
+
+        eventos_diarios: [
+          "eventosdiarios",
+          "diarios",
+        ],
+
+        registro_poderes: [
+          "poderes",
+          "registrodepoderes",
+        ],
+
+        cronograma: [
+          "cronograma",
+        ],
+
+        alinhamentos: [
+          "alinhamentos",
+        ],
+
+        presencas: [
+          "presencas",
+          "presenca",
+          "confirmacoes",
+        ],
+
+        pagamentos: [
+          "pagamentos",
+        ],
+
+        set_staff: [
+          "setstaff",
+          "set_staff",
+        ],
+      };
+
+      for (
+        const alias of
+        aliases[
+          metricId
+        ] ||
+        []
+      ) {
+        sourceNames.add(
+          normalizeOperationalSourceName(
+            alias
+          )
+        );
+      }
+
+      return sourceNames;
+    };
+
+  const getActivityRoleBreakdown =
+    metric => {
+      const sourceNames =
+        getMetricSourceNames(
+          metric
+        );
+
+      const groups =
+        reportRoleGroups.map(
+          item => {
+            const amount =
+              Object.entries(
+                item.group?.sources ||
+                {}
+              ).reduce(
+                (
+                  total,
+                  [
+                    sourceName,
+                    sourceAmount,
+                  ]
+                ) =>
+                  sourceNames.has(
+                    normalizeOperationalSourceName(
+                      sourceName
+                    )
+                  )
+                    ? total +
+                      Math.max(
+                        0,
+                        Number(
+                          sourceAmount ||
+                          0
+                        )
+                      )
+                    : total,
+                0
+              );
+
+            return {
+              ...item,
+              amount,
+            };
+          }
+        );
+
+      const classifiedTotal =
+        groups.reduce(
+          (
+            total,
+            item
+          ) =>
+            total +
+            item.amount,
+          0
+        );
+
+      const users =
+        reportRoleGroups
+          .flatMap(
+            item =>
+              Object.values(
+                item.group?.users ||
+                {}
+              ).map(
+                user => {
+                  const amount =
+                    Object.entries(
+                      user?.sources ||
+                      {}
+                    ).reduce(
+                      (
+                        total,
+                        [
+                          sourceName,
+                          sourceAmount,
+                        ]
+                      ) =>
+                        sourceNames.has(
+                          normalizeOperationalSourceName(
+                            sourceName
+                          )
+                        )
+                          ? total +
+                            Math.max(
+                              0,
+                              Number(
+                                sourceAmount ||
+                                0
+                              )
+                            )
+                          : total,
+                      0
+                    );
+
+                  return {
+                    userId:
+                      user?.userId ||
+                      null,
+
+                    displayName:
+                      user?.displayName ||
+                      user?.userId ||
+                      "Participante",
+
+                    groupLabel:
+                      item.label,
+
+                    amount,
+                  };
+                }
+              )
+          )
+          .filter(
+            user =>
+              user.amount >
+              0
+          )
+          .sort(
+            (
+              first,
+              second
+            ) =>
+              second.amount -
+              first.amount
+          );
+
+      return {
+        groups,
+        classifiedTotal,
+        users,
+      };
+    };
+
   const lines = [];
 
   lines.push(
@@ -6353,47 +6617,203 @@ function buildCompleteOperationalTextReport(
   );
 
   if (
-    presencasMetric
+    presencasMetric &&
+    presencasMetric.available !==
+      false &&
+    Number(
+      presencasMetric.details
+        ?.answered ||
+      0
+    ) >
+      0
   ) {
     const details =
       presencasMetric.details ||
       {};
 
+    const totalOrganizations =
+      Number(
+        details.totalOrganizations ||
+        0
+      );
+
+    const answered =
+      Number(
+        details.answered ||
+        0
+      );
+
+    const confirmed =
+      Number(
+        details.confirmed ||
+        0
+      );
+
+    const absent =
+      Number(
+        details.absent ||
+        0
+      );
+
+    const pending =
+      Math.max(
+        0,
+        Number(
+          details.pending ||
+          0
+        )
+      );
+
+    const responseRate =
+      Number(
+        details.responseRate ||
+        0
+      );
+
+    const attendanceRate =
+      Number(
+        details.attendanceRate ||
+        0
+      );
+
     lines.push(
-      `**ORGs cadastradas:** ${Number(details.totalOrganizations || 0)}`,
-      `**Responderam:** ${Number(details.answered || 0)}`,
-      `**Confirmaram presença:** ${Number(details.confirmed || 0)}`,
-      `**Informaram ausência:** ${Number(details.absent || 0)}`,
-      `**Ainda não responderam:** ${Number(details.pending || 0)}`,
-      `**Taxa de resposta:** ${Number(details.responseRate || 0).toFixed(1)}%`,
-      `**Presença entre quem respondeu:** ${Number(details.attendanceRate || 0).toFixed(1)}%`
+      `Nesta semana, **${answered} de ${totalOrganizations} ORG(s)** já registraram um posicionamento nos eventos. Foram **${confirmed} confirmação(ões) de presença** e **${absent} ausência(s) informada(s)**.`
     );
 
     if (
-      Number(
-        details.pending ||
-        0
-      ) >
+      pending >
       0
     ) {
-      if (
+      lines.push(
         details.confirmationWindowOpen ===
-        true
+          true
+          ? `Ainda existem **${pending} ORG(s) sem resposta**. A janela de confirmação permanece aberta até sábado.`
+          : `A janela terminou com **${pending} ORG(s) sem resposta registrada**.`
+      );
+    } else {
+      lines.push(
+        "Todas as ORGs cadastradas já possuem um posicionamento registrado nesta análise."
+      );
+    }
+
+    lines.push(
+      `A participação das ORGs corresponde a **${responseRate.toFixed(1)}%** do cadastro. Entre as organizações que responderam, **${attendanceRate.toFixed(1)}% confirmaram presença**.`
+    );
+
+    if (
+      details.previousConfirmed !=
+      null
+    ) {
+      const difference =
+        Number(
+          details.difference ||
+          0
+        );
+
+      lines.push(
+        difference >
+          0
+          ? `Em comparação com a mesma parte da semana passada, existem **${difference} confirmação(ões) a mais**.`
+          : difference <
+              0
+            ? `Em comparação com a mesma parte da semana passada, existem **${Math.abs(difference)} confirmação(ões) a menos**.`
+            : "O número de confirmações está igual ao registrado na mesma parte da semana passada."
+      );
+    }
+
+    const presenceRoleBreakdown =
+      getActivityRoleBreakdown(
+        presencasMetric
+      );
+
+    if (
+      presenceRoleBreakdown
+        .classifiedTotal >
+      0
+    ) {
+      lines.push(
+        "",
+        "**Quem está realizando as confirmações:**"
+      );
+
+      for (
+        const group of
+        presenceRoleBreakdown.groups
+      ) {
+        if (
+          group.amount <=
+          0
+        ) {
+          continue;
+        }
+
+        const percentage =
+          (
+            group.amount /
+            presenceRoleBreakdown
+              .classifiedTotal
+          ) *
+          100;
+
+        lines.push(
+          `• **${group.label}:** ${group.amount} registro(s), representando ${percentage.toFixed(1)}% das confirmações/ausências que puderam ser ligadas aos cargos.`
+        );
+      }
+
+      const strongestGroup =
+        presenceRoleBreakdown
+          .groups
+          .slice()
+          .sort(
+            (
+              first,
+              second
+            ) =>
+              second.amount -
+              first.amount
+          )[0];
+
+      if (
+        strongestGroup &&
+        strongestGroup.amount >
+        0
       ) {
         lines.push(
-          "",
-          `⚠️ A janela de confirmação vai de quinta-feira até sábado. Ainda existem ${Number(details.pending || 0)} ORG(s) sem resposta, mas o período de confirmação ainda está em andamento.`
-        );
-      } else {
-        lines.push(
-          "",
-          `🚨 A janela de confirmação terminou com ${Number(details.pending || 0)} ORG(s) sem resposta registrada.`
+          `🏆 **${strongestGroup.label}** foi o grupo que mais atuou nas confirmações de ORGs nesta semana.`
         );
       }
     }
+
+    if (
+      presenceRoleBreakdown
+        .users.length >
+      0
+    ) {
+      lines.push(
+        "",
+        "**Principais participantes nesta atividade:**"
+      );
+
+      presenceRoleBreakdown
+        .users
+        .slice(
+          0,
+          5
+        )
+        .forEach(
+          (
+            user,
+            index
+          ) => {
+            lines.push(
+              `${index + 1}. <@${user.userId}> — ${user.amount} registro(s) • ${user.groupLabel}`
+            );
+          }
+        );
+    }
   } else {
     lines.push(
-      "Ainda não existem dados de confirmação das ORGs."
+      "Ainda não existe confirmação ou ausência de ORG comprovada para esta semana. O relatório não calcula taxa de resposta enquanto nenhuma resposta real for localizada."
     );
   }
 
@@ -6619,11 +7039,8 @@ function buildCompleteOperationalTextReport(
    * APROVAÇÕES POR SISTEMA
    * ================================================================
    */
-  lines.push(
-    "",
-    "## ⚡ EFICIÊNCIA DAS APROVAÇÕES",
-    ""
-  );
+  let approvalSectionStarted =
+    false;
 
   const approvalWeek =
     results?.state
@@ -6761,10 +7178,23 @@ function buildCompleteOperationalTextReport(
           previousDurations.length
         : null;
 
+    if (
+      !approvalSectionStarted
+    ) {
+      lines.push(
+        "",
+        "## ⚡ EFICIÊNCIA DAS APROVAÇÕES",
+        ""
+      );
+
+      approvalSectionStarted =
+        true;
+    }
+
     lines.push(
       "",
       `**${system.label}**`,
-      `Decisões nesta semana: ${decisions.length}`
+      `Nesta semana foram concluídas **${decisions.length} decisão(ões)** neste processo.`
     );
 
     if (
@@ -7080,7 +7510,7 @@ function buildCompleteOperationalTextReport(
 
   /*
    * ================================================================
-   * DEMAIS FONTES
+   * ANÁLISE DAS DEMAIS ATIVIDADES
    * ================================================================
    */
   const otherSources = [
@@ -7096,21 +7526,184 @@ function buildCompleteOperationalTextReport(
     findMetric(
       "set_staff"
     ),
-  ].filter(Boolean);
+  ].filter(
+    metric =>
+      metric &&
+      metric.available !==
+        false
+  );
 
   lines.push(
     "",
-    "## 📚 DEMAIS ÁREAS",
+    "## 📚 ANÁLISE POR ATIVIDADE",
     ""
   );
+
+  if (
+    !otherSources.length
+  ) {
+    lines.push(
+      "Nenhuma das demais atividades possui registros confiáveis nesta semana."
+    );
+  }
 
   for (
     const metric of
     otherSources
   ) {
+    const currentAmount =
+      Math.max(
+        0,
+        Number(
+          metric.current ??
+          metric.volume ??
+          0
+        )
+      );
+
+    const previousAmount =
+      Number.isFinite(
+        Number(
+          metric.previous
+        )
+      )
+        ? Math.max(
+            0,
+            Number(
+              metric.previous
+            )
+          )
+        : null;
+
+    const activityBreakdown =
+      getActivityRoleBreakdown(
+        metric
+      );
+
     lines.push(
-      `**${metric.label}** — ${Number(metric.score || 0).toFixed(1)}%`
+      "",
+      `### ${metric.label}`
     );
+
+    if (
+      currentAmount >
+      0
+    ) {
+      lines.push(
+        `Nesta semana foram comprovados **${currentAmount} registro(s)** desta atividade.`
+      );
+    } else {
+      lines.push(
+        "A atividade está disponível para análise, mas ainda não possui registro concluído nesta semana."
+      );
+    }
+
+    if (
+      previousAmount !=
+      null
+    ) {
+      const difference =
+        currentAmount -
+        previousAmount;
+
+      lines.push(
+        difference >
+          0
+          ? `📈 O volume está **${difference} registro(s) acima** da semana passada, que teve ${previousAmount}.`
+          : difference <
+              0
+            ? `📉 O volume está **${Math.abs(difference)} registro(s) abaixo** da semana passada, que teve ${previousAmount}.`
+            : `➖ O volume está igual ao da semana passada, com ${currentAmount} registro(s).`
+      );
+    }
+
+    if (
+      activityBreakdown
+        .classifiedTotal >
+      0
+    ) {
+      lines.push(
+        "**Divisão desta atividade entre as equipes:**"
+      );
+
+      for (
+        const group of
+        activityBreakdown.groups
+      ) {
+        const percentage =
+          activityBreakdown
+            .classifiedTotal >
+          0
+            ? (
+                group.amount /
+                activityBreakdown
+                  .classifiedTotal
+              ) *
+              100
+            : 0;
+
+        lines.push(
+          `• **${group.label}:** ${group.amount} registro(s) • ${percentage.toFixed(1)}% da atividade identificada.`
+        );
+      }
+
+      const strongestGroup =
+        activityBreakdown
+          .groups
+          .slice()
+          .sort(
+            (
+              first,
+              second
+            ) =>
+              second.amount -
+              first.amount
+          )[0];
+
+      if (
+        strongestGroup &&
+        strongestGroup.amount >
+        0
+      ) {
+        lines.push(
+          `🏆 **${strongestGroup.label}** foi quem mais realizou esta atividade nesta semana.`
+        );
+      }
+    } else if (
+      currentAmount >
+      0
+    ) {
+      lines.push(
+        "O volume desta atividade foi encontrado, mas os autores ainda não puderam ser ligados com segurança a Responsáveis, Coordenação ou Equipe Creator."
+      );
+    }
+
+    if (
+      activityBreakdown
+        .users.length >
+      0
+    ) {
+      lines.push(
+        "**Quem mais realizou esta atividade:**"
+      );
+
+      activityBreakdown
+        .users
+        .slice(
+          0,
+          5
+        )
+        .forEach(
+          (
+            user,
+            index
+          ) => {
+            lines.push(
+              `${index + 1}. <@${user.userId}> — ${user.amount} registro(s) • ${user.groupLabel}`
+            );
+          }
+        );
+    }
 
     for (
       const point of
@@ -7131,8 +7724,6 @@ function buildCompleteOperationalTextReport(
         `⚠️ ${point}`
       );
     }
-
-    lines.push("");
   }
 
   /*
