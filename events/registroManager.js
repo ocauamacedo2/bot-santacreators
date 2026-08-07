@@ -2938,12 +2938,14 @@ if (
     .setPlaceholder("Ex: 59 | RedLine  (ou: 59 | RedLine | Tropa da Big)")
     .setRequired(true);
 
-  // ✅ input v3 (opcional MESMO)
+  // ✅ Manager opcional:
+  // vazio = quem está registrando será considerado o Manager responsável
+  // preenchido = o ponto vai para o ID informado
   const responsavel = new TextInputBuilder()
     .setCustomId("manager_id_v3")
-    .setLabel("🧑‍💼 Manager responsável (SÓ ID Discord)")
+    .setLabel("🧑‍💼 Outro Manager responsável (opcional)")
     .setStyle(TextInputStyle.Short)
-    .setPlaceholder("Vazio = ponto vai pra você | Preenchido = cole o ID (ex: 660311795327828008)")
+    .setPlaceholder("Deixe vazio se VOCÊ é o Manager | Ou informe outro ID Discord")
     .setRequired(false);
 
   const lider = new TextInputBuilder()
