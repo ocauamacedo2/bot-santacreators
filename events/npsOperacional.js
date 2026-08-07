@@ -5747,10 +5747,50 @@ async function ensureCoreOperationalMetrics(
             requiredProvider.id
       );
 
+    /*
+     * Se o Hub já entregou uma versão disponível
+     * desta métrica durante a coleta atual,
+     * ela é reutilizada imediatamente.
+     *
+     * Isso evita executar novamente fontes pesadas
+     * como GeralDash e Ranking Semanal.
+     */
+    const existingMetric =
+      existingMetricIndex >=
+      0
+        ? providerCollection.results[
+            existingMetricIndex
+          ]
+        : null;
+
+    if (
+      existingMetric &&
+      existingMetric.available !==
+        false
+    ) {
+      console.log(
+        `[NPS Operacional] Métrica "${requiredProvider.id}" já disponível no Hub. Reutilizando sem nova coleta.`
+      );
+
+      continue;
+    }
+
     try {
+      /*
+       * A consulta direta somente acontece quando
+       * o Hub realmente não conseguiu entregar
+       * uma métrica disponível.
+       *
+       * Mesmo nesse fallback, aplica um limite de
+       * segurança para impedir espera indefinida.
+       */
       const metric =
-        await requiredProvider.provider(
-          context
+        await runNpsHeavyOperationWithTimeout(
+          requiredProvider.label,
+          () =>
+            requiredProvider.provider(
+              context
+            )
         );
 
       if (
@@ -10550,21 +10590,90 @@ if (
   ) {
     try {
       /*
-       * O relatório privado utiliza exatamente
-       * a mesma leitura que gerou o painel atual.
+       * O relatório completo tenta primeiro utilizar
+       * diretamente a mensagem do painel executivo
+       * que já está publicada no Discord.
        *
-       * Nenhuma nova coleta operacional é executada
-       * somente por causa deste clique.
+       * Isso evita:
+       *
+       * • gerar novamente todas as métricas;
+       * • executar novamente o GeralDash;
+       * • executar novamente scanners históricos;
+       * • aguardar os provedores pesados;
+       * • produzir uma nota diferente daquela
+       *   que está atualmente visível no painel.
        */
-      const results =
-        await getCurrentDashboardResults(
-          client
+      const state =
+        loadState();
+
+      const executiveChannel =
+        await client.channels.fetch(
+          NPS_EXECUTIVE_CHANNEL_ID
+        ).catch(
+          () => null
         );
 
-      const executiveEmbeds =
-        buildExecutiveDashboardEmbeds(
-          results
+      let executiveEmbeds =
+        null;
+
+      if (
+        executiveChannel &&
+        executiveChannel.isTextBased()
+      ) {
+        const existingExecutive =
+          await findExistingDashboardMessage(
+            executiveChannel,
+            state.executiveDashboardMessageId,
+            NPS_EXECUTIVE_MARKER
+          );
+
+        if (
+          existingExecutive &&
+          Array.isArray(
+            existingExecutive.embeds
+          ) &&
+          existingExecutive.embeds.length >
+            0
+        ) {
+          executiveEmbeds =
+            existingExecutive.embeds.map(
+              embed =>
+                embed.toJSON()
+            );
+
+          console.log(
+            "[NPS Operacional] Relatório privado reutilizou diretamente o painel executivo existente."
+          );
+        }
+      }
+
+      /*
+       * Fallback de segurança.
+       *
+       * Somente será utilizado caso a mensagem
+       * executiva realmente não exista mais.
+       *
+       * Mantém completamente a funcionalidade
+       * antiga como segunda opção.
+       */
+      if (
+        !executiveEmbeds ||
+        !executiveEmbeds.length
+      ) {
+        console.warn(
+          "[NPS Operacional] Painel executivo não encontrado. Utilizando geração de fallback."
         );
+
+        const results =
+          await getCurrentDashboardResults(
+            client
+          );
+
+        executiveEmbeds =
+          buildExecutiveDashboardEmbeds(
+            results
+          );
+      }
 
       await interaction.user.send({
         content:
