@@ -185,7 +185,7 @@ const BUTTON_EXECUTIVE_DM_ID = "sc_nps_operacional_executive_dm";
  * que o resumo ou relatório seja entregue ao usuário.
  */
 const NPS_HEAVY_PROVIDER_TIMEOUT_MS =
-  8 * 1000;
+  60 * 1000;
 
 /*
  * Estas categorias somente podem influenciar o NPS quando
@@ -4669,15 +4669,15 @@ function buildOperationalParticipationAuditEmbed({
       );
 
   /*
-   * Bate Ponto representa a presença da equipe inteira.
+   * Bate Ponto representa exclusivamente
+   * a presença da equipe.
    *
-   * Presenças e Bate Ponto são tratados como evidência
-   * de que a pessoa marcou presença durante a semana.
+   * A fonte "presencas" NÃO entra aqui porque representa
+   * a confirmação das ORGs nos eventos.
    */
   const attendanceSources =
     new Set([
       "bateponto",
-      "presencas",
     ]);
 
   /*

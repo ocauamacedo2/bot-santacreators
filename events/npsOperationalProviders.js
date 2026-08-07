@@ -1315,40 +1315,17 @@ async function buildPresenceMetric(
     );
 
   /*
-   * Reutiliza a varredura histórica compartilhada.
-   *
-   * Ela lê os canais e arquivos oficiais uma única vez
-   * durante esta atualização do NPS.
-   */
-  const operationalData =
-    await getFreshPayEvtOperationalData(
-      context
-    );
-
-  const currentBucket =
-    operationalData.byWeek?.[
-      currentWeekKey
-    ] || {};
-
-  const previousBucket =
-    operationalData.byWeek?.[
-      previousWeekKey
-    ] || {};
-
-  /*
    * ==========================================================================
-   * FALLBACK OFICIAL DO BATE PONTO
+   * BATE PONTO: CONSOLIDADO PRIMEIRO
    * ==========================================================================
    *
-   * Fonte principal:
-   * payEvtDash.
+   * O Ranking Semanal Geral já possui os registros consolidados.
    *
-   * Fonte de segurança:
-   * sc_geral_weekly_rank_sources.json.
+   * Por isso, o Bate Ponto não deve depender de uma varredura pesada
+   * do Discord quando o consolidado já possui dados suficientes.
    *
-   * Isso evita mostrar Bate Ponto como zero quando o scanner histórico
-   * ainda não conseguiu recuperar os registros, mas eles já estão
-   * consolidados no Ranking Semanal Geral.
+   * A varredura histórica fica como fallback somente quando o
+   * consolidado da semana atual não possui Bate Ponto.
    */
   const currentConsolidated =
     collectWeekData(
@@ -1358,24 +1335,6 @@ async function buildPresenceMetric(
   const previousConsolidated =
     collectWeekData(
       previousWeekKey
-    );
-
-  const currentPayEvtRecords =
-    Math.max(
-      0,
-      Number(
-        currentBucket.eventsBatePonto ||
-        0
-      )
-    );
-
-  const previousPayEvtRecords =
-    Math.max(
-      0,
-      Number(
-        previousBucket.eventsBatePonto ||
-        0
-      )
     );
 
   const currentConsolidatedRecords =
@@ -1400,31 +1359,95 @@ async function buildPresenceMetric(
       )
     );
 
+  let operationalData = {
+    events:
+      [],
+
+    byWeek:
+      {},
+
+    debug: {
+      scannedChannels:
+        {},
+
+      recoveredFromLogs:
+        0,
+
+      duplicatesIgnored:
+        0,
+    },
+  };
+
+  /*
+   * Só executa a leitura pesada quando a fonte consolidada
+   * realmente não possui o Bate Ponto da semana atual.
+   *
+   * Isso impede que um timeout do payEvtDash esconda registros
+   * que já estão comprovados no arquivo semanal.
+   */
+  if (
+    currentConsolidatedRecords <=
+    0
+  ) {
+    operationalData =
+      await getFreshPayEvtOperationalData(
+        context
+      );
+  }
+
+  const currentBucket =
+    operationalData.byWeek?.[
+      currentWeekKey
+    ] || {};
+
+  const previousBucket =
+    operationalData.byWeek?.[
+      previousWeekKey
+    ] || {};
+
+  const currentPayEvtRecords =
+    Math.max(
+      0,
+      Number(
+        currentBucket.eventsBatePonto ||
+        0
+      )
+    );
+
+  const previousPayEvtRecords =
+    Math.max(
+      0,
+      Number(
+        previousBucket.eventsBatePonto ||
+        0
+      )
+    );
+
   /*
    * Nunca soma as duas fontes porque elas podem representar
-   * exatamente os mesmos registros.
+   * os mesmos registros.
    *
-   * Utilizamos o maior valor comprovado.
+   * Utiliza sempre o maior total comprovado.
    */
   const currentRecords =
     Math.max(
-      currentPayEvtRecords,
-      currentConsolidatedRecords
+      currentConsolidatedRecords,
+      currentPayEvtRecords
     );
 
   const previousRecords =
     Math.max(
-      previousPayEvtRecords,
-      previousConsolidatedRecords
+      previousConsolidatedRecords,
+      previousPayEvtRecords
     );
 
   const batePontoSource =
-    currentPayEvtRecords >=
-      currentConsolidatedRecords &&
-    currentPayEvtRecords > 0
-      ? "pay_evt_dash"
-      : currentConsolidatedRecords > 0
-        ? "ranking_consolidado"
+    currentConsolidatedRecords >
+      0
+      ? "ranking_consolidado"
+      : currentPayEvtRecords >
+          0
+        ? "pay_evt_dash"
         : "sem_dados";
 
   const weekProgress =
