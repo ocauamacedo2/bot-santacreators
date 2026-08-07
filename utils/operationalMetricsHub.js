@@ -37,29 +37,75 @@ const providers =
 // ============================================================================
 
 /*
- * Tempo máximo permitido para um único provedor.
+ * Tempo máximo padrão permitido para um único provedor.
  *
- * Como os provedores agora são executados em paralelo,
- * um provedor lento não poderá bloquear indefinidamente
- * todo o NPS Operacional.
+ * Provedores simples continuam limitados a 15 segundos.
+ * Isso impede que uma leitura realmente travada mantenha
+ * todo o NPS aguardando indefinidamente.
  */
 const OPERATIONAL_PROVIDER_TIMEOUT_MS =
   15 * 1000;
 
 /*
- * Cache extremamente curto da coleta completa.
+ * Algumas métricas dependem da mesma varredura histórica
+ * pesada executada pelo payEvtDash.
  *
- * Evita executar novamente todos os provedores quando:
+ * Essa coleta pode consultar:
+ *
+ * • canais históricos;
+ * • mensagens antigas;
+ * • arquivos persistentes;
+ * • pagamentos;
+ * • Bate Ponto;
+ * • Registro de Poderes;
+ * • Hall da Fama;
+ * • Eventos Diários;
+ * • Cronograma.
+ *
+ * Esses provedores compartilham a mesma Promise dentro do
+ * npsOperationalProviders.js, portanto não existem seis
+ * varreduras diferentes acontecendo ao mesmo tempo.
+ *
+ * Eles apenas precisam de tempo suficiente para que a única
+ * coleta compartilhada seja concluída.
+ */
+const OPERATIONAL_HEAVY_PROVIDER_TIMEOUT_MS =
+  60 * 1000;
+
+/*
+ * Somente estes provedores utilizam a coleta histórica pesada
+ * compartilhada do payEvtDash.
+ *
+ * A verdadeira Presença das ORGs não entra aqui porque
+ * "presencas" lê o arquivo confirmacao_presenca_state.json
+ * diretamente e não precisa da varredura histórica pesada.
+ */
+const OPERATIONAL_HEAVY_PROVIDER_IDS =
+  new Set([
+    "bate_ponto",
+    "pagamentos",
+    "registro_poderes",
+    "hall_da_fama",
+    "eventos_diarios",
+    "cronograma",
+  ]);
+
+/*
+ * Cache curto da coleta completa.
+ *
+ * O período foi alinhado com o cache de 60 segundos utilizado
+ * pela coleta compartilhada do payEvtDash.
+ *
+ * Isso evita recalcular todos os providers várias vezes quando:
  *
  * • o painel acabou de ser atualizado;
  * • o usuário clica logo depois em "Semana atual";
+ * • o usuário clica logo depois em "Semana passada";
  * • o usuário clica logo depois em "Relatório completo";
- * • duas partes do sistema solicitam a mesma coleta ao mesmo tempo.
- *
- * O período curto mantém os dados praticamente em tempo real.
+ * • mais de uma parte do NPS solicita os mesmos dados.
  */
 const OPERATIONAL_COLLECTION_CACHE_MS =
-  15 * 1000;
+  60 * 1000;
 
 /*
  * Cache da última coleta concluída.
@@ -129,9 +175,14 @@ function buildOperationalCollectionKey(
 /*
  * Executa um provedor com limite máximo de tempo.
  *
- * Isso impede que uma leitura travada no Discord,
- * API, cache ou arquivo mantenha o relatório
- * permanentemente carregando.
+ * Provedores normais:
+ * 15 segundos.
+ *
+ * Provedores que utilizam a varredura histórica compartilhada:
+ * 60 segundos.
+ *
+ * Dessa forma, não aumentamos desnecessariamente o tempo
+ * permitido para todos os sistemas.
  */
 async function executeProviderWithTimeout(
   providerId,
@@ -140,6 +191,16 @@ async function executeProviderWithTimeout(
 ) {
   let timeoutHandle =
     null;
+
+  /*
+   * Decide o limite de tempo baseado no tipo do provider.
+   */
+  const providerTimeoutMs =
+    OPERATIONAL_HEAVY_PROVIDER_IDS.has(
+      providerId
+    )
+      ? OPERATIONAL_HEAVY_PROVIDER_TIMEOUT_MS
+      : OPERATIONAL_PROVIDER_TIMEOUT_MS;
 
   try {
     const providerPromise =
@@ -162,7 +223,7 @@ async function executeProviderWithTimeout(
               () => {
                 const error =
                   new Error(
-                    `O provedor "${providerId}" excedeu o limite de ${OPERATIONAL_PROVIDER_TIMEOUT_MS / 1000} segundos.`
+                    `O provedor "${providerId}" excedeu o limite de ${providerTimeoutMs / 1000} segundos.`
                   );
 
                 error.code =
@@ -172,7 +233,7 @@ async function executeProviderWithTimeout(
                   error
                 );
               },
-              OPERATIONAL_PROVIDER_TIMEOUT_MS
+              providerTimeoutMs
             );
         }
       );

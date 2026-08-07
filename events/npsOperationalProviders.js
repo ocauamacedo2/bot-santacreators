@@ -153,6 +153,15 @@ async function getFreshPayEvtOperationalData(
     client;
 
   /*
+   * Guarda o horário real em que a coleta pesada começou.
+   *
+   * Isso permite diagnosticar pelo console quanto tempo
+   * a varredura histórica está levando na Square Cloud.
+   */
+  const collectionStartedAt =
+    Date.now();
+
+  /*
    * force = false:
    *
    * permite que o payEvtDash reutilize a coleta já disponível
@@ -180,6 +189,10 @@ async function getFreshPayEvtOperationalData(
           console.log(
             "[NPS Providers] Varredura histórica compartilhada concluída:",
             {
+              durationMs:
+                Date.now() -
+                collectionStartedAt,
+
               payments:
                 Array.isArray(
                   payload?.payments
@@ -1322,7 +1335,32 @@ async function buildPresenceMetric(
       previousWeekKey
     ] || {};
 
-  const currentRecords =
+  /*
+   * ==========================================================================
+   * FALLBACK OFICIAL DO BATE PONTO
+   * ==========================================================================
+   *
+   * Fonte principal:
+   * payEvtDash.
+   *
+   * Fonte de segurança:
+   * sc_geral_weekly_rank_sources.json.
+   *
+   * Isso evita mostrar Bate Ponto como zero quando o scanner histórico
+   * ainda não conseguiu recuperar os registros, mas eles já estão
+   * consolidados no Ranking Semanal Geral.
+   */
+  const currentConsolidated =
+    collectWeekData(
+      currentWeekKey
+    );
+
+  const previousConsolidated =
+    collectWeekData(
+      previousWeekKey
+    );
+
+  const currentPayEvtRecords =
     Math.max(
       0,
       Number(
@@ -1331,7 +1369,7 @@ async function buildPresenceMetric(
       )
     );
 
-  const previousRecords =
+  const previousPayEvtRecords =
     Math.max(
       0,
       Number(
@@ -1339,6 +1377,55 @@ async function buildPresenceMetric(
         0
       )
     );
+
+  const currentConsolidatedRecords =
+    Math.max(
+      0,
+      Number(
+        currentConsolidated
+          ?.sourceTotals
+          ?.bateponto ||
+        0
+      )
+    );
+
+  const previousConsolidatedRecords =
+    Math.max(
+      0,
+      Number(
+        previousConsolidated
+          ?.sourceTotals
+          ?.bateponto ||
+        0
+      )
+    );
+
+  /*
+   * Nunca soma as duas fontes porque elas podem representar
+   * exatamente os mesmos registros.
+   *
+   * Utilizamos o maior valor comprovado.
+   */
+  const currentRecords =
+    Math.max(
+      currentPayEvtRecords,
+      currentConsolidatedRecords
+    );
+
+  const previousRecords =
+    Math.max(
+      previousPayEvtRecords,
+      previousConsolidatedRecords
+    );
+
+  const batePontoSource =
+    currentPayEvtRecords >=
+      currentConsolidatedRecords &&
+    currentPayEvtRecords > 0
+      ? "pay_evt_dash"
+      : currentConsolidatedRecords > 0
+        ? "ranking_consolidado"
+        : "sem_dados";
 
   const weekProgress =
     Math.max(
@@ -1452,6 +1539,74 @@ async function buildPresenceMetric(
         )
         .filter(Boolean)
     );
+
+  /*
+   * Se a varredura do payEvtDash não encontrou os usuários,
+   * recupera quem bateu ponto através da fonte consolidada.
+   */
+  if (
+    currentParticipants.size ===
+    0
+  ) {
+    for (
+      const [
+        userId,
+        userData,
+      ] of Object.entries(
+        currentConsolidated
+          ?.byUser ||
+        {}
+      )
+    ) {
+      if (
+        Number(
+          userData
+            ?.sources
+            ?.bateponto ||
+          0
+        ) >
+        0
+      ) {
+        currentParticipants.add(
+          String(
+            userId
+          )
+        );
+      }
+    }
+  }
+
+  if (
+    previousParticipants.size ===
+    0
+  ) {
+    for (
+      const [
+        userId,
+        userData,
+      ] of Object.entries(
+        previousConsolidated
+          ?.byUser ||
+        {}
+      )
+    ) {
+      if (
+        Number(
+          userData
+            ?.sources
+            ?.bateponto ||
+          0
+        ) >
+        0
+      ) {
+        previousParticipants.add(
+          String(
+            userId
+          )
+        );
+      }
+    }
+  }
 
   const teamTotals = {};
 
@@ -1611,33 +1766,84 @@ async function buildPresenceMetric(
 
       teamTotals,
 
+      /*
+       * Mantém a fonte histórica oficial quando o payEvtDash
+       * conseguiu localizar os eventos individualmente.
+       *
+       * Caso a varredura esteja vazia, utiliza o Ranking
+       * Consolidado para preservar também quem realizou
+       * os registros de Bate Ponto.
+       */
       byUser:
-        currentEvents.reduce(
-          (
-            result,
-            event
-          ) => {
-            const userId =
-              String(
-                event?.userId ||
-                ""
-              );
+        currentEvents.length >
+        0
+          ? currentEvents.reduce(
+              (
+                result,
+                event
+              ) => {
+                const userId =
+                  String(
+                    event?.userId ||
+                    ""
+                  );
 
-            if (!userId) {
-              return result;
-            }
+                if (!userId) {
+                  return result;
+                }
 
-            result[userId] =
-              Number(
-                result[userId] ||
-                0
-              ) +
-              1;
+                result[userId] =
+                  Number(
+                    result[userId] ||
+                    0
+                  ) +
+                  1;
 
-            return result;
-          },
-          {}
-        ),
+                return result;
+              },
+              {}
+            )
+          : Object.fromEntries(
+              Object.entries(
+                currentConsolidated
+                  ?.byUser ||
+                {}
+              )
+                .filter(
+                  (
+                    [
+                      ,
+                      userData,
+                    ]
+                  ) =>
+                    Number(
+                      userData
+                        ?.sources
+                        ?.bateponto ||
+                      0
+                    ) >
+                    0
+                )
+                .map(
+                  (
+                    [
+                      userId,
+                      userData,
+                    ]
+                  ) => [
+                    String(
+                      userId
+                    ),
+
+                    Number(
+                      userData
+                        ?.sources
+                        ?.bateponto ||
+                      0
+                    ),
+                  ]
+                )
+            ),
     },
   };
 }
@@ -2205,25 +2411,124 @@ function buildOrganizationConfirmationMetric() {
         "NO"
     );
 
-  const pending =
-    organizations.filter(
-      (
-        [
-          ,
-          information,
-        ]
-      ) =>
-        !information ||
-        information.status ===
-          "PENDING"
+  /*
+   * ==========================================================================
+   * HISTÓRICO CONSOLIDADO DA PRESENÇA DAS ORGs
+   * ==========================================================================
+   *
+   * O arquivo confirmacao_presenca_state.json representa principalmente
+   * o estado atual da janela.
+   *
+   * O consolidado semanal é utilizado como segurança e histórico.
+   */
+  const currentWeekKey =
+    getWeekKeySP();
+
+  const previousWeekKey =
+    addDaysToWeekKey(
+      currentWeekKey,
+      -7
     );
+
+  const currentConsolidated =
+    collectWeekData(
+      currentWeekKey
+    );
+
+  const previousConsolidated =
+    collectWeekData(
+      previousWeekKey
+    );
+
+  /*
+   * Dependendo da origem histórica, a confirmação pode aparecer
+   * usando um destes nomes.
+   *
+   * Utilizamos o MAIOR valor e nunca somamos, evitando duplicidade.
+   */
+  const currentConsolidatedPresence =
+    Math.max(
+      0,
+
+      Number(
+        currentConsolidated
+          ?.sourceTotals
+          ?.presenca ||
+        0
+      ),
+
+      Number(
+        currentConsolidated
+          ?.sourceTotals
+          ?.presencas ||
+        0
+      ),
+
+      Number(
+        currentConsolidated
+          ?.sourceTotals
+          ?.confirmacoes ||
+        0
+      )
+    );
+
+  const previousConsolidatedPresence =
+    Math.max(
+      0,
+
+      Number(
+        previousConsolidated
+          ?.sourceTotals
+          ?.presenca ||
+        0
+      ),
+
+      Number(
+        previousConsolidated
+          ?.sourceTotals
+          ?.presencas ||
+        0
+      ),
+
+      Number(
+        previousConsolidated
+          ?.sourceTotals
+          ?.confirmacoes ||
+        0
+      )
+    );
+
+  /*
+   * O estado atual continua tendo prioridade.
+   *
+   * Se ele foi reiniciado e está zerado, o consolidado impede
+   * que confirmações já registradas desapareçam do relatório.
+   */
+  const effectiveConfirmed =
+    Math.max(
+      confirmed.length,
+      currentConsolidatedPresence
+    );
+
+  const effectiveAbsent =
+    absent.length;
 
   const totalOrganizations =
     organizations.length;
 
   const answered =
-    confirmed.length +
-    absent.length;
+    Math.min(
+      totalOrganizations,
+      effectiveConfirmed +
+      effectiveAbsent
+    );
+
+  const effectivePending =
+    Math.max(
+      0,
+      totalOrganizations -
+      answered
+    );
 
   const responseRate =
     totalOrganizations > 0
@@ -2237,11 +2542,60 @@ function buildOrganizationConfirmationMetric() {
   const attendanceRate =
     answered > 0
       ? (
-          confirmed.length /
+          effectiveConfirmed /
           answered
         ) *
         100
       : 0;
+
+  const difference =
+    previousConsolidatedPresence >
+      0
+      ? effectiveConfirmed -
+        previousConsolidatedPresence
+      : null;
+
+  /*
+   * Descobre a situação da janela oficial:
+   *
+   * quinta;
+   * sexta;
+   * sábado.
+   */
+  const currentWeekday =
+    new Intl.DateTimeFormat(
+      "en-US",
+      {
+        timeZone:
+          TZ,
+
+        weekday:
+          "short",
+      }
+    ).format(
+      new Date()
+    );
+
+  const confirmationWindowOpen =
+    [
+      "Thu",
+      "Fri",
+      "Sat",
+    ].includes(
+      currentWeekday
+    );
+
+  const confirmationWindowDay =
+    currentWeekday ===
+      "Thu"
+      ? "quinta-feira"
+      : currentWeekday ===
+          "Fri"
+        ? "sexta-feira"
+        : currentWeekday ===
+            "Sat"
+          ? "sábado"
+          : null;
 
   /*
    * A confirmação precisa avaliar duas coisas diferentes:
@@ -2283,18 +2637,10 @@ function buildOrganizationConfirmationMetric() {
   const recommendations = [];
 
   if (
-    answered > 0
+    effectiveConfirmed > 0
   ) {
     positivePoints.push(
-      `${answered} de ${totalOrganizations} organizações já responderam ao painel de confirmação.`
-    );
-  }
-
-  if (
-    confirmed.length > 0
-  ) {
-    positivePoints.push(
-      `${confirmed.length} organização(ões) confirmaram presença até o momento.`
+      `Presença das ORGs: ${effectiveConfirmed} de ${totalOrganizations} organizações já confirmaram participação nesta janela.`
     );
   }
 
@@ -2302,46 +2648,90 @@ function buildOrganizationConfirmationMetric() {
     responseRate >= 80
   ) {
     positivePoints.push(
-      `A taxa de resposta está em ${responseRate.toFixed(1)}%, indicando boa adesão ao processo de confirmação.`
+      `A confirmação das ORGs está em bom nível: ${responseRate.toFixed(1)}% das organizações já se posicionaram.`
     );
   }
 
   if (
-    pending.length > 0
+    difference !==
+      null &&
+    difference > 0
+  ) {
+    positivePoints.push(
+      `Até o momento existem ${difference} confirmação(ões) a mais do que na semana passada.`
+    );
+  }
+
+  if (
+    difference !==
+      null &&
+    difference < 0
   ) {
     attentionPoints.push(
-      `${pending.length} organização(ões) ainda não responderam ao painel.`
+      `Até o momento existem ${Math.abs(difference)} confirmação(ões) a menos do que na semana passada.`
     );
   }
 
   if (
-    absent.length > 0
+    effectivePending >
+      0 &&
+    confirmationWindowOpen
   ) {
     attentionPoints.push(
-      `${absent.length} organização(ões) informaram ausência nesta janela.`
+      `A janela de confirmação acontece de quinta-feira até sábado. Hoje é ${confirmationWindowDay} e ainda existem ${effectivePending} ORG(s) sem confirmação. A janela ainda não terminou, mas essas organizações precisam ser acompanhadas até o fechamento.`
     );
   }
 
   if (
-    responseRate < 60 &&
-    totalOrganizations > 0
+    effectivePending >
+      0 &&
+    !confirmationWindowOpen
   ) {
     attentionPoints.push(
-      `A taxa de resposta está em ${responseRate.toFixed(1)}%, o que ainda deixa uma parte importante das organizações sem posicionamento.`
+      `A última janela de confirmação terminou com ${effectivePending} ORG(s) sem resposta registrada.`
     );
   }
 
-  recommendations.push(
-    pending.length > 0
-      ? `Entrar em contato com as ${pending.length} organização(ões) pendentes antes do fechamento da janela de confirmação.`
-      : "Manter o acompanhamento atual, pois todas as organizações cadastradas já apresentaram uma resposta."
-  );
+  if (
+    effectiveAbsent > 0
+  ) {
+    attentionPoints.push(
+      `${effectiveAbsent} ORG(s) informaram que não participariam nesta janela.`
+    );
+  }
 
   if (
-    absent.length > 0
+    responseRate <
+      60 &&
+    totalOrganizations >
+      0 &&
+    confirmationWindowOpen
+  ) {
+    attentionPoints.push(
+      `A confirmação ainda está baixa para o momento da janela: apenas ${responseRate.toFixed(1)}% das ORGs já responderam.`
+    );
+  }
+
+  if (
+    effectivePending >
+    0
   ) {
     recommendations.push(
-      "Avaliar as ausências informadas para identificar se existe concentração por cidade, horário ou tipo de evento."
+      confirmationWindowOpen
+        ? `Acompanhar as ${effectivePending} ORG(s) que ainda não responderam e reforçar a confirmação antes do encerramento de sábado.`
+        : `Revisar por que ${effectivePending} ORG(s) encerraram a última janela sem confirmar presença.`
+    );
+  } else {
+    recommendations.push(
+      "Todas as ORGs cadastradas já possuem uma resposta registrada nesta janela."
+    );
+  }
+
+  if (
+    effectiveAbsent > 0
+  ) {
+    recommendations.push(
+      "Acompanhar as ausências informadas para verificar se existe algum padrão recorrente."
     );
   }
 
@@ -2353,14 +2743,16 @@ return {
     "Presença das ORGs nos Eventos",
 
   /*
-   * A existência de organizações cadastradas não significa
-   * que a janela de confirmação já produziu dados válidos.
+   * A métrica participa do NPS quando existe pelo menos
+   * uma confirmação ou ausência comprovada.
    *
-   * A métrica somente participa da nota quando pelo menos
-   * uma organização confirmar presença ou informar ausência.
+   * O valor efetivo considera:
    *
-   * Enquanto todas permanecerem pendentes, o provedor continua
-   * entregando os detalhes, mas não influencia o NPS Geral.
+   * • o estado atual do painel;
+   * • o histórico consolidado da semana.
+   *
+   * Dessa forma, um reset do painel não faz as confirmações
+   * já registradas desaparecerem do relatório.
    */
   available:
     answered > 0,
@@ -2383,20 +2775,24 @@ return {
   goal:
     totalOrganizations,
 
+  /*
+   * "current" representa a quantidade real de ORGs
+   * confirmadas nesta semana.
+   */
   current:
-    answered,
+    effectiveConfirmed,
 
   /*
-   * O arquivo atual é reiniciado por dia e por semana.
-   *
-   * O histórico será construído pelos snapshots do próprio
-   * NPS a partir desta implementação.
+   * A semana anterior passa a utilizar o histórico
+   * consolidado quando ele existir.
    */
   previous:
-    null,
+    previousConsolidatedPresence >
+      0
+      ? previousConsolidatedPresence
+      : null,
 
-  difference:
-    null,
+  difference,
 
   positivePoints,
 
@@ -2406,8 +2802,9 @@ return {
 
   details: {
     weekKey:
-      state.lastWeekKey ||
-      null,
+      currentWeekKey,
+
+    previousWeekKey,
 
     lastResetDate:
       state.lastResetDate ||
@@ -2415,26 +2812,59 @@ return {
 
     totalOrganizations,
 
+    /*
+     * Quantidade total de organizações que já possuem
+     * algum posicionamento conhecido.
+     */
     answered,
 
     approved:
-      confirmed.length,
+      effectiveConfirmed,
 
     confirmed:
-      confirmed.length,
+      effectiveConfirmed,
 
     rejected:
-      absent.length,
+      effectiveAbsent,
 
     absent:
-      absent.length,
+      effectiveAbsent,
 
     pending:
-      pending.length,
+      effectivePending,
 
     responseRate,
 
     attendanceRate,
+
+    previousConfirmed:
+      previousConsolidatedPresence,
+
+    difference,
+
+    confirmationWindowOpen,
+
+    confirmationWindowDay,
+
+    /*
+     * Identifica de onde o número final foi obtido.
+     *
+     * Isso ajuda no diagnóstico sem alterar nenhuma
+     * regra operacional.
+     */
+    source:
+      confirmed.length >
+        0 &&
+      currentConsolidatedPresence >
+        0
+        ? "estado_atual_e_ranking_consolidado"
+        : confirmed.length >
+            0
+          ? "estado_atual"
+          : currentConsolidatedPresence >
+              0
+            ? "ranking_consolidado"
+            : "sem_confirmacoes",
 
     participants:
       responsibleUsers.size,
@@ -2444,6 +2874,15 @@ return {
         ...responsibleUsers,
       ],
 
+    /*
+     * Estas listas representam somente os registros que
+     * ainda existem identificados individualmente no
+     * arquivo atual de confirmação.
+     *
+     * O consolidado informa quantidade histórica, mas não
+     * permite inventar quais organizações correspondem
+     * àquelas confirmações.
+     */
     confirmedOrganizations:
       confirmed.map(
         (
@@ -2464,15 +2903,39 @@ return {
           organization
       ),
 
+    /*
+     * Só informa nomes pendentes quando o estado atual
+     * possui informação suficiente para identificá-los
+     * com segurança.
+     *
+     * Quando o consolidado possui mais confirmações do que
+     * o estado atual, sabemos QUANTAS ainda faltam, mas não
+     * podemos afirmar corretamente QUAIS são.
+     */
     pendingOrganizations:
-      pending.map(
-        (
-          [
-            organization,
-          ]
-        ) =>
-          organization
-      ),
+      currentConsolidatedPresence >
+        confirmed.length
+        ? []
+        : organizations
+            .filter(
+              (
+                [
+                  ,
+                  information,
+                ]
+              ) =>
+                !information ||
+                information.status ===
+                  "PENDING"
+            )
+            .map(
+              (
+                [
+                  organization,
+                ]
+              ) =>
+                organization
+            ),
 
     byUser:
       organizations.reduce(
@@ -3200,15 +3663,45 @@ function buildWeeklyLogChecklistMetric(
       ""
     );
 
-  const currentChecklistWeekKey =
+  const calculatedCurrentChecklistWeekKey =
     npsWeekKeyToChecklistWeekKey(
       currentNpsWeekKey
     );
 
-  const previousChecklistWeekKey =
+  const calculatedPreviousChecklistWeekKey =
     npsWeekKeyToChecklistWeekKey(
       previousNpsWeekKey
     );
+
+  /*
+   * O Checklist historicamente pode possuir a chave:
+   *
+   * • no sábado;
+   * • ou na mesma chave semanal utilizada pelo NPS.
+   *
+   * Aceitamos as duas sem alterar o arquivo original.
+   */
+  const currentChecklistWeekKey =
+    checklist?.weeks?.[
+      calculatedCurrentChecklistWeekKey
+    ]
+      ? calculatedCurrentChecklistWeekKey
+      : checklist?.weeks?.[
+          currentNpsWeekKey
+        ]
+        ? currentNpsWeekKey
+        : calculatedCurrentChecklistWeekKey;
+
+  const previousChecklistWeekKey =
+    checklist?.weeks?.[
+      calculatedPreviousChecklistWeekKey
+    ]
+      ? calculatedPreviousChecklistWeekKey
+      : checklist?.weeks?.[
+          previousNpsWeekKey
+        ]
+        ? previousNpsWeekKey
+        : calculatedPreviousChecklistWeekKey;
 
   const currentWeek =
     checklist?.weeks?.[
@@ -3225,6 +3718,33 @@ function buildWeeklyLogChecklistMetric(
       responsaveis:
         {},
     };
+
+  console.log(
+    "[NPS Providers] Checklist semanal localizado:",
+    {
+      requestedNpsWeek:
+        currentNpsWeekKey,
+
+      calculatedChecklistWeek:
+        calculatedCurrentChecklistWeekKey,
+
+      selectedChecklistWeek:
+        currentChecklistWeekKey,
+
+      availableWeeks:
+        Object.keys(
+          checklist?.weeks ||
+          {}
+        ),
+
+      responsibles:
+        Object.keys(
+          currentWeek
+            ?.responsaveis ||
+          {}
+        ).length,
+    }
+  );
 
   /*
    * Descobre em qual dia um responsável terminou

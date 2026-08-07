@@ -5891,7 +5891,7 @@ function buildExecutiveDashboardEmbeds({
         "📊 Feedback da semana"
       )
       .setDescription(
-        "Resumo direto do que foi bem, do que deixou a desejar e do que precisa melhorar na próxima semana."
+        "Resumo direto do que está funcionando, do que entrou em estado crítico e do que precisa ser corrigido antes do fechamento da semana."
       )
       .addFields(
         {
@@ -5907,7 +5907,7 @@ function buildExecutiveDashboardEmbeds({
         },
         {
           name:
-            "🔴 O que deixou a desejar",
+            "🚨 Estado crítico",
           value:
             truncate(
               attentionLines,
@@ -6107,17 +6107,91 @@ function buildCompleteOperationalTextReport(
     null;
 
   const findMetric =
-    id =>
-      providerMetrics.find(
-        metric =>
-          String(
-            metric?.id ||
-            metric?.providerId ||
-            ""
-          ) ===
-          id
-      ) ||
-      null;
+    id => {
+      const matchingMetrics =
+        providerMetrics
+          .filter(
+            metric =>
+              String(
+                metric?.id ||
+                metric?.providerId ||
+                ""
+              ) ===
+              id
+          )
+          .sort(
+            (
+              firstMetric,
+              secondMetric
+            ) => {
+              const firstPriority =
+                (
+                  firstMetric
+                    ?.officialSource
+                    ? 100
+                    : 0
+                ) +
+                (
+                  firstMetric
+                    ?.details &&
+                  Object.keys(
+                    firstMetric.details
+                  ).length >
+                    0
+                    ? 20
+                    : 0
+                ) +
+                (
+                  Number(
+                    firstMetric
+                      ?.volume ||
+                    0
+                  ) >
+                    0
+                    ? 10
+                    : 0
+                );
+
+              const secondPriority =
+                (
+                  secondMetric
+                    ?.officialSource
+                    ? 100
+                    : 0
+                ) +
+                (
+                  secondMetric
+                    ?.details &&
+                  Object.keys(
+                    secondMetric.details
+                  ).length >
+                    0
+                    ? 20
+                    : 0
+                ) +
+                (
+                  Number(
+                    secondMetric
+                      ?.volume ||
+                    0
+                  ) >
+                    0
+                    ? 10
+                    : 0
+                );
+
+              return (
+                secondPriority -
+                firstPriority
+              );
+            }
+          );
+
+      return (
+        matchingMetrics[0] ||
+        null
+      );
+    };
 
   const batePontoMetric =
     findMetric(
@@ -6194,7 +6268,8 @@ function buildCompleteOperationalTextReport(
 
   lines.push(
     "",
-    "## 🔴 O QUE PRECISA MELHORAR",
+    "## 🚨 ESTADO CRÍTICO",
+    "Pontos que exigem atenção da gestão porque estão abaixo do esperado ou podem prejudicar o fechamento da semana.",
     ""
   );
 
@@ -6285,15 +6360,26 @@ function buildCompleteOperationalTextReport(
     );
 
     if (
-      Array.isArray(
-        details.pendingOrganizations
-      ) &&
-      details.pendingOrganizations.length
+      Number(
+        details.pending ||
+        0
+      ) >
+      0
     ) {
-      lines.push(
-        "",
-        `⚠️ **ORGs pendentes:** ${details.pendingOrganizations.join(", ")}`
-      );
+      if (
+        details.confirmationWindowOpen ===
+        true
+      ) {
+        lines.push(
+          "",
+          `⚠️ A janela de confirmação vai de quinta-feira até sábado. Ainda existem ${Number(details.pending || 0)} ORG(s) sem resposta, mas o período de confirmação ainda está em andamento.`
+        );
+      } else {
+        lines.push(
+          "",
+          `🚨 A janela de confirmação terminou com ${Number(details.pending || 0)} ORG(s) sem resposta registrada.`
+        );
+      }
     }
   } else {
     lines.push(
@@ -7007,13 +7093,58 @@ function buildCompleteOperationalTextReport(
     const group of
     groups
   ) {
+    const activeMembers =
+      Number(
+        group.activeMembers ||
+        0
+      );
+
+    const serverMembers =
+      Number(
+        group.serverMembers ||
+        0
+      );
+
+    const records =
+      Number(
+        group.records ||
+        0
+      );
+
+    const rosterAvailable =
+      operationalRoleAnalysis
+        ?.roleRosterAvailable ===
+        true &&
+      serverMembers >
+        0;
+
     lines.push(
-      `**${group.label}**`,
-      `Membros do cargo: ${Number(group.serverMembers || 0)}`,
-      `Participaram: ${Number(group.activeMembers || 0)}`,
-      `Atividades: ${Number(group.records || 0)}`,
-      ""
+      `**${group.label}**`
     );
+
+    if (
+      rosterAvailable
+    ) {
+      const participationRate =
+        (
+          activeMembers /
+          serverMembers
+        ) *
+        100;
+
+      lines.push(
+        `${activeMembers} de ${serverMembers} membros participaram nesta semana (${participationRate.toFixed(1)}%).`,
+        `Foram registradas ${records} atividade(s) pelo grupo.`
+      );
+    } else {
+      lines.push(
+        `${activeMembers} membro(s) do grupo tiveram atividade comprovada nesta semana.`,
+        `Foram registradas ${records} atividade(s).`,
+        "O total atual de pessoas com esse cargo não pôde ser confirmado pelo Discord nesta coleta."
+      );
+    }
+
+    lines.push("");
   }
 
   /*
@@ -12329,36 +12460,30 @@ async function sendAutomaticWeeklyReport(
   const summary =
     await generateCurrentSummary();
 
-  const executiveEmbeds =
-    buildExecutiveDashboardEmbeds(
+  const completeReport =
+    buildCompleteOperationalTextReport(
       summary
+    );
+
+  const reportChunks =
+    splitDiscordText(
+      completeReport,
+      1900
     );
 
   await channel.send({
     content:
       "🧠 **Relatório semanal completo da operação SantaCreators**",
-
-    embeds:
-      executiveEmbeds,
   });
 
-  if (
-    summary.analysisText
+  for (
+    const reportChunk of
+    reportChunks
   ) {
-    const textChunks =
-      splitDiscordText(
-        summary.analysisText
-      );
-
-    for (
-      const textChunk of
-      textChunks
-    ) {
-      await channel.send({
-        content:
-          textChunk,
-      });
-    }
+    await channel.send({
+      content:
+        reportChunk,
+    });
   }
 
   state.metadata
