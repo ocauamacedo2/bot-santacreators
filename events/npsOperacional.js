@@ -212,6 +212,7 @@ const PROVIDER_REQUIRED_CATEGORY_IDS = new Set([
   "hall_da_fama",
   "eventos_diarios",
   "cronograma",
+  "log_checklist",
 
   "eventos",
   "quiz",
@@ -430,32 +431,46 @@ categories: {
     },
 
 bate_ponto: {
-  label: "Bate Ponto",
-  weight: 0,
-  enabled: false,
-  weeklyGoal: 15,
-},
-
-presencas: {
-  label: "Bate Ponto",
+  label: "Bate Ponto da Equipe",
   weight: 8,
   enabled: true,
   weeklyGoal: 15,
 },
 
-    alinhamentos: {
-      label: "Alinhamentos",
-      weight: 8,
-      enabled: true,
-      weeklyGoal: 10,
-    },
+presencas: {
+  label: "Presença das ORGs nos Eventos",
+  weight: 10,
+  enabled: true,
+  weeklyGoal: 15,
+},
 
-    organizacoes: {
-      label: "Organizações",
-      weight: 10,
-      enabled: true,
-      weeklyGoal: 15,
-    },
+alinhamentos: {
+  label: "Alinhamentos",
+  weight: 8,
+  enabled: true,
+  weeklyGoal: 10,
+},
+
+organizacoes: {
+  label: "Registros de Organizações",
+  weight: 0,
+  enabled: false,
+  weeklyGoal: 15,
+},
+
+aprovacoes: {
+  label: "Eficiência das Aprovações",
+  weight: 12,
+  enabled: true,
+  weeklyGoal: 20,
+},
+
+log_checklist: {
+  label: "Checklist Semanal de Logs",
+  weight: 8,
+  enabled: true,
+  weeklyGoal: 1,
+},
 
     pagamentos: {
       label: "Pagamentos Social Media",
@@ -1837,6 +1852,7 @@ const EVENT_RULES = [
     points: 0.5,
     quality: 0.25,
     operation: "created",
+    approvalFlow: true,
   },
 
   {
@@ -1846,6 +1862,7 @@ const EVENT_RULES = [
     points: 1,
     quality: 1,
     decision: "approved",
+    approvalFlow: true,
   },
 
   {
@@ -1856,6 +1873,7 @@ const EVENT_RULES = [
     points: 0.1,
     quality: -0.5,
     decision: "rejected",
+    approvalFlow: true,
   },
 
   {
@@ -1882,6 +1900,7 @@ const EVENT_RULES = [
     points: 0.35,
     quality: 0.25,
     operation: "created",
+    approvalFlow: true,
   },
 
   {
@@ -1899,6 +1918,7 @@ const EVENT_RULES = [
     points: 1,
     quality: 1,
     decision: "approved",
+    approvalFlow: true,
   },
 
   {
@@ -1908,8 +1928,160 @@ const EVENT_RULES = [
     points: 0.2,
     quality: -0.35,
     decision: "rejected",
+    approvalFlow: true,
   },
 
+  /*
+   * ================================================================
+   * EVENTOS DIÁRIOS
+   * ================================================================
+   */
+
+  {
+    test:
+      name =>
+        name ===
+        "eventosdiarios:criado",
+
+    category:
+      "eventos_diarios",
+
+    points:
+      0.35,
+
+    quality:
+      0.25,
+
+    operation:
+      "created",
+
+    approvalFlow:
+      true,
+  },
+
+  {
+    test:
+      name =>
+        name ===
+        "eventosdiarios:aprovado",
+
+    category:
+      "eventos_diarios",
+
+    points:
+      1,
+
+    quality:
+      1,
+
+    decision:
+      "approved",
+
+    approvalFlow:
+      true,
+  },
+
+  {
+    test:
+      name =>
+        name ===
+        "eventosdiarios:reprovado",
+
+    category:
+      "eventos_diarios",
+
+    points:
+      0.5,
+
+    /*
+     * Reprovar não significa falta de trabalho.
+     * A decisão foi realizada.
+     */
+    quality:
+      0.5,
+
+    decision:
+      "rejected",
+
+    approvalFlow:
+      true,
+  },
+
+  /*
+   * ================================================================
+   * HALL DA FAMA
+   * ================================================================
+   */
+
+  {
+    test:
+      name =>
+        name ===
+        "halldafama:criado",
+
+    category:
+      "hall_da_fama",
+
+    points:
+      0.35,
+
+    quality:
+      0.25,
+
+    operation:
+      "created",
+
+    approvalFlow:
+      true,
+  },
+
+  {
+    test:
+      name =>
+        name ===
+        "halldafama:aprovado",
+
+    category:
+      "hall_da_fama",
+
+    points:
+      1,
+
+    quality:
+      1,
+
+    decision:
+      "approved",
+
+    approvalFlow:
+      true,
+  },
+
+  {
+    test:
+      name =>
+        name ===
+        "halldafama:reprovado",
+
+    category:
+      "hall_da_fama",
+
+    points:
+      0.5,
+
+    quality:
+      0.5,
+
+    decision:
+      "rejected",
+
+    approvalFlow:
+      true,
+  },
+
+  /*
+   * Demais eventos que não possuem fluxo específico.
+   */
   {
     test: name =>
       name.includes("evento") ||
@@ -2343,6 +2515,21 @@ function registerDashEvent(
         rule.category
       ).pending += 1;
     }
+
+    /*
+     * Toda solicitação que precisa de decisão também
+     * entra na fila geral de eficiência das aprovações.
+     */
+    if (
+      rule?.approvalFlow ===
+      true
+    ) {
+      ensureCategoryData(
+        week,
+        "aprovacoes"
+      ).pending +=
+        1;
+    }
   }
 
   if (
@@ -2406,6 +2593,71 @@ function registerDashEvent(
       responseCategory.responseTimes.push(
         duration
       );
+
+      /*
+       * ==============================================================
+       * EFICIÊNCIA GERAL DAS APROVAÇÕES
+       * ==============================================================
+       *
+       * Aprovar e reprovar representam trabalho realizado.
+       *
+       * A avaliação aqui mede principalmente:
+       *
+       * • rapidez;
+       * • conclusão;
+       * • quantidade de registros analisados;
+       * • pendências acumuladas.
+       */
+      if (
+        rule?.approvalFlow ===
+        true
+      ) {
+        const approvalCategory =
+          ensureCategoryData(
+            week,
+            "aprovacoes"
+          );
+
+        approvalCategory.events +=
+          1;
+
+        approvalCategory.points +=
+          1;
+
+        approvalCategory.completed +=
+          1;
+
+        approvalCategory.positive +=
+          1;
+
+        approvalCategory.responseTimes.push(
+          duration
+        );
+
+        if (
+          approvalCategory.pending >
+          0
+        ) {
+          approvalCategory.pending -=
+            1;
+        }
+
+        if (
+          rule?.decision ===
+          "approved"
+        ) {
+          approvalCategory.approved +=
+            1;
+        }
+
+        if (
+          rule?.decision ===
+          "rejected"
+        ) {
+          approvalCategory.rejected +=
+            1;
+        }
+      }
 
       week.approvals.push({
         operationId,
@@ -2993,10 +3245,36 @@ function calculateCategoryResult({
     qualityScore * 0.3 +
     completionScore * 0.2;
 
-  if (response) {
+  if (
+    categoryId ===
+      "aprovacoes" &&
+    response
+  ) {
+    /*
+     * Eficiência das aprovações:
+     *
+     * 50% rapidez;
+     * 35% conclusão das solicitações;
+     * 15% volume analisado.
+     *
+     * Aprovar ou reprovar é uma decisão válida.
+     * O problema é deixar o registro esperando.
+     */
     score =
-      score * 0.8 +
-      response.score * 0.2;
+      response.score *
+        0.50 +
+      completionScore *
+        0.35 +
+      productivityScore *
+        0.15;
+  } else if (
+    response
+  ) {
+    score =
+      score *
+        0.8 +
+      response.score *
+        0.2;
   }
 
   const hasData =
@@ -5692,6 +5970,1082 @@ function buildExecutiveDashboardEmbeds({
     analysisEmbed,
     participationAuditEmbed,
   ];
+}
+
+/*
+ * ============================================================================
+ * TEXTO HUMANO UTILIZADO PELO RELATÓRIO COMPLETO
+ * ============================================================================
+ */
+function simplifyCompleteOperationalFeedbackText(
+  value
+) {
+  let text =
+    String(
+      value ||
+      ""
+    ).trim();
+
+  if (
+    !text
+  ) {
+    return "";
+  }
+
+  text =
+    text.replace(
+      /Os indicadores gerais da operação estão em ([\d.]+)%\. Por esse motivo, a nota geral foi limitada de ([\d.]+)% para ([\d.]+)%\./i,
+      (
+        _match,
+        operationalScore,
+        _originalScore,
+        finalScore
+      ) =>
+        `A operação está em ${operationalScore}% nos indicadores principais. Por isso, a nota final ficou em ${finalScore}%.`
+    );
+
+  text =
+    text.replace(
+      /Priorizar o ritmo da meta geral e aumentar a quantidade de participantes que atingem o mínimo individual antes de classificar a operação como saudável\./i,
+      "Aumentar o ritmo das atividades e fazer mais pessoas atingirem a meta individual."
+    );
+
+  text =
+    text.replace(
+      /Participação da Equipe está em nível crítico, com ([\d.]+)%\./i,
+      (
+        _match,
+        score
+      ) =>
+        `A participação da equipe está baixa nesta semana: ${score}%.`
+    );
+
+  text =
+    text.replace(
+      /A liderança apresentou retenção estimada de ([\d.]+)%, indicando boa permanência dos novos líderes\./i,
+      (
+        _match,
+        retention
+      ) =>
+        `A liderança está estável: ${retention}% dos novos líderes permaneceram.`
+    );
+
+  text =
+    text.replace(
+      /(.+) mantém desempenho forte, alcançando ([\d.]+)%\./i,
+      (
+        _match,
+        category,
+        score
+      ) =>
+        `${category} está indo bem nesta semana, com ${score}%.`
+    );
+
+  text =
+    text.replace(
+      /(.+) está em nível crítico, com ([\d.]+)%\./i,
+      (
+        _match,
+        category,
+        score
+      ) =>
+        `${category} precisa de atenção: está com ${score}%.`
+    );
+
+  text =
+    text.replace(
+      /(.+) registrou a maior queda, com variação de ([+\-\d.]+) pontos\./i,
+      (
+        _match,
+        category,
+        difference
+      ) =>
+        `${category} foi a área que mais piorou nesta semana: ${difference} pontos.`
+    );
+
+  text =
+    text.replace(
+      /(.+) apresentou a maior evolução da semana, com avanço de ([+\-\d.]+) pontos\./i,
+      (
+        _match,
+        category,
+        difference
+      ) =>
+        `${category} foi a área que mais melhorou nesta semana: ${difference} pontos.`
+    );
+
+  return text;
+}
+
+/*
+ * ============================================================================
+ * RELATÓRIO OPERACIONAL COMPLETO EM MENSAGEM
+ * ============================================================================
+ */
+function buildCompleteOperationalTextReport(
+  results
+) {
+  const current =
+    results?.current;
+
+  const previous =
+    results?.previous;
+
+  const displayed =
+    results?.displayed;
+
+  const diagnosis =
+    results?.diagnosis ||
+    {};
+
+  const providerMetrics =
+    results?.providerMetrics ||
+    [];
+
+  const operationalRoleAnalysis =
+    results?.operationalRoleAnalysis ||
+    null;
+
+  const findMetric =
+    id =>
+      providerMetrics.find(
+        metric =>
+          String(
+            metric?.id ||
+            metric?.providerId ||
+            ""
+          ) ===
+          id
+      ) ||
+      null;
+
+  const batePontoMetric =
+    findMetric(
+      "bate_ponto"
+    );
+
+  const presencasMetric =
+    findMetric(
+      "presencas"
+    );
+
+  const managerMetric =
+    findMetric(
+      "registro_manager"
+    );
+
+  const pagamentosMetric =
+    findMetric(
+      "pagamentos"
+    );
+
+  const alinhamentosMetric =
+    findMetric(
+      "alinhamentos"
+    );
+
+  const hallMetric =
+    findMetric(
+      "hall_da_fama"
+    );
+
+  const eventosDiariosMetric =
+    findMetric(
+      "eventos_diarios"
+    );
+
+  const checklistMetric =
+    findMetric(
+      "log_checklist"
+    );
+
+  const lines = [];
+
+  lines.push(
+    "# 📊 Relatório Completo da SantaCreators",
+    "",
+    `📅 **Período:** ${current?.weekInfo?.label || "Não identificado"}`,
+    "",
+    `**NPS atual:** ${Number(displayed?.score || 0).toFixed(1)}%`,
+    `**Semana atual:** ${Number(current?.rawScore || 0).toFixed(1)}%`,
+    `**Semana passada:** ${Number(previous?.rawScore || 0).toFixed(1)}%`,
+    `**Diferença:** ${formatSigned(
+      Number(current?.rawScore || 0) -
+      Number(previous?.rawScore || 0)
+    )} pontos`,
+    "",
+    "═══════════════════════════════════════",
+    "",
+    "## 🟢 O QUE ESTÁ BOM",
+    ""
+  );
+
+  for (
+    const point of
+    diagnosis.positives ||
+    []
+  ) {
+    lines.push(
+      `✅ ${simplifyCompleteOperationalFeedbackText(
+        point
+      )}`
+    );
+  }
+
+  lines.push(
+    "",
+    "## 🔴 O QUE PRECISA MELHORAR",
+    ""
+  );
+
+  for (
+    const point of
+    diagnosis.attentions ||
+    []
+  ) {
+    lines.push(
+      `🚨 ${simplifyCompleteOperationalFeedbackText(
+        point
+      )}`
+    );
+  }
+
+  /*
+   * ================================================================
+   * BATE PONTO
+   * ================================================================
+   */
+  lines.push(
+    "",
+    "## 🕒 BATE PONTO DA EQUIPE",
+    ""
+  );
+
+  if (
+    batePontoMetric
+  ) {
+    lines.push(
+      `**Esta semana:** ${Number(batePontoMetric.current || 0)}`,
+      `**Semana passada:** ${Number(batePontoMetric.previous || 0)}`,
+      `**Diferença:** ${formatSigned(Number(batePontoMetric.difference || 0))}`,
+      ""
+    );
+
+    for (
+      const point of
+      batePontoMetric.positivePoints ||
+      []
+    ) {
+      lines.push(
+        `✅ ${point}`
+      );
+    }
+
+    for (
+      const point of
+      batePontoMetric.attentionPoints ||
+      []
+    ) {
+      lines.push(
+        `⚠️ ${point}`
+      );
+    }
+  } else {
+    lines.push(
+      "Ainda não existem dados confiáveis de Bate Ponto."
+    );
+  }
+
+  /*
+   * ================================================================
+   * PRESENÇA DAS ORGS
+   * ================================================================
+   */
+  lines.push(
+    "",
+    "## 🏙️ PRESENÇA DAS ORGs NOS EVENTOS",
+    ""
+  );
+
+  if (
+    presencasMetric
+  ) {
+    const details =
+      presencasMetric.details ||
+      {};
+
+    lines.push(
+      `**ORGs cadastradas:** ${Number(details.totalOrganizations || 0)}`,
+      `**Responderam:** ${Number(details.answered || 0)}`,
+      `**Confirmaram presença:** ${Number(details.confirmed || 0)}`,
+      `**Informaram ausência:** ${Number(details.absent || 0)}`,
+      `**Ainda não responderam:** ${Number(details.pending || 0)}`,
+      `**Taxa de resposta:** ${Number(details.responseRate || 0).toFixed(1)}%`,
+      `**Presença entre quem respondeu:** ${Number(details.attendanceRate || 0).toFixed(1)}%`
+    );
+
+    if (
+      Array.isArray(
+        details.pendingOrganizations
+      ) &&
+      details.pendingOrganizations.length
+    ) {
+      lines.push(
+        "",
+        `⚠️ **ORGs pendentes:** ${details.pendingOrganizations.join(", ")}`
+      );
+    }
+  } else {
+    lines.push(
+      "Ainda não existem dados de confirmação das ORGs."
+    );
+  }
+
+  /*
+   * ================================================================
+   * REGISTRO MANAGER
+   * ================================================================
+   */
+  lines.push(
+    "",
+    "## 🗂️ REGISTRO MANAGER",
+    ""
+  );
+
+  if (
+    managerMetric
+  ) {
+    const details =
+      managerMetric.details ||
+      {};
+
+    lines.push(
+      `**Aprovados:** ${Number(details.approved || 0)}`,
+      `**Reprovados:** ${Number(details.rejected || 0)}`,
+      `**Pendentes:** ${Number(details.pending || 0)}`,
+      `**Taxa de aprovação:** ${Number(details.approvalRate || 0).toFixed(1)}%`
+    );
+
+    const response =
+      managerMetric.responseTime ||
+      null;
+
+    if (
+      response
+    ) {
+      lines.push(
+        `**Tempo médio para decidir:** ${formatDuration(response.average)}`,
+        `**Mediana:** ${formatDuration(response.median)}`,
+        `**90% decididos em até:** ${formatDuration(response.p90)}`
+      );
+    }
+
+    const approvers =
+      Object.entries(
+        details.byApprover ||
+        {}
+      )
+        .sort(
+          (
+            first,
+            second
+          ) =>
+            Number(
+              second[1] ||
+              0
+            ) -
+            Number(
+              first[1] ||
+              0
+            )
+        )
+        .slice(
+          0,
+          10
+        );
+
+    if (
+      approvers.length
+    ) {
+      lines.push(
+        "",
+        "**Quem mais analisou:**"
+      );
+
+      approvers.forEach(
+        (
+          [
+            userId,
+            amount,
+          ],
+          index
+        ) => {
+          lines.push(
+            `${index + 1}. <@${userId}> — ${amount} decisão(ões)`
+          );
+        }
+      );
+    }
+  }
+
+  /*
+   * ================================================================
+   * PAGAMENTOS
+   * ================================================================
+   */
+  lines.push(
+    "",
+    "## 💰 PAGAMENTOS SOCIAL MEDIA",
+    ""
+  );
+
+  if (
+    pagamentosMetric
+  ) {
+    const details =
+      pagamentosMetric.details ||
+      {};
+
+    lines.push(
+      `**Aprovados:** ${Number(details.approved || pagamentosMetric.current || 0)}`,
+      `**Reprovados:** ${Number(details.rejected || 0)}`,
+      `**Solicitados:** ${Number(details.requested || 0)}`
+    );
+
+    const decisionUsers =
+      Object.entries(
+        details.decisionsByUser ||
+        {}
+      )
+        .sort(
+          (
+            first,
+            second
+          ) =>
+            Number(
+              second[1]?.total ||
+              0
+            ) -
+            Number(
+              first[1]?.total ||
+              0
+            )
+        );
+
+    if (
+      decisionUsers.length
+    ) {
+      lines.push(
+        "",
+        "**Interações dos aprovadores:**"
+      );
+
+      decisionUsers
+        .slice(
+          0,
+          10
+        )
+        .forEach(
+          (
+            [
+              userId,
+              data,
+            ],
+            index
+          ) => {
+            lines.push(
+              `${index + 1}. <@${userId}> — ${Number(data.total || 0)} ações | ✅ ${Number(data.approved || 0)} | ❌ ${Number(data.rejected || 0)} | 📌 ${Number(data.requested || 0)} solicitado(s)`
+            );
+          }
+        );
+    }
+  }
+
+  /*
+   * ================================================================
+   * APROVAÇÕES POR SISTEMA
+   * ================================================================
+   */
+  lines.push(
+    "",
+    "## ⚡ EFICIÊNCIA DAS APROVAÇÕES",
+    ""
+  );
+
+  const approvalWeek =
+    results?.state
+      ?.weeks
+      ?.[
+        current?.weekInfo?.key
+      ];
+
+  const previousApprovalWeek =
+    results?.state
+      ?.weeks
+      ?.[
+        previous?.weekInfo?.key
+      ];
+
+  const approvalSystems = [
+    {
+      id:
+        "registro_manager",
+
+      label:
+        "Registro Manager",
+    },
+    {
+      id:
+        "alinhamentos",
+
+      label:
+        "Alinhamentos",
+    },
+    {
+      id:
+        "pagamentos",
+
+      label:
+        "Pagamentos",
+    },
+    {
+      id:
+        "hall_da_fama",
+
+      label:
+        "Hall da Fama",
+    },
+    {
+      id:
+        "eventos_diarios",
+
+      label:
+        "Eventos Diários",
+    },
+  ];
+
+  for (
+    const system of
+    approvalSystems
+  ) {
+    const decisions =
+      (
+        approvalWeek?.approvals ||
+        []
+      ).filter(
+        item =>
+          item.category ===
+          system.id
+      );
+
+    const previousDecisions =
+      (
+        previousApprovalWeek
+          ?.approvals ||
+        []
+      ).filter(
+        item =>
+          item.category ===
+          system.id
+      );
+
+    if (
+      !decisions.length &&
+      !previousDecisions.length
+    ) {
+      continue;
+    }
+
+    const durations =
+      decisions
+        .map(
+          item =>
+            Number(
+              item.duration
+            )
+        )
+        .filter(
+          Number.isFinite
+        );
+
+    const previousDurations =
+      previousDecisions
+        .map(
+          item =>
+            Number(
+              item.duration
+            )
+        )
+        .filter(
+          Number.isFinite
+        );
+
+    const currentAverage =
+      durations.length
+        ? durations.reduce(
+            (
+              total,
+              value
+            ) =>
+              total +
+              value,
+            0
+          ) /
+          durations.length
+        : null;
+
+    const previousAverage =
+      previousDurations.length
+        ? previousDurations.reduce(
+            (
+              total,
+              value
+            ) =>
+              total +
+              value,
+            0
+          ) /
+          previousDurations.length
+        : null;
+
+    lines.push(
+      "",
+      `**${system.label}**`,
+      `Decisões nesta semana: ${decisions.length}`
+    );
+
+    if (
+      currentAverage != null
+    ) {
+      lines.push(
+        `Tempo médio: ${formatDuration(currentAverage)}`
+      );
+    }
+
+    if (
+      previousAverage != null
+    ) {
+      lines.push(
+        `Semana passada: ${formatDuration(previousAverage)}`
+      );
+
+      if (
+        currentAverage != null
+      ) {
+        const speedDifference =
+          currentAverage -
+          previousAverage;
+
+        lines.push(
+          speedDifference <
+            0
+            ? `✅ Ficou ${formatDuration(Math.abs(speedDifference))} mais rápido.`
+            : speedDifference >
+                0
+              ? `⚠️ Ficou ${formatDuration(speedDifference)} mais lento.`
+              : "➖ O tempo permaneceu praticamente igual."
+        );
+      }
+    }
+
+    const byApprover =
+      {};
+
+    for (
+      const decision of
+      decisions
+    ) {
+      const approverId =
+        String(
+          decision.approverId ||
+          ""
+        );
+
+      if (
+        !approverId
+      ) {
+        continue;
+      }
+
+      byApprover[
+        approverId
+      ] ||= {
+        decisions:
+          0,
+
+        durations:
+          [],
+      };
+
+      byApprover[
+        approverId
+      ].decisions +=
+        1;
+
+      if (
+        Number.isFinite(
+          Number(
+            decision.duration
+          )
+        )
+      ) {
+        byApprover[
+          approverId
+        ].durations.push(
+          Number(
+            decision.duration
+          )
+        );
+      }
+    }
+
+    const approverRanking =
+      Object.entries(
+        byApprover
+      )
+        .map(
+          (
+            [
+              userId,
+              data,
+            ]
+          ) => ({
+            userId,
+
+            decisions:
+              data.decisions,
+
+            average:
+              data.durations.length
+                ? data.durations.reduce(
+                    (
+                      total,
+                      value
+                    ) =>
+                      total +
+                      value,
+                    0
+                  ) /
+                  data.durations.length
+                : null,
+          })
+        )
+        .sort(
+          (
+            first,
+            second
+          ) =>
+            second.decisions -
+            first.decisions
+        );
+
+    approverRanking
+      .slice(
+        0,
+        5
+      )
+      .forEach(
+        (
+          approver,
+          index
+        ) => {
+          lines.push(
+            `${index + 1}. <@${approver.userId}> — ${approver.decisions} decisão(ões)` +
+            (
+              approver.average !=
+              null
+                ? ` • média ${formatDuration(approver.average)}`
+                : ""
+            )
+          );
+        }
+      );
+  }
+
+  /*
+   * ================================================================
+   * CHECKLIST SEMANAL DE LOGS
+   * ================================================================
+   */
+  lines.push(
+    "",
+    "## 📋 CHECKLIST SEMANAL DE LOGS",
+    ""
+  );
+
+  if (
+    checklistMetric
+  ) {
+    const checklistDetails =
+      checklistMetric.details ||
+      {};
+
+    lines.push(
+      `**Logs que precisavam ser conferidas:** ${Number(checklistDetails.totalMembers || 0)}`,
+      `**Já conferidas:** ${Number(checklistDetails.checkedMembers || 0)}`,
+      `**Ainda pendentes:** ${Number(checklistDetails.pendingMembers || 0)}`,
+      `**Responsáveis que concluíram tudo:** ${Number(checklistDetails.completedResponsibles || 0)} de ${Number(checklistDetails.totalResponsibles || 0)}`,
+      ""
+    );
+
+    const responsibleEntries =
+      Object.entries(
+        checklistDetails
+          .byResponsible ||
+        {}
+      )
+        .filter(
+          (
+            [
+              ,
+              responsible,
+            ]
+          ) =>
+            responsible?.ignored !==
+            true
+        );
+
+    if (
+      responsibleEntries.length >
+      0
+    ) {
+      lines.push(
+        "**Desempenho por Responsável:**"
+      );
+
+      for (
+        const [
+          responsibleId,
+          responsible,
+        ] of responsibleEntries
+      ) {
+        const checked =
+          Number(
+            responsible?.checked ||
+            0
+          );
+
+        const total =
+          Number(
+            responsible?.total ||
+            0
+          );
+
+        const pending =
+          Number(
+            responsible?.pending ||
+            0
+          );
+
+        if (
+          responsible?.completed
+        ) {
+          const level =
+            responsible?.completion
+              ?.level ||
+            "";
+
+          const emoji =
+            level ===
+              "excellent"
+              ? "🟢"
+              : level ===
+                  "good"
+                ? "✅"
+                : level ===
+                    "attention"
+                  ? "🟡"
+                  : level ===
+                      "late"
+                    ? "🟠"
+                    : "🔴";
+
+          lines.push(
+            `${emoji} <@${responsibleId}> — ${checked}/${total} conferidas • ${responsible?.completion?.label || "Concluído"}`
+          );
+        } else {
+          lines.push(
+            `🔴 <@${responsibleId}> — ${checked}/${total} conferidas • ${pending} pendente(s)`
+          );
+        }
+      }
+    }
+
+    const previousChecklist =
+      checklistDetails.previous ||
+      {};
+
+    if (
+      Number(
+        previousChecklist.totalMembers ||
+        0
+      ) >
+      0
+    ) {
+      lines.push(
+        "",
+        "**Comparação com a semana passada:**",
+        `Semana atual: ${Number(checklistMetric.score || 0).toFixed(1)}%`,
+        `Semana passada: ${Number(previousChecklist.score || 0).toFixed(1)}%`
+      );
+
+      const checklistDifference =
+        Number(
+          checklistMetric.score ||
+          0
+        ) -
+        Number(
+          previousChecklist.score ||
+          0
+        );
+
+      if (
+        checklistDifference >
+        2
+      ) {
+        lines.push(
+          `✅ Melhorou ${checklistDifference.toFixed(1)} pontos.`
+        );
+      } else if (
+        checklistDifference <
+        -2
+      ) {
+        lines.push(
+          `🚨 Piorou ${Math.abs(checklistDifference).toFixed(1)} pontos.`
+        );
+      } else {
+        lines.push(
+          "➖ O desempenho ficou parecido com a semana passada."
+        );
+      }
+    }
+  } else {
+    lines.push(
+      "Ainda não existem dados suficientes do Checklist Semanal de Logs."
+    );
+  }
+
+  /*
+   * ================================================================
+   * DEMAIS FONTES
+   * ================================================================
+   */
+  const otherSources = [
+    alinhamentosMetric,
+    hallMetric,
+    eventosDiariosMetric,
+    findMetric(
+      "registro_poderes"
+    ),
+    findMetric(
+      "cronograma"
+    ),
+    findMetric(
+      "set_staff"
+    ),
+  ].filter(Boolean);
+
+  lines.push(
+    "",
+    "## 📚 DEMAIS ÁREAS",
+    ""
+  );
+
+  for (
+    const metric of
+    otherSources
+  ) {
+    lines.push(
+      `**${metric.label}** — ${Number(metric.score || 0).toFixed(1)}%`
+    );
+
+    for (
+      const point of
+      metric.positivePoints ||
+      []
+    ) {
+      lines.push(
+        `✅ ${point}`
+      );
+    }
+
+    for (
+      const point of
+      metric.attentionPoints ||
+      []
+    ) {
+      lines.push(
+        `⚠️ ${point}`
+      );
+    }
+
+    lines.push("");
+  }
+
+  /*
+   * ================================================================
+   * PARTICIPAÇÃO POR CARGO
+   * ================================================================
+   */
+  lines.push(
+    "## 👥 PARTICIPAÇÃO POR EQUIPE",
+    ""
+  );
+
+  const groups = [
+    operationalRoleAnalysis
+      ?.responsaveis,
+
+    operationalRoleAnalysis
+      ?.coordenacao,
+
+    operationalRoleAnalysis
+      ?.equipe_creator,
+  ].filter(Boolean);
+
+  for (
+    const group of
+    groups
+  ) {
+    lines.push(
+      `**${group.label}**`,
+      `Membros do cargo: ${Number(group.serverMembers || 0)}`,
+      `Participaram: ${Number(group.activeMembers || 0)}`,
+      `Atividades: ${Number(group.records || 0)}`,
+      ""
+    );
+  }
+
+  /*
+   * ================================================================
+   * PRÓXIMA SEMANA
+   * ================================================================
+   */
+  lines.push(
+    "## 🎯 O QUE PRECISA SER FEITO",
+    ""
+  );
+
+  for (
+    const recommendation of
+    diagnosis.recommendations ||
+    []
+  ) {
+    lines.push(
+      `🎯 ${simplifyCompleteOperationalFeedbackText(
+        recommendation
+      )}`
+    );
+  }
+
+  lines.push(
+    "",
+    "_Atualização automática • SantaCreators_"
+  );
+
+  return lines.join(
+    "\n"
+  );
 }
 
 function buildDashboardComponents() {
@@ -11260,107 +12614,54 @@ if (
   return true;
 }
 
-  if (
+    if (
     customId ===
     BUTTON_EXECUTIVE_DM_ID
   ) {
     try {
       /*
-       * O relatório completo tenta primeiro utilizar
-       * diretamente a mensagem do painel executivo
-       * que já está publicada no Discord.
+       * O relatório completo passa a ser enviado
+       * como mensagens normais.
        *
-       * Isso evita:
-       *
-       * • gerar novamente todas as métricas;
-       * • executar novamente o GeralDash;
-       * • executar novamente scanners históricos;
-       * • aguardar os provedores pesados;
-       * • produzir uma nota diferente daquela
-       *   que está atualmente visível no painel.
+       * O painel público pode continuar usando embeds.
        */
-      const state =
-        loadState();
-
-      const executiveChannel =
-        await client.channels.fetch(
-          NPS_EXECUTIVE_CHANNEL_ID
-        ).catch(
-          () => null
+      const results =
+        await getCurrentDashboardResults(
+          client
         );
 
-      let executiveEmbeds =
-        null;
-
-      if (
-        executiveChannel &&
-        executiveChannel.isTextBased()
-      ) {
-        const existingExecutive =
-          await findExistingDashboardMessage(
-            executiveChannel,
-            state.executiveDashboardMessageId,
-            NPS_EXECUTIVE_MARKER
-          );
-
-        if (
-          existingExecutive &&
-          Array.isArray(
-            existingExecutive.embeds
-          ) &&
-          existingExecutive.embeds.length >
-            0
-        ) {
-          executiveEmbeds =
-            existingExecutive.embeds.map(
-              embed =>
-                embed.toJSON()
-            );
-
-          console.log(
-            "[NPS Operacional] Relatório privado reutilizou diretamente o painel executivo existente."
-          );
-        }
-      }
-
-      /*
-       * Fallback de segurança.
-       *
-       * Somente será utilizado caso a mensagem
-       * executiva realmente não exista mais.
-       *
-       * Mantém completamente a funcionalidade
-       * antiga como segunda opção.
-       */
-      if (
-        !executiveEmbeds ||
-        !executiveEmbeds.length
-      ) {
-        console.warn(
-          "[NPS Operacional] Painel executivo não encontrado. Utilizando geração de fallback."
+      const completeReport =
+        buildCompleteOperationalTextReport(
+          results
         );
 
-        const results =
-          await getCurrentDashboardResults(
-            client
-          );
+      const reportChunks =
+        splitDiscordText(
+          completeReport,
+          1900
+        );
 
-        executiveEmbeds =
-          buildExecutiveDashboardEmbeds(
-            results
-          );
+      if (
+        !reportChunks.length
+      ) {
+        throw new Error(
+          "O relatório completo não gerou conteúdo."
+        );
       }
 
-      await interaction.user.send({
-        content:
-          "🧠 **Relatório completo da saúde operacional da SantaCreators**",
-        embeds:
-          executiveEmbeds,
-      });
+      for (
+        const chunk of
+        reportChunks
+      ) {
+        await interaction.user.send({
+          content:
+            chunk,
+        });
+      }
 
       await interaction.editReply({
         content:
-          "✅ O relatório completo foi enviado para o seu privado.",
+          `✅ O relatório completo foi enviado para o seu privado em ${reportChunks.length} mensagem(ns).`,
       });
     } catch (error) {
       const code =

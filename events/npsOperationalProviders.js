@@ -44,10 +44,11 @@ const GENERAL_WEEKLY_GOAL =
   500;
 
 /*
- * Presenças corresponde ao sistema oficial de Bate Ponto.
+ * Bate Ponto corresponde à presença da equipe.
  *
- * A meta representa a quantidade semanal mínima de registros
- * esperados para que a operação seja considerada saudável.
+ * Esta meta NÃO representa confirmação de ORGs em eventos.
+ * A presença das ORGs é calculada separadamente pelo
+ * confirmacao_presenca_state.json.
  */
 const PRESENCE_WEEKLY_GOAL =
   15;
@@ -57,6 +58,18 @@ const PRESENCE_WEEKLY_GOAL =
  */
 const PAYMENT_WEEKLY_GOAL =
   10;
+
+/*
+ * Checklist semanal das logs dos membros.
+ *
+ * O arquivo é produzido pelo logChecklistSemanal.js.
+ */
+const LOG_CHECKLIST_FILE =
+  path.join(
+    process.cwd(),
+    "data",
+    "sc_logs_checklist.json"
+  );
 
 // ============================================================================
 // COLETA HISTÓRICA COMPARTILHADA DO PAY EVENT DASH
@@ -371,10 +384,10 @@ const SOURCE_LABELS = {
     "Cronograma",
 
   presenca:
-    "Bate Ponto",
+    "Presença das ORGs nos Eventos",
 
   presencas:
-    "Bate Ponto",
+    "Presença das ORGs nos Eventos",
 
   alinhamentos:
     "Alinhamentos",
@@ -383,7 +396,7 @@ const SOURCE_LABELS = {
     "Registros de Organizações",
 
   confirmacoes:
-    "Confirmações de Organizações",
+    "Presença das ORGs nos Eventos",
 
   convites:
     "Convites para Líderes",
@@ -1525,10 +1538,10 @@ async function buildPresenceMetric(
 
   return {
     id:
-      "presencas",
+      "bate_ponto",
 
     label:
-      "Presenças / Bate Ponto",
+      "Bate Ponto da Equipe",
 
     available:
       currentRecords > 0 ||
@@ -2334,10 +2347,10 @@ function buildOrganizationConfirmationMetric() {
 
 return {
   id:
-    "organizacoes",
+    "presencas",
 
   label:
-    "Confirmação de Organizações",
+    "Presença das ORGs nos Eventos",
 
   /*
    * A existência de organizações cadastradas não significa
@@ -3097,6 +3110,904 @@ async function buildPaymentMetric(
   };
 }
 
+function npsWeekKeyToChecklistWeekKey(
+  weekKey
+) {
+  const raw =
+    String(
+      weekKey ||
+      ""
+    ).trim();
+
+  if (
+    !/^\d{4}-\d{2}-\d{2}$/.test(
+      raw
+    )
+  ) {
+    return raw;
+  }
+
+  const date =
+    new Date(
+      `${raw}T12:00:00-03:00`
+    );
+
+  date.setDate(
+    date.getDate() -
+    1
+  );
+
+  return new Intl.DateTimeFormat(
+    "en-CA",
+    {
+      timeZone:
+        TZ,
+
+      year:
+        "numeric",
+
+      month:
+        "2-digit",
+
+      day:
+        "2-digit",
+    }
+  ).format(
+    date
+  );
+}
+
+/*
+ * ============================================================================
+ * MÉTRICA: CHECKLIST SEMANAL DE LOGS
+ * ============================================================================
+ *
+ * Avalia a eficiência dos Responsáveis na conferência
+ * das logs dos membros vinculados a eles.
+ *
+ * Regra operacional:
+ *
+ * • terminou no domingo = excelente;
+ * • terminou na segunda = bom;
+ * • terminou na terça = atenção;
+ * • terminou na quarta = atrasado;
+ * • terminou quinta/sexta = muito atrasado;
+ * • deixou membro pendente = crítico.
+ *
+ * A métrica também compara o resultado com a semana anterior.
+ */
+function buildWeeklyLogChecklistMetric(
+  context = {}
+) {
+  const checklist =
+    readJson(
+      LOG_CHECKLIST_FILE,
+      {
+        weeks:
+          {},
+      }
+    );
+
+  const currentNpsWeekKey =
+    String(
+      context.currentWeek?.key ||
+      ""
+    );
+
+  const previousNpsWeekKey =
+    String(
+      context.previousWeek?.key ||
+      ""
+    );
+
+  const currentChecklistWeekKey =
+    npsWeekKeyToChecklistWeekKey(
+      currentNpsWeekKey
+    );
+
+  const previousChecklistWeekKey =
+    npsWeekKeyToChecklistWeekKey(
+      previousNpsWeekKey
+    );
+
+  const currentWeek =
+    checklist?.weeks?.[
+      currentChecklistWeekKey
+    ] || {
+      responsaveis:
+        {},
+    };
+
+  const previousWeek =
+    checklist?.weeks?.[
+      previousChecklistWeekKey
+    ] || {
+      responsaveis:
+        {},
+    };
+
+  /*
+   * Descobre em qual dia um responsável terminou
+   * todas as conferências dele.
+   */
+  function getCompletionDayInformation(
+    completedAt
+  ) {
+    if (
+      !Number.isFinite(
+        Number(
+          completedAt
+        )
+      ) ||
+      Number(
+        completedAt
+      ) <=
+        0
+    ) {
+      return {
+        label:
+          "Não concluído",
+
+        level:
+          "critical",
+
+        score:
+          0,
+
+        day:
+          null,
+      };
+    }
+
+    const date =
+      new Date(
+        Number(
+          completedAt
+        )
+      );
+
+    const weekday =
+      new Intl.DateTimeFormat(
+        "en-US",
+        {
+          timeZone:
+            TZ,
+
+          weekday:
+            "short",
+        }
+      ).format(
+        date
+      );
+
+    /*
+     * Sun = domingo
+     * Mon = segunda
+     * Tue = terça
+     * Wed = quarta
+     * Thu = quinta
+     * Fri = sexta
+     * Sat = sábado
+     */
+    if (
+      weekday ===
+      "Sun"
+    ) {
+      return {
+        label:
+          "Concluiu no domingo",
+
+        level:
+          "excellent",
+
+        score:
+          100,
+
+        day:
+          weekday,
+      };
+    }
+
+    if (
+      weekday ===
+      "Mon"
+    ) {
+      return {
+        label:
+          "Concluiu na segunda-feira",
+
+        level:
+          "good",
+
+        score:
+          85,
+
+        day:
+          weekday,
+      };
+    }
+
+    if (
+      weekday ===
+      "Tue"
+    ) {
+      return {
+        label:
+          "Concluiu na terça-feira",
+
+        level:
+          "attention",
+
+        score:
+          65,
+
+        day:
+          weekday,
+      };
+    }
+
+    if (
+      weekday ===
+      "Wed"
+    ) {
+      return {
+        label:
+          "Concluiu na quarta-feira",
+
+        level:
+          "late",
+
+        score:
+          45,
+
+        day:
+          weekday,
+      };
+    }
+
+    if (
+      weekday ===
+        "Thu" ||
+      weekday ===
+        "Fri"
+    ) {
+      return {
+        label:
+          `Concluiu ${
+            weekday ===
+              "Thu"
+              ? "na quinta-feira"
+              : "na sexta-feira"
+          }`,
+
+        level:
+          "critical",
+
+        score:
+          25,
+
+        day:
+          weekday,
+      };
+    }
+
+    return {
+      label:
+        "Concluiu fora do período esperado",
+
+      level:
+        "critical",
+
+      score:
+        20,
+
+      day:
+        weekday,
+    };
+  }
+
+  /*
+   * Analisa uma semana inteira.
+   */
+  function analyzeChecklistWeek(
+    weekData
+  ) {
+    const responsaveis =
+      Object.entries(
+        weekData?.responsaveis ||
+        {}
+      );
+
+    const byResponsible =
+      {};
+
+    let totalMembers =
+      0;
+
+    let checkedMembers =
+      0;
+
+    let completedResponsibles =
+      0;
+
+    let responsiblesWithPending =
+      0;
+
+    let timelinessScoreTotal =
+      0;
+
+    let timelinessSamples =
+      0;
+
+    for (
+      const [
+        responsibleId,
+        responsibleData,
+      ] of responsaveis
+    ) {
+      const members =
+        Object.entries(
+          responsibleData
+            ?.members ||
+          {}
+        );
+
+      /*
+       * Responsável sem membro vinculado não entra
+       * na nota de cumprimento.
+       */
+      if (
+        members.length ===
+        0
+      ) {
+        byResponsible[
+          responsibleId
+        ] = {
+          responsibleId,
+
+          total:
+            0,
+
+          checked:
+            0,
+
+          pending:
+            0,
+
+          completed:
+            true,
+
+          completedAt:
+            null,
+
+          completion:
+            null,
+
+          ignored:
+            true,
+        };
+
+        continue;
+      }
+
+      const checked =
+        members.filter(
+          (
+            [
+              ,
+              member,
+            ]
+          ) =>
+            member?.checked ===
+            true
+        );
+
+      const pending =
+        members.length -
+        checked.length;
+
+      totalMembers +=
+        members.length;
+
+      checkedMembers +=
+        checked.length;
+
+      const completed =
+        pending ===
+        0;
+
+      let completedAt =
+        null;
+
+      if (
+        completed
+      ) {
+        const timestamps =
+          checked
+            .map(
+              (
+                [
+                  ,
+                  member,
+                ]
+              ) =>
+                Number(
+                  member?.checkedAt ||
+                  0
+                )
+            )
+            .filter(
+              timestamp =>
+                Number.isFinite(
+                  timestamp
+                ) &&
+                timestamp >
+                  0
+            );
+
+        /*
+         * O responsável terminou quando a última log
+         * necessária foi marcada como conferida.
+         */
+        if (
+          timestamps.length ===
+          checked.length &&
+          timestamps.length >
+            0
+        ) {
+          completedAt =
+            Math.max(
+              ...timestamps
+            );
+        }
+      }
+
+      const completion =
+        getCompletionDayInformation(
+          completedAt
+        );
+
+      if (
+        completed
+      ) {
+        completedResponsibles +=
+          1;
+      } else {
+        responsiblesWithPending +=
+          1;
+      }
+
+      if (
+        completed &&
+        completedAt
+      ) {
+        timelinessScoreTotal +=
+          completion.score;
+
+        timelinessSamples +=
+          1;
+      }
+
+      byResponsible[
+        responsibleId
+      ] = {
+        responsibleId,
+
+        total:
+          members.length,
+
+        checked:
+          checked.length,
+
+        pending,
+
+        completed,
+
+        completedAt,
+
+        completion,
+
+        ignored:
+          false,
+
+        members:
+          Object.fromEntries(
+            members.map(
+              (
+                [
+                  memberId,
+                  member,
+                ]
+              ) => [
+                memberId,
+                {
+                  checked:
+                    member?.checked ===
+                    true,
+
+                  checkedAt:
+                    member?.checkedAt ||
+                    null,
+
+                  checkedBy:
+                    member?.checkedBy ||
+                    null,
+                },
+              ]
+            )
+          ),
+      };
+    }
+
+    const validResponsibles =
+      Object.values(
+        byResponsible
+      ).filter(
+        responsible =>
+          responsible.ignored !==
+          true
+      );
+
+    const totalResponsibles =
+      validResponsibles.length;
+
+    const completionRate =
+      totalMembers >
+        0
+        ? (
+            checkedMembers /
+            totalMembers
+          ) *
+          100
+        : 0;
+
+    const responsibleCompletionRate =
+      totalResponsibles >
+        0
+        ? (
+            completedResponsibles /
+            totalResponsibles
+          ) *
+          100
+        : 0;
+
+    const averageTimeliness =
+      timelinessSamples >
+        0
+        ? timelinessScoreTotal /
+          timelinessSamples
+        : 0;
+
+    /*
+     * 65% = todas as logs realmente conferidas;
+     * 35% = rapidez para finalizar.
+     *
+     * Se houver responsável ainda pendente,
+     * a falta de conclusão já derruba a primeira parte.
+     */
+    const score =
+      totalMembers >
+        0
+        ? clamp(
+            completionRate *
+              0.65 +
+            averageTimeliness *
+              0.35
+          )
+        : 0;
+
+    return {
+      score,
+
+      totalMembers,
+      checkedMembers,
+
+      pendingMembers:
+        Math.max(
+          0,
+          totalMembers -
+          checkedMembers
+        ),
+
+      completionRate,
+
+      totalResponsibles,
+      completedResponsibles,
+      responsiblesWithPending,
+      responsibleCompletionRate,
+      averageTimeliness,
+      byResponsible,
+    };
+  }
+
+  const current =
+    analyzeChecklistWeek(
+      currentWeek
+    );
+
+  const previous =
+    analyzeChecklistWeek(
+      previousWeek
+    );
+
+  const positivePoints =
+    [];
+
+  const attentionPoints =
+    [];
+
+  const recommendations =
+    [];
+
+  if (
+    current.totalMembers >
+    0
+  ) {
+    positivePoints.push(
+      `${current.checkedMembers} de ${current.totalMembers} log(s) dos membros já foram conferidas nesta semana.`
+    );
+  }
+
+  if (
+    current.completedResponsibles >
+    0
+  ) {
+    positivePoints.push(
+      `${current.completedResponsibles} responsável(is) já concluíram todas as conferências dos próprios membros.`
+    );
+  }
+
+  const excellentResponsibles =
+    Object.values(
+      current.byResponsible
+    ).filter(
+      responsible =>
+        responsible.completed &&
+        responsible.completion
+          ?.level ===
+          "excellent"
+    );
+
+  if (
+    excellentResponsibles.length >
+    0
+  ) {
+    positivePoints.push(
+      `${excellentResponsibles.length} responsável(is) finalizaram todas as logs já no domingo, dentro do prazo ideal.`
+    );
+  }
+
+  const mondayResponsibles =
+    Object.values(
+      current.byResponsible
+    ).filter(
+      responsible =>
+        responsible.completed &&
+        responsible.completion
+          ?.level ===
+          "good"
+    );
+
+  if (
+    mondayResponsibles.length >
+    0
+  ) {
+    positivePoints.push(
+      `${mondayResponsibles.length} responsável(is) concluíram as logs na segunda-feira.`
+    );
+  }
+
+  const tuesdayOrLater =
+    Object.values(
+      current.byResponsible
+    ).filter(
+      responsible =>
+        responsible.completed &&
+        [
+          "attention",
+          "late",
+          "critical",
+        ].includes(
+          responsible.completion
+            ?.level
+        )
+    );
+
+  if (
+    tuesdayOrLater.length >
+    0
+  ) {
+    attentionPoints.push(
+      `${tuesdayOrLater.length} responsável(is) só terminaram as logs na terça-feira ou depois.`
+    );
+  }
+
+  if (
+    current.responsiblesWithPending >
+    0
+  ) {
+    attentionPoints.push(
+      `${current.responsiblesWithPending} responsável(is) ainda possuem membros com logs pendentes de conferência.`
+    );
+
+    recommendations.push(
+      "Cobrar imediatamente os Responsáveis que ainda possuem logs pendentes e concluir todas as conferências."
+    );
+  }
+
+  if (
+    current.pendingMembers >
+    0
+  ) {
+    attentionPoints.push(
+      `${current.pendingMembers} membro(s) ainda estão sem a conferência semanal concluída.`
+    );
+  }
+
+  const scoreDifference =
+    current.score -
+    previous.score;
+
+  if (
+    previous.totalMembers >
+      0 &&
+    scoreDifference >=
+      5
+  ) {
+    positivePoints.push(
+      `A conferência semanal melhorou ${scoreDifference.toFixed(1)} pontos em relação à semana passada.`
+    );
+  }
+
+  if (
+    previous.totalMembers >
+      0 &&
+    scoreDifference <=
+      -5
+  ) {
+    attentionPoints.push(
+      `A eficiência na conferência das logs caiu ${Math.abs(scoreDifference).toFixed(1)} pontos em relação à semana passada.`
+    );
+
+    recommendations.push(
+      "Revisar com os Responsáveis por que a conferência das logs ficou mais lenta do que na semana passada."
+    );
+  }
+
+  if (
+    !recommendations.length
+  ) {
+    recommendations.push(
+      "Manter a conferência das logs concentrada no domingo e evitar deixar membros pendentes para terça ou quarta-feira."
+    );
+  }
+
+  return {
+    id:
+      "log_checklist",
+
+    label:
+      "Checklist Semanal de Logs",
+
+    available:
+      current.totalMembers >
+        0 ||
+      previous.totalMembers >
+        0,
+
+    officialSource:
+      true,
+
+    sourceType:
+      "persistent_checklist",
+
+    score:
+      current.score,
+
+    confidence:
+      current.totalMembers >
+        0
+        ? 100
+        : 0,
+
+    /*
+     * Volume representa logs conferidas.
+     */
+    volume:
+      current.checkedMembers,
+
+    goal:
+      current.totalMembers,
+
+    current:
+      current.checkedMembers,
+
+    previous:
+      previous.checkedMembers,
+
+    difference:
+      current.checkedMembers -
+      previous.checkedMembers,
+
+    positivePoints,
+    attentionPoints,
+    recommendations,
+
+    details: {
+      currentWeekKey:
+        currentChecklistWeekKey,
+
+      previousWeekKey:
+        previousChecklistWeekKey,
+
+      totalMembers:
+        current.totalMembers,
+
+      checkedMembers:
+        current.checkedMembers,
+
+      pendingMembers:
+        current.pendingMembers,
+
+      completionRate:
+        current.completionRate,
+
+      totalResponsibles:
+        current.totalResponsibles,
+
+      completedResponsibles:
+        current.completedResponsibles,
+
+      responsiblesWithPending:
+        current.responsiblesWithPending,
+
+      responsibleCompletionRate:
+        current.responsibleCompletionRate,
+
+      averageTimeliness:
+        current.averageTimeliness,
+
+      byResponsible:
+        current.byResponsible,
+
+      previous: {
+        totalMembers:
+          previous.totalMembers,
+
+        checkedMembers:
+          previous.checkedMembers,
+
+        pendingMembers:
+          previous.pendingMembers,
+
+        completionRate:
+          previous.completionRate,
+
+        totalResponsibles:
+          previous.totalResponsibles,
+
+        completedResponsibles:
+          previous.completedResponsibles,
+
+        responsiblesWithPending:
+          previous.responsiblesWithPending,
+
+        responsibleCompletionRate:
+          previous.responsibleCompletionRate,
+
+        averageTimeliness:
+          previous.averageTimeliness,
+
+        score:
+          previous.score,
+
+        byResponsible:
+          previous.byResponsible,
+      },
+    },
+  };
+}
+
 // ============================================================================
 // REGISTRO DOS PROVEDORES
 // ============================================================================
@@ -3113,7 +4024,7 @@ registerOperationalMetricProvider(
 );
 
 registerOperationalMetricProvider(
-  "presencas",
+  "bate_ponto",
   async context =>
     buildPresenceMetric(
       context
@@ -3121,7 +4032,7 @@ registerOperationalMetricProvider(
 );
 
 registerOperationalMetricProvider(
-  "organizacoes",
+  "presencas",
   async () =>
     buildOrganizationConfirmationMetric()
 );
@@ -3166,6 +4077,14 @@ registerOperationalMetricProvider(
   async context =>
     buildPayEvtSourceMetric(
       "cronograma",
+      context
+    )
+);
+
+registerOperationalMetricProvider(
+  "log_checklist",
+  async context =>
+    buildWeeklyLogChecklistMetric(
       context
     )
 );

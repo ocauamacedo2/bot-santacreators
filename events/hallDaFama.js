@@ -9641,17 +9641,33 @@ const cityDisplayName = CITIES[finalCityKey].label;
       const reqId = `${interaction.user.id}-${Date.now()}`;
       
 state.pendingRequests[reqId] = {
-  userId: interaction.user.id,
-  cityKey: finalCityKey,
+  userId:
+    interaction.user.id,
+
+  cityKey:
+    finalCityKey,
+
   cityDisplayName,
+
   eventName,
+
   winnersText,
+
   imageUrl,
   imageUrl2,
   imageUrl3,
   imageUrl4,
   imageUrls,
-  eventKey: eventData?.eventKey || null
+
+  eventKey:
+    eventData?.eventKey ||
+    null,
+
+  createdAt:
+    Date.now(),
+
+  operationId:
+    reqId,
 };
       saveState(state);
 
@@ -9737,12 +9753,58 @@ if (approvalImageReferences.length > 0) {
           approvalImageFiles;
       }
 
-      await approvalChannel.send(
-        approvalPayload
-      );
+      const approvalMessage =
+        await approvalChannel.send(
+          approvalPayload
+        );
 
-      await interaction.editReply("✅ Solicitação enviada para aprovação!");
-      return true;
+      try {
+        dashEmit(
+          "halldafama:criado",
+          {
+            __at:
+              state.pendingRequests[
+                reqId
+              ].createdAt,
+
+            createdAt:
+              state.pendingRequests[
+                reqId
+              ].createdAt,
+
+            operationId:
+              reqId,
+
+            recordId:
+              reqId,
+
+            messageId:
+              approvalMessage.id,
+
+            channelId:
+              approvalMessage.channelId,
+
+            guildId:
+              approvalMessage.guildId,
+
+            userId:
+              interaction.user.id,
+
+            creatorId:
+              interaction.user.id,
+
+            source:
+              "hall_da_fama",
+
+            dedupeKey:
+              `halldafama:criado:${reqId}`,
+          }
+        );
+      } catch {}
+
+      await interaction.editReply(
+        "✅ Solicitação enviada para aprovação!"
+      );     return true;
     }
 
     // 4. Aprovação
@@ -9868,12 +9930,49 @@ if (approvalImageReferences.length > 0) {
         console.error("[HallDaFama] Erro ao atualizar ranking após aprovação:", e);
       }
 
-      dashEmit("halldafama:aprovado", {
-        userId: data.userId,
-        approverId: interaction.user.id,
-        at: Date.now()
-        // console.log(`[HALL_DA_FAMA] dashEmit: userId=${data.userId}, approverId=${interaction.user.id}`); // Debug
-      });
+dashEmit(
+  "halldafama:aprovado",
+  {
+    __at:
+      Date.now(),
+
+    decidedAt:
+      Date.now(),
+
+    createdAt:
+      Number(
+        data.createdAt ||
+        0
+      ),
+
+    operationId:
+      reqId,
+
+    recordId:
+      reqId,
+
+    userId:
+      data.userId,
+
+    creatorId:
+      data.userId,
+
+    approverId:
+      interaction.user.id,
+
+    executorId:
+      interaction.user.id,
+
+    source:
+      "hall_da_fama",
+
+    decision:
+      "approved",
+
+    dedupeKey:
+      `halldafama:aprovado:${reqId}`,
+  }
+);
 
       // ✅ Log de Auditoria
       await sendAuditHallLog(client, interaction.member, data, sentMsg);
@@ -9945,9 +10044,73 @@ if (approvalImageReferences.length > 0) {
         .setTitle("❌ Hall da Fama RECUSADO")
         .setFooter({ text: `Recusado por ${interaction.user.tag}` });
 
-      await interaction.message.edit({ embeds: [embedRejected], components: [] });
-      
-      delete state.pendingRequests[reqId];
+      await interaction.message.edit({
+        embeds:
+          [embedRejected],
+
+        components:
+          []
+      });
+
+      const rejectedData =
+        state.pendingRequests[
+          reqId
+        ];
+
+      if (
+        rejectedData
+      ) {
+        try {
+          dashEmit(
+            "halldafama:reprovado",
+            {
+              __at:
+                Date.now(),
+
+              decidedAt:
+                Date.now(),
+
+              createdAt:
+                Number(
+                  rejectedData.createdAt ||
+                  0
+                ),
+
+              operationId:
+                reqId,
+
+              recordId:
+                reqId,
+
+              userId:
+                rejectedData.userId,
+
+              creatorId:
+                rejectedData.userId,
+
+              approverId:
+                interaction.user.id,
+
+              executorId:
+                interaction.user.id,
+
+              source:
+                "hall_da_fama",
+
+              decision:
+                "rejected",
+
+              dedupeKey:
+                `halldafama:reprovado:${reqId}`,
+            }
+          );
+        } catch {}
+      }
+
+      delete state.pendingRequests[
+        reqId
+      ];
+
       saveState(state);
       await interaction.reply({ content: "❌ Solicitação recusada.", ephemeral: true });
       return true;

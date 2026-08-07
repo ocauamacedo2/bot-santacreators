@@ -810,12 +810,31 @@ if (!finalCityKey || !CITIES[finalCityKey]) {
 const reqId = `${interaction.user.id}-${Date.now()}`;
     
 state.pendingRequests[reqId] = {
-  userId: interaction.user.id,
-  cityKey: finalCityKey,
+  userId:
+    interaction.user.id,
+
+  cityKey:
+    finalCityKey,
+
   title,
+
   description,
+
   imageUrl,
-  eventKey: eventData?.eventKey || null
+
+  eventKey:
+    eventData?.eventKey ||
+    null,
+
+  /*
+   * Horário exato em que entrou na fila
+   * de aprovação.
+   */
+  createdAt:
+    Date.now(),
+
+  operationId:
+    reqId,
 };
     saveState(state); // Salva no arquivo
 
@@ -847,14 +866,65 @@ state.pendingRequests[reqId] = {
         .setStyle(ButtonStyle.Danger)
     );
 
-    await approvalChannel.send({
-      content: "Nova solicitação de Evento Diário pendente.",
-      embeds: [embed],
-      components: [row]
-    });
+    const approvalMessage =
+      await approvalChannel.send({
+        content:
+          "Nova solicitação de Evento Diário pendente.",
 
-    await interaction.editReply("✅ Solicitação enviada para aprovação!");
-    return true;
+        embeds:
+          [embed],
+
+        components:
+          [row]
+      });
+
+    try {
+      dashEmit(
+        "eventosdiarios:criado",
+        {
+          __at:
+            state.pendingRequests[
+              reqId
+            ].createdAt,
+
+          createdAt:
+            state.pendingRequests[
+              reqId
+            ].createdAt,
+
+          operationId:
+            reqId,
+
+          recordId:
+            reqId,
+
+          messageId:
+            approvalMessage.id,
+
+          channelId:
+            approvalMessage.channelId,
+
+          guildId:
+            approvalMessage.guildId,
+
+          userId:
+            interaction.user.id,
+
+          creatorId:
+            interaction.user.id,
+
+          source:
+            "eventos_diarios",
+
+          dedupeKey:
+            `eventosdiarios:criado:${reqId}`,
+        }
+      );
+    } catch {}
+
+    await interaction.editReply(
+      "✅ Solicitação enviada para aprovação!"
+    );   return true;
   }
 
   if (interaction.isButton() && interaction.customId.startsWith(BTN_APPROVE_PREFIX)) {
@@ -923,12 +993,49 @@ ${mentions}`;
       // ✅ Aqui passa true para forçar o botão a descer
       await ensureButtonAtBottom(eventChannel, client, true);
 
-      dashEmit("eventosdiarios:aprovado", {
-        userId: data.userId,
-        approverId: interaction.user.id,
-        at: Date.now()
-        // console.log(`[EVENTOS_DIARIOS] dashEmit: userId=${data.userId}, approverId=${interaction.user.id}`); // Debug
-      });
+      dashEmit(
+        "eventosdiarios:aprovado",
+        {
+          __at:
+            Date.now(),
+
+          decidedAt:
+            Date.now(),
+
+          createdAt:
+            Number(
+              data.createdAt ||
+              0
+            ),
+
+          operationId:
+            reqId,
+
+          recordId:
+            reqId,
+
+          userId:
+            data.userId,
+
+          creatorId:
+            data.userId,
+
+          approverId:
+            interaction.user.id,
+
+          executorId:
+            interaction.user.id,
+
+          source:
+            "eventos_diarios",
+
+          decision:
+            "approved",
+
+          dedupeKey:
+            `eventosdiarios:aprovado:${reqId}`,
+        }
+      );
 
       const embedApproved = EmbedBuilder.from(interaction.message.embeds[0])
         .setColor("#2ecc71")
@@ -972,11 +1079,78 @@ ${mentions}`;
       .setTitle("❌ Evento Diário RECUSADO")
       .setFooter({ text: `Recusado por ${interaction.user.tag}` });
 
-    await interaction.message.edit({ embeds: [embedRejected], components: [] }).catch(() => {});
-    
-    delete state.pendingRequests[reqId];
-    unlockRequestProcessing(reqId);
-    saveState(state); // Salva a remoção
+    await interaction.message.edit({
+      embeds:
+        [embedRejected],
+
+      components:
+        []
+    }).catch(() => {});
+
+    const rejectedData =
+      state.pendingRequests[
+        reqId
+      ];
+
+    if (
+      rejectedData
+    ) {
+      try {
+        dashEmit(
+          "eventosdiarios:reprovado",
+          {
+            __at:
+              Date.now(),
+
+            decidedAt:
+              Date.now(),
+
+            createdAt:
+              Number(
+                rejectedData.createdAt ||
+                0
+              ),
+
+            operationId:
+              reqId,
+
+            recordId:
+              reqId,
+
+            userId:
+              rejectedData.userId,
+
+            creatorId:
+              rejectedData.userId,
+
+            approverId:
+              interaction.user.id,
+
+            executorId:
+              interaction.user.id,
+
+            source:
+              "eventos_diarios",
+
+            decision:
+              "rejected",
+
+            dedupeKey:
+              `eventosdiarios:reprovado:${reqId}`,
+          }
+        );
+      } catch {}
+    }
+
+    delete state.pendingRequests[
+      reqId
+    ];
+
+    unlockRequestProcessing(
+      reqId
+    );
+
+    saveState(state);
     await interaction.reply({ content: "❌ Solicitação recusada.", ephemeral: true });
     return true;
   }

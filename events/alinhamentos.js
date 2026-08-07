@@ -785,6 +785,54 @@ export async function alinhamentosHandleInteraction(interaction, client) {
 
       const targetId = extractId(rawFoi);
 
+      /*
+       * Registra o nascimento da solicitação.
+       *
+       * O ID da própria mensagem será utilizado depois
+       * para relacionar a criação com a aprovação/reprovação.
+       */
+      try {
+        dashEmit(
+          "alinhamento:registrado",
+          {
+            __at:
+              msg.createdTimestamp ||
+              Date.now(),
+
+            createdAt:
+              msg.createdTimestamp ||
+              Date.now(),
+
+            operationId:
+              msg.id,
+
+            recordId:
+              msg.id,
+
+            messageId:
+              msg.id,
+
+            channelId:
+              msg.channelId,
+
+            guildId:
+              msg.guildId,
+
+            userId:
+              registradorId,
+
+            creatorId:
+              registradorId,
+
+            source:
+              "alinhamentos",
+
+            dedupeKey:
+              `alinhamento:registrado:${msg.id}`,
+          }
+        );
+      } catch {}
+
       const evolutionResult = {
         ok: false,
         reason: "pendente_validacao",
@@ -793,7 +841,6 @@ export async function alinhamentosHandleInteraction(interaction, client) {
 
 // ✅ Log de Auditoria
 await sendAuditAlinhamentoLog(client, interaction.member, { quemFoi: rawFoi, assunto: rawSobre }, msg, evolutionResult);
-
 await interaction.reply({
   content:
     "✅ Alinhamento enviado para validação!\n" +
@@ -1062,22 +1109,89 @@ const fields = readEmbedFields(freshEmb).filter((f) => {
   // - quem ganha ponto é a pessoa do campo "Quem alinhou?"
   // - quem registrou só ganha se também for quem alinhou
   // - se reprovar, ninguém pontua
-  if (isValid) {
-    const quemAlinhouRaw = getFieldValueByNameIncludes(freshEmb, "quem alinhou");
-    const registradoPorRaw = getFieldValueByNameIncludes(freshEmb, "registrado por");
-    const quemAlinhouId = extractId(quemAlinhouRaw) || extractId(registradoPorRaw);
+  {
+    const quemAlinhouRaw =
+      getFieldValueByNameIncludes(
+        freshEmb,
+        "quem alinhou"
+      );
 
-    if (quemAlinhouId) {
-      try {
-        dashEmit("alinhamento:validado", {
-          userId: quemAlinhouId,
+    const registradoPorRaw =
+      getFieldValueByNameIncludes(
+        freshEmb,
+        "registrado por"
+      );
+
+    const quemAlinhouId =
+      extractId(
+        quemAlinhouRaw
+      ) ||
+      extractId(
+        registradoPorRaw
+      ) ||
+      registradorId;
+
+    try {
+      dashEmit(
+        isValid
+          ? "alinhamento:validado"
+          : "alinhamento:invalidado",
+        {
+          __at:
+            Date.now(),
+
+          decidedAt:
+            Date.now(),
+
+          createdAt:
+            msg.createdTimestamp ||
+            Date.now(),
+
+          operationId:
+            msg.id,
+
+          recordId:
+            msg.id,
+
+          messageId:
+            msg.id,
+
+          channelId:
+            msg.channelId,
+
+          guildId:
+            msg.guildId,
+
+          userId:
+            quemAlinhouId,
+
+          creatorId:
+            registradorId,
+
           validatorId,
-          __at: Date.now(),
-          source: "alinhamentos",
-          src: "alinv1",
-        });
-      } catch {}
-    }
+
+          approverId:
+            validatorId,
+
+          executorId:
+            validatorId,
+
+          decision:
+            isValid
+              ? "approved"
+              : "rejected",
+
+          source:
+            "alinhamentos",
+
+          src:
+            "alinv1",
+
+          dedupeKey:
+            `alinhamento:${isValid ? "validado" : "invalidado"}:${msg.id}`,
+        }
+      );
+    } catch {}
   }
 
   await interaction.editReply(
