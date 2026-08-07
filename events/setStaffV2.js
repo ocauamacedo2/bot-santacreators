@@ -1969,15 +1969,36 @@ if (!pedido) {
   return true;
 }
 
-
       const membro = await interaction.guild.members.fetch(userIdTarget).catch(() => null);
-      if (!membro) {
-        await interaction.followUp({ content: "❌ Membro não encontrado no servidor.", ephemeral: true }).catch(() => {});
+
+      // ✅ Para APROVAR, o usuário precisa continuar no servidor,
+      // pois precisamos aplicar cargos e alterar o nickname.
+      // Para REPROVAR, o usuário pode já ter saído do servidor.
+      if (!membro && acao === "aprovar") {
+        await interaction.followUp({
+          content:
+            "❌ Não é possível aprovar este pedido porque o membro não está mais no servidor.\n" +
+            "Se necessário, você ainda pode **reprovar** o pedido normalmente.",
+          ephemeral: true,
+        }).catch(() => {});
         return true;
       }
 
-      const { cidade, nivel, nome, pasta, passaporte, dataHora } = pedido;
+      // ✅ Mesmo que tenha saído do servidor, tenta localizar
+      // o usuário globalmente no Discord para DM/avatar.
+      const usuarioAlvo =
+        membro?.user ||
+        await client.users.fetch(userIdTarget).catch(() => null);
 
+      // ✅ Avatar usado no embed final.
+      // Se o usuário não puder mais ser localizado, reaproveita
+      // a thumbnail existente na mensagem original.
+      const avatarUrl =
+        usuarioAlvo?.displayAvatarURL() ||
+        interaction.message?.embeds?.[0]?.thumbnail?.url ||
+        null;
+
+      const { cidade, nivel, nome, pasta, passaporte, dataHora } = pedido;
       const ehADM = [
   "adm",
   "responsaveis",
@@ -2084,15 +2105,22 @@ updateSetStaffDecision({
 });
 
       } else {
-        await membro
-          .send(
-            `❌ Seu pedido de set staff foi **reprovado**.\n` +
-              `Motivo: Análise da equipe.\n\n` +
-              `Caso tenha dúvidas, entre em contato com a liderança.`
-          )
-          .catch(() => {
-            dmFalhou = true;
-          });
+        // ✅ Pode reprovar mesmo que o membro já tenha saído do servidor.
+        // Se ainda conseguirmos localizar o usuário globalmente no Discord,
+        // tentamos enviar a DM normalmente.
+        if (usuarioAlvo) {
+          await usuarioAlvo
+            .send(
+              `❌ Seu pedido de set staff foi **reprovado**.\n` +
+                `Motivo: Análise da equipe.\n\n` +
+                `Caso tenha dúvidas, entre em contato com a liderança.`
+            )
+            .catch(() => {
+              dmFalhou = true;
+            });
+        } else {
+          dmFalhou = true;
+        }
 
 updateUltimoStatus(
   userIdTarget,
@@ -2130,7 +2158,6 @@ updateSetStaffDecision({
       const embedFinal = new EmbedBuilder()
         .setTitle(`📋 Pedido de Set Staff ${acao === "aprovar" ? "Aprovado" : "Reprovado"}`)
         .setColor(acao === "aprovar" ? 0x00ff88 : 0xff5555)
-        .setThumbnail(membro.displayAvatarURL())
         .addFields(
           { name: "👤 Nome:", value: nome || "—", inline: true },
           { name: "📁 Pasta:", value: pasta || "—", inline: true },
@@ -2146,6 +2173,11 @@ updateSetStaffDecision({
           }
         )
         .setFooter({ text: `ID do usuário: ${userIdTarget}` });
+
+      // ✅ Só adiciona thumbnail se tivermos uma URL válida.
+      if (avatarUrl) {
+        embedFinal.setThumbnail(avatarUrl);
+      }
 
       // edita a msg do registro (a própria interaction.message)
       await interaction.message
