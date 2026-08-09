@@ -466,9 +466,9 @@ import { setupAntiFloodProtector } from "../events/antiFloodProtector.js";
 import setupProtecaoBotsDeletarCanais from "../events/protecaoBotsDeletarCanais.js";
 import { installMessageGuardian } from "../events/messageGuardian.js";
 import { installServerConfigGuardian } from "../events/serverConfigGuardian.js";
+import { installBotSecurityGuardian } from "../events/botSecurityGuardian.js";
 import { installOrgTicketAccessSync } from "../events/orgTicketAccessSync.js";
 import { recriarTicketsHandleMessage } from "../events/ticketRecreator.js";
-
 // Dashboard de entradas, saídas, retornos e banimentos
 import {
   memberFlowDashboardOnReady,
@@ -715,16 +715,17 @@ const setupEventHandlers = () => {
   if (client.__handlersWired) return;
   client.__handlersWired = true;
 
-  setupSyncCargos(client);
-  installRoleGuardian(client);
-  installOrgTicketAccessSync(client);
-  setupSortChannels(client);
-  setupTicketRenamer(client);
-  setupIaChatAuto(client);
-  setupProtecaoBotsDeletarCanais(client);
-  setupAntiFloodProtector(client);
-  installMessageGuardian(client);
-  installServerConfigGuardian(client);
+setupSyncCargos(client);
+installRoleGuardian(client);
+installOrgTicketAccessSync(client);
+setupSortChannels(client);
+setupTicketRenamer(client);
+setupIaChatAuto(client);
+setupProtecaoBotsDeletarCanais(client);
+setupAntiFloodProtector(client);
+installMessageGuardian(client);
+installServerConfigGuardian(client);
+installBotSecurityGuardian(client);
 
   // ✅ PRIORIDADE MÁXIMA: registra o listener do botão/modal de poderes cedo.
   // Sem isso, durante o boot pesado o botão existe, mas o handler ainda não foi instalado,
