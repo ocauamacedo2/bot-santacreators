@@ -458,7 +458,64 @@ function limitDiscordText(text) {
     return finalText;
   }
 
-  return `${finalText.slice(0, MAX_RESPONSE_CHARS - 3)}...`;
+  return finalText;
+}
+
+function splitDiscordText(text, maxLength = MAX_RESPONSE_CHARS) {
+  const finalText = String(text || "").trim();
+
+  if (!finalText) {
+    return [];
+  }
+
+  if (finalText.length <= maxLength) {
+    return [finalText];
+  }
+
+  const parts = [];
+  let remaining = finalText;
+
+  while (remaining.length > maxLength) {
+    let splitIndex = remaining.lastIndexOf("\n\n", maxLength);
+
+    if (splitIndex < Math.floor(maxLength * 0.5)) {
+      splitIndex = remaining.lastIndexOf("\n", maxLength);
+    }
+
+    if (splitIndex < Math.floor(maxLength * 0.5)) {
+      splitIndex = remaining.lastIndexOf(". ", maxLength);
+
+      if (splitIndex !== -1) {
+        splitIndex += 1;
+      }
+    }
+
+    if (splitIndex < Math.floor(maxLength * 0.5)) {
+      splitIndex = remaining.lastIndexOf(" ", maxLength);
+    }
+
+    if (splitIndex <= 0) {
+      splitIndex = maxLength;
+    }
+
+    const part = remaining
+      .slice(0, splitIndex)
+      .trim();
+
+    if (part) {
+      parts.push(part);
+    }
+
+    remaining = remaining
+      .slice(splitIndex)
+      .trim();
+  }
+
+  if (remaining) {
+    parts.push(remaining);
+  }
+
+  return parts;
 }
 
 function fixBrokenDiscordMentions(text) {
@@ -3245,9 +3302,20 @@ a menos que isso seja realmente necessário.
 - se já souber uma preferência útil daquela conversa, considere essa preferência;
 - não obrigue a pessoa a explicar novamente algo que já aparece claramente na memória disponível.
 
+6.1. APRENDIZADO POR CONVERSA E CORREÇÃO DO USUÁRIO:
+- Quando o usuário claramente ensinar, explicar, complementar ou corrigir uma informação sobre a SantaCreators, entenda que ele está atualizando o contexto conhecido.
+- Exemplos de intenção: "na verdade...", "não, é...", "corrigindo...", "ela faz...", "funciona assim...", "são 4 cidades...", "o certo é...", "faltou falar que...".
+- Preserve o SIGNIFICADO da informação ensinada, não necessariamente a forma exata como ela foi escrita.
+- Se o usuário escrever com abreviações, erros de digitação, erros de português ou linguagem informal, entenda normalmente a informação.
+- Ao reutilizar essa informação no futuro, escreva em português brasileiro correto, natural e humano.
+- Não imite erros de português apenas porque eles aparecem na memória.
+- Não precisa dizer "você me ensinou isso anteriormente" ou "segundo minha memória". Use a informação naturalmente quando ela for relevante.
+- Se uma informação nova corrigir claramente uma informação antiga da conversa, considere a correção mais recente como a versão preferida.
+- Uma correção do usuário sobre contexto geral pode ser lembrada pela memória, mas não deve substituir dados operacionais atuais vindos dos sistemas internos.
+- Para dados que podem mudar com o tempo, como cargos, membros, rankings, presença, cronograma atual e registros atuais, continue priorizando as fontes reais do servidor.
+
 7. MEMÓRIA NÃO É FONTE DE VERDADE PARA DADOS OPERACIONAIS ATUAIS.
 Ela serve para lembrar assuntos, contexto, preferências, explicações e continuidade.
-
 8. Para fatos atuais da SantaCreators, como:
 - quem bateu ponto;
 - quem alinhou;
@@ -3602,12 +3670,12 @@ for (const modelName of GEMINI_MODEL_FALLBACKS) {
         model: modelName,
         contents: prompt,
 
-        config: {
-          temperature: 0.72,
-          topP: 0.9,
-          topK: 40,
-          maxOutputTokens: 700,
-        },
+       config: {
+  temperature: 0.72,
+  topP: 0.9,
+  topK: 40,
+  maxOutputTokens: 1600,
+},
       });
 
     return result.text;
@@ -5964,18 +6032,35 @@ const allowedMentionUsers =
         // RESPOSTA
         // =====================================================
 
+        const responseParts =
+          splitDiscordText(finalText);
 
-        // Resposta com menções controladas para segurança
-        await sendTemporaryReply(message, {
-          content: finalText,
-          allowedMentions: {
-            repliedUser: true,
-            users: allowedMentionUsers,
-            roles: [],
-            parse: [],
-          },
-        });
+        for (let index = 0; index < responseParts.length; index++) {
+          const part = responseParts[index];
 
+          if (index === 0) {
+            await sendTemporaryReply(message, {
+              content: part,
+              allowedMentions: {
+                repliedUser: true,
+                users: allowedMentionUsers,
+                roles: [],
+                parse: [],
+              },
+            });
+
+            continue;
+          }
+
+          await message.channel.send({
+            content: part,
+            allowedMentions: {
+              users: allowedMentionUsers,
+              roles: [],
+              parse: [],
+            },
+          });
+        }
         // =====================================================
         // MEMÓRIA DA CONVERSA
         // =====================================================
