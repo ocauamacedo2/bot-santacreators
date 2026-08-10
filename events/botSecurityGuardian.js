@@ -125,24 +125,196 @@ const STATE_TTL_MS =
 // PALAVRÕES / EXPRESSÕES PROIBIDAS
 // =====================================================
 //
-// Você pode adicionar mais palavras aqui depois.
+// O sistema trabalha em duas camadas:
 //
-// IMPORTANTE:
-// É melhor usar palavras/expressões completas para
-// diminuir falso positivo.
+// 1. Expressões/palavras conhecidas.
+// 2. Padrões antiburla.
+//
+// A normalização feita mais abaixo permite detectar:
+// • maiúsculas/minúsculas
+// • acentos
+// • números substituindo letras
+// • pontuação entre letras
+// • espaços artificiais
+// • letras repetidas
+// • abreviações comuns
+//
+// Exemplos:
+// tomar no cu
+// tomar n0 cu
+// tomar.no.cu
+// tomar-no-cu
+// tomarrr no cuuu
+// tmnc
+// vtmc
+// vtnc
+// fdp
+// vsf
+// pqp
 // =====================================================
 
 const FORBIDDEN_WORDS = [
-  "filho da puta",
-  "filha da puta",
+  // ===================================================
+  // EXPRESSÕES COM "CU"
+  // ===================================================
+
+  "tomar no cu",
+  "toma no cu",
+  "tomá no cu",
   "vai tomar no cu",
+  "vá tomar no cu",
+  "va tomar no cu",
+  "vai toma no cu",
+  "vai toma no teu cu",
+  "vai tomar no seu cu",
+  "vai tomar no teu cu",
+  "tomar no seu cu",
+  "tomar no teu cu",
+
+  // ===================================================
+  // FODER / FUDER
+  // ===================================================
+
   "vai se foder",
   "vai se fuder",
+  "vá se foder",
+  "vá se fuder",
+  "va se foder",
+  "va se fuder",
+  "se foder",
+  "se fuder",
+  "foda-se",
+  "foda se",
+  "fodase",
+  "foda",
+  "foder",
+  "fuder",
+  "fodido",
+  "fodida",
+  "fodidos",
+  "fodidas",
+
+  // ===================================================
+  // PUTA
+  // ===================================================
+
+  "puta",
+  "puto",
+  "putinha",
+  "putinho",
+  "putona",
+  "putão",
+  "putao",
   "puta que pariu",
+  "puta merda",
+
+  // ===================================================
+  // FILHO / FILHA DA PUTA
+  // ===================================================
+
+  "filho da puta",
+  "filha da puta",
+  "filhos da puta",
+  "filhas da puta",
+  "filho de uma puta",
+  "filha de uma puta",
+
+  // ===================================================
+  // CARALHO
+  // ===================================================
+
+  "caralho",
+  "caralhos",
+  "carai",
+  "caralho mano",
+
+  // ===================================================
+  // PORRA
+  // ===================================================
+
+  "porra",
+  "porras",
+
+  // ===================================================
+  // ARROMBADO
+  // ===================================================
+
   "arrombado",
   "arrombada",
+  "arrombados",
+  "arrombadas",
+
+  // ===================================================
+  // DESGRAÇADO
+  // ===================================================
+
   "desgraçado",
   "desgraçada",
+  "desgraçados",
+  "desgraçadas",
+  "desgraça",
+  "desgraca",
+
+  // ===================================================
+  // MERDA
+  // ===================================================
+
+  "merda",
+  "bosta",
+
+  // ===================================================
+  // BABACA / OTÁRIO
+  // ===================================================
+
+  "babaca",
+  "otário",
+  "otaria",
+  "otário",
+  "otaria",
+  "otario",
+  "idiota",
+  "imbecil",
+
+  // ===================================================
+  // CUZÃO
+  // ===================================================
+
+  "cuzão",
+  "cuzao",
+  "cuzona",
+
+  // ===================================================
+  // PAU NO CU
+  // ===================================================
+
+  "pau no cu",
+  "pau no seu cu",
+  "pau no teu cu",
+
+  // ===================================================
+  // ABREVIAÇÕES / GÍRIAS
+  // ===================================================
+
+  "fdp",
+  "pqp",
+  "vsf",
+  "vsfd",
+  "tmnc",
+  "tnc",
+  "vtmc",
+  "vtnc",
+  "vtncu",
+  "vai tnc",
+  "vai tmnc",
+  "vai vtnc",
+  "vai vtmc",
+  "sfdr",
+  "sfd",
+  "krl",
+  "krlh",
+  "crl",
+  "crlh",
+  "pnc",
 ];
 
 // =====================================================
@@ -188,15 +360,112 @@ function truncate(value, max = 1000) {
 
 function normalizeText(value) {
   return String(value ?? "")
+    // =================================================
+    // NORMALIZA UNICODE
+    // =================================================
+
     .normalize("NFD")
+
+    // Remove acentos.
     .replace(/[\u0300-\u036f]/g, "")
+
+    // Tudo minúsculo.
     .toLowerCase()
+
+    // =================================================
+    // LEETSPEAK / TROCA DE NÚMEROS
+    // =================================================
+    //
+    // Exemplos:
+    // p0rra -> porra
+    // caralh0 -> caralho
+    // f0der -> foder
+    // put4 -> puta
+    // =================================================
+
+    .replace(/0/g, "o")
+    .replace(/1/g, "i")
+    .replace(/3/g, "e")
+    .replace(/4/g, "a")
+    .replace(/5/g, "s")
+    .replace(/7/g, "t")
+
+    // =================================================
+    // SÍMBOLOS USADOS PARA ESCONDER LETRAS
+    // =================================================
+
+    .replace(/@/g, "a")
+    .replace(/\$/g, "s")
+
+    // =================================================
+    // SEPARADORES
+    // =================================================
+    //
+    // Exemplos:
+    // vai.tomar.no.cu
+    // vai-tomar-no-cu
+    // vai_tomar_no_cu
+    //
+    // viram:
+    // vai tomar no cu
+    // =================================================
+
+    .replace(/[._,;:!?*~^`´'"()[\]{}|/\\+=<>-]+/g, " ")
+
+    // =================================================
+    // LETRAS REPETIDAS
+    // =================================================
+    //
+    // porrrra -> porra
+    // caraaaalho -> caralho
+    // cuuuu -> cu
+    //
+    // Mantemos no máximo 2 caracteres repetidos para
+    // reduzir risco de destruir palavras legítimas.
+    // =================================================
+
+    .replace(/(.)\1{2,}/g, "$1$1")
+
+    // Normaliza espaços.
     .replace(/\s+/g, " ")
+
     .trim();
 }
 
 // =====================================================
+// NORMALIZAÇÃO COMPACTA ANTIBURLA
+// =====================================================
+//
+// Remove espaços, pontuação e qualquer outro caractere
+// que não seja letra.
+//
+// Isso permite identificar tentativas como:
+//
+// v.s.f
+// v-s-f
+// v_s_f
+// v s f
+// f.d.p
+// f-d-p
+// f d p
+// t.m.n.c
+// t-m-n-c
+// t m n c
+// v.t.m.c
+// v t m c
+//
+// Depois da normalização:
+//
+// v.s.f   -> vsf
+// f.d.p   -> fdp
+// t.m.n.c -> tmnc
+// v.t.m.c -> vtmc
+// =====================================================
 
+function compactText(value) {
+  return normalizeText(value)
+    .replace(/[^a-z]/g, "");
+}
 
 // =====================================================
 // CONTEÚDOS QUE NÃO CONTAM COMO FLOOD HUMANO
@@ -327,7 +596,7 @@ function isHumanFloodPunishmentExempt(member) {
   }
 
   // ===================================================
-  // 1. RODNEY
+  // 1. macedo
   // ===================================================
 
   if (
@@ -389,23 +658,242 @@ function isHumanFloodPunishmentExempt(member) {
 }
 
 // =====================================================
+// USUÁRIO ISENTO DE PUNIÇÃO POR PALAVRÃO
+// =====================================================
+
+function isProfanityPunishmentExempt(member) {
+  if (!member) {
+    return false;
+  }
+
+  if (
+    member.id ===
+    "660311795327828008"
+  ) {
+    return true;
+  }
+
+  const exemptRoleIds =
+    new Set([
+      "1262262852949905408", // Owner
+      "1352408327983861844", // Resp. Creators
+    ]);
+
+  if (
+    member.roles?.cache?.some(
+      (role) =>
+        exemptRoleIds.has(
+          role.id
+        )
+    )
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+// =====================================================
+// PADRÕES COMPACTOS DE PALAVRÕES / ABREVIAÇÕES
+// =====================================================
+//
+// Esta lista é usada para detectar abreviações e
+// tentativas de burlar o sistema usando separadores.
+//
+// Exemplos:
+//
+// vsf
+// v.s.f
+// v-s-f
+// v_s_f
+// v s f
+//
+// Todos serão transformados em:
+//
+// vsf
+//
+// O mesmo acontece com:
+//
+// f.d.p   -> fdp
+// p.q.p   -> pqp
+// t.m.n.c -> tmnc
+// v.t.m.c -> vtmc
+//
+// A comparação dessas abreviações é EXATA para evitar
+// detectar acidentalmente uma sequência curta dentro
+// de uma palavra legítima maior.
+// =====================================================
+
+const FORBIDDEN_COMPACT_PATTERNS = [
+  // ===================================================
+  // VAI TOMAR NO CU / TOMAR NO CU
+  // ===================================================
+
+  "vtmc",
+  "vtnc",
+  "vtncu",
+  "tmnc",
+  "tnc",
+
+  // ===================================================
+  // VAI SE FODER / VAI SE FUDER
+  // ===================================================
+
+  "vsf",
+  "vsfd",
+  "sfd",
+  "sfdr",
+
+  // ===================================================
+  // FILHO DA PUTA
+  // ===================================================
+
+  "fdp",
+
+  // ===================================================
+  // PUTA QUE PARIU
+  // ===================================================
+
+  "pqp",
+
+  // ===================================================
+  // PAU NO CU
+  // ===================================================
+
+  "pnc",
+
+  // ===================================================
+  // CARALHO
+  // ===================================================
+
+  "krl",
+  "krlh",
+  "crl",
+  "crlh",
+];
+
+// =====================================================
 // PROCURA PALAVRÃO
 // =====================================================
 
 function containsForbiddenWord(content) {
-  const normalized = normalizeText(content);
+  const normalized =
+    normalizeText(content);
+
+  const compact =
+    compactText(content);
 
   if (!normalized) {
     return null;
   }
 
-  return (
-    FORBIDDEN_WORDS.find((word) =>
+  // ===================================================
+  // 1. PALAVRAS / EXPRESSÕES COMPLETAS
+  // ===================================================
+
+  for (
+    const word of
+    FORBIDDEN_WORDS
+  ) {
+    const normalizedWord =
+      normalizeText(word);
+
+    if (
       normalized.includes(
-        normalizeText(word)
+        normalizedWord
       )
-    ) ?? null
-  );
+    ) {
+      return word;
+    }
+  }
+
+  // ===================================================
+  // 2. ABREVIAÇÕES EXATAS
+  // ===================================================
+  //
+  // Detecta:
+  //
+  // vsf
+  // v.s.f
+  // v-s-f
+  // v s f
+  // v_s_f
+  //
+  // sem procurar "vsf" no meio de uma palavra maior.
+  // ===================================================
+
+  for (
+    const pattern of
+    FORBIDDEN_COMPACT_PATTERNS
+  ) {
+    if (
+      compact === pattern
+    ) {
+      return pattern;
+    }
+  }
+
+  // ===================================================
+  // 3. EXPRESSÕES IMPORTANTES COM ESPAÇAMENTO BURLADO
+  // ===================================================
+
+  const compactExpressions = [
+    {
+      value: "vaitomarnocu",
+      label: "vai tomar no cu",
+    },
+    {
+      value: "tomarnocu",
+      label: "tomar no cu",
+    },
+    {
+      value: "tomanocu",
+      label: "toma no cu",
+    },
+    {
+      value: "vaitomanocu",
+      label: "vai toma no cu",
+    },
+    {
+      value: "vaisefoder",
+      label: "vai se foder",
+    },
+    {
+      value: "vaisefuder",
+      label: "vai se fuder",
+    },
+    {
+      value: "filhodaputa",
+      label: "filho da puta",
+    },
+    {
+      value: "filhadaputa",
+      label: "filha da puta",
+    },
+    {
+      value: "putaquepariu",
+      label: "puta que pariu",
+    },
+    {
+      value: "paunocu",
+      label: "pau no cu",
+    },
+  ];
+
+  for (
+    const expression of
+    compactExpressions
+  ) {
+    if (
+      compact.includes(
+        expression.value
+      )
+    ) {
+      return expression.label;
+    }
+  }
+
+  return null;
 }
 
 // =====================================================
@@ -1105,6 +1593,33 @@ async function punishHumanForProfanity(
     message.member;
 
   if (!member) {
+    return;
+  }
+
+  // ===================================================
+  // BYPASS EXCLUSIVO DE PALAVRÃO
+  // ===================================================
+  //
+  // Somente:
+  // • Rodney
+  // • Owner
+  // • Resp. Creators
+  //
+  // Administrator NÃO possui bypass automático.
+  // ===================================================
+
+  if (
+    isProfanityPunishmentExempt(
+      member
+    )
+  ) {
+    console.log(
+      `[SECURITY] Linguagem proibida ignorada para ` +
+      `${message.author.tag} ` +
+      `(${message.author.id}) por possuir bypass ` +
+      `específico de palavrão.`
+    );
+
     return;
   }
 
