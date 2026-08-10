@@ -606,8 +606,8 @@ function getAiAdminAuthority(member) {
   ) {
     return {
       level: "CIDADAO",
-      canAddRole: true,
-      canRemoveRole: true,
+      canAddRole: false,
+      canRemoveRole: false,
       canTimeout: false,
       canRemoveTimeout: false,
       maxTimeoutMs: 0,
@@ -641,19 +641,6 @@ function canAuthorityManageRole(
 
   if (authority.level === "SUPERUSER") {
     return true;
-  }
-
-  if (authority.level === "CIDADAO") {
-    const citizenRole =
-      member.guild.roles.cache.get(
-        AI_ADMIN_ROLE_IDS.CIDADAO
-      );
-
-    if (!citizenRole) {
-      return false;
-    }
-
-    return targetRole.position < citizenRole.position;
   }
 
   const highestRole =
@@ -709,6 +696,97 @@ function botCanManageMember(guild, targetMember) {
 // =====================================================
 // IA — EXECUÇÃO ADMINISTRATIVA INTELIGENTE
 // =====================================================
+
+function getAiAdminRecentActionKey(message) {
+  return [
+    String(message?.guildId || ""),
+    String(message?.channelId || ""),
+    String(message?.author?.id || ""),
+  ].join(":");
+}
+
+function rememberAiAdminRecentAction(
+  message,
+  {
+    action,
+    targetMemberId,
+    roleId = null,
+  }
+) {
+  if (
+    !message?.guildId ||
+    !message?.channelId ||
+    !message?.author?.id ||
+    !action ||
+    !targetMemberId
+  ) {
+    return;
+  }
+
+  const key =
+    getAiAdminRecentActionKey(message);
+
+  AI_ADMIN_RECENT_ACTIONS.set(
+    key,
+    {
+      action,
+      targetMemberId:
+        String(targetMemberId),
+      roleId:
+        roleId
+          ? String(roleId)
+          : null,
+      createdAt:
+        Date.now(),
+    }
+  );
+}
+
+function getAiAdminRecentAction(message) {
+  const key =
+    getAiAdminRecentActionKey(message);
+
+  const recent =
+    AI_ADMIN_RECENT_ACTIONS.get(key);
+
+  if (!recent) {
+    return null;
+  }
+
+  if (
+    Date.now() - recent.createdAt >
+    AI_ADMIN_RECENT_ACTION_TTL_MS
+  ) {
+    AI_ADMIN_RECENT_ACTIONS.delete(key);
+    return null;
+  }
+
+  return recent;
+}
+
+function messageRequestsRecentRoleRemoval(
+  message
+) {
+  const text =
+    aiAdminText(message).trim();
+
+  return (
+    text === "remove" ||
+    text === "remove agora" ||
+    text === "tira" ||
+    text === "tira agora" ||
+    text === "retira" ||
+    text === "retira agora" ||
+    text === "remove esse" ||
+    text === "remove esse cargo" ||
+    text === "tira esse" ||
+    text === "tira esse cargo" ||
+    text === "pode remover" ||
+    text === "pode tirar" ||
+    text === "desfaz" ||
+    text === "desfaz isso"
+  );
+}
 
 function aiAdminText(message) {
   return normalizeSearchText(
@@ -831,6 +909,7 @@ function isAiAdministrativeRequest(message) {
   return (
     messageRequestsRoleAdd(message) ||
     messageRequestsRoleRemove(message) ||
+    messageRequestsRecentRoleRemoval(message) ||
     messageRequestsTimeout(message) ||
     messageRequestsTimeoutRemove(message) ||
     messageRequestsNickname(message) ||
@@ -1142,11 +1221,25 @@ function buildAiAdminDeniedResponse(
 
   if (
     level === "CIDADAO" &&
+    (
+      action === "addRole" ||
+      action === "removeRole"
+    )
+  ) {
+    return pickAiAdminReply([
+      "Adicionar ou remover cargos não está liberado para o nível Cidadão.",
+      "Como Cidadão você não possui autorização para adicionar ou remover cargos pela IA.",
+      "Essa alteração de cargo exige uma hierarquia administrativa autorizada. O nível Cidadão não pode executar essa ação.",
+    ]);
+  }
+
+  if (
+    level === "CIDADAO" &&
     action === "timeout"
   ) {
     return pickAiAdminReply([
-      "Como Cidadão você consegue gerenciar cargos permitidos abaixo do cargo Cidadão, mas castigo não faz parte da sua permissão.",
-      "Castigo fica fora da autoridade de Cidadão. Sua permissão administrativa aqui é limitada aos cargos abaixo do Cidadão.",
+      "Castigo não está liberado para o nível Cidadão.",
+      "Sua hierarquia atual não possui autorização para aplicar castigos pela IA.",
     ]);
   }
 
@@ -1156,7 +1249,7 @@ function buildAiAdminDeniedResponse(
   ) {
     return pickAiAdminReply([
       "Troca de nome não está liberada para o nível Cidadão.",
-      "Nesse nível eu consigo cuidar dos cargos permitidos abaixo de Cidadão, mas não alterar nickname.",
+      "Sua hierarquia atual não possui autorização para alterar nicknames pela IA.",
     ]);
   }
 
@@ -1222,23 +1315,62 @@ async function tryExecuteAiAdministration(message) {
   const wantsRoleAdd =
     messageRequestsRoleAdd(message);
 
-  const wantsRoleRemove =
+  let wantsRoleRemove =
     messageRequestsRoleRemove(message);
+
+  const wantsRecentRoleRemoval =
+    messageRequestsRecentRoleRemoval(
+      message
+    );
+
+  let recentAdminAction = null;
+
+  if (wantsRecentRoleRemoval) {
+    recentAdminAction =
+      getAiAdminRecentAction(message);
+
+    if (
+      recentAdminAction?.action ===
+        "ADD_ROLE" &&
+      recentAdminAction.roleId &&
+      recentAdminAction.targetMemberId
+    ) {
+      wantsRoleRemove = true;
+    }
+  }
 
   if (
     wantsRoleAdd ||
     wantsRoleRemove
   ) {
-    const requestedRole =
+    let requestedRole =
       await resolveAiAdminRequestedRole(
         message
       );
+
+    if (
+      !requestedRole &&
+      wantsRecentRoleRemoval &&
+      recentAdminAction?.roleId
+    ) {
+      requestedRole =
+        message.guild.roles.cache.get(
+          recentAdminAction.roleId
+        ) ||
+        await message.guild.roles
+          .fetch(
+            recentAdminAction.roleId
+          )
+          .catch(() => null);
+    }
 
     if (!requestedRole) {
       return {
         handled: true,
         response:
-          "Entendi que você quer alterar um cargo, mas não consegui identificar qual. Pode mencionar o cargo ou mandar o ID dele.",
+          wantsRecentRoleRemoval
+            ? "Não encontrei uma alteração recente de cargo sua para saber qual cargo remover. Mencione o cargo que você quer retirar."
+            : "Entendi que você quer alterar um cargo, mas não consegui identificar qual. Pode mencionar o cargo ou mandar o ID dele.",
       };
     }
 
@@ -1307,16 +1439,34 @@ async function tryExecuteAiAdministration(message) {
       };
     }
 
-    const targetMember =
+    let targetMember =
       await resolveAiAdminTargetMember(
         message
       );
+
+    if (
+      !targetMember &&
+      wantsRecentRoleRemoval &&
+      recentAdminAction?.targetMemberId
+    ) {
+      targetMember =
+        message.guild.members.cache.get(
+          recentAdminAction.targetMemberId
+        ) ||
+        await message.guild.members
+          .fetch(
+            recentAdminAction.targetMemberId
+          )
+          .catch(() => null);
+    }
 
     if (!targetMember) {
       return {
         handled: true,
         response:
-          "Já entendi o cargo, mas falta saber em quem devo fazer a alteração. Mencione a pessoa ou mande o ID dela.",
+          wantsRecentRoleRemoval
+            ? "Encontrei o contexto da alteração anterior, mas não consegui localizar novamente a pessoa no servidor."
+            : "Já entendi o cargo, mas falta saber em quem devo fazer a alteração. Mencione a pessoa ou mande o ID dela.",
       };
     }
 
@@ -1374,6 +1524,17 @@ async function tryExecuteAiAdministration(message) {
           `SantaCreators IA | Solicitado por ${message.author.tag} (${message.author.id})`
         );
 
+        rememberAiAdminRecentAction(
+          message,
+          {
+            action: "ADD_ROLE",
+            targetMemberId:
+              targetMember.id,
+            roleId:
+              requestedRole.id,
+          }
+        );
+
         console.log(
           `[IA ADMIN] ADD_ROLE | Executor=${message.author.id} | Alvo=${targetMember.id} | Cargo=${requestedRole.id}`
         );
@@ -1421,6 +1582,17 @@ async function tryExecuteAiAdministration(message) {
         await targetMember.roles.remove(
           requestedRole,
           `SantaCreators IA | Solicitado por ${message.author.tag} (${message.author.id})`
+        );
+
+        rememberAiAdminRecentAction(
+          message,
+          {
+            action: "REMOVE_ROLE",
+            targetMemberId:
+              targetMember.id,
+            roleId:
+              requestedRole.id,
+          }
         );
 
         console.log(
@@ -1903,6 +2075,12 @@ const cooldowns = new Map();
 const channelHistory = new Map();
 
 const lastAiResponses = new Map();
+
+const AI_ADMIN_RECENT_ACTION_TTL_MS =
+  2 * 60 * 1000;
+
+const AI_ADMIN_RECENT_ACTIONS =
+  new Map();
 
 
 // =====================================================
