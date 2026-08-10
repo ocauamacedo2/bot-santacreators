@@ -25,6 +25,7 @@
 import {
   AuditLogEvent,
   EmbedBuilder,
+  PermissionsBitField,
 } from "discord.js";
 
 // =====================================================
@@ -297,6 +298,97 @@ function isSafeHumanFloodContent(message) {
 
   return false;
 }
+
+// =====================================================
+// USUÁRIO ISENTO DE PUNIÇÃO POR FLOOD
+// =====================================================
+//
+// IMPORTANTE:
+//
+// Estes usuários continuam tendo flood detectado.
+//
+// Se realmente fizerem flood:
+// • as mensagens continuam sendo apagadas
+// • NÃO recebem timeout
+// • NÃO recebem castigo
+// • NÃO entram na reincidência
+// • NÃO recebem ban automático por flood
+//
+// São protegidos:
+// • Rodney pelo ID
+// • Owner pelo cargo
+// • Resp. Creators pelo cargo
+// • qualquer pessoa que possua Administrator
+// =====================================================
+
+function isHumanFloodPunishmentExempt(member) {
+  if (!member) {
+    return false;
+  }
+
+  // ===================================================
+  // 1. RODNEY
+  // ===================================================
+
+  if (
+    member.id ===
+    "660311795327828008"
+  ) {
+    return true;
+  }
+
+  // ===================================================
+  // 2. OWNER + RESP. CREATORS
+  // ===================================================
+
+  const exemptRoleIds =
+    new Set([
+      "1262262852949905408", // Owner
+      "1352408327983861844", // Resp. Creators
+    ]);
+
+  if (
+    member.roles?.cache?.some(
+      (role) =>
+        exemptRoleIds.has(
+          role.id
+        )
+    )
+  ) {
+    return true;
+  }
+
+  // ===================================================
+  // 3. QUALQUER CARGO COM ADMINISTRATOR
+  // ===================================================
+
+  if (
+    member.roles?.cache?.some(
+      (role) =>
+        role.permissions?.has(
+          "Administrator"
+        )
+    )
+  ) {
+    return true;
+  }
+
+  // ===================================================
+  // 4. PERMISSÃO EFETIVA ADMINISTRATOR
+  // ===================================================
+
+  if (
+    member.permissions?.has(
+      "Administrator"
+    )
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+// =====================================================
 // PROCURA PALAVRÃO
 // =====================================================
 
@@ -1755,6 +1847,34 @@ async function handleMessage(
     if (
       detection.detected
     ) {
+      // ===============================================
+      // ADMIN / USUÁRIO ISENTO
+      // ===============================================
+      //
+      // Continua removendo as mensagens de flood,
+      // porém NÃO aplica timeout e NÃO registra
+      // reincidência para banimento.
+      // ===============================================
+
+      if (
+        isHumanFloodPunishmentExempt(
+          message.member
+        )
+      ) {
+        await deleteRecentOffendingMessages(
+          message,
+          history
+        );
+
+        console.log(
+          `[SECURITY] Flood removido sem punição de ` +
+          `${message.author.tag} ` +
+          `(${message.author.id}) por possuir bypass.`
+        );
+
+        return;
+      }
+
       await punishHumanForFlood(
         message,
         detection,

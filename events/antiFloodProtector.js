@@ -11,18 +11,39 @@ const CONFIG = {
     enabled: true,
     logChannelId: '1507676677927338107',
     
-    // Usuários Isentos
+    // =====================================================
+    // USUÁRIOS ISENTOS DE PUNIÇÃO
+    // =====================================================
     bypassUserIds: [
-        '1262262852949905408', // Owner
-        '660311795327828008',  // Você
+        '660311795327828008', // Rodney
     ],
 
-    // Cargos Isentos
+    // =====================================================
+    // CARGOS ISENTOS DE PUNIÇÃO
+    // =====================================================
     ignoredRoles: [
-        '1262262852949905409', // Resp Influ
+        '1262262852949905408', // Owner
         '1352408327983861844', // Resp Creators
-        '1352407252216184833', // Resp Líder
-        '1352385500614234134', // Coordenação
+    ],
+
+    // =====================================================
+    // DOMÍNIOS SEGUROS
+    // =====================================================
+    //
+    // Estes links não serão considerados links externos
+    // maliciosos apenas pelo domínio.
+    //
+    // Discord continua tendo a regra própria de convites.
+    // =====================================================
+    allowedDomains: [
+        'youtube.com',
+        'youtu.be',
+        'medal.tv',
+        'tenor.com',
+        'giphy.com',
+        'media.tenor.com',
+        'cdn.discordapp.com',
+        'media.discordapp.net',
     ],
 
     // Limites de Detecção
@@ -143,6 +164,67 @@ function normalizeMessageContent(content) {
         .trim();
 }
 
+// =====================================================
+// CONTEÚDO QUE NÃO CONTA COMO FLOOD
+// =====================================================
+
+function shouldIgnoreForFlood(message) {
+    if (!message) return false;
+
+    const content = String(message.content || '').trim();
+
+    // =================================================
+    // FIGURINHA / STICKER
+    // =================================================
+
+    if (message.stickers?.size > 0) {
+        return true;
+    }
+
+    // =================================================
+    // GIF / IMAGEM / VÍDEO / ARQUIVO
+    // =================================================
+
+    if (message.attachments?.size > 0) {
+        return true;
+    }
+
+    // =================================================
+    // LINK PURO
+    // =================================================
+
+    if (/^https?:\/\/\S+$/i.test(content)) {
+        try {
+            const url = new URL(content);
+
+            const domain =
+                url.hostname
+                    .toLowerCase()
+                    .replace(/^www\./, '');
+
+            const safeDomains = [
+                'youtube.com',
+                'youtu.be',
+                'medal.tv',
+                'tenor.com',
+                'giphy.com',
+                'media.tenor.com',
+                'cdn.discordapp.com',
+                'media.discordapp.net',
+            ];
+
+            if (safeDomains.includes(domain)) {
+                return true;
+            }
+        } catch {
+            // Se não for uma URL válida,
+            // continua a análise normal.
+        }
+    }
+
+    return false;
+}
+
 function hasSuspiciousAttachment(message) {
     return message.attachments.some(attachment => {
         const name = attachment.name?.toLowerCase() || '';
@@ -185,11 +267,75 @@ function isDiscordInviteLink(url) {
 function checkBypass(member) {
     if (!member || member.user.bot) return true;
 
-    // Bypass total apenas para usuários definidos manualmente
-    if (CONFIG.bypassUserIds.includes(member.id)) return true;
+    return false;
+}
 
-    // Cargos realmente isentos
-    return member.roles.cache.some(r => CONFIG.ignoredRoles.includes(r.id));
+// =====================================================
+// VERIFICA SE O USUÁRIO É ISENTO DE PUNIÇÃO
+// =====================================================
+//
+// Usuários/cargos daqui continuam sujeitos à limpeza
+// das mensagens quando houver flood real.
+//
+// Porém NÃO recebem:
+// • timeout
+// • castigo progressivo
+//
+// Também considera automaticamente qualquer cargo
+// que possua a permissão Administrator.
+// =====================================================
+
+function isPunishmentExempt(member) {
+    if (!member) return false;
+
+    // =================================================
+    // USUÁRIO AUTORIZADO DIRETAMENTE
+    // =================================================
+
+    if (CONFIG.bypassUserIds.includes(member.id)) {
+        return true;
+    }
+
+    // =================================================
+    // CARGO AUTORIZADO DIRETAMENTE
+    // =================================================
+
+    if (
+        member.roles.cache.some(
+            role => CONFIG.ignoredRoles.includes(role.id)
+        )
+    ) {
+        return true;
+    }
+
+    // =================================================
+    // QUALQUER CARGO COM ADMINISTRATOR
+    // =================================================
+
+    if (
+        member.roles.cache.some(
+            role =>
+                role.permissions.has(
+                    PermissionsBitField.Flags.Administrator
+                )
+        )
+    ) {
+        return true;
+    }
+
+    // =================================================
+    // PERMISSÃO ADMINISTRATOR EFETIVA
+    // =================================================
+
+    if (
+        member.permissions.has(
+            PermissionsBitField.Flags.Administrator
+        )
+    ) {
+        return true;
+    }
+
+    return false;
 }
 
 async function logSecurityAction(client, guild, member, channel, reason, content, infractionCount, duration) {
@@ -220,21 +366,55 @@ async function logSecurityAction(client, guild, member, channel, reason, content
 }
 
 async function applyPunishment(member, guild, reason, content, channel) {
+    // =====================================================
+    // USUÁRIO ISENTO DE PUNIÇÃO
+    // =====================================================
+    //
+    // A mensagem já foi removida antes desta função.
+    //
+    // Portanto, administrador continua tendo o flood
+    // limpo, mas NÃO recebe timeout e NÃO acumula
+    // infração progressiva.
+    // =====================================================
+
+    if (isPunishmentExempt(member)) {
+        console.log(
+            `[ANTI FLOOD PROTECTOR] Mensagem removida sem punição: ${member.user.tag} (${member.id}) | ${reason}`
+        );
+
+        return;
+    }
+
     const state = loadState();
     const userId = member.id;
 
     if (!state.users[userId]) {
-        state.users[userId] = { infractions: 0, lastInfractions: [] };
+        state.users[userId] = {
+            infractions: 0,
+            lastInfractions: []
+        };
     }
 
     state.users[userId].infractions++;
     const count = state.users[userId].infractions;
 
     let duration = CONFIG.punishments.level1;
-    if (count === 2) duration = CONFIG.punishments.level2;
-    if (count === 3) duration = CONFIG.punishments.level3;
-    if (count === 4) duration = CONFIG.punishments.level4;
-    if (count >= 5) duration = CONFIG.punishments.critical;
+
+    if (count === 2) {
+        duration = CONFIG.punishments.level2;
+    }
+
+    if (count === 3) {
+        duration = CONFIG.punishments.level3;
+    }
+
+    if (count === 4) {
+        duration = CONFIG.punishments.level4;
+    }
+
+    if (count >= 5) {
+        duration = CONFIG.punishments.critical;
+    }
 
     state.users[userId].lastInfractions.push({
         reason,
@@ -244,20 +424,63 @@ async function applyPunishment(member, guild, reason, content, channel) {
 
     saveState(state);
 
-    // Punição
-    const canTimeout = guild.members.me.permissions.has(PermissionsBitField.Flags.ModerateMembers) && member.moderatable;
+    // =====================================================
+    // PUNIÇÃO
+    // =====================================================
+
+    const canTimeout =
+        guild.members.me.permissions.has(
+            PermissionsBitField.Flags.ModerateMembers
+        ) &&
+        member.moderatable;
 
     if (canTimeout) {
-        await member.timeout(duration, `[ANTIFLOOD] ${reason}`).catch(() => {});
+        await member
+            .timeout(
+                duration,
+                `[ANTIFLOOD] ${reason}`
+            )
+            .catch(() => {});
     }
 
-    // Log
-    await logSecurityAction(guild.client, guild, member, channel, reason, content, count, duration);
+    // =====================================================
+    // LOG
+    // =====================================================
 
-    // Aviso ao usuário
-    const alert = `⚠️ ${member}, sua mensagem foi removida e você recebeu um castigo de **${duration / 60000}min** por: **${reason}**.`;
-    const msg = await channel.send(alert).catch(() => null);
-    if (msg) setTimeout(() => msg.delete().catch(() => {}), 10000);
+    await logSecurityAction(
+        guild.client,
+        guild,
+        member,
+        channel,
+        reason,
+        content,
+        count,
+        duration
+    );
+
+    // =====================================================
+    // AVISO
+    // =====================================================
+
+    const alert =
+        `⚠️ ${member}, sua mensagem foi removida e você ` +
+        `recebeu um castigo de **${duration / 60000}min** ` +
+        `por: **${reason}**.`;
+
+    const msg =
+        await channel
+            .send(alert)
+            .catch(() => null);
+
+    if (msg) {
+        setTimeout(
+            () =>
+                msg
+                    .delete()
+                    .catch(() => {}),
+            10000
+        );
+    }
 }
 
 export function setupAntiFloodProtector(client) {
@@ -282,10 +505,32 @@ export function setupAntiFloodProtector(client) {
         const userId = message.author.id;
         const now = Date.now();
 
+        // =================================================
+        // CONTEÚDOS QUE NÃO CONTAM COMO FLOOD
+        // =================================================
+        //
+        // Esses conteúdos continuam podendo passar pelas
+        // demais verificações de segurança quando aplicável,
+        // mas não alimentam o contador de flood/repetição.
+        // =================================================
+
+        const ignoreForFlood =
+            shouldIgnoreForFlood(message);
+
         // Inicializa cache do usuário
-        if (!messageCache.has(userId)) messageCache.set(userId, []);
-        const userMsgs = messageCache.get(userId);
-        userMsgs.push({ content, ts: now });
+        if (!messageCache.has(userId)) {
+            messageCache.set(userId, []);
+        }
+
+        const userMsgs =
+            messageCache.get(userId);
+
+        if (!ignoreForFlood) {
+            userMsgs.push({
+                content,
+                ts: now
+            });
+        }
 
         // Limpa cache antigo (mais que 10s)
         const filteredCache = userMsgs.filter(m => now - m.ts < 10000);
@@ -293,16 +538,46 @@ export function setupAntiFloodProtector(client) {
 
         let violation = null;
 
-        // 1. Detecção de Flood (Mensagens Rápidas)
-        const rapidMsgs = filteredCache.filter(m => now - m.ts < CONFIG.flood.windowMs);
-        if (rapidMsgs.length > CONFIG.flood.limit) {
-            violation = "Flood de mensagens (Envio muito rápido)";
+        // =================================================
+        // 1. DETECÇÃO DE FLOOD
+        // =================================================
+
+        if (!ignoreForFlood) {
+            const rapidMsgs =
+                filteredCache.filter(
+                    m =>
+                        now - m.ts <
+                        CONFIG.flood.windowMs
+                );
+
+            if (
+                rapidMsgs.length >
+                CONFIG.flood.limit
+            ) {
+                violation =
+                    "Flood de mensagens (Envio muito rápido)";
+            }
         }
 
-        // 2. Detecção de Mensagens Repetidas
-        const recentDuplicates = filteredCache.filter(m => m.content === content);
-        if (recentDuplicates.length >= CONFIG.repetition.limit && content.length > 3) {
-            violation = "Spam de mensagens repetidas";
+        // =================================================
+        // 2. DETECÇÃO DE MENSAGENS REPETIDAS
+        // =================================================
+
+        if (!ignoreForFlood) {
+            const recentDuplicates =
+                filteredCache.filter(
+                    m =>
+                        m.content === content
+                );
+
+            if (
+                recentDuplicates.length >=
+                    CONFIG.repetition.limit &&
+                content.length > 3
+            ) {
+                violation =
+                    "Spam de mensagens repetidas";
+            }
         }
 
         // 3. Detecção de Menções Excessivas
