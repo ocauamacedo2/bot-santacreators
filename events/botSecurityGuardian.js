@@ -195,6 +195,108 @@ function normalizeText(value) {
 }
 
 // =====================================================
+
+
+// =====================================================
+// CONTEÚDOS QUE NÃO CONTAM COMO FLOOD HUMANO
+// =====================================================
+//
+// IMPORTANTE:
+// Esta exceção vale SOMENTE para usuários humanos.
+//
+// Bots continuam sendo analisados normalmente,
+// inclusive quando mandam links, GIFs, imagens,
+// embeds ou qualquer outro conteúdo.
+// =====================================================
+
+function isSafeHumanFloodContent(message) {
+  if (!message || message.author?.bot) {
+    return false;
+  }
+
+  const content = String(message.content ?? "").trim();
+
+  // ===================================================
+  // 1. FIGURINHAS / STICKERS
+  // ===================================================
+
+  if (message.stickers?.size > 0) {
+    return true;
+  }
+
+  // ===================================================
+  // 2. GIF / IMAGEM / VÍDEO / ARQUIVO ANEXADO
+  // ===================================================
+
+  if (message.attachments?.size > 0) {
+    return true;
+  }
+
+  // ===================================================
+  // 3. MENSAGEM SEM TEXTO
+  // Ex.: mídia, interação ou conteúdo especial.
+  // ===================================================
+
+  if (!content) {
+    return true;
+  }
+
+  // ===================================================
+  // 4. URL
+  // ===================================================
+
+  const urlRegex = /^https?:\/\/\S+$/i;
+
+  if (urlRegex.test(content)) {
+    return true;
+  }
+
+  // ===================================================
+  // 5. LINK DO YOUTUBE
+  // ===================================================
+
+  const youtubeRegex =
+    /^(?:https?:\/\/)?(?:www\.)?(?:youtube\.com|youtu\.be)\//i;
+
+  if (youtubeRegex.test(content)) {
+    return true;
+  }
+
+  // ===================================================
+  // 6. GIFS TENOR
+  // ===================================================
+
+  const tenorRegex =
+    /^(?:https?:\/\/)?(?:www\.)?tenor\.com\//i;
+
+  if (tenorRegex.test(content)) {
+    return true;
+  }
+
+  // ===================================================
+  // 7. GIFS GIPHY
+  // ===================================================
+
+  const giphyRegex =
+    /^(?:https?:\/\/)?(?:www\.)?giphy\.com\//i;
+
+  if (giphyRegex.test(content)) {
+    return true;
+  }
+
+  // ===================================================
+  // 8. LINK DO MEDAL
+  // ===================================================
+
+  const medalRegex =
+    /^(?:https?:\/\/)?(?:www\.)?medal\.tv\//i;
+
+  if (medalRegex.test(content)) {
+    return true;
+  }
+
+  return false;
+}
 // PROCURA PALAVRÃO
 // =====================================================
 
@@ -1480,18 +1582,27 @@ async function handleMessage(
     }
 
     // =================================================
-    // REGISTRA HISTÓRICO
-    // =================================================
-
-    const history =
-      pushHistory(message);
-
-    // =================================================
     // BOT
+    // =================================================
+    //
+    // Bots são analisados ANTES das exceções humanas.
+    //
+    // Portanto:
+    // • link de bot conta
+    // • imagem de bot conta
+    // • GIF de bot conta
+    // • embed de bot conta
+    // • texto de bot conta
+    //
+    // Isso impede um bot malicioso de escapar do
+    // anti-flood simplesmente usando links ou mídia.
     // =================================================
 
     if (message.author.bot) {
-      // Bot confiável não recebe punição.
+      // =================================================
+      // BOT CONFIÁVEL
+      // =================================================
+
       if (
         isTrustedBot(
           client,
@@ -1501,15 +1612,60 @@ async function handleMessage(
         return;
       }
 
+      // =================================================
+      // REGISTRA TODA MENSAGEM DE BOT
+      // =================================================
+
+      const history =
+        pushHistory(message);
+
+      // =================================================
+      // DETECTA FLOOD
+      // =================================================
+
       const detection =
         detectFlood(
           message,
           history
         );
 
+      console.log(
+        "[SECURITY][BOT-MESSAGE]",
+        {
+          bot: message.author.tag,
+          botId: message.author.id,
+          guildId: message.guildId,
+          channelId: message.channelId,
+          messageId: message.id,
+          historyCount: history.length,
+          detected: detection.detected,
+          type: detection.type,
+          details: detection.details,
+          memberFound: Boolean(message.member),
+          kickable: Boolean(message.member?.kickable),
+          content: truncate(
+            message.content,
+            150
+          ),
+        }
+      );
+
       if (
         detection.detected
       ) {
+        console.warn(
+          "[SECURITY][BOT-FLOOD-DETECTADO]",
+          {
+            bot: message.author.tag,
+            botId: message.author.id,
+            type: detection.type,
+            details: detection.details,
+            kickable: Boolean(
+              message.member?.kickable
+            ),
+          }
+        );
+
         await punishBotForFlood(
           client,
           message,
@@ -1528,6 +1684,13 @@ async function handleMessage(
     // =================================================
     // PALAVRÃO
     // =================================================
+    //
+    // A verificação de palavrão vem ANTES da exceção
+    // de flood.
+    //
+    // Assim uma pessoa não consegue escapar do filtro
+    // escrevendo palavrão junto com algum conteúdo.
+    // =================================================
 
     const forbiddenWord =
       containsForbiddenWord(
@@ -1544,7 +1707,43 @@ async function handleMessage(
     }
 
     // =================================================
-    // FLOOD
+    // CONTEÚDO SEGURO PARA FLOOD HUMANO
+    // =================================================
+    //
+    // Não entra na contagem de flood:
+    //
+    // • GIF
+    // • figurinha
+    // • imagem
+    // • vídeo
+    // • arquivo
+    // • link puro
+    // • YouTube
+    // • Medal
+    // • Tenor
+    // • Giphy
+    //
+    // IMPORTANTE:
+    // Isso vale somente para HUMANOS.
+    // =================================================
+
+    if (
+      isSafeHumanFloodContent(
+        message
+      )
+    ) {
+      return;
+    }
+
+    // =================================================
+    // SOMENTE AGORA REGISTRA NO HISTÓRICO HUMANO
+    // =================================================
+
+    const history =
+      pushHistory(message);
+
+    // =================================================
+    // FLOOD HUMANO
     // =================================================
 
     const detection =
