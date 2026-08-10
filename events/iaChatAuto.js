@@ -39,6 +39,20 @@ const AI_REPLY_ONLY_CHANNEL_ID = "1381597720007151698";
 const AI_MEMORY_LOG_CHANNEL_ID = "1506786373687054396";
 
 // =====================================================
+// IA — MEMÓRIA LOCAL PERSISTENTE
+// =====================================================
+
+const AI_LONG_TERM_MEMORY_FILE = path.resolve(
+  process.cwd(),
+  "data",
+  "ia_long_term_memory.json"
+);
+
+const AI_LONG_TERM_MEMORY_MAX_INTERACTIONS = 80;
+const AI_LONG_TERM_MEMORY_MAX_TOPICS = 30;
+const AI_LONG_TERM_MEMORY_MAX_CONTEXT_CHARS = 12000;
+
+// =====================================================
 // IA ENTREVISTAS — SANTACREATORS
 // =====================================================
 
@@ -176,13 +190,16 @@ const AI_REPLY_TTL_MS = 2 * 60 * 1000;
 
 const GEMINI_MODEL =
   String(process.env.GEMINI_MODEL || "").trim() ||
-  "gemini-2.5-flash-lite";
+  "gemini-3.6-flash";
 
 const GEMINI_MODEL_FALLBACKS = [
   GEMINI_MODEL,
-  "gemini-2.5-flash-lite",
+  "gemini-3.6-flash",
+  "gemini-3.5-flash",
+  "gemini-3.5-flash-lite",
+  "gemini-3.1-flash-lite",
   "gemini-2.5-flash",
-  "gemini-2.0-flash",
+  "gemini-2.5-flash-lite",
 ].filter((model, index, arr) => {
   return model && arr.indexOf(model) === index;
 });
@@ -885,7 +902,7 @@ async function sendConversationMemoryLog(client, message, aiResponse) {
   }
 }
 
-async function fetchRecentMemoryLogs(client) {
+async function fetchRecentMemoryLogs(client, message) {
   try {
     const logChannel =
       client.channels.cache.get(AI_MEMORY_LOG_CHANNEL_ID) ||
@@ -895,25 +912,627 @@ async function fetchRecentMemoryLogs(client) {
       return "Canal de memória não encontrado.";
     }
 
-const messages = await logChannel.messages.fetch({ limit: 5 }).catch(() => null);
+    const targetUserId = String(message?.author?.id || "");
 
-    if (!messages?.size) {
-      return "Sem registros anteriores no canal de memória.";
+    if (!targetUserId) {
+      return "Usuário atual não identificado para consulta de memória.";
     }
 
-    const linhas = [];
+    const collected = [];
+    let before = undefined;
+    let scanned = 0;
 
-    for (const msg of [...messages.values()].reverse()) {
-      for (const embed of msg.embeds || []) {
-        const text = formatEmbedForAI(embed.data || embed);
-        if (text) linhas.push(text);
+    const MAX_SCAN_MESSAGES = 300;
+    const MAX_USER_MEMORIES = 20;
+
+    while (
+      scanned < MAX_SCAN_MESSAGES &&
+      collected.length < MAX_USER_MEMORIES
+    ) {
+      const fetchOptions = {
+        limit: 100,
+      };
+
+      if (before) {
+        fetchOptions.before = before;
+      }
+
+      const messages = await logChannel.messages
+        .fetch(fetchOptions)
+        .catch(() => null);
+
+      if (!messages?.size) {
+        break;
+      }
+
+      scanned += messages.size;
+
+      const batch = [...messages.values()];
+
+      for (const msg of batch) {
+        for (const embed of msg.embeds || []) {
+          const embedData = embed.data || embed;
+
+          const fields =
+            embedData.fields ||
+            embed.fields ||
+            [];
+
+          const userField = fields.find((field) => {
+            return normalizeSearchText(field?.name || "").includes("usuario");
+          });
+
+          const userFieldValue = String(userField?.value || "");
+
+          if (!userFieldValue.includes(targetUserId)) {
+            continue;
+          }
+
+          const text = formatEmbedForAI(embedData);
+
+          if (!text) {
+            continue;
+          }
+
+          collected.push({
+            timestamp: msg.createdTimestamp || 0,
+            text,
+          });
+
+          if (collected.length >= MAX_USER_MEMORIES) {
+            break;
+          }
+        }
+
+        if (collected.length >= MAX_USER_MEMORIES) {
+          break;
+        }
+      }
+
+      before = batch[batch.length - 1]?.id;
+
+      if (messages.size < 100) {
+        break;
       }
     }
 
-    return linhas.join("\n\n---\n\n").slice(0, 6000);
+    if (!collected.length) {
+      return `Nenhuma memória anterior encontrada para <@${targetUserId}>.`;
+    }
+
+    collected.sort((a, b) => a.timestamp - b.timestamp);
+
+    return [
+      `MEMÓRIA ESPECÍFICA DO USUÁRIO <@${targetUserId}>:`,
+      `Foram recuperadas ${collected.length} conversas anteriores relevantes deste usuário.`,
+      "",
+      collected
+        .map((item) => item.text)
+        .join("\n\n---\n\n"),
+    ]
+      .join("\n")
+      .slice(0, 12000);
   } catch (err) {
     console.error("[IA CHAT AUTO] Erro ao buscar memória:", err);
     return "Não consegui buscar a memória anterior.";
+  }
+}
+
+// =====================================================
+// IA — MEMÓRIA LOCAL PERSISTENTE / LONGO PRAZO
+// =====================================================
+
+function loadLongTermMemoryDatabase() {
+  try {
+    if (!fs.existsSync(AI_LONG_TERM_MEMORY_FILE)) {
+      return {
+        version: 1,
+        users: {},
+      };
+    }
+
+    const raw = fs.readFileSync(
+      AI_LONG_TERM_MEMORY_FILE,
+      "utf8"
+    );
+
+    if (!raw?.trim()) {
+      return {
+        version: 1,
+        users: {},
+      };
+    }
+
+    const parsed = JSON.parse(raw);
+
+    if (
+      !parsed ||
+      typeof parsed !== "object"
+    ) {
+      return {
+        version: 1,
+        users: {},
+      };
+    }
+
+    if (!parsed.users || typeof parsed.users !== "object") {
+      parsed.users = {};
+    }
+
+    if (!parsed.version) {
+      parsed.version = 1;
+    }
+
+    return parsed;
+  } catch (err) {
+    console.error(
+      "[IA MEMORY] Erro ao carregar memória persistente:",
+      err
+    );
+
+    return {
+      version: 1,
+      users: {},
+    };
+  }
+}
+
+function saveLongTermMemoryDatabase(database) {
+  try {
+    const dir = path.dirname(
+      AI_LONG_TERM_MEMORY_FILE
+    );
+
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, {
+        recursive: true,
+      });
+    }
+
+    const temporaryFile =
+      `${AI_LONG_TERM_MEMORY_FILE}.tmp`;
+
+    fs.writeFileSync(
+      temporaryFile,
+      JSON.stringify(database, null, 2),
+      "utf8"
+    );
+
+    fs.renameSync(
+      temporaryFile,
+      AI_LONG_TERM_MEMORY_FILE
+    );
+
+    return true;
+  } catch (err) {
+    console.error(
+      "[IA MEMORY] Erro ao salvar memória persistente:",
+      err
+    );
+
+    return false;
+  }
+}
+
+function ensureLongTermMemoryUser(database, message) {
+  const userId = String(
+    message?.author?.id || ""
+  );
+
+  if (!userId) {
+    return null;
+  }
+
+  if (!database.users[userId]) {
+    database.users[userId] = {
+      userId,
+      username:
+        message.author?.username ||
+        "desconhecido",
+      displayName:
+        message.member?.displayName ||
+        message.author?.username ||
+        "desconhecido",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      interactions: [],
+      topics: [],
+    };
+  }
+
+  const user = database.users[userId];
+
+  user.username =
+    message.author?.username ||
+    user.username ||
+    "desconhecido";
+
+  user.displayName =
+    message.member?.displayName ||
+    user.displayName ||
+    user.username;
+
+  user.updatedAt = Date.now();
+
+  if (!Array.isArray(user.interactions)) {
+    user.interactions = [];
+  }
+
+  if (!Array.isArray(user.topics)) {
+    user.topics = [];
+  }
+
+  return user;
+}
+
+function extractLongTermMemoryTopics(text) {
+  const terms = extractServerSearchTerms(
+    text
+  );
+
+  return terms
+    .map((term) =>
+      normalizeSearchText(term)
+    )
+    .filter(Boolean)
+    .slice(0, 10);
+}
+
+function mergeLongTermMemoryTopics(
+  currentTopics,
+  newTopics
+) {
+  const map = new Map();
+
+  for (const topic of currentTopics || []) {
+    const normalized =
+      normalizeSearchText(
+        typeof topic === "string"
+          ? topic
+          : topic?.name
+      );
+
+    if (!normalized) {
+      continue;
+    }
+
+    map.set(normalized, {
+      name:
+        typeof topic === "string"
+          ? topic
+          : topic.name,
+      mentions:
+        typeof topic === "object"
+          ? Number(topic.mentions || 1)
+          : 1,
+      lastMention:
+        typeof topic === "object"
+          ? Number(topic.lastMention || 0)
+          : 0,
+    });
+  }
+
+  for (const topic of newTopics || []) {
+    const normalized =
+      normalizeSearchText(topic);
+
+    if (!normalized) {
+      continue;
+    }
+
+    const existing = map.get(normalized);
+
+    if (existing) {
+      existing.mentions += 1;
+      existing.lastMention = Date.now();
+    } else {
+      map.set(normalized, {
+        name: topic,
+        mentions: 1,
+        lastMention: Date.now(),
+      });
+    }
+  }
+
+  return [...map.values()]
+    .sort((a, b) => {
+      if (b.lastMention !== a.lastMention) {
+        return b.lastMention - a.lastMention;
+      }
+
+      return b.mentions - a.mentions;
+    })
+    .slice(
+      0,
+      AI_LONG_TERM_MEMORY_MAX_TOPICS
+    );
+}
+
+function scoreLongTermMemoryInteraction(
+  interaction,
+  searchTerms
+) {
+  const haystack = normalizeSearchText([
+    interaction?.userMessage,
+    interaction?.aiResponse,
+    ...(interaction?.topics || []),
+  ]
+    .filter(Boolean)
+    .join(" "));
+
+  if (!haystack) {
+    return 0;
+  }
+
+  let score = 0;
+
+  for (const term of searchTerms) {
+    const normalizedTerm =
+      normalizeSearchText(term);
+
+    if (!normalizedTerm) {
+      continue;
+    }
+
+    if (haystack.includes(normalizedTerm)) {
+      score += 10;
+    }
+
+    if (
+      interaction?.topics?.some(
+        (topic) =>
+          normalizeSearchText(topic) ===
+          normalizedTerm
+      )
+    ) {
+      score += 15;
+    }
+  }
+
+  const age =
+    Date.now() -
+    Number(interaction?.timestamp || 0);
+
+  const oneDay =
+    24 * 60 * 60 * 1000;
+
+  const sevenDays =
+    7 * oneDay;
+
+  const thirtyDays =
+    30 * oneDay;
+
+  if (age <= oneDay) {
+    score += 8;
+  } else if (age <= sevenDays) {
+    score += 5;
+  } else if (age <= thirtyDays) {
+    score += 2;
+  }
+
+  return score;
+}
+
+function saveLongTermConversation(
+  message,
+  aiResponse
+) {
+  try {
+    const database =
+      loadLongTermMemoryDatabase();
+
+    const user =
+      ensureLongTermMemoryUser(
+        database,
+        message
+      );
+
+    if (!user) {
+      return false;
+    }
+
+    const userMessage =
+      cleanText(
+        message.content ||
+        "Sem texto"
+      );
+
+    const response =
+      cleanText(
+        aiResponse ||
+        "Sem resposta"
+      );
+
+    const topics =
+      extractLongTermMemoryTopics(
+        userMessage
+      );
+
+    user.interactions.push({
+      timestamp: Date.now(),
+      channelId:
+        String(
+          message.channelId || ""
+        ),
+      messageId:
+        String(
+          message.id || ""
+        ),
+      userMessage,
+      aiResponse: response,
+      topics,
+    });
+
+    if (
+      user.interactions.length >
+      AI_LONG_TERM_MEMORY_MAX_INTERACTIONS
+    ) {
+      user.interactions =
+        user.interactions.slice(
+          -AI_LONG_TERM_MEMORY_MAX_INTERACTIONS
+        );
+    }
+
+    user.topics =
+      mergeLongTermMemoryTopics(
+        user.topics,
+        topics
+      );
+
+    user.updatedAt = Date.now();
+
+    const saved =
+      saveLongTermMemoryDatabase(
+        database
+      );
+
+    if (saved) {
+      console.log(
+        `[IA MEMORY] Memória persistente atualizada para ${message.author.id}.`
+      );
+    }
+
+    return saved;
+  } catch (err) {
+    console.error(
+      "[IA MEMORY] Erro ao registrar conversa:",
+      err
+    );
+
+    return false;
+  }
+}
+
+function fetchRelevantLongTermMemory(
+  message
+) {
+  try {
+    const database =
+      loadLongTermMemoryDatabase();
+
+    const userId =
+      String(
+        message?.author?.id || ""
+      );
+
+    if (
+      !userId ||
+      !database.users[userId]
+    ) {
+      return "Nenhuma memória local persistente encontrada para este usuário.";
+    }
+
+    const user =
+      database.users[userId];
+
+    const interactions =
+      Array.isArray(user.interactions)
+        ? user.interactions
+        : [];
+
+    if (!interactions.length) {
+      return "Nenhuma conversa persistente encontrada para este usuário.";
+    }
+
+    const searchTerms =
+      extractLongTermMemoryTopics(
+        message.content
+      );
+
+    const scored =
+      interactions
+        .map((interaction) => ({
+          interaction,
+          score:
+            scoreLongTermMemoryInteraction(
+              interaction,
+              searchTerms
+            ),
+        }))
+        .sort((a, b) => {
+          if (b.score !== a.score) {
+            return b.score - a.score;
+          }
+
+          return (
+            Number(
+              b.interaction?.timestamp || 0
+            ) -
+            Number(
+              a.interaction?.timestamp || 0
+            )
+          );
+        });
+
+    let selected =
+      scored
+        .filter(
+          (item) => item.score > 0
+        )
+        .slice(0, 12);
+
+    if (!selected.length) {
+      selected =
+        scored.slice(0, 6);
+    }
+
+    const topicSummary =
+      Array.isArray(user.topics)
+        ? user.topics
+            .slice(0, 15)
+            .map((topic) => {
+              return `${topic.name} (${topic.mentions} menção(ões))`;
+            })
+            .join(", ")
+        : "Nenhum tópico consolidado.";
+
+    const blocks =
+      selected.map(
+        ({ interaction, score }, index) => {
+          const date =
+            new Date(
+              interaction.timestamp
+            ).toLocaleString(
+              "pt-BR",
+              {
+                timeZone:
+                  "America/Sao_Paulo",
+              }
+            );
+
+          return [
+            `MEMÓRIA #${index + 1}`,
+            `Relevância: ${score}`,
+            `Data: ${date}`,
+            `Canal: <#${interaction.channelId}>`,
+            `Usuário disse: ${interaction.userMessage}`,
+            `IA respondeu: ${interaction.aiResponse}`,
+            `Tópicos: ${(interaction.topics || []).join(", ") || "—"}`,
+          ].join("\n");
+        }
+      );
+
+    return [
+      "MEMÓRIA LOCAL PERSISTENTE DO USUÁRIO",
+      `Usuário: <@${userId}>`,
+      `Nome conhecido: ${user.displayName || user.username || "desconhecido"}`,
+      `Total de interações armazenadas: ${interactions.length}`,
+      `Tópicos recentes/conhecidos: ${topicSummary}`,
+      "",
+      ...blocks,
+    ]
+      .join("\n\n")
+      .slice(
+        0,
+        AI_LONG_TERM_MEMORY_MAX_CONTEXT_CHARS
+      );
+  } catch (err) {
+    console.error(
+      "[IA MEMORY] Erro ao recuperar memória relevante:",
+      err
+    );
+
+    return "Não consegui recuperar a memória local persistente.";
   }
 }
 
@@ -1166,6 +1785,306 @@ async function fetchMentionedChannelsContext(message) {
   }
 
   return blocks.join("\n\n====================\n\n");
+}
+
+// =====================================================
+// BUSCA SEMÂNTICA SIMPLES NO CONHECIMENTO DO SERVIDOR
+// =====================================================
+
+function extractServerSearchTerms(text) {
+  const normalized = normalizeSearchText(text);
+
+  const stopWords = new Set([
+    "a",
+    "o",
+    "as",
+    "os",
+    "um",
+    "uma",
+    "uns",
+    "umas",
+    "de",
+    "da",
+    "do",
+    "das",
+    "dos",
+    "e",
+    "em",
+    "no",
+    "na",
+    "nos",
+    "nas",
+    "pra",
+    "para",
+    "por",
+    "com",
+    "que",
+    "qual",
+    "quais",
+    "quem",
+    "como",
+    "onde",
+    "quando",
+    "porque",
+    "por que",
+    "me",
+    "fala",
+    "fale",
+    "diz",
+    "diga",
+    "sabe",
+    "saber",
+    "tem",
+    "teve",
+    "vai",
+    "ser",
+    "foi",
+    "hoje",
+    "amanha",
+    "ontem",
+    "ai",
+    "aí",
+    "sobre",
+  ]);
+
+  return [...new Set(
+    normalized
+      .split(/\s+/)
+      .map((term) => term.trim())
+      .filter((term) => term.length >= 3)
+      .filter((term) => !stopWords.has(term))
+  )].slice(0, 10);
+}
+
+function scoreServerKnowledgeChannel(channel, searchTerms) {
+  if (!channel?.name) {
+    return 0;
+  }
+
+  const channelName = normalizeSearchText(channel.name);
+  const parentName = normalizeSearchText(channel.parent?.name || "");
+
+  let score = 0;
+
+  for (const term of searchTerms) {
+    const normalizedTerm = normalizeSearchText(term);
+
+    if (!normalizedTerm) {
+      continue;
+    }
+
+    if (channelName === normalizedTerm) {
+      score += 40;
+    }
+
+    if (channelName.includes(normalizedTerm)) {
+      score += 20;
+    }
+
+    if (parentName.includes(normalizedTerm)) {
+      score += 8;
+    }
+
+    const channelWords = channelName.split(/[\s_-]+/);
+
+    if (channelWords.some((word) => word === normalizedTerm)) {
+      score += 12;
+    }
+  }
+
+  return score;
+}
+
+async function fetchSmartServerKnowledge(message) {
+  try {
+    const guild = message.guild;
+
+    if (!guild) {
+      return "Servidor não encontrado para busca inteligente.";
+    }
+
+    const searchTerms = extractServerSearchTerms(message.content);
+
+    if (!searchTerms.length) {
+      return "A pergunta não possui termos suficientes para busca inteligente.";
+    }
+
+    const textChannels = guild.channels.cache
+      .filter((channel) => {
+        return (
+          channel &&
+          channel.isTextBased?.() &&
+          channel.viewable !== false
+        );
+      });
+
+    const rankedChannels = textChannels
+      .map((channel) => {
+        return {
+          channel,
+          score: scoreServerKnowledgeChannel(
+            channel,
+            searchTerms
+          ),
+        };
+      })
+      .filter((item) => item.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 8);
+
+    if (!rankedChannels.length) {
+      return [
+        "BUSCA INTELIGENTE NO SERVIDOR:",
+        `Termos pesquisados: ${searchTerms.join(", ")}`,
+        "Nenhum canal teve nome ou categoria diretamente compatível com a pergunta.",
+      ].join("\n");
+    }
+
+    const blocks = [];
+
+    for (const item of rankedChannels) {
+      const channel = item.channel;
+
+      const me = guild.members.me;
+
+      if (!me) {
+        continue;
+      }
+
+      const permissions = channel.permissionsFor(me);
+
+      if (
+        !permissions?.has(PermissionsBitField.Flags.ViewChannel) ||
+        !permissions?.has(PermissionsBitField.Flags.ReadMessageHistory)
+      ) {
+        continue;
+      }
+
+      const messages = await channel.messages
+        .fetch({
+          limit: 25,
+        })
+        .catch(() => null);
+
+      if (!messages?.size) {
+        continue;
+      }
+
+      const usefulMessages = [];
+
+      for (const msg of [...messages.values()].reverse()) {
+        const parts = [];
+
+        if (msg.content) {
+          parts.push(cleanText(msg.content));
+        }
+
+        for (const embed of msg.embeds || []) {
+          const embedText = formatEmbedForAI(
+            embed.data || embed
+          );
+
+          if (embedText) {
+            parts.push(embedText);
+          }
+        }
+
+        const completeText = parts.join("\n");
+
+        if (!completeText) {
+          continue;
+        }
+
+        const normalizedMessage =
+          normalizeSearchText(completeText);
+
+        const relevance = searchTerms.reduce(
+          (total, term) => {
+            return total +
+              (
+                normalizedMessage.includes(
+                  normalizeSearchText(term)
+                )
+                  ? 1
+                  : 0
+              );
+          },
+          0
+        );
+
+        if (relevance <= 0) {
+          continue;
+        }
+
+        usefulMessages.push({
+          relevance,
+          createdTimestamp:
+            msg.createdTimestamp || 0,
+          text: completeText,
+          author:
+            msg.author?.username ||
+            "desconhecido",
+          messageId: msg.id,
+        });
+      }
+
+      usefulMessages.sort((a, b) => {
+        if (b.relevance !== a.relevance) {
+          return b.relevance - a.relevance;
+        }
+
+        return b.createdTimestamp - a.createdTimestamp;
+      });
+
+      if (!usefulMessages.length) {
+        continue;
+      }
+
+      blocks.push([
+        `CANAL ENCONTRADO: <#${channel.id}>`,
+        `Nome: #${channel.name}`,
+        `Categoria: ${channel.parent?.name || "Sem categoria"}`,
+        `Relevância do canal: ${item.score}`,
+        "",
+        ...usefulMessages
+          .slice(0, 8)
+          .map((entry) => {
+            return [
+              `Mensagem de ${entry.author}:`,
+              entry.text,
+              `Link: https://discord.com/channels/${guild.id}/${channel.id}/${entry.messageId}`,
+            ].join("\n");
+          }),
+      ].join("\n\n"));
+    }
+
+    if (!blocks.length) {
+      return [
+        "BUSCA INTELIGENTE NO SERVIDOR:",
+        `Termos pesquisados: ${searchTerms.join(", ")}`,
+        "Encontrei canais relacionados pelo nome, mas nenhuma mensagem recente compatível com a pergunta.",
+      ].join("\n");
+    }
+
+    return [
+      "BUSCA INTELIGENTE NO CONHECIMENTO DO SERVIDOR",
+      `Pergunta: ${cleanText(message.content)}`,
+      `Termos identificados: ${searchTerms.join(", ")}`,
+      "",
+      blocks.join(
+        "\n\n========================================\n\n"
+      ),
+    ]
+      .join("\n")
+      .slice(0, 18000);
+  } catch (err) {
+    console.error(
+      "[IA CHAT AUTO] Erro na busca inteligente do servidor:",
+      err
+    );
+
+    return "A busca inteligente do servidor encontrou um erro interno.";
+  }
 }
 
 async function fetchHierarquiaContext(message) {
@@ -1990,7 +2909,26 @@ async function buildServerIntelligenceContext(message, intent) {
     blocks.push(await fetchMentionedChannelsContext(message));
   }
 
-  if (!blocks.length) return "Nenhum sistema específico foi solicitado na pergunta atual.";
+  // =====================================================
+  // BUSCA INTELIGENTE GENÉRICA NO SERVIDOR
+  // =====================================================
+
+  if (!intent.isGreetingOnly) {
+    console.log(
+      "[IA CHAT AUTO] Executando busca inteligente complementar no servidor."
+    );
+
+    const smartServerKnowledge =
+      await fetchSmartServerKnowledge(message);
+
+    if (smartServerKnowledge) {
+      blocks.push(smartServerKnowledge);
+    }
+  }
+
+  if (!blocks.length) {
+    return "Nenhum sistema específico foi solicitado na pergunta atual.";
+  }
 
   return blocks.join("\n\n====================\n\n");
 }
@@ -2287,15 +3225,82 @@ Sua prioridade é a PRECISÃO DOS FATOS baseada na seção "INFORMAÇÕES REAIS"
 
 REGRAS DE PRIORIDADE (OURO):
 1. A MENSAGEM ATUAL DO USUÁRIO TEM PRIORIDADE MÁXIMA.
-2. Se a mensagem atual for uma saudação simples ("oi", "olá", etc), APENAS SAUDE de volta de forma humana e pergunte como pode ajudar. NÃO use dados de histórico para responder algo que não foi perguntado agora.
-3. Histórico e Memória de Logs servem APENAS para contexto de continuidade, NUNCA para definir o assunto da resposta se o usuário mudou de assunto.
-4. Se a pergunta for técnica/administrativa (quem, quando, teve, quanto), use APENAS os dados da seção "INFORMAÇÕES REAIS".
-5. Se os dados reais dizem "Nenhum registro encontrado", responda exatamente isso. NÃO imagine que o evento aconteceu se ele não está no log.
-6. Não use o histórico de conversas antigas para confirmar fatos de hoje. O fato deve estar na seção "INFORMAÇÕES REAIS".
-7. Ao citar usuários que bateram ponto ou registraram algo, prefira usar a menção <@ID> se disponível.
-8. Se você encontrar dados divergentes, a prioridade é: 1º JSON, 2º Mensagens do Canal, 3º Conhecimento Geral.
-9. PROIBIDO dizer: "vou olhar", "vou ver", "já volto", "um minuto", "deixa eu verificar". Se não está no prompt, você não tem acesso.
 
+2. Se a mensagem atual for uma saudação simples ("oi", "olá", etc), APENAS SAUDE de volta de forma humana e pergunte como pode ajudar. NÃO puxe aleatoriamente um assunto antigo apenas porque ele existe na memória.
+
+3. Histórico recente e Memória de Conversas servem para CONTINUIDADE REAL da relação com o usuário.
+
+4. Quando a mensagem atual tiver relação clara com algo que o mesmo usuário já conversou anteriormente, USE essa memória naturalmente.
+
+5. Não diga frases robóticas como:
+"Segundo minha memória..."
+"Conforme consta no histórico..."
+"Nos meus registros..."
+a menos que isso seja realmente necessário.
+
+6. Prefira continuidade humana. Exemplos de comportamento:
+- se antes a pessoa estava organizando um evento e agora perguntar "e sobre aquele evento?", identifique o assunto anterior;
+- se antes ela falou de um problema e depois perguntar "conseguiu entender o que eu queria?", use o contexto anterior;
+- se ela mencionar "aquilo", "aquele negócio", "o que te falei", "continuando", "e aí?", tente resolver a referência usando histórico e memória;
+- se já souber uma preferência útil daquela conversa, considere essa preferência;
+- não obrigue a pessoa a explicar novamente algo que já aparece claramente na memória disponível.
+
+7. MEMÓRIA NÃO É FONTE DE VERDADE PARA DADOS OPERACIONAIS ATUAIS.
+Ela serve para lembrar assuntos, contexto, preferências, explicações e continuidade.
+
+8. Para fatos atuais da SantaCreators, como:
+- quem bateu ponto;
+- quem alinhou;
+- evento atual;
+- cronograma atual;
+- cargo atual;
+- membro atual;
+- status atual;
+- registros;
+- ranking;
+use prioritariamente "INFORMAÇÕES REAIS BUSCADAS NO SERVIDOR".
+
+9. Se a pergunta for técnica/administrativa (quem, quando, teve, quanto), use os dados reais disponíveis.
+
+10. Se os dados reais dizem "Nenhum registro encontrado", não invente que existe registro.
+
+11. Não use uma conversa antiga para afirmar que um dado operacional continua igual hoje.
+
+12. Ao citar usuários, canais ou cargos, prefira:
+Usuário: <@ID>
+Canal: <#ID>
+Cargo: <@&ID>
+
+13. Se você encontrar dados divergentes, a prioridade é:
+1º JSON ou fonte estruturada atual
+2º mensagens atuais dos canais
+3º memória de conversa
+4º conhecimento geral
+
+14. A seção "BUSCA INTELIGENTE NO CONHECIMENTO DO SERVIDOR" contém mensagens reais encontradas em canais relacionados à pergunta. Leia o conteúdo antes de responder.
+
+15. Se encontrar no servidor a resposta para a pergunta, responda diretamente. Não peça para o usuário procurar manualmente.
+
+16. Não invente informações que não aparecem nas fontes disponíveis.
+
+17. PROIBIDO dizer:
+"vou olhar"
+"vou ver"
+"já volto"
+"um minuto"
+"deixa eu verificar"
+"aguarde"
+"vou procurar"
+
+18. Você deve parecer uma pessoa que conhece bem a SantaCreators, mas esse conhecimento deve vir das informações realmente fornecidas pelo sistema.
+
+19. Evite respostas excessivamente formais quando o usuário estiver conversando casualmente.
+
+20. Adapte o jeito de responder ao jeito da conversa, sem copiar erros de escrita do usuário.
+
+21. Não transforme toda resposta em lista. Converse naturalmente quando uma resposta conversacional for suficiente.
+
+22. Quando perceber continuação clara de um assunto anterior, engate naturalmente no assunto em vez de começar a conversa do zero.
 ${systemsIndex}
 
 ### HISTÓRICO RECENTE DO CANAL:
@@ -2313,7 +3318,94 @@ ${serverIntelligence}
 ### CONHECIMENTO GERAL DO SERVIDOR:
 ${guildKnowledge}
 
-Responda agora de forma natural, direta e baseada nos dados reais acima:
+### ESTILO HUMANO E CONVERSACIONAL:
+
+Você não é um painel de atendimento e não deve responder como formulário.
+
+Seu comportamento deve parecer o de uma pessoa experiente da equipe SantaCreators conversando naturalmente no Discord.
+
+REGRAS DE CONVERSA:
+
+- Entenda primeiro o que a pessoa realmente quer antes de formular a resposta.
+- Responda a intenção da mensagem, não apenas palavras isoladas.
+- Use o contexto da conversa quando ele realmente ajudar.
+- Se a pessoa continuar um assunto anterior, continue daquele ponto naturalmente.
+- Não recomece explicações que já foram dadas sem necessidade.
+- Não repita a pergunta do usuário antes de responder.
+- Não comece toda resposta com "Entendi", "Claro", "Com certeza", "Olá" ou frases semelhantes.
+- Varie naturalmente a abertura das respostas.
+- Não transforme toda resposta em atendimento corporativo.
+- Não use linguagem excessivamente formal em conversas casuais.
+- Também não force gírias quando a conversa for séria ou administrativa.
+- Adapte o tom ao usuário e ao assunto.
+- Pode usar humor leve quando combinar com a situação.
+- Emojis são permitidos quando naturais, mas não são obrigatórios.
+- Não coloque emoji em toda resposta.
+- Não termine toda mensagem perguntando "posso ajudar em algo mais?".
+- Não ofereça ajuda adicional automaticamente quando a resposta já estiver completa.
+- Não use listas quando uma frase ou pequeno parágrafo resolver.
+- Use listas quando realmente ajudarem a organizar várias informações.
+- Evite textos gigantes para perguntas simples.
+- Para perguntas complexas, explique o necessário sem sacrificar informações importantes.
+- Se uma resposta puder ser curta, seja curta.
+- Se precisar explicar, explique.
+- Nunca invente intimidade, apelido, informação pessoal ou relação com o usuário que não esteja no contexto.
+- Não copie erros de português do usuário.
+- Pode acompanhar informalidade e ritmo da conversa sem escrever errado propositalmente.
+
+CONTINUIDADE:
+
+Se o usuário escrever coisas como:
+- "e aquilo?"
+- "e aquele?"
+- "continuando"
+- "lembra?"
+- "o que eu falei?"
+- "e agora?"
+- "faz daquele jeito"
+- "igual o outro"
+- "não, o anterior"
+
+tente identificar primeiro a referência usando:
+1. histórico recente;
+2. memória relevante do usuário;
+3. mensagem respondida/reply;
+4. contexto técnico atual.
+
+Se existir contexto suficiente, continue normalmente sem obrigar o usuário a repetir tudo.
+
+Se realmente não existir contexto suficiente, faça UMA pergunta curta para esclarecer.
+
+CONFIANÇA E FATOS:
+
+- Diferencie conversa de informação factual.
+- Para conversa, criatividade e opinião, responda naturalmente.
+- Para informação administrativa da SantaCreators, seja rigorosa com os dados reais.
+- Nunca transforme suposição em fato.
+- Se houver certeza nos dados internos, responda com segurança.
+- Se os dados forem insuficientes, deixe isso claro de maneira natural.
+- Não invente resposta apenas para parecer inteligente.
+- Ser inteligente também significa reconhecer quando a informação disponível não permite concluir algo.
+
+NATURALIDADE:
+
+Evite padrões repetitivos.
+
+Duas perguntas parecidas não precisam obrigatoriamente receber respostas escritas da mesma maneira.
+
+Considere:
+- mensagem atual;
+- assunto;
+- contexto;
+- nível de formalidade;
+- continuidade;
+- histórico;
+- memória relevante;
+- dados reais disponíveis.
+
+A resposta deve soar escrita especificamente para aquela conversa, e não retirada de um modelo pronto.
+
+Responda agora de forma natural, inteligente, direta, contextual e baseada nos dados reais acima:
 `;
 }
 
@@ -2423,7 +3515,11 @@ async function generateIAResponse({
     getGeminiClient();
 
   if (!geminiClient) {
-    return "Minha API Gemini ainda não foi configurada direito.";
+    console.error(
+      "[IA CHAT AUTO] Cliente Gemini indisponível. Verifique GEMINI_API_KEY."
+    );
+
+    return buildFallbackInstantResponse(message);
   }
 
 await warmupGuildKnowledge(
@@ -2457,9 +3553,34 @@ const guildKnowledge =
   let memoryLogs = "Memória ignorada para focar na saudação.";
 
   if (!intent.isGreetingOnly) {
-    memoryLogs = await fetchRecentMemoryLogs(client);
+    const discordMemory =
+      await fetchRecentMemoryLogs(
+        client,
+        message
+      );
+
+    const persistentMemory =
+      fetchRelevantLongTermMemory(
+        message
+      );
+
+    memoryLogs = [
+      "========================================",
+      "MEMÓRIA HISTÓRICA DO DISCORD",
+      "========================================",
+      discordMemory,
+      "",
+      "========================================",
+      "MEMÓRIA LOCAL INTELIGENTE",
+      "========================================",
+      persistentMemory,
+    ]
+      .join("\n")
+      .slice(0, 22000);
   } else {
-    console.log("[IA CHAT AUTO] Saudação simples detectada, ignorando memória antiga.");
+    console.log(
+      "[IA CHAT AUTO] Saudação simples detectada, ignorando memória antiga."
+    );
   }
 
 const prompt =
@@ -2482,10 +3603,10 @@ for (const modelName of GEMINI_MODEL_FALLBACKS) {
         contents: prompt,
 
         config: {
-          temperature: 0.8,
-          topP: 0.92,
+          temperature: 0.72,
+          topP: 0.9,
           topK: 40,
-          maxOutputTokens: 550,
+          maxOutputTokens: 700,
         },
       });
 
@@ -4855,7 +5976,24 @@ const allowedMentionUsers =
           },
         });
 
-await sendConversationMemoryLog(client, message, finalText);
+        // =====================================================
+        // MEMÓRIA DA CONVERSA
+        // =====================================================
+
+        // Mantém o log histórico no Discord.
+        await sendConversationMemoryLog(
+          client,
+          message,
+          finalText
+        );
+
+        // Salva também na memória local persistente.
+        // Essa memória continua existindo após reiniciar o bot
+        // e pode ser recuperada por relevância nas conversas futuras.
+        saveLongTermConversation(
+          message,
+          finalText
+        );
 
 
       } catch (err) {
@@ -4871,9 +6009,14 @@ await sendConversationMemoryLog(client, message, finalText);
         if (
           isGeminiModelError(err)
         ) {
+          console.error(
+            "[IA CHAT AUTO] Nenhum modelo Gemini configurado respondeu corretamente.",
+            err
+          );
+
           await sendTemporaryReply(message, {
   content:
-    "O modelo Gemini configurado não existe ou está inválido.",
+    "Não consegui processar essa resposta agora. Tenta me mandar novamente em alguns segundos 😅",
 
   allowedMentions: {
     repliedUser: true,
@@ -4909,9 +6052,14 @@ await sendConversationMemoryLog(client, message, finalText);
         if (
           isGeminiKeyError(err)
         ) {
+          console.error(
+            "[IA CHAT AUTO] GEMINI_API_KEY inválida, ausente ou sem permissão.",
+            err
+          );
+
           await sendTemporaryReply(message, {
   content:
-    "A chave Gemini parece inválida ou sem permissão.",
+    "Não consegui processar essa resposta agora. O problema já ficou registrado internamente.",
 
   allowedMentions: {
     repliedUser: true,
