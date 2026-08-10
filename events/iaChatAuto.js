@@ -407,7 +407,10 @@ const AI_ADMIN_TIMEOUT_LIMITS = {
     60 * 60 * 1000,
 
   RESPONSAVEIS_R:
-    30 * 24 * 60 * 60 * 1000,
+    28 * 24 * 60 * 60 * 1000,
+
+  DISCORD_MAX:
+    28 * 24 * 60 * 60 * 1000,
 };
 
 function memberHasRole(member, roleId) {
@@ -434,6 +437,7 @@ function getAiAdminAuthority(member) {
       canAddRole: false,
       canRemoveRole: false,
       canTimeout: false,
+      canRemoveTimeout: false,
       maxTimeoutMs: 0,
       canNickname: false,
       canBan: false,
@@ -447,7 +451,8 @@ function getAiAdminAuthority(member) {
       canAddRole: true,
       canRemoveRole: true,
       canTimeout: true,
-      maxTimeoutMs: Number.POSITIVE_INFINITY,
+      canRemoveTimeout: true,
+      maxTimeoutMs: AI_ADMIN_TIMEOUT_LIMITS.DISCORD_MAX,
       canNickname: true,
       canBan: true,
       bypassRequestedRoleHierarchy: true,
@@ -460,7 +465,8 @@ function getAiAdminAuthority(member) {
       canAddRole: true,
       canRemoveRole: true,
       canTimeout: true,
-      maxTimeoutMs: Number.POSITIVE_INFINITY,
+      canRemoveTimeout: true,
+      maxTimeoutMs: AI_ADMIN_TIMEOUT_LIMITS.DISCORD_MAX,
       canNickname: true,
       canBan: true,
       bypassRequestedRoleHierarchy: false,
@@ -478,7 +484,8 @@ function getAiAdminAuthority(member) {
       canAddRole: true,
       canRemoveRole: true,
       canTimeout: true,
-      maxTimeoutMs: Number.POSITIVE_INFINITY,
+      canRemoveTimeout: true,
+      maxTimeoutMs: AI_ADMIN_TIMEOUT_LIMITS.DISCORD_MAX,
       canNickname: true,
       canBan: true,
       bypassRequestedRoleHierarchy: false,
@@ -496,6 +503,7 @@ function getAiAdminAuthority(member) {
       canAddRole: true,
       canRemoveRole: true,
       canTimeout: true,
+      canRemoveTimeout: true,
       maxTimeoutMs:
         AI_ADMIN_TIMEOUT_LIMITS.RESPONSAVEIS_R,
       canNickname: true,
@@ -515,9 +523,10 @@ function getAiAdminAuthority(member) {
       canAddRole: true,
       canRemoveRole: false,
       canTimeout: true,
+      canRemoveTimeout: true,
       maxTimeoutMs:
         AI_ADMIN_TIMEOUT_LIMITS.SENIOR_CREATOR,
-      canNickname: false,
+      canNickname: true,
       canBan: false,
       bypassRequestedRoleHierarchy: false,
     };
@@ -534,6 +543,7 @@ function getAiAdminAuthority(member) {
       canAddRole: true,
       canRemoveRole: true,
       canTimeout: false,
+      canRemoveTimeout: false,
       maxTimeoutMs: 0,
       canNickname: false,
       canBan: false,
@@ -546,6 +556,7 @@ function getAiAdminAuthority(member) {
     canAddRole: false,
     canRemoveRole: false,
     canTimeout: false,
+    canRemoveTimeout: false,
     maxTimeoutMs: 0,
     canNickname: false,
     canBan: false,
@@ -627,6 +638,1171 @@ function botCanManageMember(guild, targetMember) {
     botMember.roles.highest.position >
     targetMember.roles.highest.position
   );
+}
+
+// =====================================================
+// IA — EXECUÇÃO ADMINISTRATIVA INTELIGENTE
+// =====================================================
+
+function aiAdminText(message) {
+  return normalizeSearchText(
+    message?.content || ""
+  );
+}
+
+function pickAiAdminReply(options) {
+  const valid =
+    Array.isArray(options)
+      ? options.filter(Boolean)
+      : [];
+
+  if (!valid.length) {
+    return "Feito.";
+  }
+
+  return valid[
+    Math.floor(Math.random() * valid.length)
+  ];
+}
+
+function messageRequestsRoleAdd(message) {
+  const text = aiAdminText(message);
+
+  return (
+    text.includes("setar o cargo") ||
+    text.includes("seta o cargo") ||
+    text.includes("setar cargo") ||
+    text.includes("seta cargo") ||
+    text.includes("colocar o cargo") ||
+    text.includes("coloca o cargo") ||
+    text.includes("adicionar o cargo") ||
+    text.includes("adiciona o cargo") ||
+    text.includes("dar o cargo") ||
+    text.includes("da o cargo") ||
+    text.includes("me da o cargo") ||
+    text.includes("me dar o cargo")
+  );
+}
+
+function messageRequestsRoleRemove(message) {
+  const text = aiAdminText(message);
+
+  return (
+    text.includes("remover o cargo") ||
+    text.includes("remove o cargo") ||
+    text.includes("tirar o cargo") ||
+    text.includes("tira o cargo") ||
+    text.includes("retirar o cargo") ||
+    text.includes("retira o cargo")
+  );
+}
+
+function messageRequestsTimeoutRemove(message) {
+  const text = aiAdminText(message);
+
+  return (
+    text.includes("remover castigo") ||
+    text.includes("remove castigo") ||
+    text.includes("tirar castigo") ||
+    text.includes("tira o castigo") ||
+    text.includes("retirar castigo") ||
+    text.includes("retira o castigo") ||
+    text.includes("remover timeout") ||
+    text.includes("remove timeout") ||
+    text.includes("tirar timeout") ||
+    text.includes("tira timeout") ||
+    text.includes("descastigar")
+  );
+}
+
+function messageRequestsTimeout(message) {
+  const text = aiAdminText(message);
+
+  if (messageRequestsTimeoutRemove(message)) {
+    return false;
+  }
+
+  return (
+    text.includes("castigo") ||
+    text.includes("castigar") ||
+    text.includes("timeout") ||
+    text.includes("silenciar") ||
+    text.includes("silencio")
+  );
+}
+
+function messageRequestsNickname(message) {
+  const text = aiAdminText(message);
+
+  return (
+    text.includes("trocar nome") ||
+    text.includes("troca o nome") ||
+    text.includes("mudar nome") ||
+    text.includes("muda o nome") ||
+    text.includes("alterar nome") ||
+    text.includes("altera o nome") ||
+    text.includes("trocar nick") ||
+    text.includes("mudar nick") ||
+    text.includes("alterar nick") ||
+    text.includes("trocar apelido") ||
+    text.includes("mudar apelido")
+  );
+}
+
+function messageRequestsBan(message) {
+  const text = aiAdminText(message);
+
+  return (
+    text.includes("banir") ||
+    text.includes("bane ") ||
+    text.startsWith("bane ") ||
+    text.includes("dar ban") ||
+    text.includes("aplicar ban")
+  );
+}
+
+function isAiAdministrativeRequest(message) {
+  return (
+    messageRequestsRoleAdd(message) ||
+    messageRequestsRoleRemove(message) ||
+    messageRequestsTimeout(message) ||
+    messageRequestsTimeoutRemove(message) ||
+    messageRequestsNickname(message) ||
+    messageRequestsBan(message)
+  );
+}
+
+function extractDiscordSnowflakes(text) {
+  return [
+    ...String(text || "")
+      .matchAll(/\b(\d{17,22})\b/g)
+  ].map((match) => match[1]);
+}
+
+async function resolveAiAdminTargetMember(message) {
+  if (!message?.guild) {
+    return null;
+  }
+
+  const mentionedMembers =
+    [...message.mentions.members.values()]
+      .filter(
+        (member) =>
+          member?.id &&
+          member.id !== message.author.id
+      );
+
+  if (mentionedMembers.length > 0) {
+    return mentionedMembers[0];
+  }
+
+  const mentionedUser =
+    [...message.mentions.users.values()]
+      .find(
+        (user) =>
+          user?.id &&
+          user.id !== message.author.id
+      );
+
+  if (mentionedUser) {
+    const fetched =
+      await message.guild.members
+        .fetch(mentionedUser.id)
+        .catch(() => null);
+
+    if (fetched) {
+      return fetched;
+    }
+  }
+
+  const ids =
+    extractDiscordSnowflakes(
+      message.content
+    );
+
+  for (const id of ids) {
+    if (
+      id === message.author.id ||
+      message.mentions.roles.has(id)
+    ) {
+      continue;
+    }
+
+    const member =
+      message.guild.members.cache.get(id) ||
+      await message.guild.members
+        .fetch(id)
+        .catch(() => null);
+
+    if (member) {
+      return member;
+    }
+  }
+
+  const text = aiAdminText(message);
+
+  const refersToSelf =
+    text.includes(" em mim") ||
+    text.includes(" pra mim") ||
+    text.includes(" para mim") ||
+    text.includes(" meu cargo") ||
+    text.includes(" meu nome") ||
+    text.includes(" meu nick");
+
+  if (refersToSelf) {
+    return (
+      message.member ||
+      await message.guild.members
+        .fetch(message.author.id)
+        .catch(() => null)
+    );
+  }
+
+  return null;
+}
+
+async function resolveAiAdminRequestedRole(message) {
+  if (!message?.guild) {
+    return null;
+  }
+
+  const mentionedRole =
+    message.mentions.roles.first();
+
+  if (mentionedRole) {
+    return mentionedRole;
+  }
+
+  const ids =
+    extractDiscordSnowflakes(
+      message.content
+    );
+
+  for (const id of ids) {
+    const role =
+      message.guild.roles.cache.get(id);
+
+    if (role) {
+      return role;
+    }
+  }
+
+  return null;
+}
+
+function parseAiAdminDuration(message) {
+  const raw =
+    String(message?.content || "")
+      .toLowerCase();
+
+  const normalized =
+    normalizeSearchText(raw);
+
+  const patterns = [
+    {
+      regex:
+        /(\d+)\s*(segundo|segundos|seg|segs)\b/i,
+      multiplier: 1000,
+    },
+    {
+      regex:
+        /(\d+)\s*(minuto|minutos|min|mins)\b/i,
+      multiplier: 60 * 1000,
+    },
+    {
+      regex:
+        /(\d+)\s*(hora|horas|hr|hrs)\b/i,
+      multiplier: 60 * 60 * 1000,
+    },
+    {
+      regex:
+        /(\d+)\s*(dia|dias)\b/i,
+      multiplier: 24 * 60 * 60 * 1000,
+    },
+  ];
+
+  for (const item of patterns) {
+    const match =
+      normalized.match(item.regex);
+
+    if (!match) {
+      continue;
+    }
+
+    const amount =
+      Number(match[1]);
+
+    if (
+      !Number.isFinite(amount) ||
+      amount <= 0
+    ) {
+      return null;
+    }
+
+    return {
+      amount,
+      ms:
+        amount *
+        item.multiplier,
+      original:
+        match[0],
+    };
+  }
+
+  return null;
+}
+
+function formatAiAdminDuration(ms) {
+  const seconds =
+    Math.floor(ms / 1000);
+
+  if (seconds < 60) {
+    return `${seconds} segundo${seconds === 1 ? "" : "s"}`;
+  }
+
+  const minutes =
+    Math.floor(seconds / 60);
+
+  if (minutes < 60) {
+    return `${minutes} minuto${minutes === 1 ? "" : "s"}`;
+  }
+
+  const hours =
+    Math.floor(minutes / 60);
+
+  if (hours < 24) {
+    return `${hours} hora${hours === 1 ? "" : "s"}`;
+  }
+
+  const days =
+    Math.floor(hours / 24);
+
+  return `${days} dia${days === 1 ? "" : "s"}`;
+}
+
+function extractRequestedNickname(message) {
+  const content =
+    String(message?.content || "").trim();
+
+  const patterns = [
+    /(?:trocar|mudar|alterar)\s+(?:o\s+)?(?:nome|nick|nickname|apelido)(?:\s+de\s+<@!?\d{17,22}>)?\s+(?:para|pra|por)\s+(.+)$/i,
+    /(?:colocar|coloca)\s+(?:o\s+)?(?:nome|nick|nickname|apelido)(?:\s+de\s+<@!?\d{17,22}>)?\s+(?:como|para|pra)\s+(.+)$/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match =
+      content.match(pattern);
+
+    if (!match?.[1]) {
+      continue;
+    }
+
+    const nickname =
+      match[1]
+        .replace(/<@!?\d{17,22}>/g, "")
+        .trim();
+
+    if (nickname) {
+      return nickname.slice(0, 32);
+    }
+  }
+
+  return null;
+}
+
+function canAuthorityManageTargetMember(
+  executorMember,
+  targetMember,
+  authority
+) {
+  if (
+    !executorMember ||
+    !targetMember ||
+    !authority
+  ) {
+    return false;
+  }
+
+  if (
+    authority.level === "SUPERUSER"
+  ) {
+    return true;
+  }
+
+  if (
+    executorMember.id ===
+    targetMember.id
+  ) {
+    return true;
+  }
+
+  const executorHighest =
+    getMemberHighestRealRole(
+      executorMember
+    );
+
+  const targetHighest =
+    getMemberHighestRealRole(
+      targetMember
+    );
+
+  if (
+    !executorHighest ||
+    !targetHighest
+  ) {
+    return false;
+  }
+
+  return (
+    executorHighest.position >
+    targetHighest.position
+  );
+}
+
+function buildAiAdminDeniedResponse(
+  authority,
+  action
+) {
+  const level =
+    authority?.level || "NONE";
+
+  if (level === "NONE") {
+    return pickAiAdminReply([
+      "Esse tipo de ação é restrito à hierarquia administrativa da SantaCreators.",
+      "Pra essa ação eu preciso validar uma permissão administrativa no seu cargo, e você não possui uma das autorizações configuradas.",
+      "Essa eu não consigo executar pra você. Sua hierarquia atual não possui autorização para esse tipo de ação.",
+    ]);
+  }
+
+  if (
+    level === "CIDADAO" &&
+    action === "timeout"
+  ) {
+    return pickAiAdminReply([
+      "Como Cidadão você consegue gerenciar cargos permitidos abaixo do cargo Cidadão, mas castigo não faz parte da sua permissão.",
+      "Castigo fica fora da autoridade de Cidadão. Sua permissão administrativa aqui é limitada aos cargos abaixo do Cidadão.",
+    ]);
+  }
+
+  if (
+    level === "CIDADAO" &&
+    action === "nickname"
+  ) {
+    return pickAiAdminReply([
+      "Troca de nome não está liberada para o nível Cidadão.",
+      "Nesse nível eu consigo cuidar dos cargos permitidos abaixo de Cidadão, mas não alterar nickname.",
+    ]);
+  }
+
+  if (
+    level === "SENIOR_CREATOR" &&
+    action === "removeRole"
+  ) {
+    return pickAiAdminReply([
+      "Senior Creator pode adicionar cargos abaixo da própria hierarquia, mas não pode remover cargos.",
+      "Adicionar cargo eu consigo validar para Senior Creator. Remover cargo não está liberado nesse nível.",
+    ]);
+  }
+
+  if (action === "ban") {
+    return pickAiAdminReply([
+      "Banimento não está liberado para o seu nível de autoridade.",
+      "Sua hierarquia não possui autorização para banir membros pelo sistema da IA.",
+    ]);
+  }
+
+  return pickAiAdminReply([
+    "Sua hierarquia não possui autorização para executar essa ação.",
+    "Essa ação passa do limite administrativo configurado para o seu nível.",
+    "Não consigo executar isso com a autoridade que seu cargo possui atualmente.",
+  ]);
+}
+
+async function tryExecuteAiAdministration(message) {
+  if (
+    !message?.guild ||
+    message.author?.bot
+  ) {
+    return null;
+  }
+
+  if (!isAiAdministrativeRequest(message)) {
+    return null;
+  }
+
+  const executorMember =
+    message.member ||
+    await message.guild.members
+      .fetch(message.author.id)
+      .catch(() => null);
+
+  if (!executorMember) {
+    return {
+      handled: true,
+      response:
+        "Não consegui validar sua identidade dentro do servidor, então não vou executar uma ação administrativa sem essa confirmação.",
+    };
+  }
+
+  const authority =
+    getAiAdminAuthority(
+      executorMember
+    );
+
+  // =====================================================
+  // ADICIONAR / REMOVER CARGO
+  // =====================================================
+
+  const wantsRoleAdd =
+    messageRequestsRoleAdd(message);
+
+  const wantsRoleRemove =
+    messageRequestsRoleRemove(message);
+
+  if (
+    wantsRoleAdd ||
+    wantsRoleRemove
+  ) {
+    const requestedRole =
+      await resolveAiAdminRequestedRole(
+        message
+      );
+
+    if (!requestedRole) {
+      return {
+        handled: true,
+        response:
+          "Entendi que você quer alterar um cargo, mas não consegui identificar qual. Pode mencionar o cargo ou mandar o ID dele.",
+      };
+    }
+
+    const action =
+      wantsRoleRemove
+        ? "removeRole"
+        : "addRole";
+
+    if (
+      wantsRoleAdd &&
+      !authority.canAddRole
+    ) {
+      return {
+        handled: true,
+        response:
+          buildAiAdminDeniedResponse(
+            authority,
+            action
+          ),
+      };
+    }
+
+    if (
+      wantsRoleRemove &&
+      !authority.canRemoveRole
+    ) {
+      return {
+        handled: true,
+        response:
+          buildAiAdminDeniedResponse(
+            authority,
+            action
+          ),
+      };
+    }
+
+    if (
+      !authority.bypassRequestedRoleHierarchy &&
+      !canAuthorityManageRole(
+        executorMember,
+        requestedRole,
+        authority
+      )
+    ) {
+      return {
+        handled: true,
+        response:
+          pickAiAdminReply([
+            `Esse cargo está no mesmo nível ou acima do que sua autoridade permite gerenciar.`,
+            `Não consigo mexer em <@&${requestedRole.id}> por você. Pela hierarquia, esse cargo não está abaixo do seu limite permitido.`,
+            `Sua permissão está certinha, mas <@&${requestedRole.id}> ficou fora do alcance da sua hierarquia.`,
+          ]),
+      };
+    }
+
+    if (
+      !botCanManageRole(
+        message.guild,
+        requestedRole
+      )
+    ) {
+      return {
+        handled: true,
+        response:
+          `Sua autorização passou, mas meu próprio cargo não está acima de <@&${requestedRole.id}> no Discord. A hierarquia do bot me impede de alterar esse cargo.`,
+      };
+    }
+
+    const targetMember =
+      await resolveAiAdminTargetMember(
+        message
+      );
+
+    if (!targetMember) {
+      return {
+        handled: true,
+        response:
+          "Já entendi o cargo, mas falta saber em quem devo fazer a alteração. Mencione a pessoa ou mande o ID dela.",
+      };
+    }
+
+    if (
+      targetMember.id !==
+        message.author.id &&
+      !canAuthorityManageTargetMember(
+        executorMember,
+        targetMember,
+        authority
+      )
+    ) {
+      return {
+        handled: true,
+        response:
+          "Você não pode executar essa ação nesse membro porque ele está no mesmo nível ou acima da sua hierarquia.",
+      };
+    }
+
+    if (
+      !botCanManageMember(
+        message.guild,
+        targetMember
+      ) &&
+      targetMember.id !==
+        message.author.id
+    ) {
+      return {
+        handled: true,
+        response:
+          `Sua autorização passou, mas eu não consigo gerenciar <@${targetMember.id}> pela hierarquia do meu próprio cargo.`,
+      };
+    }
+
+    if (wantsRoleAdd) {
+      if (
+        targetMember.roles.cache.has(
+          requestedRole.id
+        )
+      ) {
+        return {
+          handled: true,
+          response:
+            pickAiAdminReply([
+              `<@${targetMember.id}> já está com <@&${requestedRole.id}> 😅`,
+              `Esse aí já tá certinho. <@${targetMember.id}> já possui <@&${requestedRole.id}>.`,
+              `Nem precisei mexer 😂 <@${targetMember.id}> já tem <@&${requestedRole.id}>.`,
+            ]),
+        };
+      }
+
+      try {
+        await targetMember.roles.add(
+          requestedRole,
+          `SantaCreators IA | Solicitado por ${message.author.tag} (${message.author.id})`
+        );
+
+        console.log(
+          `[IA ADMIN] ADD_ROLE | Executor=${message.author.id} | Alvo=${targetMember.id} | Cargo=${requestedRole.id}`
+        );
+
+        return {
+          handled: true,
+          response:
+            pickAiAdminReply([
+              `Fechou 😎 coloquei <@&${requestedRole.id}> em <@${targetMember.id}>.`,
+              `Prontinho. <@${targetMember.id}> agora está com <@&${requestedRole.id}>.`,
+              `Resolvido 👌 <@&${requestedRole.id}> foi adicionado em <@${targetMember.id}>.`,
+            ]),
+        };
+      } catch (err) {
+        console.error(
+          "[IA ADMIN] Erro ADD_ROLE:",
+          err
+        );
+
+        return {
+          handled: true,
+          response:
+            "A autorização passou, mas o Discord recusou a alteração do cargo. Confere se meu cargo está acima do cargo solicitado e do membro.",
+        };
+      }
+    }
+
+    if (wantsRoleRemove) {
+      if (
+        !targetMember.roles.cache.has(
+          requestedRole.id
+        )
+      ) {
+        return {
+          handled: true,
+          response:
+            pickAiAdminReply([
+              `<@${targetMember.id}> já não possui <@&${requestedRole.id}>.`,
+              `Esse cargo já não está em <@${targetMember.id}>, então não tinha nada pra remover.`,
+            ]),
+        };
+      }
+
+      try {
+        await targetMember.roles.remove(
+          requestedRole,
+          `SantaCreators IA | Solicitado por ${message.author.tag} (${message.author.id})`
+        );
+
+        console.log(
+          `[IA ADMIN] REMOVE_ROLE | Executor=${message.author.id} | Alvo=${targetMember.id} | Cargo=${requestedRole.id}`
+        );
+
+        return {
+          handled: true,
+          response:
+            pickAiAdminReply([
+              `Feito 👌 removi <@&${requestedRole.id}> de <@${targetMember.id}>.`,
+              `Resolvido. <@${targetMember.id}> não está mais com <@&${requestedRole.id}>.`,
+              `Cargo retirado certinho de <@${targetMember.id}>.`,
+            ]),
+        };
+      } catch (err) {
+        console.error(
+          "[IA ADMIN] Erro REMOVE_ROLE:",
+          err
+        );
+
+        return {
+          handled: true,
+          response:
+            "A autorização passou, mas o Discord não deixou remover esse cargo pela hierarquia atual.",
+        };
+      }
+    }
+  }
+
+  // =====================================================
+  // CASTIGO / TIMEOUT
+  // =====================================================
+
+  if (messageRequestsTimeout(message)) {
+    if (!authority.canTimeout) {
+      return {
+        handled: true,
+        response:
+          buildAiAdminDeniedResponse(
+            authority,
+            "timeout"
+          ),
+      };
+    }
+
+    const targetMember =
+      await resolveAiAdminTargetMember(
+        message
+      );
+
+    if (!targetMember) {
+      return {
+        handled: true,
+        response:
+          "Consigo cuidar do castigo, mas preciso saber quem é a pessoa. Mencione ela ou mande o ID do Discord.",
+      };
+    }
+
+    const duration =
+      parseAiAdminDuration(message);
+
+    if (!duration) {
+      return {
+        handled: true,
+        response:
+          "Entendi o castigo, só faltou o tempo 😅 Pode falar algo como `30 segundos`, `10 minutos`, `1 hora` ou `2 dias`.",
+      };
+    }
+
+    if (
+      duration.ms >
+      authority.maxTimeoutMs
+    ) {
+      return {
+        handled: true,
+        response:
+          `Esse tempo passa do seu limite. Para sua hierarquia, o máximo permitido é **${formatAiAdminDuration(authority.maxTimeoutMs)}**.`,
+      };
+    }
+
+    if (
+      duration.ms >
+      AI_ADMIN_TIMEOUT_LIMITS.DISCORD_MAX
+    ) {
+      return {
+        handled: true,
+        response:
+          "O próprio Discord limita castigos temporários a 28 dias. Para um período maior seria necessário usar outro sistema de punição.",
+      };
+    }
+
+    if (
+      !canAuthorityManageTargetMember(
+        executorMember,
+        targetMember,
+        authority
+      )
+    ) {
+      return {
+        handled: true,
+        response:
+          "Você não pode aplicar castigo nessa pessoa porque ela está no mesmo nível ou acima da sua hierarquia.",
+      };
+    }
+
+    if (
+      !botCanManageMember(
+        message.guild,
+        targetMember
+      )
+    ) {
+      return {
+        handled: true,
+        response:
+          "Sua autorização passou, mas meu cargo não consegue aplicar castigo nessa pessoa pela hierarquia do Discord.",
+      };
+    }
+
+    try {
+      await targetMember.timeout(
+        duration.ms,
+        `SantaCreators IA | Solicitado por ${message.author.tag} (${message.author.id})`
+      );
+
+      console.log(
+        `[IA ADMIN] TIMEOUT | Executor=${message.author.id} | Alvo=${targetMember.id} | Tempo=${duration.ms}`
+      );
+
+      return {
+  handled: true,
+  response:
+    pickAiAdminReply([
+      `Feito. <@${targetMember.id}> recebeu castigo de **${formatAiAdminDuration(duration.ms)}**.`,
+      `Aplicado 👌 <@${targetMember.id}> ficará de castigo por **${formatAiAdminDuration(duration.ms)}**.`,
+      `Resolvido. Castigo de **${formatAiAdminDuration(duration.ms)}** aplicado em <@${targetMember.id}>.`,
+    ]),
+};
+    } catch (err) {
+      console.error(
+        "[IA ADMIN] Erro TIMEOUT:",
+        err
+      );
+
+      return {
+        handled: true,
+        response:
+          "A autorização passou, mas o Discord recusou o castigo. Pode ser hierarquia ou falta da permissão `ModerateMembers` no meu cargo.",
+      };
+    }
+  }
+
+  // =====================================================
+  // REMOVER CASTIGO
+  // =====================================================
+
+  if (
+    messageRequestsTimeoutRemove(message)
+  ) {
+    if (!authority.canRemoveTimeout) {
+      return {
+        handled: true,
+        response:
+          buildAiAdminDeniedResponse(
+            authority,
+            "timeout"
+          ),
+      };
+    }
+
+    const targetMember =
+      await resolveAiAdminTargetMember(
+        message
+      );
+
+    if (!targetMember) {
+      return {
+        handled: true,
+        response:
+          "Consigo remover o castigo, mas preciso da menção ou do ID da pessoa.",
+      };
+    }
+
+    if (
+      !canAuthorityManageTargetMember(
+        executorMember,
+        targetMember,
+        authority
+      )
+    ) {
+      return {
+        handled: true,
+        response:
+          "Essa pessoa está fora do alcance da sua hierarquia, então não vou remover o castigo.",
+      };
+    }
+
+    if (
+      !botCanManageMember(
+        message.guild,
+        targetMember
+      )
+    ) {
+      return {
+        handled: true,
+        response:
+          "Sua autorização está certa, mas meu cargo não consegue gerenciar essa pessoa.",
+      };
+    }
+
+    try {
+      await targetMember.timeout(
+        null,
+        `SantaCreators IA | Castigo removido por ${message.author.tag} (${message.author.id})`
+      );
+
+      console.log(
+        `[IA ADMIN] REMOVE_TIMEOUT | Executor=${message.author.id} | Alvo=${targetMember.id}`
+      );
+
+      return {
+        handled: true,
+        response:
+          pickAiAdminReply([
+            `Pronto 😎 removi o castigo de <@${targetMember.id}>.`,
+            `<@${targetMember.id}> está sem castigo agora. Resolvido.`,
+            `Castigo retirado de <@${targetMember.id}> 👌`,
+          ]),
+      };
+    } catch (err) {
+      console.error(
+        "[IA ADMIN] Erro REMOVE_TIMEOUT:",
+        err
+      );
+
+      return {
+        handled: true,
+        response:
+          "Tentei remover o castigo, mas o Discord recusou a alteração.",
+      };
+    }
+  }
+
+  // =====================================================
+  // NICKNAME
+  // =====================================================
+
+  if (messageRequestsNickname(message)) {
+    if (!authority.canNickname) {
+      return {
+        handled: true,
+        response:
+          buildAiAdminDeniedResponse(
+            authority,
+            "nickname"
+          ),
+      };
+    }
+
+    const targetMember =
+      await resolveAiAdminTargetMember(
+        message
+      );
+
+    if (!targetMember) {
+      return {
+        handled: true,
+        response:
+          "Consigo trocar o nome, mas preciso saber de quem 😅 Mencione a pessoa ou mande o ID dela.",
+      };
+    }
+
+    const nickname =
+      extractRequestedNickname(message);
+
+    if (!nickname) {
+      return {
+        handled: true,
+        response:
+          "Achei a pessoa, mas não consegui identificar o nome novo. Exemplo: `troca o nome do @Fulano para Rodney`.",
+      };
+    }
+
+    if (
+      !canAuthorityManageTargetMember(
+        executorMember,
+        targetMember,
+        authority
+      )
+    ) {
+      return {
+        handled: true,
+        response:
+          "Não posso trocar o nome dessa pessoa porque ela está no mesmo nível ou acima da sua hierarquia.",
+      };
+    }
+
+    if (
+      !botCanManageMember(
+        message.guild,
+        targetMember
+      )
+    ) {
+      return {
+        handled: true,
+        response:
+          "Sua autorização passou, mas meu cargo não consegue alterar o nome dessa pessoa.",
+      };
+    }
+
+    try {
+      const oldName =
+        targetMember.displayName;
+
+      await targetMember.setNickname(
+        nickname,
+        `SantaCreators IA | Solicitado por ${message.author.tag} (${message.author.id})`
+      );
+
+      console.log(
+        `[IA ADMIN] NICKNAME | Executor=${message.author.id} | Alvo=${targetMember.id} | Antes=${oldName} | Depois=${nickname}`
+      );
+
+      return {
+        handled: true,
+        response:
+          pickAiAdminReply([
+            `Feito 😎 o nome de <@${targetMember.id}> agora é **${nickname}**.`,
+            `Prontinho. Alterei o nome de <@${targetMember.id}> para **${nickname}**.`,
+            `Nome atualizado 👌 <@${targetMember.id}> agora aparece como **${nickname}**.`,
+          ]),
+      };
+    } catch (err) {
+      console.error(
+        "[IA ADMIN] Erro NICKNAME:",
+        err
+      );
+
+      return {
+        handled: true,
+        response:
+          "A autorização passou, mas o Discord não deixou alterar esse nickname. Provavelmente é a hierarquia do meu cargo.",
+      };
+    }
+  }
+
+  // =====================================================
+  // BANIMENTO
+  // =====================================================
+
+  if (messageRequestsBan(message)) {
+    if (!authority.canBan) {
+      return {
+        handled: true,
+        response:
+          buildAiAdminDeniedResponse(
+            authority,
+            "ban"
+          ),
+      };
+    }
+
+    const targetMember =
+      await resolveAiAdminTargetMember(
+        message
+      );
+
+    if (!targetMember) {
+      return {
+        handled: true,
+        response:
+          "Entendi o banimento, mas preciso da menção ou do ID da pessoa antes de executar.",
+      };
+    }
+
+    if (
+      targetMember.id ===
+      message.author.id
+    ) {
+      return {
+        handled: true,
+        response:
+          "Banir você mesmo pelo chat seria uma bela armadilha 😂 Não vou executar isso.",
+      };
+    }
+
+    if (
+      !canAuthorityManageTargetMember(
+        executorMember,
+        targetMember,
+        authority
+      )
+    ) {
+      return {
+        handled: true,
+        response:
+          "Não posso banir essa pessoa porque ela está no mesmo nível ou acima da sua hierarquia.",
+      };
+    }
+
+    if (
+      !targetMember.bannable
+    ) {
+      return {
+        handled: true,
+        response:
+          "Sua autorização passou, mas o Discord não permite que meu cargo bana essa pessoa pela hierarquia atual.",
+      };
+    }
+
+    try {
+      await targetMember.ban({
+        reason:
+          `SantaCreators IA | Solicitado por ${message.author.tag} (${message.author.id})`,
+      });
+
+      console.log(
+        `[IA ADMIN] BAN | Executor=${message.author.id} | Alvo=${targetMember.id}`
+      );
+
+      return {
+        handled: true,
+        response:
+          pickAiAdminReply([
+            `<@${targetMember.id}> foi banido do servidor.`,
+            `Banimento executado. <@${targetMember.id}> foi removido do servidor.`,
+            `Feito. O banimento de <@${targetMember.id}> foi aplicado.`,
+          ]),
+      };
+    } catch (err) {
+      console.error(
+        "[IA ADMIN] Erro BAN:",
+        err
+      );
+
+      return {
+        handled: true,
+        response:
+          "A autorização passou, mas o Discord recusou o banimento pela hierarquia ou permissões atuais do bot.",
+      };
+    }
+  }
+
+  return {
+    handled: true,
+    response:
+      "Entendi que é uma solicitação administrativa, mas não consegui interpretar a ação com segurança. Reformule dizendo a ação, a pessoa e, quando necessário, o cargo ou tempo.",
+  };
 }
 
 const GEMINI_MODEL =
@@ -4736,6 +5912,23 @@ async function generateIAResponse({
   message,
   client,
 }) {
+  // =====================================================
+  // PRIORIDADE 0 — AÇÃO ADMINISTRATIVA REAL
+  // =====================================================
+
+  const administrativeAction =
+    await tryExecuteAiAdministration(
+      message
+    );
+
+  if (administrativeAction?.handled) {
+    console.log(
+      "[IA ADMIN] Solicitação administrativa tratada diretamente pelo sistema."
+    );
+
+    return administrativeAction.response;
+  }
+
   const geminiClient =
     getGeminiClient();
 
