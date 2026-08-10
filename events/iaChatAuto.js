@@ -986,13 +986,55 @@ async function resolveAiAdminTargetMember(message) {
 
   const text = aiAdminText(message);
 
+  // =====================================================
+  // AUTORREFERÊNCIA — AÇÃO ADMINISTRATIVA NO PRÓPRIO USUÁRIO
+  // =====================================================
+  //
+  // Reconhece formas naturais de a pessoa pedir uma ação
+  // administrativa nela mesma.
+  //
+  // Exemplos:
+  //
+  // "seta o cargo em mim"
+  // "coloca esse cargo pra mim"
+  // "remove esse cargo de mim"
+  // "tira de mim"
+  // "remove de mim mesmo"
+  // "me dá esse cargo"
+  // "remove meu cargo"
+  // "troca meu nome"
+  //
+  // A identificação de outras pessoas continua tendo
+  // prioridade, pois menções e IDs são resolvidos acima.
+  // =====================================================
+
+  const selfReferencePatterns = [
+    /\bem mim\b/,
+    /\bde mim\b/,
+    /\bpra mim\b/,
+    /\bpara mim\b/,
+    /\bem mim mesmo\b/,
+    /\bde mim mesmo\b/,
+    /\bpra mim mesmo\b/,
+    /\bpara mim mesmo\b/,
+    /\bmeu cargo\b/,
+    /\bmeus cargos\b/,
+    /\bmeu nome\b/,
+    /\bmeu nick\b/,
+    /\bmeu nickname\b/,
+    /\bmeu apelido\b/,
+    /\bme da\b/,
+    /\bme dar\b/,
+    /\bme coloca\b/,
+    /\bme colocar\b/,
+    /\bme adiciona\b/,
+    /\bme adicionar\b/,
+  ];
+
   const refersToSelf =
-    text.includes(" em mim") ||
-    text.includes(" pra mim") ||
-    text.includes(" para mim") ||
-    text.includes(" meu cargo") ||
-    text.includes(" meu nome") ||
-    text.includes(" meu nick");
+    selfReferencePatterns.some(
+      (pattern) => pattern.test(text)
+    );
 
   if (refersToSelf) {
     return (
