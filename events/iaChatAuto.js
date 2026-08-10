@@ -98,6 +98,8 @@ const AI_ALINHAMENTOS_CHANNEL_ID = "1425256185707233301";
 const AI_FIVEM_GI_PANEL_CHANNEL_ID = "1501321157259956244";
 const AI_GI_DATA_FILE = path.resolve(process.cwd(), "data", "sc_gi_registros.json");
 
+const AI_CRONOGRAMA_CHANNEL_ID = "1474605177771397223";
+
 const AI_INTERNAL_SCAN_LIMIT = 80;
 
 // =====================================================
@@ -1636,12 +1638,51 @@ function extractDiscordIdsFromText(text) {
 function messageWantsCronograma(message) {
   const text = normalizeSearchText(message.content);
 
+  const mentionsEvent =
+    text.includes("evento") ||
+    text.includes("eventos");
+
+  const mentionsTime =
+    text.includes("hoje") ||
+    text.includes("amanha") ||
+    text.includes("semana") ||
+    text.includes("segunda") ||
+    text.includes("terca") ||
+    text.includes("quarta") ||
+    text.includes("quinta") ||
+    text.includes("sexta") ||
+    text.includes("sabado") ||
+    text.includes("domingo") ||
+    text.includes("data") ||
+    text.includes("dia");
+
+  const asksEventSchedule =
+    text.includes("quais eventos") ||
+    text.includes("qual evento") ||
+    text.includes("que evento") ||
+    text.includes("que eventos") ||
+    text.includes("tem evento") ||
+    text.includes("tem eventos") ||
+    text.includes("vai ter evento") ||
+    text.includes("vai ter eventos") ||
+    text.includes("eventos de hoje") ||
+    text.includes("evento de hoje") ||
+    text.includes("eventos hoje") ||
+    text.includes("evento hoje") ||
+    text.includes("eventos da semana") ||
+    text.includes("eventos dessa semana") ||
+    text.includes("eventos desta semana") ||
+    text.includes("calendario de eventos");
+
   return (
     text.includes("cronograma") ||
     text.includes("conograma") ||
     text.includes("agenda") ||
+    text.includes("calendario") ||
     text.includes("evento semanal") ||
-    text.includes("eventos semanais")
+    text.includes("eventos semanais") ||
+    asksEventSchedule ||
+    (mentionsEvent && mentionsTime)
   );
 }
 
@@ -2205,9 +2246,14 @@ async function fetchCronogramaContext(message) {
 
     const mentionedChannels = await resolveMentionedChannels(message);
 
-const channels = mentionedChannels.length
-    ? mentionedChannels
-    : findRelevantChannels(
+    const officialCronogramaChannel =
+      guild.channels.cache.get(AI_CRONOGRAMA_CHANNEL_ID) ||
+      await guild.channels
+        .fetch(AI_CRONOGRAMA_CHANNEL_ID)
+        .catch(() => null);
+
+    const automaticallyFoundChannels =
+      findRelevantChannels(
         guild,
         [
           "cronograma",
@@ -2217,7 +2263,41 @@ const channels = mentionedChannels.length
           "calendario",
         ],
         5
-      ).filter(c => c && c.isTextBased?.() && channelLooksLikeCronograma(c)).slice(0, 3);
+      )
+        .filter(
+          (c) =>
+            c &&
+            c.isTextBased?.() &&
+            channelLooksLikeCronograma(c)
+        )
+        .slice(0, 3);
+
+    const channelsMap = new Map();
+
+    if (
+      officialCronogramaChannel &&
+      officialCronogramaChannel.isTextBased?.()
+    ) {
+      channelsMap.set(
+        officialCronogramaChannel.id,
+        officialCronogramaChannel
+      );
+    }
+
+    for (const channel of mentionedChannels) {
+      if (channel?.id && channel.isTextBased?.()) {
+        channelsMap.set(channel.id, channel);
+      }
+    }
+
+    for (const channel of automaticallyFoundChannels) {
+      if (channel?.id && channel.isTextBased?.()) {
+        channelsMap.set(channel.id, channel);
+      }
+    }
+
+    const channels =
+      [...channelsMap.values()].slice(0, 3);
 
     if (!channels.length) {
       return "Nenhum canal parecido com cronograma foi encontrado por nome, ID, link ou menção.";
@@ -2226,10 +2306,28 @@ const channels = mentionedChannels.length
     const blocks = [];
 
     for (const channel of channels) {
-      blocks.push(await readTextChannelMessages(channel, 12));
+      const channelContent =
+        await readTextChannelMessages(channel, 20);
+
+      blocks.push([
+        "FONTE OFICIAL DE CRONOGRAMA DA SANTACREATORS",
+        `Canal: <#${channel.id}>`,
+        `Nome: #${channel.name}`,
+        `Link do canal: https://discord.com/channels/${guild.id}/${channel.id}`,
+        "",
+        channelContent,
+      ].join("\n"));
     }
 
-    return blocks.join("\n\n====================\n\n");
+    return [
+      "========================================",
+      "CRONOGRAMA OFICIAL ATUAL",
+      "========================================",
+      "Use este conteúdo como fonte prioritária para perguntas sobre eventos, datas, horários e cidades.",
+      "Compare a data solicitada pelo usuário com as datas escritas no cronograma antes de responder.",
+      "",
+      blocks.join("\n\n====================\n\n"),
+    ].join("\n");
   } catch (err) {
     console.error("[IA CHAT AUTO] Erro ao buscar cronograma:", err);
     return "Tentei buscar o cronograma, mas deu erro ao acessar o canal.";
@@ -3273,6 +3371,21 @@ function buildPrompt({
   memoryLogs,
   systemsIndex,
 }) {
+  const currentDateTime = new Date().toLocaleString(
+    "pt-BR",
+    {
+      timeZone: "America/Sao_Paulo",
+      weekday: "long",
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    }
+  );
+
   return `
 ${SANTACREATORS_CONTEXT}
 
@@ -3280,13 +3393,23 @@ ${SANTACREATORS_CONTEXT}
 Você está operando como a IA Administrativa da SantaCreators.
 Sua prioridade é a PRECISÃO DOS FATOS baseada na seção "INFORMAÇÕES REAIS" abaixo.
 
+DATA E HORA ATUAL DA OPERAÇÃO:
+${currentDateTime}
+Fuso horário oficial: America/Sao_Paulo (horário de Brasília).
+
+IMPORTANTE SOBRE DATAS:
+- Considere a data acima como a referência oficial para interpretar "hoje", "amanhã", "ontem", dias da semana e datas relativas.
+- Quando o usuário perguntar sobre eventos de "hoje", compare a data atual acima com a DATA DO EVENTO informada no Cronograma Oficial.
+- Não use apenas a data de publicação da mensagem do Discord para decidir se um evento acontece hoje.
+- Se o cronograma possuir uma data explícita para o evento, essa data é a referência principal.
+- Não confunda mensagens antigas ainda presentes no canal com eventos que acontecem hoje.
+
 REGRAS DE PRIORIDADE (OURO):
 1. A MENSAGEM ATUAL DO USUÁRIO TEM PRIORIDADE MÁXIMA.
 
 2. Se a mensagem atual for uma saudação simples ("oi", "olá", etc), APENAS SAUDE de volta de forma humana e pergunte como pode ajudar. NÃO puxe aleatoriamente um assunto antigo apenas porque ele existe na memória.
 
 3. Histórico recente e Memória de Conversas servem para CONTINUIDADE REAL da relação com o usuário.
-
 4. Quando a mensagem atual tiver relação clara com algo que o mesmo usuário já conversou anteriormente, USE essa memória naturalmente.
 
 5. Não diga frases robóticas como:
@@ -3347,7 +3470,37 @@ Cargo: <@&ID>
 
 14. A seção "BUSCA INTELIGENTE NO CONHECIMENTO DO SERVIDOR" contém mensagens reais encontradas em canais relacionados à pergunta. Leia o conteúdo antes de responder.
 
+14.1. Para perguntas sobre eventos, agenda, calendário, horários, datas ou cidades:
+- priorize sempre a seção "CRONOGRAMA OFICIAL ATUAL", quando ela estiver disponível;
+- use Eventos Diários apenas como informação complementar;
+- nunca deixe Eventos Diários sobrescrever um cronograma atual;
+- confira a data do evento, e não apenas a data em que a mensagem foi publicada;
+- se o usuário disser "hoje", compare com a data atual informada no prompt;
+- se houver dois eventos no mesmo dia, informe os dois;
+- se houver horários diferentes, informe cada horário;
+- se o cronograma informar cidade/local, preserve exatamente essa informação;
+- não invente que um evento reúne todas as cidades se o cronograma indicar uma cidade específica.
+
 15. Se encontrar no servidor a resposta para a pergunta, responda diretamente. Não peça para o usuário procurar manualmente.
+
+15.1. Quando a informação vier de um canal do Discord:
+- primeiro responda a pergunta completamente com base no conteúdo que você leu;
+- quando for útil, informe também o canal de origem usando <#ID>;
+- se houver um link real do canal ou da mensagem nas informações recebidas, você pode fornecê-lo como fonte para consulta;
+- nunca invente ID, canal ou link;
+- não obrigue o usuário a abrir o link para obter a resposta;
+- o link é apenas uma referência adicional;
+- se o usuário disser que não possui acesso ao canal, não insista para que ele acesse;
+- nesse caso, resuma ou explique diretamente o conteúdo relevante que você já conseguiu ler;
+- não revele conteúdo sensível, privado ou sem relação com a pergunta apenas porque conseguiu ler o canal.
+
+15.2. Quando houver mais de uma fonte:
+- consolide as informações em uma única resposta;
+- não copie mensagens inteiras desnecessariamente;
+- retire apenas o que responde à pergunta;
+- se duas fontes divergirem, prefira a fonte oficial mais atual;
+- para cronograma de eventos, o Cronograma Oficial atual tem prioridade sobre Eventos Diários;
+- memória serve como contexto complementar, nunca para sobrescrever cronograma atual.
 
 16. Não invente informações que não aparecem nas fontes disponíveis.
 
@@ -3417,6 +3570,10 @@ REGRAS DE CONVERSA:
 - Para perguntas complexas, explique o necessário sem sacrificar informações importantes.
 - Se uma resposta puder ser curta, seja curta.
 - Se precisar explicar, explique.
+- Para perguntas simples como "o que é?", "o que faz?", "quem é?", responda primeiro em 1 ou 2 parágrafos curtos.
+- Só detalhe vários tópicos quando o usuário pedir detalhes ou quando eles forem necessários para responder corretamente.
+- Não transforme uma pergunta curta em apresentação institucional completa.
+- Para cronograma, eventos, datas e horários, prefira uma resposta organizada e objetiva.
 - Nunca invente intimidade, apelido, informação pessoal ou relação com o usuário que não esteja no contexto.
 - Não copie erros de português do usuário.
 - Pode acompanhar informalidade e ritmo da conversa sem escrever errado propositalmente.
