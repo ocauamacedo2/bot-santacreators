@@ -57,27 +57,70 @@ const CONFIG = {
     mentions: {
         limit: 8,            // máximo de menções por msg
     },
-    links: {
+       links: {
         limit: 4,            // máximo de links por msg
     },
 
+    // =====================================================
+    // ATAQUE DE MÍDIA / SCAM EM MASSA
+    // =====================================================
+    //
+    // Esta proteção NÃO pune alguém simplesmente por usar
+    // @everyone ou @here.
+    //
+    // Ela procura combinações muito mais suspeitas:
+    //
+    // • 4 ou mais imagens na mesma mensagem
+    // • 2 ou mais imagens + @everyone/@here
+    // • mídia enviada rapidamente em vários canais
+    //
+    // Quando confirmado:
+    //
+    // • mensagens recentes do ataque são apagadas
+    // • usuário recebe timeout fixo de 5 horas
+    // • ação é registrada no canal de segurança
+    //
+    // =====================================================
+
+    mediaAttack: {
+        enabled: true,
+
+        // 4 imagens numa única mensagem.
+        imagesInSingleMessage: 4,
+
+        // 2 imagens + @everyone/@here.
+        imagesWithMassMention: 2,
+
+        // Janela usada para identificar ataque em vários canais.
+        windowMs: 20 * 1000,
+
+        // Quantidade mínima de mensagens com mídia.
+        messagesInWindow: 3,
+
+        // Quantidade mínima de canais diferentes.
+        channelsInWindow: 3,
+
+        // Timeout fixo de 5 horas.
+        timeoutMs: 5 * 60 * 60 * 1000,
+    },
+
     // Domínios Permitidos (Whitelist)
-pornWords: [
-    /porn/i,
-    /porno/i,
-    /pornografia/i,
-    /sexcam/i,
-    /webcam\s*sex/i,
-    /nude/i,
-    /nudes/i,
-    /onlyfans/i,
-    /privacy/i,
-    /xxx/i,
-    /redtube/i,
-    /xvideos/i,
-    /sexo/i,
-    /conteudo\s*adulto/i,
-],
+    pornWords: [
+        /porn/i,
+        /porno/i,
+        /pornografia/i,
+        /sexcam/i,
+        /webcam\s*sex/i,
+        /nude/i,
+        /nudes/i,
+        /onlyfans/i,
+        /privacy/i,
+        /xxx/i,
+        /redtube/i,
+        /xvideos/i,
+        /sexo/i,
+        /conteudo\s*adulto/i,
+    ],
     // Duração dos Castigos (Timeout)
     punishments: {
         level1: 60 * 1000,           // 1 minuto
@@ -154,6 +197,34 @@ function saveState(state) {
 
 // Cache em memória para detecção rápida de flood (não precisa persistir tudo)
 const messageCache = new Map(); // userId -> [{ content, ts }]
+
+// =====================================================
+// MEMÓRIA DE ATAQUES DE MÍDIA
+// =====================================================
+//
+// Separada do flood comum.
+//
+// Isso é importante porque imagens, vídeos e arquivos
+// continuam podendo ser ignorados pelo contador normal
+// de flood sem ficarem invisíveis para a proteção
+// específica contra ataques de mídia.
+//
+// Estrutura:
+//
+// userId -> [
+//   {
+//     messageId,
+//     channelId,
+//     ts,
+//     imageCount,
+//     attachmentCount,
+//     massMention
+//   }
+// ]
+//
+// =====================================================
+
+const mediaAttackCache = new Map();
 
 function normalizeMessageContent(content) {
     return String(content || '')
@@ -236,6 +307,445 @@ function hasSuspiciousAttachment(message) {
             /\.(png|jpg|jpeg|gif|webp|mp4|mov|webm)$/i.test(name)
         );
     });
+}
+
+// =====================================================
+// CONTA IMAGENS DA MENSAGEM
+// =====================================================
+
+function countMessageImages(message) {
+    if (!message?.attachments?.size) {
+        return 0;
+    }
+
+    let count = 0;
+
+    for (const attachment of message.attachments.values()) {
+        const name =
+            String(
+                attachment.name || ''
+            ).toLowerCase();
+
+        const contentType =
+            String(
+                attachment.contentType || ''
+            ).toLowerCase();
+
+        if (
+            contentType.startsWith('image/') ||
+            /\.(png|jpg|jpeg|gif|webp)$/i.test(name)
+        ) {
+            count++;
+        }
+    }
+
+    return count;
+}
+
+// =====================================================
+// VERIFICA @EVERYONE / @HERE
+// =====================================================
+//
+// IMPORTANTE:
+//
+// Isto sozinho NÃO representa infração.
+//
+// A informação só será usada em conjunto com várias
+// imagens ou outro comportamento de ataque.
+//
+// =====================================================
+
+function hasMassMention(message) {
+    const content =
+        String(
+            message?.content || ''
+        ).toLowerCase();
+
+    return (
+        message?.mentions?.everyone === true ||
+        content.includes('@everyone') ||
+        content.includes('@here')
+    );
+}
+
+// =====================================================
+// REGISTRA MÍDIA RECENTE DO USUÁRIO
+// =====================================================
+
+function registerMediaAttackActivity(message) {
+    const userId =
+        message.author.id;
+
+    const now =
+        Date.now();
+
+    const imageCount =
+        countMessageImages(message);
+
+    const attachmentCount =
+        message.attachments?.size || 0;
+
+    // Sem mídia não entra neste histórico.
+    if (attachmentCount === 0) {
+        return [];
+    }
+
+    const current =
+        mediaAttackCache.get(userId) || [];
+
+    current.push({
+        messageId:
+            message.id,
+
+        channelId:
+            message.channelId,
+
+        ts:
+            now,
+
+        imageCount,
+
+        attachmentCount,
+
+        massMention:
+            hasMassMention(message),
+    });
+
+    const recent =
+        current.filter(
+            entry =>
+                now - entry.ts <=
+                CONFIG.mediaAttack.windowMs
+        );
+
+    mediaAttackCache.set(
+        userId,
+        recent
+    );
+
+    return recent;
+}
+
+// =====================================================
+// DETECTOR DE ATAQUE DE MÍDIA
+// =====================================================
+
+function detectMediaAttack(message) {
+    if (!CONFIG.mediaAttack.enabled) {
+        return {
+            detected: false,
+            reason: null,
+            history: [],
+        };
+    }
+
+    const imageCount =
+        countMessageImages(message);
+
+    const attachmentCount =
+        message.attachments?.size || 0;
+
+    if (attachmentCount === 0) {
+        return {
+            detected: false,
+            reason: null,
+            history: [],
+        };
+    }
+
+    const massMention =
+        hasMassMention(message);
+
+    const history =
+        registerMediaAttackActivity(message);
+
+    // =================================================
+    // REGRA 1
+    // 4 OU MAIS IMAGENS NA MESMA MENSAGEM
+    // =================================================
+
+    if (
+        imageCount >=
+        CONFIG.mediaAttack.imagesInSingleMessage
+    ) {
+        return {
+            detected: true,
+
+            reason:
+                `Ataque de mídia detectado: ` +
+                `${imageCount} imagens enviadas ` +
+                `na mesma mensagem.`,
+
+            history,
+        };
+    }
+
+    // =================================================
+    // REGRA 2
+    // 2+ IMAGENS + @EVERYONE/@HERE
+    // =================================================
+    //
+    // @everyone sozinho NÃO ativa esta regra.
+    //
+    // =================================================
+
+    if (
+        massMention &&
+        imageCount >=
+            CONFIG.mediaAttack.imagesWithMassMention
+    ) {
+        return {
+            detected: true,
+
+            reason:
+                `Ataque de mídia detectado: ` +
+                `${imageCount} imagens acompanhadas ` +
+                `de menção em massa.`,
+
+            history,
+        };
+    }
+
+    // =================================================
+    // REGRA 3
+    // MÍDIA SENDO ESPALHADA POR VÁRIOS CANAIS
+    // =================================================
+
+    const channels =
+        new Set(
+            history.map(
+                entry =>
+                    entry.channelId
+            )
+        );
+
+    if (
+        history.length >=
+            CONFIG.mediaAttack.messagesInWindow &&
+        channels.size >=
+            CONFIG.mediaAttack.channelsInWindow
+    ) {
+        return {
+            detected: true,
+
+            reason:
+                `Ataque de mídia em massa detectado: ` +
+                `${history.length} mensagens com mídia ` +
+                `em ${channels.size} canais diferentes ` +
+                `em poucos segundos.`,
+
+            history,
+        };
+    }
+
+    return {
+        detected: false,
+        reason: null,
+        history,
+    };
+}
+
+// =====================================================
+// APAGA MENSAGENS RECENTES DO ATAQUE
+// =====================================================
+
+async function deleteMediaAttackMessages(
+    message,
+    history
+) {
+    let deleted = 0;
+
+    const uniqueMessages =
+        new Map();
+
+    for (const entry of history) {
+        uniqueMessages.set(
+            `${entry.channelId}:${entry.messageId}`,
+            entry
+        );
+    }
+
+    for (
+        const entry of
+        uniqueMessages.values()
+    ) {
+        const channel =
+            message.guild.channels.cache.get(
+                entry.channelId
+            ) ||
+            (
+                await message.guild.channels
+                    .fetch(
+                        entry.channelId
+                    )
+                    .catch(() => null)
+            );
+
+        if (
+            !channel?.isTextBased() ||
+            !channel.messages
+        ) {
+            continue;
+        }
+
+        const target =
+            channel.messages.cache.get(
+                entry.messageId
+            ) ||
+            (
+                await channel.messages
+                    .fetch(
+                        entry.messageId
+                    )
+                    .catch(() => null)
+            );
+
+        if (!target) {
+            continue;
+        }
+
+        if (!target.deletable) {
+            continue;
+        }
+
+        const success =
+            await target
+                .delete()
+                .then(() => true)
+                .catch(() => false);
+
+        if (success) {
+            deleted++;
+        }
+    }
+
+    return deleted;
+}
+
+// =====================================================
+// PUNIÇÃO FIXA PARA ATAQUE DE MÍDIA
+// =====================================================
+
+async function punishMediaAttack(
+    message,
+    detection
+) {
+    const member =
+        message.member;
+
+    if (!member) {
+        return;
+    }
+
+    // =================================================
+    // BYPASS EXISTENTE
+    // =================================================
+    //
+    // Mantém exatamente a mesma proteção atualmente
+    // utilizada pelo Anti Flood Protector.
+    //
+    // =================================================
+
+    if (
+        isPunishmentExempt(member)
+    ) {
+        mediaAttackCache.delete(
+            message.author.id
+        );
+
+        return;
+    }
+
+    // Captura dados antes de apagar.
+    const content =
+        String(
+            message.content || ''
+        );
+
+    const deleted =
+        await deleteMediaAttackMessages(
+            message,
+            detection.history
+        );
+
+    // =================================================
+    // TIMEOUT FIXO DE 5 HORAS
+    // =================================================
+
+    const duration =
+        CONFIG.mediaAttack.timeoutMs;
+
+    const canTimeout =
+        message.guild.members.me.permissions.has(
+            PermissionsBitField.Flags.ModerateMembers
+        ) &&
+        member.moderatable;
+
+    if (canTimeout) {
+        await member
+            .timeout(
+                duration,
+                `[ANTI MEDIA ATTACK] ${detection.reason}`
+            )
+            .catch(() => {});
+    }
+
+    // =================================================
+    // LOG
+    // =================================================
+
+    await logSecurityAction(
+        message.client,
+        message.guild,
+        member,
+        message.channel,
+        detection.reason,
+        content ||
+            `[Ataque contendo mídia. ${deleted} mensagem(ns) removida(s).]`,
+        1,
+        duration
+    );
+
+    // =================================================
+    // AVISO TEMPORÁRIO
+    // =================================================
+
+    const alert =
+        `🚨 ${member}, foi detectado um possível ` +
+        `ataque de mídia em massa. ` +
+        `As mensagens relacionadas foram removidas e ` +
+        `foi aplicado um castigo de **5 horas**.`;
+
+    const warning =
+        await message.channel
+            .send({
+                content: alert,
+
+                allowedMentions: {
+                    users: [
+                        member.id
+                    ],
+
+                    parse: [],
+                },
+            })
+            .catch(() => null);
+
+    if (warning) {
+        setTimeout(
+            () => {
+                warning
+                    .delete()
+                    .catch(() => {});
+            },
+            10_000
+        );
+    }
+
+    // Limpa o histórico depois da punição.
+    mediaAttackCache.delete(
+        message.author.id
+    );
 }
 
 function isTicketChannel(message) {
@@ -504,6 +1014,36 @@ export function setupAntiFloodProtector(client) {
         const content = message.content;
         const userId = message.author.id;
         const now = Date.now();
+
+        // =================================================
+        // PROTEÇÃO CONTRA ATAQUE DE MÍDIA
+        // =================================================
+        //
+        // Esta análise acontece ANTES de imagens serem
+        // ignoradas pelo contador normal de flood.
+        //
+        // Isso permite manter imagens normais fora do flood
+        // sem deixar ataques de mídia invisíveis.
+        //
+        // IMPORTANTE:
+        //
+        // @everyone/@here sozinho NÃO gera punição.
+        //
+        // =================================================
+
+        const mediaAttack =
+            detectMediaAttack(message);
+
+        if (
+            mediaAttack.detected
+        ) {
+            await punishMediaAttack(
+                message,
+                mediaAttack
+            );
+
+            return;
+        }
 
         // =================================================
         // CONTEÚDOS QUE NÃO CONTAM COMO FLOOD
