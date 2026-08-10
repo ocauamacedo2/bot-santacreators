@@ -39,6 +39,33 @@ const AI_REPLY_ONLY_CHANNEL_ID = "1381597720007151698";
 const AI_MEMORY_LOG_CHANNEL_ID = "1506786373687054396";
 
 // =====================================================
+// IDENTIDADE INSTITUCIONAL — SANTACREATORS
+// =====================================================
+
+const SANTACREATORS_INSTITUTIONAL_IDENTITY = `
+IDENTIDADE INSTITUCIONAL IMPORTANTE:
+
+MACEDO:
+- "Macedo" é o criador da SantaCreators.
+- Macedo é o dono da SantaCreators.
+- Macedo é o dono do projeto SantaCreators.
+- Macedo é a principal autoridade e o responsável máximo pelo projeto.
+
+INTERPRETAÇÃO DE REFERÊNCIAS:
+- Quando alguém falar apenas "Macedo" dentro do contexto da SantaCreators, considere que está falando do Macedo dono/criador da SantaCreators, salvo quando o contexto identificar claramente outra pessoa.
+- Não confunda Macedo com outra pessoa que possua "Macedo" no nome, apelido ou username.
+- Se existir outro membro chamado Macedo, Bob Macedo ou nome semelhante, não assuma que é o Macedo dono da SantaCreators sem o contexto indicar isso.
+- Perguntas como "o Macedo", "sobre o Macedo", "como o Macedo é", "relação com o Macedo", "quem é o Macedo", "o dono", "o criador", "o dono da SantaCreators", "o dono do projeto" e "o responsável maior" podem estar se referindo à mesma pessoa institucional.
+
+SOBRE INFORMAÇÕES PESSOAIS OU RELACIONAIS:
+- A identidade institucional acima é um fato fixo.
+- Já opiniões sobre Macedo, relação de alguém com Macedo, comportamento, desempenho, convivência, elogios, críticas ou histórico devem ser respondidos somente quando houver contexto real, histórico, memória ou informações do servidor que sustentem a resposta.
+- Não invente opinião sobre Macedo.
+- Não invente amizade, briga, conflito ou relacionamento.
+- Quando houver informações reais suficientes, sintetize-as naturalmente.
+`;
+
+// =====================================================
 // IA — MEMÓRIA LOCAL PERSISTENTE
 // =====================================================
 
@@ -314,6 +341,8 @@ let gemini = null;
 
 const SANTACREATORS_CONTEXT = `
 Você é a IA oficial da SantaCreators.
+
+${SANTACREATORS_INSTITUTIONAL_IDENTITY}
 
 Você possui acesso contextual ao servidor Discord da SantaCreators.
 
@@ -3502,8 +3531,22 @@ Cargo: <@&ID>
 - para cronograma de eventos, o Cronograma Oficial atual tem prioridade sobre Eventos Diários;
 - memória serve como contexto complementar, nunca para sobrescrever cronograma atual.
 
-16. Não invente informações que não aparecem nas fontes disponíveis.
+15.3. DADOS INTERNOS SÃO FONTE DE RACIOCÍNIO, NÃO FORMATO DE RESPOSTA.
+- Nunca despeje para o usuário o conteúdo bruto das consultas internas.
+- Nunca reproduza cabeçalhos técnicos como "CONSULTAS INTERNAS INTELIGENTES", "SISTEMA:", "CONSULTA INTERNA", "Registros encontrados", "Fonte:", caminhos de arquivos ou estruturas usadas internamente pelo sistema, salvo se o usuário pedir explicitamente informação técnica sobre isso.
+- Nunca responda simplesmente copiando todo o bloco de serverIntelligence.
+- Leia os registros encontrados, interprete-os e responda em linguagem humana.
+- Se existirem muitos registros, resuma primeiro o resultado relevante.
+- Só liste registros individualmente quando isso for necessário para responder à pergunta do usuário.
+- Mesmo quando listar registros, apresente-os de maneira limpa e natural, sem expor a estrutura técnica da consulta.
+- Caminhos como "/application/data/...", nomes de arquivos JSON, marcadores internos e cabeçalhos de diagnóstico são informações de bastidor e não devem aparecer numa resposta comum.
+- Use números, nomes, datas, horários e fatos encontrados nas consultas normalmente quando forem relevantes.
+- A informação interna deve alimentar a resposta, e não se tornar a própria resposta.
+- Se a pessoa pedir uma opinião, análise ou avaliação, transforme os dados encontrados em uma conclusão explicada, em vez de apenas listar os dados.
+- Se a pessoa perguntar "quem", "quando", "quanto" ou "quais", entregue somente os resultados necessários para responder aquilo.
+- Preserve a precisão factual mesmo ao resumir.
 
+16. Não invente informações que não aparecem nas fontes disponíveis.
 17. PROIBIDO dizer:
 "vou olhar"
 "vou ver"
@@ -3646,21 +3689,32 @@ function buildDirectInternalQueryAnswer(message, serverIntelligence) {
     return null;
   }
 
+  // =====================================================
+  // IMPORTANTE:
+  // Dados encontrados NÃO são devolvidos crus ao usuário.
+  //
+  // Quando existem registros reais, deixamos o Gemini
+  // receber esses dados no prompt e transformá-los em
+  // uma resposta humana, resumida e contextual.
+  //
+  // Esta função fica responsável apenas por respostas
+  // negativas objetivas, quando a própria consulta
+  // confirma que não existem registros.
+  // =====================================================
+
   if (
     question.includes("bate ponto") ||
     question.includes("bp") ||
     question.includes("ponto")
   ) {
-    if (context.includes("Registros encontrados:")) {
-      return context;
-    }
-
     if (
       context.includes("Nenhum registro de bate ponto") ||
       context.includes("Sem pontos batidos")
     ) {
       return "Não encontrei nenhum registro de bate ponto hoje nos dados internos consultados.";
     }
+
+    return null;
   }
 
   if (
@@ -3669,20 +3723,11 @@ function buildDirectInternalQueryAnswer(message, serverIntelligence) {
     question.includes("poder em evento") ||
     question.includes("poderes em evento")
   ) {
-    if (context.includes("Registros encontrados:")) {
-      return context;
-    }
-
     if (context.includes("Nenhum registro de poderes em eventos")) {
       return "Não encontrei nenhum registro de poderes em eventos hoje nos dados internos consultados.";
     }
-  }
 
-  if (
-    context.includes("CONSULTAS INTERNAS INTELIGENTES:") &&
-    context.includes("Registros encontrados:")
-  ) {
-    return context;
+    return null;
   }
 
   return null;
