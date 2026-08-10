@@ -674,15 +674,45 @@ if (!violation && hasSuspiciousAttachment(message)) {
     }
 }
 
-        // EXECUÇÃO DA PUNIÇÃO
-        if (violation) {
-            try {
-                if (message.deletable) await message.delete().catch(() => {});
-                await applyPunishment(message.member, message.guild, violation, content, message.channel);
-            } catch (err) {
-                console.error('[ANTI FLOOD PROTECTOR] Erro ao punir:', err);
-            }
+// =====================================================
+// EXECUÇÃO DA PUNIÇÃO
+// =====================================================
+
+if (violation) {
+    try {
+        // =============================================
+        // BYPASS COMPLETO
+        // =============================================
+        //
+        // Rodney, Owner, Resp. Creators e qualquer
+        // membro com Administrator não têm suas
+        // mensagens removidas e não recebem punição.
+        // =============================================
+
+        if (isPunishmentExempt(message.member)) {
+            return;
         }
+
+        if (message.deletable) {
+            await message
+                .delete()
+                .catch(() => {});
+        }
+
+        await applyPunishment(
+            message.member,
+            message.guild,
+            violation,
+            content,
+            message.channel
+        );
+    } catch (err) {
+        console.error(
+            '[ANTI FLOOD PROTECTOR] Erro ao punir:',
+            err
+        );
+    }
+}
     });
 
     console.log('[ANTI FLOOD PROTECTOR] Sistema inicializado com sucesso.');

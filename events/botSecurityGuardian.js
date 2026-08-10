@@ -1818,63 +1818,58 @@ async function handleMessage(
     // IMPORTANTE:
     // Isso vale somente para HUMANOS.
     // =================================================
+if (
+  isSafeHumanFloodContent(
+    message
+  )
+) {
+  return;
+}
 
-    if (
-      isSafeHumanFloodContent(
-        message
-      )
-    ) {
-      return;
-    }
+// =================================================
+// BYPASS COMPLETO DE FLOOD HUMANO
+// =================================================
+//
+// Rodney, Owner, Resp. Creators e qualquer membro
+// com Administrator ficam completamente fora do
+// sistema de flood humano.
+//
+// As mensagens:
+// • NÃO entram no histórico
+// • NÃO são apagadas
+// • NÃO geram timeout
+// • NÃO geram reincidência
+// • NÃO geram banimento
+// =================================================
 
-    // =================================================
-    // SOMENTE AGORA REGISTRA NO HISTÓRICO HUMANO
-    // =================================================
+if (
+  isHumanFloodPunishmentExempt(
+    message.member
+  )
+) {
+  return;
+}
 
-    const history =
-      pushHistory(message);
+// =================================================
+// SOMENTE AGORA REGISTRA NO HISTÓRICO HUMANO
+// =================================================
 
-    // =================================================
-    // FLOOD HUMANO
-    // =================================================
+const history =
+  pushHistory(message);
 
-    const detection =
-      detectFlood(
-        message,
-        history
-      );
+// =================================================
+// FLOOD HUMANO
+// =================================================
 
-    if (
-      detection.detected
-    ) {
-      // ===============================================
-      // ADMIN / USUÁRIO ISENTO
-      // ===============================================
-      //
-      // Continua removendo as mensagens de flood,
-      // porém NÃO aplica timeout e NÃO registra
-      // reincidência para banimento.
-      // ===============================================
+const detection =
+  detectFlood(
+    message,
+    history
+  );
 
-      if (
-        isHumanFloodPunishmentExempt(
-          message.member
-        )
-      ) {
-        await deleteRecentOffendingMessages(
-          message,
-          history
-        );
-
-        console.log(
-          `[SECURITY] Flood removido sem punição de ` +
-          `${message.author.tag} ` +
-          `(${message.author.id}) por possuir bypass.`
-        );
-
-        return;
-      }
-
+if (
+  detection.detected
+) {
       await punishHumanForFlood(
         message,
         detection,
