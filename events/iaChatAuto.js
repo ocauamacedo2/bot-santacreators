@@ -388,6 +388,72 @@ const AI_QUIZ_ROLE_ID = "1432439271582597183";
 const AI_REPLY_TTL_MS = 2 * 60 * 1000;
 
 // =====================================================
+// IA — LIMPEZA AUTOMÁTICA DO CANAL DE CONVERSA
+// =====================================================
+
+function isAiRhetoricalQuestion(message) {
+  if (!message) {
+    return false;
+  }
+
+  const text =
+    normalizeSearchText(
+      String(message.content || "")
+    ).trim();
+
+  if (!text) {
+    return false;
+  }
+
+  const rhetoricalPatterns = [
+    /\bne\??$/,
+    /\bnao e\??$/,
+    /\bcerto\??$/,
+    /\bquem nunca\??$/,
+    /\bquem diria\??$/,
+    /\bfazer o que\??$/,
+    /\bpra que ne\??$/,
+    /\bpara que ne\??$/,
+  ];
+
+  return rhetoricalPatterns.some(
+    (pattern) => pattern.test(text)
+  );
+}
+
+function shouldAutoDeleteAiConversation(message) {
+  if (!message) {
+    return false;
+  }
+
+  // =====================================================
+  // LIMPEZA EXCLUSIVA DO CHAT-CREATORS
+  // =====================================================
+  //
+  // Esta função só é chamada depois que o sistema já
+  // decidiu que a mensagem pertence à interação com a IA.
+  //
+  // Portanto:
+  //
+  // - mensagem comum entre membros = NÃO chega aqui;
+  // - mensagem destinada à IA = temporária;
+  // - resposta da IA = temporária;
+  //
+  // Nunca usamos apenas o conteúdo da mensagem para
+  // decidir se devemos apagar uma conversa humana.
+  // =====================================================
+
+  if (
+    message.channelId !==
+    AI_REPLY_ONLY_CHANNEL_ID
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+// =====================================================
 // IA — AUTORIDADE ADMINISTRATIVA SEGURA
 // =====================================================
 
@@ -2491,6 +2557,156 @@ function getHistory(channelId) {
   return history.map((msg) => `${msg.author}: ${msg.content}`).join("\n");
 }
 
+// =====================================================
+// IA — CONTEXTO REAL RECENTE DO CANAL
+// =====================================================
+
+async function buildRecentChannelConversationContext(message, client) {
+  if (!message?.channel?.isTextBased?.()) {
+    return "Sem contexto recente disponível.";
+  }
+
+  try {
+    const fetched =
+      await message.channel.messages.fetch({
+        limit: 15,
+      }).catch(() => null);
+
+    if (!fetched?.size) {
+      return "Sem contexto recente disponível.";
+    }
+
+    const recentMessages =
+      [...fetched.values()]
+        .filter((msg) => {
+          if (!msg) {
+            return false;
+          }
+
+          // A mensagem atual já será enviada separadamente
+          // para a IA, então não precisamos duplicá-la.
+          if (msg.id === message.id) {
+            return false;
+          }
+
+          // Webhooks automáticos não ajudam a entender
+          // uma conversa humana.
+          if (msg.webhookId) {
+            return false;
+          }
+
+          const hasContent =
+            Boolean(
+              String(msg.content || "").trim()
+            );
+
+          const hasEmbeds =
+            Array.isArray(msg.embeds) &&
+            msg.embeds.length > 0;
+
+          if (!hasContent && !hasEmbeds) {
+            return false;
+          }
+
+          return true;
+        })
+        .sort(
+          (a, b) =>
+            a.createdTimestamp -
+            b.createdTimestamp
+        )
+        .slice(-10);
+
+    if (!recentMessages.length) {
+      return "Sem contexto recente disponível.";
+    }
+
+    const lines = [];
+
+    for (const msg of recentMessages) {
+      const isBot =
+        client?.user?.id &&
+        msg.author?.id === client.user.id;
+
+      const authorName =
+        isBot
+          ? "SantaCreators IA"
+          : (
+              msg.member?.displayName ||
+              msg.author?.username ||
+              msg.author?.tag ||
+              "Usuário"
+            );
+
+      const content =
+        cleanText(
+          String(msg.content || "")
+        );
+
+      let replyContext = "";
+
+      if (msg.reference?.messageId) {
+        const referenced =
+          recentMessages.find(
+            (item) =>
+              item.id ===
+              msg.reference.messageId
+          );
+
+        if (referenced) {
+          const referencedAuthor =
+            client?.user?.id &&
+            referenced.author?.id === client.user.id
+              ? "SantaCreators IA"
+              : (
+                  referenced.member?.displayName ||
+                  referenced.author?.username ||
+                  referenced.author?.tag ||
+                  "Usuário"
+                );
+
+          replyContext =
+            ` [respondendo a ${referencedAuthor}]`;
+        }
+      }
+
+      if (content) {
+        lines.push(
+          `${authorName}${replyContext}: ${content}`
+        );
+      }
+
+      for (const embed of msg.embeds || []) {
+        const embedText =
+          formatEmbedForAI(
+            embed.data || embed
+          );
+
+        if (embedText) {
+          lines.push(
+            `${authorName}${replyContext} [embed]: ${cleanText(embedText)}`
+          );
+        }
+      }
+    }
+
+    if (!lines.length) {
+      return "Sem contexto recente disponível.";
+    }
+
+    return lines
+      .join("\n")
+      .slice(0, 8000);
+  } catch (err) {
+    console.error(
+      "[IA CHAT AUTO] Erro ao montar contexto recente do canal:",
+      err
+    );
+
+    return "Sem contexto recente disponível.";
+  }
+}
+
 function getCooldownRemaining(userId) {
   const expiresAt = cooldowns.get(userId) || 0;
 
@@ -2509,27 +2725,89 @@ function setCooldown(userId) {
 }
 
 async function sendTemporaryReply(message, payload) {
-  const sent = await message.reply(payload).catch(() => null);
+  const sent =
+    await message
+      .reply(payload)
+      .catch(() => null);
 
-  // ✅ Em ticket de entrevista, NUNCA apaga histórico.
-  // A conversa da IA precisa ficar salva para transcript, correção e análise.
+  // =====================================================
+  // TICKET DE ENTREVISTA
+  // =====================================================
+  // Nunca apaga histórico de entrevista.
+  // Esse conteúdo precisa permanecer disponível para
+  // transcript, correção e análise.
+  // =====================================================
+
   if (isIaInterviewChannel(message.channel)) {
     return sent;
   }
 
-  // ✅ Em canais públicos inteligentes, mantém a conversa.
-  // A IA está participando do atendimento/conversa real do servidor.
+  // =====================================================
+  // CANAL DE CONVERSA DA IA
+  // =====================================================
+  // No canal AI_REPLY_ONLY_CHANNEL_ID, interações com a
+  // IA são temporárias para evitar poluição do chat.
+  //
+  // A pergunta do usuário e a resposta da IA serão
+  // apagadas após AI_REPLY_TTL_MS.
+  //
+  // Perguntas claramente retóricas são preservadas.
+  // =====================================================
+
+  if (shouldAutoDeleteAiConversation(message)) {
+    if (sent) {
+      setTimeout(async () => {
+        try {
+          await sent
+            .delete()
+            .catch(() => {});
+
+          if (message.deletable) {
+            await message
+              .delete()
+              .catch(() => {});
+          }
+
+          console.log(
+            `[IA CHAT AUTO] Conversa temporária apagada | Canal=${message.channelId} | User=${message.author.id}`
+          );
+        } catch (err) {
+          console.error(
+            "[IA CHAT AUTO] Erro ao apagar conversa temporária:",
+            err
+          );
+        }
+      }, AI_REPLY_TTL_MS);
+    }
+
+    return sent;
+  }
+
+  // =====================================================
+  // DEMAIS CANAIS PÚBLICOS INTELIGENTES
+  // =====================================================
+  // Continuam exatamente com o comportamento anterior.
+  // =====================================================
+
   if (isAiSmartPublicChannel(message)) {
     return sent;
   }
 
+  // =====================================================
+  // COMPORTAMENTO TEMPORÁRIO ORIGINAL
+  // =====================================================
+
   if (sent) {
     setTimeout(async () => {
       try {
-        await sent.delete().catch(() => {});
+        await sent
+          .delete()
+          .catch(() => {});
 
         if (message.deletable) {
-          await message.delete().catch(() => {});
+          await message
+            .delete()
+            .catch(() => {});
         }
 
       } catch (err) {
@@ -5208,7 +5486,63 @@ function isPublicConversationContinuation(message) {
       message.author.id
     );
 
-  return Boolean(active);
+  if (!active) {
+    return false;
+  }
+
+  // =====================================================
+  // CONTINUAÇÃO INTELIGENTE DE CONVERSA COM A IA
+  // =====================================================
+  //
+  // Ter uma conversa ativa NÃO significa que toda mensagem
+  // enviada pelo usuário nos próximos minutos é para a IA.
+  //
+  // Se a mensagem mencionar ou responder outra pessoa,
+  // consideramos que o usuário está falando com essa pessoa
+  // e não com a SantaCreators.
+  // =====================================================
+
+  const mentionedHumanUsers =
+    [...message.mentions.users.values()]
+      .filter((user) => {
+        if (!user?.id) {
+          return false;
+        }
+
+        if (user.bot) {
+          return false;
+        }
+
+        if (
+          user.id ===
+          message.author.id
+        ) {
+          return false;
+        }
+
+        return true;
+      });
+
+  if (mentionedHumanUsers.length > 0) {
+    return false;
+  }
+
+  // =====================================================
+  // REPLY PARA OUTRA PESSOA
+  // =====================================================
+  //
+  // Se a mensagem é resposta direta para alguém,
+  // não assumimos automaticamente que é continuação da IA.
+  //
+  // Reply para a própria IA já é tratado anteriormente
+  // dentro de shouldAnswerInThisChannel().
+  // =====================================================
+
+  if (message.reference?.messageId) {
+    return false;
+  }
+
+  return true;
 }
 
 async function hasHumanAnsweredAfterMessage(message, client) {
@@ -5435,6 +5769,74 @@ function isTalkingToAI(message, client) {
   );
 }
 
+// =====================================================
+// IA — IDENTIFICAR DESTINATÁRIO REAL DO REPLY
+// =====================================================
+//
+// Esta função impede a IA de entrar em uma conversa
+// apenas porque o usuário falou logo depois dela.
+//
+// REGRAS:
+//
+// 1. Reply para a SantaCreators IA:
+//    pode continuar normalmente.
+//
+// 2. Reply para outro bot:
+//    não é conversa com a SantaCreators.
+//
+// 3. Reply para outro usuário humano:
+//    não é conversa com a SantaCreators.
+//
+// 4. Sem reply:
+//    deixa as demais inteligências decidirem.
+//
+// =====================================================
+
+async function getReplyTargetType(message, client) {
+  if (!message?.reference?.messageId) {
+    return "NONE";
+  }
+
+  try {
+    const repliedMessage =
+      await message.channel.messages
+        .fetch(
+          message.reference.messageId
+        )
+        .catch(() => null);
+
+    if (!repliedMessage) {
+      // Existe referência de reply, mas não conseguimos
+      // recuperar a mensagem original.
+      //
+      // Por segurança, não assumimos que o reply
+      // foi destinado à IA.
+      return "UNKNOWN";
+    }
+
+    if (
+      client?.user?.id &&
+      repliedMessage.author?.id ===
+        client.user.id
+    ) {
+      return "AI";
+    }
+
+    if (repliedMessage.author?.bot) {
+      return "OTHER_BOT";
+    }
+
+    return "HUMAN";
+  } catch (err) {
+    console.error(
+      "[IA CHAT AUTO] Erro ao identificar destinatário do reply:",
+      err
+    );
+
+    return "UNKNOWN";
+  }
+}
+
 async function shouldAnswerInThisChannel(message, client) {
   if (message.channelId === AI_CHANNEL_ID) {
     return true;
@@ -5448,6 +5850,20 @@ async function shouldAnswerInThisChannel(message, client) {
     return false;
   }
 
+  // =====================================================
+  // MENÇÃO DIRETA À SANTACREATORS
+  // =====================================================
+  //
+  // Menção explícita continua tendo prioridade.
+  //
+  // Exemplo:
+  //
+  // @SantaCreators me ajuda aqui
+  //
+  // Mesmo que exista contexto anterior, a pessoa chamou
+  // diretamente a IA.
+  // =====================================================
+
   const mentioned =
     message.mentions.users.has(client.user.id);
 
@@ -5455,19 +5871,52 @@ async function shouldAnswerInThisChannel(message, client) {
     return true;
   }
 
-  if (message.reference?.messageId) {
-    try {
-      const replied =
-        await message.channel.messages
-          .fetch(message.reference.messageId)
-          .catch(() => null);
+  // =====================================================
+  // DESTINATÁRIO REAL DO REPLY
+  // =====================================================
+  //
+  // O Discord já nos entrega uma informação muito mais
+  // confiável do que tentar adivinhar pelo texto:
+  //
+  // para qual mensagem o usuário apertou "Responder".
+  //
+  // Se respondeu a SantaCreators:
+  // -> conversa com a IA.
+  //
+  // Se respondeu outro humano:
+  // -> conversa entre humanos.
+  //
+  // Se respondeu outro bot:
+  // -> conversa com aquele bot.
+  //
+  // Se existe reply mas não conseguimos recuperar a
+  // mensagem original:
+  // -> por segurança a IA fica quieta.
+  //
+  // Isso precisa acontecer ANTES das heurísticas de
+  // conteúdo e antes da continuação automática.
+  // =====================================================
 
-      if (
-        replied?.author?.id === client.user.id
-      ) {
-        return true;
-      }
-    } catch {}
+  const replyTargetType =
+    await getReplyTargetType(
+      message,
+      client
+    );
+
+  if (replyTargetType === "AI") {
+    return true;
+  }
+
+  if (
+    replyTargetType === "HUMAN" ||
+    replyTargetType === "OTHER_BOT" ||
+    replyTargetType === "UNKNOWN"
+  ) {
+    console.log(
+      `[IA CHAT AUTO] Mensagem ignorada porque é reply para outro destinatário | Tipo=${replyTargetType} | User=${message.author.id} | Canal=${message.channelId}`
+    );
+
+    return false;
   }
 
   if (!isAiSmartPublicChannel(message)) {
@@ -5944,8 +6393,34 @@ await warmupGuildKnowledge(
   message.guild
 );
 
-const history =
+const internalHistory =
   getHistory(message.channelId);
+
+const recentChannelContext =
+  await buildRecentChannelConversationContext(
+    message,
+    client
+  );
+
+const history = [
+  "========================================",
+  "HISTÓRICO INTERNO DA CONVERSA",
+  "========================================",
+  internalHistory,
+  "",
+  "========================================",
+  "ÚLTIMAS MENSAGENS REAIS DO CANAL",
+  "========================================",
+  recentChannelContext,
+  "",
+  "IMPORTANTE:",
+  "- Leia as últimas mensagens reais antes de interpretar a mensagem atual.",
+  "- Identifique quem estava falando com quem.",
+  "- Uma mensagem de um usuário não significa automaticamente que ele está falando com você.",
+  "- Se houver conversa humana acontecendo, respeite o contexto dessa conversa.",
+  "- Use replies, menções e sequência da conversa para identificar o destinatário.",
+  "- Não responda como se uma fala dirigida a outro membro fosse dirigida à SantaCreators IA.",
+].join("\n");
 
 const guildKnowledge =
   guildKnowledgeCache.get(
@@ -8543,35 +9018,65 @@ const allowedMentionUsers =
         // RESPOSTA
         // =====================================================
 
-        const responseParts =
-          splitDiscordText(finalText);
+       const responseParts =
+  splitDiscordText(finalText);
 
-        for (let index = 0; index < responseParts.length; index++) {
-          const part = responseParts[index];
+for (
+  let index = 0;
+  index < responseParts.length;
+  index++
+) {
+  const part =
+    responseParts[index];
 
-          if (index === 0) {
-            await sendTemporaryReply(message, {
-              content: part,
-              allowedMentions: {
-                repliedUser: true,
-                users: allowedMentionUsers,
-                roles: [],
-                parse: [],
-              },
-            });
+  if (index === 0) {
+    await sendTemporaryReply(message, {
+      content: part,
+      allowedMentions: {
+        repliedUser: true,
+        users: allowedMentionUsers,
+        roles: [],
+        parse: [],
+      },
+    });
 
-            continue;
-          }
+    continue;
+  }
 
-          await message.channel.send({
-            content: part,
-            allowedMentions: {
-              users: allowedMentionUsers,
-              roles: [],
-              parse: [],
-            },
-          });
-        }
+  const continuationMessage =
+    await message.channel
+      .send({
+        content: part,
+        allowedMentions: {
+          users: allowedMentionUsers,
+          roles: [],
+          parse: [],
+        },
+      })
+      .catch(() => null);
+
+  // =====================================================
+  // LIMPEZA DAS CONTINUAÇÕES DA RESPOSTA
+  // =====================================================
+
+  if (
+    continuationMessage &&
+    shouldAutoDeleteAiConversation(message)
+  ) {
+    setTimeout(async () => {
+      try {
+        await continuationMessage
+          .delete()
+          .catch(() => {});
+      } catch (err) {
+        console.error(
+          "[IA CHAT AUTO] Erro ao apagar continuação da resposta:",
+          err
+        );
+      }
+    }, AI_REPLY_TTL_MS);
+  }
+}
         // =====================================================
         // MEMÓRIA DA CONVERSA
         // =====================================================
