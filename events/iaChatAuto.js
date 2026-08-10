@@ -251,6 +251,10 @@ const IA_ENTREVISTA_HELP_ROLE_IDS = [
 
 const IA_ENTREVISTA_ACTIVE = new Map();
 
+const IA_ENTREVISTA_PROCESSING = new Map();
+
+const IA_ENTREVISTA_PENDING_MESSAGES = new Map();
+
 // =====================================================
 // CONSULTAS INTERNAS — SANTACREATORS
 // =====================================================
@@ -1316,7 +1320,10 @@ function getCooldownRemaining(userId) {
 
   const now = Date.now();
 
-  if (now >= expiresAt) return 0;
+  if (now >= expiresAt) {
+    cooldowns.delete(userId);
+    return 0;
+  }
 
   return expiresAt - now;
 }
@@ -5146,21 +5153,23 @@ MISSÃO:
 - Não fazer textão.
 - Responder só o que foi perguntado.
 - Não aprovar, não reprovar e não prometer entrada.
-- Explicar quando fizer sentido que SantaCreators NÃO é só para criadores de conteúdo.
-- Explicar quando fizer sentido que SantaCreators é empresa de RP estruturada, com eventos dinâmicos e interativos da Santa Group.
-
+- Use SANTACREATORS_OPERATIONAL_IDENTITY como definição oficial da SantaCreators.
+- Não reduza a SantaCreators a criadores de conteúdo, influencers, Social Media ou Mega Eventos.
+- Quando a pergunta for sobre uma área específica, responda sobre aquela área sem transformar essa área na definição completa da SantaCreators.
+- Quando existirem dados atuais do Discord ou dos sistemas internos, eles possuem prioridade sobre exemplos históricos.
 TAMANHO E ESTILO DA RESPOSTA:
-- Máximo 3 linhas curtas.
+- Para conversa simples, prefira 1 a 3 linhas curtas.
+- Para perguntas que exigem explicação, use o tamanho necessário para responder corretamente.
+- Se o usuário pedir uma explicação completa, pode responder de forma mais detalhada e organizada.
 - Não repetir a mesma abertura do histórico.
 - Não começar sempre com "Opa" ou "E aí".
 - Se o usuário já foi cumprimentado, NÃO cumprimente de novo.
-- Responda só o que ele perguntou.
+- Responda exatamente ao que ele perguntou.
 - Seja natural, com jeito de Discord.
 - Pode usar "kkk", "boaa", "fechou", "tranquilo", mas sem exagero.
 - Não mande lista grande sem necessidade.
 - Não fale de botão se o status informar que não existe botão.
 - Se a pessoa for da equipe, trate como teste/ajuda, não como candidato.
-
 ${styleControl}
 
 BANCO DE VARIAÇÃO NATURAL:
@@ -5188,7 +5197,7 @@ BANCO DE VARIAÇÃO NATURAL:
 - Para português ruim: "não precisa ser perfeito, só precisa dar pra entender."
 - Para "precisa ser famoso?": "não precisa ser famoso não kkk postura e vontade contam bastante."
 - Para "precisa fazer live?": "não necessariamente, a SantaCreators tem várias áreas."
-- Para "o que é SantaCreators?": "é uma empresa de RP da Santa Group, focada em creators, eventos e comunidade."
+- Para "o que é SantaCreators?": "é uma estrutura de organização, entretenimento e operação dentro do ecossistema FiveM e Discord, conectando pessoas, cidades, organizações, eventos, equipes e toda a operação da SantaCreators."
 - Para "sou criador pequeno": "sem problema, tamanho não é tudo. o importante é perfil e postura."
 - Para "não tenho experiência": "experiência ajuda, mas não é o único ponto avaliado."
 - Para "posso usar IA?": "melhor responder com tuas próprias palavras."
@@ -6899,6 +6908,52 @@ function isDiscordCommandMessage(message) {
   return content.startsWith("!");
 }
 
+function queueIaInterviewPendingMessage(message) {
+  if (!message?.channelId) {
+    return false;
+  }
+
+  const current =
+    IA_ENTREVISTA_PENDING_MESSAGES.get(
+      message.channelId
+    ) || [];
+
+  current.push(message);
+
+  while (current.length > 10) {
+    current.shift();
+  }
+
+  IA_ENTREVISTA_PENDING_MESSAGES.set(
+    message.channelId,
+    current
+  );
+
+  return true;
+}
+
+function takeNextIaInterviewPendingMessage(channelId) {
+  const current =
+    IA_ENTREVISTA_PENDING_MESSAGES.get(
+      channelId
+    ) || [];
+
+  const next = current.shift() || null;
+
+  if (current.length) {
+    IA_ENTREVISTA_PENDING_MESSAGES.set(
+      channelId,
+      current
+    );
+  } else {
+    IA_ENTREVISTA_PENDING_MESSAGES.delete(
+      channelId
+    );
+  }
+
+  return next;
+}
+
 export async function handleIaInterviewTicketMessage(message, client) {
   if (!message.guild || message.author.bot) return false;
 
@@ -6923,6 +6978,16 @@ export async function handleIaInterviewTicketMessage(message, client) {
   }
 
   if (await channelHasRecentInterviewQuestion(message.channel, client)) {
+    return true;
+  }
+
+  if (IA_ENTREVISTA_PROCESSING.get(message.channelId)) {
+    queueIaInterviewPendingMessage(message);
+
+    console.log(
+      `[IA ENTREVISTA] Mensagem ${message.id} entrou na fila do canal ${message.channelId}.`
+    );
+
     return true;
   }
 
@@ -7011,47 +7076,118 @@ state = {
 
   saveIaEntrevistaState();
 
-  const content = cleanText(message.content);
-  rememberMessage(message.channelId, message.author.username, content);
+const content = cleanText(message.content);
+rememberMessage(message.channelId, message.author.username, content);
 
-await message.channel.sendTyping().catch(() => {});
+IA_ENTREVISTA_PROCESSING.set(
+  message.channelId,
+  true
+);
 
-let response = buildIaInterviewQuickAnswer(message, openerId);
+try {
+  await message.channel.sendTyping().catch(() => {});
 
-if (!response) {
-  try {
-    response = await withIaTimeout(
-      generateIaInterviewConversation(message, client, openerId),
-      9000,
-      "IA ENTREVISTA"
+  let response = buildIaInterviewQuickAnswer(message, openerId);
+
+  if (!response) {
+    try {
+      response = await withIaTimeout(
+        generateIaInterviewConversation(message, client, openerId),
+        9000,
+        "IA ENTREVISTA"
+      );
+    } catch (err) {
+      console.error(
+        "[IA ENTREVISTA] Falha/timeout ao gerar resposta:",
+        err?.message || err
+      );
+
+      response =
+        `Entendi ${buildSafeUserMention(openerId)} 😄\n\n` +
+        `A SantaCreators reúne organização, entretenimento e operação dentro do ecossistema FiveM/Discord, conectando cidades, eventos, organizações, equipes e toda a estrutura que existe por trás disso.\n\n` +
+        `Se tua mensagem era sobre alguma parte específica, pode me explicar um pouquinho mais que eu sigo exatamente pelo assunto que você trouxe.`;
+    }
+  }
+
+  const finalText =
+    limitDiscordText(fixBrokenDiscordMentions(response)) ||
+    `Boaaa ${buildSafeUserMention(openerId)} 😄 me explica com suas palavras que eu vou te acompanhando por aqui.`;
+
+  const responseParts =
+    splitDiscordText(finalText);
+
+  const allowedMentionUsers =
+    uniqueDiscordUserIds(
+      openerId,
+      message.author.id
     );
-  } catch (err) {
-    console.error("[IA ENTREVISTA] Falha/timeout ao gerar resposta:", err?.message || err);
 
-response =
-  `Entendi ${buildSafeUserMention(openerId)} 😄\n\n` +
-  `A SantaCreators reúne organização, entretenimento e operação dentro do ecossistema FiveM/Discord, conectando cidades, eventos, organizações, equipes e toda a estrutura que existe por trás disso.\n\n` +
-  `Se tua mensagem era sobre alguma parte específica, pode me explicar um pouquinho mais que eu sigo exatamente pelo assunto que você trouxe.`;
+  for (
+    let index = 0;
+    index < responseParts.length;
+    index++
+  ) {
+    const part = responseParts[index];
+
+    if (index === 0) {
+      await message.reply({
+        content: part,
+        allowedMentions: {
+          repliedUser: true,
+          users: allowedMentionUsers,
+          roles: [],
+          parse: [],
+        },
+      }).catch((err) => {
+        console.error(
+          "[IA ENTREVISTA] Falha ao responder primeira parte no ticket:",
+          err?.message || err
+        );
+      });
+
+      continue;
+    }
+
+    await message.channel.send({
+      content: part,
+      allowedMentions: {
+        users: allowedMentionUsers,
+        roles: [],
+        parse: [],
+      },
+    }).catch((err) => {
+      console.error(
+        "[IA ENTREVISTA] Falha ao responder continuação no ticket:",
+        err?.message || err
+      );
+    });
+  }
+} finally {
+  IA_ENTREVISTA_PROCESSING.delete(
+    message.channelId
+  );
+
+  const nextPendingMessage =
+    takeNextIaInterviewPendingMessage(
+      message.channelId
+    );
+
+  if (nextPendingMessage) {
+    setImmediate(() => {
+      handleIaInterviewTicketMessage(
+        nextPendingMessage,
+        client
+      ).catch((err) => {
+        console.error(
+          "[IA ENTREVISTA] Falha ao processar mensagem pendente:",
+          err?.message || err
+        );
+      });
+    });
   }
 }
 
-const finalText =
-  limitDiscordText(fixBrokenDiscordMentions(response)) ||
-  `Boaaa ${buildSafeUserMention(openerId)} 😄 me explica com suas palavras que eu vou te acompanhando por aqui.`;
-
-await message.reply({
-  content: finalText,
-  allowedMentions: {
-    repliedUser: true,
-    users: uniqueDiscordUserIds(openerId, message.author.id),
-    roles: [],
-    parse: [],
-  },
-}).catch((err) => {
-  console.error("[IA ENTREVISTA] Falha ao responder no ticket:", err?.message || err);
-});
-
-  return true;
+return true;
 }
 
 // =====================================================
