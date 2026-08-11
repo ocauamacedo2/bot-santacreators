@@ -1582,6 +1582,212 @@ function buildMessageLogEmbed({
 }
 
 // =====================================================
+// ANÁLISE CONTEXTUAL DE LINGUAGEM
+// =====================================================
+//
+// O detector tradicional continua encontrando palavras
+// potencialmente ofensivas.
+//
+// Porém encontrar uma palavra NÃO significa mais,
+// sozinho, que a mensagem merece punição.
+//
+// Este segundo estágio tenta separar:
+//
+// • conversa casual
+// • gíria
+// • reação
+// • brincadeira
+//
+// de:
+//
+// • insulto direcionado
+// • humilhação
+// • ataque pessoal
+// • ordem ofensiva
+// • hostilidade explícita
+//
+// =====================================================
+
+function shouldPunishProfanityByContext(
+  message,
+  forbiddenWord
+) {
+  const content =
+    normalizeText(
+      message?.content || ""
+    );
+
+  const detected =
+    normalizeText(
+      forbiddenWord || ""
+    );
+
+  if (!content || !detected) {
+    return false;
+  }
+
+  // ===================================================
+  // EXPRESSÕES FORTEMENTE DIRECIONADAS
+  // ===================================================
+  //
+  // Estas expressões possuem intenção ofensiva muito
+  // mais clara e não precisam ser liberadas apenas
+  // porque existe outro texto ao redor.
+  //
+  // ===================================================
+
+  const aggressiveExpressions = [
+    "vai tomar no cu",
+    "va tomar no cu",
+    "vai toma no cu",
+    "vai tomar no teu cu",
+    "vai tomar no seu cu",
+    "vai se foder",
+    "vai se fuder",
+    "se foder",
+    "se fuder",
+    "filho da puta",
+    "filha da puta",
+    "pau no cu",
+    "pau no seu cu",
+    "pau no teu cu",
+    "arrombado",
+    "arrombada",
+    "cuzão",
+    "cuzao",
+    "cuzona",
+    "idiota",
+    "imbecil",
+  ];
+
+  if (
+    aggressiveExpressions.some(
+      (expression) =>
+        content.includes(
+          normalizeText(expression)
+        )
+    )
+  ) {
+    return true;
+  }
+
+  // ===================================================
+  // ABREVIAÇÕES CLARAMENTE OFENSIVAS
+  // ===================================================
+
+  const compact =
+    compactText(
+      message?.content || ""
+    );
+
+  const aggressiveCompact = new Set([
+    "vsf",
+    "vsfd",
+    "vtmc",
+    "vtnc",
+    "vtncu",
+    "tmnc",
+    "tnc",
+    "fdp",
+    "pnc",
+  ]);
+
+  if (
+    aggressiveCompact.has(compact)
+  ) {
+    return true;
+  }
+
+  // ===================================================
+  // PALAVRAS AMBÍGUAS / GÍRIAS
+  // ===================================================
+  //
+  // Estas palavras aparecem frequentemente em conversa
+  // informal sem necessariamente atacar alguém.
+  //
+  // Exemplos:
+  //
+  // "foi foda kkkkk"
+  // "krlh ele falou tudo"
+  // "caralho que evento"
+  //
+  // Sozinhas elas não justificam timeout automático.
+  //
+  // ===================================================
+
+  const contextualWords = new Set([
+    "foda",
+    "foder",
+    "fuder",
+    "fodido",
+    "fodida",
+    "fodidos",
+    "fodidas",
+    "puta",
+    "puto",
+    "caralho",
+    "caralhos",
+    "carai",
+    "porra",
+    "porras",
+    "merda",
+    "bosta",
+    "babaca",
+    "otário",
+    "otaria",
+    "otario",
+    "krl",
+    "krlh",
+    "crl",
+    "crlh",
+    "pqp",
+  ]);
+
+  if (
+    contextualWords.has(
+      detected
+    )
+  ) {
+    // ===============================================
+    // PROCURA INDÍCIO DE ATAQUE DIRECIONADO
+    // ===============================================
+
+    const directedPatterns = [
+      /\bvoce\s+(e|eh)\s+/i,
+      /\bvc\s+(e|eh)\s+/i,
+      /\btu\s+(e|eh)\s+/i,
+      /\bseu\s+/i,
+      /\bsua\s+/i,
+      /\besse\s+/i,
+      /\bessa\s+/i,
+    ];
+
+    const directed =
+      directedPatterns.some(
+        (pattern) =>
+          pattern.test(content)
+      );
+
+    // Se nem existe sinal de direcionamento,
+    // tratamos como linguagem casual.
+    if (!directed) {
+      return false;
+    }
+  }
+
+  // ===================================================
+  // CASO INCERTO
+  // ===================================================
+  //
+  // Mantém a proteção atual para palavras que não
+  // pertencem ao grupo casual.
+  //
+  // ===================================================
+
+  return true;
+}
+
+// =====================================================
 // PALAVRÃO
 // =====================================================
 
@@ -2299,19 +2505,38 @@ async function handleMessage(
     // escrevendo palavrão junto com algum conteúdo.
     // =================================================
 
-    const forbiddenWord =
-      containsForbiddenWord(
-        message.content
-      );
+   const forbiddenWord =
+  containsForbiddenWord(
+    message.content
+  );
 
-    if (forbiddenWord) {
-      await punishHumanForProfanity(
-        message,
-        forbiddenWord
-      );
+if (forbiddenWord) {
+  const shouldPunish =
+    shouldPunishProfanityByContext(
+      message,
+      forbiddenWord
+    );
 
-      return;
-    }
+  if (shouldPunish) {
+    await punishHumanForProfanity(
+      message,
+      forbiddenWord
+    );
+
+    return;
+  }
+
+  console.log(
+    `[SECURITY] Linguagem casual/contextual ignorada: ` +
+    `${message.author.tag} ` +
+    `(${message.author.id}) | ` +
+    `detectado="${forbiddenWord}" | ` +
+    `mensagem="${truncate(
+      message.content,
+      150
+    )}"`
+  );
+}
 
     // =================================================
     // CONTEÚDO SEGURO PARA FLOOD HUMANO

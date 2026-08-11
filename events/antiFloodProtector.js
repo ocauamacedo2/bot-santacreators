@@ -774,12 +774,100 @@ function isDiscordInviteLink(url) {
     );
 }
 
+// =====================================================
+// LINK INTERNO DO PRÓPRIO SERVIDOR
+// =====================================================
+//
+// Exemplos permitidos:
+//
+// https://discord.com/channels/SERVIDOR/CANAL
+// https://discord.com/channels/SERVIDOR/CANAL/MENSAGEM
+//
+// IMPORTANTE:
+//
+// • precisa ser discord.com ou discordapp.com
+// • precisa utilizar /channels/
+// • o primeiro ID precisa ser exatamente o servidor
+//   onde a mensagem foi enviada
+//
+// Portanto, links de canais/mensagens de OUTROS servidores
+// continuam passando pela proteção normal.
+// =====================================================
+
+function isInternalDiscordGuildLink(url, guildId) {
+    if (!url || !guildId) {
+        return false;
+    }
+
+    const domain =
+        url.hostname
+            .toLowerCase()
+            .replace(/^www\./, '');
+
+    if (
+        domain !== 'discord.com' &&
+        domain !== 'discordapp.com'
+    ) {
+        return false;
+    }
+
+    const parts =
+        url.pathname
+            .split('/')
+            .filter(Boolean);
+
+    // Esperado:
+    //
+    // channels / GUILD_ID / CHANNEL_ID
+    // channels / GUILD_ID / CHANNEL_ID / MESSAGE_ID
+
+    if (
+        parts.length < 3 ||
+        parts[0].toLowerCase() !== 'channels'
+    ) {
+        return false;
+    }
+
+    const linkedGuildId =
+        parts[1];
+
+    return linkedGuildId === String(guildId);
+}
+
+// =====================================================
+// SENIOR CREATOR
+// =====================================================
+//
+// Senior Creator pode enviar links externos comuns.
+//
+// Isso NÃO cria bypass para:
+//
+// • ataque de mídia
+// • scam
+// • phishing
+// • pornografia
+// • flood
+// • spam
+// • menções excessivas
+//
+// A exceção será utilizada SOMENTE na análise de links.
+// =====================================================
+
+function isSeniorCreator(member) {
+    if (!member) {
+        return false;
+    }
+
+    return member.roles?.cache?.has(
+        '1352493359897378941'
+    ) === true;
+}
+
 function checkBypass(member) {
     if (!member || member.user.bot) return true;
 
     return false;
 }
-
 // =====================================================
 // VERIFICA SE O USUÁRIO É ISENTO DE PUNIÇÃO
 // =====================================================
@@ -1126,21 +1214,67 @@ export function setupAntiFloodProtector(client) {
             violation = "Excesso de menções na mensagem";
         }
 
-        // 4. Detecção de Links e Scams
-        const links = content.match(/https?:\/\/[^\s]+/gi) || [];
-        if (links.length > CONFIG.links.limit) {
-            violation = "Excesso de links na mensagem";
-        }
+// 4. Detecção de Links e Scams
+const links = content.match(/https?:\/\/[^\s]+/gi) || [];
 
-       if (links.length > 0) {
+if (links.length > CONFIG.links.limit) {
+    violation = "Excesso de links na mensagem";
+}
+
+if (links.length > 0) {
+    const seniorCreator =
+        isSeniorCreator(
+            message.member
+        );
+
     for (const link of links) {
         try {
-            const url = new URL(link);
-            const domain = url.hostname.toLowerCase().replace(/^www\./, '');
+            const url =
+                new URL(link);
+
+            const domain =
+                url.hostname
+                    .toLowerCase()
+                    .replace(/^www\./, '');
+
+            // =============================================
+            // LINK INTERNO DO PRÓPRIO SERVIDOR
+            // =============================================
+            //
+            // Links de canais e mensagens do servidor atual
+            // são completamente legítimos.
+            //
+            // Exemplo:
+            //
+            // discord.com/channels/GUILD/CANAL/MENSAGEM
+            //
+            // =============================================
+
+            if (
+                isInternalDiscordGuildLink(
+                    url,
+                    message.guildId
+                )
+            ) {
+                continue;
+            }
+
+            // =============================================
+            // CONVITES DO DISCORD
+            // =============================================
+            //
+            // Convite continua protegido.
+            //
+            // Senior Creator NÃO ganha bypass automático
+            // para convite de servidor externo.
+            //
+            // =============================================
 
             if (isDiscordInviteLink(url)) {
                 if (!isTicketChannel(message)) {
-                    violation = "Divulgação de convite/link de Discord não autorizado";
+                    violation =
+                        "Divulgação de convite/link de Discord não autorizado";
+
                     break;
                 }
 
@@ -1158,17 +1292,52 @@ export function setupAntiFloodProtector(client) {
                 'rebrand.ly'
             ];
 
+            // =============================================
+            // ENCURTADORES
+            // =============================================
+            //
+            // Mesmo Senior Creator continua sendo analisado
+            // aqui porque encurtador esconde o destino real.
+            //
+            // =============================================
+
             if (shorteners.includes(domain)) {
-                violation = "Link encurtado suspeito detectado";
+                violation =
+                    "Link encurtado suspeito detectado";
+
                 break;
             }
 
+            // =============================================
+            // SENIOR CREATOR
+            // =============================================
+            //
+            // Senior Creator pode compartilhar links
+            // externos comuns.
+            //
+            // Isso NÃO interfere nas verificações posteriores
+            // de scam, phishing, pornografia ou mídia.
+            //
+            // =============================================
+
+            if (seniorCreator) {
+                continue;
+            }
+
+            // =============================================
+            // WHITELIST NORMAL
+            // =============================================
+
             if (!CONFIG.allowedDomains.includes(domain)) {
-                violation = "Link externo não autorizado detectado";
+                violation =
+                    "Link externo não autorizado detectado";
+
                 break;
             }
         } catch {
-            violation = "Link com formato malicioso detectado";
+            violation =
+                "Link com formato malicioso detectado";
+
             break;
         }
     }
