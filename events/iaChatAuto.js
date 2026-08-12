@@ -2231,6 +2231,55 @@ function withGeminiTimeout(
   });
 }
 
+// =====================================================
+// IA — TIMEOUT DE CONSULTAS INTERNAS
+// =====================================================
+//
+// Sistemas internos nunca podem impedir a IA de responder.
+//
+// Se uma consulta ao ranking, pagamentos, GI, alinhamentos
+// ou qualquer outro sistema interno demorar além do limite,
+// somente aquela consulta é abandonada.
+//
+// A conversa continua normalmente e o Gemini recebe os
+// demais contextos que estiverem disponíveis.
+// =====================================================
+
+const AI_INTERNAL_QUERY_TIMEOUT_MS = 5000;
+
+function withInternalQueryTimeout(
+  promise,
+  timeoutMs = AI_INTERNAL_QUERY_TIMEOUT_MS,
+  label = "Consulta interna"
+) {
+  let timeoutId = null;
+
+  const timeoutPromise =
+    new Promise((_, reject) => {
+      timeoutId =
+        setTimeout(() => {
+          const error =
+            new Error(
+              `${label} excedeu ${timeoutMs}ms`
+            );
+
+          error.code =
+            "AI_INTERNAL_QUERY_TIMEOUT";
+
+          reject(error);
+        }, timeoutMs);
+    });
+
+  return Promise.race([
+    promise,
+    timeoutPromise,
+  ]).finally(() => {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  });
+}
+
 const COOLDOWN_MS = 12000;
 
 const MAX_RESPONSE_CHARS = 1900;
@@ -7726,9 +7775,24 @@ const SC_QUERY_SYSTEMS = {
     handler: fetchGIStatusContext,
   },
   ranking: {
-    keywords: ["ranking", "top", "pontos", "pontuou", "quem mais", "semanal"],
-    handler: fetchRankingContext,
-  },
+  keywords: [
+    "ranking",
+    "ranking semanal",
+    "ranking da semana",
+    "ranking atual",
+    "top ranking",
+    "top do ranking",
+    "posição no ranking",
+    "posicao no ranking",
+    "pontos no ranking",
+    "pontuação no ranking",
+    "pontuacao no ranking",
+    "quantos pontos",
+    "posição semanal",
+    "posicao semanal",
+  ],
+  handler: fetchRankingContext,
+},
   pagamentos: {
     keywords: ["pagamento", "financeiro", "comprovante", "pago", "solicitado"],
     handler: fetchPagamentosContext,
@@ -7767,14 +7831,50 @@ async function runSmartInternalQueryRouter(message) {
     console.log(`[IA QUERY MATCH] Sistema detectado: ${key}`);
 
     try {
-      const result = await system.handler(message, scope);
+      const startedAt =
+        Date.now();
+
+      const result =
+        await withInternalQueryTimeout(
+          system.handler(
+            message,
+            scope
+          ),
+          AI_INTERNAL_QUERY_TIMEOUT_MS,
+          `Sistema interno ${key}`
+        );
+
+      console.log(
+        `[IA SYSTEM RESULT] Sistema ${key} concluído em ${Date.now() - startedAt}ms.`
+      );
 
       if (result) {
         results.push(`SISTEMA: ${key}\n${result}`);
       }
     } catch (err) {
-      console.error(`[IA SYSTEM RESULT] Erro no sistema ${key}:`, err);
-      results.push(`SISTEMA: ${key}\nErro ao consultar este sistema.`);
+      if (
+        err?.code ===
+        "AI_INTERNAL_QUERY_TIMEOUT"
+      ) {
+        console.warn(
+          `[IA SYSTEM RESULT] Timeout no sistema ${key}. A resposta continuará sem bloquear a conversa.`
+        );
+
+        results.push(
+          `SISTEMA: ${key}\nConsulta temporariamente indisponível por demora na resposta.`
+        );
+
+        continue;
+      }
+
+      console.error(
+        `[IA SYSTEM RESULT] Erro no sistema ${key}:`,
+        err
+      );
+
+      results.push(
+        `SISTEMA: ${key}\nErro ao consultar este sistema.`
+      );
     }
   }
 
@@ -7795,7 +7895,7 @@ async function buildServerIntelligenceContext(message, intent) {
     return "O usuário apenas saudou. Responda amigavelmente sem dados técnicos.";
   }
 
-  // =====================================================
+    // =====================================================
   // INTELIGÊNCIA DE PESSOAS
   // =====================================================
 
@@ -7821,18 +7921,82 @@ async function buildServerIntelligenceContext(message, intent) {
     }
   }
 
-    const smartRouterResult =
-    await runSmartInternalQueryRouter(
-      message
+  // =====================================================
+  // ROUTER INTERNO — SOMENTE QUANDO NECESSÁRIO
+  // =====================================================
+  //
+  // Conversas comuns não precisam consultar sistemas
+  // operacionais da SantaCreators.
+  //
+  // O router só será executado quando a própria mensagem
+  // possuir palavras relacionadas a algum sistema interno.
+  //
+  // Isso evita consultas desnecessárias ao Ranking,
+  // pagamentos, GI, alinhamentos, vendas, poderes e outros
+  // sistemas durante uma conversa normal.
+  //
+  // O timeout interno continua existindo como segunda
+  // camada de proteção caso uma consulta realmente
+  // necessária apresente lentidão.
+  // =====================================================
+
+  const normalizedMessageText =
+    normalizeSearchText(
+      message.content || ""
     );
 
-  if (smartRouterResult) {
+  const hasInternalSystemRequest =
+    Object.values(
+      SC_QUERY_SYSTEMS
+    ).some(
+      (system) =>
+        system.keywords.some(
+          (keyword) => {
+            const normalizedKeyword =
+              normalizeSearchText(
+                keyword
+              );
+
+            if (
+              normalizedKeyword.length <= 3
+            ) {
+              return new RegExp(
+                `\\b${normalizedKeyword}\\b`,
+                "i"
+              ).test(
+                normalizedMessageText
+              );
+            }
+
+            return normalizedMessageText.includes(
+              normalizedKeyword
+            );
+          }
+        )
+    );
+
+  if (hasInternalSystemRequest) {
     console.log(
-      "[IA FACTUAL MODE] Resultado factual encontrado pelo router interno."
+      "[IA QUERY ROUTER] Consulta interna necessária para esta mensagem."
     );
 
-    blocks.push(
-      smartRouterResult
+    const smartRouterResult =
+      await runSmartInternalQueryRouter(
+        message
+      );
+
+    if (smartRouterResult) {
+      console.log(
+        "[IA FACTUAL MODE] Resultado factual encontrado pelo router interno."
+      );
+
+      blocks.push(
+        smartRouterResult
+      );
+    }
+  } else {
+    console.log(
+      "[IA QUERY ROUTER] Conversa sem consulta operacional. Router interno ignorado."
     );
   }
 
