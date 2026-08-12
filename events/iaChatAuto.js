@@ -2161,9 +2161,16 @@ const GEMINI_MODEL_FALLBACKS = [
 // =====================================================
 // IA — FALLBACK RÁPIDO PARA CHAT
 // =====================================================
+//
+// O chat utiliza todos os modelos configurados na cadeia
+// de fallback.
+//
+// Cada tentativa continua protegida pelo timeout individual,
+// portanto um modelo indisponível não prende a conversa.
+// =====================================================
 
 const GEMINI_CHAT_MODEL_FALLBACKS =
-  GEMINI_MODEL_FALLBACKS.slice(0, 3);
+  GEMINI_MODEL_FALLBACKS;
 
 const GEMINI_API_KEY =
   process.env.GEMINI_API_KEY || "";
@@ -2294,12 +2301,285 @@ const channelHistory = new Map();
 
 const lastAiResponses = new Map();
 
+// =====================================================
+// IA — AGRUPAMENTO DE MENSAGENS CONSECUTIVAS
+// =====================================================
+//
+// Quando o mesmo usuário envia várias mensagens em
+// sequência dentro do mesmo canal, a SantaCreators
+// aguarda uma pequena janela antes de começar a resposta.
+//
+// Exemplo:
+//
+// "é sobre o ranking"
+// "da semana passada"
+//
+// Em vez de gerar duas respostas separadas, o sistema
+// combina as mensagens e processa:
+//
+// "é sobre o ranking
+// da semana passada"
+//
+// A chave inclui servidor, canal e usuário para impedir
+// que conversas diferentes sejam misturadas.
+//
+// O agrupamento acontece somente antes do processamento.
+// Depois que a geração realmente começou, continua
+// existindo uma trava para impedir duas gerações
+// simultâneas do mesmo fluxo.
+// =====================================================
+
+const AI_MESSAGE_BATCH_DELAY_MS = 1800;
+
+const AI_PENDING_MESSAGE_BATCHES = new Map();
+
+const AI_ACTIVE_USER_PROCESSING = new Set();
+
+// =====================================================
+// IA — AUTORIZAÇÃO TEMPORÁRIA DO AGRUPAMENTO
+// =====================================================
+//
+// Em canais públicos inteligentes, somente a primeira
+// mensagem precisa provar que realmente está chamando a IA.
+//
+// Depois que essa primeira mensagem foi autorizada,
+// mensagens imediatamente seguintes do mesmo:
+//
+// servidor + canal + usuário
+//
+// podem entrar no mesmo agrupamento durante a pequena
+// janela de AI_MESSAGE_BATCH_DELAY_MS.
+//
+// Exemplo:
+//
+// "SantaCreators, é sobre o ranking"
+// "da semana passada"
+//
+// A segunda mensagem isoladamente poderia não parecer
+// uma chamada para a IA.
+//
+// Porém, como existe um agrupamento autorizado ainda
+// aguardando mensagens desse mesmo usuário e canal,
+// ela também poderá fazer parte do lote.
+//
+// Essa autorização existe SOMENTE enquanto o agrupamento
+// estiver pendente.
+//
+// Quando o lote termina, a autorização desaparece junto
+// com ele.
+//
+// Isso impede que uma conversa humana normal seja
+// transformada em conversa com a IA apenas porque o
+// usuário falou com ela anteriormente.
+// =====================================================
+
+const AI_AUTHORIZED_MESSAGE_BATCHES = new Set();
+
+// =====================================================
+// IA — CHAVE DO AGRUPAMENTO CONVERSACIONAL
+// =====================================================
+//
+// A mesma pessoa pode conversar com a IA em canais
+// diferentes.
+//
+// Por isso a chave não utiliza somente o ID do usuário.
+// Ela separa:
+//
+// servidor + canal + usuário
+//
+// Assim mensagens enviadas em locais diferentes nunca
+// serão combinadas acidentalmente.
+// =====================================================
+
+function getAiMessageBatchKey(message) {
+  return [
+    String(message?.guildId || "DM"),
+    String(message?.channelId || ""),
+    String(message?.author?.id || ""),
+  ].join(":");
+}
+
+// =====================================================
+// IA — VERIFICAR AGRUPAMENTO JÁ AUTORIZADO
+// =====================================================
+//
+// Retorna true somente quando já existe uma mensagem
+// anterior desse mesmo fluxo que passou normalmente pela
+// validação shouldAnswerInThisChannel() e ainda está
+// aguardando o fechamento do agrupamento.
+// =====================================================
+
+function hasAuthorizedAiMessageBatch(message) {
+  const key =
+    getAiMessageBatchKey(message);
+
+  return (
+    AI_AUTHORIZED_MESSAGE_BATCHES.has(key) &&
+    AI_PENDING_MESSAGE_BATCHES.has(key)
+  );
+}
+
+// =====================================================
+// IA — AUTORIZAR AGRUPAMENTO
+// =====================================================
+//
+// Chamado somente depois que a mensagem passou pela
+// validação normal de canal.
+//
+// Isso registra que mensagens imediatamente seguintes
+// desse mesmo usuário e canal pertencem ao mesmo fluxo.
+// =====================================================
+
+function authorizeAiMessageBatch(message) {
+  const key =
+    getAiMessageBatchKey(message);
+
+  AI_AUTHORIZED_MESSAGE_BATCHES.add(key);
+}
+
+// =====================================================
+// IA — REMOVER AUTORIZAÇÃO DO AGRUPAMENTO
+// =====================================================
+//
+// Assim que a janela de agrupamento termina, removemos a
+// autorização.
+//
+// Portanto ela nunca vira uma permissão permanente para
+// aquele usuário conversar com a IA naquele canal.
+// =====================================================
+
+function clearAuthorizedAiMessageBatch(messageOrKey) {
+  const key =
+    typeof messageOrKey === "string"
+      ? messageOrKey
+      : getAiMessageBatchKey(messageOrKey);
+
+  AI_AUTHORIZED_MESSAGE_BATCHES.delete(key);
+}
+
+// =====================================================
+// IA — AGUARDAR E AGRUPAR MENSAGENS CONSECUTIVAS
+// =====================================================
+//
+// Cada nova mensagem do mesmo fluxo reinicia a pequena
+// janela de espera.
+//
+// Exemplo:
+//
+// 00.0s -> "é sobre o ranking"
+// 00.7s -> "da semana passada"
+//
+// A segunda mensagem reinicia a janela.
+//
+// Quando o usuário para de enviar mensagens pelo período
+// configurado em AI_MESSAGE_BATCH_DELAY_MS, somente a
+// mensagem mais recente continua o processamento.
+//
+// As mensagens anteriores são incorporadas ao conteúdo
+// dessa mensagem mais recente.
+//
+// Isso permite que TODO o restante do sistema continue
+// funcionando usando apenas uma mensagem principal.
+// =====================================================
+
+function waitForAiMessageBatch(message) {
+  return new Promise((resolve) => {
+    const key =
+      getAiMessageBatchKey(message);
+
+    const existing =
+      AI_PENDING_MESSAGE_BATCHES.get(key);
+
+    if (existing?.timer) {
+      clearTimeout(existing.timer);
+    }
+
+    const messages =
+      existing?.messages
+        ? [...existing.messages, message]
+        : [message];
+
+    const waiters =
+      existing?.waiters
+        ? [...existing.waiters]
+        : [];
+
+    waiters.push({
+      messageId: message.id,
+      resolve,
+    });
+
+    const timer =
+      setTimeout(() => {
+        const current =
+          AI_PENDING_MESSAGE_BATCHES.get(key);
+
+        if (!current) {
+          resolve({
+            shouldProcess: true,
+            messages: [message],
+          });
+
+          return;
+        }
+
+        AI_PENDING_MESSAGE_BATCHES.delete(key);
+
+        const batchMessages =
+          current.messages || [];
+
+        const lastMessage =
+          batchMessages[
+            batchMessages.length - 1
+          ];
+
+        for (const waiter of current.waiters || []) {
+          waiter.resolve({
+            shouldProcess:
+              waiter.messageId === lastMessage?.id,
+            messages:
+              batchMessages,
+          });
+        }
+      }, AI_MESSAGE_BATCH_DELAY_MS);
+
+    AI_PENDING_MESSAGE_BATCHES.set(
+      key,
+      {
+        messages,
+        waiters,
+        timer,
+      }
+    );
+  });
+}
+
+// =====================================================
+// IA — COMBINAR CONTEÚDO DO AGRUPAMENTO
+// =====================================================
+//
+// Preserva a ordem original das mensagens.
+//
+// Também evita inserir textos vazios no conteúdo final.
+// =====================================================
+
+function buildAiCombinedMessageContent(messages) {
+  return (messages || [])
+    .map((item) =>
+      cleanText(
+        item?.content || ""
+      ).trim()
+    )
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
 const AI_ADMIN_RECENT_ACTION_TTL_MS =
   2 * 60 * 1000;
 
 const AI_ADMIN_RECENT_ACTIONS =
   new Map();
-
 
 // =====================================================
 // ÍNDICE DE SISTEMAS E CLASSIFICAÇÃO DE INTENÇÃO
@@ -9732,8 +10012,15 @@ function isGeminiModelError(err) {
 
   return (
     text.includes("404") ||
-    text.includes("model") ||
-    text.includes("not found")
+    text.includes("model not found") ||
+    text.includes("models/") &&
+      text.includes("not found") ||
+    text.includes("model") &&
+      text.includes("not found") ||
+    text.includes("model") &&
+      text.includes("not supported") ||
+    text.includes("model") &&
+      text.includes("does not exist")
   );
 }
 
@@ -9952,17 +10239,17 @@ for (const modelName of GEMINI_CHAT_MODEL_FALLBACKS) {
     }
 
     if (!isGeminiModelError(err)) {
-      console.error(
-        `[IA CHAT AUTO] Erro inesperado no modelo ${modelName}:`,
-        err
-      );
+  console.error(
+    `[IA CHAT AUTO] Erro não recuperável no modelo ${modelName} | ${elapsed}ms:`,
+    err
+  );
 
-      throw err;
-    }
+  throw err;
+}
 
-    console.warn(
-      `[IA CHAT AUTO] Modelo falhou: ${modelName} | ${elapsed}ms. Tentando próximo fallback...`
-    );
+console.warn(
+  `[IA CHAT AUTO] Modelo indisponível ou incompatível: ${modelName} | ${elapsed}ms. Tentando próximo fallback...`
+);
   }
 }
 
@@ -12359,42 +12646,218 @@ if (
   return;
 }
 
-const canAnswerHere =
-  await shouldAnswerInThisChannel(message, client);
+// =====================================================
+// AUTORIZAÇÃO DO AGRUPAMENTO CONVERSACIONAL
+// =====================================================
+//
+// Primeiro verificamos se já existe um agrupamento
+// autorizado aguardando mensagens desse mesmo:
+//
+// servidor + canal + usuário.
+//
+// Se existir, esta mensagem é considerada continuação
+// imediata daquele lote.
+//
+// Isso resolve situações como:
+//
+// "SantaCreators, é sobre o ranking"
+// "da semana passada"
+//
+// A primeira mensagem passa normalmente pela validação
+// shouldAnswerInThisChannel().
+//
+// A segunda não precisa parecer, isoladamente, uma nova
+// chamada para a IA porque ainda pertence ao agrupamento
+// iniciado pela primeira.
+//
+// Se NÃO existir agrupamento autorizado, a mensagem passa
+// normalmente por shouldAnswerInThisChannel(), preservando
+// toda a proteção atual contra respostas indevidas em
+// conversas humanas.
+// =====================================================
+
+const hasAuthorizedBatch =
+  hasAuthorizedAiMessageBatch(message);
+
+let canAnswerHere =
+  hasAuthorizedBatch;
+
+if (!hasAuthorizedBatch) {
+  canAnswerHere =
+    await shouldAnswerInThisChannel(
+      message,
+      client
+    );
+}
 
 if (!canAnswerHere) {
   return;
 }
 
-        const content =
-          cleanText(message.content);
+// =====================================================
+// AUTORIZAR O AGRUPAMENTO ATUAL
+// =====================================================
+//
+// Se chegamos aqui, significa que:
+//
+// 1. a mensagem foi validada normalmente pela IA;
+//
+// OU
+//
+// 2. ela pertence a um agrupamento que já havia sido
+//    autorizado.
+//
+// Mantemos a autorização durante toda a janela de
+// agrupamento.
+// =====================================================
 
-        rememberMessage(
-          message.channelId,
-          message.author.username,
-          content
-        );
+authorizeAiMessageBatch(message);
 
-        // =====================================================
-        // COOLDOWN
-        // =====================================================
+// =====================================================
+// AGRUPAMENTO DE MENSAGENS CONSECUTIVAS
+// =====================================================
+//
+// Antes de iniciar consultas internas, cooldown ou Gemini,
+// aguardamos uma pequena janela para descobrir se o usuário
+// ainda está completando o próprio raciocínio.
+//
+// Exemplo:
+//
+// "é sobre o ranking"
+// "da semana passada"
+//
+// Somente a última mensagem do agrupamento continuará
+// executando o fluxo.
+//
+// As anteriores terminam aqui depois de entregarem seu
+// conteúdo para a mensagem principal.
+// =====================================================
 
-        const remaining =
-          getCooldownRemaining(
-            message.author.id
-          );
+const messageBatch =
+  await waitForAiMessageBatch(message);
 
-        if (remaining > 0) {
-          return;
-        }
+if (!messageBatch.shouldProcess) {
+  return;
+}
 
-        setCooldown(message.author.id);
+// =====================================================
+// ENCERRAR AUTORIZAÇÃO TEMPORÁRIA
+// =====================================================
+//
+// A janela terminou e a última mensagem do agrupamento
+// assumiu o processamento.
+//
+// A autorização temporária não é mais necessária.
+//
+// Uma mensagem enviada depois disso terá que passar
+// novamente pelas regras normais da IA, salvo quando as
+// regras existentes de continuação pública determinarem
+// que ela faz parte da conversa.
+// =====================================================
 
-        // =====================================================
-        // LOGS
-        // =====================================================
+clearAuthorizedAiMessageBatch(message);
 
-        console.log(`
+const batchedMessages =
+  messageBatch.messages || [message];
+
+const combinedContent =
+  buildAiCombinedMessageContent(
+    batchedMessages
+  );
+
+// =====================================================
+// MENSAGEM PRINCIPAL DO AGRUPAMENTO
+// =====================================================
+//
+// A última mensagem é utilizada como base porque ela
+// contém o estado mais recente da conversa.
+//
+// O conteúdo textual, porém, passa a representar todas
+// as mensagens consecutivas do agrupamento.
+// =====================================================
+
+const originalMessageContent =
+  message.content;
+
+if (combinedContent) {
+  message.content =
+    combinedContent;
+}
+
+const content =
+  cleanText(message.content);
+
+rememberMessage(
+  message.channelId,
+  message.author.username,
+  content
+);
+
+// =====================================================
+// COOLDOWN
+// =====================================================
+//
+// O cooldown continua protegendo chamadas novas contra
+// spam, exatamente como antes.
+//
+// Porém, se o usuário estiver RESPONDENDO diretamente a
+// uma mensagem da SantaCreators IA, essa mensagem faz
+// parte de uma conversa já iniciada.
+//
+// Portanto, reply direto para a IA não pode ser descartado
+// silenciosamente pelo cooldown.
+//
+// Exemplo:
+//
+// SantaCreators: "Aqui tá tudo tranquilo..."
+// Macedo responde: "e essa mensagem aqui"
+//
+// Mesmo que tenham passado apenas alguns segundos,
+// a resposta deve continuar a conversa normalmente.
+//
+// =====================================================
+
+const replyTargetTypeForCooldown =
+  await getReplyTargetType(
+    message,
+    client
+  );
+
+const isDirectReplyToAI =
+  replyTargetTypeForCooldown === "AI";
+
+const remaining =
+  getCooldownRemaining(
+    message.author.id
+  );
+
+if (
+  remaining > 0 &&
+  !isDirectReplyToAI
+) {
+  message.content =
+    originalMessageContent;
+
+  return;
+}
+
+// =====================================================
+// ATUALIZAÇÃO DO COOLDOWN
+// =====================================================
+//
+// Uma interação aceita continua renovando o cooldown.
+//
+// Isso preserva a proteção original sem impedir
+// continuidade por reply direto.
+// =====================================================
+
+setCooldown(message.author.id);
+
+// =====================================================
+// LOGS
+// =====================================================
+
+console.log(`
 [IA CHAT AUTO]
 User: ${message.author.tag}
 ID: ${message.author.id}
@@ -12406,11 +12869,11 @@ Mensagem: ${content}
         // DIGITANDO
         // =====================================================
 
-        await message.channel
-          .sendTyping()
-          .catch(() => {});
+await message.channel
+  .sendTyping()
+  .catch(() => {});
 
-       // =====================================================
+// =====================================================
 // RESPOSTA DIRETA DO DISCORD
 // =====================================================
 
@@ -12421,16 +12884,59 @@ let safeIaResponse = directDiscordAnswer;
 
 if (!safeIaResponse) {
   // =====================================================
-  // GERAÇÃO IA
+  // PROTEÇÃO CONTRA GERAÇÕES SIMULTÂNEAS
+  // =====================================================
+  //
+  // O agrupamento acima absorve mensagens consecutivas
+  // antes que a geração comece.
+  //
+  // Esta trava permanece como uma segunda camada de
+  // segurança caso uma nova interação consiga chegar
+  // enquanto uma geração anterior ainda estiver ativa.
+  //
+  // A chave também considera o canal para não bloquear
+  // conversas independentes do mesmo usuário.
   // =====================================================
 
-  const iaResponse =
-    await generateIAResponse({
-      message,
-      client,
-    });
+  const processingKey =
+    getAiMessageBatchKey(message);
 
-  safeIaResponse = iaResponse;
+  if (
+    AI_ACTIVE_USER_PROCESSING.has(
+      processingKey
+    )
+  ) {
+    console.log(
+      `[IA CHAT AUTO] Geração simultânea bloqueada por segurança | User=${message.author.id} | Canal=${message.channelId}`
+    );
+
+    message.content =
+      originalMessageContent;
+
+    return;
+  }
+
+  AI_ACTIVE_USER_PROCESSING.add(
+    processingKey
+  );
+
+  try {
+    // =====================================================
+    // GERAÇÃO IA
+    // =====================================================
+
+    const iaResponse =
+      await generateIAResponse({
+        message,
+        client,
+      });
+
+    safeIaResponse = iaResponse;
+  } finally {
+    AI_ACTIVE_USER_PROCESSING.delete(
+      processingKey
+    );
+  }
 }
 
 if (iaResponseLooksLikePending(safeIaResponse)) {
@@ -12440,6 +12946,21 @@ if (iaResponseLooksLikePending(safeIaResponse)) {
 
   safeIaResponse = buildFallbackInstantResponse(message);
 }
+
+// =====================================================
+// RESTAURAÇÃO DA MENSAGEM ORIGINAL
+// =====================================================
+//
+// Durante o processamento, message.content representa
+// todas as mensagens consecutivas agrupadas.
+//
+// A partir daqui o processamento principal já terminou,
+// então devolvemos ao objeto do Discord seu conteúdo
+// original.
+// =====================================================
+
+message.content =
+  originalMessageContent;
 
 if (iaResponseLooksRepeated(message.channelId, safeIaResponse)) {
   console.warn(
