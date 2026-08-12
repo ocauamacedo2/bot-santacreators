@@ -8504,6 +8504,22 @@ function looksLikeDirectInformalAiCall(content) {
     return false;
   }
 
+  // =====================================================
+  // CHAMADAS DIRETAS À SANTACREATORS IA
+  // =====================================================
+  //
+  // Aqui ficam frases em que a pessoa claramente começa
+  // falando diretamente com a IA.
+  //
+  // Exemplos:
+  //
+  // "SantaCreators me ajuda"
+  // "bot da santa responde"
+  // "ia da santa olha isso"
+  // "amigo creators responde aqui"
+  //
+  // =====================================================
+
   const directPatterns = [
     /^amigo creators\b/i,
     /^amiga creators\b/i,
@@ -8529,6 +8545,38 @@ function looksLikeDirectInformalAiCall(content) {
     return true;
   }
 
+  // =====================================================
+  // REFERÊNCIAS CONVERSACIONAIS À PRÓPRIA IA
+  // =====================================================
+  //
+  // Nem sempre alguém chama a IA diretamente.
+  //
+  // Durante uma conversa, os membros também podem falar
+  // SOBRE ela:
+  //
+  // "era o bot"
+  // "foi o bot"
+  // "é o bot"
+  // "esse daí é o bot"
+  // "to falando do bot"
+  // "estou falando do bot"
+  // "a santa creators lê tudo"
+  // "a santacreators responde"
+  // "essa santa creators"
+  // "a ia respondeu"
+  //
+  // Nesses casos existe referência suficientemente clara
+  // à SantaCreators IA para permitir que ela reconheça que
+  // está sendo assunto da conversa.
+  //
+  // IMPORTANTE:
+  //
+  // Não usamos simplesmente a palavra "bot" em qualquer
+  // posição, pois isso faria a SantaCreators entrar em
+  // conversas sobre outros bots do servidor.
+  //
+  // =====================================================
+
   const conversationalPatterns = [
     /\bo bot criou vida\b/i,
     /\bbot criou vida\b/i,
@@ -8541,6 +8589,50 @@ function looksLikeDirectInformalAiCall(content) {
     /\bia ta viva\b/i,
     /\bessa ia\b/i,
     /\besse bot\b/i,
+
+    /\bera o bot\b/i,
+    /\bfoi o bot\b/i,
+    /\be o bot\b/i,
+    /\bé o bot\b/i,
+    /\be esse bot\b/i,
+    /\bé esse bot\b/i,
+    /\be aquele bot\b/i,
+    /\bé aquele bot\b/i,
+    /\besse dai e o bot\b/i,
+    /\besse dai é o bot\b/i,
+    /\besse ai e o bot\b/i,
+    /\besse ai é o bot\b/i,
+
+    /\bto falando do bot\b/i,
+    /\btô falando do bot\b/i,
+    /\bestou falando do bot\b/i,
+    /\btava falando do bot\b/i,
+    /\bestava falando do bot\b/i,
+    /\bfalei do bot\b/i,
+    /\bfalando desse bot\b/i,
+    /\bfalando daquele bot\b/i,
+
+    /\ba santa creators\b/i,
+    /\ba santacreators\b/i,
+    /\bessa santa creators\b/i,
+    /\bessa santacreators\b/i,
+    /\bo santa creators\b/i,
+    /\bo santacreators\b/i,
+
+    /\ba ia da santa\b/i,
+    /\bia da santa\b/i,
+    /\ba ia da creators\b/i,
+    /\bia da creators\b/i,
+    /\ba ia creators\b/i,
+
+    /\ba ia respondeu\b/i,
+    /\ba ia responde\b/i,
+    /\ba ia falou\b/i,
+    /\ba ia disse\b/i,
+    /\bo bot respondeu\b/i,
+    /\bo bot responde\b/i,
+    /\bo bot falou\b/i,
+    /\bo bot disse\b/i,
   ];
 
   return conversationalPatterns.some(
