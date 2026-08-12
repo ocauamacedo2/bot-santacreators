@@ -86,6 +86,11 @@ const CONFIG = {
         enabled: true,
 
         // 4 imagens numa única mensagem.
+        //
+        // IMPORTANTE:
+        // atingir este número sozinho NÃO confirma mais ataque.
+        // O sistema usa isso como um forte sinal e procura
+        // outros indícios antes de aplicar 5 horas.
         imagesInSingleMessage: 4,
 
         // 2 imagens + @everyone/@here.
@@ -99,6 +104,11 @@ const CONFIG = {
 
         // Quantidade mínima de canais diferentes.
         channelsInWindow: 3,
+
+        // Quantidade de mensagens com mídia em sequência
+        // que transforma o envio de 4 imagens em comportamento
+        // mais suspeito, mesmo dentro do mesmo canal.
+        repeatedMediaMessages: 2,
 
         // Timeout fixo de 5 horas.
         timeoutMs: 5 * 60 * 60 * 1000,
@@ -463,21 +473,82 @@ function detectMediaAttack(message) {
     // REGRA 1
     // 4 OU MAIS IMAGENS NA MESMA MENSAGEM
     // =================================================
+    //
+    // IMPORTANTE:
+    //
+    // 4 imagens sozinhas NÃO confirmam mais automaticamente
+    // um ataque.
+    //
+    // Isso evita punir situações legítimas como:
+    //
+    // • envio de portfólio
+    // • trabalhos realizados
+    // • prints para suporte
+    // • comprovações em tickets
+    // • várias fotos normais na mesma mensagem
+    //
+    // As 4 imagens continuam sendo consideradas um sinal
+    // forte, porém precisam estar acompanhadas de outro
+    // comportamento suspeito.
+    //
+    // =================================================
 
     if (
         imageCount >=
         CONFIG.mediaAttack.imagesInSingleMessage
     ) {
-        return {
-            detected: true,
+        const repeatedMedia =
+            history.length >=
+            CONFIG.mediaAttack.repeatedMediaMessages;
 
-            reason:
-                `Ataque de mídia detectado: ` +
-                `${imageCount} imagens enviadas ` +
-                `na mesma mensagem.`,
+        const differentChannels =
+            new Set(
+                history.map(
+                    entry =>
+                        entry.channelId
+                )
+            );
 
-            history,
-        };
+        const spreadingAcrossChannels =
+            differentChannels.size >= 2;
+
+        if (
+            massMention ||
+            repeatedMedia ||
+            spreadingAcrossChannels
+        ) {
+            const signals = [];
+
+            if (massMention) {
+                signals.push(
+                    '@everyone/@here junto das imagens'
+                );
+            }
+
+            if (repeatedMedia) {
+                signals.push(
+                    `${history.length} mensagens com mídia em poucos segundos`
+                );
+            }
+
+            if (spreadingAcrossChannels) {
+                signals.push(
+                    `mídia espalhada em ${differentChannels.size} canais`
+                );
+            }
+
+            return {
+                detected: true,
+
+                reason:
+                    `Ataque de mídia detectado: ` +
+                    `${imageCount} imagens na mesma mensagem ` +
+                    `com comportamento adicional suspeito: ` +
+                    `${signals.join(', ')}.`,
+
+                history,
+            };
+        }
     }
 
     // =================================================
@@ -623,6 +694,162 @@ async function deleteMediaAttackMessages(
 }
 
 // =====================================================
+// CAPTURA EVIDÊNCIAS DO ATAQUE DE MÍDIA
+// =====================================================
+//
+// As imagens precisam ser capturadas ANTES da exclusão
+// das mensagens.
+//
+// Além das URLs originais, tentamos baixar os arquivos
+// para reenviá-los diretamente ao canal de logs.
+//
+// Dessa forma o log não depende somente da mensagem
+// original continuar existindo.
+//
+// =====================================================
+
+async function captureMediaAttackEvidence(
+    message,
+    history
+) {
+    const evidence = [];
+
+    const uniqueMessages =
+        new Map();
+
+    for (const entry of history) {
+        uniqueMessages.set(
+            `${entry.channelId}:${entry.messageId}`,
+            entry
+        );
+    }
+
+    for (
+        const entry of
+        uniqueMessages.values()
+    ) {
+        const channel =
+            message.guild.channels.cache.get(
+                entry.channelId
+            ) ||
+            (
+                await message.guild.channels
+                    .fetch(
+                        entry.channelId
+                    )
+                    .catch(() => null)
+            );
+
+        if (
+            !channel?.isTextBased() ||
+            !channel.messages
+        ) {
+            continue;
+        }
+
+        const target =
+            channel.messages.cache.get(
+                entry.messageId
+            ) ||
+            (
+                await channel.messages
+                    .fetch(
+                        entry.messageId
+                    )
+                    .catch(() => null)
+            );
+
+        if (!target) {
+            continue;
+        }
+
+        const attachments = [];
+
+        for (
+            const attachment of
+            target.attachments.values()
+        ) {
+            const attachmentData = {
+                id:
+                    attachment.id,
+
+                name:
+                    attachment.name ||
+                    `arquivo-${attachment.id}`,
+
+                url:
+                    attachment.url,
+
+                proxyURL:
+                    attachment.proxyURL || null,
+
+                contentType:
+                    attachment.contentType || null,
+
+                size:
+                    attachment.size || 0,
+
+                buffer:
+                    null,
+            };
+
+            try {
+                const response =
+                    await fetch(
+                        attachment.url
+                    );
+
+                if (response.ok) {
+                    const arrayBuffer =
+                        await response.arrayBuffer();
+
+                    attachmentData.buffer =
+                        Buffer.from(
+                            arrayBuffer
+                        );
+                }
+            } catch (err) {
+                console.error(
+                    '[ANTI FLOOD PROTECTOR] Erro ao preservar anexo para o log:',
+                    err
+                );
+            }
+
+            attachments.push(
+                attachmentData
+            );
+        }
+
+        evidence.push({
+            messageId:
+                target.id,
+
+            messageURL:
+                target.url,
+
+            channelId:
+                target.channelId,
+
+            channelName:
+                target.channel?.name ||
+                'Canal desconhecido',
+
+            content:
+                String(
+                    target.content || ''
+                ),
+
+            createdTimestamp:
+                target.createdTimestamp,
+
+            attachments,
+        });
+    }
+
+    return evidence;
+}
+
+// =====================================================
 // PUNIÇÃO FIXA PARA ATAQUE DE MÍDIA
 // =====================================================
 
@@ -656,10 +883,19 @@ async function punishMediaAttack(
         return;
     }
 
-    // Captura dados antes de apagar.
+    // =================================================
+    // CAPTURA CONTEÚDO E EVIDÊNCIAS ANTES DE APAGAR
+    // =================================================
+
     const content =
         String(
             message.content || ''
+        );
+
+    const mediaEvidence =
+        await captureMediaAttackEvidence(
+            message,
+            detection.history
         );
 
     const deleted =
@@ -703,7 +939,14 @@ async function punishMediaAttack(
         content ||
             `[Ataque contendo mídia. ${deleted} mensagem(ns) removida(s).]`,
         1,
-        duration
+        duration,
+        {
+            type: 'mediaAttack',
+            messageId: message.id,
+            messageURL: message.url,
+            deletedMessages: deleted,
+            evidence: mediaEvidence,
+        }
     );
 
     // =================================================
@@ -936,31 +1179,481 @@ function isPunishmentExempt(member) {
     return false;
 }
 
-async function logSecurityAction(client, guild, member, channel, reason, content, infractionCount, duration) {
-    const logChannel = await client.channels.fetch(CONFIG.logChannelId).catch(() => null);
-    if (!logChannel || !logChannel.isTextBased()) return;
+async function logSecurityAction(
+    client,
+    guild,
+    member,
+    channel,
+    reason,
+    content,
+    infractionCount,
+    duration,
+    extra = null
+) {
+    const logChannel =
+        await client.channels
+            .fetch(
+                CONFIG.logChannelId
+            )
+            .catch(() => null);
 
-    const now = new Date();
-    const timestampSP = now.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+    if (
+        !logChannel ||
+        !logChannel.isTextBased()
+    ) {
+        return;
+    }
 
-    const embed = new EmbedBuilder()
-        .setTitle('🛡️ Proteção Ativa: Mensagem Removida')
-        .setColor(infractionCount > 3 ? '#FF0000' : '#FFA500')
-        .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
-        .addFields(
-            { name: '👤 Usuário', value: `${member} (\`${member.id}\`)`, inline: true },
-            { name: '📍 Canal', value: `${channel} (Ir ao Canal)`, inline: true },
-            { name: '⚖️ Punição', value: `Timeout: \`${duration / 60000} min\``, inline: true },
-            { name: '🚩 Reincidência', value: `\`${infractionCount}ª infração\``, inline: true },
-            { name: '📝 Motivo Detectado', value: `\`${reason}\``, inline: false },
-            { name: '💬 Conteúdo Removido', value: `\`\`\`${content.slice(0, 1000) || '[Sem Texto/Apenas Mídia]'}\`\`\``, inline: false },
-            { name: '🕒 Horário (SP)', value: `\`${timestampSP}\``, inline: false },
-            { name: '🔗 Links Úteis', value: `Perfil do Usuário`, inline: false }
-        )
-        .setFooter({ text: 'Sistema de Segurança SantaCreators' })
+    const now =
+        new Date();
+
+    const timestampSP =
+        now.toLocaleString(
+            'pt-BR',
+            {
+                timeZone:
+                    'America/Sao_Paulo',
+            }
+        );
+
+    const channelURL =
+        `https://discord.com/channels/` +
+        `${guild.id}/${channel.id}`;
+
+    const userURL =
+        `https://discord.com/users/` +
+        `${member.id}`;
+
+    const roles =
+        member.roles?.cache
+            ?.filter(
+                role =>
+                    role.id !== guild.id
+            )
+            ?.sort(
+                (a, b) =>
+                    b.position -
+                    a.position
+            )
+            ?.map(
+                role =>
+                    `${role}`
+            )
+            ?.slice(
+                0,
+                15
+            )
+            ?.join(', ') ||
+        'Nenhum cargo encontrado.';
+
+    const evidence =
+        extra?.evidence || [];
+
+    const totalAttachments =
+        evidence.reduce(
+            (
+                total,
+                entry
+            ) =>
+                total +
+                (
+                    entry.attachments
+                        ?.length ||
+                    0
+                ),
+            0
+        );
+
+    const totalEvidenceMessages =
+        evidence.length;
+
+    const embed =
+        new EmbedBuilder()
+            .setTitle(
+                '🛡️ Proteção Ativa: Mensagem Removida'
+            )
+            .setColor(
+                infractionCount > 3
+                    ? '#FF0000'
+                    : '#FFA500'
+            )
+            .setThumbnail(
+                member.user.displayAvatarURL({
+                    dynamic: true,
+                })
+            )
+            .addFields(
+                {
+                    name:
+                        '👤 Usuário',
+
+                    value:
+                        `${member}\n` +
+                        `**Nome:** ${member.user.tag}\n` +
+                        `**ID:** \`${member.id}\`\n` +
+                        `[Abrir Perfil](${userURL})`,
+
+                    inline:
+                        true,
+                },
+
+                {
+                    name:
+                        '📍 Canal',
+
+                    value:
+                        `${channel}\n` +
+                        `**ID:** \`${channel.id}\`\n` +
+                        `[🔗 Ir ao Canal](${channelURL})`,
+
+                    inline:
+                        true,
+                },
+
+                {
+                    name:
+                        '⚖️ Punição',
+
+                    value:
+                        `Timeout: ` +
+                        `\`${duration / 60000} min\``,
+
+                    inline:
+                        true,
+                },
+
+                {
+                    name:
+                        '🚩 Reincidência',
+
+                    value:
+                        `\`${infractionCount}ª infração\``,
+
+                    inline:
+                        true,
+                },
+
+                {
+                    name:
+                        '🏠 Servidor',
+
+                    value:
+                        `**Nome:** ${guild.name}\n` +
+                        `**ID:** \`${guild.id}\``,
+
+                    inline:
+                        true,
+                },
+
+                {
+                    name:
+                        '🆔 Mensagem',
+
+                    value:
+                        extra?.messageId
+                            ? `\`${extra.messageId}\``
+                            : 'Não informado.',
+
+                    inline:
+                        true,
+                },
+
+                {
+                    name:
+                        '📝 Motivo Detectado',
+
+                    value:
+                        `\`${String(reason).slice(0, 1000)}\``,
+
+                    inline:
+                        false,
+                },
+
+                {
+                    name:
+                        '💬 Conteúdo Removido',
+
+                    value:
+                        `\`\`\`\n` +
+                        `${String(
+                            content ||
+                            '[Sem Texto/Apenas Mídia]'
+                        ).slice(0, 950)}` +
+                        `\n\`\`\``,
+
+                    inline:
+                        false,
+                },
+
+                {
+                    name:
+                        '🎭 Cargos do Usuário',
+
+                    value:
+                        roles.slice(
+                            0,
+                            1000
+                        ),
+
+                    inline:
+                        false,
+                }
+            );
+
+    if (
+        extra?.type ===
+        'mediaAttack'
+    ) {
+        embed.addFields(
+            {
+                name:
+                    '🖼️ Evidências de Mídia',
+
+                value:
+                    `**Mensagens analisadas:** ` +
+                    `\`${totalEvidenceMessages}\`\n` +
+                    `**Arquivos encontrados:** ` +
+                    `\`${totalAttachments}\`\n` +
+                    `**Mensagens removidas:** ` +
+                    `\`${extra.deletedMessages || 0}\``,
+
+                inline:
+                    false,
+            }
+        );
+    }
+
+    embed.addFields(
+        {
+            name:
+                '🕒 Horário (SP)',
+
+            value:
+                `\`${timestampSP}\``,
+
+            inline:
+                false,
+        },
+
+        {
+            name:
+                '🔗 Links Úteis',
+
+            value:
+                `[👤 Perfil do Usuário](${userURL})\n` +
+                `[📍 Ir ao Canal](${channelURL})`,
+
+            inline:
+                false,
+        }
+    );
+
+    embed
+        .setFooter({
+            text:
+                'Sistema de Segurança SantaCreators',
+        })
         .setTimestamp();
 
-    await logChannel.send({ embeds: [embed] }).catch(() => {});
+    await logChannel
+        .send({
+            embeds: [
+                embed,
+            ],
+        })
+        .catch(
+            err => {
+                console.error(
+                    '[ANTI FLOOD PROTECTOR] Erro ao enviar log:',
+                    err
+                );
+            }
+        );
+
+    // =================================================
+    // EVIDÊNCIAS VISUAIS
+    // =================================================
+    //
+    // Cada mensagem original recebe seu próprio bloco
+    // de evidência.
+    //
+    // As imagens são reenviadas como arquivos para que
+    // apareçam diretamente no Discord e possam ser
+    // abertas/clicadas pela equipe.
+    //
+    // =================================================
+
+    if (
+        extra?.type ===
+            'mediaAttack' &&
+        evidence.length > 0
+    ) {
+        for (
+            let index = 0;
+            index < evidence.length;
+            index++
+        ) {
+            const entry =
+                evidence[index];
+
+            const evidenceChannelURL =
+                `https://discord.com/channels/` +
+                `${guild.id}/${entry.channelId}`;
+
+            const attachmentLinks =
+                (
+                    entry.attachments ||
+                    []
+                )
+                    .map(
+                        (
+                            attachment,
+                            attachmentIndex
+                        ) =>
+                            `**Imagem/arquivo ${attachmentIndex + 1}:** ` +
+                            `[Abrir original](${attachment.url})`
+                    )
+                    .join('\n');
+
+            const evidenceEmbed =
+                new EmbedBuilder()
+                    .setTitle(
+                        `📸 Evidência ${index + 1}/${evidence.length}`
+                    )
+                    .setColor(
+                        '#FFA500'
+                    )
+                    .setDescription(
+                        `Registro preservado antes da exclusão automática.`
+                    )
+                    .addFields(
+                        {
+                            name:
+                                '👤 Autor',
+
+                            value:
+                                `${member}\n` +
+                                `\`${member.id}\``,
+
+                            inline:
+                                true,
+                        },
+
+                        {
+                            name:
+                                '📍 Origem',
+
+                            value:
+                                `<#${entry.channelId}>\n` +
+                                `[🔗 Abrir Canal](${evidenceChannelURL})`,
+
+                            inline:
+                                true,
+                        },
+
+                        {
+                            name:
+                                '🆔 Mensagem Original',
+
+                            value:
+                                `\`${entry.messageId}\``,
+
+                            inline:
+                                true,
+                        },
+
+                        {
+                            name:
+                                '💬 Texto Original',
+
+                            value:
+                                entry.content
+                                    ? (
+                                        `\`\`\`\n` +
+                                        `${entry.content.slice(0, 950)}` +
+                                        `\n\`\`\``
+                                    )
+                                    : (
+                                        '`[Mensagem sem texto / somente mídia]`'
+                                    ),
+
+                            inline:
+                                false,
+                        },
+
+                        {
+                            name:
+                                '🖼️ Arquivos Originais',
+
+                            value:
+                                attachmentLinks
+                                    ? attachmentLinks.slice(
+                                        0,
+                                        1000
+                                    )
+                                    : 'Nenhum arquivo encontrado.',
+
+                            inline:
+                                false,
+                        }
+                    )
+                    .setFooter({
+                        text:
+                            'Evidência preservada antes da remoção',
+                    })
+                    .setTimestamp(
+                        entry.createdTimestamp
+                            ? new Date(
+                                entry.createdTimestamp
+                            )
+                            : new Date()
+                    );
+
+            const files =
+                (
+                    entry.attachments ||
+                    []
+                )
+                    .filter(
+                        attachment =>
+                            attachment.buffer
+                    )
+                    .slice(
+                        0,
+                        10
+                    )
+                    .map(
+                        (
+                            attachment,
+                            attachmentIndex
+                        ) => ({
+                            attachment:
+                                attachment.buffer,
+
+                            name:
+                                attachment.name ||
+                                `evidencia-${attachmentIndex + 1}.png`,
+                        })
+                    );
+
+            await logChannel
+                .send({
+                    embeds: [
+                        evidenceEmbed,
+                    ],
+
+                    files,
+                })
+                .catch(
+                    err => {
+                        console.error(
+                            '[ANTI FLOOD PROTECTOR] Erro ao enviar evidência de mídia:',
+                            err
+                        );
+                    }
+                );
+        }
+    }
 }
 
 async function applyPunishment(member, guild, reason, content, channel) {
