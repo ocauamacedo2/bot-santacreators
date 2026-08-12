@@ -9998,10 +9998,23 @@ function isGeminiQuotaError(err) {
     String(err?.message || err)
       .toLowerCase();
 
+  const status =
+    Number(
+      err?.status ||
+      err?.statusCode ||
+      err?.response?.status ||
+      0
+    );
+
   return (
-    text.includes("quota") ||
+    status === 429 ||
     text.includes("429") ||
-    text.includes("rate")
+    text.includes("quota") ||
+    text.includes("rate limit") ||
+    text.includes("resource_exhausted") ||
+    text.includes("resource has been exhausted") ||
+    text.includes("exceeded your current quota") ||
+    text.includes("quota exceeded")
   );
 }
 
@@ -10227,6 +10240,16 @@ for (const modelName of GEMINI_CHAT_MODEL_FALLBACKS) {
     const elapsed =
       Date.now() - startedAt;
 
+    // =====================================================
+    // TIMEOUT DO MODELO
+    // =====================================================
+    //
+    // Um modelo lento não derruba toda a IA.
+    //
+    // Apenas abandonamos esta tentativa e seguimos para
+    // o próximo modelo configurado na cadeia de fallback.
+    // =====================================================
+
     if (
       err?.code ===
       "GEMINI_REQUEST_TIMEOUT"
@@ -10238,18 +10261,59 @@ for (const modelName of GEMINI_CHAT_MODEL_FALLBACKS) {
       continue;
     }
 
-    if (!isGeminiModelError(err)) {
-  console.error(
-    `[IA CHAT AUTO] Erro não recuperável no modelo ${modelName} | ${elapsed}ms:`,
-    err
-  );
+    // =====================================================
+    // LIMITE / QUOTA DO MODELO
+    // =====================================================
+    //
+    // Um erro 429 / RESOURCE_EXHAUSTED pode significar que
+    // ESTE modelo atingiu um limite temporário ou diário.
+    //
+    // Isso não significa automaticamente que todos os
+    // modelos configurados estão indisponíveis.
+    //
+    // Portanto, não encerramos a geração aqui.
+    //
+    // Tentamos o próximo modelo da cadeia.
+    // =====================================================
 
-  throw err;
-}
+    if (isGeminiQuotaError(err)) {
+      console.warn(
+        `[IA CHAT AUTO] Quota/limite atingido em ${modelName} | ${elapsed}ms. Tentando próximo fallback...`
+      );
 
-console.warn(
-  `[IA CHAT AUTO] Modelo indisponível ou incompatível: ${modelName} | ${elapsed}ms. Tentando próximo fallback...`
-);
+      continue;
+    }
+
+    // =====================================================
+    // MODELO INDISPONÍVEL / INCOMPATÍVEL
+    // =====================================================
+    //
+    // Erros de modelo inexistente, removido ou incompatível
+    // também permitem tentar o próximo fallback.
+    // =====================================================
+
+    if (isGeminiModelError(err)) {
+      console.warn(
+        `[IA CHAT AUTO] Modelo indisponível ou incompatível: ${modelName} | ${elapsed}ms. Tentando próximo fallback...`
+      );
+
+      continue;
+    }
+
+    // =====================================================
+    // ERRO REALMENTE NÃO RECUPERÁVEL
+    // =====================================================
+    //
+    // Somente erros que não sejam timeout, quota ou problema
+    // específico de modelo encerram imediatamente a geração.
+    // =====================================================
+
+    console.error(
+      `[IA CHAT AUTO] Erro não recuperável no modelo ${modelName} | ${elapsed}ms:`,
+      err
+    );
+
+    throw err;
   }
 }
 
