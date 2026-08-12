@@ -704,6 +704,60 @@ async function logChange(client, guild, user, oldState, newState, changeType) {
 
 // ================= EXPORTS =================
 
+// ================= CONSULTA EXTERNA — IA / SISTEMAS =================
+export function getCronogramaData() {
+  const state = loadState();
+  const dates = getWeekDates();
+
+  const days = [
+    { key: "seg", label: "Segunda-feira" },
+    { key: "ter", label: "Terça-feira" },
+    { key: "qua", label: "Quarta-feira" },
+    { key: "qui", label: "Quinta-feira" },
+    { key: "sex", label: "Sexta-feira" },
+    { key: "sab", label: "Sábado" },
+    { key: "dom", label: "Domingo" },
+  ];
+
+  const schedule = days.map(({ key, label }) => {
+    const item = state.schedule?.[key] || {};
+
+    return {
+      key,
+      day: label,
+      date: dates[key] || null,
+      active: item.active === true,
+      city: item.city || "—",
+      time: item.time || "—",
+      eventName: item.eventName || "—",
+      prizes: item.prizes || "—",
+    };
+  });
+
+  const madrugada = days.map(({ key, label }) => {
+    const item = state.madrugada?.[key] || {};
+
+    return {
+      key,
+      day: label,
+      date: dates[key] || null,
+      active: item.active === true,
+      city: item.city || "—",
+      time: item.time || "—",
+      eventName: item.eventName || "—",
+      prizes: item.prizes || "—",
+    };
+  });
+
+  return {
+    timezone: TZ,
+    weekStart: dates.seg || null,
+    weekEnd: dates.dom || null,
+    schedule,
+    madrugada,
+  };
+}
+
 let cronogramaAutoRefreshStarted = false;
 
 export async function cronogramaCreatorsOnReady(client) {

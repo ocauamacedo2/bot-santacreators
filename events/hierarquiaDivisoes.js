@@ -284,6 +284,69 @@ function getDivisionLabels(keys) {
     .join(" + ");
 }
 
+// ================= CONSULTA EXTERNA — INTELIGÊNCIA DE PESSOAS =================
+export function getHierarchyPersonData(userId) {
+  const normalizedUserId = String(userId || "").trim();
+
+  if (!normalizedUserId) {
+    return null;
+  }
+
+  const slots = loadSlots();
+  const divisions = loadDivisions();
+
+  const hasStoredSlot = Object.prototype.hasOwnProperty.call(
+    slots,
+    normalizedUserId
+  );
+
+  const hasStoredDivisions = Object.prototype.hasOwnProperty.call(
+    divisions,
+    normalizedUserId
+  );
+
+  const slotKey =
+    slots[normalizedUserId] ||
+    CONFIG.SLOTS.NONE;
+
+  const divisionKeys =
+    getMemberDivisions(
+      divisions,
+      normalizedUserId
+    );
+
+  return {
+    userId: normalizedUserId,
+
+    slot: slotKey,
+
+    slotLabel:
+      CONFIG.LABELS[slotKey] ||
+      CONFIG.LABELS[CONFIG.SLOTS.NONE],
+
+    divisions: divisionKeys,
+
+    divisionLabels:
+      divisionKeys.map(
+        (key) =>
+          getDivisionLabel(key)
+      ),
+
+    divisionsText:
+      getDivisionLabels(
+        divisionKeys
+      ),
+
+    hasStoredSlot,
+
+    hasStoredDivisions,
+
+    hasStoredData:
+      hasStoredSlot ||
+      hasStoredDivisions,
+  };
+}
+
 // Filtra membros que podem ser editados pelo executor
 async function getEditableMembers(guild, permissionLevel) {
   await guild.members.fetch();

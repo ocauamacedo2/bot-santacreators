@@ -1415,6 +1415,202 @@ const foundMsg = messages.find((msg) => {
     return null;
 }
 
+export async function getFormsCreatorPersonData(client, userId) {
+    const targetUserId = String(userId || "").trim();
+
+    if (!targetUserId) {
+        return null;
+    }
+
+    const threadId = await findFormsCreatorThreadIdByUserId(
+        client,
+        targetUserId
+    );
+
+    if (!threadId) {
+        return null;
+    }
+
+    const state = readState();
+    const registration =
+        state.registrations?.[threadId] || null;
+
+    const thread = client
+        ? await client.channels
+            .fetch(threadId)
+            .catch(() => null)
+        : null;
+
+    let registrationMessage = null;
+
+    if (
+        thread?.isTextBased?.() &&
+        registration?.messageId
+    ) {
+        registrationMessage =
+            await thread.messages
+                .fetch(registration.messageId)
+                .catch(() => null);
+    }
+
+    if (
+        !registrationMessage &&
+        thread?.isTextBased?.()
+    ) {
+        const recentMessages =
+            await thread.messages
+                .fetch({ limit: 20 })
+                .catch(() => null);
+
+        if (recentMessages) {
+            registrationMessage =
+                recentMessages.find((msg) => {
+                    const raw = [
+                        msg.content || "",
+                        ...msg.embeds.map((embed) => [
+                            embed.title || "",
+                            embed.description || "",
+                            ...(embed.fields || []).flatMap(
+                                (field) => [
+                                    field.name || "",
+                                    field.value || "",
+                                ]
+                            ),
+                            embed.footer?.text || "",
+                        ].join("\n")),
+                    ].join("\n");
+
+                    return (
+                        raw.includes(
+                            `<@${targetUserId}>`
+                        ) ||
+                        raw.includes(
+                            `<@!${targetUserId}>`
+                        ) ||
+                        raw.includes(
+                            targetUserId
+                        )
+                    );
+                }) || null;
+        }
+    }
+
+    const embed =
+        registrationMessage?.embeds?.[0] ||
+        null;
+
+    const getEmbedFieldValue = (
+        fieldNamePart
+    ) => {
+        if (!embed?.fields?.length) {
+            return null;
+        }
+
+        const normalizedFieldNamePart =
+            String(
+                fieldNamePart || ""
+            ).toLowerCase();
+
+        const field =
+            embed.fields.find(
+                (currentField) =>
+                    String(
+                        currentField?.name || ""
+                    )
+                        .toLowerCase()
+                        .includes(
+                            normalizedFieldNamePart
+                        )
+            );
+
+        return field?.value || null;
+    };
+
+    const nome =
+        registration?.nome ||
+        embed?.title?.replace("👤 ", "") ||
+        thread?.name ||
+        null;
+
+    const idCidade =
+        registration?.idCidade ||
+        getEmbedFieldValue(
+            "ID/Passaporte"
+        ) ||
+        null;
+
+    const area =
+        registration?.area ||
+        getEmbedFieldValue(
+            "Área de Interesse"
+        ) ||
+        null;
+
+    const embedStatus =
+        getEmbedFieldValue(
+            "Status do Projeto"
+        );
+
+    let active = null;
+
+    if (
+        typeof registration?.active ===
+        "boolean"
+    ) {
+        active = registration.active;
+    } else if (embedStatus) {
+        if (
+            embedStatus.includes(
+                "🟢"
+            ) ||
+            /\bativo\b/i.test(
+                embedStatus
+            )
+        ) {
+            active = true;
+        } else if (
+            embedStatus.includes(
+                "🔴"
+            ) ||
+            /\binativo\b/i.test(
+                embedStatus
+            )
+        ) {
+            active = false;
+        }
+    }
+
+    const guildId =
+        thread?.guild?.id ||
+        null;
+
+    return {
+        found: true,
+        userId: targetUserId,
+        threadId,
+        threadName:
+            thread?.name || null,
+        threadUrl:
+            guildId
+                ? `https://discord.com/channels/${guildId}/${threadId}`
+                : null,
+        messageId:
+            registration?.messageId ||
+            registrationMessage?.id ||
+            null,
+        nome,
+        idCidade,
+        area,
+        active,
+        statusText:
+            embedStatus || null,
+        threadCreatedAt:
+            thread?.createdAt
+                ? thread.createdAt.toISOString()
+                : null,
+    };
+}
+
 export async function findFormsCreatorThreadLinkByUserId(client, userId, guildId = null) {
     const threadId = await findFormsCreatorThreadIdByUserId(client, userId);
     if (!threadId) return null;

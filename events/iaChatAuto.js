@@ -214,6 +214,24 @@ const AI_LONG_TERM_MEMORY_MAX_TOPICS = 30;
 const AI_LONG_TERM_MEMORY_MAX_CONTEXT_CHARS = 12000;
 
 // =====================================================
+// IA — MEMÓRIA INSTITUCIONAL DA SANTACREATORS
+// =====================================================
+
+// Apenas esta pessoa pode ensinar informações institucionais
+// permanentes para a IA através da conversa.
+//
+// O conteúdo aprendido aqui fica separado da memória comum
+// dos usuários para não transformar qualquer conversa em
+// uma nova "regra oficial" da SantaCreators.
+const AI_INSTITUTIONAL_TEACHER_USER_ID =
+  "660311795327828008";
+
+const AI_INSTITUTIONAL_MEMORY_MAX_ITEMS = 300;
+
+const AI_INSTITUTIONAL_MEMORY_MAX_CONTEXT_CHARS =
+  16000;
+
+// =====================================================
 // IA ENTREVISTAS — SANTACREATORS
 // =====================================================
 
@@ -264,6 +282,43 @@ const AI_FIVEM_GI_PANEL_CHANNEL_ID = "1501321157259956244";
 const AI_GI_DATA_FILE = path.resolve(process.cwd(), "data", "sc_gi_registros.json");
 
 const AI_CRONOGRAMA_CHANNEL_ID = "1474605177771397223";
+
+// =====================================================
+// INTELIGÊNCIA DE PESSOAS — SANTACREATORS
+// =====================================================
+
+// Chat principal da Equipe Creators.
+// É uma das fontes complementares para localizar conversas,
+// dúvidas, orientações e interações envolvendo uma pessoa.
+const AI_CREATORS_CHAT_CHANNEL_ID = "1381597720007151698";
+
+// Canal oficial de entrada de membros no servidor.
+// Utilizado como segunda fonte para descobrir quando alguém
+// entrou na SantaCreators caso o GuildMember não esteja
+// disponível ou seja necessário confirmar historicamente.
+const AI_MEMBER_JOIN_CHANNEL_ID = "1262262852949905411";
+
+// Canal principal do sistema Evolução Equipe Creators.
+// Mantido separado para facilitar futuras alterações.
+const AI_CREATOR_EVOLUTION_CHANNEL_ID = "1352493047140847627";
+
+// Quantidade máxima de mensagens percorridas por página
+// durante buscas históricas específicas de uma pessoa.
+const AI_PERSON_SCAN_PAGE_SIZE = 100;
+
+// Limite de páginas antigas que a IA poderá percorrer
+// quando estiver procurando uma pessoa específica.
+// 20 páginas x 100 mensagens = até 2.000 mensagens por canal.
+const AI_PERSON_SCAN_MAX_PAGES = 20;
+
+// Evita gerar um contexto gigantesco para o Gemini.
+const AI_PERSON_CONTEXT_MAX_CHARS = 24000;
+
+// Cache curto para evitar pesquisar a mesma pessoa
+// repetidamente quando a conversa continua.
+const AI_PERSON_CACHE_TTL_MS = 5 * 60 * 1000;
+
+const aiPersonIntelligenceCache = new Map();
 
 const AI_INTERNAL_SCAN_LIMIT = 80;
 
@@ -2170,20 +2225,116 @@ function classifyCurrentUserIntent(message) {
   // Regex para saudações puras ou curtas
   const isGreetingOnly = /^(oi|oie|ola|olá|opa|salve|bom dia|boa tarde|boa noite|oii vida|eae|eaí|e ai|tudo bem|tudo bom)$/i.test(String(message.content || "").trim().replace(/[?.!]/g, ""));
 
+  const operationalKeywords = [
+    "ranking",
+    "rank",
+    "pontos",
+    "pontuacao",
+    "pontuação",
+    "meta",
+    "meta semanal",
+    "dashboard",
+    "geraldash",
+    "geral dash",
+    "nps",
+    "nps operacional",
+    "desempenho",
+    "desempenho da equipe",
+    "desempenho semanal",
+    "como estamos",
+    "como estamos indo",
+    "como a equipe esta",
+    "como a equipe está",
+    "como esta a equipe",
+    "como está a equipe",
+    "semana atual",
+    "semana passada",
+    "melhorar os pontos",
+    "melhorar a pontuacao",
+    "melhorar a pontuação",
+    "pontos criticos",
+    "pontos críticos",
+    "ponto critico",
+    "ponto crítico",
+    "pontos de atencao",
+    "pontos de atenção",
+    "o que melhorar",
+    "oq melhorar",
+    "precisamos melhorar",
+    "o que incentivar",
+    "oq incentivar",
+    "precisamos incentivar",
+    "participacao",
+    "participação",
+    "produtividade",
+    "saude operacional",
+    "saúde operacional",
+  ];
+
+  const wantsOperationalAnalysis =
+    operationalKeywords.some(
+      (keyword) =>
+        text.includes(
+          normalizeSearchText(
+            keyword
+          )
+        )
+    );
+
   const intent = {
     isGreetingOnly,
-    wantsAusencias: SC_INTERNAL_SYSTEMS_INDEX.ausencias.keywords.some(k => text.includes(k)),
-    wantsCronograma: messageWantsCronograma(message),
-    wantsAlinhamentos: messageWantsAlinhamentos(message),
-    wantsGI: messageWantsGIStatus(message),
-    wantsRoles: messageWantsRoles(message) || messageWantsDiscordRoles(message),
-    wantsChannels: messageWantsChannels(message),
-    hasSpecificReference: 
-      message.mentions.channels.size > 0 || 
-      message.mentions.roles.size > 0 || 
-      message.mentions.users.size > 0 || 
-      extractDiscordIdsFromText(message.content).length > 0 ||
-      String(message.content || "").includes("discord.com/channels/")
+
+    wantsAusencias:
+      SC_INTERNAL_SYSTEMS_INDEX
+        .ausencias
+        .keywords
+        .some(
+          (k) =>
+            text.includes(k)
+        ),
+
+    wantsCronograma:
+      messageWantsCronograma(
+        message
+      ),
+
+    wantsAlinhamentos:
+      messageWantsAlinhamentos(
+        message
+      ),
+
+    wantsGI:
+      messageWantsGIStatus(
+        message
+      ),
+
+    wantsRoles:
+      messageWantsRoles(
+        message
+      ) ||
+      messageWantsDiscordRoles(
+        message
+      ),
+
+    wantsChannels:
+      messageWantsChannels(
+        message
+      ),
+
+    wantsOperationalAnalysis,
+
+    hasSpecificReference:
+      message.mentions.channels.size > 0 ||
+      message.mentions.roles.size > 0 ||
+      message.mentions.users.size > 0 ||
+      extractDiscordIdsFromText(
+        message.content
+      ).length > 0 ||
+      String(
+        message.content || ""
+      ).includes(
+        "discord.com/channels/"
+      ),
   };
 
   console.log(`[IA CHAT AUTO] Intenção atual:`, intent);
@@ -3228,8 +3379,9 @@ function loadLongTermMemoryDatabase() {
   try {
     if (!fs.existsSync(AI_LONG_TERM_MEMORY_FILE)) {
       return {
-        version: 1,
+        version: 2,
         users: {},
+        institutionalKnowledge: [],
       };
     }
 
@@ -3240,8 +3392,9 @@ function loadLongTermMemoryDatabase() {
 
     if (!raw?.trim()) {
       return {
-        version: 1,
+        version: 2,
         users: {},
+        institutionalKnowledge: [],
       };
     }
 
@@ -3252,18 +3405,28 @@ function loadLongTermMemoryDatabase() {
       typeof parsed !== "object"
     ) {
       return {
-        version: 1,
+        version: 2,
         users: {},
+        institutionalKnowledge: [],
       };
     }
 
-    if (!parsed.users || typeof parsed.users !== "object") {
+    if (
+      !parsed.users ||
+      typeof parsed.users !== "object"
+    ) {
       parsed.users = {};
     }
 
-    if (!parsed.version) {
-      parsed.version = 1;
+    if (
+      !Array.isArray(
+        parsed.institutionalKnowledge
+      )
+    ) {
+      parsed.institutionalKnowledge = [];
     }
+
+    parsed.version = 2;
 
     return parsed;
   } catch (err) {
@@ -3273,8 +3436,9 @@ function loadLongTermMemoryDatabase() {
     );
 
     return {
-      version: 1,
+      version: 2,
       users: {},
+      institutionalKnowledge: [],
     };
   }
 }
@@ -3313,6 +3477,442 @@ function saveLongTermMemoryDatabase(database) {
     );
 
     return false;
+  }
+}
+
+// =====================================================
+// IA — APRENDIZADO INSTITUCIONAL AUTORIZADO
+// =====================================================
+
+function isAuthorizedInstitutionalTeacher(
+  message
+) {
+  return (
+    String(
+      message?.author?.id || ""
+    ) ===
+    AI_INSTITUTIONAL_TEACHER_USER_ID
+  );
+}
+
+function messageLooksLikeInstitutionalTeaching(
+  message
+) {
+  if (
+    !isAuthorizedInstitutionalTeacher(
+      message
+    )
+  ) {
+    return false;
+  }
+
+  const text =
+    normalizeSearchText(
+      message?.content || ""
+    );
+
+  if (!text) {
+    return false;
+  }
+
+  const teachingPatterns = [
+    "aprende que",
+    "aprenda que",
+    "lembra que",
+    "lembre que",
+    "guarda que",
+    "guarde que",
+    "salva que",
+    "salve que",
+    "anota que",
+    "anote que",
+    "memoriza que",
+    "memorize que",
+    "quero que voce lembre",
+    "quero que voce aprenda",
+    "daqui pra frente",
+    "daqui para frente",
+    "a partir de agora",
+    "fica sabendo que",
+    "considere que",
+    "informacao oficial",
+    "isso e oficial",
+  ];
+
+  return teachingPatterns.some(
+    (pattern) =>
+      text.includes(
+        normalizeSearchText(
+          pattern
+        )
+      )
+  );
+}
+
+function extractInstitutionalTeachingContent(
+  message
+) {
+  const raw =
+    cleanText(
+      message?.content || ""
+    ).trim();
+
+  if (!raw) {
+    return "";
+  }
+
+  return raw
+    .replace(
+      /^(ia[,\s:]*)/i,
+      ""
+    )
+    .replace(
+      /^(aprende|aprenda|lembra|lembre|guarda|guarde|salva|salve|anota|anote|memoriza|memorize)\s+(isso\s+)?(que\s+)?/i,
+      ""
+    )
+    .trim();
+}
+
+function saveInstitutionalTeaching(
+  message
+) {
+  try {
+    if (
+      !messageLooksLikeInstitutionalTeaching(
+        message
+      )
+    ) {
+      return false;
+    }
+
+    const content =
+      extractInstitutionalTeachingContent(
+        message
+      );
+
+    if (
+      !content ||
+      content.length < 3
+    ) {
+      return false;
+    }
+
+    const database =
+      loadLongTermMemoryDatabase();
+
+    if (
+      !Array.isArray(
+        database.institutionalKnowledge
+      )
+    ) {
+      database.institutionalKnowledge = [];
+    }
+
+    const normalizedContent =
+      normalizeSearchText(
+        content
+      );
+
+    const existing =
+      database.institutionalKnowledge.find(
+        (item) =>
+          normalizeSearchText(
+            item?.content || ""
+          ) === normalizedContent
+      );
+
+    if (existing) {
+      existing.updatedAt =
+        Date.now();
+
+      existing.sourceChannelId =
+        String(
+          message.channelId || ""
+        );
+
+      existing.sourceMessageId =
+        String(
+          message.id || ""
+        );
+
+      existing.teacherUserId =
+        String(
+          message.author.id
+        );
+    } else {
+      database.institutionalKnowledge.push({
+        id:
+          `institutional_${Date.now()}_${message.id}`,
+
+        content,
+
+        normalizedContent,
+
+        topics:
+          extractLongTermMemoryTopics(
+            content
+          ),
+
+        teacherUserId:
+          String(
+            message.author.id
+          ),
+
+        sourceChannelId:
+          String(
+            message.channelId || ""
+          ),
+
+        sourceMessageId:
+          String(
+            message.id || ""
+          ),
+
+        createdAt:
+          Date.now(),
+
+        updatedAt:
+          Date.now(),
+      });
+    }
+
+    database.institutionalKnowledge =
+      database.institutionalKnowledge
+        .sort(
+          (a, b) =>
+            Number(
+              b.updatedAt ||
+              b.createdAt ||
+              0
+            ) -
+            Number(
+              a.updatedAt ||
+              a.createdAt ||
+              0
+            )
+        )
+        .slice(
+          0,
+          AI_INSTITUTIONAL_MEMORY_MAX_ITEMS
+        );
+
+    database.version = 2;
+
+    const saved =
+      saveLongTermMemoryDatabase(
+        database
+      );
+
+    if (saved) {
+      console.log(
+        `[IA INSTITUTIONAL MEMORY] Ensinamento salvo por ${message.author.id}: ${content}`
+      );
+    }
+
+    return saved;
+  } catch (err) {
+    console.error(
+      "[IA INSTITUTIONAL MEMORY] Erro ao salvar ensinamento:",
+      err
+    );
+
+    return false;
+  }
+}
+
+function scoreInstitutionalKnowledge(
+  item,
+  searchTerms
+) {
+  const haystack =
+    normalizeSearchText(
+      [
+        item?.content,
+        ...(item?.topics || []),
+      ]
+        .filter(Boolean)
+        .join(" ")
+    );
+
+  if (!haystack) {
+    return 0;
+  }
+
+  let score = 0;
+
+  for (const term of searchTerms) {
+    const normalizedTerm =
+      normalizeSearchText(
+        term
+      );
+
+    if (!normalizedTerm) {
+      continue;
+    }
+
+    if (
+      haystack.includes(
+        normalizedTerm
+      )
+    ) {
+      score += 15;
+    }
+
+    if (
+      item?.topics?.some(
+        (topic) =>
+          normalizeSearchText(
+            topic
+          ) === normalizedTerm
+      )
+    ) {
+      score += 20;
+    }
+  }
+
+  return score;
+}
+
+function fetchRelevantInstitutionalMemory(
+  message
+) {
+  try {
+    const database =
+      loadLongTermMemoryDatabase();
+
+    const knowledge =
+      Array.isArray(
+        database.institutionalKnowledge
+      )
+        ? database.institutionalKnowledge
+        : [];
+
+    if (!knowledge.length) {
+      return [
+        "MEMÓRIA INSTITUCIONAL:",
+        "Nenhum ensinamento institucional persistente foi registrado ainda.",
+      ].join("\n");
+    }
+
+    const searchTerms =
+      extractLongTermMemoryTopics(
+        message?.content || ""
+      );
+
+    const scored =
+      knowledge
+        .map(
+          (item) => ({
+            item,
+            score:
+              scoreInstitutionalKnowledge(
+                item,
+                searchTerms
+              ),
+          })
+        )
+        .sort(
+          (a, b) => {
+            if (
+              b.score !==
+              a.score
+            ) {
+              return (
+                b.score -
+                a.score
+              );
+            }
+
+            return (
+              Number(
+                b.item?.updatedAt ||
+                b.item?.createdAt ||
+                0
+              ) -
+              Number(
+                a.item?.updatedAt ||
+                a.item?.createdAt ||
+                0
+              )
+            );
+          }
+        );
+
+    let selected =
+      scored
+        .filter(
+          (entry) =>
+            entry.score > 0
+        )
+        .slice(0, 15);
+
+    if (!selected.length) {
+      selected =
+        scored.slice(0, 5);
+    }
+
+    const lines =
+      selected.map(
+        (
+          {
+            item,
+            score,
+          },
+          index
+        ) => {
+          const date =
+            new Date(
+              item.updatedAt ||
+              item.createdAt
+            ).toLocaleString(
+              "pt-BR",
+              {
+                timeZone:
+                  "America/Sao_Paulo",
+              }
+            );
+
+          return [
+            `CONHECIMENTO #${index + 1}`,
+            `Relevância: ${score}`,
+            `Data: ${date}`,
+            `Conteúdo: ${item.content}`,
+            `Tópicos: ${
+              (item.topics || [])
+                .join(", ") ||
+              "—"
+            }`,
+            `Fonte: <#${item.sourceChannelId}>`,
+          ].join("\n");
+        }
+      );
+
+    return [
+      "========================================",
+      "MEMÓRIA INSTITUCIONAL AUTORIZADA",
+      "========================================",
+      "Estas informações foram ensinadas pelo responsável autorizado e persistem após reiniciar o bot.",
+      "",
+      "REGRAS:",
+      "- Use somente conhecimentos relevantes para a pergunta atual.",
+      "- Conhecimento institucional não deve sobrescrever dados operacionais atuais.",
+      "- Cargo atual, ranking, NPS, cronograma, presença, registros e demais dados mutáveis devem continuar vindo das fontes atuais.",
+      "- Se uma informação ensinada entrar em conflito com uma fonte estruturada atual, priorize a fonte estruturada para o estado atual.",
+      "",
+      ...lines,
+    ]
+      .join("\n\n")
+      .slice(
+        0,
+        AI_INSTITUTIONAL_MEMORY_MAX_CONTEXT_CHARS
+      );
+  } catch (err) {
+    console.error(
+      "[IA INSTITUTIONAL MEMORY] Erro ao recuperar memória:",
+      err
+    );
+
+    return "Não foi possível consultar a memória institucional.";
   }
 }
 
@@ -4136,6 +4736,1403 @@ function scoreServerKnowledgeChannel(channel, searchTerms) {
   return score;
 }
 
+// =====================================================
+// INTELIGÊNCIA DE PESSOAS — DETECÇÃO E RESOLUÇÃO
+// =====================================================
+
+function messageWantsPersonIntelligence(message) {
+  const text = normalizeSearchText(message.content || "");
+
+  if (message.mentions?.users?.size > 0) {
+    return true;
+  }
+
+  const ids = extractDiscordIdsFromText(message.content || "");
+
+  if (ids.length > 0) {
+    return true;
+  }
+
+  const personPatterns = [
+    "quem e ",
+    "quem é ",
+    "sobre ",
+    "como esta ",
+    "como está ",
+    "como ta ",
+    "como tá ",
+    "quando entrou",
+    "quando ele entrou",
+    "quando ela entrou",
+    "entrou no servidor",
+    "entrou na equipe",
+    "faz parte da equipe",
+    "ja foi da equipe",
+    "já foi da equipe",
+    "qual cargo",
+    "qual o cargo",
+    "qual area",
+    "qual área",
+    "area de interesse",
+    "área de interesse",
+    "evolucao",
+    "evolução",
+    "feedback",
+    "feedbacks",
+    "alinhamento",
+    "alinhamentos",
+    "quantos pontos",
+    "pontuacao",
+    "pontuação",
+    "ranking dele",
+    "ranking dela",
+    "desempenho dele",
+    "desempenho dela",
+    "como ele esta indo",
+    "como ela esta indo",
+    "como ele está indo",
+    "como ela está indo",
+  ];
+
+  return personPatterns.some((pattern) =>
+    text.includes(normalizeSearchText(pattern))
+  );
+}
+
+function extractPersonQueryTerms(message) {
+  const raw = String(message.content || "");
+
+  const ignored = new Set([
+    "quem",
+    "como",
+    "esta",
+    "está",
+    "sobre",
+    "qual",
+    "cargo",
+    "area",
+    "área",
+    "quando",
+    "entrou",
+    "servidor",
+    "equipe",
+    "santa",
+    "creators",
+    "santacreators",
+    "pessoa",
+    "membro",
+    "desempenho",
+    "ranking",
+    "pontos",
+    "pontuacao",
+    "pontuação",
+    "dele",
+    "dela",
+    "esse",
+    "essa",
+    "daquele",
+    "daquela",
+    "fala",
+    "fale",
+    "dizer",
+    "diz",
+  ]);
+
+  return normalizeSearchText(raw)
+    .split(/\s+/)
+    .map((part) => part.trim())
+    .filter((part) => {
+      return (
+        part.length >= 2 &&
+        !ignored.has(part) &&
+        !/^\d{17,22}$/.test(part)
+      );
+    })
+    .slice(0, 8);
+}
+
+function scoreMemberForPersonQuery(member, terms) {
+  if (!member || member.user?.bot) {
+    return 0;
+  }
+
+  const username = normalizeSearchText(
+    member.user?.username || ""
+  );
+
+  const globalName = normalizeSearchText(
+    member.user?.globalName || ""
+  );
+
+  const displayName = normalizeSearchText(
+    member.displayName || ""
+  );
+
+  const nickname = normalizeSearchText(
+    member.nickname || ""
+  );
+
+  const complete = [
+    username,
+    globalName,
+    displayName,
+    nickname,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  let score = 0;
+
+  for (const term of terms) {
+    const normalizedTerm = normalizeSearchText(term);
+
+    if (!normalizedTerm) {
+      continue;
+    }
+
+    if (username === normalizedTerm) {
+      score += 100;
+    }
+
+    if (globalName === normalizedTerm) {
+      score += 95;
+    }
+
+    if (displayName === normalizedTerm) {
+      score += 95;
+    }
+
+    if (nickname === normalizedTerm) {
+      score += 90;
+    }
+
+    if (username.includes(normalizedTerm)) {
+      score += 35;
+    }
+
+    if (globalName.includes(normalizedTerm)) {
+      score += 35;
+    }
+
+    if (displayName.includes(normalizedTerm)) {
+      score += 40;
+    }
+
+    if (nickname.includes(normalizedTerm)) {
+      score += 40;
+    }
+
+    if (complete.includes(normalizedTerm)) {
+      score += 20;
+    }
+  }
+
+  return score;
+}
+
+async function resolvePersonFromMessage(message) {
+  const guild = message.guild;
+
+  if (!guild) {
+    return {
+      status: "not_found",
+      member: null,
+      candidates: [],
+    };
+  }
+
+  // =====================================================
+  // PRIORIDADE 1 — MENÇÃO EXPLÍCITA
+  // =====================================================
+
+  const mentioned =
+    message.mentions?.members?.first?.();
+
+  if (mentioned && !mentioned.user?.bot) {
+    return {
+      status: "resolved",
+      source: "mention",
+      member: mentioned,
+      userId: mentioned.id,
+      candidates: [],
+    };
+  }
+
+  // =====================================================
+  // PRIORIDADE 2 — ID EXPLÍCITO
+  // =====================================================
+
+  const ids =
+    extractDiscordIdsFromText(
+      message.content || ""
+    );
+
+  for (const id of ids) {
+    const member =
+      guild.members.cache.get(id) ||
+      await guild.members.fetch(id).catch(() => null);
+
+    if (member && !member.user?.bot) {
+      return {
+        status: "resolved",
+        source: "discord_id",
+        member,
+        userId: member.id,
+        candidates: [],
+      };
+    }
+
+    // Mesmo se a pessoa já saiu do servidor,
+    // preservamos o ID para procurar registros históricos.
+    if (/^\d{17,22}$/.test(id)) {
+      return {
+        status: "historical_id",
+        source: "discord_id",
+        member: null,
+        userId: id,
+        candidates: [],
+      };
+    }
+  }
+
+  // =====================================================
+  // PRIORIDADE 3 — NOME / USERNAME / NICKNAME
+  // =====================================================
+
+  const terms = extractPersonQueryTerms(message);
+
+  if (!terms.length) {
+    return {
+      status: "not_found",
+      member: null,
+      candidates: [],
+    };
+  }
+
+  // Tenta garantir uma lista de membros mais completa.
+  await guild.members.fetch().catch(() => null);
+
+  const ranked =
+    [...guild.members.cache.values()]
+      .filter((member) => !member.user?.bot)
+      .map((member) => ({
+        member,
+        score: scoreMemberForPersonQuery(
+          member,
+          terms
+        ),
+      }))
+      .filter((item) => item.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 8);
+
+  if (!ranked.length) {
+    return {
+      status: "not_found",
+      member: null,
+      candidates: [],
+      searchTerms: terms,
+    };
+  }
+
+  const best = ranked[0];
+  const second = ranked[1];
+
+  // Se os dois primeiros forem muito próximos,
+  // não inventamos qual pessoa o usuário quis dizer.
+  if (
+    second &&
+    best.score < 100 &&
+    Math.abs(best.score - second.score) <= 10
+  ) {
+    return {
+      status: "ambiguous",
+      member: null,
+      candidates: ranked.slice(0, 5),
+      searchTerms: terms,
+    };
+  }
+
+  return {
+    status: "resolved",
+    source: "name",
+    member: best.member,
+    userId: best.member.id,
+    score: best.score,
+    candidates: ranked.slice(0, 5),
+    searchTerms: terms,
+  };
+}
+
+// =====================================================
+// INTELIGÊNCIA DE PESSOAS — COLETA HISTÓRICA
+// =====================================================
+
+function formatPersonMemberProfile(member) {
+  if (!member) {
+    return "";
+  }
+
+  const roles = [...member.roles.cache.values()]
+    .filter((role) => role.id !== member.guild.id)
+    .sort((a, b) => b.position - a.position)
+    .map((role) => `<@&${role.id}> (${role.name})`);
+
+  return [
+    "PERFIL ATUAL NO DISCORD:",
+    `- Usuário: <@${member.id}>`,
+    `- ID: ${member.id}`,
+    `- Username: ${member.user?.username || "Não identificado"}`,
+    `- Nome global: ${member.user?.globalName || "Não informado"}`,
+    `- Nome no servidor: ${member.displayName || "Não informado"}`,
+    `- Apelido: ${member.nickname || "Sem apelido"}`,
+    `- Entrou no Discord em: ${
+      member.user?.createdAt
+        ? member.user.createdAt.toLocaleString("pt-BR", {
+            timeZone: "America/Sao_Paulo",
+          })
+        : "Data não disponível"
+    }`,
+    `- Entrou neste servidor em: ${
+      member.joinedAt
+        ? member.joinedAt.toLocaleString("pt-BR", {
+            timeZone: "America/Sao_Paulo",
+          })
+        : "Data não disponível"
+    }`,
+    `- Cargos atuais: ${
+      roles.length
+        ? roles.join(", ")
+        : "Nenhum cargo adicional identificado"
+    }`,
+  ].join("\n");
+}
+
+function buildPersonSearchTokens(personResolution) {
+  const tokens = new Set();
+
+  const addToken = (value) => {
+    const normalized = normalizeSearchText(
+      String(value || "")
+    ).trim();
+
+    if (
+      normalized &&
+      normalized.length >= 2
+    ) {
+      tokens.add(normalized);
+    }
+  };
+
+  if (personResolution?.userId) {
+    addToken(personResolution.userId);
+    addToken(`<@${personResolution.userId}>`);
+    addToken(`<@!${personResolution.userId}>`);
+  }
+
+  const member = personResolution?.member;
+
+  if (member) {
+    addToken(member.user?.username);
+    addToken(member.user?.globalName);
+    addToken(member.displayName);
+    addToken(member.nickname);
+  }
+
+  for (
+    const term of
+      personResolution?.searchTerms || []
+  ) {
+    addToken(term);
+  }
+
+  return [...tokens];
+}
+
+function personMessageMatchesTokens(
+  completeText,
+  tokens,
+  userId = null
+) {
+  const raw =
+    String(completeText || "");
+
+  const normalized =
+    normalizeSearchText(raw);
+
+  if (!normalized) {
+    return false;
+  }
+
+  if (
+    userId &&
+    (
+      raw.includes(`<@${userId}>`) ||
+      raw.includes(`<@!${userId}>`) ||
+      new RegExp(`\\b${userId}\\b`).test(raw)
+    )
+  ) {
+    return true;
+  }
+
+  return tokens.some((token) => {
+    const normalizedToken =
+      normalizeSearchText(token);
+
+    if (
+      !normalizedToken ||
+      normalizedToken.length < 2
+    ) {
+      return false;
+    }
+
+    return normalized.includes(
+      normalizedToken
+    );
+  });
+}
+
+async function scanPersonHistoryInChannel(
+  guild,
+  channelId,
+  personResolution,
+  {
+    label = "Canal",
+    maxPages = AI_PERSON_SCAN_MAX_PAGES,
+    maxResults = 20,
+  } = {}
+) {
+  const channel =
+    guild.channels.cache.get(channelId) ||
+    await guild.channels
+      .fetch(channelId)
+      .catch(() => null);
+
+  if (
+    !channel ||
+    !channel.isTextBased?.()
+  ) {
+    return {
+      label,
+      channelId,
+      accessible: false,
+      matches: [],
+    };
+  }
+
+  const me = guild.members.me;
+
+  if (!me) {
+    return {
+      label,
+      channelId,
+      accessible: false,
+      matches: [],
+    };
+  }
+
+  const permissions =
+    channel.permissionsFor(me);
+
+  if (
+    !permissions?.has(
+      PermissionsBitField.Flags.ViewChannel
+    ) ||
+    !permissions?.has(
+      PermissionsBitField.Flags.ReadMessageHistory
+    )
+  ) {
+    return {
+      label,
+      channelId,
+      accessible: false,
+      matches: [],
+    };
+  }
+
+  const tokens =
+    buildPersonSearchTokens(
+      personResolution
+    );
+
+  const matches = [];
+
+  let before = null;
+  let page = 0;
+
+  while (
+    page < maxPages &&
+    matches.length < maxResults
+  ) {
+    const fetchOptions = {
+      limit: AI_PERSON_SCAN_PAGE_SIZE,
+    };
+
+    if (before) {
+      fetchOptions.before = before;
+    }
+
+    const messages =
+      await channel.messages
+        .fetch(fetchOptions)
+        .catch(() => null);
+
+    if (!messages?.size) {
+      break;
+    }
+
+    const orderedMessages =
+      [...messages.values()]
+        .sort(
+          (a, b) =>
+            b.createdTimestamp -
+            a.createdTimestamp
+        );
+
+    for (const msg of orderedMessages) {
+      const parts = [];
+
+      if (msg.content) {
+        parts.push(
+          cleanText(msg.content)
+        );
+      }
+
+      for (
+        const embed of
+          msg.embeds || []
+      ) {
+        const embedText =
+          formatEmbedForAI(
+            embed.data || embed
+          );
+
+        if (embedText) {
+          parts.push(embedText);
+        }
+      }
+
+      const completeText =
+        parts.join("\n").trim();
+
+      if (!completeText) {
+        continue;
+      }
+
+      const directAuthorMatch =
+        personResolution?.userId &&
+        msg.author?.id ===
+          personResolution.userId;
+
+      const contentMatch =
+        personMessageMatchesTokens(
+          completeText,
+          tokens,
+          personResolution?.userId
+        );
+
+      if (
+        !directAuthorMatch &&
+        !contentMatch
+      ) {
+        continue;
+      }
+
+      matches.push({
+        messageId: msg.id,
+        channelId: channel.id,
+        channelName:
+          channel.name || label,
+        authorId:
+          msg.author?.id || null,
+        authorName:
+          msg.author?.username ||
+          "Desconhecido",
+        createdTimestamp:
+          msg.createdTimestamp,
+        text:
+          completeText.slice(
+            0,
+            2500
+          ),
+        link:
+          `https://discord.com/channels/${guild.id}/${channel.id}/${msg.id}`,
+      });
+
+      if (
+        matches.length >=
+        maxResults
+      ) {
+        break;
+      }
+    }
+
+    const oldestMessage =
+      [...messages.values()]
+        .sort(
+          (a, b) =>
+            a.createdTimestamp -
+            b.createdTimestamp
+        )[0];
+
+    if (!oldestMessage) {
+      break;
+    }
+
+    before = oldestMessage.id;
+    page += 1;
+
+    if (
+      messages.size <
+      AI_PERSON_SCAN_PAGE_SIZE
+    ) {
+      break;
+    }
+  }
+
+  return {
+    label,
+    channelId,
+    accessible: true,
+    matches,
+  };
+}
+
+// =====================================================
+// INTELIGÊNCIA DE PESSOAS — BUSCA GLOBAL NO SERVIDOR
+// =====================================================
+
+async function scanPersonHistoryAcrossServer(
+  guild,
+  personResolution,
+  {
+    maxChannels = 40,
+    messagesPerChannel = 100,
+    maxResults = 40,
+  } = {}
+) {
+  if (!guild) {
+    return {
+      label: "HISTÓRICO COMPLEMENTAR NO SERVIDOR",
+      accessible: false,
+      matches: [],
+      scannedChannels: 0,
+    };
+  }
+
+  const me = guild.members.me;
+
+  if (!me) {
+    return {
+      label: "HISTÓRICO COMPLEMENTAR NO SERVIDOR",
+      accessible: false,
+      matches: [],
+      scannedChannels: 0,
+    };
+  }
+
+  const tokens =
+    buildPersonSearchTokens(
+      personResolution
+    );
+
+  const userId =
+    personResolution?.userId || null;
+
+  const priorityChannelIds =
+    new Set([
+      AI_CREATORS_CHAT_CHANNEL_ID,
+      AI_MEMBER_JOIN_CHANNEL_ID,
+      AI_CREATOR_EVOLUTION_CHANNEL_ID,
+    ]);
+
+  const channels =
+    [...guild.channels.cache.values()]
+      .filter((channel) => {
+        if (
+          !channel ||
+          !channel.isTextBased?.() ||
+          channel.isThread?.()
+        ) {
+          return false;
+        }
+
+        const permissions =
+          channel.permissionsFor(me);
+
+        if (
+          !permissions?.has(
+            PermissionsBitField.Flags.ViewChannel
+          ) ||
+          !permissions?.has(
+            PermissionsBitField.Flags.ReadMessageHistory
+          )
+        ) {
+          return false;
+        }
+
+        return true;
+      })
+      .sort((a, b) => {
+        const aPriority =
+          priorityChannelIds.has(a.id)
+            ? 1
+            : 0;
+
+        const bPriority =
+          priorityChannelIds.has(b.id)
+            ? 1
+            : 0;
+
+        if (bPriority !== aPriority) {
+          return bPriority - aPriority;
+        }
+
+        return (
+          Number(b.rawPosition || 0) -
+          Number(a.rawPosition || 0)
+        );
+      })
+      .slice(0, maxChannels);
+
+  const matches = [];
+
+  let scannedChannels = 0;
+
+  for (const channel of channels) {
+    if (
+      matches.length >= maxResults
+    ) {
+      break;
+    }
+
+    const messages =
+      await channel.messages
+        .fetch({
+          limit: Math.min(
+            messagesPerChannel,
+            100
+          ),
+        })
+        .catch(() => null);
+
+    if (!messages?.size) {
+      continue;
+    }
+
+    scannedChannels += 1;
+
+    for (
+      const msg of messages.values()
+    ) {
+      const parts = [];
+
+      if (msg.content) {
+        parts.push(
+          cleanText(msg.content)
+        );
+      }
+
+      for (
+        const embed of
+          msg.embeds || []
+      ) {
+        const embedText =
+          formatEmbedForAI(
+            embed.data || embed
+          );
+
+        if (embedText) {
+          parts.push(embedText);
+        }
+      }
+
+      const completeText =
+        parts.join("\n").trim();
+
+      if (!completeText) {
+        continue;
+      }
+
+      const directAuthorMatch =
+        Boolean(
+          userId &&
+          msg.author?.id === userId
+        );
+
+      const referenceMatch =
+        personMessageMatchesTokens(
+          completeText,
+          tokens,
+          userId
+        );
+
+      if (
+        !directAuthorMatch &&
+        !referenceMatch
+      ) {
+        continue;
+      }
+
+      let relationType =
+        "REFERÊNCIA À PESSOA";
+
+      if (directAuthorMatch) {
+        relationType =
+          "MENSAGEM DA PRÓPRIA PESSOA";
+      } else if (
+        userId &&
+        (
+          String(msg.content || "")
+            .includes(`<@${userId}>`) ||
+          String(msg.content || "")
+            .includes(`<@!${userId}>`)
+        )
+      ) {
+        relationType =
+          "MENÇÃO DIRETA À PESSOA";
+      }
+
+      matches.push({
+        messageId: msg.id,
+        channelId: channel.id,
+        channelName:
+          channel.name ||
+          "canal-sem-nome",
+        authorId:
+          msg.author?.id || null,
+        authorName:
+          msg.author?.username ||
+          "Desconhecido",
+        createdTimestamp:
+          msg.createdTimestamp,
+        relationType,
+        text:
+          completeText.slice(
+            0,
+            1800
+          ),
+        link:
+          `https://discord.com/channels/${guild.id}/${channel.id}/${msg.id}`,
+      });
+
+      if (
+        matches.length >=
+        maxResults
+      ) {
+        break;
+      }
+    }
+  }
+
+  matches.sort(
+    (a, b) =>
+      b.createdTimestamp -
+      a.createdTimestamp
+  );
+
+  return {
+    label:
+      "HISTÓRICO COMPLEMENTAR NO SERVIDOR",
+    accessible: true,
+    matches,
+    scannedChannels,
+  };
+}
+
+function formatPersonGlobalHistoryBlock(
+  result
+) {
+  if (!result?.accessible) {
+    return [
+      "HISTÓRICO COMPLEMENTAR NO SERVIDOR:",
+      "- Não foi possível executar a pesquisa global.",
+    ].join("\n");
+  }
+
+  if (!result.matches?.length) {
+    return [
+      "HISTÓRICO COMPLEMENTAR NO SERVIDOR:",
+      `- Canais pesquisados: ${result.scannedChannels || 0}`,
+      "- Nenhuma referência complementar foi encontrada na amostra pesquisada.",
+      "- Isso NÃO significa que nunca existiu uma referência à pessoa.",
+    ].join("\n");
+  }
+
+  return [
+    "HISTÓRICO COMPLEMENTAR NO SERVIDOR:",
+    `- Canais pesquisados: ${result.scannedChannels || 0}`,
+    `- Registros relacionados encontrados: ${result.matches.length}`,
+    "",
+    ...result.matches.map(
+      (item, index) => {
+        const date =
+          new Date(
+            item.createdTimestamp
+          ).toLocaleString(
+            "pt-BR",
+            {
+              timeZone:
+                "America/Sao_Paulo",
+            }
+          );
+
+        return [
+          `REFERÊNCIA ${index + 1}`,
+          `Tipo: ${item.relationType}`,
+          `Data: ${date}`,
+          `Canal: <#${item.channelId}>`,
+          `Autor: ${
+            item.authorId
+              ? `<@${item.authorId}>`
+              : item.authorName
+          }`,
+          `Conteúdo: ${item.text}`,
+          `Link: ${item.link}`,
+        ].join("\n");
+      }
+    ),
+  ].join("\n\n");
+}
+
+function formatPersonHistoryBlock(result) {
+  if (!result?.accessible) {
+    return [
+      `${result?.label || "Canal"}:`,
+      "- Canal não acessível pela IA.",
+    ].join("\n");
+  }
+
+  if (!result.matches?.length) {
+    return [
+      `${result.label}:`,
+      "- Nenhum registro relacionado à pessoa foi encontrado na varredura realizada.",
+    ].join("\n");
+  }
+
+  return [
+    `${result.label}:`,
+    `- Registros encontrados: ${result.matches.length}`,
+    "",
+    ...result.matches.map(
+      (item, index) => {
+        const date =
+          new Date(
+            item.createdTimestamp
+          ).toLocaleString(
+            "pt-BR",
+            {
+              timeZone:
+                "America/Sao_Paulo",
+            }
+          );
+
+        return [
+          `REGISTRO ${index + 1}`,
+          `Data: ${date}`,
+          `Autor: ${
+            item.authorId
+              ? `<@${item.authorId}>`
+              : item.authorName
+          }`,
+          `Canal: <#${item.channelId}>`,
+          `Conteúdo: ${item.text}`,
+          `Link: ${item.link}`,
+        ].join("\n");
+      }
+    ),
+  ].join("\n\n");
+}
+
+function formatPersonCandidates(
+  candidates
+) {
+  if (!candidates?.length) {
+    return "";
+  }
+
+  return candidates
+    .map(
+      ({ member, score }) =>
+        `- <@${member.id}> | ${member.displayName} | @${member.user?.username || "sem_username"} | compatibilidade ${score}`
+    )
+    .join("\n");
+}
+
+async function buildPersonIntelligenceContext(
+  message
+) {
+  if (
+    !messageWantsPersonIntelligence(
+      message
+    )
+  ) {
+    return "";
+  }
+
+  const guild = message.guild;
+
+  if (!guild) {
+    return [
+      "INTELIGÊNCIA DE PESSOAS:",
+      "Não foi possível acessar o servidor atual.",
+    ].join("\n");
+  }
+
+  const personResolution =
+    await resolvePersonFromMessage(
+      message
+    );
+
+  if (
+    personResolution.status ===
+    "ambiguous"
+  ) {
+    return [
+      "INTELIGÊNCIA DE PESSOAS:",
+      "A pergunta parece se referir a uma pessoa, mas encontrei mais de um membro compatível.",
+      "",
+      "POSSÍVEIS PESSOAS:",
+      formatPersonCandidates(
+        personResolution.candidates
+      ),
+      "",
+      "Não escolha uma delas por conta própria. Peça ao usuário para mencionar a pessoa ou informar o ID.",
+    ].join("\n");
+  }
+
+  if (
+    personResolution.status ===
+    "not_found"
+  ) {
+    return [
+      "INTELIGÊNCIA DE PESSOAS:",
+      "A pergunta parece ser sobre uma pessoa, mas não consegui identificar com segurança quem é.",
+      "",
+      "Peça uma menção, ID do Discord ou nome mais específico antes de afirmar informações pessoais ou operacionais.",
+    ].join("\n");
+  }
+
+  const personId =
+    personResolution.userId;
+
+  const cacheKey =
+    `${guild.id}:${personId}`;
+
+  const cached =
+    aiPersonIntelligenceCache.get(
+      cacheKey
+    );
+
+  if (
+    cached &&
+    Date.now() - cached.createdAt <
+      AI_PERSON_CACHE_TTL_MS
+  ) {
+    return cached.context;
+  }
+
+  const profileBlock =
+    personResolution.member
+      ? formatPersonMemberProfile(
+          personResolution.member
+        )
+      : [
+          "PERFIL ATUAL NO DISCORD:",
+          `- ID conhecido: ${personId}`,
+          "- A pessoa não está disponível atualmente na lista de membros do servidor.",
+          "- Informações históricas ainda podem existir nos canais e sistemas internos.",
+        ].join("\n");
+
+  const [
+    joinHistory,
+    evolutionHistory,
+    creatorsChatHistory,
+    globalServerHistory,
+  ] = await Promise.all([
+    scanPersonHistoryInChannel(
+      guild,
+      AI_MEMBER_JOIN_CHANNEL_ID,
+      personResolution,
+      {
+        label:
+          "HISTÓRICO DE ENTRADA NO SERVIDOR",
+        maxResults: 10,
+      }
+    ),
+
+    scanPersonHistoryInChannel(
+      guild,
+      AI_CREATOR_EVOLUTION_CHANNEL_ID,
+      personResolution,
+      {
+        label:
+          "EVOLUÇÃO EQUIPE CREATORS",
+        maxResults: 20,
+      }
+    ),
+
+    scanPersonHistoryInChannel(
+      guild,
+      AI_CREATORS_CHAT_CHANNEL_ID,
+      personResolution,
+      {
+        label:
+          "CONVERSAS RECENTES NO CHAT CREATORS",
+        maxPages: 8,
+        maxResults: 15,
+      }
+    ),
+
+    scanPersonHistoryAcrossServer(
+      guild,
+      personResolution,
+      {
+        maxChannels: 40,
+        messagesPerChannel: 100,
+        maxResults: 40,
+      }
+    ),
+  ]);
+
+  let formsCreatorContext = "";
+
+  try {
+    const {
+      getFormsCreatorPersonData,
+    } = await import(
+      "./formscreator.js"
+    );
+
+    const formsCreatorData =
+      await getFormsCreatorPersonData(
+        message.client,
+        personId
+      );
+
+    if (formsCreatorData) {
+      formsCreatorContext = [
+        "FORMSCREATOR:",
+        `- Discord ID: ${formsCreatorData.userId}`,
+        `- Nome registrado: ${formsCreatorData.nome || "Não informado"}`,
+        `- ID/Passaporte: ${formsCreatorData.idCidade || "Não informado"}`,
+        `- Área de interesse: ${formsCreatorData.area || "Não informada"}`,
+        `- Status no projeto: ${
+          formsCreatorData.active === true
+            ? "Ativo"
+            : formsCreatorData.active === false
+              ? "Inativo"
+              : formsCreatorData.statusText ||
+                "Não determinado"
+        }`,
+        `- Tópico: ${formsCreatorData.threadName || "Não informado"}`,
+        `- Data de criação do tópico: ${
+          formsCreatorData.threadCreatedAt ||
+          "Não disponível"
+        }`,
+        `- Link do tópico: ${
+          formsCreatorData.threadUrl ||
+          "Não disponível"
+        }`,
+      ].join("\n");
+    } else {
+      formsCreatorContext = [
+        "FORMSCREATOR:",
+        "- Nenhum registro do FormsCreator foi localizado para este Discord ID.",
+      ].join("\n");
+    }
+  } catch (err) {
+    console.error(
+      "[IA PERSON] Erro ao consultar FormsCreator:",
+      err
+    );
+
+    formsCreatorContext = [
+      "FORMSCREATOR:",
+      "- Não foi possível consultar o FormsCreator neste momento.",
+    ].join("\n");
+  }
+
+  let hierarchyContext = "";
+
+  try {
+    const {
+      getHierarchyPersonData,
+    } = await import(
+      "./hierarquiaDivisoes.js"
+    );
+
+    const hierarchyData =
+      getHierarchyPersonData(
+        personId
+      );
+
+    if (
+      hierarchyData &&
+      hierarchyData.hasStoredData
+    ) {
+      hierarchyContext = [
+        "HIERARQUIA / DIVISÕES:",
+        `- Discord ID: ${hierarchyData.userId}`,
+        `- Horário registrado: ${
+          hierarchyData.hasStoredSlot
+            ? hierarchyData.slotLabel
+            : "Nenhum horário registrado explicitamente"
+        }`,
+        `- Divisão/Cidade registrada: ${
+          hierarchyData.hasStoredDivisions
+            ? hierarchyData.divisionsText
+            : "Nenhuma divisão/cidade registrada explicitamente"
+        }`,
+      ].join("\n");
+    } else {
+      hierarchyContext = [
+        "HIERARQUIA / DIVISÕES:",
+        "- Nenhum horário ou divisão/cidade foi localizado no sistema de Hierarquia para este Discord ID.",
+      ].join("\n");
+    }
+  } catch (err) {
+    console.error(
+      "[IA PERSON] Erro ao consultar Hierarquia:",
+      err
+    );
+
+    hierarchyContext = [
+      "HIERARQUIA / DIVISÕES:",
+      "- Não foi possível consultar o sistema de Hierarquia neste momento.",
+    ].join("\n");
+  }
+
+  let rankingContext = "";
+
+  try {
+    rankingContext =
+      await fetchRankingContext(
+        message,
+        "recent"
+      );
+  } catch (err) {
+    console.error(
+      "[IA PERSON] Erro ao consultar ranking:",
+      err
+    );
+
+    rankingContext =
+      "Não foi possível consultar o ranking neste momento.";
+  }
+
+  let alinhamentosContext = "";
+
+  try {
+    alinhamentosContext =
+      await fetchAlinhamentosContext(
+        message
+      );
+  } catch (err) {
+    console.error(
+      "[IA PERSON] Erro ao consultar alinhamentos:",
+      err
+    );
+
+    alinhamentosContext =
+      "Não foi possível consultar alinhamentos neste momento.";
+  }
+
+  const context = [
+    "========================================",
+    "INTELIGÊNCIA DE PESSOAS — DADOS REAIS",
+    "========================================",
+    "",
+    "PESSOA IDENTIFICADA:",
+    `- ID: ${personId}`,
+    `- Origem da identificação: ${
+      personResolution.source ||
+      personResolution.status
+    }`,
+    "",
+    profileBlock,
+    "",
+    "========================================",
+    formatPersonHistoryBlock(
+      joinHistory
+    ),
+    "",
+    "========================================",
+    formatPersonHistoryBlock(
+      evolutionHistory
+    ),
+    "",
+    "========================================",
+    formatPersonHistoryBlock(
+      creatorsChatHistory
+    ),
+    "",
+    "========================================",
+       formatPersonGlobalHistoryBlock(
+      globalServerHistory
+    ),
+    "",
+    "========================================",
+    formsCreatorContext ||
+      [
+        "FORMSCREATOR:",
+        "- Nenhuma informação do FormsCreator disponível.",
+      ].join("\n"),
+    "",
+    "========================================",
+    hierarchyContext ||
+      [
+        "HIERARQUIA / DIVISÕES:",
+        "- Nenhuma informação do sistema de Hierarquia disponível.",
+      ].join("\n"),
+    "",
+    "========================================",
+    "RANKING / PONTUAÇÃO:",
+    rankingContext ||
+      "Nenhuma informação de ranking disponível.",
+    "",
+    "========================================",
+    "ALINHAMENTOS:",
+    alinhamentosContext ||
+      "Nenhuma informação de alinhamento disponível.",
+    "",
+    "REGRAS DE INTERPRETAÇÃO:",
+    "- Diferencie cargo atual de cargo histórico.",
+    "- Não diga que um cargo antigo continua ativo sem confirmação no perfil atual.",
+    "- Data de entrada do GuildMember representa a entrada atual conhecida pelo Discord.",
+    "- Registros do canal de entrada podem complementar o histórico.",
+    "- Não transforme ausência de registro em afirmação negativa absoluta.",
+    "- Não invente evolução, feedback, alinhamento, cargo, pontuação ou comportamento.",
+    "- Se houver dados contraditórios, priorize dados estruturados e estado atual do Discord.",
+    "- Dados do FormsCreator complementam o perfil e o histórico da pessoa.",
+    "- Área de interesse registrada no FormsCreator não deve ser tratada automaticamente como cargo atual no Discord.",
+    "- Status do FormsCreator representa o estado registrado naquele sistema e não substitui os cargos atuais do Discord.",
+    "- A data de criação do tópico do FormsCreator representa a criação daquele registro e não deve ser apresentada automaticamente como data de entrada no servidor ou na equipe.",
+    "- A ausência de registro no FormsCreator não significa que a pessoa nunca participou da SantaCreators.",
+    "- Dados de horário e divisão/cidade devem vir do sistema de Hierarquia quando estiverem disponíveis.",
+    "- Uma divisão/cidade registrada na Hierarquia representa a atribuição registrada naquele sistema e não deve ser confundida automaticamente com cargo do Discord.",
+    "- Horário registrado na Hierarquia representa o horário operacional cadastrado naquele sistema e não prova sozinho presença, atividade ou desempenho da pessoa.",
+    "- Ausência de horário ou divisão/cidade na Hierarquia não significa ausência da pessoa na SantaCreators.",
+    "- Se não existir registro explícito de horário ou divisão/cidade, não transforme os valores técnicos de fallback em informação factual.",
+    "- Conversas do chat servem como contexto e histórico, não como prova automática de desempenho.",
+  ]
+    .join("\n")
+    .slice(
+      0,
+      AI_PERSON_CONTEXT_MAX_CHARS
+    );
+
+  aiPersonIntelligenceCache.set(
+    cacheKey,
+    {
+      createdAt: Date.now(),
+      context,
+    }
+  );
+
+  return context;
+}
+
 async function fetchSmartServerKnowledge(message) {
   try {
     const guild = message.guild;
@@ -4387,6 +6384,69 @@ async function fetchCronogramaContext(message) {
     const guild = message.guild;
     if (!guild) return "Servidor não encontrado.";
 
+    let structuredCronogramaContext = "";
+
+    try {
+      const {
+        getCronogramaData,
+      } = await import(
+        "./cronogramaCreators.js"
+      );
+
+      const cronogramaData =
+        getCronogramaData();
+
+      if (cronogramaData) {
+        const formatItems = (items, title) => {
+          const lines = [
+            title,
+          ];
+
+          for (const item of items || []) {
+            lines.push(
+              [
+                `- ${item.day}`,
+                `Data: ${item.date || "Não disponível"}`,
+                `Ativo: ${item.active ? "Sim" : "Não"}`,
+                `Evento: ${item.eventName || "—"}`,
+                `Cidade: ${item.city || "—"}`,
+                `Horário: ${item.time || "—"}`,
+                `Premiação: ${item.prizes || "—"}`,
+              ].join(" | ")
+            );
+          }
+
+          return lines.join("\n");
+        };
+
+        structuredCronogramaContext = [
+          "DADOS ESTRUTURADOS DO CRONOGRAMA:",
+          `Fuso horário: ${cronogramaData.timezone || "America/Sao_Paulo"}`,
+          `Semana: ${cronogramaData.weekStart || "—"} até ${cronogramaData.weekEnd || "—"}`,
+          "",
+          formatItems(
+            cronogramaData.schedule,
+            "HORÁRIOS PRINCIPAIS:"
+          ),
+          "",
+          formatItems(
+            cronogramaData.madrugada,
+            "HORÁRIOS VIRADA / MADRUGADA:"
+          ),
+        ].join("\n");
+      }
+    } catch (err) {
+      console.error(
+        "[IA CHAT AUTO] Erro ao consultar dados estruturados do cronograma:",
+        err
+      );
+
+      structuredCronogramaContext = [
+        "DADOS ESTRUTURADOS DO CRONOGRAMA:",
+        "- Não foi possível consultar diretamente o estado do cronograma neste momento.",
+      ].join("\n");
+    }
+
     const mentionedChannels = await resolveMentionedChannels(message);
 
     const officialCronogramaChannel =
@@ -4466,9 +6526,18 @@ async function fetchCronogramaContext(message) {
       "========================================",
       "CRONOGRAMA OFICIAL ATUAL",
       "========================================",
-      "Use este conteúdo como fonte prioritária para perguntas sobre eventos, datas, horários e cidades.",
-      "Compare a data solicitada pelo usuário com as datas escritas no cronograma antes de responder.",
+      "Use os DADOS ESTRUTURADOS DO CRONOGRAMA como fonte principal para evento, data, horário, cidade, status e premiação.",
+      "Use o conteúdo do canal oficial como confirmação e contexto complementar.",
+      "Se houver divergência entre o estado estruturado atual e mensagens antigas do canal, priorize o estado estruturado atual.",
+      "Compare a data solicitada pelo usuário com as datas reais da semana antes de responder.",
+      "Não trate programação inativa como evento ativo.",
       "",
+      structuredCronogramaContext ||
+        "Nenhum dado estruturado do cronograma ficou disponível.",
+      "",
+      "========================================",
+      "CONTEÚDO COMPLEMENTAR DO CANAL OFICIAL:",
+      "========================================",
       blocks.join("\n\n====================\n\n"),
     ].join("\n");
   } catch (err) {
@@ -4908,29 +6977,360 @@ async function fetchPoderesEventosContext(message, scope) {
 }
 
 async function fetchRankingContext(message) {
-  console.log("[IA INTERNAL QUERY] Consultando Ranking Semanal...");
+  console.log(
+    "[IA INTERNAL QUERY] Consultando Ranking Semanal..."
+  );
 
   try {
-    const { getWeeklyRankingDebug } = await import("./scGeralWeeklyRanking.js");
+    const {
+      getWeeklyRanking,
+      getWeeklyRankingDebug,
+      buildWeeklyRankingOperationalMetric,
+    } = await import(
+      "./scGeralWeeklyRanking.js"
+    );
 
-    const rankData = await getWeeklyRankingDebug(message.client);
+    const [
+      fullRanking,
+      rankData,
+      operationalMetric,
+    ] = await Promise.all([
+      getWeeklyRanking(
+        message.client
+      ),
 
-    if (!rankData || !Array.isArray(rankData.top15) || !rankData.top15.length) {
-      return "O ranking semanal ainda não possui dados processados ou o export getWeeklyRankingDebug não retornou top15.";
+      getWeeklyRankingDebug(
+        message.client
+      ),
+
+      buildWeeklyRankingOperationalMetric(
+        message.client
+      ).catch(() => null),
+    ]);
+
+    const ranking =
+      Array.isArray(fullRanking)
+        ? fullRanking
+        : [];
+
+    const top15 =
+      Array.isArray(rankData?.top15)
+        ? rankData.top15
+        : [];
+
+    if (
+      !ranking.length &&
+      !top15.length
+    ) {
+      return [
+        "CONSULTA INTERNA — RANKING SEMANAL",
+        "O ranking semanal ainda não possui dados processados.",
+      ].join("\n");
     }
 
-    const lines = rankData.top15.map((user, index) => {
-      return `${index + 1}º. <@${user.userId}>: ${user.points} pts`;
-    });
+    const effectiveRanking =
+      ranking.length
+        ? ranking
+        : top15;
+
+    const rankingLines =
+      effectiveRanking
+        .slice(0, 30)
+        .map(
+          (user, index) => {
+            return [
+              `${index + 1}º.`,
+              `<@${user.userId}>`,
+              `${Number(user.points || 0)} pts`,
+            ].join(" ");
+          }
+        );
+
+    const mentionedUserIds =
+      message?.mentions?.users
+        ? [...message.mentions.users.keys()]
+        : [];
+
+    const explicitIds =
+      extractDiscordIdsFromText(
+        message.content || ""
+      );
+
+    const requestedUserIds =
+      [
+        ...new Set([
+          ...mentionedUserIds,
+          ...explicitIds,
+        ]),
+      ];
+
+    const requestedUsers = [];
+
+    for (
+      const userId of requestedUserIds
+    ) {
+      const rankingIndex =
+        effectiveRanking.findIndex(
+          (item) =>
+            String(item?.userId) ===
+            String(userId)
+        );
+
+      if (rankingIndex < 0) {
+        continue;
+      }
+
+      const rankingUser =
+        effectiveRanking[
+          rankingIndex
+        ];
+
+      requestedUsers.push(
+        [
+          `Pessoa consultada: <@${userId}>`,
+          `Posição atual: ${rankingIndex + 1}º`,
+          `Pontuação atual: ${Number(
+            rankingUser?.points || 0
+          )} pontos`,
+        ].join("\n")
+      );
+    }
+
+    const metricLines = [];
+
+    if (operationalMetric) {
+      metricLines.push(
+        "ANÁLISE OPERACIONAL DO RANKING:"
+      );
+
+      if (
+        Number.isFinite(
+          Number(
+            operationalMetric.score
+          )
+        )
+      ) {
+        metricLines.push(
+          `- Saúde da participação: ${Number(
+            operationalMetric.score
+          ).toFixed(1)}%`
+        );
+      }
+
+      const details =
+        operationalMetric.details ||
+        {};
+
+      if (
+        Number.isFinite(
+          Number(
+            details.participants
+          )
+        )
+      ) {
+        metricLines.push(
+          `- Participantes nesta semana: ${Number(
+            details.participants
+          )}`
+        );
+      }
+
+      if (
+        Number.isFinite(
+          Number(
+            details.reachedMinimum
+          )
+        )
+      ) {
+        metricLines.push(
+          `- Atingiram o mínimo individual: ${Number(
+            details.reachedMinimum
+          )}`
+        );
+      }
+
+      if (
+        Number.isFinite(
+          Number(
+            details.belowMinimum
+          )
+        )
+      ) {
+        metricLines.push(
+          `- Ainda abaixo do mínimo: ${Number(
+            details.belowMinimum
+          )}`
+        );
+      }
+
+      if (
+        Number.isFinite(
+          Number(
+            details.averagePoints
+          )
+        )
+      ) {
+        metricLines.push(
+          `- Média por participante: ${Number(
+            details.averagePoints
+          ).toFixed(1)} pontos`
+        );
+      }
+
+      if (
+        Number.isFinite(
+          Number(
+            details.minimumPerParticipant
+          )
+        )
+      ) {
+        metricLines.push(
+          `- Meta mínima individual: ${Number(
+            details.minimumPerParticipant
+          )} pontos`
+        );
+      }
+
+      if (
+        Number.isFinite(
+          Number(
+            details.totalPoints
+          )
+        )
+      ) {
+        metricLines.push(
+          `- Pontuação total atual: ${Number(
+            details.totalPoints
+          )}`
+        );
+      }
+
+      if (
+        Number.isFinite(
+          Number(
+            details.previousTotalPoints
+          )
+        )
+      ) {
+        metricLines.push(
+          `- Pontuação total da semana anterior: ${Number(
+            details.previousTotalPoints
+          )}`
+        );
+      }
+
+      if (
+        Array.isArray(
+          operationalMetric.positivePoints
+        ) &&
+        operationalMetric
+          .positivePoints.length
+      ) {
+        metricLines.push(
+          "",
+          "PONTOS POSITIVOS:",
+          ...operationalMetric
+            .positivePoints
+            .map(
+              (item) =>
+                `- ${item}`
+            )
+        );
+      }
+
+      if (
+        Array.isArray(
+          operationalMetric.attentionPoints
+        ) &&
+        operationalMetric
+          .attentionPoints.length
+      ) {
+        metricLines.push(
+          "",
+          "PONTOS DE ATENÇÃO:",
+          ...operationalMetric
+            .attentionPoints
+            .map(
+              (item) =>
+                `- ${item}`
+            )
+        );
+      }
+
+      if (
+        Array.isArray(
+          operationalMetric.recommendations
+        ) &&
+        operationalMetric
+          .recommendations.length
+      ) {
+        metricLines.push(
+          "",
+          "RECOMENDAÇÕES DO SISTEMA:",
+          ...operationalMetric
+            .recommendations
+            .map(
+              (item) =>
+                `- ${item}`
+            )
+        );
+      }
+    }
 
     return [
       "CONSULTA INTERNA — RANKING SEMANAL",
-      lines.join("\n"),
-      `Total de eventos registrados: ${rankData.totalItems || 0}`,
-    ].join("\n");
+      "",
+      `Semana operacional: ${
+        rankData?.weekKey ||
+        operationalMetric?.details?.weekKey ||
+        "não identificada"
+      }`,
+      `Pessoas ranqueadas: ${
+        rankData?.totalRankedUsers ||
+        effectiveRanking.length
+      }`,
+      `Total de registros processados: ${
+        rankData?.totalItems || 0
+      }`,
+      "",
+      "RANKING ATUAL:",
+      rankingLines.join("\n"),
+      requestedUsers.length
+        ? [
+            "",
+            "PESSOA ESPECIFICAMENTE CONSULTADA:",
+            requestedUsers.join(
+              "\n\n"
+            ),
+          ].join("\n")
+        : "",
+      metricLines.length
+        ? [
+            "",
+            metricLines.join("\n"),
+          ].join("\n")
+        : "",
+      "",
+      "REGRAS PARA A IA:",
+      "- Use os números acima como dados reais do Ranking Semanal.",
+      "- Não invente pontuação que não apareceu nos dados.",
+      "- Não diga que alguém está sem trabalhar apenas porque está abaixo da meta.",
+      "- Diferencie pontuação baixa de ausência completa de registros.",
+      "- Compare semana atual e semana anterior somente quando ambos os valores estiverem disponíveis.",
+      "- Ao recomendar melhorias, utilize os pontos de atenção e recomendações reais fornecidos pelo sistema.",
+    ]
+      .filter(Boolean)
+      .join("\n");
   } catch (err) {
-    console.error("[IA INTERNAL QUERY] Erro ranking:", err);
-    return "Erro ao acessar o módulo de ranking. Verifique se scGeralWeeklyRanking.js exporta getWeeklyRankingDebug.";
+    console.error(
+      "[IA INTERNAL QUERY] Erro no Ranking:",
+      err
+    );
+
+    return [
+      "CONSULTA INTERNA — RANKING SEMANAL",
+      "Não foi possível consultar o Ranking Semanal neste momento.",
+    ].join("\n");
   }
 }
 
@@ -5174,11 +7574,97 @@ async function buildServerIntelligenceContext(message, intent) {
     return "O usuário apenas saudou. Responda amigavelmente sem dados técnicos.";
   }
 
-  const smartRouterResult = await runSmartInternalQueryRouter(message);
+  // =====================================================
+  // INTELIGÊNCIA DE PESSOAS
+  // =====================================================
+
+  if (messageWantsPersonIntelligence(message)) {
+    console.log(
+      "[IA PERSON] Pergunta sobre pessoa detectada. Construindo contexto individual."
+    );
+
+    try {
+      const personContext =
+        await buildPersonIntelligenceContext(
+          message
+        );
+
+      if (personContext) {
+        blocks.push(personContext);
+      }
+    } catch (err) {
+      console.error(
+        "[IA PERSON] Erro ao construir inteligência da pessoa:",
+        err
+      );
+    }
+  }
+
+    const smartRouterResult =
+    await runSmartInternalQueryRouter(
+      message
+    );
 
   if (smartRouterResult) {
-    console.log("[IA FACTUAL MODE] Resultado factual encontrado pelo router interno.");
-    blocks.push(smartRouterResult);
+    console.log(
+      "[IA FACTUAL MODE] Resultado factual encontrado pelo router interno."
+    );
+
+    blocks.push(
+      smartRouterResult
+    );
+  }
+
+  // =====================================================
+  // INTELIGÊNCIA OPERACIONAL
+  // =====================================================
+
+  if (
+    intent.wantsOperationalAnalysis &&
+    !normalizeSearchText(
+      message.content || ""
+    ).includes("ranking")
+  ) {
+    console.log(
+      "[IA OPERATIONAL] Análise operacional solicitada."
+    );
+
+    try {
+      const rankingOperationalContext =
+        await fetchRankingContext(
+          message
+        );
+
+      if (
+        rankingOperationalContext
+      ) {
+        blocks.push(
+          [
+            "========================================",
+            "INTELIGÊNCIA OPERACIONAL — SANTACREATORS",
+            "========================================",
+            "",
+            rankingOperationalContext,
+            "",
+            "ORIENTAÇÃO PARA ANÁLISE:",
+            "- Analise os dados, não apenas repita números.",
+            "- Explique naturalmente o que está indo bem.",
+            "- Identifique os pontos que precisam de atenção.",
+            "- Quando existir comparação com a semana anterior, explique se houve melhora, estabilidade ou queda.",
+            "- Sugira ações práticas baseadas somente nos dados disponíveis.",
+            "- Se a participação estiver baixa, incentive as áreas adequadas sem acusar pessoas individualmente sem evidência.",
+            "- Se houver membros abaixo da meta, diferencie quem possui pouca pontuação de quem realmente não possui registros.",
+            "- Não trate uma semana ainda em andamento como se estivesse encerrada.",
+            "- Considere que a semana operacional vai de domingo 00:00 até sábado 23:59.",
+          ].join("\n")
+        );
+      }
+    } catch (err) {
+      console.error(
+        "[IA OPERATIONAL] Erro ao montar análise operacional:",
+        err
+      );
+    }
   }
 
   if (intent.wantsAlinhamentos) {
@@ -6735,23 +9221,33 @@ const guildKnowledge =
       );
 
     const persistentMemory =
-      fetchRelevantLongTermMemory(
-        message
-      );
+  fetchRelevantLongTermMemory(
+    message
+  );
 
-    memoryLogs = [
-      "========================================",
-      "MEMÓRIA HISTÓRICA DO DISCORD",
-      "========================================",
-      discordMemory,
-      "",
-      "========================================",
-      "MEMÓRIA LOCAL INTELIGENTE",
-      "========================================",
-      persistentMemory,
-    ]
-      .join("\n")
-      .slice(0, 22000);
+const institutionalMemory =
+  fetchRelevantInstitutionalMemory(
+    message
+  );
+
+memoryLogs = [
+  "========================================",
+  "MEMÓRIA HISTÓRICA DO DISCORD",
+  "========================================",
+  discordMemory,
+  "",
+  "========================================",
+  "MEMÓRIA LOCAL INTELIGENTE",
+  "========================================",
+  persistentMemory,
+  "",
+  "========================================",
+  "MEMÓRIA INSTITUCIONAL",
+  "========================================",
+  institutionalMemory,
+]
+  .join("\n")
+  .slice(0, 32000);
   } else {
     console.log(
       "[IA CHAT AUTO] Saudação simples detectada, ignorando memória antiga."
@@ -6777,11 +9273,17 @@ for (const modelName of GEMINI_MODEL_FALLBACKS) {
         model: modelName,
         contents: prompt,
 
-       config: {
+config: {
   temperature: 0.72,
   topP: 0.9,
   topK: 40,
-  maxOutputTokens: 1600,
+
+  // A IA pode produzir respostas completas quando a pergunta
+  // realmente exigir uma análise maior.
+  //
+  // O Discord continua protegido por splitDiscordText(),
+  // que divide a resposta em mensagens menores.
+  maxOutputTokens: 4096,
 },
       });
 
@@ -9375,10 +11877,17 @@ for (
         // Salva também na memória local persistente.
         // Essa memória continua existindo após reiniciar o bot
         // e pode ser recuperada por relevância nas conversas futuras.
-        saveLongTermConversation(
-          message,
-          finalText
-        );
+saveLongTermConversation(
+  message,
+  finalText
+);
+
+// Se o usuário autorizado estiver ensinando
+// uma informação institucional, registra esse
+// conhecimento separadamente para uso futuro.
+saveInstitutionalTeaching(
+  message
+);
 
 
       } catch (err) {
