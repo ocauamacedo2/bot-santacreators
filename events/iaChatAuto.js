@@ -4860,26 +4860,140 @@ function scoreServerKnowledgeChannel(channel, searchTerms) {
 // =====================================================
 
 function messageWantsPersonIntelligence(message) {
-  const text = normalizeSearchText(message.content || "");
+  const text =
+    normalizeSearchText(
+      message.content || ""
+    ).trim();
+
+  if (!text) {
+    return false;
+  }
+
+  // =====================================================
+  // INTELIGÊNCIA DE PESSOAS — DETECÇÃO INTENCIONAL
+  // =====================================================
+  //
+  // IMPORTANTE:
+  //
+  // Uma simples menção a uma pessoa NÃO significa que o
+  // usuário deseja uma investigação completa sobre ela.
+  //
+  // Exemplos que NÃO devem disparar:
+  //
+  // @fulano olha isso
+  // @fulano o bot voltou
+  // fala com @fulano
+  // @fulano kkkkk
+  // obrigado @fulano
+  //
+  // Exemplos que DEVEM disparar:
+  //
+  // quem é @fulano?
+  // me fala sobre @fulano
+  // como está @fulano?
+  // quando @fulano entrou?
+  // qual cargo do @fulano?
+  // qual o histórico do @fulano?
+  // qual o ranking do @fulano?
+  // como está o desempenho do @fulano?
+  //
+  // A menção continua sendo utilizada para identificar
+  // a pessoa, mas sozinha não ativa a busca pesada.
+  // =====================================================
+
+  const personPatterns = [
+    "quem e ",
+    "quem é ",
+    "quem seria ",
+    "sobre ",
+    "me fala sobre ",
+    "fala sobre ",
+    "me diga sobre ",
+    "me conta sobre ",
+    "como esta ",
+    "como está ",
+    "como ta ",
+    "como tá ",
+    "quando entrou",
+    "quando ele entrou",
+    "quando ela entrou",
+    "entrou no servidor",
+    "entrou na equipe",
+    "faz parte da equipe",
+    "ja foi da equipe",
+    "já foi da equipe",
+    "qual cargo",
+    "qual o cargo",
+    "quais cargos",
+    "cargo atual",
+    "qual area",
+    "qual área",
+    "area de interesse",
+    "área de interesse",
+    "evolucao",
+    "evolução",
+    "feedback",
+    "feedbacks",
+    "alinhamento",
+    "alinhamentos",
+    "quantos pontos",
+    "pontuacao",
+    "pontuação",
+    "ranking dele",
+    "ranking dela",
+    "ranking do ",
+    "ranking da ",
+    "desempenho",
+    "desempenho dele",
+    "desempenho dela",
+    "como ele esta indo",
+    "como ela esta indo",
+    "como ele está indo",
+    "como ela está indo",
+    "historico",
+    "histórico",
+    "historico dele",
+    "histórico dele",
+    "historico dela",
+    "histórico dela",
+    "dados sobre ",
+    "dados de ",
+    "informacoes sobre ",
+    "informações sobre ",
+    "o que sabe sobre ",
+    "o que voce sabe sobre ",
+    "o que você sabe sobre ",
+  ];
+
+  const hasPersonIntent =
+    personPatterns.some((pattern) =>
+      text.includes(
+        normalizeSearchText(pattern)
+      )
+    );
+
+  // =====================================================
+  // SEM INTENÇÃO DE CONSULTAR PESSOA = NÃO INVESTIGAR
+  // =====================================================
+  //
+  // Este é o ponto principal da correção.
+  //
+  // Mesmo que exista:
+  //
+  // - menção humana;
+  // - ID de usuário;
+  // - menção à própria IA;
+  //
+  // a busca pesada NÃO será iniciada se a frase não tiver
+  // intenção real de consultar informações sobre alguém.
+  // =====================================================
+
+  if (!hasPersonIntent) {
+    return false;
+  }
 
   // =====================================================
   // MENÇÕES HUMANAS REAIS
-  // =====================================================
-  //
-  // Uma menção à própria SantaCreators IA ou a qualquer
-  // outro bot NÃO significa que o usuário está pedindo
-  // inteligência sobre uma pessoa.
-  //
-  // Isso evita disparar desnecessariamente:
-  //
-  // - busca histórica da pessoa;
-  // - varredura de canais;
-  // - FormsCreator;
-  // - Hierarquia;
-  // - Ranking;
-  // - Alinhamentos;
-  //
-  // quando o usuário simplesmente chamou a própria IA.
   // =====================================================
 
   const mentionedHumanUsers =
@@ -4948,50 +5062,22 @@ function messageWantsPersonIntelligence(message) {
     return true;
   }
 
-  const personPatterns = [
-    "quem e ",
-    "quem é ",
-    "sobre ",
-    "como esta ",
-    "como está ",
-    "como ta ",
-    "como tá ",
-    "quando entrou",
-    "quando ele entrou",
-    "quando ela entrou",
-    "entrou no servidor",
-    "entrou na equipe",
-    "faz parte da equipe",
-    "ja foi da equipe",
-    "já foi da equipe",
-    "qual cargo",
-    "qual o cargo",
-    "qual area",
-    "qual área",
-    "area de interesse",
-    "área de interesse",
-    "evolucao",
-    "evolução",
-    "feedback",
-    "feedbacks",
-    "alinhamento",
-    "alinhamentos",
-    "quantos pontos",
-    "pontuacao",
-    "pontuação",
-    "ranking dele",
-    "ranking dela",
-    "desempenho dele",
-    "desempenho dela",
-    "como ele esta indo",
-    "como ela esta indo",
-    "como ele está indo",
-    "como ela está indo",
-  ];
+  // =====================================================
+  // REFERÊNCIA POR NOME / CONTEXTO
+  // =====================================================
+  //
+  // Mantemos o comportamento anterior para perguntas como:
+  //
+  // "quem é Ramon?"
+  // "como está o Macedo?"
+  // "qual o histórico do João?"
+  //
+  // Nesses casos pode não existir menção nem ID.
+  // resolvePersonFromMessage() continuará responsável por
+  // localizar a pessoa através do nome/username/nickname.
+  // =====================================================
 
-  return personPatterns.some((pattern) =>
-    text.includes(normalizeSearchText(pattern))
-  );
+  return hasPersonIntent;
 }
 
 function extractPersonQueryTerms(message) {
@@ -6227,37 +6313,85 @@ async function buildPersonIntelligenceContext(
 
   let rankingContext = "";
 
-  try {
-    rankingContext =
-      await fetchRankingContext(
-        message,
-        "recent"
-      );
-  } catch (err) {
-    console.error(
-      "[IA PERSON] Erro ao consultar ranking:",
-      err
+  const personQuestionText =
+    normalizeSearchText(
+      message.content || ""
     );
 
-    rankingContext =
-      "Não foi possível consultar o ranking neste momento.";
+  const wantsPersonRanking =
+    personQuestionText.includes(
+      "ranking"
+    ) ||
+    personQuestionText.includes(
+      "pontos no ranking"
+    ) ||
+    personQuestionText.includes(
+      "pontuacao no ranking"
+    ) ||
+    personQuestionText.includes(
+      "posição no ranking"
+    ) ||
+    personQuestionText.includes(
+      "posicao no ranking"
+    );
+
+  if (wantsPersonRanking) {
+    try {
+      rankingContext =
+        await fetchRankingContext(
+          message,
+          "recent"
+        );
+    } catch (err) {
+      console.error(
+        "[IA PERSON] Erro ao consultar ranking:",
+        err
+      );
+
+      rankingContext =
+        "Não foi possível consultar o ranking neste momento.";
+    }
+  } else {
+    console.log(
+      "[IA PERSON] Ranking ignorado: a pergunta não solicitou dados de ranking."
+    );
   }
 
   let alinhamentosContext = "";
 
-  try {
-    alinhamentosContext =
-      await fetchAlinhamentosContext(
-        message
-      );
-  } catch (err) {
-    console.error(
-      "[IA PERSON] Erro ao consultar alinhamentos:",
-      err
+  const wantsPersonAlinhamentos =
+    personQuestionText.includes(
+      "alinhamento"
+    ) ||
+    personQuestionText.includes(
+      "alinhamentos"
+    ) ||
+    personQuestionText.includes(
+      "alinhou"
+    ) ||
+    personQuestionText.includes(
+      "foi alinhado"
     );
 
-    alinhamentosContext =
-      "Não foi possível consultar alinhamentos neste momento.";
+  if (wantsPersonAlinhamentos) {
+    try {
+      alinhamentosContext =
+        await fetchAlinhamentosContext(
+          message
+        );
+    } catch (err) {
+      console.error(
+        "[IA PERSON] Erro ao consultar alinhamentos:",
+        err
+      );
+
+      alinhamentosContext =
+        "Não foi possível consultar alinhamentos neste momento.";
+    }
+  } else {
+    console.log(
+      "[IA PERSON] Alinhamentos ignorados: a pergunta não solicitou esse histórico."
+    );
   }
 
   const context = [
