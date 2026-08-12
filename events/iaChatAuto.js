@@ -430,7 +430,7 @@ const AI_ALLOWED_CHANNEL_IDS = new Set([
   ...AI_SMART_PUBLIC_CHANNEL_IDS,
 ]);
 
-const AI_PUBLIC_AUTO_REPLY_DELAY_MS = 20 * 1000;
+const AI_PUBLIC_AUTO_REPLY_DELAY_MS = 5 * 1000;
 
 const AI_PUBLIC_CONTINUATION_TTL_MS = 5 * 60 * 1000;
 
@@ -2158,8 +2158,78 @@ const GEMINI_MODEL_FALLBACKS = [
   return model && arr.indexOf(model) === index;
 });
 
+// =====================================================
+// IA — FALLBACK RÁPIDO PARA CHAT
+// =====================================================
+
+const GEMINI_CHAT_MODEL_FALLBACKS =
+  GEMINI_MODEL_FALLBACKS.slice(0, 3);
+
 const GEMINI_API_KEY =
   process.env.GEMINI_API_KEY || "";
+
+// =====================================================
+// IA — CONTROLE DE LATÊNCIA
+// =====================================================
+//
+// Nenhuma tentativa individual do Gemini pode prender
+// a resposta da SantaCreators por vários minutos.
+//
+// Se um modelo não responder dentro do limite abaixo,
+// a IA abandona somente aquela tentativa e passa para
+// o próximo fallback.
+//
+// Isso preserva completamente o sistema de fallback.
+// =====================================================
+
+const GEMINI_REQUEST_TIMEOUT_MS = 8000;
+
+// =====================================================
+// IA — EXECUÇÃO COM TIMEOUT
+// =====================================================
+//
+// Executa uma Promise com limite máximo de espera.
+//
+// Se a operação não responder dentro do tempo definido,
+// somente aquela tentativa é encerrada logicamente e o
+// sistema pode continuar para o próximo fallback.
+//
+// Isso evita que uma chamada lenta do Gemini mantenha
+// a SantaCreators digitando durante vários minutos.
+// =====================================================
+
+function withGeminiTimeout(
+  promise,
+  timeoutMs = GEMINI_REQUEST_TIMEOUT_MS,
+  label = "Gemini"
+) {
+  let timeoutId = null;
+
+  const timeoutPromise =
+    new Promise((_, reject) => {
+      timeoutId =
+        setTimeout(() => {
+          const error =
+            new Error(
+              `${label} excedeu ${timeoutMs}ms`
+            );
+
+          error.code =
+            "GEMINI_REQUEST_TIMEOUT";
+
+          reject(error);
+        }, timeoutMs);
+    });
+
+  return Promise.race([
+    promise,
+    timeoutPromise,
+  ]).finally(() => {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  });
+}
 
 const COOLDOWN_MS = 12000;
 
@@ -4743,13 +4813,89 @@ function scoreServerKnowledgeChannel(channel, searchTerms) {
 function messageWantsPersonIntelligence(message) {
   const text = normalizeSearchText(message.content || "");
 
-  if (message.mentions?.users?.size > 0) {
+  // =====================================================
+  // MENÇÕES HUMANAS REAIS
+  // =====================================================
+  //
+  // Uma menção à própria SantaCreators IA ou a qualquer
+  // outro bot NÃO significa que o usuário está pedindo
+  // inteligência sobre uma pessoa.
+  //
+  // Isso evita disparar desnecessariamente:
+  //
+  // - busca histórica da pessoa;
+  // - varredura de canais;
+  // - FormsCreator;
+  // - Hierarquia;
+  // - Ranking;
+  // - Alinhamentos;
+  //
+  // quando o usuário simplesmente chamou a própria IA.
+  // =====================================================
+
+  const mentionedHumanUsers =
+    message.mentions?.users
+      ? [...message.mentions.users.values()]
+          .filter((user) => {
+            if (!user?.id) {
+              return false;
+            }
+
+            if (user.bot) {
+              return false;
+            }
+
+            if (
+              message.client?.user?.id &&
+              user.id === message.client.user.id
+            ) {
+              return false;
+            }
+
+            return true;
+          })
+      : [];
+
+  if (mentionedHumanUsers.length > 0) {
     return true;
   }
 
-  const ids = extractDiscordIdsFromText(message.content || "");
+  // =====================================================
+  // IDs EXPLÍCITOS DE PESSOAS
+  // =====================================================
 
-  if (ids.length > 0) {
+  const ids =
+    extractDiscordIdsFromText(
+      message.content || ""
+    );
+
+  const humanIds =
+    ids.filter((id) => {
+      if (
+        message.client?.user?.id &&
+        id === message.client.user.id
+      ) {
+        return false;
+      }
+
+      const cachedMember =
+        message.guild?.members?.cache?.get(id);
+
+      if (cachedMember?.user?.bot) {
+        return false;
+      }
+
+      const cachedUser =
+        message.client?.users?.cache?.get(id);
+
+      if (cachedUser?.bot) {
+        return false;
+      }
+
+      return true;
+    });
+
+  if (humanIds.length > 0) {
     return true;
   }
 
@@ -4967,34 +5113,61 @@ async function resolvePersonFromMessage(message) {
       message.content || ""
     );
 
-  for (const id of ids) {
-    const member =
-      guild.members.cache.get(id) ||
-      await guild.members.fetch(id).catch(() => null);
+ for (const id of ids) {
+  // =====================================================
+  // IGNORAR A PRÓPRIA SANTACREATORS IA
+  // =====================================================
 
-    if (member && !member.user?.bot) {
-      return {
-        status: "resolved",
-        source: "discord_id",
-        member,
-        userId: member.id,
-        candidates: [],
-      };
-    }
-
-    // Mesmo se a pessoa já saiu do servidor,
-    // preservamos o ID para procurar registros históricos.
-    if (/^\d{17,22}$/.test(id)) {
-      return {
-        status: "historical_id",
-        source: "discord_id",
-        member: null,
-        userId: id,
-        candidates: [],
-      };
-    }
+  if (
+    message.client?.user?.id &&
+    id === message.client.user.id
+  ) {
+    continue;
   }
 
+  const member =
+    guild.members.cache.get(id) ||
+    await guild.members.fetch(id).catch(() => null);
+
+  // =====================================================
+  // IGNORAR BOTS
+  // =====================================================
+
+  if (member?.user?.bot) {
+    continue;
+  }
+
+  const cachedUser =
+    message.client?.users?.cache?.get(id);
+
+  if (cachedUser?.bot) {
+    continue;
+  }
+
+  if (member) {
+    return {
+      status: "resolved",
+      source: "discord_id",
+      member,
+      userId: member.id,
+      candidates: [],
+    };
+  }
+
+  // Mesmo se a pessoa já saiu do servidor,
+  // preservamos o ID para procurar registros históricos.
+  //
+  // IDs conhecidos como bots já foram eliminados acima.
+  if (/^\d{17,22}$/.test(id)) {
+    return {
+      status: "historical_id",
+      source: "discord_id",
+      member: null,
+      userId: id,
+      candidates: [],
+    };
+  }
+}
   // =====================================================
   // PRIORIDADE 3 — NOME / USERNAME / NICKNAME
   // =====================================================
@@ -6549,23 +6722,71 @@ async function fetchCronogramaContext(message) {
 function buildRolesHierarchyContext(message) {
   try {
     const guild = message.guild;
-    if (!guild) return "Servidor não encontrado.";
+
+    if (!guild) {
+      return "Servidor não encontrado.";
+    }
 
     const roles = guild.roles.cache
       .filter((role) => role.name !== "@everyone")
       .sort((a, b) => b.position - a.position)
       .map((role) => {
-        return `- <@&${role.id}> | nome: ${role.name} | ID: ${role.id} | posição: ${role.position} | membros: ${role.members?.size || 0}`;
+        return `- <@&${role.id}> | nome: ${role.name} | ID: ${role.id} | posição Discord: ${role.position} | membros: ${role.members?.size || 0}`;
       })
       .slice(0, 45);
 
-    if (!roles.length) {
-      return "Nenhum cargo encontrado no cache.";
-    }
+    const discordRolesContext =
+      roles.length > 0
+        ? roles.join("\n")
+        : "Nenhum cargo encontrado no cache.";
 
-    return `HIERARQUIA DE CARGOS DO DISCORD:\n${roles.join("\n")}`;
+    return [
+      "========================================",
+      "HIERARQUIA OFICIAL — SANTACREATORS",
+      "========================================",
+      "",
+      "IMPORTANTE:",
+      "- A hierarquia institucional da SantaCreators NÃO deve ser deduzida apenas pela posição dos cargos no Discord.",
+      "- Cargos técnicos, administrativos, integrações, bots ou cargos auxiliares podem estar acima de cargos humanos no Discord sem fazer parte da linha institucional de evolução.",
+      "- Portanto, NÃO coloque automaticamente cargos como ADMINISTRAÇÃO, cargos de bot ou cargos técnicos no topo da hierarquia humana apenas porque possuem posição maior no Discord.",
+      "",
+      "CAMINHO NATURAL DE EVOLUÇÃO:",
+      "",
+      "Creator",
+      "↓",
+      "Creator Líder",
+      "↓",
+      "Social Media / Manager",
+      "↓",
+      "Gestor",
+      "↓",
+      "Coord",
+      "↓",
+      "Responsáveis",
+      "",
+      "RESPONSÁVEIS:",
+      "- Os cargos específicos de responsáveis existentes no Discord devem ser identificados pelos cargos reais do servidor.",
+      "- Entre eles podem existir funções como Resp Líder, Resp Influ e Resp Creators quando esses cargos estiverem presentes no servidor.",
+      "- Não invente cargos que não estejam disponíveis nos dados reais.",
+      "",
+      "REGRA DE INTERPRETAÇÃO:",
+      "- Use a estrutura oficial acima para explicar quem está acima ou abaixo na evolução institucional.",
+      "- Use os cargos reais do Discord para identificar quais cargos existem atualmente, seus nomes, IDs e membros.",
+      "- Não confunda posição técnica do Discord com autoridade institucional.",
+      "- Não trate cargos de bot como pessoas ou como integrantes humanos da hierarquia.",
+      "",
+      "========================================",
+      "CARGOS REAIS ATUAIS DO DISCORD",
+      "========================================",
+      "",
+      discordRolesContext,
+    ].join("\n");
   } catch (err) {
-    console.error("[IA CHAT AUTO] Erro ao montar hierarquia:", err);
+    console.error(
+      "[IA CHAT AUTO] Erro ao montar hierarquia:",
+      err
+    );
+
     return "Não consegui montar a hierarquia de cargos.";
   }
 }
@@ -7697,18 +7918,35 @@ async function buildServerIntelligenceContext(message, intent) {
   // BUSCA INTELIGENTE GENÉRICA NO SERVIDOR
   // =====================================================
 
-  if (!intent.isGreetingOnly) {
-    console.log(
-      "[IA CHAT AUTO] Executando busca inteligente complementar no servidor."
-    );
+  const shouldRunSmartServerKnowledge =
+  !intent.isGreetingOnly &&
+  (
+    intent.wantsAusencias ||
+    intent.wantsCronograma ||
+    intent.wantsAlinhamentos ||
+    intent.wantsGI ||
+    intent.wantsRoles ||
+    intent.wantsChannels ||
+    intent.wantsOperationalAnalysis ||
+    messageWantsPersonIntelligence(message)
+  );
 
-    const smartServerKnowledge =
-      await fetchSmartServerKnowledge(message);
+if (shouldRunSmartServerKnowledge) {
+  console.log(
+    "[IA CHAT AUTO] Executando busca inteligente complementar no servidor."
+  );
 
-    if (smartServerKnowledge) {
-      blocks.push(smartServerKnowledge);
-    }
+  const smartServerKnowledge =
+    await fetchSmartServerKnowledge(message);
+
+  if (smartServerKnowledge) {
+    blocks.push(smartServerKnowledge);
   }
+} else {
+  console.log(
+    "[IA CHAT AUTO] Conversa simples detectada. Busca pesada no servidor ignorada."
+  );
+}
 
   if (!blocks.length) {
     return "Nenhum sistema específico foi solicitado na pergunta atual.";
@@ -9266,37 +9504,74 @@ const prompt =
 
 let lastError = null;
 
-for (const modelName of GEMINI_MODEL_FALLBACKS) {
+for (const modelName of GEMINI_CHAT_MODEL_FALLBACKS) {
+  const startedAt =
+    Date.now();
+
   try {
+    console.log(
+      `[IA CHAT AUTO] Tentando modelo: ${modelName}`
+    );
+
     const result =
-      await geminiClient.models.generateContent({
-        model: modelName,
-        contents: prompt,
+      await withGeminiTimeout(
+        geminiClient.models.generateContent({
+          model: modelName,
+          contents: prompt,
 
-config: {
-  temperature: 0.72,
-  topP: 0.9,
-  topK: 40,
+          config: {
+            maxOutputTokens: 4096,
+          },
+        }),
+        GEMINI_REQUEST_TIMEOUT_MS,
+        `Modelo ${modelName}`
+      );
 
-  // A IA pode produzir respostas completas quando a pergunta
-  // realmente exigir uma análise maior.
-  //
-  // O Discord continua protegido por splitDiscordText(),
-  // que divide a resposta em mensagens menores.
-  maxOutputTokens: 4096,
-},
-      });
+    const elapsed =
+      Date.now() - startedAt;
+
+    console.log(
+      `[IA CHAT AUTO] Modelo respondeu: ${modelName} | ${elapsed}ms`
+    );
+
+    if (
+      !result?.text ||
+      !String(result.text).trim()
+    ) {
+      throw new Error(
+        `Modelo ${modelName} retornou resposta vazia.`
+      );
+    }
 
     return result.text;
   } catch (err) {
     lastError = err;
 
+    const elapsed =
+      Date.now() - startedAt;
+
+    if (
+      err?.code ===
+      "GEMINI_REQUEST_TIMEOUT"
+    ) {
+      console.warn(
+        `[IA CHAT AUTO] Timeout: ${modelName} | ${elapsed}ms. Tentando próximo fallback...`
+      );
+
+      continue;
+    }
+
     if (!isGeminiModelError(err)) {
+      console.error(
+        `[IA CHAT AUTO] Erro inesperado no modelo ${modelName}:`,
+        err
+      );
+
       throw err;
     }
 
     console.warn(
-      `[IA CHAT AUTO] Modelo falhou: ${modelName}. Tentando próximo fallback...`
+      `[IA CHAT AUTO] Modelo falhou: ${modelName} | ${elapsed}ms. Tentando próximo fallback...`
     );
   }
 }
