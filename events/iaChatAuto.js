@@ -11052,6 +11052,10 @@ TAMANHO E ESTILO DA RESPOSTA:
 - Para conversa simples, prefira 1 a 3 linhas curtas.
 - Para perguntas que exigem explicação, use o tamanho necessário para responder corretamente.
 - Se o usuário pedir uma explicação completa, pode responder de forma mais detalhada e organizada.
+- NUNCA termine uma resposta no meio de uma frase.
+- NUNCA corte uma explicação apenas para obedecer à preferência de 1 a 3 linhas.
+- É melhor enviar uma frase completa um pouco maior do que uma resposta curta e incompleta.
+- Sempre conclua o raciocínio iniciado antes de finalizar a resposta.
 - Não repetir a mesma abertura do histórico.
 - Não começar sempre com "Opa" ou "E aí".
 - Se o usuário já foi cumprimentado, NÃO cumprimente de novo.
@@ -11417,6 +11421,123 @@ Responda agora como uma conversa natural de Discord, utilizando o idioma da pess
 `;
 }
 
+// =====================================================
+// IA ENTREVISTA — DETECÇÃO DE RESPOSTA INTERROMPIDA
+// =====================================================
+//
+// Evita mandar para o Discord uma resposta que o Gemini
+// interrompeu antes de concluir.
+//
+// Isso pode acontecer quando:
+// - o modelo bate o limite de tokens;
+// - a geração termina de maneira inesperada;
+// - a resposta vem vazia ou incompleta.
+//
+// Quando isso acontecer, o sistema NÃO entrega aquele
+// pedaço quebrado.
+// Ele deixa o fluxo tentar o próximo modelo de fallback.
+// =====================================================
+
+function iaInterviewGenerationLooksCutOff(result) {
+  if (!result) {
+    return true;
+  }
+
+  const text =
+    String(
+      result.text || ""
+    ).trim();
+
+  if (!text) {
+    return true;
+  }
+
+  const candidate =
+    Array.isArray(result.candidates)
+      ? result.candidates[0]
+      : null;
+
+  const finishReason =
+    String(
+      candidate?.finishReason || ""
+    )
+      .trim()
+      .toUpperCase();
+
+  // =====================================================
+  // MOTIVOS EXPLÍCITOS DE INTERRUPÇÃO
+  // =====================================================
+
+  const interruptedReasons =
+    new Set([
+      "MAX_TOKENS",
+      "MAX_OUTPUT_TOKENS",
+      "LENGTH",
+      "TOKEN_LIMIT",
+    ]);
+
+  if (
+    finishReason &&
+    interruptedReasons.has(
+      finishReason
+    )
+  ) {
+    return true;
+  }
+
+  // =====================================================
+  // DETECÇÃO CONSERVADORA DE FINAL VISIVELMENTE QUEBRADO
+  // =====================================================
+  //
+  // Não exigimos pontuação final.
+  //
+  // Apenas identificamos casos em que a última palavra
+  // normalmente exige continuação imediata.
+  //
+  // Exemplo real:
+  //
+  // "posso te explicar o"
+  //
+  // Isso claramente não constitui uma frase concluída.
+  // =====================================================
+
+  const normalizedEnd =
+    normalizeSearchText(
+      text
+    ).trim();
+
+  const suspiciousEndingPatterns = [
+    /\b(o|a|os|as)$/,
+    /\b(de|do|da|dos|das)$/,
+    /\b(para|pra|por)$/,
+    /\b(com|sem)$/,
+    /\b(que|porque|pois)$/,
+    /\b(e|ou|mas)$/,
+    /\b(um|uma|uns|umas)$/,
+    /\b(no|na|nos|nas)$/,
+    /\b(seu|sua|seus|suas)$/,
+    /\b(meu|minha|meus|minhas)$/,
+  ];
+
+  const endsSuspiciously =
+    suspiciousEndingPatterns.some(
+      (pattern) =>
+        pattern.test(
+          normalizedEnd
+        )
+    );
+
+  if (endsSuspiciously) {
+    console.warn(
+      `[IA ENTREVISTA] Texto terminou de forma suspeita: "${text.slice(-80)}"`
+    );
+
+    return true;
+  }
+
+  return false;
+}
+
 async function generateIaInterviewConversation(message, client, openerId) {
   const geminiClient = getGeminiClient();
 
@@ -11515,14 +11636,80 @@ for (const modelName of GEMINI_MODEL_FALLBACKS) {
             temperature: 0.75,
             topP: 0.9,
             topK: 35,
-            maxOutputTokens: 500,
+
+            // =====================================================
+            // LIMITE SEGURO PARA A ENTREVISTA
+            // =====================================================
+            //
+            // O prompt continua controlando o tamanho natural.
+            //
+            // Este valor é somente o teto máximo permitido para
+            // evitar que respostas sejam interrompidas antes
+            // da conclusão.
+            // =====================================================
+
+            maxOutputTokens: 1400,
           },
         }),
         4500,
         `IA ENTREVISTA | ${modelName}`
       );
 
-    return result.text;
+    // =====================================================
+    // PROTEÇÃO CONTRA RESPOSTA CORTADA
+    // =====================================================
+    //
+    // Não devolvemos imediatamente qualquer texto recebido.
+    //
+    // Primeiro verificamos se o próprio Gemini informou que
+    // a geração foi encerrada por limite.
+    //
+    // Se estiver incompleta, tentamos o próximo modelo da
+    // cadeia de fallback em vez de mostrar meia frase.
+    // =====================================================
+
+    if (
+      iaInterviewGenerationLooksCutOff(
+        result
+      )
+    ) {
+      const finishReason =
+        String(
+          result?.candidates?.[0]
+            ?.finishReason || "DESCONHECIDO"
+        );
+
+      console.warn(
+        `[IA ENTREVISTA] Resposta incompleta detectada | Modelo=${modelName} | Motivo=${finishReason}. Tentando próximo fallback.`
+      );
+
+      lastError =
+        new Error(
+          `IA ENTREVISTA retornou resposta incompleta | Modelo=${modelName} | Motivo=${finishReason}`
+        );
+
+      continue;
+    }
+
+    const generatedText =
+      String(
+        result.text || ""
+      ).trim();
+
+    if (!generatedText) {
+      console.warn(
+        `[IA ENTREVISTA] Modelo ${modelName} retornou resposta vazia. Tentando próximo fallback.`
+      );
+
+      lastError =
+        new Error(
+          `IA ENTREVISTA retornou resposta vazia | Modelo=${modelName}`
+        );
+
+      continue;
+    }
+
+    return generatedText;
   } catch (err) {
     lastError = err;
 
@@ -11545,9 +11732,8 @@ for (const modelName of GEMINI_MODEL_FALLBACKS) {
   }
 }
 
-  throw lastError;
+throw lastError;
 }
-
 export async function iaInterviewTicketOpened(channel, openerId) {
   if (!channel?.isTextBased?.()) return false;
   if (!isIaInterviewChannel(channel)) return false;
