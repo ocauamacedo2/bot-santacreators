@@ -267,6 +267,40 @@ const IA_ENTREVISTA_HELP_ROLE_IDS = [
   "1282119104576098314",
 ];
 
+// =====================================================
+// IA — ATENDIMENTO AUTOMÁTICO DE TICKETS
+// =====================================================
+//
+// Nestas categorias a IA conversa diretamente com a pessoa
+// que abriu o ticket enquanto nenhum membro autorizado da
+// equipe tiver assumido o atendimento.
+//
+// Quando Senior Creator, Owner ou Resp. Creators falar no
+// ticket, a IA entrega a conversa e permanece em silêncio.
+//
+// IMPORTANTE:
+// se quem abriu o ticket possuir um desses cargos, isso NÃO
+// significa que a IA deve parar. O autor do ticket continua
+// sendo tratado normalmente até OUTRA pessoa autorizada
+// aparecer e falar.
+// =====================================================
+
+const AI_TICKET_ASSIST_CATEGORY_IDS = new Set([
+  "1359245003523756136",
+  "1359244743724241156",
+  "1359245055239655544",
+]);
+
+const AI_TICKET_ASSIST_STAFF_ROLE_IDS = new Set([
+  "1352493359897378941", // Senior Creator
+  "1262262852949905408", // Owner
+  "1352408327983861844", // Resp. Creators
+]);
+
+const AI_TICKET_ASSIST_ACTIVE = new Map();
+
+const AI_TICKET_ASSIST_PROCESSING = new Set();
+
 const IA_ENTREVISTA_ACTIVE = new Map();
 
 const IA_ENTREVISTA_PROCESSING = new Map();
@@ -408,6 +442,7 @@ const AI_HIERARCHY_CHANNEL_ID = "1370830395637239928";
 const AI_SMART_PUBLIC_CATEGORY_IDS = new Set([
   "1359244743724241156",
   "1359245003523756136",
+  "1359245055239655544",
   "1414687963161559180",
   "1428572742051168378",
   "1482874296685695118",
@@ -3914,29 +3949,81 @@ function messageLooksLikeInstitutionalTeaching(
     return false;
   }
 
-  const teachingPatterns = [
-    "aprende que",
-    "aprenda que",
-    "lembra que",
-    "lembre que",
-    "guarda que",
-    "guarde que",
-    "salva que",
-    "salve que",
-    "anota que",
-    "anote que",
-    "memoriza que",
-    "memorize que",
-    "quero que voce lembre",
-    "quero que voce aprenda",
-    "daqui pra frente",
-    "daqui para frente",
-    "a partir de agora",
-    "fica sabendo que",
-    "considere que",
-    "informacao oficial",
-    "isso e oficial",
-  ];
+const teachingPatterns = [
+  "aprende que",
+  "aprenda que",
+  "lembra que",
+  "lembre que",
+  "guarda que",
+  "guarde que",
+  "salva que",
+  "salve que",
+  "anota que",
+  "anote que",
+  "memoriza que",
+  "memorize que",
+
+  "quero que voce lembre",
+  "quero que voce aprenda",
+
+  "daqui pra frente",
+  "daqui para frente",
+  "a partir de agora",
+
+  "fica sabendo que",
+  "considere que",
+
+  "informacao oficial",
+  "isso e oficial",
+
+  // =====================================================
+  // CORREÇÕES E ENSINAMENTOS NATURAIS DO MACEDO
+  // =====================================================
+
+  "na verdade",
+  "o certo e",
+  "o correto e",
+  "corrigindo",
+
+  "quero que voce faca",
+  "quero que voce passe a",
+  "quero que passe a",
+
+  "passa a fazer",
+  "passe a fazer",
+
+  "sempre faca",
+  "sempre responda",
+  "sempre considere",
+
+  "nunca faca",
+  "nunca responda",
+  "nunca considere",
+
+  "quando eu falar",
+  "quando alguem falar",
+
+  "funciona assim",
+  "tem que funcionar assim",
+
+  "essa regra e",
+  "essa regra passa a ser",
+
+  "isso significa",
+  "isso quer dizer",
+
+  "na santa creators",
+  "na santacreators",
+
+  "nao e assim",
+  "não é assim",
+
+  "nao e pra",
+  "não é pra",
+
+  "o objetivo e",
+  "o objetivo é",
+];
 
   return teachingPatterns.some(
     (pattern) =>
@@ -9758,6 +9845,26 @@ Cargo: <@&ID>
 
 20. Adapte o jeito de responder ao jeito da conversa, sem copiar erros de escrita do usuário.
 
+20.1. IDIOMA AUTOMÁTICO E NATURAL:
+- Identifique o idioma predominante da MENSAGEM ATUAL antes de responder.
+- Responda naturalmente no MESMO idioma utilizado pela pessoa.
+- Não traduza a mensagem do usuário antes de responder.
+- Não diga "vou responder em inglês", "detectei espanhol" ou qualquer aviso semelhante.
+- Apenas converse naturalmente no idioma detectado.
+- Se a pessoa escrever em inglês, responda em inglês.
+- Se a pessoa escrever em espanhol, responda em espanhol.
+- Se a pessoa escrever em francês, responda em francês.
+- Se a pessoa escrever em italiano, responda em italiano.
+- Se a pessoa escrever em alemão, responda em alemão.
+- O comportamento não está limitado aos idiomas acima. Detecte qualquer idioma que você consiga compreender.
+- Se a pessoa mudar de idioma durante a conversa, acompanhe a mudança naturalmente.
+- Se uma mensagem curta for ambígua, use o idioma predominante das mensagens recentes daquela pessoa no canal.
+- Se a conversa estiver claramente em outro idioma, NÃO force português brasileiro.
+- Nomes próprios, IDs, cargos, nomes de canais e termos oficiais da SantaCreators podem permanecer em sua forma original.
+- Não traduza nomes como SantaCreators, Senior Creator, Owner, Resp Creators, Nobre, Grande, Maresia ou Santa quando isso prejudicar a identificação.
+- Erros gramaticais do usuário não devem ser copiados.
+- Preserve o nível de formalidade e o ritmo da conversa, mas escreva corretamente no idioma utilizado.
+
 21. Não transforme toda resposta em lista. Converse naturalmente quando uma resposta conversacional for suficiente.
 
 22. Quando perceber continuação clara de um assunto anterior, engate naturalmente no assunto em vez de começar a conversa do zero.
@@ -10358,6 +10465,305 @@ function restoreIaEntrevistaState() {
 
 restoreIaEntrevistaState();
 
+// =====================================================
+// IA — IDENTIFICAÇÃO INTELIGENTE DO AUTOR DO TICKET
+// =====================================================
+
+function isAiTicketAssistChannel(channel) {
+  return AI_TICKET_ASSIST_CATEGORY_IDS.has(
+    String(channel?.parentId || "")
+  );
+}
+
+function memberIsAiTicketAssistStaff(member) {
+  if (!member?.roles?.cache) {
+    return false;
+  }
+
+  if (member.user?.bot) {
+    return false;
+  }
+
+  return member.roles.cache.some((role) =>
+    AI_TICKET_ASSIST_STAFF_ROLE_IDS.has(role.id)
+  );
+}
+
+function getAiTicketAssistState(channelId) {
+  return AI_TICKET_ASSIST_ACTIVE.get(
+    String(channelId || "")
+  ) || null;
+}
+
+function saveAiTicketAssistState(
+  channelId,
+  payload
+) {
+  if (!channelId) {
+    return false;
+  }
+
+  AI_TICKET_ASSIST_ACTIVE.set(
+    String(channelId),
+    {
+      ...(AI_TICKET_ASSIST_ACTIVE.get(
+        String(channelId)
+      ) || {}),
+      ...payload,
+    }
+  );
+
+  return true;
+}
+
+function extractTicketOpenerIdFromText(text) {
+  const raw =
+    String(text || "");
+
+  const patterns = [
+    /aberto_por:(\d{17,22})/i,
+    /aberto por:\s*<@!?(\d{17,22})>/i,
+    /criado por:\s*<@!?(\d{17,22})>/i,
+    /ticket de:\s*<@!?(\d{17,22})>/i,
+    /ticket aberto por:\s*<@!?(\d{17,22})>/i,
+    /autor:\s*<@!?(\d{17,22})>/i,
+    /usuário:\s*<@!?(\d{17,22})>/i,
+    /usuario:\s*<@!?(\d{17,22})>/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match =
+      raw.match(pattern);
+
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+
+  return null;
+}
+
+async function resolveAiTicketAssistOpenerId(
+  message,
+  client
+) {
+  if (
+    !message?.guild ||
+    !message?.channel
+  ) {
+    return null;
+  }
+
+  // =====================================================
+  // PRIORIDADE 1 — TOPIC DO CANAL
+  // =====================================================
+
+  const topic =
+    String(
+      message.channel.topic || ""
+    );
+
+  const topicOpenerId =
+    extractTicketOpenerIdFromText(
+      topic
+    );
+
+  if (topicOpenerId) {
+    return topicOpenerId;
+  }
+
+  // =====================================================
+  // PRIORIDADE 2 — ESTADO JÁ DESCOBERTO
+  // =====================================================
+
+  const currentState =
+    getAiTicketAssistState(
+      message.channelId
+    );
+
+  if (currentState?.openerId) {
+    return String(
+      currentState.openerId
+    );
+  }
+
+  // =====================================================
+  // PRIORIDADE 3 — MENSAGENS / EMBEDS DO SISTEMA DE TICKET
+  // =====================================================
+
+  const recentMessages =
+    await message.channel.messages
+      .fetch({
+        limit: 50,
+      })
+      .catch(() => null);
+
+  if (recentMessages?.size) {
+    const orderedMessages =
+      [...recentMessages.values()]
+        .sort(
+          (a, b) =>
+            a.createdTimestamp -
+            b.createdTimestamp
+        );
+
+    for (
+      const currentMessage
+      of orderedMessages
+    ) {
+      const textParts = [
+        currentMessage.content || "",
+      ];
+
+      for (
+        const embed
+        of currentMessage.embeds || []
+      ) {
+        textParts.push(
+          embed.title || ""
+        );
+
+        textParts.push(
+          embed.description || ""
+        );
+
+        for (
+          const field
+          of embed.fields || []
+        ) {
+          textParts.push(
+            field.name || ""
+          );
+
+          textParts.push(
+            field.value || ""
+          );
+        }
+      }
+
+      const foundId =
+        extractTicketOpenerIdFromText(
+          textParts.join("\n")
+        );
+
+      if (foundId) {
+        return foundId;
+      }
+    }
+  }
+
+  // =====================================================
+  // PRIORIDADE 4 — PERMISSÃO INDIVIDUAL DO TICKET
+  // =====================================================
+  //
+  // A maioria dos bots de ticket cria um overwrite individual
+  // para quem abriu o canal.
+  // =====================================================
+
+  const individualOverwrites =
+    message.channel
+      .permissionOverwrites
+      ?.cache
+      ?.filter(
+        (overwrite) =>
+          Number(overwrite.type) === 1 &&
+          String(overwrite.id) !==
+            String(client?.user?.id || "")
+      );
+
+  if (
+    individualOverwrites?.size === 1
+  ) {
+    const overwrite =
+      individualOverwrites.first();
+
+    if (overwrite?.id) {
+      return String(
+        overwrite.id
+      );
+    }
+  }
+
+  if (
+    individualOverwrites?.size > 1 &&
+    recentMessages?.size
+  ) {
+    const candidateIds =
+      new Set(
+        individualOverwrites.map(
+          (overwrite) =>
+            String(overwrite.id)
+        )
+      );
+
+    const orderedMessages =
+      [...recentMessages.values()]
+        .sort(
+          (a, b) =>
+            a.createdTimestamp -
+            b.createdTimestamp
+        );
+
+    const firstCandidateMessage =
+      orderedMessages.find(
+        (currentMessage) =>
+          !currentMessage.author?.bot &&
+          candidateIds.has(
+            String(
+              currentMessage.author?.id ||
+              ""
+            )
+          )
+      );
+
+    if (
+      firstCandidateMessage?.author?.id
+    ) {
+      return String(
+        firstCandidateMessage.author.id
+      );
+    }
+  }
+
+  // =====================================================
+  // PRIORIDADE 5 — PRIMEIRA PESSOA REAL DO TICKET
+  // =====================================================
+
+  if (recentMessages?.size) {
+    const firstHumanMessage =
+      [...recentMessages.values()]
+        .filter(
+          (currentMessage) =>
+            !currentMessage.author?.bot
+        )
+        .sort(
+          (a, b) =>
+            a.createdTimestamp -
+            b.createdTimestamp
+        )[0];
+
+    if (
+      firstHumanMessage?.author?.id
+    ) {
+      return String(
+        firstHumanMessage.author.id
+      );
+    }
+  }
+
+  // =====================================================
+  // ÚLTIMO FALLBACK
+  // =====================================================
+  //
+  // Só chegamos aqui quando nenhuma informação do sistema
+  // de ticket permitiu descobrir o autor.
+  // =====================================================
+
+  return String(
+    message.author?.id || ""
+  ) || null;
+}
+
 function getOpenerIdFromChannel(channel) {
   const topic = String(channel?.topic || "");
   const match = topic.match(/aberto_por:(\d{17,22})/i);
@@ -10576,6 +10982,7 @@ function buildIaInterviewConversationPrompt({
   serverIntelligence,
   systemsIndex,
   currentGuildKnowledge,
+  institutionalMemory,
   openerId,
   hasStartButton,
   openerIsStaff,
@@ -10621,8 +11028,24 @@ MISSÃO:
 - Não fazer textão.
 - Responder só o que foi perguntado.
 - Não aprovar, não reprovar e não prometer entrada.
-- Use SANTACREATORS_OPERATIONAL_IDENTITY como definição oficial da SantaCreators.
-- Não reduza a SantaCreators a criadores de conteúdo, influencers, Social Media ou Mega Eventos.
+- Use SANTACREATORS_OPERATIONAL_IDENTITY como definição oficial e prioritária da SantaCreators.
+- A SantaCreators NÃO é uma empresa criada para desenvolver influenciadores.
+- A SantaCreators NÃO é uma agência de influencers.
+- A SantaCreators NÃO existe para fazer alguém crescer em TikTok, YouTube, Instagram ou lives.
+- A SantaCreators NÃO deve ser apresentada como "equipe de criadores de conteúdo".
+- A SantaCreators é uma estrutura operacional dentro do ecossistema FiveM e Discord que organiza e movimenta grandes operações e Mega Eventos pelas cidades.
+- Os Mega Eventos são uma parte central e extremamente importante da atuação, envolvendo planejamento, organização, cidades, organizações, equipes, participantes, cronograma, registros, presença, premiações, acompanhamento e execução.
+- Não reduza, porém, toda a estrutura da SantaCreators a uma única frase ou a somente um evento.
+- Creator é nome de uma posição/equipe dentro da estrutura e NÃO significa automaticamente "influenciador de redes sociais".
+- Quando alguém perguntar sobre entrar para a EQUIPE da SantaCreators, explique que existe um processo de entrevista.
+- A pessoa NÃO recebe formulário automaticamente só porque abriu o ticket.
+- Primeiro existe o pré-atendimento.
+- Depois é necessário aguardar alguém autorizado da equipe assumir o ticket.
+- A equipe humana conduz ou inicia a entrevista.
+- O formulário/processo correspondente só deve ser enviado ou iniciado no momento correto pela equipe.
+- A IA pode explicar o processo, tirar dúvidas e conversar enquanto a equipe não chegou.
+- A IA não deve fingir que já iniciou uma entrevista humana quando isso ainda não aconteceu.
+- A IA não deve prometer cargo, vaga, aprovação ou entrada.
 - Quando a pergunta for sobre uma área específica, responda sobre aquela área sem transformar essa área na definição completa da SantaCreators.
 - Quando existirem dados atuais do Discord ou dos sistemas internos, eles possuem prioridade sobre exemplos históricos.
 TAMANHO E ESTILO DA RESPOSTA:
@@ -10953,13 +11376,44 @@ ${IA_ENTREVISTA_HELP_ROLE_IDS.map((id) => `<@&${id}>`).join(", ")}
 CONTEXTO REAL DO SERVIDOR:
 ${knowledge}
 
+DADOS OPERACIONAIS E CONSULTAS ATUAIS:
+${serverIntelligence}
+
+CONHECIMENTO ATUAL DO SERVIDOR:
+${currentGuildKnowledge}
+
+MEMÓRIA INSTITUCIONAL AUTORIZADA:
+${institutionalMemory}
+
+REGRAS DA MEMÓRIA INSTITUCIONAL:
+- Esta memória contém ensinamentos institucionais registrados pelo responsável autorizado da SantaCreators.
+- Use somente os ensinamentos relevantes para a conversa atual.
+- Use os ensinamentos naturalmente, sem anunciar que está consultando memória.
+- Não diga "Macedo me ensinou isso", "segundo minha memória" ou frases semelhantes sem necessidade.
+- Se um ensinamento determinar como a IA deve agir em determinada situação, aplique esse comportamento quando a situação realmente ocorrer.
+- Se um ensinamento corrigir uma explicação institucional anterior, considere a versão ensinada mais recente.
+- A memória institucional NÃO substitui informações operacionais atuais.
+- Cargo atual, membro atual, ranking, presença, NPS, cronograma, registros, eventos atuais e outros dados mutáveis devem continuar sendo obtidos das fontes atuais do servidor.
+- Se existir conflito entre memória institucional e dado operacional atual, o dado operacional atual possui prioridade para representar o estado atual.
+- Não invente novas regras a partir de um ensinamento.
+- Preserve o significado do que foi ensinado.
+
 HISTÓRICO RECENTE DO CANAL:
 ${history}
 
 MENSAGEM ATUAL:
 ${message.author.tag}: ${message.content}
 
-Responda agora em português brasileiro, como conversa natural de Discord:
+IDIOMA DA CONVERSA:
+- Detecte o idioma da mensagem atual.
+- Responda no mesmo idioma da pessoa.
+- Se a mensagem atual for curta ou ambígua, use o idioma predominante do histórico recente.
+- Se a pessoa mudar de idioma, acompanhe naturalmente.
+- Não anuncie qual idioma detectou.
+- Não traduza nomes próprios, cargos, IDs, canais ou nomes oficiais da SantaCreators sem necessidade.
+- Escreva corretamente no idioma utilizado pela pessoa, sem copiar erros gramaticais.
+
+Responda agora como uma conversa natural de Discord, utilizando o idioma da pessoa:
 `;
 }
 
@@ -10995,6 +11449,24 @@ const currentGuildKnowledge =
     message.guild.id
   ) || "Sem conhecimento prévio adicional.";
 
+// =====================================================
+// MEMÓRIA INSTITUCIONAL AUTORIZADA
+// =====================================================
+//
+// Recupera ensinamentos persistentes registrados pelo
+// responsável autorizado da SantaCreators.
+//
+// Isso permite que o comportamento aprendido também seja
+// utilizado dentro do pré-atendimento de entrevistas.
+//
+// Dados operacionais atuais continuam tendo prioridade.
+// =====================================================
+
+const institutionalMemory =
+  fetchRelevantInstitutionalMemory(
+    message
+  );
+
 const hasStartButton =
   await channelHasInterviewStartButton(
     message.channel,
@@ -11023,6 +11495,7 @@ const prompt = buildIaInterviewConversationPrompt({
   serverIntelligence,
   systemsIndex,
   currentGuildKnowledge,
+  institutionalMemory,
   openerId,
   hasStartButton,
   openerIsStaff,
@@ -11031,25 +11504,46 @@ const prompt = buildIaInterviewConversationPrompt({
 
   let lastError = null;
 
-  for (const modelName of GEMINI_MODEL_FALLBACKS) {
-    try {
-      const result = await geminiClient.models.generateContent({
-        model: modelName,
-        contents: prompt,
-        config: {
-  temperature: 0.75,
-  topP: 0.9,
-  topK: 35,
-  maxOutputTokens: 500,
-},
-      });
+for (const modelName of GEMINI_MODEL_FALLBACKS) {
+  try {
+    const result =
+      await withGeminiTimeout(
+        geminiClient.models.generateContent({
+          model: modelName,
+          contents: prompt,
+          config: {
+            temperature: 0.75,
+            topP: 0.9,
+            topK: 35,
+            maxOutputTokens: 500,
+          },
+        }),
+        4500,
+        `IA ENTREVISTA | ${modelName}`
+      );
 
-      return result.text;
-    } catch (err) {
-      lastError = err;
-      if (!isGeminiModelError(err)) throw err;
+    return result.text;
+  } catch (err) {
+    lastError = err;
+
+    if (
+      err?.code ===
+      "GEMINI_REQUEST_TIMEOUT"
+    ) {
+      console.warn(
+        `[IA ENTREVISTA] Modelo ${modelName} demorou demais. Tentando próximo fallback.`
+      );
+
+      continue;
+    }
+
+    if (
+      !isGeminiModelError(err)
+    ) {
+      throw err;
     }
   }
+}
 
   throw lastError;
 }
@@ -12424,6 +12918,320 @@ function takeNextIaInterviewPendingMessage(channelId) {
   return next;
 }
 
+// =====================================================
+// IA — ATENDIMENTO AUTOMÁTICO EM TICKETS GERAIS
+// =====================================================
+
+async function handleAiTicketAssistMessage(
+  message,
+  client
+) {
+  if (
+    !message?.guild ||
+    message.author?.bot
+  ) {
+    return false;
+  }
+
+  if (
+    !isAiTicketAssistChannel(
+      message.channel
+    )
+  ) {
+    return false;
+  }
+
+  if (
+    isDiscordCommandMessage(
+      message
+    )
+  ) {
+    return false;
+  }
+
+  const openerId =
+    await resolveAiTicketAssistOpenerId(
+      message,
+      client
+    );
+
+  if (!openerId) {
+    return false;
+  }
+
+  let state =
+    getAiTicketAssistState(
+      message.channelId
+    ) || {
+      openerId,
+      active: true,
+      pausedByStaff: false,
+      startedAt: Date.now(),
+    };
+
+  if (
+    String(state.openerId || "") !==
+    String(openerId)
+  ) {
+    state = {
+      ...state,
+      openerId,
+    };
+  }
+
+  saveAiTicketAssistState(
+    message.channelId,
+    state
+  );
+
+  const isOpener =
+    String(message.author.id) ===
+    String(openerId);
+
+  const isAuthorizedStaff =
+    memberIsAiTicketAssistStaff(
+      message.member
+    );
+
+  const mentionedBot =
+    client?.user?.id
+      ? message.mentions.users.has(
+          client.user.id
+        )
+      : false;
+
+  // =====================================================
+  // STAFF AUTORIZADO ASSUMIU O TICKET
+  // =====================================================
+  //
+  // IMPORTANTE:
+  // o próprio autor do ticket NÃO conta como takeover.
+  //
+  // Portanto, se Macedo abrir o ticket e possuir Owner /
+  // Resp Creators, a IA continua conversando com ele.
+  //
+  // Só entrega quando OUTRA pessoa autorizada falar.
+  // =====================================================
+
+  if (
+    isAuthorizedStaff &&
+    !isOpener
+  ) {
+    if (!state.pausedByStaff) {
+      state = {
+        ...state,
+        active: false,
+        pausedByStaff: true,
+        pausedAt: Date.now(),
+        pausedBy:
+          message.author.id,
+      };
+
+      saveAiTicketAssistState(
+        message.channelId,
+        state
+      );
+
+      await message.channel
+        .send({
+          content:
+            `Vi que ${message.author} assumiu o atendimento por aqui. Vou deixar vocês conversarem e fico fora da conversa. Se precisarem de mim depois, é só me mencionar.`,
+          allowedMentions: {
+            users: [
+              message.author.id,
+            ],
+            roles: [],
+            parse: [],
+          },
+        })
+        .catch(() => {});
+    }
+
+    return true;
+  }
+
+  // =====================================================
+  // IA JÁ ENTREGOU O TICKET PARA STAFF
+  // =====================================================
+
+  if (state.pausedByStaff) {
+    // Mesma lógica já existente no ticket de entrevista:
+    // o autor pode chamar explicitamente a IA novamente.
+
+    if (
+      isOpener &&
+      mentionedBot
+    ) {
+      state = {
+        ...state,
+        active: true,
+        pausedByStaff: false,
+        resumedByMention: true,
+        resumedAt: Date.now(),
+        pausedBy: null,
+        pausedAt: null,
+      };
+
+      saveAiTicketAssistState(
+        message.channelId,
+        state
+      );
+    } else {
+      return true;
+    }
+  }
+
+  // =====================================================
+  // SOMENTE O AUTOR DO TICKET RECEBE O PRÉ-ATENDIMENTO
+  // =====================================================
+
+  if (!isOpener) {
+    return false;
+  }
+
+  // =====================================================
+  // EVITA RESPOSTAS DUPLICADAS NO MESMO TICKET
+  // =====================================================
+
+  if (
+    AI_TICKET_ASSIST_PROCESSING.has(
+      message.channelId
+    )
+  ) {
+    return true;
+  }
+
+  AI_TICKET_ASSIST_PROCESSING.add(
+    message.channelId
+  );
+
+  try {
+    await message.channel
+      .sendTyping()
+      .catch(() => {});
+
+    const content =
+      cleanText(
+        message.content || ""
+      );
+
+    rememberMessage(
+      message.channelId,
+      message.author.username,
+      content
+    );
+
+    const response =
+      await generateIAResponse({
+        message,
+        client,
+      });
+
+    const finalText =
+      limitDiscordText(
+        fixBrokenDiscordMentions(
+          response
+        )
+      );
+
+    if (!finalText) {
+      return true;
+    }
+
+    const allowedMentionUsers =
+      uniqueDiscordUserIds(
+        openerId,
+        message.author.id
+      );
+
+    const responseParts =
+      splitDiscordText(
+        finalText
+      );
+
+    for (
+      let index = 0;
+      index < responseParts.length;
+      index++
+    ) {
+      const part =
+        responseParts[index];
+
+      if (index === 0) {
+        await message
+          .reply({
+            content: part,
+            allowedMentions: {
+              repliedUser: true,
+              users:
+                allowedMentionUsers,
+              roles: [],
+              parse: [],
+            },
+          })
+          .catch((err) => {
+            console.error(
+              "[IA TICKET ASSIST] Falha ao responder:",
+              err?.message || err
+            );
+          });
+
+        continue;
+      }
+
+      await message.channel
+        .send({
+          content: part,
+          allowedMentions: {
+            users:
+              allowedMentionUsers,
+            roles: [],
+            parse: [],
+          },
+        })
+        .catch((err) => {
+          console.error(
+            "[IA TICKET ASSIST] Falha ao enviar continuação:",
+            err?.message || err
+          );
+        });
+    }
+
+    saveLongTermConversation(
+      message,
+      finalText
+    );
+
+    saveInstitutionalTeaching(
+      message
+    );
+
+    saveAiTicketAssistState(
+      message.channelId,
+      {
+        ...state,
+        active: true,
+        pausedByStaff: false,
+        lastInteractionAt:
+          Date.now(),
+      }
+    );
+
+    return true;
+  } catch (err) {
+    console.error(
+      "[IA TICKET ASSIST] Erro:",
+      err
+    );
+
+    return true;
+  } finally {
+    AI_TICKET_ASSIST_PROCESSING.delete(
+      message.channelId
+    );
+  }
+}
+
 export async function handleIaInterviewTicketMessage(message, client) {
   if (!message.guild || message.author.bot) return false;
 
@@ -12547,7 +13355,12 @@ state = {
   saveIaEntrevistaState();
 
 const content = cleanText(message.content);
-rememberMessage(message.channelId, message.author.username, content);
+
+rememberMessage(
+  message.channelId,
+  message.author.username,
+  content
+);
 
 IA_ENTREVISTA_PROCESSING.set(
   message.channelId,
@@ -12555,36 +13368,63 @@ IA_ENTREVISTA_PROCESSING.set(
 );
 
 try {
-  await message.channel.sendTyping().catch(() => {});
+  await message.channel
+    .sendTyping()
+    .catch(() => {});
 
-  let response = buildIaInterviewQuickAnswer(message, openerId);
+  // =====================================================
+  // IA INTELIGENTE PRIMEIRO
+  // =====================================================
+  //
+  // A IA tenta interpretar naturalmente a conversa.
+  //
+  // As respostas rápidas antigas continuam existindo,
+  // mas agora funcionam apenas como fallback caso
+  // o Gemini falhe ou exceda o tempo permitido.
+  //
+  // Nada da estrutura antiga de fallback foi removido.
+  // =====================================================
 
-  if (!response) {
-    try {
-      response = await withIaTimeout(
-        generateIaInterviewConversation(message, client, openerId),
-        9000,
-        "IA ENTREVISTA"
-      );
-    } catch (err) {
-      console.error(
-        "[IA ENTREVISTA] Falha/timeout ao gerar resposta:",
-        err?.message || err
-      );
+  let response = null;
 
-      response =
-        `Entendi ${buildSafeUserMention(openerId)} 😄\n\n` +
-        `A SantaCreators reúne organização, entretenimento e operação dentro do ecossistema FiveM/Discord, conectando cidades, eventos, organizações, equipes e toda a estrutura que existe por trás disso.\n\n` +
-        `Se tua mensagem era sobre alguma parte específica, pode me explicar um pouquinho mais que eu sigo exatamente pelo assunto que você trouxe.`;
-    }
+  try {
+    response = await withIaTimeout(
+      generateIaInterviewConversation(
+        message,
+        client,
+        openerId
+      ),
+      9000,
+      "IA ENTREVISTA"
+    );
+  } catch (err) {
+    console.error(
+      "[IA ENTREVISTA] Falha/timeout ao gerar resposta:",
+      err?.message || err
+    );
+
+    response =
+      buildIaInterviewQuickAnswer(
+        message,
+        openerId
+      ) ||
+      `Entendi ${buildSafeUserMention(openerId)} 😄\n\n` +
+      `A SantaCreators reúne organização, entretenimento e operação dentro do ecossistema FiveM/Discord, conectando cidades, eventos, organizações, equipes e toda a estrutura que existe por trás disso.\n\n` +
+      `Se tua mensagem era sobre alguma parte específica, pode me explicar um pouquinho mais que eu sigo exatamente pelo assunto que você trouxe.`;
   }
 
   const finalText =
-    limitDiscordText(fixBrokenDiscordMentions(response)) ||
+    limitDiscordText(
+      fixBrokenDiscordMentions(
+        response
+      )
+    ) ||
     `Boaaa ${buildSafeUserMention(openerId)} 😄 me explica com suas palavras que eu vou te acompanhando por aqui.`;
 
   const responseParts =
-    splitDiscordText(finalText);
+    splitDiscordText(
+      finalText
+    );
 
   const allowedMentionUsers =
     uniqueDiscordUserIds(
@@ -12597,40 +13437,47 @@ try {
     index < responseParts.length;
     index++
   ) {
-    const part = responseParts[index];
+    const part =
+      responseParts[index];
 
     if (index === 0) {
-      await message.reply({
-        content: part,
-        allowedMentions: {
-          repliedUser: true,
-          users: allowedMentionUsers,
-          roles: [],
-          parse: [],
-        },
-      }).catch((err) => {
-        console.error(
-          "[IA ENTREVISTA] Falha ao responder primeira parte no ticket:",
-          err?.message || err
-        );
-      });
+      await message
+        .reply({
+          content: part,
+          allowedMentions: {
+            repliedUser: true,
+            users:
+              allowedMentionUsers,
+            roles: [],
+            parse: [],
+          },
+        })
+        .catch((err) => {
+          console.error(
+            "[IA ENTREVISTA] Falha ao responder primeira parte no ticket:",
+            err?.message || err
+          );
+        });
 
       continue;
     }
 
-    await message.channel.send({
-      content: part,
-      allowedMentions: {
-        users: allowedMentionUsers,
-        roles: [],
-        parse: [],
-      },
-    }).catch((err) => {
-      console.error(
-        "[IA ENTREVISTA] Falha ao responder continuação no ticket:",
-        err?.message || err
-      );
-    });
+    await message.channel
+      .send({
+        content: part,
+        allowedMentions: {
+          users:
+            allowedMentionUsers,
+          roles: [],
+          parse: [],
+        },
+      })
+      .catch((err) => {
+        console.error(
+          "[IA ENTREVISTA] Falha ao responder continuação no ticket:",
+          err?.message || err
+        );
+      });
   }
 } finally {
   IA_ENTREVISTA_PROCESSING.delete(
@@ -12659,7 +13506,6 @@ try {
 
 return true;
 }
-
 // =====================================================
 // SETUP PRINCIPAL
 // =====================================================
@@ -12691,11 +13537,24 @@ export function setupIaChatAuto(client) {
   );
 
   client.on(
-    "messageCreate",
-    async (message) => {
-      try {
+  "messageCreate",
+  async (message) => {
+    try {
+const handledAiTicketAssist =
+  await handleAiTicketAssistMessage(
+    message,
+    client
+  );
+
+if (handledAiTicketAssist) {
+  return;
+}
+
 const handledIaInterview =
-  await handleIaInterviewTicketMessage(message, client);
+  await handleIaInterviewTicketMessage(
+    message,
+    client
+  );
 
 if (handledIaInterview) {
   return;
