@@ -3093,32 +3093,142 @@ function isShortGreeting(text) {
 }
 
 async function buildIaInterviewRecentHumanContext(message, openerId) {
-  const messages = await message.channel.messages.fetch({ limit: 20 }).catch(() => null);
+  const messages =
+    await message.channel.messages
+      .fetch({
+        limit: 30,
+      })
+      .catch(() => null);
+
   if (!messages?.size) {
     return {
-      historyText: "Sem histórico recente.",
-      hasHumanSupportRecently: false,
+      historyText:
+        "Sem histórico recente.",
+      hasHumanSupportRecently:
+        false,
     };
   }
 
-  const ordered = [...messages.values()].reverse();
+  const ordered =
+    [...messages.values()]
+      .reverse();
 
-  const humanMessages = ordered.filter((msg) => !msg.author.bot);
-  const hasHumanSupportRecently = humanMessages.some((msg) =>
-    msg.author.id !== openerId &&
-    Date.now() - msg.createdTimestamp <= 5 * 60 * 1000
-  );
+  // =====================================================
+  // HUMANOS DO TICKET
+  // =====================================================
+  //
+  // Continua separado porque esta lista é usada para
+  // detectar se outra pessoa humana entrou no atendimento.
+  //
+  // Portanto não alteramos a lógica de takeover / suporte.
+  // =====================================================
 
-  const historyText = humanMessages
-    .slice(-10)
-    .map((msg) => {
-      const who = msg.author.id === openerId ? "CANDIDATO" : "OUTRO_HUMANO";
-      return `${who} ${msg.author.tag}: ${cleanText(msg.content || "")}`;
-    })
-    .join("\n");
+  const humanMessages =
+    ordered.filter(
+      (msg) =>
+        !msg.author.bot
+    );
+
+  const hasHumanSupportRecently =
+    humanMessages.some(
+      (msg) =>
+        msg.author.id !==
+          openerId &&
+        Date.now() -
+          msg.createdTimestamp <=
+          5 * 60 * 1000
+    );
+
+  // =====================================================
+  // HISTÓRICO REAL DA CONVERSA
+  // =====================================================
+  //
+  // Antes somente mensagens humanas eram enviadas ao Gemini.
+  //
+  // Isso fazia a IA esquecer aquilo que ELA MESMA tinha
+  // acabado de responder.
+  //
+  // Agora entram:
+  //
+  // - mensagens do autor do ticket;
+  // - respostas da própria SantaCreators IA;
+  // - outros humanos que participaram do ticket.
+  //
+  // Outros bots continuam sendo ignorados para não poluir
+  // o contexto.
+  // =====================================================
+
+  const relevantMessages =
+    ordered.filter(
+      (msg) => {
+        if (!msg?.author) {
+          return false;
+        }
+
+        // Pessoa que abriu o ticket.
+        if (
+          msg.author.id ===
+          openerId
+        ) {
+          return true;
+        }
+
+        // Própria SantaCreators IA.
+        if (
+          msg.author.bot &&
+          msg.author.id ===
+            message.client?.user?.id
+        ) {
+          return true;
+        }
+
+        // Outros humanos.
+        if (!msg.author.bot) {
+          return true;
+        }
+
+        // Outros bots não entram.
+        return false;
+      }
+    );
+
+  const historyText =
+    relevantMessages
+      .slice(-16)
+      .map((msg) => {
+        let who =
+          "OUTRO_HUMANO";
+
+        if (
+          msg.author.id ===
+          openerId
+        ) {
+          who =
+            "CANDIDATO";
+        } else if (
+          msg.author.bot &&
+          msg.author.id ===
+            message.client?.user?.id
+        ) {
+          who =
+            "SANTACREATORS_IA";
+        }
+
+        return (
+          `${who} ${msg.author.tag}: ` +
+          `${cleanText(
+            msg.content || ""
+          )}`
+        );
+      })
+      .filter(Boolean)
+      .join("\n");
 
   return {
-    historyText: historyText || "Sem histórico recente.",
+    historyText:
+      historyText ||
+      "Sem histórico recente.",
+
     hasHumanSupportRecently,
   };
 }
@@ -11453,19 +11563,31 @@ function iaInterviewGenerationLooksCutOff(result) {
   }
 
   const candidate =
-    Array.isArray(result.candidates)
+    Array.isArray(
+      result.candidates
+    )
       ? result.candidates[0]
       : null;
 
   const finishReason =
     String(
-      candidate?.finishReason || ""
+      candidate?.finishReason ||
+      ""
     )
       .trim()
       .toUpperCase();
 
   // =====================================================
-  // MOTIVOS EXPLÍCITOS DE INTERRUPÇÃO
+  // SOMENTE INTERRUPÇÕES CONFIRMADAS PELA API
+  // =====================================================
+  //
+  // Não tentamos mais adivinhar que uma resposta foi
+  // cortada apenas pela última palavra.
+  //
+  // O Gemini informa quando encerra por limite de tokens.
+  //
+  // Isso evita falso positivo e impede que respostas boas
+  // sejam descartadas sem necessidade.
   // =====================================================
 
   const interruptedReasons =
@@ -11476,68 +11598,13 @@ function iaInterviewGenerationLooksCutOff(result) {
       "TOKEN_LIMIT",
     ]);
 
-  if (
+  return Boolean(
     finishReason &&
     interruptedReasons.has(
       finishReason
     )
-  ) {
-    return true;
-  }
-
-  // =====================================================
-  // DETECÇÃO CONSERVADORA DE FINAL VISIVELMENTE QUEBRADO
-  // =====================================================
-  //
-  // Não exigimos pontuação final.
-  //
-  // Apenas identificamos casos em que a última palavra
-  // normalmente exige continuação imediata.
-  //
-  // Exemplo real:
-  //
-  // "posso te explicar o"
-  //
-  // Isso claramente não constitui uma frase concluída.
-  // =====================================================
-
-  const normalizedEnd =
-    normalizeSearchText(
-      text
-    ).trim();
-
-  const suspiciousEndingPatterns = [
-    /\b(o|a|os|as)$/,
-    /\b(de|do|da|dos|das)$/,
-    /\b(para|pra|por)$/,
-    /\b(com|sem)$/,
-    /\b(que|porque|pois)$/,
-    /\b(e|ou|mas)$/,
-    /\b(um|uma|uns|umas)$/,
-    /\b(no|na|nos|nas)$/,
-    /\b(seu|sua|seus|suas)$/,
-    /\b(meu|minha|meus|minhas)$/,
-  ];
-
-  const endsSuspiciously =
-    suspiciousEndingPatterns.some(
-      (pattern) =>
-        pattern.test(
-          normalizedEnd
-        )
-    );
-
-  if (endsSuspiciously) {
-    console.warn(
-      `[IA ENTREVISTA] Texto terminou de forma suspeita: "${text.slice(-80)}"`
-    );
-
-    return true;
-  }
-
-  return false;
+  );
 }
-
 async function generateIaInterviewConversation(message, client, openerId) {
   const geminiClient = getGeminiClient();
 
@@ -11628,32 +11695,21 @@ const prompt = buildIaInterviewConversationPrompt({
 for (const modelName of GEMINI_MODEL_FALLBACKS) {
   try {
     const result =
-      await withGeminiTimeout(
-        geminiClient.models.generateContent({
-          model: modelName,
-          contents: prompt,
-          config: {
-            temperature: 0.75,
-            topP: 0.9,
-            topK: 35,
+  await withGeminiTimeout(
+    geminiClient.models.generateContent({
+      model: modelName,
+      contents: prompt,
+      config: {
+        temperature: 0.75,
+        topP: 0.9,
+        topK: 35,
 
-            // =====================================================
-            // LIMITE SEGURO PARA A ENTREVISTA
-            // =====================================================
-            //
-            // O prompt continua controlando o tamanho natural.
-            //
-            // Este valor é somente o teto máximo permitido para
-            // evitar que respostas sejam interrompidas antes
-            // da conclusão.
-            // =====================================================
-
-            maxOutputTokens: 1400,
-          },
-        }),
-        4500,
-        `IA ENTREVISTA | ${modelName}`
-      );
+        maxOutputTokens: 1400,
+      },
+    }),
+    7000,
+    `IA ENTREVISTA | ${modelName}`
+  );
 
     // =====================================================
     // PROTEÇÃO CONTRA RESPOSTA CORTADA
@@ -13571,33 +13627,54 @@ try {
   // Nada da estrutura antiga de fallback foi removido.
   // =====================================================
 
-  let response = null;
+ let response = null;
 
-  try {
-    response = await withIaTimeout(
-      generateIaInterviewConversation(
-        message,
-        client,
-        openerId
-      ),
-      9000,
-      "IA ENTREVISTA"
-    );
-  } catch (err) {
-    console.error(
-      "[IA ENTREVISTA] Falha/timeout ao gerar resposta:",
-      err?.message || err
-    );
+try {
+  // =====================================================
+  // GERAÇÃO INTELIGENTE DA ENTREVISTA
+  // =====================================================
+  //
+  // generateIaInterviewConversation() já possui timeout
+  // individual para cada modelo Gemini.
+  //
+  // Portanto não aplicamos outro timeout de 9 segundos
+  // envolvendo toda a cadeia.
+  //
+  // Assim, se um modelo estiver lento ou indisponível,
+  // a própria função consegue avançar para o próximo
+  // fallback sem ser interrompida prematuramente.
+  // =====================================================
 
-    response =
-      buildIaInterviewQuickAnswer(
-        message,
-        openerId
-      ) ||
-      `Entendi ${buildSafeUserMention(openerId)} 😄\n\n` +
-      `A SantaCreators reúne organização, entretenimento e operação dentro do ecossistema FiveM/Discord, conectando cidades, eventos, organizações, equipes e toda a estrutura que existe por trás disso.\n\n` +
-      `Se tua mensagem era sobre alguma parte específica, pode me explicar um pouquinho mais que eu sigo exatamente pelo assunto que você trouxe.`;
-  }
+  response =
+    await generateIaInterviewConversation(
+      message,
+      client,
+      openerId
+    );
+} catch (err) {
+  console.error(
+    "[IA ENTREVISTA] Falha ao gerar resposta inteligente:",
+    err?.message || err
+  );
+
+  // =====================================================
+  // FALLBACK DE SEGURANÇA
+  // =====================================================
+  //
+  // Continua existindo.
+  //
+  // Só será utilizado quando toda a cadeia inteligente
+  // realmente falhar.
+  // =====================================================
+
+  response =
+    buildIaInterviewQuickAnswer(
+      message,
+      openerId
+    ) ||
+    `Entendi ${buildSafeUserMention(openerId)} 😄\n\n` +
+    `Não consegui processar tua mensagem pela conversa inteligente agora, mas continuo por aqui. Pode repetir a última pergunta que eu tento seguir exatamente dela.`;
+}
 
   const finalText =
     limitDiscordText(
