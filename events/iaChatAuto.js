@@ -11766,26 +11766,80 @@ for (const modelName of GEMINI_MODEL_FALLBACKS) {
     }
 
     return generatedText;
-  } catch (err) {
-    lastError = err;
+} catch (err) {
+  lastError = err;
 
-    if (
-      err?.code ===
-      "GEMINI_REQUEST_TIMEOUT"
-    ) {
-      console.warn(
-        `[IA ENTREVISTA] Modelo ${modelName} demorou demais. Tentando próximo fallback.`
-      );
+  // =====================================================
+  // TIMEOUT DO MODELO
+  // =====================================================
+  //
+  // Se somente este modelo demorou demais,
+  // seguimos para o próximo modelo da cadeia.
+  // =====================================================
 
-      continue;
-    }
+  if (
+    err?.code ===
+    "GEMINI_REQUEST_TIMEOUT"
+  ) {
+    console.warn(
+      `[IA ENTREVISTA] Modelo ${modelName} demorou demais. Tentando próximo fallback.`
+    );
 
-    if (
-      !isGeminiModelError(err)
-    ) {
-      throw err;
-    }
+    continue;
   }
+
+  // =====================================================
+  // QUOTA / RATE LIMIT DO MODELO
+  // =====================================================
+  //
+  // Um erro 429 / RESOURCE_EXHAUSTED pode atingir somente
+  // o modelo atual.
+  //
+  // Isso NÃO significa que os outros modelos configurados
+  // estejam indisponíveis.
+  //
+  // Portanto a entrevista deve seguir para o próximo
+  // fallback, exatamente como o chat principal já faz.
+  // =====================================================
+
+  if (
+    isGeminiQuotaError(err)
+  ) {
+    console.warn(
+      `[IA ENTREVISTA] Quota/limite atingido em ${modelName}. Tentando próximo fallback...`
+    );
+
+    continue;
+  }
+
+  // =====================================================
+  // MODELO INDISPONÍVEL / INCOMPATÍVEL
+  // =====================================================
+  //
+  // Se determinado modelo não existir, estiver removido
+  // ou não for compatível, também seguimos para o próximo.
+  // =====================================================
+
+  if (
+    isGeminiModelError(err)
+  ) {
+    console.warn(
+      `[IA ENTREVISTA] Modelo indisponível ou incompatível: ${modelName}. Tentando próximo fallback...`
+    );
+
+    continue;
+  }
+
+  // =====================================================
+  // ERRO REALMENTE NÃO RECUPERÁVEL
+  // =====================================================
+  //
+  // Somente um erro que não seja timeout, quota ou
+  // problema específico do modelo encerra a geração.
+  // =====================================================
+
+  throw err;
+}
 }
 
 throw lastError;
