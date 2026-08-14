@@ -347,6 +347,368 @@ export function getHierarchyPersonData(userId) {
   };
 }
 
+// =====================================================
+// CONSULTA EXTERNA — HIERARQUIA OFICIAL SANTACREATORS
+// =====================================================
+//
+// Estas funções são utilizadas por outros sistemas,
+// principalmente pela SantaCreators IA.
+//
+// IMPORTANTE:
+//
+// A hierarquia institucional NÃO é calculada utilizando
+// a posição técnica dos cargos dentro do Discord.
+//
+// A fonte de verdade são exatamente os cargos definidos
+// neste CONFIG e as divisões persistidas por este sistema.
+// =====================================================
+
+export function isOfficialSantaCreatorsTeamMember(member) {
+  if (
+    !member ||
+    member.user?.bot ||
+    !member.roles?.cache
+  ) {
+    return false;
+  }
+
+  const officialRoleIds = new Set([
+    CONFIG.ROLES.OWNER,
+    CONFIG.ROLES.RESP_CREATOR,
+    CONFIG.ROLES.RESP_INFLU,
+    CONFIG.ROLES.RESP_LIDER,
+    CONFIG.ROLES.COORD_CREATOR,
+    CONFIG.ROLES.GESTOR,
+    CONFIG.ROLES.MANAGER_CREATOR,
+    CONFIG.ROLES.SOCIAL_MEDIAS,
+    CONFIG.ROLES.EQ_MANAGER,
+    CONFIG.ROLES.EQ_SOCIAL_MEDIAS,
+    CONFIG.ROLES.EQ_CREATORS,
+  ]);
+
+  return member.roles.cache.some(
+    (role) =>
+      officialRoleIds.has(role.id)
+  );
+}
+
+export function isOfficialSantaCreatorsResponsible(member) {
+  if (
+    !member ||
+    member.user?.bot ||
+    !member.roles?.cache
+  ) {
+    return false;
+  }
+
+  const responsibleRoleIds = new Set([
+    CONFIG.ROLES.OWNER,
+    CONFIG.ROLES.RESP_CREATOR,
+    CONFIG.ROLES.RESP_INFLU,
+    CONFIG.ROLES.RESP_LIDER,
+    CONFIG.ROLES.COORD_CREATOR,
+    CONFIG.ROLES.GESTOR,
+    CONFIG.ROLES.MANAGER_CREATOR,
+  ]);
+
+  return member.roles.cache.some(
+    (role) =>
+      responsibleRoleIds.has(role.id)
+  );
+}
+
+export function getOfficialSantaCreatorsHierarchySnapshot(guild) {
+  if (!guild) {
+    return null;
+  }
+
+  const slots =
+    loadSlots();
+
+  const divisions =
+    loadDivisions();
+
+  const hierarchyDefinitions = [
+    {
+      key: "OWNER",
+      label: "Owner",
+      roleId: CONFIG.ROLES.OWNER,
+      responsible: true,
+    },
+    {
+      key: "RESP_CREATOR",
+      label: "Resp. Creators",
+      roleId: CONFIG.ROLES.RESP_CREATOR,
+      responsible: true,
+    },
+    {
+      key: "RESP_INFLU",
+      label: "Resp. Influ",
+      roleId: CONFIG.ROLES.RESP_INFLU,
+      responsible: true,
+    },
+    {
+      key: "RESP_LIDER",
+      label: "Resp. Líder",
+      roleId: CONFIG.ROLES.RESP_LIDER,
+      responsible: true,
+    },
+    {
+      key: "COORD_CREATOR",
+      label: "Coord. Creators",
+      roleId: CONFIG.ROLES.COORD_CREATOR,
+      responsible: true,
+    },
+    {
+      key: "GESTOR",
+      label: "Gestor",
+      roleId: CONFIG.ROLES.GESTOR,
+      responsible: true,
+    },
+    {
+      key: "MANAGER_CREATOR",
+      label: "Manager Creators",
+      roleId: CONFIG.ROLES.MANAGER_CREATOR,
+      responsible: true,
+    },
+    {
+      key: "SOCIAL_MEDIAS",
+      label: "Social Medias",
+      roleId: CONFIG.ROLES.SOCIAL_MEDIAS,
+      responsible: false,
+    },
+    {
+      key: "EQ_MANAGER",
+      label: "Equipe Manager",
+      roleId: CONFIG.ROLES.EQ_MANAGER,
+      responsible: false,
+    },
+    {
+      key: "EQ_SOCIAL_MEDIAS",
+      label: "Equipe Social Medias",
+      roleId: CONFIG.ROLES.EQ_SOCIAL_MEDIAS,
+      responsible: false,
+    },
+    {
+      key: "EQ_CREATORS",
+      label: "Equipe Creators",
+      roleId: CONFIG.ROLES.EQ_CREATORS,
+      responsible: false,
+    },
+  ];
+
+  const seenMembers =
+    new Set();
+
+  const teamMemberIds =
+    new Set();
+
+  const responsibleMemberIds =
+    new Set();
+
+  const hierarchy =
+    [];
+
+  for (
+    const definition
+    of hierarchyDefinitions
+  ) {
+    const role =
+      guild.roles.cache.get(
+        definition.roleId
+      );
+
+    const members =
+      role
+        ? [...role.members.values()]
+            .filter(
+              (member) =>
+                !member.user?.bot
+            )
+            .sort(
+              (a, b) =>
+                a.displayName.localeCompare(
+                  b.displayName
+                )
+            )
+        : [];
+
+    const memberData =
+      [];
+
+    for (
+      const member
+      of members
+    ) {
+      teamMemberIds.add(
+        member.id
+      );
+
+      if (
+        definition.responsible
+      ) {
+        responsibleMemberIds.add(
+          member.id
+        );
+      }
+
+      const memberDivisions =
+        getMemberDivisions(
+          divisions,
+          member.id
+        );
+
+      const slotKey =
+        slots[member.id] ||
+        CONFIG.SLOTS.NONE;
+
+      memberData.push({
+        userId:
+          member.id,
+
+        displayName:
+          member.displayName,
+
+        mention:
+          `<@${member.id}>`,
+
+        slot:
+          slotKey,
+
+        slotLabel:
+          CONFIG.LABELS[slotKey] ||
+          CONFIG.LABELS[
+            CONFIG.SLOTS.NONE
+          ],
+
+        divisions:
+          memberDivisions,
+
+        divisionLabels:
+          memberDivisions.map(
+            (divisionKey) =>
+              getDivisionLabel(
+                divisionKey
+              )
+          ),
+      });
+
+      seenMembers.add(
+        member.id
+      );
+    }
+
+    hierarchy.push({
+      ...definition,
+      members:
+        memberData,
+    });
+  }
+
+  const divisionsSnapshot =
+    Object.keys(
+      CONFIG.DIVISIONS
+    ).map(
+      (divisionKey) => {
+        const respInfluRole =
+          guild.roles.cache.get(
+            CONFIG.ROLES.RESP_INFLU
+          );
+
+        const respLiderRole =
+          guild.roles.cache.get(
+            CONFIG.ROLES.RESP_LIDER
+          );
+
+        const respInflu =
+          respInfluRole
+            ? [...respInfluRole.members.values()]
+                .filter(
+                  (member) =>
+                    !member.user?.bot &&
+                    memberHasDivision(
+                      divisions,
+                      member.id,
+                      divisionKey
+                    )
+                )
+                .map(
+                  (member) => ({
+                    userId:
+                      member.id,
+
+                    displayName:
+                      member.displayName,
+
+                    mention:
+                      `<@${member.id}>`,
+                  })
+                )
+            : [];
+
+        const respLider =
+          respLiderRole
+            ? [...respLiderRole.members.values()]
+                .filter(
+                  (member) =>
+                    !member.user?.bot &&
+                    memberHasDivision(
+                      divisions,
+                      member.id,
+                      divisionKey
+                    )
+                )
+                .map(
+                  (member) => ({
+                    userId:
+                      member.id,
+
+                    displayName:
+                      member.displayName,
+
+                    mention:
+                      `<@${member.id}>`,
+                  })
+                )
+            : [];
+
+        return {
+          key:
+            divisionKey,
+
+          label:
+            CONFIG.DIVISIONS[
+              divisionKey
+            ]?.label ||
+            divisionKey,
+
+          respInflu,
+
+          respLider,
+        };
+      }
+    );
+
+  return {
+    generatedAt:
+      Date.now(),
+
+    hierarchy,
+
+    divisions:
+      divisionsSnapshot,
+
+    teamMemberIds:
+      [...teamMemberIds],
+
+    responsibleMemberIds:
+      [...responsibleMemberIds],
+
+    totalOfficialMembers:
+      seenMembers.size,
+  };
+}
+
 // Filtra membros que podem ser editados pelo executor
 async function getEditableMembers(guild, permissionLevel) {
   await guild.members.fetch();

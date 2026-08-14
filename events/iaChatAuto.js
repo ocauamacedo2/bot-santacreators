@@ -297,9 +297,60 @@ const AI_TICKET_ASSIST_STAFF_ROLE_IDS = new Set([
   "1352408327983861844", // Resp. Creators
 ]);
 
+// =====================================================
+// IA — SUPORTE AUTOMÁTICO PARA LÍDERES
+// =====================================================
+//
+// Nessas categorias, pessoas com o cargo abaixo podem
+// receber atendimento automático contínuo da IA.
+//
+// A IA permanece ajudando até alguém da hierarquia oficial
+// da SantaCreators participar do atendimento.
+//
+// Depois que alguém da equipe participar:
+//
+// - mensagens normais da equipe não recebem resposta;
+// - reply simples para a IA não recebe resposta;
+// - menção explícita à IA permite que ela responda;
+// - o líder/solicitante volta a receber atendimento quando
+//   a equipe ficar pelo menos 5 minutos sem interagir.
+// =====================================================
+
+const AI_LEADER_SUPPORT_ROLE_ID =
+  "1353858422063239310";
+
+const AI_LEADER_SUPPORT_CATEGORY_IDS = new Set([
+  "1414687963161559180",
+  "1428572742051168378",
+  "1482874296685695118",
+]);
+
+const AI_HUMAN_TEAM_SILENCE_MS =
+  5 * 60 * 1000;
+
+// =====================================================
+// IA — FOLLOW-UP DE TICKET SEM RESPOSTA
+// =====================================================
+//
+// Depois de uma resposta da IA, se a pessoa simplesmente
+// desaparecer e nenhum Creator assumir, a IA pode fazer
+// UM lembrete curto marcando a pessoa.
+//
+// O lembrete não fica se repetindo em loop.
+// =====================================================
+
+const AI_TICKET_IDLE_FOLLOWUP_MS =
+  10 * 60 * 1000;
+
 const AI_TICKET_ASSIST_ACTIVE = new Map();
 
 const AI_TICKET_ASSIST_PROCESSING = new Set();
+
+const AI_TICKET_IDLE_TIMERS = new Map();
+
+const AI_LEADER_SUPPORT_HUMAN_ACTIVITY = new Map();
+
+const AI_LEADER_SUPPORT_PROCESSING = new Set();
 
 const IA_ENTREVISTA_ACTIVE = new Map();
 
@@ -7379,75 +7430,143 @@ async function fetchCronogramaContext(message) {
   }
 }
 
-function buildRolesHierarchyContext(message) {
+async function buildRolesHierarchyContext(message) {
   try {
-    const guild = message.guild;
+    const guild =
+      message.guild;
 
     if (!guild) {
       return "Servidor não encontrado.";
     }
 
-    const roles = guild.roles.cache
-      .filter((role) => role.name !== "@everyone")
-      .sort((a, b) => b.position - a.position)
-      .map((role) => {
-        return `- <@&${role.id}> | nome: ${role.name} | ID: ${role.id} | posição Discord: ${role.position} | membros: ${role.members?.size || 0}`;
-      })
-      .slice(0, 45);
+    const {
+      getOfficialSantaCreatorsHierarchySnapshot,
+    } = await import(
+      "./hierarquiaDivisoes.js"
+    );
 
-    const discordRolesContext =
-      roles.length > 0
-        ? roles.join("\n")
-        : "Nenhum cargo encontrado no cache.";
+    const snapshot =
+      getOfficialSantaCreatorsHierarchySnapshot(
+        guild
+      );
+
+    if (!snapshot) {
+      return "A hierarquia oficial não ficou disponível.";
+    }
+
+    const hierarchyLines =
+      snapshot.hierarchy.map(
+        (group) => {
+          const members =
+            group.members.length > 0
+              ? group.members
+                  .map(
+                    (member) => {
+                      const divisionText =
+                        member.divisionLabels
+                          ?.filter(Boolean)
+                          .join(" + ") ||
+                        "Sem cidade definida";
+
+                      return (
+                        `  • ${member.mention}` +
+                        ` | ${member.displayName}` +
+                        ` | horário: ${member.slotLabel}` +
+                        ` | divisão: ${divisionText}`
+                      );
+                    }
+                  )
+                  .join("\n")
+              : "  • Ninguém atualmente";
+
+          return [
+            `${group.label}:`,
+            members,
+          ].join("\n");
+        }
+      );
+
+    const divisionLines =
+      snapshot.divisions.map(
+        (division) => {
+          const influ =
+            division.respInflu.length > 0
+              ? division.respInflu
+                  .map(
+                    (member) =>
+                      member.mention
+                  )
+                  .join(", ")
+              : "Nenhum";
+
+          const lider =
+            division.respLider.length > 0
+              ? division.respLider
+                  .map(
+                    (member) =>
+                      member.mention
+                  )
+                  .join(", ")
+              : "Nenhum";
+
+          return [
+            `${division.label}`,
+            `Resp. Influ: ${influ}`,
+            `Resp. Líder: ${lider}`,
+          ].join(" | ");
+        }
+      );
+
+    const responsibleMentions =
+      snapshot.responsibleMemberIds
+        .map(
+          (userId) =>
+            `<@${userId}>`
+        )
+        .join(", ");
 
     return [
       "========================================",
-      "HIERARQUIA OFICIAL — SANTACREATORS",
+      "HIERARQUIA OFICIAL ATUAL — SANTACREATORS",
       "========================================",
       "",
-      "IMPORTANTE:",
-      "- A hierarquia institucional da SantaCreators NÃO deve ser deduzida apenas pela posição dos cargos no Discord.",
-      "- Cargos técnicos, administrativos, integrações, bots ou cargos auxiliares podem estar acima de cargos humanos no Discord sem fazer parte da linha institucional de evolução.",
-      "- Portanto, NÃO coloque automaticamente cargos como ADMINISTRAÇÃO, cargos de bot ou cargos técnicos no topo da hierarquia humana apenas porque possuem posição maior no Discord.",
+      "FONTE:",
+      `- Sistema oficial de Hierarquia da SantaCreators.`,
+      `- Painel oficial: <#${AI_HIERARCHY_CHANNEL_ID}>`,
+      "- NÃO deduza autoridade pela posição técnica de cargos do Discord.",
+      "- NÃO trate cargos técnicos acima no Discord como superiores institucionais.",
+      "- Os grupos e membros abaixo vieram diretamente do mesmo sistema que mantém o painel oficial.",
       "",
-      "CAMINHO NATURAL DE EVOLUÇÃO:",
+      "HIERARQUIA ATUAL:",
       "",
-      "Creator",
-      "↓",
-      "Creator Líder",
-      "↓",
-      "Social Media / Manager",
-      "↓",
-      "Gestor",
-      "↓",
-      "Coord",
-      "↓",
-      "Responsáveis",
-      "",
-      "RESPONSÁVEIS:",
-      "- Os cargos específicos de responsáveis existentes no Discord devem ser identificados pelos cargos reais do servidor.",
-      "- Entre eles podem existir funções como Resp Líder, Resp Influ e Resp Creators quando esses cargos estiverem presentes no servidor.",
-      "- Não invente cargos que não estejam disponíveis nos dados reais.",
-      "",
-      "REGRA DE INTERPRETAÇÃO:",
-      "- Use a estrutura oficial acima para explicar quem está acima ou abaixo na evolução institucional.",
-      "- Use os cargos reais do Discord para identificar quais cargos existem atualmente, seus nomes, IDs e membros.",
-      "- Não confunda posição técnica do Discord com autoridade institucional.",
-      "- Não trate cargos de bot como pessoas ou como integrantes humanos da hierarquia.",
+      hierarchyLines.join(
+        "\n\n"
+      ),
       "",
       "========================================",
-      "CARGOS REAIS ATUAIS DO DISCORD",
+      "RESPONSÁVEIS POR CIDADE",
       "========================================",
       "",
-      discordRolesContext,
+      divisionLines.join(
+        "\n"
+      ),
+      "",
+      "========================================",
+      "PESSOAS ATUALMENTE CLASSIFICADAS COMO RESPONSÁVEIS",
+      "========================================",
+      "",
+      responsibleMentions ||
+        "Nenhum responsável identificado atualmente.",
+      "",
+      `Total de membros oficiais identificados: ${snapshot.totalOfficialMembers}`,
     ].join("\n");
   } catch (err) {
     console.error(
-      "[IA CHAT AUTO] Erro ao montar hierarquia:",
+      "[IA CHAT AUTO] Erro ao consultar hierarquia oficial:",
       err
     );
 
-    return "Não consegui montar a hierarquia de cargos.";
+    return "Não consegui consultar a hierarquia oficial neste momento.";
   }
 }
 
@@ -8493,20 +8612,449 @@ async function runSmartInternalQueryRouter(message) {
     return "";
   }
 
-  return [
+    return [
     "CONSULTAS INTERNAS INTELIGENTES:",
     results.join("\n\n====================\n\n"),
   ].join("\n\n");
 }
+
+// =====================================================
+// IA — CONTEXTO PROFISSIONAL DE SUPORTE
+// =====================================================
+
+function isAiLeaderSupportCategory(message) {
+  return AI_LEADER_SUPPORT_CATEGORY_IDS.has(
+    String(
+      message?.channel?.parentId ||
+      ""
+    )
+  );
+}
+
+function memberHasAiLeaderSupportRole(member) {
+  return Boolean(
+    member?.roles?.cache?.has(
+      AI_LEADER_SUPPORT_ROLE_ID
+    )
+  );
+}
+
+function isAiSantaCreatorsSupportEnvironment(message) {
+  if (!message?.channel) {
+    return false;
+  }
+
+  if (
+    isAiTicketAssistChannel(
+      message.channel
+    )
+  ) {
+    return true;
+  }
+
+  if (
+    isIaInterviewChannel(
+      message.channel
+    )
+  ) {
+    return true;
+  }
+
+  if (
+    isAiLeaderSupportCategory(
+      message
+    )
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function extractUserMentionIdsFromText(text) {
+  const ids =
+    new Set();
+
+  const raw =
+    String(text || "");
+
+  const regex =
+    /<@!?(\d{17,22})>/g;
+
+  let match;
+
+  while (
+    (match = regex.exec(raw)) !==
+    null
+  ) {
+    if (match[1]) {
+      ids.add(
+        match[1]
+      );
+    }
+  }
+
+  return [
+    ...ids,
+  ];
+}
+
+async function buildAiSantaCreatorsSupportContext(
+  message
+) {
+  if (
+    !isAiSantaCreatorsSupportEnvironment(
+      message
+    )
+  ) {
+    return "";
+  }
+
+  let hierarchyContext =
+    "";
+
+  try {
+    hierarchyContext =
+      await buildRolesHierarchyContext(
+        message
+      );
+  } catch (err) {
+    console.error(
+      "[IA SUPPORT] Erro ao carregar hierarquia oficial:",
+      err?.message || err
+    );
+  }
+
+  const recentMessages =
+    await message.channel.messages
+      .fetch({
+        limit: 75,
+      })
+      .catch(
+        () => null
+      );
+
+  const ordered =
+    recentMessages?.size
+      ? [...recentMessages.values()]
+          .sort(
+            (a, b) =>
+              a.createdTimestamp -
+              b.createdTimestamp
+          )
+      : [];
+
+  const conversationLines =
+    [];
+
+  const evidenceLines =
+    [];
+
+  for (
+    const currentMessage
+    of ordered
+  ) {
+    if (
+      !currentMessage?.author
+    ) {
+      continue;
+    }
+
+    const authorType =
+      currentMessage.author.bot
+        ? (
+            currentMessage.author.id ===
+            message.client?.user?.id
+              ? "SANTACREATORS_IA"
+              : "BOT"
+          )
+        : "HUMANO";
+
+    const content =
+      cleanText(
+        currentMessage.content ||
+        ""
+      );
+
+    const attachments =
+      [...(
+        currentMessage.attachments?.values?.() ||
+        []
+      )];
+
+    const attachmentText =
+      attachments
+        .map(
+          (attachment) =>
+            `${attachment.name || "arquivo"}: ${attachment.url}`
+        )
+        .join(" | ");
+
+    const embedsText =
+      (currentMessage.embeds || [])
+        .map(
+          (embed) => {
+            const fields =
+              (embed.fields || [])
+                .map(
+                  (field) =>
+                    `${field.name}: ${field.value}`
+                )
+                .join(" | ");
+
+            return [
+              embed.title || "",
+              embed.description || "",
+              fields,
+              embed.url || "",
+            ]
+              .filter(Boolean)
+              .join(" | ");
+          }
+        )
+        .filter(Boolean)
+        .join(" | ");
+
+    const line =
+      [
+        `[${authorType}]`,
+        `${currentMessage.author.tag || currentMessage.author.id}:`,
+        content,
+        attachmentText,
+        embedsText,
+      ]
+        .filter(Boolean)
+        .join(" ");
+
+    conversationLines.push(
+      line
+    );
+
+    if (
+      attachments.length > 0 ||
+      /https?:\/\//i.test(
+        currentMessage.content ||
+        ""
+      )
+    ) {
+      evidenceLines.push(
+        [
+          `Mensagem ${currentMessage.id}`,
+          `Autor: <@${currentMessage.author.id}>`,
+          content
+            ? `Texto: ${content}`
+            : null,
+          attachmentText
+            ? `Anexos: ${attachmentText}`
+            : null,
+          `Link: https://discord.com/channels/${currentMessage.guildId}/${currentMessage.channelId}/${currentMessage.id}`,
+        ]
+          .filter(Boolean)
+          .join(" | ")
+      );
+    }
+  }
+
+  return `
+========================================
+MODO DE PRÉ-ATENDIMENTO E SUPORTE — SANTACREATORS
+========================================
+
+VOCÊ ESTÁ EM UM AMBIENTE DE SUPORTE DA SANTACREATORS.
+
+IDENTIDADE DA EQUIPE:
+- Dentro da SantaCreators, prefira os termos "equipe", "Creators", "equipe Creators", "responsável", "Responsáveis da SantaCreators" ou o cargo real da pessoa.
+- NÃO chame a equipe da SantaCreators de "staff" como termo institucional.
+- A SantaCreators funciona de maneira semelhante a uma estrutura independente de atendimento e operação, mas internamente o termo correto é Creators.
+- Quando mencionar a staff do servidor FiveM, aí "staff do servidor" pode ser utilizado se realmente estiver falando da staff da cidade e não da SantaCreators.
+
+AUTORIDADE DOS RESPONSÁVEIS:
+- Responsáveis autorizados da SantaCreators PODEM tomar providências contra players e facções quando a função e o caso permitirem.
+- Isso pode incluir advertência/ADV, punição, banimento ou providências relacionadas à facção.
+- Portanto é PROIBIDO responder genericamente que "a SantaCreators não pode punir".
+- O que a IA NÃO deve fazer é prometer uma punição antes da análise das evidências.
+- A IA também não deve afirmar que determinada pessoa será banida sem análise.
+- A decisão deve ser atribuída aos responsáveis competentes quando depender de análise humana.
+
+FUNÇÃO DA IA:
+- Você realiza PRÉ-ATENDIMENTO.
+- Você pode conversar normalmente com a pessoa.
+- Você pode investigar o ocorrido através da conversa.
+- Você pode pedir informações que estejam faltando.
+- Você pode identificar inconsistências.
+- Você pode organizar as informações.
+- Você pode esclarecer dúvidas utilizando dados internos reais da SantaCreators.
+- Você pode preparar o caso para o Creator que assumir depois.
+- Você NÃO precisa mandar todas as perguntas de uma vez.
+- Pergunte naturalmente conforme a pessoa responde.
+- Não transforme a conversa em um formulário.
+- Não faça interrogatório.
+- Não faça perguntas que a pessoa já respondeu.
+- Leia o histórico antes de pedir alguma coisa novamente.
+- Se a pessoa estiver nervosa ou irritada, mantenha postura calma, educada e firme.
+- Não provoque.
+- Não entre em discussão.
+- Não trate a pessoa como culpada antes da análise.
+
+DENÚNCIAS:
+- Descubra exatamente o que aconteceu.
+- Identifique quem está denunciando.
+- Identifique o player ou players envolvidos.
+- Se existirem IDs, registre-os no contexto.
+- Se existir clipe, vídeo, print ou link, considere como evidência.
+- Se houver várias pessoas, diferencie cada ID.
+- Se a pessoa enviar apenas IDs sem explicar o que cada pessoa fez, pergunte naturalmente qual foi a participação de cada uma.
+- Não faça a pessoa repetir informação que já aparece no histórico.
+- Sem evidência suficiente, explique de forma natural que os responsáveis podem não conseguir confirmar/aplicar uma medida somente com alegação.
+- Não diga que uma denúncia "não serve" apenas por estar incompleta.
+- Ajude a pessoa a completar o que falta.
+
+PROVAS:
+- Clipe pode ser utilizado.
+- Vídeo pode ser utilizado.
+- Print pode ser utilizado.
+- Link pode ser utilizado quando levar para a evidência.
+- IDs dos envolvidos são importantes.
+- Leia links e anexos disponíveis no contexto antes de perguntar se a pessoa possui prova.
+- Se já houver clipe ou print no ticket, NÃO pergunte novamente "tem prova?".
+- Nesse caso reconheça que a evidência já foi enviada e, se necessário, pergunte apenas o que ainda falta.
+
+PERDA DE ITENS / RR / PROBLEMAS DO SERVIDOR:
+- Se a pessoa alegar perda de itens por RR, queda, problema do servidor ou situação semelhante, tente identificar EXATAMENTE o que foi perdido.
+- Pergunte o nome dos itens quando não estiver informado.
+- Pergunte quantidade quando não estiver informada.
+- Se forem vários itens, organize item + quantidade.
+- Procure print, vídeo, inventário, clipe ou qualquer evidência capaz de confirmar os itens.
+- Não invente itens nem quantidades.
+- Não diga que haverá ressarcimento garantido.
+- Prepare os dados para análise dos responsáveis.
+
+EVENTOS:
+- Se o problema tiver acontecido em evento, descubra qual evento quando isso ainda não estiver claro.
+- Consulte o cronograma real quando a pergunta depender de evento, cidade, dia ou horário.
+- Se houver instrução passada por Macedo ou por algum responsável e a pessoa disser que alguém descumpriu, registre a alegação e procure evidência.
+- Não considere automaticamente a pessoa culpada somente porque alguém disse que descumpriu.
+
+ESCALONAMENTO:
+- Quando o assunto realmente precisar de intervenção humana, você pode indicar ou mencionar um responsável atual da SantaCreators com base na HIERARQUIA OFICIAL recebida abaixo.
+- Não marque várias pessoas sem necessidade.
+- Não transforme qualquer dúvida simples em marcação da gestão.
+- Quando houver um responsável diretamente relacionado à cidade/divisão, prefira essa pessoa.
+- Quando não houver responsável específico disponível, use a hierarquia geral.
+- Macedo pode ser mencionado em assuntos relacionados ao BOT, sistema da SantaCreators, desenvolvimento, erro técnico importante ou quando a hierarquia/contexto indicar que a intervenção dele realmente é necessária.
+- Não marque Macedo para qualquer dúvida simples.
+
+RESUMO DE TICKET:
+- Se Macedo, um Creator ou responsável pedir "resume o ticket", "o que rolou aqui?", "o que aconteceu?", "me atualiza", "me dá o contexto" ou intenção semelhante, NÃO responda apenas a última mensagem.
+- Leia o histórico inteiro fornecido abaixo.
+- Entregue o contexto geral de forma direta.
+- Informe:
+  1. por que o ticket foi aberto;
+  2. o que a pessoa relatou;
+  3. pessoas/IDs envolvidos;
+  4. provas ou anexos existentes;
+  5. informações importantes coletadas;
+  6. o que ainda está faltando, se estiver faltando;
+  7. o que a IA já orientou;
+  8. se alguém da equipe já participou;
+  9. situação atual do atendimento.
+- Não obrigue o responsável a ler o ticket inteiro.
+- Não invente fatos para preencher lacunas.
+- Diferencie claramente alegação de fato comprovado.
+
+CONVERSA NATURAL:
+- Você pode conversar em etapas.
+- Uma resposta não precisa resolver o caso inteiro.
+- Se a pessoa responder uma informação, use essa resposta para definir o próximo passo.
+- Não repita a mesma orientação várias vezes.
+- Não mande textão quando uma pergunta curta for suficiente.
+- Não mande várias mensagens só para parecer humana.
+- Divida em mais de uma mensagem apenas quando o conteúdo realmente ficar mais natural ou legível.
+- O objetivo é diminuir trabalho e poluição do chat, não aumentar.
+- Seja compreensiva sem perder firmeza.
+- Adapte o nível de informalidade ao jeito da conversa.
+- Em denúncia/punição/problema sério, reduza gírias.
+
+========================================
+HIERARQUIA OFICIAL ATUAL
+========================================
+
+${hierarchyContext || "Hierarquia oficial indisponível nesta consulta."}
+
+========================================
+HISTÓRICO RECENTE COMPLETO DO ATENDIMENTO
+========================================
+
+${
+  conversationLines.length > 0
+    ? conversationLines.join("\n")
+    : "Nenhuma mensagem recente encontrada."
+}
+
+========================================
+EVIDÊNCIAS / ANEXOS / LINKS IDENTIFICADOS
+========================================
+
+${
+  evidenceLines.length > 0
+    ? evidenceLines.join("\n")
+    : "Nenhuma evidência ou link identificado automaticamente."
+}
+`;
+}
+
 async function buildServerIntelligenceContext(message, intent) {
   const blocks = [];
 
-  if (intent.isGreetingOnly) {
-    console.log("[IA CHAT AUTO] Consulta interna bloqueada: apenas saudação.");
+  const isSupportEnvironment =
+    isAiSantaCreatorsSupportEnvironment(
+      message
+    );
+
+  if (
+    intent.isGreetingOnly &&
+    !isSupportEnvironment
+  ) {
+    console.log(
+      "[IA CHAT AUTO] Consulta interna bloqueada: apenas saudação."
+    );
+
     return "O usuário apenas saudou. Responda amigavelmente sem dados técnicos.";
   }
 
-    // =====================================================
+  // =====================================================
+  // CONTEXTO PROFISSIONAL DE SUPORTE
+  // =====================================================
+
+  if (
+    isSupportEnvironment
+  ) {
+    console.log(
+      "[IA SUPPORT] Ambiente de atendimento detectado. Construindo contexto completo do caso."
+    );
+
+    try {
+      const supportContext =
+        await buildAiSantaCreatorsSupportContext(
+          message
+        );
+
+      if (
+        supportContext
+      ) {
+        blocks.push(
+          supportContext
+        );
+      }
+    } catch (err) {
+      console.error(
+        "[IA SUPPORT] Erro ao construir contexto do atendimento:",
+        err?.message || err
+      );
+    }
+  }
+
+  // =====================================================
   // INTELIGÊNCIA DE PESSOAS
   // =====================================================
 
@@ -8678,10 +9226,15 @@ async function buildServerIntelligenceContext(message, intent) {
     blocks.push(await fetchCronogramaContext(message));
   }
 
-  if (intent.wantsRoles || intent.hasSpecificReference) {
-    console.log("[IA CHAT AUTO] Consulta interna liberada: Cargos/Referências.");
-    blocks.push(buildRolesHierarchyContext(message));
-  }
+if (intent.wantsRoles || intent.hasSpecificReference) {
+  console.log("[IA CHAT AUTO] Consulta interna liberada: Hierarquia Oficial/Cargos/Referências.");
+
+  blocks.push(
+    await buildRolesHierarchyContext(
+      message
+    )
+  );
+}
 
   if (intent.wantsChannels || intent.hasSpecificReference) {
     console.log("[IA CHAT AUTO] Consulta interna liberada: Canais.");
@@ -10267,6 +10820,81 @@ function isGeminiKeyError(err) {
 }
 
 // =====================================================
+// ERRO TRANSITÓRIO DO GEMINI
+// =====================================================
+//
+// Erros 500/502/503/504 podem acontecer temporariamente
+// dentro da própria infraestrutura do provedor.
+//
+// Isso NÃO significa que os outros modelos da cadeia
+// estejam indisponíveis.
+//
+// Portanto a IA deve tentar o próximo fallback.
+// =====================================================
+
+function isGeminiTransientError(err) {
+  const text =
+    String(
+      err?.message || err
+    ).toLowerCase();
+
+  const status =
+    Number(
+      err?.status ||
+      err?.statusCode ||
+      err?.response?.status ||
+      0
+    );
+
+  return (
+    status === 500 ||
+    status === 502 ||
+    status === 503 ||
+    status === 504 ||
+
+    text.includes(
+      "\"code\":500"
+    ) ||
+
+    text.includes(
+      "\"code\":502"
+    ) ||
+
+    text.includes(
+      "\"code\":503"
+    ) ||
+
+    text.includes(
+      "\"code\":504"
+    ) ||
+
+    text.includes(
+      "internal error encountered"
+    ) ||
+
+    text.includes(
+      "\"status\":\"internal\""
+    ) ||
+
+    text.includes(
+      "service unavailable"
+    ) ||
+
+    text.includes(
+      "\"status\":\"unavailable\""
+    ) ||
+
+    text.includes(
+      "bad gateway"
+    ) ||
+
+    text.includes(
+      "gateway timeout"
+    )
+  );
+}
+
+// =====================================================
 // GERAR RESPOSTA
 // =====================================================
 
@@ -10494,29 +11122,45 @@ for (const modelName of GEMINI_CHAT_MODEL_FALLBACKS) {
     // =====================================================
 
     if (isGeminiQuotaError(err)) {
-      console.warn(
-        `[IA CHAT AUTO] Quota/limite atingido em ${modelName} | ${elapsed}ms. Tentando próximo fallback...`
-      );
+  console.warn(
+    `[IA CHAT AUTO] Quota/limite atingido em ${modelName} | ${elapsed}ms. Tentando próximo fallback...`
+  );
 
-      continue;
-    }
+  continue;
+}
 
-    // =====================================================
-    // MODELO INDISPONÍVEL / INCOMPATÍVEL
-    // =====================================================
-    //
-    // Erros de modelo inexistente, removido ou incompatível
-    // também permitem tentar o próximo fallback.
-    // =====================================================
+// =====================================================
+// ERRO TEMPORÁRIO DO PROVEDOR
+// =====================================================
+//
+// Um INTERNAL 500 não derruba mais a conversa inteira.
+//
+// Tentamos o próximo modelo configurado.
+// =====================================================
 
-    if (isGeminiModelError(err)) {
-      console.warn(
-        `[IA CHAT AUTO] Modelo indisponível ou incompatível: ${modelName} | ${elapsed}ms. Tentando próximo fallback...`
-      );
+if (
+  isGeminiTransientError(
+    err
+  )
+) {
+  console.warn(
+    `[IA CHAT AUTO] Erro temporário em ${modelName} | ${elapsed}ms. Tentando próximo fallback...`
+  );
 
-      continue;
-    }
+  continue;
+}
 
+// =====================================================
+// MODELO INDISPONÍVEL / INCOMPATÍVEL
+// =====================================================
+
+if (isGeminiModelError(err)) {
+  console.warn(
+    `[IA CHAT AUTO] Modelo indisponível ou incompatível: ${modelName} | ${elapsed}ms. Tentando próximo fallback...`
+  );
+
+  continue;
+}
     // =====================================================
     // ERRO REALMENTE NÃO RECUPERÁVEL
     // =====================================================
@@ -10585,18 +11229,40 @@ function isAiTicketAssistChannel(channel) {
   );
 }
 
-function memberIsAiTicketAssistStaff(member) {
-  if (!member?.roles?.cache) {
+async function memberIsAiTicketAssistStaff(member) {
+  if (
+    !member ||
+    !member.roles?.cache ||
+    member.user?.bot
+  ) {
     return false;
   }
 
-  if (member.user?.bot) {
-    return false;
-  }
+  try {
+    const {
+      isOfficialSantaCreatorsTeamMember,
+    } = await import(
+      "./hierarquiaDivisoes.js"
+    );
 
-  return member.roles.cache.some((role) =>
-    AI_TICKET_ASSIST_STAFF_ROLE_IDS.has(role.id)
-  );
+    return Boolean(
+      isOfficialSantaCreatorsTeamMember(
+        member
+      )
+    );
+  } catch (err) {
+    console.error(
+      "[IA TICKET ASSIST] Não foi possível consultar a hierarquia oficial. Utilizando fallback de segurança:",
+      err?.message || err
+    );
+
+    return member.roles.cache.some(
+      (role) =>
+        AI_TICKET_ASSIST_STAFF_ROLE_IDS.has(
+          role.id
+        )
+    );
+  }
 }
 
 function getAiTicketAssistState(channelId) {
@@ -13218,6 +13884,226 @@ function takeNextIaInterviewPendingMessage(channelId) {
 // IA — ATENDIMENTO AUTOMÁTICO EM TICKETS GERAIS
 // =====================================================
 
+// =====================================================
+// FOLLOW-UP INTELIGENTE DE TICKET
+// =====================================================
+
+function clearAiTicketIdleFollowUp(
+  channelId
+) {
+  const existing =
+    AI_TICKET_IDLE_TIMERS.get(
+      String(channelId || "")
+    );
+
+  if (
+    existing
+  ) {
+    clearTimeout(
+      existing
+    );
+
+    AI_TICKET_IDLE_TIMERS.delete(
+      String(channelId || "")
+    );
+  }
+}
+
+function scheduleAiTicketIdleFollowUp(
+  channel,
+  openerId,
+  client
+) {
+  if (
+    !channel?.id ||
+    !openerId
+  ) {
+    return;
+  }
+
+  clearAiTicketIdleFollowUp(
+    channel.id
+  );
+
+  const scheduledAt =
+    Date.now();
+
+  const timer =
+    setTimeout(
+      async () => {
+        try {
+          AI_TICKET_IDLE_TIMERS.delete(
+            String(channel.id)
+          );
+
+          const state =
+            getAiTicketAssistState(
+              channel.id
+            );
+
+          // Se alguém da equipe assumiu,
+          // não chamamos o usuário.
+
+          if (
+            state?.pausedByStaff
+          ) {
+            return;
+          }
+
+          const recent =
+            await channel.messages
+              .fetch({
+                limit: 50,
+              })
+              .catch(
+                () => null
+              );
+
+          if (
+            !recent?.size
+          ) {
+            return;
+          }
+
+          const messagesAfterSchedule =
+            [...recent.values()]
+              .filter(
+                (currentMessage) =>
+                  currentMessage.createdTimestamp >
+                  scheduledAt
+              );
+
+          // =====================================================
+          // O AUTOR RESPONDEU
+          // =====================================================
+
+          const openerAnswered =
+            messagesAfterSchedule.some(
+              (currentMessage) =>
+                !currentMessage.author?.bot &&
+                String(
+                  currentMessage.author.id
+                ) ===
+                  String(
+                    openerId
+                  )
+            );
+
+          if (
+            openerAnswered
+          ) {
+            return;
+          }
+
+          // =====================================================
+          // ALGUM CREATOR RESPONDEU
+          // =====================================================
+
+          let humanTeamAnswered =
+            false;
+
+          for (
+            const currentMessage
+            of messagesAfterSchedule
+          ) {
+            if (
+              currentMessage.author?.bot
+            ) {
+              continue;
+            }
+
+            if (
+              String(
+                currentMessage.author.id
+              ) ===
+                String(
+                  openerId
+                )
+            ) {
+              continue;
+            }
+
+            const member =
+              currentMessage.member ||
+              await channel.guild.members
+                .fetch(
+                  currentMessage.author.id
+                )
+                .catch(
+                  () => null
+                );
+
+            if (
+              await memberIsAiTicketAssistStaff(
+                member
+              )
+            ) {
+              humanTeamAnswered =
+                true;
+
+              break;
+            }
+          }
+
+          if (
+            humanTeamAnswered
+          ) {
+            return;
+          }
+
+          // =====================================================
+          // CONTINUA REALMENTE NO VÁCUO
+          // =====================================================
+
+          await channel
+            .send({
+              content:
+                `<@${openerId}> passando aqui só pra confirmar: você ainda precisa seguir com esse atendimento? Se sim, pode continuar me explicando por aqui que eu acompanho contigo.`,
+
+              allowedMentions: {
+                users: [
+                  String(
+                    openerId
+                  ),
+                ],
+
+                roles: [],
+
+                parse: [],
+              },
+            })
+            .catch(
+              () => {}
+            );
+
+          saveAiTicketAssistState(
+            channel.id,
+            {
+              ...(state || {}),
+
+              openerId,
+
+              lastIdleFollowUpAt:
+                Date.now(),
+            }
+          );
+        } catch (err) {
+          console.error(
+            "[IA TICKET ASSIST] Erro no follow-up automático:",
+            err?.message || err
+          );
+        }
+      },
+
+      AI_TICKET_IDLE_FOLLOWUP_MS
+    );
+
+  AI_TICKET_IDLE_TIMERS.set(
+    String(channel.id),
+    timer
+  );
+}
+
 async function handleAiTicketAssistMessage(
   message,
   client
@@ -13280,12 +14166,12 @@ async function handleAiTicketAssistMessage(
     state
   );
 
-  const isOpener =
+    const isOpener =
     String(message.author.id) ===
     String(openerId);
 
   const isAuthorizedStaff =
-    memberIsAiTicketAssistStaff(
+    await memberIsAiTicketAssistStaff(
       message.member
     );
 
@@ -13528,6 +14414,327 @@ async function handleAiTicketAssistMessage(
   }
 }
 
+// =====================================================
+// IA — SUPORTE AUTOMÁTICO PARA LÍDERES
+// =====================================================
+
+async function handleAiLeaderSupportMessage(
+  message,
+  client
+) {
+  if (
+    !message?.guild ||
+    message.author?.bot
+  ) {
+    return false;
+  }
+
+  if (
+    !isAiLeaderSupportCategory(
+      message
+    )
+  ) {
+    return false;
+  }
+
+  if (
+    isDiscordCommandMessage(
+      message
+    )
+  ) {
+    return false;
+  }
+
+  const isOfficialTeamMember =
+    await memberIsAiTicketAssistStaff(
+      message.member
+    );
+
+  const isLeaderSupportUser =
+    memberHasAiLeaderSupportRole(
+      message.member
+    );
+
+  const mentionedBot =
+    client?.user?.id
+      ? message.mentions.users.has(
+          client.user.id
+        )
+      : false;
+
+  const channelKey =
+    String(
+      message.channelId
+    );
+
+  // =====================================================
+  // ALGUÉM DA EQUIPE OFICIAL FALOU
+  // =====================================================
+
+  if (
+    isOfficialTeamMember &&
+    !isLeaderSupportUser
+  ) {
+    AI_LEADER_SUPPORT_HUMAN_ACTIVITY.set(
+      channelKey,
+      {
+        userId:
+          message.author.id,
+
+        lastInteractionAt:
+          Date.now(),
+      }
+    );
+
+    // Depois que alguém da equipe aparece:
+    //
+    // mensagem comum = silêncio
+    // reply simples = silêncio
+    // menção explícita = responde
+
+    if (
+      !mentionedBot
+    ) {
+      return true;
+    }
+  }
+
+  // =====================================================
+  // PESSOA COM CARGO DE LÍDER PEDINDO SUPORTE
+  // =====================================================
+
+  if (
+    isLeaderSupportUser
+  ) {
+    const humanActivity =
+      AI_LEADER_SUPPORT_HUMAN_ACTIVITY.get(
+        channelKey
+      );
+
+    if (
+      humanActivity
+    ) {
+      const silenceMs =
+        Date.now() -
+        Number(
+          humanActivity.lastInteractionAt ||
+          0
+        );
+
+      if (
+        silenceMs <
+        AI_HUMAN_TEAM_SILENCE_MS
+      ) {
+        // Existe alguém da equipe considerado ativo.
+        //
+        // A IA não atravessa a conversa.
+
+        return true;
+      }
+
+      // Passaram 5 minutos.
+      //
+      // A IA pode voltar naturalmente.
+
+      AI_LEADER_SUPPORT_HUMAN_ACTIVITY.delete(
+        channelKey
+      );
+    }
+  }
+
+  // =====================================================
+  // QUEM PODE ATIVAR O SUPORTE AUTOMÁTICO
+  // =====================================================
+
+  const teamExplicitlyCalledAI =
+    isOfficialTeamMember &&
+    mentionedBot;
+
+  if (
+    !isLeaderSupportUser &&
+    !teamExplicitlyCalledAI
+  ) {
+    return false;
+  }
+
+  const processingKey =
+    `${channelKey}:${message.author.id}`;
+
+  if (
+    AI_LEADER_SUPPORT_PROCESSING.has(
+      processingKey
+    )
+  ) {
+    return true;
+  }
+
+  AI_LEADER_SUPPORT_PROCESSING.add(
+    processingKey
+  );
+
+  try {
+    await message.channel
+      .sendTyping()
+      .catch(
+        () => {}
+      );
+
+    const content =
+      cleanText(
+        message.content ||
+        ""
+      );
+
+    rememberMessage(
+      message.channelId,
+      message.author.username,
+      content
+    );
+
+    const response =
+      await generateIAResponse({
+        message,
+        client,
+      });
+
+    const finalText =
+      limitDiscordText(
+        fixBrokenDiscordMentions(
+          response
+        )
+      );
+
+    if (
+      !finalText
+    ) {
+      return true;
+    }
+
+    const generatedMentionIds =
+      extractUserMentionIdsFromText(
+        finalText
+      );
+
+    const allowedMentionUsers =
+      uniqueDiscordUserIds(
+        message.author.id,
+        ...generatedMentionIds
+      );
+
+    const responseParts =
+      splitDiscordText(
+        finalText
+      );
+
+    for (
+      let index = 0;
+      index <
+      responseParts.length;
+      index++
+    ) {
+      const part =
+        responseParts[
+          index
+        ];
+
+      if (
+        index === 0
+      ) {
+        await message
+          .reply({
+            content:
+              part,
+
+            allowedMentions: {
+              repliedUser:
+                true,
+
+              users:
+                allowedMentionUsers,
+
+              roles: [],
+
+              parse: [],
+            },
+          })
+          .catch(
+            (err) => {
+              console.error(
+                "[IA LEADER SUPPORT] Falha ao responder:",
+                err?.message || err
+              );
+            }
+          );
+
+        continue;
+      }
+
+      await message.channel
+        .send({
+          content:
+            part,
+
+          allowedMentions: {
+            users:
+              allowedMentionUsers,
+
+            roles: [],
+
+            parse: [],
+          },
+        })
+        .catch(
+          (err) => {
+            console.error(
+              "[IA LEADER SUPPORT] Falha ao enviar continuação:",
+              err?.message || err
+            );
+          }
+        );
+    }
+
+    saveLongTermConversation(
+      message,
+      finalText
+    );
+
+    saveInstitutionalTeaching(
+      message
+    );
+
+    // Se quem chamou foi da equipe,
+    // a atividade humana continua válida.
+
+    if (
+      teamExplicitlyCalledAI
+    ) {
+      AI_LEADER_SUPPORT_HUMAN_ACTIVITY.set(
+        channelKey,
+        {
+          userId:
+            message.author.id,
+
+          lastInteractionAt:
+            Date.now(),
+        }
+      );
+    }
+
+    return true;
+  } catch (err) {
+    console.error(
+      "[IA LEADER SUPPORT] Erro:",
+      err
+    );
+
+    return true;
+  } finally {
+    AI_LEADER_SUPPORT_PROCESSING.delete(
+      processingKey
+    );
+  }
+}
+
 export async function handleIaInterviewTicketMessage(message, client) {
   if (!message.guild || message.author.bot) return false;
 
@@ -13600,57 +14807,256 @@ state = {
     saveIaEntrevistaState();
   }
 
-  if (isStaff && !isOpener) {
-    if (!state.pausedByStaff) {
-      IA_ENTREVISTA_ACTIVE.set(message.channelId, {
-        ...state,
-        active: false,
-        pausedByStaff: true,
-        pausedAt: Date.now(),
-        pausedBy: message.author.id,
-      });
-
-      saveIaEntrevistaState();
-
-      await message.channel.send(
-        `Vi que ${message.author} apareceu kkk então vou deixar contigo por aqui 😄 qualquer coisa me chama.`
-      ).catch(() => {});
-    }
-
-    return true;
-  }
-
-  if (!isOpener) {
-    IA_ENTREVISTA_ACTIVE.set(message.channelId, {
+  if (
+    isStaff &&
+    !isOpener
+  ) {
+    state = {
       ...state,
-      active: false,
-      lastHumanHelperId: message.author.id,
-      lastHumanHelperAt: Date.now(),
-    });
+
+      active:
+        false,
+
+      pausedByStaff:
+        true,
+
+      pausedAt:
+        Date.now(),
+
+      pausedBy:
+        message.author.id,
+
+      lastHumanHelperId:
+        message.author.id,
+
+      lastHumanHelperAt:
+        Date.now(),
+    };
+
+    IA_ENTREVISTA_ACTIVE.set(
+      message.channelId,
+      state
+    );
 
     saveIaEntrevistaState();
-    return false;
+
+    if (
+      !mentionedBot
+    ) {
+      if (
+        !state.handoffNoticeSent
+      ) {
+        state = {
+          ...state,
+
+          handoffNoticeSent:
+            true,
+
+          handoffNoticeSentAt:
+            Date.now(),
+        };
+
+        IA_ENTREVISTA_ACTIVE.set(
+          message.channelId,
+          state
+        );
+
+        saveIaEntrevistaState();
+
+        await message.channel
+          .send(
+            `Vi que ${message.author} entrou no atendimento. Vou deixar contigo por aqui e fico acompanhando sem interferir. Se precisar de mim, me menciona.`
+          )
+          .catch(
+            () => {}
+          );
+      }
+
+      return true;
+    }
+
+    // =====================================================
+    // CREATOR MENCIONOU A IA
+    // =====================================================
+    //
+    // Não retornamos aqui.
+    //
+    // A mensagem seguirá para a inteligência da IA.
+    //
+    // Depois da resposta, a pessoa da equipe continua
+    // considerada responsável pelo atendimento.
+    //
+    // Reply simples sem menção continua não ativando a IA.
+    // =====================================================
   }
 
-  if (state.pausedByStaff) return false;
+  // =====================================================
+  // CREATOR CHAMOU EXPLICITAMENTE A IA
+  // =====================================================
+
+  const creatorExplicitlyCalledAI =
+    isStaff &&
+    !isOpener &&
+    mentionedBot;
+
+  // =====================================================
+  // OUTRA PESSOA HUMANA NO TICKET
+  // =====================================================
+  //
+  // Se não for o autor e também não for um Creator
+  // mencionando explicitamente a IA, não respondemos.
+  //
+  // A presença dessa pessoa é registrada como interação
+  // humana para impedir que a IA dispute a conversa.
+  // =====================================================
 
   if (
-    state.lastHumanHelperId &&
-    Date.now() - Number(state.lastHumanHelperAt || 0) <= 5 * 60 * 1000
+    !isOpener &&
+    !creatorExplicitlyCalledAI
   ) {
+    IA_ENTREVISTA_ACTIVE.set(
+      message.channelId,
+      {
+        ...state,
+
+        active:
+          false,
+
+        pausedByStaff:
+          true,
+
+        pausedBy:
+          message.author.id,
+
+        pausedAt:
+          Date.now(),
+
+        lastHumanHelperId:
+          message.author.id,
+
+        lastHumanHelperAt:
+          Date.now(),
+      }
+    );
+
+    saveIaEntrevistaState();
+
     return false;
   }
 
-  IA_ENTREVISTA_ACTIVE.set(message.channelId, {
-    ...state,
-    active: true,
-    pausedByStaff: false,
-    lastCandidateMessageAt: Date.now(),
-  });
+  // =====================================================
+  // REGRAS ABAIXO SÃO EXCLUSIVAS PARA O AUTOR DO TICKET
+  // =====================================================
+  //
+  // Isso é importante porque um Creator que chamou a IA
+  // explicitamente deve receber a resposta, mas não deve
+  // fazer o sistema voltar a considerar a IA responsável
+  // principal pelo atendimento.
+  // =====================================================
 
-  saveIaEntrevistaState();
+  if (
+    isOpener
+  ) {
+    // =====================================================
+    // EQUIPE HUMANA AINDA ATIVA
+    // =====================================================
 
-const content = cleanText(message.content);
+    if (
+      state.lastHumanHelperId
+    ) {
+      const lastHumanInteraction =
+        Number(
+          state.lastHumanHelperAt ||
+          state.pausedAt ||
+          0
+        );
+
+      const silenceMs =
+        Date.now() -
+        lastHumanInteraction;
+
+      if (
+        silenceMs <
+        AI_HUMAN_TEAM_SILENCE_MS
+      ) {
+        return false;
+      }
+
+      // =====================================================
+      // 5 MINUTOS SEM EQUIPE
+      // =====================================================
+      //
+      // O autor voltou a conversar e já se passaram pelo
+      // menos 5 minutos desde a última interação humana.
+      //
+      // A IA pode voltar ao pré-atendimento normalmente.
+      // =====================================================
+
+      state = {
+        ...state,
+
+        active:
+          true,
+
+        pausedByStaff:
+          false,
+
+        pausedBy:
+          null,
+
+        pausedAt:
+          null,
+
+        lastHumanHelperId:
+          null,
+
+        lastHumanHelperAt:
+          null,
+
+        resumedAfterHumanSilence:
+          true,
+
+        resumedAt:
+          Date.now(),
+
+        handoffNoticeSent:
+          false,
+      };
+
+      IA_ENTREVISTA_ACTIVE.set(
+        message.channelId,
+        state
+      );
+
+      saveIaEntrevistaState();
+    }
+
+    // =====================================================
+    // AUTOR CONTINUA SENDO ATENDIDO PELA IA
+    // =====================================================
+
+    state = {
+      ...state,
+
+      active:
+        true,
+
+      pausedByStaff:
+        false,
+
+      lastCandidateMessageAt:
+        Date.now(),
+    };
+
+    IA_ENTREVISTA_ACTIVE.set(
+      message.channelId,
+      state
+    );
+
+    saveIaEntrevistaState();
+  }
+
+  const content = cleanText(message.content);
 
 rememberMessage(
   message.channelId,
@@ -13853,7 +15259,7 @@ export function setupIaChatAuto(client) {
     `[IA CHAT AUTO] Canal: ${AI_CHANNEL_ID}`
   );
 
-  client.on(
+client.on(
   "messageCreate",
   async (message) => {
     try {
@@ -13864,6 +15270,16 @@ const handledAiTicketAssist =
   );
 
 if (handledAiTicketAssist) {
+  return;
+}
+
+const handledAiLeaderSupport =
+  await handleAiLeaderSupportMessage(
+    message,
+    client
+  );
+
+if (handledAiLeaderSupport) {
   return;
 }
 
