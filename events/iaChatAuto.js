@@ -214,6 +214,42 @@ const AI_LONG_TERM_MEMORY_MAX_TOPICS = 30;
 const AI_LONG_TERM_MEMORY_MAX_CONTEXT_CHARS = 12000;
 
 // =====================================================
+// IA — MEMÓRIA CONVERSACIONAL COMPARTILHADA
+// =====================================================
+//
+// Esta memória é diferente da memória individual.
+//
+// MEMÓRIA INDIVIDUAL:
+// - pertence ao usuário;
+// - ajuda a IA a lembrar conversas anteriores daquela pessoa.
+//
+// MEMÓRIA COMPARTILHADA:
+// - reúne experiências reais de conversas da IA;
+// - pode ser consultada em conversas futuras com outras pessoas;
+// - ajuda a IA a lembrar assuntos, dúvidas, explicações e contextos
+//   que já apareceram anteriormente.
+//
+// IMPORTANTE:
+//
+// Conversa NÃO significa fato oficial.
+//
+// Uma afirmação feita por um usuário pode ser utilizada como
+// contexto histórico, mas NÃO deve automaticamente virar regra,
+// dado oficial ou verdade institucional.
+//
+// Dados atuais do Discord e dos sistemas internos continuam
+// tendo prioridade.
+//
+// Conhecimento institucional oficial continua sendo registrado
+// separadamente através da memória institucional autorizada.
+// =====================================================
+
+const AI_SHARED_CONVERSATION_MEMORY_MAX_ITEMS = 5000;
+
+const AI_SHARED_CONVERSATION_MEMORY_MAX_CONTEXT_CHARS =
+  16000;
+
+// =====================================================
 // IA — MEMÓRIA INSTITUCIONAL DA SANTACREATORS
 // =====================================================
 
@@ -3977,6 +4013,7 @@ function loadLongTermMemoryDatabase() {
         version: 2,
         users: {},
         institutionalKnowledge: [],
+        sharedConversationMemory: [],
       };
     }
 
@@ -3990,6 +4027,7 @@ function loadLongTermMemoryDatabase() {
         version: 2,
         users: {},
         institutionalKnowledge: [],
+        sharedConversationMemory: [],
       };
     }
 
@@ -4003,6 +4041,7 @@ function loadLongTermMemoryDatabase() {
         version: 2,
         users: {},
         institutionalKnowledge: [],
+        sharedConversationMemory: [],
       };
     }
 
@@ -4021,6 +4060,14 @@ function loadLongTermMemoryDatabase() {
       parsed.institutionalKnowledge = [];
     }
 
+    if (
+      !Array.isArray(
+        parsed.sharedConversationMemory
+      )
+    ) {
+      parsed.sharedConversationMemory = [];
+    }
+
     parsed.version = 2;
 
     return parsed;
@@ -4034,6 +4081,7 @@ function loadLongTermMemoryDatabase() {
       version: 2,
       users: {},
       institutionalKnowledge: [],
+      sharedConversationMemory: [],
     };
   }
 }
@@ -4841,7 +4889,7 @@ function saveLongTermConversation(
       );
     }
 
-    return saved;
+       return saved;
   } catch (err) {
     console.error(
       "[IA MEMORY] Erro ao registrar conversa:",
@@ -4849,6 +4897,443 @@ function saveLongTermConversation(
     );
 
     return false;
+  }
+}
+
+// =====================================================
+// IA — SALVAR MEMÓRIA CONVERSACIONAL COMPARTILHADA
+// =====================================================
+//
+// Esta memória registra experiências reais da IA em diferentes
+// canais, tickets e atendimentos.
+//
+// Ela NÃO transforma automaticamente falas dos usuários em fatos
+// institucionais.
+//
+// Serve para:
+// - lembrar assuntos já discutidos;
+// - reconhecer dúvidas recorrentes;
+// - aproveitar explicações anteriores;
+// - preservar contexto histórico;
+// - melhorar respostas futuras;
+// - permitir continuidade de conhecimento entre usuários.
+//
+// A memória institucional continua separada.
+// =====================================================
+
+function saveSharedConversationMemory(
+  message,
+  aiResponse,
+  sourceType = "conversation"
+) {
+  try {
+    if (
+      !message?.author?.id ||
+      !message?.channelId
+    ) {
+      return false;
+    }
+
+    const database =
+      loadLongTermMemoryDatabase();
+
+    if (
+      !Array.isArray(
+        database.sharedConversationMemory
+      )
+    ) {
+      database.sharedConversationMemory = [];
+    }
+
+    const userMessage =
+      cleanText(
+        message.content ||
+        "Sem texto"
+      );
+
+    const response =
+      cleanText(
+        aiResponse ||
+        "Sem resposta"
+      );
+
+    if (
+      !userMessage &&
+      !response
+    ) {
+      return false;
+    }
+
+    const topics =
+      extractLongTermMemoryTopics(
+        [
+          userMessage,
+          response,
+        ].join(" ")
+      );
+
+    const item = {
+      id:
+        `shared_${Date.now()}_${message.id}`,
+
+      timestamp:
+        Date.now(),
+
+      guildId:
+        String(
+          message.guildId || ""
+        ),
+
+      channelId:
+        String(
+          message.channelId || ""
+        ),
+
+      messageId:
+        String(
+          message.id || ""
+        ),
+
+      userId:
+        String(
+          message.author.id
+        ),
+
+      username:
+        String(
+          message.author.username ||
+          message.author.tag ||
+          "desconhecido"
+        ),
+
+      displayName:
+        String(
+          message.member?.displayName ||
+          message.author.username ||
+          "desconhecido"
+        ),
+
+      sourceType:
+        String(
+          sourceType ||
+          "conversation"
+        ),
+
+      channelName:
+        String(
+          message.channel?.name ||
+          ""
+        ),
+
+      categoryId:
+        String(
+          message.channel?.parentId ||
+          ""
+        ),
+
+      userMessage,
+
+      aiResponse:
+        response,
+
+      topics,
+
+      sourceLink:
+        message.guildId &&
+        message.channelId &&
+        message.id
+          ? `https://discord.com/channels/${message.guildId}/${message.channelId}/${message.id}`
+          : "",
+    };
+
+    database.sharedConversationMemory.push(
+      item
+    );
+
+    if (
+      database.sharedConversationMemory.length >
+      AI_SHARED_CONVERSATION_MEMORY_MAX_ITEMS
+    ) {
+      database.sharedConversationMemory =
+        database.sharedConversationMemory.slice(
+          -AI_SHARED_CONVERSATION_MEMORY_MAX_ITEMS
+        );
+    }
+
+    const saved =
+      saveLongTermMemoryDatabase(
+        database
+      );
+
+    if (saved) {
+      console.log(
+        `[IA SHARED MEMORY] Conversa compartilhada salva | Usuário=${message.author.id} | Canal=${message.channelId} | Tipo=${sourceType}`
+      );
+    }
+
+    return saved;
+  } catch (err) {
+    console.error(
+      "[IA SHARED MEMORY] Erro ao salvar memória compartilhada:",
+      err
+    );
+
+    return false;
+  }
+}
+
+function scoreSharedConversationMemory(
+  interaction,
+  searchTerms
+) {
+  const haystack =
+    normalizeSearchText(
+      [
+        interaction?.userMessage,
+        interaction?.aiResponse,
+        interaction?.channelName,
+        interaction?.sourceType,
+        ...(interaction?.topics || []),
+      ]
+        .filter(Boolean)
+        .join(" ")
+    );
+
+  if (!haystack) {
+    return 0;
+  }
+
+  let score = 0;
+
+  for (const term of searchTerms || []) {
+    const normalizedTerm =
+      normalizeSearchText(
+        term
+      );
+
+    if (!normalizedTerm) {
+      continue;
+    }
+
+    if (
+      haystack.includes(
+        normalizedTerm
+      )
+    ) {
+      score += 10;
+    }
+
+    if (
+      interaction?.topics?.some(
+        (topic) =>
+          normalizeSearchText(
+            topic
+          ) === normalizedTerm
+      )
+    ) {
+      score += 15;
+    }
+  }
+
+  // =====================================================
+  // RECÊNCIA SOMENTE REFORÇA MEMÓRIA JÁ RELEVANTE
+  // =====================================================
+  //
+  // Uma conversa recente não deve virar relevante apenas
+  // por ser recente.
+  //
+  // Primeiro precisa existir relação real com os termos
+  // pesquisados. Depois a recência funciona apenas como
+  // desempate/reforço entre memórias relacionadas.
+  // =====================================================
+
+  if (score <= 0) {
+    return 0;
+  }
+
+  const age =
+    Date.now() -
+    Number(
+      interaction?.timestamp || 0
+    );
+
+  const oneDay =
+    24 * 60 * 60 * 1000;
+
+  const sevenDays =
+    7 * oneDay;
+
+  const thirtyDays =
+    30 * oneDay;
+
+  const ninetyDays =
+    90 * oneDay;
+
+  if (age <= oneDay) {
+    score += 8;
+  } else if (age <= sevenDays) {
+    score += 5;
+  } else if (age <= thirtyDays) {
+    score += 3;
+  } else if (age <= ninetyDays) {
+    score += 1;
+  }
+
+  return score;
+}
+
+function fetchRelevantSharedConversationMemory(
+  message
+) {
+  try {
+    const database =
+      loadLongTermMemoryDatabase();
+
+    const interactions =
+      Array.isArray(
+        database.sharedConversationMemory
+      )
+        ? database.sharedConversationMemory
+        : [];
+
+    if (!interactions.length) {
+      return [
+        "MEMÓRIA CONVERSACIONAL COMPARTILHADA:",
+        "Nenhuma conversa compartilhada foi registrada ainda.",
+      ].join("\n");
+    }
+
+    const searchTerms =
+      extractLongTermMemoryTopics(
+        message?.content || ""
+      );
+
+    const scored =
+      interactions
+        .map(
+          (interaction) => ({
+            interaction,
+            score:
+              scoreSharedConversationMemory(
+                interaction,
+                searchTerms
+              ),
+          })
+        )
+        .sort(
+          (a, b) => {
+            if (
+              b.score !==
+              a.score
+            ) {
+              return (
+                b.score -
+                a.score
+              );
+            }
+
+            return (
+              Number(
+                b.interaction?.timestamp ||
+                0
+              ) -
+              Number(
+                a.interaction?.timestamp ||
+                0
+              )
+            );
+          }
+        );
+
+    let selected =
+      scored
+        .filter(
+          (entry) =>
+            entry.score > 0
+        )
+        .slice(
+          0,
+          12
+        );
+
+    if (!selected.length) {
+      selected =
+        scored.slice(
+          0,
+          4
+        );
+    }
+
+    const blocks =
+      selected.map(
+        (
+          {
+            interaction,
+            score,
+          },
+          index
+        ) => {
+          const date =
+            new Date(
+              interaction.timestamp
+            ).toLocaleString(
+              "pt-BR",
+              {
+                timeZone:
+                  "America/Sao_Paulo",
+              }
+            );
+
+          return [
+            `CONVERSA COMPARTILHADA #${index + 1}`,
+            `Relevância: ${score}`,
+            `Data: ${date}`,
+            `Tipo: ${interaction.sourceType || "conversation"}`,
+            `Canal: <#${interaction.channelId}>`,
+            `Pessoa: <@${interaction.userId}>`,
+            `Pessoa disse: ${interaction.userMessage}`,
+            `IA respondeu: ${interaction.aiResponse}`,
+            `Tópicos: ${(interaction.topics || []).join(", ") || "—"}`,
+            interaction.sourceLink
+              ? `Fonte: ${interaction.sourceLink}`
+              : "",
+          ]
+            .filter(Boolean)
+            .join("\n");
+        }
+      );
+
+    return [
+      "========================================",
+      "MEMÓRIA CONVERSACIONAL COMPARTILHADA",
+      "========================================",
+      "",
+      "Esta memória contém conversas anteriores reais da SantaCreators IA.",
+      "",
+      "REGRAS DE USO:",
+      "- Use somente conversas realmente relevantes para a pergunta atual.",
+      "- Uma conversa antiga NÃO é automaticamente um fato oficial.",
+      "- Afirmações de usuários são contexto histórico, não prova.",
+      "- Não transforme opinião, acusação, hipótese ou brincadeira em verdade.",
+      "- Dados operacionais atuais possuem prioridade.",
+      "- Informações atuais de cargos, membros, ranking, NPS, cronograma, eventos, registros e presença devem vir dos sistemas atuais.",
+      "- Memória institucional autorizada possui prioridade para regras institucionais.",
+      "- Use esta memória principalmente para continuidade, contexto, assuntos recorrentes e conhecimento adquirido em atendimentos anteriores.",
+      "",
+      ...blocks,
+    ]
+      .join("\n\n")
+      .slice(
+        0,
+        AI_SHARED_CONVERSATION_MEMORY_MAX_CONTEXT_CHARS
+      );
+  } catch (err) {
+    console.error(
+      "[IA SHARED MEMORY] Erro ao recuperar memória compartilhada:",
+      err
+    );
+
+    return "Não foi possível consultar a memória conversacional compartilhada.";
   }
 }
 
@@ -8963,17 +9448,57 @@ RESUMO DE TICKET:
 - Diferencie claramente alegação de fato comprovado.
 
 CONVERSA NATURAL:
-- Você pode conversar em etapas.
+- Este atendimento deve funcionar como uma CONVERSA REAL, não como formulário, checklist ou questionário.
+- O padrão principal é descobrir o caso PASSO A PASSO.
+- Em cada resposta, pergunte preferencialmente UMA coisa por vez.
+- Faça no máximo duas perguntas juntas quando elas forem muito relacionadas e realmente fizer sentido perguntar naquele momento.
+- NÃO despeje logo na primeira resposta tudo o que será necessário para concluir o atendimento.
+- NÃO apresente uma lista de todas as informações necessárias só porque você já sabe que precisará delas depois.
+- Primeiro descubra a informação mais importante para continuar entendendo o caso.
+- Espere a resposta da pessoa.
+- Depois use exatamente o que ela respondeu para escolher naturalmente a próxima pergunta.
 - Uma resposta não precisa resolver o caso inteiro.
-- Se a pessoa responder uma informação, use essa resposta para definir o próximo passo.
+- O objetivo é construir o contexto durante a conversa.
+- Não transforme a pessoa em alguém preenchendo um formulário.
+- Não faça interrogatório.
 - Não repita a mesma orientação várias vezes.
-- Não mande textão quando uma pergunta curta for suficiente.
-- Não mande várias mensagens só para parecer humana.
-- Divida em mais de uma mensagem apenas quando o conteúdo realmente ficar mais natural ou legível.
-- O objetivo é diminuir trabalho e poluição do chat, não aumentar.
+- Não pergunte novamente algo que já esteja informado no histórico, em mensagem anterior, anexo, clipe, print ou reply.
+- Não mande textão quando uma frase curta ou uma pergunta simples forem suficientes.
+- Não mande várias mensagens consecutivas apenas para simular humanidade.
+- Quando realmente houver bastante coisa para explicar, aí sim você pode organizar em parágrafos ou tópicos.
+- Listas continuam permitidas quando forem úteis, principalmente em resumo de ticket, organização de itens, IDs, evidências ou informações já coletadas.
+- Listas NÃO devem ser o comportamento padrão durante a coleta inicial das informações.
 - Seja compreensiva sem perder firmeza.
-- Adapte o nível de informalidade ao jeito da conversa.
-- Em denúncia/punição/problema sério, reduza gírias.
+- Adapte o nível de informalidade ao jeito da pessoa.
+- Em denúncia, punição, conflito ou problema sério, mantenha naturalidade, mas reduza gírias.
+- Evite frases com aparência de atendimento automatizado como "envie as seguintes informações", "preciso dos seguintes dados" ou equivalentes quando puder simplesmente perguntar naturalmente.
+- Não tente antecipar cinco passos da conversa em uma única resposta.
+- Resolva o passo atual primeiro.
+
+EXEMPLO DE RITMO NATURAL:
+
+Usuário:
+"quero fazer uma denúncia sobre o evento"
+
+Resposta preferida:
+"Tranquilo. Qual evento foi?"
+
+Depois que a pessoa responder qual evento foi, pergunte naturalmente o que aconteceu.
+
+Depois que ela explicar o ocorrido, veja se já informou quem estava envolvido.
+
+Se ainda não informou, pergunte os IDs ou quem estava envolvido.
+
+Depois verifique se já existe clipe, print ou outra evidência no histórico.
+
+Se não existir, pergunte pela prova.
+
+IMPORTANTE:
+- Esse exemplo mostra o RITMO da conversa.
+- NÃO copie obrigatoriamente as frases do exemplo.
+- Adapte cada resposta ao contexto e ao jeito que a pessoa está falando.
+- Se a pessoa já entregar várias informações espontaneamente, não volte etapas apenas para seguir uma ordem fixa.
+- Se ela já disser evento + ocorrido + IDs + prova, reconheça o que já recebeu e trabalhe somente com o que ainda estiver faltando.
 
 ========================================
 HIERARQUIA OFICIAL ATUAL
@@ -11003,6 +11528,11 @@ const institutionalMemory =
     message
   );
 
+const sharedConversationMemory =
+  fetchRelevantSharedConversationMemory(
+    message
+  );
+
 memoryLogs = [
   "========================================",
   "MEMÓRIA HISTÓRICA DO DISCORD",
@@ -11015,12 +11545,17 @@ memoryLogs = [
   persistentMemory,
   "",
   "========================================",
+  "MEMÓRIA CONVERSACIONAL COMPARTILHADA",
+  "========================================",
+  sharedConversationMemory,
+  "",
+  "========================================",
   "MEMÓRIA INSTITUCIONAL",
   "========================================",
   institutionalMemory,
 ]
   .join("\n")
-  .slice(0, 32000);
+  .slice(0, 48000);
   } else {
     console.log(
       "[IA CHAT AUTO] Saudação simples detectada, ignorando memória antiga."
@@ -11759,6 +12294,7 @@ function buildIaInterviewConversationPrompt({
   systemsIndex,
   currentGuildKnowledge,
   institutionalMemory,
+  sharedConversationMemory,
   openerId,
   hasStartButton,
   openerIsStaff,
@@ -12178,6 +12714,33 @@ REGRAS DA MEMÓRIA INSTITUCIONAL:
 - Não invente novas regras a partir de um ensinamento.
 - Preserve o significado do que foi ensinado.
 
+MEMÓRIA CONVERSACIONAL COMPARTILHADA:
+${sharedConversationMemory}
+
+REGRAS DA MEMÓRIA CONVERSACIONAL:
+- Esta memória contém experiências e conversas anteriores reais da SantaCreators IA.
+- Use somente conversas anteriores que sejam relevantes para a situação atual.
+- Use essa memória para reconhecer assuntos recorrentes, dúvidas anteriores, contexto histórico e explicações já utilizadas.
+- NÃO trate automaticamente uma fala de usuário como informação oficial.
+- NÃO transforme acusações, opiniões, hipóteses, brincadeiras ou boatos em fatos.
+- NÃO diga que algo é verdade apenas porque apareceu em uma conversa anterior.
+- Se uma conversa anterior conflitar com dado atual do servidor, use o dado atual.
+- Se uma conversa anterior conflitar com memória institucional autorizada, use a memória institucional para regras e definições oficiais.
+- Utilize a experiência anterior para entender melhor o assunto, não para fabricar certeza.
+- Não anuncie ao usuário que encontrou aquilo em uma conversa antiga, salvo quando essa informação for importante para explicar a resposta.
+
+HISTÓRICO RECENTE DO CANAL:
+${history}
+- Use os ensinamentos naturalmente, sem anunciar que está consultando memória.
+- Não diga "Macedo me ensinou isso", "segundo minha memória" ou frases semelhantes sem necessidade.
+- Se um ensinamento determinar como a IA deve agir em determinada situação, aplique esse comportamento quando a situação realmente ocorrer.
+- Se um ensinamento corrigir uma explicação institucional anterior, considere a versão ensinada mais recente.
+- A memória institucional NÃO substitui informações operacionais atuais.
+- Cargo atual, membro atual, ranking, presença, NPS, cronograma, registros, eventos atuais e outros dados mutáveis devem continuar sendo obtidos das fontes atuais do servidor.
+- Se existir conflito entre memória institucional e dado operacional atual, o dado operacional atual possui prioridade para representar o estado atual.
+- Não invente novas regras a partir de um ensinamento.
+- Preserve o significado do que foi ensinado.
+
 HISTÓRICO RECENTE DO CANAL:
 ${history}
 
@@ -12321,6 +12884,11 @@ const institutionalMemory =
     message
   );
 
+const sharedConversationMemory =
+  fetchRelevantSharedConversationMemory(
+    message
+  );
+
 const hasStartButton =
   await channelHasInterviewStartButton(
     message.channel,
@@ -12350,6 +12918,7 @@ const prompt = buildIaInterviewConversationPrompt({
   systemsIndex,
   currentGuildKnowledge,
   institutionalMemory,
+  sharedConversationMemory,
   openerId,
   hasStartButton,
   openerIsStaff,
@@ -14149,6 +14718,9 @@ async function handleAiTicketAssistMessage(
       active: true,
       pausedByStaff: false,
       startedAt: Date.now(),
+      lastHumanHelperId: null,
+      lastHumanHelperAt: null,
+      handoffNoticeSent: false,
     };
 
   if (
@@ -14166,7 +14738,7 @@ async function handleAiTicketAssistMessage(
     state
   );
 
-    const isOpener =
+  const isOpener =
     String(message.author.id) ===
     String(openerId);
 
@@ -14182,76 +14754,227 @@ async function handleAiTicketAssistMessage(
         )
       : false;
 
+  const creatorExplicitlyCalledAI =
+    isAuthorizedStaff &&
+    !isOpener &&
+    mentionedBot;
+
+  const openerExplicitlyCalledAI =
+    isOpener &&
+    mentionedBot;
+
+  const explicitAiCall =
+    creatorExplicitlyCalledAI ||
+    openerExplicitlyCalledAI;
+
+  const now =
+    Date.now();
+
   // =====================================================
-  // STAFF AUTORIZADO ASSUMIU O TICKET
+  // CREATOR / RESPONSÁVEL PARTICIPOU DO TICKET
   // =====================================================
   //
-  // IMPORTANTE:
-  // o próprio autor do ticket NÃO conta como takeover.
+  // Quando alguém da equipe oficial fala no ticket:
   //
-  // Portanto, se Macedo abrir o ticket e possuir Owner /
-  // Resp Creators, a IA continua conversando com ele.
-  //
-  // Só entrega quando OUTRA pessoa autorizada falar.
+  // - a presença humana é registrada;
+  // - a IA deixa de disputar o atendimento;
+  // - reply simples NÃO chama a IA;
+  // - menção explícita @SantaCreators chama a IA;
+  // - essa chamada é pontual: após responder, a IA volta
+  //   a permanecer em silêncio enquanto a equipe estiver ativa.
   // =====================================================
 
   if (
     isAuthorizedStaff &&
     !isOpener
   ) {
-    if (!state.pausedByStaff) {
-      state = {
-        ...state,
-        active: false,
-        pausedByStaff: true,
-        pausedAt: Date.now(),
-        pausedBy:
-          message.author.id,
-      };
+    clearAiTicketIdleFollowUp(
+      message.channelId
+    );
 
-      saveAiTicketAssistState(
-        message.channelId,
-        state
-      );
+    state = {
+      ...state,
 
-      await message.channel
-        .send({
-          content:
-            `Vi que ${message.author} assumiu o atendimento por aqui. Vou deixar vocês conversarem e fico fora da conversa. Se precisarem de mim depois, é só me mencionar.`,
-          allowedMentions: {
-            users: [
-              message.author.id,
-            ],
-            roles: [],
-            parse: [],
-          },
-        })
-        .catch(() => {});
+      active:
+        false,
+
+      pausedByStaff:
+        true,
+
+      pausedAt:
+        now,
+
+      pausedBy:
+        message.author.id,
+
+      lastHumanHelperId:
+        message.author.id,
+
+      lastHumanHelperAt:
+        now,
+    };
+
+    saveAiTicketAssistState(
+      message.channelId,
+      state
+    );
+
+    // =====================================================
+    // CREATOR NÃO MENCIONOU A IA
+    // =====================================================
+    //
+    // Mesmo que seja reply para uma mensagem antiga da IA,
+    // ela fica quieta.
+    //
+    // A única exceção é menção explícita.
+    // =====================================================
+
+    if (
+      !creatorExplicitlyCalledAI
+    ) {
+      if (
+        !state.handoffNoticeSent
+      ) {
+        state = {
+          ...state,
+
+          handoffNoticeSent:
+            true,
+
+          handoffNoticeSentAt:
+            now,
+        };
+
+        saveAiTicketAssistState(
+          message.channelId,
+          state
+        );
+
+        await message.channel
+          .send({
+            content:
+              `Vi que ${message.author} entrou no atendimento. Vou deixar vocês seguirem por aqui e fico acompanhando sem interferir. Se precisar de mim, é só me mencionar diretamente.`,
+
+            allowedMentions: {
+              users: [
+                message.author.id,
+              ],
+
+              roles: [],
+
+              parse: [],
+            },
+          })
+          .catch(() => {});
+      }
+
+      return true;
     }
 
-    return true;
+    // =====================================================
+    // CREATOR MENCIONOU EXPLICITAMENTE A IA
+    // =====================================================
+    //
+    // NÃO retornamos aqui.
+    //
+    // A mensagem segue para generateIAResponse().
+    //
+    // Exemplos:
+    //
+    // @SantaCreators resume o que rolou aqui
+    //
+    // @SantaCreators olha essa mensagem que respondi
+    //
+    // @SantaCreators o que ainda falta nesse ticket?
+    //
+    // Se também existir reply, buildDiscordContext() já lê
+    // a mensagem respondida e o contexto anterior dela.
+    // =====================================================
   }
 
   // =====================================================
-  // IA JÁ ENTREGOU O TICKET PARA STAFF
+  // TICKET JÁ ESTÁ COM A EQUIPE HUMANA
   // =====================================================
 
-  if (state.pausedByStaff) {
-    // Mesma lógica já existente no ticket de entrevista:
-    // o autor pode chamar explicitamente a IA novamente.
+  if (
+    state.pausedByStaff &&
+    !creatorExplicitlyCalledAI
+  ) {
+    // =====================================================
+    // AUTOR MENCIONOU A IA
+    // =====================================================
+    //
+    // Menção explícita é uma chamada direta e pode receber
+    // UMA resposta mesmo com Creator no ticket.
+    //
+    // Depois da resposta, o ticket continua considerado
+    // sob atendimento humano.
+    // =====================================================
 
     if (
-      isOpener &&
-      mentionedBot
+      openerExplicitlyCalledAI
     ) {
+      // segue normalmente para a geração abaixo
+    } else if (
+      isOpener
+    ) {
+      const lastHumanInteraction =
+        Number(
+          state.lastHumanHelperAt ||
+          state.pausedAt ||
+          0
+        );
+
+      const humanSilenceMs =
+        now -
+        lastHumanInteraction;
+
+      if (
+        humanSilenceMs <
+        AI_HUMAN_TEAM_SILENCE_MS
+      ) {
+        return true;
+      }
+
+      // =====================================================
+      // 5 MINUTOS SEM INTERAÇÃO DA EQUIPE
+      // =====================================================
+      //
+      // O autor voltou a falar e ninguém da equipe interagiu
+      // durante a janela configurada.
+      //
+      // A IA retoma o pré-atendimento normalmente.
+      // =====================================================
+
       state = {
         ...state,
-        active: true,
-        pausedByStaff: false,
-        resumedByMention: true,
-        resumedAt: Date.now(),
-        pausedBy: null,
-        pausedAt: null,
+
+        active:
+          true,
+
+        pausedByStaff:
+          false,
+
+        pausedBy:
+          null,
+
+        pausedAt:
+          null,
+
+        lastHumanHelperId:
+          null,
+
+        lastHumanHelperAt:
+          null,
+
+        resumedAfterHumanSilence:
+          true,
+
+        resumedAt:
+          now,
+
+        handoffNoticeSent:
+          false,
       };
 
       saveAiTicketAssistState(
@@ -14264,10 +14987,21 @@ async function handleAiTicketAssistMessage(
   }
 
   // =====================================================
-  // SOMENTE O AUTOR DO TICKET RECEBE O PRÉ-ATENDIMENTO
+  // QUEM PODE RECEBER RESPOSTA
+  // =====================================================
+  //
+  // 1. Autor do ticket.
+  //
+  // 2. Creator/responsável que mencionou explicitamente a IA.
+  //
+  // Uma pessoa aleatória adicionada ao ticket não inicia
+  // atendimento automático somente por conversar ali.
   // =====================================================
 
-  if (!isOpener) {
+  if (
+    !isOpener &&
+    !creatorExplicitlyCalledAI
+  ) {
     return false;
   }
 
@@ -14320,10 +15054,20 @@ async function handleAiTicketAssistMessage(
       return true;
     }
 
+    // =====================================================
+    // MENÇÕES GERADAS PELA IA
+    // =====================================================
+
+    const generatedMentionIds =
+      extractUserMentionIdsFromText(
+        finalText
+      );
+
     const allowedMentionUsers =
       uniqueDiscordUserIds(
         openerId,
-        message.author.id
+        message.author.id,
+        ...generatedMentionIds
       );
 
     const responseParts =
@@ -14342,12 +15086,18 @@ async function handleAiTicketAssistMessage(
       if (index === 0) {
         await message
           .reply({
-            content: part,
+            content:
+              part,
+
             allowedMentions: {
-              repliedUser: true,
+              repliedUser:
+                true,
+
               users:
                 allowedMentionUsers,
+
               roles: [],
+
               parse: [],
             },
           })
@@ -14363,11 +15113,15 @@ async function handleAiTicketAssistMessage(
 
       await message.channel
         .send({
-          content: part,
+          content:
+            part,
+
           allowedMentions: {
             users:
               allowedMentionUsers,
+
             roles: [],
+
             parse: [],
           },
         })
@@ -14379,25 +15133,97 @@ async function handleAiTicketAssistMessage(
         });
     }
 
-    saveLongTermConversation(
-      message,
-      finalText
-    );
+    // Mantém também um registro histórico no canal
+// de memória do Discord.
+await sendConversationMemoryLog(
+  client,
+  message,
+  finalText
+);
 
-    saveInstitutionalTeaching(
-      message
-    );
+saveLongTermConversation(
+  message,
+  finalText
+);
 
-    saveAiTicketAssistState(
-      message.channelId,
-      {
-        ...state,
-        active: true,
-        pausedByStaff: false,
-        lastInteractionAt:
-          Date.now(),
-      }
-    );
+// Compartilha a experiência deste atendimento
+// com a memória conversacional geral.
+saveSharedConversationMemory(
+  message,
+  finalText,
+  "ticket_assist"
+);
+
+saveInstitutionalTeaching(
+  message
+);
+
+// =====================================================
+// ESTADO DEPOIS DA RESPOSTA
+// =====================================================
+
+    if (
+      explicitAiCall &&
+      state.pausedByStaff
+    ) {
+      // =====================================================
+      // CHAMADA PONTUAL DA IA
+      // =====================================================
+      //
+      // Já existe equipe humana no atendimento.
+      //
+      // A IA respondeu à menção direta, mas NÃO volta a
+      // assumir automaticamente a conversa.
+      //
+      // Para responder novamente, precisa de nova menção
+      // explícita ou entrar a regra dos 5 minutos.
+      // =====================================================
+
+      saveAiTicketAssistState(
+        message.channelId,
+        {
+          ...state,
+
+          active:
+            false,
+
+          pausedByStaff:
+            true,
+
+          lastInteractionAt:
+            Date.now(),
+        }
+      );
+    } else {
+      // =====================================================
+      // ATENDIMENTO NORMAL DO AUTOR
+      // =====================================================
+
+      saveAiTicketAssistState(
+        message.channelId,
+        {
+          ...state,
+
+          active:
+            true,
+
+          pausedByStaff:
+            false,
+
+          lastInteractionAt:
+            Date.now(),
+
+          lastCandidateMessageAt:
+            Date.now(),
+        }
+      );
+
+      scheduleAiTicketIdleFollowUp(
+        message.channel,
+        openerId,
+        client
+      );
+    }
 
     return true;
   } catch (err) {
@@ -14413,7 +15239,6 @@ async function handleAiTicketAssistMessage(
     );
   }
 }
-
 // =====================================================
 // IA — SUPORTE AUTOMÁTICO PARA LÍDERES
 // =====================================================
@@ -14693,17 +15518,29 @@ async function handleAiLeaderSupportMessage(
         );
     }
 
-    saveLongTermConversation(
-      message,
-      finalText
-    );
+    await sendConversationMemoryLog(
+  client,
+  message,
+  finalText
+);
 
-    saveInstitutionalTeaching(
-      message
-    );
+saveLongTermConversation(
+  message,
+  finalText
+);
 
-    // Se quem chamou foi da equipe,
-    // a atividade humana continua válida.
+saveSharedConversationMemory(
+  message,
+  finalText,
+  "leader_support"
+);
+
+saveInstitutionalTeaching(
+  message
+);
+
+// Se quem chamou foi da equipe,
+// a atividade humana continua válida.
 
     if (
       teamExplicitlyCalledAI
@@ -15155,40 +15992,20 @@ try {
       message.author.id
     );
 
-  for (
-    let index = 0;
-    index < responseParts.length;
-    index++
-  ) {
-    const part =
-      responseParts[index];
+for (
+  let index = 0;
+  index < responseParts.length;
+  index++
+) {
+  const part =
+    responseParts[index];
 
-    if (index === 0) {
-      await message
-        .reply({
-          content: part,
-          allowedMentions: {
-            repliedUser: true,
-            users:
-              allowedMentionUsers,
-            roles: [],
-            parse: [],
-          },
-        })
-        .catch((err) => {
-          console.error(
-            "[IA ENTREVISTA] Falha ao responder primeira parte no ticket:",
-            err?.message || err
-          );
-        });
-
-      continue;
-    }
-
-    await message.channel
-      .send({
+  if (index === 0) {
+    await message
+      .reply({
         content: part,
         allowedMentions: {
+          repliedUser: true,
           users:
             allowedMentionUsers,
           roles: [],
@@ -15197,11 +16014,62 @@ try {
       })
       .catch((err) => {
         console.error(
-          "[IA ENTREVISTA] Falha ao responder continuação no ticket:",
+          "[IA ENTREVISTA] Falha ao responder primeira parte no ticket:",
           err?.message || err
         );
       });
+
+    continue;
   }
+
+  await message.channel
+    .send({
+      content: part,
+      allowedMentions: {
+        users:
+          allowedMentionUsers,
+        roles: [],
+        parse: [],
+      },
+    })
+    .catch((err) => {
+      console.error(
+        "[IA ENTREVISTA] Falha ao responder continuação no ticket:",
+        err?.message || err
+      );
+    });
+}
+
+// =====================================================
+// MEMÓRIA DO PRÉ-ATENDIMENTO DA ENTREVISTA
+// =====================================================
+//
+// Toda conversa efetivamente respondida pela IA também
+// participa das mesmas memórias utilizadas no restante
+// da SantaCreators.
+// =====================================================
+
+await sendConversationMemoryLog(
+  client,
+  message,
+  finalText
+);
+
+saveLongTermConversation(
+  message,
+  finalText
+);
+
+saveSharedConversationMemory(
+  message,
+  finalText,
+  "interview_ticket"
+);
+
+saveInstitutionalTeaching(
+  message
+);
+
 } finally {
   IA_ENTREVISTA_PROCESSING.delete(
     message.channelId
@@ -15716,12 +16584,21 @@ for (
           finalText
         );
 
-        // Salva também na memória local persistente.
-        // Essa memória continua existindo após reiniciar o bot
-        // e pode ser recuperada por relevância nas conversas futuras.
+// Salva também na memória local persistente.
+// Essa memória continua existindo após reiniciar o bot
+// e pode ser recuperada por relevância nas conversas futuras.
 saveLongTermConversation(
   message,
   finalText
+);
+
+// Salva a conversa na memória compartilhada.
+// Isso permite que assuntos úteis discutidos aqui também
+// possam ajudar conversas futuras com outras pessoas.
+saveSharedConversationMemory(
+  message,
+  finalText,
+  "chat"
 );
 
 // Se o usuário autorizado estiver ensinando
