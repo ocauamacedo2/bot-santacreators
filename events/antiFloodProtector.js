@@ -1078,10 +1078,10 @@ function isInternalDiscordGuildLink(url, guildId) {
 }
 
 // =====================================================
-// SENIOR CREATOR
+// CARGOS AUTORIZADOS A ENVIAR LINKS EXTERNOS
 // =====================================================
 //
-// Senior Creator pode enviar links externos comuns.
+// Estes cargos podem enviar links externos comuns.
 //
 // Isso NÃO cria bypass para:
 //
@@ -1092,17 +1092,29 @@ function isInternalDiscordGuildLink(url, guildId) {
 // • flood
 // • spam
 // • menções excessivas
+// • convites externos do Discord
+// • links encurtados suspeitos
 //
 // A exceção será utilizada SOMENTE na análise de links.
 // =====================================================
+
+const EXTERNAL_LINK_ALLOWED_ROLE_IDS = new Set([
+    '1352493359897378941', // Senior Creator
+    '1352407252216184833', // Cargo autorizado
+    '1262262852949905409', // Cargo autorizado
+    '1352408327983861844', // Resp Creators
+]);
 
 function isSeniorCreator(member) {
     if (!member) {
         return false;
     }
 
-    return member.roles?.cache?.has(
-        '1352493359897378941'
+    return member.roles?.cache?.some(
+        role =>
+            EXTERNAL_LINK_ALLOWED_ROLE_IDS.has(
+                role.id
+            )
     ) === true;
 }
 
@@ -1910,16 +1922,19 @@ export function setupAntiFloodProtector(client) {
 // 4. Detecção de Links e Scams
 const links = content.match(/https?:\/\/[^\s]+/gi) || [];
 
-if (links.length > CONFIG.links.limit) {
+const seniorCreator =
+    isSeniorCreator(
+        message.member
+    );
+
+if (
+    links.length > CONFIG.links.limit &&
+    !seniorCreator
+) {
     violation = "Excesso de links na mensagem";
 }
 
 if (links.length > 0) {
-    const seniorCreator =
-        isSeniorCreator(
-            message.member
-        );
-
     for (const link of links) {
         try {
             const url =
