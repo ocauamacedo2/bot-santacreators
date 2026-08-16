@@ -56,11 +56,15 @@ const AUTHORIZED_ROLE_IDS = new Set([
 // O próprio bot conectado ao client é protegido
 // automaticamente pelo código.
 //
-// Caso futuramente queira liberar outro bot para flood
-// legítimo, coloque o ID aqui.
+// Bots adicionados aqui também recebem proteção total
+// contra:
+// • expulsão automática ao entrar
+// • flood de bot
+// • mensagens repetidas
+// • punições automáticas do Security Guardian
 
 const TRUSTED_BOT_IDS = new Set([
-  // "ID_DO_BOT",
+  "1380989431011610634", // Amigo dos Creators
 ]);
 
 // =====================================================
@@ -2718,19 +2722,35 @@ async function handleBotJoin(
       return;
     }
 
-    // =================================================
-    // NUNCA REMOVE O PRÓPRIO BOT
-    // =================================================
+   // =================================================
+// NUNCA REMOVE BOT CONFIÁVEL
+// =================================================
 
-    if (
-      member.id ===
-      client.user?.id
-    ) {
-      return;
-    }
+// Protege:
+// • o próprio Security Guardian
+// • todos os bots cadastrados em TRUSTED_BOT_IDS
+//
+// Bot confiável não depende do Audit Log.
+// Mesmo que o Discord demore para informar quem adicionou,
+// ele permanecerá no servidor.
 
-    const guild =
-      member.guild;
+if (
+  isTrustedBot(
+    client,
+    member.id
+  )
+) {
+  console.log(
+    `[SECURITY] Bot confiável protegido na entrada: ` +
+    `${member.user?.tag || member.user?.username} ` +
+    `(${member.id}).`
+  );
+
+  return;
+}
+
+const guild =
+  member.guild;
 
     // =================================================
     // DESCOBRE QUEM ADICIONOU

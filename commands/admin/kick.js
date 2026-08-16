@@ -3,6 +3,13 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+// =====================================================
+// USUÁRIOS/BOTS QUE NUNCA PODEM SER EXPULSOS
+// =====================================================
+const KICK_PROTECTED_USER_IDS = new Set([
+    '1380989431011610634', // Amigo dos Creators
+]);
+
 export default {
     name: 'kick',
     description: 'Expulsa um usuário do servidor.',
@@ -30,16 +37,43 @@ export default {
         }
 
         const userToKick = message.mentions.users.first();
-        if (!userToKick) {
-            return message.reply('Você precisa mencionar um usuário para expulsar!');
-        }
 
-        const reason = args.slice(1).join(' ') || 'Sem motivo especificado';
+if (!userToKick) {
+    return message.reply('Você precisa mencionar um usuário para expulsar!');
+}
 
-        try {
-            const member = await message.guild.members.fetch(userToKick.id);
-            await member.kick(reason);
-            const kickEmbed = new EmbedBuilder()
+// =====================================================
+// PROTEÇÃO ABSOLUTA CONTRA KICK
+// =====================================================
+if (KICK_PROTECTED_USER_IDS.has(userToKick.id)) {
+    console.warn(
+        `[KICK PROTECTION] Tentativa bloqueada de expulsar ${userToKick.tag} (${userToKick.id}) por ${message.author.tag} (${message.author.id}).`
+    );
+
+    return message.reply(
+        '🛡️ Este usuário/bot está protegido e não pode ser expulso do servidor.'
+    );
+}
+
+const reason = args.slice(1).join(' ') || 'Sem motivo especificado';
+
+try {
+    const member = await message.guild.members.fetch(userToKick.id);
+
+    // Segunda proteção antes da ação real.
+    if (KICK_PROTECTED_USER_IDS.has(member.id)) {
+        console.warn(
+            `[KICK PROTECTION] Kick cancelado para usuário protegido ${member.id}.`
+        );
+
+        return message.reply(
+            '🛡️ Este usuário/bot está protegido e não pode ser expulso do servidor.'
+        );
+    }
+
+    await member.kick(reason);
+
+    const kickEmbed = new EmbedBuilder()
                 .setColor('#ff0000')
                 .setTitle('Usuário Expulso')
                 .addFields(
