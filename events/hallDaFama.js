@@ -631,6 +631,12 @@ function getManualPlayerCityKeySmart(playerId = "", playerName = "") {
   const MODAL_PRIZES_SUBMIT = "hf_modal_prizes_submit";
   const BTN_EDIT_CITY = "hf_edit_city";
   const MODAL_CITY_SUBMIT = "hf_modal_city_submit";
+
+  const BTN_EDIT_BY_LINK = "hf_edit_by_link";
+  const MODAL_EDIT_BY_LINK = "hf_edit_by_link_modal";
+  const BTN_EDIT_LINK_TOPS_PREFIX = "hf_edit_link_tops:";
+  const BTN_EDIT_LINK_CITY_PREFIX = "hf_edit_link_city:";
+
   const BTN_SCAN_ALL = "hf_scan_all";
   const BTN_REVIEW_AS_ORG_PREFIX = "hf_review_org_";
   const BTN_REVIEW_AS_PLAYER_PREFIX = "hf_review_player_";
@@ -8087,6 +8093,16 @@ new ButtonBuilder()
     );
   }
 
+  function buildOldHallEditButtons() {
+    return new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(BTN_EDIT_BY_LINK)
+        .setLabel("🔗 Editar Hall Antigo")
+        .setStyle(ButtonStyle.Primary)
+        .setEmoji("🔗")
+    );
+  }
+
   async function ensureButtonAtBottom(channel, client, force = true) {
     try {
       const messages = await channel.messages.fetch({ limit: 50 }).catch(() => null);
@@ -8096,13 +8112,20 @@ new ButtonBuilder()
       if (m.author.id !== client.user.id || m.components.length === 0) return false;
 
       const allButtons = m.components.flatMap(row => row.components || []);
-      return allButtons.some(c => [BTN_OPEN_MENU, BTN_EDIT_LAST, BTN_EDIT_PRIZES, BTN_EDIT_CITY, BTN_SCAN_ALL].includes(c.customId));
+      return allButtons.some(c => [
+        BTN_OPEN_MENU,
+        BTN_EDIT_LAST,
+        BTN_EDIT_PRIZES,
+        BTN_EDIT_CITY,
+        BTN_EDIT_BY_LINK,
+        BTN_SCAN_ALL
+      ].includes(c.customId));
     });
 
-      // ✅ Checa se já existe um painel de botões ATUALIZADO com o botão de varredura
+      // ✅ Checa se já existe um painel de botões ATUALIZADO com o botão de edição por link
     const upToDateMsg = myMsgs.find((m) => {
       const allButtons = m.components.flatMap(row => row.components || []);
-      return allButtons.some(c => c.customId === BTN_SCAN_ALL);
+      return allButtons.some(c => c.customId === BTN_EDIT_BY_LINK);
     });
 
       // Se não for forçado e já existir um painel atualizado, não faz nada.
@@ -8114,7 +8137,10 @@ new ButtonBuilder()
       }
 
       await channel.send({
-        components: [buildControlButtons()]
+        components: [
+          buildControlButtons(),
+          buildOldHallEditButtons()
+        ]
       });
     } catch (e) {
       console.error("[HallDaFama] Erro ao mover botão:", e);
@@ -8994,6 +9020,143 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
       return true;
     }
 
+    // ✅ Abre o modal para localizar qualquer Hall antigo pelo link
+    if (interaction.isButton() && interaction.customId === BTN_EDIT_BY_LINK) {
+      if (!hasPermission(interaction.member, interaction.user.id)) {
+        return interaction.reply({
+          content: "🚫 Sem permissão para editar Hall antigo.",
+          ephemeral: true
+        });
+      }
+
+      const modal = new ModalBuilder()
+        .setCustomId(MODAL_EDIT_BY_LINK)
+        .setTitle("🔗 Editar Hall Antigo");
+
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId("hf_old_hall_link")
+            .setLabel("Link da mensagem do Hall")
+            .setPlaceholder("https://discord.com/channels/servidor/canal/mensagem")
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true)
+        )
+      );
+
+      await interaction.showModal(modal);
+      return true;
+    }
+
+    // ✅ Recebe o link e localiza exatamente o Hall antigo
+    if (interaction.isModalSubmit() && interaction.customId === MODAL_EDIT_BY_LINK) {
+      if (!hasPermission(interaction.member, interaction.user.id)) {
+        return interaction.reply({
+          content: "🚫 Sem permissão para editar Hall antigo.",
+          ephemeral: true
+        });
+      }
+
+      await interaction.deferReply({ ephemeral: true });
+
+      const hallLink = interaction.fields
+        .getTextInputValue("hf_old_hall_link")
+        ?.trim();
+
+      const linkMatch = String(hallLink || "").match(
+        /(?:https?:\/\/)?(?:(?:canary|ptb)\.)?discord(?:app)?\.com\/channels\/(\d+)\/(\d+)\/(\d+)/i
+      );
+
+      if (!linkMatch) {
+        return interaction.editReply(
+          "❌ Link inválido.\n\nCopie o link da própria mensagem do Hall usando **Copiar link da mensagem** no Discord."
+        );
+      }
+
+      const [, guildIdFromLink, channelIdFromLink, messageIdFromLink] = linkMatch;
+
+      if (guildIdFromLink !== interaction.guildId) {
+        return interaction.editReply(
+          "❌ Esse link pertence a outro servidor."
+        );
+      }
+
+      if (channelIdFromLink !== HALL_CHANNEL_ID) {
+        return interaction.editReply(
+          `❌ Esse link não pertence ao canal oficial do Hall da Fama <#${HALL_CHANNEL_ID}>.`
+        );
+      }
+
+      const hallChannel = await client.channels.fetch(HALL_CHANNEL_ID).catch(() => null);
+
+      if (!hallChannel || !hallChannel.isTextBased()) {
+        return interaction.editReply(
+          "❌ Canal do Hall da Fama não encontrado."
+        );
+      }
+
+      const hallMessage = await hallChannel.messages
+        .fetch(messageIdFromLink)
+        .catch(() => null);
+
+      if (!hallMessage) {
+        return interaction.editReply(
+          "❌ Não consegui encontrar essa mensagem. Confira se ela ainda existe e se o link está correto."
+        );
+      }
+
+      if (hallMessage.author.id !== client.user.id) {
+        return interaction.editReply(
+          "❌ Esse Hall não foi publicado por este bot. O Discord não permite que o bot edite mensagens de outro usuário ou de outro bot."
+        );
+      }
+
+      const hallContent = getHallMessageText(hallMessage);
+
+      if (!normalizeHallName(hallContent).includes("hall da fama")) {
+        return interaction.editReply(
+          "❌ A mensagem encontrada não parece ser um Hall da Fama."
+        );
+      }
+
+      const parts = extractHallParts(hallMessage.content);
+
+      const eventName = parts.eventName || "Evento";
+      const cityName = parts.cityName || "Cidade";
+
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`${BTN_EDIT_LINK_TOPS_PREFIX}${hallMessage.id}`)
+          .setLabel("✏️ Editar Evento/TOPs")
+          .setStyle(ButtonStyle.Primary)
+          .setEmoji("✏️"),
+
+        new ButtonBuilder()
+          .setCustomId(`${BTN_EDIT_LINK_CITY_PREFIX}${hallMessage.id}`)
+          .setLabel("🌆 Editar Cidade")
+          .setStyle(ButtonStyle.Secondary)
+          .setEmoji("🌆"),
+
+        new ButtonBuilder()
+          .setLabel("🔗 Abrir Hall")
+          .setStyle(ButtonStyle.Link)
+          .setURL(getMessageJumpUrl(hallMessage))
+      );
+
+      await interaction.editReply({
+        content:
+          `✅ **Hall antigo encontrado!**\n\n` +
+          `🎮 **Evento:** ${eventName}\n` +
+          `🌆 **Cidade:** ${cityName}\n` +
+          `📅 **Publicado:** <t:${Math.floor(hallMessage.createdTimestamp / 1000)}:F>\n` +
+          `🆔 **Mensagem:** \`${hallMessage.id}\`\n\n` +
+          `Escolha abaixo o que deseja editar.`,
+        components: [row]
+      });
+
+      return true;
+    }
+
     // ✅ Botão para editar somente a cidade do último Hall da Fama
     if (interaction.isButton() && interaction.customId === BTN_EDIT_CITY) {
       if (!hasPermission(interaction.member, interaction.user.id)) {
@@ -9206,6 +9369,164 @@ new TextInputBuilder()
   )
 );
       
+      await interaction.showModal(modal);
+      return true;
+    }
+
+    // ✅ Abre a edição de Evento/TOPs para um Hall específico localizado pelo link
+    if (
+      interaction.isButton() &&
+      interaction.customId.startsWith(BTN_EDIT_LINK_TOPS_PREFIX)
+    ) {
+      if (!hasPermission(interaction.member, interaction.user.id)) {
+        return interaction.reply({
+          content: "🚫 Sem permissão para editar.",
+          ephemeral: true
+        });
+      }
+
+      const messageId = interaction.customId.replace(
+        BTN_EDIT_LINK_TOPS_PREFIX,
+        ""
+      );
+
+      const hallChannel = await client.channels
+        .fetch(HALL_CHANNEL_ID)
+        .catch(() => null);
+
+      if (!hallChannel || !hallChannel.isTextBased()) {
+        return interaction.reply({
+          content: "❌ Canal do Hall da Fama não encontrado.",
+          ephemeral: true
+        });
+      }
+
+      const hallMessage = await hallChannel.messages
+        .fetch(messageId)
+        .catch(() => null);
+
+      if (!hallMessage) {
+        return interaction.reply({
+          content: "❌ Hall antigo não encontrado.",
+          ephemeral: true
+        });
+      }
+
+      if (hallMessage.author.id !== client.user.id) {
+        return interaction.reply({
+          content: "❌ Esse Hall não foi publicado por este bot e não pode ser editado.",
+          ephemeral: true
+        });
+      }
+
+      const parts = extractHallParts(hallMessage.content);
+
+      const eventName = parts.eventName || "Evento";
+      const winnersText = parts.winnersText || "";
+
+      const imageUrls = uniqueImageUrls([
+        ...(parts.imageUrls || (parts.imageUrl ? [parts.imageUrl] : [])),
+        ...getImageUrlsFromAttachments(hallMessage)
+      ]).slice(0, 4);
+
+      const modal = new ModalBuilder()
+        .setCustomId(`${MODAL_PRIZES_SUBMIT}:${hallMessage.id}`)
+        .setTitle("✏️ Editar TOPs do Hall");
+
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId("hf_edit_event_name")
+            .setLabel("🎮 Nome do Evento")
+            .setValue(eventName)
+            .setStyle(TextInputStyle.Short)
+            .setPlaceholder("Ex: Missão Pântano")
+            .setRequired(true)
+        ),
+
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId("hf_edit_winners")
+            .setLabel("🏆 TOPs / Vencedores")
+            .setValue(winnersText)
+            .setStyle(TextInputStyle.Paragraph)
+            .setPlaceholder("Adicione/corrija as ORGs vencedoras e os TOPs aqui.")
+            .setRequired(true)
+        ),
+
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId("hf_edit_image_link")
+            .setLabel("🖼️ Link(s) da imagem correta")
+            .setValue(imageUrls.join("\n") || "")
+            .setStyle(TextInputStyle.Paragraph)
+            .setPlaceholder("Cole até 4 links aqui, um por linha ou separados por espaço.")
+            .setMaxLength(4000)
+            .setRequired(false)
+        )
+      );
+
+      await interaction.showModal(modal);
+      return true;
+    }
+
+    // ✅ Abre a edição da cidade para um Hall específico localizado pelo link
+    if (
+      interaction.isButton() &&
+      interaction.customId.startsWith(BTN_EDIT_LINK_CITY_PREFIX)
+    ) {
+      if (!hasPermission(interaction.member, interaction.user.id)) {
+        return interaction.reply({
+          content: "🚫 Sem permissão para editar a cidade.",
+          ephemeral: true
+        });
+      }
+
+      const messageId = interaction.customId.replace(
+        BTN_EDIT_LINK_CITY_PREFIX,
+        ""
+      );
+
+      const hallChannel = await client.channels
+        .fetch(HALL_CHANNEL_ID)
+        .catch(() => null);
+
+      if (!hallChannel || !hallChannel.isTextBased()) {
+        return interaction.reply({
+          content: "❌ Canal do Hall da Fama não encontrado.",
+          ephemeral: true
+        });
+      }
+
+      const hallMessage = await hallChannel.messages
+        .fetch(messageId)
+        .catch(() => null);
+
+      if (!hallMessage) {
+        return interaction.reply({
+          content: "❌ Hall antigo não encontrado.",
+          ephemeral: true
+        });
+      }
+
+      const parts = extractHallParts(hallMessage.content);
+
+      const modal = new ModalBuilder()
+        .setCustomId(`${MODAL_CITY_SUBMIT}:${hallMessage.id}`)
+        .setTitle("🌆 Editar Cidade do Hall");
+
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId("hf_city_only")
+            .setLabel("Cidade correta do evento")
+            .setValue(parts.cityName || "Cidade")
+            .setPlaceholder("Ex: Cidade Nobre")
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true)
+        )
+      );
+
       await interaction.showModal(modal);
       return true;
     }
@@ -9471,10 +9792,40 @@ const imageEditData =
       imageEditData.files;
   }
 
-  await messageToEdit.edit(editPayload);
+  const editedHallMessage = await messageToEdit.edit(editPayload);
+
+  const rankings = loadHallRankings();
+
+  rankings.pendingReview ??= {};
+
+  for (const reviewKey of Object.keys(rankings.pendingReview)) {
+    const pendingReview = rankings.pendingReview[reviewKey];
+
+    if (
+      pendingReview?.messageId === editedHallMessage.id ||
+      reviewKey.startsWith(`${editedHallMessage.id}:`)
+    ) {
+      delete rankings.pendingReview[reviewKey];
+    }
+  }
+
+  await addHallToRankings(
+    rankings,
+    editedHallMessage,
+    client
+  );
+
+  rankings.lastUpdatedAt = Date.now();
+
+  saveHallRankings(rankings);
+
+  await publishHallRankings(
+    client,
+    rankings
+  );
 
   await interaction.editReply(
-    "✅ TOPs do Hall da Fama editados com sucesso!"
+    "✅ TOPs do Hall da Fama editados com sucesso!\n📊 O Hall corrigido também foi recalculado no ranking de GGs."
   );
 
   return true;
