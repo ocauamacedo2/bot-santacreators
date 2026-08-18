@@ -78,9 +78,18 @@ DEFINIÇÃO:
 - Creators, criação de conteúdo e influenciadores podem existir dentro do ecossistema, mas não definem o propósito completo da SantaCreators.
 - Mega Eventos são uma parte importante da operação, mas também não representam sozinhos tudo o que a SantaCreators é.
 
+CREATORS, INFLUENCIADORES E MIGRAÇÃO ENTRE ESTRUTURAS:
+- A equipe SantaCreators e uma equipe/estrutura de influenciadores de uma cidade NÃO são a mesma coisa.
+- Um ticket da SantaCreators NÃO deve ser apresentado como suporte de influenciadores quando esse não for o objetivo real do atendimento.
+- NÃO invente que existe um "responsável de influenciadores" dentro da SantaCreators apenas porque a pessoa falou que era influencer em outra estrutura.
+- NÃO associe automaticamente Resp. Influ, Resp. Creators, Creator, influencer e liderança de cidade como se fossem a mesma função.
+- Se alguém veio de uma equipe de influenciadores e quer continuar ou migrar para uma atuação Creator em outra cidade, pode existir possibilidade de entrada/continuidade, mas isso NÃO significa transferência automática de pasta, cargo, histórico ou vínculo.
+- A possibilidade deve ser tratada como análise/alinhamento da estrutura correta, usando dados atuais e responsáveis reais quando eles estiverem disponíveis.
+- Se não houver responsável real identificado para aquela área, NÃO escolha uma pessoa por conta própria e NÃO invente quem é responsável.
+- Antes de falar em migração, transferência ou responsável, diferencie claramente: equipe SantaCreators, equipe Creator da cidade, equipe de influenciadores da cidade e demais estruturas externas/internas.
+
 VISÃO HUMANA:
 A SantaCreators organiza e movimenta uma comunidade dentro do universo do FiveM, utilizando o Discord como centro operacional. Existe uma estrutura por trás dos eventos e atividades, envolvendo responsáveis, equipes, cidades, organizações, cronogramas, registros, presença, metas, pagamentos, acompanhamento e análise de desempenho.
-
 CIDADES PRINCIPAIS:
 - Cidade Nobre
 - Cidade Santa
@@ -209,9 +218,10 @@ const AI_LONG_TERM_MEMORY_FILE = path.resolve(
   "ia_long_term_memory.json"
 );
 
-const AI_LONG_TERM_MEMORY_MAX_INTERACTIONS = 80;
-const AI_LONG_TERM_MEMORY_MAX_TOPICS = 30;
-const AI_LONG_TERM_MEMORY_MAX_CONTEXT_CHARS = 12000;
+const AI_LONG_TERM_MEMORY_MAX_INTERACTIONS = 300;
+const AI_LONG_TERM_MEMORY_MAX_TOPICS = 80;
+const AI_LONG_TERM_MEMORY_MAX_CONTEXT_CHARS = 20000;
+const AI_PERSONAL_MEMORY_MAX_FACTS = 80;
 
 // =====================================================
 // IA — MEMÓRIA CONVERSACIONAL COMPARTILHADA
@@ -4542,8 +4552,10 @@ function fetchRelevantInstitutionalMemory(
         .slice(0, 15);
 
     if (!selected.length) {
-      selected =
-        scored.slice(0, 5);
+      return [
+        "MEMÓRIA INSTITUCIONAL:",
+        "Existe memória institucional salva, mas nenhuma entrada possui relação suficiente com a pergunta atual.",
+      ].join("\n");
     }
 
     const lines =
@@ -4659,7 +4671,190 @@ function ensureLongTermMemoryUser(database, message) {
     user.topics = [];
   }
 
+  if (!Array.isArray(user.personalFacts)) {
+    user.personalFacts = [];
+  }
+
   return user;
+}
+
+function extractSafePersonalMemoryFacts(text) {
+  const raw = cleanText(text || "").trim();
+
+  if (!raw) {
+    return [];
+  }
+
+  const facts = [];
+
+  const addFact = (type, value) => {
+    const cleanValue = cleanText(value || "").trim();
+
+    if (!cleanValue || cleanValue.length < 2) {
+      return;
+    }
+
+    facts.push({
+      type,
+      value: cleanValue.slice(0, 180),
+    });
+  };
+
+  const preferredName = raw.match(
+    /\b(?:me chama de|pode me chamar de|prefiro ser chamado(?:a)? de)\s+([^.,!?\n]{2,40})/i
+  );
+
+  if (preferredName?.[1]) {
+    addFact("preferred_name", preferredName[1]);
+  }
+
+  const gender = raw.match(
+    /\b(?:eu sou|sou)\s+(mulher|homem)\b/i
+  );
+
+  if (gender?.[1]) {
+    addFact("gender", gender[1]);
+  }
+
+  const pronouns = raw.match(
+    /\b(?:meus pronomes são|meus pronomes sao|meu pronome é|meu pronome e|pode usar)\s+(ela\/dela|ele\/dele|ela|ele)\b/i
+  );
+
+  if (pronouns?.[1]) {
+    addFact("pronouns", pronouns[1]);
+  }
+
+  const likes = raw.match(
+    /\b(?:eu gosto de|gosto de)\s+([^.!?\n]{2,120})/i
+  );
+
+  if (likes?.[1]) {
+    addFact("likes", likes[1]);
+  }
+
+  const dislikes = raw.match(
+    /\b(?:eu não gosto de|eu nao gosto de|não gosto de|nao gosto de)\s+([^.!?\n]{2,120})/i
+  );
+
+  if (dislikes?.[1]) {
+    addFact("dislikes", dislikes[1]);
+  }
+
+  const preference = raw.match(
+    /\b(?:eu prefiro|prefiro)\s+([^.!?\n]{2,120})/i
+  );
+
+  if (preference?.[1]) {
+    addFact("preference", preference[1]);
+  }
+
+  return facts;
+}
+
+function mergeSafePersonalMemoryFacts(
+  user,
+  facts,
+  message
+) {
+  if (!user || !Array.isArray(facts) || !facts.length) {
+    return;
+  }
+
+  if (!Array.isArray(user.personalFacts)) {
+    user.personalFacts = [];
+  }
+
+  const replaceableTypes = new Set([
+    "preferred_name",
+    "gender",
+    "pronouns",
+  ]);
+
+  for (const fact of facts) {
+    const normalizedValue = normalizeSearchText(fact.value);
+
+    if (!normalizedValue) {
+      continue;
+    }
+
+    if (replaceableTypes.has(fact.type)) {
+      user.personalFacts = user.personalFacts.filter(
+        (item) => item?.type !== fact.type
+      );
+    }
+
+    const existing = user.personalFacts.find(
+      (item) =>
+        item?.type === fact.type &&
+        normalizeSearchText(item?.value || "") === normalizedValue
+    );
+
+    if (existing) {
+      existing.updatedAt = Date.now();
+      existing.sourceChannelId = String(message?.channelId || "");
+      existing.sourceMessageId = String(message?.id || "");
+      continue;
+    }
+
+    user.personalFacts.push({
+      type: fact.type,
+      value: fact.value,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      sourceChannelId: String(message?.channelId || ""),
+      sourceMessageId: String(message?.id || ""),
+    });
+  }
+
+  user.personalFacts = user.personalFacts
+    .sort(
+      (a, b) =>
+        Number(b.updatedAt || b.createdAt || 0) -
+        Number(a.updatedAt || a.createdAt || 0)
+    )
+    .slice(0, AI_PERSONAL_MEMORY_MAX_FACTS);
+}
+
+function fetchStoredPersonalProfileByUserId(userId) {
+  try {
+    const id = String(userId || "");
+
+    if (!id) {
+      return "";
+    }
+
+    const database = loadLongTermMemoryDatabase();
+    const user = database.users?.[id];
+
+    if (
+      !user ||
+      !Array.isArray(user.personalFacts) ||
+      !user.personalFacts.length
+    ) {
+      return "";
+    }
+
+    const facts = user.personalFacts
+      .slice(0, AI_PERSONAL_MEMORY_MAX_FACTS)
+      .map((fact) => `- ${fact.type}: ${fact.value}`);
+
+    return [
+      "MEMÓRIA PESSOAL DECLARADA PELA PRÓPRIA PESSOA:",
+      ...facts,
+      "",
+      "REGRAS:",
+      "- Use apenas como contexto pessoal estável, nunca como prova de cargo, permissão, ranking ou estado operacional atual.",
+      "- Não deduza gênero pelo nome, avatar, voz ou aparência.",
+      "- Para pronome/gênero, use somente informação explícita armazenada ou fonte confiável atual.",
+    ].join("\n");
+  } catch (err) {
+    console.error(
+      "[IA PERSONAL MEMORY] Erro ao recuperar perfil pessoal:",
+      err
+    );
+
+    return "";
+  }
 }
 
 function extractLongTermMemoryTopics(text) {
@@ -4730,7 +4925,6 @@ function mergeLongTermMemoryTopics(
       });
     }
   }
-
   return [...map.values()]
     .sort((a, b) => {
       if (b.lastMention !== a.lastMention) {
@@ -4784,6 +4978,13 @@ function scoreLongTermMemoryInteraction(
     ) {
       score += 15;
     }
+  }
+
+  // Recência só reforça uma memória que já possui relação real
+  // com a mensagem atual. Isso evita puxar assunto aleatório
+  // apenas porque aconteceu recentemente.
+  if (score <= 0) {
+    return 0;
   }
 
   const age =
@@ -4845,6 +5046,17 @@ function saveLongTermConversation(
         userMessage
       );
 
+    const personalFacts =
+      extractSafePersonalMemoryFacts(
+        userMessage
+      );
+
+    mergeSafePersonalMemoryFacts(
+      user,
+      personalFacts,
+      message
+    );
+
     user.interactions.push({
       timestamp: Date.now(),
       channelId:
@@ -4859,7 +5071,6 @@ function saveLongTermConversation(
       aiResponse: response,
       topics,
     });
-
     if (
       user.interactions.length >
       AI_LONG_TERM_MEMORY_MAX_INTERACTIONS
@@ -5257,11 +5468,10 @@ function fetchRelevantSharedConversationMemory(
         );
 
     if (!selected.length) {
-      selected =
-        scored.slice(
-          0,
-          4
-        );
+      return [
+        "MEMÓRIA CONVERSACIONAL COMPARTILHADA:",
+        "Há conversas históricas armazenadas, mas nenhuma é relevante o bastante para a pergunta atual.",
+      ].join("\n");
     }
 
     const blocks =
@@ -5405,10 +5615,23 @@ function fetchRelevantLongTermMemory(
         )
         .slice(0, 12);
 
-    if (!selected.length) {
-      selected =
-        scored.slice(0, 6);
-    }
+    const personalFacts =
+      Array.isArray(user.personalFacts)
+        ? user.personalFacts
+            .slice(0, AI_PERSONAL_MEMORY_MAX_FACTS)
+        : [];
+
+    const personalFactsBlock =
+      personalFacts.length
+        ? [
+            "FATOS PESSOAIS DECLARADOS PELO PRÓPRIO USUÁRIO:",
+            ...personalFacts.map(
+              (fact) =>
+                `- ${fact.type}: ${fact.value}`
+            ),
+            "- Estes fatos servem para continuidade pessoal. Não os trate como cargos, permissões ou configurações operacionais.",
+          ].join("\n")
+        : "Nenhum fato pessoal explícito foi consolidado para este usuário.";
 
     const topicSummary =
       Array.isArray(user.topics)
@@ -5452,6 +5675,12 @@ function fetchRelevantLongTermMemory(
       `Nome conhecido: ${user.displayName || user.username || "desconhecido"}`,
       `Total de interações armazenadas: ${interactions.length}`,
       `Tópicos recentes/conhecidos: ${topicSummary}`,
+      "",
+      personalFactsBlock,
+      "",
+      selected.length
+        ? "CONVERSAS RELACIONADAS À MENSAGEM ATUAL:"
+        : "Nenhuma conversa antiga possui relação suficiente com a mensagem atual.",
       "",
       ...blocks,
     ]
@@ -7407,6 +7636,11 @@ async function buildPersonIntelligenceContext(
     );
   }
 
+  const storedPersonalProfile =
+    fetchStoredPersonalProfileByUserId(
+      personId
+    );
+
   const context = [
     "========================================",
     "INTELIGÊNCIA DE PESSOAS — DADOS REAIS",
@@ -7420,6 +7654,9 @@ async function buildPersonIntelligenceContext(
     }`,
     "",
     profileBlock,
+    "",
+    storedPersonalProfile ||
+      "Nenhuma memória pessoal explícita consolidada para esta pessoa.",
     "",
     "========================================",
     formatPersonHistoryBlock(
@@ -9353,6 +9590,21 @@ IDENTIDADE DA EQUIPE:
 - A SantaCreators funciona de maneira semelhante a uma estrutura independente de atendimento e operação, mas internamente o termo correto é Creators.
 - Quando mencionar a staff do servidor FiveM, aí "staff do servidor" pode ser utilizado se realmente estiver falando da staff da cidade e não da SantaCreators.
 
+CREATORS X INFLUENCIADORES / MIGRAÇÃO:
+- Este ticket pertence à SantaCreators. NÃO diga que aqui existe uma equipe de responsáveis por influenciadores se a hierarquia atual não mostrar isso.
+- NÃO escolha uma pessoa como "responsável por influencers" apenas porque ela possui cargo semelhante, foi mencionada antes ou aparece em uma conversa antiga.
+- Se a pessoa disser que era influencer em outra estrutura/cidade e quer atuar como Creator em outra cidade, explique que PODE existir possibilidade de seguir/entrar como Creator, mas isso NÃO é transferência automática da pasta de influencer.
+- Não diga que "a pasta será transferida", "o histórico será migrado" ou "o responsável de influencer fará a transferência" sem uma fonte real confirmando esse procedimento.
+- Diferencie sempre equipe SantaCreators, Creator da cidade e equipe de influenciadores da cidade.
+- Quando faltar dado real sobre quem cuida da outra estrutura, diga apenas que o caso precisa ser alinhado com a estrutura correta, sem inventar nome, cargo ou responsável.
+- Se houver responsável real na hierarquia atual diretamente ligado ao assunto, aí sim use essa informação.
+
+PRONOMES E IDENTIDADE PESSOAL:
+- NÃO deduza homem/mulher pelo nome, nickname, avatar, foto, voz ou aparência.
+- Só use "ele/dele" ou "ela/dela" quando houver informação explícita e confiável no contexto, memória pessoal declarada ou ensinamento institucional autorizado.
+- Se não houver confirmação, prefira o nome, a menção ou expressões neutras como "a pessoa".
+- Uma correção explícita de pronome/gênero mais recente deve prevalecer sobre uma suposição anterior.
+
 AUTORIDADE DOS RESPONSÁVEIS:
 - Responsáveis autorizados da SantaCreators PODEM tomar providências contra players e facções quando a função e o caso permitirem.
 - Isso pode incluir advertência/ADV, punição, banimento ou providências relacionadas à facção.
@@ -10936,6 +11188,15 @@ a menos que isso seja realmente necessário.
 - Se uma informação nova corrigir claramente uma informação antiga da conversa, considere a correção mais recente como a versão preferida.
 - Uma correção do usuário sobre contexto geral pode ser lembrada pela memória, mas não deve substituir dados operacionais atuais vindos dos sistemas internos.
 - Para dados que podem mudar com o tempo, como cargos, membros, rankings, presença, cronograma atual e registros atuais, continue priorizando as fontes reais do servidor.
+
+6.2. MEMÓRIA PESSOAL E IDENTIDADE:
+- Informações pessoais estáveis que a própria pessoa declarar, como nome pelo qual prefere ser chamada, preferências e pronomes, podem ser usadas para continuidade futura quando aparecerem na memória pessoal.
+- NÃO transforme conversa pessoal em configuração do bot, regra institucional, permissão ou cargo.
+- NÃO deduza gênero pelo nome, avatar, foto, voz, nickname ou aparência.
+- Só use "ele/dele" ou "ela/dela" quando houver uma informação explícita e confiável.
+- Se não souber, use o nome, a menção ou "a pessoa".
+- Uma resposta anterior da própria IA NÃO é prova de um fato. Se a IA falou algo sem fonte e a memória trouxer essa resposta antiga, trate como histórico de conversa, não como verdade.
+- Conversas compartilhadas servem para reconhecer assuntos e continuidade, mas não podem criar responsáveis, transferências, regras, cargos ou procedimentos que não estejam confirmados.
 
 7. MEMÓRIA NÃO É FONTE DE VERDADE PARA DADOS OPERACIONAIS ATUAIS.
 Ela serve para lembrar assuntos, contexto, preferências, explicações e continuidade.

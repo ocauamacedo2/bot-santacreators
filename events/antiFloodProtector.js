@@ -1018,6 +1018,48 @@ function isDiscordInviteLink(url) {
 }
 
 // =====================================================
+// VERIFICA SE O CONVITE É DE UM SERVIDOR CONFIÁVEL
+// =====================================================
+//
+// O Discord fornece os dados do servidor correspondente
+// ao convite através de fetchInvite().
+//
+// Se o convite pertencer a qualquer um dos servidores
+// cadastrados em TRUSTED_DISCORD_GUILD_IDS, ele é liberado
+// para qualquer usuário.
+//
+// Convites inválidos, expirados ou impossíveis de verificar
+// continuam passando pela proteção normal.
+//
+// =====================================================
+
+async function isTrustedDiscordInvite(client, inviteLink) {
+    if (!client || !inviteLink) {
+        return false;
+    }
+
+    try {
+        const invite =
+            await client.fetchInvite(
+                inviteLink
+            );
+
+        const inviteGuildId =
+            invite?.guild?.id;
+
+        if (!inviteGuildId) {
+            return false;
+        }
+
+        return TRUSTED_DISCORD_GUILD_IDS.has(
+            String(inviteGuildId)
+        );
+    } catch {
+        return false;
+    }
+}
+
+// =====================================================
 // LINK INTERNO DO PRÓPRIO SERVIDOR
 // =====================================================
 //
@@ -1074,14 +1116,18 @@ function isInternalDiscordGuildLink(url, guildId) {
     const linkedGuildId =
         parts[1];
 
-    return linkedGuildId === String(guildId);
+    return (
+        linkedGuildId === String(guildId) ||
+        TRUSTED_DISCORD_GUILD_IDS.has(linkedGuildId)
+    );
 }
 
 // =====================================================
-// CARGOS AUTORIZADOS A ENVIAR LINKS EXTERNOS
+// SERVIDORES DO DISCORD CONFIÁVEIS
 // =====================================================
 //
-// Estes cargos podem enviar links externos comuns.
+// Qualquer usuário pode compartilhar links de canais,
+// mensagens e convites pertencentes a estes servidores.
 //
 // Isso NÃO cria bypass para:
 //
@@ -1092,7 +1138,34 @@ function isInternalDiscordGuildLink(url, guildId) {
 // • flood
 // • spam
 // • menções excessivas
-// • convites externos do Discord
+// • links encurtados suspeitos
+//
+// =====================================================
+
+const TRUSTED_DISCORD_GUILD_IDS = new Set([
+    '1262262852782129183', // Santa Creators
+    '755203021490749530',  // Nobre
+    '690983940567334964',  // Santa
+    '788905600699858944',  // Grande
+    '798594785896038401',  // Maresia
+]);
+
+// =====================================================
+// CARGOS AUTORIZADOS A ENVIAR LINKS EXTERNOS
+// =====================================================
+//
+// Estes cargos podem enviar links externos comuns,
+// incluindo convites do Discord.
+//
+// Isso NÃO cria bypass para:
+//
+// • ataque de mídia
+// • scam
+// • phishing
+// • pornografia
+// • flood
+// • spam
+// • menções excessivas
 // • links encurtados suspeitos
 //
 // A exceção será utilizada SOMENTE na análise de links.
@@ -1100,11 +1173,10 @@ function isInternalDiscordGuildLink(url, guildId) {
 
 const EXTERNAL_LINK_ALLOWED_ROLE_IDS = new Set([
     '1352493359897378941', // Senior Creator
-    '1352407252216184833', // Cargo autorizado
-    '1262262852949905409', // Cargo autorizado
+    '1352407252216184833', // Resp Líder
+    '1262262852949905409', // Resp Influ
     '1352408327983861844', // Resp Creators
 ]);
-
 function isSeniorCreator(member) {
     if (!member) {
         return false;
@@ -1979,15 +2051,29 @@ if (links.length > 0) {
             // =============================================
 
             if (isDiscordInviteLink(url)) {
-                if (!isTicketChannel(message)) {
-                    violation =
-                        "Divulgação de convite/link de Discord não autorizado";
+    const trustedDiscordInvite =
+        await isTrustedDiscordInvite(
+            message.client,
+            link
+        );
 
-                    break;
-                }
+    if (trustedDiscordInvite) {
+        continue;
+    }
 
-                continue;
-            }
+    if (seniorCreator) {
+        continue;
+    }
+
+    if (isTicketChannel(message)) {
+        continue;
+    }
+
+    violation =
+        "Divulgação de convite/link de Discord não autorizado";
+
+    break;
+}
 
             const shorteners = [
                 'bit.ly',
