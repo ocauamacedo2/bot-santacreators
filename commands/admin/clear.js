@@ -51,10 +51,9 @@ const EXPORT_FORMATS = (process.env.CLEAR_EXPORT_FORMATS || 'html')
   .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 
 // prévia (mini-transcripts) no canal de logs?
-const SHOW_PREVIEW = String(process.env.CLEAR_SHOW_PREVIEW || 'false').toLowerCase() === 'true';
+const SHOW_PREVIEW = String(process.env.CLEAR_SHOW_PREVIEW || 'true').toLowerCase() === 'true';
 const PREVIEW_PAGE_SIZE   = parseInt(process.env.CLEAR_PREVIEW_PAGE_SIZE || '8', 10);
 const PREVIEW_MAX_EMBEDS  = parseInt(process.env.CLEAR_PREVIEW_MAX_EMBEDS || '6', 10);
-
 // canal de logs
 const LOG_CLEAR_CHANNEL_ID = process.env.LOG_CLEAR_CHANNEL_ID;
 
@@ -281,21 +280,91 @@ function buildCsv({ rows }) {
 function buildPreviewEmbeds({ guild, channel, rows }) {
   const pages = [];
   const chunks = [];
-  for (let i=0; i<rows.length; i+=PREVIEW_PAGE_SIZE) {
-    chunks.push(rows.slice(i, i+PREVIEW_PAGE_SIZE));
-    if (chunks.length >= PREVIEW_MAX_EMBEDS) break;
+
+  for (let i = 0; i < rows.length; i += PREVIEW_PAGE_SIZE) {
+    chunks.push(rows.slice(i, i + PREVIEW_PAGE_SIZE));
+
+    if (chunks.length >= PREVIEW_MAX_EMBEDS) {
+      break;
+    }
   }
+
   chunks.forEach((chunk, idx) => {
-    const desc = chunk.map(r =>
-      `**${r.authorTag}**  •  ${formatTS(r.ts)}\n${r.clean || r.content || '(sem texto)'}\n[abrir](${r.url})`
-    ).join('\n\n');
+    const desc = chunk.map((r, messageIndex) => {
+      const content =
+        r.clean ||
+        r.content ||
+        '(mensagem sem texto)';
+
+      const attachmentsCount =
+        Array.isArray(r.attachments)
+          ? r.attachments.length
+          : 0;
+
+      const extras = [];
+
+      if (attachmentsCount > 0) {
+        extras.push(
+          `📎 ${attachmentsCount} anexo${attachmentsCount !== 1 ? 's' : ''}`
+        );
+      }
+
+      if (r.embedsCount > 0) {
+        extras.push(
+          `🧩 ${r.embedsCount} embed${r.embedsCount !== 1 ? 's' : ''}`
+        );
+      }
+
+      const extrasLine =
+        extras.length > 0
+          ? `\n${extras.join(' • ')}`
+          : '';
+
+      return [
+        `### 💬 Mensagem ${messageIndex + 1}`,
+        `**Autor:** ${r.authorTag}`,
+        `**ID:** \`${r.authorId}\``,
+        `**Horário:** ${formatTS(r.ts)}`,
+        '',
+        content,
+        extrasLine,
+        '',
+        `[🔗 Abrir mensagem original](${r.url})`
+      ].join('\n');
+    }).join('\n\n━━━━━━━━━━━━━━━━━━━━\n\n');
+
     const eb = new EmbedBuilder()
-      .setColor(0x2b2d31)
-      .setAuthor({ name: `Transcript prévia — #${channel.name} (${idx+1}/${chunks.length})` })
+      .setColor(0x5865F2)
+      .setAuthor({
+        name: `📜 Transcript de mensagens apagadas`
+      })
+      .setTitle(`#${channel.name}`)
       .setDescription(desc)
-      .setFooter({ text: `Servidor: ${guild?.name ?? ''}` });
+      .addFields(
+        {
+          name: 'Servidor',
+          value: guild?.name ?? 'Desconhecido',
+          inline: true
+        },
+        {
+          name: 'Canal',
+          value: `<#${channel.id}>`,
+          inline: true
+        },
+        {
+          name: 'Página',
+          value: `${idx + 1}/${chunks.length}`,
+          inline: true
+        }
+      )
+      .setFooter({
+        text: `Santa Creators • Transcript automático • ${rows.length} mensagem(ns) registrada(s)`
+      })
+      .setTimestamp();
+
     pages.push(eb);
   });
+
   return pages;
 }
 
@@ -861,10 +930,19 @@ await logChannel.send({
   components: [row]
 });
 
-      if (SHOW_PREVIEW && rows.length > 0) {
-        const pages = buildPreviewEmbeds({ guild: message.guild, channel, rows: rows.slice().reverse() });
-        for (const eb of pages) await logChannel.send({ embeds:[eb] });
-      }
+     if ((SHOW_PREVIEW || !publicUrl) && rows.length > 0) {
+  const pages = buildPreviewEmbeds({
+    guild: message.guild,
+    channel,
+    rows: rows.slice().reverse()
+  });
+
+  for (const eb of pages) {
+    await logChannel.send({
+      embeds: [eb]
+    });
+  }
+}
     }
 
     if (note) {
