@@ -125,7 +125,14 @@ function generateMessagesHtml(mensagens) {
 
     lastDay = dayKey;
 
-    const avatar = msg.avatar || 'https://cdn.discordapp.com/embed/avatars/0.png';
+    const avatar =
+      msg.avatar ||
+      'https://cdn.discordapp.com/embed/avatars/0.png';
+
+    const avatarSrc =
+      /^\/media\/[a-f0-9]{24}$/i.test(avatar)
+        ? avatar
+        : `/img?u=${encodeURIComponent(avatar)}`;
 
     function proxifyHtmlImages(html) {
   if (typeof html !== "string" || !html.trim()) return html;
@@ -189,7 +196,13 @@ function forceNoReferrerAndLazy(html) {
     return `
       ${dayDivider}
       <div class="msg">
-        <img src="/img?u=${encodeURIComponent(avatar)}" alt="Avatar" loading="lazy" referrerpolicy="no-referrer">
+        <img
+          src="${avatarSrc}"
+          data-original-src="${escapeHtml(avatar)}"
+          alt="Avatar"
+          loading="lazy"
+          referrerpolicy="no-referrer"
+        >
         <div class="msg-body">
           <div class="top-row">
             <span class="autor">${escapeHtml(msg.autor)}</span>
@@ -473,7 +486,20 @@ function generatePageHtml(transcript) {
       display: inline-block;
       margin: 0 0.1em;
     }
-    .attachment-img, .attachment-video {
+    .attachment-link {
+      display: inline-block;
+      max-width: 100%;
+      text-decoration: none;
+      border-radius: 8px;
+    }
+
+    .attachment-link:focus-visible {
+      outline: 2px solid #5865f2;
+      outline-offset: 3px;
+    }
+
+    .attachment-img,
+    .attachment-video {
       max-width: 400px;
       width: auto;
       height: auto;
@@ -595,7 +621,11 @@ function generatePageHtml(transcript) {
       var onErr = function() {
         // Passo 1: Descobrir a URL original da imagem que falhou.
         var currentSrc = img.getAttribute('src');
-        var original = getOriginalUrl(currentSrc) || getOriginalUrl(initialSrc);
+
+        var original =
+          img.getAttribute('data-original-src') ||
+          getOriginalUrl(currentSrc) ||
+          getOriginalUrl(initialSrc);
         
         if (!original) {
           // Se não há URL original, não há mais o que fazer.
@@ -644,7 +674,11 @@ function generatePageHtml(transcript) {
 
       var onVidErr = function() {
         var currentSrc = video.getAttribute('src');
-        var original = getOriginalUrl(currentSrc) || getOriginalUrl(initialSrc);
+
+        var original =
+          video.getAttribute('data-original-src') ||
+          getOriginalUrl(currentSrc) ||
+          getOriginalUrl(initialSrc);
         
         if (!original) {
           video.removeEventListener('error', onVidErr);

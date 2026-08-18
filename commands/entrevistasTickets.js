@@ -1,6 +1,8 @@
 // /application/commands/entrevistasTickets.js
 import fs from 'node:fs';
 import path from 'node:path';
+import { Readable, Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import {
   ChannelType,
   PermissionsBitField,
@@ -170,6 +172,224 @@ export default function createEntrevistasTickets({ client, Transcript }) {
   // ✅ Variáveis importantes
   const TRANSCRIPTS_CHANNEL_ID = '1358568999738409151'; // Canal onde o log de tickets será enviado
   const TRANSCRIPTS_BASE_URL = 'https://transcripts-santa.squareweb.app/transcript/';
+
+  // ✅ Mídia persistente dos transcripts (GridFS no mesmo MongoDB)
+  const TRANSCRIPT_MEDIA_BUCKET = 'transcript_media';
+  const TRANSCRIPT_MEDIA_MAX_BYTES = 100 * 1024 * 1024; // 100 MB por mídia
+  const TRANSCRIPT_MEDIA_TIMEOUT_MS = 30_000;
+
+  function getTranscriptMediaBucket() {
+    const connection = Transcript?.db;
+    const nativeDb = connection?.db;
+    const GridFSBucket = connection?.base?.mongo?.GridFSBucket;
+
+    if (!nativeDb || !GridFSBucket) {
+      throw new Error('Conexão Mongo/GridFS indisponível para persistir mídia do transcript.');
+    }
+
+    return new GridFSBucket(nativeDb, {
+      bucketName: TRANSCRIPT_MEDIA_BUCKET
+    });
+  }
+
+  function escapeHtmlAttribute(value) {
+    return String(value || '')
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  async function persistirMidiaTranscript(urlOriginal, contexto, cache) {
+    const url = String(urlOriginal || '').trim();
+
+    if (!/^https?:\/\//i.test(url)) {
+      return url;
+    }
+
+    if (cache?.has(url)) {
+      return await cache.get(url);
+    }
+
+    const trabalho = (async () => {
+      const controller = new AbortController();
+      const timeout = setTimeout(
+        () => controller.abort(),
+        TRANSCRIPT_MEDIA_TIMEOUT_MS
+      );
+
+      let uploadStream = null;
+
+      try {
+        const response = await fetch(url, {
+          redirect: 'follow',
+          signal: controller.signal,
+          headers: {
+            'User-Agent': 'SantaCreators-Transcript/1.0',
+            'Accept': 'image/*,video/*;q=0.9,*/*;q=0.8'
+          }
+        });
+
+        if (!response.ok || !response.body) {
+          throw new Error(`HTTP ${response.status} ao baixar mídia.`);
+        }
+
+        const contentType = String(
+          response.headers.get('content-type') ||
+          'application/octet-stream'
+        )
+          .split(';')[0]
+          .trim()
+          .toLowerCase();
+
+        if (
+          !contentType.startsWith('image/') &&
+          !contentType.startsWith('video/')
+        ) {
+          throw new Error(
+            `Content-Type não suportado para mídia visual: ${contentType}`
+          );
+        }
+
+        const contentLength = Number(
+          response.headers.get('content-length') || 0
+        );
+
+        if (
+          Number.isFinite(contentLength) &&
+          contentLength > TRANSCRIPT_MEDIA_MAX_BYTES
+        ) {
+          throw new Error(
+            `Mídia maior que ${TRANSCRIPT_MEDIA_MAX_BYTES} bytes.`
+          );
+        }
+
+        const bucket = getTranscriptMediaBucket();
+
+        const nomeUrl = (() => {
+          try {
+            return new URL(url).pathname.split('/').pop() || 'media';
+          } catch {
+            return 'media';
+          }
+        })();
+
+        const nomeSeguro = String(
+          contexto?.nomeArquivo ||
+          nomeUrl ||
+          'media'
+        )
+          .replace(/[^a-zA-Z0-9._-]/g, '_')
+          .slice(-140) || 'media';
+
+        uploadStream = bucket.openUploadStream(
+          `${contexto?.canalId || 'ticket'}-${contexto?.mensagemId || 'msg'}-${Date.now()}-${nomeSeguro}`,
+          {
+            metadata: {
+              canalId: contexto?.canalId || null,
+              mensagemId: contexto?.mensagemId || null,
+              contentType,
+              originalUrl: url,
+              criadoEm: new Date()
+            }
+          }
+        );
+
+        let totalBytes = 0;
+
+        const limitador = new Transform({
+          transform(chunk, encoding, callback) {
+            totalBytes += chunk.length;
+
+            if (totalBytes > TRANSCRIPT_MEDIA_MAX_BYTES) {
+              callback(
+                new Error(
+                  `Mídia excedeu o limite de ${TRANSCRIPT_MEDIA_MAX_BYTES} bytes durante o download.`
+                )
+              );
+              return;
+            }
+
+            callback(null, chunk);
+          }
+        });
+
+        await pipeline(
+          Readable.fromWeb(response.body),
+          limitador,
+          uploadStream
+        );
+
+        return `/media/${uploadStream.id.toString()}`;
+      } catch (error) {
+        if (uploadStream) {
+          try {
+            await uploadStream.abort();
+          } catch {}
+        }
+
+        console.warn(
+          `[TRANSCRIPT MEDIA] Não foi possível arquivar ${url}:`,
+          error?.message || error
+        );
+
+        // Fallback seguro:
+        // se o armazenamento permanente falhar,
+        // mantém exatamente a URL que o sistema já utilizava.
+        return url;
+      } finally {
+        clearTimeout(timeout);
+      }
+    })();
+
+    if (cache) {
+      cache.set(url, trabalho);
+    }
+
+    return await trabalho;
+  }
+
+  async function persistirMidiasDoHtmlTranscript(html, contexto, cache) {
+    if (typeof html !== 'string' || !html.trim()) {
+      return html;
+    }
+
+    let resultado = html;
+
+    const urls = [
+      ...new Set(
+        [...html.matchAll(/\bsrc="(https?:\/\/[^"]+)"/gi)]
+          .map(match => match[1])
+          .filter(Boolean)
+      )
+    ];
+
+    for (const url of urls) {
+      const urlPersistida = await persistirMidiaTranscript(
+        url,
+        contexto,
+        cache
+      );
+
+      if (!urlPersistida || urlPersistida === url) {
+        continue;
+      }
+
+      const originalEscapada = escapeHtmlAttribute(url);
+
+      resultado = resultado
+        .split(`src="${url}"`)
+        .join(
+          `src="${urlPersistida}" data-original-src="${originalEscapada}"`
+        )
+        .split(`href="${url}"`)
+        .join(
+          `href="${urlPersistida}" data-original-href="${originalEscapada}"`
+        );
+    }
+
+    return resultado;
+  }
 
   // (REMOVIDO) não usamos mais modal de fechamento
 
@@ -1920,6 +2140,8 @@ if (interaction.isModalSubmit() && interaction.customId === 'modal_registro_lide
 
     // O filtro `isTicketMenuMessage` foi removido para que a mensagem inicial do ticket
     // (com o embed e os botões de controle) seja incluída no transcript, criando um "espelho" mais fiel.
+    const transcriptMediaCache = new Map();
+
     const mensagensTranscript = await Promise.all(
       sorted
         .map(async msg => {
@@ -2060,11 +2282,25 @@ if (interaction.isModalSubmit() && interaction.customId === 'modal_registro_lide
                 <div style="margin-top: 8px; display: flex; gap: 12px; flex-wrap: wrap;">
                   ${imageAttachments.map(att => {
                     const raw = att.url || att.proxyURL || "";
-const src = String(raw).trim(); // mantém query
+                    const src = String(raw).trim();
                     const name = (att.name || "Imagem enviada").replace(/"/g, "");
+
                     return `
-                      <img
-                        src="${src}" alt="${name}" loading="lazy" referrerpolicy="no-referrer" style="max-width: 400px; height: auto; border-radius: 8px; display: block;">
+                      <a
+                        href="${src}"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        class="attachment-link"
+                      >
+                        <img
+                          class="attachment-img"
+                          src="${src}"
+                          alt="${name}"
+                          loading="lazy"
+                          referrerpolicy="no-referrer"
+                          style="max-width: 400px; height: auto; border-radius: 8px; display: block;"
+                        >
+                      </a>
                     `;
                   }).join("")}
                 </div>
@@ -2075,9 +2311,21 @@ const src = String(raw).trim(); // mantém query
               conteudo += `
                 <div style="margin-top: 8px; display: flex; gap: 12px; flex-wrap: wrap;">
                   ${videoAttachments.map(att => {
-                    const src = String(att.url || att.proxyURL || "").trim();
+                    const src = String(
+                      att.url ||
+                      att.proxyURL ||
+                      ""
+                    ).trim();
+
                     return `
-                      <video controls src="${src}" style="max-width: 100%; width: 400px; border-radius: 8px; background: #000;"></video>
+                      <video
+                        controls
+                        playsinline
+                        preload="metadata"
+                        class="attachment-video"
+                        src="${src}"
+                        style="max-width: 100%; width: 400px; height: auto; border-radius: 8px; background: #000;"
+                      ></video>
                     `;
                   }).join("")}
                 </div>
@@ -2099,17 +2347,56 @@ const src = String(raw).trim(); // mantém query
           }
 
           if (!conteudo || !conteudo.trim()) {
-  conteudo = '<span class="vazio">[Mensagem sem conteúdo]</span>';
-        }
+            conteudo = '<span class="vazio">[Mensagem sem conteúdo]</span>';
+          }
+
+          // ✅ NOVO:
+          // copia imagens, vídeos, stickers, emojis e mídias de embeds
+          // para o GridFS antes do ticket desaparecer.
+          //
+          // Se alguma mídia não puder ser copiada,
+          // o HTML mantém automaticamente a URL antiga como fallback.
+          conteudo = await persistirMidiasDoHtmlTranscript(
+            conteudo,
+            {
+              canalId,
+              mensagemId: msg.id
+            },
+            transcriptMediaCache
+          );
+
+          const avatarOriginal =
+            msg.author?.displayAvatarURL({
+              dynamic: true,
+              size: 64
+            }) || "";
+
+          const avatarPersistido = avatarOriginal
+            ? await persistirMidiaTranscript(
+                avatarOriginal,
+                {
+                  canalId,
+                  mensagemId: msg.id,
+                  nomeArquivo: `avatar-${msg.author?.id || 'desconhecido'}`
+                },
+                transcriptMediaCache
+              )
+            : "";
 
           return {
-            autor:  msg.member?.displayName || msg.author?.username || "Desconhecido",
+            autor:
+              msg.member?.displayName ||
+              msg.author?.username ||
+              "Desconhecido",
+
             idAutor: msg.author?.id || "0",
+
             conteudo,
+
             horario: msg.createdAt,
-            // ✅ FIX: Usa dynamic:true para avatares animados (GIFs) e estáticos
-            avatar: msg.author?.displayAvatarURL({ dynamic: true, size: 64 }) || ""
-        };
+
+            avatar: avatarPersistido
+          };
         })
     );
 
