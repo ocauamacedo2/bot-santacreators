@@ -338,15 +338,87 @@ async function uploadTranscriptToGistWithViewer(html, filename) {
     body: JSON.stringify({
       description: 'Discord clear transcript (HTML)',
       public: true,
-      files: { [filename]: { content: html } }
+      files: {
+        [filename]: {
+          content: html
+        }
+      }
     })
   });
-  if (!res.ok) return null;
+
+  if (!res.ok) {
+    const errorText = await res.text().catch(() => '');
+    console.error(
+      `[CLEAR] Falha ao criar Gist do transcript: ${res.status} ${res.statusText}`,
+      errorText
+    );
+    return null;
+  }
+
   const data = await res.json();
-  const fileObj = data.files[filename];
-  const raw = fileObj?.raw_url;
-  const viewer = raw ? `https://htmlpreview.github.io/?${raw}` : data.html_url;
-  return { viewerUrl: viewer, gistUrl: data.html_url };
+
+  const gistId = data?.id;
+  const gistUrl = data?.html_url;
+  const ownerLogin = data?.owner?.login;
+
+  if (!gistId || !ownerLogin) {
+    console.error('[CLEAR] Gist criado, mas retornou dados incompletos:', {
+      gistId,
+      ownerLogin,
+      gistUrl
+    });
+    return gistUrl
+      ? {
+          viewerUrl: gistUrl,
+          gistUrl
+        }
+      : null;
+  }
+
+  const safeFilename = encodeURIComponent(filename);
+
+  // Usa a URL RAW permanente do Gist, sem prender o link a uma revisão específica.
+  const rawUrl =
+    `https://gist.githubusercontent.com/${ownerLogin}/${gistId}/raw/${safeFilename}`;
+
+  // Confirma que o arquivo realmente está acessível antes de entregar o link.
+  try {
+    const rawCheck = await fetch(rawUrl, {
+      method: 'GET',
+      headers: {
+        'Accept': 'text/html,*/*'
+      }
+    });
+
+    if (!rawCheck.ok) {
+      console.error(
+        `[CLEAR] RAW do Gist não ficou acessível: ${rawCheck.status} ${rawCheck.statusText}`,
+        rawUrl
+      );
+
+      return {
+        viewerUrl: gistUrl,
+        gistUrl,
+        rawUrl: null
+      };
+    }
+  } catch (error) {
+    console.error('[CLEAR] Erro ao validar RAW do Gist:', error);
+
+    return {
+      viewerUrl: gistUrl,
+      gistUrl,
+      rawUrl: null
+    };
+  }
+
+  const viewerUrl = `https://htmlpreview.github.io/?${rawUrl}`;
+
+  return {
+    viewerUrl,
+    gistUrl,
+    rawUrl
+  };
 }
 
 /* ==========================
@@ -585,18 +657,75 @@ if (!isOwner && !message.member.permissionsIn(message.channel).has(PermissionsBi
       rows
     };
 
-    const html = buildTranscriptHTML(payloadCommon);
-    const slug = `${channel.id}_${Date.now()}${isClearButtons ? '_btn' : ''}`;
+const html = buildTranscriptHTML(payloadCommon);
+const slug = `${channel.id}_${Date.now()}${isClearButtons ? '_btn' : ''}`;
 
-    let publicUrl = null;
-    try { publicUrl = await uploadTranscriptHTML(html, slug); } catch {}
+let publicUrl = null;
 
-    if (!publicUrl) {
-      const gist = await uploadTranscriptToGistWithViewer(html, `transcript_${slug}.html`).catch(()=>null);
-      if (gist) publicUrl = gist.viewerUrl;
+// 1º tenta S3 / R2
+try {
+  const s3Url = await uploadTranscriptHTML(html, slug);
+
+  if (
+    s3Url &&
+    /^https?:\/\//i.test(String(s3Url))
+  ) {
+    publicUrl = s3Url;
+
+    console.log(
+      `[CLEAR] Transcript publicado via S3/R2: ${publicUrl}`
+    );
+  } else if (s3Url) {
+    console.error(
+      '[CLEAR] S3/R2 retornou uma URL inválida para o transcript:',
+      s3Url
+    );
+  }
+} catch (error) {
+  console.error(
+    '[CLEAR] Falha ao publicar transcript via S3/R2:',
+    error
+  );
+}
+
+// 2º fallback: Gist
+if (!publicUrl) {
+  try {
+    const gist = await uploadTranscriptToGistWithViewer(
+      html,
+      `transcript_${slug}.html`
+    );
+
+    if (
+      gist?.viewerUrl &&
+      /^https?:\/\//i.test(String(gist.viewerUrl))
+    ) {
+      publicUrl = gist.viewerUrl;
+
+      console.log(
+        `[CLEAR] Transcript publicado via Gist: ${publicUrl}`
+      );
+    } else {
+      console.error(
+        '[CLEAR] Gist não retornou uma URL válida para o transcript.',
+        gist
+      );
     }
+  } catch (error) {
+    console.error(
+      '[CLEAR] Falha ao publicar transcript via Gist:',
+      error
+    );
+  }
+}
 
-    const files = [];
+if (!publicUrl) {
+  console.error(
+    `[CLEAR] Nenhum link público conseguiu ser criado para o transcript ${slug}. O HTML será enviado como arquivo no log.`
+  );
+}
+
+const files = [];
     if (!publicUrl && EXPORT_FORMATS.includes('html')) {
       files.push(new AttachmentBuilder(Buffer.from(html,'utf-8'), {
         name: `transcript_${slug}.html`
@@ -624,12 +753,26 @@ if (!isOwner && !message.member.permissionsIn(message.channel).has(PermissionsBi
       )
       .setFooter({ text: `Início: ${formatTS(startedAt)} • Fim: ${formatTS(new Date())}` });
 
-    const buttonsRow = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Abrir chat').setURL(jumpChannel),
-      new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Abrir Transcript').setURL(publicUrl || jumpChannel)
-    );
+const buttonsRow = new ActionRowBuilder().addComponents(
+  new ButtonBuilder()
+    .setStyle(ButtonStyle.Link)
+    .setLabel('Abrir chat')
+    .setURL(jumpChannel)
+);
 
-    const chatMsg = await channel.send({ embeds:[pretty], components:[buttonsRow] });
+if (publicUrl) {
+  buttonsRow.addComponents(
+    new ButtonBuilder()
+      .setStyle(ButtonStyle.Link)
+      .setLabel('Abrir Transcript')
+      .setURL(publicUrl)
+  );
+}
+
+const chatMsg = await channel.send({
+  embeds: [pretty],
+  components: [buttonsRow]
+});
     setTimeout(()=>chatMsg.delete().catch(()=>{}), 15000);
 
     // LOG no canal de logs
@@ -652,12 +795,27 @@ if (!isOwner && !message.member.permissionsIn(message.channel).has(PermissionsBi
         )
         .setTimestamp();
 
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Abrir chat').setURL(jumpChannel),
-        new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Abrir Transcript').setURL(publicUrl || jumpChannel)
-      );
+const row = new ActionRowBuilder().addComponents(
+  new ButtonBuilder()
+    .setStyle(ButtonStyle.Link)
+    .setLabel('Abrir chat')
+    .setURL(jumpChannel)
+);
 
-      await logChannel.send({ embeds:[logEmbed], files, components:[row] });
+if (publicUrl) {
+  row.addComponents(
+    new ButtonBuilder()
+      .setStyle(ButtonStyle.Link)
+      .setLabel('Abrir Transcript')
+      .setURL(publicUrl)
+  );
+}
+
+await logChannel.send({
+  embeds: [logEmbed],
+  files,
+  components: [row]
+});
 
       if (SHOW_PREVIEW && rows.length > 0) {
         const pages = buildPreviewEmbeds({ guild: message.guild, channel, rows: rows.slice().reverse() });
