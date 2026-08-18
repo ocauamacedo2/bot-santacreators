@@ -326,14 +326,20 @@ async function uploadTranscriptHTML(html, slug) {
 // Fallback: Gist público + viewer
 async function uploadTranscriptToGistWithViewer(html, filename) {
   const token = process.env.GITHUB_TOKEN;
-  if (!token) return null;
+
+  if (!token) {
+    console.error('[CLEAR] GITHUB_TOKEN não configurado.');
+    return null;
+  }
 
   const res = await fetch('https://api.github.com/gists', {
     method: 'POST',
     headers: {
-      'Authorization': `token ${token}`,
+      'Authorization': `Bearer ${token}`,
       'Accept': 'application/vnd.github+json',
-      'Content-Type': 'application/json'
+      'Content-Type': 'application/json',
+      'X-GitHub-Api-Version': '2026-03-10',
+      'User-Agent': 'SantaCreators-Transcript-Bot'
     },
     body: JSON.stringify({
       description: 'Discord clear transcript (HTML)',
@@ -348,10 +354,12 @@ async function uploadTranscriptToGistWithViewer(html, filename) {
 
   if (!res.ok) {
     const errorText = await res.text().catch(() => '');
+
     console.error(
       `[CLEAR] Falha ao criar Gist do transcript: ${res.status} ${res.statusText}`,
       errorText
     );
+
     return null;
   }
 
@@ -359,66 +367,102 @@ async function uploadTranscriptToGistWithViewer(html, filename) {
 
   const gistId = data?.id;
   const gistUrl = data?.html_url;
-  const ownerLogin = data?.owner?.login;
 
-  if (!gistId || !ownerLogin) {
-    console.error('[CLEAR] Gist criado, mas retornou dados incompletos:', {
-      gistId,
-      ownerLogin,
-      gistUrl
-    });
-    return gistUrl
-      ? {
-          viewerUrl: gistUrl,
-          gistUrl
-        }
-      : null;
-  }
+  // IMPORTANTE:
+  // usa exatamente o raw_url retornado pela API do GitHub
+  const rawUrl = data?.files?.[filename]?.raw_url;
 
-  const safeFilename = encodeURIComponent(filename);
-
-  // Usa a URL RAW permanente do Gist, sem prender o link a uma revisão específica.
-  const rawUrl =
-    `https://gist.githubusercontent.com/${ownerLogin}/${gistId}/raw/${safeFilename}`;
-
-  // Confirma que o arquivo realmente está acessível antes de entregar o link.
-  try {
-    const rawCheck = await fetch(rawUrl, {
-      method: 'GET',
-      headers: {
-        'Accept': 'text/html,*/*'
-      }
-    });
-
-    if (!rawCheck.ok) {
-      console.error(
-        `[CLEAR] RAW do Gist não ficou acessível: ${rawCheck.status} ${rawCheck.statusText}`,
-        rawUrl
-      );
-
-      return {
-        viewerUrl: gistUrl,
+  if (!gistId || !gistUrl || !rawUrl) {
+    console.error(
+      '[CLEAR] Gist foi criado, mas a API retornou dados incompletos:',
+      {
+        gistId,
         gistUrl,
-        rawUrl: null
-      };
-    }
-  } catch (error) {
-    console.error('[CLEAR] Erro ao validar RAW do Gist:', error);
+        rawUrl,
+        filename
+      }
+    );
 
-    return {
-      viewerUrl: gistUrl,
-      gistUrl,
-      rawUrl: null
-    };
+    return null;
   }
 
-  const viewerUrl = `https://htmlpreview.github.io/?${rawUrl}`;
+  console.log(
+    `[CLEAR] Gist criado pela API: ${gistId}`
+  );
 
-  return {
-    viewerUrl,
-    gistUrl,
-    rawUrl
-  };
+  console.log(
+    `[CLEAR] RAW informado pela API: ${rawUrl}`
+  );
+
+  /*
+   * O GitHub pode levar alguns instantes até disponibilizar
+   * o RAW recém-criado.
+   *
+   * Em vez de testar apenas uma vez, fazemos algumas tentativas.
+   */
+  const maxAttempts = 5;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const rawCheck = await fetch(rawUrl, {
+        method: 'GET',
+        headers: {
+          'Accept': 'text/html,*/*',
+          'User-Agent': 'SantaCreators-Transcript-Bot'
+        },
+        redirect: 'follow'
+      });
+
+      if (rawCheck.ok) {
+        const rawText = await rawCheck.text();
+
+        if (rawText && rawText.trim().length > 0) {
+          console.log(
+            `[CLEAR] RAW do Gist disponível na tentativa ${attempt}/${maxAttempts}.`
+          );
+
+          const viewerUrl =
+            `https://htmlpreview.github.io/?${rawUrl}`;
+
+          return {
+            viewerUrl,
+            gistUrl,
+            rawUrl
+          };
+        }
+
+        console.error(
+          `[CLEAR] RAW respondeu 200, mas veio vazio. Tentativa ${attempt}/${maxAttempts}.`
+        );
+      } else {
+        console.error(
+          `[CLEAR] RAW ainda indisponível: ${rawCheck.status} ${rawCheck.statusText}. Tentativa ${attempt}/${maxAttempts}.`
+        );
+      }
+    } catch (error) {
+      console.error(
+        `[CLEAR] Erro ao testar RAW do Gist. Tentativa ${attempt}/${maxAttempts}:`,
+        error
+      );
+    }
+
+    if (attempt < maxAttempts) {
+      await sleep(1500);
+    }
+  }
+
+  /*
+   * NÃO usamos gistUrl como fallback.
+   *
+   * Se o RAW não existe, o Gist pode estar inválido ou
+   * indisponível também. Retornar gistUrl aqui foi justamente
+   * o que estava levando ao erro 404.
+   */
+  console.error(
+    `[CLEAR] Gist ${gistId} foi criado pela API, mas o RAW não ficou acessível após ${maxAttempts} tentativas.`
+  );
+
+  return null;
 }
 
 /* ==========================
