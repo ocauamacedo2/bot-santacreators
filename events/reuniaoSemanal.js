@@ -926,21 +926,26 @@ async function removeRewardRoleFromEveryoneExcept(guild, roleId, keepUserId, rol
       return;
     }
 
-    const safeCandidateIds = [...new Set(candidateUserIds.map(String).filter(Boolean))];
+    // ✅ Garante que a lista/cache de membros esteja atualizada antes da limpeza.
+    // Assim não dependemos apenas de vencedores salvos em state.lastWinners.
+    await guild.members.fetch().catch(() => null);
 
-    if (safeCandidateIds.length === 0) {
-      log.push(`ℹ️ Nenhum candidato para verificar **${roleName}**.`);
+    // ✅ Fonte real da limpeza:
+    // verifica TODAS as pessoas que possuem este cargo atualmente.
+    const membersWithRole = [...role.members.values()];
+
+    if (membersWithRole.length === 0) {
+      log.push(`ℹ️ Ninguém possui atualmente o cargo **${roleName}** para remover.`);
       return;
     }
 
-    for (const userId of safeCandidateIds) {
+    for (const member of membersWithRole) {
+      const userId = member.id;
+
       if (keepUserId && String(userId) === String(keepUserId)) {
-        log.push(`🔒 Mantido **${roleName}** em <@${userId}> porque é o vencedor atual.`);
+        log.push(`🔒 Mantido **${roleName}** em <@${userId}> porque é o vencedor da semana que está sendo aplicada.`);
         continue;
       }
-
-      const member = await guild.members.fetch(userId).catch(() => null);
-      if (!member) continue;
 
       if (!member.roles.cache.has(roleId)) {
         continue;

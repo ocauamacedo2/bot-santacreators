@@ -6739,9 +6739,11 @@ for (const [cityKey, channelId] of Object.entries(HALL_ORGS_CITY_RANKING_CHANNEL
   };
 
   await upsertSingleRankingMessage(cityChannel, cityPayload);
-}
 
-  await sendRankingWebhookMirror(HALL_ORGS_RANKING_WEBHOOK_URL, orgsPayload);
+  if (cityKey === "nobre") {
+    await sendRankingWebhookMirror(HALL_ORGS_RANKING_WEBHOOK_URL, cityPayload);
+  }
+}
 }
 
 async function publishHallRankingsDuringScan(client, rankings) {
