@@ -1343,13 +1343,13 @@ function resolveCityKeyFromName(value = "") {
   function extractExplicitOrgNameFromWinnerLine(cleanLine = "", originalLine = "") {
     const rawMarkerText = stripDiscordNoise(originalLine);
     const hasOrgMarker =
-      /\bGG\s*[:\-]/i.test(originalLine) ||
+      hasHallGGWinnerMarker(originalLine) ||
       /^Organiza[cç][aã]o\s*[:\-]/i.test(rawMarkerText) ||
       /^Vencedores?\b/i.test(rawMarkerText);
 
     const beforePrize = normalizeHallDisplay(String(cleanLine || "").split("|")[0] || "")
-      .replace(/\b\d+\s*(vip|vips|rolepass|pass|kk|k|milh[oõ]es|milh[aã]o)\b[\s\S]*$/i, "")
-      .replace(/\b(vip|vips|rolepass|pass|kk|k|milh[oõ]es|milh[aã]o)\b[\s\S]*$/i, "")
+      .replace(/\b\d+\s*(vip|vips|rolepass|pass|ve[ií]culo|ve[ií]culos|blindado|blindados|kk|k|milh[oõ]es|milh[aã]o)\b[\s\S]*$/i, "")
+      .replace(/\b(vip|vips|rolepass|pass|ve[ií]culo|ve[ií]culos|blindado|blindados|kk|k|milh[oõ]es|milh[aã]o)\b[\s\S]*$/i, "")
       .trim();
 
     const orgName = normalizeOrgDisplayName(beforePrize);
@@ -1363,7 +1363,6 @@ function resolveCityKeyFromName(value = "") {
 
     return "";
   }
-
   function findKnownOrgInsideWinnerName(value = "") {
     const clean = normalizeHallDisplay(value);
     const key = normalizeHallKey(clean);
@@ -3273,22 +3272,46 @@ async function getSafeHallImageUrls(client, hallMessage, options = {}) {
   ]);
 }
 
-function cleanHallWinnerLine(line = "") {
-  return stripDiscordNoise(line)
+function hasHallGGWinnerMarker(line = "") {
+  const cleaned = stripDiscordNoise(line)
     .replace(/^#\s*/i, "")
     .replace(/^TOP\s*#?\s*\d*\s*[:\-]?\s*/i, "")
     .replace(/^Top\s*#?\s*\d+\s*[:\-]?\s*/i, "")
     .replace(/^novo[_\s-]*emoji\s*~?\s*\d+\s*[:\-]?\s*/i, "")
     .replace(/^emoji\s*~?\s*\d+\s*[:\-]?\s*/i, "")
-    .replace(/^GG\s*[:\-]\s*/i, "")
-    .replace(/\bGG\s*[:\-]\s*/i, "")
-    .replace(/^Organiza[cç][aã]o\s*[:\-]\s*/i, "")
-    .replace(/^Vencedores?\s*/i, "")
     .replace(/^(🥇|🥈|🥉)\s*/u, "")
     .replace(/^[º°ª\.\:\-\s|]+/, "")
-    .replace(/\s*\|\s*/g, " | ")
     .replace(/\s+/g, " ")
     .trim();
+
+  return /^GG(?:\s*[:\-]\s*|\s+)(?=\S)/i.test(cleaned);
+}
+
+function removeHallGGWinnerMarker(value = "") {
+  return String(value || "")
+    .replace(/^GG\s*[:\-]\s*/i, "")
+    .replace(/^GG\s+(?=\S)/i, "")
+    .trim();
+}
+
+function cleanHallWinnerLine(line = "") {
+  return removeHallGGWinnerMarker(
+    stripDiscordNoise(line)
+      .replace(/^#\s*/i, "")
+      .replace(/^TOP\s*#?\s*\d*\s*[:\-]?\s*/i, "")
+      .replace(/^Top\s*#?\s*\d+\s*[:\-]?\s*/i, "")
+      .replace(/^novo[_\s-]*emoji\s*~?\s*\d+\s*[:\-]?\s*/i, "")
+      .replace(/^emoji\s*~?\s*\d+\s*[:\-]?\s*/i, "")
+      .replace(/^GG\s*[:\-]\s*/i, "")
+      .replace(/\bGG\s*[:\-]\s*/i, "")
+      .replace(/^Organiza[cç][aã]o\s*[:\-]\s*/i, "")
+      .replace(/^Vencedores?\s*/i, "")
+      .replace(/^(🥇|🥈|🥉)\s*/u, "")
+      .replace(/^[º°ª\.\:\-\s|]+/, "")
+      .replace(/\s*\|\s*/g, " | ")
+      .replace(/\s+/g, " ")
+      .trim()
+  );
 }
 
 function parsePipePlayerOrgWinnerLine(cleanLine = "", cityKey = "nobre", originalLine = "") {
@@ -3684,14 +3707,18 @@ function parseTopEmojiOrgWinnerLine(line = "", cityKey = "nobre") {
 
   if (!hasTopPrefix) return null;
 
-  const cleanedLine = stripDiscordNoise(originalLine)
-    .replace(/^#\s*/i, "")
-    .replace(/^TOP\s*#?\s*\d*\s*[:\-]?\s*/i, "")
-    .replace(/^novo[_\s-]*emoji\s*~?\s*\d+\s*[:\-]?\s*/i, "")
-    .replace(/^emoji\s*~?\s*\d+\s*[:\-]?\s*/i, "")
-    .replace(/^[º°ª\.\:\-\s|]+/, "")
-    .replace(/\s+/g, " ")
-    .trim();
+  const hasGGMarker = hasHallGGWinnerMarker(originalLine);
+
+  const cleanedLine = removeHallGGWinnerMarker(
+    stripDiscordNoise(originalLine)
+      .replace(/^#\s*/i, "")
+      .replace(/^TOP\s*#?\s*\d*\s*[:\-]?\s*/i, "")
+      .replace(/^novo[_\s-]*emoji\s*~?\s*\d+\s*[:\-]?\s*/i, "")
+      .replace(/^emoji\s*~?\s*\d+\s*[:\-]?\s*/i, "")
+      .replace(/^[º°ª\.\:\-\s|]+/, "")
+      .replace(/\s+/g, " ")
+      .trim()
+  );
 
   if (!cleanedLine) return null;
 
@@ -3708,6 +3735,7 @@ function parseTopEmojiOrgWinnerLine(line = "", cityKey = "nobre") {
   if (!orgName) return null;
 
   const isRecognizedOrg =
+    hasGGMarker ||
     isExactKnownOrgName(orgName) ||
     isKnownOrgName(orgName) ||
     Boolean(getManualOrgCityKey(orgName));
@@ -3721,7 +3749,6 @@ function parseTopEmojiOrgWinnerLine(line = "", cityKey = "nobre") {
     rawLine: originalLine
   };
 }
-
 function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento") {
     const originalLine = String(line || "");
 
@@ -3752,7 +3779,7 @@ function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento")
         isOrgEventName(eventName, cityKey) ||
         isExactKnownOrgName(explicitOrgName) ||
         getManualOrgCityKey(explicitOrgName) ||
-        /\bGG\s*[:\-]/i.test(originalLine)
+        hasHallGGWinnerMarker(originalLine)
       )
     ) {
       return {
@@ -3762,7 +3789,6 @@ function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento")
         rawLine: originalLine
       };
     }
-
     const legacyPlayerOrg = cleanLine.match(/^(.+?)\s*\(([^)]+)\)\s*$/i);
     if (legacyPlayerOrg) {
       return {
