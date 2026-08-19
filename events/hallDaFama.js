@@ -1311,7 +1311,10 @@ function resolveCityKeyFromName(value = "") {
   };
 
   function normalizeOrgDisplayName(orgName = "") {
-    const clean = normalizeHallDisplay(orgName);
+    const clean = removeHallGGWinnerMarker(
+      normalizeHallDisplay(orgName)
+    );
+
     const alias = ORG_NAME_ALIASES[normalizeHallKey(clean)];
 
     return alias || clean;
