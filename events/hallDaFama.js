@@ -25,8 +25,16 @@ import {
   const HALL_CHANNEL_ID = "1386503496353976470"; // Canal Oficial do Hall da Fama
   const APPROVAL_CHANNEL_ID = "1387864036259004436"; // Canal de Aprovação
   const HALL_AUDIT_LOG_CH_ID = "1486006930492362893";
-const HALL_ORGS_RANKING_CHANNEL_ID = "1518696187237236816"; // Ranking de ORGs com mais GGs
+const HALL_ORGS_RANKING_CHANNEL_ID = "1518696187237236816"; // Ranking GERAL de ORGs com mais GGs
 const HALL_PLAYERS_RANKING_CHANNEL_ID = "1518696133071863838"; // Ranking de Pessoas com mais GGs
+
+const HALL_ORGS_CITY_RANKING_CHANNELS = {
+  nobre: "1539694067104088075",
+  santa: "1539694099764875385",
+  grande: "1539695240464568461",
+  maresia: "1539695203638710322"
+};
+
 const HALL_ORGS_RANKING_WEBHOOK_URL = "https://discord.com/api/webhooks/1519547838957359155/TjDA5C-QquaAag2YBKqhfwR1szql7hooy-m53EAto6O37o3ZhP-PBIEduH64QodLBLGD";
 const HALL_PLAYERS_RANKING_WEBHOOK_URL = "";
 
@@ -6230,6 +6238,65 @@ function buildOrgsRankingEmbed(rankings) {
     );
   }
 
+function buildOrgsCityRankingEmbed(rankings, cityKey) {
+  const cityData = CITIES[cityKey];
+
+  if (!cityData) {
+    return buildRankingEmbed(
+      "🏆 Ranking de ORGs — Hall da Fama",
+      "Cidade inválida.",
+      "Nenhuma informação disponível.",
+      [],
+      "#f1c40f"
+    );
+  }
+
+  const cityOrgs = mergeDuplicateOrgRankingItems(
+    applyDominantCityToRankingItems(
+      Object.values(rankings.orgs || {})
+    )
+  )
+    .filter(org => !isInvalidWinnerName(org.name))
+    .filter(org => !looksLikePrizeOnly(org.name))
+    .filter(org => org.cityKey === cityKey)
+    .sort(sortRankingByTotalAndRecent);
+
+  const topOrgs = cityOrgs.slice(0, 10);
+
+  const totalVitorias = cityOrgs.reduce(
+    (total, org) => total + Number(org.total || 0),
+    0
+  );
+
+  const lines = topOrgs.map((org, index) => {
+    const pos = index + 1;
+    const medal =
+      pos === 1
+        ? "🥇"
+        : pos === 2
+          ? "🥈"
+          : pos === 3
+            ? "🥉"
+            : "🏆";
+
+    return `${medal} **TOP ${pos} — ${org.name}**
+  🌆 ${org.cityName}
+  🏆 Vitórias: **${org.total}**
+  🎮 ${formatRankingEventBreakdown(org.events, org.cityKey)}`;
+  });
+
+  return buildRankingEmbed(
+    `${cityData.emoji} Ranking de ORGs — ${cityData.label}`,
+    `TOP 10 organizações da ${cityData.label} que mais venceram eventos oficiais.`,
+    `🏢 ORGs da cidade no ranking: **${cityOrgs.length}**
+  🏆 Vitórias contabilizadas: **${totalVitorias}**
+  📜 Halls analisados: **${Object.keys(rankings.reviewedMessages || {}).length}**
+  ⚠️ Revisões pendentes: **${Object.keys(rankings.pendingReview || {}).length}**`,
+    lines,
+    "#f1c40f"
+  );
+}
+
 function buildPlayersRankingEmbed(rankings) {
   const topPlayers = applyDominantCityToRankingItems(Object.values(rankings.players || {}))
     .filter(player => !isInvalidWinnerName(player.name))
@@ -6391,18 +6458,33 @@ async function sendRankingPrivateLog(client, interaction, data = {}) {
   await ch.send({ embeds: [embed], allowedMentions: { parse: [] } }).catch(() => {});
 }
 
-function rankingButtons(type, page = 0) {
+function rankingButtons(type, page = 0, cityKey = null) {
   const isOrg = type === "org";
+
+  const orgScope =
+    cityKey && CITIES[cityKey]
+      ? cityKey
+      : "geral";
+
+  const searchCustomId =
+    isOrg
+      ? `${BTN_RANK_ORG_SEARCH}:${orgScope}`
+      : BTN_RANK_PLAYER_SEARCH;
+
+  const nextCustomId =
+    isOrg
+      ? `${BTN_RANK_ORG_NEXT_PREFIX}${orgScope}:${page + 1}`
+      : `${BTN_RANK_PLAYER_NEXT_PREFIX}${page + 1}`;
 
   return [
     new ActionRowBuilder().addComponents(
       new ButtonBuilder()
-        .setCustomId(isOrg ? BTN_RANK_ORG_SEARCH : BTN_RANK_PLAYER_SEARCH)
+        .setCustomId(searchCustomId)
         .setLabel(isOrg ? "Pesquisar ORG" : "Pesquisar Pessoa")
         .setEmoji("🔎")
         .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
-        .setCustomId(`${isOrg ? BTN_RANK_ORG_NEXT_PREFIX : BTN_RANK_PLAYER_NEXT_PREFIX}${page + 1}`)
+        .setCustomId(nextCustomId)
         .setLabel("Próxima página")
         .setEmoji("➡️")
         .setStyle(ButtonStyle.Secondary)
@@ -6440,9 +6522,20 @@ function buildPrivateRankingEmbed(rankings, type, page = 0, filters = {}) {
 
   let filtered = list;
 
+  const cityKey =
+    filters.cityKey && CITIES[filters.cityKey]
+      ? filters.cityKey
+      : null;
+
+  if (type === "org" && cityKey) {
+    filtered = filtered.filter(item => item.cityKey === cityKey);
+  }
+
   if (type === "org" && filters.org) {
     const q = normalizeHallKey(filters.org);
-    filtered = filtered.filter(item => normalizeHallKey(item.name || "").includes(q));
+    filtered = filtered.filter(item =>
+      normalizeHallKey(item.name || "").includes(q)
+    );
   }
 
   if (type === "player") {
@@ -6451,34 +6544,82 @@ function buildPrivateRankingEmbed(rankings, type, page = 0, filters = {}) {
     const cidade = normalizeHallKey(filters.cidade || "");
 
     filtered = filtered.filter(item => {
-      const okNome = !nome || normalizeHallKey(item.name || "").includes(nome);
-      const okId = !id || String(item.playerId || "").trim() === id;
-      const okCidade = !cidade || normalizeHallKey(item.cityName || item.cityKey || "").includes(cidade);
+      const okNome =
+        !nome ||
+        normalizeHallKey(item.name || "").includes(nome);
+
+      const okId =
+        !id ||
+        String(item.playerId || "").trim() === id;
+
+      const okCidade =
+        !cidade ||
+        normalizeHallKey(
+          item.cityName ||
+          item.cityKey ||
+          ""
+        ).includes(cidade);
+
       return okNome && okId && okCidade;
     });
   }
 
-  const maxPage = Math.max(0, Math.ceil(filtered.length / pageSize) - 1);
-  const safePage = Math.min(Math.max(Number(page || 0), 0), maxPage);
+  const maxPage = Math.max(
+    0,
+    Math.ceil(filtered.length / pageSize) - 1
+  );
+
+  const safePage = Math.min(
+    Math.max(Number(page || 0), 0),
+    maxPage
+  );
+
   const start = safePage * pageSize;
-  const pageItems = filtered.slice(start, start + pageSize);
+
+  const pageItems = filtered.slice(
+    start,
+    start + pageSize
+  );
 
   const lines = pageItems.map((item, index) => {
-    return formatRankingLine(item, start + index + 1, type);
+    return formatRankingLine(
+      item,
+      start + index + 1,
+      type
+    );
   });
 
-  const title = type === "org"
-    ? "🏆 Consulta Privada — Ranking de ORGs"
-    : "👑 Consulta Privada — Ranking de Pessoas";
+  const cityData =
+    cityKey
+      ? CITIES[cityKey]
+      : null;
+
+  const title =
+    type === "org"
+      ? cityData
+        ? `${cityData.emoji} Consulta Privada — Ranking de ORGs — ${cityData.label}`
+        : "🏆 Consulta Privada — Ranking Geral de ORGs"
+      : "👑 Consulta Privada — Ranking de Pessoas";
+
+  const scopeText =
+    type === "org" && cityData
+      ? `🌆 Ranking filtrado por: **${cityData.label}**`
+      : type === "org"
+        ? "🌎 Ranking: **Geral**"
+        : "";
 
   return {
     embed: buildRankingEmbed(
       title,
       "Resultado visível somente para você.",
-      `📄 Página: **${safePage + 1}/${maxPage + 1}**
+      `${scopeText ? `${scopeText}\n` : ""}📄 Página: **${safePage + 1}/${maxPage + 1}**
 🔎 Resultados encontrados: **${filtered.length}**`,
-      lines.length ? lines : ["❌ Nenhum resultado encontrado com esses filtros."],
-      type === "org" ? "#f1c40f" : "#5865f2"
+      lines.length
+        ? lines
+        : ["❌ Nenhum resultado encontrado com esses filtros."],
+      type === "org"
+        ? "#f1c40f"
+        : "#5865f2"
     ),
     page: safePage,
     maxPage,
@@ -6555,6 +6696,24 @@ async function publishHallRankings(client, rankings) {
 
   await upsertSingleRankingMessage(orgsChannel, orgsPayload);
   await upsertSingleRankingMessage(playersChannel, playersPayload);
+
+for (const [cityKey, channelId] of Object.entries(HALL_ORGS_CITY_RANKING_CHANNELS)) {
+  const cityChannel = await client.channels.fetch(channelId).catch(() => null);
+
+  if (!cityChannel || !cityChannel.isTextBased()) {
+    console.warn(
+      `[HallDaFama] Canal do ranking da cidade ${cityKey} não encontrado ou não é textual: ${channelId}`
+    );
+    continue;
+  }
+
+  const cityPayload = {
+    embeds: [buildOrgsCityRankingEmbed(rankings, cityKey)],
+    components: rankingButtons("org", 0, cityKey)
+  };
+
+  await upsertSingleRankingMessage(cityChannel, cityPayload);
+}
 
   await sendRankingWebhookMirror(HALL_ORGS_RANKING_WEBHOOK_URL, orgsPayload);
 }
@@ -8222,58 +8381,162 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
 
   // ================= RANKING PRIVADO — ORG / PLAYER =================
 
-  if (interaction.isButton() && interaction.customId === BTN_RANK_ORG_SEARCH) {
-    const allowed = await ensureRankingAccessOrWL(interaction, "org_search");
-    if (!allowed) return true;
+if (
+  interaction.isButton() &&
+  interaction.customId.startsWith(BTN_RANK_ORG_SEARCH)
+) {
+  const rawScope =
+    interaction.customId.startsWith(`${BTN_RANK_ORG_SEARCH}:`)
+      ? interaction.customId.slice(
+          `${BTN_RANK_ORG_SEARCH}:`.length
+        )
+      : "geral";
 
-    const modal = new ModalBuilder()
-      .setCustomId(MODAL_RANK_ORG_SEARCH)
-      .setTitle("Pesquisar ORG no Ranking");
+  const cityKey =
+    rawScope !== "geral" &&
+    CITIES[rawScope]
+      ? rawScope
+      : null;
 
-    modal.addComponents(
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId("rank_org_nome")
-          .setLabel("Nome da ORG")
-          .setPlaceholder("Ex: Morro do Sacola")
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true)
-          .setMaxLength(50)
-      )
+  const actionType =
+    cityKey
+      ? `org_search:${cityKey}`
+      : "org_search:geral";
+
+  const allowed =
+    await ensureRankingAccessOrWL(
+      interaction,
+      actionType
     );
 
-    await sendRankingPrivateLog(client, interaction, {
-      action: "abriu_modal_pesquisa_org",
-      type: "org"
-    });
+  if (!allowed) return true;
 
-    await interaction.showModal(modal);
-    return true;
+  const cityData =
+    cityKey
+      ? CITIES[cityKey]
+      : null;
+
+  const modal = new ModalBuilder()
+    .setCustomId(
+      `${MODAL_RANK_ORG_SEARCH}:${cityKey || "geral"}`
+    )
+    .setTitle(
+      cityData
+        ? `Pesquisar ORG - ${cityData.label}`
+        : "Pesquisar ORG - Ranking Geral"
+    );
+
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("rank_org_nome")
+        .setLabel("Nome da ORG")
+        .setPlaceholder("Ex: Morro do Sacola")
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setMaxLength(50)
+    )
+  );
+
+  await sendRankingPrivateLog(
+    client,
+    interaction,
+    {
+      action: "abriu_modal_pesquisa_org",
+      type: "org",
+      cityKey: cityKey || "geral"
+    }
+  );
+
+  await interaction.showModal(modal);
+  return true;
+}
+
+if (
+  interaction.isButton() &&
+  interaction.customId.startsWith(BTN_RANK_ORG_NEXT_PREFIX)
+) {
+  const rawData =
+    interaction.customId.slice(
+      BTN_RANK_ORG_NEXT_PREFIX.length
+    );
+
+  const parts = rawData.split(":");
+
+  let rawScope = "geral";
+  let page = 0;
+
+  if (
+    parts.length >= 2
+  ) {
+    rawScope =
+      parts[0] || "geral";
+
+    page =
+      Number(parts[1]) || 0;
+  } else {
+    page =
+      Number(parts[0]) || 0;
   }
 
-  if (interaction.isButton() && interaction.customId.startsWith(BTN_RANK_ORG_NEXT_PREFIX)) {
-    const allowed = await ensureRankingAccessOrWL(interaction, "org_next");
-    if (!allowed) return true;
+  const cityKey =
+    rawScope !== "geral" &&
+    CITIES[rawScope]
+      ? rawScope
+      : null;
 
-    await interaction.deferReply({ ephemeral: true });
+  const actionType =
+    cityKey
+      ? `org_next:${cityKey}`
+      : "org_next:geral";
 
-    const page = Number(interaction.customId.replace(BTN_RANK_ORG_NEXT_PREFIX, "")) || 0;
-    const rankings = loadHallRankings();
-    const result = buildPrivateRankingEmbed(rankings, "org", page);
+  const allowed =
+    await ensureRankingAccessOrWL(
+      interaction,
+      actionType
+    );
 
-    await sendRankingPrivateLog(client, interaction, {
+  if (!allowed) return true;
+
+  await interaction.deferReply({
+    ephemeral: true
+  });
+
+  const rankings =
+    loadHallRankings();
+
+  const result =
+    buildPrivateRankingEmbed(
+      rankings,
+      "org",
+      page,
+      {
+        cityKey
+      }
+    );
+
+  await sendRankingPrivateLog(
+    client,
+    interaction,
+    {
       action: "proxima_pagina",
       type: "org",
+      cityKey: cityKey || "geral",
       page: result.page + 1
-    });
+    }
+  );
 
-    await interaction.editReply({
-      embeds: [result.embed],
-      components: rankingButtons("org", result.page)
-    });
+  await interaction.editReply({
+    embeds: [result.embed],
+    components: rankingButtons(
+      "org",
+      result.page,
+      cityKey
+    )
+  });
 
-    return true;
-  }
+  return true;
+}
 
   if (interaction.isButton() && interaction.customId === BTN_RANK_PLAYER_SEARCH) {
     const allowed = await ensureRankingAccessOrWL(interaction, "player_search");
@@ -8346,28 +8609,69 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
     return true;
   }
 
-  if (interaction.isModalSubmit() && interaction.customId === MODAL_RANK_ORG_SEARCH) {
-    await interaction.deferReply({ ephemeral: true });
+if (
+  interaction.isModalSubmit() &&
+  interaction.customId.startsWith(MODAL_RANK_ORG_SEARCH)
+) {
+  await interaction.deferReply({
+    ephemeral: true
+  });
 
-    const org = interaction.fields.getTextInputValue("rank_org_nome")?.trim();
+  const rawScope =
+    interaction.customId.startsWith(`${MODAL_RANK_ORG_SEARCH}:`)
+      ? interaction.customId.slice(
+          `${MODAL_RANK_ORG_SEARCH}:`.length
+        )
+      : "geral";
 
-    const rankings = loadHallRankings();
-    const result = buildPrivateRankingEmbed(rankings, "org", 0, { org });
+  const cityKey =
+    rawScope !== "geral" &&
+    CITIES[rawScope]
+      ? rawScope
+      : null;
 
-    await sendRankingPrivateLog(client, interaction, {
+  const org =
+    interaction.fields
+      .getTextInputValue("rank_org_nome")
+      ?.trim();
+
+  const rankings =
+    loadHallRankings();
+
+  const result =
+    buildPrivateRankingEmbed(
+      rankings,
+      "org",
+      0,
+      {
+        org,
+        cityKey
+      }
+    );
+
+  await sendRankingPrivateLog(
+    client,
+    interaction,
+    {
       action: "pesquisou_org",
       type: "org",
       org,
+      cityKey: cityKey || "geral",
       page: 1
-    });
+    }
+  );
 
-    await interaction.editReply({
-      embeds: [result.embed],
-      components: rankingButtons("org", result.page)
-    });
+  await interaction.editReply({
+    embeds: [result.embed],
+    components: rankingButtons(
+      "org",
+      result.page,
+      cityKey
+    )
+  });
 
-    return true;
-  }
+  return true;
+}
 
   if (interaction.isModalSubmit() && interaction.customId === MODAL_RANK_PLAYER_SEARCH) {
     const nome = interaction.fields.getTextInputValue("rank_player_nome")?.trim();
@@ -8424,13 +8728,34 @@ export async function hallDaFamaHandleInteraction(interaction, client) {
       id
     });
 
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId(actionType.includes("org") ? BTN_RANK_ORG_SEARCH : BTN_RANK_PLAYER_SEARCH)
-        .setLabel(actionType.includes("org") ? "Pesquisar ORG agora" : "Pesquisar Pessoa agora")
-        .setEmoji("🔎")
-        .setStyle(ButtonStyle.Success)
-    );
+const orgAction =
+  actionType.includes("org");
+
+const actionParts =
+  actionType.split(":");
+
+const actionCityKey =
+  orgAction &&
+  actionParts.length >= 2 &&
+  CITIES[actionParts[1]]
+    ? actionParts[1]
+    : null;
+
+const row = new ActionRowBuilder().addComponents(
+  new ButtonBuilder()
+    .setCustomId(
+      orgAction
+        ? `${BTN_RANK_ORG_SEARCH}:${actionCityKey || "geral"}`
+        : BTN_RANK_PLAYER_SEARCH
+    )
+    .setLabel(
+      orgAction
+        ? "Pesquisar ORG agora"
+        : "Pesquisar Pessoa agora"
+    )
+    .setEmoji("🔎")
+    .setStyle(ButtonStyle.Success)
+);
 
     await interaction.editReply({
       content:
