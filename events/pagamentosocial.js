@@ -113,23 +113,43 @@ const ALLOWED_IDS = [
   "1388976314253312100", // COORD+ (role)
   "1282119104576098314", // Mkt Creators (role)
 ];
-// 🔥 Chefões: podem aprovar ATÉ o próprio
-const SELF_APPROVE_USER_IDS = [
-  "660311795327828008",  // você
-  "1262262852949905408", // owner
-];
-
-const SELF_APPROVE_ROLE_IDS = [
-  "1352408327983861844", // resp creators
+// ✅ Mesma permissão de aprovação/reprovação do registroManager.js
+const CARGOS_PODE_APROVAR = [
   "1262262852949905409", // resp influ
-  "1352407252216184833", // resp líder
+  "1435325004471336990", // tier 3
+  "1508258904826445944", // tier 4
+  "1388976314253312100", // coord creators
+  "1352408327983861844", // resp creators
+  "1352407252216184833", // resp lider
+  "1262262852949905408", // owner
+  "660311795327828008",  // você
 ];
 
-// ✅ Quem pode aprovar/recusar (mas NÃO o próprio, a menos que seja chefão acima)
-const APPROVER_ROLE_IDS = [
-  "1388976314253312100", // coord
-  "1282119104576098314", // mkt ticket
-];
+// ✅ Mesma exceção de autoaprovação do registroManager.js
+const SELF_APPROVE_ALLOWED = {
+  userIds: new Set([
+    "660311795327828008", // você (garantia)
+  ]),
+  roleIds: new Set([
+    "1262262852949905409", // resp influ
+    "1435325004471336990", // tier 3
+    "1508258904826445944", // tier 4
+    "1352408327983861844", // resp creators
+    "1262262852949905408", // owner
+  ]),
+};
+
+// ✅ Mesmo bypass total do registroManager.js
+// Ignora hierarquia + bloqueio de decisão no próprio registro
+const PAGAMENTO_GLOBAL_BYPASS = {
+  userIds: new Set([
+    "660311795327828008", // você
+  ]),
+  roleIds: new Set([
+    "1352408327983861844", // resp creators
+    "1262262852949905408", // owner
+  ]),
+};
 
 // =============================
 // Helpers de permissão
@@ -151,19 +171,104 @@ function temPermissaoPagamentoMensagem(message) {
   return hasRole || hasUser;
 }
 
-// ✅ Chefão = pode até aprovar o próprio
-function podeAprovarProprio(interaction) {
-  const hasUser = SELF_APPROVE_USER_IDS.includes(interaction.user.id);
-  const hasRole = _hasAnyRole(interaction, SELF_APPROVE_ROLE_IDS);
-  return hasUser || hasRole;
-}
-
-// ✅ Aprovação = Coord/Mkt ou Chefão
 function temPermissaoAprovacao(interaction) {
-  if (podeAprovarProprio(interaction)) return true;
-  return _hasAnyRole(interaction, APPROVER_ROLE_IDS);
+  return _hasAnyRole(interaction, CARGOS_PODE_APROVAR) ||
+    CARGOS_PODE_APROVAR.includes(interaction.user.id);
 }
 
+function podeAprovarProprio(interaction) {
+  if (SELF_APPROVE_ALLOWED.userIds.has(String(interaction.user.id))) return true;
+
+  for (const rid of SELF_APPROVE_ALLOWED.roleIds) {
+    if (interaction.member?.roles?.cache?.has(rid)) return true;
+  }
+
+  return false;
+}
+
+function hasPagamentoGlobalBypass(member, userId) {
+  try {
+    if (PAGAMENTO_GLOBAL_BYPASS.userIds.has(String(userId))) return true;
+
+    for (const rid of PAGAMENTO_GLOBAL_BYPASS.roleIds) {
+      if (member?.roles?.cache?.has(rid)) return true;
+    }
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function cannotApprovePagamentoByHierarchy(approverMember, targetMember) {
+  try {
+    if (!approverMember || !targetMember) return false;
+
+    const approverHighest = approverMember.roles.highest;
+    if (!approverHighest) return false;
+
+    for (const role of targetMember.roles.cache.values()) {
+      if (role.position >= approverHighest.position) {
+        return true;
+      }
+    }
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+async function validarHierarquiaDecisaoPagamento(interaction, criadorId, action) {
+  const ehDecisaoFinal = action === "pago" || action === "reprovado";
+  if (!ehDecisaoFinal || !criadorId) return { ok: true };
+
+  const bypass = hasPagamentoGlobalBypass(
+    interaction.member,
+    interaction.user.id
+  );
+
+  const ehProprio =
+    String(criadorId) === String(interaction.user.id);
+
+  const selfApproveAllowed =
+    ehProprio &&
+    podeAprovarProprio(interaction);
+
+  if (!bypass && !selfApproveAllowed) {
+    const criadorMember = await interaction.guild?.members
+      ?.fetch(String(criadorId))
+      .catch(() => null);
+
+    if (criadorMember) {
+      const bloqueadoPorHierarquia =
+        cannotApprovePagamentoByHierarchy(
+          interaction.member,
+          criadorMember
+        );
+
+      if (bloqueadoPorHierarquia) {
+        return {
+          ok: false,
+          motivo: "hierarquia",
+          mensagem:
+            "❌ Você não pode aprovar/reprovar este registro porque o criador possui **cargo igual ou superior** ao seu.",
+        };
+      }
+    }
+  }
+
+  if (ehProprio && !bypass && !selfApproveAllowed) {
+    return {
+      ok: false,
+      motivo: "proprio",
+      mensagem:
+        "❌ Você **não pode aprovar/reprovar** o seu próprio registro.",
+    };
+  }
+
+  return { ok: true };
+}
 
 function isUnknownInteraction(err) {
   return err?.code === 10062 || err?.code === 40060;
@@ -5634,37 +5739,51 @@ return true;
       // ✅ STATUS (abre modal)
 // formato: pago__{messageId} / solicitado__{messageId} / reprovado__{messageId}
 if (id.startsWith("pago__") || id.startsWith("solicitado__") || id.startsWith("reprovado__")) {
-  // ✅ só aprovadores (coord/mkt) + chefões
+  // ✅ Mesma lista de aprovadores do registroManager.js
   if (!temPermissaoAprovacao(interaction)) {
-    await interaction.reply({ content: "🚫 Você não tem permissão para aprovar/reprovar registros.", ephemeral: true }).catch(() => {});
-    await interaction.reply({ content: "🚫 Você não tem permissão para aprovar/reprovar registros.", flags: MessageFlags.Ephemeral }).catch(() => {});
+    await interaction.reply({
+      content: "🚫 Você não tem permissão para aprovar/reprovar registros.",
+      flags: MessageFlags.Ephemeral,
+    }).catch(() => {});
+
     return true;
   }
 
   const [action, messageId] = id.split("__");
 
-  // ✅ TRAVA: não pode aprovar o próprio (a menos que seja chefão)
-  try {
-    const embedClicado = interaction.message?.embeds?.[0];
-    const criadorId = getCriadorIdFromEmbed(embedClicado);
-    const ehProprio = criadorId && criadorId === interaction.user.id;
+  // ✅ Mesma trava de hierarquia do Registro Manager aplicada às decisões finais
+  // PAGO e REPROVADO respeitam hierarquia + autoaprovação + bypass.
+  const embedClicado = interaction.message?.embeds?.[0];
+  const criadorId = getCriadorIdFromEmbed(embedClicado);
 
-    if (ehProprio && !podeAprovarProprio(interaction)) {
-      await interaction.reply({
-        content: "🚫 Você não pode aprovar/reprovar **o seu próprio registro**.",
-        flags: MessageFlags.Ephemeral,
-      }).catch(() => {});
+  const validacaoHierarquia =
+    await validarHierarquiaDecisaoPagamento(
+      interaction,
+      criadorId,
+      action
+    );
 
-      // loga tentativa
-      logPagamento(
-        client,
-        interaction,
-        "⛔ Bloqueado: auto-aprovação",
-        `Usuário tentou **${action.toUpperCase()}** o próprio registro.\nCriador: <@${criadorId}>\nMensagem: \`${messageId}\``
-      ).catch(() => {});
-      return true;
-    }
-  } catch {}
+  if (!validacaoHierarquia.ok) {
+    await interaction.reply({
+      content: validacaoHierarquia.mensagem,
+      flags: MessageFlags.Ephemeral,
+    }).catch(() => {});
+
+    logPagamento(
+      client,
+      interaction,
+      validacaoHierarquia.motivo === "hierarquia"
+        ? "⛔ Bloqueado: hierarquia de aprovação"
+        : "⛔ Bloqueado: auto-aprovação",
+      [
+        `Usuário tentou **${action.toUpperCase()}** um registro bloqueado pela regra de permissão.`,
+        `Criador: ${criadorId ? `<@${criadorId}>` : "Não identificado"}`,
+        `Mensagem: \`${messageId}\``,
+      ].join("\n")
+    ).catch(() => {});
+
+    return true;
+  }
 
   const tituloModal =
     action === "pago" ? "Descrição do Pagamento" :
@@ -6075,17 +6194,16 @@ vipEventoResolvido?.ok
 
         return true;
       }
-
-      // ✅ STATUS UPDATE
+// ✅ STATUS UPDATE
 if (id.startsWith("pago_desc_") || id.startsWith("solicitado_desc_") || id.startsWith("reprovado_desc_")) {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
 
-  // ✅ só aprovadores (coord/mkt) + chefões
+  // ✅ Repete a permissão no submit para impedir bypass do modal
   if (!temPermissaoAprovacao(interaction)) {
-    await interaction.followUp({
+    await interaction.editReply({
       content: "🚫 Você não tem permissão para aprovar/reprovar registros.",
-      flags: MessageFlags.Ephemeral
     }).catch(() => {});
+
     return true;
   }
 
@@ -6093,42 +6211,66 @@ if (id.startsWith("pago_desc_") || id.startsWith("solicitado_desc_") || id.start
   const action = parts[0]; // pago | solicitado | reprovado
   const messageId = parts.slice(1).join("_desc_"); // segura caso tenha underscore
 
-  const descricao = interaction.fields.getTextInputValue("descricao")?.trim() || PADRAO_INDEFINIDO;
+  const descricao =
+    interaction.fields.getTextInputValue("descricao")?.trim() ||
+    PADRAO_INDEFINIDO;
 
-  const canal = await client.channels.fetch(CANAL_PAGAMENTO).catch(() => null);
+  const canal =
+    await client.channels.fetch(CANAL_PAGAMENTO).catch(() => null);
+
   if (!canal || !canal.isTextBased()) {
-    await interaction.editReply({ content: "❌ Não achei o canal." }).catch(() => {});
+    await interaction.editReply({
+      content: "❌ Não achei o canal.",
+    }).catch(() => {});
+
     return true;
   }
 
-  const msgOriginal = await canal.messages.fetch(messageId).catch(() => null);
+  const msgOriginal =
+    await canal.messages.fetch(messageId).catch(() => null);
+
   if (!msgOriginal?.embeds?.[0]) {
-    await interaction.editReply({ content: "❌ Não achei o embed desse registro." }).catch(() => {});
+    await interaction.editReply({
+      content: "❌ Não achei o embed desse registro.",
+    }).catch(() => {});
+
     return true;
   }
 
-  const embedOriginal = EmbedBuilder.from(msgOriginal.embeds[0]);
+  const embedOriginal =
+    EmbedBuilder.from(msgOriginal.embeds[0]);
 
-  // ✅ TRAVA: não pode aprovar o próprio (a menos que seja chefão)
-  try {
-    const criadorId = getCriadorIdFromEmbed(embedOriginal);
-    const ehProprio = criadorId && criadorId === interaction.user.id;
+  // ✅ Repete hierarquia + autoaprovação + bypass no submit do modal
+  const criadorId =
+    getCriadorIdFromEmbed(embedOriginal);
 
-    if (ehProprio && !podeAprovarProprio(interaction)) {
-      await interaction.followUp({
-        content: "🚫 Você não pode aprovar/reprovar **o seu próprio registro**.",
-        flags: MessageFlags.Ephemeral,
-      }).catch(() => {});
+  const validacaoHierarquia =
+    await validarHierarquiaDecisaoPagamento(
+      interaction,
+      criadorId,
+      action
+    );
 
-      logPagamento(
-        client,
-        interaction,
-        "⛔ Bloqueado: auto-aprovação (submit)",
-        `Usuário tentou **${action.toUpperCase()}** o próprio registro.\nCriador: <@${criadorId}>\nMensagem: \`${messageId}\``
-      ).catch(() => {});
-      return true;
-    }
-  } catch {}
+  if (!validacaoHierarquia.ok) {
+    await interaction.editReply({
+      content: validacaoHierarquia.mensagem,
+    }).catch(() => {});
+
+    logPagamento(
+      client,
+      interaction,
+      validacaoHierarquia.motivo === "hierarquia"
+        ? "⛔ Bloqueado: hierarquia de aprovação (submit)"
+        : "⛔ Bloqueado: auto-aprovação (submit)",
+      [
+        `Usuário tentou **${action.toUpperCase()}** um registro bloqueado pela regra de permissão.`,
+        `Criador: ${criadorId ? `<@${criadorId}>` : "Não identificado"}`,
+        `Mensagem: \`${messageId}\``,
+      ].join("\n")
+    ).catch(() => {});
+
+    return true;
+  }
 
   const statusTexto =
     action === "pago"
