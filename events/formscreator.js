@@ -1309,103 +1309,407 @@ state.registrations[topic.id] = {
 export async function findFormsCreatorThreadIdByUserId(clientOrUserId, maybeUserId = null) {
     const client = maybeUserId ? clientOrUserId : null;
     const targetUserId = String(maybeUserId || clientOrUserId || "").trim();
+
     if (!targetUserId) return null;
 
     const state = readState();
 
-    // 1) busca rápida pelo state salvo
-    for (const [threadId, reg] of Object.entries(state.registrations || {})) {
-        if (String(reg?.userId || "").trim() === targetUserId) {
-            return threadId;
+    function isOfficialFormsCreatorMessage(msg, threadId, expectedUserId) {
+        if (!msg) return false;
+
+        if (client && msg.author?.id !== client.user?.id) {
+            return false;
+        }
+
+        const embed = msg.embeds?.[0];
+
+        if (!embed) {
+            return false;
+        }
+
+        const description = String(embed.description || "").trim();
+
+        const descriptionUserId =
+            description.match(/^<@!?(\d{17,20})>$/)?.[1] || null;
+
+        if (descriptionUserId !== String(expectedUserId)) {
+            return false;
+        }
+
+        const fields = embed.fields || [];
+
+        const hasPassaporteField = fields.some((field) =>
+            String(field?.name || "")
+                .toLowerCase()
+                .includes("id/passaporte")
+        );
+
+        const hasAreaField = fields.some((field) =>
+            String(field?.name || "")
+                .toLowerCase()
+                .includes("área de interesse")
+        );
+
+        const hasStatusField = fields.some((field) =>
+            String(field?.name || "")
+                .toLowerCase()
+                .includes("status do projeto")
+        );
+
+        if (
+            !hasPassaporteField ||
+            !hasAreaField ||
+            !hasStatusField
+        ) {
+            return false;
+        }
+
+        const components = msg.components || [];
+
+        const hasFormsCreatorButton = components.some((row) =>
+            (row.components || []).some((component) => {
+                const customId = String(component?.customId || "");
+
+                return (
+                    customId === `editar_id_${threadId}` ||
+                    customId === `editar_area_${threadId}` ||
+                    customId.startsWith(
+                        `fc_toggle_status:${threadId}:${expectedUserId}:`
+                    )
+                );
+            })
+        );
+
+        /*
+         * Registros antigos podem não possuir mais os botões,
+         * então os campos oficiais + descrição EXATA com o usuário
+         * já são suficientes.
+         *
+         * hasFormsCreatorButton fica como confirmação adicional
+         * quando os botões existirem.
+         */
+        return (
+            hasFormsCreatorButton ||
+            (
+                hasPassaporteField &&
+                hasAreaField &&
+                hasStatusField
+            )
+        );
+    }
+
+    async function validateStateRegistration(threadId, registration) {
+        if (
+            String(registration?.userId || "").trim() !==
+            targetUserId
+        ) {
+            return null;
+        }
+
+        if (!client) {
+            return {
+                threadId,
+                thread: null,
+                message: null,
+            };
+        }
+
+        const thread = await client.channels
+            .fetch(threadId)
+            .catch(() => null);
+
+        if (
+            !thread ||
+            !thread.isTextBased?.()
+        ) {
+            return null;
+        }
+
+        let registrationMessage = null;
+
+        if (registration?.messageId) {
+            registrationMessage = await thread.messages
+                .fetch(registration.messageId)
+                .catch(() => null);
+        }
+
+        if (
+            registrationMessage &&
+            isOfficialFormsCreatorMessage(
+                registrationMessage,
+                thread.id,
+                targetUserId
+            )
+        ) {
+            return {
+                threadId: thread.id,
+                thread,
+                message: registrationMessage,
+            };
+        }
+
+        const recentMessages = await thread.messages
+            .fetch({ limit: 50 })
+            .catch(() => null);
+
+        if (!recentMessages) {
+            return null;
+        }
+
+        const officialMessage = recentMessages.find((msg) =>
+            isOfficialFormsCreatorMessage(
+                msg,
+                thread.id,
+                targetUserId
+            )
+        );
+
+        if (!officialMessage) {
+            return null;
+        }
+
+        registration.messageId = officialMessage.id;
+
+        return {
+            threadId: thread.id,
+            thread,
+            message: officialMessage,
+        };
+    }
+
+    // =====================================================
+    // 1) VALIDA O STATE EM VEZ DE CONFIAR CEGAMENTE NELE
+    // =====================================================
+
+    const stateCandidates = [];
+
+    for (
+        const [threadId, registration]
+        of Object.entries(state.registrations || {})
+    ) {
+        if (
+            String(registration?.userId || "").trim() !==
+            targetUserId
+        ) {
+            continue;
+        }
+
+        const validated = await validateStateRegistration(
+            threadId,
+            registration
+        );
+
+        if (validated) {
+            stateCandidates.push(validated);
         }
     }
 
-    // 2) fallback forte: varre tópicos reais do canal FormsCreator
+    if (stateCandidates.length > 0) {
+        stateCandidates.sort((a, b) => {
+            const aCreated =
+                Number(a.thread?.createdTimestamp || 0);
+
+            const bCreated =
+                Number(b.thread?.createdTimestamp || 0);
+
+            return bCreated - aCreated;
+        });
+
+        const selected = stateCandidates[0];
+
+        /*
+         * Remove somente associações incorretas/duplicadas
+         * do mesmo usuário no state.
+         *
+         * O tópico real do Discord NÃO é apagado.
+         */
+        for (
+            const [threadId, registration]
+            of Object.entries(state.registrations || {})
+        ) {
+            if (
+                threadId !== selected.threadId &&
+                String(registration?.userId || "").trim() ===
+                    targetUserId
+            ) {
+                delete state.registrations[threadId];
+            }
+        }
+
+        if (selected.message?.id) {
+            state.registrations[selected.threadId] = {
+                ...(state.registrations[selected.threadId] || {}),
+                userId: targetUserId,
+                messageId: selected.message.id,
+            };
+        }
+
+        writeState(state);
+
+        return selected.threadId;
+    }
+
+    // =====================================================
+    // 2) FALLBACK: PROCURA NOS TÓPICOS REAIS
+    // =====================================================
+
     if (!client) return null;
 
-    const channel = await client.channels.fetch(CREATOR_FORM_CHANNEL_ID).catch(() => null);
-    if (!channel || !channel.threads) return null;
+    const channel = await client.channels
+        .fetch(CREATOR_FORM_CHANNEL_ID)
+        .catch(() => null);
 
-    const allThreads = [];
+    if (
+        !channel ||
+        !channel.threads
+    ) {
+        return null;
+    }
 
-    const activeThreads = await channel.threads.fetchActive().catch(() => null);
+    const allThreadsMap = new Map();
+
+    const activeThreads = await channel.threads
+        .fetchActive()
+        .catch(() => null);
+
     if (activeThreads?.threads) {
-        activeThreads.threads.forEach((thread) => allThreads.push(thread));
+        activeThreads.threads.forEach((thread) => {
+            allThreadsMap.set(thread.id, thread);
+        });
     }
 
     const fetchArchivedThreads = async (type) => {
         let before = undefined;
 
         for (let page = 0; page < 10; page++) {
-            const archived = await channel.threads.fetchArchived({
-                type,
-                limit: 100,
-                before,
-            }).catch(() => null);
+            const archived = await channel.threads
+                .fetchArchived({
+                    type,
+                    limit: 100,
+                    before,
+                })
+                .catch(() => null);
 
-            if (!archived?.threads?.size) break;
+            if (!archived?.threads?.size) {
+                break;
+            }
 
-            archived.threads.forEach((thread) => allThreads.push(thread));
+            archived.threads.forEach((thread) => {
+                allThreadsMap.set(thread.id, thread);
+            });
 
             before = archived.threads.last()?.id;
-            if (!before || archived.threads.size < 100) break;
 
-            await new Promise((resolve) => setTimeout(resolve, 500));
+            if (
+                !before ||
+                archived.threads.size < 100
+            ) {
+                break;
+            }
+
+            await new Promise((resolve) =>
+                setTimeout(resolve, 500)
+            );
         }
     };
 
     await fetchArchivedThreads("public");
     await fetchArchivedThreads("private");
 
+    const allThreads = Array.from(
+        allThreadsMap.values()
+    );
+
+    /*
+     * Se por algum motivo existirem dois Forms oficiais
+     * para a mesma pessoa, prioriza o tópico mais recente.
+     */
+    allThreads.sort(
+        (a, b) =>
+            Number(b.createdTimestamp || 0) -
+            Number(a.createdTimestamp || 0)
+    );
+
     for (const thread of allThreads) {
-        const messages = await thread.messages.fetch({ limit: 20 }).catch(() => null);
+        const messages = await thread.messages
+            .fetch({ limit: 50 })
+            .catch(() => null);
+
         if (!messages) continue;
 
-const foundMsg = messages.find((msg) => {
-    if (msg.author?.id !== client.user.id) return false;
+        const foundMsg = messages.find((msg) =>
+            isOfficialFormsCreatorMessage(
+                msg,
+                thread.id,
+                targetUserId
+            )
+        );
 
-    const raw = [
-        msg.content || "",
-        ...msg.embeds.map((embed) => [
-            embed.title || "",
-            embed.description || "",
-            ...(embed.fields || []).flatMap((field) => [
-                field.name || "",
-                field.value || "",
-            ]),
-            embed.footer?.text || "",
-        ].join("\n")),
-    ].join("\n");
-
-    return (
-        raw.includes(`<@${targetUserId}>`) ||
-        raw.includes(`<@!${targetUserId}>`) ||
-        raw.includes(targetUserId)
-    );
-});
-
-        if (!foundMsg) continue;
+        if (!foundMsg) {
+            continue;
+        }
 
         const embed = foundMsg.embeds?.[0];
+
+        const statusValue =
+            embed?.fields?.find((field) =>
+                String(field?.name || "")
+                    .toLowerCase()
+                    .includes("status do projeto")
+            )?.value || "";
 
         state.registrations[thread.id] = {
             ...(state.registrations[thread.id] || {}),
             userId: targetUserId,
-            nome: embed?.title?.replace("👤 ", "") || thread.name || targetUserId,
+
+            nome:
+                embed?.title?.replace("👤 ", "") ||
+                thread.name ||
+                targetUserId,
+
             idCidade:
-                embed?.fields?.find((f) => f.name?.includes("ID/Passaporte"))?.value ||
+                embed?.fields?.find((field) =>
+                    String(field?.name || "")
+                        .toLowerCase()
+                        .includes("id/passaporte")
+                )?.value ||
                 state.registrations[thread.id]?.idCidade ||
                 "?",
+
             area:
-                embed?.fields?.find((f) => f.name?.includes("Área de Interesse"))?.value ||
+                embed?.fields?.find((field) =>
+                    String(field?.name || "")
+                        .toLowerCase()
+                        .includes("área de interesse")
+                )?.value ||
                 state.registrations[thread.id]?.area ||
                 "?",
+
             active:
-                embed?.fields?.find((f) => f.name?.includes("Status do Projeto"))?.value?.includes("Ativo") ??
-                state.registrations[thread.id]?.active ??
-                true,
+                statusValue.includes("🟢") ||
+                (
+                    /\bativo\b/i.test(statusValue) &&
+                    !/\binativo\b/i.test(statusValue)
+                ),
+
             messageId: foundMsg.id,
         };
+
+        /*
+         * Limpa associações antigas/erradas do mesmo usuário.
+         */
+        for (
+            const [savedThreadId, registration]
+            of Object.entries(state.registrations || {})
+        ) {
+            if (
+                savedThreadId !== thread.id &&
+                String(registration?.userId || "").trim() ===
+                    targetUserId
+            ) {
+                delete state.registrations[savedThreadId];
+            }
+        }
 
         writeState(state);
 
