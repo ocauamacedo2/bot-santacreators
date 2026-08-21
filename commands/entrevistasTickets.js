@@ -1621,35 +1621,43 @@ async function notificarEquipeEntrevista(guild, canal, tipo) {
             '⚠️ Esse feedback não é válido.',
         };
 
-        await interaction
-          .reply({
-            content:
-              messages[
-                result.reason
-              ] ||
-              '⚠️ Não foi possível registrar o feedback.',
+await interaction
+  .reply({
+    content:
+      messages[
+        result.reason
+      ] ||
+      '⚠️ Não foi possível registrar o feedback.',
 
-            ephemeral:
-              true,
-          })
-          .catch(
-            () => {}
-          );
+    ...(interaction.inGuild()
+      ? {
+          ephemeral:
+            true,
+        }
+      : {}),
+  })
+  .catch(
+    () => {}
+  );
 
         return true;
       }
 
-      await interaction
-        .reply({
-          content:
-            '💗 Obrigado! Seu feedback foi registrado e será considerado no acompanhamento semanal da qualidade dos atendimentos.',
+     await interaction
+  .reply({
+    content:
+      '💗 Valeu pelo retorno! Seu feedback foi registrado e vai entrar no acompanhamento dos atendimentos.',
 
+    ...(interaction.inGuild()
+      ? {
           ephemeral:
             true,
-        })
-        .catch(
-          () => {}
-        );
+        }
+      : {}),
+  })
+  .catch(
+    () => {}
+  );
 
       return true;
     }
@@ -2398,29 +2406,47 @@ if (interaction.isModalSubmit() && interaction.customId === 'modal_registro_lide
     const guild   = interaction?.guild || autoData?.guild;
     const closer  = interaction?.member || null;
 
-    // ✅ IMPORTANTE: se algo travar, a gente ainda vai deletar o canal
-    let deleteAgendado = false;
-    const agendarDeleteGarantido = async () => {
-      if (deleteAgendado) return;
-      deleteAgendado = true;
+// ✅ IMPORTANTE: se algo travar, a gente ainda vai deletar o canal
+let deleteAgendado = false;
 
-      // dá 5s pro log/transcript tentar rodar e depois deleta
-      setTimeout(async () => {
-        const ok = await safeDeleteTicketChannel(canal, canalId);
-        if (!ok) {
-          // se falhar, tenta avisar no canal (se ainda existir)
-          try {
-            await canal.send("⚠️ Não consegui deletar o canal automaticamente (permissão do bot). Um admin precisa apagar manualmente.");
-          } catch {}
-        }
-      }, 5000);
-    };
+const agendarDeleteGarantido = async () => {
+  if (deleteAgendado) return;
 
-    // ✅ Inicia o agendamento do delete agora mesmo.
-    // Isso garante que, em 5 segundos, o canal suma mesmo que o resto do código trave.
-    agendarDeleteGarantido();
+  deleteAgendado = true;
 
-    try {
+  // Dá tempo suficiente para:
+  // - ler todas as mensagens;
+  // - salvar as mídias;
+  // - gerar o transcript;
+  // - executar a análise;
+  // - enviar a log;
+  // - enviar o transcript e feedback no PV.
+  //
+  // Continua sendo apenas uma trava de segurança.
+  // O ticket não fica preso indefinidamente se alguma operação travar.
+  setTimeout(async () => {
+    const ok = await safeDeleteTicketChannel(
+      canal,
+      canalId
+    );
+
+    if (!ok) {
+      // se falhar, tenta avisar no canal (se ainda existir)
+      try {
+        await canal.send(
+          "⚠️ Não consegui deletar o canal automaticamente (permissão do bot). Um admin precisa apagar manualmente."
+        );
+      } catch {}
+    }
+  }, 45000);
+};
+
+// ✅ Inicia o agendamento de segurança.
+// O prazo de 45 segundos deixa transcript, análise, log e PV
+// terminarem antes da exclusão forçada do canal.
+agendarDeleteGarantido();
+
+try {
     // ⚙️ pega TODAS as mensagens em ordem crescente (só UMA vez aqui)
     // 🔧 FIX: se esse fetch ficar pesado/travar por rate, colocamos timeout por “lote”
     const sorted = await (async function fetchTodasAsMensagens(channel) {
@@ -3067,10 +3093,181 @@ if (interaction.isModalSubmit() && interaction.customId === 'modal_registro_lide
       } catch (e) {
         console.error("[TICKET] Transcript.create falhou/timeout:", e?.message || e);
       }
-    }
+}
 
-    const embedLog = new EmbedBuilder()
-      .setTitle("📁 LOGS DE TICKETS")
+// ============================================================================
+// TEXTOS AMIGÁVEIS DA AVALIAÇÃO DO TICKET
+// ============================================================================
+
+const resultadoBruto =
+  ticketOperationalRecord
+    ?.evaluation
+    ?.resolved ||
+  "inconclusivo";
+
+const resultadoAmigavel = {
+  sim:
+    "Resolvido ✅",
+
+  parcial:
+    "Resolvido em parte 🟡",
+
+  nao:
+    "Não resolvido ❌",
+
+  inconclusivo:
+    "Não deu para confirmar ⚪",
+}[
+  resultadoBruto
+] ||
+"Não deu para confirmar ⚪";
+
+
+const desempenhoBruto =
+  ticketOperationalRecord
+    ?.evaluation
+    ?.teamPerformance ||
+  "nao_classificado";
+
+const desempenhoAmigavel = {
+  excelente:
+    "Mandou muito bem 🟢",
+
+  bom:
+    "Bom atendimento ✅",
+
+  atencao:
+    "Precisa de atenção 🟡",
+
+  critico:
+    "Atendimento crítico 🔴",
+
+  nao_classificado:
+    "Ainda sem avaliação",
+}[
+  desempenhoBruto
+] ||
+"Ainda sem avaliação";
+
+
+const quemResolveuBruto =
+  ticketOperationalRecord
+    ?.evaluation
+    ?.whoSolved ||
+  "nao_identificado";
+
+const quemResolveuAmigavel = {
+  humano:
+    "Creator",
+
+  ia:
+    "SantaCreators",
+
+  misto:
+    "SantaCreators + Creator",
+
+  nao_identificado:
+    "Não deu para identificar",
+}[
+  quemResolveuBruto
+] ||
+"Não deu para identificar";
+
+
+const aguardandoBruto =
+  ticketOperationalRecord
+    ?.metrics
+    ?.waitingOn ||
+  "indefinido";
+
+const aguardandoAmigavel = {
+  cidadao:
+    "O cidadão precisava responder",
+
+  equipe:
+    "A SantaCreators precisava responder",
+
+  indefinido:
+    "Não deu para identificar",
+}[
+  aguardandoBruto
+] ||
+"Não deu para identificar";
+
+
+const primeiraRespostaMs =
+  ticketOperationalRecord
+    ?.metrics
+    ?.firstHumanResponseMs;
+
+const primeiraRespostaAmigavel =
+  primeiraRespostaMs ==
+  null
+    ? "Não identificada"
+    : `${Math.max(
+        1,
+        Math.round(
+          primeiraRespostaMs /
+          60000
+        )
+      )} min`;
+
+
+const tempoTotalMs =
+  ticketOperationalRecord
+    ?.metrics
+    ?.totalOpenMs;
+
+const tempoTotalAmigavel =
+  tempoTotalMs ==
+  null
+    ? "Não identificado"
+    : tempoTotalMs <
+        60 * 60 * 1000
+      ? `${Math.max(
+          1,
+          Math.round(
+            tempoTotalMs /
+            60000
+          )
+        )} min`
+      : `${(
+          tempoTotalMs /
+          3600000
+        ).toFixed(
+          1
+        )} h`;
+
+
+const confiancaBruta =
+  Number(
+    ticketOperationalRecord
+      ?.evaluation
+      ?.confidence ??
+    0
+  );
+
+const confiancaPercentual =
+  confiancaBruta > 0 &&
+  confiancaBruta <= 1
+    ? confiancaBruta *
+      100
+    : confiancaBruta;
+
+const confiancaAmigavel =
+  `${Math.round(
+    Math.max(
+      0,
+      Math.min(
+        100,
+        confiancaPercentual
+      )
+    )
+  )}%`;
+
+
+const embedLog = new EmbedBuilder()
+  .setTitle("📁 LOGS DE TICKETS")
       .setColor("#ff009a")
       .addFields(
         { name: "📝 TIPO DE TICKET", value: `\`${tipoTicket}\``, inline: false },
@@ -3080,97 +3277,46 @@ if (interaction.isModalSubmit() && interaction.customId === 'modal_registro_lide
         { name: "🆔 Canal do ticket:",    value: `\`${canalId}\``, inline: false },
         { name: "🕒 Abertura:",           value: `<t:${Math.floor(horarioAbertura.getTime() / 1000)}:f>`, inline: true },
         { name: "🕓 Fechamento:",         value: `<t:${Math.floor(horarioFechamento.getTime() / 1000)}:f>`, inline: true },
-        {
-          name:
-            "📝 Qual foi o desenrolar/motivo? Foi resolvido?",
+{
+  name:
+    "📝 Como esse ticket terminou?",
 
-          value:
-            `👤 **Motivo De Fechar do Creator:**\n${
-              conclusaoFinal &&
-              conclusaoFinal.length >
-                0
-                ? conclusaoFinal
-                : "Sem considerações."
-            }\n\n` +
+  value:
+    `🎨 **Conclusão do Creator:**\n${
+      conclusaoFinal &&
+      conclusaoFinal.length >
+        0
+        ? conclusaoFinal
+        : "O Creator não deixou uma conclusão."
+    }\n\n` +
 
-            `🤖 **resumo do que rolou no ticket( IA ) :**\n${
-              ticketOperationalRecord
-                ?.evaluation
-                ?.summaryShort ||
-              "A avaliação automática não ficou disponível."
-            }`
-        },
+    `🧠 **Resumo do atendimento:**\n${
+      ticketOperationalRecord
+        ?.evaluation
+        ?.summaryShort ||
+      "Não foi possível gerar o resumo desse atendimento."
+    }`
+},
 
-        {
-          name:
-            "📊 Avaliação interna do atendimento",
+       {
+  name:
+    "📊 Como foi esse atendimento?",
 
-          value:
-            `**Resultado:** ${
-              ticketOperationalRecord
-                ?.evaluation
-                ?.resolved ||
-              "inconclusivo"
-            }\n` +
+  value:
+    `**Situação final:** ${resultadoAmigavel}\n` +
 
-            `**Desempenho da equipe:** ${
-              ticketOperationalRecord
-                ?.evaluation
-                ?.teamPerformance ||
-              "não classificado"
-            }\n` +
+    `**Como foi o atendimento:** ${desempenhoAmigavel}\n` +
 
-            `**Quem mais resolveu:** ${
-              ticketOperationalRecord
-                ?.evaluation
-                ?.whoSolved ||
-              "não identificado"
-            }\n` +
+    `**Quem participou mais da solução:** ${quemResolveuAmigavel}\n` +
 
-            `**Aguardando no fechamento:** ${
-              ticketOperationalRecord
-                ?.metrics
-                ?.waitingOn ||
-              "indefinido"
-            }\n` +
+    `**Na hora de fechar:** ${aguardandoAmigavel}\n` +
 
-            `**Primeira resposta humana:** ${
-              ticketOperationalRecord
-                ?.metrics
-                ?.firstHumanResponseMs ==
-              null
-                ? "não identificada"
-                : `${Math.round(
-                    ticketOperationalRecord
-                      .metrics
-                      .firstHumanResponseMs /
-                    60000
-                  )} min`
-            }\n` +
+    `**Primeira resposta do Creator:** ${primeiraRespostaAmigavel}\n` +
 
-            `**Tempo total aberto:** ${
-              ticketOperationalRecord
-                ?.metrics
-                ?.totalOpenMs ==
-              null
-                ? "não identificado"
-                : `${(
-                    ticketOperationalRecord
-                      .metrics
-                      .totalOpenMs /
-                    3600000
-                  ).toFixed(
-                    1
-                  )} h`
-            }\n` +
+    `**Quanto tempo o ticket ficou aberto:** ${tempoTotalAmigavel}\n` +
 
-            `**Confiança da IA:** ${
-              ticketOperationalRecord
-                ?.evaluation
-                ?.confidence ??
-              0
-            }%`
-        }
+    `**Segurança dessa análise:** ${confiancaAmigavel}`
+}
       )
       .setFooter({ text: "SantaCreators", iconURL: guild.iconURL() });
 
@@ -3192,41 +3338,235 @@ if (interaction.isModalSubmit() && interaction.customId === 'modal_registro_lide
       console.error("[TICKET] Falha ao enviar embed de log/timeout:", e?.message || e);
     }
 
-    // ✅ DM pra quem abriu (NUNCA pode travar o fechamento)
-    let dmEnviada = false;
-    if (userAberto) {
-      const dmEmbed = new EmbedBuilder()
-        .setTitle("✅ Seu atendimento foi finalizado!")
-        .setColor("#00d084")
-        .setDescription("Obrigado por usar o suporte da **SantaCreators** 💗")
-        .addFields(
-          { name: "📄 Tipo de ticket", value: `\`${tipoTicket}\``, inline: true },
-          { name: "📨 Aberto por", value: `<@${idAberto}>`, inline: true },
-          { name: "🎨 Creator que atendeu", value: `<@${ATENDENTE_ID_FINAL}>`, inline: true },
-          {
-            name: "📝 Qual foi o desenrolar/motivo? Foi resolvido?",
-            value: conclusaoFinal && conclusaoFinal.length > 0
-              ? conclusaoFinal
-              : "O creator não escreveu a conclusão."
-          },
-          { name: "🆔 ID do canal", value: `\`${canalId}\``, inline: false }
-        )
-        .setFooter({ text: "SantaCreators - Tickets", iconURL: guild.iconURL() });
+// ============================================================================
+// PV DE QUEM ABRIU O TICKET
+// ============================================================================
+//
+// IMPORTANTE:
+//
+// • envia a conclusão escrita pelo Creator;
+// • envia o transcript completo;
+// • NÃO envia a avaliação interna;
+// • permite o cidadão informar se realmente resolveu;
+// • tenta buscar o usuário diretamente pelo client caso o GuildMember
+//   não esteja mais disponível;
+// • registra no console quando a DM falhar.
+// ============================================================================
 
-      const dmRow = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setStyle(ButtonStyle.Link)
-          .setLabel("📂 Ver transcript do atendimento")
-          .setURL(`${TRANSCRIPTS_BASE_URL}${canalId}`)
+let dmEnviada =
+  false;
+
+if (
+  idAberto
+) {
+  const usuarioParaDm =
+    userAberto?.user ||
+    await client.users
+      .fetch(
+        idAberto
+      )
+      .catch(
+        () => null
       );
 
-      try {
-        await withTimeout(userAberto.send({ embeds: [dmEmbed], components: [dmRow] }), 12_000, "DM userAberto.send");
-        dmEnviada = true;
-      } catch {
-        dmEnviada = false;
-      }
+  if (
+    usuarioParaDm
+  ) {
+    const dmEmbed =
+      new EmbedBuilder()
+        .setTitle(
+          "✅ Seu atendimento foi finalizado!"
+        )
+        .setColor(
+          "#00d084"
+        )
+        .setDescription(
+          "Obrigado por usar o suporte da **SantaCreators** 💗\n\n" +
+          "Abaixo você pode consultar o atendimento completo e dizer pra gente se ficou tudo certo."
+        )
+        .addFields(
+          {
+            name:
+              "📄 Tipo de ticket",
+
+            value:
+              `\`${tipoTicket}\``,
+
+            inline:
+              true,
+          },
+
+          {
+            name:
+              "📨 Aberto por",
+
+            value:
+              `<@${idAberto}>`,
+
+            inline:
+              true,
+          },
+
+          {
+            name:
+              "🎨 Creator que atendeu",
+
+            value:
+              ATENDENTE_ID_FINAL
+                ? `<@${ATENDENTE_ID_FINAL}>`
+                : "Não identificado",
+
+            inline:
+              true,
+          },
+
+          {
+            name:
+              "📝 Conclusão do Creator",
+
+            value:
+              conclusaoFinal &&
+              conclusaoFinal.length >
+                0
+                ? conclusaoFinal
+                : "O Creator não deixou uma conclusão.",
+          },
+
+          {
+            name:
+              "💬 E aí, ficou tudo certo?",
+
+            value:
+              "Depois de conferir o atendimento, escolha uma das opções abaixo. Seu retorno ajuda no acompanhamento da qualidade dos tickets.",
+          },
+
+          {
+            name:
+              "🆔 ID do atendimento",
+
+            value:
+              `\`${canalId}\``,
+
+            inline:
+              false,
+          }
+        )
+        .setFooter({
+          text:
+            "SantaCreators - Tickets",
+
+          iconURL:
+            guild.iconURL(),
+        });
+
+
+    // Botão separado para abrir o transcript.
+    const dmTranscriptRow =
+      new ActionRowBuilder()
+        .addComponents(
+          new ButtonBuilder()
+            .setStyle(
+              ButtonStyle.Link
+            )
+            .setLabel(
+              "📂 Ver atendimento completo"
+            )
+            .setURL(
+              `${TRANSCRIPTS_BASE_URL}${canalId}`
+            )
+        );
+
+
+    // Feedback sobre o resultado real do atendimento.
+    const dmFeedbackRow =
+      new ActionRowBuilder()
+        .addComponents(
+          new ButtonBuilder()
+            .setCustomId(
+              `ticket_feedback:resolvido:${canalId}`
+            )
+            .setLabel(
+              "✅ Resolvido"
+            )
+            .setStyle(
+              ButtonStyle.Success
+            ),
+
+          new ButtonBuilder()
+            .setCustomId(
+              `ticket_feedback:parcial:${canalId}`
+            )
+            .setLabel(
+              "🟡 Em parte"
+            )
+            .setStyle(
+              ButtonStyle.Secondary
+            ),
+
+          new ButtonBuilder()
+            .setCustomId(
+              `ticket_feedback:nao_resolvido:${canalId}`
+            )
+            .setLabel(
+              "❌ Não resolveu"
+            )
+            .setStyle(
+              ButtonStyle.Danger
+            )
+        );
+
+
+    try {
+      await withTimeout(
+        usuarioParaDm.send({
+          embeds: [
+            dmEmbed
+          ],
+
+          components: [
+            dmTranscriptRow,
+            dmFeedbackRow,
+          ],
+        }),
+
+        12_000,
+
+        "DM ticket finalizado"
+      );
+
+      dmEnviada =
+        true;
+
+      console.log(
+        `[TICKET] ✅ PV final enviado para ${idAberto} com transcript e feedback.`
+      );
+    } catch (
+      error
+    ) {
+      dmEnviada =
+        false;
+
+      console.error(
+        `[TICKET] ❌ Não foi possível enviar o fechamento no PV de ${idAberto}:`,
+        {
+          codigo:
+            error?.code ??
+            null,
+
+          mensagem:
+            error?.message ||
+            String(
+              error
+            ),
+        }
+      );
     }
+  } else {
+    console.warn(
+      `[TICKET] Não foi possível localizar o usuário ${idAberto} para enviar o fechamento no PV.`
+    );
+  }
+}
 
     if (!dmEnviada && idAberto) {
       try {
