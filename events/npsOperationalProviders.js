@@ -30,10 +30,18 @@ import {
   collectPayEvtOperationalData,
 } from "./payEvtDash/index.js";
 
+import {
+  buildTicketQualityOperationalMetric,
+  buildTicketResponseOperationalMetric,
+} from "../utils/ticketOperationalIntelligence.js";
+
+import {
+  enrichApprovalOperationalMetric,
+} from "../utils/approvalOperationalIntelligence.js";
+
 // ============================================================================
 // CONFIGURAÇÃO
 // ============================================================================
-
 const TZ =
   "America/Sao_Paulo";
 
@@ -5250,20 +5258,36 @@ registerOperationalMetricProvider(
 
 registerOperationalMetricProvider(
   "hall_da_fama",
-  async context =>
-    buildPayEvtSourceMetric(
+  async context => {
+    const baseMetric =
+      await buildPayEvtSourceMetric(
+        "hall_da_fama",
+        context
+      );
+
+    return enrichApprovalOperationalMetric(
+      baseMetric,
       "hall_da_fama",
       context
-    )
+    );
+  }
 );
 
 registerOperationalMetricProvider(
   "eventos_diarios",
-  async context =>
-    buildPayEvtSourceMetric(
+  async context => {
+    const baseMetric =
+      await buildPayEvtSourceMetric(
+        "eventos_diarios",
+        context
+      );
+
+    return enrichApprovalOperationalMetric(
+      baseMetric,
       "eventos_diarios",
       context
-    )
+    );
+  }
 );
 
 registerOperationalMetricProvider(
@@ -5279,6 +5303,22 @@ registerOperationalMetricProvider(
   "log_checklist",
   async context =>
     buildWeeklyLogChecklistMetric(
+      context
+    )
+);
+
+registerOperationalMetricProvider(
+  "qualidade",
+  async context =>
+    buildTicketQualityOperationalMetric(
+      context
+    )
+);
+
+registerOperationalMetricProvider(
+  "tempo_resposta",
+  async context =>
+    buildTicketResponseOperationalMetric(
       context
     )
 );

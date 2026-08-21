@@ -20,141 +20,557 @@ import {
 import { resolveLogChannel } from '../events/channelResolver.js';
 import { logManualTicketAccessChange } from '../events/orgTicketAccessSync.js';
 import { iaInterviewTicketOpened } from '../events/iaChatAuto.js';
+import {
+  analyzeAndRecordTicket,
+  recordTicketFeedback,
+} from '../utils/ticketOperationalIntelligence.js';
 
 export default function createEntrevistasTickets({ client, Transcript }) {
   ///!ENTREVISTA
 
-  // ── 📊 Gerenciamento de Inatividade (Persistência) ─────────────────
+  // ── 📊 Gerenciamento Inteligente de Inatividade / SLA ───────────────
   const INACTIVITY_STORAGE = path.resolve(process.cwd(), 'data', 'ticket_inactivity.json');
-  
+
+  const TICKET_AUTO_CLOSE_MS = 3 * 24 * 60 * 60 * 1000;
+  const TEAM_SILENCE_ALERT_MS = 12 * 60 * 60 * 1000;
+  const CITIZEN_SILENCE_ALERT_MS = 24 * 60 * 60 * 1000;
+  const REMINDER_STEP_MS = 12 * 60 * 60 * 1000;
+
   function loadInactivityState() {
     try {
       if (!fs.existsSync(INACTIVITY_STORAGE)) return {};
       const data = fs.readFileSync(INACTIVITY_STORAGE, 'utf8');
       return data ? JSON.parse(data) : {};
-    } catch { return {}; }
+    } catch {
+      return {};
+    }
   }
 
   function saveInactivityState(state) {
     try {
       const dir = path.dirname(INACTIVITY_STORAGE);
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(INACTIVITY_STORAGE, JSON.stringify(state, null, 2));
-    } catch {}
+
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, {
+          recursive: true
+        });
+      }
+
+      const temporaryFile = `${INACTIVITY_STORAGE}.tmp`;
+
+      fs.writeFileSync(
+        temporaryFile,
+        JSON.stringify(
+          state,
+          null,
+          2
+        )
+      );
+
+      fs.renameSync(
+        temporaryFile,
+        INACTIVITY_STORAGE
+      );
+    } catch (error) {
+      console.error(
+        '[TICKET SLA] Erro ao salvar estado de inatividade:',
+        error
+      );
+    }
   }
 
-  // Monitor Inteligente - Regras #1 a #6 e #8
+  async function classifyTicketWaitingSide(
+    guild,
+    messages,
+    openerId
+  ) {
+    const humanMessages = [
+      ...messages.values()
+    ]
+      .filter(
+        message =>
+          !message.author?.bot
+      )
+      .sort(
+        (first, second) =>
+          first.createdTimestamp -
+          second.createdTimestamp
+      );
+
+    const staffIds =
+      new Set();
+
+    const candidateIds = [
+      ...new Set(
+        humanMessages
+          .map(
+            message =>
+              message.author?.id
+          )
+          .filter(
+            userId =>
+              userId &&
+              userId !== openerId
+          )
+      )
+    ];
+
+    for (
+      const userId of
+      candidateIds
+    ) {
+      const member =
+        guild.members.cache.get(
+          userId
+        ) ||
+        await guild.members
+          .fetch(
+            userId
+          )
+          .catch(
+            () => null
+          );
+
+      if (!member) {
+        continue;
+      }
+
+      if (
+        USERS_SEMPRE_PODEM.includes(
+          userId
+        ) ||
+        temCargoDeResp(
+          member
+        ) ||
+        temCargoQuePodeAbrir(
+          member
+        )
+      ) {
+        staffIds.add(
+          userId
+        );
+      }
+    }
+
+    const openerMessages =
+      humanMessages.filter(
+        message =>
+          message.author?.id ===
+          openerId
+      );
+
+    const staffMessages =
+      humanMessages.filter(
+        message =>
+          staffIds.has(
+            message.author?.id
+          )
+      );
+
+    const lastOpenerMessage =
+      openerMessages.at(-1) ||
+      null;
+
+    const lastStaffMessage =
+      staffMessages.at(-1) ||
+      null;
+
+    const lastHumanMessage =
+      humanMessages.at(-1) ||
+      null;
+
+    let waitingOn =
+      'indefinido';
+
+    if (
+      lastOpenerMessage &&
+      !lastStaffMessage
+    ) {
+      waitingOn =
+        'equipe';
+    } else if (
+      !lastOpenerMessage &&
+      lastStaffMessage
+    ) {
+      waitingOn =
+        'cidadao';
+    } else if (
+      lastOpenerMessage &&
+      lastStaffMessage
+    ) {
+      waitingOn =
+        lastOpenerMessage.createdTimestamp >
+        lastStaffMessage.createdTimestamp
+          ? 'equipe'
+          : 'cidadao';
+    }
+
+    return {
+      waitingOn,
+      staffIds,
+      lastHumanMessage,
+      lastOpenerMessage,
+      lastStaffMessage,
+    };
+  }
+
   async function startInactivityMonitor() {
-    setInterval(async () => {
-      const now = Date.now();
-      const state = loadInactivityState();
+    setInterval(
+      async () => {
+        const now =
+          Date.now();
 
-      const targetCats = [
-        ...new Set([
-          ...Object.values(CATEGORIES),
-          '1444857594517913742'
-        ])
-      ];
+        const state =
+          loadInactivityState();
 
-      const inactivityCats = new Set([
-        CATEGORIES.entrevista,
-        '1444857594517913742'
-      ]);
-      
-      for (const catId of targetCats) {
-        const category = client.channels.cache.get(catId);
-        if (!category || category.type !== ChannelType.GuildCategory) continue;
+        const targetCats = [
+          ...new Set([
+            ...Object.values(
+              CATEGORIES
+            ),
+            '1444857594517913742'
+          ])
+        ];
 
-        for (const channel of category.children.cache.values()) {
-          if (channel.type !== ChannelType.GuildText) continue;
+        for (
+          const catId of
+          targetCats
+        ) {
+          const category =
+            client.channels.cache.get(
+              catId
+            );
 
-          const topic = channel.topic || "";
-          const mOpener = topic.match(/aberto_por:(\d{17,20})/i);
-          if (!mOpener) continue;
-          const openerId = mOpener[1];
-
-          const guild = channel.guild;
-          const member = await guild.members.fetch(openerId).catch(() => null);
-
-          // Regra #7: Usuário saiu do servidor
-          if (!member) {
-            await finalizarTicketComConclusao(null, "Ticket fechado automaticamente (usuário saiu/banido).", {
-              channel, guild, isAuto: true, reasonType: "saida"
-            });
-            if (state[channel.id]) delete state[channel.id];
+          if (
+            !category ||
+            category.type !==
+              ChannelType.GuildCategory
+          ) {
             continue;
           }
 
-          /*
-           * As categorias abaixo participam da verificação de saída ou banimento,
-           * mas não participam das regras específicas de inatividade da entrevista.
-           */
-          if (!inactivityCats.has(catId)) {
-            if (state[channel.id]) delete state[channel.id];
-            continue;
-          }
+          for (
+            const channel of
+            category.children.cache.values()
+          ) {
+            if (
+              channel.type !==
+              ChannelType.GuildText
+            ) {
+              continue;
+            }
 
-          // Regra #6: Exceções (Owner, SantaCreators, Você)
-          const bypassRoles = ['1262262852949905408', '1352275728476930099'];
-          if (openerId === '660311795327828008' || member.roles.cache.some(r => bypassRoles.includes(r.id))) {
-            if (state[channel.id]) delete state[channel.id];
-            continue;
-          }
+            const topic =
+              channel.topic ||
+              '';
 
-          // Regra #1: Identificação por Cargos (Cidadão + Entrevista)
-          const reqRoles = ['1262978759922028575', '1353797415488196770'];
-          if (!reqRoles.every(rid => member.roles.cache.has(rid))) {
-            if (state[channel.id]) delete state[channel.id];
-            continue;
-          }
+            const mOpener =
+              topic.match(
+                /aberto_por:(\d{17,20})/i
+              );
 
-          const msgs = await channel.messages.fetch({ limit: 50 }).catch(() => null);
-          if (!msgs) continue;
+            if (!mOpener) {
+              continue;
+            }
 
-          // Ignora mensagens de bots para calcular inatividade
-          const lastHumanMsg = msgs.find(m => !m.author.bot);
-          const lastActivity = lastHumanMsg ? lastHumanMsg.createdTimestamp : channel.createdTimestamp;
+            const openerId =
+              mOpener[1];
 
-          const staleTime = now - lastActivity;
-          const isStale = staleTime >= 12 * 60 * 60 * 1000;
-          const tData = state[channel.id] || { accumulated: 0, lastCheck: now, lastReminderIndex: 0 };
+            const guild =
+              channel.guild;
 
-          if (isStale) {
-            // Regra #4: Contagem acumulada
-            tData.accumulated += (now - (tData.lastCheck || now));
-            
-            // Regra #2 e #3: Aviso de 12h
-            const reminderIndex = Math.floor(staleTime / (12 * 60 * 60 * 1000));
-            if (reminderIndex > tData.lastReminderIndex) {
-              if (tData.lastReminderId) {
-                const old = await channel.messages.fetch(tData.lastReminderId).catch(() => null);
-                if (old) await old.delete().catch(() => {});
+            const member =
+              await guild.members
+                .fetch(
+                  openerId
+                )
+                .catch(
+                  () => null
+                );
+
+            if (!member) {
+              await finalizarTicketComConclusao(
+                null,
+                'Ticket fechado automaticamente (usuário saiu/banido).',
+                {
+                  channel,
+                  guild,
+                  isAuto: true,
+                  reasonType:
+                    'saida'
+                }
+              );
+
+              delete state[
+                channel.id
+              ];
+
+              continue;
+            }
+
+            const bypassRoles = [
+              '1262262852949905408',
+              '1352275728476930099'
+            ];
+
+            if (
+              openerId ===
+                '660311795327828008' ||
+              member.roles.cache.some(
+                role =>
+                  bypassRoles.includes(
+                    role.id
+                  )
+              )
+            ) {
+              delete state[
+                channel.id
+              ];
+
+              continue;
+            }
+
+            if (
+              catId ===
+              CATEGORIES.entrevista
+            ) {
+              const requiredInterviewRoles = [
+                '1262978759922028575',
+                '1353797415488196770'
+              ];
+
+              if (
+                !requiredInterviewRoles.every(
+                  roleId =>
+                    member.roles.cache.has(
+                      roleId
+                    )
+                )
+              ) {
+                delete state[
+                  channel.id
+                ];
+
+                continue;
               }
-              
-              // Regra #8: Marcação inteligente
-              const participants = [...new Set(msgs.filter(m => !m.author.bot && m.author.id !== openerId).map(m => `<@${m.author.id}>`))];
-              const cc = participants.length > 0 ? `\n\nCC: ${participants.join(' ')}` : "";
-              
-              const rem = await channel.send(`⚠️ Olá! Percebemos que este ticket está sem interação há um tempo...\n\nPoderiam informar qual será o desenrolar? 🤔\n\nCaso já tenha sido resolvido ou não haja mais necessidade, pedimos que finalizem o ticket. ✅\n\n⏳ Lembrando que tickets inativos são fechados automaticamente após 7 dias.${cc}`);
-              tData.lastReminderId = rem.id;
-              tData.lastReminderIndex = reminderIndex;
+            }
+
+            const messages =
+              await channel.messages
+                .fetch({
+                  limit: 100
+                })
+                .catch(
+                  () => null
+                );
+
+            if (!messages) {
+              continue;
+            }
+
+            const waitingState =
+              await classifyTicketWaitingSide(
+                guild,
+                messages,
+                openerId
+              );
+
+            const lastActivity =
+              waitingState
+                .lastHumanMessage
+                ?.createdTimestamp ||
+              channel.createdTimestamp;
+
+            const staleTime =
+              Math.max(
+                0,
+                now -
+                  lastActivity
+              );
+
+            const alertThreshold =
+              waitingState.waitingOn ===
+              'equipe'
+                ? TEAM_SILENCE_ALERT_MS
+                : CITIZEN_SILENCE_ALERT_MS;
+
+            const tData =
+              state[channel.id] ||
+              {
+                lastReminderIndex:
+                  0,
+                lastReminderId:
+                  null,
+                waitingOn:
+                  waitingState.waitingOn,
+                firstSeenAt:
+                  now,
+              };
+
+            tData.waitingOn =
+              waitingState.waitingOn;
+
+            tData.lastActivity =
+              lastActivity;
+
+            tData.lastCheck =
+              now;
+
+            if (
+              staleTime >=
+              alertThreshold
+            ) {
+              const reminderIndex =
+                Math.floor(
+                  staleTime /
+                    REMINDER_STEP_MS
+                );
+
+              if (
+                reminderIndex >
+                Number(
+                  tData
+                    .lastReminderIndex ||
+                    0
+                )
+              ) {
+                if (
+                  tData.lastReminderId
+                ) {
+                  const oldReminder =
+                    await channel.messages
+                      .fetch(
+                        tData
+                          .lastReminderId
+                      )
+                      .catch(
+                        () => null
+                      );
+
+                  if (
+                    oldReminder
+                  ) {
+                    await oldReminder
+                      .delete()
+                      .catch(
+                        () => {}
+                      );
+                  }
+                }
+
+                const participants = [
+                  ...new Set(
+                    [
+                      ...waitingState.staffIds
+                    ].map(
+                      userId =>
+                        `<@${userId}>`
+                    )
+                  )
+                ];
+
+                const cc =
+                  participants.length >
+                  0
+                    ? `\n\nCC: ${participants.join(' ')}`
+                    : '';
+
+                let reminderText;
+
+                if (
+                  waitingState
+                    .waitingOn ===
+                  'equipe'
+                ) {
+                  reminderText =
+                    `🚨 **ALERTA DE ATENDIMENTO**\n\n` +
+                    `<@${openerId}> está aguardando retorno da equipe neste ticket.\n\n` +
+                    `⏱️ Tempo sem resposta humana após a última interação: ` +
+                    `**${Math.floor(staleTime / (60 * 60 * 1000))}h**.\n\n` +
+                    `A ausência de resposta da equipe será registrada na avaliação operacional do ticket e poderá impactar o NPS.\n\n` +
+                    `⏳ O ticket será fechado automaticamente ao completar **3 dias de inatividade**.${cc}`;
+                } else if (
+                  waitingState
+                    .waitingOn ===
+                  'cidadao'
+                ) {
+                  reminderText =
+                    `⚠️ Olá <@${openerId}>! A equipe respondeu e está aguardando seu retorno.\n\n` +
+                    `Se ainda precisar de ajuda, responda neste ticket. Caso não haja mais necessidade, o atendimento pode ser concluído.\n\n` +
+                    `⏳ O ticket será fechado automaticamente ao completar **3 dias de inatividade**.${cc}`;
+                } else {
+                  reminderText =
+                    `⚠️ Este ticket está sem interação humana há ` +
+                    `**${Math.floor(staleTime / (60 * 60 * 1000))}h**.\n\n` +
+                    `Por favor, atualizem o andamento ou concluam o atendimento.\n\n` +
+                    `⏳ O fechamento automático ocorre após **3 dias de inatividade**.${cc}`;
+                }
+
+                const reminder =
+                  await channel
+                    .send(
+                      reminderText
+                    )
+                    .catch(
+                      () => null
+                    );
+
+                if (
+                  reminder
+                ) {
+                  tData.lastReminderId =
+                    reminder.id;
+                }
+
+                tData.lastReminderIndex =
+                  reminderIndex;
+              }
+            }
+
+            state[channel.id] =
+              tData;
+
+            if (
+              staleTime >=
+              TICKET_AUTO_CLOSE_MS
+            ) {
+              const automaticConclusion =
+                waitingState.waitingOn ===
+                'equipe'
+                  ? 'Ticket fechado automaticamente após 3 dias de inatividade enquanto o cidadão aguardava retorno da equipe.'
+                  : waitingState.waitingOn ===
+                    'cidadao'
+                    ? 'Ticket fechado automaticamente após 3 dias de inatividade enquanto a equipe aguardava retorno do cidadão.'
+                    : 'Ticket fechado automaticamente após 3 dias de inatividade.';
+
+              await finalizarTicketComConclusao(
+                null,
+                automaticConclusion,
+                {
+                  channel,
+                  guild,
+                  isAuto: true,
+                  reasonType:
+                    'inatividade',
+                  waitingOn:
+                    waitingState
+                      .waitingOn,
+                }
+              );
+
+              delete state[
+                channel.id
+              ];
             }
           }
-
-          tData.lastCheck = now;
-          state[channel.id] = tData;
-
-          // Regra #5: Fechamento após 7 dias acumulados
-          if (tData.accumulated >= 7 * 24 * 60 * 60 * 1000) {
-            await finalizarTicketComConclusao(null, "Ticket fechado automaticamente por inatividade.", {
-              channel, guild, isAuto: true, reasonType: "inatividade"
-            });
-            delete state[channel.id];
-          }
         }
-      }
-      saveInactivityState(state);
-    }, 10 * 60 * 1000); // Executa a cada 10 minutos
+
+        saveInactivityState(
+          state
+        );
+      },
+      10 * 60 * 1000
+    );
   }
   // ── 🔒 Trava anti double-click / concorrência ─────────────────────
   const HANDLED_INTERACTIONS = new Set();
@@ -1169,6 +1585,75 @@ async function notificarEquipeEntrevista(guild, canal, tipo) {
 
     if (hasHandled(interaction)) return true;
 
+    if (
+      interaction.isButton() &&
+      interaction.customId.startsWith('ticket_feedback:')
+    ) {
+      const [
+        ,
+        feedback,
+        channelId
+      ] =
+        interaction.customId.split(
+          ':'
+        );
+
+      const result =
+        recordTicketFeedback({
+          channelId,
+          userId:
+            interaction.user.id,
+          feedback,
+        });
+
+      if (!result.ok) {
+        const messages = {
+          ticket_nao_encontrado:
+            '⚠️ Não encontrei o registro operacional desse ticket.',
+
+          usuario_nao_autorizado:
+            '🚫 Somente quem abriu o ticket pode registrar esse feedback.',
+
+          feedback_ja_registrado:
+            '✅ Seu feedback desse ticket já foi registrado.',
+
+          feedback_invalido:
+            '⚠️ Esse feedback não é válido.',
+        };
+
+        await interaction
+          .reply({
+            content:
+              messages[
+                result.reason
+              ] ||
+              '⚠️ Não foi possível registrar o feedback.',
+
+            ephemeral:
+              true,
+          })
+          .catch(
+            () => {}
+          );
+
+        return true;
+      }
+
+      await interaction
+        .reply({
+          content:
+            '💗 Obrigado! Seu feedback foi registrado e será considerado no acompanhamento semanal da qualidade dos atendimentos.',
+
+          ephemeral:
+            true,
+        })
+        .catch(
+          () => {}
+        );
+
+      return true;
+    }
+
     // ===== SELECT MENU =====
     if (interaction.isStringSelectMenu() && interaction.customId === 'selecionar_ticket') {
       try {
@@ -2076,10 +2561,172 @@ if (interaction.isModalSubmit() && interaction.customId === 'modal_registro_lide
 
     const ATENDENTE_ID_FINAL = atendenteId || idAssumido || CLOSED_BY_ID;
 
-    const horarioAbertura   = sorted.at(0)?.createdAt || new Date();
-    const horarioFechamento = new Date();
+    const horarioAbertura   =
+      sorted.at(0)?.createdAt ||
+      new Date();
 
-    const IGNORE_CUSTOM_IDS = new Set(["assumir_ticket", "assumir_resp", "fechar_ticket", "adicionar_membro", "remover_membro"]);
+    const horarioFechamento =
+      new Date();
+
+    const mensagensParaAnalise =
+      sorted.map(
+        message => {
+          const embedText =
+            (
+              message.embeds ||
+              []
+            )
+              .map(
+                embed =>
+                  [
+                    embed.title ||
+                      '',
+
+                    embed.description ||
+                      '',
+
+                    ...(
+                      embed.fields ||
+                      []
+                    ).flatMap(
+                      field =>
+                        [
+                          field.name ||
+                            '',
+
+                          field.value ||
+                            '',
+                        ]
+                    ),
+                  ]
+                    .filter(
+                      Boolean
+                    )
+                    .join(
+                      ' | '
+                    )
+              )
+              .filter(
+                Boolean
+              )
+              .join(
+                ' | '
+              );
+
+          const content =
+            [
+              message.content ||
+                '',
+
+              embedText,
+            ]
+              .filter(
+                Boolean
+              )
+              .join(
+                ' | '
+              )
+              .trim();
+
+          return {
+            authorId:
+              message.author?.id ||
+              '0',
+
+            authorName:
+              message.member
+                ?.displayName ||
+              message.author
+                ?.username ||
+              'Desconhecido',
+
+            createdTimestamp:
+              message
+                .createdTimestamp,
+
+            isBot:
+              Boolean(
+                message.author?.bot
+              ),
+
+            isOpener:
+              message.author?.id ===
+              idAberto,
+
+            isStaff:
+              staffVerificada.has(
+                message.author?.id
+              ),
+
+            content,
+
+            attachments:
+              message.attachments
+                ?.size ||
+              0,
+          };
+        }
+      );
+
+    const ticketOperationalRecord =
+      await analyzeAndRecordTicket({
+        channelId:
+          canalId,
+
+        guildId:
+          guild.id,
+
+        ticketType:
+          tipoTicket,
+
+        openerId:
+          idAberto,
+
+        closerId:
+          CLOSED_BY_ID,
+
+        primaryAttendantId:
+          ATENDENTE_ID_FINAL,
+
+        humanConclusion:
+          conclusaoFinal,
+
+        autoReasonType:
+          autoData
+            ?.reasonType ||
+          null,
+
+        openedAt:
+          horarioAbertura
+            .getTime(),
+
+        closedAt:
+          horarioFechamento
+            .getTime(),
+
+        messages:
+          mensagensParaAnalise,
+      })
+        .catch(
+          error => {
+            console.error(
+              '[TICKET IA/NPS] Falha ao analisar/gravar ticket:',
+              error?.message ||
+                error
+            );
+
+            return null;
+          }
+        );
+
+    const IGNORE_CUSTOM_IDS =
+      new Set([
+        "assumir_ticket",
+        "assumir_resp",
+        "fechar_ticket",
+        "adicionar_membro",
+        "remover_membro"
+      ]);
     const IGNORE_LABELS     = new Set(["Assumir Ticket", "Assumir Resp", "Fechar Ticket", "Adicionar Usuário", "Remover Usuário"]);
 
     function isTicketMenuMessage(msg) {
@@ -2434,8 +3081,95 @@ if (interaction.isModalSubmit() && interaction.customId === 'modal_registro_lide
         { name: "🕒 Abertura:",           value: `<t:${Math.floor(horarioAbertura.getTime() / 1000)}:f>`, inline: true },
         { name: "🕓 Fechamento:",         value: `<t:${Math.floor(horarioFechamento.getTime() / 1000)}:f>`, inline: true },
         {
-          name: "📝 Qual foi o desenrolar/motivo? Foi resolvido?",
-          value: conclusaoFinal && conclusaoFinal.length > 0 ? conclusaoFinal : "Sem considerações."
+          name:
+            "📝 Qual foi o desenrolar/motivo? Foi resolvido?",
+
+          value:
+            `👤 **Conclusão humana:**\n${
+              conclusaoFinal &&
+              conclusaoFinal.length >
+                0
+                ? conclusaoFinal
+                : "Sem considerações."
+            }\n\n` +
+
+            `🤖 **Leitura interna da IA:**\n${
+              ticketOperationalRecord
+                ?.evaluation
+                ?.summaryShort ||
+              "A avaliação automática não ficou disponível."
+            }`
+        },
+
+        {
+          name:
+            "📊 Avaliação interna do atendimento",
+
+          value:
+            `**Resultado:** ${
+              ticketOperationalRecord
+                ?.evaluation
+                ?.resolved ||
+              "inconclusivo"
+            }\n` +
+
+            `**Desempenho da equipe:** ${
+              ticketOperationalRecord
+                ?.evaluation
+                ?.teamPerformance ||
+              "não classificado"
+            }\n` +
+
+            `**Quem mais resolveu:** ${
+              ticketOperationalRecord
+                ?.evaluation
+                ?.whoSolved ||
+              "não identificado"
+            }\n` +
+
+            `**Aguardando no fechamento:** ${
+              ticketOperationalRecord
+                ?.metrics
+                ?.waitingOn ||
+              "indefinido"
+            }\n` +
+
+            `**Primeira resposta humana:** ${
+              ticketOperationalRecord
+                ?.metrics
+                ?.firstHumanResponseMs ==
+              null
+                ? "não identificada"
+                : `${Math.round(
+                    ticketOperationalRecord
+                      .metrics
+                      .firstHumanResponseMs /
+                    60000
+                  )} min`
+            }\n` +
+
+            `**Tempo total aberto:** ${
+              ticketOperationalRecord
+                ?.metrics
+                ?.totalOpenMs ==
+              null
+                ? "não identificado"
+                : `${(
+                    ticketOperationalRecord
+                      .metrics
+                      .totalOpenMs /
+                    3600000
+                  ).toFixed(
+                    1
+                  )} h`
+            }\n` +
+
+            `**Confiança da IA:** ${
+              ticketOperationalRecord
+                ?.evaluation
+                ?.confidence ??
+              0
+            }%`
         }
       )
       .setFooter({ text: "SantaCreators", iconURL: guild.iconURL() });

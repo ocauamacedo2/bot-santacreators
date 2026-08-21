@@ -14,6 +14,16 @@ import {
 } from "discord.js";
 
 import { dashEmit } from "../utils/dashHub.js";
+
+import {
+  getOperationalDateKeySP,
+  getOperationalMidnightTimestampSP,
+  recordExpectedOperation,
+  recordApprovalCreated,
+  recordApprovalDecision,
+  markExpectedOperationPosted,
+} from "../utils/approvalOperationalIntelligence.js";
+
 ///teste
 // ================= PERSISTÊNCIA =================
 const DATA_DIR = path.resolve(process.cwd(), "data");
@@ -264,6 +274,92 @@ function markTodayEventPosted(eventKey, scope = "eventosDiarios") {
   }
 }
 
+// ============================================================================
+// NPS OPERACIONAL — EVENTOS DIÁRIOS ESPERADOS PELO CRONOGRAMA
+// ============================================================================
+
+function registerTodayExpectedEventsForNps() {
+  try {
+    const events =
+      getTodayEventOptions();
+
+    if (
+      !Array.isArray(events) ||
+      events.length === 0
+    ) {
+      return;
+    }
+
+    const now =
+      Date.now();
+
+    const dateKey =
+      getOperationalDateKeySP(
+        now
+      );
+
+    const midnight =
+      getOperationalMidnightTimestampSP(
+        now
+      );
+
+    for (
+      const eventData of
+      events
+    ) {
+      if (
+        !eventData?.eventKey
+      ) {
+        continue;
+      }
+
+      recordExpectedOperation({
+        system:
+          "eventos_diarios",
+
+        dateKey,
+
+        eventKey:
+          eventData.eventKey,
+
+        label:
+          eventData.title ||
+          eventData.eventName ||
+          eventData.name ||
+          eventData.eventKey,
+
+        expectedAt:
+          midnight,
+      });
+    }
+  } catch (error) {
+    console.error(
+      "[EventosDiarios] Erro ao registrar eventos esperados no NPS:",
+      error
+    );
+  }
+}
+
+function startEventosDiariosOperationalMonitor() {
+  if (
+    globalThis.__SC_EVENTOS_DIARIOS_OPERATIONAL_MONITOR__
+  ) {
+    return;
+  }
+
+  globalThis.__SC_EVENTOS_DIARIOS_OPERATIONAL_MONITOR__ =
+    true;
+
+  registerTodayExpectedEventsForNps();
+
+  setInterval(
+    () => {
+      registerTodayExpectedEventsForNps();
+    },
+    10 * 60 * 1000
+  );
+}
+
 function isRequestProcessing(reqId) {
   state.processingRequests ??= {};
   return Boolean(state.processingRequests[reqId]);
@@ -424,6 +520,11 @@ async function ensureButtonAtBottom(channel, client, force = true) {
 export async function eventosDiariosOnReady(client) {
   // Garante que o estado seja carregado no boot
   state = loadState();
+
+  // Registra no NPS quais Eventos Diários realmente
+  // deveriam existir de acordo com o cronograma vigente.
+  startEventosDiariosOperationalMonitor();
+
   const channel = await client.channels.fetch(EVENTOS_CHANNEL_ID).catch(() => null);
   if (channel && channel.isTextBased()) {
     // ✅ No restart, passa false para não spammar se já tiver botão
@@ -826,17 +927,37 @@ state.pendingRequests[reqId] = {
     eventData?.eventKey ||
     null,
 
-  /*
-   * Horário exato em que entrou na fila
-   * de aprovação.
-   */
+  expectedDateKey:
+    getOperationalDateKeySP(),
+
   createdAt:
     Date.now(),
 
   operationId:
     reqId,
 };
-    saveState(state); // Salva no arquivo
+
+saveState(state);
+
+recordApprovalCreated({
+  system:
+    "eventos_diarios",
+
+  operationId:
+    reqId,
+
+  eventKey:
+    eventData?.eventKey ||
+    null,
+
+  creatorId:
+    interaction.user.id,
+
+  createdAt:
+    state.pendingRequests[
+      reqId
+    ].createdAt,
+});
 
     const approvalChannel = await client.channels.fetch(APPROVAL_CHANNEL_ID).catch(() => null);
     if (!approvalChannel) {
@@ -979,13 +1100,61 @@ ${mentions}`;
           sentMsg = await eventChannel.send({ content: chunk });
       }
 
-      if (!sentMsg) {
-        unlockRequestProcessing(reqId);
-        return interaction.editReply("❌ Falha ao enviar a mensagem do evento. O conteúdo pode estar vazio.");
-      }
-      
-      // ✅ Mais emojis
-      try {
+if (!sentMsg) {
+  unlockRequestProcessing(reqId);
+
+  return interaction.editReply(
+    "❌ Falha ao enviar a mensagem do evento. O conteúdo pode estar vazio."
+  );
+}
+
+const postedAt =
+  Date.now();
+
+recordApprovalDecision({
+  system:
+    "eventos_diarios",
+
+  operationId:
+    reqId,
+
+  decision:
+    "approved",
+
+  approverId:
+    interaction.user.id,
+
+  decidedAt:
+    postedAt,
+
+  postedAt,
+});
+
+if (
+  data.eventKey
+) {
+  markExpectedOperationPosted({
+    system:
+      "eventos_diarios",
+
+    dateKey:
+      data.expectedDateKey ||
+      getOperationalDateKeySP(
+        postedAt
+      ),
+
+    eventKey:
+      data.eventKey,
+
+    postedAt,
+
+    operationId:
+      reqId,
+  });
+}
+
+// ✅ Mais emojis
+try {
         const emojis = ["💜", "🔥", "🚀", "👏", "🎉", "🤩", "🤯", "🏆", "👑", "💸", "👀", "✨", "💯", "✅", "📸", "💎", "⚡", "💣", "🫡", "🤝", "👻", "💀", "👽", "👾", "🤖", "🎃", "😺"];
         for (const e of emojis) await sentMsg.react(e).catch(() => {});
       } catch {}
@@ -993,20 +1162,22 @@ ${mentions}`;
       // ✅ Aqui passa true para forçar o botão a descer
       await ensureButtonAtBottom(eventChannel, client, true);
 
-      dashEmit(
-        "eventosdiarios:aprovado",
-        {
-          __at:
-            Date.now(),
+dashEmit(
+  "eventosdiarios:aprovado",
+  {
+    __at:
+      postedAt,
 
-          decidedAt:
-            Date.now(),
+    decidedAt:
+      postedAt,
 
-          createdAt:
-            Number(
-              data.createdAt ||
-              0
-            ),
+    postedAt,
+
+    createdAt:
+      Number(
+        data.createdAt ||
+        0
+      ),
 
           operationId:
             reqId,
@@ -1087,71 +1258,98 @@ ${mentions}`;
         []
     }).catch(() => {});
 
-    const rejectedData =
-      state.pendingRequests[
-        reqId
-      ];
+   const rejectedData =
+  state.pendingRequests[
+    reqId
+  ];
 
-    if (
-      rejectedData
-    ) {
-      try {
-        dashEmit(
-          "eventosdiarios:reprovado",
-          {
-            __at:
-              Date.now(),
+if (
+  rejectedData
+) {
+  const rejectedAt =
+    Date.now();
 
-            decidedAt:
-              Date.now(),
+  try {
+    dashEmit(
+      "eventosdiarios:reprovado",
+      {
+        __at:
+          rejectedAt,
 
-            createdAt:
-              Number(
-                rejectedData.createdAt ||
-                0
-              ),
+        decidedAt:
+          rejectedAt,
 
-            operationId:
-              reqId,
+        createdAt:
+          Number(
+            rejectedData.createdAt ||
+            0
+          ),
 
-            recordId:
-              reqId,
+        operationId:
+          reqId,
 
-            userId:
-              rejectedData.userId,
+        recordId:
+          reqId,
 
-            creatorId:
-              rejectedData.userId,
+        userId:
+          rejectedData.userId,
 
-            approverId:
-              interaction.user.id,
+        creatorId:
+          rejectedData.userId,
 
-            executorId:
-              interaction.user.id,
+        approverId:
+          interaction.user.id,
 
-            source:
-              "eventos_diarios",
+        executorId:
+          interaction.user.id,
 
-            decision:
-              "rejected",
+        source:
+          "eventos_diarios",
 
-            dedupeKey:
-              `eventosdiarios:reprovado:${reqId}`,
-          }
-        );
-      } catch {}
-    }
+        decision:
+          "rejected",
 
-    delete state.pendingRequests[
-      reqId
-    ];
-
-    unlockRequestProcessing(
-      reqId
+        dedupeKey:
+          `eventosdiarios:reprovado:${reqId}`,
+      }
     );
+  } catch {}
 
-    saveState(state);
-    await interaction.reply({ content: "❌ Solicitação recusada.", ephemeral: true });
+  recordApprovalDecision({
+    system:
+      "eventos_diarios",
+
+    operationId:
+      reqId,
+
+    decision:
+      "rejected",
+
+    approverId:
+      interaction.user.id,
+
+    decidedAt:
+      rejectedAt,
+  });
+}
+
+delete state.pendingRequests[
+  reqId
+];
+
+unlockRequestProcessing(
+  reqId
+);
+
+saveState(state);
+
+await interaction.reply({
+  content:
+    "❌ Solicitação recusada.",
+
+  ephemeral:
+    true
+});
     return true;
   }
 

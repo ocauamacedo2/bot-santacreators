@@ -21,6 +21,11 @@ import {
 
   import { dashEmit } from "../utils/dashHub.js";
 
+import {
+  recordApprovalCreated,
+  recordApprovalDecision,
+} from "../utils/approvalOperationalIntelligence.js";
+
   // ================= CONFIGURAÇÃO =================
   const HALL_CHANNEL_ID = "1386503496353976470"; // Canal Oficial do Hall da Fama
   const APPROVAL_CHANNEL_ID = "1387864036259004436"; // Canal de Aprovação
@@ -10376,7 +10381,28 @@ state.pendingRequests[reqId] = {
   operationId:
     reqId,
 };
-      saveState(state);
+
+saveState(state);
+
+recordApprovalCreated({
+  system:
+    "hall_da_fama",
+
+  operationId:
+    reqId,
+
+  eventKey:
+    eventData?.eventKey ||
+    null,
+
+  creatorId:
+    interaction.user.id,
+
+  createdAt:
+    state.pendingRequests[
+      reqId
+    ].createdAt,
+});
 
       const approvalChannel = await client.channels.fetch(APPROVAL_CHANNEL_ID).catch(() => null);
       if (!approvalChannel) return interaction.editReply("❌ Canal de aprovação não encontrado.");
@@ -10615,13 +10641,36 @@ if (approvalImageReferences.length > 0) {
     sentMsg = await hallChannel.send(sendPayload);
   }
 
-  if (!sentMsg) {
-    return interaction.editReply(
-      "❌ Falha ao enviar a mensagem do Hall da Fama. O conteúdo pode estar vazio."
-    );
-  }
-      
-      try {
+if (!sentMsg) {
+  return interaction.editReply(
+    "❌ Falha ao enviar a mensagem do Hall da Fama. O conteúdo pode estar vazio."
+  );
+}
+
+const hallPostedAt =
+  Date.now();
+
+recordApprovalDecision({
+  system:
+    "hall_da_fama",
+
+  operationId:
+    reqId,
+
+  decision:
+    "approved",
+
+  approverId:
+    interaction.user.id,
+
+  decidedAt:
+    hallPostedAt,
+
+  postedAt:
+    hallPostedAt,
+});
+
+try {
         const emojis = ["💜", "🔥", "🚀", "👏", "🎉", "🤩", "🏆", "👑", "💸", "✨", "💯", "✅", "💎", "🫡", "🤝", "🤯", "👀", "📸", "⚡", "💣", "👻", "💀", "👽", "👾", "🤖", "🎃", "😺"];
         for (const e of emojis) await sentMsg.react(e).catch(() => {});
       } catch {}
@@ -10641,10 +10690,13 @@ dashEmit(
   "halldafama:aprovado",
   {
     __at:
-      Date.now(),
+      hallPostedAt,
 
     decidedAt:
-      Date.now(),
+      hallPostedAt,
+
+    postedAt:
+      hallPostedAt,
 
     createdAt:
       Number(
@@ -10759,68 +10811,96 @@ dashEmit(
           []
       });
 
-      const rejectedData =
-        state.pendingRequests[
-          reqId
-        ];
+const rejectedData =
+  state.pendingRequests[
+    reqId
+  ];
 
-      if (
-        rejectedData
-      ) {
-        try {
-          dashEmit(
-            "halldafama:reprovado",
-            {
-              __at:
-                Date.now(),
+if (
+  rejectedData
+) {
+  const rejectedAt =
+    Date.now();
 
-              decidedAt:
-                Date.now(),
+  try {
+    dashEmit(
+      "halldafama:reprovado",
+      {
+        __at:
+          rejectedAt,
 
-              createdAt:
-                Number(
-                  rejectedData.createdAt ||
-                  0
-                ),
+        decidedAt:
+          rejectedAt,
 
-              operationId:
-                reqId,
+        createdAt:
+          Number(
+            rejectedData.createdAt ||
+            0
+          ),
 
-              recordId:
-                reqId,
+        operationId:
+          reqId,
 
-              userId:
-                rejectedData.userId,
+        recordId:
+          reqId,
 
-              creatorId:
-                rejectedData.userId,
+        userId:
+          rejectedData.userId,
 
-              approverId:
-                interaction.user.id,
+        creatorId:
+          rejectedData.userId,
 
-              executorId:
-                interaction.user.id,
+        approverId:
+          interaction.user.id,
 
-              source:
-                "hall_da_fama",
+        executorId:
+          interaction.user.id,
 
-              decision:
-                "rejected",
+        source:
+          "hall_da_fama",
 
-              dedupeKey:
-                `halldafama:reprovado:${reqId}`,
-            }
-          );
-        } catch {}
+        decision:
+          "rejected",
+
+        dedupeKey:
+          `halldafama:reprovado:${reqId}`,
       }
+    );
+  } catch {}
 
-      delete state.pendingRequests[
-        reqId
-      ];
+  recordApprovalDecision({
+    system:
+      "hall_da_fama",
 
-      saveState(state);
-      await interaction.reply({ content: "❌ Solicitação recusada.", ephemeral: true });
-      return true;
+    operationId:
+      reqId,
+
+    decision:
+      "rejected",
+
+    approverId:
+      interaction.user.id,
+
+    decidedAt:
+      rejectedAt,
+  });
+}
+
+delete state.pendingRequests[
+  reqId
+];
+
+saveState(state);
+
+await interaction.reply({
+  content:
+    "❌ Solicitação recusada.",
+
+  ephemeral:
+    true
+});
+
+return true;
     }
 
     return false;
