@@ -1158,7 +1158,7 @@ ${autoReasonType || "não"}
 Quem aparentemente aguardava resposta:
 ${waitingOn || "indefinido"}
 
-Conclusão humana:
+Motivo De fechar do Creator:
 ${humanConclusion || "não informada"}
 
 Métricas:

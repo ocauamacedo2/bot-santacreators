@@ -3085,7 +3085,7 @@ if (interaction.isModalSubmit() && interaction.customId === 'modal_registro_lide
             "📝 Qual foi o desenrolar/motivo? Foi resolvido?",
 
           value:
-            `👤 **Conclusão humana:**\n${
+            `👤 **Motivo De Fechar do Creator:**\n${
               conclusaoFinal &&
               conclusaoFinal.length >
                 0
@@ -3093,7 +3093,7 @@ if (interaction.isModalSubmit() && interaction.customId === 'modal_registro_lide
                 : "Sem considerações."
             }\n\n` +
 
-            `🤖 **Leitura interna da IA:**\n${
+            `🤖 **resumo do que rolou no ticket( IA ) :**\n${
               ticketOperationalRecord
                 ?.evaluation
                 ?.summaryShort ||
