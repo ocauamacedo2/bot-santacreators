@@ -1028,13 +1028,53 @@ function getFallbackEvaluation({
       "O ticket foi encerrado, mas não existem evidências suficientes para afirmar com segurança se houve solução completa.";
   }
 
-  return {
-    resolved,
+  let closingContext =
+  "Atendimento encerrado normalmente pela equipe.";
 
-    confidence:
-      35,
+if (
+  autoReasonType ===
+    "inatividade"
+) {
+  if (
+    waitingOn ===
+    "equipe"
+  ) {
+    closingContext =
+      "O ticket fechou por inatividade enquanto o cidadão ainda aguardava retorno da SantaCreators.";
+  } else if (
+    waitingOn ===
+    "cidadao"
+  ) {
+    closingContext =
+      "O ticket fechou por inatividade depois que a SantaCreators respondeu e o cidadão não retornou.";
+  } else {
+    closingContext =
+      "O ticket fechou automaticamente por inatividade.";
+  }
+} else if (
+  explicitResolved
+) {
+  closingContext =
+    "Atendimento concluído normalmente com indicação de que a solicitação foi resolvida.";
+} else if (
+  explicitUnresolved
+) {
+  closingContext =
+    "Atendimento encerrado sem indicação de que a solicitação tenha sido resolvida.";
+} else {
+  closingContext =
+    "Atendimento encerrado sem confirmação clara sobre o resultado final.";
+}
 
-    summaryShort,
+return {
+  resolved,
+
+  confidence:
+    35,
+
+  summaryShort,
+
+  closingContext,
 
     mainReason:
       normalizeText(
@@ -1136,17 +1176,55 @@ REGRAS OBRIGATÓRIAS:
 5. Se a equipe respondeu e ficou aguardando algo do cidadão, não penalize injustamente a equipe.
 6. Tickets de entrevista podem existir apenas para tirar dúvidas. Não exija necessariamente entrevista concluída para considerar uma dúvida resolvida.
 7. Considere atendimento de suporte, bugs, perda de itens e denúncias de hacker da mesma forma: avalie se a necessidade apresentada recebeu resposta ou encaminhamento real.
-8. Diferencie quem resolveu principalmente:
+8. Diferencie quem realmente participou da solução:
    humano
    ia
    misto
    nao_identificado
-9. Se a IA ajudou mas a decisão final dependeu de uma pessoa, classifique como misto quando apropriado.
-10. Se não houver evidência suficiente, use inconclusivo.
-11. O resumo deve ser curto, objetivo e adequado para aparecer na log interna do ticket.
-12. A conclusão humana é uma fonte importante, mas compare-a com as mensagens do ticket.
-13. Não exponha raciocínio interno. Retorne somente JSON válido.
 
+9. Use "humano" quando a solução veio principalmente de um Creator.
+
+10. Use "ia" somente quando a inteligência da SantaCreators realmente respondeu, orientou ou resolveu a demanda.
+
+11. Não considere mensagens automáticas, menu do ticket, aviso de abertura, lembretes, botões ou mensagens administrativas como participação da IA na solução.
+
+12. Use "misto" somente quando existirem evidências reais de que tanto a SantaCreators quanto um Creator participaram da solução.
+
+13. Se não houver evidência suficiente, use inconclusivo.
+
+14. O resumo deve ser curto, direto e escrito de uma forma que qualquer pessoa consiga entender sem conhecer o funcionamento técnico do bot.
+
+15. Analise também COMO o atendimento terminou.
+
+16. No campo "closingContext", escreva UMA frase curta, natural e extremamente clara explicando a situação real no momento do encerramento.
+
+17. Em fechamento MANUAL, NÃO diga que "o cidadão precisava responder" ou que "a equipe precisava responder" simplesmente porque uma das partes falou por último.
+
+18. Em fechamento manual, considere a conclusão do Creator, a confirmação do cidadão e o contexto da conversa. Exemplos válidos:
+   "Atendimento concluído normalmente após confirmação do cidadão."
+   "Atendimento encerrado após a dúvida ser esclarecida."
+   "Atendimento encerrado pelo Creator, mas sem confirmação clara de solução."
+   "Atendimento encerrado com parte da solicitação ainda pendente."
+
+19. Somente mencione que alguém ficou aguardando resposta quando isso realmente for relevante para o encerramento, principalmente em fechamento automático por inatividade.
+
+20. Se o ticket fechar automaticamente enquanto o cidadão estava esperando a equipe, deixe isso explícito:
+   "O ticket fechou por inatividade enquanto o cidadão ainda aguardava retorno da SantaCreators."
+
+21. Se o ticket fechar automaticamente depois da equipe responder e o cidadão não retornar, deixe isso explícito:
+   "O ticket fechou por inatividade depois que a SantaCreators respondeu e o cidadão não retornou."
+
+22. Não use termos técnicos como:
+   waitingOn
+   humano
+   misto
+   BOT_IA
+   classificação interna
+   na frase de closingContext.
+
+23. A conclusão escrita pelo Creator é uma fonte importante, mas compare-a com as mensagens do ticket.
+
+24. Não exponha raciocínio interno. Retorne somente JSON válido.
 DADOS DO TICKET:
 
 Tipo:
@@ -1181,8 +1259,9 @@ RETORNE EXATAMENTE UM JSON NESTE FORMATO:
 {
   "resolved": "sim|parcial|nao|inconclusivo",
   "confidence": 0,
-  "summaryShort": "resumo curto",
+  "summaryShort": "resumo curto e fácil de entender",
   "mainReason": "motivo principal",
+  "closingContext": "frase curta e clara explicando como o atendimento terminou",
   "teamPerformance": "excelente|bom|atencao|critico",
   "whoSolved": "humano|ia|misto|nao_identificado",
   "citizenAbandoned": false,
@@ -1265,23 +1344,43 @@ RETORNE EXATAMENTE UM JSON NESTE FORMATO:
           "A IA não forneceu um resumo conclusivo.",
 
         mainReason:
-          normalizeText(
-            parsed.mainReason
-          ).slice(
-            0,
-            500
-          ) ||
-          "Não identificado.",
+  normalizeText(
+    parsed.mainReason
+  ).slice(
+    0,
+    500
+  ) ||
+  "Não identificado.",
 
-        teamPerformance:
-          normalizeTeamPerformance(
-            parsed.teamPerformance
-          ),
+closingContext:
+  normalizeText(
+    parsed.closingContext
+  ).slice(
+    0,
+    500
+  ) ||
+  (
+    autoReasonType ===
+      "inatividade"
+      ? waitingOn ===
+          "equipe"
+        ? "O ticket fechou por inatividade enquanto o cidadão ainda aguardava retorno da SantaCreators."
+        : waitingOn ===
+            "cidadao"
+          ? "O ticket fechou por inatividade depois que a SantaCreators respondeu e o cidadão não retornou."
+          : "O ticket fechou automaticamente por inatividade."
+      : "Atendimento encerrado normalmente pela equipe."
+  ),
 
-        whoSolved:
-          normalizeWhoSolved(
-            parsed.whoSolved
-          ),
+teamPerformance:
+  normalizeTeamPerformance(
+    parsed.teamPerformance
+  ),
+
+whoSolved:
+  normalizeWhoSolved(
+    parsed.whoSolved
+  ),
 
         citizenAbandoned:
           parsed.citizenAbandoned ===

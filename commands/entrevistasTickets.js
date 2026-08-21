@@ -3174,25 +3174,27 @@ const quemResolveuAmigavel = {
 "Não deu para identificar";
 
 
-const aguardandoBruto =
+const comoTerminouAmigavel =
   ticketOperationalRecord
-    ?.metrics
-    ?.waitingOn ||
-  "indefinido";
-
-const aguardandoAmigavel = {
-  cidadao:
-    "O cidadão precisava responder",
-
-  equipe:
-    "A SantaCreators precisava responder",
-
-  indefinido:
-    "Não deu para identificar",
-}[
-  aguardandoBruto
-] ||
-"Não deu para identificar";
+    ?.evaluation
+    ?.closingContext ||
+  (
+    autoData
+      ?.reasonType ===
+      "inatividade"
+      ? ticketOperationalRecord
+          ?.metrics
+          ?.waitingOn ===
+          "equipe"
+        ? "O ticket fechou por inatividade enquanto o cidadão ainda aguardava retorno da SantaCreators."
+        : ticketOperationalRecord
+              ?.metrics
+              ?.waitingOn ===
+              "cidadao"
+          ? "O ticket fechou por inatividade depois que a SantaCreators respondeu e o cidadão não retornou."
+          : "O ticket fechou automaticamente por inatividade."
+      : "Atendimento encerrado normalmente."
+  );
 
 
 const primeiraRespostaMs =
@@ -3298,24 +3300,24 @@ const embedLog = new EmbedBuilder()
     }`
 },
 
-       {
+    {
   name:
     "📊 Como foi esse atendimento?",
 
   value:
     `**Situação final:** ${resultadoAmigavel}\n` +
 
-    `**Como foi o atendimento:** ${desempenhoAmigavel}\n` +
+    `**Qualidade do atendimento:** ${desempenhoAmigavel}\n` +
 
-    `**Quem participou mais da solução:** ${quemResolveuAmigavel}\n` +
+    `**Quem ajudou na solução:** ${quemResolveuAmigavel}\n` +
 
-    `**Na hora de fechar:** ${aguardandoAmigavel}\n` +
+    `**Como o atendimento terminou:** ${comoTerminouAmigavel}\n` +
 
     `**Primeira resposta do Creator:** ${primeiraRespostaAmigavel}\n` +
 
-    `**Quanto tempo o ticket ficou aberto:** ${tempoTotalAmigavel}\n` +
+    `**Tempo total do atendimento:** ${tempoTotalAmigavel}\n` +
 
-    `**Segurança dessa análise:** ${confiancaAmigavel}`
+    `**Confiança da análise:** ${confiancaAmigavel}`
 }
       )
       .setFooter({ text: "SantaCreators", iconURL: guild.iconURL() });
@@ -3515,52 +3517,167 @@ if (
             )
         );
 
+const payloadDmFinal = {
+  embeds: [
+    dmEmbed
+  ],
 
-    try {
+  components: [
+    dmTranscriptRow,
+    dmFeedbackRow,
+  ],
+
+  allowedMentions: {
+    parse: [],
+  },
+};
+
+try {
+  /*
+   * Primeiro tenta utilizar o sistema global
+   * de DM segura que o projeto já utiliza.
+   *
+   * Ele já centraliza tratamento de erros
+   * e situações em que o Discord bloqueia a DM.
+   */
+  if (
+    typeof globalThis
+      .enviarMensagemPrivadaSegura ===
+      "function" &&
+    userAberto
+  ) {
+    const resultadoEnvio =
       await withTimeout(
-        usuarioParaDm.send({
-          embeds: [
-            dmEmbed
-          ],
+        globalThis
+          .enviarMensagemPrivadaSegura(
+            userAberto,
+            payloadDmFinal,
+            `TICKET_FINALIZADO:${canalId}`
+          ),
 
-          components: [
-            dmTranscriptRow,
-            dmFeedbackRow,
-          ],
-        }),
+        15_000,
 
-        12_000,
-
-        "DM ticket finalizado"
+        "enviarMensagemPrivadaSegura(ticket finalizado)"
       );
 
-      dmEnviada =
-        true;
-
-      console.log(
-        `[TICKET] ✅ PV final enviado para ${idAberto} com transcript e feedback.`
-      );
-    } catch (
-      error
+    if (
+      !resultadoEnvio
+        ?.sucesso
     ) {
-      dmEnviada =
-        false;
+      const erroEnvio =
+        new Error(
+          resultadoEnvio
+            ?.mensagem ||
+          "O sistema de DM segura não conseguiu enviar a mensagem."
+        );
 
-      console.error(
-        `[TICKET] ❌ Não foi possível enviar o fechamento no PV de ${idAberto}:`,
-        {
-          codigo:
-            error?.code ??
-            null,
+      erroEnvio.code =
+        resultadoEnvio
+          ?.codigo ??
+        null;
 
-          mensagem:
-            error?.message ||
-            String(
-              error
-            ),
-        }
-      );
+      erroEnvio.dmStatus =
+        resultadoEnvio
+          ?.status ??
+        "erro_desconhecido";
+
+      throw erroEnvio;
     }
+  } else {
+    /*
+     * Fallback:
+     *
+     * se por algum motivo o helper global
+     * não estiver disponível, utiliza o
+     * envio direto do Discord.
+     */
+    await withTimeout(
+      usuarioParaDm.send(
+        payloadDmFinal
+      ),
+
+      15_000,
+
+      "usuarioParaDm.send(ticket finalizado)"
+    );
+  }
+
+  dmEnviada =
+    true;
+
+  console.log(
+    `[TICKET] ✅ PV final enviado para ${idAberto} com transcript e feedback.`
+  );
+} catch (
+  error
+) {
+  dmEnviada =
+    false;
+
+  console.error(
+    `[TICKET] ❌ Não foi possível enviar o fechamento no PV de ${idAberto}:`,
+    {
+      codigo:
+        error?.code ??
+        null,
+
+      status:
+        error?.dmStatus ??
+        null,
+
+      mensagem:
+        error?.message ||
+        String(
+          error
+        ),
+    }
+  );
+
+  /*
+   * Última tentativa direta.
+   *
+   * Isso cobre um eventual problema específico
+   * do helper global sem perder o PV do usuário.
+   */
+  try {
+    await withTimeout(
+      usuarioParaDm.send(
+        payloadDmFinal
+      ),
+
+      10_000,
+
+      "fallback direto da DM final"
+    );
+
+    dmEnviada =
+      true;
+
+ console.log(
+  `[TICKET] ✅ PV final enviado pelo fallback direto para ${idAberto}.`
+);
+  } catch (
+    fallbackError
+  ) {
+    console.error(
+      `[TICKET] ❌ O fallback direto do PV também falhou para ${idAberto}:`,
+      {
+        codigo:
+          fallbackError
+            ?.code ??
+          null,
+
+        mensagem:
+          fallbackError
+            ?.message ||
+          String(
+            fallbackError
+          ),
+      }
+    );
+  }
+}
+
   } else {
     console.warn(
       `[TICKET] Não foi possível localizar o usuário ${idAberto} para enviar o fechamento no PV.`
@@ -3568,22 +3685,37 @@ if (
   }
 }
 
-    if (!dmEnviada && idAberto) {
-      try {
-        await withTimeout(
-          canal.send({ content: `📩 <@${idAberto}> seu atendimento foi finalizado. Transcript: ${TRANSCRIPTS_BASE_URL}${canalId}` }),
-          10_000,
-          "canal.send(fallback DM)"
-        );
-      } catch {}
-    }
+if (
+  !dmEnviada &&
+  idAberto
+) {
+  try {
+    await withTimeout(
+      canal.send({
+        content:
+          `📩 <@${idAberto}> seu atendimento foi finalizado. Transcript: ${TRANSCRIPTS_BASE_URL}${canalId}`
+      }),
 
-    } catch (err) {
-      console.error("[TICKET] Erro crítico durante o processamento do fechamento:", err);
-    }
-  }
+      10_000,
 
+      "canal.send(fallback DM)"
+    );
+  } catch {}
+}
 
+} catch (
+  err
+) {
+  console.error(
+    "[TICKET] Erro crítico durante o processamento do fechamento:",
+    err
+  );
+}
 
-  return { onReady, onMessageCreate, onInteractionCreate };
+return {
+  onReady,
+  onMessageCreate,
+  onInteractionCreate
+};
+}
 }
