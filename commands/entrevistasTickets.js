@@ -3712,10 +3712,11 @@ if (
   );
 }
 
+}
+
 return {
   onReady,
   onMessageCreate,
   onInteractionCreate
 };
-}
 }
