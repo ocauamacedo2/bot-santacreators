@@ -224,13 +224,8 @@ export default function createEntrevistasTickets({ client, Transcript }) {
           loadInactivityState();
 
         const targetCats = [
-          ...new Set([
-            ...Object.values(
-              CATEGORIES
-            ),
-            '1444857594517913742'
-          ])
-        ];
+  ...ALL_TICKET_CATEGORY_IDS
+];
 
         for (
           const catId of
@@ -242,17 +237,45 @@ export default function createEntrevistasTickets({ client, Transcript }) {
             );
 
           if (
-            !category ||
-            category.type !==
-              ChannelType.GuildCategory
-          ) {
-            continue;
-          }
+  !category ||
+  category.type !==
+    ChannelType.GuildCategory
+) {
+  continue;
+}
 
-          for (
-            const channel of
-            category.children.cache.values()
-          ) {
+// =========================================================
+// 🔒 CATEGORIA SEM FECHAMENTO POR INATIVIDADE
+// =========================================================
+//
+// Para estas categorias o monitor de SLA simplesmente
+// não executa.
+//
+// Também apagamos qualquer estado antigo de inatividade
+// que possa ter sido salvo antes desta alteração.
+// =========================================================
+
+if (
+  INACTIVITY_PROTECTED_CATEGORY_IDS.has(
+    catId
+  )
+) {
+  for (
+    const protectedChannel of
+    category.children.cache.values()
+  ) {
+    delete state[
+      protectedChannel.id
+    ];
+  }
+
+  continue;
+}
+
+for (
+  const channel of
+  category.children.cache.values()
+) {
             if (
               channel.type !==
               ChannelType.GuildText
@@ -309,26 +332,36 @@ export default function createEntrevistasTickets({ client, Transcript }) {
             }
 
             const bypassRoles = [
-              '1262262852949905408',
-              '1352275728476930099'
-            ];
+  '1262262852949905408',
+  '1352275728476930099'
+];
 
-            if (
-              openerId ===
-                '660311795327828008' ||
-              member.roles.cache.some(
-                role =>
-                  bypassRoles.includes(
-                    role.id
-                  )
-              )
-            ) {
-              delete state[
-                channel.id
-              ];
+const hasOldBypass =
+  openerId ===
+    '660311795327828008' ||
+  member.roles.cache.some(
+    role =>
+      bypassRoles.includes(
+        role.id
+      )
+  );
 
-              continue;
-            }
+const openedBySantaCreatorsTeam =
+  isTeamTicketOpener(
+    member,
+    openerId
+  );
+
+if (
+  hasOldBypass ||
+  openedBySantaCreatorsTeam
+) {
+  delete state[
+    channel.id
+  ];
+
+  continue;
+}
 
             if (
               catId ===
@@ -904,16 +937,212 @@ export default function createEntrevistasTickets({ client, Transcript }) {
   ];
 
   const CATEGORIES = {
-    entrevista: '1359244725781266492',
-    suporte: '1359245003523756136',
-    lider: '1414687963161559180',
-    ideias: '1359245055239655544',
-    roupas: '1352706815594598420',
-    banners: '1404568518179029142'
-  };
+  entrevista: '1359244725781266492',
+  suporte: '1359245003523756136',
+  lider: '1414687963161559180',
+  ideias: '1359245055239655544',
+  roupas: '1352706815594598420',
+  banners: '1404568518179029142'
+};
 
-  // ✅ IDs de formulário/cargos/approvers para set de líder
-  const FORMS_CHANNEL_ID = '1428003736671883405';
+// =========================================================
+// 🔒 PROTEÇÃO CONTRA FECHAMENTO AUTOMÁTICO DE TICKETS
+// =========================================================
+//
+// Estas categorias NÃO participam do fechamento automático
+// por inatividade.
+//
+// Isso significa:
+// - não fecham com 3 dias sem mensagem;
+// - não recebem aviso dizendo que fecharão por inatividade;
+// - continuam podendo ser fechadas manualmente.
+//
+// IMPORTANTE:
+// A categoria de Líder possui uma proteção ainda maior,
+// definida separadamente mais abaixo.
+// =========================================================
+
+const INACTIVITY_PROTECTED_CATEGORY_IDS = new Set([
+  '1414687963161559180',
+  '1428572742051168378',
+  '1482874296685695118',
+  '1384650670145278033',
+  '1352706815594598420'
+]);
+
+// =========================================================
+// 👑 TICKETS DE LÍDER
+// =========================================================
+//
+// Ticket da categoria oficial de Líder NUNCA será fechado
+// automaticamente.
+//
+// Mesmo se:
+// - ficar dias sem mensagem;
+// - quem abriu sair do servidor;
+// - quem abriu for banido;
+// - não houver mais ninguém explicitamente adicionado.
+//
+// O fechamento continua possível MANUALMENTE.
+// =========================================================
+
+const ALWAYS_KEEP_OPEN_CATEGORY_IDS = new Set([
+  '1414687963161559180'
+]);
+
+// =========================================================
+// 👥 EQUIPE SANTACREATORS
+// =========================================================
+//
+// Se quem abriu o ticket possuir qualquer um destes cargos,
+// o ticket NÃO será encerrado por inatividade.
+// =========================================================
+
+const TEAM_TICKET_ROLE_IDS = new Set([
+  '1352493359897378941',
+  '1352429001188180039',
+  '1352385500614234134',
+  '1414651836861907006',
+  '1352407252216184833',
+  '1262262852949905409',
+  '1352408327983861844'
+]);
+
+// Pessoas que recebem a mesma proteção mesmo sem depender de cargo.
+const TEAM_TICKET_USER_IDS = new Set([
+  '660311795327828008'
+]);
+
+// =========================================================
+// 📁 TODAS AS CATEGORIAS QUE O SISTEMA DEVE CONHECER
+// =========================================================
+//
+// Mantém as categorias antigas e inclui também as categorias
+// protegidas informadas acima.
+//
+// Isso é necessário para que o sistema saiba aplicar corretamente
+// as regras de saída/banimento nessas categorias.
+// =========================================================
+
+const ALL_TICKET_CATEGORY_IDS = new Set([
+  ...Object.values(CATEGORIES),
+  '1444857594517913742',
+  ...INACTIVITY_PROTECTED_CATEGORY_IDS
+]);
+
+function isTeamTicketOpener(member, userId) {
+  if (
+    userId &&
+    TEAM_TICKET_USER_IDS.has(
+      String(userId)
+    )
+  ) {
+    return true;
+  }
+
+  if (!member) {
+    return false;
+  }
+
+  return member.roles.cache.some(
+    role =>
+      TEAM_TICKET_ROLE_IDS.has(
+        role.id
+      )
+  );
+}
+
+// =========================================================
+// 👤 VERIFICA SE AINDA EXISTE ALGUÉM ADICIONADO AO TICKET
+// =========================================================
+//
+// Usado quando quem abriu um ticket protegido sai ou é banido.
+//
+// Só considera pessoas adicionadas diretamente ao canal.
+// Cargos e bots não contam.
+//
+// Exemplo:
+//
+// Pessoa A abriu ticket de roupas.
+// Pessoa B foi adicionada ao ticket.
+//
+// Pessoa A saiu do servidor.
+// Pessoa B ainda está no servidor.
+//
+// Resultado:
+// o ticket permanece aberto.
+// =========================================================
+
+async function hasRemainingExplicitTicketMember(
+  channel,
+  removedUserId
+) {
+  if (
+    !channel ||
+    !channel.guild
+  ) {
+    return false;
+  }
+
+  const memberOverwriteIds = [
+    ...channel.permissionOverwrites.cache.values()
+  ]
+    .filter(
+      overwrite =>
+        (
+          overwrite.type ===
+            OverwriteType.Member ||
+          overwrite.type ===
+            1
+        ) &&
+        String(
+          overwrite.id
+        ) !==
+          String(
+            removedUserId
+          ) &&
+        String(
+          overwrite.id
+        ) !==
+          String(
+            client.user?.id ||
+            ''
+          )
+    )
+    .map(
+      overwrite =>
+        overwrite.id
+    );
+
+  for (
+    const userId of
+    memberOverwriteIds
+  ) {
+    const remainingMember =
+      channel.guild.members.cache.get(
+        userId
+      ) ||
+      await channel.guild.members
+        .fetch(
+          userId
+        )
+        .catch(
+          () => null
+        );
+
+    if (
+      remainingMember &&
+      !remainingMember.user?.bot
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+// ✅ IDs de formulário/cargos/approvers para set de líder
+const FORMS_CHANNEL_ID = '1428003736671883405';
   const ROLE_LIDERES_ID   = '1353858422063239310';
   const ROLE_PARCEIROS_ID = '1275540170791452765';
 
@@ -1521,39 +1750,171 @@ async function notificarEquipeEntrevista(guild, canal, tipo) {
   async function onReady() {
     await verificarOuCriarMenu();
 
-    // Regra #7: Monitor de Saída/Banimento
-    client.on('guildMemberRemove', async member => {
-      const targetCats = [
-        ...new Set([
-          ...Object.values(CATEGORIES),
-          '1444857594517913742'
-        ])
-      ];
+// =========================================================
+// Regra #7: Monitor de Saída/Banimento
+// =========================================================
+//
+// REGRAS:
+//
+// 1. Ticket de Líder:
+//    NUNCA fecha automaticamente.
+//    Nem por inatividade.
+//    Nem porque quem abriu saiu.
+//    Nem porque quem abriu foi banido.
+//    Nem se não sobrar ninguém.
+//
+// 2. Outras categorias protegidas:
+//    Se quem abriu sair/for banido,
+//    verifica se ainda existe alguma outra pessoa
+//    explicitamente adicionada ao ticket.
+//
+//    Se existir:
+//    mantém aberto.
+//
+//    Se não existir:
+//    pode fechar automaticamente.
+//
+// 3. Tickets normais:
+//    comportamento antigo permanece.
+// =========================================================
 
-      for (const catId of targetCats) {
-        const cat = member.guild.channels.cache.get(catId);
-        if (!cat || cat.type !== ChannelType.GuildCategory) continue;
+client.on(
+  'guildMemberRemove',
+  async member => {
+    const targetCats = [
+      ...ALL_TICKET_CATEGORY_IDS
+    ];
 
-        for (const channel of cat.children.cache.values()) {
-          if (channel.type !== ChannelType.GuildText) continue;
+    for (
+      const catId of
+      targetCats
+    ) {
+      const cat =
+        member.guild.channels.cache.get(
+          catId
+        );
 
-          const topic = channel.topic || "";
-
-          if (topic.includes(`aberto_por:${member.id}`)) {
-            await finalizarTicketComConclusao(
-              null,
-              "Ticket fechado automaticamente (usuário saiu/banido).",
-              {
-                channel,
-                guild: member.guild,
-                isAuto: true,
-                reasonType: "saida"
-              }
-            );
-          }
-        }
+      if (
+        !cat ||
+        cat.type !==
+          ChannelType.GuildCategory
+      ) {
+        continue;
       }
-    });
+
+      for (
+        const channel of
+        cat.children.cache.values()
+      ) {
+        if (
+          channel.type !==
+          ChannelType.GuildText
+        ) {
+          continue;
+        }
+
+        const topic =
+          channel.topic ||
+          "";
+
+        // Só nos interessa o ticket que foi
+        // originalmente aberto por quem saiu.
+        if (
+          !topic.includes(
+            `aberto_por:${member.id}`
+          )
+        ) {
+          continue;
+        }
+
+ // =====================================================
+// 👑 LÍDER
+// =====================================================
+//
+// Ticket da categoria de Líder nunca fecha
+// automaticamente.
+//
+// Mesmo se:
+// - quem abriu sair;
+// - quem abriu for banido;
+// - ninguém mais estiver adicionado;
+// - o ticket ficar sem atividade.
+//
+// Somente fechamento manual poderá encerrar.
+// =====================================================
+
+if (
+  ALWAYS_KEEP_OPEN_CATEGORY_IDS.has(
+    catId
+  )
+) {
+  console.log(
+    `[TICKET PROTEGIDO] Ticket ${channel.id} mantido aberto porque pertence à categoria de Líder. Usuário removido: ${member.id}.`
+  );
+
+  continue;
+}
+
+// =====================================================
+// 👥 VERIFICA SE AINDA EXISTE OUTRA PESSOA NO TICKET
+// =====================================================
+//
+// Esta regra vale para QUALQUER ticket.
+//
+// Se quem abriu saiu/foi banido, mas existe outra pessoa
+// explicitamente adicionada ao canal e ela continua no servidor,
+// o ticket permanece aberto.
+//
+// Só fecha automaticamente se não existir mais ninguém.
+// =====================================================
+
+const hasRemainingMember =
+  await hasRemainingExplicitTicketMember(
+    channel,
+    member.id
+  );
+
+if (
+  hasRemainingMember
+) {
+  console.log(
+    `[TICKET PROTEGIDO] Ticket ${channel.id} mantido aberto porque ainda existe outra pessoa adicionada ao canal.`
+  );
+
+  continue;
+}
+
+// =====================================================
+// FECHAMENTO AUTOMÁTICO
+// =====================================================
+//
+// Chega aqui somente quando:
+//
+// - quem abriu saiu ou foi banido;
+// - NÃO é ticket de Líder;
+// - não existe outra pessoa explicitamente adicionada
+//   ao ticket que ainda esteja no servidor.
+// =====================================================
+
+await finalizarTicketComConclusao(
+  null,
+  "Ticket fechado automaticamente porque quem abriu saiu ou foi banido e não havia mais nenhuma outra pessoa adicionada ao ticket.",
+  {
+    channel,
+    guild:
+      member.guild,
+
+    isAuto:
+      true,
+
+    reasonType:
+      "saida"
+  }
+);
+      }
+    }
+  }
+);
 
     await startInactivityMonitor();
     return true;
