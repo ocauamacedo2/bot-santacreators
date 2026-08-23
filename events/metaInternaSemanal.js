@@ -74,6 +74,7 @@ const PESOS = {
 
 const METAS = {
   eventosRatio: 0.8,
+  eventosMinimo: 7,
   pontos: 50,
   poderesDias: 6,
   orgs: 10,
