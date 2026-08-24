@@ -224,7 +224,75 @@ function getManualAdjustRoleLabel(roleId) {
 async function fetchGuildMemberSafe(guild, userId) {
   try {
     if (!guild || !userId) return null;
-    return await guild.members.fetch(userId);
+
+    const normalizedUserId =
+      String(userId);
+
+    // =====================================================
+    // ✅ 1. CACHE PRIMEIRO
+    // =====================================================
+    //
+    // Evita consultar a API do Discord quando o membro
+    // já está disponível localmente no client.
+    const cachedMember =
+      guild.members.cache.get(
+        normalizedUserId
+      );
+
+    if (cachedMember) {
+      return cachedMember;
+    }
+
+    // =====================================================
+    // ✅ 2. DEDUPLICAÇÃO GLOBAL DE FETCH
+    // =====================================================
+    //
+    // Caso Ranking, GeralDash ou outro módulo solicitem
+    // exatamente o mesmo membro ao mesmo tempo, apenas
+    // UMA requisição REST será executada.
+    globalThis.__SC_MEMBER_FETCH_PROMISES__ ??=
+      new Map();
+
+    const fetchKey =
+      `${guild.id}:${normalizedUserId}`;
+
+    const existingPromise =
+      globalThis
+        .__SC_MEMBER_FETCH_PROMISES__
+        .get(
+          fetchKey
+        );
+
+    if (existingPromise) {
+      return await existingPromise;
+    }
+
+    const fetchPromise =
+      guild.members
+        .fetch(
+          normalizedUserId
+        )
+        .catch(
+          () => null
+        )
+        .finally(
+          () => {
+            globalThis
+              .__SC_MEMBER_FETCH_PROMISES__
+              ?.delete(
+                fetchKey
+              );
+          }
+        );
+
+    globalThis
+      .__SC_MEMBER_FETCH_PROMISES__
+      .set(
+        fetchKey,
+        fetchPromise
+      );
+
+    return await fetchPromise;
   } catch {
     return null;
   }
@@ -1415,7 +1483,7 @@ function readBPStatesFromDisk(monthKeys = []) {
 
   try {
     for (const mk of monthKeys) {
-      const file = path.join(BP_STATE_DIR, `${mk}.json`);
+      const file = path.join(DATA_DIR, "sc_bp_monthly", `${mk}.json`);
       if (!fs.existsSync(file)) continue;
 
       const raw = JSON.parse(fs.readFileSync(file, "utf8"));
@@ -1430,6 +1498,146 @@ function readBPStatesFromDisk(monthKeys = []) {
   return out;
 }
 
+// =====================================================
+// ✅ CACHE COMPARTILHADO DE PÁGINAS DO DISCORD
+// =====================================================
+//
+// Evita que GeralDash, Ranking e outros módulos
+// consultem exatamente a mesma página do mesmo canal
+// repetidamente em um curto espaço de tempo.
+//
+// O cache é compartilhado globalmente entre os módulos.
+const SHARED_DISCORD_PAGE_CACHE_TTL_MS =
+  2 * 60 * 1000;
+
+async function fetchDiscordMessagesPageShared(
+  channel,
+  {
+    limit = 100,
+    before = undefined,
+  } = {}
+) {
+  if (
+    !channel?.messages?.fetch
+  ) {
+    return null;
+  }
+
+  globalThis.__SC_DISCORD_PAGE_CACHE__ ??=
+    new Map();
+
+  const cache =
+    globalThis.__SC_DISCORD_PAGE_CACHE__;
+
+  const key = [
+    String(
+      channel.id ||
+      "unknown"
+    ),
+    Number(
+      limit ||
+      100
+    ),
+    String(
+      before ||
+      "LATEST"
+    ),
+  ].join(":");
+
+  const now =
+    Date.now();
+
+  const existing =
+    cache.get(
+      key
+    );
+
+  if (
+    existing &&
+    existing.expiresAt >
+      now
+  ) {
+    if (
+      existing.promise
+    ) {
+      return await existing.promise;
+    }
+
+    if (
+      existing.value
+    ) {
+      return existing.value;
+    }
+  }
+
+  const promise =
+    channel.messages
+      .fetch({
+        limit,
+        before,
+      })
+      .catch(
+        () => null
+      );
+
+  cache.set(
+    key,
+    {
+      promise,
+      value:
+        null,
+
+      expiresAt:
+        now +
+        SHARED_DISCORD_PAGE_CACHE_TTL_MS,
+    }
+  );
+
+  const value =
+    await promise;
+
+  cache.set(
+    key,
+    {
+      promise:
+        null,
+
+      value,
+
+      expiresAt:
+        Date.now() +
+        SHARED_DISCORD_PAGE_CACHE_TTL_MS,
+    }
+  );
+
+  if (
+    cache.size >
+    500
+  ) {
+    const cleanupNow =
+      Date.now();
+
+    for (
+      const [
+        cacheKey,
+        cacheValue,
+      ] of cache.entries()
+    ) {
+      if (
+        !cacheValue ||
+        cacheValue.expiresAt <=
+          cleanupNow
+      ) {
+        cache.delete(
+          cacheKey
+        );
+      }
+    }
+  }
+
+  return value;
+}
+
 async function scanChannelEmbeds(client, { channelId, weekFloorKey, maxPages = 60, onMessage }) {
   const ch = await client.channels.fetch(channelId).catch(() => null);
   if (!ch?.isTextBased?.()) return;
@@ -1441,11 +1649,16 @@ async function scanChannelEmbeds(client, { channelId, weekFloorKey, maxPages = 6
   let stop = false;
 
   for (let p = 0; p < maxPages; p++) {
-    const batch = await ch.messages
-      .fetch({ limit: 100, before: lastId })
-      .catch(() => null);
+  const batch =
+    await fetchDiscordMessagesPageShared(
+      ch,
+      {
+        limit: 100,
+        before: lastId,
+      }
+    );
 
-    if (!batch?.size) break;
+  if (!batch?.size) break;
 
     for (const msg of batch.values()) {
       // ✅ condição de parada: quando chegar em msgs mais antigas que o floor
@@ -1473,35 +1686,108 @@ async function scanChannelEmbeds(client, { channelId, weekFloorKey, maxPages = 6
  *  3) se achar, salva o ID e retorna a msg
  *  4) se não achar, retorna null (caller decide criar)
  */
-async function resolveLogMessageForWeek(logChannel, st, wk) {
+async function resolveLogMessageForWeek(
+  logChannel,
+  st,
+  wk
+) {
   try {
-    st.logWeeklyMsgIds = st.logWeeklyMsgIds || {};
+    st.logWeeklyMsgIds =
+      st.logWeeklyMsgIds ||
+      {};
 
-    const savedId = st.logWeeklyMsgIds[wk] || null;
-    if (savedId) {
-      const byId = await logChannel.messages.fetch(savedId).catch(() => null);
-      if (byId) return byId;
+    const savedId =
+      st.logWeeklyMsgIds[wk] ||
+      null;
+
+    if (
+      savedId
+    ) {
+      const byId =
+        await logChannel
+          .messages
+          .fetch(
+            savedId
+          )
+          .catch(
+            () => null
+          );
+
+      if (
+        byId
+      ) {
+        return byId;
+      }
     }
 
-    // procura no histórico recente (até 300 msgs) uma msg que tenha o WEEK_KEY
+    // =====================================================
+    // PROCURA NO HISTÓRICO RECENTE
+    // =====================================================
+    //
+    // Até 3 páginas de 100 mensagens = 300 mensagens.
+    //
+    // Usa o cache compartilhado para evitar requisição
+    // duplicada quando outro módulo estiver lendo o mesmo
+    // canal ao mesmo tempo.
     let lastId;
-    for (let p = 0; p < 3; p++) {
-      const batch = await logChannel.messages
-        .fetch({ limit: 100, before: lastId })
-        .catch(() => null);
-      if (!batch?.size) break;
 
-      for (const m of batch.values()) {
-        const emb = m.embeds?.[0];
-        const footer = emb?.footer?.text || emb?.data?.footer?.text || "";
-        if (String(footer).includes(`WEEK_KEY: ${wk}`)) {
-          st.logWeeklyMsgIds[wk] = m.id; // salva pra editar sempre daqui pra frente
+    for (
+      let p = 0;
+      p < 3;
+      p++
+    ) {
+      const batch =
+        await fetchDiscordMessagesPageShared(
+          logChannel,
+          {
+            limit:
+              100,
+
+            before:
+              lastId,
+          }
+        );
+
+      if (
+        !batch?.size
+      ) {
+        break;
+      }
+
+      for (
+        const m of
+        batch.values()
+      ) {
+        const emb =
+          m.embeds?.[0];
+
+        const footer =
+          emb?.footer?.text ||
+          emb?.data?.footer?.text ||
+          "";
+
+        if (
+          String(
+            footer
+          ).includes(
+            `WEEK_KEY: ${wk}`
+          )
+        ) {
+          st.logWeeklyMsgIds[wk] =
+            m.id;
+
           return m;
         }
       }
 
-      lastId = batch.last()?.id;
-      if (!lastId) break;
+      lastId =
+        batch.last()?.id;
+
+      if (
+        !lastId
+      ) {
+        break;
+      }
     }
 
     return null;

@@ -228,9 +228,69 @@ globalThis.__SC_ALINV1_DASH_BOOTSTRAPPED__ = true;
         default: return "Sem cargo permitido";
       }
     }
-    async function fetchGuildMemberSafe(guild, userId) {
-      try { if (!guild || !userId) return null; return await guild.members.fetch(userId); } catch { return null; }
+async function fetchGuildMemberSafe(guild, userId) {
+  try {
+    if (!guild || !userId) return null;
+
+    const normalizedUserId =
+      String(userId);
+
+    const cachedMember =
+      guild.members.cache.get(
+        normalizedUserId
+      );
+
+    if (cachedMember) {
+      return cachedMember;
     }
+
+    globalThis.__SC_MEMBER_FETCH_PROMISES__ ??=
+      new Map();
+
+    const fetchKey =
+      `${guild.id}:${normalizedUserId}`;
+
+    const existingPromise =
+      globalThis
+        .__SC_MEMBER_FETCH_PROMISES__
+        .get(
+          fetchKey
+        );
+
+    if (existingPromise) {
+      return await existingPromise;
+    }
+
+    const fetchPromise =
+      guild.members
+        .fetch(
+          normalizedUserId
+        )
+        .catch(
+          () => null
+        )
+        .finally(
+          () => {
+            globalThis
+              .__SC_MEMBER_FETCH_PROMISES__
+              ?.delete(
+                fetchKey
+              );
+          }
+        );
+
+    globalThis
+      .__SC_MEMBER_FETCH_PROMISES__
+      .set(
+        fetchKey,
+        fetchPromise
+      );
+
+    return await fetchPromise;
+  } catch {
+    return null;
+  }
+}
     async function canManualRemovePoints({ guild, executorId, targetUserId }) {
       if (MANUAL_ADJUST_ALLOWED_USERS.has(String(executorId))) return { ok: true, bypass: true };
       const executorMember = await fetchGuildMemberSafe(guild, executorId);
@@ -448,6 +508,141 @@ function isRegistroValidado(emb) {
   return false;
 }
 
+// =====================================================
+// ✅ CACHE COMPARTILHADO DE PÁGINAS DO DISCORD
+// =====================================================
+
+const SHARED_DISCORD_PAGE_CACHE_TTL_MS =
+  2 * 60 * 1000;
+
+async function fetchDiscordMessagesPageShared(
+  channel,
+  {
+    limit = 100,
+    before = undefined,
+  } = {}
+) {
+  if (
+    !channel?.messages?.fetch
+  ) {
+    return null;
+  }
+
+  globalThis.__SC_DISCORD_PAGE_CACHE__ ??=
+    new Map();
+
+  const cache =
+    globalThis.__SC_DISCORD_PAGE_CACHE__;
+
+  const key = [
+    String(
+      channel.id ||
+      "unknown"
+    ),
+    Number(
+      limit ||
+      100
+    ),
+    String(
+      before ||
+      "LATEST"
+    ),
+  ].join(":");
+
+  const now =
+    Date.now();
+
+  const existing =
+    cache.get(
+      key
+    );
+
+  if (
+    existing &&
+    existing.expiresAt >
+      now
+  ) {
+    if (
+      existing.promise
+    ) {
+      return await existing.promise;
+    }
+
+    if (
+      existing.value
+    ) {
+      return existing.value;
+    }
+  }
+
+  const promise =
+    channel.messages
+      .fetch({
+        limit,
+        before,
+      })
+      .catch(
+        () => null
+      );
+
+  cache.set(
+    key,
+    {
+      promise,
+      value:
+        null,
+
+      expiresAt:
+        now +
+        SHARED_DISCORD_PAGE_CACHE_TTL_MS,
+    }
+  );
+
+  const value =
+    await promise;
+
+  cache.set(
+    key,
+    {
+      promise:
+        null,
+
+      value,
+
+      expiresAt:
+        Date.now() +
+        SHARED_DISCORD_PAGE_CACHE_TTL_MS,
+    }
+  );
+
+  if (
+    cache.size >
+    500
+  ) {
+    const cleanupNow =
+      Date.now();
+
+    for (
+      const [
+        cacheKey,
+        cacheValue,
+      ] of cache.entries()
+    ) {
+      if (
+        !cacheValue ||
+        cacheValue.expiresAt <=
+          cleanupNow
+      ) {
+        cache.delete(
+          cacheKey
+        );
+      }
+    }
+  }
+
+  return value;
+}
+
 // ----------------- SCAN -----------------
 async function collectAlinhamentos() {
   const now = Date.now();
@@ -463,9 +658,17 @@ async function collectAlinhamentos() {
       let lastId;
       const items = [];
 
-      for (let page = 0; page < SCAN_PAGES; page++) {
-        const batch = await ch.messages.fetch({ limit: 100, before: lastId }).catch(() => null);
-        if (!batch?.size) break;
+   for (let page = 0; page < SCAN_PAGES; page++) {
+  const batch =
+    await fetchDiscordMessagesPageShared(
+      ch,
+      {
+        limit: 100,
+        before: lastId,
+      }
+    );
+
+  if (!batch?.size) break;
 
         for (const m of batch.values()) {
           DEBUG.scannedMsgs++;
