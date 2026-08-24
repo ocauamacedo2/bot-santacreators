@@ -7369,17 +7369,105 @@ async function buildPersonIntelligenceContext(
   const cacheKey =
     `${guild.id}:${personId}`;
 
+  // =====================================================
+  // ✅ CACHE INTELIGENTE PARA CONSULTA DE PESSOAS
+  // =====================================================
+  //
+  // Consultas simples de identidade/perfil podem aproveitar
+  // o cache de alguns minutos normalmente.
+  //
+  // Porém perguntas sobre desempenho, evolução, atividade,
+  // ranking, feedback ou desenvolvimento precisam utilizar
+  // informações operacionais atuais.
+  //
+  // Isso evita situações como:
+  //
+  // - pessoa estava com 20 pontos;
+  // - contexto foi armazenado no cache;
+  // - depois subiu para 28 pontos;
+  // - usuário pergunta novamente dois minutos depois;
+  // - IA responder ainda utilizando os 20 pontos antigos.
+  //
+  // Nesses casos ignoramos somente o CONTEXTO pronto em cache.
+  //
+  // Os próprios sistemas internos continuam podendo utilizar
+  // seus caches específicos de coleta para evitar carga excessiva.
+  //
+  const currentPersonQuestionText =
+    normalizeSearchText(
+      message.content || ""
+    );
+
+  const requiresFreshPersonOperationalContext =
+    [
+      "ranking",
+      "ponto",
+      "pontos",
+      "pontuacao",
+      "pontuação",
+      "desempenho",
+      "desenvolvimento",
+      "evolucao",
+      "evolução",
+      "feedback",
+      "feedbacks",
+      "alinhamento",
+      "alinhamentos",
+      "atividade",
+      "atividades",
+      "participacao",
+      "participação",
+      "produtividade",
+      "processo",
+      "como anda",
+      "como esta indo",
+      "como está indo",
+      "como ele esta",
+      "como ele está",
+      "como ela esta",
+      "como ela está",
+      "melhorou",
+      "piorou",
+      "como ta indo",
+      "como tá indo",
+      "o que tem a falar",
+      "o que voce tem a falar",
+      "o que você tem a falar",
+      "o que acha",
+      "o que voce acha",
+      "o que você acha",
+      "me fale tudo",
+      "me fala tudo",
+      "tudo sobre",
+    ].some(
+      term =>
+        currentPersonQuestionText.includes(
+          normalizeSearchText(
+            term
+          )
+        )
+    );
+
   const cached =
     aiPersonIntelligenceCache.get(
       cacheKey
     );
 
   if (
+    !requiresFreshPersonOperationalContext &&
     cached &&
     Date.now() - cached.createdAt <
       AI_PERSON_CACHE_TTL_MS
   ) {
     return cached.context;
+  }
+
+  if (
+    requiresFreshPersonOperationalContext
+  ) {
+    console.log(
+      `[IA PERSON] Contexto operacional fresco solicitado para ${personId}. Cache completo de pessoa ignorado nesta consulta.`
+    );
   }
 
   const profileBlock =
@@ -7560,7 +7648,66 @@ async function buildPersonIntelligenceContext(
       message.content || ""
     );
 
+  // =====================================================
+  // ✅ ANÁLISE AMPLA DE DESENVOLVIMENTO DA PESSOA
+  // =====================================================
+  //
+  // Perguntas sobre alguém nem sempre usam literalmente
+  // a palavra "ranking".
+  //
+  // Exemplos:
+  //
+  // "como ele está indo?"
+  // "como anda o desenvolvimento dele?"
+  // "me fale tudo sobre ele"
+  // "o que você tem a falar sobre ele?"
+  // "como está o desempenho?"
+  //
+  // Nesses casos, Ranking + histórico + alinhamentos são
+  // informações essenciais para evitar conclusões erradas.
+  //
+  const wantsPersonPerformanceAnalysis =
+    [
+      "desempenho",
+      "desenvolvimento",
+      "evolucao",
+      "evolução",
+      "feedback",
+      "feedbacks",
+      "atividade",
+      "atividades",
+      "participacao",
+      "participação",
+      "produtividade",
+      "processo",
+      "como anda",
+      "como esta indo",
+      "como está indo",
+      "como ele esta",
+      "como ele está",
+      "como ela esta",
+      "como ela está",
+      "o que tem a falar",
+      "o que voce tem a falar",
+      "o que você tem a falar",
+      "o que acha",
+      "o que voce acha",
+      "o que você acha",
+      "me fale tudo",
+      "me fala tudo",
+      "tudo sobre",
+      "tudo que",
+    ].some(
+      (term) =>
+        personQuestionText.includes(
+          normalizeSearchText(
+            term
+          )
+        )
+    );
+
   const wantsPersonRanking =
+    wantsPersonPerformanceAnalysis ||
     personQuestionText.includes(
       "ranking"
     ) ||
@@ -7582,7 +7729,7 @@ async function buildPersonIntelligenceContext(
       rankingContext =
         await fetchRankingContext(
           message,
-          "recent"
+          personId
         );
     } catch (err) {
       console.error(
@@ -7595,13 +7742,14 @@ async function buildPersonIntelligenceContext(
     }
   } else {
     console.log(
-      "[IA PERSON] Ranking ignorado: a pergunta não solicitou dados de ranking."
+      "[IA PERSON] Ranking ignorado: a pergunta não solicitou dados de ranking nem análise de desempenho/desenvolvimento."
     );
   }
 
   let alinhamentosContext = "";
 
   const wantsPersonAlinhamentos =
+    wantsPersonPerformanceAnalysis ||
     personQuestionText.includes(
       "alinhamento"
     ) ||
@@ -7632,7 +7780,7 @@ async function buildPersonIntelligenceContext(
     }
   } else {
     console.log(
-      "[IA PERSON] Alinhamentos ignorados: a pergunta não solicitou esse histórico."
+      "[IA PERSON] Alinhamentos ignorados: a pergunta não solicitou esse histórico nem análise de desempenho/desenvolvimento."
     );
   }
 
@@ -8698,7 +8846,10 @@ async function fetchPoderesEventosContext(message, scope) {
     : "Nenhum registro de poderes em eventos encontrado para este período.";
 }
 
-async function fetchRankingContext(message) {
+async function fetchRankingContext(
+  message,
+  requestedPersonId = null
+) {
   console.log(
     "[IA INTERNAL QUERY] Consultando Ranking Semanal..."
   );
@@ -8777,15 +8928,23 @@ async function fetchRankingContext(message) {
       extractDiscordIdsFromText(
         message.content || ""
       );
-
     const requestedUserIds =
       [
         ...new Set([
           ...mentionedUserIds,
           ...explicitIds,
+
+          ...(
+            requestedPersonId
+              ? [
+                  String(
+                    requestedPersonId
+                  ),
+                ]
+              : []
+          ),
         ]),
       ];
-
     const requestedUsers = [];
 
     for (
@@ -8807,13 +8966,31 @@ async function fetchRankingContext(message) {
           rankingIndex
         ];
 
+      const sourceSummary =
+        String(
+          rankingUser
+            ?.sourceSummary ||
+          ""
+        ).trim();
+
       requestedUsers.push(
         [
           `Pessoa consultada: <@${userId}>`,
-          `Posição atual: ${rankingIndex + 1}º`,
+
+          `Posição atual: ${
+            rankingIndex + 1
+          }º de ${
+            effectiveRanking.length
+          } participante(s) pontuado(s)`,
+
           `Pontuação atual: ${Number(
             rankingUser?.points || 0
           )} pontos`,
+
+          "Detalhamento real das atividades desta semana:",
+
+          sourceSummary ||
+            "O Ranking possui a pontuação atual, mas não retornou detalhamento por fonte para esta pessoa.",
         ].join("\n")
       );
     }
@@ -11466,6 +11643,173 @@ CONFIANÇA E FATOS:
 - Se os dados forem insuficientes, deixe isso claro de maneira natural.
 - Não invente resposta apenas para parecer inteligente.
 - Ser inteligente também significa reconhecer quando a informação disponível não permite concluir algo.
+
+ANÁLISE HUMANA DE PESSOAS:
+
+Quando a pergunta for ampla sobre uma pessoa, por exemplo:
+
+- "como ele está?"
+- "como anda o desenvolvimento?"
+- "me fale tudo sobre ele"
+- "o que você tem a falar sobre ele?"
+- "como está o desempenho?"
+- "ele melhorou?"
+- "como está sendo o processo?"
+
+NÃO responda apenas com cargo, descrição genérica ou quantidade total de registros.
+
+Monte uma leitura individual realmente contextualizada.
+
+REGRAS OBRIGATÓRIAS:
+
+1. Cruze os dados atuais disponíveis da pessoa antes de tirar conclusão.
+
+Considere, quando estiverem disponíveis:
+
+- situação atual no Discord;
+- FormsCreator;
+- área;
+- ranking semanal;
+- posição atual;
+- pontos atuais;
+- fontes que geraram esses pontos;
+- registros recentes;
+- alinhamentos;
+- feedbacks humanos anteriores;
+- evolução registrada;
+- histórico recente relevante;
+- comparação temporal quando houver base real.
+
+2. Ranking atual e fontes estruturadas possuem prioridade sobre impressão baseada somente em mensagens de chat.
+
+Exemplo de regra:
+
+Se alguém aparece atualmente entre os primeiros colocados do ranking e possui diversas atividades registradas, NÃO diga que essa pessoa está "apagada", "sem atividade", "parada" ou equivalente apenas porque encontrou poucas mensagens recentes em algum chat.
+
+Conversa em chat é contexto.
+
+Registro operacional estruturado é evidência de atividade.
+
+3. Não transforme os números em uma tabela falada.
+
+Exemplo:
+
+Se os dados mostrarem:
+
+Manager: 22
+Doações: 2
+Bate-ponto: 2
+Poderes: 1
+Poderes Do Dia: 1
+
+NÃO responda simplesmente repetindo a lista.
+
+Interprete naturalmente, por exemplo:
+
+- explique que a maior parte da movimentação da pessoa está concentrada em Manager;
+- mencione que também houve participação em outras frentes;
+- se isso representar boa atividade comparada ao restante da equipe, explique;
+- se ela estiver em uma posição alta, contextualize isso;
+- se houver pouca variedade, pode mencionar concentração de atuação sem tratar isso automaticamente como algo ruim.
+
+NUNCA copie este exemplo literalmente.
+Escreva de acordo com os dados reais daquela pessoa.
+
+4. Quantidade não prova qualidade.
+
+Ter muitos registros em uma fonte demonstra movimentação naquela frente.
+
+Isso NÃO prova automaticamente:
+
+- que todos os registros foram excelentes;
+- que a pessoa domina totalmente a função;
+- que não comete erros;
+- que possui boa postura;
+- que possui liderança;
+- que executou tudo perfeitamente.
+
+Qualidade deve vir de feedback, alinhamento ou outra evidência real.
+
+5. Feedbacks e alinhamentos antigos devem ser tratados como continuidade de processo.
+
+Quando existir um comentário anterior dizendo que a pessoa precisava:
+
+- aprender determinada função;
+- corrigir um erro;
+- tirar dúvidas;
+- melhorar comunicação;
+- receber acompanhamento;
+- aumentar participação;
+- melhorar constância;
+
+procure nos acontecimentos posteriores evidências relacionadas.
+
+Se houver evidência concreta de melhora, diga isso naturalmente.
+
+Exemplo de intenção:
+
+"Naquele retorno anterior tinha aparecido bastante dúvida sobre X. Nos registros mais novos já dá para perceber uma mudança porque..."
+
+NÃO copie a frase literalmente.
+
+6. Se NÃO houver evidência posterior suficiente, não invente evolução.
+
+Nesse caso, diga naturalmente que aquele ponto continua sendo algo para acompanhar ou que ainda não existe base suficiente para afirmar se melhorou.
+
+Ausência de prova de melhora NÃO significa prova de que a pessoa não melhorou.
+
+7. Diferencie ausência de registro de ausência de trabalho.
+
+"Não encontrei registro de X" significa apenas isso.
+
+Não transforme automaticamente em:
+
+"ele não fez X".
+
+8. Procure contradições antes de responder.
+
+Se um bloco indicar pouca atividade e outro mostrar a pessoa em 1º lugar com muitos registros atuais, não repita a conclusão de pouca atividade.
+
+Resolva a contradição dando prioridade ao dado operacional estruturado mais atual.
+
+9. Dê destaque proporcional às atividades.
+
+Se 22 de 28 atividades estiverem em Manager, Manager é claramente uma característica importante daquela semana.
+
+Não trate uma atividade com 1 registro como se tivesse o mesmo peso da frente com 22.
+
+Ao mesmo tempo, pode mencionar as demais para mostrar variedade.
+
+10. O feedback deve responder "como essa pessoa está de verdade?", não apenas "quantos pontos ela tem?".
+
+Explique:
+
+- onde está aparecendo mais;
+- o que isso representa no processo;
+- o que melhorou;
+- o que continua precisando de atenção;
+- o que mudou desde feedbacks anteriores;
+- onde ainda falta evidência;
+- qual seria um próximo passo prático coerente.
+
+11. Quando houver bastante informação, não seja curta artificialmente.
+
+Uma análise completa sobre uma pessoa pode possuir vários parágrafos.
+
+Prefira uma resposta completa, específica e individual a um comentário genérico curto.
+
+12. Cada pessoa deve parecer possuir um feedback próprio.
+
+Evite estruturas repetidas como:
+
+"ele é um membro ativo..."
+"tem responsabilidade considerável..."
+"é participativo..."
+"tem se mostrado presente..."
+
+sem explicar fatos concretos que sustentem isso.
+
+A resposta deve ser impossível de simplesmente trocar o nome e reutilizar para outra pessoa sem parecer errada.
 
 NATURALIDADE:
 

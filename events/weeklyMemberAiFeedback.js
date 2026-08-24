@@ -163,6 +163,19 @@ let rankingRefreshPromise =
 let rankingRefreshAt =
   0;
 
+// =====================================================
+// ✅ ÚLTIMO RANKING REAL CARREGADO
+// =====================================================
+//
+// Além de controlar o cache, agora preservamos o resultado
+// obtido pelo próprio getWeeklyRanking().
+//
+// Assim cada feedback consegue descobrir posição, pontos
+// e fontes da pessoa sem executar outra leitura completa.
+//
+let rankingRefreshValue =
+  [];
+
 const RANKING_REFRESH_CACHE_MS =
   2 * 60 * 1000;
 
@@ -177,23 +190,33 @@ async function ensureWeeklyRankingFresh(
     now - rankingRefreshAt <
       RANKING_REFRESH_CACHE_MS
   ) {
-    return;
+    return rankingRefreshValue;
   }
 
   if (
     rankingRefreshPromise
   ) {
-    await rankingRefreshPromise;
-    return;
+    return await rankingRefreshPromise;
   }
 
   rankingRefreshPromise =
     Promise.resolve()
       .then(
-        () =>
-          getWeeklyRanking(
-            client
-          )
+        async () => {
+          const ranking =
+            await getWeeklyRanking(
+              client
+            );
+
+          rankingRefreshValue =
+            Array.isArray(
+              ranking
+            )
+              ? ranking
+              : [];
+
+          return rankingRefreshValue;
+        }
       )
       .catch(
         error => {
@@ -202,6 +225,8 @@ async function ensureWeeklyRankingFresh(
             error?.message ||
               error
           );
+
+          return rankingRefreshValue;
         }
       )
       .finally(
@@ -214,7 +239,7 @@ async function ensureWeeklyRankingFresh(
         }
       );
 
-  await rankingRefreshPromise;
+  return await rankingRefreshPromise;
 }
 
 // =====================================================
@@ -1396,9 +1421,10 @@ async function collectMemberFacts({
   // Isso evita montar o feedback em cima de um JSON
   // antigo antes de o Ranking fazer sua leitura atual.
   //
-  await ensureWeeklyRankingFresh(
-    client
-  );
+  const weeklyRanking =
+    await ensureWeeklyRankingFresh(
+      client
+    );
 
   const rankingStats =
     await getStatsForUser(
@@ -1407,6 +1433,57 @@ async function collectMemberFacts({
     ).catch(
       () => null
     );
+
+  // =====================================================
+  // ✅ POSIÇÃO REAL DA PESSOA NA SEMANA ATUAL
+  // =====================================================
+
+  const rankingIndex =
+    Array.isArray(
+      weeklyRanking
+    )
+      ? weeklyRanking.findIndex(
+          item =>
+            String(
+              item?.userId ||
+              ""
+            ) ===
+            userId
+        )
+      : -1;
+
+  const rankingEntry =
+    rankingIndex >=
+    0
+      ? weeklyRanking[
+          rankingIndex
+        ]
+      : null;
+
+  const rankingPosition =
+    rankingIndex >=
+    0
+      ? rankingIndex + 1
+      : null;
+
+  const rankingSize =
+    Array.isArray(
+      weeklyRanking
+    )
+      ? weeklyRanking.length
+      : 0;
+
+  const rankingPoints =
+    rankingEntry
+      ? Math.max(
+          0,
+          Number(
+            rankingEntry
+              ?.points ||
+            0
+          )
+        )
+      : 0;
 
   // =====================================================
   // 2. SÓ DEPOIS RELEIA O CONSOLIDADO
@@ -1481,7 +1558,8 @@ async function collectMemberFacts({
   const currentTotal =
     Math.max(
       consolidatedCurrentTotal,
-      rankingCurrentTotal
+      rankingCurrentTotal,
+      rankingPoints
     );
 
   // =====================================================
@@ -1609,6 +1687,14 @@ async function collectMemberFacts({
       formsHistory.totalScanned,
 
     rankingStats,
+
+    rankingEntry,
+
+    rankingPosition,
+
+    rankingSize,
+
+    rankingPoints,
 
     weekKey,
 
@@ -1846,7 +1932,29 @@ HISTÓRICO DO RANKING
 =====================================================
 
 ${rankingHistory}
+=====================================================
+POSIÇÃO ATUAL DA PESSOA NA SEMANA
+=====================================================
 
+${
+  Number.isFinite(
+    facts.rankingPosition
+  )
+    ? `Posição atual: ${facts.rankingPosition}º de ${facts.rankingSize} pessoa(s) pontuada(s)
+
+Pontuação atual confirmada pelo ranking:
+${facts.rankingPoints}`
+    : `A pessoa não possui posição atual confirmada no ranking retornado nesta consulta.`
+}
+
+IMPORTANTE:
+
+- A posição atual serve como contexto para entender o peso da atividade da pessoa dentro da equipe.
+- Não transforme o feedback em placar.
+- Se estiver nas primeiras posições, reconheça isso naturalmente quando for relevante.
+- Se estiver em 1º lugar, NÃO descreva a pessoa como pouco ativa, apagada ou parada se os próprios registros atuais confirmarem atividade.
+- Não considere posição alta como prova automática de qualidade.
+- Use as fontes individuais para explicar de onde veio essa movimentação.
 =====================================================
 SEMANA ANTERIOR
 =====================================================
@@ -2047,6 +2155,421 @@ Nunca faça crítica pessoal.
 Fale de participação, organização, registros, evolução e comportamento operacional documentado.
 
 =====================================================
+LEITURA HUMANA E LONGITUDINAL OBRIGATÓRIA
+=====================================================
+
+Você não está avaliando apenas uma fotografia desta semana.
+
+Quando houver histórico suficiente, acompanhe a TRAJETÓRIA da pessoa.
+
+O Forms pode possuir:
+
+- alinhamentos;
+- comentários de responsáveis;
+- elogios;
+- cobranças;
+- observações de acompanhamento;
+- orientações;
+- avaliações;
+- registros antigos;
+- registros novos.
+
+Essas informações não devem ser tratadas como blocos isolados.
+
+Você deve entender o que veio ANTES e o que aconteceu DEPOIS.
+
+Antes de escrever a resposta final, confronte internamente:
+
+1. feedbacks e alinhamentos anteriores;
+
+2. registros posteriores a esses feedbacks;
+
+3. atividades atuais;
+
+4. posição atual da pessoa;
+
+5. distribuição das atividades;
+
+6. registros e comentários desta semana;
+
+7. orientações que já haviam sido dadas;
+
+8. sinais posteriores relacionados a essas orientações.
+
+Pergunte internamente:
+
+- O que já haviam elogiado nessa pessoa?
+
+- Esse ponto positivo continua aparecendo?
+
+- O que haviam pedido para ela melhorar?
+
+- Existem acontecimentos posteriores relacionados àquilo?
+
+- Existe evidência concreta de melhora?
+
+- Existe evidência concreta de que o problema continua?
+
+- Existe evidência de que aquele ponto deixou de aparecer?
+
+- Ainda é cedo para saber?
+
+- Depois do último feedback, a pessoa aumentou a movimentação?
+
+- Depois de uma orientação específica, apareceu alguma mudança relacionada?
+
+- Alguma preocupação antiga deixou de aparecer?
+
+- Alguma preocupação antiga voltou a aparecer?
+
+- Algum elogio antigo continua sendo sustentado por acontecimentos novos?
+
+- O perfil atual está mais consistente?
+
+- A atuação ficou mais diversificada?
+
+- A atuação ficou mais concentrada em determinada frente?
+
+- A pessoa está colocando em prática aquilo que anteriormente estava aprendendo?
+
+NÃO exponha essas perguntas.
+
+Use-as somente para construir o comentário final.
+
+=====================================================
+ORDEM TEMPORAL DOS FEEDBACKS
+=====================================================
+
+Datas importam.
+
+Um comentário antigo NÃO pode ser utilizado como se tivesse sido escrito depois de uma atividade nova.
+
+Sempre entenda a ordem:
+
+FEEDBACK / ORIENTAÇÃO
+↓
+ACONTECIMENTOS POSTERIORES
+↓
+LEITURA ATUAL
+
+Exemplo conceitual:
+
+Se anteriormente alguém escreveu que a pessoa:
+
+"entendeu bem, mas ainda possuía dúvidas e precisava de acompanhamento"
+
+e DEPOIS disso aparecem muitos registros daquela mesma função,
+
+isso permite dizer que ela continuou praticando aquela frente.
+
+Mas quantidade sozinha NÃO permite afirmar automaticamente que todas as dúvidas foram resolvidas.
+
+Nesse caso, uma leitura correta seria reconhecer que houve prática e movimentação posterior, enquanto a qualidade/autonomia ainda precisa ser confirmada pelos retornos humanos.
+
+Nunca copie esse exemplo literalmente.
+
+Use a mesma lógica sobre os fatos reais da pessoa analisada.
+
+=====================================================
+FEEDBACK HUMANO TEM SIGNIFICADO
+=====================================================
+
+Não conte comentários humanos apenas como quantidade.
+
+Se existirem comentários de responsáveis no Forms, LEIA O CONTEÚDO deles.
+
+Um comentário dizendo:
+
+"teve dúvidas"
+
+não significa a mesma coisa que:
+
+"teve ótimo desenvolvimento"
+
+e nenhum dos dois significa apenas:
+
+"existem 2 comentários no Forms".
+
+Use o conteúdo e o momento de cada comentário para entender a evolução.
+
+Quando um responsável registrar:
+
+- dúvida;
+- dificuldade;
+- erro;
+- necessidade de acompanhamento;
+- boa aprendizagem;
+- dedicação;
+- interesse;
+- melhora;
+- autonomia;
+- evolução;
+- comunicação;
+- postura operacional;
+
+trate isso como informação qualitativa sobre o processo.
+
+Mas somente afirme aquilo que o próprio comentário sustenta.
+
+=====================================================
+O QUE ACONTECEU DEPOIS DO FEEDBACK
+=====================================================
+
+Quando houver um feedback anterior relevante, procure obrigatoriamente o que aconteceu DEPOIS dele.
+
+Se houver fatos posteriores relacionados:
+
+mencione a mudança naturalmente.
+
+Se houver sinais concretos de melhora:
+
+reconheça a melhora e explique o que sustenta essa leitura.
+
+Se existirem apenas mais registros, mas nenhuma avaliação de qualidade posterior:
+
+pode reconhecer maior prática, movimentação ou constância.
+
+NÃO transforme isso automaticamente em:
+
+"o problema foi resolvido".
+
+Se não houver evidência suficiente:
+
+explique naturalmente que aquele ponto continua sendo algo para acompanhar.
+
+Ausência de prova de melhora NÃO significa prova de que a pessoa não melhorou.
+
+=====================================================
+TRANSFORME NÚMEROS EM OBSERVAÇÕES HUMANAS
+=====================================================
+
+Os números são EVIDÊNCIA.
+
+Eles não são o texto final.
+
+Se uma pessoa tiver, por exemplo:
+
+Manager: 22
+Doações: 2
+Bate Ponto: 2
+Poderes: 1
+Poderes Do Dia: 1
+
+perceba internamente que:
+
+- existe uma concentração muito forte em Manager;
+- outras frentes também aparecem;
+- a pessoa não está dependendo exclusivamente de uma única ocorrência;
+- existe atividade operacional em outras áreas;
+- Manager é claramente sua principal frente da semana.
+
+Na resposta, fale disso naturalmente.
+
+Algo como a INTENÇÃO:
+
+"Você tem puxado bastante coisa em Manager nessa semana, e essa é claramente a frente onde mais apareceu. Ao mesmo tempo, também existem registros seus em outras atividades."
+
+Esse é SOMENTE um exemplo de raciocínio.
+
+NÃO copie essa frase automaticamente.
+
+Crie um comentário novo e exclusivo para cada pessoa.
+
+=====================================================
+PROPORÇÃO DAS ATIVIDADES
+=====================================================
+
+Não trate todas as fontes com o mesmo peso.
+
+Se uma pessoa possui:
+
+22 Manager
+
+e:
+
+1 Poderes
+
+Manager é uma característica muito mais importante da movimentação dela naquela semana.
+
+A resposta deve refletir essa diferença.
+
+Se uma frente representar a maior parte dos registros:
+
+destaque isso naturalmente.
+
+Se a pessoa estiver realmente distribuída entre várias frentes:
+
+pode reconhecer essa variedade.
+
+Não chame concentração de algo ruim automaticamente.
+
+A função e o contexto da pessoa importam.
+
+=====================================================
+QUANTIDADE NÃO É QUALIDADE
+=====================================================
+
+Uma pessoa possuir muitos registros demonstra MOVIMENTAÇÃO naquela frente.
+
+Isso NÃO prova automaticamente:
+
+- qualidade perfeita;
+- domínio completo;
+- ausência de erros;
+- liderança;
+- maturidade;
+- autonomia;
+- boa comunicação;
+- excelência;
+- resolução de todas as dúvidas anteriores.
+
+Para falar sobre qualidade, utilize:
+
+- feedback humano;
+- alinhamento;
+- comentário;
+- avaliação;
+- evidência operacional explícita.
+
+=====================================================
+NÃO CONFUNDA AUSÊNCIA DE REGISTRO
+=====================================================
+
+Nunca diga:
+
+"você não fez X"
+
+somente porque X não apareceu nas informações disponíveis.
+
+Prefira, quando necessário:
+
+"não apareceu registro de X até aqui"
+
+ou uma formulação humana equivalente.
+
+Ausência de registro não prova ausência absoluta de trabalho.
+
+=====================================================
+CONTRADIÇÕES ENTRE FONTES
+=====================================================
+
+Antes de concluir que a pessoa está:
+
+- apagada;
+- parada;
+- pouco ativa;
+- sem movimentação;
+- abaixo do esperado;
+
+verifique os dados estruturados atuais.
+
+Se uma leitura de mensagens do chat parecer fraca, mas o ranking atual mostrar que a pessoa possui muitos registros e está entre as primeiras posições:
+
+NÃO descreva essa pessoa como inativa.
+
+Mensagens do chat são contexto.
+
+Registros operacionais atuais são evidência mais forte de atividade.
+
+Se houver contradição:
+
+priorize o dado operacional estruturado mais atual para representar a movimentação atual.
+
+=====================================================
+RANKING NÃO É SOMENTE PLACAR
+=====================================================
+
+A posição da pessoa serve para contextualizar sua movimentação em relação ao restante da equipe.
+
+Se alguém estiver em 1º lugar:
+
+isso é um destaque objetivo e pode ser reconhecido.
+
+Mas não transforme todo o feedback em:
+
+"você está em primeiro, parabéns".
+
+Explique o que está fazendo aquela pessoa chegar naquela posição.
+
+Use as fontes reais.
+
+Exemplo:
+
+se a maior parte vier de Manager, diga que Manager está puxando grande parte daquela movimentação.
+
+=====================================================
+FEEDBACKS RECORRENTES
+=====================================================
+
+Se o mesmo ponto aparecer em diferentes comentários humanos ao longo do tempo:
+
+isso pode indicar recorrência.
+
+Exemplos:
+
+- dúvidas aparecendo repetidamente;
+- necessidade de acompanhamento aparecendo repetidamente;
+- elogios sobre dedicação aparecendo repetidamente;
+- boa aprendizagem sendo registrada por mais de uma pessoa;
+- dificuldade específica aparecendo novamente.
+
+Só trate como recorrente quando realmente existir repetição documentada.
+
+Não invente recorrência com um único comentário.
+
+=====================================================
+EXCLUSIVIDADE
+=====================================================
+
+O comentário final deve ser tão específico que NÃO seja possível trocar apenas o nome da pessoa e reutilizar o mesmo texto para outro membro.
+
+Se o comentário poderia servir igualmente para cinco pessoas diferentes:
+
+ele está genérico demais.
+
+Use fatos individuais concretos.
+
+Considere principalmente:
+
+- principal frente da semana;
+- proporção entre as atividades;
+- posição;
+- histórico de feedback;
+- mudanças depois das orientações;
+- pontos que continuam aparecendo;
+- coisas que aparentemente evoluíram;
+- pontos que ainda precisam ser acompanhados.
+
+=====================================================
+PRÓXIMO PASSO PRÁTICO
+=====================================================
+
+A orientação final precisa nascer da situação daquela pessoa.
+
+Se ela já possui alto volume:
+
+não mande simplesmente "registrar mais".
+
+Pode ser mais útil orientar sobre:
+
+- qualidade;
+- autonomia;
+- consistência;
+- correção de dúvidas anteriores;
+- distribuição da atuação;
+- acompanhamento de um ponto específico.
+
+Se a pessoa possui poucos registros:
+
+pode fazer sentido falar de participação ou constância.
+
+Se está começando:
+
+pode fazer sentido priorizar aprendizagem e acompanhamento.
+
+Não use uma orientação genérica só porque precisa terminar o texto.
+
+=====================================================
 HUMANIZAÇÃO
 =====================================================
 
@@ -2117,21 +2640,35 @@ mencione com cuidado.
 FORMATO
 =====================================================
 
-Escreva de 2 a 4 parágrafos curtos.
+A profundidade do texto deve acompanhar a quantidade de informação real disponível.
 
-Quando existirem dados suficientes, aproximadamente 700 a 1400 caracteres.
+Quando houver poucos dados:
+
+- pode ser mais curto;
+- não tente preencher espaço inventando observações.
+
+Quando houver bastante histórico, atividades, feedbacks e comparação:
+
+- escreva de 3 a 7 parágrafos;
+- pode escrever mais se realmente houver informação útil;
+- prefira aproximadamente 1200 a 3200 caracteres quando houver material suficiente;
+- pode ultrapassar esse tamanho quando uma análise maior for necessária para não perder informação importante.
+
+NÃO corte uma observação útil apenas para manter o texto curto.
+
+NÃO estique uma análise sem informação real apenas para ficar grande.
 
 Use emojis naturalmente, sem transformar o texto em carnaval.
 
 Não faça tabela.
 
-Não faça lista de números.
+Não despeje uma lista fria de números.
 
 Não coloque nota.
 
-Não coloque título.
+Não transforme o texto em relatório técnico.
 
-Não coloque:
+Não use como título ou cabeçalho:
 
 "Feedback semanal"
 
@@ -2143,17 +2680,23 @@ Não coloque:
 
 "NPS"
 
-"Ranking"
-
 "Banco de dados"
 
 "Provider"
 
 "JSON"
 
-A pessoa não precisa saber de onde as informações vieram.
+A palavra "ranking" PODE ser usada naturalmente dentro do texto quando a posição da pessoa for realmente relevante.
 
-Ela precisa receber um retorno sobre o próprio processo.
+Exemplo de intenção:
+
+"Hoje você aparece no topo do ranking da semana."
+
+Mas não transforme o comentário em uma leitura de placar.
+
+A pessoa não precisa saber como os sistemas internos funcionam.
+
+Ela precisa receber um retorno humano sobre o próprio processo.
 
 =====================================================
 FINAL
@@ -2451,7 +2994,39 @@ function buildLocalFactRichFeedback({
           0
       )
     );
+  const rankingContext =
+    Number.isFinite(
+      facts?.rankingPosition
+    )
+      ? (
+          facts.rankingPosition ===
+          1
+            ? `Hoje você aparece em 1º lugar entre ${facts.rankingSize} pessoa(s) pontuada(s), com ${facts.rankingPoints} pontos. Isso é um destaque concreto da sua movimentação nesta semana.`
+            : `Hoje você aparece em ${facts.rankingPosition}º lugar entre ${facts.rankingSize} pessoa(s) pontuada(s), com ${facts.rankingPoints} pontos.`
+        )
+      : "";
 
+  const currentSourceEntries =
+    getSortedCurrentSourceEntries(
+      facts
+    );
+
+  const dominantSource =
+    currentSourceEntries[0] ||
+    null;
+
+  const dominantSourceContext =
+    dominantSource &&
+    currentTotal >
+      0
+      ? (
+          dominantSource.amount /
+          currentTotal >=
+          0.5
+            ? `A frente que mais concentra sua movimentação até aqui é ${dominantSource.label}, com ${dominantSource.amount} registro(s). Então esse é claramente o ponto onde você mais vem aparecendo na semana.`
+            : `Sua participação está relativamente distribuída entre diferentes frentes, sem uma única atividade concentrando sozinha a maior parte do que foi registrado.`
+        )
+      : "";
   const paragraphs =
     [];
 
@@ -2473,7 +3048,21 @@ function buildLocalFactRichFeedback({
       `${firstName}, por enquanto ainda existem poucos registros concretos desta semana para fazer uma leitura completa do seu andamento. Como ainda estamos no decorrer da semana, isso pode mudar bastante nos próximos dias.`
     );
   }
+  if (
+    rankingContext
+  ) {
+    paragraphs.push(
+      rankingContext
+    );
+  }
 
+  if (
+    dominantSourceContext
+  ) {
+    paragraphs.push(
+      dominantSourceContext
+    );
+  }
   if (
     formsContext
   ) {
@@ -2509,14 +3098,14 @@ function buildLocalFactRichFeedback({
     )
     .slice(
       0,
-      4
+      7
     )
     .join(
       "\n\n"
     )
     .slice(
       0,
-      3400
+      10000
     );
 }
 
@@ -2655,7 +3244,7 @@ function cleanGeneratedText(
     .trim()
     .slice(
       0,
-      3600
+      12000
     );
 }
 
@@ -2677,10 +3266,10 @@ async function generateFeedback({
         prompt,
 
         maxOutputTokens:
-          1200,
+          2200,
 
         temperature:
-          0.72,
+          0.78,
 
         label:
           `Weekly Member Feedback ${facts.userId}`,
@@ -2737,6 +3326,350 @@ async function generateFeedback({
 
     return fallback;
   }
+}
+
+// =====================================================
+// ✅ DIVISÃO SEGURA DE FEEDBACKS GRANDES
+// =====================================================
+//
+// O Discord permite até 4096 caracteres na descrição
+// de um embed.
+//
+// Utilizamos 3400 para deixar folga para textos adicionais
+// e preservar parágrafos/frases inteiras sempre que possível.
+//
+// Quando houver mais conteúdo, serão enviadas mensagens
+// de continuação logo abaixo do primeiro feedback.
+//
+function splitWeeklyFeedbackText(
+  text,
+  maxLength = 3400
+) {
+  const finalText =
+    String(
+      text || ""
+    ).trim();
+
+  if (
+    !finalText
+  ) {
+    return [];
+  }
+
+  if (
+    finalText.length <=
+    maxLength
+  ) {
+    return [
+      finalText,
+    ];
+  }
+
+  const parts =
+    [];
+
+  let remaining =
+    finalText;
+
+  while (
+    remaining.length >
+    maxLength
+  ) {
+    let splitIndex =
+      remaining.lastIndexOf(
+        "\n\n",
+        maxLength
+      );
+
+    if (
+      splitIndex <
+      Math.floor(
+        maxLength *
+        0.5
+      )
+    ) {
+      splitIndex =
+        remaining.lastIndexOf(
+          "\n",
+          maxLength
+        );
+    }
+
+    if (
+      splitIndex <
+      Math.floor(
+        maxLength *
+        0.5
+      )
+    ) {
+      splitIndex =
+        remaining.lastIndexOf(
+          ". ",
+          maxLength
+        );
+
+      if (
+        splitIndex !==
+        -1
+      ) {
+        splitIndex +=
+          1;
+      }
+    }
+
+    if (
+      splitIndex <
+      Math.floor(
+        maxLength *
+        0.5
+      )
+    ) {
+      splitIndex =
+        remaining.lastIndexOf(
+          " ",
+          maxLength
+        );
+    }
+
+    if (
+      splitIndex <=
+      0
+    ) {
+      splitIndex =
+        maxLength;
+    }
+
+    const part =
+      remaining
+        .slice(
+          0,
+          splitIndex
+        )
+        .trim();
+
+    if (
+      part
+    ) {
+      parts.push(
+        part
+      );
+    }
+
+    remaining =
+      remaining
+        .slice(
+          splitIndex
+        )
+        .trim();
+  }
+
+  if (
+    remaining
+  ) {
+    parts.push(
+      remaining
+    );
+  }
+
+  return parts;
+}
+
+// =====================================================
+// ✅ EMBED DE CONTINUAÇÃO
+// =====================================================
+
+function buildFeedbackContinuationEmbed({
+  text,
+  mode,
+  partIndex,
+  partCount,
+}) {
+  const isManual =
+    mode ===
+    "manual";
+
+  return new EmbedBuilder()
+    .setColor(
+      isManual
+        ? 0x5865f2
+        : 0x57f287
+    )
+    .setTitle(
+      `↳ Continuação ${partIndex + 1}/${partCount}`
+    )
+    .setDescription(
+      String(
+        text || ""
+      )
+        .trim()
+        .slice(
+          0,
+          4096
+        )
+    );
+}
+
+// =====================================================
+// ✅ LIMPA CONTINUAÇÕES ANTIGAS
+// =====================================================
+//
+// Quando um feedback manual é atualizado, a primeira
+// mensagem é editada.
+//
+// Caso a versão anterior tivesse continuações, elas também
+// precisam ser apagadas para não deixar pedaços antigos.
+//
+async function deleteFeedbackContinuationMessages(
+  thread,
+  messageIds = []
+) {
+  if (
+    !thread ||
+    !Array.isArray(
+      messageIds
+    ) ||
+    !messageIds.length
+  ) {
+    return;
+  }
+
+  for (
+    const messageId of
+    messageIds
+  ) {
+    const message =
+      await thread
+        .messages
+        .fetch(
+          messageId
+        )
+        .catch(
+          () => null
+        );
+
+    if (
+      !message
+    ) {
+      continue;
+    }
+
+    await message
+      .delete()
+      .catch(
+        () => null
+      );
+  }
+}
+
+// =====================================================
+// ✅ ENVIA / EDITA TODAS AS PARTES DO FEEDBACK
+// =====================================================
+
+async function sendWeeklyFeedbackParts({
+  facts,
+  text,
+  mode,
+  actorId = null,
+  existingFirstMessage = null,
+}) {
+  const parts =
+    splitWeeklyFeedbackText(
+      text
+    );
+
+  if (
+    !parts.length
+  ) {
+    throw new Error(
+      "O feedback ficou vazio."
+    );
+  }
+
+  const firstPayload = {
+    content:
+      `<@${facts.userId}>`,
+
+    embeds: [
+      buildFeedbackEmbed({
+        facts,
+
+        text:
+          parts[0],
+
+        mode,
+
+        actorId,
+      }),
+    ],
+
+    allowedMentions: {
+      users: [
+        facts.userId,
+      ],
+    },
+  };
+
+  let firstMessage =
+    existingFirstMessage;
+
+  if (
+    firstMessage
+  ) {
+    await firstMessage.edit(
+      firstPayload
+    );
+  } else {
+    firstMessage =
+      await facts
+        .formsThread
+        .send(
+          firstPayload
+        );
+  }
+
+  const continuationMessageIds =
+    [];
+
+  for (
+    let index = 1;
+    index < parts.length;
+    index++
+  ) {
+    const continuationMessage =
+      await facts
+        .formsThread
+        .send({
+          embeds: [
+            buildFeedbackContinuationEmbed({
+              text:
+                parts[index],
+
+              mode,
+
+              partIndex:
+                index,
+
+              partCount:
+                parts.length,
+            }),
+          ],
+
+          allowedMentions: {
+            parse: [],
+          },
+        });
+
+    continuationMessageIds.push(
+      continuationMessage.id
+    );
+  }
+
+  return {
+    message:
+      firstMessage,
+
+    continuationMessageIds,
+  };
 }
 
 // =====================================================
@@ -2854,28 +3787,7 @@ async function upsertManualFeedback({
       facts.userId
     ] || null;
 
-  const payload = {
-    content:
-      `<@${facts.userId}>`,
-
-    embeds: [
-      buildFeedbackEmbed({
-        facts,
-        text,
-        mode:
-          "manual",
-        actorId,
-      }),
-    ],
-
-    allowedMentions: {
-      users: [
-        facts.userId,
-      ],
-    },
-  };
-
-  let message =
+  let existingFirstMessage =
     null;
 
   let replaced =
@@ -2894,7 +3806,7 @@ async function upsertManualFeedback({
           .id
       )
   ) {
-    message =
+    existingFirstMessage =
       await facts
         .formsThread
         .messages
@@ -2906,27 +3818,39 @@ async function upsertManualFeedback({
         );
 
     if (
-      message
+      existingFirstMessage
     ) {
-      await message.edit(
-        payload
-      );
-
       replaced =
         true;
+
+      await deleteFeedbackContinuationMessages(
+        facts.formsThread,
+        previous
+          ?.continuationMessageIds ||
+          []
+      );
     }
   }
 
-  if (
-    !message
-  ) {
-    message =
-      await facts
-        .formsThread
-        .send(
-          payload
-        );
-  }
+  const result =
+    await sendWeeklyFeedbackParts({
+      facts,
+
+      text,
+
+      mode:
+        "manual",
+
+      actorId,
+
+      existingFirstMessage,
+    });
+
+  const message =
+    result.message;
+
+  const continuationMessageIds =
+    result.continuationMessageIds;
 
   state.manual[
     facts.weekKey
@@ -2935,6 +3859,8 @@ async function upsertManualFeedback({
   ] = {
     messageId:
       message.id,
+
+    continuationMessageIds,
 
     threadId:
       facts
@@ -2959,6 +3885,8 @@ async function upsertManualFeedback({
   return {
     message,
     replaced,
+
+    continuationMessageIds,
   };
 }
 
@@ -3000,29 +3928,21 @@ async function sendAutomaticFeedback({
     };
   }
 
+  const result =
+    await sendWeeklyFeedbackParts({
+      facts,
+
+      text,
+
+      mode:
+        "automatic",
+    });
+
   const message =
-    await facts
-      .formsThread
-      .send({
-        content:
-          `<@${facts.userId}>`,
+    result.message;
 
-        embeds: [
-          buildFeedbackEmbed({
-            facts,
-            text,
-
-            mode:
-              "automatic",
-          }),
-        ],
-
-        allowedMentions: {
-          users: [
-            facts.userId,
-          ],
-        },
-      });
+  const continuationMessageIds =
+    result.continuationMessageIds;
 
   state.automatic[
     facts.weekKey
@@ -3031,6 +3951,8 @@ async function sendAutomaticFeedback({
   ] = {
     messageId:
       message.id,
+
+    continuationMessageIds,
 
     threadId:
       facts
@@ -3052,6 +3974,8 @@ async function sendAutomaticFeedback({
       false,
 
     message,
+
+    continuationMessageIds,
   };
 }
 

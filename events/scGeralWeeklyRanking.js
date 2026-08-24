@@ -3914,13 +3914,61 @@ export async function getWeeklyRanking(client) {
     const wkNow = weekKeyFromDateSP(nowSP());
     const agg = aggregateWeekDetailed(items, wkNow);
 
-return [...(agg.list || [])].sort((a, b) => {
-  const pa = Number(a?.points || 0);
-  const pb = Number(b?.points || 0);
-  return pb - pa;
-});
+    return [...(agg.list || [])]
+      .map((user) => {
+        const userSources =
+          agg.bySourceByUser?.[String(user.userId)] || {};
+
+        return {
+          ...user,
+
+          // =====================================================
+          // ✅ DETALHAMENTO REAL DAS FONTES DA SEMANA
+          // =====================================================
+          //
+          // Permite que outros sistemas, inclusive a IA,
+          // saibam não apenas quantos pontos a pessoa possui,
+          // mas também DE ONDE eles vieram.
+          //
+          // Exemplo:
+          //
+          // {
+          //   manager: 22,
+          //   doacoes: 2,
+          //   bateponto: 2,
+          //   poderes: 1,
+          //   eventopoder: 1
+          // }
+          //
+          // Não altera a pontuação e não interfere no painel.
+          // Apenas acrescenta informação ao retorno.
+          //
+          sources: {
+            ...userSources,
+          },
+
+          sourceSummary:
+            summarizeSources(
+              userSources,
+              Number(user.adjustment || 0)
+            ),
+        };
+      })
+      .sort((a, b) => {
+        const pa =
+          Number(a?.points || 0);
+
+        const pb =
+          Number(b?.points || 0);
+
+        return pb - pa;
+      });
   } catch (e) {
-    console.error("[SC_GERAL_WEEKLY_RANK] getWeeklyRanking error:", e);
+    console.error(
+      "[SC_GERAL_WEEKLY_RANK] getWeeklyRanking error:",
+      e
+    );
+
     return [];
   }
 }
