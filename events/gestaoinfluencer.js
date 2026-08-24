@@ -40,12 +40,31 @@
     } catch (e) {
         console.warn("[SC_GI] ⚠️ Aviso: o módulo formscreator.js não pôde ser carregado. A integração com ele estará desativada.", e.message);
     }
+
 const {
   findFormsCreatorThreadIdByUserId,
   findFormsCreatorThreadLinkByUserId,
   setFormsCreatorStatus,
   setFormsCreatorArea
 } = formsCreator;
+
+    // ✅ NOVO: importa a hierarquia institucional oficial.
+    // A automação de área NÃO usa posição técnica dos cargos do Discord.
+    let hierarchyDivisoes = {};
+    try {
+      hierarchyDivisoes = await import('./hierarquiaDivisoes.js');
+    } catch (e) {
+      console.warn(
+        "[SC_GI] ⚠️ hierarquiaDivisoes.js não pôde ser carregado. " +
+        "A automação inteligente de Área ficará bloqueada por segurança.",
+        e.message
+      );
+    }
+
+    const {
+      getOfficialSantaCreatorsHierarchyRank,
+      getOfficialSantaCreatorsHierarchyRankForRoleId
+    } = hierarchyDivisoes;
 
     if (client.__SC_GI_INSTALLED) {
       console.log('[SC_GI] Já instalado, pulando.');
@@ -120,6 +139,14 @@ CHANNEL_RESTORE_LOG:      '1486006878914875412',
       // snapshots pra restauração após punição
       // NOVO: lastCountdownWarningAt para evitar spam de DM
       roleSnapshots: new Map(), // userId -> { roleIds: string[], restoreAtMs:number, createdAtMs:number, recordMessageId:string|null }
+
+      // 👑 OVERRIDE ABSOLUTO
+      // Mudanças manuais feitas por:
+      // 660311795327828008
+      // 1262262852949905408
+      //
+      // targetId -> Map(roleId -> "present" | "absent")
+      masterRoleOverridesByUser: new Map(),
 
       // timers em memória
       restoreTimers: new Map() // userId -> timeoutId
@@ -209,6 +236,46 @@ const prev = byUser.get(r.targetId);
           });
         }
 
+        // 👑 OVERRIDES MANUAIS PERSISTENTES
+        SC_GI_STATE.masterRoleOverridesByUser.clear();
+
+        for (const item of (data.masterRoleOverrides || [])) {
+          if (!item?.targetId) continue;
+
+          const targetId =
+            String(item.targetId);
+
+          const roleMap =
+            new Map();
+
+          for (const role of (item.roles || [])) {
+            const roleId =
+              String(role?.roleId || "").trim();
+
+            const state =
+              String(role?.state || "").trim();
+
+            if (
+              !roleId ||
+              !["present", "absent"].includes(state)
+            ) {
+              continue;
+            }
+
+            roleMap.set(
+              roleId,
+              state
+            );
+          }
+
+          if (roleMap.size > 0) {
+            SC_GI_STATE.masterRoleOverridesByUser.set(
+              targetId,
+              roleMap
+            );
+          }
+        }
+
         console.log(`[SC_GI] Carregado ${SC_GI_STATE.registros.size} registro(s).`);
 
         // Se leu do arquivo antigo, salva no novo imediatamente
@@ -230,16 +297,38 @@ const prev = byUser.get(r.targetId);
           boardMessageIds:  SC_GI_STATE.boardMessageIds,
           boardContentHash: SC_GI_STATE.boardContentHash,
           registros:        Array.from(SC_GI_STATE.registros.values()),
-          giWarnings:       Array.from(SC_GI_STATE.giWarningsByUser.entries()).map(([userId, v]) => ({
-            userId, count: v.count || 0, lastAtMs: v.lastAtMs ?? null
-          })),
-          roleSnapshots:    Array.from(SC_GI_STATE.roleSnapshots.entries()).map(([userId, s]) => ({
+
+          giWarnings: Array.from(
+            SC_GI_STATE.giWarningsByUser.entries()
+          ).map(([userId, v]) => ({
             userId,
-            roleIds: Array.isArray(s.roleIds) ? s.roleIds : [],
+            count: v.count || 0,
+            lastAtMs: v.lastAtMs ?? null
+          })),
+
+          roleSnapshots: Array.from(
+            SC_GI_STATE.roleSnapshots.entries()
+          ).map(([userId, s]) => ({
+            userId,
+            roleIds: Array.isArray(s.roleIds)
+              ? s.roleIds
+              : [],
             restoreAtMs: s.restoreAtMs ?? 0,
             createdAtMs: s.createdAtMs ?? 0,
-            // NOVO: recordMessageId para logs de restauração
             recordMessageId: s.recordMessageId ?? null
+          })),
+
+          // 👑 Alterações manuais feitas por Você/Owner.
+          masterRoleOverrides: Array.from(
+            SC_GI_STATE.masterRoleOverridesByUser.entries()
+          ).map(([targetId, roleMap]) => ({
+            targetId,
+            roles: Array.from(
+              roleMap.entries()
+            ).map(([roleId, state]) => ({
+              roleId,
+              state
+            }))
           }))
         };
         await fsp.writeFile(SC_GI_CFG.DATA_FILE, JSON.stringify(data, null, 2), 'utf8');
@@ -419,6 +508,1118 @@ function activeTimeText(rec, n = nowMs()) {
       if (!member) return false;
       if (SC_GI_CFG.AUTH_USER_IDS.includes(member.id)) return true;
       return SC_GI_CFG.AUTH_ROLE_IDS.some(id => member.roles?.cache?.has?.(id));
+    }
+
+    // =====================================================
+    // 👑 MASTER OVERRIDE
+    // =====================================================
+
+    function isMasterOverrideUser(userId) {
+      return SC_GI_CFG.AUTH_USER_IDS.includes(
+        String(userId || "")
+      );
+    }
+
+    function getMasterRoleOverrideMap(targetId, create = false) {
+      const key =
+        String(targetId || "").trim();
+
+      if (!key) return null;
+
+      let roleMap =
+        SC_GI_STATE.masterRoleOverridesByUser.get(
+          key
+        );
+
+      if (
+        !roleMap &&
+        create
+      ) {
+        roleMap =
+          new Map();
+
+        SC_GI_STATE.masterRoleOverridesByUser.set(
+          key,
+          roleMap
+        );
+      }
+
+      return roleMap || null;
+    }
+
+    function setMasterRoleOverride(
+      targetId,
+      roleId,
+      state
+    ) {
+      const normalizedTargetId =
+        String(targetId || "").trim();
+
+      const normalizedRoleId =
+        String(roleId || "").trim();
+
+      if (
+        !normalizedTargetId ||
+        !normalizedRoleId ||
+        !["present", "absent"].includes(state)
+      ) {
+        return false;
+      }
+
+      const roleMap =
+        getMasterRoleOverrideMap(
+          normalizedTargetId,
+          true
+        );
+
+      roleMap.set(
+        normalizedRoleId,
+        state
+      );
+
+      SC_GI_scheduleSave();
+
+      return true;
+    }
+
+    function getMasterRoleOverride(
+      targetId,
+      roleId
+    ) {
+      const roleMap =
+        getMasterRoleOverrideMap(
+          targetId,
+          false
+        );
+
+      if (!roleMap) {
+        return null;
+      }
+
+      return (
+        roleMap.get(
+          String(roleId || "")
+        ) ||
+        null
+      );
+    }
+
+    async function findRecentManualRoleUpdate(
+      guild,
+      targetId
+    ) {
+      try {
+        const logs =
+          await guild.fetchAuditLogs({
+            type:
+              AuditLogEvent.MemberRoleUpdate,
+            limit: 8
+          });
+
+        const now =
+          Date.now();
+
+        for (
+          const entry
+          of logs.entries.values()
+        ) {
+          if (
+            String(entry.target?.id || "") !==
+            String(targetId)
+          ) {
+            continue;
+          }
+
+          if (
+            now -
+              Number(
+                entry.createdTimestamp || 0
+              ) >
+            10000
+          ) {
+            continue;
+          }
+
+          const executorId =
+            String(
+              entry.executor?.id || ""
+            );
+
+          if (
+            !isMasterOverrideUser(
+              executorId
+            )
+          ) {
+            continue;
+          }
+
+          return {
+            executorId,
+            entry
+          };
+        }
+      } catch (error) {
+        console.warn(
+          "[SC_GI] Não foi possível consultar Audit Log para Master Override:",
+          error?.message || error
+        );
+      }
+
+      return null;
+    }
+
+    function extractAuditRoleIds(
+      entry,
+      changeKey
+    ) {
+      const ids =
+        [];
+
+      for (
+        const change
+        of (entry?.changes || [])
+      ) {
+        if (
+          change?.key !== changeKey
+        ) {
+          continue;
+        }
+
+        const value =
+          Array.isArray(change.new)
+            ? change.new
+            : [];
+
+        for (
+          const role
+          of value
+        ) {
+          if (role?.id) {
+            ids.push(
+              String(role.id)
+            );
+          }
+        }
+      }
+
+      return ids;
+    }
+
+    // =====================================================
+    // AUTOMAÇÃO INTELIGENTE DE ÁREA / FUNÇÃO
+    // =====================================================
+
+    const AREA_ROLE_IDS = Object.freeze({
+      MKT_CREATORS: "1282119104576098314",
+      COORD_CREATORS: "1388976314253312100",
+      COORDENACAO: "1352385500614234134",
+      GESTOR_CREATORS: "1388975939161161728",
+      MANAGER_CREATORS: "1388976155830255697",
+      SOCIAL_MEDIAS: "1388976094920704141",
+      EQUIPE_MANAGER: "1392678638176043029",
+      EQUIPE_SOCIAL_MEDIAS: "1387253972661964840",
+      CREATOR: "1352939011253076000",
+      EQUIPE_CREATOR: "1352429001188180039",
+      SENIOR_CREATORS: "1352493359897378941",
+      RESPONSAVEIS: "1414651836861907006",
+      RESP_LIDER: "1352407252216184833",
+      RESP_INFLU: "1262262852949905409",
+      RESP_CREATORS: "1352408327983861844",
+      SANTA_CREATORS: "1352275728476930099",
+      GESTAOINFLUENCER: "1371733765243670538"
+    });
+
+    const AREA_PROFILES = Object.freeze({
+      COORD_CREATORS: Object.freeze({
+        canonicalName: "Coord. Creators",
+        primaryRoleId: AREA_ROLE_IDS.COORD_CREATORS,
+        aliases: Object.freeze([
+          "coord creators",
+          "coord creator",
+          "coord",
+          "coord.",
+          "coordenador creators",
+          "coordenacao creators"
+        ]),
+        requiredRoleIds: Object.freeze([
+          AREA_ROLE_IDS.COORD_CREATORS,
+          AREA_ROLE_IDS.MKT_CREATORS,
+          AREA_ROLE_IDS.COORDENACAO,
+          AREA_ROLE_IDS.SENIOR_CREATORS,
+          AREA_ROLE_IDS.SANTA_CREATORS
+        ]),
+        nicknamePrefix: "Coord.",
+        skipRoleTransition: false,
+        skipNickname: false
+      }),
+
+      GESTOR_CREATORS: Object.freeze({
+        canonicalName: "Gestor. Creators",
+        primaryRoleId: AREA_ROLE_IDS.GESTOR_CREATORS,
+        aliases: Object.freeze([
+          "gestor",
+          "gestor creator",
+          "gestor creators",
+          "gestor.",
+          "gestor creators."
+        ]),
+        requiredRoleIds: Object.freeze([
+          AREA_ROLE_IDS.MKT_CREATORS,
+          AREA_ROLE_IDS.GESTOR_CREATORS,
+          AREA_ROLE_IDS.COORDENACAO,
+          AREA_ROLE_IDS.SENIOR_CREATORS,
+          AREA_ROLE_IDS.SANTA_CREATORS
+        ]),
+        nicknamePrefix: "Gestor.",
+        skipRoleTransition: false,
+        skipNickname: false
+      }),
+
+      MANAGER_CREATORS: Object.freeze({
+        canonicalName: "Manager Creators",
+        primaryRoleId: AREA_ROLE_IDS.MANAGER_CREATORS,
+        aliases: Object.freeze([
+          "manager",
+          "manager creator",
+          "manager creators",
+          "manager.",
+          "manager creators."
+        ]),
+        requiredRoleIds: Object.freeze([
+          AREA_ROLE_IDS.MANAGER_CREATORS,
+          AREA_ROLE_IDS.COORDENACAO,
+          AREA_ROLE_IDS.SENIOR_CREATORS,
+          AREA_ROLE_IDS.SANTA_CREATORS
+        ]),
+        nicknamePrefix: "Manager.",
+        skipRoleTransition: false,
+        skipNickname: false
+      }),
+
+      SOCIAL_MEDIAS: Object.freeze({
+        canonicalName: "Social Medias",
+        primaryRoleId: AREA_ROLE_IDS.SOCIAL_MEDIAS,
+        aliases: Object.freeze([
+          "social",
+          "social medias",
+          "social media",
+          "social midias",
+          "social mídia",
+          "social m",
+          "social. m",
+          "social.m"
+        ]),
+        requiredRoleIds: Object.freeze([
+          AREA_ROLE_IDS.SOCIAL_MEDIAS,
+          AREA_ROLE_IDS.COORDENACAO,
+          AREA_ROLE_IDS.SENIOR_CREATORS,
+          AREA_ROLE_IDS.SANTA_CREATORS
+        ]),
+        nicknamePrefix: "Social.M",
+        skipRoleTransition: false,
+        skipNickname: false
+      }),
+
+      EQUIPE_MANAGER: Object.freeze({
+        canonicalName: "Equipe Manager",
+        primaryRoleId: AREA_ROLE_IDS.EQUIPE_MANAGER,
+        aliases: Object.freeze([
+          "equipe manager",
+          "equipe manager creator",
+          "equipe manager creators",
+          "eqp manager",
+          "eqp manager creator",
+          "eqp.m",
+          "equp manager"
+        ]),
+        requiredRoleIds: Object.freeze([
+          AREA_ROLE_IDS.EQUIPE_MANAGER,
+          AREA_ROLE_IDS.CREATOR,
+          AREA_ROLE_IDS.EQUIPE_CREATOR,
+          AREA_ROLE_IDS.SENIOR_CREATORS,
+          AREA_ROLE_IDS.SANTA_CREATORS
+        ]),
+        nicknamePrefix: "EQP.M",
+        skipRoleTransition: false,
+        skipNickname: false
+      }),
+
+      EQUIPE_SOCIAL_MEDIAS: Object.freeze({
+        canonicalName: "Equipe Social Medias",
+        primaryRoleId: AREA_ROLE_IDS.EQUIPE_SOCIAL_MEDIAS,
+        aliases: Object.freeze([
+          "equipe social medias",
+          "equipe social media",
+          "equipe social",
+          "equipe sociais medias",
+          "equipe social midias",
+          "eqp social medias",
+          "eqp social",
+          "eqp social midias",
+          "eqps",
+          "eqp.s"
+        ]),
+        requiredRoleIds: Object.freeze([
+          AREA_ROLE_IDS.EQUIPE_SOCIAL_MEDIAS,
+          AREA_ROLE_IDS.CREATOR,
+          AREA_ROLE_IDS.EQUIPE_CREATOR,
+          AREA_ROLE_IDS.SENIOR_CREATORS,
+          AREA_ROLE_IDS.SANTA_CREATORS
+        ]),
+        nicknamePrefix: "EQP.S",
+        skipRoleTransition: false,
+        skipNickname: false
+      }),
+
+      EQUIPE_CREATOR: Object.freeze({
+        canonicalName: "Equipe Creator",
+        primaryRoleId: AREA_ROLE_IDS.EQUIPE_CREATOR,
+        aliases: Object.freeze([
+          "equipe creator",
+          "equipe creators",
+          "eqp creator",
+          "eqp creators",
+          "equipe",
+          "eqp.c"
+        ]),
+        requiredRoleIds: Object.freeze([]),
+        nicknamePrefix: "EQP.C",
+        skipRoleTransition: true,
+        skipNickname: false
+      }),
+
+      A_DEFINIR: Object.freeze({
+        canonicalName: "A Definir",
+        primaryRoleId: null,
+        aliases: Object.freeze([
+          "a definir",
+          "definir",
+          "indefinido",
+          "sem area",
+          "sem área"
+        ]),
+        requiredRoleIds: Object.freeze([]),
+        nicknamePrefix: null,
+        skipRoleTransition: true,
+        skipNickname: true
+      }),
+
+      RESP_LIDER: Object.freeze({
+        canonicalName: "Resp Lider",
+        primaryRoleId: AREA_ROLE_IDS.RESP_LIDER,
+        aliases: Object.freeze([
+          "resp lider",
+          "resp líder",
+          "responsavel lider",
+          "responsável lider",
+          "responsável líder",
+          "resp. lider"
+        ]),
+        requiredRoleIds: Object.freeze([
+          AREA_ROLE_IDS.RESP_LIDER,
+          AREA_ROLE_IDS.RESPONSAVEIS,
+          AREA_ROLE_IDS.SENIOR_CREATORS,
+          AREA_ROLE_IDS.SANTA_CREATORS
+        ]),
+        nicknamePrefix: "Resp Lider",
+        skipRoleTransition: false,
+        skipNickname: false
+      }),
+
+      RESP_INFLU: Object.freeze({
+        canonicalName: "Resp Influ",
+        primaryRoleId: AREA_ROLE_IDS.RESP_INFLU,
+        aliases: Object.freeze([
+          "resp influ",
+          "responsavel influ",
+          "responsável influ",
+          "resp influencer",
+          "resp. influ"
+        ]),
+        requiredRoleIds: Object.freeze([
+          AREA_ROLE_IDS.RESP_INFLU,
+          AREA_ROLE_IDS.RESPONSAVEIS,
+          AREA_ROLE_IDS.SENIOR_CREATORS,
+          AREA_ROLE_IDS.SANTA_CREATORS
+        ]),
+        nicknamePrefix: "Resp Influ",
+        skipRoleTransition: false,
+        skipNickname: false
+      }),
+
+      RESP_CREATORS: Object.freeze({
+        canonicalName: "Resp Creators",
+        primaryRoleId: AREA_ROLE_IDS.RESP_CREATORS,
+        aliases: Object.freeze([
+          "resp creators",
+          "resp creator",
+          "responsavel creators",
+          "responsável creators",
+          "responsavel creator",
+          "resp. creators"
+        ]),
+        requiredRoleIds: Object.freeze([
+          AREA_ROLE_IDS.RESP_CREATORS,
+          AREA_ROLE_IDS.SENIOR_CREATORS
+        ]),
+        nicknamePrefix: null,
+        skipRoleTransition: false,
+        skipNickname: false
+      })
+    });
+
+    const AREA_MANAGED_REMOVABLE_ROLE_IDS = new Set([
+      AREA_ROLE_IDS.MKT_CREATORS,
+      AREA_ROLE_IDS.COORD_CREATORS,
+      AREA_ROLE_IDS.COORDENACAO,
+      AREA_ROLE_IDS.GESTOR_CREATORS,
+      AREA_ROLE_IDS.MANAGER_CREATORS,
+      AREA_ROLE_IDS.SOCIAL_MEDIAS,
+      AREA_ROLE_IDS.EQUIPE_MANAGER,
+      AREA_ROLE_IDS.EQUIPE_SOCIAL_MEDIAS,
+      AREA_ROLE_IDS.CREATOR,
+      AREA_ROLE_IDS.EQUIPE_CREATOR,
+      AREA_ROLE_IDS.SENIOR_CREATORS,
+      AREA_ROLE_IDS.RESPONSAVEIS,
+      AREA_ROLE_IDS.RESP_LIDER,
+      AREA_ROLE_IDS.RESP_INFLU,
+      AREA_ROLE_IDS.RESP_CREATORS
+    ]);
+
+    function normalizeAreaText(value) {
+      return String(value || "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase()
+        .replace(/[._-]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+
+    const AREA_ALIAS_INDEX = (() => {
+      const index = new Map();
+
+      for (const profile of Object.values(AREA_PROFILES)) {
+        const candidates = [
+          profile.canonicalName,
+          ...profile.aliases
+        ];
+
+        for (const candidate of candidates) {
+          const normalized =
+            normalizeAreaText(candidate);
+
+          if (!normalized) {
+            continue;
+          }
+
+          const existing =
+            index.get(normalized);
+
+          if (
+            existing &&
+            existing.canonicalName !== profile.canonicalName
+          ) {
+            console.warn(
+              `[SC_GI] Alias de área ambíguo ignorado: "${candidate}" ` +
+              `(${existing.canonicalName} x ${profile.canonicalName})`
+            );
+            index.delete(normalized);
+            continue;
+          }
+
+          index.set(
+            normalized,
+            profile
+          );
+        }
+      }
+
+      return index;
+    })();
+
+    function resolveAreaProfile(value) {
+      const normalized =
+        normalizeAreaText(value);
+
+      if (!normalized) {
+        return null;
+      }
+
+      return (
+        AREA_ALIAS_INDEX.get(normalized) ||
+        null
+      );
+    }
+
+    function getAreaRoleProfile(value) {
+      return resolveAreaProfile(value);
+    }
+
+    function getAreaNicknameProfile(value) {
+      return resolveAreaProfile(value);
+    }
+
+    function buildDesiredRoleSet(profile) {
+      return new Set(
+        Array.isArray(profile?.requiredRoleIds)
+          ? profile.requiredRoleIds
+          : []
+      );
+    }
+
+    function hierarchyLabelFromRank(rank) {
+      if (rank === 0) return "Owner";
+      if (rank === 1) return "Resp Creators";
+      if (rank === 2) return "Resp Influ";
+      if (rank === 3) return "Resp Lider";
+      if (rank === 4) return "Coord. Creators";
+      if (rank === 5) return "Gestor";
+      if (rank === 6) return "Manager Creators";
+      if (rank === 7) return "Social Medias";
+      if (rank === 8) return "Equipe Manager";
+      if (rank === 9) return "Equipe Social Medias";
+      if (rank === 10) return "Equipe Creator";
+      return "Sem cargo institucional";
+    }
+
+    async function assertCanSetArea(
+      guild,
+      actorUser,
+      targetUserId,
+      areaProfile
+    ) {
+      const actorId =
+        String(actorUser?.id || "").trim();
+
+      if (!actorId) {
+        throw new Error(
+          "Não foi possível identificar quem tentou alterar a área."
+        );
+      }
+
+      const actorMember =
+        await guild.members
+          .fetch(actorId)
+          .catch(() => null);
+
+      if (!actorMember) {
+        throw new Error(
+          "Não consegui localizar o executor no servidor para validar a hierarquia."
+        );
+      }
+
+      if (!hasAuth(actorMember)) {
+        throw new Error(
+          "Você não tem permissão para alterar este Controle GI."
+        );
+      }
+
+      // Mantém os bypasses administrativos de usuário que já existem.
+      if (
+        SC_GI_CFG.AUTH_USER_IDS.includes(
+          actorId
+        )
+      ) {
+        return true;
+      }
+
+      // A Definir não representa promoção hierárquica.
+      if (
+        !areaProfile?.primaryRoleId
+      ) {
+        return true;
+      }
+
+      if (
+        typeof getOfficialSantaCreatorsHierarchyRank !== "function" ||
+        typeof getOfficialSantaCreatorsHierarchyRankForRoleId !== "function"
+      ) {
+        throw new Error(
+          "A hierarquia institucional não está disponível. " +
+          "A alteração foi bloqueada por segurança."
+        );
+      }
+
+      const actorRank =
+        getOfficialSantaCreatorsHierarchyRank(
+          actorMember
+        );
+
+      const targetAreaRank =
+        getOfficialSantaCreatorsHierarchyRankForRoleId(
+          areaProfile.primaryRoleId
+        );
+
+      if (
+        !Number.isFinite(actorRank)
+      ) {
+        throw new Error(
+          "Alteração bloqueada pela hierarquia da SantaCreators. " +
+          "Seu cargo não pertence à hierarquia institucional autorizada."
+        );
+      }
+
+      if (
+        !Number.isFinite(targetAreaRank)
+      ) {
+        throw new Error(
+          `A Área "${areaProfile.canonicalName}" não possui posição ` +
+          "institucional válida configurada."
+        );
+      }
+
+      if (
+        actorRank >= targetAreaRank
+      ) {
+        await logMsg(
+          guild,
+          "Alteração de Área Bloqueada pela Hierarquia",
+          [
+            `🛡️ **Executor:** <@${actorId}>`,
+            `👤 **Membro alvo:** <@${targetUserId}>`,
+            `🎚️ **Função do executor:** \`${hierarchyLabelFromRank(actorRank)}\``,
+            `🎯 **Área solicitada:** \`${areaProfile.canonicalName}\``,
+            `🎚️ **Posição da área:** \`${hierarchyLabelFromRank(targetAreaRank)}\``,
+            "",
+            "❌ **Resultado:** bloqueado porque o executor não está acima da função solicitada."
+          ].join("\n")
+        );
+
+        throw new Error(
+          `Alteração bloqueada pela hierarquia da SantaCreators. ` +
+          `Sua função (${hierarchyLabelFromRank(actorRank)}) não possui ` +
+          `autoridade para definir ${areaProfile.canonicalName}.`
+        );
+      }
+
+      return true;
+    }
+
+    const KNOWN_INSTITUTIONAL_NICKNAME_PREFIXES = new Set([
+      "coord",
+      "coord creators",
+      "gestor",
+      "gestor creators",
+      "manager",
+      "manager creators",
+      "social m",
+      "social medias",
+      "equipe",
+      "equipe creator",
+      "equipe creators",
+      "eqp c",
+      "eqp m",
+      "eqp s",
+      "eqps",
+      "equipe manager",
+      "equipe social medias",
+      "resp lider",
+      "resp influ"
+    ]);
+
+    function extractNicknameIdentity(member) {
+      const current =
+        String(
+          member?.nickname ||
+          member?.user?.globalName ||
+          member?.user?.username ||
+          ""
+        ).trim();
+
+      const parts =
+        current
+          .split("|")
+          .map((part) => part.trim())
+          .filter(Boolean);
+
+      if (parts.length === 0) {
+        return {
+          current,
+          name: member?.user?.globalName ||
+                member?.user?.username ||
+                "Membro",
+          idText: null
+        };
+      }
+
+      if (parts.length === 1) {
+        return {
+          current,
+          name: parts[0],
+          idText: null
+        };
+      }
+
+      const firstNormalized =
+        normalizeAreaText(
+          parts[0]
+        );
+
+      if (
+        KNOWN_INSTITUTIONAL_NICKNAME_PREFIXES.has(
+          firstNormalized
+        )
+      ) {
+        return {
+          current,
+          name:
+            parts[1] ||
+            member?.user?.globalName ||
+            member?.user?.username ||
+            "Membro",
+          idText:
+            parts.length >= 3
+              ? parts.slice(2).join(" | ")
+              : null
+        };
+      }
+
+      return {
+        current,
+        name: parts[0],
+        idText:
+          parts.length >= 2
+            ? parts.slice(1).join(" | ")
+            : null
+      };
+    }
+
+    function buildNicknameForArea(
+      member,
+      areaProfile
+    ) {
+      if (
+        !member ||
+        areaProfile?.skipNickname
+      ) {
+        return member?.nickname || null;
+      }
+
+      const identity =
+        extractNicknameIdentity(
+          member
+        );
+
+      const pieces = [];
+
+      if (
+        areaProfile.nicknamePrefix
+      ) {
+        pieces.push(
+          areaProfile.nicknamePrefix
+        );
+      }
+
+      pieces.push(
+        identity.name
+      );
+
+      if (
+        identity.idText
+      ) {
+        pieces.push(
+          identity.idText
+        );
+      }
+
+      return pieces.join(" | ");
+    }
+
+    async function applyAreaRoleTransition(
+      guild,
+      rec,
+      areaProfile
+    ) {
+      const member =
+        await guild.members
+          .fetch(rec.targetId)
+          .catch(() => null);
+
+      if (!member) {
+        throw new Error(
+          "Não consegui localizar o membro alvo no servidor."
+        );
+      }
+
+      const result = {
+        addedRoleIds: [],
+        removedRoleIds: [],
+        nicknameBefore:
+          member.nickname ||
+          member.user?.globalName ||
+          member.user?.username ||
+          "",
+        nicknameAfter:
+          member.nickname ||
+          member.user?.globalName ||
+          member.user?.username ||
+          "",
+        nicknameUpdated: false,
+        roleTransitionSkipped: Boolean(
+          areaProfile.skipRoleTransition
+        )
+      };
+
+      if (
+        areaProfile.skipRoleTransition
+      ) {
+        if (
+          !areaProfile.skipNickname
+        ) {
+          const wantedNickname =
+            buildNicknameForArea(
+              member,
+              areaProfile
+            );
+
+          if (
+            wantedNickname &&
+            wantedNickname !== member.nickname
+          ) {
+            await member.setNickname(
+              wantedNickname,
+              `Controle GI: área alterada para ${areaProfile.canonicalName}`
+            );
+
+            result.nicknameAfter =
+              wantedNickname;
+
+            result.nicknameUpdated =
+              true;
+          }
+        }
+
+        return result;
+      }
+
+      const desiredRoleIds =
+        buildDesiredRoleSet(
+          areaProfile
+        );
+
+      // =====================================================
+      // 👑 RESPEITA ALTERAÇÕES MANUAIS DE VOCÊ / OWNER
+      // =====================================================
+
+      const masterOverrides =
+        getMasterRoleOverrideMap(
+          rec.targetId,
+          false
+        );
+
+      if (masterOverrides) {
+        for (
+          const [roleId, overrideState]
+          of masterOverrides.entries()
+        ) {
+          if (
+            overrideState === "present"
+          ) {
+            desiredRoleIds.add(
+              roleId
+            );
+          }
+
+          if (
+            overrideState === "absent"
+          ) {
+            desiredRoleIds.delete(
+              roleId
+            );
+          }
+        }
+      }
+
+      const currentRoleIds =
+        new Set(
+          member.roles.cache.keys()
+        );
+
+      const removeRoleIds =
+        [...AREA_MANAGED_REMOVABLE_ROLE_IDS]
+          .filter(
+            (roleId) =>
+              currentRoleIds.has(roleId) &&
+              !desiredRoleIds.has(roleId)
+          );
+
+      const addRoleIds =
+        [...desiredRoleIds]
+          .filter(
+            (roleId) =>
+              !currentRoleIds.has(roleId)
+          );
+
+      const nicknameBefore =
+        member.nickname;
+
+      const wantedNickname =
+        buildNicknameForArea(
+          member,
+          areaProfile
+        );
+
+      try {
+        if (
+          removeRoleIds.length > 0
+        ) {
+          await member.roles.remove(
+            removeRoleIds,
+            `Controle GI: saída de cargos antigos ao mudar para ${areaProfile.canonicalName}`
+          );
+
+          result.removedRoleIds.push(
+            ...removeRoleIds
+          );
+        }
+
+        if (
+          addRoleIds.length > 0
+        ) {
+          await member.roles.add(
+            addRoleIds,
+            `Controle GI: pacote automático da área ${areaProfile.canonicalName}`
+          );
+
+          result.addedRoleIds.push(
+            ...addRoleIds
+          );
+        }
+
+        if (
+          wantedNickname &&
+          wantedNickname !== member.nickname
+        ) {
+          await member.setNickname(
+            wantedNickname,
+            `Controle GI: nickname da área ${areaProfile.canonicalName}`
+          );
+
+          result.nicknameUpdated =
+            true;
+
+          result.nicknameAfter =
+            wantedNickname;
+        }
+
+        // O cargo Gestaoinfluencer NÃO é manipulado aqui.
+        // Ele continua sob o sistema atual de pausa/despausa.
+        // Isso evita criar dois sistemas brigando pelo mesmo cargo.
+
+        return result;
+      } catch (error) {
+        try {
+          if (
+            result.addedRoleIds.length > 0
+          ) {
+            await member.roles.remove(
+              result.addedRoleIds,
+              "Controle GI: rollback após falha na mudança de área"
+            ).catch(() => {});
+          }
+
+          if (
+            result.removedRoleIds.length > 0
+          ) {
+            await member.roles.add(
+              result.removedRoleIds,
+              "Controle GI: rollback após falha na mudança de área"
+            ).catch(() => {});
+          }
+
+          if (
+            member.nickname !== nicknameBefore
+          ) {
+            await member.setNickname(
+              nicknameBefore,
+              "Controle GI: rollback de nickname"
+            ).catch(() => {});
+          }
+        } catch {}
+
+        throw new Error(
+          `Falha ao aplicar os cargos/nickname da área ${areaProfile.canonicalName}: ` +
+          `${error?.message || error}`
+        );
+      }
+    }
+
+    async function syncAreaToFormsCreator(
+      rec,
+      canonicalArea,
+      editor
+    ) {
+      if (
+        typeof findFormsCreatorThreadIdByUserId !== "function" ||
+        typeof setFormsCreatorArea !== "function"
+      ) {
+        return {
+          status: "unavailable",
+          threadId: null,
+          error: "Integração FormsCreator indisponível."
+        };
+      }
+
+      const fcThreadId =
+        await findFormsCreatorThreadIdByUserId(
+          client,
+          rec.targetId
+        ).catch(() => null);
+
+      if (!fcThreadId) {
+        return {
+          status: "not_found",
+          threadId: null,
+          error: "Tópico do FormsCreator não encontrado."
+        };
+      }
+
+      try {
+        await setFormsCreatorArea(
+          client,
+          {
+            threadId: fcThreadId,
+            newArea: canonicalArea,
+            actor: editor
+          }
+        );
+
+        return {
+          status: "synced",
+          threadId: fcThreadId,
+          error: null
+        };
+      } catch (error) {
+        console.error(
+          "[GI] Falha ao sincronizar área no FormsCreator:",
+          error
+        );
+
+        return {
+          status: "failed",
+          threadId: fcThreadId,
+          error:
+            error?.message ||
+            String(error)
+        };
+      }
+    }
+
+    function formatRoleMentions(roleIds) {
+      if (
+        !Array.isArray(roleIds) ||
+        roleIds.length === 0
+      ) {
+        return "Nenhum";
+      }
+
+      return roleIds
+        .map(
+          (roleId) =>
+            `<@&${roleId}>`
+        )
+        .join(", ");
     }
 
     function hierarchyNameByRank(rank) {
@@ -1414,45 +2615,225 @@ try {
     async function editRegistro(guild, editor, messageId, newArea, newNote, newDateStr) {
       const rec = SC_GI_STATE.registros.get(messageId);
       if (!rec) throw new Error('Registro não encontrado.');
-      const ch  = await guild.channels.fetch(rec.channelId).catch(() => null);
-      if (!ch) throw new Error('Canal indisponível.');
-      const msg = await ch.messages.fetch(messageId).catch(() => null);
-      if (!msg) throw new Error('Mensagem do registro não encontrada.');
 
-      rec.area = newArea || rec.area;
-      rec.note = (newNote || '').trim();
+      const ch =
+        await guild.channels
+          .fetch(rec.channelId)
+          .catch(() => null);
+
+      if (!ch) {
+        throw new Error('Canal indisponível.');
+      }
+
+      const msg =
+        await ch.messages
+          .fetch(messageId)
+          .catch(() => null);
+
+      if (!msg) {
+        throw new Error('Mensagem do registro não encontrada.');
+      }
+
+      const typedArea =
+        String(newArea || "").trim();
+
+      const newAreaProfile =
+        resolveAreaProfile(
+          typedArea
+        );
+
+      if (!newAreaProfile) {
+        throw new Error(
+          "Não consegui identificar com segurança essa Área de Interesse."
+        );
+      }
+
+      const previousArea =
+        String(rec.area || "A Definir").trim();
+
+      const previousAreaProfile =
+        resolveAreaProfile(
+          previousArea
+        );
+
+      const previousCanonicalArea =
+        previousAreaProfile?.canonicalName ||
+        previousArea;
+
+      const canonicalArea =
+        newAreaProfile.canonicalName;
+
+      const institutionalAreaChanged =
+        previousCanonicalArea !== canonicalArea;
+
+      const storedAreaChanged =
+        previousArea !== canonicalArea;
+
+      let transitionResult = {
+        addedRoleIds: [],
+        removedRoleIds: [],
+        nicknameBefore: null,
+        nicknameAfter: null,
+        nicknameUpdated: false,
+        roleTransitionSkipped: false
+      };
+
+      // Só executa cargos/nickname quando realmente mudou de função.
+      //
+      // Isso também evita que:
+      // Manager -> salva novamente como Manager
+      //
+      // remova um MKT colocado manualmente depois da promoção.
+      if (
+        institutionalAreaChanged
+      ) {
+        await assertCanSetArea(
+          guild,
+          editor,
+          rec.targetId,
+          newAreaProfile
+        );
+
+        transitionResult =
+          await applyAreaRoleTransition(
+            guild,
+            rec,
+            newAreaProfile
+          );
+      }
+
+      rec.area =
+        canonicalArea;
+
+      rec.note =
+        (newNote || "").trim();
 
       if (newDateStr) {
-        const ms = fromDDMMYYYY_toMs(newDateStr);
+        const ms =
+          fromDDMMYYYY_toMs(
+            newDateStr
+          );
+
         if (ms) {
           rec.joinDateMs = ms;
-          if (rec.active) rec.nextWeekTickMs = computeNextWeekTick(rec.joinDateMs);
+
+          if (rec.active) {
+            rec.nextWeekTickMs =
+              computeNextWeekTick(
+                rec.joinDateMs
+              );
+          }
         }
       }
+
       SC_GI_scheduleSave();
 
-      // ✅ NOVO: Update formscreator area
-      if (newArea) {
-          if (typeof findFormsCreatorThreadIdByUserId === 'function' && typeof setFormsCreatorArea === 'function') {
-              const fcThreadId = await findFormsCreatorThreadIdByUserId(rec.targetId).catch(() => null);
-              if (fcThreadId) {
-                  await setFormsCreatorArea(client, {
-                      threadId: fcThreadId,
-                      newArea: newArea,
-                      actor: editor
-                  }).catch(e => console.error("[GI] Falha ao editar área no FormsCreator:", e));
-              }
-          }
+      let formsSyncResult = {
+        status: "unchanged",
+        threadId: null,
+        error: null
+      };
+
+      if (
+        storedAreaChanged
+      ) {
+        formsSyncResult =
+          await syncAreaToFormsCreator(
+            rec,
+            canonicalArea,
+            editor
+          );
       }
 
-      const targetUser    = await fetchUserCached(rec.targetId);
-      const registrarUser = await fetchUserCached(rec.registrarId);
-      const days   = daysBetween(rec.joinDateMs, nowMs());
-      const weeks  = Math.max(0, Math.floor(days / 7));
-      const months = monthsSince(rec.joinDateMs);
+      const targetUser =
+        await fetchUserCached(
+          rec.targetId
+        );
 
-      const emb = await registroEmbed({ targetUser, registrarUser, joinDateMs: rec.joinDateMs, area: rec.area, weeks, months, active: rec.active, rec });
-      await msg.edit({ embeds: [emb], components: registroButtons(messageId, rec.active) });
+      const registrarUser =
+        await fetchUserCached(
+          rec.registrarId
+        );
+
+      const days =
+        daysBetween(
+          rec.joinDateMs,
+          nowMs()
+        );
+
+      const weeks =
+        Math.max(
+          0,
+          Math.floor(days / 7)
+        );
+
+      const months =
+        monthsSince(
+          rec.joinDateMs
+        );
+
+      const emb =
+        await registroEmbed({
+          targetUser,
+          registrarUser,
+          joinDateMs: rec.joinDateMs,
+          area: rec.area,
+          weeks,
+          months,
+          active: rec.active,
+          rec
+        });
+
+      await msg.edit({
+        embeds: [emb],
+        components:
+          registroButtons(
+            messageId,
+            rec.active
+          )
+      });
+
+      if (
+        institutionalAreaChanged ||
+        storedAreaChanged
+      ) {
+        const formsText =
+          formsSyncResult.status === "synced"
+            ? "✅ sincronizado"
+            : formsSyncResult.status === "not_found"
+              ? "⚠️ tópico não encontrado"
+              : formsSyncResult.status === "failed"
+                ? `❌ falhou: ${formsSyncResult.error}`
+                : formsSyncResult.status === "unavailable"
+                  ? "⚠️ integração indisponível"
+                  : "➖ sem alteração";
+
+        await logMsg(
+          guild,
+          "Mudança Inteligente de Área",
+          [
+            `🧾 **Executor:** <@${editor.id}> (\`${editor.id}\`)`,
+            `👤 **Membro:** <@${rec.targetId}> (\`${rec.targetId}\`)`,
+            `⌨️ **Entrada digitada:** \`${typedArea}\``,
+            `🧠 **Identificado como:** \`${canonicalArea}\``,
+            `📤 **Área anterior:** \`${previousArea}\``,
+            `📥 **Nova área:** \`${canonicalArea}\``,
+            "",
+            `🧹 **Cargos removidos:** ${formatRoleMentions(transitionResult.removedRoleIds)}`,
+            `➕ **Cargos adicionados:** ${formatRoleMentions(transitionResult.addedRoleIds)}`,
+            transitionResult.roleTransitionSkipped
+              ? "🛡️ **Pacote de cargos:** não alterado para esta Área."
+              : "✅ **Pacote de cargos:** processado.",
+            transitionResult.nicknameUpdated
+              ? `🏷️ **Nickname:** \`${transitionResult.nicknameBefore || "Sem nickname"}\` → \`${transitionResult.nicknameAfter}\``
+              : "🏷️ **Nickname:** sem alteração.",
+            `📚 **FormsCreator:** ${formsText}`,
+            "",
+            `🟢 **Status GI:** ${rec.active ? "Ativo" : "Pausado"}`,
+            "ℹ️ O cargo Gestaoinfluencer continua sendo controlado pela regra atual de pausa/despausa."
+          ].join("\n")
+        );
+      }
 
       await logMsg(
         guild,
@@ -1479,6 +2860,26 @@ try {
 
       markBoardDirty();
       await renderRespBoard(guild);
+
+      return {
+        previousArea,
+        canonicalArea,
+        institutionalAreaChanged,
+        storedAreaChanged,
+        addedRoleIds:
+          transitionResult.addedRoleIds,
+        removedRoleIds:
+          transitionResult.removedRoleIds,
+        nicknameUpdated:
+          transitionResult.nicknameUpdated,
+        nicknameBefore:
+          transitionResult.nicknameBefore,
+        nicknameAfter:
+          transitionResult.nicknameAfter,
+        roleTransitionSkipped:
+          transitionResult.roleTransitionSkipped,
+        formsSyncResult
+      };
     }
 
 
@@ -2806,20 +4207,190 @@ if (!rec.active) {
     // ====================== TRAVA (GuildMemberUpdate) ======================
     client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
       try {
-        const guild = newMember.guild;
+        const guild =
+          newMember.guild;
+
         if (!guild) return;
 
-        // se foi o bot mexendo, ignora
-        if (hasRoleBypass(newMember.id)) return;
-
-        const hadGI = oldMember.roles.cache.has(GI_ROLE_ID);
-        const hasGI = newMember.roles.cache.has(GI_ROLE_ID);
-
-        // detecta REMOÇÃO do cargo GI
-        if (hadGI && !hasGI) {
-          await handleGIRoleRemoved(guild, newMember.id);
+        // Se foi uma alteração interna do próprio sistema,
+        // não registra como decisão manual.
+        if (
+          hasRoleBypass(
+            newMember.id
+          )
+        ) {
+          return;
         }
-      } catch {}
+
+        const oldRoleIds =
+          new Set(
+            oldMember.roles.cache.keys()
+          );
+
+        const newRoleIds =
+          new Set(
+            newMember.roles.cache.keys()
+          );
+
+        const addedRoleIds =
+          [...newRoleIds].filter(
+            (roleId) =>
+              !oldRoleIds.has(roleId)
+          );
+
+        const removedRoleIds =
+          [...oldRoleIds].filter(
+            (roleId) =>
+              !newRoleIds.has(roleId)
+          );
+
+        // Aguarda alguns ms para o Audit Log do Discord aparecer.
+        if (
+          addedRoleIds.length > 0 ||
+          removedRoleIds.length > 0
+        ) {
+          await new Promise(
+            (resolve) =>
+              setTimeout(resolve, 800)
+          );
+
+          const masterChange =
+            await findRecentManualRoleUpdate(
+              guild,
+              newMember.id
+            );
+
+          if (masterChange) {
+            const auditAddedRoleIds =
+              extractAuditRoleIds(
+                masterChange.entry,
+                "$add"
+              );
+
+            const auditRemovedRoleIds =
+              extractAuditRoleIds(
+                masterChange.entry,
+                "$remove"
+              );
+
+            const confirmedAddedRoleIds =
+              auditAddedRoleIds.length > 0
+                ? addedRoleIds.filter(
+                    (roleId) =>
+                      auditAddedRoleIds.includes(
+                        roleId
+                      )
+                  )
+                : addedRoleIds;
+
+            const confirmedRemovedRoleIds =
+              auditRemovedRoleIds.length > 0
+                ? removedRoleIds.filter(
+                    (roleId) =>
+                      auditRemovedRoleIds.includes(
+                        roleId
+                      )
+                  )
+                : removedRoleIds;
+
+            for (
+              const roleId
+              of confirmedAddedRoleIds
+            ) {
+              setMasterRoleOverride(
+                newMember.id,
+                roleId,
+                "present"
+              );
+            }
+
+            for (
+              const roleId
+              of confirmedRemovedRoleIds
+            ) {
+              setMasterRoleOverride(
+                newMember.id,
+                roleId,
+                "absent"
+              );
+            }
+
+            // Se você/Owner removeu GI,
+            // limpa avisos anteriores e NÃO devolve.
+            if (
+              confirmedRemovedRoleIds.includes(
+                GI_ROLE_ID
+              )
+            ) {
+              SC_GI_STATE.giWarningsByUser.delete(
+                String(
+                  newMember.id
+                )
+              );
+
+              SC_GI_scheduleSave();
+            }
+
+            await logMsg(
+              guild,
+              "👑 Master Override Manual",
+              [
+                `👑 **Executor:** <@${masterChange.executorId}>`,
+                `👤 **Membro:** <@${newMember.id}>`,
+                "",
+                confirmedAddedRoleIds.length > 0
+                  ? `➕ **Cargos protegidos como PRESENTES:** ${confirmedAddedRoleIds.map((id) => `<@&${id}>`).join(", ")}`
+                  : "",
+                confirmedRemovedRoleIds.length > 0
+                  ? `➖ **Cargos protegidos como AUSENTES:** ${confirmedRemovedRoleIds.map((id) => `<@&${id}>`).join(", ")}`
+                  : "",
+                "",
+                "🔒 Esta decisão manual passa a ter prioridade sobre a automação de Área/hierarquia."
+              ]
+                .filter(Boolean)
+                .join("\n")
+            ).catch(() => {});
+
+            // 👑 Mudança manual de você/Owner termina aqui.
+            // Nenhuma trava GI, punição ou restauração poderá desfazer.
+            return;
+          }
+        }
+
+        const hadGI =
+          oldMember.roles.cache.has(
+            GI_ROLE_ID
+          );
+
+        const hasGI =
+          newMember.roles.cache.has(
+            GI_ROLE_ID
+          );
+
+        // Se existe override dizendo que GI deve ficar ausente,
+        // não devolve o cargo.
+        const giMasterOverride =
+          getMasterRoleOverride(
+            newMember.id,
+            GI_ROLE_ID
+          );
+
+        if (
+          hadGI &&
+          !hasGI &&
+          giMasterOverride !== "absent"
+        ) {
+          await handleGIRoleRemoved(
+            guild,
+            newMember.id
+          );
+        }
+      } catch (error) {
+        console.warn(
+          "[SC_GI] GuildMemberUpdate:",
+          error?.message || error
+        );
+      }
     });
 
     // ====================== LISTENER EXTERNO (PEDIR SET) ======================
@@ -3103,21 +4674,138 @@ if (!rec.active) {
 
         // Modal editar // NOVO: Modal de edição
         if (interaction.isModalSubmit() && interaction.customId.startsWith('SC_GI_MODAL_EDIT_')) {
-          if (!hasAuth(interaction.member)) return interaction.reply({ content: '❌ Você não tem permissão.', flags: MessageFlags.Ephemeral });
-          const messageId = interaction.customId.replace('SC_GI_MODAL_EDIT_', '');
-          await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-          try {
-            const area = interaction.fields.getTextInputValue('SC_GI_EDIT_AREA')?.trim();
-            const note = interaction.fields.getTextInputValue('SC_GI_EDIT_NOTE')?.trim();
-            const date = interaction.fields.getTextInputValue('SC_GI_EDIT_DATE')?.trim();
-            await editRegistro(guild, interaction.user, messageId, area, note, date);
-            await interaction.editReply({ content: '✅ Registro atualizado!' });
-          } catch (e) {
-            await interaction.editReply({ content: '⚠️ ' + e.message });
+          if (!hasAuth(interaction.member)) {
+            return interaction.reply({
+              content: '❌ Você não tem permissão.',
+              flags: MessageFlags.Ephemeral
+            });
           }
+
+          const messageId =
+            interaction.customId.replace(
+              'SC_GI_MODAL_EDIT_',
+              ''
+            );
+
+          await interaction.deferReply({
+            flags: MessageFlags.Ephemeral
+          });
+
+          try {
+            const area =
+              interaction.fields
+                .getTextInputValue(
+                  'SC_GI_EDIT_AREA'
+                )
+                ?.trim();
+
+            const note =
+              interaction.fields
+                .getTextInputValue(
+                  'SC_GI_EDIT_NOTE'
+                )
+                ?.trim();
+
+            const date =
+              interaction.fields
+                .getTextInputValue(
+                  'SC_GI_EDIT_DATE'
+                )
+                ?.trim();
+
+            const result =
+              await editRegistro(
+                guild,
+                interaction.user,
+                messageId,
+                area,
+                note,
+                date
+              );
+
+            const responseLines = [];
+
+            if (
+              result.storedAreaChanged
+            ) {
+              responseLines.push(
+                `✅ Área atualizada para **${result.canonicalArea}**.`
+              );
+            } else {
+              responseLines.push(
+                '✅ Registro atualizado!'
+              );
+            }
+
+            if (
+              result.institutionalAreaChanged
+            ) {
+              if (
+                result.roleTransitionSkipped
+              ) {
+                responseLines.push(
+                  '🛡️ Pacote de cargos não foi alterado para essa Área.'
+                );
+              } else {
+                responseLines.push(
+                  `🔄 Cargos adicionados: **${result.addedRoleIds.length}**`
+                );
+
+                responseLines.push(
+                  `🧹 Cargos antigos removidos: **${result.removedRoleIds.length}**`
+                );
+              }
+
+              responseLines.push(
+                result.nicknameUpdated
+                  ? '🏷️ Nickname atualizado.'
+                  : '🏷️ Nickname já estava correto ou não precisou ser alterado.'
+              );
+            }
+
+            if (
+              result.formsSyncResult.status === 'synced'
+            ) {
+              responseLines.push(
+                '📚 FormsCreator sincronizado.'
+              );
+            } else if (
+              result.formsSyncResult.status === 'not_found'
+            ) {
+              responseLines.push(
+                '⚠️ FormsCreator: tópico pessoal não encontrado.'
+              );
+            } else if (
+              result.formsSyncResult.status === 'failed'
+            ) {
+              responseLines.push(
+                `⚠️ FormsCreator não foi sincronizado: ${result.formsSyncResult.error}`
+              );
+            } else if (
+              result.formsSyncResult.status === 'unavailable'
+            ) {
+              responseLines.push(
+                '⚠️ Integração com FormsCreator indisponível.'
+              );
+            }
+
+            await interaction.editReply({
+              content:
+                responseLines.join('\n')
+            });
+          } catch (e) {
+            await interaction.editReply({
+              content:
+                '⚠️ ' +
+                (
+                  e?.message ||
+                  'Falha ao editar o registro.'
+                )
+            });
+          }
+
           return;
         }
-
         // Atualizar controle
         if (interaction.isButton() && interaction.customId.startsWith(BTN.REFRESH_PREFIX)) {
           if (!hasAuth(interaction.member)) return interaction.reply({ content: '❌ Você não tem permissão.', flags: MessageFlags.Ephemeral });

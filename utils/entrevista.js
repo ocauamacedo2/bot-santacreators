@@ -32,8 +32,35 @@ const ALERT_ROLE_IDS = [
   "1388975939161161728", // gestor creators
 ];
 
-// salva no storage (você tem essa pasta)
-const ENTREVISTAS_PATH = path.resolve(process.cwd(), 'storage', 'entrevistas_backup.json');
+// ===== STORAGE PERSISTENTE DA ENTREVISTA =====
+function pickEntrevistaPersistRoot() {
+  const candidates = [
+    process.env.SQUARECLOUD_STORAGE_PATH?.trim(),
+    "/storage",
+    "/home/container/storage",
+    "/home/squarecloud/storage",
+  ].filter(Boolean);
+
+  for (const dir of candidates) {
+    try {
+      if (fs.existsSync(dir)) return dir;
+    } catch {}
+  }
+
+  return path.resolve(process.cwd(), "storage");
+}
+
+const ENTREVISTAS_DIR = pickEntrevistaPersistRoot();
+const ENTREVISTAS_PATH = path.join(
+  ENTREVISTAS_DIR,
+  "entrevistas_backup.json"
+);
+
+const ENTREVISTAS_LEGACY_PATH = path.resolve(
+  process.cwd(),
+  "storage",
+  "entrevistas_backup.json"
+);
 
 const PERGUNTAS_ALLOWED_CATEGORY_IDS = new Set([
   "1359244725781266492",
@@ -153,12 +180,37 @@ async function salvarEntrevistasEmDisco() {
 
 function carregarEntrevistasDoDisco() {
   try {
-    if (!fs.existsSync(ENTREVISTAS_PATH)) {
-      console.log('[Entrevista] Arquivo de backup não encontrado. Nenhuma entrevista para carregar.');
+    let arquivoLeitura = ENTREVISTAS_PATH;
+
+    // Se ainda não existir no storage persistente,
+    // tenta recuperar o arquivo antigo usado pelo sistema.
+    if (
+      !fs.existsSync(arquivoLeitura) &&
+      fs.existsSync(ENTREVISTAS_LEGACY_PATH)
+    ) {
+      arquivoLeitura = ENTREVISTAS_LEGACY_PATH;
+
+      console.log(
+        `[Entrevista] Backup legado encontrado em ${arquivoLeitura}. ` +
+        `Ele será migrado para o storage persistente.`
+      );
+    }
+
+    if (!fs.existsSync(arquivoLeitura)) {
+      console.log(
+        `[Entrevista] Arquivo de backup não encontrado em ` +
+        `${ENTREVISTAS_PATH}. Nenhuma entrevista para carregar.`
+      );
+
       return;
     }
-    const bruto = JSON.parse(fs.readFileSync(ENTREVISTAS_PATH, 'utf8'));
+
+    const bruto = JSON.parse(
+      fs.readFileSync(arquivoLeitura, 'utf8')
+    );
+
     let count = 0;
+
     for (const id in bruto) {
       entrevistas.set(id, {
         respostas: bruto[id].respostas || [],
@@ -167,25 +219,71 @@ function carregarEntrevistasDoDisco() {
         mensagens: bruto[id].mensagens || [],
         entrevistadorId: bruto[id].entrevistadorId || null,
         channelId: bruto[id].channelId || null,
-        lastSent: 0, // ✅ Adiciona o campo para o debounce
+        lastSent: 0,
         globalTimer: null
       });
+
       count++;
     }
+
     if (count > 0) {
-      console.log(`[Entrevista] Carregadas ${count} entrevista(s) do backup.`);
+      console.log(
+        `[Entrevista] Carregadas ${count} entrevista(s) do backup: ` +
+        `${arquivoLeitura}`
+      );
     }
+
+    // Migra automaticamente o backup antigo para o storage persistente.
+    if (arquivoLeitura !== ENTREVISTAS_PATH) {
+      const dir = path.dirname(ENTREVISTAS_PATH);
+
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+
+      fs.writeFileSync(
+        ENTREVISTAS_PATH,
+        JSON.stringify(bruto, null, 2),
+        'utf8'
+      );
+
+      console.log(
+        `[Entrevista] Backup migrado para: ${ENTREVISTAS_PATH}`
+      );
+    }
+
   } catch (e) {
     console.warn('Falha ao carregar entrevistas:', e);
   }
 }
 
 carregarEntrevistasDoDisco();
+
 // Hooks de saída (mantidos como sync para garantir o salvamento no encerramento do processo)
 process.on('exit', () => {
-  const dados = Object.fromEntries(entrevistas);
-  fs.writeFileSync(ENTREVISTAS_PATH, JSON.stringify(dados, null, 2));
+  try {
+    const dir = path.dirname(ENTREVISTAS_PATH);
+
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+
+    const dados = Object.fromEntries(entrevistas);
+
+    fs.writeFileSync(
+      ENTREVISTAS_PATH,
+      JSON.stringify(dados, null, 2),
+      'utf8'
+    );
+
+  } catch (e) {
+    console.warn(
+      '[Entrevista] Falha ao salvar backup no encerramento:',
+      e
+    );
+  }
 });
+
 // Estes hooks ajudam a salvar em caso de desligamento normal, mas não em caso de crash.
 // Por isso, chamamos salvarEntrevistasEmDisco() sempre que o estado muda.
 process.on('SIGINT', () => { process.exit(); });
@@ -298,21 +396,56 @@ async function reanexar(client) {
         }
       }
 
-      await logCompleto(client, {
+          console.log(
+        `[Entrevista] Reanexando entrevista para ${membro.user.tag} ` +
+        `no canal #${channel.name}. Próxima pergunta: ${dados.index + 1}`
+      );
+
+      // Reativa a pergunta imediatamente.
+      // NÃO usamos await porque enviarPergunta fica aguardando
+      // a resposta do candidato.
+      enviarPergunta(channel, membro, dados.index).catch(async (e) => {
+        console.warn(
+          '[Entrevista] Falha ao retomar pergunta:',
+          userId,
+          e
+        );
+
+        entrevistasAtivas.delete(channel.id);
+
+        await salvarEntrevistasEmDisco().catch(() => {});
+      });
+
+      // O log não deve bloquear a retomada da entrevista.
+      logCompleto(client, {
         titulo: '🔄 Entrevista reanexada',
         cor: 0xf1c40f,
         autorTag: membro.user.tag,
         autorIcon: membro.user.displayAvatarURL({ dynamic: true }),
         desc: `O bot voltou e reanexou a entrevista em andamento.`,
         fields: [
-          { name: '👤 Entrevistado', value: `<@${userId}>`, inline: true },
-          { name: '📍 Canal', value: `<#${channel.id}>`, inline: true },
-          { name: '⏳ Restante', value: `${Math.ceil(restante / 60000)} min`, inline: true }
+          {
+            name: '👤 Entrevistado',
+            value: `<@${userId}>`,
+            inline: true
+          },
+          {
+            name: '📍 Canal',
+            value: `<#${channel.id}>`,
+            inline: true
+          },
+          {
+            name: '⏳ Restante',
+            value: `${Math.ceil(restante / 60000)} min`,
+            inline: true
+          }
         ]
+      }).catch((e) => {
+        console.warn(
+          '[Entrevista] Falha ao registrar log de reanexação:',
+          e
+        );
       });
-
-      console.log(`[Entrevista] Reanexando entrevista para ${membro.user.tag} no canal #${channel.name}. Próxima pergunta: ${dados.index + 1}`);
-      enviarPergunta(channel, membro, dados.index);
     } catch (e) {
       console.warn('Falha ao reanexar:', userId, e);
     }

@@ -138,6 +138,93 @@ DIVISIONS: {
   },
 };
 
+// =====================================================
+// HIERARQUIA INSTITUCIONAL OFICIAL SANTACREATORS
+// =====================================================
+//
+// IMPORTANTE:
+//
+// A ordem abaixo é a fonte institucional para sistemas
+// externos que precisem comparar autoridade.
+//
+// NÃO utiliza:
+// - role.position;
+// - member.roles.highest;
+// - Administrator;
+// - ManageRoles.
+//
+// Quanto MENOR o índice, MAIOR a autoridade.
+// =====================================================
+
+const OFFICIAL_SANTA_CREATORS_HIERARCHY = Object.freeze([
+  Object.freeze({
+    key: "OWNER",
+    label: "Owner",
+    roleId: CONFIG.ROLES.OWNER,
+    responsible: true,
+  }),
+  Object.freeze({
+    key: "RESP_CREATOR",
+    label: "Resp. Creators",
+    roleId: CONFIG.ROLES.RESP_CREATOR,
+    responsible: true,
+  }),
+  Object.freeze({
+    key: "RESP_INFLU",
+    label: "Resp. Influ",
+    roleId: CONFIG.ROLES.RESP_INFLU,
+    responsible: true,
+  }),
+  Object.freeze({
+    key: "RESP_LIDER",
+    label: "Resp. Líder",
+    roleId: CONFIG.ROLES.RESP_LIDER,
+    responsible: true,
+  }),
+  Object.freeze({
+    key: "COORD_CREATOR",
+    label: "Coord. Creators",
+    roleId: CONFIG.ROLES.COORD_CREATOR,
+    responsible: true,
+  }),
+  Object.freeze({
+    key: "GESTOR",
+    label: "Gestor",
+    roleId: CONFIG.ROLES.GESTOR,
+    responsible: true,
+  }),
+  Object.freeze({
+    key: "MANAGER_CREATOR",
+    label: "Manager Creators",
+    roleId: CONFIG.ROLES.MANAGER_CREATOR,
+    responsible: true,
+  }),
+  Object.freeze({
+    key: "SOCIAL_MEDIAS",
+    label: "Social Medias",
+    roleId: CONFIG.ROLES.SOCIAL_MEDIAS,
+    responsible: false,
+  }),
+  Object.freeze({
+    key: "EQ_MANAGER",
+    label: "Equipe Manager",
+    roleId: CONFIG.ROLES.EQ_MANAGER,
+    responsible: false,
+  }),
+  Object.freeze({
+    key: "EQ_SOCIAL_MEDIAS",
+    label: "Equipe Social Medias",
+    roleId: CONFIG.ROLES.EQ_SOCIAL_MEDIAS,
+    responsible: false,
+  }),
+  Object.freeze({
+    key: "EQ_CREATORS",
+    label: "Equipe Creators",
+    roleId: CONFIG.ROLES.EQ_CREATORS,
+    responsible: false,
+  }),
+]);
+
 // ================= PERSISTÊNCIA =================
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -417,6 +504,72 @@ export function isOfficialSantaCreatorsResponsible(member) {
   );
 }
 
+export function getOfficialSantaCreatorsHierarchyRankForRoleId(roleId) {
+  const normalizedRoleId = String(roleId || "").trim();
+
+  if (!normalizedRoleId) {
+    return Infinity;
+  }
+
+  const index = OFFICIAL_SANTA_CREATORS_HIERARCHY.findIndex(
+    (definition) =>
+      definition.roleId === normalizedRoleId
+  );
+
+  return index >= 0
+    ? index
+    : Infinity;
+}
+
+export function getOfficialSantaCreatorsHierarchyRank(member) {
+  if (
+    !member ||
+    member.user?.bot ||
+    !member.roles?.cache
+  ) {
+    return Infinity;
+  }
+
+  for (
+    let index = 0;
+    index < OFFICIAL_SANTA_CREATORS_HIERARCHY.length;
+    index++
+  ) {
+    const definition =
+      OFFICIAL_SANTA_CREATORS_HIERARCHY[index];
+
+    if (
+      member.roles.cache.has(
+        definition.roleId
+      )
+    ) {
+      return index;
+    }
+  }
+
+  return Infinity;
+}
+
+export function getOfficialSantaCreatorsHierarchyDefinition(member) {
+  const rank =
+    getOfficialSantaCreatorsHierarchyRank(
+      member
+    );
+
+  if (
+    !Number.isFinite(rank) ||
+    rank < 0 ||
+    rank >= OFFICIAL_SANTA_CREATORS_HIERARCHY.length
+  ) {
+    return null;
+  }
+
+  return {
+    rank,
+    ...OFFICIAL_SANTA_CREATORS_HIERARCHY[rank],
+  };
+}
+
 export function getOfficialSantaCreatorsHierarchySnapshot(guild) {
   if (!guild) {
     return null;
@@ -428,74 +581,8 @@ export function getOfficialSantaCreatorsHierarchySnapshot(guild) {
   const divisions =
     loadDivisions();
 
-  const hierarchyDefinitions = [
-    {
-      key: "OWNER",
-      label: "Owner",
-      roleId: CONFIG.ROLES.OWNER,
-      responsible: true,
-    },
-    {
-      key: "RESP_CREATOR",
-      label: "Resp. Creators",
-      roleId: CONFIG.ROLES.RESP_CREATOR,
-      responsible: true,
-    },
-    {
-      key: "RESP_INFLU",
-      label: "Resp. Influ",
-      roleId: CONFIG.ROLES.RESP_INFLU,
-      responsible: true,
-    },
-    {
-      key: "RESP_LIDER",
-      label: "Resp. Líder",
-      roleId: CONFIG.ROLES.RESP_LIDER,
-      responsible: true,
-    },
-    {
-      key: "COORD_CREATOR",
-      label: "Coord. Creators",
-      roleId: CONFIG.ROLES.COORD_CREATOR,
-      responsible: true,
-    },
-    {
-      key: "GESTOR",
-      label: "Gestor",
-      roleId: CONFIG.ROLES.GESTOR,
-      responsible: true,
-    },
-    {
-      key: "MANAGER_CREATOR",
-      label: "Manager Creators",
-      roleId: CONFIG.ROLES.MANAGER_CREATOR,
-      responsible: true,
-    },
-    {
-      key: "SOCIAL_MEDIAS",
-      label: "Social Medias",
-      roleId: CONFIG.ROLES.SOCIAL_MEDIAS,
-      responsible: false,
-    },
-    {
-      key: "EQ_MANAGER",
-      label: "Equipe Manager",
-      roleId: CONFIG.ROLES.EQ_MANAGER,
-      responsible: false,
-    },
-    {
-      key: "EQ_SOCIAL_MEDIAS",
-      label: "Equipe Social Medias",
-      roleId: CONFIG.ROLES.EQ_SOCIAL_MEDIAS,
-      responsible: false,
-    },
-    {
-      key: "EQ_CREATORS",
-      label: "Equipe Creators",
-      roleId: CONFIG.ROLES.EQ_CREATORS,
-      responsible: false,
-    },
-  ];
+  const hierarchyDefinitions =
+    OFFICIAL_SANTA_CREATORS_HIERARCHY;
 
   const seenMembers =
     new Set();

@@ -1946,8 +1946,259 @@ export async function setFormsCreatorStatus(client, { threadId, newStatus, actor
 }
 
 export async function setFormsCreatorArea(client, { threadId, newArea, actor }) {
-    // Similar ao de status, a lógica de edição já existe.
-    console.log(`[FormsCreator] Ação de área solicitada para thread ${threadId} para ${newArea}`);
+    const normalizedThreadId =
+        String(threadId || "").trim();
+
+    const normalizedArea =
+        String(newArea || "").trim();
+
+    if (!normalizedThreadId) {
+        throw new Error(
+            "Thread do FormsCreator não informada."
+        );
+    }
+
+    if (!normalizedArea) {
+        throw new Error(
+            "Nova Área de Interesse não informada."
+        );
+    }
+
+    const state =
+        readState();
+
+    let registration =
+        state.registrations?.[
+            normalizedThreadId
+        ] || null;
+
+    const thread =
+        await client.channels
+            .fetch(normalizedThreadId)
+            .catch(() => null);
+
+    if (
+        !thread ||
+        !thread.isTextBased()
+    ) {
+        throw new Error(
+            "Tópico do FormsCreator não encontrado."
+        );
+    }
+
+    if (
+        thread.archived &&
+        typeof thread.setArchived === "function"
+    ) {
+        await thread
+            .setArchived(false)
+            .catch(() => {});
+    }
+
+    let registroMsg = null;
+
+    if (
+        registration?.messageId
+    ) {
+        registroMsg =
+            await thread.messages
+                .fetch(
+                    registration.messageId
+                )
+                .catch(() => null);
+
+        if (
+            registroMsg &&
+            registroMsg.author?.id !== client.user?.id
+        ) {
+            registroMsg = null;
+        }
+    }
+
+    if (!registroMsg) {
+        const mensagens =
+            await thread.messages
+                .fetch({
+                    limit: 100
+                })
+                .catch(() => null);
+
+        if (mensagens) {
+            registroMsg =
+                mensagens.find(
+                    (msg) =>
+                        isFormsCreatorMainRegisterMessage(
+                            msg,
+                            client
+                        )
+                ) || null;
+        }
+    }
+
+    if (!registroMsg) {
+        throw new Error(
+            "Mensagem principal do FormsCreator não encontrada."
+        );
+    }
+
+    const originalEmbed =
+        registroMsg.embeds?.[0];
+
+    if (!originalEmbed) {
+        throw new Error(
+            "Embed principal do FormsCreator não encontrado."
+        );
+    }
+
+    const embed =
+        EmbedBuilder.from(
+            originalEmbed
+        );
+
+    const fields =
+        Array.isArray(embed.data.fields)
+            ? [...embed.data.fields]
+            : [];
+
+    const areaFieldIndex =
+        fields.findIndex(
+            (field) =>
+                String(field?.name || "")
+                    .toLowerCase()
+                    .includes(
+                        "área de interesse"
+                    )
+        );
+
+    if (
+        areaFieldIndex < 0
+    ) {
+        throw new Error(
+            "Campo Área de Interesse não encontrado no FormsCreator."
+        );
+    }
+
+    const oldArea =
+        String(
+            fields[areaFieldIndex]?.value ||
+            registration?.area ||
+            "A Definir"
+        ).trim();
+
+    fields[areaFieldIndex] = {
+        ...fields[areaFieldIndex],
+        name:
+            fields[areaFieldIndex]?.name ||
+            "📚 Área de Interesse",
+        value:
+            normalizedArea,
+        inline:
+            fields[areaFieldIndex]?.inline !== false
+    };
+
+    embed.setFields(
+        fields
+    );
+
+    await registroMsg.edit({
+        embeds: [embed]
+    });
+
+    if (!registration) {
+        const description =
+            String(
+                originalEmbed.description ||
+                ""
+            ).trim();
+
+        const userId =
+            description.match(
+                /^<@!?(\d{17,20})>$/
+            )?.[1] || null;
+
+        const idCidade =
+            originalEmbed.fields
+                ?.find(
+                    (field) =>
+                        String(
+                            field?.name ||
+                            ""
+                        ).includes(
+                            "ID/Passaporte"
+                        )
+                )
+                ?.value || "?";
+
+        const statusField =
+            originalEmbed.fields
+                ?.find(
+                    (field) =>
+                        String(
+                            field?.name ||
+                            ""
+                        ) ===
+                        "Status do Projeto"
+                );
+
+        const active =
+            statusField
+                ? String(
+                    statusField.value ||
+                    ""
+                  ).includes("Ativo")
+                : false;
+
+        registration = {
+            userId,
+            nome:
+                String(
+                    originalEmbed.title ||
+                    ""
+                )
+                    .replace(
+                        /^👤\s*/,
+                        ""
+                    )
+                    .trim() ||
+                "Membro",
+            idCidade,
+            area:
+                normalizedArea,
+            active,
+            messageId:
+                registroMsg.id
+        };
+    }
+
+    registration.area =
+        normalizedArea;
+
+    registration.messageId =
+        registroMsg.id;
+
+    state.registrations[
+        normalizedThreadId
+    ] = registration;
+
+    writeState(
+        state
+    );
+
+    console.log(
+        `[FormsCreator] Área da thread ${normalizedThreadId} alterada ` +
+        `de "${oldArea}" para "${normalizedArea}" ` +
+        `por ${actor?.id || "sistema"}.`
+    );
+
+    return {
+        threadId:
+            normalizedThreadId,
+        messageId:
+            registroMsg.id,
+        oldArea,
+        newArea:
+            normalizedArea
+    };
 }
 
 // =========================
