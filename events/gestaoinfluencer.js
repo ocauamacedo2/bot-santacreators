@@ -66,6 +66,30 @@ const {
       getOfficialSantaCreatorsHierarchyRankForRoleId
     } = hierarchyDivisoes;
 
+    // =====================================================
+    // IA — COMENTÁRIO SEMANAL INDIVIDUAL
+    // =====================================================
+
+    let weeklyMemberAiFeedback = {};
+
+    try {
+      weeklyMemberAiFeedback =
+        await import(
+          './weeklyMemberAiFeedback.js'
+        );
+    } catch (e) {
+      console.warn(
+        "[SC_GI] ⚠️ weeklyMemberAiFeedback.js não pôde ser carregado. " +
+        "Os comentários semanais por IA ficarão desativados.",
+        e?.message || e
+      );
+    }
+
+    const {
+      weeklyMemberAiFeedbackOnReady,
+      forceWeeklyMemberAiFeedback
+    } = weeklyMemberAiFeedback;
+
     if (client.__SC_GI_INSTALLED) {
       console.log('[SC_GI] Já instalado, pulando.');
       return;
@@ -1936,6 +1960,7 @@ async function resolveInitialRoleSetAtMs(guild, targetId) {
   DMNOW_PREFIX: 'SC_GI_DMNOW_',
   RESP_PREFIX: 'SC_GI_RESP_',
   REFRESH_PREFIX: 'SC_GI_REFRESH_',
+  FEEDBACK_AI_PREFIX: 'SC_GI_FEEDBACK_AI_',
   DESLIGAR_PREFIX: 'SC_GI_OFF_'
 };
     const SEL = {
@@ -2046,6 +2071,12 @@ function registroButtons(messageId, active) {
   );
 
   const rowDanger = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(BTN.FEEDBACK_AI_PREFIX + messageId)
+      .setStyle(ButtonStyle.Primary)
+      .setEmoji('🧠')
+      .setLabel('Comentário IA'),
+
     new ButtonBuilder()
       .setCustomId(BTN.DESLIGAR_PREFIX + messageId)
       .setStyle(ButtonStyle.Danger)
@@ -4164,6 +4195,24 @@ if (!rec.active) {
     client.once(Events.ClientReady, async () => {
       try {
         await SC_GI_load();
+
+        // =====================================================
+        // IA — FEEDBACK SEMANAL DOS MEMBROS
+        // =====================================================
+
+        if (
+          typeof weeklyMemberAiFeedbackOnReady ===
+          'function'
+        ) {
+          weeklyMemberAiFeedbackOnReady(
+            client
+          );
+        } else {
+          console.warn(
+            '[SC_GI] Weekly Member AI indisponível. Scheduler não iniciado.'
+          );
+        }
+
         for (const [, guild] of client.guilds.cache) {
           await ensureMenu(guild);
 
@@ -4541,6 +4590,124 @@ if (!rec.active) {
           await ensureMenu(guild);
 
           await interaction.editReply({ content: `✅ Verificação completa.\n**${fixedCount}** registros restaurados/migrados.\n**${orphansRemoved}** duplicatas (órfãs) removidas.` });
+          return;
+        }
+
+        // =====================================================
+        // COMENTÁRIO SEMANAL POR IA
+        // =====================================================
+
+        if (
+          interaction.isButton() &&
+          interaction.customId.startsWith(
+            BTN.FEEDBACK_AI_PREFIX
+          )
+        ) {
+          const raw =
+            interaction.customId.replace(
+              BTN.FEEDBACK_AI_PREFIX,
+              ''
+            );
+
+          const {
+            rec,
+            id: messageId
+          } =
+            resolveRecordByInteraction(
+              interaction,
+              raw
+            );
+
+          if (
+            !rec
+          ) {
+            return interaction.reply({
+              content:
+                '❌ Registro GI não encontrado.',
+
+              flags:
+                MessageFlags.Ephemeral
+            });
+          }
+
+          await interaction.deferReply({
+            flags:
+              MessageFlags.Ephemeral
+          });
+
+          try {
+            // =====================================================
+            // USA EXATAMENTE A MESMA TRAVA HIERÁRQUICA DO GI
+            // =====================================================
+
+            await assertCanManageGIRecord(
+              guild,
+              interaction.user,
+              rec.targetId,
+              'gerar o comentário semanal de IA'
+            );
+
+            if (
+              typeof forceWeeklyMemberAiFeedback !==
+              'function'
+            ) {
+              throw new Error(
+                'O módulo de comentário semanal por IA não está disponível.'
+              );
+            }
+
+            const result =
+              await forceWeeklyMemberAiFeedback({
+                client,
+                guild,
+                record:
+                  rec,
+                actorUser:
+                  interaction.user
+              });
+
+            const formsUrl =
+              result
+                ?.facts
+                ?.formsData
+                ?.threadUrl ||
+              (
+                result
+                  ?.facts
+                  ?.formsThread
+                  ?.id
+                  ? `https://discord.com/channels/${guild.id}/${result.facts.formsThread.id}`
+                  : null
+              );
+
+            await interaction.editReply({
+              content: [
+                result?.replaced
+                  ? '🔄 **Comentário semanal atualizado com sucesso!**'
+                  : '🧠 **Comentário semanal criado com sucesso!**',
+
+                '',
+
+                `👤 **Membro:** <@${rec.targetId}>`,
+
+                result?.replaced
+                  ? '♻️ O comentário manual anterior desta semana foi substituído pela análise atualizada.'
+                  : '✨ Foi criado o primeiro acompanhamento manual desta semana.',
+
+                formsUrl
+                  ? `🔗 **Forms pessoal:** ${formsUrl}`
+                  : ''
+              ]
+                .filter(Boolean)
+                .join('\n')
+            });
+          } catch (e) {
+            await interaction.editReply({
+              content:
+                `⚠️ ${e?.message || 'Não foi possível gerar o comentário semanal.'}`
+            });
+          }
+
           return;
         }
 

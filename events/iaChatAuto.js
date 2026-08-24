@@ -11681,6 +11681,159 @@ function isGeminiTransientError(err) {
 }
 
 // =====================================================
+// IA — GERAÇÃO STANDALONE PARA SISTEMAS INTERNOS
+// =====================================================
+//
+// Permite que outros sistemas internos da SantaCreators
+// utilizem a mesma infraestrutura Gemini deste arquivo.
+//
+// Exemplos:
+// - feedback semanal individual;
+// - textos operacionais;
+// - análises internas;
+// - comentários humanizados.
+//
+// Continua utilizando:
+// - GEMINI_API_KEY;
+// - cadeia oficial de fallbacks;
+// - timeout;
+// - tratamento de quota;
+// - tratamento de erro temporário;
+// - tratamento de modelo indisponível.
+//
+// =====================================================
+
+export async function generateSantaCreatorsStandaloneText({
+  prompt,
+  maxOutputTokens = 900,
+  temperature = 0.75,
+  label = "IA standalone",
+}) {
+  const geminiClient =
+    getGeminiClient();
+
+  if (
+    !geminiClient
+  ) {
+    throw new Error(
+      "Cliente Gemini indisponível. Verifique GEMINI_API_KEY."
+    );
+  }
+
+  const finalPrompt =
+    String(
+      prompt || ""
+    ).trim();
+
+  if (
+    !finalPrompt
+  ) {
+    throw new Error(
+      "Prompt vazio para geração standalone."
+    );
+  }
+
+  let lastError =
+    null;
+
+  for (
+    const modelName of
+    GEMINI_CHAT_MODEL_FALLBACKS
+  ) {
+    try {
+      const result =
+        await withGeminiTimeout(
+          geminiClient
+            .models
+            .generateContent({
+              model:
+                modelName,
+
+              contents:
+                finalPrompt,
+
+              config: {
+                temperature,
+
+                topP:
+                  0.9,
+
+                topK:
+                  35,
+
+                maxOutputTokens,
+              },
+            }),
+
+          GEMINI_REQUEST_TIMEOUT_MS,
+
+          `${label} | ${modelName}`
+        );
+
+      const text =
+        String(
+          result?.text ||
+          ""
+        ).trim();
+
+      if (
+        !text
+      ) {
+        throw new Error(
+          `Modelo ${modelName} retornou resposta vazia.`
+        );
+      }
+
+      return text;
+    } catch (
+      err
+    ) {
+      lastError =
+        err;
+
+      if (
+        err?.code ===
+          "GEMINI_REQUEST_TIMEOUT" ||
+        isGeminiQuotaError(
+          err
+        ) ||
+        isGeminiTransientError(
+          err
+        ) ||
+        isGeminiModelError(
+          err
+        )
+      ) {
+        console.warn(
+          `[IA STANDALONE] ${label} falhou em ${modelName}. Tentando próximo fallback...`,
+          err?.message ||
+          err
+        );
+
+        continue;
+      }
+
+      if (
+        isGeminiKeyError(
+          err
+        )
+      ) {
+        throw err;
+      }
+
+      throw err;
+    }
+  }
+
+  throw (
+    lastError ||
+    new Error(
+      "Nenhum modelo Gemini conseguiu gerar o texto standalone."
+    )
+  );
+}
+
+// =====================================================
 // GERAR RESPOSTA
 // =====================================================
 
