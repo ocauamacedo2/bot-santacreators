@@ -32,26 +32,105 @@ const TARGET_ROLE_IDS = new Set([
 // ARQUIVOS
 // =====================================================
 
-const DATA_DIR = path.resolve(
-  process.cwd(),
-  "data"
-);
+function pickFeedbackPersistRoot() {
+  const candidates = [
+    process.env.SQUARECLOUD_STORAGE_PATH?.trim(),
+    "/storage",
+    "/home/container/storage",
+    "/home/squarecloud/storage",
+  ].filter(Boolean);
 
-const GI_DATA_FILE = path.join(
-  DATA_DIR,
-  "sc_gi_registros.json"
-);
+  for (
+    const directory of
+    candidates
+  ) {
+    try {
+      if (
+        fs.existsSync(
+          directory
+        )
+      ) {
+        return directory;
+      }
+    } catch {}
+  }
 
-const WEEKLY_SOURCES_FILE = path.join(
-  DATA_DIR,
-  "sc_geral_weekly_rank_sources.json"
-);
+  return null;
+}
 
-const FEEDBACK_STATE_FILE = path.join(
-  DATA_DIR,
-  "sc_weekly_member_ai_feedback.json"
-);
+const APP_DATA_DIR =
+  path.resolve(
+    process.cwd(),
+    "data"
+  );
 
+const PERSIST_DATA_DIR =
+  path.resolve(
+    pickFeedbackPersistRoot() ||
+      process.cwd(),
+    "data"
+  );
+
+// =====================================================
+// CONTROLE GI
+// =====================================================
+//
+// Mantém o mesmo local utilizado atualmente pelo GI.
+//
+const GI_DATA_FILE =
+  path.join(
+    APP_DATA_DIR,
+    "sc_gi_registros.json"
+  );
+
+// =====================================================
+// FONTES DO RANKING
+// =====================================================
+//
+// Procura primeiro no storage persistente da Square Cloud
+// e mantém /application/data como fallback.
+//
+// Assim o feedback consegue enxergar os mesmos registros
+// que o Ranking está mostrando no painel.
+//
+const WEEKLY_SOURCES_FILES =
+  [
+    path.join(
+      PERSIST_DATA_DIR,
+      "sc_geral_weekly_rank_sources.json"
+    ),
+
+    path.join(
+      APP_DATA_DIR,
+      "sc_geral_weekly_rank_sources.json"
+    ),
+  ].filter(
+    (
+      file,
+      index,
+      array
+    ) =>
+      array.indexOf(
+        file
+      ) === index
+  );
+
+// =====================================================
+// ESTADO DO FEEDBACK
+// =====================================================
+//
+// O estado dos comentários fica persistente para sobreviver
+// a restart/deploy quando storage estiver disponível.
+//
+const FEEDBACK_STATE_FILE =
+  path.join(
+    PERSIST_DATA_DIR,
+    "sc_weekly_member_ai_feedback.json"
+  );
+
+// Compatibilidade com funções existentes que utilizam DATA_DIR.
+const DATA_DIR =
+  PERSIST_DATA_DIR;
 // =====================================================
 // CONFIGURAÇÃO
 // =====================================================
@@ -689,21 +768,60 @@ function getUserWeekSources(
   userId,
   weekKey
 ) {
-  const allWeeks =
-    readJson(
-      WEEKLY_SOURCES_FILE,
-      {}
-    );
+  let bestBucket =
+    {};
 
-  return normalizeSourceBucket(
-    allWeeks?.[
-      weekKey
-    ]?.[
-      String(
-        userId
-      )
-    ] || {}
-  );
+  let bestTotal =
+    0;
+
+  for (
+    const sourceFile of
+    WEEKLY_SOURCES_FILES
+  ) {
+    const allWeeks =
+      readJson(
+        sourceFile,
+        {}
+      );
+
+    const bucket =
+      normalizeSourceBucket(
+        allWeeks?.[
+          weekKey
+        ]?.[
+          String(
+            userId
+          )
+        ] || {}
+      );
+
+    const total =
+      sumSources(
+        bucket
+      );
+
+    /*
+     * Pode existir uma cópia antiga em /application/data
+     * e uma mais atual em /storage/data.
+     *
+     * Não soma os dois arquivos porque seriam as mesmas
+     * atividades duplicadas.
+     *
+     * Utiliza a leitura mais completa.
+     */
+    if (
+      total >
+      bestTotal
+    ) {
+      bestBucket =
+        bucket;
+
+      bestTotal =
+        total;
+    }
+  }
+
+  return bestBucket;
 }
 
 function sumSources(
@@ -2065,8 +2183,460 @@ Entregue SOMENTE a mensagem final para ${facts.displayName}.
 }
 
 // =====================================================
-// TEXTO GERADO
+// FALLBACK LOCAL FACTUAL
 // =====================================================
+//
+// Se o Gemini estiver sem quota, o sistema ainda consegue
+// produzir um comentário útil baseado SOMENTE nos fatos
+// que já foram coletados.
+//
+// Não utiliza informação inventada.
+// =====================================================
+
+function getFeedbackFirstName(
+  facts
+) {
+  return (
+    String(
+      facts?.displayName ||
+      "Oi"
+    )
+      .trim()
+      .split(
+        /\s+/
+      )[0] ||
+    "Oi"
+  );
+}
+
+function getSortedCurrentSourceEntries(
+  facts
+) {
+  return Object.entries(
+    facts?.currentSources ||
+      {}
+  )
+    .map(
+      ([
+        sourceName,
+        amountRaw,
+      ]) => ({
+        sourceName,
+
+        label:
+          getSourceLabel(
+            sourceName
+          ),
+
+        amount:
+          Math.max(
+            0,
+            Number(
+              amountRaw ||
+                0
+            )
+          ),
+      })
+    )
+    .filter(
+      item =>
+        item.amount >
+        0
+    )
+    .sort(
+      (
+        first,
+        second
+      ) =>
+        second.amount -
+        first.amount
+    );
+}
+
+function buildHumanSourceSentence(
+  facts
+) {
+  const entries =
+    getSortedCurrentSourceEntries(
+      facts
+    );
+
+  if (
+    !entries.length
+  ) {
+    return "";
+  }
+
+  const selected =
+    entries.slice(
+      0,
+      5
+    );
+
+  const parts =
+    selected.map(
+      item => {
+        const amount =
+          item.amount;
+
+        const label =
+          item.label;
+
+        if (
+          amount ===
+          1
+        ) {
+          return `1 registro em ${label}`;
+        }
+
+        return `${amount} registros em ${label}`;
+      }
+    );
+
+  if (
+    parts.length ===
+    1
+  ) {
+    return parts[0];
+  }
+
+  if (
+    parts.length ===
+    2
+  ) {
+    return `${parts[0]} e ${parts[1]}`;
+  }
+
+  return (
+    parts
+      .slice(
+        0,
+        -1
+      )
+      .join(
+        ", "
+      ) +
+    ` e ${
+      parts[
+        parts.length -
+        1
+      ]
+    }`
+  );
+}
+
+function buildPreviousWeekComparisonText(
+  facts
+) {
+  const current =
+    Number(
+      facts?.currentTotal ||
+        0
+    );
+
+  const previous =
+    Number(
+      facts?.previousTotal ||
+        0
+    );
+
+  if (
+    previous <=
+    0
+  ) {
+    return "";
+  }
+
+  if (
+    current >
+    previous
+  ) {
+    return (
+      "Comparando com a semana anterior, você já está com uma movimentação maior até aqui, então tem um sinal positivo de crescimento no ritmo."
+    );
+  }
+
+  if (
+    current ===
+    previous
+  ) {
+    return (
+      "Até aqui seu volume está próximo do que apareceu na semana anterior, então o ponto principal agora é manter a constância e continuar distribuindo bem sua participação."
+    );
+  }
+
+  return (
+    "Comparando com a semana anterior, o volume ainda está abaixo do que você vinha registrando. Como a semana ainda está andando, ainda existe espaço para recuperar esse ritmo nos próximos dias."
+  );
+}
+
+function buildFormsContextText(
+  facts
+) {
+  const currentForms =
+    Array.isArray(
+      facts?.formsHistory
+    )
+      ? facts.formsHistory
+      : [];
+
+  const previousForms =
+    Array.isArray(
+      facts?.previousFormsHistory
+    )
+      ? facts.previousFormsHistory
+      : [];
+
+  if (
+    currentForms.length >
+      0 &&
+    previousForms.length >
+      0
+  ) {
+    return (
+      `Também existem ${currentForms.length} registro(s) ou comentário(s) no seu Forms nesta semana, além do histórico anterior que já vinha sendo acompanhado. Isso ajuda a olhar seu processo além da pontuação e acompanhar se as orientações e a forma de trabalhar estão evoluindo.`
+    );
+  }
+
+  if (
+    currentForms.length >
+    0
+  ) {
+    return (
+      `Seu Forms também já recebeu ${currentForms.length} registro(s) ou comentário(s) durante esta semana, então o acompanhamento não está olhando apenas quantidade de pontos, mas também o que vem sendo registrado sobre seu processo.`
+    );
+  }
+
+  if (
+    previousForms.length >
+    0
+  ) {
+    return (
+      "Existe histórico anterior no seu Forms que continua servindo como referência para acompanhar sua evolução, mesmo que ainda existam poucos registros novos nesta semana."
+    );
+  }
+
+  return "";
+}
+
+function buildLocalFactRichFeedback({
+  facts,
+  mode,
+}) {
+  const firstName =
+    getFeedbackFirstName(
+      facts
+    );
+
+  const sourceSentence =
+    buildHumanSourceSentence(
+      facts
+    );
+
+  const comparison =
+    buildPreviousWeekComparisonText(
+      facts
+    );
+
+  const formsContext =
+    buildFormsContextText(
+      facts
+    );
+
+  const currentTotal =
+    Math.max(
+      0,
+      Number(
+        facts?.currentTotal ||
+          0
+      )
+    );
+
+  const paragraphs =
+    [];
+
+  if (
+    sourceSentence
+  ) {
+    paragraphs.push(
+      `${firstName}, já dá para enxergar melhor como sua semana está andando até aqui 👀 Você soma ${currentTotal} atividade(s) considerada(s) no acompanhamento, com ${sourceSentence}. Isso já mostra onde você mais apareceu nesses primeiros dias, em vez de olhar só para um número geral.`
+    );
+  } else if (
+    currentTotal >
+    0
+  ) {
+    paragraphs.push(
+      `${firstName}, já existem ${currentTotal} atividade(s) registradas no seu acompanhamento nesta semana. O volume já aparece, mas ainda não consegui separar com segurança todas as frentes dessas atividades, então prefiro não inventar quais foram.`
+    );
+  } else {
+    paragraphs.push(
+      `${firstName}, por enquanto ainda existem poucos registros concretos desta semana para fazer uma leitura completa do seu andamento. Como ainda estamos no decorrer da semana, isso pode mudar bastante nos próximos dias.`
+    );
+  }
+
+  if (
+    formsContext
+  ) {
+    paragraphs.push(
+      formsContext
+    );
+  }
+
+  if (
+    comparison
+  ) {
+    paragraphs.push(
+      comparison
+    );
+  }
+
+  if (
+    mode ===
+      "manual"
+  ) {
+    paragraphs.push(
+      "Para o restante da semana, o ideal é continuar deixando sua participação registrada e manter constância nas frentes em que você já começou a aparecer. Assim, no próximo retorno dá para comparar seu processo com muito mais precisão. 🙌"
+    );
+  } else {
+    paragraphs.push(
+      "No fechamento, o mais importante é usar esse histórico para manter o que funcionou bem e ajustar as frentes em que sua participação ainda ficou menor. 🙌"
+    );
+  }
+
+  return paragraphs
+    .filter(
+      Boolean
+    )
+    .slice(
+      0,
+      4
+    )
+    .join(
+      "\n\n"
+    )
+    .slice(
+      0,
+      3400
+    );
+}
+
+// =====================================================
+// VALIDAÇÃO DE QUALIDADE DA RESPOSTA
+// =====================================================
+
+function normalizeFeedbackComparisonText(
+  value
+) {
+  return String(
+    value ||
+      ""
+  )
+    .toLowerCase()
+    .normalize(
+      "NFD"
+    )
+    .replace(
+      /[\u0300-\u036f]/g,
+      ""
+    );
+}
+
+function generatedFeedbackUsesRealActivity(
+  text,
+  facts
+) {
+  const entries =
+    getSortedCurrentSourceEntries(
+      facts
+    );
+
+  if (
+    !entries.length
+  ) {
+    return true;
+  }
+
+  const normalizedText =
+    normalizeFeedbackComparisonText(
+      text
+    );
+
+  return entries
+    .slice(
+      0,
+      5
+    )
+    .some(
+      item => {
+        const label =
+          normalizeFeedbackComparisonText(
+            item.label
+          );
+
+        const relevantWords =
+          label
+            .split(
+              /\s+/
+            )
+            .filter(
+              word =>
+                word.length >=
+                4
+            );
+
+        return relevantWords.some(
+          word =>
+            normalizedText.includes(
+              word
+            )
+        );
+      }
+    );
+}
+
+function isGeneratedFeedbackGoodEnough(
+  text,
+  facts
+) {
+  const clean =
+    String(
+      text ||
+        ""
+    ).trim();
+
+  if (
+    !clean
+  ) {
+    return false;
+  }
+
+  const hasRealActivity =
+    Object.keys(
+      facts?.currentSources ||
+        {}
+    ).length >
+    0;
+
+  if (
+    hasRealActivity &&
+    clean.length <
+      450
+  ) {
+    return false;
+  }
+
+  if (
+    hasRealActivity &&
+    !generatedFeedbackUsesRealActivity(
+      clean,
+      facts
+    )
+  ) {
+    return false;
+  }
+
+  return true;
+}
 
 function cleanGeneratedText(
   value
@@ -2101,34 +2671,72 @@ async function generateFeedback({
       mode,
     });
 
-  const generated =
-    await generateSantaCreatorsStandaloneText({
-      prompt,
+  try {
+    const generated =
+      await generateSantaCreatorsStandaloneText({
+        prompt,
 
-      maxOutputTokens:
-        900,
+        maxOutputTokens:
+          1200,
 
-      temperature:
-        0.78,
+        temperature:
+          0.72,
 
-      label:
-        `Weekly Member Feedback ${facts.userId}`,
+        label:
+          `Weekly Member Feedback ${facts.userId}`,
+      });
+
+    const text =
+      cleanGeneratedText(
+        generated
+      );
+
+    if (
+      isGeneratedFeedbackGoodEnough(
+        text,
+        facts
+      )
+    ) {
+      return text;
+    }
+
+    console.warn(
+      `[Weekly Member Feedback] A resposta de ${facts.userId} ficou genérica ou curta demais. Utilizando fallback factual local.`
+    );
+
+    return buildLocalFactRichFeedback({
+      facts,
+      mode,
     });
-
-  const text =
-    cleanGeneratedText(
-      generated
-    );
-
-  if (
-    !text
+  } catch (
+    error
   ) {
-    throw new Error(
-      "A IA retornou um comentário vazio."
+    /*
+     * Quota, timeout ou indisponibilidade do Gemini
+     * NÃO devem impedir o acompanhamento da pessoa.
+     */
+    console.warn(
+      `[Weekly Member Feedback] Gemini indisponível para ${facts.userId}. Utilizando fallback factual local:`,
+      error?.message ||
+        error
     );
-  }
 
-  return text;
+    const fallback =
+      buildLocalFactRichFeedback({
+        facts,
+        mode,
+      });
+
+    if (
+      !fallback
+    ) {
+      throw new Error(
+        "Não foi possível gerar o comentário e não havia fatos suficientes para montar o fallback local."
+      );
+    }
+
+    return fallback;
+  }
 }
 
 // =====================================================

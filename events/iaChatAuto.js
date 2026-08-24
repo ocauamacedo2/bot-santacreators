@@ -11701,6 +11701,59 @@ function isGeminiTransientError(err) {
 // - tratamento de erro temporário;
 // - tratamento de modelo indisponível.
 //
+
+
+// =====================================================
+// IA STANDALONE — COOLDOWN DE QUOTA POR MODELO
+// =====================================================
+//
+// Quando um modelo responder 429, evita tentar o mesmo
+// modelo repetidamente em cada feedback individual.
+//
+// Isso não aumenta a quota da API.
+// Apenas evita desperdiçar chamadas sabendo que aquele
+// modelo acabou de informar esgotamento.
+//
+const GEMINI_STANDALONE_QUOTA_COOLDOWN_MS =
+  30 * 60 * 1000;
+
+const geminiStandaloneQuotaBlockedUntil =
+  new Map();
+
+function isStandaloneModelTemporarilyBlocked(
+  modelName
+) {
+  const blockedUntil =
+    Number(
+      geminiStandaloneQuotaBlockedUntil.get(
+        modelName
+      ) ||
+        0
+    );
+
+  if (
+    blockedUntil <=
+    Date.now()
+  ) {
+    geminiStandaloneQuotaBlockedUntil.delete(
+      modelName
+    );
+
+    return false;
+  }
+
+  return true;
+}
+
+function blockStandaloneModelByQuota(
+  modelName
+) {
+  geminiStandaloneQuotaBlockedUntil.set(
+    modelName,
+    Date.now() +
+      GEMINI_STANDALONE_QUOTA_COOLDOWN_MS
+  );
+}
 // =====================================================
 
 export async function generateSantaCreatorsStandaloneText({
@@ -11736,11 +11789,19 @@ export async function generateSantaCreatorsStandaloneText({
   let lastError =
     null;
 
-  for (
-    const modelName of
-    GEMINI_CHAT_MODEL_FALLBACKS
+for (
+  const modelName of
+  GEMINI_CHAT_MODEL_FALLBACKS
+) {
+  if (
+    isStandaloneModelTemporarilyBlocked(
+      modelName
+    )
   ) {
-    try {
+    continue;
+  }
+
+  try {
       const result =
         await withGeminiTimeout(
           geminiClient
@@ -11791,27 +11852,40 @@ export async function generateSantaCreatorsStandaloneText({
       lastError =
         err;
 
-      if (
-        err?.code ===
-          "GEMINI_REQUEST_TIMEOUT" ||
-        isGeminiQuotaError(
-          err
-        ) ||
-        isGeminiTransientError(
-          err
-        ) ||
-        isGeminiModelError(
-          err
-        )
-      ) {
-        console.warn(
-          `[IA STANDALONE] ${label} falhou em ${modelName}. Tentando próximo fallback...`,
-          err?.message ||
-          err
-        );
+if (
+  isGeminiQuotaError(
+    err
+  )
+) {
+  blockStandaloneModelByQuota(
+    modelName
+  );
 
-        continue;
-      }
+  console.warn(
+    `[IA STANDALONE] ${label}: quota indisponível em ${modelName}. Modelo ficará em cooldown e o próximo fallback será tentado.`
+  );
+
+  continue;
+}
+
+if (
+  err?.code ===
+    "GEMINI_REQUEST_TIMEOUT" ||
+  isGeminiTransientError(
+    err
+  ) ||
+  isGeminiModelError(
+    err
+  )
+) {
+  console.warn(
+    `[IA STANDALONE] ${label} falhou em ${modelName}. Tentando próximo fallback...`,
+    err?.message ||
+      err
+  );
+
+  continue;
+}
 
       if (
         isGeminiKeyError(
