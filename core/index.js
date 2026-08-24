@@ -91,7 +91,7 @@ import messageUpdateLog from "../events/logs/messageUpdate.js";
 import channelCreateLog from "../events/logs/channelCreate.js";
 import channelDeleteLog from "../events/logs/channelDelete.js";
 import channelDeleteProtectLog from "../events/logs/channelDeleteProtect.js";
-import { installDiscordHealthDebug } from "./utils/discordHealthDebug.js";
+import { installDiscordHealthDebug } from "../utils/discordHealthDebug.js";
 // Handlers Gerais
 import messageCreateHandler from "../events/messageCreate.js";
 import interactionCreateHandler from "../events/interactionCreate.js";
