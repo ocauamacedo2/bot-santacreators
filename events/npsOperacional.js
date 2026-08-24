@@ -666,8 +666,14 @@ function createEmptyState() {
     // Mensagem do painel rápido.
     dashboardMessageId: null,
 
-    // Mensagem do painel executivo completo.
+    // Primeira mensagem do painel executivo completo.
     executiveDashboardMessageId: null,
+
+    // Mensagens adicionais do painel executivo.
+    //
+    // Necessárias quando os embeds ultrapassarem
+    // o limite combinado permitido pelo Discord.
+    executiveDashboardExtraMessageIds: [],
 
     weeks: {},
 
@@ -708,11 +714,21 @@ function loadState() {
     createEmptyState()
   );
 
-  state.version ||= 1;
-  state.dashboardMessageId ||= null;
-  state.executiveDashboardMessageId ||= null;
-  state.weeks ||= {};
-  state.pendingOperations ||= {};
+ state.version ||= 1;
+state.dashboardMessageId ||= null;
+state.executiveDashboardMessageId ||= null;
+
+if (
+  !Array.isArray(
+    state.executiveDashboardExtraMessageIds
+  )
+) {
+  state.executiveDashboardExtraMessageIds =
+    [];
+}
+
+state.weeks ||= {};
+state.pendingOperations ||= {};
 
   state.metadata ||= {
     createdAt:
@@ -10295,10 +10311,371 @@ return {
     null,
 };
 }
+// ============================================================================
+// PROTEÇÃO DE LIMITE DOS EMBEDS DO DISCORD
+// ============================================================================
+//
+// O Discord limita o conjunto de embeds de uma única
+// mensagem a aproximadamente 6000 caracteres.
+//
+// O painel executivo possui vários embeds grandes.
+// Portanto:
+//
+// 1. um embed grande pode ser dividido em continuações;
+// 2. depois os embeds são separados em várias mensagens;
+// 3. nenhum conteúdo operacional precisa ser descartado.
+// ============================================================================
 
-// ============================================================================
-// ATUALIZAÇÃO DO PAINEL
-// ============================================================================
+function getEmbedCharacterCount(
+  embed
+) {
+  const data =
+    typeof embed?.toJSON ===
+    "function"
+      ? embed.toJSON()
+      : (
+        embed?.data ||
+        embed ||
+        {}
+      );
+
+  let total =
+    0;
+
+  total +=
+    safeString(
+      data.title
+    ).length;
+
+  total +=
+    safeString(
+      data.description
+    ).length;
+
+  total +=
+    safeString(
+      data.author?.name
+    ).length;
+
+  total +=
+    safeString(
+      data.footer?.text
+    ).length;
+
+  for (
+    const field of
+    data.fields || []
+  ) {
+    total +=
+      safeString(
+        field?.name
+      ).length;
+
+    total +=
+      safeString(
+        field?.value
+      ).length;
+  }
+
+  return total;
+}
+
+function splitSingleExecutiveEmbed(
+  embed,
+  maximumCharacters =
+    5400
+) {
+  const data =
+    typeof embed?.toJSON ===
+    "function"
+      ? embed.toJSON()
+      : (
+        embed?.data ||
+        embed ||
+        {}
+      );
+
+  if (
+    getEmbedCharacterCount(
+      data
+    ) <=
+    maximumCharacters
+  ) {
+    return [
+      data,
+    ];
+  }
+
+  const fields =
+    Array.isArray(
+      data.fields
+    )
+      ? data.fields
+      : [];
+
+  // Caso improvável de um embed gigante sem campos.
+  if (
+    fields.length ===
+    0
+  ) {
+    const description =
+      safeString(
+        data.description
+      );
+
+    const chunks =
+      [];
+
+    for (
+      let offset = 0;
+      offset <
+        description.length;
+      offset +=
+        3800
+    ) {
+      chunks.push(
+        description.slice(
+          offset,
+          offset +
+            3800
+        )
+      );
+    }
+
+    return chunks.map(
+      (
+        chunk,
+        index
+      ) => ({
+        ...data,
+
+        title:
+          index ===
+          0
+            ? data.title
+            : `${safeString(
+                data.title ||
+                  "Painel executivo"
+              )} • continuação`,
+
+        description:
+          chunk,
+
+        fields:
+          [],
+      })
+    );
+  }
+
+  const result =
+    [];
+
+  const commonData = {
+    color:
+      data.color,
+
+    url:
+      data.url,
+
+    timestamp:
+      data.timestamp,
+
+    thumbnail:
+      data.thumbnail,
+
+    image:
+      data.image,
+  };
+
+  let partIndex =
+    0;
+
+  let current = {
+    ...commonData,
+
+    title:
+      data.title,
+
+    description:
+      data.description,
+
+    author:
+      data.author,
+
+    fields:
+      [],
+  };
+
+  let currentSize =
+    getEmbedCharacterCount(
+      current
+    );
+
+  for (
+    const field of
+    fields
+  ) {
+    const fieldSize =
+      safeString(
+        field?.name
+      ).length +
+      safeString(
+        field?.value
+      ).length;
+
+    if (
+      current.fields.length >
+        0 &&
+      currentSize +
+        fieldSize >
+        maximumCharacters
+    ) {
+      result.push(
+        current
+      );
+
+      partIndex++;
+
+      current = {
+        ...commonData,
+
+        title:
+          `${safeString(
+            data.title ||
+              "Painel executivo"
+          )} • continuação ${partIndex + 1}`,
+
+        fields:
+          [],
+      };
+
+      currentSize =
+        getEmbedCharacterCount(
+          current
+        );
+    }
+
+    current.fields.push(
+      field
+    );
+
+    currentSize +=
+      fieldSize;
+  }
+
+  if (
+    current.fields.length >
+      0
+  ) {
+    result.push(
+      current
+    );
+  }
+
+  if (
+    result.length >
+      0 &&
+    data.footer
+  ) {
+    const lastIndex =
+      result.length -
+      1;
+
+    result[
+      lastIndex
+    ] = {
+      ...result[
+        lastIndex
+      ],
+
+      footer:
+        data.footer,
+    };
+  }
+
+  return result;
+}
+
+function buildDiscordSafeExecutiveEmbedBatches(
+  embeds
+) {
+  const safeEmbeds =
+    [];
+
+  for (
+    const embed of
+    embeds || []
+  ) {
+    safeEmbeds.push(
+      ...splitSingleExecutiveEmbed(
+        embed
+      )
+    );
+  }
+
+  const batches =
+    [];
+
+  let currentBatch =
+    [];
+
+  let currentCharacters =
+    0;
+
+  for (
+    const embed of
+    safeEmbeds
+  ) {
+    const size =
+      getEmbedCharacterCount(
+        embed
+      );
+
+    const exceedsCharacterLimit =
+      currentBatch.length >
+        0 &&
+      currentCharacters +
+        size >
+        5600;
+
+    const exceedsEmbedLimit =
+      currentBatch.length >=
+      10;
+
+    if (
+      exceedsCharacterLimit ||
+      exceedsEmbedLimit
+    ) {
+      batches.push(
+        currentBatch
+      );
+
+      currentBatch =
+        [];
+
+      currentCharacters =
+        0;
+    }
+
+    currentBatch.push(
+      embed
+    );
+
+    currentCharacters +=
+      size;
+  }
+
+  if (
+    currentBatch.length >
+      0
+  ) {
+    batches.push(
+      currentBatch
+    );
+  }
+
+  return batches;
+}
 
 async function findExistingDashboardMessage(
   channel,
@@ -10448,41 +10825,174 @@ async function updateDashboard(
       executiveChannel &&
       executiveChannel.isTextBased()
     ) {
-      const executiveEmbeds =
-        buildExecutiveDashboardEmbeds(
-          results
-        );
+     const executiveEmbeds =
+  buildExecutiveDashboardEmbeds(
+    results
+  );
 
-      const existingExecutive =
-        await findExistingDashboardMessage(
-          executiveChannel,
-          results.state.executiveDashboardMessageId,
-          NPS_EXECUTIVE_MARKER
-        );
+// ==================================================
+// DIVIDE O PAINEL EM MENSAGENS SEGURAS
+// ==================================================
 
-      let executiveMessage;
+const executiveBatches =
+  buildDiscordSafeExecutiveEmbedBatches(
+    executiveEmbeds
+  );
 
-      if (existingExecutive) {
-        executiveMessage =
-          await existingExecutive.edit({
-            embeds:
-              executiveEmbeds,
-            components,
-          });
-      } else {
-        executiveMessage =
-          await executiveChannel.send({
-            embeds:
-              executiveEmbeds,
-            components,
-          });
-      }
+const existingExecutive =
+  await findExistingDashboardMessage(
+    executiveChannel,
+    results.state.executiveDashboardMessageId,
+    NPS_EXECUTIVE_MARKER
+  );
 
-      results.state.executiveDashboardMessageId =
-        executiveMessage.id;
+const firstBatch =
+  executiveBatches[
+    0
+  ] || [];
 
-      results.state.metadata.lastExecutiveDashboardUpdateAt =
-        Date.now();
+let executiveMessage;
+
+if (
+  existingExecutive
+) {
+  executiveMessage =
+    await existingExecutive.edit({
+      embeds:
+        firstBatch,
+
+      components,
+    });
+} else {
+  executiveMessage =
+    await executiveChannel.send({
+      embeds:
+        firstBatch,
+
+      components,
+    });
+}
+
+results.state.executiveDashboardMessageId =
+  executiveMessage.id;
+
+// ==================================================
+// MENSAGENS DE CONTINUAÇÃO
+// ==================================================
+
+const previousExtraIds =
+  Array.isArray(
+    results
+      .state
+      .executiveDashboardExtraMessageIds
+  )
+    ? [
+        ...results
+          .state
+          .executiveDashboardExtraMessageIds,
+      ]
+    : [];
+
+const nextExtraIds =
+  [];
+
+for (
+  let index = 1;
+  index <
+    executiveBatches.length;
+  index++
+) {
+  const batch =
+    executiveBatches[
+      index
+    ];
+
+  const previousId =
+    previousExtraIds[
+      index -
+        1
+    ] || null;
+
+  let extraMessage =
+    previousId
+      ? await executiveChannel
+          .messages
+          .fetch(
+            previousId
+          )
+          .catch(
+            () => null
+          )
+      : null;
+
+  if (
+    extraMessage
+  ) {
+    await extraMessage.edit({
+      embeds:
+        batch,
+
+      components:
+        [],
+    });
+  } else {
+    extraMessage =
+      await executiveChannel.send({
+        embeds:
+          batch,
+
+        components:
+          [],
+      });
+  }
+
+  nextExtraIds.push(
+    extraMessage.id
+  );
+}
+
+// ==================================================
+// REMOVE CONTINUAÇÕES ANTIGAS QUE NÃO SÃO MAIS USADAS
+// ==================================================
+
+for (
+  let index =
+    nextExtraIds.length;
+  index <
+    previousExtraIds.length;
+  index++
+) {
+  const staleId =
+    previousExtraIds[
+      index
+    ];
+
+  const staleMessage =
+    await executiveChannel
+      .messages
+      .fetch(
+        staleId
+      )
+      .catch(
+        () => null
+      );
+
+  if (
+    staleMessage
+  ) {
+    await staleMessage
+      .delete()
+      .catch(
+        () => null
+      );
+  }
+}
+
+results.state.executiveDashboardExtraMessageIds =
+  nextExtraIds;
+
+results.state.metadata.lastExecutiveDashboardUpdateAt =
+  Date.now();
     } else {
       console.error(
         `[NPS Operacional] Canal executivo inválido: ${NPS_EXECUTIVE_CHANNEL_ID}`
