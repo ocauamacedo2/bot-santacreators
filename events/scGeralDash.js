@@ -1508,7 +1508,7 @@ function readBPStatesFromDisk(monthKeys = []) {
 //
 // O cache é compartilhado globalmente entre os módulos.
 const SHARED_DISCORD_PAGE_CACHE_TTL_MS =
-  2 * 60 * 1000;
+  30 * 1000;
 
 async function fetchDiscordMessagesPageShared(
   channel,

@@ -415,7 +415,98 @@ function diffDays(fromIso, toDate = new Date()) {
   const ms = toDate.getTime() - from.getTime();
   return Math.floor(ms / (1000 * 60 * 60 * 24));
 }
+// =====================================================
+// ✅ MEMBROS — CACHE + DEDUPLICAÇÃO DE REST
+// =====================================================
+//
+// Usado somente para consultas onde não é necessário
+// forçar uma leitura fresh dos cargos.
+//
+// Não substitui fetches administrativos que precisam
+// obrigatoriamente consultar o estado mais recente.
+async function fetchGuildMemberShared(
+  guild,
+  userId
+) {
+  try {
+    if (
+      !guild ||
+      !userId
+    ) {
+      return null;
+    }
 
+    const id =
+      String(userId);
+
+    // ==================================================
+    // 1. CACHE NATIVO
+    // ==================================================
+
+    const cached =
+      guild.members.cache.get(
+        id
+      );
+
+    if (cached) {
+      return cached;
+    }
+
+    // ==================================================
+    // 2. UMA PROMISE POR GUILD + MEMBRO
+    // ==================================================
+
+    globalThis.__SC_MEMBER_FETCH_PROMISES__ ??=
+      new Map();
+
+    const key =
+      `${guild.id}:${id}`;
+
+    const running =
+      globalThis
+        .__SC_MEMBER_FETCH_PROMISES__
+        .get(
+          key
+        );
+
+    if (running) {
+      return await running;
+    }
+
+    // ==================================================
+    // 3. REST SOMENTE SE NÃO ESTIVER NO CACHE
+    // ==================================================
+
+    const request =
+      guild.members
+        .fetch(
+          id
+        )
+        .catch(
+          () => null
+        )
+        .finally(
+          () => {
+            globalThis
+              .__SC_MEMBER_FETCH_PROMISES__
+              ?.delete(
+                key
+              );
+          }
+        );
+
+    globalThis
+      .__SC_MEMBER_FETCH_PROMISES__
+      .set(
+        key,
+        request
+      );
+
+    return await request;
+  } catch {
+    return null;
+  }
+}
 async function getRankingText(guild, client) {
   try {
     const weeklyRanking = await getWeeklyRanking(client);
@@ -431,23 +522,46 @@ async function getRankingText(guild, client) {
       const points = Number(user.points || 0);
       if (!Number.isFinite(points) || points <= 0) continue;
 
-      const member = await guild.members.fetch(String(user.userId)).catch(() => null);
-      if (!member) {
-        notFoundInGuild++;
-        continue;
-      }
+const member =
+  guild.members.cache.get(
+    String(user.userId)
+  ) ||
+  await fetchGuildMemberShared(
+    guild,
+    String(user.userId)
+  );
 
-  if (member.user?.bot) continue;
+if (!member) {
+  notFoundInGuild++;
+  continue;
+}
 
-const memberId = String(user.userId);
+if (member.user?.bot) continue;
 
-if (EXCLUDE_FEEDBACK_USERS.includes(memberId)) continue;
+const memberId =
+  String(user.userId);
 
-const hasExcludedRole = member.roles.cache.some((role) =>
-  EXCLUDE_FEEDBACK_ROLES.includes(role.id)
-);
+if (
+  EXCLUDE_FEEDBACK_USERS.includes(
+    memberId
+  )
+) {
+  continue;
+}
 
-if (hasExcludedRole) continue;
+const hasExcludedRole =
+  member.roles.cache.some(
+    role =>
+      EXCLUDE_FEEDBACK_ROLES.includes(
+        role.id
+      )
+  );
+
+if (
+  hasExcludedRole
+) {
+  continue;
+}
 
 validMembers.push({
   userId: memberId,
@@ -520,11 +634,21 @@ async function runReminderJob(client) {
   const days = diffDays(state.lastPublicReminderAt, now);
   // 🔄 AUTO-DESLIGAMENTO (Check de cargo obrigatório)
   let stateChanged = false;
-  for (const [threadId, reg] of Object.entries(state.registrations)) {
-    if (!reg.active) continue;
+for (const [threadId, reg] of Object.entries(state.registrations)) {
+  if (!reg.active) continue;
 
-    const member = await guild.members.fetch(reg.userId).catch(() => null);
-    if (!member || !member.roles.cache.has(ROLE_REQUIRED_FOR_ACTIVE)) {
+  const member =
+    await fetchGuildMemberShared(
+      guild,
+      reg.userId
+    );
+
+  if (
+    !member ||
+    !member.roles.cache.has(
+      ROLE_REQUIRED_FOR_ACTIVE
+    )
+  ) {
       // Desliga automaticamente
       reg.active = false;
       stateChanged = true;

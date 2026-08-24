@@ -776,7 +776,7 @@ function approval_getSource(emb) {
 //
 // O cache dura somente 15 segundos.
 const SHARED_DISCORD_PAGE_CACHE_TTL_MS =
-  2 * 60 * 1000;
+  30 * 1000;
 
 async function fetchDiscordMessagesPageShared(
   channel,

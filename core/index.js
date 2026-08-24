@@ -1399,18 +1399,40 @@ try {
     } catch (e) {}
   });
 
-  setupUserUpdateLog(client);
-  setupBanLog(client);
-  setupKickLog(client);
-  setupRoleUpdateLog(client);
-  setupVoiceLog(client);
-  setupChannelLog(client);
-  setupBotAddLog(client);
-  setupBotRemoveLog(client);
-  setupChannelNameCategoryUpdateLog(client);
-  setupChannelCategoryMoveLog(client);
-  setupNicknameChangeLog(client);
+setupUserUpdateLog(client);
+setupBanLog(client);
+setupKickLog(client);
+setupRoleUpdateLog(client);
+setupVoiceLog(client);
+setupChannelLog(client);
+setupBotAddLog(client);
+setupBotRemoveLog(client);
+setupChannelNameCategoryUpdateLog(client);
+setupChannelCategoryMoveLog(client);
+setupNicknameChangeLog(client);
+
+// =====================================================
+// 🔎 DISCORD HEALTH DEBUG
+// =====================================================
+//
+// Controle pela variável de ambiente:
+//
+// DISCORD_HEALTH_DEBUG=1
+//   → diagnóstico ATIVADO
+//
+// DISCORD_HEALTH_DEBUG=0
+//   → diagnóstico DESATIVADO
+//
+// Se a variável não existir, fica DESATIVADO.
+if (
+  process.env.DISCORD_HEALTH_DEBUG === "1"
+) {
   installDiscordHealthDebug(client);
+
+  console.log(
+    "[CORE] 🔎 Discord Health Debug ATIVADO."
+  );
+}
   if (client.isReady() && !client.__coreBootState.lateBootExecuted) {
     client.__coreBootState.lateBootExecuted = true;
 
