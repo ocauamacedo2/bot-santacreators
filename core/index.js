@@ -91,7 +91,7 @@ import messageUpdateLog from "../events/logs/messageUpdate.js";
 import channelCreateLog from "../events/logs/channelCreate.js";
 import channelDeleteLog from "../events/logs/channelDelete.js";
 import channelDeleteProtectLog from "../events/logs/channelDeleteProtect.js";
-
+import { installDiscordHealthDebug } from "./utils/discordHealthDebug.js";
 // Handlers Gerais
 import messageCreateHandler from "../events/messageCreate.js";
 import interactionCreateHandler from "../events/interactionCreate.js";
@@ -1034,6 +1034,28 @@ client.on("interactionCreate", async (interaction) => {
 
   try {
     // =====================================================
+    // 🚀 ROTEAMENTO DIRETO — SLASH COMMANDS
+    // =====================================================
+    // Slash Commands não devem atravessar todos os handlers
+    // de botões, modais e selects antes de chegar ao handler
+    // principal.
+    //
+    // Isso também impede que um módulo secundário com lentidão
+    // ou timeout na API do Discord bloqueie todos os comandos "/".
+    if (interaction.isChatInputCommand()) {
+      console.log("[CORE] ⚡ Slash Command recebido:", {
+        commandName: interaction.commandName,
+        interactionId: interaction.id,
+        guildId: interaction.guildId,
+        channelId: interaction.channelId,
+        userId: interaction.user?.id,
+      });
+
+      await interactionCreateHandler.execute(interaction);
+      return;
+    }
+
+    // =====================================================
     // 🧠 REMOVER GERAL — BOTÃO E MODAL DE CORREÇÃO
     // =====================================================
     // Precisa executar antes dos outros handlers para capturar:
@@ -1388,7 +1410,7 @@ try {
   setupChannelNameCategoryUpdateLog(client);
   setupChannelCategoryMoveLog(client);
   setupNicknameChangeLog(client);
-
+  installDiscordHealthDebug(client);
   if (client.isReady() && !client.__coreBootState.lateBootExecuted) {
     client.__coreBootState.lateBootExecuted = true;
 
@@ -1439,7 +1461,7 @@ export const initBot = async () => {
     }
 
     try {
-      const data = [
+      const disconnectCommandData =
         new SlashCommandBuilder()
           .setName("disconnect")
           .setDescription("Expulsa um usuário da call de voz")
@@ -1449,11 +1471,50 @@ export const initBot = async () => {
               .setDescription("Usuário a ser desconectado")
               .setRequired(true)
           )
-          .toJSON(),
-      ];
+          .toJSON();
 
-      await client.application.commands.set(data);
-    } catch (e) {}
+      // =====================================================
+      // ✅ REGISTRO SEGURO DO /disconnect
+      // =====================================================
+      //
+      // NÃO utiliza application.commands.set(),
+      // porque .set() substitui todos os comandos globais
+      // pela lista fornecida.
+      //
+      // Apenas cria ou atualiza /disconnect.
+      const existingCommands =
+        await client.application.commands.fetch();
+
+      const existingDisconnect =
+        existingCommands.find(
+          (command) =>
+            command.name === "disconnect"
+        );
+
+      if (existingDisconnect) {
+        await client.application.commands.edit(
+          existingDisconnect.id,
+          disconnectCommandData
+        );
+
+        console.log(
+          "[CORE] ✅ /disconnect atualizado sem remover outros Slash Commands."
+        );
+      } else {
+        await client.application.commands.create(
+          disconnectCommandData
+        );
+
+        console.log(
+          "[CORE] ✅ /disconnect criado sem remover outros Slash Commands."
+        );
+      }
+    } catch (e) {
+      console.error(
+        "[CORE] ❌ Erro ao registrar/atualizar /disconnect:",
+        e
+      );
+    }
 
     const CANAL_BOTAO = "1383152873587740843";
     const GIF_BANNER =

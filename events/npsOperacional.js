@@ -172,6 +172,35 @@ const OPERATIONAL_ROLE_GROUPS = [
 const NPS_DASH_MARKER = "SC_NPS_OPERACIONAL::V1";
 const NPS_EXECUTIVE_MARKER = "SC_NPS_EXECUTIVO::V1";
 
+// ============================================================================
+// IDENTIFICAÇÃO ESTÁVEL DAS PARTES DO PAINEL EXECUTIVO
+// ============================================================================
+//
+// O painel executivo pode precisar ser dividido em mais de uma mensagem
+// por causa dos limites de tamanho de embeds do Discord.
+//
+// Cada parte recebe um identificador próprio.
+//
+// Isso permite reencontrar a mensagem mesmo quando:
+//
+// • o bot reiniciar;
+// • o arquivo de estado estiver temporariamente sem o ID;
+// • uma atualização conseguir enviar uma mensagem e falhar antes do saveState;
+// • ocorrer timeout durante uma atualização.
+//
+// Dessa forma, o painel é EDITADO em vez de criar novas mensagens.
+function getExecutiveBatchMarker(index) {
+  return `${NPS_EXECUTIVE_MARKER}::PART=${Number(index) + 1}`;
+}
+
+const EXECUTIVE_DASHBOARD_TITLES = new Set([
+  "📊 Visão geral da operação",
+  "🏢 Resultado por área",
+  "📈 Evolução e impacto no resultado",
+  "📊 Feedback da semana",
+  "🔎 Participação real e registros obrigatórios",
+]);
+
 const BUTTON_REFRESH_ID = "sc_nps_operacional_refresh";
 const BUTTON_CURRENT_DM_ID = "sc_nps_operacional_current_dm";
 const BUTTON_PREVIOUS_DM_ID = "sc_nps_operacional_previous_dm";
@@ -10677,48 +10706,293 @@ function buildDiscordSafeExecutiveEmbedBatches(
   return batches;
 }
 
+function embedContainsDashboardMarker(
+  embed,
+  marker
+) {
+  if (
+    !embed ||
+    !marker
+  ) {
+    return false;
+  }
+
+  const data =
+    typeof embed.toJSON ===
+      "function"
+      ? embed.toJSON()
+      : embed?.data ||
+        embed ||
+        {};
+
+  const fields =
+    Array.isArray(
+      data.fields
+    )
+      ? data.fields
+      : [];
+
+  const texts = [
+    data.title,
+    data.description,
+    data.footer?.text,
+
+    ...fields.flatMap(
+      field => [
+        field?.name,
+        field?.value,
+      ]
+    ),
+  ];
+
+  return texts.some(
+    value =>
+      safeString(
+        value
+      ).includes(
+        marker
+      )
+  );
+}
+
+function applyExecutiveBatchMarker(
+  batch,
+  index
+) {
+  const embeds =
+    Array.isArray(
+      batch
+    )
+      ? batch
+      : [];
+
+  if (
+    embeds.length ===
+    0
+  ) {
+    return embeds;
+  }
+
+  const marker =
+    getExecutiveBatchMarker(
+      index
+    );
+
+  const firstEmbed =
+    EmbedBuilder.from(
+      embeds[0]
+    );
+
+  const firstEmbedData =
+    firstEmbed.toJSON();
+
+  const currentFooter =
+    safeString(
+      firstEmbedData
+        ?.footer
+        ?.text
+    ).trim();
+
+  const markerAlreadyPresent =
+    currentFooter.includes(
+      marker
+    );
+
+  const footerText =
+    markerAlreadyPresent
+      ? currentFooter
+      : currentFooter
+        ? `${currentFooter} • ${marker}`
+        : marker;
+
+  const footer = {
+    text:
+      truncate(
+        footerText,
+        2048
+      ),
+  };
+
+  if (
+    firstEmbedData
+      ?.footer
+      ?.icon_url
+  ) {
+    footer.iconURL =
+      firstEmbedData
+        .footer
+        .icon_url;
+  }
+
+  firstEmbed.setFooter(
+    footer
+  );
+
+  return [
+    firstEmbed,
+    ...embeds.slice(1),
+  ];
+}
+
 async function findExistingDashboardMessage(
   channel,
   messageId,
   marker
 ) {
-  if (messageId) {
+  if (
+    messageId
+  ) {
     const existing =
-      await channel.messages.fetch(
-        messageId
-      ).catch(
-        () => null
-      );
+      await channel
+        .messages
+        .fetch(
+          messageId
+        )
+        .catch(
+          () => null
+        );
 
-    if (existing) {
+    if (
+      existing &&
+      existing.author?.id ===
+        channel.client.user?.id
+    ) {
       return existing;
     }
   }
 
   const messages =
-    await channel.messages.fetch({
-      limit: 50,
-    }).catch(
-      () => null
-    );
+    await channel
+      .messages
+      .fetch({
+        limit: 100,
+      })
+      .catch(
+        () => null
+      );
 
-  if (!messages) {
+  if (
+    !messages
+  ) {
     return null;
   }
 
-  return messages.find(
-    message =>
-      message.author?.id ===
-        channel.client.user?.id &&
-      message.embeds?.some(
-        embed =>
-          safeString(
-            embed.description
-          ).includes(
-            marker
+  return (
+    messages.find(
+      message =>
+        message.author?.id ===
+          channel.client.user?.id &&
+        message.embeds?.some(
+          embed =>
+            embedContainsDashboardMarker(
+              embed,
+              marker
+            )
+        )
+    ) ||
+    null
+  );
+}
+
+async function cleanupExecutiveDashboardDuplicates(
+  channel,
+  keepMessageIds = []
+) {
+  if (
+    !channel ||
+    !channel.isTextBased?.()
+  ) {
+    return 0;
+  }
+
+  const keepIds =
+    new Set(
+      keepMessageIds
+        .filter(Boolean)
+        .map(String)
+    );
+
+  const messages =
+    await channel
+      .messages
+      .fetch({
+        limit: 100,
+      })
+      .catch(
+        () => null
+      );
+
+  if (
+    !messages
+  ) {
+    return 0;
+  }
+
+  const duplicates =
+    messages.filter(
+      message => {
+        if (
+          message.author?.id !==
+          channel.client.user?.id
+        ) {
+          return false;
+        }
+
+        if (
+          keepIds.has(
+            String(
+              message.id
+            )
           )
-      )
-  ) || null;
+        ) {
+          return false;
+        }
+
+        return message.embeds?.some(
+          embed =>
+            EXECUTIVE_DASHBOARD_TITLES.has(
+              safeString(
+                embed.title
+              )
+            )
+        );
+      }
+    );
+
+  let removed =
+    0;
+
+  for (
+    const message of
+    duplicates.values()
+  ) {
+    const deleted =
+      await message
+        .delete()
+        .then(
+          () => true
+        )
+        .catch(
+          () => false
+        );
+
+    if (
+      deleted
+    ) {
+      removed++;
+    }
+  }
+
+  if (
+    removed >
+    0
+  ) {
+    console.log(
+      `[NPS Operacional] 🧹 ${removed} mensagem(ns) duplicada(s) do painel executivo removida(s).`
+    );
+  }
+
+  return removed;
 }
 
 async function updateDashboard(
@@ -10839,17 +11113,27 @@ const executiveBatches =
     executiveEmbeds
   );
 
+// ==================================================
+// PRIMEIRA PARTE DO PAINEL EXECUTIVO
+// ==================================================
+
+const rawFirstBatch =
+  executiveBatches[
+    0
+  ] || [];
+
+const firstBatch =
+  applyExecutiveBatchMarker(
+    rawFirstBatch,
+    0
+  );
+
 const existingExecutive =
   await findExistingDashboardMessage(
     executiveChannel,
     results.state.executiveDashboardMessageId,
     NPS_EXECUTIVE_MARKER
   );
-
-const firstBatch =
-  executiveBatches[
-    0
-  ] || [];
 
 let executiveMessage;
 
@@ -10879,7 +11163,13 @@ results.state.executiveDashboardMessageId =
 // ==================================================
 // MENSAGENS DE CONTINUAÇÃO
 // ==================================================
-
+//
+// Cada continuação possui:
+// • ID persistido;
+// • marker permanente;
+//
+// Se o ID não estiver disponível, o marker permite
+// reencontrar a mensagem antiga em vez de criar outra.
 const previousExtraIds =
   Array.isArray(
     results
@@ -10902,10 +11192,16 @@ for (
     executiveBatches.length;
   index++
 ) {
-  const batch =
+  const rawBatch =
     executiveBatches[
       index
     ];
+
+  const batch =
+    applyExecutiveBatchMarker(
+      rawBatch,
+      index
+    );
 
   const previousId =
     previousExtraIds[
@@ -10913,28 +11209,68 @@ for (
         1
     ] || null;
 
+  const partMarker =
+    getExecutiveBatchMarker(
+      index
+    );
+
   let extraMessage =
+    null;
+
+  // ==================================================
+  // 1. TENTA PELO ID PERSISTIDO
+  // ==================================================
+
+  if (
     previousId
-      ? await executiveChannel
-          .messages
-          .fetch(
-            previousId
-          )
-          .catch(
-            () => null
-          )
-      : null;
+  ) {
+    extraMessage =
+      await executiveChannel
+        .messages
+        .fetch(
+          previousId
+        )
+        .catch(
+          () => null
+        );
+  }
+
+  // ==================================================
+  // 2. FALLBACK PELO MARKER PERMANENTE
+  // ==================================================
+  //
+  // Essencial para casos em que:
+  //
+  // • ocorreu timeout antes do saveState;
+  // • o bot reiniciou;
+  // • o JSON ficou sem aquele ID;
+  // • uma atualização anterior foi interrompida.
+  if (
+    !extraMessage
+  ) {
+    extraMessage =
+      await findExistingDashboardMessage(
+        executiveChannel,
+        null,
+        partMarker
+      );
+  }
+
+  // ==================================================
+  // 3. EDITA OU CRIA SOMENTE SE REALMENTE NÃO EXISTIR
+  // ==================================================
 
   if (
     extraMessage
   ) {
-    await extraMessage.edit({
-      embeds:
-        batch,
+    extraMessage =
+      await extraMessage.edit({
+        embeds:
+          batch,
 
-      components:
-        [],
-    });
+        components:
+          [],
+      });
   } else {
     extraMessage =
       await executiveChannel.send({
@@ -10987,6 +11323,26 @@ for (
       );
   }
 }
+
+// ==================================================
+// LIMPA DUPLICATAS ANTIGAS DO PAINEL EXECUTIVO
+// ==================================================
+//
+// Essa limpeza considera somente:
+//
+// • mensagens do próprio bot;
+// • dentro do canal executivo;
+// • que possuem títulos exclusivos deste painel;
+//
+// e preserva todas as mensagens que acabaram de ser
+// reconhecidas como o painel oficial atual.
+await cleanupExecutiveDashboardDuplicates(
+  executiveChannel,
+  [
+    executiveMessage.id,
+    ...nextExtraIds,
+  ]
+);
 
 results.state.executiveDashboardExtraMessageIds =
   nextExtraIds;
