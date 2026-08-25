@@ -1787,15 +1787,44 @@ function buildFeedbackPrompt({
       );
 
   return `
-Você vai escrever diretamente para ${facts.displayName}.
+Você vai escrever SOBRE ${facts.displayName}.
 
-O texto será colocado no acompanhamento pessoal dessa pessoa dentro da SantaCreators.
+Este texto ficará no acompanhamento interno da pessoa dentro da SantaCreators.
 
-Sua tarefa NÃO é produzir um relatório.
+Esse espaço é utilizado pelos responsáveis e superiores que acompanham o desenvolvimento da pessoa.
 
-Sua tarefa é deixar um feedback humano sobre como está sendo o processo da pessoa.
+IMPORTANTE:
 
-A mensagem deve parecer escrita por alguém da gestão que realmente conhece e acompanha a pessoa.
+Você NÃO está falando diretamente com ${facts.displayName}.
+
+Você está registrando uma leitura INTERNA SOBRE o desenvolvimento de ${facts.displayName}.
+
+Portanto:
+
+- NÃO escreva usando "você", "seu", "sua", "continue", "aproveite" ou outras construções direcionadas ao membro;
+- fale SOBRE a pessoa;
+- use o nome da pessoa quando ficar natural;
+- quando o gênero não estiver explicitamente confirmado, prefira o nome ou expressões neutras como "a pessoa", "o membro", "essa atuação" e "o processo";
+- não invente gênero;
+- não transforme o texto em recado direto;
+- não escreva como se a pessoa fosse necessariamente ler aquele Forms.
+
+Sua tarefa NÃO é produzir um relatório frio.
+
+Sua tarefa é deixar um comentário humano, detalhado e útil para os responsáveis entenderem como está sendo o processo da pessoa.
+
+A mensagem deve parecer escrita por alguém da gestão que realmente acompanha o desenvolvimento daquela pessoa.
+
+O objetivo é permitir que outro responsável leia o comentário e entenda:
+
+- como a pessoa está nesta semana;
+- onde mais está atuando;
+- como isso se compara à semana anterior;
+- quais orientações já apareceram;
+- se existem sinais posteriores relacionados às orientações;
+- quais pontos positivos estão aparecendo;
+- quais pontos ainda merecem acompanhamento;
+- qual seria uma boa atenção dos responsáveis nos próximos dias.
 
 Não diga que é IA.
 Não diga que fez análise automática.
@@ -2084,15 +2113,27 @@ Mas:
 
 Somente diga quantos dias diferentes a pessoa esteve presente se existirem datas diferentes comprovando isso.
 
-Se houver apenas quantidade de Bate Ponto, pode dizer:
+Se houver apenas quantidade de Bate Ponto, pode escrever SOBRE a pessoa de forma natural.
 
-"você apareceu no Bate Ponto"
+Exemplos de intenção:
+
+"${facts.displayName.split(/\s+/)[0]} também apareceu no Bate Ponto."
 
 ou
 
-"teve presença registrada"
+"Também existe presença registrada no período."
 
-mas NÃO invente número de dias.
+ou
+
+"O Bate Ponto também aparece entre as atividades registradas."
+
+Não copie obrigatoriamente esses exemplos.
+
+Adapte ao contexto.
+
+NÃO escreva diretamente para o membro.
+
+NÃO invente número de dias.
 
 =====================================================
 TICKETS
@@ -2120,15 +2161,25 @@ Hall da Fama: 1
 
 não diga apenas:
 
-"você participou bastante."
+"a pessoa participou bastante."
 
-Diga naturalmente algo próximo de:
+Isso ainda seria genérico demais.
 
-"Vi bastante movimentação sua em Manager, você também apareceu nos pagamentos e ainda teve registro no Hall da Fama."
+Transforme os números em uma leitura SOBRE a pessoa.
 
-Não copie esse exemplo literalmente.
+Uma intenção possível seria:
 
-Adapte à pessoa.
+"${facts.displayName.split(/\s+/)[0]} teve a maior parte da movimentação concentrada em Manager, mas também apareceu em Pagamentos e ainda teve participação registrada no Hall da Fama."
+
+Ou:
+
+"A atuação de ${facts.displayName.split(/\s+/)[0]} ficou mais concentrada em Manager durante o período, com participações complementares em outras frentes."
+
+Não copie esses exemplos literalmente.
+
+Adapte aos dados reais daquela pessoa.
+
+Não fale diretamente com o membro.
 
 =====================================================
 PROCESSO E EVOLUÇÃO
@@ -2573,7 +2624,15 @@ Não use uma orientação genérica só porque precisa terminar o texto.
 HUMANIZAÇÃO
 =====================================================
 
-A mensagem precisa soar como uma pessoa falando com outra pessoa.
+A mensagem precisa soar como um responsável deixando uma observação humana para OUTROS responsáveis.
+
+Não deve parecer:
+
+- relatório de sistema;
+- ficha automática;
+- mensagem enviada ao membro;
+- texto padrão reutilizado;
+- descrição estatística sem interpretação.
 
 Não use frases robotizadas como:
 
@@ -2586,23 +2645,41 @@ Não use frases robotizadas como:
 "A análise indica..."
 "Seu desempenho apresenta..."
 
+Também não use construções direcionadas ao membro como:
+
+"queria te deixar um retorno"
+
+"você precisa"
+
+"aproveite os próximos dias"
+
+"continue assim"
+
+"mantenha sua constância"
+
+porque esse comentário está sendo escrito SOBRE a pessoa.
+
 Não comece sempre da mesma forma.
 
-Varie naturalmente.
+Varie naturalmente de acordo com o que realmente chamou atenção naquela pessoa.
 
-Você pode começar, quando fizer sentido, com coisas como:
+Exemplos SOMENTE de intenção:
 
-"${facts.displayName.split(/\s+/)[0]}, vi algumas coisas legais nesses primeiros dias 👀"
+"${facts.displayName.split(/\s+/)[0]} vem mostrando uma movimentação interessante nesses primeiros dias da semana."
 
-"${facts.displayName.split(/\s+/)[0]}, dando uma olhada em como sua semana está andando até aqui..."
+"Até aqui, a semana de ${facts.displayName.split(/\s+/)[0]} está ficando bastante marcada pela atuação em determinada frente."
 
-"${facts.displayName.split(/\s+/)[0]}, queria deixar um retorno sobre como você está indo nessa semana 🙌"
+"Uma coisa que chama atenção no processo de ${facts.displayName.split(/\s+/)[0]} nesta semana é..."
 
-"${facts.displayName.split(/\s+/)[0]}, algumas coisas suas chamaram atenção nesses últimos dias..."
+"Comparando os retornos anteriores com o que apareceu depois, já existe um ponto interessante para acompanhar em ${facts.displayName.split(/\s+/)[0]}."
+
+"Os primeiros dias dessa semana mostram uma movimentação bem específica de ${facts.displayName.split(/\s+/)[0]}, principalmente em..."
 
 Mas NÃO copie sempre esses modelos.
 
-Crie uma abertura natural baseada no contexto real.
+Crie uma abertura nova baseada nos fatos reais.
+
+O texto precisa ser tão individual que trocar apenas o nome por outro membro deixe o comentário claramente incorreto.
 
 =====================================================
 TOM
@@ -2702,26 +2779,37 @@ Ela precisa receber um retorno humano sobre o próprio processo.
 FINAL
 =====================================================
 
-Termine com algo útil e específico.
+Termine com uma conclusão útil para os responsáveis que acompanham ${facts.displayName}.
+
+O final deve ajudar a responder:
+
+"O que vale a pena observar ou trabalhar com essa pessoa agora?"
 
 Não use automaticamente:
 
 "continue assim".
 
-Prefira uma orientação relacionada ao que realmente aconteceu.
+Não escreva uma ordem diretamente para o membro.
+
+Em vez disso, transforme a orientação em uma recomendação de acompanhamento.
 
 Exemplos de intenção:
 
-- manter a constância;
-- aparecer mais em determinada frente;
-- corrigir algo que já havia sido orientado;
-- continuar a evolução que começou;
-- distribuir melhor a participação;
-- aproveitar os próximos dias da semana.
+- acompanhar se a constância continua;
+- observar determinada frente;
+- verificar se uma dúvida anteriormente registrada continua aparecendo;
+- confirmar se uma melhora percebida está se consolidando;
+- acompanhar qualidade e autonomia quando o volume já estiver alto;
+- observar se a participação fica mais distribuída;
+- acompanhar os próximos acontecimentos antes de concluir definitivamente.
 
-Mas escolha somente o que fizer sentido com os fatos.
+Mas escolha SOMENTE aquilo que fizer sentido com os fatos reais.
 
-Entregue SOMENTE a mensagem final para ${facts.displayName}.
+Não invente um problema só para produzir uma recomendação.
+
+Entregue SOMENTE o comentário interno SOBRE ${facts.displayName}.
+
+Não escreva como se ${facts.displayName} fosse o destinatário da mensagem.
 `.trim();
 }
 
@@ -3110,6 +3198,209 @@ function buildLocalFactRichFeedback({
 }
 
 // =====================================================
+// ✅ FALLBACK INTERNO PARA O FORMS
+// =====================================================
+//
+// Diferente do fallback acima:
+//
+// buildLocalFactRichFeedback()
+// -> fala DIRETAMENTE com o membro.
+//
+// buildLocalManagementFactRichFeedback()
+// -> fala SOBRE o membro para os responsáveis.
+//
+// Assim o Forms nunca vira uma mensagem em segunda pessoa
+// apenas porque o Gemini ficou indisponível.
+//
+function buildLocalManagementFactRichFeedback({
+  facts,
+  mode,
+}) {
+  const firstName =
+    getFeedbackFirstName(
+      facts
+    );
+
+  const sourceSentence =
+    buildHumanSourceSentence(
+      facts
+    );
+
+  const currentTotal =
+    Math.max(
+      0,
+      Number(
+        facts?.currentTotal ||
+          0
+      )
+    );
+
+  const currentSourceEntries =
+    getSortedCurrentSourceEntries(
+      facts
+    );
+
+  const dominantSource =
+    currentSourceEntries[0] ||
+    null;
+
+  const paragraphs =
+    [];
+
+  if (
+    sourceSentence
+  ) {
+    paragraphs.push(
+      `${firstName} soma ${currentTotal} atividade(s) consideradas no acompanhamento desta semana até agora, com ${sourceSentence}. O conjunto já permite enxergar com mais clareza onde está concentrada a movimentação atual.`
+    );
+  } else if (
+    currentTotal >
+    0
+  ) {
+    paragraphs.push(
+      `${firstName} já possui ${currentTotal} atividade(s) consideradas nesta semana, mas nem todas as frentes puderam ser separadas com segurança. Por isso, o volume pode ser reconhecido sem atribuir atividades que não estejam confirmadas.`
+    );
+  } else {
+    paragraphs.push(
+      `Ainda existem poucos registros concretos desta semana para formar uma leitura completa sobre ${firstName}. Como o período ainda está em andamento, vale acompanhar os próximos acontecimentos antes de chegar a uma conclusão mais ampla.`
+    );
+  }
+
+  if (
+    Number.isFinite(
+      facts?.rankingPosition
+    )
+  ) {
+    if (
+      facts.rankingPosition ===
+      1
+    ) {
+      paragraphs.push(
+        `${firstName} aparece atualmente em 1º lugar entre ${facts.rankingSize} pessoa(s) pontuada(s), com ${facts.rankingPoints} pontos. É um destaque objetivo de movimentação na semana, embora a posição por si só não determine a qualidade de todas as atividades.`
+      );
+    } else {
+      paragraphs.push(
+        `${firstName} aparece atualmente em ${facts.rankingPosition}º lugar entre ${facts.rankingSize} pessoa(s) pontuada(s), com ${facts.rankingPoints} pontos. A posição ajuda a contextualizar o volume atual dentro da equipe.`
+      );
+    }
+  }
+
+  if (
+    dominantSource &&
+    currentTotal >
+      0
+  ) {
+    const ratio =
+      dominantSource.amount /
+      currentTotal;
+
+    if (
+      ratio >=
+      0.5
+    ) {
+      paragraphs.push(
+        `A principal frente de ${firstName} neste período é ${dominantSource.label}, com ${dominantSource.amount} registro(s). Isso mostra uma concentração clara da atuação nessa área, enquanto as demais fontes funcionam como participação complementar.`
+      );
+    } else {
+      paragraphs.push(
+        `A movimentação de ${firstName} está relativamente distribuída entre diferentes frentes, sem uma única atividade concentrando sozinha a maior parte do que foi registrado.`
+      );
+    }
+  }
+
+  const currentForms =
+    Array.isArray(
+      facts?.formsHistory
+    )
+      ? facts.formsHistory
+      : [];
+
+  const previousForms =
+    Array.isArray(
+      facts?.previousFormsHistory
+    )
+      ? facts.previousFormsHistory
+      : [];
+
+  if (
+    currentForms.length >
+      0 ||
+    previousForms.length >
+      0
+  ) {
+    paragraphs.push(
+      `O Forms também possui material de acompanhamento sobre ${firstName}, incluindo ${currentForms.length} registro(s) ou comentário(s) desta semana e ${previousForms.length} item(ns) do histórico anterior considerado. Esses retornos devem continuar sendo usados para avaliar não apenas quantidade, mas também evolução, dúvidas, aprendizado e pontos recorrentes.`
+    );
+  }
+
+  const current =
+    Number(
+      facts?.currentTotal ||
+        0
+    );
+
+  const previous =
+    Number(
+      facts?.previousTotal ||
+        0
+    );
+
+  if (
+    previous >
+    0
+  ) {
+    if (
+      current >
+      previous
+    ) {
+      paragraphs.push(
+        `Comparando com a semana anterior, a movimentação atual de ${firstName} já é maior. Isso aponta crescimento no volume registrado até aqui, sem transformar esse aumento automaticamente em conclusão sobre qualidade.`
+      );
+    } else if (
+      current ===
+      previous
+    ) {
+      paragraphs.push(
+        `O volume atual de ${firstName} está próximo do registrado na semana anterior. O acompanhamento agora pode observar principalmente a continuidade e a qualidade das frentes em que a pessoa vem aparecendo.`
+      );
+    } else {
+      paragraphs.push(
+        `Até aqui, o volume de ${firstName} está abaixo do que apareceu na semana anterior. Como o período ainda pode estar em andamento, a leitura precisa considerar os próximos dias antes de tratar isso como uma queda definitiva.`
+      );
+    }
+  }
+
+  if (
+    mode ===
+      "manual"
+  ) {
+    paragraphs.push(
+      `Para os próximos acompanhamentos, o mais útil é observar como ${firstName} evolui nas frentes que já aparecem com maior frequência e se as orientações registradas anteriormente começam a refletir em mais autonomia e consistência.`
+    );
+  } else {
+    paragraphs.push(
+      `No fechamento, vale utilizar esse histórico para preservar o que funcionou bem e identificar quais pontos de ${firstName} ainda merecem acompanhamento mais próximo na próxima semana.`
+    );
+  }
+
+  return paragraphs
+    .filter(
+      Boolean
+    )
+    .slice(
+      0,
+      7
+    )
+    .join(
+      "\n\n"
+    )
+    .slice(
+      0,
+      10000
+    );
+}
+
+// =====================================================
 // VALIDAÇÃO DE QUALIDADE DA RESPOSTA
 // =====================================================
 
@@ -3292,8 +3583,7 @@ async function generateFeedback({
     console.warn(
       `[Weekly Member Feedback] A resposta de ${facts.userId} ficou genérica ou curta demais. Utilizando fallback factual local.`
     );
-
-    return buildLocalFactRichFeedback({
+    return buildLocalManagementFactRichFeedback({
       facts,
       mode,
     });
@@ -3311,7 +3601,7 @@ async function generateFeedback({
     );
 
     const fallback =
-      buildLocalFactRichFeedback({
+      buildLocalManagementFactRichFeedback({
         facts,
         mode,
       });
@@ -3326,6 +3616,381 @@ async function generateFeedback({
 
     return fallback;
   }
+}
+
+// =====================================================
+// ✅ PROMPT PRIVADO PARA O MEMBRO
+// =====================================================
+//
+// Este texto NÃO é o comentário interno do Forms.
+//
+// O comentário do Forms fala SOBRE a pessoa.
+//
+// Este texto é enviado diretamente no PV e, portanto,
+// fala COM a pessoa.
+//
+// Feedbacks internos servem como contexto para criar
+// orientações, mas não são copiados literalmente.
+//
+function buildPrivateMemberFeedbackPrompt({
+  facts,
+}) {
+  const currentFormsHistory =
+    Array.isArray(
+      facts.formsHistory
+    ) &&
+    facts.formsHistory.length
+      ? facts.formsHistory
+          .join("\n")
+          .slice(
+            0,
+            14000
+          )
+      : (
+        "Nenhum comentário ou registro adicional foi localizado no Forms desta semana."
+      );
+
+  const previousFormsHistory =
+    Array.isArray(
+      facts.previousFormsHistory
+    ) &&
+    facts.previousFormsHistory.length
+      ? facts.previousFormsHistory
+          .join("\n")
+          .slice(
+            0,
+            10000
+          )
+      : (
+        "Nenhum histórico anterior relevante foi localizado."
+      );
+
+  return `
+Você vai escrever uma orientação PRIVADA diretamente para ${facts.displayName}.
+
+A mensagem será enviada no PV dessa pessoa pelo bot da SantaCreators.
+
+Diferente do comentário interno do Forms, AQUI você deve falar diretamente com a pessoa.
+
+Use linguagem:
+
+- humana;
+- respeitosa;
+- natural;
+- clara;
+- prática;
+- individual.
+
+Pode usar "você", "seu", "sua" normalmente.
+
+=====================================================
+OBJETIVO DA MENSAGEM
+=====================================================
+
+A pessoa precisa entender:
+
+1. como a semana está andando;
+
+2. onde ela mais está aparecendo;
+
+3. o que está fazendo bem;
+
+4. o que mudou em relação à semana anterior, quando existir comparação real;
+
+5. quais pontos anteriores parecem estar evoluindo;
+
+6. quais pontos ainda merecem atenção;
+
+7. o que ela pode fazer de forma prática para melhorar.
+
+Não produza apenas números.
+
+Transforme os fatos em orientação.
+
+=====================================================
+PRIVACIDADE DOS FEEDBACKS INTERNOS
+=====================================================
+
+Você terá acesso abaixo a comentários e acompanhamentos internos.
+
+Eles servem SOMENTE para orientar sua leitura.
+
+NUNCA:
+
+- revele que a pessoa não possui acesso ao Forms;
+- diga que está lendo uma área restrita;
+- informe nome ou menção de quem escreveu determinada avaliação, salvo se isso for absolutamente necessário e já estiver explicitamente destinado ao membro;
+- copie críticas internas literalmente;
+- exponha conversa privada;
+- diga "o responsável X falou isso de você";
+- diga "nos dados internos";
+- diga "segundo o sistema";
+- diga "segundo o banco de dados".
+
+Transforme o significado desses feedbacks em orientação útil.
+
+Exemplo de intenção:
+
+Se um acompanhamento interno disser que a pessoa entendeu a função, mas ainda apresentava dúvidas:
+
+você pode dizer naturalmente que nos acompanhamentos anteriores ainda existiam pontos para ganhar segurança e que vale observar se a prática atual está trazendo mais autonomia.
+
+Não copie o comentário original.
+
+=====================================================
+SEMANA ATUAL
+=====================================================
+
+Período considerado:
+
+${facts.analyzedPeriod}
+
+Atividades registradas:
+
+${formatSourcesForPrompt(
+  facts.currentSources
+)}
+
+Total atual considerado:
+
+${facts.currentTotal}
+
+${
+  Number.isFinite(
+    facts.rankingPosition
+  )
+    ? `Posição atual: ${facts.rankingPosition}º de ${facts.rankingSize} pessoa(s) pontuada(s)
+
+Pontuação atual: ${facts.rankingPoints}`
+    : `Posição atual: não confirmada nesta consulta.`
+}
+
+=====================================================
+SEMANA ANTERIOR
+=====================================================
+
+Atividades:
+
+${formatSourcesForPrompt(
+  facts.previousSources
+)}
+
+Total anterior:
+
+${facts.previousTotal}
+
+Compare as semanas apenas quando existir base suficiente.
+
+Lembre que a semana atual ainda pode não ter terminado.
+
+=====================================================
+ACOMPANHAMENTOS DESTA SEMANA
+=====================================================
+
+${currentFormsHistory}
+
+=====================================================
+HISTÓRICO ANTERIOR DE ACOMPANHAMENTO
+=====================================================
+
+${previousFormsHistory}
+
+=====================================================
+COMO INTERPRETAR
+=====================================================
+
+Não trate números como texto pronto.
+
+Se 22 de 28 registros estiverem em Manager:
+
+explique naturalmente que Manager está sendo a principal frente da pessoa.
+
+Se também existirem outras atividades:
+
+mencione que existe movimentação complementar.
+
+Se ela estiver nas primeiras posições:
+
+pode reconhecer isso.
+
+Se estiver em 1º:
+
+pode dizer que atualmente aparece no topo da semana.
+
+Mas não transforme isso em competição vazia.
+
+Explique o que está sustentando a posição.
+
+=====================================================
+EVOLUÇÃO
+=====================================================
+
+Quando um feedback anterior apontar uma dúvida, dificuldade ou orientação:
+
+procure sinais posteriores relacionados.
+
+Se existirem mais registros naquela atividade:
+
+isso prova maior prática ou movimentação.
+
+Não prova automaticamente domínio total.
+
+Se houver feedback posterior positivo sobre aquele ponto:
+
+aí existe uma evidência qualitativa melhor de evolução.
+
+Se não houver prova suficiente:
+
+diga de maneira leve que aquele ponto ainda vale ser acompanhado.
+
+=====================================================
+SEMANA ATUAL X SEMANA ANTERIOR
+=====================================================
+
+Não diga apenas:
+
+"subiu"
+
+"caiu"
+
+"melhorou"
+
+"piorou"
+
+Explique o contexto.
+
+Uma semana com menos registros ainda pode estar no começo.
+
+Uma semana com mais registros demonstra aumento de movimentação, mas não prova automaticamente aumento de qualidade.
+
+=====================================================
+DICAS PRÁTICAS
+=====================================================
+
+A parte final deve trazer de 1 a 3 orientações realmente coerentes com aquela pessoa.
+
+Exemplos de tipos de orientação:
+
+- ganhar mais autonomia na principal frente;
+- tirar dúvidas específicas;
+- manter constância;
+- distribuir melhor a atuação;
+- trabalhar qualidade quando o volume já estiver alto;
+- continuar praticando aquilo que anteriormente estava em aprendizado;
+- buscar acompanhamento em um ponto ainda recorrente;
+- aparecer mais quando realmente existir pouca movimentação.
+
+Não dê dicas que os dados não sustentam.
+
+Se a pessoa já possui alto volume:
+
+não diga simplesmente para "registrar mais".
+
+Nesse caso, qualidade, segurança, autonomia e consistência podem ser orientações mais úteis.
+
+=====================================================
+TOM
+=====================================================
+
+Fale como alguém da SantaCreators deixando um retorno útil no privado.
+
+Não seja corporativo.
+
+Não seja excessivamente formal.
+
+Não pareça bronca automática.
+
+Não seja bajulador.
+
+Quando houver mérito real, reconheça.
+
+Quando houver algo para melhorar, explique com respeito.
+
+=====================================================
+FORMATO
+=====================================================
+
+Escreva normalmente de 3 a 6 parágrafos.
+
+Quando houver bastante informação, aproximadamente 1000 a 2400 caracteres é adequado.
+
+Pode ser menor quando existirem poucos dados.
+
+Não invente conteúdo para preencher espaço.
+
+Pode utilizar poucos emojis quando forem naturais.
+
+Não faça tabela.
+
+Não escreva lista fria de números.
+
+Pode mencionar alguns números importantes dentro da conversa.
+
+Não coloque título dentro do texto.
+
+Entregue SOMENTE a mensagem que será enviada para ${facts.displayName}.
+`.trim();
+}
+
+// =====================================================
+// ✅ GERA ORIENTAÇÃO PRIVADA
+// =====================================================
+
+async function generatePrivateMemberFeedback({
+  facts,
+}) {
+  const prompt =
+    buildPrivateMemberFeedbackPrompt({
+      facts,
+    });
+
+  try {
+    const generated =
+      await generateSantaCreatorsStandaloneText({
+        prompt,
+
+        maxOutputTokens:
+          1800,
+
+        temperature:
+          0.74,
+
+        label:
+          `Weekly Member Private DM ${facts.userId}`,
+      });
+
+    const text =
+      cleanGeneratedText(
+        generated
+      );
+
+    if (
+      text &&
+      text.length >=
+        350
+    ) {
+      return text;
+    }
+
+    console.warn(
+      `[Weekly Member Feedback] DM privada de ${facts.userId} ficou curta demais. Usando fallback factual direto.`
+    );
+  } catch (
+    error
+  ) {
+    console.warn(
+      `[Weekly Member Feedback] Não foi possível gerar orientação privada para ${facts.userId}. Utilizando fallback factual:`,
+      error?.message ||
+        error
+    );
+  }
+
+  return buildLocalFactRichFeedback({
+    facts,
+
+    mode:
+      "manual",
+  });
 }
 
 // =====================================================
@@ -3710,8 +4375,8 @@ function buildFeedbackEmbed({
       )
       .setTitle(
         isManual
-          ? "💬 Um retorno sobre sua semana"
-          : "🌟 Fechando sua semana"
+          ? "💬 Acompanhamento da semana"
+          : "🌟 Fechamento do acompanhamento"
       )
       .setDescription(
         descriptionParts
@@ -4135,6 +4800,103 @@ async function processFeedback({
       runningKey
     );
   }
+}
+
+// =====================================================
+// ✅ ORIENTAÇÃO PRIVADA PARA O MEMBRO
+// =====================================================
+//
+// Utilizada pelo botão "Reenviar DM agora" do Controle GI.
+//
+// Não publica nada no Forms.
+//
+// Apenas coleta os mesmos fatos reais e gera uma versão
+// própria para o membro receber no PV.
+//
+export async function generateWeeklyMemberPrivateDm({
+  client,
+  guild,
+  record,
+}) {
+  if (
+    !client ||
+    !guild ||
+    !record
+  ) {
+    throw new Error(
+      "Dados insuficientes para gerar a orientação privada."
+    );
+  }
+
+  const userId =
+    String(
+      record?.targetId ||
+        ""
+    ).trim();
+
+  if (
+    !userId
+  ) {
+    throw new Error(
+      "O Controle GI não possui membro alvo."
+    );
+  }
+
+  const member =
+    await guild
+      .members
+      .fetch(
+        userId
+      )
+      .catch(
+        () => null
+      );
+
+  if (
+    !member
+  ) {
+    throw new Error(
+      "O membro não está disponível no servidor."
+    );
+  }
+
+  const weekKey =
+    getWeekKeySP();
+
+  const facts =
+    await collectMemberFacts({
+      client,
+      guild,
+      record,
+      weekKey,
+    });
+
+  const text =
+    await generatePrivateMemberFeedback({
+      facts,
+    });
+
+  const chunks =
+    splitWeeklyFeedbackText(
+      text,
+      3300
+    );
+
+  if (
+    !chunks.length
+  ) {
+    throw new Error(
+      "A orientação privada ficou vazia."
+    );
+  }
+
+  return {
+    text,
+
+    chunks,
+
+    facts,
+  };
 }
 
 // =====================================================

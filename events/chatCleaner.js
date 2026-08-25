@@ -5,9 +5,12 @@ import {
 } from "discord.js";
 
 // IDs de Configuração
+
 const MONITOR_CHANNEL_ID = "1381597720007151698"; // Canal que o bot observa
+
 const LOG_REDIRECT_CHANNEL_ID = "1370512999298891806"; // Canal onde as marcações são logadas
-const CORRECT_CHAT_CHANNEL_ID = "1506520202576400404"; // Canal "ideal" ( SantaCreators IA )
+
+const CORRECT_CHAT_CHANNEL_ID = "1370512999298891806"; // Canal correto para redirecionamento
 
 // =====================================================
 // USUÁRIOS ISENTOS DO CHAT CLEANER

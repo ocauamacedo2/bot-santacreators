@@ -68,6 +68,28 @@ const TRUSTED_BOT_IDS = new Set([
 ]);
 
 // =====================================================
+// CARGOS COM LIBERAÇÃO DE LINKS
+// =====================================================
+//
+// Estes cargos podem enviar normalmente links externos,
+// convites, redes sociais, sites, arquivos, plataformas,
+// ferramentas e demais URLs.
+//
+// IMPORTANTE:
+//
+// A liberação NÃO vale para conteúdo pornográfico.
+//
+// A regra de conteúdo adulto continua tendo prioridade.
+// =====================================================
+
+const PRIVILEGED_LINK_ROLE_IDS = new Set([
+  "1352407252216184833", // Resp. Líder
+  "1352408327983861844", // Resp. Creators
+  "1262262852949905409", // Resp. Influ
+  "1388976314253312100", // Coord
+]);
+
+// =====================================================
 // CONFIGURAÇÃO DE FLOOD DE USUÁRIO
 // =====================================================
 
@@ -101,7 +123,15 @@ const BOT_REPEAT_WINDOW_MS = 10_000;
 // =====================================================
 
 // 30 minutos.
+// Usado para flood e para linguagem claramente ofensiva.
 const TIMEOUT_MS = 30 * 60 * 1000;
+
+// 5 minutos.
+// Usado somente quando a linguagem foi detectada,
+// mas o contexto não permite afirmar com segurança
+// que houve um ataque direto.
+const SOFT_PROFANITY_TIMEOUT_MS =
+  5 * 60 * 1000;
 
 // Mensagem de aviso desaparece após 30 segundos.
 const WARNING_DELETE_MS = 30_000;
@@ -356,6 +386,241 @@ function truncate(value, max = 1000) {
   return text.length > max
     ? `${text.slice(0, max - 3)}...`
     : text;
+}
+
+// =====================================================
+// REMOVE URL SOMENTE DA ANÁLISE DE PALAVRÃO
+// =====================================================
+//
+// IMPORTANTE:
+//
+// A mensagem original NÃO é modificada.
+//
+// Este helper existe apenas para impedir que:
+// • hashes
+// • tokens
+// • parâmetros
+// • nomes de arquivos
+// • links do Discord CDN
+//
+// produzam falsos positivos como "sfd", "fdp",
+// "pqp", "crl" etc. dentro de uma URL.
+//
+// Texto normal antes ou depois do link continua
+// sendo analisado normalmente.
+// =====================================================
+
+function stripUrlsForProfanityAnalysis(
+  value
+) {
+  return String(value ?? "")
+    .replace(
+      /https?:\/\/\S+/gi,
+      " "
+    )
+    .replace(
+      /\s+/g,
+      " "
+    )
+    .trim();
+}
+
+// =====================================================
+// VERIFICA LIBERAÇÃO ESPECIAL DE LINKS
+// =====================================================
+
+function hasPrivilegedLinkRole(
+  member
+) {
+  if (!member) {
+    return false;
+  }
+
+  return (
+    member.roles?.cache?.some(
+      (role) =>
+        PRIVILEGED_LINK_ROLE_IDS.has(
+          role.id
+        )
+    ) ?? false
+  );
+}
+
+// =====================================================
+// EXTRAI LINKS DA MENSAGEM
+// =====================================================
+
+function extractMessageUrls(
+  value
+) {
+  const content =
+    String(value ?? "");
+
+  const matches =
+    content.match(
+      /https?:\/\/[^\s<>()]+/gi
+    );
+
+  return matches ?? [];
+}
+
+// =====================================================
+// DETECÇÃO DE LINK EXPLICITAMENTE PORNOGRÁFICO
+// =====================================================
+//
+// Esta proteção analisa a própria URL.
+//
+// Ela NÃO tenta analisar visualmente:
+// • imagens
+// • vídeos
+// • páginas inteiras
+//
+// Portanto:
+//
+// • domínio adulto conhecido = bloqueia
+// • URL explicitamente pornográfica = bloqueia
+// • URL normal = libera
+//
+// Nenhum cargo possui bypass para esta proteção.
+// =====================================================
+
+const BLOCKED_ADULT_LINK_HOSTS = new Set([
+  "pornhub.com",
+  "xvideos.com",
+  "xnxx.com",
+  "xhamster.com",
+  "redtube.com",
+  "youporn.com",
+]);
+
+// =====================================================
+// VERIFICA UMA URL INDIVIDUAL
+// =====================================================
+
+function isExplicitAdultUrl(
+  value
+) {
+  let parsedUrl;
+
+  try {
+    parsedUrl =
+      new URL(
+        value
+      );
+  } catch {
+    return false;
+  }
+
+  const hostname =
+    String(
+      parsedUrl.hostname ?? ""
+    )
+      .toLowerCase()
+      .replace(
+        /\.$/,
+        ""
+      );
+
+  // ===================================================
+  // 1. DOMÍNIO ADULTO CONHECIDO
+  // ===================================================
+  //
+  // Também bloqueia subdomínios.
+  //
+  // Exemplo:
+  //
+  // alguma-coisa.exemplo-adulto.com
+  // ===================================================
+
+  const blockedByDomain =
+    [...BLOCKED_ADULT_LINK_HOSTS]
+      .some(
+        (blockedHost) =>
+          hostname ===
+            blockedHost ||
+          hostname.endsWith(
+            `.${blockedHost}`
+          )
+      );
+
+  if (blockedByDomain) {
+    return true;
+  }
+
+  // ===================================================
+  // 2. TERMOS EXPLÍCITOS NA URL
+  // ===================================================
+  //
+  // Isso permite bloquear URLs que deixam explícito
+  // no domínio/caminho que se trata de conteúdo adulto.
+  //
+  // Mantemos termos específicos para reduzir
+  // falsos positivos.
+  // ===================================================
+
+  let decodedUrl;
+
+  try {
+    decodedUrl =
+      decodeURIComponent(
+        `${hostname}` +
+        `${parsedUrl.pathname}` +
+        `${parsedUrl.search}`
+      );
+  } catch {
+    decodedUrl =
+      `${hostname}` +
+      `${parsedUrl.pathname}` +
+      `${parsedUrl.search}`;
+  }
+
+  const normalizedUrl =
+    decodedUrl
+      .toLowerCase();
+
+  const explicitAdultUrlPatterns = [
+    /(?:^|[._\-\/])porn(?:$|[._\-\/])/i,
+    /(?:^|[._\-\/])porno(?:$|[._\-\/])/i,
+    /(?:^|[._\-\/])pornografia(?:$|[._\-\/])/i,
+    /(?:^|[._\-\/])xxx(?:$|[._\-\/])/i,
+  ];
+
+  return (
+    explicitAdultUrlPatterns.some(
+      (pattern) =>
+        pattern.test(
+          normalizedUrl
+        )
+    )
+  );
+}
+
+// =====================================================
+// PROCURA LINK ADULTO NA MENSAGEM
+// =====================================================
+
+function findExplicitAdultUrl(
+  content
+) {
+  const urls =
+    extractMessageUrls(
+      content
+    );
+
+  for (
+    const url of
+    urls
+  ) {
+    if (
+      isExplicitAdultUrl(
+        url
+      )
+    ) {
+      return url;
+    }
+  }
+
+  return null;
 }
 
 // =====================================================
@@ -781,11 +1046,36 @@ const FORBIDDEN_COMPACT_PATTERNS = [
 // =====================================================
 
 function containsForbiddenWord(content) {
+  // ===================================================
+  // REMOVE LINKS ANTES DA ANÁLISE
+  // ===================================================
+  //
+  // Evita falsos positivos provocados por:
+  //
+  // • Discord CDN
+  // • hashes
+  // • tokens
+  // • parâmetros de URL
+  // • nomes de arquivo
+  //
+  // A mensagem original continua intacta.
+  // Somente a análise linguística ignora as URLs.
+  // ===================================================
+
+  const contentWithoutUrls =
+    stripUrlsForProfanityAnalysis(
+      content
+    );
+
   const normalized =
-    normalizeText(content);
+    normalizeText(
+      contentWithoutUrls
+    );
 
   const compact =
-    compactText(content);
+    compactText(
+      contentWithoutUrls
+    );
 
   if (!normalized) {
     return null;
@@ -794,6 +1084,26 @@ function containsForbiddenWord(content) {
   // ===================================================
   // 1. PALAVRAS / EXPRESSÕES COMPLETAS
   // ===================================================
+  //
+  // Adicionamos espaço artificial antes e depois
+  // para impedir que abreviações curtas sejam
+  // encontradas dentro de palavras, hashes ou outras
+  // sequências maiores.
+  //
+  // Exemplo:
+  //
+  // "sfd" continua sendo detectado.
+  //
+  // Mas:
+  //
+  // "abcxsfdxyz"
+  //
+  // não será tratado como se a pessoa tivesse escrito
+  // a expressão "sfd".
+  // ===================================================
+
+  const paddedNormalized =
+    ` ${normalized} `;
 
   for (
     const word of
@@ -802,9 +1112,12 @@ function containsForbiddenWord(content) {
     const normalizedWord =
       normalizeText(word);
 
+    const paddedWord =
+      ` ${normalizedWord} `;
+
     if (
-      normalized.includes(
-        normalizedWord
+      paddedNormalized.includes(
+        paddedWord
       )
     ) {
       return word;
@@ -823,7 +1136,8 @@ function containsForbiddenWord(content) {
   // v s f
   // v_s_f
   //
-  // sem procurar "vsf" no meio de uma palavra maior.
+  // quando o conteúdo compactado corresponde
+  // exatamente à abreviação.
   // ===================================================
 
   for (
@@ -1612,13 +1926,15 @@ function buildMessageLogEmbed({
 //
 // =====================================================
 
-function shouldPunishProfanityByContext(
+function getProfanityPunishmentLevel(
   message,
   forbiddenWord
 ) {
   const content =
     normalizeText(
-      message?.content || ""
+      stripUrlsForProfanityAnalysis(
+        message?.content || ""
+      )
     );
 
   const detected =
@@ -1627,20 +1943,64 @@ function shouldPunishProfanityByContext(
     );
 
   if (!content || !detected) {
-    return false;
+    return "ignore";
   }
 
   // ===================================================
-  // EXPRESSÕES FORTEMENTE DIRECIONADAS
+  // 1. ELOGIOS / USO POSITIVO / CONTEXTO CASUAL
   // ===================================================
   //
-  // Estas expressões possuem intenção ofensiva muito
-  // mais clara e não precisam ser liberadas apenas
-  // porque existe outro texto ao redor.
+  // Algumas palavras da lista também são usadas
+  // naturalmente como elogio ou reação.
   //
+  // Exemplos:
+  //
+  // "você é foda"
+  // "vc é foda"
+  // "tu é foda"
+  // "foi foda"
+  // "muito foda"
+  // "que foda"
+  // "foda demais"
+  //
+  // Nesses casos não existe motivo para apagar
+  // a mensagem nem aplicar timeout.
   // ===================================================
 
-  const aggressiveExpressions = [
+  const positiveOrCasualPatterns = [
+    /\bvoce\s+(e|eh)\s+foda\b/i,
+    /\bvc\s+(e|eh)\s+foda\b/i,
+    /\btu\s+(e|eh)\s+foda\b/i,
+    /\bfoi\s+foda\b/i,
+    /\bmuito\s+foda\b/i,
+    /\bque\s+foda\b/i,
+    /\bfoda\s+demais\b/i,
+    /\bfoda\s+mano\b/i,
+    /\bfoda\s+kkkk/i,
+    /\bcaralho\s+que\b/i,
+    /\bkrlh?\s+que\b/i,
+    /\bporra\s+que\b/i,
+  ];
+
+  if (
+    positiveOrCasualPatterns.some(
+      (pattern) =>
+        pattern.test(content)
+    )
+  ) {
+    return "ignore";
+  }
+
+  // ===================================================
+  // 2. ORDENS / EXPRESSÕES CLARAMENTE HOSTIS
+  // ===================================================
+  //
+  // Estas expressões possuem intenção ofensiva
+  // suficientemente clara para manter o castigo
+  // normal de 30 minutos.
+  // ===================================================
+
+  const stronglyAggressiveExpressions = [
     "vai tomar no cu",
     "va tomar no cu",
     "vai toma no cu",
@@ -1648,40 +2008,75 @@ function shouldPunishProfanityByContext(
     "vai tomar no seu cu",
     "vai se foder",
     "vai se fuder",
-    "se foder",
-    "se fuder",
-    "filho da puta",
-    "filha da puta",
     "pau no cu",
     "pau no seu cu",
     "pau no teu cu",
-    "arrombado",
-    "arrombada",
-    "cuzão",
-    "cuzao",
-    "cuzona",
-    "idiota",
-    "imbecil",
   ];
 
   if (
-    aggressiveExpressions.some(
+    stronglyAggressiveExpressions.some(
       (expression) =>
         content.includes(
-          normalizeText(expression)
+          normalizeText(
+            expression
+          )
         )
     )
   ) {
-    return true;
+    return "strong";
   }
 
   // ===================================================
-  // ABREVIAÇÕES CLARAMENTE OFENSIVAS
+  // 3. INSULTO DIRETO CONTRA OUTRA PESSOA
+  // ===================================================
+  //
+  // Aqui existe estrutura clara:
+  //
+  // "você é idiota"
+  // "vc é um imbecil"
+  // "tu é babaca"
+  // "seu arrombado"
+  // "sua idiota"
+  //
+  // Diferente de simplesmente encontrar a palavra
+  // solta em uma conversa.
+  // ===================================================
+
+  const directInsultPatterns = [
+    /\b(voce|vc|tu)\s+(e|eh)\s+(um\s+|uma\s+)?(idiota|imbecil|babaca|otario|otaria|arrombado|arrombada|cuzao|cuzona|desgracado|desgracada)\b/i,
+
+    /\b(seu|sua)\s+(idiota|imbecil|babaca|otario|otaria|arrombado|arrombada|cuzao|cuzona|desgracado|desgracada)\b/i,
+
+    /\b(voce|vc|tu)\s+(e|eh)\s+(um\s+|uma\s+)?filho\s+da\s+puta\b/i,
+
+    /\b(voce|vc|tu)\s+(e|eh)\s+(um\s+|uma\s+)?filha\s+da\s+puta\b/i,
+  ];
+
+  if (
+    directInsultPatterns.some(
+      (pattern) =>
+        pattern.test(content)
+    )
+  ) {
+    return "strong";
+  }
+
+  // ===================================================
+  // 4. ABREVIAÇÃO SOZINHA CLARAMENTE OFENSIVA
+  // ===================================================
+  //
+  // Se a pessoa envia somente algo como:
+  //
+  // "vsf"
+  // "fdp"
+  // "vtnc"
+  //
+  // a intenção é muito mais clara.
   // ===================================================
 
   const compact =
     compactText(
-      message?.content || ""
+      content
     );
 
   const aggressiveCompact = new Set([
@@ -1697,26 +2092,15 @@ function shouldPunishProfanityByContext(
   ]);
 
   if (
-    aggressiveCompact.has(compact)
+    aggressiveCompact.has(
+      compact
+    )
   ) {
-    return true;
+    return "strong";
   }
 
   // ===================================================
-  // PALAVRAS AMBÍGUAS / GÍRIAS
-  // ===================================================
-  //
-  // Estas palavras aparecem frequentemente em conversa
-  // informal sem necessariamente atacar alguém.
-  //
-  // Exemplos:
-  //
-  // "foi foda kkkkk"
-  // "krlh ele falou tudo"
-  // "caralho que evento"
-  //
-  // Sozinhas elas não justificam timeout automático.
-  //
+  // 5. PALAVRAS QUE PODEM SER GÍRIA / REAÇÃO
   // ===================================================
 
   const contextualWords = new Set([
@@ -1753,17 +2137,23 @@ function shouldPunishProfanityByContext(
     )
   ) {
     // ===============================================
-    // PROCURA INDÍCIO DE ATAQUE DIRECIONADO
+    // PROCURA ALGUM SINAL DE DIRECIONAMENTO
+    // ===============================================
+    //
+    // Isso sozinho ainda NÃO significa ataque.
+    //
+    // Como não temos certeza suficiente,
+    // usamos o castigo leve de 5 minutos.
     // ===============================================
 
     const directedPatterns = [
-      /\bvoce\s+(e|eh)\s+/i,
-      /\bvc\s+(e|eh)\s+/i,
-      /\btu\s+(e|eh)\s+/i,
-      /\bseu\s+/i,
-      /\bsua\s+/i,
-      /\besse\s+/i,
-      /\bessa\s+/i,
+      /\bvoce\b/i,
+      /\bvc\b/i,
+      /\btu\b/i,
+      /\bseu\b/i,
+      /\bsua\b/i,
+      /\besse\b/i,
+      /\bessa\b/i,
     ];
 
     const directed =
@@ -1772,23 +2162,33 @@ function shouldPunishProfanityByContext(
           pattern.test(content)
       );
 
-    // Se nem existe sinal de direcionamento,
-    // tratamos como linguagem casual.
-    if (!directed) {
-      return false;
+    if (directed) {
+      return "soft";
     }
+
+    // ===============================================
+    // SEM DIRECIONAMENTO
+    // ===============================================
+    //
+    // Uso casual ou reação sem ataque pessoal.
+    // ===============================================
+
+    return "ignore";
   }
 
   // ===================================================
-  // CASO INCERTO
+  // 6. CASO INCERTO
   // ===================================================
   //
-  // Mantém a proteção atual para palavras que não
-  // pertencem ao grupo casual.
+  // O detector encontrou uma expressão proibida,
+  // porém não conseguimos classificá-la com confiança
+  // como ataque grave.
   //
+  // Em vez de aplicar 30 minutos automaticamente,
+  // aplicamos somente 5 minutos.
   // ===================================================
 
-  return true;
+  return "soft";
 }
 
 // =====================================================
@@ -1797,7 +2197,8 @@ function shouldPunishProfanityByContext(
 
 async function punishHumanForProfanity(
   message,
-  forbiddenWord
+  forbiddenWord,
+  punishmentLevel = "strong"
 ) {
   const member =
     message.member;
@@ -1841,6 +2242,29 @@ async function punishHumanForProfanity(
     message.content;
 
   // ===================================================
+  // DEFINE GRAVIDADE
+  // ===================================================
+
+  const isSoftPunishment =
+    punishmentLevel === "soft";
+
+  const profanityTimeoutMs =
+    isSoftPunishment
+      ? SOFT_PROFANITY_TIMEOUT_MS
+      : TIMEOUT_MS;
+
+  const profanityTimeoutMinutes =
+    Math.round(
+      profanityTimeoutMs /
+      60_000
+    );
+
+  const punishmentDescription =
+    isSoftPunishment
+      ? "Contexto incerto / linguagem ambígua"
+      : "Linguagem claramente ofensiva";
+
+  // ===================================================
   // APAGA MENSAGEM
   // ===================================================
 
@@ -1863,9 +2287,9 @@ async function punishHumanForProfanity(
   if (member.moderatable) {
     await member
       .timeout(
-        TIMEOUT_MS,
+        profanityTimeoutMs,
 
-        `Linguagem proibida detectada automaticamente: ${forbiddenWord}`
+        `Linguagem proibida detectada automaticamente: ${forbiddenWord} | ${punishmentDescription}`
       )
       .then(() => {
         timeoutApplied =
@@ -1885,7 +2309,8 @@ async function punishHumanForProfanity(
     timeoutApplied
       ? (
           "Mensagem apagada + " +
-          "castigo de 30 minutos."
+          `castigo de ${profanityTimeoutMinutes} minutos. ` +
+          `Classificação: ${punishmentDescription}.`
         )
       : (
           "Mensagem apagada. " +
@@ -1940,7 +2365,9 @@ async function punishHumanForProfanity(
 
       reason:
         `Palavra/expressão detectada: ` +
-        `"${forbiddenWord}"`,
+        `"${forbiddenWord}"\n` +
+        `**Análise contextual:** ` +
+        `${punishmentDescription}`,
 
       action,
 
@@ -1965,7 +2392,13 @@ async function punishHumanForProfanity(
     `⚠️ <@${message.author.id}>, ` +
       `essa linguagem não é permitida aqui. ` +
       `A mensagem foi removida e você recebeu ` +
-      `**30 minutos de castigo**. ` +
+      `**${profanityTimeoutMinutes} minutos de castigo**. ` +
+      (
+        isSoftPunishment
+          ? `O contexto foi considerado ambíguo, ` +
+            `por isso foi aplicado somente o castigo leve. `
+          : ""
+      ) +
       `Este aviso será apagado automaticamente ` +
       `em 30 segundos.`
   );
@@ -2499,6 +2932,145 @@ async function handleMessage(
     // =================================================
 
     // =================================================
+    // LINK EXPLICITAMENTE PORNOGRÁFICO
+    // =================================================
+    //
+    // IMPORTANTE:
+    //
+    // A verificação acontece ANTES de qualquer liberação
+    // especial de link.
+    //
+    // Portanto nem mesmo:
+    //
+    // • Resp. Líder
+    // • Resp. Creators
+    // • Resp. Influ
+    // • Coord
+    //
+    // possuem bypass para conteúdo adulto.
+    // =================================================
+
+    const explicitAdultUrl =
+      findExplicitAdultUrl(
+        message.content
+      );
+
+    if (explicitAdultUrl) {
+      const originalContent =
+        message.content;
+
+      const imageUrl =
+        getFirstImage(
+          message
+        );
+
+      const deleted =
+        await message
+          .delete()
+          .then(() => 1)
+          .catch(() => 0);
+
+      if (
+        !message.content &&
+        originalContent
+      ) {
+        try {
+          Object.defineProperty(
+            message,
+            "content",
+            {
+              configurable: true,
+
+              value:
+                originalContent,
+            }
+          );
+        } catch {}
+      }
+
+      const embed =
+        buildMessageLogEmbed({
+          message,
+
+          title:
+            "🔞 Link proibido detectado",
+
+          color:
+            0xed4245,
+
+          reason:
+            "Link explicitamente pornográfico detectado.",
+
+          action:
+            "Mensagem apagada. " +
+            "Nenhum cargo possui bypass " +
+            "para conteúdo pornográfico.",
+
+          deletedCount:
+            deleted,
+
+          imageUrl,
+        });
+
+      await sendSecurityLog(
+        message.guild,
+        embed
+      );
+
+      await sendTemporaryWarning(
+        message,
+
+        `⚠️ <@${message.author.id}>, ` +
+          `links com conteúdo pornográfico ` +
+          `não são permitidos neste servidor. ` +
+          `A mensagem foi removida. ` +
+          `Este aviso será apagado automaticamente ` +
+          `em 30 segundos.`
+      );
+
+      return;
+    }
+
+    // =================================================
+    // LIBERAÇÃO ESPECIAL DE LINKS
+    // =================================================
+    //
+    // Estes cargos podem enviar qualquer URL normal:
+    //
+    // • Resp. Líder
+    // • Resp. Creators
+    // • Resp. Influ
+    // • Coord
+    //
+    // Isso NÃO ignora palavrão escrito junto do link.
+    //
+    // Exemplo:
+    //
+    // "https://site.com"
+    //
+    // pode passar.
+    //
+    // Já:
+    //
+    // "vai se foder https://site.com"
+    //
+    // continua passando pelo filtro de linguagem.
+    // =================================================
+
+    const privilegedLinkSender =
+      hasPrivilegedLinkRole(
+        message.member
+      );
+
+    const messageUrls =
+      extractMessageUrls(
+        message.content
+      );
+
+    const hasNormalLink =
+      messageUrls.length > 0;
+
+    // =================================================
     // PALAVRÃO
     // =================================================
     //
@@ -2507,40 +3079,51 @@ async function handleMessage(
     //
     // Assim uma pessoa não consegue escapar do filtro
     // escrevendo palavrão junto com algum conteúdo.
+    //
+    // Antes de punir, o sistema classifica o contexto:
+    //
+    // • ignore = casual / elogio / sem ataque
+    // • soft   = contexto incerto = 5 minutos
+    // • strong = ataque claro = 30 minutos
     // =================================================
 
-   const forbiddenWord =
-  containsForbiddenWord(
-    message.content
-  );
+    const forbiddenWord =
+      containsForbiddenWord(
+        message.content
+      );
 
-if (forbiddenWord) {
-  const shouldPunish =
-    shouldPunishProfanityByContext(
-      message,
-      forbiddenWord
-    );
+    if (forbiddenWord) {
+      const punishmentLevel =
+        getProfanityPunishmentLevel(
+          message,
+          forbiddenWord
+        );
 
-  if (shouldPunish) {
-    await punishHumanForProfanity(
-      message,
-      forbiddenWord
-    );
+      if (
+        punishmentLevel === "soft" ||
+        punishmentLevel === "strong"
+      ) {
+        await punishHumanForProfanity(
+          message,
+          forbiddenWord,
+          punishmentLevel
+        );
 
-    return;
-  }
+        return;
+      }
 
-  console.log(
-    `[SECURITY] Linguagem casual/contextual ignorada: ` +
-    `${message.author.tag} ` +
-    `(${message.author.id}) | ` +
-    `detectado="${forbiddenWord}" | ` +
-    `mensagem="${truncate(
-      message.content,
-      150
-    )}"`
-  );
-}
+      console.log(
+        `[SECURITY] Linguagem casual/contextual ignorada: ` +
+        `${message.author.tag} ` +
+        `(${message.author.id}) | ` +
+        `detectado="${forbiddenWord}" | ` +
+        `classificacao="${punishmentLevel}" | ` +
+        `mensagem="${truncate(
+          message.content,
+          150
+        )}"`
+      );
+    }
 
     // =================================================
     // CONTEÚDO SEGURO PARA FLOOD HUMANO

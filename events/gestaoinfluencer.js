@@ -87,7 +87,8 @@ const {
 
     const {
       weeklyMemberAiFeedbackOnReady,
-      forceWeeklyMemberAiFeedback
+      forceWeeklyMemberAiFeedback,
+      generateWeeklyMemberPrivateDm
     } = weeklyMemberAiFeedback;
 
     if (client.__SC_GI_INSTALLED) {
@@ -3068,37 +3069,296 @@ try {
 
     async function resendDM(guild, actor, messageId) {
       const rec = SC_GI_STATE.registros.get(messageId);
-      if (!rec) throw new Error('Registro não encontrado.');
-      const targetUser = await fetchUserCached(rec.targetId);
-      if (!targetUser) throw new Error('Usuário não encontrado.');
 
-      // ✅ BUSCA ESTATÍSTICAS GERAIS (scGeralWeeklyRanking)
-      let statsEmbed = null;
-      try {
-        const stats = await getStatsForUser(guild.client, rec.targetId);
-        if (stats) {
-          statsEmbed = new EmbedBuilder()
-            .setColor(0x2b2d31)
-            .setTitle('📊 Relatório de Desempenho (Recente)')
-            .setDescription(`🏆 **Total Geral:** ${stats.total} pontos`)
-            .addFields(
-              { name: '📂 Por Categoria', value: stats.sourcesFormatted.length ? stats.sourcesFormatted.join('\n') : '_(sem registros)_', inline: false },
-              { name: '📅 Por Semana', value: stats.weeksFormatted.length ? stats.weeksFormatted.join('\n') : '_(sem registros)_', inline: false }
-            );
-        }
-      } catch (e) {
-        console.warn('[SC_GI] Falha ao buscar stats para resendDM:', e);
+      if (!rec) {
+        throw new Error('Registro não encontrado.');
       }
 
-      const dmEmb = await dmEmbedResumo(rec, targetUser, '📨 Reenvio — Atualização da gestão');
-      await sendDM_andMirror(guild, targetUser, dmEmb, `<@${rec.targetId}>`, statsEmbed ? [statsEmbed] : []);
-      await logMsg(guild, 'DM Reenviada (GI)', [
-        `📨 **Enviado para:** <@${rec.targetId}> (\`${rec.targetId}\`)`,
-        `🔧 **Por:** <@${actor.id}> (\`${actor.id}\`)`,
-        `🔗 **Link:** Ir ao registro})`
-      ].join('\n'), {
-        thumb: targetUser.displayAvatarURL?.({ size: 128 })
-      });
+      const targetUser =
+        await fetchUserCached(
+          rec.targetId
+        );
+
+      if (!targetUser) {
+        throw new Error(
+          'Usuário não encontrado.'
+        );
+      }
+
+      // =====================================================
+      // ✅ BUSCA ESTATÍSTICAS GERAIS
+      // =====================================================
+      //
+      // Mantém exatamente o relatório que já existia.
+      //
+      let statsEmbed =
+        null;
+
+      try {
+        const stats =
+          await getStatsForUser(
+            guild.client,
+            rec.targetId
+          );
+
+        if (stats) {
+          statsEmbed =
+            new EmbedBuilder()
+              .setColor(
+                0x2b2d31
+              )
+              .setTitle(
+                '📊 Relatório de Desempenho (Recente)'
+              )
+              .setDescription(
+                `🏆 **Total Geral:** ${stats.total} pontos`
+              )
+              .addFields(
+                {
+                  name:
+                    '📂 Por Categoria',
+
+                  value:
+                    stats
+                      .sourcesFormatted
+                      .length
+                      ? stats
+                          .sourcesFormatted
+                          .join(
+                            '\n'
+                          )
+                      : '_(sem registros)_',
+
+                  inline:
+                    false
+                },
+
+                {
+                  name:
+                    '📅 Por Semana',
+
+                  value:
+                    stats
+                      .weeksFormatted
+                      .length
+                      ? stats
+                          .weeksFormatted
+                          .join(
+                            '\n'
+                          )
+                      : '_(sem registros)_',
+
+                  inline:
+                    false
+                }
+              );
+        }
+      } catch (e) {
+        console.warn(
+          '[SC_GI] Falha ao buscar stats para resendDM:',
+          e
+        );
+      }
+
+      // =====================================================
+      // ✅ ENVIA PRIMEIRO A DM QUE JÁ EXISTIA
+      // =====================================================
+      //
+      // Não removemos nem substituímos nada do comportamento
+      // anterior.
+      //
+      const dmEmb =
+        await dmEmbedResumo(
+          rec,
+          targetUser,
+          '📨 Reenvio — Atualização da gestão'
+        );
+
+      const baseDmOk =
+        await sendDM_andMirror(
+          guild,
+          targetUser,
+          dmEmb,
+          `<@${rec.targetId}>`,
+          statsEmbed
+            ? [
+                statsEmbed,
+              ]
+            : []
+        );
+
+      // =====================================================
+      // ✅ ORIENTAÇÃO PRIVADA INTELIGENTE
+      // =====================================================
+      //
+      // Esta parte utiliza:
+      //
+      // - semana atual;
+      // - semana anterior;
+      // - ranking;
+      // - origem dos registros;
+      // - histórico do Forms;
+      // - feedbacks anteriores;
+      // - sinais de evolução;
+      //
+      // Mas gera um NOVO texto feito especificamente para o
+      // membro, sem copiar comentários internos.
+      //
+      let privateGuidanceSent =
+        false;
+
+      let privateGuidanceParts =
+        0;
+
+      if (
+        typeof generateWeeklyMemberPrivateDm ===
+        'function'
+      ) {
+        try {
+          const privateFeedback =
+            await generateWeeklyMemberPrivateDm({
+              client:
+                guild.client,
+
+              guild,
+
+              record:
+                rec,
+            });
+
+          const chunks =
+            Array.isArray(
+              privateFeedback
+                ?.chunks
+            )
+              ? privateFeedback
+                  .chunks
+              : [];
+
+          privateGuidanceParts =
+            chunks.length;
+
+          for (
+            let index = 0;
+            index < chunks.length;
+            index++
+          ) {
+            const chunk =
+              String(
+                chunks[index] ||
+                  ''
+              ).trim();
+
+            if (!chunk) {
+              continue;
+            }
+
+            const guidanceEmbed =
+              new EmbedBuilder()
+                .setColor(
+                  0x5865f2
+                )
+                .setTitle(
+                  index ===
+                    0
+                    ? '💡 Um retorno para você'
+                    : `↳ Continuação ${index + 1}/${chunks.length}`
+                )
+                .setDescription(
+                  chunk.slice(
+                    0,
+                    4096
+                  )
+                );
+
+            if (
+              index ===
+              0
+            ) {
+              guidanceEmbed
+                .setFooter({
+                  text:
+                    'SantaCreators • acompanhamento pessoal',
+                })
+                .setTimestamp(
+                  new Date()
+                );
+            }
+
+            const partSent =
+              await sendDM_andMirror(
+                guild,
+                targetUser,
+                guidanceEmbed,
+
+                // String vazia evita marcar novamente o membro
+                // em cada continuação.
+                '',
+                []
+              );
+
+            if (
+              partSent
+            ) {
+              privateGuidanceSent =
+                true;
+            }
+          }
+        } catch (e) {
+          console.warn(
+            `[SC_GI] Não foi possível gerar/enviar orientação privada de ${rec.targetId}:`,
+            e?.message ||
+              e
+          );
+        }
+      } else {
+        console.warn(
+          '[SC_GI] generateWeeklyMemberPrivateDm indisponível. A DM padrão será mantida sem orientação IA adicional.'
+        );
+      }
+
+      // =====================================================
+      // ✅ LOG
+      // =====================================================
+
+      await logMsg(
+        guild,
+        'DM Reenviada (GI)',
+        [
+          `📨 **Enviado para:** <@${rec.targetId}> (\`${rec.targetId}\`)`,
+
+          `🔧 **Por:** <@${actor.id}> (\`${actor.id}\`)`,
+
+          `📊 **Resumo/estatísticas:** ${
+            baseDmOk
+              ? 'enviado'
+              : 'não confirmado'
+          }`,
+
+          `🧠 **Orientação personalizada:** ${
+            privateGuidanceSent
+              ? `enviada em ${privateGuidanceParts} parte(s)`
+              : (
+                typeof generateWeeklyMemberPrivateDm ===
+                'function'
+                  ? 'não confirmada'
+                  : 'indisponível'
+              )
+          }`,
+
+          `🔗 **Link:** Ir ao registro})`
+        ].join(
+          '\n'
+        ),
+        {
+          thumb:
+            targetUser
+              .displayAvatarURL?.({
+                size:
+                  128
+              })
+        }
+      );
     }
 
     // Mantém SOMENTE o cargo Cidadão (conforme pedido do desligamento)
@@ -4766,12 +5026,26 @@ if (!rec.active) {
           if (!rec) return interaction.reply({ content: 'Registro não encontrado.', flags: MessageFlags.Ephemeral });
 
           await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
           try {
-            await resendDM(guild, interaction.user, messageId);
-            await interaction.editReply({ content: '✅ DM reenviada e espelhada!' });
+            await resendDM(
+              guild,
+              interaction.user,
+              messageId
+            );
+
+            await interaction.editReply({
+              content:
+                '✅ DM reenviada! O membro recebeu a atualização da gestão, os dados de desempenho e a orientação personalizada da semana.'
+            });
           } catch (e) {
-            await interaction.editReply({ content: '⚠️ ' + e.message });
+            await interaction.editReply({
+              content:
+                '⚠️ ' +
+                e.message
+            });
           }
+
           return;
         }
 
