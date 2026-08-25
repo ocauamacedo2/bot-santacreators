@@ -2318,10 +2318,105 @@ const GEMINI_API_KEY =
 // a IA abandona somente aquela tentativa e passa para
 // o próximo fallback.
 //
-// Isso preserva completamente o sistema de fallback.
+// 4,5 segundos dão espaço suficiente para uma resposta
+// normal sem permitir que um modelo travado segure a
+// cadeia inteira durante 8 segundos.
+//
+// O fallback completo continua existindo.
 // =====================================================
 
-const GEMINI_REQUEST_TIMEOUT_MS = 8000;
+const GEMINI_REQUEST_TIMEOUT_MS = 4500;
+
+// =====================================================
+// IA CHAT — SAÚDE TEMPORÁRIA DOS MODELOS
+// =====================================================
+//
+// Quando um modelo informar quota esgotada ou ficar
+// travado até o timeout, não faz sentido tentar novamente
+// o mesmo modelo em TODA mensagem seguinte.
+//
+// Este controle existe somente em memória.
+//
+// Reiniciar o bot limpa os bloqueios automaticamente.
+//
+// QUOTA:
+// aguarda 30 minutos antes de testar novamente.
+//
+// TIMEOUT:
+// aguarda 2 minutos antes de testar novamente.
+//
+// Isso NÃO altera a quota da API e NÃO desativa nenhum
+// modelo permanentemente.
+//
+// Apenas evita desperdiçar vários segundos em modelos
+// que acabaram de provar que estão indisponíveis.
+// =====================================================
+
+const GEMINI_CHAT_QUOTA_COOLDOWN_MS =
+  30 * 60 * 1000;
+
+const GEMINI_CHAT_TIMEOUT_COOLDOWN_MS =
+  2 * 60 * 1000;
+
+const geminiChatModelBlockedUntil =
+  new Map();
+
+function getGeminiChatModelBlock(
+  modelName
+) {
+  const block =
+    geminiChatModelBlockedUntil.get(
+      modelName
+    );
+
+  if (!block) {
+    return null;
+  }
+
+  if (
+    Number(block.until || 0) <=
+    Date.now()
+  ) {
+    geminiChatModelBlockedUntil.delete(
+      modelName
+    );
+
+    return null;
+  }
+
+  return block;
+}
+
+function isGeminiChatModelTemporarilyBlocked(
+  modelName
+) {
+  return Boolean(
+    getGeminiChatModelBlock(
+      modelName
+    )
+  );
+}
+
+function blockGeminiChatModel(
+  modelName,
+  reason,
+  durationMs
+) {
+  geminiChatModelBlockedUntil.set(
+    modelName,
+    {
+      reason:
+        String(
+          reason ||
+          "temporariamente_indisponivel"
+        ),
+
+      until:
+        Date.now() +
+        Number(durationMs || 0),
+    }
+  );
+}
 
 // =====================================================
 // IA — EXECUÇÃO COM TIMEOUT
@@ -2456,16 +2551,109 @@ const lastAiResponses = new Map();
 // que conversas diferentes sejam misturadas.
 //
 // O agrupamento acontece somente antes do processamento.
-// Depois que a geração realmente começou, continua
-// existindo uma trava para impedir duas gerações
-// simultâneas do mesmo fluxo.
+//
+// Se uma nova mensagem chegar DEPOIS que a geração já
+// tiver começado, ela não será descartada.
+//
+// Nesse caso, o novo fluxo aguardará a geração anterior
+// liberar o processamento e continuará logo depois.
 // =====================================================
 
-const AI_MESSAGE_BATCH_DELAY_MS = 1800;
+// Janela curta suficiente para juntar mensagens enviadas
+// praticamente uma atrás da outra sem deixar a IA parada
+// por quase 2 segundos antes de cada resposta.
+const AI_MESSAGE_BATCH_DELAY_MS = 700;
 
 const AI_PENDING_MESSAGE_BATCHES = new Map();
 
 const AI_ACTIVE_USER_PROCESSING = new Set();
+
+// =====================================================
+// IA — ESPERA DE GERAÇÃO ANTERIOR
+// =====================================================
+//
+// Quando o mesmo usuário mandar uma segunda mensagem
+// enquanto a primeira resposta ainda está sendo gerada,
+// NÃO descartamos mais a mensagem.
+//
+// Ela fica aguardando a geração anterior terminar.
+//
+// Assim:
+//
+// Pessoa:
+// "como está o Vinicius?"
+//
+// IA começa a gerar.
+//
+// Pessoa:
+// "e compara com semana passada"
+//
+// A segunda mensagem será processada logo depois da
+// primeira, utilizando novamente todo o contexto recente.
+//
+// Isso mantém apenas uma geração simultânea por:
+// servidor + canal + usuário.
+//
+// Conversas de pessoas ou canais diferentes continuam
+// independentes.
+// =====================================================
+
+const AI_PROCESSING_WAIT_INTERVAL_MS = 80;
+
+const AI_PROCESSING_WAIT_TIMEOUT_MS = 30 * 1000;
+
+async function waitForPreviousAiProcessing(
+  message
+) {
+  const processingKey =
+    getAiMessageBatchKey(message);
+
+  if (
+    !AI_ACTIVE_USER_PROCESSING.has(
+      processingKey
+    )
+  ) {
+    return true;
+  }
+
+  console.log(
+    `[IA CHAT AUTO] Nova mensagem aguardando geração anterior | User=${message.author.id} | Canal=${message.channelId}`
+  );
+
+  const startedAt =
+    Date.now();
+
+  while (
+    AI_ACTIVE_USER_PROCESSING.has(
+      processingKey
+    )
+  ) {
+    if (
+      Date.now() - startedAt >=
+      AI_PROCESSING_WAIT_TIMEOUT_MS
+    ) {
+      console.warn(
+        `[IA CHAT AUTO] Tempo máximo aguardando geração anterior atingido | User=${message.author.id} | Canal=${message.channelId}`
+      );
+
+      return false;
+    }
+
+    await new Promise(
+      (resolve) =>
+        setTimeout(
+          resolve,
+          AI_PROCESSING_WAIT_INTERVAL_MS
+        )
+    );
+  }
+
+  console.log(
+    `[IA CHAT AUTO] Geração anterior liberada. Continuando nova mensagem | User=${message.author.id} | Canal=${message.channelId}`
+  );
+
+  return true;
+}
 
 // =====================================================
 // IA — AUTORIZAÇÃO TEMPORÁRIA DO AGRUPAMENTO
@@ -12407,6 +12595,38 @@ const prompt =
 let lastError = null;
 
 for (const modelName of GEMINI_CHAT_MODEL_FALLBACKS) {
+  // =====================================================
+  // CIRCUIT BREAKER DO MODELO
+  // =====================================================
+  //
+  // Se este modelo acabou de informar quota esgotada ou
+  // acabou de estourar timeout, pulamos a tentativa durante
+  // o pequeno período de bloqueio configurado.
+  //
+  // Isso reduz drasticamente a latência das próximas
+  // mensagens quando algum modelo estiver problemático.
+  // =====================================================
+
+  const modelBlock =
+    getGeminiChatModelBlock(
+      modelName
+    );
+
+  if (modelBlock) {
+    const remainingMs =
+      Math.max(
+        0,
+        Number(modelBlock.until || 0) -
+          Date.now()
+      );
+
+    console.log(
+      `[IA CHAT AUTO] Modelo pulado temporariamente: ${modelName} | Motivo=${modelBlock.reason} | Restante=${remainingMs}ms`
+    );
+
+    continue;
+  }
+
   const startedAt =
     Date.now();
 
@@ -12463,15 +12683,21 @@ for (const modelName of GEMINI_CHAT_MODEL_FALLBACKS) {
     // =====================================================
 
     if (
-      err?.code ===
-      "GEMINI_REQUEST_TIMEOUT"
-    ) {
-      console.warn(
-        `[IA CHAT AUTO] Timeout: ${modelName} | ${elapsed}ms. Tentando próximo fallback...`
-      );
+  err?.code ===
+  "GEMINI_REQUEST_TIMEOUT"
+) {
+  blockGeminiChatModel(
+    modelName,
+    "timeout",
+    GEMINI_CHAT_TIMEOUT_COOLDOWN_MS
+  );
 
-      continue;
-    }
+  console.warn(
+    `[IA CHAT AUTO] Timeout: ${modelName} | ${elapsed}ms. Modelo ficará temporariamente em cooldown. Tentando próximo fallback...`
+  );
+
+  continue;
+}
 
     // =====================================================
     // LIMITE / QUOTA DO MODELO
@@ -12488,9 +12714,19 @@ for (const modelName of GEMINI_CHAT_MODEL_FALLBACKS) {
     // Tentamos o próximo modelo da cadeia.
     // =====================================================
 
-    if (isGeminiQuotaError(err)) {
+if (
+  isGeminiQuotaError(
+    err
+  )
+) {
+  blockGeminiChatModel(
+    modelName,
+    "quota",
+    GEMINI_CHAT_QUOTA_COOLDOWN_MS
+  );
+
   console.warn(
-    `[IA CHAT AUTO] Quota/limite atingido em ${modelName} | ${elapsed}ms. Tentando próximo fallback...`
+    `[IA CHAT AUTO] Quota/limite atingido em ${modelName} | ${elapsed}ms. Modelo ficará em cooldown temporário. Tentando próximo fallback...`
   );
 
   continue;
@@ -17182,6 +17418,56 @@ const replyTargetTypeForCooldown =
 const isDirectReplyToAI =
   replyTargetTypeForCooldown === "AI";
 
+// =====================================================
+// CONTINUAÇÃO ATIVA DA CONVERSA
+// =====================================================
+//
+// Além de replies diretos para a IA, uma conversa pública
+// que já está ativa também pode continuar naturalmente.
+//
+// Isso permite:
+//
+// Pessoa:
+// "como está o Vinicius?"
+//
+// poucos segundos depois:
+//
+// "e comparado com semana passada?"
+//
+// sem a segunda mensagem desaparecer por causa do
+// cooldown.
+//
+// A própria função isPublicConversationContinuation()
+// continua responsável por impedir que uma mensagem
+// dirigida a outra pessoa seja considerada continuação
+// da SantaCreators IA.
+// =====================================================
+
+const isActiveConversationContinuation =
+  isPublicConversationContinuation(
+    message
+  );
+
+// =====================================================
+// GERAÇÃO ANTERIOR AINDA ATIVA
+// =====================================================
+//
+// Se a pessoa mandou uma nova mensagem enquanto a IA
+// ainda estava construindo a resposta anterior, essa nova
+// mensagem também não pode ser descartada pelo cooldown.
+//
+// Ela será colocada na sequência do processamento logo
+// abaixo.
+// =====================================================
+
+const processingKeyForCooldown =
+  getAiMessageBatchKey(message);
+
+const hasPreviousGenerationRunning =
+  AI_ACTIVE_USER_PROCESSING.has(
+    processingKeyForCooldown
+  );
+
 const remaining =
   getCooldownRemaining(
     message.author.id
@@ -17189,7 +17475,9 @@ const remaining =
 
 if (
   remaining > 0 &&
-  !isDirectReplyToAI
+  !isDirectReplyToAI &&
+  !isActiveConversationContinuation &&
+  !hasPreviousGenerationRunning
 ) {
   message.content =
     originalMessageContent;
@@ -17203,8 +17491,14 @@ if (
 //
 // Uma interação aceita continua renovando o cooldown.
 //
-// Isso preserva a proteção original sem impedir
-// continuidade por reply direto.
+// O cooldown continua protegendo contra spam.
+//
+// Porém ele não interfere mais em:
+//
+// - reply direto para a IA;
+// - conversa ativa reconhecida;
+// - mensagem enviada enquanto uma geração anterior
+//   ainda está acontecendo.
 // =====================================================
 
 setCooldown(message.author.id);
@@ -17244,14 +17538,20 @@ if (!safeIaResponse) {
   // =====================================================
   //
   // O agrupamento acima absorve mensagens consecutivas
-  // antes que a geração comece.
+  // enviadas antes que a geração comece.
   //
-  // Esta trava permanece como uma segunda camada de
-  // segurança caso uma nova interação consiga chegar
-  // enquanto uma geração anterior ainda estiver ativa.
+  // Caso uma nova mensagem chegue depois que uma geração
+  // já estiver ativa, ela NÃO será mais descartada.
   //
-  // A chave também considera o canal para não bloquear
-  // conversas independentes do mesmo usuário.
+  // Em vez disso, aguardamos o processamento anterior
+  // terminar e continuamos imediatamente depois.
+  //
+  // A chave considera:
+  //
+  // servidor + canal + usuário
+  //
+  // Portanto outras pessoas e outros canais continuam
+  // processando normalmente em paralelo.
   // =====================================================
 
   const processingKey =
@@ -17262,14 +17562,32 @@ if (!safeIaResponse) {
       processingKey
     )
   ) {
-    console.log(
-      `[IA CHAT AUTO] Geração simultânea bloqueada por segurança | User=${message.author.id} | Canal=${message.channelId}`
+    const previousProcessingFinished =
+      await waitForPreviousAiProcessing(
+        message
+      );
+
+    if (!previousProcessingFinished) {
+      console.warn(
+        `[IA CHAT AUTO] Nova geração cancelada somente porque a geração anterior excedeu o limite de espera | User=${message.author.id} | Canal=${message.channelId}`
+      );
+
+      message.content =
+        originalMessageContent;
+
+      return;
+    }
+
+    // Pequena janela para permitir que a resposta anterior
+    // seja enviada ao Discord antes da nova geração montar
+    // novamente o contexto recente do canal.
+    await new Promise(
+      (resolve) =>
+        setTimeout(
+          resolve,
+          150
+        )
     );
-
-    message.content =
-      originalMessageContent;
-
-    return;
   }
 
   AI_ACTIVE_USER_PROCESSING.add(
@@ -17279,6 +17597,20 @@ if (!safeIaResponse) {
   try {
     // =====================================================
     // GERAÇÃO IA
+    // =====================================================
+    //
+    // generateIAResponse() reconstruirá novamente:
+    //
+    // - histórico interno;
+    // - últimas mensagens reais do canal;
+    // - contexto do servidor;
+    // - memória relevante;
+    // - consultas operacionais necessárias.
+    //
+    // Portanto uma mensagem enviada durante a resposta
+    // anterior não reutiliza cegamente um prompt antigo.
+    //
+    // Ela ganha uma nova leitura do contexto disponível.
     // =====================================================
 
     const iaResponse =
