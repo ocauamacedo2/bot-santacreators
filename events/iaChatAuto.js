@@ -5218,21 +5218,73 @@ async function buildRecentChannelConversationContext(message, client) {
   }
 }
 
-function getCooldownRemaining(userId) {
-  const expiresAt = cooldowns.get(userId) || 0;
+function getAiCooldownKey(
+  message
+) {
+  return [
+    String(
+      message?.guildId ||
+      "DM"
+    ),
 
-  const now = Date.now();
+    String(
+      message?.channelId ||
+      ""
+    ),
 
-  if (now >= expiresAt) {
-    cooldowns.delete(userId);
+    String(
+      message?.author?.id ||
+      ""
+    ),
+  ].join(":");
+}
+
+function getCooldownRemaining(
+  message
+) {
+  const key =
+    getAiCooldownKey(
+      message
+    );
+
+  const expiresAt =
+    cooldowns.get(
+      key
+    ) || 0;
+
+  const now =
+    Date.now();
+
+  if (
+    now >=
+    expiresAt
+  ) {
+    cooldowns.delete(
+      key
+    );
+
     return 0;
   }
 
-  return expiresAt - now;
+  return (
+    expiresAt -
+    now
+  );
 }
 
-function setCooldown(userId) {
-  cooldowns.set(userId, Date.now() + COOLDOWN_MS);
+function setCooldown(
+  message
+) {
+  const key =
+    getAiCooldownKey(
+      message
+    );
+
+  cooldowns.set(
+    key,
+    Date.now() +
+      COOLDOWN_MS
+  );
 }
 
 async function sendTemporaryReply(message, payload) {
@@ -20708,13 +20760,34 @@ const hasPreviousGenerationRunning =
     message
   );
 
+// =====================================================
+// CANAL DEDICADO À IA
+// =====================================================
+//
+// No canal principal da SantaCreators IA, toda mensagem
+// enviada pelo usuário deve ser considerada uma interação
+// direta com a IA.
+//
+// Portanto o cooldown NÃO pode descartar uma nova mensagem
+// apenas porque ela foi enviada poucos segundos depois da
+// resposta anterior.
+//
+// O cooldown continua funcionando normalmente nos outros
+// canais para evitar spam e respostas indevidas.
+// =====================================================
+
+const isDedicatedAiChannel =
+  message.channelId ===
+  AI_CHANNEL_ID;
+
 const remaining =
   getCooldownRemaining(
-    message.author.id
+    message
   );
 
 if (
   remaining > 0 &&
+  !isDedicatedAiChannel &&
   !isDirectReplyToAI &&
   !isActiveConversationContinuation &&
   !hasPreviousGenerationRunning
@@ -20741,7 +20814,9 @@ if (
 //   ainda está acontecendo.
 // =====================================================
 
-setCooldown(message.author.id);
+setCooldown(
+  message
+);
 
 // =====================================================
 // MEMÓRIA PERSISTENTE DA CONVERSA PRINCIPAL
@@ -20871,7 +20946,23 @@ rememberAiResponse(
   finalText
 );
 
+// =====================================================
+// CONVERSA ATIVA COM A IA
+// =====================================================
+//
+// Mantemos o comportamento existente dos canais públicos
+// inteligentes.
+//
+// Além disso, o canal dedicado à SantaCreators IA também
+// deve permanecer marcado como conversa ativa.
+//
+// Isso permite que mensagens consecutivas sejam entendidas
+// naturalmente como parte da mesma conversa.
+// =====================================================
+
 if (
+  message.channelId ===
+    AI_CHANNEL_ID ||
   isAiSmartPublicChannel(
     message
   )

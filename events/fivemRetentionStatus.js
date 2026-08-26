@@ -1146,28 +1146,47 @@ async function syncContinuationMessages(channel, botId, embedGroups, row = null)
 // ---------- DATA PERSISTENCE (MONGODB) ----------
 async function addSnapshot(newSnapshot) {
   try {
+    // =====================================================
+    // LIMPEZA PREVENTIVA DO HISTÓRICO
+    // =====================================================
+    // A limpeza precisa acontecer ANTES da criação do novo snapshot.
+    // Assim o MongoDB não fica preso quando estiver próximo do limite
+    // de armazenamento do Atlas.
+    const historyCutoff =
+      Date.now() - FIVEM_HISTORY_MAX_DAYS * 24 * 60 * 60 * 1000;
+
+    await HistoryModel.deleteMany({
+      timestamp: { $lt: historyCutoff },
+    });
+
     const last = await HistoryModel.findOne().sort({ timestamp: -1 });
 
     // Evita duplicar no mesmo minuto exato, mas não perde coleta por diferença de milissegundos.
-    if (last && last.spDate === newSnapshot.spDate && last.spTime === newSnapshot.spTime) return false;
+    if (
+      last &&
+      last.spDate === newSnapshot.spDate &&
+      last.spTime === newSnapshot.spTime
+    ) {
+      return false;
+    }
 
     await HistoryModel.create(newSnapshot);
 
-    FIVEM_DEBUG && console.log(
-      "[FIVEM_RETENTION] Snapshot salvo no MongoDB:",
-      newSnapshot.spDate,
-      newSnapshot.spTime,
-      "Total:",
-      newSnapshot.totalClients
-    );
-    
-    // Limpeza automática de dados antigos (>30 dias)
-    const thirtyDaysAgo = Date.now() - FIVEM_HISTORY_MAX_DAYS * 24 * 60 * 60 * 1000;
-    await HistoryModel.deleteMany({ timestamp: { $lt: thirtyDaysAgo } });
-    
+    FIVEM_DEBUG &&
+      console.log(
+        "[FIVEM_RETENTION] Snapshot salvo no MongoDB:",
+        newSnapshot.spDate,
+        newSnapshot.spTime,
+        "Total:",
+        newSnapshot.totalClients
+      );
+
     return true;
   } catch (e) {
-    console.error("[FIVEM_RETENTION] Erro ao salvar snapshot no MongoDB:", e);
+    console.error(
+      "[FIVEM_RETENTION] Erro ao salvar snapshot no MongoDB:",
+      e
+    );
     return false;
   }
 }
