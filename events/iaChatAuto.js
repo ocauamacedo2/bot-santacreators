@@ -772,6 +772,310 @@ const AI_PUBLIC_CONTINUATION_TTL_MS = 5 * 60 * 1000;
 
 const AI_PUBLIC_ACTIVE_CONVERSATIONS = new Map();
 
+// =====================================================
+// IA — RELEVÂNCIA DE CONTEXTO CONVERSACIONAL
+// =====================================================
+//
+// Memória disponível NÃO significa memória obrigatória.
+//
+// O objetivo desta camada é impedir que assuntos antigos
+// sejam empurrados para uma conversa atual somente porque:
+//
+// - ocorreram no mesmo canal;
+// - foram discutidos pelo mesmo usuário;
+// - possuem uma palavra parecida;
+// - ainda estão armazenados na memória.
+//
+// Um histórico antigo deve entrar como continuidade quando:
+//
+// 1. a mensagem atual explicitamente referencia o passado;
+//
+// OU
+//
+// 2. existe assunto realmente compatível entre a mensagem
+//    atual e o registro anterior.
+//
+// Isso permite memória de longo prazo sem transformar
+// toda conversa futura em continuação da anterior.
+// =====================================================
+
+const AI_CONTEXT_RECENT_WINDOW_MS =
+  20 * 60 * 1000;
+
+const AI_CONTEXT_RELATED_MAX_AGE_MS =
+  24 * 60 * 60 * 1000;
+
+const AI_CONTEXT_EXPLICIT_REFERENCE_MAX_AGE_MS =
+  30 * 24 * 60 * 60 * 1000;
+
+function messageExplicitlyReferencesPreviousContext(
+  message
+) {
+  const text =
+    normalizeSearchText(
+      message?.content || ""
+    );
+
+  if (!text) {
+    return false;
+  }
+
+  const patterns = [
+    /\bcontinuando\b/,
+    /\bvoltando\b/,
+    /\bsobre aquilo\b/,
+    /\bsobre aquele\b/,
+    /\bsobre aquela\b/,
+    /\baquilo que\b/,
+    /\baquele assunto\b/,
+    /\bo assunto anterior\b/,
+    /\bda conversa anterior\b/,
+    /\bque a gente falou\b/,
+    /\bque falamos\b/,
+    /\bque eu falei\b/,
+    /\bque eu te falei\b/,
+    /\bque te falei\b/,
+    /\bmais cedo\b/,
+    /\bantes\b/,
+    /\blembra\b/,
+    /\blembra daquele\b/,
+    /\blembra daquela\b/,
+    /\be ele\b/,
+    /\be ela\b/,
+    /\be aquele\b/,
+    /\be aquela\b/,
+    /\be isso\b/,
+    /\be aquilo\b/,
+    /\be agora\b/,
+    /\be semana passada\b/,
+    /\be comparado\b/,
+    /\bigual o anterior\b/,
+    /\bigual aquele\b/,
+    /\bdo mesmo assunto\b/,
+  ];
+
+  return patterns.some(
+    (pattern) =>
+      pattern.test(text)
+  );
+}
+
+function getConversationTopicTerms(
+  text
+) {
+  const normalized =
+    normalizeSearchText(
+      text || ""
+    );
+
+  if (!normalized) {
+    return [];
+  }
+
+  const stopWords =
+    new Set([
+      "a",
+      "o",
+      "as",
+      "os",
+      "um",
+      "uma",
+      "uns",
+      "umas",
+      "de",
+      "da",
+      "do",
+      "das",
+      "dos",
+      "em",
+      "no",
+      "na",
+      "nos",
+      "nas",
+      "pra",
+      "para",
+      "por",
+      "com",
+      "sem",
+      "e",
+      "ou",
+      "que",
+      "qual",
+      "quais",
+      "quem",
+      "como",
+      "quando",
+      "onde",
+      "isso",
+      "isto",
+      "aquilo",
+      "esse",
+      "essa",
+      "aquele",
+      "aquela",
+      "ele",
+      "ela",
+      "eles",
+      "elas",
+      "eu",
+      "vc",
+      "voce",
+      "voces",
+      "me",
+      "te",
+      "se",
+      "ta",
+      "esta",
+      "estao",
+      "foi",
+      "era",
+      "vai",
+      "tem",
+      "tinha",
+      "sobre",
+      "agora",
+      "aqui",
+      "ali",
+      "mais",
+      "menos",
+      "muito",
+      "pouco",
+      "sim",
+      "nao",
+    ]);
+
+  return [
+    ...new Set(
+      normalized
+        .split(/\s+/)
+        .map(
+          (term) =>
+            term.trim()
+        )
+        .filter(
+          (term) =>
+            term.length >= 3 &&
+            !stopWords.has(term)
+        )
+    ),
+  ];
+}
+
+function countConversationTopicOverlap(
+  currentText,
+  previousText
+) {
+  const currentTerms =
+    getConversationTopicTerms(
+      currentText
+    );
+
+  const previousTerms =
+    new Set(
+      getConversationTopicTerms(
+        previousText
+      )
+    );
+
+  if (
+    !currentTerms.length ||
+    !previousTerms.size
+  ) {
+    return 0;
+  }
+
+  return currentTerms.filter(
+    (term) =>
+      previousTerms.has(term)
+  ).length;
+}
+
+function isHistoricalConversationRelevant(
+  message,
+  record
+) {
+  if (!record) {
+    return false;
+  }
+
+  const timestamp =
+    Number(
+      record.createdAt ||
+      record.updatedAt ||
+      record.timestamp ||
+      0
+    );
+
+  if (!timestamp) {
+    return false;
+  }
+
+  const age =
+    Math.max(
+      0,
+      Date.now() - timestamp
+    );
+
+  const explicitReference =
+    messageExplicitlyReferencesPreviousContext(
+      message
+    );
+
+  if (
+    age <=
+    AI_CONTEXT_RECENT_WINDOW_MS
+  ) {
+    return true;
+  }
+
+  const previousText = [
+    record.userMessage || "",
+    record.aiResponse || "",
+    Array.isArray(record.topics)
+      ? record.topics.join(" ")
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const topicOverlap =
+    countConversationTopicOverlap(
+      message?.content || "",
+      previousText
+    );
+
+  // =====================================================
+  // REFERÊNCIA EXPLÍCITA
+  // =====================================================
+  //
+  // Se a própria pessoa indicar que está retomando algo,
+  // permitimos buscar mais longe no histórico.
+  // =====================================================
+
+  if (explicitReference) {
+    return (
+      age <=
+      AI_CONTEXT_EXPLICIT_REFERENCE_MAX_AGE_MS
+    );
+  }
+
+  // =====================================================
+  // MESMO ASSUNTO SEM REFERÊNCIA EXPLÍCITA
+  // =====================================================
+  //
+  // Fora da janela recente, exige assunto compatível.
+  //
+  // E ainda limitamos a 24 horas para não conectar
+  // automaticamente tópicos antigos indefinidamente.
+  // =====================================================
+
+  return (
+    age <=
+      AI_CONTEXT_RELATED_MAX_AGE_MS &&
+    topicOverlap >= 2
+  );
+}
+
 const AI_QUIZ_BOT_ID = "1380989431011610634";
 
 const AI_QUIZ_ROLE_ID = "1432439271582597183";
@@ -3565,8 +3869,25 @@ function buildSystemsIndexContext(message) {
 }
 
 
-const guildKnowledgeCache =
-  new Map();
+const guildKnowledgeCache = new Map();
+
+// =====================================================
+// IA — WARMUP EM ANDAMENTO
+// =====================================================
+//
+// Como o warmup agora roda em segundo plano, várias
+// mensagens podem chegar antes de ele terminar.
+//
+// Esta trava impede que cada mensagem inicie outro
+// warmup completo para o mesmo servidor.
+//
+// Não altera o cache final.
+// Não altera os dados.
+// Não bloqueia a resposta da IA.
+// =====================================================
+
+const guildKnowledgeWarmupInFlight =
+  new Set();
 
 let gemini = null;
 
@@ -3744,74 +4065,292 @@ function limitDiscordText(text) {
   return finalText;
 }
 
-function splitDiscordText(text, maxLength = MAX_RESPONSE_CHARS) {
-  const finalText = String(text || "").trim();
+function adjustDiscordSplitIndexForMention(
+  text,
+  splitIndex
+) {
+  const raw =
+    String(
+      text || ""
+    );
+
+  if (
+    !raw ||
+    splitIndex <= 0
+  ) {
+    return splitIndex;
+  }
+
+  // =====================================================
+  // ÚLTIMA ABERTURA DE TOKEN ANTES DO CORTE
+  // =====================================================
+
+  const userMentionStart =
+    Math.max(
+      raw.lastIndexOf(
+        "<@",
+        splitIndex
+      ),
+      raw.lastIndexOf(
+        "<@!",
+        splitIndex
+      ),
+      raw.lastIndexOf(
+        "<@&",
+        splitIndex
+      )
+    );
+
+  const channelMentionStart =
+    raw.lastIndexOf(
+      "<#",
+      splitIndex
+    );
+
+  const tokenStart =
+    Math.max(
+      userMentionStart,
+      channelMentionStart
+    );
+
+  if (tokenStart < 0) {
+    return splitIndex;
+  }
+
+  const tokenEnd =
+    raw.indexOf(
+      ">",
+      tokenStart
+    );
+
+  // Se o fechamento vem depois do ponto de corte,
+  // significa que dividiríamos o token no meio.
+  if (
+    tokenEnd >= splitIndex
+  ) {
+    if (
+      tokenStart >
+      Math.floor(
+        splitIndex * 0.5
+      )
+    ) {
+      return tokenStart;
+    }
+
+    // Caso extremamente raro em que a menção começou
+    // cedo demais, move o corte para depois do token.
+    return Math.min(
+      raw.length,
+      tokenEnd + 1
+    );
+  }
+
+  return splitIndex;
+}
+
+function splitDiscordText(
+  text,
+  maxLength = MAX_RESPONSE_CHARS
+) {
+  const finalText =
+    String(
+      text || ""
+    ).trim();
 
   if (!finalText) {
     return [];
   }
 
-  if (finalText.length <= maxLength) {
-    return [finalText];
+  if (
+    finalText.length <=
+    maxLength
+  ) {
+    return [
+      finalText,
+    ];
   }
 
   const parts = [];
-  let remaining = finalText;
 
-  while (remaining.length > maxLength) {
-    let splitIndex = remaining.lastIndexOf("\n\n", maxLength);
+  let remaining =
+    finalText;
 
-    if (splitIndex < Math.floor(maxLength * 0.5)) {
-      splitIndex = remaining.lastIndexOf("\n", maxLength);
+  while (
+    remaining.length >
+    maxLength
+  ) {
+    let splitIndex =
+      remaining.lastIndexOf(
+        "\n\n",
+        maxLength
+      );
+
+    if (
+      splitIndex <
+      Math.floor(
+        maxLength * 0.5
+      )
+    ) {
+      splitIndex =
+        remaining.lastIndexOf(
+          "\n",
+          maxLength
+        );
     }
 
-    if (splitIndex < Math.floor(maxLength * 0.5)) {
-      splitIndex = remaining.lastIndexOf(". ", maxLength);
+    if (
+      splitIndex <
+      Math.floor(
+        maxLength * 0.5
+      )
+    ) {
+      splitIndex =
+        remaining.lastIndexOf(
+          ". ",
+          maxLength
+        );
 
-      if (splitIndex !== -1) {
+      if (
+        splitIndex !== -1
+      ) {
         splitIndex += 1;
       }
     }
 
-    if (splitIndex < Math.floor(maxLength * 0.5)) {
-      splitIndex = remaining.lastIndexOf(" ", maxLength);
+    if (
+      splitIndex <
+      Math.floor(
+        maxLength * 0.5
+      )
+    ) {
+      splitIndex =
+        remaining.lastIndexOf(
+          " ",
+          maxLength
+        );
     }
 
-    if (splitIndex <= 0) {
-      splitIndex = maxLength;
+    if (
+      splitIndex <= 0
+    ) {
+      splitIndex =
+        maxLength;
     }
 
-    const part = remaining
-      .slice(0, splitIndex)
-      .trim();
+    // =====================================================
+    // PROTEÇÃO DE MENÇÕES DO DISCORD
+    // =====================================================
+    //
+    // Nunca divide:
+    //
+    // <@USER_ID>
+    // <@!USER_ID>
+    // <@&ROLE_ID>
+    // <#CHANNEL_ID>
+    //
+    // no meio de duas mensagens.
+    // =====================================================
+
+    splitIndex =
+      adjustDiscordSplitIndexForMention(
+        remaining,
+        splitIndex
+      );
+
+    const part =
+      remaining
+        .slice(
+          0,
+          splitIndex
+        )
+        .trim();
 
     if (part) {
-      parts.push(part);
+      parts.push(
+        part
+      );
     }
 
-    remaining = remaining
-      .slice(splitIndex)
-      .trim();
+    remaining =
+      remaining
+        .slice(
+          splitIndex
+        )
+        .trim();
   }
 
   if (remaining) {
-    parts.push(remaining);
+    parts.push(
+      remaining
+    );
   }
 
   return parts;
 }
 
-function fixBrokenDiscordMentions(text) {
-  return String(text || "")
-    // ✅ Mantém menções válidas intactas
-    .replace(/<@!?(\d{17,22})>/g, "<@$1>")
-    .replace(/<@&(\d{17,22})>/g, "<@&$1>")
-    .replace(/<#(\d{17,22})>/g, "<#$1>")
+function fixBrokenDiscordMentions(
+  text
+) {
+  return String(
+    text || ""
+  )
+    // =====================================================
+    // MENÇÕES VÁLIDAS
+    // =====================================================
 
-    // ✅ Corrige menções sem fechar, mas NÃO quebra ID completo
-    .replace(/<@!?(\d{17,22})(?!\d)(?!>)/g, "<@$1>")
-    .replace(/<@&(\d{17,22})(?!\d)(?!>)/g, "<@&$1>")
-    .replace(/<#(\d{17,22})(?!\d)(?!>)/g, "<#$1>");
+    .replace(
+      /<@!?(\d{17,22})>/g,
+      "<@$1>"
+    )
+    .replace(
+      /<@&(\d{17,22})>/g,
+      "<@&$1>"
+    )
+    .replace(
+      /<#(\d{17,22})>/g,
+      "<#$1>"
+    )
+
+    // =====================================================
+    // ESPAÇOS ACIDENTAIS GERADOS PELO MODELO
+    // =====================================================
+    //
+    // Exemplos:
+    //
+    // <@ 12345678901234567 >
+    // <@& 12345678901234567>
+    // <# 12345678901234567 >
+    // =====================================================
+
+    .replace(
+      /<@\s*!?\s*(\d{17,22})\s*>/g,
+      "<@$1>"
+    )
+    .replace(
+      /<@\s*&\s*(\d{17,22})\s*>/g,
+      "<@&$1>"
+    )
+    .replace(
+      /<#\s*(\d{17,22})\s*>/g,
+      "<#$1>"
+    )
+
+    // =====================================================
+    // MENÇÕES SEM FECHAMENTO
+    // =====================================================
+
+    .replace(
+      /<@!?(\d{17,22})(?!\d)(?!>)/g,
+      "<@$1>"
+    )
+    .replace(
+      /<@&(\d{17,22})(?!\d)(?!>)/g,
+      "<@&$1>"
+    )
+    .replace(
+      /<#(\d{17,22})(?!\d)(?!>)/g,
+      "<#$1>"
+    );
 }
 
 function uniqueDiscordUserIds(...ids) {
@@ -4057,33 +4596,146 @@ function rememberAiResponse(channelId, text) {
   lastAiResponses.set(channelId, arr);
 }
 
-function iaResponseLooksRepeated(channelId, text) {
-  const arr = lastAiResponses.get(channelId) || [];
+function calculateAiTextSimilarity(
+  firstText,
+  secondText
+) {
+  const firstWords =
+    new Set(
+      normalizeAiCompareText(
+        firstText
+      )
+        .split(/\s+/)
+        .filter(
+          (word) =>
+            word.length >= 3
+        )
+    );
 
-  const normalized = normalizeAiCompareText(text);
+  const secondWords =
+    new Set(
+      normalizeAiCompareText(
+        secondText
+      )
+        .split(/\s+/)
+        .filter(
+          (word) =>
+            word.length >= 3
+        )
+    );
 
-  if (!normalized) return false;
+  if (
+    !firstWords.size ||
+    !secondWords.size
+  ) {
+    return 0;
+  }
+
+  const intersection =
+    [...firstWords].filter(
+      (word) =>
+        secondWords.has(word)
+    ).length;
+
+  const union =
+    new Set([
+      ...firstWords,
+      ...secondWords,
+    ]).size;
+
+  if (!union) {
+    return 0;
+  }
+
+  return intersection / union;
+}
+
+function iaResponseLooksRepeated(
+  channelId,
+  text
+) {
+  const arr =
+    lastAiResponses.get(
+      channelId
+    ) || [];
+
+  const normalized =
+    normalizeAiCompareText(
+      text
+    );
+
+  if (!normalized) {
+    return false;
+  }
+
+  const now =
+    Date.now();
 
   return arr.some((item) => {
-    if (!item?.text) return false;
+    if (!item?.text) {
+      return false;
+    }
 
-    return (
-      item.text === normalized ||
-      item.text.includes(normalized) ||
-      normalized.includes(item.text)
-    );
+    // =====================================================
+    // REPETIÇÃO EXATA
+    // =====================================================
+
+    if (
+      item.text ===
+      normalized
+    ) {
+      return true;
+    }
+
+    // =====================================================
+    // RESPOSTAS ANTIGAS NÃO BLOQUEIAM TEXTO ATUAL
+    // =====================================================
+
+    if (
+      now -
+        Number(
+          item.timestamp ||
+          0
+        ) >
+      3 * 60 * 1000
+    ) {
+      return false;
+    }
+
+    // =====================================================
+    // SEMELHANÇA MUITO ALTA
+    // =====================================================
+    //
+    // Só tratamos como repetição quando a maior parte
+    // relevante das palavras realmente coincide.
+    //
+    // Uma frase ser subconjunto da outra não basta mais.
+    // =====================================================
+
+    const similarity =
+      calculateAiTextSimilarity(
+        item.text,
+        normalized
+      );
+
+    return similarity >= 0.9;
   });
 }
 
-function buildNonRepeatedFallback(message) {
-  const content = normalizeSearchText(message.content);
+function buildNonRepeatedFallback(
+  message
+) {
+  const content =
+    normalizeSearchText(
+      message.content
+    );
 
   if (
     content.includes("teste") ||
     content.includes("testando") ||
     content.includes("funcionando")
   ) {
-    return "Tá funcionando sim 😎 Recebi tua mensagem e respondi normal. Se quiser, manda uma pergunta real agora pra testar contexto, reply, menção ou canal.";
+    return "Está funcionando. Recebi sua mensagem normalmente.";
   }
 
   if (
@@ -4092,10 +4744,10 @@ function buildNonRepeatedFallback(message) {
     content === "opa" ||
     content === "salve"
   ) {
-    return "Opa! Tô por aqui sim 😄 manda aí no que posso ajudar.";
+    return "Oi! Como posso ajudar?";
   }
 
-  return "Entendi 😎 me manda o que você quer saber exatamente que eu respondo direto, sem repetir a mesma coisa.";
+  return "Essa resposta ficou muito parecida com uma anterior. Pode reformular só esse ponto para eu responder especificamente ao que mudou?";
 }
 
 // =====================================================
@@ -4215,30 +4867,198 @@ function rememberMessage(channelId, author, content) {
   channelHistory.set(channelId, history);
 }
 
-async function warmupGuildKnowledge(guild) {
+async function warmupGuildKnowledge(
+  guild
+) {
+  if (!guild) {
+    return;
+  }
+
+  // =====================================================
+  // CACHE JÁ PRONTO
+  // =====================================================
+
+  if (
+    guildKnowledgeCache.has(
+      guild.id
+    )
+  ) {
+    return;
+  }
+
+  // =====================================================
+  // WARMUP JÁ EM EXECUÇÃO
+  // =====================================================
+  //
+  // Como esta função agora é chamada em segundo plano,
+  // uma segunda mensagem pode chegar antes da primeira
+  // leitura terminar.
+  //
+  // Nesse caso não iniciamos outro scan dos 25 canais.
+  // =====================================================
+
+  if (
+    guildKnowledgeWarmupInFlight.has(
+      guild.id
+    )
+  ) {
+    return;
+  }
+
+  guildKnowledgeWarmupInFlight.add(
+    guild.id
+  );
+
   try {
-    if (!guild || guildKnowledgeCache.has(guild.id)) return;
-    console.log(`[IA CHAT AUTO] Iniciando warmup inteligente do servidor ${guild.name}`);
+    console.log(
+      `[IA CHAT AUTO] Iniciando warmup inteligente do servidor ${guild.name}`
+    );
+
+    const channels =
+      guild.channels.cache
+        .filter(
+          (channel) =>
+            channel?.isTextBased?.()
+        )
+        .first(25);
+
+    // =====================================================
+    // LEITURA PARALELA LIMITADA DO WARMUP
+    // =====================================================
+    //
+    // Antes os 25 canais eram consultados um após o outro.
+    //
+    // Agora dividimos em pequenos grupos.
+    //
+    // Isso melhora bastante o tempo sem disparar dezenas
+    // de requests simultâneos contra a API do Discord.
+    // =====================================================
+
     const knowledge = [];
-    const channels = guild.channels.cache.filter((c) => c?.isTextBased?.()).first(25);
-    for (const channel of channels) {
-      try {
-        const messages = await channel.messages.fetch({ limit: 3 }).catch(() => null);
-        if (!messages) continue;
-        knowledge.push(`CANAL: #${channel.name}`);
-        for (const msg of messages.values()) {
-          if (msg.content) knowledge.push(cleanText(msg.content));
-          for (const embed of msg.embeds) {
-            const embedText = formatEmbedForAI(embed.data || embed);
-            if (embedText) knowledge.push(embedText);
-          }
-        }
-      } catch {}
+
+    const WARMUP_CONCURRENCY =
+      5;
+
+    for (
+      let index = 0;
+      index < channels.length;
+      index += WARMUP_CONCURRENCY
+    ) {
+      const batch =
+        channels.slice(
+          index,
+          index +
+            WARMUP_CONCURRENCY
+        );
+
+      const batchResults =
+        await Promise.all(
+          batch.map(
+            async (
+              channel
+            ) => {
+              try {
+                const messages =
+                  await channel.messages
+                    .fetch({
+                      limit: 3,
+                    })
+                    .catch(
+                      () => null
+                    );
+
+                if (
+                  !messages
+                ) {
+                  return [];
+                }
+
+                const lines = [
+                  `CANAL: #${channel.name}`,
+                ];
+
+                for (
+                  const msg of
+                  messages.values()
+                ) {
+                  if (
+                    msg.content
+                  ) {
+                    lines.push(
+                      cleanText(
+                        msg.content
+                      )
+                    );
+                  }
+
+                  for (
+                    const embed of
+                    msg.embeds || []
+                  ) {
+                    const embedText =
+                      formatEmbedForAI(
+                        embed.data ||
+                        embed
+                      );
+
+                    if (
+                      embedText
+                    ) {
+                      lines.push(
+                        embedText
+                      );
+                    }
+                  }
+                }
+
+                return lines;
+              } catch {
+                return [];
+              }
+            }
+          )
+        );
+
+      for (
+        const lines of
+        batchResults
+      ) {
+        knowledge.push(
+          ...lines
+        );
+      }
     }
-    guildKnowledgeCache.set(guild.id, knowledge.join("\n").slice(0, 15000));
-    console.log(`[IA CHAT AUTO] Warmup concluído.`);
+
+    guildKnowledgeCache.set(
+      guild.id,
+      knowledge
+        .join("\n")
+        .slice(
+          0,
+          15000
+        )
+    );
+
+    console.log(
+      `[IA CHAT AUTO] Warmup concluído.`
+    );
   } catch (err) {
-    console.error("[IA CHAT AUTO] Erro warmup:", err);
+    console.error(
+      "[IA CHAT AUTO] Erro warmup:",
+      err
+    );
+  } finally {
+    // =====================================================
+    // LIBERAÇÃO DA TRAVA
+    // =====================================================
+    //
+    // Independentemente de sucesso ou erro, permitimos
+    // uma tentativa futura.
+    // =====================================================
+
+    guildKnowledgeWarmupInFlight.delete(
+      guild.id
+    );
   }
 }
 
@@ -4572,119 +5392,355 @@ async function sendConversationMemoryLog(client, message, aiResponse) {
     console.error("[IA CHAT AUTO] Erro ao salvar memória/log:", err);
   }
 }
+// =====================================================
+// IA — CACHE DA MEMÓRIA HISTÓRICA DO DISCORD
+// =====================================================
+//
+// A memória do canal de logs não precisa ser relida do
+// Discord em toda mensagem consecutiva.
+//
+// Um cache curto reduz:
+//
+// - GET /messages;
+// - rate limit;
+// - latência;
+// - trabalho repetido.
+//
+// Como o TTL é de apenas 2 minutos, novas conversas
+// continuam sendo atualizadas rapidamente.
+// =====================================================
 
-async function fetchRecentMemoryLogs(client, message) {
+const AI_DISCORD_MEMORY_CACHE_TTL_MS =
+  2 * 60 * 1000;
+
+const aiDiscordMemoryCache =
+  new Map();
+
+function getAiDiscordMemoryCacheKey(
+  message
+) {
+  return String(
+    message?.author?.id ||
+    ""
+  );
+}
+
+function getCachedAiDiscordMemory(
+  message
+) {
+  const key =
+    getAiDiscordMemoryCacheKey(
+      message
+    );
+
+  if (!key) {
+    return null;
+  }
+
+  const cached =
+    aiDiscordMemoryCache.get(
+      key
+    );
+
+  if (!cached) {
+    return null;
+  }
+
+  if (
+    Date.now() -
+      Number(
+        cached.createdAt ||
+        0
+      ) >
+    AI_DISCORD_MEMORY_CACHE_TTL_MS
+  ) {
+    aiDiscordMemoryCache.delete(
+      key
+    );
+
+    return null;
+  }
+
+  return cached.text ||
+    null;
+}
+
+function setCachedAiDiscordMemory(
+  message,
+  text
+) {
+  const key =
+    getAiDiscordMemoryCacheKey(
+      message
+    );
+
+  if (
+    !key ||
+    !text
+  ) {
+    return;
+  }
+
+  aiDiscordMemoryCache.set(
+    key,
+    {
+      createdAt:
+        Date.now(),
+
+      text:
+        String(
+          text
+        ),
+    }
+  );
+}
+async function fetchRecentMemoryLogs(
+  client,
+  message
+) {
   try {
-    const logChannel =
-      client.channels.cache.get(AI_MEMORY_LOG_CHANNEL_ID) ||
-      await client.channels.fetch(AI_MEMORY_LOG_CHANNEL_ID).catch(() => null);
+    // =====================================================
+    // CACHE
+    // =====================================================
 
-    if (!logChannel?.isTextBased?.()) {
+    const cachedMemory =
+      getCachedAiDiscordMemory(
+        message
+      );
+
+    if (cachedMemory) {
+      console.log(
+        `[IA CHAT AUTO] Memória Discord reutilizada do cache | User=${message.author?.id}`
+      );
+
+      return cachedMemory;
+    }
+
+    const logChannel =
+      client.channels.cache.get(
+        AI_MEMORY_LOG_CHANNEL_ID
+      ) ||
+      await client.channels
+        .fetch(
+          AI_MEMORY_LOG_CHANNEL_ID
+        )
+        .catch(
+          () => null
+        );
+
+    if (
+      !logChannel?.isTextBased?.()
+    ) {
       return "Canal de memória não encontrado.";
     }
 
-    const targetUserId = String(message?.author?.id || "");
+    const targetUserId =
+      String(
+        message?.author?.id ||
+        ""
+      );
 
     if (!targetUserId) {
       return "Usuário atual não identificado para consulta de memória.";
     }
 
     const collected = [];
-    let before = undefined;
-    let scanned = 0;
 
-    const MAX_SCAN_MESSAGES = 300;
-    const MAX_USER_MEMORIES = 20;
+    let before =
+      undefined;
+
+    let scanned =
+      0;
+
+    // =====================================================
+    // LIMITE DE BUSCA
+    // =====================================================
+    //
+    // Mantemos profundidade suficiente para memória real,
+    // mas evitamos percorrer centenas de mensagens sem
+    // necessidade em toda interação.
+    //
+    // O cache acima preserva o resultado durante conversas
+    // consecutivas.
+    // =====================================================
+
+    const MAX_SCAN_MESSAGES =
+      200;
+
+    const MAX_USER_MEMORIES =
+      15;
 
     while (
-      scanned < MAX_SCAN_MESSAGES &&
-      collected.length < MAX_USER_MEMORIES
+      scanned <
+        MAX_SCAN_MESSAGES &&
+      collected.length <
+        MAX_USER_MEMORIES
     ) {
       const fetchOptions = {
         limit: 100,
       };
 
       if (before) {
-        fetchOptions.before = before;
+        fetchOptions.before =
+          before;
       }
 
-      const messages = await logChannel.messages
-        .fetch(fetchOptions)
-        .catch(() => null);
+      const messages =
+        await logChannel.messages
+          .fetch(
+            fetchOptions
+          )
+          .catch(
+            () => null
+          );
 
-      if (!messages?.size) {
+      if (
+        !messages?.size
+      ) {
         break;
       }
 
-      scanned += messages.size;
+      scanned +=
+        messages.size;
 
-      const batch = [...messages.values()];
+      const batch = [
+        ...messages.values(),
+      ];
 
-      for (const msg of batch) {
-        for (const embed of msg.embeds || []) {
-          const embedData = embed.data || embed;
+      for (
+        const msg of
+        batch
+      ) {
+        for (
+          const embed of
+          msg.embeds || []
+        ) {
+          const embedData =
+            embed.data ||
+            embed;
 
           const fields =
             embedData.fields ||
             embed.fields ||
             [];
 
-          const userField = fields.find((field) => {
-            return normalizeSearchText(field?.name || "").includes("usuario");
-          });
+          const userField =
+            fields.find(
+              (field) => {
+                return normalizeSearchText(
+                  field?.name ||
+                  ""
+                ).includes(
+                  "usuario"
+                );
+              }
+            );
 
-          const userFieldValue = String(userField?.value || "");
+          const userFieldValue =
+            String(
+              userField?.value ||
+              ""
+            );
 
-          if (!userFieldValue.includes(targetUserId)) {
+          if (
+            !userFieldValue.includes(
+              targetUserId
+            )
+          ) {
             continue;
           }
 
-          const text = formatEmbedForAI(embedData);
+          const text =
+            formatEmbedForAI(
+              embedData
+            );
 
           if (!text) {
             continue;
           }
 
           collected.push({
-            timestamp: msg.createdTimestamp || 0,
+            timestamp:
+              msg.createdTimestamp ||
+              0,
+
             text,
           });
 
-          if (collected.length >= MAX_USER_MEMORIES) {
+          if (
+            collected.length >=
+            MAX_USER_MEMORIES
+          ) {
             break;
           }
         }
 
-        if (collected.length >= MAX_USER_MEMORIES) {
+        if (
+          collected.length >=
+          MAX_USER_MEMORIES
+        ) {
           break;
         }
       }
 
-      before = batch[batch.length - 1]?.id;
+      before =
+        batch[
+          batch.length - 1
+        ]?.id;
 
-      if (messages.size < 100) {
+      if (
+        messages.size < 100
+      ) {
         break;
       }
     }
 
-    if (!collected.length) {
-      return `Nenhuma memória anterior encontrada para <@${targetUserId}>.`;
+    let result;
+
+    if (
+      !collected.length
+    ) {
+      result =
+        `Nenhuma memória anterior encontrada para <@${targetUserId}>.`;
+    } else {
+      collected.sort(
+        (a, b) =>
+          a.timestamp -
+          b.timestamp
+      );
+
+      result = [
+        `MEMÓRIA ESPECÍFICA DO USUÁRIO <@${targetUserId}>:`,
+        `Foram recuperadas ${collected.length} conversas anteriores relevantes deste usuário.`,
+        "",
+        collected
+          .map(
+            (item) =>
+              item.text
+          )
+          .join(
+            "\n\n---\n\n"
+          ),
+      ]
+        .join("\n")
+        .slice(
+          0,
+          12000
+        );
     }
 
-    collected.sort((a, b) => a.timestamp - b.timestamp);
+    setCachedAiDiscordMemory(
+      message,
+      result
+    );
 
-    return [
-      `MEMÓRIA ESPECÍFICA DO USUÁRIO <@${targetUserId}>:`,
-      `Foram recuperadas ${collected.length} conversas anteriores relevantes deste usuário.`,
-      "",
-      collected
-        .map((item) => item.text)
-        .join("\n\n---\n\n"),
-    ]
-      .join("\n")
-      .slice(0, 12000);
+    return result;
   } catch (err) {
-    console.error("[IA CHAT AUTO] Erro ao buscar memória:", err);
+    console.error(
+      "[IA CHAT AUTO] Erro ao buscar memória:",
+      err
+    );
+
     return "Não consegui buscar a memória anterior.";
   }
 }
@@ -4820,10 +5876,144 @@ function migrateLegacyLongTermMemoryIfNeeded() {
     );
   }
 }
+// =====================================================
+// IA — CACHE CURTO DA MEMÓRIA PERSISTENTE LOCAL
+// =====================================================
+//
+// IMPORTANTE:
+//
+// Este cache NÃO substitui o arquivo JSON.
+//
+// O arquivo continua sendo a fonte persistente.
+//
+// O objetivo é evitar fazer:
+//
+// readFileSync
+// JSON.parse
+//
+// várias vezes seguidas durante a mesma interação.
+//
+// O cache guarda somente o TEXTO JSON serializado.
+//
+// Cada load continua fazendo JSON.parse() e devolvendo
+// um NOVO objeto.
+//
+// Portanto diferentes partes do sistema não recebem
+// a mesma referência mutável na memória.
+//
+// Isso reduz o risco de uma função alterar acidentalmente
+// o objeto que outra função está usando.
+//
+// Ao salvar:
+// 1. grava no arquivo temporário;
+// 2. renomeia para o arquivo oficial;
+// 3. SOMENTE depois atualiza o cache.
+//
+// Portanto falha de escrita NÃO transforma dado não salvo
+// em cache válido.
+//
+// O TTL é propositalmente pequeno.
+// =====================================================
 
+const AI_LONG_TERM_MEMORY_READ_CACHE_TTL_MS =
+  5 * 1000;
+
+let aiLongTermMemoryRawCache =
+  null;
+
+let aiLongTermMemoryRawCacheAt =
+  0;
+
+function getCachedLongTermMemoryRaw() {
+  if (
+    !aiLongTermMemoryRawCache
+  ) {
+    return null;
+  }
+
+  if (
+    Date.now() -
+      aiLongTermMemoryRawCacheAt >
+    AI_LONG_TERM_MEMORY_READ_CACHE_TTL_MS
+  ) {
+    aiLongTermMemoryRawCache =
+      null;
+
+    aiLongTermMemoryRawCacheAt =
+      0;
+
+    return null;
+  }
+
+  return aiLongTermMemoryRawCache;
+}
+
+function setCachedLongTermMemoryRaw(
+  raw
+) {
+  const normalizedRaw =
+    String(
+      raw || ""
+    );
+
+  if (
+    !normalizedRaw.trim()
+  ) {
+    aiLongTermMemoryRawCache =
+      null;
+
+    aiLongTermMemoryRawCacheAt =
+      0;
+
+    return;
+  }
+
+  aiLongTermMemoryRawCache =
+    normalizedRaw;
+
+  aiLongTermMemoryRawCacheAt =
+    Date.now();
+}
+
+function clearCachedLongTermMemoryRaw() {
+  aiLongTermMemoryRawCache =
+    null;
+
+  aiLongTermMemoryRawCacheAt =
+    0;
+}
 function loadLongTermMemoryDatabase() {
   try {
     migrateLegacyLongTermMemoryIfNeeded();
+
+    // =====================================================
+    // CACHE CURTO
+    // =====================================================
+    //
+    // Primeiro verificamos se o mesmo JSON acabou de ser
+    // carregado ou salvo.
+    //
+    // Ainda fazemos JSON.parse() a cada chamada.
+    //
+    // Isso é proposital:
+    //
+    // cada consumidor recebe um objeto independente,
+    // mantendo o comportamento antigo da função.
+    // =====================================================
+
+    const cachedRaw =
+      getCachedLongTermMemoryRaw();
+
+    if (cachedRaw) {
+      const cachedParsed =
+        JSON.parse(
+          cachedRaw
+        );
+
+      return normalizeLongTermMemoryDatabase(
+        cachedParsed
+      );
+    }
 
     if (
       !fs.existsSync(
@@ -4842,8 +6032,18 @@ function loadLongTermMemoryDatabase() {
     if (
       !raw?.trim()
     ) {
+      clearCachedLongTermMemoryRaw();
+
       return createEmptyLongTermMemoryDatabase();
     }
+
+    // =====================================================
+    // CACHEIA EXATAMENTE O CONTEÚDO QUE VEIO DO DISCO
+    // =====================================================
+
+    setCachedLongTermMemoryRaw(
+      raw
+    );
 
     const parsed =
       JSON.parse(
@@ -4854,6 +6054,16 @@ function loadLongTermMemoryDatabase() {
       parsed
     );
   } catch (err) {
+    // =====================================================
+    // CACHE CORROMPIDO OU LEITURA INVÁLIDA
+    // =====================================================
+    //
+    // Limpamos o cache para que a próxima tentativa possa
+    // consultar novamente o arquivo físico.
+    // =====================================================
+
+    clearCachedLongTermMemoryRaw();
+
     console.error(
       "[IA MEMORY] Erro ao carregar memória persistente:",
       err
@@ -4863,24 +6073,64 @@ function loadLongTermMemoryDatabase() {
   }
 }
 
-function saveLongTermMemoryDatabase(database) {
+function saveLongTermMemoryDatabase(
+  database
+) {
   try {
-    const dir = path.dirname(
-      AI_LONG_TERM_MEMORY_FILE
-    );
+    const dir =
+      path.dirname(
+        AI_LONG_TERM_MEMORY_FILE
+      );
 
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, {
-        recursive: true,
-      });
+    if (
+      !fs.existsSync(
+        dir
+      )
+    ) {
+      fs.mkdirSync(
+        dir,
+        {
+          recursive: true,
+        }
+      );
     }
+
+    // =====================================================
+    // SERIALIZAÇÃO ÚNICA
+    // =====================================================
+    //
+    // Geramos exatamente o conteúdo que será:
+    //
+    // 1. salvo no arquivo;
+    // 2. colocado no cache somente após sucesso.
+    //
+    // Assim cache e disco representam a mesma versão.
+    // =====================================================
+
+    const serialized =
+      JSON.stringify(
+        database,
+        null,
+        2
+      );
 
     const temporaryFile =
       `${AI_LONG_TERM_MEMORY_FILE}.tmp`;
 
+    // =====================================================
+    // ESCRITA ATÔMICA EXISTENTE
+    // =====================================================
+    //
+    // NÃO removemos o arquivo temporário.
+    //
+    // Primeiro gravamos tudo no .tmp.
+    //
+    // Só depois substituímos o arquivo oficial.
+    // =====================================================
+
     fs.writeFileSync(
       temporaryFile,
-      JSON.stringify(database, null, 2),
+      serialized,
       "utf8"
     );
 
@@ -4889,8 +6139,30 @@ function saveLongTermMemoryDatabase(database) {
       AI_LONG_TERM_MEMORY_FILE
     );
 
+    // =====================================================
+    // CACHE SOMENTE DEPOIS DO SUCESSO NO DISCO
+    // =====================================================
+    //
+    // Esta ordem é muito importante.
+    //
+    // Se writeFileSync() ou renameSync() falhar, este ponto
+    // nunca é executado.
+    //
+    // Portanto nunca fingimos que uma memória foi salva.
+    // =====================================================
+
+    setCachedLongTermMemoryRaw(
+      serialized
+    );
+
     return true;
   } catch (err) {
+    // =====================================================
+    // NÃO PRESERVAR POSSÍVEL CACHE INCERTO
+    // =====================================================
+
+    clearCachedLongTermMemoryRaw();
+
     console.error(
       "[IA MEMORY] Erro ao salvar memória persistente:",
       err
@@ -6363,6 +7635,19 @@ function fetchPersistentChannelConversationContext(
           ""
       );
 
+    // =====================================================
+    // CONTEXTO DO MESMO CANAL
+    // =====================================================
+    //
+    // Primeiro localizamos registros do canal.
+    //
+    // Depois aplicamos relevância conversacional.
+    //
+    // Isso impede que o simples fato de duas mensagens
+    // estarem no mesmo canal faça a IA considerar que elas
+    // pertencem ao mesmo assunto.
+    // =====================================================
+
     const records =
       journal
         .filter(
@@ -6375,6 +7660,13 @@ function fetchPersistentChannelConversationContext(
               item?.messageId ||
                 ""
             ) !== currentMessageId
+        )
+        .filter(
+          (item) =>
+            isHistoricalConversationRelevant(
+              message,
+              item
+            )
         )
         .sort(
           (a, b) =>
@@ -6394,7 +7686,10 @@ function fetchPersistentChannelConversationContext(
         );
 
     if (!records.length) {
-      return "Sem histórico persistente deste canal.";
+      return [
+        "Sem continuidade persistente relevante para a mensagem atual.",
+        "Existem conversas antigas armazenadas, mas elas não foram incluídas porque não possuem relação suficiente com o assunto atual.",
+      ].join("\n");
     }
 
     const lines = [];
@@ -6406,15 +7701,35 @@ function fetchPersistentChannelConversationContext(
         record.userId ||
         "Usuário";
 
+      const recordTime =
+        Number(
+          record.createdAt ||
+          record.updatedAt ||
+          0
+        );
+
+      const dateText =
+        recordTime
+          ? new Date(
+              recordTime
+            ).toLocaleString(
+              "pt-BR",
+              {
+                timeZone:
+                  "America/Sao_Paulo",
+              }
+            )
+          : "horário desconhecido";
+
       if (record.userMessage) {
         lines.push(
-          `${person}: ${record.userMessage}`
+          `[${dateText}] ${person}: ${record.userMessage}`
         );
       }
 
       if (record.aiResponse) {
         lines.push(
-          `SantaCreators IA: ${record.aiResponse}`
+          `[${dateText}] SantaCreators IA: ${record.aiResponse}`
         );
       }
     }
@@ -7188,15 +8503,48 @@ function fetchRelevantSharedConversationMemory(
         );
 
     let selected =
-      scored
-        .filter(
-          (entry) =>
-            entry.score > 0
-        )
-        .slice(
-          0,
-          12
-        );
+  scored
+    .filter(
+      ({
+        interaction,
+        score,
+      }) => {
+        if (
+          !interaction ||
+          score <= 0
+        ) {
+          return false;
+        }
+
+        // =====================================================
+        // MEMÓRIA COMPARTILHADA EXIGE ASSUNTO REALMENTE COMUM
+        // =====================================================
+
+        const overlap =
+          countConversationTopicOverlap(
+            message?.content || "",
+            [
+              interaction.userMessage || "",
+              interaction.aiResponse || "",
+              Array.isArray(
+                interaction.topics
+              )
+                ? interaction.topics.join(
+                    " "
+                  )
+                : "",
+            ]
+              .filter(Boolean)
+              .join(" ")
+          );
+
+        return overlap >= 2;
+      }
+    )
+    .slice(
+      0,
+      6
+    );
 
     if (!selected.length) {
       return [
@@ -7340,11 +8688,31 @@ function fetchRelevantLongTermMemory(
         });
 
     let selected =
-      scored
-        .filter(
-          (item) => item.score > 0
-        )
-        .slice(0, 12);
+  scored
+    .filter(
+      ({ interaction, score }) => {
+        if (
+          !interaction ||
+          score <= 0
+        ) {
+          return false;
+        }
+
+        return isHistoricalConversationRelevant(
+          message,
+          {
+            ...interaction,
+
+            createdAt:
+              interaction.timestamp,
+
+            updatedAt:
+              interaction.timestamp,
+          }
+        );
+      }
+    )
+    .slice(0, 8);
 
     const personalFacts =
       Array.isArray(user.personalFacts)
@@ -13069,8 +14437,43 @@ REGRAS DE PRIORIDADE (OURO):
 
 2. Se a mensagem atual for uma saudação simples ("oi", "olá", etc), APENAS SAUDE de volta de forma humana e pergunte como pode ajudar. NÃO puxe aleatoriamente um assunto antigo apenas porque ele existe na memória.
 
-3. Histórico recente e Memória de Conversas servem para CONTINUIDADE REAL da relação com o usuário.
-4. Quando a mensagem atual tiver relação clara com algo que o mesmo usuário já conversou anteriormente, USE essa memória naturalmente.
+3. Histórico recente e Memória de Conversas servem para CONTINUIDADE REAL, não para misturar assuntos.
+
+4. REGRA DE TROCA DE ASSUNTO:
+- A MENSAGEM ATUAL define o assunto principal da resposta.
+- Não mencione automaticamente assuntos anteriores apenas porque aparecem no histórico ou na memória.
+- Uma conversa antiga disponível no prompt NÃO significa que o usuário continua falando dela.
+- Se a mensagem atual trouxer um assunto novo e independente, responda somente ao assunto novo.
+- Não faça conexões artificiais entre pessoas, eventos, problemas ou perguntas diferentes.
+- Não use uma palavra coincidente como prova de continuidade.
+- Não associe o assunto atual ao anterior apenas porque ocorreu no mesmo canal.
+- Não associe o assunto atual ao anterior apenas porque foi dito pelo mesmo usuário.
+- Não associe o assunto atual ao anterior apenas porque uma pessoa mencionada apareceu em outra conversa.
+- Horas terem passado é um forte sinal de que a conversa pode ter mudado de assunto.
+- Se houver dúvida entre "assunto novo" e "continuação", prefira tratar como assunto novo, salvo quando existir referência clara.
+
+4.1. USE CONTEXTO ANTERIOR SOMENTE QUANDO:
+- a mensagem atual depender semanticamente dele;
+- houver reply direto;
+- houver pronome ou referência que precise ser resolvida, como "ele", "ela", "aquilo", "aquele", "a anterior";
+- o usuário disser "continuando", "voltando", "lembra", "sobre aquilo", "que a gente falou", "mais cedo" ou equivalente;
+- o mesmo assunto, entidade ou problema estiver claramente sendo retomado;
+- uma pergunta atual exigir comparação com informação anterior.
+
+4.2. NÃO USE CONTEXTO ANTERIOR SOMENTE PARA:
+- parecer que possui memória;
+- demonstrar inteligência;
+- criar uma introdução;
+- fazer comentário desnecessário;
+- preencher espaço;
+- puxar assunto;
+- repetir algo que já foi encerrado.
+
+4.3. MEMÓRIA SILENCIOSA:
+- Você pode reconhecer internamente algo da memória sem necessariamente mencioná-lo.
+- Ter acesso a uma informação antiga não obriga você a colocá-la na resposta.
+- Só verbalize memória antiga quando ela melhorar concretamente a resposta atual.
+- Se a memória não mudar a resposta, ignore-a silenciosamente.
 
 5. Não diga frases robóticas como:
 "Segundo minha memória..."
@@ -13078,13 +14481,13 @@ REGRAS DE PRIORIDADE (OURO):
 "Nos meus registros..."
 a menos que isso seja realmente necessário.
 
-6. Prefira continuidade humana. Exemplos de comportamento:
+6. CONTINUIDADE HUMANA:
 - se antes a pessoa estava organizando um evento e agora perguntar "e sobre aquele evento?", identifique o assunto anterior;
 - se antes ela falou de um problema e depois perguntar "conseguiu entender o que eu queria?", use o contexto anterior;
-- se ela mencionar "aquilo", "aquele negócio", "o que te falei", "continuando", "e aí?", tente resolver a referência usando histórico e memória;
-- se já souber uma preferência útil daquela conversa, considere essa preferência;
-- não obrigue a pessoa a explicar novamente algo que já aparece claramente na memória disponível.
-
+- se ela mencionar "aquilo", "aquele negócio", "o que te falei", "continuando", tente resolver a referência;
+- se a mensagem atual não depender do assunto anterior, NÃO puxe esse assunto de volta;
+- não obrigue a pessoa a explicar novamente algo realmente necessário que já esteja claramente definido;
+- ao mesmo tempo, não recicle detalhes antigos sem função na pergunta atual.
 6.1. APRENDIZADO POR CONVERSA E CORREÇÃO DO USUÁRIO:
 - Quando o usuário claramente ensinar, explicar, complementar ou corrigir uma informação sobre a SantaCreators, entenda que ele está atualizando o contexto conhecido.
 - Exemplos de intenção: "na verdade...", "não, é...", "corrigindo...", "ela faz...", "funciona assim...", "são 4 cidades...", "o certo é...", "faltou falar que...".
@@ -13126,10 +14529,27 @@ use prioritariamente "INFORMAÇÕES REAIS BUSCADAS NO SERVIDOR".
 
 11. Não use uma conversa antiga para afirmar que um dado operacional continua igual hoje.
 
-12. Ao citar usuários, canais ou cargos, prefira:
+12. MENÇÕES DO DISCORD:
+
+Ao citar uma entidade conhecida por ID, use exatamente:
+
 Usuário: <@ID>
 Canal: <#ID>
 Cargo: <@&ID>
+
+REGRAS:
+- Nunca corte um ID.
+- Nunca abrevie um ID com "...".
+- Nunca retire dígitos.
+- Nunca coloque espaço dentro da menção.
+- Nunca escreva "<@ ID >".
+- Nunca escreva "@123456..." como substituto.
+- Nunca invente ID.
+- Se o sistema fornecer nome + ID, preserve o ID completo.
+- Se possuir ID real de um usuário, prefira a menção completa em vez de escrever apenas o nome.
+- Não coloque a menção dentro de bloco de código.
+- Não transforme uma menção Discord em Markdown.
+- Uma menção válida deve permanecer exatamente no formato do Discord.
 
 13. Se você encontrar dados divergentes, a prioridade é:
 1º JSON ou fonte estruturada atual
@@ -13288,6 +14708,17 @@ TOM E NÍVEL DE INFORMALIDADE:
 
 RITMO DA CONVERSA:
 
+SAUDAÇÕES E REABERTURA DE CONVERSA:
+
+- Não diga "oi", "olá", "opa", "salve", "bom dia", "boa tarde" ou "boa noite" em toda resposta.
+- Cumprimente somente quando o usuário realmente iniciou uma conversa com uma saudação ou quando houver uma reabertura natural depois de um período significativo e o cumprimento fizer sentido.
+- Se a conversa já está acontecendo e a pessoa fizer outra pergunta, responda diretamente.
+- Não trate cada mensagem como um novo atendimento.
+- Não diga novamente "tô por aqui", "como posso ajudar?", "manda aí" ou equivalente se a conversa já está em andamento.
+- Não apresente novamente a SantaCreators IA.
+- Não reinicie o tom da conversa depois de cada pergunta.
+- Uma resposta consecutiva deve parecer continuação natural, e não uma nova sessão.
+
 - Considere o tamanho da mensagem recebida antes de decidir o tamanho da resposta.
 - Mensagens rápidas normalmente merecem respostas rápidas.
 - Se a pessoa fizer um pedido simples, responda diretamente sem criar introdução desnecessária.
@@ -13363,7 +14794,19 @@ tente identificar primeiro a referência usando:
 Se existir contexto suficiente, continue normalmente sem obrigar o usuário a repetir tudo.
 
 Se realmente não existir contexto suficiente, faça UMA pergunta curta para esclarecer.
+REPETIÇÃO E INFORMAÇÃO JÁ DITA:
 
+- Não repita uma informação anterior apenas para demonstrar continuidade.
+- Antes de reutilizar um fato já mencionado, pergunte internamente: "isso é necessário para responder a mensagem atual?"
+- Se não for necessário, omita.
+- Se já explicou algo e a pessoa perguntou outra coisa, avance para a nova pergunta.
+- Não reescreva o mesmo parágrafo com palavras diferentes.
+- Não faça resumo da conversa anterior sem ser solicitado.
+- Não recapitule automaticamente a trajetória da pessoa em toda nova pergunta sobre ela.
+- Não repita cargo, posição, ranking, histórico e feedback juntos se a pergunta atual exigir somente um deles.
+- Não reintroduza contexto que já está entendido.
+- Em continuidade curta, responda somente ao pedaço novo.
+- Quando a pessoa corrigir algo, passe a usar a correção e evite repetir a versão antiga.
 CONFIANÇA E FATOS:
 
 - Diferencie conversa de informação factual.
@@ -14007,29 +15450,97 @@ async function generateIAResponse({
     return administrativeAction.response;
   }
 
-  const geminiClient =
-    getGeminiClient();
+const geminiClient =
+  getGeminiClient();
 
-  if (!geminiClient) {
-    console.error(
-      "[IA CHAT AUTO] Cliente Gemini indisponível. Verifique GEMINI_API_KEY."
-    );
+if (!geminiClient) {
+  console.error(
+    "[IA CHAT AUTO] Cliente Gemini indisponível. Verifique GEMINI_API_KEY."
+  );
 
-    return buildFallbackInstantResponse(message);
-  }
+  return buildFallbackInstantResponse(message);
+}
 
-await warmupGuildKnowledge(
+// =====================================================
+// WARMUP DO SERVIDOR EM SEGUNDO PLANO
+// =====================================================
+//
+// O conhecimento geral continua sendo construído.
+//
+// Porém a resposta atual NÃO precisa mais ficar parada
+// esperando a leitura de vários canais.
+//
+// Se o cache já estiver pronto, ele será usado normalmente.
+//
+// Se ainda estiver sendo construído, a IA segue utilizando:
+//
+// - mensagem atual;
+// - contexto recente;
+// - consultas específicas;
+// - sistemas internos;
+// - memória relevante.
+//
+// Quando o warmup terminar, as próximas respostas já
+// terão o conhecimento geral disponível.
+// =====================================================
+
+warmupGuildKnowledge(
   message.guild
+).catch(
+  (err) => {
+    console.error(
+      "[IA CHAT AUTO] Warmup em segundo plano falhou:",
+      err?.message ||
+      err
+    );
+  }
 );
 
 const internalHistory =
-  getHistory(message.channelId);
-
-const recentChannelContext =
-  await buildRecentChannelConversationContext(
-    message,
-    client
+  getHistory(
+    message.channelId
   );
+
+// =====================================================
+// INTENÇÃO ATUAL
+// =====================================================
+//
+// A classificação é local e rápida.
+//
+// Fazemos isso antes para permitir que as próximas
+// operações independentes sejam iniciadas juntas.
+// =====================================================
+
+const intent =
+  classifyCurrentUserIntent(
+    message
+  );
+
+// =====================================================
+// CONTEXTOS INDEPENDENTES EM PARALELO
+// =====================================================
+//
+// Contexto recente do canal e contexto técnico da
+// mensagem não dependem um do outro.
+//
+// Portanto não precisamos esperar um terminar para
+// começar o próximo.
+// =====================================================
+
+const [
+  recentChannelContext,
+  discordContext,
+] =
+  await Promise.all([
+    buildRecentChannelConversationContext(
+      message,
+      client
+    ),
+
+    buildDiscordContext(
+      message
+    ),
+  ]);
 
 const persistentChannelContext =
   fetchPersistentChannelConversationContext(
@@ -14068,16 +15579,23 @@ const history = [
 const guildKnowledge =
   guildKnowledgeCache.get(
     message.guild.id
-  ) || "Sem conhecimento prévio.";
+  ) ||
+  "Sem conhecimento prévio.";
 
-  const discordContext =
-    await buildDiscordContext(message);
+// =====================================================
+// INTELIGÊNCIA INTERNA
+// =====================================================
 
-  const intent = classifyCurrentUserIntent(message);
+const serverIntelligence =
+  await buildServerIntelligenceContext(
+    message,
+    intent
+  );
 
-  // Busca inteligência interna
-  const serverIntelligence = await buildServerIntelligenceContext(message, intent);
-  const systemsIndex = buildSystemsIndexContext(message);
+const systemsIndex =
+  buildSystemsIndexContext(
+    message
+  );
 
   // PRIORIDADE 1: Se temos dados reais, respondemos direto
   const directInternalAnswer = buildDirectInternalQueryAnswer(message, serverIntelligence);
@@ -19348,21 +20866,69 @@ const finalText =
 
 if (!finalText) return;
 
-rememberAiResponse(message.channelId, finalText);
+rememberAiResponse(
+  message.channelId,
+  finalText
+);
 
-if (isAiSmartPublicChannel(message)) {
-  markActivePublicConversation(message);
+if (
+  isAiSmartPublicChannel(
+    message
+  )
+) {
+  markActivePublicConversation(
+    message
+  );
 }
 
+// =====================================================
+// MENÇÕES GERADAS PELA PRÓPRIA IA
+// =====================================================
+//
+// buildAllowedMentionUsers() continua preservando:
+//
+// - autor da mensagem;
+// - usuários mencionados pelo usuário;
+// - autor da mensagem respondida.
+//
+// Porém a IA também pode descobrir uma pessoa através de:
+//
+// - busca interna;
+// - ranking;
+// - FormsCreator;
+// - registros;
+// - hierarquia;
+// - contexto do servidor.
+//
+// Se a resposta final contiver uma menção válida encontrada
+// dessa forma, o ID também precisa entrar no allowedMentions.
+// =====================================================
+
+const generatedMentionIds =
+  extractUserMentionIdsFromText(
+    finalText
+  );
+
+const baseAllowedMentionUsers =
+  await buildAllowedMentionUsers(
+    message,
+    client
+  );
+
 const allowedMentionUsers =
-  await buildAllowedMentionUsers(message, client);
+  uniqueDiscordUserIds(
+    ...baseAllowedMentionUsers,
+    ...generatedMentionIds
+  );
 
-        // =====================================================
-        // RESPOSTA
-        // =====================================================
+// =====================================================
+// RESPOSTA
+// =====================================================
 
-       const responseParts =
-  splitDiscordText(finalText);
+const responseParts =
+  splitDiscordText(
+    finalText
+  );
 
 for (
   let index = 0;
