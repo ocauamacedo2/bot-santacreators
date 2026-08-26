@@ -2808,10 +2808,51 @@ const AI_ACTIVE_USER_PROCESSING = new Set();
 const AI_BACKGROUND_MAX_CONCURRENCY =
   4;
 
-// Depois deste tempo sem resposta, a IA pode avisar
-// naturalmente que continua trabalhando.
+// =====================================================
+// IA — AVISO DE PROCESSAMENTO REALMENTE DEMORADO
+// =====================================================
+//
+// Não tentamos mais adivinhar se uma pergunta é:
+// - pesada;
+// - simples;
+// - análise;
+// - consulta;
+// - conversa.
+//
+// Toda interação aceita pela IA começa normalmente.
+//
+// Se a resposta terminar antes do limite abaixo:
+// nenhum aviso intermediário é enviado.
+//
+// Se a resposta ainda estiver sendo processada depois
+// do limite:
+//
+// a IA envia UMA mensagem natural avisando que continua
+// trabalhando.
+//
+// IMPORTANTE:
+//
+// O aviso NÃO encerra a geração.
+// O aviso NÃO cancela a pergunta.
+// O aviso NÃO remove a tarefa da fila.
+// O aviso NÃO substitui a resposta.
+//
+// A geração continua normalmente até terminar.
+//
+// Isso funciona da mesma forma para:
+//
+// - menção direta à IA;
+// - reply para a IA;
+// - continuação de conversa;
+// - chat principal;
+// - ticket;
+// - suporte;
+// - entrevista.
+//
+// =====================================================
+
 const AI_BACKGROUND_ACK_DELAY_MS =
-  1800;
+  30 * 1000;
 
 // Fila global das tarefas ainda aguardando worker.
 const AI_BACKGROUND_QUEUE = [];
@@ -2954,6 +2995,23 @@ function drainAiBackgroundQueue() {
 
     let acknowledgementMessage =
       null;
+
+    // =====================================================
+    // AVISO SOMENTE QUANDO A RESPOSTA REALMENTE DEMORAR
+    // =====================================================
+    //
+    // Não classificamos mais a pergunta antecipadamente.
+    //
+    // O cronômetro simplesmente acompanha a tarefa real.
+    //
+    // Se a tarefa terminar antes de 30 segundos:
+    // nenhum aviso será enviado.
+    //
+    // Se ainda estiver executando depois de 30 segundos:
+    // enviamos o aviso humano.
+    //
+    // A tarefa continua rodando normalmente depois disso.
+    // =====================================================
 
     const acknowledgementTimer =
       setTimeout(
