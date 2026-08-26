@@ -3192,20 +3192,105 @@ function hasAiBackgroundWork(
   );
 }
 
+// =====================================================
+// IA — AVISO SOMENTE PARA PROCESSAMENTO REALMENTE PESADO
+// =====================================================
+//
+// Nem toda resposta que demorar merece uma mensagem dizendo
+// que a IA está "analisando dados".
+//
+// Conversas comuns devem simplesmente responder normalmente.
+//
+// O aviso intermediário fica reservado para mensagens que
+// realmente envolvam:
+//
+// - sistemas operacionais;
+// - ranking;
+// - NPS;
+// - cronograma;
+// - alinhamentos;
+// - Controle GI;
+// - cargos/hierarquia;
+// - canais;
+// - análise operacional;
+// - análise de pessoa;
+// - ações administrativas.
+//
+// A geração em segundo plano continua funcionando para todas
+// as mensagens.
+//
+// Esta função decide SOMENTE se vale a pena mostrar o aviso.
+// =====================================================
+
+function shouldSendAiBackgroundAcknowledgement(
+  message
+) {
+  if (!message) {
+    return false;
+  }
+
+  // Conversas evidentemente simples nunca precisam
+  // receber aviso de "estou analisando".
+  if (
+    buildInstantCasualAnswer(
+      message
+    )
+  ) {
+    return false;
+  }
+
+  const intent =
+    classifyCurrentUserIntent(
+      message
+    );
+
+  if (
+    intent?.isGreetingOnly
+  ) {
+    return false;
+  }
+
+  if (
+    isAiAdministrativeRequest(
+      message
+    )
+  ) {
+    return true;
+  }
+
+  if (
+    messageWantsPersonIntelligence(
+      message
+    )
+  ) {
+    return true;
+  }
+
+  return Boolean(
+    intent?.wantsAusencias ||
+    intent?.wantsCronograma ||
+    intent?.wantsAlinhamentos ||
+    intent?.wantsGI ||
+    intent?.wantsRoles ||
+    intent?.wantsChannels ||
+    intent?.wantsOperationalAnalysis
+  );
+}
+
 function buildAiBackgroundAcknowledgement(
   message
 ) {
-  const variants = [
-    "Pera kkk, essa eu vou conferir direito antes de responder 😂 Já tô cruzando os dados aqui. Pode continuar falando que eu não vou travar o resto da conversa.",
+const variants = [
+  "Essa tá levando um pouco mais porque envolve dados. Tô conferindo e já te respondo certinho.",
 
-    "Essa eu não quero responder no chute kkk 😅 Tô analisando os fatos certinho e já volto nela. Enquanto isso pode mandar as próximas normalmente.",
+  "Ainda tô fechando essa consulta aqui. Assim que terminar te mando o resultado.",
 
-    "Peguei tua pergunta kkk 🧠 essa vai levar um cadin porque eu tô conferindo os dados antes de falar besteira. Já já eu respondo certinho.",
+  "Essa análise tá demorando um pouco mais que o normal. Continua comigo que eu já termino.",
 
-    "Tô nessa ainda kkk 😂 Tem bastante coisa pra cruzar aqui. Vou terminar a análise e te respondo nessa mesma conversa, pode continuar mandando mensagem tranquilo.",
+  "Ainda tô processando essa porque tem dados pra conferir. Já te entrego a resposta completa.",
 
-    "Essa veio com trabalho de detetive junto kkk 🔎 Tô verificando os dados pra não te entregar resposta meia-boca. Já volto nela certinho.",
-  ];
+  "Essa consulta ainda não terminou. Tô conferindo os dados antes de te passar o resultado.",
+];
 
   const numericSeed =
     Number(
@@ -3317,41 +3402,60 @@ function drainAiBackgroundQueue() {
     // A tarefa continua rodando normalmente depois disso.
     // =====================================================
 
-    const acknowledgementTimer =
-      setTimeout(
-        async () => {
-          if (
-            settled
-          ) {
-            return;
-          }
+const acknowledgementTimer =
+  setTimeout(
+    async () => {
+      if (
+        settled
+      ) {
+        return;
+      }
 
-          const sent =
-            await sendAiBackgroundAcknowledgement(
-              job.message
+      // =====================================================
+      // AVISO APENAS PARA TAREFA REALMENTE PESADA
+      // =====================================================
+      //
+      // A tarefa continua processando normalmente mesmo
+      // quando esta função retornar false.
+      //
+      // Apenas não mostramos uma mensagem desnecessária
+      // dizendo que a IA está "pensando" ou "analisando".
+      // =====================================================
+
+      if (
+        !shouldSendAiBackgroundAcknowledgement(
+          job.message
+        )
+      ) {
+        return;
+      }
+
+      const sent =
+        await sendAiBackgroundAcknowledgement(
+          job.message
+        );
+
+      if (
+        settled
+      ) {
+        if (
+          sent?.deletable
+        ) {
+          await sent
+            .delete()
+            .catch(
+              () => {}
             );
+        }
 
-          if (
-            settled
-          ) {
-            if (
-              sent?.deletable
-            ) {
-              await sent
-                .delete()
-                .catch(
-                  () => {}
-                );
-            }
+        return;
+      }
 
-            return;
-          }
-
-          acknowledgementMessage =
-            sent;
-        },
-        AI_BACKGROUND_ACK_DELAY_MS
-      );
+      acknowledgementMessage =
+        sent;
+    },
+    AI_BACKGROUND_ACK_DELAY_MS
+  );
 
     Promise.resolve()
       .then(
@@ -4841,11 +4945,213 @@ function buildRoleMembersAnswer(message) {
   ].join("\n");
 }
 
-function buildDirectDiscordAnswer(message) {
-  const roleMembersAnswer = buildRoleMembersAnswer(message);
+// =====================================================
+// IA — RESPOSTAS CONVERSACIONAIS IMEDIATAS
+// =====================================================
+//
+// Algumas mensagens não precisam:
+// - consultar sistemas;
+// - consultar memória histórica;
+// - entrar na fila pesada;
+// - chamar Gemini.
+//
+// Exemplos:
+//
+// "td bem?"
+// "tudo bom?"
+// "valeu"
+// "vlw"
+// "teste"
+// "ta funcionando?"
+//
+// Também tratamos perguntas como:
+//
+// "vc vai responder?"
+//
+// SOMENTE quando já existe uma tarefa anterior daquele
+// usuário/canal realmente em processamento.
+//
+// Isso mantém conversas simples rápidas sem alterar
+// consultas operacionais ou análises complexas.
+// =====================================================
 
-  if (roleMembersAnswer) {
+function buildInstantCasualAnswer(
+  message
+) {
+  const text =
+    normalizeSearchText(
+      message?.content || ""
+    )
+      .replace(/[?!.,]+$/g, "")
+      .trim();
+
+  if (!text) {
+    return null;
+  }
+
+  // =====================================================
+  // SAUDAÇÕES
+  // =====================================================
+
+  if (
+    /^(oi+|oie+|ola|opa|salve|eae|e ai|eaí)$/.test(
+      text
+    )
+  ) {
+    return "Opa 😎 tô por aqui. Manda.";
+  }
+
+  // =====================================================
+  // TUDO BEM?
+  // =====================================================
+
+  if (
+    /^(tudo bem|td bem|tudo bom|td bom|como vc ta|como voce ta|como ce ta)$/.test(
+      text
+    )
+  ) {
+    return "Tô bem kkk 😄 e você?";
+  }
+
+  // =====================================================
+  // TESTES RÁPIDOS
+  // =====================================================
+
+  if (
+    /^(teste|testando|teste ai|ta funcionando|esta funcionando|funcionando)$/.test(
+      text
+    )
+  ) {
+    return "Tô aqui 😎 funcionando normal.";
+  }
+
+  // =====================================================
+  // AGRADECIMENTOS / CONFIRMAÇÕES
+  // =====================================================
+
+  if (
+    /^(valeu|vlw|obrigado|obg|tmj|fechou|beleza|blz)$/.test(
+      text
+    )
+  ) {
+    return "Tmj 😎";
+  }
+
+  // =====================================================
+  // RISADAS ISOLADAS
+  // =====================================================
+
+  if (
+    /^(kk+|kkk+|kkkk+|rs+|haha+|hahaha+)$/.test(
+      text
+    )
+  ) {
+    return "KKKK 😂";
+  }
+
+  return null;
+}
+
+// =====================================================
+// IA — PERGUNTA SOBRE RESPOSTA QUE JÁ ESTÁ PROCESSANDO
+// =====================================================
+//
+// Exemplo:
+//
+// Pessoa:
+// "consegue analisar isso?"
+//
+// Enquanto a análise ainda roda:
+//
+// "mas vc vai responder né? kkk"
+//
+// Não precisamos criar OUTRA geração Gemini apenas para
+// responder essa confirmação.
+//
+// Só fazemos isso quando realmente existe trabalho anterior
+// desse mesmo usuário/canal na fila ou em execução.
+// =====================================================
+
+function buildActiveProcessingDirectAnswer(
+  message
+) {
+  if (
+    !hasAiBackgroundWork(
+      message
+    )
+  ) {
+    return null;
+  }
+
+  const text =
+    normalizeSearchText(
+      message?.content || ""
+    );
+
+  const asksAboutPendingAnswer =
+    [
+      "vai responder",
+      "vai me responder",
+      "vc vai responder",
+      "voce vai responder",
+      "vai responder sobre",
+      "vai responder ne",
+      "vai responder né",
+      "vai mandar a resposta",
+      "ainda vai responder",
+      "ainda vai me responder",
+    ].some(
+      (phrase) =>
+        text.includes(
+          normalizeSearchText(
+            phrase
+          )
+        )
+    );
+
+  if (
+    !asksAboutPendingAnswer
+  ) {
+    return null;
+  }
+
+  return "Vou sim kkk 😅 a anterior ainda tá sendo processada. Quando terminar eu mando certinho.";
+}
+
+function buildDirectDiscordAnswer(
+  message
+) {
+  const roleMembersAnswer =
+    buildRoleMembersAnswer(
+      message
+    );
+
+  if (
+    roleMembersAnswer
+  ) {
     return roleMembersAnswer;
+  }
+
+  const activeProcessingAnswer =
+    buildActiveProcessingDirectAnswer(
+      message
+    );
+
+  if (
+    activeProcessingAnswer
+  ) {
+    return activeProcessingAnswer;
+  }
+
+  const instantCasualAnswer =
+    buildInstantCasualAnswer(
+      message
+    );
+
+  if (
+    instantCasualAnswer
+  ) {
+    return instantCasualAnswer;
   }
 
   return null;
