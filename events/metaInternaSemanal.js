@@ -573,13 +573,13 @@ function calcUserMeta({ userId, state, eventos, bpEntries }) {
   const user = ensureUser(state, userId);
 
   const eventosTotal = Math.max(1, eventos.length || 10);
-  const eventosPresentes = countPresencasEventos(userId, eventos, bpEntries);
-  const eventosMeta = Math.ceil(eventosTotal * METAS.eventosRatio);
+const eventosPresentes = countPresencasEventos(userId, eventos, bpEntries);
+const eventosMeta = METAS.eventosMinimo;
 
-  const raw = {
-    eventosPresentes,
-    eventosTotal,
-    eventosMeta,
+const raw = {
+  eventosPresentes,
+  eventosTotal,
+  eventosMeta,
     orgs: user.orgs.length,
     confirmacoes: user.confirmacoes.length,
     poderesEventos: user.poderesEventos.length,
