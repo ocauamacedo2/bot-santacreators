@@ -2258,11 +2258,115 @@ function getWeeklyAdjustment(weekKey, userId) {
 }
 
 
+// =====================================================
+// 🔒 ANTI-FARM GLOBAL — PONTOS DE PODERES
+// =====================================================
+//
+// Regra:
+//
+// - Poderes do Dia e Poderes em Evento compartilham
+//   o MESMO cooldown.
+//
+// - A pessoa pode continuar registrando normalmente.
+//
+// - Porém só pode receber 1 ponto de poderes
+//   a cada 2 horas.
+//
+// - A trava é aplicada diretamente na fonte de verdade
+//   do Ranking, portanto continua funcionando mesmo
+//   após reinício do bot.
+//
+// =====================================================
+
+const POWER_POINTS_COOLDOWN_MS =
+  2 * 60 * 60 * 1000;
+
+function applyPowerPointsCooldown(items = []) {
+  const normalItems = [];
+  const powerItems = [];
+
+  for (const item of items || []) {
+    const source =
+      String(item?.source || "")
+        .trim()
+        .toLowerCase();
+
+    if (
+      source === "poderes" ||
+      source === "eventopoder"
+    ) {
+      powerItems.push(item);
+    } else {
+      normalItems.push(item);
+    }
+  }
+
+  powerItems.sort((a, b) => {
+    const aTime =
+      new Date(a?.ts || 0).getTime();
+
+    const bTime =
+      new Date(b?.ts || 0).getTime();
+
+    return aTime - bTime;
+  });
+
+  const lastPointByUser =
+    new Map();
+
+  const acceptedPowerItems = [];
+
+  for (const item of powerItems) {
+    const userId =
+      String(item?.userId || "")
+        .trim();
+
+    if (!userId) continue;
+
+    const timestamp =
+      new Date(item?.ts || 0)
+        .getTime();
+
+    if (!Number.isFinite(timestamp)) {
+      continue;
+    }
+
+    const lastPointAt =
+      Number(
+        lastPointByUser.get(userId) || 0
+      );
+
+    const canScore =
+      !lastPointAt ||
+      timestamp - lastPointAt >=
+        POWER_POINTS_COOLDOWN_MS;
+
+    if (!canScore) {
+      continue;
+    }
+
+    lastPointByUser.set(
+      userId,
+      timestamp
+    );
+
+    acceptedPowerItems.push(
+      item
+    );
+  }
+
+  return [
+    ...normalItems,
+    ...acceptedPowerItems,
+  ];
+}
+
+
 // ================== AGGREGATION (RANK) ==================
 const SOURCE_LABEL = {
-  poderes: "Poderes",
+  poderes: "Poderes do Dia",
   eventos: "Eventos",
-  eventopoder: "Poderes Do Dia",
+  eventopoder: "Poderes em Evento",
   pagamentos: "Pagamentos",
   vipPagos: "VIP Líderes",
   manager: "Manager",
@@ -2281,7 +2385,15 @@ const SOURCE_LABEL = {
 };
 
 function aggregateWeekDetailed(items, weekKey) {
-  const only = (items || []).filter((x) => weekKeyFromDateSP(x.ts) === weekKey);
+  const weekItems = (items || []).filter(
+    (x) =>
+      weekKeyFromDateSP(x.ts) === weekKey
+  );
+
+  const only =
+    applyPowerPointsCooldown(
+      weekItems
+    );
 
   const totalByUser = {};
   const bySourceByUser = {};

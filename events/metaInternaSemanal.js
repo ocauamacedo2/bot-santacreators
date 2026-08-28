@@ -527,15 +527,29 @@ function injectGeralWeeklySources(state) {
         pushManyVirtual(user.confirmacoes, amount, prefix);
       }
 
-      if (source === "eventopoder" || source === "eventos_poder" || source === "evento_poder") {
-        pushManyVirtual(user.poderesEventos, amount, prefix);
-      }
+if (source === "eventopoder" || source === "eventos_poder" || source === "evento_poder") {
+  user.poderesEventos = [];
 
-      if (source === "poderes" || source === "registro_poderes") {
-        for (let i = 0; i < Math.max(0, amount); i++) {
-          user.poderesDias[`virtual-${week.weekKey}-${userId}-${source}-${i + 1}`] = true;
-        }
-      }
+  pushManyVirtual(
+    user.poderesEventos,
+    amount,
+    prefix
+  );
+}
+
+if (source === "poderes" || source === "registro_poderes") {
+  user.poderesDias = {};
+
+  for (
+    let i = 0;
+    i < Math.max(0, amount);
+    i++
+  ) {
+    user.poderesDias[
+      `virtual-${week.weekKey}-${userId}-${source}-${i + 1}`
+    ] = true;
+  }
+}
 
       if (source === "doacoes" || source === "doacao") {
         pushManyVirtual(user.doacoes, amount, prefix);
@@ -1065,12 +1079,14 @@ function logDescription(rows) {
 
   return rows.map((r, i) => {
     const x = r.raw;
+
     return [
       `**#${i + 1} — <@${r.userId}>**`,
       `📊 Meta: **${r.percent}%**`,
       `🎯 Pontos internos: **${x.pontos}/${METAS.pontos}**`,
       `🎮 Eventos: **${x.eventosPresentes}/${x.eventosTotal}** mínimo ${x.eventosMeta}`,
-      `⚡ Poderes em dias: **${x.poderesDias}/${METAS.poderesDias}**`,
+      `⚡ Poderes do Dia: **${x.poderesDias}/${METAS.poderesDias}**`,
+      `🎪 Poderes em Evento: **${x.poderesEventos}**`,
       `🏢 Registros de ORG: **${x.orgs}/${METAS.orgs}**`,
       `✅ Confirmações de ORG: **${x.confirmacoes}/${METAS.confirmacoes}**`,
       `🎁 Eventos diários: **${x.eventosDiarios}/${METAS.eventosDiarios}**`,
