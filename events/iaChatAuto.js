@@ -96,6 +96,18 @@ CIDADES PRINCIPAIS:
 - Cidade Grande
 - Cidade Maresia
 
+ENTRADA, IDADE E DIFERENÇA ENTRE SANTACREATORS E STAFF DAS CIDADES:
+- Para entrar na SantaCreators é necessário ter MAIS DE 16 ANOS.
+- Uma pessoa com 15 anos NÃO está apta a entrar na SantaCreators.
+- Uma pessoa com 16 anos também NÃO atende à regra quando a exigência oficial é estar acima de 16 anos.
+- Experiência anterior não elimina nem substitui a exigência de idade.
+- SantaCreators NÃO é a staff administrativa das cidades.
+- Entrar na SantaCreators NÃO significa entrar como ADM ou staff de Nobre, Santa, Grande ou Maresia.
+- Quem quiser virar ADM ou integrar a staff deve seguir o processo específico da cidade em que deseja atuar.
+- Nunca direcione automaticamente um candidato a ADM para entrevista ou alinhamento da SantaCreators.
+- Primeiro diferencie se a pessoa quer entrar na SantaCreators ou se quer entrar na staff/administração de uma cidade.
+- Creator, GI, SantaCreators, staff da cidade e ADM da cidade são estruturas/funções diferentes e não devem ser tratadas como sinônimos.
+
 CRONOGRAMA:
 - O cronograma é dinâmico e pode mudar semanalmente.
 - Nunca afirme que uma cidade ou evento pertence permanentemente a determinado dia sem consultar o cronograma vigente.
@@ -3518,18 +3530,25 @@ const acknowledgementTimer =
 
 function runAiBackgroundTask(
   message,
-  task
+  task,
+  options = {}
 ) {
   return new Promise(
     (
       resolve,
       reject
     ) => {
-      AI_BACKGROUND_QUEUE.push({
-        key:
+      const backgroundKey =
+        String(
+          options?.key ||
           getAiMessageBatchKey(
             message
-          ),
+          )
+        );
+
+      AI_BACKGROUND_QUEUE.push({
+        key:
+          backgroundKey,
 
         message,
 
@@ -3544,7 +3563,7 @@ function runAiBackgroundTask(
       });
 
       console.log(
-        `[IA BACKGROUND] Trabalho colocado na fila | User=${message.author?.id} | Canal=${message.channelId} | Pendentes=${AI_BACKGROUND_QUEUE.length} | Ativos=${AI_BACKGROUND_ACTIVE_COUNT}`
+        `[IA BACKGROUND] Trabalho colocado na fila | User=${message.author?.id} | Canal=${message.channelId} | Key=${backgroundKey} | Pendentes=${AI_BACKGROUND_QUEUE.length} | Ativos=${AI_BACKGROUND_ACTIVE_COUNT}`
       );
 
       drainAiBackgroundQueue();
@@ -13224,6 +13243,29 @@ IDENTIDADE DA EQUIPE:
 - A SantaCreators funciona de maneira semelhante a uma estrutura independente de atendimento e operação, mas internamente o termo correto é Creators.
 - Quando mencionar a staff do servidor FiveM, aí "staff do servidor" pode ser utilizado se realmente estiver falando da staff da cidade e não da SantaCreators.
 
+SANTACREATORS X STAFF / ADMINISTRAÇÃO DAS CIDADES:
+- SantaCreators NÃO é a staff administrativa das cidades.
+- Entrar na SantaCreators NÃO significa virar ADM, staff ou administrador de servidor.
+- O processo de entrada da SantaCreators é destinado à estrutura e à equipe da própria SantaCreators.
+- Se alguém disser que quer ser ADM, administrador ou entrar para a staff, NÃO direcione essa pessoa para alinhamento, entrevista ou entrada da SantaCreators como se fosse o mesmo processo.
+- Para virar ADM ou integrar a staff, a pessoa deve procurar o processo da CIDADE em que deseja atuar.
+- As cidades principais relacionadas à operação são Nobre, Santa, Grande e Maresia, mas cada cidade possui sua própria estrutura e seu próprio processo de staff/administração.
+- Exemplo: quem quer ser ADM da Cidade Nobre precisa procurar o processo de staff/administração da Cidade Nobre.
+- Exemplo: quem quer ser ADM da Cidade Santa precisa procurar o processo de staff/administração da Cidade Santa.
+- Exemplo: quem quer ser ADM da Cidade Grande precisa procurar o processo de staff/administração da Cidade Grande.
+- Exemplo: quem quer ser ADM da Cidade Maresia precisa procurar o processo de staff/administração da Cidade Maresia.
+- NÃO diga que alguém precisa entrar primeiro na SantaCreators para depois virar ADM, salvo se existir uma regra oficial específica dizendo isso.
+- NÃO misture Creator, SantaCreators, GI, staff da cidade e ADM da cidade como se fossem a mesma carreira.
+- Se a intenção da pessoa estiver ambígua, primeiro descubra se ela quer entrar na SantaCreators ou na staff/administração de uma cidade.
+
+IDADE OFICIAL DA SANTACREATORS:
+- Para entrar na SantaCreators é necessário ter MAIS DE 16 ANOS.
+- 15 anos NÃO atende à regra.
+- 16 anos NÃO atende à regra quando a regra oficial for "acima de 16".
+- Experiência anterior NÃO substitui a exigência de idade.
+- Nunca incentive alguém abaixo da idade exigida a continuar o processo de entrada como se estivesse elegível.
+- A regra de idade da SantaCreators NÃO deve ser automaticamente aplicada à staff das cidades. Staff/ADM possui o processo e as regras da respectiva cidade.
+
 CREATORS X INFLUENCIADORES / MIGRAÇÃO:
 - Este ticket pertence à SantaCreators. NÃO diga que aqui existe uma equipe de responsáveis por influenciadores se a hierarquia atual não mostrar isso.
 - NÃO escolha uma pessoa como "responsável por influencers" apenas porque ela possui cargo semelhante, foi mencionada antes ou aparece em uma conversa antiga.
@@ -18367,17 +18409,20 @@ function buildIaInterviewSantaCreatorsKnowledgeQuickAnswer(message, openerId) {
       "quantos anos",
       "tenho 14",
       "tenho 13",
+      "tenho 15",
+      "15 anos",
+      "tenho 16",
+      "16 anos",
       "menor de idade",
       "menor",
-      "15 anos",
     ])
   ) {
     return pickIaInterviewReply([
-      `${mention}, a idade mínima para participar da SantaCreators é 15 anos.`,
-      `pra entrar na SantaCreators precisa ter 15 anos ou mais.`,
-      `se tiver menos de 15 anos, infelizmente não pode participar agora.`,
-      `a regra de idade existe pra manter um ambiente mais seguro, maduro e organizado.`,
-      `15 anos é o mínimo pra seguir no processo da SantaCreators.`,
+      `${mention}, para entrar na SantaCreators é necessário ter mais de 16 anos.`,
+      `a regra da SantaCreators exige idade acima de 16 anos para seguir no processo de entrada.`,
+      `com 15 anos ainda não é possível entrar na SantaCreators. A regra exige mais de 16 anos.`,
+      `ter experiência não substitui a regra de idade. Para entrar na SantaCreators, precisa estar acima dos 16 anos.`,
+      `se a pessoa ainda não passou dos 16 anos, o processo de entrada na SantaCreators não pode seguir por enquanto.`,
     ], channelId);
   }
 
@@ -18452,16 +18497,32 @@ function buildIaInterviewRulesQuickAnswer(message, openerId) {
     ], channelId);
   }
 
-  if (textHasAny(text, ["idade", "anos", "tenho 14", "tenho 13", "menor", "15 anos", "quatorze", "treze"])) {
+  if (
+    textHasAny(
+      text,
+      [
+        "idade",
+        "tenho 14",
+        "tenho 13",
+        "tenho 15",
+        "15 anos",
+        "tenho 16",
+        "16 anos",
+        "menor",
+        "quatorze",
+        "treze",
+      ]
+    )
+  ) {
     return pickIaInterviewReply([
-      `${mention}, a idade mínima pra participar da SantaCreators é 15 anos.`,
-      `sobre idade: só pode participar com 15 anos ou mais, tanto na GI quanto no painel.`,
-      `se tiver menos de 15 anos, infelizmente não pode entrar agora. É regra pra manter o ambiente mais seguro e maduro.`,
-      `a SantaCreators pede mínimo de 15 anos. Não é questão pessoal, é organização e segurança do projeto.`,
-      `pra entrar precisa ter 15+. Se ainda não tiver, o correto é aguardar.`,
-      `idade mínima é 15 anos, sem exceção comum no fluxo de entrevista.`,
-      `se a pessoa tem menos de 15, não segue pra participação na SantaCreators por enquanto.`,
-      `com 15 anos ou mais pode ser avaliado. Abaixo disso, a regra bloqueia a participação.`,
+      `${mention}, para entrar na SantaCreators precisa ter mais de 16 anos.`,
+      `a regra de idade da SantaCreators exige que a pessoa esteja acima dos 16 anos.`,
+      `com 15 anos ainda não pode entrar na SantaCreators, mesmo que já tenha experiência.`,
+      `experiência ajuda na avaliação, mas não substitui a regra de idade. Para entrar precisa ter mais de 16 anos.`,
+      `se ainda não passou dos 16 anos, precisa aguardar antes de seguir no processo da SantaCreators.`,
+      `a regra de idade vale para a entrada na SantaCreators e não deve ser confundida com os requisitos da staff de cada cidade.`,
+      `SantaCreators e staff da cidade são estruturas diferentes. A idade e os requisitos da SantaCreators não devem ser usados para afirmar automaticamente quem pode virar ADM em Nobre, Santa, Grande ou Maresia.`,
+      `para assuntos de ADM ou staff, a pessoa deve seguir o processo da própria cidade em que deseja atuar.`,
     ], channelId);
   }
 
@@ -19517,30 +19578,37 @@ async function handleAiTicketAssistMessage(
   }
 
   // =====================================================
-  // EVITA RESPOSTAS DUPLICADAS NO MESMO TICKET
+  // EVITA PROCESSAMENTO DUPLICADO DA MESMA MENSAGEM
+  // =====================================================
+  //
+  // Cada mensagem possui sua própria chave.
+  //
+  // Assim:
+  //
+  // - a mesma mensagem não pode ser processada duas vezes;
+  // - uma consulta pesada não bloqueia as mensagens seguintes;
+  // - perguntas novas podem utilizar outro worker disponível;
+  // - o limite global de concorrência continua sendo respeitado.
   // =====================================================
 
- if (
-  AI_TICKET_ASSIST_PROCESSING.has(
-    message.channelId
-  )
-) {
-  queuePendingAiMessage(
-    AI_TICKET_ASSIST_PENDING_MESSAGES,
-    message.channelId,
-    message
+  const ticketProcessingKey =
+    `${message.channelId}:${message.author.id}:${message.id}`;
+
+  if (
+    AI_TICKET_ASSIST_PROCESSING.has(
+      ticketProcessingKey
+    )
+  ) {
+    console.log(
+      `[IA TICKET ASSIST] Mensagem ${message.id} já está sendo processada no canal ${message.channelId}.`
+    );
+
+    return true;
+  }
+
+  AI_TICKET_ASSIST_PROCESSING.add(
+    ticketProcessingKey
   );
-
-  console.log(
-    `[IA TICKET ASSIST] Mensagem ${message.id} entrou na fila do canal ${message.channelId}.`
-  );
-
-  return true;
-}
-
-AI_TICKET_ASSIST_PROCESSING.add(
-  message.channelId
-);
 
   try {
     await message.channel
@@ -19585,6 +19653,10 @@ const response =
         message,
         client,
       });
+    },
+    {
+      key:
+        `${getAiMessageBatchKey(message)}:${message.id}`,
     }
   );
 
@@ -19785,37 +19857,37 @@ saveInstitutionalTeaching(
 
     return true;
   } finally {
-  AI_TICKET_ASSIST_PROCESSING.delete(
-    message.channelId
-  );
-
-  const nextPendingMessage =
-    takeNextPendingAiMessage(
-      AI_TICKET_ASSIST_PENDING_MESSAGES,
-      message.channelId
+    AI_TICKET_ASSIST_PROCESSING.delete(
+      ticketProcessingKey
     );
 
-  if (
-    nextPendingMessage
-  ) {
-    setImmediate(
-      () => {
-        handleAiTicketAssistMessage(
-          nextPendingMessage,
-          client
-        ).catch(
-          (err) => {
-            console.error(
-              "[IA TICKET ASSIST] Falha ao processar mensagem pendente:",
-              err?.message ||
-                err
-            );
-          }
-        );
-      }
-    );
+    const nextPendingMessage =
+      takeNextPendingAiMessage(
+        AI_TICKET_ASSIST_PENDING_MESSAGES,
+        message.channelId
+      );
+
+    if (
+      nextPendingMessage
+    ) {
+      setImmediate(
+        () => {
+          handleAiTicketAssistMessage(
+            nextPendingMessage,
+            client
+          ).catch(
+            (err) => {
+              console.error(
+                "[IA TICKET ASSIST] Falha ao processar mensagem pendente:",
+                err?.message ||
+                  err
+              );
+            }
+          );
+        }
+      );
+    }
   }
-}
 }
 // =====================================================
 // IA — SUPORTE AUTOMÁTICO PARA LÍDERES
