@@ -143,17 +143,16 @@ async function hasRequiredActiveRole(guild, userId) {
 async function filterRankingByActiveRole(list, guild) {
   if (!Array.isArray(list) || list.length === 0) return [];
 
-  const filtered = [];
-  for (const item of list) {
-    if (!item?.id) continue;
+  const checks = await Promise.all(
+    list.map(async (item) => {
+      if (!item?.id) return null;
 
-    const isActive = await hasRequiredActiveRole(guild, item.id);
-    if (isActive) {
-      filtered.push(item);
-    }
-  }
+      const isActive = await hasRequiredActiveRole(guild, item.id);
+      return isActive ? item : null;
+    })
+  );
 
-  return filtered;
+  return checks.filter(Boolean);
 }
 
 // ================= LÓGICA DE DADOS (TIMEZONE SAFE) =================
@@ -441,6 +440,10 @@ async function fetchWeeklyRankMessagesForWeek(client, wk) {
         }
       }
 
+      // ✅ Achou a semana dentro deste lote: não precisa continuar varrendo
+      // centenas de mensagens antigas do canal.
+      if (foundMessages.length > 0) break;
+
       lastId = batch.last()?.id;
       if (!lastId) break;
     }
@@ -456,6 +459,14 @@ async function getSyncedPreviousWeekData(client, guild, previousWeekKey) {
 
   if (rankMessages.length > 0) {
     const dataFromRank = parseWeeklyRankEmbedsToData(rankMessages, previousWeekKey);
+
+    // ✅ A semana publicada também precisa obedecer à regra de membro ativo.
+    // Isso impede Creator Destaque / Master Manager / Master Eventos
+    // de irem para alguém que não possui o cargo obrigatório da equipe.
+    dataFromRank.topGeral = await filterRankingByActiveRole(dataFromRank.topGeral, guild);
+    dataFromRank.topManager = await filterRankingByActiveRole(dataFromRank.topManager, guild);
+    dataFromRank.topSocial = await filterRankingByActiveRole(dataFromRank.topSocial, guild);
+    dataFromRank.topAlinh = await filterRankingByActiveRole(dataFromRank.topAlinh, guild);
 
     if (dataFromRank.topGeral.length > 0) {
       console.log(`[ReuniaoSemanal] Semana anterior sincronizada pelo ranking publicado: ${previousWeekKey}`);
@@ -473,27 +484,56 @@ function calculateWinners(data) {
 
     for (const item of list) {
       if (!item?.id) continue;
+
       if (!blockedIds.has(item.id)) {
         return item;
       }
     }
 
-    // ✅ Se todos os colocados já estiverem bloqueados, mantém o primeiro válido
-    // para não deixar a categoria vazia.
-    return list.find((item) => item?.id) || null;
+    // ✅ REGRA DE HIERARQUIA:
+    // Se todos os candidatos desta categoria já venceram uma categoria superior,
+    // não repete vencedor.
+    // É melhor deixar a categoria sem vencedor do que entregar dois títulos
+    // para a mesma pessoa.
+    return null;
   };
 
+  // =====================================================
+  // 1º PRIORIDADE: CREATOR DESTAQUE
+  // =====================================================
   const winnerGeral = pickFirstAvailable(data.topGeral);
 
   const usedIds = new Set();
-  if (winnerGeral?.id) usedIds.add(winnerGeral.id);
 
+  if (winnerGeral?.id) {
+    usedIds.add(winnerGeral.id);
+  }
+
+  // =====================================================
+  // 2º PRIORIDADE: MASTER MANAGER
+  // Creator Destaque não pode ganhar novamente.
+  // =====================================================
   const winnerManager = pickFirstAvailable(data.topManager, usedIds);
-  if (winnerManager?.id) usedIds.add(winnerManager.id);
 
+  if (winnerManager?.id) {
+    usedIds.add(winnerManager.id);
+  }
+
+  // =====================================================
+  // 3º PRIORIDADE: MASTER SOCIAL / EVENTOS
+  // Creator Destaque e Master Manager não podem ganhar.
+  // =====================================================
   const winnerSocial = pickFirstAvailable(data.topSocial, usedIds);
 
-  return { winnerGeral, winnerManager, winnerSocial };
+  if (winnerSocial?.id) {
+    usedIds.add(winnerSocial.id);
+  }
+
+  return {
+    winnerGeral,
+    winnerManager,
+    winnerSocial
+  };
 }
 
 // ================= CHART BUILDER =================
@@ -926,9 +966,8 @@ async function removeRewardRoleFromEveryoneExcept(guild, roleId, keepUserId, rol
       return;
     }
 
-    // ✅ Garante que a lista/cache de membros esteja atualizada antes da limpeza.
-    // Assim não dependemos apenas de vencedores salvos em state.lastWinners.
-    await guild.members.fetch().catch(() => null);
+    // ✅ A sincronização geral dos membros é feita UMA única vez em applyRoles().
+    // Aqui apenas usamos a lista atualizada do próprio cargo.
 
     // ✅ Fonte real da limpeza:
     // verifica TODAS as pessoas que possuem este cargo atualmente.
@@ -1066,7 +1105,11 @@ async function applyRoles(guild, winners, state) {
   const log = [];
   const rewardCandidateIds = buildRewardCandidateIds(winners, state);
 
-  log.push(`🔎 Verificando cargos somente em ${rewardCandidateIds.length} pessoa(s) relacionadas aos destaques.`);
+  // ✅ Sincroniza os membros UMA única vez antes de limpar os 3 cargos.
+  // Antes isso acontecia 3 vezes, uma para cada cargo, deixando a publicação muito mais lenta.
+  await guild.members.fetch().catch(() => null);
+
+  log.push(`🔎 Membros sincronizados. Limpando os cargos antigos antes de aplicar os novos vencedores.`);
 
   await removeRewardRoleFromEveryoneExcept(
     guild,
