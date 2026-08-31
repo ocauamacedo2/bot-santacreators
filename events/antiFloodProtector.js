@@ -54,6 +54,31 @@ const CONFIG = {
     repetition: {
         limit: 3,            // 3 mensagens idênticas
     },
+    textAbuse: {
+        enabled: true,
+        strictChannelIds: [
+            '1381597720007151698', // Chat Creators
+        ],
+        blockedAutomationUserIds: [
+            '1537993019976843264', // Legião Bot
+        ],
+        blockUntrustedAutomations: true,
+        trustedBotUserIds: [
+            // Adicione aqui somente IDs de bots que realmente
+            // precisam escrever no Chat Creators.
+        ],
+        minimumLength: 40,
+        longBlockLength: 500,
+        suspiciousUnicodeRatio: 0.22,
+        combiningMarkRatio: 0.10,
+        repeatedLineLimit: 3,
+        repeatedSequenceLimit: 8,
+        invisibleCharacterLimit: 3,
+        excessiveLineLimit: 18,
+        fragmentedWindowMs: 12 * 1000,
+        fragmentedMessageLimit: 3,
+        fragmentedTotalLength: 100,
+    },
     mentions: {
         limit: 8,            // máximo de menções por msg
     },
@@ -208,6 +233,10 @@ function saveState(state) {
 // Cache em memória para detecção rápida de flood (não precisa persistir tudo)
 const messageCache = new Map(); // userId -> [{ content, ts }]
 
+// Cache separado para ataques de texto divididos em várias mensagens.
+// A chave usa usuário + canal para não misturar conversas diferentes.
+const textAbuseCache = new Map(); // "userId:channelId" -> [{ messageId, content, ts }]
+
 // =====================================================
 // MEMÓRIA DE ATAQUES DE MÍDIA
 // =====================================================
@@ -243,6 +272,266 @@ function normalizeMessageContent(content) {
         .replace(/[\u0300-\u036f]/g, '')
         .replace(/\s+/g, ' ')
         .trim();
+}
+
+// =====================================================
+// DETECÇÃO DE TEXTO UNICODE ABUSIVO / TEXT ART SPAM
+// =====================================================
+
+function detectTextAbuse(content, channelId) {
+    if (
+        !CONFIG.textAbuse.enabled ||
+        !CONFIG.textAbuse.strictChannelIds.includes(String(channelId))
+    ) {
+        return null;
+    }
+
+    const original = String(content || '');
+    const normalized = original.normalize('NFKC');
+    const characters = Array.from(normalized);
+    const visibleCharacters = characters.filter(character => !/\s/u.test(character));
+
+    if (visibleCharacters.length < CONFIG.textAbuse.minimumLength) {
+        return null;
+    }
+
+    const decomposedCharacters = Array.from(original.normalize('NFD'));
+    const combiningMarks = decomposedCharacters
+        .filter(character => /\p{M}/u.test(character))
+        .length;
+
+    const suspiciousUnicode = visibleCharacters.filter(character => {
+        if (/\p{Extended_Pictographic}/u.test(character)) return false;
+        if (/[\p{Script=Latin}\p{N}\p{P}]/u.test(character)) return false;
+
+        return true;
+    }).length;
+
+    const invisibleCharacters =
+        Array.from(original)
+            .filter(
+                character =>
+                    /[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/u.test(character)
+            )
+            .length;
+
+    const combiningRatio =
+        combiningMarks /
+        Math.max(decomposedCharacters.length, 1);
+
+    const suspiciousUnicodeRatio =
+        suspiciousUnicode /
+        Math.max(visibleCharacters.length, 1);
+
+    const lines = normalized
+        .split(/\r?\n/u)
+        .map(line => line.trim())
+        .filter(Boolean);
+
+    const lineFrequency = new Map();
+
+    for (const line of lines) {
+        const key = line.replace(/\s+/gu, ' ').toLowerCase();
+        lineFrequency.set(key, (lineFrequency.get(key) || 0) + 1);
+    }
+
+    const mostRepeatedLine = Math.max(0, ...lineFrequency.values());
+    const repeatedSequence = /(\P{White_Space}{1,8})\1{7,}/u.test(normalized);
+
+    const hasExcessiveCombiningMarks =
+        combiningRatio >= CONFIG.textAbuse.combiningMarkRatio;
+
+    const hasExcessiveSuspiciousUnicode =
+        suspiciousUnicodeRatio >= CONFIG.textAbuse.suspiciousUnicodeRatio;
+
+    const hasRepeatedLines =
+        mostRepeatedLine >= CONFIG.textAbuse.repeatedLineLimit;
+
+    const hasInvisibleCharacterAbuse =
+        invisibleCharacters >= CONFIG.textAbuse.invisibleCharacterLimit;
+
+    const hasExcessiveLines =
+        lines.length >= CONFIG.textAbuse.excessiveLineLimit;
+
+    const isArtificialLongBlock =
+        visibleCharacters.length >= CONFIG.textAbuse.longBlockLength &&
+        (
+            hasExcessiveSuspiciousUnicode ||
+            hasExcessiveCombiningMarks ||
+            hasRepeatedLines ||
+            hasInvisibleCharacterAbuse ||
+            hasExcessiveLines ||
+            repeatedSequence
+        );
+
+    if (
+        isArtificialLongBlock ||
+        hasExcessiveCombiningMarks ||
+        hasInvisibleCharacterAbuse ||
+        (
+            hasExcessiveSuspiciousUnicode &&
+            (hasRepeatedLines || repeatedSequence || lines.length >= 8)
+        ) ||
+        (
+            hasExcessiveLines &&
+            (hasExcessiveSuspiciousUnicode || repeatedSequence)
+        )
+    ) {
+        const signals = [];
+
+        if (hasExcessiveSuspiciousUnicode) {
+            signals.push(`Unicode incomum: ${Math.round(suspiciousUnicodeRatio * 100)}%`);
+        }
+
+        if (hasExcessiveCombiningMarks) {
+            signals.push(`marcas combinadas/sobrepostas: ${Math.round(combiningRatio * 100)}%`);
+        }
+
+        if (hasRepeatedLines) {
+            signals.push(`linha repetida ${mostRepeatedLine} vezes`);
+        }
+
+        if (hasInvisibleCharacterAbuse) {
+            signals.push(`${invisibleCharacters} caracteres invisíveis/direcionais`);
+        }
+
+        if (hasExcessiveLines) {
+            signals.push(`excesso de linhas: ${lines.length}`);
+        }
+
+        if (repeatedSequence) {
+            signals.push('sequências artificiais repetidas');
+        }
+
+        if (isArtificialLongBlock) {
+            signals.push(`bloco excessivo com ${visibleCharacters.length} caracteres`);
+        }
+
+        return `Abuso de texto/Unicode detectado (${signals.join(', ')})`;
+    }
+
+    return null;
+}
+
+// =====================================================
+// ATAQUE DE TEXTO DIVIDIDO EM VÁRIAS MENSAGENS
+// =====================================================
+
+function detectFragmentedTextAbuse(message) {
+    if (
+        !CONFIG.textAbuse.enabled ||
+        !CONFIG.textAbuse.strictChannelIds.includes(String(message.channelId))
+    ) {
+        return null;
+    }
+
+    const now = Date.now();
+    const key = `${message.author.id}:${message.channelId}`;
+    const current = textAbuseCache.get(key) || [];
+
+    current.push({
+        messageId: message.id,
+        content: String(message.content || ''),
+        ts: now,
+    });
+
+    const recent = current.filter(
+        entry =>
+            now - entry.ts <= CONFIG.textAbuse.fragmentedWindowMs
+    );
+
+    textAbuseCache.set(key, recent);
+
+    if (recent.length < CONFIG.textAbuse.fragmentedMessageLimit) {
+        return null;
+    }
+
+    const combinedContent = recent
+        .map(entry => entry.content)
+        .join('\n');
+
+    const combinedLength =
+        Array.from(combinedContent)
+            .filter(character => !/\s/u.test(character))
+            .length;
+
+    if (combinedLength < CONFIG.textAbuse.fragmentedTotalLength) {
+        return null;
+    }
+
+    const combinedViolation =
+        detectTextAbuse(combinedContent, message.channelId);
+
+    if (!combinedViolation) {
+        return null;
+    }
+
+    return (
+        `Ataque de texto fragmentado detectado em ${recent.length} mensagens. ` +
+        combinedViolation
+    );
+}
+
+async function deleteRecentTextAbuseMessages(message) {
+    const key = `${message.author.id}:${message.channelId}`;
+    const recent = textAbuseCache.get(key) || [];
+    let deleted = 0;
+
+    for (const entry of recent) {
+        const target =
+            message.channel.messages.cache.get(entry.messageId) ||
+            await message.channel.messages
+                .fetch(entry.messageId)
+                .catch(() => null);
+
+        if (!target?.deletable) {
+            continue;
+        }
+
+        const success = await target
+            .delete()
+            .then(() => true)
+            .catch(() => false);
+
+        if (success) {
+            deleted++;
+        }
+    }
+
+    textAbuseCache.delete(key);
+
+    return deleted;
+}
+
+async function removeAutomatedTextAbuse(message, reason) {
+    const content = String(message.content || '');
+
+    if (message.deletable) {
+        await message.delete().catch(() => {});
+    }
+
+    if (message.member) {
+        await logSecurityAction(
+            message.client,
+            message.guild,
+            message.member,
+            message.channel,
+            `${reason} | Origem automatizada: bot/webhook`,
+            content,
+            1,
+            0,
+            {
+                type: 'automatedTextAbuse',
+                messageId: message.id,
+                messageURL: message.url,
+            }
+        );
+    }
+
+    console.warn(
+        `[ANTI FLOOD PROTECTOR] Texto abusivo automatizado removido: ` +
+        `${message.author.tag} (${message.author.id}) no canal ${message.channelId} | ${reason}`
+    );
 }
 
 // =====================================================
@@ -1863,10 +2152,61 @@ export function setupAntiFloodProtector(client) {
     globalThis.__SC_ANTI_FLOOD_PROTECTOR__ = true;
 
     client.on(Events.MessageCreate, async (message) => {
-        if (!message.guild || message.author.bot) return;
+        if (!message.guild) return;
         
         const state = loadState();
         if (state.enabled === false) return;
+
+        // O próprio bot precisa ser ignorado para não analisar
+        // os avisos enviados pelo sistema de proteção.
+        if (message.author.id === client.user?.id) return;
+
+        // Bots e webhooks não podem ignorar a proteção de texto.
+        // No canal reforçado, conteúdo Unicode/text art abusivo
+        // é removido antes do retorno reservado às automações.
+        if (message.author.bot || message.webhookId) {
+            const isStrictChannel =
+                CONFIG.textAbuse.strictChannelIds.includes(
+                    String(message.channelId)
+                );
+
+            const isExplicitlyBlockedAutomation =
+                CONFIG.textAbuse.blockedAutomationUserIds.includes(
+                    String(message.author.id)
+                );
+
+            const isTrustedAutomation =
+                CONFIG.textAbuse.trustedBotUserIds.includes(
+                    String(message.author.id)
+                );
+
+            const automatedTextViolation =
+                detectTextAbuse(message.content, message.channelId);
+
+            const automatedViolation =
+                (
+                    isExplicitlyBlockedAutomation
+                        ? `Bot bloqueado diretamente pelo ID ${message.author.id}`
+                        : null
+                ) ||
+                automatedTextViolation ||
+                (
+                    CONFIG.textAbuse.blockUntrustedAutomations &&
+                    isStrictChannel &&
+                    !isTrustedAutomation
+                        ? 'Mensagem de bot/webhook não autorizado no canal protegido'
+                        : null
+                );
+
+            if (automatedViolation) {
+                await removeAutomatedTextAbuse(
+                    message,
+                    automatedViolation
+                );
+            }
+
+            return;
+        }
 
         // Comandos Administrativos do Protector
         if (message.content.startsWith('!protector')) {
@@ -1942,6 +2282,22 @@ export function setupAntiFloodProtector(client) {
         messageCache.set(userId, filteredCache);
 
         let violation = null;
+
+        // =================================================
+        // 0. ABUSO DE TEXTO / UNICODE NO CANAL REFORÇADO
+        // =================================================
+
+        const textAbuseViolation =
+            detectTextAbuse(content, message.channelId);
+
+        const fragmentedTextViolation =
+            detectFragmentedTextAbuse(message);
+
+        if (textAbuseViolation || fragmentedTextViolation) {
+            violation =
+                fragmentedTextViolation ||
+                textAbuseViolation;
+        }
 
         // =================================================
         // 1. DETECÇÃO DE FLOOD
@@ -2194,6 +2550,10 @@ if (violation) {
 
         if (isPunishmentExempt(message.member)) {
             return;
+        }
+
+        if (textAbuseViolation || fragmentedTextViolation) {
+            await deleteRecentTextAbuseMessages(message);
         }
 
         if (message.deletable) {
