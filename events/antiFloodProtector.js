@@ -64,8 +64,7 @@ const CONFIG = {
         ],
         blockUntrustedAutomations: true,
         trustedBotUserIds: [
-            // Adicione aqui somente IDs de bots que realmente
-            // precisam escrever no Chat Creators.
+            '1380989431011610634', // Amigo dos Creators
         ],
         minimumLength: 40,
         longBlockLength: 500,
@@ -2179,6 +2178,16 @@ export function setupAntiFloodProtector(client) {
                 CONFIG.textAbuse.trustedBotUserIds.includes(
                     String(message.author.id)
                 );
+
+            // Bot confiável recebe bypass completo.
+            // A lista de bloqueados continua tendo prioridade
+            // caso um mesmo ID seja colocado nas duas listas.
+            if (
+                isTrustedAutomation &&
+                !isExplicitlyBlockedAutomation
+            ) {
+                return;
+            }
 
             const automatedTextViolation =
                 detectTextAbuse(message.content, message.channelId);
