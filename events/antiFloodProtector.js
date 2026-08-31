@@ -61,6 +61,7 @@ const CONFIG = {
         ],
         blockedAutomationUserIds: [
             '1537993019976843264', // Legião Bot
+            '1542295918395793438', // Origem do spam Demons
         ],
         blockUntrustedAutomations: true,
         trustedBotUserIds: [
@@ -77,6 +78,19 @@ const CONFIG = {
         fragmentedWindowMs: 12 * 1000,
         fragmentedMessageLimit: 3,
         fragmentedTotalLength: 100,
+    },
+    raidSpam: {
+        enabled: true,
+        massMentionLimit: 6,
+        linkLimit: 2,
+        historyWindowMs: 30 * 1000,
+        firstTimeoutMs: 50 * 60 * 1000,
+        repeatedTimeoutMs: 28 * 24 * 60 * 60 * 1000,
+    },
+    startupCleanup: {
+        enabled: true,
+        maxMessagesPerChannel: 500,
+        pageSize: 100,
     },
     mentions: {
         limit: 8,            // máximo de menções por msg
@@ -235,6 +249,9 @@ const messageCache = new Map(); // userId -> [{ content, ts }]
 // Cache separado para ataques de texto divididos em várias mensagens.
 // A chave usa usuário + canal para não misturar conversas diferentes.
 const textAbuseCache = new Map(); // "userId:channelId" -> [{ messageId, content, ts }]
+
+// Histórico curto para apagar mensagens relacionadas a uma raid textual.
+const raidSpamCache = new Map(); // "guildId:userId" -> [{ channelId, messageId, ts }]
 
 // =====================================================
 // MEMÓRIA DE ATAQUES DE MÍDIA
@@ -1687,8 +1704,12 @@ async function logSecurityAction(
                         '⚖️ Punição',
 
                     value:
-                        `Timeout: ` +
-                        `\`${duration / 60000} min\``,
+                        extra?.type === 'raidSpam' && member.user.bot
+                            ? '`Banimento da automação maliciosa`'
+                            : (
+                                `Timeout: ` +
+                                `\`${duration / 60000} min\``
+                            ),
 
                     inline:
                         true,
@@ -2028,6 +2049,145 @@ async function logSecurityAction(
     }
 }
 
+async function punishRaidSpam(message, detection) {
+    const member = message.member;
+
+    if (!member) {
+        await deleteRaidSpamMessages(
+            message,
+            detection.history
+        );
+
+        return;
+    }
+
+    // Bots/apps maliciosos não aceitam timeout.
+    // Quando possível, são banidos diretamente.
+    if (message.author.bot || message.webhookId) {
+        const deleted = await deleteRaidSpamMessages(
+            message,
+            detection.history
+        );
+
+        const canBan =
+            message.guild.members.me.permissions.has(
+                PermissionsBitField.Flags.BanMembers
+            ) &&
+            member.bannable;
+
+        if (canBan) {
+            await member.ban({
+                reason: `[ANTI RAID] ${detection.reason}`,
+            }).catch(() => {});
+        }
+
+        await logSecurityAction(
+            message.client,
+            message.guild,
+            member,
+            message.channel,
+            `${detection.reason} | Automação maliciosa ${canBan ? 'banida' : 'não pôde ser banida'}`,
+            message.content || `[Raid automatizada. ${deleted} mensagem(ns) removida(s).]`,
+            1,
+            0,
+            {
+                type: 'raidSpam',
+                messageId: message.id,
+                messageURL: message.url,
+                deletedMessages: deleted,
+            }
+        );
+
+        return;
+    }
+
+    if (isPunishmentExempt(member)) {
+        return;
+    }
+
+    const state = loadState();
+    const userId = member.id;
+
+    if (!state.users[userId]) {
+        state.users[userId] = {
+            infractions: 0,
+            lastInfractions: [],
+        };
+    }
+
+    const previousRaidCount =
+        Number(state.users[userId].raidSpamInfractions || 0);
+
+    const raidCount = previousRaidCount + 1;
+    const duration =
+        raidCount === 1
+            ? CONFIG.raidSpam.firstTimeoutMs
+            : CONFIG.raidSpam.repeatedTimeoutMs;
+
+    state.users[userId].raidSpamInfractions = raidCount;
+    state.users[userId].lastInfractions.push({
+        reason: detection.reason,
+        ts: Date.now(),
+        duration,
+    });
+
+    saveState(state);
+
+    const deleted = await deleteRaidSpamMessages(
+        message,
+        detection.history
+    );
+
+    const canTimeout =
+        message.guild.members.me.permissions.has(
+            PermissionsBitField.Flags.ModerateMembers
+        ) &&
+        member.moderatable;
+
+    if (canTimeout) {
+        await member.timeout(
+            duration,
+            `[ANTI RAID] ${detection.reason}`
+        ).catch(() => {});
+    }
+
+    await logSecurityAction(
+        message.client,
+        message.guild,
+        member,
+        message.channel,
+        detection.reason,
+        message.content || `[Raid textual. ${deleted} mensagem(ns) removida(s).]`,
+        raidCount,
+        duration,
+        {
+            type: 'raidSpam',
+            messageId: message.id,
+            messageURL: message.url,
+            deletedMessages: deleted,
+        }
+    );
+
+    const durationText =
+        raidCount === 1
+            ? '50 minutos'
+            : '28 dias';
+
+    const warning = await message.channel.send({
+        content:
+            `🚨 ${member}, ataque de spam/raid detectado. ` +
+            `As mensagens foram removidas e foi aplicado castigo de **${durationText}**.`,
+        allowedMentions: {
+            users: [member.id],
+            parse: [],
+        },
+    }).catch(() => null);
+
+    if (warning) {
+        setTimeout(() => warning.delete().catch(() => {}), 10_000);
+    }
+}
+
 async function applyPunishment(member, guild, reason, content, channel) {
     // =====================================================
     // USUÁRIO ISENTO DE PUNIÇÃO
@@ -2150,6 +2310,31 @@ export function setupAntiFloodProtector(client) {
     if (globalThis.__SC_ANTI_FLOOD_PROTECTOR__) return;
     globalThis.__SC_ANTI_FLOOD_PROTECTOR__ = true;
 
+    const startStartupCleanup = () => {
+        setTimeout(
+            () => {
+                runStartupRaidCleanup(client).catch(
+                    err => {
+                        console.error(
+                            '[ANTI FLOOD PROTECTOR] Erro na limpeza inicial:',
+                            err
+                        );
+                    }
+                );
+            },
+            3000
+        );
+    };
+
+    if (client.isReady()) {
+        startStartupCleanup();
+    } else {
+        client.once(
+            Events.ClientReady,
+            startStartupCleanup
+        );
+    }
+
     client.on(Events.MessageCreate, async (message) => {
         if (!message.guild) return;
         
@@ -2186,6 +2371,18 @@ export function setupAntiFloodProtector(client) {
                 isTrustedAutomation &&
                 !isExplicitlyBlockedAutomation
             ) {
+                return;
+            }
+
+            const automatedRaidSpam =
+                detectRaidSpam(message);
+
+            if (automatedRaidSpam) {
+                await punishRaidSpam(
+                    message,
+                    automatedRaidSpam
+                );
+
                 return;
             }
 
@@ -2228,6 +2425,22 @@ export function setupAntiFloodProtector(client) {
         const content = message.content;
         const userId = message.author.id;
         const now = Date.now();
+
+        // =================================================
+        // PROTEÇÃO CRÍTICA CONTRA RAID TEXTUAL
+        // =================================================
+
+        const raidSpam =
+            detectRaidSpam(message);
+
+        if (raidSpam) {
+            await punishRaidSpam(
+                message,
+                raidSpam
+            );
+
+            return;
+        }
 
         // =================================================
         // PROTEÇÃO CONTRA ATAQUE DE MÍDIA
@@ -2664,4 +2877,275 @@ async function handleCommands(message, state) {
     }
     
     return message.reply('❓ Comandos: `status`, `on`, `off`, `user @user`, `limpar @user`');
+}
+
+// =====================================================
+// DETECÇÃO DE RAID TEXTUAL / MASS MENTION / LINKS
+// =====================================================
+
+function detectRaidSpam(message) {
+    if (!CONFIG.raidSpam.enabled) {
+        return null;
+    }
+
+    const content = String(message.content || '');
+    const normalized = normalizeMessageContent(content);
+    const massMentions = content.match(/@(everyone|here)/gi) || [];
+    const links = content.match(/https?:\/\/[^\s<>()]+/gi) || [];
+    const discordInvites =
+        content.match(/(?:https?:\/\/)?(?:www\.)?(?:discord\.gg|discord(?:app)?\.com\/invite)\/[^\s<>()]+/gi) || [];
+
+    const lines = content
+        .split(/\r?\n/u)
+        .map(line => line.trim().toLowerCase())
+        .filter(Boolean);
+
+    const lineFrequency = new Map();
+
+    for (const line of lines) {
+        lineFrequency.set(line, (lineFrequency.get(line) || 0) + 1);
+    }
+
+    const mostRepeatedLine = Math.max(0, ...lineFrequency.values());
+    const attackLanguage =
+        /\b(spamado|spammed|pwned|hacked|hackeado|owned|raid(?:ado)?|invadido)\b/i.test(normalized) ||
+        /seguranca\s+do\s+servidor|spamados?\s+(?:de\s+)?novo/i.test(normalized);
+
+    const longMessage = Array.from(content).length >= 300;
+    const excessiveMassMentions =
+        massMentions.length >= CONFIG.raidSpam.massMentionLimit;
+    const excessiveLinks =
+        links.length >= CONFIG.raidSpam.linkLimit;
+
+    const detected =
+        (
+            excessiveMassMentions &&
+            (links.length >= 1 || longMessage)
+        ) ||
+        (
+            discordInvites.length >= 1 &&
+            massMentions.length >= 3
+        ) ||
+        (
+            attackLanguage &&
+            massMentions.length >= 3 &&
+            links.length >= 1
+        ) ||
+        (
+            excessiveLinks &&
+            mostRepeatedLine >= 2 &&
+            longMessage
+        );
+
+    const now = message.createdTimestamp || Date.now();
+    const cacheKey = `${message.guildId}:${message.author.id}`;
+    const current = raidSpamCache.get(cacheKey) || [];
+
+    current.push({
+        channelId: message.channelId,
+        messageId: message.id,
+        ts: now,
+    });
+
+    const recent = current.filter(
+        entry => Math.abs(now - entry.ts) <= CONFIG.raidSpam.historyWindowMs
+    );
+
+    raidSpamCache.set(cacheKey, recent);
+
+    if (!detected) {
+        return null;
+    }
+
+    const signals = [
+        `${massMentions.length} ocorrências de @everyone/@here`,
+        `${links.length} links`,
+        `${discordInvites.length} convites do Discord`,
+    ];
+
+    if (attackLanguage) {
+        signals.push('linguagem de invasão/raid');
+    }
+
+    if (mostRepeatedLine >= 2) {
+        signals.push(`linha repetida ${mostRepeatedLine} vezes`);
+    }
+
+    return {
+        reason: `Raid textual crítica detectada (${signals.join(', ')})`,
+        history: recent,
+    };
+}
+
+async function deleteRaidSpamMessages(message, history) {
+    let deleted = 0;
+
+    for (const entry of history) {
+        const channel =
+            message.guild.channels.cache.get(entry.channelId) ||
+            await message.guild.channels.fetch(entry.channelId).catch(() => null);
+
+        if (!channel?.isTextBased() || !channel.messages) {
+            continue;
+        }
+
+        const target =
+            channel.messages.cache.get(entry.messageId) ||
+            await channel.messages.fetch(entry.messageId).catch(() => null);
+
+        if (!target?.deletable) {
+            continue;
+        }
+
+        const success = await target
+            .delete()
+            .then(() => true)
+            .catch(() => false);
+
+        if (success) {
+            deleted++;
+        }
+    }
+
+    raidSpamCache.delete(`${message.guildId}:${message.author.id}`);
+
+    return deleted;
+}
+
+// =====================================================
+// LIMPEZA AUTOMÁTICA QUANDO O BOT É INICIADO
+// =====================================================
+
+async function runStartupRaidCleanup(client) {
+    if (!CONFIG.startupCleanup.enabled) {
+        return;
+    }
+
+    const handledAuthors = new Set();
+    let analyzed = 0;
+    let removed = 0;
+
+    for (const channelId of CONFIG.textAbuse.strictChannelIds) {
+        const channel =
+            client.channels.cache.get(channelId) ||
+            await client.channels.fetch(channelId).catch(() => null);
+
+        if (!channel?.isTextBased() || !channel.messages) {
+            continue;
+        }
+
+        const collected = [];
+        let before;
+
+        while (collected.length < CONFIG.startupCleanup.maxMessagesPerChannel) {
+            const remaining =
+                CONFIG.startupCleanup.maxMessagesPerChannel - collected.length;
+
+            const limit = Math.min(
+                CONFIG.startupCleanup.pageSize,
+                remaining
+            );
+
+            const page = await channel.messages.fetch({
+                limit,
+                ...(before ? { before } : {}),
+            }).catch(() => null);
+
+            if (!page?.size) {
+                break;
+            }
+
+            collected.push(...page.values());
+            before = page.last()?.id;
+
+            if (page.size < limit) {
+                break;
+            }
+        }
+
+        collected.sort(
+            (a, b) => a.createdTimestamp - b.createdTimestamp
+        );
+
+        for (const message of collected) {
+            analyzed++;
+
+            if (!message.guild || message.author.id === client.user?.id) {
+                continue;
+            }
+
+            const isTrustedAutomation =
+                CONFIG.textAbuse.trustedBotUserIds.includes(
+                    String(message.author.id)
+                );
+
+            const isExplicitlyBlockedAutomation =
+                CONFIG.textAbuse.blockedAutomationUserIds.includes(
+                    String(message.author.id)
+                );
+
+            if (isTrustedAutomation && !isExplicitlyBlockedAutomation) {
+                continue;
+            }
+
+            const detectedRaid = detectRaidSpam(message);
+
+            const detection =
+                detectedRaid ||
+                (
+                    isExplicitlyBlockedAutomation
+                        ? {
+                            reason: `Automação bloqueada diretamente pelo ID ${message.author.id}`,
+                            history: [{
+                                channelId: message.channelId,
+                                messageId: message.id,
+                                ts: message.createdTimestamp,
+                            }],
+                        }
+                        : null
+                );
+
+            if (!detection) {
+                continue;
+            }
+
+            const authorKey = `${message.guildId}:${message.author.id}`;
+
+            if (handledAuthors.has(authorKey)) {
+                if (message.deletable) {
+                    const success = await message
+                        .delete()
+                        .then(() => true)
+                        .catch(() => false);
+
+                    if (success) {
+                        removed++;
+                    }
+                }
+
+                continue;
+            }
+
+            handledAuthors.add(authorKey);
+
+            await punishRaidSpam(
+                message,
+                {
+                    ...detection,
+                    history: [{
+                        channelId: message.channelId,
+                        messageId: message.id,
+                        ts: message.createdTimestamp,
+                    }],
+                }
+            );
+
+            removed++;
+        }
+    }
+
+    console.log(
+        `[ANTI FLOOD PROTECTOR] Limpeza inicial concluída: ` +
+        `${analyzed} mensagens analisadas e ${removed} ataque(s) removido(s).`
+    );
 }
