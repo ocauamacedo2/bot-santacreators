@@ -31,10 +31,13 @@ export default function createEntrevistasTickets({ client, Transcript }) {
   // ── 📊 Gerenciamento Inteligente de Inatividade / SLA ───────────────
   const INACTIVITY_STORAGE = path.resolve(process.cwd(), 'data', 'ticket_inactivity.json');
 
-  const TICKET_AUTO_CLOSE_MS = 3 * 24 * 60 * 60 * 1000;
-  const TEAM_SILENCE_ALERT_MS = 12 * 60 * 60 * 1000;
-  const CITIZEN_SILENCE_ALERT_MS = 24 * 60 * 60 * 1000;
-  const REMINDER_STEP_MS = 12 * 60 * 60 * 1000;
+  const TICKET_AUTO_CLOSE_MS = 12 * 60 * 60 * 1000;
+  const TEAM_SILENCE_ALERT_MS = 4 * 60 * 60 * 1000;
+  const CITIZEN_SILENCE_ALERT_MS = 4 * 60 * 60 * 1000;
+  const REMINDER_STEP_MS = 4 * 60 * 60 * 1000;
+  const TICKET_ACTIVE_WINDOW_MS = 10 * 60 * 1000;
+  let inactivityMonitorStarted = false;
+  let inactivityMonitorRunning = false;
 
   function loadInactivityState() {
     try {
@@ -214,13 +217,120 @@ export default function createEntrevistasTickets({ client, Transcript }) {
     };
   }
 
+  // Soma apenas os períodos fora da janela de conversa ativa.
+  // Trabalha sobre uma cópia: uma falha na leitura não avança o estado.
+  async function updateAccumulatedInactivity(channel, messages, previous, checkedAt) {
+    const data = { ...previous };
+    const snapshot = new Map(messages);
+    const hasClock =
+      data.inactivityVersion === 2 &&
+      Number.isFinite(data.inactivityCheckedAt) &&
+      Number.isFinite(data.inactivityAccumulatedMs) &&
+      Number.isFinite(data.activeUntil);
+
+    if (!hasClock) {
+      // O formato antigo só permite recuperar o silêncio atual.
+      // Os períodos de inatividade anteriores não eram armazenados.
+      const latestHuman = [...snapshot.values()]
+        .filter(message => !message.author?.bot)
+        .sort((a, b) => b.createdTimestamp - a.createdTimestamp)[0];
+
+      const lastHumanAt = latestHuman?.createdTimestamp;
+
+      data.inactivityVersion = 2;
+      data.inactivityAccumulatedMs = 0;
+      data.inactivityCheckedAt = lastHumanAt ?? channel.createdTimestamp;
+      data.activeUntil = lastHumanAt == null
+        ? channel.createdTimestamp
+        : lastHumanAt + TICKET_ACTIVE_WINDOW_MS;
+      data.lastReminderIndex = 0;
+    }
+
+    const from = data.inactivityCheckedAt;
+
+    if (checkedAt < from) {
+      throw new Error('Relógio anterior à última verificação do ticket.');
+    }
+
+    // Recupera também mensagens que ficaram fora das últimas 100.
+    // Sem essa paginação, uma conversa movimentada poderia ser ignorada.
+    let page = messages;
+
+    while (hasClock && page.size === 100) {
+      const oldest = [...page.values()].reduce((first, message) =>
+        BigInt(message.id) < BigInt(first.id) ? message : first
+      );
+
+      if (oldest.createdTimestamp <= from) break;
+
+      const nextPage = await channel.messages.fetch({
+        limit: 100,
+        before: oldest.id,
+      });
+
+      if (!nextPage.size) break;
+
+      if ([...nextPage.keys()].every(id => snapshot.has(id))) {
+        throw new Error('Paginação sem avanço no histórico do ticket.');
+      }
+
+      for (const [id, message] of nextPage) {
+        snapshot.set(id, message);
+      }
+
+      page = nextPage;
+    }
+
+    const interactions = [...snapshot.values()]
+      .filter(message =>
+        !message.author?.bot &&
+        message.createdTimestamp > from &&
+        message.createdTimestamp <= checkedAt
+      )
+      .sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+
+    let cursor = from;
+    let activeUntil = data.activeUntil;
+    let accumulated = data.inactivityAccumulatedMs;
+
+    for (const message of interactions) {
+      const at = message.createdTimestamp;
+
+      accumulated += Math.max(0, at - Math.max(cursor, activeUntil));
+      activeUntil = Math.max(activeUntil, at + TICKET_ACTIVE_WINDOW_MS);
+      cursor = at;
+    }
+
+    accumulated += Math.max(0, checkedAt - Math.max(cursor, activeUntil));
+
+    data.inactivityAccumulatedMs = accumulated;
+    data.inactivityCheckedAt = checkedAt;
+    data.activeUntil = activeUntil;
+
+    return {
+      data,
+      staleTime: accumulated,
+      isActive: checkedAt < activeUntil || [...snapshot.values()].some(message =>
+        !message.author?.bot && message.createdTimestamp > checkedAt
+      ),
+    };
+  }
+
   async function startInactivityMonitor() {
+    if (inactivityMonitorStarted) return;
+    inactivityMonitorStarted = true;
+
     setInterval(
       async () => {
+        if (inactivityMonitorRunning) return;
+        inactivityMonitorRunning = true;
+        let state;
+
+        try {
         const now =
           Date.now();
 
-        const state =
+        state =
           loadInactivityState();
 
         const targetCats = [
@@ -414,44 +524,44 @@ if (
                 ?.createdTimestamp ||
               channel.createdTimestamp;
 
-            const staleTime =
-              Math.max(
-                0,
-                now -
-                  lastActivity
+            let clock;
+
+            try {
+              clock = await updateAccumulatedInactivity(
+                channel,
+                messages,
+                state[channel.id] || {
+                  lastReminderIndex: 0,
+                  lastReminderId: null,
+                  firstSeenAt: now,
+                },
+                now
               );
+            } catch (error) {
+              console.error(
+                '[TICKET SLA] Falha ao calcular inatividade:',
+                channel.id,
+                error
+              );
+              continue;
+            }
 
-            const alertThreshold =
-              waitingState.waitingOn ===
-              'equipe'
-                ? TEAM_SILENCE_ALERT_MS
-                : CITIZEN_SILENCE_ALERT_MS;
+            const { data: tData, staleTime, isActive } = clock;
 
-            const tData =
-              state[channel.id] ||
-              {
-                lastReminderIndex:
-                  0,
-                lastReminderId:
-                  null,
-                waitingOn:
-                  waitingState.waitingOn,
-                firstSeenAt:
-                  now,
-              };
+            const alertThreshold = waitingState.waitingOn === 'equipe'
+              ? TEAM_SILENCE_ALERT_MS
+              : CITIZEN_SILENCE_ALERT_MS;
 
-            tData.waitingOn =
-              waitingState.waitingOn;
+            tData.waitingOn = waitingState.waitingOn;
+            tData.lastActivity = lastActivity;
+            tData.lastCheck = tData.inactivityCheckedAt;
 
-            tData.lastActivity =
-              lastActivity;
-
-            tData.lastCheck =
-              now;
+            state[channel.id] = tData;
 
             if (
-              staleTime >=
-              alertThreshold
+              !isActive &&
+              staleTime >= alertThreshold &&
+              staleTime < TICKET_AUTO_CLOSE_MS
             ) {
               const reminderIndex =
                 Math.floor(
@@ -508,6 +618,20 @@ if (
                     ? `\n\nCC: ${participants.join(' ')}`
                     : '';
 
+                const remainingMinutes = Math.max(
+                  0,
+                  Math.ceil((TICKET_AUTO_CLOSE_MS - staleTime) / (60 * 1000))
+                );
+
+                const remainingText =
+                  `${Math.floor(remainingMinutes / 60)}h ${remainingMinutes % 60}min`;
+
+                const inactivityNotice =
+                  `⏳ O ticket será fechado automaticamente ao completar **12 horas de inatividade acumulada**.\n` +
+                  `Restam **${remainingText}** de inatividade.\n` +
+                  `Mensagens da equipe ou do solicitante pausam a contagem, sem zerar o tempo já acumulado. ` +
+                  `Após **10 minutos sem mensagem humana**, a contagem continua de onde parou.`;
+
                 let reminderText;
 
                 if (
@@ -518,10 +642,10 @@ if (
                   reminderText =
                     `🚨 **ALERTA DE ATENDIMENTO**\n\n` +
                     `<@${openerId}> está aguardando retorno da equipe neste ticket.\n\n` +
-                    `⏱️ Tempo sem resposta humana após a última interação: ` +
+                    `⏱️ Inatividade acumulada neste ticket: ` +
                     `**${Math.floor(staleTime / (60 * 60 * 1000))}h**.\n\n` +
                     `A ausência de resposta da equipe será registrada na avaliação operacional do ticket e poderá impactar o NPS.\n\n` +
-                    `⏳ O ticket será fechado automaticamente ao completar **3 dias de inatividade**.${cc}`;
+                    `${inactivityNotice}${cc}`;
                 } else if (
                   waitingState
                     .waitingOn ===
@@ -530,13 +654,13 @@ if (
                   reminderText =
                     `⚠️ Olá <@${openerId}>! A equipe respondeu e está aguardando seu retorno.\n\n` +
                     `Se ainda precisar de ajuda, responda neste ticket. Caso não haja mais necessidade, o atendimento pode ser concluído.\n\n` +
-                    `⏳ O ticket será fechado automaticamente ao completar **3 dias de inatividade**.${cc}`;
+                    `${inactivityNotice}${cc}`;
                 } else {
                   reminderText =
-                    `⚠️ Este ticket está sem interação humana há ` +
+                    `⚠️ Este ticket acumulou inatividade por ` +
                     `**${Math.floor(staleTime / (60 * 60 * 1000))}h**.\n\n` +
                     `Por favor, atualizem o andamento ou concluam o atendimento.\n\n` +
-                    `⏳ O fechamento automático ocorre após **3 dias de inatividade**.${cc}`;
+                    `${inactivityNotice}${cc}`;
                 }
 
                 const reminder =
@@ -564,18 +688,30 @@ if (
               tData;
 
             if (
-              staleTime >=
-              TICKET_AUTO_CLOSE_MS
+              !isActive &&
+              staleTime >= TICKET_AUTO_CLOSE_MS
             ) {
+              // Confere se houve nova conversa durante esta verificação.
+              const freshMessages = await channel.messages.fetch({ limit: 100 })
+                .catch(() => null);
+
+              if (!freshMessages) continue;
+
+              const hasNewHumanMessage = [...freshMessages.values()].some(message =>
+                !message.author?.bot &&
+                message.createdTimestamp > tData.inactivityCheckedAt
+              );
+
+              if (hasNewHumanMessage) continue;
+
               const automaticConclusion =
                 waitingState.waitingOn ===
                 'equipe'
-                  ? 'Ticket fechado automaticamente após 3 dias de inatividade enquanto o cidadão aguardava retorno da equipe.'
+                  ? 'Ticket fechado automaticamente após 12 horas de inatividade acumulada enquanto o cidadão aguardava retorno da equipe.'
                   : waitingState.waitingOn ===
                     'cidadao'
-                    ? 'Ticket fechado automaticamente após 3 dias de inatividade enquanto a equipe aguardava retorno do cidadão.'
-                    : 'Ticket fechado automaticamente após 3 dias de inatividade.';
-
+                    ? 'Ticket fechado automaticamente após 12 horas de inatividade acumulada enquanto a equipe aguardava retorno do cidadão.'
+                    : 'Ticket fechado automaticamente após 12 horas de inatividade acumulada.';
               await finalizarTicketComConclusao(
                 null,
                 automaticConclusion,
@@ -598,11 +734,17 @@ if (
           }
         }
 
-        saveInactivityState(
-          state
-        );
+        } catch (error) {
+          console.error('[TICKET SLA] Erro na verificação de inatividade:', error);
+        } finally {
+          try {
+            if (state) saveInactivityState(state);
+          } finally {
+            inactivityMonitorRunning = false;
+          }
+        }
       },
-      10 * 60 * 1000
+      60 * 1000
     );
   }
   // ── 🔒 Trava anti double-click / concorrência ─────────────────────
@@ -953,7 +1095,7 @@ if (
 // por inatividade.
 //
 // Isso significa:
-// - não fecham com 3 dias sem mensagem;
+// - não fecham com 12 horas de inatividade acumulada;
 // - não recebem aviso dizendo que fecharão por inatividade;
 // - continuam podendo ser fechadas manualmente.
 //
