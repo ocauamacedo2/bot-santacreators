@@ -121,6 +121,9 @@ const MENU_GIF =
 
 // ── 🔒 evita processar a mesma interação 2x ─────────────────────
 const VIP_HANDLED_INTERACTIONS = new Set();
+const VIP_CLIENTS_COM_PROTECAO_DE_EDICAO = new WeakSet();
+const VIP_CORRECOES_EM_ANDAMENTO = new Set();
+
 function VIP_hasHandled(i) {
   try {
     if (!i?.id) return false;
@@ -984,7 +987,10 @@ async function VIP_corrigirRegistroVipMensagem(msg, client) {
   }
 
   const embed = EmbedBuilder.from(msg.embeds[0]);
-  const antes = String(embed.data.description || "");
+  const estadoAntes = JSON.stringify({
+    description: embed.data.description || "",
+    fields: embed.data.fields || [],
+  });
 
   const analiseFinal = VIP_reanalisarEmbedVip(embed);
 
@@ -1042,19 +1048,76 @@ async function VIP_corrigirRegistroVipMensagem(msg, client) {
     analiseFinal.premiacaoFinal = premiacaoFonte;
   }
 
-  const depois = String(embed.data.description || "");
+  const estadoDepois = JSON.stringify({
+    description: embed.data.description || "",
+    fields: embed.data.fields || [],
+  });
 
-  await msg.edit({
-    embeds: [embed],
-    components: msg.components,
-  }).catch(() => null);
+  const precisaCorrigir = estadoAntes !== estadoDepois;
+
+  if (precisaCorrigir) {
+    await msg.edit({
+      embeds: [embed],
+      components: msg.components,
+    }).catch(() => null);
+  }
 
   return {
     ok: true,
-    corrigido: antes !== depois || Boolean(pagamentoResolvido?.ok),
+    corrigido: precisaCorrigir,
     tipoFinal: analiseFinal.tipoFinal,
     vinculado: Boolean(pagamentoResolvido?.ok),
   };
+}
+
+function VIP_instalarProtecaoContraEdicaoIncorreta(client) {
+  if (!client || VIP_CLIENTS_COM_PROTECAO_DE_EDICAO.has(client)) return;
+
+  VIP_CLIENTS_COM_PROTECAO_DE_EDICAO.add(client);
+
+  client.on("messageUpdate", async (_mensagemAntiga, mensagemNova) => {
+    try {
+      if (!mensagemNova || mensagemNova.channelId !== VIP_MENU_CHANNEL_ID) return;
+
+      const msg = mensagemNova.partial
+        ? await mensagemNova.fetch().catch(() => null)
+        : mensagemNova;
+
+      if (!msg?.embeds?.[0]) return;
+
+      const titulo = String(msg.embeds[0]?.title || "");
+      if (titulo !== "💎 Registro de VIP por Evento") return;
+      if (VIP_CORRECOES_EM_ANDAMENTO.has(msg.id)) return;
+
+      VIP_CORRECOES_EM_ANDAMENTO.add(msg.id);
+
+      await VIP_corrigirRegistroVipMensagem(msg, client).catch((erro) => {
+        console.error("[vipEvento] Erro ao proteger tipo da premiação após edição:", erro);
+      });
+
+      setTimeout(() => VIP_CORRECOES_EM_ANDAMENTO.delete(msg.id), 2_000);
+    } catch (erro) {
+      if (mensagemNova?.id) VIP_CORRECOES_EM_ANDAMENTO.delete(mensagemNova.id);
+      console.error("[vipEvento] Erro na proteção de edição do registro:", erro);
+    }
+  });
+}
+
+async function VIP_corrigirRegistrosRecentesAoIniciar(client) {
+  const canal = await client.channels.fetch(VIP_MENU_CHANNEL_ID).catch(() => null);
+  if (!canal?.isTextBased()) return;
+
+  const mensagens = await canal.messages.fetch({ limit: 100 }).catch(() => null);
+  if (!mensagens) return;
+
+  for (const msg of mensagens.values()) {
+    if (!msg?.embeds?.[0]) continue;
+    if (String(msg.embeds[0]?.title || "") !== "💎 Registro de VIP por Evento") continue;
+
+    await VIP_corrigirRegistroVipMensagem(msg, client).catch((erro) => {
+      console.error(`[vipEvento] Erro ao revisar registro ${msg.id} na inicialização:`, erro);
+    });
+  }
 }
 
 function VIP_extractEmbedFields(embedLike) {
@@ -1267,6 +1330,9 @@ movidos++;
 // =====================================================
 
 export async function vipEventoOnReady(client) {
+  VIP_instalarProtecaoContraEdicaoIncorreta(client);
+  await VIP_corrigirRegistrosRecentesAoIniciar(client);
+
   for (const g of client.guilds.cache.values()) {
     await VIP_ensureFreshMenu(g, client);
   }
