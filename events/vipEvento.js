@@ -123,6 +123,7 @@ const MENU_GIF =
 const VIP_HANDLED_INTERACTIONS = new Set();
 const VIP_CLIENTS_COM_PROTECAO_DE_EDICAO = new WeakSet();
 const VIP_CORRECOES_EM_ANDAMENTO = new Set();
+const VIP_PRESERVAR_PREMIACAO_ORIGINAL = true;
 
 function VIP_hasHandled(i) {
   try {
@@ -717,7 +718,7 @@ function VIP_normalizarTipoPremiacao(texto) {
 
   if (pareceDinheiro) return "Dinheiro";
 
-  return "Dinheiro";
+  return "Não identificado";
 }
 
 function VIP_formatTipoBonito(tipo) {
@@ -983,6 +984,21 @@ async function VIP_corrigirRegistroVipMensagem(msg, client) {
       ok: false,
       corrigido: false,
       motivo: "Mensagem sem embed.",
+    };
+  }
+
+  if (VIP_PRESERVAR_PREMIACAO_ORIGINAL) {
+    const original = msg.embeds[0];
+    const descricao = String(original.description || original.data?.description || "");
+    const tipo = descricao.match(/Tipo Identificado:\*\*\s*`([^`]+)`/i)?.[1];
+
+    return {
+      ok: true,
+      corrigido: false,
+      tipoFinal: tipo || "Não identificado",
+      premiacaoFinal: VIP_getFieldValue(original, "🎁 Premiação"),
+      vinculado: false,
+      motivo: "Registro original preservado; sem reescrita automática.",
     };
   }
 
@@ -1309,16 +1325,13 @@ emb.setDescription(
   `${descSemFiltro}\n\n**Filtro automático:** \`${analiseFinal.tipoFinal}\``
 );
 
-const nova = await channel.send({ embeds: [emb] });
-
 const comps = ehReprovado
   ? VIP_buildRegistroButtons(true, false, true)
   : ehPago
   ? VIP_buildRegistroButtons(true, true, false)
   : VIP_buildRegistroButtons(false, false, false);
 
-await nova.edit({ components: comps }).catch(() => {});
-await msg.delete().catch(() => {});
+await msg.edit({ embeds: [emb], components: comps });
 movidos++;
   }
 
@@ -1330,8 +1343,10 @@ movidos++;
 // =====================================================
 
 export async function vipEventoOnReady(client) {
-  VIP_instalarProtecaoContraEdicaoIncorreta(client);
-  await VIP_corrigirRegistrosRecentesAoIniciar(client);
+  if (!VIP_PRESERVAR_PREMIACAO_ORIGINAL) {
+    VIP_instalarProtecaoContraEdicaoIncorreta(client);
+    await VIP_corrigirRegistrosRecentesAoIniciar(client);
+  }
 
   for (const g of client.guilds.cache.values()) {
     await VIP_ensureFreshMenu(g, client);
@@ -1572,8 +1587,11 @@ const ganhadorFlex = VIP_parseGanhadorFlex(ganhadorInput, org);
 let ganhadorId = ganhadorFlex.id;
 let ganhadorNome = ganhadorFlex.nome || org || "Não identificado";
 
-const pagamentoResolvido = await VIP_resolverPagamentoLink(client, premiacao);
-const premiacaoPrincipal = VIP_pegarTextoPrincipalPremiacao(premiacao);
+const pagamentoResolvido = VIP_PRESERVAR_PREMIACAO_ORIGINAL
+  ? null
+  : await VIP_resolverPagamentoLink(client, premiacao);
+
+const premiacaoPrincipal = VIP_limparTextoAnalise(premiacao);
 let tipo = VIP_normalizarTipoPremiacao(premiacaoPrincipal || premiacao);
 let pagamentoLink = null;
 

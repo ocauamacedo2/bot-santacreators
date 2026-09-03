@@ -50,6 +50,8 @@ const QUIZ_PAYMENT_BRIDGE_STATE_FILE = path.join(
 
 // Canal onde o sistema vipEvento.js posta os registros de VIP por evento
 const CANAL_VIP_EVENTO = "1414718336826081330";
+const PAGAMENTO_PRESERVAR_DADOS_ORIGINAIS_VIP = true;
+const PAGAMENTO_VIP_EM_ANDAMENTO = new Set();
 
 // Cidades / CDDs usadas para filtro dos pagamentos
 const CIDADES_PAGAMENTO = {
@@ -3901,21 +3903,77 @@ async function buscarVipEventoPorDados(client, dados = {}) {
 }
 
 async function resolverVipEventoProfissional(client, texto, dados = {}) {
-  const porLink = await resolverVipEventoPorLink(client, texto).catch((err) => ({
+  const urls = [...new Set(
+    String(texto || "").match(
+      /https?:\/\/(?:canary\.|ptb\.)?discord(?:app)?\.com\/channels\/\d{10,25}\/\d{10,25}\/\d{10,25}/gi
+    ) || []
+  )];
+
+  if (urls.length !== 1) {
+    return {
+      ok: false,
+      erro: "Informe um único link exato do Registro VIP. Não vinculo por ID, nome ou horário.",
+    };
+  }
+
+  const link = extrairLinkMensagemDiscord(urls[0]);
+
+  if (!link || link.channelId !== CANAL_VIP_EVENTO) {
+    return {
+      ok: false,
+      erro: "O link não pertence ao canal de registros VIP.",
+    };
+  }
+
+  const resultado = await resolverVipEventoPorLink(client, urls[0]).catch((erro) => ({
     ok: false,
-    erro: err?.message || String(err),
+    erro: erro?.message || String(erro),
   }));
 
-  if (porLink?.ok) return porLink;
+  if (!resultado?.ok) return resultado;
 
-  const porBusca = await buscarVipEventoPorDados(client, dados).catch((err) => ({
-    ok: false,
-    erro: err?.message || String(err),
-  }));
+  if (
+    resultado.message?.author?.id !== client.user?.id ||
+    resultado.message?.guildId !== link.guildId
+  ) {
+    return {
+      ok: false,
+      erro: "O registro não pertence a este bot ou servidor.",
+    };
+  }
 
-  if (porBusca?.ok) return porBusca;
+  const info = resultado.info || {};
 
-  return porLink || porBusca || null;
+  const idPagamento = String(dados.ganhadorId || "").replace(/\D/g, "");
+  const idVip = String(info.ganhadorId || "").replace(/\D/g, "");
+
+  if (!idPagamento || !idVip || idPagamento !== idVip) {
+    return {
+      ok: false,
+      erro: "O ID do beneficiado não corresponde ao Registro VIP.",
+    };
+  }
+
+  for (const [recebido, registrado, nome] of [
+    [dados.eventoNome, info.evento, "evento"],
+    [dados.eventoData, info.data, "data"],
+    [dados.cidade, info.cidade, "cidade"],
+  ]) {
+    if (
+      recebido &&
+      normalizarBuscaVip(recebido) !== normalizarBuscaVip(registrado)
+    ) {
+      return {
+        ok: false,
+        erro: "O campo " + nome + " diverge do Registro VIP. Confira o link.",
+      };
+    }
+  }
+
+  return {
+    ...resultado,
+    vinculoExplicito: true,
+  };
 }
 
 function extrairRegistranteVipEvento(embedLike) {
@@ -3949,6 +4007,54 @@ async function enviarDmPagamentoSocialVip(client, userId, content) {
 }
 
 async function marcarVipEventoComoPagoPorPagamentoSocial(client, vipEventoResolvido, interaction, descricao = PADRAO_INDEFINIDO) {
+  const id = vipEventoResolvido?.message?.id;
+
+  if (
+    !vipEventoResolvido?.ok ||
+    !vipEventoResolvido.vinculoExplicito ||
+    !id
+  ) {
+    return {
+      ok: false,
+      motivo: "Pagamento registrado; falta um vínculo VIP explícito e validado.",
+    };
+  }
+
+  if (PAGAMENTO_VIP_EM_ANDAMENTO.has(id)) {
+    return {
+      ok: false,
+      motivo: "Este Registro VIP já está sendo atualizado. Aguarde e confira o status.",
+    };
+  }
+
+  PAGAMENTO_VIP_EM_ANDAMENTO.add(id);
+
+  try {
+    const atual = await vipEventoResolvido.message.channel.messages.fetch({
+      message: id,
+      force: true,
+    });
+
+    return await marcarVipEventoComoPagoPorPagamentoSocialInterno(
+      client,
+      {
+        ...vipEventoResolvido,
+        message: atual,
+      },
+      interaction,
+      descricao
+    );
+  } catch (erro) {
+    return {
+      ok: false,
+      motivo: erro?.message || String(erro),
+    };
+  } finally {
+    PAGAMENTO_VIP_EM_ANDAMENTO.delete(id);
+  }
+}
+
+async function marcarVipEventoComoPagoPorPagamentoSocialInterno(client, vipEventoResolvido, interaction, descricao = PADRAO_INDEFINIDO) {
   if (!vipEventoResolvido?.ok || !vipEventoResolvido?.message?.embeds?.[0]) {
     return {
       ok: false,
@@ -4002,7 +4108,7 @@ async function marcarVipEventoComoPagoPorPagamentoSocial(client, vipEventoResolv
   await msgVip.edit({
     embeds: [embedVip],
     components: [],
-  }).catch(() => null);
+  });
 
   const registranteId = extrairRegistranteVipEvento(embedVip);
   const ganhadorId = extrairIdGanhadorVipEvento(embedVip);
@@ -4061,6 +4167,14 @@ function validarMesmoEventoOuDataParaAtualizarVip(vipInfo = {}, dadosPagamento =
 }
 
 async function atualizarNomeGanhadorNoVipEvento(client, vipEventoResolvido, dadosPagamento = {}) {
+  if (PAGAMENTO_PRESERVAR_DADOS_ORIGINAIS_VIP) {
+    return {
+      ok: true,
+      alterou: false,
+      motivo: "Dados originais do VIP preservados. O pagamento tem classificação própria.",
+    };
+  }
+
   if (!vipEventoResolvido?.ok || !vipEventoResolvido?.message?.embeds?.[0]) {
     return {
       ok: false,
@@ -4146,6 +4260,14 @@ if (!nomeVipEstaVazioOuGenerico(infoVip.ganhadorNome, infoVip.organizacao)) {
 }
 
 async function atualizarTipoPremiacaoNoVipEvento(client, vipEventoResolvido, categoriaPagamentoSocial, dadosPagamento = {}) {
+  if (PAGAMENTO_PRESERVAR_DADOS_ORIGINAIS_VIP) {
+    return {
+      ok: true,
+      alterou: false,
+      motivo: "Dados originais do VIP preservados. O pagamento tem classificação própria.",
+    };
+  }
+
   if (!vipEventoResolvido?.ok || !vipEventoResolvido?.message?.embeds?.[0]) {
     return {
       ok: false,
@@ -4285,6 +4407,7 @@ return {
   ganhadorId: ganhadorParts[1] || "",
   premiacao: getFieldValue(embedLike, "🔗 Premiação / Link"),
   tipo: getTipoPagamentoFromEmbed(embedLike) || "",
+  cidade: CIDADES_PAGAMENTO[getCidadeKeyFromEmbed(embedLike)]?.label || "",
   registroTimestamp: timestampEmbed,
 };
 }
