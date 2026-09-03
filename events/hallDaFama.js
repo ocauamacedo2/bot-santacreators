@@ -1312,7 +1312,9 @@ function resolveCityKeyFromName(value = "") {
     [normalizeHallKey("mete gala")]: "Metgala",
     [normalizeHallKey("metegala")]: "Metgala",
     [normalizeHallKey("metgala")]: "Metgala",
-    [normalizeHallKey("meta gala")]: "Metgala"
+    [normalizeHallKey("meta gala")]: "Metgala",
+
+    [normalizeHallKey("paquistao")]: "Paquistão"
   };
 
   function normalizeOrgDisplayName(orgName = "") {
@@ -3764,6 +3766,37 @@ function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento")
     // Ex: TOP 🥇 : | <@1420173743434498098>
     if (/<@!?\d+>/i.test(originalLine)) return null;
 
+    const lineForOrgPrize = originalLine
+      .replace(/\[([^\]\n]*)\]\(https?:\/\/[^)\s]+\)/g, "$1")
+      .replace(/\\([_~*])/g, "$1");
+
+    const orgPrizeParts = cleanHallWinnerLine(lineForOrgPrize)
+      .split(/\s*\|\s*/g)
+      .map(part => normalizeHallDisplay(part));
+
+    const orgPrizeName = orgPrizeParts[0] || "";
+    const prizeParts = orgPrizeParts.slice(1);
+    const inlinePlayerIdentity = extractWinnerIdentityFromParts([orgPrizeName]);
+
+    if (
+      orgPrizeName &&
+      !/^\d+$/.test(orgPrizeName) &&
+      !looksLikePrizeOnly(orgPrizeName) &&
+      !isInvalidWinnerName(orgPrizeName) &&
+      !inlinePlayerIdentity?.playerId &&
+      !extractOrgBetweenBraces(orgPrizeName) &&
+      !extractOrgBetweenAngles(orgPrizeName) &&
+      prizeParts.length > 0 &&
+      prizeParts.every(part => part && looksLikePrizeOnly(part))
+    ) {
+      return {
+        type: "org",
+        orgName: normalizeOrgDisplayName(orgPrizeName),
+        cityKey,
+        rawLine: originalLine
+      };
+    }
+
     const topEmojiOrgWinner = parseTopEmojiOrgWinnerLine(originalLine, cityKey);
     if (topEmojiOrgWinner) return topEmojiOrgWinner;
 
@@ -4001,6 +4034,15 @@ function isAmbiguousHallWinner(winner) {
 
     if (winner.type === "org") {
       return false;
+    }
+
+    if (
+      winner.type === "player" &&
+      !winner.playerId &&
+      !winner.orgName &&
+      !isForcedPlayerName(winner.playerName || "")
+    ) {
+      return true;
     }
 
     if (isClearTopWinnerLine(rawLine)) {
@@ -5768,6 +5810,31 @@ async function sendPlayerIdentitySimilarityReviews(client, rankings) {
     const deduped = dedupeHallWinners(parsed);
 
     if (!deduped.orgs.length && !deduped.players.length) {
+      console.warn("[HallDaFama] Hall sem vencedor identificado:", {
+        messageId: message.id,
+        jumpUrl: hallMeta.jumpUrl,
+        cityKey,
+        eventName
+      });
+
+      if (client) {
+        await sendHallScanLog(client, {
+          title: "⚠️ Hall sem vencedor identificado",
+          color: "#f1c40f",
+          description:
+            "Nenhum vencedor foi identificado neste Hall. " +
+            "Confira a linha dos vencedores no original; " +
+            "este aviso não cria uma revisão manual.",
+          phase: "Leitura dos vencedores",
+          currentHall: content,
+          currentHallUrl: hallMeta.jumpUrl,
+          currentEvent: eventName,
+          currentCity: hallMeta.cityName
+        }).catch(error => {
+          console.error("[HallDaFama] Erro ao registrar Hall sem vencedor:", error);
+        });
+      }
+
       return rankings;
     }
 
