@@ -224,24 +224,167 @@ function getTodayEventData(preferredEventKey = null) {
 }
 
 function splitText(text, maxLength = 2000) {
-  if (text.length <= maxLength) return [text];
   const chunks = [];
-  let currentChunk = "";
-  const lines = text.split("\n");
-  for (const line of lines) {
-    if (currentChunk.length + line.length + 1 <= maxLength) {
-      currentChunk += (currentChunk ? "\n" : "") + line;
-    } else {
-      if (currentChunk) chunks.push(currentChunk);
-      currentChunk = line;
-      while (currentChunk.length > maxLength) {
-          chunks.push(currentChunk.slice(0, maxLength));
-          currentChunk = currentChunk.slice(maxLength);
+  let remaining = String(text || "");
+
+  while (remaining.length > maxLength) {
+    const window = remaining.slice(0, maxLength);
+    let cut = window.lastIndexOf("\n\n");
+    if (cut >= maxLength / 2) cut += 2;
+    else {
+      cut = window.lastIndexOf("\n");
+      if (cut >= maxLength / 2) cut += 1;
+      else {
+        cut = window.lastIndexOf(" ");
+        cut = cut >= maxLength / 2 ? cut + 1 : maxLength;
       }
     }
+
+    // Não corta um emoji entre as duas unidades UTF-16.
+    const lastCode = remaining.charCodeAt(cut - 1);
+    if (lastCode >= 0xD800 && lastCode <= 0xDBFF) cut--;
+
+    chunks.push(remaining.slice(0, cut));
+    remaining = remaining.slice(cut);
   }
-  if (currentChunk) chunks.push(currentChunk);
+
+  if (remaining) chunks.push(remaining);
   return chunks;
+}
+
+const eventMessageLocks = new Set();
+const EVENT_REACTIONS = ["💜", "🔥", "🚀", "👏", "🎉", "🤩", "🤯", "🏆", "👑", "💸", "👀", "✨", "💯", "✅", "📸", "💎", "⚡", "💣", "🫡", "🤝", "👻", "💀", "👽", "👾", "🤖", "🎃", "😺"];
+
+function rememberEventMessages(messages, content) {
+  if (!messages.length) return;
+  state.eventMessageGroups ??= {};
+  state.eventMessageGroups[messages[0].id] = {
+    ids: messages.map(message => message.id),
+    content,
+  };
+  saveState(state);
+}
+
+function isEventMentionsLine(line = "") {
+  const tokens = String(line).trim().split(/\s+/);
+  if (tokens.length !== 5) return false;
+
+  const required = [
+    "@everyone",
+    "@here",
+    `<@&${ROLE_CIDADAO}>`,
+    `<@&${ROLE_LIDERES}>`,
+  ];
+
+  return required.every(token => tokens.includes(token)) &&
+    Object.values(CITIES).some(city => tokens.includes(`<@&${city.roleId}>`));
+}
+
+async function readEventMessages(channel, firstMessage) {
+  const saved = state.eventMessageGroups?.[firstMessage.id];
+  if (saved) {
+    const messages = [];
+    for (const id of saved.ids) {
+      // Falha de acesso não deve ser confundida com uma parte apagada.
+      messages.push(await channel.messages.fetch(id));
+    }
+    return { messages, content: saved.content };
+  }
+
+  // Recupera eventos antigos que este arquivo publicou em partes consecutivas.
+  const messages = [firstMessage];
+  if (!firstMessage.content.split("\n").some(isEventMentionsLine)) {
+    const fetched = await channel.messages.fetch({ after: firstMessage.id, limit: 100 });
+    const following = [...fetched.values()].sort((a, b) =>
+      BigInt(a.id) < BigInt(b.id) ? -1 : 1
+    );
+
+    for (const message of following) {
+      if (message.author.id !== firstMessage.author.id ||
+          message.components.length || message.embeds.length ||
+          !message.content ||
+          message.content.includes("# 🎉 :  **Santa Creators :") ||
+          message.createdTimestamp - firstMessage.createdTimestamp > 60000) break;
+
+      messages.push(message);
+      if (message.content.split("\n").some(isEventMentionsLine)) break;
+    }
+
+    if (!messages.at(-1).content.split("\n").some(isEventMentionsLine)) {
+      throw new Error("Não foi possível identificar todas as partes antigas do evento com segurança.");
+    }
+  }
+
+  const content = messages.map(message => message.content).join("\n");
+  rememberEventMessages(messages, content);
+  return { messages, content };
+}
+
+async function applyEventReactions(message) {
+  // O Discord aceita até 20 tipos diferentes de reação por mensagem.
+  for (const emoji of EVENT_REACTIONS) {
+    const existing = message.reactions.cache.find(reaction => reaction.emoji.name === emoji);
+    if (existing?.me) continue;
+    if (!existing && message.reactions.cache.size >= 20) break;
+    try {
+      await message.react(emoji);
+    } catch (error) {
+      console.error("[EventosDiarios] Não foi possível adicionar reação:", emoji, error.message);
+      break;
+    }
+  }
+}
+
+async function syncEventMessages(channel, fullContent, firstMessage = null) {
+  const lockKey = channel.id;
+  if (eventMessageLocks.has(lockKey)) {
+    throw new Error("Outra atualização do evento está em andamento. Aguarde e tente novamente.");
+  }
+  eventMessageLocks.add(lockKey);
+
+  try {
+    const previous = firstMessage
+      ? await readEventMessages(channel, firstMessage)
+      : { messages: [], content: "" };
+    const chunks = splitText(fullContent);
+    if (!chunks.length) throw new Error("O conteúdo do evento está vazio.");
+    const messages = [...previous.messages];
+
+    // Salva cada etapa: uma falha não perde os IDs das partes já enviadas.
+    for (let index = 0; index < chunks.length; index++) {
+      const payload = { content: chunks[index] };
+      if (firstMessage) payload.allowedMentions = { parse: [] };
+      if (messages[index]) {
+        messages[index] = await messages[index].edit(payload);
+      } else {
+        messages.push(await channel.send(payload));
+      }
+      rememberEventMessages(messages, messages.map(message => message.content).join("\n"));
+    }
+
+    while (messages.length > chunks.length) {
+      await messages.at(-1).delete();
+      messages.pop();
+      rememberEventMessages(messages, messages.map(message => message.content).join("\n"));
+    }
+
+    rememberEventMessages(messages, fullContent);
+
+    // Move somente as reações do próprio bot para o final; preserva as dos membros.
+    for (const message of messages.slice(0, -1)) {
+      for (const reaction of message.reactions.cache.values()) {
+        if (reaction.me && EVENT_REACTIONS.includes(reaction.emoji.name)) {
+          await reaction.users.remove(message.author.id).catch(error => {
+            console.error("[EventosDiarios] Erro ao mover reação:", error.message);
+          });
+        }
+      }
+    }
+    await applyEventReactions(messages.at(-1));
+    return messages;
+  } finally {
+    eventMessageLocks.delete(lockKey);
+  }
 }
 
 function getTodayPostKey() {
@@ -556,9 +699,10 @@ ${mentions}
 
 ${imageUrl}`;
 
-            // Deleta a mensagem antiga e envia a nova, dividida se necessário
-            await msg.delete().catch(() => {});
-            await channel.send({ content: newContent, split: true });
+            // Converte a mensagem existente e vincula as partes adicionais.
+            rememberEventMessages([msg], newContent);
+            await syncEventMessages(channel, newContent, msg);
+            await msg.edit({ embeds: [] });
             console.log(`[EventosDiarios] Mensagem de evento ${msg.id} convertida de embed para texto.`);
           }
         }
@@ -725,15 +869,17 @@ const modal = createEventModal(cityKey, eventData);
 
     const cityData = CITIES[cityKey];
 
-    const oldContentWithoutMentions = messageToEdit.content
+    let completeEvent;
+    try {
+      completeEvent = await readEventMessages(eventChannel, messageToEdit);
+    } catch (error) {
+      console.error("[EventosDiarios] Erro ao ler evento:", error);
+      return interaction.editReply("❌ Não consegui ler todas as partes do evento. Nenhum texto foi alterado.");
+    }
+
+    const oldContentWithoutMentions = completeEvent.content
       .split("\n")
-      .filter(line =>
-        !line.includes("@everyone") &&
-        !line.includes("@here") &&
-        !line.includes(`<@&${ROLE_CIDADAO}>`) &&
-        !line.includes(`<@&${ROLE_LIDERES}>`) &&
-        !Object.values(CITIES).some(city => line.includes(`<@&${city.roleId}>`))
-      )
+      .filter(line => !isEventMentionsLine(line))
       .join("\n")
       .trim();
 
@@ -741,11 +887,13 @@ const modal = createEventModal(cityKey, eventData);
 
     const finalContent = `${oldContentWithoutMentions}\n\n${newMentions}`;
 
-    if (finalContent.length > 2000) {
-      return interaction.editReply("❌ A mensagem ficou maior que 2000 caracteres e não pode ser salva.");
+    try {
+      await syncEventMessages(eventChannel, finalContent, messageToEdit);
+      await ensureButtonAtBottom(eventChannel, client, true);
+    } catch (error) {
+      console.error("[EventosDiarios] Erro ao editar cidade:", error);
+      return interaction.editReply("❌ Não consegui concluir a atualização. Os IDs das partes processadas foram mantidos; confira o evento antes de tentar novamente.");
     }
-
-    await messageToEdit.edit({ content: finalContent });
 
     await interaction.editReply(`✅ Cidade do último Evento Diário alterada para: **${cityData.label}**`);
     return true;
@@ -778,17 +926,24 @@ const modal = createEventModal(cityKey, eventData);
       return interaction.reply({ content: "❌ Nenhum evento recente encontrado para editar.", ephemeral: true });
     }
 
-    // Parse the content
-    const lines = lastEventMessage.content.split('\n');
+    let completeEvent;
+    try {
+      completeEvent = await readEventMessages(eventChannel, lastEventMessage);
+    } catch (error) {
+      console.error("[EventosDiarios] Erro ao ler evento:", error);
+      return interaction.reply({ content: "❌ Não consegui identificar todas as partes do evento para editar.", ephemeral: true });
+    }
+
+    // O formulário recebe o conteúdo completo de todas as mensagens.
+    const lines = completeEvent.content.split('\n');
     const titleLineIndex = lines.findIndex(l => l.startsWith('# 🎉 :'));
     if (titleLineIndex === -1) {
         return interaction.reply({ content: "❌ Formato de título do evento não encontrado.", ephemeral: true });
     }
     const title = lines[titleLineIndex].match(/# 🎉 :  \*\*Santa Creators : (.*?)\*\* 🎉/)?.[1] || '';
 
-    const imageUrlLineIndex = lines.findIndex(l => l.startsWith('https://'));
-    const mentionsLineIndex = lines.findIndex(l => l.includes('@everyone'));
-
+    const imageUrlLineIndex = lines.findLastIndex(l => /^https?:\/\/\S+$/.test(l.trim()));
+    const mentionsLineIndex = lines.findLastIndex(isEventMentionsLine);
     const imageUrl = imageUrlLineIndex > -1 ? lines[imageUrlLineIndex] : '';
 
     const descriptionStartIndex = titleLineIndex + 2;
@@ -862,9 +1017,17 @@ const modal = createEventModal(cityKey, eventData);
       return interaction.editReply("❌ A mensagem do evento original não foi encontrada. Talvez tenha sido apagada.");
     }
 
-    // Extract old mentions to preserve them
-    const oldContent = messageToEdit.content;
-    const oldMentions = oldContent.split('\n').find(l => l.includes('@everyone')) || '';
+    let completeEvent;
+    try {
+      completeEvent = await readEventMessages(eventChannel, messageToEdit);
+    } catch (error) {
+      console.error("[EventosDiarios] Erro ao ler evento:", error);
+      return interaction.editReply("❌ Não consegui ler todas as partes do evento. Nenhum texto foi alterado.");
+    }
+
+    // Preserva somente o rodapé oficial, sem confundir com as regras.
+    const oldContent = completeEvent.content;
+    const oldMentions = oldContent.split('\n').findLast(isEventMentionsLine) || '';
 
     const newMessageContent = 
 `# 🎉 :  **Santa Creators : ${newTitle}** 🎉 
@@ -875,11 +1038,13 @@ ${newImageUrl}
 
 ${oldMentions}`;
 
-    if (newMessageContent.length > 2000) {
-      return interaction.editReply("❌ O conteúdo editado é muito longo (mais de 2000 caracteres) e não pode ser salvo. Por favor, reduza a descrição.");
+    try {
+      await syncEventMessages(eventChannel, newMessageContent, messageToEdit);
+      await ensureButtonAtBottom(eventChannel, client, true);
+    } catch (error) {
+      console.error("[EventosDiarios] Erro ao editar evento:", error);
+      return interaction.editReply("❌ Não consegui concluir a atualização. Os IDs das partes processadas foram mantidos; confira o evento antes de tentar novamente.");
     }
-
-    await messageToEdit.edit({ content: newMessageContent });
 
     await interaction.editReply("✅ Evento editado com sucesso!");
     return true;
@@ -1094,11 +1259,8 @@ ${data.imageUrl}
 
 ${mentions}`;
 
-      const chunks = splitText(finalMessage);
-      let sentMsg;
-      for (const chunk of chunks) {
-          sentMsg = await eventChannel.send({ content: chunk });
-      }
+      const sentMessages = await syncEventMessages(eventChannel, finalMessage);
+      const sentMsg = sentMessages.at(-1);
 
 if (!sentMsg) {
   unlockRequestProcessing(reqId);
@@ -1153,11 +1315,7 @@ if (
   });
 }
 
-// ✅ Mais emojis
-try {
-        const emojis = ["💜", "🔥", "🚀", "👏", "🎉", "🤩", "🤯", "🏆", "👑", "💸", "👀", "✨", "💯", "✅", "📸", "💎", "⚡", "💣", "🫡", "🤝", "👻", "💀", "👽", "👾", "🤖", "🎃", "😺"];
-        for (const e of emojis) await sentMsg.react(e).catch(() => {});
-      } catch {}
+// ✅ As reações já foram aplicadas na última parte por syncEventMessages.
 
       // ✅ Aqui passa true para forçar o botão a descer
       await ensureButtonAtBottom(eventChannel, client, true);
