@@ -69,6 +69,7 @@ const MODAL_RANK_PLAYER_SEARCH = "hf_rank_player_search_modal";
 const MODAL_RANK_WL_PREFIX = "hf_rank_wl:";
 
 const HALL_REVIEW_CHANNEL_ID = "1518707314901651576";// Canal para revisão manual de Halls confusos
+const HALL_HISTORICAL_IMAGES_CHANNEL_ID = "1459982880158646496"; // Armazena cópias permanentes das imagens dos Halls humanos
   const PAYMENT_EVENTS_CHANNEL_ID = "1387922662134775818"; // Canal dos botões/registros de pagamento de evento
   const PAYMENT_CITY_REVIEW_CHANNEL_ID = "1518707314901651576"; // Canal para decidir CDD de pagamento sem cidade
   const HALL_SCAN_PROGRESS_CHANNEL_ID = "1518723758574276750"; // Painel auto-editável do progresso da varredura
@@ -651,16 +652,19 @@ function getManualPlayerCityKeySmart(playerId = "", playerName = "") {
   const BTN_EDIT_LINK_CITY_PREFIX = "hf_edit_link_city:";
 
   const BTN_SCAN_ALL = "hf_scan_all";
-  const BTN_REVIEW_AS_ORG_PREFIX = "hf_review_org_";
-  const BTN_REVIEW_AS_PLAYER_PREFIX = "hf_review_player_";
-  const BTN_REVIEW_AS_BOTH_PREFIX = "hf_review_both_";
+const BTN_HISTORICAL_RECREATE_PREFIX = "hf_hist_recreate:";
+const BTN_HISTORICAL_IGNORE_PREFIX = "hf_hist_ignore:";
+const BTN_HISTORICAL_EDIT_PREFIX = "hf_hist_edit:";
+const MODAL_HISTORICAL_PREFIX = "hf_hist_modal:";
+const BTN_REVIEW_AS_ORG_PREFIX = "hf_review_org_";
+const BTN_REVIEW_AS_PLAYER_PREFIX = "hf_review_player_";
+const BTN_REVIEW_AS_BOTH_PREFIX = "hf_review_both_";
 const BTN_REVIEW_CITY_PREFIX = "hf_review_city_";
 const BTN_PAYMENT_CITY_PREFIX = "hf_payment_city_";
 const BTN_PLAYER_IDENTITY_MERGE_PREFIX = "hf_identity_merge:";
 const BTN_PLAYER_IDENTITY_SEPARATE_PREFIX = "hf_identity_separate:";
 const BTN_REVIEW_EVENT_PREFIX = "hf_review_event_";
-  const MODAL_REVIEW_EVENT_SUBMIT = "hf_review_event_modal";
-
+const MODAL_REVIEW_EVENT_SUBMIT = "hf_review_event_modal";
   // ================= PERSISTÊNCIA =================
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = path.dirname(__filename);
@@ -741,7 +745,12 @@ return {
     await ch.send({ content: `${member}`, embeds: [embed] }).catch(() => {});
   }
 
-  let state = loadState();
+let state = loadState();
+
+state.pendingRequests ??= {};
+state.historicalHallReviews ??= {};
+state.historicalHallMigrations ??= {};
+saveState(state);
 
 const processingApprovals = new Set();
 const processingHallModalSubmits = new Set();
@@ -7218,6 +7227,817 @@ const progressBar = `${"🟩".repeat(filled)}${"⬛".repeat(20 - filled)} ${prog
     }).catch(() => {});
   }
 
+function formatHistoricalDateInput(timestamp = Date.now()) {
+  const date = new Date(Number(timestamp) || Date.now());
+
+  const parts = new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric"
+  }).formatToParts(date);
+
+  const get = type =>
+    parts.find(part => part.type === type)?.value || "";
+
+  return `${get("day")}/${get("month")}/${get("year")}`;
+}
+
+function parseHistoricalDateInput(value = "") {
+  const match = String(value)
+    .trim()
+    .match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+
+  if (!match) return null;
+
+  const day = Number(match[1]);
+  const month = Number(match[2]);
+  const year = Number(match[3]);
+
+  const timestamp = Date.parse(
+    `${String(year).padStart(4, "0")}-` +
+    `${String(month).padStart(2, "0")}-` +
+    `${String(day).padStart(2, "0")}T12:00:00-03:00`
+  );
+
+  const parsed = new Date(timestamp);
+
+  if (
+    !Number.isFinite(timestamp) ||
+    parsed.getUTCFullYear() !== year ||
+    parsed.getUTCMonth() + 1 !== month ||
+    parsed.getUTCDate() !== day
+  ) {
+    return null;
+  }
+
+  return timestamp;
+}
+
+function buildHistoricalWinnersText(rawWinners = "") {
+  const lines = String(rawWinners)
+    .split("\n")
+    .map(line => line.trim())
+    .filter(Boolean);
+
+  return lines
+    .map((line, index) => {
+      const emoji =
+        index === 0
+          ? "<:novo_emoji:1381082106469290076>"
+          : index === 1
+            ? "<:novo_emoji:1381082144981651500>"
+            : index === 2
+              ? "<:novo_emoji:1381082168142336095>"
+              : "🏅";
+
+      return `**TOP** ${emoji} ${line}`;
+    })
+    .join("\n");
+}
+
+function buildHistoricalHallModal(oldMessageId, data = {}) {
+  const modal = new ModalBuilder()
+    .setCustomId(
+      `${MODAL_HISTORICAL_PREFIX}${oldMessageId}`
+    )
+    .setTitle("Recriar Hall da Fama antigo");
+
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("hf_hist_event")
+        .setLabel("Nome completo do evento")
+        .setPlaceholder("Ex: Missão Rosa")
+        .setStyle(TextInputStyle.Short)
+        .setValue(
+          String(data.eventName || "").slice(0, 4000)
+        )
+        .setRequired(true)
+    ),
+
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("hf_hist_city")
+        .setLabel("Cidade")
+        .setPlaceholder(
+          "Nobre, Santa, Grande ou Maresia"
+        )
+        .setStyle(TextInputStyle.Short)
+        .setValue(
+          String(data.cityName || "").slice(0, 4000)
+        )
+        .setRequired(true)
+    ),
+
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("hf_hist_date")
+        .setLabel(
+          "Data original da vitória — DD/MM/AAAA"
+        )
+        .setPlaceholder("Ex: 30/08/2026")
+        .setStyle(TextInputStyle.Short)
+        .setValue(
+          String(data.victoryDate || "").slice(0, 4000)
+        )
+        .setRequired(true)
+    ),
+
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("hf_hist_winners")
+        .setLabel(
+          "Vencedores — nome, ID/ORG e prêmio"
+        )
+        .setPlaceholder(
+          "Um por linha:\n" +
+          "Espanha | ORG | 1 VIP\n" +
+          "Rodney | 123 | R$ 100 milhões"
+        )
+        .setStyle(TextInputStyle.Paragraph)
+        .setValue(
+          String(data.rawWinners || "").slice(0, 4000)
+        )
+        .setRequired(true)
+    ),
+
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId(
+          "hf_hist_new_images"
+        )
+        .setLabel(
+          "Imagens novas — links, um por linha"
+        )
+        .setPlaceholder(
+          "Opcional se as imagens antigas foram recuperadas. Cole até 4 links."
+        )
+        .setStyle(
+          TextInputStyle.Paragraph
+        )
+        .setValue(
+          String(
+            data.manualImageUrls || []
+          )
+            .split(",")
+            .join("\n")
+            .slice(0, 4000)
+        )
+        .setRequired(false)
+    )
+  );
+
+  return modal;
+}
+
+async function archiveHistoricalHallImages(
+  client,
+  hallMessage
+) {
+  const storageChannel =
+    await client.channels
+      .fetch(HALL_HISTORICAL_IMAGES_CHANNEL_ID)
+      .catch(() => null);
+
+  if (
+    !storageChannel ||
+    !storageChannel.isTextBased()
+  ) {
+    return {
+      ok: false,
+      reason:
+        "Canal de armazenamento das imagens não encontrado.",
+      messageId: null,
+      imageUrls: []
+    };
+  }
+
+  const sourceUrls = uniqueImageUrls([
+    ...getImageUrlsFromAttachments(hallMessage),
+    ...getImageUrlsFromContent(
+      getHallMessageText(hallMessage)
+    )
+  ]).slice(0, 4);
+
+  if (sourceUrls.length === 0) {
+    return {
+      ok: true,
+      reason:
+        "O Hall original não possui imagens.",
+      messageId: null,
+      imageUrls: []
+    };
+  }
+
+  const files =
+    await downloadUniqueApprovedHallImages(
+      sourceUrls
+    );
+
+  if (files.length !== sourceUrls.length) {
+    return {
+      ok: false,
+      reason:
+        `Foram recuperadas somente ` +
+        `${files.length} de ${sourceUrls.length} imagens. ` +
+        `O Hall não poderá ser apagado.`,
+      messageId: null,
+      imageUrls: []
+    };
+  }
+
+  const storageMessage =
+    await storageChannel.send({
+      content:
+        `🖼️ **Cópia protegida de Hall humano**\n` +
+        `Hall original: ${getMessageJumpUrl(hallMessage)}\n` +
+        `Mensagem: \`${hallMessage.id}\`\n` +
+        `Autor: <@${hallMessage.author.id}> ` +
+        `\`${hallMessage.author.id}\`\n` +
+        `Data original: ` +
+        `<t:${Math.floor(
+          (
+            hallMessage.createdTimestamp ||
+            Date.now()
+          ) / 1000
+        )}:F>`,
+
+      files
+    });
+
+  return {
+    ok: true,
+    reason:
+      "Imagens protegidas com sucesso.",
+    messageId:
+      storageMessage.id,
+    channelId:
+      storageMessage.channelId,
+    imageUrls:
+      uniqueImageUrls(
+        [
+          ...storageMessage.attachments.values()
+        ].map(attachment => attachment.url)
+      )
+  };
+}
+
+async function storeHistoricalReplacementImages(
+  client,
+  review,
+  imageUrls = []
+) {
+  const finalInputUrls =
+    uniqueImageUrls(
+      imageUrls
+    ).slice(0, 4);
+
+  if (
+    finalInputUrls.length === 0
+  ) {
+    return {
+      ok:
+        false,
+
+      reason:
+        "Nenhum link de imagem nova foi informado.",
+
+      messageId:
+        null,
+
+      channelId:
+        HALL_HISTORICAL_IMAGES_CHANNEL_ID,
+
+      imageUrls:
+        []
+    };
+  }
+
+  const storageChannel =
+    await client.channels
+      .fetch(
+        HALL_HISTORICAL_IMAGES_CHANNEL_ID
+      )
+      .catch(() => null);
+
+  if (
+    !storageChannel ||
+    !storageChannel.isTextBased()
+  ) {
+    return {
+      ok:
+        false,
+
+      reason:
+        "Canal de armazenamento das imagens não encontrado.",
+
+      messageId:
+        null,
+
+      channelId:
+        HALL_HISTORICAL_IMAGES_CHANNEL_ID,
+
+      imageUrls:
+        []
+    };
+  }
+
+  const files =
+    await downloadUniqueApprovedHallImages(
+      finalInputUrls
+    );
+
+  if (
+    files.length !==
+    finalInputUrls.length
+  ) {
+    return {
+      ok:
+        false,
+
+      reason:
+        `Foram baixadas somente ` +
+        `${files.length} de ` +
+        `${finalInputUrls.length} imagens novas.`,
+
+      messageId:
+        null,
+
+      channelId:
+        HALL_HISTORICAL_IMAGES_CHANNEL_ID,
+
+      imageUrls:
+        []
+    };
+  }
+
+  const storageMessage =
+    await storageChannel.send({
+      content:
+        `🖼️ **Imagens novas para recriação de Hall humano**\n` +
+        `Hall original: ${review.oldJumpUrl}\n` +
+        `Mensagem original: \`${review.oldMessageId}\`\n` +
+        `Imagens enviadas manualmente para substituir ou complementar as antigas.`,
+
+      files
+    });
+
+  const storedImageUrls =
+    uniqueImageUrls(
+      [
+        ...storageMessage
+          .attachments
+          .values()
+      ].map(
+        attachment =>
+          attachment.url
+      )
+    );
+
+  if (
+    storedImageUrls.length !==
+    finalInputUrls.length
+  ) {
+    return {
+      ok:
+        false,
+
+      reason:
+        "Nem todas as imagens novas foram armazenadas corretamente.",
+
+      messageId:
+        storageMessage.id,
+
+      channelId:
+        storageMessage.channelId,
+
+      imageUrls:
+        storedImageUrls
+    };
+  }
+
+  return {
+    ok:
+      true,
+
+    reason:
+      "Imagens novas protegidas com sucesso.",
+
+    messageId:
+      storageMessage.id,
+
+    channelId:
+      storageMessage.channelId,
+
+    imageUrls:
+      storedImageUrls
+  };
+}
+
+async function queueHistoricalHallReview(
+  client,
+  hallMessage
+) {
+  if (
+    !hallMessage ||
+    hallMessage.author?.id === client.user.id
+  ) {
+    return;
+  }
+
+  const existingMigration =
+    state.historicalHallMigrations?.[
+      hallMessage.id
+    ];
+
+  if (
+    existingMigration?.status ===
+    "completed"
+  ) {
+    return;
+  }
+
+  if (
+    existingMigration?.status ===
+    "published_pending_old_deletion"
+  ) {
+    try {
+      await hallMessage.delete();
+
+      existingMigration.status =
+        "completed";
+
+      existingMigration.deletionError =
+        null;
+
+      existingMigration.deletedAt =
+        Date.now();
+
+      if (
+        state.historicalHallReviews?.[
+          hallMessage.id
+        ]
+      ) {
+        state.historicalHallReviews[
+          hallMessage.id
+        ].status =
+          "completed";
+      }
+
+      saveState(state);
+
+      await sendHallScanLog(
+        client,
+        {
+          title:
+            "✅ Exclusão pendente concluída",
+
+          color:
+            "#2ecc71",
+
+          description:
+            `A varredura conseguiu apagar o Hall humano antigo.\n\n` +
+            `Mensagem antiga: \`${hallMessage.id}\`\n` +
+            `Hall novo: ${
+              existingMigration.newJumpUrl ||
+              "Link não registrado"
+            }\n\n` +
+            `A varredura atual continuará e reconstruirá ` +
+            `o ranking sem a mensagem antiga.`,
+
+          phase:
+            "Migração de Hall humano",
+
+          currentHallUrl:
+            existingMigration.newJumpUrl ||
+            ""
+        }
+      ).catch(() => {});
+    } catch (error) {
+      existingMigration.deletionError =
+        error?.message ||
+        String(error);
+
+      existingMigration.lastDeleteAttemptAt =
+        Date.now();
+
+      saveState(state);
+
+      await sendHallScanLog(
+        client,
+        {
+          title:
+            "⚠️ Exclusão do Hall antigo continua pendente",
+
+          color:
+            "#e67e22",
+
+          description:
+            `O Hall novo já foi publicado, mas a mensagem humana antiga ainda não pôde ser apagada.\n\n` +
+            `Mensagem antiga: \`${hallMessage.id}\`\n` +
+            `Hall antigo: ${getMessageJumpUrl(hallMessage)}\n` +
+            `Hall novo: ${
+              existingMigration.newJumpUrl ||
+              "Link não registrado"
+            }\n` +
+            `Erro: \`${error?.message || error}\``,
+
+          phase:
+            "Migração de Hall humano",
+
+          currentHallUrl:
+            getMessageJumpUrl(
+              hallMessage
+            )
+        }
+      ).catch(() => {});
+    }
+
+    return;
+  }
+
+  const existing =
+    state.historicalHallReviews?.[
+      hallMessage.id
+    ];
+
+  if (
+    existing?.status ===
+    "ignored"
+  ) {
+    existing.status =
+      "awaiting_recreation";
+
+    delete existing.ignoredBy;
+    delete existing.ignoredAt;
+
+    saveState(state);
+  } else if (
+    existing?.status &&
+    existing.status !==
+    "archive_failed"
+  ) {
+    return;
+  }
+
+  const archive =
+    await archiveHistoricalHallImages(
+      client,
+      hallMessage
+    );
+
+  const text =
+    getHallMessageText(hallMessage);
+
+  const parts =
+    extractHallParts(text);
+
+  const detectedCityKey =
+    detectHallCityKey(text);
+
+  const reviewChannel =
+    await client.channels
+      .fetch(HALL_REVIEW_CHANNEL_ID)
+      .catch(() => null);
+
+  if (
+    !reviewChannel ||
+    !reviewChannel.isTextBased()
+  ) {
+    return;
+  }
+
+  const reviewData = {
+    oldMessageId:
+      hallMessage.id,
+
+    oldChannelId:
+      hallMessage.channelId,
+
+    oldGuildId:
+      hallMessage.guildId,
+
+    oldJumpUrl:
+      getMessageJumpUrl(hallMessage),
+
+    oldAuthorId:
+      hallMessage.author.id,
+
+    originalCreatedTimestamp:
+      hallMessage.createdTimestamp ||
+      Date.now(),
+
+    originalContent:
+      text,
+
+    eventName:
+      parts.eventName || "",
+
+    cityKey:
+      detectedCityKey,
+
+    cityName:
+      CITIES[detectedCityKey]?.label || "",
+
+    victoryDate:
+      formatHistoricalDateInput(
+        hallMessage.createdTimestamp ||
+        Date.now()
+      ),
+
+    rawWinners:
+      String(parts.winnersText || "")
+        .replace(
+          /^\*\*TOP\*\*\s+\S+\s*/gim,
+          ""
+        )
+        .trim(),
+
+    archiveMessageId:
+      archive.messageId,
+
+    archiveChannelId:
+      archive.channelId ||
+      HALL_HISTORICAL_IMAGES_CHANNEL_ID,
+
+    archivedImageUrls:
+      archive.imageUrls,
+
+    archiveOk:
+      archive.ok,
+
+    status:
+      archive.ok
+        ? "awaiting_recreation"
+        : "archive_failed",
+
+    createdAt:
+      Date.now()
+  };
+
+  const embed =
+    new EmbedBuilder()
+      .setTitle(
+        archive.ok
+          ? "📜 Hall humano encontrado — recriação necessária"
+          : "⚠️ Hall humano — imagens não protegidas"
+      )
+      .setColor(
+        archive.ok
+          ? "#f1c40f"
+          : "#e74c3c"
+      )
+      .setDescription(
+        `Este Hall foi publicado por uma pessoa ` +
+        `e precisa ser recriado no formato novo.\n\n` +
+        `**Ele não será apagado antes da ` +
+        `publicação correta do substituto.**`
+      )
+      .addFields(
+        {
+          name: "Hall original",
+          value:
+            `[Abrir Hall humano](` +
+            `${reviewData.oldJumpUrl})`,
+          inline: false
+        },
+        {
+          name: "Autor original",
+          value:
+            `<@${reviewData.oldAuthorId}> ` +
+            `\`${reviewData.oldAuthorId}\``,
+          inline: true
+        },
+        {
+          name: "Data encontrada",
+          value:
+            `<t:${Math.floor(
+              reviewData.originalCreatedTimestamp /
+              1000
+            )}:F>`,
+          inline: true
+        },
+        {
+          name: "Evento detectado",
+          value:
+            reviewData.eventName ||
+            "Não identificado",
+          inline: true
+        },
+        {
+          name: "Cidade detectada",
+          value:
+            reviewData.cityName ||
+            "Não identificada",
+          inline: true
+        },
+        {
+          name: "Imagens",
+          value:
+            archive.reason,
+          inline: false
+        },
+        {
+          name: "Conteúdo original",
+          value:
+            String(
+              text || "Sem conteúdo"
+            ).slice(0, 1000),
+          inline: false
+        }
+      )
+      .setFooter({
+        text:
+          `Hall original: ${hallMessage.id}`
+      })
+      .setTimestamp();
+
+  const firstRow =
+    new ActionRowBuilder()
+      .addComponents(
+        new ButtonBuilder()
+          .setCustomId(
+            `${BTN_HISTORICAL_RECREATE_PREFIX}` +
+            `${hallMessage.id}`
+          )
+          .setLabel(
+            "♻️ Recriar no formato novo"
+          )
+          .setStyle(
+            ButtonStyle.Success
+          ),
+
+        new ButtonBuilder()
+          .setLabel(
+            "🔗 Abrir Hall antigo"
+          )
+          .setStyle(
+            ButtonStyle.Link
+          )
+          .setURL(
+            reviewData.oldJumpUrl
+          )
+      );
+
+  const components = [firstRow];
+
+  if (archive.messageId) {
+    components.push(
+      new ActionRowBuilder()
+        .addComponents(
+          new ButtonBuilder()
+            .setLabel(
+              "🖼️ Abrir imagens protegidas"
+            )
+            .setStyle(
+              ButtonStyle.Link
+            )
+            .setURL(
+              `https://discord.com/channels/` +
+              `${reviewData.oldGuildId}/` +
+              `${reviewData.archiveChannelId}/` +
+              `${archive.messageId}`
+            )
+        )
+    );
+  }
+
+  let sentReview =
+    existing?.reviewMessageId
+      ? await reviewChannel.messages
+          .fetch(
+            existing.reviewMessageId
+          )
+          .catch(() => null)
+      : null;
+
+  if (sentReview) {
+    await sentReview.edit({
+      embeds: [embed],
+      components
+    });
+  } else {
+    sentReview =
+      await reviewChannel.send({
+        embeds: [embed],
+        components
+      });
+  }
+
+  reviewData.reviewMessageId =
+    sentReview.id;
+
+  reviewData.reviewChannelId =
+    sentReview.channelId;
+
+  state.historicalHallReviews[
+    hallMessage.id
+  ] = reviewData;
+
+  saveState(state);
+}
+
 function extractWinnerNamesForApprovalMatch(text = "") {
   const winners = parseHallWinners(text, detectHallCityKey(text));
 
@@ -7863,17 +8683,102 @@ async function findApprovalImagesForHall(
       });
 
       const botHallMessages = hallMessages.filter(m => {
-        const text = getHallMessageText(m);
+  const text = getHallMessageText(m);
 
-        return (
-          m.author.id === client.user.id &&
-          text.includes("Santa Creators :") &&
-          normalizeHallName(text).includes("hall da fama")
-        );
-      });
+  return (
+    m.author.id === client.user.id &&
+    text.includes("Santa Creators :") &&
+    normalizeHallName(text).includes("hall da fama")
+  );
+});
 
-      let edited = 0;
-      let correctionProcessed = 0;
+const humanHallMessages =
+  allMessages.filter(message => {
+    if (
+      !message ||
+      message.author?.bot
+    ) {
+      return false;
+    }
+
+    const messageText =
+      getHallMessageText(message);
+
+    const hasText =
+      String(messageText || "")
+        .trim()
+        .length > 0;
+
+    const hasAttachments =
+      message.attachments?.size > 0;
+
+    const hasEmbeds =
+      message.embeds?.length > 0;
+
+    return (
+      hasText ||
+      hasAttachments ||
+      hasEmbeds
+    );
+  });
+
+for (
+  const humanHallMessage
+  of humanHallMessages.values()
+) {
+  await queueHistoricalHallReview(
+    client,
+    humanHallMessage
+  ).catch(async error => {
+    await sendHallScanLog(
+      client,
+      {
+        title:
+          "⚠️ Falha ao preparar recriação de Hall humano",
+
+        color:
+          "#e74c3c",
+
+        description:
+          `Mensagem: \`${humanHallMessage.id}\`\n` +
+          `Erro: \`${error?.message || error}\`\n\n` +
+          `O Hall original foi mantido e não será apagado.`,
+
+        phase:
+          "Migração de Hall humano",
+
+        currentHall:
+          getHallMessageText(
+            humanHallMessage
+          ),
+
+        currentHallPostedAt:
+          humanHallMessage.createdTimestamp
+            ? `<t:${Math.floor(
+                humanHallMessage.createdTimestamp /
+                1000
+              )}:F>`
+            : "Não identificado",
+
+        currentHallAuthor:
+          humanHallMessage.author
+            ? (
+                `${humanHallMessage.author.tag || humanHallMessage.author.username} ` +
+                `(\`${humanHallMessage.author.id}\`)`
+              )
+            : "Não identificado",
+
+        currentHallUrl:
+          getMessageJumpUrl(
+            humanHallMessage
+          )
+      }
+    ).catch(() => {});
+  });
+}
+
+let edited = 0;
+let correctionProcessed = 0;
 
       if (showProgress) {
         await updateHallScanProgress(client, {
@@ -8322,9 +9227,29 @@ async function findApprovalImagesForHall(
         }
       }
 
-      const sortedHallMessages = hallMessages.sort((a, b) => {
-        return (a.createdTimestamp || 0) - (b.createdTimestamp || 0);
-      });
+      const sortedHallMessages =
+        hallMessages
+          .filter(message => {
+            const migration =
+              state.historicalHallMigrations?.[
+                message.id
+              ];
+
+            if (
+              migration?.status ===
+              "completed"
+            ) {
+              return false;
+            }
+
+            return true;
+          })
+          .sort((a, b) => {
+            return (
+              (a.createdTimestamp || 0) -
+              (b.createdTimestamp || 0)
+            );
+          });
 
       let processed = 0;
 
@@ -8614,20 +9539,50 @@ new ActionRowBuilder().addComponents(
     if (client.__HALL_DA_FAMA_READY_RAN__) return;
     client.__HALL_DA_FAMA_READY_RAN__ = true;
 
-    state = loadState();
-    const channel = await client.channels.fetch(HALL_CHANNEL_ID).catch(() => null);
+state = loadState();
+
+state.pendingRequests ??= {};
+state.historicalHallReviews ??= {};
+state.historicalHallMigrations ??= {};
+
+saveState(state);
+
+const channel =
+  await client.channels
+    .fetch(HALL_CHANNEL_ID)
+    .catch(() => null);
     if (channel && channel.isTextBased()) {
       await ensureButtonAtBottom(channel, client, true);
 
       await ensureHallRankingsDashboards(client);
 
-      if (shouldRunHallScanToday()) {
-        autoCorrectDuplications(channel, client, { showProgress: true })
+      if (
+        shouldRunHallScanToday() &&
+        !hallScanRunning
+      ) {
+        hallScanRunning =
+          true;
+
+        autoCorrectDuplications(
+          channel,
+          client,
+          {
+            showProgress:
+              true
+          }
+        )
           .then(() => {
             markHallScanDoneToday();
           })
-          .catch((e) => {
-            console.error("[HallDaFama] Erro ao rodar varredura em segundo plano:", e);
+          .catch(error => {
+            console.error(
+              "[HallDaFama] Erro ao rodar varredura em segundo plano:",
+              error
+            );
+          })
+          .finally(() => {
+            hallScanRunning =
+              false;
           });
       }
     }
@@ -9419,6 +10374,593 @@ const row = new ActionRowBuilder().addComponents(
       }).catch(() => {});
 
       await interaction.editReply("✅ Cidade aplicada no registro original. Rode a varredura novamente para contabilizar.");
+      return true;
+    }
+
+    if (
+      interaction.isButton() &&
+      (
+        interaction.customId.startsWith(
+          BTN_HISTORICAL_RECREATE_PREFIX
+        ) ||
+        interaction.customId.startsWith(
+          BTN_HISTORICAL_EDIT_PREFIX
+        )
+      )
+    ) {
+      if (
+        !hasPermission(
+          interaction.member,
+          interaction.user.id
+        )
+      ) {
+        return interaction.reply({
+          content:
+            "🚫 Sem permissão para recriar Halls antigos.",
+          ephemeral: true
+        });
+      }
+
+      const isEdit =
+        interaction.customId.startsWith(
+          BTN_HISTORICAL_EDIT_PREFIX
+        );
+
+      const oldMessageId =
+        interaction.customId.replace(
+          isEdit
+            ? BTN_HISTORICAL_EDIT_PREFIX
+            : BTN_HISTORICAL_RECREATE_PREFIX,
+          ""
+        );
+
+      const review =
+        state.historicalHallReviews?.[
+          oldMessageId
+        ];
+
+      if (!review) {
+        return interaction.reply({
+          content:
+            "⚠️ Esta solicitação não existe mais. Rode a varredura novamente.",
+          ephemeral: true
+        });
+      }
+
+      if (
+        state.historicalHallMigrations?.[
+          oldMessageId
+        ]?.status === "completed"
+      ) {
+        return interaction.reply({
+          content:
+            "✅ Este Hall já foi recriado.",
+          ephemeral: true
+        });
+      }
+
+      await interaction.showModal(
+        buildHistoricalHallModal(
+          oldMessageId,
+          review
+        )
+      );
+
+      return true;
+    }
+
+    if (
+      interaction.isButton() &&
+      interaction.customId.startsWith(
+        BTN_HISTORICAL_IGNORE_PREFIX
+      )
+    ) {
+      if (
+        !hasPermission(
+          interaction.member,
+          interaction.user.id
+        )
+      ) {
+        return interaction.reply({
+          content:
+            "🚫 Sem permissão para gerenciar Halls antigos.",
+
+          ephemeral:
+            true
+        });
+      }
+
+      const oldMessageId =
+        interaction.customId.replace(
+          BTN_HISTORICAL_IGNORE_PREFIX,
+          ""
+        );
+
+      const review =
+        state.historicalHallReviews?.[
+          oldMessageId
+        ];
+
+      if (review) {
+        review.status =
+          "awaiting_recreation";
+
+        delete review.ignoredBy;
+        delete review.ignoredAt;
+
+        saveState(state);
+      }
+
+      await interaction.reply({
+        content:
+          "⚠️ Todos os Halls humanos precisam ser recriados. Este Hall continua aguardando recriação.",
+
+        ephemeral:
+          true
+      });
+
+      return true;
+    }
+
+    if (
+      interaction.isModalSubmit() &&
+      interaction.customId.startsWith(
+        MODAL_HISTORICAL_PREFIX
+      )
+    ) {
+      await interaction.deferReply({
+        ephemeral:
+          true
+      });
+
+      const oldMessageId =
+        interaction.customId.replace(
+          MODAL_HISTORICAL_PREFIX,
+          ""
+        );
+
+      const review =
+        state.historicalHallReviews?.[
+          oldMessageId
+        ];
+
+      if (!review) {
+        return interaction.editReply(
+          "❌ Não foi possível localizar os dados desse Hall. Rode a varredura novamente."
+        );
+      }
+
+      const eventName =
+        interaction.fields
+          .getTextInputValue(
+            "hf_hist_event"
+          )
+          .trim();
+
+      const cityInput =
+        interaction.fields
+          .getTextInputValue(
+            "hf_hist_city"
+          )
+          .trim();
+
+      const victoryDate =
+        interaction.fields
+          .getTextInputValue(
+            "hf_hist_date"
+          )
+          .trim();
+
+      const rawWinners =
+        interaction.fields
+          .getTextInputValue(
+            "hf_hist_winners"
+          )
+          .trim();
+
+      const newImagesInput =
+        interaction.fields
+          .getTextInputValue(
+            "hf_hist_new_images"
+          )
+          ?.trim() || "";
+
+      const manualImageUrls =
+        uniqueImageUrls(
+          getImageUrlsFromContent(
+            newImagesInput
+          )
+        ).slice(0, 4);
+
+      const cityKey =
+        resolveCityKeyFromModalInput(
+          cityInput
+        );
+
+      const victoryTimestamp =
+        parseHistoricalDateInput(
+          victoryDate
+        );
+
+      if (
+        !cityKey ||
+        !CITIES[cityKey]
+      ) {
+        return interaction.editReply(
+          "❌ Cidade inválida. Use Nobre, Santa, Grande ou Maresia."
+        );
+      }
+
+      if (!victoryTimestamp) {
+        return interaction.editReply(
+          "❌ Data inválida. Informe exatamente no formato DD/MM/AAAA."
+        );
+      }
+
+      if (
+        !eventName ||
+        !rawWinners
+      ) {
+        return interaction.editReply(
+          "❌ Evento e vencedores são obrigatórios."
+        );
+      }
+
+      let finalHistoricalImageUrls =
+        uniqueImageUrls(
+          review.archivedImageUrls ||
+          []
+        ).slice(0, 4);
+
+      if (
+        manualImageUrls.length > 0
+      ) {
+        const manualStorage =
+          await storeHistoricalReplacementImages(
+            client,
+            review,
+            manualImageUrls
+          );
+
+        if (!manualStorage.ok) {
+          return interaction.editReply(
+            `❌ As imagens novas não foram protegidas corretamente.\n` +
+            `${manualStorage.reason}\n\n` +
+            `O Hall antigo foi mantido e não será apagado.`
+          );
+        }
+
+        review.archiveOk =
+          true;
+
+        review.archiveMessageId =
+          manualStorage.messageId;
+
+        review.archiveChannelId =
+          manualStorage.channelId;
+
+        review.archivedImageUrls =
+          manualStorage.imageUrls;
+
+        review.manualImageUrls =
+          manualImageUrls;
+
+        finalHistoricalImageUrls =
+          manualStorage.imageUrls;
+      }
+
+      if (
+        finalHistoricalImageUrls.length ===
+        0
+      ) {
+        return interaction.editReply(
+          "❌ Nenhuma imagem protegida foi encontrada. Informe pelo menos um link de imagem nova. O Hall antigo continuará intacto."
+        );
+      }
+
+      const reqId =
+        review.pendingRequestId ||
+        `${interaction.user.id}-${Date.now()}`;
+
+      const winnersText =
+        buildHistoricalWinnersText(
+          rawWinners
+        );
+
+      Object.assign(
+        review,
+        {
+          eventName,
+
+          cityKey,
+
+          cityName:
+            CITIES[cityKey].label,
+
+          victoryDate,
+
+          victoryTimestamp,
+
+          rawWinners,
+
+          manualImageUrls,
+
+          archivedImageUrls:
+            finalHistoricalImageUrls,
+
+          pendingRequestId:
+            reqId,
+
+          status:
+            "awaiting_approval",
+
+          editedBy:
+            interaction.user.id,
+
+          editedAt:
+            Date.now()
+        }
+      );
+
+      state.pendingRequests[
+        reqId
+      ] = {
+        userId:
+          interaction.user.id,
+
+        cityKey,
+
+        cityDisplayName:
+          CITIES[cityKey].label,
+
+        eventName,
+
+        winnersText,
+
+        imageUrls:
+          finalHistoricalImageUrls,
+
+        imageUrl:
+          finalHistoricalImageUrls[0] ||
+          "",
+
+        imageUrl2:
+          finalHistoricalImageUrls[1] ||
+          "",
+
+        imageUrl3:
+          finalHistoricalImageUrls[2] ||
+          "",
+
+        imageUrl4:
+          finalHistoricalImageUrls[3] ||
+          "",
+
+        createdAt:
+          Date.now(),
+
+        operationId:
+          reqId,
+
+        historicalMigration:
+          true,
+
+        historicalOldMessageId:
+          oldMessageId,
+
+        historicalOldChannelId:
+          review.oldChannelId,
+
+        historicalOldGuildId:
+          review.oldGuildId,
+
+        historicalOldJumpUrl:
+          review.oldJumpUrl,
+
+        historicalVictoryTimestamp:
+          victoryTimestamp,
+
+        historicalVictoryDate:
+          victoryDate,
+
+        historicalArchiveMessageId:
+          review.archiveMessageId,
+
+        historicalArchiveChannelId:
+          review.archiveChannelId,
+
+        historicalManualImageUrls:
+          manualImageUrls
+      };
+
+      saveState(state);
+
+      const approvalChannel =
+        await client.channels
+          .fetch(
+            APPROVAL_CHANNEL_ID
+          )
+          .catch(() => null);
+
+      if (
+        !approvalChannel ||
+        !approvalChannel.isTextBased()
+      ) {
+        return interaction.editReply(
+          "❌ Canal de aprovação não encontrado."
+        );
+      }
+
+      const embed =
+        new EmbedBuilder()
+          .setTitle(
+            "♻️ Aprovação: recriação de Hall humano"
+          )
+          .setColor("#f1c40f")
+          .setDescription(
+            `**Solicitante:** <@${interaction.user.id}>\n` +
+            `**Hall antigo:** [Abrir mensagem original](${review.oldJumpUrl})\n` +
+            `**Imagens protegidas:** [Abrir armazenamento](https://discord.com/channels/${review.oldGuildId}/${review.archiveChannelId}/${review.archiveMessageId})\n\n` +
+            `⚠️ O Hall antigo só será apagado depois da publicação completa do novo.`
+          )
+          .addFields(
+            {
+              name:
+                "Evento",
+
+              value:
+                eventName,
+
+              inline:
+                true
+            },
+            {
+              name:
+                "Cidade",
+
+              value:
+                CITIES[cityKey].label,
+
+              inline:
+                true
+            },
+            {
+              name:
+                "Data original da vitória",
+
+              value:
+                `<t:${Math.floor(
+                  victoryTimestamp /
+                  1000
+                )}:F>`,
+
+              inline:
+                false
+            },
+            {
+              name:
+                "Vencedores, IDs/ORG e premiações",
+
+              value:
+                winnersText.slice(
+                  0,
+                  1000
+                ),
+
+              inline:
+                false
+            },
+            {
+              name:
+                "Imagens protegidas",
+
+              value:
+                `${review.archivedImageUrls.length} imagem(ns) pronta(s)`,
+
+              inline:
+                true
+            },
+            {
+              name:
+                "Origem das imagens",
+
+              value:
+                manualImageUrls.length > 0
+                  ? (
+                      "Imagens novas informadas manualmente e " +
+                      "protegidas no canal de armazenamento."
+                    )
+                  : (
+                      "Imagens recuperadas do Hall humano original " +
+                      "e protegidas no canal de armazenamento."
+                    ),
+
+              inline:
+                false
+            }
+          )
+          .setFooter({
+            text:
+              `Substituição protegida • Hall ${oldMessageId}`
+          })
+          .setTimestamp();
+
+      const components = [
+        new ActionRowBuilder()
+          .addComponents(
+            new ButtonBuilder()
+              .setCustomId(
+                `${BTN_APPROVE_PREFIX}${reqId}`
+              )
+              .setLabel(
+                "✅ Aprovar, publicar e substituir"
+              )
+              .setStyle(
+                ButtonStyle.Success
+              ),
+
+            new ButtonBuilder()
+              .setCustomId(
+                `${BTN_HISTORICAL_EDIT_PREFIX}${oldMessageId}`
+              )
+              .setLabel(
+                "✏️ Editar dados"
+              )
+              .setStyle(
+                ButtonStyle.Primary
+              ),
+
+            new ButtonBuilder()
+              .setCustomId(
+                `${BTN_REJECT_PREFIX}${reqId}`
+              )
+              .setLabel(
+                "❌ Reprovar"
+              )
+              .setStyle(
+                ButtonStyle.Danger
+              )
+          )
+      ];
+
+      let approvalMessage =
+        review.approvalMessageId
+          ? await approvalChannel.messages
+              .fetch(
+                review.approvalMessageId
+              )
+              .catch(() => null)
+          : null;
+
+      if (approvalMessage) {
+        await approvalMessage.edit({
+          embeds:
+            [embed],
+
+          components
+        });
+      } else {
+        approvalMessage =
+          await approvalChannel.send({
+            content:
+              "Recriação de Hall humano pendente.",
+
+            embeds:
+              [embed],
+
+            components
+          });
+
+        review.approvalMessageId =
+          approvalMessage.id;
+
+        saveState(state);
+      }
+
+      await interaction.editReply(
+        "✅ Recriação enviada para aprovação. O Hall antigo continua intacto."
+      );
+
       return true;
     }
 
@@ -10787,24 +12329,140 @@ if (approvalImageReferences.length > 0) {
         return interaction.editReply("⚠️ Dados da solicitação expiraram.");
       }
 
-      await interaction.message.edit({ components: [] }).catch(() => {});
+      const originalApprovalComponents =
+        interaction.message.components;
 
-      const hallChannel = await client.channels.fetch(HALL_CHANNEL_ID).catch(() => null);
-      if (!hallChannel) return interaction.editReply("❌ Canal do Hall da Fama não encontrado.");
+      const restoreApprovalComponents =
+        async () => {
+          if (
+            !originalApprovalComponents ||
+            originalApprovalComponents.length ===
+            0
+          ) {
+            return;
+          }
 
-      const cityData = CITIES[data.cityKey];
-  const cityName = data.cityDisplayName || cityData.label;
-  const intro = getRandomIntro(); // Frase aleatória
-  const introLine = buildHallIntroLine(intro, data.eventName, cityName);
+          await interaction.message
+            .edit({
+              components:
+                originalApprovalComponents
+            })
+            .catch(error => {
+              console.error(
+                "[HallDaFama] Não foi possível restaurar os botões da aprovação:",
+                error
+              );
+            });
+        };
 
-  const finalImageUrls = uniqueImageUrls(
-    data.imageUrls || [
-      data.imageUrl,
-      data.imageUrl2,
-      data.imageUrl3,
-      data.imageUrl4
-    ].filter(Boolean)
-  ).slice(0, 4);
+      await interaction.message
+        .edit({
+          components:
+            []
+        })
+        .catch(() => {});
+
+      const hallChannel =
+        await client.channels
+          .fetch(HALL_CHANNEL_ID)
+          .catch(() => null);
+
+      if (!hallChannel) {
+        processingApprovals.delete(
+          reqId
+        );
+
+        await restoreApprovalComponents();
+
+        return interaction.editReply(
+          "❌ Canal do Hall da Fama não encontrado. Nenhuma mensagem antiga foi apagada. Os botões foram restaurados para uma nova tentativa."
+        );
+      }
+
+      const cityData =
+        CITIES[data.cityKey];
+
+      const cityName =
+        data.cityDisplayName ||
+        cityData.label;
+
+      const intro =
+        getRandomIntro();
+
+      const introLine =
+        buildHallIntroLine(
+          intro,
+          data.eventName,
+          cityName
+        );
+
+      let protectedHistoricalImageUrls =
+        [];
+
+      if (
+        data.historicalMigration
+      ) {
+        const historicalImagesChannel =
+          await client.channels
+            .fetch(
+              data.historicalArchiveChannelId ||
+              HALL_HISTORICAL_IMAGES_CHANNEL_ID
+            )
+            .catch(() => null);
+
+        const historicalImagesMessage =
+          historicalImagesChannel?.isTextBased()
+            ? await historicalImagesChannel.messages
+                .fetch(
+                  data.historicalArchiveMessageId
+                )
+                .catch(() => null)
+            : null;
+
+        protectedHistoricalImageUrls =
+          historicalImagesMessage
+            ? uniqueImageUrls(
+                [
+                  ...historicalImagesMessage
+                    .attachments
+                    .values()
+                ].map(
+                  attachment =>
+                    attachment.url
+                )
+              )
+            : [];
+
+        if (
+          protectedHistoricalImageUrls.length ===
+          0
+        ) {
+          processingApprovals.delete(
+            reqId
+          );
+
+          await restoreApprovalComponents();
+
+          return interaction.editReply(
+            "❌ As imagens protegidas não estão mais disponíveis. O Hall antigo foi mantido, nada foi apagado e os botões foram restaurados para edição ou nova tentativa."
+          );
+        }
+      }
+
+      const finalImageUrls =
+        uniqueImageUrls(
+          protectedHistoricalImageUrls.length >
+          0
+            ? protectedHistoricalImageUrls
+            : (
+                data.imageUrls || [
+                  data.imageUrl,
+                  data.imageUrl2,
+                  data.imageUrl3,
+                  data.imageUrl4
+                ].filter(Boolean)
+              )
+        ).slice(0, 4);
 
   const hallTopCount =
     countHallTopLines(
@@ -10837,6 +12495,12 @@ if (approvalImageReferences.length > 0) {
 
   <:12633559939374122111:1368796471297576970>  **HALL DA FAMA** <:12633559939374122111:1368796471297576970> 
 
+  ${data.historicalVictoryTimestamp
+    ? `📅 **Vitória histórica de:** <t:${Math.floor(data.historicalVictoryTimestamp / 1000)}:D>
+  🕰️ **Hall recriado no formato atual**
+`
+    : ""}
+
   ${data.winnersText}
 
   **Foi insano, mas mais uma vez os vencedores mostraram que a vitória só é possível com raça! <:__:1357520048318709840>**
@@ -10845,27 +12509,251 @@ if (approvalImageReferences.length > 0) {
 
   ${hallImageLinks}`;
 
-  const chunks = splitText(finalMessage);
+  const chunks =
+    splitText(finalMessage);
+
   let sentMsg;
 
-  for (let index = 0; index < chunks.length; index++) {
-    const isLastChunk = index === chunks.length - 1;
+  const sentHallMessages =
+    [];
 
-    const sendPayload = {
-      content: chunks[index]
-    };
+  try {
+    for (
+      let index = 0;
+      index < chunks.length;
+      index++
+    ) {
+      const isLastChunk =
+        index ===
+        chunks.length - 1;
 
-    if (isLastChunk && hallImageFiles.length > 0) {
-      sendPayload.files = hallImageFiles;
+      const sendPayload = {
+        content:
+          chunks[index]
+      };
+
+      if (
+        isLastChunk &&
+        hallImageFiles.length > 0
+      ) {
+        sendPayload.files =
+          hallImageFiles;
+      }
+
+      sentMsg =
+        await hallChannel.send(
+          sendPayload
+        );
+
+      sentHallMessages.push(
+        sentMsg
+      );
+    }
+  } catch (error) {
+    if (
+      data.historicalMigration
+    ) {
+      for (
+        const partiallySentMessage
+        of sentHallMessages.reverse()
+      ) {
+        await partiallySentMessage
+          .delete()
+          .catch(() => {});
+      }
     }
 
-    sentMsg = await hallChannel.send(sendPayload);
+    processingApprovals.delete(
+      reqId
+    );
+
+    await restoreApprovalComponents();
+
+    return interaction.editReply(
+      `❌ A publicação não foi concluída. ` +
+      `O Hall antigo foi mantido e nada foi apagado.\n` +
+      `Os botões da aprovação foram restaurados.\n` +
+      `Erro: \`${error?.message || error}\``
+    );
   }
 
-if (!sentMsg) {
-  return interaction.editReply(
-    "❌ Falha ao enviar a mensagem do Hall da Fama. O conteúdo pode estar vazio."
-  );
+  if (!sentMsg) {
+    processingApprovals.delete(
+      reqId
+    );
+
+    await restoreApprovalComponents();
+
+    return interaction.editReply(
+      "❌ Falha ao enviar a mensagem do Hall da Fama. O Hall antigo foi mantido e os botões da aprovação foram restaurados."
+    );
+  }
+
+let historicalOldHallDeleted =
+  false;
+
+let historicalDeletionError =
+  null;
+
+if (
+  data.historicalMigration
+) {
+  const oldChannel =
+    await client.channels
+      .fetch(
+        data.historicalOldChannelId
+      )
+      .catch(() => null);
+
+  const oldMessage =
+    oldChannel?.isTextBased()
+      ? await oldChannel.messages
+          .fetch(
+            data.historicalOldMessageId
+          )
+          .catch(() => null)
+      : null;
+
+  if (!oldMessage) {
+    historicalDeletionError =
+      "A mensagem antiga não foi encontrada para exclusão.";
+  } else {
+    await oldMessage
+      .delete()
+      .then(() => {
+        historicalOldHallDeleted =
+          true;
+      })
+      .catch(error => {
+        historicalDeletionError =
+          error?.message ||
+          String(error);
+      });
+  }
+
+  state.historicalHallMigrations ??=
+    {};
+
+  state.historicalHallMigrations[
+    data.historicalOldMessageId
+  ] = {
+    status:
+      historicalOldHallDeleted
+        ? "completed"
+        : "published_pending_old_deletion",
+
+    oldMessageId:
+      data.historicalOldMessageId,
+
+    oldChannelId:
+      data.historicalOldChannelId,
+
+    oldJumpUrl:
+      data.historicalOldJumpUrl,
+
+    newMessageId:
+      sentMsg.id,
+
+    newChannelId:
+      sentMsg.channelId,
+
+    newJumpUrl:
+      getMessageJumpUrl(
+        sentMsg
+      ),
+
+    archiveMessageId:
+      data.historicalArchiveMessageId,
+
+    archiveChannelId:
+      data.historicalArchiveChannelId,
+
+    victoryTimestamp:
+      data.historicalVictoryTimestamp,
+
+    approvedBy:
+      interaction.user.id,
+
+    completedAt:
+      Date.now(),
+
+    deletionError:
+      historicalDeletionError
+  };
+
+  if (
+    state.historicalHallReviews?.[
+      data.historicalOldMessageId
+    ]
+  ) {
+    state.historicalHallReviews[
+      data.historicalOldMessageId
+    ].status =
+      historicalOldHallDeleted
+        ? "completed"
+        : "published_pending_old_deletion";
+
+    state.historicalHallReviews[
+      data.historicalOldMessageId
+    ].newMessageId =
+      sentMsg.id;
+
+    state.historicalHallReviews[
+      data.historicalOldMessageId
+    ].newJumpUrl =
+      getMessageJumpUrl(
+        sentMsg
+      );
+  }
+
+  saveState(state);
+
+  await sendHallScanLog(
+    client,
+    {
+      title:
+        historicalOldHallDeleted
+          ? "✅ Hall humano substituído com segurança"
+          : "⚠️ Hall novo publicado, mas o antigo não foi apagado",
+
+      color:
+        historicalOldHallDeleted
+          ? "#2ecc71"
+          : "#e67e22",
+
+      description:
+        `Hall antigo: ${data.historicalOldJumpUrl}\n` +
+        `Hall novo: ${getMessageJumpUrl(sentMsg)}\n` +
+        `Imagens protegidas: ` +
+        `https://discord.com/channels/` +
+        `${data.historicalOldGuildId}/` +
+        `${data.historicalArchiveChannelId}/` +
+        `${data.historicalArchiveMessageId}\n` +
+        `Data histórica: ` +
+        `<t:${Math.floor(
+          data.historicalVictoryTimestamp /
+          1000
+        )}:F>\n` +
+        `Exclusão do antigo: **${
+          historicalOldHallDeleted
+            ? "concluída"
+            : "pendente"
+        }**` +
+        (
+          historicalDeletionError
+            ? `\nErro: \`${historicalDeletionError}\``
+            : ""
+        ),
+
+      phase:
+        "Migração de Hall humano",
+
+      currentHallUrl:
+        getMessageJumpUrl(
+          sentMsg
+        )
+    }
+  ).catch(() => {});
 }
 
 const hallPostedAt =
@@ -10899,12 +12787,72 @@ try {
       await ensureButtonAtBottom(hallChannel, client, true);
 
       try {
-        const rankings = loadHallRankings();
-        await addHallToRankings(rankings, sentMsg, client);
-        saveHallRankings(rankings);
-        await publishHallRankings(client, rankings);
+        if (
+          data.historicalMigration &&
+          historicalOldHallDeleted
+        ) {
+          await autoCorrectDuplications(
+            hallChannel,
+            client,
+            {
+              showProgress:
+                false
+            }
+          );
+        } else if (
+          data.historicalMigration &&
+          !historicalOldHallDeleted
+        ) {
+          await sendHallScanLog(
+            client,
+            {
+              title:
+                "⏳ Ranking mantido até excluir o Hall antigo",
+
+              color:
+                "#f1c40f",
+
+              description:
+                `O Hall novo foi publicado, mas o Hall humano antigo ` +
+                `ainda não foi apagado.\n\n` +
+                `Para evitar uma vitória duplicada, o ranking não será ` +
+                `reconstruído até a exclusão do Hall antigo ser concluída.\n\n` +
+                `Hall antigo: ${data.historicalOldJumpUrl}\n` +
+                `Hall novo: ${getMessageJumpUrl(sentMsg)}`,
+
+              phase:
+                "Proteção contra ranking duplicado",
+
+              currentHallUrl:
+                getMessageJumpUrl(
+                  sentMsg
+                )
+            }
+          ).catch(() => {});
+        } else {
+          const rankings =
+            loadHallRankings();
+
+          await addHallToRankings(
+            rankings,
+            sentMsg,
+            client
+          );
+
+          saveHallRankings(
+            rankings
+          );
+
+          await publishHallRankings(
+            client,
+            rankings
+          );
+        }
       } catch (e) {
-        console.error("[HallDaFama] Erro ao atualizar ranking após aprovação:", e);
+        console.error(
+          "[HallDaFama] Erro ao atualizar ranking após aprovação:",
+          e
+        );
       }
 
 dashEmit(
@@ -11007,7 +12955,15 @@ dashEmit(
   delete state.pendingRequests[reqId];
   saveState(state);
   processingApprovals.delete(reqId);
-  await interaction.editReply("✅ Hall da Fama postado e pontos computados!");
+  await interaction.editReply(
+    data.historicalMigration
+      ? (
+          historicalOldHallDeleted
+            ? "✅ Hall histórico recriado, imagens preservadas, Hall antigo apagado e ranking recalculado!"
+            : "⚠️ O Hall novo foi publicado e as imagens foram preservadas, mas o Hall antigo não pôde ser apagado. Consulte o log antes de tentar novamente."
+        )
+      : "✅ Hall da Fama postado e pontos computados!"
+  );
   return true;
     }
 
@@ -11105,6 +13061,34 @@ if (
     decidedAt:
       rejectedAt,
   });
+
+  if (
+    rejectedData.historicalMigration &&
+    rejectedData.historicalOldMessageId &&
+    state.historicalHallReviews?.[
+      rejectedData.historicalOldMessageId
+    ]
+  ) {
+    const historicalReview =
+      state.historicalHallReviews[
+        rejectedData.historicalOldMessageId
+      ];
+
+    historicalReview.status =
+      "rejected";
+
+    historicalReview.pendingRequestId =
+      null;
+
+    historicalReview.approvalMessageId =
+      null;
+
+    historicalReview.rejectedBy =
+      interaction.user.id;
+
+    historicalReview.rejectedAt =
+      rejectedAt;
+  }
 }
 
 delete state.pendingRequests[
