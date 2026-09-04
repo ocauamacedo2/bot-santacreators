@@ -1312,7 +1312,17 @@ function resolveCityKeyFromName(value = "") {
     [normalizeHallKey("mete gala")]: "Metgala",
     [normalizeHallKey("metegala")]: "Metgala",
     [normalizeHallKey("metgala")]: "Metgala",
-    [normalizeHallKey("meta gala")]: "Metgala"
+    [normalizeHallKey("meta gala")]: "Metgala",
+
+    [normalizeHallKey("paquistao")]: "Paquistão",
+
+    [normalizeHallKey("groov")]: "Groove",
+    [normalizeHallKey("grove")]: "Groove",
+    [normalizeHallKey("groove")]: "Groove",
+
+    [normalizeHallKey("legiao belica")]: "Legião Bélica",
+    [normalizeHallKey("legião bélica")]: "Legião Bélica",
+    [normalizeHallKey("maldivas")]: "Maldivas"
   };
 
   function normalizeOrgDisplayName(orgName = "") {
@@ -3411,6 +3421,7 @@ function cleanRankingPlayerName(value = "") {
       const startsAsWinner =
         /^TOP\b/i.test(rawClean) ||
         /^#?\s*TOP\b/i.test(rawClean) ||
+        /^(?:🥇|🥈|🥉)?\s*\d+\s*[º°ª]?\s*LUGAR\b/i.test(rawClean) ||
         /^Organiza[cç][aã]o\b/i.test(rawClean) ||
         /^Vencedores?\s*[:\-]/i.test(rawClean) ||
         /^Vencedores?\s+[A-Za-zÀ-ÿ0-9]/i.test(rawClean);
@@ -3517,6 +3528,8 @@ function cleanRankingPlayerName(value = "") {
       /\brole\s*pass\b/i.test(normalized) ||
       /\bmilhao\b/i.test(normalized) ||
       /\bmilhoes\b/i.test(normalized) ||
+      /\b\d+\s*kk\b/i.test(normalized) ||
+      /\b\d+\s*k\b/i.test(normalized) ||
       /\bkk\b/i.test(normalized) ||
       /\bk\b/i.test(normalized) ||
       /\b50k\b/i.test(normalized) ||
@@ -3704,6 +3717,111 @@ function extractWinnerIdentityFromParts(parts = []) {
   };
 }
 
+function parsePlayerOrgPrizeWinnerLine(line = "", cityKey = "nobre") {
+  const cleanedLine = cleanHallWinnerLine(line);
+
+  const parts = cleanedLine
+    .split(/\s*\|\s*/g)
+    .map(part => normalizeHallDisplay(part));
+
+  if (parts.length < 2) return null;
+
+  const nameAndOrg = parts[0] || "";
+  const prizeParts = parts.slice(1);
+
+  if (
+    !prizeParts.every(part =>
+      part &&
+      looksLikePrizeOnly(part)
+    )
+  ) {
+    return null;
+  }
+
+  const separated = nameAndOrg
+    .split(/\s*[-–—]\s*/g)
+    .map(part => normalizeHallDisplay(part))
+    .filter(Boolean);
+
+  if (separated.length < 2) return null;
+
+  const possibleOrgName =
+    separated.at(-1) ||
+    "";
+
+  const playerName =
+    separated
+      .slice(0, -1)
+      .join(" - ");
+
+  if (
+    !playerName ||
+    !possibleOrgName
+  ) {
+    return null;
+  }
+
+  const isRecognizedOrg =
+    isExactKnownOrgName(possibleOrgName) ||
+    Boolean(
+      ORG_NAME_ALIASES[
+        normalizeHallKey(
+          possibleOrgName
+        )
+      ]
+    ) ||
+    Boolean(
+      getManualOrgCityKey(
+        possibleOrgName
+      )
+    );
+
+  if (!isRecognizedOrg) {
+    return null;
+  }
+
+  return {
+    type: "org",
+    orgName:
+      normalizeOrgDisplayName(
+        possibleOrgName
+      ),
+    cityKey,
+    rawLine:
+      String(line || "")
+  };
+}
+
+function parsePlacementOrgWinnerLine(line = "", cityKey = "nobre") {
+  const cleaned =
+    normalizeHallDisplay(
+      stripDiscordNoise(line)
+    );
+
+  const match = cleaned.match(
+    /^\d+\s*[º°ª]?\s*LUGAR\s*[-–—:]\s*(.+)$/i
+  );
+
+  const orgName =
+    normalizeOrgDisplayName(
+      match?.[1] ||
+      ""
+    );
+
+  if (!orgName) return null;
+  if (/^\d+$/.test(orgName)) return null;
+  if (looksLikePrizeOnly(orgName)) return null;
+  if (isInvalidWinnerName(orgName)) return null;
+
+  return {
+    type: "org",
+    orgName,
+    cityKey,
+    rawLine:
+      String(line || "")
+  };
+}
+
 function parseTopEmojiOrgWinnerLine(line = "", cityKey = "nobre") {
   const originalLine = String(line || "").trim();
 
@@ -3764,13 +3882,116 @@ function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento")
     // Ex: TOP 🥇 : | <@1420173743434498098>
     if (/<@!?\d+>/i.test(originalLine)) return null;
 
-    const topEmojiOrgWinner = parseTopEmojiOrgWinnerLine(originalLine, cityKey);
-    if (topEmojiOrgWinner) return topEmojiOrgWinner;
+    const playerOrgPrizeWinner =
+      parsePlayerOrgPrizeWinnerLine(
+        originalLine,
+        cityKey
+      );
 
-    const cleanLineRaw = cleanHallWinnerLine(originalLine);
-    const braceOrgName = extractOrgBetweenBraces(cleanLineRaw);
-    const angleOrgName = extractOrgBetweenAngles(cleanLineRaw);
-    const cleanLine = removeOrgBetweenAngles(removeOrgBetweenBraces(cleanLineRaw));
+    if (playerOrgPrizeWinner) {
+      return playerOrgPrizeWinner;
+    }
+
+    const placementOrgWinner =
+      parsePlacementOrgWinnerLine(
+        originalLine,
+        cityKey
+      );
+
+    if (placementOrgWinner) {
+      return placementOrgWinner;
+    }
+
+    const lineForOrgPrize = originalLine
+      .replace(
+        /\[([^\]\n]*)\]\(https?:\/\/[^)\s]+\)/g,
+        "$1"
+      )
+      .replace(
+        /\\([_~*])/g,
+        "$1"
+      );
+
+    const orgPrizeParts =
+      cleanHallWinnerLine(
+        lineForOrgPrize
+      )
+        .split(/\s*\|\s*/g)
+        .map(part =>
+          normalizeHallDisplay(
+            part
+          )
+        );
+
+    const orgPrizeName =
+      orgPrizeParts[0] ||
+      "";
+
+    const prizeParts =
+      orgPrizeParts.slice(1);
+
+    const inlinePlayerIdentity =
+      extractWinnerIdentityFromParts([
+        orgPrizeName
+      ]);
+
+    if (
+      orgPrizeName &&
+      !/^\d+$/.test(orgPrizeName) &&
+      !looksLikePrizeOnly(orgPrizeName) &&
+      !isInvalidWinnerName(orgPrizeName) &&
+      !inlinePlayerIdentity?.playerId &&
+      !extractOrgBetweenBraces(orgPrizeName) &&
+      !extractOrgBetweenAngles(orgPrizeName) &&
+      prizeParts.length > 0 &&
+      prizeParts.every(part =>
+        part &&
+        looksLikePrizeOnly(part)
+      )
+    ) {
+      return {
+        type: "org",
+        orgName:
+          normalizeOrgDisplayName(
+            orgPrizeName
+          ),
+        cityKey,
+        rawLine:
+          originalLine
+      };
+    }
+
+    const topEmojiOrgWinner =
+      parseTopEmojiOrgWinnerLine(
+        originalLine,
+        cityKey
+      );
+
+    if (topEmojiOrgWinner) {
+      return topEmojiOrgWinner;
+    }
+
+    const cleanLineRaw =
+      cleanHallWinnerLine(
+        originalLine
+      );
+
+    const braceOrgName =
+      extractOrgBetweenBraces(
+        cleanLineRaw
+      );
+
+    const angleOrgName =
+      extractOrgBetweenAngles(
+        cleanLineRaw
+      );
+
+    const cleanLine =
+      removeOrgBetweenAngles(
+        removeOrgBetweenBraces(
+          cleanLineRaw
+        )
+      );
 
     if (!cleanLine) return null;
 
