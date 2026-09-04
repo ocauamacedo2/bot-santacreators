@@ -789,7 +789,133 @@ if (
 
     return await transcriptFilesChannelPromise;
   }
+  async function encaminharMensagemOriginalTranscript(
+    mensagemOriginal,
+    contexto,
+    cache
+  ) {
+    if (
+      !mensagemOriginal ||
+      !mensagemOriginal.id ||
+      !mensagemOriginal.attachments?.size
+    ) {
+      return null;
+    }
 
+    const cacheKey =
+      `${contexto?.canalId || 'ticket'}:${mensagemOriginal.id}`;
+
+    if (cache?.has(cacheKey)) {
+      return await cache.get(cacheKey);
+    }
+
+    const trabalho = (async () => {
+      try {
+        const canalArquivos =
+          await getTranscriptFilesChannel();
+
+        const horarioUnix = Math.floor(
+          new Date(
+            contexto?.enviadoEm ||
+            mensagemOriginal.createdAt ||
+            Date.now()
+          ).getTime() / 1000
+        );
+
+        const mensagemOriginalUrl =
+          contexto?.guildId &&
+          contexto?.canalId &&
+          mensagemOriginal.id
+            ? `https://discord.com/channels/${contexto.guildId}/${contexto.canalId}/${mensagemOriginal.id}`
+            : null;
+
+        const transcriptUrl =
+          contexto?.canalId
+            ? `${TRANSCRIPTS_BASE_URL}${contexto.canalId}`
+            : null;
+
+        /*
+         * Essa ficha fica imediatamente antes do encaminhamento,
+         * identificando a origem que o encaminhamento sozinho
+         * não apresenta por completo.
+         */
+        await canalArquivos.send({
+          content: [
+            `## 🗂️ Arquivos encaminhados — ${contexto?.nomeTicket || 'Ticket desconhecido'}`,
+            '',
+            `**Ticket:** \`${contexto?.canalId || 'desconhecido'}\``,
+            `**Aberto por:** ${
+              contexto?.abertoPorId
+                ? `<@${contexto.abertoPorId}>`
+                : contexto?.abertoPor || 'Desconhecido'
+            }`,
+            `**Mensagem enviada por:** ${
+              contexto?.autorId
+                ? `<@${contexto.autorId}>`
+                : contexto?.autor || 'Desconhecido'
+            }`,
+            `**Data e horário:** <t:${horarioUnix}:F>`,
+            `**Quantidade de arquivos:** ${mensagemOriginal.attachments.size}`,
+            mensagemOriginalUrl
+              ? `**Mensagem original:** [Abrir mensagem](${mensagemOriginalUrl})`
+              : null,
+            transcriptUrl
+              ? `**Transcript:** [Abrir transcript](${transcriptUrl})`
+              : null,
+            '',
+            '⬇️ **Snapshot encaminhado da mensagem original:**'
+          ]
+            .filter(Boolean)
+            .join('\n'),
+
+          allowedMentions: {
+            parse: []
+          }
+        });
+
+        /*
+         * Verificação de compatibilidade:
+         * se a versão instalada do discord.js possuir message.forward(),
+         * o encaminhamento é executado.
+         *
+         * Caso contrário, o restante do transcript continua funcionando.
+         */
+        if (
+          typeof mensagemOriginal.forward !== 'function'
+        ) {
+          console.warn(
+            `[TRANSCRIPT FORWARD] A versão instalada do discord.js não possui message.forward(). Mensagem=${mensagemOriginal.id}`
+          );
+
+          return null;
+        }
+
+        const mensagemEncaminhada =
+          await mensagemOriginal.forward(
+            canalArquivos
+          );
+
+        console.log(
+          `[TRANSCRIPT FORWARD] ✅ Mensagem ${mensagemOriginal.id} encaminhada para ${TRANSCRIPT_FILES_CHANNEL_ID}.`
+        );
+
+        return mensagemEncaminhada?.url || null;
+      } catch (error) {
+        console.warn(
+          `[TRANSCRIPT FORWARD] Não foi possível encaminhar a mensagem ${mensagemOriginal?.id || 'desconhecida'}:`,
+          error?.message || error
+        );
+
+        return null;
+      }
+    })();
+
+    if (cache) {
+      cache.set(cacheKey, trabalho);
+    }
+
+    return await trabalho;
+  }
   function escapeHtmlAttribute(value) {
     return String(value || '')
       .replace(/&/g, '&amp;')
@@ -848,7 +974,17 @@ if (
 
     const fallback = {
       arquivoUrl: url,
-      mensagemUrl: url
+
+      /*
+       * Quando o reenvio físico não for possível,
+       * o clique direcionará ao snapshot encaminhado.
+       *
+       * Se o encaminhamento também falhar,
+       * permanecerá o link original.
+       */
+      mensagemUrl:
+        contexto?.mensagemEncaminhadaUrl ||
+        url
     };
 
     if (!/^https?:\/\//i.test(url)) {
@@ -922,14 +1058,52 @@ if (
             contexto
           );
 
+        const horarioUnix = Math.floor(
+          new Date(
+            contexto?.enviadoEm ||
+            Date.now()
+          ).getTime() / 1000
+        );
+
+        const mensagemOriginalUrl =
+          contexto?.guildId &&
+          contexto?.canalId &&
+          contexto?.mensagemId
+            ? `https://discord.com/channels/${contexto.guildId}/${contexto.canalId}/${contexto.mensagemId}`
+            : null;
+
+        const transcriptUrl =
+          contexto?.canalId
+            ? `${TRANSCRIPTS_BASE_URL}${contexto.canalId}`
+            : null;
+
         const mensagemArquivo =
           await canalArquivos.send({
             content: [
-              '📁 **Arquivo permanente de transcript**',
+              `## 📁 Arquivo do ticket — ${contexto?.nomeTicket || 'Ticket desconhecido'}`,
+              '',
               `**Ticket:** \`${contexto?.canalId || 'desconhecido'}\``,
-              `**Mensagem original:** \`${contexto?.mensagemId || 'desconhecida'}\``,
-              `**Nome:** \`${nomeSeguro.replace(/`/g, '')}\``
-            ].join('\n'),
+              `**Aberto por:** ${
+                contexto?.abertoPorId
+                  ? `<@${contexto.abertoPorId}>`
+                  : contexto?.abertoPor || 'Desconhecido'
+              }`,
+              `**Arquivo enviado por:** ${
+                contexto?.autorId
+                  ? `<@${contexto.autorId}>`
+                  : contexto?.autor || 'Desconhecido'
+              }`,
+              `**Data e horário:** <t:${horarioUnix}:F>`,
+              `**Nome do arquivo:** \`${nomeSeguro.replace(/`/g, '')}\``,
+              mensagemOriginalUrl
+                ? `**Mensagem original:** [Abrir mensagem](${mensagemOriginalUrl})`
+                : null,
+              transcriptUrl
+                ? `**Transcript:** [Abrir transcript](${transcriptUrl})`
+                : null
+            ]
+              .filter(Boolean)
+              .join('\n'),
 
             files: [
               {
@@ -1006,17 +1180,14 @@ if (
               String(match[2] || '');
 
             /*
-             * SRC representa imagens, vídeos, figurinhas,
-             * emojis, avatares e mídias de embeds.
+             * Arquiva somente arquivos realmente enviados
+             * como anexos no Discord.
              *
-             * HREF só será arquivado automaticamente quando
-             * for realmente um anexo do Discord. Isso impede
-             * que links comuns de sites sejam baixados como arquivos.
+             * Avatares, emojis, logotipos, stickers e imagens
+             * externas continuam sendo exibidos pelo link original,
+             * mas não são copiados para o canal de arquivos.
              */
-            return (
-              atributo === 'src' ||
-              isDiscordAttachmentUrl(url)
-            );
+            return isDiscordAttachmentUrl(url);
           })
           .map(match => match[2])
           .filter(Boolean)
@@ -1032,8 +1203,23 @@ if (
         );
 
       if (
-        !arquivoPersistido?.arquivoUrl ||
-        arquivoPersistido.arquivoUrl === url
+        !arquivoPersistido?.arquivoUrl
+      ) {
+        continue;
+      }
+
+      const arquivoFoiCopiado =
+        arquivoPersistido.arquivoUrl !== url;
+
+      const possuiEncaminhamento =
+        Boolean(
+          arquivoPersistido.mensagemUrl &&
+          arquivoPersistido.mensagemUrl !== url
+        );
+
+      if (
+        !arquivoFoiCopiado &&
+        !possuiEncaminhamento
       ) {
         continue;
       }
@@ -3405,9 +3591,67 @@ try {
     // (com o embed e os botões de controle) seja incluída no transcript, criando um "espelho" mais fiel.
     const transcriptMediaCache = new Map();
 
+    /*
+     * Impede que uma mensagem com mais de um anexo
+     * seja encaminhada várias vezes.
+     */
+    const transcriptForwardCache = new Map();
+
     const mensagensTranscript = await Promise.all(
       sorted
         .map(async msg => {
+          const contextoArquivoTranscript = {
+            canalId,
+            mensagemId: msg.id,
+            guildId: guild.id,
+
+            nomeTicket:
+              canal?.name ||
+              `ticket-${canalId}`,
+
+            abertoPor:
+              userAberto?.displayName ||
+              (
+                idAberto
+                  ? `ID: ${idAberto}`
+                  : 'Desconhecido'
+              ),
+
+            abertoPorId:
+              idAberto ||
+              null,
+
+            autor:
+              msg.member?.displayName ||
+              msg.author?.username ||
+              'Desconhecido',
+
+            autorId:
+              msg.author?.id ||
+              null,
+
+            enviadoEm:
+              msg.createdAt ||
+              new Date()
+          };
+
+          /*
+           * Encaminha a mensagem original inteira.
+           * Se ela tiver vários anexos, permanecerão juntos
+           * no mesmo encaminhamento.
+           */
+          const mensagemEncaminhadaUrl =
+            msg.attachments?.size > 0
+              ? await encaminharMensagemOriginalTranscript(
+                  msg,
+                  contextoArquivoTranscript,
+                  transcriptForwardCache
+                )
+              : null;
+
+          contextoArquivoTranscript.mensagemEncaminhadaUrl =
+            mensagemEncaminhadaUrl;
+
           // 3. Construção do conteúdo da mensagem
           let conteudo = '';
 
@@ -3581,14 +3825,32 @@ try {
                     ).trim();
 
                     return `
-                      <video
-                        controls
-                        playsinline
-                        preload="metadata"
-                        class="attachment-video"
-                        src="${src}"
-                        style="max-width: 100%; width: 400px; height: auto; border-radius: 8px; background: #000;"
-                      ></video>
+                      <div
+                        style="
+                          display: flex;
+                          flex-direction: column;
+                          gap: 6px;
+                        "
+                      >
+                        <video
+                          controls
+                          playsinline
+                          preload="metadata"
+                          class="attachment-video"
+                          src="${src}"
+                          style="max-width: 100%; width: 400px; height: auto; border-radius: 8px; background: #000;"
+                        ></video>
+
+                        <a
+                          href="${src}"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          class="attachment-link"
+                          style="color: #61dafb; text-decoration: none;"
+                        >
+                          🔗 Abrir vídeo arquivado
+                        </a>
+                      </div>
                     `;
                   }).join("")}
                 </div>
@@ -3613,18 +3875,20 @@ try {
             conteudo = '<span class="vazio">[Mensagem sem conteúdo]</span>';
           }
 
-          // ✅ NOVO:
-          // copia imagens, vídeos, stickers, emojis e mídias de embeds
-          // para o GridFS antes do ticket desaparecer.
-          //
-          // Se alguma mídia não puder ser copiada,
-          // o HTML mantém automaticamente a URL antiga como fallback.
+          /*
+           * Copia somente anexos verdadeiros para o canal do Discord.
+           *
+           * Quando o arquivo couber no limite, também cria uma
+           * nova cópia física.
+           *
+           * Quando não couber, usa o encaminhamento da mensagem
+           * como destino clicável.
+           *
+           * O MongoDB recebe somente o HTML e os links.
+           */
           conteudo = await persistirMidiasDoHtmlTranscript(
             conteudo,
-            {
-              canalId,
-              mensagemId: msg.id
-            },
+            contextoArquivoTranscript,
             transcriptMediaCache
           );
 
@@ -3634,19 +3898,13 @@ try {
               size: 64
             }) || "";
 
-          const avatarPersistido = avatarOriginal
-            ? (
-                await persistirMidiaTranscript(
-                  avatarOriginal,
-                  {
-                    canalId,
-                    mensagemId: msg.id,
-                    nomeArquivo: `avatar-${msg.author?.id || 'desconhecido'}`
-                  },
-                  transcriptMediaCache
-                )
-              ).arquivoUrl
-            : "";
+          /*
+           * O avatar permanece somente como link.
+           * Ele não é reenviado ao canal de arquivos
+           * e não é armazenado como arquivo no MongoDB.
+           */
+          const avatarPersistido =
+            avatarOriginal;
 
           return {
             autor:
