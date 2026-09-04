@@ -1,8 +1,6 @@
 // /application/commands/entrevistasTickets.js
 import fs from 'node:fs';
 import path from 'node:path';
-import { Readable, Transform } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
 import {
   ChannelType,
   PermissionsBitField,
@@ -764,23 +762,32 @@ if (
   const TRANSCRIPTS_CHANNEL_ID = '1358568999738409151'; // Canal onde o log de tickets será enviado
   const TRANSCRIPTS_BASE_URL = 'https://transcripts-santa.squareweb.app/transcript/';
 
-  // ✅ Mídia persistente dos transcripts (GridFS no mesmo MongoDB)
-  const TRANSCRIPT_MEDIA_BUCKET = 'transcript_media';
-  const TRANSCRIPT_MEDIA_MAX_BYTES = 100 * 1024 * 1024; // 100 MB por mídia
-  const TRANSCRIPT_MEDIA_TIMEOUT_MS = 30_000;
+  // ✅ Canal permanente onde os arquivos dos transcripts serão armazenados
+  const TRANSCRIPT_FILES_CHANNEL_ID = '1486001946539196516';
+  const TRANSCRIPT_MEDIA_TIMEOUT_MS = 60_000;
 
-  function getTranscriptMediaBucket() {
-    const connection = Transcript?.db;
-    const nativeDb = connection?.db;
-    const GridFSBucket = connection?.base?.mongo?.GridFSBucket;
+  let transcriptFilesChannelPromise = null;
 
-    if (!nativeDb || !GridFSBucket) {
-      throw new Error('Conexão Mongo/GridFS indisponível para persistir mídia do transcript.');
+  async function getTranscriptFilesChannel() {
+    if (!transcriptFilesChannelPromise) {
+      transcriptFilesChannelPromise = client.channels
+        .fetch(TRANSCRIPT_FILES_CHANNEL_ID)
+        .then(channel => {
+          if (!channel || !channel.isTextBased()) {
+            throw new Error(
+              `O canal ${TRANSCRIPT_FILES_CHANNEL_ID} não existe ou não aceita mensagens.`
+            );
+          }
+
+          return channel;
+        })
+        .catch(error => {
+          transcriptFilesChannelPromise = null;
+          throw error;
+        });
     }
 
-    return new GridFSBucket(nativeDb, {
-      bucketName: TRANSCRIPT_MEDIA_BUCKET
-    });
+    return await transcriptFilesChannelPromise;
   }
 
   function escapeHtmlAttribute(value) {
@@ -791,11 +798,61 @@ if (
       .replace(/>/g, '&gt;');
   }
 
+  function isDiscordAttachmentUrl(value) {
+    try {
+      const url = new URL(String(value || ''));
+
+      const allowedHosts = new Set([
+        'cdn.discordapp.com',
+        'media.discordapp.net',
+        'cdn.discord.com'
+      ]);
+
+      return (
+        allowedHosts.has(url.hostname.toLowerCase()) &&
+        url.pathname.includes('/attachments/')
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  function getSafeTranscriptFileName(url, contexto = {}) {
+    let nomeUrl = 'arquivo';
+
+    try {
+      const pathname = new URL(url).pathname;
+      nomeUrl = decodeURIComponent(
+        pathname.split('/').pop() || 'arquivo'
+      );
+    } catch {}
+
+    const nomeOriginal = String(
+      contexto.nomeArquivo ||
+      nomeUrl ||
+      'arquivo'
+    );
+
+    const nomeSeguro = nomeOriginal
+      .replace(/[\u0000-\u001f\u007f]/g, '')
+      .replace(/[\\/:*?"<>|]/g, '_')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(-180);
+
+    return nomeSeguro || 'arquivo';
+  }
+
   async function persistirMidiaTranscript(urlOriginal, contexto, cache) {
     const url = String(urlOriginal || '').trim();
 
+    const fallback = {
+      arquivoUrl: url,
+      mensagemUrl: url
+    };
+
     if (!/^https?:\/\//i.test(url)) {
-      return url;
+      return fallback;
     }
 
     if (cache?.has(url)) {
@@ -804,41 +861,28 @@ if (
 
     const trabalho = (async () => {
       const controller = new AbortController();
+
       const timeout = setTimeout(
         () => controller.abort(),
         TRANSCRIPT_MEDIA_TIMEOUT_MS
       );
 
-      let uploadStream = null;
-
       try {
+        const canalArquivos =
+          await getTranscriptFilesChannel();
+
         const response = await fetch(url, {
           redirect: 'follow',
           signal: controller.signal,
           headers: {
             'User-Agent': 'SantaCreators-Transcript/1.0',
-            'Accept': 'image/*,video/*;q=0.9,*/*;q=0.8'
+            'Accept': '*/*'
           }
         });
 
-        if (!response.ok || !response.body) {
-          throw new Error(`HTTP ${response.status} ao baixar mídia.`);
-        }
-
-        const contentType = String(
-          response.headers.get('content-type') ||
-          'application/octet-stream'
-        )
-          .split(';')[0]
-          .trim()
-          .toLowerCase();
-
-        if (
-          !contentType.startsWith('image/') &&
-          !contentType.startsWith('video/')
-        ) {
+        if (!response.ok) {
           throw new Error(
-            `Content-Type não suportado para mídia visual: ${contentType}`
+            `HTTP ${response.status} ao baixar o arquivo.`
           );
         }
 
@@ -846,88 +890,79 @@ if (
           response.headers.get('content-length') || 0
         );
 
+        const limiteServidor = Number(
+          canalArquivos.guild?.maximumUploadLimit ||
+          10 * 1024 * 1024
+        );
+
         if (
           Number.isFinite(contentLength) &&
-          contentLength > TRANSCRIPT_MEDIA_MAX_BYTES
+          contentLength > limiteServidor
         ) {
           throw new Error(
-            `Mídia maior que ${TRANSCRIPT_MEDIA_MAX_BYTES} bytes.`
+            `O arquivo possui ${contentLength} bytes e ultrapassa o limite de ${limiteServidor} bytes do servidor Discord.`
           );
         }
 
-        const bucket = getTranscriptMediaBucket();
+        const arrayBuffer =
+          await response.arrayBuffer();
 
-        const nomeUrl = (() => {
-          try {
-            return new URL(url).pathname.split('/').pop() || 'media';
-          } catch {
-            return 'media';
-          }
-        })();
+        const arquivoBuffer =
+          Buffer.from(arrayBuffer);
 
-        const nomeSeguro = String(
-          contexto?.nomeArquivo ||
-          nomeUrl ||
-          'media'
-        )
-          .replace(/[^a-zA-Z0-9._-]/g, '_')
-          .slice(-140) || 'media';
-
-        uploadStream = bucket.openUploadStream(
-          `${contexto?.canalId || 'ticket'}-${contexto?.mensagemId || 'msg'}-${Date.now()}-${nomeSeguro}`,
-          {
-            metadata: {
-              canalId: contexto?.canalId || null,
-              mensagemId: contexto?.mensagemId || null,
-              contentType,
-              originalUrl: url,
-              criadoEm: new Date()
-            }
-          }
-        );
-
-        let totalBytes = 0;
-
-        const limitador = new Transform({
-          transform(chunk, encoding, callback) {
-            totalBytes += chunk.length;
-
-            if (totalBytes > TRANSCRIPT_MEDIA_MAX_BYTES) {
-              callback(
-                new Error(
-                  `Mídia excedeu o limite de ${TRANSCRIPT_MEDIA_MAX_BYTES} bytes durante o download.`
-                )
-              );
-              return;
-            }
-
-            callback(null, chunk);
-          }
-        });
-
-        await pipeline(
-          Readable.fromWeb(response.body),
-          limitador,
-          uploadStream
-        );
-
-        return `/media/${uploadStream.id.toString()}`;
-      } catch (error) {
-        if (uploadStream) {
-          try {
-            await uploadStream.abort();
-          } catch {}
+        if (arquivoBuffer.length > limiteServidor) {
+          throw new Error(
+            `O arquivo possui ${arquivoBuffer.length} bytes e ultrapassa o limite de ${limiteServidor} bytes do servidor Discord.`
+          );
         }
 
+        const nomeSeguro =
+          getSafeTranscriptFileName(
+            url,
+            contexto
+          );
+
+        const mensagemArquivo =
+          await canalArquivos.send({
+            content: [
+              '📁 **Arquivo permanente de transcript**',
+              `**Ticket:** \`${contexto?.canalId || 'desconhecido'}\``,
+              `**Mensagem original:** \`${contexto?.mensagemId || 'desconhecida'}\``,
+              `**Nome:** \`${nomeSeguro.replace(/`/g, '')}\``
+            ].join('\n'),
+
+            files: [
+              {
+                attachment: arquivoBuffer,
+                name: nomeSeguro
+              }
+            ],
+
+            allowedMentions: {
+              parse: []
+            }
+          });
+
+        const arquivoEnviado =
+          mensagemArquivo.attachments.first();
+
+        if (!arquivoEnviado?.url) {
+          throw new Error(
+            'O Discord enviou a mensagem, mas não retornou o link do arquivo.'
+          );
+        }
+
+        return {
+          arquivoUrl: arquivoEnviado.url,
+          mensagemUrl: mensagemArquivo.url
+        };
+      } catch (error) {
         console.warn(
-          `[TRANSCRIPT MEDIA] Não foi possível arquivar ${url}:`,
+          `[TRANSCRIPT MEDIA] Não foi possível copiar ${url} para o canal ${TRANSCRIPT_FILES_CHANNEL_ID}:`,
           error?.message || error
         );
 
-        // Fallback seguro:
-        // se o armazenamento permanente falhar,
-        // mantém exatamente a URL que o sistema já utilizava.
-        return url;
+        return fallback;
       } finally {
         clearTimeout(timeout);
       }
@@ -940,48 +975,100 @@ if (
     return await trabalho;
   }
 
-  async function persistirMidiasDoHtmlTranscript(html, contexto, cache) {
-    if (typeof html !== 'string' || !html.trim()) {
+  async function persistirMidiasDoHtmlTranscript(
+    html,
+    contexto,
+    cache
+  ) {
+    if (
+      typeof html !== 'string' ||
+      !html.trim()
+    ) {
       return html;
     }
 
     let resultado = html;
 
+    const referencias = [
+      ...html.matchAll(
+        /\b(src|href)="(https?:\/\/[^"]+)"/gi
+      )
+    ];
+
     const urls = [
       ...new Set(
-        [...html.matchAll(/\bsrc="(https?:\/\/[^"]+)"/gi)]
-          .map(match => match[1])
+        referencias
+          .filter(match => {
+            const atributo =
+              String(match[1] || '').toLowerCase();
+
+            const url =
+              String(match[2] || '');
+
+            /*
+             * SRC representa imagens, vídeos, figurinhas,
+             * emojis, avatares e mídias de embeds.
+             *
+             * HREF só será arquivado automaticamente quando
+             * for realmente um anexo do Discord. Isso impede
+             * que links comuns de sites sejam baixados como arquivos.
+             */
+            return (
+              atributo === 'src' ||
+              isDiscordAttachmentUrl(url)
+            );
+          })
+          .map(match => match[2])
           .filter(Boolean)
       )
     ];
 
     for (const url of urls) {
-      const urlPersistida = await persistirMidiaTranscript(
-        url,
-        contexto,
-        cache
-      );
+      const arquivoPersistido =
+        await persistirMidiaTranscript(
+          url,
+          contexto,
+          cache
+        );
 
-      if (!urlPersistida || urlPersistida === url) {
+      if (
+        !arquivoPersistido?.arquivoUrl ||
+        arquivoPersistido.arquivoUrl === url
+      ) {
         continue;
       }
 
-      const originalEscapada = escapeHtmlAttribute(url);
+      const originalEscapada =
+        escapeHtmlAttribute(url);
 
+      const arquivoUrlEscapada =
+        escapeHtmlAttribute(
+          arquivoPersistido.arquivoUrl
+        );
+
+      const mensagemUrlEscapada =
+        escapeHtmlAttribute(
+          arquivoPersistido.mensagemUrl ||
+          arquivoPersistido.arquivoUrl
+        );
+
+      /*
+       * A visualização usa o arquivo hospedado no Discord.
+       * O clique abre a mensagem permanente no canal de arquivos.
+       */
       resultado = resultado
         .split(`src="${url}"`)
         .join(
-          `src="${urlPersistida}" data-original-src="${originalEscapada}"`
+          `src="${arquivoUrlEscapada}" data-original-src="${originalEscapada}"`
         )
         .split(`href="${url}"`)
         .join(
-          `href="${urlPersistida}" data-original-href="${originalEscapada}"`
+          `href="${mensagemUrlEscapada}" data-original-href="${originalEscapada}"`
         );
     }
 
     return resultado;
   }
-
   // (REMOVIDO) não usamos mais modal de fechamento
 
   const MENU_CHANNEL_ID = '1352706630869061702'; // ✅ Canal onde o menu será enviado
@@ -3548,15 +3635,17 @@ try {
             }) || "";
 
           const avatarPersistido = avatarOriginal
-            ? await persistirMidiaTranscript(
-                avatarOriginal,
-                {
-                  canalId,
-                  mensagemId: msg.id,
-                  nomeArquivo: `avatar-${msg.author?.id || 'desconhecido'}`
-                },
-                transcriptMediaCache
-              )
+            ? (
+                await persistirMidiaTranscript(
+                  avatarOriginal,
+                  {
+                    canalId,
+                    mensagemId: msg.id,
+                    nomeArquivo: `avatar-${msg.author?.id || 'desconhecido'}`
+                  },
+                  transcriptMediaCache
+                )
+              ).arquivoUrl
             : "";
 
           return {
