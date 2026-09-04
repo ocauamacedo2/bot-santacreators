@@ -4209,40 +4209,83 @@ function isAmbiguousHallWinner(winner) {
     const reviewChannel = await client.channels.fetch(HALL_REVIEW_CHANNEL_ID).catch(() => null);
     if (!reviewChannel || !reviewChannel.isTextBased()) return;
 
-    const messages = await reviewChannel.messages.fetch({ limit: 100 }).catch(() => null);
-    if (!messages) return;
+    state.pendingCityReviews = {};
+    saveState(state);
 
-    const botReviewMessages = messages.filter((msg) => {
-      if (!msg.author.bot || msg.author.id !== client.user.id) return false;
+    let beforeId = null;
 
-      const embedTitle = msg.embeds?.[0]?.title || "";
-      const embedDescription = msg.embeds?.[0]?.description || "";
+    while (true) {
+      const fetchOptions = beforeId
+        ? {
+            limit: 100,
+            before: beforeId
+          }
+        : {
+            limit: 100
+          };
 
-      const hasReviewButtons = msg.components?.some(row =>
-        row.components?.some(btn =>
-          String(btn.customId || "").startsWith(BTN_REVIEW_AS_ORG_PREFIX) ||
-          String(btn.customId || "").startsWith(BTN_REVIEW_AS_PLAYER_PREFIX) ||
-          String(btn.customId || "").startsWith(BTN_REVIEW_AS_BOTH_PREFIX) ||
-          String(btn.customId || "").startsWith(BTN_REVIEW_CITY_PREFIX) ||
-          String(btn.customId || "").startsWith(BTN_PLAYER_IDENTITY_MERGE_PREFIX) ||
-          String(btn.customId || "").startsWith(BTN_PLAYER_IDENTITY_SEPARATE_PREFIX) ||
-          String(btn.customId || "").startsWith(BTN_PAYMENT_CITY_PREFIX)
-        )
-      );
+      const messages = await reviewChannel.messages.fetch(fetchOptions).catch(() => null);
 
-      return hasReviewButtons && (
-        embedTitle.includes("Revisão Manual") ||
-        embedTitle.includes("Revisão de identidade parecida") ||
-        embedTitle.includes("Revisão obrigatória de cidade do player") ||
-        embedDescription.includes("Esse vencedor ficou confuso") ||
-        embedDescription.includes("A varredura encontrou conflito") ||
-        embedDescription.includes("mesmo nome com IDs diferentes") ||
-        embedDescription.includes("nomes parecidos / IDs diferentes")
-      );
-    });
+      if (
+        !messages ||
+        messages.size === 0
+      ) {
+        break;
+      }
 
-    for (const msg of botReviewMessages.values()) {
-      await msg.delete().catch(() => {});
+      const botReviewMessages = messages.filter((msg) => {
+        if (
+          !msg.author.bot ||
+          msg.author.id !== client.user.id
+        ) {
+          return false;
+        }
+
+        const embedTitle =
+          msg.embeds?.[0]?.title ||
+          "";
+
+        const embedDescription =
+          msg.embeds?.[0]?.description ||
+          "";
+
+        const hasReviewButtons = msg.components?.some(row =>
+          row.components?.some(btn =>
+            String(btn.customId || "").startsWith(BTN_REVIEW_AS_ORG_PREFIX) ||
+            String(btn.customId || "").startsWith(BTN_REVIEW_AS_PLAYER_PREFIX) ||
+            String(btn.customId || "").startsWith(BTN_REVIEW_AS_BOTH_PREFIX) ||
+            String(btn.customId || "").startsWith(BTN_REVIEW_CITY_PREFIX) ||
+            String(btn.customId || "").startsWith(BTN_PLAYER_IDENTITY_MERGE_PREFIX) ||
+            String(btn.customId || "").startsWith(BTN_PLAYER_IDENTITY_SEPARATE_PREFIX) ||
+            String(btn.customId || "").startsWith(BTN_PAYMENT_CITY_PREFIX)
+          )
+        );
+
+        return hasReviewButtons && (
+          embedTitle.includes("Revisão Manual") ||
+          embedTitle.includes("Revisão de identidade parecida") ||
+          embedTitle.includes("Revisão obrigatória de cidade do player") ||
+          embedDescription.includes("Esse vencedor ficou confuso") ||
+          embedDescription.includes("A varredura encontrou conflito") ||
+          embedDescription.includes("mesmo nome com IDs diferentes") ||
+          embedDescription.includes("nomes parecidos / IDs diferentes")
+        );
+      });
+
+      for (const msg of botReviewMessages.values()) {
+        await msg.delete().catch(() => {});
+      }
+
+      beforeId =
+        messages.last()?.id ||
+        null;
+
+      if (
+        !beforeId ||
+        messages.size < 100
+      ) {
+        break;
+      }
     }
   }
 
@@ -5993,30 +6036,7 @@ async function sendPlayerIdentitySimilarityReviews(client, rankings) {
           confidence: 35
         };
 
-    const explicitCityKey =
-      detectExplicitHallCityKey(content);
-
-    const confirmedCityKey =
-      state.confirmedCityReviews?.[message.id]?.cityKey ||
-      null;
-
-    if (
-      client &&
-      !explicitCityKey &&
-      !confirmedCityKey
-    ) {
-      await sendHallCityToManualReview(
-        client,
-        message,
-        evidence,
-        null
-      );
-
-      return rankings;
-    }
-
     const cityKey =
-      confirmedCityKey ||
       evidence.cityKey ||
       "nobre";
 
