@@ -1314,15 +1314,7 @@ function resolveCityKeyFromName(value = "") {
     [normalizeHallKey("metgala")]: "Metgala",
     [normalizeHallKey("meta gala")]: "Metgala",
 
-    [normalizeHallKey("paquistao")]: "Paquistão",
-
-    [normalizeHallKey("groov")]: "Groove",
-    [normalizeHallKey("grove")]: "Groove",
-    [normalizeHallKey("groove")]: "Groove",
-
-    [normalizeHallKey("legiao belica")]: "Legião Bélica",
-    [normalizeHallKey("legião bélica")]: "Legião Bélica",
-    [normalizeHallKey("maldivas")]: "Maldivas"
+    [normalizeHallKey("paquistao")]: "Paquistão"
   };
 
   function normalizeOrgDisplayName(orgName = "") {
@@ -1345,10 +1337,7 @@ function resolveCityKeyFromName(value = "") {
       const orgKey = normalizeHallKey(orgName);
       if (!orgKey) return false;
 
-      return (
-        key === orgKey ||
-        key.includes(orgKey)
-      );
+      return key === orgKey || key.includes(orgKey) || orgKey.includes(key);
     });
   }
 
@@ -1748,22 +1737,6 @@ function applyCityToRankingPlayer(player, cityKey) {
       .replace(/[🏆👑🎉👏⚠️✅❌⭐🌆📊📌🧹🔄✨🥇🥈🥉🏅🎮🧠📥🤖✏️📅]/gu, " ")
       .replace(/\s+/g, " ")
       .trim();
-  }
-
-  function detectExplicitHallCityKey(content = "") {
-    const raw = String(content || "");
-    const normalized = normalizeHallName(stripDiscordNoise(raw));
-
-    if (/\bcidade\s+nobre\b/.test(normalized)) return "nobre";
-    if (/\bcidade\s+santa\b/.test(normalized)) return "santa";
-    if (/\bcidade\s+grande\b/.test(normalized)) return "grande";
-    if (/\bcidade\s+maresia\b/.test(normalized)) return "maresia";
-
-    const roleCity = Object.entries(CITIES).find(([, data]) =>
-      raw.includes(data.roleId)
-    );
-
-    return roleCity?.[0] || null;
   }
 
   function detectHallCityKey(content = "") {
@@ -3440,7 +3413,6 @@ function cleanRankingPlayerName(value = "") {
       const startsAsWinner =
         /^TOP\b/i.test(rawClean) ||
         /^#?\s*TOP\b/i.test(rawClean) ||
-        /^(?:🥇|🥈|🥉)?\s*\d+\s*[º°ª]?\s*LUGAR\b/i.test(rawClean) ||
         /^Organiza[cç][aã]o\b/i.test(rawClean) ||
         /^Vencedores?\s*[:\-]/i.test(rawClean) ||
         /^Vencedores?\s+[A-Za-zÀ-ÿ0-9]/i.test(rawClean);
@@ -3547,8 +3519,6 @@ function cleanRankingPlayerName(value = "") {
       /\brole\s*pass\b/i.test(normalized) ||
       /\bmilhao\b/i.test(normalized) ||
       /\bmilhoes\b/i.test(normalized) ||
-      /\b\d+\s*kk\b/i.test(normalized) ||
-      /\b\d+\s*k\b/i.test(normalized) ||
       /\bkk\b/i.test(normalized) ||
       /\bk\b/i.test(normalized) ||
       /\b50k\b/i.test(normalized) ||
@@ -3736,102 +3706,6 @@ function extractWinnerIdentityFromParts(parts = []) {
   };
 }
 
-function parsePlayerOrgPrizeWinnerLine(line = "", cityKey = "nobre") {
-  const cleanedLine = cleanHallWinnerLine(line);
-
-  const parts = cleanedLine
-    .split(/\s*\|\s*/g)
-    .map(part => normalizeHallDisplay(part));
-
-  if (parts.length < 2) return null;
-
-  const nameAndOrg = parts[0] || "";
-  const prizeParts = parts.slice(1);
-
-  if (
-    !prizeParts.every(part =>
-      part &&
-      looksLikePrizeOnly(part)
-    )
-  ) {
-    return null;
-  }
-
-  const separated = nameAndOrg
-    .split(/\s*[-–—]\s*/g)
-    .map(part => normalizeHallDisplay(part))
-    .filter(Boolean);
-
-  if (separated.length < 2) return null;
-
-  const possibleOrgName =
-    separated.at(-1) ||
-    "";
-
-  const playerName =
-    separated
-      .slice(0, -1)
-      .join(" - ");
-
-  if (
-    !playerName ||
-    !possibleOrgName
-  ) {
-    return null;
-  }
-
-  const isRecognizedOrg =
-    isExactKnownOrgName(possibleOrgName) ||
-    Boolean(
-      ORG_NAME_ALIASES[
-        normalizeHallKey(
-          possibleOrgName
-        )
-      ]
-    ) ||
-    Boolean(
-      getManualOrgCityKey(
-        possibleOrgName
-      )
-    );
-
-  if (!isRecognizedOrg) {
-    return null;
-  }
-
-  return {
-    type: "org",
-    orgName:
-      normalizeOrgDisplayName(
-        possibleOrgName
-      ),
-    cityKey,
-    rawLine:
-      String(line || "")
-  };
-}
-
-function parsePlacementOrgWinnerLine(line = "", cityKey = "nobre") {
-  const cleaned = normalizeHallDisplay(stripDiscordNoise(line));
-  const match = cleaned.match(
-    /^\d+\s*[º°ª]?\s*LUGAR\s*[-–—:]\s*(.+)$/i
-  );
-
-  const orgName = normalizeOrgDisplayName(match?.[1] || "");
-
-  if (!orgName) return null;
-  if (/^\d+$/.test(orgName)) return null;
-  if (looksLikePrizeOnly(orgName)) return null;
-  if (isInvalidWinnerName(orgName)) return null;
-
-  return {
-    type: "org",
-    orgName,
-    cityKey,
-    rawLine: String(line || "")
-  };
-}
-
 function parseTopEmojiOrgWinnerLine(line = "", cityKey = "nobre") {
   const originalLine = String(line || "").trim();
 
@@ -3891,57 +3765,6 @@ function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento")
     // Se o vencedor for uma menção Discord, ignora.
     // Ex: TOP 🥇 : | <@1420173743434498098>
     if (/<@!?\d+>/i.test(originalLine)) return null;
-
-    const playerOrgPrizeWinner =
-      parsePlayerOrgPrizeWinnerLine(
-        originalLine,
-        cityKey
-      );
-
-    if (playerOrgPrizeWinner) {
-      return playerOrgPrizeWinner;
-    }
-
-    const placementOrgWinner =
-      parsePlacementOrgWinnerLine(
-        originalLine,
-        cityKey
-      );
-
-    if (placementOrgWinner) {
-      return placementOrgWinner;
-    }
-
-    const lineForOrgPrize = originalLine
-      .replace(/\[([^\]\n]*)\]\(https?:\/\/[^)\s]+\)/g, "$1")
-      .replace(/\\([_~*])/g, "$1");
-
-    const orgPrizeParts = cleanHallWinnerLine(lineForOrgPrize)
-      .split(/\s*\|\s*/g)
-      .map(part => normalizeHallDisplay(part));
-
-    const orgPrizeName = orgPrizeParts[0] || "";
-    const prizeParts = orgPrizeParts.slice(1);
-    const inlinePlayerIdentity = extractWinnerIdentityFromParts([orgPrizeName]);
-
-    if (
-      orgPrizeName &&
-      !/^\d+$/.test(orgPrizeName) &&
-      !looksLikePrizeOnly(orgPrizeName) &&
-      !isInvalidWinnerName(orgPrizeName) &&
-      !inlinePlayerIdentity?.playerId &&
-      !extractOrgBetweenBraces(orgPrizeName) &&
-      !extractOrgBetweenAngles(orgPrizeName) &&
-      prizeParts.length > 0 &&
-      prizeParts.every(part => part && looksLikePrizeOnly(part))
-    ) {
-      return {
-        type: "org",
-        orgName: normalizeOrgDisplayName(orgPrizeName),
-        cityKey,
-        rawLine: originalLine
-      };
-    }
 
     const topEmojiOrgWinner = parseTopEmojiOrgWinnerLine(originalLine, cityKey);
     if (topEmojiOrgWinner) return topEmojiOrgWinner;
@@ -4212,83 +4035,40 @@ function isAmbiguousHallWinner(winner) {
     const reviewChannel = await client.channels.fetch(HALL_REVIEW_CHANNEL_ID).catch(() => null);
     if (!reviewChannel || !reviewChannel.isTextBased()) return;
 
-    state.pendingCityReviews = {};
-    saveState(state);
+    const messages = await reviewChannel.messages.fetch({ limit: 100 }).catch(() => null);
+    if (!messages) return;
 
-    let beforeId = null;
+    const botReviewMessages = messages.filter((msg) => {
+      if (!msg.author.bot || msg.author.id !== client.user.id) return false;
 
-    while (true) {
-      const fetchOptions = beforeId
-        ? {
-            limit: 100,
-            before: beforeId
-          }
-        : {
-            limit: 100
-          };
+      const embedTitle = msg.embeds?.[0]?.title || "";
+      const embedDescription = msg.embeds?.[0]?.description || "";
 
-      const messages = await reviewChannel.messages.fetch(fetchOptions).catch(() => null);
+      const hasReviewButtons = msg.components?.some(row =>
+        row.components?.some(btn =>
+          String(btn.customId || "").startsWith(BTN_REVIEW_AS_ORG_PREFIX) ||
+          String(btn.customId || "").startsWith(BTN_REVIEW_AS_PLAYER_PREFIX) ||
+          String(btn.customId || "").startsWith(BTN_REVIEW_AS_BOTH_PREFIX) ||
+          String(btn.customId || "").startsWith(BTN_REVIEW_CITY_PREFIX) ||
+          String(btn.customId || "").startsWith(BTN_PLAYER_IDENTITY_MERGE_PREFIX) ||
+          String(btn.customId || "").startsWith(BTN_PLAYER_IDENTITY_SEPARATE_PREFIX) ||
+          String(btn.customId || "").startsWith(BTN_PAYMENT_CITY_PREFIX)
+        )
+      );
 
-      if (
-        !messages ||
-        messages.size === 0
-      ) {
-        break;
-      }
+      return hasReviewButtons && (
+        embedTitle.includes("Revisão Manual") ||
+        embedTitle.includes("Revisão de identidade parecida") ||
+        embedTitle.includes("Revisão obrigatória de cidade do player") ||
+        embedDescription.includes("Esse vencedor ficou confuso") ||
+        embedDescription.includes("A varredura encontrou conflito") ||
+        embedDescription.includes("mesmo nome com IDs diferentes") ||
+        embedDescription.includes("nomes parecidos / IDs diferentes")
+      );
+    });
 
-      const botReviewMessages = messages.filter((msg) => {
-        if (
-          !msg.author.bot ||
-          msg.author.id !== client.user.id
-        ) {
-          return false;
-        }
-
-        const embedTitle =
-          msg.embeds?.[0]?.title ||
-          "";
-
-        const embedDescription =
-          msg.embeds?.[0]?.description ||
-          "";
-
-        const hasReviewButtons = msg.components?.some(row =>
-          row.components?.some(btn =>
-            String(btn.customId || "").startsWith(BTN_REVIEW_AS_ORG_PREFIX) ||
-            String(btn.customId || "").startsWith(BTN_REVIEW_AS_PLAYER_PREFIX) ||
-            String(btn.customId || "").startsWith(BTN_REVIEW_AS_BOTH_PREFIX) ||
-            String(btn.customId || "").startsWith(BTN_REVIEW_CITY_PREFIX) ||
-            String(btn.customId || "").startsWith(BTN_PLAYER_IDENTITY_MERGE_PREFIX) ||
-            String(btn.customId || "").startsWith(BTN_PLAYER_IDENTITY_SEPARATE_PREFIX) ||
-            String(btn.customId || "").startsWith(BTN_PAYMENT_CITY_PREFIX)
-          )
-        );
-
-        return hasReviewButtons && (
-          embedTitle.includes("Revisão Manual") ||
-          embedTitle.includes("Revisão de identidade parecida") ||
-          embedTitle.includes("Revisão obrigatória de cidade do player") ||
-          embedDescription.includes("Esse vencedor ficou confuso") ||
-          embedDescription.includes("A varredura encontrou conflito") ||
-          embedDescription.includes("mesmo nome com IDs diferentes") ||
-          embedDescription.includes("nomes parecidos / IDs diferentes")
-        );
-      });
-
-      for (const msg of botReviewMessages.values()) {
-        await msg.delete().catch(() => {});
-      }
-
-      beforeId =
-        messages.last()?.id ||
-        null;
-
-      if (
-        !beforeId ||
-        messages.size < 100
-      ) {
-        break;
-      }
+    for (const msg of botReviewMessages.values()) {
+      await msg.delete().catch(() => {});
     }
   }
 
@@ -4590,34 +4370,15 @@ function isAmbiguousHallWinner(winner) {
     const eventName = normalizeHallEventName(extractRawHallEventName(content), cityKey);
 
     for (const line of lines) {
-      const parsed = parseHallWinnerLine(
-        line,
-        cityKey,
-        eventName
-      );
-
+      const parsed = parseHallWinnerLine(line, cityKey, eventName);
       if (!parsed) continue;
-
-      if (
-        parsed.type === "player" &&
-        !parsed.playerId
-      ) {
-        continue;
-      }
 
       winners.push(parsed);
     }
 
     if (winners.length === 0) {
-      const inlineWinner =
-        extractInlineApplauseWinner(
-          content,
-          cityKey
-        );
-
-      if (inlineWinner?.playerId) {
-        winners.push(inlineWinner);
-      }
+      const inlineWinner = extractInlineApplauseWinner(content, cityKey);
+      if (inlineWinner) winners.push(inlineWinner);
     }
 
     return winners;
@@ -5987,9 +5748,7 @@ async function sendPlayerIdentitySimilarityReviews(client, rankings) {
           confidence: 35
         };
 
-    const cityKey =
-      evidence.cityKey ||
-      "nobre";
+    const cityKey = evidence.cityKey || "nobre";
 
     const directEventName = normalizeHallEventName(extractRawHallEventName(content), cityKey);
     const eventName =
@@ -7917,15 +7676,6 @@ async function findApprovalImagesForHall(
 
         return true;
       });
-
-      const fetchedHallMessageIds = new Set(
-        hallMessages.map(message => message.id)
-      );
-
-      removeFetchedHallRankingData(
-        rankings,
-        fetchedHallMessageIds
-      );
 
       const botHallMessages = hallMessages.filter(m => {
         const text = getHallMessageText(m);
