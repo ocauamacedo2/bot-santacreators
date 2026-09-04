@@ -1345,7 +1345,10 @@ function resolveCityKeyFromName(value = "") {
       const orgKey = normalizeHallKey(orgName);
       if (!orgKey) return false;
 
-      return key === orgKey || key.includes(orgKey) || orgKey.includes(key);
+      return (
+        key === orgKey ||
+        key.includes(orgKey)
+      );
     });
   }
 
@@ -4600,58 +4603,6 @@ function isAmbiguousHallWinner(winner) {
         !parsed.playerId
       ) {
         continue;
-      }
-
-      if (parsed.type === "org") {
-        const cleanedWinnerLine =
-          cleanHallWinnerLine(line);
-
-        const winnerParts =
-          cleanedWinnerLine
-            .split(/\s*\|\s*/g)
-            .map(part =>
-              normalizeHallDisplay(
-                part
-              )
-            );
-
-        const prizeParts =
-          winnerParts.slice(1);
-
-        const hasOrgPrizeFormat =
-          prizeParts.length > 0 &&
-          prizeParts.every(part =>
-            part &&
-            looksLikePrizeOnly(part)
-          );
-
-        const hasPlacementFormat =
-          Boolean(
-            parsePlacementOrgWinnerLine(
-              line,
-              cityKey
-            )
-          );
-
-        const rawWinnerLine =
-          stripDiscordNoise(line);
-
-        const hasExplicitOrgMarker =
-          hasHallGGWinnerMarker(line) ||
-          /^Organiza[cç][aã]o\s*[:\-]/i.test(
-            rawWinnerLine
-          ) ||
-          /^Vencedores?\s*[:\-]/i.test(
-            rawWinnerLine
-          );
-
-        if (
-          !hasOrgPrizeFormat &&
-          !hasPlacementFormat &&
-          !hasExplicitOrgMarker
-        ) {
-          continue;
-        }
       }
 
       winners.push(parsed);
