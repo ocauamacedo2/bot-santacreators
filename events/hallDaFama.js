@@ -750,6 +750,8 @@ let state = loadState();
 state.pendingRequests ??= {};
 state.historicalHallReviews ??= {};
 state.historicalHallMigrations ??= {};
+state.historicalRankingRebuildPending ??= false;
+
 saveState(state);
 
 const processingApprovals = new Set();
@@ -1085,11 +1087,112 @@ return {
     return genericTopLines.length;
   }
 
-  function buildHallIntroLine(intro, eventName, cityName) {
-    return `${cleanOneLine(intro)}\n\n🏆 **${cleanOneLine(eventName).toUpperCase()}** na **${cleanOneLine(cityName).toUpperCase()}**! <:coroa_orange:1353939359144870019>`;
+  function buildHallIntroLine(
+    intro,
+    eventName,
+    cityName
+  ) {
+    return (
+      `${cleanOneLine(intro)}\n\n` +
+      `🏆 **${cleanOneLine(eventName).toUpperCase()}** ` +
+      `na **${cleanOneLine(cityName).toUpperCase()}**! ` +
+      `<:coroa_orange:1353939359144870019>`
+    );
   }
 
-  function fixDuplicatedHallContent(content = "", attachmentUrls = []) {
+  function getHistoricalHallBlock(
+    content = "",
+    hallMessageId = ""
+  ) {
+    const lines =
+      String(content || "")
+        .split("\n")
+        .map(line => line.trim())
+        .filter(Boolean);
+
+    const existingDateLine =
+      lines.find(line =>
+        (
+          line.includes("📅") &&
+          (
+            /data original do evento/i.test(line) ||
+            /vitória histórica de/i.test(line) ||
+            /vitoria historica de/i.test(line)
+          )
+        )
+      ) || "";
+
+    const existingRecreatedLine =
+      lines.find(line =>
+        (
+          line.includes("🕰️") &&
+          /hall.*recriado/i.test(line)
+        )
+      ) || "";
+
+    if (existingDateLine) {
+      return [
+        existingDateLine,
+
+        existingRecreatedLine ||
+        "🕰️ **Hall antigo recriado no formato atual**"
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+
+    if (!hallMessageId) {
+      return "";
+    }
+
+    const migration =
+      Object.values(
+        state.historicalHallMigrations ||
+        {}
+      ).find(item => {
+        return (
+          String(
+            item?.newMessageId ||
+            ""
+          ) ===
+          String(
+            hallMessageId
+          )
+        );
+      });
+
+    if (!migration) {
+      return "";
+    }
+
+    const victoryTimestamp =
+      Number(
+        migration.victoryTimestamp ||
+        0
+      );
+
+    if (!victoryTimestamp) {
+      return (
+        "📅 **Data original do evento:** não identificada\n" +
+        "🕰️ **Hall antigo recriado no formato atual**"
+      );
+    }
+
+    return (
+      `📅 **Data original do evento:** ` +
+      `<t:${Math.floor(
+        victoryTimestamp /
+        1000
+      )}:D>\n` +
+      `🕰️ **Hall antigo recriado no formato atual**`
+    );
+  }
+
+  function fixDuplicatedHallContent(
+    content = "",
+    attachmentUrls = [],
+    hallMessageId = ""
+  ) {
     if (!content.includes("Santa Creators :") || !content.includes("HALL DA FAMA")) return content;
 
     const parts = extractHallParts(content);
@@ -1104,8 +1207,25 @@ return {
       ...attachmentUrls
     ]);
 
-    const safeIntro = isBadHallIntro(parts.introText) ? getRandomIntro() : parts.introText;
-    const introLine = buildHallIntroLine(safeIntro, parts.eventName, parts.cityName);
+    const safeIntro =
+      isBadHallIntro(
+        parts.introText
+      )
+        ? getRandomIntro()
+        : parts.introText;
+
+    const introLine =
+      buildHallIntroLine(
+        safeIntro,
+        parts.eventName,
+        parts.cityName
+      );
+
+    const historicalHallBlock =
+      getHistoricalHallBlock(
+        content,
+        hallMessageId
+      );
 
     const fixedMessage =
   `# 🎉 :  **Santa Creators : ${parts.eventName}** 🎉 
@@ -1115,6 +1235,10 @@ return {
   👏  Uma salva de palmas para os BRABOS! 👏 
 
   <:12633559939374122111:1368796471297576970>  **HALL DA FAMA** <:12633559939374122111:1368796471297576970> 
+
+  ${historicalHallBlock
+    ? `${historicalHallBlock}\n`
+    : ""}
 
   ${parts.winnersText.trim()}
 
@@ -1194,8 +1318,24 @@ function resolveCityKeyFromName(value = "") {
       ...attachmentUrls
     ]);
 
-    const safeIntro = isBadHallIntro(parts.introText) ? getRandomIntro() : parts.introText;
-    const introLine = buildHallIntroLine(safeIntro, parts.eventName, finalCityName);
+    const safeIntro =
+      isBadHallIntro(
+        parts.introText
+      )
+        ? getRandomIntro()
+        : parts.introText;
+
+    const introLine =
+      buildHallIntroLine(
+        safeIntro,
+        parts.eventName,
+        finalCityName
+      );
+
+    const historicalHallBlock =
+      getHistoricalHallBlock(
+        cleanedContent
+      );
 
     const fixedMessage =
   `# 🎉 :  **Santa Creators : ${parts.eventName}** 🎉 
@@ -1205,6 +1345,10 @@ function resolveCityKeyFromName(value = "") {
   👏  Uma salva de palmas para os BRABOS! 👏 
 
   <:12633559939374122111:1368796471297576970>  **HALL DA FAMA** <:12633559939374122111:1368796471297576970> 
+
+  ${historicalHallBlock
+    ? `${historicalHallBlock}\n`
+    : ""}
 
   ${parts.winnersText.trim()}
 
@@ -8921,7 +9065,8 @@ let correctionProcessed = 0;
         const fixedBase =
           fixDuplicatedHallContent(
             msg.content || text,
-            originalImageUrls
+            originalImageUrls,
+            msg.id
           );
 
         const fixedWithUrls =
@@ -9544,6 +9689,7 @@ state = loadState();
 state.pendingRequests ??= {};
 state.historicalHallReviews ??= {};
 state.historicalHallMigrations ??= {};
+state.historicalRankingRebuildPending ??= false;
 
 saveState(state);
 
@@ -9557,7 +9703,10 @@ const channel =
       await ensureHallRankingsDashboards(client);
 
       if (
-        shouldRunHallScanToday() &&
+        (
+          shouldRunHallScanToday() ||
+          state.historicalRankingRebuildPending
+        ) &&
         !hallScanRunning
       ) {
         hallScanRunning =
@@ -9572,9 +9721,19 @@ const channel =
           }
         )
           .then(() => {
+            state.historicalRankingRebuildPending =
+              false;
+
+            saveState(state);
+
             markHallScanDoneToday();
           })
           .catch(error => {
+            state.historicalRankingRebuildPending =
+              true;
+
+            saveState(state);
+
             console.error(
               "[HallDaFama] Erro ao rodar varredura em segundo plano:",
               error
@@ -12396,6 +12555,36 @@ if (approvalImageReferences.length > 0) {
           cityName
         );
 
+      const historicalVictoryTimestamp =
+        Number(
+          data.historicalVictoryTimestamp ||
+          0
+        ) ||
+        parseHistoricalDateInput(
+          data.historicalVictoryDate ||
+          ""
+        );
+
+      const historicalVictoryBlock =
+        data.historicalMigration
+          ? (
+              historicalVictoryTimestamp
+                ? (
+                    `📅 **Data original do evento:** ` +
+                    `<t:${Math.floor(
+                      historicalVictoryTimestamp /
+                      1000
+                    )}:D>\n` +
+                    `🕰️ **Hall antigo recriado no formato atual**`
+                  )
+                : (
+                    `📅 **Data original do evento:** ` +
+                    `não identificada\n` +
+                    `🕰️ **Hall antigo recriado no formato atual**`
+                  )
+            )
+          : "";
+
       let protectedHistoricalImageUrls =
         [];
 
@@ -12495,11 +12684,7 @@ if (approvalImageReferences.length > 0) {
 
   <:12633559939374122111:1368796471297576970>  **HALL DA FAMA** <:12633559939374122111:1368796471297576970> 
 
-  ${data.historicalVictoryTimestamp
-    ? `📅 **Vitória histórica de:** <t:${Math.floor(data.historicalVictoryTimestamp / 1000)}:D>
-  🕰️ **Hall recriado no formato atual**
-`
-    : ""}
+  ${historicalVictoryBlock}
 
   ${data.winnersText}
 
@@ -12791,14 +12976,68 @@ try {
           data.historicalMigration &&
           historicalOldHallDeleted
         ) {
-          await autoCorrectDuplications(
-            hallChannel,
-            client,
-            {
-              showProgress:
-                false
-            }
-          );
+          state.historicalRankingRebuildPending =
+            true;
+
+          saveState(state);
+
+          if (!hallScanRunning) {
+            hallScanRunning =
+              true;
+
+            autoCorrectDuplications(
+              hallChannel,
+              client,
+              {
+                showProgress:
+                  false
+              }
+            )
+              .then(() => {
+                state.historicalRankingRebuildPending =
+                  false;
+
+                saveState(state);
+              })
+              .catch(async error => {
+                state.historicalRankingRebuildPending =
+                  true;
+
+                saveState(state);
+
+                await sendHallScanLog(
+                  client,
+                  {
+                    title:
+                      "⚠️ Reconstrução do ranking pendente",
+
+                    color:
+                      "#e67e22",
+
+                    description:
+                      `O Hall antigo foi substituído, mas ocorreu ` +
+                      `um erro ao reconstruir o ranking.\n\n` +
+                      `Hall antigo: ${data.historicalOldJumpUrl}\n` +
+                      `Hall novo: ${getMessageJumpUrl(sentMsg)}\n` +
+                      `Erro: \`${error?.message || error}\`\n\n` +
+                      `A reconstrução será tentada novamente ` +
+                      `na próxima inicialização ou varredura.`,
+
+                    phase:
+                      "Atualização do ranking",
+
+                    currentHallUrl:
+                      getMessageJumpUrl(
+                        sentMsg
+                      )
+                  }
+                ).catch(() => {});
+              })
+              .finally(() => {
+                hallScanRunning =
+                  false;
+              });
+          }
         } else if (
           data.historicalMigration &&
           !historicalOldHallDeleted
@@ -12959,8 +13198,19 @@ dashEmit(
     data.historicalMigration
       ? (
           historicalOldHallDeleted
-            ? "✅ Hall histórico recriado, imagens preservadas, Hall antigo apagado e ranking recalculado!"
-            : "⚠️ O Hall novo foi publicado e as imagens foram preservadas, mas o Hall antigo não pôde ser apagado. Consulte o log antes de tentar novamente."
+            ? (
+                "✅ Hall histórico recriado com sucesso!\n\n" +
+                "🖼️ Imagens preservadas.\n" +
+                "📅 Data original do evento adicionada.\n" +
+                "🗑️ Hall humano antigo apagado.\n" +
+                "📊 Reconstrução segura do ranking iniciada em segundo plano."
+              )
+            : (
+                "⚠️ O Hall novo foi publicado e as imagens foram preservadas, " +
+                "mas o Hall antigo não pôde ser apagado.\n\n" +
+                "O ranking foi mantido sem nova contabilização para evitar duplicidade. " +
+                "A exclusão será tentada novamente na próxima varredura."
+              )
         )
       : "✅ Hall da Fama postado e pontos computados!"
   );
