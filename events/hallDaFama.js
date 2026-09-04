@@ -1312,9 +1312,7 @@ function resolveCityKeyFromName(value = "") {
     [normalizeHallKey("mete gala")]: "Metgala",
     [normalizeHallKey("metegala")]: "Metgala",
     [normalizeHallKey("metgala")]: "Metgala",
-    [normalizeHallKey("meta gala")]: "Metgala",
-
-    [normalizeHallKey("paquistao")]: "Paquistão"
+    [normalizeHallKey("meta gala")]: "Metgala"
   };
 
   function normalizeOrgDisplayName(orgName = "") {
@@ -4005,15 +4003,6 @@ function isAmbiguousHallWinner(winner) {
       return false;
     }
 
-    if (
-      winner.type === "player" &&
-      !winner.playerId &&
-      !winner.orgName &&
-      !isForcedPlayerName(winner.playerName || "")
-    ) {
-      return true;
-    }
-
     if (isClearTopWinnerLine(rawLine)) {
       return false;
     }
@@ -5779,31 +5768,6 @@ async function sendPlayerIdentitySimilarityReviews(client, rankings) {
     const deduped = dedupeHallWinners(parsed);
 
     if (!deduped.orgs.length && !deduped.players.length) {
-      console.warn("[HallDaFama] Hall sem vencedor identificado:", {
-        messageId: message.id,
-        jumpUrl: hallMeta.jumpUrl,
-        cityKey,
-        eventName
-      });
-
-      if (client) {
-        await sendHallScanLog(client, {
-          title: "⚠️ Hall sem vencedor identificado",
-          color: "#f1c40f",
-          description:
-            "Nenhum vencedor foi identificado neste Hall. " +
-            "Confira a linha dos vencedores no original; " +
-            "este aviso não cria uma revisão manual.",
-          phase: "Leitura dos vencedores",
-          currentHall: content,
-          currentHallUrl: hallMeta.jumpUrl,
-          currentEvent: eventName,
-          currentCity: hallMeta.cityName
-        }).catch(error => {
-          console.error("[HallDaFama] Erro ao registrar Hall sem vencedor:", error);
-        });
-      }
-
       return rankings;
     }
 
