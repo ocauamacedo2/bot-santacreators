@@ -1314,7 +1314,15 @@ function resolveCityKeyFromName(value = "") {
     [normalizeHallKey("metgala")]: "Metgala",
     [normalizeHallKey("meta gala")]: "Metgala",
 
-    [normalizeHallKey("paquistao")]: "Paquistão"
+    [normalizeHallKey("paquistao")]: "Paquistão",
+
+    [normalizeHallKey("groov")]: "Groove",
+    [normalizeHallKey("grove")]: "Groove",
+    [normalizeHallKey("groove")]: "Groove",
+
+    [normalizeHallKey("legiao belica")]: "Legião Bélica",
+    [normalizeHallKey("legião bélica")]: "Legião Bélica",
+    [normalizeHallKey("maldivas")]: "Maldivas"
   };
 
   function normalizeOrgDisplayName(orgName = "") {
@@ -1737,6 +1745,22 @@ function applyCityToRankingPlayer(player, cityKey) {
       .replace(/[🏆👑🎉👏⚠️✅❌⭐🌆📊📌🧹🔄✨🥇🥈🥉🏅🎮🧠📥🤖✏️📅]/gu, " ")
       .replace(/\s+/g, " ")
       .trim();
+  }
+
+  function detectExplicitHallCityKey(content = "") {
+    const raw = String(content || "");
+    const normalized = normalizeHallName(stripDiscordNoise(raw));
+
+    if (/\bcidade\s+nobre\b/.test(normalized)) return "nobre";
+    if (/\bcidade\s+santa\b/.test(normalized)) return "santa";
+    if (/\bcidade\s+grande\b/.test(normalized)) return "grande";
+    if (/\bcidade\s+maresia\b/.test(normalized)) return "maresia";
+
+    const roleCity = Object.entries(CITIES).find(([, data]) =>
+      raw.includes(data.roleId)
+    );
+
+    return roleCity?.[0] || null;
   }
 
   function detectHallCityKey(content = "") {
@@ -3413,6 +3437,7 @@ function cleanRankingPlayerName(value = "") {
       const startsAsWinner =
         /^TOP\b/i.test(rawClean) ||
         /^#?\s*TOP\b/i.test(rawClean) ||
+        /^(?:🥇|🥈|🥉)?\s*\d+\s*[º°ª]?\s*LUGAR\b/i.test(rawClean) ||
         /^Organiza[cç][aã]o\b/i.test(rawClean) ||
         /^Vencedores?\s*[:\-]/i.test(rawClean) ||
         /^Vencedores?\s+[A-Za-zÀ-ÿ0-9]/i.test(rawClean);
@@ -3519,6 +3544,8 @@ function cleanRankingPlayerName(value = "") {
       /\brole\s*pass\b/i.test(normalized) ||
       /\bmilhao\b/i.test(normalized) ||
       /\bmilhoes\b/i.test(normalized) ||
+      /\b\d+\s*kk\b/i.test(normalized) ||
+      /\b\d+\s*k\b/i.test(normalized) ||
       /\bkk\b/i.test(normalized) ||
       /\bk\b/i.test(normalized) ||
       /\b50k\b/i.test(normalized) ||
@@ -3706,6 +3733,102 @@ function extractWinnerIdentityFromParts(parts = []) {
   };
 }
 
+function parsePlayerOrgPrizeWinnerLine(line = "", cityKey = "nobre") {
+  const cleanedLine = cleanHallWinnerLine(line);
+
+  const parts = cleanedLine
+    .split(/\s*\|\s*/g)
+    .map(part => normalizeHallDisplay(part));
+
+  if (parts.length < 2) return null;
+
+  const nameAndOrg = parts[0] || "";
+  const prizeParts = parts.slice(1);
+
+  if (
+    !prizeParts.every(part =>
+      part &&
+      looksLikePrizeOnly(part)
+    )
+  ) {
+    return null;
+  }
+
+  const separated = nameAndOrg
+    .split(/\s*[-–—]\s*/g)
+    .map(part => normalizeHallDisplay(part))
+    .filter(Boolean);
+
+  if (separated.length < 2) return null;
+
+  const possibleOrgName =
+    separated.at(-1) ||
+    "";
+
+  const playerName =
+    separated
+      .slice(0, -1)
+      .join(" - ");
+
+  if (
+    !playerName ||
+    !possibleOrgName
+  ) {
+    return null;
+  }
+
+  const isRecognizedOrg =
+    isExactKnownOrgName(possibleOrgName) ||
+    Boolean(
+      ORG_NAME_ALIASES[
+        normalizeHallKey(
+          possibleOrgName
+        )
+      ]
+    ) ||
+    Boolean(
+      getManualOrgCityKey(
+        possibleOrgName
+      )
+    );
+
+  if (!isRecognizedOrg) {
+    return null;
+  }
+
+  return {
+    type: "org",
+    orgName:
+      normalizeOrgDisplayName(
+        possibleOrgName
+      ),
+    cityKey,
+    rawLine:
+      String(line || "")
+  };
+}
+
+function parsePlacementOrgWinnerLine(line = "", cityKey = "nobre") {
+  const cleaned = normalizeHallDisplay(stripDiscordNoise(line));
+  const match = cleaned.match(
+    /^\d+\s*[º°ª]?\s*LUGAR\s*[-–—:]\s*(.+)$/i
+  );
+
+  const orgName = normalizeOrgDisplayName(match?.[1] || "");
+
+  if (!orgName) return null;
+  if (/^\d+$/.test(orgName)) return null;
+  if (looksLikePrizeOnly(orgName)) return null;
+  if (isInvalidWinnerName(orgName)) return null;
+
+  return {
+    type: "org",
+    orgName,
+    cityKey,
+    rawLine: String(line || "")
+  };
+}
+
 function parseTopEmojiOrgWinnerLine(line = "", cityKey = "nobre") {
   const originalLine = String(line || "").trim();
 
@@ -3765,6 +3888,26 @@ function parseHallWinnerLine(line = "", cityKey = "nobre", eventName = "Evento")
     // Se o vencedor for uma menção Discord, ignora.
     // Ex: TOP 🥇 : | <@1420173743434498098>
     if (/<@!?\d+>/i.test(originalLine)) return null;
+
+    const playerOrgPrizeWinner =
+      parsePlayerOrgPrizeWinnerLine(
+        originalLine,
+        cityKey
+      );
+
+    if (playerOrgPrizeWinner) {
+      return playerOrgPrizeWinner;
+    }
+
+    const placementOrgWinner =
+      parsePlacementOrgWinnerLine(
+        originalLine,
+        cityKey
+      );
+
+    if (placementOrgWinner) {
+      return placementOrgWinner;
+    }
 
     const lineForOrgPrize = originalLine
       .replace(/\[([^\]\n]*)\]\(https?:\/\/[^)\s]+\)/g, "$1")
@@ -4401,15 +4544,86 @@ function isAmbiguousHallWinner(winner) {
     const eventName = normalizeHallEventName(extractRawHallEventName(content), cityKey);
 
     for (const line of lines) {
-      const parsed = parseHallWinnerLine(line, cityKey, eventName);
+      const parsed = parseHallWinnerLine(
+        line,
+        cityKey,
+        eventName
+      );
+
       if (!parsed) continue;
+
+      if (
+        parsed.type === "player" &&
+        !parsed.playerId
+      ) {
+        continue;
+      }
+
+      if (parsed.type === "org") {
+        const cleanedWinnerLine =
+          cleanHallWinnerLine(line);
+
+        const winnerParts =
+          cleanedWinnerLine
+            .split(/\s*\|\s*/g)
+            .map(part =>
+              normalizeHallDisplay(
+                part
+              )
+            );
+
+        const prizeParts =
+          winnerParts.slice(1);
+
+        const hasOrgPrizeFormat =
+          prizeParts.length > 0 &&
+          prizeParts.every(part =>
+            part &&
+            looksLikePrizeOnly(part)
+          );
+
+        const hasPlacementFormat =
+          Boolean(
+            parsePlacementOrgWinnerLine(
+              line,
+              cityKey
+            )
+          );
+
+        const rawWinnerLine =
+          stripDiscordNoise(line);
+
+        const hasExplicitOrgMarker =
+          hasHallGGWinnerMarker(line) ||
+          /^Organiza[cç][aã]o\s*[:\-]/i.test(
+            rawWinnerLine
+          ) ||
+          /^Vencedores?\s*[:\-]/i.test(
+            rawWinnerLine
+          );
+
+        if (
+          !hasOrgPrizeFormat &&
+          !hasPlacementFormat &&
+          !hasExplicitOrgMarker
+        ) {
+          continue;
+        }
+      }
 
       winners.push(parsed);
     }
 
     if (winners.length === 0) {
-      const inlineWinner = extractInlineApplauseWinner(content, cityKey);
-      if (inlineWinner) winners.push(inlineWinner);
+      const inlineWinner =
+        extractInlineApplauseWinner(
+          content,
+          cityKey
+        );
+
+      if (inlineWinner?.playerId) {
+        winners.push(inlineWinner);
+      }
     }
 
     return winners;
@@ -5779,7 +5993,32 @@ async function sendPlayerIdentitySimilarityReviews(client, rankings) {
           confidence: 35
         };
 
-    const cityKey = evidence.cityKey || "nobre";
+    const explicitCityKey =
+      detectExplicitHallCityKey(content);
+
+    const confirmedCityKey =
+      state.confirmedCityReviews?.[message.id]?.cityKey ||
+      null;
+
+    if (
+      client &&
+      !explicitCityKey &&
+      !confirmedCityKey
+    ) {
+      await sendHallCityToManualReview(
+        client,
+        message,
+        evidence,
+        null
+      );
+
+      return rankings;
+    }
+
+    const cityKey =
+      confirmedCityKey ||
+      evidence.cityKey ||
+      "nobre";
 
     const directEventName = normalizeHallEventName(extractRawHallEventName(content), cityKey);
     const eventName =
@@ -7707,6 +7946,15 @@ async function findApprovalImagesForHall(
 
         return true;
       });
+
+      const fetchedHallMessageIds = new Set(
+        hallMessages.map(message => message.id)
+      );
+
+      removeFetchedHallRankingData(
+        rankings,
+        fetchedHallMessageIds
+      );
 
       const botHallMessages = hallMessages.filter(m => {
         const text = getHallMessageText(m);
