@@ -7946,38 +7946,218 @@ async function updateHistoricalReviewPanelAfterPublication(
 async function syncHistoricalReviewPanels(
   client
 ) {
-  const migrations =
+  const reviews =
     Object.entries(
-      state.historicalHallMigrations ||
+      state.historicalHallReviews ||
       {}
     );
 
   for (
     const [
       oldMessageId,
-      migration
+      review
     ]
-    of migrations
+    of reviews
   ) {
+    const migration =
+      state.historicalHallMigrations?.[
+        oldMessageId
+      ];
+
     if (
-      migration?.status !==
-        "completed" &&
-      migration?.status !==
+      migration?.status ===
+        "completed" ||
+      migration?.status ===
         "published_pending_old_deletion"
+    ) {
+      await updateHistoricalReviewPanelAfterPublication(
+        client,
+        oldMessageId
+      ).catch(error => {
+        console.error(
+          `[HallDaFama] Não foi possível limpar o painel histórico ${oldMessageId}:`,
+          error
+        );
+      });
+
+      continue;
+    }
+
+    if (
+      !review?.reviewMessageId ||
+      !review?.oldGuildId ||
+      !review?.oldChannelId
     ) {
       continue;
     }
 
-    await updateHistoricalReviewPanelAfterPublication(
-      client,
-      oldMessageId
-    ).catch(error => {
+    const reviewChannel =
+      await client.channels
+        .fetch(
+          review.reviewChannelId ||
+          HALL_REVIEW_CHANNEL_ID
+        )
+        .catch(() => null);
+
+    if (
+      !reviewChannel ||
+      !reviewChannel.isTextBased()
+    ) {
+      continue;
+    }
+
+    const reviewMessage =
+      await reviewChannel.messages
+        .fetch(
+          review.reviewMessageId
+        )
+        .catch(() => null);
+
+    if (!reviewMessage) {
+      continue;
+    }
+
+    const oldChannel =
+      await client.channels
+        .fetch(
+          review.oldChannelId
+        )
+        .catch(() => null);
+
+    const oldMessage =
+      oldChannel?.isTextBased()
+        ? await oldChannel.messages
+            .fetch(
+              oldMessageId
+            )
+            .catch(() => null)
+        : null;
+
+    const refreshedOldJumpUrl =
+      oldMessage?.url ||
+      (
+        `https://discord.com/channels/` +
+        `${review.oldGuildId}/` +
+        `${review.oldChannelId}/` +
+        `${oldMessageId}`
+      );
+
+    review.oldJumpUrl =
+      refreshedOldJumpUrl;
+
+    const refreshedEmbed =
+      reviewMessage.embeds?.[0]
+        ? EmbedBuilder.from(
+            reviewMessage.embeds[0]
+          )
+        : new EmbedBuilder();
+
+    const refreshedFields =
+      (
+        reviewMessage.embeds?.[0]?.fields ||
+        []
+      ).map(field => {
+        if (
+          field.name !==
+          "Hall original"
+        ) {
+          return field;
+        }
+
+        return {
+          name:
+            "Hall original",
+
+          value:
+            oldMessage
+              ? `[Abrir Hall humano](${refreshedOldJumpUrl})`
+              : (
+                  "A mensagem antiga não foi encontrada. " +
+                  `Canal: <#${review.oldChannelId}> • ` +
+                  `Mensagem: \`${oldMessageId}\``
+                ),
+
+          inline:
+            false
+        };
+      });
+
+    refreshedEmbed.setFields(
+      ...refreshedFields
+    );
+
+    const firstRow =
+      new ActionRowBuilder()
+        .addComponents(
+          new ButtonBuilder()
+            .setCustomId(
+              `${BTN_HISTORICAL_RECREATE_PREFIX}` +
+              `${oldMessageId}`
+            )
+            .setLabel(
+              "♻️ Recriar no formato novo"
+            )
+            .setStyle(
+              ButtonStyle.Success
+            )
+        );
+
+    if (oldMessage) {
+      firstRow.addComponents(
+        new ButtonBuilder()
+          .setLabel(
+            "🔗 Abrir Hall antigo"
+          )
+          .setStyle(
+            ButtonStyle.Link
+          )
+          .setURL(
+            refreshedOldJumpUrl
+          )
+      );
+    }
+
+    const components =
+      [firstRow];
+
+    if (
+      review.archiveMessageId &&
+      review.archiveChannelId
+    ) {
+      components.push(
+        new ActionRowBuilder()
+          .addComponents(
+            new ButtonBuilder()
+              .setLabel(
+                "🖼️ Abrir imagens protegidas"
+              )
+              .setStyle(
+                ButtonStyle.Link
+              )
+              .setURL(
+                `https://discord.com/channels/` +
+                `${review.oldGuildId}/` +
+                `${review.archiveChannelId}/` +
+                `${review.archiveMessageId}`
+              )
+          )
+      );
+    }
+
+    await reviewMessage.edit({
+      embeds:
+        [refreshedEmbed],
+
+      components
+    }).catch(error => {
       console.error(
-        `[HallDaFama] Não foi possível atualizar o painel histórico ${oldMessageId}:`,
+        `[HallDaFama] Não foi possível reconstruir os botões do painel ${oldMessageId}:`,
         error
       );
     });
   }
+
+  saveState(state);
 }
 
 async function queueHistoricalHallReview(
