@@ -7778,11 +7778,213 @@ async function storeHistoricalReplacementImages(
       storedImageUrls
   };
 }
+async function updateHistoricalReviewPanelAfterPublication(
+  client,
+  oldMessageId
+) {
+  const review =
+    state.historicalHallReviews?.[
+      oldMessageId
+    ];
+
+  const migration =
+    state.historicalHallMigrations?.[
+      oldMessageId
+    ];
+
+  if (
+    !review ||
+    !migration
+  ) {
+    return false;
+  }
+
+  if (
+    migration.status !==
+      "completed" &&
+    migration.status !==
+      "published_pending_old_deletion"
+  ) {
+    return false;
+  }
+
+  const reviewChannel =
+    await client.channels
+      .fetch(
+        review.reviewChannelId ||
+        HALL_REVIEW_CHANNEL_ID
+      )
+      .catch(() => null);
+
+  if (
+    !reviewChannel ||
+    !reviewChannel.isTextBased() ||
+    !review.reviewMessageId
+  ) {
+    return false;
+  }
+
+  const reviewMessage =
+    await reviewChannel.messages
+      .fetch(
+        review.reviewMessageId
+      )
+      .catch(() => null);
+
+  if (!reviewMessage) {
+    return false;
+  }
+
+  const previousEmbed =
+    reviewMessage.embeds?.[0]
+      ? EmbedBuilder.from(
+          reviewMessage.embeds[0]
+        )
+      : new EmbedBuilder();
+
+  const previousFields =
+    (
+      reviewMessage.embeds?.[0]?.fields ||
+      []
+    ).filter(field => {
+      return ![
+        "✅ Status da substituição",
+        "🔗 Hall novo",
+        "🗑️ Hall antigo"
+      ].includes(field.name);
+    });
+
+  const oldHallStatus =
+    migration.status === "completed"
+      ? "O Hall humano antigo foi apagado."
+      : (
+          "O Hall novo foi publicado, mas a exclusão " +
+          "do Hall humano antigo ainda está pendente."
+        );
+
+  const finalEmbed =
+    previousEmbed
+      .setTitle(
+        migration.status === "completed"
+          ? "✅ Hall humano recriado e substituído"
+          : "⏳ Hall recriado — exclusão antiga pendente"
+      )
+      .setColor(
+        migration.status === "completed"
+          ? "#2ecc71"
+          : "#f1c40f"
+      )
+      .setDescription(
+        migration.status === "completed"
+          ? (
+              "Este Hall humano já foi recriado, aprovado " +
+              "e publicado no formato atual.\n\n" +
+              "**Não é necessário recriá-lo novamente.**"
+            )
+          : (
+              "Este Hall já foi recriado e publicado no " +
+              "formato atual.\n\n" +
+              "**Não é necessário recriá-lo novamente.** " +
+              "O sistema tentará apagar a mensagem antiga " +
+              "na próxima varredura."
+            )
+      )
+      .setFields(
+        ...previousFields,
+        {
+          name:
+            "✅ Status da substituição",
+
+          value:
+            migration.status === "completed"
+              ? "Recriação aprovada e concluída."
+              : "Recriação aprovada; exclusão antiga pendente.",
+
+          inline:
+            false
+        },
+        {
+          name:
+            "🔗 Hall novo",
+
+          value:
+            migration.newJumpUrl
+              ? `[Abrir Hall recriado](${migration.newJumpUrl})`
+              : "Link do Hall novo não encontrado.",
+
+          inline:
+            false
+        },
+        {
+          name:
+            "🗑️ Hall antigo",
+
+          value:
+            oldHallStatus,
+
+          inline:
+            false
+        }
+      )
+      .setFooter({
+        text:
+          `Substituição protegida • Hall ${oldMessageId}`
+      })
+      .setTimestamp();
+
+  await reviewMessage.edit({
+    embeds:
+      [finalEmbed],
+
+    components:
+      []
+  });
+
+  return true;
+}
+
+async function syncHistoricalReviewPanels(
+  client
+) {
+  const migrations =
+    Object.entries(
+      state.historicalHallMigrations ||
+      {}
+    );
+
+  for (
+    const [
+      oldMessageId,
+      migration
+    ]
+    of migrations
+  ) {
+    if (
+      migration?.status !==
+        "completed" &&
+      migration?.status !==
+        "published_pending_old_deletion"
+    ) {
+      continue;
+    }
+
+    await updateHistoricalReviewPanelAfterPublication(
+      client,
+      oldMessageId
+    ).catch(error => {
+      console.error(
+        `[HallDaFama] Não foi possível atualizar o painel histórico ${oldMessageId}:`,
+        error
+      );
+    });
+  }
+}
 
 async function queueHistoricalHallReview(
   client,
   hallMessage
 ) {
+
   if (
     !hallMessage ||
     hallMessage.author?.id === client.user.id
@@ -7830,6 +8032,16 @@ async function queueHistoricalHallReview(
       }
 
       saveState(state);
+
+      await updateHistoricalReviewPanelAfterPublication(
+        client,
+        hallMessage.id
+      ).catch(error => {
+        console.error(
+          `[HallDaFama] Não foi possível finalizar visualmente o painel ${hallMessage.id}:`,
+          error
+        );
+      });
 
       await sendHallScanLog(
         client,
@@ -9697,10 +9909,23 @@ const channel =
   await client.channels
     .fetch(HALL_CHANNEL_ID)
     .catch(() => null);
-    if (channel && channel.isTextBased()) {
-      await ensureButtonAtBottom(channel, client, true);
+    if (
+      channel &&
+      channel.isTextBased()
+    ) {
+      await ensureButtonAtBottom(
+        channel,
+        client,
+        true
+      );
 
-      await ensureHallRankingsDashboards(client);
+      await ensureHallRankingsDashboards(
+        client
+      );
+
+      await syncHistoricalReviewPanels(
+        client
+      );
 
       if (
         (
@@ -10586,15 +10811,38 @@ const row = new ActionRowBuilder().addComponents(
         });
       }
 
-      if (
+      const existingMigration =
         state.historicalHallMigrations?.[
           oldMessageId
-        ]?.status === "completed"
+        ];
+
+      if (
+        existingMigration?.status ===
+          "completed" ||
+        existingMigration?.status ===
+          "published_pending_old_deletion"
       ) {
+        await updateHistoricalReviewPanelAfterPublication(
+          client,
+          oldMessageId
+        ).catch(() => {});
+
         return interaction.reply({
           content:
-            "✅ Este Hall já foi recriado.",
-          ephemeral: true
+            existingMigration.status ===
+              "completed"
+              ? (
+                  "✅ Este Hall já foi recriado, aprovado " +
+                  "e o Hall humano antigo já foi removido."
+                )
+              : (
+                  "⏳ Este Hall já foi recriado e aprovado. " +
+                  "Somente a exclusão da mensagem antiga " +
+                  "continua pendente."
+                ),
+
+          ephemeral:
+            true
         });
       }
 
@@ -12892,6 +13140,16 @@ if (
   }
 
   saveState(state);
+
+  await updateHistoricalReviewPanelAfterPublication(
+    client,
+    data.historicalOldMessageId
+  ).catch(error => {
+    console.error(
+      `[HallDaFama] Não foi possível atualizar o painel da recriação ${data.historicalOldMessageId}:`,
+      error
+    );
+  });
 
   await sendHallScanLog(
     client,
