@@ -112,12 +112,29 @@ const APPROVER_ROLES = [
   "1352408327983861844", // Resp Creators
   "1262262852949905409", // Resp Influ
   "1352407252216184833", // Resp Lider
+  "1388976314253312100", // Coord Creators
 ];
 
 const ALLOWED_USERS = [
   "660311795327828008", // Você
   "1262262852949905408", // Owner
 ];
+
+// Podem aprovar a própria solicitação e não ficam limitados pela hierarquia.
+const SELF_APPROVAL_BYPASS_ROLES = [
+  "1262262852949905408", // Owner
+  "1352408327983861844", // Resp Creators
+  "1262262852949905409", // Resp Influ
+];
+
+// Quanto maior o número, mais alto é o cargo na hierarquia de aprovação.
+const APPROVAL_HIERARCHY = {
+  "1388976314253312100": 1, // Coord Creators
+  "1352407252216184833": 2, // Resp Lider
+  "1352408327983861844": 3, // Resp Creators
+  "1262262852949905409": 3, // Resp Influ
+  "1262262852949905408": 4, // Owner
+};
 
 const BTN_OPEN_MENU = "evd_open_menu";
 const SEL_CITY = "evd_select_city";
@@ -532,6 +549,72 @@ function hasPermission(member, userId) {
 function canApprove(member, userId) {
   if (ALLOWED_USERS.includes(userId)) return true;
   return member?.roles?.cache?.some((r) => APPROVER_ROLES.includes(r.id)) || false;
+}
+
+function canBypassApprovalHierarchy(member, userId) {
+  if (ALLOWED_USERS.includes(userId)) return true;
+  return member?.roles?.cache?.some((r) => SELF_APPROVAL_BYPASS_ROLES.includes(r.id)) || false;
+}
+
+function getApprovalHierarchyLevel(member, userId) {
+  if (userId === "660311795327828008") return 4;
+
+  let highestLevel = 0;
+
+  for (const [roleId, level] of Object.entries(APPROVAL_HIERARCHY)) {
+    if (member?.roles?.cache?.has(roleId)) {
+      highestLevel = Math.max(highestLevel, level);
+    }
+  }
+
+  return highestLevel;
+}
+
+async function validateApprovalHierarchy(interaction, requesterId) {
+  if (interaction.user.id === requesterId) {
+    if (canBypassApprovalHierarchy(interaction.member, interaction.user.id)) {
+      return { allowed: true };
+    }
+
+    return {
+      allowed: false,
+      message: "🚫 Você não pode aprovar a sua própria solicitação."
+    };
+  }
+
+  if (canBypassApprovalHierarchy(interaction.member, interaction.user.id)) {
+    return { allowed: true };
+  }
+
+  const requesterMember = await interaction.guild?.members
+    .fetch(requesterId)
+    .catch(() => null);
+
+  if (!requesterMember) {
+    return {
+      allowed: false,
+      message: "🚫 Não foi possível verificar os cargos do solicitante. A aprovação foi bloqueada por segurança."
+    };
+  }
+
+  const approverLevel = getApprovalHierarchyLevel(
+    interaction.member,
+    interaction.user.id
+  );
+
+  const requesterLevel = getApprovalHierarchyLevel(
+    requesterMember,
+    requesterId
+  );
+
+  if (requesterLevel > approverLevel) {
+    return {
+      allowed: false,
+      message: "🚫 Você não pode aprovar a solicitação de alguém acima do seu cargo na hierarquia."
+    };
+  }
+
+  return { allowed: true };
 }
 
 function buildControlButtons() {
@@ -1230,6 +1313,15 @@ recordApprovalCreated({
 
     if (!data) {
       return interaction.editReply("⚠️ Dados da solicitação não encontrados (antigos ou expirados).");
+    }
+
+    const hierarchyValidation = await validateApprovalHierarchy(
+      interaction,
+      data.userId
+    );
+
+    if (!hierarchyValidation.allowed) {
+      return interaction.editReply(hierarchyValidation.message);
     }
 
     lockRequestProcessing(reqId, interaction.user.id);
