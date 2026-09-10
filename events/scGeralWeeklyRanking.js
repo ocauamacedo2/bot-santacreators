@@ -2311,7 +2311,7 @@ function applyPowerPointsCooldown(items = []) {
     return aTime - bTime;
   });
 
-  const lastPointByUser =
+  const lastPointByUserAndSource =
     new Map();
 
   const acceptedPowerItems = [];
@@ -2331,9 +2331,13 @@ function applyPowerPointsCooldown(items = []) {
       continue;
     }
 
+    // Poderes do Dia e Poderes em Evento são fontes diferentes.
+    // O cooldown continua protegendo cada fonte, mas uma não bloqueia a outra.
+    const cooldownKey = `${userId}:${String(item?.source || "").trim().toLowerCase()}`;
+
     const lastPointAt =
       Number(
-        lastPointByUser.get(userId) || 0
+        lastPointByUserAndSource.get(cooldownKey) || 0
       );
 
     const canScore =
@@ -2345,8 +2349,8 @@ function applyPowerPointsCooldown(items = []) {
       continue;
     }
 
-    lastPointByUser.set(
-      userId,
+    lastPointByUserAndSource.set(
+      cooldownKey,
       timestamp
     );
 

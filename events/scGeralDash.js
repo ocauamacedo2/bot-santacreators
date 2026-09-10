@@ -933,7 +933,7 @@ function gradeLabel(total) {
   if (total >= 450) return { emoji: "✨", label: "MUITO BOM" };
   if (total >= 400) return { emoji: "✅", label: "BOM" };
   if (total >= 350) return { emoji: "🙂", label: "OK" };
-  if (total >= 300) return { emoji: "📈", label: "MELHORANDO" };
+  if (total >= 300) return { emoji: "📈", label: "EM ANDAMENTO" };
   if (total >= 250) return { emoji: "🌗", label: "METADE" };
   if (total >= 200) return { emoji: "🟡", label: "PROCESSO" };
   if (total >= 100) return { emoji: "🔴", label: "NEGATIVO" };
@@ -2566,8 +2566,61 @@ function chooseWeeksUnion() {
   return { thisKey: currentWk, lastKey: keys[1] || null, keys };
 }
 
+// =====================================================
+// 🔒 ANTI-FARM — PONTOS DE PODERES
+// =====================================================
+// Mantém o mesmo critério usado pelo Ranking Semanal:
+// cada fonte de poderes possui seu próprio cooldown.
+// Assim, Poderes do Dia não bloqueia Poderes em Evento
+// e os totais do GeralDash e do Ranking permanecem iguais.
+const POWER_POINTS_COOLDOWN_MS = 2 * 60 * 60 * 1000;
+
+function applyPowerPointsCooldown(items = []) {
+  const normalItems = [];
+  const powerItems = [];
+
+  for (const item of items || []) {
+    const source = String(item?.source || "").trim().toLowerCase();
+
+    if (source === "poderes" || source === "eventopoder") {
+      powerItems.push(item);
+    } else {
+      normalItems.push(item);
+    }
+  }
+
+  powerItems.sort(
+    (a, b) => new Date(a?.ts || 0).getTime() - new Date(b?.ts || 0).getTime()
+  );
+
+  const lastPointByUserAndSource = new Map();
+  const acceptedPowerItems = [];
+
+  for (const item of powerItems) {
+    const userId = String(item?.userId || "").trim();
+    const source = String(item?.source || "").trim().toLowerCase();
+    if (!userId || !source) continue;
+
+    const timestamp = new Date(item?.ts || 0).getTime();
+    if (!Number.isFinite(timestamp)) continue;
+
+    const cooldownKey = `${userId}:${source}`;
+    const lastPointAt = Number(lastPointByUserAndSource.get(cooldownKey) || 0);
+
+    if (lastPointAt && timestamp - lastPointAt < POWER_POINTS_COOLDOWN_MS) {
+      continue;
+    }
+
+    lastPointByUserAndSource.set(cooldownKey, timestamp);
+    acceptedPowerItems.push(item);
+  }
+
+  return [...normalItems, ...acceptedPowerItems];
+}
+
 async function aggregateByWeek(items, weekKey, client = null) {
-  const only = items.filter((x) => weekKeyFromDateSP(x.ts) === weekKey);
+  const weekItems = items.filter((x) => weekKeyFromDateSP(x.ts) === weekKey);
+  const only = applyPowerPointsCooldown(weekItems);
   
   if (client) {
     await validateSourceConsistency(client, items, weekKey);
@@ -2597,10 +2650,28 @@ async function aggregateByWeek(items, weekKey, client = null) {
   return { total, top };
 }
 
+// Recalcula os snapshots históricos usando exatamente os mesmos itens,
+// ajustes e cooldowns usados no total atual do GeralDash.
+async function rebuildRecentWeeklySnapshots(items, weeksBack = 5) {
+  const snap = loadWeeklySnapshot();
+  snap.totals = snap.totals || {};
+
+  const wkNow = weekKeyFromDateSP(nowSP());
+
+  for (let weeksAgo = 1; weeksAgo <= weeksBack; weeksAgo++) {
+    const historicalWeekKey = addDaysToWeekKey(wkNow, -(weeksAgo * 7));
+    if (!historicalWeekKey) continue;
+
+    const historical = await aggregateByWeek(items, historicalWeekKey);
+    snap.totals[historicalWeekKey] = historical.total;
+  }
+
+  saveWeeklySnapshot(snap);
+}
+
 // ============================================================================
 // MÉTRICA OPERACIONAL — RITMO GERAL DA SEMANA
 // ============================================================================
-
 function getGeneralExpectedProgress() {
   const parts =
     new Intl.DateTimeFormat(
@@ -4042,11 +4113,17 @@ DEBUG.dashMsgId = st.dashboardMsgId || null;
 
 const { items } = await collectAllGeneral(client, scanMode);
 
+// ✅ Em full scan (inclusive ao reiniciar), corrige os totais congelados
+// das últimas 5 semanas antes de montar o texto e os gráficos.
+if (scanMode === "full") {
+  await rebuildRecentWeeklySnapshots(items, 5);
+}
+
 // ✅ congela a semana passada pra nunca mais mudar
 freezeLastWeekIfNeeded(items);
 
-    // ✅ Carrega o snapshot DEPOIS de congelar, para garantir que os dados estão atualizados
-    const snap = loadWeeklySnapshot();
+// ✅ Carrega o snapshot DEPOIS de congelar, para garantir que os dados estão atualizados
+const snap = loadWeeklySnapshot();
 
 
 
