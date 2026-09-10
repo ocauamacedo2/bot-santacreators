@@ -95,9 +95,25 @@ const CONFIG = {
     mentions: {
         limit: 8,            // máximo de menções por msg
     },
-       links: {
+    links: {
         limit: 4,            // máximo de links por msg
     },
+
+    // =====================================================
+    // CANAIS COM LINKS EXTERNOS RESTRITOS
+    // =====================================================
+    //
+    // Nestes canais, mesmo domínios considerados seguros,
+    // como medal.tv e youtube.com, somente poderão ser
+    // enviados pelos cargos autorizados em
+    // EXTERNAL_LINK_ALLOWED_ROLE_IDS.
+    //
+    // Links internos dos servidores confiáveis continuam
+    // liberados normalmente.
+    // =====================================================
+    restrictedExternalLinkChannelIds: [
+        '1381597720007151698', // Chat Creators
+    ],
 
     // =====================================================
     // ATAQUE DE MÍDIA / SCAM EM MASSA
@@ -2681,14 +2697,46 @@ if (links.length > 0) {
             }
 
             // =============================================
+            // CANAL COM LINKS EXTERNOS RESTRITOS
+            // =============================================
+            //
+            // Nestes canais, estar em allowedDomains não é
+            // suficiente para liberar o link.
+            //
+            // O usuário também precisa possuir um dos cargos
+            // cadastrados em EXTERNAL_LINK_ALLOWED_ROLE_IDS.
+            //
+            // Links internos do próprio servidor já foram
+            // liberados anteriormente por
+            // isInternalDiscordGuildLink().
+            // =============================================
+
+            const isRestrictedExternalLinkChannel =
+                CONFIG.restrictedExternalLinkChannelIds.includes(
+                    message.channelId
+                );
+
+            if (
+                isRestrictedExternalLinkChannel &&
+                !seniorCreator
+            ) {
+                violation =
+                    "Link externo enviado sem permissão no canal protegido";
+
+                break;
+            }
+
+            // =============================================
             // SENIOR CREATOR
             // =============================================
             //
-            // Senior Creator pode compartilhar links
-            // externos comuns.
+            // Os cargos cadastrados em
+            // EXTERNAL_LINK_ALLOWED_ROLE_IDS podem
+            // compartilhar links externos comuns.
             //
-            // Isso NÃO interfere nas verificações posteriores
-            // de scam, phishing, pornografia ou mídia.
+            // Isso NÃO interfere nas verificações anteriores
+            // de convites, encurtadores, scam, phishing,
+            // pornografia ou ataques de mídia.
             //
             // =============================================
 
