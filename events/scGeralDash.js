@@ -2047,17 +2047,41 @@ const pushItem = (item) => {
       weekFloorKey,
       maxPages: 80,
       onMessage: async (m) => {
-        auditor.addStats('eventopoder', 'scanned');
-        if (seenMessageIds.has(m.id)) return;
+        auditor.addStats('eventos', 'scanned');
+
+        if (seenMessageIds.has(m.id)) {
+          auditor.reject('eventos', 'duplicate_message');
+          return;
+        }
+
         seenMessageIds.add(m.id);
+
         const emb = m.embeds?.[0];
-        if (!emb) return;
-        const bag = getEmbedTextBag(emb);
-        if (!/evento|criado|criador/i.test(bag)) return;
-        const uid = pickFirstMentionId(bag) || pickFirstIdLoose(bag);
-        if (!uid) return;
+
+        if (!emb) {
+          auditor.reject('eventos', 'no_embed');
+          return;
+        }
+
+        if (!GERAL_PARSERS.isEvento(emb)) {
+          auditor.reject('eventos', 'invalid_embed');
+          return;
+        }
+
+        const uid = GERAL_PARSERS.getEventoRegistrarId(emb);
+
+        if (!uid) {
+          auditor.reject('eventos', 'uid_null');
+          return;
+        }
+
         auditor.addStats('eventos', 'uidOk');
-        pushItem({ userId: uid, ts: new Date(m.createdTimestamp), source: "eventos" });
+
+        pushItem({
+          userId: uid,
+          ts: new Date(m.createdTimestamp),
+          source: "eventos",
+        });
       },
     });
   }
