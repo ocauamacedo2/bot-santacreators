@@ -167,6 +167,14 @@ const FIVEM_DEBUG = false; // 🛑 Desativa os logs de depuração para evitar f
 const FIVEM_UNRELIABLE_WARN_COOLDOWN_MS = 10 * 60 * 1000; // evita flood de aviso quando a API oscila
 let FIVEM_LAST_UNRELIABLE_WARN_AT = 0;
 
+// Evita executar deleteMany em todos os ciclos de 1 minuto.
+const FIVEM_DATABASE_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
+let FIVEM_LAST_DATABASE_CLEANUP_AT = 0;
+
+// Evita repetir a mesma consulta histórica enquanto os painéis são montados.
+const FIVEM_HISTORICAL_WINDOW_CACHE_MS = 10 * 60 * 1000;
+const FIVEM_HISTORICAL_WINDOW_CACHE = new Map();
+
 const DEFAULT_COLOR = 0x2b2d31;
 
 // 🎨 UI LAYOUT HELPERS
@@ -1146,27 +1154,45 @@ async function syncContinuationMessages(channel, botId, embedGroups, row = null)
 // ---------- DATA PERSISTENCE (MONGODB) ----------
 async function addSnapshot(newSnapshot) {
   try {
-    // =====================================================
-    // LIMPEZA PREVENTIVA DO HISTÓRICO
-    // =====================================================
-    // A limpeza precisa acontecer ANTES da criação do novo snapshot.
-    // Assim o MongoDB não fica preso quando estiver próximo do limite
-    // de armazenamento do Atlas.
-    const historyCutoff =
-      Date.now() - FIVEM_HISTORY_MAX_DAYS * 24 * 60 * 60 * 1000;
+    const now = Date.now();
 
-    await HistoryModel.deleteMany({
-      timestamp: { $lt: historyCutoff },
-    });
-
-    const last = await HistoryModel.findOne().sort({ timestamp: -1 });
-
-    // Evita duplicar no mesmo minuto exato, mas não perde coleta por diferença de milissegundos.
+    // A limpeza é pesada e não precisa rodar em todos os ciclos.
+    // Ela será executada no máximo uma vez a cada 24 horas.
     if (
-      last &&
-      last.spDate === newSnapshot.spDate &&
-      last.spTime === newSnapshot.spTime
+      FIVEM_LAST_DATABASE_CLEANUP_AT === 0 ||
+      now - FIVEM_LAST_DATABASE_CLEANUP_AT >= FIVEM_DATABASE_CLEANUP_INTERVAL_MS
     ) {
+      FIVEM_LAST_DATABASE_CLEANUP_AT = now;
+
+      const historyCutoff =
+        now - FIVEM_HISTORY_MAX_DAYS * 24 * 60 * 60 * 1000;
+
+      await Promise.all([
+        HistoryModel.deleteMany({
+          timestamp: { $lt: historyCutoff },
+        }),
+        PeakModel.deleteMany({
+          date: {
+            $lt: new Date(historyCutoff).toISOString().slice(0, 10),
+          },
+        }),
+      ]).catch((error) => {
+        console.error(
+          "[FIVEM_RETENTION] Erro na limpeza preventiva do MongoDB:",
+          error
+        );
+      });
+    }
+
+    const last = await HistoryModel.findOne({
+      spDate: newSnapshot.spDate,
+      spTime: newSnapshot.spTime,
+    })
+      .select({ _id: 1 })
+      .lean();
+
+    // Não cria mais de um registro para o mesmo minuto.
+    if (last) {
       return false;
     }
 
@@ -1187,6 +1213,7 @@ async function addSnapshot(newSnapshot) {
       "[FIVEM_RETENTION] Erro ao salvar snapshot no MongoDB:",
       e
     );
+
     return false;
   }
 }
@@ -1280,15 +1307,143 @@ async function getExact21hHistory(dateKey) {
 
 async function loadPeaksMap() {
   try {
-    const docs = await PeakModel.find();
+    const docs = await PeakModel.find().lean();
     const map = {};
-    for (const d of docs) {
-      map[d.date] = d.toObject();
+
+    for (const document of docs) {
+      map[document.date] = document;
     }
+
     return map;
   } catch (e) {
     console.error("[FIVEM_RETENTION] Erro ao carregar picos do MongoDB:", e);
     return {};
+  }
+}
+
+function getHistoricalWindowTimestamps(dateKey, event) {
+  if (!dateKey || !event) {
+    return null;
+  }
+
+  const startHour = Number(event.startHour || 0) % 24;
+  const startMinute = Number(event.startMinute || 0);
+  const endHour = Number(event.endHour || 0) % 24;
+  const endMinute = Number(event.endMinute || 0);
+
+  const startText =
+    `${dateKey}T${String(startHour).padStart(2, "0")}:` +
+    `${String(startMinute).padStart(2, "0")}:00-03:00`;
+
+  const startDate = new Date(startText);
+
+  if (Number.isNaN(startDate.getTime())) {
+    return null;
+  }
+
+  const startTotalMinutes =
+    Number(event.startHour || 0) * 60 + startMinute;
+
+  let endTotalMinutes =
+    Number(event.endHour || 0) * 60 + endMinute;
+
+  if (endTotalMinutes <= startTotalMinutes) {
+    endTotalMinutes += 24 * 60;
+  }
+
+  const durationMinutes = endTotalMinutes - startTotalMinutes;
+  const endDate = new Date(
+    startDate.getTime() + durationMinutes * 60 * 1000
+  );
+
+  return {
+    startTimestamp: startDate.getTime(),
+    endTimestamp: endDate.getTime(),
+  };
+}
+
+async function getHistoricalCityPeakForWindow(dateKey, event, cityKey) {
+  if (!dateKey || !event || !cityKey) {
+    return null;
+  }
+
+  const stableKey = getStableEventWindowKey(event);
+  const cacheKey = `${dateKey}:${stableKey}:${cityKey}`;
+  const cached = FIVEM_HISTORICAL_WINDOW_CACHE.get(cacheKey);
+
+  if (
+    cached &&
+    Date.now() - cached.createdAt < FIVEM_HISTORICAL_WINDOW_CACHE_MS
+  ) {
+    return cached.value;
+  }
+
+  const timestamps = getHistoricalWindowTimestamps(dateKey, event);
+
+  if (!timestamps) {
+    return null;
+  }
+
+  try {
+    const snapshots = await HistoryModel.find({
+      timestamp: {
+        $gte: timestamps.startTimestamp,
+        $lt: timestamps.endTimestamp,
+      },
+    })
+      .select({
+        timestamp: 1,
+        spTime: 1,
+        cities: 1,
+      })
+      .sort({ timestamp: 1 })
+      .lean();
+
+    let bestPeak = null;
+
+    for (const snapshot of snapshots) {
+      const cityData = snapshot?.cities?.[cityKey];
+
+      if (
+        !cityData ||
+        cityData.stale === true ||
+        cityData.online !== true
+      ) {
+        continue;
+      }
+
+      const clients = safeNumber(cityData.clients, 0);
+
+      if (clients <= 0) {
+        continue;
+      }
+
+      if (!bestPeak || clients > bestPeak.peak) {
+        bestPeak = {
+          peak: clients,
+          peakTime: snapshot.spTime || "--:--",
+          peakAt: snapshot.timestamp || 0,
+          cityKey,
+          cityName: cityData.name || cityKey,
+          emoji: cityData.emoji || "",
+          source: "history_fallback",
+        };
+      }
+    }
+
+    FIVEM_HISTORICAL_WINDOW_CACHE.set(cacheKey, {
+      createdAt: Date.now(),
+      value: bestPeak,
+    });
+
+    return bestPeak;
+  } catch (e) {
+    console.error(
+      `[FIVEM_RETENTION] Erro ao recuperar pico histórico de ${cityKey} em ${dateKey}:`,
+      e?.message || e
+    );
+
+    return null;
   }
 }
 
@@ -1517,20 +1672,20 @@ if (changedTargetDoc) {
       }
     }
 
-    dayPeak.markModified('total');
-dayPeak.markModified('cities');
-dayPeak.markModified('exact21h'); // Marca o novo campo como modificado
-dayPeak.markModified('eventWindows');
-await dayPeak.save();
+    dayPeak.markModified("total");
+    dayPeak.markModified("cities");
+    dayPeak.markModified("exact21h");
+    dayPeak.markModified("eventWindows");
 
-    // Limpeza de picos antigos conforme FIVEM_HISTORY_MAX_DAYS.
-    // Mantém bastante histórico para comparações semanais/mensais sem perder base.
-    const thirtyDaysAgoDate = new Date(Date.now() - FIVEM_HISTORY_MAX_DAYS * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  await PeakModel.deleteMany({ date: { $lt: thirtyDaysAgoDate } });
+    await dayPeak.save();
 
-return hasChange;
+    return hasChange;
   } catch (e) {
-    console.error("[FIVEM_RETENTION] Erro ao atualizar picos diários:", e);
+    console.error(
+      "[FIVEM_RETENTION] Erro ao atualizar picos diários:",
+      e
+    );
+
     return false;
   }
 }
@@ -2208,26 +2363,68 @@ function formatOnlyCurrentLine(label, current, max, pct, index, yesterday = 0, c
     `> 📈 **Leitura:** ${formatRetentionStatus(diffYesterday, "ontem")}`;
 }
 
-function buildCityEventPanelDescription(cityKey, cityName, emoji, peaks, currentSnapshot, onlyEvent = null) {
+async function buildCityEventPanelDescription(cityKey, cityName, emoji, peaks, currentSnapshot, onlyEvent = null) {
 const cityEvents = onlyEvent
   ? [onlyEvent]
   : getAllFivemEventSchedule().filter((event) => event.cityKey === cityKey);
 
-  const lines = cityEvents.map((event) => {
+  const lines = await Promise.all(cityEvents.map(async (event) => {
     const eventDateKey = getDateKeyFromWeekdayInCurrentWeek(currentSnapshot, event.weekday);
     const previousDayKey = getDateKeyOffsetFromDateKey(eventDateKey, -1);
     const lastWeekKey = getDateKeyOffsetFromDateKey(eventDateKey, -7);
 
-const currentWeekWindow = resolveEventWindowFromPeaks(peaks[eventDateKey], event);
-const previousDayWindow = resolveComparableCityWindowFromPeaks(peaks[previousDayKey], event, cityKey);
-const lastWeekWindow = resolveComparableCityWindowFromPeaks(peaks[lastWeekKey], event, cityKey);
+const currentWeekWindow =
+  resolveEventWindowFromPeaks(peaks[eventDateKey], event);
 
-const currentCityWindow = resolveComparableCityWindowFromPeaks(peaks[eventDateKey], event, cityKey);
+let previousDayWindow =
+  resolveComparableCityWindowFromPeaks(
+    peaks[previousDayKey],
+    event,
+    cityKey
+  );
 
-const currentPeak = currentCityWindow?.peak || currentWeekWindow?.peak || 0;
-const currentPeakTime = currentCityWindow?.peakTime || currentWeekWindow?.peakTime || "--:--";
-const previousDayPeak = previousDayWindow?.peak || 0;
-const lastWeekPeak = lastWeekWindow?.peak || 0;
+const lastWeekWindow =
+  resolveComparableCityWindowFromPeaks(
+    peaks[lastWeekKey],
+    event,
+    cityKey
+  );
+
+const currentCityWindow =
+  resolveComparableCityWindowFromPeaks(
+    peaks[eventDateKey],
+    event,
+    cityKey
+  );
+
+// Caso o documento de pico de ontem não tenha eventWindows,
+// recupera o maior valor diretamente dos snapshots históricos.
+if (!previousDayWindow || safeNumber(previousDayWindow.peak, 0) <= 0) {
+  previousDayWindow =
+    await getHistoricalCityPeakForWindow(
+      previousDayKey,
+      event,
+      cityKey
+    );
+}
+
+const currentPeak =
+  currentCityWindow?.peak ||
+  currentWeekWindow?.peak ||
+  0;
+
+const currentPeakTime =
+  currentCityWindow?.peakTime ||
+  currentWeekWindow?.peakTime ||
+  "--:--";
+
+const previousDayPeak =
+  previousDayWindow?.peak ||
+  0;
+
+const lastWeekPeak =
+  lastWeekWindow?.peak ||
+  0;
 
     const diffPreviousDay = calculateDiff(currentPeak, previousDayPeak);
     const diffLastWeek = calculateDiff(currentPeak, lastWeekPeak);
@@ -2295,7 +2492,7 @@ return (
 `### 🏆 Evolução das cidades no mesmo horário\n` +
 `${cityRankingText || "> Sem comparação disponível para essa janela."}`
     );
-  });
+  }));
 
   return (
     `# ${emoji} PAINEL DA BR ${cityName.toUpperCase()}\n\n` +
@@ -2325,9 +2522,13 @@ async function buildEmbeds(client, currentSnapshot, panelScope = "main") {
  const embeds = [];
  const baseColor = cn2ParseColor(process.env.BASE_COLORS, DEFAULT_COLOR);
  
- const sevenDaysAgoSnapshot = await getSnapshotDaysAgo(7, currentSnapshot);
- const yesterdaySnapshot = await getSnapshotDaysAgo(1, currentSnapshot);
-
+const [
+  sevenDaysAgoSnapshot,
+  yesterdaySnapshot,
+] = await Promise.all([
+  getSnapshotDaysAgo(7, currentSnapshot),
+  getSnapshotDaysAgo(1, currentSnapshot),
+]);
  // 1. COLETA E CÁLCULO DE MÉTRICAS ANALÍTICAS
  const cityData = FIVEM_CITIES
    .map((cityConfig) => {
@@ -2358,7 +2559,12 @@ async function buildEmbeds(client, currentSnapshot, panelScope = "main") {
    ? ((totalCurrentClients / totalMaxClients) * 100).toFixed(2)
    : "0.00";
 
- const peaks = await loadPeaksMap();
+ // O painel TRENDS não utiliza os documentos de pico.
+// Portanto, não deve esperar essa consulta pesada para ser editado.
+const peaks =
+  panelScope === "trends"
+    ? {}
+    : await loadPeaksMap();
  const todayKey = currentSnapshot.spDate;
  const yesterdayKey = getDateKeyDaysAgoFromSnapshot(currentSnapshot, 1);
  const lastWeekKey = getDateKeyDaysAgoFromSnapshot(currentSnapshot, 7);
@@ -2427,7 +2633,7 @@ return formatOnlyCurrentLine(
      `**Ocupação Geral:** \`${capacityPercent}%\` ${getStatusEmojiByYesterday(totalCurrentClients, totalYesterdayClients)}`
    )
     .setFooter({
-      text: `Coleta a cada 1min • Painel atualizado a cada 10min • ${FIVEM_RANK_MARKER_TAG}`,
+      text: `Coleta a cada 1min • Painel atualizado a cada 1min • ${FIVEM_RANK_MARKER_TAG}`,
     });
  if (panelScope === "main") {
   embeds.push(summaryEmbed);
@@ -2480,14 +2686,14 @@ const cityEvents = getAllFivemEventSchedule().filter((event) => {
   const uniqueCityEvents = [...new Map(cityEvents.map((event) => [event.eventKey, event])).values()];
 
   for (const event of uniqueCityEvents) {
-    const description = buildCityEventPanelDescription(
-      cityPanel.key,
-      cityPanel.name,
-      cityPanel.emoji,
-      peaks,
-      currentSnapshot,
-      event
-    );
+const description = await buildCityEventPanelDescription(
+  cityPanel.key,
+  cityPanel.name,
+  cityPanel.emoji,
+  peaks,
+  currentSnapshot,
+  event
+);
 
     const cityEmbed = new EmbedBuilder()
       .setColor(baseColor)
@@ -3377,9 +3583,10 @@ if (shouldForcePanelEdit) {
 }
 
 const sharedSafeSnapshot =
-  isSecondary &&
+  !isTrends &&
   FIVEM_LAST_PRIORITY_SAFE_SNAPSHOT.value?.snapshot &&
-  Date.now() - FIVEM_LAST_PRIORITY_SAFE_SNAPSHOT.createdAt <= FIVEM_SHARED_SNAPSHOT_MAX_AGE_MS
+  Date.now() - FIVEM_LAST_PRIORITY_SAFE_SNAPSHOT.createdAt <=
+    FIVEM_SHARED_SNAPSHOT_MAX_AGE_MS
     ? FIVEM_LAST_PRIORITY_SAFE_SNAPSHOT.value
     : null;
 
@@ -3388,12 +3595,22 @@ const results = await editAllFivemRetentionPanels(client, {
   force: true,
   panelChannelIds,
   fastRefreshChannelIds: panelChannelIds,
-  forceFresh: !isSecondary || !sharedSafeSnapshot,
+
+  // TRENDS sempre busca o dado atual.
+  // Os outros painéis reutilizam essa coleta durante até 45 segundos.
+  forceFresh: isTrends || !sharedSafeSnapshot,
+
   cleanupDuplicates: false,
   silentAutoLogs: true,
-  persistSnapshot: !isSecondary,
+
+  // TRENDS edita primeiro e não espera o MongoDB.
+  // O ciclo prioritário seguinte reutiliza o mesmo snapshot e o salva.
+  persistSnapshot: !isTrends && !isSecondary,
+
   safeSnapshot: sharedSafeSnapshot,
-  rememberPrioritySnapshot: !isSecondary,
+
+  // O snapshot coletado pelo TRENDS fica disponível para os demais painéis.
+  rememberPrioritySnapshot: isTrends || !isSecondary,
 });
 
       if (!results.editedCount) {

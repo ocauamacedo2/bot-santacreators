@@ -36,6 +36,14 @@ const FORBIDDEN_REWARD_ROLE_IDS = new Set([
 // ✅ Cargo obrigatório para a pessoa ser considerada ativa na gestão/ranking
 const ROLE_REQUIRED_FOR_ACTIVE = "1352275728476930099";
 
+// ✅ Usuários completamente isentos de premiações da reunião semanal
+// Estes usuários continuam aparecendo normalmente nos rankings,
+// mas nunca podem ser escolhidos como Creator Destaque,
+// Master Manager ou Master Eventos / Social Media.
+const REWARD_EXEMPT_USER_IDS = new Set([
+  "660311795327828008",
+]);
+
 // Cargos de Gestão (Permissão para mexer no painel)
 // VIPs (Podem sempre): Owner, Eu, Resp Creators
 const VIP_USERS = ["660311795327828008", "1262262852949905408"];
@@ -43,7 +51,6 @@ const VIP_ROLES = ["1352408327983861844"]; // Resp Creators
 
 // Restritos (Só Sábado): Resp Influ, Resp Lider
 const SATURDAY_ROLES = ["1262262852949905409", "1352407252216184833"];
-
 // Cargos de Premiação (IDs para setar automaticamente)
 const ROLES_REWARD = {
   CREATOR_DESTAQUE: "1368422518326562967", // Santa Creators
@@ -485,7 +492,16 @@ function calculateWinners(data) {
     for (const item of list) {
       if (!item?.id) continue;
 
-      if (!blockedIds.has(item.id)) {
+      const userId = String(item.id);
+
+      // ✅ Usuários isentos nunca podem receber nenhuma premiação.
+      // Eles continuam aparecendo no ranking e mantendo seus pontos,
+      // mas são ignorados na escolha dos vencedores.
+      if (REWARD_EXEMPT_USER_IDS.has(userId)) {
+        continue;
+      }
+
+      if (!blockedIds.has(userId)) {
         return item;
       }
     }
@@ -506,7 +522,7 @@ function calculateWinners(data) {
   const usedIds = new Set();
 
   if (winnerGeral?.id) {
-    usedIds.add(winnerGeral.id);
+    usedIds.add(String(winnerGeral.id));
   }
 
   // =====================================================
@@ -516,7 +532,7 @@ function calculateWinners(data) {
   const winnerManager = pickFirstAvailable(data.topManager, usedIds);
 
   if (winnerManager?.id) {
-    usedIds.add(winnerManager.id);
+    usedIds.add(String(winnerManager.id));
   }
 
   // =====================================================
@@ -526,7 +542,7 @@ function calculateWinners(data) {
   const winnerSocial = pickFirstAvailable(data.topSocial, usedIds);
 
   if (winnerSocial?.id) {
-    usedIds.add(winnerSocial.id);
+    usedIds.add(String(winnerSocial.id));
   }
 
   return {
