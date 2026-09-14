@@ -10,7 +10,8 @@ import {
 // CONFIGURAÇÃO GERAL
 // =====================================================
 const AULAO_CONFIG = {
-  ALLOWED_CHANNELS: ["1470185555823300863", "1472838723208216706"], // Canais permitidos
+  ALLOW_IN_ANY_CHANNEL: true, // true = funciona em qualquer canal do servidor
+  ALLOWED_CHANNELS: ["1470185555823300863", "1472838723208216706"], // Usado somente se ALLOW_IN_ANY_CHANNEL for false
   ALLOWED_USER_ID: "660311795327828008", // APENAS VOCÊ pode iniciar
 
   // Configuração do Aulão 1 (Geral)
@@ -809,7 +810,10 @@ export async function aulaoHandleMessage(message, client) {
       await message.reply("🚫 Apenas o administrador autorizado pode iniciar o sistema de aulão.");
       return true;
     }
-    if (!AULAO_CONFIG.ALLOWED_CHANNELS.includes(message.channel.id)) {
+    if (
+      !AULAO_CONFIG.ALLOW_IN_ANY_CHANNEL &&
+      !AULAO_CONFIG.ALLOWED_CHANNELS.includes(message.channel.id)
+    ) {
       const channels = AULAO_CONFIG.ALLOWED_CHANNELS.map(id => `<#${id}>`).join(" ou ");
       await message.reply(`⚠️ Este comando deve ser usado no canal ${channels}.`);
       return true;
@@ -838,7 +842,10 @@ export async function aulaoHandleMessage(message, client) {
       await message.reply("🚫 Apenas o administrador autorizado pode iniciar o sistema de aulão.");
       return true;
     }
-    if (!AULAO_CONFIG.ALLOWED_CHANNELS.includes(message.channel.id)) {
+    if (
+      !AULAO_CONFIG.ALLOW_IN_ANY_CHANNEL &&
+      !AULAO_CONFIG.ALLOWED_CHANNELS.includes(message.channel.id)
+    ) {
       const channels = AULAO_CONFIG.ALLOWED_CHANNELS.map(id => `<#${id}>`).join(" ou ");
       await message.reply(`⚠️ Este comando deve ser usado no canal ${channels}.`);
       return true;
@@ -867,7 +874,10 @@ export async function aulaoHandleMessage(message, client) {
       await message.reply("🚫 Apenas o administrador autorizado pode iniciar o sistema de aulão.");
       return true;
     }
-    if (!AULAO_CONFIG.ALLOWED_CHANNELS.includes(message.channel.id)) {
+    if (
+      !AULAO_CONFIG.ALLOW_IN_ANY_CHANNEL &&
+      !AULAO_CONFIG.ALLOWED_CHANNELS.includes(message.channel.id)
+    ) {
       const channels = AULAO_CONFIG.ALLOWED_CHANNELS.map(id => `<#${id}>`).join(" ou ");
       await message.reply(`⚠️ Este comando deve ser usado no canal ${channels}.`);
       return true;
