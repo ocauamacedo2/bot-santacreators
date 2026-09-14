@@ -83,30 +83,44 @@ export function getNowSP() {
 
 /**
  * Gera a chave da semana (Domingo) baseada em uma data.
- * @param {Date|number|string} inputDate 
+ * @param {Date|number|string} inputDate
  * @returns {string} YYYY-MM-DD
  */
 function weekKeyFromDateSP(inputDate = null) {
   const now = inputDate ? new Date(inputDate) : getNowSP();
   const day = now.getDay();
-  // ✅ Início da semana: Sábado (6). Fechamento: Sexta (5)
-  const diff = (day + 1) % 7; // Dias a subtrair para chegar ao Sábado anterior/atual
-  
-  const saturday = new Date(now);
-  saturday.setDate(now.getDate() - diff);
-  
-  const y = saturday.getFullYear();
-  const m = String(saturday.getMonth() + 1).padStart(2, '0');
-  const d = String(saturday.getDate()).padStart(2, '0');
+
+  // ✅ Início da semana: Domingo (0). Fechamento: Sábado (6).
+  const diff = day;
+
+  const sunday = new Date(now);
+  sunday.setDate(now.getDate() - diff);
+
+  const y = sunday.getFullYear();
+  const m = String(sunday.getMonth() + 1).padStart(2, "0");
+  const d = String(sunday.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
 }
 
 function getWeekRangeLabel(weekKey) {
   const start = new Date(weekKey + "T00:00:00");
   const end = new Date(start);
-  end.setDate(start.getDate() + 6); // Este 'end' é a Sexta-feira
-  const fmt = (d) => `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`;
+
+  // A semana começa no domingo e termina no sábado.
+  end.setDate(start.getDate() + 6);
+
+  const fmt = (d) =>
+    `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}`;
+
   return `${fmt(start)} → ${fmt(end)}`;
+}
+
+/**
+ * A conferência das logs fica aberta de domingo até quarta-feira.
+ */
+function isLogWindowOpenSP() {
+  const day = getNowSP().getDay();
+  return day >= 0 && day <= 3;
 }
 
 /**
@@ -345,7 +359,12 @@ function readChecklistWeek(weekKey = weekKeyFromDateSP()) {
   const checklist = loadJSON(CHECKLIST_FILE, { weeks: {} });
 
   if (!checklist.weeks[weekKey]) {
-    checklist.weeks[weekKey] = { lastSyncedAt: null, responsaveis: {} };
+    checklist.weeks[weekKey] = {
+      lastSyncedAt: null,
+      snapshotLocked: false,
+      responsaveis: {}
+    };
+
     saveJSON(CHECKLIST_FILE, checklist);
   }
 
@@ -524,10 +543,21 @@ async function syncWeekData(client, force = false) {
   const weekKey = weekKeyFromDateSP();
 
   if (!checklist.weeks[weekKey]) {
-    checklist.weeks[weekKey] = { lastSyncedAt: null, responsaveis: {} };
+    checklist.weeks[weekKey] = {
+      lastSyncedAt: null,
+      snapshotLocked: false,
+      responsaveis: {}
+    };
   }
 
   const currentWeek = checklist.weeks[weekKey];
+
+  // 🔒 A lista semanal já foi criada.
+  // Depois de congelada, nenhuma sincronização automática, manual ou causada
+  // por reinicialização poderá adicionar, remover ou trocar membros.
+  if (currentWeek.snapshotLocked === true) {
+    return checklist;
+  }
 
   // ✅ THROTTLE: Se sincronizou há menos de 5 minutos e não for um "Sincronizar" forçado,
   // retorna os dados atuais imediatamente sem fazer o scan pesado.
@@ -538,17 +568,15 @@ async function syncWeekData(client, force = false) {
   const giData = loadGiSource();
   const rawRegistros = Array.isArray(giData?.registros) ? giData.registros : [];
 
-  // 🛡️ PROTEÇÃO: Se a fonte estiver vazia (erro de leitura ou arquivo quebrado), 
-  // não prossegue para não apagar o progresso da semana atual.
-  if (rawRegistros.length === 0) return checklist;
-  // Se rawRegistros.length === 0, significa que não há registros GI elegíveis.
-  // Isso deve resultar em uma lista de responsáveis vazia, não manter a antiga.
-  // if (rawRegistros.length === 0) return checklist; // <-- REMOVER ESTA LINHA
+  // 🛡️ Se a fonte GI estiver vazia, a lista não será congelada.
+  // Assim, o sistema poderá tentar novamente sem apagar nenhum dado.
+  if (rawRegistros.length === 0) {
+    return checklist;
+  }
 
   if (!currentWeek.responsaveis || typeof currentWeek.responsaveis !== "object") {
     currentWeek.responsaveis = {};
   }
-
   const registros = pickLatestEligibleGiRecords(rawRegistros);
 
   const giMap = new Map(); // respId -> Map(memberId -> memberData)
@@ -652,6 +680,10 @@ async function syncWeekData(client, force = false) {
   currentWeek.responsaveis = recoveredResponsaveis;
   currentWeek.lastSyncedAt = Date.now();
 
+  // 🔒 Depois que a lista foi criada com sucesso, ela fica congelada
+  // até o início da próxima semana, no domingo.
+  currentWeek.snapshotLocked = true;
+
   saveJSON(CHECKLIST_FILE, checklist);
   return checklist;
 }
@@ -740,7 +772,7 @@ fields.push({
   if (fields.length === 0) {
     fields.push({
       name: "👤 Responsáveis",
-      value: "_Nenhum responsável encontrado na semana atual. Use o botão **Sincronizar GI**._",
+      value: "_Nenhum responsável foi carregado para a semana atual._",
       inline: false
     });
   }
@@ -749,11 +781,12 @@ fields.push({
     .setTitle("📋 Checklist Semanal de Logs")
     .setDescription(
       `📅 **Semana:** ${getWeekRangeLabel(weekKey)}\n` +
-      `🕒 **Fechamento:** Sexta-feira às 23:59\n\n` +
-      `� **Responsáveis com pendência:** \`${respsWithPending}\`\n` +
+      `🕒 **Período para bater log:** Domingo às 00:00 até quarta-feira às 23:59\n` +
+      `🔒 **Lista semanal:** ${data.snapshotLocked ? "Congelada" : "Aguardando criação"}\n\n` +
+      `👥 **Responsáveis com pendência:** \`${respsWithPending}\`\n` +
       `✅ **Membros conferidos:** \`${checkedMembers}\`\n` +
       `❌ **Membros pendentes:** \`${totalMembers - checkedMembers}\`\n` +
-      `🕓 **Última sincronização GI:** ${data.lastSyncedAt ? `<t:${Math.floor(data.lastSyncedAt / 1000)}:R>` : "`Nunca`"}\n\n` +
+      `🕓 **Lista criada em:** ${data.lastSyncedAt ? `<t:${Math.floor(data.lastSyncedAt / 1000)}:F>` : "`Ainda não criada`"}\n\n` +
       `📊 **Progresso Geral:**\n${buildProgressBar(checkedMembers, totalMembers)}\n`
     )
     .addFields(fields)
@@ -764,9 +797,8 @@ fields.push({
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId("logcheck_my_members").setLabel("Gerenciar Meus Membros").setStyle(ButtonStyle.Success).setEmoji("✅"),
     new ButtonBuilder().setCustomId("logcheck_admin_view").setLabel("Visão Geral").setStyle(ButtonStyle.Primary).setEmoji("👑"),
-    new ButtonBuilder().setCustomId("logcheck_sync_gi").setLabel("Sincronizar GI").setStyle(ButtonStyle.Secondary).setEmoji("🔄")
+    new ButtonBuilder().setCustomId("logcheck_sync_gi").setLabel("Lista Semanal Congelada").setStyle(ButtonStyle.Secondary).setEmoji("🔒")
   );
-
   return { embeds: [embed], components: [row] };
 }
 
@@ -777,29 +809,36 @@ export async function checklistHandleInteraction(interaction, client) {
   if (!interaction.guild) return false;
   const customId = interaction.customId;
 
-  // 1. Sincronizar GI
+  // 1. Consultar o estado da lista semanal
   if (customId === "logcheck_sync_gi") {
     if (!hasPermission(interaction.member)) {
-      return interaction.reply({ content: "❌ Sem permissão.", flags: MessageFlags.Ephemeral });
+      return interaction.reply({
+        content: "❌ Sem permissão.",
+        flags: MessageFlags.Ephemeral
+      });
     }
 
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
-    const checklist = await syncWeekData(client, true); // Único lugar que força o scan pesado
     const weekKey = weekKeyFromDateSP();
-    const data = checklist.weeks?.[weekKey] || { responsaveis: {} };
+    const checklist = readChecklistWeek(weekKey);
+    const data = checklist.weeks?.[weekKey] || {
+      responsaveis: {},
+      snapshotLocked: false
+    };
 
     const totalResponsaveis = Object.keys(data.responsaveis || {}).length;
     const totalMembros = Object.values(data.responsaveis || {}).reduce((acc, resp) => {
       return acc + Object.keys(resp?.members || {}).length;
     }, 0);
 
-    await refreshMainPanel(client, interaction.guild);
-    return interaction.editReply(
-      `✅ Dados sincronizados com sucesso!\n` +
-      `👤 Responsáveis carregados: **${totalResponsaveis}**\n` +
-      `🧍 Membros carregados: **${totalMembros}**`
-    );
+    return interaction.reply({
+      content:
+        `🔒 **A lista desta semana está congelada.**\n\n` +
+        `Ela não pode ser reconstruída durante a semana.\n` +
+        `Membros novos serão adicionados somente na próxima atualização de domingo às **00:00**.\n\n` +
+        `👤 Responsáveis carregados: **${totalResponsaveis}**\n` +
+        `🧍 Membros carregados: **${totalMembros}**`,
+      flags: MessageFlags.Ephemeral
+    });
   }
 
   // 2. Gerenciar Meus Membros
@@ -907,6 +946,15 @@ if (interaction.isStringSelectMenu() && customId === "logcheck_admin_select") {
     const [, respId, weekKey] = customId.split(":");
     const memberId = interaction.values[0];
 
+    if (!isLogWindowOpenSP()) {
+      return interaction.reply({
+        content:
+          "🔒 O período para bater log está fechado.\n" +
+          "As conferências podem ser realizadas de domingo até quarta-feira, às 23:59.",
+        flags: MessageFlags.Ephemeral
+      });
+    }
+
 if (!interaction.deferred && !interaction.replied) {
   await interaction.deferUpdate().catch(() => {});
 }
@@ -945,6 +993,15 @@ return true;
   // 6. Ações em Massa
   if (interaction.isButton() && customId.startsWith("logcheck_bulk:")) {
     const [, action, respId, weekKey] = customId.split(":");
+
+    if (!isLogWindowOpenSP()) {
+      return interaction.reply({
+        content:
+          "🔒 O período para bater log está fechado.\n" +
+          "As conferências podem ser realizadas de domingo até quarta-feira, às 23:59.",
+        flags: MessageFlags.Ephemeral
+      });
+    }
 
 if (!interaction.deferred && !interaction.replied) {
   await interaction.deferUpdate().catch(() => {});
@@ -1150,21 +1207,40 @@ async function sendSundayReminders(client) {
 export async function checklistOnReady(client) {
   const weekKey = weekKeyFromDateSP();
   const checklist = readChecklistWeek(weekKey);
-
-  // ✅ No restart do bot:
-  // Verifica se a semana atual no estado está vazia ou nunca foi sincronizada.
   const currentWeekData = checklist.weeks[weekKey];
-  if (!currentWeekData || !currentWeekData.lastSyncedAt || !weekHasResponsaveis(checklist, weekKey)) {
-    await syncWeekData(client, true).catch(() => {});
+
+  // ✅ Recuperação segura:
+  // Se o bot estava desligado no domingo às 00:00, cria a lista uma única vez
+  // quando voltar. Se a lista já estiver congelada, o restart não altera nada.
+  if (currentWeekData?.snapshotLocked !== true) {
+    await syncWeekData(client, true).catch((error) => {
+      console.error("[ChecklistLogs] Falha ao criar a lista semanal:", error);
+    });
   }
 
   await refreshMainPanel(client).catch(() => {});
 
-  // ✅ Cobrança no Domingo (0) para os pendentes da semana que iniciou no Sábado.
-  cron.schedule("0 12,16,20 * * 0", () => sendSundayReminders(client), { timezone: TZ });
+  // ✅ Lembretes de domingo até quarta-feira, às 12:00, 16:00 e 20:00.
+  cron.schedule(
+    "0 12,16,20 * * 0-3",
+    () => sendSundayReminders(client),
+    { timezone: TZ }
+  );
 
-  // ✅ O "reset" (início da nova semana) acontece rigorosamente no Sábado 00:00.
-  cron.schedule("0 0 * * 6", () => syncWeekData(client, true), { timezone: TZ });
+  // ✅ Todo domingo às 00:00 começa uma nova semana.
+  // A nova chave semanal ainda não terá snapshot, então a lista será criada
+  // uma única vez e ficará congelada até o próximo domingo.
+  cron.schedule(
+    "0 0 * * 0",
+    async () => {
+      await syncWeekData(client, true).catch((error) => {
+        console.error("[ChecklistLogs] Falha na atualização semanal:", error);
+      });
+
+      await refreshMainPanel(client).catch(() => {});
+    },
+    { timezone: TZ }
+  );
 }
 
 export async function checklistHandleMessage(message, client) {
@@ -1180,12 +1256,10 @@ export async function checklistHandleMessage(message, client) {
   await message.delete().catch(() => {});
 
 const weekKey = weekKeyFromDateSP();
-const checklist = readChecklistWeek(weekKey);
+readChecklistWeek(weekKey);
 
-if (!weekHasResponsaveis(checklist, weekKey)) {
-  await syncWeekData(client, true).catch(() => {});
-}
-
+// ✅ O comando apenas publica o painel.
+// Ele nunca reconstrói ou altera a lista semanal congelada.
 const payload = await buildMainPanel(client, message.guild);
 const sent = await message.channel.send(payload);
 
