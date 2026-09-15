@@ -375,6 +375,12 @@ function weekHasResponsaveis(checklist, weekKey) {
   return Object.keys(checklist?.weeks?.[weekKey]?.responsaveis || {}).length > 0;
 }
 
+function weekHasCheckedMembers(weekData) {
+  return Object.values(weekData?.responsaveis || {}).some(resp =>
+    Object.values(resp?.members || {}).some(member => member?.checked === true)
+  );
+}
+
 function loadGiSource() {
   const dataFile = loadJSON(GI_DATA_FILE, null);
   if (dataFile && Array.isArray(dataFile.registros) && dataFile.registros.length > 0) {
@@ -552,10 +558,10 @@ async function syncWeekData(client, force = false) {
 
   const currentWeek = checklist.weeks[weekKey];
 
-  // 🔒 A lista semanal já foi criada.
-  // Depois de congelada, nenhuma sincronização automática, manual ou causada
-  // por reinicialização poderá adicionar, remover ou trocar membros.
-  if (currentWeek.snapshotLocked === true) {
+  // 🔒 Depois que pelo menos uma log for conferida, a lista semanal fica protegida.
+  // Enquanto ninguém bateu log na semana, uma sincronização manual forçada ainda
+  // pode corrigir os vínculos sem colocar nenhum progresso em risco.
+  if (currentWeek.snapshotLocked === true && (!force || weekHasCheckedMembers(currentWeek))) {
     return checklist;
   }
 
@@ -564,7 +570,6 @@ async function syncWeekData(client, force = false) {
   if (!force && currentWeek.lastSyncedAt && (Date.now() - currentWeek.lastSyncedAt < 5 * 60 * 1000)) {
     return checklist;
   }
-
   const giData = loadGiSource();
   const rawRegistros = Array.isArray(giData?.registros) ? giData.registros : [];
 
@@ -714,6 +719,8 @@ async function buildMainPanel(client, sourceGuild = null) {
   const checklist = readChecklistWeek(weekKey);
   const data = checklist.weeks[weekKey] || { responsaveis: {}, lastSyncedAt: null };
   const isSunday = getNowSP().getDay() === 0;
+  const hasCheckedMembers = weekHasCheckedMembers(data);
+  const canSynchronize = !hasCheckedMembers;
 
   let totalMembers = 0;
   let checkedMembers = 0;
@@ -782,7 +789,7 @@ fields.push({
     .setDescription(
       `📅 **Semana:** ${getWeekRangeLabel(weekKey)}\n` +
       `🕒 **Período para bater log:** Domingo às 00:00 até quarta-feira às 23:59\n` +
-      `🔒 **Lista semanal:** ${data.snapshotLocked ? "Congelada" : "Aguardando criação"}\n\n` +
+      `🔒 **Lista semanal:** ${hasCheckedMembers ? "Congelada" : "Sincronização liberada"}\n\n` +
       `👥 **Responsáveis com pendência:** \`${respsWithPending}\`\n` +
       `✅ **Membros conferidos:** \`${checkedMembers}\`\n` +
       `❌ **Membros pendentes:** \`${totalMembers - checkedMembers}\`\n` +
@@ -797,8 +804,13 @@ fields.push({
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId("logcheck_my_members").setLabel("Gerenciar Meus Membros").setStyle(ButtonStyle.Success).setEmoji("✅"),
     new ButtonBuilder().setCustomId("logcheck_admin_view").setLabel("Visão Geral").setStyle(ButtonStyle.Primary).setEmoji("👑"),
-    new ButtonBuilder().setCustomId("logcheck_sync_gi").setLabel("Lista Semanal Congelada").setStyle(ButtonStyle.Secondary).setEmoji("🔒")
+    new ButtonBuilder()
+      .setCustomId("logcheck_sync_gi")
+      .setLabel(canSynchronize ? "Sincronizar" : "Lista Semanal Congelada")
+      .setStyle(canSynchronize ? ButtonStyle.Primary : ButtonStyle.Secondary)
+      .setEmoji(canSynchronize ? "🔄" : "🔒")
   );
+
   return { embeds: [embed], components: [row] };
 }
 
@@ -824,6 +836,29 @@ export async function checklistHandleInteraction(interaction, client) {
       responsaveis: {},
       snapshotLocked: false
     };
+
+    if (!weekHasCheckedMembers(data)) {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+      const syncedChecklist = await syncWeekData(client, true);
+      const syncedData = syncedChecklist.weeks?.[weekKey] || { responsaveis: {} };
+      const totalResponsaveis = Object.keys(syncedData.responsaveis || {}).length;
+      const totalMembros = Object.values(syncedData.responsaveis || {}).reduce((acc, resp) => {
+        return acc + Object.keys(resp?.members || {}).length;
+      }, 0);
+
+      await refreshMainPanel(client, interaction.guild).catch(() => {});
+
+      return interaction.editReply({
+        content:
+          `✅ **Lista semanal sincronizada com sucesso.**\n\n` +
+          `Os vínculos foram atualizados porque nenhuma log havia sido conferida nesta semana.\n` +
+          `A lista será congelada automaticamente assim que a primeira log for marcada.\n\n` +
+          `👤 Responsáveis carregados: **${totalResponsaveis}**\n` +
+          `🧑 Membros carregados: **${totalMembros}**`,
+        components: []
+      });
+    }
 
     const totalResponsaveis = Object.keys(data.responsaveis || {}).length;
     const totalMembros = Object.values(data.responsaveis || {}).reduce((acc, resp) => {
