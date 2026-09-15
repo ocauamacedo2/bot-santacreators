@@ -8,6 +8,11 @@ import {
 } from "./formscreator.js";
 
 import {
+  getEvolutionFeedbackContext,
+  withActiveEvolutionThread,
+} from "./evolutionHierarchy.js";
+
+import {
   getStatsForUser,
   getWeeklyRanking,
 } from "./scGeralWeeklyRanking.js";
@@ -1107,6 +1112,7 @@ function messageToContextLine(
   }
 
   const author =
+    message?.evolutionOriginalAuthor ||
     message?.member
       ?.displayName ||
     message?.author
@@ -1192,18 +1198,90 @@ function isOurFeedbackMessage(
     ) ||
     raw.includes(
       "🌟 Fechando sua semana"
+    ) ||
+    raw.includes(
+      "💬 Acompanhamento da semana"
+    ) ||
+    raw.includes(
+      "🌟 Fechamento do acompanhamento"
+    ) ||
+    raw.includes(
+      "↳ Continuação "
+    )
+  );
+}
+
+function isHistoricalCopyMessage(
+  message
+) {
+  return Boolean(
+    (
+      message?.embeds ||
+      []
+    ).some(
+      embed =>
+        /Cópia histórica\s*•\s*origem\s+\d{17,22}/i.test(
+          String(
+            embed?.footer?.text ||
+            ""
+          )
+        )
+    )
+  );
+}
+
+function isEvolutionHierarchySystemMessage(
+  message
+) {
+  const raw = [
+    message?.content ||
+      "",
+
+    ...(
+      message?.embeds ||
+      []
+    ).flatMap(
+      embed => [
+        embed?.title ||
+          "",
+
+        embed?.description ||
+          "",
+      ]
+    ),
+  ].join(
+    "\n"
+  );
+
+  return (
+    message?.author?.id ===
+      message?.client?.user?.id &&
+    raw.includes(
+      "🔐 Evolução organizada por hierarquia"
     )
   );
 }
 
 async function collectFormsHistory(
-  thread,
+  threadsOrThread,
   weekKey
 ) {
+  const threads =
+    (
+      Array.isArray(
+        threadsOrThread
+      )
+        ? threadsOrThread
+        : [threadsOrThread]
+    ).filter(
+      thread =>
+        thread
+          ?.isTextBased
+          ?.()
+    );
+
   if (
-    !thread
-      ?.isTextBased
-      ?.()
+    !threads.length
   ) {
     return {
       currentWeek: [],
@@ -1215,73 +1293,93 @@ async function collectFormsHistory(
   const collected =
     new Map();
 
-  let before =
-    null;
-
   // =====================================================
-  // VARREDURA DE ATÉ 300 MENSAGENS DO FORMS
+  // VARREDURA DE ATÉ 300 MENSAGENS POR TÓPICO
   // =====================================================
   //
-  // Isso permite enxergar registros, alinhamentos,
-  // comentários e avaliações que poderiam ficar fora
-  // das últimas 100 mensagens.
+  // Agora a análise considera o tópico ativo e todos os
+  // históricos válidos retornados pela hierarquia.
+  //
+  // As cópias históricas criadas durante uma promoção
+  // são ignoradas aqui porque a mensagem original já será
+  // lida no tópico onde realmente nasceu.
+  //
+  // Isso impede que o mesmo feedback seja contado duas
+  // ou três vezes quando a pessoa passou por várias fases.
   //
   for (
-    let page = 0;
-    page < 3;
-    page++
+    const thread of
+    threads
   ) {
-    const options = {
-      limit: 100,
-    };
-
-    if (
-      before
-    ) {
-      options.before =
-        before;
-    }
-
-    const batch =
-      await thread
-        .messages
-        .fetch(
-          options
-        )
-        .catch(
-          () => null
-        );
-
-    if (
-      !batch ||
-      batch.size ===
-        0
-    ) {
-      break;
-    }
-
-    for (
-      const message of
-      batch.values()
-    ) {
-      collected.set(
-        message.id,
-        message
-      );
-    }
-
-    const oldest =
-      batch.last();
-
-    before =
-      oldest?.id ||
+    let before =
       null;
 
-    if (
-      batch.size <
-      100
+    for (
+      let page = 0;
+      page < 3;
+      page++
     ) {
-      break;
+      const options = {
+        limit: 100,
+      };
+
+      if (
+        before
+      ) {
+        options.before =
+          before;
+      }
+
+      const batch =
+        await thread
+          .messages
+          .fetch(
+            options
+          )
+          .catch(
+            () => null
+          );
+
+      if (
+        !batch ||
+        batch.size ===
+          0
+      ) {
+        break;
+      }
+
+      for (
+        const message of
+        batch.values()
+      ) {
+        if (
+          threads.length > 1 &&
+          isHistoricalCopyMessage(
+            message
+          )
+        ) {
+          continue;
+        }
+
+        collected.set(
+          message.id,
+          message
+        );
+      }
+
+      const oldest =
+        batch.last();
+
+      before =
+        oldest?.id ||
+        null;
+
+      if (
+        batch.size <
+        100
+      ) {
+        break;
+      }
     }
   }
 
@@ -1308,6 +1406,9 @@ async function collectFormsHistory(
       .filter(
         message =>
           !isOurFeedbackMessage(
+            message
+          ) &&
+          !isEvolutionHierarchySystemMessage(
             message
           )
       )
@@ -1392,7 +1493,6 @@ async function collectFormsHistory(
       collected.size,
   };
 }
-
 // =====================================================
 // COLETA INDIVIDUAL
 // =====================================================
@@ -1508,21 +1608,42 @@ async function collectMemberFacts({
       () => null
     );
 
-  const formsThread =
+  const evolutionContext =
     formsData?.threadId
-      ? await client
-          .channels
-          .fetch(
-            formsData.threadId
-          )
-          .catch(
-            () => null
-          )
+      ? await getEvolutionFeedbackContext(
+          client,
+          userId,
+          {
+            guildId:
+              guild.id,
+
+            originalThreadId:
+              formsData.threadId,
+
+            reason:
+              "Coleta do feedback semanal",
+          }
+        )
       : null;
+
+  const formsThread =
+    evolutionContext
+      ?.thread ||
+    null;
+
+  const formsThreads =
+    Array.isArray(
+      evolutionContext?.threads
+    ) &&
+    evolutionContext.threads.length
+      ? evolutionContext.threads
+      : formsThread
+        ? [formsThread]
+        : [];
 
   const formsHistory =
     await collectFormsHistory(
-      formsThread,
+      formsThreads,
       weekKey
     );
 
@@ -1676,6 +1797,11 @@ async function collectMemberFacts({
     formsData,
 
     formsThread,
+
+    evolutionTier:
+      evolutionContext
+        ?.tier ??
+      null,
 
     formsHistory:
       formsHistory.currentWeek,
@@ -4766,35 +4892,77 @@ async function processFeedback({
         mode,
       });
 
-    if (
-      mode ===
-      "manual"
-    ) {
-      const result =
-        await upsertManualFeedback({
-          facts,
-          text,
-          actorId,
-        });
+    const publishFeedback =
+      async (
+        confirmedThread
+      ) => {
+        const publicationFacts = {
+          ...facts,
 
-      return {
-        ...result,
-        text,
-        facts,
+          formsThread:
+            confirmedThread,
+        };
+
+        if (
+          mode ===
+          "manual"
+        ) {
+          const result =
+            await upsertManualFeedback({
+              facts:
+                publicationFacts,
+
+              text,
+              actorId,
+            });
+
+          return {
+            ...result,
+            text,
+
+            facts:
+              publicationFacts,
+          };
+        }
+
+        const result =
+          await sendAutomaticFeedback({
+            facts:
+              publicationFacts,
+
+            text,
+          });
+
+        return {
+          ...result,
+          text,
+
+          facts:
+            publicationFacts,
+        };
       };
+
+    if (
+      facts.evolutionTier ==
+        null
+    ) {
+      throw new Error(
+        "Não foi possível confirmar a fase ativa da evolução antes da publicação."
+      );
     }
 
-    const result =
-      await sendAutomaticFeedback({
-        facts,
-        text,
-      });
+    return await withActiveEvolutionThread(
+      client,
+      userId,
+      {
+        tier:
+          facts.evolutionTier,
 
-    return {
-      ...result,
-      text,
-      facts,
-    };
+        thread:
+          facts.formsThread,
+      },
+      publishFeedback
+    );
   } finally {
     runningKeys.delete(
       runningKey

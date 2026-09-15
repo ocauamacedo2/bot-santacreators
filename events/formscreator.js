@@ -28,6 +28,8 @@ import {
   getActiveEvolutionThreadId,
   initializeEvolutionHierarchy,
   syncEvolutionHierarchyForMember,
+  isHistoricalEvolutionThread,
+  restoreHistoricalEvolutionThread,
 } from "./evolutionHierarchy.js";
 
 const GUILD_ID = "1262262852782129183";
@@ -1012,9 +1014,13 @@ async function syncLegacyThreads(client, progressMsg = null) {
 
   let updates = 0;
   let checkedThreads = 0;
-
   for (const thread of allThreads) {
     checkedThreads++;
+
+    if (isHistoricalEvolutionThread(thread.id)) {
+      await restoreHistoricalEvolutionThread(thread);
+      continue;
+    }
 
     if (progressMsg && (checkedThreads === 1 || checkedThreads % 10 === 0 || checkedThreads === allThreads.length)) {
       await progressMsg.edit(
@@ -1910,9 +1916,14 @@ export async function findFormsCreatorThreadIdByUserId(
             originalThreadId,
             reason: "Consulta do tópico ativo",
         }
-    ).catch(
-        () => originalThreadId
-    );
+    ).catch((error) => {
+        console.error(
+            "[FormsCreator] Falha ao resolver tópico ativo:",
+            error
+        );
+
+        return null;
+    });
 }
 
 export async function getFormsCreatorPersonData(client, userId) {
@@ -2182,16 +2193,21 @@ export async function setFormsCreatorArea(client, { threadId, newArea, actor }) 
         );
     }
 
-    if (
-        thread.archived &&
-        typeof thread.setArchived === "function"
-    ) {
-        await thread
-            .setArchived(false)
-            .catch(() => {});
-    }
+    try {
+        if (
+            thread.archived ||
+            isHistoricalEvolutionThread(thread.id)
+        ) {
+            await thread.edit({
+                archived: false,
+                locked: isHistoricalEvolutionThread(thread.id)
+                    ? true
+                    : thread.locked,
+                reason: "Atualizando Área de Interesse",
+            });
+        }
 
-    let registroMsg = null;
+        let registroMsg = null;
 
     if (
         registration?.messageId
@@ -2395,6 +2411,9 @@ export async function setFormsCreatorArea(client, { threadId, newArea, actor }) 
         newArea:
             normalizedArea
     };
+    } finally {
+        await restoreHistoricalEvolutionThread(thread);
+    }
 }
 
 // =========================

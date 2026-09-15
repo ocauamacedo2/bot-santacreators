@@ -199,15 +199,24 @@ function readState() {
     );
 
     if (
+      !parsed ||
+      typeof parsed !== "object" ||
       !parsed.users ||
-      typeof parsed.users !== "object"
+      typeof parsed.users !== "object" ||
+      Array.isArray(parsed.users)
     ) {
-      parsed.users = {};
+      throw new Error("Formato inválido do estado da evolução.");
     }
 
     return parsed;
-  } catch {
-    return emptyState();
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return emptyState();
+    }
+
+    throw new Error(
+      `Não foi possível ler ${STATE_FILE}: ${error.message}`
+    );
   }
 }
 
@@ -548,8 +557,7 @@ async function configureChannelPermissions(
           .delete(
             overwrite.id,
             "Removendo permissão antiga da evolução"
-          )
-          .catch(() => null);
+          );
       }
 
       continue;
@@ -586,8 +594,7 @@ async function configureChannelPermissions(
           .delete(
             overwrite.id,
             "Removendo acesso individual antigo da evolução"
-          )
-          .catch(() => null);
+          );
       }
     }
   }
@@ -696,6 +703,7 @@ async function configureChannelPermissions(
           SendMessagesInThreads: true,
           CreatePublicThreads: true,
           CreatePrivateThreads: true,
+          ManageMessages: true,
           ManageThreads: true,
         },
         {
@@ -724,7 +732,7 @@ async function configureChannelPermissions(
           SendMessagesInThreads: true,
           CreatePublicThreads: true,
           CreatePrivateThreads: true,
-          ManageThreads: true,
+          ManageThreads: false,
         },
         {
           reason:
@@ -1000,6 +1008,45 @@ async function copyHistory(
   sourceThread,
   targetThread
 ) {
+  const sourceTier = Number(
+    Object.keys(CHANNEL_BY_TIER).find(
+      (key) =>
+        CHANNEL_BY_TIER[key] === sourceThread.parentId
+    )
+  );
+
+  const targetTier = Number(
+    Object.keys(CHANNEL_BY_TIER).find(
+      (key) =>
+        CHANNEL_BY_TIER[key] === targetThread.parentId
+    )
+  );
+
+  if (!sourceTier || !targetTier) {
+    throw new Error("Canal de migração desconhecido.");
+  }
+
+  /*
+   * O histórico somente sobe.
+   * Nunca copia para a mesma fase ou para uma inferior.
+   */
+
+  if (targetTier <= sourceTier) {
+    return 0;
+  }
+
+  await setThreadMode(
+    sourceThread,
+    false,
+    "Origem preservada como histórico"
+  );
+
+  await setThreadMode(
+    targetThread,
+    true,
+    "Destino da promoção"
+  );
+
   const messages =
     await fetchAllMessages(
       sourceThread
@@ -1211,12 +1258,7 @@ async function updateStatusMessage(
   payload
 ) {
   const messages =
-    await thread
-      .messages
-      .fetch({
-        limit: 100,
-      })
-      .catch(() => null);
+    await fetchAllMessages(thread);
 
   const previous =
     messages?.find(
@@ -1335,54 +1377,52 @@ async function setThreadMode(
   active,
   reason
 ) {
-  /*
-   * Antes de atualizar, desarquiva.
-   */
+  let current = await thread.fetch(true);
 
-  if (thread.archived) {
-    await thread
-      .setArchived(
-        false,
-        reason
-      )
-      .catch(() => null);
+  if (active) {
+    if (current.archived || current.locked) {
+      await current.edit({
+        archived: false,
+        locked: false,
+        reason,
+      });
+    }
+  } else if (!current.archived || !current.locked) {
+    /*
+     * Um histórico já arquivado e travado não é reaberto.
+     *
+     * Quando está arquivado, mas ainda não possui trava,
+     * a alteração precisa desarquivá-lo para aplicar
+     * a trava e depois arquivá-lo novamente.
+     */
+
+    if (current.archived) {
+      current = await current.edit({
+        archived: false,
+        locked: true,
+        reason,
+      });
+    }
+
+    await current.edit({
+      archived: true,
+      locked: true,
+      reason,
+    });
   }
 
-  /*
-   * Tópico ativo:
-   * locked precisa ser false.
-   *
-   * Tópico histórico:
-   * locked precisa ser true.
-   */
+  const confirmed = await thread.fetch(true);
 
   if (
-    thread.locked === active
+    confirmed.archived !== !active ||
+    confirmed.locked !== !active
   ) {
-    await thread
-      .setLocked(
-        !active,
-        reason
-      )
-      .catch(() => null);
+    throw new Error(
+      `Não consegui confirmar a trava do tópico ${thread.id}.`
+    );
   }
 
-  /*
-   * Tópicos históricos são arquivados
-   * depois de serem bloqueados.
-   */
-
-  if (
-    !active &&
-    !thread.archived
-  ) {
-    await thread
-      .setArchived(
-        true,
-        reason
-      )
-      .catch(() => null);
-  }
+  return confirmed;
 }
 
 // =====================================================
@@ -1509,7 +1549,10 @@ async function performSync(
 
   const member =
     await guild.members
-      .fetch(userId)
+      .fetch({
+        user: userId,
+        force: true,
+      })
       .catch(() => null);
 
   if (!member) {
@@ -1703,6 +1746,39 @@ async function performSync(
    * daquela pessoa.
    */
 
+  /*
+   * Primeiro fecha os históricos.
+   *
+   * Assim, uma falha posterior na edição de um painel
+   * não impede o fechamento dos demais históricos.
+   */
+
+  for (
+    const [savedTier, threadId]
+    of Object.entries(userState.tiers)
+  ) {
+    if (Number(savedTier) === tier) {
+      continue;
+    }
+
+    const historical = await fetchChannel(
+      client,
+      threadId
+    );
+
+    if (!historical?.isThread?.()) {
+      throw new Error(
+        `Histórico indisponível para conferência: ${threadId}`
+      );
+    }
+
+    await setThreadMode(
+      historical,
+      false,
+      "Histórico: somente leitura"
+    );
+  }
+
   for (
     const [
       savedTier,
@@ -1722,72 +1798,95 @@ async function performSync(
       continue;
     }
 
-    const isActive =
-      Number(savedTier) ===
-      tier;
+    const isActive = Number(savedTier) === tier;
+
+    const panelKey = JSON.stringify([
+      tier,
+      activeThread.id,
+      userState.tiers,
+    ]);
+
+    userState.panelKeys ||= {};
 
     /*
-     * Precisa desarquivar temporariamente
-     * para atualizar painel e botões.
+     * Uma consulta do tópico ativo não deve reabrir
+     * os históricos apenas para repetir o mesmo painel.
      */
 
-    if (thread.archived) {
-      await thread
-        .setArchived(
-          false,
-          "Atualizando sinalização da evolução"
-        )
-        .catch(() => null);
+    if (
+      !isActive &&
+      userState.panelKeys[threadId] === panelKey
+    ) {
+      await setThreadMode(
+        thread,
+        false,
+        "Histórico permanece fechado"
+      );
+
+      continue;
     }
 
-    await updateStatusMessage(
-      thread,
-      {
-        embeds: [
-          createStatusEmbed({
-            member,
-            tier,
-            activeThread,
-            allThreadIds:
-              userState.tiers,
-          }),
-        ],
+    try {
+      /*
+       * Quando o painel precisa mudar, a manutenção
+       * mantém locked: true nos tópicos históricos.
+       */
 
-        components:
-          createStatusComponents(
+      if (
+        thread.archived ||
+        thread.locked !== !isActive
+      ) {
+        await thread.edit({
+          archived: false,
+          locked: !isActive,
+          reason: "Atualizando sinalização da evolução",
+        });
+      }
+
+      await updateStatusMessage(
+        thread,
+        {
+          embeds: [
+            createStatusEmbed({
+              member,
+              tier,
+              activeThread,
+              allThreadIds: userState.tiers,
+            }),
+          ],
+
+          components: createStatusComponents(
             guild.id,
             thread.id,
             activeThread.id
           ),
 
-        allowedMentions: {
-          parse: [],
-        },
-      }
-    );
+          allowedMentions: {
+            parse: [],
+          },
+        }
+      );
 
-    /*
-     * Desabilita os botões antigos
-     * quando o tópico não é o atual.
-     */
+      await setFormsManagementButtonsDisabled(
+        thread,
+        !isActive
+      );
 
-    await setFormsManagementButtonsDisabled(
-      thread,
-      !isActive
-    );
+      userState.panelKeys[threadId] = panelKey;
 
-    /*
-     * Aplica bloqueio ou liberação.
-     */
+      writeState(state);
+    } finally {
+      /*
+       * Mesmo que editar o painel ou os botões falhe,
+       * o histórico precisa voltar a ficar fechado.
+       */
 
-    await setThreadMode(
-      thread,
-      isActive,
-      (
-        `${reason} • fase ` +
-        `${TIER_NAME[tier]}`
-      )
-    );
+      await setThreadMode(
+        thread,
+        isActive,
+        `${reason} • fase ${TIER_NAME[tier]}`
+      );
+    }
   }
 
   return {
@@ -1838,6 +1937,273 @@ export function syncEvolutionHierarchyForMember(
 // =====================================================
 // BUSCA DO TÓPICO ATIVO
 // =====================================================
+
+export function isHistoricalEvolutionThread(threadId) {
+  const id = String(threadId);
+
+  return Object.values(readState().users).some(
+    (record) =>
+      record.activeThreadId &&
+      String(record.activeThreadId) !== id &&
+      Object.values(record.tiers || {}).some(
+        (savedId) => String(savedId) === id
+      )
+  );
+}
+
+export async function restoreHistoricalEvolutionThread(thread) {
+  if (
+    thread?.isThread?.() &&
+    isHistoricalEvolutionThread(thread.id)
+  ) {
+    await setThreadMode(
+      thread,
+      false,
+      "Histórico: somente leitura"
+    );
+  }
+}
+
+function installHistoricalEvolutionGuards(client) {
+  if (
+    !client ||
+    client.__EVOLUTION_HISTORICAL_GUARDS__
+  ) {
+    return;
+  }
+
+  client.__EVOLUTION_HISTORICAL_GUARDS__ =
+    true;
+
+  /*
+   * Se alguém com uma permissão elevada tentar
+   * desbloquear manualmente um histórico, o bot
+   * restaura a trava automaticamente.
+   *
+   * O listener reage ao DESBLOQUEIO.
+   * Um histórico pode ficar temporariamente
+   * desarquivado e ainda travado durante manutenção
+   * interna do próprio bot sem causar conflito.
+   */
+  client.on(
+    "threadUpdate",
+    async (oldThread, newThread) => {
+      if (
+        newThread?.guildId !== GUILD_ID ||
+        !newThread?.isThread?.() ||
+        !isHistoricalEvolutionThread(
+          newThread.id
+        ) ||
+        newThread.locked
+      ) {
+        return;
+      }
+
+      try {
+        await restoreHistoricalEvolutionThread(
+          newThread
+        );
+      } catch (error) {
+        console.error(
+          `[EVOLUTION_HIERARCHY] Falha ao retravar histórico ${newThread.id}:`,
+          error
+        );
+      }
+    }
+  );
+
+  /*
+   * Segunda barreira.
+   *
+   * Se alguém conseguir enviar uma mensagem em um
+   * histórico por possuir Administrator ou alguma
+   * permissão externa que ignore a trava normal,
+   * a mensagem é removida e o tópico é travado
+   * novamente.
+   *
+   * Somente o próprio bot fica fora desta regra,
+   * pois ele precisa realizar manutenção interna.
+   */
+  client.on(
+    "messageCreate",
+    async (message) => {
+      if (
+        message?.guildId !== GUILD_ID ||
+        !message?.channel?.isThread?.() ||
+        message.author?.id ===
+          client.user?.id ||
+        !isHistoricalEvolutionThread(
+          message.channel.id
+        )
+      ) {
+        return;
+      }
+
+      try {
+        const deleted =
+          await message
+            .delete()
+            .then(() => true)
+            .catch(() => false);
+
+        await restoreHistoricalEvolutionThread(
+          message.channel
+        );
+
+        if (!deleted) {
+          console.warn(
+            `[EVOLUTION_HIERARCHY] Não consegui apagar mensagem enviada no histórico ${message.channel.id}. Confira ManageMessages do bot.`
+          );
+        }
+      } catch (error) {
+        console.error(
+          `[EVOLUTION_HIERARCHY] Proteção de escrita do histórico ${message.channel.id}:`,
+          error
+        );
+      }
+    }
+  );
+}
+
+export async function getEvolutionFeedbackContext(
+  client,
+  userId,
+  options = {}
+) {
+  const known = readState().users[String(userId)];
+
+  if (
+    !options.originalThreadId &&
+    !Object.keys(known?.tiers || {}).length
+  ) {
+    throw new Error(
+      "Nenhum registro de evolução foi associado a esta pessoa."
+    );
+  }
+
+  const result = await syncEvolutionHierarchyForMember(
+    client,
+    {
+      ...options,
+      userId,
+    }
+  );
+
+  if (!result.ok) {
+    throw new Error(
+      `Evolução indisponível: ${result.reason}`
+    );
+  }
+
+  const record = readState().users[String(userId)];
+  const threads = [];
+
+  for (
+    const [tierKey, threadId]
+    of Object.entries(record?.tiers || {})
+  ) {
+    const tier = Number(tierKey);
+
+    /*
+     * Conteúdo superior não entra no prompt de uma
+     * publicação que ficará disponível em nível inferior.
+     */
+
+    if (tier > result.tier) {
+      continue;
+    }
+
+    const thread = await client.channels.fetch(
+      threadId,
+      {
+        force: true,
+      }
+    );
+
+    if (
+      !thread?.isThread?.() ||
+      thread.guildId !== (options.guildId || GUILD_ID) ||
+      thread.parentId !== CHANNEL_BY_TIER[tier]
+    ) {
+      throw new Error(
+        `Vínculo inválido da evolução: ${threadId}`
+      );
+    }
+
+    threads.push(thread);
+  }
+
+  const thread = threads.find(
+    (item) => item.id === result.threadId
+  );
+
+  if (!thread) {
+    throw new Error(
+      "Tópico ativo não encontrado entre os tópicos válidos."
+    );
+  }
+
+  return {
+    tier: result.tier,
+    thread,
+    threads,
+  };
+}
+
+export function withActiveEvolutionThread(
+  client,
+  userId,
+  expected,
+  action
+) {
+  const task = syncQueue.then(async () => {
+    const thread = await client.channels.fetch(
+      expected.thread.id,
+      {
+        force: true,
+      }
+    );
+
+    if (
+      !thread?.isThread?.() ||
+      thread.guildId !== expected.thread.guildId
+    ) {
+      throw new Error(
+        "O tópico de publicação não está disponível."
+      );
+    }
+
+    const member = await thread.guild.members.fetch({
+      user: userId,
+      force: true,
+    });
+
+    const record = readState().users[String(userId)];
+
+    if (
+      getEvolutionTierForMember(member) !== expected.tier ||
+      record?.activeThreadId !== thread.id ||
+      Number(record?.activeTier) !== expected.tier ||
+      thread.parentId !== CHANNEL_BY_TIER[expected.tier]
+    ) {
+      throw new Error(
+        "A hierarquia mudou durante a geração. Gere o feedback novamente."
+      );
+    }
+
+    await setThreadMode(
+      thread,
+      true,
+      "Publicação no tópico ativo confirmado"
+    );
+
+    return action(thread);
+  });
+
+  syncQueue = task.catch(() => null);
+
+  return task;
+}
 
 export async function getActiveEvolutionThread(
   client,
@@ -1893,6 +2259,73 @@ export async function initializeEvolutionHierarchy(
     client,
     GUILD_ID
   );
+
+  installHistoricalEvolutionGuards(
+    client
+  );
+
+  if (!client.__EVOLUTION_HIERARCHY_ROLE_LISTENER__) {
+    client.__EVOLUTION_HIERARCHY_ROLE_LISTENER__ = true;
+
+    client.on(
+      "guildMemberUpdate",
+      async (oldMember, member) => {
+        if (
+          member.guild.id !== GUILD_ID ||
+          member.user.bot
+        ) {
+          return;
+        }
+
+        const sameRoles =
+          oldMember.roles.cache.size ===
+            member.roles.cache.size &&
+          oldMember.roles.cache.every(
+            (role) =>
+              member.roles.cache.has(role.id)
+          );
+
+        if (sameRoles) {
+          return;
+        }
+
+        try {
+          const known =
+            readState().users[member.id];
+
+          const originalThreadId =
+            known?.tiers?.[EVOLUTION_TIERS.TEAM] ||
+            (
+              typeof resolveOriginalThreadId === "function"
+                ? await resolveOriginalThreadId(member.id)
+                : null
+            );
+
+          if (
+            !originalThreadId &&
+            !known?.activeThreadId
+          ) {
+            return;
+          }
+
+          await syncEvolutionHierarchyForMember(
+            client,
+            {
+              guildId: member.guild.id,
+              userId: member.id,
+              originalThreadId,
+              reason: "Mudança de cargos: conferência da evolução",
+            }
+          );
+        } catch (error) {
+          console.error(
+            `[EVOLUTION_HIERARCHY] Mudança de cargos de ${member.id}:`,
+            error
+          );
+        }
+      }
+    );
+  }
 
   const guild =
     client.guilds.cache.get(
