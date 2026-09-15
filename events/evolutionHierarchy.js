@@ -477,6 +477,13 @@ async function configureChannelPermissions(
         SendMessagesInThreads: false,
         CreatePublicThreads: false,
         CreatePrivateThreads: false,
+
+        /*
+         * Impede que permissões gerais de cargos
+         * permitam reabrir tópicos históricos.
+         */
+
+        ManageThreads: false,
       },
       {
         reason:
@@ -613,6 +620,15 @@ async function configureChannelPermissions(
           SendMessagesInThreads: false,
           CreatePublicThreads: false,
           CreatePrivateThreads: false,
+
+          /*
+           * Mesmo que esse cargo possua
+           * Gerenciar tópicos no servidor,
+           * dentro deste canal não poderá
+           * reabrir tópicos históricos.
+           */
+
+          ManageThreads: false,
         },
         {
           reason:
@@ -646,6 +662,16 @@ async function configureChannelPermissions(
           ReadMessageHistory: true,
           SendMessages: true,
           SendMessagesInThreads: true,
+
+          /*
+           * Pode avaliar tópicos ativos,
+           * mas não pode reabrir um tópico
+           * histórico bloqueado.
+           */
+
+          CreatePublicThreads: false,
+          CreatePrivateThreads: false,
+          ManageThreads: false,
         },
         {
           reason:
