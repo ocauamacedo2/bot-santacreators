@@ -45,8 +45,28 @@ const {
   findFormsCreatorThreadIdByUserId,
   findFormsCreatorThreadLinkByUserId,
   setFormsCreatorStatus,
-  setFormsCreatorArea
+  setFormsCreatorArea,
+  findOriginalFormsCreatorThreadIdByUserId
 } = formsCreator;
+
+    // ✅ EVOLUÇÃO EM TRÊS FASES
+    let evolutionHierarchy = {};
+
+    try {
+      evolutionHierarchy =
+        await import(
+          './evolutionHierarchy.js'
+        );
+    } catch (e) {
+      console.warn(
+        '[SC_GI] evolutionHierarchy.js indisponível:',
+        e?.message || e
+      );
+    }
+
+    const {
+      syncEvolutionHierarchyForMember
+    } = evolutionHierarchy;
 
     // ✅ NOVO: importa a hierarquia institucional oficial.
     // A automação de área NÃO usa posição técnica dos cargos do Discord.
@@ -4544,6 +4564,67 @@ if (!rec.active) {
           newMember.guild;
 
         if (!guild) return;
+
+        /*
+         * Confere se houve qualquer mudança
+         * nos cargos do membro.
+         */
+
+        const rolesMudaram =
+          oldMember.roles.cache.size !==
+            newMember.roles.cache.size ||
+          oldMember.roles.cache.some(
+            (role) =>
+              !newMember.roles.cache.has(
+                role.id
+              )
+          );
+
+        /*
+         * A sincronização hierárquica fica antes
+         * do bypass do Controle GI.
+         *
+         * Assim até alterações feitas pelo próprio
+         * bot atualizam corretamente os tópicos.
+         */
+
+        if (
+          rolesMudaram &&
+          typeof syncEvolutionHierarchyForMember ===
+            'function'
+        ) {
+          const originalThreadId =
+            typeof findOriginalFormsCreatorThreadIdByUserId ===
+              'function'
+              ? await findOriginalFormsCreatorThreadIdByUserId(
+                  client,
+                  newMember.id
+                ).catch(() => null)
+              : null;
+
+          await syncEvolutionHierarchyForMember(
+            client,
+            {
+              guildId:
+                guild.id,
+
+              userId:
+                newMember.id,
+
+              originalThreadId,
+
+              reason:
+                'Cargo do membro alterado no Discord'
+            }
+          ).catch(
+            (error) => {
+              console.error(
+                `[SC_GI] Falha ao sincronizar evolução de ${newMember.id}:`,
+                error
+              );
+            }
+          );
+        }
 
         // Se foi uma alteração interna do próprio sistema,
         // não registra como decisão manual.

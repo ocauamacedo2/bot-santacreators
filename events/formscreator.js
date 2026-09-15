@@ -23,13 +23,20 @@ const __dirname = path.dirname(__filename);
 // ✅ IMPORTS ADICIONAIS
 // =========================
 import { getWeeklyRanking } from "./scGeralWeeklyRanking.js";
+
+import {
+  getActiveEvolutionThreadId,
+  initializeEvolutionHierarchy,
+  syncEvolutionHierarchyForMember,
+} from "./evolutionHierarchy.js";
+
+const GUILD_ID = "1262262852782129183";
 const CREATOR_EQUIPE_ROLE_ID = "1352429001188180039";
 const CREATOR_FORM_CHANNEL_ID = "1389401636446802042";
 const CREATOR_FORM_BUTTON_CHANNEL_ID = "1389401636446802042";
 const PUBLIC_REMINDER_CHANNEL_ID = "1389362249017327842";
 const ALINHAMENTO_LOG_CHANNEL_ID = "1425256185707233301";
 const LOG_CHANNEL_ID_V2 = "1486009731595112448"; // ✅ Novo canal de logs de status
-
 const HIERARQUIA_LINK_1 =
   "https://discord.com/channels/755203021490749530/1430736372112560261";
 const HIERARQUIA_LINK_2 =
@@ -1394,6 +1401,18 @@ state.registrations[topic.id] = {
 };
     writeState(state);
 
+    await syncEvolutionHierarchyForMember(client, {
+        guildId: guild.id,
+        userId: targetId,
+        originalThreadId: topic.id,
+        reason: "Registro de evolução criado",
+    }).catch((error) => {
+        console.error(
+            `[FormsCreator] Falha ao sincronizar hierarquia de ${targetId}:`,
+            error
+        );
+    });
+
     // ✅ CORREÇÃO: Enviar DM para o usuário
     if (membro) {
         try {
@@ -1430,7 +1449,7 @@ state.registrations[topic.id] = {
     return { threadId: topic.id, messageId: registroMsg?.id };
 }
 
-export async function findFormsCreatorThreadIdByUserId(clientOrUserId, maybeUserId = null) {
+export async function findOriginalFormsCreatorThreadIdByUserId(clientOrUserId, maybeUserId = null) {
     const client = maybeUserId ? clientOrUserId : null;
     const targetUserId = String(maybeUserId || clientOrUserId || "").trim();
 
@@ -1843,6 +1862,59 @@ export async function findFormsCreatorThreadIdByUserId(clientOrUserId, maybeUser
     return null;
 }
 
+export async function findFormsCreatorThreadIdByUserId(
+    clientOrUserId,
+    maybeUserId = null
+) {
+    const client =
+        maybeUserId
+            ? clientOrUserId
+            : null;
+
+    const targetUserId =
+        String(
+            maybeUserId ||
+            clientOrUserId ||
+            ""
+        ).trim();
+
+    if (!targetUserId) {
+        return null;
+    }
+
+    const originalThreadId =
+        await findOriginalFormsCreatorThreadIdByUserId(
+            clientOrUserId,
+            maybeUserId
+        );
+
+    /*
+     * Sem uma instância do client,
+     * mantém o comportamento antigo.
+     */
+
+    if (!client) {
+        return originalThreadId;
+    }
+
+    /*
+     * Com o client, retorna o tópico
+     * correspondente ao cargo atual.
+     */
+
+    return await getActiveEvolutionThreadId(
+        client,
+        targetUserId,
+        {
+            guildId: GUILD_ID,
+            originalThreadId,
+            reason: "Consulta do tópico ativo",
+        }
+    ).catch(
+        () => originalThreadId
+    );
+}
+
 export async function getFormsCreatorPersonData(client, userId) {
     const targetUserId = String(userId || "").trim();
 
@@ -1850,7 +1922,7 @@ export async function getFormsCreatorPersonData(client, userId) {
         return null;
     }
 
-    const threadId = await findFormsCreatorThreadIdByUserId(
+    const threadId = await findOriginalFormsCreatorThreadIdByUserId(
         client,
         targetUserId
     );
@@ -2338,6 +2410,18 @@ export async function formsCreatorOnReady(client) {
     // ✅ NOVO: Sincroniza registros antigos (adiciona botões e salva no state)
     await syncLegacyThreads(client);
 
+    // ✅ EVOLUÇÃO EM TRÊS FASES
+    // Configura os canais, confere os cargos atuais
+    // e cria/trava os tópicos necessários.
+    await initializeEvolutionHierarchy(
+      client,
+      (userId) =>
+        findOriginalFormsCreatorThreadIdByUserId(
+          client,
+          userId
+        )
+    );
+
     // ✅ LISTENER RESERVA: garante que comandos como !syncforms funcionem
     // mesmo se o index.js não estiver chamando formsCreatorHandleMessage.
     if (!client.__FORMS_CREATOR_MESSAGE_LISTENER__) {
@@ -2693,6 +2777,18 @@ state.registrations[topic.id] = {
   messageId: registroMsg?.id || null
 };
 writeState(state);
+
+await syncEvolutionHierarchyForMember(client, {
+  guildId: guild.id,
+  userId: idDiscord,
+  originalThreadId: topic.id,
+  reason: "Registro de evolução criado pelo formulário",
+}).catch((error) => {
+  console.error(
+    `[FormsCreator] Falha ao sincronizar hierarquia de ${idDiscord}:`,
+    error
+  );
+});
 
       // DMs pros cargos
       const linkDoTopico = `https://discord.com/channels/${guild.id}/${topic.id}`;
