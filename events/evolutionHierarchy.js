@@ -7,6 +7,7 @@ import {
   ButtonBuilder,
   ButtonStyle,
   EmbedBuilder,
+  OverwriteType,
 } from "discord.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -81,6 +82,11 @@ const ADMIN_USERS = new Set([
   "660311795327828008",
 ]);
 
+/*
+ * Responsáveis:
+ * podem visualizar todas as três fases.
+ */
+
 const RESPONSIBLE_ROLES = new Set([
   ROLE.OWNER,
   ROLE.RESP_CREATORS,
@@ -88,12 +94,39 @@ const RESPONSIBLE_ROLES = new Set([
   ROLE.RESP_LIDER,
 ]);
 
-const COORDINATION_ROLES = new Set([
+/*
+ * Coordenação:
+ * pode avaliar Equipe e Gestão.
+ *
+ * Quando uma pessoa possui Coord. Creators,
+ * o próprio tópico dela fica na fase dos
+ * Responsáveis para que ela não veja os
+ * feedbacks escritos sobre ela.
+ */
+
+const COORDINATOR_ROLES = new Set([
   ROLE.COORD_CREATORS,
+]);
+
+/*
+ * Gestão:
+ * pode avaliar os membros da Equipe.
+ *
+ * O próprio tópico de um Gestor, Manager
+ * Creators ou Social Medias fica na fase
+ * da Coordenação.
+ */
+
+const MANAGEMENT_ROLES = new Set([
   ROLE.GESTOR_CREATORS,
   ROLE.MANAGER_CREATORS,
   ROLE.SOCIAL_MEDIAS,
 ]);
+
+/*
+ * Equipe:
+ * o tópico fica na primeira fase.
+ */
 
 const TEAM_ROLES = new Set([
   ROLE.EQUIPE_MANAGER,
@@ -101,6 +134,36 @@ const TEAM_ROLES = new Set([
   ROLE.EQUIPE_CREATORS,
 ]);
 
+/*
+ * Quem pode avaliar os tópicos da Equipe.
+ */
+
+const TEAM_EVALUATOR_ROLES = new Set([
+  ...RESPONSIBLE_ROLES,
+  ...COORDINATOR_ROLES,
+  ...MANAGEMENT_ROLES,
+]);
+
+/*
+ * Quem pode avaliar os tópicos da Gestão.
+ *
+ * Os próprios Gestores não estão aqui.
+ */
+
+const MANAGEMENT_EVALUATOR_ROLES = new Set([
+  ...RESPONSIBLE_ROLES,
+  ...COORDINATOR_ROLES,
+]);
+
+/*
+ * Quem pode avaliar os tópicos da Coordenação.
+ *
+ * Os próprios Coordenadores não estão aqui.
+ */
+
+const COORDINATION_EVALUATOR_ROLES = new Set([
+  ...RESPONSIBLE_ROLES,
+]);
 const TIER_NAME = Object.freeze({
   [EVOLUTION_TIERS.TEAM]:
     "Equipe Creators",
@@ -201,10 +264,13 @@ export function getEvolutionTierForMember(
   /*
    * A fase mais alta sempre vence.
    *
-   * Exemplo:
-   * se a pessoa ainda tiver Equipe Creators,
-   * mas também tiver Resp. Líder,
-   * ela será colocada em Responsáveis.
+   * Coord. Creators sobe para o canal dos
+   * Responsáveis. Assim, o Coordenador não
+   * consegue visualizar as avaliações feitas
+   * sobre ele mesmo.
+   *
+   * Os Responsáveis também permanecem na
+   * fase mais reservada disponível.
    */
 
   if (
@@ -212,19 +278,38 @@ export function getEvolutionTierForMember(
     hasAnyRole(
       member,
       RESPONSIBLE_ROLES
+    ) ||
+    hasAnyRole(
+      member,
+      COORDINATOR_ROLES
     )
   ) {
     return EVOLUTION_TIERS.RESPONSIBLES;
   }
 
+  /*
+   * Gestor Creators, Manager Creators e
+   * Social Medias possuem seus tópicos no
+   * canal da Coordenação.
+   *
+   * Como MANAGEMENT_ROLES não recebe acesso
+   * ao canal da Coordenação, essas pessoas
+   * não enxergam os próprios feedbacks.
+   */
+
   if (
     hasAnyRole(
       member,
-      COORDINATION_ROLES
+      MANAGEMENT_ROLES
     )
   ) {
     return EVOLUTION_TIERS.COORDINATION;
   }
+
+  /*
+   * Os cargos iniciais permanecem no
+   * canal original da Equipe Creators.
+   */
 
   if (
     hasAnyRole(
@@ -294,23 +379,236 @@ async function configureChannelPermissions(
   }
 
   /*
-   * O canal original da Equipe Creators
-   * mantém as permissões que já existem.
+   * Define quem pode visualizar e escrever
+   * em cada uma das três fases.
+   */
+
+  let allowedRoles =
+    new Set();
+
+  let deniedRoles =
+    new Set();
+
+  /*
+   * FASE 1 — EQUIPE
    *
-   * Nos canais superiores, @everyone
-   * não pode ver nem escrever.
+   * Gestores, Coordenadores e Responsáveis
+   * podem avaliar a equipe.
+   *
+   * A própria Equipe não pode visualizar
+   * os feedbacks reservados.
    */
 
   if (
-    tier >=
+    tier ===
+    EVOLUTION_TIERS.TEAM
+  ) {
+    allowedRoles =
+      TEAM_EVALUATOR_ROLES;
+
+    deniedRoles =
+      new Set([
+        ...TEAM_ROLES,
+      ]);
+  }
+
+  /*
+   * FASE 2 — GESTÃO
+   *
+   * Somente Coordenadores e Responsáveis
+   * podem avaliar os Gestores.
+   *
+   * Gestores e Equipe não podem visualizar.
+   */
+
+  if (
+    tier ===
     EVOLUTION_TIERS.COORDINATION
   ) {
+    allowedRoles =
+      MANAGEMENT_EVALUATOR_ROLES;
+
+    deniedRoles =
+      new Set([
+        ...MANAGEMENT_ROLES,
+        ...TEAM_ROLES,
+      ]);
+  }
+
+  /*
+   * FASE 3 — COORDENAÇÃO E RESPONSÁVEIS
+   *
+   * Somente Responsáveis podem visualizar.
+   *
+   * Coordenadores, Gestores e Equipe
+   * não podem visualizar.
+   */
+
+  if (
+    tier ===
+    EVOLUTION_TIERS.RESPONSIBLES
+  ) {
+    allowedRoles =
+      COORDINATION_EVALUATOR_ROLES;
+
+    deniedRoles =
+      new Set([
+        ...COORDINATOR_ROLES,
+        ...MANAGEMENT_ROLES,
+        ...TEAM_ROLES,
+      ]);
+  }
+
+  /*
+   * Bloqueia o canal para @everyone.
+   *
+   * Depois disso, somente os cargos que
+   * pertencem ao allowedRoles recebem acesso.
+   */
+
+  await channel
+    .permissionOverwrites
+    .edit(
+      guild.roles.everyone,
+      {
+        ViewChannel: false,
+        ReadMessageHistory: false,
+        SendMessages: false,
+        SendMessagesInThreads: false,
+        CreatePublicThreads: false,
+        CreatePrivateThreads: false,
+      },
+      {
+        reason:
+          "Proteção automática da evolução por hierarquia",
+      }
+    );
+
+  /*
+   * Remove permissões antigas de cargos e
+   * usuários que não pertencem às regras
+   * atuais desse canal.
+   *
+   * Isso é importante porque apenas bloquear
+   * @everyone não elimina uma permissão
+   * positiva antiga configurada diretamente.
+   */
+
+  const botUserId =
+    guild.members.me?.id ||
+    guild.client.user?.id ||
+    null;
+
+  for (
+    const overwrite
+    of channel
+      .permissionOverwrites
+      .cache
+      .values()
+  ) {
+    if (
+      overwrite.id ===
+      guild.roles.everyone.id
+    ) {
+      continue;
+    }
+
+    /*
+     * Permissão vinculada diretamente
+     * a um cargo.
+     */
+
+    if (
+      overwrite.type ===
+      OverwriteType.Role
+    ) {
+      const isKnownAllowedRole =
+        allowedRoles.has(
+          overwrite.id
+        );
+
+      const isKnownDeniedRole =
+        deniedRoles.has(
+          overwrite.id
+        );
+
+      if (
+        !isKnownAllowedRole &&
+        !isKnownDeniedRole
+      ) {
+        await channel
+          .permissionOverwrites
+          .delete(
+            overwrite.id,
+            "Removendo permissão antiga da evolução"
+          )
+          .catch(() => null);
+      }
+
+      continue;
+    }
+
+    /*
+     * Permissão vinculada diretamente
+     * a uma pessoa.
+     *
+     * Mantém somente o bot e os usuários
+     * administrativos configurados.
+     */
+
+    if (
+      overwrite.type ===
+      OverwriteType.Member
+    ) {
+      const isBot =
+        botUserId &&
+        overwrite.id ===
+          botUserId;
+
+      const isAdminUser =
+        ADMIN_USERS.has(
+          overwrite.id
+        );
+
+      if (
+        !isBot &&
+        !isAdminUser
+      ) {
+        await channel
+          .permissionOverwrites
+          .delete(
+            overwrite.id,
+            "Removendo acesso individual antigo da evolução"
+          )
+          .catch(() => null);
+      }
+    }
+  }
+
+  /*
+   * Aplica bloqueio explícito nos cargos
+   * que não podem acessar esta fase.
+   */
+
+  for (
+    const roleId
+    of deniedRoles
+  ) {
+    if (
+      !guild.roles.cache.has(
+        roleId
+      )
+    ) {
+      continue;
+    }
+
     await channel
       .permissionOverwrites
       .edit(
-        guild.roles.everyone,
+        roleId,
         {
           ViewChannel: false,
+          ReadMessageHistory: false,
           SendMessages: false,
           SendMessagesInThreads: false,
           CreatePublicThreads: false,
@@ -318,107 +616,71 @@ async function configureChannelPermissions(
         },
         {
           reason:
-            "Proteção automática da evolução por hierarquia",
+            "Bloqueio automático de avaliação por hierarquia",
         }
       );
   }
 
-  const allowedRoles =
-    tier ===
-    EVOLUTION_TIERS.RESPONSIBLES
-      ? RESPONSIBLE_ROLES
-      : new Set([
-          ...RESPONSIBLE_ROLES,
-          ...COORDINATION_ROLES,
-        ]);
-
   /*
-   * Bloqueia explicitamente os cargos
-   * inferiores nos canais superiores.
-   *
-   * Isso impede que uma permissão antiga
-   * do próprio cargo libere o canal.
+   * Libera os cargos autorizados.
    */
 
-  const deniedRoles =
-    tier ===
-    EVOLUTION_TIERS.RESPONSIBLES
-      ? new Set([
-          ...TEAM_ROLES,
-          ...COORDINATION_ROLES,
-        ])
-      : tier ===
-        EVOLUTION_TIERS.COORDINATION
-        ? TEAM_ROLES
-        : new Set();
-
-  if (
-    tier >=
-    EVOLUTION_TIERS.COORDINATION
+  for (
+    const roleId
+    of allowedRoles
   ) {
-    for (
-      const roleId
-      of deniedRoles
+    if (
+      !guild.roles.cache.has(
+        roleId
+      )
     ) {
-      if (
-        !guild.roles.cache.has(
-          roleId
-        )
-      ) {
-        continue;
-      }
-
-      await channel
-        .permissionOverwrites
-        .edit(
-          roleId,
-          {
-            ViewChannel: false,
-            ReadMessageHistory: false,
-            SendMessages: false,
-            SendMessagesInThreads: false,
-            CreatePublicThreads: false,
-            CreatePrivateThreads: false,
-          },
-          {
-            reason:
-              "Bloqueio automático dos cargos inferiores",
-          }
-        );
+      continue;
     }
 
-    for (
-      const roleId
-      of allowedRoles
-    ) {
-      if (
-        !guild.roles.cache.has(
-          roleId
-        )
-      ) {
-        continue;
-      }
-
-      await channel
-        .permissionOverwrites
-        .edit(
-          roleId,
-          {
-            ViewChannel: true,
-            ReadMessageHistory: true,
-            SendMessages: true,
-            SendMessagesInThreads: true,
-          },
-          {
-            reason:
-              "Acesso automático à evolução por hierarquia",
-          }
-        );
-    }
+    await channel
+      .permissionOverwrites
+      .edit(
+        roleId,
+        {
+          ViewChannel: true,
+          ReadMessageHistory: true,
+          SendMessages: true,
+          SendMessagesInThreads: true,
+        },
+        {
+          reason:
+            "Acesso automático de avaliação por hierarquia",
+        }
+      );
   }
 
   /*
-   * Bypass do Macedo.
+   * Garante o acesso do próprio bot.
+   */
+
+  if (botUserId) {
+    await channel
+      .permissionOverwrites
+      .edit(
+        botUserId,
+        {
+          ViewChannel: true,
+          ReadMessageHistory: true,
+          SendMessages: true,
+          SendMessagesInThreads: true,
+          CreatePublicThreads: true,
+          CreatePrivateThreads: true,
+          ManageThreads: true,
+        },
+        {
+          reason:
+            "Acesso operacional do bot à evolução",
+        }
+      );
+  }
+
+  /*
+   * Bypass administrativo do Macedo.
    */
 
   for (
@@ -434,6 +696,9 @@ async function configureChannelPermissions(
           ReadMessageHistory: true,
           SendMessages: true,
           SendMessagesInThreads: true,
+          CreatePublicThreads: true,
+          CreatePrivateThreads: true,
+          ManageThreads: true,
         },
         {
           reason:
