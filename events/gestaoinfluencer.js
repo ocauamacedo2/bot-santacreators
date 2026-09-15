@@ -1670,27 +1670,51 @@ async function assertCanManageGIRecord(guild, actorUser, targetUserId, actionNam
   }
 
   // ✅ PERMITE AÇÕES AUTOMÁTICAS DO PRÓPRIO BOT
-  // Exemplo: auto-desligamento após 30 dias pausado.
+  // Exemplo: auto-desligamento após 30 dias pausado
+  // ou desligamento automático quando o membro sai do servidor.
   if (client?.user?.id && actorId === client.user.id) {
     return true;
   }
 
   const actorMember = await guild.members.fetch(actorId).catch(() => null);
-  const targetMember = await guild.members.fetch(String(targetUserId)).catch(() => null);
 
   if (!actorMember) {
     throw new Error('Não consegui encontrar seu membro no servidor para validar a hierarquia.');
   }
 
-  if (!targetMember) {
-    throw new Error('Não consegui encontrar o membro alvo no servidor para validar a hierarquia.');
-  }
-
+  // 🔒 Primeiro confirma se o executor possui permissão.
+  // Isso impede que alguém sem autorização aproveite a ausência
+  // do membro alvo para desligar o controle.
   if (!hasAuth(actorMember)) {
     throw new Error('Você não tem permissão para mexer nesse controle.');
   }
 
+  // ✅ Mantém os usuários com bypass total já configurados.
   if (SC_GI_CFG.AUTH_USER_IDS.includes(actorId)) {
+    return true;
+  }
+
+  const targetMember = await guild.members
+    .fetch(String(targetUserId))
+    .catch(() => null);
+
+  // ✅ O membro já saiu do servidor.
+  // Como o executor já teve sua permissão validada acima,
+  // permite encerrar o registro mesmo sem conseguir comparar
+  // a hierarquia atual do membro alvo.
+  if (!targetMember) {
+    await logMsg(
+      guild,
+      'Desligamento de membro ausente (GI)',
+      [
+        `🛡️ **Ação:** ${actionName}`,
+        `👮 **Executor:** <@${actorId}>`,
+        `👤 **Membro alvo:** <@${targetUserId}> (\`${targetUserId}\`)`,
+        '',
+        '✅ **Resultado:** permitido porque o executor possui permissão e o membro alvo já não está no servidor.'
+      ].join('\n')
+    ).catch(() => {});
+
     return true;
   }
 
@@ -4697,6 +4721,76 @@ if (!rec.active) {
       } catch (error) {
         console.warn(
           "[SC_GI] GuildMemberUpdate:",
+          error?.message || error
+        );
+      }
+    });
+
+    // ====================== SAÍDA DO SERVIDOR (GuildMemberRemove) ======================
+    // ✅ Desliga automaticamente todos os Controles GI ainda existentes
+    // da pessoa que saiu, quitou ou foi removida do servidor.
+    client.on(Events.GuildMemberRemove, async (member) => {
+      try {
+        const guild = member.guild;
+        const targetId = String(member.id || '');
+
+        if (!guild || !targetId) {
+          return;
+        }
+
+        // ✅ Cria uma cópia antes de desligar porque desligarRegistro()
+        // remove cada registro de SC_GI_STATE.registros.
+        const registrosDoMembro = Array.from(
+          SC_GI_STATE.registros.values()
+        ).filter((rec) =>
+          rec.guildId === guild.id &&
+          String(rec.targetId) === targetId
+        );
+
+        if (registrosDoMembro.length === 0) {
+          return;
+        }
+
+        for (const rec of registrosDoMembro) {
+          try {
+            await desligarRegistro(
+              guild,
+              client.user,
+              rec.messageId,
+              'Desligamento automático: membro saiu do servidor'
+            );
+
+            await logMsg(
+              guild,
+              'Desligamento automático por saída do servidor (GI)',
+              [
+                `👤 **Membro:** <@${targetId}> (\`${targetId}\`)`,
+                `🧾 **Registro:** \`${rec.messageId}\``,
+                `🤖 **Executor:** <@${client.user.id}>`,
+                '',
+                '✅ **Resultado:** o Controle GI foi desligado automaticamente porque o membro saiu do servidor.'
+              ].join('\n')
+            ).catch(() => {});
+          } catch (error) {
+            console.warn(
+              `[SC_GI] Falha ao desligar automaticamente o membro ${targetId} que saiu do servidor:`,
+              error?.message || error
+            );
+
+            await logMsg(
+              guild,
+              'Falha no desligamento automático por saída (GI)',
+              [
+                `👤 **Membro:** <@${targetId}> (\`${targetId}\`)`,
+                `🧾 **Registro:** \`${rec.messageId}\``,
+                `⚠️ **Erro:** \`${String(error?.message || error).slice(0, 900)}\``
+              ].join('\n')
+            ).catch(() => {});
+          }
+        }
+      } catch (error) {
+        console.warn(
+          '[SC_GI] GuildMemberRemove:',
           error?.message || error
         );
       }
