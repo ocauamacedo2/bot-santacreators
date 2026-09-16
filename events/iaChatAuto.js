@@ -50,7 +50,11 @@ MACEDO:
 - Macedo é o dono da SantaCreators.
 - Macedo é o dono do projeto SantaCreators.
 - Macedo é a principal autoridade e o responsável máximo pelo projeto.
-
+- Dentro da hierarquia institucional da SantaCreators, Macedo é a referência máxima do projeto e está acima dos demais cargos internos da estrutura.
+- Macedo idealizou e estruturou a SantaCreators, sua gestão, sua operação de eventos e os sistemas/bot que sustentam o projeto.
+- O fato de Macedo também ser influenciador não transforma a SantaCreators em equipe, agência, suporte ou gestão de influenciadores.
+- Em conversa casual e claramente brincalhona, a IA pode acompanhar elogios e brincadeiras sobre Macedo de forma natural.
+- Em relatório, feedback, entrevista, análise de desempenho ou informação operacional, mantenha a descrição de Macedo objetiva e não transforme brincadeira em fato técnico.
 INTERPRETAÇÃO DE REFERÊNCIAS:
 - Quando alguém falar apenas "Macedo" dentro do contexto da SantaCreators, considere que está falando do Macedo dono/criador da SantaCreators, salvo quando o contexto identificar claramente outra pessoa.
 - Não confunda Macedo com outra pessoa que possua "Macedo" no nome, apelido ou username.
@@ -69,25 +73,27 @@ const SANTACREATORS_OPERATIONAL_IDENTITY = `
 CONTEXTO OFICIAL DA SANTACREATORS:
 
 DEFINIÇÃO:
-- A SantaCreators é uma estrutura de organização, entretenimento e operação dentro do ecossistema de FiveM e Discord.
-- Ela conecta pessoas, cidades, organizações, eventos, equipes e toda a operação necessária para manter esse ecossistema funcionando.
+- A SantaCreators é a principal equipe operacional de grandes eventos da Santa Group dentro do ecossistema de FiveM e Discord.
+- Sua atuação central é planejar, organizar, executar, acompanhar e registrar grandes eventos e Mega Eventos nas quatro cidades principais da operação: Nobre, Santa, Grande e Maresia.
+- A estrutura possui gestão, responsáveis, coordenação, managers, social medias, equipe, cronograma, registros, presença, pagamentos, premiações, rankings, evolução e outros sistemas porque tudo isso sustenta a operação dos eventos.
 - NÃO defina a SantaCreators como "empresa de criadores de conteúdo".
 - NÃO defina a SantaCreators como "estrutura para influenciadores".
-- NÃO diga que o objetivo principal é ajudar creators, streamers ou influenciadores a crescer.
-- NÃO reduza a SantaCreators apenas a Mega Eventos.
-- Creators, criação de conteúdo e influenciadores podem existir dentro do ecossistema, mas não definem o propósito completo da SantaCreators.
-- Mega Eventos são uma parte importante da operação, mas também não representam sozinhos tudo o que a SantaCreators é.
+- NÃO diga que a SantaCreators cuida, gerencia, assessora ou desenvolve influenciadores.
+- NÃO diga que o objetivo é ajudar creators, streamers ou influenciadores a crescer em TikTok, Instagram, YouTube, live, seguidores ou carreira pessoal.
+- Uma pessoa pode ser influenciador ou criador de conteúdo fora da função que exerce na SantaCreators, mas isso não altera a finalidade da equipe.
+- Quando precisar resumir a SantaCreators, priorize a ideia de equipe operacional responsável pelos grandes eventos/Mega Eventos das quatro cidades, sem transformar nomes internos de cargos em funções de influencer.
 
-CREATORS, INFLUENCIADORES E MIGRAÇÃO ENTRE ESTRUTURAS:
+CREATORS, INFLUENCIADORES E NOMES INTERNOS DE CARGOS:
 - A equipe SantaCreators e uma equipe/estrutura de influenciadores de uma cidade NÃO são a mesma coisa.
-- Um ticket da SantaCreators NÃO deve ser apresentado como suporte de influenciadores quando esse não for o objetivo real do atendimento.
-- NÃO invente que existe um "responsável de influenciadores" dentro da SantaCreators apenas porque a pessoa falou que era influencer em outra estrutura.
-- NÃO associe automaticamente Resp. Influ, Resp. Creators, Creator, influencer e liderança de cidade como se fossem a mesma função.
-- Se alguém veio de uma equipe de influenciadores e quer continuar ou migrar para uma atuação Creator em outra cidade, pode existir possibilidade de entrada/continuidade, mas isso NÃO significa transferência automática de pasta, cargo, histórico ou vínculo.
-- A possibilidade deve ser tratada como análise/alinhamento da estrutura correta, usando dados atuais e responsáveis reais quando eles estiverem disponíveis.
-- Se não houver responsável real identificado para aquela área, NÃO escolha uma pessoa por conta própria e NÃO invente quem é responsável.
-- Antes de falar em migração, transferência ou responsável, diferencie claramente: equipe SantaCreators, equipe Creator da cidade, equipe de influenciadores da cidade e demais estruturas externas/internas.
-
+- A SantaCreators NÃO é suporte, agência, gestão ou central de influenciadores.
+- Um ticket da SantaCreators NÃO deve ser apresentado como suporte de influenciadores.
+- "Creator", "Creators", "Equipe Creators", "Resp. Creators", "Social Media" e "Manager" são nomes internos de posições/áreas e NÃO significam automaticamente criador de conteúdo ou influenciador de rede social.
+- "Resp. Influ" significa "Resp. Influência" dentro da estrutura da SantaCreators.
+- NUNCA expanda "Resp. Influ" como "Responsável por Influenciadores".
+- A existência do cargo "Resp. Influ" NÃO significa que a SantaCreators possua um setor que cuida de influenciadores.
+- Se alguém veio de uma equipe de influenciadores de outra estrutura, isso não cria transferência automática de pasta, cargo, histórico, suporte ou vínculo para a SantaCreators.
+- Se houver dúvida sobre migração entre estruturas, use dados atuais e responsáveis reais; não invente vínculo nem responsável.
+- Antes de falar em migração, transferência ou responsável, diferencie claramente: SantaCreators, staff da cidade, equipes externas e qualquer estrutura específica de influenciadores.
 VISÃO HUMANA:
 A SantaCreators organiza e movimenta uma comunidade dentro do universo do FiveM, utilizando o Discord como centro operacional. Existe uma estrutura por trás dos eventos e atividades, envolvendo responsáveis, equipes, cidades, organizações, cronogramas, registros, presença, metas, pagamentos, acompanhamento e análise de desempenho.
 CIDADES PRINCIPAIS:
@@ -629,6 +635,7 @@ const AI_FIVEM_GI_PANEL_CHANNEL_ID = "1501321157259956244";
 const AI_GI_DATA_FILE = path.resolve(process.cwd(), "data", "sc_gi_registros.json");
 
 const AI_CRONOGRAMA_CHANNEL_ID = "1474605177771397223";
+const AI_EVENTOS_DIARIOS_CHANNEL_ID = "1385003944803041371";
 
 // =====================================================
 // INTELIGÊNCIA DE PESSOAS — SANTACREATORS
@@ -7091,6 +7098,24 @@ function ensureLongTermMemoryUser(database, message) {
     user.personalFacts = [];
   }
 
+  if (
+    !user.conversationStyle ||
+    typeof user.conversationStyle !== "object" ||
+    Array.isArray(user.conversationStyle)
+  ) {
+    user.conversationStyle = {
+      samples: 0,
+      totalChars: 0,
+      shortMessages: 0,
+      longMessages: 0,
+      emojiMessages: 0,
+      laughterMessages: 0,
+      casualMessages: 0,
+      questionMessages: 0,
+      updatedAt: 0,
+    };
+  }
+
   return user;
 }
 
@@ -7165,6 +7190,282 @@ function extractSafePersonalMemoryFacts(text) {
   }
 
   return facts;
+}
+
+// =====================================================
+// IA — ADAPTAÇÃO CONVERSACIONAL POR PESSOA
+// =====================================================
+//
+// Aprende somente características de comunicação:
+// - tamanho médio das mensagens;
+// - preferência por respostas curtas ou mais explicadas;
+// - nível de informalidade;
+// - uso de humor/risadas;
+// - uso de emojis;
+// - frequência de perguntas.
+//
+// Isso NÃO transforma erro de português, palavrão, acusação,
+// opinião ou dado operacional em "preferência" ou verdade.
+//
+// O perfil serve apenas para ajustar TOM, RITMO e TAMANHO.
+// Nunca altera fatos, permissões, cronograma, ranking ou regras.
+// =====================================================
+
+function updateAdaptiveConversationStyle(
+  user,
+  message
+) {
+  if (!user || !message) {
+    return;
+  }
+
+  const raw =
+    String(
+      message.content ||
+      ""
+    ).trim();
+
+  if (!raw) {
+    return;
+  }
+
+  if (
+    !user.conversationStyle ||
+    typeof user.conversationStyle !== "object" ||
+    Array.isArray(user.conversationStyle)
+  ) {
+    user.conversationStyle = {
+      samples: 0,
+      totalChars: 0,
+      shortMessages: 0,
+      longMessages: 0,
+      emojiMessages: 0,
+      laughterMessages: 0,
+      casualMessages: 0,
+      questionMessages: 0,
+      updatedAt: 0,
+    };
+  }
+
+  const style =
+    user.conversationStyle;
+
+  const normalized =
+    normalizeSearchText(
+      raw
+    );
+
+  style.samples =
+    Number(style.samples || 0) + 1;
+
+  style.totalChars =
+    Number(style.totalChars || 0) +
+    raw.length;
+
+  if (raw.length <= 45) {
+    style.shortMessages =
+      Number(
+        style.shortMessages ||
+        0
+      ) + 1;
+  }
+
+  if (raw.length >= 180) {
+    style.longMessages =
+      Number(
+        style.longMessages ||
+        0
+      ) + 1;
+  }
+
+  if (
+    /[\u{1F300}-\u{1FAFF}\u2600-\u27BF]/u.test(
+      raw
+    )
+  ) {
+    style.emojiMessages =
+      Number(
+        style.emojiMessages ||
+        0
+      ) + 1;
+  }
+
+  if (
+    /\b(?:kkk+|haha+|hehe+|rsrs+|rs+)\b/i.test(
+      raw
+    )
+  ) {
+    style.laughterMessages =
+      Number(
+        style.laughterMessages ||
+        0
+      ) + 1;
+  }
+
+  if (
+    [
+      "mano",
+      "pow",
+      "po",
+      "cara",
+      "vei",
+      "tmj",
+      "bora",
+      "fechou",
+      "de boa",
+      "kkk",
+    ].some(
+      term =>
+        normalized.includes(
+          normalizeSearchText(
+            term
+          )
+        )
+    )
+  ) {
+    style.casualMessages =
+      Number(
+        style.casualMessages ||
+        0
+      ) + 1;
+  }
+
+  if (
+    raw.includes("?")
+  ) {
+    style.questionMessages =
+      Number(
+        style.questionMessages ||
+        0
+      ) + 1;
+  }
+
+  style.updatedAt =
+    Date.now();
+}
+
+function fetchAdaptiveConversationStyleContext(
+  message
+) {
+  try {
+    const userId =
+      String(
+        message?.author?.id ||
+        ""
+      );
+
+    if (!userId) {
+      return "Nenhum perfil conversacional individual disponível.";
+    }
+
+    const database =
+      loadLongTermMemoryDatabase();
+
+    const style =
+      database.users?.[userId]
+        ?.conversationStyle;
+
+    const samples =
+      Number(
+        style?.samples ||
+        0
+      );
+
+    if (samples < 2) {
+      return [
+        "ADAPTAÇÃO CONVERSACIONAL DA PESSOA:",
+        "- Ainda não há histórico suficiente para definir um padrão individual.",
+        "- Use principalmente o tom e o tamanho da mensagem atual.",
+      ].join("\n");
+    }
+
+    const ratio =
+      value =>
+        Number(
+          value ||
+          0
+        ) / samples;
+
+    const averageLength =
+      Math.round(
+        Number(
+          style.totalChars ||
+          0
+        ) / samples
+      );
+
+    const guidance = [];
+
+    if (
+      ratio(
+        style.shortMessages
+      ) >= 0.55
+    ) {
+      guidance.push(
+        "- A pessoa costuma conversar em mensagens curtas. Prefira respostas objetivas quando o assunto permitir."
+      );
+    } else if (
+      ratio(
+        style.longMessages
+      ) >= 0.35 ||
+      averageLength >= 150
+    ) {
+      guidance.push(
+        "- A pessoa costuma explicar bastante o contexto. Pode responder com um pouco mais de detalhe quando isso ajudar."
+      );
+    } else {
+      guidance.push(
+        "- Use tamanho intermediário e ajuste pela complexidade da pergunta atual."
+      );
+    }
+
+    if (
+      ratio(
+        style.casualMessages
+      ) >= 0.30
+    ) {
+      guidance.push(
+        "- A conversa dessa pessoa tende a ser informal. Pode responder de forma mais solta, mas escrevendo corretamente e sem imitar erros."
+      );
+    }
+
+    if (
+      ratio(
+        style.laughterMessages
+      ) >= 0.20
+    ) {
+      guidance.push(
+        "- Humor leve pode aparecer quando o assunto também estiver descontraído."
+      );
+    }
+
+    if (
+      ratio(
+        style.emojiMessages
+      ) >= 0.25
+    ) {
+      guidance.push(
+        "- Emojis ocasionais combinam com o padrão da conversa, sem exagerar."
+      );
+    }
+
+    return [
+      "ADAPTAÇÃO CONVERSACIONAL DA PESSOA:",
+      `- Amostras observadas: ${samples}`,
+      `- Tamanho médio das mensagens: ${averageLength} caractere(s)`,
+      ...guidance,
+      "- Esta adaptação afeta somente tom, ritmo e tamanho.",
+      "- NUNCA use o perfil conversacional para substituir fatos atuais, sistemas internos, regras, cronograma ou permissões.",
+      "- NUNCA copie erros ortográficos, ofensas, palavrões ou vícios de escrita apenas para imitar a pessoa.",
+    ].join("\n");
+  } catch (err) {
+    console.error(
+      "[IA STYLE MEMORY] Erro ao recuperar estilo conversacional:",
+      err
+    );
+
+    return "Não foi possível consultar o perfil conversacional individual.";
+  }
 }
 
 function mergeSafePersonalMemoryFacts(
@@ -7470,6 +7771,11 @@ function saveLongTermConversation(
     mergeSafePersonalMemoryFacts(
       user,
       personalFacts,
+      message
+    );
+
+    updateAdaptiveConversationStyle(
+      user,
       message
     );
 
@@ -9224,6 +9530,7 @@ function messageWantsCronograma(message) {
 
   const mentionsTime =
     text.includes("hoje") ||
+    text.includes("hj") ||
     text.includes("amanha") ||
     text.includes("semana") ||
     text.includes("segunda") ||
@@ -9239,6 +9546,8 @@ function messageWantsCronograma(message) {
   const asksEventSchedule =
     text.includes("quais eventos") ||
     text.includes("qual evento") ||
+    text.includes("qual o evento") ||
+    text.includes("qual e o evento") ||
     text.includes("que evento") ||
     text.includes("que eventos") ||
     text.includes("tem evento") ||
@@ -9249,6 +9558,10 @@ function messageWantsCronograma(message) {
     text.includes("evento de hoje") ||
     text.includes("eventos hoje") ||
     text.includes("evento hoje") ||
+    text.includes("eventos de hj") ||
+    text.includes("evento de hj") ||
+    text.includes("eventos hj") ||
+    text.includes("evento hj") ||
     text.includes("eventos da semana") ||
     text.includes("eventos dessa semana") ||
     text.includes("eventos desta semana") ||
@@ -11010,6 +11323,7 @@ async function buildPersonIntelligenceContext(
   ]);
 
   let formsCreatorContext = "";
+  let formsCreatorData = null;
 
   try {
     const {
@@ -11018,7 +11332,7 @@ async function buildPersonIntelligenceContext(
       "./formscreator.js"
     );
 
-    const formsCreatorData =
+    formsCreatorData =
       await getFormsCreatorPersonData(
         message.client,
         personId
@@ -11117,6 +11431,77 @@ async function buildPersonIntelligenceContext(
     ].join("\n");
   }
 
+  let giContext = "";
+
+  try {
+    const giRecords =
+      readGiRecordsFromFile();
+
+    const giRecord =
+      giRecords.find(
+        record =>
+          String(
+            record?.targetId ||
+            record?.userId ||
+            ""
+          ) === String(
+            personId
+          )
+      );
+
+    if (giRecord) {
+      const formatGiDate =
+        value => {
+          const numeric =
+            Number(
+              value ||
+              0
+            );
+
+          if (!numeric) {
+            return "Não disponível";
+          }
+
+          return new Date(
+            numeric
+          ).toLocaleString(
+            "pt-BR",
+            {
+              timeZone:
+                "America/Sao_Paulo",
+            }
+          );
+        };
+
+      giContext = [
+        "CONTROLE GI:",
+        `- Status: ${giRecord.active === false ? "Pausado" : "Ativo"}`,
+        `- Área registrada: ${giRecord.area || formsCreatorData?.area || "Não informada"}`,
+        `- Responsável direto: ${giRecord.responsibleUserId ? `<@${giRecord.responsibleUserId}>` : "Não definido"}`,
+        `- Tipo de responsável: ${giRecord.responsibleType || "Não definido"}`,
+        `- Entrada registrada: ${formatGiDate(giRecord.joinDateMs)}`,
+        `- Registro criado em: ${formatGiDate(giRecord.createdAtMs)}`,
+        `- Pausa registrada em: ${formatGiDate(giRecord.pausedAtMs || giRecord.pausedAt)}`,
+        `- Observação: ${String(giRecord.note || "").trim() || "Nenhuma observação cadastrada"}`,
+      ].join("\n");
+    } else {
+      giContext = [
+        "CONTROLE GI:",
+        "- Nenhum registro do Controle GI foi localizado para este Discord ID.",
+      ].join("\n");
+    }
+  } catch (err) {
+    console.error(
+      "[IA PERSON] Erro ao consultar Controle GI:",
+      err
+    );
+
+    giContext = [
+      "CONTROLE GI:",
+      "- Não foi possível consultar o Controle GI neste momento.",
+    ].join("\n");
+  }
+
   let rankingContext = "";
 
   const personQuestionText =
@@ -11181,9 +11566,100 @@ async function buildPersonIntelligenceContext(
           )
         )
     );
+  let structuredEvolutionContext = "";
+
+  if (
+    wantsPersonPerformanceAnalysis &&
+    formsCreatorData?.threadId
+  ) {
+    try {
+      const {
+        getEvolutionFeedbackContext,
+      } = await import(
+        "./evolutionHierarchy.js"
+      );
+
+      const evolutionData =
+        await getEvolutionFeedbackContext(
+          message.client,
+          personId,
+          {
+            guildId:
+              guild.id,
+
+            originalThreadId:
+              formsCreatorData.threadId,
+
+            reason:
+              "Consulta da IA sobre desenvolvimento individual",
+          }
+        );
+
+      const evolutionThreads =
+        Array.isArray(
+          evolutionData?.threads
+        ) &&
+        evolutionData.threads.length
+          ? evolutionData.threads
+          : evolutionData?.thread
+            ? [
+                evolutionData.thread,
+              ]
+            : [];
+
+      const threadBlocks =
+        await Promise.all(
+          evolutionThreads
+            .slice(0, 3)
+            .map(
+              async thread => {
+                const threadText =
+                  await fetchChannelTextContext(
+                    message.client,
+                    thread.id,
+                    50
+                  );
+
+                return [
+                  `TÓPICO DE EVOLUÇÃO: <#${thread.id}>`,
+                  threadText,
+                ].join("\n");
+              }
+            )
+        );
+
+      structuredEvolutionContext = [
+        "EVOLUÇÃO ESTRUTURADA ATUAL:",
+        `- Fase atual: ${evolutionData?.tier ?? "Não determinada"}`,
+        `- Tópico ativo: ${evolutionData?.thread?.id ? `<#${evolutionData.thread.id}>` : "Não localizado"}`,
+        "",
+        ...threadBlocks,
+      ]
+        .join("\n\n")
+        .slice(0, 18000);
+    } catch (err) {
+      console.error(
+        "[IA PERSON] Erro ao consultar Evolução estruturada:",
+        err
+      );
+
+      structuredEvolutionContext = [
+        "EVOLUÇÃO ESTRUTURADA ATUAL:",
+        "- Não foi possível consultar os tópicos estruturados de evolução neste momento.",
+      ].join("\n");
+    }
+  } else if (
+    wantsPersonPerformanceAnalysis
+  ) {
+    structuredEvolutionContext = [
+      "EVOLUÇÃO ESTRUTURADA ATUAL:",
+      "- Não existe thread do FormsCreator disponível para vincular a evolução estruturada desta pessoa.",
+    ].join("\n");
+  }
 
   const wantsPersonRanking =
     wantsPersonPerformanceAnalysis ||
+
     personQuestionText.includes(
       "ranking"
     ) ||
@@ -11317,6 +11793,20 @@ async function buildPersonIntelligenceContext(
       ].join("\n"),
     "",
     "========================================",
+    giContext ||
+      [
+        "CONTROLE GI:",
+        "- Nenhuma informação do Controle GI disponível.",
+      ].join("\n"),
+    "",
+    "========================================",
+    structuredEvolutionContext ||
+      [
+        "EVOLUÇÃO ESTRUTURADA ATUAL:",
+        "- Esta consulta não exigiu leitura detalhada dos tópicos de evolução.",
+      ].join("\n"),
+    "",
+    "========================================",
     "RANKING / PONTUAÇÃO:",
     rankingContext ||
       "Nenhuma informação de ranking disponível.",
@@ -11345,6 +11835,9 @@ async function buildPersonIntelligenceContext(
     "- Ausência de horário ou divisão/cidade na Hierarquia não significa ausência da pessoa na SantaCreators.",
     "- Se não existir registro explícito de horário ou divisão/cidade, não transforme os valores técnicos de fallback em informação factual.",
     "- Conversas do chat servem como contexto e histórico, não como prova automática de desempenho.",
+    "- O Controle GI indica estado de acompanhamento, área, responsável e observações registradas; sozinho não prova desempenho bom ou ruim.",
+    "- Quando existir Evolução estruturada atual, use os tópicos/fase atuais como fonte mais específica do processo de evolução do que um canal histórico genérico.",
+    "- Resp. Influ significa Resp. Influência e nunca deve ser interpretado como Responsável por Influenciadores.",
   ]
     .join("\n")
     .slice(
@@ -11609,6 +12102,622 @@ function formatEmbedForAI(embed) {
   return lines.join("\n");
 }
 
+// =====================================================
+// EVENTOS — RESPOSTA AUTORITATIVA POR DATA
+// =====================================================
+//
+// Perguntas como "qual o evento de hoje?" não devem depender
+// do Gemini, do histórico do chat ou de uma resposta antiga.
+//
+// Ordem de verdade:
+// 1. cronograma_state atual via getCronogramaData();
+// 2. Eventos Diários da MESMA data, somente como complemento;
+// 3. se a leitura estruturada falhar, o fluxo normal continua e
+//    fetchCronogramaContext() ainda lê o canal oficial.
+//
+// Assim uma resposta antiga do próprio bot nunca vence o
+// cronograma atual.
+// =====================================================
+
+function formatDateDdMmSp(
+  date = new Date()
+) {
+  const parts =
+    new Intl.DateTimeFormat(
+      "pt-BR",
+      {
+        timeZone:
+          "America/Sao_Paulo",
+
+        day:
+          "2-digit",
+
+        month:
+          "2-digit",
+      }
+    ).formatToParts(
+      date
+    );
+
+  const map =
+    Object.fromEntries(
+      parts.map(
+        part =>
+          [
+            part.type,
+            part.value,
+          ]
+      )
+    );
+
+  return (
+    `${map.day}/${map.month}`
+  );
+}
+
+function resolveRequestedCronogramaDate(
+  message,
+  cronogramaData
+) {
+  const raw =
+    String(
+      message?.content ||
+      ""
+    );
+
+  const text =
+    normalizeSearchText(
+      raw
+    );
+
+  const today =
+    new Date();
+
+  const tomorrow =
+    new Date(
+      today.getTime() +
+      24 * 60 * 60 * 1000
+    );
+
+  if (
+    /\b(?:amanha|amanhã)\b/i.test(
+      raw
+    )
+  ) {
+    return formatDateDdMmSp(
+      tomorrow
+    );
+  }
+
+  if (
+    /\b(?:hoje|hj)\b/i.test(
+      raw
+    )
+  ) {
+    return formatDateDdMmSp(
+      today
+    );
+  }
+
+  const explicitDate =
+    raw.match(
+      /\b(\d{1,2})[\/.-](\d{1,2})(?:[\/.-](\d{2,4}))?\b/
+    );
+
+  if (explicitDate) {
+    return (
+      `${String(
+        explicitDate[1]
+      ).padStart(2, "0")}/${String(
+        explicitDate[2]
+      ).padStart(2, "0")}`
+    );
+  }
+
+  const weekdayMap =
+    [
+      ["segunda", "seg"],
+      ["terca", "ter"],
+      ["terça", "ter"],
+      ["quarta", "qua"],
+      ["quinta", "qui"],
+      ["sexta", "sex"],
+      ["sabado", "sab"],
+      ["sábado", "sab"],
+      ["domingo", "dom"],
+    ];
+
+  const allItems =
+    [
+      ...(cronogramaData?.schedule || []),
+      ...(cronogramaData?.madrugada || []),
+    ];
+
+  for (
+    const [word, key]
+    of weekdayMap
+  ) {
+    if (
+      text.includes(
+        normalizeSearchText(
+          word
+        )
+      )
+    ) {
+      const item =
+        allItems.find(
+          current =>
+            current?.key === key &&
+            current?.date
+        );
+
+      if (item?.date) {
+        return item.date;
+      }
+    }
+  }
+
+  const asksSingleEvent =
+    text.includes(
+      "qual evento"
+    ) ||
+    text.includes(
+      "qual o evento"
+    ) ||
+    text.includes(
+      "qual e o evento"
+    ) ||
+    text.includes(
+      "que evento"
+    ) ||
+    text.includes(
+      "tem evento"
+    ) ||
+    text.includes(
+      "evento hj"
+    ) ||
+    text.includes(
+      "evento de hj"
+    );
+
+  return asksSingleEvent
+    ? formatDateDdMmSp(
+        today
+      )
+    : null;
+}
+
+function discordMessageDateDdMmSp(
+  discordMessage
+) {
+  const timestamp =
+    Number(
+      discordMessage?.createdTimestamp ||
+      0
+    );
+
+  if (!timestamp) {
+    return null;
+  }
+
+  return formatDateDdMmSp(
+    new Date(
+      timestamp
+    )
+  );
+}
+
+async function fetchEventosDiariosForDate(
+  message,
+  dateDdMm
+) {
+  try {
+    const guild =
+      message.guild;
+
+    if (
+      !guild ||
+      !dateDdMm
+    ) {
+      return [];
+    }
+
+    const channel =
+      guild.channels.cache.get(
+        AI_EVENTOS_DIARIOS_CHANNEL_ID
+      ) ||
+      await guild.channels
+        .fetch(
+          AI_EVENTOS_DIARIOS_CHANNEL_ID
+        )
+        .catch(
+          () => null
+        );
+
+    if (
+      !channel?.isTextBased?.()
+    ) {
+      return [];
+    }
+
+    const me =
+      guild.members.me;
+
+    if (
+      !channel.permissionsFor(me)?.has(
+        [
+          PermissionsBitField.Flags.ViewChannel,
+          PermissionsBitField.Flags.ReadMessageHistory,
+        ]
+      )
+    ) {
+      return [];
+    }
+
+    const messages =
+      await channel.messages
+        .fetch(
+          {
+            limit: 100,
+          }
+        )
+        .catch(
+          () => null
+        );
+
+    if (!messages?.size) {
+      return [];
+    }
+
+    return [
+      ...messages.values(),
+    ]
+      .filter(
+        current => {
+          if (
+            !current ||
+            current.author?.id !==
+              message.client?.user?.id
+          ) {
+            return false;
+          }
+
+          if (
+            discordMessageDateDdMmSp(
+              current
+            ) !== dateDdMm
+          ) {
+            return false;
+          }
+
+          const rawContent =
+            [
+              current.content || "",
+
+              ...(current.embeds || [])
+                .map(
+                  embed =>
+                    formatEmbedForAI(
+                      embed.data ||
+                      embed
+                    )
+                ),
+            ]
+              .filter(Boolean)
+              .join("\n")
+              .trim();
+
+          return (
+            /Santa Creators\s*:/i.test(
+              rawContent
+            ) ||
+            /\bevento\b/i.test(
+              rawContent
+            )
+          );
+        }
+      )
+      .sort(
+        (a, b) =>
+          b.createdTimestamp -
+          a.createdTimestamp
+      )
+      .slice(0, 8)
+      .map(
+        current =>
+          [
+            current.content || "",
+
+            ...(current.embeds || [])
+              .map(
+                embed =>
+                  formatEmbedForAI(
+                    embed.data ||
+                    embed
+                  )
+              ),
+          ]
+            .filter(Boolean)
+            .join("\n")
+            .trim()
+      )
+      .filter(Boolean);
+  } catch (err) {
+    console.error(
+      "[IA EVENTOS] Erro ao ler Eventos Diários da data:",
+      err
+    );
+
+    return [];
+  }
+}
+
+function dailyEventTextMatchesCronogramaItem(
+  dailyText,
+  item
+) {
+  const normalizedDaily =
+    normalizeSearchText(
+      dailyText ||
+      ""
+    );
+
+  const normalizedEvent =
+    normalizeSearchText(
+      item?.eventName ||
+      ""
+    );
+
+  const normalizedCity =
+    normalizeSearchText(
+      item?.city ||
+      ""
+    )
+      .replace(
+        /^cidade\s+/,
+        ""
+      )
+      .trim();
+
+  const eventMatches =
+    !normalizedEvent ||
+    normalizedEvent === "—" ||
+    normalizedEvent === "evento pico" ||
+    normalizedDaily.includes(
+      normalizedEvent
+    );
+
+  const cityMatches =
+    !normalizedCity ||
+    normalizedCity === "—" ||
+    normalizedDaily.includes(
+      normalizedCity
+    );
+
+  return (
+    eventMatches &&
+    cityMatches
+  );
+}
+
+async function tryBuildAuthoritativeEventAnswer(
+  message
+) {
+  if (
+    !messageWantsCronograma(
+      message
+    )
+  ) {
+    return null;
+  }
+
+  const text =
+    normalizeSearchText(
+      message.content ||
+      ""
+    );
+
+  const asksWholeSchedule =
+    (
+      text.includes(
+        "semana"
+      ) ||
+      text.includes(
+        "cronograma completo"
+      ) ||
+      text.includes(
+        "todos os eventos"
+      ) ||
+      text.includes(
+        "eventos da semana"
+      )
+    ) &&
+    !text.includes(
+      "hoje"
+    ) &&
+    !text.includes(
+      "hj"
+    );
+
+  if (asksWholeSchedule) {
+    return null;
+  }
+
+  try {
+    const {
+      getCronogramaData,
+    } = await import(
+      "./cronogramaCreators.js"
+    );
+
+    const cronogramaData =
+      getCronogramaData();
+
+    if (!cronogramaData) {
+      return null;
+    }
+
+    const targetDate =
+      resolveRequestedCronogramaDate(
+        message,
+        cronogramaData
+      );
+
+    if (!targetDate) {
+      return null;
+    }
+
+    const items =
+      [
+        ...(cronogramaData.schedule || [])
+          .map(
+            item =>
+              ({
+                ...item,
+                sourceType:
+                  "schedule",
+              })
+          ),
+
+        ...(cronogramaData.madrugada || [])
+          .map(
+            item =>
+              ({
+                ...item,
+                sourceType:
+                  "madrugada",
+              })
+          ),
+      ]
+        .filter(
+          item =>
+            item?.active === true &&
+            item?.date === targetDate
+        );
+
+    if (!items.length) {
+      return (
+        `Pelo cronograma atual, não há evento ativo registrado para **${targetDate}**.`
+      );
+    }
+
+    const dailyPosts =
+      await fetchEventosDiariosForDate(
+        message,
+        targetDate
+      );
+
+    const validDailyPosts =
+      dailyPosts.filter(
+        post =>
+          items.some(
+            item =>
+              dailyEventTextMatchesCronogramaItem(
+                post,
+                item
+              )
+          )
+      );
+
+    const todayDdMm =
+      formatDateDdMmSp();
+
+    const header =
+      targetDate === todayDdMm
+        ? "Hoje, pelo cronograma atual:"
+        : `Para **${targetDate}**, pelo cronograma atual:`;
+
+    const lines =
+      items.map(
+        item => {
+          const eventName =
+            item.eventName &&
+            item.eventName !== "—"
+              ? item.eventName
+              : "Evento";
+
+          const city =
+            item.city &&
+            item.city !== "—"
+              ? item.city
+              : "cidade não informada";
+
+          const time =
+            item.time &&
+            item.time !== "—"
+              ? item.time
+              : "horário não informado";
+
+          const prizeText =
+            item.prizes &&
+            item.prizes !== "—"
+              ? ` | Premiação: **${item.prizes}**`
+              : "";
+
+          return (
+            `• **${eventName}** — **${city}**, às **${time}**${prizeText}`
+          );
+        }
+      );
+
+    const asksForDetails =
+      [
+        "detalhe",
+        "detalhes",
+        "premiacao",
+        "premiação",
+        "regra",
+        "regras",
+        "entrada",
+        "o que levar",
+        "oq levar",
+        "descricao",
+        "descrição",
+      ].some(
+        term =>
+          text.includes(
+            normalizeSearchText(
+              term
+            )
+          )
+      );
+
+    if (
+      asksForDetails &&
+      validDailyPosts.length
+    ) {
+      const details =
+        validDailyPosts[0]
+          .replace(
+            /@everyone|@here/g,
+            ""
+          )
+          .trim()
+          .slice(0, 1400);
+
+      return [
+        header,
+        ...lines,
+        "",
+        "O Eventos Diários dessa mesma data também possui um post compatível com o cronograma:",
+        details,
+      ].join("\n");
+    }
+
+    return [
+      header,
+      ...lines,
+    ].join("\n");
+  } catch (err) {
+    console.error(
+      "[IA EVENTOS] Não foi possível montar resposta estruturada direta. O fluxo continuará usando os canais oficiais:",
+      err
+    );
+
+    return null;
+  }
+}
+
 async function fetchCronogramaContext(message) {
   try {
     const guild = message.guild;
@@ -11685,6 +12794,12 @@ async function fetchCronogramaContext(message) {
         .fetch(AI_CRONOGRAMA_CHANNEL_ID)
         .catch(() => null);
 
+    const officialEventosDiariosChannel =
+      guild.channels.cache.get(AI_EVENTOS_DIARIOS_CHANNEL_ID) ||
+      await guild.channels
+        .fetch(AI_EVENTOS_DIARIOS_CHANNEL_ID)
+        .catch(() => null);
+
     const automaticallyFoundChannels =
       findRelevantChannels(
         guild,
@@ -11717,6 +12832,16 @@ async function fetchCronogramaContext(message) {
       );
     }
 
+    if (
+      officialEventosDiariosChannel &&
+      officialEventosDiariosChannel.isTextBased?.()
+    ) {
+      channelsMap.set(
+        officialEventosDiariosChannel.id,
+        officialEventosDiariosChannel
+      );
+    }
+
     for (const channel of mentionedChannels) {
       if (channel?.id && channel.isTextBased?.()) {
         channelsMap.set(channel.id, channel);
@@ -11742,8 +12867,13 @@ async function fetchCronogramaContext(message) {
       const channelContent =
         await readTextChannelMessages(channel, 20);
 
+      const sourceLabel =
+        channel.id === AI_EVENTOS_DIARIOS_CHANNEL_ID
+          ? "FONTE COMPLEMENTAR DE EVENTOS DIÁRIOS DA SANTACREATORS"
+          : "FONTE OFICIAL DE CRONOGRAMA DA SANTACREATORS";
+
       blocks.push([
-        "FONTE OFICIAL DE CRONOGRAMA DA SANTACREATORS",
+        sourceLabel,
         `Canal: <#${channel.id}>`,
         `Nome: #${channel.name}`,
         `Link do canal: https://discord.com/channels/${guild.id}/${channel.id}`,
@@ -11757,7 +12887,10 @@ async function fetchCronogramaContext(message) {
       "CRONOGRAMA OFICIAL ATUAL",
       "========================================",
       "Use os DADOS ESTRUTURADOS DO CRONOGRAMA como fonte principal para evento, data, horário, cidade, status e premiação.",
-      "Use o conteúdo do canal oficial como confirmação e contexto complementar.",
+      "Use o canal oficial do Cronograma como confirmação, contexto e fallback quando o estado estruturado não estiver disponível.",
+      "Use Eventos Diários apenas como fonte complementar da MESMA data para descrição, regras, premiação e detalhes publicados.",
+      "Eventos Diários nunca deve sobrescrever cidade, evento, data ou horário quando o cronograma estruturado atual estiver disponível.",
+      "Se não existir Evento Diário da data pedida, responda normalmente com o cronograma atual.",
       "Se houver divergência entre o estado estruturado atual e mensagens antigas do canal, priorize o estado estruturado atual.",
       "Compare a data solicitada pelo usuário com as datas reais da semana antes de responder.",
       "Não trate programação inativa como evento ativo.",
@@ -14798,6 +15931,7 @@ function buildPrompt({
   guildKnowledge,
   memoryLogs,
   systemsIndex,
+  adaptiveStyleContext,
 }) {
   const currentDateTime = new Date().toLocaleString(
     "pt-BR",
@@ -15052,6 +16186,15 @@ ${history}
 
 ### MEMÓRIA DE CONVERSAS ANTERIORES:
 ${memoryLogs}
+
+### PERFIL CONVERSACIONAL DA PESSOA ATUAL:
+${adaptiveStyleContext}
+
+REGRAS DO PERFIL CONVERSACIONAL:
+- Use este perfil apenas para ajustar tom, ritmo, informalidade e tamanho da resposta.
+- O perfil NÃO é fonte de fatos.
+- Não copie erros de português, digitação, palavrões ou bordões automaticamente.
+- A mensagem atual sempre pode justificar um tom diferente do padrão histórico.
 
 ### CONTEXTO TÉCNICO DA MENSAGEM ATUAL:
 ${discordContext}
@@ -15977,6 +17120,34 @@ const intent =
   );
 
 // =====================================================
+// PRIORIDADE FACTUAL — EVENTO / CRONOGRAMA
+// =====================================================
+//
+// Perguntas sobre evento de uma data específica são
+// respondidas ANTES de histórico, memória e Gemini.
+//
+// Isso impede que uma resposta antiga do próprio bot
+// seja reciclada como se ainda fosse o evento atual.
+// =====================================================
+
+if (
+  intent.wantsCronograma
+) {
+  const authoritativeEventAnswer =
+    await tryBuildAuthoritativeEventAnswer(
+      message
+    );
+
+  if (authoritativeEventAnswer) {
+    console.log(
+      "[IA EVENTOS] Resposta direta usando o cronograma estruturado atual."
+    );
+
+    return authoritativeEventAnswer;
+  }
+}
+
+// =====================================================
 // CONTEXTOS INDEPENDENTES EM PARALELO
 // =====================================================
 //
@@ -16003,38 +17174,51 @@ const [
   ]);
 
 const persistentChannelContext =
-  fetchPersistentChannelConversationContext(
-    message
-  );
+  intent.wantsCronograma
+    ? "Histórico persistente omitido nesta consulta factual de cronograma para evitar reutilizar programação antiga."
+    : fetchPersistentChannelConversationContext(
+        message
+      );
 
-const history = [
-  "========================================",
-  "HISTÓRICO INTERNO DA CONVERSA",
-  "========================================",
-  internalHistory,
-  "",
-  "========================================",
-  "ÚLTIMAS MENSAGENS REAIS DO CANAL",
-  "========================================",
-  recentChannelContext,
-  "",
-  "========================================",
-  "CONTINUIDADE PERSISTENTE DESTE CANAL",
-  "========================================",
-  persistentChannelContext,
-  "",
-  "IMPORTANTE:",
-  "- Leia as últimas mensagens reais antes de interpretar a mensagem atual.",
-  "- Leia também a continuidade persistente do canal quando ela existir.",
-  "- Trate mensagens relacionadas como partes da mesma conversa quando assunto, sequência, reply, pessoas citadas e contexto indicarem continuidade.",
-  "- Uma frase curta como 'e ele?', 'e semana passada?', 'e na Mecânica?' ou 'e comparado com ela?' pode depender diretamente das mensagens anteriores.",
-  "- Não obrigue o usuário a repetir um nome ou assunto que já esteja claramente definido na conversa.",
-  "- Identifique quem estava falando com quem.",
-  "- Uma mensagem de um usuário não significa automaticamente que ele está falando com você.",
-  "- Se houver conversa humana acontecendo, respeite o contexto dessa conversa.",
-  "- Use replies, menções e sequência da conversa para identificar o destinatário.",
-  "- Não responda como se uma fala dirigida a outro membro fosse dirigida à SantaCreators IA.",
-].join("\n");
+const history =
+  intent.wantsCronograma
+    ? [
+        "========================================",
+        "CONSULTA FACTUAL DE EVENTO / CRONOGRAMA",
+        "========================================",
+        "O histórico antigo do canal foi deliberadamente reduzido nesta consulta.",
+        "Motivo: uma resposta antiga sobre evento NÃO pode ser utilizada como programação atual.",
+        "Use somente a mensagem atual e as fontes atuais presentes em INFORMAÇÕES REAIS BUSCADAS NO SERVIDOR.",
+        "Se a consulta estruturada falhar, use os canais oficiais atuais lidos pelo sistema.",
+      ].join("\n")
+    : [
+        "========================================",
+        "HISTÓRICO INTERNO DA CONVERSA",
+        "========================================",
+        internalHistory,
+        "",
+        "========================================",
+        "ÚLTIMAS MENSAGENS REAIS DO CANAL",
+        "========================================",
+        recentChannelContext,
+        "",
+        "========================================",
+        "CONTINUIDADE PERSISTENTE DESTE CANAL",
+        "========================================",
+        persistentChannelContext,
+        "",
+        "IMPORTANTE:",
+        "- Leia as últimas mensagens reais antes de interpretar a mensagem atual.",
+        "- Leia também a continuidade persistente do canal quando ela existir.",
+        "- Trate mensagens relacionadas como partes da mesma conversa quando assunto, sequência, reply, pessoas citadas e contexto indicarem continuidade.",
+        "- Uma frase curta como 'e ele?', 'e semana passada?', 'e na Mecânica?' ou 'e comparado com ela?' pode depender diretamente das mensagens anteriores.",
+        "- Não obrigue o usuário a repetir um nome ou assunto que já esteja claramente definido na conversa.",
+        "- Identifique quem estava falando com quem.",
+        "- Uma mensagem de um usuário não significa automaticamente que ele está falando com você.",
+        "- Se houver conversa humana acontecendo, respeite o contexto dessa conversa.",
+        "- Use replies, menções e sequência da conversa para identificar o destinatário.",
+        "- Não responda como se uma fala dirigida a outro membro fosse dirigida à SantaCreators IA.",
+      ].join("\n");
 
 const guildKnowledge =
   guildKnowledgeCache.get(
@@ -16063,10 +17247,18 @@ const systemsIndex =
     return directInternalAnswer;
   }
 
-  // PRIORIDADE 2: Se for apenas saudação, ignora memória antiga
-  let memoryLogs = "Memória ignorada para focar na saudação.";
+  // PRIORIDADE 2:
+  // Saudação e consulta factual de cronograma
+  // não reutilizam memória antiga.
+  let memoryLogs =
+    intent.wantsCronograma
+      ? "Memória histórica ignorada nesta consulta factual de cronograma para evitar reutilizar programação antiga."
+      : "Memória ignorada para focar na saudação.";
 
-  if (!intent.isGreetingOnly) {
+  if (
+    !intent.isGreetingOnly &&
+    !intent.wantsCronograma
+  ) {
     const discordMemory =
       await fetchRecentMemoryLogs(
         client,
@@ -16123,18 +17315,27 @@ memoryLogs = [
   .slice(0, 60000);
   } else {
     console.log(
-      "[IA CHAT AUTO] Saudação simples detectada, ignorando memória antiga."
+      intent.wantsCronograma
+        ? "[IA CHAT AUTO] Consulta factual de cronograma: memória antiga ignorada para evitar programação desatualizada."
+        : "[IA CHAT AUTO] Saudação simples detectada, ignorando memória antiga."
     );
   }
+
+const adaptiveStyleContext =
+  fetchAdaptiveConversationStyleContext(
+    message
+  );
 
 const prompt =
     buildPrompt({
       discordContext,
       history,
       serverIntelligence,
-      guildKnowledge,
+      guildKnowledge:
+        guildKnowledge,
       memoryLogs,
       systemsIndex,
+      adaptiveStyleContext,
     });
 
 let lastError = null;
@@ -16777,14 +17978,140 @@ async function fetchChannelTextContext(client, channelId, limit = 20) {
     .join("\n\n")
     .slice(0, 9000);
 }
+const IA_ENTREVISTA_REAL_SAMPLES_CACHE_MS =
+  5 * 60 * 1000;
+
+let iaInterviewRealSamplesCache = {
+  createdAt: 0,
+  text: "",
+};
+
+async function fetchRecentRealInterviewSamples(
+  client
+) {
+  const now =
+    Date.now();
+
+  if (
+    iaInterviewRealSamplesCache.text &&
+    now -
+      iaInterviewRealSamplesCache.createdAt <
+      IA_ENTREVISTA_REAL_SAMPLES_CACHE_MS
+  ) {
+    return iaInterviewRealSamplesCache.text;
+  }
+
+  try {
+    const category =
+      await client.channels
+        .fetch(
+          IA_ENTREVISTA_CATEGORY_ID
+        )
+        .catch(
+          () => null
+        );
+
+    const guild =
+      category?.guild;
+
+    if (!guild) {
+      return "Não foi possível localizar a categoria de entrevistas.";
+    }
+
+    const channels =
+      await guild.channels
+        .fetch()
+        .catch(
+          () => null
+        );
+
+    if (!channels?.size) {
+      return "Nenhum canal de entrevista ficou disponível para leitura.";
+    }
+
+    const interviewChannels =
+      [...channels.values()]
+        .filter(
+          channel =>
+            channel &&
+            String(
+              channel.parentId ||
+              ""
+            ) ===
+              IA_ENTREVISTA_CATEGORY_ID &&
+            channel.isTextBased?.()
+        )
+        .sort(
+          (a, b) =>
+            Number(
+              b.createdTimestamp ||
+              0
+            ) -
+            Number(
+              a.createdTimestamp ||
+              0
+            )
+        )
+        .slice(0, 10);
+
+    const samples =
+      await Promise.all(
+        interviewChannels.map(
+          async channel => {
+            const channelText =
+              await fetchChannelTextContext(
+                client,
+                channel.id,
+                40
+              );
+
+            return [
+              `ENTREVISTA REAL — <#${channel.id}>`,
+              channelText,
+            ].join("\n");
+          }
+        )
+      );
+
+    const result =
+      [
+        "AMOSTRAS REAIS RECENTES DE ENTREVISTAS:",
+        ...samples,
+      ]
+        .join("\n\n")
+        .slice(0, 18000);
+
+    iaInterviewRealSamplesCache = {
+      createdAt: now,
+      text: result,
+    };
+
+    return result;
+  } catch (err) {
+    console.error(
+      "[IA ENTREVISTA] Erro ao ler amostras reais de entrevistas:",
+      err
+    );
+
+    return "Não foi possível ler outras entrevistas neste momento.";
+  }
+}
+
 
 async function buildIaInterviewKnowledge(client) {
-  const [respostasRecentes, gabarito, logsPerguntas, logsCorrecao] =
+  const [
+    respostasRecentes,
+    gabarito,
+    logsPerguntas,
+    logsCorrecao,
+    entrevistasReais,
+  ] =
     await Promise.all([
       fetchChannelTextContext(client, IA_ENTREVISTA_LOG_PERGUNTAS_ID, 25),
       fetchChannelTextContext(client, IA_ENTREVISTA_LOG_PERGUNTAS_GABARITO_ID, 25),
       fetchChannelTextContext(client, IA_ENTREVISTA_LOG_PERGUNTAS_USADO_ID, 15),
       fetchChannelTextContext(client, IA_ENTREVISTA_LOG_CORRECAO_ID, 20),
+      fetchRecentRealInterviewSamples(client),
     ]);
 
   return `
@@ -16801,7 +18128,20 @@ ${logsPerguntas}
 
 [LOGS DE !CORRECAO]
 ${logsCorrecao}
-`.slice(0, 22000);
+
+[AMOSTRAS REAIS DE OUTRAS ENTREVISTAS]
+${entrevistasReais}
+
+REGRAS PARA USAR ESSE BANCO:
+- O gabarito representa o SIGNIFICADO e os pontos esperados; ele NÃO é um texto obrigatório para o candidato copiar.
+- Compare entendimento, postura, lógica e aplicação prática, mesmo quando a pessoa escrever de forma totalmente diferente do gabarito.
+- Use as entrevistas reais apenas para aprender variedade de respostas humanas e padrões de entendimento.
+- NUNCA copie a resposta de outro candidato para responder alguém.
+- NUNCA exponha a outro candidato nome, ID, canal ou conteúdo privado de uma entrevista usada como referência interna.
+- Resposta diferente do gabarito não é errada se preservar a ideia correta.
+- Resposta parcialmente correta pode ser incompleta em vez de errada.
+- Erro de português não é erro conceitual.
+`.slice(0, 32000);
 }
 
 function buildIaInterviewStyleControl({ message, history, openerIsStaff }) {
@@ -16908,6 +18248,7 @@ function buildIaInterviewConversationPrompt({
   currentGuildKnowledge,
   institutionalMemory,
   sharedConversationMemory,
+  adaptiveStyleContext,
   openerId,
   hasStartButton,
   openerIsStaff,
@@ -17015,10 +18356,10 @@ BANCO DE VARIAÇÃO NATURAL:
 - Para reprovação: "não consigo confirmar resultado por aqui, a equipe avalia certinho."
 - Para resposta pronta: "não posso montar resposta pra copiar, mas posso te ajudar a entender a pergunta."
 - Para português ruim: "não precisa ser perfeito, só precisa dar pra entender."
-- Para "precisa ser famoso?": "não precisa ser famoso não kkk postura e vontade contam bastante."
-- Para "precisa fazer live?": "não necessariamente, a SantaCreators tem várias áreas."
-- Para "o que é SantaCreators?": "é uma estrutura de organização, entretenimento e operação dentro do ecossistema FiveM e Discord, conectando pessoas, cidades, organizações, eventos, equipes e toda a operação da SantaCreators."
-- Para "sou criador pequeno": "sem problema, tamanho não é tudo. o importante é perfil e postura."
+- Para "precisa ser famoso?": "não precisa ser famoso. seguidores ou tamanho de canal não definem entrada aqui; o foco é postura e atuação na operação dos eventos."
+- Para "precisa fazer live?": "não. live não é o objetivo nem um requisito geral da SantaCreators; a atuação é voltada à operação dos grandes eventos."
+- Para "o que é SantaCreators?": "é a principal equipe operacional de grandes eventos da Santa Group, atuando nos Mega Eventos de Nobre, Santa, Grande e Maresia."
+- Para "sou criador pequeno": "isso não muda a análise. tamanho de canal e seguidores não definem a função dentro da SantaCreators."
 - Para "não tenho experiência": "experiência ajuda, mas não é o único ponto avaliado."
 - Para "posso usar IA?": "melhor responder com tuas próprias palavras."
 - Para "me ajuda a responder": "posso explicar a pergunta, mas a resposta precisa ser tua."
@@ -17093,10 +18434,10 @@ RESPOSTAS PARA CANDIDATO:
 - Se candidato disser "posso copiar?": "melhor não. responde com tuas palavras pra ficar verdadeiro."
 - Se candidato disser "tenho vergonha": "relaxa, não precisa ser perfeito, só sincero."
 - Se candidato disser "não sei responder": "pensa no que tu faria na prática dentro do RP e responde simples."
-- Se candidato disser "não faço live": "sem problema automático, SantaCreators não é só live."
-- Se candidato disser "sou pequeno": "isso não elimina ninguém sozinho. postura e vontade contam muito."
-- Se candidato disser "tenho canal pequeno": "tranquilo, o tamanho não é o único ponto avaliado."
-- Se candidato disser "não tenho TikTok": "isso pode depender da área, mas não inventa nada; responde tua realidade."
+- Se candidato disser "não faço live": "sem problema. live não é requisito geral nem o objetivo da SantaCreators; o foco é a operação dos eventos."
+- Se candidato disser "sou pequeno": "tamanho de canal, seguidores ou fama não definem a entrada. a análise é sobre perfil, postura e encaixe na operação."
+- Se candidato disser "tenho canal pequeno": "isso não pesa por si só. a SantaCreators não seleciona pessoas pelo tamanho do canal ou número de seguidores."
+- Se candidato disser "não tenho TikTok": "não tem problema por si só. TikTok não é requisito geral para fazer parte da operação da SantaCreators."
 - Se candidato disser "não tenho experiência": "fala isso com sinceridade e mostra vontade de aprender."
 - Se candidato disser "posso editar depois?": "aguarda orientação da equipe, porque depende do fluxo do ticket."
 - Se candidato perguntar "quando sai resultado?": "a equipe responde quando terminar a análise."
@@ -17104,15 +18445,16 @@ RESPOSTAS PARA CANDIDATO:
 - Se candidato perguntar "fui reprovado?": "também não consigo confirmar por aqui, aguarda o retorno da equipe."
 
 RESPOSTAS SOBRE SANTACREATORS:
-- "SantaCreators é uma empresa de RP ligada à Santa Group."
-- "Ela envolve creators, eventos, comunidade, social media, organização e suporte."
-- "Não é só pra quem faz live."
-- "Também pode ter espaço pra quem curte RP, comunicação, eventos e criação."
-- "O foco é somar com postura, presença e responsabilidade."
+- "SantaCreators é a principal equipe operacional de grandes eventos da Santa Group dentro do RP."
+- "O foco central são os grandes eventos e Mega Eventos das cidades Nobre, Santa, Grande e Maresia."
+- "Não é agência, suporte, gestão nem equipe de influenciadores."
+- "Não cuida de carreira, seguidores, TikTok, Instagram, YouTube ou crescimento de influencer."
+- "Creator, Creators, Social Media e Manager são nomes internos de funções e não significam influencer."
+- "Resp. Influ significa Resp. Influência, não Responsável por Influenciadores."
+- "O foco é somar com postura, presença, responsabilidade e operação dos eventos."
 - "A equipe avalia perfil, postura e encaixe."
 - "Não dá pra prometer entrada antes da análise."
-- "Cada função pode ter critérios diferentes."
-- "Se tiver dúvida sobre área específica, a equipe confirma melhor."
+- "Cada função pode ter critérios diferentes dentro da operação."
 
 RESPOSTAS SOBRE ENTREVISTA:
 - "A entrevista é pra conhecer teu perfil."
@@ -17187,18 +18529,19 @@ COMPORTAMENTO NATURAL:
 - Se não entender, peça para ela explicar de novo de forma simples.
 
 SOBRE A SANTACREATORS:
-- SantaCreators é uma empresa de RP estruturada ligada à Santa Group.
-- SantaCreators trabalha com creators, social medias, managers, responsáveis, eventos, organização e suporte de comunidade.
-- SantaCreators NÃO é apenas para quem grava vídeo ou faz live.
-- Pessoas que gostam de RP, eventos, organização, comunicação, criatividade ou comunidade também podem se encaixar.
+- SantaCreators é a principal equipe operacional de grandes eventos da Santa Group dentro do RP.
+- Atua principalmente nos grandes eventos e Mega Eventos de Nobre, Santa, Grande e Maresia.
+- SantaCreators NÃO é equipe, agência, suporte ou gestão de influenciadores.
+- Não existe para fazer alguém crescer como streamer, tiktoker, youtuber ou influencer.
+- Uma pessoa pode criar conteúdo por fora, mas isso não define a função dela dentro da SantaCreators.
+- "Resp. Influ" significa "Resp. Influência" e NÃO "Responsável por Influenciadores".
 - Não diga que a pessoa já está aceita.
 - Não diga que a pessoa tem vaga garantida.
 - Não prometa cargo, pagamento, benefício, VIP ou aprovação.
-- Se perguntarem "o que é SantaCreators?", explique de forma curta e natural.
-- Se perguntarem "precisa ser famoso?", explique que não, o importante é ter interesse, postura e vontade de participar.
-- Se perguntarem "precisa fazer live?", explique que depende da função e da avaliação da equipe, sem prometer nada.
+- Se perguntarem "o que é SantaCreators?", explique de forma curta e natural com foco na operação dos eventos.
+- Se perguntarem "precisa ser famoso?", explique que fama, seguidores ou live não são o objetivo da equipe.
+- Se perguntarem "precisa fazer live?", explique que live não define a SantaCreators nem é o propósito da entrada.
 - Se perguntarem "tem que ter experiência?", diga que experiência ajuda, mas não é obrigatório para todos os casos.
-
 SOBRE A ENTREVISTA:
 - A entrevista serve para conhecer melhor a pessoa.
 - Oriente a pessoa a responder com sinceridade e com as próprias palavras.
@@ -17267,9 +18610,9 @@ VARIAÇÕES DE RESPOSTAS CURTAS QUE PODE USAR COMO BASE:
 - Para candidato querendo começar: "Certo, dá para começar por aqui. Segue o passo que aparecer no ticket."
 - Para quando tem botão: "Pode usar o botão de iniciar entrevista aqui no ticket."
 - Para quando não tem botão: "Aqui não apareceu botão para mim, então aguarda alguém da equipe iniciar ou orientar certinho."
-- Para dúvida sobre SantaCreators: "A SantaCreators é uma empresa de RP da Santa Group, focada em creators, eventos e comunidade."
-- Para quem acha que precisa ser famoso: "Não precisa ser famoso. O importante é postura, interesse e vontade de somar."
-- Para quem não faz live: "Não tem problema automaticamente. SantaCreators não é só live, tem várias áreas e perfis."
+- Para dúvida sobre SantaCreators: "A SantaCreators é a principal equipe operacional de grandes eventos da Santa Group, atuando nos Mega Eventos de Nobre, Santa, Grande e Maresia."
+- Para quem acha que precisa ser famoso: "Não precisa ser famoso. Aqui não é seleção nem suporte de influencer; o importante é ter postura e vontade de somar na operação dos eventos."
+- Para quem não faz live: "Não tem problema. Live e criação de conteúdo não são o foco da SantaCreators."
 - Para nervosismo: "Fica tranquilo, responde com calma e do seu jeito. Não precisa ser perfeito."
 - Para pedido de resposta pronta: "Não posso montar uma resposta para copiar, mas posso te ajudar a entender a pergunta."
 - Para erro de português: "Fica tranquilo, não precisa escrever perfeitamente. O importante é dar para entender bem."
@@ -17342,17 +18685,14 @@ REGRAS DA MEMÓRIA CONVERSACIONAL:
 - Utilize a experiência anterior para entender melhor o assunto, não para fabricar certeza.
 - Não anuncie ao usuário que encontrou aquilo em uma conversa antiga, salvo quando essa informação for importante para explicar a resposta.
 
-HISTÓRICO RECENTE DO CANAL:
-${history}
-- Use os ensinamentos naturalmente, sem anunciar que está consultando memória.
-- Não diga "Macedo me ensinou isso", "segundo minha memória" ou frases semelhantes sem necessidade.
-- Se um ensinamento determinar como a IA deve agir em determinada situação, aplique esse comportamento quando a situação realmente ocorrer.
-- Se um ensinamento corrigir uma explicação institucional anterior, considere a versão ensinada mais recente.
-- A memória institucional NÃO substitui informações operacionais atuais.
-- Cargo atual, membro atual, ranking, presença, NPS, cronograma, registros, eventos atuais e outros dados mutáveis devem continuar sendo obtidos das fontes atuais do servidor.
-- Se existir conflito entre memória institucional e dado operacional atual, o dado operacional atual possui prioridade para representar o estado atual.
-- Não invente novas regras a partir de um ensinamento.
-- Preserve o significado do que foi ensinado.
+PERFIL CONVERSACIONAL DA PESSOA ATUAL:
+${adaptiveStyleContext}
+
+REGRAS DE ADAPTAÇÃO INDIVIDUAL:
+- Adapte apenas tom, ritmo, tamanho e informalidade.
+- Não copie erros de português ou digitação da pessoa.
+- Não transforme gírias, brincadeiras ou opiniões em fatos institucionais.
+- Em entrevista, a adaptação não pode facilitar resposta pronta nem alterar critérios de correção.
 
 HISTÓRICO RECENTE DO CANAL:
 ${history}
@@ -17502,6 +18842,11 @@ const sharedConversationMemory =
     message
   );
 
+const adaptiveStyleContext =
+  fetchAdaptiveConversationStyleContext(
+    message
+  );
+
 const hasStartButton =
   await channelHasInterviewStartButton(
     message.channel,
@@ -17532,6 +18877,7 @@ const prompt = buildIaInterviewConversationPrompt({
   currentGuildKnowledge,
   institutionalMemory,
   sharedConversationMemory,
+  adaptiveStyleContext,
   openerId,
   hasStartButton,
   openerIsStaff,
@@ -18761,10 +20107,10 @@ function buildIaInterviewQuickAnswer(message, openerId) {
     ],
 
     criadorConteudo: [
-      `${mention}, ponto importante: a SantaCreators não é só pra quem grava ou faz live. Ela é uma empresa de RP estruturada, com eventos dinâmicos e organização dentro da Santa Group.`,
-      `Ter seguidores ajuda em algumas coisas, mas não é o foco principal. Aqui pesa mais postura, RP, compromisso, hierarquia e participação nos eventos.`,
-      `Se tu veio achando que é só “grupo de criador”, já te adianto: é bem mais que isso kkk. A SantaCreators funciona como empresa de RP organizada.`,
-      `Conteúdo é legal, mas SantaCreators não é só vitrine de influencer. A base é evento, organização, presença e postura dentro da cidade.`,
+      `${mention}, pode ser criador de conteúdo ou influencer por fora, mas isso não muda o objetivo daqui: a SantaCreators não é equipe nem suporte de influenciador. O foco são os grandes eventos e Mega Eventos das quatro cidades.`,
+      `Ter seguidores, fazer live ou criar conteúdo não dá vantagem nem define função aqui. A entrada é para somar na operação de eventos da SantaCreators.`,
+      `O nome Creator pode confundir, mas dentro da SantaCreators ele é nome de função/equipe, não sinônimo de influencer de rede social.`,
+      `E quando aparecer “Resp. Influ”, leia como “Resp. Influência”. Esse cargo não significa responsável por influenciadores.`,
     ],
 
     duvidaRegras: [
