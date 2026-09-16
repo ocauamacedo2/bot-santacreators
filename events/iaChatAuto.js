@@ -9521,6 +9521,156 @@ function extractDiscordIdsFromText(text) {
 }
 
 
+// =====================================================
+// IA — CONTINUIDADE SEGURA DE CRONOGRAMA
+// =====================================================
+//
+// Permite entender continuações curtas como:
+//
+// "e o de amanhã?"
+// "e quarta?"
+// "qual o de sexta?"
+// "amanhã?"
+//
+// SOMENTE quando a resposta recente da própria IA naquele
+// canal já era sobre cronograma/evento.
+//
+// Isso evita transformar qualquer frase com "amanhã" em
+// consulta de evento e impede que uma continuação legítima
+// caia no Gemini sem consultar o cronograma atual.
+// =====================================================
+
+function hasRecentCronogramaAiResponse(
+  channelId,
+  maxAgeMs = 15 * 60 * 1000
+) {
+  const responses =
+    lastAiResponses.get(
+      channelId
+    ) || [];
+
+  if (!responses.length) {
+    return false;
+  }
+
+  const now =
+    Date.now();
+
+  return [
+    ...responses,
+  ]
+    .reverse()
+    .some(
+      item => {
+        if (
+          !item?.text ||
+          !item?.timestamp
+        ) {
+          return false;
+        }
+
+        if (
+          now -
+            Number(
+              item.timestamp
+            ) >
+          maxAgeMs
+        ) {
+          return false;
+        }
+
+        const previousText =
+          normalizeSearchText(
+            item.text
+          );
+
+        return (
+          previousText.includes(
+            "cronograma"
+          ) ||
+          (
+            previousText.includes(
+              "evento"
+            ) &&
+            (
+              previousText.includes(
+                "cidade grande"
+              ) ||
+              previousText.includes(
+                "cidade santa"
+              ) ||
+              previousText.includes(
+                "cidade nobre"
+              ) ||
+              previousText.includes(
+                "cidade maresia"
+              )
+            )
+          )
+        );
+      }
+    );
+}
+
+function messageLooksLikeCronogramaTemporalFollowUp(
+  message
+) {
+  const text =
+    normalizeSearchText(
+      message?.content ||
+      ""
+    );
+
+  if (
+    !text ||
+    text.length > 100
+  ) {
+    return false;
+  }
+
+  const hasTemporalReference =
+    text.includes("hoje") ||
+    /\bhj\b/.test(text) ||
+    text.includes("amanha") ||
+    text.includes("segunda") ||
+    text.includes("terca") ||
+    text.includes("quarta") ||
+    text.includes("quinta") ||
+    text.includes("sexta") ||
+    text.includes("sabado") ||
+    text.includes("domingo") ||
+    /\b\d{1,2}[\/.-]\d{1,2}(?:[\/.-]\d{2,4})?\b/.test(
+      text
+    );
+
+  if (
+    !hasTemporalReference
+  ) {
+    return false;
+  }
+
+  const looksLikeShortFollowUp =
+    text.startsWith("e ") ||
+    text.startsWith("o de ") ||
+    text.startsWith("a de ") ||
+    text.startsWith("de ") ||
+    text.startsWith("qual ") ||
+    /^(hoje|hj|amanha|segunda|terca|quarta|quinta|sexta|sabado|domingo)$/.test(
+      text
+    );
+
+  if (
+    !looksLikeShortFollowUp
+  ) {
+    return false;
+  }
+
+  return hasRecentCronogramaAiResponse(
+    message?.channelId
+  );
+}
+
+
 function messageWantsCronograma(message) {
   const text = normalizeSearchText(message.content);
 
@@ -9575,7 +9725,10 @@ function messageWantsCronograma(message) {
     text.includes("evento semanal") ||
     text.includes("eventos semanais") ||
     asksEventSchedule ||
-    (mentionsEvent && mentionsTime)
+    (mentionsEvent && mentionsTime) ||
+    messageLooksLikeCronogramaTemporalFollowUp(
+      message
+    )
   );
 }
 
