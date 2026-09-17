@@ -17,8 +17,7 @@ import {
 } from "discord.js";
 // ✅ HUB do dashboard
 import { dashEmit } from "../utils/dashHub.js";
-import { getMemberOrgTicketContext } from "../../orgTicketAccessSync.js";
-
+import { getMemberOrgTicketContext } from "./orgTicketAccessSync.js";
 // ── CONFIG DE CANAIS ─────────────────────────────────────────────
 const VIP_MENU_CHANNEL_ID = "1414718336826081330"; // onde fica o MENU e os REGISTROS
 const VIP_NOTIFY_CHANNEL_ID = "1424489278615978114"; // notificação de novo registro
