@@ -37,6 +37,7 @@ const ALLOWED_ROLES = new Set([
   "1352407252216184833", // Resp Líder
   "1352408327983861844", // Resp Creators
   "1262262852949905409", // Resp Influ
+  "1262262852949905408", // Owner (caso este ID seja cargo)
   "1388976314253312100", // Coord.
   "1388975939161161728", // Gestor
 ]);
@@ -46,6 +47,27 @@ const ALLOWED_USERS = new Set([
   "1262262852949905408", // Owner
   "660311795327828008",  // Você
 ]);
+
+// Quem pode enviar convite para líderes em QUALQUER horário
+const ALWAYS_SEND_ROLES = new Set([
+  "1352407252216184833", // Resp Líder
+  "1262262852949905409", // Resp Influ
+  "1352408327983861844", // Resp Creators
+  "1262262852949905408", // Owner (mantido também aqui caso este ID seja cargo)
+]);
+
+const ALWAYS_SEND_USERS = new Set([
+  "1262262852949905408", // Owner (mantém compatibilidade com a configuração atual)
+  "660311795327828008",  // Macedo / Você
+]);
+
+const SEND_START_HOUR = 18;
+const SEND_START_MINUTE = 50;
+
+const SEND_END_HOUR = 21;
+const SEND_END_MINUTE = 0;
+
+const SEND_TIMEZONE = "America/Sao_Paulo";
 
 
 // ======================= IDs de componentes =======================
@@ -151,6 +173,42 @@ function allowed(i) {
 
   // Cargos liberados
   return i.member?.roles?.cache?.some((r) => ALLOWED_ROLES.has(r.id)) ?? false;
+}
+
+function canSendLeaderInviteAnytime(i) {
+  if (ALWAYS_SEND_USERS.has(i.user.id)) return true;
+
+  return (
+    i.member?.roles?.cache?.some((r) => ALWAYS_SEND_ROLES.has(r.id)) ?? false
+  );
+}
+
+function getSendTimeBR(ms = Date.now()) {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: SEND_TIMEZONE,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(ms));
+
+  const hour = Number(parts.find((p) => p.type === "hour")?.value ?? 0);
+  const minute = Number(parts.find((p) => p.type === "minute")?.value ?? 0);
+
+  return { hour, minute };
+}
+
+function canSendLeaderInviteNow(i, ms = Date.now()) {
+  // Resp Líder, Resp Influ, Resp Creators, Owner e Macedo
+  // podem enviar em qualquer horário.
+  if (canSendLeaderInviteAnytime(i)) return true;
+
+  const { hour, minute } = getSendTimeBR(ms);
+
+  const currentMinutes = hour * 60 + minute;
+  const startMinutes = SEND_START_HOUR * 60 + SEND_START_MINUTE;
+  const endMinutes = SEND_END_HOUR * 60 + SEND_END_MINUTE;
+
+  return currentMinutes >= startMinutes && currentMinutes <= endMinutes;
 }
 
 
@@ -495,6 +553,17 @@ export async function lideresConvitesHandleInteraction(i, client) {
 
   // ========== BOTÃO: ABRIR MODAL ==========
   if (i.isButton?.() && i.customId === BTN_OPEN_ID) {
+    if (!canSendLeaderInviteNow(i)) {
+      await i
+        .reply({
+          content:
+  "⏰ O envio de convites para líderes fica liberado somente entre **18:50 e 21:00** (horário de Brasília).",
+          ephemeral: true,
+        })
+        .catch(() => {});
+      return true;
+    }
+
     const modal = new ModalBuilder().setCustomId(MODAL_ID).setTitle("💜 Convite para Líderes");
 
     const t = new TextInputBuilder()
@@ -674,9 +743,19 @@ try {
     if (menu && canSend(menu)) await createOrReplaceMenu(menu).catch(() => {});
     return true;
   }
-
   // ========== MODAL: ENVIAR CONVITE ==========
   if (i.isModalSubmit?.() && i.customId === MODAL_ID) {
+    if (!canSendLeaderInviteNow(i)) {
+      await i
+        .reply({
+         content:
+  "⏰ O envio de convites para líderes fica liberado somente entre **18:50 e 21:00** (horário de Brasília).",
+          ephemeral: true,
+        })
+        .catch(() => {});
+      return true;
+    }
+
     await i.deferReply({ ephemeral: true }).catch(() => {});
 
     const titulo = i.fields.getTextInputValue(IN_TITULO).trim();
