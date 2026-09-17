@@ -17,6 +17,7 @@ import {
 } from "discord.js";
 // ✅ HUB do dashboard
 import { dashEmit } from "../utils/dashHub.js";
+import { getMemberOrgTicketContext } from "../../orgTicketAccessSync.js";
 
 // ── CONFIG DE CANAIS ─────────────────────────────────────────────
 const VIP_MENU_CHANNEL_ID = "1414718336826081330"; // onde fica o MENU e os REGISTROS
@@ -103,6 +104,8 @@ const CITIES = {
     grande: { label: "Grande", emoji: "🐘", roleId: "1418691103397253322" },
     boomerang: { label: "Boomerang", emoji: "🪃", roleId: "1423354185570586694" },
 };
+
+const VIP_LIDER_CITY_KEYS = ["nobre", "santa", "maresia", "grande"];
 
 const VIP_BTN_SOLICITADO_ID = "vip_mark_solicitado";
 const VIP_BTN_PAGO_ID = "vip_mark_pago";
@@ -196,6 +199,120 @@ function canMarkPaid(member) {
 }
 function canReprove(member) {
   return hasAnyRole(member, REPROVE_ALLOWED) || REPROVE_ALLOWED_USERS.includes(member?.id);
+}
+
+async function VIP_getLeaderRequestContext(member) {
+  const isLeader = member?.roles?.cache?.has(IDS.LIDERES) === true;
+
+  if (!isLeader) {
+    return {
+      strict: false,
+      ok: true,
+      source: 'normal',
+      cityKeys: Object.keys(CITIES),
+      orgName: null,
+      orgMatch: null,
+    };
+  }
+
+  let orgContext;
+
+  try {
+    orgContext = await getMemberOrgTicketContext(member);
+  } catch (error) {
+    console.error('[VIP] Falha ao validar organização/ticket do líder:', error);
+
+    return {
+      strict: true,
+      ok: false,
+      source: 'error',
+      cityKeys: [],
+      orgName: null,
+      orgMatch: null,
+      message: '⚠️ Não consegui validar sua organização agora. Tente novamente em alguns segundos.',
+    };
+  }
+
+  const orgMatches = Array.isArray(orgContext?.matches) ? orgContext.matches : [];
+
+  const missingTagTickets = Array.isArray(orgContext?.missingTagTickets)
+    ? orgContext.missingTagTickets
+    : [];
+
+  if (missingTagTickets.length > 0) {
+    const orgNames = missingTagTickets
+      .map(ticket => `**${ticket.orgName || ticket.channelName}**`)
+      .join(', ');
+
+    return {
+      strict: true,
+      ok: false,
+      source: 'missing_org_tag',
+      cityKeys: [],
+      orgName: null,
+      orgMatch: null,
+      message:
+        '🚫 **Solicitação de VIP bloqueada.**\n' +
+        `Você possui ticket de organização aberto (${orgNames}), mas não está usando a **tag/cargo correspondente à própria organização**.\n` +
+        'Peça para corrigirem sua tag antes de solicitar o VIP.',
+    };
+  }
+
+  if (orgMatches.length > 1) {
+    return {
+      strict: true,
+      ok: false,
+      source: 'multiple_orgs',
+      cityKeys: [],
+      orgName: null,
+      orgMatch: null,
+      message:
+        '🚫 **Solicitação de VIP bloqueada.**\n' +
+        'Foram encontradas **mais de uma tag de organização com ticket aberto** no seu usuário.\n' +
+        'Por segurança, deixe apenas a tag correta da sua organização antes de solicitar o VIP.',
+    };
+  }
+
+  if (orgMatches.length === 1) {
+    const orgMatch = orgMatches[0];
+
+    return {
+      strict: true,
+      ok: true,
+      source: 'org_ticket',
+      cityKeys: ['nobre'],
+      orgName: orgMatch.orgName,
+      orgMatch,
+    };
+  }
+
+  const cityKeys = VIP_LIDER_CITY_KEYS.filter(cityKey =>
+    member.roles.cache.has(CITIES[cityKey].roleId)
+  );
+
+  if (cityKeys.length === 0) {
+    return {
+      strict: true,
+      ok: false,
+      source: 'missing_requirement',
+      cityKeys: [],
+      orgName: null,
+      orgMatch: null,
+      message:
+        '🚫 **Solicitação de VIP bloqueada.**\n' +
+        `Você possui <@&${IDS.LIDERES}>, mas não foi encontrada uma **tag de organização ligada a um ticket aberto** e você também não possui nenhum dos divisores de cidade autorizados:\n` +
+        VIP_LIDER_CITY_KEYS.map(cityKey => `<@&${CITIES[cityKey].roleId}>`).join(' • '),
+    };
+  }
+
+  return {
+    strict: true,
+    ok: true,
+    source: 'city_role',
+    cityKeys,
+    orgName: null,
+    orgMatch: null,
+  };
 }
 
 // ── Helpers de status do registro ───────────────────────────────
@@ -317,7 +434,18 @@ function VIP_buildMenuComponents() {
   ];
 }
 
-function VIP_buildModal(eventData = null) {
+function VIP_buildModal(eventData = null, defaults = {}) {
+  const orgInput = new TextInputBuilder()
+    .setCustomId("vip_org_nome")
+    .setLabel("Nome da organização")
+    .setStyle(TextInputStyle.Short)
+    .setPlaceholder("Ex: Bellagio")
+    .setRequired(true);
+
+  if (defaults?.orgName) {
+    orgInput.setValue(String(defaults.orgName).slice(0, 100));
+  }
+
   return new ModalBuilder()
     .setCustomId(VIP_MODAL_ID)
     .setTitle("Registro de VIP por Evento")
@@ -339,20 +467,14 @@ function VIP_buildModal(eventData = null) {
           .setRequired(true)
       ),
       new ActionRowBuilder().addComponents(
-      new TextInputBuilder()
-  .setCustomId("vip_ganhador_id")
-  .setLabel("Nome | ID do ganhador")
-  .setPlaceholder("Ex: Lopess 7 | 209311 ou 209311 | Lopess 7")
-  .setStyle(TextInputStyle.Short)
-  .setRequired(true)
-      ),
-      new ActionRowBuilder().addComponents(
         new TextInputBuilder()
-          .setCustomId("vip_org_nome")
-          .setLabel("Nome da organização")
+          .setCustomId("vip_ganhador_id")
+          .setLabel("Nome | ID do ganhador")
+          .setPlaceholder("Ex: Lopess 7 | 209311 ou 209311 | Lopess 7")
           .setStyle(TextInputStyle.Short)
           .setRequired(true)
       ),
+      new ActionRowBuilder().addComponents(orgInput),
       new ActionRowBuilder().addComponents(
         new TextInputBuilder()
           .setCustomId("vip_premiacao")
@@ -1381,23 +1503,85 @@ const isVipModalCriar =
           return true;
         }
 
-        const selectMenu = new StringSelectMenuBuilder()
-            .setCustomId(VIP_SEL_CITY_ID)
-            .setPlaceholder('Selecione a cidade do evento')
-            .addOptions(
-                Object.entries(CITIES).map(([key, city]) =>
-                    new StringSelectMenuOptionBuilder()
-                        .setLabel(city.label)
-                        .setValue(key)
-                        .setEmoji(city.emoji)
-                )
-            );
-        const row = new ActionRowBuilder().addComponents(selectMenu);
-        await safeReply(i, {
-            content: '🌆 Para qual cidade é este registro de VIP?',
-            components: [row],
+        const leaderContext = await VIP_getLeaderRequestContext(i.member);
+
+        if (leaderContext.strict && !leaderContext.ok) {
+          await safeReply(i, {
+            content: leaderContext.message,
             ephemeral: true,
+          });
+          return true;
+        }
+
+        const directCityKey = leaderContext.strict && (
+          leaderContext.source === 'org_ticket' ||
+          leaderContext.cityKeys.length === 1
+        )
+          ? leaderContext.cityKeys[0]
+          : null;
+
+        if (directCityKey) {
+          const eventData = getTodayEventData();
+
+          const modal = VIP_buildModal(eventData, {
+            orgName: leaderContext.orgName,
+          });
+
+          modal.setCustomId(`${VIP_MODAL_ID}:${directCityKey}`);
+
+          try {
+            await i.showModal(modal);
+
+            await VIP_sendAuditLog(client, i.guild, {
+              title: "🌆 Modal de VIP aberto automaticamente",
+              color: MENU_COLOR,
+              action: "ABRIU_MODAL_VIP_AUTO",
+              interaction: i,
+              actor: i.user,
+              channel: i.channel,
+              during: "O sistema validou automaticamente o líder e abriu o modal de VIP.",
+              before: "Antes: usuário clicou em Abrir formulário.",
+              after: [
+                `Depois: modal aberto para **${CITIES[directCityKey].label}**.`,
+                leaderContext.orgName
+                  ? `Organização detectada: **${leaderContext.orgName}**.`
+                  : "Organização: preenchimento manual.",
+              ].join("\n"),
+              extra: `Fonte da validação: \`${leaderContext.source}\``,
+            });
+          } catch (err) {
+            console.error('[VIP] showModal automático falhou:', err);
+          }
+
+          return true;
+        }
+
+        const allowedCityKeys = leaderContext.strict
+          ? leaderContext.cityKeys
+          : Object.keys(CITIES);
+
+        const selectMenu = new StringSelectMenuBuilder()
+          .setCustomId(VIP_SEL_CITY_ID)
+          .setPlaceholder('Selecione a cidade do evento')
+          .addOptions(
+            allowedCityKeys.map(key => {
+              const city = CITIES[key];
+
+              return new StringSelectMenuOptionBuilder()
+                .setLabel(city.label)
+                .setValue(key)
+                .setEmoji(city.emoji);
+            })
+          );
+
+        const row = new ActionRowBuilder().addComponents(selectMenu);
+
+        await safeReply(i, {
+          content: '🌆 Para qual cidade é este registro de VIP?',
+          components: [row],
+          ephemeral: true,
         });
+
         return true;
       }
 
@@ -1428,35 +1612,69 @@ const isVipModalCriar =
     }
 
     if (isVipCitySelect) {
-        if (!canRegister(i.member)) {
-            await safeReply(i, { content: '🚫 Você não tem permissão para registrar.', ephemeral: true });
-            return true;
-        }
-        const cityKey = i.values[0];
-        const eventData = getTodayEventData();
+      if (!canRegister(i.member)) {
+        await safeReply(i, { content: '🚫 Você não tem permissão para registrar.', ephemeral: true });
+        return true;
+      }
 
-        const modal = VIP_buildModal(eventData);
-        modal.setCustomId(`${VIP_MODAL_ID}:${cityKey}`);
+      const cityKey = i.values[0];
 
-        try {
-    await i.showModal(modal);
+      if (!cityKey || !CITIES[cityKey]) {
+        await safeReply(i, {
+          content: '❌ Cidade inválida. Comece o processo novamente.',
+          ephemeral: true,
+        });
+        return true;
+      }
 
-    await VIP_sendAuditLog(client, i.guild, {
-      title: "🌆 Modal de VIP aberto",
-      color: MENU_COLOR,
-      action: "ABRIU_MODAL_VIP",
-      interaction: i,
-      actor: i.user,
-      channel: i.channel,
-      during: "Usuário selecionou a cidade e o sistema abriu o modal de registro de VIP.",
-      before: "Antes: usuário estava no seletor de cidade.",
-      after: `Depois: modal aberto para preenchimento.\nCidade selecionada: **${CITIES[cityKey].label}** (\`${cityKey}\`)`,
-      extra: `Dados automáticos do cronograma:\n\`\`\`json\n${VIP_cut(JSON.stringify(eventData || {}, null, 2), 900)}\n\`\`\``,
-    });
-} catch (err) {
-    console.error('[VIP] showModal (city select) falhou:', err);
-}
-return true;
+      const leaderContext = await VIP_getLeaderRequestContext(i.member);
+
+      if (leaderContext.strict && !leaderContext.ok) {
+        await safeReply(i, {
+          content: leaderContext.message,
+          ephemeral: true,
+        });
+        return true;
+      }
+
+      if (leaderContext.strict && !leaderContext.cityKeys.includes(cityKey)) {
+        await safeReply(i, {
+          content: '🚫 Essa cidade não corresponde aos seus cargos/ticket atuais. Abra o formulário novamente.',
+          ephemeral: true,
+        });
+        return true;
+      }
+
+      const eventData = getTodayEventData();
+
+      const modal = VIP_buildModal(eventData, {
+        orgName: leaderContext.source === 'org_ticket'
+          ? leaderContext.orgName
+          : null,
+      });
+
+      modal.setCustomId(`${VIP_MODAL_ID}:${cityKey}`);
+
+      try {
+        await i.showModal(modal);
+
+        await VIP_sendAuditLog(client, i.guild, {
+          title: "🌆 Modal de VIP aberto",
+          color: MENU_COLOR,
+          action: "ABRIU_MODAL_VIP",
+          interaction: i,
+          actor: i.user,
+          channel: i.channel,
+          during: "Usuário selecionou a cidade e o sistema abriu o modal de registro de VIP.",
+          before: "Antes: usuário estava no seletor de cidade.",
+          after: `Depois: modal aberto para preenchimento.\nCidade selecionada: **${CITIES[cityKey].label}** (\`${cityKey}\`)`,
+          extra: `Dados automáticos do cronograma:\n\`\`\`json\n${VIP_cut(JSON.stringify(eventData || {}, null, 2), 900)}\n\`\`\``,
+        });
+      } catch (err) {
+        console.error('[VIP] showModal (city select) falhou:', err);
+      }
+
+      return true;
     }
 
     // ── 2) MODAL: Reprovar pagamento (submit) ─────────────────────
@@ -1572,15 +1790,40 @@ return true;
       const cityKey = customIdParts.length > 1 ? customIdParts[1] : null;
 
       if (!cityKey || !CITIES[cityKey]) {
-          await safeReply(i, { content: "❌ Cidade inválida ou não selecionada. Por favor, comece o processo novamente.", ephemeral: true });
-          return true;
+        await safeReply(i, {
+          content: "❌ Cidade inválida ou não selecionada. Por favor, comece o processo novamente.",
+          ephemeral: true,
+        });
+        return true;
+      }
+
+      const leaderContext = await VIP_getLeaderRequestContext(i.member);
+
+      if (leaderContext.strict && !leaderContext.ok) {
+        await safeReply(i, {
+          content: leaderContext.message,
+          ephemeral: true,
+        });
+        return true;
+      }
+
+      if (leaderContext.strict && !leaderContext.cityKeys.includes(cityKey)) {
+        await safeReply(i, {
+          content: "🚫 Seus cargos/ticket mudaram e esta cidade não é mais válida para você. Abra o formulário novamente.",
+          ephemeral: true,
+        });
+        return true;
       }
 
 let evento = i.fields.getTextInputValue("vip_evt_nome").trim();
 let data = i.fields.getTextInputValue("vip_evt_data").trim();
 const ganhadorInput = i.fields.getTextInputValue("vip_ganhador_id").trim();
-const org = i.fields.getTextInputValue("vip_org_nome").trim();
+let org = i.fields.getTextInputValue("vip_org_nome").trim();
 let premiacao = i.fields.getTextInputValue("vip_premiacao").trim();
+
+if (leaderContext.strict && leaderContext.source === 'org_ticket' && leaderContext.orgName) {
+  org = leaderContext.orgName;
+}
 
 const ganhadorFlex = VIP_parseGanhadorFlex(ganhadorInput, org);
 

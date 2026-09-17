@@ -240,7 +240,10 @@ async function fetchOrgTicketChannels(guild) {
   const result = [];
 
   for (const categoryId of ORG_TICKET_CATEGORY_IDS) {
-    const category = await guild.channels.fetch(categoryId).catch(() => null);
+    const category =
+      guild.channels.cache.get(categoryId) ||
+      await guild.channels.fetch(categoryId).catch(() => null);
+
     if (!category || category.type !== ChannelType.GuildCategory) continue;
 
     const children = category.children?.cache?.values
@@ -325,6 +328,178 @@ async function findMatchingOrgTicketChannel(guild, role) {
     reason: `Canal encontrado com ${Math.round(best.score * 100)}% de confiança.`,
     candidates,
   };
+}
+
+export async function getMemberOrgTicketContext(member) {
+  if (!member?.guild) {
+    return {
+      matches: [],
+      missingTagTickets: [],
+    };
+  }
+
+  const guild = member.guild;
+  const channels = await fetchOrgTicketChannels(guild);
+
+  const tagRoles = [...member.roles.cache.values()].filter(role =>
+    !role.managed &&
+    role.id !== guild.id &&
+    !isIgnoredRoleName(role.name) &&
+    isRoleInsideTagsRange(guild, role)
+  );
+
+  const buildMatch = (role, channel) => {
+    const roleClean = normalizeName(role.name);
+    const channelPretty = prettyChannelName(channel.name);
+    const channelClean = normalizeName(channelPretty);
+
+    let score = similarity(roleClean, channelClean);
+
+    if (channelClean === roleClean) score = 1;
+    else if (channelClean.includes(roleClean) || roleClean.includes(channelClean)) {
+      score = Math.max(score, 0.94);
+    }
+
+    return {
+      role,
+      channel,
+      score,
+      channelPretty,
+    };
+  };
+
+  const directTicketChannels = channels.filter(channel => {
+    const overwrite = channel.permissionOverwrites.cache.get(member.id);
+    return overwrite?.allow?.has(PermissionsBitField.Flags.ViewChannel) === true;
+  });
+
+  if (directTicketChannels.length > 0) {
+    const matches = [];
+    const missingTagTickets = [];
+
+    for (const channel of directTicketChannels) {
+      const candidates = tagRoles
+        .map(role => buildMatch(role, channel))
+        .sort((a, b) => b.score - a.score);
+
+      const best = candidates[0];
+      const second = candidates[1];
+
+      const ambiguous =
+        second &&
+        best &&
+        best.score < 0.94 &&
+        Math.abs(best.score - second.score) < 0.08;
+
+      if (!best || best.score < 0.86 || ambiguous) {
+        missingTagTickets.push({
+          channelId: channel.id,
+          channelName: channel.name,
+          orgName: prettyChannelName(channel.name),
+        });
+        continue;
+      }
+
+      matches.push({
+        roleId: best.role.id,
+        roleName: best.role.name,
+        channelId: channel.id,
+        channelName: channel.name,
+        orgName: prettyChannelName(best.role.name) || best.channelPretty,
+        score: best.score,
+      });
+    }
+
+    return {
+      matches,
+      missingTagTickets,
+    };
+  }
+
+  return {
+    matches: [],
+    missingTagTickets: [],
+  };
+}
+
+function buildLeaderNickname(member) {
+  const raw = String(
+    member?.nickname ||
+    member?.user?.globalName ||
+    member?.user?.username ||
+    'Nome'
+  )
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const parts = raw
+    .split('|')
+    .map(part => part.trim())
+    .filter(Boolean);
+
+  let name = '';
+  let id = '';
+
+  if (parts.length >= 3) {
+    name = parts[1] || '';
+    id = parts.slice(2).find(part => /^\d+$/.test(part)) || '';
+  } else if (parts.length === 2) {
+    if (/^\d+$/.test(parts[1])) {
+      name = parts[0];
+      id = parts[1];
+    } else {
+      const firstCompact = parts[0].replace(/\s+/g, '');
+      const firstLooksLikeSigla =
+        /^[A-Z0-9]{1,6}$/.test(firstCompact) &&
+        /[A-Z]/.test(firstCompact);
+
+      name = firstLooksLikeSigla ? parts[1] : parts[0];
+    }
+  } else {
+    name = parts[0] || member?.user?.username || 'Nome';
+  }
+
+  name = String(name || member?.user?.username || 'Nome')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (name) {
+    name = name.charAt(0).toUpperCase() + name.slice(1);
+  }
+
+  const idText = id || 'ID?????';
+  const fixedLength = 'LD | '.length + ' | '.length + idText.length;
+  const maxNameLength = Math.max(1, 32 - fixedLength);
+  const safeName = name.slice(0, maxNameLength).trim() || 'Nome';
+
+  return `LD | ${safeName} | ${idText}`;
+}
+
+async function ensureLeaderNickname(member) {
+  if (!member || member.user?.bot) return false;
+  if (!member.roles.cache.has(ROLE_LIDERES_ID)) return false;
+
+  const desiredNickname = buildLeaderNickname(member);
+  const currentDisplay = String(member.nickname || member.user?.globalName || member.user?.username || '').trim();
+
+  if (currentDisplay === desiredNickname) return false;
+
+  if (!member.manageable) {
+    console.warn(`[ORG_TICKET_ACCESS_SYNC] Não posso alterar o apelido de ${member.user?.tag || member.id}.`);
+    return false;
+  }
+
+  try {
+    await member.setNickname(
+      desiredNickname,
+      'OrgTicketAccessSync: padronização automática de líder'
+    );
+
+    return true;
+  } catch (error) {
+    console.error('[ORG_TICKET_ACCESS_SYNC] Erro ao padronizar apelido de líder:', error);
+    return false;
+  }
 }
 
 async function getAuditExecutor(guild, targetId) {
@@ -663,6 +838,14 @@ export function installOrgTicketAccessSync(client) {
 
       const addedRoleIds = [...newRoles].filter(id => !oldRoles.has(id));
       const removedRoleIds = [...oldRoles].filter(id => !newRoles.has(id));
+
+      const leaderWasAdded = addedRoleIds.includes(ROLE_LIDERES_ID);
+      const leaderHasRole = newRoles.has(ROLE_LIDERES_ID);
+      const nicknameChanged = oldMember.nickname !== newMember.nickname;
+
+      if (leaderHasRole && (leaderWasAdded || nicknameChanged)) {
+        await ensureLeaderNickname(newMember);
+      }
 
       if (!addedRoleIds.length && !removedRoleIds.length) return;
 
