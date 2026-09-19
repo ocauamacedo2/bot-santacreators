@@ -629,6 +629,10 @@ function getManualPlayerCityKeySmart(playerId = "", playerName = "") {
     "1352407252216184833", // Resp Lider
   ];
 
+  const COORD_APPROVER_ROLES = [
+    "1388976314253312100", // Coord Creators
+  ];
+
   const ALLOWED_USERS = [
     "660311795327828008", // Você
     "1262262852949905408", // Owner
@@ -9941,6 +9945,108 @@ await publishHallRankings(client, rankings);
     return member?.roles?.cache?.some((r) => APPROVER_ROLES.includes(r.id)) || false;
   }
 
+  function isCoordHallApprover(member, userId) {
+    if (ALLOWED_USERS.includes(userId)) return false;
+    return member?.roles?.cache?.some((r) => COORD_APPROVER_ROLES.includes(r.id)) || false;
+  }
+
+  function getHighestHallRolePosition(member) {
+    if (!member?.roles?.cache) return -1;
+
+    const positions = member.roles.cache
+      .filter((role) => ALLOWED_ROLES.includes(role.id))
+      .map((role) => role.position);
+
+    return positions.length > 0
+      ? Math.max(...positions)
+      : -1;
+  }
+
+  function getHighestCoordRolePosition(member) {
+    if (!member?.roles?.cache) return -1;
+
+    const positions = member.roles.cache
+      .filter((role) => COORD_APPROVER_ROLES.includes(role.id))
+      .map((role) => role.position);
+
+    return positions.length > 0
+      ? Math.max(...positions)
+      : -1;
+  }
+
+  async function validateHallApprovalHierarchy(interaction, data) {
+    if (canApprove(interaction.member, interaction.user.id)) {
+      return { allowed: true };
+    }
+
+    if (!isCoordHallApprover(interaction.member, interaction.user.id)) {
+      return {
+        allowed: false,
+        reason: "🚫 Você não tem permissão para aprovar."
+      };
+    }
+
+    const creatorId = String(data?.userId || "").trim();
+
+    if (!creatorId) {
+      return {
+        allowed: false,
+        reason: "🚫 Não foi possível identificar quem registrou este Hall da Fama."
+      };
+    }
+
+    if (creatorId === interaction.user.id) {
+      return {
+        allowed: false,
+        reason: "🚫 Coordenação não pode aprovar o próprio Hall da Fama."
+      };
+    }
+
+    if (ALLOWED_USERS.includes(creatorId)) {
+      return {
+        allowed: false,
+        reason: "🚫 Coordenação não pode aprovar Hall da Fama de cargo superior."
+      };
+    }
+
+    const creatorMember = await interaction.guild?.members
+      .fetch(creatorId)
+      .catch(() => null);
+
+    if (!creatorMember) {
+      return {
+        allowed: false,
+        reason: "🚫 Não foi possível confirmar a hierarquia de quem registrou este Hall da Fama."
+      };
+    }
+
+    const creatorIsCoord = creatorMember.roles.cache.some((role) =>
+      COORD_APPROVER_ROLES.includes(role.id)
+    );
+
+    if (creatorIsCoord) {
+      return {
+        allowed: false,
+        reason: "🚫 Coordenação não pode aprovar Hall da Fama de outra Coordenação."
+      };
+    }
+
+    const coordPosition =
+      getHighestCoordRolePosition(interaction.member);
+
+    const creatorPosition =
+      getHighestHallRolePosition(creatorMember);
+
+    if (creatorPosition >= coordPosition) {
+      return {
+        allowed: false,
+        reason: "🚫 Coordenação só pode aprovar Hall da Fama de pessoas com cargo abaixo do seu."
+      };
+    }
+
+    return { allowed: true };
+  }
+
   function buildControlButtons() {
     return new ActionRowBuilder().addComponents(
       new ButtonBuilder()
@@ -12892,7 +12998,10 @@ if (approvalImageReferences.length > 0) {
 
     // 4. Aprovação
     if (interaction.isButton() && interaction.customId.startsWith(BTN_APPROVE_PREFIX)) {
-      if (!canApprove(interaction.member, interaction.user.id)) {
+      if (
+        !canApprove(interaction.member, interaction.user.id) &&
+        !isCoordHallApprover(interaction.member, interaction.user.id)
+      ) {
         return interaction.reply({ content: "🚫 Você não tem permissão para aprovar.", ephemeral: true });
       }
 
@@ -12914,6 +13023,17 @@ if (approvalImageReferences.length > 0) {
       if (!data) {
         processingApprovals.delete(reqId);
         return interaction.editReply("⚠️ Dados da solicitação expiraram.");
+      }
+
+      const hierarchyCheck =
+        await validateHallApprovalHierarchy(
+          interaction,
+          data
+        );
+
+      if (!hierarchyCheck.allowed) {
+        processingApprovals.delete(reqId);
+        return interaction.editReply(hierarchyCheck.reason);
       }
 
       const originalApprovalComponents =
