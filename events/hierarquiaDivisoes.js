@@ -79,9 +79,9 @@ SLOTS: {
 },
 
 LABELS: {
-  evening: "🌆 19:00 às 22:00",
-  dawn: "🌌 23:00 às 02:00",
-  none: "⚪ Sem Horário Fixo",
+  evening: "🕘 21:00 FIXO",
+  dawn: "🕘 21:00 FIXO",
+  none: "🕘 21:00 FIXO",
 },
 
 DIVISIONS: {
@@ -305,16 +305,31 @@ function isFullAdmin(member) {
 function canManageDivisionTarget(actorMember, targetMember) {
   if (!actorMember || !targetMember) return false;
 
+  // Bypass total continua exclusivo para ADMIN_USERS / OWNER.
   if (isFullAdmin(actorMember)) return true;
 
-  const actorIsRespCreator = hasRole(actorMember, CONFIG.ROLES.RESP_CREATOR);
-  const actorIsRespInflu = hasRole(actorMember, CONFIG.ROLES.RESP_INFLU);
+  const actorRank = getOfficialSantaCreatorsHierarchyRank(actorMember);
+  const targetRank = getOfficialSantaCreatorsHierarchyRank(targetMember);
 
-  const targetIsRespInflu = hasRole(targetMember, CONFIG.ROLES.RESP_INFLU);
-  const targetIsRespLider = hasRole(targetMember, CONFIG.ROLES.RESP_LIDER);
+  if (!Number.isFinite(actorRank) || !Number.isFinite(targetRank)) return false;
 
-  if (actorIsRespCreator && (targetIsRespInflu || targetIsRespLider)) return true;
-  if (actorIsRespInflu && targetIsRespLider) return true;
+  // Regra principal:
+  // cargo mais alto pode alterar qualquer cargo abaixo.
+  if (actorRank < targetRank) return true;
+
+  // Resp. Líder também pode organizar outro Resp. Líder,
+  // mas não alguém que tenha cargo oficial acima de Resp. Líder.
+  const respLiderRank = getOfficialSantaCreatorsHierarchyRankForRoleId(
+    CONFIG.ROLES.RESP_LIDER
+  );
+
+  if (
+    actorMember.id !== targetMember.id &&
+    actorRank === respLiderRank &&
+    targetRank === respLiderRank
+  ) {
+    return true;
+  }
 
   return false;
 }
@@ -324,7 +339,8 @@ function isDivisionTargetRole(member) {
 
   return (
     hasRole(member, CONFIG.ROLES.RESP_INFLU) ||
-    hasRole(member, CONFIG.ROLES.RESP_LIDER)
+    hasRole(member, CONFIG.ROLES.RESP_LIDER) ||
+    hasRole(member, CONFIG.ROLES.COORD_CREATOR)
   );
 }
 
@@ -356,11 +372,15 @@ function normalizeMemberDivisions(values, targetMember) {
 
   if (valid.length === 0) return ["none"];
 
-  const isRespInflu = hasRole(targetMember, CONFIG.ROLES.RESP_INFLU);
+  const canHaveMultipleDivisions =
+    hasRole(targetMember, CONFIG.ROLES.RESP_INFLU) ||
+    hasRole(targetMember, CONFIG.ROLES.RESP_LIDER) ||
+    hasRole(targetMember, CONFIG.ROLES.COORD_CREATOR);
 
-  return isRespInflu ? valid.slice(0, 2) : valid.slice(0, 1);
+  const maxCities = Object.keys(CONFIG.DIVISIONS).filter((key) => key !== "none").length;
+
+  return canHaveMultipleDivisions ? valid.slice(0, maxCities) : valid.slice(0, 1);
 }
-
 function memberHasDivision(divisions, memberId, divisionKey) {
   return getMemberDivisions(divisions, memberId).includes(divisionKey);
 }
@@ -707,6 +727,11 @@ export function getOfficialSantaCreatorsHierarchySnapshot(guild) {
             CONFIG.ROLES.RESP_LIDER
           );
 
+        const coordCreatorRole =
+          guild.roles.cache.get(
+            CONFIG.ROLES.COORD_CREATOR
+          );
+
         const respInflu =
           respInfluRole
             ? [...respInfluRole.members.values()]
@@ -759,6 +784,32 @@ export function getOfficialSantaCreatorsHierarchySnapshot(guild) {
                 )
             : [];
 
+        const coordCreators =
+          coordCreatorRole
+            ? [...coordCreatorRole.members.values()]
+                .filter(
+                  (member) =>
+                    !member.user?.bot &&
+                    memberHasDivision(
+                      divisions,
+                      member.id,
+                      divisionKey
+                    )
+                )
+                .map(
+                  (member) => ({
+                    userId:
+                      member.id,
+
+                    displayName:
+                      member.displayName,
+
+                    mention:
+                      `<@${member.id}>`,
+                  })
+                )
+            : [];
+
         return {
           key:
             divisionKey,
@@ -772,6 +823,8 @@ export function getOfficialSantaCreatorsHierarchySnapshot(guild) {
           respInflu,
 
           respLider,
+
+          coordCreators,
         };
       }
     );
@@ -895,15 +948,7 @@ const getMembersByRoleGroups = (guild, groupDefs, slots, filterSlot, E, seen, gr
 
       lines.push(
         members
-          .map((m) => {
-            const userSlot = slots[m.id] || CONFIG.SLOTS.NONE;
-            let icon = "";
-            if (filterSlot === "ANY") {
-              if (userSlot === CONFIG.SLOTS.EVENING) icon = "🌅 ";
-              if (userSlot === CONFIG.SLOTS.DAWN) icon = "🌌 ";
-            }
-            return `${E.DOT} ${icon}${m.toString()}`;
-          })
+          .map((m) => `${E.DOT} ${m.toString()}`)
           .join("\n")
       );
     }
@@ -1004,21 +1049,14 @@ async function updateHierarchyPanel(client) {
           const countLine = `\ntotais: ${finalList.length} <@&${roleId}>`;
 
           return finalList
-            .map((m) => {
-              const userSlot = slots[m.id] || CONFIG.SLOTS.NONE;
-              let icon = "";
-              if (filterSlot === "ANY") {
-                if (userSlot === CONFIG.SLOTS.EVENING) icon = "🌅 ";
-                if (userSlot === CONFIG.SLOTS.DAWN) icon = "🌌 ";
-              }
-              return `${E.DOT} ${icon}${m.toString()}`;
-        })
-        .join("\n") + countLine;
+            .map((m) => `${E.DOT} ${m.toString()}`)
+            .join("\n") + countLine;
         };
 
         const getDivisionLines = (divisionKey) => {
           const respInfluRole = guild.roles.cache.get(CONFIG.ROLES.RESP_INFLU);
           const respLiderRole = guild.roles.cache.get(CONFIG.ROLES.RESP_LIDER);
+          const coordCreatorRole = guild.roles.cache.get(CONFIG.ROLES.COORD_CREATOR);
 
           const respInfluMembers = respInfluRole
   ? respInfluRole.members
@@ -1034,6 +1072,13 @@ const respLiderMembers = respLiderRole
       .sort((a, b) => a.displayName.localeCompare(b.displayName))
   : [];
 
+const coordCreatorMembers = coordCreatorRole
+  ? coordCreatorRole.members
+      .filter((m) => !m.user.bot && memberHasDivision(divisions, m.id, divisionKey))
+      .map((m) => m)
+      .sort((a, b) => a.displayName.localeCompare(b.displayName))
+  : [];
+
           const influLine =
             respInfluMembers.length > 0
               ? respInfluMembers.map((m) => `${E.DOT} ${m.toString()}`).join("\n")
@@ -1044,12 +1089,19 @@ const respLiderMembers = respLiderRole
               ? respLiderMembers.map((m) => `${E.DOT} ${m.toString()}`).join("\n")
               : "_Nenhum Resp. Líder definido_";
 
+          const coordLine =
+            coordCreatorMembers.length > 0
+              ? coordCreatorMembers.map((m) => `${E.DOT} ${m.toString()}`).join("\n")
+              : "_Nenhum Coord. Creators definido_";
+
           return [
             `### ${CONFIG.DIVISIONS[divisionKey].label}`,
             `**Resp. Influ:**`,
             influLine,
             `**Resp. Líder:**`,
             liderLine,
+            `**Coord. Creators:**`,
+            coordLine,
             "",
           ].join("\n");
         };
@@ -1072,15 +1124,9 @@ const respLiderMembers = respLiderRole
           "┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅",
           `#  ${E.CROWN_CYAN}   RESP. LIDER ${E.CROWN_CYAN}`,
           "",
-`### ${CONFIG.LABELS.evening}`,
-getMembersByRole(CONFIG.ROLES.RESP_LIDER, CONFIG.SLOTS.EVENING) || "_Ninguém definido_",
-"",
-`### ${CONFIG.LABELS.dawn}`,
-getMembersByRole(CONFIG.ROLES.RESP_LIDER, CONFIG.SLOTS.DAWN) || "_Ninguém definido_",
+          "### 🕘 21:00 FIXO",
+          getMembersByRole(CONFIG.ROLES.RESP_LIDER, "ANY") || "_Ninguém definido_",
           "",
-`### ⚪ Sem Horário Fixo / Flexível`,
-getMembersByRole(CONFIG.ROLES.RESP_LIDER, CONFIG.SLOTS.NONE) || "_Ninguém_",
-"",
 "┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅",
 "## 🏙️ RESPS DE CADA CIDADE",
 "",
@@ -1089,21 +1135,16 @@ getDivisionLines("grande"),
 getDivisionLines("santa"),
 getDivisionLines("nobre"),
 getDivisionLines("none"),
-"> Cada cidade deve ter 2 RESPONSÁVEIS tendo **1 Resp. Líder + 1 Resp. Influ**.",
-"> A divisão pode ser alterada pelo o seu responsável acima.",
+"> Resp. Influ, Resp. Líder e Coord. Creators podem ser responsáveis por cidades.",
+"> Resp. Influ, Resp. Líder e Coord. Creators podem cuidar de mais de uma cidade.",
+"> A divisão pode ser alterada por quem estiver acima na hierarquia; Resp. Líder também pode organizar outro Resp. Líder.",
 "",
 
 "┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅",
 `#  ${E.CROWN_GREEN}  COORD. CREATORS  ${E.CROWN_GREEN}`,
           "",
-          `### ${CONFIG.LABELS.evening}`,
-          getMembersByRole(CONFIG.ROLES.COORD_CREATOR, CONFIG.SLOTS.EVENING) || "_Ninguém definido_",
-          "",
-          `### ${CONFIG.LABELS.dawn}`,
-          getMembersByRole(CONFIG.ROLES.COORD_CREATOR, CONFIG.SLOTS.DAWN) || "_Ninguém definido_",
-          "",
-          `### ⚪ Sem Horário Fixo / Flexível`,
-          getMembersByRole(CONFIG.ROLES.COORD_CREATOR, CONFIG.SLOTS.NONE) || "_Ninguém_",
+          "### 🕘 21:00 FIXO",
+          getMembersByRole(CONFIG.ROLES.COORD_CREATOR, "ANY") || "_Ninguém definido_",
           "",
           "┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅┅",
           `#  ${E.CROWN_INFLU}  COORDENAÇÃO / GESTÃO ${E.CROWN_INFLU}`,
@@ -1133,11 +1174,6 @@ getDivisionLines("none"),
           .setImage(CONFIG.GIF_FOOTER);
 
 const row = new ActionRowBuilder().addComponents(
-  new ButtonBuilder()
-    .setCustomId("hier_manage_slots")
-    .setLabel("Gerenciar horários")
-    .setStyle(ButtonStyle.Secondary)
-    .setEmoji("🕰️"),
   new ButtonBuilder()
     .setCustomId("hier_manage_divisions")
     .setLabel("Gerenciar divisões")
@@ -1425,6 +1461,7 @@ await interaction.reply({
       const targetRoles = [
         CONFIG.ROLES.RESP_INFLU,
         CONFIG.ROLES.RESP_LIDER,
+        CONFIG.ROLES.COORD_CREATOR,
       ];
 
       let members = [];
@@ -1442,7 +1479,7 @@ await interaction.reply({
 
       if (members.length === 0) {
         return interaction.editReply({
-          content: "🚫 Você não tem nenhum Resp. Influ ou Resp. Líder disponível para alterar pela sua hierarquia.",
+          content: "🚫 Você não tem nenhum Resp. Influ, Resp. Líder ou Coord. Creators disponível para alterar pela sua hierarquia.",
         }).catch(() => {});
       }
 
@@ -1498,7 +1535,7 @@ await interaction.reply({
 
     if (!isDivisionTargetRole(targetMember)) {
       return interaction.reply({
-        content: "⚠️ Esse membro não é Resp. Influ nem Resp. Líder.",
+        content: "⚠️ Esse membro não é Resp. Influ, Resp. Líder nem Coord. Creators.",
         ephemeral: true,
       });
     }
@@ -1512,7 +1549,7 @@ await interaction.reply({
 
     const divisions = loadDivisions();
 const currentDivisions = getMemberDivisions(divisions, targetId);
-const isRespInflu = hasRole(targetMember, CONFIG.ROLES.RESP_INFLU);
+const maxCities = Object.keys(CONFIG.DIVISIONS).filter((key) => key !== "none").length;
 
 const options = Object.entries(CONFIG.DIVISIONS).map(([key, data]) =>
   new StringSelectMenuOptionBuilder()
@@ -1526,14 +1563,14 @@ const options = Object.entries(CONFIG.DIVISIONS).map(([key, data]) =>
 const row = new ActionRowBuilder().addComponents(
   new StringSelectMenuBuilder()
     .setCustomId(`hier_set_division:${targetId}`)
-    .setPlaceholder(isRespInflu ? "Escolha até 2 cidades do Resp. Influ" : "Escolha a cidade do responsável")
+    .setPlaceholder("Escolha uma ou mais cidades do responsável")
     .setMinValues(1)
-    .setMaxValues(isRespInflu ? 2 : 1)
+    .setMaxValues(maxCities)
     .addOptions(options)
 );
 
 await interaction.update({
-  content: `🏙️ Editando divisão de <@${targetId}>\nAtualmente: **${getDivisionLabels(currentDivisions)}**\n${isRespInflu ? "ℹ️ Resp. Influ pode ficar em até **2 cidades**." : "ℹ️ Resp. Líder pode ficar em apenas **1 cidade**."}`,
+  content: `🏙️ Editando divisão de <@${targetId}>\nAtualmente: **${getDivisionLabels(currentDivisions)}**\nℹ️ Resp. Influ, Resp. Líder e Coord. Creators podem ficar em **mais de uma cidade**.`,
   components: [row],
 }).catch(() => {});
 
@@ -1563,7 +1600,7 @@ await interaction.update({
 
       if (!isDivisionTargetRole(targetMember)) {
         return interaction.editReply({
-          content: "⚠️ Esse membro não é Resp. Influ nem Resp. Líder.",
+        content: "⚠️ Esse membro não é Resp. Influ, Resp. Líder nem Coord. Creators.",
         }).catch(() => {});
       }
 
