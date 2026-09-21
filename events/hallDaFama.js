@@ -1479,7 +1479,9 @@ function resolveCityKeyFromName(value = "") {
 
     [normalizeHallKey("legiao belica")]: "Legião Bélica",
     [normalizeHallKey("legião bélica")]: "Legião Bélica",
-    [normalizeHallKey("maldivas")]: "Maldivas"
+    [normalizeHallKey("maldivas")]: "Maldivas",
+
+    [normalizeHallKey("mecanica")]: "Mecânica"
   };
 
   function normalizeOrgDisplayName(orgName = "") {
@@ -1491,7 +1493,6 @@ function resolveCityKeyFromName(value = "") {
 
     return alias || clean;
   }
-
   function isKnownOrgName(value = "") {
     const key = normalizeHallKey(value);
     if (!key) return false;
