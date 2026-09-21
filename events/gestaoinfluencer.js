@@ -154,6 +154,7 @@ CHANNEL_RESTORE_LOG:      '1486006878914875412',
       ROLE_RESP_CREATORS: '1352408327983861844',
       ROLE_RESP_INFLU:    '1262262852949905409',
       ROLE_RESP_LIDER:    '1352407252216184833',
+      ROLE_COORD_CREATORS: '1388976314253312100',
 
       RESP_ALLOWED_ROLE_IDS: [
         '1262262852949905408',
@@ -552,7 +553,29 @@ function activeTimeText(rec, n = nowMs()) {
     function hasAuth(member) {
       if (!member) return false;
       if (SC_GI_CFG.AUTH_USER_IDS.includes(member.id)) return true;
+      if (member.roles?.cache?.has?.(SC_GI_CFG.ROLE_OWNER)) return true;
       return SC_GI_CFG.AUTH_ROLE_IDS.some(id => member.roles?.cache?.has?.(id));
+    }
+
+    function hasAreaEditAuth(member) {
+      if (!member) return false;
+
+      // Você/Macedo, Owner e quem já possui autorização geral continuam liberados.
+      if (hasAuth(member)) return true;
+
+      // Coord. Creators pode editar Área/cargo, mas continua preso à hierarquia.
+      return member.roles?.cache?.has?.(SC_GI_CFG.ROLE_COORD_CREATORS) || false;
+    }
+
+    function isHierarchyBypassMember(member) {
+      if (!member) return false;
+
+      // 👑 Bypass absoluto somente para os usuários já configurados
+      // e para quem possui o cargo Owner.
+      if (SC_GI_CFG.AUTH_USER_IDS.includes(String(member.id || ''))) return true;
+      if (member.roles?.cache?.has?.(SC_GI_CFG.ROLE_OWNER)) return true;
+
+      return false;
     }
 
     // =====================================================
@@ -1154,16 +1177,16 @@ function activeTimeText(rec, n = nowMs()) {
         );
       }
 
-      if (!hasAuth(actorMember)) {
+      if (!hasAreaEditAuth(actorMember)) {
         throw new Error(
           "Você não tem permissão para alterar este Controle GI."
         );
       }
 
-      // Mantém os bypasses administrativos de usuário que já existem.
+      // 👑 Você/Macedo e Owner ignoram a hierarquia.
       if (
-        SC_GI_CFG.AUTH_USER_IDS.includes(
-          actorId
+        isHierarchyBypassMember(
+          actorMember
         )
       ) {
         return true;
@@ -1682,7 +1705,13 @@ function activeTimeText(rec, n = nowMs()) {
   return 'Sem cargo de hierarquia';
 }
 
-async function assertCanManageGIRecord(guild, actorUser, targetUserId, actionName = 'gerenciar este registro') {
+async function assertCanManageGIRecord(
+  guild,
+  actorUser,
+  targetUserId,
+  actionName = 'gerenciar este registro',
+  options = {}
+) {
   const actorId = String(actorUser?.id || '');
 
   if (!actorId) {
@@ -1705,12 +1734,22 @@ async function assertCanManageGIRecord(guild, actorUser, targetUserId, actionNam
   // 🔒 Primeiro confirma se o executor possui permissão.
   // Isso impede que alguém sem autorização aproveite a ausência
   // do membro alvo para desligar o controle.
-  if (!hasAuth(actorMember)) {
+  const allowCoordAreaEdit =
+    options?.allowCoordAreaEdit === true;
+
+  const coordCanUseThisAction =
+    allowCoordAreaEdit &&
+    actorMember.roles?.cache?.has?.(SC_GI_CFG.ROLE_COORD_CREATORS);
+
+  if (
+    !hasAuth(actorMember) &&
+    !coordCanUseThisAction
+  ) {
     throw new Error('Você não tem permissão para mexer nesse controle.');
   }
 
-  // ✅ Mantém os usuários com bypass total já configurados.
-  if (SC_GI_CFG.AUTH_USER_IDS.includes(actorId)) {
+  // 👑 Você/Macedo e Owner ignoram a hierarquia.
+  if (isHierarchyBypassMember(actorMember)) {
     return true;
   }
 
@@ -2691,6 +2730,14 @@ try {
     async function editRegistro(guild, editor, messageId, newArea, newNote, newDateStr) {
       const rec = SC_GI_STATE.registros.get(messageId);
       if (!rec) throw new Error('Registro não encontrado.');
+
+      await assertCanManageGIRecord(
+        guild,
+        editor,
+        rec.targetId,
+        'editar o controle e alterar a Área/cargo',
+        { allowCoordAreaEdit: true }
+      );
 
       const ch =
         await guild.channels
@@ -5165,10 +5212,37 @@ if (!rec.active) {
 
         // Editar registro
         if (interaction.isButton() && interaction.customId.startsWith(BTN.EDIT_PREFIX)) { // NOVO: Botão de edição
-          if (!hasAuth(interaction.member)) return interaction.reply({ content: '❌ Você não tem permissão.', flags: MessageFlags.Ephemeral });
+          if (!hasAreaEditAuth(interaction.member)) {
+            return interaction.reply({
+              content: '❌ Você não tem permissão.',
+              flags: MessageFlags.Ephemeral
+            });
+          }
+
           const raw = interaction.customId.replace(BTN.EDIT_PREFIX, '');
           const { rec, id: messageId } = resolveRecordByInteraction(interaction, raw);
-          if (!rec) return interaction.reply({ content: 'Registro não encontrado.', flags: MessageFlags.Ephemeral });
+
+          if (!rec) {
+            return interaction.reply({
+              content: 'Registro não encontrado.',
+              flags: MessageFlags.Ephemeral
+            });
+          }
+
+          try {
+            await assertCanManageGIRecord(
+              guild,
+              interaction.user,
+              rec.targetId,
+              'editar o controle e alterar a Área/cargo',
+              { allowCoordAreaEdit: true }
+            );
+          } catch (e) {
+            return interaction.reply({
+              content: '⚠️ ' + (e?.message || 'Ação bloqueada pela hierarquia.'),
+              flags: MessageFlags.Ephemeral
+            });
+          }
 
           const inpArea = new TextInputBuilder()
             .setCustomId('SC_GI_EDIT_AREA').setLabel('Área (visual)').setStyle(TextInputStyle.Short)
@@ -5190,6 +5264,7 @@ if (!rec.active) {
               new ActionRowBuilder().addComponents(inpDate),
               new ActionRowBuilder().addComponents(inpNote)
             );
+
           return interaction.showModal(modal);
         }
 
@@ -5290,7 +5365,7 @@ if (!rec.active) {
 
         // Modal editar // NOVO: Modal de edição
         if (interaction.isModalSubmit() && interaction.customId.startsWith('SC_GI_MODAL_EDIT_')) {
-          if (!hasAuth(interaction.member)) {
+          if (!hasAreaEditAuth(interaction.member)) {
             return interaction.reply({
               content: '❌ Você não tem permissão.',
               flags: MessageFlags.Ephemeral
