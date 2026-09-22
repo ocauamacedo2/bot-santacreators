@@ -2972,8 +2972,14 @@ function shouldUseFastChatLane(
     return false;
   }
 
+  const messageLength =
+    String(
+      message.content || ""
+    ).length;
+
   if (
     message.attachments?.size ||
+    messageLength > 1200 ||
     messageRequestsAiImageGeneration(message) ||
     isAiAdministrativeRequest(message) ||
     messageWantsPersonIntelligence(message)
@@ -3126,7 +3132,7 @@ const MAX_RESPONSE_CHARS = 1900;
 
 const MAX_HISTORY_MESSAGES = 8;
 
-const MAX_MESSAGE_CHARS = 1200;
+const MAX_MESSAGE_CHARS = 6000;
 
 const cooldowns = new Map();
 
@@ -5344,8 +5350,38 @@ function buildInstantCasualAnswer(
     );
   }
 
+  // =====================================================
+  // REAÇÕES CASUAIS IMEDIATAS
+  // =====================================================
+  //
+  // Reações curtas não precisam consumir chamada Gemini.
+  //
+  // Exemplos:
+  // "nossa q rapido"
+  // "agora sim"
+  // "ai sim"
+  // "show"
+  // "top"
+  // =====================================================
+
+  if (
+    /^(nossa(?: q| que)? rapido|caraca|caramba|agora sim|ai sim|boa|show|top|perfeito)$/.test(
+      text
+    )
+  ) {
+    return pickInstantCasualVariant(
+      message,
+      [
+        "KKKK agora foi 😄",
+        "Aí sim 😎",
+        "Agora tá ligeiro mesmo 😂",
+        "Boa 😄 agora ficou bem mais rápido.",
+      ]
+    );
+  }
+
   const casualOnly =
-    /^(?:(?:oi+|oie+|ola+|opa+|salve+|eae+|e ai|alo+|bom+ dia+|boa+ tarde+|boa+ noite+|teste|testando|teste ai|ta por ai|esta por ai|vc ta por ai|voce ta por ai|como vai|como vc ta|como voce ta|como ce ta|tudo bem|td bem|tudo bom|td bom|ta funcionando|esta funcionando|funcionando|funcionando ou nao|entao ta funcionando(?: entao)? ne|entao|ne)\s*)+$/.test(
+    /^(?:(?:oi+|oie+|ola+|opa+|salve+|eae+|e ai|alo+|bom+ dia+|boa+ tarde+|boa+ noite+|teste|testando|teste ai|ta por ai|esta por ai|vc ta por ai|voce ta por ai|como vai|como vc ta|como voce ta|como ce ta|tudo bem(?: por ai)?|td bem(?: por ai)?|tudo bom(?: por ai)?|td bom(?: por ai)?|ta funcionando|esta funcionando|funcionando|funcionando ou nao|entao ta funcionando(?: entao)? ne|entao|ne)\s*)+$/.test(
       text
     );
 
@@ -5370,7 +5406,7 @@ function buildInstantCasualAnswer(
   }
 
   if (
-    /\b(como vai|como vc ta|como voce ta|como ce ta|tudo bem|td bem|tudo bom|td bom)\b/.test(
+    /\b(como vai|como vc ta|como voce ta|como ce ta|tudo bem(?: por ai)?|td bem(?: por ai)?|tudo bom(?: por ai)?|td bom(?: por ai)?)\b/.test(
       text
     )
   ) {
@@ -24300,37 +24336,68 @@ Se houver falha real, explique brevemente a limitação sem fingir que processou
 
 async function scRequest(provider, request) {
   const imageOutput =
-  request.config?.responseModalities?.includes("IMAGE");
+    request.config?.responseModalities?.includes("IMAGE");
 
-const requestedTimeoutMs =
-  Number(
-    request.config
-      ?.httpOptions
-      ?.timeout ||
-    0
-  );
+  const requestedTimeoutMs =
+    Number(
+      request.config
+        ?.httpOptions
+        ?.timeout ||
+      0
+    );
 
-const timeoutMs =
-  imageOutput
-    ? GEMINI_IMAGE_REQUEST_TIMEOUT_MS
-    : (
-        Number.isFinite(
-          requestedTimeoutMs
-        ) &&
-        requestedTimeoutMs > 0
-          ? Math.min(
-              requestedTimeoutMs,
-              GEMINI_REQUEST_TIMEOUT_MS
-            )
-          : GEMINI_REQUEST_TIMEOUT_MS
-      );
+  const timeoutMs =
+    imageOutput
+      ? GEMINI_IMAGE_REQUEST_TIMEOUT_MS
+      : (
+          Number.isFinite(
+            requestedTimeoutMs
+          ) &&
+          requestedTimeoutMs > 0
+            ? Math.min(
+                requestedTimeoutMs,
+                GEMINI_REQUEST_TIMEOUT_MS
+              )
+            : GEMINI_REQUEST_TIMEOUT_MS
+        );
 
-const controller = new AbortController();
+  // =====================================================
+  // DEADLINE HTTP MÍNIMO DO GEMINI
+  // =====================================================
+  //
+  // A rota rápida da IA pode continuar usando timeout
+  // lógico/local de 6 segundos.
+  //
+  // Porém o Gemini não aceita que httpOptions.timeout
+  // seja enviado abaixo de 10 segundos.
+  //
+  // Portanto:
+  //
+  // timeoutMs
+  // = quanto tempo NOSSA IA aceita esperar.
+  //
+  // transportTimeoutMs
+  // = deadline HTTP enviado ao Gemini.
+  //
+  // O AbortController continua podendo cancelar a chamada
+  // antes dos 10 segundos.
+  // =====================================================
 
-  const timer = setTimeout(
-    () => controller.abort(),
-    timeoutMs
-  );
+  const transportTimeoutMs =
+    Math.max(
+      10 * 1000,
+      timeoutMs
+    );
+
+  const controller =
+    new AbortController();
+
+  const timer =
+    setTimeout(
+      () =>
+        controller.abort(),
+      timeoutMs
+    );
 
   try {
     return await provider.models.generateContent({
@@ -24342,37 +24409,50 @@ const controller = new AbortController();
         systemInstruction: [
           ...(request.config?.systemInstruction
             ? [{
-                text: String(request.config.systemInstruction),
+                text:
+                  String(
+                    request.config.systemInstruction
+                  ),
               }]
             : []),
 
           {
-            text: SC_AI_RULES,
+            text:
+              SC_AI_RULES,
           },
         ],
 
-        abortSignal: controller.signal,
+        abortSignal:
+          controller.signal,
 
         httpOptions: {
           ...request.config?.httpOptions,
-          timeout: timeoutMs,
+
+          timeout:
+            transportTimeoutMs,
         },
       },
     });
   } catch (error) {
-    if (controller.signal.aborted) {
-      const timeoutError = new Error(
-        "Tempo limite da análise excedido."
-      );
+    if (
+      controller.signal.aborted
+    ) {
+      const timeoutError =
+        new Error(
+          "Tempo limite da análise excedido."
+        );
 
-      timeoutError.code = "GEMINI_REQUEST_TIMEOUT";
+      timeoutError.code =
+        "GEMINI_REQUEST_TIMEOUT";
 
       throw timeoutError;
     }
 
     throw error;
   } finally {
-    clearTimeout(timer);
+    clearTimeout(
+      timer
+    );
   }
 }
 
