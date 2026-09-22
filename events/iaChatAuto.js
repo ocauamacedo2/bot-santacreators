@@ -2811,11 +2811,19 @@ const GEMINI_MODEL =
 
 const GEMINI_MODEL_FALLBACKS = [
   GEMINI_MODEL,
-  ...(process.env.GEMINI_FALLBACK_MODELS || "gemini-3.5-flash")
+  ...(process.env.GEMINI_FALLBACK_MODELS || [
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+  ].join(","))
     .split(",")
     .map(model => model.trim()),
-].filter((model, index, arr) => model && arr.indexOf(model) === index)
-  .slice(0, 3);
+].filter((model, index, arr) => {
+  return model && arr.indexOf(model) === index;
+});
 
 // =====================================================
 // IA — FALLBACK RÁPIDO PARA CHAT
