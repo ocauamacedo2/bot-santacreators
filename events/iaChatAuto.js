@@ -3383,6 +3383,27 @@ function shouldSendAiBackgroundAcknowledgement(
     return false;
   }
 
+  // =====================================================
+  // PV — SEMPRE AVISAR QUANDO UMA ANÁLISE REAL DEMORAR
+  // =====================================================
+  //
+  // Se chegou até aqui, não era uma resposta casual local.
+  //
+  // Portanto, no PV, caso o processamento ultrapasse o
+  // tempo configurado em AI_BACKGROUND_ACK_DELAY_MS,
+  // a pessoa recebe uma mensagem informando que a consulta
+  // continua rodando e que ela pode continuar conversando.
+  //
+  // Isso evita deixar o usuário olhando para o vazio.
+  // =====================================================
+
+  if (
+    message.channel?.type ===
+      ChannelType.DM
+  ) {
+    return true;
+  }
+
   const intent =
     classifyCurrentUserIntent(
       message
@@ -5380,20 +5401,20 @@ function buildInstantCasualAnswer(
     );
   }
 
-  const casualOnly =
-    /^(?:(?:oi+|oie+|ola+|opa+|salve+|eae+|e ai|alo+|bom+ dia+|boa+ tarde+|boa+ noite+|teste|testando|teste ai|ta por ai|esta por ai|vc ta por ai|voce ta por ai|como vai|como vc ta|como voce ta|como ce ta|tudo bem(?: por ai)?|td bem(?: por ai)?|tudo bom(?: por ai)?|td bom(?: por ai)?|ta funcionando|esta funcionando|funcionando|funcionando ou nao|entao ta funcionando(?: entao)? ne|entao|ne)\s*)+$/.test(
-      text
-    );
+const casualOnly =
+  /^(?:(?:oi+|oie+|ola+|opa+|salve+|eae+|e ai|alo+|bom+ dia+|boa+ tarde+|boa+ noite+|teste+|testando|teste+ ai|ta ai|esta ai|vc ta ai|voce ta ai|ta por ai|esta por ai|vc ta por ai|voce ta por ai|como vai|como vc ta|como voce ta|como ce ta|tudo bem(?: por ai)?|td bem(?: por ai)?|tudo bom(?: por ai)?|td bom(?: por ai)?|ta funcionando|esta funcionando|funcionando|funcionando ou nao|entao ta funcionando(?: entao)? ne|entao|ne)\s*)+$/.test(
+    text
+  );
 
   if (!casualOnly) {
     return null;
   }
 
   if (
-    /\b(teste|testando|funcionando)\b/.test(
-      text
-    )
-  ) {
+  /\b(teste+|testando|funcionando)\b/.test(
+    text
+  )
+) {
     return pickInstantCasualVariant(
       message,
       [
@@ -26256,49 +26277,36 @@ const sent =
         return;
       }
 
-      await message.channel
-        .sendTyping()
-        .catch(() => {});
+await message.channel
+  .sendTyping()
+  .catch(() => {});
 
-      const recent =
-        await message.channel.messages.fetch({
-          limit: 20,
-        });
+// =====================================================
+// PV — SEM FETCH DUPLICADO DE HISTÓRICO
+// =====================================================
+//
+// generateIAResponse() já monta:
+//
+// - histórico persistente;
+// - memória individual;
+// - memória compartilhada;
+// - contexto institucional;
+// - inteligência de pessoas;
+// - informações do servidor.
+//
+// A antiga leitura das últimas 20 mensagens deste canal
+// montava uma variável "history" que não era utilizada
+// posteriormente.
+//
+// Portanto removemos somente essa chamada redundante ao
+// Discord para diminuir a latência do PV.
+// =====================================================
 
-      const history = [...recent.values()]
-        .filter(
-          item =>
-            !item.author.bot ||
-            item.author.id === client.user.id
-        )
-        .sort(
-          (a, b) =>
-            a.createdTimestamp -
-            b.createdTimestamp
-        )
-        .map(
-          item =>
-            `${new Date(
-              item.createdTimestamp
-            ).toISOString()} | ${item.author.id} | ${item.content}\n${
-              item.embeds
-                .map(
-                  embed =>
-                    formatEmbedForAI(
-                      embed
-                    )
-                )
-                .join("\n")
-            }`
-        )
-        .join("\n")
-        .slice(-24000);
-
-      const intelligenceMessage =
-        await buildUnifiedAiMessage(
-          message,
-          client
-        );
+const intelligenceMessage =
+  await buildUnifiedAiMessage(
+    message,
+    client
+  );
 
       const response =
         await generateIAResponse({
