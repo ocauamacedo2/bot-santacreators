@@ -27165,15 +27165,14 @@ async function scArchiveMessage(
       const key =
         `${message.id}:${message.editedTimestamp || 0}:${answer ? "answer" : "message"}`;
 
-      const previous =
-        scMemory.data.recent.find(
-          item => item.key === key
-        );
+const previous =
+  scMemory.data.recent.find(
+    item => item.key === key
+  );
 
-      if (previous) {
-        await scFlushDiscordMemory();
-        return previous;
-      }
+if (previous) {
+  return previous;
+}
 
       const scope =
         scMemoryScope(message);
@@ -27717,23 +27716,28 @@ if (!answer) {
         [entry, ...index].slice(0, 30);
 
       scMemory.data.recent = [
-        ...scMemory.data.recent,
-        {
-          key,
-          id: saved.id,
-        },
-      ].slice(-500);
+  ...scMemory.data.recent,
+  {
+    key,
+    id: saved.id,
+  },
+].slice(-500);
 
-      scMarkMemoryDirty();
+scMarkMemoryDirty();
 
-      await scFlushDiscordMemory();
+// O snapshot será consolidado pelo debounce de
+// scMarkMemoryDirty().
+//
+// O registro individual já foi salvo no canal de memória,
+// então a IA não precisa esperar root.edit() terminar
+// antes de continuar atendendo a conversa.
 
-      if (record.failures.length) {
-        console.error(
-          "[IA ARCHIVE] Mídias não preservadas:",
-          record.failures
-        );
-      }
+if (record.failures.length) {
+  console.error(
+    "[IA ARCHIVE] Mídias não preservadas:",
+    record.failures
+  );
+}
 
       return {
         key,
@@ -28157,21 +28161,51 @@ async function scHandleAdditionalMessage(
 
   await scInitDiscordMemory(client);
 
-  if (!scShouldArchive(message)) {
-    return scHandleAdditionalMessageV1(
-      message,
-      client
-    );
-  }
+  const shouldArchive =
+    scShouldArchive(message);
 
-  await scArchiveMessage(
-    client,
-    message
-  );
+  const isDm =
+    message.channel.type ===
+      ChannelType.DM;
+
+  const isQuietTicket =
+    Boolean(
+      message.guildId &&
+      message.channel.parentId ===
+        SC_QUIET_TICKET_CATEGORY_ID
+    );
+
+  // =====================================================
+  // ARQUIVAMENTO NÃO BLOQUEANTE
+  // =====================================================
+  //
+  // DM e quiet ticket já são arquivados dentro de
+  // scHandleAdditionalMessageV1().
+  //
+  // Nos demais canais, o arquivamento começa em paralelo.
+  // A IA NÃO espera forward + log + snapshot terminarem
+  // para começar a responder.
+  // =====================================================
+
+  if (
+    shouldArchive &&
+    !isDm &&
+    !isQuietTicket
+  ) {
+    void scArchiveMessage(
+      client,
+      message
+    ).catch(error => {
+      console.error(
+        "[IA ARCHIVE] Entrada não arquivada em segundo plano:",
+        error.message
+      );
+    });
+  }
 
   if (
     message.channel.parentId ===
-    SC_QUIET_TICKET_CATEGORY_ID
+      SC_QUIET_TICKET_CATEGORY_ID
   ) {
     scMemory.data.idle[
       message.channelId
@@ -28234,15 +28268,10 @@ async function scHandleAdditionalMessage(
     }
   }
 
-  const result =
-    await scHandleAdditionalMessageV1(
-      message,
-      client
-    );
-
-  await scFlushDiscordMemory();
-
-  return result;
+  return scHandleAdditionalMessageV1(
+    message,
+    client
+  );
 }
 
 function scInstallDiscordMemory(client) {
