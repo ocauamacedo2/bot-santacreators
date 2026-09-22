@@ -114,6 +114,36 @@ export async function enviarMensagemPrivadaSegura(
           }
     );
 
+    try {
+      if (
+        typeof globalThis.scArchiveAiMessage ===
+        "function"
+      ) {
+        await globalThis.scArchiveAiMessage(
+          mensagemEnviada
+        );
+      } else {
+        console.warn(
+          `[DM GLOBAL][${contexto}] A mensagem ${mensagemEnviada.id} foi enviada, mas o arquivador da IA ainda não está inicializado.`
+        );
+      }
+    } catch (erroArquivo) {
+      console.error(
+        `[DM GLOBAL][${contexto}] A DM foi enviada, mas o arquivamento não foi confirmado.`,
+        {
+          messageId:
+            mensagemEnviada.id,
+
+          usuarioId:
+            usuarioAtualizado.id,
+
+          erro:
+            erroArquivo?.message ||
+            String(erroArquivo),
+        }
+      );
+    }
+
     console.log(
       `[DM GLOBAL][${contexto}] ✅ Mensagem privada enviada para ` +
       `${usuarioAtualizado.tag || usuarioAtualizado.username} ` +
