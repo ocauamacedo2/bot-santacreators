@@ -2839,6 +2839,31 @@ const GEMINI_MODEL_FALLBACKS = [
 const GEMINI_CHAT_MODEL_FALLBACKS =
   GEMINI_MODEL_FALLBACKS;
 
+// =====================================================
+// IA — ROTA RÁPIDA PARA CONVERSA COMUM
+// =====================================================
+//
+// Conversas sem consulta operacional começam pelos modelos
+// mais leves e rápidos. Consultas de ranking, cronograma,
+// pessoas, cargos, dados e anexos continuam usando a cadeia
+// completa para preservar qualidade.
+// =====================================================
+
+const GEMINI_FAST_CHAT_MODEL_FALLBACKS = [
+  "gemini-3.5-flash-lite",
+  "gemini-3.1-flash-lite",
+  "gemini-2.5-flash-lite",
+  ...GEMINI_MODEL_FALLBACKS,
+].filter((model, index, arr) => {
+  return model && arr.indexOf(model) === index;
+});
+
+const GEMINI_FAST_REQUEST_TIMEOUT_MS =
+  6 * 1000;
+
+const GEMINI_CHAT_HEAVY_REQUEST_TIMEOUT_MS =
+  12 * 1000;
+
 const GEMINI_API_KEY =
   process.env.GEMINI_API_KEY || "";
 
@@ -2846,18 +2871,15 @@ const GEMINI_API_KEY =
 // IA — CONTROLE DE LATÊNCIA
 // =====================================================
 //
-// Nenhuma tentativa individual do Gemini pode prender
-// a resposta da SantaCreators por vários minutos.
+// Este timeout geral continua existindo para sistemas
+// antigos e rotas que ainda utilizem GEMINI_REQUEST_TIMEOUT_MS.
 //
-// Se um modelo não responder dentro do limite abaixo,
-// a IA abandona somente aquela tentativa e passa para
-// o próximo fallback.
+// O chat principal passa a utilizar:
+// - 6 segundos na rota rápida;
+// - 12 segundos na rota completa.
 //
-// 4,5 segundos dão espaço suficiente para uma resposta
-// normal sem permitir que um modelo travado segure a
-// cadeia inteira durante 8 segundos.
-//
-// O fallback completo continua existindo.
+// Isso evita prender uma conversa simples por 20 ou
+// 25 segundos em um único modelo congestionado.
 // =====================================================
 
 const GEMINI_REQUEST_TIMEOUT_MS = 25000;
@@ -2866,25 +2888,11 @@ const GEMINI_REQUEST_TIMEOUT_MS = 25000;
 // IA CHAT — SAÚDE TEMPORÁRIA DOS MODELOS
 // =====================================================
 //
-// Quando um modelo informar quota esgotada ou ficar
-// travado até o timeout, não faz sentido tentar novamente
-// o mesmo modelo em TODA mensagem seguinte.
-//
-// Este controle existe somente em memória.
+// Quando um modelo informar quota esgotada, timeout ou
+// indisponibilidade temporária, evitamos insistir nele
+// imediatamente em cada nova mensagem.
 //
 // Reiniciar o bot limpa os bloqueios automaticamente.
-//
-// QUOTA:
-// aguarda 30 minutos antes de testar novamente.
-//
-// TIMEOUT:
-// aguarda 2 minutos antes de testar novamente.
-//
-// Isso NÃO altera a quota da API e NÃO desativa nenhum
-// modelo permanentemente.
-//
-// Apenas evita desperdiçar vários segundos em modelos
-// que acabaram de provar que estão indisponíveis.
 // =====================================================
 
 const GEMINI_CHAT_QUOTA_COOLDOWN_MS =
@@ -2892,6 +2900,9 @@ const GEMINI_CHAT_QUOTA_COOLDOWN_MS =
 
 const GEMINI_CHAT_TIMEOUT_COOLDOWN_MS =
   2 * 60 * 1000;
+
+const GEMINI_CHAT_TRANSIENT_COOLDOWN_MS =
+  60 * 1000;
 
 const geminiChatModelBlockedUntil =
   new Map();
@@ -2951,6 +2962,66 @@ function blockGeminiChatModel(
         Number(durationMs || 0),
     }
   );
+}
+
+function shouldUseFastChatLane(
+  message,
+  intent = null
+) {
+  if (!message) {
+    return false;
+  }
+
+  if (
+    message.attachments?.size ||
+    messageRequestsAiImageGeneration(message) ||
+    isAiAdministrativeRequest(message) ||
+    messageWantsPersonIntelligence(message)
+  ) {
+    return false;
+  }
+
+  const currentIntent =
+    intent ||
+    classifyCurrentUserIntent(
+      message
+    );
+
+  return !(
+    currentIntent?.wantsAusencias ||
+    currentIntent?.wantsCronograma ||
+    currentIntent?.wantsAlinhamentos ||
+    currentIntent?.wantsGI ||
+    currentIntent?.wantsRoles ||
+    currentIntent?.wantsChannels ||
+    currentIntent?.wantsOperationalAnalysis ||
+    currentIntent?.hasSpecificReference
+  );
+}
+
+function getGeminiChatExecutionPlan(
+  message,
+  intent = null
+) {
+  const fast =
+    shouldUseFastChatLane(
+      message,
+      intent
+    );
+
+  return {
+    fast,
+
+    models:
+      fast
+        ? GEMINI_FAST_CHAT_MODEL_FALLBACKS
+        : GEMINI_CHAT_MODEL_FALLBACKS,
+
+    timeoutMs:
+      fast
+        ? GEMINI_FAST_REQUEST_TIMEOUT_MS
+        : GEMINI_CHAT_HEAVY_REQUEST_TIMEOUT_MS,
+  };
 }
 
 // =====================================================
@@ -3097,7 +3168,7 @@ const lastAiResponses = new Map();
 // Janela curta suficiente para juntar mensagens enviadas
 // praticamente uma atrás da outra sem deixar a IA parada
 // por quase 2 segundos antes de cada resposta.
-const AI_MESSAGE_BATCH_DELAY_MS = 700;
+const AI_MESSAGE_BATCH_DELAY_MS = 250;
 
 const AI_PENDING_MESSAGE_BATCHES = new Map();
 
@@ -3128,16 +3199,17 @@ const AI_ACTIVE_USER_PROCESSING = new Set();
 //
 // =====================================================
 
-// Quantidade máxima de gerações pesadas simultâneas.
+// Quantidade máxima de gerações simultâneas.
 //
-// 4 mantém bom equilíbrio entre:
-// - velocidade;
-// - memória;
-// - CPU;
-// - limites da API;
-// - proteção contra explosão de chamadas.
+// 8 permite que conversas independentes avancem em
+// paralelo sem deixar uma consulta pesada monopolizar
+// o atendimento.
+//
+// A prioridade interna continua protegendo as mensagens
+// rápidas, enquanto o limite evita explosão ilimitada
+// de chamadas contra a API.
 const AI_BACKGROUND_MAX_CONCURRENCY =
-  4;
+  8;
 
 // =====================================================
 // IA — AVISO DE PROCESSAMENTO REALMENTE DEMORADO
@@ -3183,7 +3255,7 @@ const AI_BACKGROUND_MAX_CONCURRENCY =
 // =====================================================
 
 const AI_BACKGROUND_ACK_DELAY_MS =
-  30 * 1000;
+  1500;
 
 // Fila global das tarefas ainda aguardando worker.
 const AI_BACKGROUND_QUEUE = [];
@@ -3213,6 +3285,28 @@ function getAiBackgroundJobKey(
     : conversationKey;
 }
 
+function isAiBackgroundConversationRunning(
+  conversationKey
+) {
+  const normalizedKey =
+    String(conversationKey || "");
+
+  if (!normalizedKey) {
+    return false;
+  }
+
+  const runningPrefix =
+    `${normalizedKey}:`;
+
+  return [...AI_BACKGROUND_RUNNING_KEYS].some(
+    (key) =>
+      key === normalizedKey ||
+      key.startsWith(
+        runningPrefix
+      )
+  );
+}
+
 function hasAiBackgroundWork(
   message
 ) {
@@ -3221,16 +3315,9 @@ function hasAiBackgroundWork(
       message
     );
 
-  const runningPrefix =
-    `${conversationKey}:`;
-
   if (
-    [...AI_BACKGROUND_RUNNING_KEYS].some(
-      (key) =>
-        key === conversationKey ||
-        key.startsWith(
-          runningPrefix
-        )
+    isAiBackgroundConversationRunning(
+      conversationKey
     )
   ) {
     return true;
@@ -3332,15 +3419,15 @@ function buildAiBackgroundAcknowledgement(
   message
 ) {
 const variants = [
-  "Essa tá levando um pouco mais porque envolve dados. Tô conferindo e já te respondo certinho.",
+  "Essa consulta ficou mais pesada, mas já está rodando. Pode mandar outra coisa enquanto isso que eu continuo te respondendo normalmente.",
 
-  "Ainda tô fechando essa consulta aqui. Assim que terminar te mando o resultado.",
+  "Tô fechando essa consulta em segundo plano. Pode continuar a conversa por outro assunto que, quando terminar, eu respondo esta mensagem com o resultado.",
 
-  "Essa análise tá demorando um pouco mais que o normal. Continua comigo que eu já termino.",
+  "Essa análise vai levar um pouco mais, mas não precisa esperar parado. Pode continuar falando comigo que eu sigo respondendo e te entrego este resultado quando ficar pronto.",
 
-  "Ainda tô processando essa porque tem dados pra conferir. Já te entrego a resposta completa.",
+  "Ainda estou processando os dados desta mensagem. Pode mandar outra pergunta normalmente; esta continua rodando sem travar a conversa.",
 
-  "Essa consulta ainda não terminou. Tô conferindo os dados antes de te passar o resultado.",
+  "Essa consulta ainda não terminou, mas ficou trabalhando em segundo plano. Pode continuar comigo que eu respondo as outras mensagens e volto nesta assim que o resultado fechar.",
 ];
 
   const numericSeed =
@@ -3392,23 +3479,97 @@ async function sendAiBackgroundAcknowledgement(
   }
 }
 
+function getAiBackgroundPriority(
+  message
+) {
+  const intent =
+    classifyCurrentUserIntent(
+      message
+    );
+
+  if (
+    shouldUseFastChatLane(
+      message,
+      intent
+    )
+  ) {
+    return 100;
+  }
+
+  if (
+    messageRequestsAiImageGeneration(
+      message
+    )
+  ) {
+    return 80;
+  }
+
+  if (
+    messageWantsPersonIntelligence(
+      message
+    )
+  ) {
+    return 70;
+  }
+
+  return 60;
+}
+
 function drainAiBackgroundQueue() {
   while (
     AI_BACKGROUND_ACTIVE_COUNT <
       AI_BACKGROUND_MAX_CONCURRENCY
   ) {
-    const nextIndex =
-      AI_BACKGROUND_QUEUE.findIndex(
-        (job) =>
-          !AI_BACKGROUND_RUNNING_KEYS.has(
-            job.key
-          )
-      );
-
     if (
-      nextIndex < 0
+      !AI_BACKGROUND_QUEUE.length
     ) {
       return;
+    }
+
+    let nextIndex = 0;
+
+    for (
+      let index = 1;
+      index < AI_BACKGROUND_QUEUE.length;
+      index++
+    ) {
+      const candidate =
+        AI_BACKGROUND_QUEUE[index];
+
+      const selected =
+        AI_BACKGROUND_QUEUE[nextIndex];
+
+      const candidatePriority =
+        Number(
+          candidate?.priority ||
+          0
+        );
+
+      const selectedPriority =
+        Number(
+          selected?.priority ||
+          0
+        );
+
+      if (
+        candidatePriority >
+          selectedPriority ||
+        (
+          candidatePriority ===
+            selectedPriority &&
+          Number(
+            candidate?.queuedAt ||
+            0
+          ) <
+            Number(
+              selected?.queuedAt ||
+              0
+            )
+        )
+      ) {
+        nextIndex =
+          index;
+      }
     }
 
     const [
@@ -3603,6 +3764,14 @@ function runAiBackgroundTask(
         resolve,
 
         reject,
+
+        priority:
+          Number(
+            options?.priority ??
+            getAiBackgroundPriority(
+              message
+            )
+          ),
 
         queuedAt:
           Date.now(),
@@ -3902,9 +4071,16 @@ const SC_INTERNAL_SYSTEMS_INDEX = {
 
 function classifyCurrentUserIntent(message) {
   const text = normalizeSearchText(message.content);
-  
-  // Regex para saudações puras ou curtas
-  const isGreetingOnly = /^(oi|oie|ola|olá|opa|salve|bom dia|boa tarde|boa noite|oii vida|eae|eaí|e ai|tudo bem|tudo bom)$/i.test(String(message.content || "").trim().replace(/[?.!]/g, ""));
+
+// Conversas casuais curtas também contam como saudação/conversa simples.
+// Isso inclui variações naturais como "oláaaaa", "boa tardee",
+// "alô tá por aí?", "como vai?" e mensagens rápidas de teste.
+const isGreetingOnly =
+  Boolean(
+    buildInstantCasualAnswer(
+      message
+    )
+  );
 
   const operationalKeywords = [
     "ranking",
@@ -5057,81 +5233,183 @@ function buildRoleMembersAnswer(message) {
 // consultas operacionais ou análises complexas.
 // =====================================================
 
+function pickInstantCasualVariant(
+  message,
+  variants
+) {
+  const valid =
+    Array.isArray(variants)
+      ? variants.filter(Boolean)
+      : [];
+
+  if (!valid.length) {
+    return null;
+  }
+
+  const numericSeed =
+    Number(
+      String(
+        message?.id || "0"
+      ).slice(-6)
+    ) || 0;
+
+  for (
+    let offset = 0;
+    offset < valid.length;
+    offset++
+  ) {
+    const candidate =
+      valid[
+        (numericSeed + offset) %
+          valid.length
+      ];
+
+    if (
+      !message?.channelId ||
+      !iaResponseLooksRepeated(
+        message.channelId,
+        candidate
+      )
+    ) {
+      return candidate;
+    }
+  }
+
+  return valid[
+    numericSeed %
+      valid.length
+  ];
+}
+
 function buildInstantCasualAnswer(
   message
 ) {
+  if (
+    message?.attachments?.size
+  ) {
+    return null;
+  }
+
   const text =
     normalizeSearchText(
       message?.content || ""
     )
-      .replace(/[?!.,]+$/g, "")
       .trim();
 
-  if (!text) {
+  if (
+    !text ||
+    text.length > 180
+  ) {
     return null;
   }
 
-  // =====================================================
-  // SAUDAÇÕES
-  // =====================================================
-
+  // Mensagens com assunto real não devem ser confundidas
+  // com uma simples saudação só porque começam com "oi".
   if (
-    /^(oi+|oie+|ola|opa|salve|eae|e ai|eaí)$/.test(
+    /\b(ranking|cronograma|evento|eventos|log|logs|ticket|tickets|cargo|cargos|hierarquia|alinhamento|alinhamentos|pagamento|pagamentos|vip|nps|gi|pontos|pontuacao|meta|dashboard|ban|timeout|codigo|erro|bug|imagem|foto|video|audio|arquivo|pdf|planilha|dados|consulta|analisar|analise|membro|usuario|canal|discord)\b/.test(
       text
     )
   ) {
-    return "Opa 😎 tô por aqui. Manda.";
+    return null;
   }
-
-  // =====================================================
-  // TUDO BEM?
-  // =====================================================
-
-  if (
-    /^(tudo bem|td bem|tudo bom|td bom|como vc ta|como voce ta|como ce ta)$/.test(
-      text
-    )
-  ) {
-    return "Tô bem kkk 😄 e você?";
-  }
-
-  // =====================================================
-  // TESTES RÁPIDOS
-  // =====================================================
-
-  if (
-    /^(teste|testando|teste ai|ta funcionando|esta funcionando|funcionando)$/.test(
-      text
-    )
-  ) {
-    return "Tô aqui 😎 funcionando normal.";
-  }
-
-  // =====================================================
-  // AGRADECIMENTOS / CONFIRMAÇÕES
-  // =====================================================
 
   if (
     /^(valeu|vlw|obrigado|obg|tmj|fechou|beleza|blz)$/.test(
       text
     )
   ) {
-    return "Tmj 😎";
+    return pickInstantCasualVariant(
+      message,
+      [
+        "Tamo junto 😄",
+        "Por nada 😄",
+        "Fechou 👊",
+        "Imagina, tranquilo.",
+      ]
+    );
   }
 
-  // =====================================================
-  // RISADAS ISOLADAS
-  // =====================================================
-
   if (
-    /^(kk+|kkk+|kkkk+|rs+|haha+|hahaha+)$/.test(
+    /^(kk+|rs+|haha+|hahaha+)$/.test(
       text
     )
   ) {
-    return "KKKK 😂";
+    return pickInstantCasualVariant(
+      message,
+      [
+        "KKKK 😂",
+        "kkkk 😄",
+        "😂 aí é complicado",
+      ]
+    );
   }
 
-  return null;
+  const casualOnly =
+    /^(?:(?:oi+|oie+|ola+|opa+|salve+|eae+|e ai|alo+|bom+ dia+|boa+ tarde+|boa+ noite+|teste|testando|teste ai|ta por ai|esta por ai|vc ta por ai|voce ta por ai|como vai|como vc ta|como voce ta|como ce ta|tudo bem|td bem|tudo bom|td bom|ta funcionando|esta funcionando|funcionando|funcionando ou nao|entao ta funcionando(?: entao)? ne|entao|ne)\s*)+$/.test(
+      text
+    );
+
+  if (!casualOnly) {
+    return null;
+  }
+
+  if (
+    /\b(teste|testando|funcionando)\b/.test(
+      text
+    )
+  ) {
+    return pickInstantCasualVariant(
+      message,
+      [
+        "Tô por aqui 😄 recebi certinho.",
+        "Sim, chegou normal por aqui 👌",
+        "Funcionando sim. Pode continuar mandando.",
+        "Recebi direitinho. Tô online 😄",
+      ]
+    );
+  }
+
+  if (
+    /\b(como vai|como vc ta|como voce ta|como ce ta|tudo bem|td bem|tudo bom|td bom)\b/.test(
+      text
+    )
+  ) {
+    return pickInstantCasualVariant(
+      message,
+      [
+        "Tô bem 😄 e por aí?",
+        "Tudo certo por aqui. E contigo?",
+        "Tô de boa por aqui 😄 como você tá?",
+        "Tudo em ordem. E você?",
+      ]
+    );
+  }
+
+  if (
+    /\b(alo+|ta por ai|esta por ai|vc ta por ai|voce ta por ai)\b/.test(
+      text
+    )
+  ) {
+    return pickInstantCasualVariant(
+      message,
+      [
+        "Tô sim 😄 pode falar.",
+        "Tô por aqui. Manda aí.",
+        "Sim, tô te ouvindo 👀",
+        "Por aqui sim 😄",
+      ]
+    );
+  }
+
+  return pickInstantCasualVariant(
+    message,
+    [
+      "Oi 😄 tudo certo?",
+      "Boa! Tô por aqui 😄",
+      "Opa, tudo tranquilo por aí?",
+      "Oi! Pode mandar 😄",
+    ]
+  );
 }
 
 // =====================================================
@@ -5170,34 +5448,49 @@ function buildActiveProcessingDirectAnswer(
       message?.content || ""
     );
 
-  const asksAboutPendingAnswer =
-    [
-      "vai responder",
-      "vai me responder",
-      "vc vai responder",
-      "voce vai responder",
-      "vai responder sobre",
-      "vai responder ne",
-      "vai responder né",
-      "vai mandar a resposta",
-      "ainda vai responder",
-      "ainda vai me responder",
-    ].some(
-      (phrase) =>
-        text.includes(
-          normalizeSearchText(
-            phrase
-          )
+const asksAboutPendingAnswer =
+  [
+    "vai responder",
+    "vai me responder",
+    "vc vai responder",
+    "voce vai responder",
+    "vai responder sobre",
+    "vai responder ne",
+    "vai responder né",
+    "vai mandar a resposta",
+    "ainda vai responder",
+    "ainda vai me responder",
+    "ia me responder",
+    "ia responder",
+    "se vc ia me responder",
+    "se voce ia me responder",
+    "cade a resposta",
+    "ta demorando pra responder",
+    "esta demorando pra responder",
+  ].some(
+    (phrase) =>
+      text.includes(
+        normalizeSearchText(
+          phrase
         )
-    );
+      )
+  );
 
-  if (
-    !asksAboutPendingAnswer
-  ) {
-    return null;
-  }
+if (
+  !asksAboutPendingAnswer
+) {
+  return null;
+}
 
-  return "Vou sim kkk 😅 a anterior ainda tá sendo processada. Quando terminar eu mando certinho.";
+return pickInstantCasualVariant(
+  message,
+  [
+    "Vou sim 😄 a anterior ainda está rodando, mas pode continuar falando comigo enquanto isso.",
+    "Sim. A resposta anterior continua processando; não precisa parar a conversa por causa dela.",
+    "Tô nela ainda 😅 mas pode mandar outra coisa normalmente enquanto termina.",
+    "Vai sair sim. A anterior está em processamento e eu continuo te acompanhando por aqui.",
+  ]
+);
 }
 
 function buildDirectDiscordAnswer(
@@ -9565,6 +9858,14 @@ const GEMINI_IMAGE_MODEL =
   String(process.env.GEMINI_IMAGE_MODEL || "").trim() ||
   "gemini-3.1-flash-image";
 
+const GEMINI_IMAGE_MODEL_FALLBACKS = [
+  GEMINI_IMAGE_MODEL,
+  "gemini-3.1-flash-image",
+  "gemini-2.5-flash-image",
+].filter((model, index, arr) => {
+  return model && arr.indexOf(model) === index;
+});
+
 const AI_IMAGE_INPUT_MAX_COUNT = 4;
 const AI_IMAGE_INPUT_MAX_BYTES = 4 * 1024 * 1024;
 const AI_IMAGE_INPUT_MAX_TOTAL_BYTES = 12 * 1024 * 1024;
@@ -10016,10 +10317,27 @@ function buildAiImageGenerationPrompt(message) {
         6000
       );
 
-  return (
+  const normalizedPrompt =
+    normalizeSearchText(
+      prompt
+    );
+
+  const isNaturalShowRequest =
+    /\b(?:me mostra|me mostre|mostra pra mim|mostre pra mim|quero ver|consegue me mostrar|pode me mostrar|poderia me mostrar)\b/.test(
+      normalizedPrompt
+    );
+
+  return [
+    "Gere ou edite uma imagem nova por IA conforme o pedido do usuário.",
+    "Nunca diga que a imagem gerada foi encontrada no Google, Instagram ou internet.",
+    isNaturalShowRequest
+      ? "O usuário pediu para mostrar uma imagem; trate isso como criação visual por IA e deixe claro na resposta que a imagem foi gerada por IA."
+      : "Preserve os detalhes e o estilo solicitados pelo usuário.",
+    "",
+    "PEDIDO DO USUÁRIO:",
     prompt ||
-    "Crie a imagem solicitada pelo usuário, preservando os detalhes fornecidos na conversa."
-  );
+      "Crie a imagem solicitada pelo usuário, preservando os detalhes fornecidos na conversa.",
+  ].join("\n");
 }
 
 function getAiImageFileExtension(mimeType) {
@@ -10055,103 +10373,161 @@ async function generateAiImageResponse({
       prompt
     );
 
-  const result =
-    await withGeminiTimeout(
-      geminiClient.models.generateContent({
-        model:
-          GEMINI_IMAGE_MODEL,
-
-        contents,
-
-        config: {
-          responseModalities: [
-            "TEXT",
-            "IMAGE",
-          ],
-        },
-      }),
-
-      GEMINI_IMAGE_REQUEST_TIMEOUT_MS,
-
-      `Geração de imagem | ${GEMINI_IMAGE_MODEL}`
+  let lastError =
+    new Error(
+      "Nenhum modelo de imagem conseguiu gerar a imagem."
     );
 
-  const parts =
-    result
-      ?.candidates
-      ?.[0]
-      ?.content
-      ?.parts ||
-    [];
-
-  const outputImagePart =
-    parts.find(
-      (part) =>
-        !part?.thought &&
-        part?.inlineData?.data
-    );
-
-  if (
-    !outputImagePart
+  for (
+    const modelName of
+    GEMINI_IMAGE_MODEL_FALLBACKS
   ) {
-    throw new Error(
-      `O modelo ${GEMINI_IMAGE_MODEL} não retornou uma imagem.`
-    );
+    try {
+      console.log(
+        `[IA IMAGE] Tentando modelo de imagem: ${modelName}`
+      );
+
+      const result =
+        await withGeminiTimeout(
+          geminiClient.models.generateContent({
+            model:
+              modelName,
+
+            contents,
+
+            config: {
+              responseModalities: [
+                "TEXT",
+                "IMAGE",
+              ],
+
+              httpOptions: {
+                timeout:
+                  GEMINI_IMAGE_REQUEST_TIMEOUT_MS,
+              },
+            },
+          }),
+
+          GEMINI_IMAGE_REQUEST_TIMEOUT_MS,
+
+          `Geração de imagem | ${modelName}`
+        );
+
+      const parts =
+        result
+          ?.candidates
+          ?.[0]
+          ?.content
+          ?.parts ||
+        [];
+
+      const outputImagePart =
+        parts.find(
+          (part) =>
+            !part?.thought &&
+            part?.inlineData?.data &&
+            String(
+              part?.inlineData?.mimeType ||
+              ""
+            ).startsWith(
+              "image/"
+            )
+        );
+
+      if (
+        !outputImagePart
+      ) {
+        throw new Error(
+          `O modelo ${modelName} respondeu sem retornar bytes de imagem.`
+        );
+      }
+
+      const text =
+        parts
+          .filter(
+            (part) =>
+              !part?.thought &&
+              part?.text
+          )
+          .map(
+            (part) =>
+              String(
+                part.text
+              ).trim()
+          )
+          .filter(
+            Boolean
+          )
+          .join(
+            "\n"
+          )
+          .trim();
+
+      const mimeType =
+        String(
+          outputImagePart
+            .inlineData
+            .mimeType ||
+          "image/png"
+        );
+
+      const buffer =
+        Buffer.from(
+          outputImagePart
+            .inlineData
+            .data,
+
+          "base64"
+        );
+
+      if (
+        !buffer.length
+      ) {
+        throw new Error(
+          `O modelo ${modelName} retornou uma imagem vazia.`
+        );
+      }
+
+      console.log(
+        `[IA IMAGE] Imagem gerada com sucesso | Modelo=${modelName} | Bytes=${buffer.length}`
+      );
+
+      return {
+        type:
+          "generated_image",
+
+        text:
+  text ||
+  "Pronto. Gerei esta imagem por IA para você.",
+
+        mimeType,
+
+        buffer,
+
+        fileName:
+          `santacreators-ia-${Date.now()}.${getAiImageFileExtension(mimeType)}`,
+      };
+    } catch (error) {
+      lastError =
+        error;
+
+      console.warn(
+        `[IA IMAGE] Falha no modelo ${modelName}: ${error?.message || error}`
+      );
+
+      if (
+        isGeminiKeyError(
+          error
+        )
+      ) {
+        throw error;
+      }
+
+      continue;
+    }
   }
 
-  const text =
-    parts
-      .filter(
-        (part) =>
-          !part?.thought &&
-          part?.text
-      )
-      .map(
-        (part) =>
-          String(
-            part.text
-          ).trim()
-      )
-      .filter(
-        Boolean
-      )
-      .join(
-        "\n"
-      )
-      .trim();
-
-  const mimeType =
-    String(
-      outputImagePart
-        .inlineData
-        .mimeType ||
-      "image/png"
-    );
-
-  const buffer =
-    Buffer.from(
-      outputImagePart
-        .inlineData
-        .data,
-
-      "base64"
-    );
-
-  return {
-    type:
-      "generated_image",
-
-    text:
-      text ||
-      "Pronto. Gerei a imagem para você.",
-
-    mimeType,
-
-    buffer,
-
-    fileName:
-      `santacreators-ia-${Date.now()}.${getAiImageFileExtension(mimeType)}`,
-  };
+  throw lastError;
 }
 
 function isAiGeneratedImageResponse(response) {
@@ -10768,6 +11144,44 @@ function messageWantsPersonIntelligence(message) {
   // a pessoa, mas sozinha não ativa a busca pesada.
   // =====================================================
 
+  const selfPersonPatterns = [
+    "quem sou eu",
+    "quem eu sou",
+    "voce sabe quem sou eu",
+    "você sabe quem sou eu",
+    "sabe quem sou eu",
+    "o que sabe de mim",
+    "o que voce sabe de mim",
+    "o que você sabe de mim",
+    "o que sabe sobre mim",
+    "o que voce sabe sobre mim",
+    "o que você sabe sobre mim",
+    "me fala sobre mim",
+    "me fale sobre mim",
+    "meus dados",
+    "meu historico",
+    "meu histórico",
+    "meu perfil",
+    "minha historia",
+    "minha história",
+    "como eu estou",
+    "como estou indo",
+    "como eu estou indo",
+    "qual meu cargo",
+    "quais meus cargos",
+    "quantos pontos eu tenho",
+    "minha pontuacao",
+    "minha pontuação",
+    "meu ranking",
+  ];
+
+  const asksAboutSelf =
+    selfPersonPatterns.some((pattern) =>
+      text.includes(
+        normalizeSearchText(pattern)
+      )
+    );
+
   const personPatterns = [
     "quem e ",
     "quem é ",
@@ -10833,6 +11247,7 @@ function messageWantsPersonIntelligence(message) {
   ];
 
   const hasPersonIntent =
+    asksAboutSelf ||
     personPatterns.some((pattern) =>
       text.includes(
         normalizeSearchText(pattern)
@@ -10857,6 +11272,10 @@ function messageWantsPersonIntelligence(message) {
 
   if (!hasPersonIntent) {
     return false;
+  }
+
+  if (asksAboutSelf) {
+    return true;
   }
 
   // =====================================================
@@ -11078,8 +11497,13 @@ function scoreMemberForPersonQuery(member, terms) {
   return score;
 }
 
-async function resolvePersonFromMessage(message) {
-  const guild = message.guild;
+async function resolvePersonFromMessage(
+  message,
+  guildOverride = null
+) {
+  const guild =
+    guildOverride ||
+    message.guild;
 
   if (!guild) {
     return {
@@ -11090,11 +11514,115 @@ async function resolvePersonFromMessage(message) {
   }
 
   // =====================================================
+  // PRIORIDADE 0 — A PRÓPRIA PESSOA
+  // =====================================================
+  //
+  // Funciona tanto no servidor quanto no PV.
+  //
+  // Em DM não existe message.guild, então o guildOverride
+  // aponta para o servidor oficial da SantaCreators.
+  // =====================================================
+
+  const personText =
+    normalizeSearchText(
+      message.content || ""
+    );
+
+  const asksAboutSelf =
+    [
+      /\bquem sou eu\b/,
+      /\bquem eu sou\b/,
+      /\bo que (?:voce )?sabe (?:de|sobre) mim\b/,
+      /\bme fal[ae] sobre mim\b/,
+      /\bmeus dados\b/,
+      /\bmeu historico\b/,
+      /\bmeu perfil\b/,
+      /\bminha historia\b/,
+      /\bcomo eu estou\b/,
+      /\bcomo estou indo\b/,
+      /\bcomo eu estou indo\b/,
+      /\bqual meu cargo\b/,
+      /\bquais meus cargos\b/,
+      /\bmeu ranking\b/,
+      /\bminha pontuacao\b/,
+      /\bquantos pontos eu tenho\b/,
+    ].some(
+      pattern =>
+        pattern.test(
+          personText
+        )
+    );
+
+  if (
+    asksAboutSelf &&
+    message.author?.id &&
+    !message.author.bot
+  ) {
+    const selfMember =
+      guild.members.cache.get(
+        message.author.id
+      ) ||
+      await guild.members
+        .fetch(
+          message.author.id
+        )
+        .catch(
+          () => null
+        );
+
+    if (selfMember) {
+      return {
+        status: "resolved",
+        source: "self",
+        member: selfMember,
+        userId: selfMember.id,
+        candidates: [],
+      };
+    }
+
+    return {
+      status: "historical_id",
+      source: "self",
+      member: null,
+      userId: message.author.id,
+      candidates: [],
+    };
+  }
+
+  // =====================================================
   // PRIORIDADE 1 — MENÇÃO EXPLÍCITA
   // =====================================================
 
-  const mentioned =
-    message.mentions?.members?.first?.();
+  let mentioned =
+    message.mentions?.members?.first?.() ||
+    null;
+
+  if (!mentioned) {
+    const mentionedUser =
+      message.mentions?.users
+        ?.find?.(
+          user =>
+            user?.id &&
+            !user.bot &&
+            user.id !==
+              message.client?.user?.id
+        ) ||
+      null;
+
+    if (mentionedUser) {
+      mentioned =
+        guild.members.cache.get(
+          mentionedUser.id
+        ) ||
+        await guild.members
+          .fetch(
+            mentionedUser.id
+          )
+          .catch(
+            () => null
+          );
+    }
+  }
 
   if (mentioned && !mentioned.user?.bot) {
     return {
@@ -11935,7 +12463,8 @@ function formatPersonCandidates(
 }
 
 async function buildPersonIntelligenceContext(
-  message
+  message,
+  guildOverride = null
 ) {
   if (
     !messageWantsPersonIntelligence(
@@ -11945,7 +12474,9 @@ async function buildPersonIntelligenceContext(
     return "";
   }
 
-  const guild = message.guild;
+  const guild =
+    guildOverride ||
+    message.guild;
 
   if (!guild) {
     return [
@@ -11956,7 +12487,8 @@ async function buildPersonIntelligenceContext(
 
   const personResolution =
     await resolvePersonFromMessage(
-      message
+      message,
+      guild
     );
 
   if (
@@ -12073,6 +12605,30 @@ async function buildPersonIntelligenceContext(
         )
     );
 
+  const requiresDeepPersonHistory =
+    requiresFreshPersonOperationalContext ||
+    [
+      "historico",
+      "histórico",
+      "quando entrou",
+      "entrada",
+      "me fale tudo",
+      "me fala tudo",
+      "tudo sobre",
+      "tudo que sabe",
+      "o que sabe sobre",
+      "o que voce sabe sobre",
+      "o que você sabe sobre",
+      "dados sobre",
+    ].some(
+      term =>
+        currentPersonQuestionText.includes(
+          normalizeSearchText(
+            term
+          )
+        )
+    );
+
   const cached =
     aiPersonIntelligenceCache.get(
       cacheKey
@@ -12080,6 +12636,7 @@ async function buildPersonIntelligenceContext(
 
   if (
     !requiresFreshPersonOperationalContext &&
+    !requiresDeepPersonHistory &&
     cached &&
     Date.now() - cached.createdAt <
       AI_PERSON_CACHE_TTL_MS
@@ -12107,56 +12664,108 @@ async function buildPersonIntelligenceContext(
           "- Informações históricas ainda podem existir nos canais e sistemas internos.",
         ].join("\n");
 
-  const [
-    joinHistory,
-    evolutionHistory,
-    creatorsChatHistory,
-    globalServerHistory,
-  ] = await Promise.all([
-    scanPersonHistoryInChannel(
-      guild,
+  let joinHistory = {
+    label:
+      "HISTÓRICO DE ENTRADA NO SERVIDOR",
+    channelId:
       AI_MEMBER_JOIN_CHANNEL_ID,
-      personResolution,
-      {
-        label:
-          "HISTÓRICO DE ENTRADA NO SERVIDOR",
-        maxResults: 10,
-      }
-    ),
+    accessible:
+      true,
+    matches:
+      [],
+  };
 
-    scanPersonHistoryInChannel(
-      guild,
+  let evolutionHistory = {
+    label:
+      "EVOLUÇÃO EQUIPE CREATORS",
+    channelId:
       AI_CREATOR_EVOLUTION_CHANNEL_ID,
-      personResolution,
-      {
-        label:
-          "EVOLUÇÃO EQUIPE CREATORS",
-        maxResults: 20,
-      }
-    ),
+    accessible:
+      true,
+    matches:
+      [],
+  };
 
-    scanPersonHistoryInChannel(
-      guild,
+  let creatorsChatHistory = {
+    label:
+      "CONVERSAS RECENTES NO CHAT CREATORS",
+    channelId:
       AI_CREATORS_CHAT_CHANNEL_ID,
-      personResolution,
-      {
-        label:
-          "CONVERSAS RECENTES NO CHAT CREATORS",
-        maxPages: 8,
-        maxResults: 15,
-      }
-    ),
+    accessible:
+      true,
+    matches:
+      [],
+  };
 
-    scanPersonHistoryAcrossServer(
-      guild,
-      personResolution,
-      {
-        maxChannels: 40,
-        messagesPerChannel: 100,
-        maxResults: 40,
-      }
-    ),
-  ]);
+  let globalServerHistory = {
+    label:
+      "HISTÓRICO COMPLEMENTAR NO SERVIDOR",
+    accessible:
+      true,
+    matches:
+      [],
+    scannedChannels:
+      0,
+  };
+
+  if (
+    requiresDeepPersonHistory
+  ) {
+    [
+      joinHistory,
+      evolutionHistory,
+      creatorsChatHistory,
+      globalServerHistory,
+    ] = await Promise.all([
+      scanPersonHistoryInChannel(
+        guild,
+        AI_MEMBER_JOIN_CHANNEL_ID,
+        personResolution,
+        {
+          label:
+            "HISTÓRICO DE ENTRADA NO SERVIDOR",
+          maxResults: 10,
+        }
+      ),
+
+      scanPersonHistoryInChannel(
+        guild,
+        AI_CREATOR_EVOLUTION_CHANNEL_ID,
+        personResolution,
+        {
+          label:
+            "EVOLUÇÃO EQUIPE CREATORS",
+          maxResults: 20,
+        }
+      ),
+
+      scanPersonHistoryInChannel(
+        guild,
+        AI_CREATORS_CHAT_CHANNEL_ID,
+        personResolution,
+        {
+          label:
+            "CONVERSAS RECENTES NO CHAT CREATORS",
+          maxPages: 8,
+          maxResults: 15,
+        }
+      ),
+
+      scanPersonHistoryAcrossServer(
+        guild,
+        personResolution,
+        {
+          maxChannels: 40,
+          messagesPerChannel: 100,
+          maxResults: 40,
+        }
+      ),
+    ]);
+  } else {
+    console.log(
+      `[IA PERSON] Consulta rápida de identidade/perfil para ${personId}. Varredura histórica profunda ignorada nesta mensagem.`
+    );
+  }
 
   let formsCreatorContext = "";
   let formsCreatorData = null;
@@ -12572,10 +13181,19 @@ async function buildPersonIntelligenceContext(
     );
   }
 
-  const storedPersonalProfile =
-    fetchStoredPersonalProfileByUserId(
-      personId
+  const isSelfPersonQuery =
+    String(personId) ===
+    String(
+      message.author?.id ||
+      ""
     );
+
+  const storedPersonalProfile =
+    isSelfPersonQuery
+      ? fetchStoredPersonalProfileByUserId(
+          personId
+        )
+      : "";
 
   const context = [
     "========================================",
@@ -12591,8 +13209,12 @@ async function buildPersonIntelligenceContext(
     "",
     profileBlock,
     "",
-    storedPersonalProfile ||
-      "Nenhuma memória pessoal explícita consolidada para esta pessoa.",
+    isSelfPersonQuery
+      ? (
+          storedPersonalProfile ||
+          "Nenhuma memória pessoal explícita consolidada para você."
+        )
+      : "Memória pessoal privada não é exposta em consultas de terceiros; use perfil atual, histórico do servidor e sistemas operacionais.",
     "",
     "========================================",
     formatPersonHistoryBlock(
@@ -12659,6 +13281,8 @@ async function buildPersonIntelligenceContext(
     "- Registros do canal de entrada podem complementar o histórico.",
     "- Não transforme ausência de registro em afirmação negativa absoluta.",
     "- Não invente evolução, feedback, alinhamento, cargo, pontuação ou comportamento.",
+    "- Quando a pessoa consultada for o próprio autor da pergunta, use também a memória pessoal explícita armazenada para ela.",
+    "- Quando a consulta for sobre outra pessoa, não exponha fatos pessoais vindos de conversas privadas; use dados do servidor, perfil, registros e sistemas autorizados.",
     "- Se houver dados contraditórios, priorize dados estruturados e estado atual do Discord.",
     "- Dados do FormsCreator complementam o perfil e o histórico da pessoa.",
     "- Área de interesse registrada no FormsCreator não deve ser tratada automaticamente como cargo atual no Discord.",
@@ -13073,7 +13697,234 @@ function formatDateDdMmSp(
     `${map.day}/${map.month}`
   );
 }
+const AI_CRONOGRAMA_STATE_FILE =
+  path.resolve(
+    process.cwd(),
+    "data",
+    "cronograma_state.json"
+  );
 
+function buildCurrentCronogramaDatesForAi() {
+  const now =
+    new Date(
+      new Date().toLocaleString(
+        "en-US",
+        {
+          timeZone:
+            "America/Sao_Paulo",
+        }
+      )
+    );
+
+  const day =
+    now.getDay();
+
+  const diffToMonday =
+    day === 0
+      ? -6
+      : 1 - day;
+
+  const monday =
+    new Date(
+      now
+    );
+
+  monday.setDate(
+    now.getDate() +
+    diffToMonday
+  );
+
+  const dates = {};
+
+  const daysMap = [
+    "seg",
+    "ter",
+    "qua",
+    "qui",
+    "sex",
+    "sab",
+    "dom",
+  ];
+
+  for (
+    let index = 0;
+    index < daysMap.length;
+    index++
+  ) {
+    const current =
+      new Date(
+        monday
+      );
+
+    current.setDate(
+      monday.getDate() +
+      index
+    );
+
+    dates[
+      daysMap[index]
+    ] =
+      `${String(
+        current.getDate()
+      ).padStart(
+        2,
+        "0"
+      )}/${String(
+        current.getMonth() + 1
+      ).padStart(
+        2,
+        "0"
+      )}`;
+  }
+
+  return dates;
+}
+
+function readCronogramaStateFallbackForAi() {
+  try {
+    if (
+      !fs.existsSync(
+        AI_CRONOGRAMA_STATE_FILE
+      )
+    ) {
+      return null;
+    }
+
+    const raw =
+      fs.readFileSync(
+        AI_CRONOGRAMA_STATE_FILE,
+        "utf8"
+      );
+
+    const state =
+      JSON.parse(
+        raw
+      );
+
+    const dates =
+      buildCurrentCronogramaDatesForAi();
+
+    const days = [
+      ["seg", "Segunda-feira"],
+      ["ter", "Terça-feira"],
+      ["qua", "Quarta-feira"],
+      ["qui", "Quinta-feira"],
+      ["sex", "Sexta-feira"],
+      ["sab", "Sábado"],
+      ["dom", "Domingo"],
+    ];
+
+    const mapItems =
+      (source = {}) =>
+        days.map(
+          ([key, day]) => {
+            const item =
+              source?.[key] ||
+              {};
+
+            return {
+              key,
+              day,
+
+              date:
+                dates[key] ||
+                null,
+
+              active:
+                item.active === true,
+
+              city:
+                item.city ||
+                "—",
+
+              time:
+                item.time ||
+                "—",
+
+              eventName:
+                item.eventName ||
+                "—",
+
+              prizes:
+                item.prizes ||
+                "—",
+            };
+          }
+        );
+
+    return {
+      timezone:
+        "America/Sao_Paulo",
+
+      weekStart:
+        dates.seg ||
+        null,
+
+      weekEnd:
+        dates.dom ||
+        null,
+
+      schedule:
+        mapItems(
+          state.schedule
+        ),
+
+      madrugada:
+        mapItems(
+          state.madrugada
+        ),
+    };
+  } catch (error) {
+    console.error(
+      "[IA EVENTOS] Falha ao ler cronograma_state.json como fallback:",
+      error
+    );
+
+    return null;
+  }
+}
+
+async function getCronogramaDataForAi() {
+  try {
+    const module =
+      await import(
+        "./cronogramaCreators.js"
+      );
+
+    if (
+      typeof module
+        ?.getCronogramaData ===
+        "function"
+    ) {
+      const data =
+        await module
+          .getCronogramaData();
+
+      if (
+        data &&
+        (
+          Array.isArray(
+            data.schedule
+          ) ||
+          Array.isArray(
+            data.madrugada
+          )
+        )
+      ) {
+        return data;
+      }
+    }
+  } catch (error) {
+    console.error(
+      "[IA EVENTOS] Consulta direta ao cronogramaCreators.js falhou; tentando cronograma_state.json:",
+      error
+    );
+  }
+
+  return (
+    readCronogramaStateFallbackForAi()
+  );
+}
 function resolveRequestedCronogramaDate(
   message,
   cronogramaData
@@ -13463,14 +14314,8 @@ async function tryBuildAuthoritativeEventAnswer(
   }
 
   try {
-    const {
-      getCronogramaData,
-    } = await import(
-      "./cronogramaCreators.js"
-    );
-
     const cronogramaData =
-      getCronogramaData();
+  await getCronogramaDataForAi();
 
     if (!cronogramaData) {
       return null;
@@ -13520,23 +14365,49 @@ async function tryBuildAuthoritativeEventAnswer(
       );
     }
 
-    const dailyPosts =
-      await fetchEventosDiariosForDate(
-        message,
-        targetDate
-      );
-
-    const validDailyPosts =
-      dailyPosts.filter(
-        post =>
-          items.some(
-            item =>
-              dailyEventTextMatchesCronogramaItem(
-                post,
-                item
-              )
+    const asksForDetails =
+      [
+        "detalhe",
+        "detalhes",
+        "premiacao",
+        "premiação",
+        "regra",
+        "regras",
+        "entrada",
+        "o que levar",
+        "oq levar",
+        "descricao",
+        "descrição",
+      ].some(
+        term =>
+          text.includes(
+            normalizeSearchText(
+              term
+            )
           )
       );
+
+    let validDailyPosts = [];
+
+    if (asksForDetails) {
+      const dailyPosts =
+        await fetchEventosDiariosForDate(
+          message,
+          targetDate
+        );
+
+      validDailyPosts =
+        dailyPosts.filter(
+          post =>
+            items.some(
+              item =>
+                dailyEventTextMatchesCronogramaItem(
+                  post,
+                  item
+                )
+            )
+        );
+    }
 
     const todayDdMm =
       formatDateDdMmSp();
@@ -13577,28 +14448,6 @@ async function tryBuildAuthoritativeEventAnswer(
             `• **${eventName}** — **${city}**, às **${time}**${prizeText}`
           );
         }
-      );
-
-    const asksForDetails =
-      [
-        "detalhe",
-        "detalhes",
-        "premiacao",
-        "premiação",
-        "regra",
-        "regras",
-        "entrada",
-        "o que levar",
-        "oq levar",
-        "descricao",
-        "descrição",
-      ].some(
-        term =>
-          text.includes(
-            normalizeSearchText(
-              term
-            )
-          )
       );
 
     if (
@@ -13645,14 +14494,8 @@ async function fetchCronogramaContext(message) {
     let structuredCronogramaContext = "";
 
     try {
-      const {
-        getCronogramaData,
-      } = await import(
-        "./cronogramaCreators.js"
-      );
-
       const cronogramaData =
-        getCronogramaData();
+  await getCronogramaDataForAi();
 
       if (cronogramaData) {
         const formatItems = (items, title) => {
@@ -15754,7 +16597,7 @@ if (intent.wantsRoles || intent.hasSpecificReference) {
   // BUSCA INTELIGENTE GENÉRICA NO SERVIDOR
   // =====================================================
 
-  const shouldRunSmartServerKnowledge =
+const shouldRunSmartServerKnowledge =
   !intent.isGreetingOnly &&
   (
     intent.wantsAusencias ||
@@ -15763,8 +16606,7 @@ if (intent.wantsRoles || intent.hasSpecificReference) {
     intent.wantsGI ||
     intent.wantsRoles ||
     intent.wantsChannels ||
-    intent.wantsOperationalAnalysis ||
-    messageWantsPersonIntelligence(message)
+    intent.wantsOperationalAnalysis
   );
 
 if (shouldRunSmartServerKnowledge) {
@@ -18291,9 +19133,19 @@ const geminiContents =
     prompt
   );
 
+const chatExecutionPlan =
+  getGeminiChatExecutionPlan(
+    message,
+    intent
+  );
+
+console.log(
+  `[IA CHAT AUTO] Rota de modelo: ${chatExecutionPlan.fast ? "rápida" : "completa"} | Timeout=${chatExecutionPlan.timeoutMs}ms`
+);
+
 let lastError = null;
 
-for (const modelName of GEMINI_CHAT_MODEL_FALLBACKS) {
+for (const modelName of chatExecutionPlan.models) {
   // =====================================================
   // CIRCUIT BREAKER DO MODELO
   // =====================================================
@@ -18334,8 +19186,8 @@ for (const modelName of GEMINI_CHAT_MODEL_FALLBACKS) {
       `[IA CHAT AUTO] Tentando modelo: ${modelName}`
     );
 
-    const result =
-      await withGeminiTimeout(
+const result =
+  await withGeminiTimeout(
 geminiClient.models.generateContent({
   model: modelName,
 
@@ -18344,11 +19196,16 @@ geminiClient.models.generateContent({
 
   config: {
     maxOutputTokens: 4096,
+
+    httpOptions: {
+      timeout:
+        chatExecutionPlan.timeoutMs,
+    },
   },
 }),
-        GEMINI_REQUEST_TIMEOUT_MS,
-        `Modelo ${modelName}`
-      );
+    chatExecutionPlan.timeoutMs,
+    `Modelo ${modelName}`
+  );
 
     const elapsed =
       Date.now() - startedAt;
@@ -18447,8 +19304,14 @@ if (
     err
   )
 ) {
+  blockGeminiChatModel(
+    modelName,
+    "transient",
+    GEMINI_CHAT_TRANSIENT_COOLDOWN_MS
+  );
+
   console.warn(
-    `[IA CHAT AUTO] Erro temporário em ${modelName} | ${elapsed}ms. Tentando próximo fallback...`
+    `[IA CHAT AUTO] Erro temporário em ${modelName} | ${elapsed}ms. Modelo ficará em cooldown curto. Tentando próximo fallback...`
   );
 
   continue;
@@ -22679,6 +23542,9 @@ export async function handleIaInterviewTicketMessage(message, client) {
 
   const currentState = IA_ENTREVISTA_ACTIVE.get(message.channelId);
 
+  const interviewProcessingKey =
+    `${message.channelId}:${message.author.id}:${message.id}`;
+
   if (currentState?.interviewRunning || channelHasActiveInterviewRunning(message.channel)) {
     return true;
   }
@@ -22691,13 +23557,11 @@ export async function handleIaInterviewTicketMessage(message, client) {
     return true;
   }
 
-  if (IA_ENTREVISTA_PROCESSING.get(message.channelId)) {
-    queueIaInterviewPendingMessage(message);
-
-    console.log(
-      `[IA ENTREVISTA] Mensagem ${message.id} entrou na fila do canal ${message.channelId}.`
-    );
-
+  if (
+    IA_ENTREVISTA_PROCESSING.get(
+      interviewProcessingKey
+    )
+  ) {
     return true;
   }
 
@@ -23010,7 +23874,7 @@ saveCommunityTeaching(
 );
 
 IA_ENTREVISTA_PROCESSING.set(
-  message.channelId,
+  interviewProcessingKey,
   true
 );
 
@@ -23032,77 +23896,131 @@ try {
   // Nada da estrutura antiga de fallback foi removido.
   // =====================================================
 
- let response = null;
+let response =
+  buildDirectDiscordAnswer(
+    message
+  );
 
-try {
-  // =====================================================
-  // GERAÇÃO INTELIGENTE DA ENTREVISTA
-  // =====================================================
-  //
-  // generateIaInterviewConversation() já possui timeout
-  // individual para cada modelo Gemini.
-  //
-  // Portanto não aplicamos outro timeout de 9 segundos
-  // envolvendo toda a cadeia.
-  //
-  // Assim, se um modelo estiver lento ou indisponível,
-  // a própria função consegue avançar para o próximo
-  // fallback sem ser interrompida prematuramente.
-  // =====================================================
+if (!response) {
+  try {
+    // =====================================================
+    // MESMO CÉREBRO CENTRAL DA SANTACREATORS
+    // =====================================================
+    //
+    // O pré-atendimento de entrevista não usa mais uma rota
+    // Gemini separada para perguntas comuns.
+    //
+    // Isso garante acesso às mesmas capacidades do restante:
+    // - cronograma atual;
+    // - inteligência de pessoas;
+    // - memória;
+    // - hierarquia;
+    // - sistemas internos;
+    // - imagens;
+    // - circuit breaker;
+    // - rota rápida e fallbacks com timeout curto.
+    // =====================================================
 
-response =
-  await runAiBackgroundTask(
-    message,
-    async () => {
-      return await generateIaInterviewConversation(
+    response =
+      await runAiBackgroundTask(
         message,
-        client,
+        async () => {
+          return await generateIAResponse({
+            message,
+            client,
+          });
+        }
+      );
+  } catch (err) {
+    console.error(
+      "[IA ENTREVISTA] Falha ao gerar resposta inteligente:",
+      err?.message || err
+    );
+
+    // =====================================================
+    // FALLBACK DE SEGURANÇA
+    // =====================================================
+
+    response =
+      buildIaInterviewQuickAnswer(
+        message,
+        openerId
+      ) ||
+      scInterviewFallback(
+        message,
         openerId
       );
-    }
-  );
-} catch (err) {
-  console.error(
-    "[IA ENTREVISTA] Falha ao gerar resposta inteligente:",
-    err?.message || err
-  );
-
-  // =====================================================
-  // FALLBACK DE SEGURANÇA
-  // =====================================================
-  //
-  // Continua existindo.
-  //
-  // Só será utilizado quando toda a cadeia inteligente
-  // realmente falhar.
-  // =====================================================
-
-  response =
-    buildIaInterviewQuickAnswer(
-      message,
-      openerId
-    ) ||
-    scInterviewFallback(message, openerId);
+  }
 }
+
+  const generatedImageResponse =
+    isAiGeneratedImageResponse(
+      response
+    )
+      ? response
+      : null;
+
+  const responseText =
+    generatedImageResponse
+      ? (
+          generatedImageResponse.text ||
+          "Pronto. Gerei a imagem por IA para você."
+        )
+      : String(
+          response ||
+          ""
+        );
 
   const finalText =
     limitDiscordText(
       fixBrokenDiscordMentions(
-        response
+        responseText
       )
     ) ||
     `Boaaa ${buildSafeUserMention(openerId)} 😄 me explica com suas palavras que eu vou te acompanhando por aqui.`;
 
   const responseParts =
-    splitDiscordText(
-      finalText
-    );
+    generatedImageResponse
+      ? []
+      : splitDiscordText(
+          finalText
+        );
 
   const allowedMentionUsers =
     uniqueDiscordUserIds(
       openerId,
       message.author.id
     );
+
+if (
+  generatedImageResponse
+) {
+  await message
+    .reply({
+      content:
+        finalText,
+
+      files: [
+        buildAiGeneratedImageAttachment(
+          generatedImageResponse
+        ),
+      ],
+
+      allowedMentions: {
+        repliedUser: true,
+        users:
+          allowedMentionUsers,
+        roles: [],
+        parse: [],
+      },
+    })
+    .catch((err) => {
+      console.error(
+        "[IA ENTREVISTA] Falha ao enviar imagem gerada:",
+        err?.message || err
+      );
+    });
+}
 
 for (
   let index = 0;
@@ -23190,7 +24108,7 @@ saveInstitutionalTeaching(
 
 } finally {
   IA_ENTREVISTA_PROCESSING.delete(
-    message.channelId
+    interviewProcessingKey
   );
 
   const nextPendingMessage =
@@ -23255,34 +24173,110 @@ async function scRunAdditionalJob(task) {
 }
 
 function messageRequestsAiImageGeneration(message) {
-  const text = normalizeSearchText(message?.content || "");
+  const text =
+    normalizeSearchText(
+      message?.content || ""
+    );
+
+  if (!text) {
+    return false;
+  }
 
   if (
-    /\bnao\s+(?:quero\s+que\s+)?(?:gere|gera|crie|cria|recrie|recria|edite|edita)\b/.test(text)
+    /\bnao\s+(?:quero\s+que\s+)?(?:gere|gera|crie|cria|recrie|recria|edite|edita|faca|faz)\b/.test(
+      text
+    )
   ) {
     return false;
   }
 
-  if (messageRequestsAiImageGenerationLegacy(message)) {
+  if (
+    messageRequestsAiImageGenerationLegacy(
+      message
+    )
+  ) {
     return true;
   }
 
-  return (
-    /\b(?:recria|recrie|recriar|edita|edite|editar|transforma|transforme|altera|altere)\b/.test(text) &&
+  const imageWords =
+    /\b(?:imagem|imagens|foto|fotos|arte|artes|banner|capa|capas|logo|logos|thumbnail|wallpaper|ilustracao|ilustracoes)\b/;
+
+  const generationIntent =
+    /\b(?:gera|gere|gerar|cria|crie|criar|faz|faca|fazer|desenha|desenhe|desenhar|monta|monte|montar|produz|produza|produzir)\b/;
+
+  const editIntent =
+    /\b(?:recria|recrie|recriar|edita|edite|editar|transforma|transforme|transformar|altera|altere|alterar|remove|remova|remover|adiciona|adicione|adicionar|troca|troque|trocar)\b/;
+
+  const conversationalGeneration =
+    /\b(?:quero|queria|preciso|consegue|pode|poderia)\b/.test(
+      text
+    ) &&
     (
-      /\b(?:imagem|foto|arte|banner|capa|logo)\b/.test(text) ||
-      Boolean(message.reference?.messageId)
+      generationIntent.test(text) ||
+      /\b(?:uma|um)\s+(?:imagem|foto|arte|banner|capa|logo|thumbnail|wallpaper|ilustracao)\b/.test(
+        text
+      )
+    );
+
+  const asksToShowVisual =
+    /\b(?:me mostra|me mostre|mostra pra mim|mostre pra mim|mostra|mostre|quero ver|consegue me mostrar|pode me mostrar|poderia me mostrar)\b/.test(
+      text
+    ) &&
+    imageWords.test(
+      text
+    );
+
+  const explicitlyRequestsExistingImage =
+    /\b(?:foto real|imagem real|foto original|imagem original|buscar no google|procura no google|pesquisa no google|da internet|no instagram|link da foto|link da imagem)\b/.test(
+      text
+    );
+
+  if (
+    imageWords.test(text) &&
+    (
+      generationIntent.test(text) ||
+      conversationalGeneration ||
+      (
+        asksToShowVisual &&
+        !explicitlyRequestsExistingImage
+      )
+    )
+  ) {
+    return true;
+  }
+
+  const hasDirectImage =
+    [
+      ...(
+        message?.attachments?.values?.() ||
+        []
+      ),
+    ].some(
+      (attachment) =>
+        isAiImageAttachment(
+          attachment
+        )
+    );
+
+  return (
+    editIntent.test(text) &&
+    (
+      imageWords.test(text) ||
+      hasDirectImage ||
+      Boolean(
+        message.reference?.messageId
+      )
     )
   );
 }
 
 const SC_AI_RULES = `
 Você é a assistente virtual da SantaCreators. Converse em português natural.
-A SantaCreators desenvolve eventos, conteúdo, experiências e pessoas dentro do GTA RP.
-A entrada na SantaCreators não equivale a entrar na staff da cidade.
-Creator é a base da jornada; evolução depende de participação, aprendizado e responsabilidade.
-Managers articulam a participação de organizações; Social Medias organizam eventos e registros.
-Gestores desenvolvem membros; Coordenação acompanha a operação; Responsáveis acompanham processos e lideranças.
+A SantaCreators é a equipe operacional responsável pelos grandes eventos da Santa Group nas cidades Nobre, Santa, Grande e Maresia.
+A entrada na SantaCreators não equivale a entrar na staff administrativa de uma cidade.
+Creator, Manager, Social Media, Gestor, Coordenação e Responsáveis são nomes internos de funções e áreas.
+Não atribua automaticamente a Social Media, Managers ou qualquer outro cargo a responsabilidade por organizar, divulgar ou executar um evento sem dados atuais que comprovem isso.
+Cronograma atual, Eventos Diários e registros estruturados têm prioridade quando a pergunta for sobre evento, cidade, horário ou premiação.
 Essas atribuições gerais não provam que uma pessoa realizou ou deixou de realizar uma tarefa.
 Não revele gabaritos de entrevistas a candidatos.
 Seja leve e bem-humorada, sem fingir ser uma pessoa humana.
@@ -23306,13 +24300,32 @@ Se houver falha real, explique brevemente a limitação sem fingir que processou
 
 async function scRequest(provider, request) {
   const imageOutput =
-    request.config?.responseModalities?.includes("IMAGE");
+  request.config?.responseModalities?.includes("IMAGE");
 
-  const timeoutMs = imageOutput
+const requestedTimeoutMs =
+  Number(
+    request.config
+      ?.httpOptions
+      ?.timeout ||
+    0
+  );
+
+const timeoutMs =
+  imageOutput
     ? GEMINI_IMAGE_REQUEST_TIMEOUT_MS
-    : GEMINI_REQUEST_TIMEOUT_MS;
+    : (
+        Number.isFinite(
+          requestedTimeoutMs
+        ) &&
+        requestedTimeoutMs > 0
+          ? Math.min(
+              requestedTimeoutMs,
+              GEMINI_REQUEST_TIMEOUT_MS
+            )
+          : GEMINI_REQUEST_TIMEOUT_MS
+      );
 
-  const controller = new AbortController();
+const controller = new AbortController();
 
   const timer = setTimeout(
     () => controller.abort(),
@@ -24916,147 +25929,368 @@ async function sendConversationMemoryLog(
   }
 }
 
+async function buildUnifiedAiMessage(
+  message,
+  client
+) {
+  if (
+    message?.guild
+  ) {
+    return message;
+  }
+
+  await scInitDiscordMemory(
+    client
+  );
+
+  const intelligenceGuild =
+    scMemory.channel?.guild ||
+    null;
+
+  if (
+    !intelligenceGuild
+  ) {
+    return message;
+  }
+
+  const intelligenceMember =
+    intelligenceGuild.members.cache.get(
+      message.author?.id
+    ) ||
+    await intelligenceGuild.members
+      .fetch(
+        message.author?.id
+      )
+      .catch(
+        () => null
+      );
+
+  return new Proxy(
+    message,
+    {
+      get(
+        target,
+        property
+      ) {
+        if (
+          property === "guild"
+        ) {
+          return intelligenceGuild;
+        }
+
+        if (
+          property === "member"
+        ) {
+          return intelligenceMember;
+        }
+
+        const value =
+          Reflect.get(
+            target,
+            property,
+            target
+          );
+
+        if (
+          typeof value ===
+          "function"
+        ) {
+          return value.bind(
+            target
+          );
+        }
+
+        return value;
+      },
+    }
+  );
+}
+
+async function buildDirectPrivateKnowledgeContext(
+  message,
+  client
+) {
+  await scInitDiscordMemory(
+    client
+  );
+
+  const intelligenceGuild =
+    message.guild ||
+    scMemory.channel?.guild ||
+    null;
+
+  const wantsPerson =
+    messageWantsPersonIntelligence(
+      message
+    );
+
+  let personContext =
+    "";
+
+  if (
+    wantsPerson &&
+    intelligenceGuild
+  ) {
+    try {
+      personContext =
+        await buildPersonIntelligenceContext(
+          message,
+          intelligenceGuild
+        );
+    } catch (error) {
+      console.error(
+        "[IA DM PERSON] Erro ao montar inteligência da pessoa:",
+        error
+      );
+
+      personContext =
+        "A inteligência detalhada de pessoas ficou parcialmente indisponível nesta consulta. Não invente dados.";
+    }
+  }
+
+  const ownLongTermMemory =
+    fetchRelevantLongTermMemory(
+      message
+    );
+
+  const institutionalMemory =
+    fetchRelevantInstitutionalMemory(
+      message
+    );
+
+  return [
+    "========================================",
+    "CONTEXTO OFICIAL FIXO DA SANTACREATORS",
+    "========================================",
+    SANTACREATORS_CONTEXT,
+    "",
+    "========================================",
+    "MEMÓRIA LOCAL DO AUTOR DA CONVERSA",
+    "========================================",
+    ownLongTermMemory,
+    "",
+    "========================================",
+    "MEMÓRIA INSTITUCIONAL AUTORIZADA",
+    "========================================",
+    institutionalMemory,
+    "",
+    "========================================",
+    "INTELIGÊNCIA DA PESSOA CONSULTADA",
+    "========================================",
+    personContext ||
+      "A mensagem atual não solicitou uma consulta detalhada sobre uma pessoa.",
+    "",
+    "REGRAS IMPORTANTES:",
+    "- No PV, continue sabendo a identidade institucional da SantaCreators e do Macedo; não trate a conversa privada como um sistema separado sem memória.",
+    "- Se a pessoa perguntar sobre si própria, una perfil atual do Discord, memória pessoal explícita dela, histórico autorizado e sistemas estruturados disponíveis.",
+    "- Se perguntarem sobre outra pessoa, use dados do servidor e sistemas autorizados, mas não exponha conversas privadas nem fatos pessoais privados dessa pessoa.",
+    "- Dados atuais e estruturados vencem lembranças antigas quando houver conflito.",
+    "- Ausência de registro não prova ausência de atividade.",
+  ]
+    .filter(Boolean)
+    .join("\n\n")
+    .slice(
+      0,
+      60000
+    );
+}
+
 async function scDirectConversation(
   message,
   client,
   canSend = async () => true
 ) {
-  return scRunAdditionalJob(async () => {
-    if (!await canSend()) {
+  if (!await canSend()) {
+    return;
+  }
+
+  // =====================================================
+  // PV / TICKET — RESPOSTA INSTANTÂNEA QUANDO NÃO PRECISA IA
+  // =====================================================
+  //
+  // Saudações, testes, confirmações e perguntas rápidas de
+  // presença não entram na fila adicional nem chamam Gemini.
+  // Isso mantém o PV vivo mesmo quando outra análise pesada
+  // ainda está rodando.
+  // =====================================================
+
+  const directDiscordAnswer =
+    buildDirectDiscordAnswer(
+      message
+    );
+
+  if (directDiscordAnswer) {
+    const finalDirectText =
+      limitDiscordText(
+        fixBrokenDiscordMentions(
+          directDiscordAnswer
+        )
+      );
+
+    if (!finalDirectText) {
       return;
     }
 
-    await message.channel
-      .sendTyping()
-      .catch(() => {});
+    rememberAiResponse(
+      message.channelId,
+      finalDirectText
+    );
 
-    const recent =
-      await message.channel.messages.fetch({
-        limit: 20,
-      });
+const directPayload = {
+  content:
+    finalDirectText,
 
-    const history = [...recent.values()]
-      .filter(
-        item =>
-          !item.author.bot ||
-          item.author.id === client.user.id
+  allowedMentions: {
+    parse: [],
+    repliedUser: false,
+  },
+};
+
+const sent =
+  message.channel.type ===
+    ChannelType.DM
+    ? await message.reply(
+        directPayload
       )
-      .sort(
-        (a, b) => a.createdTimestamp - b.createdTimestamp
-      )
-      .map(
-        item =>
-          `${new Date(item.createdTimestamp).toISOString()} | ${item.author.id} | ${item.content}\n${
-            item.embeds
-              .map(embed => formatEmbedForAI(embed))
-              .join("\n")
-          }`
-      )
-      .join("\n")
-      .slice(-24000);
-
-    const provider =
-      getGeminiClient();
-
-    if (!provider) {
-      throw new Error(
-        "IA sem chave configurada."
+    : await message.channel.send(
+        directPayload
       );
-    }
 
-    let response;
+    await scArchiveMessage(
+      client,
+      sent
+    ).catch(error => {
+      console.error(
+        "[IA ARCHIVE] Resposta direta não arquivada:",
+        error.message
+      );
+    });
 
-    if (messageRequestsAiImageGeneration(message)) {
-      response = await generateAiImageResponse({
-        message,
-        geminiClient: provider,
-      });
-    } else {
-      const contents =
-        await buildGeminiMultimodalContents(
+    return;
+  }
+
+   return runAiBackgroundTask(
+    message,
+    async () => {
+      if (!await canSend()) {
+        return;
+      }
+
+      await message.channel
+        .sendTyping()
+        .catch(() => {});
+
+      const recent =
+        await message.channel.messages.fetch({
+          limit: 20,
+        });
+
+      const history = [...recent.values()]
+        .filter(
+          item =>
+            !item.author.bot ||
+            item.author.id === client.user.id
+        )
+        .sort(
+          (a, b) =>
+            a.createdTimestamp -
+            b.createdTimestamp
+        )
+        .map(
+          item =>
+            `${new Date(
+              item.createdTimestamp
+            ).toISOString()} | ${item.author.id} | ${item.content}\n${
+              item.embeds
+                .map(
+                  embed =>
+                    formatEmbedForAI(
+                      embed
+                    )
+                )
+                .join("\n")
+            }`
+        )
+        .join("\n")
+        .slice(-24000);
+
+      const intelligenceMessage =
+        await buildUnifiedAiMessage(
           message,
-          `Continue esta conversa. Não alegue consultar registros não presentes.\nHISTÓRICO:\n${history}`
+          client
         );
 
-      let lastError = new Error(
-        "Nenhum modelo disponível."
-      );
+      const response =
+        await generateIAResponse({
+          message:
+            intelligenceMessage,
+
+          client,
+        });
+
+      if (!await canSend()) {
+        return;
+      }
+
+      const image =
+        isAiGeneratedImageResponse(
+          response
+        )
+          ? response
+          : null;
+
+      let text =
+        image
+          ? image.text
+          : String(response);
+
+      if (
+        !image &&
+        iaResponseLooksRepeated(
+          message.channelId,
+          text
+        )
+      ) {
+        text =
+          buildNonRepeatedFallback(
+            message
+          );
+      }
+
+      const chunks =
+        splitDiscordText(
+          text
+        );
+
+      if (text) {
+        rememberAiResponse(
+          message.channelId,
+          text
+        );
+      }
 
       for (
-        const model of
-        GEMINI_CHAT_MODEL_FALLBACKS
+        let i = 0;
+        i < chunks.length;
+        i++
       ) {
         if (
-          isGeminiChatModelTemporarilyBlocked(model)
+          i === 0 &&
+          !await canSend()
         ) {
-          continue;
-        }
-
-        try {
-          const result =
-            await provider.models.generateContent({
-              model,
-              contents,
-
-              config: {
-                maxOutputTokens: 4096,
-              },
-            });
-
-          if (!result.text?.trim()) {
-            throw new Error(
-              "Resposta vazia."
-            );
-          }
-
-          response = result.text;
           break;
-        } catch (error) {
-          lastError = error;
-
-          if (isGeminiKeyError(error)) {
-            break;
-          }
         }
-      }
 
-      if (!response) {
-        throw lastError;
-      }
-    }
-
-    if (!await canSend()) {
-      return;
-    }
-
-    const image =
-      isAiGeneratedImageResponse(response)
-        ? response
-        : null;
-
-    const text =
-      image ? image.text : String(response);
-
-    const chunks =
-      splitDiscordText(text);
-
-    for (let i = 0; i < chunks.length; i++) {
-      if (
-        i === 0 &&
-        !await canSend()
-      ) {
-        break;
-      }
-
-      const sent =
-        await message.channel.send({
+        const responsePayload = {
           content:
             chunks[i],
 
           ...(i === 0 && image
             ? {
                 files: [
-                  buildAiGeneratedImageAttachment(image),
+                  buildAiGeneratedImageAttachment(
+                    image
+                  ),
                 ],
               }
             : {}),
@@ -25065,17 +26299,33 @@ async function scDirectConversation(
             parse: [],
             repliedUser: false,
           },
-        });
+        };
 
-      await scArchiveMessage(client, sent)
-        .catch(error => {
+        const sent =
+          (
+            i === 0 &&
+            message.channel.type ===
+              ChannelType.DM
+          )
+            ? await message.reply(
+                responsePayload
+              )
+            : await message.channel.send(
+                responsePayload
+              );
+
+        await scArchiveMessage(
+          client,
+          sent
+        ).catch(error => {
           console.error(
             "[IA ARCHIVE] Resposta não arquivada:",
             error.message
           );
         });
+      }
     }
-  });
+  );
 }
 
 async function scHandleAdditionalMessageV1(
@@ -25131,17 +26381,26 @@ async function scHandleAdditionalMessageV1(
     return true;
   }
 
-  await scArchiveMessage(client, message)
-    .catch(error => {
-      console.error(
-        "[IA ARCHIVE] Entrada não arquivada:",
-        error.message
-      );
-    });
+  const inputArchivePromise =
+    scArchiveMessage(
+      client,
+      message
+    )
+      .catch(error => {
+        console.error(
+          "[IA ARCHIVE] Entrada não arquivada:",
+          error.message
+        );
+
+        return null;
+      });
 
   if (isDm) {
     try {
-      await scDirectConversation(message, client);
+      await scDirectConversation(
+        message,
+        client
+      );
     } catch (error) {
       console.error(
         "[IA DM]",
@@ -25157,10 +26416,14 @@ async function scHandleAdditionalMessageV1(
           repliedUser: false,
         },
       });
+    } finally {
+      await inputArchivePromise;
     }
 
     return true;
   }
+
+  await inputArchivePromise;
 
   const openerId =
     extractTicketOpenerIdFromText(
@@ -25918,8 +27181,48 @@ async function scArchiveMessage(
       const index =
         scMemory.data.indexes[scope] || [];
 
+      const conversationPerson =
+        !message.author.bot
+          ? message.author
+          : (
+              message.channel.recipient ||
+              message.mentions?.repliedUser ||
+              null
+            );
+
+      const conversationUserId =
+        String(
+          conversationPerson?.id ||
+          message.channel.recipientId ||
+          message.author.id ||
+          ""
+        );
+
+      const conversationUsername =
+        conversationPerson?.username ||
+        (
+          conversationUserId ===
+          message.author.id
+            ? message.author.username
+            : "não identificado"
+        );
+
       const record = {
         version: 2,
+
+        conversationPerson: {
+          id:
+            conversationUserId ||
+            null,
+
+          mention:
+            conversationUserId
+              ? `<@${conversationUserId}>`
+              : null,
+
+          username:
+            conversationUsername,
+        },
 
         key,
 
@@ -26309,9 +27612,21 @@ if (!answer) {
             message.createdTimestamp
           )
           .setDescription(
-            `Autor: ${record.author.id}\nLocal: ${record.channelName}\nMensagem: ${message.id}\n[Origem](${message.url})`
+            `Pessoa: ${record.conversationPerson?.mention || "não identificada"} | ID: ${record.conversationPerson?.id || "não identificado"}\nAutor da mensagem: ${record.author.displayName} | ID: ${record.author.id}\nLocal: ${record.channelName}\nMensagem: ${message.id}\n[Origem](${message.url})`
           )
           .addFields(
+            {
+              name:
+                "👤 Pessoa da conversa",
+
+              value:
+                record.conversationPerson?.id
+                  ? `${record.conversationPerson.mention}\nID Discord: \`${record.conversationPerson.id}\`\nUsername: @${record.conversationPerson.username}`
+                  : "Não identificada",
+
+              inline:
+                false,
+            },
             {
               name:
                 "Direção",
@@ -26530,11 +27845,35 @@ async function scRecallRecords(message) {
         b.at - a.at
     );
 
+  const isPersonQuery =
+    messageWantsPersonIntelligence(
+      message
+    );
+
+  const semanticallyRelevant =
+    ranked
+      .filter(
+        entry =>
+          entry.score > 0
+      )
+      .slice(
+        0,
+        3
+      );
+
+  const continuityFallback =
+    isPersonQuery
+      ? []
+      : entries.slice(
+          0,
+          2
+        );
+
   const selected = [
     ...new Map(
       [
-        ...entries.slice(0, 3),
-        ...ranked.slice(0, 3),
+        ...continuityFallback,
+        ...semanticallyRelevant,
       ].map(entry => [
         entry.id,
         entry,
@@ -27404,12 +28743,16 @@ const batchedMessages =
 // scArchiveMessage() reaproveita o registro existente.
 // =====================================================
 
-for (const batchedMessage of batchedMessages) {
-  await scArchiveMessage(
-    client,
-    batchedMessage
+const acceptedArchivePromise =
+  Promise.allSettled(
+    batchedMessages.map(
+      batchedMessage =>
+        scArchiveMessage(
+          client,
+          batchedMessage
+        )
+    )
   );
-}
 
 const combinedContent =
   buildAiCombinedMessageContent(
@@ -27894,6 +29237,10 @@ for (
         // =====================================================
         // MEMÓRIA DA CONVERSA
         // =====================================================
+
+        // Garante que o arquivamento iniciado antes da geração
+        // terminou, sem ter atrasado a resposta visível ao usuário.
+        await acceptedArchivePromise;
 
         // Mantém o log histórico no Discord.
         await sendConversationMemoryLog(
