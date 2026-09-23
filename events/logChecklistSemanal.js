@@ -46,6 +46,13 @@ const AUTH_CONFIG = {
   ]
 };
 
+// ✅ Exceções totais do checklist
+// Macedo (usuário) e cargo Owner podem gerenciar em qualquer dia/horário.
+const CHECKLIST_FULL_OVERRIDE = {
+  USER_IDS: ["660311795327828008"],
+  ROLE_IDS: ["1262262852949905408"] // owner
+};
+
 // ✅ HIERARQUIA DE GESTÃO (Maior para Menor)
 // O sistema ignora cargos externos (como Destaque) e foca apenas nestes IDs para a filtragem.
 const HIERARCHY_ORDER = [
@@ -72,6 +79,35 @@ function getManagementRank(member) {
     if (member.roles.cache.has(HIERARCHY_ORDER[i])) return i;
   }
   return Infinity;
+}
+
+function hasChecklistFullOverride(member) {
+  if (!member) return false;
+
+  if (CHECKLIST_FULL_OVERRIDE.USER_IDS.includes(member.id)) return true;
+
+  return member.roles.cache.some(role =>
+    CHECKLIST_FULL_OVERRIDE.ROLE_IDS.includes(role.id)
+  );
+}
+
+function canManageChecklistTarget(actorMember, targetMember) {
+  if (!actorMember || !targetMember) return false;
+
+  // Ninguém bate a própria log por este sistema.
+  if (actorMember.id === targetMember.id) return false;
+
+  // Macedo e Owner podem gerenciar qualquer outro membro.
+  if (hasChecklistFullOverride(actorMember)) return true;
+
+  const actorRank = getManagementRank(actorMember);
+  const targetRank = getManagementRank(targetMember);
+
+  // Quem não está na hierarquia de gestão não gerencia terceiros pela Visão Geral.
+  if (actorRank === Infinity) return false;
+
+  // Só pode gerenciar cargos ABAIXO. Mesmo nível ou acima ficam bloqueados.
+  return targetRank > actorRank;
 }
 
 // ===============================
@@ -695,9 +731,16 @@ async function syncWeekData(client, force = false) {
 
 function hasPermission(member, type = "use") {
   if (!member) return false;
+  if (hasChecklistFullOverride(member)) return true;
   if (AUTH_CONFIG.SUPER_IDS.includes(member.id)) return true;
-  if (type === "admin") return false; // Somente Super IDs para admin total
-  return member.roles.cache.some(r => AUTH_CONFIG.ROLE_IDS.includes(r.id));
+
+  const hasAuthorizedRole = member.roles.cache.some(r => AUTH_CONFIG.ROLE_IDS.includes(r.id));
+
+  // A Visão Geral também pode ser aberta pelos responsáveis autorizados.
+  // A hierarquia é filtrada depois, membro por membro.
+  if (type === "admin") return hasAuthorizedRole;
+
+  return hasAuthorizedRole;
 }
 
 // ===============================
@@ -884,28 +927,36 @@ if (customId === "logcheck_my_members") {
   
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-// ✅ Apenas lê a semana atual.
-// Não sincroniza aqui para não reconstruir/zerar ao abrir gerenciamento.
+// ✅ Lê a semana atual sem mexer em progresso já conferido.
 const weekKey = weekKeyFromDateSP();
-const checklist = readChecklistWeek(weekKey);
-const data = checklist.weeks?.[weekKey] || { responsaveis: {} };
-const myData = data.responsaveis?.[interaction.user.id];
+let checklist = readChecklistWeek(weekKey);
+let data = checklist.weeks?.[weekKey] || { responsaveis: {} };
+let myData = data.responsaveis?.[interaction.user.id];
 
-  if (!myData || Object.keys(myData.members || {}).length === 0) {
+// Se ainda ninguém bateu log, tenta uma sincronização segura antes de afirmar
+// que o responsável não possui membros. Isso corrige lista inicial desatualizada
+// sem reconstruir uma semana que já tenha progresso.
+if ((!myData || Object.keys(myData.members || {}).length === 0) && !weekHasCheckedMembers(data)) {
+  checklist = await syncWeekData(client, true);
+  data = checklist.weeks?.[weekKey] || { responsaveis: {} };
+  myData = data.responsaveis?.[interaction.user.id];
+}
+
+if (!myData || Object.keys(myData.members || {}).length === 0) {
   return interaction.editReply({
-    content: "❌ Você não possui membros vinculados a você nesta semana.",
+    content: "❌ Você não possui membros vinculados a você nesta lista semanal.",
     components: []
   });
 }
 
-  return sendPersonalManager(interaction, interaction.user.id, weekKey, myData);
+return sendPersonalManager(interaction, interaction.user.id, weekKey, myData);
 }
 
-  // 3. Visão Geral (Admin)
+  // 3. Visão Geral (Responsáveis autorizados)
   if (customId === "logcheck_admin_view") {
   const guild = interaction.guild;
   if (!hasPermission(interaction.member, "admin")) {
-    return interaction.reply({ content: "❌ Apenas Administradores podem acessar a visão geral.", flags: MessageFlags.Ephemeral });
+    return interaction.reply({ content: "❌ Você não possui permissão para acessar a visão geral.", flags: MessageFlags.Ephemeral });
   }
   
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -916,62 +967,92 @@ const weekKey = weekKeyFromDateSP();
 const checklist = readChecklistWeek(weekKey);
 const data = checklist.weeks?.[weekKey] || { responsaveis: {} };
 
-    // ✅ PRE-FETCH EM MASSA (Otimização de Performance)
-    const respIds = Object.keys(data.responsaveis || {});
-    if (respIds.length > 0) {
-      await guild.members.fetch({ user: respIds }).catch(() => {});
+    // ✅ PRE-FETCH dos responsáveis + membros para aplicar a hierarquia corretamente.
+    const idsToFetch = new Set();
+    for (const [respId, content] of Object.entries(data.responsaveis || {})) {
+      idsToFetch.add(respId);
+      Object.keys(content?.members || {}).forEach(memberId => idsToFetch.add(memberId));
+    }
+
+    if (idsToFetch.size > 0) {
+      await guild.members.fetch({ user: Array.from(idsToFetch) }).catch(() => {});
     }
 
   const options = [];
-    const respEntries = Object.entries(data.responsaveis || {});
+  const respEntries = Object.entries(data.responsaveis || {});
     
-    for (const [respId, content] of respEntries) {
-  const pending = Object.values(content?.members || {}).filter(m => !m.checked).length;
+  for (const [respId, content] of respEntries) {
+    // Pela Visão Geral, o responsável não abre o próprio grupo.
+    // Para o próprio grupo existe o botão "Gerenciar Meus Membros".
+    if (respId === interaction.user.id) continue;
 
-      const member = guild.members.cache.get(respId);
-  const rawName = member?.displayName || member?.user?.username || respId;
+    const manageableMembers = Object.entries(content?.members || {}).filter(([memberId]) => {
+      const targetMember = guild.members.cache.get(memberId);
+      return canManageChecklistTarget(interaction.member, targetMember);
+    });
 
-  options.push({
-    label: String(rawName).slice(0, 100),
-    value: `logcheck_inspect:${respId}:${weekKey}`,
-        description: String(pending === 0 ? "Logs conferidos" : `${pending} pendências encontradas`).slice(0, 100),
-    emoji: pending === 0 ? "🟢" : "🔴"
-  });
-}
+    // Não mostra um responsável se o usuário não puder gerenciar ninguém daquele grupo.
+    if (manageableMembers.length === 0) continue;
 
-if (options.length === 0) {
-      return interaction.editReply({
-    content: "❌ Nenhum responsável encontrado na semana atual.",
-  });
-}
+    const pending = manageableMembers.filter(([_, memberData]) => !memberData.checked).length;
 
-const select = new ActionRowBuilder().addComponents(
-  new StringSelectMenuBuilder()
-    .setCustomId("logcheck_admin_select")
-    .setPlaceholder("Selecione um responsável para inspecionar")
-    .addOptions(options.slice(0, 25))
-);
+    const member = guild.members.cache.get(respId);
+    const rawName = member?.displayName || member?.user?.username || respId;
 
+    options.push({
+      label: String(rawName).slice(0, 100),
+      value: `logcheck_inspect:${respId}:${weekKey}`,
+      description: String(pending === 0 ? "Logs permitidas conferidas" : `${pending} pendências permitidas`).slice(0, 100),
+      emoji: pending === 0 ? "🟢" : "🔴"
+    });
+  }
+
+  if (options.length === 0) {
     return interaction.editReply({
-  content: "👑 **Painel Administrativo**\nEscolha um responsável para ver detalhes ou alterar status.",
-  components: [select],
-});
+      content: "❌ Nenhum grupo com membros abaixo da sua hierarquia está disponível para você.",
+      components: []
+    });
+  }
+
+  const select = new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId("logcheck_admin_select")
+      .setPlaceholder("Selecione outro responsável para inspecionar")
+      .addOptions(options.slice(0, 25))
+  );
+
+  return interaction.editReply({
+    content: "👑 **Visão Geral**\nEscolha outro responsável. Você só poderá alterar membros abaixo da sua hierarquia.",
+    components: [select],
+  });
   }
 
   // 4. Seleção Admin
 if (interaction.isStringSelectMenu() && customId === "logcheck_admin_select") {
+  if (!hasPermission(interaction.member, "admin")) {
+    return interaction.reply({ content: "❌ Você não possui permissão para usar a visão geral.", flags: MessageFlags.Ephemeral });
+  }
+
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   const [, respId, weekKey] = interaction.values[0].split(":");
+
+  if (respId === interaction.user.id) {
+    return interaction.editReply({
+      content: "❌ Na Visão Geral você não pode abrir o próprio grupo. Use **Gerenciar Meus Membros**.",
+      components: []
+    });
+  }
+
   const checklist = loadJSON(CHECKLIST_FILE, { weeks: {} });
   const data = checklist.weeks?.[weekKey]?.responsaveis?.[respId];
 
- if (!data) {
-  return interaction.editReply({
-    content: "❌ Não encontrei dados desse responsável na semana atual.",
-    components: []
-  });
-}
+  if (!data) {
+    return interaction.editReply({
+      content: "❌ Não encontrei dados desse responsável na semana atual.",
+      components: []
+    });
+  }
 
   return sendPersonalManager(interaction, respId, weekKey, data, true);
 }
@@ -981,7 +1062,15 @@ if (interaction.isStringSelectMenu() && customId === "logcheck_admin_select") {
     const [, respId, weekKey] = customId.split(":");
     const memberId = interaction.values[0];
 
-    if (!isLogWindowOpenSP()) {
+    if (!hasPermission(interaction.member)) {
+      return interaction.reply({
+        content: "❌ Você não possui permissão para alterar este checklist.",
+        flags: MessageFlags.Ephemeral
+      });
+    }
+
+    // Macedo e Owner ignoram a janela de domingo a quarta.
+    if (!hasChecklistFullOverride(interaction.member) && !isLogWindowOpenSP()) {
       return interaction.reply({
         content:
           "🔒 O período para bater log está fechado.\n" +
@@ -990,17 +1079,31 @@ if (interaction.isStringSelectMenu() && customId === "logcheck_admin_select") {
       });
     }
 
-if (!interaction.deferred && !interaction.replied) {
-  await interaction.deferUpdate().catch(() => {});
-}
-
     const checklist = loadJSON(CHECKLIST_FILE, { weeks: {} });
     const weekData = checklist.weeks?.[weekKey];
     const respData = weekData?.responsaveis?.[respId];
     const member = respData?.members?.[memberId];
 
     if (!weekData || !respData || !member) {
-      return true;
+      return interaction.reply({
+        content: "❌ Não encontrei esse vínculo na lista semanal atual.",
+        flags: MessageFlags.Ephemeral
+      });
+    }
+
+    const targetMember =
+      interaction.guild.members.cache.get(memberId) ||
+      await interaction.guild.members.fetch(memberId).catch(() => null);
+
+    if (!canManageChecklistTarget(interaction.member, targetMember)) {
+      return interaction.reply({
+        content: "❌ Você não pode bater a própria log, nem a log de alguém da mesma hierarquia ou acima da sua.",
+        flags: MessageFlags.Ephemeral
+      });
+    }
+
+    if (!interaction.deferred && !interaction.replied) {
+      await interaction.deferUpdate().catch(() => {});
     }
 
     const oldStatus = member.checked;
@@ -1010,26 +1113,34 @@ if (!interaction.deferred && !interaction.replied) {
 
     saveJSON(CHECKLIST_FILE, checklist);
 
-// Log Auditoria
-await logAudit(client, interaction.user, respId, memberId, member.checked, weekKey);
+    // Log Auditoria
+    await logAudit(client, interaction.user, respId, memberId, member.checked, weekKey);
 
-// Recarrega do arquivo já salvo
-const refreshedChecklist = loadJSON(CHECKLIST_FILE, { weeks: {} });
-const updatedData = refreshedChecklist.weeks?.[weekKey]?.responsaveis?.[respId];
+    // Recarrega do arquivo já salvo
+    const refreshedChecklist = loadJSON(CHECKLIST_FILE, { weeks: {} });
+    const updatedData = refreshedChecklist.weeks?.[weekKey]?.responsaveis?.[respId];
 
-if (updatedData) {
-  await sendPersonalManager(interaction, respId, weekKey, updatedData, interaction.user.id !== respId, true);
-}
+    if (updatedData) {
+      await sendPersonalManager(interaction, respId, weekKey, updatedData, interaction.user.id !== respId, true);
+    }
 
-await refreshMainPanel(client, interaction.guild);
-return true;
+    await refreshMainPanel(client, interaction.guild);
+    return true;
   }
 
   // 6. Ações em Massa
   if (interaction.isButton() && customId.startsWith("logcheck_bulk:")) {
     const [, action, respId, weekKey] = customId.split(":");
 
-    if (!isLogWindowOpenSP()) {
+    if (!hasPermission(interaction.member)) {
+      return interaction.reply({
+        content: "❌ Você não possui permissão para alterar este checklist.",
+        flags: MessageFlags.Ephemeral
+      });
+    }
+
+    // Macedo e Owner ignoram a janela de domingo a quarta.
+    if (!hasChecklistFullOverride(interaction.member) && !isLogWindowOpenSP()) {
       return interaction.reply({
         content:
           "🔒 O período para bater log está fechado.\n" +
@@ -1038,38 +1149,71 @@ return true;
       });
     }
 
-if (!interaction.deferred && !interaction.replied) {
-  await interaction.deferUpdate().catch(() => {});
-}
-
     const checklist = loadJSON(CHECKLIST_FILE, { weeks: {} });
     const weekData = checklist.weeks?.[weekKey];
     const respData = weekData?.responsaveis?.[respId];
     const members = respData?.members;
 
     if (!weekData || !respData || !members) {
-      return true;
+      return interaction.reply({
+        content: "❌ Não encontrei esse grupo na lista semanal atual.",
+        flags: MessageFlags.Ephemeral
+      });
     }
 
-    Object.keys(members).forEach(mId => {
+    const memberIds = Object.keys(members);
+    if (memberIds.length > 0) {
+      await interaction.guild.members.fetch({ user: memberIds }).catch(() => {});
+    }
+
+    // Em massa também respeita a hierarquia: nunca altera a própria log,
+    // nem membros do mesmo nível/acima. Macedo e Owner ignoram apenas a hierarquia,
+    // mas continuam sem bater a própria log.
+    const allowedMemberIds = memberIds.filter(memberId => {
+      const targetMember = interaction.guild.members.cache.get(memberId);
+      return canManageChecklistTarget(interaction.member, targetMember);
+    });
+
+    if (allowedMemberIds.length === 0) {
+      return interaction.reply({
+        content: "❌ Não há membros abaixo da sua hierarquia disponíveis para esta ação.",
+        flags: MessageFlags.Ephemeral
+      });
+    }
+
+    if (!interaction.deferred && !interaction.replied) {
+      await interaction.deferUpdate().catch(() => {});
+    }
+
+    allowedMemberIds.forEach(mId => {
       members[mId].checked = action === "check";
       members[mId].checkedAt = action === "check" ? Date.now() : null;
       members[mId].checkedBy = action === "check" ? interaction.user.id : null;
     });
 
-   saveJSON(CHECKLIST_FILE, checklist);
-await logAudit(client, interaction.user, respId, "TODOS", action === "check", weekKey, true);
+    saveJSON(CHECKLIST_FILE, checklist);
 
-// Recarrega do arquivo já salvo
-const refreshedChecklist = loadJSON(CHECKLIST_FILE, { weeks: {} });
-const updatedData = refreshedChecklist.weeks?.[weekKey]?.responsaveis?.[respId];
+    // Se todos os vinculados eram permitidos, mantém o log em massa tradicional.
+    // Se houve filtro hierárquico, registra individualmente para a recuperação por auditoria
+    // não alterar alguém que o responsável não podia gerenciar.
+    if (allowedMemberIds.length === memberIds.length) {
+      await logAudit(client, interaction.user, respId, "TODOS", action === "check", weekKey, true);
+    } else {
+      for (const memberId of allowedMemberIds) {
+        await logAudit(client, interaction.user, respId, memberId, action === "check", weekKey, false);
+      }
+    }
 
-if (updatedData) {
-  await sendPersonalManager(interaction, respId, weekKey, updatedData, interaction.user.id !== respId, true);
-}
+    // Recarrega do arquivo já salvo
+    const refreshedChecklist = loadJSON(CHECKLIST_FILE, { weeks: {} });
+    const updatedData = refreshedChecklist.weeks?.[weekKey]?.responsaveis?.[respId];
 
-await refreshMainPanel(client, interaction.guild);
-return true;
+    if (updatedData) {
+      await sendPersonalManager(interaction, respId, weekKey, updatedData, interaction.user.id !== respId, true);
+    }
+
+    await refreshMainPanel(client, interaction.guild);
+    return true;
   }
 
   return false;
@@ -1079,18 +1223,41 @@ return true;
 async function sendPersonalManager(interaction, respId, weekKey, data, isAdmin = false, isUpdate = false) {
   const guild = interaction.guild;
   const isSunday = getNowSP().getDay() === 0;
-  const members = Object.entries(data?.members || {});
-  const checked = members.filter(([_, m]) => m.checked).length;
-  const total = members.length;
+  const allMembers = Object.entries(data?.members || {});
 
-  // ✅ Pre-fetch focado apenas nos membros deste responsável específico
+  // ✅ Pre-fetch focado nos membros deste responsável específico.
+  // A filtragem hierárquica precisa dos cargos carregados antes de montar a tela.
   const idsToFetch = new Set([respId]);
-  members.forEach(([mId]) => idsToFetch.add(mId));
-  members.forEach(([_, m]) => { if (m.checkedBy) idsToFetch.add(m.checkedBy); });
+  allMembers.forEach(([mId]) => idsToFetch.add(mId));
+  allMembers.forEach(([_, m]) => { if (m.checkedBy) idsToFetch.add(m.checkedBy); });
 
   if (idsToFetch.size > 0 && guild) {
     await guild.members.fetch({ user: Array.from(idsToFetch) }).catch(() => {});
   }
+
+  const members = isAdmin
+    ? allMembers.filter(([id]) => {
+        const targetMember = guild.members.cache.get(id);
+        return canManageChecklistTarget(interaction.member, targetMember);
+      })
+    : allMembers;
+
+  if (isAdmin && members.length === 0) {
+    const payload = {
+      content: "❌ Este grupo não possui membros que você possa gerenciar pela sua hierarquia.",
+      embeds: [],
+      components: []
+    };
+
+    if (interaction.deferred || interaction.replied) {
+      return interaction.editReply(payload).catch(console.error);
+    }
+
+    return interaction.reply({ ...payload, flags: MessageFlags.Ephemeral }).catch(console.error);
+  }
+
+  const checked = members.filter(([_, m]) => m.checked).length;
+  const total = members.length;
 
   const respMember = guild.members.cache.get(respId);
   const respDisplay = respMember?.displayName || respMember?.user?.username || respId;
@@ -1113,7 +1280,7 @@ async function sendPersonalManager(interaction, respId, weekKey, data, isAdmin =
   }
 
   const embed = new EmbedBuilder()
-.setTitle(`📖 Gerenciar Logs: ${respDisplay}`)
+    .setTitle(`📖 Gerenciar Logs: ${respDisplay}`)
     .setDescription(
       `📅 **Semana:** ${getWeekRangeLabel(weekKey)}\n` +
       `📊 **Progresso:** ${checked}/${total} conferidos\n\n` +
@@ -1124,7 +1291,6 @@ async function sendPersonalManager(interaction, respId, weekKey, data, isAdmin =
   const selectOptions = [];
   for (const [id, m] of members) {
     const member = guild.members.cache.get(id);
-
     const rawName = member?.displayName || member?.user?.username || id;
 
     selectOptions.push({
@@ -1145,14 +1311,14 @@ async function sendPersonalManager(interaction, respId, weekKey, data, isAdmin =
         .addOptions(selectOptions.slice(0, 25))
     );
     components.push(select);
+
+    const buttons = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`logcheck_bulk:check:${respId}:${weekKey}`).setLabel("Marcar Todos").setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(`logcheck_bulk:uncheck:${respId}:${weekKey}`).setLabel("Desmarcar Todos").setStyle(ButtonStyle.Danger)
+    );
+
+    components.push(buttons);
   }
-
-  const buttons = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`logcheck_bulk:check:${respId}:${weekKey}`).setLabel("Marcar Todos").setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId(`logcheck_bulk:uncheck:${respId}:${weekKey}`).setLabel("Desmarcar Todos").setStyle(ButtonStyle.Danger)
-  );
-
-  components.push(buttons);
 
   const payload = { embeds: [embed], components };
 
