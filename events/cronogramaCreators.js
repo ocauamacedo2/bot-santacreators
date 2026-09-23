@@ -705,8 +705,27 @@ async function logChange(client, guild, user, oldState, newState, changeType) {
 // ================= EXPORTS =================
 
 // ================= CONSULTA EXTERNA — IA / SISTEMAS =================
-export function getCronogramaData() {
-  const state = loadState();
+export function getCronogramaData({ strict = false } = {}) {
+  const state = strict
+    ? JSON.parse(fs.readFileSync(STATE_FILE, "utf8"))
+    : loadState();
+
+  if (
+    strict &&
+    (
+      !state ||
+      typeof state !== "object" ||
+      !state.schedule ||
+      !state.madrugada ||
+      Array.isArray(state.schedule) ||
+      Array.isArray(state.madrugada)
+    )
+  ) {
+    throw new Error(
+      "Estado oficial do cronograma ausente ou inválido."
+    );
+  }
+
   const dates = getWeekDates();
 
   const days = [
