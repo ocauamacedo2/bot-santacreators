@@ -134,6 +134,31 @@ const TEAM_ROLES = new Set([
   ROLE.EQUIPE_CREATORS,
 ]);
 
+// Cargos institucionais acompanhados para registrar mudança real de função.
+// Isso não altera permissões nem a fase da Evolução; apenas cria histórico
+// para o feedback semanal conseguir saber quando houve troca de cargo.
+const TRACKED_EVOLUTION_ROLE_IDS = new Set([
+  ROLE.OWNER,
+
+  // Responsáveis
+  "1414651836861907006", // cargo geral Responsáveis
+  ROLE.RESP_CREATORS,
+  ROLE.RESP_INFLU,
+  ROLE.RESP_LIDER,
+
+  // Gestão / Coordenação
+  "1352385500614234134", // cargo geral Gestão/Coordenação
+  ROLE.COORD_CREATORS,
+  ROLE.GESTOR_CREATORS,
+  ROLE.MANAGER_CREATORS,
+  ROLE.SOCIAL_MEDIAS,
+
+  // Equipe
+  ROLE.EQUIPE_MANAGER,
+  ROLE.EQUIPE_SOCIAL_MEDIAS,
+  ROLE.EQUIPE_CREATORS,
+]);
+
 /*
  * Quem pode avaliar os tópicos da Equipe.
  */
@@ -1723,6 +1748,67 @@ async function performSync(
    * desçam para canais inferiores.
    */
 
+  const stateUpdatedAt =
+    new Date()
+      .toISOString();
+
+  const currentTrackedRoleIds =
+    [...TRACKED_EVOLUTION_ROLE_IDS]
+      .filter(
+        roleId =>
+          member.roles.cache.has(
+            roleId
+          )
+      )
+      .sort();
+
+  const previousTrackedRoleIds =
+    Array.isArray(
+      userState.currentTrackedRoleIds
+    )
+      ? [...userState.currentTrackedRoleIds]
+          .map(String)
+          .sort()
+      : [];
+
+  if (
+    previousTrackedRoleIds.length > 0 &&
+    JSON.stringify(previousTrackedRoleIds) !==
+      JSON.stringify(currentTrackedRoleIds)
+  ) {
+    userState.previousTrackedRoleIds =
+      previousTrackedRoleIds;
+
+    userState.lastRoleChangeAt =
+      stateUpdatedAt;
+
+    userState.lastRoleChangeReason =
+      reason;
+  }
+
+  userState.currentTrackedRoleIds =
+    currentTrackedRoleIds;
+
+  const tierChanged =
+    previousActiveTier > 0 &&
+    previousActiveTier !== tier;
+
+  if (tierChanged) {
+    userState.previousTier =
+      previousActiveTier;
+
+    userState.lastTierChangeAt =
+      stateUpdatedAt;
+
+    userState.lastTierChangeReason =
+      reason;
+
+    userState.lastTierDirection =
+      tier > previousActiveTier
+        ? "up"
+        : "down";
+  }
+
   userState.activeTier =
     tier;
 
@@ -1730,8 +1816,7 @@ async function performSync(
     activeThread.id;
 
   userState.updatedAt =
-    new Date()
-      .toISOString();
+    stateUpdatedAt;
 
   userState.lastReason =
     reason;
@@ -2147,6 +2232,34 @@ export async function getEvolutionFeedbackContext(
     tier: result.tier,
     thread,
     threads,
+
+    previousTier:
+      Number(record?.previousTier || 0) || null,
+
+    lastTierChangeAt:
+      record?.lastTierChangeAt || null,
+
+    lastTierChangeReason:
+      record?.lastTierChangeReason || null,
+
+    lastTierDirection:
+      record?.lastTierDirection || null,
+
+    currentTrackedRoleIds:
+      Array.isArray(record?.currentTrackedRoleIds)
+        ? [...record.currentTrackedRoleIds]
+        : [],
+
+    previousTrackedRoleIds:
+      Array.isArray(record?.previousTrackedRoleIds)
+        ? [...record.previousTrackedRoleIds]
+        : [],
+
+    lastRoleChangeAt:
+      record?.lastRoleChangeAt || null,
+
+    lastRoleChangeReason:
+      record?.lastRoleChangeReason || null,
   };
 }
 

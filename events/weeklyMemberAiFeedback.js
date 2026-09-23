@@ -15,6 +15,7 @@ import {
 import {
   getStatsForUser,
   getWeeklyRanking,
+  MIN_POINTS_WEEK,
 } from "./scGeralWeeklyRanking.js";
 
 import {
@@ -27,12 +28,89 @@ const TZ = "America/Sao_Paulo";
 // CARGOS ACOMPANHADOS
 // =====================================================
 
-const TARGET_ROLE_IDS = new Set([
-  "1352429001188180039", // Equipe Creators
-  "1352385500614234134", // Coordenação / Gestão
-  "1414651836861907006", // Responsáveis
-]);
+const MACEDO_USER_ID =
+  "660311795327828008";
 
+const SANTACREATORS_GUILD_ID =
+  "1262262852782129183";
+
+const MEMBER_TIER_GROUPS = [
+  {
+    key:
+      "responsaveis",
+
+    label:
+      "Responsáveis",
+
+    roles: [
+      "1414651836861907006",
+      "1352407252216184833",
+      "1262262852949905409",
+      "1352408327983861844",
+    ],
+  },
+
+  {
+    key:
+      "gestao",
+
+    label:
+      "Gestão / Coordenação",
+
+    roles: [
+      "1352385500614234134",
+      "1388976155830255697",
+      "1388976094920704141",
+      "1388975939161161728",
+      "1388976314253312100",
+    ],
+  },
+
+  {
+    key:
+      "equipe",
+
+    label:
+      "Equipe",
+
+    roles: [
+      "1352429001188180039",
+      "1392678638176043029",
+      "1387253972661964840",
+    ],
+  },
+];
+
+const TARGET_ROLE_IDS =
+  new Set(
+    MEMBER_TIER_GROUPS.flatMap(
+      group =>
+        group.roles
+    )
+  );
+
+function getMemberTierGroup(
+  member
+) {
+  if (
+    !member?.roles?.cache
+  ) {
+    return null;
+  }
+
+  return (
+    MEMBER_TIER_GROUPS.find(
+      group =>
+        group.roles.some(
+          roleId =>
+            member.roles.cache.has(
+              roleId
+            )
+        )
+    ) ||
+    null
+  );
+}
 // =====================================================
 // ARQUIVOS
 // =====================================================
@@ -425,7 +503,8 @@ function loadFeedbackState() {
     );
 
   return {
-    version: 1,
+    version:
+      2,
 
     manual:
       state?.manual &&
@@ -439,6 +518,27 @@ function loadFeedbackState() {
       typeof state.automatic ===
         "object"
         ? state.automatic
+        : {},
+
+    operations:
+      state?.operations &&
+      typeof state.operations ===
+        "object"
+        ? state.operations
+        : {},
+
+    roleHistory:
+      state?.roleHistory &&
+      typeof state.roleHistory ===
+        "object"
+        ? state.roleHistory
+        : {},
+
+    telemetry:
+      state?.telemetry &&
+      typeof state.telemetry ===
+        "object"
+        ? state.telemetry
         : {},
   };
 }
@@ -1485,7 +1585,7 @@ async function collectFormsHistory(
         -20
       );
 
-  return {
+   return {
     currentWeek,
     previousContext,
 
@@ -1493,6 +1593,1101 @@ async function collectFormsHistory(
       collected.size,
   };
 }
+
+// =====================================================
+// INTELIGÊNCIA OPERACIONAL SEMANAL
+// =====================================================
+//
+// Lê somente estados persistentes já produzidos pelos sistemas.
+// Assim o feedback não precisa varrer todos os canais para cada membro.
+//
+// Fontes:
+// - sc_approval_operational.json: Hall, Eventos Diários e demais sistemas
+//   que usam approvalOperationalIntelligence.js;
+// - sc_logs_checklist.json: quem bateu as logs e em quanto tempo;
+// - reg_manager_weekly_stats.json: aprovações de Registro Manager.
+// =====================================================
+
+const APPROVAL_OPERATIONAL_FILES = [
+  path.join(
+    PERSIST_DATA_DIR,
+    "sc_approval_operational.json"
+  ),
+
+  path.join(
+    APP_DATA_DIR,
+    "sc_approval_operational.json"
+  ),
+].filter(
+  (
+    file,
+    index,
+    array
+  ) =>
+    array.indexOf(
+      file
+    ) ===
+    index
+);
+
+const CHECKLIST_FILES = [
+  path.join(
+    APP_DATA_DIR,
+    "sc_logs_checklist.json"
+  ),
+
+  path.join(
+    PERSIST_DATA_DIR,
+    "sc_logs_checklist.json"
+  ),
+].filter(
+  (
+    file,
+    index,
+    array
+  ) =>
+    array.indexOf(
+      file
+    ) ===
+    index
+);
+
+const MANAGER_WEEKLY_FILES = [
+  path.resolve(
+    process.cwd(),
+    "reg_manager_weekly_stats.json"
+  ),
+
+  path.join(
+    APP_DATA_DIR,
+    "reg_manager_weekly_stats.json"
+  ),
+
+  path.join(
+    PERSIST_DATA_DIR,
+    "reg_manager_weekly_stats.json"
+  ),
+].filter(
+  (
+    file,
+    index,
+    array
+  ) =>
+    array.indexOf(
+      file
+    ) ===
+    index
+);
+
+function readFirstExistingJson(
+  files,
+  fallback
+) {
+  for (
+    const file of
+    files
+  ) {
+    try {
+      if (
+        !fs.existsSync(
+          file
+        )
+      ) {
+        continue;
+      }
+
+      const parsed =
+        JSON.parse(
+          fs.readFileSync(
+            file,
+            "utf8"
+          )
+        );
+
+      if (
+        parsed &&
+        typeof parsed ===
+          "object"
+      ) {
+        return parsed;
+      }
+    } catch (
+      error
+    ) {
+      console.warn(
+        `[Weekly Member Feedback] Falha ao ler ${file}:`,
+        error?.message ||
+          error
+      );
+    }
+  }
+
+  return fallback;
+}
+
+function getWeekBoundsMs(
+  weekKey
+) {
+  const startMs =
+    new Date(
+      `${weekKey}T03:00:00.000Z`
+    ).getTime();
+
+  return {
+    startMs,
+
+    endMs:
+      startMs +
+      7 *
+        24 *
+        60 *
+        60 *
+        1000,
+  };
+}
+
+function medianNumber(
+  values
+) {
+  const valid =
+    values
+      .map(
+        Number
+      )
+      .filter(
+        Number.isFinite
+      )
+      .sort(
+        (
+          a,
+          b
+        ) =>
+          a -
+          b
+      );
+
+  if (
+    !valid.length
+  ) {
+    return null;
+  }
+
+  const middle =
+    Math.floor(
+      valid.length /
+      2
+    );
+
+  return (
+    valid.length %
+      2 ===
+    0
+      ? (
+          valid[
+            middle -
+            1
+          ] +
+          valid[
+            middle
+          ]
+        ) /
+        2
+      : valid[
+          middle
+        ]
+  );
+}
+
+function formatOperationalDuration(
+  ms
+) {
+  if (
+    !Number.isFinite(
+      Number(
+        ms
+      )
+    )
+  ) {
+    return null;
+  }
+
+  const minutes =
+    Math.max(
+      0,
+      Math.round(
+        Number(
+          ms
+        ) /
+        60000
+      )
+    );
+
+  if (
+    minutes <
+    60
+  ) {
+    return `${minutes} min`;
+  }
+
+  const hours =
+    Math.floor(
+      minutes /
+      60
+    );
+
+  const rest =
+    minutes %
+    60;
+
+  return rest
+    ? `${hours}h ${rest}min`
+    : `${hours}h`;
+}
+
+function buildApprovalOperationalWeekSnapshot(
+  weekKey
+) {
+  const state =
+    readFirstExistingJson(
+      APPROVAL_OPERATIONAL_FILES,
+      {
+        systems: {},
+      }
+    );
+
+  const {
+    startMs,
+    endMs,
+  } =
+    getWeekBoundsMs(
+      weekKey
+    );
+
+  const byUser =
+    {};
+
+  for (
+    const [
+      system,
+      systemState,
+    ] of
+    Object.entries(
+      state?.systems ||
+      {}
+    )
+  ) {
+    for (
+      const request of
+      systemState?.requests ||
+      []
+    ) {
+      const approverId =
+        String(
+          request?.approverId ||
+          ""
+        ).trim();
+
+      const decidedAt =
+        Number(
+          request?.decidedAt ||
+          0
+        );
+
+      if (
+        !approverId ||
+        !Number.isFinite(
+          decidedAt
+        ) ||
+        decidedAt <
+          startMs ||
+        decidedAt >=
+          endMs
+      ) {
+        continue;
+      }
+
+      byUser[
+        approverId
+      ] ??= {
+        total: 0,
+        approved: 0,
+        rejected: 0,
+        bySystem: {},
+        delaysMs: [],
+      };
+
+      const bucket =
+        byUser[
+          approverId
+        ];
+
+      const decision =
+        String(
+          request?.decision ||
+          "unknown"
+        )
+          .toLowerCase();
+
+      bucket.total++;
+
+      bucket.bySystem[
+        system
+      ] =
+        Number(
+          bucket
+            .bySystem
+            [
+              system
+            ] ||
+          0
+        ) +
+        1;
+
+      if (
+        decision ===
+          "approved" ||
+        decision ===
+          "pago"
+      ) {
+        bucket.approved++;
+      } else if (
+        decision ===
+          "rejected" ||
+        decision ===
+          "reprovado"
+      ) {
+        bucket.rejected++;
+      }
+
+      const createdAt =
+        Number(
+          request?.createdAt ||
+          0
+        );
+
+      const delayMs =
+        decidedAt -
+        createdAt;
+
+      if (
+        Number.isFinite(
+          delayMs
+        ) &&
+        createdAt >
+          0 &&
+        delayMs >=
+          0 &&
+        delayMs <=
+          30 *
+            24 *
+            60 *
+            60 *
+            1000
+      ) {
+        bucket
+          .delaysMs
+          .push(
+            delayMs
+          );
+      }
+    }
+  }
+
+  for (
+    const bucket of
+    Object.values(
+      byUser
+    )
+  ) {
+    bucket.medianDelayMs =
+      medianNumber(
+        bucket.delaysMs
+      );
+
+    delete bucket.delaysMs;
+  }
+
+  return {
+    byUser,
+  };
+}
+
+function buildChecklistWeekSnapshot(
+  weekKey
+) {
+  const state =
+    readFirstExistingJson(
+      CHECKLIST_FILES,
+      {
+        weeks: {},
+      }
+    );
+
+  const week =
+    state
+      ?.weeks
+      ?.[
+        weekKey
+      ] ||
+    null;
+
+  const byUser =
+    {};
+
+  const releasedAt =
+    Number(
+      week?.lastSyncedAt ||
+      0
+    ) ||
+    null;
+
+  for (
+    const responsible of
+    Object.values(
+      week
+        ?.responsaveis ||
+      {}
+    )
+  ) {
+    for (
+      const memberData of
+      Object.values(
+        responsible
+          ?.members ||
+        {}
+      )
+    ) {
+      if (
+        memberData
+          ?.checked !==
+        true
+      ) {
+        continue;
+      }
+
+      const checkedBy =
+        String(
+          memberData?.checkedBy ||
+          ""
+        ).trim();
+
+      const checkedAt =
+        Number(
+          memberData?.checkedAt ||
+          0
+        ) ||
+        null;
+
+      if (
+        !checkedBy
+      ) {
+        continue;
+      }
+
+      byUser[
+        checkedBy
+      ] ??= {
+        total: 0,
+        checkedAt: [],
+        delaysFromReleaseMs: [],
+      };
+
+      const bucket =
+        byUser[
+          checkedBy
+        ];
+
+      bucket.total++;
+
+      if (
+        checkedAt
+      ) {
+        bucket
+          .checkedAt
+          .push(
+            checkedAt
+          );
+
+        if (
+          releasedAt &&
+          checkedAt >=
+            releasedAt
+        ) {
+          bucket
+            .delaysFromReleaseMs
+            .push(
+              checkedAt -
+              releasedAt
+            );
+        }
+      }
+    }
+  }
+
+  for (
+    const bucket of
+    Object.values(
+      byUser
+    )
+  ) {
+    bucket.firstCheckedAt =
+      bucket
+        .checkedAt
+        .length
+        ? Math.min(
+            ...bucket.checkedAt
+          )
+        : null;
+
+    bucket.medianDelayFromReleaseMs =
+      medianNumber(
+        bucket
+          .delaysFromReleaseMs
+      );
+
+    delete bucket.checkedAt;
+    delete bucket.delaysFromReleaseMs;
+  }
+
+  return {
+    releasedAt,
+    byUser,
+  };
+}
+
+function buildManagerWeekSnapshot(
+  weekKey
+) {
+  const state =
+    readFirstExistingJson(
+      MANAGER_WEEKLY_FILES,
+      {
+        weeks: {},
+      }
+    );
+
+  const week =
+    state
+      ?.weeks
+      ?.[
+        weekKey
+      ] ||
+    null;
+
+  return {
+    approvedBy:
+      week?.approvedBy &&
+      typeof week.approvedBy ===
+        "object"
+        ? week.approvedBy
+        : {},
+  };
+}
+
+function buildResponsibleActivitySnapshot(
+  weekKey,
+  previousWeekKey
+) {
+  return {
+    current: {
+      approvals:
+        buildApprovalOperationalWeekSnapshot(
+          weekKey
+        ),
+
+      checklist:
+        buildChecklistWeekSnapshot(
+          weekKey
+        ),
+
+      managers:
+        buildManagerWeekSnapshot(
+          weekKey
+        ),
+    },
+
+    previous: {
+      approvals:
+        buildApprovalOperationalWeekSnapshot(
+          previousWeekKey
+        ),
+
+      checklist:
+        buildChecklistWeekSnapshot(
+          previousWeekKey
+        ),
+
+      managers:
+        buildManagerWeekSnapshot(
+          previousWeekKey
+        ),
+    },
+  };
+}
+
+function summarizeOperationalUser(
+  activity,
+  userId
+) {
+  const id =
+    String(
+      userId ||
+      ""
+    );
+
+  const approval =
+    activity
+      ?.approvals
+      ?.byUser
+      ?.[
+        id
+      ] ||
+    {};
+
+  const checklist =
+    activity
+      ?.checklist
+      ?.byUser
+      ?.[
+        id
+      ] ||
+    {};
+
+  const managerApprovals =
+    Number(
+      activity
+        ?.managers
+        ?.approvedBy
+        ?.[
+          id
+        ] ||
+      0
+    );
+
+  return {
+    approvalTotal:
+      Number(
+        approval?.total ||
+        0
+      ),
+
+    approvalApproved:
+      Number(
+        approval?.approved ||
+        0
+      ),
+
+    approvalRejected:
+      Number(
+        approval?.rejected ||
+        0
+      ),
+
+    approvalBySystem:
+      approval?.bySystem ||
+      {},
+
+    approvalMedianDelayMs:
+      Number.isFinite(
+        Number(
+          approval
+            ?.medianDelayMs
+        )
+      )
+        ? Number(
+            approval
+              .medianDelayMs
+          )
+        : null,
+
+    checklistTotal:
+      Number(
+        checklist?.total ||
+        0
+      ),
+
+    checklistFirstCheckedAt:
+      checklist
+        ?.firstCheckedAt ||
+      null,
+
+    checklistMedianDelayFromReleaseMs:
+      Number.isFinite(
+        Number(
+          checklist
+            ?.medianDelayFromReleaseMs
+        )
+      )
+        ? Number(
+            checklist
+              .medianDelayFromReleaseMs
+          )
+        : null,
+
+    managerApprovals,
+  };
+}
+
+function buildOperationalEvidenceText({
+  member,
+  guild,
+  responsibleActivity,
+}) {
+  const group =
+    getMemberTierGroup(
+      member
+    );
+
+  const current =
+    summarizeOperationalUser(
+      responsibleActivity
+        ?.current,
+      member.id
+    );
+
+  const previous =
+    summarizeOperationalUser(
+      responsibleActivity
+        ?.previous,
+      member.id
+    );
+
+  const macedo =
+    summarizeOperationalUser(
+      responsibleActivity
+        ?.current,
+      MACEDO_USER_ID
+    );
+
+  const lines =
+    [];
+
+  const approvalDelay =
+    formatOperationalDuration(
+      current
+        .approvalMedianDelayMs
+    );
+
+  const checklistDelay =
+    formatOperationalDuration(
+      current
+        .checklistMedianDelayFromReleaseMs
+    );
+
+  lines.push(
+    `Decisões estruturadas nesta semana: ${current.approvalTotal}. ` +
+    `Semana anterior: ${previous.approvalTotal}.` +
+    (
+      approvalDelay
+        ? ` Mediana de decisão: ${approvalDelay}.`
+        : ""
+    )
+  );
+
+  lines.push(
+    `Registros Manager aprovados nesta semana: ${current.managerApprovals}. ` +
+    `Semana anterior: ${previous.managerApprovals}.`
+  );
+
+  lines.push(
+    `Logs de membros confirmadas pela pessoa nesta semana: ${current.checklistTotal}. ` +
+    `Semana anterior: ${previous.checklistTotal}.` +
+    (
+      checklistDelay
+        ? ` Mediana após a liberação da lista: ${checklistDelay}.`
+        : ""
+    )
+  );
+
+  if (
+    group?.key ===
+      "responsaveis" &&
+    member.id !==
+      MACEDO_USER_ID
+  ) {
+    lines.push(
+      `Referência Macedo nas mesmas fontes: ${macedo.approvalTotal} decisão(ões) estruturada(s), ` +
+      `${macedo.managerApprovals} aprovação(ões) Manager e ${macedo.checklistTotal} confirmação(ões) de log. ` +
+      `Use isso como referência de descentralização: se Macedo aparece fazendo mais tarefas que deveriam estar distribuídas, ` +
+      `o feedback pode cobrar maior iniciativa dos responsáveis, sem tratar Macedo como meta numérica obrigatória.`
+    );
+  }
+
+  const peerRows =
+    [];
+
+  if (
+    group
+  ) {
+    const candidateIds =
+      new Set([
+        ...Object.keys(
+          responsibleActivity
+            ?.current
+            ?.approvals
+            ?.byUser ||
+          {}
+        ),
+
+        ...Object.keys(
+          responsibleActivity
+            ?.current
+            ?.checklist
+            ?.byUser ||
+          {}
+        ),
+
+        ...Object.keys(
+          responsibleActivity
+            ?.current
+            ?.managers
+            ?.approvedBy ||
+          {}
+        ),
+      ]);
+
+    for (
+      const userId of
+      candidateIds
+    ) {
+      if (
+        userId ===
+        member.id
+      ) {
+        continue;
+      }
+
+      const other =
+        guild
+          .members
+          .cache
+          .get(
+            userId
+          );
+
+      if (
+        !other ||
+        other.user?.bot
+      ) {
+        continue;
+      }
+
+      if (
+        getMemberTierGroup(
+          other
+        )?.key !==
+        group.key
+      ) {
+        continue;
+      }
+
+      const summary =
+        summarizeOperationalUser(
+          responsibleActivity
+            .current,
+          userId
+        );
+
+      peerRows.push({
+        userId,
+
+        total:
+          summary
+            .approvalTotal +
+          summary
+            .managerApprovals +
+          summary
+            .checklistTotal,
+      });
+    }
+  }
+
+  if (
+    peerRows.length
+  ) {
+    const ownTotal =
+      current
+        .approvalTotal +
+      current
+        .managerApprovals +
+      current
+        .checklistTotal;
+
+    const above =
+      peerRows.filter(
+        row =>
+          row.total >
+          ownTotal
+      ).length;
+
+    const average =
+      peerRows.reduce(
+        (
+          sum,
+          row
+        ) =>
+          sum +
+          row.total,
+        ownTotal
+      ) /
+      (
+        peerRows.length +
+        1
+      );
+
+    lines.push(
+      `Comparação operacional da área ${group.label}: ${above} colega(s) da amostra aparecem acima desta pessoa em volume ` +
+      `de decisões/logs rastreadas; média comparável ${average.toFixed(1)} ação(ões). ` +
+      `Isso mede movimentação, não qualidade humana isoladamente.`
+    );
+  }
+
+  return lines.join(
+    "\n"
+  );
+}
+
+// =====================================================
+// COMPARAÇÕES COM DADOS EFETIVAMENTE REGISTRADOS
+// =====================================================
+function buildVerifiedWeeklyComparisons({
+  guild,
+  member,
+  ranking,
+  responsibleActivity,
+}) {
+  const group =
+    getMemberTierGroup(
+      member
+    );
+
+  const lines =
+    [];
+
+  if (
+    group &&
+    Array.isArray(
+      ranking
+    )
+  ) {
+    const own =
+      ranking.find(
+        item =>
+          String(
+            item?.userId ||
+            ""
+          ) ===
+          member.id
+      );
+
+    const peers =
+      ranking.filter(
+        item => {
+          const id =
+            String(
+              item?.userId ||
+              ""
+            );
+
+          if (
+            !id ||
+            id ===
+              member.id
+          ) {
+            return false;
+          }
+
+          const other =
+            guild
+              .members
+              .cache
+              .get(
+                id
+              );
+
+          if (
+            !other ||
+            other.user?.bot
+          ) {
+            return false;
+          }
+
+          return (
+            getMemberTierGroup(
+              other
+            )?.key ===
+              group.key &&
+            Number.isFinite(
+              Number(
+                item?.points
+              )
+            )
+          );
+        }
+      );
+
+    if (
+      own &&
+      peers.length
+    ) {
+      const ownPoints =
+        Number(
+          own.points ||
+          0
+        );
+
+      const comparable =
+        [
+          own,
+          ...peers,
+        ];
+
+      const average =
+        comparable.reduce(
+          (
+            total,
+            item
+          ) =>
+            total +
+            Number(
+              item.points ||
+              0
+            ),
+          0
+        ) /
+        comparable.length;
+
+      const higher =
+        peers.filter(
+          item =>
+            Number(
+              item.points ||
+              0
+            ) >
+            ownPoints
+        ).length;
+
+      lines.push(
+        `Comparação da área ${group.label}: ${ownPoints} ponto(s); ` +
+        `${higher} colega(s) da amostra estão acima e a média comparável é ${average.toFixed(1)}. ` +
+        `Use o ranking como contexto de volume, não como prova isolada de qualidade.`
+      );
+    } else {
+      lines.push(
+        `Comparação de pontos com ${group.label}: amostra insuficiente nesta consulta.`
+      );
+    }
+  }
+
+  return lines
+    .filter(
+      Boolean
+    )
+    .join(
+      "\n"
+    );
+}
+
 // =====================================================
 // COLETA INDIVIDUAL
 // =====================================================
@@ -1657,6 +2852,164 @@ async function collectMemberFacts({
         () => null
       );
 
+  const responsibleActivity =
+    buildResponsibleActivitySnapshot(
+      weekKey,
+      previousWeekKey
+    );
+
+  const weeklyMinimumPoints =
+    Math.max(
+      0,
+      Number(
+        MIN_POINTS_WEEK ||
+        0
+      )
+    );
+
+  const weekBounds =
+    getWeekBoundsMs(
+      weekKey
+    );
+
+  const lastRoleChangeMs =
+    Date.parse(
+      String(
+        evolutionContext?.lastRoleChangeAt ||
+        ""
+      )
+    );
+
+  const lastTierChangeMs =
+    Date.parse(
+      String(
+        evolutionContext?.lastTierChangeAt ||
+        ""
+      )
+    );
+
+  const roleChangedThisWeek =
+    Number.isFinite(
+      lastRoleChangeMs
+    ) &&
+    lastRoleChangeMs >=
+      weekBounds.startMs &&
+    lastRoleChangeMs <
+      weekBounds.endMs;
+
+  const tierChangedThisWeek =
+    Number.isFinite(
+      lastTierChangeMs
+    ) &&
+    lastTierChangeMs >=
+      weekBounds.startMs &&
+    lastTierChangeMs <
+      weekBounds.endMs;
+
+  const roleNamesFromIds =
+    roleIds =>
+      (
+        roleIds ||
+        []
+      )
+        .map(
+          roleId =>
+            guild
+              .roles
+              .cache
+              .get(
+                String(
+                  roleId
+                )
+              )
+              ?.name ||
+            String(
+              roleId
+            )
+        )
+        .filter(
+          Boolean
+        );
+
+  const currentTrackedRoleNames =
+    roleNamesFromIds(
+      evolutionContext
+        ?.currentTrackedRoleIds ||
+      []
+    );
+
+  const previousTrackedRoleNames =
+    roleNamesFromIds(
+      evolutionContext
+        ?.previousTrackedRoleIds ||
+      []
+    );
+
+  const feedbackRoleGroup =
+    getMemberTierGroup(
+      member
+    );
+
+  const previousTotal =
+    sumSources(
+      previousSources
+    );
+
+  const operationalEvidence =
+    buildOperationalEvidenceText({
+      member,
+      guild,
+      responsibleActivity,
+    });
+
+  const comparisonEvidence =
+    buildVerifiedWeeklyComparisons({
+      guild,
+      member,
+      ranking:
+        weeklyRanking,
+      responsibleActivity,
+    });
+
+  const roleChangeEvidenceParts =
+    [];
+
+  if (
+    roleChangedThisWeek
+  ) {
+    roleChangeEvidenceParts.push(
+      `Mudança de cargo/função registrada nesta semana. Antes: ${
+        previousTrackedRoleNames.join(", ") ||
+        "não identificado"
+      }. Agora: ${
+        currentTrackedRoleNames.join(", ") ||
+        "não identificado"
+      }.`
+    );
+  }
+
+  if (
+    tierChangedThisWeek
+  ) {
+    const tierDirection =
+      evolutionContext?.lastTierDirection ===
+        "up"
+        ? "subida/promoção"
+        : evolutionContext?.lastTierDirection ===
+            "down"
+          ? "descida/rebaixamento"
+          : "mudança de fase";
+
+    roleChangeEvidenceParts.push(
+      `Mudança de fase da Evolução registrada nesta semana: ${tierDirection}.`
+    );
+  }
+
+  const roleChangeEvidence =
+    roleChangeEvidenceParts.join(
+      "\n"
+    );
+
   const consolidatedCurrentTotal =
     sumSources(
       currentSources
@@ -1789,10 +3142,7 @@ async function collectMemberFacts({
 
     rankingCurrentTotal,
 
-    previousTotal:
-      sumSources(
-        previousSources
-      ),
+    previousTotal,
 
     formsData,
 
@@ -1821,6 +3171,52 @@ async function collectMemberFacts({
     rankingSize,
 
     rankingPoints,
+
+    weeklyMinimumPoints,
+
+    reachedWeeklyMinimum:
+      weeklyMinimumPoints >
+      0
+        ? rankingPoints >=
+          weeklyMinimumPoints
+        : null,
+
+    comparisonGroupKey:
+      feedbackRoleGroup?.key ||
+      null,
+
+    comparisonGroupLabel:
+      feedbackRoleGroup?.label ||
+      null,
+
+    roleChangedThisWeek,
+
+    tierChangedThisWeek,
+
+    currentTrackedRoleNames,
+
+    previousTrackedRoleNames,
+
+    lastRoleChangeAt:
+      evolutionContext
+        ?.lastRoleChangeAt ||
+      null,
+
+    lastTierChangeAt:
+      evolutionContext
+        ?.lastTierChangeAt ||
+      null,
+
+    lastTierDirection:
+      evolutionContext
+        ?.lastTierDirection ||
+      null,
+
+    operationalEvidence,
+
+    roleChangeEvidence,
+
+    comparisonEvidence,
 
     weekKey,
 
@@ -2110,6 +3506,46 @@ IMPORTANTE:
 - Se estiver em 1º lugar, NÃO descreva a pessoa como pouco ativa, apagada ou parada se os próprios registros atuais confirmarem atividade.
 - Não considere posição alta como prova automática de qualidade.
 - Use as fontes individuais para explicar de onde veio essa movimentação.
+
+=====================================================
+META MÍNIMA E MOVIMENTAÇÃO DE CARGO
+=====================================================
+
+Grupo atual:
+${facts.comparisonGroupLabel || "não identificado"}
+
+Meta mínima semanal oficial:
+${
+  facts.weeklyMinimumPoints > 0
+    ? `${facts.weeklyMinimumPoints} pontos`
+    : "não localizada"
+}
+
+Situação da meta:
+${
+  facts.reachedWeeklyMinimum === true
+    ? "atingida"
+    : facts.reachedWeeklyMinimum === false
+      ? "ainda não atingida"
+      : "sem dado suficiente"
+}
+
+Mudança de cargo detectada nesta semana:
+${
+  facts.roleChangedThisWeek
+    ? `SIM. Antes: ${facts.previousTrackedRoleNames.join(", ") || "não identificado"}. Agora: ${facts.currentTrackedRoleNames.join(", ") || "não identificado"}.`
+    : "não confirmada nesta semana"
+}
+
+Mudança de fase da Evolução nesta semana:
+${
+  facts.tierChangedThisWeek
+    ? `SIM. Direção registrada: ${facts.lastTierDirection || "não informada"}.`
+    : "não confirmada nesta semana"
+}
+
+Se houve promoção ou mudança real de função, reconheça isso naturalmente e avalie como a pessoa respondeu à nova responsabilidade.
+
 =====================================================
 SEMANA ANTERIOR
 =====================================================
@@ -2125,6 +3561,222 @@ ${facts.previousTotal}
 
 Compare somente quando existir base real.
 
+=====================================================
+COMPARAÇÕES VERIFICADAS
+=====================================================
+
+Grupo da pessoa:
+${facts.comparisonGroupLabel || "não identificado"}
+
+${facts.comparisonEvidence || "Ainda não há comparação confiável."}
+
+=====================================================
+ATUAÇÃO OPERACIONAL REAL
+=====================================================
+
+${facts.operationalEvidence || "Nenhuma evidência operacional adicional disponível."}
+
+=====================================================
+MUDANÇAS DE CARGO / EVOLUÇÃO DE FUNÇÃO
+=====================================================
+
+${facts.roleChangeEvidence || "Nenhuma mudança registrada."}
+
+=====================================================
+COMO USAR ESSAS COMPARAÇÕES
+=====================================================
+
+O feedback NÃO deve ser apenas Ranking.
+
+Ranking é somente uma das fontes.
+
+Compare a pessoa em três dimensões:
+
+1. COM ELA MESMA
+
+Compare:
+
+- semana atual;
+- semana anterior;
+- distribuição das atividades;
+- constância;
+- pontos;
+- feedbacks anteriores;
+- ações operacionais;
+- velocidade das ações quando houver timestamp real.
+
+Se a pessoa vinha melhor e caiu de forma clara, pode dizer isso.
+
+Se melhorou, diga exatamente EM QUE melhorou.
+
+Não use somente "subiu" ou "caiu".
+
+Explique o motivo.
+
+2. COM PESSOAS DO MESMO GRUPO
+
+Use o grupo:
+
+- Equipe;
+- Gestão / Coordenação;
+- Responsáveis.
+
+Não compare funções completamente diferentes como se tivessem a mesma obrigação.
+
+Se a pessoa estiver abaixo da média do próprio grupo em movimentação, pode contextualizar.
+
+Se estiver acima, reconheça.
+
+Mas pontuação sozinha NÃO prova qualidade.
+
+3. COM A RESPONSABILIDADE DO CARGO
+
+Para Equipe:
+
+observe principalmente:
+
+- participação;
+- registros;
+- constância;
+- qualidade apontada pelos feedbacks humanos;
+- cumprimento do mínimo;
+- evolução desde orientações anteriores.
+
+Para Gestão / Coordenação:
+
+além da própria participação, observe:
+
+- aprovações;
+- confirmações;
+- apoio aos membros;
+- logs;
+- ações operacionais;
+- acompanhamento;
+- retorno;
+- cobertura de tarefas.
+
+Para Responsáveis:
+
+o Ranking NÃO deve ser a fonte principal.
+
+Responsável deve ser analisado principalmente por:
+
+- acompanhamento da equipe;
+- alinhamentos realmente registrados;
+- aprovações realmente realizadas;
+- registros Manager tratados;
+- pagamentos tratados;
+- Halls/Eventos tratados quando aplicável;
+- logs/checklists batidos;
+- velocidade de resposta quando houver timestamp real;
+- atuação dos membros sob responsabilidade;
+- necessidade de outras pessoas cobrirem tarefas;
+- dependência do Macedo para executar tarefas operacionais.
+
+=====================================================
+MACEDO COMO REFERÊNCIA
+=====================================================
+
+Macedo não é um concorrente no Ranking.
+
+Ele é uma referência operacional e uma forma de medir distribuição da gestão.
+
+Se Macedo executou MUITO mais ações de gestão que um responsável ou membro da gestão,
+e essas ações são do mesmo tipo que estavam disponíveis para aquela função,
+isso pode ser mencionado de forma sincera.
+
+Exemplo de intenção:
+
+"A operação acabou ficando mais concentrada no Macedo nesta semana, enquanto a participação de X nas aprovações rastreadas ficou baixa."
+
+NÃO copie a frase automaticamente.
+
+Adapte aos fatos.
+
+Se a pessoa realizou 0 ações rastreadas em uma frente e Macedo realizou várias,
+não diga simplesmente que "não fez nada".
+
+Diga especificamente que não houve ação confirmada daquela pessoa NAQUELA FRENTE
+durante a janela rastreada.
+
+Se várias frentes relevantes mostrarem o mesmo padrão, aí sim o feedback pode dizer
+que a presença operacional como responsável ficou abaixo do esperado nesta semana.
+
+=====================================================
+SINCERIDADE
+=====================================================
+
+Não transforme todo feedback em elogio.
+
+Se a semana foi fraca, diga.
+
+Se o responsável teve pouca presença operacional, diga.
+
+Se terceiros precisaram bater várias logs que estavam vinculadas a ele, mencione.
+
+Se demorou bastante para executar ações e existem timestamps que provam isso, mencione.
+
+Se não atingiu o mínimo, diga que ainda não atingiu.
+
+Se ficou abaixo da própria semana anterior, contextualize.
+
+Se ficou abaixo dos colegas do mesmo grupo, contextualize.
+
+Se recebeu promoção ou mudança de cargo, considere que as responsabilidades mudaram.
+
+Também reconheça mérito REAL:
+
+- crescimento;
+- mais autonomia;
+- aprovação rápida;
+- constância;
+- diversidade de atuação;
+- apoio aos demais;
+- boa cobertura operacional;
+- melhora depois de orientação;
+- destaque dentro do próprio grupo.
+
+O objetivo não é humilhar.
+
+O objetivo é produzir um retorno honesto que ajude a pessoa a entender
+o que precisa fazer para chegar ao próximo cargo.
+
+=====================================================
+REGRAS DE EVIDÊNCIA
+=====================================================
+
+Use o histórico humano do Forms para interpretar comportamento e qualidade.
+
+Feedback humano continua tendo muito peso.
+
+A IA acrescenta a leitura operacional dela aos comentários humanos.
+
+Responsáveis podem não possuir muitos comentários humanos novos.
+
+Nesse caso, use atividade operacional, comparações, histórico e ações verificadas.
+
+NUNCA invente uma falha.
+
+Ausência de dado não significa automaticamente ausência de trabalho.
+
+Mas quando uma fonte rastreada teve atividade realizada por outras pessoas
+e a pessoa analisada possui zero naquela mesma fonte,
+isso É uma comparação operacional válida.
+
+Nunca invente:
+
+- clique;
+- aprovação;
+- alinhamento;
+- pagamento;
+- log;
+- atraso;
+- promoção;
+- meta;
+- presença;
+- comportamento.
+
+Só use o que estiver nas informações fornecidas acima.
 =====================================================
 FEEDBACK MANUAL ANTERIOR DESTA SEMANA
 =====================================================
@@ -2182,6 +3834,19 @@ Antes de escrever, faça internamente esta análise:
 Use essas respostas somente para construir a mensagem.
 
 Não exponha esse raciocínio.
+
+=====================================================
+TOM, FRANQUEZA E CONSELHO
+=====================================================
+
+- Escreva como alguém da gestão que realmente acompanha a pessoa.
+- Seja humano e direto, sem transformar o texto em relatório de planilha.
+- Quando os dados confirmarem queda, pouca movimentação ou meta não atingida, pode dizer claramente que a semana ficou abaixo do esperado.
+- Quando os dados confirmarem evolução, promoção, aumento de participação ou mais iniciativa, reconheça isso de forma específica.
+- Para Responsáveis, ausência de decisões/logs rastreados pode ser apontada como baixa movimentação NAS FONTES MEDIDAS, principalmente se colegas do mesmo grupo ou Macedo aparecem assumindo essas tarefas.
+- Nunca escreva "não fez nada" quando o que existe é apenas ausência de log. Prefira "não apareceu movimentação rastreada em...".
+- Termine com uma orientação concreta para a próxima semana: o que manter, o que corrigir e qual comportamento ajudaria a pessoa a ficar pronta para assumir mais responsabilidade ou avançar de função.
+- Não humilhe, não ironize e não elogie vazio. O feedback precisa ser útil e crível.
 
 =====================================================
 REGRAS DE VERDADE
@@ -3892,6 +5557,25 @@ Pontuação atual: ${facts.rankingPoints}`
 }
 
 =====================================================
+META MÍNIMA E MOVIMENTAÇÃO
+=====================================================
+
+Meta mínima semanal:
+${facts.weeklyMinimumPoints > 0 ? `${facts.weeklyMinimumPoints} pontos` : "não localizada"}
+
+Situação:
+${
+  facts.reachedWeeklyMinimum === true
+    ? "atingida"
+    : facts.reachedWeeklyMinimum === false
+      ? "ainda não atingida"
+      : "sem dado suficiente"
+}
+
+Mudança de cargo/função nesta semana:
+${facts.roleChangeEvidence || "não confirmada"}
+
+=====================================================
 SEMANA ANTERIOR
 =====================================================
 
@@ -3905,6 +5589,46 @@ Total anterior:
 
 ${facts.previousTotal}
 
+Comparações verificadas:
+${facts.comparisonEvidence || "Sem comparação confiável nesta consulta."}
+
+Atuação operacional rastreada:
+${facts.operationalEvidence || "Sem dados operacionais adicionais."}
+
+Mudanças de cargo/função registradas:
+${facts.roleChangeEvidence || "Nenhuma mudança registrada."}
+
+Use essas informações para produzir uma orientação realmente individual.
+
+Se a pessoa melhorou em relação à semana anterior, explique onde.
+
+Se caiu, explique onde.
+
+Se está abaixo do mínimo, diga com naturalidade.
+
+Se estiver abaixo do próprio grupo, contextualize sem transformar em competição.
+
+Se tiver aumentado a participação operacional, reconheça.
+
+Se tiver assumido um cargo novo, adapte a orientação à nova responsabilidade.
+
+Para responsáveis e gestão, não trate Ranking como principal indicador.
+
+Observe também:
+
+- aprovações;
+- checklists;
+- alinhamentos;
+- decisões;
+- acompanhamento;
+- velocidade comprovada;
+- necessidade de cobertura por terceiros.
+
+Nunca revele dados internos que a pessoa não deveria ver.
+
+Transforme a leitura em orientação prática.
+
+Não afirme ausência de trabalho em outras frentes sem evidência.
 Compare as semanas apenas quando existir base suficiente.
 
 Lembre que a semana atual ainda pode não ter terminado.
@@ -5258,6 +6982,14 @@ export function weeklyMemberAiFeedbackOnReady(
     true;
 
   ensureDataDir();
+
+  // =====================================================
+  // INTELIGÊNCIA OPERACIONAL
+  // =====================================================
+
+  installWeeklyFeedbackTelemetry(
+    client
+  );
 
   cron.schedule(
     AUTOMATIC_CRON,

@@ -30,6 +30,8 @@ import {
   syncEvolutionHierarchyForMember,
   isHistoricalEvolutionThread,
   restoreHistoricalEvolutionThread,
+  getEvolutionFeedbackContext,
+  withActiveEvolutionThread,
 } from "./evolutionHierarchy.js";
 
 const GUILD_ID = "1262262852782129183";
@@ -83,6 +85,27 @@ const MANAGE_PERMS_USERS = [
   "660311795327828008", // eu
   "1262262852949905408", // owner
 ];
+
+// Cargos que mudam a fase ativa da Evolução.
+const EVOLUTION_PROFILE_ROLE_IDS = new Set([
+  // Equipe
+  "1352429001188180039",
+  "1392678638176043029",
+  "1387253972661964840",
+
+  // Gestão / Coordenação
+  "1352385500614234134",
+  "1388976155830255697",
+  "1388976094920704141",
+  "1388975939161161728",
+  "1388976314253312100",
+
+  // Responsáveis
+  "1414651836861907006",
+  "1352407252216184833",
+  "1262262852949905409",
+  "1352408327983861844",
+]);
 
 // ✅ Cargos para IGNORAR no ranking/cobrança de feedback
 const EXCLUDE_FEEDBACK_ROLES = [
@@ -205,6 +228,530 @@ function hasPermission(member, userId) {
   return Boolean(byRole || byUser);
 }
 
+// =====================================================
+// ESPELHO CANÔNICO DO FORMS NO TÓPICO ATIVO
+// =====================================================
+//
+// REGRA:
+//
+// 1. O Forms ORIGINAL continua sendo a fonte oficial.
+// 2. Se o tópico original já for o ativo, não duplica.
+// 3. Se a pessoa subir de fase/cargo, cria ou atualiza
+//    um espelho COMPLETO no tópico ativo.
+// 4. Os botões do espelho continuam apontando para o
+//    tópico original.
+// 5. Se a pessoa mudar novamente de fase, os botões do
+//    espelho antigo são desativados.
+// 6. O antigo resumo SC_FORMS_AREA é removido para não
+//    gerar duplicação.
+// =====================================================
+
+async function syncFormsCreatorActiveMirror(
+  client,
+  {
+    originalThreadId,
+    registration,
+    reason = "Sincronização do FormsCreator com o tópico ativo",
+  }
+) {
+  const normalizedOriginalThreadId =
+    String(
+      originalThreadId ||
+      ""
+    ).trim();
+
+  const userId =
+    String(
+      registration?.userId ||
+      ""
+    ).trim();
+
+  if (
+    !normalizedOriginalThreadId ||
+    !userId
+  ) {
+    return {
+      ok: false,
+      status: "skipped",
+    };
+  }
+
+  const originalThread =
+    await client.channels
+      .fetch(
+        normalizedOriginalThreadId
+      )
+      .catch(
+        () => null
+      );
+
+  if (
+    !originalThread ||
+    !originalThread.isTextBased?.()
+  ) {
+    throw new Error(
+      "Tópico original do FormsCreator não encontrado."
+    );
+  }
+
+  let sourceMessage =
+    registration?.messageId
+      ? await originalThread.messages
+          .fetch(
+            registration.messageId
+          )
+          .catch(
+            () => null
+          )
+      : null;
+
+  if (
+    sourceMessage &&
+    sourceMessage.author?.id !==
+      client.user?.id
+  ) {
+    sourceMessage =
+      null;
+  }
+
+  if (!sourceMessage) {
+    const recent =
+      await originalThread.messages
+        .fetch({
+          limit: 100,
+        })
+        .catch(
+          () => null
+        );
+
+    sourceMessage =
+      recent?.find(
+        message =>
+          isFormsCreatorMainRegisterMessage(
+            message,
+            client
+          )
+      ) ||
+      null;
+  }
+
+  if (
+    !sourceMessage ||
+    !sourceMessage.embeds?.[0]
+  ) {
+    throw new Error(
+      "Mensagem principal do FormsCreator não encontrada para sincronizar o tópico ativo."
+    );
+  }
+
+  registration.messageId =
+    sourceMessage.id;
+
+  const persistRegistration =
+    () => {
+      const latestState =
+        readState();
+
+      latestState.registrations ||= {};
+
+      latestState.registrations[
+        normalizedOriginalThreadId
+      ] = {
+        ...(
+          latestState.registrations[
+            normalizedOriginalThreadId
+          ] ||
+          {}
+        ),
+
+        ...registration,
+      };
+
+      writeState(
+        latestState
+      );
+    };
+
+  const disablePreviousMirror =
+    async () => {
+      const previousThreadId =
+        registration
+          ?.activeMirrorThreadId;
+
+      const previousMessageId =
+        registration
+          ?.activeMirrorMessageId;
+
+      if (
+        !previousThreadId ||
+        !previousMessageId
+      ) {
+        return;
+      }
+
+      const previousThread =
+        await client.channels
+          .fetch(
+            previousThreadId
+          )
+          .catch(
+            () => null
+          );
+
+      const previousMessage =
+        previousThread
+          ?.isTextBased?.()
+          ? await previousThread.messages
+              .fetch(
+                previousMessageId
+              )
+              .catch(
+                () => null
+              )
+          : null;
+
+      if (
+        previousMessage &&
+        previousMessage.author?.id ===
+          client.user?.id
+      ) {
+        await previousMessage
+          .edit({
+            components: [],
+          })
+          .catch(
+            () => {}
+          );
+      }
+    };
+
+  const evolution =
+    await getEvolutionFeedbackContext(
+      client,
+      userId,
+      {
+        guildId:
+          GUILD_ID,
+
+        originalThreadId:
+          normalizedOriginalThreadId,
+
+        reason,
+      }
+    );
+
+  if (
+    !evolution?.thread ||
+    evolution.tier ==
+      null
+  ) {
+    throw new Error(
+      "Não foi possível confirmar o tópico ativo do FormsCreator."
+    );
+  }
+
+  // =====================================================
+  // O ORIGINAL JÁ É O TÓPICO ATIVO
+  // =====================================================
+
+  if (
+    evolution.thread.id ===
+    normalizedOriginalThreadId
+  ) {
+    await disablePreviousMirror();
+
+    registration.activeMirrorThreadId =
+      null;
+
+    registration.activeMirrorMessageId =
+      null;
+
+    delete registration.activeAreaThreadId;
+    delete registration.activeAreaMessageId;
+
+    persistRegistration();
+
+    return {
+      ok: true,
+      status: "original_is_active",
+      threadId:
+        normalizedOriginalThreadId,
+      messageId:
+        sourceMessage.id,
+    };
+  }
+
+  return await withActiveEvolutionThread(
+    client,
+    userId,
+    {
+      tier:
+        evolution.tier,
+
+      thread:
+        evolution.thread,
+    },
+
+    async (
+      activeThread
+    ) => {
+      // =====================================================
+      // DESATIVA O ESPELHO DA FASE ANTERIOR
+      // =====================================================
+
+      if (
+        registration
+          .activeMirrorThreadId &&
+        registration
+          .activeMirrorThreadId !==
+          activeThread.id
+      ) {
+        await disablePreviousMirror();
+      }
+
+      const marker =
+        `SC_FORMS_ACTIVE_CARD:${userId}:${normalizedOriginalThreadId}`;
+
+      const legacyAreaMarker =
+        `SC_FORMS_AREA:${userId}`;
+
+      let mirrorMessage =
+        (
+          registration
+            .activeMirrorThreadId ===
+              activeThread.id &&
+          registration
+            .activeMirrorMessageId
+        )
+          ? await activeThread.messages
+              .fetch(
+                registration
+                  .activeMirrorMessageId
+              )
+              .catch(
+                () => null
+              )
+          : null;
+
+      const recent =
+        await activeThread.messages
+          .fetch({
+            limit: 100,
+          })
+          .catch(
+            () => null
+          );
+
+      if (
+        !mirrorMessage &&
+        recent
+      ) {
+        mirrorMessage =
+          recent.find(
+            message =>
+              message.author?.id ===
+                client.user?.id &&
+              message.embeds?.[0]
+                ?.footer?.text ===
+                marker
+          ) ||
+          null;
+      }
+
+      const mirrorEmbed =
+        EmbedBuilder.from(
+          sourceMessage.embeds[0]
+        );
+
+      const fields =
+        Array.isArray(
+          mirrorEmbed.data.fields
+        )
+          ? [
+              ...mirrorEmbed.data.fields,
+            ]
+          : [];
+
+      const originalLink =
+        `https://discord.com/channels/${GUILD_ID}/${normalizedOriginalThreadId}/${sourceMessage.id}`;
+
+      const originalLinkField = {
+        name:
+          "🔗 Registro original",
+        value:
+          `[Abrir Forms original](${originalLink})`,
+        inline:
+          false,
+      };
+
+      const linkFieldIndex =
+        fields.findIndex(
+          field =>
+            String(
+              field?.name ||
+              ""
+            ) ===
+            "🔗 Registro original"
+        );
+
+      if (
+        linkFieldIndex >=
+        0
+      ) {
+        fields[
+          linkFieldIndex
+        ] =
+          originalLinkField;
+      } else {
+        fields.push(
+          originalLinkField
+        );
+      }
+
+      mirrorEmbed
+        .setFields(
+          fields
+        )
+        .setFooter({
+          text:
+            marker,
+        });
+
+      // =====================================================
+      // BOTÕES DO ESPELHO
+      // =====================================================
+      //
+      // IMPORTANTE:
+      // todos apontam para o tópico ORIGINAL.
+      // =====================================================
+
+      const editRow =
+        new ActionRowBuilder()
+          .addComponents(
+            new ButtonBuilder()
+              .setCustomId(
+                `editar_id_${normalizedOriginalThreadId}`
+              )
+              .setLabel(
+                "✏️ Editar ID/Passaporte"
+              )
+              .setStyle(
+                ButtonStyle.Secondary
+              ),
+
+            new ButtonBuilder()
+              .setCustomId(
+                `editar_area_${normalizedOriginalThreadId}`
+              )
+              .setLabel(
+                "✏️ Editar Área de Interesse"
+              )
+              .setStyle(
+                ButtonStyle.Secondary
+              )
+          );
+
+      const statusRow =
+        new ActionRowBuilder()
+          .addComponents(
+            new ButtonBuilder()
+              .setCustomId(
+                `fc_toggle_status:${normalizedOriginalThreadId}:${userId}:${registration.active ? "inactive" : "active"}`
+              )
+              .setLabel(
+                registration.active
+                  ? "Desligar do Projeto"
+                  : "Ligar ao Projeto"
+              )
+              .setStyle(
+                registration.active
+                  ? ButtonStyle.Danger
+                  : ButtonStyle.Success
+              )
+          );
+
+      const payload = {
+        embeds: [
+          mirrorEmbed,
+        ],
+
+        components: [
+          editRow,
+          statusRow,
+        ],
+
+        allowedMentions: {
+          parse: [],
+        },
+      };
+
+      const posted =
+        mirrorMessage
+          ? await mirrorMessage.edit(
+              payload
+            )
+          : await activeThread.send(
+              payload
+            );
+
+      // =====================================================
+      // REMOVE O RESUMO ANTIGO DA ÁREA
+      // =====================================================
+
+      if (
+        recent
+      ) {
+        const legacyAreaMessage =
+          recent.find(
+            message =>
+              message.id !==
+                posted.id &&
+              message.author?.id ===
+                client.user?.id &&
+              message.embeds?.[0]
+                ?.footer?.text ===
+                legacyAreaMarker
+          );
+
+        if (
+          legacyAreaMessage
+        ) {
+          await legacyAreaMessage
+            .delete()
+            .catch(
+              () => {}
+            );
+        }
+      }
+
+      registration.activeMirrorThreadId =
+        activeThread.id;
+
+      registration.activeMirrorMessageId =
+        posted.id;
+
+      delete registration.activeAreaThreadId;
+      delete registration.activeAreaMessageId;
+
+      persistRegistration();
+
+      return {
+        ok: true,
+        status:
+          mirrorMessage
+            ? "updated"
+            : "created",
+
+        threadId:
+          activeThread.id,
+
+        messageId:
+          posted.id,
+      };
+    }
+  );
+}
+
 async function _performStatusUpdate(client, { registration, threadId, newStatus, actor }) {
     const formChannel = await client.channels.fetch(CREATOR_FORM_CHANNEL_ID).catch(() => null);
     const guild = formChannel?.guild || null;
@@ -260,9 +807,32 @@ async function _performStatusUpdate(client, { registration, threadId, newStatus,
         await thread.send(`**${actor.username}** alterou o status do projeto para **${newStatus ? 'ATIVO' : 'INATIVO'}**.`);
     }
 
-    await logStatusChange(client, { user: actor }, { threadId, userId, nome: registration.nome, oldStatus, newStatus });
-}
+    await logStatusChange(
+        client,
+        { user: actor },
+        {
+            threadId,
+            userId,
+            nome: registration.nome,
+            oldStatus,
+            newStatus
+        }
+    );
 
+    await syncFormsCreatorActiveMirror(
+        client,
+        {
+            originalThreadId: threadId,
+            registration,
+            reason: "Status do FormsCreator alterado",
+        }
+    ).catch((error) => {
+        console.error(
+            `[FormsCreator] Status atualizado no original, mas o espelho ativo ficou pendente para ${userId}:`,
+            error
+        );
+    });
+}
 function hasManagePermission(member, userId) {
   if (MANAGE_PERMS_USERS.includes(userId)) return true;
   const roles = member?.roles?.cache;
@@ -2396,6 +2966,33 @@ export async function setFormsCreatorArea(client, { threadId, newArea, actor }) 
         state
     );
 
+    let activeTopicUpdated = true;
+
+    if (registration.userId) {
+        try {
+            const mirrorResult =
+                await syncFormsCreatorActiveMirror(
+                    client,
+                    {
+                        originalThreadId:
+                            normalizedThreadId,
+                        registration,
+                        reason:
+                            "Área do FormsCreator alterada",
+                    }
+                );
+
+            activeTopicUpdated =
+                mirrorResult?.ok !== false;
+        } catch (error) {
+            activeTopicUpdated = false;
+            console.error(
+                "[FormsCreator] Registro original atualizado; espelho do tópico ativo pendente:",
+                error
+            );
+        }
+    }
+
     console.log(
         `[FormsCreator] Área da thread ${normalizedThreadId} alterada ` +
         `de "${oldArea}" para "${normalizedArea}" ` +
@@ -2409,7 +3006,8 @@ export async function setFormsCreatorArea(client, { threadId, newArea, actor }) 
             registroMsg.id,
         oldArea,
         newArea:
-            normalizedArea
+            normalizedArea,
+        activeTopicUpdated
     };
     } finally {
         await restoreHistoricalEvolutionThread(thread);
@@ -2440,7 +3038,158 @@ export async function formsCreatorOnReady(client) {
           userId
         )
     );
+    // =====================================================
+    // FORMS COMPLETO NO TÓPICO ATIVO
+    // =====================================================
 
+    if (
+      !client
+        .__FORMS_CREATOR_ACTIVE_MIRROR_ROLE_LISTENER__
+    ) {
+      client
+        .__FORMS_CREATOR_ACTIVE_MIRROR_ROLE_LISTENER__ =
+        true;
+
+      client.on(
+        "guildMemberUpdate",
+        async (
+          oldMember,
+          member
+        ) => {
+          try {
+            if (
+              member.guild.id !==
+                GUILD_ID ||
+              member.user.bot
+            ) {
+              return;
+            }
+
+            const relevantRoleChanged =
+              [...EVOLUTION_PROFILE_ROLE_IDS]
+                .some(
+                  roleId =>
+                    oldMember.roles.cache.has(
+                      roleId
+                    ) !==
+                    member.roles.cache.has(
+                      roleId
+                    )
+                );
+
+            if (
+              !relevantRoleChanged
+            ) {
+              return;
+            }
+
+            const state =
+              readState();
+
+            const registrationEntry =
+              Object.entries(
+                state.registrations ||
+                  {}
+              ).find(
+                (
+                  [
+                    ,
+                    registration,
+                  ]
+                ) =>
+                  String(
+                    registration
+                      ?.userId ||
+                      ""
+                  ) ===
+                  member.id
+              );
+
+            if (
+              !registrationEntry
+            ) {
+              return;
+            }
+
+            const [
+              originalThreadId,
+              registration,
+            ] =
+              registrationEntry;
+
+            await syncFormsCreatorActiveMirror(
+              client,
+              {
+                originalThreadId,
+                registration,
+                reason:
+                  "Mudança de cargo: sincronização do Forms completo no tópico ativo",
+              }
+            );
+          } catch (
+            error
+          ) {
+            console.error(
+              "[FormsCreator] Falha ao atualizar espelho após mudança de cargo:",
+              error
+            );
+          }
+        }
+      );
+    }
+
+    // =====================================================
+    // BACKFILL
+    // =====================================================
+    //
+    // Garante que registros criados antes desta melhoria
+    // também recebam o card completo no tópico ativo.
+    // =====================================================
+
+    void (
+      async () => {
+        const state =
+          readState();
+
+        for (
+          const [
+            originalThreadId,
+            registration,
+          ]
+          of Object.entries(
+            state.registrations ||
+              {}
+          )
+        ) {
+          try {
+            await syncFormsCreatorActiveMirror(
+              client,
+              {
+                originalThreadId,
+                registration,
+                reason:
+                  "Backfill do Forms completo no tópico ativo",
+              }
+            );
+          } catch (
+            error
+          ) {
+            console.error(
+              `[FormsCreator] Backfill pendente em ${originalThreadId}:`,
+              error
+            );
+          }
+
+          await new Promise(
+            resolve =>
+              setTimeout(
+                resolve,
+                150
+              )
+          );
+        }
+      }
+    )();
     // ✅ LISTENER RESERVA: garante que comandos como !syncforms funcionem
     // mesmo se o index.js não estiver chamando formsCreatorHandleMessage.
     if (!client.__FORMS_CREATOR_MESSAGE_LISTENER__) {
@@ -2994,15 +3743,143 @@ await syncEvolutionHierarchyForMember(client, {
         return true;
       }
 
-      const embed = EmbedBuilder.from(msgOriginal.embeds[0]);
+      // =====================================================
+      // ÁREA
+      // =====================================================
+      //
+      // A alteração de Área precisa obrigatoriamente passar
+      // pelo helper oficial.
+      //
+      // Nunca editar apenas o embed local.
+      // =====================================================
 
-      if (tipo === "id")
-        embed.spliceFields(0, 1, { name: "📌 ID/Passaporte", value: novoValor, inline: true }); // Mantém o campo
-      if (tipo === "area")
-        embed.spliceFields(1, 1, { name: "📚 Área de Interesse", value: novoValor, inline: true }); // Mantém o campo
+      if (
+        tipo ===
+        "area"
+      ) {
+        try {
+          const result =
+            await setFormsCreatorArea(
+              client,
+              {
+                threadId,
+                newArea:
+                  novoValor,
+                actor:
+                  interaction.user,
+              }
+            );
 
-      await msgOriginal.edit({ embeds: [embed] }).catch(() => {});
-      await interaction.reply({ content: "✅ Informações atualizadas!", ephemeral: true });
+          await interaction.reply({
+            content:
+              result
+                ?.activeTopicUpdated
+                ? "✅ Área atualizada no Forms original e no tópico ativo!"
+                : "⚠️ Área atualizada no Forms original, mas a sincronização do tópico ativo ficou pendente e será refeita pelo sincronizador.",
+
+            ephemeral:
+              true,
+          });
+        } catch (
+          error
+        ) {
+          await interaction.reply({
+            content:
+              `❌ Não consegui atualizar a Área: ${error?.message || error}`,
+
+            ephemeral:
+              true,
+          });
+        }
+
+        return true;
+      }
+
+      // =====================================================
+      // ID / PASSAPORTE
+      // =====================================================
+
+      const embed =
+        EmbedBuilder.from(
+          msgOriginal.embeds[0]
+        );
+
+      if (
+        tipo ===
+        "id"
+      ) {
+        embed.spliceFields(
+          0,
+          1,
+          {
+            name:
+              "📌 ID/Passaporte",
+
+            value:
+              novoValor,
+
+            inline:
+              true,
+          }
+        );
+      }
+
+      await msgOriginal.edit({
+        embeds: [
+          embed,
+        ],
+      });
+
+      const state =
+        readState();
+
+      const registration =
+        state.registrations?.[
+          threadId
+        ];
+
+      if (
+        registration
+      ) {
+        registration.idCidade =
+          novoValor;
+
+        registration.messageId =
+          msgOriginal.id;
+
+        writeState(
+          state
+        );
+
+        await syncFormsCreatorActiveMirror(
+          client,
+          {
+            originalThreadId:
+              threadId,
+
+            registration,
+
+            reason:
+              "ID/Passaporte do FormsCreator alterado",
+          }
+        ).catch(
+          error => {
+            console.error(
+              `[FormsCreator] ID atualizado no original, mas espelho ativo pendente para ${registration.userId}:`,
+              error
+            );
+          }
+        );
+      }
+
+      await interaction.reply({
+        content:
+          "✅ Informações atualizadas!",
+
+        ephemeral:
+          true,
+      });
+
       return true;
     }
 

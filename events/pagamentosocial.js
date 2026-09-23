@@ -14,6 +14,10 @@ import {
   MessageFlags,
 } from "discord.js";
 import { dashEmit } from "../utils/dashHub.js";
+import {
+  recordApprovalCreated,
+  recordApprovalDecision,
+} from "../utils/approvalOperationalIntelligence.js";
 import { createWorker } from "tesseract.js";
 import sharp from "sharp";
 
@@ -30,6 +34,11 @@ const CANAL_DASHBOARD_PAGAMENTO = "1505716526534103110";
 // Arquivos de persistência
 const STATS_FILE = path.join(process.cwd(), "data", "pagamentos_social_stats.json");
 const DASH_STATE_FILE = path.join(process.cwd(), "data", "pagamentos_social_dash_state.json");
+const PAYMENT_OPERATION_TRACE_FILE = path.join(
+  process.cwd(),
+  "data",
+  "pagamentos_social_operation_trace.json"
+);
 const DASH_MARKER = "SC_PAGAMENTO_DASH::V1";
 // Canal onde fica o menu + onde os registros são postados
 const CANAL_PAGAMENTO = "1387922662134775818";
@@ -101,6 +110,137 @@ const PADRAO_INDEFINIDO = "Não informado";
 // Regex separadores de Nome/ID (se teu arquivo já tem, pode remover daqui)
 // Mantive pra evitar ReferenceError se não existir no teu arquivo.
 const SEP_REGEX = /[|\/\\]/g;
+
+// =============================
+// RASTRO ESTÁVEL DA OPERAÇÃO
+// =============================
+//
+// Cada vez que o registro é movido para o fim do canal ele ganha
+// um novo messageId. Este mapa mantém o ID raiz e o createdAt original,
+// permitindo calcular o tempo real até aprovação/reprovação mesmo após
+// várias mudanças de status.
+// =====================================================
+
+function loadPaymentOperationTrace() {
+  try {
+    if (!fs.existsSync(PAYMENT_OPERATION_TRACE_FILE)) {
+      return { messages: {} };
+    }
+
+    const raw = fs.readFileSync(
+      PAYMENT_OPERATION_TRACE_FILE,
+      "utf8"
+    );
+
+    const parsed = raw ? JSON.parse(raw) : {};
+    parsed.messages ??= {};
+    return parsed;
+  } catch (error) {
+    console.error(
+      "[PagamentoSocial] Falha ao ler rastro operacional:",
+      error
+    );
+    return { messages: {} };
+  }
+}
+
+function savePaymentOperationTrace(state) {
+  try {
+    const dir = path.dirname(PAYMENT_OPERATION_TRACE_FILE);
+
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+
+    const temporaryFile =
+      `${PAYMENT_OPERATION_TRACE_FILE}.tmp`;
+
+    fs.writeFileSync(
+      temporaryFile,
+      JSON.stringify(state, null, 2),
+      "utf8"
+    );
+
+    fs.renameSync(
+      temporaryFile,
+      PAYMENT_OPERATION_TRACE_FILE
+    );
+  } catch (error) {
+    console.error(
+      "[PagamentoSocial] Falha ao salvar rastro operacional:",
+      error
+    );
+  }
+}
+
+function registerPaymentOperationMessage(
+  messageId,
+  {
+    operationId,
+    createdAt,
+  }
+) {
+  if (!messageId || !operationId) return;
+
+  const state =
+    loadPaymentOperationTrace();
+
+  state.messages[String(messageId)] = {
+    operationId: String(operationId),
+    createdAt: Number(createdAt || Date.now()),
+    updatedAt: Date.now(),
+  };
+
+  const entries =
+    Object.entries(state.messages)
+      .sort(
+        (a, b) =>
+          Number(a[1]?.updatedAt || 0) -
+          Number(b[1]?.updatedAt || 0)
+      )
+      .slice(-5000);
+
+  state.messages =
+    Object.fromEntries(entries);
+
+  savePaymentOperationTrace(state);
+}
+
+function resolvePaymentOperationMessage(
+  messageId,
+  fallbackCreatedAt = Date.now()
+) {
+  const state =
+    loadPaymentOperationTrace();
+
+  const existing =
+    state.messages?.[String(messageId)] ||
+    null;
+
+  if (existing?.operationId) {
+    return {
+      operationId:
+        String(existing.operationId),
+
+      createdAt:
+        Number(
+          existing.createdAt ||
+          fallbackCreatedAt
+        ),
+    };
+  }
+
+  return {
+    operationId:
+      String(messageId),
+
+    createdAt:
+      Number(
+        fallbackCreatedAt ||
+        Date.now()
+      ),
+  };
+}
 
 // ===== PERMISSÕES =====
 // Quem pode USAR o sistema (abrir form, filtrar, etc.)
@@ -6757,6 +6897,31 @@ updateDashboard(client).catch((error) => {
     dedupeKey:
       `pagamento_social:criado:${mensagem.id}`,
   });
+
+  registerPaymentOperationMessage(
+    mensagem.id,
+    {
+      operationId: mensagem.id,
+      createdAt:
+        mensagem.createdTimestamp ||
+        Date.now(),
+    }
+  );
+
+  recordApprovalCreated({
+    system:
+      "pagamento_social",
+
+    operationId:
+      mensagem.id,
+
+    creatorId:
+      interaction.user.id,
+
+    createdAt:
+      mensagem.createdTimestamp ||
+      Date.now(),
+  });
 } catch {}
 
 logPagamento(
@@ -6999,6 +7164,18 @@ const msgNova = await canal.send({ embeds: [embedAtualizado] }).catch(() => null
     }
   }
 
+  const paymentOperationTrace =
+    resolvePaymentOperationMessage(
+      msgOriginal.id,
+      msgOriginal.createdTimestamp ||
+      Date.now()
+    );
+
+  registerPaymentOperationMessage(
+    msgNova.id,
+    paymentOperationTrace
+  );
+
   // apaga o original (ou deixa como movido)
   try {
     await msgOriginal.delete();
@@ -7131,6 +7308,45 @@ dashEmit(map[action] || "pagamento:status", {
 
   dedupeKey:
     `pagamento_social:${action}:${msgNova.id}`,
+});
+
+recordApprovalCreated({
+  system:
+    "pagamento_social",
+
+  operationId:
+    paymentOperationTrace.operationId,
+
+  creatorId:
+    criadorId,
+
+  createdAt:
+    paymentOperationTrace.createdAt,
+});
+
+recordApprovalDecision({
+  system:
+    "pagamento_social",
+
+  operationId:
+    paymentOperationTrace.operationId,
+
+  decision:
+    action === "pago"
+      ? "approved"
+      : action === "reprovado"
+        ? "rejected"
+        : "requested",
+
+  approverId:
+    interaction.user.id,
+
+  decidedAt:
+    Date.now(),
+
+  postedAt:
+    msgNova.createdTimestamp ||
+    Date.now(),
 });
 
     // ✅ fallback geral para qualquer dashboard que esteja ouvindo status genérico

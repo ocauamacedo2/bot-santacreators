@@ -390,7 +390,7 @@ const RANK_CHANNEL_ID = "1415387000416243722";
 const RANK_MARKER_PREFIX = "SC_GERAL_WEEKLY_RANK::WK=";
 
 // mínimo de pontos por semana
-const MIN_POINTS_WEEK = 25;
+export const MIN_POINTS_WEEK = 25;
 
 // timezone
 const TZ = "America/Sao_Paulo";

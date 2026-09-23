@@ -1619,7 +1619,7 @@ function activeTimeText(rec, n = nowMs()) {
       editor
     ) {
       if (
-        typeof findFormsCreatorThreadIdByUserId !== "function" ||
+        typeof findOriginalFormsCreatorThreadIdByUserId !== "function" ||
         typeof setFormsCreatorArea !== "function"
       ) {
         return {
@@ -1630,10 +1630,13 @@ function activeTimeText(rec, n = nowMs()) {
       }
 
       const fcThreadId =
-        await findFormsCreatorThreadIdByUserId(
+        await findOriginalFormsCreatorThreadIdByUserId(
           client,
           rec.targetId
-        ).catch(() => null);
+        ).catch((error) => {
+          console.error("[GI] Falha ao localizar registro original do FormsCreator:", error);
+          return null;
+        });
 
       if (!fcThreadId) {
         return {
@@ -1644,7 +1647,7 @@ function activeTimeText(rec, n = nowMs()) {
       }
 
       try {
-        await setFormsCreatorArea(
+        const update = await setFormsCreatorArea(
           client,
           {
             threadId: fcThreadId,
@@ -1654,7 +1657,7 @@ function activeTimeText(rec, n = nowMs()) {
         );
 
         return {
-          status: "synced",
+          status: update.activeTopicUpdated ? "synced" : "partial",
           threadId: fcThreadId,
           error: null
         };
@@ -2923,6 +2926,8 @@ try {
         const formsText =
           formsSyncResult.status === "synced"
             ? "✅ sincronizado"
+            : formsSyncResult.status === "partial"
+              ? "⚠️ registro original atualizado; resumo do tópico ativo pendente"
             : formsSyncResult.status === "not_found"
               ? "⚠️ tópico não encontrado"
               : formsSyncResult.status === "failed"
@@ -3681,10 +3686,10 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
 // ✅ NOVO: Desliga/inativa também o FormsCreator da pessoa
 try {
   if (
-    typeof findFormsCreatorThreadIdByUserId === "function" &&
+    typeof findOriginalFormsCreatorThreadIdByUserId === "function" &&
     typeof setFormsCreatorStatus === "function"
   ) {
-    const fcThreadId = await findFormsCreatorThreadIdByUserId(
+    const fcThreadId = await findOriginalFormsCreatorThreadIdByUserId(
       guild.client,
       snapshot.targetId
     ).catch(() => null);
@@ -5459,6 +5464,12 @@ if (!rec.active) {
             ) {
               responseLines.push(
                 '📚 FormsCreator sincronizado.'
+              );
+            } else if (
+              result.formsSyncResult.status === 'partial'
+            ) {
+              responseLines.push(
+                '⚠️ Registro original atualizado; resumo do tópico ativo pendente. Consulte o log.'
               );
             } else if (
               result.formsSyncResult.status === 'not_found'
