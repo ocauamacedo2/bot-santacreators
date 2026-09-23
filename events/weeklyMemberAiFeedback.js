@@ -4522,6 +4522,23 @@ Quando houver bastante histórico, atividades, feedbacks e comparação:
 - prefira aproximadamente 1200 a 3200 caracteres quando houver material suficiente;
 - pode ultrapassar esse tamanho quando uma análise maior for necessária para não perder informação importante.
 
+ANTES DE ENTREGAR O TEXTO, confira se todas as dimensões abaixo que possuem dados reais foram contempladas:
+
+1. situação da semana atual e principais frentes;
+2. meta mínima semanal e se ela já foi atingida, quando essa meta estiver disponível;
+3. comparação com a semana anterior, quando houver dados anteriores;
+4. comparação com pessoas do mesmo grupo, quando a amostra existir;
+5. atuação operacional do cargo, principalmente para Gestão / Coordenação e Responsáveis;
+6. mudança de cargo ou fase, quando houver mudança registrada;
+7. histórico qualitativo do Forms, quando houver comentário humano relevante;
+8. orientação concreta do que vale acompanhar, manter ou melhorar para a próxima etapa.
+
+Não encerre o texto antes de cobrir esses pontos quando houver evidência real para eles.
+
+Nunca termine a resposta no meio de uma frase.
+
+Se faltar dado para uma dessas dimensões, simplesmente não invente.
+
 NÃO corte uma observação útil apenas para manter o texto curto.
 
 NÃO estique uma análise sem informação real apenas para ficar grande.
@@ -5003,6 +5020,36 @@ function buildLocalFactRichFeedback({
 // Assim o Forms nunca vira uma mensagem em segunda pessoa
 // apenas porque o Gemini ficou indisponível.
 //
+
+function buildLocalManagementOperationalText(
+  facts
+) {
+  return String(
+    facts?.operationalEvidence ||
+    ""
+  )
+    .split(
+      "\n"
+    )
+    .map(
+      line =>
+        String(
+          line || ""
+        )
+          .split(
+            "Use isso como referência:"
+          )[0]
+          .trim()
+    )
+    .filter(
+      Boolean
+    )
+    .join(
+      " "
+    )
+    .trim();
+}
+
 function buildLocalManagementFactRichFeedback({
   facts,
   mode,
@@ -5162,6 +5209,76 @@ function buildLocalManagementFactRichFeedback({
   }
 
   if (
+    Number(
+      facts?.weeklyMinimumPoints ||
+      0
+    ) >
+    0
+  ) {
+    if (
+      facts?.reachedWeeklyMinimum ===
+        true
+    ) {
+      paragraphs.push(
+        `${firstName} já atingiu a meta mínima semanal de ${facts.weeklyMinimumPoints} pontos, com ${facts.rankingPoints} ponto(s) confirmados no ranking atual. A partir daqui, o acompanhamento pode olhar menos para quantidade isolada e mais para qualidade, autonomia e distribuição da atuação.`
+      );
+    } else if (
+      facts?.reachedWeeklyMinimum ===
+        false
+    ) {
+      paragraphs.push(
+        `${firstName} está com ${facts.rankingPoints} ponto(s) confirmados no ranking atual e ainda não atingiu a meta mínima semanal de ${facts.weeklyMinimumPoints} pontos. Como a semana ainda está em andamento, esse ponto deve ser acompanhado junto da qualidade e das responsabilidades do cargo, sem reduzir toda a avaliação à pontuação.`
+      );
+    }
+  }
+
+  const comparisonEvidence =
+    String(
+      facts?.comparisonEvidence ||
+      ""
+    ).trim();
+
+  if (
+    comparisonEvidence &&
+    !/amostra insuficiente/i.test(
+      comparisonEvidence
+    )
+  ) {
+    paragraphs.push(
+      comparisonEvidence
+    );
+  }
+
+  const operationalText =
+    buildLocalManagementOperationalText(
+      facts
+    );
+
+  if (
+    (
+      facts?.comparisonGroupKey ===
+        "responsaveis" ||
+      facts?.comparisonGroupKey ===
+        "gestao"
+    ) &&
+    operationalText
+  ) {
+    paragraphs.push(
+      `No recorte operacional compatível com o cargo, ${operationalText}`
+    );
+  }
+
+  if (
+    facts?.roleChangeEvidence
+  ) {
+    paragraphs.push(
+      String(
+        facts.roleChangeEvidence
+      ).trim()
+    );
+  }
+
+  if (
     mode ===
       "manual"
   ) {
@@ -5180,7 +5297,7 @@ function buildLocalManagementFactRichFeedback({
     )
     .slice(
       0,
-      7
+      10
     )
     .join(
       "\n\n"
@@ -5265,6 +5382,192 @@ function generatedFeedbackUsesRealActivity(
     );
 }
 
+function generatedFeedbackLooksCutOff(
+  text
+) {
+  const clean =
+    String(
+      text ||
+      ""
+    )
+      .trim()
+      .replace(
+        /[*_~`>\s]+$/g,
+        ""
+      )
+      .trim();
+
+  if (
+    !clean
+  ) {
+    return true;
+  }
+
+  if (
+    /[.!?…)\]}]$/u.test(
+      clean
+    )
+  ) {
+    return false;
+  }
+
+  if (
+    /\p{Extended_Pictographic}$/u.test(
+      clean
+    )
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function generatedFeedbackCoversRequiredContext(
+  text,
+  facts
+) {
+  const normalized =
+    normalizeFeedbackComparisonText(
+      text
+    );
+
+  const hasAny =
+    terms =>
+      terms.some(
+        term =>
+          normalized.includes(
+            normalizeFeedbackComparisonText(
+              term
+            )
+          )
+      );
+
+  if (
+    Number(
+      facts?.previousTotal ||
+      0
+    ) >
+      0 &&
+    !hasAny([
+      "semana anterior",
+      "semana passada",
+      "comparando",
+      "comparação",
+    ])
+  ) {
+    return false;
+  }
+
+  if (
+    Number(
+      facts?.weeklyMinimumPoints ||
+      0
+    ) >
+      0 &&
+    facts?.reachedWeeklyMinimum ===
+      false &&
+    !hasAny([
+      "meta",
+      "mínimo",
+      `${facts.weeklyMinimumPoints} pontos`,
+    ])
+  ) {
+    return false;
+  }
+
+  const comparisonEvidence =
+    normalizeFeedbackComparisonText(
+      facts?.comparisonEvidence ||
+      ""
+    );
+
+  const hasPeerComparison =
+    comparisonEvidence.includes(
+      "media comparavel"
+    ) ||
+    comparisonEvidence.includes(
+      "colega"
+    );
+
+  if (
+    hasPeerComparison &&
+    !hasAny([
+      "média",
+      "grupo",
+      "colega",
+      "comparação",
+      "comparando",
+    ])
+  ) {
+    return false;
+  }
+
+  const operationalRequired =
+    (
+      facts?.comparisonGroupKey ===
+        "responsaveis" ||
+      facts?.comparisonGroupKey ===
+        "gestao"
+    ) &&
+    String(
+      facts?.operationalEvidence ||
+      ""
+    ).trim();
+
+  if (
+    operationalRequired &&
+    !hasAny([
+      "operacional",
+      "aprovação",
+      "aprovações",
+      "manager",
+      "pagamento",
+      "log",
+      "checklist",
+      "decisão",
+      "decisões",
+    ])
+  ) {
+    return false;
+  }
+
+  if (
+    (
+      facts?.roleChangedThisWeek ||
+      facts?.tierChangedThisWeek
+    ) &&
+    !hasAny([
+      "cargo",
+      "função",
+      "promoção",
+      "fase",
+      "gestão",
+      "responsável",
+      "equipe",
+    ])
+  ) {
+    return false;
+  }
+
+  if (
+    !hasAny([
+      "próxim",
+      "acompanhar",
+      "observar",
+      "atenção",
+      "foco",
+      "prioridade",
+      "avançar",
+      "evolução",
+      "melhorar",
+    ])
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
 function isGeneratedFeedbackGoodEnough(
   text,
   facts
@@ -5299,6 +5602,23 @@ function isGeneratedFeedbackGoodEnough(
   if (
     hasRealActivity &&
     !generatedFeedbackUsesRealActivity(
+      clean,
+      facts
+    )
+  ) {
+    return false;
+  }
+
+  if (
+    generatedFeedbackLooksCutOff(
+      clean
+    )
+  ) {
+    return false;
+  }
+
+  if (
+    !generatedFeedbackCoversRequiredContext(
       clean,
       facts
     )
@@ -5342,24 +5662,37 @@ async function generateFeedback({
       mode,
     });
 
-  try {
-    const generated =
-      await generateSantaCreatorsStandaloneText({
-        prompt,
+  const generateCompleteAttempt =
+    async (
+      attemptLabel,
+      attemptPrompt,
+      temperature
+    ) => {
+      const generated =
+        await generateSantaCreatorsStandaloneText({
+          prompt:
+            attemptPrompt,
 
-        maxOutputTokens:
-          2200,
+          maxOutputTokens:
+            4096,
 
-        temperature:
-          0.78,
+          temperature,
 
-        label:
-          `Weekly Member Feedback ${facts.userId}`,
-      });
+          label:
+            `${attemptLabel} ${facts.userId}`,
+        });
 
-    const text =
-      cleanGeneratedText(
+      return cleanGeneratedText(
         generated
+      );
+    };
+
+  try {
+    const text =
+      await generateCompleteAttempt(
+        "Weekly Member Feedback",
+        prompt,
+        0.72
       );
 
     if (
@@ -5372,8 +5705,56 @@ async function generateFeedback({
     }
 
     console.warn(
-      `[Weekly Member Feedback] A resposta de ${facts.userId} ficou genérica ou curta demais. Utilizando fallback factual local.`
+      `[Weekly Member Feedback] A primeira resposta de ${facts.userId} ficou incompleta, cortada ou sem cobrir o contexto obrigatório. Tentando regeneração completa.`
     );
+
+    const repairedPrompt =
+      `${prompt}
+
+=====================================================
+REGENERAÇÃO OBRIGATÓRIA
+=====================================================
+
+A tentativa anterior não foi aceita porque ficou incompleta, cortada ou deixou de cobrir informações relevantes.
+
+Refaça o comentário DO ZERO.
+
+Antes de finalizar, confirme internamente que, quando houver dados reais, o texto inclui:
+
+- situação atual e principais frentes;
+- meta mínima;
+- comparação com a semana anterior;
+- comparação com o mesmo grupo;
+- atuação operacional compatível com o cargo;
+- mudança de cargo/fase, se existir;
+- histórico qualitativo relevante;
+- orientação concreta para o próximo passo.
+
+Não termine no meio de uma frase.
+
+Entregue somente o comentário final completo.
+`.trim();
+
+    const repairedText =
+      await generateCompleteAttempt(
+        "Weekly Member Feedback Retry",
+        repairedPrompt,
+        0.62
+      );
+
+    if (
+      isGeneratedFeedbackGoodEnough(
+        repairedText,
+        facts
+      )
+    ) {
+      return repairedText;
+    }
+
+    console.warn(
+      `[Weekly Member Feedback] A regeneração de ${facts.userId} também não atingiu a cobertura mínima. Utilizando fallback factual local.`
+    );
+
     return buildLocalManagementFactRichFeedback({
       facts,
       mode,

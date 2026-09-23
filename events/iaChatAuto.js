@@ -19277,6 +19277,36 @@ function blockStandaloneModelByQuota(
 }
 // =====================================================
 
+function standaloneGenerationLooksCutOff(
+  result
+) {
+  const finishReason =
+    String(
+      result
+        ?.candidates
+        ?.[0]
+        ?.finishReason ||
+      ""
+    )
+      .trim()
+      .toUpperCase();
+
+  const interruptedReasons =
+    new Set([
+      "MAX_TOKENS",
+      "MAX_OUTPUT_TOKENS",
+      "LENGTH",
+      "TOKEN_LIMIT",
+    ]);
+
+  return Boolean(
+    finishReason &&
+    interruptedReasons.has(
+      finishReason
+    )
+  );
+}
+
 export async function generateSantaCreatorsStandaloneText({
   prompt,
   maxOutputTokens = 900,
@@ -19351,6 +19381,32 @@ for (
 
           `${label} | ${modelName}`
         );
+
+      if (
+        standaloneGenerationLooksCutOff(
+          result
+        )
+      ) {
+        const finishReason =
+          String(
+            result
+              ?.candidates
+              ?.[0]
+              ?.finishReason ||
+            "DESCONHECIDO"
+          );
+
+        console.warn(
+          `[IA STANDALONE] ${label}: resposta incompleta em ${modelName} | Motivo=${finishReason}. Tentando próximo fallback.`
+        );
+
+        lastError =
+          new Error(
+            `${label} retornou resposta incompleta em ${modelName} | Motivo=${finishReason}`
+          );
+
+        continue;
+      }
 
       const text =
         String(
