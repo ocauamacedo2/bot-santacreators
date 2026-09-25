@@ -25,6 +25,11 @@ import {
   GeralAudit,
 } from "../shared/scGeralSources.js";
 
+import {
+  resolveDiscordIdentity,
+  normalizeDiscordIdentityAdjustmentMap,
+} from "../shared/scDiscordIdentity.js";
+
 
 // ✅ __dirname no ESM
 const __filename = fileURLToPath(import.meta.url);
@@ -306,27 +311,85 @@ async function canRemovePointsFromTarget({ guild, executorId, targetUserId }) {
 }
 
 function loadAdjustments() {
-  return readJSON(ADJUSTMENTS_FILE, {
-    byWeek: {},
-  });
+  const data = readJSON(
+    ADJUSTMENTS_FILE,
+    {
+      byWeek: {},
+    }
+  );
+
+  data.byWeek =
+    data.byWeek || {};
+
+  for (
+    const [
+      weekKey,
+      users
+    ]
+    of Object.entries(
+      data.byWeek
+    )
+  ) {
+    data.byWeek[weekKey] =
+      normalizeDiscordIdentityAdjustmentMap(
+        users
+      );
+  }
+
+  return data;
 }
 
 function saveAdjustments(data) {
   writeJSON(ADJUSTMENTS_FILE, data);
 }
 
-function applyManualAdjustment({ weekKey, userId, delta }) {
-  const data = loadAdjustments();
-  data.byWeek = data.byWeek || {};
-  data.byWeek[weekKey] = data.byWeek[weekKey] || {};
+function applyManualAdjustment({
+  weekKey,
+  userId,
+  delta
+}) {
+  const data =
+    loadAdjustments();
 
-  const before = Number(data.byWeek[weekKey][userId] || 0);
-  const after = before + Number(delta || 0);
+  data.byWeek =
+    data.byWeek || {};
 
-  data.byWeek[weekKey][userId] = after;
+  data.byWeek[weekKey] =
+    data.byWeek[weekKey] || {};
+
+  const canonicalUserId =
+    resolveDiscordIdentity(
+      userId
+    );
+
+  const before =
+    Number(
+      data.byWeek[
+        weekKey
+      ][canonicalUserId] ||
+      0
+    );
+
+  const after =
+    before +
+    Number(
+      delta || 0
+    );
+
+  data.byWeek[
+    weekKey
+  ][canonicalUserId] =
+    after;
+
   saveAdjustments(data);
 
-  return { before, after, data };
+  return {
+    before,
+    after,
+    data,
+    userId:
+      canonicalUserId,
+  };
 }
 
 async function emitManualRemoveLog(client, payload = {}) {
@@ -1613,21 +1676,58 @@ const audit = { totalFound: 0, rejected: {}, extractedIds: 0, sources: {} };
 const auditor = new GeralAudit();
 
 const pushItem = (item) => {
-  const userId = String(item?.userId || "").trim();
-  const source = String(item?.source || "").trim();
+  const rawUserId =
+    String(
+      item?.userId || ""
+    ).trim();
 
-  if (!userId || !source || !item?.ts) return;
+  const userId =
+    resolveDiscordIdentity(
+      rawUserId
+    );
 
-  if (client?.user?.id && userId === String(client.user.id)) {
-    auditor.reject(source, "bot_self_point");
-    audit.rejected.bot_self_point = (audit.rejected.bot_self_point || 0) + 1;
+  const source =
+    String(
+      item?.source || ""
+    ).trim();
+
+  if (
+    !userId ||
+    !source ||
+    !item?.ts
+  ) return;
+
+  if (
+    client?.user?.id &&
+    userId ===
+      String(client.user.id)
+  ) {
+    auditor.reject(
+      source,
+      "bot_self_point"
+    );
+
+    audit.rejected.bot_self_point =
+      (
+        audit.rejected
+          .bot_self_point || 0
+      ) + 1;
+
     return;
   }
 
-  auditor.addStats(source, "counted");
+  auditor.addStats(
+    source,
+    "counted"
+  );
 
   audit.extractedIds++;
-  audit.sources[source] = (audit.sources[source] || 0) + 1;
+
+  audit.sources[source] =
+    (
+      audit.sources[source] ||
+      0
+    ) + 1;
 
   items.push({
     ...item,
@@ -2252,9 +2352,25 @@ function addWeeklyAdjustment(weekKey, userId, delta) {
   return applyManualAdjustment({ weekKey, userId, delta });
 }
 
-function getWeeklyAdjustment(weekKey, userId) {
-  const data = loadAdjustments();
-  return Number(data.byWeek?.[weekKey]?.[userId] || 0);
+function getWeeklyAdjustment(
+  weekKey,
+  userId
+) {
+  const data =
+    loadAdjustments();
+
+  const canonicalUserId =
+    resolveDiscordIdentity(
+      userId
+    );
+
+  return Number(
+    data.byWeek?.[
+      weekKey
+    ]?.[
+      canonicalUserId
+    ] || 0
+  );
 }
 
 
@@ -3330,6 +3446,11 @@ dashOn("correcao:usado", () => {
 dashOn("gi:desligado", () => markDirty({ invalidateScanCache: true }));
 dashOn("gi:retornou", () => markDirty({ invalidateScanCache: true }));
 
+dashOn("identity:migrated", () => {
+  markDirty({ invalidateScanCache: true });
+  scheduleFastSync();
+});
+
   // scheduler leve: se DIRTY, atualiza
   setInterval(async () => {
 
@@ -4115,14 +4236,33 @@ export async function getWeeklyRankingDebug(client) {
 }
 
 // ✅ NOVO: Export para uso externo (ex: gestaoinfluencer desligamento)
-export async function getStatsForUser(client, userId) {
-
+export async function getStatsForUser(
+  client,
+  userId
+) {
   try {
-    // Usa scanMode light pra aproveitar cache se tiver, ou scan rápido
-    const { items } = await collectAllPoints(client, "light");
-    
-    const userItems = items.filter(i => i.userId === String(userId));
-    const total = userItems.length;
+    const canonicalUserId =
+      resolveDiscordIdentity(
+        userId
+      );
+
+    const { items } =
+      await collectAllPoints(
+        client,
+        "light"
+      );
+
+    const userItems =
+      items.filter(
+        i =>
+          resolveDiscordIdentity(
+            i.userId
+          ) ===
+          canonicalUserId
+      );
+
+    const total =
+      userItems.length;
     
     const bySource = {};
     const byWeek = {};
@@ -4144,7 +4284,10 @@ export async function getStatsForUser(client, userId) {
     let totalAdjustments = 0;
     if (adjustmentsData.byWeek) {
       for (const [wk, users] of Object.entries(adjustmentsData.byWeek)) {
-        const adj = users[String(userId)] || 0;
+        const adj =
+  users[
+    canonicalUserId
+  ] || 0;
         if (adj !== 0) {
           byWeek[wk] = (byWeek[wk] || 0) + adj;
           totalAdjustments += adj;
@@ -4173,7 +4316,13 @@ const currentWeekKey = weekKeyFromDateSP(nowSP());
 
 // byWeek já recebeu os ajustes no loop acima
 const thisWeekTotalPoints = byWeek[currentWeekKey] || 0;
-const thisWeekAdjustment = adjustmentsData.byWeek?.[currentWeekKey]?.[String(userId)] || 0;
+const thisWeekAdjustment =
+  adjustmentsData
+    .byWeek?.[
+      currentWeekKey
+    ]?.[
+      canonicalUserId
+    ] || 0;
 
  return {
   total: total + totalAdjustments,

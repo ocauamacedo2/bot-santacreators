@@ -46,8 +46,31 @@ const {
   findFormsCreatorThreadLinkByUserId,
   setFormsCreatorStatus,
   setFormsCreatorArea,
-  findOriginalFormsCreatorThreadIdByUserId
+  findOriginalFormsCreatorThreadIdByUserId,
+  migrateFormsCreatorDiscordId
 } = formsCreator;
+
+    // ✅ IDENTIDADE DISCORD
+    // Mantém o histórico quando a pessoa troca de conta.
+    let discordIdentity = {};
+
+    try {
+      discordIdentity =
+        await import(
+          '../shared/scDiscordIdentity.js'
+        );
+    } catch (e) {
+      console.warn(
+        '[SC_GI] scDiscordIdentity.js indisponível. Troca de Discord ficará bloqueada por segurança:',
+        e?.message || e
+      );
+    }
+
+    const {
+      validateDiscordIdentityMigration,
+      registerDiscordIdentityMigration,
+      rollbackDiscordIdentityMigration
+    } = discordIdentity;
 
     // ✅ EVOLUÇÃO EM TRÊS FASES
     let evolutionHierarchy = {};
@@ -2730,9 +2753,1119 @@ try {
       await renderRespBoard(guild, { force: true });
     }
 
-    async function editRegistro(guild, editor, messageId, newArea, newNote, newDateStr) {
-      const rec = SC_GI_STATE.registros.get(messageId);
-      if (!rec) throw new Error('Registro não encontrado.');
+    // =====================================================
+    // 🔁 MIGRAÇÃO DE IDENTIDADE DISCORD
+    // =====================================================
+    //
+    // Permite trocar a conta Discord do mesmo membro
+    // preservando:
+    //
+    // - registro GI
+    // - histórico
+    // - pontos
+    // - ranking
+    // - dashboard
+    // - FormsCreator
+    // - responsável
+    // - snapshots
+    // - overrides
+    // - cargos
+    // - nickname
+    //
+    // =====================================================
+
+    function mergeGIWarningState(
+      oldValue,
+      newValue
+    ) {
+      if (
+        !oldValue &&
+        !newValue
+      ) {
+        return null;
+      }
+
+      return {
+        count:
+          Number(
+            oldValue?.count ||
+            0
+          ) +
+          Number(
+            newValue?.count ||
+            0
+          ),
+
+        lastAtMs:
+          Math.max(
+            Number(
+              oldValue?.lastAtMs ||
+              0
+            ),
+
+            Number(
+              newValue?.lastAtMs ||
+              0
+            )
+          ) ||
+          null
+      };
+    }
+
+    async function migrateGIInternalIdentityState(
+      guild,
+      oldUserId,
+      newUserId
+    ) {
+      const oldId =
+        String(
+          oldUserId
+        );
+
+      const newId =
+        String(
+          newUserId
+        );
+
+      // =====================================================
+      // WARNINGS DA TRAVA GI
+      // =====================================================
+
+      const oldWarning =
+        SC_GI_STATE
+          .giWarningsByUser
+          .get(
+            oldId
+          );
+
+      const newWarning =
+        SC_GI_STATE
+          .giWarningsByUser
+          .get(
+            newId
+          );
+
+      const mergedWarning =
+        mergeGIWarningState(
+          oldWarning,
+          newWarning
+        );
+
+      if (
+        mergedWarning
+      ) {
+        SC_GI_STATE
+          .giWarningsByUser
+          .set(
+            newId,
+            mergedWarning
+          );
+      }
+
+      SC_GI_STATE
+        .giWarningsByUser
+        .delete(
+          oldId
+        );
+
+      // =====================================================
+      // SNAPSHOT TEMPORÁRIO DE CARGOS
+      // =====================================================
+
+      const oldSnapshot =
+        SC_GI_STATE
+          .roleSnapshots
+          .get(
+            oldId
+          );
+
+      const newSnapshot =
+        SC_GI_STATE
+          .roleSnapshots
+          .get(
+            newId
+          );
+
+      if (
+        oldSnapshot ||
+        newSnapshot
+      ) {
+        const selectedSnapshot =
+          !newSnapshot
+            ? oldSnapshot
+            : !oldSnapshot
+              ? newSnapshot
+              : Number(
+                  oldSnapshot
+                    .restoreAtMs ||
+                  0
+                ) >=
+                Number(
+                  newSnapshot
+                    .restoreAtMs ||
+                  0
+                )
+                ? oldSnapshot
+                : newSnapshot;
+
+        SC_GI_STATE
+          .roleSnapshots
+          .set(
+            newId,
+            selectedSnapshot
+          );
+      }
+
+      SC_GI_STATE
+        .roleSnapshots
+        .delete(
+          oldId
+        );
+
+      // =====================================================
+      // OVERRIDES MANUAIS
+      // =====================================================
+
+      const oldOverrides =
+        SC_GI_STATE
+          .masterRoleOverridesByUser
+          .get(
+            oldId
+          );
+
+      const newOverrides =
+        SC_GI_STATE
+          .masterRoleOverridesByUser
+          .get(
+            newId
+          );
+
+      if (
+        oldOverrides ||
+        newOverrides
+      ) {
+        const mergedOverrides =
+          new Map();
+
+        for (
+          const [
+            roleId,
+            state
+          ]
+          of oldOverrides ||
+          []
+        ) {
+          mergedOverrides.set(
+            roleId,
+            state
+          );
+        }
+
+        for (
+          const [
+            roleId,
+            state
+          ]
+          of newOverrides ||
+          []
+        ) {
+          mergedOverrides.set(
+            roleId,
+            state
+          );
+        }
+
+        SC_GI_STATE
+          .masterRoleOverridesByUser
+          .set(
+            newId,
+            mergedOverrides
+          );
+      }
+
+      SC_GI_STATE
+        .masterRoleOverridesByUser
+        .delete(
+          oldId
+        );
+
+      // =====================================================
+      // RESPONSÁVEL ATUAL DE OUTROS MEMBROS
+      // =====================================================
+      //
+      // Se a pessoa que trocou de Discord também era
+      // responsável por outros membros, atualiza somente
+      // o ponteiro atual.
+      //
+      // O histórico antigo continua intacto.
+      // =====================================================
+
+      for (
+        const otherRec
+        of SC_GI_STATE
+          .registros
+          .values()
+      ) {
+        if (
+          String(
+            otherRec
+              ?.responsibleUserId ||
+            ''
+          ) ===
+          oldId
+        ) {
+          otherRec
+            .responsibleUserId =
+            newId;
+        }
+      }
+
+      // =====================================================
+      // BYPASS TEMPORÁRIO
+      // =====================================================
+
+      if (
+        globalThis
+          .__SC_ROLE_BYPASS__
+          instanceof Map
+      ) {
+        const oldBypass =
+          Number(
+            globalThis
+              .__SC_ROLE_BYPASS__
+              .get(
+                oldId
+              ) ||
+            0
+          );
+
+        const newBypass =
+          Number(
+            globalThis
+              .__SC_ROLE_BYPASS__
+              .get(
+                newId
+              ) ||
+            0
+          );
+
+        if (
+          oldBypass ||
+          newBypass
+        ) {
+          globalThis
+            .__SC_ROLE_BYPASS__
+            .set(
+              newId,
+              Math.max(
+                oldBypass,
+                newBypass
+              )
+            );
+        }
+
+        globalThis
+          .__SC_ROLE_BYPASS__
+          .delete(
+            oldId
+          );
+      }
+
+      // =====================================================
+      // TIMER DE RESTAURAÇÃO
+      // =====================================================
+
+      if (
+        SC_GI_STATE
+          .restoreTimers
+          .has(
+            oldId
+          )
+      ) {
+        clearTimeout(
+          SC_GI_STATE
+            .restoreTimers
+            .get(
+              oldId
+            )
+        );
+
+        SC_GI_STATE
+          .restoreTimers
+          .delete(
+            oldId
+          );
+      }
+
+      if (
+        SC_GI_STATE
+          .roleSnapshots
+          .has(
+            newId
+          ) &&
+        typeof scheduleRestoreRoles ===
+          'function'
+      ) {
+        await scheduleRestoreRoles(
+          guild,
+          newId
+        ).catch(
+          () => {}
+        );
+      }
+    }
+
+    // =====================================================
+    // TRANSFERE OS CARGOS DO DISCORD ANTIGO PARA O NOVO
+    // =====================================================
+
+    async function transferDiscordMemberRoles(
+      guild,
+      oldUserId,
+      newUserId
+    ) {
+      const oldMember =
+        await guild.members
+          .fetch(
+            oldUserId
+          )
+          .catch(
+            () => null
+          );
+
+      const newMember =
+        await guild.members
+          .fetch(
+            newUserId
+          )
+          .catch(
+            () => null
+          );
+
+      if (
+        !newMember
+      ) {
+        throw new Error(
+          'O novo ID Discord não está no servidor.'
+        );
+      }
+
+      if (
+        newMember
+          .user
+          ?.bot
+      ) {
+        throw new Error(
+          'O novo ID informado pertence a um bot.'
+        );
+      }
+
+      // Conta antiga já saiu do servidor.
+      //
+      // Ainda podemos fazer a troca de identidade,
+      // apenas não haverá cargos ao vivo para remover.
+
+      if (
+        !oldMember
+      ) {
+        return {
+          oldMember:
+            null,
+
+          newMember,
+
+          transferableRoleIds:
+            [],
+
+          addedRoleIds:
+            [],
+
+          removedRoleIds:
+            [],
+
+          skippedRoleIds:
+            [],
+
+          newNicknameBefore:
+            newMember.nickname,
+
+          nicknameTransferred:
+            false,
+
+          oldMemberMissing:
+            true
+        };
+      }
+
+      const botMember =
+        guild.members.me ||
+        await guild.members
+          .fetch(
+            client.user.id
+          )
+          .catch(
+            () => null
+          );
+
+      if (
+        !botMember
+      ) {
+        throw new Error(
+          'Não consegui validar a hierarquia de cargos do bot.'
+        );
+      }
+
+      // Somente cargos que o bot realmente consegue administrar.
+
+      const transferableRoles =
+        oldMember
+          .roles
+          .cache
+          .filter(
+            role =>
+              role.id !==
+                guild.id &&
+              !role.managed &&
+              role.comparePositionTo(
+                botMember
+                  .roles
+                  .highest
+              ) < 0
+          );
+
+      // Cargos impossíveis de transferir.
+      //
+      // Exemplo:
+      // - cargos managed
+      // - integração
+      // - cargo acima do bot
+
+      const skippedRoles =
+        oldMember
+          .roles
+          .cache
+          .filter(
+            role =>
+              role.id !==
+                guild.id &&
+              (
+                role.managed ||
+                role.comparePositionTo(
+                  botMember
+                    .roles
+                    .highest
+                ) >= 0
+              )
+          );
+
+      const transferableRoleIds =
+        transferableRoles
+          .map(
+            role =>
+              role.id
+          );
+
+      const addedRoleIds =
+        transferableRoleIds
+          .filter(
+            roleId =>
+              !newMember
+                .roles
+                .cache
+                .has(
+                  roleId
+                )
+          );
+
+      const newNicknameBefore =
+        newMember.nickname;
+
+      try {
+        // Primeiro coloca no novo.
+        //
+        // Isso evita tirar tudo do antigo e só depois
+        // descobrir que não consegue colocar no novo.
+
+        if (
+          addedRoleIds.length
+        ) {
+          await newMember
+            .roles
+            .add(
+              addedRoleIds,
+              `Troca de Discord: ${oldUserId} -> ${newUserId}`
+            );
+        }
+
+        // Depois de confirmar a adição,
+        // remove da conta antiga.
+
+        if (
+          transferableRoleIds.length
+        ) {
+          await oldMember
+            .roles
+            .remove(
+              transferableRoleIds,
+              `Troca de Discord: ${oldUserId} -> ${newUserId}`
+            );
+        }
+      } catch (
+        error
+      ) {
+        // Se der erro, devolve o novo membro
+        // ao estado anterior.
+
+        if (
+          addedRoleIds.length
+        ) {
+          await newMember
+            .roles
+            .remove(
+              addedRoleIds,
+              'Rollback da troca de Discord'
+            )
+            .catch(
+              () => {}
+            );
+        }
+
+        throw new Error(
+          `Falha ao transferir cargos entre as contas: ${error?.message || error}`
+        );
+      }
+
+      let nicknameTransferred =
+        false;
+
+      if (
+        oldMember.nickname &&
+        newMember.manageable
+      ) {
+        nicknameTransferred =
+          await newMember
+            .setNickname(
+              oldMember.nickname,
+              `Troca de Discord: ${oldUserId} -> ${newUserId}`
+            )
+            .then(
+              () => true
+            )
+            .catch(
+              () => false
+            );
+      }
+
+      return {
+        oldMember,
+
+        newMember,
+
+        transferableRoleIds,
+
+        addedRoleIds,
+
+        removedRoleIds:
+          transferableRoleIds,
+
+        skippedRoleIds:
+          skippedRoles
+            .map(
+              role =>
+                role.id
+            ),
+
+        newNicknameBefore,
+
+        nicknameTransferred,
+
+        oldMemberMissing:
+          false
+      };
+    }
+
+    // =====================================================
+    // ROLLBACK DOS CARGOS
+    // =====================================================
+
+    async function rollbackDiscordMemberRoles(
+      transferResult
+    ) {
+      if (
+        !transferResult
+      ) {
+        return;
+      }
+
+      const {
+        oldMember,
+        newMember,
+        removedRoleIds = [],
+        addedRoleIds = [],
+        newNicknameBefore
+      } =
+        transferResult;
+
+      // Devolve os cargos ao antigo.
+
+      if (
+        oldMember &&
+        removedRoleIds.length
+      ) {
+        await oldMember
+          .roles
+          .add(
+            removedRoleIds,
+            'Rollback da troca de Discord'
+          )
+          .catch(
+            () => {}
+          );
+      }
+
+      // Remove os cargos adicionados no novo.
+
+      if (
+        newMember &&
+        addedRoleIds.length
+      ) {
+        await newMember
+          .roles
+          .remove(
+            addedRoleIds,
+            'Rollback da troca de Discord'
+          )
+          .catch(
+            () => {}
+          );
+      }
+
+      // Restaura nickname anterior do novo membro.
+
+      if (
+        newMember
+          ?.manageable
+      ) {
+        await newMember
+          .setNickname(
+            newNicknameBefore ||
+            null,
+
+            'Rollback da troca de Discord'
+          )
+          .catch(
+            () => {}
+          );
+      }
+    }
+
+    // =====================================================
+    // FUNÇÃO CENTRAL
+    // =====================================================
+
+    async function migrateDiscordIdentityForGI({
+      guild,
+      editor,
+      rec,
+      messageId,
+      newUserId
+    }) {
+      const oldUserId =
+        String(
+          rec.targetId ||
+          ''
+        ).trim();
+
+      const nextUserId =
+        String(
+          newUserId ||
+          ''
+        ).trim();
+
+      // Se não mudou o Discord,
+      // não executa nenhuma migração.
+
+      if (
+        !nextUserId ||
+        nextUserId ===
+          oldUserId
+      ) {
+        return {
+          changed:
+            false,
+
+          oldUserId,
+
+          newUserId:
+            oldUserId,
+
+          formsResult: {
+            status:
+              'unchanged'
+          },
+
+          roleTransfer:
+            null
+        };
+      }
+
+      // =====================================================
+      // VALIDA ID
+      // =====================================================
+
+      if (
+        !/^\d{17,20}$/.test(
+          nextUserId
+        )
+      ) {
+        throw new Error(
+          'Novo ID Discord inválido. Informe somente o ID numérico da conta.'
+        );
+      }
+
+      // =====================================================
+      // NÃO PERMITE DUPLICAR REGISTRO GI
+      // =====================================================
+
+      const duplicatedGIRecord =
+        Array.from(
+          SC_GI_STATE
+            .registros
+            .values()
+        )
+          .find(
+            item =>
+              String(
+                item
+                  ?.messageId ||
+                ''
+              ) !==
+                String(
+                  messageId
+                ) &&
+              String(
+                item
+                  ?.targetId ||
+                ''
+              ) ===
+                nextUserId
+          );
+
+      if (
+        duplicatedGIRecord
+      ) {
+        throw new Error(
+          'O novo Discord já possui outro registro Gestaoinfluencer. A troca foi bloqueada para não misturar históricos.'
+        );
+      }
+
+      // =====================================================
+      // CONFERE MÓDULO CENTRAL
+      // =====================================================
+
+      if (
+        typeof validateDiscordIdentityMigration !==
+          'function' ||
+        typeof registerDiscordIdentityMigration !==
+          'function' ||
+        typeof rollbackDiscordIdentityMigration !==
+          'function'
+      ) {
+        throw new Error(
+          'Módulo central de identidade indisponível. A troca foi bloqueada para evitar perda de pontos.'
+        );
+      }
+
+      // =====================================================
+      // CONFERE FORMSCREATOR
+      // =====================================================
+
+      if (
+        typeof migrateFormsCreatorDiscordId !==
+          'function'
+      ) {
+        throw new Error(
+          'Integração do FormsCreator sem suporte à troca de Discord. A troca foi bloqueada para evitar histórico quebrado.'
+        );
+      }
+
+      // =====================================================
+      // VALIDA IDENTIDADE
+      // =====================================================
+
+      validateDiscordIdentityMigration(
+        oldUserId,
+        nextUserId
+      );
+
+      // =====================================================
+      // NOVO MEMBRO PRECISA ESTAR NO SERVIDOR
+      // =====================================================
+
+      const newMember =
+        await guild.members
+          .fetch(
+            nextUserId
+          )
+          .catch(
+            () => null
+          );
+
+      if (
+        !newMember
+      ) {
+        throw new Error(
+          'O novo ID Discord precisa estar dentro do servidor antes da troca.'
+        );
+      }
+
+      // =====================================================
+      // TRANSFERE CARGOS
+      // =====================================================
+
+      const roleTransfer =
+        await transferDiscordMemberRoles(
+          guild,
+          oldUserId,
+          nextUserId
+        );
+
+      let identityRegistered =
+        false;
+
+      try {
+        // =====================================================
+        // REGISTRA ID ANTIGO -> ID NOVO
+        // =====================================================
+
+        const identityResult =
+          registerDiscordIdentityMigration({
+            oldUserId,
+
+            newUserId:
+              nextUserId,
+
+            actorId:
+              editor.id,
+
+            reason:
+              'Troca de Discord pelo Editar Registro do Gestaoinfluencer'
+          });
+
+        identityRegistered =
+          identityResult
+            ?.changed ===
+          true;
+
+        // =====================================================
+        // MIGRA FORMSCREATOR
+        // =====================================================
+
+        const formsResult =
+          await migrateFormsCreatorDiscordId(
+            guild.client,
+            {
+              oldUserId,
+
+              newUserId:
+                nextUserId,
+
+              actor:
+                editor
+            }
+          );
+
+        // =====================================================
+        // HISTÓRICO DA TROCA NO REGISTRO GI
+        // =====================================================
+
+        rec.discordIdHistory =
+          Array.isArray(
+            rec
+              .discordIdHistory
+          )
+            ? rec
+                .discordIdHistory
+            : [];
+
+        rec
+          .discordIdHistory
+          .push({
+            from:
+              oldUserId,
+
+            to:
+              nextUserId,
+
+            changedAtMs:
+              nowMs(),
+
+            changedBy:
+              editor.id
+          });
+
+        rec.lastDiscordMigration =
+          {
+            from:
+              oldUserId,
+
+            to:
+              nextUserId,
+
+            changedAtMs:
+              nowMs(),
+
+            changedBy:
+              editor.id
+          };
+
+        // =====================================================
+        // TROCA O ID PRINCIPAL DO REGISTRO GI
+        // =====================================================
+
+        rec.targetId =
+          nextUserId;
+
+        // =====================================================
+        // MOVE ESTADOS INTERNOS
+        // =====================================================
+
+        await migrateGIInternalIdentityState(
+          guild,
+          oldUserId,
+          nextUserId
+        );
+
+        // =====================================================
+        // SALVA IMEDIATAMENTE
+        // =====================================================
+
+        await SC_GI_saveNow();
+
+        // =====================================================
+        // AVISA DASHBOARD + RANKING
+        // =====================================================
+
+        dashEmit(
+          'identity:migrated',
+          {
+            oldUserId,
+
+            newUserId:
+              nextUserId,
+
+            actorId:
+              editor.id,
+
+            __at:
+              Date.now()
+          }
+        );
+
+        // =====================================================
+        // LOG
+        // =====================================================
+
+        await logMsg(
+          guild,
+          'Troca de Discord (GI)',
+          [
+            `🔁 **Discord anterior:** <@${oldUserId}> (\`${oldUserId}\`)`,
+
+            `✅ **Discord atual:** <@${nextUserId}> (\`${nextUserId}\`)`,
+
+            `🧾 **Executado por:** <@${editor.id}> (\`${editor.id}\`)`,
+
+            `📚 **FormsCreator:** ${formsResult?.status || 'desconhecido'}`,
+
+            `🎭 **Cargos transferidos:** ${roleTransfer.removedRoleIds.length}`,
+
+            roleTransfer
+              .skippedRoleIds
+              .length
+              ? `⚠️ **Cargos não gerenciáveis pelo bot:** ${formatRoleMentions(roleTransfer.skippedRoleIds)}`
+              : '✅ **Cargos não gerenciáveis:** nenhum',
+
+            roleTransfer
+              .oldMemberMissing
+              ? '⚠️ A conta antiga não estava mais no servidor; não havia cargos ao vivo para remover.'
+              : '✅ Os cargos transferíveis foram removidos da conta antiga após serem aplicados na nova.',
+
+            '📊 **Ranking/Dashboard:** histórico antigo preservado pelo vínculo de identidade.',
+
+            '🧠 **Auditoria:** logs históricos antigos não são apagados nem reescritos.'
+          ]
+            .join(
+              '\n'
+            )
+        );
+
+        return {
+          changed:
+            true,
+
+          oldUserId,
+
+          newUserId:
+            nextUserId,
+
+          formsResult,
+
+          roleTransfer
+        };
+      } catch (
+        error
+      ) {
+        // =====================================================
+        // ROLLBACK DA IDENTIDADE
+        // =====================================================
+
+        if (
+          identityRegistered
+        ) {
+          try {
+            rollbackDiscordIdentityMigration({
+              oldUserId,
+
+              newUserId:
+                nextUserId
+            });
+          } catch {}
+        }
+
+        // =====================================================
+        // ROLLBACK DOS CARGOS
+        // =====================================================
+
+        await rollbackDiscordMemberRoles(
+          roleTransfer
+        );
+
+        throw error;
+      }
+    }
+
+    async function editRegistro(
+      guild,
+      editor,
+      messageId,
+      newArea,
+      newNote,
+      newDateStr,
+      newDiscordId
+    ) {
+      const rec =
+        SC_GI_STATE
+          .registros
+          .get(
+            messageId
+          );
+
+      if (!rec) {
+        throw new Error(
+          'Registro não encontrado.'
+        );
+      }
 
       await assertCanManageGIRecord(
         guild,
@@ -2774,8 +3907,29 @@ try {
         );
       }
 
+      const requestedDiscordId =
+        String(
+          newDiscordId ||
+          rec.targetId ||
+          ""
+        ).trim();
+
+      const identityMigrationResult =
+        await migrateDiscordIdentityForGI({
+          guild,
+          editor,
+          rec,
+          messageId,
+
+          newUserId:
+            requestedDiscordId
+        });
+
       const previousArea =
-        String(rec.area || "A Definir").trim();
+        String(
+          rec.area ||
+          "A Definir"
+        ).trim();
 
       const previousAreaProfile =
         resolveAreaProfile(
@@ -3006,6 +4160,10 @@ try {
           transitionResult.nicknameAfter,
         roleTransitionSkipped:
           transitionResult.roleTransitionSkipped,
+
+        identityMigration:
+          identityMigrationResult,
+
         formsSyncResult
       };
     }
@@ -5249,28 +6407,121 @@ if (!rec.active) {
             });
           }
 
-          const inpArea = new TextInputBuilder()
-            .setCustomId('SC_GI_EDIT_AREA').setLabel('Área (visual)').setStyle(TextInputStyle.Short)
-            .setPlaceholder(rec.area || 'SocialMedias').setValue(rec.area || 'SocialMedias').setRequired(true);
-          
-          const inpDate = new TextInputBuilder()
-            .setCustomId('SC_GI_EDIT_DATE').setLabel('Data Entrada (DD/MM/AAAA)').setStyle(TextInputStyle.Short)
-            .setPlaceholder('DD/MM/AAAA').setValue(msToDDMMYYYY(rec.joinDateMs)).setRequired(true);
-          
-          const inpNote = new TextInputBuilder()
-            .setCustomId('SC_GI_EDIT_NOTE').setLabel('Observação/Nota (opcional)').setStyle(TextInputStyle.Paragraph)
-            .setPlaceholder('Ex.: destaque, mudança visual, etc.').setRequired(false);
+          const inpDiscordId =
+            new TextInputBuilder()
+              .setCustomId(
+                'SC_GI_EDIT_DISCORD_ID'
+              )
+              .setLabel(
+                'Discord ID atual / novo'
+              )
+              .setStyle(
+                TextInputStyle.Short
+              )
+              .setPlaceholder(
+                'Ex.: 123456789012345678'
+              )
+              .setValue(
+                String(
+                  rec.targetId ||
+                  ''
+                )
+              )
+              .setMinLength(17)
+              .setMaxLength(20)
+              .setRequired(true);
 
-          const modal = new ModalBuilder()
-            .setCustomId(`SC_GI_MODAL_EDIT_${messageId}`)
-            .setTitle('Editar Registro — Gestaoinfluencer')
-            .addComponents(
-              new ActionRowBuilder().addComponents(inpArea),
-              new ActionRowBuilder().addComponents(inpDate),
-              new ActionRowBuilder().addComponents(inpNote)
-            );
+          const inpArea =
+            new TextInputBuilder()
+              .setCustomId(
+                'SC_GI_EDIT_AREA'
+              )
+              .setLabel(
+                'Área (visual)'
+              )
+              .setStyle(
+                TextInputStyle.Short
+              )
+              .setPlaceholder(
+                rec.area ||
+                'SocialMedias'
+              )
+              .setValue(
+                rec.area ||
+                'SocialMedias'
+              )
+              .setRequired(true);
+          
+          const inpDate =
+            new TextInputBuilder()
+              .setCustomId(
+                'SC_GI_EDIT_DATE'
+              )
+              .setLabel(
+                'Data Entrada (DD/MM/AAAA)'
+              )
+              .setStyle(
+                TextInputStyle.Short
+              )
+              .setPlaceholder(
+                'DD/MM/AAAA'
+              )
+              .setValue(
+                msToDDMMYYYY(
+                  rec.joinDateMs
+                )
+              )
+              .setRequired(true);
+          
+          const inpNote =
+            new TextInputBuilder()
+              .setCustomId(
+                'SC_GI_EDIT_NOTE'
+              )
+              .setLabel(
+                'Observação/Nota (opcional)'
+              )
+              .setStyle(
+                TextInputStyle.Paragraph
+              )
+              .setPlaceholder(
+                'Ex.: destaque, mudança visual, etc.'
+              )
+              .setRequired(false);
 
-          return interaction.showModal(modal);
+          const modal =
+            new ModalBuilder()
+              .setCustomId(
+                `SC_GI_MODAL_EDIT_${messageId}`
+              )
+              .setTitle(
+                'Editar Registro — Gestaoinfluencer'
+              )
+              .addComponents(
+                new ActionRowBuilder()
+                  .addComponents(
+                    inpDiscordId
+                  ),
+
+                new ActionRowBuilder()
+                  .addComponents(
+                    inpArea
+                  ),
+
+                new ActionRowBuilder()
+                  .addComponents(
+                    inpDate
+                  ),
+
+                new ActionRowBuilder()
+                  .addComponents(
+                    inpNote
+                  )
+              );
+
+          return interaction.showModal(
+            modal
+          );
         }
 
         // Reenviar DM agora
@@ -5388,6 +6639,13 @@ if (!rec.active) {
           });
 
           try {
+            const discordId =
+              interaction.fields
+                .getTextInputValue(
+                  'SC_GI_EDIT_DISCORD_ID'
+                )
+                ?.trim();
+
             const area =
               interaction.fields
                 .getTextInputValue(
@@ -5416,10 +6674,57 @@ if (!rec.active) {
                 messageId,
                 area,
                 note,
-                date
+                date,
+                discordId
               );
 
             const responseLines = [];
+
+            if (
+              result
+                .identityMigration
+                ?.changed
+            ) {
+              responseLines.push(
+                `🔁 Discord trocado: <@${result.identityMigration.oldUserId}> → <@${result.identityMigration.newUserId}>.`
+              );
+
+              responseLines.push(
+                `🎭 Cargos transferidos: **${result.identityMigration.roleTransfer?.removedRoleIds?.length || 0}**.`
+              );
+
+              if (
+                result
+                  .identityMigration
+                  .roleTransfer
+                  ?.skippedRoleIds
+                  ?.length
+              ) {
+                responseLines.push(
+                  `⚠️ ${result.identityMigration.roleTransfer.skippedRoleIds.length} cargo(s) não puderam ser movidos por hierarquia/integração do Discord.`
+                );
+              }
+
+              responseLines.push(
+                '📊 Ranking e Dashboard vinculados ao novo Discord sem zerar o histórico.'
+              );
+
+              responseLines.push(
+                result
+                  .identityMigration
+                  .formsResult
+                  ?.status ===
+                    'synced'
+                  ? '📚 FormsCreator mantido no mesmo histórico/tópico.'
+                  : result
+                      .identityMigration
+                      .formsResult
+                      ?.status ===
+                        'not_found'
+                    ? '⚠️ FormsCreator não encontrado para este membro.'
+                    : '📚 FormsCreator verificado durante a troca.'
+              );
+            }
 
             if (
               result.storedAreaChanged
@@ -5558,19 +6863,129 @@ if (!rec.active) {
               SC_GI_scheduleSave();
               await refreshRegistroMessage(guild, interaction.user, recordId, 'Revertido status');
               await interaction.editReply({ content: `✅ Status do registro de <@${rec.targetId}> revertido para **${newStatus ? 'Ativo' : 'Pausado'}**.` });
-            } else if (action === 'EDIT') {
+                       } else if (action === 'EDIT') {
               // Para edição, abre o modal de edição novamente para o usuário preencher
-              const inpArea = new TextInputBuilder().setCustomId('SC_GI_EDIT_AREA').setLabel('Área (visual)').setStyle(TextInputStyle.Short).setPlaceholder(rec.area || 'SocialMedias').setValue(rec.area || 'SocialMedias').setRequired(true);
-              const inpDate = new TextInputBuilder().setCustomId('SC_GI_EDIT_DATE').setLabel('Data Entrada (DD/MM/AAAA)').setStyle(TextInputStyle.Short).setPlaceholder('DD/MM/AAAA').setValue(msToDDMMYYYY(rec.joinDateMs)).setRequired(true);
-              const inpNote = new TextInputBuilder().setCustomId('SC_GI_EDIT_NOTE').setLabel('Observação/Nota (opcional)').setStyle(TextInputStyle.Paragraph).setPlaceholder('Ex.: destaque, mudança visual, etc.').setRequired(false);
 
-              const modal = new ModalBuilder()
-                .setCustomId(`SC_GI_MODAL_EDIT_${recordId}`)
-                .setTitle('Re-editar Registro — Gestaoinfluencer')
-                .addComponents(new ActionRowBuilder().addComponents(inpArea), new ActionRowBuilder().addComponents(inpDate), new ActionRowBuilder().addComponents(inpNote));
+              const inpDiscordId =
+                new TextInputBuilder()
+                  .setCustomId(
+                    'SC_GI_EDIT_DISCORD_ID'
+                  )
+                  .setLabel(
+                    'Discord ID atual / novo'
+                  )
+                  .setStyle(
+                    TextInputStyle.Short
+                  )
+                  .setPlaceholder(
+                    'Ex.: 123456789012345678'
+                  )
+                  .setValue(
+                    String(
+                      rec.targetId ||
+                      ''
+                    )
+                  )
+                  .setMinLength(17)
+                  .setMaxLength(20)
+                  .setRequired(true);
+
+              const inpArea =
+                new TextInputBuilder()
+                  .setCustomId(
+                    'SC_GI_EDIT_AREA'
+                  )
+                  .setLabel(
+                    'Área (visual)'
+                  )
+                  .setStyle(
+                    TextInputStyle.Short
+                  )
+                  .setPlaceholder(
+                    rec.area ||
+                    'SocialMedias'
+                  )
+                  .setValue(
+                    rec.area ||
+                    'SocialMedias'
+                  )
+                  .setRequired(true);
+
+              const inpDate =
+                new TextInputBuilder()
+                  .setCustomId(
+                    'SC_GI_EDIT_DATE'
+                  )
+                  .setLabel(
+                    'Data Entrada (DD/MM/AAAA)'
+                  )
+                  .setStyle(
+                    TextInputStyle.Short
+                  )
+                  .setPlaceholder(
+                    'DD/MM/AAAA'
+                  )
+                  .setValue(
+                    msToDDMMYYYY(
+                      rec.joinDateMs
+                    )
+                  )
+                  .setRequired(true);
+
+              const inpNote =
+                new TextInputBuilder()
+                  .setCustomId(
+                    'SC_GI_EDIT_NOTE'
+                  )
+                  .setLabel(
+                    'Observação/Nota (opcional)'
+                  )
+                  .setStyle(
+                    TextInputStyle.Paragraph
+                  )
+                  .setPlaceholder(
+                    'Ex.: destaque, mudança visual, etc.'
+                  )
+                  .setRequired(false);
+
+              const modal =
+                new ModalBuilder()
+                  .setCustomId(
+                    `SC_GI_MODAL_EDIT_${recordId}`
+                  )
+                  .setTitle(
+                    'Re-editar Registro — Gestaoinfluencer'
+                  )
+                  .addComponents(
+                    new ActionRowBuilder()
+                      .addComponents(
+                        inpDiscordId
+                      ),
+
+                    new ActionRowBuilder()
+                      .addComponents(
+                        inpArea
+                      ),
+
+                    new ActionRowBuilder()
+                      .addComponents(
+                        inpDate
+                      ),
+
+                    new ActionRowBuilder()
+                      .addComponents(
+                        inpNote
+                      )
+                  );
               
-              await interaction.showModal(modal); // Mostra o modal
-              await interaction.editReply({ content: '✅ Modal de edição aberto para reverter a edição.' }); // Responde a interação original
+              await interaction.showModal(
+                modal
+              );
+
+              await interaction.editReply({
+                content:
+                  '✅ Modal de edição aberto para reverter a edição.'
+              });
             } else if (action === 'RESP') {
               // Para responsável, abre o select novamente
               const rows = [];

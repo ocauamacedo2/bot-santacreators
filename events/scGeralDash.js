@@ -26,6 +26,11 @@ import {
   GeralAudit,
 } from "../shared/scGeralSources.js";
 
+import {
+  resolveDiscordIdentity,
+  normalizeDiscordIdentityAdjustmentMap,
+} from "../shared/scDiscordIdentity.js";
+
 // ✅ __dirname no ESM
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -156,9 +161,33 @@ const MANUAL_ADJUST_ROLE_HIERARCHY = new Map([
 const MANUAL_ADJUST_PATH = path.join(DATA_DIR, "sc_points_adjustments.json");
 
 function loadManualAdjustments() {
-  return readJSON(MANUAL_ADJUST_PATH, {
-    byWeek: {},
-  });
+  const manual =
+    readJSON(
+      MANUAL_ADJUST_PATH,
+      {
+        byWeek: {},
+      }
+    );
+
+  manual.byWeek =
+    manual.byWeek || {};
+
+  for (
+    const [
+      weekKey,
+      users
+    ]
+    of Object.entries(
+      manual.byWeek
+    )
+  ) {
+    manual.byWeek[weekKey] =
+      normalizeDiscordIdentityAdjustmentMap(
+        users
+      );
+  }
+
+  return manual;
 }
 
 function saveManualAdjustments(data) {
@@ -387,22 +416,71 @@ async function canManualRemovePoints({ guild, executorId, targetUserId }) {
 }
 
 function applyManualAdjustment({ weekKey, userId, delta }) {
-  const manual = loadManualAdjustments();
-  manual.byWeek = manual.byWeek || {};
-  manual.byWeek[weekKey] = manual.byWeek[weekKey] || {};
+  const manual =
+    loadManualAdjustments();
 
-  const before = Number(manual.byWeek[weekKey][userId] || 0);
-  const after = before + Number(delta || 0);
+  manual.byWeek =
+    manual.byWeek || {};
 
-  manual.byWeek[weekKey][userId] = after;
-  saveManualAdjustments(manual);
+  manual.byWeek[weekKey] =
+    manual.byWeek[weekKey] || {};
 
-  return { before, after, data: manual };
+  const canonicalUserId =
+    resolveDiscordIdentity(
+      userId
+    );
+
+  const before =
+    Number(
+      manual.byWeek[
+        weekKey
+      ][canonicalUserId] ||
+      0
+    );
+
+  const after =
+    before +
+    Number(
+      delta || 0
+    );
+
+  manual.byWeek[
+    weekKey
+  ][canonicalUserId] =
+    after;
+
+  saveManualAdjustments(
+    manual
+  );
+
+  return {
+    before,
+    after,
+    data: manual,
+    userId:
+      canonicalUserId,
+  };
 }
 
-function getManualAdjustmentForWeekUser(weekKey, userId) {
-  const manual = loadManualAdjustments();
-  return Number(manual.byWeek?.[weekKey]?.[String(userId)] || 0);
+function getManualAdjustmentForWeekUser(
+  weekKey,
+  userId
+) {
+  const manual =
+    loadManualAdjustments();
+
+  const canonicalUserId =
+    resolveDiscordIdentity(
+      userId
+    );
+
+  return Number(
+    manual.byWeek?.[
+      weekKey
+    ]?.[
+      canonicalUserId
+    ] || 0
+  );
 }
 
 async function emitManualRemovePointLog(client, payload = {}) {
@@ -2003,17 +2081,44 @@ async function collectAllGeneral(client, mode = "light") {
     const items = [];
 
 const pushItem = (item) => {
-  const userId = String(item?.userId || "").trim();
-  const source = String(item?.source || "").trim();
+  const rawUserId =
+    String(
+      item?.userId || ""
+    ).trim();
 
-  if (!userId || !source || !item?.ts) return;
+  const userId =
+    resolveDiscordIdentity(
+      rawUserId
+    );
 
-  if (client?.user?.id && userId === String(client.user.id)) {
-    auditor.reject(source, "bot_self_point");
+  const source =
+    String(
+      item?.source || ""
+    ).trim();
+
+  if (
+    !userId ||
+    !source ||
+    !item?.ts
+  ) return;
+
+  if (
+    client?.user?.id &&
+    userId ===
+      String(client.user.id)
+  ) {
+    auditor.reject(
+      source,
+      "bot_self_point"
+    );
+
     return;
   }
 
-  auditor.addStats(source, "counted");
+  auditor.addStats(
+    source,
+    "counted"
+  );
 
   items.push({
     ...item,
@@ -4601,6 +4706,11 @@ const scheduleFastSync = () => {
   }, 5000);
 };
 
+dashOn("identity:migrated", () => {
+  markDirty({ invalidateScanCache: true });
+  scheduleFastSync();
+});
+
 // ✅ BATE PONTO -> altera ranking (scan)
 // FIX: faz update "fast" (não depende do scheduler de 60s)
 let BP_FAST_TIMER = null;
@@ -4746,63 +4856,125 @@ dashOn("correcao:usado", () => {
   // ✅ GI: DESLIGADO -> Remove do Ranking/Geral (aplica ajuste negativo massivo na semana)
   dashOn("gi:desligado", (p) => {
     try {
-      const userId = p.userId;
+      const userId =
+        resolveDiscordIdentity(
+          p.userId
+        );
+
       if (!userId) return;
 
-      const wk = weekKeyFromDateSP(nowSP());
-      const manual = loadManualAdjustments();
+      const wk =
+        weekKeyFromDateSP(
+          nowSP()
+        );
+
+      const manual =
+        loadManualAdjustments();
       
-      manual.byWeek = manual.byWeek || {};
-      manual.byWeek[wk] = manual.byWeek[wk] || {};
+      manual.byWeek =
+        manual.byWeek || {};
+
+      manual.byWeek[wk] =
+        manual.byWeek[wk] || {};
       
       // Aplica penalidade visual para sumir do ranking/geral (-99999)
       // Isso NÃO apaga os logs de manager/social media, apenas remove a pontuação do painel.
-      manual.byWeek[wk][userId] = -99999;
+      manual.byWeek[
+        wk
+      ][
+        userId
+      ] = -99999;
       
-      saveManualAdjustments(manual);
+      saveManualAdjustments(
+        manual
+      );
       
       // Força atualização imediata
-      markDirty({ invalidateScanCache: true });
+      markDirty({
+        invalidateScanCache: true
+      });
       
       // console.log(`[SC_GERAL_DASH] Usuário ${userId} desligado. Removido do ranking da semana ${wk}.`);
     } catch (e) {
-      console.error("[SC_GERAL_DASH] Erro ao processar desligamento:", e);
+      console.error(
+        "[SC_GERAL_DASH] Erro ao processar desligamento:",
+        e
+      );
     }
   });
 
   // ✅ GI: RETORNOU / REATIVOU -> devolve a visibilidade da semana atual
   dashOn("gi:retornou", (p) => {
     try {
-      const userId = p.userId;
+      const userId =
+        resolveDiscordIdentity(
+          p.userId
+        );
+
       if (!userId) return;
 
-      const wk = weekKeyFromDateSP(nowSP());
-      const manual = loadManualAdjustments();
+      const wk =
+        weekKeyFromDateSP(
+          nowSP()
+        );
 
-      manual.byWeek = manual.byWeek || {};
-      manual.byWeek[wk] = manual.byWeek[wk] || {};
+      const manual =
+        loadManualAdjustments();
 
-      const currentAdj = Number(manual.byWeek[wk][userId] || 0);
+      manual.byWeek =
+        manual.byWeek || {};
+
+      manual.byWeek[wk] =
+        manual.byWeek[wk] || {};
+
+      const currentAdj =
+        Number(
+          manual.byWeek[
+            wk
+          ][
+            userId
+          ] || 0
+        );
 
       // Se estava escondido pelo desligamento massivo, limpa o ajuste.
       // Assim os pontos antigos da semana + novos pontos voltam a contar.
-      if (currentAdj <= -99999) {
-        delete manual.byWeek[wk][userId];
+      if (
+        currentAdj <=
+        -99999
+      ) {
+        delete manual.byWeek[
+          wk
+        ][
+          userId
+        ];
       }
 
       // limpeza opcional se a semana ficar vazia
-      if (Object.keys(manual.byWeek[wk]).length === 0) {
-        delete manual.byWeek[wk];
+      if (
+        Object.keys(
+          manual.byWeek[wk]
+        ).length === 0
+      ) {
+        delete manual.byWeek[
+          wk
+        ];
       }
 
-      saveManualAdjustments(manual);
+      saveManualAdjustments(
+        manual
+      );
 
       // força reprocessar ranking/dash/gráficos
-      markDirty({ invalidateScanCache: true });
+      markDirty({
+        invalidateScanCache: true
+      });
 
       // console.log(`[SC_GERAL_DASH] Usuário ${userId} retornou. Pontos da semana ${wk} reabilitados.`);
     } catch (e) {
-      console.error("[SC_GERAL_DASH] Erro ao processar retorno do GI:", e);
+      console.error(
+        "[SC_GERAL_DASH] Erro ao processar retorno do GI:",
+        e
+      );
     }
   });
 

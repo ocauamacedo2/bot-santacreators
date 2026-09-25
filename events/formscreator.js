@@ -2708,6 +2708,585 @@ export async function findFormsCreatorThreadLinkByUserId(client, userId, guildId
     return `https://discord.com/channels/${resolvedGuildId}/${threadId}`;
 }
 
+export async function migrateFormsCreatorDiscordId(
+  client,
+  {
+    oldUserId,
+    newUserId,
+    actor = null,
+  } = {}
+) {
+  const oldId =
+    String(
+      oldUserId || ""
+    ).trim();
+
+  const newId =
+    String(
+      newUserId || ""
+    ).trim();
+
+  if (
+    !/^\d{17,20}$/.test(
+      oldId
+    )
+  ) {
+    throw new Error(
+      "ID Discord antigo inválido no FormsCreator."
+    );
+  }
+
+  if (
+    !/^\d{17,20}$/.test(
+      newId
+    )
+  ) {
+    throw new Error(
+      "Novo ID Discord inválido no FormsCreator."
+    );
+  }
+
+  if (
+    oldId === newId
+  ) {
+    return {
+      status:
+        "unchanged",
+
+      oldUserId:
+        oldId,
+
+      newUserId:
+        newId,
+
+      threadId:
+        null,
+
+      messageId:
+        null,
+
+      mirrorStatus:
+        "unchanged",
+
+      evolutionStatus:
+        "unchanged",
+    };
+  }
+
+  const originalThreadId =
+    await findOriginalFormsCreatorThreadIdByUserId(
+      client,
+      oldId
+    );
+
+  if (!originalThreadId) {
+    return {
+      status:
+        "not_found",
+
+      oldUserId:
+        oldId,
+
+      newUserId:
+        newId,
+
+      threadId:
+        null,
+
+      messageId:
+        null,
+
+      mirrorStatus:
+        "not_found",
+
+      evolutionStatus:
+        "not_found",
+    };
+  }
+
+  const state =
+    readState();
+
+  state.registrations ||=
+    {};
+
+  const collision =
+    Object.entries(
+      state.registrations
+    ).find(
+      ([
+        threadId,
+        registration
+      ]) =>
+        threadId !==
+          originalThreadId &&
+        String(
+          registration?.userId ||
+          ""
+        ).trim() ===
+          newId
+    );
+
+  if (collision) {
+    throw new Error(
+      `O novo Discord já possui outro registro FormsCreator no tópico ${collision[0]}.`
+    );
+  }
+
+  const registration =
+    state.registrations[
+      originalThreadId
+    ];
+
+  if (!registration) {
+    throw new Error(
+      "Registro FormsCreator não encontrado no state."
+    );
+  }
+
+  if (
+    String(
+      registration.userId ||
+      ""
+    ).trim() !== oldId
+  ) {
+    throw new Error(
+      "O FormsCreator encontrado não pertence mais ao Discord antigo informado."
+    );
+  }
+
+  const thread =
+    await client.channels
+      .fetch(
+        originalThreadId
+      )
+      .catch(
+        () => null
+      );
+
+  if (
+    !thread ||
+    !thread.isTextBased?.()
+  ) {
+    throw new Error(
+      "Tópico original do FormsCreator não encontrado."
+    );
+  }
+
+  if (thread.archived) {
+    await thread
+      .setArchived(false)
+      .catch(
+        () => {}
+      );
+  }
+
+  let registrationMessage =
+    registration.messageId
+      ? await thread.messages
+          .fetch(
+            registration.messageId
+          )
+          .catch(
+            () => null
+          )
+      : null;
+
+  if (
+    !registrationMessage ||
+    !isFormsCreatorMainRegisterMessage(
+      registrationMessage,
+      client
+    )
+  ) {
+    const recent =
+      await thread.messages
+        .fetch({
+          limit: 100,
+        })
+        .catch(
+          () => null
+        );
+
+    registrationMessage =
+      recent?.find(
+        message => {
+          if (
+            !isFormsCreatorMainRegisterMessage(
+              message,
+              client
+            )
+          ) {
+            return false;
+          }
+
+          const description =
+            String(
+              message
+                .embeds?.[0]
+                ?.description ||
+              ""
+            ).trim();
+
+          return (
+            description ===
+              `<@${oldId}>` ||
+            description ===
+              `<@!${oldId}>`
+          );
+        }
+      ) || null;
+  }
+
+  if (!registrationMessage) {
+    throw new Error(
+      "Mensagem principal do FormsCreator não encontrada para trocar o Discord."
+    );
+  }
+
+  const guild =
+    thread.guild ||
+    await client.guilds
+      .fetch(
+        GUILD_ID
+      )
+      .catch(
+        () => null
+      );
+
+  const newMember =
+    guild
+      ? await guild.members
+          .fetch(
+            newId
+          )
+          .catch(
+            () => null
+          )
+      : null;
+
+  const newUser =
+    newMember?.user ||
+    client.users.cache.get(
+      newId
+    ) ||
+    await client.users
+      .fetch(
+        newId
+      )
+      .catch(
+        () => null
+      );
+
+  const nextEmbed =
+    EmbedBuilder.from(
+      registrationMessage
+        .embeds[0]
+    )
+      .setDescription(
+        `<@${newId}>`
+      );
+
+  if (newUser) {
+    nextEmbed.setThumbnail(
+      newUser.displayAvatarURL({
+        size: 512,
+      })
+    );
+  }
+
+  const rowEdit =
+    new ActionRowBuilder()
+      .addComponents(
+        new ButtonBuilder()
+          .setCustomId(
+            `editar_id_${originalThreadId}`
+          )
+          .setLabel(
+            "✏️ Editar ID/Passaporte"
+          )
+          .setStyle(
+            ButtonStyle.Secondary
+          ),
+
+        new ButtonBuilder()
+          .setCustomId(
+            `editar_area_${originalThreadId}`
+          )
+          .setLabel(
+            "✏️ Editar Área de Interesse"
+          )
+          .setStyle(
+            ButtonStyle.Secondary
+          )
+      );
+
+  const rowStatus =
+    new ActionRowBuilder()
+      .addComponents(
+        new ButtonBuilder()
+          .setCustomId(
+            `fc_toggle_status:${originalThreadId}:${newId}:${registration.active ? "inactive" : "active"}`
+          )
+          .setLabel(
+            registration.active
+              ? "Desligar do Projeto"
+              : "Ligar no Projeto"
+          )
+          .setStyle(
+            registration.active
+              ? ButtonStyle.Danger
+              : ButtonStyle.Success
+          )
+      );
+
+  await registrationMessage.edit({
+    embeds: [
+      nextEmbed,
+    ],
+
+    components: [
+      rowEdit,
+      rowStatus,
+    ],
+  });
+
+  registration.discordIdHistory =
+    Array.isArray(
+      registration
+        .discordIdHistory
+    )
+      ? registration
+          .discordIdHistory
+      : [];
+
+  registration
+    .discordIdHistory
+    .push({
+      from:
+        oldId,
+
+      to:
+        newId,
+
+      changedAtMs:
+        Date.now(),
+
+      changedBy:
+        String(
+          actor?.id ||
+          actor ||
+          ""
+        ).trim() ||
+        null,
+    });
+
+  registration.userId =
+    newId;
+
+  registration.messageId =
+    registrationMessage.id;
+
+  registration.lastDiscordMigration =
+    {
+      from:
+        oldId,
+
+      to:
+        newId,
+
+      changedAtMs:
+        Date.now(),
+
+      changedBy:
+        String(
+          actor?.id ||
+          actor ||
+          ""
+        ).trim() ||
+        null,
+    };
+
+  state.registrations[
+    originalThreadId
+  ] =
+    registration;
+
+  writeState(state);
+
+  let evolutionStatus =
+    "synced";
+
+  try {
+    await syncEvolutionHierarchyForMember(
+      client,
+      {
+        guildId:
+          guild?.id ||
+          GUILD_ID,
+
+        userId:
+          newId,
+
+        originalThreadId,
+
+        reason:
+          `Troca de Discord ${oldId} -> ${newId}`,
+      }
+    );
+  } catch (error) {
+    evolutionStatus =
+      "partial";
+
+    console.error(
+      `[FormsCreator] Registro migrado, mas a hierarquia de evolução ficou pendente para ${newId}:`,
+      error?.message ||
+      error
+    );
+  }
+
+  let mirrorStatus =
+    "synced";
+
+  try {
+    const mirrorResult =
+      await syncFormsCreatorActiveMirror(
+        client,
+        {
+          originalThreadId,
+
+          registration,
+
+          reason:
+            `Troca de Discord ${oldId} -> ${newId}`,
+        }
+      );
+
+    mirrorStatus =
+      mirrorResult?.status ||
+      "synced";
+  } catch (error) {
+    mirrorStatus =
+      "partial";
+
+    console.error(
+      `[FormsCreator] Registro migrado, mas o espelho ativo ficou pendente para ${newId}:`,
+      error?.message ||
+      error
+    );
+  }
+
+  try {
+    const logChannel =
+      await client.channels
+        .fetch(
+          LOG_CHANNEL_ID_V2
+        )
+        .catch(
+          () => null
+        );
+
+    if (
+      logChannel
+        ?.isTextBased?.()
+    ) {
+      const logEmbed =
+        new EmbedBuilder()
+          .setTitle(
+            "🔁 Troca de Discord no FormsCreator"
+          )
+          .setColor(
+            "Purple"
+          )
+          .addFields(
+            {
+              name:
+                "Discord anterior",
+
+              value:
+                `<@${oldId}> (\`${oldId}\`)`,
+
+              inline:
+                false,
+            },
+
+            {
+              name:
+                "Discord atual",
+
+              value:
+                `<@${newId}> (\`${newId}\`)`,
+
+              inline:
+                false,
+            },
+
+            {
+              name:
+                "Tópico preservado",
+
+              value:
+                `<#${originalThreadId}>`,
+
+              inline:
+                true,
+            },
+
+            {
+              name:
+                "Executado por",
+
+              value:
+                actor?.id
+                  ? `<@${actor.id}>`
+                  : "Sistema",
+
+              inline:
+                true,
+            }
+          )
+          .setFooter({
+            text:
+              "O tópico e todo o histórico permanecem os mesmos; somente a identidade atual foi vinculada.",
+          })
+          .setTimestamp();
+
+      await logChannel.send({
+        embeds: [
+          logEmbed,
+        ],
+      });
+    }
+  } catch (error) {
+    console.error(
+      "[FormsCreator] Falha ao registrar log da troca de Discord:",
+      error?.message ||
+      error
+    );
+  }
+
+  return {
+    status:
+      "synced",
+
+    oldUserId:
+      oldId,
+
+    newUserId:
+      newId,
+
+    threadId:
+      originalThreadId,
+
+    messageId:
+      registrationMessage.id,
+
+    mirrorStatus,
+
+    evolutionStatus,
+  };
+}
+
 export async function setFormsCreatorStatus(client, { threadId, newStatus, actor }) {
     const state = readState();
     const registration = state.registrations?.[threadId];
