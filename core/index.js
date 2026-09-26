@@ -270,6 +270,7 @@ import {
 import {
   hallDaFamaOnReady,
   hallDaFamaHandleInteraction,
+  hallDaFamaHandleMessage,
 } from "../events/hallDaFama.js";
 import {
   eventosDiariosOnReady,
@@ -879,6 +880,28 @@ if (
 if (
   await entrevistasTickets.onMessageCreate(
     message
+  )
+) {
+  return;
+}
+
+// =====================================================
+// 🏆 HALL DA FAMA — RESET DE RANKING DE PLAYERS
+// =====================================================
+// Comandos:
+// !zerarrankingplayers
+// !zerarrankingplayers nobre
+// !zerarrankingplayers santa
+// !zerarrankingplayers grande
+// !zerarrankingplayers maresia
+// !zerarrankingnobreplayers
+//
+// Precisa executar ANTES do roteador central para não ser
+// engolido pelo fluxo geral de comandos.
+if (
+  await hallDaFamaHandleMessage(
+    message,
+    client
   )
 ) {
   return;

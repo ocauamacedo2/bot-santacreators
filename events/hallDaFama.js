@@ -13354,6 +13354,17 @@ async function handlePlayerRankingResetCommand(
 
   return true;
 }
+
+export async function hallDaFamaHandleMessage(
+  message,
+  client
+) {
+  return handlePlayerRankingResetCommand(
+    message,
+    client
+  );
+}
+
   // ================= EXPORTS =================
 
   export async function hallDaFamaOnReady(client) {
@@ -13371,30 +13382,6 @@ state.playerRankingSeasons ??= {};
 state.hallAiCopyHistory ??= [];
 
 saveState(state);
-
-if (
-  !client.__HALL_PLAYER_RANKING_RESET_LISTENER__
-) {
-  client.__HALL_PLAYER_RANKING_RESET_LISTENER__ =
-    true;
-
-client.on(
-  "messageCreate",
-  async message => {
-    await handlePlayerRankingResetCommand(
-      message,
-      client
-    ).catch(
-      error => {
-        console.error(
-          "[HallDaFama] Erro no comando de reset de ranking:",
-          error
-        );
-      }
-    );
-  }
-);
-}
 
 const channel =
   await client.channels
