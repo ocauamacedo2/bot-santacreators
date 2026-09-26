@@ -855,6 +855,35 @@ if (
   }
 }
 
+// =====================================================
+// 🎫 TICKETS / RESTAURAÇÃO DE TICKETS
+// =====================================================
+//
+// Estes comandos precisam executar ANTES do roteador
+// centralizado.
+//
+// O motivo é que existe um `return` no final do bloco
+// de comandos. Se este handler ficar somente mais abaixo,
+// comandos como:
+//
+// !entrevistar
+// !atualizartickets
+//
+// nunca chegam ao entrevistasTickets.js.
+//
+// O próprio handler retorna false quando a mensagem
+// não pertence ao sistema de tickets, então os demais
+// comandos continuam normalmente.
+// =====================================================
+
+if (
+  await entrevistasTickets.onMessageCreate(
+    message
+  )
+) {
+  return;
+}
+
 // 🚀 ROTEADOR CENTRALIZADO: Tenta executar via messageCreateHandler primeiro.
 // Se o handler retornar true, significa que o comando foi processado e paramos aqui.
 if (await messageCreateHandler.execute(message, args, client)) return;
