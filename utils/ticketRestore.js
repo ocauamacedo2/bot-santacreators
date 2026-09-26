@@ -1731,6 +1731,335 @@ export function createTicketRestoreSystem({
     );
   }
 
+  // =========================================================
+  // ♻️ ATUALIZAÇÃO MANUAL DOS LOGS RECENTES
+  // =========================================================
+  //
+  // Usado pelo comando !atualizartickets.
+  //
+  // Diferente do backfill automático:
+  // - conta LOGS DE TICKET, não mensagens aleatórias;
+  // - atualiza os tickets mais recentes primeiro;
+  // - informa exatamente quantos foram alterados;
+  // - verifica o ticket prioritário antes de tudo.
+  // =========================================================
+
+  async function forceUpdateRecentTicketLogs(
+    requestedLimit = 50
+  ) {
+    const limit = Math.max(
+      1,
+      Math.min(
+        Number(requestedLimit) || 50,
+        200
+      )
+    );
+
+    const channel =
+      await client.channels
+        .fetch(
+          transcriptLogChannelId
+        )
+        .catch(
+          () => null
+        );
+
+    if (
+      !channel ||
+      !channel.isTextBased?.()
+    ) {
+      throw new Error(
+        `Canal de transcripts ${transcriptLogChannelId} não encontrado ou não é textual.`
+      );
+    }
+
+    // =====================================================
+    // PRIMEIRO: TICKETS PRIORITÁRIOS
+    // =====================================================
+    //
+    // Isso garante que o ticket antigo específico:
+    //
+    // Log:
+    // 1553421533005750417
+    //
+    // Ticket:
+    // 1553211623458738227
+    //
+    // seja verificado ANTES de qualquer paginação.
+    // =====================================================
+
+    await ensurePriorityOldRestoreButtons(
+      channel
+    );
+
+    let before = null;
+
+    let scannedMessages = 0;
+
+    let ticketLogsFound = 0;
+
+    let updated = 0;
+
+    let alreadyHadButton = 0;
+
+    let notEditable = 0;
+
+    let failed = 0;
+
+    // =====================================================
+    // LIMITE DE SEGURANÇA
+    // =====================================================
+    //
+    // Queremos 50 LOGS de ticket.
+    //
+    // Porém o canal pode possuir mensagens que não sejam
+    // logs de ticket.
+    //
+    // Por isso o sistema pode analisar mais de 50 mensagens
+    // até encontrar os 50 tickets verdadeiros.
+    // =====================================================
+
+    const maxMessagesToScan =
+      Math.max(
+        1000,
+        limit * 20
+      );
+
+    while (
+      ticketLogsFound < limit &&
+      scannedMessages < maxMessagesToScan
+    ) {
+      const batch =
+        await channel.messages
+          .fetch({
+            limit: 100,
+
+            before:
+              before ||
+              undefined
+          });
+
+      if (
+        !batch ||
+        batch.size === 0
+      ) {
+        break;
+      }
+
+      // ===================================================
+      // MAIS RECENTES PRIMEIRO
+      // ===================================================
+
+      const ordered =
+        [...batch.values()]
+          .sort(
+            (a, b) =>
+              b.createdTimestamp -
+              a.createdTimestamp
+          );
+
+      for (
+        const logMessage of
+        ordered
+      ) {
+        scannedMessages++;
+
+        // =================================================
+        // IDENTIFICA O ID DO TICKET
+        // =================================================
+
+        const ticketId =
+          getTicketIdFromLog(
+            logMessage
+          );
+
+        // Não é um log de ticket.
+        if (
+          !ticketId
+        ) {
+          continue;
+        }
+
+        ticketLogsFound++;
+
+        // =================================================
+        // JÁ POSSUI BOTÃO
+        // =================================================
+
+        if (
+          hasRestoreButton(
+            logMessage,
+            ticketId
+          )
+        ) {
+          alreadyHadButton++;
+
+          if (
+            ticketLogsFound >= limit
+          ) {
+            break;
+          }
+
+          continue;
+        }
+
+        // =================================================
+        // VERIFICA SE O LOG PODE SER EDITADO
+        // =================================================
+        //
+        // Discord só permite ao mesmo bot editar
+        // a mensagem que ele próprio publicou.
+        // =================================================
+
+        if (
+          logMessage.author?.id !==
+            client.user?.id ||
+          !logMessage.editable
+        ) {
+          notEditable++;
+
+          console.warn(
+            `[TICKET RESTORE] Log ${logMessage.id} do ticket ${ticketId} não é editável por este bot.`
+          );
+
+          if (
+            ticketLogsFound >= limit
+          ) {
+            break;
+          }
+
+          continue;
+        }
+
+        // =================================================
+        // MONTA NOVAMENTE AS ACTION ROWS
+        // =================================================
+        //
+        // Mantém:
+        //
+        // 📂 Abrir Transcript
+        //
+        // e adiciona:
+        //
+        // ♻️ Restaurar Ticket
+        // =================================================
+
+        const rows =
+          addRestoreButtonToRows(
+            logMessage,
+            ticketId
+          );
+
+        if (
+          !rows.length
+        ) {
+          failed++;
+
+          if (
+            ticketLogsFound >= limit
+          ) {
+            break;
+          }
+
+          continue;
+        }
+
+        // =================================================
+        // EDITA O LOG
+        // =================================================
+
+        const editedMessage =
+          await logMessage
+            .edit({
+              components:
+                rows
+            })
+            .catch(
+              error => {
+                console.error(
+                  `[TICKET RESTORE] Falha ao atualizar o log ${logMessage.id} do ticket ${ticketId}:`,
+                  error?.message ||
+                    error
+                );
+
+                return null;
+              }
+            );
+
+        if (
+          editedMessage
+        ) {
+          updated++;
+
+          // Pequena pausa para evitar rate limit.
+          await sleep(
+            350
+          );
+        } else {
+          failed++;
+        }
+
+        if (
+          ticketLogsFound >= limit
+        ) {
+          break;
+        }
+      }
+
+      // ===================================================
+      // PAGINAÇÃO
+      // ===================================================
+      //
+      // Continua a partir da mensagem mais antiga
+      // deste lote.
+      // ===================================================
+
+      before =
+        batch.last()?.id ||
+        null;
+
+      if (
+        batch.size < 100
+      ) {
+        break;
+      }
+    }
+
+    // =====================================================
+    // RESULTADO
+    // =====================================================
+
+    const result = {
+      ok: true,
+
+      requested:
+        limit,
+
+      ticketLogsFound,
+
+      updated,
+
+      alreadyHadButton,
+
+      notEditable,
+
+      failed,
+
+      scannedMessages
+    };
+
+    console.log(
+      `[TICKET RESTORE] Atualização manual concluída: ` +
+      `${ticketLogsFound}/${limit} logs encontrados, ` +
+      `${updated} atualizados, ` +
+      `${alreadyHadButton} já tinham botão, ` +
+      `${notEditable} não editáveis, ` +
+      `${failed} falharam.`
+    );
+
+    return result;
+  }
+
   async function resolveCategory(
     guild,
     transcript,
@@ -2755,6 +3084,7 @@ export function createTicketRestoreSystem({
   return {
     saveRestoreMeta,
     backfillRestoreButtons,
+    forceUpdateRecentTicketLogs,
     handleRestoreInteraction,
     buildRestoreButton,
   };

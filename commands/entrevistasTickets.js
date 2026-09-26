@@ -2396,22 +2396,242 @@ await finalizarTicketComConclusao(
 
   async function onMessageCreate(message) {
     // (era o client.on(Events.MessageCreate...))
-    if (message.author.bot) return false;
-    if (!message.content.toLowerCase().startsWith('!entrevistar')) return false;
 
-    const temPermissao =
-      ENTREVISTA_ALLOWED.includes(message.author.id) ||
-      message.member.roles.cache.some(role => ENTREVISTA_ALLOWED.includes(role.id)) ||
-      USERS_SEMPRE_PODEM.includes(message.author.id); // ← agora tbm passa aqui
+    if (
+      message.author.bot
+    ) {
+      return false;
+    }
 
-    if (!temPermissao) {
-      await message.reply('🚫 Você não tem permissão para usar esse comando.');
+    // =========================================================
+    // ♻️ COMANDO: !atualizartickets
+    // =========================================================
+    //
+    // Força a atualização dos logs antigos mais recentes,
+    // adicionando:
+    //
+    // ♻️ Restaurar Ticket
+    //
+    // Exemplos:
+    //
+    // !atualizartickets
+    //
+    // Atualiza:
+    // 50 tickets
+    //
+    // !atualizartickets 100
+    //
+    // Atualiza:
+    // 100 tickets
+    //
+    // Máximo:
+    // 200 tickets por execução
+    //
+    // Pode usar:
+    //
+    // - Macedo
+    // - Owner
+    //
+    // O sistema também verifica o ticket prioritário
+    // antes de começar os tickets recentes.
+    // =========================================================
+
+    const atualizarTicketsMatch =
+      message.content
+        .trim()
+        .match(
+          /^!atualizartickets(?:\s+(\d+))?$/i
+        );
+
+    if (
+      atualizarTicketsMatch
+    ) {
+      // =======================================================
+      // PERMISSÃO
+      // =======================================================
+
+      const podeAtualizarTickets =
+        message.author.id ===
+          '660311795327828008' ||
+        message.member
+          ?.roles
+          ?.cache
+          ?.has(
+            '1262262852949905408'
+          );
+
+      if (
+        !podeAtualizarTickets
+      ) {
+        await message.reply(
+          '🚫 Apenas Macedo ou Owner pode usar `!atualizartickets`.'
+        );
+
+        return true;
+      }
+
+      // =======================================================
+      // QUANTIDADE
+      // =======================================================
+      //
+      // Sem número:
+      //
+      // !atualizartickets
+      //
+      // = 50
+      //
+      // Com número:
+      //
+      // !atualizartickets 100
+      //
+      // = 100
+      //
+      // Máximo:
+      // 200
+      // =======================================================
+
+      const quantidadePedida =
+        Number(
+          atualizarTicketsMatch[1] ||
+          50
+        );
+
+      const quantidade =
+        Math.max(
+          1,
+          Math.min(
+            Number.isFinite(
+              quantidadePedida
+            )
+              ? quantidadePedida
+              : 50,
+
+            200
+          )
+        );
+
+      // =======================================================
+      // MENSAGEM DE STATUS
+      // =======================================================
+
+      const statusMessage =
+        await message.reply(
+          `♻️ **Atualizando os últimos ${quantidade} logs de tickets...**\n` +
+          `Vou procurar os logs mais recentes e adicionar o botão **Restaurar Ticket** onde ainda estiver faltando.`
+        );
+
+      try {
+        // =====================================================
+        // EXECUTA A ATUALIZAÇÃO
+        // =====================================================
+
+        const result =
+          await ticketRestore
+            .forceUpdateRecentTicketLogs(
+              quantidade
+            );
+
+        // =====================================================
+        // RESULTADO
+        // =====================================================
+
+        await statusMessage.edit(
+          `✅ **Atualização de tickets concluída!**\n\n` +
+
+          `🎫 Logs de ticket encontrados: **${result.ticketLogsFound}/${result.requested}**\n` +
+
+          `♻️ Botões adicionados agora: **${result.updated}**\n` +
+
+          `✅ Já possuíam botão: **${result.alreadyHadButton}**\n` +
+
+          `🔒 Não editáveis por este bot: **${result.notEditable}**\n` +
+
+          `⚠️ Falhas: **${result.failed}**\n` +
+
+          `🔎 Mensagens analisadas: **${result.scannedMessages}**\n\n` +
+
+          `O ticket prioritário antigo também foi verificado automaticamente.`
+        );
+
+      } catch (
+        error
+      ) {
+        console.error(
+          '[TICKET RESTORE] Erro no comando !atualizartickets:',
+          error
+        );
+
+        await statusMessage.edit(
+          `❌ Não consegui atualizar os tickets.\n` +
+          `Erro: \`${String(
+            error?.message ||
+            error
+          ).slice(
+            0,
+            1500
+          )}\``
+        );
+      }
+
       return true;
     }
 
-    await message.delete().catch(() => {});
-    await enviarOuAtualizarMenu(false);
-    await message.channel.send('✅ Menu de entrevista enviado com sucesso!');
+    // =========================================================
+    // COMANDO ANTIGO: !entrevistar
+    // =========================================================
+    //
+    // A partir daqui tudo continua funcionando exatamente
+    // como antes.
+    // =========================================================
+
+    if (
+      !message.content
+        .toLowerCase()
+        .startsWith(
+          '!entrevistar'
+        )
+    ) {
+      return false;
+    }
+
+    const temPermissao =
+      ENTREVISTA_ALLOWED.includes(
+        message.author.id
+      ) ||
+      message.member.roles.cache.some(
+        role =>
+          ENTREVISTA_ALLOWED.includes(
+            role.id
+          )
+      ) ||
+      USERS_SEMPRE_PODEM.includes(
+        message.author.id
+      ); // ← agora tbm passa aqui
+
+    if (
+      !temPermissao
+    ) {
+      await message.reply(
+        '🚫 Você não tem permissão para usar esse comando.'
+      );
+
+      return true;
+    }
+
+    await message
+      .delete()
+      .catch(
+        () => {}
+      );
+
+    await enviarOuAtualizarMenu(
+      false
+    );
+
+    await message.channel.send(
+      '✅ Menu de entrevista enviado com sucesso!'
+    );
+
     return true;
   }
 
