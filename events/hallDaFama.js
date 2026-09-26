@@ -1005,6 +1005,45 @@ const saveState = (data) => {
   );
 };
 
+const loadState = () => {
+  ensureDir();
+
+  if (
+    !fs.existsSync(
+      STATE_FILE
+    )
+  ) {
+    return {};
+  }
+
+  const raw =
+    fs.readFileSync(
+      STATE_FILE,
+      "utf8"
+    ).trim();
+
+  if (!raw) {
+    return {};
+  }
+
+  const parsed =
+    JSON.parse(
+      raw
+    );
+
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    Array.isArray(parsed)
+  ) {
+    throw new Error(
+      "halldafama_state.json possui formato inválido."
+    );
+  }
+
+  return parsed;
+};
+
 const saveHallRankings = (data) => {
   ensureDir();
 
