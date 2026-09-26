@@ -4,6 +4,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 
+import { generateSantaCreatorsStandaloneText } from "./iaChatAuto.js";
+
 import {
   EmbedBuilder,
   ActionRowBuilder,
@@ -44,6 +46,18 @@ const HALL_ORGS_RANKING_WEBHOOK_URL = "https://discord.com/api/webhooks/15195478
 const HALL_PLAYERS_RANKING_WEBHOOK_URL = "";
 
 const RANKING_PRIVATE_LOG_CHANNEL_ID = "1521946409207730347";
+
+const PLAYER_RANKING_RESET_COMMAND = "!zerarrankingplayers";
+const PLAYER_RANKING_RESET_LEGACY_NOBRE_COMMAND = "!zerarrankingnobreplayers";
+
+const PLAYER_RANKING_RESET_ALLOWED_USERS = [
+  "660311795327828008" // Macedo
+];
+
+const PLAYER_RANKING_RESET_ALLOWED_ROLES = [
+  "1262262852949905408", // Owner
+  "1352408327983861844"  // Resp Creators
+];
 
 const RANKING_ROLE_CIDADAO = "1262978759922028575";
 const RANKING_ROLE_SEM_WL = "1430984036972494908";
@@ -509,93 +523,345 @@ function getManualPlayerCityKeySmart(playerId = "", playerName = "") {
     };
   }
 
-  function normalizeExistingPlayerRankingOverrides(rankings) {
-    if (!rankings?.players) return rankings;
+ function normalizeExistingPlayerRankingOverrides(rankings) {
+  if (!rankings?.players) return rankings;
 
-    const fixedPlayers = {};
+  const fixedPlayers = {};
 
-    for (const player of Object.values(rankings.players || {})) {
-      if (!player) continue;
+for (
+  const player of
+  Object.values(
+    rankings.players ||
+    {}
+  )
+) {
+  if (!player) continue;
 
-      const currentPlayerId = String(player.playerId || "").trim();
-      const fixedIdentity = resolvePlayerIdentityOverride(currentPlayerId, player.name || "Sem nome");
-      const fixedName = fixedIdentity.playerName;
-      const fixedPlayerId = fixedIdentity.playerId;
+  const currentPlayerId =
+    String(
+      player.playerId ||
+      ""
+    ).trim();
 
-      const fixedCityKey =
-        getManualPlayerCityKey(fixedPlayerId) ||
-        getManualPlayerCityKeyByName(fixedName) ||
+  const playerSeasonId =
+    String(
+      player.seasonId ||
+      ""
+    ).trim();
+
+  const playerSeasonCityKey =
+    Object.entries(
+      rankings.playerRankingSeasons ||
+      {}
+    ).find(
+      (
+        [
+          cityKey,
+          season
+        ]
+      ) =>
+        CITIES[cityKey] &&
+        String(
+          season?.seasonId ||
+          ""
+        ) ===
+        playerSeasonId
+    )?.[0] ||
+    "";
+
+  const playerBaseCityKey =
+    player.cityKey ||
+    playerSeasonCityKey ||
+    player.halls?.[0]?.cityKey ||
+    "nobre";
+
+  const activeSeason =
+    getPlayerRankingSeason(
+      rankings,
+      playerBaseCityKey
+    );
+
+  const isCurrentSeasonPlayer =
+    Boolean(
+      playerSeasonId &&
+      activeSeason?.seasonId &&
+      playerSeasonId ===
+        String(
+          activeSeason.seasonId
+        )
+    );
+
+  const fixedIdentity =
+    isCurrentSeasonPlayer
+      ? {
+          playerId:
+            currentPlayerId,
+
+          playerName:
+            cleanRankingPlayerName(
+              player.name ||
+              "Sem nome"
+            )
+        }
+      : resolvePlayerIdentityOverride(
+          currentPlayerId,
+          player.name ||
+          "Sem nome"
+        );
+
+  const fixedName =
+    fixedIdentity.playerName;
+
+  const fixedPlayerId =
+    fixedIdentity.playerId;
+
+  const fixedCityKey =
+    isCurrentSeasonPlayer
+      ? playerBaseCityKey
+      : (
+          getManualPlayerCityKey(
+            fixedPlayerId
+          ) ||
+          getManualPlayerCityKeyByName(
+            fixedName
+          ) ||
+          playerBaseCityKey ||
+          "nobre"
+        );
+
+    const fixedCityName =
+      CITIES[fixedCityKey]?.label ||
+      "Cidade Nobre";
+
+    const fixedKey =
+      getPlayerRankingKey({
+        playerName:
+          fixedName,
+
+        playerId:
+          fixedPlayerId,
+
+        cityKey:
+          fixedCityKey,
+
+        seasonId:
+          playerSeasonId
+      });
+
+    fixedPlayers[fixedKey] ??= {
+      ...player,
+
+      key:
+        fixedKey,
+
+      name:
+        fixedName,
+
+      playerId:
+        fixedPlayerId,
+
+      cityKey:
+        fixedCityKey,
+
+      cityName:
+        fixedCityName,
+
+      seasonId:
+        playerSeasonId,
+
+      total:
+        0,
+
+      events:
+        {},
+
+      halls:
+        []
+    };
+
+    fixedPlayers[
+      fixedKey
+    ].name =
+      fixedName;
+
+    fixedPlayers[
+      fixedKey
+    ].playerId =
+      fixedPlayerId;
+
+    fixedPlayers[
+      fixedKey
+    ].cityKey =
+      fixedCityKey;
+
+    fixedPlayers[
+      fixedKey
+    ].cityName =
+      fixedCityName;
+
+    fixedPlayers[
+      fixedKey
+    ].seasonId =
+      playerSeasonId;
+
+    fixedPlayers[
+      fixedKey
+    ].halls.push(
+      ...(
+        player.halls ||
+        []
+      ).map(
+        hall => ({
+          ...hall,
+
+          cityKey:
+  isCurrentSeasonPlayer
+    ? fixedCityKey
+    : (
+        hall.cityKey ||
+        fixedCityKey
+      ),
+
+cityName:
+  isCurrentSeasonPlayer
+    ? (
+        CITIES[
+          fixedCityKey
+        ]?.label ||
+        fixedCityName
+      )
+    : (
+        CITIES[
+          hall.cityKey ||
+          fixedCityKey
+        ]?.label ||
+        fixedCityName
+      ),
+
+          seasonId:
+            hall.seasonId ||
+            playerSeasonId
+        })
+      )
+    );
+  }
+
+  for (
+    const player of
+    Object.values(
+      fixedPlayers
+    )
+  ) {
+    const uniqueHalls =
+      [];
+
+    const seenHallKeys =
+      new Set();
+
+    for (
+      const hall of
+      player.halls ||
+      []
+    ) {
+      const eventName =
+        normalizeHallEventName(
+          hall.eventName,
+          hall.cityKey ||
+          player.cityKey ||
+          "nobre"
+        );
+
+      const cityKey =
+        hall.cityKey ||
         player.cityKey ||
         "nobre";
 
-      const fixedCityName = CITIES[fixedCityKey]?.label || "Cidade Nobre";
-      const fixedKey = getPlayerRankingKey({
-        playerName: fixedName,
-        playerId: fixedPlayerId,
-        cityKey: fixedCityKey
-      });
+      const seasonId =
+        String(
+          hall.seasonId ||
+          player.seasonId ||
+          ""
+        ).trim();
 
-      fixedPlayers[fixedKey] ??= {
-        ...player,
-        key: fixedKey,
-        name: fixedName,
-        playerId: fixedPlayerId,
-        cityKey: fixedCityKey,
-        cityName: fixedCityName,
-        total: 0,
-        events: {},
-        halls: []
-      };
+      const uniqueKey =
+        `${
+          hall.messageId ||
+          hall.jumpUrl ||
+          hall.at
+        }:` +
+        `${eventName}:` +
+        `${cityKey}:` +
+        `${seasonId}`;
 
-      fixedPlayers[fixedKey].name = fixedName;
-      fixedPlayers[fixedKey].playerId = fixedPlayerId;
-      fixedPlayers[fixedKey].cityKey = fixedCityKey;
-      fixedPlayers[fixedKey].cityName = fixedCityName;
+      if (
+        seenHallKeys.has(
+          uniqueKey
+        )
+      ) {
+        continue;
+      }
 
-      fixedPlayers[fixedKey].halls.push(
-        ...(player.halls || []).map(hall => ({
-          ...hall,
-          cityKey: fixedCityKey,
-          cityName: fixedCityName
-        }))
+      seenHallKeys.add(
+        uniqueKey
       );
+
+      uniqueHalls.push({
+        ...hall,
+
+        eventName,
+
+        cityKey,
+
+        cityName:
+          CITIES[
+            cityKey
+          ]?.label ||
+          player.cityName ||
+          "Cidade Nobre",
+
+        seasonId
+      });
     }
 
-    for (const player of Object.values(fixedPlayers)) {
-      const uniqueHalls = [];
-      const seenHallKeys = new Set();
+    player.halls =
+      uniqueHalls;
 
-      for (const hall of player.halls || []) {
-        const eventName = normalizeHallEventName(hall.eventName, hall.cityKey || player.cityKey || "nobre");
-        const cityKey = hall.cityKey || player.cityKey || "nobre";
-        const uniqueKey = `${hall.messageId || hall.jumpUrl || hall.at}:${eventName}:${cityKey}`;
+    player.total =
+      player.halls.length;
 
-        if (seenHallKeys.has(uniqueKey)) continue;
+    player.events =
+      {};
 
-        seenHallKeys.add(uniqueKey);
-        uniqueHalls.push({
-          ...hall,
-          eventName,
-          cityKey,
-          cityName: CITIES[cityKey]?.label || player.cityName || "Cidade Nobre"
-        });
-      }
+    for (
+      const hall of
+      player.halls
+    ) {
+      const eventCityKey =
+        hall.cityKey ||
+        player.cityKey ||
+        "nobre";
 
-      player.halls = uniqueHalls;
-      player.total = player.halls.length;
-      player.events = {};
-      for (const hall of player.halls) {
-        const eventCityKey = hall.cityKey || player.cityKey || "nobre";
-        const eventName = normalizeHallEventName(hall.eventName, eventCityKey);
+      const eventName =
+        normalizeHallEventName(
+          hall.eventName,
+          eventCityKey
+        );
 
-        player.events[eventName] ??= 0;
-        player.events[eventName] += 1;
-      }
+      player.events[
+        eventName
+      ] ??= 0;
+
+      player.events[
+        eventName
+      ] += 1;
     }
-
-    rankings.players = fixedPlayers;
-    return rankings;
   }
+
+  rankings.players =
+    fixedPlayers;
+
+  return rankings;
+}
 
   function normalizeStaticKey(value = "") {
     return String(value || "")
@@ -670,23 +936,134 @@ const BTN_PLAYER_IDENTITY_SEPARATE_PREFIX = "hf_identity_separate:";
 const BTN_REVIEW_EVENT_PREFIX = "hf_review_event_";
 const MODAL_REVIEW_EVENT_SUBMIT = "hf_review_event_modal";
   // ================= PERSISTÊNCIA =================
-  const __filename = fileURLToPath(import.meta.url);
-  const __dirname = path.dirname(__filename);
-  const DATA_DIR = path.resolve(__dirname, "../data");
-  const STATE_FILE = path.join(DATA_DIR, "halldafama_state.json");
-  const HALL_RANKING_FILE = path.join(DATA_DIR, "halldafama_rankings.json");
-  const CRONO_FILE = path.join(DATA_DIR, "cronograma_state.json"); // Lê o arquivo do cronograma
+const __filename =
+  fileURLToPath(
+    import.meta.url
+  );
 
-  const ensureDir = () => { if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true }); };
-  const saveState = (data) => { ensureDir(); fs.writeFileSync(STATE_FILE, JSON.stringify(data, null, 2)); };
-  const loadState = () => { try { if (fs.existsSync(STATE_FILE)) return JSON.parse(fs.readFileSync(STATE_FILE, "utf8")); } catch {} return { pendingRequests: {} }; };
+const __dirname =
+  path.dirname(
+    __filename
+  );
 
-  const saveHallRankings = (data) => {
-    ensureDir();
-    fs.writeFileSync(HALL_RANKING_FILE, JSON.stringify(data, null, 2));
+const DATA_DIR =
+  path.resolve(
+    __dirname,
+    "../data"
+  );
+
+const STATE_FILE =
+  path.join(
+    DATA_DIR,
+    "halldafama_state.json"
+  );
+
+const HALL_RANKING_FILE =
+  path.join(
+    DATA_DIR,
+    "halldafama_rankings.json"
+  );
+
+const PAYMENT_OPERATION_TRACE_FILE =
+  path.join(
+    DATA_DIR,
+    "pagamentos_social_operation_trace.json"
+  );
+
+const CRONO_FILE =
+  path.join(
+    DATA_DIR,
+    "cronograma_state.json"
+  );
+
+const ensureDir = () => {
+  if (
+    !fs.existsSync(
+      DATA_DIR
+    )
+  ) {
+    fs.mkdirSync(
+      DATA_DIR,
+      {
+        recursive:
+          true
+      }
+    );
+  }
+};
+
+const saveState = (data) => {
+  ensureDir();
+
+  fs.writeFileSync(
+    STATE_FILE,
+    JSON.stringify(
+      data,
+      null,
+      2
+    )
+  );
+};
+
+const saveHallRankings = (data) => {
+  ensureDir();
+
+  fs.writeFileSync(
+    HALL_RANKING_FILE,
+    JSON.stringify(
+      data,
+      null,
+      2
+    )
+  );
+};
+
+const loadPaymentOperationTraceForHallRanking =
+  () => {
+    try {
+      if (
+        !fs.existsSync(
+          PAYMENT_OPERATION_TRACE_FILE
+        )
+      ) {
+        return {
+          messages: {}
+        };
+      }
+
+      const raw =
+        fs.readFileSync(
+          PAYMENT_OPERATION_TRACE_FILE,
+          "utf8"
+        );
+
+      const parsed =
+        raw
+          ? JSON.parse(
+              raw
+            )
+          : {};
+
+      parsed.messages ??=
+        {};
+
+      return parsed;
+    } catch (
+      error
+    ) {
+      console.warn(
+        "[HallDaFama] Não foi possível ler o rastro original dos pagamentos:",
+        error?.message ||
+        error
+      );
+
+      return {
+        messages: {}
+      };
+    }
   };
 
-  const loadHallRankings = () => {
+const loadHallRankings = () => {
     try {
       if (fs.existsSync(HALL_RANKING_FILE)) {
         const data = JSON.parse(fs.readFileSync(HALL_RANKING_FILE, "utf8"));
@@ -700,11 +1077,15 @@ data.pendingPaymentCityReview ??= {};
 data.pendingPlayerIdentityReview ??= {};
 data.manualPlayerIdentityMerges ??= {};
 data.manualPlayerCityOverrides ??= {};
+
+data.playerRankingSeasons ??= {};
+data.playerRankingHistory ??= {};
+
 data.manualReviews ??= {};
 data.pendingReview ??= {};
 data.lastUpdatedAt ??= Date.now();
 
-        return data;
+return data;
       }
     } catch {}
 
@@ -718,12 +1099,292 @@ return {
   pendingPlayerIdentityReview: {},
   manualPlayerIdentityMerges: {},
   manualPlayerCityOverrides: {},
+
+  playerRankingSeasons: {},
+  playerRankingHistory: {},
+
   pendingReview: {},
   manualReviews: {},
   lastUpdatedAt: Date.now()
 };
   };
+function compareDiscordSnowflakes(a = "", b = "") {
+  try {
+    const left = BigInt(String(a || "0"));
+    const right = BigInt(String(b || "0"));
 
+    if (left === right) return 0;
+
+    return left > right ? 1 : -1;
+  } catch {
+    return 0;
+  }
+}
+
+function getPlayerRankingSeason(rankings = null, cityKey = "nobre") {
+  return (
+    rankings?.playerRankingSeasons?.[cityKey] ||
+    state?.playerRankingSeasons?.[cityKey] ||
+    null
+  );
+}
+
+function getPlayerEvidenceSourceType(hallMeta = {}) {
+  return String(
+    hallMeta.evidenceSource || ""
+  ).includes("botao_pagamento")
+    ? "payment"
+    : "hall";
+}
+
+function extractHistoricalVictoryTimestampFromContent(content = "") {
+  const match =
+    String(content || "").match(
+      /Data original do evento:\*\*\s*<t:(\d+):[A-Za-z]>/i
+    );
+
+  return match
+    ? Number(match[1]) * 1000
+    : 0;
+}
+
+function shouldCountPlayerRankingEvidence(
+  rankings,
+  cityKey,
+  hallMeta = {}
+) {
+  if (
+    !cityKey ||
+    !CITIES[cityKey]
+  ) {
+    return true;
+  }
+
+  const season =
+    getPlayerRankingSeason(
+      rankings,
+      cityKey
+    );
+
+  if (
+    !season?.startedAt
+  ) {
+    return true;
+  }
+
+  const historicalVictoryTimestamp =
+    Number(
+      hallMeta.historicalVictoryTimestamp ||
+      0
+    );
+
+  if (
+    historicalVictoryTimestamp >
+      0 &&
+    historicalVictoryTimestamp <
+      Number(
+        season.startedAt
+      )
+  ) {
+    return false;
+  }
+
+  const sourceType =
+    getPlayerEvidenceSourceType(
+      hallMeta
+    );
+
+  if (
+    sourceType ===
+    "payment"
+  ) {
+    const paymentOriginalCreatedTimestamp =
+      Number(
+        hallMeta.paymentOriginalCreatedTimestamp ||
+        0
+      );
+
+    if (
+      paymentOriginalCreatedTimestamp >
+        0 &&
+      paymentOriginalCreatedTimestamp <
+        Number(
+          season.startedAt ||
+          0
+        )
+    ) {
+      return false;
+    }
+
+    const paymentEventTimestamp =
+      Number(
+        hallMeta.paymentEventTimestamp ||
+        paymentDateKeyToTimestamp(
+          hallMeta.eventDateKey ||
+          ""
+        ) ||
+        0
+      );
+
+    const seasonDateKey =
+      new Date(
+        Number(
+          season.startedAt ||
+          Date.now()
+        )
+      ).toLocaleDateString(
+        "pt-BR",
+        {
+          timeZone:
+            "America/Sao_Paulo"
+        }
+      );
+
+    const seasonDayTimestamp =
+      paymentDateKeyToTimestamp(
+        seasonDateKey
+      );
+
+    if (
+      paymentEventTimestamp >
+        0 &&
+      seasonDayTimestamp >
+        0 &&
+      paymentEventTimestamp <
+        seasonDayTimestamp
+    ) {
+      return false;
+    }
+  }
+
+  const cutoffMessageId =
+    sourceType ===
+      "payment"
+      ? season.paymentCutoffMessageId
+      : season.hallCutoffMessageId;
+
+  const messageId =
+    String(
+      hallMeta.messageId ||
+      ""
+    ).trim();
+
+  if (
+    cutoffMessageId &&
+    messageId
+  ) {
+    return (
+      compareDiscordSnowflakes(
+        messageId,
+        cutoffMessageId
+      ) >
+      0
+    );
+  }
+
+  return (
+    Number(
+      hallMeta.createdTimestamp ||
+      0
+    ) >
+    Number(
+      season.startedAt ||
+      0
+    )
+  );
+}
+
+function isCurrentPlayerSeasonEvidence(
+  rankings,
+  cityKey,
+  hallMeta = {}
+) {
+  if (
+    !cityKey ||
+    !CITIES[cityKey]
+  ) {
+    return false;
+  }
+
+  const season =
+    getPlayerRankingSeason(
+      rankings,
+      cityKey
+    );
+
+  return (
+    Boolean(
+      season?.seasonId
+    ) &&
+    shouldCountPlayerRankingEvidence(
+      rankings,
+      cityKey,
+      hallMeta
+    )
+  );
+}
+
+function isMessageAfterActivePlayerSeasonCutoff(
+  message,
+  cityKey,
+  sourceType = "hall"
+) {
+  if (
+    !cityKey ||
+    !CITIES[cityKey]
+  ) {
+    return false;
+  }
+
+  const season =
+    getPlayerRankingSeason(
+      null,
+      cityKey
+    );
+
+  if (
+    !season?.startedAt ||
+    !message
+  ) {
+    return false;
+  }
+
+  const cutoffMessageId =
+    sourceType ===
+      "payment"
+      ? season.paymentCutoffMessageId
+      : season.hallCutoffMessageId;
+
+  const messageId =
+    String(
+      message.id ||
+      ""
+    ).trim();
+
+  if (
+    cutoffMessageId &&
+    messageId
+  ) {
+    return (
+      compareDiscordSnowflakes(
+        messageId,
+        cutoffMessageId
+      ) >
+      0
+    );
+  }
+
+  return (
+    Number(
+      message.createdTimestamp ||
+      0
+    ) >
+    Number(
+      season.startedAt ||
+      0
+    )
+  );
+}
   async function sendAuditHallLog(client, member, data, msg) {
     const ch = await client.channels.fetch(HALL_AUDIT_LOG_CH_ID).catch(() => null);
     if (!ch || !ch.isTextBased()) return;
@@ -755,6 +1416,7 @@ state.pendingRequests ??= {};
 state.historicalHallReviews ??= {};
 state.historicalHallMigrations ??= {};
 state.historicalRankingRebuildPending ??= false;
+state.hallAiCopyHistory ??= [];
 
 saveState(state);
 
@@ -928,7 +1590,678 @@ function getHallScanKeySP() {
   function getRandomIntro() {
     return INTRO_TEMPLATES[Math.floor(Math.random() * INTRO_TEMPLATES.length)];
   }
+const HALL_CLOSING_TEMPLATES = [
+  "Foi no limite, no coração e na raça. Quem ficou de pé até o fim escreveu o próprio nome na vitória. 🔥",
 
+  "Que batalha! A pressão subiu, a disputa apertou e os campeões responderam do jeito certo: vencendo. 🏆",
+
+  "Foi intenso do começo ao fim. No momento decisivo, a raça falou mais alto e a vitória encontrou seus donos. 🔥",
+
+  "Não foi sorte, foi entrega. Mais uma disputa encerrada com coragem, foco e lugar garantido no Hall da Fama. 👑",
+
+  "Quando o evento apertou, eles não recuaram. Foram até o último segundo e transformaram pressão em vitória. ⚡",
+
+  "A batalha exigiu tudo, e os vencedores entregaram ainda mais. Resultado: nome cravado no topo. 🏆",
+
+  "Foi daqueles eventos que não deixam espaço para erro. Sangue frio, atitude e vitória na conta. 🔥",
+
+  "O desafio veio pesado, mas a resposta veio maior. Hoje a vitória teve dono e teve história. 👑",
+
+  "Foi no detalhe, na insistência e na vontade de vencer. O Hall da Fama ganhou novos capítulos. 🏆",
+
+  "A pressão tentou decidir o jogo, mas quem decidiu foram os campeões. Vitória conquistada até o último instante. ⚡"
+];
+
+const HALL_CLOSING_MARKER =
+  "🎙️";
+
+const HALL_CLOSING_EMOJI =
+  "<:__:1357520048318709840>";
+
+function getRandomHallClosing() {
+  return HALL_CLOSING_TEMPLATES[
+    Math.floor(
+      Math.random() *
+      HALL_CLOSING_TEMPLATES.length
+    )
+  ];
+}
+
+function formatHallClosingLine(
+  value = ""
+) {
+  const text =
+    cleanOneLine(
+      value
+    )
+      .replace(
+        /\*\*/g,
+        ""
+      )
+      .replace(
+        /@everyone|@here/gi,
+        ""
+      )
+      .replace(
+        /<@&\d+>/g,
+        ""
+      )
+      .replace(
+        /https?:\/\/\S+/gi,
+        ""
+      )
+      .trim() ||
+    getRandomHallClosing();
+
+  return (
+    `${HALL_CLOSING_MARKER} ` +
+    `**${text}** ` +
+    `${HALL_CLOSING_EMOJI}`
+  );
+}
+
+function isHallClosingLine(
+  line = ""
+) {
+  const text =
+    String(
+      line ||
+      ""
+    ).trim();
+
+  return (
+    text.startsWith(
+      HALL_CLOSING_MARKER
+    ) ||
+    text.includes(
+      "Foi insano, mas mais uma vez os vencedores mostraram"
+    )
+  );
+}
+
+function extractHallClosingText(
+  content = ""
+) {
+  const line =
+    String(
+      content ||
+      ""
+    )
+      .split("\n")
+      .map(
+        item =>
+          item.trim()
+      )
+      .find(
+        isHallClosingLine
+      );
+
+  if (!line) {
+    return "";
+  }
+
+  return cleanOneLine(
+    line
+      .replace(
+        HALL_CLOSING_MARKER,
+        ""
+      )
+      .replace(
+        HALL_CLOSING_EMOJI,
+        ""
+      )
+      .replace(
+        /\*\*/g,
+        ""
+      )
+  );
+}
+
+function extractHallPlayerSeasonMarker(
+  content = ""
+) {
+  return (
+    String(
+      content ||
+      ""
+    )
+      .split("\n")
+      .map(
+        line =>
+          line.trim()
+      )
+      .find(
+        line =>
+          line.includes(
+            "**Temporada de Players:**"
+          )
+      ) ||
+    ""
+  );
+}
+
+function hallHasPlayerWinner(
+  winnersText = "",
+  cityKey = "nobre"
+) {
+  const parsed =
+    dedupeHallWinners(
+      parseHallWinners(
+        winnersText,
+        cityKey
+      )
+    );
+
+  return (
+    parsed.players?.length ||
+    0
+  ) > 0;
+}
+
+function buildHallPlayerSeasonMarker(
+  rankings,
+  cityKey,
+  historicalMigration = false,
+  winnersText = ""
+) {
+  if (
+    historicalMigration ||
+    !cityKey ||
+    !CITIES[cityKey] ||
+    !hallHasPlayerWinner(
+      winnersText,
+      cityKey
+    )
+  ) {
+    return "";
+  }
+
+  const season =
+    getPlayerRankingSeason(
+      rankings,
+      cityKey
+    );
+
+  if (
+    !season?.seasonId
+  ) {
+    return "";
+  }
+
+  return (
+    `🆕 **Temporada de Players — ${CITIES[cityKey].label}:** ` +
+    `${season.label} • ` +
+    `iniciada <t:${
+      Math.floor(
+        Number(
+          season.startedAt ||
+          Date.now()
+        ) /
+        1000
+      )
+    }:D>`
+  );
+}
+
+function sanitizeHallAiText(
+  value = "",
+  fallback = ""
+) {
+  const cleaned =
+    cleanOneLine(
+      String(
+        value ||
+        ""
+      )
+        .replace(
+          /```(?:json)?/gi,
+          " "
+        )
+        .replace(
+          /@everyone|@here/gi,
+          " "
+        )
+        .replace(
+          /<@&\d+>/g,
+          " "
+        )
+        .replace(
+          /https?:\/\/\S+/gi,
+          " "
+        )
+        .replace(
+          /\*\*/g,
+          " "
+        )
+    )
+      .slice(
+        0,
+        220
+      )
+      .trim();
+
+  return (
+    cleaned ||
+    fallback
+  );
+}
+
+function parseHallAiPayload(
+  raw = ""
+) {
+  const text =
+    String(
+      raw ||
+      ""
+    ).trim();
+
+  const firstBrace =
+    text.indexOf("{");
+
+  const lastBrace =
+    text.lastIndexOf("}");
+
+  if (
+    firstBrace === -1 ||
+    lastBrace <=
+      firstBrace
+  ) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(
+      text.slice(
+        firstBrace,
+        lastBrace + 1
+      )
+    );
+  } catch {
+    return null;
+  }
+}
+
+function buildHallWinnerHistoryContext(
+  rankings,
+  winnersText,
+  cityKey = "nobre"
+) {
+  const parsed =
+    dedupeHallWinners(
+      parseHallWinners(
+        winnersText,
+        cityKey
+      )
+    );
+
+  const lines = [];
+
+  const currentPlayers =
+    Object.values(
+      rankings.players ||
+      {}
+    );
+
+  const archivedSeasons =
+    rankings
+      .playerRankingHistory
+      ?.[cityKey] ||
+    [];
+
+  for (
+    const winner of
+    parsed.players ||
+    []
+  ) {
+    const winnerId =
+      String(
+        winner.playerId ||
+        ""
+      ).trim();
+
+    const winnerNameKey =
+      normalizeHallKey(
+        winner.playerName ||
+        ""
+      );
+
+    const currentMatch =
+      currentPlayers.find(
+        player => {
+          if (
+            player.cityKey !==
+            cityKey
+          ) {
+            return false;
+          }
+
+          if (
+            winnerId &&
+            String(
+              player.playerId ||
+              ""
+            ).trim() ===
+              winnerId
+          ) {
+            return true;
+          }
+
+          return (
+            normalizeHallKey(
+              player.name ||
+              ""
+            ) ===
+            winnerNameKey
+          );
+        }
+      );
+
+    if (currentMatch) {
+      lines.push(
+        `PLAYER ATUAL: ` +
+        `${winner.playerName}` +
+        `${
+          winnerId
+            ? ` (ID ${winnerId})`
+            : ""
+        } | ` +
+        `${
+          currentMatch.total ||
+          0
+        } vitória(s) registradas nesta temporada.`
+      );
+
+      continue;
+    }
+
+    let archivedNameVictories =
+      0;
+
+    for (
+      const season of
+      archivedSeasons
+    ) {
+      for (
+        const oldPlayer of
+        Object.values(
+          season.players ||
+          {}
+        )
+      ) {
+        if (
+          normalizeHallKey(
+            oldPlayer.name ||
+            ""
+          ) ===
+          winnerNameKey
+        ) {
+          archivedNameVictories +=
+            Number(
+              oldPlayer.total ||
+              0
+            );
+        }
+      }
+    }
+
+    if (
+      archivedNameVictories >
+      0
+    ) {
+      lines.push(
+        `NOME NO HISTÓRICO: ` +
+        `${winner.playerName} ` +
+        `apareceu em temporada anterior com ` +
+        `${archivedNameVictories} vitória(s). ` +
+        `Como houve wipe de IDs, NÃO trate isso como identidade confirmada.`
+      );
+    }
+  }
+
+  for (
+    const winner of
+    parsed.orgs ||
+    []
+  ) {
+    const orgKey =
+      getOrgRankingKey(
+        winner.orgName,
+        cityKey
+      );
+
+    const org =
+      rankings.orgs?.[
+        orgKey
+      ];
+
+    if (org) {
+      lines.push(
+        `ORG: ` +
+        `${winner.orgName} | ` +
+        `${org.total || 0} ` +
+        `vitória(s) registradas no histórico atual.`
+      );
+    }
+  }
+
+  return (
+    lines
+      .slice(
+        0,
+        12
+      )
+      .join("\n") ||
+    "Sem histórico confiável suficiente para citar sequência de vitórias."
+  );
+}
+
+function getRecentHallAiCopyContext(
+  limit = 8
+) {
+  const items =
+    Array.isArray(
+      state?.hallAiCopyHistory
+    )
+      ? state.hallAiCopyHistory
+      : [];
+
+  return items
+    .slice(
+      -Math.max(
+        1,
+        limit
+      )
+    )
+    .reverse()
+    .map(
+      (
+        item,
+        index
+      ) =>
+        `${index + 1}. ` +
+        `[${item.cityName || item.cityKey || "Cidade"} | ${item.eventName || "Evento"}]\n` +
+        `INTRO: ${cleanOneLine(item.intro || "")}\n` +
+        `CLOSING: ${cleanOneLine(item.closing || "")}`
+    )
+    .join("\n\n") ||
+    "Nenhum texto recente registrado.";
+}
+
+function rememberHallAiCopy({
+  intro = "",
+  closing = "",
+  eventName = "",
+  cityKey = "",
+  cityName = ""
+} = {}) {
+  state.hallAiCopyHistory ??=
+    [];
+
+  state.hallAiCopyHistory.push({
+    intro:
+      cleanOneLine(
+        intro
+      ),
+
+    closing:
+      cleanOneLine(
+        closing
+      ),
+
+    eventName:
+      cleanOneLine(
+        eventName
+      ),
+
+    cityKey:
+      String(
+        cityKey ||
+        ""
+      ),
+
+    cityName:
+      cleanOneLine(
+        cityName
+      ),
+
+    createdAt:
+      Date.now()
+  });
+
+  state.hallAiCopyHistory =
+    state.hallAiCopyHistory
+      .slice(
+        -40
+      );
+
+  saveState(
+    state
+  );
+}
+
+async function generateHallAiCopy({
+  eventName,
+  cityKey,
+  cityName,
+  winnersText,
+  historicalMigration = false
+}) {
+  const fallback = {
+    intro:
+      getRandomIntro(),
+
+    closing:
+      getRandomHallClosing()
+  };
+
+  try {
+    const rankings =
+      loadHallRankings();
+
+    const historyContext =
+      buildHallWinnerHistoryContext(
+        rankings,
+        winnersText,
+        cityKey
+      );
+
+    const recentCopyContext =
+      getRecentHallAiCopyContext(
+        8
+      );
+
+    const prompt = `
+Você escreve SOMENTE a abertura e o fechamento de um Hall da Fama da SantaCreators.
+
+CONTEXTO REAL:
+- Evento: ${cleanOneLine(eventName || "Evento")}
+- Cidade: ${cleanOneLine(cityName || CITIES[cityKey]?.label || "Cidade")}
+- É recriação histórica: ${historicalMigration ? "SIM" : "NÃO"}
+- Histórico disponível:
+${historyContext}
+
+TEXTOS RECENTES QUE NÃO DEVEM SER COPIADOS NEM PARAFRASEADOS DE FORMA ÓBVIA:
+${recentCopyContext}
+
+OBJETIVO CRIATIVO:
+- Cada Hall deve parecer escrito especialmente para aquele evento.
+- Varie o ângulo narrativo entre: clima da cidade, identidade do evento, momento de decisão, domínio, precisão, resistência, estratégia, celebração e assinatura de campeão.
+- Evite estruturas repetidas entre um Hall e outro.
+- Evite começar sempre com "A disputa", "O evento", "Foi" ou "Mais uma".
+- A abertura e o fechamento devem conversar entre si, mas não repetir a mesma ideia.
+- Quando não houver histórico confiável, crie energia usando SOMENTE o nome do evento e da cidade, sem inventar fatos.
+
+REGRAS OBRIGATÓRIAS:
+1. Retorne SOMENTE JSON válido neste formato: {"intro":"...","closing":"..."}
+2. NÃO escreva os vencedores, IDs, TOPs ou premiações. O código preserva isso separadamente.
+3. NÃO invente placar, rivalidade, dificuldade, virada, recorde, número de participantes ou sequência que não esteja no contexto.
+4. Pode brincar de forma profissional com o nome da cidade e do evento.
+5. Se houver vitória anterior CONFIRMADA nesta temporada, pode fazer referência natural a consistência ou retorno ao topo.
+6. Se o histórico disser apenas "NOME NO HISTÓRICO", não afirme que é a mesma pessoa, porque os IDs podem ter mudado após reset/wipe.
+7. Intro: 1 frase, aproximadamente 45 a 145 caracteres.
+8. Closing: 1 frase forte, aproximadamente 55 a 180 caracteres.
+9. NÃO reutilize frases dos TEXTOS RECENTES.
+10. Evite repetir "foi insano", "na raça", "mais uma vez", "pegou fogo", "sangue frio" e "só os brabos".
+11. Use no máximo 2 emojis no total das duas frases.
+12. Linguagem de evento/FiveM, elegante, enérgica, natural e com personalidade. Nada infantil.
+13. Não use tom genérico de comunicado corporativo.
+`;
+
+    const raw =
+      await generateSantaCreatorsStandaloneText({
+        prompt,
+
+        maxOutputTokens:
+          360,
+
+        temperature:
+          0.98,
+
+        label:
+          "Hall da Fama"
+      });
+
+    const payload =
+      parseHallAiPayload(
+        raw
+      );
+
+    if (!payload) {
+      return fallback;
+    }
+
+    const result = {
+      intro:
+        sanitizeHallAiText(
+          payload.intro,
+          fallback.intro
+        ),
+
+      closing:
+        sanitizeHallAiText(
+          payload.closing,
+          fallback.closing
+        )
+    };
+
+    rememberHallAiCopy({
+      ...result,
+      eventName,
+      cityKey,
+      cityName
+    });
+
+    return result;
+  } catch (error) {
+    console.warn(
+      "[HallDaFama] IA de texto indisponível; usando variação local:",
+      error?.message ||
+      error
+    );
+
+    return fallback;
+  }
+}
   // Função para dividir texto longo em partes de 2000 caracteres
   function splitText(text, maxLength = 2000) {
     if (text.length <= maxLength) return [text];
@@ -1015,20 +2348,61 @@ const imageUrl = imageUrls[0] || "";
       introText = getRandomIntro();
     }
 
-    let winnersText = "";
+let winnersText = "";
 
-    const hallIndex = lines.findIndex(l => l.includes("HALL DA FAMA"));
-    const endIndex = lines.findIndex(l => l.includes("Foi insano, mas mais uma vez"));
-    if (hallIndex !== -1 && endIndex !== -1 && endIndex > hallIndex) {
-      winnersText = lines
-        .slice(hallIndex + 1, endIndex)
-        .filter(l => l.includes("**TOP**") || l.toUpperCase().startsWith("TOP"))
-        .join("\n")
-        .trim();
-    }
+const hallIndex =
+  lines.findIndex(
+    line =>
+      line.includes(
+        "HALL DA FAMA"
+      )
+  );
+
+const endIndex =
+  lines.findIndex(
+    (
+      line,
+      index
+    ) =>
+      index >
+        hallIndex &&
+      isHallClosingLine(
+        line
+      )
+  );
+
+if (
+  hallIndex !== -1 &&
+  endIndex !== -1 &&
+  endIndex > hallIndex
+) {
+  winnersText =
+    lines
+      .slice(
+        hallIndex + 1,
+        endIndex
+      )
+      .filter(
+        line =>
+          line.includes(
+            "**TOP**"
+          ) ||
+          line
+            .toUpperCase()
+            .startsWith(
+              "TOP"
+            )
+      )
+      .join("\n")
+      .trim();
+}
 
     if (!winnersText) {
-      const topMatches = [...contentWithoutUrls.matchAll(/\*\*TOP\*\*[\s\S]*?(?=\*\*TOP\*\*|\*\*Foi insano|Foi insano|$)/g)];
+const topMatches = [
+  ...contentWithoutUrls.matchAll(
+    /\*\*TOP\*\*[\s\S]*?(?=\*\*TOP\*\*|🎙️|\*\*Foi insano|Foi insano|$)/g
+  )
+];
 
       winnersText = topMatches
         .map(m => cleanOneLine(m[0]))
@@ -1041,10 +2415,36 @@ const imageUrl = imageUrls[0] || "";
     }
 
 return {
-  eventName: cleanOneLine(eventName) || "Evento",
-  cityName: cleanOneLine(cityName) || "Cidade",
-  introText: cleanOneLine(introText) || getRandomIntro(),
+  eventName:
+    cleanOneLine(
+      eventName
+    ) ||
+    "Evento",
+
+  cityName:
+    cleanOneLine(
+      cityName
+    ) ||
+    "Cidade",
+
+  introText:
+    cleanOneLine(
+      introText
+    ) ||
+    getRandomIntro(),
+
   winnersText,
+
+  closingText:
+    extractHallClosingText(
+      rawContent
+    ),
+
+  seasonMarker:
+    extractHallPlayerSeasonMarker(
+      rawContent
+    ),
+
   imageUrl,
   imageUrls
 };
@@ -1231,26 +2631,33 @@ return {
         hallMessageId
       );
 
-    const fixedMessage =
-  `# 🎉 :  **Santa Creators : ${parts.eventName}** 🎉 
+   const fixedMessage =
+`# 🎉 :  **Santa Creators : ${parts.eventName}** 🎉 
 
-  ${introLine}
+${introLine}
 
-  👏  Uma salva de palmas para os BRABOS! 👏 
+👏  Uma salva de palmas para os BRABOS! 👏 
 
-  <:12633559939374122111:1368796471297576970>  **HALL DA FAMA** <:12633559939374122111:1368796471297576970> 
+<:12633559939374122111:1368796471297576970>  **HALL DA FAMA** <:12633559939374122111:1368796471297576970> 
 
-  ${historicalHallBlock
-    ? `${historicalHallBlock}\n`
-    : ""}
+${historicalHallBlock
+  ? `${historicalHallBlock}\n`
+  : ""}
 
-  ${parts.winnersText.trim()}
+${parts.seasonMarker
+  ? `${parts.seasonMarker}\n`
+  : ""}
 
-  **Foi insano, mas mais uma vez os vencedores mostraram que a vitória só é possível com raça! <:__:1357520048318709840>**
+${parts.winnersText.trim()}
 
-  ${mentionsLine}
+${formatHallClosingLine(
+  parts.closingText ||
+  getRandomHallClosing()
+)}
 
-  ${imageLines.join("\n")}`;
+${mentionsLine}
+
+${imageLines.join("\n")}`;
 
     return fixedMessage.trim();
   }
@@ -1341,26 +2748,33 @@ function resolveCityKeyFromName(value = "") {
         cleanedContent
       );
 
-    const fixedMessage =
-  `# 🎉 :  **Santa Creators : ${parts.eventName}** 🎉 
+const fixedMessage =
+`# 🎉 :  **Santa Creators : ${parts.eventName}** 🎉 
 
-  ${introLine}
+${introLine}
 
-  👏  Uma salva de palmas para os BRABOS! 👏 
+👏  Uma salva de palmas para os BRABOS! 👏 
 
-  <:12633559939374122111:1368796471297576970>  **HALL DA FAMA** <:12633559939374122111:1368796471297576970> 
+<:12633559939374122111:1368796471297576970>  **HALL DA FAMA** <:12633559939374122111:1368796471297576970> 
 
-  ${historicalHallBlock
-    ? `${historicalHallBlock}\n`
-    : ""}
+${historicalHallBlock
+  ? `${historicalHallBlock}\n`
+  : ""}
 
-  ${parts.winnersText.trim()}
+${parts.seasonMarker
+  ? `${parts.seasonMarker}\n`
+  : ""}
 
-  **Foi insano, mas mais uma vez os vencedores mostraram que a vitória só é possível com raça! <:__:1357520048318709840>**
+${parts.winnersText.trim()}
 
-  ${mentionsLine}
+${formatHallClosingLine(
+  parts.closingText ||
+  getRandomHallClosing()
+)}
 
-  ${imageLines.join("\n")}`;
+${mentionsLine}
+
+${imageLines.join("\n")}`;
 
     return fixedMessage.trim();
   }
@@ -1762,33 +3176,88 @@ function applyCityToRankingPlayer(player, cityKey) {
     };
   }
 
-  function getPlayerCityEvidenceFromHallContent(content = "") {
-    const baseCityKey = detectHallCityKey(content);
-    const winners = parseHallWinners(content, baseCityKey);
+function getPlayerCityEvidenceFromHallContent(
+  content = "",
+  options = {}
+) {
+  const baseCityKey =
+    detectHallCityKey(
+      content
+    );
 
-    const player = winners.find(w => {
-      if (w.type !== "player") return false;
+  const winners =
+    parseHallWinners(
+      content,
+      baseCityKey
+    );
+
+  const ignoredLegacyCityKey =
+    String(
+      options.ignoreLegacyCityKey ||
+      ""
+    ).trim();
+
+  const player =
+    winners.find(w => {
+      if (
+        w.type !==
+        "player"
+      ) {
+        return false;
+      }
+
+      const mappedCityKey =
+        getManualPlayerCityKey(
+          w.playerId
+        ) ||
+        getManualPlayerCityKeyByName(
+          w.playerName
+        );
 
       return (
-        getManualPlayerCityKey(w.playerId) ||
-        getManualPlayerCityKeyByName(w.playerName)
+        mappedCityKey &&
+        mappedCityKey !==
+          ignoredLegacyCityKey
       );
     });
 
-    const cityKey =
-      getManualPlayerCityKey(player?.playerId) ||
-      getManualPlayerCityKeyByName(player?.playerName);
+  const cityKey =
+    getManualPlayerCityKey(
+      player?.playerId
+    ) ||
+    getManualPlayerCityKeyByName(
+      player?.playerName
+    );
 
-    if (!cityKey) return null;
-
-    return {
-      cityKey,
-      cityName: CITIES[cityKey]?.label || "Cidade",
-      eventName: normalizeHallEventName(extractRawHallEventName(content), cityKey),
-      source: `player_override:${player.playerId || player.playerName}`,
-      confidence: 96
-    };
+  if (!cityKey) {
+    return null;
   }
+
+  return {
+    cityKey,
+
+    cityName:
+      CITIES[cityKey]?.label ||
+      "Cidade",
+
+    eventName:
+      normalizeHallEventName(
+        extractRawHallEventName(
+          content
+        ),
+        cityKey
+      ),
+
+    source:
+      `player_override:${
+        player.playerId ||
+        player.playerName
+      }`,
+
+    confidence:
+      96
+  };
+}
 
   function getOrgCityEvidenceFromHallContent(content = "") {
     const baseCityKey = detectHallCityKey(content);
@@ -2259,8 +3728,27 @@ function applyCityToRankingPlayer(player, cityKey) {
     const rawEventName = extractRawHallEventName(content);
     const directEventName = normalizeHallEventName(rawEventName, directCityKey);
 
-    const manualReviewEvidence = getManualReviewCityEvidence(hallMessage.id, content);
-    const playerEvidence = getPlayerCityEvidenceFromHallContent(content);
+const manualReviewEvidence =
+  getManualReviewCityEvidence(
+    hallMessage.id,
+    content
+  );
+
+const playerEvidence =
+  getPlayerCityEvidenceFromHallContent(
+    content,
+    {
+      ignoreLegacyCityKey:
+        directCityKey &&
+        isMessageAfterActivePlayerSeasonCutoff(
+          hallMessage,
+          directCityKey,
+          "hall"
+        )
+          ? directCityKey
+          : ""
+    }
+  );
     const orgEvidence = getOrgCityEvidenceFromHallContent(content);
     const eventNameEvidence = getEventCityEvidenceFromHallContent(content);
     const directHallEvidence = getDirectHallCityEvidence(content);
@@ -4752,19 +6240,52 @@ function isAmbiguousHallWinner(winner) {
     return winners;
   }
 
-  function getPlayerRankingKey(player) {
-    const identityKey = getPlayerIdentityKey(player.playerId || "", player.playerName || "");
+function getPlayerRankingKey(player) {
+  const identityKey =
+    getPlayerIdentityKey(
+      player.playerId || "",
+      player.playerName || ""
+    );
 
-    if (identityKey.startsWith("idname:")) {
-      return `${identityKey}:${player.cityKey || "sem-cidade"}`;
-    }
+  const cityKey =
+    player.cityKey ||
+    "sem-cidade";
 
-    if (identityKey.startsWith("id:")) {
-      return identityKey;
-    }
+  const seasonId =
+    String(
+      player.seasonId ||
+      ""
+    ).trim();
 
-    return `${identityKey}:${player.cityKey || "sem-cidade"}`;
+  // Player de temporada nova ganha chave própria.
+  // Assim ID 7414 antigo e ID 7414 pós-wipe
+  // nunca viram automaticamente a mesma pessoa.
+  if (seasonId) {
+    return (
+      `season:${seasonId}:` +
+      `${cityKey}:` +
+      `${identityKey}`
+    );
   }
+
+  if (
+    identityKey.startsWith(
+      "idname:"
+    )
+  ) {
+    return `${identityKey}:${cityKey}`;
+  }
+
+  if (
+    identityKey.startsWith(
+      "id:"
+    )
+  ) {
+    return identityKey;
+  }
+
+  return `${identityKey}:${cityKey}`;
+}
   function getOrgRankingKey(orgName = "", cityKey = "nobre") {
     const finalOrgName = normalizeOrgDisplayName(orgName);
     const finalCityKey = getManualOrgCityKey(finalOrgName) || cityKey || "nobre";
@@ -4820,21 +6341,61 @@ function isAmbiguousHallWinner(winner) {
   }
 
 function createEmptyHallRankingData(previousData = null) {
-    return {
-      orgs: previousData?.orgs || {},
-      players: previousData?.players || {},
-      reviewedMessages: previousData?.reviewedMessages || {},
-      reviewedPaymentMessages: previousData?.reviewedPaymentMessages || {},
-      paymentEventKeys: previousData?.paymentEventKeys || {},
-      pendingPaymentCityReview: previousData?.pendingPaymentCityReview || {},
-      pendingPlayerIdentityReview: previousData?.pendingPlayerIdentityReview || {},
-      manualPlayerIdentityMerges: previousData?.manualPlayerIdentityMerges || {},
-      manualPlayerCityOverrides: previousData?.manualPlayerCityOverrides || {},
-      pendingReview: {},
-      manualReviews: previousData?.manualReviews || {},
-      lastUpdatedAt: Date.now()
-    };
-  }
+  return {
+    orgs:
+      previousData?.orgs ||
+      {},
+
+    players:
+      previousData?.players ||
+      {},
+
+    reviewedMessages:
+      previousData?.reviewedMessages ||
+      {},
+
+    reviewedPaymentMessages:
+      previousData?.reviewedPaymentMessages ||
+      {},
+
+    paymentEventKeys:
+      previousData?.paymentEventKeys ||
+      {},
+
+    pendingPaymentCityReview:
+      previousData?.pendingPaymentCityReview ||
+      {},
+
+    pendingPlayerIdentityReview:
+      previousData?.pendingPlayerIdentityReview ||
+      {},
+
+    manualPlayerIdentityMerges:
+      previousData?.manualPlayerIdentityMerges ||
+      {},
+
+    manualPlayerCityOverrides:
+      previousData?.manualPlayerCityOverrides ||
+      {},
+
+    playerRankingSeasons:
+      previousData?.playerRankingSeasons ||
+      {},
+
+    playerRankingHistory:
+      previousData?.playerRankingHistory ||
+      {},
+
+    pendingReview: {},
+
+    manualReviews:
+      previousData?.manualReviews ||
+      {},
+
+    lastUpdatedAt:
+      Date.now()
+  };
+}
 
   function removeFetchedHallRankingData(rankings, fetchedMessageIds = new Set()) {
     if (!rankings || !fetchedMessageIds?.size) return rankings;
@@ -4994,77 +6555,263 @@ const eventName = normalizeHallEventName(hallMeta.eventName, cityKey);
     });
   }
 
-function addPlayerRankingPoint(rankings, playerWinner, hallMeta) {
-  const rawPlayerName = cleanRankingPlayerName(playerWinner.playerName);
-  const fixedIdentity = resolvePlayerIdentityOverride(playerWinner.playerId, rawPlayerName);
-  const playerName = fixedIdentity.playerName;
-  const playerId = fixedIdentity.playerId;
+function addPlayerRankingPoint(
+  rankings,
+  playerWinner,
+  hallMeta
+) {
+  const rawPlayerName =
+    cleanRankingPlayerName(
+      playerWinner.playerName
+    );
+
+  const rawPlayerId =
+    String(
+      playerWinner.playerId ||
+      ""
+    ).trim();
+
+  const evidenceCityKey =
+    playerWinner.cityKey ||
+    hallMeta.cityKey ||
+    "nobre";
+
+  // 🔐 FILTRO DA TEMPORADA.
+  // Se for Nobre e for anterior ao wipe,
+  // não entra no ranking ativo.
+  if (
+    !shouldCountPlayerRankingEvidence(
+      rankings,
+      evidenceCityKey,
+      hallMeta
+    )
+  ) {
+    return;
+  }
+
+const isCurrentSeason =
+  isCurrentPlayerSeasonEvidence(
+    rankings,
+    evidenceCityKey,
+    hallMeta
+  );
+
+/*
+ * Durante uma temporada nova de qualquer cidade,
+ * NÃO aplicamos aliases históricos de ID.
+ *
+ * O ID pode ter sido reutilizado após wipe/reset.
+ */
+const fixedIdentity =
+  isCurrentSeason
+    ? {
+        playerId:
+          rawPlayerId,
+
+        playerName:
+          rawPlayerName
+      }
+    : resolvePlayerIdentityOverride(
+        rawPlayerId,
+        rawPlayerName
+      );
+
+  const playerName =
+    fixedIdentity.playerName;
+
+  const playerId =
+    fixedIdentity.playerId;
 
   if (!playerName) return;
-  if (isInvalidWinnerName(playerName)) return;
-  if (looksLikePrizeOnly(playerName)) return;
 
-    const cityKey =
-      getManualPlayerCityKeySmart(playerId, playerName) ||
-      playerWinner.cityKey ||
-      hallMeta.cityKey ||
-      "nobre";
+  if (
+    isInvalidWinnerName(
+      playerName
+    )
+  ) {
+    return;
+  }
 
-    const key = getPlayerRankingKey({
+  if (
+    looksLikePrizeOnly(
+      playerName
+    )
+  ) {
+    return;
+  }
+
+ const cityKey =
+  isCurrentSeason
+    ? evidenceCityKey
+    : (
+        getManualPlayerCityKeySmart(
+          playerId,
+          playerName
+        ) ||
+        evidenceCityKey ||
+        "nobre"
+      );
+
+const activeSeason =
+  isCurrentSeason
+    ? getPlayerRankingSeason(
+        rankings,
+        cityKey
+      )
+    : null;
+
+  const seasonId =
+    activeSeason?.seasonId ||
+    "";
+
+  const key =
+    getPlayerRankingKey({
       ...playerWinner,
+
       playerName,
       playerId,
-      cityKey
-    });
-
-    const cityName = CITIES[cityKey]?.label || "Cidade Nobre";
-
-    rankings.players[key] ??= {
-      key,
-      name: playerName,
-      playerId: playerId || "",
       cityKey,
-      cityName,
-      total: 0,
-      events: {},
-      halls: []
-    };
-
-    rankings.players[key].name = playerName;
-
-    if (!rankings.players[key].playerId && playerId) {
-      rankings.players[key].playerId = playerId;
-    }
-
-    rankings.players[key].cityKey = cityKey;
-    rankings.players[key].cityName = cityName;
-
-    const eventName = normalizeHallEventName(hallMeta.eventName, cityKey);
-    const uniqueKey = `${hallMeta.messageId || hallMeta.jumpUrl || hallMeta.createdTimestamp}:${eventName}:${cityKey}`;
-
-    const alreadyCounted = (rankings.players[key].halls || []).some(hall => {
-      const hallEventName = normalizeHallEventName(hall.eventName, hall.cityKey || cityKey);
-      const hallCityKey = hall.cityKey || cityKey;
-      const hallUniqueKey = `${hall.messageId || hall.jumpUrl || hall.at}:${hallEventName}:${hallCityKey}`;
-
-      return hallUniqueKey === uniqueKey;
+      seasonId
     });
 
-    if (alreadyCounted) return;
+  const cityName =
+    CITIES[cityKey]?.label ||
+    "Cidade Nobre";
 
-    rankings.players[key].total += 1;
+  rankings.players[key] ??= {
+    key,
 
-    rankings.players[key].events[eventName] ??= 0;
-    rankings.players[key].events[eventName] += 1;
+    name:
+      playerName,
 
-    rankings.players[key].halls.push({
-      messageId: hallMeta.messageId,
-      eventName,
-      cityKey,
-      cityName,
-      at: hallMeta.createdTimestamp || Date.now()
-    });
+    playerId:
+      playerId ||
+      "",
+
+    cityKey,
+    cityName,
+    seasonId,
+
+    total: 0,
+
+    events: {},
+
+    halls: []
+  };
+
+  rankings.players[key].name =
+    playerName;
+
+  if (
+    !rankings.players[key].playerId &&
+    playerId
+  ) {
+    rankings.players[key].playerId =
+      playerId;
   }
+
+  rankings.players[key].cityKey =
+    cityKey;
+
+  rankings.players[key].cityName =
+    cityName;
+
+  rankings.players[key].seasonId =
+    seasonId;
+
+  const eventName =
+    normalizeHallEventName(
+      hallMeta.eventName,
+      cityKey
+    );
+
+  const uniqueKey =
+    `${
+      hallMeta.messageId ||
+      hallMeta.jumpUrl ||
+      hallMeta.createdTimestamp
+    }:` +
+    `${eventName}:` +
+    `${cityKey}:` +
+    `${seasonId}`;
+
+  const alreadyCounted =
+    (
+      rankings.players[key].halls ||
+      []
+    ).some(hall => {
+      const hallEventName =
+        normalizeHallEventName(
+          hall.eventName,
+          hall.cityKey ||
+          cityKey
+        );
+
+      const hallCityKey =
+        hall.cityKey ||
+        cityKey;
+
+      const hallSeasonId =
+        hall.seasonId ||
+        rankings.players[key].seasonId ||
+        "";
+
+      const hallUniqueKey =
+        `${
+          hall.messageId ||
+          hall.jumpUrl ||
+          hall.at
+        }:` +
+        `${hallEventName}:` +
+        `${hallCityKey}:` +
+        `${hallSeasonId}`;
+
+      return (
+        hallUniqueKey ===
+        uniqueKey
+      );
+    });
+
+  if (alreadyCounted) {
+    return;
+  }
+
+  rankings.players[key].total +=
+    1;
+
+  rankings.players[key]
+    .events[eventName] ??= 0;
+
+  rankings.players[key]
+    .events[eventName] += 1;
+
+  rankings.players[key]
+    .halls.push({
+      messageId:
+        hallMeta.messageId,
+
+      eventName,
+
+      cityKey,
+      cityName,
+
+      seasonId,
+
+      evidenceSource:
+        hallMeta.evidenceSource ||
+        "",
+
+      historicalVictoryTimestamp:
+        Number(
+          hallMeta.historicalVictoryTimestamp ||
+          0
+        ),
+
+      at:
+        hallMeta.createdTimestamp ||
+        Date.now()
+    });
+}
 
   function getPaymentEmbedText(message) {
     const embedText = message?.embeds
@@ -5229,11 +6976,34 @@ function getPaymentCityKey(message, winner = null) {
     const cityByDiscordLink = getPaymentCityKeyFromDiscordLinks(fullText);
     if (cityByDiscordLink) return cityByDiscordLink;
 
-    const winnerManualCity =
-      getManualPlayerCityKey(winner?.playerId || "") ||
-      getManualPlayerCityKeyByName(winner?.playerName || "");
+const winnerManualCity =
+  getManualPlayerCityKey(
+    winner?.playerId ||
+    ""
+  ) ||
+  getManualPlayerCityKeyByName(
+    winner?.playerName ||
+    ""
+  );
 
-    if (winnerManualCity && CITIES[winnerManualCity]) return winnerManualCity;
+const isPostResetPayment =
+  Boolean(
+    winnerManualCity &&
+    CITIES[winnerManualCity] &&
+    isMessageAfterActivePlayerSeasonCutoff(
+      message,
+      winnerManualCity,
+      "payment"
+    )
+  );
+
+if (
+  winnerManualCity &&
+  CITIES[winnerManualCity] &&
+  !isPostResetPayment
+) {
+  return winnerManualCity;
+}
 
     const prizeText = getPaymentFieldValue(message, [
       "Premiação",
@@ -5282,54 +7052,297 @@ function getPaymentCityKey(message, winner = null) {
     return hasApprovedStatus;
   }
 
-  function getPaymentPlayerKey(playerId = "", playerName = "") {
-    const fixedIdentity = resolvePlayerIdentityOverride(playerId, playerName);
-    const fixedPlayerId = fixedIdentity.playerId;
-    const fixedPlayerName = fixedIdentity.playerName;
+function getPaymentPlayerKey(
+  rankings,
+  {
+    playerId = "",
+    playerName = "",
+    cityKey = "",
+    messageId = "",
+    createdTimestamp = 0,
+    eventDateKey = "",
+    paymentEventTimestamp = 0,
+    paymentOriginalCreatedTimestamp = 0
+  } = {}
+) {
+  const paymentMeta = {
+    messageId,
+    cityKey,
 
-    return getPlayerIdentityKey(fixedPlayerId, fixedPlayerName);
-  }
+    evidenceSource:
+      "botao_pagamento_pago",
 
-  function getPaymentEventKey({ eventName, eventDateKey, cityKey, playerId, playerName }) {
-    const playerKey = getPaymentPlayerKey(playerId, playerName);
+    paymentOriginalCreatedTimestamp:
+      Number(
+        paymentOriginalCreatedTimestamp ||
+        0
+      ),
 
-    return [
-      normalizeHallKey(eventName),
-      eventDateKey,
-      cityKey || "sem-cidade",
-      playerKey
-    ].join("|");
-  }
+    eventDateKey,
 
-  function findDuplicateNearbyPaymentEvent(rankings, { eventName, eventDateKey, cityKey, playerId, playerName, createdTimestamp, messageId }) {
-    const eventKey = normalizeHallKey(eventName);
-    const playerKey = getPaymentPlayerKey(playerId, playerName);
-    const currentTs = Number(createdTimestamp || 0);
-    const THREE_HOURS_MS = 1000 * 60 * 60 * 3;
+    paymentEventTimestamp:
+      Number(
+        paymentEventTimestamp ||
+        paymentDateKeyToTimestamp(
+          eventDateKey
+        ) ||
+        0
+      ),
 
-    for (const payment of Object.values(rankings.paymentEventKeys || {})) {
-      if (!payment) continue;
-      if (payment.messageId === messageId) continue;
+    createdTimestamp
+  };
 
-      const sameEvent = normalizeHallKey(payment.eventName || "") === eventKey;
-      const sameCity = payment.cityKey === cityKey;
-      const samePlayer = getPaymentPlayerKey(payment.playerId || "", payment.playerName || "") === playerKey;
-      const sameOrCloseDate = isSameOrClosePaymentDate(payment.eventDateKey || "", eventDateKey);
+const currentSeason =
+  isCurrentPlayerSeasonEvidence(
+    rankings,
+    cityKey,
+    paymentMeta
+  );
 
-      if (!sameEvent || !sameCity || !samePlayer || !sameOrCloseDate) continue;
+const fixedIdentity =
+  currentSeason
+    ? {
+        playerId:
+          String(
+            playerId ||
+            ""
+          ).trim(),
 
-      const oldTs = Number(payment.createdTimestamp || payment.at || 0);
-
-      if (oldTs && currentTs) {
-        if (Math.abs(currentTs - oldTs) <= THREE_HOURS_MS) return payment;
-        continue;
+        playerName:
+          cleanRankingPlayerName(
+            playerName ||
+            ""
+          )
       }
+    : resolvePlayerIdentityOverride(
+        playerId,
+        playerName
+      );
 
-      return payment;
+const identityKey =
+  getPlayerIdentityKey(
+    fixedIdentity.playerId,
+    fixedIdentity.playerName
+  );
+
+if (
+  !currentSeason
+) {
+  return identityKey;
+}
+
+const seasonId =
+  getPlayerRankingSeason(
+    rankings,
+    cityKey
+  )?.seasonId ||
+  "";
+
+return seasonId
+  ? `season:${seasonId}:${identityKey}`
+  : identityKey;
+}
+
+function getPaymentEventKey(
+  rankings,
+  {
+    eventName,
+    eventDateKey,
+    cityKey,
+    playerId,
+    playerName,
+    messageId,
+    createdTimestamp,
+    paymentOriginalCreatedTimestamp
+  }
+) {
+  const playerKey =
+    getPaymentPlayerKey(
+      rankings,
+      {
+        playerId,
+        playerName,
+        cityKey,
+        messageId,
+        createdTimestamp,
+        eventDateKey,
+        paymentOriginalCreatedTimestamp
+      }
+    );
+
+  return [
+    normalizeHallKey(
+      eventName
+    ),
+
+    eventDateKey,
+
+    cityKey ||
+      "sem-cidade",
+
+    playerKey
+  ].join("|");
+}
+
+function findDuplicateNearbyPaymentEvent(
+  rankings,
+  {
+    eventName,
+    eventDateKey,
+    cityKey,
+    playerId,
+    playerName,
+    createdTimestamp,
+    messageId,
+    paymentOriginalCreatedTimestamp
+  }
+) {
+  const eventKey =
+    normalizeHallKey(
+      eventName
+    );
+
+  const playerKey =
+    getPaymentPlayerKey(
+      rankings,
+      {
+        playerId,
+        playerName,
+        cityKey,
+        messageId,
+        createdTimestamp,
+        eventDateKey,
+        paymentOriginalCreatedTimestamp
+      }
+    );
+
+  const currentTs =
+    Number(
+      createdTimestamp ||
+      0
+    );
+
+  const THREE_HOURS_MS =
+    1000 *
+    60 *
+    60 *
+    3;
+
+  for (
+    const payment of
+    Object.values(
+      rankings.paymentEventKeys ||
+      {}
+    )
+  ) {
+    if (!payment) {
+      continue;
     }
 
-    return null;
+    if (
+      payment.messageId ===
+      messageId
+    ) {
+      continue;
+    }
+
+    const sameEvent =
+      normalizeHallKey(
+        payment.eventName ||
+        ""
+      ) ===
+      eventKey;
+
+    const sameCity =
+      payment.cityKey ===
+      cityKey;
+
+    const oldPlayerKey =
+      getPaymentPlayerKey(
+        rankings,
+        {
+          playerId:
+            payment.playerId ||
+            "",
+
+          playerName:
+            payment.playerName ||
+            "",
+
+          cityKey:
+            payment.cityKey ||
+            cityKey,
+
+          messageId:
+            payment.messageId ||
+            "",
+
+          createdTimestamp:
+            payment.createdTimestamp ||
+            payment.at ||
+            0,
+
+          eventDateKey:
+            payment.eventDateKey ||
+            "",
+
+          paymentOriginalCreatedTimestamp:
+            payment.paymentOriginalCreatedTimestamp ||
+            payment.createdTimestamp ||
+            payment.at ||
+            0
+        }
+      );
+
+    const samePlayer =
+      oldPlayerKey ===
+      playerKey;
+
+    const sameOrCloseDate =
+      isSameOrClosePaymentDate(
+        payment.eventDateKey ||
+        "",
+        eventDateKey
+      );
+
+    if (
+      !sameEvent ||
+      !sameCity ||
+      !samePlayer ||
+      !sameOrCloseDate
+    ) {
+      continue;
+    }
+
+    const oldTs =
+      Number(
+        payment.createdTimestamp ||
+        payment.at ||
+        0
+      );
+
+    if (
+      oldTs &&
+      currentTs
+    ) {
+      if (
+        Math.abs(
+          currentTs -
+          oldTs
+        ) <=
+        THREE_HOURS_MS
+      ) {
+        return payment;
+      }
+
+      continue;
+    }
+
+    return payment;
   }
+
+  return null;
+}
 
   function playerAlreadyHasHallForEvent(rankings, { eventName, eventDateKey, cityKey, playerId, playerName }) {
     const playerKey = getPlayerRankingKey({
@@ -5882,15 +7895,43 @@ async function sendPlayerIdentitySimilarityReviews(client, rankings) {
   }
 }
 
-  async function addPaymentEventsToPlayerRankings(rankings, client) {
-    const channel = await client.channels.fetch(PAYMENT_EVENTS_CHANNEL_ID).catch(() => null);
-    if (!channel || !channel.isTextBased()) return rankings;
+async function addPaymentEventsToPlayerRankings(
+  rankings,
+  client
+) {
+  const channel =
+    await client.channels
+      .fetch(
+        PAYMENT_EVENTS_CHANNEL_ID
+      )
+      .catch(
+        () =>
+          null
+      );
 
-    rankings.reviewedPaymentMessages ??= {};
-    rankings.paymentEventKeys ??= {};
-    rankings.pendingPaymentCityReview ??= {};
+  if (
+    !channel ||
+    !channel.isTextBased()
+  ) {
+    return rankings;
+  }
 
-    rankings = rebuildPaymentPlayerPointsFromZero(rankings);
+  const paymentOperationTrace =
+    loadPaymentOperationTraceForHallRanking();
+
+  rankings.reviewedPaymentMessages ??=
+    {};
+
+  rankings.paymentEventKeys ??=
+    {};
+
+  rankings.pendingPaymentCityReview ??=
+    {};
+
+  rankings =
+    rebuildPaymentPlayerPointsFromZero(
+      rankings
+    );
 
     let beforeId = null;
     let scanned = 0;
@@ -5964,9 +8005,35 @@ async function sendPlayerIdentitySimilarityReviews(client, rankings) {
           continue;
         }
 
-        const cityKey = getPaymentCityKey(message, winner);
-        const eventDateKey = normalizePaymentDateKey(dateRaw, message.createdTimestamp || Date.now());
-        const eventName = normalizeHallEventName(eventRaw, cityKey || "nobre");
+const cityKey =
+  getPaymentCityKey(
+    message,
+    winner
+  );
+
+const eventDateKey =
+  normalizePaymentDateKey(
+    dateRaw,
+    message.createdTimestamp ||
+    Date.now()
+  );
+
+const eventName =
+  normalizeHallEventName(
+    eventRaw,
+    cityKey ||
+    "nobre"
+  );
+
+const paymentOriginalCreatedTimestamp =
+  Number(
+    paymentOperationTrace
+      ?.messages
+      ?.[message.id]
+      ?.createdAt ||
+    message.createdTimestamp ||
+    Date.now()
+  );
 
         if (!cityKey) {
           skipped++;
@@ -5984,15 +8051,32 @@ async function sendPlayerIdentitySimilarityReviews(client, rankings) {
           continue;
         }
 
-        const paymentKey = getPaymentEventKey({
-          eventName,
-          eventDateKey,
-          cityKey,
-          playerId: winner.playerId,
-          playerName: winner.playerName,
-          messageId: message.id,
-          createdTimestamp: message.createdTimestamp || Date.now()
-        });
+const paymentKey =
+  getPaymentEventKey(
+    rankings,
+    {
+      eventName,
+
+      eventDateKey,
+
+      cityKey,
+
+      playerId:
+        winner.playerId,
+
+      playerName:
+        winner.playerName,
+
+      messageId:
+        message.id,
+
+      createdTimestamp:
+        message.createdTimestamp ||
+        Date.now(),
+
+      paymentOriginalCreatedTimestamp
+    }
+  );
 
         if (rankings.paymentEventKeys[paymentKey]) {
           skipped++;
@@ -6006,15 +8090,32 @@ async function sendPlayerIdentitySimilarityReviews(client, rankings) {
           continue;
         }
 
-        const duplicatePayment = findDuplicateNearbyPaymentEvent(rankings, {
-          eventName,
-          eventDateKey,
-          cityKey,
-          playerId: winner.playerId,
-          playerName: winner.playerName,
-          messageId: message.id,
-          createdTimestamp: message.createdTimestamp || Date.now()
-        });
+const duplicatePayment =
+  findDuplicateNearbyPaymentEvent(
+    rankings,
+    {
+      eventName,
+
+      eventDateKey,
+
+      cityKey,
+
+      playerId:
+        winner.playerId,
+
+      playerName:
+        winner.playerName,
+
+      messageId:
+        message.id,
+
+      createdTimestamp:
+        message.createdTimestamp ||
+        Date.now(),
+
+      paymentOriginalCreatedTimestamp
+    }
+  );
 
         if (duplicatePayment) {
           skipped++;
@@ -6028,43 +8129,173 @@ async function sendPlayerIdentitySimilarityReviews(client, rankings) {
           continue;
         }
 
-        addPlayerRankingPoint(rankings, {
-          type: "player",
-          playerName: winner.playerName,
-          playerId: winner.playerId || "",
-          cityKey,
-          rawLine: winnerRaw
-        }, {
-          messageId: message.id,
-          channelId: message.channelId,
-          guildId: message.guildId,
-          jumpUrl: getMessageJumpUrl(message),
-          cityKey,
-          cityName: CITIES[cityKey]?.label || "Cidade Nobre",
-          eventName,
-          evidenceSource: "botao_pagamento_pago",
-          evidenceConfidence: 92,
-          createdTimestamp: message.createdTimestamp || Date.now()
-        });
+const paymentHallMeta = {
+  messageId:
+    message.id,
 
-        const playerKey = getPlayerRankingKey({
-          playerName: winner.playerName,
-          playerId: winner.playerId || "",
+  channelId:
+    message.channelId,
+
+  guildId:
+    message.guildId,
+
+  jumpUrl:
+    getMessageJumpUrl(
+      message
+    ),
+
+  cityKey,
+
+  cityName:
+    CITIES[
+      cityKey
+    ]?.label ||
+    "Cidade Nobre",
+
+  eventName,
+
+  evidenceSource:
+    "botao_pagamento_pago",
+
+  evidenceConfidence:
+    92,
+
+  eventDateKey,
+
+  paymentEventTimestamp:
+    paymentDateKeyToTimestamp(
+      eventDateKey
+    ),
+
+  paymentOriginalCreatedTimestamp,
+
+  createdTimestamp:
+    message.createdTimestamp ||
+    Date.now()
+};
+
+addPlayerRankingPoint(
+  rankings,
+  {
+    type:
+      "player",
+
+    playerName:
+      winner.playerName,
+
+    playerId:
+      winner.playerId ||
+      "",
+
+    cityKey,
+
+    rawLine:
+      winnerRaw
+  },
+  paymentHallMeta
+);
+
+const isCurrentSeason =
+  isCurrentPlayerSeasonEvidence(
+    rankings,
+    cityKey,
+    paymentHallMeta
+  );
+
+const reviewIdentity =
+  isCurrentSeason
+    ? {
+        playerId:
+          String(
+            winner.playerId ||
+            ""
+          ).trim(),
+
+        playerName:
+          cleanRankingPlayerName(
+            winner.playerName ||
+            ""
+          )
+      }
+    : resolvePlayerIdentityOverride(
+        winner.playerId,
+        winner.playerName
+      );
+
+const reviewCityKey =
+  isCurrentSeason
+    ? cityKey
+    : (
+        getManualPlayerCityKeySmart(
+          reviewIdentity.playerId,
+          reviewIdentity.playerName
+        ) ||
+        cityKey
+      );
+
+const reviewSeasonId =
+  isCurrentSeason
+    ? (
+        getPlayerRankingSeason(
+          rankings,
           cityKey
-        });
+        )?.seasonId ||
+        ""
+      )
+    : "";
 
-        await sendRequiredPlayerCityReviewIfNeeded(client, rankings, rankings.players[playerKey], "mais_de_3_vitorias_no_mesmo_id_por_pagamento");
+const playerKey =
+  getPlayerRankingKey({
+    playerName:
+      reviewIdentity.playerName,
 
-        rankings.paymentEventKeys[paymentKey] = {
-          messageId: message.id,
-          eventName,
-          eventDateKey,
-          cityKey,
-          playerName: winner.playerName,
-          playerId: winner.playerId || "",
-          createdTimestamp: message.createdTimestamp || Date.now(),
-          at: Date.now()
-        };
+    playerId:
+      reviewIdentity.playerId,
+
+    cityKey:
+      reviewCityKey,
+
+    seasonId:
+      reviewSeasonId
+  });
+
+await sendRequiredPlayerCityReviewIfNeeded(
+  client,
+  rankings,
+  rankings.players[
+    playerKey
+  ],
+  "mais_de_3_vitorias_no_mesmo_id_por_pagamento"
+);
+
+rankings.paymentEventKeys[
+  paymentKey
+] = {
+  messageId:
+    message.id,
+
+  eventName,
+
+  eventDateKey,
+
+  cityKey,
+
+  playerName:
+    winner.playerName,
+
+  playerId:
+    winner.playerId ||
+    "",
+
+  paymentOriginalCreatedTimestamp,
+
+  createdTimestamp:
+    message.createdTimestamp ||
+    Date.now(),
+
+  at:
+    Date.now()
+};
 
         rankings.reviewedPaymentMessages[message.id] = {
           skipped: false,
@@ -6124,18 +8355,44 @@ async function sendPlayerIdentitySimilarityReviews(client, rankings) {
         ? normalizeHallEventName(evidence.eventName, cityKey)
         : directEventName;
 
-    const hallMeta = {
-      messageId: message.id,
-      channelId: message.channelId,
-      guildId: message.guildId,
-      jumpUrl: getMessageJumpUrl(message),
-      cityKey,
-      cityName: CITIES[cityKey]?.label || "Cidade Nobre",
-      eventName,
-      evidenceSource: evidence.source,
-      evidenceConfidence: evidence.confidence,
-      createdTimestamp: message.createdTimestamp || Date.now()
-    };
+const hallMeta = {
+  messageId:
+    message.id,
+
+  channelId:
+    message.channelId,
+
+  guildId:
+    message.guildId,
+
+  jumpUrl:
+    getMessageJumpUrl(
+      message
+    ),
+
+  cityKey,
+
+  cityName:
+    CITIES[cityKey]?.label ||
+    "Cidade Nobre",
+
+  eventName,
+
+  evidenceSource:
+    evidence.source,
+
+  evidenceConfidence:
+    evidence.confidence,
+
+  historicalVictoryTimestamp:
+    extractHistoricalVictoryTimestampFromContent(
+      content
+    ),
+
+  createdTimestamp:
+    message.createdTimestamp ||
+    Date.now()
+};
 
     rankings.orgs ??= {};
     rankings.players ??= {};
@@ -6305,16 +8562,83 @@ async function sendPlayerIdentitySimilarityReviews(client, rankings) {
         continue;
       }
 
-      addPlayerRankingPoint(rankings, playerWinner, hallMeta);
+addPlayerRankingPoint(
+  rankings,
+  playerWinner,
+  hallMeta
+);
 
-      const fixedIdentity = resolvePlayerIdentityOverride(playerWinner.playerId, playerWinner.playerName);
-      const playerKey = getPlayerRankingKey({
-        playerName: fixedIdentity.playerName,
-        playerId: fixedIdentity.playerId,
+const isCurrentSeason =
+  isCurrentPlayerSeasonEvidence(
+    rankings,
+    cityKey,
+    hallMeta
+  );
+
+const fixedIdentity =
+  isCurrentSeason
+    ? {
+        playerId:
+          String(
+            playerWinner.playerId ||
+            ""
+          ).trim(),
+
+        playerName:
+          cleanRankingPlayerName(
+            playerWinner.playerName ||
+            ""
+          )
+      }
+    : resolvePlayerIdentityOverride(
+        playerWinner.playerId,
+        playerWinner.playerName
+      );
+
+const fixedCityKey =
+  isCurrentSeason
+    ? cityKey
+    : (
+        getManualPlayerCityKeySmart(
+          fixedIdentity.playerId,
+          fixedIdentity.playerName
+        ) ||
         cityKey
-      });
+      );
 
-      await sendRequiredPlayerCityReviewIfNeeded(client, rankings, rankings.players[playerKey], "mais_de_3_vitorias_no_mesmo_id_hall");
+const seasonId =
+  isCurrentSeason
+    ? (
+        getPlayerRankingSeason(
+          rankings,
+          cityKey
+        )?.seasonId ||
+        ""
+      )
+    : "";
+
+const playerKey =
+  getPlayerRankingKey({
+    playerName:
+      fixedIdentity.playerName,
+
+    playerId:
+      fixedIdentity.playerId,
+
+    cityKey:
+      fixedCityKey,
+
+    seasonId
+  });
+
+await sendRequiredPlayerCityReviewIfNeeded(
+  client,
+  rankings,
+  rankings.players[
+    playerKey
+  ],
+  "mais_de_3_vitorias_no_mesmo_id_hall"
+);
     }
 
     rankings.reviewedMessages[message.id] = {
@@ -6389,15 +8713,75 @@ async function sendPlayerIdentitySimilarityReviews(client, rankings) {
     return dominant || fallbackCityKey || "nobre";
   }
   ///teste
-function applyDominantCityToRankingItems(items = []) {
+function applyDominantCityToRankingItems(
+  items = [],
+  rankings = null
+) {
   return items.map(item => {
-    const forcedCityKey =
-      getManualPlayerCityKey(item.playerId || "") ||
-      getManualPlayerCityKeyByName(item.name || "") ||
-      getManualOrgCityKey(item.name || "");
+    const baseCityKey =
+      item.cityKey ||
+      getDominantCityFromHalls(
+        item.halls ||
+        [],
+        "nobre"
+      );
 
-    const cityKey = forcedCityKey || getDominantCityFromHalls(item.halls || [], item.cityKey || "nobre");
-    const cityName = CITIES[cityKey]?.label || item.cityName || "Cidade Nobre";
+    const activeSeason =
+      rankings &&
+      CITIES[baseCityKey]
+        ? getPlayerRankingSeason(
+            rankings,
+            baseCityKey
+          )
+        : null;
+
+    const isCurrentSeasonItem =
+      Boolean(
+        item.seasonId &&
+        activeSeason?.seasonId &&
+        String(
+          item.seasonId
+        ) ===
+        String(
+          activeSeason.seasonId
+        )
+      );
+
+    const forcedCityKey =
+      isCurrentSeasonItem
+        ? ""
+        : (
+            getManualPlayerCityKey(
+              item.playerId ||
+              ""
+            ) ||
+            getManualPlayerCityKeyByName(
+              item.name ||
+              ""
+            ) ||
+            getManualOrgCityKey(
+              item.name ||
+              ""
+            )
+          );
+
+    const cityKey =
+      isCurrentSeasonItem
+        ? baseCityKey
+        : (
+            forcedCityKey ||
+            getDominantCityFromHalls(
+              item.halls ||
+              [],
+              baseCityKey ||
+              "nobre"
+            )
+          );
+
+    const cityName =
+      CITIES[cityKey]?.label ||
+      item.cityName ||
+      "Cidade Nobre";
 
     return {
       ...item,
@@ -6711,33 +9095,151 @@ function buildOrgsCityRankingEmbed(rankings, cityKey) {
 }
 
 function buildPlayersRankingEmbed(rankings) {
-  const topPlayers = applyDominantCityToRankingItems(Object.values(rankings.players || {}))
-    .filter(player => !isInvalidWinnerName(player.name))
-    .filter(player => !looksLikePrizeOnly(player.name))
-    .sort(sortRankingByTotalAndRecent)
-    .slice(0, 10);
+  const activeSeasonLines =
+    Object.entries(
+      CITIES
+    )
+      .map(
+        (
+          [
+            cityKey,
+            city
+          ]
+        ) => {
+          const season =
+            getPlayerRankingSeason(
+              rankings,
+              cityKey
+            );
 
-    const lines = topPlayers.map((player, index) => {
-      const pos = index + 1;
-      const medal = pos === 1 ? "🥇" : pos === 2 ? "🥈" : pos === 3 ? "🥉" : "⭐";
-      const idText = player.playerId ? `\n🆔 ID: **${player.playerId}**` : "";
+          if (
+            !season?.seasonId
+          ) {
+            return null;
+          }
 
-      return `${medal} **TOP ${pos} — ${player.name}**${idText}
+          return (
+            `${city.emoji} ${city.label}: ` +
+            `**${season.label}** • desde ` +
+            `<t:${
+              Math.floor(
+                Number(
+                  season.startedAt ||
+                  Date.now()
+                ) /
+                1000
+              )
+            }:D>`
+          );
+        }
+      )
+      .filter(
+        Boolean
+      );
+
+  const currentPlayerEvidenceIds =
+    new Set(
+      Object.values(
+        rankings.players ||
+        {}
+      ).flatMap(
+        player =>
+          (
+            player.halls ||
+            []
+          )
+            .map(
+              hall =>
+                hall.messageId
+            )
+            .filter(
+              Boolean
+            )
+      )
+    );
+
+  const topPlayers =
+    applyDominantCityToRankingItems(
+      Object.values(
+        rankings.players ||
+        {}
+      ),
+      rankings
+    )
+      .filter(
+        player =>
+          !isInvalidWinnerName(
+            player.name
+          )
+      )
+      .filter(
+        player =>
+          !looksLikePrizeOnly(
+            player.name
+          )
+      )
+      .sort(
+        sortRankingByTotalAndRecent
+      )
+      .slice(
+        0,
+        10
+      );
+
+  const lines =
+    topPlayers.map(
+      (
+        player,
+        index
+      ) => {
+        const pos =
+          index + 1;
+
+        const medal =
+          pos === 1
+            ? "🥇"
+            : pos === 2
+              ? "🥈"
+              : pos === 3
+                ? "🥉"
+                : "⭐";
+
+        const idText =
+          player.playerId
+            ? `\n🆔 ID: **${player.playerId}**`
+            : "";
+
+        return `${medal} **TOP ${pos} — ${player.name}**${idText}
   🌆 ${player.cityName}
   🏆 Vitórias: **${player.total}**
   🎮 ${formatRankingEventBreakdown(player.events, player.cityKey)}`;
-    });
-
-    return buildRankingEmbed(
-      "👑 Ranking de Pessoas — Hall da Fama",
-      "TOP 10 jogadores que mais venceram eventos oficiais.",
-      `👤 Pessoas no ranking: **${Object.keys(rankings.players || {}).length}**
-  📜 Halls analisados: **${Object.keys(rankings.reviewedMessages || {}).length}**
-  ⚠️ Revisões pendentes: **${Object.keys(rankings.pendingReview || {}).length}**`,
-      lines,
-      "#5865f2"
+      }
     );
-  }
+
+  const seasonSummary =
+    activeSeasonLines.length > 0
+      ? (
+          `\n🆕 **Temporadas ativas de players:**\n` +
+          activeSeasonLines.join(
+            "\n"
+          )
+        )
+      : "";
+
+  return buildRankingEmbed(
+    "👑 Ranking de Pessoas — Hall da Fama",
+
+    "TOP 10 jogadores que mais venceram eventos oficiais.",
+
+    `👤 Pessoas no ranking: **${Object.keys(rankings.players || {}).length}**
+  📜 Registros contabilizados: **${currentPlayerEvidenceIds.size}**
+  ⚠️ Revisões pendentes: **${Object.keys(rankings.pendingReview || {}).length}**${seasonSummary}`,
+
+    lines,
+
+    "#5865f2"
+  );
+}
 function sanitizeRankingNick(nome, id) {
   const base = `${String(nome || "").trim()} | ${String(id || "").trim()}`.replace(/\s+/g, " ");
   return base.length <= 32 ? base : base.slice(0, 32);
@@ -10176,7 +12678,643 @@ new ActionRowBuilder().addComponents(
     );
     return modal;
   }
+// ================= RESET DE TEMPORADA — PLAYERS POR CIDADE =================
 
+function canResetPlayerRanking(
+  member,
+  userId
+) {
+  if (!member) {
+    return false;
+  }
+
+  if (
+    PLAYER_RANKING_RESET_ALLOWED_USERS.includes(
+      userId
+    )
+  ) {
+    return true;
+  }
+
+  return (
+    PLAYER_RANKING_RESET_ALLOWED_ROLES.some(
+      roleId =>
+        member.roles
+          ?.cache
+          ?.has(
+            roleId
+          )
+    )
+  );
+}
+
+function resolvePlayerRankingResetCityKey(
+  command = ""
+) {
+  const normalizedCommand =
+    cleanOneLine(
+      command
+    ).toLowerCase();
+
+  if (
+    normalizedCommand ===
+    PLAYER_RANKING_RESET_LEGACY_NOBRE_COMMAND
+  ) {
+    return "nobre";
+  }
+
+  if (
+    !normalizedCommand.startsWith(
+      `${PLAYER_RANKING_RESET_COMMAND} `
+    )
+  ) {
+    return null;
+  }
+
+  const cityInput =
+    normalizedCommand
+      .slice(
+        PLAYER_RANKING_RESET_COMMAND.length
+      )
+      .trim();
+
+  return (
+    resolveCityKeyFromModalInput(
+      cityInput
+    ) ||
+    null
+  );
+}
+
+async function getLatestChannelMessageId(
+  client,
+  channelId
+) {
+  const channel =
+    await client.channels
+      .fetch(
+        channelId
+      )
+      .catch(
+        () =>
+          null
+      );
+
+  if (
+    !channel?.isTextBased()
+  ) {
+    return "";
+  }
+
+  const messages =
+    await channel.messages
+      .fetch({
+        limit: 1
+      })
+      .catch(
+        () =>
+          null
+      );
+
+  return (
+    messages
+      ?.first()
+      ?.id ||
+    ""
+  );
+}
+
+function rebuildPlayerRecordFromHalls(
+  player,
+  halls = []
+) {
+  const next = {
+    ...player,
+
+    halls:
+      [...halls],
+
+    total:
+      halls.length,
+
+    events:
+      {}
+  };
+
+  for (
+    const hall of
+    next.halls
+  ) {
+    const cityKey =
+      hall.cityKey ||
+      next.cityKey ||
+      "nobre";
+
+    const eventName =
+      normalizeHallEventName(
+        hall.eventName,
+        cityKey
+      );
+
+    next.events[eventName] ??=
+      0;
+
+    next.events[eventName] +=
+      1;
+  }
+
+  return next;
+}
+
+function archiveAndClearCityPlayerRanking(
+  rankings,
+  cityKey,
+  endedBy = ""
+) {
+  if (
+    !cityKey ||
+    !CITIES[cityKey]
+  ) {
+    throw new Error(
+      "Cidade inválida para troca de temporada."
+    );
+  }
+
+  rankings.playerRankingHistory ??=
+    {};
+
+  rankings
+    .playerRankingHistory[
+      cityKey
+    ] ??=
+    [];
+
+  const archivedPlayers =
+    {};
+
+  for (
+    const [
+      key,
+      player
+    ] of
+    Object.entries(
+      rankings.players ||
+      {}
+    )
+  ) {
+    if (!player) {
+      continue;
+    }
+
+    const halls =
+      Array.isArray(
+        player.halls
+      )
+        ? player.halls
+        : [];
+
+    const cityHalls =
+      halls.filter(
+        hall =>
+          (
+            hall.cityKey ||
+            player.cityKey ||
+            "nobre"
+          ) ===
+          cityKey
+      );
+
+    const isLegacyCityWithoutHallDetails =
+      player.cityKey ===
+        cityKey &&
+      halls.length ===
+        0 &&
+      Number(
+        player.total ||
+        0
+      ) >
+        0;
+
+    if (
+      !cityHalls.length &&
+      !isLegacyCityWithoutHallDetails
+    ) {
+      continue;
+    }
+
+    archivedPlayers[key] =
+      isLegacyCityWithoutHallDetails
+        ? {
+            ...player
+          }
+        : rebuildPlayerRecordFromHalls(
+            player,
+            cityHalls
+          );
+
+    const remainingHalls =
+      halls.filter(
+        hall =>
+          (
+            hall.cityKey ||
+            player.cityKey ||
+            "nobre"
+          ) !==
+          cityKey
+      );
+
+    if (
+      remainingHalls.length ===
+      0
+    ) {
+      delete rankings.players[
+        key
+      ];
+    } else {
+      rankings.players[
+        key
+      ] =
+        rebuildPlayerRecordFromHalls(
+          player,
+          remainingHalls
+        );
+    }
+  }
+
+  const previousSeason =
+    getPlayerRankingSeason(
+      rankings,
+      cityKey
+    );
+
+  const playerCount =
+    Object.keys(
+      archivedPlayers
+    ).length;
+
+  const victoryCount =
+    Object.values(
+      archivedPlayers
+    ).reduce(
+      (
+        sum,
+        player
+      ) =>
+        sum +
+        Number(
+          player.total ||
+          0
+        ),
+      0
+    );
+
+  if (
+    playerCount > 0 ||
+    previousSeason
+  ) {
+    rankings
+      .playerRankingHistory[
+        cityKey
+      ]
+      .push({
+        seasonId:
+          previousSeason
+            ?.seasonId ||
+          `legacy-${cityKey}-pre-reset`,
+
+        seasonNumber:
+          Number(
+            previousSeason
+              ?.seasonNumber ||
+            1
+          ),
+
+        label:
+          previousSeason
+            ?.label ||
+          "Temporada 1 • Legado",
+
+        cityKey,
+
+        startedAt:
+          Number(
+            previousSeason
+              ?.startedAt ||
+            0
+          ),
+
+        endedAt:
+          Date.now(),
+
+        endedBy,
+
+        playerCount,
+
+        victoryCount,
+
+        players:
+          archivedPlayers
+      });
+  }
+
+  for (
+    const [
+      key,
+      value
+    ] of
+    Object.entries(
+      rankings
+        .manualPlayerCityOverrides ||
+      {}
+    )
+  ) {
+    if (
+      value?.cityKey ===
+      cityKey
+    ) {
+      delete rankings
+        .manualPlayerCityOverrides[
+          key
+        ];
+    }
+  }
+
+  return {
+    previousSeason,
+    playerCount,
+    victoryCount
+  };
+}
+
+const playerRankingResetRunningCities =
+  new Set();
+
+async function handlePlayerRankingResetCommand(
+  message,
+  client
+) {
+  if (
+    !message?.guild ||
+    message.author?.bot
+  ) {
+    return false;
+  }
+
+  const command =
+    cleanOneLine(
+      message.content ||
+      ""
+    ).toLowerCase();
+
+  const isGenericCommandWithoutCity =
+    command ===
+    PLAYER_RANKING_RESET_COMMAND;
+
+  const isLegacyCommand =
+    command ===
+    PLAYER_RANKING_RESET_LEGACY_NOBRE_COMMAND;
+
+  const isGenericCommand =
+    command.startsWith(
+      `${PLAYER_RANKING_RESET_COMMAND} `
+    );
+
+  if (
+    !isGenericCommandWithoutCity &&
+    !isLegacyCommand &&
+    !isGenericCommand
+  ) {
+    return false;
+  }
+
+  if (
+    !canResetPlayerRanking(
+      message.member,
+      message.author.id
+    )
+  ) {
+    await message
+      .reply(
+        "🚫 Esse comando é exclusivo para **Owner**, **Resp. Creators** e **Macedo**."
+      )
+      .catch(
+        () => {}
+      );
+
+    return true;
+  }
+
+  const cityKey =
+    resolvePlayerRankingResetCityKey(
+      command
+    );
+
+  if (
+    !cityKey ||
+    !CITIES[cityKey]
+  ) {
+    await message
+      .reply(
+        `❌ Informe a cidade que deve iniciar uma nova temporada de players.\n\n` +
+        `Use:\n` +
+        `\`${PLAYER_RANKING_RESET_COMMAND} nobre\`\n` +
+        `\`${PLAYER_RANKING_RESET_COMMAND} santa\`\n` +
+        `\`${PLAYER_RANKING_RESET_COMMAND} grande\`\n` +
+        `\`${PLAYER_RANKING_RESET_COMMAND} maresia\``
+      )
+      .catch(
+        () => {}
+      );
+
+    return true;
+  }
+
+  const cityData =
+    CITIES[cityKey];
+
+  if (
+    playerRankingResetRunningCities.has(
+      cityKey
+    )
+  ) {
+    await message
+      .reply(
+        `⏳ Já existe uma troca de temporada do ranking de players da **${cityData.label}** em andamento.`
+      )
+      .catch(
+        () => {}
+      );
+
+    return true;
+  }
+
+  playerRankingResetRunningCities.add(
+    cityKey
+  );
+
+  try {
+    const [
+      hallCutoffMessageId,
+      paymentCutoffMessageId
+    ] =
+      await Promise.all([
+        getLatestChannelMessageId(
+          client,
+          HALL_CHANNEL_ID
+        ),
+
+        getLatestChannelMessageId(
+          client,
+          PAYMENT_EVENTS_CHANNEL_ID
+        )
+      ]);
+
+    const rankings =
+      loadHallRankings();
+
+    rankings.playerRankingSeasons ??=
+      {};
+
+    rankings.playerRankingHistory ??=
+      {};
+
+    const archived =
+      archiveAndClearCityPlayerRanking(
+        rankings,
+        cityKey,
+        message.author.id
+      );
+
+    const previousSeasonNumber =
+      Number(
+        archived
+          .previousSeason
+          ?.seasonNumber ||
+        1
+      );
+
+    const startedAt =
+      Date.now();
+
+    const nextSeasonNumber =
+      previousSeasonNumber +
+      1;
+
+    const newSeason = {
+      seasonId:
+        `${cityKey}-${startedAt}`,
+
+      seasonNumber:
+        nextSeasonNumber,
+
+      label:
+        `Temporada ${nextSeasonNumber} • Novo Ciclo`,
+
+      cityKey,
+
+      startedAt,
+
+      startedBy:
+        message.author.id,
+
+      hallCutoffMessageId,
+
+      paymentCutoffMessageId
+    };
+
+    rankings
+      .playerRankingSeasons[
+        cityKey
+      ] =
+      newSeason;
+
+    rankings.lastUpdatedAt =
+      Date.now();
+
+    state.playerRankingSeasons ??=
+      {};
+
+    state
+      .playerRankingSeasons[
+        cityKey
+      ] =
+      newSeason;
+
+    saveHallRankings(
+      rankings
+    );
+
+    saveState(
+      state
+    );
+
+    await publishHallRankings(
+      client,
+      rankings
+    );
+
+    await sendHallScanLog(
+      client,
+      {
+        title:
+          `🆕 Nova temporada de Players — ${cityData.label}`,
+
+        color:
+          "#2ecc71",
+
+        description:
+          `Comando: **${command}**\n` +
+          `Executado por: <@${message.author.id}>\n` +
+          `Cidade: **${cityData.label}**\n` +
+          `Temporada iniciada: **${newSeason.label}**\n` +
+          `Players arquivados: **${archived.playerCount}**\n` +
+          `Vitórias arquivadas: **${archived.victoryCount}**\n` +
+          `Corte Hall: \`${hallCutoffMessageId || "sem mensagem"}\`\n` +
+          `Corte Pagamentos: \`${paymentCutoffMessageId || "sem mensagem"}\`\n\n` +
+          `O histórico foi preservado. O ranking de ORGs e as outras cidades não foram alterados.`,
+
+        phase:
+          "Troca de temporada de Players"
+      }
+    ).catch(
+      () => {}
+    );
+
+    await message
+      .reply(
+        `✅ **Ranking de PLAYERS da ${cityData.label} iniciado em uma nova temporada.**\n\n` +
+        `🆕 ${newSeason.label}\n` +
+        `👤 Players antigos arquivados: **${archived.playerCount}**\n` +
+        `🏆 Vitórias antigas arquivadas: **${archived.victoryCount}**\n` +
+        `🗃️ O histórico antigo continua salvo.\n` +
+        `🚫 Ranking de ORGs não foi alterado.\n` +
+        `🌆 As outras cidades não foram alteradas.\n` +
+        `🧱 Halls e pagamentos anteriores ao corte não voltarão para esta temporada.`
+      )
+      .catch(
+        () => {}
+      );
+  } catch (error) {
+    console.error(
+      `[HallDaFama] Erro ao iniciar nova temporada de players da ${cityData.label}:`,
+      error
+    );
+
+    await message
+      .reply(
+        `❌ Não foi possível iniciar a nova temporada: \`${error?.message || error}\``
+      )
+      .catch(
+        () => {}
+      );
+  } finally {
+    playerRankingResetRunningCities.delete(
+      cityKey
+    );
+  }
+
+  return true;
+}
   // ================= EXPORTS =================
 
   export async function hallDaFamaOnReady(client) {
@@ -10190,7 +13328,34 @@ state.historicalHallReviews ??= {};
 state.historicalHallMigrations ??= {};
 state.historicalRankingRebuildPending ??= false;
 
+state.playerRankingSeasons ??= {};
+state.hallAiCopyHistory ??= [];
+
 saveState(state);
+
+if (
+  !client.__HALL_PLAYER_RANKING_RESET_LISTENER__
+) {
+  client.__HALL_PLAYER_RANKING_RESET_LISTENER__ =
+    true;
+
+client.on(
+  "messageCreate",
+  async message => {
+    await handlePlayerRankingResetCommand(
+      message,
+      client
+    ).catch(
+      error => {
+        console.error(
+          "[HallDaFama] Erro no comando de reset de ranking:",
+          error
+        );
+      }
+    );
+  }
+);
+}
 
 const channel =
   await client.channels
@@ -12493,23 +15658,45 @@ if (isPrizesOnly) {
 }
       const mentionsLine = lines.find(l => l.includes('@everyone')) || '';
 
-    // Remonta a mensagem
-  const introLine = buildHallIntroLine(newIntro, newEventName, newCityName);
+// Remonta a mensagem
+const introLine =
+  buildHallIntroLine(
+    newIntro,
+    newEventName,
+    newCityName
+  );
 
-  const finalMessageWithUrls =
-  `# 🎉 :  **Santa Creators : ${newEventName}** 🎉 
+const preservedSeasonMarker =
+  extractHallPlayerSeasonMarker(
+    oldContent
+  );
 
-  ${introLine}
+const preservedClosing =
+  extractHallClosingText(
+    oldContent
+  ) ||
+  getRandomHallClosing();
 
-  👏  Uma salva de palmas para os BRABOS! 👏 
+const finalMessageWithUrls =
+`# 🎉 :  **Santa Creators : ${newEventName}** 🎉 
 
-  <:12633559939374122111:1368796471297576970>  **HALL DA FAMA** <:12633559939374122111:1368796471297576970> 
+${introLine}
 
-  ${newWinnersText.trim()}
+👏  Uma salva de palmas para os BRABOS! 👏 
 
-  **Foi insano, mas mais uma vez os vencedores mostraram que a vitória só é possível com raça! <:__:1357520048318709840>**
+<:12633559939374122111:1368796471297576970>  **HALL DA FAMA** <:12633559939374122111:1368796471297576970> 
 
-  ${mentionsLine}`;
+${preservedSeasonMarker
+  ? `${preservedSeasonMarker}\n`
+  : ""}
+
+${newWinnersText.trim()}
+
+${formatHallClosingLine(
+  preservedClosing
+)}
+
+${mentionsLine}`;
 
 const manualImageFieldWasFilled =
   manualImageUrlInput.length > 0;
@@ -13087,22 +16274,50 @@ if (approvalImageReferences.length > 0) {
         );
       }
 
-      const cityData =
-        CITIES[data.cityKey];
+const cityData =
+  CITIES[
+    data.cityKey
+  ];
 
-      const cityName =
-        data.cityDisplayName ||
-        cityData.label;
+const cityName =
+  data.cityDisplayName ||
+  cityData.label;
 
-      const intro =
-        getRandomIntro();
+const hallAiCopy =
+  await generateHallAiCopy({
+    eventName:
+      data.eventName,
 
-      const introLine =
-        buildHallIntroLine(
-          intro,
-          data.eventName,
-          cityName
-        );
+    cityKey:
+      data.cityKey,
+
+    cityName,
+
+    winnersText:
+      data.winnersText,
+
+    historicalMigration:
+      Boolean(
+        data.historicalMigration
+      )
+  });
+
+const introLine =
+  buildHallIntroLine(
+    hallAiCopy.intro,
+    data.eventName,
+    cityName
+  );
+
+const hallSeasonMarker =
+  buildHallPlayerSeasonMarker(
+    loadHallRankings(),
+    data.cityKey,
+    Boolean(
+      data.historicalMigration
+    ),
+    data.winnersText
+  );
 
       const historicalVictoryTimestamp =
         Number(
@@ -13223,25 +16438,29 @@ if (approvalImageReferences.length > 0) {
       ? finalImageUrls.join("\n")
       : "";
 
-  // Montagem da mensagem final (Estilo Diva/Grande)
-  const finalMessage =
-  `# 🎉 :  **Santa Creators : ${data.eventName}** 🎉 
+// Montagem da mensagem final (Estilo Diva/Grande)
+const finalMessage =
+`# 🎉 :  **Santa Creators : ${data.eventName}** 🎉 
 
-  ${introLine}
+${introLine}
 
-  👏  Uma salva de palmas para os BRABOS! 👏 
+👏  Uma salva de palmas para os BRABOS! 👏 
 
-  <:12633559939374122111:1368796471297576970>  **HALL DA FAMA** <:12633559939374122111:1368796471297576970> 
+<:12633559939374122111:1368796471297576970>  **HALL DA FAMA** <:12633559939374122111:1368796471297576970> 
 
-  ${historicalVictoryBlock}
+${historicalVictoryBlock}
 
-  ${data.winnersText}
+${hallSeasonMarker}
 
-  **Foi insano, mas mais uma vez os vencedores mostraram que a vitória só é possível com raça! <:__:1357520048318709840>**
+${data.winnersText}
 
-  ||@everyone @here <@&${ROLE_CIDADAO}> <@&${ROLE_LIDERES}> <@&${cityData.roleId}>||
+${formatHallClosingLine(
+  hallAiCopy.closing
+)}
 
-  ${hallImageLinks}`;
+||@everyone @here <@&${ROLE_CIDADAO}> <@&${ROLE_LIDERES}> <@&${cityData.roleId}>||
+
+${hallImageLinks}`;
 
   const chunks =
     splitText(finalMessage);

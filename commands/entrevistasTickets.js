@@ -22,6 +22,7 @@ import {
   analyzeAndRecordTicket,
   recordTicketFeedback,
 } from '../utils/ticketOperationalIntelligence.js';
+import { createTicketRestoreSystem } from '../utils/ticketRestore.js';
 
 export default function createEntrevistasTickets({ client, Transcript }) {
   ///!ENTREVISTA
@@ -1382,7 +1383,8 @@ const INACTIVITY_PROTECTED_CATEGORY_IDS = new Set([
   '1428572742051168378',
   '1482874296685695118',
   '1384650670145278033',
-  '1352706815594598420'
+  '1352706815594598420',
+  '1444857594517913742'
 ]);
 
 // =========================================================
@@ -1444,6 +1446,52 @@ const ALL_TICKET_CATEGORY_IDS = new Set([
   '1444857594517913742',
   ...INACTIVITY_PROTECTED_CATEGORY_IDS
 ]);
+
+// =========================================================
+// ♻️ RESTAURAÇÃO PROFISSIONAL DE TICKETS
+// =========================================================
+//
+// O transcript continua sendo a fonte do histórico.
+// Aqui salvamos somente metadados leves do canal original:
+// categoria, nome, tópico, posição e permissões.
+//
+// Para tickets antigos, sem restoreMeta, o sistema usa:
+// 1) override específico, quando existir;
+// 2) categoria padrão do tipo do ticket.
+// =========================================================
+
+const ticketRestore = createTicketRestoreSystem({
+  client,
+  Transcript,
+  transcriptLogChannelId: TRANSCRIPTS_CHANNEL_ID,
+  transcriptBaseUrl: TRANSCRIPTS_BASE_URL,
+
+  allowedUserIds: [
+    '660311795327828008' // Macedo
+  ],
+
+  allowedRoleIds: [
+    '1262262852949905408' // Owner
+  ],
+
+  typeCategoryMap: {
+    entrevista: CATEGORIES.entrevista,
+    suporte: CATEGORIES.suporte,
+    lider: CATEGORIES.lider,
+    ideias: CATEGORIES.ideias,
+    gravacoes: CATEGORIES.ideias,
+    roupas: CATEGORIES.roupas,
+    banners: CATEGORIES.banners,
+    designer: CATEGORIES.banners
+  },
+
+  // Ticket antigo do print enviado por você.
+  // Como ele foi fechado antes de existir restoreMeta,
+  // este override garante retorno ao local indicado.
+  legacyParentOverrides: {
+    '1553211623458738227': '1444857594517913742'
+  }
+});
 
 function isTeamTicketOpener(member, userId) {
   if (
@@ -2331,6 +2379,17 @@ await finalizarTicketComConclusao(
   }
 );
 
+    // Adiciona o botão de restauração também em logs antigos.
+    // Executa em segundo plano para não atrasar o ready do bot.
+    void ticketRestore
+      .backfillRestoreButtons()
+      .catch(error => {
+        console.error(
+          '[TICKET RESTORE] Falha no backfill dos botões:',
+          error?.message || error
+        );
+      });
+
     await startInactivityMonitor();
     return true;
   }
@@ -2357,14 +2416,21 @@ await finalizarTicketComConclusao(
   }
 
   async function onInteractionCreate(interaction) {
-    // (era o client.on(Events.InteractionCreate...))
+  // (era o client.on(Events.InteractionCreate...))
 
-    if (hasHandled(interaction)) return true;
+  if (hasHandled(interaction)) return true;
 
-    if (
-      interaction.isButton() &&
-      interaction.customId.startsWith('ticket_feedback:')
-    ) {
+  if (
+    interaction.isButton() &&
+    interaction.customId.startsWith('restaurar_ticket:')
+  ) {
+    return await ticketRestore.handleRestoreInteraction(interaction);
+  }
+
+  if (
+    interaction.isButton() &&
+    interaction.customId.startsWith('ticket_feedback:')
+  ) {
       const [
         ,
         feedback,
@@ -3939,7 +4005,28 @@ try {
       };
 
       try {
-        await withTimeout(Transcript.create(payload), 15_000, "Transcript.create");
+        const transcriptDocument = await withTimeout(
+          Transcript.create(payload),
+          15_000,
+          "Transcript.create"
+        );
+
+        await withTimeout(
+          ticketRestore.saveRestoreMeta({
+            transcriptDocument,
+            channel: canal,
+            tipoTicket,
+            openerId: idAberto,
+            assumedById: idAssumido || ATENDENTE_ID_FINAL
+          }),
+          10_000,
+          "ticketRestore.saveRestoreMeta"
+        ).catch(error => {
+          console.error(
+            "[TICKET RESTORE] Falha ao salvar metadados de restauração:",
+            error?.message || error
+          );
+        });
       } catch (e) {
         console.error("[TICKET] Transcript.create falhou/timeout:", e?.message || e);
       }
@@ -4172,12 +4259,14 @@ const embedLog = new EmbedBuilder()
       )
       .setFooter({ text: "SantaCreators", iconURL: guild.iconURL() });
 
-    const rowLog = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setStyle(ButtonStyle.Link)
-        .setLabel("📂 Abrir Transcript")
-        .setURL(`${TRANSCRIPTS_BASE_URL}${canalId}`)
-    );
+const rowLog = new ActionRowBuilder().addComponents(
+  new ButtonBuilder()
+    .setStyle(ButtonStyle.Link)
+    .setLabel("📂 Abrir Transcript")
+    .setURL(`${TRANSCRIPTS_BASE_URL}${canalId}`),
+
+  ticketRestore.buildRestoreButton(canalId)
+);
 
     // ✅ manda log (NUNCA pode travar o fechamento)
     try {

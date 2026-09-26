@@ -32,13 +32,36 @@ import sharp from "sharp";
 const CANAL_DASHBOARD_PAGAMENTO = "1505716526534103110";
 
 // Arquivos de persistência
-const STATS_FILE = path.join(process.cwd(), "data", "pagamentos_social_stats.json");
-const DASH_STATE_FILE = path.join(process.cwd(), "data", "pagamentos_social_dash_state.json");
-const PAYMENT_OPERATION_TRACE_FILE = path.join(
-  process.cwd(),
-  "data",
-  "pagamentos_social_operation_trace.json"
-);
+const STATS_FILE =
+  path.join(
+    process.cwd(),
+    "data",
+    "pagamentos_social_stats.json"
+  );
+
+const DASH_STATE_FILE =
+  path.join(
+    process.cwd(),
+    "data",
+    "pagamentos_social_dash_state.json"
+  );
+
+const HALL_RANKING_FILE =
+  path.join(
+    process.cwd(),
+    "data",
+    "halldafama_rankings.json"
+  );
+
+const PAYMENT_PLAYER_SEASON_FIELD_NAME =
+  "🏆 Temporada de Players";
+
+const PAYMENT_OPERATION_TRACE_FILE =
+  path.join(
+    process.cwd(),
+    "data",
+    "pagamentos_social_operation_trace.json"
+  );
 const DASH_MARKER = "SC_PAGAMENTO_DASH::V1";
 // Canal onde fica o menu + onde os registros são postados
 const CANAL_PAGAMENTO = "1387922662134775818";
@@ -2269,10 +2292,30 @@ async function autoMarcarCidadePagamentoMensagem(client, message, motivo = "auto
   const cidadeKey = detectarCidadeAutomaticaPagamento(message);
   if (!cidadeKey) return false;
 
-  const embedAtualizado = atualizarCampoCidade(
-    EmbedBuilder.from(message.embeds[0]),
+const paymentTrace =
+  resolvePaymentOperationMessage(
+    message.id,
+    message.createdTimestamp ||
+    Date.now()
+  );
+
+const embedAtualizado =
+  atualizarCampoCidade(
+    EmbedBuilder.from(
+      message.embeds[0]
+    ),
     cidadeKey,
-    client.user.id
+    client.user.id,
+    {
+      messageId:
+        message.id,
+
+      originalCreatedAt:
+        paymentTrace.createdAt,
+
+      embedLike:
+        message.embeds[0]
+    }
   );
 
   const componentsSemCidades = removerRowsCidadePagamento(message);
@@ -2313,11 +2356,41 @@ async function atualizarRegistroPagamentoAntigoNaMesmaMensagem(client, msg) {
 
   const cidadeKey = detectarCidadeAutomaticaPagamento(msg);
 
-  if (cidadeKey && CIDADES_PAGAMENTO[cidadeKey]) {
-    atualizarCampoCidade(embedBuilder, cidadeKey, client.user.id);
-    cidadeAlterada = true;
-    alterou = true;
-  }
+if (
+  cidadeKey &&
+  CIDADES_PAGAMENTO[
+    cidadeKey
+  ]
+) {
+  const paymentTrace =
+    resolvePaymentOperationMessage(
+      msg.id,
+      msg.createdTimestamp ||
+      Date.now()
+    );
+
+  atualizarCampoCidade(
+    embedBuilder,
+    cidadeKey,
+    client.user.id,
+    {
+      messageId:
+        msg.id,
+
+      originalCreatedAt:
+        paymentTrace.createdAt,
+
+      embedLike:
+        msg.embeds[0]
+    }
+  );
+
+  cidadeAlterada =
+    true;
+
+  alterou =
+    true;
+}
 
   const resultadoOCR = await tentarReprocessarOCRRegistro(embedBuilder, msg).catch(() => ({
     alterou: false,
@@ -3484,35 +3557,455 @@ function getCidadeKeyFromEmbed(embedLike) {
   return null;
 }
 
-function atualizarCampoCidade(embedBuilder, cidadeKey, actionByUserId = null) {
-  const cidade = CIDADES_PAGAMENTO[cidadeKey];
-  if (!cidade) return embedBuilder;
+function getActivePlayerSeasonForPayment(
+  cidadeKey = ""
+) {
+  if (
+    !cidadeKey ||
+    !CIDADES_PAGAMENTO[
+      cidadeKey
+    ]
+  ) {
+    return null;
+  }
 
-  const data = embedBuilder.data ?? {};
-  const fields = Array.isArray(data.fields) ? [...data.fields] : [];
+  try {
+    if (
+      !fs.existsSync(
+        HALL_RANKING_FILE
+      )
+    ) {
+      return null;
+    }
 
-  const textoCidade = [
-    `${cidade.emoji} **${cidade.label}**`,
-    `<@&${cidade.roleId}>`,
-    actionByUserId ? `Marcado por: <@${actionByUserId}>` : null,
-    `🕒 <t:${Math.floor(Date.now() / 1000)}:f>`,
-  ].filter(Boolean).join("\n");
+    const raw =
+      fs.readFileSync(
+        HALL_RANKING_FILE,
+        "utf8"
+      );
 
-  const novoField = {
-    name: "🏙️ Cidade / CDD",
-    value: textoCidade,
-    inline: false,
-  };
+    const parsed =
+      raw
+        ? JSON.parse(
+            raw
+          )
+        : {};
 
-  const idx = fields.findIndex((f) => f.name === "🏙️ Cidade / CDD");
+    const season =
+      parsed
+        ?.playerRankingSeasons
+        ?.[cidadeKey] ||
+      null;
 
-  if (idx >= 0) fields[idx] = novoField;
-  else fields.splice(Math.max(fields.length - 2, 0), 0, novoField);
+    return season?.seasonId
+      ? season
+      : null;
+  } catch (
+    error
+  ) {
+    console.warn(
+      `[PagamentoSocial] Não foi possível ler a temporada de players de ${cidadeKey}:`,
+      error?.message ||
+      error
+    );
 
-  embedBuilder.setFields(fields);
-  return embedBuilder;
+    return null;
+  }
 }
 
+function comparePaymentSnowflakes(
+  a = "",
+  b = ""
+) {
+  try {
+    const left =
+      BigInt(
+        String(
+          a ||
+          "0"
+        )
+      );
+
+    const right =
+      BigInt(
+        String(
+          b ||
+          "0"
+        )
+      );
+
+    if (
+      left ===
+      right
+    ) {
+      return 0;
+    }
+
+    return left >
+      right
+      ? 1
+      : -1;
+  } catch {
+    return 0;
+  }
+}
+
+function getPaymentEventDateTimestampFromEmbed(
+  embedLike
+) {
+  const raw =
+    String(
+      getFieldValue(
+        embedLike,
+        "📅 Data do Evento"
+      ) ||
+      getFieldValue(
+        embedLike,
+        "Data do Evento"
+      ) ||
+      ""
+    );
+
+  const match =
+    raw.match(
+      /\b(\d{1,2})\/(\d{1,2})\/(20\d{2})\b/
+    );
+
+  if (!match) {
+    return 0;
+  }
+
+  return new Date(
+    `${match[3]}-` +
+    `${String(match[2]).padStart(2, "0")}-` +
+    `${String(match[1]).padStart(2, "0")}` +
+    `T12:00:00-03:00`
+  ).getTime();
+}
+
+function getSaoPauloDayTimestamp(
+  timestamp =
+    Date.now()
+) {
+  const dateKey =
+    new Date(
+      Number(
+        timestamp
+      ) ||
+      Date.now()
+    ).toLocaleDateString(
+      "pt-BR",
+      {
+        timeZone:
+          "America/Sao_Paulo"
+      }
+    );
+
+  const match =
+    dateKey.match(
+      /^(\d{2})\/(\d{2})\/(20\d{2})$/
+    );
+
+  if (!match) {
+    return 0;
+  }
+
+  return new Date(
+    `${match[3]}-` +
+    `${match[2]}-` +
+    `${match[1]}` +
+    `T12:00:00-03:00`
+  ).getTime();
+}
+
+function shouldMarkCurrentPlayerSeasonOnPayment(
+  cidadeKey,
+  {
+    messageId = "",
+    originalCreatedAt = 0,
+    embedLike = null
+  } = {}
+) {
+  const season =
+    getActivePlayerSeasonForPayment(
+      cidadeKey
+    );
+
+  if (
+    !season?.seasonId
+  ) {
+    return false;
+  }
+
+  const eventDateTimestamp =
+    getPaymentEventDateTimestampFromEmbed(
+      embedLike
+    );
+
+  const seasonDayTimestamp =
+    getSaoPauloDayTimestamp(
+      season.startedAt
+    );
+
+  if (
+    eventDateTimestamp >
+      0 &&
+    seasonDayTimestamp >
+      0 &&
+    eventDateTimestamp <
+      seasonDayTimestamp
+  ) {
+    return false;
+  }
+
+  const originalTimestamp =
+    Number(
+      originalCreatedAt ||
+      0
+    );
+
+  if (
+    originalTimestamp >
+      0 &&
+    originalTimestamp <
+      Number(
+        season.startedAt ||
+        0
+      )
+  ) {
+    return false;
+  }
+
+  if (
+    messageId &&
+    season.paymentCutoffMessageId &&
+    originalTimestamp <=
+      0
+  ) {
+    return (
+      comparePaymentSnowflakes(
+        messageId,
+        season.paymentCutoffMessageId
+      ) >
+      0
+    );
+  }
+
+  return true;
+}
+
+function buildPaymentPlayerSeasonField(
+  cidadeKey = "",
+  context = {}
+) {
+  if (
+    !cidadeKey ||
+    !CIDADES_PAGAMENTO[
+      cidadeKey
+    ] ||
+    !shouldMarkCurrentPlayerSeasonOnPayment(
+      cidadeKey,
+      context
+    )
+  ) {
+    return null;
+  }
+
+  const season =
+    getActivePlayerSeasonForPayment(
+      cidadeKey
+    );
+
+  if (
+    !season?.seasonId
+  ) {
+    return null;
+  }
+
+  const cidade =
+    CIDADES_PAGAMENTO[
+      cidadeKey
+    ];
+
+  return {
+    name:
+      PAYMENT_PLAYER_SEASON_FIELD_NAME,
+
+    value:
+      `${cidade.emoji} **${cidade.label}** • ` +
+      `🆕 **${season.label || "Temporada atual"}**` +
+      ` • desde <t:${
+        Math.floor(
+          Number(
+            season.startedAt ||
+            Date.now()
+          ) /
+          1000
+        )
+      }:D>` +
+      `\n📌 Válido somente para o **ranking de players desta cidade**.`,
+
+    inline:
+      false
+  };
+}
+
+function atualizarCampoCidade(
+  embedBuilder,
+  cidadeKey,
+  actionByUserId = null,
+  seasonContext = {}
+) {
+  const cidade =
+    CIDADES_PAGAMENTO[
+      cidadeKey
+    ];
+
+  if (!cidade) {
+    return embedBuilder;
+  }
+
+  const data =
+    embedBuilder.data ??
+    {};
+
+  const fields =
+    Array.isArray(
+      data.fields
+    )
+      ? [
+          ...data.fields
+        ]
+      : [];
+
+  const textoCidade =
+    [
+      `${cidade.emoji} **${cidade.label}**`,
+
+      `<@&${cidade.roleId}>`,
+
+      actionByUserId
+        ? `Marcado por: <@${actionByUserId}>`
+        : null,
+
+      `🕒 <t:${
+        Math.floor(
+          Date.now() /
+          1000
+        )
+      }:f>`
+    ]
+      .filter(
+        Boolean
+      )
+      .join(
+        "\n"
+      );
+
+  const novoField = {
+    name:
+      "🏙️ Cidade / CDD",
+
+    value:
+      textoCidade,
+
+    inline:
+      false
+  };
+
+  /*
+   * Remove uma marca de Season anterior
+   * antes de recalcular.
+   *
+   * Exemplo:
+   * Nobre -> Santa
+   *
+   * Não pode carregar a Season da Nobre
+   * depois que a cidade foi alterada.
+   */
+  const existingSeasonIndex =
+    fields.findIndex(
+      field =>
+        field.name ===
+        PAYMENT_PLAYER_SEASON_FIELD_NAME
+    );
+
+  if (
+    existingSeasonIndex >=
+    0
+  ) {
+    fields.splice(
+      existingSeasonIndex,
+      1
+    );
+  }
+
+  const idx =
+    fields.findIndex(
+      field =>
+        field.name ===
+        "🏙️ Cidade / CDD"
+    );
+
+  if (
+    idx >=
+    0
+  ) {
+    fields[
+      idx
+    ] =
+      novoField;
+  } else {
+    fields.splice(
+      Math.max(
+        fields.length -
+        2,
+        0
+      ),
+      0,
+      novoField
+    );
+  }
+
+  const seasonField =
+    buildPaymentPlayerSeasonField(
+      cidadeKey,
+      {
+        ...seasonContext,
+
+        embedLike:
+          seasonContext.embedLike ||
+          embedBuilder
+      }
+    );
+
+  if (
+    seasonField
+  ) {
+    const cityIndex =
+      fields.findIndex(
+        field =>
+          field.name ===
+          "🏙️ Cidade / CDD"
+      );
+
+    fields.splice(
+      cityIndex >=
+        0
+        ? cityIndex +
+          1
+        : fields.length,
+      0,
+      seasonField
+    );
+  }
+
+  embedBuilder.setFields(
+    fields
+  );
+
+  return embedBuilder;
+}
 function mensagemEhDoMesAtualSP(msg) {
   const monthKey = getMonthKey();
 
@@ -6362,11 +6855,31 @@ if (id.startsWith("pagamento_filtro_")) {
           return true;
         }
 
-const embedAtualizado = atualizarCampoCidade(
-  EmbedBuilder.from(embedRaw),
-  cidadeKey,
-  interaction.user.id
-);
+const paymentTrace =
+  resolvePaymentOperationMessage(
+    registroMsg.id,
+    registroMsg.createdTimestamp ||
+    Date.now()
+  );
+
+const embedAtualizado =
+  atualizarCampoCidade(
+    EmbedBuilder.from(
+      embedRaw
+    ),
+    cidadeKey,
+    interaction.user.id,
+    {
+      messageId:
+        registroMsg.id,
+
+      originalCreatedAt:
+        paymentTrace.createdAt,
+
+      embedLike:
+        embedRaw
+    }
+  );
 
 const resultadoVipCidade = await tentarCorrigirRegistroPorVipEvento(
   client,
@@ -6748,11 +7261,18 @@ if (
   cidadeAutomaticaPorLink &&
   CIDADES_PAGAMENTO[cidadeAutomaticaPorLink]
 ) {
-  atualizarCampoCidade(
-    embed,
-    cidadeAutomaticaPorLink,
-    client.user.id
-  );
+atualizarCampoCidade(
+  embed,
+  cidadeAutomaticaPorLink,
+  client.user.id,
+  {
+    originalCreatedAt:
+      Date.now(),
+
+    embedLike:
+      embed
+  }
+);
 }
 
         const mensagem = await canal.send({ embeds: [embed] }).catch(() => null);
