@@ -12,6 +12,32 @@ const RESTORE_PREFIX = 'restaurar_ticket:';
 const BACKFILL_LIMIT = 1000;
 const REPLAY_DELAY_MS = 550;
 
+// =========================================================
+// ♻️ LOGS ANTIGOS PRIORITÁRIOS PARA RESTAURAÇÃO
+// =========================================================
+//
+// Estes registros são buscados DIRETAMENTE pelo ID
+// da mensagem do log.
+//
+// Isso significa que eles não dependem:
+// - de estarem entre os últimos 1000 logs;
+// - da paginação normal do backfill;
+// - de o sistema encontrar o ticket por acaso.
+//
+// logMessageId = ID DA MENSAGEM no canal de transcripts.
+// ticketId     = ID DO CANAL ORIGINAL que foi apagado.
+//
+// Para adicionar outros tickets antigos no futuro,
+// basta adicionar outro objeto neste array.
+// =========================================================
+
+const PRIORITY_OLD_RESTORE_LOGS = [
+  {
+    logMessageId: '1553421533005750417',
+    ticketId: '1553211623458738227'
+  }
+];
+
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function splitText(value, max = 1750) {
@@ -1217,7 +1243,311 @@ export function createTicketRestoreSystem({
 
     return true;
   }
+  // =========================================================
+  // ♻️ GARANTE BOTÃO EM LOGS ANTIGOS PRIORITÁRIOS
+  // =========================================================
+  //
+  // Primeiro tenta editar diretamente a mensagem antiga.
+  //
+  // Se o Discord não permitir editar porque:
+  // - foi enviada por outro bot;
+  // - foi enviada por webhook;
+  // - não pertence à instância atual;
+  // - deixou de ser editável;
+  //
+  // o sistema cria automaticamente um controle logo
+  // abaixo daquele log.
+  //
+  // Assim o ticket continua podendo ser restaurado.
+  // =========================================================
 
+  async function ensurePriorityOldRestoreButtons(channel) {
+    for (
+      const target of
+      PRIORITY_OLD_RESTORE_LOGS
+    ) {
+      // =====================================================
+      // BUSCA EXATAMENTE A MENSAGEM DO LOG
+      // =====================================================
+
+      const logMessage =
+        await channel.messages
+          .fetch(
+            target.logMessageId
+          )
+          .catch(error => {
+            console.error(
+              `[TICKET RESTORE] Não consegui buscar o log antigo ${target.logMessageId}:`,
+              error?.message || error
+            );
+
+            return null;
+          });
+
+      if (!logMessage) {
+        console.warn(
+          `[TICKET RESTORE] Log prioritário ${target.logMessageId} não encontrado.`
+        );
+
+        continue;
+      }
+
+      // =====================================================
+      // JÁ TEM BOTÃO?
+      // =====================================================
+
+      if (
+        hasRestoreButton(
+          logMessage,
+          target.ticketId
+        )
+      ) {
+        console.log(
+          `[TICKET RESTORE] O log ${target.logMessageId} já possui botão para o ticket ${target.ticketId}.`
+        );
+
+        continue;
+      }
+
+      // =====================================================
+      // CAMINHO IDEAL
+      //
+      // Edita a própria mensagem antiga e coloca:
+      //
+      // [📂 Abrir Transcript] [♻️ Restaurar Ticket]
+      // =====================================================
+
+      if (
+        logMessage.author?.id ===
+          client.user?.id &&
+        logMessage.editable
+      ) {
+        const rows =
+          addRestoreButtonToRows(
+            logMessage,
+            target.ticketId
+          );
+
+        const edited =
+          await logMessage
+            .edit({
+              components:
+                rows
+            })
+            .catch(error => {
+              console.error(
+                `[TICKET RESTORE] Falha ao editar diretamente o log ${target.logMessageId}:`,
+                error?.message || error
+              );
+
+              return null;
+            });
+
+        if (edited) {
+          console.log(
+            `[TICKET RESTORE] ✅ Botão adicionado diretamente ao log ${target.logMessageId} do ticket ${target.ticketId}.`
+          );
+
+          continue;
+        }
+      }
+
+      // =====================================================
+      // FALLBACK PROFISSIONAL
+      //
+      // A mensagem antiga não pode ser editada.
+      //
+      // Nesse caso criamos uma mensagem ligada ao log,
+      // logo abaixo dele, com o botão verdadeiro.
+      // =====================================================
+
+      console.warn(
+        `[TICKET RESTORE] O log ${target.logMessageId} não pode ser editado diretamente. Criando controle alternativo...`
+      );
+
+      // =====================================================
+      // PROCURA O TRANSCRIPT
+      // =====================================================
+
+      const transcript =
+        await getBestTranscript(
+          Transcript,
+          target.ticketId
+        )
+          .catch(
+            () =>
+              null
+          );
+
+      // =====================================================
+      // EVITA CRIAR MENSAGEM DUPLICADA A CADA RESTART
+      // =====================================================
+
+      const previousControlId =
+        transcript
+          ?.restoreMeta
+          ?.restoreControlMessageId ||
+        null;
+
+      if (
+        previousControlId
+      ) {
+        const previousControl =
+          await channel.messages
+            .fetch(
+              previousControlId
+            )
+            .catch(
+              () =>
+                null
+            );
+
+        if (
+          previousControl &&
+          hasRestoreButton(
+            previousControl,
+            target.ticketId
+          )
+        ) {
+          console.log(
+            `[TICKET RESTORE] Controle alternativo já existe para o ticket ${target.ticketId}.`
+          );
+
+          continue;
+        }
+      }
+
+      // =====================================================
+      // EMBED DO CONTROLE
+      // =====================================================
+
+      const controlEmbed =
+        new EmbedBuilder()
+          .setColor(
+            '#ff009a'
+          )
+          .setTitle(
+            '♻️ Restauração disponível'
+          )
+          .setDescription(
+            `Este controle pertence ao ticket antigo \`${target.ticketId}\`.\n` +
+            `O transcript original acima será mantido e o canal será recriado a partir dele.`
+          )
+          .addFields(
+            {
+              name:
+                '🆔 Ticket original',
+
+              value:
+                `\`${target.ticketId}\``,
+
+              inline:
+                true
+            },
+
+            {
+              name:
+                '📄 Log original',
+
+              value:
+                `\`${target.logMessageId}\``,
+
+              inline:
+                true
+            }
+          )
+          .setFooter({
+            text:
+              'SantaCreators • Recuperação de Ticket'
+          });
+
+      // =====================================================
+      // CRIA O BOTÃO LOGO ABAIXO DO LOG ANTIGO
+      // =====================================================
+
+      const controlMessage =
+        await channel
+          .send({
+            reply: {
+              messageReference:
+                logMessage.id,
+
+              failIfNotExists:
+                false
+            },
+
+            embeds: [
+              controlEmbed
+            ],
+
+            components: [
+              new ActionRowBuilder()
+                .addComponents(
+                  buildRestoreButton(
+                    target.ticketId
+                  )
+                )
+            ],
+
+            allowedMentions: {
+              parse: [],
+              repliedUser: false
+            }
+          })
+          .catch(error => {
+            console.error(
+              `[TICKET RESTORE] Falha ao criar controle alternativo para ${target.ticketId}:`,
+              error?.message || error
+            );
+
+            return null;
+          });
+
+      if (
+        !controlMessage
+      ) {
+        continue;
+      }
+
+      // =====================================================
+      // MEMORIZA A MENSAGEM DE CONTROLE
+      //
+      // Assim um restart NÃO cria outra mensagem igual.
+      // =====================================================
+
+      await Transcript.collection
+        .updateMany(
+          {
+            canalId:
+              String(
+                target.ticketId
+              )
+          },
+
+          {
+            $set: {
+              'restoreMeta.restoreControlMessageId':
+                controlMessage.id,
+
+              'restoreMeta.restoreControlLogMessageId':
+                logMessage.id
+            }
+          }
+        )
+        .catch(
+          error => {
+            console.error(
+              '[TICKET RESTORE] Falha ao registrar mensagem de controle:',
+              error?.message || error
+            );
+          }
+        );
+
+      console.log(
+        `[TICKET RESTORE] ✅ Controle alternativo criado para o ticket ${target.ticketId}: ${controlMessage.id}`
+      );
+    }
+  }
   async function backfillRestoreButtons(
     limit =
       BACKFILL_LIMIT
@@ -1238,8 +1568,33 @@ export function createTicketRestoreSystem({
         ?.isTextBased
         ?.()
     ) {
+      console.error(
+        `[TICKET RESTORE] Canal de transcripts ${transcriptLogChannelId} não encontrado.`
+      );
+
       return;
     }
+
+    // =====================================================
+    // PRIORIDADE ABSOLUTA
+    //
+    // Antes de analisar os últimos 1000 logs,
+    // busca DIRETAMENTE os logs antigos que foram
+    // adicionados em PRIORITY_OLD_RESTORE_LOGS.
+    //
+    // Portanto o ticket específico que você precisa
+    // NÃO depende mais da paginação normal.
+    // =====================================================
+
+    await ensurePriorityOldRestoreButtons(
+      channel
+    );
+
+    // =====================================================
+    // BACKFILL NORMAL
+    //
+    // Depois continua analisando os demais logs antigos.
+    // =====================================================
 
     let before;
 
