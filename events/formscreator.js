@@ -218,6 +218,66 @@ function runWithEnsureLock(fn) {
   return ensureButtonRunning;
 }
 
+// =====================================================
+// 🔒 LOCK DE CRIAÇÃO POR USUÁRIO
+// =====================================================
+//
+// Impede que dois formulários/processos criem tópicos
+// simultaneamente para a mesma pessoa.
+//
+// A segunda tentativa espera a primeira terminar.
+// Depois disso, ela encontra o tópico já existente
+// e a criação é recusada normalmente.
+// =====================================================
+
+const formsCreatorUserCreateLocks = new Map();
+
+async function runWithFormsCreatorUserCreateLock(
+  userId,
+  fn
+) {
+  const key = String(userId || "").trim();
+
+  if (!key) {
+    return await fn();
+  }
+
+  const previous =
+    formsCreatorUserCreateLocks.get(key) ||
+    Promise.resolve();
+
+  let releaseCurrent =
+    () => {};
+
+  const gate = new Promise((resolve) => {
+    releaseCurrent =
+      () => resolve();
+  });
+
+  const current =
+    previous.then(() => gate);
+
+  formsCreatorUserCreateLocks.set(
+    key,
+    current
+  );
+
+  await previous;
+
+  try {
+    return await fn();
+  } finally {
+    releaseCurrent();
+
+    if (
+      formsCreatorUserCreateLocks.get(key) ===
+      current
+    ) {
+      formsCreatorUserCreateLocks.delete(key);
+    }
+  }
+}
+
 // =========================
 // HELPERS
 // =========================
@@ -226,6 +286,36 @@ function hasPermission(member, userId) {
   const byRole = roles?.some((role) => CREATOR_FORM_ALLOWED_ROLES.includes(role.id));
   const byUser = CREATOR_FORM_ALLOWED_ROLES.includes(userId);
   return Boolean(byRole || byUser);
+}
+
+// =====================================================
+// 🪞 IDENTIFICA ESPELHOS DO FORMSCREATOR
+// =====================================================
+//
+// IMPORTANTE:
+//
+// Um espelho possui praticamente os mesmos campos
+// do registro original.
+//
+// Sem esta trava, uma varredura pode interpretar
+// o espelho como se fosse um Forms original.
+// =====================================================
+
+function isFormsCreatorMirrorEmbed(embed) {
+  const footerText =
+    String(
+      embed?.footer?.text ||
+      ""
+    ).trim();
+
+  return (
+    footerText.startsWith(
+      "SC_FORMS_ACTIVE_CARD:"
+    ) ||
+    footerText.startsWith(
+      "SC_FORMS_AREA:"
+    )
+  );
 }
 
 // =====================================================
@@ -1356,6 +1446,18 @@ function isFormsCreatorMainRegisterMessage(msg, client) {
 
   const embed = msg.embeds[0];
 
+  // ===================================================
+  // 🪞 ESPELHO NÃO É REGISTRO ORIGINAL
+  // ===================================================
+
+  if (
+    isFormsCreatorMirrorEmbed(
+      embed
+    )
+  ) {
+    return false;
+  }
+
   const description = String(embed.description || "").trim();
 
   const hasMemberDescription = /^<@!?\d+>$/.test(description);
@@ -1379,6 +1481,18 @@ function isFormsCreatorLegacyRegisterMessage(msg) {
   if (!msg?.embeds?.length) return false;
 
   const embed = msg.embeds[0];
+
+  // ===================================================
+  // 🪞 ESPELHO NÃO É REGISTRO LEGADO ORIGINAL
+  // ===================================================
+
+  if (
+    isFormsCreatorMirrorEmbed(
+      embed
+    )
+  ) {
+    return false;
+  }
 
   const raw = [
     embed.title || "",
@@ -1914,16 +2028,76 @@ async function syncLegacyThreads(client, progressMsg = null) {
 // ✅ EXPORTS PARA INTEGRAÇÃO
 // =========================
 
-export async function createFormsCreatorRecord(client, { guildId, creatorId, targetId, targetName, targetPassaporte, area = "A Definir" }) {
-    const guild = await client.guilds.fetch(guildId).catch(() => null);
-    if (!guild) throw new Error("Guilda não encontrada para criar registro FormsCreator.");
+export async function createFormsCreatorRecord(
+  client,
+  {
+    guildId,
+    creatorId,
+    targetId,
+    targetName,
+    targetPassaporte,
+    area = "A Definir",
+  }
+) {
+  return await runWithFormsCreatorUserCreateLock(
+    targetId,
+    async () => {
+      const guild = await client.guilds
+        .fetch(guildId)
+        .catch(() => null);
 
-    const canal = await client.channels.fetch(CREATOR_FORM_CHANNEL_ID).catch(() => null);
-    if (!canal || !canal.isTextBased()) {
-        throw new Error("Canal de FormsCreator não encontrado.");
-    }
+      if (!guild) {
+        throw new Error(
+          "Guilda não encontrada para criar registro FormsCreator."
+        );
+      }
 
-    const membro = await guild.members.fetch(targetId).catch(() => null);
+      const canal = await client.channels
+        .fetch(
+          CREATOR_FORM_CHANNEL_ID
+        )
+        .catch(() => null);
+
+      if (
+        !canal ||
+        !canal.isTextBased()
+      ) {
+        throw new Error(
+          "Canal de FormsCreator não encontrado."
+        );
+      }
+
+      // ===============================================
+      // 🚫 ANTI-DUPLICAÇÃO
+      // ===============================================
+
+      const existingThreadId =
+        await findOriginalFormsCreatorThreadIdByUserId(
+          client,
+          targetId
+        ).catch(() => null);
+
+      if (existingThreadId) {
+        const error =
+          Object.assign(
+            new Error(
+              `O membro ${targetId} já possui um tópico FormsCreator: ${existingThreadId}`
+            ),
+            {
+              code:
+                "FORMSCREATOR_ALREADY_EXISTS",
+
+              threadId:
+                existingThreadId,
+            }
+          );
+
+        throw error;
+      }
+
+      const membro = await guild.members
+        .fetch(targetId)
+        .catch(() => null);
     const avatarURL = membro?.user?.displayAvatarURL({ size: 512 }) || "";
 
     const topic = await canal.threads.create({
@@ -2021,8 +2195,19 @@ state.registrations[topic.id] = {
         console.error(`[FormsCreator] Falha ao enviar log de criação para o canal ${LOG_CHANNEL_ID_V2}:`, e);
     }
 
-    console.log(`[FormsCreator] Registro automático criado para ${targetName} (${targetId}) no tópico ${topic.id}`);
-    return { threadId: topic.id, messageId: registroMsg?.id };
+console.log(
+  `[FormsCreator] Registro automático criado para ${targetName} (${targetId}) no tópico ${topic.id}`
+);
+
+return {
+  threadId:
+    topic.id,
+
+  messageId:
+    registroMsg?.id,
+};
+    }
+  );
 }
 
 export async function findOriginalFormsCreatorThreadIdByUserId(clientOrUserId, maybeUserId = null) {
@@ -2033,20 +2218,32 @@ export async function findOriginalFormsCreatorThreadIdByUserId(clientOrUserId, m
 
     const state = readState();
 
-    function isOfficialFormsCreatorMessage(msg, threadId, expectedUserId) {
-        if (!msg) return false;
+function isOfficialFormsCreatorMessage(msg, threadId, expectedUserId) {
+    if (!msg) return false;
 
-        if (client && msg.author?.id !== client.user?.id) {
-            return false;
-        }
+    if (client && msg.author?.id !== client.user?.id) {
+        return false;
+    }
 
-        const embed = msg.embeds?.[0];
+    const embed = msg.embeds?.[0];
 
-        if (!embed) {
-            return false;
-        }
+    if (!embed) {
+        return false;
+    }
 
-        const description = String(embed.description || "").trim();
+    // ===================================================
+    // 🪞 NUNCA ACEITA UM ESPELHO COMO FORMS ORIGINAL
+    // ===================================================
+
+    if (
+        isFormsCreatorMirrorEmbed(
+            embed
+        )
+    ) {
+        return false;
+    }
+
+    const description = String(embed.description || "").trim();
 
         const descriptionUserId =
             description.match(/^<@!?(\d{17,20})>$/)?.[1] || null;
@@ -2231,7 +2428,7 @@ export async function findOriginalFormsCreatorThreadIdByUserId(clientOrUserId, m
             const bCreated =
                 Number(b.thread?.createdTimestamp || 0);
 
-            return bCreated - aCreated;
+            return aCreated - bCreated;
         });
 
         const selected = stateCandidates[0];
@@ -2341,12 +2538,16 @@ export async function findOriginalFormsCreatorThreadIdByUserId(clientOrUserId, m
 
     /*
      * Se por algum motivo existirem dois Forms oficiais
-     * para a mesma pessoa, prioriza o tópico mais recente.
+     * para a mesma pessoa, prioriza o tópico ORIGINAL,
+     * ou seja, o mais antigo.
+     *
+     * Assim uma duplicata criada depois nunca assume
+     * o lugar do registro canônico.
      */
     allThreads.sort(
         (a, b) =>
-            Number(b.createdTimestamp || 0) -
-            Number(a.createdTimestamp || 0)
+            Number(a.createdTimestamp || 0) -
+            Number(b.createdTimestamp || 0)
     );
 
     for (const thread of allThreads) {
@@ -2714,7 +2915,11 @@ export async function migrateFormsCreatorDiscordId(
     oldUserId,
     newUserId,
     actor = null,
-  } = {}
+  } = {
+    oldUserId: null,
+    newUserId: null,
+    actor: null,
+  }
 ) {
   const oldId =
     String(
@@ -3842,8 +4047,18 @@ export async function formsCreatorHandleMessage(message, client) {
 
     await syncLegacyThreads(client, progressMsg);
 
+    await initializeEvolutionHierarchy(
+      client,
+      (userId) =>
+        findOriginalFormsCreatorThreadIdByUserId(
+          client,
+          userId
+        )
+    );
+
     await progressMsg.edit(
       "✅ **Sincronização finalizada.**\n" +
+      "🧹 Registros, espelhos e hierarquia foram conferidos.\n" +
       "📌 Se existiam mensagens duplicadas de status, o sistema tentou limpar automaticamente."
     ).catch(() => {});
 
@@ -3984,9 +4199,19 @@ export async function formsCreatorHandleInteraction(interaction, client) {
 
       await syncLegacyThreads(client, progressMsg);
 
+      await initializeEvolutionHierarchy(
+        client,
+        (userId) =>
+          findOriginalFormsCreatorThreadIdByUserId(
+            client,
+            userId
+          )
+      );
+
       await interaction.editReply({
         content:
           "✅ **Sincronização finalizada.**\n" +
+          "🧹 Registros, espelhos e hierarquia foram conferidos.\n" +
           "📌 Agora confira os tópicos que estavam duplicados.",
       }).catch(() => {});
 
@@ -4038,119 +4263,322 @@ export async function formsCreatorHandleInteraction(interaction, client) {
       return true;
     }
 
-    // FORM -> cria thread + embed
-    if (interaction.isModalSubmit?.() && interaction.customId === "form_equipecreator") {
-      await interaction.deferReply({ ephemeral: true });
+// FORM -> cria thread + embed
+if (interaction.isModalSubmit?.() && interaction.customId === "form_equipecreator") {
+  await interaction.deferReply({ ephemeral: true });
 
-      const idDiscord = interaction.fields.getTextInputValue("idDiscord").trim();
-      const nome = interaction.fields.getTextInputValue("nome").trim();
-      const idCidade = interaction.fields.getTextInputValue("idCidade").trim();
-      const area = interaction.fields.getTextInputValue("area").trim();
+  const idDiscord = interaction.fields.getTextInputValue("idDiscord").trim();
+  const nome = interaction.fields.getTextInputValue("nome").trim();
+  const idCidade = interaction.fields.getTextInputValue("idCidade").trim();
+  const area = interaction.fields.getTextInputValue("area").trim();
 
+  return await runWithFormsCreatorUserCreateLock(
+    idDiscord,
+    async () => {
       const guild = interaction.guild;
-      const canal = await client.channels.fetch(CREATOR_FORM_CHANNEL_ID).catch(() => null);
-      if (!guild || !canal || !canal.isTextBased()) {
-        await interaction.editReply({ content: "❌ Não achei o canal do formulário." });
+
+      const canal = await client.channels
+        .fetch(
+          CREATOR_FORM_CHANNEL_ID
+        )
+        .catch(() => null);
+
+      if (
+        !guild ||
+        !canal ||
+        !canal.isTextBased()
+      ) {
+        await interaction.editReply({
+          content:
+            "❌ Não achei o canal do formulário.",
+        });
+
         return true;
       }
 
-      const membro = await guild.members.fetch(idDiscord).catch(() => null);
-      const avatarURL = membro?.user?.displayAvatarURL({ size: 512 }) || "";
+      // =================================================
+      // 🚫 ANTI-DUPLICAÇÃO
+      // =================================================
+      //
+      // Antes de criar QUALQUER tópico, procura
+      // um Forms original já existente para este ID.
+      // =================================================
+
+      const existingThreadId =
+        await findOriginalFormsCreatorThreadIdByUserId(
+          client,
+          idDiscord
+        ).catch(() => null);
+
+      if (existingThreadId) {
+        await interaction.editReply({
+          content:
+            `⚠️ **Este membro já possui um tópico de evolução.**\n\n` +
+            `👤 Membro: <@${idDiscord}>\n` +
+            `📌 Tópico existente: <#${existingThreadId}>\n\n` +
+            `❌ Nenhum novo tópico foi criado.`,
+        });
+
+        return true;
+      }
+
+      const membro = await guild.members
+        .fetch(idDiscord)
+        .catch(() => null);
+
+      const avatarURL =
+        membro?.user?.displayAvatarURL({
+          size: 512,
+        }) || "";
 
       const topic = await canal.threads
         .create({
           name: nome,
           autoArchiveDuration: 1440,
-          reason: "Registro de membro da Equipe Creator",
+          reason:
+            "Registro de membro da Equipe Creator",
         })
         .catch(() => null);
 
       if (!topic) {
-        await interaction.editReply({ content: "❌ Falha ao criar thread." });
+        await interaction.editReply({
+          content:
+            "❌ Falha ao criar thread.",
+        });
+
         return true;
       }
-const isActiveOnCreate = !!(membro && membro.roles.cache.has(ROLE_REQUIRED_FOR_ACTIVE));
 
-const embed = new EmbedBuilder()
-  .setTitle(`👤 ${nome}`)
-  .setThumbnail(avatarURL)
-  .setDescription(`<@${idDiscord}>`)
-  .addFields(
-    { name: "📌 ID/Passaporte", value: idCidade, inline: true },
-    { name: "📚 Área de Interesse", value: area, inline: true },
-    { name: "Status do Projeto", value: isActiveOnCreate ? "🟢 Ativo" : "🔴 Inativo", inline: false }
-  )
-  .setColor("Purple");
+      const isActiveOnCreate =
+        !!(
+          membro &&
+          membro.roles.cache.has(
+            ROLE_REQUIRED_FOR_ACTIVE
+          )
+        );
 
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId(`editar_id_${topic.id}`)
-          .setLabel("✏️ Editar ID/Passaporte")
-          .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
-          .setCustomId(`editar_area_${topic.id}`)
-          .setLabel("✏️ Editar Área de Interesse")
-          .setStyle(ButtonStyle.Secondary)
-      );
+      const embed =
+        new EmbedBuilder()
+          .setTitle(
+            `👤 ${nome}`
+          )
+          .setThumbnail(
+            avatarURL
+          )
+          .setDescription(
+            `<@${idDiscord}>`
+          )
+          .addFields(
+            {
+              name:
+                "📌 ID/Passaporte",
+              value:
+                idCidade,
+              inline:
+                true,
+            },
+            {
+              name:
+                "📚 Área de Interesse",
+              value:
+                area,
+              inline:
+                true,
+            },
+            {
+              name:
+                "Status do Projeto",
+              value:
+                isActiveOnCreate
+                  ? "🟢 Ativo"
+                  : "🔴 Inativo",
+              inline:
+                false,
+            }
+          )
+          .setColor(
+            "Purple"
+          );
+
+      const row =
+        new ActionRowBuilder()
+          .addComponents(
+            new ButtonBuilder()
+              .setCustomId(
+                `editar_id_${topic.id}`
+              )
+              .setLabel(
+                "✏️ Editar ID/Passaporte"
+              )
+              .setStyle(
+                ButtonStyle.Secondary
+              ),
+
+            new ButtonBuilder()
+              .setCustomId(
+                `editar_area_${topic.id}`
+              )
+              .setLabel(
+                "✏️ Editar Área de Interesse"
+              )
+              .setStyle(
+                ButtonStyle.Secondary
+              )
+          );
 
       // ✅ Adiciona botões de status
-      const statusRow = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId(`fc_toggle_status:${topic.id}:${idDiscord}:inactive`)
-          .setLabel("Desligar do Projeto")
-          .setStyle(ButtonStyle.Danger)
+      const statusRow =
+        new ActionRowBuilder()
+          .addComponents(
+            new ButtonBuilder()
+              .setCustomId(
+                `fc_toggle_status:${topic.id}:${idDiscord}:inactive`
+              )
+              .setLabel(
+                "Desligar do Projeto"
+              )
+              .setStyle(
+                ButtonStyle.Danger
+              )
+          );
+
+      if (
+        !membro ||
+        !membro.roles.cache.has(
+          ROLE_REQUIRED_FOR_ACTIVE
+        )
+      ) {
+        setTimeout(
+          () =>
+            topic
+              .send(
+                `⚠️ **Atenção:** Este membro não possui o cargo <@&${ROLE_REQUIRED_FOR_ACTIVE}>. Ele será desligado automaticamente no próximo ciclo se não receber o cargo.`
+              )
+              .catch(() => {}),
+          2000
+        );
+      }
+
+      const registroMsg =
+        await topic.send({
+          embeds: [
+            embed,
+          ],
+
+          components: [
+            row,
+            statusRow,
+          ],
+        }).catch((e) => {
+          console.error(
+            `[FormsCreator] Falha ao enviar registro inicial na thread ${topic.id}:`,
+            e
+          );
+
+          return null;
+        });
+
+      // ===============================================
+      // ✅ SALVA NO ESTADO
+      // ===============================================
+
+      const state =
+        readState();
+
+      state.registrations[
+        topic.id
+      ] = {
+        userId:
+          idDiscord,
+
+        nome,
+
+        idCidade,
+
+        area,
+
+        active:
+          isActiveOnCreate,
+
+        messageId:
+          registroMsg?.id ||
+          null,
+      };
+
+      writeState(
+        state
       );
 
-      // ✅ Verifica cargo obrigatório na criação (se não tiver, já nasce desligado visualmente ou avisa)
-      // Mas como é criação, assumimos que vai ser ativo, o job diário corrige se faltar cargo.
-      // Ou podemos forçar aqui:
-      if (!membro || !membro.roles.cache.has(ROLE_REQUIRED_FOR_ACTIVE)) {
-   setTimeout(() => topic.send(`⚠️ **Atenção:** Este membro não possui o cargo <@&${ROLE_REQUIRED_FOR_ACTIVE}>. Ele será desligado automaticamente no próximo ciclo se não receber o cargo.`).catch(()=>{}), 2000);
-}
+      await syncEvolutionHierarchyForMember(
+        client,
+        {
+          guildId:
+            guild.id,
 
-      const registroMsg = await topic.send({ embeds: [embed], components: [row, statusRow] }).catch((e) => {
-  console.error(`[FormsCreator] Falha ao enviar registro inicial na thread ${topic.id}:`, e);
-  return null;
-});
+          userId:
+            idDiscord,
 
-// ✅ Salva no estado
-const state = readState();
-state.registrations[topic.id] = {
-  userId: idDiscord,
-  nome,
-  idCidade,
-  area,
-  active: isActiveOnCreate,
-  messageId: registroMsg?.id || null
-};
-writeState(state);
+          originalThreadId:
+            topic.id,
 
-await syncEvolutionHierarchyForMember(client, {
-  guildId: guild.id,
-  userId: idDiscord,
-  originalThreadId: topic.id,
-  reason: "Registro de evolução criado pelo formulário",
-}).catch((error) => {
-  console.error(
-    `[FormsCreator] Falha ao sincronizar hierarquia de ${idDiscord}:`,
-    error
-  );
-});
+          reason:
+            "Registro de evolução criado pelo formulário",
+        }
+      ).catch((error) => {
+        console.error(
+          `[FormsCreator] Falha ao sincronizar hierarquia de ${idDiscord}:`,
+          error
+        );
+      });
 
       // DMs pros cargos
-      const linkDoTopico = `https://discord.com/channels/${guild.id}/${topic.id}`;
-      const jaNotificado = new Set();
-      const nomeDoCargo = guild.roles.cache.get(CREATOR_EQUIPE_ROLE_ID)?.name || "Equipe Creator";
+      const linkDoTopico =
+        `https://discord.com/channels/${guild.id}/${topic.id}`;
 
-      for (const roleId of CREATOR_FORM_NOTIFY_ROLES) {
-        const role = guild.roles.cache.get(roleId);
-        const membrosRole = role?.members;
-        if (!membrosRole) continue;
+      const jaNotificado =
+        new Set();
 
-        for (const m of membrosRole.values()) {
-          if (m.user.bot) continue;
-          if (jaNotificado.has(m.id)) continue;
-          jaNotificado.add(m.id);
+      const nomeDoCargo =
+        guild.roles.cache.get(
+          CREATOR_EQUIPE_ROLE_ID
+        )?.name ||
+        "Equipe Creator";
+
+      for (
+        const roleId
+        of CREATOR_FORM_NOTIFY_ROLES
+      ) {
+        const role =
+          guild.roles.cache.get(
+            roleId
+          );
+
+        const membrosRole =
+          role?.members;
+
+        if (!membrosRole) {
+          continue;
+        }
+
+        for (
+          const m
+          of membrosRole.values()
+        ) {
+          if (m.user.bot) {
+            continue;
+          }
+
+          if (
+            jaNotificado.has(
+              m.id
+            )
+          ) {
+            continue;
+          }
+
+          jaNotificado.add(
+            m.id
+          );
 
           try {
             await m.send({
@@ -4158,21 +4586,40 @@ await syncEvolutionHierarchyForMember(client, {
                 `📥 Novo registro da equipe **${nomeDoCargo}** aberto por <@${interaction.user.id}>.\n` +
                 `👤 Membro: <@${idDiscord}>\n` +
                 `🔗 Abrir tópico: ${linkDoTopico}`,
+
               embeds: [
-                new EmbedBuilder().setImage(avatarURL).setColor("Blurple").setTitle(nome),
+                new EmbedBuilder()
+                  .setImage(
+                    avatarURL
+                  )
+                  .setColor(
+                    "Blurple"
+                  )
+                  .setTitle(
+                    nome
+                  ),
               ],
             });
           } catch {}
         }
       }
 
-      await interaction.editReply({ content: `✅ Registro criado no tópico ${topic.toString()}` });
+      await interaction.editReply({
+        content:
+          `✅ Registro criado no tópico ${topic.toString()}`,
+      });
 
       // ✅ AGORA: sempre apaga o botão antigo e cria um novo quando cria registro
-      await replaceButtonMessage(client);
+      await replaceButtonMessage(
+        client
+      );
 
       return true;
     }
+  );
+}
+
+
 
     // ✅ Botão de Ligar/Desligar
     if (interaction.isButton?.() && interaction.customId.startsWith("fc_toggle_status:")) {
