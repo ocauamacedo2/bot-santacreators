@@ -641,6 +641,11 @@ const AI_GI_DATA_FILE = path.resolve(process.cwd(), "data", "sc_gi_registros.jso
 const AI_CRONOGRAMA_CHANNEL_ID = "1474605177771397223";
 const AI_EVENTOS_DIARIOS_CHANNEL_ID = "1385003944803041371";
 
+const AI_HALL_DA_FAMA_LOG_CHANNEL_ID = "1553636810205167646";
+const AI_HALL_DA_FAMA_LOG_SCAN_PAGE_SIZE = 100;
+const AI_HALL_DA_FAMA_LOG_SCAN_MAX_PAGES = 8;
+const AI_HALL_DA_FAMA_CONTEXT_MAX_RECORDS = 30;
+
 // =====================================================
 // INTELIGÊNCIA DE PESSOAS — SANTACREATORS
 // =====================================================
@@ -16343,7 +16348,335 @@ async function fetchVendasContext(message) {
     return "Erro ao ler registros de vendas.";
   }
 }
+function getHallArchiveEmbedForAI(message) {
+  return (
+    message?.embeds?.find((embed) =>
+      String(
+        embed?.footer?.text ||
+        embed?.data?.footer?.text ||
+        ""
+      ).startsWith("SC-HALL-ARCHIVE •")
+    ) ||
+    null
+  );
+}
 
+function buildHallArchiveSearchTokens(text = "") {
+  const stopWords = new Set([
+    "hall",
+    "fama",
+    "hall da fama",
+    "quem",
+    "qual",
+    "quais",
+    "quanto",
+    "quantos",
+    "quantas",
+    "vez",
+    "vezes",
+    "ganhou",
+    "ganhar",
+    "venceu",
+    "vencedor",
+    "vencedores",
+    "campeao",
+    "campea",
+    "campeoes",
+    "vitoria",
+    "vitorias",
+    "historico",
+    "historia",
+    "registro",
+    "registros",
+    "org",
+    "orgs",
+    "organizacao",
+    "organizacoes",
+    "player",
+    "players",
+    "jogador",
+    "jogadores",
+    "evento",
+    "eventos",
+    "cidade",
+    "cidades",
+    "top",
+    "gg",
+    "ggs",
+    "da",
+    "de",
+    "do",
+    "das",
+    "dos",
+    "em",
+    "no",
+    "na",
+    "nos",
+    "nas",
+    "o",
+    "a",
+    "os",
+    "as",
+    "um",
+    "uma",
+    "e"
+  ]);
+
+  return [
+    ...new Set(
+      normalizeSearchText(text)
+        .split(/\s+/)
+        .map((part) => part.trim())
+        .filter((part) =>
+          part &&
+          part.length >= 2 &&
+          !stopWords.has(part)
+        )
+    )
+  ].slice(0, 12);
+}
+
+async function fetchHallDaFamaContext(message, scope = "recent") {
+  console.log(
+    `[IA DATA SOURCE] Consultando arquivo oficial do Hall da Fama no Discord. Escopo: ${scope}`
+  );
+
+  const channel = await message.client.channels
+    .fetch(AI_HALL_DA_FAMA_LOG_CHANNEL_ID)
+    .catch(() => null);
+
+  if (!channel?.isTextBased?.()) {
+    return [
+      "CONSULTA INTERNA — HALL DA FAMA",
+      "O canal oficial de logs do Hall da Fama não está acessível neste momento."
+    ].join("\n");
+  }
+
+  const queryTokens = buildHallArchiveSearchTokens(
+    message.content || ""
+  );
+
+  const records = [];
+  let matchedCount = 0;
+  let scannedMessages = 0;
+  let scannedArchiveRecords = 0;
+  let before = null;
+  let exhausted = false;
+
+  for (
+    let page = 0;
+    page < AI_HALL_DA_FAMA_LOG_SCAN_MAX_PAGES;
+    page++
+  ) {
+    const fetchOptions = {
+      limit: AI_HALL_DA_FAMA_LOG_SCAN_PAGE_SIZE
+    };
+
+    if (before) {
+      fetchOptions.before = before;
+    }
+
+    const messages = await channel.messages
+      .fetch(fetchOptions)
+      .catch(() => null);
+
+    if (!messages?.size) {
+      exhausted = true;
+      break;
+    }
+
+    scannedMessages += messages.size;
+
+    for (const logMessage of messages.values()) {
+      const embed = getHallArchiveEmbedForAI(
+        logMessage
+      );
+
+      if (!embed) {
+        continue;
+      }
+
+      scannedArchiveRecords += 1;
+
+      if (
+        scope !== "recent" &&
+        !isDateInScope(
+          logMessage.createdTimestamp ||
+          Date.now(),
+          scope
+        )
+      ) {
+        continue;
+      }
+
+      const embedText = [
+        embed?.title ||
+          embed?.data?.title ||
+          "",
+        embed?.description ||
+          embed?.data?.description ||
+          "",
+        ...(
+          embed?.fields ||
+          embed?.data?.fields ||
+          []
+        ).map(
+          (field) =>
+            `${field?.name || ""}: ${field?.value || ""}`
+        ),
+        embed?.footer?.text ||
+          embed?.data?.footer?.text ||
+          ""
+      ].join("\n");
+
+      const searchableText = normalizeSearchText(
+        embedText
+      );
+
+      const matchesQuery =
+        queryTokens.length === 0 ||
+        queryTokens.every(
+          (token) =>
+            searchableText.includes(token)
+        ) ||
+        queryTokens.some(
+          (token) =>
+            searchableText.includes(token)
+        );
+
+      if (!matchesQuery) {
+        continue;
+      }
+
+      matchedCount += 1;
+
+      if (
+        records.length <
+        AI_HALL_DA_FAMA_CONTEXT_MAX_RECORDS
+      ) {
+        const fields =
+          embed?.fields ||
+          embed?.data?.fields ||
+          [];
+
+        const getField = (needle) => {
+          const normalizedNeedle =
+            normalizeSearchText(
+              needle
+            );
+
+          return String(
+            fields.find((field) =>
+              normalizeSearchText(
+                field?.name ||
+                ""
+              ).includes(
+                normalizedNeedle
+              )
+            )?.value ||
+            ""
+          ).trim();
+        };
+
+        const eventName =
+          getField("Evento") ||
+          "Evento não identificado";
+
+        const city =
+          getField("Cidade") ||
+          "Cidade não identificada";
+
+        const orgs =
+          getField("Organizações") ||
+          "Nenhuma ORG identificada no registro.";
+
+        const players =
+          getField("Players / IDs") ||
+          "Nenhum player/ID identificado no registro.";
+
+        const hallLink =
+          getField("Hall publicado") ||
+          `https://discord.com/channels/${logMessage.guildId}/${logMessage.channelId}/${logMessage.id}`;
+
+        const timeline =
+          getField("Linha do tempo") ||
+          `<t:${Math.floor((logMessage.createdTimestamp || Date.now()) / 1000)}:F>`;
+
+        const operationId =
+          getField("Operação / Request ID") ||
+          "não informado";
+
+        records.push(
+          [
+            `REGISTRO ${records.length + 1}`,
+            `Operação: ${operationId}`,
+            `Evento: ${eventName}`,
+            `Cidade: ${city}`,
+            `ORGs: ${orgs}`,
+            `Players/IDs: ${players}`,
+            `Linha do tempo: ${timeline}`,
+            `Hall / fonte: ${hallLink}`,
+            `Log: https://discord.com/channels/${logMessage.guildId}/${logMessage.channelId}/${logMessage.id}`
+          ].join("\n")
+        );
+      }
+    }
+
+    const oldestMessage =
+      messages.last();
+
+    before =
+      oldestMessage?.id ||
+      null;
+
+    if (
+      !before ||
+      messages.size <
+      AI_HALL_DA_FAMA_LOG_SCAN_PAGE_SIZE
+    ) {
+      exhausted = true;
+      break;
+    }
+  }
+
+  const coverageText = exhausted
+    ? "A consulta alcançou o início da janela disponível percorrida sem bater o limite de páginas."
+    : (
+        `A consulta atingiu o limite de ${AI_HALL_DA_FAMA_LOG_SCAN_MAX_PAGES} página(s). ` +
+        `Não trate a contagem encontrada como total histórico absoluto se existirem registros mais antigos.`
+      );
+
+  if (!records.length) {
+    return [
+      "CONSULTA INTERNA — HALL DA FAMA",
+      `Canal oficial consultado: <#${AI_HALL_DA_FAMA_LOG_CHANNEL_ID}>`,
+      `Mensagens percorridas: ${scannedMessages}`,
+      `Registros oficiais de Hall analisados: ${scannedArchiveRecords}`,
+      `Filtros relevantes: ${queryTokens.length ? queryTokens.join(", ") : "nenhum filtro específico"}`,
+      "Nenhum registro correspondente foi encontrado na janela consultada.",
+      coverageText
+    ].join("\n");
+  }
+
+  return [
+    "CONSULTA INTERNA — HALL DA FAMA",
+    `Fonte principal: canal oficial de logs <#${AI_HALL_DA_FAMA_LOG_CHANNEL_ID}>`,
+    `Mensagens percorridas: ${scannedMessages}`,
+    `Registros oficiais de Hall analisados: ${scannedArchiveRecords}`,
+    `Registros correspondentes encontrados: ${matchedCount}`,
+    `Filtros relevantes: ${queryTokens.length ? queryTokens.join(", ") : "nenhum filtro específico"}`,
+    coverageText,
+    "",
+    records.join("\n\n"),
+    "",
+    "REGRAS PARA A IA:",
+    "- Use estes registros do Discord como fonte factual principal do Hall da Fama.",
+    "- Não invente vitória, ORG, ID, cidade, data, premiação ou sequência que não apareça nos registros.",
+    "- Se a consulta atingiu o limite de páginas, não apresente a contagem como total histórico absoluto.",
+    "- Quando houver ID de player, prefira o ID para diferenciar pessoas com nomes iguais.",
+    "- Use o link do Hall ou da log quando precisar indicar a origem da informação."
+  ].join("\n");
+}
 async function fetchPagamentosContext(message, scope) {
   const guild = message.guild;
   const channel = await guild.channels.fetch("1387922662134775818").catch(() => null);
@@ -16394,49 +16727,87 @@ const SC_QUERY_SYSTEMS = {
     keywords: ["poder", "poderes", "god", "nc", "tptome", "setou poder", "uso de poder"],
     handler: fetchPoderesContext,
   },
+
   poderesEventos: {
     keywords: ["poder evento", "poder em evento", "poderes eventos", "registro de evento", "social media", "poderes em evento"],
     handler: fetchPoderesEventosContext,
   },
+
   batePonto: {
     keywords: ["ponto", "bate ponto", "bp", "horas", "quem bateu", "trabalhou"],
     handler: fetchBatePontoContext,
   },
+
   alinhamentos: {
     keywords: ["alinhamento", "alinhou", "foi alinhado", "alinv1"],
     handler: fetchAlinhamentosContext,
   },
+
   gi: {
     keywords: ["gestao influencer", "controle gi", "gi ativo", "gi ativos", "gi pausado", "gi pausados", "controles ativos", "controles pausados"],
     handler: fetchGIStatusContext,
   },
+
+  hallDaFama: {
+    keywords: [
+      "hall da fama",
+      "hall",
+      "vitória",
+      "vitoria",
+      "vitórias",
+      "vitorias",
+      "venceu",
+      "vencedor",
+      "vencedores",
+      "campeão",
+      "campeao",
+      "campeões",
+      "campeoes",
+      "ganhou",
+      "gg",
+      "ggs",
+      "top 1",
+      "top1",
+      "org campeã",
+      "org campea"
+    ],
+
+    handler:
+      fetchHallDaFamaContext,
+  },
+
   ranking: {
-  keywords: [
-    "ranking",
-    "ranking semanal",
-    "ranking da semana",
-    "ranking atual",
-    "top ranking",
-    "top do ranking",
-    "posição no ranking",
-    "posicao no ranking",
-    "pontos no ranking",
-    "pontuação no ranking",
-    "pontuacao no ranking",
-    "quantos pontos",
-    "posição semanal",
-    "posicao semanal",
-  ],
-  handler: fetchRankingContext,
-},
+    keywords: [
+      "ranking",
+      "ranking semanal",
+      "ranking da semana",
+      "ranking atual",
+      "top ranking",
+      "top do ranking",
+      "posição no ranking",
+      "posicao no ranking",
+      "pontos no ranking",
+      "pontuação no ranking",
+      "pontuacao no ranking",
+      "quantos pontos",
+      "posição semanal",
+      "posicao semanal",
+    ],
+
+    handler:
+      fetchRankingContext,
+  },
+
   pagamentos: {
     keywords: ["pagamento", "financeiro", "comprovante", "pago", "solicitado"],
     handler: fetchPagamentosContext,
   },
+
   ausencias: {
     keywords: ["ausencia", "ausências", "falta", "folga", "faltou", "justificativa"],
     handler: fetchAusenciasContext,
   },
+
   vendas: {
     keywords: ["venda", "vendeu", "ranking vendas", "valor depositado"],
     handler: fetchVendasContext,
