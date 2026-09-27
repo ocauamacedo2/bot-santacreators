@@ -19678,10 +19678,145 @@ function standaloneGenerationLooksCutOff(
   );
 }
 
+async function buildStandaloneMultimodalContents(
+  prompt,
+  imageAttachments = []
+) {
+  const finalPrompt =
+    String(
+      prompt ||
+      ""
+    ).trim();
+
+  const uniqueAttachments = [
+    ...new Map(
+      (
+        Array.isArray(
+          imageAttachments
+        )
+          ? imageAttachments
+          : []
+      )
+        .filter(
+          attachment =>
+            attachment?.url
+        )
+        .map(
+          attachment => [
+            String(
+              attachment.url
+            ),
+            attachment
+          ]
+        )
+    ).values()
+  ].slice(
+    0,
+    AI_IMAGE_INPUT_MAX_COUNT
+  );
+
+  if (
+    !uniqueAttachments.length
+  ) {
+    return finalPrompt;
+  }
+
+  const downloaded =
+    await Promise.all(
+      uniqueAttachments.map(
+        attachment =>
+          downloadAiImageAttachment(
+            attachment
+          )
+      )
+    );
+
+  const accepted = [];
+
+  let totalBytes =
+    0;
+
+  for (
+    const item of
+    downloaded
+  ) {
+    if (!item) {
+      continue;
+    }
+
+    if (
+      totalBytes +
+        item.bytes >
+      AI_IMAGE_INPUT_MAX_TOTAL_BYTES
+    ) {
+      console.warn(
+        `[IA STANDALONE VISION] Imagem ${item.name} ignorada para manter o payload dentro do limite seguro.`
+      );
+
+      continue;
+    }
+
+    totalBytes +=
+      item.bytes;
+
+    accepted.push(
+      item
+    );
+  }
+
+  if (
+    !accepted.length
+  ) {
+    return finalPrompt;
+  }
+
+  const parts =
+    [];
+
+  for (
+    let index = 0;
+    index <
+    accepted.length;
+    index++
+  ) {
+    const image =
+      accepted[index];
+
+    parts.push(
+      image.part
+    );
+
+    parts.push({
+      text:
+        `Imagem oficial de referência ${index + 1}: ${image.name}`
+    });
+  }
+
+  parts.push({
+    text:
+      finalPrompt
+  });
+
+  console.log(
+    `[IA STANDALONE VISION] ${accepted.length} imagem(ns) enviada(s) ao Gemini | Bytes=${totalBytes}`
+  );
+
+  return [
+    {
+      role:
+        "user",
+
+      parts
+    }
+  ];
+}
+
 export async function generateSantaCreatorsStandaloneText({
   prompt,
+  imageAttachments = [],
   maxOutputTokens = 900,
   temperature = 0.75,
+  responseMimeType = "",
   label = "IA standalone",
 }) {
   const geminiClient =
@@ -19708,6 +19843,12 @@ export async function generateSantaCreatorsStandaloneText({
     );
   }
 
+  const standaloneContents =
+    await buildStandaloneMultimodalContents(
+      finalPrompt,
+      imageAttachments
+    );
+
   let lastError =
     null;
 
@@ -19733,7 +19874,7 @@ for (
                 modelName,
 
               contents:
-                finalPrompt,
+                standaloneContents,
 
               config: {
                 temperature,
@@ -19745,6 +19886,14 @@ for (
                   35,
 
                 maxOutputTokens,
+
+                ...(
+                  responseMimeType
+                    ? {
+                        responseMimeType
+                      }
+                    : {}
+                ),
               },
             }),
 

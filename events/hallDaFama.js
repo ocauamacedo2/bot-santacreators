@@ -98,6 +98,9 @@ const HALL_HISTORICAL_IMAGES_CHANNEL_ID = "1459982880158646496"; // Armazena có
   const CRONO_LOG_CHANNEL_ID = "1486009619846529075"; // Logs do cronograma
   const CRONO_PANEL_CHANNEL_ID = "1474605177771397223"; // Painel do cronograma
   const EVENTOS_DIARIOS_CHANNEL_ID = "1385003944803041371"; // Eventos diários
+  const EVT3_EVENT_CHANNEL_ID = "1457573495952248883"; // Base completa dos eventos / tópicos EVT3
+  const HALL_EVENT_CONTEXT_MAX_CHARS = 18000;
+  const HALL_EVENT_CONTEXT_MAX_IMAGES = 4;
 
   // Cargos Fixos para Menção
   const ROLE_CIDADAO = "1262978759922028575";
@@ -2996,14 +2999,1087 @@ function rememberHallAiCopy({
     state
   );
 }
+function hallEventSourceText(
+  message,
+  maxLength = 5000
+) {
+  return String(
+    getHallMessageText(
+      message
+    ) ||
+    ""
+  )
+    .replace(
+      /@everyone|@here/gi,
+      " "
+    )
+    .replace(
+      /<@&\d+>/g,
+      " "
+    )
+    .replace(
+      /\n{3,}/g,
+      "\n\n"
+    )
+    .trim()
+    .slice(
+      0,
+      maxLength
+    );
+}
 
+function hallEventImageMimeType(
+  url = "",
+  fallback = ""
+) {
+  const direct =
+    String(
+      fallback ||
+      ""
+    )
+      .toLowerCase()
+      .split(";")[0]
+      .trim();
+
+  if (
+    direct.startsWith(
+      "image/"
+    )
+  ) {
+    return direct;
+  }
+
+  const cleanUrl =
+    String(
+      url ||
+      ""
+    )
+      .toLowerCase();
+
+  if (
+    /\.png(?:$|[?#])/i.test(
+      cleanUrl
+    )
+  ) {
+    return "image/png";
+  }
+
+  if (
+    /\.(?:jpe?g)(?:$|[?#])/i.test(
+      cleanUrl
+    )
+  ) {
+    return "image/jpeg";
+  }
+
+  if (
+    /\.webp(?:$|[?#])/i.test(
+      cleanUrl
+    )
+  ) {
+    return "image/webp";
+  }
+
+  if (
+    /\.heic(?:$|[?#])/i.test(
+      cleanUrl
+    )
+  ) {
+    return "image/heic";
+  }
+
+  if (
+    /\.heif(?:$|[?#])/i.test(
+      cleanUrl
+    )
+  ) {
+    return "image/heif";
+  }
+
+  return "";
+}
+
+function hallEventLooksLikeImageUrl(
+  url = ""
+) {
+  const cleanUrl =
+    normalizeImageUrl(
+      url
+    );
+
+  if (!cleanUrl) {
+    return false;
+  }
+
+  return Boolean(
+    hallEventImageMimeType(
+      cleanUrl
+    ) ||
+    /(?:cdn|media)\.discordapp\.(?:com|net)\/attachments\//i.test(
+      cleanUrl
+    )
+  );
+}
+
+function addHallEventImageCandidate(
+  targetMap,
+  {
+    url = "",
+    name = "imagem-evento",
+    contentType = "",
+    size = 0
+  } = {}
+) {
+  const cleanUrl =
+    normalizeImageUrl(
+      url
+    );
+
+  if (
+    !cleanUrl ||
+    !hallEventLooksLikeImageUrl(
+      cleanUrl
+    )
+  ) {
+    return;
+  }
+
+  const key =
+    cleanUrl
+      .split("?")[0]
+      .toLowerCase();
+
+  if (
+    targetMap.has(
+      key
+    )
+  ) {
+    return;
+  }
+
+  targetMap.set(
+    key,
+    {
+      url:
+        cleanUrl,
+
+      name:
+        cleanOneLine(
+          name ||
+          "imagem-evento"
+        ),
+
+      contentType:
+        hallEventImageMimeType(
+          cleanUrl,
+          contentType
+        ),
+
+      size:
+        Number(
+          size ||
+          0
+        )
+    }
+  );
+}
+
+function collectHallEventImagesFromMessage(
+  message,
+  targetMap
+) {
+  for (
+    const attachment of
+    message?.attachments?.values?.() ||
+    []
+  ) {
+    addHallEventImageCandidate(
+      targetMap,
+      {
+        url:
+          attachment.url,
+
+        name:
+          attachment.name ||
+          "anexo-evento",
+
+        contentType:
+          attachment.contentType ||
+          "",
+
+        size:
+          attachment.size ||
+          0
+      }
+    );
+  }
+
+  for (
+    const embed of
+    message?.embeds ||
+    []
+  ) {
+    addHallEventImageCandidate(
+      targetMap,
+      {
+        url:
+          embed?.image?.url ||
+          "",
+
+        name:
+          `embed-${message?.id || "evento"}-imagem`
+      }
+    );
+
+    addHallEventImageCandidate(
+      targetMap,
+      {
+        url:
+          embed?.thumbnail?.url ||
+          "",
+
+        name:
+          `embed-${message?.id || "evento"}-thumb`
+      }
+    );
+  }
+
+  for (
+    const url of
+    getImageUrlsFromContent(
+      message?.content ||
+      ""
+    )
+  ) {
+    addHallEventImageCandidate(
+      targetMap,
+      {
+        url,
+
+        name:
+          `link-${message?.id || "evento"}`
+      }
+    );
+  }
+}
+
+async function fetchHallEventSourceMessages(
+  channel,
+  maxPages = 2
+) {
+  if (
+    !channel?.isTextBased?.()
+  ) {
+    return [];
+  }
+
+  const messages =
+    [];
+
+  let before =
+    null;
+
+  for (
+    let page = 0;
+    page <
+    Math.max(
+      1,
+      maxPages
+    );
+    page++
+  ) {
+    const options = {
+      limit:
+        100
+    };
+
+    if (
+      before
+    ) {
+      options.before =
+        before;
+    }
+
+    const fetched =
+      await channel.messages
+        .fetch(
+          options
+        )
+        .catch(
+          () =>
+            null
+        );
+
+    if (
+      !fetched?.size
+    ) {
+      break;
+    }
+
+    messages.push(
+      ...fetched.values()
+    );
+
+    before =
+      fetched
+        .last()
+        ?.id ||
+      null;
+
+    if (
+      fetched.size <
+        100 ||
+      !before
+    ) {
+      break;
+    }
+  }
+
+  return [
+    ...new Map(
+      messages.map(
+        message => [
+          message.id,
+          message
+        ]
+      )
+    ).values()
+  ].sort(
+    (
+      a,
+      b
+    ) =>
+      Number(
+        a.createdTimestamp ||
+        0
+      ) -
+      Number(
+        b.createdTimestamp ||
+        0
+      )
+  );
+}
+
+function pickHallEventDailyGroup(
+  messages,
+  eventName,
+  referenceTimestamp = Date.now()
+) {
+  const normalizedEvent =
+    normalizeHallName(
+      eventName
+    );
+
+  if (
+    !normalizedEvent
+  ) {
+    return [];
+  }
+
+  const candidates =
+    messages
+      .filter(
+        message => {
+          const text =
+            getHallMessageText(
+              message
+            );
+
+          const rawEvent =
+            extractRawHallEventName(
+              text
+            );
+
+          return (
+            isSameNormalizedEventName(
+              rawEvent,
+              eventName
+            ) ||
+            normalizeHallName(
+              text
+            ).includes(
+              normalizedEvent
+            )
+          );
+        }
+      )
+      .sort(
+        (
+          a,
+          b
+        ) =>
+          Math.abs(
+            Number(
+              a.createdTimestamp ||
+              0
+            ) -
+            referenceTimestamp
+          ) -
+          Math.abs(
+            Number(
+              b.createdTimestamp ||
+              0
+            ) -
+            referenceTimestamp
+          )
+      );
+
+  const anchor =
+    candidates[0];
+
+  if (
+    !anchor
+  ) {
+    return [];
+  }
+
+  const anchorIndex =
+    messages.findIndex(
+      message =>
+        message.id ===
+        anchor.id
+    );
+
+  if (
+    anchorIndex === -1
+  ) {
+    return [
+      anchor
+    ];
+  }
+
+  const group =
+    [];
+
+  const maxWindowMs =
+    1000 *
+    60 *
+    3;
+
+  for (
+    let index =
+      anchorIndex;
+    index <
+    messages.length;
+    index++
+  ) {
+    const message =
+      messages[index];
+
+    const diffMs =
+      Number(
+        message.createdTimestamp ||
+        0
+      ) -
+      Number(
+        anchor.createdTimestamp ||
+        0
+      );
+
+    if (
+      diffMs <
+      0
+    ) {
+      continue;
+    }
+
+    if (
+      diffMs >
+      maxWindowMs
+    ) {
+      break;
+    }
+
+    if (
+      message.author?.id !==
+      anchor.author?.id
+    ) {
+      continue;
+    }
+
+    if (
+      message.components?.length
+    ) {
+      continue;
+    }
+
+    if (
+      message.id !==
+        anchor.id &&
+      /Santa\s*Creators\s*:/i.test(
+        message?.content ||
+        ""
+      )
+    ) {
+      const possibleOtherEvent =
+        extractRawHallEventName(
+          getHallMessageText(
+            message
+          )
+        );
+
+      if (
+        possibleOtherEvent !==
+          "Evento" &&
+        !isSameNormalizedEventName(
+          possibleOtherEvent,
+          eventName
+        )
+      ) {
+        break;
+      }
+    }
+
+    group.push(
+      message
+    );
+
+    if (
+      group.length >=
+      8
+    ) {
+      break;
+    }
+  }
+
+  return (
+    group.length
+      ? group
+      : [
+          anchor
+        ]
+  );
+}
+
+async function buildHallEventosDiariosCreativeContext({
+  client,
+  eventName,
+  referenceTimestamp = Date.now(),
+  imageMap
+}) {
+  const channel =
+    await client.channels
+      .fetch(
+        EVENTOS_DIARIOS_CHANNEL_ID
+      )
+      .catch(
+        () =>
+          null
+      );
+
+  if (
+    !channel?.isTextBased?.()
+  ) {
+    return "";
+  }
+
+  const messages =
+    await fetchHallEventSourceMessages(
+      channel,
+      2
+    );
+
+  const group =
+    pickHallEventDailyGroup(
+      messages,
+      eventName,
+      referenceTimestamp
+    );
+
+  if (
+    !group.length
+  ) {
+    return "";
+  }
+
+  const blocks =
+    [];
+
+  for (
+    const message of
+    group
+  ) {
+    collectHallEventImagesFromMessage(
+      message,
+      imageMap
+    );
+
+    const text =
+      hallEventSourceText(
+        message,
+        6500
+      );
+
+    if (
+      text
+    ) {
+      blocks.push(
+        text
+      );
+    }
+  }
+
+  return (
+    `FONTE OFICIAL: Eventos Diários <#${EVENTOS_DIARIOS_CHANNEL_ID}>.\n` +
+    `Use esta fonte para entender as regras da edição, objetivo, mecânica, clima e identidade do evento.\n` +
+    blocks.join(
+      "\n\n"
+    )
+  ).slice(
+    0,
+    10500
+  );
+}
+
+async function fetchHallEvt3Threads(
+  parent
+) {
+  const threadMap =
+    new Map();
+
+  const active =
+    await parent?.threads
+      ?.fetchActive?.()
+      .catch(
+        () =>
+          null
+      );
+
+  for (
+    const thread of
+    active?.threads?.values?.() ||
+    []
+  ) {
+    threadMap.set(
+      thread.id,
+      thread
+    );
+  }
+
+  let before =
+    null;
+
+  for (
+    let page = 0;
+    page <
+    3;
+    page++
+  ) {
+    const options = {
+      limit:
+        100
+    };
+
+    if (
+      before
+    ) {
+      options.before =
+        before;
+    }
+
+    const archived =
+      await parent?.threads
+        ?.fetchArchived?.(
+          options
+        )
+        .catch(
+          () =>
+            null
+        );
+
+    const archivedThreads = [
+      ...(
+        archived?.threads?.values?.() ||
+        []
+      )
+    ];
+
+    for (
+      const thread of
+      archivedThreads
+    ) {
+      threadMap.set(
+        thread.id,
+        thread
+      );
+    }
+
+    if (
+      !archived?.hasMore ||
+      !archivedThreads.length
+    ) {
+      break;
+    }
+
+    const oldestArchiveTimestamp =
+      Math.min(
+        ...archivedThreads
+          .map(
+            thread =>
+              Number(
+                thread.archiveTimestamp ||
+                thread.createdTimestamp ||
+                0
+              )
+          )
+          .filter(
+            Boolean
+          )
+      );
+
+    if (
+      !Number.isFinite(
+        oldestArchiveTimestamp
+      ) ||
+      oldestArchiveTimestamp <=
+        0
+    ) {
+      break;
+    }
+
+    before =
+      new Date(
+        oldestArchiveTimestamp -
+        1
+      );
+  }
+
+  return [
+    ...threadMap.values()
+  ];
+}
+
+function pickHallEvt3EventThread(
+  threads,
+  eventName,
+  referenceTimestamp = Date.now()
+) {
+  const normalizedEvent =
+    normalizeHallName(
+      eventName
+    );
+
+  if (
+    !normalizedEvent
+  ) {
+    return null;
+  }
+
+  return (
+    threads
+      .filter(
+        thread =>
+          normalizeHallName(
+            thread?.name ||
+            ""
+          ).includes(
+            normalizedEvent
+          )
+      )
+      .sort(
+        (
+          a,
+          b
+        ) =>
+          Math.abs(
+            Number(
+              a.createdTimestamp ||
+              0
+            ) -
+            referenceTimestamp
+          ) -
+          Math.abs(
+            Number(
+              b.createdTimestamp ||
+              0
+            ) -
+            referenceTimestamp
+          )
+      )[0] ||
+    null
+  );
+}
+
+function getHallEvt3LinkedThreadIds(
+  messages
+) {
+  const ids =
+    [];
+
+  for (
+    const message of
+    messages
+  ) {
+    const content =
+      String(
+        message?.content ||
+        ""
+      );
+
+    const match =
+      content.match(
+        /Área\s+\*\*(?:INFO DO EVENTO|ORGANIZAÇÃO):\*\*\s*<#(\d{15,25})>/i
+      );
+
+    const threadId =
+      match?.[1] ||
+      "";
+
+    if (
+      threadId &&
+      !ids.includes(
+        threadId
+      )
+    ) {
+      ids.push(
+        threadId
+      );
+    }
+  }
+
+  return ids.slice(
+    0,
+    3
+  );
+}
+
+async function buildHallEvt3CreativeContext({
+  client,
+  eventName,
+  referenceTimestamp = Date.now(),
+  imageMap
+}) {
+  const parent =
+    await client.channels
+      .fetch(
+        EVT3_EVENT_CHANNEL_ID
+      )
+      .catch(
+        () =>
+          null
+      );
+
+  if (
+    !parent?.isTextBased?.() ||
+    !parent?.threads
+  ) {
+    return "";
+  }
+
+  const eventThread =
+    pickHallEvt3EventThread(
+      await fetchHallEvt3Threads(
+        parent
+      ),
+      eventName,
+      referenceTimestamp
+    );
+
+  if (
+    !eventThread
+  ) {
+    return "";
+  }
+
+  const mainMessages =
+    await fetchHallEventSourceMessages(
+      eventThread,
+      1
+    );
+
+  const blocks =
+    [];
+
+  for (
+    const message of
+    mainMessages
+  ) {
+    collectHallEventImagesFromMessage(
+      message,
+      imageMap
+    );
+
+    const text =
+      hallEventSourceText(
+        message,
+        4000
+      );
+
+    if (
+      text
+    ) {
+      blocks.push(
+        `TÓPICO PRINCIPAL:\n${text}`
+      );
+    }
+  }
+
+  for (
+    const threadId of
+    getHallEvt3LinkedThreadIds(
+      mainMessages
+    )
+  ) {
+    const linkedThread =
+      await client.channels
+        .fetch(
+          threadId
+        )
+        .catch(
+          () =>
+            null
+        );
+
+    if (
+      !linkedThread?.isTextBased?.()
+    ) {
+      continue;
+    }
+
+    const linkedBlocks =
+      [];
+
+    for (
+      const message of
+      await fetchHallEventSourceMessages(
+        linkedThread,
+        1
+      )
+    ) {
+      collectHallEventImagesFromMessage(
+        message,
+        imageMap
+      );
+
+      const text =
+        hallEventSourceText(
+          message,
+          5000
+        );
+
+      if (
+        text
+      ) {
+        linkedBlocks.push(
+          text
+        );
+      }
+    }
+
+    if (
+      linkedBlocks.length
+    ) {
+      blocks.push(
+        `ÁREA VINCULADA ${cleanOneLine(
+          linkedThread.name ||
+          threadId
+        )}:\n` +
+        linkedBlocks.join(
+          "\n\n"
+        )
+      );
+    }
+  }
+
+  if (
+    !blocks.length
+  ) {
+    return "";
+  }
+
+  return (
+    `FONTE OFICIAL: base EVT3 <#${EVT3_EVENT_CHANNEL_ID}> / tópico ${cleanOneLine(
+      eventThread.name ||
+      eventThread.id
+    )}.\n` +
+    `Esta é a base temática e explicativa completa do evento.\n` +
+    blocks.join(
+      "\n\n"
+    )
+  ).slice(
+    0,
+    12500
+  );
+}
+
+async function buildHallEventCreativeContext({
+  client,
+  eventName,
+  referenceTimestamp = Date.now()
+}) {
+  if (
+    !client
+  ) {
+    return {
+      text:
+        "Nenhum contexto oficial do evento foi carregado.",
+
+      imageAttachments:
+        []
+    };
+  }
+
+  const imageMap =
+    new Map();
+
+  const eventosDiariosContext =
+    await buildHallEventosDiariosCreativeContext({
+      client,
+      eventName,
+      referenceTimestamp,
+      imageMap
+    }).catch(
+      () =>
+        ""
+    );
+
+  const evt3Context =
+    await buildHallEvt3CreativeContext({
+      client,
+      eventName,
+      referenceTimestamp,
+      imageMap
+    }).catch(
+      () =>
+        ""
+    );
+
+  const sourceBlocks = [
+    eventosDiariosContext,
+    evt3Context
+  ].filter(
+    Boolean
+  );
+
+  return {
+    text:
+      sourceBlocks.length
+        ? sourceBlocks
+            .join(
+              "\n\n==============================\n\n"
+            )
+            .slice(
+              0,
+              HALL_EVENT_CONTEXT_MAX_CHARS
+            )
+        : "Nenhum contexto oficial específico desse evento foi localizado no Discord nesta consulta.",
+
+    imageAttachments: [
+      ...imageMap.values()
+    ].slice(
+      0,
+      HALL_EVENT_CONTEXT_MAX_IMAGES
+    )
+  };
+}
 async function generateHallAiCopy({
   client,
   eventName,
   cityKey,
   cityName,
   winnersText,
-  historicalMigration = false
+  historicalMigration = false,
+  referenceTimestamp = Date.now()
 }) {
   const fallback = {
     intro:
@@ -3041,6 +4117,13 @@ async function generateHallAiCopy({
         8
       );
 
+    const eventCreativeContext =
+      await buildHallEventCreativeContext({
+        client,
+        eventName,
+        referenceTimestamp
+      });
+
     const prompt = `
 Você escreve SOMENTE a abertura e o fechamento de um Hall da Fama da SantaCreators.
 
@@ -3051,43 +4134,75 @@ CONTEXTO REAL:
 - Histórico disponível:
 ${historyContext}
 
+CONHECIMENTO OFICIAL DO EVENTO LIDO DIRETAMENTE DO DISCORD:
+${eventCreativeContext.text}
+
+IMAGENS OFICIAIS DO EVENTO ENVIADAS PARA LEITURA VISUAL:
+${
+  eventCreativeContext
+    .imageAttachments
+    .length >
+  0
+    ? `${eventCreativeContext.imageAttachments.length} imagem(ns) oficial(is) anexada(s) ao pedido da IA.`
+    : "Nenhuma imagem oficial utilizável foi localizada nesta consulta."
+}
+
 TEXTOS RECENTES QUE NÃO DEVEM SER COPIADOS NEM PARAFRASEADOS DE FORMA ÓBVIA:
 ${recentCopyContext}
 
 OBJETIVO CRIATIVO:
-- Cada Hall deve parecer escrito especialmente para aquele evento.
+- Cada Hall deve parecer escrito especialmente para aquele evento, e não um texto genérico com o nome do evento encaixado.
+- Leia as regras, objetivo, mecânica, ambientação, objetos importantes, identidade visual e dinâmica presentes nas fontes oficiais.
+- Eventos Diários representa a edição operacional do evento próxima daquele Hall e deve ter prioridade quando trouxer uma regra ou mecânica específica daquela edição.
+- EVT3 é a base temática e explicativa completa do evento e deve complementar o contexto.
+- Se Eventos Diários e EVT3 divergirem sobre uma mecânica, NÃO misture as duas versões. Para aquele Hall, priorize o Eventos Diários correspondente à edição mais próxima da data do Hall.
+- Quando houver imagens oficiais, observe somente elementos visuais realmente presentes e úteis para entender a identidade do evento.
+- Transforme a mecânica do evento em linguagem de Hall da Fama: trocadilhos leves, metáforas, humor curto, energia, tensão, estratégia, celebração ou provocação elegante quando combinar.
+- Se o evento tiver um elemento central confirmado nas fontes, como veículo, área, arma, sobrevivência, fuga, resgate, fogo, pântano, navio, prisão, guerra de tropas ou outro objetivo, use isso como matéria-prima criativa.
+- Não copie o regulamento literalmente. A mensagem deve celebrar os vencedores, não republicar as regras.
 - Varie o ângulo narrativo entre: clima da cidade, identidade do evento, momento de decisão, domínio, precisão, resistência, estratégia, celebração e assinatura de campeão.
 - Evite estruturas repetidas entre um Hall e outro.
 - Evite começar sempre com "A disputa", "O evento", "Foi" ou "Mais uma".
 - A abertura e o fechamento devem conversar entre si, mas não repetir a mesma ideia.
-- Quando não houver histórico confiável, crie energia usando SOMENTE o nome do evento e da cidade, sem inventar fatos.
+- Quando houver contexto oficial suficiente, PRIORIZE esse contexto em vez de frases genéricas.
+- Quando não houver contexto oficial suficiente, crie energia usando SOMENTE o nome do evento e da cidade, sem inventar fatos.
 
 REGRAS OBRIGATÓRIAS:
 1. Retorne SOMENTE JSON válido neste formato: {"intro":"...","closing":"..."}
 2. NÃO escreva os vencedores, IDs, TOPs ou premiações. O código preserva isso separadamente.
-3. NÃO invente placar, rivalidade, dificuldade, virada, recorde, número de participantes ou sequência que não esteja no contexto.
-4. Pode brincar de forma profissional com o nome da cidade e do evento.
+3. NÃO invente placar, rivalidade, dificuldade, virada, recorde, número de participantes, sequência, regra ou mecânica que não esteja nas fontes.
+4. Pode brincar de forma profissional com o nome da cidade, nome do evento e mecânicas CONFIRMADAS nas fontes.
 5. Se houver vitória anterior CONFIRMADA nesta temporada, pode fazer referência natural a consistência ou retorno ao topo.
 6. Se o histórico disser apenas "NOME NO HISTÓRICO", não afirme que é a mesma pessoa, porque os IDs podem ter mudado após reset/wipe.
-7. Intro: 1 frase, aproximadamente 45 a 145 caracteres.
-8. Closing: 1 frase forte, aproximadamente 55 a 180 caracteres.
+7. Intro: 1 ou 2 frases curtas, aproximadamente 80 a 210 caracteres no total.
+8. Closing: 1 ou 2 frases curtas e fortes, aproximadamente 80 a 220 caracteres no total.
 9. NÃO reutilize frases dos TEXTOS RECENTES.
-10. Evite repetir "foi insano", "na raça", "mais uma vez", "pegou fogo", "sangue frio" e "só os brabos".
+10. Evite repetir "foi insano", "na raça", "mais uma vez", "pegou fogo", "sangue frio" e "só os brabos", exceto quando uma palavra fizer parte literal da identidade confirmada do evento e ainda assim prefira variar.
 11. Use no máximo 2 emojis no total das duas frases.
-12. Linguagem de evento/FiveM, elegante, enérgica, natural e com personalidade. Nada infantil.
-13. Não use tom genérico de comunicado corporativo.
-14. Quando o contexto começar com "FONTE PRINCIPAL", ele veio do canal oficial de logs do Discord e deve ter prioridade sobre o cache/JSON legado.
+12. Linguagem de evento/FiveM, elegante, enérgica, natural, criativa e com personalidade. Nada infantil.
+13. Humor é permitido quando nascer naturalmente da mecânica do evento; nunca humilhe participante, ORG ou cidade.
+14. Não use tom genérico de comunicado corporativo.
+15. Quando o contexto começar com "FONTE PRINCIPAL", ele veio do canal oficial de logs do Discord e deve ter prioridade sobre o cache/JSON legado.
+16. As fontes de Eventos Diários e EVT3 servem para entender O EVENTO. Elas não provam quem venceu, quantas pessoas participaram ou o que ocorreu naquela partida específica.
+17. Se uma imagem sugerir algo que contradiga o texto oficial, priorize o texto oficial e não invente uma terceira interpretação.
 `;
 
     const raw =
       await generateSantaCreatorsStandaloneText({
         prompt,
 
+        imageAttachments:
+          eventCreativeContext
+            .imageAttachments,
+
         maxOutputTokens:
-          360,
+          480,
 
         temperature:
-          0.98,
+          1.02,
+
+        responseMimeType:
+          "application/json",
 
         label:
           "Hall da Fama"
@@ -3098,7 +4213,9 @@ REGRAS OBRIGATÓRIAS:
         raw
       );
 
-    if (!payload) {
+    if (
+      !payload
+    ) {
       return fallback;
     }
 
@@ -3124,7 +4241,9 @@ REGRAS OBRIGATÓRIAS:
     });
 
     return result;
-  } catch (error) {
+  } catch (
+    error
+  ) {
     console.warn(
       "[HallDaFama] IA de texto indisponível; usando variação local:",
       error?.message ||
@@ -3160,22 +4279,22 @@ REGRAS OBRIGATÓRIAS:
     return String(value).replace(/\s+/g, " ").trim();
   }
 
-  function isBadHallIntro(value = "") {
-    const text = cleanOneLine(value);
+function isBadHallIntro(value = "") {
+  const text = cleanOneLine(value);
 
-    if (!text) return true;
-    if (text.length < 25) return true;
-    if (text.length > 160) return true;
-    if (text.startsWith("http")) return true;
-    if (text.includes("**TOP**")) return true;
-    if (text.includes("HALL DA FAMA")) return true;
-    if (/^é\s+com$/i.test(text)) return true;
-    if (/^é\s+com\s*$/i.test(text)) return true;
-    if ((text.match(/Confira os vencedores/gi) || []).length > 1) return true;
-    if ((text.match(/Hall da Fama/gi) || []).length > 1) return true;
+  if (!text) return true;
+  if (text.length < 25) return true;
+  if (text.length > 220) return true;
+  if (text.startsWith("http")) return true;
+  if (text.includes("**TOP**")) return true;
+  if (text.includes("HALL DA FAMA")) return true;
+  if (/^é\s+com$/i.test(text)) return true;
+  if (/^é\s+com\s*$/i.test(text)) return true;
+  if ((text.match(/Confira os vencedores/gi) || []).length > 1) return true;
+  if ((text.match(/Hall da Fama/gi) || []).length > 1) return true;
 
-    return false;
-  }
+  return false;
+}
 
   function extractHallParts(content = "") {
     const rawContent = String(content || "");
@@ -17160,7 +18279,22 @@ const hallAiCopy =
     historicalMigration:
       Boolean(
         data.historicalMigration
-      )
+      ),
+
+    referenceTimestamp:
+      Number(
+        data.historicalVictoryTimestamp ||
+        0
+      ) ||
+      parseHistoricalDateInput(
+        data.historicalVictoryDate ||
+        ""
+      ) ||
+      Number(
+        data.createdAt ||
+        0
+      ) ||
+      Date.now()
   });
 
 const introLine =
