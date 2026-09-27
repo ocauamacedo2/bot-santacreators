@@ -731,6 +731,156 @@ async function consolidateFormsCreatorDuplicateThreadForUser(
   return true;
 }
 
+// =====================================================
+// 🧹 LIMPEZA DAS MENSAGENS ÓRFÃS "INICIOU UM TÓPICO"
+// =====================================================
+//
+// Quando uma thread duplicada é realmente apagada,
+// o Discord pode manter no canal principal a mensagem:
+//
+// "Santa Creators iniciou um tópico: Nome"
+//
+// Esta função remove SOMENTE essas mensagens quando:
+//
+// 1. São mensagens de criação de thread.
+// 2. Foram geradas pelo próprio bot.
+// 3. A thread vinculada já não existe.
+// 4. A mensagem tem pelo menos 30 segundos.
+//
+// Não interfere em Coordenação, Responsáveis ou
+// qualquer outro canal.
+// =====================================================
+
+async function cleanupOrphanThreadCreatedSystemMessages(
+  client,
+  channel
+) {
+  if (
+    !channel?.messages ||
+    !client?.user?.id
+  ) {
+    return 0;
+  }
+
+  let deleted = 0;
+  let before = undefined;
+
+  for (
+    let page = 0;
+    page < 10;
+    page++
+  ) {
+    const messages =
+      await channel.messages
+        .fetch({
+          limit: 100,
+          before,
+        })
+        .catch(() => null);
+
+    if (
+      !messages?.size
+    ) {
+      break;
+    }
+
+    before =
+      messages.last()?.id;
+
+    for (
+      const message
+      of messages.values()
+    ) {
+      /*
+       * Discord:
+       * MessageType.ThreadCreated = 18
+       */
+      const isThreadCreatedSystemMessage =
+        Number(
+          message.type
+        ) === 18;
+
+      if (
+        !isThreadCreatedSystemMessage ||
+        message.author?.id !==
+          client.user.id
+      ) {
+        continue;
+      }
+
+      /*
+       * Evita mexer numa mensagem que acabou
+       * de nascer enquanto Discord/cache ainda
+       * pode estar sincronizando a nova thread.
+       */
+      const isTooRecent =
+        Date.now() -
+          Number(
+            message.createdTimestamp ||
+            0
+          ) <
+        30_000;
+
+      if (
+        isTooRecent
+      ) {
+        continue;
+      }
+
+      /*
+       * Se ainda existe uma thread vinculada,
+       * esta mensagem é válida e permanece.
+       */
+      if (
+        message.hasThread ||
+        message.thread
+      ) {
+        continue;
+      }
+
+      const wasDeleted =
+        await message
+          .delete()
+          .then(
+            () => true
+          )
+          .catch(
+            (error) => {
+              console.warn(
+                `[FormsCreator] Não consegui apagar a mensagem órfã de criação de tópico ${message.id}:`,
+                error
+              );
+
+              return false;
+            }
+          );
+
+      if (
+        wasDeleted
+      ) {
+        deleted += 1;
+      }
+    }
+
+    if (
+      !before ||
+      messages.size < 100
+    ) {
+      break;
+    }
+  }
+
+  if (
+    deleted > 0
+  ) {
+    console.log(
+      `[FormsCreator] ${deleted} mensagem(ns) órfã(s) de "iniciou um tópico" removida(s) do canal inicial.`
+    );
+  }
+
+  return deleted;
+}
+
 async function cleanupFormsCreatorDuplicateThreads(
   client
 ) {
@@ -1425,6 +1575,23 @@ async function cleanupFormsCreatorDuplicateThreads(
       );
     }
   }
+
+  // ===================================================
+  // 🧹 LIMPA AS MENSAGENS ÓRFÃS DO CANAL PRINCIPAL
+  // ===================================================
+  //
+  // Exemplo:
+  //
+  // "Santa Creators iniciou um tópico: Vitor taborda."
+  //
+  // Se a thread já foi apagada, a mensagem de sistema
+  // também desaparece.
+  // ===================================================
+
+  await cleanupOrphanThreadCreatedSystemMessages(
+    client,
+    channel
+  );
 
   return deleted;
 }
