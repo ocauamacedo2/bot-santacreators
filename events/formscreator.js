@@ -319,6 +319,474 @@ function isFormsCreatorMirrorEmbed(embed) {
 }
 
 // =====================================================
+// TÓPICO ÚNICO: FORMSCREATOR + EVOLUÇÃO/GI
+// =====================================================
+
+async function resolveFormsCreatorCanonicalTopic(
+  client,
+  {
+    guildId,
+    userId,
+    channel,
+    topicName,
+    reason,
+  }
+) {
+  const activeEvolutionThreadId =
+    await getActiveEvolutionThreadId(
+      client,
+      userId,
+      {
+        guildId,
+        originalThreadId: null,
+        reason:
+          "FormsCreator verificando tópico ativo antes da criação",
+      }
+    ).catch(() => null);
+
+  if (activeEvolutionThreadId) {
+    const activeEvolutionThread =
+      await client.channels
+        .fetch(activeEvolutionThreadId)
+        .catch(() => null);
+
+    if (
+      activeEvolutionThread?.isThread?.() &&
+      activeEvolutionThread.parentId ===
+        CREATOR_FORM_CHANNEL_ID
+    ) {
+      if (activeEvolutionThread.archived) {
+        await activeEvolutionThread
+          .setArchived(false)
+          .catch(() => {});
+      }
+
+      return activeEvolutionThread;
+    }
+  }
+
+  return await channel.threads
+    .create({
+      name: topicName,
+      autoArchiveDuration: 1440,
+      reason,
+    })
+    .catch(() => null);
+}
+async function consolidateFormsCreatorDuplicateThreadForUser(
+  client,
+  userId
+) {
+  const targetUserId =
+    String(userId || "").trim();
+
+  if (!targetUserId) {
+    return false;
+  }
+
+  const formsThreadId =
+    await findOriginalFormsCreatorThreadIdByUserId(
+      client,
+      targetUserId
+    ).catch(() => null);
+
+  if (!formsThreadId) {
+    return false;
+  }
+
+  const evolutionThreadId =
+    await getActiveEvolutionThreadId(
+      client,
+      targetUserId,
+      {
+        guildId:
+          GUILD_ID,
+
+        originalThreadId:
+          formsThreadId,
+
+        reason:
+          "Conferindo duplicidade FormsCreator x Evolução",
+      }
+    ).catch(() => null);
+
+  if (
+    !evolutionThreadId ||
+    evolutionThreadId ===
+      formsThreadId
+  ) {
+    return false;
+  }
+
+  const formsThread =
+    await client.channels
+      .fetch(
+        formsThreadId
+      )
+      .catch(() => null);
+
+  const evolutionThread =
+    await client.channels
+      .fetch(
+        evolutionThreadId
+      )
+      .catch(() => null);
+
+  if (
+    !formsThread?.isThread?.() ||
+    !evolutionThread?.isThread?.() ||
+    formsThread.parentId !==
+      CREATOR_FORM_CHANNEL_ID ||
+    evolutionThread.parentId !==
+      CREATOR_FORM_CHANNEL_ID
+  ) {
+    return false;
+  }
+
+  /*
+   * O bug cria primeiro o tópico da Evolução/GI
+   * e depois cria o Forms separado.
+   *
+   * Só automatizamos a remoção nesse sentido.
+   */
+
+  if (
+    Number(
+      formsThread.createdTimestamp ||
+      0
+    ) <
+    Number(
+      evolutionThread.createdTimestamp ||
+      0
+    )
+  ) {
+    return false;
+  }
+
+  const state =
+    readState();
+
+  const registration =
+    state.registrations?.[
+      formsThreadId
+    ];
+
+  if (!registration) {
+    return false;
+  }
+
+  let sourceMessage =
+    registration.messageId
+      ? await formsThread.messages
+          .fetch(
+            registration.messageId
+          )
+          .catch(() => null)
+      : null;
+
+  if (
+    !sourceMessage ||
+    !isFormsCreatorMainRegisterMessage(
+      sourceMessage,
+      client
+    )
+  ) {
+    const messages =
+      await formsThread.messages
+        .fetch({
+          limit: 100,
+        })
+        .catch(() => null);
+
+    sourceMessage =
+      messages?.find(
+        (message) =>
+          isFormsCreatorMainRegisterMessage(
+            message,
+            client
+          )
+      ) ||
+      null;
+  }
+
+  if (
+    !sourceMessage?.embeds?.[0]
+  ) {
+    return false;
+  }
+
+  const duplicateMessages =
+    await formsThread.messages
+      .fetch({
+        limit: 100,
+      })
+      .catch(() => null);
+
+  /*
+   * SEGURANÇA:
+   *
+   * Se alguém já escreveu manualmente
+   * nesse tópico duplicado, não apagamos.
+   */
+
+  if (
+    !duplicateMessages ||
+    duplicateMessages.some(
+      (message) =>
+        message.author?.id !==
+        client.user?.id
+    )
+  ) {
+    console.warn(
+      `[FormsCreator] Duplicado ${formsThreadId} não foi apagado porque possui mensagem humana.`
+    );
+
+    return false;
+  }
+
+  if (
+    evolutionThread.archived
+  ) {
+    await evolutionThread
+      .setArchived(false)
+      .catch(() => {});
+  }
+
+  const evolutionMessages =
+    await evolutionThread.messages
+      .fetch({
+        limit: 100,
+      })
+      .catch(() => null);
+
+  /*
+   * Remove o espelho antigo do Forms,
+   * porque agora o registro OFICIAL
+   * ficará no próprio tópico da Evolução.
+   */
+
+  if (evolutionMessages) {
+    for (
+      const message
+      of evolutionMessages.values()
+    ) {
+      const footerText =
+        String(
+          message.embeds?.[0]
+            ?.footer?.text ||
+          ""
+        );
+
+      if (
+        footerText.startsWith(
+          `SC_FORMS_ACTIVE_CARD:${targetUserId}:`
+        )
+      ) {
+        await message
+          .delete()
+          .catch(() => {});
+      }
+    }
+  }
+
+  const rowEdit =
+    new ActionRowBuilder()
+      .addComponents(
+        new ButtonBuilder()
+          .setCustomId(
+            `editar_id_${evolutionThread.id}`
+          )
+          .setLabel(
+            "✏️ Editar ID/Passaporte"
+          )
+          .setStyle(
+            ButtonStyle.Secondary
+          ),
+
+        new ButtonBuilder()
+          .setCustomId(
+            `editar_area_${evolutionThread.id}`
+          )
+          .setLabel(
+            "✏️ Editar Área de Interesse"
+          )
+          .setStyle(
+            ButtonStyle.Secondary
+          )
+      );
+
+  const rowStatus =
+    new ActionRowBuilder()
+      .addComponents(
+        new ButtonBuilder()
+          .setCustomId(
+            `fc_toggle_status:${evolutionThread.id}:${targetUserId}:${registration.active ? "inactive" : "active"}`
+          )
+          .setLabel(
+            registration.active
+              ? "Desligar do Projeto"
+              : "Ligar ao Projeto"
+          )
+          .setStyle(
+            registration.active
+              ? ButtonStyle.Danger
+              : ButtonStyle.Success
+          )
+      );
+
+  /*
+   * Recria o registro oficial do Forms
+   * DENTRO do tópico já ligado ao GI.
+   */
+
+  const canonicalMessage =
+    await evolutionThread
+      .send({
+        embeds: [
+          EmbedBuilder.from(
+            sourceMessage.embeds[0]
+          ),
+        ],
+
+        components: [
+          rowEdit,
+          rowStatus,
+        ],
+
+        allowedMentions: {
+          parse: [],
+        },
+      })
+      .catch(() => null);
+
+  if (!canonicalMessage) {
+    return false;
+  }
+
+  /*
+   * Só depois que o registro foi
+   * preservado no tópico correto
+   * tentamos remover o duplicado.
+   */
+
+  const deleted =
+    await formsThread
+      .delete(
+        `FormsCreator duplicado consolidado no tópico ${evolutionThread.id}`
+      )
+      .then(
+        () => true
+      )
+      .catch(
+        () => false
+      );
+
+  if (!deleted) {
+    /*
+     * Se não conseguiu apagar,
+     * desfaz a nova mensagem para
+     * não criar outra duplicidade.
+     */
+
+    await canonicalMessage
+      .delete()
+      .catch(() => {});
+
+    return false;
+  }
+
+  /*
+   * Atualiza o FormsCreator para considerar
+   * o tópico GI/Evolução como oficial.
+   */
+
+  state.registrations[
+    evolutionThread.id
+  ] = {
+    ...registration,
+
+    messageId:
+      canonicalMessage.id,
+
+    activeMirrorThreadId:
+      null,
+
+    activeMirrorMessageId:
+      null,
+  };
+
+  delete state.registrations[
+    formsThreadId
+  ];
+
+  writeState(
+    state
+  );
+
+  console.log(
+    `[FormsCreator] Duplicado ${formsThreadId} removido. ` +
+    `Tópico canônico GI/Evolução: ${evolutionThread.id}`
+  );
+
+  return true;
+}
+
+async function cleanupFormsCreatorDuplicateThreads(
+  client
+) {
+  const state =
+    readState();
+
+  const userIds =
+    [
+      ...new Set(
+        Object.values(
+          state.registrations ||
+          {}
+        )
+          .map(
+            (registration) =>
+              String(
+                registration?.userId ||
+                ""
+              ).trim()
+          )
+          .filter(
+            Boolean
+          )
+      ),
+    ];
+
+  let deleted =
+    0;
+
+  for (
+    const userId
+    of userIds
+  ) {
+    const removed =
+      await consolidateFormsCreatorDuplicateThreadForUser(
+        client,
+        userId
+      ).catch(
+        (error) => {
+          console.error(
+            `[FormsCreator] Falha ao consolidar duplicidade de ${userId}:`,
+            error
+          );
+
+          return false;
+        }
+      );
+
+    if (removed) {
+      deleted += 1;
+    }
+  }
+
+  return deleted;
+}
+// =====================================================
 // ESPELHO CANÔNICO DO FORMS NO TÓPICO ATIVO
 // =====================================================
 //
@@ -2095,21 +2563,32 @@ export async function createFormsCreatorRecord(
         throw error;
       }
 
-      const membro = await guild.members
+           const membro = await guild.members
         .fetch(targetId)
         .catch(() => null);
+
     const avatarURL = membro?.user?.displayAvatarURL({ size: 512 }) || "";
 
-    const topic = await canal.threads.create({
-        name: targetName,
-        autoArchiveDuration: 1440,
-        reason: `Registro automático para ${targetName}`,
-    }).catch(() => null);
+    const topic =
+      await resolveFormsCreatorCanonicalTopic(
+        client,
+        {
+          guildId: guild.id,
+          userId: targetId,
+          channel: canal,
+          topicName: targetName,
+          reason:
+            `Registro automático para ${targetName}`,
+        }
+      );
 
-    if (!topic) throw new Error("Falha ao criar thread no FormsCreator.");
+    if (!topic) {
+      throw new Error(
+        "Falha ao criar ou reutilizar thread no FormsCreator."
+      );
+    }
 
   const isActiveOnCreate = !!(membro && membro.roles.cache.has(ROLE_REQUIRED_FOR_ACTIVE));
-
 const embed = new EmbedBuilder()
     .setTitle(`👤 ${targetName}`)
     .setThumbnail(avatarURL)
@@ -3811,6 +4290,11 @@ export async function formsCreatorOnReady(client) {
     // ✅ NOVO: Sincroniza registros antigos (adiciona botões e salva no state)
     await syncLegacyThreads(client);
 
+    // ✅ Consolida tópicos duplicados FormsCreator x Evolução/GI
+    await cleanupFormsCreatorDuplicateThreads(
+      client
+    );
+
     // ✅ EVOLUÇÃO EM TRÊS FASES
     // Configura os canais, confere os cargos atuais
     // e cria/trava os tópicos necessários.
@@ -4047,6 +4531,11 @@ export async function formsCreatorHandleMessage(message, client) {
 
     await syncLegacyThreads(client, progressMsg);
 
+    const removedDuplicateThreads =
+      await cleanupFormsCreatorDuplicateThreads(
+        client
+      );
+
     await initializeEvolutionHierarchy(
       client,
       (userId) =>
@@ -4059,7 +4548,7 @@ export async function formsCreatorHandleMessage(message, client) {
     await progressMsg.edit(
       "✅ **Sincronização finalizada.**\n" +
       "🧹 Registros, espelhos e hierarquia foram conferidos.\n" +
-      "📌 Se existiam mensagens duplicadas de status, o sistema tentou limpar automaticamente."
+      `🗑️ Tópicos duplicados removidos: **${removedDuplicateThreads}**`
     ).catch(() => {});
 
     return true;
@@ -4199,6 +4688,11 @@ export async function formsCreatorHandleInteraction(interaction, client) {
 
       await syncLegacyThreads(client, progressMsg);
 
+      const removedDuplicateThreads =
+        await cleanupFormsCreatorDuplicateThreads(
+          client
+        );
+
       await initializeEvolutionHierarchy(
         client,
         (userId) =>
@@ -4212,7 +4706,7 @@ export async function formsCreatorHandleInteraction(interaction, client) {
         content:
           "✅ **Sincronização finalizada.**\n" +
           "🧹 Registros, espelhos e hierarquia foram conferidos.\n" +
-          "📌 Agora confira os tópicos que estavam duplicados.",
+          `🗑️ Tópicos duplicados removidos: **${removedDuplicateThreads}**`,
       }).catch(() => {});
 
       return true;
@@ -4331,19 +4825,31 @@ if (interaction.isModalSubmit?.() && interaction.customId === "form_equipecreato
           size: 512,
         }) || "";
 
-      const topic = await canal.threads
-        .create({
-          name: nome,
-          autoArchiveDuration: 1440,
-          reason:
-            "Registro de membro da Equipe Creator",
-        })
-        .catch(() => null);
+      const topic =
+        await resolveFormsCreatorCanonicalTopic(
+          client,
+          {
+            guildId:
+              guild.id,
+
+            userId:
+              idDiscord,
+
+            channel:
+              canal,
+
+            topicName:
+              nome,
+
+            reason:
+              "Registro de membro da Equipe Creator",
+          }
+        );
 
       if (!topic) {
         await interaction.editReply({
           content:
-            "❌ Falha ao criar thread.",
+            "❌ Falha ao criar ou reutilizar thread.",
         });
 
         return true;

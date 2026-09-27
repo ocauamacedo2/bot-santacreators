@@ -17,7 +17,7 @@ import { onceIn } from '../utils/onceIn.js';
 import { dashEmit } from '../utils/dashHub.js';
 import {
   createFormsCreatorRecord,
-  findFormsCreatorThreadIdByUserId,
+  findOriginalFormsCreatorThreadIdByUserId,
   setFormsCreatorStatus
 } from './formscreator.js';
 
@@ -547,7 +547,12 @@ if (!podeAprovarSet) {
 
       // 2. FormsCreator
       try {
-        const existingThreadId = await findFormsCreatorThreadIdByUserId(userId);
+        const existingThreadId =
+          await findOriginalFormsCreatorThreadIdByUserId(
+            client,
+            userId
+          );
+
         if (existingThreadId) {
           await setFormsCreatorStatus(client, {
             threadId: existingThreadId,
@@ -564,7 +569,12 @@ if (!podeAprovarSet) {
             area: "A Definir",
           });
         }
-      } catch (e) { console.error("[PedirSet] Background FormsCreator error:", e); }
+      } catch (e) {
+        console.error(
+          "[PedirSet] Background FormsCreator error:",
+          e
+        );
+      }
 
       // 3. Dash e Logs
       dashEmit('pedirset:aprovado', {
