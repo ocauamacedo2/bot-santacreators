@@ -737,50 +737,692 @@ async function cleanupFormsCreatorDuplicateThreads(
   const state =
     readState();
 
-  const userIds =
-    [
-      ...new Set(
-        Object.values(
-          state.registrations ||
-          {}
-        )
-          .map(
-            (registration) =>
-              String(
-                registration?.userId ||
-                ""
-              ).trim()
+  const channel =
+    await client.channels
+      .fetch(
+        CREATOR_FORM_CHANNEL_ID
+      )
+      .catch(() => null);
+
+  if (
+    !channel?.threads
+  ) {
+    return 0;
+  }
+
+  // =====================================================
+  // BUSCA SOMENTE OS TÓPICOS DA CATEGORIA INICIAL
+  // =====================================================
+
+  const allThreadsMap =
+    new Map();
+
+  const activeThreads =
+    await channel.threads
+      .fetchActive()
+      .catch(() => null);
+
+  if (
+    activeThreads?.threads
+  ) {
+    for (
+      const thread
+      of activeThreads.threads.values()
+    ) {
+      allThreadsMap.set(
+        thread.id,
+        thread
+      );
+    }
+  }
+
+  const fetchArchivedThreads =
+    async (type) => {
+      let before =
+        undefined;
+
+      for (
+        let page = 0;
+        page < 10;
+        page++
+      ) {
+        const archived =
+          await channel.threads
+            .fetchArchived({
+              type,
+              limit: 100,
+              before,
+            })
+            .catch(() => null);
+
+        if (
+          !archived?.threads?.size
+        ) {
+          break;
+        }
+
+        for (
+          const thread
+          of archived.threads.values()
+        ) {
+          allThreadsMap.set(
+            thread.id,
+            thread
+          );
+        }
+
+        before =
+          archived.threads
+            .last()
+            ?.id;
+
+        if (
+          !before ||
+          archived.threads.size < 100
+        ) {
+          break;
+        }
+
+        await new Promise(
+          (resolve) =>
+            setTimeout(
+              resolve,
+              300
+            )
+        );
+      }
+    };
+
+  await fetchArchivedThreads(
+    "public"
+  );
+
+  await fetchArchivedThreads(
+    "private"
+  );
+
+  // =====================================================
+  // IDENTIFICA QUAL USUÁRIO PERTENCE A CADA THREAD
+  // =====================================================
+
+  const extractUserIdFromThread =
+    async (thread) => {
+      const stateUserId =
+        String(
+          state.registrations?.[
+            thread.id
+          ]?.userId ||
+          ""
+        ).trim();
+
+      if (stateUserId) {
+        return stateUserId;
+      }
+
+      const messages =
+        await thread.messages
+          .fetch({
+            limit: 100,
+          })
+          .catch(() => null);
+
+      if (!messages) {
+        return null;
+      }
+
+      for (
+        const message
+        of messages.values()
+      ) {
+        if (
+          message.author?.id !==
+          client.user?.id
+        ) {
+          continue;
+        }
+
+        const embed =
+          message.embeds?.[0];
+
+        if (!embed) {
+          continue;
+        }
+
+        // ===============================================
+        // FORMSCREATOR
+        // ===============================================
+
+        if (
+          isFormsCreatorMainRegisterMessage(
+            message,
+            client
           )
-          .filter(
-            Boolean
-          )
-      ),
-    ];
+        ) {
+          const formsUserId =
+            String(
+              embed.description ||
+              ""
+            )
+              .trim()
+              .match(
+                /^<@!?(\d{17,20})>$/
+              )?.[1];
+
+          if (formsUserId) {
+            return formsUserId;
+          }
+        }
+
+        // ===============================================
+        // TÓPICO DA EVOLUÇÃO / GI
+        // ===============================================
+
+        const raw =
+          [
+            embed.title || "",
+            embed.description || "",
+            ...(embed.fields || [])
+              .flatMap(
+                (field) => [
+                  field.name || "",
+                  field.value || "",
+                ]
+              ),
+          ].join("\n");
+
+        const isTeamEvolutionCard =
+          raw.includes(
+            "Equipe Creators"
+          ) &&
+          (
+            raw.includes(
+              "Fase"
+            ) ||
+            raw.includes(
+              "ID Discord"
+            )
+          );
+
+        if (
+          !isTeamEvolutionCard
+        ) {
+          continue;
+        }
+
+        const idDiscordMatch =
+          raw.match(
+            /ID Discord[^\d]*(\d{17,20})/i
+          );
+
+        if (
+          idDiscordMatch?.[1]
+        ) {
+          return idDiscordMatch[1];
+        }
+
+        const mentionMatch =
+          raw.match(
+            /<@!?(\d{17,20})>/
+          );
+
+        if (
+          mentionMatch?.[1]
+        ) {
+          return mentionMatch[1];
+        }
+      }
+
+      return null;
+    };
+
+  // =====================================================
+  // AGRUPA THREADS DA MESMA PESSOA
+  // =====================================================
+
+  const groups =
+    new Map();
+
+  for (
+    const thread
+    of allThreadsMap.values()
+  ) {
+    if (
+      thread.parentId !==
+      CREATOR_FORM_CHANNEL_ID
+    ) {
+      continue;
+    }
+
+    const userId =
+      await extractUserIdFromThread(
+        thread
+      );
+
+    if (!userId) {
+      continue;
+    }
+
+    if (
+      !groups.has(userId)
+    ) {
+      groups.set(
+        userId,
+        []
+      );
+    }
+
+    groups
+      .get(userId)
+      .push(
+        thread
+      );
+  }
 
   let deleted =
     0;
 
-  for (
-    const userId
-    of userIds
-  ) {
-    const removed =
-      await consolidateFormsCreatorDuplicateThreadForUser(
-        client,
-        userId
-      ).catch(
-        (error) => {
-          console.error(
-            `[FormsCreator] Falha ao consolidar duplicidade de ${userId}:`,
-            error
-          );
+  // =====================================================
+  // PROCESSA SOMENTE QUEM TEM MAIS DE UMA THREAD
+  // =====================================================
 
-          return false;
-        }
+  for (
+    const [
+      userId,
+      threads,
+    ]
+    of groups.entries()
+  ) {
+    if (
+      threads.length < 2
+    ) {
+      continue;
+    }
+
+    // ===================================================
+    // O TÓPICO QUE DEVE PERMANECER É O EQP.C
+    // ===================================================
+
+    const canonicalCandidates =
+      threads
+        .filter(
+          (thread) =>
+            /^EQP\.C\s*\|/i.test(
+              String(
+                thread.name ||
+                ""
+              )
+            ) &&
+            /Equipe Creators/i.test(
+              String(
+                thread.name ||
+                ""
+              )
+            )
+        )
+        .sort(
+          (a, b) =>
+            Number(
+              a.createdTimestamp ||
+              0
+            ) -
+            Number(
+              b.createdTimestamp ||
+              0
+            )
+        );
+
+    if (
+      canonicalCandidates.length ===
+      0
+    ) {
+      continue;
+    }
+
+    const canonicalThread =
+      canonicalCandidates[0];
+
+    if (
+      canonicalThread.archived
+    ) {
+      await canonicalThread
+        .setArchived(false)
+        .catch(() => {});
+    }
+
+    let canonicalMessages =
+      await canonicalThread.messages
+        .fetch({
+          limit: 100,
+        })
+        .catch(() => null);
+
+    let canonicalFormsMessage =
+      canonicalMessages?.find(
+        (message) =>
+          isFormsCreatorMainRegisterMessage(
+            message,
+            client
+          ) &&
+          String(
+            message.embeds?.[0]
+              ?.description ||
+            ""
+          )
+            .trim()
+            .match(
+              /^<@!?(\d{17,20})>$/
+            )?.[1] ===
+              userId
+      ) ||
+      null;
+
+    const duplicateThreads =
+      threads.filter(
+        (thread) =>
+          thread.id !==
+          canonicalThread.id
       );
 
-    if (removed) {
+    // ===================================================
+    // APAGA AS OUTRAS THREADS REAIS DO DISCORD
+    // ===================================================
+
+    for (
+      const duplicateThread
+      of duplicateThreads
+    ) {
+      const duplicateMessages =
+        await duplicateThread.messages
+          .fetch({
+            limit: 100,
+          })
+          .catch(() => null);
+
+      if (!duplicateMessages) {
+        continue;
+      }
+
+      // =================================================
+      // SEGURANÇA:
+      // se alguém humano escreveu ali, não apaga
+      // =================================================
+
+      const hasHumanMessages =
+        duplicateMessages.some(
+          (message) =>
+            message.author?.id !==
+            client.user?.id
+        );
+
+      if (hasHumanMessages) {
+        console.warn(
+          `[FormsCreator] Tópico duplicado ${duplicateThread.id} de ${userId} não foi apagado porque possui mensagem humana.`
+        );
+
+        continue;
+      }
+
+      // =================================================
+      // PROCURA O FORMS NO TÓPICO DUPLICADO
+      // =================================================
+
+      const duplicateFormsMessage =
+        duplicateMessages.find(
+          (message) =>
+            isFormsCreatorMainRegisterMessage(
+              message,
+              client
+            ) &&
+            String(
+              message.embeds?.[0]
+                ?.description ||
+              ""
+            )
+              .trim()
+              .match(
+                /^<@!?(\d{17,20})>$/
+              )?.[1] ===
+                userId
+        ) ||
+        null;
+
+      const duplicateRegistration =
+        state.registrations?.[
+          duplicateThread.id
+        ] ||
+        null;
+
+      // =================================================
+      // SE O EQP.C AINDA NÃO TEM O FORMS,
+      // MOVE O FORMS PARA ELE ANTES DE APAGAR
+      // =================================================
+
+      if (
+        !canonicalFormsMessage &&
+        duplicateFormsMessage?.embeds?.[0]
+      ) {
+        const statusText =
+          duplicateFormsMessage
+            .embeds[0]
+            .fields
+            ?.find(
+              (field) =>
+                String(
+                  field?.name ||
+                  ""
+                ) ===
+                "Status do Projeto"
+            )
+            ?.value ||
+          "";
+
+        const isActive =
+          duplicateRegistration?.active ??
+          (
+            statusText.includes(
+              "🟢"
+            ) ||
+            (
+              /\bativo\b/i.test(
+                statusText
+              ) &&
+              !/\binativo\b/i.test(
+                statusText
+              )
+            )
+          );
+
+        const rowEdit =
+          new ActionRowBuilder()
+            .addComponents(
+              new ButtonBuilder()
+                .setCustomId(
+                  `editar_id_${canonicalThread.id}`
+                )
+                .setLabel(
+                  "✏️ Editar ID/Passaporte"
+                )
+                .setStyle(
+                  ButtonStyle.Secondary
+                ),
+
+              new ButtonBuilder()
+                .setCustomId(
+                  `editar_area_${canonicalThread.id}`
+                )
+                .setLabel(
+                  "✏️ Editar Área de Interesse"
+                )
+                .setStyle(
+                  ButtonStyle.Secondary
+                )
+            );
+
+        const rowStatus =
+          new ActionRowBuilder()
+            .addComponents(
+              new ButtonBuilder()
+                .setCustomId(
+                  `fc_toggle_status:${canonicalThread.id}:${userId}:${isActive ? "inactive" : "active"}`
+                )
+                .setLabel(
+                  isActive
+                    ? "Desligar do Projeto"
+                    : "Ligar ao Projeto"
+                )
+                .setStyle(
+                  isActive
+                    ? ButtonStyle.Danger
+                    : ButtonStyle.Success
+                )
+            );
+
+        canonicalFormsMessage =
+          await canonicalThread
+            .send({
+              embeds: [
+                EmbedBuilder.from(
+                  duplicateFormsMessage
+                    .embeds[0]
+                ),
+              ],
+
+              components: [
+                rowEdit,
+                rowStatus,
+              ],
+
+              allowedMentions: {
+                parse: [],
+              },
+            })
+            .catch(() => null);
+
+        if (
+          !canonicalFormsMessage
+        ) {
+          console.warn(
+            `[FormsCreator] Não consegui mover o Forms de ${duplicateThread.id} para ${canonicalThread.id}. O duplicado não será apagado.`
+          );
+
+          continue;
+        }
+
+        const sourceEmbed =
+          duplicateFormsMessage.embeds[0];
+
+        state.registrations[
+          canonicalThread.id
+        ] = {
+          ...(
+            duplicateRegistration ||
+            {}
+          ),
+
+          userId,
+
+          nome:
+            duplicateRegistration?.nome ||
+            String(
+              sourceEmbed.title ||
+              canonicalThread.name ||
+              userId
+            )
+              .replace(
+                /^👤\s*/,
+                ""
+              )
+              .trim(),
+
+          idCidade:
+            duplicateRegistration?.idCidade ||
+            sourceEmbed.fields
+              ?.find(
+                (field) =>
+                  String(
+                    field?.name ||
+                    ""
+                  ).includes(
+                    "ID/Passaporte"
+                  )
+              )
+              ?.value ||
+            "?",
+
+          area:
+            duplicateRegistration?.area ||
+            sourceEmbed.fields
+              ?.find(
+                (field) =>
+                  String(
+                    field?.name ||
+                    ""
+                  ).includes(
+                    "Área de Interesse"
+                  )
+              )
+              ?.value ||
+            "?",
+
+          active:
+            isActive,
+
+          messageId:
+            canonicalFormsMessage.id,
+
+          activeMirrorThreadId:
+            null,
+
+          activeMirrorMessageId:
+            null,
+        };
+      }
+
+      // =================================================
+      // AQUI SIM APAGA A THREAD REAL DO DISCORD
+      // =================================================
+
+      const deletedThread =
+        await duplicateThread
+          .delete(
+            `Tópico inicial duplicado de ${userId}; mantido ${canonicalThread.id}`
+          )
+          .then(
+            () => true
+          )
+          .catch(
+            (error) => {
+              console.error(
+                `[FormsCreator] Falha ao apagar de fato o tópico duplicado ${duplicateThread.id}:`,
+                error
+              );
+
+              return false;
+            }
+          );
+
+      if (!deletedThread) {
+        continue;
+      }
+
+      // =================================================
+      // SÓ LIMPA O STATE DEPOIS QUE O DISCORD APAGOU
+      // =================================================
+
+      delete state.registrations[
+        duplicateThread.id
+      ];
+
+      writeState(
+        state
+      );
+
       deleted += 1;
+
+      console.log(
+        `[FormsCreator] TÓPICO DUPLICADO APAGADO DO DISCORD: ${duplicateThread.name} (${duplicateThread.id}). ` +
+        `Mantido: ${canonicalThread.name} (${canonicalThread.id}).`
+      );
     }
   }
 
@@ -2190,7 +2832,10 @@ async function syncLegacyThreads(client, progressMsg = null) {
 
       if (deletedDuplicates > 0) {
         updates += deletedDuplicates;
-        console.log(`[FormsCreator] ${deletedDuplicates} duplicado(s) removido(s) da thread ${thread.name} (${thread.id}).`);
+
+        console.log(
+          `[FormsCreator] ${deletedDuplicates} mensagem(ns) duplicada(s) removida(s) dentro da thread ${thread.name} (${thread.id}).`
+        );
       }
     } catch (e) {
       console.error(`[FormsCreator] Erro ao limpar duplicados da thread ${thread.name}:`, e);
