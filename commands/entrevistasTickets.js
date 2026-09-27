@@ -4193,6 +4193,9 @@ try {
             avatarOriginal;
 
           return {
+            messageId:
+              msg.id,
+
             autor:
               msg.member?.displayName ||
               msg.author?.username ||

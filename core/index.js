@@ -515,6 +515,7 @@ const transcriptSchema = new mongoose.Schema({
   assumidoPor: String,
   mensagens: [
     {
+      messageId: String,
       autor: String,
       idAutor: String,
       conteudo: String,

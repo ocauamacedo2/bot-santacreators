@@ -216,46 +216,233 @@ function extractArchiveLinks(html) {
   return links;
 }
 
+function getHtmlAttribute(attrs, name) {
+  const match = String(attrs || '').match(
+    new RegExp(`\\b${name}="([^"]*)"`, 'i')
+  );
+
+  return match?.[1] || '';
+}
+
+function extractRestorableMediaLinks(html) {
+  const links = [];
+  const seen = new Set();
+
+  const add = url => {
+    const value = String(url || '').trim();
+
+    if (
+      !/^https?:\/\//i.test(value) ||
+      seen.has(value)
+    ) {
+      return;
+    }
+
+    seen.add(value);
+    links.push(value);
+  };
+
+  const source = String(html || '');
+
+  /*
+   * Recupera somente mídias que realmente fazem parte
+   * da mensagem:
+   *
+   * - anexos;
+   * - vídeos anexados;
+   * - imagens/vídeos de embed;
+   * - stickers.
+   *
+   * NÃO transforma avatar, ícone de cargo ou emoji
+   * customizado em "Arquivo".
+   */
+  for (
+    const match of source.matchAll(
+      /<(img|video)\b([^>]*)>/gi
+    )
+  ) {
+    const attrs = match[2] || '';
+
+    const className =
+      getHtmlAttribute(
+        attrs,
+        'class'
+      )
+        .toLowerCase();
+
+    const src =
+      getHtmlAttribute(
+        attrs,
+        'src'
+      );
+
+    const isRealMessageMedia =
+      className.includes('attachment-img') ||
+      className.includes('attachment-video') ||
+      className.includes('embed-image') ||
+      className.includes('sticker-image');
+
+    if (
+      isRealMessageMedia
+    ) {
+      add(src);
+    }
+  }
+
+  /*
+   * Arquivos genéricos que não são imagem/vídeo.
+   */
+  for (
+    const match of source.matchAll(
+      /<a\b([^>]*)>([\s\S]*?)<\/a>/gi
+    )
+  ) {
+    const attrs =
+      match[1] || '';
+
+    const inner =
+      match[2] || '';
+
+    const href =
+      getHtmlAttribute(
+        attrs,
+        'href'
+      );
+
+    const innerText =
+      stripTranscriptHtml(
+        inner
+      );
+
+    /*
+     * Imagens e vídeos já entram pelo src do próprio elemento.
+     * Aqui adicionamos somente anexos genéricos, evitando
+     * colocar duas URLs para o mesmo arquivo.
+     */
+    if (
+      /📎\s*anexo\s*:/i.test(
+        innerText
+      )
+    ) {
+      add(href);
+    }
+  }
+
+  return links;
+}
+
+function removeMediaHtmlBeforeText(html) {
+  let value =
+    String(
+      html ||
+        ''
+    );
+
+  /*
+   * Remove blocos clicáveis de anexos do corpo textual.
+   * O arquivo será recolocado abaixo como link limpo,
+   * evitando duplicação visual.
+   */
+  value = value.replace(
+    /<a\b([^>]*)>([\s\S]*?)<\/a>/gi,
+    (full, attrs, inner) => {
+      const className =
+        getHtmlAttribute(
+          attrs,
+          'class'
+        )
+          .toLowerCase();
+
+      const innerText =
+        stripTranscriptHtml(
+          inner
+        );
+
+      if (
+        className.includes('attachment-link') ||
+        /📎\s*anexo\s*:|abrir vídeo arquivado/i.test(
+          innerText
+        )
+      ) {
+        return '';
+      }
+
+      return full;
+    }
+  );
+
+  value = value.replace(
+    /<(img|video)\b([^>]*)>(?:<\/video>)?/gi,
+    (full, tag, attrs) => {
+      const className =
+        getHtmlAttribute(
+          attrs,
+          'class'
+        )
+          .toLowerCase();
+
+      const isRealMessageMedia =
+        className.includes('attachment-img') ||
+        className.includes('attachment-video') ||
+        className.includes('embed-image') ||
+        className.includes('sticker-image');
+
+      if (
+        isRealMessageMedia
+      ) {
+        return '';
+      }
+
+      return full;
+    }
+  );
+
+  return value;
+}
+
 function restoredMessageText(item) {
-  const body =
-    stripTranscriptHtml(
+  const html =
+    String(
       item?.conteudo ||
         ''
     );
 
-  const links =
-    extractArchiveLinks(
-      item?.conteudo ||
-        ''
-    )
-      .filter(
-        url =>
-          !body.includes(
-            url
-          )
+  const mediaLinks =
+    extractRestorableMediaLinks(
+      html
+    );
+
+  const body =
+    stripTranscriptHtml(
+      removeMediaHtmlBeforeText(
+        html
       )
-      .slice(
-        0,
-        12
-      );
+    );
 
-  return [
-    body ||
-      '[Mensagem sem conteúdo]',
-
-    links.length
-      ? links
+  const mediaBlock =
+    mediaLinks.length
+      ? mediaLinks
           .map(
             (
               url,
               index
             ) =>
-              `📎 Arquivo/registro ${index + 1}: ${url}`
+              `📎 Arquivo ${index + 1}: ${url}`
           )
           .join(
             '\n'
           )
-      : '',
+      : '';
+
+  return [
+    body ||
+      (
+        mediaBlock
+          ? ''
+          : '[Mensagem sem conteúdo]'
+      ),
+
+    mediaBlock,
   ]
     .filter(
       Boolean
@@ -263,6 +450,149 @@ function restoredMessageText(item) {
     .join(
       '\n\n'
     );
+}
+
+function isLegacyTicketControlMessage(item) {
+  const plainText =
+    stripTranscriptHtml(
+      item?.conteudo ||
+        ''
+    )
+      .toLowerCase();
+
+  const markers = [
+    'assumir ticket',
+    'assumir resp',
+    'fechar ticket',
+    'adicionar usuário',
+    'remover usuário'
+  ];
+
+  const matches =
+    markers.filter(
+      marker =>
+        plainText.includes(
+          marker
+        )
+    ).length;
+
+  /*
+   * O painel antigo será substituído pelo painel novo
+   * e funcional no TOPO do canal restaurado.
+   */
+  return matches >= 3;
+}
+
+function normalizeMessagesForRestore(rawMessages) {
+  const source =
+    Array.isArray(
+      rawMessages
+    )
+      ? rawMessages
+      : [];
+
+  const seen =
+    new Set();
+
+  const messages =
+    [];
+
+  let duplicatesSkipped =
+    0;
+
+  let controlPanelsSkipped =
+    0;
+
+  for (
+    let index = 0;
+    index < source.length;
+    index++
+  ) {
+    const item =
+      source[index];
+
+    if (
+      isLegacyTicketControlMessage(
+        item
+      )
+    ) {
+      controlPanelsSkipped++;
+      continue;
+    }
+
+    const explicitMessageId =
+      String(
+        item?.messageId ||
+          ''
+      )
+        .trim();
+
+    const originalTime =
+      new Date(
+        item?.horario ||
+          0
+      )
+        .getTime();
+
+    const normalizedContent =
+      String(
+        item?.conteudo ||
+          ''
+      )
+        .replace(
+          /\s+/g,
+          ' '
+        )
+        .trim();
+
+    const key =
+      explicitMessageId
+        ? `id:${explicitMessageId}`
+        : [
+            'legacy',
+            String(
+              item?.idAutor ||
+                '0'
+            ),
+            Number.isFinite(
+              originalTime
+            )
+              ? originalTime
+              : 0,
+            normalizedContent,
+          ]
+            .join(
+              ':'
+            );
+
+    if (
+      seen.has(
+        key
+      )
+    ) {
+      duplicatesSkipped++;
+      continue;
+    }
+
+    seen.add(
+      key
+    );
+
+    messages.push(
+      item
+    );
+  }
+
+  return {
+    messages,
+
+    totalOriginal:
+      source.length,
+
+    duplicatesSkipped,
+
+    controlPanelsSkipped,
+  };
 }
 
 function buildTicketButtons() {
@@ -1116,6 +1446,13 @@ export function createTicketRestoreSystem({
           ]
         )
     );
+
+  /*
+   * Evita duas restaurações concorrentes do mesmo ticket.
+   * A trava existe somente em memória durante a operação.
+   */
+  const restoreInProgress =
+    new Set();
 
   function canRestore(
     interaction
@@ -2141,10 +2478,6 @@ export function createTicketRestoreSystem({
     transcript,
     interaction
   }) {
-    /*
-     * Webhook permite reproduzir
-     * nome + avatar de cada autor.
-     */
     let webhook =
       null;
 
@@ -2176,16 +2509,28 @@ export function createTicketRestoreSystem({
                 `Restauração do ticket ${transcript.canalId}`,
             });
       }
-    } catch {}
+    } catch (
+      error
+    ) {
+      console.warn(
+        '[TICKET RESTORE] Não foi possível criar webhook de restauração:',
+        error?.message ||
+          error
+      );
+    }
+
+    const normalized =
+      normalizeMessagesForRestore(
+        transcript.mensagens
+      );
 
     const messages =
-      Array.isArray(
-        transcript.mensagens
-      )
-        ? transcript.mensagens
-        : [];
+      normalized.messages;
 
     let sends =
+      0;
+
+    let failed =
       0;
 
     for (
@@ -2237,11 +2582,15 @@ export function createTicketRestoreSystem({
           ? item.avatar
           : undefined;
 
+      const restoredText =
+        restoredMessageText(
+          item
+        );
+
       const parts =
         splitText(
-          restoredMessageText(
-            item
-          )
+          restoredText,
+          1680
         );
 
       for (
@@ -2250,12 +2599,6 @@ export function createTicketRestoreSystem({
         parts.length;
         partIndex++
       ) {
-        /*
-         * Discord não deixa falsificar
-         * a data real de criação da mensagem,
-         * então mostramos a data original
-         * explicitamente.
-         */
         const meta =
           `-# 🕒 Original: <t:${Math.floor(originalAt / 1000)}:F>` +
           (
@@ -2272,34 +2615,65 @@ export function createTicketRestoreSystem({
               : ''
           );
 
+        const content =
+          `${meta}\n${parts[partIndex]}`
+            .slice(
+              0,
+              2000
+            );
+
+        let sent =
+          false;
+
+        /*
+         * Caminho principal:
+         * reproduz nome + avatar do autor.
+         */
         if (
           webhook
         ) {
-          await webhook
-            .send({
-              username:
-                authorName,
+          sent =
+            Boolean(
+              await webhook
+                .send({
+                  username:
+                    authorName,
 
-              avatarURL:
-                avatar,
+                  avatarURL:
+                    avatar,
 
-              content:
-                `${meta}\n${parts[partIndex]}`
-                  .slice(
-                    0,
-                    2000
-                  ),
+                  content,
 
-              allowedMentions: {
-                parse:
-                  []
-              },
-            });
-        } else {
-          /*
-           * Se o bot não tiver Manage Webhooks,
-           * ainda restaura o conteúdo usando embeds.
-           */
+                  allowedMentions: {
+                    parse:
+                      []
+                  },
+                })
+                .then(
+                  () =>
+                    true
+                )
+                .catch(
+                  error => {
+                    console.warn(
+                      `[TICKET RESTORE] Webhook falhou na mensagem ${index + 1}/${messages.length}:`,
+                      error?.message ||
+                        error
+                    );
+
+                    return false;
+                  }
+                )
+            );
+        }
+
+        /*
+         * Se uma mensagem específica falhar no webhook,
+         * NÃO interrompe a restauração inteira.
+         */
+        if (
+          !sent
+        ) {
           const embed =
             new EmbedBuilder()
               .setAuthor({
@@ -2326,30 +2700,53 @@ export function createTicketRestoreSystem({
                 originalAt
               );
 
-          await restoredChannel
-            .send({
-              embeds: [
-                embed
-              ],
+          sent =
+            Boolean(
+              await restoredChannel
+                .send({
+                  content:
+                    meta,
 
-              allowedMentions: {
-                parse:
-                  []
-              },
-            });
+                  embeds: [
+                    embed
+                  ],
+
+                  allowedMentions: {
+                    parse:
+                      []
+                  },
+                })
+                .then(
+                  () =>
+                    true
+                )
+                .catch(
+                  error => {
+                    console.error(
+                      `[TICKET RESTORE] Falha definitiva ao restaurar mensagem ${index + 1}/${messages.length}:`,
+                      error?.message ||
+                        error
+                    );
+
+                    return false;
+                  }
+                )
+            );
         }
 
-        sends++;
+        if (
+          sent
+        ) {
+          sends++;
+        } else {
+          failed++;
+        }
 
         await sleep(
           REPLAY_DELAY_MS
         );
       }
 
-      /*
-       * Atualização visual a cada
-       * 20 mensagens restauradas.
-       */
       if (
         (
           index +
@@ -2360,7 +2757,7 @@ export function createTicketRestoreSystem({
       ) {
         await interaction
           .editReply(
-            `⏳ Restaurando histórico... **${index + 1}/${messages.length}** mensagens.\n📍 ${restoredChannel}`
+            `⏳ Restaurando histórico... **${index + 1}/${messages.length}** mensagens únicas.\n📍 ${restoredChannel}`
           )
           .catch(
             () => {}
@@ -2369,8 +2766,9 @@ export function createTicketRestoreSystem({
     }
 
     /*
-     * O webhook temporário só serve
-     * durante a reconstrução.
+     * Exclui somente o webhook temporário.
+     *
+     * Isso NÃO exclui as mensagens já enviadas por ele.
      */
     if (
       webhook
@@ -2384,10 +2782,26 @@ export function createTicketRestoreSystem({
         );
     }
 
-    return sends;
+    return {
+      sends,
+
+      failed,
+
+      uniqueMessages:
+        messages.length,
+
+      totalOriginal:
+        normalized.totalOriginal,
+
+      duplicatesSkipped:
+        normalized.duplicatesSkipped,
+
+      controlPanelsSkipped:
+        normalized.controlPanelsSkipped,
+    };
   }
 
-  async function handleRestoreInteraction(
+    async function handleRestoreInteraction(
     interaction
   ) {
     if (
@@ -2401,12 +2815,6 @@ export function createTicketRestoreSystem({
       return false;
     }
 
-    /*
-     * Segurança:
-     * somente Macedo/Owner,
-     * conforme os IDs passados
-     * no entrevistasTickets.js.
-     */
     if (
       !canRestore(
         interaction
@@ -2438,23 +2846,18 @@ export function createTicketRestoreSystem({
           ''
         );
 
-    await interaction
-      .deferReply({
-        ephemeral:
-          true
-      })
-      .catch(
-        () => {}
-      );
-
     if (
       !ticketId ||
       !interaction.guild
     ) {
       await interaction
-        .editReply(
-          '⚠️ Não consegui identificar o ticket/servidor.'
-        )
+        .reply({
+          content:
+            '⚠️ Não consegui identificar o ticket/servidor.',
+
+          ephemeral:
+            true,
+        })
         .catch(
           () => {}
         );
@@ -2463,33 +2866,21 @@ export function createTicketRestoreSystem({
     }
 
     /*
-     * Impede restauração duplicada.
+     * Trava instantânea contra clique duplo/concorrrência.
      */
-    const alreadyRestored =
-      interaction
-        .guild
-        .channels
-        .cache
-        .find(
-          channel =>
-            channel.type ===
-              ChannelType.GuildText &&
-            String(
-              channel.topic ||
-                ''
-            )
-              .includes(
-                `restaurado_de:${ticketId}`
-              )
-        );
-
     if (
-      alreadyRestored
+      restoreInProgress.has(
+        ticketId
+      )
     ) {
       await interaction
-        .editReply(
-          `✅ Esse ticket já está restaurado em ${alreadyRestored}.`
-        )
+        .reply({
+          content:
+            '⏳ Este ticket já está sendo restaurado agora. Aguarde a restauração atual terminar.',
+
+          ephemeral:
+            true,
+        })
         .catch(
           () => {}
         );
@@ -2497,588 +2888,737 @@ export function createTicketRestoreSystem({
       return true;
     }
 
-    await interaction
-      .editReply(
-        '♻️ Buscando transcript e configuração original...'
-      )
-      .catch(
-        () => {}
-      );
+    restoreInProgress.add(
+      ticketId
+    );
 
-    const transcript =
-      await getBestTranscript(
-        Transcript,
-        ticketId
-      )
-        .catch(
-          () =>
-            null
-        );
+    let restoredChannel =
+      null;
 
-    if (
-      !transcript
-    ) {
+    try {
+      await interaction
+        .deferReply({
+          ephemeral:
+            true
+        });
+
       await interaction
         .editReply(
-          `❌ Não achei transcript salvo para \`${ticketId}\`.`
-        )
-        .catch(
-          () => {}
+          '♻️ Validando transcript e verificando se já existe uma restauração ativa...'
         );
 
-      return true;
-    }
-
-    const hints =
-      getHintsFromLog(
-        interaction.message,
-        ticketId
-      );
-
-    const tipo =
-      String(
-        transcript
-          ?.restoreMeta
-          ?.tipo ||
-        hints.tipo ||
-        'suporte'
-      )
-        .toLowerCase();
-
-    const openerId =
-      String(
-        transcript
-          ?.restoreMeta
-          ?.openerId ||
-        hints.openerId ||
-        ''
-      ) ||
-      null;
-
-    const assumedById =
-      String(
-        transcript
-          ?.restoreMeta
-          ?.assumedById ||
-        hints.assumedById ||
-        ''
-      ) ||
-      null;
-
-    const category =
-      await resolveCategory(
-        interaction.guild,
-        transcript,
-        {
-          ...hints,
-          tipo,
+      const transcript =
+        await getBestTranscript(
+          Transcript,
           ticketId
-        }
-      );
-
-    if (
-      !category
-    ) {
-      await interaction
-        .editReply(
-          `❌ Não achei a categoria original nem o fallback do tipo \`${tipo}\`.`
         )
-        .catch(
-          () => {}
+          .catch(
+            () =>
+              null
+          );
+
+      if (
+        !transcript
+      ) {
+        await interaction
+          .editReply(
+            `❌ Não achei transcript salvo para \`${ticketId}\`.`
+          );
+
+        return true;
+      }
+
+      /*
+       * =====================================================
+       * 🔒 SOMENTE UMA RESTAURAÇÃO ATIVA POR TICKET
+       * =====================================================
+       *
+       * 1. Confere o canal salvo no Mongo.
+       * 2. Confere o tópico dos canais atualmente em cache.
+       *
+       * Se o canal anterior já tiver sido apagado/fechado,
+       * o fetch retorna null e uma nova restauração é liberada.
+       */
+      const persistedRestoredChannelId =
+        String(
+          transcript
+            ?.restoreMeta
+            ?.lastRestoredChannelId ||
+          ''
         );
 
-      return true;
-    }
+      let alreadyRestored =
+        null;
 
-    const openerMember =
-      openerId
-        ? interaction
+      if (
+        persistedRestoredChannelId
+      ) {
+        alreadyRestored =
+          interaction
             .guild
-            .members
+            .channels
             .cache
             .get(
-              openerId
+              persistedRestoredChannelId
             ) ||
           await interaction
             .guild
-            .members
+            .channels
             .fetch(
-              openerId
+              persistedRestoredChannelId
             )
             .catch(
               () =>
                 null
-            )
-        : null;
+            );
+      }
 
-    const savedOverwrites =
-      transcript
-        ?.restoreMeta
-        ?.permissionOverwrites ||
-      [];
-
-    /*
-     * Se for um ticket novo, recupera
-     * exatamente as permissões antigas.
-     *
-     * Se for um transcript antigo,
-     * usa as permissões da categoria
-     * + acesso de quem abriu.
-     */
-    const permissionOverwrites =
-      savedOverwrites.length
-        ? await sanitizeOverwrites(
-            interaction.guild,
-            savedOverwrites,
-            openerMember
-              ? openerId
-              : null,
-            category
-          )
-        : fallbackPermissions(
-            category,
-            openerMember
-              ? openerId
-              : null
-          );
-
-    const openerUser =
-      openerId
-        ? await client
-            .users
-            .fetch(
-              openerId
-            )
-            .catch(
-              () =>
-                null
-            )
-        : null;
-
-    const channelName =
-      String(
-        transcript
-          ?.restoreMeta
-          ?.originalName ||
-        `🎫┋${tipo}-${openerUser?.username || ticketId.slice(-6)}`
-      )
-        .slice(
-          0,
-          100
-        );
-
-    const originalTopic =
-      String(
-        transcript
-          ?.restoreMeta
-          ?.originalTopic ||
-        ''
-      );
-
-    const topic =
-      [
-        originalTopic,
-
-        originalTopic.includes(
-          'ticket_tipo:'
-        )
-          ? null
-          : `ticket_tipo:${tipo}`,
-
-        openerId &&
-        !originalTopic.includes(
-          'aberto_por:'
-        )
-          ? `aberto_por:${openerId}`
-          : null,
-
-        `restaurado_de:${ticketId}`,
-
-        `restaurado_por:${interaction.user.id}`,
-      ]
-        .filter(
-          Boolean
-        )
-        .join(
-          ';'
-        )
-        .slice(
-          0,
-          1024
-        );
-
-    await interaction
-      .editReply(
-        '📁 Criando canal no local correto...'
-      )
-      .catch(
-        () => {}
-      );
-
-    /*
-     * Cria o NOVO canal.
-     *
-     * Discord não permite ressuscitar
-     * literalmente um channelId apagado.
-     */
-    const restoredChannel =
-      await interaction
-        .guild
-        .channels
-        .create({
-          name:
-            channelName,
-
-          type:
-            ChannelType.GuildText,
-
-          parent:
-            category.id,
-
-          topic,
-
-          nsfw:
-            Boolean(
-              transcript
-                ?.restoreMeta
-                ?.originalNsfw
-            ),
-
-          rateLimitPerUser:
-            Number(
-              transcript
-                ?.restoreMeta
-                ?.originalRateLimitPerUser ||
-              0
-            ),
-
-          permissionOverwrites,
-
-          reason:
-            `Ticket ${ticketId} restaurado por ${interaction.user.tag}`,
-        });
-
-    /*
-     * Reaplica a posição aproximada
-     * que o ticket possuía.
-     */
-    const oldPosition =
-      Number(
-        transcript
-          ?.restoreMeta
-          ?.originalPosition
-      );
-
-    if (
-      Number.isFinite(
-        oldPosition
-      )
-    ) {
-      await restoredChannel
-        .setPosition(
-          oldPosition
-        )
-        .catch(
-          () => {}
-        );
-    }
-
-    /*
-     * Cabeçalho inicial da restauração.
-     */
-    const restoreHeader =
-      new EmbedBuilder()
-        .setColor(
-          '#ff009a'
-        )
-        .setTitle(
-          '♻️ Ticket restaurado'
-        )
-        .setDescription(
-          `Restauração do ticket original \`${ticketId}\`.\n` +
-          `O transcript original continua preservado no canal de logs.`
-        )
-        .addFields(
-          {
-            name:
-              '📄 Tipo',
-
-            value:
-              `\`${tipo.toUpperCase()}\``,
-
-            inline:
-              true
-          },
-
-          {
-            name:
-              '📨 Aberto por',
-
-            value:
-              openerId
-                ? `<@${openerId}>`
-                : '`Não identificado`',
-
-            inline:
-              true
-          },
-
-          {
-            name:
-              '♻️ Restaurado por',
-
-            value:
-              `<@${interaction.user.id}>`,
-
-            inline:
-              true
-          },
-
-          {
-            name:
-              '📂 Transcript original',
-
-            value:
-              `[Abrir transcript](${transcriptBaseUrl}${ticketId})`,
-
-            inline:
-              false
-          }
-        )
-        .setFooter({
-          text:
-            'SantaCreators • Restauração de Tickets'
-        })
-        .setTimestamp();
-
-    await restoredChannel
-      .send({
-        embeds: [
-          restoreHeader
-        ],
-
-        allowedMentions: {
-          parse:
-            []
-        },
-      });
-
-    /*
-     * Reconstrói todas as mensagens.
-     */
-    const restoredMessages =
-      await replayTranscript({
-        restoredChannel,
-        transcript,
-        interaction,
-      });
-
-    /*
-     * Depois do histórico, cria um painel
-     * NOVO e FUNCIONAL.
-     *
-     * Estes são exatamente os mesmos
-     * customIds usados pelo seu
-     * entrevistasTickets.js.
-     */
-    const activePanel =
-      new EmbedBuilder()
-        .setTitle(
-          tipo
-            .charAt(
-              0
-            )
-            .toUpperCase() +
-          tipo.slice(
-            1
-          )
-        )
-        .setColor(
-          '#ff009a'
-        )
-        .setThumbnail(
+      if (
+        !alreadyRestored
+      ) {
+        alreadyRestored =
           interaction
             .guild
-            .iconURL({
-              dynamic:
-                true
-            })
+            .channels
+            .cache
+            .find(
+              channel =>
+                channel.type ===
+                  ChannelType.GuildText &&
+                String(
+                  channel.topic ||
+                    ''
+                )
+                  .includes(
+                    `restaurado_de:${ticketId}`
+                  )
+            ) ||
+          null;
+      }
+
+      if (
+        alreadyRestored
+      ) {
+        await interaction
+          .editReply(
+            `🔒 Este ticket já possui uma restauração ativa em ${alreadyRestored}.\n` +
+            `Para restaurar novamente, primeiro feche ou apague esse canal restaurado.`
+          );
+
+        return true;
+      }
+
+      const hints =
+        getHintsFromLog(
+          interaction.message,
+          ticketId
+        );
+
+      const tipo =
+        String(
+          transcript
+            ?.restoreMeta
+            ?.tipo ||
+          hints.tipo ||
+          'suporte'
         )
-        .addFields(
+          .toLowerCase();
+
+      const openerId =
+        String(
+          transcript
+            ?.restoreMeta
+            ?.openerId ||
+          hints.openerId ||
+          ''
+        ) ||
+        null;
+
+      const assumedById =
+        String(
+          transcript
+            ?.restoreMeta
+            ?.assumedById ||
+          hints.assumedById ||
+          ''
+        ) ||
+        null;
+
+      const category =
+        await resolveCategory(
+          interaction.guild,
+          transcript,
           {
+            ...hints,
+            tipo,
+            ticketId
+          }
+        );
+
+      if (
+        !category
+      ) {
+        await interaction
+          .editReply(
+            `❌ Não achei a categoria original nem o fallback do tipo \`${tipo}\`.`
+          );
+
+        return true;
+      }
+
+      const openerMember =
+        openerId
+          ? interaction
+              .guild
+              .members
+              .cache
+              .get(
+                openerId
+              ) ||
+            await interaction
+              .guild
+              .members
+              .fetch(
+                openerId
+              )
+              .catch(
+                () =>
+                  null
+              )
+          : null;
+
+      const savedOverwrites =
+        transcript
+          ?.restoreMeta
+          ?.permissionOverwrites ||
+        [];
+
+      const permissionOverwrites =
+        savedOverwrites.length
+          ? await sanitizeOverwrites(
+              interaction.guild,
+              savedOverwrites,
+              openerMember
+                ? openerId
+                : null,
+              category
+            )
+          : fallbackPermissions(
+              category,
+              openerMember
+                ? openerId
+                : null
+            );
+
+      const openerUser =
+        openerId
+          ? await client
+              .users
+              .fetch(
+                openerId
+              )
+              .catch(
+                () =>
+                  null
+              )
+          : null;
+
+      const channelName =
+        String(
+          transcript
+            ?.restoreMeta
+            ?.originalName ||
+          `🎫┋${tipo}-${openerUser?.username || ticketId.slice(-6)}`
+        )
+          .slice(
+            0,
+            100
+          );
+
+      const originalTopic =
+        String(
+          transcript
+            ?.restoreMeta
+            ?.originalTopic ||
+          ''
+        );
+
+      const topic =
+        [
+          originalTopic,
+
+          originalTopic.includes(
+            'ticket_tipo:'
+          )
+            ? null
+            : `ticket_tipo:${tipo}`,
+
+          openerId &&
+          !originalTopic.includes(
+            'aberto_por:'
+          )
+            ? `aberto_por:${openerId}`
+            : null,
+
+          `restaurado_de:${ticketId}`,
+
+          `restaurado_por:${interaction.user.id}`,
+        ]
+          .filter(
+            Boolean
+          )
+          .join(
+            ';'
+          )
+          .slice(
+            0,
+            1024
+          );
+
+      await interaction
+        .editReply(
+          '📁 Criando o canal restaurado no local correto...'
+        );
+
+      restoredChannel =
+        await interaction
+          .guild
+          .channels
+          .create({
             name:
-              'Aberto por:',
+              channelName,
 
-            value:
-              openerId
-                ? `<@${openerId}> • ticket original \`${ticketId}\``
-                : '`Não identificado`',
+            type:
+              ChannelType.GuildText,
 
-            inline:
-              true,
+            parent:
+              category.id,
+
+            topic,
+
+            nsfw:
+              Boolean(
+                transcript
+                  ?.restoreMeta
+                  ?.originalNsfw
+              ),
+
+            rateLimitPerUser:
+              Number(
+                transcript
+                  ?.restoreMeta
+                  ?.originalRateLimitPerUser ||
+                0
+              ),
+
+            permissionOverwrites,
+
+            reason:
+              `Ticket ${ticketId} restaurado por ${interaction.user.tag}`,
+          });
+
+      /*
+       * Registra o canal ativo IMEDIATAMENTE.
+       * Isso reduz ainda mais a chance de duplicação.
+       */
+      await Transcript
+        .collection
+        .updateMany(
+          {
+            canalId:
+              String(
+                ticketId
+              )
           },
-
           {
-            name:
-              'Assumido por:',
+            $set: {
+              'restoreMeta.lastRestoredChannelId':
+                restoredChannel.id,
 
-            value:
-              assumedById
-                ? `<@${assumedById}>`
-                : '`Ninguém`',
+              'restoreMeta.lastRestoredAt':
+                Date.now(),
 
-            inline:
-              true,
-          },
+              'restoreMeta.lastRestoredBy':
+                interaction.user.id,
 
-          {
-            name:
-              '♻️ Restauração:',
-
-            value:
-              `Histórico preservado • ${restoredMessages} envio(s) reconstruído(s)`,
-
-            inline:
-              false,
+              'restoreMeta.restoreState':
+                'active',
+            }
           }
         )
-        .setFooter({
-          text:
-            'SantaCreators - Tickets'
+        .catch(
+          error => {
+            console.error(
+              '[TICKET RESTORE] Não consegui registrar o canal ativo no Mongo:',
+              error?.message ||
+                error
+            );
+          }
+        );
+
+      const oldPosition =
+        Number(
+          transcript
+            ?.restoreMeta
+            ?.originalPosition
+        );
+
+      if (
+        Number.isFinite(
+          oldPosition
+        )
+      ) {
+        await restoredChannel
+          .setPosition(
+            oldPosition
+          )
+          .catch(
+            () => {}
+          );
+      }
+
+      /*
+       * =====================================================
+       * 🎛️ PAINEL ATIVO É A PRIMEIRA MENSAGEM DO CANAL
+       * =====================================================
+       *
+       * Antes o painel era enviado somente DEPOIS de todo
+       * o histórico. Agora ele nasce primeiro e depois apenas
+       * é EDITADO com o resultado final da restauração.
+       */
+      const buildActivePanel =
+        restorationText =>
+          new EmbedBuilder()
+            .setTitle(
+              `♻️ ${
+                tipo
+                  .charAt(
+                    0
+                  )
+                  .toUpperCase() +
+                tipo.slice(
+                  1
+                )
+              } restaurado`
+            )
+            .setColor(
+              '#ff009a'
+            )
+            .setDescription(
+              `Ticket original: \`${ticketId}\`\n` +
+              `O histórico original será reconstruído logo abaixo deste painel.`
+            )
+            .setThumbnail(
+              interaction
+                .guild
+                .iconURL({
+                  dynamic:
+                    true
+                })
+            )
+            .addFields(
+              {
+                name:
+                  '👤 Aberto por',
+
+                value:
+                  openerId
+                    ? `<@${openerId}>`
+                    : '`Não identificado`',
+
+                inline:
+                  true,
+              },
+
+              {
+                name:
+                  '🎨 Assumido por',
+
+                value:
+                  assumedById
+                    ? `<@${assumedById}>`
+                    : '`Ninguém`',
+
+                inline:
+                  true,
+              },
+
+              {
+                name:
+                  '📂 Categoria restaurada',
+
+                value:
+                  `<#${category.id}>`,
+
+                inline:
+                  true,
+              },
+
+              {
+                name:
+                  '♻️ Restauração',
+
+                value:
+                  restorationText,
+
+                inline:
+                  false,
+              },
+
+              {
+                name:
+                  '📜 Transcript original',
+
+                value:
+                  `[Abrir transcript preservado](${transcriptBaseUrl}${ticketId})`,
+
+                inline:
+                  false,
+              }
+            )
+            .setFooter({
+              text:
+                'SantaCreators • Ticket restaurado'
+            })
+            .setTimestamp();
+
+      const controlMessage =
+        await restoredChannel
+          .send({
+            content:
+              openerId
+                ? `<@${openerId}>`
+                : undefined,
+
+            embeds: [
+              buildActivePanel(
+                '⏳ Reconstruindo o histórico original...'
+              )
+            ],
+
+            components: [
+              buildTicketButtons()
+            ],
+
+            allowedMentions: {
+              parse:
+                []
+            },
+          });
+
+      /*
+       * Ticket de líder mantém o controle adicional,
+       * também no topo, antes do histórico.
+       */
+      if (
+        tipo ===
+        'lider'
+      ) {
+        await restoredChannel
+          .send({
+            content:
+              '👑 Controles adicionais do ticket de Líder:',
+
+            components: [
+              new ActionRowBuilder()
+                .addComponents(
+                  new ButtonBuilder()
+                    .setCustomId(
+                      'registrar_lider_org'
+                    )
+                    .setLabel(
+                      '✍️ Registrar Líder'
+                    )
+                    .setStyle(
+                      ButtonStyle.Primary
+                    )
+                )
+            ],
+          });
+      }
+
+      await interaction
+        .editReply(
+          `⏳ Canal criado em ${restoredChannel}. Reconstruindo o histórico sem duplicar mensagens...`
+        );
+
+      const restoreStats =
+        await replayTranscript({
+          restoredChannel,
+          transcript,
+          interaction,
         });
 
-    /*
-     * O painel restaurado volta com:
-     *
-     * Assumir Ticket
-     * Assumir Resp
-     * Fechar Ticket
-     * Adicionar Usuário
-     * Remover Usuário
-     */
-    await restoredChannel
-      .send({
-        content:
-          openerId
-            ? `<@${openerId}>`
-            : undefined,
+      const finalStatus =
+        [
+          `✅ **Histórico restaurado com sucesso.**`,
+          `💬 Mensagens únicas reconstruídas: **${restoreStats.uniqueMessages}**`,
+          `📨 Envios realizados: **${restoreStats.sends}**`,
 
-        embeds: [
-          activePanel
-        ],
+          restoreStats.duplicatesSkipped > 0
+            ? `🧹 Duplicadas ignoradas: **${restoreStats.duplicatesSkipped}**`
+            : `🧹 Duplicadas ignoradas: **0**`,
 
-        components: [
-          buildTicketButtons()
-        ],
+          restoreStats.controlPanelsSkipped > 0
+            ? `🎛️ Painéis antigos substituídos pelo painel ativo: **${restoreStats.controlPanelsSkipped}**`
+            : `🎛️ Painéis antigos substituídos: **0**`,
 
-        allowedMentions: {
-          parse:
-            []
-        },
-      });
+          restoreStats.failed > 0
+            ? `⚠️ Falhas de envio: **${restoreStats.failed}**`
+            : `✅ Falhas de envio: **0**`,
+        ]
+          .join(
+            '\n'
+          );
 
-    /*
-     * Ticket de líder possuía também
-     * o botão Registrar Líder.
-     */
-    if (
-      tipo ===
-      'lider'
-    ) {
-      await restoredChannel
-        .send({
-          content:
-            '👑 Controles adicionais do ticket de Líder:',
+      /*
+       * Atualiza O MESMO painel que já está no topo.
+       * Não cria outro painel no final.
+       */
+      await controlMessage
+        .edit({
+          embeds: [
+            buildActivePanel(
+              finalStatus
+            )
+          ],
 
           components: [
-            new ActionRowBuilder()
-              .addComponents(
-                new ButtonBuilder()
-                  .setCustomId(
-                    'registrar_lider_org'
-                  )
-                  .setLabel(
-                    '✍️ Registrar Líder'
-                  )
-                  .setStyle(
-                    ButtonStyle.Primary
-                  )
-              )
+            buildTicketButtons()
           ],
-        });
-    }
-
-    /*
-     * Marca no Mongo que o transcript
-     * já foi restaurado e para onde.
-     *
-     * O transcript NÃO é apagado.
-     */
-    await Transcript
-      .collection
-      .updateMany(
-        {
-          canalId:
-            String(
-              ticketId
-            )
-        },
-        {
-          $set: {
-            'restoreMeta.lastRestoredChannelId':
-              restoredChannel.id,
-
-            'restoreMeta.lastRestoredAt':
-              Date.now(),
-
-            'restoreMeta.lastRestoredBy':
-              interaction.user.id,
-          }
-        }
-      )
-      .catch(
-        () => {}
-      );
-
-    /*
-     * Depois da restauração,
-     * coloca também o botão para abrir
-     * diretamente o canal novo.
-     */
-    const restoredChannelUrl =
-      `https://discord.com/channels/${interaction.guild.id}/${restoredChannel.id}`;
-
-    const updatedRows =
-      addRestoredChannelButtonToRows(
-        interaction.message,
-        restoredChannelUrl
-      );
-
-    if (
-      updatedRows.length
-    ) {
-      await interaction
-        .message
-        .edit({
-          components:
-            updatedRows
         })
+        .catch(
+          error => {
+            console.error(
+              '[TICKET RESTORE] Falha ao atualizar painel superior:',
+              error?.message ||
+                error
+            );
+          }
+        );
+
+      await Transcript
+        .collection
+        .updateMany(
+          {
+            canalId:
+              String(
+                ticketId
+              )
+          },
+          {
+            $set: {
+              'restoreMeta.lastRestoredChannelId':
+                restoredChannel.id,
+
+              'restoreMeta.lastRestoredAt':
+                Date.now(),
+
+              'restoreMeta.lastRestoredBy':
+                interaction.user.id,
+
+              'restoreMeta.restoreState':
+                'active',
+
+              'restoreMeta.lastRestoreStats':
+                {
+                  uniqueMessages:
+                    restoreStats.uniqueMessages,
+
+                  sends:
+                    restoreStats.sends,
+
+                  duplicatesSkipped:
+                    restoreStats.duplicatesSkipped,
+
+                  controlPanelsSkipped:
+                    restoreStats.controlPanelsSkipped,
+
+                  failed:
+                    restoreStats.failed,
+                }
+            }
+          }
+        )
         .catch(
           () => {}
         );
-    }
 
-    await interaction
-      .editReply(
-        `✅ Ticket \`${ticketId}\` restaurado com sucesso em ${restoredChannel}.\n` +
-        `💬 Histórico reconstruído: **${restoredMessages}** envio(s).\n` +
-        `📄 O transcript original foi mantido.`
-      )
-      .catch(
-        () => {}
+      const restoredChannelUrl =
+        `https://discord.com/channels/${interaction.guild.id}/${restoredChannel.id}`;
+
+      const updatedRows =
+        addRestoredChannelButtonToRows(
+          interaction.message,
+          restoredChannelUrl
+        );
+
+      if (
+        updatedRows.length
+      ) {
+        await interaction
+          .message
+          .edit({
+            components:
+              updatedRows
+          })
+          .catch(
+            () => {}
+          );
+      }
+
+      console.log(
+        `[TICKET RESTORE] ✅ ${ticketId} -> ${restoredChannel.id} | ` +
+        `únicas=${restoreStats.uniqueMessages} | ` +
+        `envios=${restoreStats.sends} | ` +
+        `duplicadas=${restoreStats.duplicatesSkipped} | ` +
+        `painéis=${restoreStats.controlPanelsSkipped} | ` +
+        `falhas=${restoreStats.failed}`
       );
 
-    return true;
+      await interaction
+        .editReply(
+          `✅ Ticket \`${ticketId}\` restaurado com sucesso em ${restoredChannel}.\n` +
+          `💬 Mensagens únicas: **${restoreStats.uniqueMessages}**.\n` +
+          `🧹 Duplicadas ignoradas: **${restoreStats.duplicatesSkipped}**.\n` +
+          `🎛️ Painéis antigos substituídos: **${restoreStats.controlPanelsSkipped}**.\n` +
+          `⚠️ Falhas de envio: **${restoreStats.failed}**.\n` +
+          `📄 O transcript original foi mantido.`
+        );
+
+      return true;
+    } catch (
+      error
+    ) {
+      console.error(
+        `[TICKET RESTORE] Erro ao restaurar ticket ${ticketId}:`,
+        error
+      );
+
+      if (
+        interaction.deferred ||
+        interaction.replied
+      ) {
+        await interaction
+          .editReply(
+            restoredChannel
+              ? `⚠️ A restauração encontrou um erro depois de criar ${restoredChannel}.\n` +
+                `O canal foi mantido para não apagar nada. Verifique o console antes de tentar novamente.\n` +
+                `Erro: \`${String(error?.message || error).slice(0, 1200)}\``
+              : `❌ Não consegui restaurar o ticket.\n` +
+                `Erro: \`${String(error?.message || error).slice(0, 1200)}\``
+          )
+          .catch(
+            () => {}
+          );
+      }
+
+      return true;
+    } finally {
+      restoreInProgress.delete(
+        ticketId
+      );
+    }
   }
 
   return {
