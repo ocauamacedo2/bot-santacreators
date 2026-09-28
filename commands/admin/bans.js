@@ -4,10 +4,25 @@ import { cacheBanSnapshotForUnban } from '../../events/logs/ban.js';
 const CENTRAL_LOG_BAN_ID = '1362540782829048170';
 const CENTRAL_LOG_UNBAN_ID = '1553925418304671785';
 
+// ==========================================================
+// PERMISSÕES DO !bans
+// ==========================================================
+
 const BANS_ALLOWED_ROLE_IDS = new Set([
   '1388976314253312100', // Coord.
   '1352407252216184833', // Resp. Líderes
+  '1262262852949905409', // Resp. Influ
+  '1352408327983861844', // Resp. Creators
+  '1262262852949905408', // Owner
 ]);
+
+const BANS_ALLOWED_USER_IDS = new Set([
+  '660311795327828008', // Macedo
+]);
+
+// ==========================================================
+// PERMISSÕES DO !unbangeral
+// ==========================================================
 
 const UNBAN_ALL_ALLOWED_ROLE_IDS = new Set([
   '1262262852949905409', // Resp. Influ
@@ -750,11 +765,17 @@ export async function bansHandleMessage(
   if (
     command === 'bans'
   ) {
-    if (
-      !memberHasAnyRole(
+    const allowedBans =
+      BANS_ALLOWED_USER_IDS.has(
+        message.author.id
+      ) ||
+      memberHasAnyRole(
         message.member,
         BANS_ALLOWED_ROLE_IDS
-      )
+      );
+
+    if (
+      !allowedBans
     ) {
       await message.reply({
         content:
