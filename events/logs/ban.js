@@ -525,6 +525,152 @@ function parseBanReason(rawReason) {
   };
 }
 
+/**
+ * Lê o motivo interno de um desbanimento disparado por comando.
+ *
+ * Formato:
+ * [SOLICITANTE:ID] [COMANDO:unbangeral] motivo
+ */
+function parseUnbanCommandReason(rawReason) {
+  const defaultReason =
+    'Nenhum motivo de desbanimento foi informado';
+
+  const text =
+    typeof rawReason === 'string'
+      ? rawReason.trim()
+      : '';
+
+  if (!text) {
+    return {
+      requesterId: null,
+      command: null,
+      reason: defaultReason
+    };
+  }
+
+  const requesterId =
+    text.match(
+      /\[SOLICITANTE:(\d{17,20})\]/
+    )?.[1] || null;
+
+  const command =
+    text.match(
+      /\[COMANDO:([a-z0-9_-]+)\]/i
+    )?.[1]?.toLowerCase() || null;
+
+  const reason =
+    text
+      .replace(
+        /\[SOLICITANTE:\d{17,20}\]\s*/gi,
+        ''
+      )
+      .replace(
+        /\[COMANDO:[a-z0-9_-]+\]\s*/gi,
+        ''
+      )
+      .trim() ||
+    defaultReason;
+
+  return {
+    requesterId,
+    command,
+    reason
+  };
+}
+
+/**
+ * Pré-carrega no cache os dados de um ban antes de um
+ * desbanimento disparado por comando.
+ *
+ * Isso evita que o guildBanRemove precise fazer várias
+ * buscas extras no Audit Log para recuperar o ban anterior.
+ */
+export function cacheBanSnapshotForUnban({
+  guild,
+  guildBan,
+  auditEntry = null
+}) {
+  const user =
+    guildBan?.user;
+
+  if (!guild || !user) {
+    return false;
+  }
+
+  cleanupBanHistoryCache();
+
+  const rawReason =
+    auditEntry?.reason ||
+    guildBan.reason ||
+    'Sem motivo especificado';
+
+  const parsedReason =
+    parseBanReason(
+      rawReason
+    );
+
+  const executor =
+    auditEntry?.executor ||
+    null;
+
+  banHistoryCache.set(
+    getBanHistoryKey(
+      guild.id,
+      user.id
+    ),
+    {
+      userId:
+        user.id,
+
+      guildId:
+        guild.id,
+
+      guildName:
+        guild.name,
+
+      bannedAt:
+        auditEntry
+          ?.createdTimestamp ||
+        null,
+
+      reason:
+        parsedReason.reason,
+
+      rawReason,
+
+      requesterId:
+        parsedReason
+          .requesterId,
+
+      executorId:
+        executor?.id ||
+        null,
+
+      executorTag:
+        executor?.tag ||
+        null,
+
+      executorBot:
+        executor?.bot ??
+        null,
+
+      executionOrigin:
+        getExecutionOrigin(
+          executor
+        ),
+
+      auditLogId:
+        auditEntry?.id ||
+        null,
+
+      cachedAt:
+        Date.now()
+    }
+  );
+
+  return true;
+}
+
 // ==========================================================
 // ENVIO DE DM
 // ==========================================================
@@ -1349,9 +1495,29 @@ export function setupBanLog(client) {
             unbanExecutor
           );
 
+        const parsedUnbanReason =
+          parseUnbanCommandReason(
+            unbanEntry?.reason
+          );
+
         const unbanReason =
-          unbanEntry?.reason ||
-          'Nenhum motivo de desbanimento foi informado';
+          parsedUnbanReason.reason;
+
+        const unbanRequesterText =
+          parsedUnbanReason.requesterId
+            ? (
+                `<@${parsedUnbanReason.requesterId}>\n` +
+                `ID: \`${parsedUnbanReason.requesterId}\``
+              )
+            : (
+                unbanExecutor &&
+                !unbanExecutor.bot
+                  ? 'O próprio executor'
+                  : 'Não identificado'
+              );
+
+        const unbanCommand =
+          parsedUnbanReason.command;
 
         // ================================================
         // PROCURA O BANIMENTO ORIGINAL
@@ -1556,6 +1722,30 @@ export function setupBanLog(client) {
                   truncateText(
                     unbanExecutorText
                   ),
+
+                inline: true
+              },
+
+              {
+                name:
+                  '👮 Desbanimento solicitado por',
+
+                value:
+                  truncateText(
+                    unbanRequesterText
+                  ),
+
+                inline: true
+              },
+
+              {
+                name:
+                  '⌨️ Comando relacionado',
+
+                value:
+                  unbanCommand
+                    ? `\`!${unbanCommand}\``
+                    : 'Ação direta / não identificada',
 
                 inline: true
               },

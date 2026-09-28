@@ -279,6 +279,7 @@ import {
 
 // Comandos Admin
 import { registerApagarPV } from "../commands/admin/apagarpv.js";
+import { bansHandleMessage } from "../commands/admin/bans.js";
 import { criarCargoHandleMessage } from "../commands/admin/criarcargo.js";
 import { verIdHandleMessage } from "../commands/admin/verid.js";
 import {
@@ -927,6 +928,18 @@ if (
 // engolido pelo fluxo geral de comandos.
 if (
   await hallDaFamaHandleMessage(
+    message,
+    client
+  )
+) {
+  return;
+}
+
+// =====================================================
+// 🔨 BANIMENTOS — !bans / !unbangeral
+// =====================================================
+if (
+  await bansHandleMessage(
     message,
     client
   )
