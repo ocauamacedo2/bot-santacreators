@@ -791,7 +791,33 @@ const isCommand = content.startsWith(prefix);
 if (isCommand) {
   const args = content.slice(prefix.length).trim().split(/\s+/);
   const cmd = args.shift().toLowerCase();
+// =====================================================
+// 🚀 FAST PATH - !PERGUNTAS
+// =====================================================
+//
+// O !perguntas é um comando interativo e precisa responder
+// imediatamente.
+//
+// Ele tenta o roteador central antes dos handlers auxiliares
+// para não ficar aguardando módulos que não possuem relação
+// com entrevistas.
+//
+// Se o roteador tratar o comando, encerramos aqui.
+// Se não tratar, o Core continua normalmente.
+//
+// =====================================================
 
+if (cmd === "perguntas") {
+  if (
+    await messageCreateHandler.execute(
+      message,
+      args,
+      client
+    )
+  ) {
+    return;
+  }
+}
   // ✅ Diagnóstico de mensagens privadas deve executar antes do roteador central.
   if (await testarMensagemPrivadaHandleMessage(message)) return;
 
