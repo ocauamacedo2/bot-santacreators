@@ -27,6 +27,10 @@ export function setupTicketRenamer(client) {
   }
   client.__SC_TICKET_RENAMER_INSTALLED = true;
 
+  console.log(
+    '[SC_TICKET_RENAMER] instalado — fonte automática ativa nas categorias de Líder/Organização.'
+  );
+
   // ====== CONFIG ======
   const ROLE_SANTA_CREATORS = '1352275728476930099';
   const ROLE_CIDADAO       = '1262978759922028575';
@@ -77,6 +81,9 @@ export function setupTicketRenamer(client) {
 
   // Debounce por canal para não perder atualização durante um rename do próprio bot.
   const LEADER_FONT_RECHECK_TIMERS = new Map();
+
+  // Impede duas varreduras de segurança das categorias de Líder/Organização ao mesmo tempo.
+  let LEADER_FONT_WATCHDOG_RUNNING = false;
 
   // ====== UTIL ======
   const SUPER = ['','²','³','⁴','⁵','⁶','⁷','⁸','⁹'];
@@ -379,9 +386,15 @@ export function setupTicketRenamer(client) {
         );
 
         try {
+          const previousName = channel.name;
+
           await channel.setName(
             desired,
             'SC Ticket Renamer — fonte automática das categorias de Líder/Organização'
+          );
+
+          console.log(
+            `[SC_TICKET_RENAMER] Fonte corrigida: ${previousName} -> ${desired} (${channel.id})`
           );
         } catch (error) {
           console.warn(
@@ -495,6 +508,71 @@ export function setupTicketRenamer(client) {
       350
     );
   });
+
+  async function enforceLeaderFontCategories() {
+    if (LEADER_FONT_WATCHDOG_RUNNING) return;
+
+    LEADER_FONT_WATCHDOG_RUNNING = true;
+
+    try {
+      for (const [, guild] of client.guilds.cache) {
+        for (const categoryId of LEADER_FONT_CATEGORY_IDS) {
+          const category =
+            guild.channels.cache.get(categoryId);
+
+          if (
+            !category ||
+            category.type !== ChannelType.GuildCategory
+          ) {
+            continue;
+          }
+
+          for (
+            const channel of
+            category.children.cache.values()
+          ) {
+            if (
+              channel.type !== ChannelType.GuildText
+            ) {
+              continue;
+            }
+
+            const desired =
+              formatLeaderFontChannelName(
+                channel.name
+              );
+
+            if (
+              !desired ||
+              channel.name === desired
+            ) {
+              continue;
+            }
+
+            await maybeRenameChannel(
+              channel
+            );
+          }
+        }
+      }
+    } catch (error) {
+      console.warn(
+        '[SC_TICKET_RENAMER] Falha na varredura de segurança das categorias de Líder/Organização:',
+        error?.message || error
+      );
+    } finally {
+      LEADER_FONT_WATCHDOG_RUNNING = false;
+    }
+  }
+
+  // Varredura rápida somente das 3 categorias de Líder/Organização.
+  // Não renomeia canais que já estejam corretos.
+  setInterval(
+    () => {
+      enforceLeaderFontCategories();
+    },
+    10_000
+  );
 
   // Mudou SantaCreators -> renomeia tickets do membro (exceto líder)
   client.on(Events.GuildMemberUpdate, async (oldM, newM) => {
