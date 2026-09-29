@@ -90,6 +90,53 @@ const PRIVILEGED_LINK_ROLE_IDS = new Set([
 ]);
 
 // =====================================================
+// ÁREAS LIBERADAS DO FILTRO DE CONTEÚDO
+// =====================================================
+//
+// Estes IDs podem ser:
+//
+// • o próprio canal
+// • a categoria pai do canal
+//
+// IMPORTANTE:
+//
+// Estes locais são canais/categorias de TICKET.
+//
+// Neles o sistema NÃO aplica punição automática por:
+//
+// • links
+// • convites do Discord
+// • conteúdo sexual em texto
+// • palavrões / expressões proibidas
+//
+// O restante do servidor continua protegido normalmente.
+//
+// A liberação vale SOMENTE para o filtro de conteúdo.
+// O sistema de flood continua funcionando normalmente.
+// =====================================================
+
+const CONTENT_FILTER_EXEMPT_LOCATION_IDS = new Set([
+  "1359244725781266492",
+  "1359244743724241156",
+  "1359245003523756136",
+  "1359245055239655544",
+  "1352706815594598420",
+  "1404568518179029142",
+  "1444857594517913742",
+  "1384650670145278033",
+]);
+
+// Fora das áreas liberadas, ao detectar uma infração,
+// o bot busca também mensagens recentes do mesmo autor
+// no canal para limpar infrações que tenham escapado
+// da memória.
+const STRICT_PROTECTED_SWEEP_MS =
+  60 * 60 * 1000;
+
+const STRICT_PROTECTED_SWEEP_FETCH_LIMIT =
+  100;
+
+// =====================================================
 // CONFIGURAÇÃO DE FLOOD DE USUÁRIO
 // =====================================================
 
@@ -352,6 +399,35 @@ const FORBIDDEN_WORDS = [
 ];
 
 // =====================================================
+// TERMOS SEXUAIS BLOQUEADOS PELO FILTRO RÍGIDO
+// =====================================================
+//
+// Esta lista é aplicada em todo o servidor,
+// EXCETO nos canais/categorias definidos em:
+//
+// CONTENT_FILTER_EXEMPT_LOCATION_IDS
+//
+// A normalização já existente também permite detectar
+// variações com acento, números e separadores.
+// =====================================================
+
+const STRICT_SEXUAL_CONTENT_TERMS = [
+  "sexo",
+  "sexual",
+  "nude",
+  "nudes",
+  "porno",
+  "pornografia",
+  "porn",
+  "boquete",
+  "sexo oral",
+  "transar",
+  "transando",
+  "buceta",
+  "piroca",
+];
+
+// =====================================================
 // MEMÓRIA DO SISTEMA
 // =====================================================
 
@@ -415,7 +491,7 @@ function stripUrlsForProfanityAnalysis(
 ) {
   return String(value ?? "")
     .replace(
-      /https?:\/\/\S+/gi,
+      /(?:https?:\/\/|www\.)[^\s<>()]+|\b(?:discord\.gg|discord(?:app)?\.com\/invite)\/[^\s<>()]+|\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}(?:\/[^\s<>()]*)?/gi,
       " "
     )
     .replace(
@@ -458,10 +534,15 @@ function extractMessageUrls(
 
   const matches =
     content.match(
-      /https?:\/\/[^\s<>()]+/gi
+      /(?:https?:\/\/|www\.)[^\s<>()]+|\b(?:discord\.gg|discord(?:app)?\.com\/invite)\/[^\s<>()]+|\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}(?:\/[^\s<>()]*)?/gi
     );
 
-  return matches ?? [];
+  return (
+    matches?.map(
+      (url) =>
+        url.trim()
+    ) ?? []
+  );
 }
 
 // =====================================================
@@ -502,10 +583,25 @@ function isExplicitAdultUrl(
 ) {
   let parsedUrl;
 
+  const rawUrl =
+    String(value ?? "")
+      .trim();
+
+  if (!rawUrl) {
+    return false;
+  }
+
+  const urlForParsing =
+    /^(?:https?:\/\/)/i.test(
+      rawUrl
+    )
+      ? rawUrl
+      : `https://${rawUrl}`;
+
   try {
     parsedUrl =
       new URL(
-        value
+        urlForParsing
       );
   } catch {
     return false;
@@ -1215,6 +1311,242 @@ function containsForbiddenWord(content) {
 }
 
 // =====================================================
+// PROCURA TERMO SEXUAL NAS ÁREAS PROTEGIDAS
+// =====================================================
+
+function findStrictSexualContentTerm(
+  content
+) {
+  const contentWithoutUrls =
+    stripUrlsForProfanityAnalysis(
+      content
+    );
+
+  const normalized =
+    normalizeText(
+      contentWithoutUrls
+    );
+
+  const compact =
+    compactText(
+      contentWithoutUrls
+    );
+
+  if (!normalized) {
+    return null;
+  }
+
+  const paddedNormalized =
+    ` ${normalized} `;
+
+  for (
+    const term of
+    STRICT_SEXUAL_CONTENT_TERMS
+  ) {
+    const normalizedTerm =
+      normalizeText(term);
+
+    const paddedTerm =
+      ` ${normalizedTerm} `;
+
+    if (
+      paddedNormalized.includes(
+        paddedTerm
+      )
+    ) {
+      return term;
+    }
+
+    const compactTerm =
+      compactText(term);
+
+    if (
+      compactTerm.length >= 4 &&
+      compact.includes(
+        compactTerm
+      )
+    ) {
+      return term;
+    }
+  }
+
+  return null;
+}
+
+// =====================================================
+// CONFERE SE A MENSAGEM ESTÁ EM ÁREA LIBERADA
+// =====================================================
+//
+// Funciona quando o ID configurado for:
+//
+// • o próprio canal
+// • a categoria pai
+// • a categoria pai do canal onde uma thread está
+//
+// Se retornar true, o filtro de conteúdo NÃO pune:
+//
+// • links
+// • convites
+// • conteúdo sexual em texto
+// • palavrões
+//
+// IMPORTANTE:
+//
+// Isso NÃO desativa a proteção contra flood.
+// =====================================================
+
+function isContentFilterExemptLocation(
+  message
+) {
+  const channel =
+    message?.channel;
+
+  const possibleLocationIds = [
+    message?.channelId,
+    channel?.parentId,
+    channel?.parent?.parentId,
+  ];
+
+  return (
+    possibleLocationIds.some(
+      (id) =>
+        id &&
+        CONTENT_FILTER_EXEMPT_LOCATION_IDS.has(
+          id
+        )
+    )
+  );
+}
+
+// =====================================================
+// DETECTA INFRAÇÃO FORA DAS ÁREAS LIBERADAS
+// =====================================================
+
+function getStrictProtectedViolation(
+  message,
+  memberOverride = null
+) {
+  // ===================================================
+  // TICKET / ÁREA LIBERADA
+  // ===================================================
+  //
+  // Não aplica filtro rígido de conteúdo aqui.
+  //
+  // O código de flood continua executando depois.
+  // ===================================================
+
+  if (
+    isContentFilterExemptLocation(
+      message
+    )
+  ) {
+    return null;
+  }
+
+  const member =
+    memberOverride ??
+    message.member;
+
+  // ===================================================
+  // LINK ADULTO
+  // ===================================================
+
+  const explicitAdultUrl =
+    findExplicitAdultUrl(
+      message.content
+    );
+
+  if (explicitAdultUrl) {
+    return {
+      type:
+        "LINK_ADULTO",
+
+      label:
+        explicitAdultUrl,
+
+      reason:
+        "Link explicitamente pornográfico detectado fora das áreas liberadas de ticket.",
+    };
+  }
+
+  // ===================================================
+  // LINK / CONVITE
+  // ===================================================
+
+  const urls =
+    extractMessageUrls(
+      message.content
+    );
+
+  if (
+    urls.length > 0 &&
+    !hasPrivilegedLinkRole(
+      member
+    )
+  ) {
+    return {
+      type:
+        "LINK_NAO_PERMITIDO",
+
+      label:
+        urls[0],
+
+      reason:
+        "Link/convite enviado fora das áreas liberadas de ticket.",
+    };
+  }
+
+  // ===================================================
+  // CONTEÚDO SEXUAL / PALAVRÃO
+  // ===================================================
+
+  const punishmentExempt =
+    isProfanityPunishmentExempt(
+      member
+    );
+
+  if (!punishmentExempt) {
+    const sexualTerm =
+      findStrictSexualContentTerm(
+        message.content
+      );
+
+    if (sexualTerm) {
+      return {
+        type:
+          "CONTEUDO_SEXUAL",
+
+        label:
+          sexualTerm,
+
+        reason:
+          `Termo sexual detectado: "${sexualTerm}".`,
+      };
+    }
+
+    const forbiddenWord =
+      containsForbiddenWord(
+        message.content
+      );
+
+    if (forbiddenWord) {
+      return {
+        type:
+          "PALAVRAO",
+
+        label:
+          forbiddenWord,
+
+        reason:
+          `Palavra/expressão proibida detectada: "${forbiddenWord}".`,
+      };
+    }
+  }
+
+  return null;
+}
+
+// =====================================================
 // LINK DA MENSAGEM
 // =====================================================
 
@@ -1659,6 +1991,134 @@ async function deleteRecentOffendingMessages(
         .delete()
         .then(() => true)
         .catch(() => false);
+
+    if (ok) {
+      deleted += 1;
+    }
+  }
+
+  return deleted;
+}
+
+// =====================================================
+// VARREDURA FORTE DAS ÁREAS PROTEGIDAS
+// =====================================================
+//
+// Não depende somente do histórico em memória.
+//
+// Ao detectar uma infração, busca até 100 mensagens
+// recentes do canal e remove outras infrações recentes
+// do MESMO autor.
+//
+// Isso resolve o caso em que:
+//
+// • um link foi tratado como conteúdo seguro para flood
+// • o bot reiniciou e perdeu o histórico em memória
+// • a mensagem anterior não entrou no messageHistory
+// =====================================================
+
+async function deleteStrictProtectedViolations(
+  message
+) {
+  const channel =
+    message.channel;
+
+  if (
+    !channel?.isTextBased() ||
+    !channel.messages
+  ) {
+    return 0;
+  }
+
+  const candidates =
+    new Map();
+
+  candidates.set(
+    message.id,
+    message
+  );
+
+  const fetched =
+    await channel.messages
+      .fetch({
+        limit:
+          STRICT_PROTECTED_SWEEP_FETCH_LIMIT,
+      })
+      .catch(() => null);
+
+  if (fetched) {
+    for (
+      const target of
+      fetched.values()
+    ) {
+      candidates.set(
+        target.id,
+        target
+      );
+    }
+  }
+
+  const cutoff =
+    Date.now() -
+    STRICT_PROTECTED_SWEEP_MS;
+
+  let deleted =
+    0;
+
+  for (
+    const target of
+    candidates.values()
+  ) {
+    if (
+      target.author?.id !==
+      message.author.id
+    ) {
+      continue;
+    }
+
+    if (
+      Number(
+        target.createdTimestamp ?? 0
+      ) < cutoff
+    ) {
+      continue;
+    }
+
+    const violation =
+      getStrictProtectedViolation(
+        target,
+        message.member
+      );
+
+    if (!violation) {
+      continue;
+    }
+
+    const ok =
+      await target
+        .delete()
+        .then(() => true)
+        .catch((error) => {
+          console.error(
+            "[SECURITY] Falha ao apagar mensagem em área protegida:",
+            {
+              messageId:
+                target.id,
+
+              channelId:
+                target.channelId,
+
+              authorId:
+                target.author?.id,
+
+              error:
+                error?.message ??
+                String(error),
+            }
+          );
+
+          return false;
+        });
 
     if (ok) {
       deleted += 1;
@@ -2405,6 +2865,157 @@ async function punishHumanForProfanity(
 }
 
 // =====================================================
+// PUNIÇÃO DO FILTRO RÍGIDO DE CONTEÚDO
+// =====================================================
+
+async function punishHumanForStrictProtectedViolation(
+  message,
+  violation
+) {
+  const member =
+    message.member;
+
+  if (!member) {
+    return;
+  }
+
+  const imageUrl =
+    getFirstImage(
+      message
+    );
+
+  const originalContent =
+    message.content;
+
+  // ===================================================
+  // VARREDURA E LIMPEZA
+  // ===================================================
+
+  const deletedCount =
+    await deleteStrictProtectedViolations(
+      message
+    );
+
+  // ===================================================
+  // TIMEOUT
+  // ===================================================
+
+  let timeoutApplied =
+    false;
+
+  let timeoutError =
+    null;
+
+  if (member.moderatable) {
+    await member
+      .timeout(
+        TIMEOUT_MS,
+
+        `Conteúdo proibido fora das áreas liberadas de ticket: ${violation.type} | ${violation.label}`
+      )
+      .then(() => {
+        timeoutApplied =
+          true;
+      })
+      .catch((error) => {
+        timeoutError =
+          error;
+      });
+  }
+
+  // ===================================================
+  // GARANTE CONTEÚDO PARA O LOG
+  // ===================================================
+
+  if (
+    !message.content &&
+    originalContent
+  ) {
+    try {
+      Object.defineProperty(
+        message,
+        "content",
+        {
+          configurable: true,
+
+          value:
+            originalContent,
+        }
+      );
+    } catch {}
+  }
+
+  // ===================================================
+  // AÇÃO
+  // ===================================================
+
+  const action =
+    timeoutApplied
+      ? (
+          `Mensagem(ns) proibida(s) removida(s): ${deletedCount}. ` +
+          "Castigo automático de 30 minutos aplicado."
+        )
+      : (
+          `Mensagem(ns) proibida(s) removida(s): ${deletedCount}. ` +
+          "Não foi possível aplicar o castigo." +
+          (
+            timeoutError
+              ? ` Erro: ${truncate(
+                  timeoutError.message,
+                  300
+                )}`
+              : ""
+          )
+        );
+
+  // ===================================================
+  // LOG
+  // ===================================================
+
+  const embed =
+    buildMessageLogEmbed({
+      message,
+
+      title:
+        "🛡️ Conteúdo proibido detectado",
+
+      color:
+        0xed4245,
+
+      reason:
+        `${violation.reason}\n` +
+        `**Tipo:** ${violation.type}\n` +
+        `**Detecção:** ${violation.label}`,
+
+      action,
+
+      deletedCount,
+
+      imageUrl,
+    });
+
+  await sendSecurityLog(
+    message.guild,
+    embed
+  );
+
+  // ===================================================
+  // AVISO
+  // ===================================================
+
+  await sendTemporaryWarning(
+    message,
+
+    `⚠️ <@${message.author.id}>, ` +
+      `esse conteúdo não é permitido neste local. ` +
+      `As mensagens proibidas recentes foram removidas ` +
+      `e você recebeu **30 minutos de castigo**. ` +
+      `Este aviso será apagado automaticamente ` +
+      `em 30 segundos.`
+  );
+}
+
+// =====================================================
 // FLOOD HUMANO
 // =====================================================
 
@@ -2932,6 +3543,58 @@ async function handleMessage(
     // =================================================
 
     // =================================================
+    // ÁREAS DE TICKET LIBERADAS DO FILTRO DE CONTEÚDO
+    // =================================================
+    //
+    // Nestes canais/categorias é permitido enviar:
+    //
+    // • links
+    // • convites do Discord
+    // • palavras de conteúdo sexual
+    // • palavrões
+    //
+    // IMPORTANTE:
+    //
+    // Esta liberação NÃO desativa o sistema de flood.
+    // Ela vale somente para o filtro de conteúdo.
+    // =================================================
+
+    const contentFilterExemptLocation =
+      isContentFilterExemptLocation(
+        message
+      );
+
+    // =================================================
+    // FILTRO RÍGIDO FORA DOS TICKETS LIBERADOS
+    // =================================================
+    //
+    // Em qualquer outro local do servidor, esta checagem
+    // acontece ANTES:
+    //
+    // • do link adulto global
+    // • da análise contextual de palavrão
+    // • da exceção de link/mídia no flood humano
+    //
+    // Assim links, palavras sexuais e palavrões são
+    // tratados pelo filtro rígido em todo o servidor,
+    // exceto nos canais/categorias de ticket liberados.
+    // =================================================
+
+    const strictViolation =
+      getStrictProtectedViolation(
+        message
+      );
+
+    if (strictViolation) {
+      await punishHumanForStrictProtectedViolation(
+        message,
+        strictViolation
+      );
+
+      return;
+    }
+
+    // =================================================
     // LINK EXPLICITAMENTE PORNOGRÁFICO
     // =================================================
     //
@@ -2955,7 +3618,10 @@ async function handleMessage(
         message.content
       );
 
-    if (explicitAdultUrl) {
+    if (
+      explicitAdultUrl &&
+      !contentFilterExemptLocation
+    ) {
       const originalContent =
         message.content;
 
@@ -3092,7 +3758,10 @@ async function handleMessage(
         message.content
       );
 
-    if (forbiddenWord) {
+    if (
+      forbiddenWord &&
+      !contentFilterExemptLocation
+    ) {
       const punishmentLevel =
         getProfanityPunishmentLevel(
           message,
