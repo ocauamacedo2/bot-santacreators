@@ -19818,6 +19818,8 @@ export async function generateSantaCreatorsStandaloneText({
   temperature = 0.75,
   responseMimeType = "",
   label = "IA standalone",
+  fast = false,
+  timeoutMs = GEMINI_REQUEST_TIMEOUT_MS,
 }) {
   const geminiClient =
     getGeminiClient();
@@ -19852,9 +19854,26 @@ export async function generateSantaCreatorsStandaloneText({
   let lastError =
     null;
 
+  const effectiveTimeoutMs =
+    Math.max(
+      1_000,
+      Math.min(
+        Number(
+          timeoutMs
+        ) ||
+          GEMINI_REQUEST_TIMEOUT_MS,
+        GEMINI_REQUEST_TIMEOUT_MS
+      )
+    );
+
+  const standaloneModelFallbacks =
+    fast
+      ? GEMINI_FAST_CHAT_MODEL_FALLBACKS
+      : GEMINI_CHAT_MODEL_FALLBACKS;
+
 for (
   const modelName of
-  GEMINI_CHAT_MODEL_FALLBACKS
+  standaloneModelFallbacks
 ) {
   if (
     isStandaloneModelTemporarilyBlocked(
@@ -19894,10 +19913,15 @@ for (
                       }
                     : {}
                 ),
+
+                httpOptions: {
+                  timeout:
+                    effectiveTimeoutMs,
+                },
               },
             }),
 
-          GEMINI_REQUEST_TIMEOUT_MS,
+          effectiveTimeoutMs,
 
           `${label} | ${modelName}`
         );
