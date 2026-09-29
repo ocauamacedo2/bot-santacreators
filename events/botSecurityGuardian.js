@@ -226,6 +226,19 @@ const GLOBAL_ABUSE_SWEEP_MS =
 const GLOBAL_ABUSE_SWEEP_FETCH_LIMIT =
   100;
 
+// Quantidade de mensagens anteriores enviadas para a IA
+// somente quando o caso realmente precisa de contexto.
+const AI_ABUSE_CONTEXT_MESSAGE_LIMIT =
+  8;
+
+const AI_ABUSE_CONTEXT_MAX_CHARS =
+  2400;
+
+// Loga no console quando a IA entra na moderação.
+// Útil para confirmar se a camada semântica trabalhou.
+const AI_ABUSE_DEBUG =
+  true;
+
 // =====================================================
 // REINCIDÊNCIA
 // =====================================================
@@ -886,6 +899,810 @@ function compactText(value) {
 }
 
 // =====================================================
+// NORMALIZAÇÃO AGRESSIVA SOMENTE PARA MODERAÇÃO
+// =====================================================
+//
+// NÃO altera a mensagem original.
+//
+// Esta versão é propositalmente mais forte que
+// normalizeText() e serve somente para reconhecer
+// tentativas de burlar o Guardian.
+//
+// Ela trata:
+// • Unicode estilizado / largura diferente;
+// • caracteres invisíveis;
+// • leetspeak;
+// • separadores;
+// • letras exageradamente repetidas.
+// =====================================================
+
+function normalizeAggressiveModerationText(
+  value
+) {
+  return stripUrlsForProfanityAnalysis(
+    value
+  )
+    .replace(
+      /<@!?\d+>|<@&\d+>|<#\d+>/g,
+      " "
+    )
+    .normalize(
+      "NFKD"
+    )
+    .replace(
+      /[\u0300-\u036f\u200B-\u200D\uFEFF]/g,
+      ""
+    )
+    .toLowerCase()
+    .replace(/0/g, "o")
+    .replace(/1/g, "i")
+    .replace(/3/g, "e")
+    .replace(/4/g, "a")
+    .replace(/5/g, "s")
+    .replace(/7/g, "t")
+    .replace(/@/g, "a")
+    .replace(/\$/g, "s")
+    .replace(
+      /[^a-zç\s]/gi,
+      " "
+    )
+    // Para moderação, uma sequência como:
+    // fuedasseeee -> fuedasse
+    .replace(
+      /(.)\1{2,}/g,
+      "$1"
+    )
+    .replace(
+      /\s+/g,
+      " "
+    )
+    .trim();
+}
+
+// =====================================================
+// DISTÂNCIA DE EDIÇÃO LIMITADA
+// =====================================================
+//
+// Usada somente em palavras suficientemente longas.
+// Isso permite reconhecer erros/alterações propositais
+// sem transformar qualquer palavra curta em palavrão.
+// =====================================================
+
+function getLimitedEditDistance(
+  left,
+  right,
+  maxDistance = 2
+) {
+  const a =
+    String(
+      left || ""
+    );
+
+  const b =
+    String(
+      right || ""
+    );
+
+  if (
+    Math.abs(
+      a.length -
+      b.length
+    ) >
+    maxDistance
+  ) {
+    return (
+      maxDistance +
+      1
+    );
+  }
+
+  const previous =
+    Array.from(
+      {
+        length:
+          b.length +
+          1,
+      },
+      (
+        _,
+        index
+      ) =>
+        index
+    );
+
+  for (
+    let i = 1;
+    i <= a.length;
+    i += 1
+  ) {
+    const current =
+      [
+        i,
+      ];
+
+    let rowMinimum =
+      current[0];
+
+    for (
+      let j = 1;
+      j <= b.length;
+      j += 1
+    ) {
+      const substitutionCost =
+        a[i - 1] ===
+        b[j - 1]
+          ? 0
+          : 1;
+
+      const value =
+        Math.min(
+          previous[j] +
+            1,
+
+          current[j - 1] +
+            1,
+
+          previous[j - 1] +
+            substitutionCost
+        );
+
+      current[j] =
+        value;
+
+      rowMinimum =
+        Math.min(
+          rowMinimum,
+          value
+        );
+    }
+
+    if (
+      rowMinimum >
+      maxDistance
+    ) {
+      return (
+        maxDistance +
+        1
+      );
+    }
+
+    for (
+      let j = 0;
+      j < current.length;
+      j += 1
+    ) {
+      previous[j] =
+        current[j];
+    }
+  }
+
+  return previous[
+    b.length
+  ];
+}
+
+// =====================================================
+// PALAVRAS LONGAS COM DETECÇÃO APROXIMADA
+// =====================================================
+//
+// Mantemos somente termos longos/fortes aqui para
+// reduzir falso positivo.
+//
+// Exemplo:
+//
+// fuedasseeee
+//   -> fuedasse
+//   -> muito próximo de "fudase"
+//   -> Guardian reconhece a tentativa.
+// =====================================================
+
+const ADVANCED_FUZZY_FORBIDDEN_TERMS = [
+  {
+    target:
+      "fudase",
+
+    label:
+      "foda-se / fuda-se",
+
+    category:
+      "PALAVRAO_VARIANTE",
+  },
+  {
+    target:
+      "fodase",
+
+    label:
+      "foda-se",
+
+    category:
+      "PALAVRAO_VARIANTE",
+  },
+  {
+    target:
+      "caralho",
+
+    label:
+      "caralho",
+
+    category:
+      "PALAVRAO_VARIANTE",
+  },
+  {
+    target:
+      "arrombado",
+
+    label:
+      "arrombado",
+
+    category:
+      "XINGAMENTO_VARIANTE",
+  },
+  {
+    target:
+      "desgracado",
+
+    label:
+      "desgraçado",
+
+    category:
+      "XINGAMENTO_VARIANTE",
+  },
+  {
+    target:
+      "buceta",
+
+    label:
+      "buceta",
+
+    category:
+      "CONTEUDO_SEXUAL_VARIANTE",
+  },
+  {
+    target:
+      "xereca",
+
+    label:
+      "xereca",
+
+    category:
+      "CONTEUDO_SEXUAL_VARIANTE",
+  },
+  {
+    target:
+      "piroca",
+
+    label:
+      "piroca",
+
+    category:
+      "CONTEUDO_SEXUAL_VARIANTE",
+  },
+  {
+    target:
+      "punheta",
+
+    label:
+      "punheta",
+
+    category:
+      "CONTEUDO_SEXUAL_VARIANTE",
+  },
+  {
+    target:
+      "boquete",
+
+    label:
+      "boquete",
+
+    category:
+      "CONTEUDO_SEXUAL_VARIANTE",
+  },
+  {
+    target:
+      "cuzinho",
+
+    label:
+      "cuzinho",
+
+    category:
+      "CONTEUDO_SEXUAL_VARIANTE",
+  },
+  {
+    target:
+      "imbecil",
+
+    label:
+      "imbecil",
+
+    category:
+      "XINGAMENTO_VARIANTE",
+  },
+  {
+    target:
+      "idiota",
+
+    label:
+      "idiota",
+
+    category:
+      "XINGAMENTO_VARIANTE",
+  },
+  {
+    target:
+      "otario",
+
+    label:
+      "otário",
+
+    category:
+      "XINGAMENTO_VARIANTE",
+  },
+  {
+    target:
+      "babaca",
+
+    label:
+      "babaca",
+
+    category:
+      "XINGAMENTO_VARIANTE",
+  },
+  {
+    target:
+      "nojento",
+
+    label:
+      "nojento",
+
+    category:
+      "XINGAMENTO_VARIANTE",
+  },
+  {
+    target:
+      "ridiculo",
+
+    label:
+      "ridículo",
+
+    category:
+      "XINGAMENTO_VARIANTE",
+  },
+  {
+    target:
+      "vagabundo",
+
+    label:
+      "vagabundo",
+
+    category:
+      "XINGAMENTO_VARIANTE",
+  },
+  {
+    target:
+      "escroto",
+
+    label:
+      "escroto",
+
+    category:
+      "XINGAMENTO_VARIANTE",
+  },
+  {
+    target:
+      "cretino",
+
+    label:
+      "cretino",
+
+    category:
+      "XINGAMENTO_VARIANTE",
+  },
+];
+
+function findApproximateForbiddenToken(
+  content
+) {
+  const normalized =
+    normalizeAggressiveModerationText(
+      content
+    );
+
+  if (!normalized) {
+    return null;
+  }
+
+  const tokens =
+    normalized
+      .split(
+        /\s+/
+      )
+      .filter(
+        (token) =>
+          token.length >=
+          6
+      );
+
+  for (
+    const token of
+    tokens
+  ) {
+    for (
+      const item of
+      ADVANCED_FUZZY_FORBIDDEN_TERMS
+    ) {
+      const maxDistance =
+        item.target.length >=
+        6
+          ? 2
+          : 1;
+
+      if (
+        Math.abs(
+          token.length -
+          item.target.length
+        ) >
+        maxDistance
+      ) {
+        continue;
+      }
+
+      if (
+        getLimitedEditDistance(
+          token,
+          item.target,
+          maxDistance
+        ) <=
+        maxDistance
+      ) {
+        return {
+          ...item,
+
+          detected:
+            token,
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
+// =====================================================
+// DETECTOR AVANÇADO DE CONTEÚDO PROIBIDO
+// =====================================================
+//
+// Esta camada trabalha com FAMÍLIAS de palavras em vez
+// de depender de uma lista infinita de grafias.
+//
+// Tickets:
+//
+// • palavrão/sexual isolado continua respeitando a
+//   exceção já configurada;
+// • ataque/assédio DIRECIONADO continua bloqueado.
+//
+// Fora dos tickets:
+//
+// • sexual explícito;
+// • palavrão forte;
+// • variantes aproximadas;
+// são bloqueados imediatamente.
+// =====================================================
+
+function findAdvancedModerationViolation(
+  message
+) {
+  if (
+    !message ||
+    message.author?.bot
+  ) {
+    return null;
+  }
+
+  const normalized =
+    normalizeAggressiveModerationText(
+      message.content ||
+      ""
+    );
+
+  if (!normalized) {
+    return null;
+  }
+
+  const directed =
+    hasDirectedAbuseTargetSignal(
+      message
+    );
+
+  const contentFilterExemptLocation =
+    isContentFilterExemptLocation(
+      message
+    );
+
+  // Expressões que já carregam direcionamento pelo
+  // próprio sentido, mesmo sem @menção.
+  const inherentlyDirectedPatterns = [
+    {
+      pattern:
+        /\b(me\s+mama|mama\s+me|mama\s+aqui|mama\s+o\s+meu|mama\s+meu)\b/i,
+
+      label:
+        "assédio sexual explícito",
+    },
+    {
+      pattern:
+        /\b(chupa|chupe|chupar)\b.{0,35}\b(meu|me|o\s+meu|pau|pauzao|piroca|cu)\b/i,
+
+      label:
+        "assédio sexual explícito",
+    },
+    {
+      pattern:
+        /\b(vai|va)\s+(tomar\s+no\s+cu|se\s+foder|se\s+fuder)\b/i,
+
+      label:
+        "ordem ofensiva direta",
+    },
+  ];
+
+  const inherentlyDirected =
+    inherentlyDirectedPatterns.find(
+      (item) =>
+        item.pattern.test(
+          normalized
+        )
+    );
+
+  if (inherentlyDirected) {
+    return {
+      type:
+        "ABUSO_DIRECIONADO_IMEDIATO",
+
+      label:
+        inherentlyDirected.label,
+
+      reason:
+        "Ataque/assédio com direcionamento explícito detectado pela proteção avançada.",
+
+      source:
+        "REGRA_AVANCADA",
+
+      confidence:
+        1,
+    };
+  }
+
+  const sexualFamilyPatterns = [
+    /\bcu\b/i,
+    /\bcuzinh[a-z]*\b/i,
+    /\bxerec[a-z]*\b/i,
+    /\bxereq[a-z]*\b/i,
+    /\bbucet[a-z]*\b/i,
+    /\bpiroc[a-z]*\b/i,
+    /\bpauz[a-z]*\b/i,
+    /\bboquet[a-z]*\b/i,
+    /\bpunhet[a-z]*\b/i,
+    /\bsiriric[a-z]*\b/i,
+    /\bmamad[a-z]*\b/i,
+    /\bsexo\b/i,
+    /\bporn[a-z]*\b/i,
+  ];
+
+  const sexualFamilyDetected =
+    sexualFamilyPatterns.some(
+      (pattern) =>
+        pattern.test(
+          normalized
+        )
+    );
+
+  if (
+    sexualFamilyDetected &&
+    (
+      directed ||
+      !contentFilterExemptLocation
+    )
+  ) {
+    return {
+      type:
+        directed
+          ? "ASSEDIO_SEXUAL_DIRECIONADO"
+          : "CONTEUDO_SEXUAL_EXPLICITO",
+
+      label:
+        "família de termo sexual explícito",
+
+      reason:
+        directed
+          ? "Conteúdo sexual dirigido a uma pessoa detectado pela proteção avançada."
+          : "Conteúdo sexual explícito detectado fora das áreas liberadas.",
+
+      source:
+        "REGRA_AVANCADA",
+
+      confidence:
+        1,
+    };
+  }
+
+  const profanityFamilyPatterns = [
+    /\bfod[a-z]*\b/i,
+    /\bfud[a-z]*\b/i,
+    /\bcaralh[a-z]*\b/i,
+    /\bporr[a-z]*\b/i,
+    /\bmerd[a-z]*\b/i,
+    /\bbost[a-z]*\b/i,
+    /\barrombad[a-z]*\b/i,
+    /\bdesgrac[a-z]*\b/i,
+    /\bcuza[a-z]*\b/i,
+    /\bputa\b/i,
+    /\bputo\b/i,
+    /\bputinha\b/i,
+    /\bputinho\b/i,
+    /\bfilh[oa]\s+da\s+puta\b/i,
+    /\b(?:fdp|pqp|vsf|vsfd|tmnc|tnc|vtmc|vtnc|pnc)\b/i,
+  ];
+
+  const profanityFamilyDetected =
+    profanityFamilyPatterns.some(
+      (pattern) =>
+        pattern.test(
+          normalized
+        )
+    );
+
+  if (
+    profanityFamilyDetected &&
+    (
+      directed ||
+      !contentFilterExemptLocation
+    )
+  ) {
+    return {
+      type:
+        directed
+          ? "XINGAMENTO_DIRECIONADO"
+          : "PALAVRAO",
+
+      label:
+        "família de palavrão/xingamento",
+
+      reason:
+        directed
+          ? "Palavrão/xingamento direcionado detectado pela proteção avançada."
+          : "Palavrão detectado fora das áreas liberadas.",
+
+      source:
+        "REGRA_AVANCADA",
+
+      confidence:
+        1,
+    };
+  }
+
+  const hardInsultPatterns = [
+    /\bidiot[a-z]*\b/i,
+    /\bimbecil[a-z]*\b/i,
+    /\bbabac[a-z]*\b/i,
+    /\botari[a-z]*\b/i,
+    /\bvagabund[a-z]*\b/i,
+    /\bescrot[a-z]*\b/i,
+    /\bcretin[a-z]*\b/i,
+    /\blixo\b/i,
+    /\bverme\b/i,
+  ];
+
+  const hardInsultDetected =
+    hardInsultPatterns.some(
+      (pattern) =>
+        pattern.test(
+          normalized
+        )
+    );
+
+  if (
+    hardInsultDetected &&
+    (
+      directed ||
+      !contentFilterExemptLocation
+    )
+  ) {
+    return {
+      type:
+        directed
+          ? "XINGAMENTO_DIRECIONADO"
+          : "XINGAMENTO",
+
+      label:
+        "família de xingamento",
+
+      reason:
+        directed
+          ? "Xingamento direcionado detectado pela proteção avançada."
+          : "Xingamento detectado fora das áreas liberadas.",
+
+      source:
+        "REGRA_AVANCADA",
+
+      confidence:
+        1,
+    };
+  }
+
+  // Termos que também podem aparecer em frases legítimas
+  // só são bloqueados imediatamente quando há alvo claro.
+  //
+  // Sem alvo, eles seguem para a IA com contexto.
+  const contextualInsultPatterns = [
+    /\barrogant[a-z]*\b/i,
+    /\bnojent[a-z]*\b/i,
+    /\bridicul[a-z]*\b/i,
+    /\binutil[a-z]*\b/i,
+    /\bburr[oa]\b/i,
+    /\bcadel[a-z]*\b/i,
+    /\bcachorr[a-z]*\b/i,
+  ];
+
+  if (
+    directed &&
+    contextualInsultPatterns.some(
+      (pattern) =>
+        pattern.test(
+          normalized
+        )
+    )
+  ) {
+    return {
+      type:
+        "XINGAMENTO_DIRECIONADO",
+
+      label:
+        "xingamento contextual direcionado",
+
+      reason:
+        "Xingamento contextual dirigido a uma pessoa detectado pela proteção avançada.",
+
+      source:
+        "REGRA_AVANCADA",
+
+      confidence:
+        1,
+    };
+  }
+
+  const approximate =
+    findApproximateForbiddenToken(
+      normalized
+    );
+
+  if (
+    approximate &&
+    (
+      directed ||
+      !contentFilterExemptLocation
+    )
+  ) {
+    return {
+      type:
+        approximate.category,
+
+      label:
+        `${approximate.label} (variante: ${approximate.detected})`,
+
+      reason:
+        "Tentativa de variar/errar propositalmente termo proibido detectada por aproximação.",
+
+      source:
+        "REGRA_FUZZY",
+
+      confidence:
+        0.98,
+    };
+  }
+
+  return null;
+}
+
+// =====================================================
 // CONTEÚDOS QUE NÃO CONTAM COMO FLOOD HUMANO
 // =====================================================
 //
@@ -1278,6 +2095,20 @@ function hasGlobalAbuseAnalysisSignal(
 function findImmediateGlobalAbuse(
   message
 ) {
+  // PRIMEIRO executa a camada determinística avançada.
+  //
+  // Ela NÃO depende do pré-filtro da IA. Isso evita
+  // exatamente o buraco em que "cu aberto", "cu fedido"
+  // e variantes podiam morrer antes de chegar às regras.
+  const advancedViolation =
+    findAdvancedModerationViolation(
+      message
+    );
+
+  if (advancedViolation) {
+    return advancedViolation;
+  }
+
   if (
     !hasGlobalAbuseAnalysisSignal(
       message
@@ -1561,6 +2392,122 @@ function parseAiAbuseModerationDecision(
 // • ticket continua respeitando a exceção para conteúdo
 //   isolado quando não existe ataque/assédio contra alguém.
 // =====================================================
+// =====================================================
+// CONTEXTO RECENTE PARA A IA DE MODERAÇÃO
+// =====================================================
+//
+// Somente casos ambíguos chegam aqui.
+//
+// O objetivo é permitir que a IA perceba uma sequência
+// de provocações/ataques, em vez de analisar uma frase
+// isolada sem saber o que estava acontecendo.
+// =====================================================
+
+async function buildAiModerationRecentContext(
+  message
+) {
+  const channel =
+    message?.channel;
+
+  if (
+    !channel?.isTextBased() ||
+    !channel.messages ||
+    !message?.id
+  ) {
+    return [];
+  }
+
+  const fetched =
+    await channel.messages
+      .fetch({
+        limit:
+          AI_ABUSE_CONTEXT_MESSAGE_LIMIT,
+
+        before:
+          message.id,
+      })
+      .catch(
+        () => null
+      );
+
+  if (!fetched) {
+    return [];
+  }
+
+  const items =
+    [
+      ...fetched.values(),
+    ]
+      .sort(
+        (
+          a,
+          b
+        ) =>
+          Number(
+            a.createdTimestamp ||
+            0
+          ) -
+          Number(
+            b.createdTimestamp ||
+            0
+          )
+      )
+      .map(
+        (item) => ({
+          authorId:
+            item.author?.id ||
+            null,
+
+          isBot:
+            Boolean(
+              item.author?.bot
+            ),
+
+          content:
+            String(
+              item.content ||
+              ""
+            ).slice(
+              0,
+              280
+            ),
+        })
+      );
+
+  const limited = [];
+  let totalChars = 0;
+
+  for (
+    const item of
+    items
+  ) {
+    const serialized =
+      JSON.stringify(
+        item
+      );
+
+    if (
+      totalChars +
+      serialized.length >
+      AI_ABUSE_CONTEXT_MAX_CHARS
+    ) {
+      continue;
+    }
+
+    limited.push(
+      item
+    );
+
+    totalChars +=
+      serialized.length;
+  }
+
+  return limited;
+}
+
+// =====================================================
+// IA - ANALISA CONTEÚDO ABUSIVO / SEXUAL
+// =====================================================
 
 async function detectGlobalUnsafeAbuse(
   message
@@ -1595,21 +2542,33 @@ async function detectGlobalUnsafeAbuse(
     return null;
   }
 
-  if (
-    !hasGlobalAbuseAnalysisSignal(
-      message
-    )
-  ) {
-    return null;
-  }
-
+  // IMPORTANTE:
+  // regras determinísticas vêm ANTES do pré-filtro da IA.
   const immediate =
     findImmediateGlobalAbuse(
       message
     );
 
   if (immediate) {
+    if (AI_ABUSE_DEBUG) {
+      console.log(
+        `[SECURITY][MODERATION] REGRA IMEDIATA | ` +
+        `user=${message.author?.id} | ` +
+        `channel=${message.channelId} | ` +
+        `type=${immediate.type} | ` +
+        `label=${immediate.label}`
+      );
+    }
+
     return immediate;
+  }
+
+  if (
+    !hasGlobalAbuseAnalysisSignal(
+      message
+    )
+  ) {
+    return null;
   }
 
   const mentionedIds =
@@ -1633,6 +2592,27 @@ async function detectGlobalUnsafeAbuse(
     isContentFilterExemptLocation(
       message
     );
+
+  const recentContext =
+    await buildAiModerationRecentContext(
+      message
+    );
+
+  if (AI_ABUSE_DEBUG) {
+    console.log(
+      `[SECURITY][IA-MODERATION] ANALISANDO | ` +
+      `user=${message.author?.id} | ` +
+      `channel=${message.channelId} | ` +
+      `directed=${directed} | ` +
+      `ticket=${contentFilterExemptLocation} | ` +
+      `content=${JSON.stringify(
+        content.slice(
+          0,
+          180
+        )
+      )}`
+    );
+  }
 
   const prompt =
     `
@@ -1669,6 +2649,12 @@ REGRA DE TICKET:
 - Se "areaTicketLiberada" for true e NÃO existir ataque, assédio ou humilhação contra alguém, respeite a exceção do ticket e prefira "allow".
 - Se houver ataque, assédio sexual, ameaça, discriminação ou humilhação direcionada, puna mesmo em ticket.
 
+CONTEXTO:
+- "contextoRecente" contém mensagens imediatamente anteriores do mesmo canal.
+- Use esse contexto somente para entender se existe sequência de provocação, ataque, assédio ou perseguição.
+- Não puna alguém apenas porque outra pessoa escreveu algo ofensivo no contexto.
+- A decisão sempre é sobre a mensagem atual.
+
 Se houver dúvida real, escolha "allow".
 
 DADOS:
@@ -1686,6 +2672,9 @@ direcionada=${JSON.stringify(
     )}
 areaTicketLiberada=${JSON.stringify(
       contentFilterExemptLocation
+    )}
+contextoRecente=${JSON.stringify(
+      recentContext
     )}
 
 Responda SOMENTE com JSON válido neste formato:
@@ -1721,11 +2710,30 @@ Responda SOMENTE com JSON válido neste formato:
           AI_ABUSE_MODERATION_TIMEOUT_MS,
       });
 
-    return (
+    const decision =
       parseAiAbuseModerationDecision(
         rawDecision
-      )
-    );
+      );
+
+    if (AI_ABUSE_DEBUG) {
+      console.log(
+        `[SECURITY][IA-MODERATION] RESULTADO | ` +
+        `user=${message.author?.id} | ` +
+        `channel=${message.channelId} | ` +
+        `action=${decision ? "PUNISH" : "ALLOW"} | ` +
+        `raw=${JSON.stringify(
+          String(
+            rawDecision ||
+            ""
+          ).slice(
+            0,
+            350
+          )
+        )}`
+      );
+    }
+
+    return decision;
   } catch (error) {
     console.error(
       "[SECURITY][IA-MODERATION] Falha na análise semântica:",
@@ -2185,6 +3193,24 @@ function getStrictProtectedViolation(
     );
 
   if (!punishmentExempt) {
+    const advancedViolation =
+      findAdvancedModerationViolation(
+        message
+      );
+
+    if (advancedViolation) {
+      return {
+        type:
+          advancedViolation.type,
+
+        label:
+          advancedViolation.label,
+
+        reason:
+          advancedViolation.reason,
+      };
+    }
+
     const sexualTerm =
       findStrictSexualContentTerm(
         message.content
