@@ -34,10 +34,11 @@ const SORT_GROUPS = [
   },
   {
     id: "LIDERES",
+    strategy: "leaders_fill_from_bottom",
     categories: [
-      { id: "1414687963161559180", limit: 30 },
-      { id: "1428572742051168378", limit: 50 },
-      { id: "1482874296685695118", limit: 50 },
+      { id: "1414687963161559180", limit: 30 }, // mínimo 20 vagas livres
+      { id: "1428572742051168378", limit: 35 }, // mínimo 15 vagas livres
+      { id: "1482874296685695118", limit: 50 }, // pode ficar cheia
     ],
     sticky: ["1414718336826081330", "1414718856542421052"]
   },
@@ -121,6 +122,12 @@ const runningLocks = new Map();
 const debouncers = new Map();
 const collator = new Intl.Collator("pt-BR", { sensitivity: "base", numeric: true });
 
+function getChannelAlphabeticalName(value) {
+  return String(value ?? "")
+    .normalize("NFKC")
+    .toLocaleLowerCase("pt-BR");
+}
+
 function isTextChannelLike(ch) {
   return ch && ch.type !== ChannelType.GuildCategory && !(typeof ch.isThread === "function" && ch.isThread());
 }
@@ -168,7 +175,12 @@ async function sortCategoryBatch(guild, categoryId) {
   const regularChs = children.filter(c => !stickyIds.includes(c.id));
 
   // Ordena A-Z
-  regularChs.sort((a, b) => collator.compare(a.name, b.name));
+  regularChs.sort((a, b) =>
+    collator.compare(
+      getChannelAlphabeticalName(a.name),
+      getChannelAlphabeticalName(b.name)
+    )
+  );
 
   // Lista final desejada
   const sorted = [...stickyChs, ...regularChs];
@@ -206,61 +218,304 @@ async function sortChannelGroup(guild, groupConfig) {
     const stickyIds = groupConfig.sticky || [];
     const sticky = allChannels.filter(c => stickyIds.includes(c.id));
     const regular = allChannels.filter(c => !stickyIds.includes(c.id));
-    regular.sort((a, b) => collator.compare(a.name, b.name));
+
+    regular.sort((a, b) =>
+      collator.compare(
+        getChannelAlphabeticalName(a.name),
+        getChannelAlphabeticalName(b.name)
+      )
+    );
+
     const sortedAll = [...sticky, ...regular];
 
-    // 3. Distribuição Lógica (Mantida do original)
+    // 3. Distribuição Lógica
     const assignments = new Map();
     const catUsage = new Map();
     cats.forEach(id => catUsage.set(id, 0));
 
-    let currentCatIndex = 0;
-    let dynamicLimit = 50;
-    
-    if (groupConfig.strategy === 'balance' && groupConfig.categories.length > 0) {
-       dynamicLimit = Math.ceil(sortedAll.length / groupConfig.categories.length);
-       if (dynamicLimit > 50) dynamicLimit = 50;
-    }
+    if (
+      groupConfig.strategy === "leaders_fill_from_bottom" &&
+      groupConfig.categories.length >= 3
+    ) {
+      const [firstCat, secondCat, thirdCat] = groupConfig.categories;
 
-    for (const ch of sortedAll) {
-      let assigned = false;
-      while (currentCatIndex < groupConfig.categories.length) {
-        const catConfig = groupConfig.categories[currentCatIndex];
-        const usage = catUsage.get(catConfig.id) || 0;
-        const limit = groupConfig.strategy === 'balance' ? Math.min(catConfig.limit, dynamicLimit) : catConfig.limit;
+      const firstLimit = Math.min(firstCat.limit, 50);
+      const secondLimit = Math.min(secondCat.limit, 50);
+      const thirdLimit = Math.min(thirdCat.limit, 50);
 
-        if (usage < limit && usage < 50) {
-          assignments.set(ch.id, catConfig.id);
-          catUsage.set(catConfig.id, usage + 1);
-          assigned = true;
-          break;
-        } else {
-          currentCatIndex++;
+      // Stickies ficam obrigatoriamente na 1ª categoria
+      // e contam dentro do limite de 30 canais.
+      for (const ch of sticky) {
+        if ((catUsage.get(firstCat.id) || 0) >= firstLimit) break;
+
+        assignments.set(ch.id, firstCat.id);
+
+        catUsage.set(
+          firstCat.id,
+          (catUsage.get(firstCat.id) || 0) + 1
+        );
+      }
+
+      const firstRegularCapacity = Math.max(
+        0,
+        firstLimit - (catUsage.get(firstCat.id) || 0)
+      );
+
+      const totalRegularCapacity =
+        firstRegularCapacity + secondLimit + thirdLimit;
+
+      const distributableRegular = regular.slice(
+        0,
+        totalRegularCapacity
+      );
+
+      const overflowRegular = regular.slice(
+        totalRegularCapacity
+      );
+
+      // =====================================================
+      // DISTRIBUIÇÃO DE BAIXO PARA CIMA
+      // =====================================================
+      //
+      // Prioridade:
+      //
+      // 3ª categoria -> até 50
+      // 2ª categoria -> até 35
+      // 1ª categoria -> somente o restante
+      //
+      // Isso faz a última categoria ser sempre a mais cheia.
+      // =====================================================
+
+      const thirdCount = Math.min(
+        thirdLimit,
+        distributableRegular.length
+      );
+
+      const remainingAfterThird =
+        distributableRegular.length - thirdCount;
+
+      const secondCount = Math.min(
+        secondLimit,
+        remainingAfterThird
+      );
+
+      const firstCount =
+        remainingAfterThird - secondCount;
+
+      // =====================================================
+      // A ORDEM ALFABÉTICA CONTINUA DE CIMA PARA BAIXO
+      // =====================================================
+      //
+      // Como "regular" já está A→Z:
+      //
+      // A / início -> 1ª categoria
+      // meio       -> 2ª categoria
+      // Z / final  -> 3ª categoria
+      // =====================================================
+
+      let cursor = 0;
+
+      // 1ª categoria: começo do alfabeto
+      for (
+        let i = 0;
+        i < firstCount && cursor < distributableRegular.length;
+        i++
+      ) {
+        const ch = distributableRegular[cursor++];
+
+        assignments.set(
+          ch.id,
+          firstCat.id
+        );
+
+        catUsage.set(
+          firstCat.id,
+          (catUsage.get(firstCat.id) || 0) + 1
+        );
+      }
+
+      // 2ª categoria: meio do alfabeto
+      for (
+        let i = 0;
+        i < secondCount && cursor < distributableRegular.length;
+        i++
+      ) {
+        const ch = distributableRegular[cursor++];
+
+        assignments.set(
+          ch.id,
+          secondCat.id
+        );
+
+        catUsage.set(
+          secondCat.id,
+          (catUsage.get(secondCat.id) || 0) + 1
+        );
+      }
+
+      // 3ª categoria: final do alfabeto
+      for (
+        let i = 0;
+        i < thirdCount && cursor < distributableRegular.length;
+        i++
+      ) {
+        const ch = distributableRegular[cursor++];
+
+        assignments.set(
+          ch.id,
+          thirdCat.id
+        );
+
+        catUsage.set(
+          thirdCat.id,
+          (catUsage.get(thirdCat.id) || 0) + 1
+        );
+      }
+
+      if (overflowRegular.length > 0) {
+        console.error(
+          `[SC_SORT] Grupo LIDERES excedeu a capacidade reservada de ` +
+          `${firstLimit + secondLimit + thirdLimit} canais. ` +
+          `${overflowRegular.length} canal(is) permanecerão sem redistribuição automática.`
+        );
+      }
+    } else {
+      let currentCatIndex = 0;
+      let dynamicLimit = 50;
+      
+      if (
+        groupConfig.strategy === "balance" &&
+        groupConfig.categories.length > 0
+      ) {
+        dynamicLimit = Math.ceil(
+          sortedAll.length / groupConfig.categories.length
+        );
+
+        if (dynamicLimit > 50) {
+          dynamicLimit = 50;
         }
       }
-      // Overflow
-      if (!assigned) {
-        for (const catConfig of groupConfig.categories) {
-           const usage = catUsage.get(catConfig.id) || 0;
-           if (usage < 50) {
-             assignments.set(ch.id, catConfig.id);
-             catUsage.set(catConfig.id, usage + 1);
-             assigned = true;
-             break;
-           }
+
+      for (const ch of sortedAll) {
+        let assigned = false;
+
+        while (
+          currentCatIndex < groupConfig.categories.length
+        ) {
+          const catConfig =
+            groupConfig.categories[currentCatIndex];
+
+          const usage =
+            catUsage.get(catConfig.id) || 0;
+
+          const limit =
+            groupConfig.strategy === "balance"
+              ? Math.min(catConfig.limit, dynamicLimit)
+              : catConfig.limit;
+
+          if (
+            usage < limit &&
+            usage < 50
+          ) {
+            assignments.set(
+              ch.id,
+              catConfig.id
+            );
+
+            catUsage.set(
+              catConfig.id,
+              usage + 1
+            );
+
+            assigned = true;
+            break;
+          }
+
+          currentCatIndex++;
+        }
+
+        if (!assigned) {
+          for (
+            const catConfig of groupConfig.categories
+          ) {
+            const usage =
+              catUsage.get(catConfig.id) || 0;
+
+            if (usage < 50) {
+              assignments.set(
+                ch.id,
+                catConfig.id
+              );
+
+              catUsage.set(
+                catConfig.id,
+                usage + 1
+              );
+
+              assigned = true;
+              break;
+            }
+          }
         }
       }
     }
 
     // 4. Execução Otimizada
     
-    // 4.1 Move canais na categoria errada (com delay)
-    for (const [chId, targetCatId] of assignments) {
-        const ch = guild.channels.cache.get(chId);
-        if (ch && ch.parentId !== targetCatId) {
-            await ch.setParent(targetCatId, { lockPermissions: false }).catch(() => {});
-            await new Promise(r => setTimeout(r, 1200)); // Delay para evitar rate limit de movimento
+    // 4.1 Move primeiro os canais destinados às categorias mais abaixo.
+    // Isso ajuda a esvaziar a categoria do meio antes de reorganizar o restante.
+    const categoryIndex = new Map(
+      groupConfig.categories.map(
+        (cat, index) => [cat.id, index]
+      )
+    );
+
+    const moveQueue = [...assignments.entries()]
+      .map(([chId, targetCatId]) => ({
+        ch: guild.channels.cache.get(chId),
+        targetCatId,
+      }))
+      .filter(
+        ({ ch, targetCatId }) =>
+          ch &&
+          targetCatId &&
+          ch.parentId !== targetCatId
+      )
+      .sort((a, b) => {
+        const targetDiff =
+          (categoryIndex.get(b.targetCatId) ?? -1) -
+          (categoryIndex.get(a.targetCatId) ?? -1);
+
+        if (targetDiff !== 0) {
+          return targetDiff;
         }
+
+        return collator.compare(
+          getChannelAlphabeticalName(a.ch.name),
+          getChannelAlphabeticalName(b.ch.name)
+        );
+      });
+
+    for (
+      const { ch, targetCatId } of moveQueue
+    ) {
+      try {
+        await ch.setParent(
+          targetCatId,
+          {
+            lockPermissions: false
+          }
+        );
+
+        await new Promise(
+          r => setTimeout(r, 1200)
+        );
+      } catch (error) {
+        console.warn(
+          `[SC_SORT] Falha ao mover ${ch.name} (${ch.id}) para ${targetCatId}:`,
+          error?.message || error
+        );
+      }
     }
 
     // 4.2 Renomeia se tiver prefixo (com delay)
@@ -312,7 +567,20 @@ export function setupSortChannels(client) {
     debouncers.set(catId, timer);
   }
 
+  // Ao iniciar o bot, reorganiza imediatamente o grupo de líderes.
+  client.once(Events.ClientReady, async () => {
+    for (
+      const guild of client.guilds.cache.values()
+    ) {
+      await safeSortCategory(
+        guild,
+        "1414687963161559180"
+      );
+    }
+  });
+
   client.on(Events.ChannelCreate, (ch) => triggerSort(ch.guild, ch.parentId));
+
   client.on(Events.ChannelUpdate, (oldCh, newCh) => {
     if (oldCh.parentId !== newCh.parentId) {
         triggerSort(newCh.guild, oldCh.parentId);
