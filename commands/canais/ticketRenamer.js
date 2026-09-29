@@ -52,12 +52,19 @@ export function setupTicketRenamer(client) {
 
   // IDs das categorias
   const CATEGORIES_WATCH = {
-    entrevista: '1359244725781266492',
-    suporte:    '1359245003523756136',
-    lider:      '1414687963161559180',
-    ideias:     '1359245055239655544',
-    roupas:     '1352706815594598420',
-    banners:    '1404568518179029142'
+    entrevista:      '1359244725781266492',
+    suporte:         '1359245003523756136',
+    lider:           '1414687963161559180',
+    ideias:          '1359245055239655544',
+    roupas:          '1352706815594598420',
+    banners:         '1404568518179029142',
+
+    // Fluxo automático do membro / Controle GI
+    membroAguardando: '1444857594517913742',
+    membroAtivo:      '1384650670145278033',
+    membroInativo1:   '1383899907244425246',
+    membroInativo2:   '1410071955159122051',
+    membroInativo3:   '1477566945598640251'
   };
 
   // categoria -> sufixo
@@ -67,8 +74,25 @@ export function setupTicketRenamer(client) {
     lider: 'lider',
     ideias: 'ideias',
     roupas: 'roupas',
-    banners: 'banners'
+    banners: 'banners',
+
+    // Nestas categorias o ticket sempre usa o sufixo SC.
+    membroAguardando: 'sc',
+    membroAtivo: 'sc',
+    membroInativo1: 'sc',
+    membroInativo2: 'sc',
+    membroInativo3: 'sc'
   };
+
+  // Nestes locais o nome final também recebe a fonte
+  // Mathematical Monospace usada no restante do sistema.
+  const MEMBER_FONT_CATEGORY_IDS = new Set([
+    '1444857594517913742',
+    '1384650670145278033',
+    '1383899907244425246',
+    '1410071955159122051',
+    '1477566945598640251'
+  ]);
 
   // ====== STATE (cache de abridores) ======
   const OPENER_CACHE = new Map();       // canalId -> userId
@@ -303,8 +327,13 @@ export function setupTicketRenamer(client) {
 
     guild.channels.cache.forEach(ch => {
       if (ch?.type === ChannelType.GuildText && ch.parentId && parentIds.has(ch.parentId)) {
-        const nameCore = ch.name.replace(PREFIX_RE, '');
-        if (nameCore === `${base}-${suffix}` || nameCore.startsWith(`${base}-${suffix}`)) {
+        const nameCore = fromMonospaceUnicode(ch.name)
+          .replace(PREFIX_RE, '')
+          .toLocaleLowerCase('pt-BR');
+
+        const expectedCore = `${base}-${suffix}`.toLocaleLowerCase('pt-BR');
+
+        if (nameCore === expectedCore || nameCore.startsWith(expectedCore)) {
           count += 1;
         }
       }
@@ -336,13 +365,36 @@ export function setupTicketRenamer(client) {
     const base = slugify(preferred);
 
     const hasSC = member.roles.cache.has(ROLE_SANTA_CREATORS);
-    const rawSuffix = (type === 'entrevista' && hasSC) ? 'sc' : CATEGORY_SUFFIX[type];
+
+    let rawSuffix = CATEGORY_SUFFIX[type];
+
+    // Entrevista vira SC somente depois de ganhar SantaCreators.
+    if (type === 'entrevista' && hasSC) {
+      rawSuffix = 'sc';
+    }
+
+    // Na categoria intermediária, antes do Set aprovado continua como entrevista.
+    // Depois que ganha SantaCreators/Set, passa para SC.
+    if (type === 'membroAguardando' && !hasSC) {
+      rawSuffix = 'entrevista';
+    }
 
     const existing = countSameTypeChannels(guild, base, rawSuffix);
     const ordinal  = existing > 1 ? (SUPER[existing] || String(existing)) : '';
 
     const desiredCore = `${base}-${rawSuffix}${ordinal}`;
-    const desired     = `${NAME_PREFIX}${desiredCore}`;
+    const desired = `${NAME_PREFIX}${desiredCore}`;
+
+    if (MEMBER_FONT_CATEGORY_IDS.has(channel.parentId)) {
+      return formatLeaderFontChannelName(desired).slice(0, 100);
+    }
+
+    return desired.slice(0, 100);
+
+    if (MEMBER_FONT_CATEGORY_IDS.has(channel.parentId)) {
+      return formatLeaderFontChannelName(desired).slice(0, 100);
+    }
+
     return desired.slice(0, 100);
   }
 
@@ -501,10 +553,23 @@ export function setupTicketRenamer(client) {
       oldChannel?.parentId !== newChannel.parentId;
 
     if (!nameChanged && !parentChanged) return;
-    if (!LEADER_FONT_CATEGORY_IDS.has(newChannel.parentId)) return;
 
-    scheduleLeaderFontRecheck(
-      newChannel,
+    const managedParentIds = getAllManagedParentIds();
+    if (!managedParentIds.has(newChannel.parentId)) return;
+
+    // Categorias de Líder mantêm o debounce específico já existente.
+    if (LEADER_FONT_CATEGORY_IDS.has(newChannel.parentId)) {
+      scheduleLeaderFontRecheck(
+        newChannel,
+        350
+      );
+      return;
+    }
+
+    // Tickets normais e tickets do fluxo SC também são corrigidos
+    // imediatamente quando mudam de categoria ou são renomeados.
+    setTimeout(
+      () => maybeRenameChannel(newChannel),
       350
     );
   });
@@ -574,11 +639,15 @@ export function setupTicketRenamer(client) {
     10_000
   );
 
-  // Mudou SantaCreators -> renomeia tickets do membro (exceto líder)
+  // Mudou SantaCreators OU mudou o nome/apelido -> renomeia tickets do membro.
   client.on(Events.GuildMemberUpdate, async (oldM, newM) => {
     const before = oldM.roles.cache.has(ROLE_SANTA_CREATORS);
     const after  = newM.roles.cache.has(ROLE_SANTA_CREATORS);
-    if (before === after) return;
+
+    const santaCreatorsChanged = before !== after;
+    const displayNameChanged = oldM.displayName !== newM.displayName;
+
+    if (!santaCreatorsChanged && !displayNameChanged) return;
 
     const parentIds = getWatchedParentIdsExcludingLider();
     newM.guild.channels.cache.forEach(async ch => {

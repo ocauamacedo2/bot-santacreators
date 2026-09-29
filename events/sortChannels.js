@@ -12,7 +12,10 @@ import {
   ButtonBuilder,
   ButtonStyle,
   PermissionsBitField,
+  OverwriteType,
 } from "discord.js";
+
+import { dashOn } from "../../utils/dashHub.js";
 
 // ===============================
 // SANTA CREATORS — ORDENAR CANAIS POR NOME (A→Z) + PINNED NO TOPO
@@ -128,6 +131,29 @@ const INATIVO_CONFIG = {
   LOG_CHANNEL: "1477570850302591090",
 };
 
+// =====================================================
+// AUTOMAÇÃO DO TICKET DO MEMBRO / CONTROLE GI
+// =====================================================
+const CREATOR_TICKET_AUTO = {
+  ROLE_SANTA_CREATORS: "1352275728476930099",
+
+  // Categoria original de entrevista.
+  INTERVIEW_CATEGORY: "1359244725781266492",
+
+  // Categoria intermediária: só desce automaticamente daqui.
+  WAITING_CATEGORY: "1444857594517913742",
+
+  // Categoria oficial de membros ativos.
+  ACTIVE_CATEGORY: "1384650670145278033",
+
+  // Mesmas categorias já usadas pelo !inativo.
+  INACTIVE_CATEGORIES: [
+    "1383899907244425246",
+    "1410071955159122051",
+    "1477566945598640251",
+  ],
+};
+
 // ===============================
 // PERSISTÊNCIA (PARA LÓGICA ESPECIAL)
 // ===============================
@@ -203,6 +229,226 @@ function resolveEffectiveCategoryId(channel) {
 // Variáveis globais do módulo de ordenação
 const runningLocks = new Map();
 const debouncers = new Map();
+
+// =====================================================
+// AUTOMAÇÃO: TICKET DO MEMBRO / CONTROLE GI
+// =====================================================
+function isAutomationTextChannelLike(channel) {
+  return (
+    channel &&
+    channel.type !== ChannelType.GuildCategory &&
+    !(typeof channel.isThread === "function" && channel.isThread())
+  );
+}
+
+async function extractCreatorTicketOwnerFromHeader(channel) {
+  try {
+    const pool = [];
+
+    const pins = await channel.messages.fetchPinned().catch(() => null);
+    if (pins?.size) pool.push(...pins.values());
+
+    if (!pool.length) {
+      const recent = await channel.messages.fetch({ limit: 30 }).catch(() => null);
+      if (recent?.size) pool.push(...recent.values());
+    }
+
+    for (const message of pool) {
+      for (const embed of message.embeds || []) {
+        const fields = embed.data?.fields || embed.fields || [];
+        const abertoPor = fields.find(
+          (field) => String(field?.name || "").toLowerCase() === "aberto por:"
+        );
+
+        const match = String(abertoPor?.value || "").match(/<@(\d+)>/);
+        if (match?.[1]) return match[1];
+      }
+    }
+  } catch {}
+
+  return null;
+}
+
+function extractCreatorTicketOwnerFromOverwrites(channel) {
+  const overwrites = channel.permissionOverwrites?.cache;
+  if (!overwrites) return null;
+
+  const memberOverwrites = overwrites.filter(
+    (overwrite) =>
+      overwrite.type === OverwriteType.Member &&
+      overwrite.allow.has(PermissionsBitField.Flags.ViewChannel)
+  );
+
+  const withSendMessages = memberOverwrites.find((overwrite) =>
+    overwrite.allow.has(PermissionsBitField.Flags.SendMessages)
+  );
+
+  if (withSendMessages) return withSendMessages.id;
+  return memberOverwrites.first()?.id ?? null;
+}
+
+async function resolveCreatorTicketOwnerId(channel) {
+  const fromHeader = await extractCreatorTicketOwnerFromHeader(channel);
+  if (fromHeader) return fromHeader;
+
+  return extractCreatorTicketOwnerFromOverwrites(channel);
+}
+
+async function findCreatorTicketsForUser(guild, userId, allowedCategoryIds) {
+  const categoryIds = new Set(allowedCategoryIds);
+  const matches = [];
+
+  for (const channel of guild.channels.cache.values()) {
+    if (channel.type !== ChannelType.GuildText) continue;
+    if (!channel.parentId || !categoryIds.has(channel.parentId)) continue;
+
+    const ownerId = await resolveCreatorTicketOwnerId(channel);
+    if (String(ownerId) === String(userId)) {
+      matches.push(channel);
+    }
+  }
+
+  return matches;
+}
+
+async function getFirstAvailableInactiveCategory(guild) {
+  for (const categoryId of CREATOR_TICKET_AUTO.INACTIVE_CATEGORIES) {
+    const category = await guild.channels.fetch(categoryId).catch(() => null);
+    if (!category || category.type !== ChannelType.GuildCategory) continue;
+
+    const childrenCount = category.children.cache.filter(
+      isAutomationTextChannelLike
+    ).size;
+
+    if (childrenCount < 50) return category;
+  }
+
+  return null;
+}
+
+async function moveCreatorTicketAutomatically(
+  channel,
+  targetCategoryId,
+  reason,
+  { saveInactiveOrigin = false } = {}
+) {
+  if (!channel?.guild || channel.parentId === targetCategoryId) return false;
+
+  const targetCategory = await channel.guild.channels
+    .fetch(targetCategoryId)
+    .catch(() => null);
+
+  if (!targetCategory || targetCategory.type !== ChannelType.GuildCategory) {
+    console.warn(
+      `[SC_SORT][AUTO_TICKET] Categoria de destino ${targetCategoryId} não encontrada.`
+    );
+    return false;
+  }
+
+  const targetChildrenCount = targetCategory.children.cache.filter(
+    isAutomationTextChannelLike
+  ).size;
+
+  if (targetChildrenCount >= 50) {
+    console.warn(
+      `[SC_SORT][AUTO_TICKET] Categoria ${targetCategoryId} cheia. Canal ${channel.id} não foi movido.`
+    );
+    return false;
+  }
+
+  const oldParentId = channel.parentId;
+
+  if (
+    saveInactiveOrigin &&
+    oldParentId &&
+    !CREATOR_TICKET_AUTO.INACTIVE_CATEGORIES.includes(oldParentId)
+  ) {
+    storeChannelState(channel);
+  }
+
+  await channel.setParent(targetCategoryId, {
+    lockPermissions: false,
+    reason,
+  });
+
+  await safeSortCategory(channel.guild, targetCategoryId);
+
+  if (oldParentId && oldParentId !== targetCategoryId) {
+    await safeSortCategory(channel.guild, oldParentId);
+  }
+
+  console.log(
+    `[SC_SORT][AUTO_TICKET] ${channel.id}: ${oldParentId} -> ${targetCategoryId} | ${reason}`
+  );
+
+  return true;
+}
+
+async function syncCreatorTicketAfterSetApproval(guild, userId) {
+  const tickets = await findCreatorTicketsForUser(
+    guild,
+    userId,
+    [CREATOR_TICKET_AUTO.WAITING_CATEGORY]
+  );
+
+  for (const channel of tickets) {
+    await moveCreatorTicketAutomatically(
+      channel,
+      CREATOR_TICKET_AUTO.ACTIVE_CATEGORY,
+      "SantaCreators: Set aprovado -> mover ticket para membros ativos"
+    );
+  }
+}
+
+async function syncCreatorTicketAfterGiDisabled(guild, userId) {
+  const tickets = await findCreatorTicketsForUser(
+    guild,
+    userId,
+    [
+      CREATOR_TICKET_AUTO.INTERVIEW_CATEGORY,
+      CREATOR_TICKET_AUTO.WAITING_CATEGORY,
+      CREATOR_TICKET_AUTO.ACTIVE_CATEGORY,
+    ]
+  );
+
+  for (const channel of tickets) {
+    const inactiveCategory = await getFirstAvailableInactiveCategory(guild);
+
+    if (!inactiveCategory) {
+      console.warn(
+        `[SC_SORT][AUTO_TICKET] Todas as categorias de inativos estão cheias para ${userId}.`
+      );
+      return;
+    }
+
+    await moveCreatorTicketAutomatically(
+      channel,
+      inactiveCategory.id,
+      "SantaCreators: Controle GI desligado -> mover ticket para inativos",
+      { saveInactiveOrigin: true }
+    );
+  }
+}
+
+async function syncCreatorTicketMovedIntoWaiting(channel) {
+  if (channel?.type !== ChannelType.GuildText) return;
+  if (channel.parentId !== CREATOR_TICKET_AUTO.WAITING_CATEGORY) return;
+
+  const ownerId = await resolveCreatorTicketOwnerId(channel);
+  if (!ownerId) return;
+
+  const member = await channel.guild.members.fetch(ownerId).catch(() => null);
+  if (!member) return;
+
+  // Só desce sozinho se a pessoa já estiver com o Set/SantaCreators aprovado.
+  if (!member.roles.cache.has(CREATOR_TICKET_AUTO.ROLE_SANTA_CREATORS)) return;
+
+  await moveCreatorTicketAutomatically(
+    channel,
+    CREATOR_TICKET_AUTO.ACTIVE_CATEGORY,
+    "SantaCreators: ticket movido para a fila após Set já aprovado"
+  );
+}
 
 // =====================================================
 // FORMATAÇÃO AUTOMÁTICA DOS CANAIS DE LÍDERES
@@ -992,6 +1238,23 @@ const SC_SORT_CATEGORY_IDS = [
       console.log("[SC_SORT] supervisor ligado.");
       await periodicSupervisor();
       setInterval(periodicSupervisor, SC_SORT_INTERVAL_MS);
+
+      // FAILSAFE: se o bot reiniciar e existir canal parado na categoria
+      // 1444857594517913742 de alguém que já possui SantaCreators,
+      // ele é enviado para a categoria de membros automaticamente.
+      for (const [, guild] of client.guilds.cache) {
+        const waitingCategory = guild.channels.cache.get(
+          CREATOR_TICKET_AUTO.WAITING_CATEGORY
+        );
+
+        if (!waitingCategory || waitingCategory.type !== ChannelType.GuildCategory) {
+          continue;
+        }
+
+        for (const channel of waitingCategory.children.cache.values()) {
+          await syncCreatorTicketMovedIntoWaiting(channel);
+        }
+      }
     });
 
     // reage a criação
@@ -1003,7 +1266,7 @@ const SC_SORT_CATEGORY_IDS = [
     });
 
     // reage a update (mudança de nome, mudança de categoria, etc.)
-    client.on(Events.ChannelUpdate, (oldCh, newCh) => {
+    client.on(Events.ChannelUpdate, async (oldCh, newCh) => {
       if (!newCh?.guild) return;
 
       const was = oldCh?.parentId;
@@ -1016,6 +1279,92 @@ const SC_SORT_CATEGORY_IDS = [
 
       if (now && was === now && SC_SORT_CATEGORY_IDS.includes(now)) {
         debounceSort(newCh.guild, now);
+      }
+
+      // Se alguém mover manualmente o ticket para 1444857594517913742
+      // e a pessoa já tiver o Set/SantaCreators, ele desce sozinho.
+      if (
+        was !== now &&
+        now === CREATOR_TICKET_AUTO.WAITING_CATEGORY
+      ) {
+        await syncCreatorTicketMovedIntoWaiting(newCh);
+      }
+    });
+
+    // O gestaoinfluencer.js emite este evento quando um Controle GI é criado,
+    // inclusive quando a criação foi manual. A regra de movimentação continua
+    // restrita à categoria 1444857594517913742.
+    dashOn("gi:controle_criado", async (data) => {
+      try {
+        const guild = client.guilds.cache.get(String(data?.guildId || ""));
+        const userId = String(data?.userId || "");
+        if (!guild || !userId) return;
+
+        await syncCreatorTicketAfterSetApproval(guild, userId);
+      } catch (error) {
+        console.error(
+          "[SC_SORT][AUTO_TICKET] Erro ao sincronizar ticket após criação do Controle GI:",
+          error
+        );
+      }
+    });
+
+    // O pedirset.js já emite este evento quando o Set é aprovado.
+    // IMPORTANTE: aqui só move se o ticket estiver em 1444857594517913742.
+    dashOn("pedirset:aprovado", async (data) => {
+      try {
+        const guild = client.guilds.cache.get(String(data?.guildId || ""));
+        const userId = String(data?.userId || "");
+        if (!guild || !userId) return;
+
+        await syncCreatorTicketAfterSetApproval(guild, userId);
+      } catch (error) {
+        console.error(
+          "[SC_SORT][AUTO_TICKET] Erro ao sincronizar ticket após Set aprovado:",
+          error
+        );
+      }
+    });
+
+    // O gestaoinfluencer.js já emite este evento no desligamento definitivo.
+    // Pausar/despausar NÃO passa por aqui.
+    dashOn("gi:desligado", async (data) => {
+      try {
+        const userId = String(data?.userId || "");
+        const guildId = String(data?.guildId || "");
+        if (!userId) return;
+
+        // Caminho principal: o GI agora informa diretamente a guild correta.
+        if (guildId) {
+          const guild = client.guilds.cache.get(guildId);
+
+          if (guild) {
+            await syncCreatorTicketAfterGiDisabled(guild, userId);
+            return;
+          }
+        }
+
+        // Fallback de compatibilidade para qualquer emissão antiga sem guildId.
+        for (const [, guild] of client.guilds.cache) {
+          const tickets = await findCreatorTicketsForUser(
+            guild,
+            userId,
+            [
+              CREATOR_TICKET_AUTO.INTERVIEW_CATEGORY,
+              CREATOR_TICKET_AUTO.WAITING_CATEGORY,
+              CREATOR_TICKET_AUTO.ACTIVE_CATEGORY,
+            ]
+          );
+
+          if (tickets.length === 0) continue;
+
+          await syncCreatorTicketAfterGiDisabled(guild, userId);
+        }
+      } catch (error) {
+        console.error(
+          "[SC_SORT][AUTO_TICKET] Erro ao sincronizar ticket após GI desligado:",
+          error
+        );
       }
     });
   } catch (e) {

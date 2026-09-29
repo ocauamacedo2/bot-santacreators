@@ -2751,6 +2751,17 @@ try {
       await ensureMenu(guild);
       markBoardDirty();
       await renderRespBoard(guild, { force: true });
+
+      // ✅ AVISA O SISTEMA DE TICKETS QUE O CONTROLE GI PASSOU A EXISTIR
+      // O sortChannels.js decide se deve mover ou não.
+      // Ele só move automaticamente quando o ticket estiver na categoria
+      // 1444857594517913742, preservando todas as outras categorias.
+      dashEmit('gi:controle_criado', {
+        userId: record.targetId,
+        guildId: guild.id,
+        active: record.active,
+        timestamp: Date.now()
+      });
     }
 
     // =====================================================
@@ -4838,6 +4849,7 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
       // ✅ Emite evento de desligamento para o Dashboard
       dashEmit('gi:desligado', {
         userId: snapshot.targetId,
+        guildId: guild.id,
         timestamp: Date.now()
       });
 
