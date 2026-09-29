@@ -75,6 +75,9 @@ export function setupTicketRenamer(client) {
   // Evita duas tentativas de renomear o mesmo canal ao mesmo tempo.
   const LEADER_FONT_RENAME_IN_PROGRESS = new Set();
 
+  // Debounce por canal para não perder atualização durante um rename do próprio bot.
+  const LEADER_FONT_RECHECK_TIMERS = new Map();
+
   // ====== UTIL ======
   const SUPER = ['','²','³','⁴','⁵','⁶','⁷','⁸','⁹'];
 
@@ -411,6 +414,53 @@ export function setupTicketRenamer(client) {
     } catch (_) {}
   }
 
+  function scheduleLeaderFontRecheck(channel, delay = 350) {
+    if (!channel?.id) return;
+
+    const previousTimer =
+      LEADER_FONT_RECHECK_TIMERS.get(channel.id);
+
+    if (previousTimer) {
+      clearTimeout(previousTimer);
+    }
+
+    const timer = setTimeout(async () => {
+      LEADER_FONT_RECHECK_TIMERS.delete(channel.id);
+
+      const latestChannel =
+        channel.guild?.channels?.cache?.get(channel.id) ||
+        channel;
+
+      if (
+        !latestChannel ||
+        latestChannel.type !== ChannelType.GuildText ||
+        !latestChannel.parentId ||
+        !LEADER_FONT_CATEGORY_IDS.has(latestChannel.parentId)
+      ) {
+        return;
+      }
+
+      if (
+        LEADER_FONT_RENAME_IN_PROGRESS.has(
+          latestChannel.id
+        )
+      ) {
+        scheduleLeaderFontRecheck(
+          latestChannel,
+          350
+        );
+        return;
+      }
+
+      await maybeRenameChannel(latestChannel);
+    }, delay);
+
+    LEADER_FONT_RECHECK_TIMERS.set(
+      channel.id,
+      timer
+    );
+  }
+
   // ====== WATCHERS ======
 
   // Canal criado.
@@ -422,16 +472,28 @@ export function setupTicketRenamer(client) {
 
   // Canal alterado:
   // - renomeado manualmente;
-  // - movido para uma das 3 categorias;
-  // - atualizado por outra automação.
+  // - movido para uma das 3 categorias.
   //
-  // Se estiver em uma categoria especial, reaplica o padrão automaticamente.
-  client.on(Events.ChannelUpdate, async (_oldChannel, newChannel) => {
+  // Só agenda nova conferência quando NOME ou CATEGORIA realmente mudarem.
+  // O pequeno debounce evita perder uma edição manual feita exatamente durante
+  // o rename executado pelo próprio bot.
+  client.on(Events.ChannelUpdate, (oldChannel, newChannel) => {
     if (!newChannel || newChannel.type !== ChannelType.GuildText) return;
     if (!newChannel.parentId) return;
+
+    const nameChanged =
+      oldChannel?.name !== newChannel.name;
+
+    const parentChanged =
+      oldChannel?.parentId !== newChannel.parentId;
+
+    if (!nameChanged && !parentChanged) return;
     if (!LEADER_FONT_CATEGORY_IDS.has(newChannel.parentId)) return;
 
-    await maybeRenameChannel(newChannel);
+    scheduleLeaderFontRecheck(
+      newChannel,
+      350
+    );
   });
 
   // Mudou SantaCreators -> renomeia tickets do membro (exceto líder)
