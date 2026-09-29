@@ -4,7 +4,7 @@
 // • Cache por canal para não refetchar sempre
 // • Regras de nome (nome do MEIO), 🎫┋ prefix, superíndice, varredura 30s, sweep inicial
 // • ENTREVISTA vira "-sc" se ganhar SantaCreators
-// • IGNORA completamente a categoria Líder de Organização
+// • Categorias de Líder/Organização usam fonte monoespaçada Unicode com Title Case automático
 // ===============================
 
 import {
@@ -38,17 +38,25 @@ export function setupTicketRenamer(client) {
   const NAME_PREFIX = '🎫┋';
   const PREFIX_RE   = /^🎫┋\s*/;
 
+  // Categorias em que TODO canal recebe a fonte 𝙼𝚘𝚗𝚘𝚜𝚙𝚊𝚌𝚎
+  // e cada palavra fica com a primeira letra maiúscula.
+  const LEADER_FONT_CATEGORY_IDS = new Set([
+    '1414687963161559180',
+    '1428572742051168378',
+    '1482874296685695118'
+  ]);
+
   // IDs das categorias
   const CATEGORIES_WATCH = {
     entrevista: '1359244725781266492',
     suporte:    '1359245003523756136',
-    lider:      '1414687963161559180', // << totalmente ignorada
+    lider:      '1414687963161559180',
     ideias:     '1359245055239655544',
     roupas:     '1352706815594598420',
     banners:    '1404568518179029142'
   };
 
-  // categoria -> sufixo (líder está aqui só por completude; é ignorada)
+  // categoria -> sufixo
   const CATEGORY_SUFFIX = {
     entrevista: 'entrevista',
     suporte: 'suporte',
@@ -64,6 +72,9 @@ export function setupTicketRenamer(client) {
   const OPENER_TTL   = 60 * 60 * 1000;  // 1h
   const OPENER_TIME  = new Map();       // canalId -> timestamp
 
+  // Evita duas tentativas de renomear o mesmo canal ao mesmo tempo.
+  const LEADER_FONT_RENAME_IN_PROGRESS = new Set();
+
   // ====== UTIL ======
   const SUPER = ['','²','³','⁴','⁵','⁶','⁷','⁸','⁹'];
 
@@ -74,6 +85,87 @@ export function setupTicketRenamer(client) {
       .trim()
       .replace(/\s+/g, '-')
       .toLowerCase();
+  }
+
+  function fromMonospaceUnicode(str) {
+    return Array.from(String(str ?? ''))
+      .map(char => {
+        const code = char.codePointAt(0);
+
+        if (code >= 0x1D670 && code <= 0x1D689) {
+          return String.fromCharCode(65 + (code - 0x1D670));
+        }
+
+        if (code >= 0x1D68A && code <= 0x1D6A3) {
+          return String.fromCharCode(97 + (code - 0x1D68A));
+        }
+
+        if (code >= 0x1D7F6 && code <= 0x1D7FF) {
+          return String.fromCharCode(48 + (code - 0x1D7F6));
+        }
+
+        return char;
+      })
+      .join('')
+      .normalize('NFC');
+  }
+
+  function toMonospaceUnicode(str) {
+    return Array.from(
+      String(str ?? '').normalize('NFD')
+    )
+      .map(char => {
+        const code = char.codePointAt(0);
+
+        if (code >= 65 && code <= 90) {
+          return String.fromCodePoint(0x1D670 + (code - 65));
+        }
+
+        if (code >= 97 && code <= 122) {
+          return String.fromCodePoint(0x1D68A + (code - 97));
+        }
+
+        if (code >= 48 && code <= 57) {
+          return String.fromCodePoint(0x1D7F6 + (code - 48));
+        }
+
+        return char;
+      })
+      .join('');
+  }
+
+  function titleCaseChannelName(str) {
+    const plain = fromMonospaceUnicode(str)
+      .trim()
+      .replace(/\s+/g, ' ');
+
+    return plain
+      .split(/([\s_-]+)/)
+      .map(part => {
+        if (!part || /^[\s_-]+$/.test(part)) {
+          return part;
+        }
+
+        const lower = part.toLocaleLowerCase('pt-BR');
+
+        return lower.replace(
+          /[A-Za-zÀ-ÖØ-öø-ÿ]/,
+          letter => letter.toLocaleUpperCase('pt-BR')
+        );
+      })
+      .join('');
+  }
+
+  function formatLeaderFontChannelName(channelName) {
+    const titleCaseName =
+      titleCaseChannelName(channelName);
+
+    const formatted =
+      toMonospaceUnicode(titleCaseName);
+
+    return Array.from(formatted)
+      .slice(0, 100)
+      .join('');
   }
 
   // Nome no MEIO
@@ -149,6 +241,13 @@ export function setupTicketRenamer(client) {
         .filter(([type]) => type !== 'lider')
         .map(([, id]) => id)
     );
+  }
+
+  function getAllManagedParentIds() {
+    return new Set([
+      ...getWatchedParentIdsExcludingLider(),
+      ...LEADER_FONT_CATEGORY_IDS
+    ]);
   }
 
   // Resolve abridor com cache -> embed -> overwrite
@@ -242,8 +341,61 @@ export function setupTicketRenamer(client) {
       if (!channel || channel.type !== ChannelType.GuildText) return;
       if (!channel.parentId) return;
 
+      // =====================================================
+      // 👑 CATEGORIAS DE LÍDER / ORGANIZAÇÃO
+      // =====================================================
+      //
+      // Nessas categorias não usamos o nome do abridor.
+      // Pegamos o nome ATUAL do canal, corrigimos o Title Case
+      // e aplicamos a fonte monoespaçada Unicode.
+      //
+      // Isso permite:
+      // - ticket recém-criado;
+      // - canal movido manualmente para a categoria;
+      // - canal renomeado manualmente depois;
+      // - correção automática após restart/sweep.
+      // =====================================================
+      if (LEADER_FONT_CATEGORY_IDS.has(channel.parentId)) {
+        const desired =
+          formatLeaderFontChannelName(channel.name);
+
+        if (!desired || channel.name === desired) {
+          return;
+        }
+
+        if (
+          LEADER_FONT_RENAME_IN_PROGRESS.has(
+            channel.id
+          )
+        ) {
+          return;
+        }
+
+        LEADER_FONT_RENAME_IN_PROGRESS.add(
+          channel.id
+        );
+
+        try {
+          await channel.setName(
+            desired,
+            'SC Ticket Renamer — fonte automática das categorias de Líder/Organização'
+          );
+        } catch (error) {
+          console.warn(
+            `[SC_TICKET_RENAMER] Não foi possível aplicar a fonte no canal ${channel.id}:`,
+            error?.message || error
+          );
+        } finally {
+          LEADER_FONT_RENAME_IN_PROGRESS.delete(
+            channel.id
+          );
+        }
+
+        return;
+      }
+
       const type = detectTicketTypeByCategoryId(channel.parentId);
-      if (!type || type === 'lider') return; // NÃO TOCA EM LÍDER
+      if (!type || type === 'lider') return;
 
       const guild   = channel.guild;
       const desired = await computeDesiredName(guild, channel);
@@ -261,9 +413,25 @@ export function setupTicketRenamer(client) {
 
   // ====== WATCHERS ======
 
-  // Canal criado (espera embed nascer)
+  // Canal criado.
+  // Para as categorias especiais, a fonte será aplicada automaticamente.
+  // Para os demais tickets, o atraso continua permitindo o embed nascer.
   client.on(Events.ChannelCreate, async (channel) => {
     setTimeout(() => maybeRenameChannel(channel), 1500);
+  });
+
+  // Canal alterado:
+  // - renomeado manualmente;
+  // - movido para uma das 3 categorias;
+  // - atualizado por outra automação.
+  //
+  // Se estiver em uma categoria especial, reaplica o padrão automaticamente.
+  client.on(Events.ChannelUpdate, async (_oldChannel, newChannel) => {
+    if (!newChannel || newChannel.type !== ChannelType.GuildText) return;
+    if (!newChannel.parentId) return;
+    if (!LEADER_FONT_CATEGORY_IDS.has(newChannel.parentId)) return;
+
+    await maybeRenameChannel(newChannel);
   });
 
   // Mudou SantaCreators -> renomeia tickets do membro (exceto líder)
@@ -282,10 +450,11 @@ export function setupTicketRenamer(client) {
     });
   });
 
-  // Sweep inicial ao ligar — ignora líder
+  // Sweep inicial ao ligar:
+  // corrige tickets normais e TODOS os canais das 3 categorias especiais.
   client.once(Events.ClientReady, async () => {
     try {
-      const parentIds = getWatchedParentIdsExcludingLider();
+      const parentIds = getAllManagedParentIds();
 
       for (const [, guild] of client.guilds.cache) {
         guild.channels.cache.forEach(async ch => {
@@ -295,15 +464,16 @@ export function setupTicketRenamer(client) {
         });
       }
 
-      // console.log('[SC_TICKET_RENAMER] Sweep inicial feito — abridor por embed, prefixos ok, líder ignorado.');
+      // console.log('[SC_TICKET_RENAMER] Sweep inicial feito — tickets e categorias especiais padronizados.');
     } catch (_) {}
   });
 
-  // Varredura periódica (30s)
+  // Varredura periódica (30s):
+  // serve como backup caso algum evento de criação/update seja perdido.
   setInterval(async () => {
     try {
       for (const [, guild] of client.guilds.cache) {
-        const parentIds = getWatchedParentIdsExcludingLider();
+        const parentIds = getAllManagedParentIds();
 
         guild.channels.cache.forEach(async ch => {
           if (ch?.type !== ChannelType.GuildText) return;
