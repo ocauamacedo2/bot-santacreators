@@ -230,6 +230,14 @@ function resolveEffectiveCategoryId(channel) {
 const runningLocks = new Map();
 const debouncers = new Map();
 
+// Cache do dono do ticket para evitar refetch constante de mensagens.
+const CREATOR_TICKET_OWNER_CACHE = new Map();
+const CREATOR_TICKET_OWNER_CACHE_TTL_MS = 30 * 60 * 1000;
+
+// Controle do failsafe de reconciliação dos membros ativos.
+const CREATOR_ACTIVE_RECONCILE_LAST_RUN = new Map();
+const CREATOR_ACTIVE_RECONCILE_INTERVAL_MS = 60 * 1000;
+
 // =====================================================
 // AUTOMAÇÃO: TICKET DO MEMBRO / CONTROLE GI
 // =====================================================
@@ -288,10 +296,32 @@ function extractCreatorTicketOwnerFromOverwrites(channel) {
 }
 
 async function resolveCreatorTicketOwnerId(channel) {
-  const fromHeader = await extractCreatorTicketOwnerFromHeader(channel);
-  if (fromHeader) return fromHeader;
+  if (!channel?.id) return null;
 
-  return extractCreatorTicketOwnerFromOverwrites(channel);
+  const cached = CREATOR_TICKET_OWNER_CACHE.get(channel.id);
+
+  if (
+    cached?.userId &&
+    Date.now() - Number(cached.resolvedAt || 0) <
+      CREATOR_TICKET_OWNER_CACHE_TTL_MS
+  ) {
+    return cached.userId;
+  }
+
+  const fromHeader = await extractCreatorTicketOwnerFromHeader(channel);
+  const resolved =
+    fromHeader ||
+    extractCreatorTicketOwnerFromOverwrites(channel) ||
+    null;
+
+  if (resolved) {
+    CREATOR_TICKET_OWNER_CACHE.set(channel.id, {
+      userId: String(resolved),
+      resolvedAt: Date.now(),
+    });
+  }
+
+  return resolved;
 }
 
 async function findCreatorTicketsForUser(guild, userId, allowedCategoryIds) {
@@ -448,6 +478,338 @@ async function syncCreatorTicketMovedIntoWaiting(channel) {
     CREATOR_TICKET_AUTO.ACTIVE_CATEGORY,
     "SantaCreators: ticket movido para a fila após Set já aprovado"
   );
+}
+
+function getCreatorGiControlState(guildId, userId) {
+  const api = globalThis.SC_GI_CONTROL_API;
+
+  if (
+    !api ||
+    api.ready !== true ||
+    typeof api.getControl !== "function"
+  ) {
+    return {
+      available: false,
+      authoritative: false,
+      exists: null,
+      active: null,
+      paused: null,
+    };
+  }
+
+  const control = api.getControl(guildId, userId);
+
+  return {
+    available: true,
+    authoritative: api.authoritative === true,
+    exists: !!control,
+    active: control?.active === true,
+    paused: control?.paused === true,
+    control: control || null,
+  };
+}
+
+async function fetchCreatorMemberSafely(guild, userId) {
+  const cached = guild.members.cache.get(userId);
+
+  if (cached) {
+    return {
+      member: cached,
+      definitiveMissing: false,
+      lookupFailed: false,
+    };
+  }
+
+  try {
+    const member = await guild.members.fetch(userId);
+
+    return {
+      member,
+      definitiveMissing: false,
+      lookupFailed: false,
+    };
+  } catch (error) {
+    // Discord API: Unknown Member.
+    if (Number(error?.code || 0) === 10007) {
+      return {
+        member: null,
+        definitiveMissing: true,
+        lookupFailed: false,
+      };
+    }
+
+    console.warn(
+      `[SC_SORT][RECONCILE] Não foi possível confirmar o membro ${userId}:`,
+      error?.message || error
+    );
+
+    return {
+      member: null,
+      definitiveMissing: false,
+      lookupFailed: true,
+    };
+  }
+}
+
+async function reconcileCreatorActiveChannel(
+  channel,
+  trigger = "supervisor"
+) {
+  if (
+    !channel?.guild ||
+    channel.type !== ChannelType.GuildText
+  ) {
+    return {
+      checked: false,
+      moved: false,
+    };
+  }
+
+  if (
+    channel.parentId !==
+    CREATOR_TICKET_AUTO.ACTIVE_CATEGORY
+  ) {
+    return {
+      checked: false,
+      moved: false,
+    };
+  }
+
+  const ownerId =
+    await resolveCreatorTicketOwnerId(channel);
+
+  if (!ownerId) {
+    console.warn(
+      `[SC_SORT][RECONCILE] Canal ${channel.id} ignorado: não foi possível identificar o dono.`
+    );
+
+    return {
+      checked: true,
+      moved: false,
+      skipped: "owner_not_found",
+    };
+  }
+
+  const memberState =
+    await fetchCreatorMemberSafely(
+      channel.guild,
+      String(ownerId)
+    );
+
+  // Em falha transitória de API, não move nada.
+  if (memberState.lookupFailed) {
+    return {
+      checked: true,
+      moved: false,
+      skipped: "member_lookup_failed",
+    };
+  }
+
+  const issues = [];
+
+  if (memberState.definitiveMissing) {
+    issues.push(
+      "membro não está mais no servidor"
+    );
+  } else if (
+    memberState.member &&
+    !memberState.member.roles.cache.has(
+      CREATOR_TICKET_AUTO.ROLE_SANTA_CREATORS
+    )
+  ) {
+    issues.push(
+      "membro não possui mais o cargo SantaCreators"
+    );
+  }
+
+  const giState =
+    getCreatorGiControlState(
+      channel.guild.id,
+      String(ownerId)
+    );
+
+  // Só usa ausência de Controle GI como prova quando a base foi
+  // carregada com segurança e é considerada autoritativa.
+  if (
+    giState.available &&
+    giState.authoritative &&
+    !giState.exists
+  ) {
+    issues.push(
+      "membro não possui Controle GI registrado"
+    );
+  }
+
+  // Controle pausado continua sendo controle existente.
+  if (issues.length === 0) {
+    return {
+      checked: true,
+      moved: false,
+      ownerId: String(ownerId),
+      giState,
+    };
+  }
+
+  const inactiveCategory =
+    await getFirstAvailableInactiveCategory(
+      channel.guild
+    );
+
+  if (!inactiveCategory) {
+    console.warn(
+      `[SC_SORT][RECONCILE] Não há categoria de inativos disponível para ${channel.id}.`
+    );
+
+    return {
+      checked: true,
+      moved: false,
+      ownerId: String(ownerId),
+      skipped: "inactive_categories_full",
+      issues,
+    };
+  }
+
+  const moved =
+    await moveCreatorTicketAutomatically(
+      channel,
+      inactiveCategory.id,
+      `SantaCreators: reconciliação automática (${trigger}) -> ${issues.join("; ")}`,
+      {
+        saveInactiveOrigin: true,
+      }
+    );
+
+  return {
+    checked: true,
+    moved: !!moved,
+    ownerId: String(ownerId),
+    issues,
+    giState,
+  };
+}
+
+async function reconcileCreatorActiveTicketsForUser(
+  guild,
+  userId,
+  trigger = "member_event"
+) {
+  if (!guild || !userId) return;
+
+  const tickets =
+    await findCreatorTicketsForUser(
+      guild,
+      String(userId),
+      [
+        CREATOR_TICKET_AUTO.ACTIVE_CATEGORY,
+      ]
+    );
+
+  for (const channel of tickets) {
+    await reconcileCreatorActiveChannel(
+      channel,
+      trigger
+    );
+  }
+}
+
+async function reconcileCreatorActiveCategory(
+  guild,
+  {
+    force = false,
+    trigger = "supervisor",
+  } = {}
+) {
+  if (!guild) return;
+
+  const lockKey =
+    `CREATOR_ACTIVE_RECONCILE:${guild.id}`;
+
+  if (runningLocks.get(lockKey)) {
+    return;
+  }
+
+  const lastRun =
+    CREATOR_ACTIVE_RECONCILE_LAST_RUN.get(
+      guild.id
+    ) || 0;
+
+  if (
+    !force &&
+    Date.now() - lastRun <
+      CREATOR_ACTIVE_RECONCILE_INTERVAL_MS
+  ) {
+    return;
+  }
+
+  runningLocks.set(
+    lockKey,
+    true
+  );
+
+  try {
+    const activeCategory =
+      guild.channels.cache.get(
+        CREATOR_TICKET_AUTO.ACTIVE_CATEGORY
+      ) ||
+      await guild.channels
+        .fetch(
+          CREATOR_TICKET_AUTO.ACTIVE_CATEGORY
+        )
+        .catch(() => null);
+
+    if (
+      !activeCategory ||
+      activeCategory.type !==
+        ChannelType.GuildCategory
+    ) {
+      return;
+    }
+
+    let checked = 0;
+    let moved = 0;
+    let skipped = 0;
+
+    for (
+      const channel
+      of activeCategory.children.cache.values()
+    ) {
+      if (
+        channel.type !==
+        ChannelType.GuildText
+      ) {
+        continue;
+      }
+
+      const result =
+        await reconcileCreatorActiveChannel(
+          channel,
+          trigger
+        );
+
+      if (result?.checked) checked++;
+      if (result?.moved) moved++;
+      if (result?.skipped) skipped++;
+    }
+
+    CREATOR_ACTIVE_RECONCILE_LAST_RUN.set(
+      guild.id,
+      Date.now()
+    );
+
+    console.log(
+      `[SC_SORT][RECONCILE] ${guild.name}: verificados=${checked}, movidos=${moved}, ignorados=${skipped}, gatilho=${trigger}`
+    );
+  } catch (error) {
+    console.error(
+      "[SC_SORT][RECONCILE] Erro na reconciliação da categoria ativa:",
+      error
+    );
+  } finally {
+    runningLocks.set(
+      lockKey,
+      false
+    );
+  }
 }
 
 // =====================================================
@@ -1227,9 +1589,23 @@ const SC_SORT_CATEGORY_IDS = [
       for (const [, guild] of client.guilds.cache) {
         for (const categoryId of SC_SORT_CATEGORY_IDS) {
           if (guild.channels.cache.has(categoryId)) {
-            debounceSort(guild, categoryId, 0);
+            debounceSort(
+              guild,
+              categoryId,
+              0
+            );
           }
         }
+
+        // Failsafe profissional:
+        // além de ordenar, confere se quem está em "membros ativos"
+        // ainda é membro válido e ainda possui Controle GI existente.
+        await reconcileCreatorActiveCategory(
+          guild,
+          {
+            trigger: "supervisor_periodico",
+          }
+        );
       }
     }
 
@@ -1367,6 +1743,61 @@ const SC_SORT_CATEGORY_IDS = [
         );
       }
     });
+
+    // Se perder o cargo SantaCreators, confere imediatamente o ticket ativo.
+    client.on(
+      Events.GuildMemberUpdate,
+      async (oldMember, newMember) => {
+        try {
+          const hadSantaCreators =
+            oldMember.roles.cache.has(
+              CREATOR_TICKET_AUTO
+                .ROLE_SANTA_CREATORS
+            );
+
+          const hasSantaCreators =
+            newMember.roles.cache.has(
+              CREATOR_TICKET_AUTO
+                .ROLE_SANTA_CREATORS
+            );
+
+          if (
+            hadSantaCreators &&
+            !hasSantaCreators
+          ) {
+            await reconcileCreatorActiveTicketsForUser(
+              newMember.guild,
+              newMember.id,
+              "cargo_santacreators_removido"
+            );
+          }
+        } catch (error) {
+          console.error(
+            "[SC_SORT][RECONCILE] Erro no GuildMemberUpdate:",
+            error
+          );
+        }
+      }
+    );
+
+    // Se sair do servidor, o ticket ativo não fica órfão em membros.
+    client.on(
+      Events.GuildMemberRemove,
+      async (member) => {
+        try {
+          await reconcileCreatorActiveTicketsForUser(
+            member.guild,
+            member.id,
+            "membro_saiu_do_servidor"
+          );
+        } catch (error) {
+          console.error(
+            "[SC_SORT][RECONCILE] Erro no GuildMemberRemove:",
+            error
+          );
+        }
+      }
+    );
   } catch (e) {
     console.error("[SC_SORT] Erro inesperado:", e);
   }

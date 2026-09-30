@@ -15647,25 +15647,173 @@ async function fetchAlinhamentosContext(message) {
   }
 }
 
-function readGiRecordsFromFile() {
+function normalizeGiRecords(
+  records,
+  guildId = null
+) {
+  const wantedGuildId =
+    guildId
+      ? String(guildId)
+      : null;
+
+  const byUser =
+    new Map();
+
+  for (
+    const rec
+    of Array.isArray(records)
+      ? records
+      : []
+  ) {
+    const targetId =
+      String(
+        rec?.targetId || ""
+      ).trim();
+
+    if (!targetId) {
+      continue;
+    }
+
+    const recGuildId =
+      rec?.guildId
+        ? String(rec.guildId)
+        : null;
+
+    if (
+      wantedGuildId &&
+      recGuildId &&
+      recGuildId !== wantedGuildId
+    ) {
+      continue;
+    }
+
+    const previous =
+      byUser.get(targetId);
+
+    if (
+      !previous ||
+      Number(rec?.createdAtMs || 0) >
+        Number(
+          previous?.createdAtMs || 0
+        )
+    ) {
+      byUser.set(
+        targetId,
+        rec
+      );
+    }
+  }
+
+  return [
+    ...byUser.values()
+  ];
+}
+
+function readGiRecordsFromFile(
+  guildId = null
+) {
   try {
-    if (!fs.existsSync(AI_GI_DATA_FILE)) return [];
+    if (
+      !fs.existsSync(
+        AI_GI_DATA_FILE
+      )
+    ) {
+      return [];
+    }
 
-    const raw = fs.readFileSync(AI_GI_DATA_FILE, "utf8");
-    const data = JSON.parse(raw || "{}");
+    const raw =
+      fs.readFileSync(
+        AI_GI_DATA_FILE,
+        "utf8"
+      );
 
-    if (!Array.isArray(data.registros)) return [];
+    const data =
+      JSON.parse(
+        raw || "{}"
+      );
 
-    return data.registros;
+    if (
+      !Array.isArray(
+        data.registros
+      )
+    ) {
+      return [];
+    }
+
+    return normalizeGiRecords(
+      data.registros,
+      guildId
+    );
   } catch (err) {
-    console.error("[IA CHAT AUTO] Erro ao ler sc_gi_registros.json:", err);
+    console.error(
+      "[IA CHAT AUTO] Erro ao ler sc_gi_registros.json:",
+      err
+    );
+
     return [];
   }
 }
 
+function readCurrentGiRecords(
+  guildId = null
+) {
+  const api =
+    globalThis.SC_GI_CONTROL_API;
+
+  if (
+    api &&
+    api.ready === true &&
+    typeof api.listControls ===
+      "function"
+  ) {
+    try {
+      const liveRecords =
+        api.listControls(
+          guildId
+        );
+
+      return {
+        records:
+          normalizeGiRecords(
+            liveRecords,
+            guildId
+          ),
+
+        source:
+          "memoria_viva_gi",
+      };
+    } catch (err) {
+      console.warn(
+        "[IA CHAT AUTO] Falha ao consultar memória viva do GI; usando arquivo:",
+        err?.message || err
+      );
+    }
+  }
+
+  return {
+    records:
+      readGiRecordsFromFile(
+        guildId
+      ),
+
+    source:
+      "arquivo_persistido",
+  };
+}
+
 async function fetchGIStatusContext(message) {
   try {
-    const records = readGiRecordsFromFile();
+    const guildId =
+      message.guild?.id ||
+      null;
+
+    const {
+      records,
+      source,
+    } =
+      readCurrentGiRecords(
+        guildId
+      );
 
     const ativos = [];
     const pausados = [];
@@ -15741,17 +15889,42 @@ async function fetchGIStatusContext(message) {
 
     return [
       `CONSULTA INTERNA — CONTROLE GI`,
-      `Arquivo lido: ${AI_GI_DATA_FILE}`,
+
+      `Fonte atual: ${
+        source === "memoria_viva_gi"
+          ? "memória viva do Controle GI"
+          : "arquivo persistido deduplicado"
+      }`,
+
+      `Arquivo de fallback: ${AI_GI_DATA_FILE}`,
+
       `Canal/painel consultado: <#${AI_FIVEM_GI_PANEL_CHANNEL_ID}>`,
-      `Total de registros: ${records.length}`,
+
+      `Total de controles únicos: ${records.length}`,
+
       `Ativos: ${ativos.length}`,
+
       `Pausados: ${pausados.length}`,
+
       "",
+
       `GI ATIVOS:`,
-      ativos.slice(0, 20).map(formatRec).join("\n\n") || "Nenhum ativo encontrado.",
+
+      ativos
+        .slice(0, 20)
+        .map(formatRec)
+        .join("\n\n") ||
+        "Nenhum ativo encontrado.",
+
       "",
+
       `GI PAUSADOS:`,
-      pausados.slice(0, 20).map(formatRec).join("\n\n") || "Nenhum pausado encontrado.",
+
+      pausados
+        .slice(0, 20)
+        .map(formatRec)
+        .join("\n\n") ||
+        "Nenhum pausado encontrado.",
       "",
       `PAINEL/CANAL ${AI_FIVEM_GI_PANEL_CHANNEL_ID}:`,
       panelContext || "Nenhuma mensagem recente útil encontrada no painel.",

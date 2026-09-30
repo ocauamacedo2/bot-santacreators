@@ -221,6 +221,125 @@ CHANNEL_RESTORE_LOG:      '1486006878914875412',
       restoreTimers: new Map() // userId -> timeoutId
     };
 
+    // =====================================================
+    // API VIVA DO CONTROLE GI
+    // =====================================================
+    // Permite que outros módulos do mesmo processo consultem o estado REAL
+    // dos controles em memória, inclusive controles pausados.
+    //
+    // IMPORTANTE:
+    // - active === true  -> Controle GI ativo
+    // - active === false -> Controle GI pausado, MAS ainda existente
+    // - sem registro     -> pessoa não possui mais Controle GI
+    //
+    // O sortChannels usa isso como failsafe para não depender somente
+    // de eventos antigos ou do cargo GI.
+    let SC_GI_DATA_READY = false;
+    let SC_GI_DATA_AUTHORITATIVE = false;
+
+    function SC_GI_findCurrentControl(guildId, userId) {
+      const wantedGuildId = String(guildId || '');
+      const wantedUserId = String(userId || '');
+
+      if (!wantedUserId) return null;
+
+      let newest = null;
+
+      for (const rec of SC_GI_STATE.registros.values()) {
+        if (String(rec?.targetId || '') !== wantedUserId) continue;
+
+        if (
+          wantedGuildId &&
+          rec?.guildId &&
+          String(rec.guildId) !== wantedGuildId
+        ) {
+          continue;
+        }
+
+        if (
+          !newest ||
+          Number(rec?.createdAtMs || 0) > Number(newest?.createdAtMs || 0)
+        ) {
+          newest = rec;
+        }
+      }
+
+      return newest;
+    }
+
+    function SC_GI_toPublicControl(rec) {
+      if (!rec) return null;
+
+      return {
+        targetId: String(rec.targetId || ''),
+        guildId: rec.guildId ? String(rec.guildId) : null,
+        messageId: rec.messageId ? String(rec.messageId) : null,
+        channelId: rec.channelId ? String(rec.channelId) : null,
+        active: rec.active !== false,
+        paused: rec.active === false,
+        area: rec.area || null,
+        responsibleUserId: rec.responsibleUserId || null,
+        responsibleType: rec.responsibleType || null,
+        pausedAtMs: rec.pausedAtMs || null,
+        createdAtMs: rec.createdAtMs || null,
+        note: rec.note || ''
+      };
+    }
+
+    const SC_GI_CONTROL_API = {
+      get ready() {
+        return SC_GI_DATA_READY;
+      },
+
+      get authoritative() {
+        return SC_GI_DATA_AUTHORITATIVE;
+      },
+
+      getControl(guildId, userId) {
+        return SC_GI_toPublicControl(
+          SC_GI_findCurrentControl(guildId, userId)
+        );
+      },
+
+      hasControl(guildId, userId) {
+        return !!SC_GI_findCurrentControl(guildId, userId);
+      },
+
+      listControls(guildId = null) {
+        const wantedGuildId = String(guildId || '');
+        const byUser = new Map();
+
+        for (const rec of SC_GI_STATE.registros.values()) {
+          if (!rec?.targetId) continue;
+
+          if (
+            wantedGuildId &&
+            rec?.guildId &&
+            String(rec.guildId) !== wantedGuildId
+          ) {
+            continue;
+          }
+
+          const userId = String(rec.targetId);
+          const previous = byUser.get(userId);
+
+          if (
+            !previous ||
+            Number(rec?.createdAtMs || 0) >
+              Number(previous?.createdAtMs || 0)
+          ) {
+            byUser.set(userId, rec);
+          }
+        }
+
+        return [...byUser.values()]
+          .map(SC_GI_toPublicControl)
+          .filter(Boolean);
+      }
+    };
+
+    globalThis.SC_GI_CONTROL_API = SC_GI_CONTROL_API;
+
     async function SC_GI_load() {
       try {
         // Migração: se não existe na pasta data, tenta ler da raiz
@@ -230,7 +349,11 @@ CHANNEL_RESTORE_LOG:      '1486006878914875412',
           console.log('[SC_GI] Migrando dados da raiz para pasta /data...');
         }
 
-        if (!fs.existsSync(fileToRead)) return;
+        if (!fs.existsSync(fileToRead)) {
+          SC_GI_DATA_READY = true;
+          SC_GI_DATA_AUTHORITATIVE = false;
+          return;
+        }
 
         const raw  = await fsp.readFile(fileToRead, 'utf8');
         const data = JSON.parse(raw || '{}');
@@ -347,11 +470,17 @@ const prev = byUser.get(r.targetId);
 
         console.log(`[SC_GI] Carregado ${SC_GI_STATE.registros.size} registro(s).`);
 
+        // A partir daqui a memória do Controle GI já é uma fonte confiável.
+        SC_GI_DATA_READY = true;
+        SC_GI_DATA_AUTHORITATIVE = true;
+
         // Se leu do arquivo antigo, salva no novo imediatamente
         if (fileToRead !== SC_GI_CFG.DATA_FILE) {
           await SC_GI_saveNow();
         }
       } catch (e) {
+        SC_GI_DATA_READY = false;
+        SC_GI_DATA_AUTHORITATIVE = false;
         console.warn('[SC_GI] Falha ao carregar arquivo, seguindo em memória:', e?.message);
       }
     }
@@ -401,6 +530,8 @@ const prev = byUser.get(r.targetId);
           }))
         };
         await fsp.writeFile(SC_GI_CFG.DATA_FILE, JSON.stringify(data, null, 2), 'utf8');
+        SC_GI_DATA_READY = true;
+        SC_GI_DATA_AUTHORITATIVE = true;
       } catch (e) {
         console.error('[SC_GI] Erro ao salvar dados:', e);
       }
