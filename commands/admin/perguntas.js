@@ -25,12 +25,36 @@ const PERGUNTAS_BYPASS_USER_IDS = new Set([
   "1262262852949905408", // owner
 ]);
 
+const PERGUNTAS_EXECUTION_LOCKS = new Set();
+
+function claimPerguntasExecution(message) {
+  const key =
+    `${message.guildId || "no-guild"}:` +
+    `${message.channel?.id || "no-channel"}:` +
+    `${message.id}`;
+
+  if (PERGUNTAS_EXECUTION_LOCKS.has(key)) {
+    return false;
+  }
+
+  PERGUNTAS_EXECUTION_LOCKS.add(key);
+
+  const lockTimer = setTimeout(() => {
+    PERGUNTAS_EXECUTION_LOCKS.delete(key);
+  }, 60_000);
+
+  if (typeof lockTimer.unref === "function") {
+    lockTimer.unref();
+  }
+
+  return true;
+}
+
 function fireAndForget(promise, label = 'async_task') {
   Promise.resolve(promise).catch((e) => {
     console.error(`[!perguntas] Falha em ${label}:`, e);
   });
 }
-
 async function disableOldStartButtons(channel, clientUserId, keepMessageId) {
   const mensagensRecentes = await channel.messages
     .fetch({ limit: 50 })
@@ -40,8 +64,16 @@ async function disableOldStartButtons(channel, clientUserId, keepMessageId) {
 
   const tarefas = [];
 
+  const keepMessage = mensagensRecentes.get(keepMessageId) || null;
+  const keepCreatedTimestamp = keepMessage?.createdTimestamp ?? Date.now();
+
   for (const msg of mensagensRecentes.values()) {
     if (msg.id === keepMessageId) continue;
+
+    // Nunca remove o botão de uma mensagem criada depois da mensagem
+    // que esta execução acabou de enviar. Isso evita duas execuções
+    // concorrentes removerem o botão uma da outra.
+    if (msg.createdTimestamp >= keepCreatedTimestamp) continue;
 
     if (msg.author?.id !== clientUserId) continue;
 
@@ -92,6 +124,14 @@ export default {
       return message.channel.send(
         "Esse comando só funciona dentro do servidor."
       );
+    }
+
+    if (!claimPerguntasExecution(message)) {
+      console.warn(
+        `[!perguntas] Execução duplicada ignorada para a mensagem ${message.id} no canal ${message.channel.id}.`
+      );
+
+      return;
     }
 
     // =====================================================
