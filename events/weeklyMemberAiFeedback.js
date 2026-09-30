@@ -5,6 +5,7 @@ import { EmbedBuilder } from "discord.js";
 
 import {
   getFormsCreatorPersonData,
+  getPersonalTicketHistoryForUser,
 } from "./formscreator.js";
 
 import {
@@ -20,6 +21,7 @@ import {
 
 import {
   generateSantaCreatorsStandaloneText,
+  getPersonDiscordEvidenceForFeedback,
 } from "./iaChatAuto.js";
 
 const TZ = "America/Sao_Paulo";
@@ -2867,10 +2869,122 @@ async function collectMemberFacts({
       )
     );
 
-  const weekBounds =
+   const weekBounds =
     getWeekBoundsMs(
       weekKey
     );
+
+  const previousWeekBounds =
+    getWeekBoundsMs(
+      previousWeekKey
+    );
+
+  // =====================================================
+  // 🎫 HISTÓRICO DO TICKET PESSOAL
+  // =====================================================
+  //
+  // Inclui mensagens do próprio membro, responsáveis,
+  // registros, evidências e as respostas contextuais da IA.
+  // Não substitui os feedbacks humanos do Forms.
+  // =====================================================
+
+  const personalTicketHistory =
+    getPersonalTicketHistoryForUser(
+      userId,
+      {
+        sinceMs:
+          weekBounds.startMs,
+
+        untilMs:
+          Math.min(
+            Date.now(),
+            weekBounds.endMs - 1
+          ),
+
+        limit:
+          120,
+
+        includeAi:
+          true,
+      }
+    );
+
+  const previousPersonalTicketHistory =
+    getPersonalTicketHistoryForUser(
+      userId,
+      {
+        sinceMs:
+          previousWeekBounds.startMs,
+
+        untilMs:
+          previousWeekBounds.endMs - 1,
+
+        limit:
+          80,
+
+        includeAi:
+          true,
+      }
+    );
+
+  // =====================================================
+  // 🌐 EVIDÊNCIAS COMPLEMENTARES DO DISCORD
+  // =====================================================
+  //
+  // Busca limitada e cacheada em canais que o bot realmente
+  // consegue visualizar. Inclui mensagens da própria pessoa e
+  // referências feitas por terceiros, sem transformar relato em fato.
+  // =====================================================
+
+  const [
+    discordEvidenceCurrent,
+    discordEvidencePrevious,
+  ] = await Promise.all([
+    getPersonDiscordEvidenceForFeedback({
+      client,
+      guildId:
+        guild.id,
+      userId,
+      sinceMs:
+        weekBounds.startMs,
+      untilMs:
+        Math.min(
+          Date.now(),
+          weekBounds.endMs - 1
+        ),
+      maxChannels:
+        40,
+      maxResults:
+        60,
+    }).catch(
+      () => ({
+        accessible: false,
+        scannedChannels: 0,
+        matches: [],
+      })
+    ),
+
+    getPersonDiscordEvidenceForFeedback({
+      client,
+      guildId:
+        guild.id,
+      userId,
+      sinceMs:
+        previousWeekBounds.startMs,
+      untilMs:
+        previousWeekBounds.endMs - 1,
+      maxChannels:
+        40,
+      maxResults:
+        60,
+    }).catch(
+      () => ({
+        accessible: false,
+        scannedChannels: 0,
+        matches: [],
+      })
+    ),
+  ]);
 
   const lastRoleChangeMs =
     Date.parse(
@@ -3159,8 +3273,16 @@ async function collectMemberFacts({
     previousFormsHistory:
       formsHistory.previousContext,
 
-    formsMessagesScanned:
+        formsMessagesScanned:
       formsHistory.totalScanned,
+
+    personalTicketHistory,
+
+    previousPersonalTicketHistory,
+
+    discordEvidenceCurrent,
+
+    discordEvidencePrevious,
 
     rankingStats,
 
@@ -3230,6 +3352,170 @@ async function collectMemberFacts({
 }
 
 // =====================================================
+// 🎫 FORMATAÇÃO DO HISTÓRICO DO TICKET PESSOAL
+// =====================================================
+
+function formatPersonalTicketHistoryForPrompt(
+  rows,
+  maxChars = 14000
+) {
+  const items =
+    Array.isArray(
+      rows
+    )
+      ? rows
+      : [];
+
+  if (!items.length) {
+    return "Nenhum registro do ticket pessoal foi localizado neste período.";
+  }
+
+  return items
+    .slice(
+      -80
+    )
+    .map(
+      item => {
+        const when =
+          Number(
+            item?.createdAtMs ||
+            0
+          ) > 0
+            ? new Date(
+                Number(
+                  item.createdAtMs
+                )
+              ).toLocaleString(
+                "pt-BR",
+                {
+                  timeZone:
+                    TZ,
+                }
+              )
+            : "data não informada";
+
+        const attachments =
+          Array.isArray(
+            item?.attachments
+          ) &&
+          item.attachments.length
+            ? item.attachments
+                .map(
+                  attachment =>
+                    `${attachment.name || "arquivo"}${
+                      attachment.contentType
+                        ? ` (${attachment.contentType})`
+                        : ""
+                    }`
+                )
+                .join(
+                  ", "
+                )
+            : "nenhum";
+
+        return [
+          `- ${when}`,
+          `tipo=${item?.type || "message"}`,
+          `relação=${item?.relation || "não classificada"}`,
+          `evidência=${item?.evidenceKind || "não classificada"}`,
+          `autor=${item?.authorName || item?.authorId || "não identificado"}`,
+          item?.content
+            ? `mensagem=${String(item.content).replace(/\s+/g, " ").slice(0, 1200)}`
+            : "",
+          item?.summary
+            ? `resumo=${String(item.summary).replace(/\s+/g, " ").slice(0, 1800)}`
+            : "",
+          `anexos=${attachments}`,
+          item?.messageUrl
+            ? `link=${item.messageUrl}`
+            : "",
+        ]
+          .filter(
+            Boolean
+          )
+          .join(
+            " | "
+          );
+      }
+    )
+    .join(
+      "\n"
+    )
+    .slice(
+      0,
+      maxChars
+    );
+}
+
+
+// =====================================================
+// 🌐 FORMATAÇÃO DAS EVIDÊNCIAS DO DISCORD
+// =====================================================
+
+function formatDiscordEvidenceForPrompt(
+  result,
+  maxChars = 14000
+) {
+  if (!result?.accessible) {
+    return "A varredura complementar do Discord não ficou disponível nesta consulta.";
+  }
+
+  const matches =
+    Array.isArray(
+      result?.matches
+    )
+      ? result.matches
+      : [];
+
+  if (!matches.length) {
+    return `Nenhuma referência adicional foi localizada na amostra de ${Number(result?.scannedChannels || 0)} canal(is) pesquisado(s). Isso não prova ausência de atividade fora da amostra.`;
+  }
+
+  return matches
+    .slice(
+      0,
+      60
+    )
+    .map(
+      item => {
+        const when =
+          Number(
+            item?.createdTimestamp ||
+            0
+          ) > 0
+            ? new Date(
+                Number(
+                  item.createdTimestamp
+                )
+              ).toLocaleString(
+                "pt-BR",
+                {
+                  timeZone:
+                    TZ,
+                }
+              )
+            : "data não informada";
+
+        return [
+          `- ${when}`,
+          `relação=${item?.relationType || "referência"}`,
+          `canal=${item?.channelName || item?.channelId || "não identificado"}`,
+          `autor=${item?.authorName || item?.authorId || "não identificado"}`,
+          `conteúdo=${String(item?.text || "").replace(/\s+/g, " ").slice(0, 1800)}`,
+          item?.link
+            ? `link=${item.link}`
+            : "",
+        ]
+          .filter(Boolean)
+          .join(" | ");
+      }
+    )
+    .join("\n")
+    .slice(0, maxChars);
+}
+
+
+// =====================================================
 // PROMPT DA IA
 // =====================================================
 
@@ -3253,7 +3539,7 @@ function buildFeedbackPrompt({
         "Nenhum registro ou comentário do Forms foi localizado no período já transcorrido desta semana."
       );
 
-  const previousFormsHistory =
+   const previousFormsHistory =
     Array.isArray(
       facts.previousFormsHistory
     ) &&
@@ -3267,6 +3553,30 @@ function buildFeedbackPrompt({
       : (
         "Nenhum histórico anterior relevante foi localizado no Forms."
       );
+
+  const currentPersonalTicketHistory =
+    formatPersonalTicketHistoryForPrompt(
+      facts.personalTicketHistory,
+      16000
+    );
+
+  const previousPersonalTicketHistory =
+    formatPersonalTicketHistoryForPrompt(
+      facts.previousPersonalTicketHistory,
+      10000
+    );
+
+  const currentDiscordEvidence =
+    formatDiscordEvidenceForPrompt(
+      facts.discordEvidenceCurrent,
+      16000
+    );
+
+  const previousDiscordEvidence =
+    formatDiscordEvidenceForPrompt(
+      facts.discordEvidencePrevious,
+      10000
+    );
 
   const rankingCurrentPoints =
     Math.max(
@@ -3456,10 +3766,71 @@ O QUE APARECEU NO FORMS NESTA SEMANA
 ${currentFormsHistory}
 
 =====================================================
+TICKET PESSOAL NESTA SEMANA
+=====================================================
+
+${currentPersonalTicketHistory}
+
+Use o ticket pessoal como contexto operacional e humano.
+
+Ele pode conter:
+
+- dúvidas;
+- pedidos de orientação;
+- denúncias;
+- registros pessoais importantes;
+- correções;
+- prints;
+- vídeos;
+- evidências;
+- alinhamentos;
+- respostas de responsáveis;
+- sinais de autonomia;
+- dificuldades recorrentes.
+
+IMPORTANTE:
+
+- uma dúvida não deve virar automaticamente ponto negativo;
+- uma denúncia feita pela pessoa não é prova de que ela cometeu algo;
+- diferencie mensagem do próprio membro, mensagem da equipe e resposta da IA;
+- não trate resposta da IA como feedback humano;
+- evidências e registros podem ajudar a entender contexto, mas não invente conclusões além do que foi registrado.
+
+=====================================================
+EVIDÊNCIAS COMPLEMENTARES DO DISCORD NESTA SEMANA
+=====================================================
+
+${currentDiscordEvidence}
+
+Use esta seção para complementar, nunca para substituir, Forms, Ranking, Ticket Pessoal e registros oficiais.
+
+REGRAS IMPORTANTES:
+
+- mensagem escrita pela própria pessoa pode ser tratada como fala/ação dela;
+- fala de terceiro SOBRE a pessoa é relato, opinião ou referência, e NÃO vira fato automaticamente;
+- denúncia, acusação ou suspeita continua sendo alegação até existir evidência suficiente;
+- anexo, print ou vídeo listado confirma que houve mídia naquela mensagem, mas só descreva o conteúdo visual se existir análise textual real registrada;
+- mensagens de bot/IA não são feedback humano;
+- não use piada, ironia ou conclusão psicológica para interpretar conflito;
+- procure padrões corroborados entre fontes diferentes antes de transformar uma ocorrência em orientação de desempenho.
+
+=====================================================
 HISTÓRICO ANTERIOR DO PROCESSO DA PESSOA
 =====================================================
 
 ${previousFormsHistory}
+
+=====================================================
+TICKET PESSOAL — HISTÓRICO ANTERIOR
+=====================================================
+
+${previousPersonalTicketHistory}
+
+=====================================================
+DISCORD — CONTEXTO COMPLEMENTAR ANTERIOR
+=====================================================
+
+${previousDiscordEvidence}
 
 Esse histórico é MUITO IMPORTANTE.
 
@@ -5822,7 +6193,7 @@ function buildPrivateMemberFeedbackPrompt({
         "Nenhum comentário ou registro adicional foi localizado no Forms desta semana."
       );
 
-  const previousFormsHistory =
+   const previousFormsHistory =
     Array.isArray(
       facts.previousFormsHistory
     ) &&
@@ -5836,6 +6207,30 @@ function buildPrivateMemberFeedbackPrompt({
       : (
         "Nenhum histórico anterior relevante foi localizado."
       );
+
+  const currentPersonalTicketHistory =
+    formatPersonalTicketHistoryForPrompt(
+      facts.personalTicketHistory,
+      14000
+    );
+
+  const previousPersonalTicketHistory =
+    formatPersonalTicketHistoryForPrompt(
+      facts.previousPersonalTicketHistory,
+      9000
+    );
+
+  const currentDiscordEvidence =
+    formatDiscordEvidenceForPrompt(
+      facts.discordEvidenceCurrent,
+      12000
+    );
+
+  const previousDiscordEvidence =
+    formatDiscordEvidenceForPrompt(
+      facts.discordEvidencePrevious,
+      8000
+    );
 
   return `
 Você vai escrever uma orientação PRIVADA diretamente para ${facts.displayName}.
@@ -5854,6 +6249,7 @@ Use linguagem:
 - individual.
 
 Pode usar "você", "seu", "sua" normalmente.
+Quando o contexto permitir, pode usar uma brincadeira leve ou um toque de humor natural, sem diminuir a pessoa, sem ironizar situações sérias e sem transformar o feedback em piada.
 
 =====================================================
 OBJETIVO DA MENSAGEM
@@ -6021,10 +6417,51 @@ ACOMPANHAMENTOS DESTA SEMANA
 ${currentFormsHistory}
 
 =====================================================
+TICKET PESSOAL NESTA SEMANA
+=====================================================
+
+${currentPersonalTicketHistory}
+
+Use esse histórico para orientar a pessoa de forma prática.
+
+Não exponha para ela mensagens internas de terceiros literalmente.
+Não diga que uma denúncia é verdadeira só porque foi enviada.
+Não transforme uma dúvida em falha de desempenho.
+Se aparecer um padrão de dúvida, correção ou orientação recorrente, traduza isso em conselho útil e respeitoso.
+
+=====================================================
+CONTEXTO COMPLEMENTAR DO DISCORD NESTA SEMANA
+=====================================================
+
+${currentDiscordEvidence}
+
+Use esse contexto apenas para enriquecer a orientação.
+
+- Não exponha literalmente conversas privadas de terceiros.
+- Não revele nomes de quem criticou, denunciou ou comentou sobre a pessoa quando isso não for necessário.
+- Relato de terceiro não é fato confirmado.
+- Mensagem da própria pessoa pode ser usada como fala/ação dela.
+- Se houver padrão real corroborado por mais de uma fonte, traduza o significado em conselho prático.
+- Se faltar confirmação, seja cuidadoso e não acuse.
+- Se existir anexo, print ou vídeo apenas listado, não invente o conteúdo visual sem análise registrada.
+
+=====================================================
 HISTÓRICO ANTERIOR DE ACOMPANHAMENTO
 =====================================================
 
 ${previousFormsHistory}
+
+=====================================================
+TICKET PESSOAL — HISTÓRICO ANTERIOR
+=====================================================
+
+${previousPersonalTicketHistory}
+
+=====================================================
+DISCORD — CONTEXTO COMPLEMENTAR ANTERIOR
+=====================================================
+
+${previousDiscordEvidence}
 
 =====================================================
 COMO INTERPRETAR

@@ -156,6 +156,485 @@ function pickPersistRoot() {
 const DATA_DIR = path.resolve(pickPersistRoot() || path.join(__dirname, ".."), "data");
 const STATE_FILE = path.join(DATA_DIR, "formscreator_state.json");
 
+
+// =====================================================
+// 🎫 HISTÓRICO DOS TICKETS PESSOAIS
+// =====================================================
+//
+// Mantém um histórico estruturado e limitado das mensagens
+// dos tickets pessoais vinculados ao Controle GI.
+//
+// Não armazena bytes de imagens/vídeos.
+// Guarda somente metadados, texto, links e resumos produzidos
+// pela própria IA, evitando crescimento infinito do arquivo.
+// =====================================================
+
+const PERSONAL_TICKET_HISTORY_FILE =
+  path.join(
+    DATA_DIR,
+    "formscreator_personal_ticket_history.json"
+  );
+
+const PERSONAL_TICKET_HISTORY_RETENTION_MS =
+  180 *
+  24 *
+  60 *
+  60 *
+  1000;
+
+const PERSONAL_TICKET_HISTORY_MAX_PER_USER =
+  400;
+
+function readPersonalTicketHistoryState() {
+  ensureDataDir();
+
+  if (
+    !fs.existsSync(
+      PERSONAL_TICKET_HISTORY_FILE
+    )
+  ) {
+    return {
+      version:
+        1,
+
+      users:
+        {},
+    };
+  }
+
+  try {
+    const parsed =
+      JSON.parse(
+        fs.readFileSync(
+          PERSONAL_TICKET_HISTORY_FILE,
+          "utf8"
+        ) ||
+        "{}"
+      );
+
+    return {
+      version:
+        1,
+
+      users:
+        (
+          parsed?.users &&
+          typeof parsed.users ===
+            "object"
+        )
+          ? parsed.users
+          : {},
+    };
+  } catch (error) {
+    console.warn(
+      "[FormsCreator] Falha ao ler histórico dos tickets pessoais:",
+      error?.message || error
+    );
+
+    return {
+      version:
+        1,
+
+      users:
+        {},
+    };
+  }
+}
+
+function writePersonalTicketHistoryState(
+  state
+) {
+  try {
+    ensureDataDir();
+
+    const temporaryFile =
+      `${PERSONAL_TICKET_HISTORY_FILE}.tmp`;
+
+    fs.writeFileSync(
+      temporaryFile,
+      JSON.stringify(
+        state,
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    fs.renameSync(
+      temporaryFile,
+      PERSONAL_TICKET_HISTORY_FILE
+    );
+  } catch (error) {
+    console.error(
+      "[FormsCreator] Falha ao salvar histórico dos tickets pessoais:",
+      error?.message || error
+    );
+  }
+}
+
+function sanitizePersonalTicketAttachments(
+  attachments
+) {
+  return (
+    Array.isArray(
+      attachments
+    )
+      ? attachments
+      : []
+  )
+    .slice(
+      0,
+      8
+    )
+    .map(
+      item => ({
+        name:
+          String(
+            item?.name ||
+            "arquivo"
+          ).slice(
+            0,
+            180
+          ),
+
+        url:
+          String(
+            item?.url ||
+            ""
+          ).slice(
+            0,
+            1000
+          ),
+
+        contentType:
+          String(
+            item?.contentType ||
+            ""
+          ).slice(
+            0,
+            120
+          ),
+
+        size:
+          Math.max(
+            0,
+            Number(
+              item?.size ||
+              0
+            )
+          ),
+      })
+    );
+}
+
+export function recordPersonalTicketActivity({
+  userId,
+  guildId = null,
+  channelId,
+  messageId,
+  authorId,
+  authorName = null,
+  relation = null,
+  evidenceKind = null,
+  type = "message",
+  content = "",
+  summary = "",
+  attachments = [],
+  createdAtMs = Date.now(),
+  messageUrl = null,
+} = {}) {
+  const targetUserId =
+    String(
+      userId ||
+      ""
+    ).trim();
+
+  const normalizedMessageId =
+    String(
+      messageId ||
+      ""
+    ).trim();
+
+  if (
+    !targetUserId ||
+    !channelId ||
+    !normalizedMessageId
+  ) {
+    return null;
+  }
+
+  const state =
+    readPersonalTicketHistoryState();
+
+  const current =
+    Array.isArray(
+      state.users[
+        targetUserId
+      ]
+    )
+      ? state.users[
+          targetUserId
+        ]
+      : [];
+
+  const dedupeKey =
+    `${normalizedMessageId}:${String(type || "message")}`;
+
+  const alreadyExists =
+    current.some(
+      item =>
+        item?.dedupeKey ===
+        dedupeKey
+    );
+
+  if (alreadyExists) {
+    return null;
+  }
+
+  const record = {
+    dedupeKey,
+
+    userId:
+      targetUserId,
+
+    guildId:
+      guildId
+        ? String(
+            guildId
+          )
+        : null,
+
+    channelId:
+      String(
+        channelId
+      ),
+
+    messageId:
+      normalizedMessageId,
+
+    authorId:
+      authorId
+        ? String(
+            authorId
+          )
+        : null,
+
+    authorName:
+      authorName
+        ? String(
+            authorName
+          ).slice(
+            0,
+            150
+          )
+        : null,
+
+    relation:
+      relation
+        ? String(
+            relation
+          ).slice(
+            0,
+            40
+          )
+        : null,
+
+    evidenceKind:
+      evidenceKind
+        ? String(
+            evidenceKind
+          ).slice(
+            0,
+            60
+          )
+        : null,
+
+    type:
+      String(
+        type ||
+        "message"
+      ).slice(
+        0,
+        50
+      ),
+
+    content:
+      String(
+        content ||
+        ""
+      )
+        .trim()
+        .slice(
+          0,
+          2200
+        ),
+
+    summary:
+      String(
+        summary ||
+        ""
+      )
+        .trim()
+        .slice(
+          0,
+          3000
+        ),
+
+    attachments:
+      sanitizePersonalTicketAttachments(
+        attachments
+      ),
+
+    createdAtMs:
+      Number(
+        createdAtMs ||
+        Date.now()
+      ),
+
+    messageUrl:
+      messageUrl
+        ? String(
+            messageUrl
+          ).slice(
+            0,
+            1000
+          )
+        : null,
+  };
+
+  const cutoff =
+    Date.now() -
+    PERSONAL_TICKET_HISTORY_RETENTION_MS;
+
+  const next = [
+    ...current,
+    record,
+  ]
+    .filter(
+      item =>
+        Number(
+          item?.createdAtMs ||
+          0
+        ) >=
+        cutoff
+    )
+    .sort(
+      (a, b) =>
+        Number(
+          a?.createdAtMs ||
+          0
+        ) -
+        Number(
+          b?.createdAtMs ||
+          0
+        )
+    )
+    .slice(
+      -PERSONAL_TICKET_HISTORY_MAX_PER_USER
+    );
+
+  state.users[
+    targetUserId
+  ] =
+    next;
+
+  writePersonalTicketHistoryState(
+    state
+  );
+
+  return record;
+}
+
+export function getPersonalTicketHistoryForUser(
+  userId,
+  {
+    sinceMs = 0,
+    untilMs = Number.POSITIVE_INFINITY,
+    limit = 120,
+    includeAi = true,
+  } = {}
+) {
+  const targetUserId =
+    String(
+      userId ||
+      ""
+    ).trim();
+
+  if (!targetUserId) {
+    return [];
+  }
+
+  const state =
+    readPersonalTicketHistoryState();
+
+  const rows =
+    Array.isArray(
+      state.users[
+        targetUserId
+      ]
+    )
+      ? state.users[
+          targetUserId
+        ]
+      : [];
+
+  return rows
+    .filter(
+      item => {
+        const createdAt =
+          Number(
+            item?.createdAtMs ||
+            0
+          );
+
+        if (
+          createdAt <
+            Number(
+              sinceMs ||
+              0
+            ) ||
+          createdAt >
+            Number(
+              untilMs
+            )
+        ) {
+          return false;
+        }
+
+        if (
+          includeAi !==
+            true &&
+          item?.type ===
+            "ai_response"
+        ) {
+          return false;
+        }
+
+        return true;
+      }
+    )
+    .sort(
+      (a, b) =>
+        Number(
+          a?.createdAtMs ||
+          0
+        ) -
+        Number(
+          b?.createdAtMs ||
+          0
+        )
+    )
+    .slice(
+      -Math.max(
+        1,
+        Number(
+          limit ||
+          120
+        )
+      )
+    );
+}
+
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 }
@@ -4181,6 +4660,15 @@ export async function getFormsCreatorPersonData(client, userId) {
             thread?.createdAt
                 ? thread.createdAt.toISOString()
                 : null,
+
+        personalTicketHistory:
+            getPersonalTicketHistoryForUser(
+                targetUserId,
+                {
+                    limit: 60,
+                    includeAi: true,
+                }
+            ),
     };
 }
 

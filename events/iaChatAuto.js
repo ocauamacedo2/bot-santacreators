@@ -467,6 +467,12 @@ const AI_TICKET_ASSIST_CATEGORY_IDS = new Set([
   "1359245055239655544",
 ]);
 
+// Ticket pessoal permanente vinculado ao Controle GI.
+// Neste local a IA acompanha continuamente o dono do ticket.
+const AI_PERSONAL_TICKET_CATEGORY_IDS = new Set([
+  "1384650670145278033",
+]);
+
 const AI_TICKET_ASSIST_STAFF_ROLE_IDS = new Set([
   "1352493359897378941", // Senior Creator
   "1262262852949905408", // Owner
@@ -11624,6 +11630,23 @@ function messageWantsPersonIntelligence(message) {
     "como eu estou",
     "como estou indo",
     "como eu estou indo",
+    "como estou me saindo",
+    "como eu estou me saindo",
+    "como esta meu desenvolvimento",
+    "como está meu desenvolvimento",
+    "meu desenvolvimento",
+    "minha evolucao",
+    "minha evolução",
+    "o que eu preciso melhorar",
+    "o que preciso melhorar",
+    "tenho que melhorar algo",
+    "tenho algo para melhorar",
+    "onde eu preciso melhorar",
+    "onde preciso melhorar",
+    "como fui essa semana",
+    "como estou essa semana",
+    "como estou na santa creators",
+    "como estou na santacreators",
     "qual meu cargo",
     "quais meus cargos",
     "quantos pontos eu tenho",
@@ -12105,6 +12128,21 @@ async function resolvePersonFromMessageInternal(
       /\bcomo eu estou\b/,
       /\bcomo estou indo\b/,
       /\bcomo eu estou indo\b/,
+      /\bcomo estou me saindo\b/,
+      /\bcomo eu estou me saindo\b/,
+      /\bcomo esta meu desenvolvimento\b/,
+      /\bmeu desenvolvimento\b/,
+      /\bminha evolucao\b/,
+      /\bo que eu preciso melhorar\b/,
+      /\bo que preciso melhorar\b/,
+      /\btenho que melhorar algo\b/,
+      /\btenho algo para melhorar\b/,
+      /\bonde eu preciso melhorar\b/,
+      /\bonde preciso melhorar\b/,
+      /\bcomo fui essa semana\b/,
+      /\bcomo estou essa semana\b/,
+      /\bcomo estou na santa creators\b/,
+      /\bcomo estou na santacreators\b/,
       /\bqual meu cargo\b/,
       /\bquais meus cargos\b/,
       /\bmeu ranking\b/,
@@ -12585,6 +12623,39 @@ async function scanPersonHistoryInChannel(
         }
       }
 
+      for (
+        const attachment
+        of msg.attachments?.values?.() ||
+        []
+      ) {
+        parts.push(
+          [
+            "ANEXO DA MENSAGEM:",
+            `nome=${attachment?.name || "arquivo"}`,
+            `tipo=${attachment?.contentType || "desconhecido"}`,
+            `tamanho=${Number(attachment?.size || 0)}`,
+            `url=${attachment?.url || ""}`,
+          ].join(" ")
+        );
+      }
+
+      for (
+        const embed
+        of msg.embeds ||
+        []
+      ) {
+        const videoUrl =
+          embed?.video?.proxyURL ||
+          embed?.video?.url ||
+          null;
+
+        if (videoUrl) {
+          parts.push(
+            `VÍDEO INCORPORADO: provedor=${embed?.provider?.name || "desconhecido"} url=${videoUrl}`
+          );
+        }
+      }
+
       const completeText =
         parts.join("\n").trim();
 
@@ -12682,6 +12753,9 @@ async function scanPersonHistoryAcrossServer(
     maxChannels = 40,
     messagesPerChannel = 100,
     maxResults = 40,
+    sinceMs = 0,
+    untilMs = Number.POSITIVE_INFINITY,
+    maxPagesPerChannel = 1,
   } = {}
 ) {
   if (!guild) {
@@ -12817,6 +12891,39 @@ async function scanPersonHistoryAcrossServer(
 
         if (embedText) {
           parts.push(embedText);
+        }
+      }
+
+      for (
+        const attachment
+        of msg.attachments?.values?.() ||
+        []
+      ) {
+        parts.push(
+          [
+            "ANEXO DA MENSAGEM:",
+            `nome=${attachment?.name || "arquivo"}`,
+            `tipo=${attachment?.contentType || "desconhecido"}`,
+            `tamanho=${Number(attachment?.size || 0)}`,
+            `url=${attachment?.url || ""}`,
+          ].join(" ")
+        );
+      }
+
+      for (
+        const embed
+        of msg.embeds ||
+        []
+      ) {
+        const videoUrl =
+          embed?.video?.proxyURL ||
+          embed?.video?.url ||
+          null;
+
+        if (videoUrl) {
+          parts.push(
+            `VÍDEO INCORPORADO: provedor=${embed?.provider?.name || "desconhecido"} url=${videoUrl}`
+          );
         }
       }
 
@@ -12966,6 +13073,159 @@ function formatPersonGlobalHistoryBlock(
       }
     ),
   ].join("\n\n");
+}
+
+const AI_PERSON_FEEDBACK_SERVER_CACHE =
+  new Map();
+
+const AI_PERSON_FEEDBACK_SERVER_CACHE_MS =
+  5 * 60 * 1000;
+
+export async function getPersonDiscordEvidenceForFeedback({
+  client,
+  guildId,
+  userId,
+  sinceMs = 0,
+  untilMs = Number.POSITIVE_INFINITY,
+  maxChannels = 40,
+  maxResults = 60,
+} = {}) {
+  const normalizedGuildId =
+    String(guildId || "");
+
+  const normalizedUserId =
+    String(userId || "");
+
+  if (
+    !client ||
+    !normalizedGuildId ||
+    !normalizedUserId
+  ) {
+    return {
+      accessible: false,
+      scannedChannels: 0,
+      matches: [],
+    };
+  }
+
+  const guild =
+    client.guilds.cache.get(
+      normalizedGuildId
+    ) ||
+    await client.guilds
+      .fetch(
+        normalizedGuildId
+      )
+      .catch(() => null);
+
+  if (!guild) {
+    return {
+      accessible: false,
+      scannedChannels: 0,
+      matches: [],
+    };
+  }
+
+  const member =
+    guild.members.cache.get(
+      normalizedUserId
+    ) ||
+    await guild.members
+      .fetch(
+        normalizedUserId
+      )
+      .catch(() => null);
+
+  const personResolution = {
+    status:
+      member
+        ? "resolved"
+        : "historical_id",
+
+    userId:
+      normalizedUserId,
+
+    member:
+      member ||
+      null,
+
+    searchTerms:
+      [
+        member?.user?.username,
+        member?.user?.globalName,
+        member?.displayName,
+        member?.nickname,
+      ].filter(Boolean),
+  };
+
+  const cacheKey =
+    `${normalizedGuildId}:${normalizedUserId}`;
+
+  const cached =
+    AI_PERSON_FEEDBACK_SERVER_CACHE.get(
+      cacheKey
+    );
+
+  let rawResult = null;
+
+  if (
+    cached &&
+    Date.now() -
+      Number(cached.at || 0) <
+      AI_PERSON_FEEDBACK_SERVER_CACHE_MS
+  ) {
+    rawResult =
+      cached.result;
+  } else {
+    rawResult =
+      await scanPersonHistoryAcrossServer(
+        guild,
+        personResolution,
+        {
+          maxChannels,
+          messagesPerChannel:
+            100,
+          maxResults,
+        }
+      );
+
+    AI_PERSON_FEEDBACK_SERVER_CACHE.set(
+      cacheKey,
+      {
+        at:
+          Date.now(),
+        result:
+          rawResult,
+      }
+    );
+  }
+
+  const filteredMatches =
+    (
+      rawResult?.matches ||
+      []
+    ).filter(
+      item => {
+        const timestamp =
+          Number(
+            item?.createdTimestamp ||
+            0
+          );
+
+        return (
+          timestamp >=
+            Number(sinceMs || 0) &&
+          timestamp <=
+            Number(untilMs)
+        );
+      }
+    );
+
+  return {
+    ...rawResult,
+    matches:
+      filteredMatches,
+  };
 }
 
 function formatPersonHistoryBlock(result) {
@@ -13146,6 +13406,11 @@ async function buildPersonIntelligenceContext(
       "participação",
       "produtividade",
       "processo",
+      "melhorar",
+      "preciso melhorar",
+      "tenho que melhorar",
+      "como fui essa semana",
+      "como estou essa semana",
       "como anda",
       "como esta indo",
       "como está indo",
@@ -13380,6 +13645,44 @@ async function buildPersonIntelligenceContext(
           formsCreatorData.threadUrl ||
           "Não disponível"
         }`,
+        "",
+        "TICKET PESSOAL — HISTÓRICO RECENTE:",
+        ...(
+          Array.isArray(
+            formsCreatorData.personalTicketHistory
+          ) &&
+          formsCreatorData.personalTicketHistory.length
+            ? formsCreatorData.personalTicketHistory
+                .slice(-30)
+                .map(
+                  item => {
+                    const author =
+                      item?.authorName ||
+                      item?.authorId ||
+                      "não identificado";
+
+                    const content =
+                      String(
+                        item?.content ||
+                        item?.summary ||
+                        ""
+                      )
+                        .replace(
+                          /\s+/g,
+                          " "
+                        )
+                        .slice(
+                          0,
+                          900
+                        );
+
+                    return `- ${item?.type || "message"} | ${author}: ${content || "(sem texto)"}`;
+                  }
+                )
+            : [
+                "- Nenhum histórico recente do ticket pessoal foi registrado.",
+              ]
+        ),
       ].join("\n");
     } else {
       formsCreatorContext = [
@@ -20880,9 +21183,26 @@ restoreIaEntrevistaState();
 // IA — IDENTIFICAÇÃO INTELIGENTE DO AUTOR DO TICKET
 // =====================================================
 
-function isAiTicketAssistChannel(channel) {
-  return AI_TICKET_ASSIST_CATEGORY_IDS.has(
+function isAiPersonalTicketChannel(channel) {
+  return AI_PERSONAL_TICKET_CATEGORY_IDS.has(
     String(channel?.parentId || "")
+  );
+}
+
+function isAiTicketAssistChannel(channel) {
+  const parentId =
+    String(
+      channel?.parentId ||
+      ""
+    );
+
+  return (
+    AI_TICKET_ASSIST_CATEGORY_IDS.has(
+      parentId
+    ) ||
+    AI_PERSONAL_TICKET_CATEGORY_IDS.has(
+      parentId
+    )
   );
 }
 
@@ -20947,6 +21267,321 @@ function saveAiTicketAssistState(
   );
 
   return true;
+}
+
+
+function classifyPersonalTicketMessageType(message) {
+  const text =
+    String(
+      message?.content ||
+      ""
+    )
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase();
+
+  const hasAttachment =
+    Number(
+      message?.attachments?.size ||
+      0
+    ) > 0;
+
+  const hasEmbeddedVideo =
+    (
+      message?.embeds ||
+      []
+    ).some(
+      embed =>
+        Boolean(
+          embed?.video?.proxyURL ||
+          embed?.video?.url
+        )
+    );
+
+  if (
+    /\b(denuncia|denunciar|abuso|abusivo|poder indevido|uso indevido|irregularidade|suspeita)\b/.test(text)
+  ) {
+    return "denuncia_relatada";
+  }
+
+  if (
+    /\b(alinhamento|alinhado|orientacao|orientação|direcionamento)\b/.test(text)
+  ) {
+    return "alinhamento_orientacao";
+  }
+
+  if (
+    /\b(registro|log|ocorrencia|ocorrência|advertencia|advertência|correcao|correção)\b/.test(text)
+  ) {
+    return "registro_log";
+  }
+
+  if (
+    hasAttachment ||
+    hasEmbeddedVideo
+  ) {
+    return "evidencia_midia";
+  }
+
+  if (
+    text.includes("?") ||
+    /\b(duvida|dúvida|como faco|como faço|pode me ajudar|me explica)\b/.test(text)
+  ) {
+    return "duvida";
+  }
+
+  return "mensagem";
+}
+
+async function resolvePersonalTicketAuthorRelation(
+  message,
+  openerId
+) {
+  const authorId =
+    String(
+      message?.author?.id ||
+      ""
+    );
+
+  if (
+    authorId &&
+    authorId ===
+      String(openerId || "")
+  ) {
+    return "dono_ticket";
+  }
+
+  if (
+    await memberIsAiTicketAssistStaff(
+      message?.member
+    )
+  ) {
+    return "equipe_santacreators";
+  }
+
+  return "participante";
+}
+
+
+async function savePersonalTicketHistoryRecord({
+  message,
+  openerId,
+  type = null,
+  relation = null,
+  evidenceKind = null,
+  content = null,
+  summary = "",
+  messageId = null,
+  authorId = null,
+  authorName = null,
+} = {}) {
+  if (
+    !message?.guild ||
+    !message?.channel ||
+    !openerId
+  ) {
+    return;
+  }
+
+  try {
+    const {
+      recordPersonalTicketActivity,
+    } = await import(
+      "./formscreator.js"
+    );
+
+    if (
+      typeof recordPersonalTicketActivity !==
+        "function"
+    ) {
+      return;
+    }
+
+    const attachments =
+      [
+        ...(
+          message.attachments?.values?.() ||
+          []
+        ),
+      ].map(
+        attachment => ({
+          name:
+            attachment?.name ||
+            "arquivo",
+
+          url:
+            attachment?.url ||
+            "",
+
+          contentType:
+            attachment?.contentType ||
+            "",
+
+          size:
+            Number(
+              attachment?.size ||
+              0
+            ),
+        })
+      );
+
+    for (
+      const embed
+      of message.embeds ||
+      []
+    ) {
+      const videoUrl =
+        embed?.video?.proxyURL ||
+        embed?.video?.url ||
+        null;
+
+      if (!videoUrl) {
+        continue;
+      }
+
+      attachments.push({
+        name:
+          /medal/i.test(
+            String(
+              embed?.provider?.name ||
+              embed?.url ||
+              ""
+            )
+          )
+            ? "medal-embed.mp4"
+            : "video-embed.mp4",
+
+        url:
+          String(videoUrl),
+
+        contentType:
+          "video/mp4",
+
+        size:
+          0,
+      });
+    }
+
+    const resolvedType =
+      type ||
+      classifyPersonalTicketMessageType(
+        message
+      );
+
+    const resolvedRelation =
+      relation ||
+      await resolvePersonalTicketAuthorRelation(
+        message,
+        openerId
+      );
+
+    const resolvedEvidenceKind =
+      evidenceKind ||
+      resolvedType;
+
+    recordPersonalTicketActivity({
+      userId:
+        String(openerId),
+
+      guildId:
+        message.guild.id,
+
+      channelId:
+        message.channel.id,
+
+      messageId:
+        String(
+          messageId ||
+          message.id
+        ),
+
+      authorId:
+        String(
+          authorId ||
+          message.author?.id ||
+          ""
+        ) ||
+        null,
+
+      authorName:
+        authorName ||
+        message.member?.displayName ||
+        message.author?.globalName ||
+        message.author?.username ||
+        null,
+
+      relation:
+        resolvedRelation,
+
+      evidenceKind:
+        resolvedEvidenceKind,
+
+      type:
+        resolvedType,
+
+      content:
+        content === null
+          ? String(
+              message.content ||
+              ""
+            )
+          : String(
+              content ||
+              ""
+            ),
+
+      summary:
+        String(
+          summary ||
+          ""
+        ),
+
+      attachments,
+
+      createdAtMs:
+        Number(
+          message.createdTimestamp ||
+          Date.now()
+        ),
+
+      messageUrl:
+        message.url ||
+        (
+          message.guildId &&
+          message.channelId &&
+          message.id
+            ? `https://discord.com/channels/${message.guildId}/${message.channelId}/${message.id}`
+            : null
+        ),
+    });
+  } catch (error) {
+    console.warn(
+      "[IA PERSONAL TICKET] Não foi possível registrar histórico no FormsCreator:",
+      error?.message || error
+    );
+  }
+}
+
+async function messageRepliesToCurrentAI(
+  message,
+  client
+) {
+  if (
+    !message?.reference?.messageId ||
+    !client?.user?.id
+  ) {
+    return false;
+  }
+
+  const referenced =
+    await message
+      .fetchReference()
+      .catch(() => null);
+
+  return (
+    referenced?.author?.id ===
+    client.user.id
+  );
 }
 
 function extractTicketOpenerIdFromText(text) {
@@ -24002,6 +24637,20 @@ async function handleAiTicketAssistMessage(
     return false;
   }
 
+  const personalTicketMode =
+    isAiPersonalTicketChannel(
+      message.channel
+    );
+
+  // Em ticket pessoal, TODA mensagem humana entra no histórico,
+  // mesmo quando a IA não precisa responder.
+  if (personalTicketMode) {
+    await savePersonalTicketHistoryRecord({
+      message,
+      openerId,
+    });
+  }
+
   let state =
     getAiTicketAssistState(
       message.channelId
@@ -24046,6 +24695,14 @@ async function handleAiTicketAssistMessage(
         )
       : false;
 
+  const repliedToAI =
+    personalTicketMode
+      ? await messageRepliesToCurrentAI(
+          message,
+          client
+        )
+      : false;
+
   const creatorExplicitlyCalledAI =
     isAuthorizedStaff &&
     !isOpener &&
@@ -24055,9 +24712,18 @@ async function handleAiTicketAssistMessage(
     isOpener &&
     mentionedBot;
 
+  const personalExplicitAiCall =
+    personalTicketMode &&
+    !isOpener &&
+    (
+      mentionedBot ||
+      repliedToAI
+    );
+
   const explicitAiCall =
     creatorExplicitlyCalledAI ||
-    openerExplicitlyCalledAI;
+    openerExplicitlyCalledAI ||
+    personalExplicitAiCall;
 
   const now =
     Date.now();
@@ -24077,6 +24743,7 @@ async function handleAiTicketAssistMessage(
   // =====================================================
 
   if (
+    !personalTicketMode &&
     isAuthorizedStaff &&
     !isOpener
   ) {
@@ -24189,6 +24856,7 @@ async function handleAiTicketAssistMessage(
   // =====================================================
 
   if (
+    !personalTicketMode &&
     state.pausedByStaff &&
     !creatorExplicitlyCalledAI
   ) {
@@ -24290,7 +24958,14 @@ async function handleAiTicketAssistMessage(
   // atendimento automático somente por conversar ali.
   // =====================================================
 
-  if (
+  if (personalTicketMode) {
+    if (
+      !isOpener &&
+      !personalExplicitAiCall
+    ) {
+      return false;
+    }
+  } else if (
     !isOpener &&
     !creatorExplicitlyCalledAI
   ) {
@@ -24511,6 +25186,31 @@ recordAiConversationJournalAnswer(
   "ticket_assist"
 );
 
+if (personalTicketMode) {
+  await savePersonalTicketHistoryRecord({
+    message,
+    openerId,
+    type:
+      "ai_response",
+    relation:
+      "ia_santacreators",
+    evidenceKind:
+      "analise_contextual_ia",
+    content:
+      finalText,
+    summary:
+      "Resposta e análise contextual produzida pela IA no ticket pessoal.",
+    messageId:
+      `${message.id}:ai`,
+    authorId:
+      client.user?.id ||
+      null,
+    authorName:
+      client.user?.username ||
+      "SantaCreators IA",
+  });
+}
+
 saveInstitutionalTeaching(
   message
 );
@@ -24575,11 +25275,13 @@ saveInstitutionalTeaching(
         }
       );
 
-      scheduleAiTicketIdleFollowUp(
-        message.channel,
-        openerId,
-        client
-      );
+      if (!personalTicketMode) {
+        scheduleAiTicketIdleFollowUp(
+          message.channel,
+          openerId,
+          client
+        );
+      }
     }
 
     return true;
@@ -26996,6 +27698,97 @@ async function scBuildMediaContents(message, prompt) {
         attachments.set(
           file.id || file.url,
           file
+        );
+      }
+
+      // =====================================================
+      // 🎬 VÍDEOS INCORPORADOS PELO DISCORD / MEDAL
+      // =====================================================
+      //
+      // Medal e outros provedores podem aparecer no Discord
+      // como player incorporado em um embed, mesmo sem existir
+      // um Attachment normal na mensagem.
+      //
+      // Quando o Discord disponibiliza uma proxy de vídeo no
+      // próprio CDN, transformamos esse player em uma entrada
+      // temporária para a pipeline multimodal já existente.
+      // =====================================================
+
+      for (
+        const embed
+        of container.embeds ||
+        []
+      ) {
+        const providerName =
+          String(
+            embed?.provider?.name ||
+            ""
+          );
+
+        const videoUrl =
+          embed?.video?.proxyURL ||
+          embed?.video?.url ||
+          null;
+
+        if (!videoUrl) {
+          continue;
+        }
+
+        let parsedVideoUrl = null;
+
+        try {
+          parsedVideoUrl =
+            new URL(
+              videoUrl
+            );
+        } catch {
+          continue;
+        }
+
+        if (
+          ![
+            "cdn.discordapp.com",
+            "media.discordapp.net",
+          ].includes(
+            parsedVideoUrl.hostname
+          )
+        ) {
+          continue;
+        }
+
+        const isMedal =
+          /medal/i.test(
+            providerName
+          ) ||
+          /medal\.tv/i.test(
+            String(
+              embed?.url ||
+              ""
+            )
+          );
+
+        const pseudoAttachment = {
+          id:
+            `embed-video:${source.id}:${attachments.size}`,
+
+          url:
+            videoUrl,
+
+          name:
+            isMedal
+              ? `medal-${source.id}.mp4`
+              : `embed-video-${source.id}.mp4`,
+
+          contentType:
+            "video/mp4",
+
+          size:
+            0,
+        };
+
+        attachments.set(
+          pseudoAttachment.id,
+          pseudoAttachment
         );
       }
     }
@@ -30534,8 +31327,18 @@ const remaining =
     message
   );
 
+const isAiSuperuserCooldownBypass =
+  String(
+    message.author?.id ||
+    ""
+  ) ===
+  String(
+    AI_ADMIN_SUPERUSER_ID
+  );
+
 if (
   remaining > 0 &&
+  !isAiSuperuserCooldownBypass &&
   !isDedicatedAiChannel &&
   !isDirectReplyToAI &&
   !isActiveConversationContinuation &&

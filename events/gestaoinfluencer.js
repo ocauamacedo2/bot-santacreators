@@ -187,11 +187,15 @@ CHANNEL_RESTORE_LOG:      '1486006878914875412',
         '1414651836861907006'
       ],
 
-      AUTO_DESLIGAR_PAUSA_DIAS: 30,
+            AUTO_DESLIGAR_PAUSA_DIAS: 30,
+
+      // Atualização visual automática dos controles.
+      CONTROL_REFRESH_ACTIVE_MS: 30 * 60 * 1000,
+      CONTROL_REFRESH_PAUSED_MS: 2 * 60 * 1000,
 
       // NOVO: regras da trava
-      GI_REMOVE_WINDOW_MS: 2 * 60 * 1000, // 2 minutos
-      GI_RESTORE_AFTER_PUNISH_MS: 10 * 60 * 1000 // 10 minutos
+      GI_REMOVE_WINDOW_MS: 2 * 60 * 1000,
+      GI_RESTORE_AFTER_PUNISH_MS: 10 * 60 * 1000
     };
     
     // ====================== STATE / PERSIST ======================
@@ -237,6 +241,39 @@ CHANNEL_RESTORE_LOG:      '1486006878914875412',
     let SC_GI_DATA_READY = false;
     let SC_GI_DATA_AUTHORITATIVE = false;
 
+    function SC_GI_resolveRecordGuildId(rec) {
+      if (!rec) return null;
+
+      const directGuildId =
+        String(
+          rec.guildId ||
+          ''
+        );
+
+      if (directGuildId) {
+        return directGuildId;
+      }
+
+      const channelGuildId =
+        String(
+          client.channels.cache.get(
+            String(rec.channelId || '')
+          )?.guildId ||
+          ''
+        );
+
+      if (channelGuildId) {
+        rec.guildId =
+          channelGuildId;
+
+        SC_GI_scheduleSave();
+
+        return channelGuildId;
+      }
+
+      return null;
+    }
+
     function SC_GI_findCurrentControl(guildId, userId) {
       const wantedGuildId = String(guildId || '');
       const wantedUserId = String(userId || '');
@@ -248,10 +285,22 @@ CHANNEL_RESTORE_LOG:      '1486006878914875412',
       for (const rec of SC_GI_STATE.registros.values()) {
         if (String(rec?.targetId || '') !== wantedUserId) continue;
 
+        const recordGuildId =
+          SC_GI_resolveRecordGuildId(
+            rec
+          );
+
         if (
           wantedGuildId &&
-          rec?.guildId &&
-          String(rec.guildId) !== wantedGuildId
+          recordGuildId &&
+          recordGuildId !== wantedGuildId
+        ) {
+          continue;
+        }
+
+        if (
+          wantedGuildId &&
+          !recordGuildId
         ) {
           continue;
         }
@@ -282,6 +331,7 @@ CHANNEL_RESTORE_LOG:      '1486006878914875412',
         responsibleType: rec.responsibleType || null,
         pausedAtMs: rec.pausedAtMs || null,
         createdAtMs: rec.createdAtMs || null,
+        personalTicketChannelId: rec.personalTicketChannelId || null,
         note: rec.note || ''
       };
     }
@@ -312,10 +362,14 @@ CHANNEL_RESTORE_LOG:      '1486006878914875412',
         for (const rec of SC_GI_STATE.registros.values()) {
           if (!rec?.targetId) continue;
 
+          const recordGuildId =
+            SC_GI_resolveRecordGuildId(
+              rec
+            );
+
           if (
             wantedGuildId &&
-            rec?.guildId &&
-            String(rec.guildId) !== wantedGuildId
+            recordGuildId !== wantedGuildId
           ) {
             continue;
           }
@@ -383,8 +437,16 @@ r.responsibleHistory = Array.isArray(r.responsibleHistory) ? r.responsibleHistor
           r.totalPausedMs      = (typeof r.totalPausedMs === 'number') ? r.totalPausedMs : 0;
           r.roleSetAtMs        = (typeof r.roleSetAtMs === 'number') ? r.roleSetAtMs : null;
           r.messageId          = String(r.messageId);
-r.lastCountdownWarningAt = r.lastCountdownWarningAt || null; // NOVO
-r.passaporte         = r.passaporte || null; // ✅ Carrega passaporte se existir
+r.lastCountdownWarningAt = r.lastCountdownWarningAt || null;
+r.passaporte         = r.passaporte || null;
+r.personalTicketChannelId = r.personalTicketChannelId || null;
+r.lastControlVisualRefreshAtMs = Number(r.lastControlVisualRefreshAtMs || 0);
+
+if (!r.guildId && r.channelId) {
+  r.guildId =
+    client.channels.cache.get(String(r.channelId))?.guildId ||
+    null;
+}
 
 // ✅ MIGRAÇÃO/CORREÇÃO: registros pausados criados já com tempo acumulado errado.
 // Caso o registro tenha nascido pausado, com pausedAtMs igual ao createdAtMs,
@@ -1993,7 +2055,71 @@ async function assertCanManageGIRecord(
       if (!guildId || !channelId || !messageId) return null;
       return `https://discord.com/channels/${guildId}/${channelId}/${messageId}`;
     }
+    async function resolvePersonalTicketInfo(
+      guildId,
+      userId,
+      storedChannelId = null
+    ) {
+      const guild =
+        client.guilds.cache.get(
+          String(guildId || "")
+        );
 
+      if (!guild) {
+        return null;
+      }
+
+      if (storedChannelId) {
+        const stored =
+          guild.channels.cache.get(
+            String(storedChannelId)
+          ) ||
+          await guild.channels
+            .fetch(
+              String(storedChannelId)
+            )
+            .catch(() => null);
+
+        if (stored?.isTextBased?.()) {
+          return {
+            channelId:
+              stored.id,
+
+            url:
+              `https://discord.com/channels/${guild.id}/${stored.id}`,
+          };
+        }
+      }
+
+      const api =
+        globalThis.SC_PERSONAL_TICKET_API;
+
+      if (
+        !api ||
+        typeof api.findByUser !==
+          "function"
+      ) {
+        return null;
+      }
+
+      const channel =
+        await api.findByUser(
+          guild,
+          String(userId || "")
+        ).catch(() => null);
+
+      if (!channel) {
+        return null;
+      }
+
+      return {
+        channelId:
+          channel.id,
+
+        url:
+          `https://discord.com/channels/${guild.id}/${channel.id}`,
+      };
+    }
     // ====================== ROLE GI HELPERS (OBRIGATÓRIO) ======================
     const GI_ROLE_ID = SC_GI_CFG.ROLE_GESTAOINFLUENCER; // 1371733765243670538
 
@@ -2280,6 +2406,33 @@ if (!fcLink && typeof findFormsCreatorThreadIdByUserId === 'function') {
   console.warn('[SC_GI] Falha ao buscar link do tópico FormsCreator:', e?.message || e);
 }
 
+// ✅ TICKET PESSOAL VINCULADO AO CONTROLE GI
+let personalTicket = null;
+
+try {
+  personalTicket =
+    await resolvePersonalTicketInfo(
+      rec.guildId,
+      rec.targetId,
+      rec.personalTicketChannelId
+    );
+
+  if (
+    personalTicket?.channelId &&
+    rec.personalTicketChannelId !==
+      personalTicket.channelId
+  ) {
+    rec.personalTicketChannelId =
+      personalTicket.channelId;
+
+    SC_GI_scheduleSave();
+  }
+} catch (e) {
+  console.warn(
+    '[SC_GI] Falha ao localizar ticket pessoal:',
+    e?.message || e
+  );
+}
 
 ///teste besta 
       emb.setDescription([
@@ -2292,6 +2445,7 @@ if (!fcLink && typeof findFormsCreatorThreadIdByUserId === 'function') {
           `🗓️ **Meses já na gestão:** \`${months}\``,
           '',
           `🔗 **Evolução (Forms):** ${fcLink ? `[Abrir Tópico](${fcLink})` : 'Não encontrado'}`,
+          `🎫 **Ticket pessoal:** ${personalTicket?.url ? `[Abrir Ticket](${personalTicket.url})` : 'Aguardando vínculo automático'}`,
 
           `📌 **Status:** ${active ? 'Ativo' : 'Pausado'}`,
 `⏳ **Tempo ativo real:** \`${activeTimeText(rec)}\``,
@@ -2791,7 +2945,9 @@ pausedAtMs: initialActive ? null : createdNowMs,
 // O tempo pausado passa a contar a partir do createdNowMs.
 totalPausedMs: 0,
         roleSetAtMs,
-        passaporte: options.passaporte || null // ✅ Salva o ID se vier do pedirset
+        passaporte: options.passaporte || null, // ✅ Salva o ID se vier do pedirset
+        personalTicketChannelId: null,
+        lastControlVisualRefreshAtMs: 0
       };
 
       const emb = await registroEmbed({
@@ -4320,7 +4476,13 @@ try {
     }
 
 
-    async function refreshRegistroMessage(guild, actor, messageId, reason = 'Atualização manual') {
+    async function refreshRegistroMessage(
+      guild,
+      actor,
+      messageId,
+      reason = 'Atualização manual',
+      options = {}
+    ) {
   const rec = SC_GI_STATE.registros.get(messageId);
   if (!rec) throw new Error('Registro não encontrado.');
 
@@ -4349,6 +4511,12 @@ try {
     components: registroButtons(rec.messageId, rec.active)
   });
 
+  rec.lastControlVisualRefreshAtMs =
+    nowMs();
+
+  SC_GI_scheduleSave();
+
+  if (options.log !== false) {
   await logMsg(
     guild,
     'Controle Atualizado (GI)',
@@ -4360,9 +4528,10 @@ try {
       `⏳ **Tempo ativo real:** \`${activeTimeText(rec)}\``,
       !rec.active ? `⏸️ **Pausado acumulado:** \`${formatDurationFull(getPausedTotalMs(rec))}\`` : '',
       !rec.active ? `🧨 **Auto-desligamento em:** ${pauseCountdownText(rec)}` : '',
-      `🔗 **Registro:** Ir ao registro})`
+      `🔗 **Registro:** ${recordLink(rec.guildId || guild.id, rec.channelId, rec.messageId) || 'Não disponível'}`
     ].filter(Boolean).join('\n')
   );
+  }
 
   return rec;
 }
@@ -5634,8 +5803,11 @@ async function setResponsibleAuto(guild, actorId, messageId, pickedUserId) {
       warn.lastAtMs = now;
       SC_GI_scheduleSave();
 
-      await warnAndReAddGI(guild, userId, rec); // NOVO: passa o registro
+            await warnAndReAddGI(guild, userId, rec); // NOVO: passa o registro
     }
+
+const AUTO_DESLIGAR_IN_PROGRESS =
+  new Set();
 
 async function autoDesligarPausadosVencidos(guild, origem = 'tick') {
   const n = nowMs();
@@ -5643,13 +5815,52 @@ async function autoDesligarPausadosVencidos(guild, origem = 'tick') {
 
   for (const rec of records) {
     if (!rec) continue;
-    if (rec.guildId !== guild.id) continue;
+
+    const resolvedGuildId =
+      String(
+        rec.guildId ||
+        client.channels.cache.get(
+          String(rec.channelId || "")
+        )?.guildId ||
+        ""
+      );
+
+    if (!resolvedGuildId) {
+      console.warn(
+        `[SC_GI] Registro ${rec.messageId} de ${rec.targetId} sem guildId resolvível.`
+      );
+      continue;
+    }
+
+    if (!rec.guildId) {
+      rec.guildId =
+        resolvedGuildId;
+
+      SC_GI_scheduleSave();
+    }
+
+    if (resolvedGuildId !== guild.id) continue;
     if (rec.active) continue;
 
     const pausedTotalMs = getPausedTotalMs(rec, n);
     const dias = Math.floor(pausedTotalMs / (24 * 60 * 60 * 1000));
 
     if (pausedTotalMs < AUTO_DESLIGAR_PAUSA_MS) continue;
+
+    const autoKey =
+      `${guild.id}:${rec.messageId}`;
+
+    if (
+      AUTO_DESLIGAR_IN_PROGRESS.has(
+        autoKey
+      )
+    ) {
+      continue;
+    }
+
+    AUTO_DESLIGAR_IN_PROGRESS.add(
+      autoKey
+    );
 
     try {
       await logMsg(
@@ -5689,6 +5900,10 @@ async function autoDesligarPausadosVencidos(guild, origem = 'tick') {
           `🧾 **Registro:** \`${rec.messageId}\``,
           `⚠️ **Erro:** \`${String(e?.message || e).slice(0, 900)}\``
         ].join('\n')
+      );
+    } finally {
+      AUTO_DESLIGAR_IN_PROGRESS.delete(
+        autoKey
       );
     }
   }
@@ -5762,6 +5977,62 @@ async function autoDesligarPausadosVencidos(guild, origem = 'tick') {
         const n = nowMs();
 
         for (const rec of SC_GI_STATE.registros.values()) {
+          // ✅ Atualização visual automática do controle.
+          // Controles pausados atualizam com mais frequência porque
+          // exibem tempo pausado e contagem de auto-desligamento.
+          const visualRefreshEveryMs =
+            rec.active
+              ? SC_GI_CFG.CONTROL_REFRESH_ACTIVE_MS
+              : SC_GI_CFG.CONTROL_REFRESH_PAUSED_MS;
+
+          if (
+            !rec.lastControlVisualRefreshAtMs ||
+            (
+              n -
+              Number(
+                rec.lastControlVisualRefreshAtMs ||
+                0
+              )
+            ) >=
+              visualRefreshEveryMs
+          ) {
+            const refreshGuild =
+              client.guilds.cache.get(
+                String(rec.guildId || "")
+              ) ||
+              client.channels.cache.get(
+                String(rec.channelId || "")
+              )?.guild ||
+              null;
+
+            if (refreshGuild) {
+              if (!rec.guildId) {
+                rec.guildId =
+                  refreshGuild.id;
+
+                SC_GI_scheduleSave();
+              }
+
+              await refreshRegistroMessage(
+                refreshGuild,
+                client.user,
+                rec.messageId,
+                'Atualização visual automática',
+                {
+                  log:
+                    false,
+                }
+              ).catch(
+                error => {
+                  console.warn(
+                    `[SC_GI] Falha ao atualizar visualmente ${rec.targetId}:`,
+                    error?.message || error
+                  );
+                }
+              );
+            }
+          }
+
           if (rec.active && rec.nextWeekTickMs && n >= rec.nextWeekTickMs) {
             const guild = client.guilds.cache.get(rec.guildId);
             if (guild) {
@@ -5801,54 +6072,6 @@ async function autoDesligarPausadosVencidos(guild, origem = 'tick') {
             SC_GI_scheduleSave();
           }
 
-if (!rec.active) {
-  const pausedTotalMs = getPausedTotalMs(rec, n);
-  const dias = Math.floor(pausedTotalMs / (24 * 60 * 60 * 1000));
-
-  if (pausedTotalMs >= AUTO_DESLIGAR_PAUSA_MS) {
-    const guild = client.guilds.cache.get(rec.guildId);
-
-    if (guild) {
-      try {
-        await desligarRegistro(
-          guild,
-          client.user,
-          rec.messageId,
-          `Auto-desligado após ${dias} dias pausado acumulado`
-        );
-
-        await logMsg(
-          guild,
-          'Auto-desligamento executado (GI)',
-          [
-            `👤 **Membro:** <@${rec.targetId}> (\`${rec.targetId}\`)`,
-            `⏸️ **Tempo pausado acumulado:** \`${formatDurationFull(pausedTotalMs)}\``,
-            `📅 **Dias pausado:** \`${dias}\``,
-            `🤖 **Ação:** executada automaticamente pelo bot`,
-            `🧾 **Registro:** \`${rec.messageId}\``
-          ].join('\n')
-        );
-      } catch (e) {
-        console.warn(
-          `[SC_GI] Falha ao auto-desligar ${rec.targetId} após ${dias} dias pausado:`,
-          e?.message || e
-        );
-
-        await logMsg(
-          guild,
-          'Falha no Auto-desligamento (GI)',
-          [
-            `👤 **Membro:** <@${rec.targetId}> (\`${rec.targetId}\`)`,
-            `⏸️ **Tempo pausado acumulado:** \`${formatDurationFull(pausedTotalMs)}\``,
-            `📅 **Dias pausado:** \`${dias}\``,
-            `🧾 **Registro:** \`${rec.messageId}\``,
-            `⚠️ **Erro:** \`${String(e?.message || e).slice(0, 900)}\``
-          ].join('\n')
-        );
-      }
-    }
-  }
-}
         }
 
         for (const [, g] of client.guilds.cache) {
@@ -5885,7 +6108,25 @@ if (!rec.active) {
     }
 
     // ====================== INIT ======================
-    client.once(Events.ClientReady, async () => {
+    let SC_GI_RUNTIME_STARTED =
+      false;
+
+    let SC_GI_PAUSE_CLOCK_INTERVAL =
+      null;
+
+    let SC_GI_MAIN_TICK_INTERVAL =
+      null;
+
+    async function startScGiRuntime() {
+      if (
+        SC_GI_RUNTIME_STARTED
+      ) {
+        return;
+      }
+
+      SC_GI_RUNTIME_STARTED =
+        true;
+
       try {
         await SC_GI_load();
 
@@ -5909,35 +6150,128 @@ if (!rec.active) {
         for (const [, guild] of client.guilds.cache) {
           await ensureMenu(guild);
 
-          await autoDesligarPausadosVencidos(guild, 'client_ready');
+          await autoDesligarPausadosVencidos(
+            guild,
+            'runtime_start'
+          );
 
           markBoardDirty();
-          await renderRespBoard(guild, { force: true });
 
-          for (const rec of SC_GI_STATE.registros.values()) {
-  if (rec.guildId !== guild.id) continue;
-  await refreshRegistroMessage(guild, client.user, rec.messageId, 'Atualização automática ao ligar o bot').catch(() => {});
-}
+          await renderRespBoard(
+            guild,
+            {
+              force:
+                true,
+            }
+          );
 
-          // re-agenda restores pendentes na hora que o bot liga
-          for (const [uid] of SC_GI_STATE.roleSnapshots.entries()) {
-            await scheduleRestoreRoles(guild, uid);
+          for (
+            const rec
+            of SC_GI_STATE.registros.values()
+          ) {
+            const resolvedGuildId =
+              String(
+                rec.guildId ||
+                client.channels.cache.get(
+                  String(rec.channelId || '')
+                )?.guildId ||
+                ''
+              );
+
+            if (
+              resolvedGuildId !==
+              guild.id
+            ) {
+              continue;
+            }
+
+            if (!rec.guildId) {
+              rec.guildId =
+                resolvedGuildId;
+
+              SC_GI_scheduleSave();
+            }
+
+            await refreshRegistroMessage(
+              guild,
+              client.user,
+              rec.messageId,
+              'Atualização automática ao iniciar o runtime',
+              {
+                log:
+                  false,
+              }
+            ).catch(() => {});
+          }
+
+          // re-agenda restores pendentes na hora que o runtime inicia
+          for (
+            const [uid]
+            of SC_GI_STATE.roleSnapshots.entries()
+          ) {
+            await scheduleRestoreRoles(
+              guild,
+              uid
+            );
           }
         }
 
-        // ✅ Relógio crítico independente:
-        // continua verificando o auto-desligamento mesmo se o tick principal
-        // estiver ocupado com rotinas pesadas de manutenção.
-        setInterval(() => {
-          void pauseClockTick('interval_critico');
-        }, SC_GI_CFG.TICK_MS);
+        // Executa um tick imediatamente.
+        await tick();
 
-        setInterval(tick, SC_GI_CFG.TICK_MS);
-        console.log('[SC_GI] Controle GI v3.4 LEVE iniciado.');
+        // Relógio crítico independente.
+        SC_GI_PAUSE_CLOCK_INTERVAL =
+          setInterval(
+            () => {
+              void pauseClockTick(
+                'interval_critico'
+              );
+            },
+            SC_GI_CFG.TICK_MS
+          );
+
+        SC_GI_MAIN_TICK_INTERVAL =
+          setInterval(
+            () => {
+              void tick();
+            },
+            SC_GI_CFG.TICK_MS
+          );
+
+        SC_GI_PAUSE_CLOCK_INTERVAL
+          .unref?.();
+
+        SC_GI_MAIN_TICK_INTERVAL
+          .unref?.();
+
+        console.log(
+          '[SC_GI] Controle GI v3.4 LEVE iniciado.'
+        );
       } catch (e) {
-        console.warn('[SC_GI] Erro no init:', e.message);
+        SC_GI_RUNTIME_STARTED =
+          false;
+
+        console.warn(
+          '[SC_GI] Erro no init:',
+          e?.message || e
+        );
       }
-    });
+    }
+
+    // Funciona tanto quando o módulo é carregado ANTES quanto
+    // DEPOIS do ClientReady.
+    if (
+      client.isReady?.()
+    ) {
+      void startScGiRuntime();
+    } else {
+      client.once(
+        Events.ClientReady,
+        () => {
+          void startScGiRuntime();
+        }
+      );
+    }
 
     // ====================== INTERAÇÕES (FAILSAFE do "TEMP") ======================
     function resolveRecordByInteraction(interaction, rawId) {
@@ -6276,7 +6610,84 @@ if (!rec.active) {
 
     // ====================== LISTENER EXTERNO (PEDIR SET) ======================
     // ✅ Isso aqui que faltava para criar o controle sozinho!
-    dashOn('pedirset:aprovado', async (data) => {
+
+dashOn('ticket:pessoal_vinculado', async (data) => {
+  try {
+    const userId =
+      String(
+        data?.userId ||
+        ''
+      );
+
+    const channelId =
+      String(
+        data?.channelId ||
+        ''
+      );
+
+    const guildId =
+      String(
+        data?.guildId ||
+        ''
+      );
+
+    if (
+      !userId ||
+      !channelId
+    ) {
+      return;
+    }
+
+    const rec =
+      getLatestRecordByTarget(
+        userId
+      );
+
+    if (!rec) {
+      return;
+    }
+
+    if (
+      guildId &&
+      rec.guildId &&
+      String(rec.guildId) !==
+        guildId
+    ) {
+      return;
+    }
+
+    rec.personalTicketChannelId =
+      channelId;
+
+    SC_GI_scheduleSave();
+
+    const guild =
+      client.guilds.cache.get(
+        guildId ||
+        String(rec.guildId || '')
+      );
+
+    if (guild) {
+      await refreshRegistroMessage(
+        guild,
+        client.user,
+        rec.messageId,
+        'Ticket pessoal vinculado automaticamente',
+        {
+          log:
+            false,
+        }
+      ).catch(() => {});
+    }
+  } catch (e) {
+    console.warn(
+      '[SC_GI] Falha ao vincular ticket pessoal ao controle:',
+      e?.message || e
+    );
+  }
+});
+
+dashOn('pedirset:aprovado', async (data) => {
       try {
         // data: { userId, guildId, approverId, ... }
         const guild = client.guilds.cache.get(data.guildId);

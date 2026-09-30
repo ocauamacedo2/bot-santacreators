@@ -1362,6 +1362,650 @@ if (
 };
 
 // =========================================================
+// 🎫 API GLOBAL — TICKET PESSOAL DA SANTACREATORS
+// =========================================================
+//
+// Fonte única para localizar/criar o ticket pessoal vinculado
+// ao Controle GI.
+//
+// Regras:
+// - Controle GI ativo OU pausado precisa ter ticket pessoal;
+// - o ticket oficial fica em 1384650670145278033;
+// - procura primeiro tickets já existentes antes de criar;
+// - preserva permissões da categoria;
+// - o canal fixo 1523906618385760458 nunca é tratado como ticket.
+// =========================================================
+
+const PERSONAL_TICKET_ACTIVE_CATEGORY_ID =
+  '1384650670145278033';
+
+const PERSONAL_TICKET_WAITING_CATEGORY_ID =
+  '1444857594517913742';
+
+const PERSONAL_TICKET_INACTIVE_CATEGORY_IDS = [
+  '1383899907244425246',
+  '1410071955159122051',
+  '1477566945598640251',
+];
+
+const PERSONAL_TICKET_EXEMPT_CHANNEL_IDS =
+  new Set([
+    '1523906618385760458',
+  ]);
+
+function extractPersonalTicketOwnerIdFromTopic(
+  channel
+) {
+  const topic =
+    String(
+      channel?.topic ||
+      ''
+    );
+
+  return (
+    topic.match(
+      /aberto_por:(\d{17,20})/i
+    )?.[1] ||
+    null
+  );
+}
+
+async function extractPersonalTicketOwnerIdFromHeader(
+  channel
+) {
+  try {
+    const pinned =
+      await channel.messages
+        .fetchPinned()
+        .catch(() => null);
+
+    const recent =
+      pinned?.size
+        ? pinned
+        : await channel.messages
+            .fetch({
+              limit:
+                30,
+            })
+            .catch(() => null);
+
+    if (!recent?.size) {
+      return null;
+    }
+
+    for (
+      const message
+      of recent.values()
+    ) {
+      for (
+        const embed
+        of message.embeds ||
+        []
+      ) {
+        const field =
+          (
+            embed.fields ||
+            embed.data?.fields ||
+            []
+          ).find(
+            item =>
+              String(
+                item?.name ||
+                ''
+              )
+                .trim()
+                .toLowerCase() ===
+              'aberto por:'
+          );
+
+        const match =
+          String(
+            field?.value ||
+            ''
+          ).match(
+            /<@!?(\d{17,20})>/
+          );
+
+        if (match?.[1]) {
+          return match[1];
+        }
+      }
+    }
+  } catch {}
+
+  return null;
+}
+
+function extractPersonalTicketOwnerIdFromOverwrites(
+  channel
+) {
+  const overwrites =
+    channel?.permissionOverwrites?.cache;
+
+  if (!overwrites) {
+    return null;
+  }
+
+  const candidates =
+    overwrites.filter(
+      overwrite =>
+        overwrite.type ===
+          OverwriteType.Member &&
+        overwrite.allow.has(
+          PermissionsBitField.Flags.ViewChannel
+        )
+    );
+
+  const sendAllowed =
+    candidates.find(
+      overwrite =>
+        overwrite.allow.has(
+          PermissionsBitField.Flags.SendMessages
+        )
+    );
+
+  return (
+    sendAllowed?.id ||
+    candidates.first()?.id ||
+    null
+  );
+}
+
+async function resolvePersonalTicketOwnerId(
+  channel
+) {
+  if (
+    !channel ||
+    PERSONAL_TICKET_EXEMPT_CHANNEL_IDS.has(
+      String(channel.id)
+    )
+  ) {
+    return null;
+  }
+
+  return (
+    extractPersonalTicketOwnerIdFromTopic(
+      channel
+    ) ||
+    await extractPersonalTicketOwnerIdFromHeader(
+      channel
+    ) ||
+    extractPersonalTicketOwnerIdFromOverwrites(
+      channel
+    ) ||
+    null
+  );
+}
+
+async function findPersonalTicketForUser(
+  guild,
+  userId
+) {
+  const targetId =
+    String(
+      userId ||
+      ''
+    ).trim();
+
+  if (
+    !guild ||
+    !targetId
+  ) {
+    return null;
+  }
+
+  const orderedCategoryIds = [
+    PERSONAL_TICKET_ACTIVE_CATEGORY_ID,
+    PERSONAL_TICKET_WAITING_CATEGORY_ID,
+    CATEGORIES.entrevista,
+    ...PERSONAL_TICKET_INACTIVE_CATEGORY_IDS,
+  ];
+
+  for (
+    const categoryId
+    of orderedCategoryIds
+  ) {
+    const category =
+      guild.channels.cache.get(
+        categoryId
+      ) ||
+      await guild.channels
+        .fetch(
+          categoryId
+        )
+        .catch(() => null);
+
+    if (
+      !category ||
+      category.type !==
+        ChannelType.GuildCategory
+    ) {
+      continue;
+    }
+
+    for (
+      const channel
+      of category.children.cache.values()
+    ) {
+      if (
+        channel.type !==
+          ChannelType.GuildText ||
+        PERSONAL_TICKET_EXEMPT_CHANNEL_IDS.has(
+          String(channel.id)
+        )
+      ) {
+        continue;
+      }
+
+      const ownerId =
+        await resolvePersonalTicketOwnerId(
+          channel
+        );
+
+      if (
+        String(ownerId) ===
+        targetId
+      ) {
+        return channel;
+      }
+    }
+  }
+
+  return null;
+}
+
+async function ensurePersonalTicketForUserUnlocked(
+  guild,
+  userId,
+  {
+    reason =
+      'Controle GI sem ticket pessoal',
+  } = {}
+) {
+  const targetId =
+    String(
+      userId ||
+      ''
+    ).trim();
+
+  if (
+    !guild ||
+    !targetId
+  ) {
+    throw new Error(
+      'Guild ou usuário inválido para garantir ticket pessoal.'
+    );
+  }
+
+  const existing =
+    await findPersonalTicketForUser(
+      guild,
+      targetId
+    );
+
+  if (existing) {
+    return {
+      channel:
+        existing,
+
+      created:
+        false,
+    };
+  }
+
+  const member =
+    await guild.members
+      .fetch(
+        targetId
+      )
+      .catch(() => null);
+
+  if (!member) {
+    throw new Error(
+      `Não foi possível criar ticket pessoal: membro ${targetId} não está no servidor.`
+    );
+  }
+
+  const category =
+    guild.channels.cache.get(
+      PERSONAL_TICKET_ACTIVE_CATEGORY_ID
+    ) ||
+    await guild.channels
+      .fetch(
+        PERSONAL_TICKET_ACTIVE_CATEGORY_ID
+      )
+      .catch(() => null);
+
+  if (
+    !category ||
+    category.type !==
+      ChannelType.GuildCategory
+  ) {
+    throw new Error(
+      'Categoria oficial de tickets pessoais não encontrada.'
+    );
+  }
+
+  const baseOverwrites =
+    category.permissionOverwrites.cache
+      .map(
+        overwrite => ({
+          id:
+            overwrite.id,
+
+          allow:
+            overwrite.allow.bitfield,
+
+          deny:
+            overwrite.deny.bitfield,
+
+          type:
+            overwrite.type,
+        })
+      )
+      .filter(
+        overwrite =>
+          String(overwrite.id) !==
+          targetId
+      );
+
+  baseOverwrites.push({
+    id:
+      targetId,
+
+    allow:
+      new PermissionsBitField([
+        PermissionsBitField.Flags.ViewChannel,
+        PermissionsBitField.Flags.SendMessages,
+        PermissionsBitField.Flags.ReadMessageHistory,
+        PermissionsBitField.Flags.AttachFiles,
+      ]).bitfield,
+
+    deny:
+      0n,
+
+    type:
+      OverwriteType.Member,
+  });
+
+  const safeUsername =
+    String(
+      member.user?.username ||
+      member.displayName ||
+      targetId
+    )
+      .replace(
+        /[^a-zA-Z0-9_-]/g,
+        '-'
+      )
+      .slice(
+        0,
+        45
+      );
+
+  const channel =
+    await guild.channels.create({
+      name:
+        `🎫┋entrevista-${safeUsername}`,
+
+      type:
+        ChannelType.GuildText,
+
+      parent:
+        category,
+
+      permissionOverwrites:
+        baseOverwrites,
+
+      reason,
+    });
+
+  await channel
+    .setTopic(
+      `ticket_tipo:entrevista;aberto_por:${targetId};ticket_pessoal:1`
+    )
+    .catch(() => {});
+
+  const embedTicket =
+    new EmbedBuilder()
+      .setTitle(
+        'Ticket Pessoal • SantaCreators'
+      )
+      .setColor(
+        '#ff009a'
+      )
+      .setThumbnail(
+        guild.iconURL()
+      )
+      .setDescription(
+        [
+          'Este é o ticket pessoal permanente vinculado ao Controle GI.',
+          'Use este espaço para dúvidas, registros, alinhamentos, denúncias internas, evidências, orientações e acompanhamentos.',
+        ].join(
+          '\n'
+        )
+      )
+      .addFields(
+        {
+          name:
+            'Aberto por:',
+
+          value:
+            `<@${targetId}> <t:${Math.floor(Date.now() / 1000)}:R>`,
+
+          inline:
+            true,
+        },
+
+        {
+          name:
+            'Assumido por:',
+
+          value:
+            '`Ninguém`',
+
+          inline:
+            true,
+        }
+      )
+      .setFooter({
+        text:
+          'SantaCreators • Ticket Pessoal',
+      });
+
+  const botoes =
+    new ActionRowBuilder()
+      .addComponents(
+        new ButtonBuilder()
+          .setCustomId(
+            'assumir_ticket'
+          )
+          .setLabel(
+            '🎫 Assumir Ticket'
+          )
+          .setStyle(
+            ButtonStyle.Secondary
+          ),
+
+        new ButtonBuilder()
+          .setCustomId(
+            'assumir_resp'
+          )
+          .setLabel(
+            '👑 Assumir Resp'
+          )
+          .setStyle(
+            ButtonStyle.Danger
+          ),
+
+        new ButtonBuilder()
+          .setCustomId(
+            'adicionar_membro'
+          )
+          .setLabel(
+            '➕ Adicionar Usuário'
+          )
+          .setStyle(
+            ButtonStyle.Success
+          ),
+
+        new ButtonBuilder()
+          .setCustomId(
+            'remover_membro'
+          )
+          .setLabel(
+            '➖ Remover Usuário'
+          )
+          .setStyle(
+            ButtonStyle.Danger
+          )
+      );
+
+  await channel.send({
+    content:
+      `<@${targetId}>`,
+
+    embeds:
+      [
+        embedTicket,
+      ],
+
+    components:
+      [
+        botoes,
+      ],
+  });
+
+  return {
+    channel,
+    created:
+      true,
+  };
+}
+
+
+// =========================================================
+// 🔒 LOCK DE CRIAÇÃO / REAPROVEITAMENTO DO TICKET PESSOAL
+// =========================================================
+//
+// Impede corrida entre:
+// - pedirset:aprovado;
+// - gi:controle_criado;
+// - supervisor periódico;
+// - qualquer outro módulo que chame ensureForUser.
+//
+// Assim uma mesma pessoa nunca ganha dois tickets pessoais
+// porque duas automações chegaram ao mesmo tempo.
+// =========================================================
+
+const PERSONAL_TICKET_ENSURE_LOCKS =
+  new Map();
+
+async function ensurePersonalTicketForUser(
+  guild,
+  userId,
+  options = {}
+) {
+  const targetId =
+    String(
+      userId ||
+      ""
+    ).trim();
+
+  const guildId =
+    String(
+      guild?.id ||
+      ""
+    ).trim();
+
+  if (
+    !guildId ||
+    !targetId
+  ) {
+    throw new Error(
+      "Guild ou usuário inválido para garantir ticket pessoal."
+    );
+  }
+
+  const lockKey =
+    `${guildId}:${targetId}`;
+
+  const previous =
+    PERSONAL_TICKET_ENSURE_LOCKS.get(
+      lockKey
+    ) ||
+    Promise.resolve();
+
+  let releaseCurrent =
+    () => {};
+
+  const gate =
+    new Promise(
+      resolve => {
+        releaseCurrent =
+          resolve;
+      }
+    );
+
+  const current =
+    previous
+      .catch(
+        () => {}
+      )
+      .then(
+        () => gate
+      );
+
+  PERSONAL_TICKET_ENSURE_LOCKS.set(
+    lockKey,
+    current
+  );
+
+  await previous
+    .catch(
+      () => {}
+    );
+
+  try {
+    // IMPORTANTE:
+    // A busca é refeita DENTRO do lock.
+    //
+    // Se outra rotina acabou de criar/reaproveitar o ticket,
+    // esta execução vai encontrá-lo em vez de criar outro.
+    return await ensurePersonalTicketForUserUnlocked(
+      guild,
+      targetId,
+      options
+    );
+  } finally {
+    releaseCurrent();
+
+    if (
+      PERSONAL_TICKET_ENSURE_LOCKS.get(
+        lockKey
+      ) ===
+      current
+    ) {
+      PERSONAL_TICKET_ENSURE_LOCKS.delete(
+        lockKey
+      );
+    }
+  }
+}
+
+
+globalThis.SC_PERSONAL_TICKET_API = {
+  findByUser:
+    findPersonalTicketForUser,
+
+  ensureForUser:
+    ensurePersonalTicketForUser,
+
+  resolveOwnerId:
+    resolvePersonalTicketOwnerId,
+};
+
+// =========================================================
 // 🔒 PROTEÇÃO CONTRA FECHAMENTO AUTOMÁTICO DE TICKETS
 // =========================================================
 //
@@ -3156,6 +3800,26 @@ if (dados.nome === 'entrevista') {
       if (id === 'fechar_ticket') {
         const canal   = interaction.channel;
         const canalId = canal.id;
+
+        // =====================================================
+        // 🔒 TICKET PESSOAL PERMANENTE
+        // =====================================================
+        // Tickets vinculados ao Controle GI que estiverem na categoria
+        // oficial de membros ativos não podem ser fechados manualmente.
+        // O desligamento do GI apenas move o ticket para !inativos.
+        if (
+          canal.parentId ===
+          PERSONAL_TICKET_ACTIVE_CATEGORY_ID
+        ) {
+          await interaction.reply({
+            content:
+              '🔒 Este é um **Ticket Pessoal permanente da SantaCreators** e não pode ser fechado. Quando o Controle GI for desligado, o sistema move este ticket automaticamente para **!inativos**.',
+            ephemeral:
+              true,
+          }).catch(() => {});
+
+          return true;
+        }
 
         const ehResp = temCargoDeResp(member);            // 👑
         const idResp = responsaveisOficiais.get(canalId); // já tem alguém marcado como resp?
