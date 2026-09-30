@@ -547,7 +547,16 @@ function getPauseCountdownMs(rec, n = nowMs()) {
 
     function pauseCountdownText(rec, n = nowMs()) {
   if (rec?.active) return '—';
-  return formatDurationFull(getPauseCountdownMs(rec, n));
+
+  const remainingMs = getPauseCountdownMs(rec, n);
+
+  if (remainingMs <= 0) {
+    return '**agora**';
+  }
+
+  const deadlineUnix = Math.floor((n + remainingMs) / 1000);
+
+  return `<t:${deadlineUnix}:R>`;
 }
 
 function activeTimeText(rec, n = nowMs()) {
@@ -2156,7 +2165,7 @@ if (!fcLink && typeof findFormsCreatorThreadIdByUserId === 'function') {
           `📌 **Status:** ${active ? 'Ativo' : 'Pausado'}`,
 `⏳ **Tempo ativo real:** \`${activeTimeText(rec)}\``,
 !active ? `⏸️ **Tempo pausado acumulado:** \`${formatDurationFull(getPausedTotalMs(rec))}\`` : '',
-!active ? `🧨 **Auto-desligamento em:** \`${pauseCountdownText(rec)}\`` : '',
+!active ? `🧨 **Auto-desligamento em:** ${pauseCountdownText(rec)}` : '',
 `🔒 **Cargo obrigatório enquanto ativo:** <@&${GI_ROLE_ID}>`,
           rec?.warnNoRoleGI
   ? '\n⚠️ *Atenção:* este membro **não possui** GI/Creator base no momento do registro.'
@@ -4219,7 +4228,7 @@ try {
       `📌 **Status:** ${rec.active ? 'Ativo' : 'Pausado'}`,
       `⏳ **Tempo ativo real:** \`${activeTimeText(rec)}\``,
       !rec.active ? `⏸️ **Pausado acumulado:** \`${formatDurationFull(getPausedTotalMs(rec))}\`` : '',
-      !rec.active ? `🧨 **Auto-desligamento em:** \`${pauseCountdownText(rec)}\`` : '',
+      !rec.active ? `🧨 **Auto-desligamento em:** ${pauseCountdownText(rec)}` : '',
       `🔗 **Registro:** Ir ao registro})`
     ].filter(Boolean).join('\n')
   );
@@ -5554,6 +5563,35 @@ async function autoDesligarPausadosVencidos(guild, origem = 'tick') {
   }
 }
 
+    // ====================== RELÓGIO CRÍTICO DA PAUSA ======================
+    // Mantém o auto-desligamento independente do loop pesado de manutenção.
+    // Assim, mesmo que o tick principal demore em outras rotinas,
+    // a contagem crítica de pausa continua sendo verificada.
+    let isPauseClockTicking = false;
+    let lastPauseClockRunAtMs = 0;
+
+    async function pauseClockTick(origem = 'interval_critico') {
+      const n = nowMs();
+
+      // Evita duas execuções praticamente juntas quando o tick principal
+      // e o intervalo crítico dispararem no mesmo instante.
+      if ((n - lastPauseClockRunAtMs) < 30 * 1000) return;
+      if (isPauseClockTicking) return;
+
+      isPauseClockTicking = true;
+      lastPauseClockRunAtMs = n;
+
+      try {
+        for (const [, guild] of client.guilds.cache) {
+          await autoDesligarPausadosVencidos(guild, origem);
+        }
+      } catch (e) {
+        console.warn('[SC_GI] pauseClockTick err:', e?.message || e);
+      } finally {
+        isPauseClockTicking = false;
+      }
+    }
+
     // ====================== LOOP ======================
     let isTicking = false; // ✅ Trava para evitar sobreposição de execuções
     async function tick() {
@@ -5561,9 +5599,7 @@ async function autoDesligarPausadosVencidos(guild, origem = 'tick') {
       isTicking = true;
 
       try {
-        for (const [, guild] of client.guilds.cache) {
-          await autoDesligarPausadosVencidos(guild, 'tick');
-        }
+        await pauseClockTick('tick_principal');
 
         // NOVO: DM de aviso de auto-desligamento
         for (const rec of SC_GI_STATE.registros.values()) {
@@ -5757,6 +5793,14 @@ if (!rec.active) {
             await scheduleRestoreRoles(guild, uid);
           }
         }
+
+        // ✅ Relógio crítico independente:
+        // continua verificando o auto-desligamento mesmo se o tick principal
+        // estiver ocupado com rotinas pesadas de manutenção.
+        setInterval(() => {
+          void pauseClockTick('interval_critico');
+        }, SC_GI_CFG.TICK_MS);
+
         setInterval(tick, SC_GI_CFG.TICK_MS);
         console.log('[SC_GI] Controle GI v3.4 LEVE iniciado.');
       } catch (e) {
