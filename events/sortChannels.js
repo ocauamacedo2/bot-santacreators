@@ -146,6 +146,12 @@ const CREATOR_TICKET_AUTO = {
   // Categoria oficial de membros ativos.
   ACTIVE_CATEGORY: "1384650670145278033",
 
+  // Canais que ficam nesta categoria, mas NÃO são tickets de membros.
+  // Nunca entram na automação de Controle GI.
+  ACTIVE_EXEMPT_CHANNEL_IDS: new Set([
+    "1523906618385760458",
+  ]),
+
   // Mesmas categorias já usadas pelo !inativo.
   INACTIVE_CATEGORIES: [
     "1383899907244425246",
@@ -236,7 +242,7 @@ const CREATOR_TICKET_OWNER_CACHE_TTL_MS = 30 * 60 * 1000;
 
 // Controle do failsafe de reconciliação dos membros ativos.
 const CREATOR_ACTIVE_RECONCILE_LAST_RUN = new Map();
-const CREATOR_ACTIVE_RECONCILE_INTERVAL_MS = 60 * 1000;
+const CREATOR_ACTIVE_RECONCILE_INTERVAL_MS = 30 * 1000;
 
 // =====================================================
 // AUTOMAÇÃO: TICKET DO MEMBRO / CONTROLE GI
@@ -247,6 +253,18 @@ function isAutomationTextChannelLike(channel) {
     channel.type !== ChannelType.GuildCategory &&
     !(typeof channel.isThread === "function" && channel.isThread())
   );
+}
+
+function isCreatorTicketAutomationExempt(channel) {
+  return CREATOR_TICKET_AUTO.ACTIVE_EXEMPT_CHANNEL_IDS.has(
+    String(channel?.id || "")
+  );
+}
+
+function extractCreatorTicketOwnerFromTopic(channel) {
+  const topic = String(channel?.topic || "");
+  const match = topic.match(/aberto_por:(\d{17,20})/i);
+  return match?.[1] || null;
 }
 
 async function extractCreatorTicketOwnerFromHeader(channel) {
@@ -308,8 +326,17 @@ async function resolveCreatorTicketOwnerId(channel) {
     return cached.userId;
   }
 
-  const fromHeader = await extractCreatorTicketOwnerFromHeader(channel);
+  // Fonte principal: o próprio tópico oficial do ticket.
+  // Os tickets usam: ticket_tipo:...;aberto_por:ID
+  const fromTopic = extractCreatorTicketOwnerFromTopic(channel);
+
+  // Fallbacks mantidos para tickets antigos ou sem tópico.
+  const fromHeader = fromTopic
+    ? null
+    : await extractCreatorTicketOwnerFromHeader(channel);
+
   const resolved =
+    fromTopic ||
     fromHeader ||
     extractCreatorTicketOwnerFromOverwrites(channel) ||
     null;
@@ -331,6 +358,7 @@ async function findCreatorTicketsForUser(guild, userId, allowedCategoryIds) {
   for (const channel of guild.channels.cache.values()) {
     if (channel.type !== ChannelType.GuildText) continue;
     if (!channel.parentId || !categoryIds.has(channel.parentId)) continue;
+    if (isCreatorTicketAutomationExempt(channel)) continue;
 
     const ownerId = await resolveCreatorTicketOwnerId(channel);
     if (String(ownerId) === String(userId)) {
@@ -363,6 +391,14 @@ async function moveCreatorTicketAutomatically(
   { saveInactiveOrigin = false } = {}
 ) {
   if (!channel?.guild || channel.parentId === targetCategoryId) return false;
+
+  // Proteção absoluta da automação para canais fixos que não são tickets.
+  if (isCreatorTicketAutomationExempt(channel)) {
+    console.log(
+      `[SC_SORT][AUTO_TICKET] Canal ${channel.id} ignorado por exceção fixa.`
+    );
+    return false;
+  }
 
   const targetCategory = await channel.guild.channels
     .fetch(targetCategoryId)
@@ -415,6 +451,21 @@ async function moveCreatorTicketAutomatically(
 }
 
 async function syncCreatorTicketAfterSetApproval(guild, userId) {
+  const giState = getCreatorGiControlState(
+    guild?.id,
+    String(userId || "")
+  );
+
+  // Regra única para entrar em membros ativos:
+  // a pessoa precisa possuir um Controle GI realmente registrado.
+  if (
+    !giState.available ||
+    !giState.authoritative ||
+    !giState.exists
+  ) {
+    return;
+  }
+
   const tickets = await findCreatorTicketsForUser(
     guild,
     userId,
@@ -425,7 +476,7 @@ async function syncCreatorTicketAfterSetApproval(guild, userId) {
     await moveCreatorTicketAutomatically(
       channel,
       CREATOR_TICKET_AUTO.ACTIVE_CATEGORY,
-      "SantaCreators: Set aprovado -> mover ticket para membros ativos"
+      "SantaCreators: Controle GI confirmado -> mover ticket para membros ativos"
     );
   }
 }
@@ -463,20 +514,29 @@ async function syncCreatorTicketAfterGiDisabled(guild, userId) {
 async function syncCreatorTicketMovedIntoWaiting(channel) {
   if (channel?.type !== ChannelType.GuildText) return;
   if (channel.parentId !== CREATOR_TICKET_AUTO.WAITING_CATEGORY) return;
+  if (isCreatorTicketAutomationExempt(channel)) return;
 
   const ownerId = await resolveCreatorTicketOwnerId(channel);
   if (!ownerId) return;
 
-  const member = await channel.guild.members.fetch(ownerId).catch(() => null);
-  if (!member) return;
+  const giState = getCreatorGiControlState(
+    channel.guild.id,
+    String(ownerId)
+  );
 
-  // Só desce sozinho se a pessoa já estiver com o Set/SantaCreators aprovado.
-  if (!member.roles.cache.has(CREATOR_TICKET_AUTO.ROLE_SANTA_CREATORS)) return;
+  // A entrada em membros ativos depende do Controle GI, não de cargo.
+  if (
+    !giState.available ||
+    !giState.authoritative ||
+    !giState.exists
+  ) {
+    return;
+  }
 
   await moveCreatorTicketAutomatically(
     channel,
     CREATOR_TICKET_AUTO.ACTIVE_CATEGORY,
-    "SantaCreators: ticket movido para a fila após Set já aprovado"
+    "SantaCreators: ticket com Controle GI confirmado -> membros ativos"
   );
 }
 
@@ -575,12 +635,22 @@ async function reconcileCreatorActiveChannel(
     };
   }
 
+  // Canal fixo da categoria que não é ticket.
+  // Nunca entra na validação nem é movido automaticamente.
+  if (isCreatorTicketAutomationExempt(channel)) {
+    return {
+      checked: true,
+      moved: false,
+      skipped: "fixed_exempt_channel",
+    };
+  }
+
   const ownerId =
     await resolveCreatorTicketOwnerId(channel);
 
   if (!ownerId) {
     console.warn(
-      `[SC_SORT][RECONCILE] Canal ${channel.id} ignorado: não foi possível identificar o dono.`
+      `[SC_SORT][RECONCILE] Canal ${channel.id} ignorado: não foi possível identificar o dono do ticket.`
     );
 
     return {
@@ -590,58 +660,32 @@ async function reconcileCreatorActiveChannel(
     };
   }
 
-  const memberState =
-    await fetchCreatorMemberSafely(
-      channel.guild,
-      String(ownerId)
-    );
-
-  // Em falha transitória de API, não move nada.
-  if (memberState.lookupFailed) {
-    return {
-      checked: true,
-      moved: false,
-      skipped: "member_lookup_failed",
-    };
-  }
-
-  const issues = [];
-
-  if (memberState.definitiveMissing) {
-    issues.push(
-      "membro não está mais no servidor"
-    );
-  } else if (
-    memberState.member &&
-    !memberState.member.roles.cache.has(
-      CREATOR_TICKET_AUTO.ROLE_SANTA_CREATORS
-    )
-  ) {
-    issues.push(
-      "membro não possui mais o cargo SantaCreators"
-    );
-  }
-
   const giState =
     getCreatorGiControlState(
       channel.guild.id,
       String(ownerId)
     );
 
-  // Só usa ausência de Controle GI como prova quando a base foi
-  // carregada com segurança e é considerada autoritativa.
+  // Segurança: se a API viva do GI ainda não terminou de carregar,
+  // não move ninguém por ausência de dado. O próximo ciclo tenta de novo.
   if (
-    giState.available &&
-    giState.authoritative &&
-    !giState.exists
+    !giState.available ||
+    !giState.authoritative
   ) {
-    issues.push(
-      "membro não possui Controle GI registrado"
-    );
+    return {
+      checked: true,
+      moved: false,
+      ownerId: String(ownerId),
+      skipped: "gi_state_not_ready",
+      giState,
+    };
   }
 
-  // Controle pausado continua sendo controle existente.
-  if (issues.length === 0) {
+  // REGRA OFICIAL DA CATEGORIA DE MEMBROS ATIVOS:
+  // possui Controle GI -> permanece;
+  // não possui Controle GI -> vai automaticamente para !inativos.
+  // Controle pausado continua contando como Controle GI existente.
+  if (giState.exists) {
     return {
       checked: true,
       moved: false,
@@ -665,7 +709,8 @@ async function reconcileCreatorActiveChannel(
       moved: false,
       ownerId: String(ownerId),
       skipped: "inactive_categories_full",
-      issues,
+      reason: "no_gi_control",
+      giState,
     };
   }
 
@@ -673,7 +718,7 @@ async function reconcileCreatorActiveChannel(
     await moveCreatorTicketAutomatically(
       channel,
       inactiveCategory.id,
-      `SantaCreators: reconciliação automática (${trigger}) -> ${issues.join("; ")}`,
+      `SantaCreators: sem Controle GI (${trigger}) -> mover ticket para inativos`,
       {
         saveInactiveOrigin: true,
       }
@@ -683,7 +728,7 @@ async function reconcileCreatorActiveChannel(
     checked: true,
     moved: !!moved,
     ownerId: String(ownerId),
-    issues,
+    reason: "no_gi_control",
     giState,
   };
 }
@@ -1631,6 +1676,24 @@ const SC_SORT_CATEGORY_IDS = [
           await syncCreatorTicketMovedIntoWaiting(channel);
         }
       }
+
+      // Segunda conferência alguns segundos após o Ready.
+      // Isso cobre a ordem de inicialização entre sortChannels e Controle GI.
+      setTimeout(async () => {
+        try {
+          for (const [, guild] of client.guilds.cache) {
+            await reconcileCreatorActiveCategory(guild, {
+              force: true,
+              trigger: "client_ready_pos_gi",
+            });
+          }
+        } catch (error) {
+          console.error(
+            "[SC_SORT][RECONCILE] Erro no failsafe pós-ready:",
+            error
+          );
+        }
+      }, 10_000);
     });
 
     // reage a criação
