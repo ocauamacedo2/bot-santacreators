@@ -15100,7 +15100,11 @@ await publishHallRankings(client, rankings);
       : -1;
   }
 
-  async function validateHallApprovalHierarchy(interaction, data) {
+  async function validateHallApprovalHierarchy(
+    interaction,
+    data,
+    action = "aprovar"
+  ) {
     if (canApprove(interaction.member, interaction.user.id)) {
       return { allowed: true };
     }
@@ -15108,7 +15112,7 @@ await publishHallRankings(client, rankings);
     if (!isCoordHallApprover(interaction.member, interaction.user.id)) {
       return {
         allowed: false,
-        reason: "🚫 Você não tem permissão para aprovar."
+        reason: `🚫 Você não tem permissão para ${action}.`
       };
     }
 
@@ -15124,14 +15128,14 @@ await publishHallRankings(client, rankings);
     if (creatorId === interaction.user.id) {
       return {
         allowed: false,
-        reason: "🚫 Coordenação não pode aprovar o próprio Hall da Fama."
+        reason: `🚫 Coordenação não pode ${action} o próprio Hall da Fama.`
       };
     }
 
     if (ALLOWED_USERS.includes(creatorId)) {
       return {
         allowed: false,
-        reason: "🚫 Coordenação não pode aprovar Hall da Fama de cargo superior."
+        reason: `🚫 Coordenação não pode ${action} Hall da Fama de cargo superior.`
       };
     }
 
@@ -15153,7 +15157,7 @@ await publishHallRankings(client, rankings);
     if (creatorIsCoord) {
       return {
         allowed: false,
-        reason: "🚫 Coordenação não pode aprovar Hall da Fama de outra Coordenação."
+        reason: `🚫 Coordenação não pode ${action} Hall da Fama de outra Coordenação.`
       };
     }
 
@@ -15166,7 +15170,7 @@ await publishHallRankings(client, rankings);
     if (creatorPosition >= coordPosition) {
       return {
         allowed: false,
-        reason: "🚫 Coordenação só pode aprovar Hall da Fama de pessoas com cargo abaixo do seu."
+        reason: `🚫 Coordenação só pode ${action} Hall da Fama de pessoas com cargo abaixo do seu.`
       };
     }
 
@@ -19867,11 +19871,33 @@ dashEmit(
 
     // 5. Reprovação
     if (interaction.isButton() && interaction.customId.startsWith(BTN_REJECT_PREFIX)) {
-      if (!canApprove(interaction.member, interaction.user.id)) {
+      if (
+        !canApprove(interaction.member, interaction.user.id) &&
+        !isCoordHallApprover(interaction.member, interaction.user.id)
+      ) {
         return interaction.reply({ content: "🚫 Você não tem permissão para recusar.", ephemeral: true });
       }
 
       const reqId = interaction.customId.replace(BTN_REJECT_PREFIX, "");
+
+      const rejectedData =
+        state.pendingRequests[
+          reqId
+        ];
+
+      const hierarchyCheck =
+        await validateHallApprovalHierarchy(
+          interaction,
+          rejectedData,
+          "recusar"
+        );
+
+      if (!hierarchyCheck.allowed) {
+        return interaction.reply({
+          content: hierarchyCheck.reason,
+          ephemeral: true
+        });
+      }
       
       const embedRejected = EmbedBuilder.from(interaction.message.embeds[0])
         .setColor("#e74c3c")
@@ -19885,11 +19911,6 @@ dashEmit(
         components:
           []
       });
-
-const rejectedData =
-  state.pendingRequests[
-    reqId
-  ];
 
 if (
   rejectedData
