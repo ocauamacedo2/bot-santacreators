@@ -685,7 +685,9 @@ export function recordPersonalTicketActivity({
         .trim()
         .slice(
           0,
-          2200
+          type === "forms_feedback" || type === "ai_forms_followup"
+            ? 16000
+            : 2200
         ),
 
     summary:
@@ -821,10 +823,11 @@ export function getPersonalTicketHistoryForUser(
         }
 
         if (
-          includeAi !==
-            true &&
-          item?.type ===
-            "ai_response"
+          includeAi !== true &&
+          (
+            String(item?.type || "").startsWith("ai_") ||
+            item?.relation === "ia_santacreators"
+          )
         ) {
           return false;
         }
@@ -2343,6 +2346,34 @@ async function cleanupFormsCreatorDuplicateThreads(
 //    gerar duplicação.
 // =====================================================
 
+async function withFormsCreatorThreadMaintenance(thread, action) {
+  if (!thread?.isThread?.()) return action(thread);
+
+  const current = await thread.fetch(true);
+  const wasArchived = current.archived;
+  const wasLocked = current.locked;
+
+  if (wasArchived) {
+    await current.edit({
+      archived: false,
+      locked: wasLocked,
+      reason: "Manutenção do registro FormsCreator",
+    });
+  }
+
+  try {
+    return await action(current);
+  } finally {
+    if (wasArchived) {
+      await current.edit({
+        archived: true,
+        locked: wasLocked,
+        reason: "Restaurando o estado do tópico após manutenção do FormsCreator",
+      });
+    }
+  }
+}
+
 async function syncFormsCreatorActiveMirror(
   client,
   {
@@ -2468,6 +2499,136 @@ async function syncFormsCreatorActiveMirror(
         latestState
       );
     };
+
+  // Inativação não depende de cargo: os cargos podem já ter sido removidos pelo GI.
+  // Atualiza somente o espelho já vinculado, sem criar/reabrir uma fase de evolução.
+  if (registration.active === false) {
+    const mirrorThreadId = registration.activeMirrorThreadId;
+    const mirrorMessageId = registration.activeMirrorMessageId;
+
+    if (
+      mirrorThreadId &&
+      mirrorMessageId &&
+      String(mirrorThreadId) !== normalizedOriginalThreadId
+    ) {
+      const missingDiscordResource = error => {
+        if ([10003, 10008].includes(Number(error?.code))) return null;
+        throw error;
+      };
+
+      const mirrorThread = await client.channels
+        .fetch(mirrorThreadId)
+        .catch(missingDiscordResource);
+
+      if (mirrorThread && mirrorThread.guildId !== GUILD_ID) {
+        throw new Error("O espelho do FormsCreator pertence a outra guilda.");
+      }
+
+      const mirrorMessage = mirrorThread?.isTextBased?.()
+        ? await mirrorThread.messages.fetch(mirrorMessageId).catch(missingDiscordResource)
+        : null;
+
+      if (mirrorMessage) {
+        if (mirrorMessage.author?.id !== client.user?.id || !mirrorMessage.embeds?.[0]) {
+          throw new Error("O espelho vinculado não é um registro válido deste bot.");
+        }
+
+        const inactiveEmbed = EmbedBuilder.from(mirrorMessage.embeds[0]);
+        const fields = [...(inactiveEmbed.data.fields || [])];
+        const statusField = {
+          name: "Status do Projeto",
+          value: "🔴 Inativo",
+          inline: false,
+        };
+        const index = fields.findIndex(field => field.name === statusField.name);
+        if (index >= 0) fields[index] = statusField;
+        else fields.push(statusField);
+        inactiveEmbed.setFields(fields);
+
+        await withFormsCreatorThreadMaintenance(mirrorThread, () =>
+          mirrorMessage.edit({
+            embeds: [inactiveEmbed],
+            components: [],
+            allowedMentions: { parse: [] },
+          })
+        );
+      }
+    }
+
+    // Preserva os IDs para histórico e eventual reativação.
+    persistRegistration();
+    return {
+      ok: true,
+      status: "inactive_mirror_synced",
+      threadId: mirrorThreadId || normalizedOriginalThreadId,
+      messageId: mirrorMessageId || sourceMessage.id,
+    };
+  }
+
+  // Inativação não depende de cargo: os cargos podem já ter sido removidos pelo GI.
+  // Atualiza somente o espelho já vinculado, sem criar/reabrir uma fase de evolução.
+  if (registration.active === false) {
+    const mirrorThreadId = registration.activeMirrorThreadId;
+    const mirrorMessageId = registration.activeMirrorMessageId;
+
+    if (
+      mirrorThreadId &&
+      mirrorMessageId &&
+      String(mirrorThreadId) !== normalizedOriginalThreadId
+    ) {
+      const missingDiscordResource = error => {
+        if ([10003, 10008].includes(Number(error?.code))) return null;
+        throw error;
+      };
+
+      const mirrorThread = await client.channels
+        .fetch(mirrorThreadId)
+        .catch(missingDiscordResource);
+
+      if (mirrorThread && mirrorThread.guildId !== GUILD_ID) {
+        throw new Error("O espelho do FormsCreator pertence a outra guilda.");
+      }
+
+      const mirrorMessage = mirrorThread?.isTextBased?.()
+        ? await mirrorThread.messages.fetch(mirrorMessageId).catch(missingDiscordResource)
+        : null;
+
+      if (mirrorMessage) {
+        if (mirrorMessage.author?.id !== client.user?.id || !mirrorMessage.embeds?.[0]) {
+          throw new Error("O espelho vinculado não é um registro válido deste bot.");
+        }
+
+        const inactiveEmbed = EmbedBuilder.from(mirrorMessage.embeds[0]);
+        const fields = [...(inactiveEmbed.data.fields || [])];
+        const statusField = {
+          name: "Status do Projeto",
+          value: "🔴 Inativo",
+          inline: false,
+        };
+        const index = fields.findIndex(field => field.name === statusField.name);
+        if (index >= 0) fields[index] = statusField;
+        else fields.push(statusField);
+        inactiveEmbed.setFields(fields);
+
+        await withFormsCreatorThreadMaintenance(mirrorThread, () =>
+          mirrorMessage.edit({
+            embeds: [inactiveEmbed],
+            components: [],
+            allowedMentions: { parse: [] },
+          })
+        );
+      }
+    }
+
+    // Preserva os IDs para histórico e eventual reativação.
+    persistRegistration();
+    return {
+      ok: true,
+      status: "inactive_mirror_synced",
+      threadId: mirrorThreadId || normalizedOriginalThreadId,
+      messageId: mirrorMessageId || sourceMessage.id,
+    };
+  }
 
   const disablePreviousMirror =
     async () => {
@@ -2849,7 +3010,7 @@ async function syncFormsCreatorActiveMirror(
   );
 }
 
-async function _performStatusUpdate(client, { registration, threadId, newStatus, actor }) {
+async function _performStatusUpdate(client, { registration, threadId, newStatus, actor, fromGi = false }) {
     const formChannel = await client.channels.fetch(CREATOR_FORM_CHANNEL_ID).catch(() => null);
     const guild = formChannel?.guild || null;
     const userId = registration.userId;
@@ -2865,24 +3026,38 @@ async function _performStatusUpdate(client, { registration, threadId, newStatus,
         }
     }
 
-    const oldStatus = registration.active;
-    registration.active = newStatus;
-    // O estado é salvo pela função que chama esta.
+    if (!newStatus && !fromGi) {
+        const giApi = globalThis.SC_GI_CONTROL_API;
+        if (!giApi?.ready || typeof giApi.desligarFromForms !== "function") {
+            throw new Error("A integração de desligamento com o Controle GI não está disponível. O status não foi alterado.");
+        }
 
-    if (!newStatus) {
-        try {
-            // A integração com gestaoinfluencer.js para desligamento automático não pode ser
-            // implementada como no código original, pois o módulo não exporta a função necessária.
-            // Deixei um log para indicar que a ação foi solicitada.
-            console.log(`[FormsCreator] Desligamento de ${userId} solicitado. A integração com gestaoinfluencer precisa ser verificada.`);
-        } catch (e) {
-            console.error("[FormsCreator] Falha ao tentar interagir com GI:", e);
+        await giApi.desligarFromForms({
+            guildId: guild.id,
+            userId,
+            actor,
+            reason: "Desligamento pelo FormsCreator",
+        });
+
+        const updated = readState().registrations?.[threadId];
+        if (updated?.active === false) {
+            Object.assign(registration, updated);
+            return;
         }
     }
 
+    const oldStatus = registration.active;
+    registration.active = newStatus;
+
     const thread = await client.channels.fetch(threadId).catch(() => null);
-    if (thread) {
-        const registroMsg = await thread.messages.fetch(registration.messageId).catch(() => null);
+    if (!thread?.isTextBased?.()) {
+        throw new Error("Tópico do FormsCreator não encontrado para atualizar o status.");
+    }
+    await withFormsCreatorThreadMaintenance(thread, async currentThread => {
+        const registroMsg = await currentThread.messages.fetch(registration.messageId);
+        if (!registroMsg?.embeds?.[0]) {
+            throw new Error("Mensagem do FormsCreator sem o embed do registro.");
+        }
         if (registroMsg) {
             const oldEmbed = EmbedBuilder.from(registroMsg.embeds[0]);
             const statusField = { name: "Status do Projeto", value: newStatus ? "🟢 Ativo" : "🔴 Inativo", inline: false };
@@ -2898,11 +3073,22 @@ async function _performStatusUpdate(client, { registration, threadId, newStatus,
                     .setLabel(newStatus ? "Desligar do Projeto" : "Ligar ao Projeto")
                     .setStyle(newStatus ? ButtonStyle.Danger : ButtonStyle.Success)
             );
-            const existingRows = registroMsg.components.filter(row => !row.components.some(c => c.customId.startsWith('fc_toggle_status')));
+            const existingRows = registroMsg.components.filter(row => !row.components.some(c => c.customId?.startsWith('fc_toggle_status')));
             await registroMsg.edit({ embeds: [oldEmbed], components: [...existingRows, newStatusRow] });
         }
-        await thread.send(`**${actor.username}** alterou o status do projeto para **${newStatus ? 'ATIVO' : 'INATIVO'}**.`);
-    }
+        const latestState = readState();
+        latestState.registrations ||= {};
+        latestState.registrations[threadId] = {
+            ...(latestState.registrations[threadId] || {}),
+            ...registration,
+        };
+        writeState(latestState);
+
+        await currentThread.send({
+            content: `**${actor?.username || actor?.id || "Sistema"}** alterou o status do projeto para **${newStatus ? 'ATIVO' : 'INATIVO'}**.`,
+            allowedMentions: { parse: [] },
+        }).catch(error => console.warn("[FormsCreator] Status salvo; aviso no tópico pendente:", error));
+    });
 
     await logStatusChange(
         client,
@@ -2914,7 +3100,7 @@ async function _performStatusUpdate(client, { registration, threadId, newStatus,
             oldStatus,
             newStatus
         }
-    );
+    ).catch(error => console.warn("[FormsCreator] Status salvo; log de auditoria pendente:", error));
 
     await syncFormsCreatorActiveMirror(
         client,
@@ -5722,18 +5908,24 @@ export async function migrateFormsCreatorDiscordId(
   };
 }
 
-export async function setFormsCreatorStatus(client, { threadId, newStatus, actor }) {
+export async function setFormsCreatorStatus(client, { threadId, newStatus, actor, fromGi = false }) {
     const state = readState();
     const registration = state.registrations?.[threadId];
 
     if (!registration) {
-        throw new Error("Registro do FormsCreator não encontrado para reativar.");
+        throw new Error("Registro do FormsCreator não encontrado para alterar o status.");
     }
     
     if (registration.active === newStatus) return; // Nenhuma mudança necessária
 
-    await _performStatusUpdate(client, { registration, threadId, newStatus, actor });
-    writeState(state); // Salva o estado após a alteração
+    await _performStatusUpdate(client, { registration, threadId, newStatus, actor, fromGi });
+    const latestState = readState();
+    latestState.registrations ||= {};
+    latestState.registrations[threadId] = {
+        ...(latestState.registrations[threadId] || {}),
+        ...registration,
+    };
+    writeState(latestState);
 }
 
 export async function setFormsCreatorArea(client, { threadId, newArea, actor }) {
@@ -6117,6 +6309,16 @@ export async function formsCreatorOnReady(client) {
               return;
             }
 
+            const roleUpdateInProgress = Number(
+              globalThis.__SC_ROLE_BYPASS__?.get(String(member.id)) || 0
+            ) > Date.now();
+            const hasEvolutionRole = [...EVOLUTION_PROFILE_ROLE_IDS]
+              .some(roleId => member.roles.cache.has(roleId));
+            if (roleUpdateInProgress && !hasEvolutionRole) {
+              // O desligamento GI atualizará o Forms depois da remoção dos cargos.
+              return;
+            }
+
             const state =
               readState();
 
@@ -6277,22 +6479,18 @@ export async function formsCreatorHandleMessage(message, client) {
   // =====================================================
 
   if (
-    message.channel?.isThread?.() &&
-    String(
-      message.channel.parentId ||
-      ""
-    ) ===
-      String(
-        CREATOR_FORM_CHANNEL_ID
-      )
+    message.guild.id === GUILD_ID &&
+    message.channel?.isThread?.()
   ) {
     const state =
       readState();
 
     const registration =
-      state.registrations?.[
-        message.channel.id
-      ] ||
+      state.registrations?.[message.channel.id] ||
+      Object.values(state.registrations || {}).find(item =>
+        item?.active === true &&
+        String(item?.activeMirrorThreadId || "") === message.channel.id
+      ) ||
       null;
 
     const targetUserId =
@@ -7152,7 +7350,13 @@ if (interaction.isModalSubmit?.() && interaction.customId === "form_equipecreato
 
       try {
         await _performStatusUpdate(client, { registration, threadId, newStatus: newActiveState, actor: interaction.user });
-        writeState(state); // Salva o estado após a alteração
+        const latestState = readState();
+        latestState.registrations ||= {};
+        latestState.registrations[threadId] = {
+          ...(latestState.registrations[threadId] || {}),
+          ...registration,
+        };
+        writeState(latestState);
         await interaction.editReply({ content: "✅ Status alterado com sucesso!" });
       } catch (e) {
         await interaction.editReply({ content: `❌ ${e.message}` });
@@ -7180,15 +7384,17 @@ if (interaction.isModalSubmit?.() && interaction.customId === "form_equipecreato
       const registration = state.registrations?.[threadId];
       if (!registration || registration.userId !== userId) return interaction.editReply({ content: "❌ Registro não encontrado." });
 
-      const oldStatus = registration.active;
-      registration.active = newActiveState;
-      writeState(state);
-
-      // ... (a lógica de editar a mensagem no tópico, igual ao toggle) ...
-
-      await interaction.message.edit({ components: [] }); // Desativa o botão de reverter
-      await logStatusChange(client, interaction, { threadId, userId, nome: registration.nome, oldStatus, newStatus: newActiveState });
-      await interaction.editReply({ content: "✅ Ação revertida com sucesso!" });
+      try {
+        await setFormsCreatorStatus(client, {
+          threadId,
+          newStatus: newActiveState,
+          actor: interaction.user,
+        });
+        await interaction.message.edit({ components: [] });
+        await interaction.editReply({ content: "✅ Ação revertida com sucesso!" });
+      } catch (error) {
+        await interaction.editReply({ content: `❌ ${error.message}` });
+      }
       return true;
     }
 

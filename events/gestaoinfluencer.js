@@ -361,6 +361,31 @@ CHANNEL_RESTORE_LOG:      '1486006878914875412',
         return !!SC_GI_findCurrentControl(guildId, userId);
       },
 
+      async desligarFromForms({ guildId, userId, actor, reason } = {}) {
+        if (!SC_GI_DATA_READY) {
+          throw new Error("O Controle GI ainda está carregando os registros.");
+        }
+        const targetGuildId = String(guildId || "").trim();
+        const targetUserId = String(userId || "").trim();
+        if (!targetGuildId || !targetUserId || !actor?.id) {
+          throw new Error("Dados insuficientes para desligar pelo FormsCreator.");
+        }
+        const record = SC_GI_findCurrentControl(targetGuildId, targetUserId);
+        if (!record) return { ok: true, status: "no_control" };
+
+        const guild = client.guilds.cache.get(targetGuildId) ||
+          await client.guilds.fetch(targetGuildId);
+
+        // A rotina existente valida permissões e hierarquia antes de remover cargos.
+        await desligarRegistro(
+          guild,
+          actor,
+          record.messageId,
+          reason || "Desligamento pelo FormsCreator"
+        );
+        return { ok: true, status: "disabled" };
+      },
+
       listControls(guildId = null) {
         const wantedGuildId = String(guildId || '');
         const byUser = new Map();
@@ -5613,6 +5638,7 @@ if (
 
       let privateGuidanceParts =
         0;
+      let privateGuidanceSentParts = 0;
 
       if (
         typeof generateWeeklyMemberPrivateDm ===
@@ -5701,13 +5727,12 @@ if (
                 []
               );
 
-            if (
-              partSent
-            ) {
-              privateGuidanceSent =
-                true;
+            if (partSent) {
+              privateGuidanceSentParts++;
             }
           }
+          privateGuidanceSent = privateGuidanceParts > 0 &&
+            privateGuidanceSentParts === privateGuidanceParts;
         } catch (e) {
           console.warn(
             `[SC_GI] Não foi possível gerar/enviar orientação privada de ${rec.targetId}:`,
@@ -5745,7 +5770,7 @@ if (
               : (
                 typeof generateWeeklyMemberPrivateDm ===
                 'function'
-                  ? 'não confirmada'
+                  ? `entrega incompleta ou não confirmada: ${privateGuidanceSentParts}/${privateGuidanceParts} parte(s)`
                   : 'indisponível'
               )
           }`,
@@ -6054,6 +6079,7 @@ if (
         threadId: fcThreadId,
         newStatus: false,
         actor,
+        fromGi: true,
       });
 
       await logMsg(
@@ -8142,13 +8168,12 @@ dashOn(
                   }
                 }
 
-                privateDmSent =
-                  privateDmSentParts >
-                  0;
+                privateDmSent = privateDmTotalParts > 0 &&
+                  privateDmSentParts === privateDmTotalParts;
 
                 if (!privateDmSent) {
                   throw new Error(
-                    'A orientação foi gerada, mas a DM não pôde ser entregue.'
+                    `A orientação foi gerada, mas a entrega ficou incompleta: ${privateDmSentParts}/${privateDmTotalParts} parte(s) confirmadas.`
                   );
                 }
               } catch (error) {
