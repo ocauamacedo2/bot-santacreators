@@ -2567,22 +2567,92 @@ async function assertCanManageGIRecord(
       return true;
     }
 
-        async function addGIRole(guild, userId, reason = 'GI obrigatório') {
-      const m = await fetchMemberCached(guild, userId);
-      if (!m) return false;
-      if (m.roles.cache.has(GI_ROLE_ID)) return true;
-      setRoleBypass(userId);
-      await m.roles.add(GI_ROLE_ID, reason).catch(()=>{});
-      return true;
+    async function addGIRole(
+      guild,
+      userId,
+      reason = 'GI obrigatório'
+    ) {
+      const m =
+        await fetchMemberCached(
+          guild,
+          userId
+        );
+
+      if (!m) {
+        return false;
+      }
+
+      if (
+        m.roles.cache.has(
+          GI_ROLE_ID
+        )
+      ) {
+        return true;
+      }
+
+      setRoleBypass(
+        userId
+      );
+
+      try {
+        await m.roles.add(
+          GI_ROLE_ID,
+          reason
+        );
+
+        return true;
+      } catch (error) {
+        console.error(
+          `[SC_GI] Falha ao adicionar o cargo GI em ${userId}:`,
+          error?.message || error
+        );
+
+        return false;
+      }
     }
 
-    async function removeGIRole(guild, userId, reason = 'GI removido por pausa/desligamento') {
-      const m = await fetchMemberCached(guild, userId);
-      if (!m) return false;
-      if (!m.roles.cache.has(GI_ROLE_ID)) return true;
-      setRoleBypass(userId);
-      await m.roles.remove(GI_ROLE_ID, reason).catch(()=>{});
-      return true;
+    async function removeGIRole(
+      guild,
+      userId,
+      reason = 'GI removido por pausa/desligamento'
+    ) {
+      const m =
+        await fetchMemberCached(
+          guild,
+          userId
+        );
+
+      if (!m) {
+        return false;
+      }
+
+      if (
+        !m.roles.cache.has(
+          GI_ROLE_ID
+        )
+      ) {
+        return true;
+      }
+
+      setRoleBypass(
+        userId
+      );
+
+      try {
+        await m.roles.remove(
+          GI_ROLE_ID,
+          reason
+        );
+
+        return true;
+      } catch (error) {
+        console.error(
+          `[SC_GI] Falha ao remover o cargo GI de ${userId}:`,
+          error?.message || error
+        );
+
+        return false;
+      }
     }
 
     function emitGIReturned(targetId, extra = {}) {
@@ -3274,8 +3344,7 @@ if (rec.responsibleUserId && !isRespStillValid) {
 
             const newMsg = await ch.send({
               content: `<@${rec.targetId}>`,
-              embeds: [emb],
-              components: registroButtons('TEMP', rec.active)
+              embeds: [emb]
             });
 
             const oldId = rec.messageId;
@@ -3300,10 +3369,42 @@ if (rec.responsibleUserId && !isRespStillValid) {
             }
             didRestore = true;
           } else {
-             if (msg.author.id !== client.user.id) return; // Ignora msg de outro bot no loop automático (usa o botão pra migrar)
-             const hasButtons = (msg.components || []).some(r => (r.components || []).some(c => typeof c.customId === 'string' && (c.customId.startsWith(BTN.EDIT_PREFIX) || c.customId.startsWith(BTN.STOP_COUNT_PREFIX))));
-             if (!hasButtons) {
-                await msg.edit({ components: registroButtons(rec.messageId, rec.active) }).catch(()=>{});
+             if (msg.author.id !== client.user.id) {
+               // Ignora somente este registro antigo.
+               // NÃO encerra a conferência dos demais registros.
+               continue;
+             }
+
+             const componentCustomIds =
+               (msg.components || [])
+                 .flatMap(row => row.components || [])
+                 .map(component => String(component.customId || ''))
+                 .filter(Boolean);
+
+             const hasButtons =
+               componentCustomIds.some(customId =>
+                 customId.startsWith(BTN.EDIT_PREFIX) ||
+                 customId.startsWith(BTN.STOP_COUNT_PREFIX)
+               );
+
+             const hasTempButtons =
+               componentCustomIds.some(customId =>
+                 customId.endsWith('_TEMP') ||
+                 customId.includes('_TEMP')
+               );
+
+             if (!hasButtons || hasTempButtons) {
+                await msg.edit({
+                  components: registroButtons(
+                    rec.messageId,
+                    rec.active
+                  )
+                }).catch((error) => {
+                  console.warn(
+                    `[SC_GI] Falha ao corrigir botões do registro ${rec.messageId}:`,
+                    error?.message || error
+                  );
+                });
              }
           }
         }
@@ -3420,11 +3521,11 @@ totalPausedMs: 0,
   rec: tempRec
 });
 
-// 🔥 ENVIA JÁ COM OS BOTÕES (não depende de edit)
+// 🔥 ENVIA PRIMEIRO SEM BOTÕES TEMPORÁRIOS
+// O ID real da mensagem só existe depois do send().
 const msg = await ch.send({
   content: `<@${targetUser.id}>`,
-  embeds: [emb],
-  components: registroButtons('TEMP', tempRec.active)
+  embeds: [emb]
 });
 
 // agora fixa o ID real
@@ -3474,10 +3575,16 @@ dashEmit(
   }
 );
 
-// 🔁 FAILSAFE: garante IDs corretos nos botões
+// 🔁 Agora adiciona os botões com o ID REAL da mensagem.
+// Nunca deixa customId com TEMP no registro oficial.
 await msg.edit({
   components: registroButtons(record.messageId, record.active)
-}).catch(()=>{});
+}).catch((error) => {
+  console.error(
+    `[SC_GI] Falha ao aplicar botões reais no registro ${record.messageId}:`,
+    error?.message || error
+  );
+});
 
 
 // ✅ NOVO: já seta cargo GI automaticamente ao criar
@@ -5051,23 +5158,61 @@ if (
       if (!msg) throw new Error('Mensagem do registro não encontrada.');
 
       // PAUSAR / DESPAUSAR
-            if (rec.active) {
+      if (rec.active) {
+        // Primeiro confirma a remoção do cargo.
+        // Só depois altera o state.
+        const roleRemoved =
+          await removeGIRole(
+            guild,
+            rec.targetId,
+            'Pausado via botão'
+          );
+
+        if (!roleRemoved) {
+          throw new Error(
+            `Não consegui remover o cargo GI de <@${rec.targetId}>. ` +
+            'Confira a permissão Gerenciar Cargos e a posição do cargo do bot.'
+          );
+        }
+
         rec.active = false;
         rec.pausedAtMs = nowMs();
-
-        // ✅ remove cargo GI quando pausar
-        await removeGIRole(guild, rec.targetId, 'Pausado via botão');
       } else {
+        // Primeiro confirma que o cargo voltou.
+        // Só depois marca o registro como Ativo.
+        const roleAdded =
+          await addGIRole(
+            guild,
+            rec.targetId,
+            'Retomado via botão (GI obrigatório)'
+          );
+
+        if (!roleAdded) {
+          throw new Error(
+            `Não consegui adicionar o cargo GI em <@${rec.targetId}>. ` +
+            'Confira a permissão Gerenciar Cargos e a posição do cargo do bot.'
+          );
+        }
+
         rec.active = true;
 
         if (rec.pausedAtMs) {
-          rec.totalPausedMs += (nowMs() - rec.pausedAtMs);
-          rec.pausedAtMs = null;
-        }
-        if (!rec.nextWeekTickMs) rec.nextWeekTickMs = computeNextWeekTick(rec.joinDateMs);
+          rec.totalPausedMs +=
+            (
+              nowMs() -
+              rec.pausedAtMs
+            );
 
-        // ✅ seta cargo GI quando despausar
-        await addGIRole(guild, rec.targetId, 'Retomado via botão (GI obrigatório)');
+          rec.pausedAtMs =
+            null;
+        }
+
+        if (!rec.nextWeekTickMs) {
+          rec.nextWeekTickMs =
+            computeNextWeekTick(
+              rec.joinDateMs
+            );
+        }
 
         // ✅ AVISA O DASH/RANKING QUE A PESSOA VOLTOU
         emitGIReturned(rec.targetId, {
@@ -7383,30 +7528,76 @@ dashOn(
 
               const newMsg = await ch.send({
                 content: `<@${rec.targetId}>`,
-                embeds: [emb],
-                components: registroButtons('TEMP', rec.active)
+                embeds: [emb]
               }).catch(() => null);
 
               if (newMsg) {
                 // Tenta apagar a antiga se existir (e for deletável)
-                if (msg && msg.deletable) await msg.delete().catch(() => {});
+                if (msg && msg.deletable) {
+                  await msg.delete().catch(() => {});
+                }
 
                 const oldId = rec.messageId;
                 rec.messageId = newMsg.id;
                 
                 SC_GI_STATE.registros.delete(oldId);
-                SC_GI_STATE.registros.set(rec.messageId, rec);
+                SC_GI_STATE.registros.set(
+                  rec.messageId,
+                  rec
+                );
 
                 SC_GI_scheduleSave();
 
-                await newMsg.edit({ components: registroButtons(rec.messageId, rec.active) }).catch(()=>{});
+                // Só coloca os botões DEPOIS de possuir
+                // o ID real da nova mensagem.
+                await newMsg.edit({
+                  components: registroButtons(
+                    rec.messageId,
+                    rec.active
+                  )
+                }).catch((error) => {
+                  console.warn(
+                    `[SC_GI] Falha ao aplicar os botões reais no registro restaurado ${rec.messageId}:`,
+                    error?.message || error
+                  );
+                });
+
                 fixedCount++;
 
-                if (restoreLogCh && restoreLogCh.isTextBased()) {
-                   const logEmb = new EmbedBuilder().setColor(0xFFA500).setTitle('♻️ Registro Restaurado (Manual)').setDescription(`**Membro:** <@${rec.targetId}>\n**Motivo:** ${reason}\n**ID Antigo:** ${oldId}\n**Novo ID:** ${rec.messageId}`).setFooter({ text: 'SantaCreators • Check Manual' }).setTimestamp();
-                   await restoreLogCh.send({ embeds: [logEmb] }).catch(() => {});
+                if (
+                  restoreLogCh &&
+                  restoreLogCh.isTextBased()
+                ) {
+                  const logEmb =
+                    new EmbedBuilder()
+                      .setColor(0xFFA500)
+                      .setTitle(
+                        '♻️ Registro Restaurado (Manual)'
+                      )
+                      .setDescription(
+                        `**Membro:** <@${rec.targetId}>\n` +
+                        `**Motivo:** ${reason}\n` +
+                        `**ID Antigo:** ${oldId}\n` +
+                        `**Novo ID:** ${rec.messageId}`
+                      )
+                      .setFooter({
+                        text:
+                          'SantaCreators • Check Manual'
+                      })
+                      .setTimestamp();
+
+                  await restoreLogCh.send({
+                    embeds: [logEmb]
+                  }).catch(() => {});
                 }
-                await new Promise(r => setTimeout(r, 1000)); // Delay pra não tomar rate limit
+
+                await new Promise(
+                  r =>
+                    setTimeout(
+                      r,
+                      1000
+                    )
+                );
               }
             }
           }
@@ -7446,13 +7637,10 @@ dashOn(
               raw
             );
 
-          if (
-            !rec
-          ) {
+          if (!rec) {
             return interaction.reply({
               content:
                 '❌ Registro GI não encontrado.',
-
               flags:
                 MessageFlags.Ephemeral
             });
@@ -7464,10 +7652,6 @@ dashOn(
           });
 
           try {
-            // =====================================================
-            // USA EXATAMENTE A MESMA TRAVA HIERÁRQUICA DO GI
-            // =====================================================
-
             await assertCanManageGIRecord(
               guild,
               interaction.user,
@@ -7475,64 +7659,271 @@ dashOn(
               'gerar o comentário semanal de IA'
             );
 
+            // =====================================================
+            // 1) COMENTÁRIO INTERNO DO FORMS
+            // =====================================================
+            //
+            // Uma falha aqui NÃO impede mais a orientação privada.
+            // =====================================================
+
+            let formsResult =
+              null;
+
+            let formsError =
+              null;
+
             if (
-              typeof forceWeeklyMemberAiFeedback !==
-              'function'
+              typeof forceWeeklyMemberAiFeedback ===
+                'function'
             ) {
-              throw new Error(
-                'O módulo de comentário semanal por IA não está disponível.'
-              );
+              try {
+                formsResult =
+                  await forceWeeklyMemberAiFeedback({
+                    client,
+                    guild,
+                    record:
+                      rec,
+                    actorUser:
+                      interaction.user
+                  });
+              } catch (error) {
+                formsError =
+                  error;
+
+                console.warn(
+                  `[SC_GI] Comentário IA no Forms falhou para ${rec.targetId}:`,
+                  error?.message || error
+                );
+              }
+            } else {
+              formsError =
+                new Error(
+                  'O módulo de comentário semanal por IA não está disponível.'
+                );
             }
 
-            const result =
-              await forceWeeklyMemberAiFeedback({
-                client,
-                guild,
-                record:
-                  rec,
-                actorUser:
-                  interaction.user
-              });
+            // =====================================================
+            // 2) ORIENTAÇÃO PRIVADA DO MEMBRO
+            // =====================================================
+            //
+            // É gerada separadamente do texto interno do Forms.
+            // Uma falha no Forms NÃO bloqueia mais o PV.
+            // =====================================================
 
-            const formsUrl =
-              result
+            let privateDmSent =
+              false;
+
+            let privateDmError =
+              null;
+
+            let privateDmSentParts =
+              0;
+
+            let privateDmTotalParts =
+              0;
+
+            if (
+              typeof generateWeeklyMemberPrivateDm ===
+                'function'
+            ) {
+              try {
+                const targetUser =
+                  await fetchUserCached(
+                    rec.targetId
+                  );
+
+                if (!targetUser) {
+                  throw new Error(
+                    'Usuário do registro não encontrado para envio privado.'
+                  );
+                }
+
+                const privateFeedback =
+                  await generateWeeklyMemberPrivateDm({
+                    client:
+                      guild.client,
+                    guild,
+                    record:
+                      rec,
+                  });
+
+                const chunks =
+                  Array.isArray(
+                    privateFeedback?.chunks
+                  )
+                    ? privateFeedback.chunks
+                    : [];
+
+                privateDmTotalParts =
+                  chunks.length;
+
+                if (!chunks.length) {
+                  throw new Error(
+                    'A orientação privada ficou vazia.'
+                  );
+                }
+
+                for (
+                  let index = 0;
+                  index < chunks.length;
+                  index++
+                ) {
+                  const chunk =
+                    String(
+                      chunks[index] ||
+                      ''
+                    ).trim();
+
+                  if (!chunk) {
+                    continue;
+                  }
+
+                  const guidanceEmbed =
+                    new EmbedBuilder()
+                      .setColor(
+                        0x5865f2
+                      )
+                      .setTitle(
+                        index === 0
+                          ? '💡 Um retorno para você'
+                          : `↳ Continuação ${index + 1}/${chunks.length}`
+                      )
+                      .setDescription(
+                        chunk.slice(
+                          0,
+                          4096
+                        )
+                      );
+
+                  if (
+                    index ===
+                    0
+                  ) {
+                    guidanceEmbed
+                      .setFooter({
+                        text:
+                          'SantaCreators • acompanhamento pessoal'
+                      })
+                      .setTimestamp(
+                        new Date()
+                      );
+                  }
+
+                  const sent =
+                    await sendDM_andMirror(
+                      guild,
+                      targetUser,
+                      guidanceEmbed,
+                      `<@${rec.targetId}>`
+                    );
+
+                  if (sent) {
+                    privateDmSentParts++;
+                  }
+                }
+
+                privateDmSent =
+                  privateDmSentParts >
+                  0;
+
+                if (!privateDmSent) {
+                  throw new Error(
+                    'A orientação foi gerada, mas a DM não pôde ser entregue.'
+                  );
+                }
+              } catch (error) {
+                privateDmError =
+                  error;
+
+                console.warn(
+                  `[SC_GI] Orientação privada IA falhou para ${rec.targetId}:`,
+                  error?.message || error
+                );
+              }
+            } else {
+              privateDmError =
+                new Error(
+                  'O gerador de orientação privada não está disponível.'
+                );
+            }
+
+            // =====================================================
+            // LINK DO FORMS
+            // =====================================================
+
+            let formsUrl =
+              formsResult
                 ?.facts
                 ?.formsData
                 ?.threadUrl ||
               (
-                result
+                formsResult
                   ?.facts
                   ?.formsThread
                   ?.id
-                  ? `https://discord.com/channels/${guild.id}/${result.facts.formsThread.id}`
+                  ? `https://discord.com/channels/${guild.id}/${formsResult.facts.formsThread.id}`
                   : null
               );
 
+            if (
+              !formsUrl &&
+              typeof findFormsCreatorThreadIdFastByUserId ===
+                'function'
+            ) {
+              const formsThreadId =
+                findFormsCreatorThreadIdFastByUserId(
+                  rec.targetId
+                );
+
+              if (formsThreadId) {
+                formsUrl =
+                  `https://discord.com/channels/${guild.id}/${formsThreadId}`;
+              }
+            }
+
+            const responseLines = [
+              `👤 **Membro:** <@${rec.targetId}>`,
+              ''
+            ];
+
+            if (formsResult) {
+              responseLines.push(
+                formsResult?.replaced
+                  ? '🔄 **Forms:** comentário semanal atualizado com sucesso.'
+                  : '🧠 **Forms:** comentário semanal criado com sucesso.'
+              );
+
+              if (formsUrl) {
+                responseLines.push(
+                  `🔗 **Forms pessoal:** ${formsUrl}`
+                );
+              }
+            } else {
+              responseLines.push(
+                `⚠️ **Forms:** ${formsError?.message || 'não foi possível publicar o comentário interno.'}`
+              );
+            }
+
+            if (privateDmSent) {
+              responseLines.push(
+                privateDmTotalParts > 1
+                  ? `📨 **Privado:** orientação personalizada enviada em ${privateDmSentParts}/${privateDmTotalParts} partes.`
+                  : '📨 **Privado:** orientação personalizada enviada ao membro.'
+              );
+            } else {
+              responseLines.push(
+                `⚠️ **Privado:** ${privateDmError?.message || 'não foi possível entregar a orientação privada.'}`
+              );
+            }
+
             await interaction.editReply({
-              content: [
-                result?.replaced
-                  ? '🔄 **Comentário semanal atualizado com sucesso!**'
-                  : '🧠 **Comentário semanal criado com sucesso!**',
-
-                '',
-
-                `👤 **Membro:** <@${rec.targetId}>`,
-
-                result?.replaced
-                  ? '♻️ O comentário manual anterior desta semana foi substituído pela análise atualizada.'
-                  : '✨ Foi criado o primeiro acompanhamento manual desta semana.',
-
-                formsUrl
-                  ? `🔗 **Forms pessoal:** ${formsUrl}`
-                  : ''
-              ]
-                .filter(Boolean)
-                .join('\n')
+              content:
+                responseLines.join('\n')
             });
           } catch (e) {
             await interaction.editReply({
               content:
-                `⚠️ ${e?.message || 'Não foi possível gerar o comentário semanal.'}`
+                `⚠️ ${e?.message || 'Não foi possível gerar o acompanhamento.'}`
             });
           }
 
@@ -7575,21 +7966,9 @@ dashOn(
             });
           }
 
-          try {
-            await assertCanManageGIRecord(
-              guild,
-              interaction.user,
-              rec.targetId,
-              'editar o controle e alterar a Área/cargo',
-              { allowCoordAreaEdit: true }
-            );
-          } catch (e) {
-            return interaction.reply({
-              content: '⚠️ ' + (e?.message || 'Ação bloqueada pela hierarquia.'),
-              flags: MessageFlags.Ephemeral
-            });
-          }
-
+          // A validação hierárquica completa continua dentro de editRegistro().
+          // Aqui não fazemos chamadas lentas antes de showModal(), porque o Discord
+          // exige que o modal seja aberto imediatamente.
           const inpDiscordId =
             new TextInputBuilder()
               .setCustomId(
@@ -7738,53 +8117,107 @@ dashOn(
           return;
         }
 
-        // Definir responsável (abrir select) // NOVO: Botão de definir responsável
+        // Definir responsável (abrir select)
         if (interaction.isButton() && interaction.customId.startsWith(BTN.RESP_PREFIX)) {
-          if (!hasAuth(interaction.member)) return interaction.reply({ content: '❌ Você não tem permissão.', flags: MessageFlags.Ephemeral });
+          if (!hasAuth(interaction.member)) {
+            return interaction.reply({
+              content: '❌ Você não tem permissão.',
+              flags: MessageFlags.Ephemeral
+            });
+          }
+
           const raw = interaction.customId.replace(BTN.RESP_PREFIX, '');
           const { rec, id: messageId } = resolveRecordByInteraction(interaction, raw);
-          if (!rec) return interaction.reply({ content: 'Registro não encontrado.', flags: MessageFlags.Ephemeral });
+
+          if (!rec) {
+            return interaction.reply({
+              content: 'Registro não encontrado.',
+              flags: MessageFlags.Ephemeral
+            });
+          }
+
+          // ACK imediato para não estourar o limite de resposta do Discord.
+          await interaction.deferReply({
+            flags: MessageFlags.Ephemeral
+          });
 
           const rows = [];
           const candidates = await getRespCandidates(guild);
+
           if (candidates.length > 0 && candidates.length <= 25) {
-            rows.push(new ActionRowBuilder().addComponents(
-              new StringSelectMenuBuilder()
-                .setCustomId(SEL.RESP_USER_PREFIX + messageId)
-                .setPlaceholder('Selecione o Responsável (lista filtrada por cargos)')
-                .addOptions(candidates.map(c => ({ label: c.label, value: c.id, emoji: '👤' })))
-            ));
+            rows.push(
+              new ActionRowBuilder().addComponents(
+                new StringSelectMenuBuilder()
+                  .setCustomId(SEL.RESP_USER_PREFIX + messageId)
+                  .setPlaceholder('Selecione o Responsável (lista filtrada por cargos)')
+                  .addOptions(
+                    candidates.map(c => ({
+                      label: c.label,
+                      value: c.id,
+                      emoji: '👤'
+                    }))
+                  )
+              )
+            );
           } else if (typeof UserSelectMenuBuilder !== 'undefined') {
-            rows.push(new ActionRowBuilder().addComponents(
-              new UserSelectMenuBuilder()
-                .setCustomId(SEL.RESP_USER_PREFIX + messageId)
-                .setPlaceholder('Selecione o Responsável (será validado pelos cargos)')
-                .setMinValues(1).setMaxValues(1)
-            ));
+            rows.push(
+              new ActionRowBuilder().addComponents(
+                new UserSelectMenuBuilder()
+                  .setCustomId(SEL.RESP_USER_PREFIX + messageId)
+                  .setPlaceholder('Selecione o Responsável (será validado pelos cargos)')
+                  .setMinValues(1)
+                  .setMaxValues(1)
+              )
+            );
           } else {
-            return interaction.reply({ content: '⚠️ Não foi possível carregar a lista de responsáveis.', flags: MessageFlags.Ephemeral });
+            return interaction.editReply({
+              content: '⚠️ Não foi possível carregar a lista de responsáveis.',
+              components: []
+            });
           }
 
-          return interaction.reply({
+          return interaction.editReply({
             content: '🧭 **Defina o Responsável Direto** (a área será detectada automaticamente pelo maior cargo).',
-            components: rows,
-            flags: MessageFlags.Ephemeral
+            components: rows
           });
         }
 
         // Select de usuário p/ responsável
-        if ((interaction.isStringSelectMenu() || interaction.isUserSelectMenu()) &&
-            interaction.customId.startsWith(SEL.RESP_USER_PREFIX)) {
+        if (
+          (interaction.isStringSelectMenu() || interaction.isUserSelectMenu()) &&
+          interaction.customId.startsWith(SEL.RESP_USER_PREFIX)
+        ) {
           const raw = interaction.customId.replace(SEL.RESP_USER_PREFIX, '');
           const { rec, id: messageId } = resolveRecordByInteraction(interaction, raw);
-          if (!rec) return interaction.reply({ content: 'Registro não encontrado.', flags: MessageFlags.Ephemeral });
+
+          if (!rec) {
+            return interaction.reply({
+              content: 'Registro não encontrado.',
+              flags: MessageFlags.Ephemeral
+            });
+          }
+
+          await interaction.deferReply({
+            flags: MessageFlags.Ephemeral
+          });
 
           const pickedUserId = interaction.values?.[0];
+
           try {
-            await setResponsibleAuto(guild, interaction.user.id, messageId, pickedUserId);
-            return interaction.reply({ content: `✅ Responsável definido: <@${pickedUserId}> (área detectada automaticamente).`, flags: MessageFlags.Ephemeral });
+            await setResponsibleAuto(
+              guild,
+              interaction.user.id,
+              messageId,
+              pickedUserId
+            );
+
+            return interaction.editReply({
+              content: `✅ Responsável definido: <@${pickedUserId}> (área detectada automaticamente).`
+            });
           } catch (e) {
-            return interaction.reply({ content: '⚠️ ' + (e?.message || 'Falha ao definir responsável.'), flags: MessageFlags.Ephemeral });
+            return interaction.editReply({
+              content: '⚠️ ' + (e?.message || 'Falha ao definir responsável.')
+            });
           }
         }
 

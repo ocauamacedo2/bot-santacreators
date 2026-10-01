@@ -2805,9 +2805,15 @@ async function collectMemberFacts({
       () => null
     );
 
-  const evolutionContext =
+  let evolutionContext =
+    null;
+
+  if (
     formsData?.threadId
-      ? await getEvolutionFeedbackContext(
+  ) {
+    try {
+      evolutionContext =
+        await getEvolutionFeedbackContext(
           client,
           userId,
           {
@@ -2820,13 +2826,29 @@ async function collectMemberFacts({
             reason:
               "Coleta do feedback semanal",
           }
-        )
-      : null;
+        );
+    } catch (error) {
+      console.warn(
+        `[Weekly Member Feedback] Histórico de evolução indisponível para ${userId}; usando o Forms atual como fallback:`,
+        error?.message || error
+      );
+    }
+  }
 
   const formsThread =
     evolutionContext
       ?.thread ||
-    null;
+    (
+      formsData?.threadId
+        ? await client.channels
+            .fetch(
+              formsData.threadId
+            )
+            .catch(
+              () => null
+            )
+        : null
+    );
 
   const formsThreads =
     Array.isArray(
@@ -7522,23 +7544,38 @@ async function processFeedback({
       facts.evolutionTier ==
         null
     ) {
-      throw new Error(
-        "Não foi possível confirmar a fase ativa da evolução antes da publicação."
+      console.warn(
+        `[Weekly Member Feedback] Fase de evolução indisponível para ${userId}; publicando diretamente no Forms atual.`
+      );
+
+      return await publishFeedback(
+        facts.formsThread
       );
     }
 
-    return await withActiveEvolutionThread(
-      client,
-      userId,
-      {
-        tier:
-          facts.evolutionTier,
+    try {
+      return await withActiveEvolutionThread(
+        client,
+        userId,
+        {
+          tier:
+            facts.evolutionTier,
 
-        thread:
-          facts.formsThread,
-      },
-      publishFeedback
-    );
+          thread:
+            facts.formsThread,
+        },
+        publishFeedback
+      );
+    } catch (error) {
+      console.warn(
+        `[Weekly Member Feedback] Não foi possível confirmar o histórico de evolução de ${userId}; publicando diretamente no Forms atual:`,
+        error?.message || error
+      );
+
+      return await publishFeedback(
+        facts.formsThread
+      );
+    }
   } finally {
     runningKeys.delete(
       runningKey

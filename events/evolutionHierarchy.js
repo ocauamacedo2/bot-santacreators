@@ -1842,19 +1842,106 @@ async function performSync(
     const [savedTier, threadId]
     of Object.entries(userState.tiers)
   ) {
-    if (Number(savedTier) === tier) {
+    if (
+      Number(savedTier) ===
+      tier
+    ) {
       continue;
     }
 
-    const historical = await fetchChannel(
-      client,
-      threadId
-    );
-
-    if (!historical?.isThread?.()) {
-      throw new Error(
-        `Histórico indisponível para conferência: ${threadId}`
+    let historical =
+      await fetchChannel(
+        client,
+        threadId
       );
+
+    // =====================================================
+    // AUTO-REPARO DE HISTÓRICO ÓRFÃO
+    // =====================================================
+    //
+    // Um tópico antigo pode ter sido apagado manualmente ou
+    // ter deixado um ID velho salvo no evolution_hierarchy.json.
+    //
+    // Antes, um único ID morto abortava TODA a sincronização.
+    // Agora removemos apenas o vínculo inválido e seguimos com
+    // os tópicos que realmente existem.
+    //
+    // Se o vínculo morto for a fase TEAM e o FormsCreator acabou
+    // de informar um originalThreadId válido, reapontamos para ele.
+    // =====================================================
+
+    if (
+      !historical?.isThread?.()
+    ) {
+      const savedTierNumber =
+        Number(
+          savedTier
+        );
+
+      if (
+        savedTierNumber ===
+          EVOLUTION_TIERS.TEAM &&
+        originalThreadId &&
+        String(
+          originalThreadId
+        ) !==
+          String(
+            threadId
+          )
+      ) {
+        const originalThread =
+          await fetchChannel(
+            client,
+            originalThreadId
+          );
+
+        if (
+          originalThread?.isThread?.()
+        ) {
+          userState.tiers[
+            savedTier
+          ] =
+            originalThread.id;
+
+          historical =
+            originalThread;
+
+          console.warn(
+            `[EVOLUTION_HIERARCHY] Histórico TEAM inválido ${threadId} substituído pelo Forms atual ${originalThread.id} de ${userId}.`
+          );
+        }
+      }
+    }
+
+    if (
+      !historical?.isThread?.()
+    ) {
+      delete userState.tiers[
+        savedTier
+      ];
+
+      if (
+        userState.panelKeys
+      ) {
+        delete userState.panelKeys[
+          threadId
+        ];
+      }
+
+      state.users[
+        userId
+      ] =
+        userState;
+
+      writeState(
+        state
+      );
+
+      console.warn(
+        `[EVOLUTION_HIERARCHY] Histórico órfão removido do state de ${userId}: tier=${savedTier} thread=${threadId}.`
+      );
+
+      continue;
     }
 
     await setThreadMode(
@@ -2185,37 +2272,126 @@ export async function getEvolutionFeedbackContext(
 
   for (
     const [tierKey, threadId]
-    of Object.entries(record?.tiers || {})
+    of Object.entries(
+      record?.tiers ||
+      {}
+    )
   ) {
-    const tier = Number(tierKey);
+    const tier =
+      Number(
+        tierKey
+      );
 
     /*
      * Conteúdo superior não entra no prompt de uma
      * publicação que ficará disponível em nível inferior.
      */
 
-    if (tier > result.tier) {
+    if (
+      tier >
+      result.tier
+    ) {
       continue;
     }
 
-    const thread = await client.channels.fetch(
-      threadId,
-      {
-        force: true,
-      }
-    );
+    const thread =
+      await client.channels
+        .fetch(
+          threadId,
+          {
+            force:
+              true,
+          }
+        )
+        .catch(
+          () => null
+        );
+
+    const isValidEvolutionThread =
+      !!(
+        thread?.isThread?.() &&
+        thread.guildId ===
+          (
+            options.guildId ||
+            GUILD_ID
+          ) &&
+        thread.parentId ===
+          CHANNEL_BY_TIER[
+            tier
+          ]
+      );
 
     if (
-      !thread?.isThread?.() ||
-      thread.guildId !== (options.guildId || GUILD_ID) ||
-      thread.parentId !== CHANNEL_BY_TIER[tier]
+      !isValidEvolutionThread
     ) {
-      throw new Error(
-        `Vínculo inválido da evolução: ${threadId}`
+      // O tópico ATIVO nunca pode ser ignorado.
+      if (
+        tier ===
+          result.tier ||
+        String(
+          threadId
+        ) ===
+          String(
+            result.threadId
+          )
+      ) {
+        throw new Error(
+          `Tópico ativo inválido da evolução: ${threadId}`
+        );
+      }
+
+      // Histórico antigo inválido não derruba
+      // IA, FormsCreator nem Controle GI.
+      const latestState =
+        readState();
+
+      const latestUserState =
+        latestState.users[
+          String(
+            userId
+          )
+        ];
+
+      if (
+        latestUserState?.tiers
+      ) {
+        delete latestUserState
+          .tiers[
+            tierKey
+          ];
+
+        if (
+          latestUserState
+            .panelKeys
+        ) {
+          delete latestUserState
+            .panelKeys[
+              threadId
+            ];
+        }
+
+        latestState.users[
+          String(
+            userId
+          )
+        ] =
+          latestUserState;
+
+        writeState(
+          latestState
+        );
+      }
+
+      console.warn(
+        `[EVOLUTION_HIERARCHY] Vínculo histórico inválido ignorado no contexto de ${userId}: tier=${tierKey} thread=${threadId}.`
       );
+
+      continue;
     }
 
-    threads.push(thread);
+    threads.push(
+      thread
+    );
   }
 
   const thread = threads.find(
