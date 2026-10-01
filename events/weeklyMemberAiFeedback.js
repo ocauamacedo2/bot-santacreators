@@ -7838,10 +7838,28 @@ export function weeklyMemberAiFeedbackOnReady(
   // =====================================================
   // INTELIGÊNCIA OPERACIONAL
   // =====================================================
+  //
+  // A telemetria operacional é complementar.
+  //
+  // Se a função existir, ela continua sendo instalada
+  // normalmente.
+  //
+  // Se não existir nesta versão do módulo, o scheduler
+  // semanal NÃO deve derrubar o Controle GI inteiro.
+  // =====================================================
 
-  installWeeklyFeedbackTelemetry(
-    client
-  );
+  if (
+    typeof installWeeklyFeedbackTelemetry ===
+      "function"
+  ) {
+    installWeeklyFeedbackTelemetry(
+      client
+    );
+  } else {
+    console.warn(
+      "[Weekly Member AI] Telemetria operacional complementar indisponível. O scheduler semanal continuará normalmente."
+    );
+  }
 
   cron.schedule(
     AUTOMATIC_CRON,

@@ -2,6 +2,7 @@
 
 import fs from "fs";
 import path from "path";
+import os from "node:os";
 import cron from "node-cron";
 import { fileURLToPath } from "node:url";
 
@@ -13,6 +14,7 @@ import {
   TextInputBuilder,
   TextInputStyle,
   EmbedBuilder,
+  MessageFlags,
 } from "discord.js";
 
 import {
@@ -147,22 +149,132 @@ const ROLE_REQUIRED_FOR_ACTIVE = "1352275728476930099";
 // =========================
 // PERSISTÊNCIA
 // =========================
-function pickPersistRoot() {
-  const candidates = [
-    process.env.SQUARECLOUD_STORAGE_PATH?.trim(),
-    "/storage",
-    "/home/container/storage",
-    "/home/squarecloud/storage",
-  ].filter(Boolean);
-
-  for (const dir of candidates) {
-    try { if (fs.existsSync(dir)) return dir; } catch {}
+function canWriteDirectory(
+  dir
+) {
+  if (!dir) {
+    return false;
   }
-  return null;
+
+  try {
+    fs.mkdirSync(
+      dir,
+      {
+        recursive:
+          true,
+      }
+    );
+
+    fs.accessSync(
+      dir,
+      fs.constants.R_OK |
+      fs.constants.W_OK
+    );
+
+    const probeFile =
+      path.join(
+        dir,
+        `.formscreator-write-test-${process.pid}-${Date.now()}.tmp`
+      );
+
+    fs.writeFileSync(
+      probeFile,
+      "ok",
+      "utf8"
+    );
+
+    fs.unlinkSync(
+      probeFile
+    );
+
+    return true;
+  } catch {
+    return false;
+  }
 }
 
-const DATA_DIR = path.resolve(pickPersistRoot() || path.join(__dirname, ".."), "data");
-const STATE_FILE = path.join(DATA_DIR, "formscreator_state.json");
+function pickPersistDataDir() {
+  const squareStorage =
+    process.env
+      .SQUARECLOUD_STORAGE_PATH
+      ?.trim();
+
+  const genericStorage =
+    process.env
+      .STORAGE_PATH
+      ?.trim();
+
+  const candidates = [
+    squareStorage
+      ? path.resolve(
+          squareStorage,
+          "data"
+        )
+      : null,
+
+    genericStorage
+      ? path.resolve(
+          genericStorage,
+          "data"
+        )
+      : null,
+
+    "/storage/data",
+
+    "/home/container/storage/data",
+
+    "/home/squarecloud/storage/data",
+
+    // Ambiente local / projeto gravável.
+    path.resolve(
+      __dirname,
+      "..",
+      "data"
+    ),
+
+    // Último fallback para impedir o Forms de quebrar.
+    path.resolve(
+      os.tmpdir(),
+      "santacreators",
+      "data"
+    ),
+  ].filter(
+    Boolean
+  );
+
+  for (
+    const dir
+    of candidates
+  ) {
+    if (
+      canWriteDirectory(
+        dir
+      )
+    ) {
+      return dir;
+    }
+  }
+
+  throw new Error(
+    "[FormsCreator] Nenhum diretório gravável foi encontrado para persistência."
+  );
+}
+
+const DATA_DIR =
+  pickPersistDataDir();
+
+const LEGACY_DATA_DIR =
+  path.resolve(
+    __dirname,
+    "..",
+    "data"
+  );
+
+const STATE_FILE =
+  path.join(
+    DATA_DIR,
+    "formscreator_state.json"
+  );
 
 
 // =====================================================
@@ -182,6 +294,76 @@ const PERSONAL_TICKET_HISTORY_FILE =
     DATA_DIR,
     "formscreator_personal_ticket_history.json"
   );
+
+// =====================================================
+// MIGRAÇÃO DO STATE ANTIGO
+// =====================================================
+//
+// Se o arquivo antigo existir em /application/data,
+// mas o diretório tiver virado somente leitura,
+// copiamos os dados para o novo destino gravável.
+//
+// Nada é apagado do local antigo.
+// =====================================================
+
+function migrateLegacyFormsCreatorFile(
+  fileName
+) {
+  if (
+    DATA_DIR ===
+    LEGACY_DATA_DIR
+  ) {
+    return;
+  }
+
+  const source =
+    path.join(
+      LEGACY_DATA_DIR,
+      fileName
+    );
+
+  const target =
+    path.join(
+      DATA_DIR,
+      fileName
+    );
+
+  if (
+    !fs.existsSync(
+      source
+    ) ||
+    fs.existsSync(
+      target
+    )
+  ) {
+    return;
+  }
+
+  try {
+    fs.copyFileSync(
+      source,
+      target
+    );
+
+    console.log(
+      `[FormsCreator] Estado legado migrado para diretório gravável: ${fileName}`
+    );
+  } catch (error) {
+    console.warn(
+      `[FormsCreator] Não foi possível migrar ${fileName}:`,
+      error?.message ||
+      error
+    );
+  }
+}
+
+migrateLegacyFormsCreatorFile(
+  "formscreator_state.json"
+);
+
+migrateLegacyFormsCreatorFile(
+  "formscreator_personal_ticket_history.json"
+);
 
 const PERSONAL_TICKET_HISTORY_RETENTION_MS =
   180 *
@@ -256,7 +438,7 @@ function writePersonalTicketHistoryState(
     ensureDataDir();
 
     const temporaryFile =
-      `${PERSONAL_TICKET_HISTORY_FILE}.tmp`;
+      `${PERSONAL_TICKET_HISTORY_FILE}.${process.pid}.${Date.now()}.tmp`;
 
     fs.writeFileSync(
       temporaryFile,
@@ -681,15 +863,38 @@ function readState() {
 function writeState(state) {
   try {
     ensureDataDir();
-    const tmp = `${STATE_FILE}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(state, null, 2), "utf8");
-    fs.renameSync(tmp, STATE_FILE);
+
+    const tmp =
+      `${STATE_FILE}.${process.pid}.${Date.now()}.tmp`;
+
+    fs.writeFileSync(
+      tmp,
+      JSON.stringify(
+        state,
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    fs.renameSync(
+      tmp,
+      STATE_FILE
+    );
   } catch (e) {
-    console.error("[FormsCreator] ❌ Falha crítica ao salvar state:", {
-      path: STATE_FILE,
-      error: e.message,
-      code: e.code
-    });
+    console.error(
+      "[FormsCreator] ❌ Falha crítica ao salvar state:",
+      {
+        path:
+          STATE_FILE,
+
+        error:
+          e.message,
+
+        code:
+          e.code,
+      }
+    );
   }
 }
 
@@ -6216,7 +6421,10 @@ export async function formsCreatorHandleInteraction(interaction, client) {
     if (interaction.isButton?.() && interaction.customId === SYNC_FORMS_BUTTON_CUSTOM_ID) {
       const temPermissao = hasPermission(interaction.member, interaction.user.id);
       if (!temPermissao) {
-        await interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
+        await interaction.reply({
+          content: "🚫 Sem permissão.",
+          flags: MessageFlags.Ephemeral,
+        });
         return true;
       }
 
@@ -6224,7 +6432,7 @@ export async function formsCreatorHandleInteraction(interaction, client) {
         content:
           "🔄 **Iniciando sincronização do FormsCreator...**\n" +
           "📌 Vou varrer tópicos ativos/arquivados e tentar remover mensagens duplicadas.",
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
 
       const progressMsg = await interaction.fetchReply().catch(() => null);
@@ -6258,7 +6466,10 @@ export async function formsCreatorHandleInteraction(interaction, client) {
     if (interaction.isButton?.() && interaction.customId === BUTTON_CUSTOM_ID) {
       const temPermissao = hasPermission(interaction.member, interaction.user.id);
       if (!temPermissao) {
-        await interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
+        await interaction.reply({
+          content: "🚫 Sem permissão.",
+          flags: MessageFlags.Ephemeral,
+        });
         return true;
       }
 
@@ -6302,7 +6513,9 @@ export async function formsCreatorHandleInteraction(interaction, client) {
 
 // FORM -> cria thread + embed
 if (interaction.isModalSubmit?.() && interaction.customId === "form_equipecreator") {
-  await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply({
+    flags: MessageFlags.Ephemeral,
+  });
 
   const idDiscord = interaction.fields.getTextInputValue("idDiscord").trim();
   const nome = interaction.fields.getTextInputValue("nome").trim();
@@ -6673,9 +6886,15 @@ if (interaction.isModalSubmit?.() && interaction.customId === "form_equipecreato
     // ✅ Botão de Ligar/Desligar
     if (interaction.isButton?.() && interaction.customId.startsWith("fc_toggle_status:")) {
       if (!hasManagePermission(interaction.member, interaction.user.id)) {
-        return interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
+        return interaction.reply({
+          content: "🚫 Sem permissão.",
+          flags: MessageFlags.Ephemeral,
+        });
       }
-      await interaction.deferReply({ ephemeral: true });
+
+      await interaction.deferReply({
+        flags: MessageFlags.Ephemeral,
+      });
 
       const [, threadId, userId, targetStatusStr] = interaction.customId.split(":");
       const newActiveState = targetStatusStr === 'active';
@@ -6728,9 +6947,15 @@ if (interaction.isModalSubmit?.() && interaction.customId === "form_equipecreato
     // ✅ Botão de Reverter (do log)
     if (interaction.isButton?.() && interaction.customId.startsWith("fc_revert_status:")) {
       if (!hasManagePermission(interaction.member, interaction.user.id)) {
-        return interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
+        return interaction.reply({
+          content: "🚫 Sem permissão.",
+          flags: MessageFlags.Ephemeral,
+        });
       }
-      await interaction.deferReply({ ephemeral: true });
+
+      await interaction.deferReply({
+        flags: MessageFlags.Ephemeral,
+      });
 
       const [, threadId, userId, targetStatusStr] = interaction.customId.split(":");
       const newActiveState = targetStatusStr === 'active';
@@ -6755,7 +6980,10 @@ if (interaction.isModalSubmit?.() && interaction.customId === "form_equipecreato
     if (interaction.isButton?.() && interaction.customId.startsWith("editar_")) {
       const temPermissao = hasPermission(interaction.member, interaction.user.id);
       if (!temPermissao) {
-        await interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
+        await interaction.reply({
+          content: "🚫 Sem permissão.",
+          flags: MessageFlags.Ephemeral,
+        });
         return true;
       }
 
@@ -6785,7 +7013,10 @@ if (interaction.isModalSubmit?.() && interaction.customId === "form_equipecreato
     if (interaction.isModalSubmit?.() && interaction.customId.startsWith("editar_")) {
       const temPermissao = hasPermission(interaction.member, interaction.user.id);
       if (!temPermissao) {
-        await interaction.reply({ content: "🚫 Sem permissão.", ephemeral: true });
+        await interaction.reply({
+          content: "🚫 Sem permissão.",
+          flags: MessageFlags.Ephemeral,
+        });
         return true;
       }
 
@@ -6797,23 +7028,30 @@ if (interaction.isModalSubmit?.() && interaction.customId === "form_equipecreato
 
       const thread = await client.channels.fetch(threadId).catch(() => null);
       if (!thread || !thread.isTextBased()) {
-        await interaction.reply({ content: "❌ Thread não encontrada.", ephemeral: true });
+        await interaction.reply({
+          content: "❌ Thread não encontrada.",
+          flags: MessageFlags.Ephemeral,
+        });
         return true;
       }
 
       const mensagens = await thread.messages.fetch({ limit: 25 }).catch(() => null);
       if (!mensagens) {
-        await interaction.reply({ content: "❌ Não consegui buscar mensagens.", ephemeral: true });
+        await interaction.reply({
+          content: "❌ Não consegui buscar mensagens.",
+          flags: MessageFlags.Ephemeral,
+        });
         return true;
       }
 
       const msgOriginal = mensagens.find((msg) =>
         isFormsCreatorMainRegisterMessage(msg, client)
       );
+
       if (!msgOriginal) {
         await interaction.reply({
           content: "❌ Não encontrei a mensagem principal do registro para editar.",
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
         return true;
       }
@@ -6852,8 +7090,8 @@ if (interaction.isModalSubmit?.() && interaction.customId === "form_equipecreato
                 ? "✅ Área atualizada no Forms original e no tópico ativo!"
                 : "⚠️ Área atualizada no Forms original, mas a sincronização do tópico ativo ficou pendente e será refeita pelo sincronizador.",
 
-            ephemeral:
-              true,
+            flags:
+              MessageFlags.Ephemeral,
           });
         } catch (
           error
@@ -6862,8 +7100,8 @@ if (interaction.isModalSubmit?.() && interaction.customId === "form_equipecreato
             content:
               `❌ Não consegui atualizar a Área: ${error?.message || error}`,
 
-            ephemeral:
-              true,
+            flags:
+              MessageFlags.Ephemeral,
           });
         }
 
@@ -6951,8 +7189,8 @@ if (interaction.isModalSubmit?.() && interaction.customId === "form_equipecreato
         content:
           "✅ Informações atualizadas!",
 
-        ephemeral:
-          true,
+        flags:
+          MessageFlags.Ephemeral,
       });
 
       return true;
@@ -6965,13 +7203,19 @@ if (interaction.isModalSubmit?.() && interaction.customId === "form_equipecreato
     if (interaction.isRepliable?.()) {
       if (interaction.deferred) {
         await interaction
-          .editReply({ content: "❌ Deu erro aqui. Olha o console do bot." })
+          .editReply({
+            content: "❌ Deu erro aqui. Olha o console do bot.",
+          })
           .catch(() => {});
         return true;
       }
+
       if (!interaction.replied) {
         await interaction
-          .reply({ content: "❌ Deu erro aqui. Olha o console do bot.", ephemeral: true })
+          .reply({
+            content: "❌ Deu erro aqui. Olha o console do bot.",
+            flags: MessageFlags.Ephemeral,
+          })
           .catch(() => {});
         return true;
       }

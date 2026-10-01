@@ -13,6 +13,7 @@ import {
   ButtonStyle,
   PermissionsBitField,
   OverwriteType,
+  MessageFlags,
 } from "discord.js";
 
 import { dashOn, dashEmit } from "../../utils/dashHub.js";
@@ -249,6 +250,20 @@ const debouncers = new Map();
 // Controle do failsafe de reconciliação dos membros ativos.
 const CREATOR_ACTIVE_RECONCILE_LAST_RUN = new Map();
 const CREATOR_ACTIVE_RECONCILE_INTERVAL_MS = 30 * 1000;
+
+// =====================================================
+// DEBUG DO SUPERVISOR
+// =====================================================
+//
+// false = console limpo.
+// true  = mostra também ciclos onde nada mudou.
+//
+// Erros, movimentações, criações e falhas continuam
+// aparecendo mesmo com false.
+// =====================================================
+
+const SC_SORT_DEBUG_NOOP_LOGS =
+  false;
 
 // =====================================================
 // AUTOMAÇÃO: TICKET DO MEMBRO / CONTROLE GI
@@ -1370,10 +1385,25 @@ async function reconcileGiControlsToPersonalTickets(
     }
   }
 
-  console.log(
-    `[SC_SORT][GI_TICKET] ${guild.name}: controles=${controls.length}, vinculados=${linked}, criados=${created}, falhas=${failed}, gatilho=${trigger}`
-  );
+  const shouldLogGiTicket =
+    SC_SORT_DEBUG_NOOP_LOGS ||
+    created > 0 ||
+    failed > 0 ||
+    (
+      controls.length > 0 &&
+      trigger !==
+        "supervisor_periodico"
+    );
+
+  if (
+    shouldLogGiTicket
+  ) {
+    console.log(
+      `[SC_SORT][GI_TICKET] ${guild.name}: controles=${controls.length}, vinculados=${linked}, criados=${created}, falhas=${failed}, gatilho=${trigger}`
+    );
+  }
 }
+
 async function fetchCreatorMemberSafely(guild, userId) {
   const cached = guild.members.cache.get(userId);
 
@@ -1674,9 +1704,19 @@ async function reconcileCreatorActiveCategory(
       Date.now()
     );
 
-    console.log(
-      `[SC_SORT][RECONCILE] ${guild.name}: verificados=${checked}, movidos=${moved}, ignorados=${skipped}, gatilho=${trigger}`
-    );
+    const shouldLogReconcile =
+      SC_SORT_DEBUG_NOOP_LOGS ||
+      moved > 0 ||
+      trigger !==
+        "supervisor_periodico";
+
+    if (
+      shouldLogReconcile
+    ) {
+      console.log(
+        `[SC_SORT][RECONCILE] ${guild.name}: verificados=${checked}, movidos=${moved}, ignorados=${skipped}, gatilho=${trigger}`
+      );
+    }
   } catch (error) {
     console.error(
       "[SC_SORT][RECONCILE] Erro na reconciliação da categoria ativa:",
@@ -3648,12 +3688,14 @@ export async function sortChannelsHandleInteraction(interaction) {
     if (!canUndo) {
       await interaction.reply({
         content: "❌ Você não tem permissão para desfazer esta ação.",
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return true;
     }
 
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({
+      flags: MessageFlags.Ephemeral,
+    });
 
     if (isUndoSpecial || isRedoSpecial) {
       const state = getChannelState(channelId);
