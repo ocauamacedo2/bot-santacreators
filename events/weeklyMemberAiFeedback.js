@@ -2942,46 +2942,80 @@ async function collectMemberFacts({
   ] = await Promise.all([
     getPersonDiscordEvidenceForFeedback({
       client,
+
       guildId:
         guild.id,
+
       userId,
+
       sinceMs:
         weekBounds.startMs,
+
       untilMs:
         Math.min(
           Date.now(),
           weekBounds.endMs - 1
         ),
+
       maxChannels:
-        40,
+        120,
+
       maxResults:
-        60,
+        120,
+
+      maxPagesPerChannel:
+        4,
     }).catch(
       () => ({
-        accessible: false,
-        scannedChannels: 0,
-        matches: [],
+        accessible:
+          false,
+
+        scannedChannels:
+          0,
+
+        scannedMessages:
+          0,
+
+        matches:
+          [],
       })
     ),
 
     getPersonDiscordEvidenceForFeedback({
       client,
+
       guildId:
         guild.id,
+
       userId,
+
       sinceMs:
         previousWeekBounds.startMs,
+
       untilMs:
         previousWeekBounds.endMs - 1,
+
       maxChannels:
-        40,
+        120,
+
       maxResults:
-        60,
+        120,
+
+      maxPagesPerChannel:
+        4,
     }).catch(
       () => ({
-        accessible: false,
-        scannedChannels: 0,
-        matches: [],
+        accessible:
+          false,
+
+        scannedChannels:
+          0,
+
+        scannedMessages:
+          0,
+
+        matches:
+          [],
       })
     ),
   ]);

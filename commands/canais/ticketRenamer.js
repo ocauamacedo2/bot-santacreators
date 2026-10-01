@@ -51,48 +51,57 @@ export function setupTicketRenamer(client) {
   ]);
 
   // IDs das categorias
-  const CATEGORIES_WATCH = {
-    entrevista:      '1359244725781266492',
-    suporte:         '1359245003523756136',
-    lider:           '1414687963161559180',
-    ideias:          '1359245055239655544',
-    roupas:          '1352706815594598420',
-    banners:         '1404568518179029142',
+const CATEGORIES_WATCH = {
+  entrevista: '1359244725781266492',
+  suporte: '1359245003523756136',
+  lider: '1414687963161559180',
+  ideias: '1359245055239655544',
+  roupas: '1352706815594598420',
+  banners: '1404568518179029142',
 
-    // Fluxo automático do membro / Controle GI
-    membroAguardando: '1444857594517913742',
-    membroAtivo:      '1384650670145278033',
-    membroInativo1:   '1383899907244425246',
-    membroInativo2:   '1410071955159122051',
-    membroInativo3:   '1477566945598640251'
-  };
+  // Fluxo automático do membro / Controle GI
+  membroAguardando: '1444857594517913742',
+  membroAtivo: '1384650670145278033',
 
-  // categoria -> sufixo
-  const CATEGORY_SUFFIX = {
-    entrevista: 'entrevista',
-    suporte: 'suporte',
-    lider: 'lider',
-    ideias: 'ideias',
-    roupas: 'roupas',
-    banners: 'banners',
+  // Categorias atuais de inativos
+  membroInativo1: '1482866398396022967',
+  membroInativo2: '1410071955159122051',
+  membroInativo3: '1477566945598640251',
 
-    // Nestas categorias o ticket sempre usa o sufixo SC.
-    membroAguardando: 'sc',
-    membroAtivo: 'sc',
-    membroInativo1: 'sc',
-    membroInativo2: 'sc',
-    membroInativo3: 'sc'
-  };
+  // Categoria antiga preservada para tickets antigos
+  membroInativoLegacy: '1383899907244425246'
+};
+
+const CATEGORY_SUFFIX = {
+  entrevista: 'entrevista',
+  suporte: 'suporte',
+  lider: 'lider',
+  ideias: 'ideias',
+  roupas: 'roupas',
+  banners: 'banners',
+
+  // Nestas categorias o ticket sempre usa o sufixo SC.
+  membroAguardando: 'sc',
+  membroAtivo: 'sc',
+  membroInativo1: 'sc',
+  membroInativo2: 'sc',
+  membroInativo3: 'sc',
+  membroInativoLegacy: 'sc'
+};
 
   // Nestes locais o nome final também recebe a fonte
   // Mathematical Monospace usada no restante do sistema.
-  const MEMBER_FONT_CATEGORY_IDS = new Set([
-    '1444857594517913742',
-    '1384650670145278033',
-    '1383899907244425246',
-    '1410071955159122051',
-    '1477566945598640251'
-  ]);
+const MEMBER_FONT_CATEGORY_IDS = new Set([
+  '1444857594517913742',
+  '1384650670145278033',
+
+  '1482866398396022967',
+  '1410071955159122051',
+  '1477566945598640251',
+
+  // Legado
+  '1383899907244425246'
+]);
 
   // ====== STATE (cache de abridores) ======
   const OPENER_CACHE = new Map();       // canalId -> userId

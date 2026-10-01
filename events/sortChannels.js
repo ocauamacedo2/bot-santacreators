@@ -31,7 +31,7 @@ const SORT_GROUPS = [
   {
     id: "INATIVOS",
     categories: [
-      { id: "1383899907244425246", limit: 50 },
+      { id: "1482866398396022967", limit: 50 },
       { id: "1410071955159122051", limit: 50 },
       { id: "1477566945598640251", limit: 50 },
     ],
@@ -91,9 +91,16 @@ const INATIVO_CONFIG = {
     "1444857594517913742",
     "1359244725781266492",
     "1384650670145278033",
-    "1383899907244425246",
+
+    // Categoria atual de inativos
+    "1482866398396022967",
+
+    // Categorias de inativos
     "1410071955159122051",
     "1477566945598640251",
+
+    // Categoria antiga mantida apenas por compatibilidade
+    "1383899907244425246",
   ],
 
   // ✅ Mantido por compatibilidade, mas agora espelha as categorias extras de entrada
@@ -107,23 +114,26 @@ const INATIVO_CONFIG = {
   SOURCE_CATEGORY: "1384650670145278033",
 
   // Categorias padrão de inativos
-  TARGET_CATEGORIES: [
-    "1383899907244425246",
-    "1410071955159122051",
-    "1477566945598640251",
-  ],
+TARGET_CATEGORIES: [
+  "1482866398396022967",
+  "1477566945598640251",
+  "1410071955159122051",
+],
 
   // Categoria especial de inativação fora da lógica padrão
   SPECIAL_INACTIVE_CATEGORY: "1482866398396022967",
 
   // Categorias onde a lógica atual deve permanecer como está
   PROTECTED_CATEGORIES: [
+    "1482866398396022967",
     "1383899907244425246",
     "1410071955159122051",
     "1477566945598640251",
+
     "1428572742051168378",
     "1414687963161559180",
-    "1482874296685695118", // ✅ Nova 3ª categoria de líderes protegida
+    "1482874296685695118",
+
     "1384650670145278033",
   ],
 
@@ -153,11 +163,11 @@ const CREATOR_TICKET_AUTO = {
   ]),
 
   // Mesmas categorias já usadas pelo !inativo.
-  INACTIVE_CATEGORIES: [
-    "1383899907244425246",
-    "1410071955159122051",
-    "1477566945598640251",
-  ],
+INACTIVE_CATEGORIES: [
+  "1482866398396022967",
+  "1477566945598640251",
+  "1410071955159122051",
+],
 };
 
 // ===============================
@@ -236,10 +246,6 @@ function resolveEffectiveCategoryId(channel) {
 const runningLocks = new Map();
 const debouncers = new Map();
 
-// Cache do dono do ticket para evitar refetch constante de mensagens.
-const CREATOR_TICKET_OWNER_CACHE = new Map();
-const CREATOR_TICKET_OWNER_CACHE_TTL_MS = 30 * 60 * 1000;
-
 // Controle do failsafe de reconciliação dos membros ativos.
 const CREATOR_ACTIVE_RECONCILE_LAST_RUN = new Map();
 const CREATOR_ACTIVE_RECONCILE_INTERVAL_MS = 30 * 1000;
@@ -264,6 +270,7 @@ function isCreatorTicketAutomationExempt(channel) {
 function extractCreatorTicketOwnerFromTopic(channel) {
   const topic = String(channel?.topic || "");
   const match = topic.match(/aberto_por:(\d{17,20})/i);
+
   return match?.[1] || null;
 }
 
@@ -271,104 +278,585 @@ async function extractCreatorTicketOwnerFromHeader(channel) {
   try {
     const pool = [];
 
-    const pins = await channel.messages.fetchPinned().catch(() => null);
-    if (pins?.size) pool.push(...pins.values());
+    const pins =
+      await channel.messages
+        .fetchPinned()
+        .catch(() => null);
+
+    if (pins?.size) {
+      pool.push(
+        ...pins.values()
+      );
+    }
 
     if (!pool.length) {
-      const recent = await channel.messages.fetch({ limit: 30 }).catch(() => null);
-      if (recent?.size) pool.push(...recent.values());
+      const recent =
+        await channel.messages
+          .fetch({
+            limit: 30,
+          })
+          .catch(() => null);
+
+      if (recent?.size) {
+        pool.push(
+          ...recent.values()
+        );
+      }
     }
 
     for (const message of pool) {
       for (const embed of message.embeds || []) {
-        const fields = embed.data?.fields || embed.fields || [];
-        const abertoPor = fields.find(
-          (field) => String(field?.name || "").toLowerCase() === "aberto por:"
-        );
+        const fields =
+          embed.data?.fields ||
+          embed.fields ||
+          [];
 
-        const match = String(abertoPor?.value || "").match(/<@(\d+)>/);
-        if (match?.[1]) return match[1];
+        const abertoPor =
+          fields.find(
+            (field) =>
+              String(
+                field?.name ||
+                ""
+              )
+                .trim()
+                .toLowerCase() ===
+              "aberto por:"
+          );
+
+        const match =
+          String(
+            abertoPor?.value ||
+            ""
+          ).match(
+            /<@!?(\d{17,20})>/
+          );
+
+        if (match?.[1]) {
+          return match[1];
+        }
       }
     }
-  } catch {}
+  } catch (error) {
+    console.warn(
+      `[SC_SORT][OWNER] Não consegui ler cabeçalho de ${channel?.id}:`,
+      error?.message || error
+    );
+  }
 
   return null;
 }
 
-function extractCreatorTicketOwnerFromOverwrites(channel) {
-  const overwrites = channel.permissionOverwrites?.cache;
-  if (!overwrites) return null;
+function getCreatorTicketMemberAccessIds(channel) {
+  const overwrites =
+    channel?.permissionOverwrites?.cache;
 
-  const memberOverwrites = overwrites.filter(
-    (overwrite) =>
-      overwrite.type === OverwriteType.Member &&
-      overwrite.allow.has(PermissionsBitField.Flags.ViewChannel)
-  );
+  if (!overwrites) {
+    return [];
+  }
 
-  const withSendMessages = memberOverwrites.find((overwrite) =>
-    overwrite.allow.has(PermissionsBitField.Flags.SendMessages)
-  );
-
-  if (withSendMessages) return withSendMessages.id;
-  return memberOverwrites.first()?.id ?? null;
+  return [
+    ...new Set(
+      overwrites
+        .filter(
+          overwrite =>
+            overwrite.type ===
+              OverwriteType.Member &&
+            overwrite.allow.has(
+              PermissionsBitField.Flags.ViewChannel
+            )
+        )
+        .map(
+          overwrite =>
+            String(
+              overwrite.id
+            )
+        )
+    ),
+  ];
 }
 
-async function resolveCreatorTicketOwnerId(channel) {
-  if (!channel?.id) return null;
+function normalizeCreatorTicketIdentity(value) {
+  return String(
+    value ||
+    ""
+  )
+    .normalize("NFKC")
+    .normalize("NFD")
+    .replace(
+      /[\u0300-\u036f]/g,
+      ""
+    )
+    .toLowerCase()
+    .replace(
+      /[^a-z0-9]/g,
+      ""
+    );
+}
 
-  const cached = CREATOR_TICKET_OWNER_CACHE.get(channel.id);
+async function creatorTicketNameScore(
+  channel,
+  userId
+) {
+  try {
+    const member =
+      channel.guild.members.cache.get(
+        String(userId)
+      ) ||
+      await channel.guild.members
+        .fetch(
+          String(userId)
+        )
+        .catch(() => null);
+
+    if (!member) {
+      return 0;
+    }
+
+    const channelName =
+      normalizeCreatorTicketIdentity(
+        channel.name
+      );
+
+    if (!channelName) {
+      return 0;
+    }
+
+    const candidates = [
+      member.displayName,
+      member.user?.globalName,
+      member.user?.username,
+    ]
+      .map(
+        normalizeCreatorTicketIdentity
+      )
+      .filter(Boolean);
+
+    let score = 0;
+
+    for (const candidate of candidates) {
+      if (
+        candidate.length >= 3 &&
+        channelName.includes(
+          candidate
+        )
+      ) {
+        score += 10;
+      }
+
+      if (
+        candidate.length >= 3 &&
+        candidate.includes(
+          channelName
+        )
+      ) {
+        score += 4;
+      }
+    }
+
+    return score;
+  } catch {
+    return 0;
+  }
+}
+
+function creatorUserHasGiControl(
+  guildId,
+  userId
+) {
+  const api =
+    globalThis.SC_GI_CONTROL_API;
 
   if (
-    cached?.userId &&
-    Date.now() - Number(cached.resolvedAt || 0) <
-      CREATOR_TICKET_OWNER_CACHE_TTL_MS
+    !api ||
+    api.ready !== true ||
+    api.authoritative !== true ||
+    typeof api.getControl !==
+      "function"
   ) {
-    return cached.userId;
+    return null;
   }
 
-  // Fonte principal: o próprio tópico oficial do ticket.
-  // Os tickets usam: ticket_tipo:...;aberto_por:ID
-  const fromTopic = extractCreatorTicketOwnerFromTopic(channel);
-
-  // Fallbacks mantidos para tickets antigos ou sem tópico.
-  const fromHeader = fromTopic
-    ? null
-    : await extractCreatorTicketOwnerFromHeader(channel);
-
-  const resolved =
-    fromTopic ||
-    fromHeader ||
-    extractCreatorTicketOwnerFromOverwrites(channel) ||
-    null;
-
-  if (resolved) {
-    CREATOR_TICKET_OWNER_CACHE.set(channel.id, {
-      userId: String(resolved),
-      resolvedAt: Date.now(),
-    });
-  }
-
-  return resolved;
+  return !!api.getControl(
+    guildId,
+    String(userId)
+  );
 }
 
-async function findCreatorTicketsForUser(guild, userId, allowedCategoryIds) {
-  const categoryIds = new Set(allowedCategoryIds);
+async function resolveCreatorTicketOwnerId(
+  channel
+) {
+  if (
+    !channel?.id ||
+    !channel?.guild
+  ) {
+    return null;
+  }
+
+  // =====================================================
+  // 0. VÍNCULO EXPLÍCITO DO CONTROLE GI
+  // =====================================================
+  //
+  // Se algum Controle GI já possui este canal salvo em
+  // personalTicketChannelId, essa é a fonte mais forte.
+  //
+  // Não usa nome.
+  // Não usa quem abriu.
+  // Não usa ordem de overwrites.
+  //
+  // O restante da função continua existindo como fallback
+  // para tickets antigos que ainda não foram vinculados.
+  // =====================================================
+
+  const giApi =
+    globalThis.SC_GI_CONTROL_API;
+
+  if (
+    giApi &&
+    giApi.ready === true &&
+    giApi.authoritative === true &&
+    typeof giApi.listControls ===
+      "function"
+  ) {
+    const linkedControls =
+      giApi
+        .listControls(
+          channel.guild.id
+        )
+        .filter(
+          control =>
+            String(
+              control?.personalTicketChannelId ||
+              ""
+            ) ===
+            String(
+              channel.id
+            )
+        );
+
+    if (
+      linkedControls.length ===
+      1 &&
+      linkedControls[0]?.targetId
+    ) {
+      return String(
+        linkedControls[0].targetId
+      );
+    }
+
+    if (
+      linkedControls.length >
+      1
+    ) {
+      console.warn(
+        `[SC_SORT][OWNER] Ticket ${channel.id} possui múltiplos Controles GI vinculados ao mesmo canal.`
+      );
+
+      return null;
+    }
+  }
+
+  // =====================================================
+  // 1. DONO ORIGINAL
+  // =====================================================
+  //
+  // Continua sendo a primeira preferência entre os
+  // fallbacks para tickets ainda sem vínculo explícito.
+  //
+  // Mas ele não vence cegamente quando o Discord antigo
+  // não possui mais Controle GI e existe outra conta
+  // adicionada no ticket que possui o Controle.
+  // =====================================================
+
+  const fromTopic =
+    extractCreatorTicketOwnerFromTopic(
+      channel
+    );
+
+  const fromHeader =
+    fromTopic
+      ? null
+      : await extractCreatorTicketOwnerFromHeader(
+          channel
+        );
+
+  const originalOwnerId =
+    fromTopic ||
+    fromHeader ||
+    null;
+
+  const memberAccessIds =
+    getCreatorTicketMemberAccessIds(
+      channel
+    );
+
+  // =====================================================
+  // 2. SE O DONO ORIGINAL TEM GI, ELE É O DONO
+  // =====================================================
+
+  if (originalOwnerId) {
+    const originalHasGi =
+      creatorUserHasGiControl(
+        channel.guild.id,
+        originalOwnerId
+      );
+
+    if (originalHasGi === true) {
+      return String(
+        originalOwnerId
+      );
+    }
+  }
+
+  // =====================================================
+  // 3. PROCURA ENTRE QUEM POSSUI ACESSO AO TICKET
+  // =====================================================
+  //
+  // Isso resolve troca de Discord.
+  //
+  // Exemplo:
+  //
+  // abriu com Discord A
+  // Discord A não possui mais GI
+  // Discord B foi adicionado no ticket
+  // Discord B possui GI
+  //
+  // Resultado: Discord B passa a ser reconhecido.
+  // =====================================================
+
+  const giCandidates =
+    memberAccessIds.filter(
+      userId =>
+        creatorUserHasGiControl(
+          channel.guild.id,
+          userId
+        ) === true
+    );
+
+  if (
+    giCandidates.length ===
+    1
+  ) {
+    return String(
+      giCandidates[0]
+    );
+  }
+
+  // =====================================================
+  // 4. SE EXISTIREM DOIS USUÁRIOS COM GI
+  // USA O NOME DO CANAL COMO DESEMPATE
+  // =====================================================
+
+  if (
+    giCandidates.length >
+    1
+  ) {
+    const scored = [];
+
+    for (
+      const userId
+      of giCandidates
+    ) {
+      scored.push({
+        userId,
+        score:
+          await creatorTicketNameScore(
+            channel,
+            userId
+          ),
+      });
+    }
+
+    scored.sort(
+      (a, b) =>
+        b.score -
+        a.score
+    );
+
+    if (
+      scored[0] &&
+      (
+        scored[0].score >
+        Number(
+          scored[1]?.score ||
+          0
+        )
+      )
+    ) {
+      return String(
+        scored[0].userId
+      );
+    }
+  }
+
+  // =====================================================
+  // 5. SEM API GI CONCLUSIVA
+  // PRESERVA DONO ORIGINAL
+  // =====================================================
+
+  if (originalOwnerId) {
+    return String(
+      originalOwnerId
+    );
+  }
+
+  // =====================================================
+  // 6. ÚLTIMO FALLBACK: USUÁRIO COM ACESSO
+  // =====================================================
+
+  if (
+    memberAccessIds.length ===
+    1
+  ) {
+    return String(
+      memberAccessIds[0]
+    );
+  }
+
+  if (
+    memberAccessIds.length >
+    1
+  ) {
+    const scored = [];
+
+    for (
+      const userId
+      of memberAccessIds
+    ) {
+      scored.push({
+        userId,
+        score:
+          await creatorTicketNameScore(
+            channel,
+            userId
+          ),
+      });
+    }
+
+    scored.sort(
+      (a, b) =>
+        b.score -
+        a.score
+    );
+
+    if (
+      scored[0]?.score >
+      0
+    ) {
+      return String(
+        scored[0].userId
+      );
+    }
+  }
+
+  return null;
+}
+
+async function creatorTicketBelongsToUser(
+  channel,
+  userId
+) {
+  const targetId =
+    String(
+      userId ||
+      ""
+    );
+
+  if (!targetId) {
+    return false;
+  }
+
+  const resolvedOwnerId =
+    await resolveCreatorTicketOwnerId(
+      channel
+    );
+
+  if (
+    String(
+      resolvedOwnerId ||
+      ""
+    ) ===
+    targetId
+  ) {
+    return true;
+  }
+
+  // Usuário adicionado pelo botão "Adicionar Usuário".
+  const accessIds =
+    getCreatorTicketMemberAccessIds(
+      channel
+    );
+
+  if (
+    accessIds.includes(
+      targetId
+    )
+  ) {
+    return true;
+  }
+
+  // Último fallback: nome.
+  return (
+    await creatorTicketNameScore(
+      channel,
+      targetId
+    )
+  ) > 0;
+}
+
+async function findCreatorTicketsForUser(
+  guild,
+  userId,
+  allowedCategoryIds
+) {
+  const categoryIds =
+    new Set(
+      allowedCategoryIds
+    );
+
   const matches = [];
 
-  for (const channel of guild.channels.cache.values()) {
-    if (channel.type !== ChannelType.GuildText) continue;
-    if (!channel.parentId || !categoryIds.has(channel.parentId)) continue;
-    if (isCreatorTicketAutomationExempt(channel)) continue;
+  for (
+    const channel
+    of guild.channels.cache.values()
+  ) {
+    if (
+      channel.type !==
+      ChannelType.GuildText
+    ) {
+      continue;
+    }
 
-    const ownerId = await resolveCreatorTicketOwnerId(channel);
-    if (String(ownerId) === String(userId)) {
-      matches.push(channel);
+    if (
+      !channel.parentId ||
+      !categoryIds.has(
+        channel.parentId
+      )
+    ) {
+      continue;
+    }
+
+    if (
+      isCreatorTicketAutomationExempt(
+        channel
+      )
+    ) {
+      continue;
+    }
+
+    if (
+      await creatorTicketBelongsToUser(
+        channel,
+        userId
+      )
+    ) {
+      matches.push(
+        channel
+      );
     }
   }
 
   return matches;
 }
-
 async function getFirstAvailableInactiveCategory(guild) {
   for (const categoryId of CREATOR_TICKET_AUTO.INACTIVE_CATEGORIES) {
     const category = await guild.channels.fetch(categoryId).catch(() => null);
@@ -865,41 +1353,42 @@ async function reconcileCreatorActiveChannel(
     await resolveCreatorTicketOwnerId(channel);
 
   if (!ownerId) {
+    // =====================================================
+    // SEGURANÇA CONTRA INATIVAÇÃO INDEVIDA
+    // =====================================================
+    //
+    // Não conseguir identificar o dono NÃO significa que
+    // ninguém possua Controle GI.
+    //
+    // Esse cenário pode acontecer quando:
+    //
+    // - o ticket foi aberto por um Discord antigo;
+    // - existe Discord novo adicionado;
+    // - existem responsáveis com acesso individual;
+    // - mais de uma pessoa do canal possui Controle GI;
+    // - o vínculo personalTicketChannelId ainda está sendo
+    //   construído durante o boot/reconciliação.
+    //
+    // Portanto, sem dono confirmado, NÃO movemos o canal.
+    // O próximo ciclo do supervisor tenta novamente.
+    // =====================================================
+
     console.warn(
-      `[SC_SORT][RECONCILE] Canal ${channel.id} sem dono identificável na categoria ativa. Como todo canal não-exempt dessa categoria deve ser ticket pessoal, ele será retirado de membros ativos.`
+      `[SC_SORT][RECONCILE] Canal ${channel.id} sem dono identificável na categoria ativa. Por segurança, ele permanecerá em membros até uma identidade confiável ser resolvida. Gatilho=${trigger}`
     );
 
-    const inactiveCategory =
-      await getFirstAvailableInactiveCategory(
-        channel.guild
-      );
-
-    if (!inactiveCategory) {
-      return {
-        checked: true,
-        moved: false,
-        skipped:
-          "owner_not_found_and_inactive_full",
-      };
-    }
-
-    const moved =
-      await moveCreatorTicketAutomatically(
-        channel,
-        inactiveCategory.id,
-        `SantaCreators: ticket ativo sem dono identificável (${trigger}) -> mover para inativos`,
-        {
-          saveInactiveOrigin:
-            true,
-        }
-      );
-
     return {
-      checked: true,
+      checked:
+        true,
+
       moved:
-        !!moved,
+        false,
+
+      skipped:
+        "owner_not_identified_safely",
+
       reason:
-        "owner_not_found",
+        "identity_not_confirmed",
     };
   }
 
@@ -2065,9 +2554,90 @@ const SC_SORT_CATEGORY_IDS = [
       }
     });
 
-    // O pedirset.js já emite este evento quando o Set é aprovado.
-    // IMPORTANTE: aqui só move se o ticket estiver em 1444857594517913742.
-    dashOn("pedirset:aprovado", async (data) => {
+// =====================================================
+// PEDIU SET -> CONTRATAR EM GAME
+// =====================================================
+//
+// Se a pessoa ainda estiver com o ticket original de
+// entrevista, o pedido do Set coloca o ticket na categoria
+// intermediária.
+//
+// NÃO depende de o Controle GI já existir.
+//
+// Isso cobre também troca de Discord, porque
+// findCreatorTicketsForUser() agora reconhece:
+// - dono original;
+// - usuário adicionado no canal;
+// - identidade pelo nome;
+// - vínculo com Controle GI.
+//
+dashOn(
+  "pedirset:solicitado",
+  async (data) => {
+    try {
+      const guild =
+        client.guilds.cache.get(
+          String(
+            data?.guildId ||
+            ""
+          )
+        );
+
+      const userId =
+        String(
+          data?.userId ||
+          ""
+        );
+
+      if (
+        !guild ||
+        !userId
+      ) {
+        return;
+      }
+
+      const tickets =
+        await findCreatorTicketsForUser(
+          guild,
+          userId,
+          [
+            CREATOR_TICKET_AUTO
+              .INTERVIEW_CATEGORY,
+          ]
+        );
+
+      if (!tickets.length) {
+        console.warn(
+          `[SC_SORT][PEDIR_SET] Nenhum ticket de entrevista localizado para ${userId}.`
+        );
+
+        return;
+      }
+
+      for (
+        const channel
+        of tickets
+      ) {
+        await moveCreatorTicketAutomatically(
+          channel,
+          CREATOR_TICKET_AUTO
+            .WAITING_CATEGORY,
+          "SantaCreators: membro solicitou Set -> Contratar em Game"
+        );
+      }
+    } catch (error) {
+      console.error(
+        "[SC_SORT][PEDIR_SET] Falha ao mover ticket após solicitação do Set:",
+        error
+      );
+    }
+  }
+);
+
+// O pedirset.js já emite este evento quando o Set é aprovado.
+dashOn(
+  "pedirset:aprovado",
+  async (data) => {
       try {
         const guild = client.guilds.cache.get(String(data?.guildId || ""));
         const userId = String(data?.userId || "");

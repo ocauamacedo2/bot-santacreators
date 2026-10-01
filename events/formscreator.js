@@ -15,6 +15,14 @@ import {
   EmbedBuilder,
 } from "discord.js";
 
+import {
+  dashEmit
+} from "../utils/dashHub.js";
+
+import {
+  sendBotDmLogged
+} from "../utils/botDmLogger.js";
+
 // __dirname no ESM
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -3186,11 +3194,28 @@ for (const [threadId, reg] of Object.entries(state.registrations)) {
         .setFooter({ text: "Hoje é dia de lembrete no PV." });
 
       try {
-        await member.send({
-          embeds: [embedDM]
+        await sendBotDmLogged({
+          client,
+
+          target:
+            member,
+
+          guild,
+
+          source:
+            "formscreator.js • Lembrete pessoal de feedback",
+
+          payload: {
+            embeds: [
+              embedDM
+            ]
+          }
         });
       } catch (e) {
-        console.error(`[FormsCreator] Falha ao enviar DM para ${member.user?.tag || member.id}:`, e?.message || e);
+        console.error(
+          `[FormsCreator] Falha ao enviar DM para ${member.user?.tag || member.id}:`,
+          e?.message || e
+        );
       }
     }
   }
@@ -3936,12 +3961,32 @@ state.registrations[topic.id] = {
     // ✅ CORREÇÃO: Enviar DM para o usuário
     if (membro) {
         try {
-            await membro.send(`Olá! Um novo tópico de acompanhamento (<#${topic.id}>) foi criado para você no servidor **${guild.name}**. Fique de olho lá!`);
+            await sendBotDmLogged({
+                client,
+
+                target:
+                    membro,
+
+                guild,
+
+                source:
+                    "formscreator.js • Novo tópico de acompanhamento",
+
+                payload: {
+                    content:
+                        `Olá! Um novo tópico de acompanhamento (<#${topic.id}>) foi criado para você no servidor **${guild.name}**. Fique de olho lá!`
+                }
+            });
         } catch (e) {
-            console.warn(`[FormsCreator] Falha ao enviar DM para ${membro.user.tag} (${membro.id}). O usuário pode ter DMs desativadas.`);
+            console.warn(
+                `[FormsCreator] Falha ao enviar DM para ${membro.user.tag} (${membro.id}). O usuário pode ter DMs desativadas.`
+            );
+
             // Opcional: avisar no tópico que a DM falhou
             try {
-                await topic.send(`⚠️ Não foi possível notificar <@${targetId}> por mensagem direta. Avise-o(a) manualmente sobre este tópico.`);
+                await topic.send(
+                    `⚠️ Não foi possível notificar <@${targetId}> por mensagem direta. Avise-o(a) manualmente sobre este tópico.`
+                );
             } catch {}
         }
     }
@@ -5788,6 +5833,204 @@ export async function formsCreatorOnReady(client) {
 // 2) chama isso dentro do teu client.on('messageCreate')
 export async function formsCreatorHandleMessage(message, client) {
   if (!message.guild || message.author.bot) return false;
+
+  // =====================================================
+  // FEEDBACK DO FORMS -> TICKET PESSOAL
+  // =====================================================
+  //
+  // Quando alguém da equipe escreve dentro do Forms
+  // individual de uma pessoa, avisamos a IA.
+  //
+  // A IA poderá utilizar esse comentário para conversar
+  // naturalmente com o membro no ticket pessoal.
+  //
+  // IMPORTANTE:
+  //
+  // - a mensagem original permanece normalmente no Forms;
+  // - não removemos nada;
+  // - o próprio membro escrevendo no próprio Forms não
+  //   dispara uma orientação para ele mesmo;
+  // - a deduplicação evita emitir duas vezes caso este
+  //   handler seja chamado tanto pelo index quanto pelo
+  //   listener reserva do FormsCreator.
+  // =====================================================
+
+  if (
+    message.channel?.isThread?.() &&
+    String(
+      message.channel.parentId ||
+      ""
+    ) ===
+      String(
+        CREATOR_FORM_CHANNEL_ID
+      )
+  ) {
+    const state =
+      readState();
+
+    const registration =
+      state.registrations?.[
+        message.channel.id
+      ] ||
+      null;
+
+    const targetUserId =
+      String(
+        registration?.userId ||
+        ""
+      );
+
+    if (
+      targetUserId &&
+      targetUserId !==
+        String(
+          message.author.id
+        )
+    ) {
+      const seen =
+        globalThis.__SC_FORMS_COMMENT_BRIDGE_SEEN__ ||
+        new Set();
+
+      globalThis.__SC_FORMS_COMMENT_BRIDGE_SEEN__ =
+        seen;
+
+      if (
+        !seen.has(
+          message.id
+        )
+      ) {
+        seen.add(
+          message.id
+        );
+
+        const cleanupTimer =
+          setTimeout(
+            () => {
+              seen.delete(
+                message.id
+              );
+            },
+            60 *
+              60 *
+              1000
+          );
+
+        cleanupTimer.unref?.();
+
+        const attachments =
+          [
+            ...(
+              message.attachments
+                ?.values?.() ||
+              []
+            ),
+          ].map(
+            attachment => ({
+              name:
+                attachment?.name ||
+                "arquivo",
+
+              url:
+                attachment?.url ||
+                "",
+
+              contentType:
+                attachment?.contentType ||
+                "",
+
+              size:
+                Number(
+                  attachment?.size ||
+                  0
+                ),
+            })
+          );
+
+        for (
+          const embed
+          of message.embeds ||
+          []
+        ) {
+          const videoUrl =
+            embed?.video?.proxyURL ||
+            embed?.video?.url ||
+            null;
+
+          if (
+            videoUrl
+          ) {
+            attachments.push({
+              name:
+                /medal/i.test(
+                  String(
+                    embed?.provider
+                      ?.name ||
+                    embed?.url ||
+                    ""
+                  )
+                )
+                  ? "medal-forms.mp4"
+                  : "video-forms.mp4",
+
+              url:
+                String(
+                  videoUrl
+                ),
+
+              contentType:
+                "video/mp4",
+
+              size:
+                0,
+            });
+          }
+        }
+
+        dashEmit(
+          "formscreator:comentario_registrado",
+          {
+            guildId:
+              message.guild.id,
+
+            userId:
+              targetUserId,
+
+            threadId:
+              message.channel.id,
+
+            messageId:
+              message.id,
+
+            authorId:
+              message.author.id,
+
+            authorName:
+              message.member?.displayName ||
+              message.author.globalName ||
+              message.author.username,
+
+            content:
+              String(
+                message.content ||
+                ""
+              ),
+
+            attachments,
+
+            createdAtMs:
+              Number(
+                message.createdTimestamp ||
+                Date.now()
+              ),
+
+            messageUrl:
+              message.url ||
+              `https://discord.com/channels/${message.guild.id}/${message.channel.id}/${message.id}`,
+          }
+        );
+      }
+    }
+  }
 
   const content = message.content.toLowerCase().trim();
 

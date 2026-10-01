@@ -1383,9 +1383,13 @@ const PERSONAL_TICKET_WAITING_CATEGORY_ID =
   '1444857594517913742';
 
 const PERSONAL_TICKET_INACTIVE_CATEGORY_IDS = [
-  '1383899907244425246',
+  // Categorias atuais
+  '1482866398396022967',
   '1410071955159122051',
   '1477566945598640251',
+
+  // Legado
+  '1383899907244425246',
 ];
 
 const PERSONAL_TICKET_EXEMPT_CHANNEL_IDS =
@@ -1516,6 +1520,7 @@ async function resolvePersonalTicketOwnerId(
 ) {
   if (
     !channel ||
+    !channel.guild ||
     PERSONAL_TICKET_EXEMPT_CHANNEL_IDS.has(
       String(channel.id)
     )
@@ -1523,18 +1528,218 @@ async function resolvePersonalTicketOwnerId(
     return null;
   }
 
-  return (
+  const giApi =
+    globalThis.SC_GI_CONTROL_API;
+
+  const giIsReady =
+    !!(
+      giApi &&
+      giApi.ready === true &&
+      giApi.authoritative === true &&
+      typeof giApi.getControl ===
+        "function"
+    );
+
+  // =====================================================
+  // PRIORIDADE ABSOLUTA — VÍNCULO EXPLÍCITO DO CONTROLE GI
+  // =====================================================
+  //
+  // Depois que um Controle GI recebe:
+  //
+  // personalTicketChannelId = ID_DO_TICKET
+  //
+  // não precisamos mais adivinhar de quem é o canal.
+  //
+  // Isso também resolve de forma determinística:
+  //
+  // - troca de Discord;
+  // - ticket aberto pelo Discord antigo;
+  // - usuário novo adicionado pelo botão;
+  // - vários membros da equipe com acesso ao mesmo ticket;
+  // - nomes semelhantes;
+  // - responsáveis que também possuem Controle GI.
+  // =====================================================
+
+  if (
+    giIsReady &&
+    typeof giApi.listControls ===
+      "function"
+  ) {
+    const linkedControls =
+      giApi
+        .listControls(
+          channel.guild.id
+        )
+        .filter(
+          control =>
+            String(
+              control?.personalTicketChannelId ||
+              ""
+            ) ===
+            String(
+              channel.id
+            )
+        );
+
+    if (
+      linkedControls.length ===
+      1 &&
+      linkedControls[0]?.targetId
+    ) {
+      return String(
+        linkedControls[0].targetId
+      );
+    }
+
+    if (
+      linkedControls.length >
+      1
+    ) {
+      console.warn(
+        `[SC_PERSONAL_TICKET] Mais de um Controle GI aponta para o ticket ${channel.id}. Não vou escolher um dono arbitrariamente.`
+      );
+
+      return null;
+    }
+  }
+
+  // =====================================================
+  // FALLBACK 1 — DONO ORIGINAL
+  // =====================================================
+
+  const fromTopic =
     extractPersonalTicketOwnerIdFromTopic(
       channel
-    ) ||
-    await extractPersonalTicketOwnerIdFromHeader(
-      channel
-    ) ||
-    extractPersonalTicketOwnerIdFromOverwrites(
-      channel
-    ) ||
-    null
-  );
+    );
+
+  const fromHeader =
+    fromTopic
+      ? null
+      : await extractPersonalTicketOwnerIdFromHeader(
+          channel
+        );
+
+  const originalOwnerId =
+    fromTopic ||
+    fromHeader ||
+    null;
+
+  // =====================================================
+  // FALLBACK 2 — QUEM TEM ACESSO INDIVIDUAL AO TICKET
+  // =====================================================
+
+  const overwrites =
+    channel.permissionOverwrites?.cache;
+
+  const accessIds =
+    overwrites
+      ? [
+          ...new Set(
+            overwrites
+              .filter(
+                overwrite =>
+                  overwrite.type ===
+                    OverwriteType.Member &&
+                  overwrite.allow.has(
+                    PermissionsBitField.Flags.ViewChannel
+                  )
+              )
+              .map(
+                overwrite =>
+                  String(
+                    overwrite.id
+                  )
+              )
+          ),
+        ]
+      : [];
+
+  // =====================================================
+  // SE O DONO ORIGINAL AINDA TEM GI, ELE CONTINUA SENDO
+  // A PRIMEIRA PREFERÊNCIA ENTRE AS HEURÍSTICAS.
+  // =====================================================
+
+  if (
+    originalOwnerId &&
+    giIsReady &&
+    giApi.getControl(
+      channel.guild.id,
+      originalOwnerId
+    )
+  ) {
+    return String(
+      originalOwnerId
+    );
+  }
+
+  // =====================================================
+  // DISCORD NOVO ADICIONADO AO TICKET + CONTROLE GI
+  // =====================================================
+
+  if (giIsReady) {
+    const candidates =
+      accessIds.filter(
+        userId =>
+          !!giApi.getControl(
+            channel.guild.id,
+            userId
+          )
+      );
+
+    if (
+      candidates.length ===
+      1
+    ) {
+      return String(
+        candidates[0]
+      );
+    }
+
+    if (
+      candidates.length >
+      1
+    ) {
+      if (
+        originalOwnerId &&
+        candidates.includes(
+          String(
+            originalOwnerId
+          )
+        )
+      ) {
+        return String(
+          originalOwnerId
+        );
+      }
+
+      console.warn(
+        `[SC_PERSONAL_TICKET] Ticket ${channel.id} possui múltiplos usuários com Controle GI e ainda não possui vínculo explícito.`
+      );
+
+      return null;
+    }
+  }
+
+  // =====================================================
+  // COMPATIBILIDADE COM TICKETS ANTIGOS
+  // =====================================================
+
+  if (originalOwnerId) {
+    return String(
+      originalOwnerId
+    );
+  }
+
+  if (
+    accessIds.length ===
+    1
+  ) {
+    return String(
+      accessIds[0]
+    );
+  }
+
+  return null;
 }
 
 async function findPersonalTicketForUser(

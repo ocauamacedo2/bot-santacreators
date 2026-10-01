@@ -26,7 +26,7 @@ const SORT_GROUPS = [
   {
     id: "INATIVOS",
     categories: [
-      { id: "1383899907244425246", limit: 50 },
+      { id: "1482866398396022967", limit: 50 },
       { id: "1410071955159122051", limit: 50 },
       { id: "1477566945598640251", limit: 50 },
     ],

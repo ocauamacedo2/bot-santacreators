@@ -152,7 +152,7 @@ const {
 CHANNEL_MENU_E_REGISTROS: '1417366889398796318',
 CHANNEL_LOGS:             '1486006878914875412',
 CHANNEL_AVISOS_1M:        '1486084383575113758',
-CHANNEL_DM_MIRROR:        '1486006878914875412',
+CHANNEL_DM_MIRROR:        '1554974969648382083',
 CHANNEL_RESP_BOARD:       '1427082727600947230',
 CHANNEL_DESLIGAMENTOS:    '1427089183847223306',
 CHANNEL_RESTORE_LOG:      '1486006878914875412',
@@ -710,7 +710,235 @@ const prev = byUser.get(r.targetId);
     const monthsSince = (joinMs, n = nowMs()) => Math.max(0, Math.floor(daysBetween(joinMs, n) / 30));
     const weeksSince  = (joinMs, n = nowMs()) => Math.max(0, Math.floor(daysBetween(joinMs, n) / 7));
     const AUTO_DESLIGAR_PAUSA_MS = SC_GI_CFG.AUTO_DESLIGAR_PAUSA_DIAS * 24 * 60 * 60 * 1000;
+// =====================================================
+// AUTO-DESLIGAMENTO INDIVIDUAL POR REGISTRO
+// =====================================================
+//
+// O tick geral continua existindo como FAILSAFE.
+//
+// Este mapa adiciona um relógio individual para cada GI
+// pausado, evitando depender exclusivamente da varredura
+// global de 60 segundos.
+//
+const SC_GI_AUTO_DISABLE_TIMERS =
+  new Map();
 
+function clearGiAutoDisableTimer(
+  messageId
+) {
+  const key =
+    String(
+      messageId ||
+      ""
+    );
+
+  const timer =
+    SC_GI_AUTO_DISABLE_TIMERS.get(
+      key
+    );
+
+  if (timer) {
+    clearTimeout(
+      timer
+    );
+
+    SC_GI_AUTO_DISABLE_TIMERS.delete(
+      key
+    );
+  }
+}
+
+function scheduleGiAutoDisableTimer(
+  rec
+) {
+  if (
+    !rec?.messageId
+  ) {
+    return;
+  }
+
+  clearGiAutoDisableTimer(
+    rec.messageId
+  );
+
+  if (
+    rec.active !== false
+  ) {
+    return;
+  }
+
+  const remainingMs =
+    getPauseCountdownMs(
+      rec,
+      nowMs()
+    );
+
+  // setTimeout do Node não deve receber intervalos enormes.
+  // Se faltar mais que aproximadamente 24 dias,
+  // agenda uma checagem intermediária e depois reagenda.
+  const MAX_SAFE_TIMER_MS =
+    24 *
+    24 *
+    60 *
+    60 *
+    1000;
+
+  const delay =
+    Math.max(
+      1000,
+      Math.min(
+        remainingMs + 1500,
+        MAX_SAFE_TIMER_MS
+      )
+    );
+
+  const timer =
+    setTimeout(
+      async () => {
+        SC_GI_AUTO_DISABLE_TIMERS.delete(
+          String(
+            rec.messageId
+          )
+        );
+
+        try {
+          const liveRecord =
+            SC_GI_STATE.registros.get(
+              String(
+                rec.messageId
+              )
+            );
+
+          if (
+            !liveRecord ||
+            liveRecord.active !==
+              false
+          ) {
+            return;
+          }
+
+          const remainingNow =
+            getPauseCountdownMs(
+              liveRecord,
+              nowMs()
+            );
+
+          // Ainda não venceu.
+          // Reagenda o restante.
+          if (
+            remainingNow >
+            0
+          ) {
+            scheduleGiAutoDisableTimer(
+              liveRecord
+            );
+
+            return;
+          }
+
+          const channelGuild =
+            client.channels.cache.get(
+              String(
+                liveRecord.channelId ||
+                ""
+              )
+            )?.guild ||
+            null;
+
+          const guild =
+            channelGuild ||
+            client.guilds.cache.get(
+              String(
+                liveRecord.guildId ||
+                ""
+              )
+            );
+
+          if (!guild) {
+            console.warn(
+              `[SC_GI] Auto-desligamento de ${liveRecord.targetId}: guild não encontrada. Tentarei novamente.`
+            );
+
+            scheduleGiAutoDisableTimer(
+              liveRecord
+            );
+
+            return;
+          }
+
+          if (
+            !liveRecord.guildId
+          ) {
+            liveRecord.guildId =
+              guild.id;
+
+            SC_GI_scheduleSave();
+          }
+
+          await autoDesligarPausadosVencidos(
+            guild,
+            "timer_individual"
+          );
+
+          // Verificação final.
+          const stillExists =
+            SC_GI_STATE.registros.has(
+              String(
+                liveRecord.messageId
+              )
+            );
+
+          if (
+            stillExists
+          ) {
+            const stillLive =
+              SC_GI_STATE.registros.get(
+                String(
+                  liveRecord.messageId
+                )
+              );
+
+            if (
+              stillLive?.active ===
+              false &&
+              getPauseCountdownMs(
+                stillLive,
+                nowMs()
+              ) <= 0
+            ) {
+              console.warn(
+                `[SC_GI] Registro ${stillLive.messageId} venceu, mas continua ativo no storage. Reagendando failsafe.`
+              );
+
+              setTimeout(
+                () => {
+                  scheduleGiAutoDisableTimer(
+                    stillLive
+                  );
+                },
+                30_000
+              ).unref?.();
+            }
+          }
+        } catch (error) {
+          console.error(
+            "[SC_GI] Falha no timer individual de auto-desligamento:",
+            error
+          );
+        }
+      },
+      delay
+    );
+
+  timer.unref?.();
+
+  SC_GI_AUTO_DISABLE_TIMERS.set(
+    String(
+      rec.messageId
+    ),
+    timer
+  );
+}
 function formatDurationFull(ms) {
   ms = Math.max(0, Number(ms || 0));
 
@@ -2971,8 +3199,22 @@ const msg = await ch.send({
 // agora fixa o ID real
 tempRec.messageId = msg.id;
 const record = { ...tempRec };
-SC_GI_STATE.registros.set(record.messageId, record);
+
+SC_GI_STATE.registros.set(
+  record.messageId,
+  record
+);
+
 SC_GI_scheduleSave();
+
+// Se nasceu pausado, já recebe seu próprio relógio.
+if (
+  record.active === false
+) {
+  scheduleGiAutoDisableTimer(
+    record
+  );
+}
 
 // 🔁 FAILSAFE: garante IDs corretos nos botões
 await msg.edit({
@@ -3021,7 +3263,7 @@ try {
       await sendDM_andMirror(guild, targetUser, welcome);
 
       // log
-         await logMsg(
+      await logMsg(
         guild,
         'Novo Registro (GI)',
         [
@@ -3032,7 +3274,7 @@ try {
             ? `✅ **Cargo GI setado automaticamente:** <@&${GI_ROLE_ID}>`
             : `⏸️ **Registro criado pausado** (sem setar o cargo GI agora).`,
           `🧾 **Por:** <@${registrar.id}> (\`${registrar.id}\`)`,
-          `🔗 **Link:** Ir ao registro})`
+          `🔗 **Link:** [Abrir registro](https://discord.com/channels/${guild.id}/${record.channelId}/${record.messageId})`
         ].filter(Boolean).join('\n'),
         { 
           thumb: targetUser.displayAvatarURL?.({ size: 128 }),
@@ -4433,7 +4675,7 @@ try {
           `🧭 **Nova área:** \`${rec.area}\``,
           `🗓️ **Nova data:** \`${msToDDMMYYYY(rec.joinDateMs)}\``,
           rec.note ? `🗒️ **Nota:** ${rec.note}` : '',
-          `🔗 **Link:** Ir ao registro})`
+          `🔗 **Link:** [Abrir registro](https://discord.com/channels/${guild.id}/${rec.channelId}/${rec.messageId})`
         ].filter(Boolean).join('\n'),
         {
           components: [
@@ -4515,7 +4757,17 @@ try {
     nowMs();
 
   SC_GI_scheduleSave();
-
+if (
+  rec.active === false
+) {
+  scheduleGiAutoDisableTimer(
+    rec
+  );
+} else {
+  clearGiAutoDisableTimer(
+    rec.messageId
+  );
+}
   if (options.log !== false) {
   await logMsg(
     guild,
@@ -4625,7 +4877,7 @@ try {
             : `⛔ **Cargo GI removido:** <@&${GI_ROLE_ID}>`,
           `⏳ **Tempo ativo real:** \`${activeTimeText(rec)}\``,
           !rec.active ? `⏸️ **Tempo pausado acumulado:** \`${formatDurationFull(getPausedTotalMs(rec))}\`` : '',
-          `🔗 **Link:** Ir ao registro})`
+          `🔗 **Link:** [Abrir registro](https://discord.com/channels/${guild.id}/${rec.channelId}/${rec.messageId})`
         ].filter(Boolean).join('\n'),
         {
           color: rec.active ? 0x2ecc71 : 0xe67e22,
@@ -4920,7 +5172,7 @@ try {
               )
           }`,
 
-          `🔗 **Link:** Ir ao registro})`
+          `🔗 **Link:** [Abrir registro](https://discord.com/channels/${guild.id}/${rec.channelId}/${rec.messageId})`
         ].join(
           '\n'
         ),
@@ -5149,7 +5401,9 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
 
 
       await removeControleRegistroDoChat(guild, snapshot, motivo);
-
+clearGiAutoDisableTimer(
+  snapshot.messageId
+);
       SC_GI_STATE.registros.delete(snapshot.messageId);
       
       // ✅ FORÇA SALVAR IMEDIATAMENTE (sem debounce) para garantir que o delete persista
@@ -5401,7 +5655,7 @@ async function setResponsibleAuto(guild, actorId, messageId, pickedUserId) {
           `👤 **Membro:** <@${rec.targetId}> (\`${rec.targetId}\`)`,
           `🧭 **Tipo:** ${TYPE_LABEL(rec.responsibleType) || '—'}`,
           `👨‍✈️ **Responsável:** <@${rec.responsibleUserId}> (\`${rec.responsibleUserId}\`)`,
-          `🔗 **Link:** Ir ao registro})`
+          `🔗 **Link:** [Abrir registro](https://discord.com/channels/${guild.id}/${rec.channelId}/${rec.messageId})`
         ].join('\n'),
         {
           components: [
@@ -6129,6 +6383,36 @@ async function autoDesligarPausadosVencidos(guild, origem = 'tick') {
 
       try {
         await SC_GI_load();
+
+        // =====================================================
+        // RESTAURA OS TIMERS INDIVIDUAIS DOS CONTROLES PAUSADOS
+        // =====================================================
+        //
+        // O arquivo JSON pode carregar controles que já estavam
+        // pausados antes de um restart/deploy.
+        //
+        // O relógio global continua existindo como failsafe,
+        // mas cada registro pausado volta a ter seu próprio
+        // timer individual imediatamente após o carregamento.
+        //
+        // scheduleGiAutoDisableTimer() já limpa qualquer timer
+        // anterior da mesma mensagem antes de criar outro.
+        // Portanto este processo é seguro contra duplicação.
+        // =====================================================
+
+        for (
+          const rec
+          of SC_GI_STATE.registros.values()
+        ) {
+          if (
+            rec?.active === false &&
+            rec?.messageId
+          ) {
+            scheduleGiAutoDisableTimer(
+              rec
+            );
+          }
+        }
 
         // =====================================================
         // IA — FEEDBACK SEMANAL DOS MEMBROS

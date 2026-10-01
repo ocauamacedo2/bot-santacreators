@@ -15,6 +15,7 @@ import {
 import { getChannel } from '../utils/cacheDiscord.js';
 import { onceIn } from '../utils/onceIn.js';
 import { dashEmit } from '../utils/dashHub.js';
+import { sendBotDmLogged } from '../utils/botDmLogger.js';
 import {
   createFormsCreatorRecord,
   findOriginalFormsCreatorThreadIdByUserId,
@@ -429,18 +430,45 @@ export async function pedirSetHandleInteraction(interaction, client) {
 
     const idUnico = Date.now().toString();
 
-    pedidosSet.set(idUnico, {
-      userId: interaction.user.id,
-      nome,
-      passaporte,
-      zipzap,
-      alinhado,
-      indicacao
-    });
+pedidosSet.set(idUnico, {
+  userId: interaction.user.id,
+  nome,
+  passaporte,
+  zipzap,
+  alinhado,
+  indicacao
+});
 
-    savePedidosSet();
+savePedidosSet();
 
-    const embed = new EmbedBuilder()
+// =====================================================
+// AVISA O FLUXO AUTOMÁTICO DE TICKETS
+// =====================================================
+//
+// Somente sinaliza que o membro PEDIU o Set.
+//
+// Quem decide se existe ticket, de quem ele é e para onde
+// deve ser movido continua sendo o sortChannels.js.
+//
+dashEmit(
+  'pedirset:solicitado',
+  {
+    userId:
+      interaction.user.id,
+
+    guildId:
+      interaction.guildId,
+
+    nome,
+
+    passaporte,
+
+    timestamp:
+      Date.now(),
+  }
+);
+
+const embed = new EmbedBuilder()
       .setTitle('📋 Novo Pedido de Set Recebido')
       .setThumbnail(interaction.user.displayAvatarURL())
       .setDescription([
@@ -586,22 +614,46 @@ if (!podeAprovarSet) {
         timestamp: Date.now()
       });
       // 4. DMs e Avisos
-      await membro.send({
-        embeds: [
-          new EmbedBuilder()
-            .setTitle('🎉 SET APROVADO COM SUCESSO! 🎉')
-            .setDescription([
-              'Parabéns! Seu set na **SantaCreators** foi oficialmente **aprovado** ✅',
-              '',
-              'Agora, **vá até o ticket onde fez sua entrevista** e diga quando poderá fazer a **contratação in game**.',
-              '',
-              'Se tiver dúvidas, fale com a Equipe Creator/Coordenação! 👥'
-            ].join('\n'))
-            .setThumbnail(interaction.guild.iconURL({ dynamic: true }))
-            .setImage('https://media.discordapp.net/attachments/1362477839944777889/1380979949816643654/standard_2r.gif')
-            .setColor('#00cc99')
-            .setFooter({ text: 'SantaCreators • Organização Oficial' })
-        ]
+      await sendBotDmLogged({
+        client,
+
+        target:
+          membro,
+
+        guild:
+          interaction.guild,
+
+        source:
+          "pedirset.js • Set aprovado",
+
+        payload: {
+          embeds: [
+            new EmbedBuilder()
+              .setTitle('🎉 SET APROVADO COM SUCESSO! 🎉')
+              .setDescription([
+                'Parabéns! Seu set na **SantaCreators** foi oficialmente **aprovado** ✅',
+                '',
+                'Agora, **vá até o ticket onde fez sua entrevista** e diga quando poderá fazer a **contratação in game**.',
+                '',
+                'Se tiver dúvidas, fale com a Equipe Creator/Coordenação! 👥'
+              ].join('\n'))
+              .setThumbnail(
+                interaction.guild.iconURL({
+                  dynamic: true
+                })
+              )
+              .setImage(
+                'https://media.discordapp.net/attachments/1362477839944777889/1380979949816643654/standard_2r.gif'
+              )
+              .setColor(
+                '#00cc99'
+              )
+              .setFooter({
+                text:
+                  'SantaCreators • Organização Oficial'
+              })
+          ]
+        }
       }).catch(() => {});
 
       const canalEquipe = await resolveLogChannel(client, CANAL_AVISO_EQUIPE);

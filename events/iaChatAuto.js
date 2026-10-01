@@ -16,6 +16,10 @@ import {
 
 import { GoogleGenAI } from "@google/genai";
 
+import {
+  dashOn
+} from "../utils/dashHub.js";
+
 // =====================================================
 // IA CHAT AUTO PROFISSIONAL — SANTACREATORS
 // =====================================================
@@ -41,6 +45,170 @@ const AI_CHANNEL_ID = "1506520202576400404";
 const AI_REPLY_ONLY_CHANNEL_ID = "1381597720007151698";
 
 const AI_MEMORY_LOG_CHANNEL_ID = "1506786373687054396";
+// =====================================================
+// LOGS SEPARADOS DA IA
+// =====================================================
+
+const AI_LOG_CHANNELS = {
+  DEFAULT:
+    "1506786373687054396",
+
+  // Tickets de entrevista
+  ENTREVISTA:
+    "1554974714215006269",
+
+  // Tickets de suporte
+  SUPORTE:
+    "1554974670808416306",
+
+  // Conversas de IA no PV
+  DM_AI:
+    "1554974368222806026",
+
+  // Tickets de roupas
+  ROUPAS:
+    "1554974819580117024",
+
+  // Mensagens automáticas/padrão do bot
+  BOT_MESSAGES:
+    "1554974969648382083",
+
+  // Chat Creators
+  CHAT_CREATORS:
+    "1554974415975088138",
+
+  // Tickets Designer
+  DESIGNER:
+    "1554974783677141106",
+};
+
+const AI_LOG_CATEGORY_ROUTE =
+  new Map([
+    [
+      "1359244725781266492",
+      AI_LOG_CHANNELS.ENTREVISTA,
+    ],
+
+    [
+      "1359245003523756136",
+      AI_LOG_CHANNELS.SUPORTE,
+    ],
+
+    [
+      "1352706815594598420",
+      AI_LOG_CHANNELS.ROUPAS,
+    ],
+
+    [
+      "1404568518179029142",
+      AI_LOG_CHANNELS.DESIGNER,
+    ],
+  ]);
+
+const AI_LOG_EXCLUDED_DESTINATION_IDS =
+  new Set(
+    Object.values(
+      AI_LOG_CHANNELS
+    )
+  );
+
+function resolveAiConversationLogChannelId(
+  message
+) {
+  if (!message) {
+    return AI_LOG_CHANNELS.DEFAULT;
+  }
+
+  // Nunca arquiva uma log dentro de outra log.
+  if (
+    AI_LOG_EXCLUDED_DESTINATION_IDS.has(
+      String(
+        message.channelId ||
+        ""
+      )
+    )
+  ) {
+    return null;
+  }
+
+  // =====================================================
+  // PV
+  // =====================================================
+
+  if (
+    message.channel?.type ===
+    ChannelType.DM
+  ) {
+    return AI_LOG_CHANNELS.DM_AI;
+  }
+
+  // =====================================================
+  // CHAT CREATORS
+  // =====================================================
+
+  if (
+    String(
+      message.channelId
+    ) ===
+    "1381597720007151698"
+  ) {
+    return AI_LOG_CHANNELS.CHAT_CREATORS;
+  }
+
+  // =====================================================
+  // CATEGORIA DO TICKET
+  // =====================================================
+
+  const parentId =
+    String(
+      message.channel?.parentId ||
+      ""
+    );
+
+  if (
+    AI_LOG_CATEGORY_ROUTE.has(
+      parentId
+    )
+  ) {
+    return AI_LOG_CATEGORY_ROUTE.get(
+      parentId
+    );
+  }
+
+  return AI_LOG_CHANNELS.DEFAULT;
+}
+
+async function resolveAiConversationLogChannel(
+  client,
+  message
+) {
+  const channelId =
+    resolveAiConversationLogChannelId(
+      message
+    );
+
+  if (!channelId) {
+    return null;
+  }
+
+  const channel =
+    client.channels.cache.get(
+      channelId
+    ) ||
+    await client.channels
+      .fetch(
+        channelId
+      )
+      .catch(() => null);
+
+  if (
+    !channel?.isTextBased?.()
+  ) {
+    return null;
+  }
+
+  return channel;
+}
 
 // =====================================================
 // IDENTIDADE INSTITUCIONAL — SANTACREATORS
@@ -12750,31 +12918,52 @@ async function scanPersonHistoryAcrossServer(
   guild,
   personResolution,
   {
-    maxChannels = 40,
+    maxChannels = 120,
     messagesPerChannel = 100,
-    maxResults = 40,
+    maxResults = 120,
     sinceMs = 0,
     untilMs = Number.POSITIVE_INFINITY,
-    maxPagesPerChannel = 1,
+    maxPagesPerChannel = 4,
   } = {}
 ) {
   if (!guild) {
     return {
-      label: "HISTÓRICO COMPLEMENTAR NO SERVIDOR",
-      accessible: false,
-      matches: [],
-      scannedChannels: 0,
+      label:
+        "HISTÓRICO COMPLEMENTAR NO SERVIDOR",
+
+      accessible:
+        false,
+
+      matches:
+        [],
+
+      scannedChannels:
+        0,
+
+      scannedMessages:
+        0,
     };
   }
 
-  const me = guild.members.me;
+  const me =
+    guild.members.me;
 
   if (!me) {
     return {
-      label: "HISTÓRICO COMPLEMENTAR NO SERVIDOR",
-      accessible: false,
-      matches: [],
-      scannedChannels: 0,
+      label:
+        "HISTÓRICO COMPLEMENTAR NO SERVIDOR",
+
+      accessible:
+        false,
+
+      matches:
+        [],
+
+      scannedChannels:
+        0,
+
+      scannedMessages:
+        0,
     };
   }
 
@@ -12784,7 +12973,36 @@ async function scanPersonHistoryAcrossServer(
     );
 
   const userId =
-    personResolution?.userId || null;
+    personResolution?.userId ||
+    null;
+
+  const normalizedSinceMs =
+    Math.max(
+      0,
+      Number(
+        sinceMs ||
+        0
+      )
+    );
+
+  const normalizedUntilMs =
+    Number.isFinite(
+      Number(
+        untilMs
+      )
+    )
+      ? Number(
+          untilMs
+        )
+      : Number.POSITIVE_INFINITY;
+
+  // =====================================================
+  // CANAIS PRIORITÁRIOS
+  // =====================================================
+  //
+  // Entram primeiro na varredura, mas o restante do
+  // Discord acessível também é considerado.
+  // =====================================================
 
   const priorityChannelIds =
     new Set([
@@ -12793,215 +13011,456 @@ async function scanPersonHistoryAcrossServer(
       AI_CREATOR_EVOLUTION_CHANNEL_ID,
     ]);
 
+  const accessibleChannels =
+    [
+      ...guild.channels.cache.values(),
+    ]
+      .filter(
+        channel => {
+          if (
+            !channel ||
+            !channel.isTextBased?.() ||
+            channel.isThread?.()
+          ) {
+            return false;
+          }
+
+          const permissions =
+            channel.permissionsFor(
+              me
+            );
+
+          if (
+            !permissions?.has(
+              PermissionsBitField
+                .Flags
+                .ViewChannel
+            ) ||
+            !permissions?.has(
+              PermissionsBitField
+                .Flags
+                .ReadMessageHistory
+            )
+          ) {
+            return false;
+          }
+
+          return true;
+        }
+      )
+      .sort(
+        (a, b) => {
+          const aPriority =
+            priorityChannelIds.has(
+              a.id
+            )
+              ? 1
+              : 0;
+
+          const bPriority =
+            priorityChannelIds.has(
+              b.id
+            )
+              ? 1
+              : 0;
+
+          if (
+            bPriority !==
+            aPriority
+          ) {
+            return (
+              bPriority -
+              aPriority
+            );
+          }
+
+          return (
+            Number(
+              b.rawPosition ||
+              0
+            ) -
+            Number(
+              a.rawPosition ||
+              0
+            )
+          );
+        }
+      );
+
   const channels =
-    [...guild.channels.cache.values()]
-      .filter((channel) => {
-        if (
-          !channel ||
-          !channel.isTextBased?.() ||
-          channel.isThread?.()
-        ) {
-          return false;
-        }
-
-        const permissions =
-          channel.permissionsFor(me);
-
-        if (
-          !permissions?.has(
-            PermissionsBitField.Flags.ViewChannel
-          ) ||
-          !permissions?.has(
-            PermissionsBitField.Flags.ReadMessageHistory
+    Number.isFinite(
+      Number(
+        maxChannels
+      )
+    )
+      ? accessibleChannels.slice(
+          0,
+          Math.max(
+            1,
+            Number(
+              maxChannels
+            )
           )
-        ) {
-          return false;
-        }
+        )
+      : accessibleChannels;
 
-        return true;
-      })
-      .sort((a, b) => {
-        const aPriority =
-          priorityChannelIds.has(a.id)
-            ? 1
-            : 0;
+  const matches =
+    [];
 
-        const bPriority =
-          priorityChannelIds.has(b.id)
-            ? 1
-            : 0;
+  let scannedChannels =
+    0;
 
-        if (bPriority !== aPriority) {
-          return bPriority - aPriority;
-        }
+  let scannedMessages =
+    0;
 
-        return (
-          Number(b.rawPosition || 0) -
-          Number(a.rawPosition || 0)
-        );
-      })
-      .slice(0, maxChannels);
+  // =====================================================
+  // VARREDURA POR CANAL
+  // =====================================================
 
-  const matches = [];
-
-  let scannedChannels = 0;
-
-  for (const channel of channels) {
+  for (
+    const channel
+    of channels
+  ) {
     if (
-      matches.length >= maxResults
+      matches.length >=
+      maxResults
     ) {
       break;
     }
 
-    const messages =
-      await channel.messages
-        .fetch({
-          limit: Math.min(
-            messagesPerChannel,
+    let before =
+      null;
+
+    let page =
+      0;
+
+    let channelHadMessages =
+      false;
+
+    while (
+      page <
+        Math.max(
+          1,
+          Number(
+            maxPagesPerChannel ||
+            1
+          )
+        ) &&
+      matches.length <
+        maxResults
+    ) {
+      const fetchOptions = {
+        limit:
+          Math.min(
+            Math.max(
+              1,
+              Number(
+                messagesPerChannel ||
+                100
+              )
+            ),
             100
           ),
-        })
-        .catch(() => null);
+      };
 
-    if (!messages?.size) {
-      continue;
-    }
-
-    scannedChannels += 1;
-
-    for (
-      const msg of messages.values()
-    ) {
-      const parts = [];
-
-      if (msg.content) {
-        parts.push(
-          cleanText(msg.content)
-        );
+      if (before) {
+        fetchOptions.before =
+          before;
       }
 
-      for (
-        const embed of
-          msg.embeds || []
-      ) {
-        const embedText =
-          formatEmbedForAI(
-            embed.data || embed
+      const messages =
+        await channel.messages
+          .fetch(
+            fetchOptions
+          )
+          .catch(
+            () => null
           );
 
-        if (embedText) {
-          parts.push(embedText);
-        }
-      }
-
-      for (
-        const attachment
-        of msg.attachments?.values?.() ||
-        []
-      ) {
-        parts.push(
-          [
-            "ANEXO DA MENSAGEM:",
-            `nome=${attachment?.name || "arquivo"}`,
-            `tipo=${attachment?.contentType || "desconhecido"}`,
-            `tamanho=${Number(attachment?.size || 0)}`,
-            `url=${attachment?.url || ""}`,
-          ].join(" ")
-        );
-      }
-
-      for (
-        const embed
-        of msg.embeds ||
-        []
-      ) {
-        const videoUrl =
-          embed?.video?.proxyURL ||
-          embed?.video?.url ||
-          null;
-
-        if (videoUrl) {
-          parts.push(
-            `VÍDEO INCORPORADO: provedor=${embed?.provider?.name || "desconhecido"} url=${videoUrl}`
-          );
-        }
-      }
-
-      const completeText =
-        parts.join("\n").trim();
-
-      if (!completeText) {
-        continue;
-      }
-
-      const directAuthorMatch =
-        Boolean(
-          userId &&
-          msg.author?.id === userId
-        );
-
-      const referenceMatch =
-        personMessageMatchesTokens(
-          completeText,
-          tokens,
-          userId
-        );
-
       if (
-        !directAuthorMatch &&
-        !referenceMatch
-      ) {
-        continue;
-      }
-
-      let relationType =
-        "REFERÊNCIA À PESSOA";
-
-      if (directAuthorMatch) {
-        relationType =
-          "MENSAGEM DA PRÓPRIA PESSOA";
-      } else if (
-        userId &&
-        (
-          String(msg.content || "")
-            .includes(`<@${userId}>`) ||
-          String(msg.content || "")
-            .includes(`<@!${userId}>`)
-        )
-      ) {
-        relationType =
-          "MENÇÃO DIRETA À PESSOA";
-      }
-
-      matches.push({
-        messageId: msg.id,
-        channelId: channel.id,
-        channelName:
-          channel.name ||
-          "canal-sem-nome",
-        authorId:
-          msg.author?.id || null,
-        authorName:
-          msg.author?.username ||
-          "Desconhecido",
-        createdTimestamp:
-          msg.createdTimestamp,
-        relationType,
-        text:
-          completeText.slice(
-            0,
-            1800
-          ),
-        link:
-          `https://discord.com/channels/${guild.id}/${channel.id}/${msg.id}`,
-      });
-
-      if (
-        matches.length >=
-        maxResults
+        !messages?.size
       ) {
         break;
       }
+
+      if (
+        !channelHadMessages
+      ) {
+        channelHadMessages =
+          true;
+
+        scannedChannels +=
+          1;
+      }
+
+      scannedMessages +=
+        messages.size;
+
+      const orderedMessages =
+        [
+          ...messages.values(),
+        ]
+          .sort(
+            (a, b) =>
+              b.createdTimestamp -
+              a.createdTimestamp
+          );
+
+      let reachedBeforeWindow =
+        false;
+
+      for (
+        const msg
+        of orderedMessages
+      ) {
+        const messageTimestamp =
+          Number(
+            msg.createdTimestamp ||
+            0
+          );
+
+        if (
+          messageTimestamp >
+          normalizedUntilMs
+        ) {
+          continue;
+        }
+
+        if (
+          messageTimestamp <
+          normalizedSinceMs
+        ) {
+          reachedBeforeWindow =
+            true;
+
+          continue;
+        }
+
+        const parts =
+          [];
+
+        if (
+          msg.content
+        ) {
+          parts.push(
+            cleanText(
+              msg.content
+            )
+          );
+        }
+
+        for (
+          const embed
+          of msg.embeds ||
+          []
+        ) {
+          const embedText =
+            formatEmbedForAI(
+              embed.data ||
+              embed
+            );
+
+          if (
+            embedText
+          ) {
+            parts.push(
+              embedText
+            );
+          }
+        }
+
+        for (
+          const attachment
+          of msg.attachments
+            ?.values?.() ||
+          []
+        ) {
+          parts.push(
+            [
+              "ANEXO DA MENSAGEM:",
+              `nome=${attachment?.name || "arquivo"}`,
+              `tipo=${attachment?.contentType || "desconhecido"}`,
+              `tamanho=${Number(attachment?.size || 0)}`,
+              `url=${attachment?.url || ""}`,
+            ].join(
+              " "
+            )
+          );
+        }
+
+        for (
+          const embed
+          of msg.embeds ||
+          []
+        ) {
+          const videoUrl =
+            embed?.video
+              ?.proxyURL ||
+            embed?.video
+              ?.url ||
+            null;
+
+          if (
+            videoUrl
+          ) {
+            parts.push(
+              `VÍDEO INCORPORADO: provedor=${embed?.provider?.name || "desconhecido"} url=${videoUrl}`
+            );
+          }
+        }
+
+        const completeText =
+          parts
+            .join(
+              "\n"
+            )
+            .trim();
+
+        if (
+          !completeText
+        ) {
+          continue;
+        }
+
+        const directAuthorMatch =
+          Boolean(
+            userId &&
+            msg.author?.id ===
+              userId
+          );
+
+        const referenceMatch =
+          personMessageMatchesTokens(
+            completeText,
+            tokens,
+            userId
+          );
+
+        if (
+          !directAuthorMatch &&
+          !referenceMatch
+        ) {
+          continue;
+        }
+
+        let relationType =
+          "REFERÊNCIA À PESSOA";
+
+        if (
+          directAuthorMatch
+        ) {
+          relationType =
+            "MENSAGEM DA PRÓPRIA PESSOA";
+        } else if (
+          userId &&
+          (
+            String(
+              msg.content ||
+              ""
+            ).includes(
+              `<@${userId}>`
+            ) ||
+            String(
+              msg.content ||
+              ""
+            ).includes(
+              `<@!${userId}>`
+            )
+          )
+        ) {
+          relationType =
+            "MENÇÃO DIRETA À PESSOA";
+        }
+
+        matches.push({
+          messageId:
+            msg.id,
+
+          channelId:
+            channel.id,
+
+          channelName:
+            channel.name ||
+            "canal-sem-nome",
+
+          authorId:
+            msg.author?.id ||
+            null,
+
+          authorName:
+            msg.member?.displayName ||
+            msg.author?.globalName ||
+            msg.author?.username ||
+            "Desconhecido",
+
+          createdTimestamp:
+            messageTimestamp,
+
+          relationType,
+
+          text:
+            completeText.slice(
+              0,
+              1800
+            ),
+
+          link:
+            `https://discord.com/channels/${guild.id}/${channel.id}/${msg.id}`,
+        });
+
+        if (
+          matches.length >=
+          maxResults
+        ) {
+          break;
+        }
+      }
+
+      const oldestMessage =
+        orderedMessages
+          .slice()
+          .sort(
+            (a, b) =>
+              a.createdTimestamp -
+              b.createdTimestamp
+          )[0];
+
+      if (
+        !oldestMessage
+      ) {
+        break;
+      }
+
+      // Se a página já ultrapassou o início do período,
+      // não precisamos continuar cavando o passado.
+      if (
+        reachedBeforeWindow ||
+        (
+          normalizedSinceMs >
+            0 &&
+          Number(
+            oldestMessage
+              .createdTimestamp ||
+            0
+          ) <=
+            normalizedSinceMs
+        )
+      ) {
+        break;
+      }
+
+      if (
+        messages.size <
+        fetchOptions.limit
+      ) {
+        break;
+      }
+
+      before =
+        oldestMessage.id;
+
+      page +=
+        1;
     }
   }
 
@@ -13014,11 +13473,24 @@ async function scanPersonHistoryAcrossServer(
   return {
     label:
       "HISTÓRICO COMPLEMENTAR NO SERVIDOR",
-    accessible: true,
+
+    accessible:
+      true,
+
     matches,
+
     scannedChannels,
+
+    scannedMessages,
+
+    configuredChannelLimit:
+      maxChannels,
+
+    configuredPageLimit:
+      maxPagesPerChannel,
   };
 }
+
 
 function formatPersonGlobalHistoryBlock(
   result
@@ -13087,8 +13559,9 @@ export async function getPersonDiscordEvidenceForFeedback({
   userId,
   sinceMs = 0,
   untilMs = Number.POSITIVE_INFINITY,
-  maxChannels = 40,
-  maxResults = 60,
+  maxChannels = 120,
+  maxResults = 120,
+  maxPagesPerChannel = 4,
 } = {}) {
   const normalizedGuildId =
     String(guildId || "");
@@ -13159,7 +13632,37 @@ export async function getPersonDiscordEvidenceForFeedback({
   };
 
   const cacheKey =
-    `${normalizedGuildId}:${normalizedUserId}`;
+    [
+      normalizedGuildId,
+      normalizedUserId,
+      Number(
+        sinceMs ||
+        0
+      ),
+      Number.isFinite(
+        Number(
+          untilMs
+        )
+      )
+        ? Number(
+            untilMs
+          )
+        : "inf",
+      Number(
+        maxChannels ||
+        0
+      ),
+      Number(
+        maxResults ||
+        0
+      ),
+      Number(
+        maxPagesPerChannel ||
+        0
+      ),
+    ].join(
+      ":"
+    );
 
   const cached =
     AI_PERSON_FEEDBACK_SERVER_CACHE.get(
@@ -13183,9 +13686,24 @@ export async function getPersonDiscordEvidenceForFeedback({
         personResolution,
         {
           maxChannels,
+
           messagesPerChannel:
             100,
+
           maxResults,
+
+          sinceMs:
+            Number(
+              sinceMs ||
+              0
+            ),
+
+          untilMs:
+            Number(
+              untilMs
+            ),
+
+          maxPagesPerChannel,
         }
       );
 
@@ -13593,9 +14111,17 @@ async function buildPersonIntelligenceContext(
         guild,
         personResolution,
         {
-          maxChannels: 40,
-          messagesPerChannel: 100,
-          maxResults: 40,
+          maxChannels:
+            120,
+
+          messagesPerChannel:
+            100,
+
+          maxResults:
+            120,
+
+          maxPagesPerChannel:
+            4,
         }
       ),
     ]);
@@ -14176,6 +14702,9 @@ async function buildPersonIntelligenceContext(
     "- Conversas do chat servem como contexto e histórico, não como prova automática de desempenho.",
     "- O Controle GI indica estado de acompanhamento, área, responsável e observações registradas; sozinho não prova desempenho bom ou ruim.",
     "- Quando existir Evolução estruturada atual, use os tópicos/fase atuais como fonte mais específica do processo de evolução do que um canal histórico genérico.",
+    "- Em perguntas sobre desempenho atual, desenvolvimento ou o que a pessoa precisa melhorar, priorize acontecimentos da semana atual e informações recentes.",
+    "- Informações antigas devem ser usadas principalmente para comparação, evolução, reincidência ou contexto realmente relevante. Não fique repetindo toda semana um problema antigo que não voltou a aparecer.",
+    "- Quando um ponto antigo tiver sido corrigido ou não possuir evidência recente de repetição, trate-o como histórico e não como problema atual.",
     "- Resp. Influ significa Resp. Influência e nunca deve ser interpretado como Responsável por Influenciadores.",
   ]
     .join("\n")
@@ -20290,6 +20819,7 @@ async function buildStandaloneMultimodalContents(
 export async function generateSantaCreatorsStandaloneText({
   prompt,
   imageAttachments = [],
+  mediaMessage = null,
   maxOutputTokens = 900,
   temperature = 0.75,
   responseMimeType = "",
@@ -20322,10 +20852,15 @@ export async function generateSantaCreatorsStandaloneText({
   }
 
   const standaloneContents =
-    await buildStandaloneMultimodalContents(
-      finalPrompt,
-      imageAttachments
-    );
+    mediaMessage
+      ? await scBuildMediaContents(
+          mediaMessage,
+          finalPrompt
+        )
+      : await buildStandaloneMultimodalContents(
+          finalPrompt,
+          imageAttachments
+        );
 
   let lastError =
     null;
@@ -21620,6 +22155,59 @@ async function resolveAiTicketAssistOpenerId(
     !message?.channel
   ) {
     return null;
+  }
+
+  // =====================================================
+  // PRIORIDADE ABSOLUTA NOS TICKETS PESSOAIS
+  // =====================================================
+  //
+  // A API oficial do ticket pessoal já sabe resolver:
+  //
+  // - quem abriu originalmente;
+  // - troca de Discord;
+  // - usuários adicionados ao ticket;
+  // - usuário que possui Controle GI;
+  // - ticket vinculado ao membro atual.
+  //
+  // Portanto, dentro da categoria pessoal, ela é mais
+  // confiável do que simplesmente confiar no aberto_por
+  // antigo gravado no topic.
+  // =====================================================
+
+  if (
+    isAiPersonalTicketChannel(
+      message.channel
+    )
+  ) {
+    const personalTicketApi =
+      globalThis.SC_PERSONAL_TICKET_API;
+
+    if (
+      personalTicketApi &&
+      typeof personalTicketApi.resolveOwnerId ===
+        "function"
+    ) {
+      try {
+        const resolvedOwnerId =
+          await personalTicketApi.resolveOwnerId(
+            message.channel
+          );
+
+        if (
+          resolvedOwnerId
+        ) {
+          return String(
+            resolvedOwnerId
+          );
+        }
+      } catch (error) {
+        console.warn(
+          `[IA PERSONAL TICKET] Não consegui consultar a identidade oficial do ticket ${message.channelId}:`,
+          error?.message ||
+          error
+        );
+      }
+    }
   }
 
   // =====================================================
@@ -24963,6 +25551,156 @@ async function handleAiTicketAssistMessage(
       !isOpener &&
       !personalExplicitAiCall
     ) {
+      // =====================================================
+      // OBSERVAÇÃO SILENCIOSA DE EVIDÊNCIAS
+      // =====================================================
+      //
+      // Outra pessoa escreveu no ticket pessoal.
+      //
+      // Pela regra oficial, a IA NÃO deve responder
+      // automaticamente a ela.
+      //
+      // Entretanto, se houver print, vídeo ou outro conteúdo
+      // multimodal, a IA pode analisar SILENCIOSAMENTE e
+      // registrar a conclusão no histórico da pessoa.
+      //
+      // Assim:
+      //
+      // - não interrompe responsáveis;
+      // - não responde sem ser chamada;
+      // - não perde evidências;
+      // - o Forms e o feedback semanal conseguem usar
+      //   posteriormente o contexto real da mídia.
+      // =====================================================
+
+      const hasDirectMedia =
+        [
+          ...(
+            message.attachments
+              ?.values?.() ||
+            []
+          ),
+        ].some(
+          attachment => {
+            const contentType =
+              String(
+                attachment?.contentType ||
+                ""
+              )
+                .toLowerCase();
+
+            return (
+              contentType.startsWith(
+                "image/"
+              ) ||
+              contentType.startsWith(
+                "video/"
+              )
+            );
+          }
+        );
+
+      const hasEmbeddedMedia =
+        (
+          message.embeds ||
+          []
+        ).some(
+          embed =>
+            Boolean(
+              embed?.video?.proxyURL ||
+              embed?.video?.url ||
+              embed?.image?.proxyURL ||
+              embed?.image?.url ||
+              embed?.thumbnail?.proxyURL ||
+              embed?.thumbnail?.url
+            )
+        );
+
+      if (
+        hasDirectMedia ||
+        hasEmbeddedMedia
+      ) {
+        try {
+          const silentAnalysis =
+            await runAiBackgroundTask(
+              message,
+              async () => {
+                return await generateIAResponse({
+                  message,
+                  client,
+                });
+              }
+            );
+
+          const silentText =
+            isAiGeneratedImageResponse(
+              silentAnalysis
+            )
+              ? String(
+                  silentAnalysis?.text ||
+                  ""
+                )
+              : String(
+                  silentAnalysis ||
+                  ""
+                );
+
+          const normalizedSilentText =
+            limitDiscordText(
+              fixBrokenDiscordMentions(
+                silentText
+              )
+            );
+
+          if (
+            normalizedSilentText
+          ) {
+            await savePersonalTicketHistoryRecord({
+              message,
+
+              openerId,
+
+              type:
+                "evidence_analysis",
+
+              relation:
+                "ia_santacreators",
+
+              evidenceKind:
+                "analise_silenciosa_de_midia",
+
+              content:
+                String(
+                  message.content ||
+                  ""
+                ),
+
+              summary:
+                `Análise silenciosa da evidência enviada por participante/responsável no ticket pessoal: ${normalizedSilentText.replace(/\s+/g, " ").slice(0, 2800)}`,
+
+              messageId:
+                `${message.id}:silent-media-analysis`,
+
+              authorId:
+                client.user?.id ||
+                null,
+
+              authorName:
+                client.user?.username ||
+                "SantaCreators IA",
+            });
+          }
+        } catch (error) {
+          console.warn(
+            `[IA PERSONAL TICKET] Não foi possível analisar silenciosamente a mídia da mensagem ${message.id}:`,
+            error?.message ||
+            error
+          );
+        }
+      }
+
+      // Continua respeitando a regra:
+      // quem NÃO é dono não recebe resposta automática.
       return false;
     }
   } else if (
@@ -25209,6 +25947,82 @@ if (personalTicketMode) {
       client.user?.username ||
       "SantaCreators IA",
   });
+
+  // =====================================================
+  // ANÁLISE HISTÓRICA DE PRINT / VÍDEO / EVIDÊNCIA
+  // =====================================================
+  //
+  // A mídia já é enviada para a IA na mensagem atual.
+  //
+  // Agora também registramos que a resposta produzida
+  // correspondeu à análise daquela evidência.
+  //
+  // Isso permite que feedbacks futuros entendam o contexto
+  // sem depender de reabrir um link antigo ou expirado.
+  // =====================================================
+
+  const hasDirectAttachment =
+    Number(
+      message.attachments?.size ||
+      0
+    ) >
+    0;
+
+  const hasEmbeddedMedia =
+    (
+      message.embeds ||
+      []
+    ).some(
+      embed =>
+        Boolean(
+          embed?.video?.proxyURL ||
+          embed?.video?.url ||
+          embed?.image?.proxyURL ||
+          embed?.image?.url ||
+          embed?.thumbnail?.proxyURL ||
+          embed?.thumbnail?.url
+        )
+    );
+
+  if (
+    hasDirectAttachment ||
+    hasEmbeddedMedia
+  ) {
+    await savePersonalTicketHistoryRecord({
+      message,
+
+      openerId,
+
+      type:
+        "evidence_analysis",
+
+      relation:
+        "ia_santacreators",
+
+      evidenceKind:
+        "analise_de_midia",
+
+      content:
+        String(
+          message.content ||
+          ""
+        ),
+
+      summary:
+        `Análise contextual da mídia/evidência enviada na mensagem: ${String(finalText || "").replace(/\s+/g, " ").slice(0, 2800)}`,
+
+      messageId:
+        `${message.id}:media-analysis`,
+
+      authorId:
+        client.user?.id ||
+        null,
+
+      authorName:
+        client.user?.username ||
+        "SantaCreators IA",
+    });
+  }
 }
 
 saveInstitutionalTeaching(
@@ -28234,19 +29048,426 @@ async function scArchiveMessageV1(
   }
 }
 
+async function sendReadableAiConversationLog(
+  client,
+  message,
+  aiResponse
+) {
+  try {
+    const logChannel =
+      await resolveAiConversationLogChannel(
+        client,
+        message
+      );
+
+    if (
+      !logChannel
+    ) {
+      return;
+    }
+
+    // O canal padrão já recebe o archive profissional.
+    // Evitamos duplicar visualmente a mesma informação nele.
+    if (
+      String(
+        logChannel.id
+      ) ===
+        String(
+          AI_MEMORY_LOG_CHANNEL_ID
+        )
+    ) {
+      return;
+    }
+
+    const authorId =
+      String(
+        message.author?.id ||
+        ""
+      );
+
+    const displayName =
+      message.member?.displayName ||
+      message.author?.globalName ||
+      message.author?.username ||
+      "Não identificado";
+
+    const username =
+      message.author?.username ||
+      "não_identificado";
+
+    const guildName =
+      message.guild?.name ||
+      "Mensagem privada";
+
+    const channelName =
+      message.channel?.name ||
+      "DM";
+
+    const createdAt =
+      Number(
+        message.createdTimestamp ||
+        Date.now()
+      );
+
+    const profileUrl =
+      authorId
+        ? `https://discord.com/users/${authorId}`
+        : null;
+
+    const messageUrl =
+      message.guildId
+        ? (
+          message.url ||
+          `https://discord.com/channels/${message.guildId}/${message.channelId}/${message.id}`
+        )
+        : null;
+
+    const attachments =
+      [
+        ...(
+          message.attachments
+            ?.values?.() ||
+          []
+        ),
+      ];
+
+    const mediaLines =
+      attachments
+        .map(
+          attachment =>
+            `• ${attachment.name || "arquivo"} | ${attachment.contentType || "tipo desconhecido"} | ${Number(attachment.size || 0)} bytes\n${attachment.url || "sem link"}`
+        );
+
+    for (
+      const embed
+      of message.embeds ||
+      []
+    ) {
+      const mediaUrl =
+        embed?.video?.proxyURL ||
+        embed?.video?.url ||
+        embed?.image?.proxyURL ||
+        embed?.image?.url ||
+        null;
+
+      if (
+        mediaUrl
+      ) {
+        mediaLines.push(
+          `• Mídia incorporada | ${embed?.provider?.name || "Embed"}\n${mediaUrl}`
+        );
+      }
+    }
+
+    const embed =
+      new EmbedBuilder()
+        .setColor(
+          0x9b59ff
+        )
+        .setAuthor({
+          name:
+            `${displayName} (@${username})`,
+
+          iconURL:
+            message.author
+              ?.displayAvatarURL?.({
+                size:
+                  256,
+              }) ||
+            undefined,
+
+          url:
+            profileUrl ||
+            undefined,
+        })
+        .setTitle(
+          "🧠 Interação com a IA"
+        )
+        .addFields(
+          {
+            name:
+              "👤 Usuário",
+
+            value:
+              authorId
+                ? `<@${authorId}>\nID: \`${authorId}\`\nUsername: \`${username}\`\nNome no Discord: \`${displayName}\``
+                : "Não identificado",
+
+            inline:
+              false,
+          },
+
+          {
+            name:
+              "📍 Origem",
+
+            value:
+              [
+                `Servidor: **${guildName}**`,
+                `Canal: ${message.guildId ? `<#${message.channelId}>` : `DM \`${channelName}\``}`,
+                `Canal ID: \`${message.channelId}\``,
+                `Mensagem ID: \`${message.id}\``,
+                messageUrl
+                  ? `[Abrir mensagem](${messageUrl})`
+                  : "Mensagem privada",
+              ].join(
+                "\n"
+              ),
+
+            inline:
+              false,
+          },
+
+          {
+            name:
+              "💬 Mensagem recebida",
+
+            value:
+              String(
+                message.content ||
+                "Sem conteúdo textual."
+              )
+                .slice(
+                  0,
+                  1024
+                ),
+
+            inline:
+              false,
+          },
+
+          {
+            name:
+              "🤖 Resposta da IA",
+
+            value:
+              String(
+                aiResponse ||
+                "Sem resposta textual."
+              )
+                .slice(
+                  0,
+                  1024
+                ),
+
+            inline:
+              false,
+          }
+        )
+        .setTimestamp(
+          createdAt
+        );
+
+    if (
+      mediaLines.length
+    ) {
+      embed.addFields({
+        name:
+          "📎 Arquivos / mídias",
+
+        value:
+          mediaLines
+            .join(
+              "\n\n"
+            )
+            .slice(
+              0,
+              1024
+            ),
+
+        inline:
+          false,
+      });
+    }
+
+    // ===============================================
+    // TENTA PRESERVAR A MÍDIA REAL
+    // ===============================================
+
+    if (
+      (
+        message.attachments?.size ||
+        message.messageSnapshots?.size
+      ) &&
+      typeof message.forward ===
+        "function"
+    ) {
+      await message
+        .forward(
+          logChannel
+        )
+        .catch(
+          () => null
+        );
+    }
+
+    const fullRecord = {
+      loggedAt:
+        new Date().toISOString(),
+
+      createdAt:
+        new Date(
+          createdAt
+        ).toISOString(),
+
+      user: {
+        id:
+          authorId,
+
+        mention:
+          authorId
+            ? `<@${authorId}>`
+            : null,
+
+        username,
+
+        displayName,
+
+        profileUrl,
+
+        avatar:
+          message.author
+            ?.displayAvatarURL?.({
+              size:
+                512,
+            }) ||
+          null,
+      },
+
+      guild: {
+        id:
+          message.guildId ||
+          null,
+
+        name:
+          guildName,
+      },
+
+      channel: {
+        id:
+          message.channelId,
+
+        name:
+          channelName,
+      },
+
+      message: {
+        id:
+          message.id,
+
+        url:
+          messageUrl,
+
+        content:
+          message.content ||
+          "",
+
+        referencedMessageId:
+          message.reference
+            ?.messageId ||
+          null,
+      },
+
+      attachments:
+        attachments.map(
+          attachment => ({
+            id:
+              attachment.id,
+
+            name:
+              attachment.name,
+
+            url:
+              attachment.url,
+
+            size:
+              attachment.size,
+
+            contentType:
+              attachment.contentType,
+          })
+        ),
+
+      aiResponse:
+        String(
+          aiResponse ||
+          ""
+        ),
+    };
+
+    await logChannel.send({
+      embeds: [
+        embed,
+      ],
+
+      files: [
+        new AttachmentBuilder(
+          Buffer.from(
+            JSON.stringify(
+              fullRecord,
+              null,
+              2
+            ),
+            "utf8"
+          ),
+          {
+            name:
+              `ia-log-${message.id}.json`,
+          }
+        ),
+      ],
+
+      allowedMentions: {
+        parse: [],
+      },
+    });
+
+  } catch (error) {
+    console.error(
+      "[IA READABLE LOG] Falha ao enviar log separado:",
+      error?.message ||
+      error
+    );
+  }
+}
+
 async function sendConversationMemoryLog(
   client,
   message,
   aiResponse
 ) {
   try {
-    await scArchiveMessage(client, message);
+    // ===============================================
+    // MEMÓRIA CENTRAL
+    // ===============================================
+    //
+    // NÃO removemos.
+    //
+    // Continua sendo responsável pelo índice/snapshot
+    // persistente da inteligência da IA.
+    // ===============================================
+
+    await scArchiveMessage(
+      client,
+      message
+    );
 
     await scArchiveMessage(
       client,
       message,
       aiResponse
     );
+
+    // ===============================================
+    // LOG VISUAL SEPARADO
+    // ===============================================
+
+    await sendReadableAiConversationLog(
+      client,
+      message,
+      aiResponse
+    );
+
   } catch (error) {
     console.error(
       "[IA ARCHIVE] Registro incompleto:",
@@ -30964,7 +32185,622 @@ function claimAiInboundMessage(message) {
 
   return true;
 }
+// =====================================================
+// FORMS -> ASSISTENTE DO TICKET PESSOAL
+// =====================================================
+//
+// Um comentário feito pela equipe no Forms pode gerar uma
+// conversa natural com o membro no ticket pessoal.
+//
+// A mensagem ao membro:
+// - não revela quem escreveu o comentário;
+// - não copia feedback interno literalmente;
+// - usa contexto do ticket;
+// - usa contexto do Forms;
+// - usa Ranking atual;
+// - usa situação do Controle GI;
+// - pode orientar, aconselhar ou perguntar;
+// - mantém linguagem humana e leve.
+// =====================================================
 
+let AI_FORMS_PERSONAL_BRIDGE_INSTALLED =
+  false;
+
+function installFormsCreatorPersonalTicketBridge(
+  client
+) {
+  if (
+    AI_FORMS_PERSONAL_BRIDGE_INSTALLED
+  ) {
+    return;
+  }
+
+  AI_FORMS_PERSONAL_BRIDGE_INSTALLED =
+    true;
+
+  dashOn(
+    "formscreator:comentario_registrado",
+    async data => {
+      try {
+        const guildId =
+          String(
+            data?.guildId ||
+            ""
+          );
+
+        const userId =
+          String(
+            data?.userId ||
+            ""
+          );
+
+        if (
+          !guildId ||
+          !userId
+        ) {
+          return;
+        }
+
+        const guild =
+          client.guilds.cache.get(
+            guildId
+          ) ||
+          await client.guilds
+            .fetch(
+              guildId
+            )
+            .catch(
+              () => null
+            );
+
+        if (!guild) {
+          return;
+        }
+
+        // ===============================================
+        // LOCALIZA O TICKET PESSOAL OFICIAL
+        // ===============================================
+
+        const personalTicketApi =
+          globalThis.SC_PERSONAL_TICKET_API;
+
+        if (
+          !personalTicketApi ||
+          typeof personalTicketApi.findByUser !==
+            "function"
+        ) {
+          console.warn(
+            `[IA FORMS BRIDGE] API de ticket pessoal indisponível para ${userId}.`
+          );
+
+          return;
+        }
+
+        const ticket =
+          await personalTicketApi
+            .findByUser(
+              guild,
+              userId
+            )
+            .catch(
+              () => null
+            );
+
+        if (
+          !ticket ||
+          String(
+            ticket.parentId ||
+            ""
+          ) !==
+            "1384650670145278033"
+        ) {
+          return;
+        }
+
+        // ===============================================
+        // DADOS ATUAIS DA PESSOA
+        // ===============================================
+
+        const {
+          getFormsCreatorPersonData,
+          getPersonalTicketHistoryForUser,
+          recordPersonalTicketActivity,
+        } =
+          await import(
+            "./formscreator.js"
+          );
+
+        const {
+          getStatsForUser,
+        } =
+          await import(
+            "./scGeralWeeklyRanking.js"
+          );
+
+        const [
+          formsData,
+          rankingStats,
+          member,
+        ] =
+          await Promise.all([
+            getFormsCreatorPersonData(
+              client,
+              userId
+            ).catch(
+              () => null
+            ),
+
+            getStatsForUser(
+              client,
+              userId
+            ).catch(
+              () => null
+            ),
+
+            guild.members
+              .fetch(
+                userId
+              )
+              .catch(
+                () => null
+              ),
+          ]);
+
+        const giControl =
+          globalThis
+            .SC_GI_CONTROL_API
+            ?.getControl?.(
+              guild.id,
+              userId
+            ) ||
+          null;
+
+        const personalHistory =
+          getPersonalTicketHistoryForUser(
+            userId,
+            {
+              limit:
+                25,
+
+              includeAi:
+                true,
+            }
+          );
+
+        // ===============================================
+        // CONTEXTO RECENTE DO PRÓPRIO FORMS
+        // ===============================================
+
+        const formsThread =
+          await client.channels
+            .fetch(
+              String(
+                data.threadId ||
+                ""
+              )
+            )
+            .catch(
+              () => null
+            );
+
+        const formsMessages =
+          formsThread
+            ?.isTextBased?.()
+            ? await formsThread.messages
+                .fetch({
+                  limit:
+                    20,
+                })
+                .catch(
+                  () => null
+                )
+            : null;
+
+        // =====================================================
+        // MENSAGEM ORIGINAL DO COMENTÁRIO
+        // =====================================================
+        //
+        // Se ainda existir, entregamos a própria Message do
+        // Discord para a pipeline multimodal.
+        //
+        // Isso permite analisar:
+        // - imagens;
+        // - vídeos;
+        // - GIFs;
+        // - anexos;
+        // - players de vídeo;
+        // - Medal quando o Discord oferece proxy/CDN.
+        // =====================================================
+
+        const sourceFormsMessage =
+          (
+            data?.messageId &&
+            formsThread?.isTextBased?.()
+          )
+            ? await formsThread.messages
+                .fetch(
+                  String(
+                    data.messageId
+                  )
+                )
+                .catch(
+                  () => null
+                )
+            : null;
+
+        const recentFormsContext =
+          formsMessages?.size
+            ? [
+                ...formsMessages.values(),
+              ]
+                .sort(
+                  (a, b) =>
+                    a.createdTimestamp -
+                    b.createdTimestamp
+                )
+                .filter(
+                  msg =>
+                    !msg.author?.bot
+                )
+                .slice(
+                  -15
+                )
+                .map(
+                  msg =>
+                    `${msg.member?.displayName || msg.author?.globalName || msg.author?.username || "Pessoa"}: ${String(msg.content || "(mensagem com mídia)").replace(/\s+/g, " ").slice(0, 900)}`
+                )
+                .join(
+                  "\n"
+                )
+            : (
+              "Sem histórico textual recente disponível."
+            );
+
+        const personalTicketContext =
+          personalHistory.length
+            ? personalHistory
+                .slice(
+                  -20
+                )
+                .map(
+                  item => {
+                    const relation =
+                      item?.relation ||
+                      "registro";
+
+                    const content =
+                      String(
+                        item?.summary ||
+                        item?.content ||
+                        ""
+                      )
+                        .replace(
+                          /\s+/g,
+                          " "
+                        )
+                        .slice(
+                          0,
+                          900
+                        );
+
+                    return `${relation}: ${content || "(sem texto)"}`;
+                  }
+                )
+                .join(
+                  "\n"
+                )
+            : (
+              "Nenhum histórico recente do ticket pessoal."
+            );
+
+        const roleNames =
+          member?.roles?.cache
+            ? [
+                ...member.roles.cache
+                  .values(),
+              ]
+                .filter(
+                  role =>
+                    role.id !==
+                    guild.id
+                )
+                .map(
+                  role =>
+                    role.name
+                )
+                .slice(
+                  0,
+                  20
+                )
+                .join(
+                  ", "
+                )
+            : (
+              "Não disponível"
+            );
+
+        const rawFeedback =
+          String(
+            data?.content ||
+            ""
+          ).trim();
+
+        const prompt =
+          `
+Você é a assistente da SantaCreators acompanhando individualmente ${member?.displayName || formsData?.nome || userId}.
+
+Um comentário novo foi registrado internamente no acompanhamento dessa pessoa.
+
+COMENTÁRIO NOVO:
+${rawFeedback || "(O comentário foi composto principalmente por mídia/anexo.)"}
+
+CONTEXTO RECENTE DO FORMS:
+${recentFormsContext}
+
+CONTEXTO RECENTE DO TICKET PESSOAL:
+${personalTicketContext}
+
+DADOS ATUAIS:
+Nome: ${member?.displayName || formsData?.nome || userId}
+Área: ${formsData?.area || giControl?.area || "Não informada"}
+Status Forms: ${
+  formsData?.active === true
+    ? "Ativo"
+    : formsData?.active === false
+      ? "Inativo"
+      : "Não confirmado"
+}
+Controle GI: ${
+  giControl
+    ? giControl.paused
+      ? "Existe e está pausado"
+      : "Existe e está ativo"
+    : "Não localizado"
+}
+Pontos atuais da semana: ${Number(rankingStats?.thisWeekPoints || 0)}
+Total histórico localizado: ${Number(rankingStats?.total || 0)}
+Cargos atuais: ${roleNames}
+
+OBJETIVO:
+
+Transforme o comentário novo em uma conversa humana e útil dentro do ticket pessoal.
+
+NÃO escreva relatório.
+
+NÃO diga quem escreveu o comentário.
+
+NÃO diga "fulano falou", "fulano reclamou", "segundo fulano" ou qualquer identificação semelhante.
+
+Quando precisar mencionar origem, diga apenas:
+- "a equipe";
+- "os responsáveis";
+- "foi observado";
+- "apareceu um ponto para a gente conversar".
+
+NÃO copie literalmente um feedback interno sensível.
+
+Se for elogio:
+reconheça naturalmente sem exagerar.
+
+Se for correção:
+explique de boa, contextualize e dê um direcionamento prático.
+
+Se for dúvida ou situação ambígua:
+você pode perguntar para a pessoa como aconteceu.
+
+Se for denúncia, suspeita ou acusação:
+NÃO trate como fato provado.
+Fale como situação registrada que precisa ser entendida.
+
+Não faça julgamento psicológico.
+
+Não humilhe.
+
+Não seja robótica.
+
+Pode usar emojis de forma moderada.
+
+Pode brincar levemente quando o assunto permitir.
+
+Use português natural, próximo e humano.
+
+O texto será enviado diretamente no ticket pessoal e a pessoa será mencionada antes da mensagem.
+
+Faça de 1 a 4 parágrafos.
+`.trim();
+
+        const generated =
+          await generateSantaCreatorsStandaloneText({
+            prompt,
+
+            // Se ainda conseguimos buscar a mensagem original
+            // do Forms, usa a pipeline multimodal completa.
+            //
+            // Isso permite imagem, vídeo e Medal.
+            mediaMessage:
+              sourceFormsMessage,
+
+            // Fallback para imagens caso a mensagem original
+            // já não esteja mais disponível.
+            imageAttachments:
+              sourceFormsMessage
+                ? []
+                : (
+                    Array.isArray(
+                      data?.attachments
+                    )
+                      ? data.attachments.filter(
+                          item =>
+                            String(
+                              item?.contentType ||
+                              ""
+                            )
+                              .toLowerCase()
+                              .startsWith(
+                                "image/"
+                              )
+                        )
+                      : []
+                  ),
+
+            maxOutputTokens:
+              900,
+
+            temperature:
+              0.82,
+
+            label:
+              "Forms -> ticket pessoal",
+          });
+
+        const finalText =
+          limitDiscordText(
+            fixBrokenDiscordMentions(
+              String(
+                generated ||
+                ""
+              )
+            )
+          );
+
+        if (!finalText) {
+          return;
+        }
+
+        const sent =
+          await ticket.send({
+            content:
+              `<@${userId}> ${finalText}`,
+
+            allowedMentions: {
+              users: [
+                userId,
+              ],
+
+              roles: [],
+
+              parse: [],
+            },
+          });
+
+        // ===============================================
+        // REGISTRA O FEEDBACK DO FORMS NO HISTÓRICO
+        // ===============================================
+
+        recordPersonalTicketActivity({
+          userId,
+
+          guildId:
+            guild.id,
+
+          channelId:
+            ticket.id,
+
+          messageId:
+            `forms:${data.messageId}`,
+
+          authorId:
+            data.authorId ||
+            null,
+
+          authorName:
+            data.authorName ||
+            null,
+
+          relation:
+            "feedback_forms_equipe",
+
+          evidenceKind:
+            "feedback_forms",
+
+          type:
+            "forms_feedback",
+
+          content:
+            rawFeedback,
+
+          summary:
+            "Comentário registrado no Forms e utilizado como contexto no acompanhamento pessoal.",
+
+          attachments:
+            Array.isArray(
+              data.attachments
+            )
+              ? data.attachments
+              : [],
+
+          createdAtMs:
+            Number(
+              data.createdAtMs ||
+              Date.now()
+            ),
+
+          messageUrl:
+            data.messageUrl ||
+            null,
+        });
+
+        // ===============================================
+        // REGISTRA A RESPOSTA PROATIVA DA IA
+        // ===============================================
+
+        recordPersonalTicketActivity({
+          userId,
+
+          guildId:
+            guild.id,
+
+          channelId:
+            ticket.id,
+
+          messageId:
+            sent?.id ||
+            `forms-ai:${data.messageId}`,
+
+          authorId:
+            client.user?.id ||
+            null,
+
+          authorName:
+            client.user?.username ||
+            "SantaCreators IA",
+
+          relation:
+            "ia_santacreators",
+
+          evidenceKind:
+            "orientacao_forms",
+
+          type:
+            "ai_forms_followup",
+
+          content:
+            finalText,
+
+          summary:
+            "Orientação contextual da IA gerada a partir de um comentário novo no Forms.",
+
+          attachments:
+            [],
+
+          createdAtMs:
+            Date.now(),
+
+          messageUrl:
+            sent?.url ||
+            null,
+        });
+
+      } catch (error) {
+        console.error(
+          "[IA FORMS BRIDGE] Falha ao transformar comentário do Forms em acompanhamento:",
+          error?.message ||
+          error
+        );
+      }
+    }
+  );
+}
 export function setupIaChatAuto(client) {
   if (
     globalThis.__SC_IA_CHAT_AUTO_BOOTSTRAPPED__
@@ -30978,6 +32814,14 @@ export function setupIaChatAuto(client) {
 
   globalThis.__SC_IA_CHAT_AUTO_BOOTSTRAPPED__ =
     true;
+
+  // =====================================================
+  // BRIDGE DO FORMS PARA O TICKET PESSOAL
+  // =====================================================
+
+  installFormsCreatorPersonalTicketBridge(
+    client
+  );
 
   scInstallDiscordMemory(client);
 
