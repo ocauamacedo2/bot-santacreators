@@ -5358,6 +5358,38 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
 
   const snapshot = { ...rec };
 
+  // =====================================================
+  // PRESERVA O VÍNCULO DO TICKET ANTES DE APAGAR O GI
+  // =====================================================
+  //
+  // O Controle GI é uma das fontes mais confiáveis para
+  // saber qual é o ticket pessoal da pessoa.
+  //
+  // Depois que o registro é apagado, essa informação pode
+  // desaparecer da API viva.
+  //
+  // Portanto resolvemos e guardamos o ticket ANTES do delete.
+  // =====================================================
+
+  let desligamentoPersonalTicketChannelId =
+    snapshot.personalTicketChannelId
+      ? String(snapshot.personalTicketChannelId)
+      : null;
+
+  if (!desligamentoPersonalTicketChannelId) {
+    const resolvedPersonalTicket =
+      await resolvePersonalTicketInfo(
+        guild.id,
+        snapshot.targetId,
+        null
+      ).catch(() => null);
+
+    if (resolvedPersonalTicket?.channelId) {
+      desligamentoPersonalTicketChannelId =
+        String(resolvedPersonalTicket.channelId);
+    }
+  }
+
   // 🔒 BYPASS TOTAL: impede GuildMemberUpdate / Trava GI
   setRoleBypass(snapshot.targetId, 20000);
 
@@ -5410,9 +5442,18 @@ clearGiAutoDisableTimer(
       await SC_GI_saveNow();
 
       // ✅ Emite evento de desligamento para o Dashboard
+      // ✅ Também informa o ticket pessoal que estava
+      //    vinculado ao Controle GI antes do delete.
       dashEmit('gi:desligado', {
         userId: snapshot.targetId,
         guildId: guild.id,
+
+        personalTicketChannelId:
+          desligamentoPersonalTicketChannelId,
+
+        controlMessageId:
+          snapshot.messageId || null,
+
         timestamp: Date.now()
       });
 

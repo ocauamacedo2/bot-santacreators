@@ -636,8 +636,54 @@ async function resolveCreatorTicketOwnerId(
     giCandidates.length ===
     1
   ) {
+    const candidateId =
+      String(
+        giCandidates[0]
+      );
+
+    // =====================================================
+    // NÃO EXISTE DONO ORIGINAL CONHECIDO
+    // =====================================================
+    //
+    // Neste caso o único usuário com GI e acesso ao canal
+    // continua sendo a melhor pista disponível.
+    // =====================================================
+
+    if (!originalOwnerId) {
+      return candidateId;
+    }
+
+    // =====================================================
+    // EXISTE DONO ORIGINAL
+    // =====================================================
+    //
+    // NÃO deixa um responsável com Controle GI assumir a
+    // identidade do ticket apenas porque também possui acesso.
+    //
+    // Para considerar que este candidato é a nova conta da
+    // pessoa, o nome dele precisa combinar com o nome do canal.
+    //
+    // A vinculação oficial personalTicketChannelId continua
+    // tendo prioridade absoluta acima desta heurística.
+    // =====================================================
+
+    const candidateNameScore =
+      await creatorTicketNameScore(
+        channel,
+        candidateId
+      );
+
+    if (
+      candidateNameScore >
+      0
+    ) {
+      return candidateId;
+    }
+
+    // O candidato com GI provavelmente é equipe/responsável.
+    // Mantém o dono original como identidade do ticket.
     return String(
-      giCandidates[0]
+      originalOwnerId
     );
   }
 
@@ -2332,25 +2378,39 @@ export function setupSortChannels(client) {
 const SC_SORT_CATEGORY_IDS = [
   "1360108570154373151",
   "1371926306064957541",
+
+  // Membros
   "1384650670145278033",
+
+  // Contratar em Game
   "1444857594517913742",
-  "1410071955159122051", // Já estava, mantido
+
+  // Inativos
+  "1482866398396022967",
+  "1410071955159122051",
+  "1477566945598640251",
+
+  // Inativo legado
+  "1383899907244425246",
+
+  // Líderes
   "1414687963161559180",
   "1428572742051168378",
-  "1482874296685695118", // ✅ Nova 3ª categoria de líderes
+  "1482874296685695118",
+
+  // Tickets
   "1359245003523756136",
   "1359244743724241156",
   "1359244725781266492",
   "1359245055239655544",
   "1352706815594598420",
   "1404568518179029142",
-  // Novos Inativos:
-  "1383899907244425246",
-  "1477566945598640251",
-  // ✅ Admin Logs (Grupo):
+
+  // Admin Logs
   "1362540577706737866",
   "1475235932931096796",
-  // ✅ Logs Discord (Individual):
+
+  // Logs Discord
   "1352491000190472193",
 ];
 
@@ -2656,35 +2716,156 @@ dashOn(
     // Pausar/despausar NÃO passa por aqui.
     dashOn("gi:desligado", async (data) => {
       try {
-        const userId = String(data?.userId || "");
-        const guildId = String(data?.guildId || "");
+        const userId =
+          String(
+            data?.userId ||
+            ""
+          );
+
+        const guildId =
+          String(
+            data?.guildId ||
+            ""
+          );
+
+        const personalTicketChannelId =
+          String(
+            data?.personalTicketChannelId ||
+            ""
+          );
+
         if (!userId) return;
 
-        // Caminho principal: o GI agora informa diretamente a guild correta.
-        if (guildId) {
-          const guild = client.guilds.cache.get(guildId);
+        // =====================================================
+        // CAMINHO MAIS FORTE: CANAL EXATO VINDO DO CONTROLE GI
+        // =====================================================
+        //
+        // O GI informa o personalTicketChannelId ANTES de apagar
+        // o próprio registro.
+        //
+        // Dessa forma não precisamos redescobrir de quem é o
+        // ticket depois que a principal fonte de identidade sumiu.
+        // =====================================================
+
+        if (
+          guildId &&
+          personalTicketChannelId
+        ) {
+          const guild =
+            client.guilds.cache.get(
+              guildId
+            );
 
           if (guild) {
-            await syncCreatorTicketAfterGiDisabled(guild, userId);
+            const directChannel =
+              guild.channels.cache.get(
+                personalTicketChannelId
+              ) ||
+              await guild.channels
+                .fetch(
+                  personalTicketChannelId
+                )
+                .catch(
+                  () => null
+                );
+
+            if (
+              directChannel?.type ===
+                ChannelType.GuildText &&
+              !isCreatorTicketAutomationExempt(
+                directChannel
+              ) &&
+              [
+                CREATOR_TICKET_AUTO.INTERVIEW_CATEGORY,
+                CREATOR_TICKET_AUTO.WAITING_CATEGORY,
+                CREATOR_TICKET_AUTO.ACTIVE_CATEGORY,
+              ].includes(
+                directChannel.parentId
+              )
+            ) {
+              const inactiveCategory =
+                await getFirstAvailableInactiveCategory(
+                  guild
+                );
+
+              if (inactiveCategory) {
+                const moved =
+                  await moveCreatorTicketAutomatically(
+                    directChannel,
+                    inactiveCategory.id,
+                    "SantaCreators: Controle GI desligado -> mover ticket vinculado para inativos",
+                    {
+                      saveInactiveOrigin:
+                        true,
+                    }
+                  );
+
+                if (moved) {
+                  return;
+                }
+              }
+            }
+          }
+        }
+
+        // =====================================================
+        // FALLBACK: DESCOBERTA POR IDENTIDADE
+        // =====================================================
+        //
+        // Mantém compatibilidade com Controles GI antigos que
+        // ainda não possuíam personalTicketChannelId salvo.
+        // =====================================================
+
+        if (guildId) {
+          const guild =
+            client.guilds.cache.get(
+              guildId
+            );
+
+          if (guild) {
+            await syncCreatorTicketAfterGiDisabled(
+              guild,
+              userId
+            );
+
             return;
           }
         }
 
-        // Fallback de compatibilidade para qualquer emissão antiga sem guildId.
-        for (const [, guild] of client.guilds.cache) {
-          const tickets = await findCreatorTicketsForUser(
+        // =====================================================
+        // FALLBACK FINAL
+        // =====================================================
+        //
+        // Compatibilidade com eventos antigos que eventualmente
+        // não possuam guildId.
+        // =====================================================
+
+        for (
+          const [, guild]
+          of client.guilds.cache
+        ) {
+          const tickets =
+            await findCreatorTicketsForUser(
+              guild,
+              userId,
+              [
+                CREATOR_TICKET_AUTO.INTERVIEW_CATEGORY,
+                CREATOR_TICKET_AUTO.WAITING_CATEGORY,
+                CREATOR_TICKET_AUTO.ACTIVE_CATEGORY,
+              ]
+            );
+
+          if (
+            tickets.length ===
+            0
+          ) {
+            continue;
+          }
+
+          await syncCreatorTicketAfterGiDisabled(
             guild,
-            userId,
-            [
-              CREATOR_TICKET_AUTO.INTERVIEW_CATEGORY,
-              CREATOR_TICKET_AUTO.WAITING_CATEGORY,
-              CREATOR_TICKET_AUTO.ACTIVE_CATEGORY,
-            ]
+            userId
           );
-
-          if (tickets.length === 0) continue;
-
-          await syncCreatorTicketAfterGiDisabled(guild, userId);
         }
       } catch (error) {
         console.error(
@@ -3084,26 +3265,66 @@ if (isReactivateCmd) {
           return true;
         }
 
-        let targetCategoryId = INATIVO_CONFIG.SOURCE_CATEGORY;
+        const forceMembersCategory =
+          content === "!membro" ||
+          content === "!membros";
 
-        // ✅ Se o canal estiver em uma categoria de inativos,
-        // tenta restaurar para a categoria original salva.
-        if (INATIVO_CONFIG.TARGET_CATEGORIES.includes(currentCategoryId)) {
-          const state = getChannelState(channel.id);
-          const oldParentId = state?.oldParentId;
+        let targetCategoryId =
+          INATIVO_CONFIG.SOURCE_CATEGORY;
+
+        // =====================================================
+        // !MEMBRO / !MEMBROS
+        // =====================================================
+        //
+        // Estes comandos significam literalmente:
+        //
+        // -> mandar para a categoria oficial de MEMBROS
+        //
+        // 1384650670145278033
+        //
+        // =====================================================
+
+        // =====================================================
+        // !REATIVAR
+        // =====================================================
+        //
+        // Mantém a função antiga:
+        //
+        // -> restaurar a categoria original salva
+        //
+        // quando existir.
+        // =====================================================
+
+        if (
+          !forceMembersCategory &&
+          content === "!reativar" &&
+          INATIVO_CONFIG.TARGET_CATEGORIES.includes(
+            currentCategoryId
+          )
+        ) {
+          const state =
+            getChannelState(
+              channel.id
+            );
+
+          const oldParentId =
+            state?.oldParentId;
 
           if (
             oldParentId &&
-            INATIVO_CONFIG.STANDARD_FLOW_CATEGORIES.includes(oldParentId)
+            INATIVO_CONFIG.STANDARD_FLOW_CATEGORIES.includes(
+              oldParentId
+            )
           ) {
-            targetCategoryId = oldParentId;
+            targetCategoryId =
+              oldParentId;
           }
-        } else {
-          // ✅ Qualquer outra categoria da lógica padrão volta para SOURCE_CATEGORY
-          targetCategoryId = INATIVO_CONFIG.SOURCE_CATEGORY;
         }
 
-        const targetCategory = message.guild.channels.cache.get(targetCategoryId);
+        const targetCategory =
+          message.guild.channels.cache.get(
+            targetCategoryId
+          );
 
         if (!targetCategory) {
           await message.reply(
