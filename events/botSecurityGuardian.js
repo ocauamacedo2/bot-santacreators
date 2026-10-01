@@ -39,6 +39,28 @@ import {
 const LOG_CHANNEL_ID = "1507676677927338107";
 
 // =====================================================
+// SERVIDOR PRINCIPAL DO SECURITY GUARDIAN
+// =====================================================
+//
+// A proteção de links deste arquivo só deve atuar no
+// servidor principal do SantaCreators.
+// Em outros servidores, o Guardian continua podendo
+// executar as demais proteções, mas NÃO bloqueia links.
+// =====================================================
+
+const SECURITY_GUARDIAN_PRIMARY_GUILD_ID =
+  "1262262852782129183";
+
+const SECURITY_GUARDIAN_FULL_BYPASS_USER_IDS = new Set([
+  "660311795327828008", // Macedo
+]);
+
+const SECURITY_GUARDIAN_FULL_BYPASS_ROLE_IDS = new Set([
+  "1262262852949905408", // Owner
+  "1352408327983861844", // Resp. Creators
+]);
+
+// =====================================================
 // QUEM PODE ADICIONAR BOT
 // =====================================================
 
@@ -589,6 +611,60 @@ function stripUrlsForProfanityAnalysis(
       " "
     )
     .trim();
+}
+
+// =====================================================
+// VERIFICA SE O GUARDIAN ESTÁ NO SERVIDOR PRINCIPAL
+// =====================================================
+
+function isSecurityGuardianPrimaryGuild(
+  message
+) {
+  return (
+    message?.guildId ===
+    SECURITY_GUARDIAN_PRIMARY_GUILD_ID
+  );
+}
+
+// =====================================================
+// BYPASS COMPLETO DO GUARDIAN PARA MACEDO / CARGOS
+// =====================================================
+//
+// Somente no servidor principal.
+// Nesses casos o Guardian não deve apagar mensagens,
+// mandar avisos, aplicar timeout ou bloquear links.
+// =====================================================
+
+function hasSecurityGuardianFullBypass(
+  member
+) {
+  if (!member) {
+    return false;
+  }
+
+  if (
+    member.guild?.id !==
+    SECURITY_GUARDIAN_PRIMARY_GUILD_ID
+  ) {
+    return false;
+  }
+
+  if (
+    SECURITY_GUARDIAN_FULL_BYPASS_USER_IDS.has(
+      member.id
+    )
+  ) {
+    return true;
+  }
+
+  return (
+    member.roles?.cache?.some(
+      (role) =>
+        SECURITY_GUARDIAN_FULL_BYPASS_ROLE_IDS.has(
+          role.id
+        )
+    ) ?? false
+  );
 }
 
 // =====================================================
@@ -4238,9 +4314,23 @@ function getStrictProtectedViolation(
     memberOverride ??
     message.member;
 
-  // ===================================================
+// ===================================================
+// LINKS / CONVITES
+// ===================================================
+//
+// A proteção de links é exclusiva do servidor principal.
+// Em qualquer outro servidor, esta parte é ignorada.
+//
+// O restante do filtro de conteúdo continua funcionando
+// normalmente nos outros servidores.
+// =====================================================
+
+if (
+  isSecurityGuardianPrimaryGuild(message)
+) {
+  // =================================================
   // LINK ADULTO
-  // ===================================================
+  // =================================================
 
   const explicitAdultUrl =
     findExplicitAdultUrl(
@@ -4260,9 +4350,9 @@ function getStrictProtectedViolation(
     };
   }
 
-  // ===================================================
+  // =================================================
   // LINK / CONVITE
-  // ===================================================
+  // =================================================
 
   const urls =
     extractMessageUrls(
@@ -4286,10 +4376,11 @@ function getStrictProtectedViolation(
         "Link/convite enviado fora das áreas liberadas de ticket.",
     };
   }
+}
 
-  // ===================================================
-  // CONTEÚDO SEXUAL / PALAVRÃO
-  // ===================================================
+// ===================================================
+// CONTEÚDO SEXUAL / PALAVRÃO
+// ===================================================
 
   const punishmentExempt =
     isProfanityPunishmentExempt(
@@ -6697,35 +6788,55 @@ async function handleMessage(
     // ESTA LIBERAÇÃO.
     // =================================================
 
-    // =================================================
-    // PROTEÇÃO GLOBAL CONTRA ATAQUE PESSOAL
-    // =================================================
-    //
-    // Esta camada roda ANTES das exceções de ticket.
-    //
-    // Portanto:
-    //
-    // • ticket pode permitir palavrão casual;
-    // • ticket pode permitir links;
-    // • ticket NÃO permite ataque direcionado.
-    //
-    // Casos muito claros são pegos instantaneamente.
-    // Casos subjetivos passam pela IA.
-    // =================================================
+// =================================================
+// BYPASS COMPLETO DO GUARDIAN
+// =================================================
+//
+// No servidor principal, Macedo e os cargos Owner /
+// Resp. Creators ficam fora de TODAS as proteções
+// automáticas deste Guardian para mensagens humanas.
+//
+// Isso precisa acontecer antes da IA, do filtro rígido,
+// da limpeza, dos avisos e do flood.
+// =================================================
 
-    const globalAbuseViolation =
-      await detectGlobalUnsafeAbuse(
-        message
-      );
+if (
+  hasSecurityGuardianFullBypass(
+    message.member
+  )
+) {
+  return;
+}
 
-    if (globalAbuseViolation) {
-      await punishHumanForGlobalDirectedAbuse(
-        message,
-        globalAbuseViolation
-      );
+// =================================================
+// PROTEÇÃO GLOBAL CONTRA ATAQUE PESSOAL
+// =================================================
+//
+// Esta camada roda ANTES das exceções de ticket.
+//
+// Portanto:
+//
+// • ticket pode permitir palavrão casual;
+// • ticket pode permitir links;
+// • ticket NÃO permite ataque direcionado.
+//
+// Casos muito claros são pegos instantaneamente.
+// Casos subjetivos passam pela IA.
+// =================================================
 
-      return;
-    }
+const globalAbuseViolation =
+  await detectGlobalUnsafeAbuse(
+    message
+  );
+
+if (globalAbuseViolation) {
+  await punishHumanForGlobalDirectedAbuse(
+    message,
+    globalAbuseViolation
+  );
+
+  return;
+}
 
     const contentFilterExemptLocation =
       isContentFilterExemptLocation(
@@ -6786,10 +6897,11 @@ async function handleMessage(
         message.content
       );
 
-    if (
-      explicitAdultUrl &&
-      !contentFilterExemptLocation
-    ) {
+if (
+  explicitAdultUrl &&
+  isSecurityGuardianPrimaryGuild(message) &&
+  !contentFilterExemptLocation
+) {
       const originalContent =
         message.content;
 
