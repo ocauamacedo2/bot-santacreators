@@ -10,6 +10,7 @@ import {
   TextInputStyle,
   EmbedBuilder,
   PermissionFlagsBits,
+  MessageFlags,
 } from 'discord.js';
 
 import { getChannel } from '../utils/cacheDiscord.js';
@@ -420,7 +421,9 @@ export async function pedirSetHandleInteraction(interaction, client) {
 
   // MODAL → Resposta
   if (interaction.isModalSubmit() && interaction.customId === 'formulario_set') {
-    await interaction.deferReply({ ephemeral: true }).catch(() => {});
+    await interaction.deferReply({
+      flags: MessageFlags.Ephemeral,
+    }).catch(() => {});
 
     const nome       = interaction.fields.getTextInputValue('nome_ingame');
     const passaporte = interaction.fields.getTextInputValue('id_passaporte');
@@ -497,7 +500,10 @@ const embed = new EmbedBuilder()
     const canal = await client.channels.fetch(CANAL_LOG_REGISTRO).catch(() => null);
     if (canal) await canal.send({ embeds: [embed], components: [row] });
 
-    await interaction.followUp({ content: '✅ Pedido enviado com sucesso!', ephemeral: true });
+    await interaction.followUp({
+      content: '✅ Pedido enviado com sucesso!',
+      flags: MessageFlags.Ephemeral,
+    });
     return true;
   }
 
@@ -519,7 +525,10 @@ const embed = new EmbedBuilder()
     }
 
     if (!dados) {
-      await interaction.followUp({ content: '❌ Dados do formulário não encontrados (nem pelo embed).', ephemeral: true });
+      await interaction.followUp({
+        content: '❌ Dados do formulário não encontrados (nem pelo embed).',
+        flags: MessageFlags.Ephemeral,
+      });
       return true;
     }
 
@@ -530,13 +539,19 @@ const embed = new EmbedBuilder()
   CARGOS_AUTORIZADOS_APROVACAO.some(id => interaction.member.roles.cache.has(id));
 
 if (!podeAprovarSet) {
-  await interaction.followUp({ content: '❌ Você não tem permissão para aprovar sets.', ephemeral: true });
+  await interaction.followUp({
+    content: '❌ Você não tem permissão para aprovar sets.',
+    flags: MessageFlags.Ephemeral,
+  });
   return true;
 }
 
     const membro = await interaction.guild.members.fetch(userId).catch(() => null);
     if (!membro) {
-      await interaction.followUp({ content: '❌ Membro não encontrado.', ephemeral: true });
+      await interaction.followUp({
+        content: '❌ Membro não encontrado.',
+        flags: MessageFlags.Ephemeral,
+      });
       return true;
     }
 
@@ -566,54 +581,180 @@ if (!podeAprovarSet) {
     // --- 🛠️ PROCESSAMENTO EM BACKGROUND (Não bloqueia o clique) ---
     (async () => {
       // 1. Cargos e Nick
-      const rolesToAdd = [CARGO_SET, CARGO_SENIOR_CREATOR, CARGO_EQUIPE_CREATOR_ADD];
-      await membro.roles.add(rolesToAdd).catch(() => {});
-      await membro.roles.remove(CARGO_ENTREVISTA).catch(() => {});
+      const rolesToAdd = [
+        CARGO_SET,
+        CARGO_SENIOR_CREATOR,
+        CARGO_EQUIPE_CREATOR_ADD
+      ];
+
+      await membro.roles
+        .add(
+          rolesToAdd
+        )
+        .catch(
+          () => {}
+        );
+
+      await membro.roles
+        .remove(
+          CARGO_ENTREVISTA
+        )
+        .catch(
+          () => {}
+        );
       
-      const newNickname = createSafeNickname(nome, passaporte);
-      await membro.setNickname(newNickname).catch(() => {});
+      const newNickname =
+        createSafeNickname(
+          nome,
+          passaporte
+        );
 
-      // 2. FormsCreator
-      try {
-        const existingThreadId =
-          await findOriginalFormsCreatorThreadIdByUserId(
-            client,
-            userId
-          );
+      await membro
+        .setNickname(
+          newNickname
+        )
+        .catch(
+          () => {}
+        );
 
-        if (existingThreadId) {
-          await setFormsCreatorStatus(client, {
-            threadId: existingThreadId,
-            newStatus: true,
-            actor: interaction.user,
-          });
-        } else {
-          await createFormsCreatorRecord(client, {
-            guildId: interaction.guildId,
-            creatorId: interaction.user.id,
-            targetId: userId,
-            targetName: nome,
-            targetPassaporte: passaporte,
-            area: "A Definir",
-          });
+      // =====================================================
+      // 2. AVISA AS INTEGRAÇÕES IMEDIATAMENTE
+      // =====================================================
+      //
+      // IMPORTANTE:
+      //
+      // O Controle GI e a movimentação do ticket NÃO podem
+      // depender da varredura do FormsCreator terminar.
+      //
+      // O gestaoinfluencer.js escuta este evento e cria o
+      // Controle GI pausado.
+      //
+      // Depois, o próprio GI emite gi:controle_criado e o
+      // sortChannels.js move o ticket de Contratar em Game
+      // para a categoria oficial da Equipe Creator.
+      // =====================================================
+
+      dashEmit(
+        'pedirset:aprovado',
+        {
+          userId:
+            userId,
+
+          approverId:
+            interaction.user.id,
+
+          guildId:
+            interaction.guildId,
+
+          nome,
+
+          passaporte,
+
+          timestamp:
+            Date.now()
         }
-      } catch (e) {
+      );
+
+      console.log(
+        `[PedirSet] Set aprovado: evento de integração emitido para ${userId}.`
+      );
+
+      // =====================================================
+      // 3. FORMSCREATOR
+      // =====================================================
+      //
+      // createFormsCreatorRecord() já possui a própria trava
+      // anti-duplicação e já procura um Forms oficial existente.
+      //
+      // Antes nós fazíamos uma varredura completa aqui e,
+      // caso não encontrasse, createFormsCreatorRecord()
+      // fazia outra varredura completa novamente.
+      //
+      // Agora existe apenas UMA varredura.
+      // =====================================================
+
+      try {
+        try {
+          const createdForms =
+            await createFormsCreatorRecord(
+              client,
+              {
+                guildId:
+                  interaction.guildId,
+
+                creatorId:
+                  interaction.user.id,
+
+                targetId:
+                  userId,
+
+                targetName:
+                  nome,
+
+                targetPassaporte:
+                  passaporte,
+
+                area:
+                  "A Definir",
+              }
+            );
+
+          console.log(
+            `[PedirSet] FormsCreator criado para ${userId}: ${createdForms?.threadId || "thread criada"}.`
+          );
+        } catch (
+          createError
+        ) {
+          // =================================================
+          // JÁ EXISTE FORMS
+          // =================================================
+          //
+          // createFormsCreatorRecord() informa o threadId
+          // através do código FORMSCREATOR_ALREADY_EXISTS.
+          //
+          // Neste caso não cria duplicado.
+          // Apenas reativa o registro existente.
+          // =================================================
+
+          if (
+            createError?.code ===
+              "FORMSCREATOR_ALREADY_EXISTS" &&
+            createError?.threadId
+          ) {
+            await setFormsCreatorStatus(
+              client,
+              {
+                threadId:
+                  createError.threadId,
+
+                newStatus:
+                  true,
+
+                actor:
+                  interaction.user,
+              }
+            );
+
+            console.log(
+              `[PedirSet] FormsCreator existente reativado para ${userId}: ${createError.threadId}.`
+            );
+          } else {
+            throw createError;
+          }
+        }
+      } catch (
+        e
+      ) {
         console.error(
           "[PedirSet] Background FormsCreator error:",
           e
         );
       }
 
-      // 3. Dash e Logs
-      dashEmit('pedirset:aprovado', {
-        userId: userId,
-        approverId: interaction.user.id,
-        guildId: interaction.guildId,
-        nome,
-        passaporte,
-        timestamp: Date.now()
-      });
-      // 4. DMs e Avisos
+      // =====================================================
+      // 4. DMs E AVISOS
+      // =====================================================
+
       await sendBotDmLogged({
         client,
 
@@ -696,7 +837,10 @@ if (!podeAprovarSet) {
     }
 
     if (!dados) {
-      await interaction.reply({ content: '❌ Dados do formulário não encontrados (nem pelo embed).', ephemeral: true });
+      await interaction.reply({
+        content: '❌ Dados do formulário não encontrados (nem pelo embed).',
+        flags: MessageFlags.Ephemeral,
+      });
       return true;
     }
 
@@ -705,7 +849,10 @@ if (!podeAprovarSet) {
   CARGOS_AUTORIZADOS_APROVACAO.some(id => interaction.member.roles.cache.has(id));
 
 if (!podeReprovarSet) {
-  await interaction.reply({ content: '❌ Você não tem permissão para reprovar sets.', ephemeral: true });
+  await interaction.reply({
+    content: '❌ Você não tem permissão para reprovar sets.',
+    flags: MessageFlags.Ephemeral,
+  });
   return true;
 }
 
