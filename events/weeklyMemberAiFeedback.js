@@ -2958,52 +2958,16 @@ async function collectMemberFacts({
   // referências feitas por terceiros, sem transformar relato em fato.
   // =====================================================
 
-  const [
-    discordEvidenceCurrent,
-    discordEvidencePrevious,
-  ] = await Promise.all([
-    getPersonDiscordEvidenceForFeedback({
-      client,
+  // =====================================================
+  // UMA ÚNICA VARREDURA PARA SEMANA ATUAL + ANTERIOR
+  // =====================================================
+  //
+  // Evita duas leituras completas do servidor para o mesmo membro.
+  // A janela é coletada uma vez e depois separada por timestamp.
+  // =====================================================
 
-      guildId:
-        guild.id,
-
-      userId,
-
-      sinceMs:
-        weekBounds.startMs,
-
-      untilMs:
-        Math.min(
-          Date.now(),
-          weekBounds.endMs - 1
-        ),
-
-      maxChannels:
-        120,
-
-      maxResults:
-        120,
-
-      maxPagesPerChannel:
-        4,
-    }).catch(
-      () => ({
-        accessible:
-          false,
-
-        scannedChannels:
-          0,
-
-        scannedMessages:
-          0,
-
-        matches:
-          [],
-      })
-    ),
-
-    getPersonDiscordEvidenceForFeedback({
+  const discordEvidenceCombined =
+    await getPersonDiscordEvidenceForFeedback({
       client,
 
       guildId:
@@ -3015,16 +2979,19 @@ async function collectMemberFacts({
         previousWeekBounds.startMs,
 
       untilMs:
-        previousWeekBounds.endMs - 1,
+        Math.min(
+          Date.now(),
+          weekBounds.endMs - 1
+        ),
 
       maxChannels:
         120,
 
       maxResults:
-        120,
+        180,
 
       maxPagesPerChannel:
-        4,
+        6,
     }).catch(
       () => ({
         accessible:
@@ -3039,8 +3006,64 @@ async function collectMemberFacts({
         matches:
           [],
       })
-    ),
-  ]);
+    );
+
+  const combinedMatches =
+    Array.isArray(
+      discordEvidenceCombined?.matches
+    )
+      ? discordEvidenceCombined.matches
+      : [];
+
+  const currentEvidenceUntilMs =
+    Math.min(
+      Date.now(),
+      weekBounds.endMs - 1
+    );
+
+  const discordEvidenceCurrent = {
+    ...discordEvidenceCombined,
+
+    matches:
+      combinedMatches.filter(
+        item => {
+          const timestamp =
+            Number(
+              item?.createdTimestamp ||
+              0
+            );
+
+          return (
+            timestamp >=
+              weekBounds.startMs &&
+            timestamp <=
+              currentEvidenceUntilMs
+          );
+        }
+      ),
+  };
+
+  const discordEvidencePrevious = {
+    ...discordEvidenceCombined,
+
+    matches:
+      combinedMatches.filter(
+        item => {
+          const timestamp =
+            Number(
+              item?.createdTimestamp ||
+              0
+            );
+
+          return (
+            timestamp >=
+              previousWeekBounds.startMs &&
+            timestamp <
+              previousWeekBounds.endMs
+          );
+        }
+      ),
+  };
 
   const lastRoleChangeMs =
     Date.parse(
@@ -7598,6 +7621,7 @@ export async function generateWeeklyMemberPrivateDm({
   client,
   guild,
   record,
+  facts: preloadedFacts = null,
 }) {
   if (
     !client ||
@@ -7645,6 +7669,7 @@ export async function generateWeeklyMemberPrivateDm({
     getWeekKeySP();
 
   const facts =
+    preloadedFacts ||
     await collectMemberFacts({
       client,
       guild,

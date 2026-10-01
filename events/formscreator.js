@@ -5981,30 +5981,44 @@ export async function setFormsCreatorArea(client, { threadId, newArea, actor }) 
     );
 
     let activeTopicUpdated = true;
+    let activeTopicSyncPending = false;
 
     if (registration.userId) {
-        try {
-            const mirrorResult =
-                await syncFormsCreatorActiveMirror(
-                    client,
-                    {
-                        originalThreadId:
-                            normalizedThreadId,
-                        registration,
-                        reason:
-                            "Área do FormsCreator alterada",
-                    }
-                );
+        // O registro ORIGINAL já foi atualizado e salvo.
+        // O espelho pode depender da fila da Evolução, então
+        // ele continua sendo sincronizado sem segurar o botão GI.
+        activeTopicSyncPending = true;
 
-            activeTopicUpdated =
-                mirrorResult?.ok !== false;
-        } catch (error) {
-            activeTopicUpdated = false;
-            console.error(
-                "[FormsCreator] Registro original atualizado; espelho do tópico ativo pendente:",
-                error
+        void syncFormsCreatorActiveMirror(
+            client,
+            {
+                originalThreadId:
+                    normalizedThreadId,
+                registration,
+                reason:
+                    "Área do FormsCreator alterada",
+            }
+        )
+            .then(
+                (mirrorResult) => {
+                    if (
+                        mirrorResult?.ok ===
+                        false
+                    ) {
+                        console.warn(
+                            `[FormsCreator] Espelho do tópico ativo ainda pendente para ${normalizedThreadId}.`
+                        );
+                    }
+                }
+            )
+            .catch(
+                (error) => {
+                    console.error(
+                        "[FormsCreator] Registro original atualizado; espelho do tópico ativo pendente:",
+                        error
+                    );
+                }
             );
-        }
     }
 
     console.log(
@@ -6021,7 +6035,8 @@ export async function setFormsCreatorArea(client, { threadId, newArea, actor }) 
         oldArea,
         newArea:
             normalizedArea,
-        activeTopicUpdated
+        activeTopicUpdated,
+        activeTopicSyncPending
     };
     } finally {
         await restoreHistoricalEvolutionThread(thread);

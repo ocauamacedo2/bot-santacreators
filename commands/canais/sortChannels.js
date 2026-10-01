@@ -1197,6 +1197,73 @@ async function ensureCreatorPersonalTicketForGi(
     };
   }
 
+  // =====================================================
+  // CAMINHO RÁPIDO: TICKET JÁ VINCULADO NO CONTROLE GI
+  // =====================================================
+  //
+  // O supervisor roda periodicamente. Se o próprio Controle GI
+  // já aponta para um canal real, não precisamos chamar novamente
+  // ensureForUser() nem emitir ticket:pessoal_vinculado outra vez.
+  //
+  // Isso evita uma tempestade de refresh nos cards GI.
+  // =====================================================
+
+  const linkedTicketId =
+    String(
+      giState.control
+        ?.personalTicketChannelId ||
+      ""
+    ).trim();
+
+  if (linkedTicketId) {
+    const linkedChannel =
+      guild.channels.cache.get(
+        linkedTicketId
+      ) ||
+      await guild.channels
+        .fetch(
+          linkedTicketId
+        )
+        .catch(
+          () => null
+        );
+
+    if (
+      linkedChannel?.type ===
+        ChannelType.GuildText &&
+      !isCreatorTicketAutomationExempt(
+        linkedChannel
+      )
+    ) {
+      if (
+        linkedChannel.parentId !==
+        CREATOR_TICKET_AUTO.ACTIVE_CATEGORY
+      ) {
+        await moveCreatorTicketAutomatically(
+          linkedChannel,
+          CREATOR_TICKET_AUTO.ACTIVE_CATEGORY,
+          `SantaCreators: Controle GI já vinculado (${trigger}) -> ticket pessoal em membros ativos`
+        );
+      }
+
+      return {
+        ok:
+          true,
+
+        channel:
+          linkedChannel,
+
+        created:
+          false,
+
+        reusedLinked:
+          true,
+
+        giState,
+      };
+    }
+  }
+
   const personalTicketApi =
     globalThis.SC_PERSONAL_TICKET_API;
 

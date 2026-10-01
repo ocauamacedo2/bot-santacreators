@@ -20,12 +20,12 @@
       return;
     }
 
-    const {
-      ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder,
-      TextInputBuilder, TextInputStyle, EmbedBuilder,
-      StringSelectMenuBuilder, UserSelectMenuBuilder,
-      Events, ChannelType, MessageFlags, AuditLogEvent
-    } = await import('discord.js');
+const {
+  ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder,
+  TextInputBuilder, TextInputStyle, EmbedBuilder,
+  StringSelectMenuBuilder, UserSelectMenuBuilder,
+  Events, ChannelType, MessageFlags, AuditLogEvent, PermissionFlagsBits
+} = await import('discord.js');
 
     const fs = await import('node:fs');
     const fsp = fs.promises;
@@ -193,6 +193,11 @@ CHANNEL_RESTORE_LOG:      '1486006878914875412',
       // Atualização visual automática dos controles.
       CONTROL_REFRESH_ACTIVE_MS: 30 * 60 * 1000,
       CONTROL_REFRESH_PAUSED_MS: 2 * 60 * 1000,
+
+      // A conferência completa percorre todos os registros
+      // e faz várias leituras no Discord.
+      // Não precisa rodar a cada minuto.
+      RECORDS_CONSISTENCY_MS: 5 * 60 * 1000,
 
       // NOVO: regras da trava
       GI_REMOVE_WINDOW_MS: 2 * 60 * 1000,
@@ -2185,6 +2190,116 @@ function activeTimeText(rec, n = nowMs()) {
           areaProfile
         );
 
+      // =====================================================
+      // PRÉ-VALIDAÇÃO DE PERMISSÕES / HIERARQUIA DO DISCORD
+      // =====================================================
+      //
+      // Antes de remover/adicionar qualquer cargo, confirma que
+      // o bot realmente consegue gerenciar TODOS os cargos que
+      // fazem parte da transição.
+      //
+      // Isso evita:
+      // - remover alguns cargos e falhar no meio;
+      // - "Missing Permissions" sem dizer qual cargo bloqueou;
+      // - rollback desnecessário;
+      // - deixar a Área visual diferente dos cargos reais.
+      // =====================================================
+
+      const botMember =
+        guild.members.me;
+
+      const roleIdsToChange =
+        [
+          ...new Set([
+            ...removeRoleIds,
+            ...addRoleIds
+          ])
+        ];
+
+      if (
+        roleIdsToChange.length > 0 &&
+        !botMember?.permissions?.has(
+          PermissionFlagsBits.ManageRoles
+        )
+      ) {
+        throw new Error(
+          "O bot não possui a permissão Gerenciar Cargos neste servidor."
+        );
+      }
+
+      const blockedRoles =
+        [];
+
+      for (
+        const roleId
+        of roleIdsToChange
+      ) {
+        const role =
+          guild.roles.cache.get(
+            roleId
+          ) ||
+          await guild.roles
+            .fetch(
+              roleId
+            )
+            .catch(
+              () => null
+            );
+
+        if (
+          !role ||
+          role.managed ||
+          role.editable !== true
+        ) {
+          blockedRoles.push({
+            id:
+              roleId,
+
+            name:
+              role?.name ||
+              "cargo não encontrado",
+          });
+        }
+      }
+
+      if (
+        blockedRoles.length > 0
+      ) {
+        throw new Error(
+          "O bot não consegue gerenciar o(s) cargo(s): " +
+          blockedRoles
+            .map(
+              role =>
+                `${role.name} (<@&${role.id}>)`
+            )
+            .join(", ") +
+          ". Coloque o cargo do bot acima desses cargos na hierarquia do Discord e confirme Gerenciar Cargos."
+        );
+      }
+
+      if (
+        wantedNickname &&
+        wantedNickname !== member.nickname
+      ) {
+        if (
+          !botMember?.permissions?.has(
+            PermissionFlagsBits.ManageNicknames
+          )
+        ) {
+          throw new Error(
+            "O bot não possui a permissão Gerenciar Apelidos."
+          );
+        }
+
+        if (
+          member.manageable === false
+        ) {
+          throw new Error(
+            "O bot não consegue alterar o nickname deste membro porque a hierarquia do Discord bloqueia a ação. Coloque o cargo do bot acima do maior cargo gerenciável do membro."
+          );
+        }
+      }
+
       try {
         if (
           removeRoleIds.length > 0
@@ -2270,13 +2385,72 @@ function activeTimeText(rec, n = nowMs()) {
       }
     }
 
+    async function resolveFormsCreatorThreadIdForGI(
+      userId
+    ) {
+      const normalizedUserId =
+        String(
+          userId ||
+          ""
+        ).trim();
+
+      if (!normalizedUserId) {
+        return null;
+      }
+
+      // Caminho rápido:
+      // consulta somente o state já carregado do FormsCreator.
+      // Não varre tópicos do Discord.
+      if (
+        typeof findFormsCreatorThreadIdFastByUserId ===
+          "function"
+      ) {
+        const fastThreadId =
+          findFormsCreatorThreadIdFastByUserId(
+            normalizedUserId
+          );
+
+        if (fastThreadId) {
+          return String(
+            fastThreadId
+          );
+        }
+      }
+
+      // Fallback de recuperação:
+      // só faz busca profunda se o state rápido não encontrou.
+      if (
+        typeof findOriginalFormsCreatorThreadIdByUserId !==
+          "function"
+      ) {
+        return null;
+      }
+
+      return await findOriginalFormsCreatorThreadIdByUserId(
+        client,
+        normalizedUserId
+      ).catch((error) => {
+        console.error(
+          "[GI] Falha ao localizar registro original do FormsCreator:",
+          error
+        );
+
+        return null;
+      });
+    }
+
     async function syncAreaToFormsCreator(
       rec,
       canonicalArea,
       editor
     ) {
       if (
-        typeof findOriginalFormsCreatorThreadIdByUserId !== "function" ||
+        (
+          typeof findFormsCreatorThreadIdFastByUserId !==
+            "function" &&
+          typeof findOriginalFormsCreatorThreadIdByUserId !==
+            "function"
+        ) ||
         typeof setFormsCreatorArea !== "function"
       ) {
         return {
@@ -2287,13 +2461,9 @@ function activeTimeText(rec, n = nowMs()) {
       }
 
       const fcThreadId =
-        await findOriginalFormsCreatorThreadIdByUserId(
-          client,
+        await resolveFormsCreatorThreadIdForGI(
           rec.targetId
-        ).catch((error) => {
-          console.error("[GI] Falha ao localizar registro original do FormsCreator:", error);
-          return null;
-        });
+        );
 
       if (!fcThreadId) {
         return {
@@ -2314,7 +2484,14 @@ function activeTimeText(rec, n = nowMs()) {
         );
 
         return {
-          status: update.activeTopicUpdated ? "synced" : "partial",
+          status:
+            update.activeTopicSyncPending
+              ? "pending"
+              : (
+                  update.activeTopicUpdated
+                    ? "synced"
+                    : "partial"
+                ),
           threadId: fcThreadId,
           error: null
         };
@@ -3652,8 +3829,13 @@ try {
       );
 
       await ensureMenu(guild);
-      markBoardDirty();
-      await renderRespBoard(guild, { force: true });
+
+      scheduleRespBoardRender(
+        guild,
+        {
+          force: true,
+        }
+      );
     }
 
     // =====================================================
@@ -4983,6 +5165,8 @@ try {
         const formsText =
           formsSyncResult.status === "synced"
             ? "✅ sincronizado"
+            : formsSyncResult.status === "pending"
+              ? "⏳ registro original atualizado; espelho será sincronizado em segundo plano"
             : formsSyncResult.status === "partial"
               ? "⚠️ registro original atualizado; resumo do tópico ativo pendente"
             : formsSyncResult.status === "not_found"
@@ -5043,8 +5227,9 @@ try {
         }
       );
 
-      markBoardDirty();
-      await renderRespBoard(guild);
+      scheduleRespBoardRender(
+        guild
+      );
 
       return {
         previousArea,
@@ -5281,8 +5466,9 @@ if (
         }
       );
 
-      markBoardDirty();
-      await renderRespBoard(guild);
+      scheduleRespBoardRender(
+        guild
+      );
     }
 
     async function resendDM(guild, actor, messageId) {
@@ -5851,14 +6037,17 @@ clearGiAutoDisableTimer(
 
 // ✅ NOVO: Desliga/inativa também o FormsCreator da pessoa
 try {
-  if (
-    typeof findOriginalFormsCreatorThreadIdByUserId === "function" &&
-    typeof setFormsCreatorStatus === "function"
-  ) {
-    const fcThreadId = await findOriginalFormsCreatorThreadIdByUserId(
-      guild.client,
+if (
+  (
+    typeof findFormsCreatorThreadIdFastByUserId === "function" ||
+    typeof findOriginalFormsCreatorThreadIdByUserId === "function"
+  ) &&
+  typeof setFormsCreatorStatus === "function"
+) {
+  const fcThreadId =
+    await resolveFormsCreatorThreadIdForGI(
       snapshot.targetId
-    ).catch(() => null);
+    );
 
     if (fcThreadId) {
       await setFormsCreatorStatus(guild.client, {
@@ -5987,10 +6176,15 @@ try {
         ).catch(() => {});
       }
 
-      await renderRespBoard(guild, { force: true });
+           scheduleRespBoardRender(
+        guild,
+        {
+          force: true,
+        }
+      );
     }
 
-    // ====================== RESPONSÁVEL DIRETO (AUTO-TIPO) ======================
+    // ====================== RESPONSÁVEL DIRETO
     async function getRespCandidates(guild) {
       const roleIds = SC_GI_CFG.RESP_ALLOWED_ROLE_IDS || [];
       const bucket  = new Map();
@@ -6102,8 +6296,13 @@ async function setResponsibleAuto(guild, actorId, messageId, pickedUserId) {
         }
       );
 
-      markBoardDirty();
-      await renderRespBoard(guild, { force: true });
+      scheduleRespBoardRender(
+        guild,
+        {
+          force: true,
+        }
+      );
+
       return true;
     }
 
@@ -6116,7 +6315,81 @@ async function setResponsibleAuto(guild, actorId, messageId, pickedUserId) {
     const BOX_TOP = '┏' + '━'.repeat(BOX_W) + '┓';
     const BOX_BOT = '┗' + '━'.repeat(BOX_W) + '┛';
 
-    function markBoardDirty() { SC_GI_STATE.boardDirty = true; }
+    function markBoardDirty() {
+      SC_GI_STATE.boardDirty =
+        true;
+    }
+
+    const SC_GI_BOARD_RENDER_TIMERS =
+      new Map();
+
+    function scheduleRespBoardRender(
+      guild,
+      {
+        force = false,
+        delayMs = 350,
+      } = {}
+    ) {
+      if (!guild?.id) {
+        return;
+      }
+
+      markBoardDirty();
+
+      const guildId =
+        String(
+          guild.id
+        );
+
+      const previousTimer =
+        SC_GI_BOARD_RENDER_TIMERS.get(
+          guildId
+        );
+
+      if (previousTimer) {
+        clearTimeout(
+          previousTimer
+        );
+      }
+
+      const timer =
+        setTimeout(
+          () => {
+            SC_GI_BOARD_RENDER_TIMERS.delete(
+              guildId
+            );
+
+            void renderRespBoard(
+              guild,
+              {
+                force,
+              }
+            ).catch(
+              error => {
+                console.warn(
+                  '[SC_GI] Falha ao atualizar board em segundo plano:',
+                  error?.message ||
+                  error
+                );
+              }
+            );
+          },
+          Math.max(
+            0,
+            Number(
+              delayMs ||
+              0
+            )
+          )
+        );
+
+      timer.unref?.();
+
+      SC_GI_BOARD_RENDER_TIMERS.set(
+        guildId,
+        timer
+      );
+    }
 
     function splitIntoChunks(str, max = 1900) {
       const parts = [];
@@ -6627,6 +6900,10 @@ async function autoDesligarPausadosVencidos(guild, origem = 'tick') {
 
     // ====================== LOOP ======================
     let isTicking = false; // ✅ Trava para evitar sobreposição de execuções
+
+    let lastRecordsConsistencyAtMs =
+      0;
+
     async function tick() {
       if (isTicking) return;
       isTicking = true;
@@ -6761,19 +7038,41 @@ async function autoDesligarPausadosVencidos(guild, origem = 'tick') {
 
         }
 
-        for (const [, g] of client.guilds.cache) {
-          // 🔧 FAILSAFE: repara registros sem botões ou deletados
-          const restoredAny = await ensureRecordsConsistency(g);
+        const shouldRunRecordsConsistency =
+          !lastRecordsConsistencyAtMs ||
+          (
+            n -
+            lastRecordsConsistencyAtMs
+          ) >=
+            SC_GI_CFG.RECORDS_CONSISTENCY_MS;
 
-          // ✅ Se restaurou algo (mandou msg nova), recria o menu no final.
+        for (const [, g] of client.guilds.cache) {
+          // 🔧 FAILSAFE: repara registros sem botões ou deletados.
+          //
+          // Essa varredura completa é propositalmente mais
+          // espaçada porque percorre todos os registros e faz
+          // várias leituras no Discord.
+          let restoredAny =
+            false;
+
+          if (
+            shouldRunRecordsConsistency
+          ) {
+            restoredAny =
+              await ensureRecordsConsistency(
+                g
+              );
+          }
+
+          // ✅ Se restaurou algo (mandou msg nova),
+          // recria o menu no final.
           if (restoredAny) {
             await ensureMenu(g);
           } else {
             await ensureMenuIfMissing(g);
           }
 
-  await renderRespBoard(g);
-
+          await renderRespBoard(g);
 
           // re-agenda restores pendentes (failsafe)
           // (só faz isso com baixa frequência via tick mesmo)
@@ -7042,13 +7341,9 @@ async function autoDesligarPausadosVencidos(guild, origem = 'tick') {
             'function'
         ) {
           const originalThreadId =
-            typeof findOriginalFormsCreatorThreadIdByUserId ===
-              'function'
-              ? await findOriginalFormsCreatorThreadIdByUserId(
-                  client,
-                  newMember.id
-                ).catch(() => null)
-              : null;
+            await resolveFormsCreatorThreadIdForGI(
+              newMember.id
+            );
 
           await syncEvolutionHierarchyForMember(
             client,
@@ -7373,6 +7668,28 @@ dashOn('ticket:pessoal_vinculado', async (data) => {
       return;
     }
 
+    // =====================================================
+    // FAILSAFE DE PERFORMANCE
+    // =====================================================
+    //
+    // O supervisor do sortChannels reconcilia os Controles GI
+    // periodicamente. Se o ticket já está vinculado ao mesmo
+    // controle, NÃO precisamos editar o card novamente.
+    //
+    // Sem esta trava, cada reconciliação periódica pode gerar
+    // dezenas de edits desnecessários nos cards GI.
+    // =====================================================
+
+    if (
+      String(
+        rec.personalTicketChannelId ||
+        ''
+      ) ===
+      channelId
+    ) {
+      return;
+    }
+
     rec.personalTicketChannelId =
       channelId;
 
@@ -7403,7 +7720,6 @@ dashOn('ticket:pessoal_vinculado', async (data) => {
     );
   }
 });
-
 dashOn(
   'pedirset:aprovado',
   async (data) => {
@@ -7745,6 +8061,10 @@ dashOn(
                     guild,
                     record:
                       rec,
+
+                    facts:
+                      formsResult?.facts ||
+                      null,
                   });
 
                 const chunks =
@@ -8385,6 +8705,12 @@ dashOn(
             ) {
               responseLines.push(
                 '📚 FormsCreator sincronizado.'
+              );
+            } else if (
+              result.formsSyncResult.status === 'pending'
+            ) {
+              responseLines.push(
+                '📚 FormsCreator original atualizado; o espelho do tópico ativo será sincronizado em segundo plano.'
               );
             } else if (
               result.formsSyncResult.status === 'partial'
