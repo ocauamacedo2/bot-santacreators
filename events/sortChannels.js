@@ -268,10 +268,65 @@ function isCreatorTicketAutomationExempt(channel) {
 }
 
 function extractCreatorTicketOwnerFromTopic(channel) {
-  const topic = String(channel?.topic || "");
-  const match = topic.match(/aberto_por:(\d{17,20})/i);
+  const topic =
+    String(
+      channel?.topic ||
+      ""
+    );
 
-  return match?.[1] || null;
+  // =====================================================
+  // 1. PADRÃO NOVO / OFICIAL
+  // =====================================================
+  //
+  // Tickets que já possuem aberto_por continuam usando
+  // essa informação como primeira prioridade.
+  // =====================================================
+
+  const abertoPor =
+    topic.match(
+      /aberto_por:(\d{17,20})/i
+    )?.[1];
+
+  if (abertoPor) {
+    return String(
+      abertoPor
+    );
+  }
+
+  // =====================================================
+  // 2. TICKETS ANTIGOS / RECRIADOS DE ENTREVISTA
+  // =====================================================
+  //
+  // Muitos tickets antigos não possuem:
+  //
+  // aberto_por:
+  //
+  // mas possuem:
+  //
+  // entrevista_starter:
+  //
+  // Exemplo real:
+  //
+  // entrevista_starter:531702211387064330
+  //
+  // O entrevista_aplicador NÃO é o dono do ticket.
+  // Ele representa quem aplicou a entrevista.
+  //
+  // Portanto usamos SOMENTE entrevista_starter.
+  // =====================================================
+
+  const entrevistaStarter =
+    topic.match(
+      /entrevista_starter:(\d{17,20})/i
+    )?.[1];
+
+  if (entrevistaStarter) {
+    return String(
+      entrevistaStarter
+    );
+  }
+
+  return null;
 }
 
 async function extractCreatorTicketOwnerFromHeader(channel) {

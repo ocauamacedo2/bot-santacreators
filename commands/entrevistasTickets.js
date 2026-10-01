@@ -1406,12 +1406,44 @@ function extractPersonalTicketOwnerIdFromTopic(
       ''
     );
 
-  return (
+  // =====================================================
+  // 1. DONO EXPLÍCITO DOS TICKETS MAIS NOVOS
+  // =====================================================
+
+  const abertoPor =
     topic.match(
       /aberto_por:(\d{17,20})/i
-    )?.[1] ||
-    null
-  );
+    )?.[1];
+
+  if (abertoPor) {
+    return String(
+      abertoPor
+    );
+  }
+
+  // =====================================================
+  // 2. COMPATIBILIDADE COM TICKETS ANTIGOS / RECRIADOS
+  // =====================================================
+  //
+  // entrevista_starter = usuário que iniciou a entrevista
+  //
+  // entrevista_aplicador = quem aplicou a entrevista
+  //
+  // Portanto NUNCA usamos entrevista_aplicador como dono.
+  // =====================================================
+
+  const entrevistaStarter =
+    topic.match(
+      /entrevista_starter:(\d{17,20})/i
+    )?.[1];
+
+  if (entrevistaStarter) {
+    return String(
+      entrevistaStarter
+    );
+  }
+
+  return null;
 }
 
 async function extractPersonalTicketOwnerIdFromHeader(
