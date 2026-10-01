@@ -204,7 +204,32 @@ function pickPersistDataDir() {
       .STORAGE_PATH
       ?.trim();
 
+  // =====================================================
+  // SQUARE CLOUD — STORAGE PERSISTENTE
+  // =====================================================
+  //
+  // Na Square Cloud, /application pode ficar somente leitura.
+  //
+  // O próprio projeto já utiliza /application/storage para
+  // arquivos persistentes, então ele recebe prioridade.
+  //
+  // No Windows/local esse caminho não é criado por engano.
+  // =====================================================
+
+  const applicationStorageData =
+    (
+      process.platform !==
+        "win32" &&
+      fs.existsSync(
+        "/application/storage"
+      )
+    )
+      ? "/application/storage/data"
+      : null;
+
   const candidates = [
+    applicationStorageData,
+
     squareStorage
       ? path.resolve(
           squareStorage,
@@ -262,6 +287,10 @@ function pickPersistDataDir() {
 
 const DATA_DIR =
   pickPersistDataDir();
+
+console.log(
+  `[FormsCreator] Persistência ativa em: ${DATA_DIR}`
+);
 
 const LEGACY_DATA_DIR =
   path.resolve(
@@ -4026,6 +4055,7 @@ export async function createFormsCreatorRecord(
     targetName,
     targetPassaporte,
     area = "A Definir",
+    skipDeepDuplicateScan = false,
   }
 ) {
   return await runWithFormsCreatorUserCreateLock(
@@ -4059,12 +4089,61 @@ export async function createFormsCreatorRecord(
       // ===============================================
       // 🚫 ANTI-DUPLICAÇÃO
       // ===============================================
+      //
+      // Fluxos normais continuam usando a busca profunda.
+      //
+      // O Pedir Set pode usar skipDeepDuplicateScan=true
+      // para não ficar preso varrendo centenas de tópicos
+      // ativos/arquivados antes de concluir uma aprovação.
+      //
+      // Nesse modo rápido:
+      //
+      // - o state oficial continua impedindo duplicação;
+      // - resolveFormsCreatorCanonicalTopic() continua
+      //   reutilizando o tópico ativo da Evolução/GI;
+      // - nenhuma busca profunda é removida dos outros fluxos.
+      // ===============================================
 
-      const existingThreadId =
-        await findOriginalFormsCreatorThreadIdByUserId(
-          client,
-          targetId
-        ).catch(() => null);
+      let existingThreadId =
+        null;
+
+      if (
+        skipDeepDuplicateScan ===
+        true
+      ) {
+        const fastState =
+          readState();
+
+        const existingEntry =
+          Object.entries(
+            fastState.registrations ||
+            {}
+          ).find(
+            ([
+              ,
+              registration,
+            ]) =>
+              String(
+                registration?.userId ||
+                ""
+              ).trim() ===
+              String(
+                targetId
+              ).trim()
+          );
+
+        existingThreadId =
+          existingEntry?.[0] ||
+          null;
+      } else {
+        existingThreadId =
+          await findOriginalFormsCreatorThreadIdByUserId(
+            client,
+            targetId
+          ).catch(
+            () => null
+          );
+      }
 
       if (existingThreadId) {
         const error =
@@ -4084,7 +4163,7 @@ export async function createFormsCreatorRecord(
         throw error;
       }
 
-           const membro = await guild.members
+      const membro = await guild.members
         .fetch(targetId)
         .catch(() => null);
 

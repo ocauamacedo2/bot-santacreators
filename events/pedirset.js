@@ -634,6 +634,69 @@ if (!podeAprovarSet) {
       // para a categoria oficial da Equipe Creator.
       // =====================================================
 
+      // =====================================================
+      // CONTROLE GI — CAMINHO DIRETO + EVENTO DE COMPATIBILIDADE
+      // =====================================================
+      //
+      // Primeiro garante o Controle GI diretamente pela API viva.
+      //
+      // Depois mantém o dashEmit já existente para:
+      //
+      // - sortChannels;
+      // - dashboards;
+      // - Controle GI antigo;
+      // - qualquer outro módulo que já escute este evento.
+      //
+      // Assim o Controle GI não depende exclusivamente do
+      // barramento de eventos.
+      // =====================================================
+
+      try {
+        const giApi =
+          globalThis
+            .SC_GI_CONTROL_API;
+
+        if (
+          !giApi ||
+          typeof giApi.ensureFromPedirSet !==
+            "function"
+        ) {
+          throw new Error(
+            "SC_GI_CONTROL_API.ensureFromPedirSet ainda não está disponível."
+          );
+        }
+
+        const giResult =
+          await giApi
+            .ensureFromPedirSet({
+              guildId:
+                interaction.guildId,
+
+              userId:
+                userId,
+
+              passaporte:
+                passaporte,
+            });
+
+        console.log(
+          giResult?.created
+            ? `[PedirSet] Controle GI criado para ${userId}.`
+            : `[PedirSet] Controle GI já existia para ${userId}.`
+        );
+      } catch (
+        giError
+      ) {
+        console.error(
+          "[PedirSet] Falha ao garantir Controle GI diretamente:",
+          giError
+        );
+      }
+
+      // =====================================================
+      // MANTÉM O EVENTO EXISTENTE
+      // =====================================================
+
       dashEmit(
         'pedirset:aprovado',
         {
@@ -696,6 +759,9 @@ if (!podeAprovarSet) {
 
                 area:
                   "A Definir",
+
+                skipDeepDuplicateScan:
+                  true,
               }
             );
 

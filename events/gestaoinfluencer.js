@@ -389,6 +389,189 @@ CHANNEL_RESTORE_LOG:      '1486006878914875412',
         return [...byUser.values()]
           .map(SC_GI_toPublicControl)
           .filter(Boolean);
+      },
+
+      // =====================================================
+      // PEDIR SET — GARANTIA DIRETA DO CONTROLE GI
+      // =====================================================
+      //
+      // Permite que o pedirset.js garanta o Controle GI sem
+      // depender exclusivamente do dashHub.
+      //
+      // É idempotente:
+      //
+      // - se já existir Controle GI, apenas devolve o existente;
+      // - se não existir, cria um Controle GI pausado;
+      // - nunca recria/destrói um Controle GI existente.
+      // =====================================================
+
+      async ensureFromPedirSet({
+        guildId,
+        userId,
+        passaporte = null,
+      } = {}) {
+        const targetGuildId =
+          String(
+            guildId ||
+            ""
+          ).trim();
+
+        const targetUserId =
+          String(
+            userId ||
+            ""
+          ).trim();
+
+        if (
+          !targetGuildId ||
+          !targetUserId
+        ) {
+          throw new Error(
+            "guildId/userId inválidos para criar Controle GI via Pedir Set."
+          );
+        }
+
+        const guild =
+          client.guilds.cache.get(
+            targetGuildId
+          ) ||
+          await client.guilds
+            .fetch(
+              targetGuildId
+            )
+            .catch(
+              () => null
+            );
+
+        if (!guild) {
+          throw new Error(
+            `Guilda ${targetGuildId} não encontrada para criar Controle GI.`
+          );
+        }
+
+        // =================================================
+        // JÁ EXISTE
+        // =================================================
+
+        const existing =
+          SC_GI_findCurrentControl(
+            guild.id,
+            targetUserId
+          );
+
+        if (existing) {
+          return {
+            ok:
+              true,
+
+            created:
+              false,
+
+            control:
+              SC_GI_toPublicControl(
+                existing
+              ),
+          };
+        }
+
+        // =================================================
+        // DATA DE ENTRADA — HORÁRIO DE SÃO PAULO
+        // =================================================
+
+        const now =
+          new Date();
+
+        const parts =
+          new Intl.DateTimeFormat(
+            "pt-BR",
+            {
+              timeZone:
+                "America/Sao_Paulo",
+
+              day:
+                "2-digit",
+
+              month:
+                "2-digit",
+
+              year:
+                "numeric",
+            }
+          ).formatToParts(
+            now
+          );
+
+        const dd =
+          parts.find(
+            part =>
+              part.type ===
+              "day"
+          )?.value;
+
+        const mm =
+          parts.find(
+            part =>
+              part.type ===
+              "month"
+          )?.value;
+
+        const yyyy =
+          parts.find(
+            part =>
+              part.type ===
+              "year"
+          )?.value;
+
+        const dataStr =
+          `${dd}/${mm}/${yyyy}`;
+
+        // =================================================
+        // CRIA PAUSADO, IGUAL AO FLUXO ANTIGO
+        // =================================================
+
+        await createRegistro(
+          guild,
+          client.user,
+          dataStr,
+          "A Definir",
+          targetUserId,
+          {
+            initialActive:
+              false,
+
+            passaporte:
+              passaporte
+                ? String(
+                    passaporte
+                  )
+                : null,
+          }
+        );
+
+        const createdRecord =
+          SC_GI_findCurrentControl(
+            guild.id,
+            targetUserId
+          );
+
+        if (!createdRecord) {
+          throw new Error(
+            `Controle GI de ${targetUserId} não apareceu no state após a criação.`
+          );
+        }
+
+        return {
+          ok:
+            true,
+
+          created:
+            true,
+
+          control:
+            SC_GI_toPublicControl(
+              createdRecord
+            ),
+        };
       }
     };
 
@@ -7012,36 +7195,37 @@ dashOn('ticket:pessoal_vinculado', async (data) => {
   }
 });
 
-dashOn('pedirset:aprovado', async (data) => {
-      try {
-        // data: { userId, guildId, approverId, ... }
-        const guild = client.guilds.cache.get(data.guildId);
-        if (!guild) return;
+dashOn(
+  'pedirset:aprovado',
+  async (data) => {
+    try {
+      const result =
+        await SC_GI_CONTROL_API
+          .ensureFromPedirSet({
+            guildId:
+              data?.guildId,
 
-        // Cria registro PAUSADO (active: false)
-        // Data de entrada = hoje (Fuso SP para não virar o dia errado)
-        const now = new Date();
-        const parts = new Intl.DateTimeFormat('pt-BR', {
-          timeZone: 'America/Sao_Paulo',
-          day: '2-digit',
-          month: '2-digit',
-          year: 'numeric'
-        }).formatToParts(now);
+            userId:
+              data?.userId,
 
-        const dd = parts.find(p => p.type === 'day').value;
-        const mm = parts.find(p => p.type === 'month').value;
-        const yyyy = parts.find(p => p.type === 'year').value;
-        const dataStr = `${dd}/${mm}/${yyyy}`;
+            passaporte:
+              data?.passaporte ||
+              null,
+          });
 
-        // Registrar como se fosse o bot (sistema)
-        // ✅ Força a área "A Definir" (conforme solicitado)
-        // ✅ Passa o passaporte para salvar no registro
-        await createRegistro(guild, client.user, dataStr, 'A Definir', data.userId, { initialActive: false, passaporte: data.passaporte });
-        console.log(`[SC_GI] Registro automático criado (pausado) para ${data.userId} em ${dataStr}`);
-      } catch (e) {
-        console.error('[SC_GI] Erro ao criar registro automático via pedirset:', e);
-      }
-    });
+      console.log(
+        result?.created
+          ? `[SC_GI] Registro automático criado (pausado) para ${data?.userId}.`
+          : `[SC_GI] Registro automático já existia para ${data?.userId}; criação duplicada ignorada.`
+      );
+    } catch (e) {
+      console.error(
+        '[SC_GI] Erro ao garantir registro automático via pedirset:',
+        e
+      );
+    }
+  }
+);
 
     // ====================== INTERAÇÕES ======================
     client.on(Events.InteractionCreate, async (interaction) => {
