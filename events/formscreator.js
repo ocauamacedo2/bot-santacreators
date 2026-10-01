@@ -1051,19 +1051,28 @@ async function resolveFormsCreatorCanonicalTopic(
     channel,
     topicName,
     reason,
+    skipEvolutionLookup = false,
   }
 ) {
-  const activeEvolutionThreadId =
-    await getActiveEvolutionThreadId(
-      client,
-      userId,
-      {
-        guildId,
-        originalThreadId: null,
-        reason:
-          "FormsCreator verificando tópico ativo antes da criação",
-      }
-    ).catch(() => null);
+  let activeEvolutionThreadId =
+    null;
+
+  if (
+    skipEvolutionLookup !==
+    true
+  ) {
+    activeEvolutionThreadId =
+      await getActiveEvolutionThreadId(
+        client,
+        userId,
+        {
+          guildId,
+          originalThreadId: null,
+          reason:
+            "FormsCreator verificando tópico ativo antes da criação",
+        }
+      ).catch(() => null);
+  }
 
   if (activeEvolutionThreadId) {
     const activeEvolutionThread =
@@ -4046,6 +4055,53 @@ async function syncLegacyThreads(client, progressMsg = null) {
 // ✅ EXPORTS PARA INTEGRAÇÃO
 // =========================
 
+// =====================================================
+// CONSULTA RÁPIDA DO FORMSCREATOR PELO STATE
+// =====================================================
+//
+// Não varre tópicos do Discord.
+//
+// É usada pelo Controle GI apenas para montar o link visual
+// do Forms sem travar a criação/atualização do controle.
+// =====================================================
+export function findFormsCreatorThreadIdFastByUserId(
+  userId
+) {
+  const targetUserId =
+    String(
+      userId ||
+      ""
+    ).trim();
+
+  if (!targetUserId) {
+    return null;
+  }
+
+  const state =
+    readState();
+
+  const entry =
+    Object.entries(
+      state.registrations ||
+      {}
+    ).find(
+      ([
+        ,
+        registration,
+      ]) =>
+        String(
+          registration?.userId ||
+          ""
+        ).trim() ===
+        targetUserId
+    );
+
+  return (
+    entry?.[0] ||
+    null
+  );
+}
+
 export async function createFormsCreatorRecord(
   client,
   {
@@ -4179,6 +4235,12 @@ export async function createFormsCreatorRecord(
           topicName: targetName,
           reason:
             `Registro automático para ${targetName}`,
+
+          // No fluxo automático do Pedir Set,
+          // não espera a Evolução antes de criar o Forms.
+          skipEvolutionLookup:
+            skipDeepDuplicateScan ===
+            true,
         }
       );
 
@@ -4230,68 +4292,128 @@ state.registrations[topic.id] = {
 };
     writeState(state);
 
-    await syncEvolutionHierarchyForMember(client, {
-        guildId: guild.id,
-        userId: targetId,
-        originalThreadId: topic.id,
-        reason: "Registro de evolução criado",
-    }).catch((error) => {
-        console.error(
-            `[FormsCreator] Falha ao sincronizar hierarquia de ${targetId}:`,
-            error
-        );
-    });
+    // =====================================================
+    // PÓS-PROCESSAMENTO DO FORMSCREATOR
+    // =====================================================
+    //
+    // O núcleo do Forms já existe neste ponto:
+    //
+    // - tópico criado;
+    // - mensagem criada;
+    // - state salvo.
+    //
+    // No Pedir Set, devolvemos o Forms imediatamente para
+    // permitir que o Controle GI seja criado logo em seguida.
+    //
+    // Evolução, DM e log continuam existindo normalmente,
+    // apenas rodam sem bloquear a sequência Forms -> GI.
+    // =====================================================
 
-    // ✅ CORREÇÃO: Enviar DM para o usuário
-    if (membro) {
-        try {
-            await sendBotDmLogged({
-                client,
-
-                target:
-                    membro,
-
-                guild,
-
-                source:
-                    "formscreator.js • Novo tópico de acompanhamento",
-
-                payload: {
-                    content:
-                        `Olá! Um novo tópico de acompanhamento (<#${topic.id}>) foi criado para você no servidor **${guild.name}**. Fique de olho lá!`
-                }
-            });
-        } catch (e) {
-            console.warn(
-                `[FormsCreator] Falha ao enviar DM para ${membro.user.tag} (${membro.id}). O usuário pode ter DMs desativadas.`
+    const finalizeFormsCreatorCreation =
+      async () => {
+        await syncEvolutionHierarchyForMember(client, {
+            guildId: guild.id,
+            userId: targetId,
+            originalThreadId: topic.id,
+            reason: "Registro de evolução criado",
+        }).catch((error) => {
+            console.error(
+                `[FormsCreator] Falha ao sincronizar hierarquia de ${targetId}:`,
+                error
             );
+        });
 
-            // Opcional: avisar no tópico que a DM falhou
+        // ✅ CORREÇÃO: Enviar DM para o usuário
+        if (membro) {
             try {
-                await topic.send(
-                    `⚠️ Não foi possível notificar <@${targetId}> por mensagem direta. Avise-o(a) manualmente sobre este tópico.`
-                );
-            } catch {}
-        }
-    }
+                await sendBotDmLogged({
+                    client,
 
-    // ✅ CORREÇÃO: Enviar log para o canal de logs
-    try {
-        const logChannel = await client.channels.fetch(LOG_CHANNEL_ID_V2).catch(() => null);
-        if (logChannel && logChannel.isTextBased()) {
-            const logEmbed = new EmbedBuilder()
-                .setTitle("📝 Novo Registro de Evolução Criado")
-                .setColor("Blue")
-                .addFields(
-                    { name: "Membro", value: `<@${targetId}>`, inline: true },
-                    { name: "Aprovado por", value: `<@${creatorId}>`, inline: true },
-                    { name: "Tópico Criado", value: `${topic}`, inline: false }
-                )
-                .setTimestamp();
-            await logChannel.send({ embeds: [logEmbed] });
+                    target:
+                        membro,
+
+                    guild,
+
+                    source:
+                        "formscreator.js • Novo tópico de acompanhamento",
+
+                    payload: {
+                        content:
+                            `Olá! Um novo tópico de acompanhamento (<#${topic.id}>) foi criado para você no servidor **${guild.name}**. Fique de olho lá!`
+                    }
+                });
+            } catch (e) {
+                console.warn(
+                    `[FormsCreator] Falha ao enviar DM para ${membro.user.tag} (${membro.id}). O usuário pode ter DMs desativadas.`
+                );
+
+                // Opcional: avisar no tópico que a DM falhou
+                try {
+                    await topic.send(
+                        `⚠️ Não foi possível notificar <@${targetId}> por mensagem direta. Avise-o(a) manualmente sobre este tópico.`
+                    );
+                } catch {}
+            }
         }
-    } catch (e) {
-        console.error(`[FormsCreator] Falha ao enviar log de criação para o canal ${LOG_CHANNEL_ID_V2}:`, e);
+
+        // ✅ CORREÇÃO: Enviar log para o canal de logs
+        try {
+            const logChannel = await client.channels.fetch(LOG_CHANNEL_ID_V2).catch(() => null);
+
+            if (
+                logChannel &&
+                logChannel.isTextBased()
+            ) {
+                const logEmbed =
+                    new EmbedBuilder()
+                        .setTitle("📝 Novo Registro de Evolução Criado")
+                        .setColor("Blue")
+                        .addFields(
+                            {
+                                name: "Membro",
+                                value: `<@${targetId}>`,
+                                inline: true
+                            },
+                            {
+                                name: "Aprovado por",
+                                value: `<@${creatorId}>`,
+                                inline: true
+                            },
+                            {
+                                name: "Tópico Criado",
+                                value: `${topic}`,
+                                inline: false
+                            }
+                        )
+                        .setTimestamp();
+
+                await logChannel.send({
+                    embeds: [logEmbed]
+                });
+            }
+        } catch (e) {
+            console.error(
+                `[FormsCreator] Falha ao enviar log de criação para o canal ${LOG_CHANNEL_ID_V2}:`,
+                e
+            );
+        }
+      };
+
+    if (
+      skipDeepDuplicateScan ===
+      true
+    ) {
+      void finalizeFormsCreatorCreation()
+        .catch(
+          (error) => {
+            console.error(
+              `[FormsCreator] Pós-processamento do Pedir Set falhou para ${targetId}:`,
+              error
+            );
+          }
+        );
+    } else {
+      await finalizeFormsCreatorCreation();
     }
 
 console.log(

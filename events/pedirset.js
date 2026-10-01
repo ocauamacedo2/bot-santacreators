@@ -560,183 +560,84 @@ if (!podeAprovarSet) {
       ? EmbedBuilder.from(interaction.message.embeds[0])
       : new EmbedBuilder().setTitle('📋 Pedido de Set');
 
-    const embedAtualizado = baseEmbed
-      .setColor('Green')
-      .setFooter({ text: `✅ Aprovado por ${interaction.user.tag}` });
+    const embedProcessando = baseEmbed
+      .setColor('Yellow')
+      .setFooter({
+        text:
+          `⏳ Processando aprovação de ${interaction.user.tag}...`
+      });
 
-    const rowAtualizada = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId('set_aprovado')
-        .setLabel('✅ Set Aprovado')
-        .setStyle(ButtonStyle.Secondary)
-        .setDisabled(true)
-    );
+    const rowProcessando =
+      new ActionRowBuilder()
+        .addComponents(
+          new ButtonBuilder()
+            .setCustomId('set_processando')
+            .setLabel('⏳ Processando Set...')
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(true)
+        );
 
-    // Atualiza a interface na hora
+    // Ainda NÃO marca como aprovado.
+    // Primeiro precisa concluir FormsCreator + Controle GI.
     await interaction.editReply({
-      components: [rowAtualizada],
-      embeds: [embedAtualizado]
+      components: [rowProcessando],
+      embeds: [embedProcessando]
     }).catch(() => {});
 
     // --- 🛠️ PROCESSAMENTO EM BACKGROUND (Não bloqueia o clique) ---
     (async () => {
-      // 1. Cargos e Nick
-      const rolesToAdd = [
-        CARGO_SET,
-        CARGO_SENIOR_CREATOR,
-        CARGO_EQUIPE_CREATOR_ADD
-      ];
-
-      await membro.roles
-        .add(
-          rolesToAdd
-        )
-        .catch(
-          () => {}
-        );
-
-      await membro.roles
-        .remove(
-          CARGO_ENTREVISTA
-        )
-        .catch(
-          () => {}
-        );
-      
-      const newNickname =
-        createSafeNickname(
-          nome,
-          passaporte
-        );
-
-      await membro
-        .setNickname(
-          newNickname
-        )
-        .catch(
-          () => {}
-        );
-
-      // =====================================================
-      // 2. AVISA AS INTEGRAÇÕES IMEDIATAMENTE
-      // =====================================================
-      //
-      // IMPORTANTE:
-      //
-      // O Controle GI e a movimentação do ticket NÃO podem
-      // depender da varredura do FormsCreator terminar.
-      //
-      // O gestaoinfluencer.js escuta este evento e cria o
-      // Controle GI pausado.
-      //
-      // Depois, o próprio GI emite gi:controle_criado e o
-      // sortChannels.js move o ticket de Contratar em Game
-      // para a categoria oficial da Equipe Creator.
-      // =====================================================
-
-      // =====================================================
-      // CONTROLE GI — CAMINHO DIRETO + EVENTO DE COMPATIBILIDADE
-      // =====================================================
-      //
-      // Primeiro garante o Controle GI diretamente pela API viva.
-      //
-      // Depois mantém o dashEmit já existente para:
-      //
-      // - sortChannels;
-      // - dashboards;
-      // - Controle GI antigo;
-      // - qualquer outro módulo que já escute este evento.
-      //
-      // Assim o Controle GI não depende exclusivamente do
-      // barramento de eventos.
-      // =====================================================
-
       try {
-        const giApi =
-          globalThis
-            .SC_GI_CONTROL_API;
+        // =====================================================
+        // 1. CARGOS E NICK
+        // =====================================================
 
-        if (
-          !giApi ||
-          typeof giApi.ensureFromPedirSet !==
-            "function"
-        ) {
-          throw new Error(
-            "SC_GI_CONTROL_API.ensureFromPedirSet ainda não está disponível."
+        const rolesToAdd = [
+          CARGO_SET,
+          CARGO_SENIOR_CREATOR,
+          CARGO_EQUIPE_CREATOR_ADD
+        ];
+
+        await membro.roles
+          .add(
+            rolesToAdd
+          )
+          .catch(
+            () => {}
           );
-        }
 
-        const giResult =
-          await giApi
-            .ensureFromPedirSet({
-              guildId:
-                interaction.guildId,
+        await membro.roles
+          .remove(
+            CARGO_ENTREVISTA
+          )
+          .catch(
+            () => {}
+          );
 
-              userId:
-                userId,
+        const newNickname =
+          createSafeNickname(
+            nome,
+            passaporte
+          );
 
-              passaporte:
-                passaporte,
-            });
+        await membro
+          .setNickname(
+            newNickname
+          )
+          .catch(
+            () => {}
+          );
+
+        // =====================================================
+        // 2. FORMSCREATOR PRIMEIRO
+        // =====================================================
 
         console.log(
-          giResult?.created
-            ? `[PedirSet] Controle GI criado para ${userId}.`
-            : `[PedirSet] Controle GI já existia para ${userId}.`
+          `[PedirSet] Etapa 1/3: iniciando FormsCreator para ${userId}.`
         );
-      } catch (
-        giError
-      ) {
-        console.error(
-          "[PedirSet] Falha ao garantir Controle GI diretamente:",
-          giError
-        );
-      }
 
-      // =====================================================
-      // MANTÉM O EVENTO EXISTENTE
-      // =====================================================
+        let formsThreadId =
+          null;
 
-      dashEmit(
-        'pedirset:aprovado',
-        {
-          userId:
-            userId,
-
-          approverId:
-            interaction.user.id,
-
-          guildId:
-            interaction.guildId,
-
-          nome,
-
-          passaporte,
-
-          timestamp:
-            Date.now()
-        }
-      );
-
-      console.log(
-        `[PedirSet] Set aprovado: evento de integração emitido para ${userId}.`
-      );
-
-      // =====================================================
-      // 3. FORMSCREATOR
-      // =====================================================
-      //
-      // createFormsCreatorRecord() já possui a própria trava
-      // anti-duplicação e já procura um Forms oficial existente.
-      //
-      // Antes nós fazíamos uma varredura completa aqui e,
-      // caso não encontrasse, createFormsCreatorRecord()
-      // fazia outra varredura completa novamente.
-      //
-      // Agora existe apenas UMA varredura.
-      // =====================================================
-
-      try {
         try {
           const createdForms =
             await createFormsCreatorRecord(
@@ -765,23 +666,16 @@ if (!podeAprovarSet) {
               }
             );
 
+          formsThreadId =
+            createdForms?.threadId ||
+            null;
+
           console.log(
-            `[PedirSet] FormsCreator criado para ${userId}: ${createdForms?.threadId || "thread criada"}.`
+            `[PedirSet] Etapa 1/3 concluída: FormsCreator criado para ${userId}: ${formsThreadId || "thread criada"}.`
           );
         } catch (
           createError
         ) {
-          // =================================================
-          // JÁ EXISTE FORMS
-          // =================================================
-          //
-          // createFormsCreatorRecord() informa o threadId
-          // através do código FORMSCREATOR_ALREADY_EXISTS.
-          //
-          // Neste caso não cria duplicado.
-          // Apenas reativa o registro existente.
-          // =================================================
-
           if (
             createError?.code ===
               "FORMSCREATOR_ALREADY_EXISTS" &&
@@ -801,21 +695,165 @@ if (!podeAprovarSet) {
               }
             );
 
+            formsThreadId =
+              String(
+                createError.threadId
+              );
+
             console.log(
-              `[PedirSet] FormsCreator existente reativado para ${userId}: ${createError.threadId}.`
+              `[PedirSet] Etapa 1/3 concluída: FormsCreator existente reativado para ${userId}: ${formsThreadId}.`
             );
           } else {
             throw createError;
           }
         }
-      } catch (
-        e
-      ) {
-        console.error(
-          "[PedirSet] Background FormsCreator error:",
-          e
+
+        if (!formsThreadId) {
+          throw new Error(
+            `FormsCreator de ${userId} não retornou um threadId válido.`
+          );
+        }
+
+        // =====================================================
+        // 3. CONTROLE GI DEPOIS DO FORMS
+        // =====================================================
+
+        console.log(
+          `[PedirSet] Etapa 2/3: FormsCreator pronto. Criando/garantindo Controle GI para ${userId}.`
         );
-      }
+
+        const giApi =
+          globalThis
+            .SC_GI_CONTROL_API;
+
+        if (
+          !giApi ||
+          typeof giApi.ensureFromPedirSet !==
+            "function"
+        ) {
+          throw new Error(
+            "SC_GI_CONTROL_API.ensureFromPedirSet não está disponível."
+          );
+        }
+
+        const giResult =
+          await giApi
+            .ensureFromPedirSet({
+              guildId:
+                interaction.guildId,
+
+              userId:
+                userId,
+
+              passaporte:
+                passaporte,
+            });
+
+        const giControl =
+          giResult?.control ||
+          (
+            typeof giApi.getControl ===
+              "function"
+              ? giApi.getControl(
+                  interaction.guildId,
+                  userId
+                )
+              : null
+          );
+
+        if (!giControl) {
+          throw new Error(
+            `Controle GI de ${userId} não ficou disponível após a criação.`
+          );
+        }
+
+        console.log(
+          giResult?.created
+            ? `[PedirSet] Etapa 2/3 concluída: Controle GI criado para ${userId}.`
+            : `[PedirSet] Etapa 2/3 concluída: Controle GI já existia e foi sincronizado para ${userId}.`
+        );
+
+        // =====================================================
+        // 4. EVENTO FINAL
+        // =====================================================
+        //
+        // Agora Forms + GI já existem.
+        // O sortChannels pode mover o ticket com segurança.
+        // =====================================================
+
+        dashEmit(
+          'pedirset:aprovado',
+          {
+            userId:
+              userId,
+
+            approverId:
+              interaction.user.id,
+
+            guildId:
+              interaction.guildId,
+
+            nome,
+
+            passaporte,
+
+            formsThreadId,
+
+            giControlMessageId:
+              giControl?.messageId ||
+              null,
+
+            directGiStarted:
+              true,
+
+            timestamp:
+              Date.now()
+          }
+        );
+
+        console.log(
+          `[PedirSet] Etapa 3/3 concluída: integração final emitida para ${userId}. Forms=${formsThreadId} | GI=${giControl?.messageId || "sem-id"}.`
+        );
+
+        // =====================================================
+        // 5. SOMENTE AGORA MARCA COMO APROVADO
+        // =====================================================
+
+        const embedAprovado =
+          baseEmbed
+            .setColor('Green')
+            .setFooter({
+              text:
+                `✅ Aprovado por ${interaction.user.tag}`
+            });
+
+        const rowAprovada =
+          new ActionRowBuilder()
+            .addComponents(
+              new ButtonBuilder()
+                .setCustomId('set_aprovado')
+                .setLabel('✅ Set Aprovado')
+                .setStyle(ButtonStyle.Secondary)
+                .setDisabled(true)
+            );
+
+        await interaction.message
+          .edit({
+            components:
+              [rowAprovada],
+
+            embeds:
+              [embedAprovado],
+          })
+          .catch(() => {});
+
+        // Só remove o pedido persistido depois que
+        // FormsCreator e Controle GI realmente existem.
+        pedidosSet.delete(
+          idUnico
+        );
+
+        savePedidosSet();
 
       // =====================================================
       // 4. DMs E AVISOS
@@ -878,12 +916,69 @@ if (!podeAprovarSet) {
         }).catch(() => {});
       }
 
-      const canalAdm = await client.channels.fetch(CANAL_ADMINISTRACAO).catch(() => null);
-      if (canalAdm) await canalAdm.send({ content: `📞 ZipZap recebido: \`${zipzap}\` de <@${userId}>` }).catch(() => {});
+            const canalAdm = await client.channels.fetch(CANAL_ADMINISTRACAO).catch(() => null);
+
+      if (canalAdm) {
+        await canalAdm.send({
+          content:
+            `📞 ZipZap recebido: \`${zipzap}\` de <@${userId}>`
+        }).catch(() => {});
+      }
+      } catch (
+        flowError
+      ) {
+        console.error(
+          `[PedirSet] Falha no fluxo completo de aprovação para ${userId}:`,
+          flowError
+        );
+
+        // =====================================================
+        // NÃO PERDE O PEDIDO SE ALGO FALHAR
+        // =====================================================
+        //
+        // O pedido continua salvo e os botões voltam.
+        // Assim você pode clicar Aprovar novamente depois de
+        // corrigir qualquer erro externo.
+        // =====================================================
+
+        const embedFalha =
+          baseEmbed
+            .setColor('Red')
+            .setFooter({
+              text:
+                `❌ Falha automática. Tente aprovar novamente.`
+            });
+
+        const rowFalha =
+          new ActionRowBuilder()
+            .addComponents(
+              new ButtonBuilder()
+                .setCustomId(
+                  `aprovar_set_${idUnico}`
+                )
+                .setLabel('✅ Aprovar Set')
+                .setStyle(ButtonStyle.Success),
+
+              new ButtonBuilder()
+                .setCustomId(
+                  `reprovar_set_${idUnico}`
+                )
+                .setLabel('❌ Reprovar Set')
+                .setStyle(ButtonStyle.Danger)
+            );
+
+        await interaction.message
+          .edit({
+            components:
+              [rowFalha],
+
+            embeds:
+              [embedFalha],
+          })
+          .catch(() => {});
+      }
     })();
 
-    pedidosSet.delete(idUnico);
-    savePedidosSet();
     return true;
   }
 

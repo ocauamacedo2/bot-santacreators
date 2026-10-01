@@ -44,6 +44,7 @@
 const {
   findFormsCreatorThreadIdByUserId,
   findFormsCreatorThreadLinkByUserId,
+  findFormsCreatorThreadIdFastByUserId,
   setFormsCreatorStatus,
   setFormsCreatorArea,
   findOriginalFormsCreatorThreadIdByUserId,
@@ -460,6 +461,20 @@ CHANNEL_RESTORE_LOG:      '1486006878914875412',
           );
 
         if (existing) {
+          // O Forms já foi criado/reativado antes desta etapa.
+          // Atualiza o controle existente para garantir que
+          // o link do Forms apareça imediatamente.
+          await refreshRegistroMessage(
+            guild,
+            client.user,
+            existing.messageId,
+            "Pedir Set: sincronizando Controle GI com FormsCreator",
+            {
+              log:
+                false,
+            }
+          ).catch(() => {});
+
           return {
             ok:
               true,
@@ -545,6 +560,12 @@ CHANNEL_RESTORE_LOG:      '1486006878914875412',
                     passaporte
                   )
                 : null,
+
+            // Fluxo automático do Pedir Set:
+            // não faz buscas históricas pesadas antes de criar
+            // o núcleo do Controle GI.
+            fastCreate:
+              true,
           }
         );
 
@@ -2801,20 +2822,39 @@ async function resolveInitialRoleSetAtMs(guild, targetId) {
         .setTimestamp(new Date());
 
 // ✅ LINK DO TÓPICO DE EVOLUÇÃO / FORMSCREATOR
+//
+// IMPORTANTE:
+// o controle GI NÃO faz mais uma varredura profunda de tópicos
+// do Discord só para montar este link visual.
+//
+// A consulta rápida usa apenas o state já carregado do FormsCreator.
+// Se o Forms ainda não existir, o controle mostra "Não encontrado"
+// e uma atualização posterior preencherá o link automaticamente.
 let fcLink = null;
-try {
-  if (typeof findFormsCreatorThreadLinkByUserId === 'function') {
-    fcLink = await findFormsCreatorThreadLinkByUserId(client, rec.targetId, rec.guildId).catch(() => null);
-  }
 
-if (!fcLink && typeof findFormsCreatorThreadIdByUserId === 'function') {
-    const fcThreadId = await findFormsCreatorThreadIdByUserId(client, rec.targetId).catch(() => null);
-    if (fcThreadId && rec.guildId) {
-      fcLink = `https://discord.com/channels/${rec.guildId}/${fcThreadId}`;
+try {
+  if (
+    typeof findFormsCreatorThreadIdFastByUserId ===
+      'function'
+  ) {
+    const fcThreadId =
+      findFormsCreatorThreadIdFastByUserId(
+        rec.targetId
+      );
+
+    if (
+      fcThreadId &&
+      rec.guildId
+    ) {
+      fcLink =
+        `https://discord.com/channels/${rec.guildId}/${fcThreadId}`;
     }
   }
 } catch (e) {
-  console.warn('[SC_GI] Falha ao buscar link do tópico FormsCreator:', e?.message || e);
+  console.warn(
+    '[SC_GI] Falha ao buscar link rápido do tópico FormsCreator:',
+    e?.message || e
+  );
 }
 
 // ✅ TICKET PESSOAL VINCULADO AO CONTROLE GI
@@ -3312,7 +3352,15 @@ if (rec.responsibleUserId && !isRespStillValid) {
 
     // cria o registro
 let warnNoRoleGI = false;
-let roleSetAtMs = await resolveInitialRoleSetAtMs(guild, targetUser.id);
+
+let roleSetAtMs =
+  options.fastCreate === true
+    ? null
+    : await resolveInitialRoleSetAtMs(
+        guild,
+        targetUser.id
+      );
+
       const ch = await guild.channels.fetch(SC_GI_CFG.CHANNEL_MENU_E_REGISTROS).catch(() => null);
       if (!ch || ch.type !== ChannelType.GuildText) throw new Error('Canal de registros indisponível.');
 
@@ -3399,6 +3447,33 @@ if (
   );
 }
 
+// =====================================================
+// AVISA O SISTEMA DE TICKETS ASSIM QUE O NÚCLEO EXISTE
+// =====================================================
+//
+// Não espera DM, logs, menu ou dashboard.
+//
+// A partir daqui o Controle GI já existe no state e já possui
+// mensagem real no Discord, então o ticket pode descer de
+// "Contratar em Game" para a categoria da Equipe Creator.
+// =====================================================
+dashEmit(
+  'gi:controle_criado',
+  {
+    userId:
+      record.targetId,
+
+    guildId:
+      guild.id,
+
+    active:
+      record.active,
+
+    timestamp:
+      Date.now()
+  }
+);
+
 // 🔁 FAILSAFE: garante IDs corretos nos botões
 await msg.edit({
   components: registroButtons(record.messageId, record.active)
@@ -3472,17 +3547,6 @@ try {
       await ensureMenu(guild);
       markBoardDirty();
       await renderRespBoard(guild, { force: true });
-
-      // ✅ AVISA O SISTEMA DE TICKETS QUE O CONTROLE GI PASSOU A EXISTIR
-      // O sortChannels.js decide se deve mover ou não.
-      // Ele só move automaticamente quando o ticket estiver na categoria
-      // 1444857594517913742, preservando todas as outras categorias.
-      dashEmit('gi:controle_criado', {
-        userId: record.targetId,
-        guildId: guild.id,
-        active: record.active,
-        timestamp: Date.now()
-      });
     }
 
     // =====================================================
@@ -7199,6 +7263,18 @@ dashOn(
   'pedirset:aprovado',
   async (data) => {
     try {
+      // ===================================================
+      // Se o pedirset.js já iniciou a garantia DIRETA do GI,
+      // este listener fica apenas como compatibilidade e não
+      // dispara uma segunda criação concorrente.
+      // ===================================================
+      if (
+        data?.directGiStarted ===
+          true
+      ) {
+        return;
+      }
+
       const result =
         await SC_GI_CONTROL_API
           .ensureFromPedirSet({
