@@ -55,6 +55,36 @@ function fireAndForget(promise, label = 'async_task') {
     console.error(`[!perguntas] Falha em ${label}:`, e);
   });
 }
+
+async function findExistingInterviewControl(channel, clientUserId) {
+  const mensagensRecentes = await channel.messages
+    .fetch({ limit: 50 })
+    .catch(() => null);
+
+  if (!mensagensRecentes) {
+    return null;
+  }
+
+  return mensagensRecentes.find((msg) => {
+    if (msg.author?.id !== clientUserId) {
+      return false;
+    }
+
+    return msg.components?.some((row) =>
+      row.components?.some((component) => {
+        const customId = String(
+          component.customId || ""
+        );
+
+        return (
+          customId === `iniciar|${channel.id}` ||
+          customId.startsWith("enviar|")
+        );
+      })
+    );
+  }) || null;
+}
+
 async function disableOldStartButtons(channel, clientUserId, keepMessageId) {
   const mensagensRecentes = await channel.messages
     .fetch({ limit: 50 })
@@ -155,6 +185,83 @@ export default {
     }
 
     // =====================================================
+    // 1.1 APAGA O !PERGUNTAS IMEDIATAMENTE
+    //
+    // O comando é removido antes de criar o botão para que
+    // fique visível no canal somente a mensagem do bot.
+    // =====================================================
+
+    if (!message.deletable) {
+      await message.channel.send(
+        "❌ Não consegui apagar o comando `!perguntas`. Verifique se o bot possui a permissão **Gerenciar Mensagens** neste canal."
+      ).catch(() => {});
+
+      return;
+    }
+
+    try {
+      await message.delete();
+    } catch (e) {
+      console.error(
+        `[!perguntas] Não foi possível apagar imediatamente a mensagem ${message.id} no canal ${message.channel.id}:`,
+        e
+      );
+
+      await message.channel.send(
+        "❌ Não consegui apagar o comando `!perguntas`. Tente novamente ou verifique a permissão **Gerenciar Mensagens** do bot."
+      ).catch(() => {});
+
+      return;
+    }
+
+    // =====================================================
+    // 1.2 IMPEDE NOVO BOTÃO SE A ENTREVISTA JÁ COMEÇOU
+    //
+    // Também bloqueia caso já exista no canal um botão
+    // Iniciar Entrevista ou ENVIAR PERGUNTAS.
+    //
+    // O !perguntas já foi apagado acima, portanto qualquer
+    // tentativa duplicada desaparece silenciosamente.
+    // =====================================================
+
+    const freshChannel =
+      await message.guild.channels
+        .fetch(message.channel.id)
+        .catch(() => message.channel);
+
+    const currentTopic = String(
+      freshChannel?.topic ||
+      message.channel?.topic ||
+      ""
+    );
+
+    const entrevistaJaIniciada =
+      /\bentrevista_ativa:1\b/i.test(currentTopic) ||
+      /\bentrevista_starter:\d{17,20}\b/i.test(currentTopic);
+
+    if (entrevistaJaIniciada) {
+      console.warn(
+        `[!perguntas] Novo botão bloqueado no canal ${message.channel.id}: a entrevista já foi iniciada.`
+      );
+
+      return;
+    }
+
+    const existingInterviewControl =
+      await findExistingInterviewControl(
+        message.channel,
+        client.user.id
+      );
+
+    if (existingInterviewControl) {
+      console.warn(
+        `[!perguntas] Novo botão bloqueado no canal ${message.channel.id}: já existe um controle de entrevista na mensagem ${existingInterviewControl.id}.`
+      );
+
+      return;
+    }
+
+    // =====================================================
     // 2. MONTA O BOTÃO
     // =====================================================
 
@@ -176,14 +283,6 @@ export default {
     const cleanedTopic = oldTopic
       .replace(
         /\bentrevista_aplicador:\d{17,20}\b/gi,
-        ""
-      )
-      .replace(
-        /\bentrevista_starter:\d{17,20}\b/gi,
-        ""
-      )
-      .replace(
-        /\bentrevista_ativa:[01]\b/gi,
         ""
       )
       .replace(
@@ -265,36 +364,22 @@ export default {
         e
       );
 
-      await message.reply({
+      await message.channel.send({
         content:
           "❌ Não consegui criar o botão da entrevista agora. " +
-          "O comando não foi apagado para você poder tentar novamente.",
-
-        allowedMentions: {
-          repliedUser: false
-        }
+          "Digite `!perguntas` novamente para tentar de novo."
       }).catch(() => {});
 
       return;
     }
 
     // =====================================================
-    // 5. SOMENTE AGORA APAGA O !PERGUNTAS
+    // 5. COMANDO !PERGUNTAS JÁ FOI APAGADO
     //
-    // Neste ponto sabemos que:
-    //
-    // - candidato foi identificado;
-    // - botão existe;
-    // - tópico foi atualizado;
-    // - aplicador foi registrado.
+    // A mensagem foi removida imediatamente após a
+    // identificação do candidato e antes da criação
+    // do botão.
     // =====================================================
-
-    if (message.deletable) {
-      fireAndForget(
-        message.delete(),
-        'message.delete'
-      );
-    }
 
     // =====================================================
     // 6. PAUSA A IA PARA A ENTREVISTA MANUAL
