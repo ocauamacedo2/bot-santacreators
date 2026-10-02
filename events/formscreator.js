@@ -3073,6 +3073,60 @@ async function syncFormsCreatorActiveMirror(
         );
       }
 
+      // =====================================================
+      // LINK DE VOLTA PARA O CONTROLE GI
+      // =====================================================
+
+      const giControl =
+        globalThis
+          .SC_GI_CONTROL_API
+          ?.getControl?.(
+            GUILD_ID,
+            userId
+          ) ||
+        null;
+
+      if (
+        giControl?.channelId &&
+        giControl?.messageId
+      ) {
+        const giLink =
+          `https://discord.com/channels/${GUILD_ID}/${giControl.channelId}/${giControl.messageId}`;
+
+        const giLinkField = {
+          name:
+            "🧭 Controle GI",
+          value:
+            `[Abrir registro no Controle GI](${giLink})`,
+          inline:
+            false,
+        };
+
+        const giFieldIndex =
+          fields.findIndex(
+            field =>
+              String(
+                field?.name ||
+                ""
+              ) ===
+              "🧭 Controle GI"
+          );
+
+        if (
+          giFieldIndex >=
+          0
+        ) {
+          fields[
+            giFieldIndex
+          ] =
+            giLinkField;
+        } else {
+          fields.push(
+            giLinkField
+          );
+        }
+      }
+
       mirrorEmbed
         .setFields(
           fields
@@ -6626,41 +6680,59 @@ export async function setFormsCreatorArea(client, { threadId, newArea, actor }) 
     let activeTopicSyncPending = false;
 
     if (registration.userId) {
-        // O registro ORIGINAL já foi atualizado e salvo.
-        // O espelho pode depender da fila da Evolução, então
-        // ele continua sendo sincronizado sem segurar o botão GI.
-        activeTopicSyncPending = true;
+        // =====================================================
+        // SINCRONIZA O TÓPICO ATIVO ANTES DE FINALIZAR
+        // =====================================================
+        //
+        // O registro original já foi atualizado e salvo.
+        //
+        // Aqui aguardamos a Evolução terminar de reconciliar a
+        // hierarquia antes de devolver o resultado ao Controle GI.
+        // Isso impede que o GI finalize enquanto o espelho ainda
+        // está usando um activeThreadId antigo.
+        // =====================================================
 
-        void syncFormsCreatorActiveMirror(
-            client,
-            {
-                originalThreadId:
-                    normalizedThreadId,
-                registration,
-                reason:
-                    "Área do FormsCreator alterada",
-            }
-        )
-            .then(
-                (mirrorResult) => {
-                    if (
-                        mirrorResult?.ok ===
-                        false
-                    ) {
-                        console.warn(
-                            `[FormsCreator] Espelho do tópico ativo ainda pendente para ${normalizedThreadId}.`
-                        );
+        try {
+            const mirrorResult =
+                await syncFormsCreatorActiveMirror(
+                    client,
+                    {
+                        originalThreadId:
+                            normalizedThreadId,
+                        registration,
+                        reason:
+                            "Área do FormsCreator alterada",
                     }
-                }
-            )
-            .catch(
-                (error) => {
-                    console.error(
-                        "[FormsCreator] Registro original atualizado; espelho do tópico ativo pendente:",
-                        error
-                    );
-                }
+                );
+
+            activeTopicUpdated =
+                mirrorResult?.ok !==
+                false;
+
+            activeTopicSyncPending =
+                mirrorResult?.ok ===
+                false;
+
+            if (
+                mirrorResult?.ok ===
+                false
+            ) {
+                console.warn(
+                    `[FormsCreator] Espelho do tópico ativo ainda pendente para ${normalizedThreadId}.`
+                );
+            }
+        } catch (error) {
+            activeTopicUpdated =
+                false;
+
+            activeTopicSyncPending =
+                true;
+
+            console.error(
+                "[FormsCreator] Registro original atualizado; espelho do tópico ativo pendente:",
+                error
             );
+        }
     }
 
     console.log(
@@ -6759,12 +6831,71 @@ export async function formsCreatorOnReady(client) {
               return;
             }
 
-            const roleUpdateInProgress = Number(
-              globalThis.__SC_ROLE_BYPASS__?.get(String(member.id)) || 0
-            ) > Date.now();
-            const hasEvolutionRole = [...EVOLUTION_PROFILE_ROLE_IDS]
-              .some(roleId => member.roles.cache.has(roleId));
-            if (roleUpdateInProgress && !hasEvolutionRole) {
+            const areaTransitionMap =
+              globalThis
+                .__SC_GI_AREA_TRANSITION__;
+
+            const areaTransitionUntil =
+              areaTransitionMap instanceof Map
+                ? Number(
+                    areaTransitionMap.get(
+                      String(
+                        member.id
+                      )
+                    ) ||
+                    0
+                  )
+                : 0;
+
+            if (
+              areaTransitionUntil &&
+              areaTransitionUntil <=
+                Date.now()
+            ) {
+              areaTransitionMap.delete(
+                String(
+                  member.id
+                )
+              );
+            }
+
+            if (
+              areaTransitionUntil >
+              Date.now()
+            ) {
+              // =================================================
+              // ALTERAÇÃO INTERNA DO CONTROLE GI
+              // =================================================
+              //
+              // O próprio fluxo que editou a Área sincronizará
+              // o Forms completo assim que terminar o pacote de
+              // cargos. Não dispara um segundo espelho em paralelo.
+              // =================================================
+              return;
+            }
+
+            const roleUpdateInProgress =
+              Number(
+                globalThis.__SC_ROLE_BYPASS__?.get(
+                  String(member.id)
+                ) ||
+                0
+              ) >
+              Date.now();
+
+            const hasEvolutionRole =
+              [...EVOLUTION_PROFILE_ROLE_IDS]
+                .some(
+                  roleId =>
+                    member.roles.cache.has(
+                      roleId
+                    )
+                );
+
+            if (
+              roleUpdateInProgress &&
+              !hasEvolutionRole
+            ) {
               // O desligamento GI atualizará o Forms depois da remoção dos cargos.
               return;
             }

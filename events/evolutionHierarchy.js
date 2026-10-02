@@ -497,6 +497,33 @@ async function configureChannelPermissions(
     );
   }
 
+  // =====================================================
+  // O DESTINO PRECISA ACEITAR TÓPICOS
+  // =====================================================
+  //
+  // CHANNEL_BY_TIER deve apontar para o canal de texto/fórum
+  // onde os tópicos realmente serão criados.
+  //
+  // Um ID de categoria possui permissionOverwrites, mas não
+  // possui threads.create(). Sem esta validação o bot poderia
+  // alterar permissões da categoria inteira e só descobrir
+  // depois que não consegue criar o Forms.
+  // =====================================================
+
+  if (
+    !channel
+      ?.threads
+      ?.create
+  ) {
+    throw new Error(
+      `O canal configurado para a fase ${TIER_NAME[tier] || tier} não aceita tópicos. ` +
+      `ID: ${channel.id}. ` +
+      `Nome: ${channel.name || "sem nome"}. ` +
+      `Tipo Discord: ${channel.type}. ` +
+      `No CHANNEL_BY_TIER use o ID do canal de texto/fórum que deve receber os tópicos, não o ID de uma categoria.`
+    );
+  }
+
   /*
    * Define quem pode visualizar e escrever
    * em cada uma das três fases.
@@ -1906,14 +1933,25 @@ async function performSync(
 
     if (
       !parentChannel
+    ) {
+      throw new Error(
+        `Canal da fase ${TIER_NAME[tier] || tier} não encontrado. ` +
+        `ID configurado: ${CHANNEL_BY_TIER[tier] || "não definido"}.`
+      );
+    }
+
+    if (
+      !parentChannel
         ?.threads
         ?.create
     ) {
-      return {
-        ok: false,
-        reason:
-          "target_forum_not_found",
-      };
+      throw new Error(
+        `O destino da fase ${TIER_NAME[tier] || tier} não suporta criação de tópicos. ` +
+        `ID: ${parentChannel.id}. ` +
+        `Nome: ${parentChannel.name || "sem nome"}. ` +
+        `Tipo Discord: ${parentChannel.type}. ` +
+        `Use no CHANNEL_BY_TIER o ID de um canal de texto/fórum que aceite tópicos, e não o ID de uma categoria pura.`
+      );
     }
 
     activeThread =
@@ -3057,55 +3095,264 @@ export function withActiveEvolutionThread(
   expected,
   action
 ) {
-  const task = syncQueue.then(async () => {
-    const thread = await client.channels.fetch(
-      expected.thread.id,
-      {
-        force: true,
+  const task =
+    syncQueue.then(
+      async () => {
+        const guildId =
+          expected?.thread?.guildId ||
+          GUILD_ID;
+
+        const guild =
+          client.guilds.cache.get(
+            guildId
+          ) ||
+          await client.guilds
+            .fetch(
+              guildId
+            )
+            .catch(
+              () => null
+            );
+
+        if (!guild) {
+          throw new Error(
+            "O servidor da evolução não está disponível."
+          );
+        }
+
+        let member =
+          await guild.members
+            .fetch({
+              user:
+                userId,
+              force:
+                true,
+            })
+            .catch(
+              () => null
+            );
+
+        if (!member) {
+          throw new Error(
+            "O membro da evolução não está disponível."
+          );
+        }
+
+        let thread =
+          expected?.thread?.id
+            ? await client.channels
+                .fetch(
+                  expected.thread.id,
+                  {
+                    force:
+                      true,
+                  }
+                )
+                .catch(
+                  () => null
+                )
+            : null;
+
+        let record =
+          readState()
+            .users[
+              String(
+                userId
+              )
+            ] ||
+          null;
+
+        const expectedTier =
+          Number(
+            expected?.tier ||
+            0
+          ) ||
+          null;
+
+        const hierarchyMatches =
+          () => {
+            if (
+              !thread?.isThread?.() ||
+              !expectedTier
+            ) {
+              return false;
+            }
+
+            return (
+              getEvolutionTierForMember(
+                member
+              ) ===
+                expectedTier &&
+              String(
+                record
+                  ?.activeThreadId ||
+                ""
+              ) ===
+                String(
+                  thread.id
+                ) &&
+              Number(
+                record
+                  ?.activeTier ||
+                0
+              ) ===
+                expectedTier &&
+              String(
+                thread.parentId ||
+                ""
+              ) ===
+                String(
+                  CHANNEL_BY_TIER[
+                    expectedTier
+                  ] ||
+                  ""
+                )
+            );
+          };
+
+        // =====================================================
+        // RECONCILIAÇÃO AUTOMÁTICA
+        // =====================================================
+        //
+        // Durante uma troca de área/cargo o Discord pode disparar
+        // vários guildMemberUpdate em sequência.
+        //
+        // Se o tópico esperado ficou obsoleto no intervalo entre
+        // getEvolutionFeedbackContext() e esta publicação, não
+        // publicamos no tópico velho e também não abortamos de
+        // primeira. Recalculamos a hierarquia uma única vez,
+        // dentro da própria fila, e usamos o tópico atual real.
+        // =====================================================
+
+        if (
+          !hierarchyMatches()
+        ) {
+          const originalThreadId =
+            record?.tiers?.[
+              EVOLUTION_TIERS.TEAM
+            ] ||
+            null;
+
+          const repaired =
+            await performSync(
+              client,
+              {
+                guildId,
+                userId,
+                originalThreadId,
+                reason:
+                  "Reconciliação automática antes da publicação no tópico ativo",
+              }
+            );
+
+          if (
+            !repaired?.ok
+          ) {
+            throw new Error(
+              `A hierarquia mudou durante a geração e não pôde ser reconciliada. ` +
+              `Motivo: ${repaired?.reason || "desconhecido"}.`
+            );
+          }
+
+          thread =
+            await client.channels
+              .fetch(
+                repaired.threadId,
+                {
+                  force:
+                    true,
+                }
+              )
+              .catch(
+                () => null
+              );
+
+          member =
+            await guild.members
+              .fetch({
+                user:
+                  userId,
+                force:
+                  true,
+              })
+              .catch(
+                () => null
+              );
+
+          record =
+            readState()
+              .users[
+                String(
+                  userId
+                )
+              ] ||
+            null;
+
+          const repairedTier =
+            Number(
+              repaired.tier ||
+              0
+            ) ||
+            null;
+
+          if (
+            !thread?.isThread?.() ||
+            !member ||
+            !repairedTier ||
+            getEvolutionTierForMember(
+              member
+            ) !==
+              repairedTier ||
+            String(
+              record
+                ?.activeThreadId ||
+              ""
+            ) !==
+              String(
+                thread.id
+              ) ||
+            Number(
+              record
+                ?.activeTier ||
+              0
+            ) !==
+              repairedTier ||
+            String(
+              thread.parentId ||
+              ""
+            ) !==
+              String(
+                CHANNEL_BY_TIER[
+                  repairedTier
+                ] ||
+                ""
+              )
+          ) {
+            throw new Error(
+              "A hierarquia continuou divergente após a reconciliação automática. Publicação cancelada para proteger o histórico."
+            );
+          }
+        }
+
+        await setThreadMode(
+          thread,
+          true,
+          "Publicação no tópico ativo confirmado"
+        );
+
+        return action(
+          thread
+        );
       }
     );
 
-    if (
-      !thread?.isThread?.() ||
-      thread.guildId !== expected.thread.guildId
-    ) {
-      throw new Error(
-        "O tópico de publicação não está disponível."
-      );
-    }
-
-    const member = await thread.guild.members.fetch({
-      user: userId,
-      force: true,
-    });
-
-    const record = readState().users[String(userId)];
-
-    if (
-      getEvolutionTierForMember(member) !== expected.tier ||
-      record?.activeThreadId !== thread.id ||
-      Number(record?.activeTier) !== expected.tier ||
-      thread.parentId !== CHANNEL_BY_TIER[expected.tier]
-    ) {
-      throw new Error(
-        "A hierarquia mudou durante a geração. Gere o feedback novamente."
-      );
-    }
-
-    await setThreadMode(
-      thread,
-      true,
-      "Publicação no tópico ativo confirmado"
+  syncQueue =
+    task.catch(
+      () => null
     );
-
-    return action(thread);
-  });
-
-  syncQueue = task.catch(() => null);
 
   return task;
 }
-
 export async function getActiveEvolutionThread(
   client,
   userId,

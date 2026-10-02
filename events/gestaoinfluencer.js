@@ -1806,12 +1806,53 @@ function activeTimeText(rec, n = nowMs()) {
       AREA_ROLE_IDS.EQUIPE_SOCIAL_MEDIAS,
       AREA_ROLE_IDS.CREATOR,
       AREA_ROLE_IDS.EQUIPE_CREATOR,
-      AREA_ROLE_IDS.SENIOR_CREATORS,
       AREA_ROLE_IDS.RESPONSAVEIS,
       AREA_ROLE_IDS.RESP_LIDER,
       AREA_ROLE_IDS.RESP_INFLU,
       AREA_ROLE_IDS.RESP_CREATORS
     ]);
+
+    // =====================================================
+    // TRANSIÇÃO INTERNA DE ÁREA DO CONTROLE GI
+    // =====================================================
+    //
+    // Usamos um marcador separado para o Forms não disparar
+    // uma segunda sincronização durante o pacote automático.
+    //
+    // Também ativa o bypass curto já existente para impedir
+    // que o roleProtect interprete a própria troca do GI como
+    // uma remoção externa de cargo protegido.
+    // =====================================================
+
+    function markGiAreaTransitionInProgress(
+      userId,
+      ms = 12000
+    ) {
+      if (
+        !(
+          globalThis
+            .__SC_GI_AREA_TRANSITION__
+          instanceof Map
+        )
+      ) {
+        globalThis
+          .__SC_GI_AREA_TRANSITION__ =
+          new Map();
+      }
+
+      globalThis
+        .__SC_GI_AREA_TRANSITION__
+        .set(
+          String(userId),
+          Date.now() + ms
+        );
+
+      setRoleBypass(
+        userId,
+        ms
+      );
+    }
+
     // =====================================================
     // CARGOS PROIBIDOS NOS RESPONSÁVEIS DE TOPO
     // =====================================================
@@ -2485,6 +2526,16 @@ function activeTimeText(rec, n = nowMs()) {
             "O bot não consegue alterar o nickname deste membro porque a hierarquia do Discord bloqueia a ação. Coloque o cargo do bot acima do maior cargo gerenciável do membro."
           );
         }
+      }
+
+      if (
+        removeRoleIds.length > 0 ||
+        addRoleIds.length > 0
+      ) {
+        markGiAreaTransitionInProgress(
+          rec.targetId,
+          12000
+        );
       }
 
       try {
@@ -3267,7 +3318,37 @@ async function resolveInitialRoleSetAtMs(guild, targetId) {
 let fcLink = null;
 
 try {
+  // =====================================================
+  // PRIMEIRO TENTA O TÓPICO HIERÁRQUICO ATIVO
+  // =====================================================
+  //
+  // Assim o Controle GI acompanha a fase atual da pessoa
+  // (Equipe, Gestão, Coordenação, Resp Líder ou Resp Influ)
+  // em vez de ficar preso ao Forms original.
+  // =====================================================
+
   if (
+    typeof findFormsCreatorThreadLinkByUserId ===
+      'function'
+  ) {
+    fcLink =
+      await findFormsCreatorThreadLinkByUserId(
+        client,
+        rec.targetId,
+        rec.guildId
+      );
+  }
+
+  // =====================================================
+  // FALLBACK: FORMS ORIGINAL
+  // =====================================================
+  //
+  // Se a Evolução ainda estiver iniciando, mantém o link
+  // antigo como recuperação temporária.
+  // =====================================================
+
+  if (
+    !fcLink &&
     typeof findFormsCreatorThreadIdFastByUserId ===
       'function'
   ) {
@@ -3286,7 +3367,7 @@ try {
   }
 } catch (e) {
   console.warn(
-    '[SC_GI] Falha ao buscar link rápido do tópico FormsCreator:',
+    '[SC_GI] Falha ao buscar tópico ativo do FormsCreator:',
     e?.message || e
   );
 }
