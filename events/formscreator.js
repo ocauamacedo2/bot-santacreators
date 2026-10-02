@@ -3345,10 +3345,32 @@ async function _performStatusUpdate(client, { registration, threadId, newStatus,
         };
         writeState(latestState);
 
-        await currentThread.send({
-            content: `**${actor?.username || actor?.id || "Sistema"}** alterou o status do projeto para **${newStatus ? 'ATIVO' : 'INATIVO'}**.`,
-            allowedMentions: { parse: [] },
-        }).catch(error => console.warn("[FormsCreator] Status salvo; aviso no tópico pendente:", error));
+        // =====================================================
+        // AVISO GENÉRICO DE STATUS
+        // =====================================================
+        //
+        // No desligamento vindo do Controle GI, NÃO publica a
+        // frase genérica "Fulano alterou o status...".
+        //
+        // O fluxo do GI publicará uma nota final específica no
+        // último tópico ativo e, em seguida, travará toda a
+        // trajetória da Evolução.
+        //
+        // Alterações manuais feitas diretamente pelo Forms
+        // continuam usando o comportamento anterior.
+        // =====================================================
+
+        if (
+            !(
+                fromGi &&
+                newStatus === false
+            )
+        ) {
+            await currentThread.send({
+                content: `**${actor?.username || actor?.id || "Sistema"}** alterou o status do projeto para **${newStatus ? 'ATIVO' : 'INATIVO'}**.`,
+                allowedMentions: { parse: [] },
+            }).catch(error => console.warn("[FormsCreator] Status salvo; aviso no tópico pendente:", error));
+        }
     });
 
     await logStatusChange(

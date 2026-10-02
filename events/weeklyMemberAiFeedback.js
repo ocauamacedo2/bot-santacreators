@@ -9080,6 +9080,199 @@ REGRAS FINAIS
 }
 
 // =====================================================
+// RESUMO INTERNO CURTO PARA DESLIGAMENTO NO FORMS
+// =====================================================
+//
+// Usa os mesmos fatos já coletados para a retrospectiva da DM.
+// Não faz uma segunda varredura completa do Discord.
+//
+// Este texto é INTERNO e propositalmente mais direto.
+// Ele não é enviado ao membro.
+// =====================================================
+
+export async function generateMemberDismissalFormsSummary({
+  facts,
+  record,
+  reason = "",
+} = {}) {
+  if (!facts) {
+    return null;
+  }
+
+  const userId =
+    String(
+      facts?.userId ||
+      record?.targetId ||
+      ""
+    ).trim();
+
+  const formsContext =
+    formatRecentFeedbackContext(
+      [
+        ...(facts?.previousFormsHumanHistory || []),
+        ...(facts?.formsHumanHistory || []),
+      ],
+      9000,
+      "Nenhum feedback humano relevante do Forms foi localizado no recorte disponível."
+    );
+
+  const ticketContext =
+    formatPersonalTicketHistoryForPrompt(
+      [
+        ...(facts?.previousPersonalTicketHistory || []),
+        ...(facts?.personalTicketHistory || []),
+      ],
+      9000
+    );
+
+  const rankingPoints =
+    Number.isFinite(
+      Number(
+        facts?.rankingPoints
+      )
+    )
+      ? Number(
+          facts.rankingPoints
+        )
+      : null;
+
+  const rankingPosition =
+    Number.isFinite(
+      Number(
+        facts?.rankingPosition
+      )
+    )
+      ? Number(
+          facts.rankingPosition
+        )
+      : null;
+
+  const rankingSize =
+    Number.isFinite(
+      Number(
+        facts?.rankingSize
+      )
+    )
+      ? Number(
+          facts.rankingSize
+        )
+      : null;
+
+  const prompt =
+    `
+Você está escrevendo uma NOTA INTERNA FINAL no Forms de acompanhamento de uma pessoa que acabou de ser desligada da SantaCreators.
+
+Esta nota NÃO será enviada para a pessoa.
+
+Seja objetivo, profissional, rigoroso e factual.
+
+Quero SOMENTE 2 a 4 frases curtas.
+Não faça despedida.
+Não faça texto motivacional.
+Não tente suavizar uma conclusão negativa comprovada.
+Não humilhe.
+Não use ironia.
+Não invente problema.
+Não invente elogio.
+Não revele o nome de quem escreveu feedbacks internos.
+Não use menções Discord.
+Não escreva IDs.
+
+Você pode dizer de forma direta que a entrega estava baixa, irregular, suficiente, forte ou muito forte SOMENTE se os dados abaixo realmente sustentarem isso.
+Você pode dizer que havia recorrência de feedback negativo ou predominância positiva SOMENTE se o conteúdo efetivo dos registros sustentar isso.
+Se os dados forem mistos, diga que eram mistos.
+Se não houver evidência suficiente para uma conclusão, diga isso de forma curta.
+
+A nota precisa registrar:
+1. que o membro foi desligado da SantaCreators;
+2. o estado objetivo recente de atividade/entrega;
+3. no máximo um ponto principal positivo e/ou um ponto principal de atenção, quando comprovados;
+4. que o Forms fica encerrado como histórico desta etapa.
+
+MEMBRO: ${facts?.displayName || "Membro"}
+ÁREA FINAL: ${facts?.area || record?.area || "Não informada"}
+ESTADO GI ANTES DO DESLIGAMENTO: ${facts?.giActive === false ? "Pausado/Inativo" : "Ativo"}
+MOTIVO REGISTRADO: ${String(reason || "Não informado").slice(0, 1000)}
+PONTOS NA SEMANA: ${rankingPoints == null ? "não confirmados" : rankingPoints}
+POSIÇÃO NA SEMANA: ${rankingPosition == null ? "sem posição confirmada" : `${rankingPosition}º${rankingSize ? ` de ${rankingSize}` : ""}`}
+META MÍNIMA SEMANAL: ${Number(facts?.weeklyMinimumPoints || 0)}
+ATINGIU A META: ${facts?.reachedWeeklyMinimum === true ? "sim" : facts?.reachedWeeklyMinimum === false ? "não" : "não confirmado"}
+
+FEEDBACKS HUMANOS DO FORMS:
+${formsContext}
+
+CONTEXTO DO TICKET PESSOAL:
+${ticketContext}
+
+Entregue apenas a nota interna final, sem título e sem explicações adicionais.
+`.trim();
+
+  let generated =
+    "";
+
+  try {
+    generated =
+      await generateSantaCreatorsStandaloneText({
+        prompt,
+
+        maxOutputTokens:
+          500,
+
+        temperature:
+          0.28,
+
+        label:
+          `Member Dismissal Forms Summary ${userId || "unknown"}`,
+      });
+  } catch (error) {
+    console.warn(
+      `[Weekly Member AI] Falha ao gerar resumo final interno do Forms para ${userId || "desconhecido"}:`,
+      error?.message ||
+      error
+    );
+  }
+
+  let text =
+    cleanGeneratedText(
+      generated
+    )
+      .replace(
+        /\n{3,}/g,
+        "\n\n"
+      )
+      .trim();
+
+  if (!text) {
+    const performanceText =
+      rankingPoints == null
+        ? "A pontuação recente não pôde ser confirmada."
+        : facts?.reachedWeeklyMinimum === true
+          ? `Na semana atual havia ${rankingPoints} ponto(s), com a meta mínima registrada atingida.`
+          : facts?.reachedWeeklyMinimum === false
+            ? `Na semana atual havia ${rankingPoints} ponto(s), abaixo da meta mínima registrada.`
+            : `Na semana atual havia ${rankingPoints} ponto(s).`;
+
+    text =
+      [
+        `O membro foi desligado da SantaCreators e esta etapa do acompanhamento foi encerrada.`,
+        facts?.giActive === false
+          ? `No momento anterior ao desligamento, o Controle GI já estava pausado/inativo. ${performanceText}`
+          : `No momento anterior ao desligamento, o Controle GI ainda estava ativo. ${performanceText}`,
+        `Os registros anteriores permanecem preservados neste Forms como histórico da trajetória.`,
+      ].join(
+        " "
+      );
+  }
+
+  return text
+    .slice(
+      0,
+      1400
+    )
+    .trim();
+}
+
+// =====================================================
 // ENVIO DA DM SEMANAL AUTOMÁTICA
 // =====================================================
 

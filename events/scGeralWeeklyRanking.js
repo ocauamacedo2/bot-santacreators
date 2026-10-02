@@ -353,6 +353,353 @@ function saveAdjustments(data) {
   writeJSON(ADJUSTMENTS_FILE, data);
 }
 
+// =====================================================
+// VISIBILIDADE DO RANKING / DESLIGAMENTO GI
+// =====================================================
+//
+// IMPORTANTE:
+//
+// O desligamento NÃO apaga pontos e NÃO aplica pontuação
+// negativa. Ele apenas esconde a pessoa da colocação da
+// semana atual.
+//
+// Os pontos reais continuam disponíveis internamente para:
+// - histórico;
+// - retrospectiva;
+// - retorno na mesma semana;
+// - relatórios individuais.
+// =====================================================
+
+const RANKING_VISIBILITY_FILE =
+  path.join(
+    DATA_DIR,
+    "sc_points_ranking_visibility.json"
+  );
+
+const LEGACY_GI_HIDDEN_ADJUSTMENT =
+  -99999;
+
+function loadRankingVisibility() {
+  const state =
+    readJSON(
+      RANKING_VISIBILITY_FILE,
+      {
+        version: 1,
+        byWeek: {},
+      }
+    );
+
+  state.version =
+    1;
+
+  state.byWeek =
+    state.byWeek &&
+    typeof state.byWeek ===
+      "object"
+      ? state.byWeek
+      : {};
+
+  for (
+    const [weekKey, users]
+    of Object.entries(
+      state.byWeek
+    )
+  ) {
+    const normalized =
+      {};
+
+    for (
+      const [rawUserId, rawEntry]
+      of Object.entries(
+        users || {}
+      )
+    ) {
+      const canonicalUserId =
+        resolveDiscordIdentity(
+          rawUserId
+        ) ||
+        String(
+          rawUserId ||
+          ""
+        ).trim();
+
+      if (!canonicalUserId) {
+        continue;
+      }
+
+      const entry =
+        rawEntry &&
+        typeof rawEntry ===
+          "object"
+          ? rawEntry
+          : {
+              hidden:
+                Boolean(
+                  rawEntry
+                ),
+            };
+
+      const previous =
+        normalized[
+          canonicalUserId
+        ];
+
+      if (
+        !previous ||
+        Number(
+          entry.updatedAtMs ||
+          0
+        ) >=
+          Number(
+            previous.updatedAtMs ||
+            0
+          )
+      ) {
+        normalized[
+          canonicalUserId
+        ] = {
+          hidden:
+            entry.hidden !==
+            false,
+
+          reason:
+            String(
+              entry.reason ||
+              "gi_disconnected"
+            ),
+
+          updatedAtMs:
+            Number(
+              entry.updatedAtMs ||
+              0
+            ),
+        };
+      }
+    }
+
+    state.byWeek[
+      weekKey
+    ] =
+      normalized;
+  }
+
+  return state;
+}
+
+function saveRankingVisibility(
+  state
+) {
+  writeJSON(
+    RANKING_VISIBILITY_FILE,
+    state
+  );
+}
+
+function setUserRankingHidden({
+  weekKey,
+  userId,
+  hidden,
+  reason =
+    "gi_disconnected",
+} = {}) {
+  const canonicalUserId =
+    resolveDiscordIdentity(
+      userId
+    ) ||
+    String(
+      userId ||
+      ""
+    ).trim();
+
+  if (
+    !weekKey ||
+    !canonicalUserId
+  ) {
+    return false;
+  }
+
+  const state =
+    loadRankingVisibility();
+
+  state.byWeek[
+    weekKey
+  ] ||= {};
+
+  if (hidden) {
+    state.byWeek[
+      weekKey
+    ][
+      canonicalUserId
+    ] = {
+      hidden:
+        true,
+
+      reason:
+        String(
+          reason ||
+          "gi_disconnected"
+        ),
+
+      updatedAtMs:
+        Date.now(),
+    };
+  } else {
+    delete state.byWeek[
+      weekKey
+    ][
+      canonicalUserId
+    ];
+
+    if (
+      Object.keys(
+        state.byWeek[
+          weekKey
+        ]
+      ).length ===
+      0
+    ) {
+      delete state.byWeek[
+        weekKey
+      ];
+    }
+  }
+
+  saveRankingVisibility(
+    state
+  );
+
+  return true;
+}
+
+function isUserRankingHidden(
+  weekKey,
+  userId
+) {
+  const canonicalUserId =
+    resolveDiscordIdentity(
+      userId
+    ) ||
+    String(
+      userId ||
+      ""
+    ).trim();
+
+  if (
+    !weekKey ||
+    !canonicalUserId
+  ) {
+    return false;
+  }
+
+  const state =
+    loadRankingVisibility();
+
+  return (
+    state.byWeek?.[
+      weekKey
+    ]?.[
+      canonicalUserId
+    ]?.hidden ===
+    true
+  );
+}
+
+function decodePointAdjustment(
+  rawValue
+) {
+  const adjustment =
+    Number(
+      rawValue ||
+      0
+    );
+
+  if (
+    adjustment <=
+    LEGACY_GI_HIDDEN_ADJUSTMENT
+  ) {
+    return {
+      adjustment:
+        0,
+
+      legacyHidden:
+        true,
+    };
+  }
+
+  return {
+    adjustment,
+    legacyHidden:
+      false,
+  };
+}
+
+function clearLegacyGiHiddenAdjustment(
+  weekKey,
+  userId
+) {
+  const canonicalUserId =
+    resolveDiscordIdentity(
+      userId
+    ) ||
+    String(
+      userId ||
+      ""
+    ).trim();
+
+  if (
+    !weekKey ||
+    !canonicalUserId
+  ) {
+    return false;
+  }
+
+  const data =
+    loadAdjustments();
+
+  const rawAdjustment =
+    Number(
+      data.byWeek?.[
+        weekKey
+      ]?.[
+        canonicalUserId
+      ] ||
+      0
+    );
+
+  if (
+    rawAdjustment >
+    LEGACY_GI_HIDDEN_ADJUSTMENT
+  ) {
+    return false;
+  }
+
+  delete data.byWeek[
+    weekKey
+  ][
+    canonicalUserId
+  ];
+
+  if (
+    Object.keys(
+      data.byWeek[
+        weekKey
+      ] ||
+      {}
+    ).length ===
+    0
+  ) {
+    delete data.byWeek[
+      weekKey
+    ];
+  }
+
+  saveAdjustments(
+    data
+  );
+
+  return true;
+}
+
 function applyManualAdjustment({
   weekKey,
   userId,
@@ -2515,10 +2862,12 @@ const SOURCE_LABEL = {
 };
 
 function aggregateWeekDetailed(items, weekKey) {
-  const weekItems = (items || []).filter(
-    (x) =>
-      weekKeyFromDateSP(x.ts) === weekKey
-  );
+  const weekItems =
+    (items || []).filter(
+      (x) =>
+        weekKeyFromDateSP(x.ts) ===
+        weekKey
+    );
 
   const only =
     applyPowerPointsCooldown(
@@ -2526,47 +2875,225 @@ function aggregateWeekDetailed(items, weekKey) {
     );
 
   const totalByUser = {};
-  const bySourceByUser = {};
+  const allBySourceByUser = {};
 
   for (const e of only) {
-    totalByUser[e.userId] = (totalByUser[e.userId] || 0) + 1;
+    const canonicalUserId =
+      resolveDiscordIdentity(
+        e.userId
+      ) ||
+      String(
+        e.userId ||
+        ""
+      );
 
-    bySourceByUser[e.userId] = bySourceByUser[e.userId] || {};
-    bySourceByUser[e.userId][e.source] = (bySourceByUser[e.userId][e.source] || 0) + 1;
+    if (!canonicalUserId) {
+      continue;
+    }
+
+    totalByUser[
+      canonicalUserId
+    ] =
+      (
+        totalByUser[
+          canonicalUserId
+        ] ||
+        0
+      ) +
+      1;
+
+    allBySourceByUser[
+      canonicalUserId
+    ] =
+      allBySourceByUser[
+        canonicalUserId
+      ] ||
+      {};
+
+    allBySourceByUser[
+      canonicalUserId
+    ][
+      e.source
+    ] =
+      (
+        allBySourceByUser[
+          canonicalUserId
+        ][
+          e.source
+        ] ||
+        0
+      ) +
+      1;
   }
 
-  const adjustmentsData = loadAdjustments();
-  const weekAdjustments = adjustmentsData.byWeek?.[weekKey] || {};
+  const adjustmentsData =
+    loadAdjustments();
 
-  const allUserIds = new Set([
-    ...Object.keys(totalByUser),
-    ...Object.keys(weekAdjustments),
-  ]);
+  const weekAdjustments =
+    adjustmentsData.byWeek?.[
+      weekKey
+    ] ||
+    {};
+
+  const allUserIds =
+    new Set([
+      ...Object.keys(
+        totalByUser
+      ),
+      ...Object.keys(
+        weekAdjustments
+      ),
+    ]);
+
   const list = [];
-  let totalPoints = 0;
+  const allList = [];
+  const hiddenUserIds =
+    new Set();
 
-for (const userId of allUserIds) {
-  const basePoints = Number(totalByUser[userId] || 0);
-  const adj = Number(weekAdjustments[userId] || 0);
-  const rawFinalPoints = basePoints + adj;
-  const finalPoints = Math.max(0, rawFinalPoints);
+  let totalPoints =
+    0;
 
-  if (finalPoints > 0) {
-    list.push({
+  let allTotalPoints =
+    0;
+
+  for (
+    const rawUserId
+    of allUserIds
+  ) {
+    const userId =
+      resolveDiscordIdentity(
+        rawUserId
+      ) ||
+      String(
+        rawUserId ||
+        ""
+      );
+
+    if (!userId) {
+      continue;
+    }
+
+    const basePoints =
+      Number(
+        totalByUser[
+          userId
+        ] ||
+        0
+      );
+
+    const decodedAdjustment =
+      decodePointAdjustment(
+        weekAdjustments[
+          userId
+        ]
+      );
+
+    const adjustment =
+      decodedAdjustment
+        .adjustment;
+
+    const hiddenByGi =
+      decodedAdjustment
+        .legacyHidden ||
+      isUserRankingHidden(
+        weekKey,
+        userId
+      );
+
+    const rawFinalPoints =
+      basePoints +
+      adjustment;
+
+    const finalPoints =
+      Math.max(
+        0,
+        rawFinalPoints
+      );
+
+    if (hiddenByGi) {
+      hiddenUserIds.add(
+        userId
+      );
+    }
+
+    if (
+      finalPoints <=
+      0
+    ) {
+      continue;
+    }
+
+    const entry = {
       userId,
-      points: finalPoints,
+      points:
+        finalPoints,
       basePoints,
-      adjustment: adj,
-    });
-    totalPoints += finalPoints;
+      adjustment,
+      hiddenByGi,
+    };
+
+    allList.push(
+      entry
+    );
+
+    allTotalPoints +=
+      finalPoints;
+
+    if (!hiddenByGi) {
+      list.push(
+        entry
+      );
+
+      totalPoints +=
+        finalPoints;
+    }
   }
+
+  list.sort(
+    (a, b) =>
+      b.points -
+      a.points
+  );
+
+  allList.sort(
+    (a, b) =>
+      b.points -
+      a.points
+  );
+
+  const bySourceByUser =
+    Object.fromEntries(
+      Object.entries(
+        allBySourceByUser
+      ).filter(
+        ([userId]) =>
+          !hiddenUserIds.has(
+            userId
+          )
+      )
+    );
+
+  return {
+    // O total da semana continua contando TODOS os pontos reais.
+    // O desligamento remove apenas a pessoa da colocação (list).
+    totalEvents:
+      allTotalPoints,
+
+    visibleTotalEvents:
+      totalPoints,
+
+    allTotalEvents:
+      allTotalPoints,
+
+    list,
+    allList,
+    bySourceByUser,
+    allBySourceByUser,
+
+    hiddenUserIds:
+      [...hiddenUserIds],
+  };
 }
-
-  list.sort((a, b) => b.points - a.points);
-
-  return { totalEvents: totalPoints, list, bySourceByUser };
-}
-
 
 function summarizeSources(bySource, adjustment = 0) {
   const entries = Object.entries(bySource || {})
@@ -3239,7 +3766,15 @@ async function upsertWeeklyRank(client, reason, { scanMode = "light", targetWeek
     try {
       const sourcesStatePath = path.join(DATA_DIR, "sc_geral_weekly_rank_sources.json");
       const sourcesState = readJSON(sourcesStatePath, {});
-      sourcesState[wk] = agg.bySourceByUser;
+
+      // O arquivo consolidado é histórico/interno.
+      // Portanto preserva também as fontes de quem está
+      // temporariamente fora da colocação por desligamento.
+      sourcesState[wk] =
+        agg.allBySourceByUser ||
+        agg.bySourceByUser ||
+        {};
+
       writeJSON(sourcesStatePath, sourcesState);
     } catch (e) {
       console.error("[SC_GERAL_WEEKLY_RANK] Erro ao salvar dados por fonte:", e);
@@ -3624,9 +4159,105 @@ dashOn("correcao:usado", () => {
   markDirty({ invalidateScanCache: true });
   scheduleFastSync();
 });
-dashOn("gi:desligado", () => markDirty({ invalidateScanCache: true }));
-dashOn("gi:retornou", () => markDirty({ invalidateScanCache: true }));
+dashOn(
+  "gi:desligado",
+  (payload) => {
+    try {
+      const userId =
+        resolveDiscordIdentity(
+          payload?.userId
+        ) ||
+        String(
+          payload?.userId ||
+          ""
+        ).trim();
 
+      if (userId) {
+        const weekKey =
+          weekKeyFromDateSP(
+            new Date()
+          );
+
+        // Remove somente o marcador antigo -99999, se existir.
+        // Os pontos reais dos logs permanecem intactos.
+        clearLegacyGiHiddenAdjustment(
+          weekKey,
+          userId
+        );
+
+        setUserRankingHidden({
+          weekKey,
+          userId,
+          hidden:
+            true,
+          reason:
+            "gi_disconnected",
+        });
+      }
+    } catch (error) {
+      console.error(
+        "[SC_GERAL_WEEKLY] Falha ao ocultar desligado da colocação:",
+        error
+      );
+    }
+
+    markDirty({
+      invalidateScanCache:
+        true,
+    });
+
+    scheduleFastSync();
+  }
+);
+
+dashOn(
+  "gi:retornou",
+  (payload) => {
+    try {
+      const userId =
+        resolveDiscordIdentity(
+          payload?.userId
+        ) ||
+        String(
+          payload?.userId ||
+          ""
+        ).trim();
+
+      if (userId) {
+        const weekKey =
+          weekKeyFromDateSP(
+            new Date()
+          );
+
+        clearLegacyGiHiddenAdjustment(
+          weekKey,
+          userId
+        );
+
+        setUserRankingHidden({
+          weekKey,
+          userId,
+          hidden:
+            false,
+          reason:
+            "gi_returned",
+        });
+      }
+    } catch (error) {
+      console.error(
+        "[SC_GERAL_WEEKLY] Falha ao restaurar retornado na colocação:",
+        error
+      );
+    }
+
+    markDirty({
+      invalidateScanCache:
+        true,
+    });
+
+    scheduleFastSync();
+  }
+);
 dashOn("identity:migrated", () => {
   markDirty({ invalidateScanCache: true });
   scheduleFastSync();
@@ -4419,51 +5050,217 @@ export async function getWeeklyRankingDebug(client) {
 // ✅ NOVO: Export para uso externo (ex: gestaoinfluencer desligamento)
 export async function getStatsForUser(client, userId) {
   try {
-    const canonicalUserId = resolveDiscordIdentity(userId);
-    const { items } = await collectAllPoints(client, "light");
-    const normalizedItems = (items || []).map(item => ({
-      ...item,
-      userId: resolveDiscordIdentity(item.userId)
-    }));
+    const canonicalUserId =
+      resolveDiscordIdentity(
+        userId
+      ) ||
+      String(
+        userId ||
+        ""
+      ).trim();
 
-    const currentWeekKey = weekKeyFromDateSP(new Date());
-    const firstWeekKey = addDaysToWeekKey(currentWeekKey, -35);
-    const adjustments = loadAdjustments();
-    const weekKeys = new Set([
-      currentWeekKey,
-      ...normalizedItems.map(item => weekKeyFromDateSP(item.ts)),
-      ...Object.keys(adjustments.byWeek || {})
-    ]);
+    const { items } =
+      await collectAllPoints(
+        client,
+        "light"
+      );
+
+    const normalizedItems =
+      (items || []).map(
+        item => ({
+          ...item,
+          userId:
+            resolveDiscordIdentity(
+              item.userId
+            ) ||
+            String(
+              item.userId ||
+              ""
+            ),
+        })
+      );
+
+    const currentWeekKey =
+      weekKeyFromDateSP(
+        new Date()
+      );
+
+    const firstWeekKey =
+      addDaysToWeekKey(
+        currentWeekKey,
+        -35
+      );
+
+    const adjustments =
+      loadAdjustments();
+
+    const visibility =
+      loadRankingVisibility();
+
+    const weekKeys =
+      new Set([
+        currentWeekKey,
+
+        ...normalizedItems.map(
+          item =>
+            weekKeyFromDateSP(
+              item.ts
+            )
+        ),
+
+        ...Object.keys(
+          adjustments.byWeek ||
+          {}
+        ),
+
+        ...Object.keys(
+          visibility.byWeek ||
+          {}
+        ),
+      ]);
 
     const bySource = {};
     const weeks = [];
-    let total = 0;
-    let totalBase = 0;
-    let totalAdjustments = 0;
 
-    for (const weekKey of [...weekKeys].sort().reverse()) {
-      if (weekKey < firstWeekKey || weekKey > currentWeekKey) continue;
+    let total =
+      0;
 
-      // Usa a mesma regra do ranking: cooldown, ajustes e piso zero.
-      const aggregate = aggregateWeekDetailed(normalizedItems, weekKey);
-      const sources = aggregate.bySourceByUser[canonicalUserId] || {};
-      const basePoints = Object.values(sources).reduce(
-        (sum, value) => sum + Number(value || 0),
-        0
-      );
-      const adjustment = Number(adjustments.byWeek?.[weekKey]?.[canonicalUserId] || 0);
-      const index = aggregate.list.findIndex(entry => entry.userId === canonicalUserId);
-      const points = index >= 0 ? aggregate.list[index].points : 0;
+    let totalBase =
+      0;
 
-      if (!basePoints && !adjustment && weekKey !== currentWeekKey) continue;
+    let totalAdjustments =
+      0;
 
-      total += points;
-      totalBase += basePoints;
-      totalAdjustments += adjustment;
+    for (
+      const weekKey
+      of [...weekKeys]
+        .sort()
+        .reverse()
+    ) {
+      if (
+        weekKey <
+          firstWeekKey ||
+        weekKey >
+          currentWeekKey
+      ) {
+        continue;
+      }
 
-      for (const [source, count] of Object.entries(sources)) {
-        const label = SOURCE_LABEL[source] || source;
-        bySource[label] = (bySource[label] || 0) + count;
+      const aggregate =
+        aggregateWeekDetailed(
+          normalizedItems,
+          weekKey
+        );
+
+      // Para relatório individual usamos a visão COMPLETA,
+      // inclusive quando a pessoa está escondida da colocação.
+      const sources =
+        aggregate
+          .allBySourceByUser?.[
+            canonicalUserId
+          ] ||
+        {};
+
+      const basePoints =
+        Object.values(
+          sources
+        ).reduce(
+          (sum, value) =>
+            sum +
+            Number(
+              value ||
+              0
+            ),
+          0
+        );
+
+      const decodedAdjustment =
+        decodePointAdjustment(
+          adjustments.byWeek?.[
+            weekKey
+          ]?.[
+            canonicalUserId
+          ]
+        );
+
+      const adjustment =
+        decodedAdjustment
+          .adjustment;
+
+      const allEntry =
+        aggregate.allList.find(
+          entry =>
+            entry.userId ===
+            canonicalUserId
+        ) ||
+        null;
+
+      const visibleIndex =
+        aggregate.list.findIndex(
+          entry =>
+            entry.userId ===
+            canonicalUserId
+        );
+
+      const points =
+        Number(
+          allEntry?.points ||
+          0
+        );
+
+      const hiddenByGi =
+        Boolean(
+          allEntry?.hiddenByGi
+        ) ||
+        decodedAdjustment
+          .legacyHidden ||
+        isUserRankingHidden(
+          weekKey,
+          canonicalUserId
+        );
+
+      if (
+        !basePoints &&
+        !adjustment &&
+        !hiddenByGi &&
+        weekKey !==
+          currentWeekKey
+      ) {
+        continue;
+      }
+
+      total +=
+        points;
+
+      totalBase +=
+        basePoints;
+
+      totalAdjustments +=
+        adjustment;
+
+      for (
+        const [source, count]
+        of Object.entries(
+          sources
+        )
+      ) {
+        const label =
+          SOURCE_LABEL[source] ||
+          source;
+
+        bySource[
+          label
+        ] =
+          (
+            bySource[
+              label
+            ] ||
+            0
+          ) +
+          Number(
+            count ||
+            0
+          );
       }
 
       weeks.push({
@@ -4471,8 +5268,17 @@ export async function getStatsForUser(client, userId) {
         points,
         basePoints,
         adjustment,
-        position: index >= 0 ? index + 1 : null,
-        participants: aggregate.list.length
+        hiddenByGi,
+
+        position:
+          visibleIndex >=
+          0
+            ? visibleIndex +
+              1
+            : null,
+
+        participants:
+          aggregate.list.length,
       });
     }
 
@@ -4480,20 +5286,64 @@ export async function getStatsForUser(client, userId) {
       total,
       totalBase,
       totalAdjustments,
-      thisWeekPoints: weeks.find(week => week.weekKey === currentWeekKey)?.points ?? 0,
-      sourcesFormatted: Object.entries(bySource)
-        .sort((a, b) => b[1] - a[1])
-        .map(([source, count]) => `• ${source}: **${count}**`),
-      weeksFormatted: weeks.map(week =>
-        `• **${triLabelShortFromWeekKey(week.weekKey)}**: ${week.points} pts` +
-        (week.position ? ` — ${week.position}º de ${week.participants}` : " — sem colocação")
-      ),
+
+      thisWeekPoints:
+        weeks.find(
+          week =>
+            week.weekKey ===
+            currentWeekKey
+        )?.points ??
+        0,
+
+      thisWeekHiddenFromRanking:
+        weeks.find(
+          week =>
+            week.weekKey ===
+            currentWeekKey
+        )?.hiddenByGi ===
+        true,
+
+      sourcesFormatted:
+        Object.entries(
+          bySource
+        )
+          .sort(
+            (a, b) =>
+              Number(b[1]) -
+              Number(a[1])
+          )
+          .map(
+            ([source, count]) =>
+              `• ${source}: **${count}**`
+          ),
+
+      weeksFormatted:
+        weeks.map(
+          week =>
+            `• **${triLabelShortFromWeekKey(week.weekKey)}**: ${week.points} pts` +
+            (
+              week.hiddenByGi
+                ? " — fora da colocação por desligamento"
+                : week.position
+                  ? ` — ${week.position}º de ${week.participants}`
+                  : " — sem colocação"
+            )
+        ),
+
       weeks,
-      historicalComplete: false,
-      coverage: `Janela recente: ${firstWeekKey} até ${currentWeekKey}. A coleta possui limites de páginas e não representa toda a trajetória.`
+
+      historicalComplete:
+        false,
+
+      coverage:
+        `Janela recente: ${firstWeekKey} até ${currentWeekKey}. A coleta possui limites de páginas e não representa toda a trajetória.`,
     };
   } catch (error) {
-    console.error("[scGeralWeeklyRanking] getStatsForUser error:", error);
+    console.error(
+      "[scGeralWeeklyRanking] getStatsForUser error:",
+      error
+    );
+
     return null;
   }
 }
@@ -4890,15 +5740,18 @@ export async function getHistoricalStatsForUser(
           0
         );
 
-      const adjustment =
-        Number(
+      const decodedAdjustment =
+        decodePointAdjustment(
           adjustments.byWeek?.[
             weekKey
           ]?.[
             canonicalUserId
-          ] ||
-          0
+          ]
         );
+
+      const adjustment =
+        decodedAdjustment
+          .adjustment;
 
       const rankRecord =
         rankByWeek.get(

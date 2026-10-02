@@ -90,7 +90,8 @@ const {
     }
 
     const {
-      syncEvolutionHierarchyForMember
+      syncEvolutionHierarchyForMember,
+      lockEvolutionHierarchyForMember
     } = evolutionHierarchy;
 
     // ✅ NOVO: importa a hierarquia institucional oficial.
@@ -135,6 +136,7 @@ const {
       forceWeeklyMemberAiFeedback,
       generateWeeklyMemberPrivateDm,
       generateMemberLifecyclePrivateDm,
+      generateMemberDismissalFormsSummary,
       migrateWeeklyMemberAiFeedbackDiscordId
     } = weeklyMemberAiFeedback;
 
@@ -2967,6 +2969,107 @@ async function assertCanManageGIRecord(
           `https://discord.com/channels/${guild.id}/${channel.id}`,
       };
     }
+
+    // =====================================================
+    // AVISO PADRÃO NO TICKET PESSOAL APÓS DESLIGAMENTO
+    // =====================================================
+    //
+    // O ticket pessoal é permanente.
+    //
+    // O sortChannels pode mover o canal para a categoria de
+    // inativos, mas usa lockPermissions:false e preserva os
+    // overwrites existentes do canal.
+    //
+    // Portanto o canal continua sendo o mesmo ticket pessoal.
+    // =====================================================
+
+    async function sendPersonalTicketDisconnectNotice(
+      guild,
+      userId,
+      ticketChannelId
+    ) {
+      if (
+        !guild ||
+        !userId ||
+        !ticketChannelId
+      ) {
+        return false;
+      }
+
+      const channel =
+        guild.channels.cache.get(
+          String(
+            ticketChannelId
+          )
+        ) ||
+        await guild.channels
+          .fetch(
+            String(
+              ticketChannelId
+            )
+          )
+          .catch(
+            () => null
+          );
+
+      if (
+        !channel?.isTextBased?.()
+      ) {
+        return false;
+      }
+
+      const embed =
+        new EmbedBuilder()
+          .setColor(
+            0x8e44ad
+          )
+          .setTitle(
+            '💜 Até logo por enquanto'
+          )
+          .setDescription(
+            [
+              `Poxa, <@${userId}>. Vi que sua etapa atual na **SantaCreators** foi encerrada.`,
+              '',
+              'Sinto muito por essa saída e espero que a gente se encontre novamente por aqui no futuro.',
+              '',
+              '🎫 **Este continua sendo o seu ticket pessoal.** O desligamento não apaga este canal nem transforma ele em uma nova entrevista.',
+              '',
+              'Se um dia você quiser conversar sobre retornar à SantaCreators, pode usar este mesmo ticket para chamar a equipe e explicar que deseja voltar.',
+              '',
+              '📌 Pelo fluxo atual do Ticket Pessoal, você não precisa abrir uma nova entrevista do zero apenas para iniciar esse retorno. A equipe poderá conferir seu histórico e orientar os próximos passos por aqui, seguindo as regras vigentes no momento.',
+              '',
+              'A gente se vê mais pra frente. Se cuida, beijinho e fica com Deus. 💜',
+            ].join(
+              '\n'
+            )
+          )
+          .setFooter({
+            text:
+              'SantaCreators • Ticket Pessoal'
+          })
+          .setTimestamp();
+
+      await channel.send({
+        content:
+          `<@${userId}>`,
+
+        embeds: [
+          embed
+        ],
+
+        allowedMentions: {
+          parse: [],
+          users: [
+            String(
+              userId
+            )
+          ],
+        },
+      });
+
+      return true;
+    }
+
     // ====================== ROLE GI HELPERS (OBRIGATÓRIO) ======================
     const GI_ROLE_ID = SC_GI_CFG.ROLE_GESTAOINFLUENCER; // 1371733765243670538
 
@@ -7093,6 +7196,46 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
   }
 
   // =====================================================
+  // RESUMO INTERNO CURTO PARA O ÚLTIMO FORMS ATIVO
+  // =====================================================
+  //
+  // Reutiliza os mesmos fatos da retrospectiva acima.
+  // Não executa outra varredura completa.
+  // =====================================================
+
+  let formsDisconnectSummary =
+    null;
+
+  if (
+    typeof generateMemberDismissalFormsSummary ===
+      "function" &&
+    lifecycleDisconnectBundle?.facts
+  ) {
+    formsDisconnectSummary =
+      await generateMemberDismissalFormsSummary({
+        facts:
+          lifecycleDisconnectBundle.facts,
+
+        record:
+          snapshot,
+
+        reason:
+          motivo,
+      })
+      .catch(
+        error => {
+          console.warn(
+            `[SC_GI] Resumo final interno do Forms indisponível para ${snapshot.targetId}:`,
+            error?.message ||
+            error
+          );
+
+          return null;
+        }
+      );
+  }
+
+  // =====================================================
   // FECHA A ÚLTIMA ETAPA DO HISTÓRICO DE ÁREA
   // =====================================================
 
@@ -7282,38 +7425,103 @@ clearGiAutoDisableTimer(
         timestamp: Date.now()
       });
 
-// ✅ NOVO: Desliga/inativa também o FormsCreator da pessoa
+// =====================================================
+// DESLIGA O FORMS + REGISTRA RESUMO FINAL + TRAVA TUDO
+// =====================================================
 try {
-if (
-  (
-    typeof findFormsCreatorThreadIdFastByUserId === "function" ||
-    typeof findOriginalFormsCreatorThreadIdByUserId === "function"
-  ) &&
-  typeof setFormsCreatorStatus === "function"
-) {
-  const fcThreadId =
-    await resolveFormsCreatorThreadIdForGI(
-      snapshot.targetId
-    );
+  if (
+    (
+      typeof findFormsCreatorThreadIdFastByUserId ===
+        "function" ||
+      typeof findOriginalFormsCreatorThreadIdByUserId ===
+        "function"
+    ) &&
+    typeof setFormsCreatorStatus ===
+      "function"
+  ) {
+    const fcThreadId =
+      await resolveFormsCreatorThreadIdForGI(
+        snapshot.targetId
+      );
 
     if (fcThreadId) {
-      await setFormsCreatorStatus(guild.client, {
-        threadId: fcThreadId,
-        newStatus: false,
-        actor,
-        fromGi: true,
-      });
+      // Primeiro marca o registro original como INATIVO.
+      // O Forms não publicará mais a frase genérica
+      // "Fulano alterou o status..." quando fromGi=true.
+      await setFormsCreatorStatus(
+        guild.client,
+        {
+          threadId:
+            fcThreadId,
 
-      await logMsg(
-        guild,
-        "FormsCreator inativado junto com desligamento GI",
-        [
-          `👤 Membro: <@${snapshot.targetId}>`,
-          `📌 FormsCreator: <#${fcThreadId}>`,
-          `🧾 Motivo: ${motivo}`,
-          `👮 Autor: <@${actor?.id || guild.client.user.id}>`,
-        ].join("\n")
+          newStatus:
+            false,
+
+          actor,
+
+          fromGi:
+            true,
+        }
       );
+
+      // Depois registra a nota curta no ÚLTIMO tópico ativo
+      // e trava fisicamente TODOS os tópicos da trajetória.
+      if (
+        typeof lockEvolutionHierarchyForMember ===
+          "function"
+      ) {
+        const lockResult =
+          await lockEvolutionHierarchyForMember(
+            guild.client,
+            {
+              userId:
+                snapshot.targetId,
+
+              originalThreadId:
+                fcThreadId,
+
+              finalSummary:
+                formsDisconnectSummary ||
+                (
+                  `O membro foi desligado da SantaCreators. ` +
+                  `Os registros disponíveis permanecem preservados como histórico desta etapa. ` +
+                  `Não houve resumo analítico adicional disponível no momento do encerramento.`
+                ),
+
+              reason:
+                `Desligamento da SantaCreators: ${motivo}`,
+            }
+          );
+
+        await logMsg(
+          guild,
+          "FormsCreator encerrado junto com desligamento GI",
+          [
+            `👤 Membro: <@${snapshot.targetId}>`,
+            `📌 FormsCreator original: <#${fcThreadId}>`,
+            lockResult?.lastActiveThreadId
+              ? `🧭 Último tópico ativo: <#${lockResult.lastActiveThreadId}>`
+              : "🧭 Último tópico ativo: não identificado",
+            `🔒 Tópicos travados: ${Number(lockResult?.lockedThreads || 0)}`,
+            `🧾 Motivo: ${motivo}`,
+            `👮 Autor: <@${actor?.id || guild.client.user.id}>`,
+          ]
+            .filter(Boolean)
+            .join("\n")
+        );
+      } else {
+        await logMsg(
+          guild,
+          "FormsCreator inativado junto com desligamento GI",
+          [
+            `👤 Membro: <@${snapshot.targetId}>`,
+            `📌 FormsCreator: <#${fcThreadId}>`,
+            `🧾 Motivo: ${motivo}`,
+            `👮 Autor: <@${actor?.id || guild.client.user.id}>`,
+            "⚠️ A função de trava da Evolução não estava disponível.",
+          ].join("\n")
+        );
+      }
     } else {
       await logMsg(
         guild,
@@ -7321,13 +7529,45 @@ if (
         [
           `👤 Membro: <@${snapshot.targetId}>`,
           `🧾 Motivo: ${motivo}`,
-          "⚠️ O GI foi desligado, mas não achei FormsCreator para inativar.",
+          "⚠️ O GI foi desligado, mas não achei FormsCreator para inativar/travar.",
         ].join("\n")
       );
     }
   }
 } catch (e) {
-  console.error("[GI] Falha ao desligar/inativar registro no FormsCreator:", e);
+  console.error(
+    "[GI] Falha ao desligar/inativar/travar registro no FormsCreator:",
+    e
+  );
+}
+
+// =====================================================
+// AVISO PADRÃO NO TICKET PESSOAL
+// =====================================================
+
+try {
+  if (
+    desligamentoPersonalTicketChannelId
+  ) {
+    const sentTicketNotice =
+      await sendPersonalTicketDisconnectNotice(
+        guild,
+        snapshot.targetId,
+        desligamentoPersonalTicketChannelId
+      );
+
+    if (!sentTicketNotice) {
+      console.warn(
+        `[SC_GI] Ticket pessoal ${desligamentoPersonalTicketChannelId} não recebeu aviso de desligamento de ${snapshot.targetId}.`
+      );
+    }
+  }
+} catch (error) {
+  console.error(
+    `[SC_GI] Falha ao enviar aviso de desligamento no ticket pessoal de ${snapshot.targetId}:`,
+    error?.message ||
+    error
+  );
 }
 
       markBoardDirty();

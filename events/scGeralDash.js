@@ -202,6 +202,343 @@ function saveManualAdjustments(data) {
   writeJSON(MANUAL_ADJUST_PATH, data);
 }
 
+// =====================================================
+// VISIBILIDADE DO RANKING / DESLIGAMENTO GI
+// =====================================================
+//
+// A saída do membro não apaga os pontos reais.
+// Apenas retira a pessoa da colocação pública da semana.
+// =====================================================
+
+const RANKING_VISIBILITY_FILE =
+  path.join(
+    DATA_DIR,
+    "sc_points_ranking_visibility.json"
+  );
+
+const LEGACY_GI_HIDDEN_ADJUSTMENT =
+  -99999;
+
+function loadRankingVisibility() {
+  const state =
+    readJSON(
+      RANKING_VISIBILITY_FILE,
+      {
+        version: 1,
+        byWeek: {},
+      }
+    );
+
+  state.version =
+    1;
+
+  state.byWeek =
+    state.byWeek &&
+    typeof state.byWeek ===
+      "object"
+      ? state.byWeek
+      : {};
+
+  for (
+    const [weekKey, users]
+    of Object.entries(
+      state.byWeek
+    )
+  ) {
+    const normalized = {};
+
+    for (
+      const [rawUserId, rawEntry]
+      of Object.entries(
+        users || {}
+      )
+    ) {
+      const canonicalUserId =
+        resolveDiscordIdentity(
+          rawUserId
+        ) ||
+        String(
+          rawUserId ||
+          ""
+        ).trim();
+
+      if (!canonicalUserId) {
+        continue;
+      }
+
+      const entry =
+        rawEntry &&
+        typeof rawEntry ===
+          "object"
+          ? rawEntry
+          : {
+              hidden:
+                Boolean(
+                  rawEntry
+                ),
+            };
+
+      const previous =
+        normalized[
+          canonicalUserId
+        ];
+
+      if (
+        !previous ||
+        Number(
+          entry.updatedAtMs ||
+          0
+        ) >=
+          Number(
+            previous.updatedAtMs ||
+            0
+          )
+      ) {
+        normalized[
+          canonicalUserId
+        ] = {
+          hidden:
+            entry.hidden !==
+            false,
+
+          reason:
+            String(
+              entry.reason ||
+              "gi_disconnected"
+            ),
+
+          updatedAtMs:
+            Number(
+              entry.updatedAtMs ||
+              0
+            ),
+        };
+      }
+    }
+
+    state.byWeek[
+      weekKey
+    ] =
+      normalized;
+  }
+
+  return state;
+}
+
+function saveRankingVisibility(
+  state
+) {
+  writeJSON(
+    RANKING_VISIBILITY_FILE,
+    state
+  );
+}
+
+function setUserRankingHidden({
+  weekKey,
+  userId,
+  hidden,
+  reason =
+    "gi_disconnected",
+} = {}) {
+  const canonicalUserId =
+    resolveDiscordIdentity(
+      userId
+    ) ||
+    String(
+      userId ||
+      ""
+    ).trim();
+
+  if (
+    !weekKey ||
+    !canonicalUserId
+  ) {
+    return false;
+  }
+
+  const state =
+    loadRankingVisibility();
+
+  state.byWeek[
+    weekKey
+  ] ||= {};
+
+  if (hidden) {
+    state.byWeek[
+      weekKey
+    ][
+      canonicalUserId
+    ] = {
+      hidden:
+        true,
+
+      reason:
+        String(
+          reason ||
+          "gi_disconnected"
+        ),
+
+      updatedAtMs:
+        Date.now(),
+    };
+  } else {
+    delete state.byWeek[
+      weekKey
+    ][
+      canonicalUserId
+    ];
+
+    if (
+      Object.keys(
+        state.byWeek[
+          weekKey
+        ]
+      ).length ===
+      0
+    ) {
+      delete state.byWeek[
+        weekKey
+      ];
+    }
+  }
+
+  saveRankingVisibility(
+    state
+  );
+
+  return true;
+}
+
+function isUserRankingHidden(
+  weekKey,
+  userId
+) {
+  const canonicalUserId =
+    resolveDiscordIdentity(
+      userId
+    ) ||
+    String(
+      userId ||
+      ""
+    ).trim();
+
+  if (
+    !weekKey ||
+    !canonicalUserId
+  ) {
+    return false;
+  }
+
+  const state =
+    loadRankingVisibility();
+
+  return (
+    state.byWeek?.[
+      weekKey
+    ]?.[
+      canonicalUserId
+    ]?.hidden ===
+    true
+  );
+}
+
+function decodePointAdjustment(
+  rawValue
+) {
+  const adjustment =
+    Number(
+      rawValue ||
+      0
+    );
+
+  if (
+    adjustment <=
+    LEGACY_GI_HIDDEN_ADJUSTMENT
+  ) {
+    return {
+      adjustment:
+        0,
+
+      legacyHidden:
+        true,
+    };
+  }
+
+  return {
+    adjustment,
+    legacyHidden:
+      false,
+  };
+}
+
+function clearLegacyGiHiddenAdjustment(
+  weekKey,
+  userId
+) {
+  const canonicalUserId =
+    resolveDiscordIdentity(
+      userId
+    ) ||
+    String(
+      userId ||
+      ""
+    ).trim();
+
+  if (
+    !weekKey ||
+    !canonicalUserId
+  ) {
+    return false;
+  }
+
+  const manual =
+    loadManualAdjustments();
+
+  const rawAdjustment =
+    Number(
+      manual.byWeek?.[
+        weekKey
+      ]?.[
+        canonicalUserId
+      ] ||
+      0
+    );
+
+  if (
+    rawAdjustment >
+    LEGACY_GI_HIDDEN_ADJUSTMENT
+  ) {
+    return false;
+  }
+
+  delete manual.byWeek[
+    weekKey
+  ][
+    canonicalUserId
+  ];
+
+  if (
+    Object.keys(
+      manual.byWeek[
+        weekKey
+      ] ||
+      {}
+    ).length ===
+    0
+  ) {
+    delete manual.byWeek[
+      weekKey
+    ];
+  }
+
+  saveManualAdjustments(
+    manual
+  );
+
+  return true;
+}
+
 function getManualAdjustAllowedRoleIdsFromMember(member) {
   try {
     if (!member?.roles?.cache) return [];
@@ -627,8 +964,21 @@ async function validateSourceConsistency(client, items, weekKey) {
 
   const manual = loadManualAdjustments();
   const adjs = manual.byWeek?.[weekKey] || {};
-  const totalAdj = Object.values(adjs).reduce((a, b) => a + Number(b), 0);
 
+  const totalAdj =
+    Object.values(
+      adjs
+    ).reduce(
+      (sum, rawValue) =>
+        sum +
+        Number(
+          decodePointAdjustment(
+            rawValue
+          ).adjustment ||
+          0
+        ),
+      0
+    );
   const report = [
     `📊 MATRIZ DE VALIDAÇÃO — WK: ${weekKey}`,
     `PODERES............. ${scanStats.poderes || 0}`,
@@ -2755,36 +3105,212 @@ function applyPowerPointsCooldown(items = []) {
   return [...normalItems, ...acceptedPowerItems];
 }
 
-async function aggregateByWeek(items, weekKey, client = null) {
-  const weekItems = items.filter((x) => weekKeyFromDateSP(x.ts) === weekKey);
-  const only = applyPowerPointsCooldown(weekItems);
+async function aggregateByWeek(
+  items,
+  weekKey,
+  client = null
+) {
+  const weekItems =
+    items.filter(
+      (x) =>
+        weekKeyFromDateSP(
+          x.ts
+        ) ===
+        weekKey
+    );
+
+  const only =
+    applyPowerPointsCooldown(
+      weekItems
+    );
   
   if (client) {
-    await validateSourceConsistency(client, items, weekKey);
+    await validateSourceConsistency(
+      client,
+      items,
+      weekKey
+    );
   }
 
   const byUser = {};
 
   for (const e of only) {
-    byUser[e.userId] = (byUser[e.userId] || 0) + 1;
+    const userId =
+      resolveDiscordIdentity(
+        e.userId
+      ) ||
+      String(
+        e.userId ||
+        ""
+      );
+
+    if (!userId) {
+      continue;
+    }
+
+    byUser[userId] =
+      (
+        byUser[userId] ||
+        0
+      ) +
+      1;
   }
 
-  // ✅ APLICA AJUSTES MANUAIS
-  const manual = loadManualAdjustments();
-  const weekAdj = manual.byWeek?.[weekKey] || {};
+  // =====================================================
+  // AJUSTES REAIS DE PONTUAÇÃO
+  // =====================================================
+  //
+  // O antigo -99999 é reconhecido apenas como marcador
+  // legado de desligamento. Ele não entra mais na soma real.
+  // =====================================================
 
-  for (const [userId, adj] of Object.entries(weekAdj)) {
-    byUser[userId] = (byUser[userId] || 0) + Number(adj);
-    if (byUser[userId] <= 0) delete byUser[userId];
+  const manual =
+    loadManualAdjustments();
+
+  const weekAdj =
+    manual.byWeek?.[
+      weekKey
+    ] ||
+    {};
+
+  const hiddenUserIds =
+    new Set();
+
+  for (
+    const [rawUserId, rawAdj]
+    of Object.entries(
+      weekAdj
+    )
+  ) {
+    const userId =
+      resolveDiscordIdentity(
+        rawUserId
+      ) ||
+      String(
+        rawUserId ||
+        ""
+      );
+
+    if (!userId) {
+      continue;
+    }
+
+    const decoded =
+      decodePointAdjustment(
+        rawAdj
+      );
+
+    byUser[userId] =
+      (
+        byUser[userId] ||
+        0
+      ) +
+      Number(
+        decoded.adjustment ||
+        0
+      );
+
+    if (
+      byUser[userId] <=
+      0
+    ) {
+      delete byUser[
+        userId
+      ];
+    }
+
+    if (
+      decoded.legacyHidden
+    ) {
+      hiddenUserIds.add(
+        userId
+      );
+    }
   }
 
-  const top = Object.entries(byUser)
-    .map(([userId, count]) => ({ userId, count }))
-    .sort((a, b) => b.count - a.count);
+  for (
+    const userId
+    of Object.keys(
+      byUser
+    )
+  ) {
+    if (
+      isUserRankingHidden(
+        weekKey,
+        userId
+      )
+    ) {
+      hiddenUserIds.add(
+        userId
+      );
+    }
+  }
 
-  const total = Object.values(byUser).reduce((a, b) => a + b, 0);
+  const allTop =
+    Object.entries(
+      byUser
+    )
+      .map(
+        ([userId, count]) => ({
+          userId,
+          count,
+          hiddenByGi:
+            hiddenUserIds.has(
+              userId
+            ),
+        })
+      )
+      .sort(
+        (a, b) =>
+          b.count -
+          a.count
+      );
 
-  return { total, top };
+  const top =
+    allTop.filter(
+      entry =>
+        !entry.hiddenByGi
+    );
+
+  const allTotal =
+    allTop.reduce(
+      (sum, entry) =>
+        sum +
+        Number(
+          entry.count ||
+          0
+        ),
+      0
+    );
+
+  const visibleTotal =
+    top.reduce(
+      (sum, entry) =>
+        sum +
+        Number(
+          entry.count ||
+          0
+        ),
+      0
+    );
+
+  // O total geral continua contando os pontos reais de todos.
+  // Somente o Top/colocação esconde quem foi desligado.
+  const total =
+    allTotal;
+
+  return {
+    total,
+    visibleTotal,
+    top,
+
+    // Pontuação preservada internamente, inclusive de desligados.
+    allTotal,
+    allTop,
+
+    hiddenUserIds:
+      [...hiddenUserIds],
+  };
 }
 
 // Recalcula os snapshots históricos usando exatamente os mesmos itens,
@@ -4861,130 +5387,127 @@ dashOn("correcao:usado", () => {
     markDirty({ invalidateScanCache: true });
   });
 
-  // ✅ GI: DESLIGADO -> Remove do Ranking/Geral (aplica ajuste negativo massivo na semana)
-  dashOn("gi:desligado", (p) => {
-    try {
-      const userId =
-        resolveDiscordIdentity(
-          p.userId
-        );
+  // =====================================================
+  // GI: DESLIGADO -> ESCONDE DA COLOCAÇÃO
+  // =====================================================
+  //
+  // Não remove logs.
+  // Não zera pontos.
+  // Não grava mais -99999 como pontuação.
+  //
+  // Apenas registra que a pessoa não deve aparecer na
+  // colocação pública enquanto estiver desligada.
+  // =====================================================
 
-      if (!userId) return;
+  dashOn(
+    "gi:desligado",
+    (payload) => {
+      try {
+        const userId =
+          resolveDiscordIdentity(
+            payload?.userId
+          ) ||
+          String(
+            payload?.userId ||
+            ""
+          ).trim();
 
-      const wk =
-        weekKeyFromDateSP(
-          nowSP()
-        );
+        if (!userId) {
+          return;
+        }
 
-      const manual =
-        loadManualAdjustments();
-      
-      manual.byWeek =
-        manual.byWeek || {};
+        const weekKey =
+          weekKeyFromDateSP(
+            nowSP()
+          );
 
-      manual.byWeek[wk] =
-        manual.byWeek[wk] || {};
-      
-      // Aplica penalidade visual para sumir do ranking/geral (-99999)
-      // Isso NÃO apaga os logs de manager/social media, apenas remove a pontuação do painel.
-      manual.byWeek[
-        wk
-      ][
-        userId
-      ] = -99999;
-      
-      saveManualAdjustments(
-        manual
-      );
-      
-      // Força atualização imediata
-      markDirty({
-        invalidateScanCache: true
-      });
-      
-      // console.log(`[SC_GERAL_DASH] Usuário ${userId} desligado. Removido do ranking da semana ${wk}.`);
-    } catch (e) {
-      console.error(
-        "[SC_GERAL_DASH] Erro ao processar desligamento:",
-        e
-      );
-    }
-  });
-
-  // ✅ GI: RETORNOU / REATIVOU -> devolve a visibilidade da semana atual
-  dashOn("gi:retornou", (p) => {
-    try {
-      const userId =
-        resolveDiscordIdentity(
-          p.userId
-        );
-
-      if (!userId) return;
-
-      const wk =
-        weekKeyFromDateSP(
-          nowSP()
-        );
-
-      const manual =
-        loadManualAdjustments();
-
-      manual.byWeek =
-        manual.byWeek || {};
-
-      manual.byWeek[wk] =
-        manual.byWeek[wk] || {};
-
-      const currentAdj =
-        Number(
-          manual.byWeek[
-            wk
-          ][
-            userId
-          ] || 0
-        );
-
-      // Se estava escondido pelo desligamento massivo, limpa o ajuste.
-      // Assim os pontos antigos da semana + novos pontos voltam a contar.
-      if (
-        currentAdj <=
-        -99999
-      ) {
-        delete manual.byWeek[
-          wk
-        ][
+        // Migração automática do mecanismo antigo.
+        // Se existir -99999 desta mesma regra, remove porque
+        // agora o estado de visibilidade fica em arquivo próprio.
+        clearLegacyGiHiddenAdjustment(
+          weekKey,
           userId
-        ];
+        );
+
+        setUserRankingHidden({
+          weekKey,
+          userId,
+          hidden:
+            true,
+          reason:
+            "gi_disconnected",
+        });
+
+        markDirty({
+          invalidateScanCache:
+            true,
+        });
+      } catch (error) {
+        console.error(
+          "[SC_GERAL_DASH] Erro ao ocultar desligado da colocação:",
+          error
+        );
       }
-
-      // limpeza opcional se a semana ficar vazia
-      if (
-        Object.keys(
-          manual.byWeek[wk]
-        ).length === 0
-      ) {
-        delete manual.byWeek[
-          wk
-        ];
-      }
-
-      saveManualAdjustments(
-        manual
-      );
-
-      // força reprocessar ranking/dash/gráficos
-      markDirty({
-        invalidateScanCache: true
-      });
-
-      // console.log(`[SC_GERAL_DASH] Usuário ${userId} retornou. Pontos da semana ${wk} reabilitados.`);
-    } catch (e) {
-      console.error(
-        "[SC_GERAL_DASH] Erro ao processar retorno do GI:",
-        e
-      );
     }
-  });
+  );
+
+  // =====================================================
+  // GI: RETORNOU -> VOLTA PARA A COLOCAÇÃO
+  // =====================================================
+  //
+  // Como os pontos reais nunca foram apagados, basta retirar
+  // a trava visual. A posição volta recalculada imediatamente
+  // com os pontos antigos da semana + os novos.
+  // =====================================================
+
+  dashOn(
+    "gi:retornou",
+    (payload) => {
+      try {
+        const userId =
+          resolveDiscordIdentity(
+            payload?.userId
+          ) ||
+          String(
+            payload?.userId ||
+            ""
+          ).trim();
+
+        if (!userId) {
+          return;
+        }
+
+        const weekKey =
+          weekKeyFromDateSP(
+            nowSP()
+          );
+
+        clearLegacyGiHiddenAdjustment(
+          weekKey,
+          userId
+        );
+
+        setUserRankingHidden({
+          weekKey,
+          userId,
+          hidden:
+            false,
+          reason:
+            "gi_returned",
+        });
+
+        markDirty({
+          invalidateScanCache:
+            true,
+        });
+      } catch (error) {
+        console.error(
+          "[SC_GERAL_DASH] Erro ao restaurar retornado na colocação:",
+          error
+        );
+      }
+    }
+  );
 
  dashOn("vip:criado", (p) => {
   try {

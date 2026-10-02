@@ -1623,6 +1623,302 @@ async function setThreadMode(
 }
 
 // =====================================================
+// DESLIGAMENTO DEFINITIVO: FECHA TODA A EVOLUÇÃO
+// =====================================================
+//
+// Diferente de uma troca de cargo, o desligamento não tem
+// uma nova fase ativa. Portanto TODOS os tópicos conhecidos
+// ficam arquivados + travados, inclusive o último ativo.
+//
+// Antes da trava final, opcionalmente grava um resumo curto
+// no último tópico que estava ativo.
+// =====================================================
+
+export function lockEvolutionHierarchyForMember(
+  client,
+  {
+    userId,
+    originalThreadId = null,
+    finalSummary = null,
+    reason =
+      "Membro desligado da SantaCreators",
+  } = {}
+) {
+  const normalizedUserId =
+    String(
+      userId ||
+      ""
+    ).trim();
+
+  if (!normalizedUserId) {
+    return Promise.reject(
+      new Error(
+        "Usuário não informado para travar a evolução."
+      )
+    );
+  }
+
+  const task =
+    syncQueue.then(
+      async () => {
+        const state =
+          readState();
+
+        const userState =
+          state.users[
+            normalizedUserId
+          ] || {
+            tiers: {},
+            activeTier: null,
+            activeThreadId: null,
+          };
+
+        userState.tiers ||=
+          {};
+
+        if (
+          originalThreadId &&
+          !userState.tiers[
+            EVOLUTION_TIERS.TEAM
+          ]
+        ) {
+          userState.tiers[
+            EVOLUTION_TIERS.TEAM
+          ] =
+            String(
+              originalThreadId
+            );
+        }
+
+        const lastActiveThreadId =
+          userState.activeThreadId ||
+          originalThreadId ||
+          null;
+
+        const knownThreadIds =
+          new Set([
+            ...Object.values(
+              userState.tiers ||
+              {}
+            ),
+            userState.activeThreadId,
+            originalThreadId,
+          ].filter(Boolean));
+
+        if (
+          !knownThreadIds.size
+        ) {
+          return {
+            ok: false,
+            reason:
+              "no_known_threads",
+          };
+        }
+
+        // =================================================
+        // ÚLTIMO REGISTRO INTERNO ANTES DA TRAVA
+        // =================================================
+
+        if (
+          lastActiveThreadId &&
+          String(
+            finalSummary ||
+            ""
+          ).trim()
+        ) {
+          const activeThread =
+            await fetchChannel(
+              client,
+              lastActiveThreadId
+            );
+
+          if (
+            activeThread
+              ?.isThread
+              ?.()
+          ) {
+            await setThreadMode(
+              activeThread,
+              true,
+              "Registrando resumo final antes do desligamento"
+            ).catch(
+              () => null
+            );
+
+            const marker =
+              `SC_EVOLUTION_DISCONNECT:${normalizedUserId}`;
+
+            const recent =
+              await activeThread.messages
+                .fetch({
+                  limit: 50,
+                })
+                .catch(
+                  () => null
+                );
+
+            const alreadyPosted =
+              recent?.some(
+                message =>
+                  message.author?.id ===
+                    client.user?.id &&
+                  String(
+                    message.embeds?.[0]
+                      ?.footer?.text ||
+                    ""
+                  ) ===
+                    marker
+              ) ||
+              false;
+
+            if (!alreadyPosted) {
+              const summaryEmbed =
+                new EmbedBuilder()
+                  .setColor(
+                    0xe74c3c
+                  )
+                  .setTitle(
+                    "🗑️ Encerramento do acompanhamento"
+                  )
+                  .setDescription(
+                    String(
+                      finalSummary
+                    )
+                      .trim()
+                      .slice(
+                        0,
+                        4000
+                      )
+                  )
+                  .addFields({
+                    name:
+                      "📌 Situação",
+                    value:
+                      "Membro desligado da SantaCreators. Este tópico foi encerrado e permanece apenas como histórico.",
+                    inline:
+                      false,
+                  })
+                  .setFooter({
+                    text:
+                      marker,
+                  })
+                  .setTimestamp();
+
+              await activeThread
+                .send({
+                  embeds: [
+                    summaryEmbed,
+                  ],
+
+                  allowedMentions: {
+                    parse: [],
+                  },
+                })
+                .catch(
+                  error =>
+                    console.warn(
+                      `[EVOLUTION_HIERARCHY] Não consegui publicar o resumo final de ${normalizedUserId}:`,
+                      error?.message ||
+                      error
+                    )
+                );
+            }
+          }
+        }
+
+        // =================================================
+        // TRAVA TODOS OS TÓPICOS DA TRAJETÓRIA
+        // =================================================
+
+        let lockedThreads =
+          0;
+
+        for (
+          const threadId
+          of knownThreadIds
+        ) {
+          const thread =
+            await fetchChannel(
+              client,
+              threadId
+            );
+
+          if (
+            !thread
+              ?.isThread
+              ?.()
+          ) {
+            continue;
+          }
+
+          await setFormsManagementButtonsDisabled(
+            thread,
+            true
+          ).catch(
+            () => null
+          );
+
+          await setThreadMode(
+            thread,
+            false,
+            reason
+          );
+
+          lockedThreads++;
+        }
+
+        userState.lastActiveThreadIdBeforeDisconnect =
+          lastActiveThreadId;
+
+        userState.lastActiveTierBeforeDisconnect =
+          Number(
+            userState.activeTier ||
+            0
+          ) ||
+          null;
+
+        userState.activeTier =
+          null;
+
+        userState.activeThreadId =
+          null;
+
+        userState.lockedByStatus =
+          "disconnected";
+
+        userState.lockedAt =
+          new Date()
+            .toISOString();
+
+        userState.lastReason =
+          reason;
+
+        state.users[
+          normalizedUserId
+        ] =
+          userState;
+
+        writeState(
+          state
+        );
+
+        return {
+          ok: true,
+          lockedThreads,
+          lastActiveThreadId,
+        };
+      }
+    );
+
+  syncQueue =
+    task.catch(
+      () => null
+    );
+
+  return task;
+}
+
+// =====================================================
 // CRIAÇÃO DO TÓPICO DE UMA NOVA FASE
 // =====================================================
 
@@ -2081,6 +2377,15 @@ async function performSync(
 
   userState.activeThreadId =
     activeThread.id;
+
+  // Se a pessoa retornou após um desligamento, a nova
+  // sincronização reabre somente a fase compatível com
+  // os cargos atuais e limpa a marca de encerramento.
+  delete userState
+    .lockedByStatus;
+
+  delete userState
+    .lockedAt;
 
   userState.updatedAt =
     stateUpdatedAt;
