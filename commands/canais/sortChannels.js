@@ -18,6 +18,11 @@ import {
 
 import { dashOn, dashEmit } from "../../utils/dashHub.js";
 
+import {
+  getOfficialSantaCreatorsAuthorityLevel,
+  getOfficialSantaCreatorsAuthorityLevelForRoleId,
+} from "../../../events/hierarquiaDivisoes.js";
+
 // ===============================
 // SANTA CREATORS — ORDENAR CANAIS POR NOME (A→Z) + PINNED NO TOPO
 // • Supervisor a cada 30s + reage em ChannelCreate/ChannelUpdate
@@ -84,6 +89,21 @@ const INATIVO_CONFIG = {
   ],
   SPECIAL_AUTHORIZED_ROLES: [
     "1352408327983861844", // Resp Creators (Apenas este cargo + usuários especiais têm acesso global)
+  ],
+
+  // Bypass das travas manuais de !membros / !inativos
+  MANUAL_SAFETY_BYPASS_USERS: [
+    "660311795327828008", // Eu
+  ],
+  MANUAL_SAFETY_BYPASS_ROLES: [
+    "1262262852949905408", // Owner
+    "1352408327983861844", // Resp Creators
+  ],
+
+  // Categorias onde !membro / !membros ficam protegidos pela automação do Controle GI
+  MANUAL_MEMBERS_GUARD_CATEGORIES: [
+    "1359244725781266492", // Tickets de Entrevista
+    "1444857594517913742", // Contratar em Game
   ],
 
   // ✅ Categorias da lógica padrão onde os autorizados padrão podem usar
@@ -250,6 +270,22 @@ const debouncers = new Map();
 // Controle do failsafe de reconciliação dos membros ativos.
 const CREATOR_ACTIVE_RECONCILE_LAST_RUN = new Map();
 const CREATOR_ACTIVE_RECONCILE_INTERVAL_MS = 30 * 1000;
+
+// =====================================================
+// PROTEÇÃO HIERÁRQUICA DOS TICKETS PESSOAIS
+// =====================================================
+//
+// Evita duas sincronizações simultâneas das permissões
+// do mesmo ticket.
+//
+// A hierarquia NÃO é calculada pela posição dos cargos
+// no Discord.
+//
+// A fonte oficial continua sendo:
+// events/hierarquiaDivisoes.js
+// =====================================================
+const CREATOR_TICKET_HIERARCHY_PERMISSION_LOCKS =
+  new Set();
 
 // =====================================================
 // DEBUG DO SUPERVISOR
@@ -867,6 +903,649 @@ async function resolveCreatorTicketOwnerId(
   return null;
 }
 
+// =====================================================
+// PROTEÇÃO HIERÁRQUICA DOS TICKETS PESSOAIS
+// =====================================================
+//
+// REGRA:
+//
+// rank menor = cargo institucional superior.
+//
+// Exemplo:
+//
+// Resp Creators = rank superior
+// Resp Influ    = rank abaixo dele
+// Resp Líder    = rank abaixo dele
+// ...
+//
+// Portanto:
+//
+// actorRank < ownerRank
+//   -> pode visualizar.
+//
+// actorRank === ownerRank
+//   -> NÃO pode visualizar.
+//
+// actorRank > ownerRank
+//   -> NÃO pode visualizar.
+//
+// IMPORTANTE:
+//
+// - NÃO usa role.position.
+// - NÃO usa highest.position.
+// - NÃO considera Tier 1/2/3.
+// - NÃO considera cargos externos à hierarquia oficial.
+// - Preserva overwrites de cargos não institucionais.
+// - Corrige também overwrites individuais de membros
+//   que pertencem à hierarquia institucional.
+// =====================================================
+
+function getCreatorTicketOfficialRoleRank(
+  roleId
+) {
+  try {
+    const rank =
+      getOfficialSantaCreatorsAuthorityLevelForRoleId(
+        String(
+          roleId ||
+          ""
+        )
+      );
+
+    return Number.isFinite(
+      rank
+    )
+      ? rank
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function getCreatorTicketOfficialMemberRank(
+  member
+) {
+  if (!member) {
+    return null;
+  }
+
+  try {
+    const rank =
+      getOfficialSantaCreatorsAuthorityLevel(
+        member
+      );
+
+    return Number.isFinite(
+      rank
+    )
+      ? rank
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function getCreatorTicketViewOverwriteState(
+  channel,
+  targetId
+) {
+  const overwrite =
+    channel
+      ?.permissionOverwrites
+      ?.cache
+      ?.get(
+        String(
+          targetId ||
+          ""
+        )
+      );
+
+  if (!overwrite) {
+    return {
+      allow:
+        false,
+
+      deny:
+        false,
+    };
+  }
+
+  return {
+    allow:
+      overwrite.allow.has(
+        PermissionsBitField.Flags.ViewChannel
+      ),
+
+    deny:
+      overwrite.deny.has(
+        PermissionsBitField.Flags.ViewChannel
+      ),
+  };
+}
+
+async function setCreatorTicketViewPermission(
+  channel,
+  targetId,
+  shouldAllow
+) {
+  const normalizedTargetId =
+    String(
+      targetId ||
+      ""
+    );
+
+  if (
+    !channel ||
+    !normalizedTargetId
+  ) {
+    return false;
+  }
+
+  const current =
+    getCreatorTicketViewOverwriteState(
+      channel,
+      normalizedTargetId
+    );
+
+  if (
+    shouldAllow === true &&
+    current.allow === true &&
+    current.deny === false
+  ) {
+    return false;
+  }
+
+  if (
+    shouldAllow === false &&
+    current.deny === true &&
+    current.allow === false
+  ) {
+    return false;
+  }
+
+  await channel.permissionOverwrites.edit(
+    normalizedTargetId,
+    {
+      ViewChannel:
+        shouldAllow,
+    }
+  );
+
+  return true;
+}
+
+async function syncCreatorTicketHierarchyPermissions(
+  channel,
+  {
+    ownerId = null,
+    trigger = "hierarchy_sync",
+  } = {}
+) {
+  if (
+    !channel?.guild ||
+    channel.type !==
+      ChannelType.GuildText
+  ) {
+    return {
+      ok:
+        false,
+
+      reason:
+        "invalid_channel",
+    };
+  }
+
+  // Esta proteção pertence SOMENTE
+  // à categoria oficial de membros.
+  if (
+    channel.parentId !==
+    CREATOR_TICKET_AUTO.ACTIVE_CATEGORY
+  ) {
+    return {
+      ok:
+        false,
+
+      reason:
+        "outside_active_category",
+    };
+  }
+
+  if (
+    isCreatorTicketAutomationExempt(
+      channel
+    )
+  ) {
+    return {
+      ok:
+        true,
+
+      skipped:
+        "fixed_exempt_channel",
+    };
+  }
+
+  const lockKey =
+    String(
+      channel.id
+    );
+
+  if (
+    CREATOR_TICKET_HIERARCHY_PERMISSION_LOCKS.has(
+      lockKey
+    )
+  ) {
+    return {
+      ok:
+        true,
+
+      skipped:
+        "already_running",
+    };
+  }
+
+  CREATOR_TICKET_HIERARCHY_PERMISSION_LOCKS.add(
+    lockKey
+  );
+
+  try {
+    // =====================================================
+    // 1. IDENTIFICA O DONO REAL DO TICKET
+    // =====================================================
+
+    const resolvedOwnerId =
+      String(
+        ownerId ||
+        await resolveCreatorTicketOwnerId(
+          channel
+        ) ||
+        ""
+      ).trim();
+
+    if (!resolvedOwnerId) {
+      console.warn(
+        `[SC_SORT][HIERARCHY] Ticket ${channel.id} sem dono confiável. Nenhum novo acesso hierárquico foi concedido. Gatilho=${trigger}`
+      );
+
+      return {
+        ok:
+          false,
+
+        reason:
+          "owner_not_identified",
+      };
+    }
+
+    const ownerMember =
+      channel.guild.members.cache.get(
+        resolvedOwnerId
+      ) ||
+      await channel.guild.members
+        .fetch(
+          resolvedOwnerId
+        )
+        .catch(
+          () => null
+        );
+
+    // =====================================================
+    // 2. DESCOBRE O RANK OFICIAL DO DONO
+    // =====================================================
+
+    const ownerRank =
+      getCreatorTicketOfficialMemberRank(
+        ownerMember
+      );
+
+    // =====================================================
+    // 3. DESCOBRE QUAIS CARGOS REALMENTE PERTENCEM
+    //    À HIERARQUIA OFICIAL
+    // =====================================================
+    //
+    // Não existe lista paralela aqui.
+    //
+    // Cada cargo do servidor é consultado diretamente
+    // no hierarquiaDivisoes.js.
+    //
+    // Tier, VIP, destaques etc. retornam null e ficam
+    // completamente fora desta proteção.
+    // =====================================================
+
+    const officialHierarchyRoles =
+      [];
+
+    for (
+      const role
+      of channel.guild.roles.cache.values()
+    ) {
+      const roleRank =
+        getCreatorTicketOfficialRoleRank(
+          role.id
+        );
+
+      if (
+        !Number.isFinite(
+          roleRank
+        )
+      ) {
+        continue;
+      }
+
+      officialHierarchyRoles.push({
+        role,
+        rank:
+          roleRank,
+      });
+    }
+
+    let changed =
+      0;
+
+    // =====================================================
+    // 4. FAILSAFE
+    // =====================================================
+    //
+    // Se sabemos QUEM é o dono, mas não conseguimos
+    // identificar o nível institucional dele:
+    //
+    // -> NÃO concedemos acesso para a hierarquia.
+    // -> cargos institucionais ficam bloqueados.
+    // -> o próprio dono mantém acesso individual.
+    //
+    // Isso evita liberar um ticket por suposição.
+    // =====================================================
+
+    if (
+      !Number.isFinite(
+        ownerRank
+      )
+    ) {
+      for (
+        const {
+          role,
+        }
+        of officialHierarchyRoles
+      ) {
+        const didChange =
+          await setCreatorTicketViewPermission(
+            channel,
+            role.id,
+            false
+          );
+
+        if (didChange) {
+          changed++;
+        }
+      }
+
+      // Corrige também acessos individuais já existentes
+      // de pessoas que fazem parte da hierarquia oficial.
+      for (
+        const overwrite
+        of channel.permissionOverwrites.cache.values()
+      ) {
+        if (
+          overwrite.type !==
+            OverwriteType.Member ||
+          String(
+            overwrite.id
+          ) ===
+            resolvedOwnerId
+        ) {
+          continue;
+        }
+
+        const member =
+          channel.guild.members.cache.get(
+            overwrite.id
+          ) ||
+          await channel.guild.members
+            .fetch(
+              overwrite.id
+            )
+            .catch(
+              () => null
+            );
+
+        const memberRank =
+          getCreatorTicketOfficialMemberRank(
+            member
+          );
+
+        if (
+          !Number.isFinite(
+            memberRank
+          )
+        ) {
+          // Não pertence à hierarquia oficial.
+          // Não mexe.
+          continue;
+        }
+
+        const didChange =
+          await setCreatorTicketViewPermission(
+            channel,
+            overwrite.id,
+            false
+          );
+
+        if (didChange) {
+          changed++;
+        }
+      }
+
+      // O dono do ticket nunca deve perder o próprio ticket.
+      const ownerChanged =
+        await setCreatorTicketViewPermission(
+          channel,
+          resolvedOwnerId,
+          true
+        );
+
+      if (ownerChanged) {
+        changed++;
+      }
+
+      console.warn(
+        `[SC_SORT][HIERARCHY] Ticket ${channel.id}: dono ${resolvedOwnerId} sem rank institucional identificável. Failsafe aplicado. alterações=${changed}, gatilho=${trigger}`
+      );
+
+      return {
+        ok:
+          false,
+
+        safeMode:
+          true,
+
+        reason:
+          "owner_rank_not_identified",
+
+        ownerId:
+          resolvedOwnerId,
+
+        changed,
+      };
+    }
+
+    // =====================================================
+    // 5. APLICA A HIERARQUIA AOS CARGOS OFICIAIS
+    // =====================================================
+    //
+    // roleRank < ownerRank
+    //   = cargo acima do dono
+    //   = PODE VER.
+    //
+    // roleRank >= ownerRank
+    //   = mesmo nível ou abaixo
+    //   = NÃO PODE VER.
+    // =====================================================
+
+    for (
+      const {
+        role,
+        rank,
+      }
+      of officialHierarchyRoles
+    ) {
+      const shouldAllow =
+        rank <
+        ownerRank;
+
+      const didChange =
+        await setCreatorTicketViewPermission(
+          channel,
+          role.id,
+          shouldAllow
+        );
+
+      if (didChange) {
+        changed++;
+      }
+    }
+
+    // =====================================================
+    // 6. CORRIGE OVERWRITES INDIVIDUAIS JÁ EXISTENTES
+    // =====================================================
+    //
+    // Isso impede que alguém da própria hierarquia
+    // fure a proteção porque recebeu ViewChannel
+    // diretamente como usuário.
+    //
+    // Pessoas sem rank institucional são preservadas.
+    // =====================================================
+
+    for (
+      const overwrite
+      of channel.permissionOverwrites.cache.values()
+    ) {
+      if (
+        overwrite.type !==
+          OverwriteType.Member
+      ) {
+        continue;
+      }
+
+      const overwriteUserId =
+        String(
+          overwrite.id
+        );
+
+      if (
+        overwriteUserId ===
+        resolvedOwnerId
+      ) {
+        continue;
+      }
+
+      const member =
+        channel.guild.members.cache.get(
+          overwriteUserId
+        ) ||
+        await channel.guild.members
+          .fetch(
+            overwriteUserId
+          )
+          .catch(
+            () => null
+          );
+
+      if (!member) {
+        continue;
+      }
+
+      const memberRank =
+        getCreatorTicketOfficialMemberRank(
+          member
+        );
+
+      if (
+        !Number.isFinite(
+          memberRank
+        )
+      ) {
+        // Usuário/cargo fora da hierarquia oficial.
+        // Não ganha acesso por esta lógica,
+        // mas também não é removido automaticamente.
+        continue;
+      }
+
+      const shouldAllow =
+        memberRank <
+        ownerRank;
+
+      const didChange =
+        await setCreatorTicketViewPermission(
+          channel,
+          overwriteUserId,
+          shouldAllow
+        );
+
+      if (didChange) {
+        changed++;
+      }
+    }
+
+    // =====================================================
+    // 7. GARANTE O ACESSO DO PRÓPRIO DONO
+    // =====================================================
+    //
+    // Mesmo que o cargo do dono receba deny por ser
+    // exatamente do mesmo nível do ticket,
+    // o overwrite individual do proprietário é aplicado.
+    // =====================================================
+
+    const ownerChanged =
+      await setCreatorTicketViewPermission(
+        channel,
+        resolvedOwnerId,
+        true
+      );
+
+    if (ownerChanged) {
+      changed++;
+    }
+
+    if (
+      changed >
+      0
+    ) {
+      console.log(
+        `[SC_SORT][HIERARCHY] Ticket ${channel.id}: dono=${resolvedOwnerId}, rank=${ownerRank}, alterações=${changed}, gatilho=${trigger}`
+      );
+    }
+
+    return {
+      ok:
+        true,
+
+      ownerId:
+        resolvedOwnerId,
+
+      ownerRank,
+
+      changed,
+    };
+  } catch (error) {
+    console.error(
+      `[SC_SORT][HIERARCHY] Falha ao sincronizar permissões do ticket ${channel?.id}:`,
+      error
+    );
+
+    return {
+      ok:
+        false,
+
+      reason:
+        "sync_error",
+
+      error,
+    };
+  } finally {
+    CREATOR_TICKET_HIERARCHY_PERMISSION_LOCKS.delete(
+      lockKey
+    );
+  }
+}
+
 async function creatorTicketBelongsToUser(
   channel,
   userId
@@ -1040,6 +1719,27 @@ async function moveCreatorTicketAutomatically(
     lockPermissions: false,
     reason,
   });
+
+  // =====================================================
+  // PROTEÇÃO HIERÁRQUICA AO ENTRAR EM MEMBROS
+  // =====================================================
+  //
+  // Assim que o ticket chega à categoria oficial de
+  // membros, as permissões são conferidas imediatamente.
+  // =====================================================
+
+  if (
+    targetCategoryId ===
+    CREATOR_TICKET_AUTO.ACTIVE_CATEGORY
+  ) {
+    await syncCreatorTicketHierarchyPermissions(
+      channel,
+      {
+        trigger:
+          "moveCreatorTicketAutomatically",
+      }
+    );
+  }
 
   await safeSortCategory(channel.guild, targetCategoryId);
 
@@ -1616,11 +2316,37 @@ async function reconcileCreatorActiveChannel(
   // não possui Controle GI -> vai automaticamente para !inativos.
   // Controle pausado continua contando como Controle GI existente.
   if (giState.exists) {
+    // =====================================================
+    // PROTEÇÃO HIERÁRQUICA CONTÍNUA
+    // =====================================================
+    //
+    // Além de confirmar que o ticket realmente pertence
+    // à categoria de membros, o supervisor também garante
+    // que as permissões continuem obedecendo à hierarquia.
+    //
+    // Isso corrige automaticamente permissões alteradas
+    // manualmente ou deixadas por uma configuração antiga.
+    // =====================================================
+
+    const hierarchySync =
+      await syncCreatorTicketHierarchyPermissions(
+        channel,
+        {
+          ownerId:
+            String(
+              ownerId
+            ),
+
+          trigger,
+        }
+      );
+
     return {
       checked: true,
       moved: false,
       ownerId: String(ownerId),
       giState,
+      hierarchySync,
     };
   }
 
@@ -2725,12 +3451,46 @@ const SC_SORT_CATEGORY_IDS = [
     }
 
     // reage a criação
-    client.on(Events.ChannelCreate, (ch) => {
-      if (!ch?.guild) return;
-      if (ch?.parentId && SC_SORT_CATEGORY_IDS.includes(ch.parentId)) {
-        debounceSort(ch.guild, ch.parentId);
+    client.on(
+      Events.ChannelCreate,
+      async (ch) => {
+        if (!ch?.guild) return;
+
+        if (
+          ch?.parentId &&
+          SC_SORT_CATEGORY_IDS.includes(
+            ch.parentId
+          )
+        ) {
+          debounceSort(
+            ch.guild,
+            ch.parentId
+          );
+        }
+
+        // =====================================================
+        // TICKET CRIADO DIRETAMENTE EM MEMBROS
+        // =====================================================
+
+        if (
+          ch.type ===
+            ChannelType.GuildText &&
+          ch.parentId ===
+            CREATOR_TICKET_AUTO.ACTIVE_CATEGORY &&
+          !isCreatorTicketAutomationExempt(
+            ch
+          )
+        ) {
+          await syncCreatorTicketHierarchyPermissions(
+            ch,
+            {
+              trigger:
+                "channel_create_active_category",
+            }
+          );
+        }
       }
-    });
+    );
 
     // reage a update (mudança de nome, mudança de categoria, etc.)
     client.on(Events.ChannelUpdate, async (oldCh, newCh) => {
@@ -2755,6 +3515,39 @@ const SC_SORT_CATEGORY_IDS = [
         now === CREATOR_TICKET_AUTO.WAITING_CATEGORY
       ) {
         await syncCreatorTicketMovedIntoWaiting(newCh);
+      }
+
+      // =====================================================
+      // PROTEÇÃO AO ENTRAR MANUALMENTE EM MEMBROS
+      // =====================================================
+      //
+      // Cobre:
+      //
+      // - movimentação manual pelo Discord;
+      // - !membro;
+      // - !membros;
+      // - restaurações;
+      // - qualquer outro módulo que use setParent()
+      //   diretamente.
+      // =====================================================
+
+      if (
+        was !== now &&
+        now ===
+          CREATOR_TICKET_AUTO.ACTIVE_CATEGORY &&
+        newCh.type ===
+          ChannelType.GuildText &&
+        !isCreatorTicketAutomationExempt(
+          newCh
+        )
+      ) {
+        await syncCreatorTicketHierarchyPermissions(
+          newCh,
+          {
+            trigger:
+              "channel_update_enter_active_category",
+          }
+        );
       }
     });
 
@@ -3173,6 +3966,15 @@ const currentCategoryId = resolveEffectiveCategoryId(channel);
     // ✅ Permissão geral para comandos padrão
     const canUseStandardFlow = isStandardFlowCategoryAuthorized;
 
+    // =====================================================
+    // BYPASS DAS TRAVAS MANUAIS DE !MEMBROS / !INATIVOS
+    // =====================================================
+    const hasManualSafetyBypass =
+      INATIVO_CONFIG.MANUAL_SAFETY_BYPASS_USERS.includes(message.author.id) ||
+      member.roles.cache.some((r) =>
+        INATIVO_CONFIG.MANUAL_SAFETY_BYPASS_ROLES.includes(r.id)
+      );
+
     if (!isSpecialAuthorized && !canUseStandardFlow) {
       setTimeout(() => message.delete().catch(() => {}), 1000);
       const msg = await message.reply(
@@ -3212,6 +4014,52 @@ const currentCategoryId = resolveEffectiveCategoryId(channel);
           );
           setTimeout(() => msg.delete().catch(() => {}), 8000);
           return true;
+        }
+
+        // =====================================================
+        // TRAVA MANUAL DO !INATIVO / !INATIVOS EM MEMBROS
+        // =====================================================
+        //
+        // A automação já controla a saída de MEMBROS para INATIVOS.
+        // Enquanto existir Controle GI, inclusive pausado, o comando
+        // manual fica bloqueado para quem não possui bypass.
+        // =====================================================
+        if (
+          currentCategoryId === INATIVO_CONFIG.SOURCE_CATEGORY &&
+          !hasManualSafetyBypass
+        ) {
+          const ownerId =
+            await resolveCreatorTicketOwnerId(channel);
+
+          const giState = ownerId
+            ? getCreatorGiControlState(
+                message.guild.id,
+                String(ownerId)
+              )
+            : {
+                available: false,
+                authoritative: false,
+                exists: null,
+              };
+
+          if (
+            !ownerId ||
+            !giState.available ||
+            !giState.authoritative ||
+            giState.exists
+          ) {
+            setTimeout(() => message.delete().catch(() => {}), 1000);
+
+            const msg = await message.reply(
+              "⛔ **Não é mais necessário usar `!inativos` manualmente neste ticket.**\n\n" +
+              "Enquanto existir um **Controle GI** vinculado ao membro, mesmo pausado, o próprio sistema mantém o ticket em Membros.\n" +
+              "Para enviar o ticket automaticamente para Inativos, o Controle GI precisa ser **desligado por completo** em <#1417366889398796318>.\n\n" +
+              "Assim que o Controle GI deixar de existir, o sistema fará a movimentação automaticamente."
+            );
+
+            setTimeout(() => msg.delete().catch(() => {}), 12000);
+            return true;
+          }
         }
 
         let targetCategory = null;
@@ -3430,6 +4278,60 @@ if (isReactivateCmd) {
         const forceMembersCategory =
           content === "!membro" ||
           content === "!membros";
+        // =====================================================
+        // TRAVA MANUAL DO !MEMBRO / !MEMBROS
+        // =====================================================
+        //
+        // Em Entrevista / Contratar em Game, a entrada em MEMBROS
+        // deve acontecer pela automação do Controle GI.
+        //
+        // Para liberar manualmente sem bypass, o Controle GI
+        // precisa existir E estar ativo.
+        // =====================================================
+        if (
+          forceMembersCategory &&
+          INATIVO_CONFIG.MANUAL_MEMBERS_GUARD_CATEGORIES.includes(
+            currentCategoryId
+          ) &&
+          !hasManualSafetyBypass
+        ) {
+          const ownerId =
+            await resolveCreatorTicketOwnerId(channel);
+
+          const giState = ownerId
+            ? getCreatorGiControlState(
+                message.guild.id,
+                String(ownerId)
+              )
+            : {
+                available: false,
+                authoritative: false,
+                exists: null,
+                active: null,
+                paused: null,
+              };
+
+          if (
+            !ownerId ||
+            !giState.available ||
+            !giState.authoritative ||
+            !giState.exists ||
+            !giState.active ||
+            giState.paused
+          ) {
+            setTimeout(() => message.delete().catch(() => {}), 1000);
+
+            const msg = await message.reply(
+              "⛔ **Não é mais necessário usar `!membros` manualmente neste ticket.**\n\n" +
+              "A pessoa responsável pela entrevista deve solicitar o **SET** em <#1352705879039803474>.\n" +
+              "Quando o **Controle GI estiver ativo e vinculado ao ticket**, o próprio sistema fará a movimentação para <#1384650670145278033> automaticamente.\n\n" +
+              "A movimentação manual fica bloqueada para evitar conflito com a automação."
+            );
+
+            setTimeout(() => msg.delete().catch(() => {}), 12000);
+            return true;
+          }
+        }
 
         let targetCategoryId =
           INATIVO_CONFIG.SOURCE_CATEGORY;

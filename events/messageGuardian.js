@@ -14,18 +14,58 @@ import {
 
 const LOG_CHANNEL_ID = '1507676677927338107'; // Canal de logs de segurança
 
-// Usuários isentos (Bypass total)
+// Usuários isentos já existentes no arquivo.
+// Mantido porque também é utilizado por outras proteções deste módulo.
 const ALLOWED_USERS = [
-    '1262262852949905408', // Owner
+    '1262262852949905408', // Mantido como já estava
     '660311795327828008',  // Você
 ];
 
-// Cargos autorizados a apagar mensagens do bot
-const ALLOWED_ROLES = [
-    '1262262852949905409', // Resp Influ
-    '1352408327983861844', // Resp Creators
-    '1352407252216184833', // Resp Líder
+// =====================================================
+// BYPASS / LIMITES DE EXCLUSÃO DE MENSAGENS DO BOT
+// =====================================================
+
+// Usuários com bypass TOTAL e SILENCIOSO:
+// não gera log, alerta, punição nem qualquer outra ação do MessageGuardian.
+const MESSAGE_DELETE_SILENT_BYPASS_USER_IDS = [
+    '660311795327828008', // Macedo
 ];
+
+// Cargos com bypass TOTAL e SILENCIOSO.
+// Adicione/remova IDs aqui no futuro sem alterar a lógica abaixo.
+const MESSAGE_DELETE_SILENT_BYPASS_ROLE_IDS = [
+    '1262262852949905408', // Owner
+];
+
+// Cargos com autorização LIMITADA.
+// Eles CONTINUAM gerando log sobre o que apagaram.
+// Se ultrapassarem o limite dentro da janela, recebem a punição normal.
+const ALLOWED_ROLES = {
+    '1262262852949905409': {
+        name: 'Resp Influ',
+        maxDeletes: 4,
+        windowMs: 2 * 60 * 1000,
+        windowLabel: '2 minutos',
+    },
+    '1352408327983861844': {
+        name: 'Resp Creators',
+        maxDeletes: 20,
+        windowMs: 2 * 60 * 1000,
+        windowLabel: '2 minutos',
+    },
+    '1352407252216184833': {
+        name: 'Resp Líder',
+        maxDeletes: 2,
+        windowMs: 10 * 60 * 1000,
+        windowLabel: '10 minutos',
+    },
+};
+
+const MESSAGE_DELETE_MAX_TRACK_WINDOW_MS = Math.max(
+    ...Object.values(ALLOWED_ROLES).map(rule => rule.windowMs)
+);
+
+const messageDeleteAttempts = new Map();
 
 // ID do cargo limite (Ninguém abaixo deste pode apagar, exceto se estiver na whitelist acima)
 const THRESHOLD_ROLE_ID = '1352275728476930099'; // SantaCreators
@@ -132,31 +172,170 @@ async function sendChannelConfigLog(client, guild, member, channel, oldChannel, 
 }
 
 /**
- * Verifica se o membro tem autorização para apagar mensagens do bot.
+ * Verifica se o membro possui bypass TOTAL e SILENCIOSO
+ * para exclusões de mensagens enviadas pelo bot.
+ */
+function hasSilentMessageDeleteBypass(member) {
+    if (!member) return false;
+
+    if (MESSAGE_DELETE_SILENT_BYPASS_USER_IDS.includes(member.id)) {
+        return true;
+    }
+
+    return member.roles.cache.some(role =>
+        MESSAGE_DELETE_SILENT_BYPASS_ROLE_IDS.includes(role.id)
+    );
+}
+
+/**
+ * Retorna a regra limitada aplicável ao membro.
+ * Se possuir mais de um dos cargos configurados, usa o cargo mais alto
+ * na hierarquia real do Discord.
+ */
+function getLimitedMessageDeleteRule(member) {
+    if (!member) return null;
+
+    const matchingRole = member.roles.cache
+        .filter(role =>
+            Object.prototype.hasOwnProperty.call(ALLOWED_ROLES, role.id)
+        )
+        .sort((firstRole, secondRole) =>
+            secondRole.position - firstRole.position
+        )
+        .first();
+
+    if (!matchingRole) {
+        return null;
+    }
+
+    return {
+        roleId: matchingRole.id,
+        role: matchingRole,
+        ...ALLOWED_ROLES[matchingRole.id],
+    };
+}
+
+function cleanupMessageDeleteAttempts(now = Date.now()) {
+    for (const [key, timestamps] of messageDeleteAttempts.entries()) {
+        const recentTimestamps = timestamps.filter(timestamp =>
+            now - timestamp < MESSAGE_DELETE_MAX_TRACK_WINDOW_MS
+        );
+
+        if (recentTimestamps.length === 0) {
+            messageDeleteAttempts.delete(key);
+            continue;
+        }
+
+        messageDeleteAttempts.set(key, recentTimestamps);
+    }
+}
+
+function registerMessageDeleteAttempts(member, rule, amount = 1) {
+    const now = Date.now();
+
+    cleanupMessageDeleteAttempts(now);
+
+    const key = `${member.guild.id}:${member.id}`;
+    const history = messageDeleteAttempts.get(key) || [];
+
+    for (let index = 0; index < amount; index++) {
+        history.push(now);
+    }
+
+    messageDeleteAttempts.set(key, history);
+
+    return history.filter(timestamp =>
+        now - timestamp < rule.windowMs
+    ).length;
+}
+
+/**
+ * Verifica autorização ilimitada por hierarquia.
+ * Esta autorização NÃO é silenciosa: continua aparecendo no log.
  */
 function isAuthorized(member) {
     if (!member) return false;
 
-    // 1. Owner e você possuem bypass total
-    if (ALLOWED_USERS.includes(member.id)) return true;
-
     const botMember = member.guild.members.me;
     if (!botMember) return false;
 
-    // 2. Qualquer pessoa com cargo acima ou igual ao cargo mais alto do bot pode apagar
-    if (member.roles.highest.position >= botMember.roles.highest.position) {
-        return true;
+    return (
+        member.roles.highest.position >=
+        botMember.roles.highest.position
+    );
+}
+
+/**
+ * Decide o que o MessageGuardian deve fazer com uma exclusão.
+ *
+ * action:
+ * - ignore: bypass total/silencioso
+ * - allow_log: pode apagar, mas deve ser anunciado no log
+ * - punish: continua para a punição normal
+ */
+function evaluateMessageDeleteAction(member, deleteCount = 1) {
+    if (!member) {
+        return {
+            action: 'punish',
+            reason: 'Não foi possível validar autorização para apagar a mensagem do bot.',
+        };
     }
 
-    // 3. Apenas esses cargos podem apagar mensagens do bot
-    const hasAllowedRole = member.roles.cache.some(role =>
-        ALLOWED_ROLES.includes(role.id)
-    );
+    // 1. Macedo e cargos de bypass total: absolutamente nenhuma ação.
+    if (hasSilentMessageDeleteBypass(member)) {
+        return {
+            action: 'ignore',
+            reason: 'Bypass total e silencioso.',
+        };
+    }
 
-    if (hasAllowedRole) return true;
+    // 2. Qualquer membro acima ou igual ao cargo mais alto do bot pode apagar,
+    // mas continua sendo anunciado no log.
+    if (isAuthorized(member)) {
+        return {
+            action: 'allow_log',
+            reason:
+                'Apagou mensagem do bot e possui cargo acima ou igual ao cargo mais alto do bot.',
+        };
+    }
 
-    // 4. Qualquer outro cargo abaixo do bot, mesmo com Administrador, NÃO pode apagar
-    return false;
+    // 3. Resp Influ / Resp Creators / Resp Líder usam limites por janela de tempo.
+    const limitedRule = getLimitedMessageDeleteRule(member);
+
+    if (limitedRule) {
+        const currentCount = registerMessageDeleteAttempts(
+            member,
+            limitedRule,
+            deleteCount
+        );
+
+        if (currentCount <= limitedRule.maxDeletes) {
+            return {
+                action: 'allow_log',
+                reason:
+                    `${limitedRule.name} apagou mensagem do bot dentro do limite permitido ` +
+                    `(${currentCount}/${limitedRule.maxDeletes} em menos de ${limitedRule.windowLabel}).`,
+                limitedRule,
+                currentCount,
+            };
+        }
+
+        return {
+            action: 'punish',
+            reason:
+                `${limitedRule.name} excedeu o limite permitido: ` +
+                `${currentCount} exclusões de mensagens do bot em menos de ${limitedRule.windowLabel} ` +
+                `(limite: ${limitedRule.maxDeletes}).`,
+            limitedRule,
+            currentCount,
+        };
+    }
+
+    // 4. Qualquer outro membro abaixo do bot continua seguindo a punição atual.
+    return {
+        action: 'punish',
+        reason: 'Apagou mensagem do bot sem autorização.',
+    };
 }
 
 function truncateGuardianText(value, maxLength = 1000) {
@@ -825,6 +1004,13 @@ export async function installMessageGuardian(client) {
         const deletedMessageAuthorId =
             message.author?.id || null;
 
+        // Este guardião protege SOMENTE mensagens enviadas pelo próprio bot.
+        // Evita associar por engano a exclusão de uma mensagem comum
+        // a um Audit Log recente de outra exclusão no mesmo canal.
+        if (deletedMessageAuthorId !== client.user.id) {
+            return;
+        }
+
         const deletedContent =
             buildDeletedMessageContent(message);
 
@@ -832,207 +1018,258 @@ export async function installMessageGuardian(client) {
         await new Promise(resolve => setTimeout(resolve, 2500));
 
         let executor = null;
+
         try {
             const fetchedLogs = await guild.fetchAuditLogs({
-    limit: 5,
-    type: AuditLogEvent.MessageDelete,
-});
+                limit: 5,
+                type: AuditLogEvent.MessageDelete,
+            });
 
-const logEntry = fetchedLogs.entries.find(entry => {
-    const isRecent = Date.now() - entry.createdTimestamp < 12000;
-    const isBotMessage = entry.target?.id === client.user.id || deletedMessageAuthorId === client.user.id;
-    const isSameChannel = entry.extra?.channel?.id === message.channel?.id;
+            const logEntry = fetchedLogs.entries.find(entry => {
+                const isRecent =
+                    Date.now() - entry.createdTimestamp < 12000;
 
-    return isRecent && isBotMessage && isSameChannel;
-});
+                const auditTargetId =
+                    entry.target?.id ?? null;
 
-if (logEntry) {
-    executor = logEntry.executor;
-}
+                const isBotMessage =
+                    !auditTargetId ||
+                    auditTargetId === client.user.id;
+
+                const isSameChannel =
+                    entry.extra?.channel?.id === message.channel?.id;
+
+                return isRecent && isBotMessage && isSameChannel;
+            });
+
+            if (logEntry) {
+                executor = logEntry.executor;
+            }
         } catch (error) {
-            console.error('[MessageGuardian] Erro ao buscar Audit Logs:', error);
+            console.error(
+                '[MessageGuardian] Erro ao buscar Audit Logs:',
+                error
+            );
         }
 
         if (!executor || executor.bot) return;
 
-        const perpetratorMember = await guild.members.fetch(executor.id).catch(() => null);
+        const perpetratorMember = await guild.members
+            .fetch(executor.id)
+            .catch(() => null);
+
         if (!perpetratorMember) return;
 
-        // 1. Checagem de autorização
-if (isAuthorized(perpetratorMember)) {
-    const professionalLog = await waitForProfessionalDeleteLog(
-        message.id
-    );
+        // =====================================================
+        // 1. BYPASS / AUTORIZAÇÃO / LIMITES
+        // =====================================================
 
-    await sendSecurityLog(
-        client,
-        guild,
-        perpetratorMember,
-        false,
-        'Apagou mensagem do bot, mas possui autorização.',
-        {
-            deletedMessage: message,
-            deletedContent,
-            professionalLog,
-            punishmentApplied: false,
+        const deleteAction = evaluateMessageDeleteAction(
+            perpetratorMember,
+            1
+        );
+
+        // Macedo e Owner: ignora COMPLETAMENTE.
+        // Não espera log profissional, não envia log de segurança,
+        // não alerta e não pune.
+        if (deleteAction.action === 'ignore') {
+            return;
         }
-    );
 
-    return;
-}
+        // Autorizados por hierarquia ou cargos limitados ainda são anunciados.
+        if (deleteAction.action === 'allow_log') {
+            const professionalLog = await waitForProfessionalDeleteLog(
+                message.id
+            );
 
-        // 2. Punição (Remoção de cargos)
-        
-        // Hierarquia: O bot não pode punir quem tem cargo maior ou igual ao dele
-const botHighestRole = guild.members.me.roles.highest;
+            await sendSecurityLog(
+                client,
+                guild,
+                perpetratorMember,
+                false,
+                deleteAction.reason,
+                {
+                    deletedMessage: message,
+                    deletedContent,
+                    professionalLog,
+                    punishmentApplied: false,
+                }
+            );
 
-if (
-    perpetratorMember.roles.highest.position >=
-    botHighestRole.position
-) {
-    const professionalLog = await waitForProfessionalDeleteLog(
-        message.id
-    );
-
-    await sendSecurityLog(
-        client,
-        guild,
-        perpetratorMember,
-        false,
-        'Tentativa de punição falhou: o infrator possui cargo superior ou igual ao cargo mais alto do bot.',
-        {
-            deletedMessage: message,
-            deletedContent,
-            professionalLog,
-            punishmentApplied: false,
+            return;
         }
-    );
 
-    return;
-}
+        // =====================================================
+        // 2. PUNIÇÃO (REMOÇÃO DE CARGOS)
+        // =====================================================
+
+        const punishmentReason =
+            deleteAction.reason ||
+            'Apagou mensagem do bot sem autorização.';
+
+        // Hierarquia: o bot não pode punir quem tem cargo maior ou igual ao dele.
+        // Esta proteção continua aqui como segurança extra.
+        const botHighestRole = guild.members.me.roles.highest;
+
+        if (
+            perpetratorMember.roles.highest.position >=
+            botHighestRole.position
+        ) {
+            const professionalLog = await waitForProfessionalDeleteLog(
+                message.id
+            );
+
+            await sendSecurityLog(
+                client,
+                guild,
+                perpetratorMember,
+                false,
+                'Tentativa de punição falhou: o infrator possui cargo superior ou igual ao cargo mais alto do bot.',
+                {
+                    deletedMessage: message,
+                    deletedContent,
+                    professionalLog,
+                    punishmentApplied: false,
+                }
+            );
+
+            return;
+        }
 
         // Aplica bypass para o Role Guardian não devolver os cargos imediatamente
-        if (!globalThis.__SC_ROLE_BYPASS__) globalThis.__SC_ROLE_BYPASS__ = new Map();
-        globalThis.__SC_ROLE_BYPASS__.set(perpetratorMember.id, Date.now() + 15000);
+        if (!globalThis.__SC_ROLE_BYPASS__) {
+            globalThis.__SC_ROLE_BYPASS__ = new Map();
+        }
 
-        const rolesToRemove = perpetratorMember.roles.cache.filter(role => 
+        globalThis.__SC_ROLE_BYPASS__.set(
+            perpetratorMember.id,
+            Date.now() + 15000
+        );
+
+        const rolesToRemove = perpetratorMember.roles.cache.filter(role =>
             role.id !== guild.id && // Não remove @everyone
             role.editable && // Bot consegue editar
             !EXEMPT_FROM_PUNISHMENT.includes(role.id)
         );
 
-if (rolesToRemove.size > 0) {
-    const removedRoleIds = rolesToRemove.map(role => role.id);
+        if (rolesToRemove.size > 0) {
+            const removedRoleIds = rolesToRemove.map(role => role.id);
 
-    const punishmentId =
-        `${guild.id}_${perpetratorMember.id}_${message.id}_${Date.now()}`;
+            const punishmentId =
+                `${guild.id}_${perpetratorMember.id}_${message.id}_${Date.now()}`;
 
-    if (!globalThis.__SC_MESSAGE_GUARDIAN_PUNISHMENTS__) {
-        globalThis.__SC_MESSAGE_GUARDIAN_PUNISHMENTS__ = new Map();
-    }
-
-    globalThis.__SC_MESSAGE_GUARDIAN_PUNISHMENTS__.set(
-        punishmentId,
-        {
-            punishmentId,
-            guildId: guild.id,
-            userId: perpetratorMember.id,
-            deletedMessageId: message.id,
-            deletedChannelId: message.channel?.id ?? null,
-            removedRoleIds,
-            appliedAt: Date.now(),
-            restored: false,
-            restoredAt: null,
-            restoredBy: null,
-        }
-    );
-
-    try {
-        await perpetratorMember.roles.remove(
-            rolesToRemove,
-            'Punição: apagou mensagem do bot sem autorização.'
-        );
-
-        await perpetratorMember.send({
-            content:
-                `⚠️ **Aviso de Segurança:** Seus cargos foram removidos em **${guild.name}** ` +
-                'porque você apagou uma mensagem oficial do sistema sem autorização. ' +
-                'Reclamações devem ser feitas com a diretoria.',
-        }).catch(() => {});
-
-        const professionalLog = await waitForProfessionalDeleteLog(
-            message.id
-        );
-
-        const securityLogMessage = await sendSecurityLog(
-            client,
-            guild,
-            perpetratorMember,
-            true,
-            'Cargos removidos por apagar mensagem do bot sem autorização.',
-            {
-                deletedMessage: message,
-                deletedContent,
-                professionalLog,
-                punishmentId,
-                removedRoleIds,
-                punishmentApplied: true,
+            if (!globalThis.__SC_MESSAGE_GUARDIAN_PUNISHMENTS__) {
+                globalThis.__SC_MESSAGE_GUARDIAN_PUNISHMENTS__ = new Map();
             }
-        );
 
-        const punishment =
-            globalThis.__SC_MESSAGE_GUARDIAN_PUNISHMENTS__.get(
-                punishmentId
+            globalThis.__SC_MESSAGE_GUARDIAN_PUNISHMENTS__.set(
+                punishmentId,
+                {
+                    punishmentId,
+                    guildId: guild.id,
+                    userId: perpetratorMember.id,
+                    deletedMessageId: message.id,
+                    deletedChannelId: message.channel?.id ?? null,
+                    removedRoleIds,
+                    appliedAt: Date.now(),
+                    restored: false,
+                    restoredAt: null,
+                    restoredBy: null,
+                }
             );
 
-        if (punishment && securityLogMessage) {
-            punishment.securityLogChannelId =
-                securityLogMessage.channelId;
+            try {
+                await perpetratorMember.roles.remove(
+                    rolesToRemove,
+                    `Punição: ${punishmentReason}`
+                );
 
-            punishment.securityLogMessageId =
-                securityLogMessage.id;
+                await perpetratorMember.send({
+                    content:
+                        `⚠️ **Aviso de Segurança:** Seus cargos foram removidos em **${guild.name}** ` +
+                        'porque você apagou uma mensagem oficial do sistema sem autorização ' +
+                        'ou ultrapassou o limite permitido para o seu cargo. ' +
+                        `**Motivo:** ${punishmentReason} ` +
+                        'Reclamações devem ser feitas com a diretoria.',
+                }).catch(() => {});
+
+                const professionalLog = await waitForProfessionalDeleteLog(
+                    message.id
+                );
+
+                const securityLogMessage = await sendSecurityLog(
+                    client,
+                    guild,
+                    perpetratorMember,
+                    true,
+                    `Cargos removidos. ${punishmentReason}`,
+                    {
+                        deletedMessage: message,
+                        deletedContent,
+                        professionalLog,
+                        punishmentId,
+                        removedRoleIds,
+                        punishmentApplied: true,
+                    }
+                );
+
+                const punishment =
+                    globalThis.__SC_MESSAGE_GUARDIAN_PUNISHMENTS__.get(
+                        punishmentId
+                    );
+
+                if (punishment && securityLogMessage) {
+                    punishment.securityLogChannelId =
+                        securityLogMessage.channelId;
+
+                    punishment.securityLogMessageId =
+                        securityLogMessage.id;
+                }
+            } catch (err) {
+                globalThis.__SC_MESSAGE_GUARDIAN_PUNISHMENTS__.delete(
+                    punishmentId
+                );
+
+                console.error(
+                    '[MessageGuardian] Falha ao remover cargos:',
+                    err
+                );
+            }
+        } else {
+            const professionalLog = await waitForProfessionalDeleteLog(
+                message.id
+            );
+
+            await sendSecurityLog(
+                client,
+                guild,
+                perpetratorMember,
+                false,
+                `O infrator não possui cargos removíveis pelo bot. Motivo original: ${punishmentReason}`,
+                {
+                    deletedMessage: message,
+                    deletedContent,
+                    professionalLog,
+                    punishmentApplied: false,
+                }
+            );
         }
-    } catch (err) {
-        globalThis.__SC_MESSAGE_GUARDIAN_PUNISHMENTS__.delete(
-            punishmentId
-        );
-
-        console.error(
-            '[MessageGuardian] Falha ao remover cargos:',
-            err
-        );
-    }
-} else {
-    const professionalLog = await waitForProfessionalDeleteLog(
-        message.id
-    );
-
-    await sendSecurityLog(
-        client,
-        guild,
-        perpetratorMember,
-        false,
-        'O infrator não possui cargos removíveis pelo bot.',
-        {
-            deletedMessage: message,
-            deletedContent,
-            professionalLog,
-            punishmentApplied: false,
-        }
-    );
-}
     });
 
     // ✅ NOVO: Proteção adicional contra deleção em massa (Bulk Delete)
     client.on('messageDeleteBulk', async (messages) => {
         const firstMsg = messages.first();
         if (!firstMsg || !firstMsg.guild) return;
-        
+
         // Se houver mensagens do bot no meio do bulk delete
-        const botMessages = messages.filter(m => m.author?.id === client.user.id);
+        const botMessages = messages.filter(
+            message => message.author?.id === client.user.id
+        );
+
         if (botMessages.size === 0) return;
 
         await new Promise(resolve => setTimeout(resolve, 3000));
+
         const guild = firstMsg.guild;
 
         try {
@@ -1040,26 +1277,100 @@ if (rolesToRemove.size > 0) {
                 limit: 1,
                 type: AuditLogEvent.MessageBulkDelete,
             });
+
             const logEntry = fetchedLogs.entries.first();
-            if (!logEntry || Date.now() - logEntry.createdTimestamp > 10000) return;
+
+            if (
+                !logEntry ||
+                Date.now() - logEntry.createdTimestamp > 10000
+            ) {
+                return;
+            }
 
             const executor = logEntry.executor;
             if (!executor || executor.bot) return;
 
-            const member = await guild.members.fetch(executor.id).catch(() => null);
-            if (!member || isAuthorized(member)) return;
+            const member = await guild.members
+                .fetch(executor.id)
+                .catch(() => null);
+
+            if (!member) return;
+
+            const deleteAction = evaluateMessageDeleteAction(
+                member,
+                botMessages.size
+            );
+
+            // Macedo e Owner: bypass silencioso total também no Bulk Delete.
+            if (deleteAction.action === 'ignore') {
+                return;
+            }
+
+            // Acima/igual ao bot ou cargo limitado ainda dentro do limite:
+            // não pune, mas registra o ocorrido.
+            if (deleteAction.action === 'allow_log') {
+                const firstBotMessage = botMessages.first();
+
+                await sendSecurityLog(
+                    client,
+                    guild,
+                    member,
+                    false,
+                    `${deleteAction.reason} Bulk Delete envolvendo ${botMessages.size} mensagem(ns) do bot.`,
+                    {
+                        deletedMessage: firstBotMessage,
+                        deletedContent:
+                            `Bulk Delete autorizado envolvendo ${botMessages.size} mensagem(ns) do bot.\n\n` +
+                            `Primeira mensagem detectada:\n${buildDeletedMessageContent(firstBotMessage)}`,
+                        punishmentApplied: false,
+                    }
+                );
+
+                return;
+            }
 
             // Punição por Bulk Delete
-            const rolesToRemove = member.roles.cache.filter(r => r.id !== guild.id && r.editable && !EXEMPT_FROM_PUNISHMENT.includes(r.id));
+            const rolesToRemove = member.roles.cache.filter(role =>
+                role.id !== guild.id &&
+                role.editable &&
+                !EXEMPT_FROM_PUNISHMENT.includes(role.id)
+            );
+
             if (rolesToRemove.size > 0) {
-                if (!globalThis.__SC_ROLE_BYPASS__) globalThis.__SC_ROLE_BYPASS__ = new Map();
-                globalThis.__SC_ROLE_BYPASS__.set(member.id, Date.now() + 15000);
-                
-                await member.roles.remove(rolesToRemove, 'Punição: Bulk Delete envolvendo mensagens do Bot.');
-                await sendSecurityLog(client, guild, member, true, `Cargos removidos por apagar ${botMessages.size} mensagens do bot via Bulk Delete.`);
+                if (!globalThis.__SC_ROLE_BYPASS__) {
+                    globalThis.__SC_ROLE_BYPASS__ = new Map();
+                }
+
+                globalThis.__SC_ROLE_BYPASS__.set(
+                    member.id,
+                    Date.now() + 15000
+                );
+
+                await member.roles.remove(
+                    rolesToRemove,
+                    `Punição: ${deleteAction.reason}`
+                );
+
+                await sendSecurityLog(
+                    client,
+                    guild,
+                    member,
+                    true,
+                    `Cargos removidos por Bulk Delete envolvendo ${botMessages.size} mensagem(ns) do bot. ${deleteAction.reason}`,
+                    {
+                        deletedMessage: botMessages.first(),
+                        deletedContent:
+                            `Bulk Delete não autorizado envolvendo ${botMessages.size} mensagem(ns) do bot.`,
+                        removedRoleIds: rolesToRemove.map(role => role.id),
+                        punishmentApplied: true,
+                    }
+                );
             }
         } catch (e) {
-            console.error('[MessageGuardian] Erro no bulk delete handler:', e);
+            console.error(
+                '[MessageGuardian] Erro no bulk delete handler:',
+                e
+            );
         }
     });
 

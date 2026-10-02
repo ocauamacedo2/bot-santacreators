@@ -139,91 +139,214 @@ DIVISIONS: {
 };
 
 // =====================================================
+
 // HIERARQUIA INSTITUCIONAL OFICIAL SANTACREATORS
-// =====================================================
-//
-// IMPORTANTE:
-//
-// A ordem abaixo é a fonte institucional para sistemas
-// externos que precisem comparar autoridade.
-//
-// NÃO utiliza:
-// - role.position;
-// - member.roles.highest;
-// - Administrator;
-// - ManageRoles.
-//
-// Quanto MENOR o índice, MAIOR a autoridade.
+
 // =====================================================
 
+//
+
+// IMPORTANTE:
+
+//
+
+// A ordem abaixo continua sendo a fonte institucional
+
+// para os sistemas que já utilizam o rank histórico.
+
+//
+
+// authorityLevel representa o nível REAL de autoridade
+
+// utilizado em comparações que precisam reconhecer
+
+// cargos equivalentes no mesmo patamar.
+
+//
+
+// NÃO utiliza:
+
+// - role.position;
+
+// - member.roles.highest;
+
+// - Administrator;
+
+// - ManageRoles.
+
+//
+
+// Quanto MENOR o authorityLevel, MAIOR a autoridade.
+
+//
+
+// Cargos com o MESMO authorityLevel são equivalentes
+
+// hierarquicamente e NÃO possuem autoridade entre si.
+
+// =====================================================
+
+
+
 const OFFICIAL_SANTA_CREATORS_HIERARCHY = Object.freeze([
+
   Object.freeze({
+
     key: "OWNER",
+
     label: "Owner",
+
     roleId: CONFIG.ROLES.OWNER,
+
     responsible: true,
+
+    authorityLevel: 0,
+
   }),
+
   Object.freeze({
+
     key: "RESP_CREATOR",
+
     label: "Resp. Creators",
+
     roleId: CONFIG.ROLES.RESP_CREATOR,
+
     responsible: true,
+
+    authorityLevel: 1,
+
   }),
+
   Object.freeze({
+
     key: "RESP_INFLU",
+
     label: "Resp. Influ",
+
     roleId: CONFIG.ROLES.RESP_INFLU,
+
     responsible: true,
+
+    authorityLevel: 2,
+
   }),
+
   Object.freeze({
+
     key: "RESP_LIDER",
+
     label: "Resp. Líder",
+
     roleId: CONFIG.ROLES.RESP_LIDER,
+
     responsible: true,
+
+    authorityLevel: 3,
+
   }),
+
   Object.freeze({
+
     key: "COORD_CREATOR",
+
     label: "Coord. Creators",
+
     roleId: CONFIG.ROLES.COORD_CREATOR,
+
     responsible: true,
+
+    authorityLevel: 4,
+
   }),
+
   Object.freeze({
+
     key: "GESTOR",
+
     label: "Gestor",
+
     roleId: CONFIG.ROLES.GESTOR,
+
     responsible: true,
+
+    authorityLevel: 5,
+
   }),
+
   Object.freeze({
+
     key: "MANAGER_CREATOR",
+
     label: "Manager Creators",
+
     roleId: CONFIG.ROLES.MANAGER_CREATOR,
+
     responsible: true,
+
+    authorityLevel: 6,
+
   }),
+
   Object.freeze({
+
     key: "SOCIAL_MEDIAS",
+
     label: "Social Medias",
+
     roleId: CONFIG.ROLES.SOCIAL_MEDIAS,
+
     responsible: false,
+
+    authorityLevel: 6,
+
   }),
+
   Object.freeze({
+
     key: "EQ_MANAGER",
+
     label: "Equipe Manager",
+
     roleId: CONFIG.ROLES.EQ_MANAGER,
+
     responsible: false,
+
+    authorityLevel: 7,
+
   }),
+
   Object.freeze({
+
     key: "EQ_SOCIAL_MEDIAS",
+
     label: "Equipe Social Medias",
+
     roleId: CONFIG.ROLES.EQ_SOCIAL_MEDIAS,
+
     responsible: false,
+
+    authorityLevel: 7,
+
   }),
+
   Object.freeze({
+
     key: "EQ_CREATORS",
+
     label: "Equipe Creators",
+
     roleId: CONFIG.ROLES.EQ_CREATORS,
+
     responsible: false,
+
+    authorityLevel: 7,
+
   }),
+
 ]);
+
+
 
 // ================= PERSISTÊNCIA =================
 const __filename = fileURLToPath(import.meta.url);
@@ -525,70 +648,352 @@ export function isOfficialSantaCreatorsResponsible(member) {
 }
 
 export function getOfficialSantaCreatorsHierarchyRankForRoleId(roleId) {
+
   const normalizedRoleId = String(roleId || "").trim();
 
+
+
   if (!normalizedRoleId) {
+
     return Infinity;
+
   }
+
+
 
   const index = OFFICIAL_SANTA_CREATORS_HIERARCHY.findIndex(
+
     (definition) =>
+
       definition.roleId === normalizedRoleId
+
   );
 
+
+
   return index >= 0
+
     ? index
+
     : Infinity;
+
 }
 
+
+
 export function getOfficialSantaCreatorsHierarchyRank(member) {
+
   if (
+
     !member ||
+
     member.user?.bot ||
+
     !member.roles?.cache
+
   ) {
+
     return Infinity;
+
   }
 
+
+
   for (
+
     let index = 0;
+
     index < OFFICIAL_SANTA_CREATORS_HIERARCHY.length;
+
     index++
+
   ) {
+
     const definition =
+
       OFFICIAL_SANTA_CREATORS_HIERARCHY[index];
 
+
+
     if (
+
       member.roles.cache.has(
+
+        definition.roleId
+
+      )
+
+    ) {
+
+      return index;
+
+    }
+
+  }
+
+
+
+  return Infinity;
+
+}
+
+
+
+export function getOfficialSantaCreatorsHierarchyDefinition(member) {
+
+  const rank =
+
+    getOfficialSantaCreatorsHierarchyRank(
+
+      member
+
+    );
+
+
+
+  if (
+
+    !Number.isFinite(rank) ||
+
+    rank < 0 ||
+
+    rank >= OFFICIAL_SANTA_CREATORS_HIERARCHY.length
+
+  ) {
+
+    return null;
+
+  }
+
+
+
+  return {
+
+    rank,
+
+    ...OFFICIAL_SANTA_CREATORS_HIERARCHY[rank],
+
+  };
+
+}
+
+
+
+// =====================================================
+
+// AUTORIDADE INSTITUCIONAL REAL
+
+// =====================================================
+
+//
+
+// Diferente do rank histórico acima, estas funções
+
+// reconhecem cargos que pertencem ao MESMO nível.
+
+//
+
+// Exemplo:
+//
+// Manager Creators = 6
+// Social Medias    = 6
+//
+// Equipe Manager       = 7
+// Equipe Social Medias = 7
+// Equipe Creators      = 7
+//
+// Estas funções devem ser utilizadas sempre que
+// o sistema precisar decidir:
+//
+// - quem está acima;
+// - quem está abaixo;
+// - quem está no mesmo nível.
+//
+// =====================================================
+
+export function getOfficialSantaCreatorsAuthorityLevelForRoleId(
+  roleId
+) {
+
+  const normalizedRoleId =
+    String(
+      roleId ||
+      ""
+    ).trim();
+
+
+
+  if (!normalizedRoleId) {
+
+    return Infinity;
+
+  }
+
+
+
+  const definition =
+    OFFICIAL_SANTA_CREATORS_HIERARCHY.find(
+
+      (item) =>
+
+        item.roleId ===
+        normalizedRoleId
+
+    );
+
+
+
+  if (
+    !definition ||
+    !Number.isFinite(
+      definition.authorityLevel
+    )
+  ) {
+
+    return Infinity;
+
+  }
+
+
+
+  return definition.authorityLevel;
+}
+
+
+
+export function getOfficialSantaCreatorsAuthorityLevel(
+  member
+) {
+
+  if (
+
+    !member ||
+
+    member.user?.bot ||
+
+    !member.roles?.cache
+
+  ) {
+
+    return Infinity;
+
+  }
+
+
+
+  let bestLevel =
+    Infinity;
+
+
+
+  for (
+    const definition
+    of OFFICIAL_SANTA_CREATORS_HIERARCHY
+  ) {
+
+    if (
+      !member.roles.cache.has(
         definition.roleId
       )
     ) {
-      return index;
+
+      continue;
+
     }
+
+
+
+    const level =
+      Number(
+        definition.authorityLevel
+      );
+
+
+
+    if (
+      Number.isFinite(level) &&
+      level < bestLevel
+    ) {
+
+      bestLevel =
+        level;
+
+    }
+
   }
 
-  return Infinity;
+
+
+  return bestLevel;
 }
 
-export function getOfficialSantaCreatorsHierarchyDefinition(member) {
-  const rank =
-    getOfficialSantaCreatorsHierarchyRank(
+
+
+export function getOfficialSantaCreatorsAuthorityDefinition(
+  member
+) {
+
+  const authorityLevel =
+    getOfficialSantaCreatorsAuthorityLevel(
       member
     );
 
+
+
   if (
-    !Number.isFinite(rank) ||
-    rank < 0 ||
-    rank >= OFFICIAL_SANTA_CREATORS_HIERARCHY.length
+    !Number.isFinite(
+      authorityLevel
+    )
   ) {
+
     return null;
+
   }
 
+
+
+  const definitions =
+    OFFICIAL_SANTA_CREATORS_HIERARCHY.filter(
+
+      (definition) =>
+        definition.authorityLevel ===
+        authorityLevel
+
+    );
+
+
+
+  const ownDefinition =
+    definitions.find(
+
+      (definition) =>
+        member.roles.cache.has(
+          definition.roleId
+        )
+
+    ) ||
+    null;
+
+
+
+  if (!ownDefinition) {
+
+    return null;
+
+  }
+
+
+
   return {
-    rank,
-    ...OFFICIAL_SANTA_CREATORS_HIERARCHY[rank],
+
+    authorityLevel,
+
+    ...ownDefinition,
+
   };
 }
+
+
 
 export function getOfficialSantaCreatorsHierarchySnapshot(guild) {
   if (!guild) {
@@ -1815,17 +2220,273 @@ new ButtonBuilder()
 }
 
 // Comando manual de emergência
+
 export async function hierarquiaHandleMessage(message, client) {
-  if (message.content === "!hierarquia") {
-    if (checkPermission(message.member) !== "ADMIN") {
-      setTimeout(() => message.delete().catch(() => {}), 1000);
-      const msg = await message.reply("❌ Você não tem permissão para usar este comando.");
-      setTimeout(() => msg.delete().catch(() => {}), 5000);
-      return true;
+
+  const command =
+    String(
+      message.content ||
+      ""
+    )
+      .trim()
+      .toLowerCase();
+
+
+
+  // =====================================================
+  // CONSULTA PÚBLICA DA HIERARQUIA OFICIAL
+  // =====================================================
+
+  if (
+    command === "!hierarquiasc"
+  ) {
+
+    if (!message.guild) {
+
+      return false;
+
     }
-    await message.reply("🔄 Forçando atualização do painel... (olhe o console se não aparecer)").catch(() => {});
-    await updateHierarchyPanel(client);
+
+
+
+    const levels =
+      new Map();
+
+
+
+    for (
+      const definition
+      of OFFICIAL_SANTA_CREATORS_HIERARCHY
+    ) {
+
+      const authorityLevel =
+        Number(
+          definition.authorityLevel
+        );
+
+
+
+      if (
+        !Number.isFinite(
+          authorityLevel
+        )
+      ) {
+
+        continue;
+
+      }
+
+
+
+      if (
+        !levels.has(
+          authorityLevel
+        )
+      ) {
+
+        levels.set(
+          authorityLevel,
+          []
+        );
+
+      }
+
+
+
+      levels
+        .get(
+          authorityLevel
+        )
+        .push(
+          definition
+        );
+
+    }
+
+
+
+    const orderedLevels =
+      [...levels.entries()]
+        .sort(
+          (a, b) =>
+            a[0] -
+            b[0]
+        );
+
+
+
+    const lines =
+      [];
+
+
+
+    for (
+      const [
+        authorityLevel,
+        definitions,
+      ]
+      of orderedLevels
+    ) {
+
+      const rolesText =
+        definitions
+          .map(
+            (definition) =>
+              `<@&${definition.roleId}>`
+          )
+          .join(
+            " / "
+          );
+
+
+
+      lines.push(
+        `**Nível ${authorityLevel}** • ${rolesText}`
+      );
+
+
+
+      if (
+        authorityLevel !==
+        orderedLevels[
+          orderedLevels.length - 1
+        ]?.[0]
+      ) {
+
+        lines.push(
+          "⬇️"
+        );
+
+      }
+
+    }
+
+
+
+    const embed =
+      new EmbedBuilder()
+        .setColor(
+          "#8b5cf6"
+        )
+        .setTitle(
+          "👑 Hierarquia Oficial • SantaCreators"
+        )
+        .setDescription(
+          [
+            "Esta é a hierarquia institucional utilizada pelo sistema de proteção dos tickets pessoais.",
+            "",
+            ...lines,
+            "",
+            "### 🔐 Regra dos tickets",
+            "✅ Um nível superior pode visualizar tickets dos níveis abaixo.",
+            "❌ O mesmo nível não pode visualizar outro membro do mesmo nível.",
+            "❌ Um nível inferior não pode visualizar tickets de níveis acima.",
+            "",
+            "Cargos como Tier 1, Tier 2, Tier 3 e outros cargos externos não entram nesta hierarquia."
+          ].join(
+            "\n"
+          )
+        )
+        .setFooter({
+          text:
+            "SantaCreators • Hierarquia Institucional Oficial",
+        })
+        .setTimestamp();
+
+
+
+    await message.reply({
+      embeds: [
+        embed,
+      ],
+
+      allowedMentions: {
+        parse: [],
+      },
+    }).catch(
+      () => {}
+    );
+
+
+
     return true;
+
   }
+
+
+
+  // =====================================================
+  // ATUALIZAÇÃO MANUAL DO PAINEL
+  // =====================================================
+
+  if (
+    command === "!hierarquia"
+  ) {
+
+    if (
+      checkPermission(
+        message.member
+      ) !==
+      "ADMIN"
+    ) {
+
+      setTimeout(
+        () =>
+          message
+            .delete()
+            .catch(
+              () => {}
+            ),
+        1000
+      );
+
+
+
+      const msg =
+        await message.reply(
+          "❌ Você não tem permissão para usar este comando."
+        );
+
+
+
+      setTimeout(
+        () =>
+          msg
+            .delete()
+            .catch(
+              () => {}
+            ),
+        5000
+      );
+
+
+
+      return true;
+
+    }
+
+
+
+    await message.reply(
+      "🔄 Forçando atualização do painel... (olhe o console se não aparecer)"
+    ).catch(
+      () => {}
+    );
+
+
+
+    await updateHierarchyPanel(
+      client
+    );
+
+
+
+    return true;
+
+  }
+
+
+
   return false;
+
 }

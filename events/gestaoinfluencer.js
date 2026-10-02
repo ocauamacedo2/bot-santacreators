@@ -110,7 +110,9 @@ const {
 
     const {
       getOfficialSantaCreatorsHierarchyRank,
-      getOfficialSantaCreatorsHierarchyRankForRoleId
+      getOfficialSantaCreatorsHierarchyRankForRoleId,
+      getOfficialSantaCreatorsAuthorityLevel,
+      getOfficialSantaCreatorsAuthorityLevelForRoleId
     } = hierarchyDivisoes;
 
     // =====================================================
@@ -184,11 +186,12 @@ CHANNEL_MEMBER_HISTORY_LOG: '1555344870195994754',
         '1352407252216184833'   // resp líder
       ],
 
-      ROLE_OWNER:         '1262262852949905408',
-      ROLE_RESP_CREATORS: '1352408327983861844',
-      ROLE_RESP_INFLU:    '1262262852949905409',
-      ROLE_RESP_LIDER:    '1352407252216184833',
+      ROLE_OWNER:          '1262262852949905408',
+      ROLE_RESP_CREATORS:  '1352408327983861844',
+      ROLE_RESP_INFLU:     '1262262852949905409',
+      ROLE_RESP_LIDER:     '1352407252216184833',
       ROLE_COORD_CREATORS: '1388976314253312100',
+      ROLE_GESTOR_CREATORS: '1388975939161161728',
 
       RESP_ALLOWED_ROLE_IDS: [
         '1262262852949905408',
@@ -733,7 +736,18 @@ r.responsibleSetBy   = r.responsibleSetBy || null;
 r.responsibleUpdatedAtMs = typeof r.responsibleUpdatedAtMs === 'number' ? r.responsibleUpdatedAtMs : null;
 r.warnNoRoleGI       = !!r.warnNoRoleGI;
 r.responsibleHistory = Array.isArray(r.responsibleHistory) ? r.responsibleHistory : [];
-
+r.responsibilityRedistributionPausedAtMs =
+  typeof r.responsibilityRedistributionPausedAtMs === 'number'
+    ? r.responsibilityRedistributionPausedAtMs
+    : null;
+r.responsibilityRedistributionCompletedAtMs =
+  typeof r.responsibilityRedistributionCompletedAtMs === 'number'
+    ? r.responsibilityRedistributionCompletedAtMs
+    : null;
+r.responsibilityRedistributionPendingLoggedPausedAtMs =
+  typeof r.responsibilityRedistributionPendingLoggedPausedAtMs === 'number'
+    ? r.responsibilityRedistributionPendingLoggedPausedAtMs
+    : null;
 // =====================================================
 // MIGRAÇÃO DO HISTÓRICO DE RESPONSÁVEL
 // =====================================================
@@ -1104,10 +1118,57 @@ const prev = byUser.get(r.targetId);
       return Infinity;
     }
 
+    function getResponsibleHierarchyRank(member, fallbackType = null) {
+      if (member && typeof getOfficialSantaCreatorsHierarchyRank === 'function') {
+        const officialRank =
+          getOfficialSantaCreatorsHierarchyRank(member);
+
+        if (Number.isFinite(officialRank)) {
+          return officialRank;
+        }
+      }
+
+      const localRank =
+        getManagementRank(member);
+
+      if (Number.isFinite(localRank)) {
+        return localRank;
+      }
+
+      const type =
+        fallbackType ||
+        getHighestTypeFromMember(member);
+
+      if (type === 'OWNER') return 0;
+      if (type === 'RESP_CREATORS') return 1;
+      if (type === 'RESP_INFLU') return 2;
+      if (type === 'RESP_LIDER') return 3;
+
+      return Infinity;
+    }
+
+    function getActiveGiControlForResponsible(guildId, userId) {
+      const control =
+        SC_GI_findCurrentControl(
+          guildId,
+          userId
+        );
+
+      if (!control) {
+        return null;
+      }
+
+      if (control.active === false) {
+        return null;
+      }
+
+      return control;
+    }
+
     async function findBestResponsible(guild, targetId = null) {
       try {
         const targetMember = targetId ? await guild.members.fetch(targetId).catch(() => null) : null;
-        const targetRank = getManagementRank(targetMember);
+        const targetRank = getResponsibleHierarchyRank(targetMember);
 
         const eligibleRoles = [
   SC_GI_CFG.ROLE_RESP_CREATORS,
@@ -1115,38 +1176,65 @@ const prev = byUser.get(r.targetId);
   SC_GI_CFG.ROLE_RESP_LIDER,
   '1414651836861907006'
 ];
-        const candidates = new Map(); // userId -> { member, count }
+        const candidates = new Map(); // userId -> { member, count, rank }
 
         for (const roleId of eligibleRoles) {
           const role = guild.roles.cache.get(roleId) || await guild.roles.fetch(roleId).catch(() => null);
           if (!role) continue;
           for (const [uid, member] of role.members) {
-            // Ignora Owner e Resp Creators da seleção automática
-            if (uid === SC_GI_CFG.ROLE_OWNER || member.roles.cache.has(SC_GI_CFG.ROLE_RESP_CREATORS)) continue;
-            
+            // Mantém a regra atual da auto-atribuição comum:
+            // Owner e Resp Creators não entram nessa seleção automática genérica.
+            if (
+              member.roles.cache.has(SC_GI_CFG.ROLE_OWNER) ||
+              member.roles.cache.has(SC_GI_CFG.ROLE_RESP_CREATORS)
+            ) {
+              continue;
+            }
+
             // 🚫 Não pode ser responsável de si mesmo
             if (uid === targetId) continue;
 
-            // 🔒 HIERARQUIA RÍGIDA: O responsável deve ter rank maior (índice menor na lista) que o membro
-            if (getManagementRank(member) >= targetRank) continue;
+            // 🚫 NOVO: responsável automático precisa possuir Controle GI ATIVO.
+            if (!getActiveGiControlForResponsible(guild.id, uid)) continue;
 
-            if (!candidates.has(uid)) candidates.set(uid, { member, count: 0 });
+            const candidateRank =
+              getResponsibleHierarchyRank(
+                member,
+                getHighestTypeFromMember(member)
+              );
+
+            // 🔒 HIERARQUIA RÍGIDA: O responsável deve estar acima do membro.
+            if (targetRank !== Infinity && candidateRank >= targetRank) continue;
+
+            if (!candidates.has(uid)) {
+              candidates.set(uid, {
+                member,
+                count: 0,
+                rank: candidateRank
+              });
+            }
           }
         }
 
         if (candidates.size === 0) return null;
 
-        // Conta quantos membros cada um já tem
+        // Conta quantos membros cada um já tem neste servidor.
         for (const rec of SC_GI_STATE.registros.values()) {
-          if (rec.responsibleUserId && candidates.has(rec.responsibleUserId)) {
+          if (
+            SC_GI_resolveRecordGuildId(rec) === guild.id &&
+            rec.responsibleUserId &&
+            candidates.has(rec.responsibleUserId)
+          ) {
             candidates.get(rec.responsibleUserId).count++;
           }
         }
 
-        // Ordena por menor contagem e depois por hierarquia do cargo (maior cargo primeiro)
+        // Ordena por menor carga e depois pela hierarquia institucional oficial.
         const sorted = Array.from(candidates.values()).sort((a, b) => {
           if (a.count !== b.count) return a.count - b.count;
-          return b.member.roles.highest.position - a.member.roles.highest.position;
+          if (a.rank !== b.rank) return a.rank - b.rank;
+
+          return String(a.member.id).localeCompare(String(b.member.id));
         });
 
         const best = sorted[0];
@@ -1506,8 +1594,25 @@ function activeTimeText(rec, n = nowMs()) {
       // Você/Macedo, Owner e quem já possui autorização geral continuam liberados.
       if (hasAuth(member)) return true;
 
-      // Coord. Creators pode editar Área/cargo, mas continua preso à hierarquia.
-      return member.roles?.cache?.has?.(SC_GI_CFG.ROLE_COORD_CREATORS) || false;
+      // Coord. Creators e Gestor Creators podem editar registros,
+      // mas continuam presos rigorosamente à hierarquia institucional.
+      if (
+        member.roles?.cache?.has?.(
+          SC_GI_CFG.ROLE_COORD_CREATORS
+        )
+      ) {
+        return true;
+      }
+
+      if (
+        member.roles?.cache?.has?.(
+          SC_GI_CFG.ROLE_GESTOR_CREATORS
+        )
+      ) {
+        return true;
+      }
+
+      return false;
     }
 
     function isHierarchyBypassMember(member) {
@@ -1519,6 +1624,46 @@ function activeTimeText(rec, n = nowMs()) {
       if (member.roles?.cache?.has?.(SC_GI_CFG.ROLE_OWNER)) return true;
 
       return false;
+    }
+
+    function memberHasAnyRole(
+      member,
+      roleIds = []
+    ) {
+      if (
+        !member ||
+        !member.roles?.cache
+      ) {
+        return false;
+      }
+
+      return roleIds.some(
+        roleId =>
+          roleId &&
+          member.roles.cache.has(
+            roleId
+          )
+      );
+    }
+
+    function hasScopedGIActionAuth(
+      member,
+      extraRoleIds = []
+    ) {
+      if (!member) {
+        return false;
+      }
+
+      // Mantém intacta toda autorização geral já existente.
+      if (hasAuth(member)) {
+        return true;
+      }
+
+      // Permissões adicionais específicas do Controle GI.
+      return memberHasAnyRole(
+        member,
+        extraRoleIds
+      );
     }
 
     // =====================================================
@@ -2214,8 +2359,8 @@ function activeTimeText(rec, n = nowMs()) {
       }
 
       if (
-        typeof getOfficialSantaCreatorsHierarchyRank !== "function" ||
-        typeof getOfficialSantaCreatorsHierarchyRankForRoleId !== "function"
+        typeof getOfficialSantaCreatorsAuthorityLevel !== "function" ||
+        typeof getOfficialSantaCreatorsAuthorityLevelForRoleId !== "function"
       ) {
         throw new Error(
           "A hierarquia institucional não está disponível. " +
@@ -2223,18 +2368,20 @@ function activeTimeText(rec, n = nowMs()) {
         );
       }
 
-      const actorRank =
-        getOfficialSantaCreatorsHierarchyRank(
+      const actorAuthorityLevel =
+        getOfficialSantaCreatorsAuthorityLevel(
           actorMember
         );
 
-      const targetAreaRank =
-        getOfficialSantaCreatorsHierarchyRankForRoleId(
+      const targetAreaAuthorityLevel =
+        getOfficialSantaCreatorsAuthorityLevelForRoleId(
           areaProfile.primaryRoleId
         );
 
       if (
-        !Number.isFinite(actorRank)
+        !Number.isFinite(
+          actorAuthorityLevel
+        )
       ) {
         throw new Error(
           "Alteração bloqueada pela hierarquia da SantaCreators. " +
@@ -2243,7 +2390,9 @@ function activeTimeText(rec, n = nowMs()) {
       }
 
       if (
-        !Number.isFinite(targetAreaRank)
+        !Number.isFinite(
+          targetAreaAuthorityLevel
+        )
       ) {
         throw new Error(
           `A Área "${areaProfile.canonicalName}" não possui posição ` +
@@ -2252,7 +2401,8 @@ function activeTimeText(rec, n = nowMs()) {
       }
 
       if (
-        actorRank >= targetAreaRank
+        actorAuthorityLevel >=
+        targetAreaAuthorityLevel
       ) {
         await logMsg(
           guild,
@@ -2260,18 +2410,17 @@ function activeTimeText(rec, n = nowMs()) {
           [
             `🛡️ **Executor:** <@${actorId}>`,
             `👤 **Membro alvo:** <@${targetUserId}>`,
-            `🎚️ **Função do executor:** \`${hierarchyLabelFromRank(actorRank)}\``,
+            `🎚️ **Nível do executor:** \`${actorAuthorityLevel}\``,
             `🎯 **Área solicitada:** \`${areaProfile.canonicalName}\``,
-            `🎚️ **Posição da área:** \`${hierarchyLabelFromRank(targetAreaRank)}\``,
+            `🎚️ **Nível da área:** \`${targetAreaAuthorityLevel}\``,
             "",
-            "❌ **Resultado:** bloqueado porque o executor não está acima da função solicitada."
+            "❌ **Resultado:** bloqueado porque a área solicitada está no mesmo nível ou acima do executor."
           ].join("\n")
         );
 
         throw new Error(
           `Alteração bloqueada pela hierarquia da SantaCreators. ` +
-          `Sua função (${hierarchyLabelFromRank(actorRank)}) não possui ` +
-          `autoridade para definir ${areaProfile.canonicalName}.`
+          `Você somente pode definir uma Área/cargo que esteja abaixo do seu nível hierárquico.`
         );
       }
 
@@ -2980,99 +3129,224 @@ async function assertCanManageGIRecord(
   actionName = 'gerenciar este registro',
   options = {}
 ) {
-  const actorId = String(actorUser?.id || '');
+  const actorId =
+    String(
+      actorUser?.id ||
+      ''
+    );
+
+  const targetId =
+    String(
+      targetUserId ||
+      ''
+    );
 
   if (!actorId) {
-    throw new Error('Não foi possível identificar quem tentou executar essa ação.');
+    throw new Error(
+      'Não foi possível identificar quem tentou executar essa ação.'
+    );
   }
 
   // ✅ PERMITE AÇÕES AUTOMÁTICAS DO PRÓPRIO BOT
   // Exemplo: auto-desligamento após 30 dias pausado
   // ou desligamento automático quando o membro sai do servidor.
-  if (client?.user?.id && actorId === client.user.id) {
+  if (
+    client?.user?.id &&
+    actorId === client.user.id
+  ) {
     return true;
   }
 
-  const actorMember = await guild.members.fetch(actorId).catch(() => null);
+  const actorMember =
+    await guild.members
+      .fetch(actorId)
+      .catch(
+        () => null
+      );
 
   if (!actorMember) {
-    throw new Error('Não consegui encontrar seu membro no servidor para validar a hierarquia.');
+    throw new Error(
+      'Não consegui encontrar seu membro no servidor para validar a hierarquia.'
+    );
   }
 
-  // 🔒 Primeiro confirma se o executor possui permissão.
-  // Isso impede que alguém sem autorização aproveite a ausência
-  // do membro alvo para desligar o controle.
-  const allowCoordAreaEdit =
-    options?.allowCoordAreaEdit === true;
+  const extraAllowedRoleIds =
+    Array.isArray(
+      options?.extraAllowedRoleIds
+    )
+      ? options.extraAllowedRoleIds
+      : [];
 
-  const coordCanUseThisAction =
-    allowCoordAreaEdit &&
-    actorMember.roles?.cache?.has?.(SC_GI_CFG.ROLE_COORD_CREATORS);
+  const selfAllowedRoleIds =
+    Array.isArray(
+      options?.selfAllowedRoleIds
+    )
+      ? options.selfAllowedRoleIds
+      : [];
+
+  // =====================================================
+  // PERMISSÃO DA AÇÃO
+  // =====================================================
+  //
+  // hasAuth() mantém exatamente as permissões gerais antigas.
+  //
+  // extraAllowedRoleIds libera Coord/Gestor apenas na ação
+  // específica que estiver sendo executada.
+  // =====================================================
 
   if (
-    !hasAuth(actorMember) &&
-    !coordCanUseThisAction
+    !hasScopedGIActionAuth(
+      actorMember,
+      extraAllowedRoleIds
+    )
   ) {
-    throw new Error('Você não tem permissão para mexer nesse controle.');
+    throw new Error(
+      'Você não tem permissão para mexer nesse controle.'
+    );
   }
 
-  // 👑 Você/Macedo e Owner ignoram a hierarquia.
-  if (isHierarchyBypassMember(actorMember)) {
+  // 👑 Você/Macedo e Owner continuam com o bypass
+  // EXATAMENTE como já funcionavam antes.
+  if (
+    isHierarchyBypassMember(
+      actorMember
+    )
+  ) {
     return true;
   }
 
-  const targetMember = await guild.members
-    .fetch(String(targetUserId))
-    .catch(() => null);
+  // =====================================================
+  // AÇÃO NO PRÓPRIO CONTROLE
+  // =====================================================
+  //
+  // Por padrão, nenhuma ação administrativa pode ser feita
+  // no próprio Controle GI.
+  //
+  // A única exceção nova será Reenviar DM para Coord/Gestor,
+  // quando selfAllowedRoleIds for informado pela ação.
+  // =====================================================
+
+  if (
+    actorId === targetId
+  ) {
+    const canUseOwnControl =
+      memberHasAnyRole(
+        actorMember,
+        selfAllowedRoleIds
+      );
+
+    if (
+      canUseOwnControl
+    ) {
+      return true;
+    }
+
+    throw new Error(
+      `Você não pode ${actionName} no seu próprio Controle GI.`
+    );
+  }
+
+  const targetMember =
+    await guild.members
+      .fetch(
+        targetId
+      )
+      .catch(
+        () => null
+      );
 
   // ✅ O membro já saiu do servidor.
-  // Como o executor já teve sua permissão validada acima,
-  // permite encerrar o registro mesmo sem conseguir comparar
-  // a hierarquia atual do membro alvo.
+  //
+  // Mantém o comportamento atual para as ações antigas que
+  // já trabalhavam com registros de membros ausentes.
   if (!targetMember) {
     await logMsg(
       guild,
-      'Desligamento de membro ausente (GI)',
+      'Membro ausente durante ação do Controle GI',
       [
         `🛡️ **Ação:** ${actionName}`,
         `👮 **Executor:** <@${actorId}>`,
-        `👤 **Membro alvo:** <@${targetUserId}> (\`${targetUserId}\`)`,
+        `👤 **Membro alvo:** <@${targetId}> (\`${targetId}\`)`,
         '',
         '✅ **Resultado:** permitido porque o executor possui permissão e o membro alvo já não está no servidor.'
       ].join('\n')
-    ).catch(() => {});
+    ).catch(
+      () => {}
+    );
 
     return true;
   }
 
-  const actorRank = getManagementRank(actorMember);
-  const targetRank = getManagementRank(targetMember);
-
-  if (actorRank === Infinity) {
-    throw new Error('Você até pode ter permissão, mas não possui cargo de hierarquia configurado.');
+  if (
+    typeof getOfficialSantaCreatorsAuthorityLevel !==
+    'function'
+  ) {
+    throw new Error(
+      'A hierarquia institucional da SantaCreators não está disponível. A ação foi bloqueada por segurança.'
+    );
   }
 
-  if (targetRank === Infinity) {
+  const actorAuthorityLevel =
+    getOfficialSantaCreatorsAuthorityLevel(
+      actorMember
+    );
+
+  const targetAuthorityLevel =
+    getOfficialSantaCreatorsAuthorityLevel(
+      targetMember
+    );
+
+  if (
+    !Number.isFinite(
+      actorAuthorityLevel
+    )
+  ) {
+    throw new Error(
+      'Você possui permissão para esta função, mas seu cargo não possui nível de autoridade institucional configurado.'
+    );
+  }
+
+  // Membro sem cargo administrativo/institucional configurado
+  // é tratado como abaixo da hierarquia administrativa.
+  if (
+    !Number.isFinite(
+      targetAuthorityLevel
+    )
+  ) {
     return true;
   }
 
-  if (actorRank >= targetRank) {
+  // =====================================================
+  // HIERARQUIA RÍGIDA
+  // =====================================================
+  //
+  // Número MENOR = cargo MAIS ALTO.
+  //
+  // actor < target  -> permitido
+  // actor = target  -> bloqueado
+  // actor > target  -> bloqueado
+  // =====================================================
+
+  if (
+    actorAuthorityLevel >=
+    targetAuthorityLevel
+  ) {
     await logMsg(
       guild,
       'Ação Bloqueada por Hierarquia (GI)',
       [
-        `🛡️ Ação: ${actionName}`,
-        `👤 Autor: <@${actorId}>`,
-        `🎚️ Cargo do autor: \`${hierarchyNameByRank(actorRank)}\``,
-        `🎯 Alvo: <@${targetUserId}>`,
-        `🎚️ Cargo do alvo: \`${hierarchyNameByRank(targetRank)}\``,
+        `🛡️ **Ação:** ${actionName}`,
+        `👤 **Autor:** <@${actorId}>`,
+        `🎚️ **Nível do autor:** \`${actorAuthorityLevel}\``,
+        `🎯 **Alvo:** <@${targetId}>`,
+        `🎚️ **Nível do alvo:** \`${targetAuthorityLevel}\``,
         '',
-        '❌ Resultado: bloqueado porque o autor não está acima do alvo na hierarquia.'
+        '❌ **Resultado:** bloqueado porque o alvo possui o mesmo nível hierárquico ou um nível superior ao executor.'
       ].join('\n')
     );
 
     throw new Error(
-      `Hierarquia bloqueada: você só pode ${actionName} de alguém abaixo de você. Seu cargo: ${hierarchyNameByRank(actorRank)} | Alvo: ${hierarchyNameByRank(targetRank)}.`
+      `Hierarquia bloqueada: você somente pode ${actionName} de alguém que esteja abaixo de você na hierarquia.`
     );
   }
 
@@ -4213,6 +4487,8 @@ function registroButtons(messageId, active) {
               rec.responsibleUserId = newBest.userId;
               rec.responsibleType = newBest.type;
               rec.responsibleHistory.push({ atMs: Date.now(), userId: newBest.userId, type: newBest.type, setBy: client.user.id });
+
+              SC_GI_scheduleSave();
               
               const chToEdit = await guild.channels.fetch(rec.channelId).catch(() => null);
               const msgToEdit = chToEdit ? await chToEdit.messages.fetch(rec.messageId).catch(() => null) : null;
@@ -4225,17 +4501,54 @@ function registroButtons(messageId, active) {
             }
           }
 
-          // 🔧 Verificação de responsável desligado
-          const respMem = rec.responsibleUserId ? await guild.members.fetch(rec.responsibleUserId).catch(() => null) : null;
+          // 🔧 Verificação de responsável desligado / pausado
+          const pausedRespControl = rec.responsibleUserId
+            ? SC_GI_findCurrentControl(guild.id, rec.responsibleUserId)
+            : null;
+
+// Se o responsável ainda existe, mas o Controle GI dele está pausado,
+// usa a redistribuição centralizada. Isso também funciona como failsafe
+// após restart/deploy caso a pausa tenha ocorrido antes de concluir a transferência.
+if (
+  rec.responsibleUserId &&
+  pausedRespControl?.active === false
+) {
+  const pausedResponsibleIdBeforeRedistribution =
+    String(rec.responsibleUserId);
+
+  await redistributeMembersFromPausedResponsible(
+    guild,
+    pausedRespControl,
+    {
+      actorId: client.user.id,
+      source: 'records_consistency'
+    }
+  ).catch((error) => {
+    console.warn(
+      `[SC_GI] Falha ao redistribuir membros do responsável pausado ${pausedResponsibleIdBeforeRedistribution}:`,
+      error?.message || error
+    );
+  });
+}
+
+// Recalcula tudo DEPOIS da tentativa de redistribuição.
+// Assim, se este próprio registro foi transferido, a validação já enxerga
+// o novo responsável e o restante do auto-heal continua rodando normalmente.
+const respMem = rec.responsibleUserId ? await guild.members.fetch(rec.responsibleUserId).catch(() => null) : null;
 const targetMem = rec.targetId ? await guild.members.fetch(rec.targetId).catch(() => null) : null;
 
 const respType = getHighestTypeFromMember(respMem);
-const respRank = getManagementRank(respMem);
-const targetRank = getManagementRank(targetMem);
+const respRank = getResponsibleHierarchyRank(respMem, rec.responsibleType);
+const targetRank = getResponsibleHierarchyRank(targetMem);
+const respControl = rec.responsibleUserId
+  ? SC_GI_findCurrentControl(guild.id, rec.responsibleUserId)
+  : null;
 
 const isRespStillValid =
   respMem &&
   respType &&
+  !!respControl &&
+  respControl.active !== false &&
   rec.responsibleUserId !== rec.targetId &&
   (targetRank === Infinity || respRank < targetRank);
 
@@ -4244,7 +4557,19 @@ if (rec.responsibleUserId && !isRespStillValid) {
             if (newBest) {
               rec.responsibleUserId = newBest.userId;
               rec.responsibleType = newBest.type;
-              rec.responsibleHistory.push({ atMs: Date.now(), userId: newBest.userId, type: newBest.type, setBy: client.user.id });
+              rec.responsibleManual = false;
+              rec.responsibleSetBy = client.user.id;
+              rec.responsibleUpdatedAtMs = Date.now();
+              rec.responsibleHistory.push({
+                atMs: Date.now(),
+                userId: newBest.userId,
+                type: newBest.type,
+                setBy: client.user.id,
+                manual: false,
+                source: 'records_consistency'
+              });
+
+              SC_GI_scheduleSave();
               
               const chToEdit = await guild.channels.fetch(rec.channelId).catch(() => null);
               const msgToEdit = chToEdit ? await chToEdit.messages.fetch(rec.messageId).catch(() => null) : null;
@@ -5549,6 +5874,66 @@ try {
       }
 
       // =====================================================
+      // HIERARQUIA NA TROCA DE DISCORD
+      // =====================================================
+      //
+      // A validação inicial de editRegistro() protege o membro
+      // que atualmente possui o Controle GI.
+      //
+      // Porém Coord/Gestor também precisam ser impedidos de
+      // trocar esse Controle para uma conta do mesmo nível
+      // ou acima deles.
+      //
+      // Esta validação é aplicada SOMENTE às novas permissões
+      // específicas de Coord/Gestor.
+      //
+      // As permissões gerais antigas continuam funcionando
+      // exatamente como antes.
+      // =====================================================
+
+      const editorMember =
+        await guild.members
+          .fetch(
+            String(
+              editor?.id ||
+              ''
+            )
+          )
+          .catch(
+            () => null
+          );
+
+      const isScopedCoordOrGestor =
+        editorMember &&
+        !hasAuth(
+          editorMember
+        ) &&
+        memberHasAnyRole(
+          editorMember,
+          [
+            SC_GI_CFG.ROLE_COORD_CREATORS,
+            SC_GI_CFG.ROLE_GESTOR_CREATORS
+          ]
+        );
+
+      if (
+        isScopedCoordOrGestor
+      ) {
+        await assertCanManageGIRecord(
+          guild,
+          editor,
+          nextUserId,
+          'transferir o Controle GI para este Discord',
+          {
+            extraAllowedRoleIds: [
+              SC_GI_CFG.ROLE_COORD_CREATORS,
+              SC_GI_CFG.ROLE_GESTOR_CREATORS
+            ]
+          }
+        );
+      }
+
+      // =====================================================
       // TRANSFERE CARGOS
       // =====================================================
 
@@ -6151,7 +6536,12 @@ try {
         editor,
         rec.targetId,
         'editar o controle e alterar a Área/cargo',
-        { allowCoordAreaEdit: true }
+        {
+          extraAllowedRoleIds: [
+            SC_GI_CFG.ROLE_COORD_CREATORS,
+            SC_GI_CFG.ROLE_GESTOR_CREATORS
+          ]
+        }
       );
 
       const ch =
@@ -6682,7 +7072,14 @@ if (
     guild,
     actor,
     rec.targetId,
-    rec.active ? 'pausar a contagem' : 'retomar a contagem'
+    rec.active
+      ? 'pausar a contagem'
+      : 'retomar a contagem',
+    {
+      extraAllowedRoleIds: [
+        SC_GI_CFG.ROLE_COORD_CREATORS
+      ]
+    }
   );
       const ch  = await guild.channels.fetch(rec.channelId).catch(() => null);
       if (!ch) throw new Error('Canal indisponível.');
@@ -6798,6 +7195,22 @@ if (
       });
 
       SC_GI_scheduleSave();
+
+      if (rec.active === false) {
+        await redistributeMembersFromPausedResponsible(
+          guild,
+          rec,
+          {
+            actorId: actor.id,
+            source: 'toggle_pause'
+          }
+        ).catch((error) => {
+          console.warn(
+            `[SC_GI] Falha na redistribuição automática após pausa de ${rec.targetId}:`,
+            error?.message || error
+          );
+        });
+      }
 
       // atualiza embed
       const targetUser    = await fetchUserCached(rec.targetId);
@@ -6997,6 +7410,24 @@ if (
       if (!rec) {
         throw new Error('Registro não encontrado.');
       }
+
+      await assertCanManageGIRecord(
+        guild,
+        actor,
+        rec.targetId,
+        'reenviar a DM',
+        {
+          extraAllowedRoleIds: [
+            SC_GI_CFG.ROLE_COORD_CREATORS,
+            SC_GI_CFG.ROLE_GESTOR_CREATORS
+          ],
+
+          selfAllowedRoleIds: [
+            SC_GI_CFG.ROLE_COORD_CREATORS,
+            SC_GI_CFG.ROLE_GESTOR_CREATORS
+          ]
+        }
+      );
 
       const targetUser =
         await fetchUserCached(
@@ -7903,15 +8334,27 @@ async function restoreRolesFromDisconnectArchive(
   ];
 }
 
-async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado manualmente') {
+async function desligarRegistro(
+  guild,
+  actor,
+  messageId,
+  motivo = 'Desligado manualmente',
+  permissionOptions = {}
+) {
   const rec = SC_GI_STATE.registros.get(messageId);
-  if (!rec) throw new Error('Registro não encontrado.');
+
+  if (!rec) {
+    throw new Error(
+      'Registro não encontrado.'
+    );
+  }
 
   await assertCanManageGIRecord(
     guild,
     actor,
     rec.targetId,
-    'desligar da gestão'
+    'desligar da gestão',
+    permissionOptions
   );
 
   const snapshot =
@@ -9697,7 +10140,11 @@ try {
       for (const roleId of roleIds) {
         const role = guild.roles.cache.get(roleId) || await guild.roles.fetch(roleId).catch(() => null);
         if (!role) continue;
-        for (const [id, member] of role.members) bucket.set(id, member);
+        for (const [id, member] of role.members) {
+          if (member.user?.bot) continue;
+          if (!getActiveGiControlForResponsible(guild.id, id)) continue;
+          bucket.set(id, member);
+        }
       }
       const arr = Array.from(bucket.values())
         .sort((a, b) => (a.displayName || a.user?.username || '').localeCompare(b.displayName || b.user?.username || '', 'pt-BR'))
@@ -9726,6 +10173,611 @@ try {
       : t === 'RESP_LIDER' ? 'Resp. Líder'
       : null;
 
+    const SC_GI_RESP_REDISTRIBUTION_LOCKS = new Set();
+
+    async function getActiveResponsibleCandidatesForRedistribution(
+      guild,
+      pausedResponsibleId,
+      pausedResponsibleRank
+    ) {
+      const roleIds =
+        SC_GI_CFG.RESP_ALLOWED_ROLE_IDS || [];
+
+      const bucket =
+        new Map();
+
+      for (const roleId of roleIds) {
+        const role =
+          guild.roles.cache.get(roleId) ||
+          await guild.roles.fetch(roleId).catch(() => null);
+
+        if (!role) {
+          continue;
+        }
+
+        for (const [userId, member] of role.members) {
+          if (
+            !userId ||
+            userId === pausedResponsibleId ||
+            member.user?.bot ||
+            bucket.has(userId)
+          ) {
+            continue;
+          }
+
+          const type =
+            getHighestTypeFromMember(member);
+
+          if (!type) {
+            continue;
+          }
+
+          const activeControl =
+            getActiveGiControlForResponsible(
+              guild.id,
+              userId
+            );
+
+          if (!activeControl) {
+            continue;
+          }
+
+          const rank =
+            getResponsibleHierarchyRank(
+              member,
+              type
+            );
+
+          if (!Number.isFinite(rank)) {
+            continue;
+          }
+
+          // A redistribuição sobe na hierarquia.
+          // Nunca joga a responsabilidade para um cargo abaixo
+          // do responsável que acabou de ser pausado.
+          if (
+            Number.isFinite(pausedResponsibleRank) &&
+            rank > pausedResponsibleRank
+          ) {
+            continue;
+          }
+
+          bucket.set(
+            userId,
+            {
+              userId,
+              member,
+              type,
+              rank,
+              count: 0,
+            }
+          );
+        }
+      }
+
+      for (const record of SC_GI_STATE.registros.values()) {
+        if (
+          SC_GI_resolveRecordGuildId(record) !== guild.id ||
+          !record.responsibleUserId
+        ) {
+          continue;
+        }
+
+        const candidate =
+          bucket.get(
+            String(record.responsibleUserId)
+          );
+
+        if (candidate) {
+          candidate.count++;
+        }
+      }
+
+      return Array.from(
+        bucket.values()
+      );
+    }
+
+    function buildResponsibleRedistributionPool(
+      candidates,
+      pausedResponsibleRank,
+      dependentCount
+    ) {
+      const sameRank =
+        candidates
+          .filter(
+            candidate =>
+              candidate.rank === pausedResponsibleRank
+          )
+          .sort(
+            (a, b) =>
+              a.count - b.count ||
+              String(a.userId).localeCompare(String(b.userId))
+          );
+
+      const higherRanks =
+        candidates
+          .filter(
+            candidate =>
+              !Number.isFinite(pausedResponsibleRank) ||
+              candidate.rank < pausedResponsibleRank
+          )
+          .sort(
+            (a, b) => {
+              if (a.rank !== b.rank) {
+                // Mais próximo do nível pausado primeiro.
+                return b.rank - a.rank;
+              }
+
+              if (a.count !== b.count) {
+                return a.count - b.count;
+              }
+
+              return String(a.userId).localeCompare(String(b.userId));
+            }
+          );
+
+      // Dois ou mais responsáveis do MESMO nível formam um pool suficiente.
+      // Isso preserva exatamente a prioridade pedida: 4 membros + 2 Resp Líderes
+      // ficam somente entre os dois Resp Líderes.
+      if (sameRank.length >= 2) {
+        return sameRank;
+      }
+
+      // Para um único membro, um responsável do mesmo nível já é suficiente.
+      if (
+        sameRank.length === 1 &&
+        dependentCount <= 1
+      ) {
+        return sameRank;
+      }
+
+      // Se existe apenas UMA pessoa do mesmo nível e há vários membros,
+      // inclui os níveis superiores elegíveis para evitar concentrar tudo nela.
+      if (sameRank.length === 1) {
+        return [
+          ...sameRank,
+          ...higherRanks,
+        ];
+      }
+
+      // Sem ninguém do mesmo nível, sobe a hierarquia.
+      return higherRanks;
+    }
+
+    async function redistributeMembersFromPausedResponsible(
+      guild,
+      pausedResponsibleRecord,
+      {
+        actorId = null,
+        source = 'pause_control'
+      } = {}
+    ) {
+      if (
+        !guild ||
+        !pausedResponsibleRecord ||
+        pausedResponsibleRecord.active !== false
+      ) {
+        return {
+          ok: true,
+          skipped: true,
+          reason: 'not_paused'
+        };
+      }
+
+      const pausedResponsibleId =
+        String(
+          pausedResponsibleRecord.targetId ||
+          ''
+        );
+
+      const pausedAtMs =
+        Number(
+          pausedResponsibleRecord.pausedAtMs ||
+          0
+        );
+
+      if (
+        !pausedResponsibleId ||
+        !pausedAtMs
+      ) {
+        return {
+          ok: false,
+          skipped: true,
+          reason: 'invalid_pause_identity'
+        };
+      }
+
+      if (
+        Number(
+          pausedResponsibleRecord
+            .responsibilityRedistributionPausedAtMs ||
+          0
+        ) === pausedAtMs
+      ) {
+        return {
+          ok: true,
+          skipped: true,
+          reason: 'already_processed'
+        };
+      }
+
+      const lockKey =
+        `${guild.id}:${pausedResponsibleId}:${pausedAtMs}`;
+
+      if (
+        SC_GI_RESP_REDISTRIBUTION_LOCKS.has(lockKey)
+      ) {
+        return {
+          ok: true,
+          skipped: true,
+          reason: 'already_running'
+        };
+      }
+
+      SC_GI_RESP_REDISTRIBUTION_LOCKS.add(
+        lockKey
+      );
+
+      try {
+        const dependentRecords =
+          Array.from(
+            SC_GI_STATE.registros.values()
+          )
+            .filter(
+              record =>
+                SC_GI_resolveRecordGuildId(record) === guild.id &&
+                String(record.responsibleUserId || '') === pausedResponsibleId &&
+                String(record.targetId || '') !== pausedResponsibleId
+            )
+            .sort(
+              (a, b) =>
+                String(a.targetId).localeCompare(String(b.targetId))
+            );
+
+        if (dependentRecords.length === 0) {
+          pausedResponsibleRecord.responsibilityRedistributionPausedAtMs =
+            pausedAtMs;
+
+          pausedResponsibleRecord.responsibilityRedistributionCompletedAtMs =
+            nowMs();
+
+          await SC_GI_saveNow();
+
+          return {
+            ok: true,
+            transferred: 0,
+            unresolved: 0
+          };
+        }
+
+        const pausedMember =
+          await guild.members
+            .fetch(pausedResponsibleId)
+            .catch(() => null);
+
+        const storedPausedType =
+          dependentRecords.find(
+            record =>
+              record.responsibleType
+          )?.responsibleType ||
+          null;
+
+        const pausedResponsibleRank =
+          getResponsibleHierarchyRank(
+            pausedMember,
+            storedPausedType
+          );
+
+        const candidates =
+          await getActiveResponsibleCandidatesForRedistribution(
+            guild,
+            pausedResponsibleId,
+            pausedResponsibleRank
+          );
+
+        const pool =
+          buildResponsibleRedistributionPool(
+            candidates,
+            pausedResponsibleRank,
+            dependentRecords.length
+          );
+
+        if (pool.length === 0) {
+          const pendingAlreadyLogged =
+            Number(
+              pausedResponsibleRecord
+                .responsibilityRedistributionPendingLoggedPausedAtMs ||
+              0
+            ) === pausedAtMs;
+
+          if (!pendingAlreadyLogged) {
+            await logMsg(
+              guild,
+              'Redistribuição Automática Pendente (GI)',
+              [
+                `⏸️ **Responsável pausado:** <@${pausedResponsibleId}> (\`${pausedResponsibleId}\`)`,
+                `👥 **Membros aguardando redistribuição:** **${dependentRecords.length}**`,
+                `⚠️ **Motivo:** não existe responsável elegível com Controle GI ativo neste momento.`,
+                `🧭 **Regra preservada:** nenhum Controle GI pausado e nenhum cargo hierarquicamente inelegível foi utilizado.`,
+                `🕒 **Pausa:** <t:${Math.floor(pausedAtMs / 1000)}:F>`
+              ].join('\n'),
+              {
+                color: 0xe74c3c
+              }
+            ).catch(() => {});
+
+            pausedResponsibleRecord.responsibilityRedistributionPendingLoggedPausedAtMs =
+              pausedAtMs;
+
+            await SC_GI_saveNow();
+          }
+
+          return {
+            ok: false,
+            transferred: 0,
+            unresolved: dependentRecords.length,
+            reason: 'no_eligible_candidate'
+          };
+        }
+
+        let transferred = 0;
+
+        for (const memberRecord of dependentRecords) {
+          // Pode ter sido transferido por outra execução enquanto aguardávamos fetch/log.
+          if (
+            String(memberRecord.responsibleUserId || '') !==
+              pausedResponsibleId
+          ) {
+            continue;
+          }
+
+          const targetMember =
+            await guild.members
+              .fetch(memberRecord.targetId)
+              .catch(() => null);
+
+          const targetRank =
+            getResponsibleHierarchyRank(
+              targetMember
+            );
+
+          const eligibleForThisMember =
+            pool
+              .filter(
+                candidate =>
+                  candidate.userId !== memberRecord.targetId &&
+                  (
+                    targetRank === Infinity ||
+                    candidate.rank < targetRank
+                  )
+              )
+              .sort(
+                (a, b) => {
+                  if (a.count !== b.count) {
+                    return a.count - b.count;
+                  }
+
+                  const aSame =
+                    a.rank === pausedResponsibleRank
+                      ? 0
+                      : 1;
+
+                  const bSame =
+                    b.rank === pausedResponsibleRank
+                      ? 0
+                      : 1;
+
+                  if (aSame !== bSame) {
+                    return aSame - bSame;
+                  }
+
+                  if (
+                    Number.isFinite(pausedResponsibleRank) &&
+                    a.rank !== b.rank
+                  ) {
+                    const aDistance =
+                      Math.abs(
+                        pausedResponsibleRank - a.rank
+                      );
+
+                    const bDistance =
+                      Math.abs(
+                        pausedResponsibleRank - b.rank
+                      );
+
+                    if (aDistance !== bDistance) {
+                      return aDistance - bDistance;
+                    }
+                  }
+
+                  return String(a.userId).localeCompare(String(b.userId));
+                }
+              );
+
+          const selected =
+            eligibleForThisMember[0] ||
+            null;
+
+          if (!selected) {
+            continue;
+          }
+
+          const transferAtMs =
+            nowMs();
+
+          const previousResponsibleType =
+            memberRecord.responsibleType ||
+            storedPausedType ||
+            null;
+
+          memberRecord.responsibleHistory =
+            Array.isArray(memberRecord.responsibleHistory)
+              ? memberRecord.responsibleHistory
+              : [];
+
+          memberRecord.responsibleHistory.push({
+            atMs: transferAtMs,
+            userId: selected.userId,
+            type: selected.type,
+            setBy: actorId || client.user.id,
+            manual: false,
+            source: 'pause_redistribution',
+            previousUserId: pausedResponsibleId,
+            previousType: previousResponsibleType,
+            reason: 'Controle GI do responsável anterior pausado'
+          });
+
+          memberRecord.responsibleUserId =
+            selected.userId;
+
+          memberRecord.responsibleType =
+            selected.type;
+
+          memberRecord.responsibleManual =
+            false;
+
+          memberRecord.responsibleSetBy =
+            actorId ||
+            client.user.id;
+
+          memberRecord.responsibleUpdatedAtMs =
+            transferAtMs;
+
+          selected.count++;
+          transferred++;
+
+          await refreshRegistroMessage(
+            guild,
+            client.user,
+            memberRecord.messageId,
+            'Redistribuição automática por pausa do responsável',
+            {
+              log: false
+            }
+          ).catch(() => {});
+
+          await logMsg(
+            guild,
+            'Responsável Redistribuído Automaticamente (GI)',
+            [
+              `👤 **Membro transferido:** <@${memberRecord.targetId}> (\`${memberRecord.targetId}\`)`,
+              `⏸️ **Responsável anterior:** <@${pausedResponsibleId}> (\`${pausedResponsibleId}\`)`,
+              `🧭 **Cargo anterior:** ${TYPE_LABEL(previousResponsibleType) || previousResponsibleType || '—'}`,
+              `✅ **Novo responsável:** <@${selected.userId}> (\`${selected.userId}\`)`,
+              `🧭 **Novo cargo:** ${TYPE_LABEL(selected.type) || selected.type || '—'}`,
+              `📌 **Motivo:** Controle GI do responsável anterior pausado`,
+              `🕒 **Transferência:** <t:${Math.floor(transferAtMs / 1000)}:F>`,
+              `🔗 **Registro:** ${recordLink(memberRecord.guildId || guild.id, memberRecord.channelId, memberRecord.messageId) || 'Não disponível'}`
+            ].join('\n'),
+            {
+              color: 0x3498db
+            }
+          ).catch(() => {});
+
+          await logMemberHistoryEvent(
+            guild,
+            {
+              type: 'Responsável Redistribuído Automaticamente',
+              memberId: memberRecord.targetId,
+              actorId: actorId || client.user.id,
+              before: {
+                responsibleUserId: pausedResponsibleId,
+                responsibleType: previousResponsibleType
+              },
+              after: {
+                responsibleUserId: selected.userId,
+                responsibleType: selected.type,
+                transferredAtMs: transferAtMs,
+                reason: 'Controle GI do responsável anterior pausado'
+              },
+              record: memberRecord,
+              note:
+                `Transferência real de responsabilidade causada pela pausa do Controle GI de ${pausedResponsibleId}. ` +
+                `Uma futura reativação do responsável anterior não desfaz esta transferência automaticamente.`
+            }
+          ).catch(() => {});
+
+          try {
+            dashEmit(
+              'gi:responsavel_transferido',
+              {
+                guildId: guild.id,
+                memberId: memberRecord.targetId,
+                previousResponsibleId: pausedResponsibleId,
+                previousResponsibleType,
+                newResponsibleId: selected.userId,
+                newResponsibleType: selected.type,
+                pausedAtMs,
+                transferredAtMs: transferAtMs,
+                source
+              }
+            );
+          } catch (error) {
+            console.warn(
+              '[SC_GI] Falha ao emitir gi:responsavel_transferido:',
+              error?.message || error
+            );
+          }
+        }
+
+        const remaining =
+          Array.from(
+            SC_GI_STATE.registros.values()
+          ).filter(
+            record =>
+              SC_GI_resolveRecordGuildId(record) === guild.id &&
+              String(record.responsibleUserId || '') === pausedResponsibleId &&
+              String(record.targetId || '') !== pausedResponsibleId
+          );
+
+        if (remaining.length === 0) {
+          pausedResponsibleRecord.responsibilityRedistributionPausedAtMs =
+            pausedAtMs;
+
+          pausedResponsibleRecord.responsibilityRedistributionCompletedAtMs =
+            nowMs();
+        }
+
+        await SC_GI_saveNow();
+
+        markBoardDirty();
+
+        scheduleRespBoardRender(
+          guild,
+          {
+            force: true
+          }
+        );
+
+        if (remaining.length > 0) {
+          await logMsg(
+            guild,
+            'Redistribuição Automática Parcial (GI)',
+            [
+              `⏸️ **Responsável pausado:** <@${pausedResponsibleId}> (\`${pausedResponsibleId}\`)`,
+              `✅ **Transferidos:** **${transferred}**`,
+              `⚠️ **Ainda aguardando responsável elegível:** **${remaining.length}**`,
+              `📌 O sistema não utilizará responsável com Controle GI pausado nem cargo hierarquicamente inválido.`
+            ].join('\n'),
+            {
+              color: 0xf1c40f
+            }
+          ).catch(() => {});
+        }
+
+        return {
+          ok: remaining.length === 0,
+          transferred,
+          unresolved: remaining.length
+        };
+      } finally {
+        SC_GI_RESP_REDISTRIBUTION_LOCKS.delete(
+          lockKey
+        );
+      }
+    }
+
 async function setResponsibleAuto(guild, actorId, messageId, pickedUserId) {
   const rec = SC_GI_STATE.registros.get(messageId);
   if (!rec) throw new Error('Registro não encontrado.');
@@ -9739,8 +10791,20 @@ async function setResponsibleAuto(guild, actorId, messageId, pickedUserId) {
   const type = getHighestTypeFromMember(mem);
   if (!type) throw new Error('Este usuário não possui cargos válidos de responsável.');
 
-  const respRank = getManagementRank(mem);
-  const targetRank = getManagementRank(targetMem);
+  const pickedControl =
+    getActiveGiControlForResponsible(
+      guild.id,
+      pickedUserId
+    );
+
+  if (!pickedControl) {
+    throw new Error(
+      'Este usuário não pode receber novos membros porque não possui Controle GI ativo.'
+    );
+  }
+
+  const respRank = getResponsibleHierarchyRank(mem, type);
+  const targetRank = getResponsibleHierarchyRank(targetMem);
 
   if (pickedUserId === rec.targetId) {
     throw new Error('O membro não pode ser responsável por ele mesmo.');
@@ -12414,18 +13478,50 @@ dashOn(
 
         // Parar/Retomar contagem
         if (interaction.isButton() && interaction.customId.startsWith(BTN.STOP_COUNT_PREFIX)) {
-          if (!hasAuth(interaction.member)) return interaction.reply({ content: '❌ Você não tem permissão.', flags: MessageFlags.Ephemeral });
+          if (
+            !hasScopedGIActionAuth(
+              interaction.member,
+              [
+                SC_GI_CFG.ROLE_COORD_CREATORS
+              ]
+            )
+          ) {
+            return interaction.reply({
+              content: '❌ Você não tem permissão.',
+              flags: MessageFlags.Ephemeral
+            });
+          }
+
           const raw = interaction.customId.replace(BTN.STOP_COUNT_PREFIX, '');
           const { rec, id: messageId } = resolveRecordByInteraction(interaction, raw);
-          if (!rec) return interaction.reply({ content: 'Registro não encontrado.', flags: MessageFlags.Ephemeral });
 
-          await interaction.deferReply({ flags: MessageFlags.Ephemeral }); // NOVO: defer para evitar timeout
-          try {
-            await toggleActive(guild, interaction.user, messageId);
-            await interaction.editReply({ content: '✅ Estado da contagem atualizado!' });
-          } catch (e) {
-            await interaction.editReply({ content: '⚠️ ' + e.message });
+          if (!rec) {
+            return interaction.reply({
+              content: 'Registro não encontrado.',
+              flags: MessageFlags.Ephemeral
+            });
           }
+
+          await interaction.deferReply({
+            flags: MessageFlags.Ephemeral
+          });
+
+          try {
+            await toggleActive(
+              guild,
+              interaction.user,
+              messageId
+            );
+
+            await interaction.editReply({
+              content: '✅ Estado da contagem atualizado!'
+            });
+          } catch (e) {
+            await interaction.editReply({
+              content: '⚠️ ' + e.message
+            });
+          }
+
           return;
         }
 
@@ -12569,13 +13665,47 @@ dashOn(
         }
 
         // Reenviar DM agora
-        if (interaction.isButton() && interaction.customId.startsWith(BTN.DMNOW_PREFIX)) { // NOVO: Botão de reenviar DM
-          if (!hasAuth(interaction.member)) return interaction.reply({ content: '❌ Você não tem permissão.', flags: MessageFlags.Ephemeral });
-          const raw = interaction.customId.replace(BTN.DMNOW_PREFIX, '');
-          const { rec, id: messageId } = resolveRecordByInteraction(interaction, raw);
-          if (!rec) return interaction.reply({ content: 'Registro não encontrado.', flags: MessageFlags.Ephemeral });
+        if (interaction.isButton() && interaction.customId.startsWith(BTN.DMNOW_PREFIX)) {
+          if (
+            !hasScopedGIActionAuth(
+              interaction.member,
+              [
+                SC_GI_CFG.ROLE_COORD_CREATORS,
+                SC_GI_CFG.ROLE_GESTOR_CREATORS
+              ]
+            )
+          ) {
+            return interaction.reply({
+              content: '❌ Você não tem permissão.',
+              flags: MessageFlags.Ephemeral
+            });
+          }
 
-          await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+          const raw =
+            interaction.customId.replace(
+              BTN.DMNOW_PREFIX,
+              ''
+            );
+
+          const {
+            rec,
+            id: messageId
+          } =
+            resolveRecordByInteraction(
+              interaction,
+              raw
+            );
+
+          if (!rec) {
+            return interaction.reply({
+              content: 'Registro não encontrado.',
+              flags: MessageFlags.Ephemeral
+            });
+          }
+
+          await interaction.deferReply({
+            flags: MessageFlags.Ephemeral
+          });
 
           try {
             await resendDM(
@@ -12919,20 +14049,78 @@ dashOn(
         }
         // Atualizar controle
         if (interaction.isButton() && interaction.customId.startsWith(BTN.REFRESH_PREFIX)) {
-          if (!hasAuth(interaction.member)) return interaction.reply({ content: '❌ Você não tem permissão.', flags: MessageFlags.Ephemeral });
+          if (
+            !hasScopedGIActionAuth(
+              interaction.member,
+              [
+                SC_GI_CFG.ROLE_COORD_CREATORS,
+                SC_GI_CFG.ROLE_GESTOR_CREATORS
+              ]
+            )
+          ) {
+            return interaction.reply({
+              content: '❌ Você não tem permissão.',
+              flags: MessageFlags.Ephemeral
+            });
+          }
 
-          const raw = interaction.customId.replace(BTN.REFRESH_PREFIX, '');
-          const { rec, id: messageId } = resolveRecordByInteraction(interaction, raw);
-          if (!rec) return interaction.reply({ content: 'Registro não encontrado.', flags: MessageFlags.Ephemeral });
+          const raw =
+            interaction.customId.replace(
+              BTN.REFRESH_PREFIX,
+              ''
+            );
 
-          await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+          const {
+            rec,
+            id: messageId
+          } =
+            resolveRecordByInteraction(
+              interaction,
+              raw
+            );
+
+          if (!rec) {
+            return interaction.reply({
+              content: 'Registro não encontrado.',
+              flags: MessageFlags.Ephemeral
+            });
+          }
+
+          await interaction.deferReply({
+            flags: MessageFlags.Ephemeral
+          });
 
           try {
-            await assertCanManageGIRecord(guild, interaction.user, rec.targetId, 'atualizar o controle');
-            await refreshRegistroMessage(guild, interaction.user, messageId, 'Botão Atualizar Controle');
-            await interaction.editReply({ content: '✅ Controle atualizado com sucesso.' });
+            await assertCanManageGIRecord(
+              guild,
+              interaction.user,
+              rec.targetId,
+              'atualizar o controle',
+              {
+                extraAllowedRoleIds: [
+                  SC_GI_CFG.ROLE_COORD_CREATORS,
+                  SC_GI_CFG.ROLE_GESTOR_CREATORS
+                ]
+              }
+            );
+
+            await refreshRegistroMessage(
+              guild,
+              interaction.user,
+              messageId,
+              'Botão Atualizar Controle'
+            );
+
+            await interaction.editReply({
+              content:
+                '✅ Controle atualizado com sucesso.'
+            });
           } catch (e) {
-            await interaction.editReply({ content: '⚠️ ' + e.message });
+            await interaction.editReply({
+              content:
+                '⚠️ ' +
+                e.message
+            });
           }
 
           return;
@@ -13035,6 +14223,23 @@ dashOn(
                 await removeGIRole(guild, rec.targetId, 'Revertido: GI removido');
               }
               SC_GI_scheduleSave();
+
+              if (newStatus === false) {
+                await redistributeMembersFromPausedResponsible(
+                  guild,
+                  rec,
+                  {
+                    actorId: interaction.user.id,
+                    source: 'undo_toggle_pause'
+                  }
+                ).catch((error) => {
+                  console.warn(
+                    `[SC_GI] Falha na redistribuição automática após reversão para pausado de ${rec.targetId}:`,
+                    error?.message || error
+                  );
+                });
+              }
+
               await refreshRegistroMessage(guild, interaction.user, recordId, 'Revertido status');
               await interaction.editReply({ content: `✅ Status do registro de <@${rec.targetId}> revertido para **${newStatus ? 'Ativo' : 'Pausado'}**.` });
                        } else if (action === 'EDIT') {
@@ -13195,18 +14400,71 @@ dashOn(
 
         // Desligar
         if (interaction.isButton() && interaction.customId.startsWith(BTN.DESLIGAR_PREFIX)) {
-          if (!hasAuth(interaction.member)) return interaction.reply({ content: '❌ Você não tem permissão.', flags: MessageFlags.Ephemeral });
-          const raw = interaction.customId.replace(BTN.DESLIGAR_PREFIX, '');
-          const { rec, id: messageId } = resolveRecordByInteraction(interaction, raw);
-          if (!rec) return interaction.reply({ content: 'Registro não encontrado.', flags: MessageFlags.Ephemeral });
-
-          await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-          try {
-            await desligarRegistro(guild, interaction.user, messageId, 'Desligamento via botão');
-            await interaction.editReply({ content: '✅ Membro desligado (controle removido, DM/log enviados).' });
-          } catch (e) {
-            await interaction.editReply({ content: '⚠️ ' + e.message });
+          if (
+            !hasScopedGIActionAuth(
+              interaction.member,
+              [
+                SC_GI_CFG.ROLE_COORD_CREATORS
+              ]
+            )
+          ) {
+            return interaction.reply({
+              content: '❌ Você não tem permissão.',
+              flags: MessageFlags.Ephemeral
+            });
           }
+
+          const raw =
+            interaction.customId.replace(
+              BTN.DESLIGAR_PREFIX,
+              ''
+            );
+
+          const {
+            rec,
+            id: messageId
+          } =
+            resolveRecordByInteraction(
+              interaction,
+              raw
+            );
+
+          if (!rec) {
+            return interaction.reply({
+              content: 'Registro não encontrado.',
+              flags: MessageFlags.Ephemeral
+            });
+          }
+
+          await interaction.deferReply({
+            flags: MessageFlags.Ephemeral
+          });
+
+          try {
+            await desligarRegistro(
+              guild,
+              interaction.user,
+              messageId,
+              'Desligamento via botão',
+              {
+                extraAllowedRoleIds: [
+                  SC_GI_CFG.ROLE_COORD_CREATORS
+                ]
+              }
+            );
+
+            await interaction.editReply({
+              content:
+                '✅ Membro desligado (controle removido, DM/log enviados).'
+            });
+          } catch (e) {
+            await interaction.editReply({
+              content:
+                '⚠️ ' +
+                e.message
+            });
+          }
+
           return;
         }
 

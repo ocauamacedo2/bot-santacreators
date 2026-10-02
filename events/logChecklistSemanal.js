@@ -12,7 +12,7 @@ import {
   PermissionsBitField,
   Guild
 } from "discord.js";
-import { dashEmit } from "../utils/dashHub.js";
+import { dashEmit, dashOn } from "../utils/dashHub.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -440,6 +440,116 @@ function findExistingCheck(responsaveis, memberId) {
     if (m && m.checked) return m;
   }
   return null;
+}
+
+async function applyGiResponsibleTransferToCurrentWeek(client, data = {}) {
+  const memberId = normalizeId(data?.memberId);
+  const previousResponsibleId = normalizeId(data?.previousResponsibleId);
+  const newResponsibleId = normalizeId(data?.newResponsibleId);
+
+  if (
+    !memberId ||
+    !previousResponsibleId ||
+    !newResponsibleId ||
+    previousResponsibleId === newResponsibleId
+  ) {
+    return false;
+  }
+
+  const checklist = loadJSON(CHECKLIST_FILE, { weeks: {} });
+  const weekKey = weekKeyFromDateSP();
+  const currentWeek = checklist?.weeks?.[weekKey];
+
+  // Se a semana ainda não possui snapshot/lista, não criamos uma lista paralela.
+  if (
+    !currentWeek ||
+    !currentWeek.responsaveis ||
+    typeof currentWeek.responsaveis !== "object"
+  ) {
+    return false;
+  }
+
+  let preservedMemberData = null;
+
+  // Remove o membro de qualquer responsável antigo dentro do snapshot atual.
+  // Isso também limpa duplicações antigas sem reconstruir a semana inteira.
+  for (const [respId, respData] of Object.entries(currentWeek.responsaveis)) {
+    const existingMember = respData?.members?.[memberId];
+    if (!existingMember) continue;
+
+    if (
+      !preservedMemberData ||
+      respId === previousResponsibleId
+    ) {
+      preservedMemberData = cloneJSONSafe(existingMember, {});
+    }
+
+    delete respData.members[memberId];
+
+    if (Object.keys(respData.members || {}).length === 0) {
+      delete currentWeek.responsaveis[respId];
+    }
+  }
+
+  // O membro não fazia parte da lista congelada desta semana.
+  // Não adicionamos um membro novo à força, apenas transferimos quem já estava nela.
+  if (!preservedMemberData) {
+    return false;
+  }
+
+  if (!currentWeek.responsaveis[newResponsibleId]) {
+    currentWeek.responsaveis[newResponsibleId] = {
+      members: {}
+    };
+  }
+
+  if (!currentWeek.responsaveis[newResponsibleId].members) {
+    currentWeek.responsaveis[newResponsibleId].members = {};
+  }
+
+  const existingAtNewResponsible =
+    currentWeek.responsaveis[newResponsibleId].members[memberId] ||
+    null;
+
+  currentWeek.responsaveis[newResponsibleId].members[memberId] = {
+    ...preservedMemberData,
+
+    // Se por algum motivo já existia uma cópia conferida no novo responsável,
+    // nunca perde o progresso.
+    checked:
+      existingAtNewResponsible?.checked === true ||
+      preservedMemberData?.checked === true,
+
+    checkedAt:
+      existingAtNewResponsible?.checkedAt ||
+      preservedMemberData?.checkedAt ||
+      null,
+
+    checkedBy:
+      existingAtNewResponsible?.checkedBy ||
+      preservedMemberData?.checkedBy ||
+      null,
+
+    responsibilityTransferredAt:
+      Number(data?.transferredAtMs || Date.now()),
+
+    responsibilityTransferredFrom:
+      previousResponsibleId,
+
+    responsibilityTransferredTo:
+      newResponsibleId
+  };
+
+  // IMPORTANTE:
+  // snapshotLocked permanece exatamente como estava.
+  // Esta operação é uma transferência pontual, não uma reconstrução da semana.
+  saveJSON(CHECKLIST_FILE, checklist);
+
+  if (client) {
+    await refreshMainPanel(client).catch(() => {});
+  }
+
+  return true;
 }
 
 function buildCheckedBackupByMemberId(responsaveis = {}) {
@@ -1405,7 +1515,28 @@ async function sendSundayReminders(client) {
   }
 }
 
+let CHECKLIST_RUNTIME_CLIENT = null;
+
+dashOn(
+  "gi:responsavel_transferido",
+  async (data) => {
+    try {
+      await applyGiResponsibleTransferToCurrentWeek(
+        CHECKLIST_RUNTIME_CLIENT,
+        data
+      );
+    } catch (error) {
+      console.error(
+        "[ChecklistLogs] Falha ao aplicar transferência de responsável do Controle GI:",
+        error
+      );
+    }
+  }
+);
+
 export async function checklistOnReady(client) {
+  CHECKLIST_RUNTIME_CLIENT = client;
+
   const weekKey = weekKeyFromDateSP();
   const checklist = readChecklistWeek(weekKey);
   const currentWeekData = checklist.weeks[weekKey];
