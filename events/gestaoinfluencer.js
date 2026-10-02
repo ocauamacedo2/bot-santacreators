@@ -137,6 +137,7 @@ const {
       generateWeeklyMemberPrivateDm,
       generateMemberLifecyclePrivateDm,
       generateMemberDismissalFormsSummary,
+      generateMemberReturnFormsSummary,
       migrateWeeklyMemberAiFeedbackDiscordId
     } = weeklyMemberAiFeedback;
 
@@ -226,6 +227,19 @@ CHANNEL_MEMBER_HISTORY_LOG: '1555344870195994754',
       // snapshots pra restauração após punição
       // NOVO: lastCountdownWarningAt para evitar spam de DM
       roleSnapshots: new Map(), // userId -> { roleIds: string[], restoreAtMs:number, createdAtMs:number, recordMessageId:string|null }
+
+      // =====================================================
+      // SNAPSHOTS PERSISTENTES DE DESLIGAMENTO
+      // =====================================================
+      //
+      // Chave: ID da mensagem antiga do Controle GI.
+      //
+      // Diferente de roleSnapshots, estes snapshots NÃO são
+      // temporários. Eles preservam a trajetória necessária
+      // para o botão "Restaurar Membro" continuar funcionando
+      // mesmo depois de restart/deploy.
+      // =====================================================
+      disconnectedSnapshots: new Map(),
 
       // 👑 OVERRIDE ABSOLUTO
       // Mudanças manuais feitas por:
@@ -718,6 +732,57 @@ r.responsibleSetBy   = r.responsibleSetBy || null;
 r.responsibleUpdatedAtMs = typeof r.responsibleUpdatedAtMs === 'number' ? r.responsibleUpdatedAtMs : null;
 r.warnNoRoleGI       = !!r.warnNoRoleGI;
 r.responsibleHistory = Array.isArray(r.responsibleHistory) ? r.responsibleHistory : [];
+
+// =====================================================
+// MIGRAÇÃO DO HISTÓRICO DE RESPONSÁVEL
+// =====================================================
+//
+// Registros antigos podiam possuir responsibleUserId atual,
+// mas responsibleHistory vazio. Nesse caso o desligamento
+// mostrava "—" mesmo existindo um responsável direto.
+//
+// Garante que o responsável atual também exista como a
+// última etapa conhecida do histórico.
+// =====================================================
+if (r.responsibleUserId) {
+  const lastResponsible =
+    r.responsibleHistory.at(-1) ||
+    null;
+
+  if (
+    String(lastResponsible?.userId || "") !==
+      String(r.responsibleUserId) ||
+    String(lastResponsible?.type || "") !==
+      String(r.responsibleType || "")
+  ) {
+    r.responsibleHistory.push({
+      atMs:
+        Number(r.responsibleUpdatedAtMs || 0) ||
+        Number(r.createdAtMs || 0) ||
+        Number(r.joinDateMs || 0) ||
+        Date.now(),
+
+      userId:
+        String(r.responsibleUserId),
+
+      type:
+        r.responsibleType ||
+        null,
+
+      setBy:
+        r.responsibleSetBy ||
+        r.registrarId ||
+        client.user?.id ||
+        null,
+
+      manual:
+        !!r.responsibleManual,
+
+      source:
+        "legacy_current_responsible_recovered"
+    });
+  }
+}
           r.pausedAtMs         = (typeof r.pausedAtMs === 'number') ? r.pausedAtMs : null;
           r.totalPausedMs      = (typeof r.totalPausedMs === 'number') ? r.totalPausedMs : 0;
           r.roleSetAtMs        = (typeof r.roleSetAtMs === 'number') ? r.roleSetAtMs : null;
@@ -773,6 +838,122 @@ const prev = byUser.get(r.targetId);
             createdAtMs: Number(s.createdAtMs || 0),
             recordMessageId: s.recordMessageId ? String(s.recordMessageId) : null
           });
+        }
+
+        // =====================================================
+        // SNAPSHOTS PERSISTENTES DE DESLIGAMENTO
+        // =====================================================
+
+        SC_GI_STATE.disconnectedSnapshots.clear();
+
+        for (const item of (data.disconnectedSnapshots || [])) {
+          const controlMessageId =
+            String(
+              item?.controlMessageId ||
+              item?.snapshot?.messageId ||
+              ""
+            ).trim();
+
+          const targetId =
+            String(
+              item?.snapshot?.targetId ||
+              item?.targetId ||
+              ""
+            ).trim();
+
+          if (
+            !controlMessageId ||
+            !targetId
+          ) {
+            continue;
+          }
+
+          SC_GI_STATE.disconnectedSnapshots.set(
+            controlMessageId,
+            {
+              ...item,
+              controlMessageId,
+
+              snapshot: {
+                ...(item.snapshot || {}),
+                messageId:
+                  String(
+                    item?.snapshot?.messageId ||
+                    controlMessageId
+                  ),
+                targetId,
+              },
+
+              roleIdsBefore:
+                Array.isArray(
+                  item?.roleIdsBefore
+                )
+                  ? item.roleIdsBefore.map(String)
+                  : [],
+
+              restored:
+                item?.restored ===
+                true,
+            }
+          );
+        }
+
+        // =====================================================
+        // SNAPSHOTS PERSISTENTES DE DESLIGAMENTO
+        // =====================================================
+
+        SC_GI_STATE.disconnectedSnapshots.clear();
+
+        for (const item of (data.disconnectedSnapshots || [])) {
+          const controlMessageId =
+            String(
+              item?.controlMessageId ||
+              item?.snapshot?.messageId ||
+              ""
+            ).trim();
+
+          const targetId =
+            String(
+              item?.snapshot?.targetId ||
+              item?.targetId ||
+              ""
+            ).trim();
+
+          if (
+            !controlMessageId ||
+            !targetId
+          ) {
+            continue;
+          }
+
+          SC_GI_STATE.disconnectedSnapshots.set(
+            controlMessageId,
+            {
+              ...item,
+              controlMessageId,
+
+              snapshot: {
+                ...(item.snapshot || {}),
+                messageId:
+                  String(
+                    item?.snapshot?.messageId ||
+                    controlMessageId
+                  ),
+                targetId,
+              },
+
+              roleIdsBefore:
+                Array.isArray(
+                  item?.roleIdsBefore
+                )
+                  ? item.roleIdsBefore.map(String)
+                  : [],
+
+              restored:
+                item?.restored ===
+                true,
+            }
+          );
         }
 
         // 👑 OVERRIDES MANUAIS PERSISTENTES
@@ -850,7 +1031,6 @@ const prev = byUser.get(r.targetId);
             count: v.count || 0,
             lastAtMs: v.lastAtMs ?? null
           })),
-
           roleSnapshots: Array.from(
             SC_GI_STATE.roleSnapshots.entries()
           ).map(([userId, s]) => ({
@@ -861,6 +1041,16 @@ const prev = byUser.get(r.targetId);
             restoreAtMs: s.restoreAtMs ?? 0,
             createdAtMs: s.createdAtMs ?? 0,
             recordMessageId: s.recordMessageId ?? null
+          })),
+
+          disconnectedSnapshots: Array.from(
+            SC_GI_STATE.disconnectedSnapshots.entries()
+          ).map(([controlMessageId, snapshotData]) => ({
+            ...snapshotData,
+            controlMessageId,
+            roleIdsBefore: Array.isArray(snapshotData?.roleIdsBefore)
+              ? snapshotData.roleIdsBefore.map(String)
+              : [],
           })),
 
           // 👑 Alterações manuais feitas por Você/Owner.
@@ -3070,6 +3260,87 @@ async function assertCanManageGIRecord(
       return true;
     }
 
+    // =====================================================
+    // AVISO PADRÃO NO TICKET PESSOAL APÓS RESTAURAÇÃO
+    // =====================================================
+
+    async function sendPersonalTicketRestoreNotice(
+      guild,
+      userId,
+      ticketChannelId
+    ) {
+      if (
+        !guild ||
+        !userId ||
+        !ticketChannelId
+      ) {
+        return false;
+      }
+
+      const channel =
+        guild.channels.cache.get(
+          String(ticketChannelId)
+        ) ||
+        await guild.channels
+          .fetch(
+            String(ticketChannelId)
+          )
+          .catch(
+            () => null
+          );
+
+      if (
+        !channel?.isTextBased?.()
+      ) {
+        return false;
+      }
+
+      const embed =
+        new EmbedBuilder()
+          .setColor(
+            0x2ecc71
+          )
+          .setTitle(
+            '💜 Que bom ter você de volta'
+          )
+          .setDescription(
+            [
+              `Que bom te ver de volta, <@${userId}>! Seu retorno à **SantaCreators** foi registrado.`,
+              '',
+              '🎫 **Este continua sendo o mesmo Ticket Pessoal de antes.** Seu histórico anterior foi preservado e você pode continuar usando este canal normalmente.',
+              '',
+              '📌 Como este ticket já representa sua trajetória, você não precisa abrir outra entrevista apenas por causa desta restauração do Controle GI.',
+              '',
+              'A partir daqui, a equipe pode retomar o acompanhamento pelo ponto em que você havia parado e orientar os próximos passos. Bem-vindo(a) de volta. 💜',
+            ].join(
+              '\n'
+            )
+          )
+          .setFooter({
+            text:
+              'SantaCreators • Ticket Pessoal'
+          })
+          .setTimestamp();
+
+      await channel.send({
+        content:
+          `<@${userId}>`,
+
+        embeds: [
+          embed
+        ],
+
+        allowedMentions: {
+          parse: [],
+          users: [
+            String(userId)
+          ],
+        },
+      });
+
+      return true;
+    }
+
     // ====================== ROLE GI HELPERS (OBRIGATÓRIO) ======================
     const GI_ROLE_ID = SC_GI_CFG.ROLE_GESTAOINFLUENCER; // 1371733765243670538
 
@@ -4137,6 +4408,16 @@ let roleSetAtMs =
         autoResp = await findBestResponsible(guild, targetId);
       }
 
+      const initialResponsibleUserId =
+        options.responsibleUserId ||
+        autoResp?.userId ||
+        null;
+
+      const initialResponsibleType =
+        options.responsibleType ||
+        autoResp?.type ||
+        null;
+
       const days   = daysBetween(joinMs, nowMs());
       const weeks  = Math.max(0, Math.floor(days / 7));
       const months = monthsSince(joinMs);
@@ -4159,13 +4440,26 @@ let roleSetAtMs =
         oneMonthNotifiedAt: null,
         note: '',
 
-responsibleUserId: options.responsibleUserId || autoResp?.userId || null,
-responsibleType: options.responsibleType || autoResp?.type || null,
+responsibleUserId: initialResponsibleUserId,
+responsibleType: initialResponsibleType,
 responsibleManual: !!options.responsibleUserId,
 responsibleSetBy: options.responsibleUserId ? registrar.id : null,
-responsibleUpdatedAtMs: nowMs(),
+responsibleUpdatedAtMs: createdNowMs,
 warnNoRoleGI,
-responsibleHistory: [],
+responsibleHistory: initialResponsibleUserId
+  ? [
+      {
+        atMs: createdNowMs,
+        userId: String(initialResponsibleUserId),
+        type: initialResponsibleType,
+        setBy: registrar.id,
+        manual: !!options.responsibleUserId,
+        source: options.restoreSnapshot
+          ? "restore"
+          : "creation",
+      }
+    ]
+  : [],
 
 // =====================================================
 // HISTÓRICO DE ÁREAS / CARGOS
@@ -4221,7 +4515,10 @@ pausedAtMs: initialActive ? null : createdNowMs,
 totalPausedMs: 0,
         roleSetAtMs,
         passaporte: options.passaporte || null,// ✅ Salva o ID se vier do pedirset
-        personalTicketChannelId: null,
+        personalTicketChannelId:
+          options.personalTicketChannelId
+            ? String(options.personalTicketChannelId)
+            : null,
         lastControlVisualRefreshAtMs: 0
       };
 
@@ -4273,22 +4570,24 @@ if (
 // mensagem real no Discord, então o ticket pode descer de
 // "Contratar em Game" para a categoria da Equipe Creator.
 // =====================================================
-dashEmit(
-  'gi:controle_criado',
-  {
-    userId:
-      record.targetId,
+if (options.suppressLifecycleEvents !== true) {
+  dashEmit(
+    'gi:controle_criado',
+    {
+      userId:
+        record.targetId,
 
-    guildId:
-      guild.id,
+      guildId:
+        guild.id,
 
-    active:
-      record.active,
+      active:
+        record.active,
 
-    timestamp:
-      Date.now()
-  }
-);
+      timestamp:
+        Date.now()
+    }
+  );
+}
 
 // 🔁 Agora adiciona os botões com o ID REAL da mensagem.
 // Nunca deixa customId com TEMP no registro oficial.
@@ -4309,10 +4608,12 @@ if (record.active) {
 
   // ✅ se a pessoa foi desligada antes e voltou na mesma semana,
   // isso limpa o bloqueio visual (-99999) e devolve os pontos antigos + novos
-  emitGIReturned(record.targetId, {
-    reason: 'create_registro_active',
-    messageId: record.messageId
-  });
+  if (options.suppressLifecycleEvents !== true) {
+    emitGIReturned(record.targetId, {
+      reason: 'create_registro_active',
+      messageId: record.messageId
+    });
+  }
 }
 
 // atualiza flags visuais sem sobrescrever a primeira data histórica
@@ -4338,33 +4639,37 @@ try {
   SC_GI_scheduleSave();
 } catch {}
 
-      // ✅ NOVO: DM BOAS-VINDAS (parabéns + 1 mês = vip/destaques)
-      const welcome = dmWelcomeEmbed(record, targetUser);
-      await sendDM_andMirror(guild, targetUser, welcome);
+      if (options.suppressWelcomeDm !== true) {
+        // ✅ NOVO: DM BOAS-VINDAS (parabéns + 1 mês = vip/destaques)
+        const welcome = dmWelcomeEmbed(record, targetUser);
+        await sendDM_andMirror(guild, targetUser, welcome);
+      }
 
-      // log
-      await logMsg(
-        guild,
-        'Novo Registro (GI)',
-        [
-          `👤 **Membro:** <@${targetUser.id}> (\`${targetUser.id}\`)`,
-          `🗓️ **Entrada:** \`${msToDDMMYYYY(joinMs)}\``,
-          `🧭 **Área:** \`${areaStr}\``,
-          record.active
-            ? `✅ **Cargo GI setado automaticamente:** <@&${GI_ROLE_ID}>`
-            : `⏸️ **Registro criado pausado** (sem setar o cargo GI agora).`,
-          `🧾 **Por:** <@${registrar.id}> (\`${registrar.id}\`)`,
-          `🔗 **Link:** [Abrir registro](https://discord.com/channels/${guild.id}/${record.channelId}/${record.messageId})`
-        ].filter(Boolean).join('\n'),
-        { 
-          thumb: targetUser.displayAvatarURL?.({ size: 128 }),
-          components: [
-            new ActionRowBuilder().addComponents(
-              new ButtonBuilder().setCustomId(`SC_GI_UNDO_DESLIGAR:${record.messageId}`).setLabel('Desfazer (Remover)').setStyle(ButtonStyle.Danger)
-            )
-          ]
-        }
-      );
+      if (options.suppressNewRecordLog !== true) {
+        // log
+        await logMsg(
+          guild,
+          'Novo Registro (GI)',
+          [
+            `👤 **Membro:** <@${targetUser.id}> (\`${targetUser.id}\`)`,
+            `🗓️ **Entrada:** \`${msToDDMMYYYY(joinMs)}\``,
+            `🧭 **Área:** \`${areaStr}\``,
+            record.active
+              ? `✅ **Cargo GI setado automaticamente:** <@&${GI_ROLE_ID}>`
+              : `⏸️ **Registro criado pausado** (sem setar o cargo GI agora).`,
+            `🧾 **Por:** <@${registrar.id}> (\`${registrar.id}\`)`,
+            `🔗 **Link:** [Abrir registro](https://discord.com/channels/${guild.id}/${record.channelId}/${record.messageId})`
+          ].filter(Boolean).join('\n'),
+          { 
+            thumb: targetUser.displayAvatarURL?.({ size: 128 }),
+            components: [
+              new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`SC_GI_UNDO_DESLIGAR:${record.messageId}`).setLabel('Desfazer (Remover)').setStyle(ButtonStyle.Danger)
+              )
+            ]
+          }
+        );
+      }
 
       await ensureMenu(guild);
 
@@ -7104,6 +7409,499 @@ async function removeControleRegistroDoChat(guild, snapshot, motivo = 'Desligame
   }
 }
 
+// =====================================================
+// RECUPERAÇÃO RETROATIVA DE DESLIGAMENTOS ANTIGOS
+// =====================================================
+//
+// Desligamentos feitos antes da criação de
+// disconnectedSnapshots não possuem snapshot persistente.
+//
+// Ao clicar no botão antigo, usamos o próprio embed do log
+// para reconstruir somente aquilo que está comprovado nele.
+// Dados que não existem no log NÃO são inventados.
+// =====================================================
+
+function recoverLegacyDisconnectSnapshotFromLogMessage(
+  guild,
+  logMessage,
+  controlMessageId
+) {
+  const normalizedControlMessageId =
+    String(
+      controlMessageId ||
+      ""
+    ).trim();
+
+  if (!normalizedControlMessageId) {
+    return null;
+  }
+
+  const existing =
+    SC_GI_STATE.disconnectedSnapshots.get(
+      normalizedControlMessageId
+    );
+
+  if (existing) {
+    return existing;
+  }
+
+  const embed =
+    logMessage?.embeds?.[0] ||
+    null;
+
+  const description =
+    String(
+      embed?.description ||
+      ""
+    );
+
+  const targetId =
+    description.match(
+      /👤\s*\*\*Membro:\*\*\s*<@!?(\d{17,20})>/i
+    )?.[1] ||
+    null;
+
+  if (!targetId) {
+    return null;
+  }
+
+  const area =
+    description.match(
+      /🧭\s*\*\*Área:\*\*\s*`([^`]+)`/i
+    )?.[1]?.trim() ||
+    "A Definir";
+
+  const entryText =
+    description.match(
+      /🗓️\s*\*\*Entrada:\*\*\s*`([^`]+)`/i
+    )?.[1]?.trim() ||
+    null;
+
+  const registrarId =
+    description.match(
+      /🧾\s*\*\*Registrado por:\*\*\s*<@!?(\d{17,20})>/i
+    )?.[1] ||
+    guild.client.user.id;
+
+  const disconnectedBy =
+    description.match(
+      /🔧\s*\*\*Desligado por:\*\*\s*<@!?(\d{17,20})>/i
+    )?.[1] ||
+    null;
+
+  const reason =
+    description.match(
+      /📝\s*\*\*Motivo:\*\*\s*([^\n]+)/i
+    )?.[1]?.trim() ||
+    "Desligamento anterior recuperado pelo log";
+
+  const disconnectedAtMs =
+    Number(
+      logMessage?.createdTimestamp ||
+      0
+    ) ||
+    Date.now();
+
+  const joinDateMs =
+    entryText
+      ? fromDDMMYYYY_toMs(
+          entryText
+        )
+      : null;
+
+  const responsibleHistory =
+    [];
+
+  const responsibleRegex =
+    /•\s*(\d{2}\/\d{2}\/\d{4})\s*—\s*([^:\n]+):\s*<@!?(\d{17,20})>\s*\(def\.\s*por\s*<@!?(\d{17,20})>\)/g;
+
+  let responsibleMatch;
+
+  while (
+    (
+      responsibleMatch =
+        responsibleRegex.exec(
+          description
+        )
+    )
+  ) {
+    const label =
+      String(
+        responsibleMatch[2] ||
+        ""
+      )
+        .toLowerCase();
+
+    const type =
+      label.includes(
+        "owner"
+      )
+        ? "OWNER"
+        : label.includes(
+            "creators"
+          )
+          ? "RESP_CREATORS"
+          : label.includes(
+              "influ"
+            )
+            ? "RESP_INFLU"
+            : label.includes(
+                "líder"
+              ) ||
+              label.includes(
+                "lider"
+              )
+              ? "RESP_LIDER"
+              : null;
+
+    responsibleHistory.push({
+      atMs:
+        fromDDMMYYYY_toMs(
+          responsibleMatch[1]
+        ) ||
+        disconnectedAtMs,
+
+      userId:
+        responsibleMatch[3],
+
+      type,
+
+      setBy:
+        responsibleMatch[4],
+
+      manual:
+        true,
+
+      source:
+        "legacy_disconnect_log",
+    });
+  }
+
+  const lastResponsible =
+    responsibleHistory.at(-1) ||
+    null;
+
+  const member =
+    guild.members.cache.get(
+      targetId
+    ) ||
+    null;
+
+  const passportMatch =
+    String(
+      member?.displayName ||
+      ""
+    ).match(
+      /\|\s*(\d{1,12})\s*$/
+    );
+
+  const safeJoinDateMs =
+    Number(joinDateMs || 0) ||
+    disconnectedAtMs;
+
+  const snapshot = {
+    messageId:
+      normalizedControlMessageId,
+
+    guildId:
+      guild.id,
+
+    channelId:
+      SC_GI_CFG.CHANNEL_MENU_E_REGISTROS,
+
+    targetId,
+
+    registrarId,
+
+    area,
+
+    joinDateMs:
+      safeJoinDateMs,
+
+    createdAtMs:
+      safeJoinDateMs,
+
+    active:
+      false,
+
+    nextWeekTickMs:
+      null,
+
+    oneMonthNotified:
+      false,
+
+    oneMonthNotifiedAt:
+      null,
+
+    note:
+      "",
+
+    responsibleUserId:
+      lastResponsible?.userId ||
+      null,
+
+    responsibleType:
+      lastResponsible?.type ||
+      null,
+
+    responsibleManual:
+      !!lastResponsible,
+
+    responsibleSetBy:
+      lastResponsible?.setBy ||
+      null,
+
+    responsibleUpdatedAtMs:
+      lastResponsible?.atMs ||
+      null,
+
+    responsibleHistory,
+
+    warnNoRoleGI:
+      false,
+
+    areaHistory: [
+      {
+        area,
+        startedAtMs:
+          safeJoinDateMs,
+        endedAtMs:
+          disconnectedAtMs,
+        changedBy:
+          registrarId,
+        source:
+          "legacy_disconnect_log",
+      }
+    ],
+
+    activityHistory: [
+      {
+        status:
+          "disconnected",
+        atMs:
+          disconnectedAtMs,
+        changedBy:
+          disconnectedBy ||
+          registrarId,
+        reason,
+      }
+    ],
+
+    pausedAtMs:
+      null,
+
+    totalPausedMs:
+      0,
+
+    roleSetAtMs:
+      null,
+
+    passaporte:
+      passportMatch?.[1] ||
+      null,
+
+    personalTicketChannelId:
+      null,
+
+    discordIdHistory:
+      [],
+
+    lastControlVisualRefreshAtMs:
+      0,
+  };
+
+  const archive = {
+    controlMessageId:
+      normalizedControlMessageId,
+
+    snapshot,
+
+    roleIdsBefore:
+      [],
+
+    nicknameBefore:
+      null,
+
+    personalTicketChannelId:
+      null,
+
+    formsOriginalThreadId:
+      null,
+
+    disconnectedAtMs,
+
+    disconnectedBy,
+
+    reason,
+
+    disconnectLogMessageId:
+      logMessage?.id ||
+      null,
+
+    restored:
+      false,
+
+    restoredAtMs:
+      null,
+
+    restoredBy:
+      null,
+
+    restoredControlMessageId:
+      null,
+
+    legacyRecovered:
+      true,
+  };
+
+  SC_GI_STATE.disconnectedSnapshots.set(
+    normalizedControlMessageId,
+    archive
+  );
+
+  SC_GI_scheduleSave();
+
+  return archive;
+}
+
+async function restoreRolesFromDisconnectArchive(
+  guild,
+  archive,
+  restoredRecord
+) {
+  const member =
+    await guild.members
+      .fetch(
+        restoredRecord.targetId
+      )
+      .catch(
+        () => null
+      );
+
+  if (!member) {
+    throw new Error(
+      "Membro não encontrado no servidor para restaurar os cargos."
+    );
+  }
+
+  setRoleBypass(
+    restoredRecord.targetId,
+    30000
+  );
+
+  const savedRoleIds =
+    Array.isArray(
+      archive?.roleIdsBefore
+    )
+      ? archive.roleIdsBefore
+          .map(String)
+          .filter(Boolean)
+      : [];
+
+  const addedRoleIds =
+    [];
+
+  if (
+    savedRoleIds.length >
+    0
+  ) {
+    const botMember =
+      guild.members.me;
+
+    const restorableRoleIds =
+      savedRoleIds.filter(
+        roleId => {
+          const role =
+            guild.roles.cache.get(
+              roleId
+            );
+
+          if (
+            !role ||
+            role.managed ||
+            role.id === guild.id ||
+            member.roles.cache.has(
+              role.id
+            )
+          ) {
+            return false;
+          }
+
+          return (
+            role.comparePositionTo(
+              botMember.roles.highest
+            ) <
+            0
+          );
+        }
+      );
+
+    if (
+      restorableRoleIds.length >
+      0
+    ) {
+      await member.roles.add(
+        restorableRoleIds,
+        "Controle GI: restauração do snapshot anterior ao desligamento"
+      );
+
+      addedRoleIds.push(
+        ...restorableRoleIds
+      );
+    }
+
+    if (
+      archive?.nicknameBefore &&
+      member.manageable
+    ) {
+      await member.setNickname(
+        String(
+          archive.nicknameBefore
+        ).slice(
+          0,
+          32
+        ),
+        "Controle GI: restaurar nickname anterior ao desligamento"
+      ).catch(
+        () => null
+      );
+    }
+  } else {
+    const areaProfile =
+      resolveAreaProfile(
+        restoredRecord.area
+      );
+
+    if (
+      areaProfile &&
+      !areaProfile.skipRoleTransition
+    ) {
+      const transition =
+        await applyAreaRoleTransition(
+          guild,
+          restoredRecord,
+          areaProfile
+        );
+
+      addedRoleIds.push(
+        ...(transition?.addedRoleIds || [])
+      );
+    }
+  }
+
+  await addGIRole(
+    guild,
+    restoredRecord.targetId,
+    "Membro restaurado: GI obrigatório"
+  );
+
+  return [
+    ...new Set(
+      addedRoleIds
+    )
+  ];
+}
+
 async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado manualmente') {
   const rec = SC_GI_STATE.registros.get(messageId);
   if (!rec) throw new Error('Registro não encontrado.');
@@ -7115,7 +7913,95 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
     'desligar da gestão'
   );
 
-  const snapshot = { ...rec };
+  const snapshot =
+    structuredClone(
+      rec
+    );
+
+  const disconnectedAtMs =
+    nowMs();
+
+  snapshot.responsibleHistory =
+    Array.isArray(
+      snapshot.responsibleHistory
+    )
+      ? structuredClone(
+          snapshot.responsibleHistory
+        )
+      : [];
+
+  // =====================================================
+  // GARANTE O RESPONSÁVEL ATUAL NO HISTÓRICO
+  // =====================================================
+
+  if (snapshot.responsibleUserId) {
+    const lastResponsible =
+      snapshot.responsibleHistory.at(-1) ||
+      null;
+
+    if (
+      String(lastResponsible?.userId || "") !==
+        String(snapshot.responsibleUserId) ||
+      String(lastResponsible?.type || "") !==
+        String(snapshot.responsibleType || "")
+    ) {
+      snapshot.responsibleHistory.push({
+        atMs:
+          Number(snapshot.responsibleUpdatedAtMs || 0) ||
+          disconnectedAtMs,
+
+        userId:
+          String(snapshot.responsibleUserId),
+
+        type:
+          snapshot.responsibleType ||
+          null,
+
+        setBy:
+          snapshot.responsibleSetBy ||
+          snapshot.registrarId ||
+          actor?.id ||
+          guild.client.user.id,
+
+        manual:
+          !!snapshot.responsibleManual,
+
+        source:
+          "disconnect_snapshot_recovery"
+      });
+    }
+  }
+
+  // =====================================================
+  // SNAPSHOT EXATO DOS CARGOS / NICK ANTES DA LIMPEZA
+  // =====================================================
+
+  const memberBeforeDisconnect =
+    await guild.members
+      .fetch(
+        snapshot.targetId
+      )
+      .catch(
+        () => null
+      );
+
+  const roleIdsBeforeDisconnect =
+    memberBeforeDisconnect
+      ? memberBeforeDisconnect.roles.cache
+          .filter(
+            role =>
+              role.id !== guild.id &&
+              !role.managed
+          )
+          .map(
+            role =>
+              String(role.id)
+          )
+      : [];
+
+  const nicknameBeforeDisconnect =
+    memberBeforeDisconnect?.nickname ||
+    null;
 
   // =====================================================
   // PRESERVA O VÍNCULO DO TICKET ANTES DE APAGAR O GI
@@ -7153,6 +8039,126 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
     desligamentoPersonalTicketChannelId ||
     snapshot.personalTicketChannelId ||
     null;
+
+  const desligamentoFormsOriginalThreadId =
+    await resolveFormsCreatorThreadIdForGI(
+      snapshot.targetId
+    ).catch(
+      () => null
+    );
+
+  snapshot.activityHistory =
+    Array.isArray(
+      snapshot.activityHistory
+    )
+      ? structuredClone(
+          snapshot.activityHistory
+        )
+      : [];
+
+  snapshot.activityHistory.push({
+    status:
+      "disconnected",
+
+    atMs:
+      disconnectedAtMs,
+
+    changedBy:
+      actor?.id ||
+      guild.client.user.id,
+
+    reason:
+      motivo,
+  });
+
+  snapshot.areaHistory =
+    Array.isArray(
+      snapshot.areaHistory
+    )
+      ? structuredClone(
+          snapshot.areaHistory
+        )
+      : [];
+
+  if (
+    snapshot.areaHistory.length >
+    0
+  ) {
+    const lastArea =
+      snapshot.areaHistory[
+        snapshot.areaHistory.length -
+        1
+      ];
+
+    if (
+      lastArea &&
+      !lastArea.endedAtMs
+    ) {
+      lastArea.endedAtMs =
+        disconnectedAtMs;
+    }
+  }
+
+  // =====================================================
+  // SNAPSHOT PERSISTENTE DO DESLIGAMENTO
+  // =====================================================
+
+  SC_GI_STATE.disconnectedSnapshots.set(
+    String(snapshot.messageId),
+    {
+      controlMessageId:
+        String(snapshot.messageId),
+
+      snapshot:
+        structuredClone(
+          snapshot
+        ),
+
+      roleIdsBefore:
+        roleIdsBeforeDisconnect,
+
+      nicknameBefore:
+        nicknameBeforeDisconnect,
+
+      personalTicketChannelId:
+        snapshot.personalTicketChannelId ||
+        null,
+
+      formsOriginalThreadId:
+        desligamentoFormsOriginalThreadId ||
+        null,
+
+      disconnectedAtMs,
+
+      disconnectedBy:
+        actor?.id ||
+        null,
+
+      reason:
+        motivo,
+
+      disconnectLogMessageId:
+        null,
+
+      restored:
+        false,
+
+      restoredAtMs:
+        null,
+
+      restoredBy:
+        null,
+
+      restoredControlMessageId:
+        null,
+
+      legacyRecovered:
+        false,
+    }
+  );
+
+  // Salva ANTES de qualquer remoção de cargo/controle.
+  await SC_GI_saveNow();
 
   // =====================================================
   // GERA A RETROSPECTIVA ANTES DE REMOVER CARGOS,
@@ -7703,7 +8709,28 @@ try {
               .setStyle(ButtonStyle.Success)
           );
 
-          await ch.send({ embeds: [emb], components: [rowUndo] });
+          const disconnectLogMessage =
+            await ch.send({
+              embeds: [emb],
+              components: [rowUndo]
+            });
+
+          const archivedDisconnect =
+            SC_GI_STATE.disconnectedSnapshots.get(
+              String(snapshot.messageId)
+            );
+
+          if (archivedDisconnect) {
+            archivedDisconnect.disconnectLogMessageId =
+              disconnectLogMessage.id;
+
+            SC_GI_STATE.disconnectedSnapshots.set(
+              String(snapshot.messageId),
+              archivedDisconnect
+            );
+
+            SC_GI_scheduleSave();
+          }
         }
       } catch (e) {
         await logMsg(
@@ -7723,6 +8750,914 @@ try {
           force: true,
         }
       );
+    }
+
+    // =====================================================
+    // RESTAURAÇÃO COMPLETA DE UM DESLIGAMENTO
+    // =====================================================
+
+    async function restoreDesligamento(
+      guild,
+      actor,
+      oldControlMessageId
+    ) {
+      const archiveKey =
+        String(
+          oldControlMessageId ||
+          ""
+        ).trim();
+
+      if (!archiveKey) {
+        throw new Error(
+          "ID do desligamento inválido."
+        );
+      }
+
+      const archive =
+        SC_GI_STATE.disconnectedSnapshots.get(
+          archiveKey
+        );
+
+      if (!archive?.snapshot?.targetId) {
+        throw new Error(
+          "Snapshot do desligamento não encontrado. Clique novamente no botão original de Restaurar Membro para recuperar os dados do log."
+        );
+      }
+
+      const snapshot =
+        structuredClone(
+          archive.snapshot
+        );
+
+      await assertCanManageGIRecord(
+        guild,
+        actor,
+        snapshot.targetId,
+        "restaurar o membro na gestão"
+      );
+
+      const alreadyActive =
+        getLatestRecordByTarget(
+          snapshot.targetId
+        );
+
+      if (alreadyActive) {
+        throw new Error(
+          `Este membro já possui um Controle GI ativo/pausado: ${alreadyActive.messageId}.`
+        );
+      }
+
+      const member =
+        await guild.members
+          .fetch(
+            snapshot.targetId
+          )
+          .catch(
+            () => null
+          );
+
+      if (!member) {
+        throw new Error(
+          "O membro não está mais no servidor. Não é possível restaurar o Controle GI enquanto ele estiver fora."
+        );
+      }
+
+      const ticketInfo =
+        await resolvePersonalTicketInfo(
+          guild.id,
+          snapshot.targetId,
+          archive.personalTicketChannelId ||
+          snapshot.personalTicketChannelId ||
+          null
+        ).catch(
+          () => null
+        );
+
+      const personalTicketChannelId =
+        ticketInfo?.channelId ||
+        archive.personalTicketChannelId ||
+        snapshot.personalTicketChannelId ||
+        null;
+
+      const originalFormsThreadId =
+        archive.formsOriginalThreadId ||
+        await resolveFormsCreatorThreadIdForGI(
+          snapshot.targetId
+        ).catch(
+          () => null
+        );
+
+      let responsibleUserId =
+        snapshot.responsibleUserId ||
+        null;
+
+      let responsibleType =
+        snapshot.responsibleType ||
+        null;
+
+      if (responsibleUserId) {
+        const responsibleMember =
+          await guild.members
+            .fetch(
+              responsibleUserId
+            )
+            .catch(
+              () => null
+            );
+
+        const currentType =
+          getHighestTypeFromMember(
+            responsibleMember
+          );
+
+        if (
+          !responsibleMember ||
+          !currentType ||
+          responsibleUserId ===
+            snapshot.targetId
+        ) {
+          responsibleUserId =
+            null;
+
+          responsibleType =
+            null;
+        } else {
+          responsibleType =
+            currentType;
+        }
+      }
+
+      if (!responsibleUserId) {
+        const automaticResponsible =
+          await findBestResponsible(
+            guild,
+            snapshot.targetId
+          );
+
+        responsibleUserId =
+          automaticResponsible?.userId ||
+          null;
+
+        responsibleType =
+          automaticResponsible?.type ||
+          null;
+      }
+
+      await createRegistro(
+        guild,
+        actor,
+        msToDDMMYYYY(
+          snapshot.joinDateMs ||
+          archive.disconnectedAtMs ||
+          Date.now()
+        ),
+        snapshot.area ||
+        "A Definir",
+        snapshot.targetId,
+        {
+          initialActive:
+            true,
+
+          passaporte:
+            snapshot.passaporte ||
+            null,
+
+          responsibleUserId:
+            responsibleUserId ||
+            undefined,
+
+          responsibleType:
+            responsibleType ||
+            undefined,
+
+          personalTicketChannelId:
+            personalTicketChannelId ||
+            null,
+
+          fastCreate:
+            true,
+
+          restoreSnapshot:
+            true,
+
+          suppressWelcomeDm:
+            true,
+
+          suppressNewRecordLog:
+            true,
+
+          suppressLifecycleEvents:
+            true,
+        }
+      );
+
+      const restoredRecord =
+        getLatestRecordByTarget(
+          snapshot.targetId
+        );
+
+      if (!restoredRecord) {
+        throw new Error(
+          "O novo Controle GI não apareceu no state após a restauração."
+        );
+      }
+
+      const restoredAtMs =
+        nowMs();
+
+      const disconnectedAtMs =
+        Number(
+          archive.disconnectedAtMs ||
+          0
+        ) ||
+        restoredAtMs;
+
+      const pausedBeforeDisconnectMs =
+        Math.max(
+          0,
+          Number(
+            snapshot.totalPausedMs ||
+            0
+          ) +
+          (
+            snapshot.pausedAtMs
+              ? Math.max(
+                  0,
+                  disconnectedAtMs -
+                  Number(
+                    snapshot.pausedAtMs
+                  )
+                )
+              : 0
+          )
+        );
+
+      const disconnectedDurationMs =
+        Math.max(
+          0,
+          restoredAtMs -
+          disconnectedAtMs
+        );
+
+      restoredRecord.registrarId =
+        snapshot.registrarId ||
+        restoredRecord.registrarId;
+
+      restoredRecord.joinDateMs =
+        Number(
+          snapshot.joinDateMs ||
+          restoredRecord.joinDateMs
+        );
+
+      restoredRecord.createdAtMs =
+        Number(
+          snapshot.createdAtMs ||
+          restoredRecord.createdAtMs
+        );
+
+      restoredRecord.oneMonthNotified =
+        !!snapshot.oneMonthNotified;
+
+      restoredRecord.oneMonthNotifiedAt =
+        snapshot.oneMonthNotifiedAt ||
+        null;
+
+      restoredRecord.note =
+        snapshot.note ||
+        "";
+
+      restoredRecord.responsibleUserId =
+        responsibleUserId ||
+        null;
+
+      restoredRecord.responsibleType =
+        responsibleType ||
+        null;
+
+      restoredRecord.responsibleManual =
+        !!snapshot.responsibleManual;
+
+      restoredRecord.responsibleSetBy =
+        snapshot.responsibleSetBy ||
+        actor.id;
+
+      restoredRecord.responsibleUpdatedAtMs =
+        restoredAtMs;
+
+      restoredRecord.responsibleHistory =
+        Array.isArray(
+          snapshot.responsibleHistory
+        )
+          ? structuredClone(
+              snapshot.responsibleHistory
+            )
+          : [];
+
+      if (responsibleUserId) {
+        const lastResponsible =
+          restoredRecord.responsibleHistory.at(-1) ||
+          null;
+
+        if (
+          String(lastResponsible?.userId || "") !==
+            String(responsibleUserId) ||
+          String(lastResponsible?.type || "") !==
+            String(responsibleType || "")
+        ) {
+          restoredRecord.responsibleHistory.push({
+            atMs:
+              restoredAtMs,
+
+            userId:
+              String(responsibleUserId),
+
+            type:
+              responsibleType ||
+              null,
+
+            setBy:
+              actor.id,
+
+            manual:
+              false,
+
+            source:
+              "restore_after_disconnect",
+          });
+        }
+      }
+
+      restoredRecord.areaHistory =
+        Array.isArray(
+          snapshot.areaHistory
+        )
+          ? structuredClone(
+              snapshot.areaHistory
+            )
+          : [];
+
+      const lastOldArea =
+        restoredRecord.areaHistory.at(-1) ||
+        null;
+
+      if (
+        lastOldArea &&
+        !lastOldArea.endedAtMs
+      ) {
+        lastOldArea.endedAtMs =
+          disconnectedAtMs;
+      }
+
+      restoredRecord.areaHistory.push({
+        area:
+          snapshot.area ||
+          restoredRecord.area,
+
+        startedAtMs:
+          restoredAtMs,
+
+        endedAtMs:
+          null,
+
+        changedBy:
+          actor.id,
+
+        source:
+          "restore_after_disconnect",
+      });
+
+      restoredRecord.activityHistory =
+        Array.isArray(
+          snapshot.activityHistory
+        )
+          ? structuredClone(
+              snapshot.activityHistory
+            )
+          : [];
+
+      const hasDisconnectEvent =
+        restoredRecord.activityHistory.some(
+          item =>
+            item?.status ===
+              "disconnected" &&
+            Math.abs(
+              Number(item?.atMs || 0) -
+              disconnectedAtMs
+            ) <
+              5000
+        );
+
+      if (!hasDisconnectEvent) {
+        restoredRecord.activityHistory.push({
+          status:
+            "disconnected",
+
+          atMs:
+            disconnectedAtMs,
+
+          changedBy:
+            archive.disconnectedBy ||
+            null,
+
+          reason:
+            archive.reason ||
+            "Desligamento",
+        });
+      }
+
+      restoredRecord.activityHistory.push({
+        status:
+          "active",
+
+        atMs:
+          restoredAtMs,
+
+        changedBy:
+          actor.id,
+
+        reason:
+          "Membro restaurado após desligamento",
+      });
+
+      restoredRecord.active =
+        true;
+
+      restoredRecord.pausedAtMs =
+        null;
+
+      restoredRecord.totalPausedMs =
+        pausedBeforeDisconnectMs +
+        disconnectedDurationMs;
+
+      restoredRecord.nextWeekTickMs =
+        computeNextWeekTick(
+          restoredRecord.joinDateMs
+        );
+
+      restoredRecord.roleSetAtMs =
+        Number(
+          snapshot.roleSetAtMs ||
+          0
+        ) ||
+        restoredAtMs;
+
+      restoredRecord.passaporte =
+        snapshot.passaporte ||
+        restoredRecord.passaporte ||
+        null;
+
+      restoredRecord.personalTicketChannelId =
+        personalTicketChannelId ||
+        null;
+
+      restoredRecord.discordIdHistory =
+        Array.isArray(
+          snapshot.discordIdHistory
+        )
+          ? structuredClone(
+              snapshot.discordIdHistory
+            )
+          : [];
+
+      const restoredRoleIds =
+        await restoreRolesFromDisconnectArchive(
+          guild,
+          archive,
+          restoredRecord
+        );
+
+      await SC_GI_saveNow();
+
+      await refreshRegistroMessage(
+        guild,
+        actor,
+        restoredRecord.messageId,
+        "Membro restaurado após desligamento"
+      );
+
+      let evolutionResult =
+        null;
+
+      if (
+        originalFormsThreadId &&
+        typeof setFormsCreatorStatus ===
+          "function"
+      ) {
+        await setFormsCreatorStatus(
+          guild.client,
+          {
+            threadId:
+              originalFormsThreadId,
+
+            newStatus:
+              true,
+
+            actor,
+
+            fromGi:
+              true,
+          }
+        ).catch(
+          error =>
+            console.warn(
+              `[SC_GI] Não consegui reativar o Forms original ${originalFormsThreadId}:`,
+              error?.message ||
+              error
+            )
+        );
+
+        if (
+          typeof syncEvolutionHierarchyForMember ===
+            "function"
+        ) {
+          evolutionResult =
+            await syncEvolutionHierarchyForMember(
+              guild.client,
+              {
+                guildId:
+                  guild.id,
+
+                userId:
+                  restoredRecord.targetId,
+
+                originalThreadId:
+                  originalFormsThreadId,
+
+                reason:
+                  "Membro restaurado após desligamento",
+              }
+            ).catch(
+              error => {
+                console.warn(
+                  `[SC_GI] Evolução não pôde ser reativada para ${restoredRecord.targetId}:`,
+                  error?.message ||
+                  error
+                );
+
+                return null;
+              }
+            );
+        }
+      }
+
+      let lifecycleReturnBundle =
+        null;
+
+      if (
+        typeof generateMemberLifecyclePrivateDm ===
+          "function"
+      ) {
+        lifecycleReturnBundle =
+          await generateMemberLifecyclePrivateDm({
+            client:
+              guild.client,
+
+            guild,
+
+            record:
+              restoredRecord,
+
+            eventType:
+              "resumed",
+
+            reason:
+              "Membro restaurado após desligamento",
+          })
+          .catch(
+            error => {
+              console.warn(
+                `[SC_GI] IA de retorno indisponível para ${restoredRecord.targetId}:`,
+                error?.message ||
+                error
+              );
+
+              return null;
+            }
+          );
+      }
+
+      let formsReturnSummary =
+        null;
+
+      if (
+        typeof generateMemberReturnFormsSummary ===
+          "function" &&
+        lifecycleReturnBundle?.facts
+      ) {
+        formsReturnSummary =
+          await generateMemberReturnFormsSummary({
+            facts:
+              lifecycleReturnBundle.facts,
+
+            record:
+              restoredRecord,
+
+            reason:
+              "Membro restaurado após desligamento",
+          }).catch(
+            () => null
+          );
+      }
+
+      const activeEvolutionThreadId =
+        evolutionResult?.threadId ||
+        null;
+
+      if (
+        activeEvolutionThreadId
+      ) {
+        const activeEvolutionThread =
+          await guild.client.channels
+            .fetch(
+              activeEvolutionThreadId
+            )
+            .catch(
+              () => null
+            );
+
+        if (
+          activeEvolutionThread?.isTextBased?.()
+        ) {
+          await activeEvolutionThread.send({
+            embeds: [
+              new EmbedBuilder()
+                .setColor(
+                  0x2ecc71
+                )
+                .setTitle(
+                  "💜 Membro reativado de volta na gestão"
+                )
+                .setDescription(
+                  formsReturnSummary ||
+                  (
+                    `O membro foi reativado na SantaCreators e retoma o acompanhamento na área **${restoredRecord.area || "não informada"}**. ` +
+                    `O histórico anterior permanece válido; o foco inicial deve ser revisar os últimos direcionamentos registrados antes de seguir com novas avaliações.`
+                  )
+                )
+                .setFooter({
+                  text:
+                    "SantaCreators • retomada do acompanhamento",
+                })
+                .setTimestamp(),
+            ],
+
+            allowedMentions: {
+              parse: [],
+            },
+          }).catch(
+            error =>
+              console.warn(
+                `[SC_GI] Não consegui publicar a nota de retorno no Forms de ${restoredRecord.targetId}:`,
+                error?.message ||
+                error
+              )
+          );
+        }
+      }
+
+      // Só emite depois de o novo Controle estar completo.
+      dashEmit(
+        "gi:controle_criado",
+        {
+          userId:
+            restoredRecord.targetId,
+
+          guildId:
+            guild.id,
+
+          active:
+            true,
+
+          personalTicketChannelId:
+            personalTicketChannelId ||
+            null,
+
+          timestamp:
+            Date.now(),
+        }
+      );
+
+      emitGIReturned(
+        restoredRecord.targetId,
+        {
+          reason:
+            "restore_after_disconnect",
+
+          messageId:
+            restoredRecord.messageId,
+        }
+      );
+
+      if (
+        personalTicketChannelId
+      ) {
+        await sendPersonalTicketRestoreNotice(
+          guild,
+          restoredRecord.targetId,
+          personalTicketChannelId
+        ).catch(
+          error =>
+            console.warn(
+              `[SC_GI] Aviso de retorno no ticket indisponível para ${restoredRecord.targetId}:`,
+              error?.message ||
+              error
+            )
+        );
+      }
+
+      const targetUser =
+        await fetchUserCached(
+          restoredRecord.targetId
+        );
+
+      if (targetUser) {
+        const baseRestoreEmbed =
+          new EmbedBuilder()
+            .setColor(
+              0x2ecc71
+            )
+            .setTitle(
+              "💜 Que bom ter você de volta!"
+            )
+            .setDescription(
+              [
+                `Seu retorno à **SantaCreators** foi confirmado.`,
+                `🧭 Você retoma na área **${restoredRecord.area || "não informada"}**.`,
+                `📚 Seu histórico anterior foi preservado. Você não está começando do zero.`,
+                personalTicketChannelId
+                  ? `🎫 Seu mesmo Ticket Pessoal continua vinculado ao acompanhamento.`
+                  : "",
+                activeEvolutionThreadId
+                  ? `📝 Seu Forms/Evolução anterior foi reativado no ponto compatível com sua hierarquia atual.`
+                  : "",
+              ]
+                .filter(Boolean)
+                .join(
+                  "\n"
+                )
+            )
+            .setImage(
+              GIF_SC_GI
+            )
+            .setFooter({
+              text:
+                "SantaCreators • retorno à gestão",
+            })
+            .setTimestamp();
+
+        const lifecycleEmbeds =
+          (
+            lifecycleReturnBundle?.chunks ||
+            []
+          ).map(
+            (
+              chunk,
+              index
+            ) => ({
+              color:
+                0x2ecc71,
+
+              title:
+                index === 0
+                  ? "💡 Sobre sua retomada"
+                  : "💬 Continuação",
+
+              description:
+                chunk,
+
+              footer: {
+                text:
+                  "SantaCreators • acompanhamento pessoal",
+              },
+            })
+          );
+
+        await sendDM_andMirror(
+          guild,
+          targetUser,
+          baseRestoreEmbed,
+          "",
+          lifecycleEmbeds
+        );
+      }
+
+      await logMemberHistoryEvent(
+        guild,
+        {
+          type:
+            "Membro Restaurado após Desligamento",
+
+          memberId:
+            restoredRecord.targetId,
+
+          actorId:
+            actor.id,
+
+          before: {
+            status:
+              "Desligado",
+
+            controlMessageId:
+              archiveKey,
+
+            disconnectedAtMs,
+
+            reason:
+              archive.reason ||
+              null,
+          },
+
+          after: {
+            status:
+              "Ativo",
+
+            newControlMessageId:
+              restoredRecord.messageId,
+
+            area:
+              restoredRecord.area,
+
+            personalTicketChannelId:
+              personalTicketChannelId ||
+              null,
+
+            formsOriginalThreadId:
+              originalFormsThreadId ||
+              null,
+
+            activeEvolutionThreadId:
+              activeEvolutionThreadId ||
+              null,
+          },
+
+          addedRoleIds:
+            restoredRoleIds,
+
+          record:
+            restoredRecord,
+
+          note:
+            archive.legacyRecovered
+              ? "Restauração executada a partir de um desligamento antigo recuperado pelo próprio log. Cargos exatos anteriores inexistentes foram reconstruídos somente pelo pacote oficial da última área conhecida."
+              : "Restauração executada a partir do snapshot persistente salvo antes do desligamento.",
+        }
+      ).catch(
+        () => null
+      );
+
+      archive.personalTicketChannelId =
+        personalTicketChannelId ||
+        archive.personalTicketChannelId ||
+        null;
+
+      archive.formsOriginalThreadId =
+        originalFormsThreadId ||
+        archive.formsOriginalThreadId ||
+        null;
+
+      archive.restored =
+        true;
+
+      archive.restoredAtMs =
+        restoredAtMs;
+
+      archive.restoredBy =
+        actor.id;
+
+      archive.restoredControlMessageId =
+        restoredRecord.messageId;
+
+      SC_GI_STATE.disconnectedSnapshots.set(
+        archiveKey,
+        archive
+      );
+
+      await SC_GI_saveNow();
+
+      markBoardDirty();
+
+      scheduleRespBoardRender(
+        guild,
+        {
+          force:
+            true,
+        }
+      );
+
+      return {
+        ok:
+          true,
+
+        archive,
+
+        restoredRecord,
+
+        personalTicketChannelId,
+
+        originalFormsThreadId,
+
+        activeEvolutionThreadId,
+      };
     }
 
     // ====================== RESPONSÁVEL DIRETO
@@ -10972,7 +12907,6 @@ dashOn(
 
           return;
         }
-
         // NOVO: Botões de Undo no Log
         if (interaction.isButton() && interaction.customId.startsWith('SC_GI_UNDO_')) {
           if (!hasAuth(interaction.member)) return interaction.reply({ content: '❌ Você não tem permissão.', flags: MessageFlags.Ephemeral });
@@ -10981,6 +12915,77 @@ dashOn(
           const action = parts[0].replace('SC_GI_UNDO_', '');
           const messageId = parts[1];
           const oldValue = parts[2]; // Para toggle_active
+
+          const activeRecordForUndo =
+            resolveRecordByInteraction(
+              interaction,
+              messageId
+            )?.rec ||
+            null;
+
+          // =================================================
+          // RESTAURAR UM MEMBRO JÁ DESLIGADO
+          // =================================================
+          //
+          // Neste caso o antigo registro NÃO deve existir em
+          // SC_GI_STATE.registros. A fonte é disconnectedSnapshots.
+          //
+          // Se o desligamento for antigo, recupera o snapshot
+          // mínimo pelo próprio embed do log.
+          // =================================================
+
+          if (
+            action === 'DESLIGAR' &&
+            !activeRecordForUndo
+          ) {
+            let disconnectArchive =
+              SC_GI_STATE.disconnectedSnapshots.get(
+                String(messageId)
+              );
+
+            if (!disconnectArchive) {
+              disconnectArchive =
+                recoverLegacyDisconnectSnapshotFromLogMessage(
+                  guild,
+                  interaction.message,
+                  messageId
+                );
+            }
+
+            if (!disconnectArchive) {
+              return interaction.reply({
+                content:
+                  '❌ Não consegui recuperar os dados deste desligamento pelo log. Nenhuma restauração foi executada.',
+                flags:
+                  MessageFlags.Ephemeral
+              });
+            }
+
+            const modal =
+              new ModalBuilder()
+                .setCustomId(
+                  `SC_GI_MODAL_RESTORE_DESLIGAR:${messageId}`
+                )
+                .setTitle(
+                  'Restaurar Desligamento?'
+                )
+                .addComponents(
+                  new ActionRowBuilder()
+                    .addComponents(
+                      new TextInputBuilder()
+                        .setCustomId('confirm')
+                        .setLabel('Confirme digitando "RESTAURAR"')
+                        .setStyle(TextInputStyle.Short)
+                        .setRequired(true)
+                    )
+                );
+
+            await interaction.showModal(
+              modal
+            );
+
+            return;
+          }
 
           const { rec, id: recordId } = resolveRecordByInteraction(interaction, messageId);
           if (!rec) return interaction.reply({ content: 'Registro não encontrado.', flags: MessageFlags.Ephemeral });
@@ -11136,13 +13141,19 @@ dashOn(
               }
               await interaction.editReply({ content: '🧭 **Re-defina o Responsável Direto** para reverter a alteração.', components: rows });
             } else if (action === 'DESLIGAR') {
-              // Para desligamento, abre um modal de confirmação para restaurar
-              const modal = new ModalBuilder()
-                .setCustomId(`SC_GI_MODAL_RESTORE_DESLIGAR:${recordId}`)
-                .setTitle('Restaurar Desligamento?')
-                .addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('confirm').setLabel('Confirme digitando "RESTAURAR"').setStyle(TextInputStyle.Short).setRequired(true)));
-              await interaction.showModal(modal);
-              await interaction.editReply({ content: '✅ Modal de confirmação aberto para restaurar o desligamento.' });
+              // Este caso acontece no botão "Desfazer (Remover)"
+              // do log de criação, quando o Controle GI ainda existe.
+              await desligarRegistro(
+                guild,
+                interaction.user,
+                recordId,
+                'Criação do Controle GI desfeita pelo botão de log'
+              );
+
+              await interaction.editReply({
+                content:
+                  `✅ O Controle GI de <@${rec.targetId}> foi removido/desfeito com sucesso.`
+              });
             }
             // Desativa o botão de undo no log
             await interaction.message.edit({ components: [] });
@@ -11173,21 +13184,74 @@ dashOn(
         if (interaction.isModalSubmit() && interaction.customId.startsWith('SC_GI_MODAL_RESTORE_DESLIGAR:')) {
           if (!hasAuth(interaction.member)) return interaction.reply({ content: '❌ Você não tem permissão.', flags: MessageFlags.Ephemeral });
           const messageId = interaction.customId.replace('SC_GI_MODAL_RESTORE_DESLIGAR:', '');
-          const confirmation = interaction.fields.getTextInputValue('confirm')?.trim();
+
+          const confirmation =
+            String(
+              interaction.fields.getTextInputValue('confirm') ||
+              ""
+            ).trim();
 
           if (confirmation.toLowerCase() !== 'restaurar') {
             return interaction.reply({ content: '❌ Confirmação inválida. O desligamento não foi restaurado.', flags: MessageFlags.Ephemeral });
           }
 
           await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
           try {
-            await restoreDesligamento(guild, interaction.user, messageId);
-            await interaction.editReply({ content: '✅ Desligamento restaurado com sucesso!' });
-            // Desativa o botão de undo no log
-            await interaction.message.edit({ components: [] });
+            const restoreResult =
+              await restoreDesligamento(
+                guild,
+                interaction.user,
+                messageId
+              );
+
+            await interaction.editReply({
+              content:
+                `✅ Membro restaurado com sucesso! Novo Controle GI: \`${restoreResult?.restoredRecord?.messageId || "não identificado"}\`.`
+            });
+
+            // =================================================
+            // DESATIVA O BOTÃO SOMENTE DEPOIS DO SUCESSO
+            // =================================================
+
+            let disconnectLogMessage =
+              interaction.message ||
+              null;
+
+            if (
+              !disconnectLogMessage &&
+              restoreResult?.archive?.disconnectLogMessageId
+            ) {
+              const disconnectChannel =
+                await guild.channels
+                  .fetch(
+                    SC_GI_CFG.CHANNEL_DESLIGAMENTOS
+                  )
+                  .catch(
+                    () => null
+                  );
+
+              disconnectLogMessage =
+                await disconnectChannel?.messages
+                  ?.fetch(
+                    restoreResult.archive.disconnectLogMessageId
+                  )
+                  .catch(
+                    () => null
+                  );
+            }
+
+            if (disconnectLogMessage) {
+              await disconnectLogMessage.edit({
+                components: []
+              }).catch(
+                () => null
+              );
+            }
           } catch (e) {
             await interaction.editReply({ content: '⚠️ ' + (e.message || 'Falha ao restaurar desligamento.') });
           }
+
           return;
         }
 

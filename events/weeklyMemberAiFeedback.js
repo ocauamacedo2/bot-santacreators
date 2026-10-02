@@ -9273,6 +9273,138 @@ Entregue apenas a nota interna final, sem título e sem explicações adicionais
 }
 
 // =====================================================
+// RESUMO INTERNO CURTO PARA RETORNO NO FORMS
+// =====================================================
+//
+// Usado somente quando um membro é restaurado após um
+// desligamento. O objetivo é deixar no Forms uma nota curta
+// dizendo onde a pessoa parou e qual deve ser o foco inicial.
+// =====================================================
+
+export async function generateMemberReturnFormsSummary({
+  facts,
+  record,
+  reason = "Membro restaurado após desligamento",
+} = {}) {
+  if (!facts) {
+    return null;
+  }
+
+  const userId =
+    String(
+      facts?.userId ||
+      record?.targetId ||
+      ""
+    ).trim();
+
+  const formsContext =
+    formatRecentFeedbackContext(
+      [
+        ...(facts?.previousFormsHumanHistory || []),
+        ...(facts?.formsHumanHistory || []),
+      ],
+      7000,
+      "Nenhum feedback humano recente do Forms foi localizado."
+    );
+
+  const ticketContext =
+    formatPersonalTicketHistoryForPrompt(
+      [
+        ...(facts?.previousPersonalTicketHistory || []),
+        ...(facts?.personalTicketHistory || []),
+      ],
+      7000
+    );
+
+  const prompt =
+    `
+Você está escrevendo uma NOTA INTERNA CURTA no Forms de uma pessoa que acabou de RETORNAR à SantaCreators após um desligamento anterior.
+
+Esta nota NÃO é uma mensagem privada para a pessoa.
+
+Escreva SOMENTE 2 a 4 frases curtas.
+Seja profissional, factual e direto.
+Não invente melhora.
+Não invente problema.
+Não revele o nome de quem escreveu feedbacks internos.
+Não use menções Discord.
+Não escreva IDs.
+Não faça uma retrospectiva longa.
+
+A nota precisa registrar:
+1. que o membro foi reativado de volta na gestão;
+2. em qual área/processo ele está retomando;
+3. qual era o principal ponto em andamento quando saiu, SOMENTE se isso estiver comprovado pelos registros;
+4. qual é o foco inicial mais coerente para retomar o acompanhamento.
+
+MEMBRO: ${facts?.displayName || "Membro"}
+ÁREA DE RETORNO: ${facts?.area || record?.area || "Não informada"}
+MOTIVO DO RETORNO: ${String(reason || "Membro restaurado").slice(0, 800)}
+
+ÚLTIMOS FEEDBACKS DO FORMS:
+${formsContext}
+
+CONTEXTO RECENTE DO TICKET PESSOAL:
+${ticketContext}
+
+Entregue apenas a nota interna final.
+`.trim();
+
+  let generated =
+    "";
+
+  try {
+    generated =
+      await generateSantaCreatorsStandaloneText({
+        prompt,
+
+        maxOutputTokens:
+          450,
+
+        temperature:
+          0.34,
+
+        label:
+          `Member Return Forms Summary ${userId || "unknown"}`,
+      });
+  } catch (error) {
+    console.warn(
+      `[Weekly Member AI] Falha ao gerar resumo interno de retorno para ${userId || "desconhecido"}:`,
+      error?.message ||
+      error
+    );
+  }
+
+  let text =
+    cleanGeneratedText(
+      generated
+    )
+      .replace(
+        /\n{3,}/g,
+        "\n\n"
+      )
+      .trim();
+
+  if (!text) {
+    text =
+      [
+        `O membro foi reativado de volta na gestão e retoma o acompanhamento na área ${facts?.area || record?.area || "não informada"}.`,
+        `Os registros anteriores continuam válidos como histórico desta trajetória.`,
+        `O foco inicial deve ser revisar os últimos direcionamentos registrados no Forms e no ticket pessoal antes de prosseguir com novas avaliações.`,
+      ].join(
+        " "
+      );
+  }
+
+  return text
+    .slice(
+      0,
+      1200
+    )
+    .trim();
+}
+
+// =====================================================
 // ENVIO DA DM SEMANAL AUTOMÁTICA
 // =====================================================
 
