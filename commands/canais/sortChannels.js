@@ -21,7 +21,7 @@ import { dashOn, dashEmit } from "../../utils/dashHub.js";
 import {
   getOfficialSantaCreatorsAuthorityLevel,
   getOfficialSantaCreatorsAuthorityLevelForRoleId,
-} from "../../../events/hierarquiaDivisoes.js";
+} from "../../events/hierarquiaDivisoes.js";
 
 // ===============================
 // SANTA CREATORS — ORDENAR CANAIS POR NOME (A→Z) + PINNED NO TOPO
