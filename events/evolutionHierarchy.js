@@ -1047,17 +1047,136 @@ function trimText(
 // RECRIAÇÃO ORGANIZADA DAS MENSAGENS
 // =====================================================
 
-function createArchivedMessageEmbed(
+function getHistoricalCopyEmbed(
   message
 ) {
-  const author =
-    message.author;
+  return (
+    message?.embeds ||
+    []
+  ).find(
+    (embed) =>
+      /Cópia histórica\s*•\s*origem\s+\d{17,22}/i.test(
+        String(
+          embed?.footer?.text ||
+          ""
+        )
+      )
+  ) || null;
+}
+
+function getHistoricalCopyOriginId(
+  message
+) {
+  const historicalEmbed =
+    getHistoricalCopyEmbed(
+      message
+    );
+
+  if (!historicalEmbed) {
+    return null;
+  }
+
+  return (
+    String(
+      historicalEmbed
+        ?.footer
+        ?.text ||
+      ""
+    ).match(
+      /Cópia histórica\s*•\s*origem\s+(\d{17,22})/i
+    )?.[1] ||
+    null
+  );
+}
+
+function normalizeHistoricalComparableText(
+  value
+) {
+  return String(
+    value ||
+    ""
+  )
+    .replace(
+      /\r/g,
+      ""
+    )
+    .replace(
+      /(?:^|\n)\*\*Embed\s+\d+\*\*\s*(?=\n|$)/gim,
+      "\n"
+    )
+    .replace(
+      /[ \t]+/g,
+      " "
+    )
+    .replace(
+      /\n{3,}/g,
+      "\n\n"
+    )
+    .trim()
+    .toLowerCase();
+}
+
+function getHistoricalLogicalAuthorId(
+  message
+) {
+  const historicalEmbed =
+    getHistoricalCopyEmbed(
+      message
+    );
+
+  if (historicalEmbed) {
+    const copiedAuthorId =
+      String(
+        historicalEmbed
+          ?.author
+          ?.name ||
+        ""
+      ).match(
+        /(?:^|•\s*)(\d{17,22})\s*$/
+      )?.[1];
+
+    if (copiedAuthorId) {
+      return copiedAuthorId;
+    }
+  }
+
+  return (
+    message?.author?.id ||
+    "unknown"
+  );
+}
+
+function buildArchivableMessageBody(
+  message
+) {
+  const historicalEmbed =
+    getHistoricalCopyEmbed(
+      message
+    );
+
+  /*
+   * Uma cópia histórica já contém a representação
+   * completa da mensagem original.
+   *
+   * Ao subir novamente de fase, reaproveitamos esse
+   * corpo em vez de criar um "Embed dentro de Embed".
+   */
+  if (historicalEmbed) {
+    return (
+      historicalEmbed
+        .description ||
+      ""
+    );
+  }
 
   const attachments =
     [
-      ...message
-        .attachments
-        .values(),
+      ...(
+        message
+          ?.attachments
+          ?.values?.() ||
+        []
+      ),
     ]
       .map(
         (
@@ -1078,7 +1197,10 @@ function createArchivedMessageEmbed(
       .join("\n");
 
   const originalEmbeds =
-    message.embeds
+    (
+      message?.embeds ||
+      []
+    )
       .map(
         (
           embed,
@@ -1090,11 +1212,13 @@ function createArchivedMessageEmbed(
               : "";
 
           const description =
-            embed.description || "";
+            embed.description ||
+            "";
 
           const fields =
             (
-              embed.fields || []
+              embed.fields ||
+              []
             )
               .map(
                 (field) =>
@@ -1114,15 +1238,107 @@ function createArchivedMessageEmbed(
       )
       .join("\n\n");
 
-  const completeBody =
+  return (
     [
-      message.content,
+      message?.content ||
+        "",
       originalEmbeds,
       attachments,
     ]
       .filter(Boolean)
       .join("\n\n") ||
-    "*(mensagem sem texto)*";
+    "*(mensagem sem texto)*"
+  );
+}
+
+function getHistoricalLogicalSignature(
+  message
+) {
+  const body =
+    normalizeHistoricalComparableText(
+      buildArchivableMessageBody(
+        message
+      )
+    );
+
+  if (!body) {
+    return null;
+  }
+
+  const authorId =
+    getHistoricalLogicalAuthorId(
+      message
+    );
+
+  return (
+    `${authorId}::${body}`
+  );
+}
+
+function isEvolutionOperationalHistoryMessage(
+  message
+) {
+  const raw =
+    [
+      message?.content ||
+        "",
+
+      ...(
+        message?.embeds ||
+        []
+      ).flatMap(
+        (embed) => [
+          embed?.title ||
+            "",
+          embed?.description ||
+            "",
+          ...(
+            embed?.fields ||
+            []
+          ).flatMap(
+            (field) => [
+              field?.name ||
+                "",
+              field?.value ||
+                "",
+            ]
+          ),
+        ]
+      ),
+    ]
+      .join("\n");
+
+  /*
+   * Estes embeds são infraestrutura da Evolução,
+   * não feedback/trajetória do membro.
+   *
+   * Não devem viajar entre fases.
+   */
+  return (
+    raw.includes(
+      "🔐 Evolução organizada por hierarquia"
+    ) ||
+    (
+      raw.includes(
+        "📚 **Fase:**"
+      ) &&
+      raw.includes(
+        "📥 **Histórico originado de:**"
+      )
+    )
+  );
+}
+
+function createArchivedMessageEmbed(
+  message
+) {
+  const author =
+    message.author;
+
+  const completeBody =
+    buildArchivableMessageBody(
+      message
+    );
 
   const displayName =
     author?.globalName ||
@@ -1171,34 +1387,260 @@ function createArchivedMessageEmbed(
     );
 }
 
-async function archivedMessageAlreadyExists(
-  targetThread,
-  sourceMessageId
-) {
-  const messages =
-    await targetThread
-      .messages
-      .fetch({
-        limit: 100,
-      })
-      .catch(() => null);
+// =====================================================
+// LIMPEZA SEGURA DE CÓPIAS HISTÓRICAS DUPLICADAS
+// =====================================================
+//
+// Só remove mensagens que possuem o marker:
+// "Cópia histórica • origem ..."
+//
+// Mensagens humanas, feedbacks originais e embeds comuns
+// NÃO são apagados por esta rotina.
+// =====================================================
 
-  if (!messages) {
-    return false;
+export async function cleanupEvolutionHistoricalDuplicatesInThread(
+  thread
+) {
+  if (
+    !thread?.isThread?.()
+  ) {
+    return 0;
   }
 
-  return messages.some(
-    (message) =>
-      message.embeds?.some(
-        (embed) =>
-          String(
-            embed.footer?.text ||
-            ""
-          ).includes(
-            `origem ${sourceMessageId}`
+  let workingThread =
+    await thread
+      .fetch(true)
+      .catch(
+        () => thread
+      );
+
+  const wasArchived =
+    !!workingThread.archived;
+
+  const wasLocked =
+    !!workingThread.locked;
+
+  /*
+   * Mensagens antigas podem estar em tópicos arquivados.
+   *
+   * Para conseguir apagar somente as cópias duplicadas,
+   * desarquiva temporariamente sem remover a trava.
+   *
+   * Assim ninguém ganha janela de escrita no histórico.
+   */
+  if (
+    wasArchived
+  ) {
+    workingThread =
+      await workingThread
+        .edit({
+          archived:
+            false,
+
+          reason:
+            "Limpeza interna de cópias históricas duplicadas",
+        })
+        .catch(
+          () => workingThread
+        );
+  }
+
+  let deleted =
+    0;
+
+  try {
+    const messages =
+      await fetchAllMessages(
+        workingThread
+      );
+
+    if (
+      !messages.length
+    ) {
+      return 0;
+    }
+
+    /*
+     * Se a informação já existe NATIVAMENTE no tópico,
+     * uma cópia histórica com o mesmo conteúdo é redundante.
+     */
+    const nativeSignatures =
+      new Set(
+        messages
+          .filter(
+            (message) =>
+              !getHistoricalCopyEmbed(
+                message
+              ) &&
+              !isEvolutionOperationalHistoryMessage(
+                message
+              )
           )
-      )
-  );
+          .map(
+            (message) =>
+              getHistoricalLogicalSignature(
+                message
+              )
+          )
+          .filter(Boolean)
+      );
+
+    const keptOrigins =
+      new Set();
+
+    const keptCopySignatures =
+      new Set();
+
+    for (
+      const message
+      of messages
+    ) {
+      const historicalEmbed =
+        getHistoricalCopyEmbed(
+          message
+        );
+
+      if (!historicalEmbed) {
+        continue;
+      }
+
+      /*
+       * Painel de hierarquia e starter de fase
+       * copiados no passado são ruído operacional.
+       */
+      if (
+        isEvolutionOperationalHistoryMessage(
+          message
+        )
+      ) {
+        const removed =
+          await message
+            .delete()
+            .then(
+              () => true
+            )
+            .catch(
+              () => false
+            );
+
+        if (removed) {
+          deleted += 1;
+        }
+
+        continue;
+      }
+
+      const originId =
+        getHistoricalCopyOriginId(
+          message
+        );
+
+      const signature =
+        getHistoricalLogicalSignature(
+          message
+        );
+
+      const duplicateByOrigin =
+        !!(
+          originId &&
+          keptOrigins.has(
+            originId
+          )
+        );
+
+      const duplicateByNativeContent =
+        !!(
+          signature &&
+          nativeSignatures.has(
+            signature
+          )
+        );
+
+      const duplicateByCopiedContent =
+        !!(
+          signature &&
+          keptCopySignatures.has(
+            signature
+          )
+        );
+
+      if (
+        duplicateByOrigin ||
+        duplicateByNativeContent ||
+        duplicateByCopiedContent
+      ) {
+        const removed =
+          await message
+            .delete()
+            .then(
+              () => true
+            )
+            .catch(
+              () => false
+            );
+
+        if (removed) {
+          deleted += 1;
+        }
+
+        continue;
+      }
+
+      if (originId) {
+        keptOrigins.add(
+          originId
+        );
+      }
+
+      if (signature) {
+        keptCopySignatures.add(
+          signature
+        );
+      }
+    }
+
+    return deleted;
+  } finally {
+    /*
+     * Devolve exatamente o estado anterior do tópico.
+     *
+     * Histórico continua histórico.
+     * Tópico ativo continua ativo.
+     */
+    if (
+      wasArchived
+    ) {
+      await workingThread
+        .edit({
+          locked:
+            wasLocked,
+
+          archived:
+            true,
+
+          reason:
+            "Fim da limpeza interna de cópias históricas",
+        })
+        .catch(
+          () => null
+        );
+    } else if (
+      workingThread.locked !==
+      wasLocked
+    ) {
+      await workingThread
+        .edit({
+          locked:
+            wasLocked,
+
+          reason:
+            "Restaurando estado após limpeza histórica",
+        })
+        .catch(
+          () => null
+        );
+    }
+  }
 }
 
 async function copyHistory(
@@ -1244,59 +1686,191 @@ async function copyHistory(
     "Destino da promoção"
   );
 
-  const messages =
+  /*
+   * Primeiro limpa lixo histórico já acumulado no destino.
+   *
+   * Isso também corrige automaticamente tópicos antigos
+   * antes de uma nova promoção/reentrada.
+   */
+  await cleanupEvolutionHistoricalDuplicatesInThread(
+    targetThread
+  ).catch(
+    () => 0
+  );
+
+  const sourceMessages =
     await fetchAllMessages(
       sourceThread
+    );
+
+  const targetMessages =
+    await fetchAllMessages(
+      targetThread
+    );
+
+  const existingOrigins =
+    new Set(
+      targetMessages
+        .map(
+          (message) =>
+            getHistoricalCopyOriginId(
+              message
+            )
+        )
+        .filter(Boolean)
+    );
+
+  /*
+   * Inclui mensagens NATIVAS e cópias históricas já
+   * existentes no destino.
+   *
+   * Se o conteúdo lógico já está lá, não replica.
+   */
+  const existingSignatures =
+    new Set(
+      targetMessages
+        .filter(
+          (message) =>
+            !isEvolutionOperationalHistoryMessage(
+              message
+            )
+        )
+        .map(
+          (message) =>
+            getHistoricalLogicalSignature(
+              message
+            )
+        )
+        .filter(Boolean)
     );
 
   let copied = 0;
 
   for (
     const message
-    of messages
+    of sourceMessages
   ) {
-    const alreadyExists =
-      await archivedMessageAlreadyExists(
-        targetThread,
-        message.id
-      );
-
-    if (alreadyExists) {
+    /*
+     * Não carrega painéis administrativos de uma fase
+     * para a seguinte.
+     */
+    if (
+      isEvolutionOperationalHistoryMessage(
+        message
+      )
+    ) {
       continue;
     }
 
-    await targetThread.send({
-      embeds: [
-        createArchivedMessageEmbed(
-          message
-        ),
-      ],
+    const historicalEmbed =
+      getHistoricalCopyEmbed(
+        message
+      );
 
-      /*
-       * Não recria os botões do registro antigo.
-       *
-       * Isso impede que um botão copiado
-       * altere o tópico errado.
-       */
+    /*
+     * Se esta mensagem já era uma cópia histórica,
+     * preservamos o ID da origem REAL.
+     *
+     * Isso evita "cópia da cópia da cópia".
+     */
+    const logicalOriginId =
+      getHistoricalCopyOriginId(
+        message
+      ) ||
+      message.id;
 
-      components: [],
+    const logicalSignature =
+      getHistoricalLogicalSignature(
+        message
+      );
 
-      /*
-       * Não notifica novamente todas as
-       * pessoas mencionadas no histórico.
-       */
+    if (
+      existingOrigins.has(
+        logicalOriginId
+      ) ||
+      (
+        logicalSignature &&
+        existingSignatures.has(
+          logicalSignature
+        )
+      )
+    ) {
+      continue;
+    }
 
-      allowedMentions: {
-        parse: [],
-      },
-    });
+    const embedToSend =
+      historicalEmbed
+        ? EmbedBuilder.from(
+            historicalEmbed
+          )
+        : createArchivedMessageEmbed(
+            message
+          );
+
+    const sent =
+      await targetThread.send({
+        embeds: [
+          embedToSend,
+        ],
+
+        /*
+         * Não recria os botões do registro antigo.
+         *
+         * Isso impede que um botão copiado
+         * altere o tópico errado.
+         */
+
+        components: [],
+
+        /*
+         * Não notifica novamente todas as
+         * pessoas mencionadas no histórico.
+         */
+
+        allowedMentions: {
+          parse: [],
+        },
+      });
+
+    const sentOriginId =
+      getHistoricalCopyOriginId(
+        sent
+      ) ||
+      logicalOriginId;
+
+    const sentSignature =
+      getHistoricalLogicalSignature(
+        sent
+      ) ||
+      logicalSignature;
+
+    if (sentOriginId) {
+      existingOrigins.add(
+        sentOriginId
+      );
+    }
+
+    if (sentSignature) {
+      existingSignatures.add(
+        sentSignature
+      );
+    }
 
     copied += 1;
   }
 
+  /*
+   * Segunda passada para garantir que uma corrida entre
+   * dois eventos não deixou cópia duplicada.
+   */
+  await cleanupEvolutionHistoricalDuplicatesInThread(
+    targetThread
+  ).catch(
+    () => 0
+  );
+
   return copied;
 }
-
 // =====================================================
 // PAINEL VISUAL DE LOCALIZAÇÃO
 // =====================================================

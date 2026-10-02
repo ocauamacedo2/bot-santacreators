@@ -4194,6 +4194,33 @@ async function syncLegacyThreads(client, progressMsg = null) {
   for (const thread of allThreads) {
     checkedThreads++;
 
+    const removedHistoricalCopies =
+      await cleanupEvolutionHistoricalDuplicatesInThread(
+        thread
+      ).catch(
+        (error) => {
+          console.warn(
+            `[FormsCreator] Não consegui limpar cópias históricas duplicadas da thread ${thread.id}:`,
+            error?.message ||
+            error
+          );
+
+          return 0;
+        }
+      );
+
+    if (
+      removedHistoricalCopies >
+      0
+    ) {
+      updates +=
+        removedHistoricalCopies;
+
+      console.log(
+        `[FormsCreator] ${removedHistoricalCopies} cópia(s) histórica(s) duplicada(s)/operacional(is) removida(s) da thread ${thread.name} (${thread.id}).`
+      );
+    }
+
     if (isHistoricalEvolutionThread(thread.id)) {
       await restoreHistoricalEvolutionThread(thread);
       continue;

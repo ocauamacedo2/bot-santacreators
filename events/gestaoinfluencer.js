@@ -91,7 +91,8 @@ const {
 
     const {
       syncEvolutionHierarchyForMember,
-      lockEvolutionHierarchyForMember
+      lockEvolutionHierarchyForMember,
+      cleanupEvolutionHistoricalDuplicatesInThread
     } = evolutionHierarchy;
 
     // ✅ NOVO: importa a hierarquia institucional oficial.
@@ -9378,6 +9379,35 @@ try {
         if (
           activeEvolutionThread?.isTextBased?.()
         ) {
+          if (
+            typeof cleanupEvolutionHistoricalDuplicatesInThread ===
+              "function"
+          ) {
+            const removedHistoricalCopies =
+              await cleanupEvolutionHistoricalDuplicatesInThread(
+                activeEvolutionThread
+              ).catch(
+                (error) => {
+                  console.warn(
+                    `[SC_GI] Não consegui limpar cópias históricas duplicadas antes de publicar o retorno de ${restoredRecord.targetId}:`,
+                    error?.message ||
+                    error
+                  );
+
+                  return 0;
+                }
+              );
+
+            if (
+              removedHistoricalCopies >
+              0
+            ) {
+              console.log(
+                `[SC_GI] ${removedHistoricalCopies} cópia(s) histórica(s) duplicada(s)/operacional(is) removida(s) do Forms ativo de ${restoredRecord.targetId}.`
+              );
+            }
+          }
+
           await activeEvolutionThread.send({
             embeds: [
               new EmbedBuilder()
