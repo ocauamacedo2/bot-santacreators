@@ -178,6 +178,127 @@ export function resolveDiscordIdentity(
   );
 }
 
+// =====================================================
+// FAMÍLIA COMPLETA DA IDENTIDADE DISCORD
+// =====================================================
+//
+// Exemplo:
+//
+// 111 -> 222
+// 222 -> 333
+//
+// getDiscordIdentityFamily("333")
+//
+// retorna:
+//
+// [
+//   "333",
+//   "111",
+//   "222"
+// ]
+//
+// Assim Forms, Tickets, Ranking, Feedback e qualquer
+// outro módulo conseguem consultar também os IDs antigos.
+//
+// =====================================================
+
+export function getDiscordIdentityFamily(
+  userId
+) {
+  const requestedId =
+    normalizeDiscordId(
+      userId
+    );
+
+  if (!requestedId) {
+    return [];
+  }
+
+  const state =
+    readState();
+
+  const canonicalId =
+    resolveFromAliases(
+      requestedId,
+      state.aliases
+    );
+
+  const family =
+    new Set([
+      requestedId,
+      canonicalId
+    ]);
+
+  for (
+    const historicalId
+    of Object.keys(
+      state.aliases || {}
+    )
+  ) {
+    const resolved =
+      resolveFromAliases(
+        historicalId,
+        state.aliases
+      );
+
+    if (
+      resolved ===
+      canonicalId
+    ) {
+      family.add(
+        historicalId
+      );
+    }
+  }
+
+  return [
+    canonicalId,
+    ...[
+      ...family
+    ].filter(
+      id =>
+        id !==
+        canonicalId
+    )
+  ];
+}
+
+export function isSameDiscordIdentity(
+  firstUserId,
+  secondUserId
+) {
+  const first =
+    normalizeDiscordId(
+      firstUserId
+    );
+
+  const second =
+    normalizeDiscordId(
+      secondUserId
+    );
+
+  if (
+    !first ||
+    !second
+  ) {
+    return false;
+  }
+
+  const state =
+    readState();
+
+  return (
+    resolveFromAliases(
+      first,
+      state.aliases
+    ) ===
+    resolveFromAliases(
+      second,
+      state.aliases
+    )
+  );
+}
+
 export function validateDiscordIdentityMigration(
   oldUserId,
   newUserId

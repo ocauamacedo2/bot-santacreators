@@ -25,6 +25,11 @@ import {
   sendBotDmLogged
 } from "../utils/botDmLogger.js";
 
+import {
+  resolveDiscordIdentity,
+  getDiscordIdentityFamily
+} from "../shared/scDiscordIdentity.js";
+
 // __dirname no ESM
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -38,6 +43,7 @@ import {
   getActiveEvolutionThreadId,
   initializeEvolutionHierarchy,
   syncEvolutionHierarchyForMember,
+  migrateEvolutionHierarchyDiscordId,
   isHistoricalEvolutionThread,
   restoreHistoricalEvolutionThread,
   getEvolutionFeedbackContext,
@@ -491,6 +497,146 @@ function writePersonalTicketHistoryState(
   }
 }
 
+// =====================================================
+// MIGRA HISTÓRICO DO TICKET PESSOAL ENTRE DISCORDS
+// =====================================================
+
+function migratePersonalTicketHistoryDiscordId(
+  oldUserId,
+  newUserId
+) {
+  const oldId =
+    String(
+      oldUserId || ""
+    ).trim();
+
+  const newId =
+    String(
+      newUserId || ""
+    ).trim();
+
+  if (
+    !oldId ||
+    !newId ||
+    oldId === newId
+  ) {
+    return {
+      changed:
+        false,
+
+      moved:
+        0,
+    };
+  }
+
+  const state =
+    readPersonalTicketHistoryState();
+
+  const oldRows =
+    Array.isArray(
+      state.users?.[
+        oldId
+      ]
+    )
+      ? state.users[
+          oldId
+        ]
+      : [];
+
+  const newRows =
+    Array.isArray(
+      state.users?.[
+        newId
+      ]
+    )
+      ? state.users[
+          newId
+        ]
+      : [];
+
+  if (
+    oldRows.length === 0
+  ) {
+    return {
+      changed:
+        false,
+
+      moved:
+        0,
+    };
+  }
+
+  const merged =
+    new Map();
+
+  for (
+    const item
+    of [
+      ...oldRows,
+      ...newRows
+    ]
+  ) {
+    const dedupeKey =
+      String(
+        item?.dedupeKey ||
+        `${item?.messageId || "sem-id"}:${item?.type || "message"}`
+      );
+
+    merged.set(
+      dedupeKey,
+      {
+        ...item,
+
+        userId:
+          newId,
+      }
+    );
+  }
+
+  const rows =
+    [
+      ...merged.values()
+    ]
+      .sort(
+        (a, b) =>
+          Number(
+            a?.createdAtMs ||
+            0
+          ) -
+          Number(
+            b?.createdAtMs ||
+            0
+          )
+      )
+      .slice(
+        -PERSONAL_TICKET_HISTORY_MAX_PER_USER
+      );
+
+  state.users[
+    newId
+  ] =
+    rows;
+
+  delete state.users[
+    oldId
+  ];
+
+  writePersonalTicketHistoryState(
+    state
+  );
+
+  return {
+    changed:
+      true,
+
+    moved:
+      oldRows.length,
+
+    total:
+      rows.length,
+  };
+}
+
 function sanitizePersonalTicketAttachments(
   attachments
 ) {
@@ -562,11 +708,17 @@ export function recordPersonalTicketActivity({
   createdAtMs = Date.now(),
   messageUrl = null,
 } = {}) {
-  const targetUserId =
+  const rawTargetUserId =
     String(
       userId ||
       ""
     ).trim();
+
+  const targetUserId =
+    resolveDiscordIdentity(
+      rawTargetUserId
+    ) ||
+    rawTargetUserId;
 
   const normalizedMessageId =
     String(
@@ -775,29 +927,84 @@ export function getPersonalTicketHistoryForUser(
     includeAi = true,
   } = {}
 ) {
-  const targetUserId =
+  const rawTargetUserId =
     String(
       userId ||
       ""
     ).trim();
 
-  if (!targetUserId) {
+  if (!rawTargetUserId) {
     return [];
   }
+
+  const targetUserId =
+    resolveDiscordIdentity(
+      rawTargetUserId
+    ) ||
+    rawTargetUserId;
+
+  const identityIds =
+    new Set([
+      rawTargetUserId,
+      targetUserId,
+      ...(
+        typeof getDiscordIdentityFamily ===
+          "function"
+          ? getDiscordIdentityFamily(
+              targetUserId
+            )
+          : []
+      )
+    ]);
 
   const state =
     readPersonalTicketHistoryState();
 
-  const rows =
-    Array.isArray(
-      state.users[
-        targetUserId
-      ]
-    )
-      ? state.users[
-          targetUserId
+  const mergedRows =
+    new Map();
+
+  for (
+    const identityId
+    of identityIds
+  ) {
+    const sourceRows =
+      Array.isArray(
+        state.users?.[
+          identityId
         ]
-      : [];
+      )
+        ? state.users[
+            identityId
+          ]
+        : [];
+
+    for (
+      const item
+      of sourceRows
+    ) {
+      const dedupeKey =
+        String(
+          item?.dedupeKey ||
+          `${item?.messageId || "sem-id"}:${item?.type || "message"}`
+        );
+
+      if (
+        !mergedRows.has(
+          dedupeKey
+        )
+      ) {
+        mergedRows.set(
+          dedupeKey,
+          item
+        );
+      }
+    }
+  }
+
+  const rows =
+    [
+      ...mergedRows.values()
+    ];
 
   return rows
     .filter(
@@ -4253,15 +4460,36 @@ async function syncLegacyThreads(client, progressMsg = null) {
 export function findFormsCreatorThreadIdFastByUserId(
   userId
 ) {
-  const targetUserId =
+  const rawTargetUserId =
     String(
       userId ||
       ""
     ).trim();
 
-  if (!targetUserId) {
+  if (!rawTargetUserId) {
     return null;
   }
+
+  const targetUserId =
+    resolveDiscordIdentity(
+      rawTargetUserId
+    ) ||
+    rawTargetUserId;
+
+  const identityIds =
+    new Set([
+      rawTargetUserId,
+      targetUserId,
+
+      ...(
+        typeof getDiscordIdentityFamily ===
+          "function"
+          ? getDiscordIdentityFamily(
+              targetUserId
+            )
+          : []
+      ),
+    ].filter(Boolean));
 
   const state =
     readState();
@@ -4275,11 +4503,12 @@ export function findFormsCreatorThreadIdFastByUserId(
         ,
         registration,
       ]) =>
-        String(
-          registration?.userId ||
-          ""
-        ).trim() ===
-        targetUserId
+        identityIds.has(
+          String(
+            registration?.userId ||
+            ""
+          ).trim()
+        )
     );
 
   return (
@@ -4287,7 +4516,6 @@ export function findFormsCreatorThreadIdFastByUserId(
     null
   );
 }
-
 export async function createFormsCreatorRecord(
   client,
   {
@@ -4619,9 +4847,45 @@ return {
 
 export async function findOriginalFormsCreatorThreadIdByUserId(clientOrUserId, maybeUserId = null) {
     const client = maybeUserId ? clientOrUserId : null;
-    const targetUserId = String(maybeUserId || clientOrUserId || "").trim();
+
+    const rawTargetUserId =
+        String(
+            maybeUserId ||
+            clientOrUserId ||
+            ""
+        ).trim();
+
+    const targetUserId =
+        resolveDiscordIdentity(
+            rawTargetUserId
+        ) ||
+        rawTargetUserId;
 
     if (!targetUserId) return null;
+
+    const identityIds =
+        new Set([
+            rawTargetUserId,
+            targetUserId,
+
+            ...(
+                typeof getDiscordIdentityFamily ===
+                    "function"
+                    ? getDiscordIdentityFamily(
+                        targetUserId
+                    )
+                    : []
+            ),
+        ].filter(Boolean));
+
+    const matchesIdentity =
+        (value) =>
+            identityIds.has(
+                String(
+                    value ||
+                    ""
+                ).trim()
+            );
 
     const state = readState();
 
@@ -4655,7 +4919,11 @@ function isOfficialFormsCreatorMessage(msg, threadId, expectedUserId) {
         const descriptionUserId =
             description.match(/^<@!?(\d{17,20})>$/)?.[1] || null;
 
-        if (descriptionUserId !== String(expectedUserId)) {
+        if (
+            !matchesIdentity(
+                descriptionUserId
+            )
+        ) {
             return false;
         }
 
@@ -4723,8 +4991,9 @@ function isOfficialFormsCreatorMessage(msg, threadId, expectedUserId) {
 
     async function validateStateRegistration(threadId, registration) {
         if (
-            String(registration?.userId || "").trim() !==
-            targetUserId
+            !matchesIdentity(
+                registration?.userId
+            )
         ) {
             return null;
         }
@@ -4811,8 +5080,9 @@ function isOfficialFormsCreatorMessage(msg, threadId, expectedUserId) {
         of Object.entries(state.registrations || {})
     ) {
         if (
-            String(registration?.userId || "").trim() !==
-            targetUserId
+            !matchesIdentity(
+                registration?.userId
+            )
         ) {
             continue;
         }
@@ -4852,8 +5122,9 @@ function isOfficialFormsCreatorMessage(msg, threadId, expectedUserId) {
         ) {
             if (
                 threadId !== selected.threadId &&
-                String(registration?.userId || "").trim() ===
-                    targetUserId
+                matchesIdentity(
+                    registration?.userId
+                )
             ) {
                 delete state.registrations[threadId];
             }
@@ -5031,8 +5302,9 @@ function isOfficialFormsCreatorMessage(msg, threadId, expectedUserId) {
         ) {
             if (
                 savedThreadId !== thread.id &&
-                String(registration?.userId || "").trim() ===
-                    targetUserId
+                matchesIdentity(
+                    registration?.userId
+                )
             ) {
                 delete state.registrations[savedThreadId];
             }
@@ -5735,26 +6007,117 @@ export async function migrateFormsCreatorDiscordId(
 
   writeState(state);
 
+  // =====================================================
+  // MIGRA HISTÓRICO ESTRUTURADO DO TICKET PESSOAL
+  // =====================================================
+
+  const personalTicketHistoryMigration =
+    migratePersonalTicketHistoryDiscordId(
+      oldId,
+      newId
+    );
+
+  // =====================================================
+  // DEIXA REGISTRO VISÍVEL DA TROCA DENTRO DO FORMS
+  // =====================================================
+
+  try {
+    const identityAuditEmbed =
+      new EmbedBuilder()
+        .setColor(
+          0x5865f2
+        )
+        .setTitle(
+          "🔁 Identidade Discord atualizada"
+        )
+        .setDescription(
+          [
+            "Este Forms continua pertencendo à mesma pessoa.",
+            "",
+            `📤 **Discord anterior:** <@${oldId}> (\`${oldId}\`)`,
+            `📥 **Discord atual:** <@${newId}> (\`${newId}\`)`,
+            actor?.id
+              ? `👤 **Alterado por:** <@${actor.id}> (\`${actor.id}\`)`
+              : "🤖 **Alterado por:** Sistema",
+            `🕒 **Data:** <t:${Math.floor(Date.now() / 1000)}:F>`,
+            "",
+            `🎫 **Histórico do ticket migrado:** ${
+              personalTicketHistoryMigration?.moved || 0
+            } registro(s).`,
+            "",
+            "📚 Nenhum feedback anterior foi reiniciado. O histórico permanece vinculado à mesma trajetória."
+          ].join(
+            "\n"
+          )
+        )
+        .setFooter({
+          text:
+            "SantaCreators • Histórico de identidade"
+        })
+        .setTimestamp();
+
+    await thread.send({
+      embeds: [
+        identityAuditEmbed
+      ],
+
+      allowedMentions: {
+        parse: []
+      }
+    });
+  } catch (error) {
+    console.warn(
+      "[FormsCreator] Não consegui escrever a auditoria da troca dentro do Forms:",
+      error?.message ||
+      error
+    );
+  }
+
   let evolutionStatus =
     "synced";
 
   try {
-    await syncEvolutionHierarchyForMember(
-      client,
-      {
-        guildId:
-          guild?.id ||
-          GUILD_ID,
+    if (
+      typeof migrateEvolutionHierarchyDiscordId ===
+      "function"
+    ) {
+      await migrateEvolutionHierarchyDiscordId(
+        client,
+        {
+          guildId:
+            guild?.id ||
+            GUILD_ID,
 
-        userId:
-          newId,
+          oldUserId:
+            oldId,
 
-        originalThreadId,
+          newUserId:
+            newId,
 
-        reason:
-          `Troca de Discord ${oldId} -> ${newId}`,
-      }
-    );
+          originalThreadId,
+
+          reason:
+            `Troca de Discord ${oldId} -> ${newId}`,
+        }
+      );
+    } else {
+      await syncEvolutionHierarchyForMember(
+        client,
+        {
+          guildId:
+            guild?.id ||
+            GUILD_ID,
+
+          userId:
+            newId,
+
+          originalThreadId,
+
+          reason:
+            `Troca de Discord ${oldId} -> ${newId}`,
+        }
+      );
+    }
   } catch (error) {
     evolutionStatus =
       "partial";
@@ -5886,9 +6249,17 @@ export async function migrateFormsCreatorDiscordId(
     );
   }
 
+  const finalStatus =
+    mirrorStatus ===
+      "synced" &&
+    evolutionStatus ===
+      "synced"
+      ? "synced"
+      : "partial";
+
   return {
     status:
-      "synced",
+      finalStatus,
 
     oldUserId:
       oldId,
@@ -6171,6 +6542,85 @@ export async function setFormsCreatorArea(client, { threadId, newArea, actor }) 
     writeState(
         state
     );
+
+    // =====================================================
+    // HISTÓRICO VISÍVEL DA ALTERAÇÃO DE ÁREA
+    // =====================================================
+    //
+    // Mantém dentro do próprio Forms uma linha da trajetória.
+    //
+    // Não substitui feedback humano.
+    // Não inventa avaliação.
+    //
+    // Apenas registra objetivamente:
+    //
+    // - área anterior;
+    // - nova área;
+    // - executor;
+    // - data/hora;
+    // - continuidade do histórico.
+    //
+    // =====================================================
+
+    if (
+        oldArea !==
+        normalizedArea
+    ) {
+        try {
+            const changedAtUnix =
+                Math.floor(
+                    Date.now() /
+                    1000
+                );
+
+            const transitionEmbed =
+                new EmbedBuilder()
+                    .setColor(
+                        0x8e44ad
+                    )
+                    .setTitle(
+                        "🤖 Atualização automática da trajetória"
+                    )
+                    .setDescription(
+                        [
+                            "Uma mudança de função/área foi registrada no acompanhamento desta pessoa.",
+                            "",
+                            `📤 **Área anterior:** \`${oldArea}\``,
+                            `📥 **Nova área:** \`${normalizedArea}\``,
+                            "",
+                            actor?.id
+                                ? `👤 **Alteração realizada por:** <@${actor.id}> (\`${actor.id}\`)`
+                                : "🤖 **Alteração realizada por:** Sistema",
+                            `🕒 **Data da alteração:** <t:${changedAtUnix}:F>`,
+                            "",
+                            "📚 O histórico anterior permanece preservado. Esta alteração representa apenas uma nova etapa da trajetória dentro da SantaCreators."
+                        ].join(
+                            "\n"
+                        )
+                    )
+                    .setFooter({
+                        text:
+                            "SantaCreators • histórico de evolução"
+                    })
+                    .setTimestamp();
+
+            await thread.send({
+                embeds: [
+                    transitionEmbed
+                ],
+
+                allowedMentions: {
+                    parse: []
+                }
+            });
+        } catch (error) {
+            console.warn(
+                `[FormsCreator] Não consegui registrar a mudança de área no tópico ${normalizedThreadId}:`,
+                error?.message ||
+                error
+            );
+        }
+    }
 
     let activeTopicUpdated = true;
     let activeTopicSyncPending = false;

@@ -28,8 +28,17 @@ const STATE_FILE = path.join(
 
 export const EVOLUTION_TIERS = Object.freeze({
   TEAM: 1,
+
   COORDINATION: 2,
+
+  // Formulários dos Coordenadores.
   RESPONSIBLES: 3,
+
+  // Formulários dos Responsáveis Líderes.
+  RESP_LIDER: 4,
+
+  // Formulários dos Responsáveis de Influência.
+  RESP_INFLU: 5,
 });
 
 const CHANNEL_BY_TIER = Object.freeze({
@@ -41,6 +50,12 @@ const CHANNEL_BY_TIER = Object.freeze({
 
   [EVOLUTION_TIERS.RESPONSIBLES]:
     "1549505951009218641",
+
+  [EVOLUTION_TIERS.RESP_LIDER]:
+    "1555332632890572953",
+
+  [EVOLUTION_TIERS.RESP_INFLU]:
+    "1555332790499676182",
 });
 
 const ROLE = Object.freeze({
@@ -189,6 +204,38 @@ const MANAGEMENT_EVALUATOR_ROLES = new Set([
 const COORDINATION_EVALUATOR_ROLES = new Set([
   ...RESPONSIBLE_ROLES,
 ]);
+
+// =====================================================
+// FORM DOS RESP LÍDERES
+// =====================================================
+//
+// Resp Influ pode avaliar Resp Líder.
+// Resp Líder NÃO recebe acesso ao próprio nível.
+//
+// =====================================================
+
+const RESP_LIDER_EVALUATOR_ROLES =
+  new Set([
+    ROLE.OWNER,
+    ROLE.RESP_CREATORS,
+    ROLE.RESP_INFLU,
+  ]);
+
+// =====================================================
+// FORM DOS RESP INFLU
+// =====================================================
+//
+// Somente Resp Creators / Owner podem avaliar.
+// Resp Líder NÃO recebe acesso.
+//
+// =====================================================
+
+const RESP_INFLU_EVALUATOR_ROLES =
+  new Set([
+    ROLE.OWNER,
+    ROLE.RESP_CREATORS,
+  ]);
+
 const TIER_NAME = Object.freeze({
   [EVOLUTION_TIERS.TEAM]:
     "Equipe Creators",
@@ -197,9 +244,14 @@ const TIER_NAME = Object.freeze({
     "Coordenação",
 
   [EVOLUTION_TIERS.RESPONSIBLES]:
-    "Responsáveis",
-});
+    "Coordenação Reservada",
 
+  [EVOLUTION_TIERS.RESP_LIDER]:
+    "Resp Líder",
+
+  [EVOLUTION_TIERS.RESP_INFLU]:
+    "Resp Influ",
+});
 // Evita duas migrações simultâneas para o mesmo sistema.
 let syncQueue = Promise.resolve();
 
@@ -295,23 +347,64 @@ export function getEvolutionTierForMember(
     return null;
   }
 
-  /*
-   * A fase mais alta sempre vence.
-   *
-   * Coord. Creators sobe para o canal dos
-   * Responsáveis. Assim, o Coordenador não
-   * consegue visualizar as avaliações feitas
-   * sobre ele mesmo.
-   *
-   * Os Responsáveis também permanecem na
-   * fase mais reservada disponível.
-   */
+  // =====================================================
+  // RESP CREATORS NÃO POSSUI FORMS ATIVO
+  // =====================================================
+  //
+  // Se a pessoa chegou neste patamar,
+  // os Forms anteriores viram somente histórico.
+  //
+  // A função performSync() fará a trava física.
+  //
+  // =====================================================
 
   if (
-    ADMIN_USERS.has(member.id) ||
-    hasAnyRole(
-      member,
-      RESPONSIBLE_ROLES
+    member.roles.cache.has(
+      ROLE.RESP_CREATORS
+    )
+  ) {
+    return null;
+  }
+
+  // =====================================================
+  // RESP INFLU
+  // =====================================================
+
+  if (
+    member.roles.cache.has(
+      ROLE.RESP_INFLU
+    )
+  ) {
+    return EVOLUTION_TIERS.RESP_INFLU;
+  }
+
+  // =====================================================
+  // RESP LÍDER
+  // =====================================================
+
+  if (
+    member.roles.cache.has(
+      ROLE.RESP_LIDER
+    )
+  ) {
+    return EVOLUTION_TIERS.RESP_LIDER;
+  }
+
+  // =====================================================
+  // COORD. CREATORS
+  // =====================================================
+  //
+  // Continua no canal reservado para não conseguir
+  // enxergar os próprios feedbacks.
+  //
+  // =====================================================
+
+  if (
+    ADMIN_USERS.has(
+      member.id
+    ) ||
+    member.roles.cache.has(
+      ROLE.OWNER
     ) ||
     hasAnyRole(
       member,
@@ -321,15 +414,9 @@ export function getEvolutionTierForMember(
     return EVOLUTION_TIERS.RESPONSIBLES;
   }
 
-  /*
-   * Gestor Creators, Manager Creators e
-   * Social Medias possuem seus tópicos no
-   * canal da Coordenação.
-   *
-   * Como MANAGEMENT_ROLES não recebe acesso
-   * ao canal da Coordenação, essas pessoas
-   * não enxergam os próprios feedbacks.
-   */
+  // =====================================================
+  // GESTÃO
+  // =====================================================
 
   if (
     hasAnyRole(
@@ -340,10 +427,9 @@ export function getEvolutionTierForMember(
     return EVOLUTION_TIERS.COORDINATION;
   }
 
-  /*
-   * Os cargos iniciais permanecem no
-   * canal original da Equipe Creators.
-   */
+  // =====================================================
+  // EQUIPE
+  // =====================================================
 
   if (
     hasAnyRole(
@@ -356,7 +442,6 @@ export function getEvolutionTierForMember(
 
   return null;
 }
-
 // =====================================================
 // LINKS E CANAIS
 // =====================================================
@@ -470,9 +555,9 @@ async function configureChannelPermissions(
   }
 
   /*
-   * FASE 3 — COORDENAÇÃO E RESPONSÁVEIS
+   * FASE 3 - COORDENAÇÃO RESERVADA
    *
-   * Somente Responsáveis podem visualizar.
+   * Somente os Responsáveis podem visualizar.
    *
    * Coordenadores, Gestores e Equipe
    * não podem visualizar.
@@ -487,6 +572,66 @@ async function configureChannelPermissions(
 
     deniedRoles =
       new Set([
+        ...COORDINATOR_ROLES,
+        ...MANAGEMENT_ROLES,
+        ...TEAM_ROLES,
+      ]);
+  }
+
+  /*
+   * FASE 4 - RESP LÍDER
+   *
+   * Podem avaliar:
+   *
+   * - Owner
+   * - Resp Creators
+   * - Resp Influ
+   *
+   * Resp Líder não pode visualizar
+   * os Forms de outros Resp Líderes
+   * nem o próprio tópico.
+   */
+
+  if (
+    tier ===
+    EVOLUTION_TIERS.RESP_LIDER
+  ) {
+    allowedRoles =
+      RESP_LIDER_EVALUATOR_ROLES;
+
+    deniedRoles =
+      new Set([
+        ROLE.RESP_LIDER,
+        ...COORDINATOR_ROLES,
+        ...MANAGEMENT_ROLES,
+        ...TEAM_ROLES,
+      ]);
+  }
+
+  /*
+   * FASE 5 - RESP INFLU
+   *
+   * Podem avaliar:
+   *
+   * - Owner
+   * - Resp Creators
+   *
+   * Resp Líder não entra aqui.
+   * Resp Influ também não consegue
+   * visualizar o próprio nível.
+   */
+
+  if (
+    tier ===
+    EVOLUTION_TIERS.RESP_INFLU
+  ) {
+    allowedRoles =
+      RESP_INFLU_EVALUATOR_ROLES;
+
+    deniedRoles =
+      new Set([
+        ROLE.RESP_INFLU,
+        ROLE.RESP_LIDER,
         ...COORDINATOR_ROLES,
         ...MANAGEMENT_ROLES,
         ...TEAM_ROLES,
@@ -1588,24 +1733,6 @@ async function performSync(
     };
   }
 
-  const tier =
-    getEvolutionTierForMember(
-      member
-    );
-
-  /*
-   * Se a pessoa não possui nenhum dos
-   * cargos mapeados, não movemos nada.
-   */
-
-  if (!tier) {
-    return {
-      ok: false,
-      reason:
-        "member_without_mapped_role",
-    };
-  }
-
   const state =
     readState();
 
@@ -1615,6 +1742,108 @@ async function performSync(
       activeTier: null,
       activeThreadId: null,
     };
+
+  // =====================================================
+  // RESP CREATORS = SEM FORMS ATIVO
+  // =====================================================
+
+  if (
+    member.roles.cache.has(
+      ROLE.RESP_CREATORS
+    )
+  ) {
+    const knownThreadIds =
+      new Set([
+        ...Object.values(
+          userState.tiers || {}
+        ),
+
+        userState.activeThreadId,
+
+        originalThreadId,
+      ].filter(Boolean));
+
+    for (
+      const threadId
+      of knownThreadIds
+    ) {
+      const historicalThread =
+        await fetchChannel(
+          client,
+          threadId
+        );
+
+      if (
+        historicalThread
+          ?.isThread
+          ?.()
+      ) {
+        await setThreadMode(
+          historicalThread,
+          false,
+          "Resp Creators não possui Forms ativo"
+        ).catch(
+          error =>
+            console.warn(
+              `[EVOLUTION_HIERARCHY] Não consegui bloquear ${threadId}:`,
+              error?.message ||
+              error
+            )
+        );
+      }
+    }
+
+    userState.activeTier =
+      null;
+
+    userState.activeThreadId =
+      null;
+
+    userState.lockedByRole =
+      ROLE.RESP_CREATORS;
+
+    userState.lockedAt =
+      new Date()
+        .toISOString();
+
+    userState.lastReason =
+      reason;
+
+    state.users[
+      userId
+    ] =
+      userState;
+
+    writeState(
+      state
+    );
+
+    return {
+      ok:
+        false,
+
+      reason:
+        "resp_creators_without_active_forms",
+
+      locked:
+        true,
+    };
+  }
+
+  const tier =
+    getEvolutionTierForMember(
+      member
+    );
+
+  if (!tier) {
+    return {
+      ok:
+        false,
+
+      reason:
+        "member_without_mapped_role",
+    };
+  }
 
   const previousActiveTier =
     Number(
@@ -2105,7 +2334,145 @@ export function syncEvolutionHierarchyForMember(
 
   return task;
 }
+// =====================================================
+// MIGRA IDENTIDADE DA EVOLUÇÃO
+// =====================================================
 
+export async function migrateEvolutionHierarchyDiscordId(
+  client,
+  {
+    guildId = GUILD_ID,
+    oldUserId,
+    newUserId,
+    originalThreadId = null,
+    reason =
+      "Troca de identidade Discord",
+  } = {}
+) {
+  const oldId =
+    String(
+      oldUserId ||
+      ""
+    ).trim();
+
+  const newId =
+    String(
+      newUserId ||
+      ""
+    ).trim();
+
+  if (
+    !oldId ||
+    !newId ||
+    oldId === newId
+  ) {
+    return {
+      changed:
+        false,
+    };
+  }
+
+  const state =
+    readState();
+
+  const oldState =
+    state.users[
+      oldId
+    ] ||
+    null;
+
+  const existingNewState =
+    state.users[
+      newId
+    ] ||
+    null;
+
+  if (
+    oldState
+  ) {
+    state.users[
+      newId
+    ] = {
+      ...oldState,
+      ...(
+        existingNewState ||
+        {}
+      ),
+
+      tiers: {
+        ...(
+          oldState.tiers ||
+          {}
+        ),
+        ...(
+          existingNewState
+            ?.tiers ||
+          {}
+        ),
+      },
+
+      identityHistory: [
+        ...(
+          Array.isArray(
+            oldState.identityHistory
+          )
+            ? oldState.identityHistory
+            : []
+        ),
+
+        {
+          from:
+            oldId,
+
+          to:
+            newId,
+
+          at:
+            new Date()
+              .toISOString(),
+
+          reason,
+        },
+      ],
+
+      updatedAt:
+        new Date()
+          .toISOString(),
+    };
+
+    delete state.users[
+      oldId
+    ];
+
+    writeState(
+      state
+    );
+  }
+
+  const preservedOriginalThreadId =
+    state.users?.[
+      newId
+    ]?.tiers?.[
+      EVOLUTION_TIERS.TEAM
+    ] ||
+    originalThreadId ||
+    null;
+
+  return await syncEvolutionHierarchyForMember(
+    client,
+    {
+      guildId,
+
+      userId:
+        newId,
+
+      originalThreadId:
+        preservedOriginalThreadId,
+
+      reason,
+    }
+  );
+}
 // =====================================================
 // BUSCA DO TÓPICO ATIVO
 // =====================================================
@@ -2439,6 +2806,251 @@ export async function getEvolutionFeedbackContext(
   };
 }
 
+// =====================================================
+// LEITURA HISTÓRICA COMPLETA DA EVOLUÇÃO
+// =====================================================
+//
+// Diferente de getEvolutionFeedbackContext(), esta função
+// NÃO tenta ativar/sincronizar uma fase atual.
+//
+// Ela existe para retrospectivas, desligamentos e auditoria.
+// Assim Resp Creators continua sem Forms ativo, mas o sistema
+// ainda consegue ler todas as fases históricas preservadas.
+// =====================================================
+
+export async function getEvolutionHistoricalThreads(
+  client,
+  userId,
+  options = {}
+) {
+  const normalizedUserId =
+    String(
+      userId ||
+      ""
+    ).trim();
+
+  if (
+    !client ||
+    !normalizedUserId
+  ) {
+    return {
+      userId:
+        normalizedUserId,
+
+      threads:
+        [],
+
+      tiers:
+        {},
+    };
+  }
+
+  const guildId =
+    String(
+      options.guildId ||
+      GUILD_ID
+    );
+
+  const state =
+    readState();
+
+  const record =
+    state.users[
+      normalizedUserId
+    ] ||
+    null;
+
+  const tierThreadIds =
+    new Map();
+
+  if (
+    options.originalThreadId
+  ) {
+    tierThreadIds.set(
+      EVOLUTION_TIERS.TEAM,
+      String(
+        options.originalThreadId
+      )
+    );
+  }
+
+  for (
+    const [
+      tierKey,
+      threadId,
+    ]
+    of Object.entries(
+      record?.tiers ||
+      {}
+    )
+  ) {
+    const tier =
+      Number(
+        tierKey
+      );
+
+    if (
+      !Number.isFinite(
+        tier
+      ) ||
+      !threadId
+    ) {
+      continue;
+    }
+
+    tierThreadIds.set(
+      tier,
+      String(
+        threadId
+      )
+    );
+  }
+
+  if (
+    record?.activeTier &&
+    record?.activeThreadId
+  ) {
+    tierThreadIds.set(
+      Number(
+        record.activeTier
+      ),
+      String(
+        record.activeThreadId
+      )
+    );
+  }
+
+  const threads =
+    [];
+
+  const tiers =
+    {};
+
+  const seenThreadIds =
+    new Set();
+
+  const orderedEntries =
+    [...tierThreadIds.entries()]
+      .sort(
+        (a, b) =>
+          Number(a[0]) -
+          Number(b[0])
+      );
+
+  for (
+    const [
+      tier,
+      threadId,
+    ]
+    of orderedEntries
+  ) {
+    if (
+      seenThreadIds.has(
+        threadId
+      )
+    ) {
+      continue;
+    }
+
+    const thread =
+      await client.channels
+        .fetch(
+          threadId,
+          {
+            force:
+              true,
+          }
+        )
+        .catch(
+          () => null
+        );
+
+    const expectedParentId =
+      CHANNEL_BY_TIER[
+        Number(
+          tier
+        )
+      ] ||
+      null;
+
+    const valid =
+      !!(
+        thread?.isThread?.() &&
+        String(
+          thread.guildId ||
+          ""
+        ) ===
+          guildId &&
+        (
+          !expectedParentId ||
+          String(
+            thread.parentId ||
+            ""
+          ) ===
+            String(
+              expectedParentId
+            )
+        )
+      );
+
+    if (!valid) {
+      console.warn(
+        `[EVOLUTION_HIERARCHY] Tópico histórico inválido ignorado para ${normalizedUserId}: tier=${tier} thread=${threadId}.`
+      );
+
+      continue;
+    }
+
+    seenThreadIds.add(
+      threadId
+    );
+
+    tiers[
+      String(
+        tier
+      )
+    ] =
+      threadId;
+
+    threads.push(
+      thread
+    );
+  }
+
+  return {
+    userId:
+      normalizedUserId,
+
+    threads,
+
+    tiers,
+
+    activeTier:
+      Number(
+        record?.activeTier ||
+        0
+      ) ||
+      null,
+
+    activeThreadId:
+      record?.activeThreadId ||
+      null,
+
+    lockedByRole:
+      record?.lockedByRole ||
+      null,
+
+    identityHistory:
+      Array.isArray(
+        record?.identityHistory
+      )
+        ? [
+            ...record.identityHistory
+          ]
+        : [],
+  };
+}
+
 export function withActiveEvolutionThread(
   client,
   userId,
@@ -2637,32 +3249,65 @@ export async function initializeEvolutionHierarchy(
     of guild.members.cache.values()
   ) {
     if (
-      member.user.bot ||
-      !getEvolutionTierForMember(
-        member
-      )
+      member.user.bot
     ) {
       continue;
     }
 
+    const currentTier =
+      getEvolutionTierForMember(
+        member
+      );
+
+    const isRespCreators =
+      member.roles.cache.has(
+        ROLE.RESP_CREATORS
+      );
+
+    if (
+      !currentTier &&
+      !isRespCreators
+    ) {
+      continue;
+    }
+
+    const known =
+      readState().users?.[
+        member.id
+      ] ||
+      null;
+
     const originalThreadId =
-      typeof resolveOriginalThreadId ===
-        "function"
-        ? await resolveOriginalThreadId(
-            member.id
-          ).catch(() => null)
-        : null;
+      known?.tiers?.[
+        EVOLUTION_TIERS.TEAM
+      ] ||
+      (
+        typeof resolveOriginalThreadId ===
+          "function"
+          ? await resolveOriginalThreadId(
+              member.id
+            ).catch(() => null)
+          : null
+      );
 
     /*
      * Não cria nenhum tópico sem que exista
      * um registro original no FormsCreator.
      *
-     * Isso evita tópicos vazios, pessoas
-     * duplicadas e registros de membros que
-     * não participam do Controle GI.
+     * Para Resp Creators também aceitamos um
+     * histórico já conhecido no state, pois o
+     * objetivo no boot é garantir que qualquer
+     * Forms antigo continue travado.
      */
 
-    if (!originalThreadId) {
+    if (
+      !originalThreadId &&
+      !known?.activeThreadId &&
+      !Object.keys(
+        known?.tiers ||
+        {}
+      ).length
+    ) {
       continue;
     }
 

@@ -27,6 +27,7 @@ import {
 
 import {
   resolveDiscordIdentity,
+  getDiscordIdentityFamily,
   normalizeDiscordIdentityAdjustmentMap,
 } from "../shared/scDiscordIdentity.js";
 
@@ -69,12 +70,21 @@ const ALLOWED_REMOVE_ROLES = new Set([
 ]);
 
 // ✅ HIERARQUIA INTERNA DOS CARGOS PERMITIDOS
-// quanto MAIOR o número, MAIOR a hierarquia
-// ajuste aqui conforme a hierarquia real desejada
+//
+// Quanto MAIOR o número, MAIOR a hierarquia.
+//
+// Hierarquia oficial:
+//
+// Resp Creators
+//      ↓
+// Resp Influ
+//      ↓
+// Resp Líder
+//
 const REMOVE_ROLE_HIERARCHY = new Map([
   ["1352407252216184833", 1], // resp lider
-  ["1352408327983861844", 2], // resp creators
-  ["1262262852949905409", 3], // resp influ
+  ["1262262852949905409", 2], // resp influ
+  ["1352408327983861844", 3], // resp creators
 ]);
 
 function getAllowedRemovalRoleIdsFromMember(member) {
@@ -2665,14 +2675,56 @@ async function resolveRankMessageForWeek(rankChannel, st, wk) {
         if (String(m.author?.id || "") !== String(rankChannel.client?.user?.id || "")) continue;
 
         const embeds = Array.isArray(m.embeds) ? m.embeds : [];
+
         const hasMarker = embeds.some((emb) => {
-          const footer = String(emb?.footer?.text || emb?.data?.footer?.text || "");
-          return footer.includes(marker);
+          const footer = String(
+            emb?.footer?.text ||
+            emb?.data?.footer?.text ||
+            ""
+          );
+
+          return footer.includes(
+            marker
+          );
         });
 
-        if (hasMarker) {
-          st.weeklyMsgIds[wk] = m.id;
-          saveState(st);
+        // =====================================================
+        // GARANTE QUE É A MENSAGEM PRINCIPAL
+        // =====================================================
+        //
+        // As mensagens de continuação usam o mesmo marker.
+        //
+        // A mensagem principal é identificada também pela
+        // capa oficial do Ranking Semanal.
+        // =====================================================
+
+        const isMainRankMessage =
+          embeds.some(
+            (emb) => {
+              const title =
+                String(
+                  emb?.title ||
+                  emb?.data?.title ||
+                  ""
+                );
+
+              return title.startsWith(
+                "🏁 Ranking Semanal — Geral (todas as fontes)"
+              );
+            }
+          );
+
+        if (
+          hasMarker &&
+          isMainRankMessage
+        ) {
+          st.weeklyMsgIds[wk] =
+            m.id;
+
+          saveState(
+            st
+          );
+
           return m;
         }
       }
@@ -2745,37 +2797,152 @@ async function resolveExtraRankMessagesForWeek(rankChannel, st, wk) {
   return messages;
 }
 
-async function cleanupDuplicateRankMessagesForWeek(rankChannel, keepMsg, wk) {
+async function cleanupDuplicateRankMessagesForWeek(
+  rankChannel,
+  keepMsg,
+  wk,
+  keepExtraIds = []
+) {
   try {
-    const marker = `${RANK_MARKER_PREFIX}${wk}`;
-    const keepId = String(keepMsg?.id || "");
+    const marker =
+      `${RANK_MARKER_PREFIX}${wk}`;
+
+    // =====================================================
+    // MENSAGENS OFICIAIS QUE NÃO PODEM SER APAGADAS
+    // =====================================================
+    //
+    // Mantém:
+    //
+    // - mensagem principal;
+    // - todas as continuações oficiais da semana.
+    //
+    // =====================================================
+
+    const keepIds =
+      new Set([
+        String(
+          keepMsg?.id ||
+          ""
+        ),
+
+        ...(
+          Array.isArray(
+            keepExtraIds
+          )
+            ? keepExtraIds.map(
+                (id) =>
+                  String(
+                    id ||
+                    ""
+                  )
+              )
+            : []
+        ),
+      ].filter(Boolean));
 
     let lastId;
 
-    for (let p = 0; p < RANK_FIND_PAGES; p++) {
-      const batch = await rankChannel.messages.fetch({ limit: 100, before: lastId }).catch(() => null);
-      if (!batch?.size) break;
+    for (
+      let p = 0;
+      p < RANK_FIND_PAGES;
+      p++
+    ) {
+      const batch =
+        await rankChannel.messages
+          .fetch({
+            limit:
+              100,
 
-      for (const msg of batch.values()) {
-        if (String(msg.author?.id || "") !== String(rankChannel.client?.user?.id || "")) continue;
-        if (String(msg.id) === keepId) continue;
+            before:
+              lastId,
+          })
+          .catch(
+            () => null
+          );
 
-        const embeds = Array.isArray(msg.embeds) ? msg.embeds : [];
-        const hasMarker = embeds.some((emb) => {
-          const footer = String(emb?.footer?.text || emb?.data?.footer?.text || "");
-          return footer.includes(marker);
-        });
+      if (
+        !batch?.size
+      ) {
+        break;
+      }
 
-        if (hasMarker) {
-          await msg.delete().catch(() => {});
+      for (
+        const msg
+        of batch.values()
+      ) {
+        if (
+          String(
+            msg.author?.id ||
+            ""
+          ) !==
+          String(
+            rankChannel.client
+              ?.user?.id ||
+            ""
+          )
+        ) {
+          continue;
+        }
+
+        if (
+          keepIds.has(
+            String(
+              msg.id
+            )
+          )
+        ) {
+          continue;
+        }
+
+        const embeds =
+          Array.isArray(
+            msg.embeds
+          )
+            ? msg.embeds
+            : [];
+
+        const hasMarker =
+          embeds.some(
+            (emb) => {
+              const footer =
+                String(
+                  emb?.footer?.text ||
+                  emb?.data?.footer?.text ||
+                  ""
+                );
+
+              return footer.includes(
+                marker
+              );
+            }
+          );
+
+        if (
+          hasMarker
+        ) {
+          await msg
+            .delete()
+            .catch(
+              () => {}
+            );
         }
       }
 
-      lastId = batch.last()?.id;
-      if (!lastId) break;
+      lastId =
+        batch.last()?.id;
+
+      if (
+        !lastId
+      ) {
+        break;
+      }
     }
   } catch (e) {
-    console.warn("[SC_GERAL_WEEKLY_RANK] Falha ao limpar duplicados:", e?.message || e);
+    console.warn(
+      "[SC_GERAL_WEEKLY_RANK] Falha ao limpar duplicados:",
+      e?.message ||
+      e
+    );
   }
 }
 
@@ -2995,8 +3162,17 @@ const bottomLines = bottom.map((u, i) => {
     }
   }
 
-  // ⚠️ Discord deixa no máximo 10 embeds por mensagem — a gente respeita
-return embeds.slice(0, 9);
+  // =====================================================
+  // NÃO CORTA O RANKING AQUI
+  // =====================================================
+  //
+  // A divisão segura em várias mensagens é feita depois
+  // por splitEmbedsForDiscord().
+  //
+  // Portanto todos os embeds precisam sair daqui.
+  // =====================================================
+
+  return embeds;
 }
 
 
@@ -3326,7 +3502,12 @@ const editedOrRecreated = await editRankMessageWithFallback(
 
 if (!editedOrRecreated) return false;
 
-await cleanupDuplicateRankMessagesForWeek(ch, editedOrRecreated, wk);
+await cleanupDuplicateRankMessagesForWeek(
+  ch,
+  editedOrRecreated,
+  wk,
+  st.weeklyExtraMsgIds?.[wk] || []
+);
 
 st.sigByWeek = st.sigByWeek || {};
 st.sigByWeek[wk] = sig;
@@ -4236,105 +4417,639 @@ export async function getWeeklyRankingDebug(client) {
 }
 
 // ✅ NOVO: Export para uso externo (ex: gestaoinfluencer desligamento)
-export async function getStatsForUser(
+export async function getStatsForUser(client, userId) {
+  try {
+    const canonicalUserId = resolveDiscordIdentity(userId);
+    const { items } = await collectAllPoints(client, "light");
+    const normalizedItems = (items || []).map(item => ({
+      ...item,
+      userId: resolveDiscordIdentity(item.userId)
+    }));
+
+    const currentWeekKey = weekKeyFromDateSP(new Date());
+    const firstWeekKey = addDaysToWeekKey(currentWeekKey, -35);
+    const adjustments = loadAdjustments();
+    const weekKeys = new Set([
+      currentWeekKey,
+      ...normalizedItems.map(item => weekKeyFromDateSP(item.ts)),
+      ...Object.keys(adjustments.byWeek || {})
+    ]);
+
+    const bySource = {};
+    const weeks = [];
+    let total = 0;
+    let totalBase = 0;
+    let totalAdjustments = 0;
+
+    for (const weekKey of [...weekKeys].sort().reverse()) {
+      if (weekKey < firstWeekKey || weekKey > currentWeekKey) continue;
+
+      // Usa a mesma regra do ranking: cooldown, ajustes e piso zero.
+      const aggregate = aggregateWeekDetailed(normalizedItems, weekKey);
+      const sources = aggregate.bySourceByUser[canonicalUserId] || {};
+      const basePoints = Object.values(sources).reduce(
+        (sum, value) => sum + Number(value || 0),
+        0
+      );
+      const adjustment = Number(adjustments.byWeek?.[weekKey]?.[canonicalUserId] || 0);
+      const index = aggregate.list.findIndex(entry => entry.userId === canonicalUserId);
+      const points = index >= 0 ? aggregate.list[index].points : 0;
+
+      if (!basePoints && !adjustment && weekKey !== currentWeekKey) continue;
+
+      total += points;
+      totalBase += basePoints;
+      totalAdjustments += adjustment;
+
+      for (const [source, count] of Object.entries(sources)) {
+        const label = SOURCE_LABEL[source] || source;
+        bySource[label] = (bySource[label] || 0) + count;
+      }
+
+      weeks.push({
+        weekKey,
+        points,
+        basePoints,
+        adjustment,
+        position: index >= 0 ? index + 1 : null,
+        participants: aggregate.list.length
+      });
+    }
+
+    return {
+      total,
+      totalBase,
+      totalAdjustments,
+      thisWeekPoints: weeks.find(week => week.weekKey === currentWeekKey)?.points ?? 0,
+      sourcesFormatted: Object.entries(bySource)
+        .sort((a, b) => b[1] - a[1])
+        .map(([source, count]) => `• ${source}: **${count}**`),
+      weeksFormatted: weeks.map(week =>
+        `• **${triLabelShortFromWeekKey(week.weekKey)}**: ${week.points} pts` +
+        (week.position ? ` — ${week.position}º de ${week.participants}` : " — sem colocação")
+      ),
+      weeks,
+      historicalComplete: false,
+      coverage: `Janela recente: ${firstWeekKey} até ${currentWeekKey}. A coleta possui limites de páginas e não representa toda a trajetória.`
+    };
+  } catch (error) {
+    console.error("[scGeralWeeklyRanking] getStatsForUser error:", error);
+    return null;
+  }
+}
+
+// =====================================================
+// HISTÓRICO CONSOLIDADO DA PESSOA NO RANKING
+// =====================================================
+//
+// Esta função NÃO refaz todos os canais operacionais.
+//
+// Para preservar desempenho, ela usa:
+// - as mensagens históricas já publicadas no canal do Ranking;
+// - o arquivo semanal de fontes já consolidado;
+// - o mapa central de identidade Discord.
+//
+// Assim uma troca de Discord não separa a trajetória antiga
+// da conta atual e o desligamento consegue enxergar semanas
+// anteriores à janela curta de 35 dias do painel vivo.
+// =====================================================
+
+export async function getHistoricalStatsForUser(
   client,
   userId
 ) {
   try {
+    const rawUserId =
+      String(
+        userId ||
+        ""
+      ).trim();
+
+    if (
+      !client ||
+      !rawUserId
+    ) {
+      return null;
+    }
+
     const canonicalUserId =
       resolveDiscordIdentity(
-        userId
-      );
+        rawUserId
+      ) ||
+      rawUserId;
 
-    const { items } =
-      await collectAllPoints(
-        client,
-        "light"
-      );
-
-    const userItems =
-      items.filter(
-        i =>
-          resolveDiscordIdentity(
-            i.userId
-          ) ===
+    const identityIds =
+      new Set([
+        rawUserId,
+        canonicalUserId,
+        ...getDiscordIdentityFamily(
           canonicalUserId
-      );
+        ),
+      ].filter(Boolean));
 
-    const total =
-      userItems.length;
-    
-    const bySource = {};
-    const byWeek = {};
-    
-    // Carrega ajustes manuais pra somar também
-    const adjustmentsData = loadAdjustments();
-    
-    for (const item of userItems) {
-      // Por fonte
-      const label = SOURCE_LABEL[item.source] || item.source;
-      bySource[label] = (bySource[label] || 0) + 1;
-      
-      // Por semana
-      const wk = weekKeyFromDateSP(item.ts);
-      byWeek[wk] = (byWeek[wk] || 0) + 1;
+    const rankChannel =
+      await client.channels
+        .fetch(
+          RANK_CHANNEL_ID
+        )
+        .catch(
+          () => null
+        );
+
+    if (
+      !rankChannel?.isTextBased?.()
+    ) {
+      return await getStatsForUser(
+        client,
+        canonicalUserId
+      );
     }
 
-    // Soma ajustes manuais no total e nas semanas
-    let totalAdjustments = 0;
-    if (adjustmentsData.byWeek) {
-      for (const [wk, users] of Object.entries(adjustmentsData.byWeek)) {
-        const adj =
-  users[
-    canonicalUserId
-  ] || 0;
-        if (adj !== 0) {
-          byWeek[wk] = (byWeek[wk] || 0) + adj;
-          totalAdjustments += adj;
+    const rankByWeek =
+      new Map();
+
+    const participantsByWeek =
+      new Map();
+
+    let before =
+      null;
+
+    let pagesRead =
+      0;
+
+    let historicalComplete =
+      true;
+
+    const HISTORY_MAX_PAGES =
+      500;
+
+    while (
+      pagesRead <
+      HISTORY_MAX_PAGES
+    ) {
+      const batch =
+        await fetchDiscordMessagesPageShared(
+          rankChannel,
+          {
+            limit:
+              100,
+
+            before,
+          }
+        );
+
+      if (
+        !batch?.size
+      ) {
+        break;
+      }
+
+      pagesRead++;
+
+      for (
+        const message
+        of batch.values()
+      ) {
+        if (
+          client.user?.id &&
+          String(
+            message.author?.id ||
+            ""
+          ) !==
+            String(
+              client.user.id
+            )
+        ) {
+          continue;
+        }
+
+        for (
+          const embed
+          of message.embeds ||
+          []
+        ) {
+          const footerText =
+            String(
+              embed?.footer?.text ||
+              embed?.data?.footer?.text ||
+              ""
+            );
+
+          const weekKey =
+            footerText.match(
+              /SC_GERAL_WEEKLY_RANK::WK=(\d{4}-\d{2}-\d{2})/i
+            )?.[1] ||
+            null;
+
+          if (!weekKey) {
+            continue;
+          }
+
+          const description =
+            String(
+              embed?.description ||
+              embed?.data?.description ||
+              ""
+            );
+
+          const participantsMatch =
+            description.match(
+              /👥\s*\*\*Participantes:\*\*\s*\*\*(\d+)\*\*/i
+            );
+
+          if (
+            participantsMatch &&
+            !participantsByWeek.has(
+              weekKey
+            )
+          ) {
+            participantsByWeek.set(
+              weekKey,
+              Number(
+                participantsMatch[1]
+              )
+            );
+          }
+
+          const title =
+            String(
+              embed?.title ||
+              embed?.data?.title ||
+              ""
+            );
+
+          if (
+            !title.startsWith(
+              "🏆 Ranking da semana (todos)"
+            )
+          ) {
+            continue;
+          }
+
+          const rankingRegex =
+            /\*\*(\d+)\.\*\*\s*<@!?(\d{17,20})>\s*[—–-]\s*\*\*(-?\d+(?:[.,]\d+)?)\*\*\s*pts\b/gi;
+
+          let match =
+            null;
+
+          while (
+            (
+              match =
+                rankingRegex.exec(
+                  description
+                )
+            ) !==
+            null
+          ) {
+            const historicalUserId =
+              String(
+                match[2]
+              );
+
+            if (
+              !identityIds.has(
+                historicalUserId
+              )
+            ) {
+              continue;
+            }
+
+            if (
+              rankByWeek.has(
+                weekKey
+              )
+            ) {
+              continue;
+            }
+
+            rankByWeek.set(
+              weekKey,
+              {
+                weekKey,
+
+                position:
+                  Number(
+                    match[1]
+                  ),
+
+                points:
+                  Number(
+                    String(
+                      match[3]
+                    ).replace(
+                      ",",
+                      "."
+                    )
+                  ),
+
+                historicalUserId,
+              }
+            );
+          }
         }
       }
+
+      before =
+        batch.last()?.id ||
+        null;
+
+      if (
+        !before ||
+        batch.size <
+          100
+      ) {
+        break;
+      }
+
+      if (
+        pagesRead >=
+          HISTORY_MAX_PAGES
+      ) {
+        historicalComplete =
+          false;
+      }
     }
-    
-    // Formata semanas para label legível
-    const weeksFormatted = [];
-    const sortedWeeks = Object.keys(byWeek).sort().reverse(); // Mais recente primeiro
-    
-    for (const wk of sortedWeeks) {
-      const pts = byWeek[wk];
-      if (pts === 0) continue;
-      const label = triLabelShortFromWeekKey(wk);
-      weeksFormatted.push(`• **${label}**: ${pts} pts`);
+
+    const sourcesStatePath =
+      path.join(
+        DATA_DIR,
+        "sc_geral_weekly_rank_sources.json"
+      );
+
+    const sourcesState =
+      readJSON(
+        sourcesStatePath,
+        {}
+      );
+
+    const adjustments =
+      loadAdjustments();
+
+    const weekKeys =
+      new Set([
+        ...rankByWeek.keys(),
+        ...Object.keys(
+          sourcesState ||
+          {}
+        ),
+        ...Object.keys(
+          adjustments.byWeek ||
+          {}
+        ),
+      ]);
+
+    const bySource =
+      {};
+
+    const weeks =
+      [];
+
+    let total =
+      0;
+
+    let totalBase =
+      0;
+
+    let totalAdjustments =
+      0;
+
+    for (
+      const weekKey
+      of [...weekKeys]
+        .sort()
+        .reverse()
+    ) {
+      const weekSourceState =
+        sourcesState?.[
+          weekKey
+        ] ||
+        {};
+
+      const sources =
+        {};
+
+      for (
+        const identityId
+        of identityIds
+      ) {
+        const sourceBucket =
+          weekSourceState?.[
+            identityId
+          ] ||
+          {};
+
+        for (
+          const [
+            source,
+            rawCount,
+          ]
+          of Object.entries(
+            sourceBucket
+          )
+        ) {
+          const count =
+            Math.max(
+              0,
+              Number(
+                rawCount ||
+                0
+              )
+            );
+
+          if (
+            !Number.isFinite(
+              count
+            ) ||
+            count <= 0
+          ) {
+            continue;
+          }
+
+          sources[source] =
+            Number(
+              sources[source] ||
+              0
+            ) +
+            count;
+        }
+      }
+
+      const basePoints =
+        Object.values(
+          sources
+        ).reduce(
+          (
+            sum,
+            value
+          ) =>
+            sum +
+            Number(
+              value ||
+              0
+            ),
+          0
+        );
+
+      const adjustment =
+        Number(
+          adjustments.byWeek?.[
+            weekKey
+          ]?.[
+            canonicalUserId
+          ] ||
+          0
+        );
+
+      const rankRecord =
+        rankByWeek.get(
+          weekKey
+        ) ||
+        null;
+
+      const points =
+        rankRecord
+          ? Math.max(
+              0,
+              Number(
+                rankRecord.points ||
+                0
+              )
+            )
+          : Math.max(
+              0,
+              basePoints +
+              adjustment
+            );
+
+      if (
+        !rankRecord &&
+        !basePoints &&
+        !adjustment
+      ) {
+        continue;
+      }
+
+      total +=
+        points;
+
+      totalBase +=
+        basePoints;
+
+      totalAdjustments +=
+        adjustment;
+
+      for (
+        const [
+          source,
+          count,
+        ]
+        of Object.entries(
+          sources
+        )
+      ) {
+        const label =
+          SOURCE_LABEL[source] ||
+          source;
+
+        bySource[label] =
+          Number(
+            bySource[label] ||
+            0
+          ) +
+          Number(
+            count ||
+            0
+          );
+      }
+
+      weeks.push({
+        weekKey,
+        points,
+        basePoints,
+        adjustment,
+
+        position:
+          rankRecord?.position ||
+          null,
+
+        participants:
+          participantsByWeek.get(
+            weekKey
+          ) ||
+          null,
+
+        historicalUserId:
+          rankRecord?.historicalUserId ||
+          null,
+      });
     }
 
-    // Formata fontes
-    const sourcesFormatted = Object.entries(bySource)
-      .sort((a, b) => b[1] - a[1])
-      .map(([src, count]) => `• ${src}: **${count}**`);
+    const currentWeekKey =
+      weekKeyFromDateSP(
+        nowSP()
+      );
 
-    // ✅ NOVO: Pega pontos da semana atual
-const currentWeekKey = weekKeyFromDateSP(nowSP());
+    return {
+      total,
+      totalBase,
+      totalAdjustments,
 
-// byWeek já recebeu os ajustes no loop acima
-const thisWeekTotalPoints = byWeek[currentWeekKey] || 0;
-const thisWeekAdjustment =
-  adjustmentsData
-    .byWeek?.[
-      currentWeekKey
-    ]?.[
-      canonicalUserId
-    ] || 0;
+      thisWeekPoints:
+        weeks.find(
+          week =>
+            week.weekKey ===
+            currentWeekKey
+        )?.points ??
+        0,
 
- return {
-  total: total + totalAdjustments,
-  thisWeekPoints: thisWeekTotalPoints,
-  totalBase: total,
-  totalAdjustments,
-  sourcesFormatted,
-  weeksFormatted
-};
-  } catch (e) {
-    console.error("[scGeralWeeklyRanking] getStatsForUser error:", e);
-    return null;
+      sourcesFormatted:
+        Object.entries(
+          bySource
+        )
+          .sort(
+            (a, b) =>
+              Number(b[1]) -
+              Number(a[1])
+          )
+          .map(
+            ([source, count]) =>
+              `• ${source}: **${count}**`
+          ),
+
+      weeksFormatted:
+        weeks.map(
+          week =>
+            `• **${triLabelShortFromWeekKey(week.weekKey)}**: ${week.points} pts` +
+            (
+              week.position
+                ? ` — ${week.position}º${week.participants ? ` de ${week.participants}` : ""}`
+                : " — colocação histórica não encontrada"
+            )
+        ),
+
+      weeks,
+
+      historicalComplete,
+
+      coverage:
+        historicalComplete
+          ? `Histórico consolidado a partir de todas as mensagens de ranking encontradas no canal e dos snapshots semanais disponíveis (${weeks.length} semana(s) da pessoa).`
+          : `Histórico consolidado até o limite de segurança de ${HISTORY_MAX_PAGES * 100} mensagens do canal de ranking; podem existir semanas anteriores fora desse limite.`,
+    };
+  } catch (
+    error
+  ) {
+    console.error(
+      "[scGeralWeeklyRanking] getHistoricalStatsForUser error:",
+      error
+    );
+
+    return await getStatsForUser(
+      client,
+      userId
+    ).catch(
+      () => null
+    );
   }
 }
 

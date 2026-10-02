@@ -150,16 +150,24 @@ const MANUAL_ADJUST_ALLOWED_ROLES = new Set([
 ]);
 
 // ✅ HIERARQUIA INTERNA DOS CARGOS PERMITIDOS
-// quanto MAIOR o número, MAIOR a hierarquia
-// ajuste aqui conforme a tua regra real
+//
+// Quanto MAIOR o número, MAIOR a hierarquia.
+//
+// Hierarquia oficial:
+//
+// Resp Creators
+//      ↓
+// Resp Influ
+//      ↓
+// Resp Líder
+//
 const MANUAL_ADJUST_ROLE_HIERARCHY = new Map([
   ["1352407252216184833", 1], // resp lider
-  ["1352408327983861844", 2], // resp creators
-  ["1262262852949905409", 3], // resp influ
+  ["1262262852949905409", 2], // resp influ
+  ["1352408327983861844", 3], // resp creators
 ]);
 
 const MANUAL_ADJUST_PATH = path.join(DATA_DIR, "sc_points_adjustments.json");
-
 function loadManualAdjustments() {
   const manual =
     readJSON(

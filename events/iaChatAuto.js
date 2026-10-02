@@ -32557,8 +32557,9 @@ Controle GI: ${
       : "Existe e está ativo"
     : "Não localizado"
 }
-Pontos atuais da semana: ${Number(rankingStats?.thisWeekPoints || 0)}
-Total histórico localizado: ${Number(rankingStats?.total || 0)}
+Pontos atuais da semana: ${rankingStats?.thisWeekPoints ?? "Não disponível"}
+Total no período consultado: ${rankingStats?.total ?? "Não disponível"}
+Cobertura: ${rankingStats?.coverage || "Cobertura histórica não confirmada; não descreva como toda a trajetória."}
 Cargos atuais: ${roleNames}
 
 OBJETIVO:
@@ -32606,8 +32607,11 @@ Use português natural, próximo e humano.
 
 O texto será enviado diretamente no ticket pessoal e a pessoa será mencionada antes da mensagem.
 
-Desenvolva cada ponto útil do comentário novo: situação concreta, por que importa, orientação relacionada, evolução posterior confirmada e ação prática.
+Não escreva menções Discord nem repita o ID Discord da pessoa. O sistema fará a única menção ao destinatário.
+O número do passaporte da cidade não é um ID Discord. Nunca o transforme em <@numero>.
+Fale diretamente com "você". Não mencione usuários, cargos, @everyone ou @here.
 
+Desenvolva cada ponto útil do comentário novo: situação concreta, por que importa, orientação relacionada, evolução posterior confirmada e ação prática.
 Relacione o comentário ao histórico do ticket e do Forms quando houver ligação real. Se não houver confirmação de melhora ou resolução, diga isso com cuidado.
 
 Não basta dizer que a pessoa precisa melhorar ou que existem retornos: explique o que ajustar e como fazer.
@@ -32663,15 +32667,55 @@ O envio será dividido em partes, sem cortar o final. Conclua todas as frases.
               "Forms -> ticket pessoal",
           });
 
-        const finalText =
-          limitDiscordText(
-            fixBrokenDiscordMentions(
-              String(
-                generated ||
-                ""
-              )
+        const finalText = limitDiscordText(
+          String(
+            generated ||
+            ""
+          )
+            // Usuário Discord
+            .replace(
+              /<@!?\s*\d{1,22}\s*>/g,
+              ""
             )
-          );
+
+            // Cargo Discord
+            .replace(
+              /<@&\s*\d{1,22}\s*>/g,
+              ""
+            )
+
+            // Canal Discord
+            .replace(
+              /<#\s*\d{1,22}\s*>/g,
+              ""
+            )
+
+            // everyone / here
+            .replace(
+              /@(everyone|here)\b/gi,
+              ""
+            )
+
+            // Remove lixo de uma menção retirada no começo.
+            .replace(
+              /^[\s,;:—–-]+/,
+              ""
+            )
+
+            // Corrige espaço antes da pontuação.
+            .replace(
+              /\s+([,.;:!?])/g,
+              "$1"
+            )
+
+            // Evita espaços duplicados.
+            .replace(
+              /[ \t]{2,}/g,
+              " "
+            )
+
+            .trim()
+        );
 
         if (!finalText) {
           return;

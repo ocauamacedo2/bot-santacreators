@@ -15,10 +15,12 @@ const PROTECTED_USER_IDS = [
   "660311795327828008",  // eu (usuário)
   "1262262852949905408", // owner
   "1352741003639132160", // admin
-  "1352408327983861844", // resp creator
-  "1262262852949905409", // resp influ
 ];
 
+const PROTECTED_ROLE_IDS = [
+  "1352408327983861844", // resp creators
+  "1262262852949905409", // resp influ
+];
 const CANAL_CREATORS_ID = "1381597720007151698"; // canal onde manda o aviso público
 
 const EXEMPT_ROLE_IDS = [
@@ -60,9 +62,42 @@ const PUBLIC_MSG = (executorId, victimTag) =>
 // ===== HELPERS =====
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-function isProtected(userId) {
-  return PROTECTED_USER_IDS.includes(userId);
+function isProtectedUserId(userId) {
+  return PROTECTED_USER_IDS.includes(
+    String(
+      userId ||
+      ""
+    )
+  );
 }
+
+function hasProtectedRole(member) {
+  if (!member?.roles?.cache) {
+    return false;
+  }
+
+  return PROTECTED_ROLE_IDS.some(
+    roleId =>
+      member.roles.cache.has(
+        roleId
+      )
+  );
+}
+
+function isProtectedMember(member) {
+  return (
+    !!member &&
+    (
+      isProtectedUserId(
+        member.id
+      ) ||
+      hasProtectedRole(
+        member
+      )
+    )
+  );
+}
+
 function isAllowedRemover(userId) {
   return ALLOWED_REMOVERS.includes(userId);
 }
@@ -116,13 +151,13 @@ function getHighestRolePosition(member) {
  * Busca entrada recente do audit log com retries para garantir que o Discord processou a ação.
  */
 async function fetchRecentRoleUpdateEntry(guild, targetUserId, removedRoleIds = []) {
-  const maxAttempts = 3;
+  const maxAttempts = 5;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      const logs = await guild.fetchAuditLogs({
-        type: AuditLogEvent.MemberRoleUpdate,
-        limit: 8,
-      });
+       const logs = await guild.fetchAuditLogs({
+         type: AuditLogEvent.MemberRoleUpdate,
+         limit: 15,
+       });
 
       const entry = logs.entries.find((e) => {
         if (!e || e.target?.id !== targetUserId) return false;
@@ -238,8 +273,19 @@ export async function roleProtectOnReady(client) {
 // ======================================================
 export async function roleProtectHandleGuildMemberUpdate(oldMember, newMember, client) {
   try {
-    // Só protege alvos configurados
-    if (!isProtected(newMember.id)) return false;
+    // Só protege alvos configurados.
+    // Usa oldMember também porque justamente o cargo protegido
+    // pode ter sido removido nesta atualização.
+    if (
+      !isProtectedMember(
+        oldMember
+      ) &&
+      !isProtectedMember(
+        newMember
+      )
+    ) {
+      return false;
+    }
 
     // ✅ Check global bypass (setado por outros sistemas como gestaoinfluencer)
     if (hasGlobalBypass(newMember.id)) return false;
@@ -260,9 +306,34 @@ export async function roleProtectHandleGuildMemberUpdate(oldMember, newMember, c
     const executorUser = auditEntry?.executor ?? null;
     const executorId = executorUser?.id || null;
 
-    // ✅ Se não achou executor mas o bypass está ativo, ignore (foi o bot via comando)
-    if (!executorId && hasGlobalBypass(newMember.id)) return false;
 
+        // =====================================================
+    // AUDIT LOG INCERTO = NÃO RESTAURA NO ESCURO
+    // =====================================================
+    //
+    // Antes o sistema assumia que "executor desconhecido"
+    // significava remoção indevida.
+    //
+    // Isso causava falso positivo em alterações legítimas.
+    //
+    // Agora:
+    //
+    // - sem executor confirmado, não pune;
+    // - não restaura automaticamente;
+    // - deixa aviso no console;
+    // - um cargo SELF_LOCKED continua protegido quando
+    //   houver executor identificável.
+    //
+    // =====================================================
+
+    if (!executorId) {
+      console.warn(
+        `[ROLE-PROTECT] Remoção de cargo em ${newMember.user.tag} não teve executor confirmado no Audit Log. ` +
+        `Cargos observados: ${removed.join(", ")}. Nenhuma restauração/punição foi executada no escuro.`
+      );
+
+      return false;
+    }
 
     // 1) Se o executor for o próprio bot (remoção legítima programada), libera
     if (executorId === client.user.id) return false;
@@ -307,7 +378,19 @@ export async function roleProtectHandleGuildMemberUpdate(oldMember, newMember, c
       }
     }
 
-    // 5) RESTAURAÇÃO (Se chegou aqui, a remoção foi indevida)
+    // 5) RESTAURAÇÃO
+    //
+    // Se chegou aqui:
+    //
+    // - existe executor confirmado;
+    // - não é o próprio bot;
+    // - não está na whitelist;
+    // - não foi uma remoção própria permitida;
+    // - não passou na hierarquia.
+    //
+    // Portanto agora existe evidência suficiente
+    // para restaurar os cargos.
+
     const rolesToRestore = removed
       .map((rid) => guild.roles.cache.get(rid))
       .filter((role) => role && role.editable)
@@ -315,20 +398,30 @@ export async function roleProtectHandleGuildMemberUpdate(oldMember, newMember, c
 
     if (rolesToRestore.length > 0) {
       await newMember.roles
-        .add(rolesToRestore, "Proteção: restauração de cargos protegidos")
+        .add(
+          rolesToRestore,
+          "Proteção: restauração de cargos protegidos"
+        )
         .catch(() => {});
     }
 
-    // Se não achou executor no log (fail-safe)
-    if (!executorId) {
-      await newMember.send("⚠️ Detectei remoção de cargos protegidos e restaurei. Executor não identificado com segurança.").catch(() => {});
-      return true;
-    }
-
-    const execMember = executorMember || await guild.members.fetch(executorId).catch(() => null);
-
+    const execMember =
+      executorMember ||
+      await guild.members
+        .fetch(
+          executorId
+        )
+        .catch(
+          () => null
+        );
     // Se o executor for protegido ou bot, apenas restaura e não pune
-    if (!execMember || execMember.user.bot || isProtected(execMember.id)) {
+    if (
+      !execMember ||
+      execMember.user.bot ||
+      isProtectedMember(
+        execMember
+      )
+    ) {
       return true;
     }
 
@@ -381,11 +474,29 @@ export async function roleProtectHandleMessage(message, client) {
       if (match) targetId = match[1];
     }
 
-    if (!targetId || !isProtected(targetId)) return false;
+    if (!targetId) return false;
+
+    const targetMember =
+      await guild.members
+        .fetch(
+          targetId
+        )
+        .catch(
+          () => null
+        );
+
+    if (
+      !targetMember ||
+      !isProtectedMember(
+        targetMember
+      )
+    ) {
+      return false;
+    }
+
     if (isAllowedRemover(message.author.id)) return false;
 
     // ✅ FIX: Hierarchy Check para o comando manual
-    const targetMember = await guild.members.fetch(targetId).catch(() => null);
     if (targetMember) {
       const executorPos = getHighestRolePosition(execMember);
       const targetPos = getHighestRolePosition(targetMember);

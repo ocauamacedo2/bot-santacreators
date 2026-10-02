@@ -4,20 +4,31 @@ import cron from "node-cron";
 import { EmbedBuilder } from "discord.js";
 
 import {
+  sendBotDmLogged,
+} from "../utils/botDmLogger.js";
+
+import {
   getFormsCreatorPersonData,
   getPersonalTicketHistoryForUser,
 } from "./formscreator.js";
 
 import {
   getEvolutionFeedbackContext,
+  getEvolutionHistoricalThreads,
   withActiveEvolutionThread,
 } from "./evolutionHierarchy.js";
 
 import {
   getStatsForUser,
+  getHistoricalStatsForUser,
   getWeeklyRanking,
   MIN_POINTS_WEEK,
 } from "./scGeralWeeklyRanking.js";
+
+import {
+  resolveDiscordIdentity,
+  getDiscordIdentityFamily,
+} from "../shared/scDiscordIdentity.js";
 
 import {
   generateSantaCreatorsStandaloneText,
@@ -555,6 +566,176 @@ function saveFeedbackState(
 }
 
 // =====================================================
+// MIGRAÇÃO DO ESTADO SEMANAL ENTRE CONTAS DISCORD
+// =====================================================
+
+export function migrateWeeklyMemberAiFeedbackDiscordId(
+  oldUserId,
+  newUserId
+) {
+  const oldId =
+    String(
+      oldUserId ||
+      ""
+    ).trim();
+
+  const newId =
+    String(
+      newUserId ||
+      ""
+    ).trim();
+
+  if (
+    !oldId ||
+    !newId ||
+    oldId === newId
+  ) {
+    return {
+      changed:
+        false,
+
+      migratedEntries:
+        0,
+    };
+  }
+
+  const state =
+    loadFeedbackState();
+
+  let changed =
+    false;
+
+  let migratedEntries =
+    0;
+
+  const migrateWeeklyBucket =
+    (bucket) => {
+      if (
+        !bucket ||
+        typeof bucket !==
+          "object"
+      ) {
+        return;
+      }
+
+      for (
+        const weekState
+        of Object.values(
+          bucket
+        )
+      ) {
+        if (
+          !weekState ||
+          typeof weekState !==
+            "object" ||
+          !weekState[
+            oldId
+          ]
+        ) {
+          continue;
+        }
+
+        const oldValue =
+          weekState[
+            oldId
+          ];
+
+        const currentNewValue =
+          weekState[
+            newId
+          ];
+
+        weekState[
+          newId
+        ] =
+          currentNewValue
+            ? {
+                ...oldValue,
+                ...currentNewValue,
+              }
+            : {
+                ...oldValue,
+              };
+
+        delete weekState[
+          oldId
+        ];
+
+        changed =
+          true;
+
+        migratedEntries++;
+      }
+    };
+
+  migrateWeeklyBucket(
+    state.manual
+  );
+
+  migrateWeeklyBucket(
+    state.automatic
+  );
+
+  if (
+    state.roleHistory?.[
+      oldId
+    ]
+  ) {
+    const oldHistory =
+      Array.isArray(
+        state.roleHistory[
+          oldId
+        ]
+      )
+        ? state.roleHistory[
+            oldId
+          ]
+        : [];
+
+    const newHistory =
+      Array.isArray(
+        state.roleHistory[
+          newId
+        ]
+      )
+        ? state.roleHistory[
+            newId
+          ]
+        : [];
+
+    state.roleHistory[
+      newId
+    ] = [
+      ...oldHistory,
+      ...newHistory,
+    ];
+
+    delete state.roleHistory[
+      oldId
+    ];
+
+    changed =
+      true;
+
+    migratedEntries++;
+  }
+
+  if (
+    changed
+  ) {
+    saveFeedbackState(
+      state
+    );
+  }
+
+  return {
+    changed,
+
+    migratedEntries,
+  };
+}
+
+// =====================================================
 // SEMANA OPERACIONAL
 // =====================================================
 
@@ -900,6 +1081,27 @@ function getUserWeekSources(
   userId,
   weekKey
 ) {
+  const rawUserId =
+    String(
+      userId ||
+      ""
+    ).trim();
+
+  const canonicalUserId =
+    resolveDiscordIdentity(
+      rawUserId
+    ) ||
+    rawUserId;
+
+  const identityIds =
+    new Set([
+      rawUserId,
+      canonicalUserId,
+      ...getDiscordIdentityFamily(
+        canonicalUserId
+      ),
+    ].filter(Boolean));
+
   let bestBucket =
     {};
 
@@ -916,20 +1118,57 @@ function getUserWeekSources(
         {}
       );
 
-    const bucket =
-      normalizeSourceBucket(
-        allWeeks?.[
-          weekKey
-        ]?.[
-          String(
-            userId
-          )
-        ] || {}
-      );
+    const weekState =
+      allWeeks?.[
+        weekKey
+      ] ||
+      {};
+
+    const mergedBucket =
+      {};
+
+    for (
+      const identityId
+      of identityIds
+    ) {
+      const bucket =
+        normalizeSourceBucket(
+          weekState?.[
+            String(
+              identityId
+            )
+          ] ||
+          {}
+        );
+
+      for (
+        const [
+          sourceName,
+          amount,
+        ]
+        of Object.entries(
+          bucket
+        )
+      ) {
+        mergedBucket[
+          sourceName
+        ] =
+          Number(
+            mergedBucket[
+              sourceName
+            ] ||
+            0
+          ) +
+          Number(
+            amount ||
+            0
+          );
+      }
+    }
 
     const total =
       sumSources(
-        bucket
+        mergedBucket
       );
 
     /*
@@ -946,7 +1185,7 @@ function getUserWeekSources(
       bestTotal
     ) {
       bestBucket =
-        bucket;
+        mergedBucket;
 
       bestTotal =
         total;
@@ -2742,17 +2981,28 @@ async function collectMemberFacts({
   // ✅ POSIÇÃO REAL DA PESSOA NA SEMANA ATUAL
   // =====================================================
 
+  const canonicalUserId =
+    resolveDiscordIdentity(
+      userId
+    ) ||
+    userId;
+
   const rankingIndex =
     Array.isArray(
       weeklyRanking
     )
       ? weeklyRanking.findIndex(
           item =>
-            String(
-              item?.userId ||
-              ""
+            (
+              resolveDiscordIdentity(
+                item?.userId
+              ) ||
+              String(
+                item?.userId ||
+                ""
+              )
             ) ===
-            userId
+            canonicalUserId
         )
       : -1;
 
@@ -3219,16 +3469,11 @@ async function collectMemberFacts({
       )
     );
 
-  // Se uma das fontes estiver mais atualizada que a outra,
-  // utiliza a maior leitura sem somar as duas.
-  //
-  // Isso evita duplicar atividade.
-  const currentTotal =
-    Math.max(
-      consolidatedCurrentTotal,
-      rankingCurrentTotal,
-      rankingPoints
-    );
+  // O ranking inclui cooldown e ajustes manuais.
+  // Uma leitura maior do consolidado não pode desfazer uma dedução.
+  const currentTotal = Number.isFinite(rankingPoints)
+    ? rankingPoints
+    : consolidatedCurrentTotal;
 
   // =====================================================
   // CONTEXTO DO PROCESSO NO CONTROLE GI
@@ -3739,10 +3984,14 @@ function buildFeedbackPrompt({
       ? [
           `Pontos localizados especificamente nesta semana: ${rankingCurrentPoints}`,
 
-          `Total histórico localizado no Ranking: ${Number(
+          `Total no período consultado no Ranking: ${Number(
             facts.rankingStats.total ||
             0
           )}`,
+
+          `Cobertura: ${facts.rankingStats.coverage || "Histórico integral não confirmado."}`,
+
+          "Não trate os pontos deste período como o total de toda a trajetória.",
 
           `Histórico das semanas anteriores: ${
             (
@@ -6095,6 +6344,38 @@ function cleanGeneratedText(
       /```$/i,
       ""
     )
+
+    // Nunca deixa a própria IA fabricar
+    // menções dentro do conteúdo.
+    .replace(
+      /<@!?\s*\d{1,22}\s*>/g,
+      ""
+    )
+    .replace(
+      /<@&\s*\d{1,22}\s*>/g,
+      ""
+    )
+    .replace(
+      /<#\s*\d{1,22}\s*>/g,
+      ""
+    )
+    .replace(
+      /@(everyone|here)\b/gi,
+      ""
+    )
+
+    .replace(
+      /\s+([,.;:!?])/g,
+      "$1"
+    )
+    .replace(
+      /^[\s,;:—–-]+/,
+      ""
+    )
+    .replace(
+      /[ \t]{2,}/g,
+      " "
+    )
     .trim();
 }
 
@@ -7629,6 +7910,1262 @@ export async function generateWeeklyMemberPrivateDm({
 }
 
 // =====================================================
+// HISTÓRICO COMPLETO PARA EVENTOS DE CICLO
+// =====================================================
+
+function formatLifecycleDuration(
+  value
+) {
+  let milliseconds =
+    Math.max(
+      0,
+      Number(
+        value ||
+        0
+      )
+    );
+
+  const dayMs =
+    24 *
+    60 *
+    60 *
+    1000;
+
+  const hourMs =
+    60 *
+    60 *
+    1000;
+
+  const minuteMs =
+    60 *
+    1000;
+
+  const days =
+    Math.floor(
+      milliseconds /
+      dayMs
+    );
+
+  milliseconds -=
+    days *
+    dayMs;
+
+  const hours =
+    Math.floor(
+      milliseconds /
+      hourMs
+    );
+
+  milliseconds -=
+    hours *
+    hourMs;
+
+  const minutes =
+    Math.floor(
+      milliseconds /
+      minuteMs
+    );
+
+  const parts =
+    [];
+
+  if (days) {
+    parts.push(
+      `${days} dia(s)`
+    );
+  }
+
+  if (hours) {
+    parts.push(
+      `${hours}h`
+    );
+  }
+
+  if (
+    minutes ||
+    parts.length === 0
+  ) {
+    parts.push(
+      `${minutes}min`
+    );
+  }
+
+  return parts.join(
+    " "
+  );
+}
+
+function flattenLifecycleDiscordMessage(
+  message
+) {
+  const textParts =
+    [];
+
+  if (
+    message?.content
+  ) {
+    textParts.push(
+      String(
+        message.content
+      )
+    );
+  }
+
+  for (
+    const embed
+    of message?.embeds ||
+    []
+  ) {
+    if (
+      embed?.title
+    ) {
+      textParts.push(
+        `[Título] ${embed.title}`
+      );
+    }
+
+    if (
+      embed?.description
+    ) {
+      textParts.push(
+        String(
+          embed.description
+        )
+      );
+    }
+
+    for (
+      const field
+      of embed?.fields ||
+      []
+    ) {
+      textParts.push(
+        `${field.name}: ${field.value}`
+      );
+    }
+  }
+
+  const clean =
+    textParts
+      .join(
+        " | "
+      )
+      .replace(
+        /\s+/g,
+        " "
+      )
+      .trim();
+
+  if (!clean) {
+    return null;
+  }
+
+  const createdAt =
+    Number(
+      message?.createdTimestamp ||
+      0
+    );
+
+  const date =
+    createdAt > 0
+      ? new Date(
+          createdAt
+        ).toLocaleString(
+          "pt-BR",
+          {
+            timeZone:
+              TZ,
+          }
+        )
+      : "data não disponível";
+
+  const authorName =
+    message?.member?.displayName ||
+    message?.author?.globalName ||
+    message?.author?.username ||
+    "Usuário";
+
+  const authorType =
+    message?.author?.bot
+      ? "BOT/SISTEMA"
+      : "HUMANO";
+
+  return (
+    `[${date}] ` +
+    `[${authorType}] ` +
+    `${authorName}: ` +
+    `${clean}`
+  );
+}
+
+async function collectLifecycleChannelHistory(
+  channel,
+  {
+    maxPages = 500,
+    maxChars = 180000,
+  } = {}
+) {
+  if (
+    !channel?.isTextBased?.()
+  ) {
+    return (
+      "Canal não disponível para leitura."
+    );
+  }
+
+  const messages =
+    [];
+
+  let before =
+    null;
+
+  for (
+    let page = 0;
+    page < maxPages;
+    page++
+  ) {
+    const options = {
+      limit:
+        100,
+    };
+
+    if (
+      before
+    ) {
+      options.before =
+        before;
+    }
+
+    const batch =
+      await channel
+        .messages
+        .fetch(
+          options
+        )
+        .catch(
+          () => null
+        );
+
+    if (
+      !batch ||
+      batch.size ===
+        0
+    ) {
+      break;
+    }
+
+    messages.push(
+      ...batch.values()
+    );
+
+    before =
+      batch.last()
+        ?.id ||
+      null;
+
+    if (
+      batch.size <
+      100
+    ) {
+      break;
+    }
+  }
+
+  const ordered =
+    messages
+      .sort(
+        (
+          first,
+          second
+        ) =>
+          Number(
+            first?.createdTimestamp ||
+            0
+          ) -
+          Number(
+            second?.createdTimestamp ||
+            0
+          )
+      );
+
+  const lines =
+    ordered
+      .map(
+        flattenLifecycleDiscordMessage
+      )
+      .filter(
+        Boolean
+      );
+
+  const selected =
+    [];
+
+  let used =
+    0;
+
+  for (
+    let index =
+      lines.length - 1;
+    index >= 0;
+    index--
+  ) {
+    const line =
+      lines[
+        index
+      ];
+
+    if (
+      used +
+        line.length +
+        1 >
+      maxChars
+    ) {
+      continue;
+    }
+
+    selected.push(
+      line
+    );
+
+    used +=
+      line.length +
+      1;
+  }
+
+  selected.reverse();
+
+  const omitted =
+    lines.length -
+    selected.length;
+
+  return [
+    omitted > 0
+      ? `[${omitted} registro(s) não couberam no limite de contexto. Não trate o recorte como histórico absolutamente integral.]`
+      : "",
+    ...selected,
+  ]
+    .filter(
+      Boolean
+    )
+    .join(
+      "\n"
+    ) ||
+    "Nenhum registro textual localizado.";
+}
+
+async function collectLifecycleFormsHistory({
+  client,
+  guild,
+  userId,
+  originalThreadId,
+} = {}) {
+  if (
+    !client ||
+    !guild ||
+    !userId ||
+    !originalThreadId
+  ) {
+    return (
+      "Histórico completo do Forms não pôde ser localizado."
+    );
+  }
+
+  let evolutionContext =
+    null;
+
+  let historicalContext =
+    null;
+
+  try {
+    historicalContext =
+      await getEvolutionHistoricalThreads(
+        client,
+        userId,
+        {
+          guildId:
+            guild.id,
+
+          originalThreadId,
+        }
+      );
+  } catch (
+    error
+  ) {
+    console.warn(
+      `[Weekly Member AI] Não consegui carregar a leitura histórica pura dos Forms de ${userId}:`,
+      error?.message ||
+      error
+    );
+  }
+
+  if (
+    !historicalContext?.threads?.length
+  ) {
+    try {
+      evolutionContext =
+        await getEvolutionFeedbackContext(
+          client,
+          userId,
+          {
+            guildId:
+              guild.id,
+
+            originalThreadId,
+
+            reason:
+              "Retrospectiva completa da trajetória",
+          }
+        );
+    } catch (
+      error
+    ) {
+      console.warn(
+        `[Weekly Member AI] Não consegui carregar todas as fases do Forms de ${userId}:`,
+        error?.message ||
+        error
+      );
+    }
+  }
+
+  const threadCandidates =
+    Array.isArray(
+      historicalContext?.threads
+    ) &&
+    historicalContext
+      .threads
+      .length
+      ? [...historicalContext.threads]
+      : Array.isArray(
+          evolutionContext?.threads
+        ) &&
+        evolutionContext
+          .threads
+          .length
+          ? [...evolutionContext.threads]
+          : [];
+
+  if (
+    !threadCandidates.length
+  ) {
+    const originalThread =
+      await client.channels
+        .fetch(
+          originalThreadId
+        )
+        .catch(
+          () => null
+        );
+
+    if (
+      originalThread
+    ) {
+      threadCandidates.push(
+        originalThread
+      );
+    }
+  }
+
+  const chunks =
+    [];
+
+  const seenThreads =
+    new Set();
+
+  for (
+    const thread
+    of threadCandidates
+  ) {
+    if (
+      !thread ||
+      seenThreads.has(
+        thread.id
+      )
+    ) {
+      continue;
+    }
+
+    seenThreads.add(
+      thread.id
+    );
+
+    const history =
+      await collectLifecycleChannelHistory(
+        thread,
+        {
+          maxPages:
+            500,
+
+          maxChars:
+            90000,
+        }
+      );
+
+    chunks.push(
+      [
+        `===== TÓPICO ${thread.name || thread.id} =====`,
+        history,
+      ].join(
+        "\n"
+      )
+    );
+  }
+
+  return (
+    chunks.join(
+      "\n\n"
+    ) ||
+    "Nenhum histórico de Forms localizado."
+  );
+}
+
+function formatLifecycleAreaHistory(
+  record
+) {
+  const rows =
+    Array.isArray(
+      record?.areaHistory
+    )
+      ? record.areaHistory
+      : [];
+
+  if (
+    !rows.length
+  ) {
+    return (
+      `Área registrada atualmente: ` +
+      `${record?.area || "Não informada"}.`
+    );
+  }
+
+  return rows
+    .map(
+      (
+        item,
+        index
+      ) => {
+        const startedAt =
+          Number(
+            item?.startedAtMs ||
+            0
+          );
+
+        const endedAt =
+          Number(
+            item?.endedAtMs ||
+            Date.now()
+          );
+
+        const duration =
+          startedAt > 0
+            ? formatLifecycleDuration(
+                Math.max(
+                  0,
+                  endedAt -
+                  startedAt
+                )
+              )
+            : "tempo não calculado";
+
+        const startText =
+          startedAt > 0
+            ? new Date(
+                startedAt
+              ).toLocaleString(
+                "pt-BR",
+                {
+                  timeZone:
+                    TZ,
+                }
+              )
+            : "não informado";
+
+        const endText =
+          item?.endedAtMs
+            ? new Date(
+                Number(
+                  item.endedAtMs
+                )
+              ).toLocaleString(
+                "pt-BR",
+                {
+                  timeZone:
+                    TZ,
+                }
+              )
+            : "atual";
+
+        return (
+          `${index + 1}. ` +
+          `${item?.area || "Área não informada"} | ` +
+          `${startText} -> ${endText} | ` +
+          `${duration}`
+        );
+      }
+    )
+    .join(
+      "\n"
+    );
+}
+
+// =====================================================
+// IA DE PAUSA, RETORNO E DESLIGAMENTO
+// =====================================================
+
+export async function generateMemberLifecyclePrivateDm({
+  client,
+  guild,
+  record,
+  eventType,
+  reason = "",
+} = {}) {
+  if (
+    !client ||
+    !guild ||
+    !record
+  ) {
+    throw new Error(
+      "Dados insuficientes para gerar mensagem de ciclo do membro."
+    );
+  }
+
+  const userId =
+    String(
+      record?.targetId ||
+      ""
+    ).trim();
+
+  if (
+    !userId
+  ) {
+    throw new Error(
+      "Controle GI sem membro alvo."
+    );
+  }
+
+  const weekKey =
+    getWeekKeySP();
+
+  const facts =
+    await collectMemberFacts({
+      client,
+      guild,
+      record,
+      weekKey,
+    });
+
+  let completeFormsHistory =
+    "Varredura completa não necessária para este evento.";
+
+  let completeTicketHistory =
+    "Varredura completa não necessária para este evento.";
+
+  let historicalRankingStats =
+    null;
+
+  if (
+    eventType ===
+    "disconnected"
+  ) {
+    historicalRankingStats =
+      await getHistoricalStatsForUser(
+        client,
+        userId
+      ).catch(
+        () => null
+      );
+
+    completeFormsHistory =
+      await collectLifecycleFormsHistory({
+        client,
+        guild,
+        userId,
+
+        originalThreadId:
+          facts?.formsData
+            ?.threadId ||
+          null,
+      });
+
+    let ticketChannel =
+      null;
+
+    if (
+      record?.personalTicketChannelId
+    ) {
+      ticketChannel =
+        await client.channels
+          .fetch(
+            String(
+              record
+                .personalTicketChannelId
+            )
+          )
+          .catch(
+            () => null
+          );
+    }
+
+    completeTicketHistory =
+      ticketChannel
+        ? await collectLifecycleChannelHistory(
+            ticketChannel,
+            {
+              maxPages:
+                500,
+
+              maxChars:
+                180000,
+            }
+          )
+        : "Ticket pessoal não localizado para varredura completa.";
+  }
+
+  const currentFormsContext =
+    formatRecentFeedbackContext(
+      facts?.formsHistory,
+      20000,
+      "Nenhum comentário atual do Forms localizado."
+    );
+
+  const previousFormsContext =
+    formatRecentFeedbackContext(
+      facts?.previousFormsHistory,
+      20000,
+      "Nenhum comentário anterior do Forms localizado."
+    );
+
+  const currentTicketContext =
+    formatPersonalTicketHistoryForPrompt(
+      facts?.personalTicketHistory,
+      20000
+    );
+
+  const previousTicketContext =
+    formatPersonalTicketHistoryForPrompt(
+      facts?.previousPersonalTicketHistory,
+      20000
+    );
+
+  const lifecycleRankingStats =
+    historicalRankingStats ||
+    facts?.rankingStats ||
+    null;
+
+  const rankingHistory =
+    lifecycleRankingStats
+      ? [
+          `Pontuação atual da semana: ${
+            Number.isFinite(
+              Number(
+                facts.rankingPoints
+              )
+            )
+              ? facts.rankingPoints
+              : "não confirmada"
+          }`,
+
+          `Posição atual: ${
+            Number.isFinite(
+              Number(
+                facts.rankingPosition
+              )
+            )
+              ? `${facts.rankingPosition}º de ${facts.rankingSize}`
+              : "sem posição confirmada"
+          }`,
+
+          `Total no histórico consultado: ${Number(
+            lifecycleRankingStats.total ||
+            0
+          )}`,
+
+          `Cobertura do ranking: ${
+            lifecycleRankingStats.coverage ||
+            "não confirmada"
+          }`,
+
+          `Histórico considerado completo: ${
+            lifecycleRankingStats.historicalComplete === true
+              ? "sim"
+              : "não / não confirmado"
+          }`,
+
+          `Semanas registradas: ${
+            (
+              lifecycleRankingStats
+                .weeksFormatted ||
+              []
+            ).join(
+              " | "
+            ) ||
+            "sem histórico semanal"
+          }`,
+
+          `Categorias registradas: ${
+            (
+              lifecycleRankingStats
+                .sourcesFormatted ||
+              []
+            ).join(
+              " | "
+            ) ||
+            "sem categorias registradas"
+          }`,
+        ].join(
+          "\n"
+        )
+      : "Ranking indisponível.";
+
+  const areaHistory =
+    formatLifecycleAreaHistory(
+      record
+    );
+
+  const responsibleHistory =
+    JSON.stringify(
+      Array.isArray(
+        record?.responsibleHistory
+      )
+        ? record.responsibleHistory
+        : [],
+      null,
+      2
+    );
+
+  const discordHistory =
+    JSON.stringify(
+      Array.isArray(
+        record?.discordIdHistory
+      )
+        ? record.discordIdHistory
+        : [],
+      null,
+      2
+    );
+
+  const pausedDuration =
+    Math.max(
+      0,
+      Number(
+        record?.totalPausedMs ||
+        0
+      ) +
+      (
+        record?.pausedAtMs
+          ? Date.now() -
+            Number(
+              record.pausedAtMs
+            )
+          : 0
+      )
+    );
+
+  let lifecycleInstruction =
+    "";
+
+  if (
+    eventType ===
+    "paused"
+  ) {
+    lifecycleInstruction =
+      `
+A pessoa acabou de ter o Controle GI PAUSADO.
+
+Explique de forma clara:
+
+- neste momento ela está sendo considerada inativa na SantaCreators;
+- a pausa normalmente representa baixa presença, pouco login ou pouca participação;
+- os poderes podem estar removidos em game durante este período;
+- começou a contagem do período de inatividade;
+- se permanecer pausada durante 30 dias, poderá ocorrer desligamento automático;
+- caso queira continuar, precisa voltar a aparecer, participar das calls, eventos e atividades semanais;
+- não precisa exagerar no volume, mas precisa demonstrar presença real;
+- utilize os feedbacks disponíveis para citar pontos que merecem atenção;
+- reconheça também coisas positivas reais;
+- não revele quem escreveu feedbacks internos;
+- não use tom ameaçador;
+- não invente fatos.
+`.trim();
+  }
+
+  if (
+    eventType ===
+    "resumed"
+  ) {
+    lifecycleInstruction =
+      `
+A pessoa acabou de ter o Controle GI DESPAUSADO.
+
+Explique:
+
+- ela voltou a demonstrar atividade;
+- a contagem de inatividade foi interrompida;
+- o acompanhamento volta ao fluxo normal;
+- o retorno não apaga orientações anteriores;
+- mostre pontos positivos que ela pode continuar mantendo;
+- traga pontos reais do Forms e ticket que ainda merecem atenção;
+- incentive presença em calls, eventos e atividades;
+- não revele autores de feedbacks;
+- não invente melhora que os dados não comprovem.
+`.trim();
+  }
+
+  if (
+    eventType ===
+    "disconnected"
+  ) {
+    lifecycleInstruction =
+      `
+A pessoa está sendo DESLIGADA da SantaCreators.
+
+Escreva uma retrospectiva LONGA, humana, detalhada e individual.
+
+Quero que você percorra a trajetória disponível da pessoa.
+
+Quando os dados existirem, fale sobre:
+
+- entrada na SantaCreators;
+- tempo total no processo;
+- áreas e cargos pelos quais passou;
+- quanto tempo permaneceu em cada área quando isso estiver registrado;
+- responsáveis que acompanharam a trajetória;
+- trocas de Discord sem tratar a pessoa como alguém novo;
+- períodos de pausa/inatividade;
+- retorno de atividade, se houver;
+- pontuação;
+- semanas de maior destaque;
+- colocações no ranking;
+- categorias em que mais trabalhou;
+- eventos, registros e atividades em que apareceu;
+- elogios reais;
+- evolução observada;
+- orientações que recebeu;
+- pontos em que precisava de mais atenção;
+- pontos que conseguiu melhorar;
+- pontos que continuavam aparecendo;
+- contribuições relevantes;
+- progresso de responsabilidade/cargo;
+- Forms;
+- ticket pessoal;
+- ranking;
+- contexto operacional disponível.
+
+Não invente uma conquista.
+
+Não transforme ausência de dados em crítica.
+
+Não diga o nome de quem escreveu feedback interno.
+
+Não revele área restrita.
+
+Não copie acusações como se fossem fatos.
+
+Não humilhe.
+
+A mensagem precisa fechar a etapa de forma respeitosa.
+
+No encerramento:
+
+- se a saída estiver registrada de forma tranquila, diga que no futuro, caso queira tentar ingressar novamente, poderá procurar a equipe;
+- explique que ela já conhece boa parte do processo;
+- não prometa retorno;
+- não prometa cargo;
+- não prometa prioridade;
+- os critérios serão os vigentes no momento de uma eventual nova entrada.
+`.trim();
+  }
+
+  const prompt =
+    `
+Você é a assistente de acompanhamento pessoal da SantaCreators.
+
+Escreva diretamente PARA a pessoa.
+
+Nome:
+${facts?.displayName || "Membro"}
+
+Área atual/final:
+${facts?.area || record?.area || "Não informada"}
+
+Motivo registrado:
+${String(reason || "Não informado").slice(0, 2000)}
+
+Tempo pausado acumulado:
+${formatLifecycleDuration(pausedDuration)}
+
+=====================================================
+INSTRUÇÃO DO EVENTO
+=====================================================
+
+${lifecycleInstruction}
+
+=====================================================
+TRAJETÓRIA DE ÁREAS / CARGOS
+=====================================================
+
+${areaHistory}
+
+=====================================================
+HISTÓRICO DE RESPONSÁVEIS
+=====================================================
+
+${responsibleHistory}
+
+=====================================================
+HISTÓRICO DE IDENTIDADE DISCORD
+=====================================================
+
+${discordHistory}
+
+=====================================================
+RANKING E DESEMPENHO
+=====================================================
+
+${rankingHistory}
+
+=====================================================
+FORMS - CONTEXTO RECENTE
+=====================================================
+
+${currentFormsContext}
+
+=====================================================
+FORMS - CONTEXTO ANTERIOR
+=====================================================
+
+${previousFormsContext}
+
+=====================================================
+TICKET PESSOAL - CONTEXTO RECENTE
+=====================================================
+
+${currentTicketContext}
+
+=====================================================
+TICKET PESSOAL - CONTEXTO ANTERIOR
+=====================================================
+
+${previousTicketContext}
+
+=====================================================
+FORMS - VARREDURA AMPLIADA DA TRAJETÓRIA
+=====================================================
+
+${completeFormsHistory}
+
+=====================================================
+TICKET - VARREDURA AMPLIADA DA TRAJETÓRIA
+=====================================================
+
+${completeTicketHistory}
+
+=====================================================
+REGRAS FINAIS
+=====================================================
+
+- Não escreva menção Discord.
+- Não escreva <@ID>.
+- Não transforme passaporte em menção.
+- Não exponha ID Discord desnecessariamente.
+- Não invente informação.
+- Diferencie fato de orientação.
+- Não exponha o nome de quem escreveu feedback interno.
+- Use português brasileiro natural.
+- Pode usar emojis moderadamente.
+- Evite texto robótico.
+- Não termine abruptamente.
+- Entregue somente a mensagem final para o membro.
+`.trim();
+
+  let generated =
+    "";
+
+  try {
+    generated =
+      await generateSantaCreatorsStandaloneText({
+        prompt,
+
+        maxOutputTokens:
+          8192,
+
+        temperature:
+          eventType ===
+            "disconnected"
+            ? 0.68
+            : 0.62,
+
+        label:
+          `Member Lifecycle ${eventType} ${userId}`,
+      });
+  } catch (
+    error
+  ) {
+    console.warn(
+      `[Weekly Member AI] Falha ao gerar mensagem ${eventType} para ${userId}:`,
+      error?.message ||
+      error
+    );
+  }
+
+  let text =
+    cleanGeneratedText(
+      generated
+    );
+
+  if (
+    !text
+  ) {
+    if (
+      eventType ===
+      "disconnected"
+    ) {
+      text =
+        [
+          `Encerramos aqui sua etapa atual na SantaCreators, ${facts?.displayName || "membro"}.`,
+          "",
+          `Sua área final registrada foi **${facts?.area || record?.area || "não informada"}**.`,
+          "",
+          facts?.rankingStats
+            ? `No período disponível no ranking, foram localizados **${Number(facts.rankingStats.total || 0)} ponto(s)**. ${facts.rankingStats.coverage || ""}`
+            : "",
+          "",
+          `Ao longo do acompanhamento ficaram registrados momentos positivos, orientações e pontos de atenção que fizeram parte do seu processo. Nem todo o histórico necessariamente está disponível nas fontes atuais, então este fechamento considera apenas o que pôde ser confirmado.`,
+          "",
+          `Obrigado pelo período conosco. Caso sua saída tenha ocorrido de forma tranquila e, no futuro, você queira tentar ingressar novamente, poderá procurar a equipe para conhecer os critérios vigentes naquele momento. Você já conhece boa parte do processo, mas uma eventual nova entrada continuará seguindo as regras aplicáveis na época.`,
+        ]
+          .filter(
+            Boolean
+          )
+          .join(
+            "\n"
+          );
+    } else {
+      const fallback =
+        await generatePrivateMemberFeedback({
+          facts,
+        })
+          .catch(
+            () => ""
+          );
+
+      text =
+        cleanGeneratedText(
+          fallback
+        );
+    }
+  }
+
+  if (
+    !text
+  ) {
+    throw new Error(
+      "Não foi possível gerar a mensagem de ciclo do membro."
+    );
+  }
+
+  return {
+    text,
+
+    chunks:
+      splitWeeklyFeedbackText(
+        text,
+        eventType ===
+          "disconnected"
+          ? 3300
+          : 3000
+      ),
+
+    facts,
+  };
+}
+
+// =====================================================
+// ENVIO DA DM SEMANAL AUTOMÁTICA
+// =====================================================
+
+async function sendWeeklyPrivateDmToMember(
+  member,
+  bundle
+) {
+  const chunks =
+    Array.isArray(
+      bundle?.chunks
+    )
+      ? bundle.chunks
+      : [];
+
+  if (
+    !member ||
+    chunks.length ===
+      0
+  ) {
+    return false;
+  }
+
+  const client =
+    member.guild?.client ||
+    null;
+
+  if (
+    !client
+  ) {
+    return false;
+  }
+
+  for (
+    let index = 0;
+    index < chunks.length;
+    index++
+  ) {
+    const embed =
+      new EmbedBuilder()
+        .setColor(
+          0x8e44ad
+        )
+        .setTitle(
+          index === 0
+            ? "💡 Um retorno para você"
+            : "💡 Continuação do seu retorno"
+        )
+        .setDescription(
+          chunks[
+            index
+          ]
+        )
+        .setFooter({
+          text:
+            "SantaCreators • acompanhamento pessoal",
+        })
+        .setTimestamp();
+
+    await sendBotDmLogged({
+      client,
+
+      target:
+        member,
+
+      payload: {
+        embeds: [
+          embed
+        ],
+
+        allowedMentions: {
+          parse: []
+        }
+      },
+
+      source:
+        "Weekly Member AI Feedback",
+
+      guild:
+        member.guild,
+    });
+  }
+
+  return true;
+}
+
+// =====================================================
 // EXECUÇÃO MANUAL
 // =====================================================
 
@@ -7714,13 +9251,15 @@ export async function runAutomaticWeeklyMemberFeedback(
           );
 
       if (
-        !member ||
-        !hasTargetRole(
-          member
-        )
+        !member
       ) {
         continue;
       }
+
+      const memberHasTargetRole =
+        hasTargetRole(
+          member
+        );
 
       const weekKey =
         getWeekKeySP();
@@ -7728,7 +9267,7 @@ export async function runAutomaticWeeklyMemberFeedback(
       const state =
         loadFeedbackState();
 
-      if (
+      const automaticState =
         state
           .automatic
           ?.[
@@ -7736,24 +9275,130 @@ export async function runAutomaticWeeklyMemberFeedback(
           ]
           ?.[
             userId
-          ]
-          ?.messageId
+          ] ||
+        null;
+
+      if (
+        automaticState
+          ?.messageId &&
+        automaticState
+          ?.privateDmSentAt
       ) {
         continue;
       }
 
       try {
-        await processFeedback({
-          client,
-          guild,
-          record,
+        const currentState =
+          loadFeedbackState();
 
-          mode:
-            "automatic",
-        });
+        const previousAutomatic =
+          currentState
+            .automatic
+            ?.[
+              weekKey
+            ]
+            ?.[
+              userId
+            ] ||
+          null;
+
+        let feedbackResult =
+          null;
+
+        // =================================================
+        // PUBLICAÇÃO NO FORMS
+        // =================================================
+        //
+        // Resp Creators não possui Forms ativo.
+        // Para os demais, continua publicando normalmente.
+        //
+        // =================================================
+
+        const isRespCreators =
+          member.roles.cache.has(
+            "1352408327983861844"
+          );
+
+        if (
+          memberHasTargetRole &&
+          !isRespCreators &&
+          !previousAutomatic?.messageId
+        ) {
+          feedbackResult =
+            await processFeedback({
+              client,
+              guild,
+              record,
+
+              mode:
+                "automatic",
+            });
+        }
+
+        // =================================================
+        // DM PRIVADA
+        // =================================================
+
+        if (
+          !previousAutomatic
+            ?.privateDmSentAt
+        ) {
+          const privateBundle =
+            await generateWeeklyMemberPrivateDm({
+              client,
+              guild,
+              record,
+
+              facts:
+                feedbackResult
+                  ?.facts ||
+                null,
+            });
+
+          const privateSent =
+            await sendWeeklyPrivateDmToMember(
+              member,
+              privateBundle
+            );
+
+          if (
+            privateSent
+          ) {
+            const nextState =
+              loadFeedbackState();
+
+            nextState
+              .automatic[
+                weekKey
+              ] ||=
+              {};
+
+            nextState
+              .automatic[
+                weekKey
+              ][
+                userId
+              ] ||=
+              {};
+
+            nextState
+              .automatic[
+                weekKey
+              ][
+                userId
+              ]
+              .privateDmSentAt =
+              Date.now();
+
+            writeJson(
+              FEEDBACK_STATE_FILE,
+              nextState
+            );
+          }
+        }
 
         console.log(
-          `[Weekly Member AI] Fechamento enviado para ${userId}.`
+          `[Weekly Member AI] Fechamento semanal processado para ${userId}.`
         );
       } catch (
         error

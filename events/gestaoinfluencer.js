@@ -68,6 +68,7 @@ const {
     }
 
     const {
+      resolveDiscordIdentity,
       validateDiscordIdentityMigration,
       registerDiscordIdentityMigration,
       rollbackDiscordIdentityMigration
@@ -132,7 +133,9 @@ const {
     const {
       weeklyMemberAiFeedbackOnReady,
       forceWeeklyMemberAiFeedback,
-      generateWeeklyMemberPrivateDm
+      generateWeeklyMemberPrivateDm,
+      generateMemberLifecyclePrivateDm,
+      migrateWeeklyMemberAiFeedbackDiscordId
     } = weeklyMemberAiFeedback;
 
     if (client.__SC_GI_INSTALLED) {
@@ -157,6 +160,9 @@ CHANNEL_DM_MIRROR:        '1554974969648382083',
 CHANNEL_RESP_BOARD:       '1427082727600947230',
 CHANNEL_DESLIGAMENTOS:    '1427089183847223306',
 CHANNEL_RESTORE_LOG:      '1486006878914875412',
+
+// Histórico completo individual de alterações do Controle GI.
+CHANNEL_MEMBER_HISTORY_LOG: '1555344870195994754',
 
       ROLE_GESTAOINFLUENCER:   '1371733765243670538',
       ROLE_CREATOR_BASE:       '1352939011253076000',
@@ -279,17 +285,60 @@ CHANNEL_RESTORE_LOG:      '1486006878914875412',
 
       return null;
     }
-
     function SC_GI_findCurrentControl(guildId, userId) {
-      const wantedGuildId = String(guildId || '');
-      const wantedUserId = String(userId || '');
+      const wantedGuildId =
+        String(
+          guildId ||
+          ''
+        );
 
-      if (!wantedUserId) return null;
+      const rawWantedUserId =
+        String(
+          userId ||
+          ''
+        );
 
-      let newest = null;
+      if (!rawWantedUserId) {
+        return null;
+      }
 
-      for (const rec of SC_GI_STATE.registros.values()) {
-        if (String(rec?.targetId || '') !== wantedUserId) continue;
+      const wantedUserId =
+        typeof resolveDiscordIdentity ===
+          "function"
+          ? resolveDiscordIdentity(
+              rawWantedUserId
+            )
+          : rawWantedUserId;
+
+      let newest =
+        null;
+
+      for (
+        const rec
+        of SC_GI_STATE
+          .registros
+          .values()
+      ) {
+        const rawRecordUserId =
+          String(
+            rec?.targetId ||
+            ''
+          );
+
+        const recordUserId =
+          typeof resolveDiscordIdentity ===
+            "function"
+            ? resolveDiscordIdentity(
+                rawRecordUserId
+              )
+            : rawRecordUserId;
+
+        if (
+          recordUserId !==
+          wantedUserId
+        ) {
+          continue;
+        }
 
         const recordGuildId =
           SC_GI_resolveRecordGuildId(
@@ -931,7 +980,7 @@ const prev = byUser.get(r.targetId);
   return utcMs - (SC_GI_CFG.TZ_OFFSET_MIN * 60 * 1000);
 }
     function msToDDMMYYYY(ms) {
-      const dt = new Date(ms - (SC_GI_CFG.TZ_OFFSET_MIN * 60 * 1000));
+      const dt = new Date(ms + (SC_GI_CFG.TZ_OFFSET_MIN * 60 * 1000));
       return `${pad2(dt.getUTCDate())}/${pad2(dt.getUTCMonth()+1)}/${dt.getUTCFullYear()}`;
     }
     const daysBetween       = (a, b) => Math.floor((b - a) / (24 * 60 * 60 * 1000));
@@ -1196,8 +1245,22 @@ function getActiveTotalMs(rec, n = nowMs()) {
   return Math.max(0, raw - getPausedTotalMs(rec, n));
 }
 
+function getCurrentPauseMs(rec, n = nowMs()) {
+  const pausedAtMs = Number(rec?.pausedAtMs);
+
+  if (
+    rec?.active !== false ||
+    !Number.isFinite(pausedAtMs) ||
+    pausedAtMs <= 0
+  ) {
+    return 0;
+  }
+
+  return Math.max(0, n - pausedAtMs);
+}
+
 function getPauseCountdownMs(rec, n = nowMs()) {
-  return Math.max(0, AUTO_DESLIGAR_PAUSA_MS - getPausedTotalMs(rec, n));
+  return Math.max(0, AUTO_DESLIGAR_PAUSA_MS - getCurrentPauseMs(rec, n));
 }
 
     function pauseCountdownText(rec, n = nowMs()) {
@@ -1466,6 +1529,9 @@ function activeTimeText(rec, n = nowMs()) {
 
     const AREA_ROLE_IDS = Object.freeze({
       MKT_CREATORS: "1282119104576098314",
+
+      TICKETS: "1372716303122567239",
+
       COORD_CREATORS: "1388976314253312100",
       COORDENACAO: "1352385500614234134",
       GESTOR_CREATORS: "1388975939161161728",
@@ -1637,9 +1703,14 @@ function activeTimeText(rec, n = nowMs()) {
           "equipe",
           "eqp.c"
         ]),
-        requiredRoleIds: Object.freeze([]),
+        requiredRoleIds: Object.freeze([
+          AREA_ROLE_IDS.CREATOR,
+          AREA_ROLE_IDS.EQUIPE_CREATOR,
+          AREA_ROLE_IDS.SANTA_CREATORS,
+          SC_GI_CFG.ROLE_CIDADAO
+        ]),
         nicknamePrefix: "EQP.C",
-        skipRoleTransition: true,
+        skipRoleTransition: false,
         skipNickname: false
       }),
 
@@ -1715,7 +1786,9 @@ function activeTimeText(rec, n = nowMs()) {
         ]),
         requiredRoleIds: Object.freeze([
           AREA_ROLE_IDS.RESP_CREATORS,
-          AREA_ROLE_IDS.SENIOR_CREATORS
+          AREA_ROLE_IDS.RESPONSAVEIS,
+          AREA_ROLE_IDS.SENIOR_CREATORS,
+          AREA_ROLE_IDS.SANTA_CREATORS
         ]),
         nicknamePrefix: null,
         skipRoleTransition: false,
@@ -1724,7 +1797,6 @@ function activeTimeText(rec, n = nowMs()) {
     });
 
     const AREA_MANAGED_REMOVABLE_ROLE_IDS = new Set([
-      AREA_ROLE_IDS.MKT_CREATORS,
       AREA_ROLE_IDS.COORD_CREATORS,
       AREA_ROLE_IDS.COORDENACAO,
       AREA_ROLE_IDS.GESTOR_CREATORS,
@@ -1740,7 +1812,28 @@ function activeTimeText(rec, n = nowMs()) {
       AREA_ROLE_IDS.RESP_INFLU,
       AREA_ROLE_IDS.RESP_CREATORS
     ]);
+    // =====================================================
+    // CARGOS PROIBIDOS NOS RESPONSÁVEIS DE TOPO
+    // =====================================================
 
+    const TOP_RESPONSIBLE_FORBIDDEN_ROLE_IDS =
+      new Set([
+        AREA_ROLE_IDS.MKT_CREATORS,
+        AREA_ROLE_IDS.TICKETS,
+      ]);
+
+    function isTopResponsibleAreaProfile(
+      areaProfile
+    ) {
+      return (
+        areaProfile ===
+          AREA_PROFILES.RESP_LIDER ||
+        areaProfile ===
+          AREA_PROFILES.RESP_INFLU ||
+        areaProfile ===
+          AREA_PROFILES.RESP_CREATORS
+      );
+    }
     function normalizeAreaText(value) {
       return String(value || "")
         .normalize("NFD")
@@ -2152,7 +2245,23 @@ function activeTimeText(rec, n = nowMs()) {
         buildDesiredRoleSet(
           areaProfile
         );
+      const topResponsibleProfile =
+        isTopResponsibleAreaProfile(
+          areaProfile
+        );
 
+      if (
+        topResponsibleProfile
+      ) {
+        for (
+          const forbiddenRoleId
+          of TOP_RESPONSIBLE_FORBIDDEN_ROLE_IDS
+        ) {
+          desiredRoleIds.delete(
+            forbiddenRoleId
+          );
+        }
+      }
       // =====================================================
       // 👑 RESPEITA ALTERAÇÕES MANUAIS DE VOCÊ / OWNER
       // =====================================================
@@ -2168,6 +2277,44 @@ function activeTimeText(rec, n = nowMs()) {
           const [roleId, overrideState]
           of masterOverrides.entries()
         ) {
+          const belongsToCreatorTransition =
+            AREA_MANAGED_REMOVABLE_ROLE_IDS.has(roleId) ||
+            areaProfile.requiredRoleIds.includes(roleId);
+
+          if (
+            areaProfile === AREA_PROFILES.EQUIPE_CREATOR &&
+            belongsToCreatorTransition
+          ) {
+            continue;
+          }
+
+          // =================================================
+          // REGRA ABSOLUTA DOS RESPONSÁVEIS DE TOPO
+          // =================================================
+          //
+          // Mesmo um Master Override antigo NÃO pode
+          // recolocar MKT Creators ou Tickets quando
+          // a pessoa estiver em:
+          //
+          // - Resp Líder
+          // - Resp Influ
+          // - Resp Creators
+          //
+          // =================================================
+
+          if (
+            topResponsibleProfile &&
+            TOP_RESPONSIBLE_FORBIDDEN_ROLE_IDS.has(
+              roleId
+            )
+          ) {
+            desiredRoleIds.delete(
+              roleId
+            );
+
+            continue;
+          }
+
           if (
             overrideState === "present"
           ) {
@@ -2191,12 +2338,27 @@ function activeTimeText(rec, n = nowMs()) {
           member.roles.cache.keys()
         );
 
+      const removableRoleIds =
+        new Set([
+          ...AREA_MANAGED_REMOVABLE_ROLE_IDS,
+
+          ...(
+            topResponsibleProfile
+              ? TOP_RESPONSIBLE_FORBIDDEN_ROLE_IDS
+              : []
+          ),
+        ]);
+
       const removeRoleIds =
-        [...AREA_MANAGED_REMOVABLE_ROLE_IDS]
+        [...removableRoleIds]
           .filter(
             (roleId) =>
-              currentRoleIds.has(roleId) &&
-              !desiredRoleIds.has(roleId)
+              currentRoleIds.has(
+                roleId
+              ) &&
+              !desiredRoleIds.has(
+                roleId
+              )
           );
 
       const addRoleIds =
@@ -3247,6 +3409,8 @@ function registroButtons(messageId, active) {
         })
         .slice(-10);
 
+      const ended = Number(rec.endedAtMs || 0) > 0;
+
       const desc = [
         `👋 <@${rec.targetId}>, segue seu status:`,
         `🗓️ **Entrada:** \`${msToDDMMYYYY(rec.joinDateMs)}\``,
@@ -3254,13 +3418,19 @@ function registroButtons(messageId, active) {
         `⏱️ **Semanas completas:** \`${weeks}\``,
         `🗓️ **Meses já na gestão:** \`${months}\``,
         respLinha,
-        `📌 **Status:** ${rec.active ? 'Ativo' : 'Pausado'} — ${pausedStr}`,
-        '',
-        `🔒 **Cargo obrigatório enquanto ativo:** <@&${GI_ROLE_ID}>`,
-        '',
-        '💡 *Participe nos dias de quinta, sexta e sábado pra garantir **VIP/Rolepass**.*',
-        'Ao completar **1 mês**, solicite **1 VIP** ao seu responsável direto presente.'
-      ].join('\n');
+        ended
+          ? '📌 **Status:** Desligado da SantaCreators.'
+          : `📌 **Status:** ${rec.active ? 'Ativo' : 'Pausado'} — ${pausedStr}`,
+        ended
+          ? `🗓️ **Saída:** \`${msToDDMMYYYY(rec.endedAtMs)}\``
+          : `🔒 **Cargo obrigatório enquanto ativo:** <@&${GI_ROLE_ID}>`,
+        ended
+          ? ''
+          : '💡 *Participe nos dias de quinta, sexta e sábado pra garantir **VIP/Rolepass**.*',
+        ended
+          ? ''
+          : 'Ao completar **1 mês**, solicite **1 VIP** ao seu responsável direto presente.'
+      ].filter(Boolean).join('\n');
 
       const emb = new EmbedBuilder()
         .setColor(0x3498db)
@@ -3335,22 +3505,132 @@ function registroButtons(messageId, active) {
     }
 
     async function sendDM_andMirror(guild, targetUser, embed, content, extraEmbeds = []) {
+      const originals = [embed, ...extraEmbeds]
+        .filter(Boolean)
+        .map(value => structuredClone(value.data || value));
+
       const baseContent = content ?? `<@${targetUser.id}>`;
-      const allEmbeds = [embed, ...extraEmbeds];
-      let dmOk = false;
+      const roleIds = new Set(
+        [...JSON.stringify([baseContent, originals]).matchAll(/<@&(\d{17,20})>/g)]
+          .map(match => match[1])
+      );
+
+      const roleNames = new Map();
+      for (const roleId of roleIds) {
+        const role = guild.roles.cache.get(roleId) ||
+          await guild.roles.fetch(roleId).catch(() => null);
+        roleNames.set(roleId, role?.name || `Cargo de ID ${roleId}`);
+      }
+
+      const readable = value => String(value ?? "").replace(
+        /<@&(\d{17,20})>/g,
+        (_, roleId) => roleNames.get(roleId) || `Cargo de ID ${roleId}`
+      );
+
+      function splitText(value, limit) {
+        const parts = [];
+        let remaining = String(value ?? "");
+        while (remaining.length > limit) {
+          let end = remaining.lastIndexOf("\n", limit);
+          if (end < limit / 2) end = remaining.lastIndexOf(" ", limit);
+          if (end < limit / 2) end = limit;
+          const lastCode = remaining.charCodeAt(end - 1);
+          if (lastCode >= 0xd800 && lastCode <= 0xdbff) end--;
+          parts.push(remaining.slice(0, end));
+          remaining = remaining.slice(end);
+        }
+        if (remaining) parts.push(remaining);
+        return parts;
+      }
+
+      const lengthOf = data =>
+        (data.title?.length || 0) +
+        (data.description?.length || 0) +
+        (data.author?.name?.length || 0) +
+        (data.footer?.text?.length || 0) +
+        (data.fields || []).reduce(
+          (total, field) => total + field.name.length + field.value.length,
+          0
+        );
+
+      const pages = [];
+      for (const original of originals) {
+        const fields = original.fields || [];
+        const description = readable(original.description);
+        const base = { ...original, fields: [] };
+        delete base.description;
+        if (base.title) base.title = readable(base.title);
+        if (base.author?.name) base.author.name = readable(base.author.name);
+        if (base.footer?.text) base.footer.text = readable(base.footer.text);
+
+        let page = null;
+        const descriptions = splitText(description, 2800);
+        for (const part of descriptions.length ? descriptions : [""]) {
+          page = { ...base, fields: [] };
+          if (part) page.description = part;
+          pages.push(page);
+        }
+
+        for (const field of fields) {
+          const name = readable(field.name);
+          const values = splitText(readable(field.value) || "—", 1000);
+          for (const value of values) {
+            if (
+              page.fields.length >= 25 ||
+              lengthOf(page) + name.length + value.length > 5900
+            ) {
+              page = { ...base, fields: [] };
+              pages.push(page);
+            }
+            page.fields.push({ ...field, name, value });
+          }
+        }
+      }
+
+      const contents = splitText(readable(baseContent), 1900);
+      const payloads = [];
+      const count = Math.max(contents.length, pages.length);
+      for (let index = 0; index < count; index++) {
+        const payload = { allowedMentions: { parse: [] } };
+        if (contents[index]?.trim()) payload.content = contents[index];
+        if (pages[index]) payload.embeds = [pages[index]];
+        if (payload.content || payload.embeds) payloads.push(payload);
+      }
+
+      let delivered = 0;
       try {
         const dm = await targetUser.createDM();
-        await dm.send({ content: baseContent, embeds: allEmbeds });
-        dmOk = true;
-      } catch { dmOk = false; }
-
-      try {
-        const mirror = await client.channels.fetch(SC_GI_CFG.CHANNEL_DM_MIRROR).catch(() => null);
-        if (mirror && mirror.type === ChannelType.GuildText) {
-          const mirrorEmb = EmbedBuilder.from(embed).setColor(dmOk ? 0x2ecc71 : 0xe67e22);
-          await mirror.send({ content: baseContent, embeds: [mirrorEmb, ...extraEmbeds] });
+        for (const payload of payloads) {
+          await dm.send(payload);
+          delivered++;
         }
-      } catch {}
+      } catch (error) {
+        console.warn(
+          `[SC_GI] DM incompleta para ${targetUser.id}: ${delivered}/${payloads.length} partes.`,
+          error?.message || error
+        );
+      }
+
+      const dmOk = payloads.length > 0 && delivered === payloads.length;
+      try {
+        const mirror = await client.channels
+          .fetch(SC_GI_CFG.CHANNEL_DM_MIRROR)
+          .catch(() => null);
+
+        if (mirror && mirror.type === ChannelType.GuildText) {
+          for (const payload of payloads) {
+            await mirror.send({
+              ...payload,
+              embeds: payload.embeds?.map(data =>
+                EmbedBuilder.from(data).setColor(dmOk ? 0x2ecc71 : 0xe67e22)
+              )
+            });
+          }
+        }
+      } catch (error) {
+        console.warn('[SC_GI] Falha ao espelhar DM:', error?.message || error);
+      }
+
       return dmOk;
     }
 
@@ -3694,6 +3974,7 @@ let roleSetAtMs =
         oneMonthNotified: false,
         oneMonthNotifiedAt: null,
         note: '',
+
 responsibleUserId: options.responsibleUserId || autoResp?.userId || null,
 responsibleType: options.responsibleType || autoResp?.type || null,
 responsibleManual: !!options.responsibleUserId,
@@ -3701,13 +3982,61 @@ responsibleSetBy: options.responsibleUserId ? registrar.id : null,
 responsibleUpdatedAtMs: nowMs(),
 warnNoRoleGI,
 responsibleHistory: [],
+
+// =====================================================
+// HISTÓRICO DE ÁREAS / CARGOS
+// =====================================================
+
+areaHistory: [
+  {
+    area:
+      areaStr,
+
+    startedAtMs:
+      createdNowMs,
+
+    endedAtMs:
+      null,
+
+    changedBy:
+      registrar.id,
+
+    source:
+      "creation",
+  }
+],
+
+// =====================================================
+// HISTÓRICO DE ATIVIDADE
+// =====================================================
+
+activityHistory: [
+  {
+    status:
+      initialActive
+        ? "active"
+        : "paused",
+
+    atMs:
+      createdNowMs,
+
+    changedBy:
+      registrar.id,
+
+    reason:
+      initialActive
+        ? "Registro criado ativo"
+        : "Registro criado pausado",
+  }
+],
+
 pausedAtMs: initialActive ? null : createdNowMs,
 
 // ✅ Registro criado pausado deve começar zerado.
 // O tempo pausado passa a contar a partir do createdNowMs.
 totalPausedMs: 0,
         roleSetAtMs,
-        passaporte: options.passaporte || null, // ✅ Salva o ID se vier do pedirset
+        passaporte: options.passaporte || null,// ✅ Salva o ID se vier do pedirset
         personalTicketChannelId: null,
         lastControlVisualRefreshAtMs: 0
       };
@@ -4743,9 +5072,244 @@ try {
       let identityRegistered =
         false;
 
+      let formsMigrated =
+        false;
+
+      let ticketMigrated =
+        false;
+
+      let weeklyMigrated =
+        false;
+
+      let giInternalMigrated =
+        false;
+
+      const identitySnapshot = {
+        targetId:
+          rec.targetId,
+
+        personalTicketChannelId:
+          rec.personalTicketChannelId ||
+          null,
+
+        discordIdHistory:
+          Array.isArray(
+            rec.discordIdHistory
+          )
+            ? structuredClone(
+                rec.discordIdHistory
+              )
+            : [],
+
+        lastDiscordMigration:
+          rec.lastDiscordMigration
+            ? structuredClone(
+                rec.lastDiscordMigration
+              )
+            : null,
+      };
+
+      let formsResult = {
+        status:
+          "not_started",
+      };
+
+      let ticketResult = {
+        status:
+          "not_started",
+      };
+
       try {
         // =====================================================
-        // REGISTRA ID ANTIGO -> ID NOVO
+        // 1. MIGRA O FORMS ANTES DE REGISTRAR O ALIAS CENTRAL
+        // =====================================================
+
+        formsResult =
+          await migrateFormsCreatorDiscordId(
+            guild.client,
+            {
+              oldUserId,
+
+              newUserId:
+                nextUserId,
+
+              actor:
+                editor
+            }
+          );
+
+        // =====================================================
+        // MARCA SE A IDENTIDADE DO FORMS JÁ FOI ALTERADA
+        // =====================================================
+        //
+        // "partial" significa que o registro principal do Forms
+        // já foi migrado, mas alguma etapa complementar
+        // (Evolução ou espelho) não terminou corretamente.
+        //
+        // Portanto ele também precisa entrar no rollback.
+        // =====================================================
+
+        formsMigrated =
+          formsResult?.status ===
+            "synced" ||
+          formsResult?.status ===
+            "partial";
+
+        if (
+          formsResult?.status !==
+            "synced" &&
+          formsResult?.status !==
+            "unchanged"
+        ) {
+          throw new Error(
+            `O FormsCreator não foi migrado completamente. Status: ${formsResult?.status || "desconhecido"}.`
+          );
+        }
+
+        // =====================================================
+        // 2. MIGRA O TICKET PESSOAL
+        // =====================================================
+
+        const personalTicketApi =
+          globalThis
+            .SC_PERSONAL_TICKET_API;
+
+        if (
+          personalTicketApi &&
+          typeof personalTicketApi
+            .migrateDiscordIdentity ===
+            "function"
+        ) {
+          ticketResult =
+            await personalTicketApi
+              .migrateDiscordIdentity({
+                guild,
+
+                channelId:
+                  rec.personalTicketChannelId ||
+                  null,
+
+                oldUserId,
+
+                newUserId:
+                  nextUserId,
+
+                reason:
+                  `Troca de Discord pelo Controle GI: ${oldUserId} -> ${nextUserId}`,
+              });
+
+          ticketMigrated =
+            ticketResult?.status ===
+            "synced";
+
+          if (
+            rec.personalTicketChannelId &&
+            ticketResult?.status !==
+              "synced" &&
+            ticketResult?.status !==
+              "unchanged"
+          ) {
+            throw new Error(
+              `O ticket pessoal vinculado ao Controle GI não foi migrado. Status: ${ticketResult?.status || "desconhecido"}.`
+            );
+          }
+
+          if (
+            ticketResult?.channelId
+          ) {
+            rec.personalTicketChannelId =
+              String(
+                ticketResult.channelId
+              );
+          }
+        } else if (
+          rec.personalTicketChannelId
+        ) {
+          throw new Error(
+            "Existe ticket pessoal vinculado, mas a API de migração do ticket está indisponível."
+          );
+        }
+
+        // =====================================================
+        // 3. MIGRA O ESTADO DO FEEDBACK SEMANAL
+        // =====================================================
+
+        if (
+          typeof migrateWeeklyMemberAiFeedbackDiscordId ===
+            "function"
+        ) {
+          const weeklyResult =
+            migrateWeeklyMemberAiFeedbackDiscordId(
+              oldUserId,
+              nextUserId
+            );
+
+          weeklyMigrated =
+            weeklyResult?.changed ===
+            true;
+        }
+
+        // =====================================================
+        // 4. HISTÓRICO DA TROCA
+        // =====================================================
+
+        rec.discordIdHistory =
+          Array.isArray(
+            rec.discordIdHistory
+          )
+            ? rec.discordIdHistory
+            : [];
+
+        rec.discordIdHistory.push({
+          from:
+            oldUserId,
+
+          to:
+            nextUserId,
+
+          changedAtMs:
+            nowMs(),
+
+          changedBy:
+            editor.id
+        });
+
+        rec.lastDiscordMigration = {
+          from:
+            oldUserId,
+
+          to:
+            nextUserId,
+
+          changedAtMs:
+            nowMs(),
+
+          changedBy:
+            editor.id
+        };
+
+        // =====================================================
+        // 5. TROCA O ID PRINCIPAL
+        // =====================================================
+
+        rec.targetId =
+          nextUserId;
+
+        // =====================================================
+        // 6. MOVE ESTADOS INTERNOS DO GI
+        // =====================================================
+
+        await migrateGIInternalIdentityState(
+          guild,
+          oldUserId,
+          nextUserId
+        );
+
+        giInternalMigrated =
+          true;
+
+        // =====================================================
+        // 7. REGISTRA O ALIAS CENTRAL SOMENTE AGORA
         // =====================================================
 
         const identityResult =
@@ -4768,92 +5332,13 @@ try {
           true;
 
         // =====================================================
-        // MIGRA FORMSCREATOR
-        // =====================================================
-
-        const formsResult =
-          await migrateFormsCreatorDiscordId(
-            guild.client,
-            {
-              oldUserId,
-
-              newUserId:
-                nextUserId,
-
-              actor:
-                editor
-            }
-          );
-
-        // =====================================================
-        // HISTÓRICO DA TROCA NO REGISTRO GI
-        // =====================================================
-
-        rec.discordIdHistory =
-          Array.isArray(
-            rec
-              .discordIdHistory
-          )
-            ? rec
-                .discordIdHistory
-            : [];
-
-        rec
-          .discordIdHistory
-          .push({
-            from:
-              oldUserId,
-
-            to:
-              nextUserId,
-
-            changedAtMs:
-              nowMs(),
-
-            changedBy:
-              editor.id
-          });
-
-        rec.lastDiscordMigration =
-          {
-            from:
-              oldUserId,
-
-            to:
-              nextUserId,
-
-            changedAtMs:
-              nowMs(),
-
-            changedBy:
-              editor.id
-          };
-
-        // =====================================================
-        // TROCA O ID PRINCIPAL DO REGISTRO GI
-        // =====================================================
-
-        rec.targetId =
-          nextUserId;
-
-        // =====================================================
-        // MOVE ESTADOS INTERNOS
-        // =====================================================
-
-        await migrateGIInternalIdentityState(
-          guild,
-          oldUserId,
-          nextUserId
-        );
-
-        // =====================================================
-        // SALVA IMEDIATAMENTE
+        // 8. SALVA O CONTROLE GI
         // =====================================================
 
         await SC_GI_saveNow();
 
         // =====================================================
-        // AVISA DASHBOARD + RANKING
+        // 9. AVISA DASHBOARD / RANKING / OUTROS MÓDULOS
         // =====================================================
 
         dashEmit(
@@ -4867,13 +5352,22 @@ try {
             actorId:
               editor.id,
 
+            formsThreadId:
+              formsResult?.threadId ||
+              null,
+
+            personalTicketChannelId:
+              rec.personalTicketChannelId ||
+              ticketResult?.channelId ||
+              null,
+
             __at:
               Date.now()
           }
         );
 
         // =====================================================
-        // LOG
+        // 10. LOG NORMAL
         // =====================================================
 
         await logMsg(
@@ -4881,34 +5375,93 @@ try {
           'Troca de Discord (GI)',
           [
             `🔁 **Discord anterior:** <@${oldUserId}> (\`${oldUserId}\`)`,
-
             `✅ **Discord atual:** <@${nextUserId}> (\`${nextUserId}\`)`,
-
             `🧾 **Executado por:** <@${editor.id}> (\`${editor.id}\`)`,
-
-            `📚 **FormsCreator:** ${formsResult?.status || 'desconhecido'}`,
-
+            "",
+            `📚 **FormsCreator:** ${formsResult?.status || "desconhecido"}`,
+            `🎫 **Ticket pessoal:** ${ticketResult?.status || "não localizado"}`,
+            `🧠 **Feedback semanal:** ${weeklyMigrated ? "estado migrado" : "sem estado antigo para migrar"}`,
             `🎭 **Cargos transferidos:** ${roleTransfer.removedRoleIds.length}`,
-
-            roleTransfer
-              .skippedRoleIds
-              .length
+            "",
+            roleTransfer.skippedRoleIds.length
               ? `⚠️ **Cargos não gerenciáveis pelo bot:** ${formatRoleMentions(roleTransfer.skippedRoleIds)}`
-              : '✅ **Cargos não gerenciáveis:** nenhum',
-
-            roleTransfer
-              .oldMemberMissing
-              ? '⚠️ A conta antiga não estava mais no servidor; não havia cargos ao vivo para remover.'
-              : '✅ Os cargos transferíveis foram removidos da conta antiga após serem aplicados na nova.',
-
-            '📊 **Ranking/Dashboard:** histórico antigo preservado pelo vínculo de identidade.',
-
-            '🧠 **Auditoria:** logs históricos antigos não são apagados nem reescritos.'
-          ]
-            .join(
-              '\n'
-            )
+              : "✅ **Cargos não gerenciáveis:** nenhum",
+            "",
+            roleTransfer.oldMemberMissing
+              ? "⚠️ A conta antiga não estava mais no servidor."
+              : "✅ Os cargos transferíveis foram removidos da conta antiga.",
+            "",
+            "📊 **Ranking:** histórico antigo continua resolvido pela identidade canônica.",
+            "🧠 **Auditoria:** nenhum histórico antigo foi apagado."
+          ].join(
+            "\n"
+          )
+        ).catch(
+          () => {}
         );
+
+        // =====================================================
+        // 11. LOG HISTÓRICO INDIVIDUAL
+        // =====================================================
+
+        if (
+          typeof logMemberHistoryEvent ===
+            "function"
+        ) {
+          await logMemberHistoryEvent(
+            guild,
+            {
+              type:
+                "Troca de Discord",
+
+              memberId:
+                nextUserId,
+
+              actorId:
+                editor.id,
+
+              before: {
+                discordId:
+                  oldUserId,
+
+                formsUserId:
+                  oldUserId,
+
+                ticketOwnerId:
+                  oldUserId,
+              },
+
+              after: {
+                discordId:
+                  nextUserId,
+
+                formsStatus:
+                  formsResult?.status ||
+                  null,
+
+                ticketStatus:
+                  ticketResult?.status ||
+                  null,
+              },
+
+              addedRoleIds:
+                roleTransfer.addedRoleIds ||
+                [],
+
+              removedRoleIds:
+                roleTransfer.removedRoleIds ||
+                [],
+
+              record:
+                rec,
+
+              note:
+                "Identidade histórica preservada do ID antigo para o novo.",
+            }
+          ).catch(
+            () => {}
+          );
+        }
 
         return {
           changed:
@@ -4921,13 +5474,20 @@ try {
 
           formsResult,
 
+          ticketResult,
+
           roleTransfer
         };
       } catch (
         error
       ) {
+        console.error(
+          `[SC_GI] Falha na migração transacional ${oldUserId} -> ${nextUserId}:`,
+          error
+        );
+
         // =====================================================
-        // ROLLBACK DA IDENTIDADE
+        // ROLLBACK DO ALIAS CENTRAL
         // =====================================================
 
         if (
@@ -4944,12 +5504,131 @@ try {
         }
 
         // =====================================================
+        // ROLLBACK DO GI INTERNO
+        // =====================================================
+
+        if (
+          giInternalMigrated
+        ) {
+          await migrateGIInternalIdentityState(
+            guild,
+            nextUserId,
+            oldUserId
+          ).catch(
+            () => {}
+          );
+        }
+
+        rec.targetId =
+          identitySnapshot.targetId;
+
+        rec.personalTicketChannelId =
+          identitySnapshot
+            .personalTicketChannelId;
+
+        rec.discordIdHistory =
+          identitySnapshot
+            .discordIdHistory;
+
+        rec.lastDiscordMigration =
+          identitySnapshot
+            .lastDiscordMigration;
+
+        // =====================================================
+        // ROLLBACK DO FEEDBACK SEMANAL
+        // =====================================================
+
+        if (
+          weeklyMigrated &&
+          typeof migrateWeeklyMemberAiFeedbackDiscordId ===
+            "function"
+        ) {
+          try {
+            migrateWeeklyMemberAiFeedbackDiscordId(
+              nextUserId,
+              oldUserId
+            );
+          } catch {}
+        }
+
+        // =====================================================
+        // ROLLBACK DO TICKET
+        // =====================================================
+
+        if (
+          ticketMigrated &&
+          globalThis
+            .SC_PERSONAL_TICKET_API &&
+          typeof globalThis
+            .SC_PERSONAL_TICKET_API
+            .migrateDiscordIdentity ===
+            "function"
+        ) {
+          await globalThis
+            .SC_PERSONAL_TICKET_API
+            .migrateDiscordIdentity({
+              guild,
+
+              channelId:
+                ticketResult?.channelId ||
+                identitySnapshot
+                  .personalTicketChannelId ||
+                null,
+
+              oldUserId:
+                nextUserId,
+
+              newUserId:
+                oldUserId,
+
+              reason:
+                "Rollback automático da troca de Discord",
+            })
+            .catch(
+              () => {}
+            );
+        }
+
+        // =====================================================
+        // ROLLBACK DO FORMS
+        // =====================================================
+
+        if (
+          formsMigrated
+        ) {
+          await migrateFormsCreatorDiscordId(
+            guild.client,
+            {
+              oldUserId:
+                nextUserId,
+
+              newUserId:
+                oldUserId,
+
+              actor:
+                guild.client.user
+            }
+          ).catch(
+            rollbackError =>
+              console.error(
+                "[SC_GI] Falha grave ao reverter FormsCreator:",
+                rollbackError
+              )
+          );
+        }
+
+        // =====================================================
         // ROLLBACK DOS CARGOS
         // =====================================================
 
         await rollbackDiscordMemberRoles(
           roleTransfer
         );
+
+        await SC_GI_saveNow()
+          .catch(
+            () => {}
+          );
 
         throw error;
       }
@@ -5068,14 +5747,11 @@ try {
         roleTransitionSkipped: false
       };
 
-      // Só executa cargos/nickname quando realmente mudou de função.
-      //
-      // Isso também evita que:
-      // Manager -> salva novamente como Manager
-      //
-      // remova um MKT colocado manualmente depois da promoção.
+      // Reaplica Equipe Creator para corrigir registros salvos
+      // quando esse perfil ainda ignorava a troca de cargos.
       if (
-        institutionalAreaChanged
+        institutionalAreaChanged ||
+        newAreaProfile === AREA_PROFILES.EQUIPE_CREATOR
       ) {
         await assertCanSetArea(
           guild,
@@ -5090,6 +5766,79 @@ try {
             rec,
             newAreaProfile
           );
+      }
+
+      if (
+        institutionalAreaChanged
+      ) {
+        rec.areaHistory =
+          Array.isArray(
+            rec.areaHistory
+          )
+            ? rec.areaHistory
+            : [];
+
+        // Registros antigos ainda podem não possuir areaHistory.
+        // Neste caso reconstruímos a fase anterior
+        // usando a criação do Controle GI como início mínimo conhecido.
+
+        if (
+          rec.areaHistory.length ===
+            0
+        ) {
+          rec.areaHistory.push({
+            area:
+              previousCanonicalArea,
+
+            startedAtMs:
+              Number(
+                rec.createdAtMs ||
+                rec.joinDateMs ||
+                nowMs()
+              ),
+
+            endedAtMs:
+              nowMs(),
+
+            changedBy:
+              editor.id,
+
+            source:
+              "legacy_reconstructed",
+          });
+        } else {
+          const currentHistory =
+            rec.areaHistory[
+              rec.areaHistory.length -
+              1
+            ];
+
+          if (
+            currentHistory &&
+            !currentHistory
+              .endedAtMs
+          ) {
+            currentHistory.endedAtMs =
+              nowMs();
+          }
+        }
+
+        rec.areaHistory.push({
+          area:
+            canonicalArea,
+
+          startedAtMs:
+            nowMs(),
+
+          endedAtMs:
+            null,
+
+          changedBy:
+            editor.id,
+
+          source:
+            "gi_edit",
+        });
       }
 
       rec.area =
@@ -5125,7 +5874,9 @@ try {
       };
 
       if (
-        storedAreaChanged
+        storedAreaChanged ||
+        identityMigrationResult.changed ||
+        newAreaProfile === AREA_PROFILES.EQUIPE_CREATOR
       ) {
         formsSyncResult =
           await syncAreaToFormsCreator(
@@ -5252,6 +6003,73 @@ try {
         }
       );
 
+      await logMemberHistoryEvent(
+        guild,
+        {
+          type:
+            institutionalAreaChanged
+              ? "Alteração de Área / Cargo"
+              : "Edição do Controle GI",
+
+          memberId:
+            rec.targetId,
+
+          actorId:
+            editor.id,
+
+          before: {
+            discordId:
+              identityMigrationResult
+                ?.oldUserId ||
+              rec.targetId,
+
+            area:
+              previousArea,
+
+            dataEntrada:
+              msToDDMMYYYY(
+                rec.joinDateMs
+              ),
+          },
+
+          after: {
+            discordId:
+              rec.targetId,
+
+            area:
+              canonicalArea,
+
+            nickname:
+              transitionResult.nicknameAfter ||
+              transitionResult.nicknameBefore ||
+              null,
+
+            nota:
+              rec.note ||
+              null,
+
+            dataEntrada:
+              msToDDMMYYYY(
+                rec.joinDateMs
+              ),
+          },
+
+          addedRoleIds:
+            transitionResult.addedRoleIds,
+
+          removedRoleIds:
+            transitionResult.removedRoleIds,
+
+          record:
+            rec,
+
+          note:
+            institutionalAreaChanged
+              ? `${previousArea} -> ${canonicalArea}`
+              : "Registro editado sem mudança institucional de área.",
+        }
+      );
+
       scheduleRespBoardRender(
         guild
       );
@@ -5356,6 +6174,20 @@ if (
   const rec = SC_GI_STATE.registros.get(messageId);
   if (!rec) throw new Error('Registro não encontrado.');
 
+  const previousActive =
+    rec.active ===
+    true;
+
+  const previousPausedAtMs =
+    rec.pausedAtMs ||
+    null;
+
+  const previousTotalPausedMs =
+    Number(
+      rec.totalPausedMs ||
+      0
+    );
+
   await assertCanManageGIRecord(
     guild,
     actor,
@@ -5450,6 +6282,31 @@ if (
           }
         } catch {}
       }
+      rec.activityHistory =
+        Array.isArray(
+          rec.activityHistory
+        )
+          ? rec.activityHistory
+          : [];
+
+      rec.activityHistory.push({
+        status:
+          rec.active
+            ? "active"
+            : "paused",
+
+        atMs:
+          nowMs(),
+
+        changedBy:
+          actor.id,
+
+        reason:
+          rec.active
+            ? "Controle despausado"
+            : "Controle pausado",
+      });
+
       SC_GI_scheduleSave();
 
       // atualiza embed
@@ -5464,8 +6321,98 @@ if (
 
       // ✅ DM avisando pause/resume
       if (targetUser) {
-        const dmEmb = dmPauseEmbed(rec, targetUser, !rec.active ? true : false);
-        await sendDM_andMirror(guild, targetUser, dmEmb);
+        const paused =
+          !rec.active;
+
+        const dmEmb =
+          dmPauseEmbed(
+            rec,
+            targetUser,
+            paused
+          );
+
+        let lifecycleBundle =
+          null;
+
+        if (
+          typeof generateMemberLifecyclePrivateDm ===
+            "function"
+        ) {
+          lifecycleBundle =
+            await generateMemberLifecyclePrivateDm({
+              client:
+                guild.client,
+
+              guild,
+
+              record:
+                rec,
+
+              eventType:
+                paused
+                  ? "paused"
+                  : "resumed",
+
+              reason:
+                paused
+                  ? "Controle pausado por inatividade"
+                  : "Controle despausado após retorno de atividade",
+            })
+            .catch(
+              error => {
+                console.warn(
+                  `[SC_GI] IA de ${paused ? "pausa" : "retorno"} indisponível para ${rec.targetId}:`,
+                  error?.message ||
+                  error
+                );
+
+                return null;
+              }
+            );
+        }
+
+        const lifecycleEmbeds =
+          (
+            lifecycleBundle
+              ?.chunks ||
+            []
+          ).map(
+            (
+              chunk,
+              index
+            ) => ({
+              color:
+                paused
+                  ? 0xe67e22
+                  : 0x2ecc71,
+
+              title:
+                index ===
+                0
+                  ? (
+                      paused
+                        ? "💡 Sobre sua pausa"
+                        : "💜 Sobre seu retorno"
+                    )
+                  : "💬 Continuação",
+
+              description:
+                chunk,
+
+              footer: {
+                text:
+                  "SantaCreators • acompanhamento pessoal",
+              },
+            })
+          );
+
+        await sendDM_andMirror(
+          guild,
+          targetUser,
+          dmEmb,
+          "",
+          lifecycleEmbeds
+        );
       }
 
       await logMsg(
@@ -5474,8 +6421,8 @@ if (
         [
           `🔧 **Por:** <@${actor.id}> (\`${actor.id}\`)`,
           `👤 **Membro:** <@${rec.targetId}> (\`${rec.targetId}\`)`,
-          rec.active 
-            ? `✅ **Cargo GI setado novamente:** <@&${GI_ROLE_ID}>` 
+          rec.active
+            ? `✅ **Cargo GI setado novamente:** <@&${GI_ROLE_ID}>`
             : `⛔ **Cargo GI removido:** <@&${GI_ROLE_ID}>`,
           `⏳ **Tempo ativo real:** \`${activeTimeText(rec)}\``,
           !rec.active ? `⏸️ **Tempo pausado acumulado:** \`${formatDurationFull(getPausedTotalMs(rec))}\`` : '',
@@ -5488,6 +6435,64 @@ if (
               new ButtonBuilder().setCustomId(`SC_GI_UNDO_TOGGLE:${messageId}:${!rec.active}`).setLabel('Desfazer Alteração').setStyle(ButtonStyle.Secondary)
             )
           ]
+        }
+      );
+
+      await logMemberHistoryEvent(
+        guild,
+        {
+          type:
+            rec.active
+              ? "Controle Despausado"
+              : "Controle Pausado",
+
+          memberId:
+            rec.targetId,
+
+          actorId:
+            actor.id,
+
+          before: {
+            status:
+              previousActive
+                ? "Ativo"
+                : "Pausado",
+
+            pausedAtMs:
+              previousPausedAtMs,
+
+            totalPausedMs:
+              previousTotalPausedMs,
+          },
+
+          after: {
+            status:
+              rec.active
+                ? "Ativo"
+                : "Pausado",
+
+            pausedAtMs:
+              rec.pausedAtMs ||
+              null,
+
+            totalPausedMs:
+              Number(
+                rec.totalPausedMs ||
+                0
+              ),
+
+            autoDesligamentoDias:
+              SC_GI_CFG
+                .AUTO_DESLIGAR_PAUSA_DIAS,
+          },
+
+          record:
+            rec,
+
+          note:
+            rec.active
+              ? "O membro voltou a apresentar atividade e a contagem de inatividade foi interrompida."
+              : `A contagem de inatividade foi iniciada. O limite configurado é de ${SC_GI_CFG.AUTO_DESLIGAR_PAUSA_DIAS} dia(s).`,
         }
       );
 
@@ -5531,56 +6536,23 @@ if (
           );
 
         if (stats) {
-          statsEmbed =
-            new EmbedBuilder()
-              .setColor(
-                0x2b2d31
-              )
-              .setTitle(
-                '📊 Relatório de Desempenho (Recente)'
-              )
-              .setDescription(
-                `🏆 **Total Geral:** ${stats.total} pontos`
-              )
-              .addFields(
-                {
-                  name:
-                    '📂 Por Categoria',
-
-                  value:
-                    stats
-                      .sourcesFormatted
-                      .length
-                      ? stats
-                          .sourcesFormatted
-                          .join(
-                            '\n'
-                          )
-                      : '_(sem registros)_',
-
-                  inline:
-                    false
-                },
-
-                {
-                  name:
-                    '📅 Por Semana',
-
-                  value:
-                    stats
-                      .weeksFormatted
-                      .length
-                      ? stats
-                          .weeksFormatted
-                          .join(
-                            '\n'
-                          )
-                      : '_(sem registros)_',
-
-                  inline:
-                    false
-                }
-              );
+          statsEmbed = {
+            color: 0x2b2d31,
+            title: '📊 Relatório de Desempenho (Recente)',
+            description: `🏆 **Total no período consultado:** ${stats.total} pontos\n\n${stats.coverage}`,
+            fields: [
+              {
+                name: '📂 Por Categoria',
+                value: stats.sourcesFormatted.join('\n') || '_(sem registros)_',
+                inline: false
+              },
+              {
+                name: '📅 Por Semana',
+                value: stats.weeksFormatted.join('\n') || '_(sem registros)_',
+                inline: false
+              }
+            ]
+          };
         }
       } catch (e) {
         console.warn(
@@ -5993,6 +6965,166 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
     }
   }
 
+  snapshot.personalTicketChannelId =
+    desligamentoPersonalTicketChannelId ||
+    snapshot.personalTicketChannelId ||
+    null;
+
+  // =====================================================
+  // GERA A RETROSPECTIVA ANTES DE REMOVER CARGOS,
+  // APAGAR O CONTROLE OU INATIVAR O FORMS
+  // =====================================================
+
+  let lifecycleDisconnectBundle =
+    null;
+
+  if (
+    typeof generateMemberLifecyclePrivateDm ===
+      "function"
+  ) {
+    lifecycleDisconnectBundle =
+      await generateMemberLifecyclePrivateDm({
+        client:
+          guild.client,
+
+        guild,
+
+        record:
+          snapshot,
+
+        eventType:
+          "disconnected",
+
+        reason:
+          motivo,
+      })
+      .catch(
+        error => {
+          console.warn(
+            `[SC_GI] Retrospectiva de desligamento indisponível para ${snapshot.targetId}:`,
+            error?.message ||
+            error
+          );
+
+          return null;
+        }
+      );
+  }
+
+  // =====================================================
+  // FECHA A ÚLTIMA ETAPA DO HISTÓRICO DE ÁREA
+  // =====================================================
+
+  snapshot.areaHistory =
+    Array.isArray(
+      snapshot.areaHistory
+    )
+      ? structuredClone(
+          snapshot.areaHistory
+        )
+      : [];
+
+  if (
+    snapshot.areaHistory.length >
+    0
+  ) {
+    const lastArea =
+      snapshot.areaHistory[
+        snapshot.areaHistory.length -
+        1
+      ];
+
+    if (
+      lastArea &&
+      !lastArea.endedAtMs
+    ) {
+      lastArea.endedAtMs =
+        nowMs();
+    }
+  }
+
+  // =====================================================
+  // LOG HISTÓRICO ANTES DE APAGAR O CONTROLE
+  // =====================================================
+
+  await logMemberHistoryEvent(
+    guild,
+    {
+      type:
+        "Desligamento da SantaCreators",
+
+      memberId:
+        snapshot.targetId,
+
+      actorId:
+        actor?.id ||
+        null,
+
+      before: {
+        status:
+          snapshot.active
+            ? "Ativo"
+            : "Pausado",
+
+        area:
+          snapshot.area,
+
+        dataEntrada:
+          msToDDMMYYYY(
+            snapshot.joinDateMs
+          ),
+
+        tempoAtivo:
+          activeTimeText(
+            snapshot
+          ),
+
+        tempoPausado:
+          formatDurationFull(
+            getPausedTotalMs(
+              snapshot
+            )
+          ),
+
+        responsibleUserId:
+          snapshot.responsibleUserId ||
+          null,
+
+        responsibleType:
+          snapshot.responsibleType ||
+          null,
+
+        discordIdHistory:
+          snapshot.discordIdHistory ||
+          [],
+
+        activityHistory:
+          snapshot.activityHistory ||
+          [],
+      },
+
+      after: {
+        status:
+          "Desligado",
+
+        motivo:
+          motivo,
+
+        desligadoEm:
+          new Date()
+            .toISOString(),
+      },
+
+      record:
+        snapshot,
+
+      note:
+        "Encerramento da trajetória atual. O histórico disponível foi preservado antes da remoção do Controle GI.",
+    }
+  ).catch(
+    () => {}
+  );
+
   // 🔒 BYPASS TOTAL: impede GuildMemberUpdate / Trava GI
   setRoleBypass(snapshot.targetId, 20000);
 
@@ -6021,14 +7153,23 @@ async function desligarRegistro(guild, actor, messageId, motivo = 'Desligado man
     try {
       const stats = await getStatsForUser(guild.client, snapshot.targetId);
       if (stats) {
-        statsEmbed = new EmbedBuilder()
-          .setColor(0x2b2d31)
-          .setTitle('📊 Relatório de Desempenho (Recente)')
-          .setDescription(`🏆 **Total Geral:** ${stats.total} pontos`)
-          .addFields(
-            { name: '📂 Por Categoria', value: stats.sourcesFormatted.length ? stats.sourcesFormatted.join('\n') : '_(sem registros)_', inline: false },
-            { name: '📅 Por Semana', value: stats.weeksFormatted.length ? stats.weeksFormatted.join('\n') : '_(sem registros)_', inline: false }
-          );
+        statsEmbed = {
+          color: 0x2b2d31,
+          title: '📊 Relatório de Desempenho (Recente)',
+          description: `🏆 **Total no período consultado:** ${stats.total} pontos\n\n${stats.coverage}`,
+          fields: [
+            {
+              name: '📂 Por Categoria',
+              value: stats.sourcesFormatted.join('\n') || '_(sem registros)_',
+              inline: false
+            },
+            {
+              name: '📅 Por Semana',
+              value: stats.weeksFormatted.join('\n') || '_(sem registros)_',
+              inline: false
+            }
+          ]
+        };
       }
     } catch (e) {
       console.warn('[SC_GI] Falha ao buscar stats para desligamento:', e);
@@ -6120,7 +7261,7 @@ if (
 
           const dmText = [
             `💜 **Poxa, que pena!** Você foi desligado(a) da gestão.`,
-            `Se quiser voltar um dia, a casa é sua. Obrigado pelo tempo com a gente!`,
+            `Obrigado pelo tempo com a gente! Se sua saída foi tranquila e, no futuro, você quiser retornar, procure a equipe para conhecer os critérios e seguir o processo de ingresso vigente.`,
             '',
             `🗓️ **Entrada:** \`${msToDDMMYYYY(snapshot.joinDateMs)}\``,
             `⏱️ **Semanas:** \`${weeks}\`  •  **Meses:** \`${months}\``,
@@ -6130,8 +7271,61 @@ if (
             `📝 **Motivo:** ${motivo}`
           ].filter(Boolean).join('\n');
 
-          const dmEmb = await dmEmbedResumo(snapshot, user, '🗑️ Desligamento — Gestaoinfluencer');
-          await sendDM_andMirror(guild, user, dmEmb, dmText, statsEmbed ? [statsEmbed] : []);
+          const dmEmb = await dmEmbedResumo(
+            {
+              ...snapshot,
+              active: false,
+              endedAtMs: nowMs()
+            },
+            user,
+            '🗑️ Desligamento — Gestaoinfluencer'
+          );
+          const lifecycleEmbeds =
+            (
+              lifecycleDisconnectBundle
+                ?.chunks ||
+              []
+            ).map(
+              (
+                chunk,
+                index
+              ) => ({
+                color:
+                  0x8e44ad,
+
+                title:
+                  index ===
+                  0
+                    ? "💜 Sua trajetória na SantaCreators"
+                    : "💜 Continuação da sua trajetória",
+
+                description:
+                  chunk,
+
+                footer: {
+                  text:
+                    "SantaCreators • retrospectiva de trajetória",
+                },
+              })
+            );
+
+          await sendDM_andMirror(
+            guild,
+            user,
+            dmEmb,
+            dmText,
+            [
+              ...(
+                statsEmbed
+                  ? [
+                      statsEmbed
+                    ]
+                  : []
+              ),
+
+              ...lifecycleEmbeds,
+            ]
+          );
         }
       } catch (e) {
         console.warn(`[SC_GI] Falha ao enviar DM de desligamento para ${snapshot.targetId}:`, e.message);
@@ -6610,6 +7804,522 @@ async function setResponsibleAuto(guild, actorId, messageId, pickedUserId) {
       } catch {}
     }
 
+    // =====================================================
+    // HISTÓRICO PERMANENTE INDIVIDUAL
+    // =====================================================
+
+    async function logMemberHistoryEvent(
+      guild,
+      {
+        type,
+        memberId,
+        actorId = null,
+        before = null,
+        after = null,
+        addedRoleIds = [],
+        removedRoleIds = [],
+        record = null,
+        note = null,
+      } = {}
+    ) {
+      try {
+        const channel =
+          await client.channels
+            .fetch(
+              SC_GI_CFG
+                .CHANNEL_MEMBER_HISTORY_LOG
+            )
+            .catch(
+              () => null
+            );
+
+        if (
+          !channel ||
+          channel.type !==
+            ChannelType.GuildText
+        ) {
+          return false;
+        }
+
+        const safeMemberId =
+          String(
+            memberId ||
+            ""
+          );
+
+        const roleText =
+          (roleIds) => {
+            if (
+              !Array.isArray(
+                roleIds
+              ) ||
+              roleIds.length ===
+                0
+            ) {
+              return "Nenhum";
+            }
+
+            return roleIds
+              .map(
+                roleId => {
+                  const role =
+                    guild.roles.cache.get(
+                      String(
+                        roleId
+                      )
+                    );
+
+                  return (
+                    `• ${
+                      role?.name ||
+                      "Cargo não encontrado"
+                    } | ID: \`${roleId}\``
+                  );
+                }
+              )
+              .join(
+                "\n"
+              );
+          };
+
+        const safeJson =
+          (value) => {
+            if (
+              value == null
+            ) {
+              return "—";
+            }
+
+            try {
+              return (
+                typeof value ===
+                  "string"
+                  ? value
+                  : JSON.stringify(
+                      value,
+                      null,
+                      2
+                    )
+              );
+            } catch {
+              return String(
+                value
+              );
+            }
+          };
+
+        const formatLocalDateTime =
+          (timestampMs) => {
+            const timestamp =
+              Number(
+                timestampMs ||
+                0
+              );
+
+            if (
+              !timestamp
+            ) {
+              return "não informado";
+            }
+
+            return new Date(
+              timestamp
+            ).toLocaleString(
+              "pt-BR",
+              {
+                timeZone:
+                  "America/Sao_Paulo",
+
+                day:
+                  "2-digit",
+
+                month:
+                  "2-digit",
+
+                year:
+                  "numeric",
+
+                hour:
+                  "2-digit",
+
+                minute:
+                  "2-digit",
+
+                second:
+                  "2-digit",
+              }
+            );
+          };
+
+        const splitLogText =
+          (
+            value,
+            maximum = 1700
+          ) => {
+            const text =
+              String(
+                value ??
+                ""
+              );
+
+            if (!text) {
+              return [
+                "—"
+              ];
+            }
+
+            const chunks =
+              [];
+
+            let remaining =
+              text;
+
+            while (
+              remaining.length >
+              maximum
+            ) {
+              let cutAt =
+                remaining.lastIndexOf(
+                  "\n",
+                  maximum
+                );
+
+              if (
+                cutAt <
+                Math.floor(
+                  maximum *
+                  0.5
+                )
+              ) {
+                cutAt =
+                  maximum;
+              }
+
+              chunks.push(
+                remaining
+                  .slice(
+                    0,
+                    cutAt
+                  )
+              );
+
+              remaining =
+                remaining
+                  .slice(
+                    cutAt
+                  )
+                  .replace(
+                    /^\n+/,
+                    ""
+                  );
+            }
+
+            if (
+              remaining
+            ) {
+              chunks.push(
+                remaining
+              );
+            }
+
+            return chunks.length
+              ? chunks
+              : [
+                  "—"
+                ];
+          };
+
+        const formatAreaHistory =
+          () => {
+            const history =
+              Array.isArray(
+                record?.areaHistory
+              )
+                ? record.areaHistory
+                : [];
+
+            if (
+              history.length ===
+                0
+            ) {
+              return "Sem histórico estruturado de áreas.";
+            }
+
+            return history
+              .map(
+                (
+                  item,
+                  index
+                ) => {
+                  const start =
+                    Number(
+                      item?.startedAtMs ||
+                      0
+                    );
+
+                  const end =
+                    Number(
+                      item?.endedAtMs ||
+                      Date.now()
+                    );
+
+                  const duration =
+                    start > 0
+                      ? formatDurationFull(
+                          Math.max(
+                            0,
+                            end -
+                            start
+                          )
+                        )
+                      : "tempo não calculado";
+
+                  const changedBy =
+                    item?.changedBy
+                      ? ` | alterado por ID: ${item.changedBy}`
+                      : "";
+
+                  return (
+                    `${index + 1}. ` +
+                    `${item?.area || "Área desconhecida"}` +
+                    ` | início: ${formatLocalDateTime(start)}` +
+                    ` | fim: ${item?.endedAtMs ? formatLocalDateTime(end) : "atual"}` +
+                    ` | duração: ${duration}` +
+                    `${changedBy}`
+                  );
+                }
+              )
+              .join(
+                "\n"
+              );
+          };
+
+        const sendCompleteSection =
+          async (
+            title,
+            value,
+            {
+              codeLanguage = null,
+            } = {}
+          ) => {
+            const chunks =
+              splitLogText(
+                value,
+                codeLanguage
+                  ? 1650
+                  : 1800
+              );
+
+            for (
+              let index = 0;
+              index < chunks.length;
+              index++
+            ) {
+              const prefix =
+                index === 0
+                  ? title
+                  : `${title} • continuação ${index + 1}/${chunks.length}`;
+
+              const body =
+                codeLanguage
+                  ? `${prefix}\n\`\`\`${codeLanguage}\n${chunks[index]}\n\`\`\``
+                  : `${prefix}\n${chunks[index]}`;
+
+              await channel.send({
+                content:
+                  body,
+
+                allowedMentions: {
+                  parse:
+                    [],
+
+                  users:
+                    [],
+
+                  roles:
+                    [],
+                },
+              });
+            }
+          };
+
+        const user =
+          safeMemberId
+            ? await fetchUserCached(
+                safeMemberId
+              )
+            : null;
+
+        const eventMs =
+          Date.now();
+
+        const eventUnix =
+          Math.floor(
+            eventMs /
+            1000
+          );
+
+        const localDateTime =
+          formatLocalDateTime(
+            eventMs
+          );
+
+        const summaryDescription =
+          [
+            safeMemberId
+              ? `👤 **Membro:** <@${safeMemberId}>`
+              : "👤 **Membro:** não identificado",
+
+            safeMemberId
+              ? `🆔 **Discord:** \`${safeMemberId}\``
+              : "",
+
+            actorId
+              ? `👮 **Executor:** <@${actorId}> (\`${actorId}\`)`
+              : "🤖 **Executor:** Sistema",
+
+            `🕒 **Data/Hora São Paulo:** \`${localDateTime}\``,
+            `🕒 **Timestamp Discord:** <t:${eventUnix}:F>`,
+
+            "",
+
+            record?.messageId &&
+            record?.channelId
+              ? `🧾 **Controle GI:** https://discord.com/channels/${guild.id}/${record.channelId}/${record.messageId}`
+              : "",
+
+            record?.personalTicketChannelId
+              ? `🎫 **Ticket pessoal:** https://discord.com/channels/${guild.id}/${record.personalTicketChannelId}`
+              : "",
+
+            "",
+
+            "➕ **Cargos adicionados**",
+            roleText(
+              addedRoleIds
+            ),
+
+            "",
+
+            "➖ **Cargos removidos**",
+            roleText(
+              removedRoleIds
+            ),
+          ]
+            .filter(
+              Boolean
+            )
+            .join(
+              "\n"
+            );
+
+        const embed =
+          new EmbedBuilder()
+            .setColor(
+              0x8e44ad
+            )
+            .setTitle(
+              `📚 Histórico • ${type || "Alteração GI"}`
+            )
+            .setDescription(
+              summaryDescription
+                .slice(
+                  0,
+                  4096
+                )
+            )
+            .setFooter({
+              text:
+                "SantaCreators • histórico permanente da gestão",
+            })
+            .setTimestamp(
+              new Date(
+                eventMs
+              )
+            );
+
+        if (
+          user?.displayAvatarURL
+        ) {
+          embed.setThumbnail(
+            user.displayAvatarURL({
+              size:
+                256,
+            })
+          );
+        }
+
+        await channel.send({
+          embeds: [
+            embed
+          ],
+
+          allowedMentions: {
+            users: [
+              safeMemberId,
+              actorId,
+            ].filter(Boolean),
+
+            roles:
+              [],
+
+            parse:
+              [],
+          },
+        });
+
+        await sendCompleteSection(
+          "📤 **ANTES • conteúdo completo**",
+          safeJson(
+            before
+          ),
+          {
+            codeLanguage:
+              "json",
+          }
+        );
+
+        await sendCompleteSection(
+          "📥 **DEPOIS • conteúdo completo**",
+          safeJson(
+            after
+          ),
+          {
+            codeLanguage:
+              "json",
+          }
+        );
+
+        await sendCompleteSection(
+          "🧭 **Trajetória completa de áreas/cargos**",
+          formatAreaHistory()
+        );
+
+        if (
+          note
+        ) {
+          await sendCompleteSection(
+            "📝 **Observação completa**",
+            String(
+              note
+            )
+          );
+        }
+
+        return true;
+      } catch (
+        error
+      ) {
+        console.warn(
+          "[SC_GI] Falha ao registrar histórico individual:",
+          error?.message ||
+          error
+        );
+
+        return false;
+      }
+    }
+
     // ====================== TRAVA ANTI-REMOVER GI ======================
     async function scheduleRestoreRoles(guild, userId) {
       const snap = SC_GI_STATE.roleSnapshots.get(String(userId));
@@ -6828,7 +8538,7 @@ async function autoDesligarPausadosVencidos(guild, origem = 'tick') {
     if (resolvedGuildId !== guild.id) continue;
     if (rec.active) continue;
 
-    const pausedTotalMs = getPausedTotalMs(rec, n);
+    const pausedTotalMs = getCurrentPauseMs(rec, n);
     const dias = Math.floor(pausedTotalMs / (24 * 60 * 60 * 1000));
 
     if (pausedTotalMs < AUTO_DESLIGAR_PAUSA_MS) continue;
@@ -6854,7 +8564,7 @@ async function autoDesligarPausadosVencidos(guild, origem = 'tick') {
         'Auto-desligamento detectado (GI)',
         [
           `👤 **Membro:** <@${rec.targetId}> (\`${rec.targetId}\`)`,
-          `⏸️ **Tempo pausado acumulado:** \`${formatDurationFull(pausedTotalMs)}\``,
+          `⏸️ **Tempo da pausa atual:** \`${formatDurationFull(pausedTotalMs)}\``,
           `📅 **Dias pausado:** \`${dias}\``,
           `🤖 **Origem:** \`${origem}\``,
           `🧾 **Registro:** \`${rec.messageId}\``,
@@ -6867,7 +8577,7 @@ async function autoDesligarPausadosVencidos(guild, origem = 'tick') {
         guild,
         client.user,
         rec.messageId,
-        `Auto-desligado após ${dias} dias pausado acumulado`
+        `Auto-desligado após ${dias} dias consecutivos na pausa atual`
       );
     } catch (e) {
       console.warn(
@@ -6880,7 +8590,7 @@ async function autoDesligarPausadosVencidos(guild, origem = 'tick') {
         'Falha no Auto-desligamento (GI)',
         [
           `👤 **Membro:** <@${rec.targetId}> (\`${rec.targetId}\`)`,
-          `⏸️ **Tempo pausado acumulado:** \`${formatDurationFull(pausedTotalMs)}\``,
+          `⏸️ **Tempo da pausa atual:** \`${formatDurationFull(pausedTotalMs)}\``,
           `📅 **Dias pausado:** \`${dias}\``,
           `🤖 **Origem:** \`${origem}\``,
           `🧾 **Registro:** \`${rec.messageId}\``,
@@ -7426,6 +9136,147 @@ async function autoDesligarPausadosVencidos(guild, origem = 'tick') {
             (roleId) =>
               !newRoleIds.has(roleId)
           );
+
+        // =====================================================
+        // RESPONSÁVEIS DE TOPO NÃO PODEM TER MKT/TICKET
+        // =====================================================
+        //
+        // Vale inclusive quando alguém tenta adicionar
+        // os cargos manualmente depois.
+        //
+        // Resp Líder:
+        // 1352407252216184833
+        //
+        // Resp Influ:
+        // 1262262852949905409
+        //
+        // Resp Creators:
+        // 1352408327983861844
+        //
+        // =====================================================
+
+        const isTopResponsibleMember =
+          newMember.roles.cache.has(
+            AREA_ROLE_IDS.RESP_LIDER
+          ) ||
+          newMember.roles.cache.has(
+            AREA_ROLE_IDS.RESP_INFLU
+          ) ||
+          newMember.roles.cache.has(
+            AREA_ROLE_IDS.RESP_CREATORS
+          );
+
+        if (
+          rolesMudaram &&
+          isTopResponsibleMember
+        ) {
+          const forbiddenPresent =
+            [
+              AREA_ROLE_IDS.MKT_CREATORS,
+              AREA_ROLE_IDS.TICKETS,
+            ].filter(
+              roleId =>
+                newMember.roles.cache.has(
+                  roleId
+                )
+            );
+
+          if (
+            forbiddenPresent.length >
+            0
+          ) {
+            setRoleBypass(
+              newMember.id,
+              12000
+            );
+
+            await newMember.roles
+              .remove(
+                forbiddenPresent,
+                "Hierarquia GI: Resp Líder, Resp Influ e Resp Creators não utilizam MKT Creators nem Tickets"
+              )
+              .catch(
+                error =>
+                  console.warn(
+                    `[SC_GI] Não consegui remover cargos incompatíveis de ${newMember.id}:`,
+                    error?.message ||
+                    error
+                  )
+              );
+
+            await logMsg(
+              guild,
+              "🧹 Correção automática de hierarquia",
+              [
+                `👤 **Membro:** <@${newMember.id}> (\`${newMember.id}\`)`,
+                "",
+                "**Cargos incompatíveis removidos:**",
+                ...forbiddenPresent.map(
+                  roleId => {
+                    const role =
+                      guild.roles.cache.get(
+                        roleId
+                      );
+
+                    return (
+                      `• ${
+                        role?.name ||
+                        "Cargo não encontrado"
+                      } | ID: \`${roleId}\``
+                    );
+                  }
+                ),
+                "",
+                "📌 Resp Líder, Resp Influ e Resp Creators não utilizam MKT Creators nem o cargo de Tickets."
+              ].join(
+                "\n"
+              )
+            ).catch(
+              () => {}
+            );
+
+            await logMemberHistoryEvent(
+              guild,
+              {
+                type:
+                  "Correção Automática de Hierarquia",
+
+                memberId:
+                  newMember.id,
+
+                actorId:
+                  guild.client.user?.id ||
+                  null,
+
+                before: {
+                  cargosIncompatíveis:
+                    forbiddenPresent,
+                },
+
+                after: {
+                  cargosIncompatíveis:
+                    [],
+                },
+
+                removedRoleIds:
+                  forbiddenPresent,
+
+                record:
+                  SC_GI_findCurrentControl(
+                    guild.id,
+                    newMember.id
+                  ),
+
+                note:
+                  "MKT Creators/Tickets removidos automaticamente por incompatibilidade com a hierarquia atual.",
+              }
+            ).catch(
+              () => {}
+            );
+
+            return;
+          }
+        }
 
         // Aguarda alguns ms para o Audit Log do Discord aparecer.
         if (

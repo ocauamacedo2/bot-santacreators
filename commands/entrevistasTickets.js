@@ -1791,6 +1791,33 @@ async function findPersonalTicketForUser(
     return null;
   }
 
+  const giApi = globalThis.SC_GI_CONTROL_API;
+  if (giApi?.ready === true && giApi.authoritative === true) {
+    const control = giApi.getControl?.(guild.id, targetId);
+    const linkedId = String(control?.personalTicketChannelId || "");
+
+    if (linkedId) {
+      const conflicts = (giApi.listControls?.(guild.id) || []).some(
+        other => String(other?.personalTicketChannelId || "") === linkedId &&
+          String(other?.targetId || "") !== targetId
+      );
+
+      if (conflicts) {
+        console.error(`[SC_PERSONAL_TICKET] Vínculo ambíguo no GI para ${linkedId}.`);
+        return null;
+      }
+
+      const linked = await guild.channels.fetch(linkedId).catch(() => null);
+      if (
+        linked?.guildId === guild.id &&
+        linked.type === ChannelType.GuildText &&
+        !PERSONAL_TICKET_EXEMPT_CHANNEL_IDS.has(linked.id)
+      ) {
+        return linked;
+      }
+    }
+  }
+
   const orderedCategoryIds = [
     PERSONAL_TICKET_ACTIVE_CATEGORY_ID,
     PERSONAL_TICKET_WAITING_CATEGORY_ID,
@@ -2229,7 +2256,340 @@ async function ensurePersonalTicketForUser(
     }
   }
 }
+// =========================================================
+// 🔁 MIGRAÇÃO DE IDENTIDADE DO TICKET PESSOAL
+// =========================================================
 
+async function migratePersonalTicketDiscordIdentity({
+  guild,
+  channelId = null,
+  oldUserId,
+  newUserId,
+  reason =
+    "Troca de Discord pelo Controle GI",
+} = {}) {
+  const oldId =
+    String(
+      oldUserId ||
+      ""
+    ).trim();
+
+  const newId =
+    String(
+      newUserId ||
+      ""
+    ).trim();
+
+  if (
+    !guild ||
+    !oldId ||
+    !newId
+  ) {
+    throw new Error(
+      "Dados insuficientes para migrar o ticket pessoal."
+    );
+  }
+
+  if (
+    oldId ===
+    newId
+  ) {
+    return {
+      status:
+        "unchanged",
+
+      channelId:
+        channelId ||
+        null,
+    };
+  }
+
+  let channel =
+    channelId
+      ? await guild.channels
+          .fetch(
+            String(
+              channelId
+            )
+          )
+          .catch(
+            () => null
+          )
+      : null;
+
+  if (!channel) {
+    channel =
+      await findPersonalTicketForUser(
+        guild,
+        oldId
+      );
+  }
+
+  if (
+    !channel ||
+    channel.type !==
+      ChannelType.GuildText
+  ) {
+    return {
+      status:
+        "not_found",
+
+      channelId:
+        null,
+    };
+  }
+
+  // =====================================================
+  // 1. DÁ ACESSO À CONTA NOVA
+  // =====================================================
+
+  await channel
+    .permissionOverwrites
+    .edit(
+      newId,
+      {
+        ViewChannel:
+          true,
+
+        SendMessages:
+          true,
+
+        ReadMessageHistory:
+          true,
+
+        AttachFiles:
+          true,
+      },
+      {
+        reason,
+      }
+    );
+
+  // =====================================================
+  // 2. REMOVE O VÍNCULO INDIVIDUAL DA CONTA ANTIGA
+  // =====================================================
+
+  if (
+    channel
+      .permissionOverwrites
+      .cache
+      .has(
+        oldId
+      )
+  ) {
+    await channel
+      .permissionOverwrites
+      .delete(
+        oldId,
+        reason
+      );
+  }
+
+  // =====================================================
+  // 3. ATUALIZA O TOPIC
+  // =====================================================
+
+  const currentTopic =
+    String(
+      channel.topic ||
+      ""
+    );
+
+  let nextTopic =
+    currentTopic.replace(
+      new RegExp(
+        `aberto_por:${oldId}`,
+        "gi"
+      ),
+      `aberto_por:${newId}`
+    );
+
+  if (
+    nextTopic === currentTopic &&
+    currentTopic.includes(
+      "ticket_pessoal:1"
+    ) &&
+    !/aberto_por:\d{17,20}/i.test(
+      currentTopic
+    )
+  ) {
+    nextTopic =
+      `${
+        currentTopic
+          ? `${currentTopic};`
+          : ""
+      }aberto_por:${newId}`;
+  }
+
+  if (
+    nextTopic !==
+    currentTopic
+  ) {
+    await channel
+      .setTopic(
+        nextTopic,
+        reason
+      );
+  }
+
+  // =====================================================
+  // 4. ATUALIZA O EMBED INICIAL "ABERTO POR"
+  // =====================================================
+
+  const recent =
+    await channel
+      .messages
+      .fetch({
+        limit:
+          50,
+      })
+      .catch(
+        () => null
+      );
+
+  if (
+    recent?.size
+  ) {
+    for (
+      const message
+      of recent.values()
+    ) {
+      if (
+        message.author?.id !==
+        client.user?.id ||
+        !message.embeds?.length
+      ) {
+        continue;
+      }
+
+      let changed =
+        false;
+
+      const nextEmbeds =
+        message.embeds.map(
+          embed => {
+            const fields =
+              embed.fields ||
+              [];
+
+            const nextFields =
+              fields.map(
+                field => {
+                  const fieldName =
+                    String(
+                      field?.name ||
+                      ""
+                    )
+                      .trim()
+                      .toLowerCase();
+
+                  if (
+                    fieldName !==
+                    "aberto por:"
+                  ) {
+                    return {
+                      name:
+                        field.name,
+
+                      value:
+                        field.value,
+
+                      inline:
+                        field.inline,
+                    };
+                  }
+
+                  const currentValue =
+                    String(
+                      field.value ||
+                      ""
+                    );
+
+                  if (
+                    !currentValue.includes(
+                      oldId
+                    )
+                  ) {
+                    return {
+                      name:
+                        field.name,
+
+                      value:
+                        field.value,
+
+                      inline:
+                        field.inline,
+                    };
+                  }
+
+                  changed =
+                    true;
+
+                  return {
+                    name:
+                      field.name,
+
+                    value:
+                      currentValue.replace(
+                        new RegExp(
+                          `<@!?${oldId}>`,
+                          "g"
+                        ),
+                        `<@${newId}>`
+                      ),
+
+                    inline:
+                      field.inline,
+                  };
+                }
+              );
+
+            const rebuilt =
+              EmbedBuilder
+                .from(
+                  embed
+                )
+                .setFields(
+                  nextFields
+                );
+
+            return rebuilt;
+          }
+        );
+
+      if (
+        changed
+      ) {
+        await message
+          .edit({
+            embeds:
+              nextEmbeds,
+          })
+          .catch(
+            error =>
+              console.warn(
+                `[SC_PERSONAL_TICKET] Falha ao atualizar cabeçalho de ${channel.id}:`,
+                error?.message ||
+                error
+              )
+          );
+
+        break;
+      }
+    }
+  }
+
+  return {
+    status:
+      "synced",
+
+    channelId:
+      channel.id,
+
+    url:
+      `https://discord.com/channels/${guild.id}/${channel.id}`,
+  };
+}
 
 globalThis.SC_PERSONAL_TICKET_API = {
   findByUser:
@@ -2240,6 +2600,9 @@ globalThis.SC_PERSONAL_TICKET_API = {
 
   resolveOwnerId:
     resolvePersonalTicketOwnerId,
+
+  migrateDiscordIdentity:
+    migratePersonalTicketDiscordIdentity,
 };
 
 // =========================================================

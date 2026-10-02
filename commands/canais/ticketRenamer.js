@@ -553,7 +553,43 @@ const MEMBER_FONT_CATEGORY_IDS = new Set([
   // o rename executado pelo próprio bot.
   client.on(Events.ChannelUpdate, (oldChannel, newChannel) => {
     if (!newChannel || newChannel.type !== ChannelType.GuildText) return;
-    if (!newChannel.parentId) return;
+
+    const managedParentIds = getAllManagedParentIds();
+
+    const wasManaged =
+      !!oldChannel?.parentId &&
+      managedParentIds.has(
+        oldChannel.parentId
+      );
+
+    const isManaged =
+      !!newChannel.parentId &&
+      managedParentIds.has(
+        newChannel.parentId
+      );
+
+    if (!wasManaged && !isManaged) return;
+
+    // =====================================================
+    // INVALIDA O ABRIDOR EM QUALQUER ALTERAÇÃO DO TICKET
+    // =====================================================
+    //
+    // A troca de Discord altera tópico, embed e permissões.
+    // Mesmo quando o nome/categoria não mudam, o abridor
+    // antigo não pode continuar preso no cache por 1 hora.
+    // =====================================================
+
+    OPENER_CACHE.delete(
+      newChannel.id
+    );
+
+    OPENER_TIME.delete(
+      newChannel.id
+    );
+
+    OPENER_MISS.delete(
+      newChannel.id
+    );
 
     const nameChanged =
       oldChannel?.name !== newChannel.name;
@@ -562,9 +598,7 @@ const MEMBER_FONT_CATEGORY_IDS = new Set([
       oldChannel?.parentId !== newChannel.parentId;
 
     if (!nameChanged && !parentChanged) return;
-
-    const managedParentIds = getAllManagedParentIds();
-    if (!managedParentIds.has(newChannel.parentId)) return;
+    if (!newChannel.parentId || !isManaged) return;
 
     // Categorias de Líder mantêm o debounce específico já existente.
     if (LEADER_FONT_CATEGORY_IDS.has(newChannel.parentId)) {
