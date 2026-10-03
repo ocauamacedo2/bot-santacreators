@@ -918,6 +918,777 @@ export function recordPersonalTicketActivity({
   return record;
 }
 
+// =====================================================
+// 🎫 ATENDIMENTOS DE TICKETS FEITOS PARA TERCEIROS
+// =====================================================
+//
+// IMPORTANTE:
+//
+// Isto NÃO representa o ticket pessoal do membro.
+//
+// Aqui entram somente tickets abertos por OUTRAS pessoas
+// nos quais esse membro atuou como:
+//
+// - atendente principal;
+// - apoio;
+// - fechador;
+// - fechador sem participação anterior.
+//
+// Dessa forma o ticket pessoal da própria pessoa nunca
+// entra como avaliação operacional do atendimento dela.
+// =====================================================
+
+export function recordServiceTicketOperationalActivity({
+  staffUserId,
+  guildId = null,
+  channelId,
+  ticketType = "SEM TIPO",
+
+  openerId = null,
+  closerId = null,
+  primaryAttendantId = null,
+
+  participantRole = "participante",
+
+  authorityLevel = null,
+  authorityLabel = null,
+
+  messageCount = 0,
+  firstMessageAt = null,
+  lastMessageAt = null,
+  individualFirstResponseMs = null,
+
+  higherSupportIds = [],
+
+  humanConclusion = "",
+  autoReasonType = null,
+  waitingOn = null,
+
+  openedAt = null,
+  closedAt = Date.now(),
+
+  participantExcerpt = "",
+  conversationExcerpt = "",
+
+  operationalRecord = null,
+} = {}) {
+  const rawStaffUserId =
+    String(
+      staffUserId ||
+      ""
+    ).trim();
+
+  const targetUserId =
+    resolveDiscordIdentity(
+      rawStaffUserId
+    ) ||
+    rawStaffUserId;
+
+  const normalizedChannelId =
+    String(
+      channelId ||
+      ""
+    ).trim();
+
+  const normalizedOpenerId =
+    openerId
+      ? String(
+          openerId
+        ).trim()
+      : null;
+
+  // =====================================================
+  // TRAVA PRINCIPAL
+  // =====================================================
+  //
+  // Nunca transformar o próprio ticket da pessoa em
+  // atendimento realizado por ela.
+  // =====================================================
+
+  if (
+    !targetUserId ||
+    !normalizedChannelId ||
+    (
+      normalizedOpenerId &&
+      targetUserId ===
+        normalizedOpenerId
+    )
+  ) {
+    return null;
+  }
+
+  const state =
+    readPersonalTicketHistoryState();
+
+  const current =
+    Array.isArray(
+      state.users[
+        targetUserId
+      ]
+    )
+      ? state.users[
+          targetUserId
+        ]
+      : [];
+
+  const dedupeKey =
+    `service_ticket:${normalizedChannelId}`;
+
+  const previous =
+    current.find(
+      item =>
+        item?.dedupeKey ===
+        dedupeKey
+    ) ||
+    null;
+
+  const safeNumber =
+    value => {
+      if (
+        value === null ||
+        value === undefined ||
+        value === ""
+      ) {
+        return null;
+      }
+
+      const parsed =
+        Number(
+          value
+        );
+
+      return Number.isFinite(
+        parsed
+      )
+        ? parsed
+        : null;
+    };
+
+  // =====================================================
+  // RESULTADO DA ANÁLISE OPERACIONAL
+  // =====================================================
+
+  const evaluation = {
+    resolved:
+      operationalRecord
+        ?.evaluation
+        ?.resolved ||
+      "inconclusivo",
+
+    teamPerformance:
+      operationalRecord
+        ?.evaluation
+        ?.teamPerformance ||
+      "nao_classificado",
+
+    whoSolved:
+      operationalRecord
+        ?.evaluation
+        ?.whoSolved ||
+      "nao_identificado",
+
+    summaryShort:
+      String(
+        operationalRecord
+          ?.evaluation
+          ?.summaryShort ||
+        ""
+      )
+        .trim()
+        .slice(
+          0,
+          3500
+        ),
+
+    closingContext:
+      String(
+        operationalRecord
+          ?.evaluation
+          ?.closingContext ||
+        ""
+      )
+        .trim()
+        .slice(
+          0,
+          3500
+        ),
+
+    confidence:
+      safeNumber(
+        operationalRecord
+          ?.evaluation
+          ?.confidence
+      ),
+  };
+
+  const serviceTicket = {
+    ticketType:
+      String(
+        ticketType ||
+        "SEM TIPO"
+      )
+        .trim()
+        .slice(
+          0,
+          80
+        ),
+
+    openerId:
+      normalizedOpenerId,
+
+    closerId:
+      closerId
+        ? String(
+            closerId
+          ).trim()
+        : null,
+
+    primaryAttendantId:
+      primaryAttendantId
+        ? String(
+            primaryAttendantId
+          ).trim()
+        : null,
+
+    participantRole:
+      String(
+        participantRole ||
+        "participante"
+      )
+        .trim()
+        .slice(
+          0,
+          80
+        ),
+
+    authorityLevel:
+      safeNumber(
+        authorityLevel
+      ),
+
+    authorityLabel:
+      authorityLabel
+        ? String(
+            authorityLabel
+          )
+            .trim()
+            .slice(
+              0,
+              120
+            )
+        : null,
+
+    messageCount:
+      Math.max(
+        0,
+        Number(
+          messageCount ||
+          0
+        )
+      ),
+
+    firstMessageAt:
+      safeNumber(
+        firstMessageAt
+      ),
+
+    lastMessageAt:
+      safeNumber(
+        lastMessageAt
+      ),
+
+    individualFirstResponseMs:
+      safeNumber(
+        individualFirstResponseMs
+      ),
+
+    higherSupportIds:
+      [
+        ...new Set(
+          (
+            Array.isArray(
+              higherSupportIds
+            )
+              ? higherSupportIds
+              : []
+          )
+            .map(
+              value =>
+                String(
+                  value ||
+                  ""
+                ).trim()
+            )
+            .filter(
+              Boolean
+            )
+        )
+      ].slice(
+        0,
+        20
+      ),
+
+    openedAt:
+      safeNumber(
+        openedAt
+      ),
+
+    closedAt:
+      safeNumber(
+        closedAt
+      ) ||
+      Date.now(),
+
+    totalOpenMs:
+      safeNumber(
+        operationalRecord
+          ?.metrics
+          ?.totalOpenMs
+      ),
+
+    globalFirstHumanResponseMs:
+      safeNumber(
+        operationalRecord
+          ?.metrics
+          ?.firstHumanResponseMs
+      ),
+
+    waitingOn:
+      waitingOn
+        ? String(
+            waitingOn
+          ).slice(
+            0,
+            40
+          )
+        : operationalRecord
+            ?.metrics
+            ?.waitingOn
+          ? String(
+              operationalRecord
+                .metrics
+                .waitingOn
+            ).slice(
+              0,
+              40
+            )
+          : null,
+
+    autoReasonType:
+      autoReasonType
+        ? String(
+            autoReasonType
+          ).slice(
+            0,
+            60
+          )
+        : null,
+
+    humanConclusion:
+      String(
+        humanConclusion ||
+        ""
+      )
+        .trim()
+        .slice(
+          0,
+          5000
+        ),
+
+    participantExcerpt:
+      String(
+        participantExcerpt ||
+        ""
+      )
+        .trim()
+        .slice(
+          0,
+          9000
+        ),
+
+    conversationExcerpt:
+      String(
+        conversationExcerpt ||
+        ""
+      )
+        .trim()
+        .slice(
+          0,
+          14000
+        ),
+
+    evaluation,
+
+    // =====================================================
+    // FEEDBACK DE QUEM ABRIU O TICKET
+    // =====================================================
+    //
+    // Preserva caso o registro seja regravado depois.
+    // =====================================================
+
+    userFeedback:
+      previous
+        ?.serviceTicket
+        ?.userFeedback ||
+      null,
+
+    userFeedbackBy:
+      previous
+        ?.serviceTicket
+        ?.userFeedbackBy ||
+      null,
+
+    userFeedbackAt:
+      previous
+        ?.serviceTicket
+        ?.userFeedbackAt ||
+      null,
+  };
+
+  const summaryParts = [
+    `Ticket ${serviceTicket.ticketType}`,
+
+    `papel=${serviceTicket.participantRole}`,
+
+    `mensagens=${serviceTicket.messageCount}`,
+
+    serviceTicket
+      .evaluation
+      ?.resolved
+        ? `resultado=${serviceTicket.evaluation.resolved}`
+        : "",
+
+    serviceTicket
+      .evaluation
+      ?.teamPerformance
+        ? `qualidade=${serviceTicket.evaluation.teamPerformance}`
+        : "",
+  ]
+    .filter(
+      Boolean
+    );
+
+  const nextRecord = {
+    dedupeKey,
+
+    userId:
+      targetUserId,
+
+    guildId:
+      guildId
+        ? String(
+            guildId
+          )
+        : null,
+
+    channelId:
+      normalizedChannelId,
+
+    messageId:
+      `service-ticket-${normalizedChannelId}`,
+
+    authorId:
+      targetUserId,
+
+    authorName:
+      null,
+
+    relation:
+      "atendimento_terceiro",
+
+    evidenceKind:
+      "ticket_operacional",
+
+    type:
+      "service_ticket_operational",
+
+    content:
+      evaluation
+        .summaryShort ||
+      serviceTicket
+        .humanConclusion ||
+      summaryParts.join(
+        " | "
+      ),
+
+    summary:
+      summaryParts.join(
+        " | "
+      ),
+
+    attachments:
+      [],
+
+    createdAtMs:
+      serviceTicket.closedAt,
+
+    messageUrl:
+      null,
+
+    serviceTicket,
+  };
+
+  const next =
+    [
+      ...current.filter(
+        item =>
+          item?.dedupeKey !==
+          dedupeKey
+      ),
+
+      nextRecord,
+    ]
+      .filter(
+        item =>
+          Number(
+            item?.createdAtMs ||
+            0
+          ) >=
+          (
+            Date.now() -
+            PERSONAL_TICKET_HISTORY_RETENTION_MS
+          )
+      )
+      .sort(
+        (a, b) =>
+          Number(
+            a?.createdAtMs ||
+            0
+          ) -
+          Number(
+            b?.createdAtMs ||
+            0
+          )
+      )
+      .slice(
+        -PERSONAL_TICKET_HISTORY_MAX_PER_USER
+      );
+
+  state.users[
+    targetUserId
+  ] =
+    next;
+
+  writePersonalTicketHistoryState(
+    state
+  );
+
+  return nextRecord;
+}
+
+// =====================================================
+// FEEDBACK DE QUEM ABRIU O TICKET
+// =====================================================
+//
+// Quando o cidadão clicar:
+//
+// ✅ Resolvido
+// 🟡 Em parte
+// ❌ Não resolveu
+//
+// o feedback é anexado ao atendimento de TODOS os
+// membros que participaram daquele ticket.
+//
+// Isso NÃO transforma automaticamente "não resolveu"
+// em culpa do Creator. A interpretação será feita depois
+// levando em consideração conversa, abandono e fechamento.
+// =====================================================
+
+export function applyServiceTicketUserFeedback({
+  channelId,
+  openerId,
+  feedback,
+  feedbackAt = Date.now(),
+} = {}) {
+  const normalizedChannelId =
+    String(
+      channelId ||
+      ""
+    ).trim();
+
+  const normalizedFeedback =
+    String(
+      feedback ||
+      ""
+    ).trim();
+
+  const allowedFeedbacks =
+    new Set([
+      "resolvido",
+      "parcial",
+      "nao_resolvido",
+    ]);
+
+  if (
+    !normalizedChannelId ||
+    !allowedFeedbacks.has(
+      normalizedFeedback
+    )
+  ) {
+    return {
+      ok:
+        false,
+
+      updated:
+        0,
+    };
+  }
+
+  const state =
+    readPersonalTicketHistoryState();
+
+  let updated =
+    0;
+
+  for (
+    const [
+      storedUserId,
+      rows
+    ]
+    of Object.entries(
+      state.users ||
+      {}
+    )
+  ) {
+    if (
+      !Array.isArray(
+        rows
+      )
+    ) {
+      continue;
+    }
+
+    let changed =
+      false;
+
+    const nextRows =
+      rows.map(
+        item => {
+          if (
+            item?.type !==
+              "service_ticket_operational" ||
+            String(
+              item?.channelId ||
+              ""
+            ) !==
+              normalizedChannelId
+          ) {
+            return item;
+          }
+
+          changed =
+            true;
+
+          updated++;
+
+          return {
+            ...item,
+
+            userId:
+              String(
+                storedUserId
+              ),
+
+            serviceTicket: {
+              ...(
+                item
+                  ?.serviceTicket ||
+                {}
+              ),
+
+              userFeedback:
+                normalizedFeedback,
+
+              userFeedbackBy:
+                openerId
+                  ? String(
+                      openerId
+                    )
+                  : null,
+
+              userFeedbackAt:
+                Number(
+                  feedbackAt ||
+                  Date.now()
+                ),
+            },
+          };
+        }
+      );
+
+    if (
+      changed
+    ) {
+      state.users[
+        storedUserId
+      ] =
+        nextRows;
+    }
+  }
+
+  if (
+    updated >
+    0
+  ) {
+    writePersonalTicketHistoryState(
+      state
+    );
+  }
+
+  return {
+    ok:
+      true,
+
+    updated,
+  };
+}
+
+// =====================================================
+// BUSCA SOMENTE ATENDIMENTOS FEITOS PARA OUTRAS PESSOAS
+// =====================================================
+
+export function getServiceTicketOperationalHistoryForUser(
+  userId,
+  {
+    sinceMs = 0,
+    untilMs = Number.POSITIVE_INFINITY,
+    limit = 80,
+  } = {}
+) {
+  return getPersonalTicketHistoryForUser(
+    userId,
+    {
+      sinceMs,
+      untilMs,
+
+      limit:
+        PERSONAL_TICKET_HISTORY_MAX_PER_USER,
+
+      includeAi:
+        true,
+
+      includeServiceTickets:
+        true,
+    }
+  )
+    .filter(
+      item =>
+        item?.type ===
+          "service_ticket_operational" &&
+        item?.relation ===
+          "atendimento_terceiro"
+    )
+    .slice(
+      -Math.max(
+        1,
+        Number(
+          limit ||
+          80
+        )
+      )
+    );
+}
+
 export function getPersonalTicketHistoryForUser(
   userId,
   {
@@ -925,6 +1696,7 @@ export function getPersonalTicketHistoryForUser(
     untilMs = Number.POSITIVE_INFINITY,
     limit = 120,
     includeAi = true,
+    includeServiceTickets = false,
   } = {}
 ) {
   const rawTargetUserId =
@@ -1035,6 +1807,25 @@ export function getPersonalTicketHistoryForUser(
             String(item?.type || "").startsWith("ai_") ||
             item?.relation === "ia_santacreators"
           )
+        ) {
+          return false;
+        }
+
+        // =====================================================
+        // SEPARA TICKET PESSOAL DE ATENDIMENTO A TERCEIROS
+        // =====================================================
+        //
+        // Por padrão, o histórico pessoal NÃO deve devolver
+        // registros de tickets que a pessoa atendeu.
+        //
+        // O getter específico de atendimentos habilita isso
+        // explicitamente com includeServiceTickets: true.
+        // =====================================================
+
+        if (
+          includeServiceTickets !== true &&
+          item?.type ===
+            "service_ticket_operational"
         ) {
           return false;
         }
@@ -5679,6 +6470,14 @@ export async function getFormsCreatorPersonData(client, userId) {
                 {
                     limit: 60,
                     includeAi: true,
+                }
+            ),
+
+        serviceTicketHistory:
+            getServiceTicketOperationalHistoryForUser(
+                targetUserId,
+                {
+                    limit: 60,
                 }
             ),
     };

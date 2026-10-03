@@ -18,12 +18,23 @@ import {
 import { resolveLogChannel } from '../events/channelResolver.js';
 import { logManualTicketAccessChange } from '../events/orgTicketAccessSync.js';
 import { iaInterviewTicketOpened } from '../events/iaChatAuto.js';
+
+import {
+  recordServiceTicketOperationalActivity,
+  applyServiceTicketUserFeedback,
+} from '../events/formscreator.js';
+
+import {
+  getOfficialSantaCreatorsAuthorityLevel,
+  getOfficialSantaCreatorsAuthorityDefinition,
+} from '../events/hierarquiaDivisoes.js';
+
 import {
   analyzeAndRecordTicket,
   recordTicketFeedback,
 } from '../utils/ticketOperationalIntelligence.js';
-import { createTicketRestoreSystem } from '../utils/ticketRestore.js';
 
+import { createTicketRestoreSystem } from '../utils/ticketRestore.js';
 export default function createEntrevistasTickets({ client, Transcript }) {
   ///!ENTREVISTA
 
@@ -3949,7 +3960,19 @@ await interaction
         return true;
       }
 
-     await interaction
+      applyServiceTicketUserFeedback({
+        channelId,
+
+        openerId:
+          interaction.user.id,
+
+        feedback,
+
+        feedbackAt:
+          Date.now(),
+      });
+
+      await interaction
   .reply({
     content:
       '💗 Valeu pelo retorno! Seu feedback foi registrado e vai entrar no acompanhamento dos atendimentos.',
@@ -4887,11 +4910,31 @@ try {
       const uid = msg.author?.id;
       if (!uid || !staffVerificada.has(uid)) continue;
 
-      const atual = contagemAtendentes.get(uid);
+      const atual =
+        contagemAtendentes.get(
+          uid
+        );
+
       if (!atual) {
-        contagemAtendentes.set(uid, { count: 1, firstTs: msg.createdTimestamp });
+        contagemAtendentes.set(
+          uid,
+          {
+            count:
+              1,
+
+            firstTs:
+              msg.createdTimestamp,
+
+            lastTs:
+              msg.createdTimestamp,
+          }
+        );
       } else {
-        atual.count += 1;
+        atual.count +=
+          1;
+
+        atual.lastTs =
+          msg.createdTimestamp;
       }
     }
 
@@ -5070,6 +5113,486 @@ try {
             return null;
           }
         );
+
+    // =====================================================
+    // 🎫 FORMS / GI
+    // HISTÓRICO DE ATENDIMENTOS A TERCEIROS
+    // =====================================================
+    //
+    // Cria um registro individual para cada membro da
+    // SantaCreators que realmente participou do ticket.
+    //
+    // Também registra quem apenas fechou o ticket.
+    //
+    // Nunca considera como atendimento o ticket aberto
+    // pela própria pessoa.
+    // =====================================================
+
+    try {
+      // =====================================================
+      // NÃO AVALIA TICKET ABERTO PELA PRÓPRIA EQUIPE
+      // =====================================================
+      //
+      // O histórico operacional semanal deve representar
+      // atendimento da SantaCreators para terceiros.
+      //
+      // Se quem abriu pertence à própria equipe, o ticket
+      // continua funcionando normalmente, continua tendo
+      // transcript/log etc., mas NÃO vira avaliação semanal
+      // de atendimento dos membros.
+      // =====================================================
+
+      const openerMemberForServiceHistory =
+        userAberto ||
+        sorted.find(
+          message =>
+            !message.author?.bot &&
+            message.author?.id ===
+              idAberto
+        )
+          ?.member ||
+        null;
+
+      const shouldTrackServiceTicket =
+        !isTeamTicketOpener(
+          openerMemberForServiceHistory,
+          idAberto
+        );
+
+      const serviceStaffIds =
+        shouldTrackServiceTicket
+          ? new Set([
+              ...staffVerificada,
+            ])
+          : new Set();
+
+      // =====================================================
+      // GARANTE O ATENDENTE PRINCIPAL
+      // =====================================================
+
+      if (
+        shouldTrackServiceTicket &&
+        ATENDENTE_ID_FINAL &&
+        ATENDENTE_ID_FINAL !==
+          "Bot" &&
+        await isAtendenteValido(
+          ATENDENTE_ID_FINAL
+        )
+      ) {
+        serviceStaffIds.add(
+          ATENDENTE_ID_FINAL
+        );
+      }
+
+      // =====================================================
+      // GARANTE O FECHADOR
+      // =====================================================
+      //
+      // Mesmo se ele não falou nada anteriormente.
+      // =====================================================
+
+      if (
+        shouldTrackServiceTicket &&
+        CLOSED_BY_ID &&
+        CLOSED_BY_ID !==
+          "Bot" &&
+        await isAtendenteValido(
+          CLOSED_BY_ID
+        )
+      ) {
+        serviceStaffIds.add(
+          CLOSED_BY_ID
+        );
+      }
+
+      // =====================================================
+      // O DONO DO TICKET NUNCA CONTA COMO ATENDENTE
+      // =====================================================
+
+      if (
+        idAberto
+      ) {
+        serviceStaffIds.delete(
+          idAberto
+        );
+      }
+
+      const openerFirstMessageAt =
+        sorted.find(
+          message =>
+            !message.author?.bot &&
+            message.author?.id ===
+              idAberto
+        )
+          ?.createdTimestamp ||
+        horarioAbertura.getTime();
+
+      const serviceStaffProfiles =
+        [];
+
+      // =====================================================
+      // CARREGA HIERARQUIA DE CADA PARTICIPANTE
+      // =====================================================
+
+      for (
+        const staffId
+        of serviceStaffIds
+      ) {
+        const member =
+          await safeFetchMember(
+            guild,
+            staffId
+          );
+
+        const authorityLevel =
+          member &&
+          typeof getOfficialSantaCreatorsAuthorityLevel ===
+            "function"
+            ? getOfficialSantaCreatorsAuthorityLevel(
+                member
+              )
+            : Infinity;
+
+        const authorityDefinition =
+          member &&
+          typeof getOfficialSantaCreatorsAuthorityDefinition ===
+            "function"
+            ? getOfficialSantaCreatorsAuthorityDefinition(
+                member
+              )
+            : null;
+
+        const interactionInfo =
+          contagemAtendentes.get(
+            staffId
+          ) ||
+          {
+            count:
+              0,
+
+            firstTs:
+              null,
+
+            lastTs:
+              null,
+          };
+
+        serviceStaffProfiles.push({
+          staffId,
+
+          authorityLevel,
+
+          authorityLabel:
+            authorityDefinition
+              ?.label ||
+            null,
+
+          messageCount:
+            Number(
+              interactionInfo
+                .count ||
+              0
+            ),
+
+          firstMessageAt:
+            interactionInfo
+              .firstTs ||
+            null,
+
+          lastMessageAt:
+            interactionInfo
+              .lastTs ||
+            interactionInfo
+              .firstTs ||
+            null,
+        });
+      }
+
+      // =====================================================
+      // RECORTE DA CONVERSA
+      // =====================================================
+      //
+      // Serve para o feedback semanal ser realmente
+      // individual e saber O QUE aconteceu no atendimento.
+      // =====================================================
+
+      const conversationExcerpt =
+        mensagensParaAnalise
+          .filter(
+            item =>
+              String(
+                item.content ||
+                ""
+              ).trim()
+          )
+          .slice(
+            -60
+          )
+          .map(
+            item =>
+              `[${new Date(
+                Number(
+                  item.createdTimestamp ||
+                  Date.now()
+                )
+              ).toLocaleString(
+                "pt-BR",
+                {
+                  timeZone:
+                    "America/Sao_Paulo",
+                }
+              )}] ${
+                item.isBot
+                  ? "BOT/SISTEMA"
+                  : item.isOpener
+                    ? "CIDADÃO"
+                    : item.isStaff
+                      ? "EQUIPE"
+                      : "OUTRO"
+              } ${item.authorName}: ${String(
+                item.content ||
+                ""
+              )
+                .replace(
+                  /\s+/g,
+                  " "
+                )
+                .slice(
+                  0,
+                  900
+                )}`
+          )
+          .join(
+            "\n"
+          )
+          .slice(
+            0,
+            14000
+          );
+
+      // =====================================================
+      // CRIA UM REGISTRO PARA CADA MEMBRO ENVOLVIDO
+      // =====================================================
+
+      for (
+        const profile
+        of serviceStaffProfiles
+      ) {
+        const isPrimary =
+          profile.staffId ===
+          ATENDENTE_ID_FINAL;
+
+        const isCloser =
+          profile.staffId ===
+          CLOSED_BY_ID;
+
+        // =================================================
+        // PAPEL REAL DA PESSOA NESSE TICKET
+        // =================================================
+
+        const participantRole =
+          isPrimary &&
+          isCloser
+            ? "atendente_principal_e_fechador"
+
+            : isPrimary
+              ? "atendente_principal"
+
+              : isCloser &&
+                  profile.messageCount >
+                    0
+                ? "fechador_com_participacao"
+
+                : isCloser
+                  ? "fechador_sem_interacao"
+
+                  : "apoio_no_atendimento";
+
+        // =================================================
+        // AJUDA DE SUPERIOR
+        // =================================================
+        //
+        // Quanto MENOR o authorityLevel, maior o cargo.
+        //
+        // Então se outra pessoa tem nível menor que o
+        // participante analisado, ela está acima dele.
+        // =================================================
+
+        const higherSupportIds =
+          serviceStaffProfiles
+            .filter(
+              other =>
+                other.staffId !==
+                  profile.staffId &&
+
+                Number.isFinite(
+                  other.authorityLevel
+                ) &&
+
+                Number.isFinite(
+                  profile.authorityLevel
+                ) &&
+
+                other.authorityLevel <
+                  profile.authorityLevel &&
+
+                other.messageCount >
+                  0
+            )
+            .map(
+              other =>
+                other.staffId
+            );
+
+        // =================================================
+        // SOMENTE AS FALAS DESSE MEMBRO
+        // =================================================
+
+        const participantExcerpt =
+          mensagensParaAnalise
+            .filter(
+              item =>
+                item.authorId ===
+                  profile.staffId &&
+
+                String(
+                  item.content ||
+                    ""
+                ).trim()
+            )
+            .slice(
+              -30
+            )
+            .map(
+              item =>
+                `[${new Date(
+                  Number(
+                    item.createdTimestamp ||
+                      Date.now()
+                  )
+                ).toLocaleString(
+                  "pt-BR",
+                  {
+                    timeZone:
+                      "America/Sao_Paulo",
+                  }
+                )}] ${item.authorName}: ${String(
+                  item.content ||
+                    ""
+                )
+                  .replace(
+                    /\s+/g,
+                    " "
+                  )
+                  .slice(
+                    0,
+                    1000
+                  )}`
+            )
+            .join(
+              "\n"
+            )
+            .slice(
+              0,
+              9000
+            );
+
+        recordServiceTicketOperationalActivity({
+          staffUserId:
+            profile.staffId,
+
+          guildId:
+            guild.id,
+
+          channelId:
+            canalId,
+
+          ticketType:
+            tipoTicket,
+
+          openerId:
+            idAberto,
+
+          closerId:
+            CLOSED_BY_ID,
+
+          primaryAttendantId:
+            ATENDENTE_ID_FINAL,
+
+          participantRole,
+
+          authorityLevel:
+            Number.isFinite(
+              profile.authorityLevel
+            )
+              ? profile.authorityLevel
+              : null,
+
+          authorityLabel:
+            profile.authorityLabel,
+
+          messageCount:
+            profile.messageCount,
+
+          firstMessageAt:
+            profile.firstMessageAt,
+
+          lastMessageAt:
+            profile.lastMessageAt,
+
+          individualFirstResponseMs:
+            profile.firstMessageAt
+              ? Math.max(
+                  0,
+
+                  profile.firstMessageAt -
+                    openerFirstMessageAt
+                )
+              : null,
+
+          higherSupportIds,
+
+          humanConclusion:
+            conclusaoFinal,
+
+          autoReasonType:
+            autoData
+              ?.reasonType ||
+            null,
+
+          waitingOn:
+            autoData
+              ?.waitingOn ||
+            ticketOperationalRecord
+              ?.metrics
+              ?.waitingOn ||
+            null,
+
+          openedAt:
+            horarioAbertura
+              .getTime(),
+
+          closedAt:
+            horarioFechamento
+              .getTime(),
+
+          participantExcerpt,
+
+          conversationExcerpt,
+
+          operationalRecord:
+            ticketOperationalRecord,
+        });
+      }
+    } catch (
+      error
+    ) {
+      console.error(
+        "[TICKET FORMS/GI] Falha ao registrar histórico operacional do atendimento:",
+        error?.message ||
+          error
+      );
+    }
 
     const IGNORE_CUSTOM_IDS =
       new Set([

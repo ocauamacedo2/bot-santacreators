@@ -1097,29 +1097,59 @@ const prev = byUser.get(r.targetId);
 
     // ====================== UTILS ======================
     const HIERARCHY_ORDER = [
-      "1262262852949905408", // owner
-      "1352408327983861844", // resp creators
-      "1262262852949905409", // resp influ
-      "1352407252216184833", // resp lider
-      "1388976314253312100", // coord
-      "1388975939161161728", // gestor
-      "1388976155830255697", // manager
-      "1388976094920704141", // social
-      "1392678638176043029", // equipe manager
-      "1387253972661964840", // equipe social
-      "1352429001188180039"  // equipe creators
+      ["1262262852949905408"], // owner
+      ["1352408327983861844"], // resp creators
+      ["1262262852949905409"], // resp influ
+      [
+        "1352407252216184833", // resp lider
+        "1414651836861907006"  // responsáveis (tratado como Resp. Líder)
+      ],
+      ["1388976314253312100"], // coord
+      ["1388975939161161728"], // gestor
+      [
+        "1388976155830255697", // manager
+        "1388976094920704141"  // social
+      ],
+      [
+        "1392678638176043029", // equipe manager
+        "1387253972661964840", // equipe social
+        "1352429001188180039"  // equipe creators
+      ]
     ];
 
     function getManagementRank(member) {
       if (!member) return Infinity;
+
       for (let i = 0; i < HIERARCHY_ORDER.length; i++) {
-        if (member.roles.cache.has(HIERARCHY_ORDER[i])) return i;
+        if (
+          HIERARCHY_ORDER[i].some(roleId =>
+            member.roles.cache.has(roleId)
+          )
+        ) {
+          return i;
+        }
       }
+
       return Infinity;
     }
 
     function getResponsibleHierarchyRank(member, fallbackType = null) {
-      if (member && typeof getOfficialSantaCreatorsHierarchyRank === 'function') {
+      if (
+        member &&
+        typeof getOfficialSantaCreatorsAuthorityLevel === 'function'
+      ) {
+        const officialAuthorityLevel =
+          getOfficialSantaCreatorsAuthorityLevel(member);
+
+        if (Number.isFinite(officialAuthorityLevel)) {
+          return officialAuthorityLevel;
+        }
+      }
+
+      if (
+        member &&
+        typeof getOfficialSantaCreatorsHierarchyRank === 'function'
+      ) {
         const officialRank =
           getOfficialSantaCreatorsHierarchyRank(member);
 
@@ -1165,85 +1195,225 @@ const prev = byUser.get(r.targetId);
       return control;
     }
 
-    async function findBestResponsible(guild, targetId = null) {
+    const AUTO_RESP_OVERFLOW_GAP = 4;
+
+    function getAutomaticResponsiblePenalty(targetRank, candidateRank) {
+      // Owner recebe automaticamente Resp. Creators.
+      if (candidateRank === 0) {
+        if (targetRank === 1) return 0;
+
+        // Owner pode ajudar com Resp. Influ somente como último apoio.
+        if (targetRank === 2) return AUTO_RESP_OVERFLOW_GAP + 2;
+
+        return Infinity;
+      }
+
+      // Resp. Creators bate automaticamente Resp. Influ.
+      // Cargos abaixo disso só podem ser assumidos manualmente por ele.
+      if (candidateRank === 1) {
+        return targetRank === 2
+          ? 0
+          : Infinity;
+      }
+
+      // Resp. Influ bate preferencialmente Resp. Líder.
+      // Também pode aliviar Resp. Líder quando os membros abaixo estiverem muito concentrados.
+      if (candidateRank === 2) {
+        if (targetRank === 3) return 0;
+
+        if (
+          targetRank === Infinity ||
+          targetRank >= 4
+        ) {
+          return AUTO_RESP_OVERFLOW_GAP;
+        }
+
+        return Infinity;
+      }
+
+      // Resp. Líder é a preferência automática para Coord. e cargos abaixo.
+      if (candidateRank === 3) {
+        if (
+          targetRank === Infinity ||
+          targetRank >= 4
+        ) {
+          return 0;
+        }
+
+        return Infinity;
+      }
+
+      return Infinity;
+    }
+
+    async function findBestResponsible(
+      guild,
+      targetId = null,
+      {
+        excludeUserIds = []
+      } = {}
+    ) {
       try {
-        const targetMember = targetId ? await guild.members.fetch(targetId).catch(() => null) : null;
-        const targetRank = getResponsibleHierarchyRank(targetMember);
+        const targetMember =
+          targetId
+            ? await guild.members.fetch(targetId).catch(() => null)
+            : null;
+
+        const targetRank =
+          getResponsibleHierarchyRank(
+            targetMember
+          );
+
+        const excludedIds =
+          new Set(
+            (Array.isArray(excludeUserIds) ? excludeUserIds : [])
+              .map(String)
+          );
 
         const eligibleRoles = [
-  SC_GI_CFG.ROLE_RESP_CREATORS,
-  SC_GI_CFG.ROLE_RESP_INFLU,
-  SC_GI_CFG.ROLE_RESP_LIDER,
-  '1414651836861907006'
-];
-        const candidates = new Map(); // userId -> { member, count, rank }
+          SC_GI_CFG.ROLE_OWNER,
+          SC_GI_CFG.ROLE_RESP_CREATORS,
+          SC_GI_CFG.ROLE_RESP_INFLU,
+          SC_GI_CFG.ROLE_RESP_LIDER,
+          '1414651836861907006'
+        ];
+
+        const candidates =
+          new Map(); // userId -> { member, count, rank, type, penalty }
 
         for (const roleId of eligibleRoles) {
-          const role = guild.roles.cache.get(roleId) || await guild.roles.fetch(roleId).catch(() => null);
-          if (!role) continue;
-          for (const [uid, member] of role.members) {
-            // Mantém a regra atual da auto-atribuição comum:
-            // Owner e Resp Creators não entram nessa seleção automática genérica.
-            if (
-              member.roles.cache.has(SC_GI_CFG.ROLE_OWNER) ||
-              member.roles.cache.has(SC_GI_CFG.ROLE_RESP_CREATORS)
-            ) {
-              continue;
-            }
+          const role =
+            guild.roles.cache.get(roleId) ||
+            await guild.roles.fetch(roleId).catch(() => null);
 
-            // 🚫 Não pode ser responsável de si mesmo
+          if (!role) continue;
+
+          for (const [uid, member] of role.members) {
+            // 🚫 Não pode ser responsável de si mesmo.
             if (uid === targetId) continue;
 
-            // 🚫 NOVO: responsável automático precisa possuir Controle GI ATIVO.
+            // 🚫 Permite excluir, por exemplo, o responsável que acabou de ser pausado.
+            if (excludedIds.has(String(uid))) continue;
+
+            // 🚫 Responsável automático precisa possuir Controle GI ATIVO.
             if (!getActiveGiControlForResponsible(guild.id, uid)) continue;
+
+            const type =
+              getHighestTypeFromMember(member);
+
+            if (!type) continue;
 
             const candidateRank =
               getResponsibleHierarchyRank(
                 member,
-                getHighestTypeFromMember(member)
+                type
               );
 
-            // 🔒 HIERARQUIA RÍGIDA: O responsável deve estar acima do membro.
-            if (targetRank !== Infinity && candidateRank >= targetRank) continue;
+            // 🔒 HIERARQUIA RÍGIDA: o responsável precisa estar acima do membro.
+            if (
+              targetRank !== Infinity &&
+              candidateRank >= targetRank
+            ) {
+              continue;
+            }
+
+            const penalty =
+              getAutomaticResponsiblePenalty(
+                targetRank,
+                candidateRank
+              );
+
+            // A preferência automática é restrita.
+            // Um cargo superior ainda pode ser escolhido manualmente pelo Controle GI.
+            if (!Number.isFinite(penalty)) continue;
 
             if (!candidates.has(uid)) {
-              candidates.set(uid, {
-                member,
-                count: 0,
-                rank: candidateRank
-              });
+              candidates.set(
+                uid,
+                {
+                  member,
+                  count: 0,
+                  rank: candidateRank,
+                  type,
+                  penalty
+                }
+              );
             }
           }
         }
 
         if (candidates.size === 0) return null;
 
-        // Conta quantos membros cada um já tem neste servidor.
+        // Conta quantos membros ATIVOS cada responsável já possui neste servidor.
         for (const rec of SC_GI_STATE.registros.values()) {
           if (
             SC_GI_resolveRecordGuildId(rec) === guild.id &&
+            rec.active !== false &&
             rec.responsibleUserId &&
-            candidates.has(rec.responsibleUserId)
+            candidates.has(String(rec.responsibleUserId))
           ) {
-            candidates.get(rec.responsibleUserId).count++;
+            candidates.get(String(rec.responsibleUserId)).count++;
           }
         }
 
-        // Ordena por menor carga e depois pela hierarquia institucional oficial.
-        const sorted = Array.from(candidates.values()).sort((a, b) => {
-          if (a.count !== b.count) return a.count - b.count;
-          if (a.rank !== b.rank) return a.rank - b.rank;
+        // A pontuação mistura carga + preferência hierárquica.
+        // Assim:
+        // - membros do mesmo nível de responsabilidade ficam equilibrados;
+        // - Resp. Líder recebe primeiro Coord. e abaixo;
+        // - Resp. Influ só começa a ajudar quando a carga dos Resp. Líderes apertar;
+        // - Resp. Creators não recebe automaticamente cargos abaixo de Resp. Influ.
+        const sorted =
+          Array.from(candidates.values())
+            .sort(
+              (a, b) => {
+                const aScore =
+                  a.count +
+                  a.penalty;
 
-          return String(a.member.id).localeCompare(String(b.member.id));
-        });
+                const bScore =
+                  b.count +
+                  b.penalty;
 
-        const best = sorted[0];
+                if (aScore !== bScore) {
+                  return aScore - bScore;
+                }
+
+                if (a.penalty !== b.penalty) {
+                  return a.penalty - b.penalty;
+                }
+
+                if (a.count !== b.count) {
+                  return a.count - b.count;
+                }
+
+                if (a.rank !== b.rank) {
+                  // Em empate, mantém o cargo mais próximo do alvo.
+                  return b.rank - a.rank;
+                }
+
+                return String(a.member.id)
+                  .localeCompare(
+                    String(b.member.id)
+                  );
+              }
+            );
+
+        const best =
+          sorted[0];
+
         return {
-          userId: best.member.id,
-          type: getHighestTypeFromMember(best.member)
+          userId:
+            best.member.id,
+
+          type:
+            best.type
         };
       } catch (e) {
-        console.error("[SC_GI] Erro ao buscar melhor responsável:", e);
+        console.error(
+          "[SC_GI] Erro ao buscar melhor responsável:",
+          e
+        );
+
         return null;
       }
     }
@@ -4553,23 +4723,66 @@ const isRespStillValid =
   (targetRank === Infinity || respRank < targetRank);
 
 if (rec.responsibleUserId && !isRespStillValid) {
-  const newBest = await findBestResponsible(guild, rec.targetId);
+  const previousResponsibleId =
+    String(rec.responsibleUserId);
+
+  const previousResponsibleType =
+    rec.responsibleType ||
+    null;
+
+  const newBest =
+    await findBestResponsible(
+      guild,
+      rec.targetId,
+      {
+        excludeUserIds: [
+          previousResponsibleId
+        ]
+      }
+    );
+
             if (newBest) {
+              const transferAtMs =
+                Date.now();
+
               rec.responsibleUserId = newBest.userId;
               rec.responsibleType = newBest.type;
               rec.responsibleManual = false;
               rec.responsibleSetBy = client.user.id;
-              rec.responsibleUpdatedAtMs = Date.now();
+              rec.responsibleUpdatedAtMs = transferAtMs;
               rec.responsibleHistory.push({
-                atMs: Date.now(),
+                atMs: transferAtMs,
                 userId: newBest.userId,
                 type: newBest.type,
                 setBy: client.user.id,
                 manual: false,
-                source: 'records_consistency'
+                source: 'records_consistency',
+                previousUserId: previousResponsibleId,
+                previousType: previousResponsibleType
               });
 
               SC_GI_scheduleSave();
+
+              try {
+                dashEmit(
+                  'gi:responsavel_transferido',
+                  {
+                    guildId: guild.id,
+                    memberId: rec.targetId,
+                    previousResponsibleId,
+                    previousResponsibleType,
+                    newResponsibleId: String(newBest.userId),
+                    newResponsibleType: newBest.type,
+                    transferredAtMs: transferAtMs,
+                    source: 'records_consistency'
+                  }
+                );
+              } catch (error) {
+                console.warn(
+                  '[SC_GI] Falha ao emitir transferência automática de responsável:',
+                  error?.message || error
+                );
+              }
               
               const chToEdit = await guild.channels.fetch(rec.channelId).catch(() => null);
               const msgToEdit = chToEdit ? await chToEdit.messages.fetch(rec.messageId).catch(() => null) : null;
@@ -10177,8 +10390,7 @@ try {
 
     async function getActiveResponsibleCandidatesForRedistribution(
       guild,
-      pausedResponsibleId,
-      pausedResponsibleRank
+      pausedResponsibleId
     ) {
       const roleIds =
         SC_GI_CFG.RESP_ALLOWED_ROLE_IDS || [];
@@ -10232,16 +10444,6 @@ try {
             continue;
           }
 
-          // A redistribuição sobe na hierarquia.
-          // Nunca joga a responsabilidade para um cargo abaixo
-          // do responsável que acabou de ser pausado.
-          if (
-            Number.isFinite(pausedResponsibleRank) &&
-            rank > pausedResponsibleRank
-          ) {
-            continue;
-          }
-
           bucket.set(
             userId,
             {
@@ -10258,6 +10460,7 @@ try {
       for (const record of SC_GI_STATE.registros.values()) {
         if (
           SC_GI_resolveRecordGuildId(record) !== guild.id ||
+          record.active === false ||
           !record.responsibleUserId
         ) {
           continue;
@@ -10279,70 +10482,13 @@ try {
     }
 
     function buildResponsibleRedistributionPool(
-      candidates,
-      pausedResponsibleRank,
-      dependentCount
+      candidates
     ) {
-      const sameRank =
-        candidates
-          .filter(
-            candidate =>
-              candidate.rank === pausedResponsibleRank
-          )
-          .sort(
-            (a, b) =>
-              a.count - b.count ||
-              String(a.userId).localeCompare(String(b.userId))
-          );
-
-      const higherRanks =
-        candidates
-          .filter(
-            candidate =>
-              !Number.isFinite(pausedResponsibleRank) ||
-              candidate.rank < pausedResponsibleRank
-          )
-          .sort(
-            (a, b) => {
-              if (a.rank !== b.rank) {
-                // Mais próximo do nível pausado primeiro.
-                return b.rank - a.rank;
-              }
-
-              if (a.count !== b.count) {
-                return a.count - b.count;
-              }
-
-              return String(a.userId).localeCompare(String(b.userId));
-            }
-          );
-
-      // Dois ou mais responsáveis do MESMO nível formam um pool suficiente.
-      // Isso preserva exatamente a prioridade pedida: 4 membros + 2 Resp Líderes
-      // ficam somente entre os dois Resp Líderes.
-      if (sameRank.length >= 2) {
-        return sameRank;
-      }
-
-      // Para um único membro, um responsável do mesmo nível já é suficiente.
-      if (
-        sameRank.length === 1 &&
-        dependentCount <= 1
-      ) {
-        return sameRank;
-      }
-
-      // Se existe apenas UMA pessoa do mesmo nível e há vários membros,
-      // inclui os níveis superiores elegíveis para evitar concentrar tudo nela.
-      if (sameRank.length === 1) {
-        return [
-          ...sameRank,
-          ...higherRanks,
-        ];
-      }
-
-      // Sem ninguém do mesmo nível, sobe a hierarquia.
-      return higherRanks;
+      // A decisão final é feita membro por membro usando a MESMA
+      // preferência hierárquica da atribuição automática comum.
+      // Assim um Resp. Influ que estava ajudando Resp. Líder pode,
+      // ao ser pausado, devolver o membro para um Resp. Líder elegível.
+      return [...candidates];
     }
 
     async function redistributeMembersFromPausedResponsible(
@@ -10472,15 +10618,12 @@ try {
         const candidates =
           await getActiveResponsibleCandidatesForRedistribution(
             guild,
-            pausedResponsibleId,
-            pausedResponsibleRank
+            pausedResponsibleId
           );
 
         const pool =
           buildResponsibleRedistributionPool(
-            candidates,
-            pausedResponsibleRank,
-            dependentRecords.length
+            candidates
           );
 
         if (pool.length === 0) {
@@ -10544,54 +10687,55 @@ try {
 
           const eligibleForThisMember =
             pool
+              .map(
+                candidate => ({
+                  ...candidate,
+                  penalty:
+                    getAutomaticResponsiblePenalty(
+                      targetRank,
+                      candidate.rank
+                    )
+                })
+              )
               .filter(
                 candidate =>
                   candidate.userId !== memberRecord.targetId &&
                   (
                     targetRank === Infinity ||
                     candidate.rank < targetRank
-                  )
+                  ) &&
+                  Number.isFinite(candidate.penalty)
               )
               .sort(
                 (a, b) => {
+                  const aScore =
+                    a.count +
+                    a.penalty;
+
+                  const bScore =
+                    b.count +
+                    b.penalty;
+
+                  if (aScore !== bScore) {
+                    return aScore - bScore;
+                  }
+
+                  if (a.penalty !== b.penalty) {
+                    return a.penalty - b.penalty;
+                  }
+
                   if (a.count !== b.count) {
                     return a.count - b.count;
                   }
 
-                  const aSame =
-                    a.rank === pausedResponsibleRank
-                      ? 0
-                      : 1;
-
-                  const bSame =
-                    b.rank === pausedResponsibleRank
-                      ? 0
-                      : 1;
-
-                  if (aSame !== bSame) {
-                    return aSame - bSame;
+                  if (a.rank !== b.rank) {
+                    return b.rank - a.rank;
                   }
 
-                  if (
-                    Number.isFinite(pausedResponsibleRank) &&
-                    a.rank !== b.rank
-                  ) {
-                    const aDistance =
-                      Math.abs(
-                        pausedResponsibleRank - a.rank
-                      );
-
-                    const bDistance =
-                      Math.abs(
-                        pausedResponsibleRank - b.rank
-                      );
-
-                    if (aDistance !== bDistance) {
-                      return aDistance - bDistance;
-                    }
-                  }
-
-                  return String(a.userId).localeCompare(String(b.userId));
+                  return String(a.userId)
+                    .localeCompare(
+                      String(b.userId)
+                    );
                 }
               );
 
@@ -10814,13 +10958,32 @@ async function setResponsibleAuto(guild, actorId, messageId, pickedUserId) {
     throw new Error('Hierarquia bloqueada: o responsável direto precisa estar acima do membro.');
   }
 
-  if (rec.responsibleUserId !== pickedUserId || rec.responsibleType !== type) {
+  const previousResponsibleId =
+    rec.responsibleUserId
+      ? String(rec.responsibleUserId)
+      : null;
+
+  const previousResponsibleType =
+    rec.responsibleType ||
+    null;
+
+  const responsibleChanged =
+    previousResponsibleId !== String(pickedUserId) ||
+    previousResponsibleType !== type;
+
+  const responsibleChangedAtMs =
+    nowMs();
+
+  if (responsibleChanged) {
     rec.responsibleHistory.push({
-      atMs: nowMs(),
+      atMs: responsibleChangedAtMs,
       userId: pickedUserId,
       type,
       setBy: actorId,
-      manual: true
+      manual: true,
+      source: 'manual_control_gi',
+      previousUserId: previousResponsibleId,
+      previousType: previousResponsibleType
     });
   }
 
@@ -10828,9 +10991,36 @@ async function setResponsibleAuto(guild, actorId, messageId, pickedUserId) {
   rec.responsibleType = type;
   rec.responsibleManual = true;
   rec.responsibleSetBy = actorId;
-  rec.responsibleUpdatedAtMs = nowMs();
+  rec.responsibleUpdatedAtMs = responsibleChangedAtMs;
 
   SC_GI_scheduleSave();
+
+  if (
+    responsibleChanged &&
+    previousResponsibleId &&
+    previousResponsibleId !== String(pickedUserId)
+  ) {
+    try {
+      dashEmit(
+        'gi:responsavel_transferido',
+        {
+          guildId: guild.id,
+          memberId: rec.targetId,
+          previousResponsibleId,
+          previousResponsibleType,
+          newResponsibleId: String(pickedUserId),
+          newResponsibleType: type,
+          transferredAtMs: responsibleChangedAtMs,
+          source: 'manual_control_gi'
+        }
+      );
+    } catch (error) {
+      console.warn(
+        '[SC_GI] Falha ao emitir transferência manual de responsável:',
+        error?.message || error
+      );
+    }
+  }
 
       try {
         const ch  = await guild.channels.fetch(rec.channelId).catch(()=>null);

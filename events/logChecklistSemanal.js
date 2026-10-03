@@ -56,28 +56,44 @@ const CHECKLIST_FULL_OVERRIDE = {
 // ✅ HIERARQUIA DE GESTÃO (Maior para Menor)
 // O sistema ignora cargos externos (como Destaque) e foca apenas nestes IDs para a filtragem.
 const HIERARCHY_ORDER = [
-  "1262262852949905408", // owner
-  "1352408327983861844", // resp creators
-  "1262262852949905409", // resp influ
-  "1352407252216184833", // resp lider
-  "1388976314253312100", // coord
-  "1388975939161161728", // gestor
-  "1388976155830255697", // manager
-  "1388976094920704141", // social
-  "1392678638176043029", // equipe manager
-  "1387253972661964840", // equipe social
-  "1352429001188180039"  // equipe creators
+  ["1262262852949905408"], // owner
+  ["1352408327983861844"], // resp creators
+  ["1262262852949905409"], // resp influ
+  [
+    "1352407252216184833", // resp lider
+    "1414651836861907006"  // responsáveis (tratado como Resp. Líder no Controle GI)
+  ],
+  ["1388976314253312100"], // coord
+  ["1388975939161161728"], // gestor
+  [
+    "1388976155830255697", // manager
+    "1388976094920704141"  // social
+  ],
+  [
+    "1392678638176043029", // equipe manager
+    "1387253972661964840", // equipe social
+    "1352429001188180039"  // equipe creators
+  ]
 ];
 
 /**
- * Retorna a posição do membro na hierarquia de gestão definida.
+ * Retorna o nível REAL do membro na hierarquia de gestão definida.
  * Quanto menor o número, maior o cargo (0 = Owner).
+ * Cargos equivalentes compartilham o mesmo nível.
  */
 function getManagementRank(member) {
   if (!member) return Infinity;
+
   for (let i = 0; i < HIERARCHY_ORDER.length; i++) {
-    if (member.roles.cache.has(HIERARCHY_ORDER[i])) return i;
+    if (
+      HIERARCHY_ORDER[i].some(roleId =>
+        member.roles.cache.has(roleId)
+      )
+    ) {
+      return i;
+    }
   }
+
   return Infinity;
 }
 
@@ -136,6 +152,29 @@ function weekKeyFromDateSP(inputDate = null) {
   const m = String(sunday.getMonth() + 1).padStart(2, "0");
   const d = String(sunday.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
+}
+
+function getWeekSnapshotCutoffMs(weekKey = weekKeyFromDateSP()) {
+  // São Paulo permanece em UTC-03:00.
+  // O corte é exatamente domingo 00:00 da semana atual.
+  const cutoff = new Date(`${weekKey}T00:00:00-03:00`).getTime();
+  return Number.isFinite(cutoff) ? cutoff : 0;
+}
+
+function getGiRecordChecklistEligibilityAtMs(reg) {
+  // A regra semanal é baseada na data REAL de entrada do membro.
+  // A criação/recriação posterior do Controle GI não pode transformar
+  // um membro antigo em "membro novo" para o checklist.
+  const joinDateMs = Number(reg?.joinDateMs || 0);
+  if (joinDateMs > 0) return joinDateMs;
+
+  const roleSetAtMs = Number(reg?.roleSetAtMs || 0);
+  if (roleSetAtMs > 0) return roleSetAtMs;
+
+  const createdAtMs = Number(reg?.createdAtMs || 0);
+  if (createdAtMs > 0) return createdAtMs;
+
+  return 0;
 }
 
 function getWeekRangeLabel(weekKey) {
@@ -397,6 +436,7 @@ function readChecklistWeek(weekKey = weekKeyFromDateSP()) {
   if (!checklist.weeks[weekKey]) {
     checklist.weeks[weekKey] = {
       lastSyncedAt: null,
+      snapshotCutoffAtMs: null,
       snapshotLocked: false,
       responsaveis: {}
     };
@@ -471,6 +511,9 @@ async function applyGiResponsibleTransferToCurrentWeek(client, data = {}) {
 
   let preservedMemberData = null;
 
+  const existingCheckedMember =
+    findExistingCheck(currentWeek.responsaveis, memberId);
+
   // Remove o membro de qualquer responsável antigo dentro do snapshot atual.
   // Isso também limpa duplicações antigas sem reconstruir a semana inteira.
   for (const [respId, respData] of Object.entries(currentWeek.responsaveis)) {
@@ -517,15 +560,18 @@ async function applyGiResponsibleTransferToCurrentWeek(client, data = {}) {
     // Se por algum motivo já existia uma cópia conferida no novo responsável,
     // nunca perde o progresso.
     checked:
+      existingCheckedMember?.checked === true ||
       existingAtNewResponsible?.checked === true ||
       preservedMemberData?.checked === true,
 
     checkedAt:
+      existingCheckedMember?.checkedAt ||
       existingAtNewResponsible?.checkedAt ||
       preservedMemberData?.checkedAt ||
       null,
 
     checkedBy:
+      existingCheckedMember?.checkedBy ||
       existingAtNewResponsible?.checkedBy ||
       preservedMemberData?.checkedBy ||
       null,
@@ -550,6 +596,160 @@ async function applyGiResponsibleTransferToCurrentWeek(client, data = {}) {
   }
 
   return true;
+}
+
+async function reconcileCurrentWeekResponsibleAssignments(client) {
+  const checklist = loadJSON(CHECKLIST_FILE, { weeks: {} });
+  const weekKey = weekKeyFromDateSP();
+  const currentWeek = checklist?.weeks?.[weekKey];
+
+  // Só reconcilia uma lista que já existe e está congelada.
+  // Esta rotina NUNCA cria membro novo no snapshot semanal.
+  if (
+    !currentWeek ||
+    currentWeek.snapshotLocked !== true ||
+    !currentWeek.responsaveis ||
+    typeof currentWeek.responsaveis !== "object"
+  ) {
+    return false;
+  }
+
+  const giData = loadGiSource();
+  const rawRegistros = Array.isArray(giData?.registros)
+    ? giData.registros
+    : [];
+
+  if (rawRegistros.length === 0) {
+    return false;
+  }
+
+  const latestRecords =
+    pickLatestEligibleGiRecords(rawRegistros);
+
+  const currentGiResponsibleByMember =
+    new Map();
+
+  for (const reg of latestRecords) {
+    const memberId =
+      extractTargetId(reg);
+
+    const responsibleId =
+      extractResponsibleIds(reg)[0] ||
+      null;
+
+    if (
+      memberId &&
+      responsibleId
+    ) {
+      currentGiResponsibleByMember.set(
+        memberId,
+        {
+          responsibleId,
+          transferredAtMs:
+            Number(reg?.responsibleUpdatedAtMs || 0) ||
+            Number(reg?.updatedAtMs || 0) ||
+            Date.now()
+        }
+      );
+    }
+  }
+
+  const snapshotResponsibleIdsByMember =
+    new Map();
+
+  for (
+    const [respId, respData]
+    of Object.entries(currentWeek.responsaveis)
+  ) {
+    for (
+      const memberId
+      of Object.keys(respData?.members || {})
+    ) {
+      if (!snapshotResponsibleIdsByMember.has(memberId)) {
+        snapshotResponsibleIdsByMember.set(
+          memberId,
+          []
+        );
+      }
+
+      snapshotResponsibleIdsByMember
+        .get(memberId)
+        .push(respId);
+    }
+  }
+
+  let changed = false;
+
+  for (
+    const [memberId, snapshotResponsibleIds]
+    of snapshotResponsibleIdsByMember.entries()
+  ) {
+    const currentGiData =
+      currentGiResponsibleByMember.get(memberId);
+
+    // Se não existe vínculo GI ativo atual, não inventa nem remove vínculo semanal.
+    if (!currentGiData?.responsibleId) {
+      continue;
+    }
+
+    const uniqueSnapshotResponsibleIds =
+      [...new Set(snapshotResponsibleIds.map(String))];
+
+    // Já está exatamente no responsável atual e sem duplicação.
+    if (
+      uniqueSnapshotResponsibleIds.length === 1 &&
+      uniqueSnapshotResponsibleIds[0] ===
+        String(currentGiData.responsibleId)
+    ) {
+      continue;
+    }
+
+    const previousResponsibleId =
+      uniqueSnapshotResponsibleIds.find(
+        respId =>
+          respId !==
+          String(currentGiData.responsibleId)
+      ) ||
+      uniqueSnapshotResponsibleIds[0] ||
+      null;
+
+    if (
+      !previousResponsibleId ||
+      previousResponsibleId ===
+        String(currentGiData.responsibleId)
+    ) {
+      continue;
+    }
+
+    const moved =
+      await applyGiResponsibleTransferToCurrentWeek(
+        null,
+        {
+          memberId,
+          previousResponsibleId,
+          newResponsibleId:
+            String(currentGiData.responsibleId),
+          transferredAtMs:
+            currentGiData.transferredAtMs,
+          source:
+            "startup_gi_reconciliation"
+        }
+      );
+
+    if (moved) {
+      changed = true;
+    }
+  }
+
+  if (
+    changed &&
+    client
+  ) {
+    await refreshMainPanel(client)
+      .catch(() => {});
+  }
+
+  return changed;
 }
 
 function buildCheckedBackupByMemberId(responsaveis = {}) {
@@ -697,6 +897,7 @@ async function syncWeekData(client, force = false) {
   if (!checklist.weeks[weekKey]) {
     checklist.weeks[weekKey] = {
       lastSyncedAt: null,
+      snapshotCutoffAtMs: null,
       snapshotLocked: false,
       responsaveis: {}
     };
@@ -704,10 +905,10 @@ async function syncWeekData(client, force = false) {
 
   const currentWeek = checklist.weeks[weekKey];
 
-  // 🔒 Depois que pelo menos uma log for conferida, a lista semanal fica protegida.
-  // Enquanto ninguém bateu log na semana, uma sincronização manual forçada ainda
-  // pode corrigir os vínculos sem colocar nenhum progresso em risco.
-  if (currentWeek.snapshotLocked === true && (!force || weekHasCheckedMembers(currentWeek))) {
+  // 🔒 Depois que o snapshot semanal foi criado, ele NÃO é reconstruído.
+  // Trocas de responsável durante a semana são aplicadas pontualmente pelo evento
+  // gi:responsavel_transferido, sem puxar membros novos para a semana em andamento.
+  if (currentWeek.snapshotLocked === true) {
     return checklist;
   }
 
@@ -728,7 +929,22 @@ async function syncWeekData(client, force = false) {
   if (!currentWeek.responsaveis || typeof currentWeek.responsaveis !== "object") {
     currentWeek.responsaveis = {};
   }
-  const registros = pickLatestEligibleGiRecords(rawRegistros);
+
+  const snapshotCutoffAtMs =
+    Number(currentWeek.snapshotCutoffAtMs || 0) ||
+    getWeekSnapshotCutoffMs(weekKey);
+
+  currentWeek.snapshotCutoffAtMs = snapshotCutoffAtMs;
+
+  const registros = pickLatestEligibleGiRecords(rawRegistros).filter(reg => {
+    const eligibleAtMs = getGiRecordChecklistEligibilityAtMs(reg);
+
+    // Registros sem timestamp legado continuam aceitos.
+    if (!eligibleAtMs) return true;
+
+    // Quem entrou DEPOIS do domingo 00:00 só entra no próximo domingo.
+    return eligibleAtMs <= snapshotCutoffAtMs;
+  });
 
   const giMap = new Map(); // respId -> Map(memberId -> memberData)
 
@@ -873,7 +1089,7 @@ async function buildMainPanel(client, sourceGuild = null) {
   const data = checklist.weeks[weekKey] || { responsaveis: {}, lastSyncedAt: null };
   const isSunday = getNowSP().getDay() === 0;
   const hasCheckedMembers = weekHasCheckedMembers(data);
-  const canSynchronize = !hasCheckedMembers;
+  const canSynchronize = data.snapshotLocked !== true;
 
   let totalMembers = 0;
   let checkedMembers = 0;
@@ -942,7 +1158,7 @@ fields.push({
     .setDescription(
       `📅 **Semana:** ${getWeekRangeLabel(weekKey)}\n` +
       `🕒 **Período para bater log:** Domingo às 00:00 até quarta-feira às 23:59\n` +
-      `🔒 **Lista semanal:** ${hasCheckedMembers ? "Congelada" : "Sincronização liberada"}\n\n` +
+      `🔒 **Lista semanal:** ${data.snapshotLocked === true ? "Congelada" : "Sincronização liberada"}\n\n` +
       `👥 **Responsáveis com pendência:** \`${respsWithPending}\`\n` +
       `✅ **Membros conferidos:** \`${checkedMembers}\`\n` +
       `❌ **Membros pendentes:** \`${totalMembers - checkedMembers}\`\n` +
@@ -990,7 +1206,7 @@ export async function checklistHandleInteraction(interaction, client) {
       snapshotLocked: false
     };
 
-    if (!weekHasCheckedMembers(data)) {
+    if (data.snapshotLocked !== true) {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
       const syncedChecklist = await syncWeekData(client, true);
@@ -1004,9 +1220,10 @@ export async function checklistHandleInteraction(interaction, client) {
 
       return interaction.editReply({
         content:
-          `✅ **Lista semanal sincronizada com sucesso.**\n\n` +
-          `Os vínculos foram atualizados porque nenhuma log havia sido conferida nesta semana.\n` +
-          `A lista será congelada automaticamente assim que a primeira log for marcada.\n\n` +
+          `✅ **Lista semanal criada e congelada com sucesso.**\n\n` +
+          `A lista considera somente os membros elegíveis até domingo às **00:00**.\n` +
+          `Durante a semana, novos membros não serão puxados para este snapshot.\n` +
+          `Trocas de responsável do Controle GI continuam sendo aplicadas pontualmente, sem recriar a lista.\n\n` +
           `👤 Responsáveis carregados: **${totalResponsaveis}**\n` +
           `🧑 Membros carregados: **${totalMembros}**`,
         components: []
@@ -1043,10 +1260,12 @@ let checklist = readChecklistWeek(weekKey);
 let data = checklist.weeks?.[weekKey] || { responsaveis: {} };
 let myData = data.responsaveis?.[interaction.user.id];
 
-// Se ainda ninguém bateu log, tenta uma sincronização segura antes de afirmar
-// que o responsável não possui membros. Isso corrige lista inicial desatualizada
-// sem reconstruir uma semana que já tenha progresso.
-if ((!myData || Object.keys(myData.members || {}).length === 0) && !weekHasCheckedMembers(data)) {
+// Só tenta criar a lista se o snapshot semanal AINDA não existir.
+// Depois de congelado, nunca reconstrói a semana para buscar membro novo.
+if (
+  (!myData || Object.keys(myData.members || {}).length === 0) &&
+  data.snapshotLocked !== true
+) {
   checklist = await syncWeekData(client, true);
   data = checklist.weeks?.[weekKey] || { responsaveis: {} };
   myData = data.responsaveis?.[interaction.user.id];
@@ -1549,6 +1768,17 @@ export async function checklistOnReady(client) {
       console.error("[ChecklistLogs] Falha ao criar a lista semanal:", error);
     });
   }
+
+  // ✅ Reconciliação segura:
+  // Corrige vínculos antigos/duplicados usando o responsável atual do Controle GI,
+  // mas somente para membros que JÁ pertencem ao snapshot desta semana.
+  // Membros novos continuam aguardando o próximo domingo.
+  await reconcileCurrentWeekResponsibleAssignments(client).catch((error) => {
+    console.error(
+      "[ChecklistLogs] Falha ao reconciliar responsáveis da semana atual:",
+      error
+    );
+  });
 
   await refreshMainPanel(client).catch(() => {});
 
