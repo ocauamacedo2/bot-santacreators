@@ -20,6 +20,10 @@ import {
   dashOn
 } from "../utils/dashHub.js";
 
+import {
+  resolveDiscordIdentity,
+} from "../shared/scDiscordIdentity.js";
+
 // =====================================================
 // IA CHAT AUTO PROFISSIONAL — SANTACREATORS
 // =====================================================
@@ -32228,11 +32232,22 @@ function installFormsCreatorPersonalTicketBridge(
             ""
           );
 
-        const userId =
+        const rawUserId =
           String(
             data?.userId ||
             ""
-          );
+          ).trim();
+
+        const userId =
+          (
+            typeof resolveDiscordIdentity ===
+              "function"
+              ? resolveDiscordIdentity(
+                  rawUserId
+                )
+              : null
+          ) ||
+          rawUserId;
 
         if (
           !guildId ||
@@ -32286,8 +32301,65 @@ function installFormsCreatorPersonalTicketBridge(
               () => null
             );
 
+        if (!ticket) {
+          console.warn(
+            `[IA FORMS BRIDGE] Ticket pessoal não localizado para ${userId} (origem Forms: ${rawUserId || "desconhecida"}).`
+          );
+
+          return;
+        }
+
+        // ===============================================
+        // AUTORREPARO DE IDENTIDADE DO TICKET
+        // ===============================================
+        //
+        // Se o Forms ainda trouxe o Discord antigo, mas o
+        // módulo central já sabe qual é o Discord atual,
+        // aproveita o próprio ticket encontrado para corrigir:
+        //
+        // - acesso da conta nova;
+        // - remoção do overwrite antigo;
+        // - topic aberto_por;
+        // - embed inicial "Aberto por".
+        //
+        // Não cria ticket novo.
+        // ===============================================
+
         if (
-          !ticket ||
+          rawUserId &&
+          userId &&
+          rawUserId !== userId &&
+          typeof personalTicketApi.migrateDiscordIdentity ===
+            "function"
+        ) {
+          await personalTicketApi
+            .migrateDiscordIdentity({
+              guild,
+
+              channelId:
+                ticket.id,
+
+              oldUserId:
+                rawUserId,
+
+              newUserId:
+                userId,
+
+              reason:
+                `Autorreparo Forms -> Ticket Pessoal: ${rawUserId} -> ${userId}`,
+            })
+            .catch(
+              error => {
+                console.warn(
+                  `[IA FORMS BRIDGE] Não foi possível autorreparar a identidade do ticket ${ticket.id}:`,
+                  error?.message ||
+                  error
+                );
+              }
+            );
+        }
+
+        if (
           String(
             ticket.parentId ||
             ""

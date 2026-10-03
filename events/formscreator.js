@@ -7922,11 +7922,71 @@ export async function formsCreatorHandleMessage(message, client) {
       ) ||
       null;
 
-    const targetUserId =
+    const rawTargetUserId =
       String(
         registration?.userId ||
         ""
+      ).trim();
+
+    const targetUserId =
+      resolveDiscordIdentity(
+        rawTargetUserId
+      ) ||
+      rawTargetUserId;
+
+    // =====================================================
+    // AUTORREPARO DE IDENTIDADE DO FORMS
+    // =====================================================
+    //
+    // Pode existir um Forms antigo cujo state ainda guarda
+    // o Discord anterior.
+    //
+    // Se o módulo central já conhece a migração:
+    //
+    // Discord antigo -> Discord atual
+    //
+    // executamos a própria rotina oficial de migração do
+    // Forms. Assim não fazemos uma alteração parcial.
+    //
+    // A rotina oficial preserva:
+    //
+    // - tópico original;
+    // - histórico;
+    // - comentários;
+    // - espelho/evolução;
+    // - histórico estruturado;
+    // - identidade anterior.
+    // =====================================================
+
+    if (
+      registration &&
+      rawTargetUserId &&
+      targetUserId &&
+      rawTargetUserId !==
+        targetUserId
+    ) {
+      await migrateFormsCreatorDiscordId(
+        client,
+        {
+          oldUserId:
+            rawTargetUserId,
+
+          newUserId:
+            targetUserId,
+
+          actor:
+            null,
+        }
+      ).catch(
+        error => {
+          console.warn(
+            `[FormsCreator] Autorreparo de Discord pendente ${rawTargetUserId} -> ${targetUserId}:`,
+            error?.message ||
+            error
+          );
+        }
       );
+    }
 
     if (
       targetUserId &&

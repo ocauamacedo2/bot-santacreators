@@ -30,6 +30,10 @@ import {
 } from '../events/hierarquiaDivisoes.js';
 
 import {
+  resolveDiscordIdentity,
+} from '../shared/scDiscordIdentity.js';
+
+import {
   analyzeAndRecordTicket,
   recordTicketFeedback,
 } from '../utils/ticketOperationalIntelligence.js';
@@ -1789,11 +1793,22 @@ async function findPersonalTicketForUser(
   guild,
   userId
 ) {
-  const targetId =
+  const rawTargetId =
     String(
       userId ||
       ''
     ).trim();
+
+  const targetId =
+    (
+      typeof resolveDiscordIdentity ===
+        'function'
+        ? resolveDiscordIdentity(
+            rawTargetId
+          )
+        : null
+    ) ||
+    rawTargetId;
 
   if (
     !guild ||
@@ -1803,26 +1818,90 @@ async function findPersonalTicketForUser(
   }
 
   const giApi = globalThis.SC_GI_CONTROL_API;
-  if (giApi?.ready === true && giApi.authoritative === true) {
-    const control = giApi.getControl?.(guild.id, targetId);
-    const linkedId = String(control?.personalTicketChannelId || "");
 
-    if (linkedId) {
-      const conflicts = (giApi.listControls?.(guild.id) || []).some(
-        other => String(other?.personalTicketChannelId || "") === linkedId &&
-          String(other?.targetId || "") !== targetId
+  if (
+    giApi?.ready === true &&
+    giApi.authoritative === true
+  ) {
+    const control =
+      giApi.getControl?.(
+        guild.id,
+        targetId
       );
 
+    const linkedId =
+      String(
+        control?.personalTicketChannelId ||
+        ""
+      );
+
+    if (linkedId) {
+      const conflicts =
+        (
+          giApi.listControls?.(
+            guild.id
+          ) ||
+          []
+        ).some(
+          other => {
+            if (
+              String(
+                other?.personalTicketChannelId ||
+                ""
+              ) !== linkedId
+            ) {
+              return false;
+            }
+
+            const rawOtherTargetId =
+              String(
+                other?.targetId ||
+                ""
+              ).trim();
+
+            const otherTargetId =
+              (
+                typeof resolveDiscordIdentity ===
+                  'function'
+                  ? resolveDiscordIdentity(
+                      rawOtherTargetId
+                    )
+                  : null
+              ) ||
+              rawOtherTargetId;
+
+            return (
+              otherTargetId !==
+              targetId
+            );
+          }
+        );
+
       if (conflicts) {
-        console.error(`[SC_PERSONAL_TICKET] Vínculo ambíguo no GI para ${linkedId}.`);
+        console.error(
+          `[SC_PERSONAL_TICKET] Vínculo ambíguo no GI para ${linkedId}.`
+        );
+
         return null;
       }
 
-      const linked = await guild.channels.fetch(linkedId).catch(() => null);
+      const linked =
+        await guild.channels
+          .fetch(
+            linkedId
+          )
+          .catch(
+            () => null
+          );
+
       if (
-        linked?.guildId === guild.id &&
-        linked.type === ChannelType.GuildText &&
-        !PERSONAL_TICKET_EXEMPT_CHANNEL_IDS.has(linked.id)
+        linked?.guildId ===
+          guild.id &&
+        linked.type ===
+          ChannelType.GuildText &&
+        !PERSONAL_TICKET_EXEMPT_CHANNEL_IDS.has(
+          linked.id
+        )
       ) {
         return linked;
       }
@@ -1877,8 +1956,25 @@ async function findPersonalTicketForUser(
           channel
         );
 
+      const rawOwnerId =
+        String(
+          ownerId ||
+          ""
+        ).trim();
+
+      const canonicalOwnerId =
+        (
+          typeof resolveDiscordIdentity ===
+            'function'
+            ? resolveDiscordIdentity(
+                rawOwnerId
+              )
+            : null
+        ) ||
+        rawOwnerId;
+
       if (
-        String(ownerId) ===
+        canonicalOwnerId ===
         targetId
       ) {
         return channel;

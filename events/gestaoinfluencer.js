@@ -254,7 +254,11 @@ CHANNEL_MEMBER_HISTORY_LOG: '1555344870195994754',
       masterRoleOverridesByUser: new Map(),
 
       // timers em memória
-      restoreTimers: new Map() // userId -> timeoutId
+      restoreTimers: new Map(), // userId -> timeoutId
+
+      // Trava individual por Controle GI para ações pesadas.
+      // messageId -> { actionName:string, actorId:string, startedAtMs:number }
+      exclusiveActionLocks: new Map()
     };
 
     // =====================================================
@@ -1833,6 +1837,83 @@ function activeTimeText(rec, n = nowMs()) {
       return memberHasAnyRole(
         member,
         extraRoleIds
+      );
+    }
+
+    function beginGIExclusiveActionLock(
+      member,
+      messageId,
+      actionName
+    ) {
+      // 👑 Macedo e Owner não ficam sujeitos à trava.
+      if (isHierarchyBypassMember(member)) {
+        return false;
+      }
+
+      const key =
+        String(
+          messageId ||
+          ''
+        ).trim();
+
+      if (!key) {
+        throw new Error(
+          'Não foi possível identificar o Controle GI para aplicar a trava de segurança.'
+        );
+      }
+
+      const existingLock =
+        SC_GI_STATE.exclusiveActionLocks.get(
+          key
+        );
+
+      if (existingLock) {
+        throw new Error(
+          `Este Controle GI já está processando "${existingLock.actionName}". Aguarde esse processo terminar antes de usar Reenviar DM agora ou Comentário IA novamente neste mesmo controle.`
+        );
+      }
+
+      SC_GI_STATE.exclusiveActionLocks.set(
+        key,
+        {
+          actionName:
+            String(
+              actionName ||
+              'uma ação'
+            ),
+          actorId:
+            String(
+              member?.id ||
+              ''
+            ),
+          startedAtMs:
+            Date.now()
+        }
+      );
+
+      return true;
+    }
+
+    function endGIExclusiveActionLock(
+      messageId,
+      lockAcquired
+    ) {
+      if (!lockAcquired) {
+        return;
+      }
+
+      const key =
+        String(
+          messageId ||
+          ''
+        ).trim();
+
+      if (!key) {
+        return;
+      }
+
+      SC_GI_STATE.exclusiveActionLocks.delete(
+        key
       );
     }
 
@@ -13384,6 +13465,9 @@ dashOn(
               MessageFlags.Ephemeral
           });
 
+          let giExclusiveLockAcquired =
+            false;
+
           try {
             await assertCanManageGIRecord(
               guild,
@@ -13391,6 +13475,13 @@ dashOn(
               rec.targetId,
               'gerar o comentário semanal de IA'
             );
+
+            giExclusiveLockAcquired =
+              beginGIExclusiveActionLock(
+                interaction.member,
+                messageId,
+                'Comentário IA'
+              );
 
             // =====================================================
             // 1) COMENTÁRIO INTERNO DO FORMS
@@ -13661,6 +13752,11 @@ dashOn(
               content:
                 `⚠️ ${e?.message || 'Não foi possível gerar o acompanhamento.'}`
             });
+          } finally {
+            endGIExclusiveActionLock(
+              messageId,
+              giExclusiveLockAcquired
+            );
           }
 
           return;
@@ -13897,7 +13993,38 @@ dashOn(
             flags: MessageFlags.Ephemeral
           });
 
+          let giExclusiveLockAcquired =
+            false;
+
           try {
+            // Reforça a regra específica do Reenviar DM:
+            // Coord/Gestor podem usar no próprio Controle GI e
+            // somente em membros abaixo deles na hierarquia.
+            await assertCanManageGIRecord(
+              guild,
+              interaction.user,
+              rec.targetId,
+              'reenviar a DM',
+              {
+                extraAllowedRoleIds: [
+                  SC_GI_CFG.ROLE_COORD_CREATORS,
+                  SC_GI_CFG.ROLE_GESTOR_CREATORS
+                ],
+
+                selfAllowedRoleIds: [
+                  SC_GI_CFG.ROLE_COORD_CREATORS,
+                  SC_GI_CFG.ROLE_GESTOR_CREATORS
+                ]
+              }
+            );
+
+            giExclusiveLockAcquired =
+              beginGIExclusiveActionLock(
+                interaction.member,
+                messageId,
+                'Reenviar DM agora'
+              );
+
             await resendDM(
               guild,
               interaction.user,
@@ -13914,6 +14041,11 @@ dashOn(
                 '⚠️ ' +
                 e.message
             });
+          } finally {
+            endGIExclusiveActionLock(
+              messageId,
+              giExclusiveLockAcquired
+            );
           }
 
           return;

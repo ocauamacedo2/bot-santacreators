@@ -1844,10 +1844,124 @@ async function moveCreatorTicketAutomatically(
 }
 
 async function syncCreatorTicketAfterSetApproval(guild, userId) {
-  await ensureCreatorPersonalTicketForGi(
+  const targetId =
+    String(
+      userId ||
+      ""
+    ).trim();
+
+  if (
+    !guild ||
+    !targetId
+  ) {
+    return {
+      ok:
+        false,
+
+      reason:
+        "invalid_target",
+    };
+  }
+
+  // =====================================================
+  // SET APROVADO = TICKET EM MEMBROS
+  // =====================================================
+  //
+  // Esta etapa NÃO depende do estado do Controle GI.
+  //
+  // Portanto funciona com o Controle GI:
+  // - ativo;
+  // - pausado;
+  // - recém-criado;
+  // - ainda em processo de sincronização.
+  //
+  // A aprovação do Set é a fonte de verdade desta transição.
+  // =====================================================
+
+  const tickets =
+    await findCreatorTicketsForUser(
+      guild,
+      targetId,
+      [
+        CREATOR_TICKET_AUTO.WAITING_CATEGORY,
+        CREATOR_TICKET_AUTO.INTERVIEW_CATEGORY,
+        CREATOR_TICKET_AUTO.ACTIVE_CATEGORY,
+      ]
+    );
+
+  const channel =
+    tickets.find(
+      ticket =>
+        ticket.parentId ===
+          CREATOR_TICKET_AUTO.WAITING_CATEGORY
+    ) ||
+    tickets.find(
+      ticket =>
+        ticket.parentId ===
+          CREATOR_TICKET_AUTO.ACTIVE_CATEGORY
+    ) ||
+    tickets.find(
+      ticket =>
+        ticket.parentId ===
+          CREATOR_TICKET_AUTO.INTERVIEW_CATEGORY
+    ) ||
+    null;
+
+  let moved =
+    false;
+
+  if (channel) {
+    if (
+      channel.parentId !==
+        CREATOR_TICKET_AUTO.ACTIVE_CATEGORY
+    ) {
+      moved =
+        await moveCreatorTicketAutomatically(
+          channel,
+          CREATOR_TICKET_AUTO.ACTIVE_CATEGORY,
+          "SantaCreators: Set aprovado -> ticket pessoal em membros ativos"
+        );
+    }
+
+    // Depois da movimentação, tenta manter o vínculo do Controle GI
+    // atualizado. Se o GI estiver pausado ou ainda sincronizando,
+    // isso NÃO desfaz nem bloqueia a ida para Membros.
+    let giSync =
+      null;
+
+    try {
+      giSync =
+        await ensureCreatorPersonalTicketForGi(
+          guild,
+          targetId,
+          "set_aprovado_pos_movimentacao"
+        );
+    } catch (error) {
+      console.warn(
+        `[SC_SORT][AUTO_TICKET] Ticket de ${targetId} foi tratado após Set aprovado, mas a sincronização complementar do Controle GI falhou:`,
+        error?.message || error
+      );
+    }
+
+    return {
+      ok:
+        true,
+
+      channel,
+
+      moved:
+        !!moved,
+
+      giSync,
+    };
+  }
+
+  // Se nenhum ticket existente foi localizado, preserva o fallback
+  // já existente para garantir/criar o ticket pessoal pelo Controle GI.
+  return await ensureCreatorPersonalTicketForGi(
     guild,
-    userId,
-    "set_aprovado_ou_controle_criado"
+    targetId,
+    "set_aprovado_sem_ticket_localizado"
   );
 }
 
@@ -3668,7 +3782,11 @@ const SC_SORT_CATEGORY_IDS = [
         const userId = String(data?.userId || "");
         if (!guild || !userId) return;
 
-        await syncCreatorTicketAfterSetApproval(guild, userId);
+        await ensureCreatorPersonalTicketForGi(
+          guild,
+          userId,
+          "controle_gi_criado"
+        );
       } catch (error) {
         console.error(
           "[SC_SORT][AUTO_TICKET] Erro ao sincronizar ticket após criação do Controle GI:",
