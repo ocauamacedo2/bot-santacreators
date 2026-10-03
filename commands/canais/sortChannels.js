@@ -183,6 +183,13 @@ const CREATOR_TICKET_AUTO = {
     "1523906618385760458",
   ]),
 
+  // Cargos que NÃO podem receber acesso por função geral
+  // na categoria oficial de membros ativos.
+  ACTIVE_DENIED_VIEW_ROLE_IDS: [
+    "1282119104576098314", // MKT Creators
+    "1372716303122567239", // Tickets
+  ],
+
   // Mesmas categorias já usadas pelo !inativo.
 INACTIVE_CATEGORIES: [
   "1482866398396022967",
@@ -1074,6 +1081,78 @@ async function setCreatorTicketViewPermission(
   return true;
 }
 
+async function syncCreatorActiveDeniedViewRoles(
+  target,
+  {
+    trigger = "active_denied_roles",
+  } = {}
+) {
+  if (
+    !target?.guild ||
+    !target?.permissionOverwrites
+  ) {
+    return {
+      ok: false,
+      reason: "invalid_target",
+      changed: 0,
+    };
+  }
+
+  const isActiveCategory =
+    target.type ===
+      ChannelType.GuildCategory &&
+    String(target.id) ===
+      CREATOR_TICKET_AUTO.ACTIVE_CATEGORY;
+
+  const isInsideActiveCategory =
+    String(
+      target.parentId ||
+      ""
+    ) ===
+      CREATOR_TICKET_AUTO.ACTIVE_CATEGORY;
+
+  if (
+    !isActiveCategory &&
+    !isInsideActiveCategory
+  ) {
+    return {
+      ok: false,
+      reason: "outside_active_category",
+      changed: 0,
+    };
+  }
+
+  let changed = 0;
+
+  for (
+    const roleId
+    of CREATOR_TICKET_AUTO
+      .ACTIVE_DENIED_VIEW_ROLE_IDS
+  ) {
+    const didChange =
+      await setCreatorTicketViewPermission(
+        target,
+        roleId,
+        false
+      );
+
+    if (didChange) {
+      changed++;
+    }
+  }
+
+  if (changed > 0) {
+    console.log(
+      `[SC_SORT][ACTIVE_ACCESS] ${target.id}: MKT Creators/Tickets bloqueados de ViewChannel. alterações=${changed}, gatilho=${trigger}`
+    );
+  }
+
+  return {
+    ok: true,
+    changed,
+  };
+}
+
 async function syncCreatorTicketHierarchyPermissions(
   channel,
   {
@@ -1109,6 +1188,16 @@ async function syncCreatorTicketHierarchyPermissions(
         "outside_active_category",
     };
   }
+
+  // MKT Creators e Tickets nunca recebem ViewChannel
+  // por esses cargos dentro de membros ativos.
+  await syncCreatorActiveDeniedViewRoles(
+    channel,
+    {
+      trigger:
+        `${trigger}:hierarchy_entry`,
+    }
+  );
 
   if (
     isCreatorTicketAutomationExempt(
@@ -2458,13 +2547,22 @@ async function reconcileCreatorActiveCategory(
         )
         .catch(() => null);
 
-    if (
+        if (
       !activeCategory ||
       activeCategory.type !==
         ChannelType.GuildCategory
     ) {
       return;
     }
+
+    // Mantém os dois cargos bloqueados na própria categoria.
+    await syncCreatorActiveDeniedViewRoles(
+      activeCategory,
+      {
+        trigger:
+          `${trigger}:active_category`,
+      }
+    );
 
     let checked = 0;
     let moved = 0;
@@ -2474,9 +2572,19 @@ async function reconcileCreatorActiveCategory(
       const channel
       of activeCategory.children.cache.values()
     ) {
+      // Garante o bloqueio também no overwrite do próprio canal,
+      // mesmo quando ele não está sincronizado com a categoria.
+      await syncCreatorActiveDeniedViewRoles(
+        channel,
+        {
+          trigger:
+            `${trigger}:active_child`,
+        }
+      );
+
       if (
         channel.type !==
-        ChannelType.GuildText
+          ChannelType.GuildText
       ) {
         continue;
       }
