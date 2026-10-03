@@ -532,19 +532,34 @@ const embed = new EmbedBuilder()
       return true;
     }
 
-    const { userId, nome, passaporte, zipzap } = dados;
+      const { userId, nome, passaporte, zipzap } = dados;
+
 
   const podeAprovarSet =
+
   USUARIOS_AUTORIZADOS_APROVACAO.includes(interaction.user.id) ||
-  CARGOS_AUTORIZADOS_APROVACAO.some(id => interaction.member.roles.cache.has(id));
+
+  CARGOS_AUTORIZADOS_APROVACAO.some(id => interaction.member.roles.cache.has(id)) ||
+
+  interaction.member.roles.cache.has('1388976314253312100') || // Coord. Creators
+
+  interaction.member.roles.cache.has('1388975939161161728'); // Gestor Creators
+
 
 if (!podeAprovarSet) {
+
   await interaction.followUp({
+
     content: '❌ Você não tem permissão para aprovar sets.',
+
     flags: MessageFlags.Ephemeral,
+
   });
+
   return true;
+
 }
+
 
     const membro = await interaction.guild.members.fetch(userId).catch(() => null);
     if (!membro) {
