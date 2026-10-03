@@ -130,8 +130,21 @@ function getMemberTierGroup(
 // =====================================================
 
 function pickFeedbackPersistRoot() {
+  const applicationStorage =
+    (
+      process.platform !==
+        "win32" &&
+      fs.existsSync(
+        "/application/storage"
+      )
+    )
+      ? "/application/storage"
+      : null;
+
   const candidates = [
+    applicationStorage,
     process.env.SQUARECLOUD_STORAGE_PATH?.trim(),
+    process.env.STORAGE_PATH?.trim(),
     "/storage",
     "/home/container/storage",
     "/home/squarecloud/storage",
@@ -147,6 +160,12 @@ function pickFeedbackPersistRoot() {
           directory
         )
       ) {
+        fs.accessSync(
+          directory,
+          fs.constants.R_OK |
+            fs.constants.W_OK
+        );
+
         return directory;
       }
     } catch {}
@@ -172,12 +191,29 @@ const PERSIST_DATA_DIR =
 // CONTROLE GI
 // =====================================================
 //
-// Mantém o mesmo local utilizado atualmente pelo GI.
+// Procura primeiro no storage persistente usado pelo GI
+// e mantém /application/data como compatibilidade.
 //
-const GI_DATA_FILE =
-  path.join(
-    APP_DATA_DIR,
-    "sc_gi_registros.json"
+const GI_DATA_FILES =
+  [
+    path.join(
+      PERSIST_DATA_DIR,
+      "sc_gi_registros.json"
+    ),
+
+    path.join(
+      APP_DATA_DIR,
+      "sc_gi_registros.json"
+    ),
+  ].filter(
+    (
+      file,
+      index,
+      array
+    ) =>
+      array.indexOf(
+        file
+      ) === index
   );
 
 // =====================================================
@@ -1294,11 +1330,38 @@ function hasTargetRole(
 function getLatestGiRecords(
   guildId
 ) {
-  const data =
-    readJson(
-      GI_DATA_FILE,
-      {}
-    );
+  let data =
+    {};
+
+  for (
+    const giDataFile
+    of GI_DATA_FILES
+  ) {
+    if (
+      !fs.existsSync(
+        giDataFile
+      )
+    ) {
+      continue;
+    }
+
+    const candidate =
+      readJson(
+        giDataFile,
+        {}
+      );
+
+    if (
+      Array.isArray(
+        candidate?.registros
+      )
+    ) {
+      data =
+        candidate;
+
+      break;
+    }
+  }
 
   const records =
     Array.isArray(

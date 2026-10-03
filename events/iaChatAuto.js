@@ -421,8 +421,21 @@ PRINCÍPIO DE RESPOSTA:
 // =====================================================
 
 function pickAiPersistRoot() {
+  const applicationStorage =
+    (
+      process.platform !==
+        "win32" &&
+      fs.existsSync(
+        "/application/storage"
+      )
+    )
+      ? "/application/storage"
+      : null;
+
   const candidates = [
+    applicationStorage,
     process.env.SQUARECLOUD_STORAGE_PATH?.trim(),
+    process.env.STORAGE_PATH?.trim(),
     "/storage",
     "/home/container/storage",
     "/home/squarecloud/storage",
@@ -435,6 +448,12 @@ function pickAiPersistRoot() {
           directory
         )
       ) {
+        fs.accessSync(
+          directory,
+          fs.constants.R_OK |
+            fs.constants.W_OK
+        );
+
         return directory;
       }
     } catch {}
@@ -814,7 +833,22 @@ function takeNextPendingAiMessage(
 
 const AI_ALINHAMENTOS_CHANNEL_ID = "1425256185707233301";
 const AI_FIVEM_GI_PANEL_CHANNEL_ID = "1501321157259956244";
-const AI_GI_DATA_FILE = path.resolve(process.cwd(), "data", "sc_gi_registros.json");
+
+const AI_GI_DATA_FILES = [
+  path.join(
+    AI_PERSIST_DATA_DIR,
+    "sc_gi_registros.json"
+  ),
+
+  path.resolve(
+    process.cwd(),
+    "data",
+    "sc_gi_registros.json"
+  ),
+].filter(
+  (file, index, array) =>
+    array.indexOf(file) === index
+);
 
 const AI_CRONOGRAMA_CHANNEL_ID = "1474605177771397223";
 const AI_EVENTOS_DIARIOS_CHANNEL_ID = "1385003944803041371";
@@ -16548,46 +16582,51 @@ function normalizeGiRecords(
 function readGiRecordsFromFile(
   guildId = null
 ) {
-  try {
+  for (
+    const giDataFile
+    of AI_GI_DATA_FILES
+  ) {
     if (
       !fs.existsSync(
-        AI_GI_DATA_FILE
+        giDataFile
       )
     ) {
-      return [];
+      continue;
     }
 
-    const raw =
-      fs.readFileSync(
-        AI_GI_DATA_FILE,
-        "utf8"
-      );
+    try {
+      const raw =
+        fs.readFileSync(
+          giDataFile,
+          "utf8"
+        );
 
-    const data =
-      JSON.parse(
-        raw || "{}"
-      );
+      const data =
+        JSON.parse(
+          raw || "{}"
+        );
 
-    if (
-      !Array.isArray(
-        data.registros
-      )
-    ) {
-      return [];
+      if (
+        !Array.isArray(
+          data.registros
+        )
+      ) {
+        continue;
+      }
+
+      return normalizeGiRecords(
+        data.registros,
+        guildId
+      );
+    } catch (err) {
+      console.error(
+        `[IA CHAT AUTO] Erro ao ler ${giDataFile}:`,
+        err
+      );
     }
-
-    return normalizeGiRecords(
-      data.registros,
-      guildId
-    );
-  } catch (err) {
-    console.error(
-      "[IA CHAT AUTO] Erro ao ler sc_gi_registros.json:",
-      err
-    );
-
-    return [];
   }
+
+  return [];
 }
 
 function readCurrentGiRecords(
@@ -16732,7 +16771,7 @@ async function fetchGIStatusContext(message) {
           : "arquivo persistido deduplicado"
       }`,
 
-      `Arquivo de fallback: ${AI_GI_DATA_FILE}`,
+      `Arquivos de fallback: ${AI_GI_DATA_FILES.join(" | ")}`,
 
       `Canal/painel consultado: <#${AI_FIVEM_GI_PANEL_CHANNEL_ID}>`,
 
@@ -32238,7 +32277,7 @@ function installFormsCreatorPersonalTicketBridge(
             ""
           ).trim();
 
-        const userId =
+        const centralUserId =
           (
             typeof resolveDiscordIdentity ===
               "function"
@@ -32248,6 +32287,22 @@ function installFormsCreatorPersonalTicketBridge(
               : null
           ) ||
           rawUserId;
+
+        const giIdentityControl =
+          globalThis
+            .SC_GI_CONTROL_API
+            ?.getControl?.(
+              guildId,
+              centralUserId
+            ) ||
+          null;
+
+        const userId =
+          String(
+            giIdentityControl?.targetId ||
+            centralUserId ||
+            ""
+          ).trim();
 
         if (
           !guildId ||
@@ -32325,10 +32380,35 @@ function installFormsCreatorPersonalTicketBridge(
         // Não cria ticket novo.
         // ===============================================
 
+        const ticketTopicOwnerId =
+          String(
+            ticket.topic ||
+            ""
+          ).match(
+            /(?:^|;)aberto_por:(\d{17,20})(?:;|$)/i
+          )?.[1] ||
+          null;
+
+        const ticketPreviousUserId =
+          (
+            ticketTopicOwnerId &&
+            ticketTopicOwnerId !==
+              userId
+          )
+            ? ticketTopicOwnerId
+            : (
+              rawUserId &&
+              rawUserId !==
+                userId
+                ? rawUserId
+                : null
+            );
+
         if (
-          rawUserId &&
+          ticketPreviousUserId &&
           userId &&
-          rawUserId !== userId &&
+          ticketPreviousUserId !==
+            userId &&
           typeof personalTicketApi.migrateDiscordIdentity ===
             "function"
         ) {
@@ -32340,13 +32420,13 @@ function installFormsCreatorPersonalTicketBridge(
                 ticket.id,
 
               oldUserId:
-                rawUserId,
+                ticketPreviousUserId,
 
               newUserId:
                 userId,
 
               reason:
-                `Autorreparo Forms -> Ticket Pessoal: ${rawUserId} -> ${userId}`,
+                `Autorreparo Forms -> Ticket Pessoal: ${ticketPreviousUserId} -> ${userId}`,
             })
             .catch(
               error => {
@@ -32359,13 +32439,38 @@ function installFormsCreatorPersonalTicketBridge(
             );
         }
 
+        const ticketControl =
+          globalThis
+            .SC_GI_CONTROL_API
+            ?.getControl?.(
+              guild.id,
+              userId
+            ) ||
+          null;
+
+        const ticketLinkedByGi =
+          String(
+            ticketControl
+              ?.personalTicketChannelId ||
+            ""
+          ) ===
+          String(
+            ticket.id ||
+            ""
+          );
+
         if (
+          !ticketLinkedByGi &&
           String(
             ticket.parentId ||
             ""
           ) !==
             "1384650670145278033"
         ) {
+          console.warn(
+            `[IA FORMS BRIDGE] Ticket ${ticket.id} localizado para ${userId}, mas ele não está vinculado ao Controle GI e não está na categoria oficial de membros.`
+          );
+
           return;
         }
 

@@ -153,7 +153,134 @@ const {
     // ====================== CONFIG ======================
     const GIF_SC_GI = 'https://media.discordapp.net/attachments/1362477839944777889/1384245215249825832/standard_2rss.gif?width=515&height=66';
 
-    const DATA_DIR = path.resolve(process.cwd(), 'data');
+    function canWriteGiDirectory(
+      directory
+    ) {
+      if (!directory) {
+        return false;
+      }
+
+      try {
+        fs.mkdirSync(
+          directory,
+          {
+            recursive: true,
+          }
+        );
+
+        fs.accessSync(
+          directory,
+          fs.constants.R_OK |
+            fs.constants.W_OK
+        );
+
+        const probeFile =
+          path.join(
+            directory,
+            `.sc-gi-write-test-${process.pid}-${Date.now()}.tmp`
+          );
+
+        fs.writeFileSync(
+          probeFile,
+          'ok',
+          'utf8'
+        );
+
+        fs.unlinkSync(
+          probeFile
+        );
+
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
+    function pickGiPersistDataDir() {
+      const squareStorage =
+        process.env
+          .SQUARECLOUD_STORAGE_PATH
+          ?.trim();
+
+      const genericStorage =
+        process.env
+          .STORAGE_PATH
+          ?.trim();
+
+      const applicationStorageData =
+        (
+          process.platform !==
+            'win32' &&
+          fs.existsSync(
+            '/application/storage'
+          )
+        )
+          ? '/application/storage/data'
+          : null;
+
+      const candidates = [
+        applicationStorageData,
+
+        squareStorage
+          ? path.resolve(
+              squareStorage,
+              'data'
+            )
+          : null,
+
+        genericStorage
+          ? path.resolve(
+              genericStorage,
+              'data'
+            )
+          : null,
+
+        '/storage/data',
+
+        '/home/container/storage/data',
+
+        '/home/squarecloud/storage/data',
+
+        path.resolve(
+          process.cwd(),
+          'data'
+        ),
+      ].filter(
+        Boolean
+      );
+
+      for (
+        const directory
+        of candidates
+      ) {
+        if (
+          canWriteGiDirectory(
+            directory
+          )
+        ) {
+          return directory;
+        }
+      }
+
+      throw new Error(
+        '[SC_GI] Nenhum diretório gravável foi encontrado para persistência.'
+      );
+    }
+
+    const LEGACY_GI_DATA_FILE =
+      path.resolve(
+        process.cwd(),
+        'data',
+        'sc_gi_registros.json'
+      );
+
+    const DATA_DIR =
+      pickGiPersistDataDir();
+
+    console.log(
+      `[SC_GI] Persistência ativa em: ${DATA_DIR}`
+    );
+
     const SC_GI_CFG = {
       TZ_OFFSET_MIN: -180,
       TICK_MS: 60 * 1000,
@@ -357,9 +484,58 @@ CHANNEL_MEMBER_HISTORY_LOG: '1555344870195994754',
               )
             : rawRecordUserId;
 
+        const identityHistory = [
+          ...(
+            Array.isArray(
+              rec?.discordIdHistory
+            )
+              ? rec.discordIdHistory
+              : []
+          ),
+
+          ...(
+            rec?.lastDiscordMigration &&
+            typeof rec.lastDiscordMigration ===
+              "object"
+              ? [
+                  rec.lastDiscordMigration
+                ]
+              : []
+          ),
+        ];
+
+        const matchesHistoricalIdentity =
+          identityHistory.some(
+            item => {
+              const fromId =
+                String(
+                  item?.from ||
+                  ''
+                ).trim();
+
+              const toId =
+                String(
+                  item?.to ||
+                  ''
+                ).trim();
+
+              return (
+                fromId ===
+                  rawWantedUserId ||
+                toId ===
+                  rawWantedUserId ||
+                fromId ===
+                  wantedUserId ||
+                toId ===
+                  wantedUserId
+              );
+            }
+          );
+
         if (
           recordUserId !==
-          wantedUserId
+            wantedUserId &&
+          !matchesHistoricalIdentity
         ) {
           continue;
         }
@@ -703,11 +879,39 @@ CHANNEL_MEMBER_HISTORY_LOG: '1555344870195994754',
 
     async function SC_GI_load() {
       try {
-        // Migração: se não existe na pasta data, tenta ler da raiz
+        // Migração: primeiro tenta o storage persistente.
+        // Se ainda não existir, reaproveita o arquivo legado
+        // de /application/data ou, por último, o arquivo da raiz.
         let fileToRead = SC_GI_CFG.DATA_FILE;
-        if (!fs.existsSync(fileToRead) && fs.existsSync('./sc_gi_registros.json')) {
-          fileToRead = './sc_gi_registros.json';
-          console.log('[SC_GI] Migrando dados da raiz para pasta /data...');
+
+        if (
+          !fs.existsSync(
+            fileToRead
+          ) &&
+          fs.existsSync(
+            LEGACY_GI_DATA_FILE
+          )
+        ) {
+          fileToRead =
+            LEGACY_GI_DATA_FILE;
+
+          console.log(
+            `[SC_GI] Migrando dados legados de ${LEGACY_GI_DATA_FILE} para ${SC_GI_CFG.DATA_FILE}...`
+          );
+        } else if (
+          !fs.existsSync(
+            fileToRead
+          ) &&
+          fs.existsSync(
+            './sc_gi_registros.json'
+          )
+        ) {
+          fileToRead =
+            './sc_gi_registros.json';
+
+          console.log(
+            '[SC_GI] Migrando dados da raiz para o storage persistente...'
+          );
         }
 
         if (!fs.existsSync(fileToRead)) {

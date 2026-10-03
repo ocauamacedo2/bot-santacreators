@@ -7914,7 +7914,7 @@ export async function formsCreatorHandleMessage(message, client) {
     const state =
       readState();
 
-    const registration =
+    let registration =
       state.registrations?.[message.channel.id] ||
       Object.values(state.registrations || {}).find(item =>
         item?.active === true &&
@@ -7922,17 +7922,184 @@ export async function formsCreatorHandleMessage(message, client) {
       ) ||
       null;
 
+    // =====================================================
+    // FAILSAFE: RECUPERA O VÍNCULO PELO CARD DO PRÓPRIO FORMS
+    // =====================================================
+    //
+    // Se a Evolução falhou antes de salvar activeMirrorThreadId,
+    // o tópico ainda pode possuir o card com o marcador oficial:
+    //
+    // SC_FORMS_ACTIVE_CARD:USER_ID:ORIGINAL_THREAD_ID
+    //
+    // Nesse caso recuperamos o registro original e corrigimos o
+    // vínculo do espelho sem criar Forms novo e sem perder histórico.
+    // =====================================================
+
+    if (!registration) {
+      let mirrorMarkerMessage =
+        null;
+
+      let beforeMessageId =
+        null;
+
+      for (
+        let pageIndex = 0;
+        pageIndex < 5 &&
+        !mirrorMarkerMessage;
+        pageIndex++
+      ) {
+        const page =
+          await message.channel.messages
+            .fetch({
+              limit: 100,
+              ...(
+                beforeMessageId
+                  ? {
+                      before:
+                        beforeMessageId,
+                    }
+                  : {}
+              ),
+            })
+            .catch(
+              () => null
+            );
+
+        if (
+          !page?.size
+        ) {
+          break;
+        }
+
+        mirrorMarkerMessage =
+          page.find(
+            item =>
+              item.author?.id ===
+                client.user?.id &&
+              item.embeds?.some(
+                embed =>
+                  /^SC_FORMS_ACTIVE_CARD:\d{17,20}:\d{17,22}$/.test(
+                    String(
+                      embed?.footer?.text ||
+                      ""
+                    ).trim()
+                  )
+              )
+          ) ||
+          null;
+
+        beforeMessageId =
+          page.last()?.id ||
+          null;
+
+        if (
+          page.size < 100 ||
+          !beforeMessageId
+        ) {
+          break;
+        }
+      }
+
+      const mirrorMarker =
+        mirrorMarkerMessage
+          ?.embeds
+          ?.map(
+            embed =>
+              String(
+                embed?.footer?.text ||
+                ""
+              ).trim()
+          )
+          .find(
+            value =>
+              /^SC_FORMS_ACTIVE_CARD:\d{17,20}:\d{17,22}$/.test(
+                value
+              )
+          ) ||
+        null;
+
+      const markerMatch =
+        mirrorMarker?.match(
+          /^SC_FORMS_ACTIVE_CARD:(\d{17,20}):(\d{17,22})$/
+        ) ||
+        null;
+
+      const originalThreadIdFromMarker =
+        markerMatch?.[2] ||
+        null;
+
+      if (
+        originalThreadIdFromMarker
+      ) {
+        const recoveredState =
+          readState();
+
+        const recoveredRegistration =
+          recoveredState.registrations?.[
+            originalThreadIdFromMarker
+          ] ||
+          null;
+
+        if (
+          recoveredRegistration
+        ) {
+          registration =
+            recoveredRegistration;
+
+          registration.activeMirrorThreadId =
+            message.channel.id;
+
+          registration.activeMirrorMessageId =
+            mirrorMarkerMessage?.id ||
+            registration.activeMirrorMessageId ||
+            null;
+
+          recoveredState.registrations ||=
+            {};
+
+          recoveredState.registrations[
+            originalThreadIdFromMarker
+          ] =
+            registration;
+
+          writeState(
+            recoveredState
+          );
+
+          console.log(
+            `[FormsCreator] Vínculo do espelho autorreparado: ${message.channel.id} -> ${originalThreadIdFromMarker}.`
+          );
+        }
+      }
+    }
+
     const rawTargetUserId =
       String(
         registration?.userId ||
         ""
       ).trim();
 
-    const targetUserId =
+    const centralTargetUserId =
       resolveDiscordIdentity(
         rawTargetUserId
       ) ||
       rawTargetUserId;
+
+    const giIdentityControl =
+      globalThis
+        .SC_GI_CONTROL_API
+        ?.getControl?.(
+          message.guild.id,
+          centralTargetUserId
+        ) ||
+      null;
+
+    const targetUserId =
+      String(
+        giIdentityControl?.targetId ||
+        centralTargetUserId ||
+        ""
+      ).trim();
 
     // =====================================================
     // AUTORREPARO DE IDENTIDADE DO FORMS

@@ -19,11 +19,188 @@ const __dirname = path.dirname(__filename);
 
 const GUILD_ID = "1262262852782129183";
 
-const STATE_FILE = path.join(
-  __dirname,
-  "..",
-  "data",
-  "evolution_hierarchy.json"
+function canWriteEvolutionDirectory(
+  directory
+) {
+  if (!directory) {
+    return false;
+  }
+
+  try {
+    fs.mkdirSync(
+      directory,
+      {
+        recursive: true,
+      }
+    );
+
+    fs.accessSync(
+      directory,
+      fs.constants.R_OK |
+        fs.constants.W_OK
+    );
+
+    const probeFile =
+      path.join(
+        directory,
+        `.evolution-write-test-${process.pid}-${Date.now()}.tmp`
+      );
+
+    fs.writeFileSync(
+      probeFile,
+      "ok",
+      "utf8"
+    );
+
+    fs.unlinkSync(
+      probeFile
+    );
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function pickEvolutionPersistDataDir() {
+  const squareStorage =
+    process.env
+      .SQUARECLOUD_STORAGE_PATH
+      ?.trim();
+
+  const genericStorage =
+    process.env
+      .STORAGE_PATH
+      ?.trim();
+
+  const applicationStorageData =
+    (
+      process.platform !==
+        "win32" &&
+      fs.existsSync(
+        "/application/storage"
+      )
+    )
+      ? "/application/storage/data"
+      : null;
+
+  const candidates = [
+    applicationStorageData,
+
+    squareStorage
+      ? path.resolve(
+          squareStorage,
+          "data"
+        )
+      : null,
+
+    genericStorage
+      ? path.resolve(
+          genericStorage,
+          "data"
+        )
+      : null,
+
+    "/storage/data",
+
+    "/home/container/storage/data",
+
+    "/home/squarecloud/storage/data",
+
+    path.resolve(
+      __dirname,
+      "..",
+      "data"
+    ),
+  ].filter(
+    Boolean
+  );
+
+  for (
+    const directory
+    of candidates
+  ) {
+    if (
+      canWriteEvolutionDirectory(
+        directory
+      )
+    ) {
+      return directory;
+    }
+  }
+
+  throw new Error(
+    "[EVOLUTION_HIERARCHY] Nenhum diretório gravável foi encontrado para persistência."
+  );
+}
+
+const LEGACY_STATE_FILE =
+  path.join(
+    __dirname,
+    "..",
+    "data",
+    "evolution_hierarchy.json"
+  );
+
+const EVOLUTION_DATA_DIR =
+  pickEvolutionPersistDataDir();
+
+const STATE_FILE =
+  path.join(
+    EVOLUTION_DATA_DIR,
+    "evolution_hierarchy.json"
+  );
+
+function migrateLegacyEvolutionStateFile() {
+  if (
+    STATE_FILE ===
+      LEGACY_STATE_FILE
+  ) {
+    return;
+  }
+
+  if (
+    !fs.existsSync(
+      LEGACY_STATE_FILE
+    ) ||
+    fs.existsSync(
+      STATE_FILE
+    )
+  ) {
+    return;
+  }
+
+  try {
+    fs.mkdirSync(
+      path.dirname(
+        STATE_FILE
+      ),
+      {
+        recursive: true,
+      }
+    );
+
+    fs.copyFileSync(
+      LEGACY_STATE_FILE,
+      STATE_FILE
+    );
+
+    console.log(
+      `[EVOLUTION_HIERARCHY] Estado legado migrado para: ${STATE_FILE}`
+    );
+  } catch (error) {
+    console.warn(
+      "[EVOLUTION_HIERARCHY] Não foi possível migrar o estado legado:",
+      error?.message ||
+        error
+    );
+  }
+}
+
+migrateLegacyEvolutionStateFile();
+
+console.log(
+  `[EVOLUTION_HIERARCHY] Persistência ativa em: ${STATE_FILE}`
 );
 
 export const EVOLUTION_TIERS = Object.freeze({
@@ -306,7 +483,7 @@ function writeState(state) {
   );
 
   const tempFile =
-    `${STATE_FILE}.tmp`;
+    `${STATE_FILE}.${process.pid}.${Date.now()}.tmp`;
 
   fs.writeFileSync(
     tempFile,
