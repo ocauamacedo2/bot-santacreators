@@ -6515,11 +6515,20 @@ try {
         // MARCA SE A IDENTIDADE DO FORMS JÁ FOI ALTERADA
         // =====================================================
         //
-        // "partial" significa que o registro principal do Forms
-        // já foi migrado, mas alguma etapa complementar
-        // (Evolução ou espelho) não terminou corretamente.
+        // "synced":
+        // registro principal + complementos sincronizados.
         //
-        // Portanto ele também precisa entrar no rollback.
+        // "partial":
+        // o registro principal do Forms JÁ foi migrado,
+        // porém uma etapa complementar, como Evolução ou
+        // espelho ativo, ficou pendente.
+        //
+        // A troca de identidade NÃO deve ser desfeita somente
+        // porque um complemento ficou pendente.
+        //
+        // "not_found" e demais estados continuam bloqueando
+        // a operação, pois nesses casos não há confirmação de
+        // que o registro principal foi migrado.
         // =====================================================
 
         formsMigrated =
@@ -6532,10 +6541,24 @@ try {
           formsResult?.status !==
             "synced" &&
           formsResult?.status !==
+            "partial" &&
+          formsResult?.status !==
             "unchanged"
         ) {
           throw new Error(
             `O FormsCreator não foi migrado completamente. Status: ${formsResult?.status || "desconhecido"}.`
+          );
+        }
+
+        if (
+          formsResult?.status ===
+            "partial"
+        ) {
+          console.warn(
+            `[SC_GI] FormsCreator migrado com complemento pendente ${oldUserId} -> ${nextUserId}. ` +
+            `mirrorStatus=${formsResult?.mirrorStatus || "desconhecido"}, ` +
+            `evolutionStatus=${formsResult?.evolutionStatus || "desconhecido"}. ` +
+            `A troca principal de Discord continuará sem rollback.`
           );
         }
 

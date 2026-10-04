@@ -7151,9 +7151,19 @@ export async function migrateFormsCreatorDiscordId(
     );
   }
 
+  const mirrorSynced =
+    [
+      "synced",
+      "updated",
+      "created",
+      "original_is_active",
+      "inactive_mirror_synced",
+    ].includes(
+      mirrorStatus
+    );
+
   const finalStatus =
-    mirrorStatus ===
-      "synced" &&
+    mirrorSynced &&
     evolutionStatus ===
       "synced"
       ? "synced"
