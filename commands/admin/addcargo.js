@@ -158,25 +158,67 @@ async function execute(message, args) {
     members = { size: col.size, map: (fn) => [...col.values()].map(fn), values: () => col.values() };
   }
 
-  // adiciona cargo
-  for (const member of members.values()) {
-    try {
-      await member.roles.add(role);
+  /// adiciona cargo
+for (const member of members.values()) {
+  try {
+    // =====================================================
+    // 1. O CARGO É A OPERAÇÃO PRINCIPAL
+    // =====================================================
+    //
+    // Esperamos somente o Discord confirmar que o cargo
+    // realmente foi adicionado.
+    //
+    // A partir daqui o comando já pode continuar e mostrar
+    // a confirmação visual para quem executou.
+    // =====================================================
 
-      await syncOrgTicketAccessForRoleChange({
-        member,
-        role,
-        action: 'add',
-        executor: message.author,
-        source: '!addcargo',
-      });
-    } catch (error) {
-      console.error(`Erro ao adicionar cargo a ${member.user.tag}:`, error);
-      return message.channel.send({
-        content: `❌ <@${message.author.id}> você não pode adicionar cargo em **${member.user.tag}**, pois ele possui um cargo maior ou igual ao seu.`,
-      }).then(msg => setTimeout(() => msg.delete().catch(() => {}), 10000));
-    }
+    await member.roles.add(role);
+
+    // =====================================================
+    // 2. SINCRONIZAÇÃO COMPLEMENTAR DO TICKET
+    // =====================================================
+    //
+    // NÃO usamos await aqui.
+    //
+    // A sincronização de:
+    //
+    // - ticket aberto;
+    // - permissões;
+    // - acesso relacionado ao cargo;
+    // - demais automações;
+    //
+    // continua acontecendo normalmente, porém em segundo
+    // plano e não segura mais a resposta do !addcargo.
+    //
+    // Qualquer falha continua aparecendo no console.
+    // =====================================================
+
+    void syncOrgTicketAccessForRoleChange({
+      member,
+      role,
+      action: 'add',
+      executor: message.author,
+      source: '!addcargo',
+    }).catch(error => {
+      console.error(
+        `[ADDCARGO][TICKET_SYNC] Falha na sincronização complementar após adicionar ${role.id} em ${member.id}:`,
+        error
+      );
+    });
+
+  } catch (error) {
+    console.error(`Erro ao adicionar cargo a ${member.user.tag}:`, error);
+
+    return message.channel.send({
+      content: `❌ <@${message.author.id}> você não pode adicionar cargo em **${member.user.tag}**, pois ele possui um cargo maior ou igual ao seu.`,
+    }).then(msg =>
+      setTimeout(
+        () => msg.delete().catch(() => {}),
+        10000
+      )
+    );
   }
+}
 
   const nomes = members.map(member => `<@${member.user.id}>`).join(', ');
   const embed = new EmbedBuilder()

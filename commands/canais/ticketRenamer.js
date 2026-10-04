@@ -682,57 +682,288 @@ const MEMBER_FONT_CATEGORY_IDS = new Set([
     10_000
   );
 
-  // Mudou SantaCreators OU mudou o nome/apelido -> renomeia tickets do membro.
-  client.on(Events.GuildMemberUpdate, async (oldM, newM) => {
-    const before = oldM.roles.cache.has(ROLE_SANTA_CREATORS);
-    const after  = newM.roles.cache.has(ROLE_SANTA_CREATORS);
+// Mudou SantaCreators OU mudou o nome/apelido -> renomeia tickets do membro.
+client.on(Events.GuildMemberUpdate, async (oldM, newM) => {
+  const before =
+    oldM.roles.cache.has(
+      ROLE_SANTA_CREATORS
+    );
 
-    const santaCreatorsChanged = before !== after;
-    const displayNameChanged = oldM.displayName !== newM.displayName;
+  const after =
+    newM.roles.cache.has(
+      ROLE_SANTA_CREATORS
+    );
 
-    if (!santaCreatorsChanged && !displayNameChanged) return;
+  const santaCreatorsChanged =
+    before !== after;
 
-    const parentIds = getWatchedParentIdsExcludingLider();
-    newM.guild.channels.cache.forEach(async ch => {
-      if (ch?.type !== ChannelType.GuildText) return;
-      if (!ch.parentId || !parentIds.has(ch.parentId)) return;
+  const displayNameChanged =
+    oldM.displayName !==
+    newM.displayName;
 
-      const openerId = await resolveOpenerId(ch);
-      if (openerId === newM.id) await maybeRenameChannel(ch);
+  if (
+    !santaCreatorsChanged &&
+    !displayNameChanged
+  ) {
+    return;
+  }
+
+  const parentIds =
+    getWatchedParentIdsExcludingLider();
+
+  const possibleChannels =
+    newM.guild.channels.cache
+      .filter(channel =>
+        channel?.type ===
+          ChannelType.GuildText &&
+        !!channel.parentId &&
+        parentIds.has(
+          channel.parentId
+        )
+      );
+
+  // =====================================================
+  // FAST PATH
+  // =====================================================
+  //
+  // Antes de consultar embeds, pins ou histórico,
+  // tenta identificar o ticket usando somente dados
+  // que já estão carregados na memória.
+  //
+  // Isso cobre imediatamente:
+  //
+  // - aberto_por no tópico;
+  // - overwrite individual do próprio membro;
+  // - opener já conhecido pelo cache.
+  //
+  // Na maioria dos tickets atuais isso evita completamente
+  // a varredura pesada.
+  // =====================================================
+
+  const handledChannelIds =
+    new Set();
+
+  for (
+    const channel
+    of possibleChannels.values()
+  ) {
+    const topic =
+      String(
+        channel.topic ||
+        ''
+      );
+
+    const topicOpenerId =
+      topic.match(
+        /aberto_por:(\d{17,20})/i
+      )?.[1] ||
+      null;
+
+    const hasDirectOverwrite =
+      channel.permissionOverwrites
+        ?.cache
+        ?.has(
+          newM.id
+        ) === true;
+
+    const cachedOpenerId =
+      OPENER_CACHE.get(
+        channel.id
+      ) ||
+      null;
+
+    const isImmediateMatch =
+      topicOpenerId ===
+        newM.id ||
+      cachedOpenerId ===
+        newM.id ||
+      hasDirectOverwrite;
+
+    if (
+      !isImmediateMatch
+    ) {
+      continue;
+    }
+
+    handledChannelIds.add(
+      channel.id
+    );
+
+    void maybeRenameChannel(
+      channel
+    ).catch(error => {
+      console.warn(
+        `[SC_TICKET_RENAMER] Falha no fast path do membro ${newM.id} no canal ${channel.id}:`,
+        error?.message || error
+      );
     });
-  });
+  }
 
-  // Sweep inicial ao ligar:
-  // corrige tickets normais e TODOS os canais das 3 categorias especiais.
-  client.once(Events.ClientReady, async () => {
-    try {
-      const parentIds = getAllManagedParentIds();
+  // =====================================================
+  // FALLBACK PARA TICKETS ANTIGOS
+  // =====================================================
+  //
+  // Tickets muito antigos podem não possuir:
+  //
+  // - aberto_por;
+  // - overwrite identificável;
+  // - cache carregado.
+  //
+  // O comportamento antigo continua existindo para eles,
+  // porém roda depois e em segundo plano.
+  //
+  // Assim o ticket atual não precisa esperar essa varredura.
+  // =====================================================
 
-      for (const [, guild] of client.guilds.cache) {
-        guild.channels.cache.forEach(async ch => {
-          if (ch?.type !== ChannelType.GuildText) return;
-          if (!ch.parentId || !parentIds.has(ch.parentId)) return;
-          await maybeRenameChannel(ch);
-        });
+  setTimeout(
+    async () => {
+      try {
+        for (
+          const channel
+          of possibleChannels.values()
+        ) {
+          if (
+            handledChannelIds.has(
+              channel.id
+            )
+          ) {
+            continue;
+          }
+
+          const openerId =
+            await resolveOpenerId(
+              channel
+            );
+
+          if (
+            openerId !==
+            newM.id
+          ) {
+            continue;
+          }
+
+          await maybeRenameChannel(
+            channel
+          );
+        }
+      } catch (error) {
+        console.warn(
+          `[SC_TICKET_RENAMER] Falha no fallback de atualização do membro ${newM.id}:`,
+          error?.message || error
+        );
       }
+    },
+    1500
+  );
+});
 
-      // console.log('[SC_TICKET_RENAMER] Sweep inicial feito — tickets e categorias especiais padronizados.');
-    } catch (_) {}
-  });
+// Sweep inicial ao ligar:
+// corrige tickets normais e TODOS os canais das 3 categorias especiais.
+client.once(Events.ClientReady, async () => {
+  try {
+    const parentIds =
+      getAllManagedParentIds();
 
-  // Varredura periódica (30s):
-  // serve como backup caso algum evento de criação/update seja perdido.
-  setInterval(async () => {
-    try {
-      for (const [, guild] of client.guilds.cache) {
-        const parentIds = getAllManagedParentIds();
+    for (
+      const [, guild]
+      of client.guilds.cache
+    ) {
+      const managedChannels =
+        guild.channels.cache
+          .filter(channel =>
+            channel?.type ===
+              ChannelType.GuildText &&
+            !!channel.parentId &&
+            parentIds.has(
+              channel.parentId
+            )
+          );
 
-        guild.channels.cache.forEach(async ch => {
-          if (ch?.type !== ChannelType.GuildText) return;
-          if (!ch.parentId || !parentIds.has(ch.parentId)) return;
-          await maybeRenameChannel(ch);
-        });
+      for (
+        const channel
+        of managedChannels.values()
+      ) {
+        await maybeRenameChannel(
+          channel
+        );
+
+        await new Promise(
+          resolve =>
+            setTimeout(
+              resolve,
+              25
+            )
+        );
       }
-    } catch (_) {}
-  }, 30_000);
+    }
+
+    // console.log('[SC_TICKET_RENAMER] Sweep inicial feito — tickets e categorias especiais padronizados.');
+  } catch (error) {
+    console.warn(
+      '[SC_TICKET_RENAMER] Falha no sweep inicial:',
+      error?.message || error
+    );
+  }
+});
+
+// Varredura periódica (30s):
+// serve como backup caso algum evento de criação/update seja perdido.
+setInterval(async () => {
+  try {
+    for (
+      const [, guild]
+      of client.guilds.cache
+    ) {
+      const parentIds =
+        getAllManagedParentIds();
+
+      const managedChannels =
+        guild.channels.cache
+          .filter(channel =>
+            channel?.type ===
+              ChannelType.GuildText &&
+            !!channel.parentId &&
+            parentIds.has(
+              channel.parentId
+            )
+          );
+
+      // =====================================================
+      // PROCESSAMENTO CONTROLADO
+      // =====================================================
+      //
+      // Antes era usado forEach(async ...), o que disparava
+      // todos os canais praticamente ao mesmo tempo.
+      //
+      // Agora processamos em sequência e colocamos uma pausa
+      // mínima entre canais.
+      //
+      // Como esta rotina é apenas um FAILSAFE, não existe
+      // necessidade de bombardear a API do Discord.
+      // =====================================================
+
+      for (
+        const channel
+        of managedChannels.values()
+      ) {
+        await maybeRenameChannel(
+          channel
+        );
+
+        await new Promise(
+          resolve =>
+            setTimeout(
+              resolve,
+              25
+            )
+        );
+      }
+    }
+  } catch (error) {
+    console.warn(
+      '[SC_TICKET_RENAMER] Falha na varredura periódica:',
+      error?.message || error
+    );
+  }
+}, 30_000);
  }

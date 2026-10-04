@@ -4733,23 +4733,66 @@ if (interaction.isModalSubmit() && interaction.customId === 'modal_registro_lide
 
 
     if (interaction.isModalSubmit() && interaction.customId === 'modal_adicionar') {
-      const raw = interaction.fields.getTextInputValue('id_usuario')?.trim();
-      const id = raw.replace(/[<@!>]/g, '');
-      const channel = interaction.channel;
+      // 🔒 Reconhece a interação imediatamente para não estourar
+      // o limite de resposta do Discord enquanto buscamos o membro,
+      // alteramos permissões e registramos o acesso manual.
+      try {
+        await interaction.deferReply({
+          ephemeral: true
+        });
+      } catch (e) {
+        console.error(
+          '[MODAL ADICIONAR] Erro ao reconhecer a interação:',
+          e
+        );
+
+        return true;
+      }
 
       try {
-        const membro = await interaction.guild.members.fetch(id).catch(() => null);
-        if (!membro) {
-          await interaction.reply({ content: '⚠️ ID inválido ou usuário não está no servidor.', flags: 64 });
+        const raw =
+          interaction.fields
+            .getTextInputValue('id_usuario')
+            ?.trim() || '';
+
+        const id =
+          raw.replace(/[<@!>]/g, '');
+
+        const channel =
+          interaction.channel;
+
+        if (!id) {
+          await interaction.editReply({
+            content:
+              '⚠️ Informe um ID de usuário válido.'
+          });
+
           return true;
         }
 
-        await channel.permissionOverwrites.edit(id, {
-          ViewChannel: true,
-          SendMessages: true,
-          ReadMessageHistory: true,
-          AttachFiles: true
-        });
+        const membro =
+          await interaction.guild.members
+            .fetch(id)
+            .catch(() => null);
+
+        if (!membro) {
+          await interaction.editReply({
+            content:
+              '⚠️ ID inválido ou usuário não está no servidor.'
+          });
+
+          return true;
+        }
+
+        await channel.permissionOverwrites.edit(
+          id,
+          {
+            ViewChannel: true,
+            SendMessages: true,
+            ReadMessageHistory: true,
+            AttachFiles: true
+          }
+        );
 
         await logManualTicketAccessChange({
           interaction,
@@ -4757,28 +4800,92 @@ if (interaction.isModalSubmit() && interaction.customId === 'modal_registro_lide
           action: 'add',
         });
 
-        await interaction.reply({ content: `<@${id}> adicionado com sucesso ao ticket.`, flags: 64 });
+        await interaction.editReply({
+          content:
+            `<@${id}> adicionado com sucesso ao ticket.`
+        });
+
       } catch (e) {
-        await interaction.reply({ content: `Erro ao adicionar: ${e.message}`, flags: 64 });
+        console.error(
+          '[MODAL ADICIONAR] ERRO:',
+          e
+        );
+
+        try {
+          await interaction.editReply({
+            content:
+              `❌ Erro ao adicionar usuário: ${e?.message || 'erro desconhecido'}`
+          });
+        } catch (replyError) {
+          console.error(
+            '[MODAL ADICIONAR] Também não foi possível enviar a mensagem de erro:',
+            replyError
+          );
+        }
       }
+
       return true;
     }
 
     if (interaction.isModalSubmit() && interaction.customId === 'modal_remover') {
-      const raw = interaction.fields.getTextInputValue('id_usuario')?.trim();
-      const id = raw.replace(/[<@!>]/g, '');
-      const channel = interaction.channel;
+      // 🔒 Reconhece a interação imediatamente para evitar
+      // "Algo deu errado, tente novamente" no Discord.
+      try {
+        await interaction.deferReply({
+          ephemeral: true
+        });
+      } catch (e) {
+        console.error(
+          '[MODAL REMOVER] Erro ao reconhecer a interação:',
+          e
+        );
+
+        return true;
+      }
 
       try {
-        const overwrite = channel.permissionOverwrites.cache.get(id);
-        if (!overwrite) {
-          await interaction.reply({ content: 'ℹ️ Esse usuário não tem permissão específica neste canal.', flags: 64 });
+        const raw =
+          interaction.fields
+            .getTextInputValue('id_usuario')
+            ?.trim() || '';
+
+        const id =
+          raw.replace(/[<@!>]/g, '');
+
+        const channel =
+          interaction.channel;
+
+        if (!id) {
+          await interaction.editReply({
+            content:
+              '⚠️ Informe um ID de usuário válido.'
+          });
+
           return true;
         }
 
-        const membro = await interaction.guild.members.fetch(id).catch(() => null);
+        const overwrite =
+          channel.permissionOverwrites.cache.get(
+            id
+          );
 
-        await channel.permissionOverwrites.delete(id);
+        if (!overwrite) {
+          await interaction.editReply({
+            content:
+              'ℹ️ Esse usuário não tem permissão específica neste canal.'
+          });
+
+          return true;
+        }
+
+        const membro =
+          await interaction.guild.members
+            .fetch(id)
+            .catch(() => null);
+
+        await channel.permissionOverwrites.delete(
+          id
+        );
 
         if (membro) {
           await logManualTicketAccessChange({
@@ -4788,10 +4895,30 @@ if (interaction.isModalSubmit() && interaction.customId === 'modal_registro_lide
           });
         }
 
-        await interaction.reply({ content: `<@${id}> removido com sucesso do ticket.`, flags: 64 });
+        await interaction.editReply({
+          content:
+            `<@${id}> removido com sucesso do ticket.`
+        });
+
       } catch (e) {
-        await interaction.reply({ content: `Erro ao remover: ${e.message}`, flags: 64 });
+        console.error(
+          '[MODAL REMOVER] ERRO:',
+          e
+        );
+
+        try {
+          await interaction.editReply({
+            content:
+              `❌ Erro ao remover usuário: ${e?.message || 'erro desconhecido'}`
+          });
+        } catch (replyError) {
+          console.error(
+            '[MODAL REMOVER] Também não foi possível enviar a mensagem de erro:',
+            replyError
+          );
+        }
       }
+
       return true;
     }
 
