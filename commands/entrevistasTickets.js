@@ -3611,46 +3611,69 @@ async function notificarEquipeEntrevista(guild, canal, tipo) {
   }
 
   function isMainTicketControlMessage(message) {
-    if (
-      !message ||
-      message.author?.id !==
-        client.user?.id
-    ) {
-      return false;
-    }
+  if (
+    !message ||
+    message.author?.id !==
+      client.user?.id
+  ) {
+    return false;
+  }
 
-    const customIds =
-      (message.components || [])
-        .flatMap(
-          (row) =>
-            row.components || []
-        )
-        .map(
-          getComponentCustomId
-        );
-
-    if (
-      customIds.includes(
-        'assumir_ticket'
-      ) ||
-      customIds.includes(
-        'fechar_ticket'
+  const customIds =
+    (message.components || [])
+      .flatMap(
+        (row) =>
+          row.components || []
       )
-    ) {
-      return true;
-    }
-
-    const footer =
-      String(
-        message.embeds?.[0]
-          ?.footer?.text ||
-        ''
+      .map(
+        getComponentCustomId
       );
 
-    return footer.includes(
-      'SantaCreators - Tickets'
-    );
+  if (
+    customIds.includes(
+      'assumir_ticket'
+    ) ||
+    customIds.includes(
+      'fechar_ticket'
+    )
+  ) {
+    return true;
   }
+
+  const embed =
+    message.embeds?.[0] ||
+    null;
+
+  const footer =
+    String(
+      embed?.footer?.text ||
+      ''
+    );
+
+  const title =
+    String(
+      embed?.title ||
+      ''
+    );
+
+  if (
+    footer.includes(
+      'SantaCreators - Tickets'
+    )
+  ) {
+    return true;
+  }
+
+  if (
+    /^entrevista$/i.test(
+      title.trim()
+    )
+  ) {
+    return true;
+  }
+
+  return false;
+}
 
   async function findInterviewTicketControlMessage(
     channel,
@@ -4153,17 +4176,34 @@ async function notificarEquipeEntrevista(guild, canal, tipo) {
   // =========================================================
 
   async function onReady() {
-    await verificarOuCriarMenu();
+  await verificarOuCriarMenu();
 
-    installInterviewAnalysisButtonSync();
+  installInterviewAnalysisButtonSync();
 
-    await backfillInterviewAnalysisButtons()
+  await backfillInterviewAnalysisButtons()
+    .catch((error) => {
+      console.error(
+        '[IA ENTREVISTA BUTTON] Falha no backfill ao iniciar:',
+        error?.message || error
+      );
+    });
+
+  const interviewAnalysisBackfillRetryTimer = setTimeout(() => {
+    backfillInterviewAnalysisButtons()
       .catch((error) => {
         console.error(
-          '[IA ENTREVISTA BUTTON] Falha no backfill ao iniciar:',
+          '[IA ENTREVISTA BUTTON] Falha na segunda tentativa de backfill:',
           error?.message || error
         );
       });
+  }, 5000);
+
+  if (
+    typeof interviewAnalysisBackfillRetryTimer.unref ===
+    'function'
+  ) {
+    interviewAnalysisBackfillRetryTimer.unref();
+  }
 
 // =========================================================
 // Regra #7: Monitor de Saída/Banimento
