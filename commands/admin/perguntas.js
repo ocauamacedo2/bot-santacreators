@@ -23,24 +23,42 @@ const PERGUNTAS_BYPASS_USER_IDS = new Set([
 ]);
 
 const PERGUNTAS_EXECUTION_LOCKS = new Set();
+const PERGUNTAS_PROCESSED_MESSAGES = new Set();
 
 function claimPerguntasExecution(message) {
-  const key =
+  const channelKey =
     `${message.guildId || "no-guild"}:` +
     `${message.channel?.id || "no-channel"}`;
 
-  if (PERGUNTAS_EXECUTION_LOCKS.has(key)) {
+  const messageKey =
+    `${channelKey}:` +
+    `${message.id || "no-message"}`;
+
+  if (PERGUNTAS_PROCESSED_MESSAGES.has(messageKey)) {
     return false;
   }
 
-  PERGUNTAS_EXECUTION_LOCKS.add(key);
+  if (PERGUNTAS_EXECUTION_LOCKS.has(channelKey)) {
+    return false;
+  }
+
+  PERGUNTAS_PROCESSED_MESSAGES.add(messageKey);
+  PERGUNTAS_EXECUTION_LOCKS.add(channelKey);
 
   const lockTimer = setTimeout(() => {
-    PERGUNTAS_EXECUTION_LOCKS.delete(key);
+    PERGUNTAS_EXECUTION_LOCKS.delete(channelKey);
   }, 15 * 1000);
+
+  const processedTimer = setTimeout(() => {
+    PERGUNTAS_PROCESSED_MESSAGES.delete(messageKey);
+  }, 10 * 60 * 1000);
 
   if (typeof lockTimer.unref === "function") {
     lockTimer.unref();
+  }
+
+  if (typeof processedTimer.unref === "function") {
+    processedTimer.unref();
   }
 
   return true;
@@ -215,16 +233,34 @@ export default {
     try {
       await message.delete();
     } catch (e) {
-      console.error(
-        `[!perguntas] Não foi possível apagar imediatamente a mensagem ${message.id} no canal ${message.channel.id}:`,
-        e
+      const errorCode = Number(
+        e?.code ??
+        e?.rawError?.code ??
+        0
       );
 
-      await message.channel.send(
-        "❌ Não consegui apagar o comando `!perguntas`. Tente novamente ou verifique a permissão **Gerenciar Mensagens** do bot."
-      ).catch(() => {});
+      const alreadyDeleted =
+        errorCode === 10008 ||
+        /Unknown Message/i.test(
+          String(e?.message || "")
+        );
 
-      return true;
+      if (!alreadyDeleted) {
+        console.error(
+          `[!perguntas] Não foi possível apagar imediatamente a mensagem ${message.id} no canal ${message.channel.id}:`,
+          e
+        );
+
+        await message.channel.send(
+          "❌ Não consegui apagar o comando `!perguntas`. Tente novamente ou verifique a permissão **Gerenciar Mensagens** do bot."
+        ).catch(() => {});
+
+        return true;
+      }
+
+      console.warn(
+        `[!perguntas] A mensagem ${message.id} já estava apagada. Continuando sem enviar falso erro de permissão.`
+      );
     }
 
     // =====================================================

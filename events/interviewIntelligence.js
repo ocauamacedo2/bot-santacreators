@@ -3349,36 +3349,48 @@ async function sendCompleteAnalysisDm(user, report, organizedMessage) {
   });
 }
 
-function disableSpecificButtonRows(rows, customId) {
+function getInterviewButtonCustomId(component) {
+  return String(
+    component?.customId ||
+    component?.data?.custom_id ||
+    component?.data?.customId ||
+    ''
+  );
+}
+
+function setSpecificButtonDisabledState(rows, customId, disabled) {
   return (rows || []).map((row) => {
     const builder = ActionRowBuilder.from(row);
 
     builder.components = builder.components.map((component) => {
-      if (component.customId !== customId) {
-        return ButtonBuilder.from(component);
+      const componentCustomId =
+        getInterviewButtonCustomId(component);
+
+      if (componentCustomId !== customId) {
+        return component;
       }
 
-      return ButtonBuilder.from(component).setDisabled(true);
+      return ButtonBuilder.from(component).setDisabled(disabled);
     });
 
     return builder;
   });
 }
 
+function disableSpecificButtonRows(rows, customId) {
+  return setSpecificButtonDisabledState(
+    rows,
+    customId,
+    true
+  );
+}
+
 function enableSpecificButtonRows(rows, customId) {
-  return (rows || []).map((row) => {
-    const builder = ActionRowBuilder.from(row);
-
-    builder.components = builder.components.map((component) => {
-      if (component.customId !== customId) {
-        return ButtonBuilder.from(component);
-      }
-
-      return ButtonBuilder.from(component).setDisabled(false);
-    });
-
-    return builder;
-  });
+  return setSpecificButtonDisabledState(
+    rows,
+    customId,
+    false
+  );
 }
 
 async function updateTicketHeaderAnalysisLink(

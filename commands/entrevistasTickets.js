@@ -3804,17 +3804,50 @@ async function notificarEquipeEntrevista(guild, canal, tipo) {
         const hasReport = found.message.embeds?.some((embed) => embed.fields?.some((field) =>
           field.name === '🔎 Análise de entrevista:' && /https:\/\/discord\.com\/channels\//.test(field.value)
         ));
-        if (!hasReport && reason === 'startup/backfill') {
+
+        if (reason === 'startup/backfill') {
+          const ticketIsClosing =
+            /\bentrevista_encerrando:1\b/i.test(
+              String(channel.topic || '')
+            );
+
+          const ticketActionButtonIds = new Set([
+            'assumir_ticket',
+            'assumir_resp',
+            'fechar_ticket',
+            'adicionar_membro',
+            'remover_membro',
+          ]);
+
           const rows = found.message.components.map((row) => {
             const builder = ActionRowBuilder.from(row);
+
             for (const component of builder.components) {
-              if (getComponentCustomId(component) === 'sc_interview_analyze') component.setDisabled(false);
+              const componentCustomId =
+                getComponentCustomId(component);
+
+              if (
+                !ticketIsClosing &&
+                ticketActionButtonIds.has(componentCustomId)
+              ) {
+                component.setDisabled(false);
+              }
+
+              if (componentCustomId === 'sc_interview_analyze') {
+                component.setDisabled(
+                  Boolean(hasReport) ||
+                  ticketIsClosing
+                );
+              }
             }
+
             return builder;
           });
+
           await found.message.edit({ components: rows });
           return true;
         }
+
         return false;
       }
 
