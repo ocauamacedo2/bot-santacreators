@@ -84,6 +84,297 @@ const GEMINI_MODELS = [
   'gemini-2.5-flash',
 ].filter((model, index, array) => model && array.indexOf(model) === index);
 
+// =====================================================
+// FILA / PRESSÃO DE IA DAS ENTREVISTAS
+// =====================================================
+//
+// O problema não é a análise em si.
+// O problema acontece quando várias entrevistas terminam
+// praticamente juntas e todas tentam chamar o provedor ao
+// mesmo tempo.
+//
+// Em vez de disparar requisições pesadas sem limite,
+// mantemos uma fila curta de execução:
+//
+// • até 2 requisições pesadas simultâneas por padrão;
+// • o restante aguarda na fila, sem perder a entrevista;
+// • 429/503 colocam apenas o modelo afetado em cooldown;
+// • a próxima entrevista pode usar outro fallback;
+// • os jobs automáticos continuam persistidos no Discord.
+//
+// Os valores podem ser ajustados por ENV sem mudar código.
+// =====================================================
+
+const INTERVIEW_AI_MAX_CONCURRENCY =
+  Math.max(
+    1,
+    Math.min(
+      4,
+      Number(
+        process.env.SC_INTERVIEW_AI_MAX_CONCURRENCY ||
+        2
+      ) || 2
+    )
+  );
+
+const INTERVIEW_AI_REQUEST_TIMEOUT_MS =
+  Math.max(
+    30_000,
+    Math.min(
+      120_000,
+      Number(
+        process.env.SC_INTERVIEW_AI_REQUEST_TIMEOUT_MS ||
+        70_000
+      ) || 70_000
+    )
+  );
+
+const INTERVIEW_AI_MAX_AUTO_ATTEMPTS =
+  Math.max(
+    3,
+    Math.min(
+      30,
+      Number(
+        process.env.SC_INTERVIEW_AI_MAX_AUTO_ATTEMPTS ||
+        12
+      ) || 12
+    )
+  );
+
+const INTERVIEW_AI_REQUEST_QUEUE = [];
+const INTERVIEW_AI_MODEL_BLOCKED_UNTIL = new Map();
+
+let INTERVIEW_AI_ACTIVE_REQUESTS = 0;
+
+function sleepInterviewAi(
+  milliseconds
+) {
+  return new Promise(
+    (resolve) => {
+      const timer =
+        setTimeout(
+          resolve,
+          Math.max(
+            0,
+            Number(
+              milliseconds ||
+              0
+            )
+          )
+        );
+
+      timer.unref?.();
+    }
+  );
+}
+
+function getInterviewAiModelBlockedUntil(
+  model
+) {
+  const key =
+    String(
+      model ||
+      ''
+    );
+
+  const blockedUntil =
+    Number(
+      INTERVIEW_AI_MODEL_BLOCKED_UNTIL.get(
+        key
+      ) ||
+      0
+    );
+
+  if (
+    blockedUntil <=
+    Date.now()
+  ) {
+    INTERVIEW_AI_MODEL_BLOCKED_UNTIL.delete(
+      key
+    );
+
+    return 0;
+  }
+
+  return blockedUntil;
+}
+
+function drainInterviewAiRequestQueue() {
+  while (
+    INTERVIEW_AI_ACTIVE_REQUESTS <
+      INTERVIEW_AI_MAX_CONCURRENCY &&
+    INTERVIEW_AI_REQUEST_QUEUE.length >
+      0
+  ) {
+    const entry =
+      INTERVIEW_AI_REQUEST_QUEUE.shift();
+
+    INTERVIEW_AI_ACTIVE_REQUESTS +=
+      1;
+
+    Promise.resolve()
+      .then(
+        entry.task
+      )
+      .then(
+        entry.resolve,
+        entry.reject
+      )
+      .finally(
+        () => {
+          INTERVIEW_AI_ACTIVE_REQUESTS =
+            Math.max(
+              0,
+              INTERVIEW_AI_ACTIVE_REQUESTS -
+                1
+            );
+
+          drainInterviewAiRequestQueue();
+        }
+      );
+  }
+}
+
+function runInterviewAiRequest(
+  task
+) {
+  return new Promise(
+    (resolve, reject) => {
+      INTERVIEW_AI_REQUEST_QUEUE.push({
+        task,
+        resolve,
+        reject,
+      });
+
+      drainInterviewAiRequestQueue();
+    }
+  );
+}
+
+function getAutomaticAnalysisRetryDelayMs(
+  attempt,
+  error
+) {
+  const failure =
+    interviewAiFailure(
+      error
+    );
+
+  if (
+    failure.retryAfterMs >
+    0
+  ) {
+    return Math.min(
+      5 * 60 * 1000,
+      Math.max(
+        5_000,
+        failure.retryAfterMs +
+          Math.floor(
+            Math.random() *
+            2_500
+          )
+      )
+    );
+  }
+
+  const delays = [
+    15_000,
+    25_000,
+    40_000,
+    60_000,
+    90_000,
+    120_000,
+    180_000,
+    240_000,
+    300_000,
+  ];
+
+  const base =
+    delays[
+      Math.min(
+        Math.max(
+          0,
+          Number(
+            attempt ||
+            1
+          ) -
+            1
+        ),
+        delays.length -
+          1
+      )
+    ];
+
+  return (
+    base +
+    Math.floor(
+      Math.random() *
+      4_000
+    )
+  );
+}
+
+function blockInterviewAiModel(
+  model,
+  error
+) {
+  const failure =
+    interviewAiFailure(
+      error
+    );
+
+  if (
+    !failure.transient
+  ) {
+    return;
+  }
+
+  const defaultDelay =
+    failure.status ===
+    429
+      ? 45_000
+      : failure.status ===
+          503
+        ? 20_000
+        : 10_000;
+
+  const delay =
+    Math.min(
+      5 * 60 * 1000,
+      Math.max(
+        5_000,
+        failure.retryAfterMs ||
+        defaultDelay
+      )
+    );
+
+  const key =
+    String(
+      model ||
+      ''
+    );
+
+  const nextUntil =
+    Date.now() +
+    delay;
+
+  const currentUntil =
+    Number(
+      INTERVIEW_AI_MODEL_BLOCKED_UNTIL.get(
+        key
+      ) ||
+      0
+    );
+
+  INTERVIEW_AI_MODEL_BLOCKED_UNTIL.set(
+    key,
+    Math.max(
+      currentUntil,
+      nextUntil
+    )
+  );
+}
+
 const OFFICIAL_RULE_SOURCE_IDS = [
   '1352285379302002710',
   '1355622493464821892',
@@ -2599,13 +2890,151 @@ function stripJsonFence(text) {
 }
 
 function interviewAiFailure(error) {
-  const text = String(error?.message || error || '');
-  const status = Number(error?.status || error?.code ||
-    text.match(/"code"\s*:\s*(\d{3})/)?.[1] || 0);
+  const text =
+    String(
+      error?.message ||
+      error ||
+      ''
+    );
+
+  const cause =
+    error?.cause &&
+    error.cause !==
+      error
+      ? interviewAiFailure(
+          error.cause
+        )
+      : null;
+
+  const rawStatus =
+    error?.status ||
+    error?.statusCode ||
+    error?.response?.status ||
+    error?.code ||
+    text.match(
+      /"code"\s*:\s*(\d{3})/
+    )?.[1] ||
+    0;
+
+  const parsedStatus =
+    Number(
+      rawStatus
+    );
+
+  const status =
+    Number.isFinite(
+      parsedStatus
+    )
+      ? parsedStatus
+      : Number(
+          cause?.status ||
+          0
+        );
+
+  let retryAfterMs =
+    0;
+
+  const retryAfterHeader =
+    error?.response
+      ?.headers
+      ?.get?.(
+        'retry-after'
+      ) ||
+    error?.headers
+      ?.['retry-after'] ||
+    null;
+
+  if (
+    retryAfterHeader !=
+    null
+  ) {
+    const numericHeader =
+      Number(
+        retryAfterHeader
+      );
+
+    if (
+      Number.isFinite(
+        numericHeader
+      )
+    ) {
+      retryAfterMs =
+        Math.max(
+          retryAfterMs,
+          numericHeader *
+            1000
+        );
+    }
+  }
+
+  const retryDelayMatch =
+    text.match(
+      /(?:retry(?:ing)?(?:\s+in)?|retryDelay["']?\s*[:=]\s*["']?)\s*(\d+(?:\.\d+)?)\s*(ms|s|sec|secs|second|seconds)?/i
+    );
+
+  if (
+    retryDelayMatch
+  ) {
+    const value =
+      Number(
+        retryDelayMatch[1]
+      );
+
+    const unit =
+      String(
+        retryDelayMatch[2] ||
+        's'
+      ).toLowerCase();
+
+    if (
+      Number.isFinite(
+        value
+      )
+    ) {
+      retryAfterMs =
+        Math.max(
+          retryAfterMs,
+          unit ===
+            'ms'
+            ? value
+            : value *
+              1000
+        );
+    }
+  }
+
+  retryAfterMs =
+    Math.max(
+      retryAfterMs,
+      Number(
+        cause
+          ?.retryAfterMs ||
+        0
+      )
+    );
+
+  const transient =
+    [
+      408,
+      429,
+      500,
+      502,
+      503,
+      504,
+    ].includes(
+      status
+    ) ||
+    /UNAVAILABLE|RESOURCE_EXHAUSTED|overloaded|overload|timeout|timed out|fetch failed|ECONNRESET/i.test(
+      text
+    ) ||
+    Boolean(
+      cause?.transient
+    );
+
   return {
     status,
-    transient: [408, 429, 500, 502, 503, 504].includes(status) ||
-      /UNAVAILABLE|RESOURCE_EXHAUSTED|timeout|timed out|fetch failed|ECONNRESET/i.test(text),
+    transient,
+    retryAfterMs,
   };
 }
 
@@ -2648,74 +3077,331 @@ async function writeAnalysisJob(message, job) {
 
 async function runAutomaticAnalysisJob(client, message, job) {
   const key = String(job.channelId);
-  if (AUTO_ANALYSIS_JOBS.has(key)) return;
-  AUTO_ANALYSIS_JOBS.add(key);
+
+  if (
+    AUTO_ANALYSIS_JOBS.has(
+      key
+    )
+  ) {
+    return;
+  }
+
+  AUTO_ANALYSIS_JOBS.add(
+    key
+  );
+
   try {
-    if (ANALYSIS_LOCKS.has(key) || CORRECTION_LOCKS.has(key)) {
-      job.status = 'pending';
-      job.nextAttemptAt = Date.now() + 15_000;
-      await writeAnalysisJob(message, job);
+    if (
+      ANALYSIS_LOCKS.has(
+        key
+      ) ||
+      CORRECTION_LOCKS.has(
+        key
+      )
+    ) {
+      job.status =
+        'pending';
+
+      job.nextAttemptAt =
+        Date.now() +
+        15_000;
+
+      await writeAnalysisJob(
+        message,
+        job
+      );
+
       return;
     }
-    ANALYSIS_LOCKS.add(key);
+
+    ANALYSIS_LOCKS.add(
+      key
+    );
+
     try {
-      const channel = await client.channels.fetch(key, { force: true });
-      if (!channel?.isTextBased?.() || String(channel.parentId) !== INTERVIEW_CATEGORY_ID ||
-          parseOpenerId(channel) !== String(job.candidateId) || isInterviewActive(channel) ||
-          /\bentrevista_encerrando:1\b/.test(String(channel.topic || ''))) {
-        job.status = 'cancelled';
-        job.error = 'Ticket indisponível, movido, encerrado ou com nova entrevista em andamento.';
-        await writeAnalysisJob(message, job);
+      const channel =
+        await client.channels.fetch(
+          key,
+          {
+            force: true,
+          }
+        );
+
+      if (
+        !channel?.isTextBased?.() ||
+        String(
+          channel.parentId
+        ) !==
+          INTERVIEW_CATEGORY_ID ||
+        parseOpenerId(
+          channel
+        ) !==
+          String(
+            job.candidateId
+          ) ||
+        isInterviewActive(
+          channel
+        ) ||
+        /\bentrevista_encerrando:1\b/.test(
+          String(
+            channel.topic ||
+            ''
+          )
+        )
+      ) {
+        job.status =
+          'cancelled';
+
+        job.error =
+          'Ticket indisponível, movido, encerrado ou com nova entrevista em andamento.';
+
+        await writeAnalysisJob(
+          message,
+          job
+        );
+
         return;
       }
-      const completion = await channel.messages.fetch({ message: job.completionMessageId, cache: false });
-      if (completion.author?.id !== client.user.id ||
-          !completion.content.includes('Seu formulário está em análise!')) {
-        throw new Error('Conclusão da entrevista não confirmada no Discord.');
+
+      const completion =
+        await channel.messages.fetch({
+          message:
+            job.completionMessageId,
+          cache:
+            false,
+        });
+
+      if (
+        completion.author?.id !==
+          client.user.id ||
+        !completion.content.includes(
+          'Seu formulário está em análise!'
+        )
+      ) {
+        throw new Error(
+          'Conclusão da entrevista não confirmada no Discord.'
+        );
       }
-      const header = await findAnalysisHeader(client, channel);
-      if (!header) throw new Error('Cabeçalho de análise ainda não disponível no ticket.');
-      const staff = await channel.guild.members.fetch({ user: job.interviewerId, force: true });
-      if (!canUseInterviewIntelligence(staff)) {
-        throw new Error('Aplicador sem permissão atual para receber o parecer interno.');
+
+      const header =
+        await findAnalysisHeader(
+          client,
+          channel
+        );
+
+      if (
+        !header
+      ) {
+        throw new Error(
+          'Cabeçalho de análise ainda não disponível no ticket.'
+        );
       }
-      job.status = 'running';
-      job.attempts = Number(job.attempts || 0) + 1;
-      job.updatedAt = Date.now();
-      await writeAnalysisJob(message, job);
-      const result = await analyzeInterview({
-        client, channel, channelId: channel.id, guild: channel.guild,
-        message: header, user: staff.user, completionMessageId: job.completionMessageId,
-      });
-      job.status = 'done';
-      job.reportUrl = result.organizedMessage.url;
-      job.dmSent = result.dmSent;
-      job.error = null;
-      await writeAnalysisJob(message, job);
+
+      const staff =
+        await channel.guild.members.fetch({
+          user:
+            job.interviewerId,
+          force:
+            true,
+        });
+
+      if (
+        !canUseInterviewIntelligence(
+          staff
+        )
+      ) {
+        throw new Error(
+          'Aplicador sem permissão atual para receber o parecer interno.'
+        );
+      }
+
+      job.status =
+        'running';
+
+      job.attempts =
+        Number(
+          job.attempts ||
+          0
+        ) +
+        1;
+
+      job.updatedAt =
+        Date.now();
+
+      await writeAnalysisJob(
+        message,
+        job
+      );
+
+      const result =
+        await analyzeInterview({
+          client,
+          channel,
+          channelId:
+            channel.id,
+          guild:
+            channel.guild,
+          message:
+            header,
+          user:
+            staff.user,
+          completionMessageId:
+            job.completionMessageId,
+        });
+
+      job.status =
+        'done';
+
+      job.reportUrl =
+        result.organizedMessage.url;
+
+      job.dmSent =
+        result.dmSent;
+
+      job.error =
+        null;
+
+      job.nextAttemptAt =
+        null;
+
+      await writeAnalysisJob(
+        message,
+        job
+      );
     } catch (error) {
-      console.error('[INTERVIEW_INTELLIGENCE] Análise automática:', error);
-      job.status = (error?.retryable || interviewAiFailure(error).transient) &&
-        Number(job.attempts || 0) < 3 ? 'retrying' : 'failed';
-      job.error = truncate(error?.message || error, 600);
-      job.nextAttemptAt = Date.now() + 60_000 * Math.max(1, Number(job.attempts || 0));
-      await writeAnalysisJob(message, job);
-      if (job.status === 'failed') {
-        const organized = await fetchTextChannel(client, ORGANIZED_ANALYSIS_CHANNEL_ID);
-        await organized?.send({
-          content: `⚠️ A análise automática de <#${key}> ficou pendente.\n` +
-            `${job.error}\nA equipe pode tentar novamente pelo botão do ticket.`,
-          allowedMentions: { parse: [] },
-        }).catch(() => {});
+      console.error(
+        '[INTERVIEW_INTELLIGENCE] Análise automática:',
+        error
+      );
+
+      const failure =
+        interviewAiFailure(
+          error
+        );
+
+      const retryable =
+        Boolean(
+          error?.retryable
+        ) ||
+        failure.transient;
+
+      const attempts =
+        Number(
+          job.attempts ||
+          0
+        );
+
+      job.status =
+        retryable &&
+        attempts <
+          INTERVIEW_AI_MAX_AUTO_ATTEMPTS
+          ? 'retrying'
+          : 'failed';
+
+      job.error =
+        truncate(
+          error?.message ||
+          error,
+          600
+        );
+
+      if (
+        job.status ===
+        'retrying'
+      ) {
+        const retryDelay =
+          getAutomaticAnalysisRetryDelayMs(
+            attempts,
+            error
+          );
+
+        job.nextAttemptAt =
+          Date.now() +
+          retryDelay;
+
+        job.retryDelayMs =
+          retryDelay;
+
+        console.warn(
+          `[INTERVIEW_INTELLIGENCE] Ticket ${key} seguirá pendente e será tentado novamente em ${Math.ceil(
+            retryDelay /
+            1000
+          )}s. Tentativa ${attempts}/${INTERVIEW_AI_MAX_AUTO_ATTEMPTS}.`
+        );
+      } else {
+        job.nextAttemptAt =
+          null;
+      }
+
+      await writeAnalysisJob(
+        message,
+        job
+      );
+
+      if (
+        job.status ===
+        'failed'
+      ) {
+        const organized =
+          await fetchTextChannel(
+            client,
+            ORGANIZED_ANALYSIS_CHANNEL_ID
+          );
+
+        await organized
+          ?.send({
+            content:
+              `⚠️ A análise automática de <#${key}> ficou pendente.\n` +
+              `${job.error}\n` +
+              `Foram realizadas ${attempts} tentativa(s) automática(s). ` +
+              'A equipe pode tentar novamente pelo botão do ticket.',
+            allowedMentions: {
+              parse: [],
+            },
+          })
+          .catch(
+            () => {}
+          );
       }
     } finally {
-      ANALYSIS_LOCKS.delete(key);
+      ANALYSIS_LOCKS.delete(
+        key
+      );
     }
   } finally {
-    AUTO_ANALYSIS_JOBS.delete(key);
-    if (['pending', 'retrying'].includes(job.status)) {
-      const timer = setTimeout(() => {
-        void runAutomaticAnalysisJob(client, message, job).catch(console.error);
-      }, Math.max(1000, Number(job.nextAttemptAt || 0) - Date.now()));
+    AUTO_ANALYSIS_JOBS.delete(
+      key
+    );
+
+    if (
+      [
+        'pending',
+        'retrying',
+      ].includes(
+        job.status
+      )
+    ) {
+      const timer =
+        setTimeout(
+          () => {
+            void runAutomaticAnalysisJob(
+              client,
+              message,
+              job
+            ).catch(
+              console.error
+            );
+          },
+          Math.max(
+            1000,
+            Number(
+              job.nextAttemptAt ||
+              0
+            ) -
+              Date.now()
+          )
+        );
+
       timer.unref?.();
     }
   }
@@ -2743,7 +3429,13 @@ export async function resumePendingInterviewAnalyses(client) {
         }, Math.min(300_000, job.nextAttemptAt - Date.now()));
         timer.unref?.();
       } else {
-        await runAutomaticAnalysisJob(client, message, job);
+        void runAutomaticAnalysisJob(
+          client,
+          message,
+          job
+        ).catch(
+          console.error
+        );
       }
     }
     before = ordered.at(-1).id;
@@ -2854,26 +3546,78 @@ async function callGeminiJson(prompt) {
   let lastError = null;
   let providerFailures = 0;
   let invalidResponses = 0;
-  const deadline = Date.now() + 240_000;
+  let blockedModels = 0;
 
   for (const model of GEMINI_MODELS) {
-    if (Date.now() >= deadline) break;
+    const blockedUntil =
+      getInterviewAiModelBlockedUntil(
+        model
+      );
+
+    if (
+      blockedUntil >
+      Date.now()
+    ) {
+      blockedModels +=
+        1;
+
+      const blockedError =
+        new Error(
+          `Modelo ${model} está em cooldown temporário até ${new Date(
+            blockedUntil
+          ).toISOString()}.`
+        );
+
+      blockedError.status =
+        503;
+
+      blockedError.retryAfterMs =
+        Math.max(
+          1000,
+          blockedUntil -
+            Date.now()
+        );
+
+      lastError =
+        blockedError;
+
+      continue;
+    }
+
     for (let attempt = 1; attempt <= 2; attempt += 1) {
-      if (Date.now() >= deadline) break;
       let receivedResponse = false;
 
       try {
-        const result = await client.models.generateContent({
-          model,
-          contents: prompt,
-          config: {
-            responseMimeType: 'application/json',
-            responseJsonSchema,
-            abortSignal: AbortSignal.timeout(Math.max(1000, deadline - Date.now())),
-            httpOptions: { timeout: Math.max(1000, Math.min(60_000, deadline - Date.now())) },
-            maxOutputTokens: attempt === 1 ? 16000 : 24000,
-          },
-        });
+        const result =
+          await runInterviewAiRequest(
+            () =>
+              client.models.generateContent({
+                model,
+                contents:
+                  prompt,
+                config: {
+                  responseMimeType:
+                    'application/json',
+                  responseJsonSchema,
+                  abortSignal:
+                    AbortSignal.timeout(
+                      INTERVIEW_AI_REQUEST_TIMEOUT_MS
+                    ),
+                  httpOptions: {
+                    timeout:
+                      Math.min(
+                        60_000,
+                        INTERVIEW_AI_REQUEST_TIMEOUT_MS
+                      ),
+                  },
+                  maxOutputTokens:
+                    attempt ===
+                    1
+                      ? 16000
+                      : 24000,
+                },
+              })
+          );
 
         receivedResponse = true;
 
@@ -3013,35 +3757,149 @@ async function callGeminiJson(prompt) {
             error
         );
 
-               if (receivedResponse) {
-          invalidResponses += 1;
-        } else {
-          providerFailures += 1;
-          const failure = interviewAiFailure(error);
-          if ([401, 403].includes(failure.status)) {
-            throw new Error('A chave da IA não está autorizada. Confira a configuração da API.');
+        if (receivedResponse) {
+          invalidResponses +=
+            1;
+
+          // A resposta chegou, mas não passou na validação.
+          // Mantemos a segunda tentativa do mesmo modelo,
+          // agora com mais espaço de saída, exatamente como
+          // o fluxo já fazia antes.
+          if (
+            attempt <
+            2
+          ) {
+            await sleepInterviewAi(
+              750 +
+              Math.floor(
+                Math.random() *
+                500
+              )
+            );
           }
-          if (!failure.transient) break;
-          if (attempt < 2 && Date.now() < deadline) {
-            const delay = Math.min(1000 * (2 ** Math.min(providerFailures, 4)) + Math.random() * 500,
-              Math.max(0, deadline - Date.now()));
-            await new Promise((resolve) => setTimeout(resolve, delay));
+        } else {
+          providerFailures +=
+            1;
+
+          const failure =
+            interviewAiFailure(
+              error
+            );
+
+          if (
+            [
+              401,
+              403,
+            ].includes(
+              failure.status
+            )
+          ) {
+            throw new Error(
+              'A chave da IA não está autorizada. Confira a configuração da API.'
+            );
+          }
+
+          if (
+            !failure.transient
+          ) {
+            break;
+          }
+
+          blockInterviewAiModel(
+            model,
+            error
+          );
+
+          // Em quota/sobrecarga real, não insistimos duas
+          // vezes seguidas no mesmo modelo. Liberamos a fila
+          // e tentamos o próximo fallback imediatamente.
+          if (
+            [
+              429,
+              503,
+            ].includes(
+              failure.status
+            ) ||
+            /RESOURCE_EXHAUSTED|UNAVAILABLE|overload/i.test(
+              String(
+                error?.message ||
+                error ||
+                ''
+              )
+            )
+          ) {
+            break;
+          }
+
+          if (
+            attempt <
+            2
+          ) {
+            const delay =
+              Math.max(
+                1_000,
+                Math.min(
+                  15_000,
+                  failure.retryAfterMs ||
+                  (
+                    1_500 *
+                    (
+                      2 **
+                      Math.min(
+                        providerFailures,
+                        3
+                      )
+                    )
+                  ) +
+                  Math.floor(
+                    Math.random() *
+                    750
+                  )
+                )
+              );
+
+            await sleepInterviewAi(
+              delay
+            );
           }
         }
       }
     }
   }
 
-  const temporary = interviewAiFailure(lastError).transient;
-  const error = new Error(
-    temporary
-      ? 'O serviço de IA está temporariamente indisponível ou sobrecarregado. As respostas continuam salvas no Discord; a análise está pendente.'
-      : invalidResponses > 0
-        ? 'A IA respondeu, mas o parecer não passou na validação das 30 questões. Nenhuma correção foi enviada.'
-        : 'Nenhum modelo configurado respondeu. Confira os nomes dos modelos e a configuração da API.'
-  );
-  error.retryable = temporary;
-  error.cause = lastError;
+  const lastFailure =
+    interviewAiFailure(
+      lastError
+    );
+
+  const temporary =
+    lastFailure.transient ||
+    providerFailures >
+      0 ||
+    blockedModels >
+      0;
+
+  const error =
+    new Error(
+      temporary
+        ? 'O provedor de IA está temporariamente ocupado. A entrevista foi preservada e continuará na fila automática de análise.'
+        : invalidResponses > 0
+          ? 'A IA respondeu, mas o parecer não passou na validação das 30 questões. Nenhuma correção foi enviada.'
+          : 'Nenhum modelo configurado respondeu. Confira os nomes dos modelos e a configuração da API.'
+    );
+
+  error.retryable =
+    temporary;
+
+  error.retryAfterMs =
+    Number(
+      lastFailure.retryAfterMs ||
+      0
+    );
+
+  error.cause =
+    lastError;
+
   throw error;
 }
 
@@ -3064,26 +3922,47 @@ async function callGeminiText(
     const model of
     GEMINI_MODELS
   ) {
+    const blockedUntil =
+      getInterviewAiModelBlockedUntil(
+        model
+      );
+
+    if (
+      blockedUntil >
+      Date.now()
+    ) {
+      continue;
+    }
+
     try {
       const result =
-        await client.models
-          .generateContent({
-            model,
-            contents:
-              prompt,
-            config: {
-              abortSignal:
-                AbortSignal.timeout(
-                  45_000
-                ),
-              httpOptions: {
-                timeout:
-                  45_000,
-              },
-              maxOutputTokens:
-                1200,
-            },
-          });
+        await runInterviewAiRequest(
+          () =>
+            client.models
+              .generateContent({
+                model,
+                contents:
+                  prompt,
+                config: {
+                  abortSignal:
+                    AbortSignal.timeout(
+                      Math.min(
+                        45_000,
+                        INTERVIEW_AI_REQUEST_TIMEOUT_MS
+                      )
+                    ),
+                  httpOptions: {
+                    timeout:
+                      Math.min(
+                        45_000,
+                        INTERVIEW_AI_REQUEST_TIMEOUT_MS
+                      ),
+                  },
+                  maxOutputTokens:
+                    1200,
+                },
+              })
+        );
 
       const text =
         String(
@@ -3091,12 +3970,28 @@ async function callGeminiText(
           ''
         ).trim();
 
-      if (text) {
+      if (
+        text
+      ) {
         return text;
       }
     } catch (error) {
       lastError =
         error;
+
+      const failure =
+        interviewAiFailure(
+          error
+        );
+
+      if (
+        failure.transient
+      ) {
+        blockInterviewAiModel(
+          model,
+          error
+        );
+      }
 
       console.warn(
         `[INTERVIEW_INTELLIGENCE] Falha ao gerar mensagem final com ${model}:`,

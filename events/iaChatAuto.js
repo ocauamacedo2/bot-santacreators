@@ -3434,7 +3434,16 @@ const AI_ACTIVE_USER_PROCESSING = new Set();
 // rápidas, enquanto o limite evita explosão ilimitada
 // de chamadas contra a API.
 const AI_BACKGROUND_MAX_CONCURRENCY =
-  6;
+  Math.max(
+    2,
+    Math.min(
+      6,
+      Number(
+        process.env.SC_AI_BACKGROUND_MAX_CONCURRENCY ||
+        4
+      ) || 4
+    )
+  );
 
 // =====================================================
 // IA — AVISO DE PROCESSAMENTO REALMENTE DEMORADO
