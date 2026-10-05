@@ -2855,18 +2855,6 @@ function interviewTimingText(telemetry = {}) {
     'Tempo entre mensagens; não mede quanto tempo a pessoa realmente digitou.';
 }
 
-function interviewTimingText(telemetry = {}) {
-  const seconds = Number(telemetry.elapsedSeconds);
-  const time = telemetry.elapsedSeconds != null && Number.isFinite(seconds)
-    ? `${seconds.toLocaleString('pt-BR', { maximumFractionDigits: 1 })} segundos`
-    : 'não disponível';
-  const typing = telemetry.typingDataAvailable
-    ? `${Number(telemetry.typingEventCount) || 0} evento(s) observado(s)`
-    : 'não disponível nesta resposta';
-  return `Resposta recebida após: **${time}**\nDigitação: **${typing}**\n` +
-    'Tempo entre mensagens; não mede quanto tempo a pessoa realmente digitou.';
-}
-
 function buildQuestionDetailEmbeds(report) {
   return report.questions.map((item) => {
     const telemetry = item.telemetry || {};
