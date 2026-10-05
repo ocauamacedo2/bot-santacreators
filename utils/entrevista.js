@@ -767,65 +767,254 @@ const enviada = await interaction.channel.send({
 // ENVIAR (inicia as perguntas)
 if (customId.startsWith('enviar|')) {
   installInterviewLifecycle(interaction.client);
+
   const [, targetId] = customId.split('|');
- const lockKey = String(channel.id);
- await interaction.deferUpdate().catch(() => {});
+  const lockKey = String(channel.id);
+
+  await interaction.deferUpdate().catch(() => {});
 
   if (entrevistasStartLocks.has(lockKey)) {
-    await channel.send("⚠️ Já tem uma tentativa de iniciar entrevista em andamento. Aguarde alguns segundos e tente novamente.").catch(() => {});
- return true;
- }
-  entrevistasStartLocks.add(lockKey);
-  const existing = entrevistas.get(targetId);
-  if (existing && !existing.cancelled && String(existing.channelId) === String(channel.id)) {
-    entrevistasStartLocks.delete(lockKey);
+    await channel.send(
+      "⚠️ Já tem uma tentativa de iniciar entrevista em andamento. Aguarde alguns segundos e tente novamente."
+    ).catch(() => {});
+
     return true;
   }
-console.log("[ENTREVISTA DEBUG] Clique recebido no botão ENVIAR:", customId, "Canal:", channel.id);
 
-let buttonRemoved = false;
-const originalButtonComponents = interaction.message.components;
+  entrevistasStartLocks.add(lockKey);
 
-try {
-  const membro = await withTimeout(
-    channel.guild.members.fetch(targetId),
-    8000,
-    "buscar candidato"
-  ).catch(() => null);
+  const existing =
+    entrevistas.get(targetId);
 
-   if (!membro) {
-    throw new Error(`Candidato ${targetId} não encontrado no servidor.`);
-  }
+  if (
+    existing &&
+    !existing.cancelled &&
+    String(existing.channelId) ===
+      String(channel.id)
+  ) {
+    const membroExistente =
+      await withTimeout(
+        channel.guild.members.fetch(
+          targetId
+        ),
+        8000,
+        "buscar candidato para retomar entrevista"
+      ).catch(() => null);
 
-  await interaction.message.edit({ components: [] }).then(() => {
-    buttonRemoved = true;
-  }).catch(() => {});
+    if (
+      membroExistente &&
+      Number(existing.timeoutEnd || 0) >
+        Date.now()
+    ) {
+      await interaction.message
+        .edit({
+          components: []
+        })
+        .catch(() => {});
 
-  for (const [userId, dados] of entrevistas.entries()) {
-    if (String(dados?.channelId || "") === String(channel.id)) {
-      entrevistas.delete(userId);
+      entrevistasAtivas.add(
+        channel.id
+      );
+
+      console.log(
+        "[ENTREVISTA DEBUG] Estado existente encontrado. Retomando entrevista.",
+        {
+          targetId,
+          channelId: channel.id,
+          index:
+            Number(existing.index) ||
+            0
+        }
+      );
+
+      const resumeIndex =
+        Number(existing.index) ||
+        0;
+
+      if (
+        !existing.globalTimer
+      ) {
+        iniciarContadorGlobal(
+          channel,
+          targetId,
+          Math.max(
+            1,
+            Number(existing.timeoutEnd) -
+              Date.now()
+          )
+        ).then(
+          async (globalTimer) => {
+            const dadosAtualizados =
+              entrevistas.get(
+                targetId
+              );
+
+            if (
+              !dadosAtualizados
+            ) {
+              return;
+            }
+
+            dadosAtualizados.globalTimer =
+              globalTimer;
+
+            entrevistas.set(
+              targetId,
+              dadosAtualizados
+            );
+
+            await salvarEntrevistasEmDisco()
+              .catch(() => {});
+          }
+        ).catch((err) => {
+          console.error(
+            "[Entrevista] Falha ao restaurar contador global:",
+            err
+          );
+        });
+      }
+
+      void enviarPergunta(
+        channel,
+        membroExistente,
+        resumeIndex
+      ).catch(
+        async (err) => {
+          console.error(
+            `[Entrevista] Falha ao retomar Q${resumeIndex + 1}:`,
+            err
+          );
+
+          await channel.send(
+            `❌ Não consegui retomar a entrevista.\n\n**Erro:** \`${String(
+              err?.message ||
+                err
+            ).slice(
+              0,
+              800
+            )}\``
+          ).catch(() => {});
+        }
+      );
+
+      entrevistasStartLocks.delete(
+        lockKey
+      );
+
+      return true;
     }
+
+    entrevistas.delete(
+      targetId
+    );
+
+    entrevistasAtivas.delete(
+      channel.id
+    );
+
+    await salvarEntrevistasEmDisco()
+      .catch(() => {});
   }
-    entrevistasAtivas.delete(channel.id);
 
-    const topicId = getAplicadorIdFromChannel(channel);
-    const entrevistadorId = topicId || interaction.user.id;
+  console.log(
+    "[ENTREVISTA DEBUG] Clique recebido no botão ENVIAR:",
+    customId,
+    "Canal:",
+    channel.id
+  );
 
-    const timeoutEnd = Date.now() + ENTREVISTA_DURACAO_MS;
+  let buttonRemoved = false;
+
+  const originalButtonComponents =
+    interaction.message.components;
+
+  try {
+    const membro = await withTimeout(
+      channel.guild.members.fetch(
+        targetId
+      ),
+      8000,
+      "buscar candidato"
+    ).catch(() => null);
+
+    if (!membro) {
+      throw new Error(
+        `Candidato ${targetId} não encontrado no servidor.`
+      );
+    }
+
+    await interaction.message
+      .edit({
+        components: []
+      })
+      .then(() => {
+        buttonRemoved = true;
+      })
+      .catch(() => {});
+
+    for (
+      const [userId, dados]
+      of entrevistas.entries()
+    ) {
+      if (
+        String(
+          dados?.channelId ||
+            ""
+        ) ===
+        String(
+          channel.id
+        )
+      ) {
+        entrevistas.delete(
+          userId
+        );
+      }
+    }
+
+    entrevistasAtivas.delete(
+      channel.id
+    );
+
+    const topicId =
+      getAplicadorIdFromChannel(
+        channel
+      );
+
+    const entrevistadorId =
+      topicId ||
+      interaction.user.id;
+
+    const timeoutEnd =
+      Date.now() +
+      ENTREVISTA_DURACAO_MS;
+
     const dadosBase = {
       respostas: [],
       index: 0,
       timeoutEnd,
       entrevistadorId,
-      channelId: channel.id,
+      channelId:
+        channel.id,
       mensagens: [],
       lastSent: 0,
       globalTimer: null
     };
 
-    entrevistas.set(targetId, dadosBase);
-entrevistasAtivas.add(channel.id);
- console.log("[ENTREVISTA DEBUG] Estado criado. targetId:", targetId, "membro.id:", membro.id);
+    entrevistas.set(
+      targetId,
+      dadosBase
+    );
+
+    entrevistasAtivas.add(
+      channel.id
+    );
+
+    console.log(
+      "[ENTREVISTA DEBUG] Estado criado. targetId:",
+      targetId,
+      "membro.id:",
+      membro.id
+    );
     void startInterviewIntelligence({
       client: channel.client,
  channel,
