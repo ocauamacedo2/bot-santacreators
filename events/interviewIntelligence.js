@@ -2343,6 +2343,39 @@ SEGURANÇA E CALIBRAÇÃO
 CRITÉRIO DE CORREÇÃO
 ${INTERVIEW_POLICY_TEXT}
 
+RUBRICA DE INTERPRETAÇÃO — REVISÃO 2, DEFINIDA PELA LIDERANÇA
+- Avalie somente o que a pergunta pede. O gabarito é referência de significado,
+  não uma lista obrigatória de palavras, exemplos ou proibições adicionais.
+- Resposta curta, informal ou com erros de português é correta quando comunica
+  o conceito central sem contradição. Não exija explicações que não foram pedidas.
+- "Incompleta" exige ausência de informação essencial à decisão perguntada.
+  Sugestão de melhoria opcional deve ficar no motivo, sem descontar pontos.
+- Use o mesmo critério independentemente da pontuação acumulada. Não mude uma
+  resposta para aprovar ou reprovar alguém por conveniência.
+- Q14: tentar resolver com calma/compreensão e conter o problema atende à pergunta.
+  Não exigir citar superior nem repetir "imagem da empresa". Remover do evento
+  alguém que persiste causando problemas não é abuso por si só.
+  Exemplo correto: "eu tentaria resolver da forma mais rapida e compressiva
+  possivel.. caso o mesmo causador nn parasse, removeria do evento".
+- Q16: por orientação explícita da liderança, identificar uso de poder em RP
+  ou para benefício próprio demonstra o entendimento central e é suficiente.
+  Não exigir lista de comandos nem todas as etapas de denúncia para pontuar.
+  Exemplo correto: "usar poder em rp, usar poder para se beneficiar".
+  Dizer que usaria poderes para revidar continua sendo uma contradição relevante.
+- Q21: a pergunta pede a função. "doação entregas", "doações" ou "entregas"
+  atendem. Não exigir mencionar proibição de retirada. Afirmar que se pode
+  retirar para consumo próprio é uma contradição e deve ser avaliado.
+- Q23: um exemplo válido como "ser rude ou grosso com alguém" atende.
+  Não exigir que o candidato enumere todas as formas de má conduta.
+- Não aprove automaticamente por encontrar uma palavra. Leia negações,
+  contexto e contradições da resposta inteira.
+- Consulte os exemplos históricos realmente recuperados. Ausência de correção
+  em um ticket não prova que aquela resposta foi aprovada individualmente.
+- Nenhuma ausência de evento de digitação comprova cópia, IA ou cliente modificado.
+  Não transforme velocidade, formalidade ou boa escrita em acusação.
+- No texto do parecer, separe sobreposição textual medida de hipótese do modelo.
+  Sem ruleMatch.matched, não declare que houve cópia literal comprovada.
+
 FONTES INTERNAS
 [GABARITO — serve para SIGNIFICADO, não texto obrigatório]
 ${knowledge.answerKey}
@@ -2685,6 +2718,7 @@ function finalizeAnalysis({
   guardedAiScore = Math.min(guardedAiScore, 69);
   return {
     version: 1,
+    reviewPolicyVersion: 2,
     generatedAt: Date.now(),
     marker: FINAL_REPORT_MARKER,
     guildId: channel.guildId,
@@ -2727,70 +2761,76 @@ function finalizeAnalysis({
 
 function buildSummaryEmbed(report) {
   const summary = report.summary;
-
+  const matches = report.questions.filter((item) => item.telemetry?.ruleMatch?.matched);
+  const command = report.questions
+    .filter((item) => ['errada', 'incompleta'].includes(item.status))
+    .map((item) => item.number);
   return new EmbedBuilder()
-    .setTitle('🔎 Análise de Entrevista • SantaCreators')
-    .setColor(
-      summary.resultSuggestion === 'REPROVAR'
-        ? 0xED4245
-        : summary.resultSuggestion === 'APROVAR'
-          ? 0x57F287
-          : 0xFEE75C
-    )
+    .setTitle('🔎 Entrevista • parecer para revisão')
+    .setColor(summary.resultSuggestion === 'REPROVAR' ? 0xED4245 : 0x5865F2)
     .setThumbnail(report.candidate.avatarUrl)
-    .setDescription(
-      [
-        `👤 <@${report.candidate.id}>`,
-        `📍 <#${report.channelId}>`,
-        '',
-        `**Resultado sugerido:** ${summary.resultSuggestion}`,
-        `**Peso de erros:** ${summary.errorWeight}/7`,
-        '',
-        `> ⚠️ O índice de IA é um sinal auxiliar, não prova isolada.`,
-      ].join('\n')
-    )
+    .setDescription([
+      `**Candidato:** <@${report.candidate.id}> • ID: ${report.candidate.id}`,
+      `**Usuário:** ${truncate(report.candidate.username, 100)}`,
+      `**Aplicador:** ${report.interviewerId ? `<@${report.interviewerId}>` : 'não identificado'}`,
+      `**Ticket:** [abrir entrevista](${report.channelUrl})`,
+      `**Análise gerada:** <t:${Math.floor(report.generatedAt / 1000)}:F>`,
+      '',
+      `**Resultado sugerido:** ${summary.resultSuggestion}`,
+      `**Peso dos erros:** ${summary.errorWeight} • limite de reprovação: 7`,
+    ].join('\n'))
     .addFields(
       {
-        name: '📊 Correção',
+        name: '📋 Avaliação das respostas',
         value:
-          `🆗 Corretas: **${summary.correctCount}**\n` +
-          `👤 Pessoais: **${summary.personalCount}**\n` +
-          `❓ Incompletas: **${summary.incompleteCount}**\n` +
-          `❌ Erradas: **${summary.wrongCount}**\n` +
-          `🧐 Revisão humana: **${summary.reviewCount}**`,
-        inline: true,
+          `Corretas: **${summary.correctCount}** • Pessoais: **${summary.personalCount}**\n` +
+          `Incompletas: **${summary.incompleteCount}** • Erradas: **${summary.wrongCount}**\n` +
+          `Para revisão humana: **${summary.reviewCount}**`,
+        inline: false
       },
       {
-        name: '🤖 Sinais',
+        name: '🤖 Indício auxiliar de IA',
         value:
-          `IA: **${summary.aiSuspicionScore}/100**\n` +
-          `Copia/cola: **${summary.copyPasteSuspicionScore}/100**\n` +
-          `Confiança do parecer: **${summary.confidenceScore}/100**`,
-        inline: true,
+          `Índice heurístico: **${summary.aiSuspicionScore}/100**.\n` +
+          'Não é porcentagem de chance, prova de autoria nem motivo isolado de reprovação.',
+        inline: false
       },
       {
-        name: '🚨 Reprovação automática sugerida',
-        value: truncate(summary.automaticFailures.length
-          ? summary.automaticFailures.map((item) =>
-              `Q${item.question}: ${truncate(item.reason, 300)}`
-            ).join('\n')
-          : 'Nenhum motivo automático identificado.', 1024),
-        inline: false,
+        name: '📑 Coincidências com regras',
+        value: matches.length
+          ? `Trechos extensos localizados em: **${matches.map((item) => `Q${item.number}`).join(', ')}**. Confira as fontes nos detalhes.`
+          : 'Nenhuma correspondência extensa confirmada pelo comparador. Isso não comprova ausência de cópia ou de IA.',
+        inline: false
       },
       {
-        name: '🧠 Leitura geral',
-        value:
-          truncate(
-            summary.text ||
-            summary.styleAssessment ||
-            'Sem observação adicional.',
-            1000
-          ),
-        inline: false,
+        name: '⚠️ Motivos graves sugeridos',
+        value: truncate(
+          summary.automaticFailures.map((item) => `Q${item.question}: ${item.reason}`).join('\n') ||
+          'Nenhum motivo automático identificado.',
+          1024
+        ),
+        inline: false
+      },
+      {
+        name: '📝 Leitura do modelo — sujeita a revisão',
+        value: truncate(
+          summary.text ||
+          summary.styleAssessment ||
+          'Sem observação adicional.',
+          1000
+        ),
+        inline: false
+      },
+      {
+        name: '📌 Comando para copiar',
+        value: command.length
+          ? '```text\n!correcao ' + command.join(' ') + '\n```'
+          : 'Nenhuma questão marcada para correção.',
+        inline: false
       }
     )
     .setFooter({
-      text: `${FINAL_REPORT_MARKER} • decisão final humana`,
+      text: `${FINAL_REPORT_MARKER} • rubrica ${report.reviewPolicyVersion || 1} • decisão humana`
     })
     .setTimestamp(report.generatedAt);
 }
@@ -2803,23 +2843,90 @@ function statusIcon(status) {
   return '👤';
 }
 
+function interviewTimingText(telemetry = {}) {
+  const seconds = Number(telemetry.elapsedSeconds);
+  const time = telemetry.elapsedSeconds != null && Number.isFinite(seconds)
+    ? `${seconds.toLocaleString('pt-BR', { maximumFractionDigits: 1 })} segundos`
+    : 'não disponível';
+  const typing = telemetry.typingDataAvailable
+    ? `${Number(telemetry.typingEventCount) || 0} evento(s) observado(s)`
+    : 'não disponível nesta resposta';
+  return `Resposta recebida após: **${time}**\nDigitação: **${typing}**\n` +
+    'Tempo entre mensagens; não mede quanto tempo a pessoa realmente digitou.';
+}
+
+function interviewTimingText(telemetry = {}) {
+  const seconds = Number(telemetry.elapsedSeconds);
+  const time = telemetry.elapsedSeconds != null && Number.isFinite(seconds)
+    ? `${seconds.toLocaleString('pt-BR', { maximumFractionDigits: 1 })} segundos`
+    : 'não disponível';
+  const typing = telemetry.typingDataAvailable
+    ? `${Number(telemetry.typingEventCount) || 0} evento(s) observado(s)`
+    : 'não disponível nesta resposta';
+  return `Resposta recebida após: **${time}**\nDigitação: **${typing}**\n` +
+    'Tempo entre mensagens; não mede quanto tempo a pessoa realmente digitou.';
+}
+
 function buildQuestionDetailEmbeds(report) {
   return report.questions.map((item) => {
     const telemetry = item.telemetry || {};
     const rule = telemetry.ruleMatch || {};
-    return new EmbedBuilder()
-      .setTitle(`${statusIcon(item.status)} Q${item.number} • ${item.status.toUpperCase()}`)
-      .setColor(0x2B2D31)
-      .setDescription([
-        `**Pergunta:** ${truncate(item.question, 500)}`,
-        `**Resposta:** ${truncate(item.answer, 700)}`,
-        `**Motivo:** ${truncate(item.reason, 500)}`,
-        `**Ideia esperada:** ${truncate(item.expectedConcept, 500)}`,
-        `**IA:** ${item.aiSuspicionScore}/100 • **Cópia:** ${item.copyPasteSuspicionScore}/100`,
-        `**Tempo:** ${telemetry.elapsedSeconds ?? '?'}s • **Typing:** ${telemetry.typingEventCount ?? 0}`,
-        rule.matched ? `**Trecho coincidente:** ${truncate(rule.matchedPhrase, 400)}\n**Regra original:** ${rule.sourceUrl}` : '',
-        `**Resposta original:** ${channelUrl(report.guildId, report.channelId, item.answerMessageId)}`,
-      ].filter(Boolean).join('\n'));
+    const embed = new EmbedBuilder()
+      .setTitle(`${statusIcon(item.status)} QUESTÃO ${item.number} • ${item.status.toUpperCase()}`)
+      .setColor(item.status === 'correta' ? 0x57F287 : 0x5865F2)
+      .setDescription(
+        `**Candidato:** <@${report.candidate.id}>\n[Ticket](${report.channelUrl}) • ` +
+        `[Resposta original](${channelUrl(report.guildId, report.channelId, item.answerMessageId)})`
+      )
+      .addFields(
+        {
+          name: '❔ Pergunta',
+          value: truncate(item.question, 700),
+          inline: false
+        },
+        {
+          name: '💬 Resposta do candidato',
+          value: truncate(item.answer || 'Sem texto.', 1000),
+          inline: false
+        },
+        {
+          name: '📋 Por que recebeu essa avaliação',
+          value: truncate(item.reason || 'Revisão necessária.', 700),
+          inline: false
+        },
+        {
+          name: '💡 Conceito de referência',
+          value: truncate(item.expectedConcept || 'Não informado.', 700),
+          inline: false
+        },
+        {
+          name: '🤖 Indício auxiliar de IA',
+          value:
+            `**${item.aiSuspicionScore}/100** — índice heurístico, não probabilidade.\n` +
+            'Boa escrita, rapidez e ausência de digitação não provam uso de IA.',
+          inline: false
+        },
+        {
+          name: '⏱️ Tempo e digitação',
+          value: interviewTimingText(telemetry),
+          inline: false
+        },
+        {
+          name: '📑 Comparação com regras',
+          value: rule.matched
+            ? truncate(
+                `**Trecho coincidente:** ${rule.matchedPhrase}\n[Consultar regra original](${rule.sourceUrl})`,
+                900
+              )
+            : 'Nenhuma correspondência extensa confirmada pelo comparador.',
+          inline: false
+        }
+      )
+      .setFooter({
+        text: `Candidato ${report.candidate.id} • Q${item.number} • decisão humana`
+      })
+      .setTimestamp(report.generatedAt);
+    return embed;
   });
 }
 
@@ -2946,38 +3053,89 @@ async function persistFinalReport(client, report) {
 
 async function sendCompleteAnalysisDm(user, report, organizedMessage) {
   const issues = report.questions.filter((item) => ['errada', 'incompleta'].includes(item.status));
-  const command = issues.length ? `!correcao ${issues.map((item) => item.number).join(' ')}` : null;
-  const flagged = report.questions.filter((item) =>
-    item.aiSuspicionScore >= 35 || item.telemetry?.ruleMatch?.matched
-  ).sort((a, b) => b.aiSuspicionScore - a.aiSuspicionScore).slice(0, 5);
+  const wrong = issues
+    .filter((item) => item.status === 'errada')
+    .map((item) => `Q${item.number}`);
+  const incomplete = issues
+    .filter((item) => item.status === 'incompleta')
+    .map((item) => `Q${item.number}`);
+  const matches = report.questions.filter((item) => item.telemetry?.ruleMatch?.matched);
+  const flagged = report.questions
+    .filter((item) => item.aiSuspicionScore >= 35)
+    .sort((a, b) => b.aiSuspicionScore - a.aiSuspicionScore)
+    .slice(0, 3);
+
   const embed = new EmbedBuilder()
-    .setTitle('📬 Entrevista • revisão da equipe')
+    .setTitle('📬 Entrevista • resumo para a equipe')
     .setColor(0x5865F2)
+    .setThumbnail(report.candidate.avatarUrl)
     .setDescription([
-      `👤 <@${report.candidate.id}> • **${report.summary.resultSuggestion}**`,
-      `🧮 Erros: **${report.summary.errorWeight}/7**`,
-      `🤖 IA: **${report.summary.aiSuspicionScore}/100** • cópia: **${report.summary.copyPasteSuspicionScore}/100**`,
-      'Índices de suspeita; não são probabilidades nem prova de uso de IA.',
-      `[Análise completa e fontes](${organizedMessage.url})`,
+      `**Candidato:** <@${report.candidate.id}> • ID: ${report.candidate.id}`,
+      `**Usuário:** ${truncate(report.candidate.username, 100)}`,
+      `**Aplicador:** ${report.interviewerId ? `<@${report.interviewerId}>` : 'não identificado'}`,
+      `**Ticket:** [abrir](${report.channelUrl})`,
+      `**Data:** <t:${Math.floor(report.generatedAt / 1000)}:F>`,
+      '',
+      `**Parecer:** ${report.summary.resultSuggestion}`,
+      `**Peso dos erros:** ${report.summary.errorWeight} • limite: 7`,
     ].join('\n'))
     .addFields(
-      { name: 'Correção pronta', value: command ? `\`${command}\`` : 'Nenhuma questão para correção.' },
-      { name: 'Questões para corrigir', value: truncate(issues.map((item) =>
-        `Q${item.number} • ${item.status} • ${item.reason}`
-      ).join('\n') || 'Nenhuma.', 1024) },
-      { name: 'Sinais mais relevantes', value: truncate(flagged.map((item) =>
-        `Q${item.number} • IA ${item.aiSuspicionScore}/100` +
-        (item.telemetry?.ruleMatch?.matched
-          ? ` • [trecho da regra](${item.telemetry.ruleMatch.sourceUrl})` : '')
-      ).join('\n') || 'Nenhum sinal relevante.', 1024) }
-    );
-  // O botão no DM abre o relatório autorizado no servidor, onde a permissão é revalidada.
-  // Não executar ações de servidor diretamente em DM sem guild/member.
+      {
+        name: '❌ Erradas',
+        value: wrong.join(', ') || 'Nenhuma.',
+        inline: false
+      },
+      {
+        name: '❓ Incompletas',
+        value: incomplete.join(', ') || 'Nenhuma.',
+        inline: false
+      },
+      {
+        name: '🤖 Indício auxiliar de IA',
+        value:
+          `**${report.summary.aiSuspicionScore}/100** — não é porcentagem de chance.\n` +
+          (
+            flagged.map((item) => `Q${item.number}: ${item.aiSuspicionScore}/100`).join(' • ') ||
+            'Nenhuma questão alcançou o destaque configurado.'
+          ),
+        inline: false
+      },
+      {
+        name: '📑 Coincidências com regras',
+        value: matches.length
+          ? matches.map((item) => `Q${item.number}`).join(', ') +
+            ' — confira os trechos e fontes no relatório.'
+          : 'Nenhum trecho extenso confirmado pelo comparador.',
+        inline: false
+      },
+      {
+        name: '🔎 Revisão completa',
+        value: `[Perguntas, respostas, motivos e fontes](${organizedMessage.url})`,
+        inline: false
+      }
+    )
+    .setFooter({
+      text: 'Decisão final humana • o comando abaixo pode ser copiado'
+    })
+    .setTimestamp(report.generatedAt);
+
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setStyle(ButtonStyle.Link)
       .setLabel('Revisar e aplicar correção').setURL(organizedMessage.url)
   );
-  return user.send({ embeds: [embed], components: [row], allowedMentions: { parse: [] } });
+
+  const content = issues.length
+    ? '**Comando para copiar:**\n```text\n!correcao ' +
+      issues.map((item) => item.number).join(' ') +
+      '\n```'
+    : 'Nenhuma questão marcada para envio de correção.';
+
+  return user.send({
+    content,
+    embeds: [embed],
+    components: [row],
+    allowedMentions: { parse: [] }
+  });
 }
 
 function disableSpecificButtonRows(rows, customId) {
@@ -3282,6 +3440,137 @@ function buildCorrectionEmbeds(report) {
     );
 }
 
+async function refreshCorrectionReport(interaction, oldReport, channel, answers) {
+  const candidate = await interaction.guild.members.fetch(oldReport.candidate.id);
+  const knowledge = await buildHistoricalKnowledge(interaction.client);
+
+  if (
+    !knowledge.answerKey.trim() ||
+    /^Fonte \d+:/.test(knowledge.answerKey) ||
+    !knowledge.approvedMembers.trim() ||
+    /^Fonte \d+:/.test(knowledge.approvedMembers)
+  ) {
+    throw new Error(
+      'Não foi possível recuperar gabarito e entrevistas históricas para revisar o parecer.'
+    );
+  }
+
+  const deterministicSignals = calculateDeterministicSignals(answers, knowledge);
+
+  const modelResult = await callGeminiJson(buildAnalysisPrompt({
+    candidateId: candidate.id,
+    interviewerId: oldReport.interviewerId,
+    channel,
+    answers,
+    deterministicSignals,
+    knowledge,
+  }));
+
+  const fresh = await interaction.client.channels.fetch(channel.id, {
+    force: true
+  });
+
+  if (
+    String(fresh.parentId) !== INTERVIEW_CATEGORY_ID ||
+    parseOpenerId(fresh) !== String(candidate.id) ||
+    /\bentrevista_encerrando:1\b/.test(String(fresh.topic || '')) ||
+    (
+      getSession(channel.id, candidate.id) &&
+      !getSession(channel.id, candidate.id).finished
+    ) ||
+    (
+      isInterviewActive(fresh) &&
+      !(
+        getSession(channel.id, candidate.id)?.finished &&
+        getSession(channel.id, candidate.id).finishedAt <= oldReport.generatedAt
+      )
+    )
+  ) {
+    throw new Error(
+      'O ticket mudou de estado durante a revisão. Nenhuma correção foi enviada.'
+    );
+  }
+
+  const checked = await reconstructInterviewFromTicket(
+    interaction.client,
+    fresh,
+    candidate.id
+  );
+
+  if (
+    checked.length !== answers.length ||
+    checked.some((entry, index) =>
+      entry.answerMessageId !== answers[index].answerMessageId ||
+      entry.answer !== answers[index].answer
+    )
+  ) {
+    throw new Error(
+      'As respostas mudaram durante a revisão. Nenhuma correção foi enviada.'
+    );
+  }
+
+  const report = finalizeAnalysis({
+    modelResult,
+    answers,
+    deterministicSignals,
+    candidate,
+    interviewerId: oldReport.interviewerId,
+    channel: fresh
+  });
+
+  const { organizedMessage } = await persistFinalReport(
+    interaction.client,
+    report
+  );
+
+  await sendCompleteAnalysisDm(
+    interaction.user,
+    report,
+    organizedMessage
+  ).catch(() => {});
+
+  const history = await fetchMessagesPaginated(
+    fresh,
+    Number.POSITIVE_INFINITY
+  );
+
+  const header = history.find((message) =>
+    message.author?.id === interaction.client.user.id &&
+    message.embeds?.some((embed) =>
+      embed.fields?.some((field) =>
+        field.name === '🔎 Análise de entrevista:' &&
+        field.value.includes(interaction.message.url)
+      )
+    )
+  );
+
+  if (header) {
+    await updateTicketHeaderAnalysisLink(
+      { channel: fresh, message: header },
+      organizedMessage
+    ).catch((error) => {
+      console.warn(
+        '[INTERVIEW_INTELLIGENCE] Falha ao atualizar link do cabeçalho:',
+        error
+      );
+    });
+  }
+
+  await interaction.message.edit({
+    components: disableSpecificButtonRows(
+      interaction.message.components,
+      interaction.customId
+    )
+  });
+
+  return {
+    refreshed: true,
+    targetChannel: fresh,
+    report,
+    organizedMessage
+  };
+}
+
 async function applyCorrection(interaction) {
   const [, channelId, candidateId] =
     String(interaction.customId).split('|');
@@ -3313,18 +3602,71 @@ async function applyCorrection(interaction) {
     );
   }
 
-  if (String(targetChannel.guildId) !== String(interaction.guildId) ||
-      String(targetChannel.parentId) !== INTERVIEW_CATEGORY_ID ||
-      parseOpenerId(targetChannel) !== String(candidateId) ||
-      isInterviewActive(targetChannel) ||
-      /\bentrevista_encerrando:1\b/.test(String(targetChannel.topic || ''))) {
-    throw new Error('Ticket fechado, movido, em entrevista ou candidato divergente. Correção bloqueada.');
+  if (
+    String(targetChannel.guildId) !== String(report.guildId) ||
+    String(targetChannel.guildId) !== String(interaction.guildId)
+  ) {
+    throw new Error(
+      `Servidor divergente: ticket=${targetChannel.guildId}; relatório=${report.guildId}; clique=${interaction.guildId}.`
+    );
+  }
+
+  if (String(targetChannel.parentId) !== INTERVIEW_CATEGORY_ID) {
+    throw new Error(
+      `O ticket está na categoria ${targetChannel.parentId || 'sem categoria'}, mas a correção exige ${INTERVIEW_CATEGORY_ID}. Ticket: ${channelId}.`
+    );
+  }
+
+  const currentCandidateId = parseOpenerId(targetChannel);
+
+  if (!currentCandidateId) {
+    throw new Error(
+      `O tópico do ticket ${channelId} não contém aberto_por:ID válido. Relatório do candidato ${candidateId}.`
+    );
+  }
+
+  if (currentCandidateId !== String(candidateId)) {
+    throw new Error(
+      `Candidato divergente: tópico=${currentCandidateId}; relatório=${candidateId}.`
+    );
+  }
+
+  if (/\bentrevista_encerrando:1\b/.test(String(targetChannel.topic || ''))) {
+    throw new Error(
+      `O ticket ${channelId} está marcado como em encerramento.`
+    );
+  }
+
+  const liveSession = getSession(channelId, candidateId);
+
+  if (liveSession && !liveSession.finished) {
+    throw new Error(
+      'Existe uma entrevista em andamento neste ticket. Termine-a antes de aplicar a correção.'
+    );
+  }
+
+  if (
+    isInterviewActive(targetChannel) &&
+    !(liveSession?.finished && liveSession.finishedAt <= report.generatedAt)
+  ) {
+    throw new Error(
+      `O tópico do ticket ${channelId} contém entrevista_ativa:1 e não há conclusão confirmada nesta execução do bot. A trava foi preservada para não interromper uma entrevista.`
+    );
   }
   const currentAnswers = await reconstructInterviewFromTicket(interaction.client, targetChannel, candidateId);
   if (currentAnswers.length !== report.questions.length || currentAnswers.some((item, index) =>
     String(item.answerMessageId) !== String(report.questions[index].answerMessageId) ||
     String(item.answer) !== String(report.questions[index].answer)
   )) throw new Error('As respostas mudaram após o parecer. Revise uma análise atualizada.');
+
+  if (report.reviewPolicyVersion !== 2) {
+    return refreshCorrectionReport(
+      interaction,
+      report,
+      targetChannel,
+      currentAnswers
+    );
+  }
 
   const embeds = buildCorrectionEmbeds(report);
 
@@ -3468,6 +3810,16 @@ export async function handleInterviewIntelligenceInteraction(
     CORRECTION_LOCKS.add(lockKey);
     try {
       const result = await applyCorrection(interaction);
+
+      if (result.refreshed) {
+        await interaction.editReply({
+          content:
+            `📋 Parecer atualizado com a nova rubrica: ${result.organizedMessage.url}\n` +
+            'Nenhuma correção foi enviada ao candidato. Revise o novo parecer e use o botão dele para aplicar.',
+          allowedMentions: { parse: [] },
+        });
+        return true;
+      }
 
       await interaction.editReply({
         content:
