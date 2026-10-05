@@ -256,18 +256,15 @@ const MEMBER_FONT_CATEGORY_IDS = new Set([
   // Fallback: pega primeiro overwrite Member com ViewChannel allow
   function getOpenerIdFromOverwrites(channel) {
     const pov = channel.permissionOverwrites?.cache;
-    if (!pov) return null;
-
-    const memberOverwrites = pov.filter(ow =>
-      ow.type === OverwriteType.Member &&
-      ow.allow.has(PermissionsBitField.Flags.ViewChannel)
-    );
-
-    // prioriza quem também tem SendMessages allow
-    const cand = memberOverwrites.find(ow => ow.allow.has(PermissionsBitField.Flags.SendMessages));
-    if (cand) return cand.id;
-
-    const first = memberOverwrites.first();
+ if (!pov) return null;
+ const memberOverwrites = pov.filter(ow =>
+ow.type === OverwriteType.Member &&
+ow.allow.has(PermissionsBitField.Flags.ViewChannel)
+ );
+ // prioriza quem também tem SendMessages allow
+ const cand = memberOverwrites.find(ow => ow.allow.has(PermissionsBitField.Flags.SendMessages));
+ if (cand) return cand.id;
+ const first = memberOverwrites.first();
     return first?.id ?? null;
   }
 

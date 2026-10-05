@@ -9,11 +9,19 @@ import {
 } from 'discord.js';
 
 import { dashEmit } from './dashHub.js';
+
 import {
-  iaInterviewEvaluateFinishedInterview,
   iaInterviewMarkInterviewFinished,
   iaInterviewPauseForManualInterview
 } from '../events/iaChatAuto.js';
+
+import {
+ recordInterviewQuestion,
+ recordInterviewAnswer,
+  finishInterviewIntelligence,
+  abortInterviewIntelligence
+} from '../events/interviewIntelligence.js';
+// ===== CONFIG =====
 
 // ===== CONFIG =====
 const ENTREVISTA_DURACAO_MIN = 180;
@@ -151,33 +159,30 @@ Como o comprometimento diário (registro, bate ponto e organização) influencia
 
   'Se um dia você decidir sair do projeto (painel da SantaCreators), como você comunicaria sua saída da forma certa e respeitosa?'
 ];
-
-
 // ===== BACKUP =====
-async function salvarEntrevistasEmDisco() {
-  try {
-    const dados = {};
-    entrevistas.forEach((v, id) => {
-      dados[id] = {
-        respostas: v.respostas || [],
-        index: v.index || 0,
-        timeoutEnd: v.timeoutEnd,
-        mensagens: v.mensagens || [],
-        entrevistadorId: v.entrevistadorId || null,
-        channelId: v.channelId || null
-      };
-    });
+let entrevistaSaveQueue = Promise.resolve();
 
-    // garante pasta storage
-    const dir = path.dirname(ENTREVISTAS_PATH);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-
-    await fs.promises.writeFile(ENTREVISTAS_PATH, JSON.stringify(dados, null, 2), 'utf8');
-  } catch (e) {
-    console.warn('Falha ao salvar entrevistas:', e);
+function salvarEntrevistasEmDisco() {
+  const snapshot = {};
+  for (const [id, state] of entrevistas) {
+    snapshot[id] = {
+      respostas: state.respostas || [], index: state.index || 0,
+      timeoutEnd: state.timeoutEnd, mensagens: state.mensagens || [],
+      entrevistadorId: state.entrevistadorId || null, channelId: state.channelId || null,
+    };
   }
+  const payload = JSON.stringify(snapshot, null, 2);
+  const write = entrevistaSaveQueue.then(async () => {
+    await fs.promises.mkdir(path.dirname(ENTREVISTAS_PATH), { recursive: true });
+    const temp = `${ENTREVISTAS_PATH}.tmp`;
+    await fs.promises.writeFile(temp, payload, 'utf8');
+    await fs.promises.rename(temp, ENTREVISTAS_PATH);
+  });
+  entrevistaSaveQueue = write.catch((error) => {
+    console.error('[Entrevista] Falha ao salvar backup:', error);
+  });
+  return write;
 }
-
 function carregarEntrevistasDoDisco() {
   try {
     let arquivoLeitura = ENTREVISTAS_PATH;
@@ -265,13 +270,15 @@ process.on('exit', () => {
     const dir = path.dirname(ENTREVISTAS_PATH);
 
     if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-
-    const dados = Object.fromEntries(entrevistas);
-
-    fs.writeFileSync(
-      ENTREVISTAS_PATH,
+  fs.mkdirSync(dir, { recursive: true });
+}
+    const dados = Object.fromEntries([...entrevistas].map(([id, state]) => [id, {
+      respostas: state.respostas || [], index: state.index || 0,
+      timeoutEnd: state.timeoutEnd, mensagens: state.mensagens || [],
+      entrevistadorId: state.entrevistadorId || null, channelId: state.channelId || null,
+    }]));
+ fs.writeFileSync(
+ENTREVISTAS_PATH,
       JSON.stringify(dados, null, 2),
       'utf8'
     );
@@ -337,11 +344,27 @@ async function logCompleto(client, data) {
 
   await canal.send({ embeds: [emb], components: data.components || [] }).catch(() => {});
 }
-
 // ===== REANEXAR =====
+const interviewLifecycleClients = new WeakSet();
+function installInterviewLifecycle(client) {
+  if (interviewLifecycleClients.has(client)) return;
+  interviewLifecycleClients.add(client);
+  const stop = (channel) => {
+    if (![...entrevistas.values()].some((state) => String(state.channelId) === String(channel.id))) return;
+    void resetInterviewChannelState(channel, 'canal apagado/movido').catch(console.error);
+    void abortInterviewIntelligence({ client, channel, candidateId: null,
+      reason: 'canal apagado/movido antes do fim' }).catch(console.error);
+  };
+  client.on('channelDelete', stop);
+  client.on('channelUpdate', (oldChannel, newChannel) => {
+    if (String(oldChannel.parentId) === '1359244725781266492' &&
+        String(newChannel.parentId) !== '1359244725781266492') stop(newChannel);
+  });
+}
 async function reanexar(client) {
-  if (entrevistas.size === 0) {
-    console.log('[Entrevista] Nenhuma entrevista pendente para reanexar.');
+  installInterviewLifecycle(client);
+ if (entrevistas.size === 0) {
+ console.log('[Entrevista] Nenhuma entrevista pendente para reanexar.');
     return;
   }
   console.log(`[Entrevista] Verificando ${entrevistas.size} entrevista(s) para reanexar...`);
@@ -359,12 +382,13 @@ async function reanexar(client) {
       if (entrevistasAtivas.has(dados.channelId)) {
         console.log(`[Entrevista] Pulando reanexação para o canal ${dados.channelId} pois já está ativo no processo atual.`);
         continue;
-      }
-
-      const channel = await client.channels.fetch(dados.channelId).catch(() => null);
-      if (!channel || !channel.isTextBased?.()) {
-        entrevistas.delete(userId);
-        await salvarEntrevistasEmDisco();
+ }
+ const channel = await client.channels.fetch(dados.channelId).catch(() => null);
+      if (!channel || !channel.isTextBased?.() ||
+          String(channel.parentId) !== '1359244725781266492' ||
+          /\bentrevista_encerrando:1\b/.test(String(channel.topic || ''))) {
+ entrevistas.delete(userId);
+ await salvarEntrevistasEmDisco();
         continue;
       }
 
@@ -376,28 +400,56 @@ async function reanexar(client) {
       }
 
       entrevistasAtivas.add(channel.id);
-      const globalTimer = await iniciarContadorGlobal(channel, userId, restante);
-      dados.globalTimer = globalTimer;
-      entrevistas.set(userId, dados);
+
+      const globalTimer =
+        await iniciarContadorGlobal(
+          channel,
+          userId,
+          restante
+        );
+
+      dados.globalTimer =
+        globalTimer;
+
+      entrevistas.set(
+        userId,
+        dados
+      );
+
       await salvarEntrevistasEmDisco();
 
-      // ✅ APAGA A MENSAGEM DA PERGUNTA ANTERIOR PARA EVITAR DUPLICIDADE
-      if (dados.mensagens && dados.mensagens.length > 0) {
-        const lastMsgId = dados.mensagens.pop(); // Pega e remove o último ID do array
-        if (lastMsgId) {
-          try {
-            const oldMsg = await channel.messages.fetch(lastMsgId);
-            await oldMsg.delete();
-            console.log(`[Entrevista] Mensagem de pergunta anterior (${lastMsgId}) apagada com sucesso.`);
-          } catch (e) {
-            // Ignora se a msg não existir mais, o que é normal.
-            // console.log(`[Entrevista] Não foi possível apagar a msg ${lastMsgId}, talvez já tenha sido deletada.`);
-          }
-        }
-      }
+      await startInterviewIntelligence({
+        client,
 
-          console.log(
-        `[Entrevista] Reanexando entrevista para ${membro.user.tag} ` +
+        channel,
+
+        candidate:
+          membro,
+
+        interviewerId:
+          getAplicadorIdFromChannel(channel) ||
+          dados.entrevistadorId ||
+          null,
+
+        questions:
+          perguntas,
+
+        resume:
+          true,
+
+        answeredCount:
+          dados.index || 0
+
+      }).catch((error) => {
+        console.warn(
+          '[INTERVIEW_INTELLIGENCE] Falha não crítica ao reanexar telemetria:',
+          error?.message || error
+);
+ });
+      // Preserva perguntas e respostas para reconstrução e auditoria.
+      // enviarPergunta reutiliza a pergunta pendente quando possível.
+ console.log(
+ `[Entrevista] Reanexando entrevista para ${membro.user.tag} ` +
         `no canal #${channel.name}. Próxima pergunta: ${dados.index + 1}`
       );
 
@@ -574,11 +626,11 @@ function canInterviewPointCount(channel, aplicadorId) {
 }
 
 function withTimeout(promise, ms, label = "operação") {
-  return Promise.race([
-    Promise.resolve(promise),
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error(`${label} demorou mais de ${ms}ms`)), ms)
-    )
+ return Promise.race([
+ Promise.resolve(promise),
+ new Promise((_, reject) =>
+ setTimeout(() => reject(new Error(`${label} demorou mais de ${ms}ms`)), ms)
+)
   ]);
 }
 
@@ -714,43 +766,46 @@ const enviada = await interaction.channel.send({
 
 // ENVIAR (inicia as perguntas)
 if (customId.startsWith('enviar|')) {
+  installInterviewLifecycle(interaction.client);
   const [, targetId] = customId.split('|');
-  const lockKey = String(channel.id);
-
-  await interaction.deferUpdate().catch(() => {});
+ const lockKey = String(channel.id);
+ await interaction.deferUpdate().catch(() => {});
 
   if (entrevistasStartLocks.has(lockKey)) {
     await channel.send("⚠️ Já tem uma tentativa de iniciar entrevista em andamento. Aguarde alguns segundos e tente novamente.").catch(() => {});
+ return true;
+ }
+  entrevistasStartLocks.add(lockKey);
+  const existing = entrevistas.get(targetId);
+  if (existing && !existing.cancelled && String(existing.channelId) === String(channel.id)) {
+    entrevistasStartLocks.delete(lockKey);
     return true;
   }
+console.log("[ENTREVISTA DEBUG] Clique recebido no botão ENVIAR:", customId, "Canal:", channel.id);
 
-  entrevistasStartLocks.add(lockKey);
+let buttonRemoved = false;
+const originalButtonComponents = interaction.message.components;
 
-  console.log("[ENTREVISTA DEBUG] Clique recebido no botão ENVIAR:", customId, "Canal:", channel.id);
+try {
+  const membro = await withTimeout(
+    channel.guild.members.fetch(targetId),
+    8000,
+    "buscar candidato"
+  ).catch(() => null);
 
-  let buttonRemoved = false;
+   if (!membro) {
+    throw new Error(`Candidato ${targetId} não encontrado no servidor.`);
+  }
 
-  try {
-    const membro = await withTimeout(
-      channel.guild.members.fetch(targetId),
-      8000,
-      "buscar candidato"
-    ).catch(() => null);
+  await interaction.message.edit({ components: [] }).then(() => {
+    buttonRemoved = true;
+  }).catch(() => {});
 
-    if (!membro) {
-      throw new Error(`Candidato ${targetId} não encontrado no servidor.`);
+  for (const [userId, dados] of entrevistas.entries()) {
+    if (String(dados?.channelId || "") === String(channel.id)) {
+      entrevistas.delete(userId);
     }
-
-    await interaction.message.edit({ components: [] }).then(() => {
-      buttonRemoved = true;
-    }).catch(() => {});
-
-    for (const [userId, dados] of entrevistas.entries()) {
-      if (String(dados?.channelId || "") === String(channel.id)) {
-        entrevistas.delete(userId);
-      }
-    }
-
+  }
     entrevistasAtivas.delete(channel.id);
 
     const topicId = getAplicadorIdFromChannel(channel);
@@ -769,9 +824,20 @@ if (customId.startsWith('enviar|')) {
     };
 
     entrevistas.set(targetId, dadosBase);
-    entrevistasAtivas.add(channel.id);
-
-    console.log("[ENTREVISTA DEBUG] Estado criado. targetId:", targetId, "membro.id:", membro.id);
+entrevistasAtivas.add(channel.id);
+ console.log("[ENTREVISTA DEBUG] Estado criado. targetId:", targetId, "membro.id:", membro.id);
+    void startInterviewIntelligence({
+      client: channel.client,
+ channel,
+candidate: membro,
+      interviewerId: entrevistadorId,
+      questions: perguntas
+    }).catch((error) => {
+      console.error(
+        "[INTERVIEW_INTELLIGENCE] Falha não crítica ao iniciar rastreio:",
+        error
+      );
+    });
 
     iaInterviewPauseForManualInterview(channel, targetId, entrevistadorId);
 
@@ -830,28 +896,28 @@ Promise.allSettled([
 
     return true;
   } catch (e) {
-    entrevistasAtivas.delete(channel.id);
-    entrevistas.delete(targetId);
+  entrevistasAtivas.delete(channel.id);
+  entrevistas.delete(targetId);
 
-    await setInterviewActiveTopic(channel, false).catch(() => {});
-    await salvarEntrevistasEmDisco().catch(() => {});
+  await setInterviewActiveTopic(channel, false).catch(() => {});
+  await salvarEntrevistasEmDisco().catch(() => {});
 
-    console.error("[Entrevista] Falha ao iniciar entrevista:", e);
+  console.error("[Entrevista] Falha ao iniciar entrevista:", e);
 
-    await channel.send(
-      `❌ Não consegui iniciar a entrevista.\n\n**Erro:** \`${String(e?.message || e).slice(0, 800)}\``
-    ).catch(() => {});
+  await channel.send(
+    `❌ Não consegui iniciar a entrevista.\n\n**Erro:** \`${String(e?.message || e).slice(0, 800)}\``
+  ).catch(() => {});
 
-    if (!buttonRemoved) {
-      await interaction.message.edit({
-        components: interaction.message.components
-      }).catch(() => {});
-    }
-
-    return true;
-  } finally {
-    entrevistasStartLocks.delete(lockKey);
+  if (buttonRemoved) {
+    await interaction.message.edit({
+      components: originalButtonComponents
+    }).catch(() => {});
   }
+
+  return true;
+} finally {
+  entrevistasStartLocks.delete(lockKey);
+}
 }
 
 
@@ -862,25 +928,30 @@ Promise.allSettled([
 
 // ===== ENVIAR PERGUNTA =====
 async function enviarPergunta(channel, membro, index) {
-  const dados = entrevistas.get(membro.id);
-
-  if (!dados) {
-    throw new Error(`Estado da entrevista não encontrado para ${membro?.id} no canal ${channel?.id}.`);
-  }
-
+   const dados = entrevistas.get(membro.id);
+  if (!dados || dados.cancelled || String(dados.channelId) !== String(channel.id) ||
+      dados.index !== index || dados.collector) return;
   if (index >= perguntas.length) {
+  if (dados.finishing || dados.respostas.length !== perguntas.length) return;
 
-    if (dados.globalTimer?.timeout) clearTimeout(dados.globalTimer.timeout);
+  dados.finishing = true;
 
-    // ✅ Validação estrita: O aplicador deve ser quem está registrado no tópico do canal
-    const aplicadorId = getAplicadorIdFromChannel(channel);
-    
-    // Se o aplicador mudou ou não é o mesmo que iniciou, tratamos com cautela
-    const isStarter = aplicadorId === dados.entrevistadorId;
+  if (dados.globalTimer?.timeout) clearTimeout(dados.globalTimer.timeout);
 
-    const categoryId = String(channel.parentId || "");
-    const canCountPoint = canInterviewPointCount(channel, aplicadorId);
+  // ✅ Aplicador registrado quando !perguntas foi executado
+  const aplicadorId = getAplicadorIdFromChannel(channel);
 
+  // ✅ Pessoa que realmente clicou em "Iniciar Entrevista"
+  const starterId = getStarterIdFromChannel(channel);
+
+  // ✅ Só considera o mesmo condutor quando os dois IDs existem e são iguais
+  const isStarter =
+    Boolean(aplicadorId) &&
+    Boolean(starterId) &&
+    aplicadorId === starterId;
+
+  const categoryId = String(channel.parentId || "");
+  const canCountPoint = canInterviewPointCount(channel, aplicadorId);
 const quemAtendeu = aplicadorId ? `<@${aplicadorId}>` : 'nossa equipe';
 
 const fim = await channel.send(
@@ -889,6 +960,17 @@ const fim = await channel.send(
   `**Agradecemos pela paciência e interesse em fazer parte do projeto!**\n\n` +
   `EQUIPE - <@&1352275728476930099>`
 );
+
+await finishInterviewIntelligence({
+  client: channel.client,
+  channel,
+  candidateId: membro.id
+}).catch((error) => {
+  console.error(
+    "[INTERVIEW_INTELLIGENCE] Falha não crítica ao finalizar rastreio:",
+    error
+  );
+});
 
 entrevistas.delete(membro.id);
 entrevistasAtivas.delete(channel.id);
@@ -905,7 +987,7 @@ try {
     const alertMsg = `✅ **ENTREVISTA FINALIZADA!**\n\n` +
       `📍 **Canal:** ${channel}\n` +
       `👤 **Candidato:** <@${membro.id}>\n` +
-      `👉 **Ação:** Usem \`!correcao\` para corrigir as respostas!`;
+      `👉 **Ação:** usem o botão **🔎 Analisar Entrevista** no topo do ticket. O \`!correcao\` continua disponível manualmente.`;
 
     await channel.guild.members.fetch().catch(() => {});
     const notifiedIds = new Set();
@@ -923,26 +1005,25 @@ try {
       }
     }
 
-   const starterId = getStarterIdFromChannel(channel);
-const entrevistaFoiConduzida = !!starterId;
+   const entrevistaFoiConduzida = !!starterId;
 
 // 📝 LOG DE FINALIZAÇÃO + PONTO
 const logChannel = await channel.client.channels.fetch(LOG_CHANNEL_ID_NOVO).catch(() => null);
 if (logChannel) {
   const logEmbed = new EmbedBuilder()
-    .setTitle('🏁 Entrevista Finalizada')
-    .setColor('#0000ff')
-    .setDescription(`O candidato terminou de responder todas as 30 perguntas.`)
-    .addFields(
-      { name: '👤 Candidato', value: `<@${membro.id}>`, inline: true },
-      { name: '🏆 Aplicador (!perguntas)', value: aplicadorId ? `<@${aplicadorId}>` : 'Não identificado', inline: true },
-      { name: '🎤 Quem conduziu (starter)', value: starterId ? `<@${starterId}>` : 'Ninguém iniciou', inline: true },
-      { name: '📂 Categoria', value: categoryId ? `\`${categoryId}\`` : 'Sem categoria', inline: true },
-      { name: '✅ Pontua?', value: (canCountPoint && entrevistaFoiConduzida) ? 'Sim' : 'Não', inline: true },
-      { name: '📍 Canal', value: `${channel}`, inline: true },
-      { name: '🕒 Horário', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false }
-    )
-    .setTimestamp();
+  .setTitle('🏁 Entrevista Finalizada')
+  .setColor('#0000ff')
+  .setDescription(`O candidato terminou de responder todas as 30 perguntas.`)
+  .addFields(
+    { name: '👤 Candidato', value: `<@${membro.id}>`, inline: true },
+    { name: '🏆 Aplicador (!perguntas)', value: aplicadorId ? `<@${aplicadorId}>` : 'Não identificado', inline: true },
+    { name: '🎤 Quem conduziu (starter)', value: starterId ? `<@${starterId}>` : 'Ninguém iniciou', inline: true },
+    { name: '📂 Categoria', value: categoryId ? `\`${categoryId}\`` : 'Sem categoria', inline: true },
+    { name: '✅ Pontua?', value: (canCountPoint && entrevistaFoiConduzida && isStarter) ? 'Sim' : 'Não', inline: true },
+    { name: '📍 Canal', value: `${channel}`, inline: true },
+    { name: '🕒 Horário', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false }
+  )
+  .setTimestamp();
 
   await logChannel.send({ embeds: [logEmbed] }).catch(() => {});
 }
@@ -1009,82 +1090,130 @@ await enviarLogFinalEntrevista(membro, {
 });
 
 return;
+  }
+  if (Date.now() >= dados.timeoutEnd) {
+    await resetInterviewChannelState(channel, 'tempo esgotado');
+    return;
   }
-
   const endUnix = Math.floor(dados.timeoutEnd / 1000);
   const perguntaBase = `**${index + 1}.** <@${membro.id}> ${perguntas[index]}`;
-
-  const perguntaMsg = await channel.send({
-    content: `${perguntaBase}\n\n> ⏰ **Atenção!** Você tem até <t:${endUnix}:R> pra concluir a entrevista inteira.`,
-    allowedMentions: { users: [membro.id] }
+  let perguntaMsg = null;
+  const lastId = dados.mensagens.at(-1);
+  if (lastId) {
+    const old = await channel.messages.fetch(lastId).catch(() => null);
+    if (old?.author?.id === channel.client.user.id && old.content.startsWith(`**${index + 1}.**`)) perguntaMsg = old;
+  }
+  const collected = new Map();
+  // O coletor é instalado ANTES de enviar a pergunta/esperar logs e backup.
+  const collector = channel.createMessageCollector({
+    filter: (message) => message.author.id === membro.id && !message.author.bot &&
+      Boolean(message.content.trim()) && !/^!/.test(message.content),
+    time: Math.max(1, dados.timeoutEnd - Date.now()),
   });
-
-  dados.mensagens.push(perguntaMsg.id);
-  entrevistas.set(membro.id, dados);
-  // Salva o estado após adicionar a mensagem da pergunta, para garantir consistência.
-  await salvarEntrevistasEmDisco();
-
-  try {
-    const tempoRestanteMs = dados.timeoutEnd - Date.now();
-    if (tempoRestanteMs <= 0) throw new Error('tempo');
-
-    const coletor = await channel.awaitMessages({
-      filter: m => m.author.id === membro.id,
-      max: 1,
-      time: tempoRestanteMs,
-      errors: ['time']
+  dados.collector = collector;
+  const ended = new Promise((resolve) => {
+    collector.on('collect', (message) => {
+      collected.set(message.id, message);
+      if (perguntaMsg && BigInt(message.id) > BigInt(perguntaMsg.id)) collector.stop('respondida');
     });
-
-    const msgResp = coletor.first();
-    await msgResp.react('✅').catch(() => {});
-
-    dados.respostas.push(msgResp.content);
-    dados.index = index + 1;
-
-    entrevistas.set(membro.id, dados);
-    salvarEntrevistasEmDisco(); // Tira o await
-
-    setTimeout(() => {
-  enviarPergunta(channel, membro, dados.index).catch((err) => {
-    console.error("[Entrevista] Falha ao avançar/finalizar entrevista:", err);
-    channel.send(
-      `❌ A entrevista chegou ao fim, mas travou ao finalizar.\n\n**Erro:** \`${String(err?.message || err).slice(0, 800)}\``
-    ).catch(() => {});
+    collector.once('end', (_, reason) => resolve(reason));
   });
-}, 300); // Reduz de 700 para 300ms
-
-  } catch (e) {
-    entrevistas.delete(membro.id);
-    entrevistasAtivas.delete(channel.id);
-    await setInterviewActiveTopic(channel, false);
+  try {
+    if (!perguntaMsg) {
+      perguntaMsg = await channel.send({
+        content: `${perguntaBase}\n\n> ⏰ **Atenção!** Você tem até <t:${endUnix}:R> pra concluir a entrevista inteira.`,
+        allowedMentions: { users: [membro.id], parse: [] },
+      });
+      dados.mensagens.push(perguntaMsg.id);
+    }
+    if (entrevistas.get(membro.id) !== dados || dados.cancelled) {
+      collector.stop('ticket_encerrado');
+      return;
+    }
+    void recordInterviewQuestion({ client: channel.client, channel, candidateId: membro.id,
+      index, question: perguntas[index], questionMessage: perguntaMsg }).catch(console.error);
+    // Inclui resposta enviada enquanto o bot estava desligado.
+    let after = perguntaMsg.id;
+    for (let page = 0; page < 5; page += 1) {
+      const batch = await channel.messages.fetch({ limit: 100, after, cache: false });
+      const ordered = [...batch.values()].sort((a, b) => BigInt(a.id) < BigInt(b.id) ? -1 : 1);
+      for (const message of ordered) {
+        if (message.author.id === membro.id && !message.author.bot &&
+            message.content.trim() && !/^!/.test(message.content)) collected.set(message.id, message);
+      }
+      const next = ordered.at(-1)?.id;
+      if (!next || next === after || batch.size < 100) break;
+      after = next;
+    }
+    const firstAnswer = () => [...collected.values()].filter((message) =>
+      BigInt(message.id) > BigInt(perguntaMsg.id) && message.createdTimestamp <= dados.timeoutEnd
+    ).sort((a, b) => BigInt(a.id) < BigInt(b.id) ? -1 : 1)[0];
+    if (firstAnswer()) collector.stop('respondida');
     await salvarEntrevistasEmDisco();
-
-    await channel.send(`⏰ <@${membro.id}>, entrevista cancelada por inatividade (passou de ${ENTREVISTA_DURACAO_MIN} min).`);
+    const reason = await ended;
+    if (entrevistas.get(membro.id) !== dados || dados.cancelled) return;
+    if (reason === 'time') {
+      await resetInterviewChannelState(channel, 'tempo esgotado');
+      await channel.send(`⏰ <@${membro.id}>, tempo da entrevista esgotado.`).catch(() => {});
+      return;
+    }
+    const msgResp = firstAnswer();
+    if (!msgResp) return;
+    dados.collector = null;
+    dados.respostas[index] = msgResp.content;
+    dados.index = index + 1;
+    await salvarEntrevistasEmDisco();
+    void msgResp.react('✅').catch(() => {});
+    void recordInterviewAnswer({ client: channel.client, channel, candidateId: membro.id,
+      index, question: perguntas[index], questionMessage: perguntaMsg, answerMessage: msgResp }).catch(console.error);
+    const nextIndex = dados.index;
+    setTimeout(() => {
+      if (entrevistas.get(membro.id) !== dados || dados.cancelled || dados.index !== nextIndex) return;
+      void enviarPergunta(channel, membro, nextIndex).catch((error) => {
+        console.error(`[Entrevista] Falha real ao avançar Q${nextIndex + 1}:`, error);
+      });
+    }, 300);
+  } catch (error) {
+    collector.stop('erro_operacional');
+    console.error(`[Entrevista] Falha operacional em Q${index + 1}:`, error);
+    // Preserva respostas/backup; uma falha HTTP não é inatividade do candidato.
+    dados.retryCounts ||= {};
+    const attempts = (dados.retryCounts[index] || 0) + 1;
+    dados.retryCounts[index] = attempts;
+    if (attempts <= 3 && entrevistas.get(membro.id) === dados && !dados.cancelled) {
+      setTimeout(() => {
+        if (entrevistas.get(membro.id) !== dados || dados.cancelled || dados.index !== index) return;
+        void enviarPergunta(channel, membro, index).catch(console.error);
+      }, attempts * 2000);
+    } else {
+      entrevistasAtivas.delete(channel.id);
+      void channel.client.channels.fetch('1556491332254695586').then((log) => log?.send({
+        content: `⚠️ Entrevista pausada por falha operacional persistente. Ticket: <#${channel.id}> • candidato: <@${membro.id}> • Q${index + 1}. Respostas preservadas para retomada.`,
+        allowedMentions: { parse: [] },
+      })).catch(console.error);
+    }
+  } finally {
+    if (dados.collector === collector) dados.collector = null;
   }
 }
-
 // ===== TIMER GLOBAL =====
 async function iniciarContadorGlobal(channel, membroId, remainingMs = ENTREVISTA_DURACAO_MS) {
-  const endAt = Date.now() + remainingMs;
-  const endUnix = Math.floor(endAt / 1000);
-
+  const state = entrevistas.get(membroId);
+  if (!state) return null;
+  const endUnix = Math.floor(state.timeoutEnd / 1000);
   const msg = await channel.send(`🕒 **Entrevista encerra** <t:${endUnix}:R> (até <t:${endUnix}:t>).`);
-
-  const timeout = setTimeout(async () => {
-    if (!entrevistas.has(membroId)) return;
-
-    entrevistas.delete(membroId);
-    entrevistasAtivas.delete(channel.id);
-    await setInterviewActiveTopic(channel, false);
-    await salvarEntrevistasEmDisco();
-
-    await msg.edit('⛔ **Tempo esgotado!** Entrevista cancelada.').catch(() => {});
-    await channel.send(`❌ <@${membroId}>, tempo total acabou (${ENTREVISTA_DURACAO_MIN} min).`).catch(() => {});
-  }, remainingMs);
-
+  const timeout = setTimeout(() => {
+    if (entrevistas.get(membroId) !== state || state.finishing || state.cancelled) return;
+    void (async () => {
+      await resetInterviewChannelState(channel, 'tempo total esgotado');
+      await abortInterviewIntelligence({ client: channel.client, channel, candidateId: membroId,
+        reason: 'tempo total esgotado' });
+      await msg.edit('⛔ **Tempo esgotado!** Entrevista cancelada.').catch(() => {});
+      await channel.send(`❌ <@${membroId}>, tempo total acabou (${ENTREVISTA_DURACAO_MIN} min).`).catch(() => {});
+    })().catch(console.error);
+  }, Math.max(1, state.timeoutEnd - Date.now()));
   return { timeout, endUnix, messageId: msg.id };
 }
-
 // ===== LOG FINAL (avaliação + botões) =====
 async function enviarLogFinalEntrevista(member, dados) {
   const canalAvaliacao = await member.client.channels.fetch(CANAL_AVALIACAO_ENTREVISTA).catch((err) => {
@@ -1156,30 +1285,11 @@ async function enviarLogFinalEntrevista(member, dados) {
     components: [row]
   });
 
-  const parecerIa = await iaInterviewEvaluateFinishedInterview(member.guild.client, {
-    guild: member.guild,
-    channel: dados.channelId
-      ? await member.guild.client.channels.fetch(dados.channelId).catch(() => null)
-      : null,
-    candidateId: member.id,
-    entrevistadorId,
-    perguntas,
-    respostas,
-  }).catch((err) => {
-    console.error('[IA ENTREVISTA] Falha ao gerar parecer automático:', err);
-    return null;
-  });
-
-  if (parecerIa) {
-    await canalAvaliacao.send({
-      content: parecerIa,
-      allowedMentions: {
-        users: [member.id, entrevistadorId].filter(Boolean),
-        roles: [],
-        parse: [],
-      },
-    }).catch(() => {});
-  }
+  // A análise completa de IA não roda mais automaticamente aqui.
+  // Ela é executada somente quando a equipe clicar em
+  // "🔎 Analisar Entrevista" no topo do ticket.
+  // Isso evita duplicidade, reduz custo e garante que o relatório
+  // persistente seja criado nos canais novos de análise.
 }
 
 async function resetInterviewChannelState(channel, reason = "manual_reset") {
@@ -1189,12 +1299,15 @@ async function resetInterviewChannelState(channel, reason = "manual_reset") {
 
   let cleaned = false;
 
-  for (const [userId, dados] of entrevistas.entries()) {
-    if (String(dados?.channelId || "") === channelId) {
+    for (const [userId, dados] of entrevistas.entries()) {
+    if (String(dados?.channelId || "") === channelId) {
+      if (dados.globalTimer?.timeout) clearTimeout(dados.globalTimer.timeout);
+      dados.cancelled = true;
+      dados.collector?.stop('ticket_encerrado');
       entrevistas.delete(userId);
       cleaned = true;
-    }
-  }
+    }
+  }
 
   entrevistasAtivas.delete(channelId);
   entrevistasStartLocks.delete(channelId);

@@ -18,6 +18,13 @@ import {
 import { resolveLogChannel } from '../events/channelResolver.js';
 import { logManualTicketAccessChange } from '../events/orgTicketAccessSync.js';
 import { iaInterviewTicketOpened } from '../events/iaChatAuto.js';
+import entrevista from '../utils/entrevista.js';
+
+import {
+  handleInterviewIntelligenceInteraction,
+  canUseInterviewIntelligence,
+  abortInterviewIntelligence,
+} from '../events/interviewIntelligence.js';
 
 import {
   recordServiceTicketOperationalActivity,
@@ -3547,11 +3554,595 @@ async function notificarEquipeEntrevista(guild, canal, tipo) {
   // ✅ Util: define nickname no formato "LD | NOME | ID"
   async function setNicknameLD(member, nome, cid) {
     const nick = `LD | ${nome} | ${cid}`;
+
     try {
       await member.setNickname(nick);
     } catch (e) {
-      console.warn('Não consegui alterar o apelido (permissões?):', e.message);
+      console.warn(
+        'Não consegui alterar o apelido (permissões?):',
+        e.message
+      );
     }
+  }
+
+  // =========================================================
+  // 🔎 BOTÃO "ANALISAR ENTREVISTA" POR CATEGORIA
+  // =========================================================
+  //
+  // Regra:
+  // - qualquer canal que esteja em CATEGORIES.entrevista
+  //   deve possuir o botão sc_interview_analyze;
+  // - tickets antigos recebem o botão no ready;
+  // - canais movidos para a categoria recebem o botão;
+  // - canais criados diretamente na categoria também recebem;
+  // - nunca duplica o botão;
+  // - se o cabeçalho antigo não for encontrado, cria um
+  //   controle dedicado dentro do ticket.
+  // =========================================================
+
+  const INTERVIEW_ANALYSIS_BUTTON_SYNC_LOCKS =
+    new Set();
+
+  let interviewAnalysisButtonSyncInstalled =
+    false;
+
+  function getComponentCustomId(component) {
+    return String(
+      component?.customId ||
+      component?.data?.custom_id ||
+      component?.data?.customId ||
+      ''
+    );
+  }
+
+  function messageHasInterviewAnalysisButton(message) {
+    return Boolean(
+      message?.components?.some(
+        (row) =>
+          row.components?.some(
+            (component) =>
+              getComponentCustomId(
+                component
+              ) ===
+              'sc_interview_analyze'
+          )
+      )
+    );
+  }
+
+  function isMainTicketControlMessage(message) {
+    if (
+      !message ||
+      message.author?.id !==
+        client.user?.id
+    ) {
+      return false;
+    }
+
+    const customIds =
+      (message.components || [])
+        .flatMap(
+          (row) =>
+            row.components || []
+        )
+        .map(
+          getComponentCustomId
+        );
+
+    if (
+      customIds.includes(
+        'assumir_ticket'
+      ) ||
+      customIds.includes(
+        'fechar_ticket'
+      )
+    ) {
+      return true;
+    }
+
+    const footer =
+      String(
+        message.embeds?.[0]
+          ?.footer?.text ||
+        ''
+      );
+
+    return footer.includes(
+      'SantaCreators - Tickets'
+    );
+  }
+
+  async function findInterviewTicketControlMessage(
+    channel,
+    maxMessages = 800
+  ) {
+    let before =
+      null;
+
+    let checked =
+      0;
+
+    let fallbackControl =
+      null;
+
+    while (
+      checked < maxMessages
+    ) {
+      const limit =
+        Math.min(
+          100,
+          maxMessages - checked
+        );
+
+      const batch =
+        await channel.messages
+          .fetch({
+            limit,
+
+            ...(before
+              ? { before }
+              : {})
+          })
+          .catch(
+            () => null
+          );
+
+      if (!batch?.size) {
+        break;
+      }
+
+      const messages =
+        [...batch.values()]
+          .sort(
+            (first, second) =>
+              second.createdTimestamp -
+              first.createdTimestamp
+          );
+
+      for (const message of messages) {
+        if (
+          message.author?.id !==
+          client.user?.id
+        ) {
+          continue;
+        }
+
+        if (
+          messageHasInterviewAnalysisButton(
+            message
+          )
+        ) {
+          return {
+            message,
+
+            alreadyHasButton:
+              true
+          };
+        }
+
+        if (
+          !fallbackControl &&
+          isMainTicketControlMessage(
+            message
+          )
+        ) {
+          fallbackControl =
+            message;
+        }
+      }
+
+      checked +=
+        batch.size;
+
+      const oldest =
+        messages.at(-1);
+
+      before =
+        oldest?.id ||
+        null;
+
+      if (
+        batch.size < limit ||
+        !before
+      ) {
+        break;
+      }
+    }
+
+    return {
+      message:
+        fallbackControl,
+
+      alreadyHasButton:
+        false
+    };
+  }
+
+  function createInterviewAnalysisButton() {
+    return new ButtonBuilder()
+      .setCustomId(
+        'sc_interview_analyze'
+      )
+      .setLabel(
+        '🔎 Analisar Entrevista'
+      )
+      .setStyle(
+        ButtonStyle.Primary
+      );
+  }
+
+  function rowAcceptsAnotherButton(row) {
+    if (
+      !row ||
+      row.components.length >= 5
+    ) {
+      return false;
+    }
+
+    return row.components.every(
+      (component) => {
+        const json =
+          typeof component.toJSON ===
+            'function'
+            ? component.toJSON()
+            : component.data ||
+              component;
+
+        return Number(
+          json?.type
+        ) === 2;
+      }
+    );
+  }
+
+  async function ensureInterviewAnalysisButton(
+    channel,
+    reason = 'sync'
+  ) {
+    if (
+      !channel ||
+      channel.type !==
+        ChannelType.GuildText ||
+      String(
+        channel.parentId ||
+        ''
+      ) !==
+        String(
+          CATEGORIES.entrevista
+        )
+    ) {
+      return false;
+    }
+
+    const lockKey =
+      String(
+        channel.id
+      );
+
+    if (
+      INTERVIEW_ANALYSIS_BUTTON_SYNC_LOCKS.has(
+        lockKey
+      )
+    ) {
+      return false;
+    }
+
+    INTERVIEW_ANALYSIS_BUTTON_SYNC_LOCKS.add(
+      lockKey
+    );
+
+    try {
+      const found =
+        await findInterviewTicketControlMessage(
+          channel
+        );
+
+      if (found.alreadyHasButton) {
+        const hasReport = found.message.embeds?.some((embed) => embed.fields?.some((field) =>
+          field.name === '🔎 Análise de entrevista:' && /https:\/\/discord\.com\/channels\//.test(field.value)
+        ));
+        if (!hasReport && String(reason).toLowerCase().includes('ready')) {
+          const rows = found.message.components.map((row) => {
+            const builder = ActionRowBuilder.from(row);
+            for (const component of builder.components) {
+              if (getComponentCustomId(component) === 'sc_interview_analyze') component.setDisabled(false);
+            }
+            return builder;
+          });
+          await found.message.edit({ components: rows });
+          return true;
+        }
+        return false;
+      }
+
+      if (found.message) {
+        const rows =
+          found.message.components.map(
+            (row) =>
+              ActionRowBuilder.from(
+                row
+              )
+          );
+
+        const preferredRow =
+          rows.find(
+            (row) =>
+              rowAcceptsAnotherButton(
+                row
+              ) &&
+              row.components.some(
+                (component) =>
+                  getComponentCustomId(
+                    component
+                  ) ===
+                  'remover_membro'
+              )
+          ) ||
+
+          rows.find(
+            (row) =>
+              rowAcceptsAnotherButton(
+                row
+              )
+          );
+
+        if (preferredRow) {
+          preferredRow.addComponents(
+            createInterviewAnalysisButton()
+          );
+
+        } else if (
+          rows.length < 5
+        ) {
+          rows.push(
+            new ActionRowBuilder()
+              .addComponents(
+                createInterviewAnalysisButton()
+              )
+          );
+
+        } else {
+          throw new Error(
+            'O controle do ticket já possui 5 Action Rows completas.'
+          );
+        }
+
+        await found.message.edit({
+          components:
+            rows
+        });
+
+        console.log(
+          `[IA ENTREVISTA BUTTON] Botão sincronizado no cabeçalho do ticket ${channel.id}. Motivo: ${reason}.`
+        );
+
+        return true;
+      }
+
+      await channel.send({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle(
+              '🔎 Análise de Entrevista'
+            )
+            .setColor(
+              '#5865F2'
+            )
+            .setDescription(
+              'Este canal está na categoria de **Tickets de Entrevista**. Use o botão abaixo depois que a entrevista terminar.'
+            )
+            .setFooter({
+              text:
+                'SantaCreators - Controle de Análise de Entrevista'
+            })
+        ],
+
+        components: [
+          new ActionRowBuilder()
+            .addComponents(
+              createInterviewAnalysisButton()
+            )
+        ]
+      });
+
+      console.log(
+        `[IA ENTREVISTA BUTTON] Controle dedicado criado no ticket ${channel.id}. Motivo: ${reason}.`
+      );
+
+      return true;
+
+    } catch (error) {
+      console.error(
+        `[IA ENTREVISTA BUTTON] Falha ao sincronizar o ticket ${channel.id}:`,
+        error?.message ||
+        error
+      );
+
+      return false;
+
+    } finally {
+      INTERVIEW_ANALYSIS_BUTTON_SYNC_LOCKS.delete(
+        lockKey
+      );
+    }
+  }
+
+  async function backfillInterviewAnalysisButtons() {
+    const category =
+      client.channels.cache.get(
+        CATEGORIES.entrevista
+      ) ||
+
+      await client.channels
+        .fetch(
+          CATEGORIES.entrevista
+        )
+        .catch(
+          () => null
+        );
+
+    if (
+      !category ||
+      category.type !==
+        ChannelType.GuildCategory
+    ) {
+      console.warn(
+        `[IA ENTREVISTA BUTTON] Categoria ${CATEGORIES.entrevista} não encontrada.`
+      );
+
+      return {
+        encontrados: 0,
+        atualizados: 0
+      };
+    }
+
+    const guildChannels =
+      await category.guild.channels
+        .fetch()
+        .catch(
+          () => null
+        );
+
+    if (!guildChannels?.size) {
+      return {
+        encontrados: 0,
+        atualizados: 0
+      };
+    }
+
+    const channels =
+      [...guildChannels.values()]
+        .filter(
+          (channel) =>
+            channel &&
+            channel.type ===
+              ChannelType.GuildText &&
+            String(
+              channel.parentId ||
+              ''
+            ) ===
+              String(
+                CATEGORIES.entrevista
+              )
+        );
+
+    let updated =
+      0;
+
+    for (const channel of channels) {
+      const changed =
+        await ensureInterviewAnalysisButton(
+          channel,
+          'ready/backfill'
+        );
+
+      if (changed) {
+        updated += 1;
+      }
+    }
+
+    console.log(
+      `[IA ENTREVISTA BUTTON] Backfill concluído: ${updated}/${channels.length} ticket(s) atualizados.`
+    );
+
+    return {
+      encontrados:
+        channels.length,
+
+      atualizados:
+        updated
+    };
+  }
+
+  function installInterviewAnalysisButtonSync() {
+    if (
+      interviewAnalysisButtonSyncInstalled
+    ) {
+      return;
+    }
+
+    interviewAnalysisButtonSyncInstalled =
+      true;
+
+    client.on(
+      'channelCreate',
+
+      (channel) => {
+        if (
+          channel?.type !==
+            ChannelType.GuildText ||
+
+          String(
+            channel.parentId ||
+            ''
+          ) !==
+            String(
+              CATEGORIES.entrevista
+            )
+        ) {
+          return;
+        }
+
+        // Espera o fluxo normal criar o cabeçalho.
+        // Isso evita dois botões em ticket recém-criado.
+        const syncTimer =
+          setTimeout(
+            () => {
+              void ensureInterviewAnalysisButton(
+                channel,
+                'channelCreate'
+              );
+            },
+            3000
+          );
+
+        if (
+          typeof syncTimer.unref ===
+            'function'
+        ) {
+          syncTimer.unref();
+        }
+      }
+    );
+
+    client.on(
+      'channelUpdate',
+
+      (
+        oldChannel,
+        newChannel
+      ) => {
+        const oldParentId =
+          String(
+            oldChannel?.parentId ||
+            ''
+          );
+
+        const newParentId =
+          String(
+            newChannel?.parentId ||
+            ''
+          );
+
+        if (
+          newChannel?.type ===
+            ChannelType.GuildText &&
+
+          newParentId ===
+            String(
+              CATEGORIES.entrevista
+            ) &&
+
+          oldParentId !==
+            newParentId
+        ) {
+          void ensureInterviewAnalysisButton(
+            newChannel,
+            'movido para categoria de entrevista'
+          );
+        }
+      }
+    );
   }
 
   // =========================================================
@@ -3563,6 +4154,16 @@ async function notificarEquipeEntrevista(guild, canal, tipo) {
 
   async function onReady() {
     await verificarOuCriarMenu();
+
+    installInterviewAnalysisButtonSync();
+
+    await backfillInterviewAnalysisButtons()
+      .catch((error) => {
+        console.error(
+          '[IA ENTREVISTA BUTTON] Falha no backfill ao iniciar:',
+          error?.message || error
+        );
+      });
 
 // =========================================================
 // Regra #7: Monitor de Saída/Banimento
@@ -4206,11 +4807,25 @@ await interaction
         new ButtonBuilder().setCustomId('assumir_ticket').setLabel('🎫 Assumir Ticket').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('assumir_resp').setLabel('👑 Assumir Resp').setStyle(ButtonStyle.Danger),
         new ButtonBuilder().setCustomId('fechar_ticket').setLabel('❌ Fechar Ticket').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('adicionar_membro').setLabel('➕ Adicionar Usuário').setStyle(ButtonStyle.Success),
-        new ButtonBuilder().setCustomId('remover_membro').setLabel('➖ Remover Usuário').setStyle(ButtonStyle.Danger)
+        new ButtonBuilder().setCustomId('adicionar_membro').setLabel('➕ Adicionar Usuário').setStyle(ButtonStyle.Success)
       );
 
-await canal.send({ embeds: [embedTicket], components: [botoes] });
+      const componentesTicket = [botoes];
+
+      if (dados.nome === 'entrevista') {
+        componentesTicket.push(
+          new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('remover_membro').setLabel('➖ Remover Usuário').setStyle(ButtonStyle.Danger),
+            new ButtonBuilder().setCustomId('sc_interview_analyze').setLabel('🔎 Analisar Entrevista').setStyle(ButtonStyle.Primary)
+          )
+        );
+      } else {
+        botoes.addComponents(
+          new ButtonBuilder().setCustomId('remover_membro').setLabel('➖ Remover Usuário').setStyle(ButtonStyle.Danger)
+        );
+      }
+
+await canal.send({ embeds: [embedTicket], components: componentesTicket });
 
 if (dados.nome === 'entrevista') {
   setTimeout(() => {
@@ -4354,6 +4969,28 @@ if (dados.nome === 'entrevista') {
 }
 
 
+
+      // =====================================================
+      // 🔎 INTELIGÊNCIA DE ENTREVISTA
+      // =====================================================
+     if (
+  id === 'sc_interview_analyze' ||
+  id.startsWith('sc_interview_apply|')
+) {
+  if (!canUseInterviewIntelligence(member)) {
+    await interaction.reply({
+      content:
+        '🚫 Você não tem permissão. O acesso segue a mesma base de usuários/cargos autorizados de `!perguntas` e `!correcao`.',
+      ephemeral: true
+    }).catch(() => {});
+
+    return true;
+  }
+
+  await handleInterviewIntelligenceInteraction(interaction);
+
+  return true;
+}
 
       // ✅ 2) A partir daqui, botões que precisam do embed
       if (!embedMsg.embeds[0]) return false;
@@ -4975,8 +5612,40 @@ if (interaction.isModalSubmit() && interaction.customId === 'modal_registro_lide
       }
     } catch {}
 
-    const guild   = interaction?.guild || autoData?.guild;
-    const closer  = interaction?.member || null;
+   const guild   = interaction?.guild || autoData?.guild;
+const closer  = interaction?.member || null;
+
+// =====================================================
+// 🛑 ENCERRAMENTO SEGURO DA INTELIGÊNCIA DE ENTREVISTA
+// =====================================================
+// Se o ticket for fechado antes do fim das 30 respostas,
+// encerramos somente a telemetria/análise silenciosa.
+// Isso NÃO interfere no fechamento nem envia nada ao candidato.
+if (
+  String(canal?.parentId || '') === '1359244725781266492' ||
+   /\bentrevista_ativa:1\b/i.test(String(canal?.topic || ''))
+) {
+  await entrevista.resetInterviewChannelState(canal, 'fechamento do ticket').catch((error) => {
+    console.warn('[Entrevista] Falha ao limpar estado no fechamento:', error?.message || error);
+  });
+  await canal.setTopic(`entrevista_encerrando:1 | ${String(canal.topic || '').replace(/\bentrevista_encerrando:[01]\b/g, '')}`.slice(0, 1024)).catch(() => {});
+  await abortInterviewIntelligence({
+    client,
+    channel: canal,
+    reason: autoData?.isAuto
+      ? `ticket de entrevista fechado automaticamente (${autoData?.reasonType || 'automação'})`
+      : 'ticket de entrevista fechado manualmente antes da conclusão',
+    actorId:
+      interaction?.user?.id ||
+      closer?.id ||
+      null,
+  }).catch((error) => {
+    console.warn(
+      '[INTERVIEW_INTELLIGENCE] Falha não crítica ao encerrar rastreio no fechamento do ticket:',
+      error?.message || error
+    );
+  });
+}
 
 // ✅ IMPORTANTE: se algo travar, a gente ainda vai deletar o canal
 let deleteAgendado = false;

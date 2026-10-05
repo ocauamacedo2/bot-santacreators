@@ -1,11 +1,8 @@
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from 'discord.js';
-
 import entrevista from '../../utils/entrevista.js';
-
+import { canUseInterviewIntelligence } from '../../events/interviewIntelligence.js';
 import { dashEmit } from "../../utils/dashHub.js";
-
 import { iaInterviewPauseForManualInterview } from "../../events/iaChatAuto.js";
-
 const ALERT_ROLE_IDS = [
   "1282119104576098314",
   "1352407252216184833",
@@ -30,8 +27,7 @@ const PERGUNTAS_EXECUTION_LOCKS = new Set();
 function claimPerguntasExecution(message) {
   const key =
     `${message.guildId || "no-guild"}:` +
-    `${message.channel?.id || "no-channel"}:` +
-    `${message.id}`;
+    `${message.channel?.id || "no-channel"}`;
 
   if (PERGUNTAS_EXECUTION_LOCKS.has(key)) {
     return false;
@@ -41,7 +37,7 @@ function claimPerguntasExecution(message) {
 
   const lockTimer = setTimeout(() => {
     PERGUNTAS_EXECUTION_LOCKS.delete(key);
-  }, 60_000);
+  }, 15 * 1000);
 
   if (typeof lockTimer.unref === "function") {
     lockTimer.unref();
@@ -131,29 +127,46 @@ async function disableOldStartButtons(channel, clientUserId, keepMessageId) {
     await Promise.allSettled(tarefas);
   }
 }
-
 export default {
   async hasPermission(message) {
-    const idsPermitidos = [
-      '660311795327828008',
-      '1262262852949905408',
-      '1352408327983861844',
-      '1262262852949905409',
-      '1352407252216184833',
-      '1282119104576098314'
-    ];
-
-    return idsPermitidos.includes(message.author.id) ||
-           message.member?.roles?.cache?.some(
-             (r) => idsPermitidos.includes(r.id)
-           );
+    return canUseInterviewIntelligence(message.member);
   },
+  async execute(message, args, client) {
+    if (message.author?.bot) {
+      return false;
+    }
 
-  async execute(message, args, client) {
     if (!message.guild) {
-      return message.channel.send(
+      await message.channel.send(
         "Esse comando só funciona dentro do servidor."
+      ).catch(() => {});
+
+      return true;
+    }
+
+    const currentCategoryId =
+      String(
+        message.channel?.parentId ||
+        message.channel?.parent?.id ||
+        ""
       );
+
+    const hasCategoryBypass =
+      PERGUNTAS_BYPASS_USER_IDS.has(
+        String(message.author.id)
+      );
+
+    if (
+      !hasCategoryBypass &&
+      !PERGUNTAS_ALLOWED_CATEGORY_IDS.has(
+        currentCategoryId
+      )
+    ) {
+      await message.channel.send(
+        "🚫 O comando `!perguntas` só pode ser usado em tickets da categoria de entrevista."
+      ).catch(() => {});
+
+      return true;
     }
 
     if (!claimPerguntasExecution(message)) {
@@ -161,7 +174,7 @@ export default {
         `[!perguntas] Execução duplicada ignorada para a mensagem ${message.id} no canal ${message.channel.id}.`
       );
 
-      return;
+      return true;
     }
 
     // =====================================================
@@ -181,7 +194,7 @@ export default {
         "❌ Não consegui identificar quem abriu o ticket pelo tópico do canal. Verifique se o tópico tem `aberto_por:ID_DO_USUÁRIO`."
       ).catch(() => {});
 
-      return;
+      return true;
     }
 
     // =====================================================
@@ -196,7 +209,7 @@ export default {
         "❌ Não consegui apagar o comando `!perguntas`. Verifique se o bot possui a permissão **Gerenciar Mensagens** neste canal."
       ).catch(() => {});
 
-      return;
+      return true;
     }
 
     try {
@@ -211,7 +224,7 @@ export default {
         "❌ Não consegui apagar o comando `!perguntas`. Tente novamente ou verifique a permissão **Gerenciar Mensagens** do bot."
       ).catch(() => {});
 
-      return;
+      return true;
     }
 
     // =====================================================
@@ -244,7 +257,7 @@ export default {
         `[!perguntas] Novo botão bloqueado no canal ${message.channel.id}: a entrevista já foi iniciada.`
       );
 
-      return;
+      return true;
     }
 
     const existingInterviewControl =
@@ -258,7 +271,7 @@ export default {
         `[!perguntas] Novo botão bloqueado no canal ${message.channel.id}: já existe um controle de entrevista na mensagem ${existingInterviewControl.id}.`
       );
 
-      return;
+      return true;
     }
 
     // =====================================================
@@ -370,7 +383,7 @@ export default {
           "Digite `!perguntas` novamente para tentar de novo."
       }).catch(() => {});
 
-      return;
+      return true;
     }
 
     // =====================================================
@@ -518,73 +531,79 @@ export default {
     // 10. LOG COMPLETO
     // =====================================================
 
-    fireAndForget(
-      entrevista.logCompleto(
-        client,
+fireAndForget(
+  entrevista.logCompleto(
+    client,
+    {
+      titulo:
+        '🧾 !perguntas usado',
+
+      cor:
+        0x9b59b6,
+
+      autorTag:
+        message.author.tag,
+
+      autorIcon:
+        message.author.displayAvatarURL({
+          dynamic: true
+        }),
+
+      desc:
+        `O comando **!perguntas** foi usado.`,
+
+      fields: [
         {
-          titulo:
-            '🧾 !perguntas usado',
+          name:
+            '👤 Quem',
 
-          cor:
-            0x9b59b6,
+          value:
+            `<@${message.author.id}>\n` +
+            `\`${message.author.id}\``,
 
-          autorTag:
-            message.author.tag,
+          inline:
+            true
+        },
 
-          autorIcon:
-            message.author.displayAvatarURL({
-              dynamic: true
-            }),
+        {
+          name:
+            '📍 Onde',
 
-          desc:
-            `O comando **!perguntas** foi usado.`,
+          value:
+            `<#${message.channel.id}>\n` +
+            `\`${message.channel.id}\``,
 
-          fields: [
-            {
-              name:
-                '👤 Quem',
+          inline:
+            true
+        },
 
-              value:
-                `<@${message.author.id}>\n` +
-                `\`${message.author.id}\``,
+        {
+          name:
+            '🏠 Servidor',
 
-              inline:
-                true
-            },
+          value:
+            `${message.guild?.name}\n` +
+            `\`${message.guildId}\``,
 
-            {
-              name:
-                '📍 Onde',
-
-              value:
-                `<#${message.channel.id}>\n` +
-                `\`${message.channel.id}\``,
-
-              inline:
-                true
-            },
-
-            {
-              name:
-                '🏠 Servidor',
-
-              value:
-                `${message.guild?.name}\n` +
-                `\`${message.guildId}\``,
-
-              inline:
-                false
-            }
-          ],
-
-          thumb:
-            message.guild?.iconURL({
-              dynamic: true
-            })
+          inline:
+            false
         }
-      ),
+      ],
 
-      'entrevista.logCompleto'
-    );
+      thumb:
+        message.guild?.iconURL({
+          dynamic:
+            true
+        })
+    }
+  ),
+
+  'entrevista.logCompleto'
+);
+
+// ✅ O comando foi totalmente consumido.
+// O Core usa esse retorno para NÃO executar a mesma
+// mensagem novamente no roteador central/fallbacks.
+return true;
   }
 };

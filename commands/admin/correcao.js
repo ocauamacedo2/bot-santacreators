@@ -3,10 +3,8 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { dashEmit } from '../../utils/dashHub.js';
-
-
+import { canUseInterviewIntelligence } from '../../events/interviewIntelligence.js';
 const CANAL_LOGS_CORRECAO = '1486006908056899748';
-
 const CATEGORIA_CORRECAO_PONTUA_ID = '1359244725781266492';
 
 const CARGOS_PODE_USAR = [
@@ -121,8 +119,8 @@ const QUESTOES = {
   },
 
   4: {
-    pergunta: "👥 Você veio até a SantaCreators por conta própria ou foi indicado por alguém? Se foi uma indicação, lembra quem te falou sobre a empresa ou te convidou?",
-    resposta: "Resposta pessoal. Exemplo: vim por indicação de um membro, conheci pela cidade ou por curiosidade."
+    pergunta: "👥 Durante o RP, qual deve ser sua postura ao interagir com uma pessoa que utiliza preset e nome feminino, mesmo que você perceba diferenças entre o visual do personagem e a voz do jogador?",
+    resposta: "Deve respeitar o personagem e a identidade apresentada dentro do RP, tratando a pessoa de acordo com o preset e o nome feminino e mantendo a imersão, sem usar a voz do jogador como motivo para quebrar o RP."
   },
 
   5: {
@@ -142,7 +140,7 @@ const QUESTOES = {
 
   8: {
     pergunta: "🕵️‍♂️ Em que situação o uso dos veículos da empresa é permitido para ações ilegais no RP? Quais cuidados devem ser tomados nesses casos?",
-    resposta: "O uso pode acontecer em sequestros organizados, seguindo as regras da cidade, o horário correto de assalto e a conduta exigida para esse tipo de ação. Também pode ser usado para vendas ou entregas, desde que não seja para troca de tiros ou PVP."
+    resposta: "O uso dos veículos da empresa em ação ilegal é permitido em sequestros organizados e bem planejados, desde que esteja dentro do horário permitido e seja executado de forma coerente com o RP. Não deve ser usado para troca de tiros nem assalto de pista."
   },
 
   9: {
@@ -270,11 +268,11 @@ const match = primeiraLinha.match(/^!correcao\s*(.+)$/i);
 if (!match) return false;
 
 
-  if (!message.guild || !message.member) return false;
-
-if (message.author.id !== '660311795327828008' && !message.member.roles.cache.some(r => CARGOS_PODE_USAR.includes(r.id))) {
-  setTimeout(() => message.delete().catch(() => {}), 1000);
-  const msg = await message.reply("❌ Você não tem permissão para usar este comando.");
+  if (!match) return false;
+  if (!message.guild || !message.member) return false;
+if (!canUseInterviewIntelligence(message.member)) {
+  setTimeout(() => message.delete().catch(() => {}), 1000);
+  const msg = await message.reply("❌ Você não tem permissão para usar este comando.");
   setTimeout(() => msg.delete().catch(() => {}), 5000);
   return true;
 }
@@ -296,34 +294,29 @@ const numeros = match[1]
   if (!numeros.length) {
     await message.reply("❌ Nenhuma questão válida encontrada.");
     return true;
-  }
-
-  await message.react('👍');
-
-  let descricao = '';
-  for (const num of numeros) {
-    descricao += `**Questão ${num} – ERRADA ou INCOMPLETA**\n`;
-    descricao += `**Pergunta:** ${QUESTOES[num].pergunta}\n\n`;
-    descricao += `**Resposta:** ${QUESTOES[num].resposta}\n\n\n`;
-  }
-
-  const embed = new EmbedBuilder()
-    .setTitle('📌 Correção de Questões')
-    .setDescription(descricao)
-    .setColor('#ff0000')
-    .setImage(GIF_CORRECAO)
-    .setFooter({
-      text: `Enviado por ${message.author.tag} • ${new Date().toLocaleString('pt-BR')}`,
-      iconURL: message.author.displayAvatarURL({ dynamic: true })
+    }
+  await message.react('👍');
+  const embeds = [...new Set(numeros)].map((num) =>
+    new EmbedBuilder()
+      .setTitle(`📌 Correção • Questão ${num} – ERRADA ou INCOMPLETA`)
+      .setDescription(`**Pergunta:** ${QUESTOES[num].pergunta}\n\n**Resposta:** ${QUESTOES[num].resposta}`)
+      .setColor('#ff0000')
+      .setImage(GIF_CORRECAO)
+      .setFooter({
+        text: `Enviado por ${message.author.tag} • ${new Date().toLocaleString('pt-BR')}`,
+        iconURL: message.author.displayAvatarURL({ dynamic: true }),
+      })
+  );
+  for (let index = 0; index < embeds.length; index += 1) {
+    await message.channel.send({
+      content: index === 0 ? `${message.author}` : undefined,
+      embeds: [embeds[index]],
+      allowedMentions: { users: index === 0 ? [message.author.id] : [], parse: [] },
     });
+  }
 
-  await message.channel.send({
-    content: `${message.author}`,
-    embeds: [embed]
-  });
-
-  // ✅ Owner e você podem pontuar em qualquer lugar.
-  // ✅ Demais seguem a regra da categoria.
+  // ✅ Owner e você podem pontuar em qualquer lugar.
+  // ✅ Demais seguem a regra da categoria.
   const canScoreHere =
     hasAnywhereBypass(message.author.id) ||
     isAllowedCorrecaoCategory(message.channel);
