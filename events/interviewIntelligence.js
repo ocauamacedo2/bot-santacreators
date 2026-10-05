@@ -2240,42 +2240,134 @@ async function callGeminiJson(prompt) {
     );
   }
 
+  const scoreSchema = { type: 'number', minimum: 0, maximum: 100 };
+  const statuses = new Set(['pessoal', 'correta', 'incompleta', 'errada', 'revisao']);
+  const responseJsonSchema = {
+    type: 'object',
+    required: ['overall', 'questions'],
+    properties: {
+      overall: {
+        type: 'object',
+        required: [
+          'aiSuspicionScore', 'copyPasteSuspicionScore',
+          'confidenceScore', 'summary', 'styleAssessment',
+        ],
+        properties: {
+          aiSuspicionScore: scoreSchema,
+          copyPasteSuspicionScore: scoreSchema,
+          confidenceScore: scoreSchema,
+          summary: { type: 'string' },
+          styleAssessment: { type: 'string' },
+        },
+      },
+      questions: {
+        type: 'array',
+        minItems: EXPECTED_QUESTION_COUNT,
+        maxItems: EXPECTED_QUESTION_COUNT,
+        items: {
+          type: 'object',
+          required: [
+            'number', 'status', 'reason', 'expectedConcept',
+            'aiSuspicionScore', 'copyPasteSuspicionScore',
+            'signals', 'automaticFailure', 'automaticFailureReason',
+          ],
+          properties: {
+            number: { type: 'integer', minimum: 1, maximum: EXPECTED_QUESTION_COUNT },
+            status: { type: 'string', enum: [...statuses] },
+            reason: { type: 'string' },
+            expectedConcept: { type: 'string' },
+            aiSuspicionScore: scoreSchema,
+            copyPasteSuspicionScore: scoreSchema,
+            signals: { type: 'array', items: { type: 'string' } },
+            automaticFailure: { type: 'boolean' },
+            automaticFailureReason: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+          },
+        },
+      },
+    },
+  };
+
+  const validScore = (value) =>
+    Number.isFinite(value) && value >= 0 && value <= 100;
   let lastError = null;
 
   for (const model of GEMINI_MODELS) {
-    try {
-      const result = await client.models.generateContent({
-        model,
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-          maxOutputTokens: 16000,
-        },
-      });
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      let receivedResponse = false;
 
-      const parsed = JSON.parse(stripJsonFence(result.text));
-      const numbers = (parsed.questions || []).map((item) => Number(item.number));
-      const statuses = new Set(['pessoal', 'correta', 'incompleta', 'errada', 'revisao']);
-      if (!parsed.overall || numbers.length !== EXPECTED_QUESTION_COUNT ||
+      try {
+        const result = await client.models.generateContent({
+          model,
+          contents: prompt,
+          config: {
+            responseMimeType: 'application/json',
+            responseJsonSchema,
+            maxOutputTokens: attempt === 1 ? 16000 : 24000,
+          },
+        });
+        receivedResponse = true;
+
+        const finishReason = result.candidates?.[0]?.finishReason;
+        if (finishReason && finishReason !== 'STOP') {
+          throw new Error(`Resposta da IA não concluída: ${finishReason}.`);
+        }
+
+        const parsed = JSON.parse(stripJsonFence(result.text));
+        const questions = parsed?.questions;
+        const overall = parsed?.overall;
+        const numbers = Array.isArray(questions)
+          ? questions.map((item) => Number(item?.number))
+          : [];
+
+        if (
+          !overall ||
+          !validScore(overall.aiSuspicionScore) ||
+          !validScore(overall.copyPasteSuspicionScore) ||
+          !validScore(overall.confidenceScore) ||
+          typeof overall.summary !== 'string' ||
+          typeof overall.styleAssessment !== 'string' ||
+          !Array.isArray(questions) ||
+          numbers.length !== EXPECTED_QUESTION_COUNT ||
           new Set(numbers).size !== EXPECTED_QUESTION_COUNT ||
-          numbers.some((number) => !Number.isInteger(number) || number < 1 || number > EXPECTED_QUESTION_COUNT) ||
-          parsed.questions.some((item) => !statuses.has(normalizeText(item.status)) ||
-            typeof item.reason !== 'string' || typeof item.expectedConcept !== 'string' ||
-            !Number.isFinite(item.aiSuspicionScore) || !Number.isFinite(item.copyPasteSuspicionScore) ||
-            typeof item.automaticFailure !== 'boolean')) {
-        throw new Error('Parecer incompleto ou inválido: esperadas 30 questões únicas e campos tipados.');
+          numbers.some((number) =>
+            !Number.isInteger(number) || number < 1 || number > EXPECTED_QUESTION_COUNT
+          ) ||
+          questions.some((item) =>
+            !item ||
+            !statuses.has(normalizeText(item.status)) ||
+            typeof item.reason !== 'string' ||
+            typeof item.expectedConcept !== 'string' ||
+            !validScore(item.aiSuspicionScore) ||
+            !validScore(item.copyPasteSuspicionScore) ||
+            !Array.isArray(item.signals) ||
+            item.signals.some((signal) => typeof signal !== 'string') ||
+            typeof item.automaticFailure !== 'boolean' ||
+            !(item.automaticFailureReason === null ||
+              typeof item.automaticFailureReason === 'string') ||
+            (item.automaticFailure && !String(item.automaticFailureReason || '').trim())
+          )
+        ) {
+          throw new Error('Parecer incompleto ou inválido: esperadas 30 questões únicas e campos tipados.');
+        }
+
+        return parsed;
+      } catch (error) {
+        lastError = error;
+        console.warn(
+          `[INTERVIEW_INTELLIGENCE] Modelo ${model}, tentativa ${attempt}/2, etapa ${receivedResponse ? 'validacao-json' : 'requisicao'}:`,
+          error?.message || error
+        );
+
+        if (!receivedResponse) break;
       }
-      return parsed;
-    } catch (error) {
-      lastError = error;
-      console.warn(
-        `[INTERVIEW_INTELLIGENCE] Modelo ${model} falhou:`,
-        error?.message || error
-      );
     }
   }
 
-  throw lastError || new Error('Nenhum modelo Gemini respondeu.');
+  throw new Error(
+    'Não foi possível obter um parecer JSON completo e válido da IA. ' +
+    'Nenhuma correção foi enviada nesta tentativa. ' +
+    `Última falha: ${lastError?.message || 'nenhum modelo respondeu'}`
+  );
 }
 
 function buildAnalysisPrompt({
@@ -3401,7 +3493,26 @@ async function loadReportFromInteractionMessage(interaction) {
     );
   }
 
-  const report = await response.json();
+  let report;
+
+  try {
+    report = JSON.parse(await response.text());
+  } catch (error) {
+    console.warn(
+      '[INTERVIEW_INTELLIGENCE] Falha ao ler JSON do relatório persistido:',
+      {
+        messageId: interaction.message.id,
+        attachmentName: attachment.name,
+        error: error?.message || String(error),
+      }
+    );
+
+    throw new Error(
+      'O anexo JSON do relatório salvo no Discord não pôde ser lido. ' +
+      'Nenhuma correção foi enviada. ' +
+      `Mensagem do relatório: ${interaction.message.id}. Detalhe: ${error?.message || error}`
+    );
+  }
 
   if (report?.marker !== FINAL_REPORT_MARKER || !Array.isArray(report.questions) ||
       report.questions.length !== EXPECTED_QUESTION_COUNT || !report.summary || !report.candidate?.id) {
@@ -3429,7 +3540,11 @@ function buildCorrectionEmbeds(report) {
 }
 
 async function refreshCorrectionReport(interaction, oldReport, channel, answers) {
-  const candidate = await interaction.guild.members.fetch(oldReport.candidate.id);
+  const candidateGuild = await interaction.client.guilds.fetch(channel.guildId);
+  const candidate = await candidateGuild.members.fetch({
+    user: oldReport.candidate.id,
+    force: true,
+  });
   const knowledge = await buildHistoricalKnowledge(interaction.client);
 
   if (
