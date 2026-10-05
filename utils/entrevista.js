@@ -948,12 +948,21 @@ if (customId.startsWith('enviar|')) {
       "membro.id:",
       membro.id
     );
+
+    console.log(
+      "[ENTREVISTA DEBUG] Iniciando inteligência auxiliar da entrevista..."
+    );
+
     void startInterviewIntelligence({
       client: channel.client,
- channel,
-candidate: membro,
+      channel,
+      candidate: membro,
       interviewerId: entrevistadorId,
       questions: perguntas
+    }).then(() => {
+      console.log(
+        "[ENTREVISTA DEBUG] Inteligência auxiliar iniciada."
+      );
     }).catch((error) => {
       console.error(
         "[INTERVIEW_INTELLIGENCE] Falha não crítica ao iniciar rastreio:",
@@ -961,34 +970,99 @@ candidate: membro,
       );
     });
 
-    iaInterviewPauseForManualInterview(channel, targetId, entrevistadorId);
+    console.log(
+      "[ENTREVISTA DEBUG] Pausando IA conversacional durante entrevista manual..."
+    );
 
-    await channel.send({
-      content: `<@${targetId}> Bora! Vamos começar sua entrevista agora ✨`
+    try {
+      iaInterviewPauseForManualInterview(
+        channel,
+        targetId,
+        entrevistadorId
+      );
+
+      console.log(
+        "[ENTREVISTA DEBUG] IA conversacional pausada para entrevista manual."
+      );
+    } catch (error) {
+      console.error(
+        "[ENTREVISTA DEBUG] Falha não crítica ao pausar IA conversacional:",
+        error
+      );
+    }
+
+    console.log(
+      "[ENTREVISTA DEBUG] Enviando mensagem de abertura da entrevista..."
+    );
+
+    await withTimeout(
+      channel.send({
+        content: `<@${targetId}> Bora! Vamos começar sua entrevista agora ✨`
+      }),
+      10000,
+      "enviar mensagem inicial da entrevista"
+    );
+
+    console.log(
+      "[ENTREVISTA DEBUG] Mensagem de abertura enviada."
+    );
+
+    console.log(
+      "[ENTREVISTA DEBUG] Disparando primeira pergunta..."
+    );
+
+    void enviarPergunta(
+      channel,
+      membro,
+      0
+    ).catch(async (err) => {
+      console.error(
+        "[Entrevista] Falha real ao enviar/coletar perguntas:",
+        err
+      );
+
+      entrevistas.delete(
+        targetId
+      );
+
+      entrevistasAtivas.delete(
+        channel.id
+      );
+
+      await setInterviewActiveTopic(
+        channel,
+        false
+      ).catch(() => {});
+
+      await salvarEntrevistasEmDisco()
+        .catch(() => {});
+
+      await channel.send(
+        `❌ A entrevista travou ao enviar a primeira pergunta.\n\n**Erro:** \`${String(
+          err?.message ||
+          err
+        ).slice(
+          0,
+          800
+        )}\``
+      ).catch(() => {});
     });
 
-    console.log("[ENTREVISTA DEBUG] Disparando primeira pergunta...");
+    console.log(
+      "[ENTREVISTA DEBUG] Primeira pergunta disparada em background."
+    );
 
-enviarPergunta(channel, membro, 0).catch(async (err) => {
-  console.error("[Entrevista] Falha real ao enviar/coletar perguntas:", err);
-
-  entrevistas.delete(targetId);
-  entrevistasAtivas.delete(channel.id);
-
-  await setInterviewActiveTopic(channel, false).catch(() => {});
-  await salvarEntrevistasEmDisco().catch(() => {});
-
-  await channel.send(
-    `❌ A entrevista travou ao enviar a primeira pergunta.\n\n**Erro:** \`${String(err?.message || err).slice(0, 800)}\``
-  ).catch(() => {});
-});
-
-console.log("[ENTREVISTA DEBUG] Primeira pergunta disparada em background.");
-
-Promise.allSettled([
-  withTimeout(setInterviewActiveTopic(channel, true), 5000, "setar tópico ativo"),
-  salvarEntrevistasEmDisco()
-]).catch(() => {});
+    Promise.allSettled([
+      withTimeout(
+        setInterviewActiveTopic(
+          channel,
+          true
+        ),
+        5000,
+        "setar tópico ativo"
+      ),
+      salvarEntrevistasEmDisco()
+    ]).catch(() => {});
 
     iniciarContadorGlobal(channel, targetId).then(async (globalTimer) => {
       const dadosAtualizados = entrevistas.get(targetId);

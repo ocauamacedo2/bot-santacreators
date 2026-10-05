@@ -21755,6 +21755,47 @@ function saveIaEntrevistaState() {
   }
 }
 
+async function saveIaEntrevistaStateAsync() {
+  try {
+    const dir =
+      path.dirname(
+        IA_ENTREVISTA_STATE_FILE
+      );
+
+    await fs.promises.mkdir(
+      dir,
+      {
+        recursive: true
+      }
+    );
+
+    const data =
+      Object.fromEntries(
+        IA_ENTREVISTA_ACTIVE.entries()
+      );
+
+    await fs.promises.writeFile(
+      IA_ENTREVISTA_STATE_FILE,
+      JSON.stringify(
+        data,
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    return true;
+  } catch (e) {
+    console.warn(
+      "[IA ENTREVISTA] Falha ao salvar estado de forma assíncrona:",
+      e?.message ||
+      e
+    );
+
+    return false;
+  }
+}
+
 function restoreIaEntrevistaState() {
   const data = loadIaEntrevistaState();
 
@@ -23670,7 +23711,8 @@ export function iaInterviewPauseForManualInterview(channel, openerId, staffId = 
     pausedReason: "!perguntas",
   });
 
-  saveIaEntrevistaState();
+  void saveIaEntrevistaStateAsync();
+
   return true;
 }
 
