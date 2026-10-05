@@ -45,6 +45,7 @@ const FINAL_REPORT_MARKER = 'SC_INTERVIEW_INTELLIGENCE_FINAL_V1';
 const LIVE_SESSIONS = new Map();
 const ANALYSIS_LOCKS = new Set();
 const CORRECTION_LOCKS = new Set();
+const AUTO_ANALYSIS_JOBS = new Set();
 const TYPING_INSTALLED_CLIENTS = new WeakSet();
 const LIFECYCLE_INSTALLED_CLIENTS = new WeakSet();
 
@@ -373,9 +374,9 @@ async function fetchMessagesPaginated(channel, maxMessages = 200) {
     if (batch.size < remaining) break;
   }
 
-  return all.sort(
-    (first, second) =>
-      first.createdTimestamp - second.createdTimestamp
+ return all.sort((first, second) =>
+    first.createdTimestamp - second.createdTimestamp ||
+    (BigInt(first.id) < BigInt(second.id) ? -1 : BigInt(first.id) > BigInt(second.id) ? 1 : 0)
   );
 }
 
@@ -416,62 +417,95 @@ async function collectSourceById(
 ) {
   const root = await client.channels.fetch(String(sourceId)).catch(() => null);
   if (!root) return `Fonte ${sourceId}: indisponível; não usada como evidência.`;
-
   if (root.type !== ChannelType.GuildCategory) {
     if (!root.isTextBased?.()) return `Fonte ${sourceId}: não textual.`;
     const messages = await fetchMessagesPaginated(root, Math.min(300, messagesPerChannel * 2));
-    return messages.map((message) =>
-      `FONTE: ${message.url}\n${stringifyMessage(message)}`
-    ).join('\n\n').slice(0, totalMaxChars);
+    const blocks = [];
+    let used = 0;
+    for (const message of [...messages].reverse()) {
+      const text = `FONTE: ${message.url}\n${stringifyMessage(message)}`;
+      if (used + text.length > totalMaxChars) continue;
+      blocks.unshift(text);
+      used += text.length;
+    }
+    return blocks.join('\n\n');
   }
 
   const channels = await root.guild.channels.fetch();
   const children = [...channels.values()].filter((channel) =>
     channel?.isTextBased?.() && String(channel.parentId) === String(sourceId)
-  ).sort((a, b) => Number(b.createdTimestamp) - Number(a.createdTimestamp))
-    .slice(0, maxChannels);
-
-  const blocks = [];
+  ).sort((a, b) => Number(b.createdTimestamp) - Number(a.createdTimestamp));
+  const audit = { available: children.length, scanned: 0, included: 0, skipped: [], sources: [] };
+  const samples = [];
   let used = 0;
-  for (const channel of children) {
-    const candidateId = parseOpenerId(channel);
-    if (!candidateId) continue;
-    // Histórico do começo, não apenas as conversas recentes do membro.
-    const messages = [];
-    let after = '0';
-    for (let page = 0; page < 12; page += 1) {
-      const batch = await channel.messages.fetch({ limit: 100, after, cache: false });
-      const ordered = [...batch.values()].sort((a, b) =>
-        BigInt(a.id) < BigInt(b.id) ? -1 : 1
+  for (const channel of children.slice(0, maxChannels)) {
+    audit.scanned += 1;
+    try {
+      // Lê também conversas antigas: não depende das últimas 35 mensagens.
+      const messages = await fetchMessagesPaginated(channel, Number.POSITIVE_INFINITY);
+      const firstQuestion = messages.find((message) =>
+        message.author?.id === client.user.id && /^\*\*1\.\*\*\s*<@!?(\d{17,22})>/.test(message.content || '')
       );
-      if (!ordered.length) break;
-      messages.push(...ordered);
-      const next = ordered.at(-1).id;
-      if (next === after) break;
-      after = next;
-      if (batch.size < 100) break;
+      const candidateId = parseOpenerId(channel) ||
+        firstQuestion?.content.match(/^\*\*1\.\*\*\s*<@!?(\d{17,22})>/)?.[1];
+      if (!candidateId) throw new Error('candidato não identificado');
+      const pairs = pairInterviewMessages(messages, candidateId, client.user.id);
+      if (pairs.length !== EXPECTED_QUESTION_COUNT || pairs.some((item, index) => item.number !== index + 1)) {
+        throw new Error(`entrevista incompleta: ${pairs.length}/30`);
+      }
+      const byMessage = new Map(pairs.flatMap((item) =>
+        [[item.answerMessageId, item.number], [item.questionMessageId, item.number]]
+      ));
+      const reviews = [];
+      const members = new Map();
+      for (const message of messages) {
+        if (message.createdTimestamp < pairs[0].questionCreatedAt) continue;
+        const text = stringifyMessage(message);
+        const isBot = message.author?.id === client.user.id;
+        const replyNumber = byMessage.get(message.reference?.messageId);
+        const explicitNumbers = [...text.matchAll(/(?:\bQ|quest[aã]o)\s*(\d{1,2})\b/gi)]
+          .map((match) => Number(match[1])).filter((number) => number >= 4 && number <= 30);
+        const botCorrection = isBot && /corre[cç][aã]o|incompleta|errada/i.test(text);
+        const humanReview = !message.author?.bot && message.author?.id !== candidateId &&
+          (replyNumber || explicitNumbers.length || /^!correcao\s/i.test(message.content || ''));
+        if (!botCorrection && !humanReview) continue;
+        if (humanReview) {
+          if (!members.has(message.author.id)) {
+            members.set(message.author.id, await root.guild.members.fetch(message.author.id).catch(() => null));
+          }
+          if (!canUseInterviewIntelligence(members.get(message.author.id))) continue;
+        }
+        const numbers = [...new Set([replyNumber, ...explicitNumbers].filter(Boolean))];
+        if (numbers.length === 1) byMessage.set(message.id, numbers[0]);
+        reviews.push({
+          questions: numbers,
+          source: message.url,
+          kind: isBot ? 'correcao_publicada_pelo_bot' : 'comentario_de_membro_autorizado_atualmente',
+          text: truncate(text, 2400),
+        });
+      }
+      const sample = {
+        source: channelUrl(channel.guildId, channel.id),
+        outcome: 'Categoria aprovada; ausência de correção NÃO significa aprovação individual.',
+        questions: pairs.filter((item) => item.number >= 4).map((item) => ({
+          number: item.number, answer: item.answer,
+          source: channelUrl(channel.guildId, channel.id, item.answerMessageId),
+        })),
+        reviews,
+      };
+      const size = JSON.stringify(sample).length;
+      if (used + size > totalMaxChars) throw new Error('limite de contexto atingido; ticket não usado');
+      samples.push(sample);
+      used += size;
+      audit.included += 1;
+      audit.sources.push(sample.source);
+    } catch (error) {
+      audit.skipped.push({ channelId: channel.id, reason: truncate(error?.message || error, 180) });
     }
-    const pairs = pairInterviewMessages(messages, candidateId, client.user.id);
-    // Estar na categoria de aprovados não transforma TODA resposta em correta.
-    if (pairs.length !== EXPECTED_QUESTION_COUNT) continue;
-    const sample = pairs.map((entry) => ({
-      number: entry.number,
-      question: entry.question,
-      answer: entry.answer,
-    }));
-    const text = JSON.stringify({
-      source: channelUrl(channel.guildId, channel.id),
-      outcome: 'membro na categoria aprovada; correções individuais não presumidas',
-      questions: sample,
-    });
-    // Não cortar no meio de uma entrevista nem inventar respostas faltantes.
-    if (used + text.length > totalMaxChars) break;
-    blocks.push(text);
-    used += text.length;
   }
-  return blocks.length
-    ? blocks.join('\n\n')
-    : `Fonte ${sourceId}: nenhuma entrevista completa encontrada na janela consultada.`;
+  return samples.length
+    ? JSON.stringify({ sourceId, audit, samples })
+    : `Fonte ${sourceId}: nenhuma entrevista completa disponível. Auditoria: ${JSON.stringify(audit)}`;
 }
 
 async function collectRuleDocuments(client) {
@@ -705,7 +739,8 @@ function findBestRuleCopyMatch(
   let best =
     null;
 
-  for (const document of documents) {
+    for (const document of documents) {
+    if (!document.url || !document.messageId) continue;
     const overlapPercent =
       Math.round(
         shingleContainment(
@@ -767,13 +802,9 @@ function findBestRuleCopyMatch(
         null,
     };
 
-    candidate.matched = Boolean(document.url) && (
-      candidate.longestExactWordRun >= 18 ||
-      (
-        tokenize(answer).length >= 25 &&
-        candidate.longestExactWordRun >= 12 &&
-        candidate.overlapPercent >= 70
-      )
+        candidate.matched = Boolean(document.url) && tokenize(answer).length >= 25 && (
+      (candidate.longestExactWordRun >= 18 && candidate.overlapPercent >= 45) ||
+      (candidate.longestExactWordRun >= 12 && candidate.overlapPercent >= 70)
     );
     candidate.sourceExcerpt = candidate.matched ? String(document.text) : null;
 
@@ -871,10 +902,10 @@ async function buildHistoricalKnowledge(client) {
     }),
 
     collectSourceById(client, APPROVED_MEMBER_CATEGORY_ID, {
-      maxChannels: 30,
+      maxChannels: 50,
       messagesPerChannel: 35,
       maxCharsPerChannel: 1500,
-      totalMaxChars: 180000,
+      totalMaxChars: 300000,
     }),
 
     collectSourceById(client, OLD_INTERVIEW_EVALUATION_CHANNEL_ID, {
@@ -893,8 +924,7 @@ async function buildHistoricalKnowledge(client) {
 
     ruleSources: [
       INTERVIEW_POLICY_TEXT,
-      SANTACREATORS_RULES_FALLBACK_TEXT,
-      liveRuleSources,
+      liveRuleSources || SANTACREATORS_RULES_FALLBACK_TEXT,
     ]
       .filter(Boolean)
       .join('\n\n')
@@ -1994,20 +2024,34 @@ export async function finishInterviewIntelligence({
   client,
   channel,
   candidateId,
+  completionMessageId,
+  interviewerId = parseInterviewerId(channel),
 }) {
   const session = getSession(channel?.id, candidateId);
-
-  if (!session) return false;
-
-  session.finished = true;
-  session.finishedAt = Date.now();
-  session.currentQuestion = null;
-
-  await updateRawIndexMessage(client, session);
-  const cleanup = setTimeout(() => {
-    if (LIVE_SESSIONS.get(session.key) === session) LIVE_SESSIONS.delete(session.key);
-  }, 30 * 60 * 1000);
-  cleanup.unref?.();
+  if (session) {
+    session.finished = true;
+    session.finishedAt = Date.now();
+    session.currentQuestion = null;
+    await updateRawIndexMessage(client, session).catch(console.error);
+    const cleanup = setTimeout(() => {
+      if (LIVE_SESSIONS.get(session.key) === session) LIVE_SESSIONS.delete(session.key);
+    }, 30 * 60 * 1000);
+    cleanup.unref?.();
+  }
+  if (!completionMessageId || !interviewerId ||
+      String(channel?.parentId) !== INTERVIEW_CATEGORY_ID) return Boolean(session);
+  const raw = await fetchTextChannel(client, RAW_ANALYSIS_LOG_CHANNEL_ID);
+  if (!raw) throw new Error('Canal de logs indisponível para agendar a análise automática.');
+  const job = {
+    channelId: channel.id, candidateId: String(candidateId), interviewerId: String(interviewerId),
+    completionMessageId: String(completionMessageId), status: 'pending', attempts: 0, createdAt: Date.now(),
+  };
+  const message = await raw.send({
+    content: `SC_INTERVIEW_JOB_V1\n${JSON.stringify(job)}`,
+    nonce: `job:${completionMessageId}`, enforceNonce: true,
+    allowedMentions: { parse: [] },
+  });
+  void runAutomaticAnalysisJob(client, message, job).catch(console.error);
   return true;
 }
 
@@ -2111,10 +2155,10 @@ function pairInterviewMessages(messages, candidateId, botId) {
 async function reconstructInterviewFromTicket(client, channel, candidateId) {
   const messages = await fetchMessagesPaginated(channel, Number.POSITIVE_INFINITY);
   const result = pairInterviewMessages(messages, candidateId, client.user.id);
+  const byAnswer = new Map(result.map((item) => [item.answerMessageId, item]));
   const raw = await fetchTextChannel(client, RAW_ANALYSIS_LOG_CHANNEL_ID);
   if (raw) {
-    const stored = await fetchMessagesPaginated(raw, 1000);
-    const byAnswer = new Map(result.map((item) => [item.answerMessageId, item]));
+    const stored = await fetchMessagesPaginated(raw, 1000).catch(() => []);
     for (const message of stored) {
       if (message.author?.id !== client.user.id) continue;
       const attachment = message.attachments?.find((item) =>
@@ -2122,24 +2166,28 @@ async function reconstructInterviewFromTicket(client, channel, candidateId) {
         byAnswer.has(item.name.slice(11, -5))
       );
       if (!attachment) continue;
-      const response = await fetch(attachment.url, { signal: AbortSignal.timeout(15_000) });
-      if (!response.ok) continue;
-      const entry = await response.json();
-      const target = byAnswer.get(String(entry.answerMessageId));
-      if (target && entry.marker === RAW_QUESTION_MARKER &&
-          String(entry.channelId) === String(channel.id) &&
-          String(entry.candidateId) === String(candidateId) &&
-          String(entry.questionMessageId) === String(target.questionMessageId) &&
-          entry.metrics) target.metrics = entry.metrics;
+      try {
+        const response = await fetch(attachment.url, { signal: AbortSignal.timeout(15_000) });
+        if (!response.ok) continue;
+        const entry = await response.json();
+        const target = byAnswer.get(String(entry.answerMessageId));
+        if (target && entry.marker === RAW_QUESTION_MARKER &&
+            String(entry.channelId) === String(channel.id) &&
+            String(entry.candidateId) === String(candidateId) &&
+            String(entry.questionMessageId) === String(target.questionMessageId) &&
+            String(entry.answer) === target.answer && entry.metrics) {
+          target.metrics = entry.metrics;
+        }
+      } catch (error) {
+        console.warn('[INTERVIEW_INTELLIGENCE] Telemetria indisponível:', message.id, error?.message);
+      }
     }
   }
-  const live = new Map(
-    (getSession(channel.id, candidateId)?.answers || []).map((item) => [item.answerMessageId, item])
-  );
-  // Somente usar telemetria da MESMA resposta; nunca reaproveitar por número.
-  for (const item of result) {
-    const recorded = live.get(item.answerMessageId);
-    if (recorded) item.metrics = recorded.metrics;
+  for (const entry of getSession(channel.id, candidateId)?.answers || []) {
+    const target = byAnswer.get(entry.answerMessageId);
+    if (target && entry.questionMessageId === target.questionMessageId && entry.answer === target.answer) {
+      target.metrics = entry.metrics;
+    }
   }
   return result;
 }
@@ -2229,6 +2277,159 @@ function stripJsonFence(text) {
   }
 
   return noFence.slice(start, end + 1);
+}
+
+function interviewAiFailure(error) {
+  const text = String(error?.message || error || '');
+  const status = Number(error?.status || error?.code ||
+    text.match(/"code"\s*:\s*(\d{3})/)?.[1] || 0);
+  return {
+    status,
+    transient: [408, 429, 500, 502, 503, 504].includes(status) ||
+      /UNAVAILABLE|RESOURCE_EXHAUSTED|timeout|timed out|fetch failed|ECONNRESET/i.test(text),
+  };
+}
+
+function sameInterviewAnswers(report, answers) {
+  return report?.questions?.length === answers.length &&
+    report.questions.every((item, index) =>
+      Number(item.number) === answers[index].number &&
+      String(item.questionMessageId) === String(answers[index].questionMessageId) &&
+      String(item.answerMessageId) === String(answers[index].answerMessageId) &&
+      String(item.question) === String(answers[index].question) &&
+      String(item.answer) === String(answers[index].answer)
+    );
+}
+
+async function findAnalysisHeader(client, channel) {
+  let before;
+  let fallback = null;
+  while (true) {
+    const batch = await channel.messages.fetch({ limit: 100, cache: false,
+      ...(before ? { before } : {}) });
+    if (!batch.size) return fallback;
+    const ordered = [...batch.values()].sort((a, b) => BigInt(a.id) > BigInt(b.id) ? -1 : 1);
+    for (const message of ordered) {
+      if (message.author?.id !== client.user.id) continue;
+      const ids = message.components.flatMap((row) => row.components.map(getInterviewButtonCustomId));
+      if (ids.includes('assumir_ticket') || ids.includes('fechar_ticket')) return message;
+      if (!fallback && ids.includes('sc_interview_analyze')) fallback = message;
+    }
+    before = ordered.at(-1).id;
+    if (batch.size < 100) return fallback;
+  }
+}
+
+async function writeAnalysisJob(message, job) {
+  await message.edit({
+    content: `SC_INTERVIEW_JOB_V1\n${JSON.stringify(job)}`,
+    allowedMentions: { parse: [] },
+  });
+}
+
+async function runAutomaticAnalysisJob(client, message, job) {
+  const key = String(job.channelId);
+  if (AUTO_ANALYSIS_JOBS.has(key)) return;
+  AUTO_ANALYSIS_JOBS.add(key);
+  try {
+    if (ANALYSIS_LOCKS.has(key) || CORRECTION_LOCKS.has(key)) {
+      job.status = 'pending';
+      job.nextAttemptAt = Date.now() + 15_000;
+      await writeAnalysisJob(message, job);
+      return;
+    }
+    ANALYSIS_LOCKS.add(key);
+    try {
+      const channel = await client.channels.fetch(key, { force: true });
+      if (!channel?.isTextBased?.() || String(channel.parentId) !== INTERVIEW_CATEGORY_ID ||
+          parseOpenerId(channel) !== String(job.candidateId) || isInterviewActive(channel) ||
+          /\bentrevista_encerrando:1\b/.test(String(channel.topic || ''))) {
+        job.status = 'cancelled';
+        job.error = 'Ticket indisponível, movido, encerrado ou com nova entrevista em andamento.';
+        await writeAnalysisJob(message, job);
+        return;
+      }
+      const completion = await channel.messages.fetch({ message: job.completionMessageId, cache: false });
+      if (completion.author?.id !== client.user.id ||
+          !completion.content.includes('Seu formulário está em análise!')) {
+        throw new Error('Conclusão da entrevista não confirmada no Discord.');
+      }
+      const header = await findAnalysisHeader(client, channel);
+      if (!header) throw new Error('Cabeçalho de análise ainda não disponível no ticket.');
+      const staff = await channel.guild.members.fetch({ user: job.interviewerId, force: true });
+      if (!canUseInterviewIntelligence(staff)) {
+        throw new Error('Aplicador sem permissão atual para receber o parecer interno.');
+      }
+      job.status = 'running';
+      job.attempts = Number(job.attempts || 0) + 1;
+      job.updatedAt = Date.now();
+      await writeAnalysisJob(message, job);
+      const result = await analyzeInterview({
+        client, channel, channelId: channel.id, guild: channel.guild,
+        message: header, user: staff.user, completionMessageId: job.completionMessageId,
+      });
+      job.status = 'done';
+      job.reportUrl = result.organizedMessage.url;
+      job.dmSent = result.dmSent;
+      job.error = null;
+      await writeAnalysisJob(message, job);
+    } catch (error) {
+      console.error('[INTERVIEW_INTELLIGENCE] Análise automática:', error);
+      job.status = (error?.retryable || interviewAiFailure(error).transient) &&
+        Number(job.attempts || 0) < 3 ? 'retrying' : 'failed';
+      job.error = truncate(error?.message || error, 600);
+      job.nextAttemptAt = Date.now() + 60_000 * Math.max(1, Number(job.attempts || 0));
+      await writeAnalysisJob(message, job);
+      if (job.status === 'failed') {
+        const organized = await fetchTextChannel(client, ORGANIZED_ANALYSIS_CHANNEL_ID);
+        await organized?.send({
+          content: `⚠️ A análise automática de <#${key}> ficou pendente.\n` +
+            `${job.error}\nA equipe pode tentar novamente pelo botão do ticket.`,
+          allowedMentions: { parse: [] },
+        }).catch(() => {});
+      }
+    } finally {
+      ANALYSIS_LOCKS.delete(key);
+    }
+  } finally {
+    AUTO_ANALYSIS_JOBS.delete(key);
+    if (['pending', 'retrying'].includes(job.status)) {
+      const timer = setTimeout(() => {
+        void runAutomaticAnalysisJob(client, message, job).catch(console.error);
+      }, Math.max(1000, Number(job.nextAttemptAt || 0) - Date.now()));
+      timer.unref?.();
+    }
+  }
+}
+
+export async function resumePendingInterviewAnalyses(client) {
+  const raw = await fetchTextChannel(client, RAW_ANALYSIS_LOG_CHANNEL_ID);
+  if (!raw) return;
+  let before;
+  while (true) {
+    const batch = await raw.messages.fetch({ limit: 100, cache: false,
+      ...(before ? { before } : {}) });
+    if (!batch.size) break;
+    const ordered = [...batch.values()].sort((a, b) => BigInt(a.id) > BigInt(b.id) ? -1 : 1);
+    for (const message of ordered) {
+      if (message.author?.id !== client.user.id ||
+          !message.content.startsWith('SC_INTERVIEW_JOB_V1\n')) continue;
+      let job;
+      try { job = JSON.parse(message.content.split('\n').slice(1).join('\n')); }
+      catch { continue; }
+      if (!['pending', 'running', 'retrying'].includes(job.status)) continue;
+      if (Number(job.nextAttemptAt || 0) > Date.now()) {
+        const timer = setTimeout(() => {
+          void runAutomaticAnalysisJob(client, message, job).catch(console.error);
+        }, Math.min(300_000, job.nextAttemptAt - Date.now()));
+        timer.unref?.();
+      } else {
+        await runAutomaticAnalysisJob(client, message, job);
+      }
+    }
+    before = ordered.at(-1).id;
+    if (batch.size < 100) break;
+  }
 }
 
 async function callGeminiJson(prompt) {
@@ -2332,9 +2533,14 @@ async function callGeminiJson(prompt) {
     Number.isFinite(value) && value >= 0 && value <= 100;
 
   let lastError = null;
+  let providerFailures = 0;
+  let invalidResponses = 0;
+  const deadline = Date.now() + 240_000;
 
   for (const model of GEMINI_MODELS) {
+    if (Date.now() >= deadline) break;
     for (let attempt = 1; attempt <= 2; attempt += 1) {
+      if (Date.now() >= deadline) break;
       let receivedResponse = false;
 
       try {
@@ -2344,6 +2550,8 @@ async function callGeminiJson(prompt) {
           config: {
             responseMimeType: 'application/json',
             responseJsonSchema,
+            abortSignal: AbortSignal.timeout(Math.max(1000, deadline - Date.now())),
+            httpOptions: { timeout: Math.max(1000, Math.min(60_000, deadline - Date.now())) },
             maxOutputTokens: attempt === 1 ? 16000 : 24000,
           },
         });
@@ -2428,8 +2636,12 @@ async function callGeminiJson(prompt) {
               ) ||
               typeof item.reason !==
                 'string' ||
-              typeof item.expectedConcept !==
+                           typeof item.expectedConcept !==
                 'string' ||
+              (
+                ['errada', 'incompleta'].includes(normalizeText(item.status)) &&
+                (!item.reason.trim() || !item.expectedConcept.trim())
+              ) ||
               !validScore(
                 item.aiSuspicionScore
               ) ||
@@ -2482,23 +2694,36 @@ async function callGeminiJson(prompt) {
             error
         );
 
-        if (
-          !receivedResponse
-        ) {
-          break;
+               if (receivedResponse) {
+          invalidResponses += 1;
+        } else {
+          providerFailures += 1;
+          const failure = interviewAiFailure(error);
+          if ([401, 403].includes(failure.status)) {
+            throw new Error('A chave da IA não está autorizada. Confira a configuração da API.');
+          }
+          if (!failure.transient) break;
+          if (attempt < 2 && Date.now() < deadline) {
+            const delay = Math.min(1000 * (2 ** Math.min(providerFailures, 4)) + Math.random() * 500,
+              Math.max(0, deadline - Date.now()));
+            await new Promise((resolve) => setTimeout(resolve, delay));
+          }
         }
       }
     }
   }
 
-  throw new Error(
-    'Não foi possível obter um parecer JSON completo e válido da IA. ' +
-    'Nenhuma correção foi enviada nesta tentativa. ' +
-    `Última falha: ${
-      lastError?.message ||
-      'nenhum modelo respondeu'
-    }`
+  const temporary = interviewAiFailure(lastError).transient;
+  const error = new Error(
+    temporary
+      ? 'O serviço de IA está temporariamente indisponível ou sobrecarregado. As respostas continuam salvas no Discord; a análise está pendente.'
+      : invalidResponses > 0
+        ? 'A IA respondeu, mas o parecer não passou na validação das 30 questões. Nenhuma correção foi enviada.'
+        : 'Nenhum modelo configurado respondeu. Confira os nomes dos modelos e a configuração da API.'
   );
+  error.retryable = temporary;
+  error.cause = lastError;
+  throw error;
 }
 
 function buildAnalysisPrompt({
@@ -2566,7 +2791,23 @@ SEGURANÇA E CALIBRAÇÃO
 CRITÉRIO DE CORREÇÃO
 ${INTERVIEW_POLICY_TEXT}
 
-RUBRICA DE INTERPRETAÇÃO — REVISÃO 2, DEFINIDA PELA LIDERANÇA
+RUBRICA DE INTERPRETAÇÃO — REVISÃO 3, DEFINIDA PELA LIDERANÇA
+- Antes de avaliar, reconstrua a intenção da resposta na leitura mais razoável.
+- Se a ideia central estiver compreensível e coerente, marque correta mesmo que
+  a pessoa seja breve, use gírias, escreva errado ou não dê todos os exemplos.
+- Não invente intenção correta quando houver contradição clara. Se houver duas
+  interpretações plausíveis, prefira revisao e peça esclarecimento sem pontuar erro.
+- Incompleta: diga precisamente qual parte ESSENCIAL pedida ficou faltando.
+- Errada: cite a contradição concreta entre a resposta e a regra aplicável.
+- Uma melhoria opcional não transforma uma resposta correta em incompleta.
+- As referências históricas incluem reviews: leia correções e respostas da equipe
+  na mesma entrevista. Silêncio não significa aprovação ou correção ignorada.
+- Resposta publicada pelo bot também pode ter sido contestada: não use sua própria
+  correção anterior como verdade. Priorize regras atuais e orientação explícita.
+- Nos scores e no resumo, não alegue descobrir qual ferramenta a pessoa usou.
+- Tempo, tamanho e velocidade são aspectos do mesmo sinal temporal; não conte
+  três vezes. Falta de digitação não é evidência independente forte.
+- Status e pontos avaliam entendimento. Suspeita de IA deve ficar separada.
 - Avalie somente o que a pergunta pede. O gabarito é referência de significado,
   não uma lista obrigatória de palavras, exemplos ou proibições adicionais.
 - Resposta curta, informal ou com erros de português é correta quando comunica
@@ -2637,7 +2878,7 @@ DEVOLVA SOMENTE JSON VÁLIDO, SEM MARKDOWN, EXATAMENTE NESTA ESTRUTURA:
   "questions": [
     {
       "number": 1,
-      "status": "pessoal|correta|incompleta|errada",
+      "status": "pessoal|correta|incompleta|errada|revisao",
       "reason": "motivo da correção",
       "expectedConcept": "ideia essencial que deveria aparecer, sem exigir frase idêntica",
       "aiSuspicionScore": 0,
@@ -2941,7 +3182,7 @@ function finalizeAnalysis({
   guardedAiScore = Math.min(guardedAiScore, 69);
   return {
     version: 1,
-    reviewPolicyVersion: 2,
+     reviewPolicyVersion: 3,
     generatedAt: Date.now(),
     marker: FINAL_REPORT_MARKER,
     guildId: channel.guildId,
@@ -3000,7 +3241,12 @@ function buildSummaryEmbed(report) {
       `**Análise gerada:** <t:${Math.floor(report.generatedAt / 1000)}:F>`,
       '',
       `**Resultado sugerido:** ${summary.resultSuggestion}`,
-      `**Peso dos erros:** ${summary.errorWeight} • limite de reprovação: 7`,
+     `**Pontos de erro:** ${summary.errorWeight.toLocaleString('pt-BR')}/30 • corte: 7`,
+      'Errada = 1 • Incompleta = 0,5 • 6,5 está abaixo do corte.',
+      report.referenceAudit
+        ? `**Referências:** ${report.referenceAudit.included}/${report.referenceAudit.available} tickets da categoria aprovados usados.`
+        : '',
+      report.auditUrl ? `[Fontes e contexto da análise](${report.auditUrl})` : '', 
     ].join('\n'))
     .addFields(
       {
@@ -3019,10 +3265,11 @@ function buildSummaryEmbed(report) {
         inline: false
       },
       {
-        name: '📑 Coincidências com regras',
-        value: matches.length
-          ? `Trechos extensos localizados em: **${matches.map((item) => `Q${item.number}`).join(', ')}**. Confira as fontes nos detalhes.`
-          : 'Nenhuma correspondência extensa confirmada pelo comparador. Isso não comprova ausência de cópia ou de IA.',
+       name: '📑 Coincidências com regras',
+        value: `Índice de cópia: **${summary.copyPasteSuspicionScore}/100** — indício, não prova.\n` +
+          (matches.length
+            ? `Trechos extensos localizados em: **${matches.map((item) => `Q${item.number}`).join(', ')}**. Confira as fontes nos detalhes.`
+            : 'Nenhuma correspondência extensa confirmada nas fontes lidas.'),
         inline: false
       },
       {
@@ -3084,7 +3331,7 @@ function buildQuestionDetailEmbeds(report) {
     const rule = telemetry.ruleMatch || {};
     const embed = new EmbedBuilder()
       .setTitle(`${statusIcon(item.status)} QUESTÃO ${item.number} • ${item.status.toUpperCase()}`)
-      .setColor(item.status === 'correta' ? 0x57F287 : 0x5865F2)
+      .setColor(({ correta: 0x57F287, incompleta: 0xF1C40F, errada: 0xED4245, revisao: 0xE67E22 })[item.status] || 0x5865F2)
       .setDescription(
         `**Candidato:** <@${report.candidate.id}>\n[Ticket](${report.channelUrl}) • ` +
         `[Resposta original](${channelUrl(report.guildId, report.channelId, item.answerMessageId)})`
@@ -3126,7 +3373,7 @@ function buildQuestionDetailEmbeds(report) {
           name: '📑 Comparação com regras',
           value: rule.matched
             ? truncate(
-                `**Trecho coincidente:** ${rule.matchedPhrase}\n[Consultar regra original](${rule.sourceUrl})`,
+              `**Sequência normalizada em comum:** ${rule.matchedPhrase}\n[Consultar regra original](${rule.sourceUrl})`,
                 900
               )
             : 'Nenhuma correspondência extensa confirmada pelo comparador.',
@@ -3149,7 +3396,7 @@ function buildHumanReportText(report) {
     `Canal: ${report.channelId}`,
     `Aplicador: ${report.interviewerId || 'não identificado'}`,
     `Resultado sugerido: ${report.summary.resultSuggestion}`,
-    `Peso de erros: ${report.summary.errorWeight}/7`,
+  `Pontos de erro: ${report.summary.errorWeight.toLocaleString('pt-BR')}/30; corte de reprovação: 7`,
     `IA: ${report.summary.aiSuspicionScore}/100`,
     `Copia/cola: ${report.summary.copyPasteSuspicionScore}/100`,
     `Confiança do parecer: ${report.summary.confidenceScore}/100`,
@@ -3264,89 +3511,65 @@ async function persistFinalReport(client, report) {
 
 async function sendCompleteAnalysisDm(user, report, organizedMessage) {
   const issues = report.questions.filter((item) => ['errada', 'incompleta'].includes(item.status));
-  const wrong = issues
-    .filter((item) => item.status === 'errada')
-    .map((item) => `Q${item.number}`);
-  const incomplete = issues
-    .filter((item) => item.status === 'incompleta')
-    .map((item) => `Q${item.number}`);
+  const list = (status) => report.questions.filter((item) => item.status === status)
+    .map((item) => `Q${item.number}`).join(', ') || 'Nenhuma.';
   const matches = report.questions.filter((item) => item.telemetry?.ruleMatch?.matched);
-  const flagged = report.questions
-    .filter((item) => item.aiSuspicionScore >= 35)
-    .sort((a, b) => b.aiSuspicionScore - a.aiSuspicionScore)
-    .slice(0, 3);
-
+  const flagged = [...report.questions].filter((item) => item.aiSuspicionScore >= 35)
+    .sort((a, b) => b.aiSuspicionScore - a.aiSuspicionScore).slice(0, 3);
+  const summary = report.summary;
   const embed = new EmbedBuilder()
-    .setTitle('📬 Entrevista • resumo para a equipe')
-    .setColor(0x5865F2)
+    .setTitle('📬 Entrevista pronta para revisão')
+    .setColor(summary.resultSuggestion === 'REPROVAR' ? 0xED4245 : 0x9B59B6)
     .setThumbnail(report.candidate.avatarUrl)
-    .setDescription([
-      `**Candidato:** <@${report.candidate.id}> • ID: ${report.candidate.id}`,
-      `**Usuário:** ${truncate(report.candidate.username, 100)}`,
-      `**Aplicador:** ${report.interviewerId ? `<@${report.interviewerId}>` : 'não identificado'}`,
-      `**Ticket:** [abrir](${report.channelUrl})`,
-      `**Data:** <t:${Math.floor(report.generatedAt / 1000)}:F>`,
-      '',
-      `**Parecer:** ${report.summary.resultSuggestion}`,
-      `**Peso dos erros:** ${report.summary.errorWeight} • limite: 7`,
-    ].join('\n'))
+    .setDescription(`**Candidato:** <@${report.candidate.id}>\n` +
+      `**Usuário:** ${truncate(report.candidate.username, 100)}\n` +
+      `**Aplicador:** ${report.interviewerId ? `<@${report.interviewerId}>` : 'não identificado'}\n` +
+      `[Abrir ticket](${report.channelUrl}) • [Ver análise completa](${organizedMessage.url})\n\n` +
+      `**Parecer:** ${summary.resultSuggestion}\n` +
+      `**${summary.errorWeight.toLocaleString('pt-BR')}/30 pontos de erro** • corte: **7**\n` +
+      'Errada = 1 • Incompleta = 0,5 • 6,5 está abaixo do corte.')
     .addFields(
-      {
-        name: '❌ Erradas',
-        value: wrong.join(', ') || 'Nenhuma.',
-        inline: false
-      },
-      {
-        name: '❓ Incompletas',
-        value: incomplete.join(', ') || 'Nenhuma.',
-        inline: false
-      },
-      {
-        name: '🤖 Indício auxiliar de IA',
-        value:
-          `**${report.summary.aiSuspicionScore}/100** — não é porcentagem de chance.\n` +
-          (
-            flagged.map((item) => `Q${item.number}: ${item.aiSuspicionScore}/100`).join(' • ') ||
-            'Nenhuma questão alcançou o destaque configurado.'
-          ),
-        inline: false
-      },
-      {
-        name: '📑 Coincidências com regras',
-        value: matches.length
-          ? matches.map((item) => `Q${item.number}`).join(', ') +
-            ' — confira os trechos e fontes no relatório.'
-          : 'Nenhum trecho extenso confirmado pelo comparador.',
-        inline: false
-      },
-      {
-        name: '🔎 Revisão completa',
-        value: `[Perguntas, respostas, motivos e fontes](${organizedMessage.url})`,
-        inline: false
-      }
+      { name: '❌ Erradas', value: list('errada'), inline: true },
+      { name: '🟡 Incompletas', value: list('incompleta'), inline: true },
+      { name: '🧐 Revisão humana', value: list('revisao'), inline: true },
+      { name: '🤖 Sinais de IA', value: `**${summary.aiSuspicionScore}/100**\n` +
+        (flagged.map((item) => `Q${item.number}: ${item.aiSuspicionScore}/100`).join(' • ') || 'Sem destaque individual.') },
+      { name: '📋 Sinais de cópia', value: `**${summary.copyPasteSuspicionScore}/100**\n` +
+        (matches.length
+          ? matches.map((item) => `Q${item.number}`).join(', ') + '\n' +
+            matches.slice(0, 3).map((item) => `[Fonte Q${item.number}](${item.telemetry.ruleMatch.sourceUrl})`).join(' • ') +
+            '\nTodos os trechos e links estão na análise completa.'
+          : 'Nenhum trecho extenso localizado nas fontes lidas.') },
+      { name: 'Como ler os índices', value: 'São sinais para investigação, não probabilidades de autoria. Boa escrita, rapidez ou ausência de digitação não provam uso de IA.' },
+      { name: 'Parecer em poucas palavras', value: truncate(summary.text || 'Confira os pontos abaixo.', 650) }
     )
-    .setFooter({
-      text: 'Decisão final humana • o comando abaixo pode ser copiado'
-    })
+    .setFooter({ text: 'SantaCreators • decisão da equipe • detalhes completos no relatório' })
     .setTimestamp(report.generatedAt);
-
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setStyle(ButtonStyle.Link)
-      .setLabel('Revisar e aplicar correção').setURL(organizedMessage.url)
+    new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Revisar e aplicar correção').setURL(organizedMessage.url)
   );
-
-  const content = issues.length
-    ? '**Comando para copiar:**\n```text\n!correcao ' +
-      issues.map((item) => item.number).join(' ') +
-      '\n```'
-    : 'Nenhuma questão marcada para envio de correção.';
-
-  return user.send({
-    content,
-    embeds: [embed],
-    components: [row],
-    allowedMentions: { parse: [] }
+  const message = await user.send({
+    content: issues.length ? '**Comando para copiar:**\n```text\n!correcao ' +
+      issues.map((item) => item.number).join(' ') + '\n```' : 'Nenhuma questão precisa de correção.',
+    embeds: [embed], components: [row], allowedMentions: { parse: [] },
   });
+  // Somente as questões que exigem ajuste: a auditoria das 30 fica no relatório.
+  for (const item of issues) {
+    await user.send({
+      embeds: [new EmbedBuilder()
+        .setTitle(`${item.status === 'errada' ? '❌' : '🟡'} Q${item.number} • ${item.status.toUpperCase()}`)
+        .setColor(item.status === 'errada' ? 0xED4245 : 0xF1C40F)
+        .setDescription(`[Conferir resposta original](${channelUrl(report.guildId, report.channelId, item.answerMessageId)})`)
+        .addFields(
+          { name: 'Pergunta', value: truncate(item.question, 450) || '—' },
+          { name: 'Resposta recebida', value: truncate(item.answer, 750) || 'Sem texto.' },
+          { name: 'Ajuste sugerido', value: truncate(item.reason, 600) || 'Revisar com a equipe.' },
+          { name: 'Ideia esperada', value: truncate(item.expectedConcept, 750) || 'Revisar com a equipe.' }
+        )],
+      allowedMentions: { parse: [] },
+    });
+  }
+  return message;
 }
 
 function getInterviewButtonCustomId(component) {
@@ -3432,187 +3655,104 @@ async function updateTicketHeaderAnalysisLink(
 
   embed.setFields(fields);
 
-  await interaction.message.edit({
-    embeds: [embed],
-    components: disableSpecificButtonRows(
+ await currentMessage.edit({
+    embeds: [embed, ...currentMessage.embeds.slice(1)],
+    components: enableSpecificButtonRows(
       currentMessage.components,
       'sc_interview_analyze'
     ),
+    allowedMentions: { parse: [] },
   });
 }
 
 async function analyzeInterview(interaction) {
-  const channel = await interaction.client.channels.fetch(interaction.channelId, { force: true });
-
-  if (
-    !channel?.isTextBased?.() ||
-    String(channel.parentId || '') !== INTERVIEW_CATEGORY_ID
-  ) {
-    throw new Error(
-      'Esse botão só pode ser usado em ticket de entrevista.'
-    );
+  const client = interaction.client;
+  const channel = await client.channels.fetch(interaction.channelId, { force: true });
+  if (!channel?.isTextBased?.() || String(channel.parentId) !== INTERVIEW_CATEGORY_ID) {
+    throw new Error('Esse botão só pode ser usado em ticket de entrevista.');
   }
-
-  if (isInterviewActive(channel)) {
-    throw new Error(
-      'A entrevista ainda está em andamento. Termine as perguntas antes de analisar.'
-    );
+  if (isInterviewActive(channel) || /\bentrevista_encerrando:1\b/.test(String(channel.topic || ''))) {
+    throw new Error('A entrevista está em andamento ou o ticket está sendo encerrado.');
   }
-
   const candidateId = parseOpenerId(channel);
-
-  if (!candidateId) {
-    throw new Error(
-      'Não consegui identificar o candidato pelo tópico `aberto_por:ID`.'
-    );
+  if (!candidateId) throw new Error('Não consegui identificar o candidato pelo tópico aberto_por:ID.');
+  const answers = await reconstructInterviewFromTicket(client, channel, candidateId);
+  if (answers.length !== EXPECTED_QUESTION_COUNT || answers.some((entry, index) => entry.number !== index + 1)) {
+    throw new Error(`Encontrei ${answers.length}/30 respostas. Complete a entrevista antes de analisar.`);
   }
-
-  if (/\bentrevista_encerrando:1\b/.test(String(channel.topic || ''))) {
-    throw new Error('O ticket está sendo encerrado.');
+  if (interaction.completionMessageId && answers.some((entry) =>
+    BigInt(entry.answerMessageId) >= BigInt(interaction.completionMessageId))) {
+    throw new Error('A conclusão salva pertence a uma entrevista anterior.');
   }
   const header = await channel.messages.fetch(interaction.message.id);
   const linked = header.embeds?.[0]?.fields?.find((field) =>
     field.name === '🔎 Análise de entrevista:'
   )?.value?.match(/https:\/\/discord\.com\/channels\/(\d+)\/(\d+)\/(\d+)/);
-  if (linked) {
-    const destination = await fetchTextChannel(interaction.client, linked[2]);
-    const organizedMessage = await destination?.messages.fetch(linked[3]);
-    if (!organizedMessage || organizedMessage.author?.id !== interaction.client.user.id) {
-      throw new Error('Relatório anterior indisponível. Revisão manual necessária.');
+  if (linked && linked[1] === channel.guildId && linked[2] === ORGANIZED_ANALYSIS_CHANNEL_ID) {
+    const destination = await fetchTextChannel(client, linked[2]);
+    const organizedMessage = await destination?.messages.fetch(linked[3]).catch(() => null);
+    if (organizedMessage?.author?.id === client.user.id) {
+      const report = await loadReportFromInteractionMessage({ message: organizedMessage }).catch(() => null);
+      if (report && report.reviewPolicyVersion === 3 && report.channelId === channel.id &&
+          report.candidate.id === candidateId && sameInterviewAnswers(report, answers)) {
+        let dmSent = true;
+        await sendCompleteAnalysisDm(interaction.user, report, organizedMessage).catch(() => { dmSent = false; });
+        await updateTicketHeaderAnalysisLink(interaction, organizedMessage);
+        return { report, organizedMessage, dmSent };
+      }
     }
-    const report = await loadReportFromInteractionMessage({ message: organizedMessage });
-    if (String(report.channelId) !== String(channel.id) || String(report.candidate.id) !== String(candidateId)) {
-      throw new Error('Relatório anterior não pertence a este ticket.');
-    }
-    let dmSent = true;
-    await sendCompleteAnalysisDm(interaction.user, report, organizedMessage).catch(() => { dmSent = false; });
-    return { report, organizedMessage, dmSent };
   }
   const interviewerId = parseInterviewerId(channel);
-
-  const candidateMember =
-    await interaction.guild.members
-      .fetch(candidateId)
-      .catch(() => null);
-
-  const candidateUser =
-    candidateMember?.user ||
-    await interaction.client.users
-      .fetch(candidateId)
-      .catch(() => null);
-
-  if (!candidateUser) {
-    throw new Error(
-      `Não consegui localizar o candidato ${candidateId} nem como membro nem como usuário do Discord.`
-    );
-  }
-
-  const candidate =
-    candidateMember ||
-    {
-      id:
-        candidateUser.id,
-
-      user:
-        candidateUser,
-
-      displayName:
-        candidateUser.globalName ||
-        candidateUser.username ||
-        candidateUser.tag ||
-        null,
-
-      displayAvatarURL:
-        (...args) =>
-          candidateUser.displayAvatarURL(
-            ...args
-          ),
-    };
-
-  const answers = await reconstructInterviewFromTicket(
-    interaction.client,
-    channel,
-    candidateId
-  );
-  if (answers.length !== EXPECTED_QUESTION_COUNT ||
-      answers.some((entry, index) => entry.number !== index + 1)) {
-    throw new Error(
-      `Encontrei somente ${answers.length}/${EXPECTED_QUESTION_COUNT} respostas. ` +
-      `A análise fica bloqueada para não gerar parecer incompleto.`
-    );
-  }
-
-  const knowledge = await buildHistoricalKnowledge(
-    interaction.client
-  );
-
+  const candidateMember = await channel.guild.members.fetch(candidateId).catch(() => null);
+  const candidateUser = candidateMember?.user || await client.users.fetch(candidateId).catch(() => null);
+  if (!candidateUser) throw new Error('Candidato não encontrado no Discord.');
+  const candidate = candidateMember || {
+    id: candidateId, user: candidateUser,
+    displayName: candidateUser.globalName || candidateUser.username,
+    displayAvatarURL: (...args) => candidateUser.displayAvatarURL(...args),
+  };
+  const knowledge = await buildHistoricalKnowledge(client);
   if (!knowledge.answerKey.trim() || /^Fonte \d+:/.test(knowledge.answerKey) ||
       !knowledge.approvedMembers.trim() || /^Fonte \d+:/.test(knowledge.approvedMembers)) {
-    throw new Error('Gabarito ou entrevistas históricas completas indisponíveis. Verifique acesso e formato antes de gerar o parecer.');
+    throw new Error('Gabarito ou entrevistas históricas completas indisponíveis. Confira as permissões de leitura.');
   }
-  const deterministicSignals =
-    calculateDeterministicSignals(
-      answers,
-      knowledge
-    );
-
-  const prompt = buildAnalysisPrompt({
-    candidateId,
-    interviewerId,
-    channel,
-    answers,
-    deterministicSignals,
-    knowledge,
+  const deterministicSignals = calculateDeterministicSignals(answers, knowledge);
+  const prompt = buildAnalysisPrompt({ candidateId, interviewerId, channel, answers, deterministicSignals, knowledge });
+  const rawChannel = await fetchTextChannel(client, RAW_ANALYSIS_LOG_CHANNEL_ID);
+  if (!rawChannel) throw new Error('Canal de auditoria indisponível. A análise foi preservada no ticket.');
+  const auditMessage = await rawChannel.send({
+    content: `SC_INTERVIEW_REQUEST_V1 • ticket:${channel.id} • candidato:${candidateId}`,
+    files: [new AttachmentBuilder(Buffer.from(JSON.stringify({
+      createdAt: Date.now(), channelId: channel.id, candidateId, interviewerId,
+      answers, deterministicSignals, knowledge, prompt,
+    }), 'utf8'), { name: `contexto_${channel.id}_${Date.now()}.json` })],
+    allowedMentions: { parse: [] },
   });
-
-  const modelResult = await callGeminiJson(prompt);
-  const currentChannel = await interaction.client.channels.fetch(channel.id, { force: true }).catch(() => null);
-  if (!currentChannel || String(currentChannel.parentId) !== INTERVIEW_CATEGORY_ID ||
-      parseOpenerId(currentChannel) !== String(candidateId) || isInterviewActive(currentChannel) ||
-      /\bentrevista_encerrando:1\b/.test(String(currentChannel.topic || ''))) {
+  let modelResult;
+  try {
+    modelResult = await callGeminiJson(prompt);
+  } catch (error) {
+    await auditMessage.reply({ content: `Análise pendente: ${truncate(error?.message || error, 1400)}`,
+      allowedMentions: { parse: [], repliedUser: false } }).catch(() => {});
+    throw error;
+  }
+  const fresh = await client.channels.fetch(channel.id, { force: true }).catch(() => null);
+  if (!fresh || String(fresh.parentId) !== INTERVIEW_CATEGORY_ID || parseOpenerId(fresh) !== candidateId ||
+      isInterviewActive(fresh) || /\bentrevista_encerrando:1\b/.test(String(fresh.topic || ''))) {
     throw new Error('Ticket apagado, movido, encerrado ou reiniciado durante a análise. Nada aplicado.');
   }
-  const currentAnswers = await reconstructInterviewFromTicket(interaction.client, currentChannel, candidateId);
-  if (currentAnswers.length !== answers.length || currentAnswers.some((item, index) =>
-    item.answerMessageId !== answers[index].answerMessageId || item.answer !== answers[index].answer
-  )) throw new Error('A entrevista mudou durante a análise. Execute novamente com os dados atuais.');
-
-  const report = finalizeAnalysis({
-    modelResult,
-    answers,
-    deterministicSignals,
-    candidate,
-    interviewerId,
-    channel,
-  });
-
-  const {
-    organizedMessage,
-  } = await persistFinalReport(
-    interaction.client,
-    report
-  );
-
-  await updateTicketHeaderAnalysisLink(
-    interaction,
-    organizedMessage
-  );
-
+  const checked = await reconstructInterviewFromTicket(client, fresh, candidateId);
+  if (!sameInterviewAnswers({ questions: answers }, checked)) {
+    throw new Error('A entrevista mudou durante a análise. Execute novamente com os dados atuais.');
+  }
+  const report = finalizeAnalysis({ modelResult, answers, deterministicSignals, candidate, interviewerId, channel: fresh });
+  report.referenceAudit = JSON.parse(knowledge.approvedMembers).audit;
+  report.auditUrl = auditMessage.url;
+  const { organizedMessage } = await persistFinalReport(client, report);
+  await updateTicketHeaderAnalysisLink(interaction, organizedMessage);
   let dmSent = true;
-
-  await sendCompleteAnalysisDm(
-    interaction.user,
-    report,
-    organizedMessage
-  ).catch(() => {
-    dmSent = false;
-  });
-
-  return {
-    report,
-    organizedMessage,
-    dmSent,
-  };
+  await sendCompleteAnalysisDm(interaction.user, report, organizedMessage).catch(() => { dmSent = false; });
+  return { report, organizedMessage, dmSent };
 }
 
 async function loadReportFromInteractionMessage(interaction) {
@@ -3670,15 +3810,18 @@ async function loadReportFromInteractionMessage(interaction) {
 function buildCorrectionEmbeds(report) {
   return report.questions.filter((item) => ['errada', 'incompleta'].includes(item.status))
     .map((item) => new EmbedBuilder()
-      .setTitle(`📌 Correção • Q${item.number} • ${item.status}`)
-      .setColor(0xED4245)
-      .setDescription([
-        `**Pergunta:** ${truncate(item.question, 700)}`,
-        `**Sua resposta:** ${truncate(item.answer, 1000)}`,
-        `**O que faltou/estava errado:** ${truncate(item.reason, 800)}`,
-        `**Ideia esperada:** ${truncate(item.expectedConcept, 1000)}`,
-      ].join('\n'))
-      .setFooter({ text: `Peso: ${report.summary.errorWeight}/7 • decisão humana` })
+      .setTitle(`${item.status === 'errada' ? '❌' : '🟡'} Questão ${item.number} • ${item.status.toUpperCase()}`)
+      .setColor(item.status === 'errada' ? 0xED4245 : 0xF1C40F)
+      .setDescription('Vamos ajustar esta resposta. Você pode explicar com suas próprias palavras.')
+      .addFields(
+        { name: 'Pergunta', value: truncate(item.question, 700) || '—' },
+        { name: 'Sua resposta', value: truncate(item.answer, 1000) || 'Sem texto.' },
+        { name: item.status === 'errada' ? 'O que precisa ser corrigido' : 'O que precisa ser completado',
+          value: truncate(item.reason, 800) || 'Confira a ideia esperada abaixo.' },
+        { name: 'Ideia esperada', value: truncate(item.expectedConcept, 1000) || 'Revisar com a equipe.' },
+        { name: 'Pontuação desta questão', value: item.status === 'errada' ? '1 ponto de erro.' : '0,5 ponto de erro.' }
+      )
+      .setFooter({ text: `Total: ${report.summary.errorWeight.toLocaleString('pt-BR')}/30 pontos de erro • corte: 7` })
     );
 }
 
@@ -3925,12 +4068,11 @@ async function applyCorrection(interaction) {
     );
   }
   const currentAnswers = await reconstructInterviewFromTicket(interaction.client, targetChannel, candidateId);
-  if (currentAnswers.length !== report.questions.length || currentAnswers.some((item, index) =>
-    String(item.answerMessageId) !== String(report.questions[index].answerMessageId) ||
-    String(item.answer) !== String(report.questions[index].answer)
-  )) throw new Error('As respostas mudaram após o parecer. Revise uma análise atualizada.');
+ if (!sameInterviewAnswers(report, currentAnswers)) {
+    throw new Error('As perguntas ou respostas mudaram após o parecer. Use Analisar Entrevista para atualizar.');
+  }
 
-  if (report.reviewPolicyVersion !== 2) {
+ if (report.reviewPolicyVersion !== 3) {
     return refreshCorrectionReport(
       interaction,
       report,
@@ -3947,25 +4089,39 @@ async function applyCorrection(interaction) {
     );
   }
 
-  const receiptMarker = `SC_CORRECTION_APPLY:${interaction.message.id}`;
-  const sent = await fetchMessagesPaginated(targetChannel, 300);
+ const receiptMarker = `SC_CORRECTION_APPLY:${interaction.message.id}`;
+  const issues = report.questions.filter((item) => ['errada', 'incompleta'].includes(item.status));
+  const sent = await fetchMessagesPaginated(targetChannel, Number.POSITIVE_INFINITY);
   for (let index = 0; index < embeds.length; index += 1) {
+    const item = issues[index];
     const partMarker = `${receiptMarker}:${index}`;
     if (sent.some((message) => message.author?.id === interaction.client.user.id &&
-        message.embeds?.some((embed) => embed.footer?.text?.includes(partMarker)))) continue;
-    embeds[index].setFooter({ text: `${partMarker} • decisão humana • peso ${report.summary.errorWeight}/7` });
-    await targetChannel.send({
-      content:
-        index === 0
-          ? `<@${candidateId}> segue a correção apontada pela análise para revisão da equipe:`
-          : undefined,
+        message.embeds?.some((embed) => String(embed.footer?.text || '').split(' • ')[0] === partMarker))) continue;
+    const fresh = await interaction.client.channels.fetch(channelId, { force: true });
+    if (String(fresh.parentId) !== INTERVIEW_CATEGORY_ID || parseOpenerId(fresh) !== candidateId ||
+        isInterviewActive(fresh) || /\bentrevista_encerrando:1\b/.test(String(fresh.topic || ''))) {
+      throw new Error('O ticket mudou de estado. Envio interrompido; as correções já enviadas serão preservadas.');
+    }
+    const original = await fresh.messages.fetch({ message: item.answerMessageId, cache: false });
+    if (original.author?.id !== candidateId || original.content !== item.answer) {
+      throw new Error(`A resposta da Q${item.number} mudou. Gere uma análise atualizada antes de continuar.`);
+    }
+    embeds[index].setFooter({ text: `${partMarker} • total ${report.summary.errorWeight.toLocaleString('pt-BR')}/30 • corte: 7` });
+    const correction = await fresh.send({
+      content: index === 0 ? `<@${candidateId}>, confira os ajustes abaixo e responda com suas palavras.` : undefined,
       embeds: [embeds[index]],
-      allowedMentions: {
-        users: index === 0 ? [candidateId] : [],
-        roles: [],
-        parse: [],
-      },
+      reply: { messageReference: original.id, failIfNotExists: true },
+      allowedMentions: { users: index === 0 ? [candidateId] : [], roles: [], parse: [], repliedUser: false },
     });
+    const raw = await fetchTextChannel(interaction.client, RAW_ANALYSIS_LOG_CHANNEL_ID);
+    await raw?.send({
+      content: `SC_INTERVIEW_CORRECTION_V1\n${JSON.stringify({
+        reportId: interaction.message.id, actorId: interaction.user.id, channelId, candidateId,
+        question: item.number, status: item.status, answerMessageId: original.id,
+        correctionMessageId: correction.id, correctionUrl: correction.url, sentAt: Date.now(),
+      })}`,
+      allowedMentions: { parse: [] },
+    }).catch(console.error);
   }
 
   const disabledRows = disableSpecificButtonRows(
@@ -4036,7 +4192,7 @@ export async function handleInterviewIntelligenceInteraction(
         content:
           `✅ Análise concluída para <@${result.report.candidate.id}>.\n` +
           `📊 Resultado sugerido: **${result.report.summary.resultSuggestion}**\n` +
-          `🧮 Peso de erros: **${result.report.summary.errorWeight}/7**\n` +
+           `🧮 Pontos de erro: **${result.report.summary.errorWeight.toLocaleString('pt-BR')}/30** • corte: 7\n` +
           `🤖 Índice de suspeita de IA: **${result.report.summary.aiSuspicionScore}/100**\n` +
           `📋 Relatório: ${result.organizedMessage.url}\n` +
           (result.dmSent
@@ -4096,7 +4252,7 @@ export async function handleInterviewIntelligenceInteraction(
       await interaction.editReply({
         content:
           `✅ Correção aplicada no ticket ${result.targetChannel}.\n` +
-          `🧮 Peso apontado pela análise: **${result.report.summary.errorWeight}/7**.\n` +
+           `🧮 Pontos de erro: **${result.report.summary.errorWeight.toLocaleString('pt-BR')}/30** • corte: 7.\n` +
           `ℹ️ Esse botão não concede ponto do comando \`!correcao\`; a pontuação antiga permanece intacta.`,
       }).catch(() => {});
     } catch (error) {

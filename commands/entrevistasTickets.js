@@ -24,6 +24,7 @@ import {
   handleInterviewIntelligenceInteraction,
   canUseInterviewIntelligence,
   abortInterviewIntelligence,
+  resumePendingInterviewAnalyses,
 } from '../events/interviewIntelligence.js';
 
 import {
@@ -3834,10 +3835,7 @@ async function notificarEquipeEntrevista(guild, canal, tipo) {
               }
 
               if (componentCustomId === 'sc_interview_analyze') {
-                component.setDisabled(
-                  Boolean(hasReport) ||
-                  ticketIsClosing
-                );
+                 component.setDisabled(ticketIsClosing);
               }
             }
 
@@ -7621,12 +7619,14 @@ function startInterviewAnalysisMaintenance() {
   installInterviewAnalysisButtonSync();
   installInterviewAnalysisBackfillWatchdog();
 
-  void backfillInterviewAnalysisButtons('startup/backfill').catch((error) => {
-    console.error(
-      '[IA ENTREVISTA BUTTON] Falha na sincronização inicial:',
-      error?.message || error
-    );
-  });
+  void backfillInterviewAnalysisButtons('startup/backfill')
+    .then(() => resumePendingInterviewAnalyses(client))
+    .catch((error) => {
+      console.error(
+        '[IA ENTREVISTA BUTTON] Falha na sincronização inicial ou retomada de análises:',
+        error?.message || error
+      );
+    });
 }
 
 if (client.isReady()) {

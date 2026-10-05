@@ -1182,20 +1182,23 @@ const fim = await channel.send(
   `EQUIPE - <@&1352275728476930099>`
 );
 
+await setInterviewActiveTopic(channel, false);
+
 await finishInterviewIntelligence({
   client: channel.client,
   channel,
-  candidateId: membro.id
+  candidateId: membro.id,
+  interviewerId: aplicadorId,
+  completionMessageId: fim.id,
 }).catch((error) => {
   console.error(
-    "[INTERVIEW_INTELLIGENCE] Falha não crítica ao finalizar rastreio:",
+    "[INTERVIEW_INTELLIGENCE] Falha ao agendar análise automática; use o botão do ticket:",
     error
   );
 });
 
 entrevistas.delete(membro.id);
 entrevistasAtivas.delete(channel.id);
-await setInterviewActiveTopic(channel, false);
 await salvarEntrevistasEmDisco();
 
 try {
@@ -1208,7 +1211,7 @@ try {
     const alertMsg = `✅ **ENTREVISTA FINALIZADA!**\n\n` +
       `📍 **Canal:** ${channel}\n` +
       `👤 **Candidato:** <@${membro.id}>\n` +
-      `👉 **Ação:** usem o botão **🔎 Analisar Entrevista** no topo do ticket. O \`!correcao\` continua disponível manualmente.`;
+     `👉 A análise automática será enviada ao privado de quem usou **!perguntas**. A equipe também pode usar **🔎 Analisar Entrevista** no topo do ticket. O \`!correcao\` continua disponível.`;
 
     await channel.guild.members.fetch().catch(() => {});
     const notifiedIds = new Set();
@@ -1506,11 +1509,9 @@ async function enviarLogFinalEntrevista(member, dados) {
     components: [row]
   });
 
-  // A análise completa de IA não roda mais automaticamente aqui.
-  // Ela é executada somente quando a equipe clicar em
-  // "🔎 Analisar Entrevista" no topo do ticket.
-  // Isso evita duplicidade, reduz custo e garante que o relatório
-  // persistente seja criado nos canais novos de análise.
+ // A análise automática é agendada em enviarPergunta, após a conclusão real.
+  // Este log e seus botões mantêm o funcionamento existente.
+  // O botão do ticket também entrega o parecer atual ao privado de quem clicar.
 }
 
 async function resetInterviewChannelState(channel, reason = "manual_reset") {
