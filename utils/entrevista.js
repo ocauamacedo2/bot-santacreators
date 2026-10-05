@@ -16,8 +16,9 @@ import {
 } from '../events/iaChatAuto.js';
 
 import {
- recordInterviewQuestion,
- recordInterviewAnswer,
+  startInterviewIntelligence,
+  recordInterviewQuestion,
+  recordInterviewAnswer,
   finishInterviewIntelligence,
   abortInterviewIntelligence
 } from '../events/interviewIntelligence.js';
@@ -181,7 +182,7 @@ function salvarEntrevistasEmDisco() {
   entrevistaSaveQueue = write.catch((error) => {
     console.error('[Entrevista] Falha ao salvar backup:', error);
   });
-  return write;
+  return entrevistaSaveQueue;
 }
 function carregarEntrevistasDoDisco() {
   try {
@@ -786,6 +787,30 @@ if (customId.startsWith('enviar|')) {
   const existing =
     entrevistas.get(targetId);
 
+  const hasProgress = existing && !existing.cancelled && (
+    Boolean(existing.collector) ||
+    Boolean(existing.finishing) ||
+    Number(existing.index) > 0 ||
+    (existing.mensagens?.length || 0) > 0 ||
+    (existing.respostas?.length || 0) > 0
+  );
+
+  if (
+    hasProgress &&
+    String(existing.channelId) === String(channel.id)
+  ) {
+    entrevistasStartLocks.delete(lockKey);
+
+    if (!existing.collector && !existing.finishing) {
+      entrevistasAtivas.delete(channel.id);
+      void reanexar(channel.client).catch((error) => {
+        console.error('[Entrevista] Falha ao retomar entrevista preservada:', error);
+      });
+    }
+
+    return true;
+  }
+
   if (
     existing &&
     String(existing.channelId) ===
@@ -953,13 +978,13 @@ if (customId.startsWith('enviar|')) {
       "[ENTREVISTA DEBUG] Iniciando inteligência auxiliar da entrevista..."
     );
 
-    void startInterviewIntelligence({
+    void Promise.resolve().then(() => startInterviewIntelligence({
       client: channel.client,
       channel,
       candidate: membro,
       interviewerId: entrevistadorId,
       questions: perguntas
-    }).then(() => {
+    })).then(() => {
       console.log(
         "[ENTREVISTA DEBUG] Inteligência auxiliar iniciada."
       );

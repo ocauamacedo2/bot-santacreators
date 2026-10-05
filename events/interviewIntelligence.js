@@ -2109,7 +2109,7 @@ function pairInterviewMessages(messages, candidateId, botId) {
 }
 
 async function reconstructInterviewFromTicket(client, channel, candidateId) {
-  const messages = await fetchMessagesPaginated(channel, 1500);
+  const messages = await fetchMessagesPaginated(channel, Number.POSITIVE_INFINITY);
   const result = pairInterviewMessages(messages, candidateId, client.user.id);
   const raw = await fetchTextChannel(client, RAW_ANALYSIS_LOG_CHANNEL_ID);
   if (raw) {
@@ -3378,33 +3378,32 @@ export async function handleInterviewIntelligenceInteraction(
   if (!supported) return false;
   if (!interaction.guild || !interaction.isButton?.() ||
       interaction.message?.author?.id !== interaction.client.user.id) return false;
-  const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
-  if (!canUseInterviewIntelligence(member)) {
-    await interaction.reply({ content: '🚫 Sem permissão para esta ação.', ephemeral: true }).catch(() => {});
+  try {
+    await interaction.deferReply({ ephemeral: true });
+  } catch {
     return true;
   }
 
+  const member = await interaction.guild.members.fetch({
+    user: interaction.user.id,
+    force: true,
+  }).catch(() => null);
+
+  if (!canUseInterviewIntelligence(member)) {
+    await interaction.editReply({ content: '🚫 Sem permissão para esta ação.' }).catch(() => {});
+    return true;
+  }
   if (customId === 'sc_interview_analyze') {
     const lockKey = String(interaction.channelId);
 
     if (ANALYSIS_LOCKS.has(lockKey) || CORRECTION_LOCKS.has(lockKey)) {
-      await interaction.reply({
-        content:
-          '⏳ Já existe uma análise sendo processada para este ticket.',
-        ephemeral: true,
+      await interaction.editReply({
+        content: '⏳ Já existe uma análise sendo processada para este ticket.',
       }).catch(() => {});
-
       return true;
     }
 
     ANALYSIS_LOCKS.add(lockKey);
-
-    try {
-      await interaction.deferReply({ ephemeral: true });
-    } catch {
-      ANALYSIS_LOCKS.delete(lockKey);
-      return true;
-    }
 
     const originalComponents =
       interaction.message.components;
@@ -3460,16 +3459,13 @@ export async function handleInterviewIntelligenceInteraction(
   if (customId.startsWith('sc_interview_apply|')) {
     const lockKey = String(customId.split('|')[1]);
     if (CORRECTION_LOCKS.has(lockKey) || ANALYSIS_LOCKS.has(lockKey)) {
-      await interaction.reply({ content: '⏳ Este ticket já tem uma operação em andamento.', ephemeral: true }).catch(() => {});
+      await interaction.editReply({
+        content: '⏳ Este ticket já tem uma operação em andamento.',
+      }).catch(() => {});
       return true;
     }
+
     CORRECTION_LOCKS.add(lockKey);
-    try {
-      await interaction.deferReply({ ephemeral: true });
-    } catch {
-      CORRECTION_LOCKS.delete(lockKey);
-      return true;
-    }
     try {
       const result = await applyCorrection(interaction);
 

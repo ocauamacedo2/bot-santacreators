@@ -3678,109 +3678,46 @@ async function notificarEquipeEntrevista(guild, canal, tipo) {
   return false;
 }
 
-  async function findInterviewTicketControlMessage(
-    channel,
-    maxMessages = 800
-  ) {
-    let before =
-      null;
+  async function findInterviewTicketControlMessage(channel) {
+    let before = null;
+    let fallbackControl = null;
 
-    let checked =
-      0;
+    while (true) {
+      const batch = await channel.messages.fetch({
+        limit: 100,
+        cache: false,
+        ...(before ? { before } : {}),
+      });
 
-    let fallbackControl =
-      null;
+      if (!batch.size) break;
 
-    while (
-      checked < maxMessages
-    ) {
-      const limit =
-        Math.min(
-          100,
-          maxMessages - checked
-        );
-
-      const batch =
-        await channel.messages
-          .fetch({
-            limit,
-
-            ...(before
-              ? { before }
-              : {})
-          })
-          .catch(
-            () => null
-          );
-
-      if (!batch?.size) {
-        break;
-      }
-
-      const messages =
-        [...batch.values()]
-          .sort(
-            (first, second) =>
-              second.createdTimestamp -
-              first.createdTimestamp
-          );
+      const messages = [...batch.values()].sort((a, b) =>
+        BigInt(a.id) > BigInt(b.id) ? -1 : BigInt(a.id) < BigInt(b.id) ? 1 : 0
+      );
 
       for (const message of messages) {
-        if (
-          message.author?.id !==
-          client.user?.id
-        ) {
-          continue;
-        }
+        if (message.author?.id !== client.user?.id) continue;
 
-        if (
-          messageHasInterviewAnalysisButton(
-            message
-          )
-        ) {
+        if (isMainTicketControlMessage(message)) {
           return {
             message,
-
-            alreadyHasButton:
-              true
+            alreadyHasButton: messageHasInterviewAnalysisButton(message),
           };
         }
 
-        if (
-          !fallbackControl &&
-          isMainTicketControlMessage(
-            message
-          )
-        ) {
-          fallbackControl =
-            message;
+        if (!fallbackControl && messageHasInterviewAnalysisButton(message)) {
+          fallbackControl = message;
         }
       }
 
-      checked +=
-        batch.size;
-
-      const oldest =
-        messages.at(-1);
-
-      before =
-        oldest?.id ||
-        null;
-
-      if (
-        batch.size < limit ||
-        !before
-      ) {
-        break;
-      }
+      const nextBefore = messages.at(-1)?.id;
+      if (!nextBefore || nextBefore === before || batch.size < 100) break;
+      before = nextBefore;
     }
 
     return {
-      message:
-        fallbackControl,
-
-      alreadyHasButton:
-        false
+      message: fallbackControl,
+      alreadyHasButton: Boolean(fallbackControl),
     };
   }
 
@@ -3867,7 +3804,7 @@ async function notificarEquipeEntrevista(guild, canal, tipo) {
         const hasReport = found.message.embeds?.some((embed) => embed.fields?.some((field) =>
           field.name === '🔎 Análise de entrevista:' && /https:\/\/discord\.com\/channels\//.test(field.value)
         ));
-        if (!hasReport && String(reason).toLowerCase().includes('ready')) {
+        if (!hasReport && reason === 'startup/backfill') {
           const rows = found.message.components.map((row) => {
             const builder = ActionRowBuilder.from(row);
             for (const component of builder.components) {
@@ -3993,7 +3930,22 @@ async function notificarEquipeEntrevista(guild, canal, tipo) {
     }
   }
 
-  async function backfillInterviewAnalysisButtons() {
+  let interviewAnalysisBackfillPromise = null;
+
+  function backfillInterviewAnalysisButtons(reason = 'periodic/backfill') {
+    if (interviewAnalysisBackfillPromise) {
+      return interviewAnalysisBackfillPromise;
+    }
+
+    interviewAnalysisBackfillPromise = runInterviewAnalysisBackfill(reason)
+      .finally(() => {
+        interviewAnalysisBackfillPromise = null;
+      });
+
+    return interviewAnalysisBackfillPromise;
+  }
+
+  async function runInterviewAnalysisBackfill(reason) {
     const category =
       client.channels.cache.get(
         CATEGORIES.entrevista
@@ -4059,7 +4011,7 @@ async function notificarEquipeEntrevista(guild, canal, tipo) {
       const changed =
         await ensureInterviewAnalysisButton(
           channel,
-          'ready/backfill'
+          reason
         );
 
       if (changed) {
@@ -4213,36 +4165,8 @@ async function notificarEquipeEntrevista(guild, canal, tipo) {
   // =========================================================
 
   async function onReady() {
+  startInterviewAnalysisMaintenance();
   await verificarOuCriarMenu();
-
-  installInterviewAnalysisButtonSync();
-
-  installInterviewAnalysisBackfillWatchdog();
-
-  await backfillInterviewAnalysisButtons()
-    .catch((error) => {
-      console.error(
-        '[IA ENTREVISTA BUTTON] Falha no backfill ao iniciar:',
-        error?.message || error
-      );
-    });
-
-  const interviewAnalysisBackfillRetryTimer = setTimeout(() => {
-    backfillInterviewAnalysisButtons()
-      .catch((error) => {
-        console.error(
-          '[IA ENTREVISTA BUTTON] Falha na segunda tentativa de backfill:',
-          error?.message || error
-        );
-      });
-  }, 5000);
-
-  if (
-    typeof interviewAnalysisBackfillRetryTimer.unref ===
-    'function'
-  ) {
-    interviewAnalysisBackfillRetryTimer.unref();
-  }
 
 // =========================================================
 // Regra #7: Monitor de Saída/Banimento
@@ -7649,6 +7573,34 @@ if (
   );
 }
 
+}
+
+let interviewAnalysisMaintenanceStarted = false;
+
+function startInterviewAnalysisMaintenance() {
+  if (interviewAnalysisMaintenanceStarted) return;
+  if (!client.isReady()) return;
+
+  interviewAnalysisMaintenanceStarted = true;
+  client.off('clientReady', startInterviewAnalysisMaintenance);
+  client.off('ready', startInterviewAnalysisMaintenance);
+
+  installInterviewAnalysisButtonSync();
+  installInterviewAnalysisBackfillWatchdog();
+
+  void backfillInterviewAnalysisButtons('startup/backfill').catch((error) => {
+    console.error(
+      '[IA ENTREVISTA BUTTON] Falha na sincronização inicial:',
+      error?.message || error
+    );
+  });
+}
+
+if (client.isReady()) {
+  startInterviewAnalysisMaintenance();
+} else {
+  client.once('clientReady', startInterviewAnalysisMaintenance);
+  client.once('ready', startInterviewAnalysisMaintenance);
 }
 
 return {
