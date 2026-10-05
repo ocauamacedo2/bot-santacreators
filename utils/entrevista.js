@@ -20,7 +20,9 @@ import {
   recordInterviewQuestion,
   recordInterviewAnswer,
   finishInterviewIntelligence,
-  abortInterviewIntelligence
+  abortInterviewIntelligence,
+  canOverrideInterviewAttemptLimit,
+  getInterviewAttemptStatus
 } from '../events/interviewIntelligence.js';
 // ===== CONFIG =====
 
@@ -701,14 +703,81 @@ if (customId.startsWith('iniciar|')) {
   const [, channelId] = customId.split('|');
   await interaction.deferUpdate().catch(() => {});
 
-  const membro = interaction.member || null;
-  const cargoEntrevista = interaction.guild.roles.cache.get('1353797415488196770');
+  const cargoEntrevista =
+    interaction.guild.roles.cache.get(
+      '1353797415488196770'
+    );
 
-  const topic = String(interaction.channel?.topic || "");
-  const mOpener = topic.match(/aberto_por:(\d{17,20})/i);
-  const targetId = mOpener ? mOpener[1] : interaction.user.id;
+  const topic =
+    String(
+      interaction.channel
+        ?.topic ||
+      ""
+    );
 
-  iaInterviewPauseForManualInterview(interaction.channel, targetId, interaction.user.id);
+  const mOpener =
+    topic.match(
+      /aberto_por:(\d{17,20})/i
+    );
+
+  const targetId =
+    mOpener
+      ? mOpener[1]
+      : interaction.user.id;
+
+  const membro =
+    interaction.guild.members.cache.get(
+      targetId
+    ) ||
+    await interaction.guild.members
+      .fetch(
+        targetId
+      )
+      .catch(
+        () => null
+      );
+
+  const attemptStatus =
+    await getInterviewAttemptStatus(
+      interaction.client,
+      targetId
+    )
+      .catch(
+        () => null
+      );
+
+  const authorizedOverride =
+    canOverrideInterviewAttemptLimit(
+      interaction.member
+    );
+
+  if (
+    attemptStatus?.blocked &&
+    !authorizedOverride
+  ) {
+    await interaction
+      .followUp({
+        content:
+          `⛔ <@${targetId}> já realizou **${attemptStatus.count}/${attemptStatus.maxAttempts} entrevistas** nos últimos **${attemptStatus.windowDays} dias**.\n` +
+          'Uma nova tentativa precisa de liberação da gestão. Se a gestão autorizar, alguém com permissão pode iniciar manualmente.',
+        ephemeral:
+          true,
+        allowedMentions: {
+          parse: [],
+        },
+      })
+      .catch(
+        () => {}
+      );
+
+    return true;
+  }
+
+  iaInterviewPauseForManualInterview(
+    interaction.channel,
+    targetId,
+    interaction.user.id
+  );
 
   const row = new ActionRowBuilder().addComponents(
   new ButtonBuilder()

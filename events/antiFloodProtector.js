@@ -1495,9 +1495,58 @@ const TRUSTED_DISCORD_GUILD_IDS = new Set([
 const EXTERNAL_LINK_ALLOWED_ROLE_IDS = new Set([
     '1352493359897378941', // Senior Creator
     '1352407252216184833', // Resp Líder
+    '1388976314253312100', // Coord Creators
     '1262262852949905409', // Resp Influ
     '1352408327983861844', // Resp Creators
 ]);
+
+// =====================================================
+// CARGOS AUTORIZADOS A PUBLICAR ANÚNCIOS DE EVENTOS
+// =====================================================
+//
+// Estes cargos podem publicar anúncios legítimos contendo:
+//
+// • @everyone / @here
+// • links
+// • convite do Discord
+// • link de canal/mensagem
+// • imagem do evento
+// • textos longos de regras/premiação
+//
+// IMPORTANTE:
+//
+// Esta autorização NÃO desativa o Anti Flood Protector.
+//
+// Ela serve somente para impedir que a combinação:
+//
+// • vários links
+// • mensagem longa
+// • linha repetida
+//
+// seja tratada sozinha como uma raid textual crítica.
+//
+// Proteções realmente críticas continuam funcionando,
+// incluindo:
+//
+// • excesso real de @everyone/@here
+// • linguagem explícita de invasão/raid
+// • ataque de mídia
+// • scam
+// • phishing
+// • pornografia
+// • flood
+// • spam
+// • links encurtados suspeitos
+//
+// =====================================================
+
+const RAID_ANNOUNCEMENT_ALLOWED_ROLE_IDS = new Set([
+    '1352407252216184833', // Resp Líder
+    '1388976314253312100', // Coord Creators
+    '1262262852949905409', // Resp Influ
+    '1352408327983861844', // Resp Creators
+]);
+
 function isSeniorCreator(member) {
     if (!member) {
         return false;
@@ -1506,6 +1555,19 @@ function isSeniorCreator(member) {
     return member.roles?.cache?.some(
         role =>
             EXTERNAL_LINK_ALLOWED_ROLE_IDS.has(
+                role.id
+            )
+    ) === true;
+}
+
+function isRaidAnnouncementAllowed(member) {
+    if (!member) {
+        return false;
+    }
+
+    return member.roles?.cache?.some(
+        role =>
+            RAID_ANNOUNCEMENT_ALLOWED_ROLE_IDS.has(
                 role.id
             )
     ) === true;
@@ -2960,10 +3022,42 @@ function detectRaidSpam(message) {
         /seguranca\s+do\s+servidor|spamados?\s+(?:de\s+)?novo/i.test(normalized);
 
     const longMessage = Array.from(content).length >= 300;
+
     const excessiveMassMentions =
         massMentions.length >= CONFIG.raidSpam.massMentionLimit;
+
     const excessiveLinks =
         links.length >= CONFIG.raidSpam.linkLimit;
+
+    // =================================================
+    // ANÚNCIO AUTORIZADO DE EVENTO
+    // =================================================
+    //
+    // Resp Líder, Coord Creators, Resp Influ e
+    // Resp Creators publicam regularmente anúncios
+    // oficiais com:
+    //
+    // • texto longo
+    // • links
+    // • imagens
+    // • @everyone / @here
+    // • regras e premiações
+    //
+    // Para esses cargos, a combinação isolada de:
+    //
+    // links + texto longo + linha repetida
+    //
+    // NÃO deve ser suficiente para classificar a
+    // mensagem como raid.
+    //
+    // As demais regras críticas continuam ativas.
+    //
+    // =================================================
+
+    const authorizedRaidAnnouncement =
+        isRaidAnnouncementAllowed(
+            message.member
+        );
 
     const detected =
         (
@@ -2980,6 +3074,7 @@ function detectRaidSpam(message) {
             links.length >= 1
         ) ||
         (
+            !authorizedRaidAnnouncement &&
             excessiveLinks &&
             mostRepeatedLine >= 2 &&
             longMessage

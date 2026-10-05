@@ -145,7 +145,7 @@ const QUESTOES = {
 
   9: {
     pergunta: "📦 Quantos baús existem dentro do prédio da SantaCreators e qual deles é proibido de ser mexido de forma alguma? E por quê?",
-    resposta: "Existem 6 baús. O baú da liderança não deve ser mexido por quem não tem acesso. O baú de Creators também não é para retirada, pois é voltado para doações."
+    resposta: "A contagem pode ser entendida como 5 baús coletivos/operacionais ou 6 quando o baú pessoal entra na conta. O importante é entender que o baú de Responsável/Liderança é restrito e não deve ser mexido por quem não tem acesso, enquanto o Baú Creators é voltado para doações e não permite retirada pelos membros."
   },
 
   10: {
@@ -175,7 +175,7 @@ const QUESTOES = {
 
   15: {
     pergunta: "📈 Na sua visão, quais atitudes e comportamentos são essenciais para que um membro da SantaCreators evolua na hierarquia e conquiste promoções dentro da empresa?",
-    resposta: "Demonstrar comprometimento, estar presente nos projetos da empresa, participar dos eventos, mostrar vontade de ajudar e manter uma boa postura dentro da equipe."
+    resposta: "Questão de visão pessoal. A resposta pode variar, mas precisa desenvolver minimamente a ideia. Pode citar respeito, comprometimento, presença, participação, vontade de ajudar, dedicação e boa postura. Uma resposta extremamente curta, como apenas 'respeito', pode receber orientação por estar pouco desenvolvida; esta questão não soma pontos de erro."
   },
 
   16: {
@@ -195,12 +195,12 @@ const QUESTOES = {
 
   19: {
     pergunta: "💬 A call é obrigatória para todos na SantaCreators? Em quais casos ela passa a ser necessária e por quê?",
-    resposta: "Não. Somente responsáveis têm obrigação de ficar em call. Entretanto, ficar em call ajuda a tirar dúvidas e aproxima mais a pessoa da equipe."
+    resposta: "A call não é obrigatória o tempo todo para todos. Ela passa a ser necessária em eventos, reuniões, alinhamentos e outras atividades oficiais quando houver convocação ou necessidade operacional. Responsáveis e cargos de liderança também precisam acompanhar a call quando a função exigir suporte ou orientação."
   },
 
   20: {
     pergunta: "🚀 Pergunta Bônus\n\nComo o comprometimento diário (registro, bate ponto e organização) influencia sua evolução dentro da SantaCreators?",
-    resposta: "O comprometimento diário parece ser contabilizado em pontos individuais, servindo para pontuar membros dentro da equipe, avaliar desempenho e manter a organização."
+    resposta: "Comprometimento, lealdade, dedicação, presença e organização ajudam na evolução dentro da SantaCreators. O candidato ainda está em pré-admissão e não precisa conhecer dashboards, pontuação individual ou a mecânica interna do bate ponto para demonstrar esse entendimento."
   },
 
   21: {

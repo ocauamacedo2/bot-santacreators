@@ -5026,7 +5026,10 @@ if (dados.nome === 'entrevista') {
       // =====================================================
      if (
   id === 'sc_interview_analyze' ||
-  id.startsWith('sc_interview_apply|')
+  id.startsWith('sc_interview_apply|') ||
+  id.startsWith('sc_interview_decide|') ||
+  id.startsWith('sc_interview_confirm|') ||
+  id.startsWith('sc_interview_cancel|')
 ) {
   if (!canUseInterviewIntelligence(member)) {
     await interaction.reply({
