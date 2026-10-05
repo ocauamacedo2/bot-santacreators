@@ -788,121 +788,49 @@ if (customId.startsWith('enviar|')) {
 
   if (
     existing &&
-    !existing.cancelled &&
     String(existing.channelId) ===
       String(channel.id)
   ) {
-    const membroExistente =
-      await withTimeout(
-        channel.guild.members.fetch(
-          targetId
-        ),
-        8000,
-        "buscar candidato para retomar entrevista"
-      ).catch(() => null);
+    console.warn(
+      "[ENTREVISTA DEBUG] Estado anterior encontrado antes de um novo ENVIAR. Limpando estado antigo para iniciar uma nova entrevista.",
+      {
+        targetId,
+        channelId: channel.id,
+        index:
+          Number(existing.index) ||
+          0,
+        tinhaCollector:
+          Boolean(existing.collector),
+        tinhaGlobalTimer:
+          Boolean(
+            existing.globalTimer?.timeout
+          )
+      }
+    );
 
     if (
-      membroExistente &&
-      Number(existing.timeoutEnd || 0) >
-        Date.now()
+      existing.globalTimer?.timeout
     ) {
-      await interaction.message
-        .edit({
-          components: []
-        })
-        .catch(() => {});
-
-      entrevistasAtivas.add(
-        channel.id
+      clearTimeout(
+        existing.globalTimer.timeout
       );
-
-      console.log(
-        "[ENTREVISTA DEBUG] Estado existente encontrado. Retomando entrevista.",
-        {
-          targetId,
-          channelId: channel.id,
-          index:
-            Number(existing.index) ||
-            0
-        }
-      );
-
-      const resumeIndex =
-        Number(existing.index) ||
-        0;
-
-      if (
-        !existing.globalTimer
-      ) {
-        iniciarContadorGlobal(
-          channel,
-          targetId,
-          Math.max(
-            1,
-            Number(existing.timeoutEnd) -
-              Date.now()
-          )
-        ).then(
-          async (globalTimer) => {
-            const dadosAtualizados =
-              entrevistas.get(
-                targetId
-              );
-
-            if (
-              !dadosAtualizados
-            ) {
-              return;
-            }
-
-            dadosAtualizados.globalTimer =
-              globalTimer;
-
-            entrevistas.set(
-              targetId,
-              dadosAtualizados
-            );
-
-            await salvarEntrevistasEmDisco()
-              .catch(() => {});
-          }
-        ).catch((err) => {
-          console.error(
-            "[Entrevista] Falha ao restaurar contador global:",
-            err
-          );
-        });
-      }
-
-      void enviarPergunta(
-        channel,
-        membroExistente,
-        resumeIndex
-      ).catch(
-        async (err) => {
-          console.error(
-            `[Entrevista] Falha ao retomar Q${resumeIndex + 1}:`,
-            err
-          );
-
-          await channel.send(
-            `❌ Não consegui retomar a entrevista.\n\n**Erro:** \`${String(
-              err?.message ||
-                err
-            ).slice(
-              0,
-              800
-            )}\``
-          ).catch(() => {});
-        }
-      );
-
-      entrevistasStartLocks.delete(
-        lockKey
-      );
-
-      return true;
     }
+
+    existing.cancelled =
+      true;
+
+    if (
+      existing.collector
+    ) {
+      try {
+        existing.collector.stop(
+          'novo_inicio_manual'
+        );
+      } catch {}
+    }
+
+    existing.collector =
+      null;
 
     entrevistas.delete(
       targetId
@@ -913,7 +841,12 @@ if (customId.startsWith('enviar|')) {
     );
 
     await salvarEntrevistasEmDisco()
-      .catch(() => {});
+      .catch((error) => {
+        console.error(
+          "[Entrevista] Falha ao limpar estado antigo antes do novo início:",
+          error
+        );
+      });
   }
 
   console.log(

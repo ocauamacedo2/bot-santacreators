@@ -3586,6 +3586,9 @@ async function notificarEquipeEntrevista(guild, canal, tipo) {
   let interviewAnalysisButtonSyncInstalled =
     false;
 
+  let interviewAnalysisBackfillWatchdogTimer =
+    null;
+
   function getComponentCustomId(component) {
     return String(
       component?.customId ||
@@ -4077,6 +4080,40 @@ async function notificarEquipeEntrevista(guild, canal, tipo) {
     };
   }
 
+  function installInterviewAnalysisBackfillWatchdog() {
+    if (
+      interviewAnalysisBackfillWatchdogTimer
+    ) {
+      return;
+    }
+
+    interviewAnalysisBackfillWatchdogTimer =
+      setInterval(
+        () => {
+          void backfillInterviewAnalysisButtons()
+            .catch((error) => {
+              console.error(
+                '[IA ENTREVISTA BUTTON] Falha no watchdog periódico de tickets de entrevista:',
+                error?.message ||
+                error
+              );
+            });
+        },
+        5 * 60 * 1000
+      );
+
+    if (
+      typeof interviewAnalysisBackfillWatchdogTimer.unref ===
+      'function'
+    ) {
+      interviewAnalysisBackfillWatchdogTimer.unref();
+    }
+
+    console.log(
+      '[IA ENTREVISTA BUTTON] Watchdog periódico instalado para a categoria de entrevistas.'
+    );
+  }
+
   function installInterviewAnalysisButtonSync() {
     if (
       interviewAnalysisButtonSyncInstalled
@@ -4179,6 +4216,8 @@ async function notificarEquipeEntrevista(guild, canal, tipo) {
   await verificarOuCriarMenu();
 
   installInterviewAnalysisButtonSync();
+
+  installInterviewAnalysisBackfillWatchdog();
 
   await backfillInterviewAnalysisButtons()
     .catch((error) => {
@@ -4393,6 +4432,23 @@ await finalizarTicketComConclusao(
       message.author.bot
     ) {
       return false;
+    }
+
+    if (
+      message.channel?.type ===
+        ChannelType.GuildText &&
+      String(
+        message.channel.parentId ||
+        ''
+      ) ===
+        String(
+          CATEGORIES.entrevista
+        )
+    ) {
+      void ensureInterviewAnalysisButton(
+        message.channel,
+        'atividade no ticket de entrevista'
+      );
     }
 
     // =========================================================
