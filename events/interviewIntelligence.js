@@ -3591,11 +3591,36 @@ async function applyCorrection(interaction) {
   }
 
   if (
-    String(targetChannel.guildId) !== String(report.guildId) ||
-    String(targetChannel.guildId) !== String(interaction.guildId)
+    !targetChannel.guildId ||
+    String(targetChannel.guildId) !== String(report.guildId)
   ) {
     throw new Error(
-      `Servidor divergente: ticket=${targetChannel.guildId}; relatório=${report.guildId}; clique=${interaction.guildId}.`
+      `Servidor divergente entre ticket e relatório: ticket=${targetChannel.guildId}; relatório=${report.guildId}.`
+    );
+  }
+
+  if (
+    String(interaction.channelId) !== ORGANIZED_ANALYSIS_CHANNEL_ID
+  ) {
+    throw new Error(
+      'A correção deve ser aplicada pelo botão do relatório no canal de análises configurado.'
+    );
+  }
+
+  const targetGuild = await interaction.client.guilds.fetch(
+    targetChannel.guildId
+  ).catch(() => null);
+
+  const targetMember = targetGuild
+    ? await targetGuild.members.fetch({
+        user: interaction.user.id,
+        force: true,
+      }).catch(() => null)
+    : null;
+
+  if (!canUseInterviewIntelligence(targetMember)) {
+    throw new Error(
+      'Você não possui permissão para aplicar correções no servidor do ticket, ou não foi possível confirmar seus cargos.'
     );
   }
 
@@ -3714,16 +3739,17 @@ export async function handleInterviewIntelligenceInteraction(
     return true;
   }
 
-  const member = await interaction.guild.members.fetch({
-    user: interaction.user.id,
-    force: true,
-  }).catch(() => null);
-
-  if (!canUseInterviewIntelligence(member)) {
-    await interaction.editReply({ content: '🚫 Sem permissão para esta ação.' }).catch(() => {});
-    return true;
-  }
   if (customId === 'sc_interview_analyze') {
+    const member = await interaction.guild.members.fetch({
+      user: interaction.user.id,
+      force: true,
+    }).catch(() => null);
+
+    if (!canUseInterviewIntelligence(member)) {
+      await interaction.editReply({ content: '🚫 Sem permissão para esta ação.' }).catch(() => {});
+      return true;
+    }
+
     const lockKey = String(interaction.channelId);
 
     if (ANALYSIS_LOCKS.has(lockKey) || CORRECTION_LOCKS.has(lockKey)) {
