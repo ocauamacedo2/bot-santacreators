@@ -2240,8 +2240,9 @@ async function callGeminiJson(prompt) {
     );
   }
 
-  const scoreSchema = { type: 'number', minimum: 0, maximum: 100 };
+  const scoreSchema = { type: 'number' };
   const statuses = new Set(['pessoal', 'correta', 'incompleta', 'errada', 'revisao']);
+
   const responseJsonSchema = {
     type: 'object',
     required: ['overall', 'questions'],
@@ -2249,8 +2250,11 @@ async function callGeminiJson(prompt) {
       overall: {
         type: 'object',
         required: [
-          'aiSuspicionScore', 'copyPasteSuspicionScore',
-          'confidenceScore', 'summary', 'styleAssessment',
+          'aiSuspicionScore',
+          'copyPasteSuspicionScore',
+          'confidenceScore',
+          'summary',
+          'styleAssessment',
         ],
         properties: {
           aiSuspicionScore: scoreSchema,
@@ -2260,27 +2264,64 @@ async function callGeminiJson(prompt) {
           styleAssessment: { type: 'string' },
         },
       },
+
       questions: {
         type: 'array',
-        minItems: EXPECTED_QUESTION_COUNT,
-        maxItems: EXPECTED_QUESTION_COUNT,
         items: {
           type: 'object',
           required: [
-            'number', 'status', 'reason', 'expectedConcept',
-            'aiSuspicionScore', 'copyPasteSuspicionScore',
-            'signals', 'automaticFailure', 'automaticFailureReason',
+            'number',
+            'status',
+            'reason',
+            'expectedConcept',
+            'aiSuspicionScore',
+            'copyPasteSuspicionScore',
+            'signals',
+            'automaticFailure',
+            'automaticFailureReason',
           ],
           properties: {
-            number: { type: 'integer', minimum: 1, maximum: EXPECTED_QUESTION_COUNT },
-            status: { type: 'string', enum: [...statuses] },
-            reason: { type: 'string' },
-            expectedConcept: { type: 'string' },
+            number: {
+              type: 'integer',
+            },
+
+            status: {
+              type: 'string',
+            },
+
+            reason: {
+              type: 'string',
+            },
+
+            expectedConcept: {
+              type: 'string',
+            },
+
             aiSuspicionScore: scoreSchema,
+
             copyPasteSuspicionScore: scoreSchema,
-            signals: { type: 'array', items: { type: 'string' } },
-            automaticFailure: { type: 'boolean' },
-            automaticFailureReason: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+
+            signals: {
+              type: 'array',
+              items: {
+                type: 'string',
+              },
+            },
+
+            automaticFailure: {
+              type: 'boolean',
+            },
+
+            automaticFailureReason: {
+              anyOf: [
+                {
+                  type: 'string',
+                },
+                {
+                  type: 'null',
+                },
+              ],
+            },
           },
         },
       },
@@ -2289,6 +2330,7 @@ async function callGeminiJson(prompt) {
 
   const validScore = (value) =>
     Number.isFinite(value) && value >= 0 && value <= 100;
+
   let lastError = null;
 
   for (const model of GEMINI_MODELS) {
@@ -2305,60 +2347,146 @@ async function callGeminiJson(prompt) {
             maxOutputTokens: attempt === 1 ? 16000 : 24000,
           },
         });
+
         receivedResponse = true;
 
-        const finishReason = result.candidates?.[0]?.finishReason;
-        if (finishReason && finishReason !== 'STOP') {
-          throw new Error(`Resposta da IA não concluída: ${finishReason}.`);
+        const finishReason =
+          result.candidates?.[0]?.finishReason;
+
+        if (
+          finishReason &&
+          finishReason !== 'STOP'
+        ) {
+          throw new Error(
+            `Resposta da IA não concluída: ${finishReason}.`
+          );
         }
 
-        const parsed = JSON.parse(stripJsonFence(result.text));
-        const questions = parsed?.questions;
-        const overall = parsed?.overall;
-        const numbers = Array.isArray(questions)
-          ? questions.map((item) => Number(item?.number))
-          : [];
+        const parsed =
+          JSON.parse(
+            stripJsonFence(
+              result.text
+            )
+          );
+
+        const questions =
+          parsed?.questions;
+
+        const overall =
+          parsed?.overall;
+
+        const numbers =
+          Array.isArray(questions)
+            ? questions.map(
+                (item) =>
+                  Number(
+                    item?.number
+                  )
+              )
+            : [];
 
         if (
           !overall ||
-          !validScore(overall.aiSuspicionScore) ||
-          !validScore(overall.copyPasteSuspicionScore) ||
-          !validScore(overall.confidenceScore) ||
-          typeof overall.summary !== 'string' ||
-          typeof overall.styleAssessment !== 'string' ||
-          !Array.isArray(questions) ||
-          numbers.length !== EXPECTED_QUESTION_COUNT ||
-          new Set(numbers).size !== EXPECTED_QUESTION_COUNT ||
-          numbers.some((number) =>
-            !Number.isInteger(number) || number < 1 || number > EXPECTED_QUESTION_COUNT
+          !validScore(
+            overall.aiSuspicionScore
           ) ||
-          questions.some((item) =>
-            !item ||
-            !statuses.has(normalizeText(item.status)) ||
-            typeof item.reason !== 'string' ||
-            typeof item.expectedConcept !== 'string' ||
-            !validScore(item.aiSuspicionScore) ||
-            !validScore(item.copyPasteSuspicionScore) ||
-            !Array.isArray(item.signals) ||
-            item.signals.some((signal) => typeof signal !== 'string') ||
-            typeof item.automaticFailure !== 'boolean' ||
-            !(item.automaticFailureReason === null ||
-              typeof item.automaticFailureReason === 'string') ||
-            (item.automaticFailure && !String(item.automaticFailureReason || '').trim())
+          !validScore(
+            overall.copyPasteSuspicionScore
+          ) ||
+          !validScore(
+            overall.confidenceScore
+          ) ||
+          typeof overall.summary !==
+            'string' ||
+          typeof overall.styleAssessment !==
+            'string' ||
+          !Array.isArray(
+            questions
+          ) ||
+          numbers.length !==
+            EXPECTED_QUESTION_COUNT ||
+          new Set(
+            numbers
+          ).size !==
+            EXPECTED_QUESTION_COUNT ||
+          numbers.some(
+            (number) =>
+              !Number.isInteger(
+                number
+              ) ||
+              number < 1 ||
+              number >
+                EXPECTED_QUESTION_COUNT
+          ) ||
+          questions.some(
+            (item) =>
+              !item ||
+              !statuses.has(
+                normalizeText(
+                  item.status
+                )
+              ) ||
+              typeof item.reason !==
+                'string' ||
+              typeof item.expectedConcept !==
+                'string' ||
+              !validScore(
+                item.aiSuspicionScore
+              ) ||
+              !validScore(
+                item.copyPasteSuspicionScore
+              ) ||
+              !Array.isArray(
+                item.signals
+              ) ||
+              item.signals.some(
+                (signal) =>
+                  typeof signal !==
+                  'string'
+              ) ||
+              typeof item.automaticFailure !==
+                'boolean' ||
+              !(
+                item.automaticFailureReason ===
+                  null ||
+                typeof item.automaticFailureReason ===
+                  'string'
+              ) ||
+              (
+                item.automaticFailure &&
+                !String(
+                  item.automaticFailureReason ||
+                    ''
+                ).trim()
+              )
           )
         ) {
-          throw new Error('Parecer incompleto ou inválido: esperadas 30 questões únicas e campos tipados.');
+          throw new Error(
+            'Parecer incompleto ou inválido: esperadas 30 questões únicas e campos tipados.'
+          );
         }
 
         return parsed;
+
       } catch (error) {
-        lastError = error;
+        lastError =
+          error;
+
         console.warn(
-          `[INTERVIEW_INTELLIGENCE] Modelo ${model}, tentativa ${attempt}/2, etapa ${receivedResponse ? 'validacao-json' : 'requisicao'}:`,
-          error?.message || error
+          `[INTERVIEW_INTELLIGENCE] Modelo ${model}, tentativa ${attempt}/2, etapa ${
+            receivedResponse
+              ? 'validacao-json'
+              : 'requisicao'
+          }:`,
+          error?.message ||
+            error
         );
 
-        if (!receivedResponse) break;
+        if (
+          !receivedResponse
+        ) {
+          break;
+        }
       }
     }
   }
@@ -2366,7 +2494,10 @@ async function callGeminiJson(prompt) {
   throw new Error(
     'Não foi possível obter um parecer JSON completo e válido da IA. ' +
     'Nenhuma correção foi enviada nesta tentativa. ' +
-    `Última falha: ${lastError?.message || 'nenhum modelo respondeu'}`
+    `Última falha: ${
+      lastError?.message ||
+      'nenhum modelo respondeu'
+    }`
   );
 }
 
