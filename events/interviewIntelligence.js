@@ -847,6 +847,80 @@ async function fetchMessagesPaginated(channel, maxMessages = 200) {
   );
 }
 
+function applyPendingRejectionToAttemptStatus(
+  baseStatus,
+  {
+    includePendingRejection = false,
+    pendingReportId = null,
+  } = {}
+) {
+  const rejectionReportIds =
+    new Set(
+      (
+        baseStatus
+          ?.rejectionReportIds ||
+        []
+      ).map(
+        String
+      )
+    );
+
+  const normalizedPendingReportId =
+    String(
+      pendingReportId ||
+      ''
+    );
+
+  const pendingAlreadyRecorded =
+    normalizedPendingReportId
+      ? rejectionReportIds.has(
+          normalizedPendingReportId
+        )
+      : false;
+
+  const extraRejection =
+    includePendingRejection &&
+    !pendingAlreadyRecorded
+      ? 1
+      : 0;
+
+  const maxAttempts =
+    Number(
+      baseStatus
+        ?.maxAttempts ||
+      MAX_INTERVIEW_ATTEMPTS
+    );
+
+  const count =
+    Math.min(
+      maxAttempts,
+      Number(
+        baseStatus
+          ?.count ||
+        0
+      ) +
+        extraRejection
+    );
+
+  return {
+    ...baseStatus,
+    count,
+    remaining:
+      Math.max(
+        0,
+        maxAttempts -
+        count
+      ),
+    blocked:
+      count >=
+      maxAttempts,
+    rejectionReportIds:
+      [
+        ...rejectionReportIds
+      ],
+  };
+}
+
 export async function getInterviewAttemptStatus(
   client,
   candidateId,
@@ -855,6 +929,10 @@ export async function getInterviewAttemptStatus(
       INTERVIEW_ATTEMPT_WINDOW_DAYS,
     maxAttempts =
       MAX_INTERVIEW_ATTEMPTS,
+    includePendingRejection =
+      false,
+    pendingReportId =
+      null,
   } = {}
 ) {
   const normalizedCandidateId =
@@ -874,8 +952,19 @@ export async function getInterviewAttemptStatus(
       windowDays,
       maxAttempts,
       available: false,
+      rejectionReportIds: [],
     };
   }
+
+  const decorate =
+    (baseStatus) =>
+      applyPendingRejectionToAttemptStatus(
+        baseStatus,
+        {
+          includePendingRejection,
+          pendingReportId,
+        }
+      );
 
   const cacheKey =
     getInterviewAttemptStatusCacheKey(
@@ -897,7 +986,9 @@ export async function getInterviewAttemptStatus(
     ) >
       Date.now()
   ) {
-    return cached.value;
+    return decorate(
+      cached.value
+    );
   }
 
   const inFlight =
@@ -908,7 +999,9 @@ export async function getInterviewAttemptStatus(
   if (
     inFlight
   ) {
-    return inFlight;
+    return decorate(
+      await inFlight
+    );
   }
 
   const generation =
@@ -924,7 +1017,7 @@ export async function getInterviewAttemptStatus(
       const logChannel =
         await fetchTextChannel(
           client,
-          INTERVIEW_ATTEMPT_LOG_CHANNEL_ID
+          RAW_ANALYSIS_LOG_CHANNEL_ID
         );
 
       if (!logChannel) {
@@ -936,6 +1029,7 @@ export async function getInterviewAttemptStatus(
           windowDays,
           maxAttempts,
           available: false,
+          rejectionReportIds: [],
         };
       }
 
@@ -949,7 +1043,7 @@ export async function getInterviewAttemptStatus(
           60 *
           1000;
 
-      const uniqueTickets =
+      const rejectedReports =
         new Set();
 
       let before =
@@ -1002,88 +1096,82 @@ export async function getInterviewAttemptStatus(
             continue;
           }
 
-          for (
-            const embed of
-            message.embeds ||
-            []
-          ) {
-            if (
-              String(
-                embed.title ||
-                ''
-              ) !==
-              '🏁 Entrevista Finalizada'
-            ) {
-              continue;
-            }
-
-            const fields =
-              Array.isArray(
-                embed.fields
-              )
-                ? embed.fields
-                : [];
-
-            const candidateField =
-              fields.find(
-                (field) =>
-                  normalizeText(
-                    field.name
-                  ).includes(
-                    'candidato'
-                  )
-              );
-
-            const channelField =
-              fields.find(
-                (field) =>
-                  normalizeText(
-                    field.name
-                  ).includes(
-                    'canal'
-                  )
-              );
-
-            if (
-              !String(
-                candidateField
-                  ?.value ||
-                ''
-              ).includes(
-                normalizedCandidateId
-              )
-            ) {
-              continue;
-            }
-
-            const ticketId =
-              String(
-                channelField
-                  ?.value ||
-                ''
-              ).match(
-                /<#(\d{17,22})>/
-              )?.[1] ||
-              String(
-                channelField
-                  ?.value ||
-                ''
-              ).match(
-                /\b(\d{17,22})\b/
-              )?.[1] ||
-              message.id;
-
-            uniqueTickets.add(
-              String(
-                ticketId
-              )
+          const content =
+            String(
+              message.content ||
+              ''
             );
+
+          if (
+            !content.startsWith(
+              'SC_INTERVIEW_DECISION_V1\n'
+            )
+          ) {
+            continue;
           }
 
-          // Já chegou ao máximo permitido.
-          // Não precisa continuar lendo o mês inteiro.
+          let decisionRecord =
+            null;
+
+          try {
+            decisionRecord =
+              JSON.parse(
+                content
+                  .split('\n')
+                  .slice(1)
+                  .join('\n')
+              );
+          } catch {
+            continue;
+          }
+
           if (
-            uniqueTickets.size >=
+            String(
+              decisionRecord
+                ?.candidateId ||
+              ''
+            ) !==
+              normalizedCandidateId ||
+            String(
+              decisionRecord
+                ?.decision ||
+              ''
+            ) !==
+              'reject'
+          ) {
+            continue;
+          }
+
+          const decidedAt =
+            Number(
+              decisionRecord
+                ?.decidedAt ||
+              message.createdTimestamp ||
+              0
+            );
+
+          if (
+            decidedAt <
+            cutoff
+          ) {
+            continue;
+          }
+
+          const rejectionKey =
+            String(
+              decisionRecord
+                ?.reportId ||
+              decisionRecord
+                ?.channelId ||
+              message.id
+            );
+
+          rejectedReports.add(
+            rejectionKey
+          );
+
+          if (
+            rejectedReports.size >=
             maxAttempts
           ) {
             reachedCutoff =
@@ -1126,7 +1214,8 @@ export async function getInterviewAttemptStatus(
           !before ||
           batch.size < 100 ||
           Number(
-            oldest?.createdTimestamp ||
+            oldest
+              ?.createdTimestamp ||
             0
           ) < cutoff
         ) {
@@ -1135,7 +1224,7 @@ export async function getInterviewAttemptStatus(
       }
 
       const count =
-        uniqueTickets.size;
+        rejectedReports.size;
 
       const value = {
         count,
@@ -1151,6 +1240,10 @@ export async function getInterviewAttemptStatus(
         windowDays,
         maxAttempts,
         available: true,
+        rejectionReportIds:
+          [
+            ...rejectedReports
+          ],
       };
 
       if (
@@ -1182,7 +1275,9 @@ export async function getInterviewAttemptStatus(
   );
 
   try {
-    return await scanPromise;
+    return decorate(
+      await scanPromise
+    );
   } finally {
     if (
       INTERVIEW_ATTEMPT_STATUS_INFLIGHT.get(
@@ -1817,56 +1912,392 @@ function buildTimingMetrics({
   answerMessage,
   liveTelemetry,
 }) {
-  const elapsedMs = Math.max(
-    0,
-    Number(answerMessage?.createdTimestamp || 0) -
-      Number(questionMessage?.createdTimestamp || 0)
-  );
+  const questionCreatedAt =
+    Number(
+      questionMessage
+        ?.createdTimestamp ||
+      0
+    );
 
-  const answer = String(answerMessage?.content || '');
-  const chars = answer.length;
-  const words = tokenize(answer).length;
-  const seconds = elapsedMs / 1000;
-  const charsPerSecond = seconds > 0 ? chars / seconds : null;
+  const answerCreatedAt =
+    Number(
+      answerMessage
+        ?.createdTimestamp ||
+      0
+    );
 
-  const typing = liveTelemetry?.typing || null;
+  const elapsedMs =
+    Math.max(
+      0,
+      answerCreatedAt -
+        questionCreatedAt
+    );
 
-  let speedSignal = 0;
+  const answer =
+    String(
+      answerMessage
+        ?.content ||
+      ''
+    );
 
-  if (chars >= 280 && elapsedMs > 0 && elapsedMs <= 18_000) {
-    speedSignal = 100;
-  } else if (chars >= 180 && elapsedMs > 0 && elapsedMs <= 15_000) {
-    speedSignal = 90;
-  } else if (chars >= 120 && elapsedMs > 0 && elapsedMs <= 10_000) {
-    speedSignal = 82;
-  } else if (chars >= 100 && elapsedMs > 0 && elapsedMs <= 15_000) {
-    speedSignal = 62;
-  } else if (chars >= 80 && elapsedMs > 0 && elapsedMs <= 10_000) {
-    speedSignal = 55;
+  const chars =
+    answer.length;
+
+  const words =
+    tokenize(
+      answer
+    ).length;
+
+  const seconds =
+    elapsedMs /
+    1000;
+
+  const charsPerSecond =
+    seconds >
+    0
+      ? chars /
+        seconds
+      : null;
+
+  const typing =
+    liveTelemetry
+      ?.typing ||
+    null;
+
+  const rawTypingEvents =
+    Array.isArray(
+      typing
+        ?.events
+    )
+      ? typing.events
+      : [];
+
+  const fallbackTypingEvents =
+    rawTypingEvents.length >
+    0
+      ? rawTypingEvents
+      : [
+          typing?.firstAt,
+          typing?.lastAt,
+        ];
+
+  const typingEvents =
+    [
+      ...new Set(
+        fallbackTypingEvents
+          .map(
+            Number
+          )
+          .filter(
+            (timestamp) =>
+              Number.isFinite(
+                timestamp
+              ) &&
+              timestamp >
+                0 &&
+              (
+                !questionCreatedAt ||
+                timestamp >=
+                  questionCreatedAt
+              ) &&
+              (
+                !answerCreatedAt ||
+                timestamp <=
+                  answerCreatedAt
+              )
+          )
+      )
+    ].sort(
+      (first, second) =>
+        first -
+        second
+    );
+
+  const firstTypingAt =
+    typingEvents.at(
+      0
+    ) ||
+    Number(
+      typing
+        ?.firstAt ||
+      0
+    ) ||
+    null;
+
+  const lastTypingAt =
+    typingEvents.at(
+      -1
+    ) ||
+    Number(
+      typing
+        ?.lastAt ||
+      0
+    ) ||
+    null;
+
+  // O Discord envia "typing start" e renova esse estado
+  // periodicamente enquanto a pessoa continua digitando.
+  // Por isso, usamos uma janela de até 10s por evento.
+  // É uma ESTIMATIVA de atividade, não um keylogger.
+  const typingIntervals =
+    typingEvents.map(
+      (timestamp) => [
+        timestamp,
+        Math.min(
+          answerCreatedAt ||
+            (
+              timestamp +
+              10_000
+            ),
+          timestamp +
+            10_000
+        ),
+      ]
+    );
+
+  const mergedTypingIntervals =
+    [];
+
+  for (
+    const interval of
+    typingIntervals
+  ) {
+    const [
+      intervalStart,
+      intervalEnd,
+    ] =
+      interval;
+
+    const previous =
+      mergedTypingIntervals.at(
+        -1
+      );
+
+    if (
+      !previous ||
+      intervalStart >
+        previous[1]
+    ) {
+      mergedTypingIntervals.push(
+        [
+          intervalStart,
+          intervalEnd,
+        ]
+      );
+
+      continue;
+    }
+
+    previous[1] =
+      Math.max(
+        previous[1],
+        intervalEnd
+      );
+  }
+
+  const estimatedActiveTypingMs =
+    mergedTypingIntervals.reduce(
+      (
+        total,
+        [
+          intervalStart,
+          intervalEnd,
+        ]
+      ) =>
+        total +
+        Math.max(
+          0,
+          intervalEnd -
+            intervalStart
+        ),
+      0
+    );
+
+  const typingCoveragePercent =
+    elapsedMs >
+    0
+      ? Math.min(
+          100,
+          Math.round(
+            (
+              estimatedActiveTypingMs /
+              elapsedMs
+            ) *
+              1000
+          ) /
+            10
+        )
+      : 0;
+
+  const firstTypingDelayMs =
+    firstTypingAt &&
+    questionCreatedAt
+      ? Math.max(
+          0,
+          firstTypingAt -
+            questionCreatedAt
+        )
+      : null;
+
+  const lastTypingToAnswerMs =
+    lastTypingAt &&
+    answerCreatedAt
+      ? Math.max(
+          0,
+          answerCreatedAt -
+            lastTypingAt
+        )
+      : null;
+
+  const typingDataAvailable =
+    Boolean(
+      liveTelemetry
+        ?.typing
+        ?.available
+    );
+
+  let typingPattern =
+    'indisponivel';
+
+  if (
+    typingDataAvailable
+  ) {
+    if (
+      typingEvents.length ===
+      0
+    ) {
+      typingPattern =
+        'nenhum_evento_observado';
+    } else if (
+      typingCoveragePercent >=
+        45 ||
+      typingEvents.length >=
+        4
+    ) {
+      typingPattern =
+        'digitacao_sustentada';
+    } else if (
+      typingEvents.length >=
+      2
+    ) {
+      typingPattern =
+        'digitacao_recorrente';
+    } else {
+      typingPattern =
+        'digitacao_breve';
+    }
+  }
+
+  let manualTypingSignal =
+    0;
+
+  if (
+    typingDataAvailable &&
+    typingEvents.length >
+      0
+  ) {
+    manualTypingSignal =
+      Math.min(
+        100,
+        25 +
+          Math.min(
+            45,
+            typingCoveragePercent
+          ) +
+          Math.min(
+            30,
+            typingEvents.length *
+              6
+          )
+      );
+  }
+
+  let speedSignal =
+    0;
+
+  if (
+    chars >= 280 &&
+    elapsedMs > 0 &&
+    elapsedMs <= 18_000
+  ) {
+    speedSignal =
+      100;
+  } else if (
+    chars >= 180 &&
+    elapsedMs > 0 &&
+    elapsedMs <= 15_000
+  ) {
+    speedSignal =
+      90;
+  } else if (
+    chars >= 120 &&
+    elapsedMs > 0 &&
+    elapsedMs <= 10_000
+  ) {
+    speedSignal =
+      82;
+  } else if (
+    chars >= 100 &&
+    elapsedMs > 0 &&
+    elapsedMs <= 15_000
+  ) {
+    speedSignal =
+      62;
+  } else if (
+    chars >= 80 &&
+    elapsedMs > 0 &&
+    elapsedMs <= 10_000
+  ) {
+    speedSignal =
+      55;
   }
 
   return {
     elapsedMs,
-    elapsedSeconds: Math.round(seconds * 10) / 10,
+    elapsedSeconds:
+      Math.round(
+        seconds *
+        10
+      ) /
+      10,
     chars,
     words,
     charsPerSecond:
-      charsPerSecond == null
+      charsPerSecond ==
+      null
         ? null
-        : Math.round(charsPerSecond * 100) / 100,
+        : Math.round(
+            charsPerSecond *
+            100
+          ) /
+          100,
     speedSignal,
-    typingObserved: Boolean(typing?.count),
-    typingEventCount: Number(typing?.count || 0),
-    firstTypingDelayMs:
-      typing?.firstAt && questionMessage?.createdTimestamp
-        ? Math.max(
-            0,
-            Number(typing.firstAt) -
-              Number(questionMessage.createdTimestamp)
-          )
-        : null,
-    lastTypingAt: typing?.lastAt || null,
-    typingDataAvailable: Boolean(liveTelemetry?.typing?.available),
+    typingObserved:
+      typingEvents.length >
+      0,
+    typingEventCount:
+      typingEvents.length,
+    typingEvents,
+    firstTypingDelayMs,
+    lastTypingAt,
+    lastTypingToAnswerMs,
+    estimatedActiveTypingMs,
+    estimatedActiveTypingSeconds:
+      Math.round(
+        (
+          estimatedActiveTypingMs /
+          1000
+        ) *
+          10
+      ) /
+      10,
+    typingCoveragePercent,
+    typingPattern,
+    manualTypingSignal:
+      Math.round(
+        manualTypingSignal
+      ),
+    typingDataAvailable,
   };
 }
 
@@ -2220,6 +2651,10 @@ async function persistRawAnswer(client, session, answerEntry) {
               ? 'não observado'
               : `${Math.round(metrics.firstTypingDelayMs / 100) / 10}s`
           }\n` +
+          `Tempo ativo estimado: ${metrics.estimatedActiveTypingSeconds ?? 0}s\n` +
+          `Cobertura do tempo: ${metrics.typingCoveragePercent ?? 0}%\n` +
+          `Padrão: ${metrics.typingPattern || 'indisponivel'}\n` +
+          `Sinal de escrita manual: ${metrics.manualTypingSignal ?? 0}/100\n` +
           `Sinal de velocidade: ${metrics.speedSignal}/100`,
         inline: true,
       },
@@ -2258,33 +2693,130 @@ async function persistRawAnswer(client, session, answerEntry) {
 }
 
 function installTypingObserver(client) {
-  if (!client || TYPING_INSTALLED_CLIENTS.has(client)) return;
+  if (
+    !client ||
+    TYPING_INSTALLED_CLIENTS.has(
+      client
+    )
+  ) {
+    return;
+  }
 
-  TYPING_INSTALLED_CLIENTS.add(client);
+  TYPING_INSTALLED_CLIENTS.add(
+    client
+  );
 
-  client.on(Events.TypingStart, (typing) => {
-    const channelId = String(typing.channel?.id || '');
-    const userId = String(typing.user?.id || '');
+  const typingIntentAvailable =
+    Boolean(
+      client.options
+        ?.intents
+        ?.has?.(
+          1 << 11
+        )
+    );
 
-    if (!channelId || !userId) return;
+  if (
+    !typingIntentAvailable
+  ) {
+    console.warn(
+      '[INTERVIEW_INTELLIGENCE] GuildMessageTyping não está ativo. A entrevista continuará funcionando, mas a telemetria de digitação ficará indisponível.'
+    );
+  }
 
-    for (const session of LIVE_SESSIONS.values()) {
+  client.on(
+    Events.TypingStart,
+    (typing) => {
+      const channelId =
+        String(
+          typing.channel
+            ?.id ||
+          ''
+        );
+
+      const userId =
+        String(
+          typing.user
+            ?.id ||
+          ''
+        );
+
       if (
-        session.channelId !== channelId ||
-        session.candidateId !== userId ||
-        !session.currentQuestion ||
-        session.finished
+        !channelId ||
+        !userId
       ) {
-        continue;
+        return;
       }
 
-      const typingState = session.currentQuestion.typing;
+      const now =
+        Date.now();
 
-      typingState.count += 1;
-      typingState.firstAt ||= Date.now();
-      typingState.lastAt = Date.now();
+      for (
+        const session of
+        LIVE_SESSIONS.values()
+      ) {
+        if (
+          session.channelId !==
+            channelId ||
+          session.candidateId !==
+            userId ||
+          !session.currentQuestion ||
+          session.finished
+        ) {
+          continue;
+        }
+
+        const typingState =
+          session
+            .currentQuestion
+            .typing;
+
+        typingState.events ||=
+          [];
+
+        const previousEvent =
+          typingState
+            .events
+            .at(
+              -1
+            );
+
+        if (
+          !previousEvent ||
+          now -
+            previousEvent >=
+            500
+        ) {
+          typingState
+            .events
+            .push(
+              now
+            );
+
+          if (
+            typingState
+              .events
+              .length >
+            120
+          ) {
+            typingState
+              .events
+              .shift();
+          }
+        }
+
+        typingState.count =
+          typingState
+            .events
+            .length;
+
+        typingState.firstAt ||=
+          now;
+
+        typingState.lastAt =
+          now;
+      }
     }
-  });
+  );
 }
 
 async function persistAbortLog(
@@ -2758,6 +3290,7 @@ export async function recordInterviewQuestion({
       count: 0,
       firstAt: null,
       lastAt: null,
+      events: [],
       available: Boolean(client.options?.intents?.has?.(1 << 11)) &&
         Number(questionMessage?.createdTimestamp || 0) >= session.observerReadyAt,
     },
@@ -3038,6 +3571,24 @@ function calculateDeterministicSignals(answers, knowledge) {
 
       typingEventCount:
         entry.metrics.typingEventCount,
+
+      firstTypingDelayMs:
+        entry.metrics.firstTypingDelayMs,
+
+      lastTypingToAnswerMs:
+        entry.metrics.lastTypingToAnswerMs,
+
+      estimatedActiveTypingSeconds:
+        entry.metrics.estimatedActiveTypingSeconds,
+
+      typingCoveragePercent:
+        entry.metrics.typingCoveragePercent,
+
+      typingPattern:
+        entry.metrics.typingPattern,
+
+      manualTypingSignal:
+        entry.metrics.manualTypingSignal,
 
       typingDataAvailable:
         entry.metrics.typingDataAvailable,
@@ -4166,7 +4717,7 @@ async function callGeminiText(
                       ),
                   },
                   maxOutputTokens:
-                    1200,
+                    4096,
                 },
               })
         );
@@ -4249,8 +4800,15 @@ em estilo de escrita. O parecer serve para decisão humana.
 
 REGRAS DE SEGURANÇA DO DETECTOR
 - "Português perfeito", texto formal ou resposta inteligente, isoladamente, valem no máximo como sinal fraco.
-- Ausência de "digitando..." é sinal fraco, porque Discord, Vencord, cliente modificado,
+- Ausência de "digitando..." é sinal fraco, porque Discord, cliente modificado,
   intents, rede ou evento perdido podem impedir o indicador.
+- Quando typingDataAvailable=true e houver digitacao_sustentada ou digitacao_recorrente,
+  trate isso como evidência FAVORÁVEL de que a pessoa esteve compondo a resposta no Discord.
+- manualTypingSignal alto deve REDUZIR suspeita baseada somente em velocidade ou tamanho do texto.
+- Tempo ativo estimado de digitação é aproximação construída a partir dos eventos do Discord;
+  não é keylogger e não prova sozinho que todo o texto foi digitado manualmente.
+- Resposta grande e muito rápida, sem nenhum evento de digitação quando typingDataAvailable=true,
+  pode aumentar levemente a suspeita de copia/cola, mas nunca deve gerar reprovação automática.
 - Resposta rápida é relevante apenas quando o tamanho e a complexidade tornam o tempo incomum.
 - Resposta rápida pode indicar copia/cola sem indicar necessariamente IA.
 - Similaridade semântica com o gabarito é esperada numa resposta correta.
@@ -6411,22 +6969,154 @@ function buildImprovementThemes(
 function cleanDecisionText(
   text
 ) {
-  return truncate(
-    String(
-      text ||
-      ''
+  return String(
+    text ||
+    ''
+  )
+    .replace(
+      /@everyone/gi,
+      'everyone'
     )
-      .replace(
-        /@everyone/gi,
-        'everyone'
+    .replace(
+      /@here/gi,
+      'here'
+    )
+    .replace(
+      /\n{3,}/g,
+      '\n\n'
+    )
+    .trim();
+}
+
+function splitDecisionText(
+  text,
+  maxLength = 2600
+) {
+  const normalized =
+    cleanDecisionText(
+      text
+    );
+
+  if (
+    !normalized
+  ) {
+    return [];
+  }
+
+  const chunks =
+    [];
+
+  let remaining =
+    normalized;
+
+  while (
+    remaining.length >
+    maxLength
+  ) {
+    let cutAt =
+      remaining.lastIndexOf(
+        '\n\n',
+        maxLength
+      );
+
+    if (
+      cutAt <
+      Math.floor(
+        maxLength *
+        0.55
       )
-      .replace(
-        /@here/gi,
-        'here'
+    ) {
+      const punctuationCandidates =
+        [
+          remaining.lastIndexOf(
+            '. ',
+            maxLength
+          ),
+          remaining.lastIndexOf(
+            '! ',
+            maxLength
+          ),
+          remaining.lastIndexOf(
+            '? ',
+            maxLength
+          ),
+          remaining.lastIndexOf(
+            '… ',
+            maxLength
+          ),
+        ].filter(
+          (index) =>
+            index >=
+            Math.floor(
+              maxLength *
+              0.55
+            )
+        );
+
+      cutAt =
+        punctuationCandidates.length
+          ? Math.max(
+              ...punctuationCandidates
+            ) +
+            1
+          : -1;
+    }
+
+    if (
+      cutAt <
+      Math.floor(
+        maxLength *
+        0.45
       )
-      .trim(),
-    1200
-  );
+    ) {
+      cutAt =
+        remaining.lastIndexOf(
+          ' ',
+          maxLength
+        );
+    }
+
+    if (
+      cutAt <=
+      0
+    ) {
+      cutAt =
+        maxLength;
+    }
+
+    const chunk =
+      remaining
+        .slice(
+          0,
+          cutAt
+        )
+        .trim();
+
+    if (
+      chunk
+    ) {
+      chunks.push(
+        chunk
+      );
+    }
+
+    remaining =
+      remaining
+        .slice(
+          cutAt
+        )
+        .trim();
+  }
+
+  if (
+    remaining
+  ) {
+    chunks.push(
+      remaining
+    );
+  }
+
+  return chunks;
 }
 
 async function generatePersonalizedDecisionCopy({
@@ -6521,6 +7211,9 @@ REGRAS DE ESCRITA:
 - Não mencione o nome do modelo, sistema, JSON ou pontuação heurística.
 - Não inclua link, cargo, assinatura ou menção Discord; isso será acrescentado pelo sistema.
 - Produza entre 3 e 7 frases curtas.
+- Termine todas as frases por completo.
+- Nunca encerre a resposta no meio de uma palavra, expressão ou raciocínio.
+- Se precisar reduzir o tamanho, encerre uma frase inteira em vez de começar outra que não consiga concluir.
 
 RETORNE APENAS A MENSAGEM FINAL.
 `.trim();
@@ -6627,7 +7320,7 @@ function buildApprovalScoreEmbed(
   return embed;
 }
 
-function buildFinalDecisionEmbed({
+function buildFinalDecisionEmbeds({
   report,
   actorUser,
   decision,
@@ -6644,118 +7337,192 @@ function buildFinalDecisionEmbed({
     decision ===
     'reject';
 
-  const embed =
-    new EmbedBuilder()
-      .setAuthor({
-        name:
-          `Decisão aplicada por ${actorUser.tag}`,
-        iconURL:
-          actorUser.displayAvatarURL?.({
-            dynamic: true,
-          }) ||
-          undefined,
-      })
-      .setTitle(
-        isReject
-          ? '❌ Entrevista finalizada • reprovação'
-          : '🎉 Entrevista aprovada • bem-vind@!'
-      )
-      .setURL(
-        reportMessageUrl
-      )
-      .setColor(
-        isReject
-          ? 0xED4245
-          : 0x9B59B6
-      )
-      .setDescription(
-        [
-          `<@${report.candidate.id}>`,
-          `**Revisado por:** <@${actorUser.id}>`,
-          '',
-          personalizedText,
-          '',
-          isReject
-            ? '### 📚 Para uma próxima tentativa'
-            : '### 🚀 Próximo passo',
-          isReject
-            ? (
-                themes.length
-                  ? themes
-                      .map(
-                        (theme) =>
-                          `• Revise **${theme}**.`
-                      )
-                      .join('\n')
-                  : '• Releia as regras com calma e responda pensando na aplicação prática dentro do RP.'
-              )
-            : (
-                `Solicite seu set por aqui: ${SET_REQUEST_URL}\n\n` +
-                'Envie **Nome**, **ID** e **Recrutador** para a equipe dar continuidade ao seu alinhamento.'
-              ),
-        ].join('\n')
-      )
-      .setFooter({
-        text:
-          isReject
-            ? 'SantaCreators • feedback para evolução • decisão da equipe'
-            : 'SantaCreators • seja bem-vind@ 💜',
-      })
-      .setTimestamp()
-      .setImage(
-        GIF_CORRECAO
-      );
+  const textChunks =
+    splitDecisionText(
+      personalizedText,
+      2600
+    );
 
-  if (
-    report.candidate
-      .avatarUrl
+  const safeChunks =
+    textChunks.length
+      ? textChunks
+      : [
+          isReject
+            ? 'A equipe concluiu a revisão da sua entrevista e decidiu pela reprovação nesta tentativa.'
+            : 'A equipe concluiu a revisão da sua entrevista e decidiu pela sua aprovação.',
+        ];
+
+  const embeds =
+    [];
+
+  for (
+    let index = 0;
+    index <
+      safeChunks.length;
+    index +=
+      1
   ) {
-    embed.setThumbnail(
-      report.candidate
-        .avatarUrl
+    const isFirst =
+      index ===
+      0;
+
+    const isLast =
+      index ===
+      safeChunks.length -
+        1;
+
+    const descriptionParts =
+      [];
+
+    if (
+      isFirst
+    ) {
+      descriptionParts.push(
+        `<@${report.candidate.id}>`,
+        `**Revisado por:** <@${actorUser.id}>`,
+        ''
+      );
+    }
+
+    descriptionParts.push(
+      safeChunks[
+        index
+      ]
+    );
+
+    if (
+      isLast
+    ) {
+      descriptionParts.push(
+        '',
+        isReject
+          ? '### 📚 Para uma próxima tentativa'
+          : '### 🚀 Próximo passo',
+        isReject
+          ? (
+              themes.length
+                ? themes
+                    .map(
+                      (theme) =>
+                        `• Revise **${theme}**.`
+                    )
+                    .join('\n')
+                : '• Releia as regras com calma e responda pensando na aplicação prática dentro do RP.'
+            )
+          : (
+              `Solicite seu set por aqui: ${SET_REQUEST_URL}\n\n` +
+              'Envie **Nome**, **ID** e **Recrutador** para a equipe dar continuidade ao seu alinhamento.'
+            )
+      );
+    }
+
+    const embed =
+      new EmbedBuilder()
+        .setColor(
+          isReject
+            ? 0xED4245
+            : 0x9B59B6
+        )
+        .setDescription(
+          descriptionParts
+            .join('\n')
+            .trim()
+        );
+
+    if (
+      isFirst
+    ) {
+      embed
+        .setAuthor({
+          name:
+            `Decisão aplicada por ${actorUser.tag}`,
+          iconURL:
+            actorUser.displayAvatarURL?.({
+              dynamic: true,
+            }) ||
+            undefined,
+        })
+        .setTitle(
+          isReject
+            ? '❌ Entrevista finalizada • reprovação'
+            : '🎉 Entrevista aprovada • bem-vind@!'
+        )
+        .setURL(
+          reportMessageUrl
+        );
+
+      if (
+        report.candidate
+          .avatarUrl
+      ) {
+        embed.setThumbnail(
+          report.candidate
+            .avatarUrl
+        );
+      }
+    }
+
+    if (
+      isLast
+    ) {
+      if (
+        isReject
+      ) {
+        const remaining =
+          Number(
+            attemptStatus
+              ?.remaining ??
+            0
+          );
+
+        const attemptText =
+          attemptStatus
+            ?.available ===
+          false
+            ? 'Não foi possível calcular automaticamente o histórico de tentativas agora.'
+            : remaining >
+              0
+              ? `Você ainda tem **${remaining} tentativa(s)** disponível(is) dentro da janela de **${attemptStatus.windowDays} dias**.`
+              : `Você atingiu o limite de **${attemptStatus?.maxAttempts || MAX_INTERVIEW_ATTEMPTS} tentativas em ${attemptStatus?.windowDays || INTERVIEW_ATTEMPT_WINDOW_DAYS} dias**. Uma nova entrevista só deve seguir com liberação da gestão.`;
+
+        embed.addFields({
+          name:
+            '🎟️ Tentativas',
+          value:
+            attemptText,
+          inline:
+            false,
+        });
+      } else {
+        embed.addFields({
+          name:
+            '💜 Equipe',
+          value:
+            `Se precisar de ajuda no próximo passo, chama a <@&${INTERVIEW_TEAM_ROLE_ID}> no próprio ticket.`,
+          inline:
+            false,
+        });
+      }
+
+      embed
+        .setFooter({
+          text:
+            isReject
+              ? 'SantaCreators • feedback para evolução • decisão da equipe'
+              : 'SantaCreators • seja bem-vind@ 💜',
+        })
+        .setTimestamp()
+        .setImage(
+          GIF_CORRECAO
+        );
+    }
+
+    embeds.push(
+      embed
     );
   }
 
-  if (
-    isReject
-  ) {
-    const remaining =
-      Number(
-        attemptStatus
-          ?.remaining ??
-        0
-      );
-
-    const attemptText =
-      attemptStatus
-        ?.available ===
-      false
-        ? 'Não foi possível calcular automaticamente o histórico de tentativas agora.'
-        : remaining >
-          0
-          ? `Você ainda tem **${remaining} tentativa(s)** disponível(is) dentro da janela de **${attemptStatus.windowDays} dias**.`
-          : `Você atingiu o limite de **${attemptStatus?.maxAttempts || MAX_INTERVIEW_ATTEMPTS} tentativas em ${attemptStatus?.windowDays || INTERVIEW_ATTEMPT_WINDOW_DAYS} dias**. Uma nova entrevista só deve seguir com liberação da gestão.`;
-
-    embed.addFields({
-      name:
-        '🎟️ Tentativas',
-      value:
-        attemptText,
-      inline:
-        false,
-    });
-  } else {
-    embed.addFields({
-      name:
-        '💜 Equipe',
-      value:
-        `Se precisar de ajuda no próximo passo, chama a <@&${INTERVIEW_TEAM_ROLE_ID}> no próprio ticket.`,
-      inline:
-        false,
-    });
-  }
-
-  return embed;
+  return embeds;
 }
 
 function buildDecisionConfirmationEmbed({
@@ -7454,14 +8221,31 @@ async function applyInterviewDecision({
   const attemptStatus =
     await getInterviewAttemptStatus(
       interaction.client,
-      candidateId
+      candidateId,
+      {
+        includePendingRejection:
+          decision ===
+          'reject',
+        pendingReportId:
+          reportMessage.id,
+      }
     )
       .catch(
         () => ({
           count:
-            0,
+            decision ===
+            'reject'
+              ? 1
+              : 0,
           remaining:
-            MAX_INTERVIEW_ATTEMPTS,
+            decision ===
+            'reject'
+              ? Math.max(
+                  0,
+                  MAX_INTERVIEW_ATTEMPTS -
+                    1
+                )
+              : MAX_INTERVIEW_ATTEMPTS,
           blocked:
             false,
           windowDays:
@@ -7470,6 +8254,7 @@ async function applyInterviewDecision({
             MAX_INTERVIEW_ATTEMPTS,
           available:
             false,
+          rejectionReportIds: [],
         })
       );
 
@@ -7621,36 +8406,56 @@ async function applyInterviewDecision({
   if (
     !existingDecisionMessage
   ) {
-    await targetChannel
-      .send({
-        content:
-          `<@${candidateId}>`,
-        embeds: [
-          buildFinalDecisionEmbed({
-            report,
-            actorUser:
-              interaction.user,
-            decision,
-            personalizedText,
-            attemptStatus,
-            reportMessageUrl,
-          }),
-        ],
-        allowedMentions: {
-          users: [
-            candidateId,
-            interaction.user.id,
-          ],
-          roles:
-            decision ===
-            'approve'
-              ? [
-                  INTERVIEW_TEAM_ROLE_ID,
-                ]
-              : [],
-          parse: [],
-        },
+    const finalDecisionEmbeds =
+      buildFinalDecisionEmbeds({
+        report,
+        actorUser:
+          interaction.user,
+        decision,
+        personalizedText,
+        attemptStatus,
+        reportMessageUrl,
       });
+
+    for (
+      let index = 0;
+      index <
+        finalDecisionEmbeds.length;
+      index +=
+        1
+    ) {
+      await targetChannel
+        .send({
+          content:
+            index === 0
+              ? `<@${candidateId}>`
+              : undefined,
+          embeds: [
+            finalDecisionEmbeds[
+              index
+            ],
+          ],
+          allowedMentions:
+            index === 0
+              ? {
+                  users: [
+                    candidateId,
+                    interaction.user.id,
+                  ],
+                  roles:
+                    decision ===
+                    'approve'
+                      ? [
+                          INTERVIEW_TEAM_ROLE_ID,
+                        ]
+                      : [],
+                  parse: [],
+                }
+              : {
+                  parse: [],
+                },
+        });
+    }
   }
 
   let scoreInfo;
@@ -7736,6 +8541,15 @@ async function applyInterviewDecision({
     .catch(
       console.error
     );
+
+  if (
+    decision ===
+    'reject'
+  ) {
+    invalidateInterviewAttemptStatus(
+      candidateId
+    );
+  }
 
   await reportMessage
     .edit({
