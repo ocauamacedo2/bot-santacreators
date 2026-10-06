@@ -5733,12 +5733,13 @@ const agendarDeleteGarantido = async () => {
         );
       } catch {}
     }
-  }, 45000);
+  }, 90000);
 };
 
 // ✅ Inicia o agendamento de segurança.
-// O prazo de 45 segundos deixa transcript, análise, log e PV
-// terminarem antes da exclusão forçada do canal.
+// O prazo de 90 segundos funciona apenas como trava máxima.
+// A folga protege transcript, mídias, log e PV quando houver
+// lentidão do Discord, MongoDB ou indisponibilidade da IA.
 agendarDeleteGarantido();
 
 try {
@@ -6009,8 +6010,8 @@ try {
         }
       );
 
-    const ticketOperationalRecord =
-      await analyzeAndRecordTicket({
+    const ticketOperationalPromise =
+      analyzeAndRecordTicket({
         channelId:
           canalId,
 
@@ -6047,11 +6048,18 @@ try {
 
         messages:
           mensagensParaAnalise,
-      })
+      });
+
+    const ticketOperationalRecord =
+      await withTimeout(
+        ticketOperationalPromise,
+        8_000,
+        "analyzeAndRecordTicket"
+      )
         .catch(
           error => {
             console.error(
-              '[TICKET IA/NPS] Falha ao analisar/gravar ticket:',
+              '[TICKET IA/NPS] A análise não terminou a tempo ou falhou. O fechamento continuará normalmente:',
               error?.message ||
                 error
             );
@@ -7412,7 +7420,13 @@ if (
             )
         );
 
+const transcriptUrlFinal =
+  `${TRANSCRIPTS_BASE_URL}${canalId}`;
+
 const payloadDmFinal = {
+  content:
+    `📂 **Transcript completo do seu atendimento:**\n${transcriptUrlFinal}`,
+
   embeds: [
     dmEmbed
   ],
@@ -7429,147 +7443,131 @@ const payloadDmFinal = {
 
 try {
   /*
-   * Primeiro tenta utilizar o sistema global
-   * de DM segura que o projeto já utiliza.
+   * O envio direto é a rota principal do fechamento.
    *
-   * Ele já centraliza tratamento de erros
-   * e situações em que o Discord bloqueia a DM.
+   * Nos logs atuais, o helper global atingiu o timeout de
+   * 15 segundos, enquanto usuarioParaDm.send() funcionou
+   * logo em seguida. Por isso o caminho comprovadamente
+   * funcional passa a ser tentado primeiro.
    */
-  if (
-    typeof globalThis
-      .enviarMensagemPrivadaSegura ===
-      "function" &&
-    userAberto
-  ) {
-    const resultadoEnvio =
-      await withTimeout(
-        globalThis
-          .enviarMensagemPrivadaSegura(
-            userAberto,
-            payloadDmFinal,
-            `TICKET_FINALIZADO:${canalId}`
-          ),
+  await withTimeout(
+    usuarioParaDm.send(
+      payloadDmFinal
+    ),
 
-        15_000,
+    12_000,
 
-        "enviarMensagemPrivadaSegura(ticket finalizado)"
-      );
-
-    if (
-      !resultadoEnvio
-        ?.sucesso
-    ) {
-      const erroEnvio =
-        new Error(
-          resultadoEnvio
-            ?.mensagem ||
-          "O sistema de DM segura não conseguiu enviar a mensagem."
-        );
-
-      erroEnvio.code =
-        resultadoEnvio
-          ?.codigo ??
-        null;
-
-      erroEnvio.dmStatus =
-        resultadoEnvio
-          ?.status ??
-        "erro_desconhecido";
-
-      throw erroEnvio;
-    }
-  } else {
-    /*
-     * Fallback:
-     *
-     * se por algum motivo o helper global
-     * não estiver disponível, utiliza o
-     * envio direto do Discord.
-     */
-    await withTimeout(
-      usuarioParaDm.send(
-        payloadDmFinal
-      ),
-
-      15_000,
-
-      "usuarioParaDm.send(ticket finalizado)"
-    );
-  }
+    "usuarioParaDm.send(ticket finalizado)"
+  );
 
   dmEnviada =
     true;
 
   console.log(
-    `[TICKET] ✅ PV final enviado para ${idAberto} com transcript e feedback.`
+    `[TICKET] ✅ PV final enviado diretamente para ${idAberto} com transcript e feedback.`
   );
 } catch (
-  error
+  directError
 ) {
   dmEnviada =
     false;
 
   console.error(
-    `[TICKET] ❌ Não foi possível enviar o fechamento no PV de ${idAberto}:`,
+    `[TICKET] ❌ O envio direto do fechamento no PV falhou para ${idAberto}:`,
     {
       codigo:
-        error?.code ??
-        null,
-
-      status:
-        error?.dmStatus ??
+        directError?.code ??
         null,
 
       mensagem:
-        error?.message ||
+        directError?.message ||
         String(
-          error
+          directError
         ),
     }
   );
 
   /*
-   * Última tentativa direta.
+   * Fallback:
    *
-   * Isso cobre um eventual problema específico
-   * do helper global sem perder o PV do usuário.
+   * se o envio direto falhar, ainda preservamos o helper
+   * global de DM segura como segunda rota.
    */
-  try {
-    await withTimeout(
-      usuarioParaDm.send(
-        payloadDmFinal
-      ),
-
-      10_000,
-
-      "fallback direto da DM final"
-    );
-
-    dmEnviada =
-      true;
-
- console.log(
-  `[TICKET] ✅ PV final enviado pelo fallback direto para ${idAberto}.`
-);
-  } catch (
-    fallbackError
+  if (
+    typeof globalThis
+      .enviarMensagemPrivadaSegura ===
+      "function"
   ) {
-    console.error(
-      `[TICKET] ❌ O fallback direto do PV também falhou para ${idAberto}:`,
-      {
-        codigo:
-          fallbackError
-            ?.code ??
-          null,
+    try {
+      const resultadoEnvio =
+        await withTimeout(
+          globalThis
+            .enviarMensagemPrivadaSegura(
+              usuarioParaDm,
+              payloadDmFinal,
+              `TICKET_FINALIZADO:${canalId}`
+            ),
 
-        mensagem:
-          fallbackError
-            ?.message ||
-          String(
-            fallbackError
-          ),
+          12_000,
+
+          "enviarMensagemPrivadaSegura(ticket finalizado)"
+        );
+
+      if (
+        !resultadoEnvio
+          ?.sucesso
+      ) {
+        const erroEnvio =
+          new Error(
+            resultadoEnvio
+              ?.mensagem ||
+            "O sistema de DM segura não conseguiu enviar a mensagem."
+          );
+
+        erroEnvio.code =
+          resultadoEnvio
+            ?.codigo ??
+          null;
+
+        erroEnvio.dmStatus =
+          resultadoEnvio
+            ?.status ??
+          "erro_desconhecido";
+
+        throw erroEnvio;
       }
-    );
+
+      dmEnviada =
+        true;
+
+      console.log(
+        `[TICKET] ✅ PV final enviado pelo helper seguro para ${idAberto} com transcript e feedback.`
+      );
+    } catch (
+      helperError
+    ) {
+      console.error(
+        `[TICKET] ❌ O fallback seguro do PV também falhou para ${idAberto}:`,
+        {
+          codigo:
+            helperError
+              ?.code ??
+            null,
+
+          status:
+            helperError
+              ?.dmStatus ??
+            null,
+
+          mensagem:
+            helperError
+              ?.message ||
+            String(
+              helperError
+            ),
+        }
+      );
+    }
   }
 }
 
