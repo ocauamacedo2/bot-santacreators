@@ -771,6 +771,16 @@ if (
   }
   // ── 🔒 Trava anti double-click / concorrência ─────────────────────
   const HANDLED_INTERACTIONS = new Set();
+
+  // 🔒 Trava por CANAL durante todo o fechamento.
+  //
+  // HANDLED_INTERACTIONS impede repetir a mesma interação,
+  // mas um novo clique gera outro interaction.id.
+  //
+  // Esta trava impede duas rotinas completas de fechamento
+  // rodando ao mesmo tempo no mesmo ticket.
+  const TICKETS_EM_FECHAMENTO = new Set();
+
   function hasHandled(i) {
     try {
       if (!i?.id) return false;
@@ -5633,30 +5643,146 @@ if (interaction.isModalSubmit() && interaction.customId === 'modal_registro_lide
   }
 
   async function safeDeleteTicketChannel(canal, canalId) {
+    const isUnknownChannelError = (error) => {
+      const code =
+        Number(
+          error?.code ||
+          error?.rawError?.code ||
+          0
+        );
+
+      return (
+        code === 10003 ||
+        /Unknown Channel/i.test(
+          String(
+            error?.message ||
+            error ||
+            ""
+          )
+        )
+      );
+    };
+
     // tenta 2x antes de desistir
     try {
-      await canal.delete("Ticket finalizado (auto-close)");
+      await withTimeout(
+        canal.delete("Ticket finalizado"),
+        12_000,
+        "canal.delete(ticket finalizado)"
+      );
+
+      console.log(
+        `[TICKET] ✅ Canal ${canalId} excluído após finalizar o processamento.`
+      );
+
       return true;
     } catch (e1) {
-      console.error("[TICKET] Falha ao deletar canal (tentativa 1):", e1?.message || e1);
+      if (isUnknownChannelError(e1)) {
+        // O canal já não existe. Para o fechamento, isso é sucesso.
+        return true;
+      }
+
+      console.error(
+        "[TICKET] Falha ao deletar canal (tentativa 1):",
+        e1?.message || e1
+      );
+
       await safeDelay(1500);
+
       try {
-        await canal.delete("Ticket finalizado (auto-close retry)");
+        await withTimeout(
+          canal.delete("Ticket finalizado (retry)"),
+          12_000,
+          "canal.delete(ticket finalizado retry)"
+        );
+
+        console.log(
+          `[TICKET] ✅ Canal ${canalId} excluído na segunda tentativa.`
+        );
+
         return true;
       } catch (e2) {
-        console.error("[TICKET] Falha ao deletar canal (tentativa 2):", e2?.message || e2);
+        if (isUnknownChannelError(e2)) {
+          return true;
+        }
+
+        console.error(
+          "[TICKET] Falha ao deletar canal (tentativa 2):",
+          e2?.message || e2
+        );
+
         return false;
       }
     } finally {
-      // limpa responsável de qualquer forma
+      // limpa responsável e libera a trava do canal de qualquer forma
       responsaveisOficiais.delete(canalId);
+      TICKETS_EM_FECHAMENTO.delete(String(canalId));
     }
   }
 
   async function finalizarTicketComConclusao(interaction, conclusaoFinal, autoData = null) {
     // garante que não dá erro de "já respondeu"
     const canal   = interaction?.channel || autoData?.channel;
-    const canalId = canal.id;
+
+    if (!canal?.id) {
+      console.error(
+        "[TICKET] Não foi possível iniciar o fechamento: canal inválido."
+      );
+
+      return false;
+    }
+
+    const canalId = String(canal.id);
+
+    // =====================================================
+    // 🔒 TRAVA REAL DE FECHAMENTO POR CANAL
+    // =====================================================
+    //
+    // Um novo clique gera outro interaction.id.
+    // Por isso a trava geral de interação não impedia duas
+    // finalizações completas do mesmo ticket ao mesmo tempo.
+    // =====================================================
+
+    if (
+      TICKETS_EM_FECHAMENTO.has(
+        canalId
+      )
+    ) {
+      if (interaction) {
+        const aviso = {
+          content:
+            "⏳ Este ticket já está sendo finalizado. O transcript, o PV e a exclusão do canal já estão em processamento.",
+          ephemeral:
+            true,
+        };
+
+        try {
+          if (
+            !interaction.replied &&
+            !interaction.deferred
+          ) {
+            await interaction.reply(
+              aviso
+            );
+          } else {
+            await interaction.followUp(
+              aviso
+            );
+          }
+        } catch {}
+      }
+
+      console.warn(
+        `[TICKET] Fechamento duplicado ignorado para o canal ${canalId}.`
+      );
+
+      return false;
+    }
+
+    TICKETS_EM_FECHAMENTO.add(
+      canalId
+    );
+
     try {
       const msg = { content: `📄 O ticket <#${canalId}> está sendo finalizado e será excluído em instantes.`, ephemeral: true };
       if (interaction) {
@@ -5703,43 +5829,62 @@ if (
 
 // ✅ IMPORTANTE: se algo travar, a gente ainda vai deletar o canal
 let deleteAgendado = false;
+let deleteTimer = null;
 
-const agendarDeleteGarantido = async () => {
+const cancelarDeleteGarantido = () => {
+  if (
+    deleteTimer
+  ) {
+    clearTimeout(
+      deleteTimer
+    );
+
+    deleteTimer =
+      null;
+  }
+};
+
+const agendarDeleteGarantido = () => {
   if (deleteAgendado) return;
 
   deleteAgendado = true;
 
-  // Dá tempo suficiente para:
-  // - ler todas as mensagens;
-  // - salvar as mídias;
-  // - gerar o transcript;
-  // - executar a análise;
-  // - enviar a log;
-  // - enviar o transcript e feedback no PV.
+  // Este timer é SOMENTE a rede de segurança.
   //
-  // Continua sendo apenas uma trava de segurança.
-  // O ticket não fica preso indefinidamente se alguma operação travar.
-  setTimeout(async () => {
-    const ok = await safeDeleteTicketChannel(
-      canal,
-      canalId
-    );
+  // O fluxo normal agora apaga o canal imediatamente assim
+  // que transcript, log e tentativa de PV terminarem.
+  //
+  // Se alguma etapa ficar travada de verdade, este timer
+  // continua garantindo a exclusão depois de 90 segundos.
+  deleteTimer =
+    setTimeout(
+      async () => {
+        deleteTimer =
+          null;
 
-    if (!ok) {
-      // se falhar, tenta avisar no canal (se ainda existir)
-      try {
-        await canal.send(
-          "⚠️ Não consegui deletar o canal automaticamente (permissão do bot). Um admin precisa apagar manualmente."
-        );
-      } catch {}
-    }
-  }, 90000);
+        const ok =
+          await safeDeleteTicketChannel(
+            canal,
+            canalId
+          );
+
+        if (!ok) {
+          // se falhar, tenta avisar no canal (se ainda existir)
+          try {
+            await canal.send(
+              "⚠️ Não consegui deletar o canal automaticamente (permissão do bot). Um admin precisa apagar manualmente."
+            );
+          } catch {}
+        }
+      },
+      90000
+    );
 };
 
-// ✅ Inicia o agendamento de segurança.
-// O prazo de 90 segundos funciona apenas como trava máxima.
-// A folga protege transcript, mídias, log e PV quando houver
-// lentidão do Discord, MongoDB ou indisponibilidade da IA.
+// ✅ Inicia a rede de segurança.
+// IMPORTANTE:
+// o ticket NÃO precisa mais esperar 90 segundos para sumir.
+// Esse prazo só entra em ação se o processamento normal travar.
 agendarDeleteGarantido();
 
 try {
@@ -7596,6 +7741,39 @@ if (
   } catch {}
 }
 
+// =====================================================
+// ✅ FECHAMENTO NORMAL CONCLUÍDO
+// =====================================================
+//
+// Neste ponto:
+// • o histórico já foi lido;
+// • o transcript já foi criado/tentado;
+// • a log já foi processada;
+// • o PV já foi enviado/tentado.
+//
+// Portanto NÃO existe motivo para esperar o timer de 90s.
+// O canal é excluído agora.
+//
+// O timer de 90s continua existindo apenas como fallback
+// para o caso de alguma etapa anterior realmente travar.
+// =====================================================
+
+const canalDeletadoAgora =
+  await safeDeleteTicketChannel(
+    canal,
+    canalId
+  );
+
+if (
+  canalDeletadoAgora
+) {
+  cancelarDeleteGarantido();
+} else {
+  console.error(
+    `[TICKET] O processamento do ticket ${canalId} terminou, mas a exclusão imediata falhou. A trava de segurança continuará ativa.`
+  );
+}
+
 } catch (
   err
 ) {
@@ -7603,6 +7781,12 @@ if (
     "[TICKET] Erro crítico durante o processamento do fechamento:",
     err
   );
+
+  // Não liberamos a trava aqui.
+  //
+  // Se houve erro crítico antes da exclusão normal,
+  // o timer de segurança continua responsável por tentar
+  // apagar o canal depois.
 }
 
 }
