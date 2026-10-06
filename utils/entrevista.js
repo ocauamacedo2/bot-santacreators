@@ -22,7 +22,8 @@ import {
   finishInterviewIntelligence,
   abortInterviewIntelligence,
   canOverrideInterviewAttemptLimit,
-  getInterviewAttemptStatus
+  getInterviewAttemptStatus,
+  invalidateInterviewAttemptStatus
 } from '../events/interviewIntelligence.js';
 // ===== CONFIG =====
 
@@ -701,12 +702,10 @@ async function handleButtons(interaction) {
  // INICIAR (manda mensagem completa + botão ENVIAR)
 if (customId.startsWith('iniciar|')) {
   const [, channelId] = customId.split('|');
-  await interaction.deferUpdate().catch(() => {});
 
-  const cargoEntrevista =
-    interaction.guild.roles.cache.get(
-      '1353797415488196770'
-    );
+  // Confirma o clique imediatamente para o Discord.
+  // Nenhuma consulta pesada acontece antes dessa confirmação.
+  await interaction.deferUpdate().catch(() => {});
 
   const topic =
     String(
@@ -725,52 +724,27 @@ if (customId.startsWith('iniciar|')) {
       ? mOpener[1]
       : interaction.user.id;
 
-  const membro =
-    interaction.guild.members.cache.get(
-      targetId
-    ) ||
-    await interaction.guild.members
-      .fetch(
-        targetId
-      )
-      .catch(
-        () => null
-      );
-
-  const attemptStatus =
-    await getInterviewAttemptStatus(
-      interaction.client,
-      targetId
-    )
-      .catch(
-        () => null
-      );
-
   const authorizedOverride =
     canOverrideInterviewAttemptLimit(
       interaction.member
     );
 
+  // Pré-aquece a consulta das tentativas em background.
+  // Ela NÃO segura mais o envio da mensagem de boas-vindas.
+  // A validação obrigatória continua existindo no botão
+  // "ENVIAR PERGUNTAS", antes da primeira questão.
   if (
-    attemptStatus?.blocked &&
     !authorizedOverride
   ) {
-    await interaction
-      .followUp({
-        content:
-          `⛔ <@${targetId}> já realizou **${attemptStatus.count}/${attemptStatus.maxAttempts} entrevistas** nos últimos **${attemptStatus.windowDays} dias**.\n` +
-          'Uma nova tentativa precisa de liberação da gestão. Se a gestão autorizar, alguém com permissão pode iniciar manualmente.',
-        ephemeral:
-          true,
-        allowedMentions: {
-          parse: [],
-        },
-      })
-      .catch(
-        () => {}
+    void getInterviewAttemptStatus(
+      interaction.client,
+      targetId
+    ).catch((error) => {
+      console.warn(
+        '[Entrevista] Falha não crítica ao pré-carregar tentativas:',
+        error?.message || error
       );
-
-    return true;
+    });
   }
 
   iaInterviewPauseForManualInterview(
@@ -780,55 +754,153 @@ if (customId.startsWith('iniciar|')) {
   );
 
   const row = new ActionRowBuilder().addComponents(
-  new ButtonBuilder()
-    .setCustomId(`enviar|${targetId}|${channelId}`)
-    .setLabel('📩 ENVIAR PERGUNTAS')
-    .setStyle(ButtonStyle.Primary)
-);
+    new ButtonBuilder()
+      .setCustomId(`enviar|${targetId}|${channelId}`)
+      .setLabel('📩 ENVIAR PERGUNTAS')
+      .setStyle(ButtonStyle.Primary)
+  );
 
-const enviada = await interaction.channel.send({
-  content: `✨ Oii, <@${targetId}> Tudo bem por aí? Seja **MUITO** bem-vind@ à família **SantaCreators**!  \nÉ um prazer ter você por aqui — e pode ficar tranquil@, porque a <@&1352275728476930099> vai te acompanhar nessa primeira etapa com todo o cuidado. 💖\n\n📝 Nosso processo de entrada é dividido em **duas fases bem tranquilas**:\n\n➊ **Aqui pelo Discord/e-mail**, a gente vai trocar uma ideia pra entender melhor o seu perfil e ver como você se sairia em algumas situações dentro da nossa estrutura.\n\n➋ **Depois, dentro da cidade**, vamos te apresentar nosso prédio, explicar direitinho as regras e mostrar na prática como funcionamos por aqui.\n\n📚 **Agora bora dar uma lida nas regras?**\nhttps://discord.com/channels/1262262852782129183/1352285379302002710\nhttps://discord.com/channels/1262262852782129183/1355622493464821892\nhttps://discord.com/channels/1262262852782129183/1370830395637239928\nhttps://discord.com/channels/1262262852782129183/1381704800608981003\n\n⚠️ **IMPORTANTE SOBRE A ENTREVISTA**\nDurante a entrevista **não é permitido utilizar Inteligência Artificial** e **nem copiar e colar**. Responda **com suas próprias palavras**.\n\n✅ Assim que estiver tudo certinho por aí, me avisa aqui mesmo pra gente **começar a sua entrevista**, combinado?\n\n🚀 **Bora começar essa jornada juntos!** 🌟`,
-  components: [row]
-});
+  // A resposta visual do clique vem primeiro.
+  // Não esperamos fetch de membro, histórico de 30 dias,
+  // cargo, tópico ou log antes de enviar esta mensagem.
+  const enviada = await interaction.channel.send({
+    content: `✨ Oii, <@${targetId}> Tudo bem por aí? Seja **MUITO** bem-vind@ à família **SantaCreators**!  \nÉ um prazer ter você por aqui — e pode ficar tranquil@, porque a <@&1352275728476930099> vai te acompanhar nessa primeira etapa com todo o cuidado. 💖\n\n📝 Nosso processo de entrada é dividido em **duas fases bem tranquilas**:\n\n➊ **Aqui pelo Discord/e-mail**, a gente vai trocar uma ideia pra entender melhor o seu perfil e ver como você se sairia em algumas situações dentro da nossa estrutura.\n\n➋ **Depois, dentro da cidade**, vamos te apresentar nosso prédio, explicar direitinho as regras e mostrar na prática como funcionamos por aqui.\n\n📚 **Agora bora dar uma lida nas regras?**\nhttps://discord.com/channels/1262262852782129183/1352285379302002710\nhttps://discord.com/channels/1262262852782129183/1355622493464821892\nhttps://discord.com/channels/1262262852782129183/1370830395637239928\nhttps://discord.com/channels/1262262852782129183/1381704800608981003\n\n⚠️ **IMPORTANTE SOBRE A ENTREVISTA**\nDurante a entrevista **não é permitido utilizar Inteligência Artificial** e **nem copiar e colar**. Responda **com suas próprias palavras**.\n\n✅ Assim que estiver tudo certinho por aí, me avisa aqui mesmo pra gente **começar a sua entrevista**, combinado?\n\n🚀 **Bora começar essa jornada juntos!** 🌟`,
+    components: [row]
+  });
 
-(async () => {
-  await interaction.message.edit({ components: [] }).catch(() => {});
+  // Tudo que não precisa bloquear a experiência do usuário
+  // continua em background.
+  (async () => {
+    await interaction.message
+      .edit({
+        components: []
+      })
+      .catch(() => {});
 
-  try {
-      const oldTopic = String(interaction.channel.topic || "");
-      const cleanedTopic = oldTopic
-        .replace(/\bentrevista_starter:\d{17,20}\b/gi, "")
-        .replace(/\s{2,}/g, " ")
-        .trim();
+    const cargoEntrevista =
+      interaction.guild.roles.cache.get(
+        '1353797415488196770'
+      );
 
-      const nextTopic = `${cleanedTopic}${cleanedTopic ? " | " : ""}entrevista_starter:${interaction.user.id}`.slice(0, 1024);
+    const membro =
+      interaction.guild.members.cache.get(
+        targetId
+      ) ||
+      await interaction.guild.members
+        .fetch(
+          targetId
+        )
+        .catch(
+          () => null
+        );
+
+    try {
+      const oldTopic =
+        String(
+          interaction.channel.topic ||
+          ""
+        );
+
+      const cleanedTopic =
+        oldTopic
+          .replace(
+            /\bentrevista_starter:\d{17,20}\b/gi,
+            ""
+          )
+          .replace(
+            /\s{2,}/g,
+            " "
+          )
+          .trim();
+
+      const nextTopic =
+        `${cleanedTopic}${cleanedTopic ? " | " : ""}entrevista_starter:${interaction.user.id}`
+          .slice(
+            0,
+            1024
+          );
 
       await Promise.allSettled([
         typeof interaction.channel.setTopic === "function"
-          ? interaction.channel.setTopic(nextTopic)
+          ? interaction.channel.setTopic(
+              nextTopic
+            )
           : Promise.resolve(),
-        membro && cargoEntrevista && !membro.roles.cache.has(cargoEntrevista.id)
-          ? membro.roles.add(cargoEntrevista.id)
+
+        membro &&
+        cargoEntrevista &&
+        !membro.roles.cache.has(
+          cargoEntrevista.id
+        )
+          ? membro.roles.add(
+              cargoEntrevista.id
+            )
           : Promise.resolve()
       ]);
     } catch (e) {
-      console.warn("[Entrevista] Falha ao configurar starter/cargo:", e?.message || e);
+      console.warn(
+        "[Entrevista] Falha ao configurar starter/cargo:",
+        e?.message || e
+      );
     }
 
-    await logCompleto(interaction.client, {
-      titulo: '🚪 Botão: Iniciar Entrevista',
-      cor: 0x1abc9c,
-      autorTag: interaction.user.tag,
-      autorIcon: interaction.user.displayAvatarURL({ dynamic: true }),
-      desc: 'Clicaram em iniciar entrevista.',
-      fields: [
-        { name: '👤 Quem clicou', value: `<@${interaction.user.id}>`, inline: true },
-        { name: '📍 Canal', value: `<#${interaction.channelId}>`, inline: true },
-        { name: '🔗 Mensagem', value: msgLink(interaction.guildId, interaction.channelId, enviada.id), inline: false }
-      ],
-      thumb: interaction.guild?.iconURL({ dynamic: true })
-    });
-  })();
+    await logCompleto(
+      interaction.client,
+      {
+        titulo:
+          '🚪 Botão: Iniciar Entrevista',
+        cor:
+          0x1abc9c,
+        autorTag:
+          interaction.user.tag,
+        autorIcon:
+          interaction.user.displayAvatarURL({
+            dynamic: true
+          }),
+        desc:
+          'Clicaram em iniciar entrevista.',
+        fields: [
+          {
+            name:
+              '👤 Quem clicou',
+            value:
+              `<@${interaction.user.id}>`,
+            inline:
+              true
+          },
+          {
+            name:
+              '📍 Canal',
+            value:
+              `<#${interaction.channelId}>`,
+            inline:
+              true
+          },
+          {
+            name:
+              '🔗 Mensagem',
+            value:
+              msgLink(
+                interaction.guildId,
+                interaction.channelId,
+                enviada.id
+              ),
+            inline:
+              false
+          }
+        ],
+        thumb:
+          interaction.guild?.iconURL({
+            dynamic: true
+          })
+      }
+    );
+  })().catch((error) => {
+    console.error(
+      '[Entrevista] Falha não crítica no pós-início:',
+      error
+    );
+  });
 
   return true;
 }
@@ -842,6 +914,65 @@ if (customId.startsWith('enviar|')) {
   const lockKey = String(channel.id);
 
   await interaction.deferUpdate().catch(() => {});
+
+  // =====================================================
+  // VALIDAÇÃO REAL DO LIMITE DE TENTATIVAS
+  // =====================================================
+  //
+  // A consulta foi pré-carregada quando o primeiro botão
+  // apareceu. Aqui nós apenas confirmamos o resultado antes
+  // de enviar a primeira pergunta.
+  //
+  // Assim:
+  // • "Iniciar Entrevista" responde imediatamente;
+  // • o limite de 3 tentativas continua obrigatório;
+  // • ninguém começa a Q1 sem passar pela validação.
+  // =====================================================
+
+  const authorizedOverride =
+    canOverrideInterviewAttemptLimit(
+      interaction.member
+    );
+
+  const attemptStatus =
+    authorizedOverride
+      ? null
+      : await getInterviewAttemptStatus(
+          interaction.client,
+          targetId
+        )
+          .catch(
+            (error) => {
+              console.warn(
+                '[Entrevista] Não foi possível confirmar o histórico de tentativas antes da Q1:',
+                error?.message || error
+              );
+
+              return null;
+            }
+          );
+
+  if (
+    attemptStatus?.blocked &&
+    !authorizedOverride
+  ) {
+    await interaction
+      .followUp({
+        content:
+          `⛔ <@${targetId}> já realizou **${attemptStatus.count}/${attemptStatus.maxAttempts} entrevistas** nos últimos **${attemptStatus.windowDays} dias**.\n` +
+          'Uma nova tentativa precisa de liberação da gestão.',
+        ephemeral:
+          true,
+        allowedMentions: {
+          parse: [],
+        },
+      })
+      .catch(
+        () => {}
+      );
+
+    return true;
+  }
 
   if (entrevistasStartLocks.has(lockKey)) {
     await channel.send(
@@ -1319,6 +1450,12 @@ if (logChannel) {
   .setTimestamp();
 
   await logChannel.send({ embeds: [logEmbed] }).catch(() => {});
+
+  // O histórico mudou agora. Remove qualquer resultado em cache
+  // para que uma próxima tentativa leia a contagem atualizada.
+  invalidateInterviewAttemptStatus(
+    membro.id
+  );
 }
 
 // ✅ PONTO DE ENTREVISTA: somente aqui, na conclusão real das 30 perguntas
@@ -1391,11 +1528,31 @@ return;
   const endUnix = Math.floor(dados.timeoutEnd / 1000);
   const perguntaBase = `**${index + 1}.** <@${membro.id}> ${perguntas[index]}`;
   let perguntaMsg = null;
+  let perguntaJaExistia = false;
+
   const lastId = dados.mensagens.at(-1);
+
   if (lastId) {
-    const old = await channel.messages.fetch(lastId).catch(() => null);
-    if (old?.author?.id === channel.client.user.id && old.content.startsWith(`**${index + 1}.**`)) perguntaMsg = old;
+    const old =
+      await channel.messages
+        .fetch(lastId)
+        .catch(() => null);
+
+    if (
+      old?.author?.id ===
+        channel.client.user.id &&
+      old.content.startsWith(
+        `**${index + 1}.**`
+      )
+    ) {
+      perguntaMsg =
+        old;
+
+      perguntaJaExistia =
+        true;
+    }
   }
+
   const collected = new Map();
   // O coletor é instalado ANTES de enviar a pergunta/esperar logs e backup.
   const collector = channel.createMessageCollector({
@@ -1425,18 +1582,72 @@ return;
     }
     void recordInterviewQuestion({ client: channel.client, channel, candidateId: membro.id,
       index, question: perguntas[index], questionMessage: perguntaMsg }).catch(console.error);
-    // Inclui resposta enviada enquanto o bot estava desligado.
-    let after = perguntaMsg.id;
-    for (let page = 0; page < 5; page += 1) {
-      const batch = await channel.messages.fetch({ limit: 100, after, cache: false });
-      const ordered = [...batch.values()].sort((a, b) => BigInt(a.id) < BigInt(b.id) ? -1 : 1);
-      for (const message of ordered) {
-        if (message.author.id === membro.id && !message.author.bot &&
-            message.content.trim() && !/^!/.test(message.content)) collected.set(message.id, message);
+    // Só procura respostas antigas quando esta pergunta já
+    // existia antes desta execução, por exemplo após reinício
+    // do bot. Em uma entrevista ao vivo, fazer esse fetch a
+    // cada questão cria uma requisição HTTP desnecessária e
+    // aumenta a sensação de atraso entre resposta e próxima Q.
+    if (
+      perguntaJaExistia
+    ) {
+      let after =
+        perguntaMsg.id;
+
+      for (
+        let page = 0;
+        page < 5;
+        page += 1
+      ) {
+        const batch =
+          await channel.messages.fetch({
+            limit: 100,
+            after,
+            cache: false
+          });
+
+        const ordered =
+          [...batch.values()].sort(
+            (a, b) =>
+              BigInt(a.id) <
+              BigInt(b.id)
+                ? -1
+                : 1
+          );
+
+        for (
+          const message of
+          ordered
+        ) {
+          if (
+            message.author.id ===
+              membro.id &&
+            !message.author.bot &&
+            message.content.trim() &&
+            !/^!/.test(
+              message.content
+            )
+          ) {
+            collected.set(
+              message.id,
+              message
+            );
+          }
+        }
+
+        const next =
+          ordered.at(-1)?.id;
+
+        if (
+          !next ||
+          next === after ||
+          batch.size < 100
+        ) {
+          break;
+        }
+
+        after =
+          next;
       }
-      const next = ordered.at(-1)?.id;
-      if (!next || next === after || batch.size < 100) break;
-      after = next;
     }
     const firstAnswer = () => [...collected.values()].filter((message) =>
       BigInt(message.id) > BigInt(perguntaMsg.id) && message.createdTimestamp <= dados.timeoutEnd

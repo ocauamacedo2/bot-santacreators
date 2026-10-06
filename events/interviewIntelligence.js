@@ -73,6 +73,91 @@ const AUTO_ANALYSIS_JOBS = new Set();
 const TYPING_INSTALLED_CLIENTS = new WeakSet();
 const LIFECYCLE_INSTALLED_CLIENTS = new WeakSet();
 
+// =====================================================
+// CACHE DE TENTATIVAS DE ENTREVISTA
+// =====================================================
+//
+// A consulta das tentativas usa um canal de logs e pode
+// precisar paginar várias mensagens. Fazer isso dentro do
+// clique em "Iniciar Entrevista" deixa o botão parecendo
+// travado.
+//
+// Guardamos o resultado por alguns minutos e reaproveitamos
+// a mesma consulta quando ela já estiver em andamento.
+// A cache é invalidada assim que uma entrevista é concluída.
+// =====================================================
+
+const INTERVIEW_ATTEMPT_STATUS_CACHE_TTL_MS =
+  10 * 60 * 1000;
+
+const INTERVIEW_ATTEMPT_STATUS_CACHE =
+  new Map();
+
+const INTERVIEW_ATTEMPT_STATUS_INFLIGHT =
+  new Map();
+
+const INTERVIEW_ATTEMPT_STATUS_GENERATION =
+  new Map();
+
+function getInterviewAttemptStatusCacheKey(
+  candidateId,
+  windowDays,
+  maxAttempts
+) {
+  return [
+    String(candidateId || ''),
+    Number(windowDays || 0),
+    Number(maxAttempts || 0),
+  ].join(':');
+}
+
+export function invalidateInterviewAttemptStatus(
+  candidateId
+) {
+  const normalizedCandidateId =
+    String(
+      candidateId ||
+      ''
+    );
+
+  if (
+    !normalizedCandidateId
+  ) {
+    return false;
+  }
+
+  INTERVIEW_ATTEMPT_STATUS_GENERATION.set(
+    normalizedCandidateId,
+    Number(
+      INTERVIEW_ATTEMPT_STATUS_GENERATION.get(
+        normalizedCandidateId
+      ) ||
+      0
+    ) +
+      1
+  );
+
+  const prefix =
+    `${normalizedCandidateId}:`;
+
+  for (
+    const key of
+    INTERVIEW_ATTEMPT_STATUS_CACHE.keys()
+  ) {
+    if (
+      key.startsWith(
+        prefix
+      )
+    ) {
+      INTERVIEW_ATTEMPT_STATUS_CACHE.delete(
+        key
+      );
+    }
+  }
+
+  return true;
+}
+
 const GEMINI_API_KEY = String(process.env.GEMINI_API_KEY || '').trim();
 const GEMINI_MODELS = [
   String(process.env.GEMINI_MODEL || '').trim() || 'gemini-3.6-flash',
@@ -772,13 +857,15 @@ export async function getInterviewAttemptStatus(
       MAX_INTERVIEW_ATTEMPTS,
   } = {}
 ) {
-  const logChannel =
-    await fetchTextChannel(
-      client,
-      INTERVIEW_ATTEMPT_LOG_CHANNEL_ID
+  const normalizedCandidateId =
+    String(
+      candidateId ||
+      ''
     );
 
-  if (!logChannel) {
+  if (
+    !normalizedCandidateId
+  ) {
     return {
       count: 0,
       remaining:
@@ -790,204 +877,324 @@ export async function getInterviewAttemptStatus(
     };
   }
 
-  const cutoff =
-    Date.now() -
+  const cacheKey =
+    getInterviewAttemptStatusCacheKey(
+      normalizedCandidateId,
+      windowDays,
+      maxAttempts
+    );
+
+  const cached =
+    INTERVIEW_ATTEMPT_STATUS_CACHE.get(
+      cacheKey
+    );
+
+  if (
+    cached &&
     Number(
-      windowDays
-    ) *
-      24 *
-      60 *
-      60 *
-      1000;
-
-  const uniqueTickets =
-    new Set();
-
-  let before =
-    null;
-
-  let reachedCutoff =
-    false;
-
-  while (
-    !reachedCutoff
+      cached.expiresAt ||
+      0
+    ) >
+      Date.now()
   ) {
-    const batch =
-      await logChannel.messages
-        .fetch({
-          limit: 100,
-          cache: false,
-          ...(
-            before
-              ? {
-                  before,
-                }
-              : {}
-          ),
-        })
-        .catch(
-          () => null
-        );
-
-    if (
-      !batch?.size
-    ) {
-      break;
-    }
-
-    const messages =
-      [
-        ...batch.values()
-      ];
-
-    for (
-      const message of
-      messages
-    ) {
-      if (
-        message.createdTimestamp <
-        cutoff
-      ) {
-        reachedCutoff =
-          true;
-        continue;
-      }
-
-      for (
-        const embed of
-        message.embeds ||
-        []
-      ) {
-        if (
-          String(
-            embed.title ||
-            ''
-          ) !==
-          '🏁 Entrevista Finalizada'
-        ) {
-          continue;
-        }
-
-        const fields =
-          Array.isArray(
-            embed.fields
-          )
-            ? embed.fields
-            : [];
-
-        const candidateField =
-          fields.find(
-            (field) =>
-              normalizeText(
-                field.name
-              ).includes(
-                'candidato'
-              )
-          );
-
-        const channelField =
-          fields.find(
-            (field) =>
-              normalizeText(
-                field.name
-              ).includes(
-                'canal'
-              )
-          );
-
-        if (
-          !String(
-            candidateField
-              ?.value ||
-            ''
-          ).includes(
-            String(
-              candidateId
-            )
-          )
-        ) {
-          continue;
-        }
-
-        const ticketId =
-          String(
-            channelField
-              ?.value ||
-            ''
-          ).match(
-            /<#(\d{17,22})>/
-          )?.[1] ||
-          String(
-            channelField
-              ?.value ||
-            ''
-          ).match(
-            /\b(\d{17,22})\b/
-          )?.[1] ||
-          message.id;
-
-        uniqueTickets.add(
-          String(
-            ticketId
-          )
-        );
-      }
-    }
-
-    const oldest =
-      messages.reduce(
-        (
-          current,
-          message
-        ) => {
-          if (!current) {
-            return message;
-          }
-
-          return (
-            message.createdTimestamp <
-            current.createdTimestamp
-              ? message
-              : current
-          );
-        },
-        null
-      );
-
-    before =
-      oldest?.id ||
-      null;
-
-    if (
-      !before ||
-      batch.size < 100 ||
-      Number(
-        oldest?.createdTimestamp ||
-        0
-      ) < cutoff
-    ) {
-      break;
-    }
+    return cached.value;
   }
 
-  const count =
-    uniqueTickets.size;
+  const inFlight =
+    INTERVIEW_ATTEMPT_STATUS_INFLIGHT.get(
+      cacheKey
+    );
 
-  return {
-    count,
-    remaining:
-      Math.max(
-        0,
-        maxAttempts -
-        count
-      ),
-    blocked:
-      count >=
-      maxAttempts,
-    windowDays,
-    maxAttempts,
-    available: true,
-  };
+  if (
+    inFlight
+  ) {
+    return inFlight;
+  }
+
+  const generation =
+    Number(
+      INTERVIEW_ATTEMPT_STATUS_GENERATION.get(
+        normalizedCandidateId
+      ) ||
+      0
+    );
+
+  const scanPromise =
+    (async () => {
+      const logChannel =
+        await fetchTextChannel(
+          client,
+          INTERVIEW_ATTEMPT_LOG_CHANNEL_ID
+        );
+
+      if (!logChannel) {
+        return {
+          count: 0,
+          remaining:
+            maxAttempts,
+          blocked: false,
+          windowDays,
+          maxAttempts,
+          available: false,
+        };
+      }
+
+      const cutoff =
+        Date.now() -
+        Number(
+          windowDays
+        ) *
+          24 *
+          60 *
+          60 *
+          1000;
+
+      const uniqueTickets =
+        new Set();
+
+      let before =
+        null;
+
+      let reachedCutoff =
+        false;
+
+      while (
+        !reachedCutoff
+      ) {
+        const batch =
+          await logChannel.messages
+            .fetch({
+              limit: 100,
+              cache: false,
+              ...(
+                before
+                  ? {
+                      before,
+                    }
+                  : {}
+              ),
+            })
+            .catch(
+              () => null
+            );
+
+        if (
+          !batch?.size
+        ) {
+          break;
+        }
+
+        const messages =
+          [
+            ...batch.values()
+          ];
+
+        for (
+          const message of
+          messages
+        ) {
+          if (
+            message.createdTimestamp <
+            cutoff
+          ) {
+            reachedCutoff =
+              true;
+            continue;
+          }
+
+          for (
+            const embed of
+            message.embeds ||
+            []
+          ) {
+            if (
+              String(
+                embed.title ||
+                ''
+              ) !==
+              '🏁 Entrevista Finalizada'
+            ) {
+              continue;
+            }
+
+            const fields =
+              Array.isArray(
+                embed.fields
+              )
+                ? embed.fields
+                : [];
+
+            const candidateField =
+              fields.find(
+                (field) =>
+                  normalizeText(
+                    field.name
+                  ).includes(
+                    'candidato'
+                  )
+              );
+
+            const channelField =
+              fields.find(
+                (field) =>
+                  normalizeText(
+                    field.name
+                  ).includes(
+                    'canal'
+                  )
+              );
+
+            if (
+              !String(
+                candidateField
+                  ?.value ||
+                ''
+              ).includes(
+                normalizedCandidateId
+              )
+            ) {
+              continue;
+            }
+
+            const ticketId =
+              String(
+                channelField
+                  ?.value ||
+                ''
+              ).match(
+                /<#(\d{17,22})>/
+              )?.[1] ||
+              String(
+                channelField
+                  ?.value ||
+                ''
+              ).match(
+                /\b(\d{17,22})\b/
+              )?.[1] ||
+              message.id;
+
+            uniqueTickets.add(
+              String(
+                ticketId
+              )
+            );
+          }
+
+          // Já chegou ao máximo permitido.
+          // Não precisa continuar lendo o mês inteiro.
+          if (
+            uniqueTickets.size >=
+            maxAttempts
+          ) {
+            reachedCutoff =
+              true;
+            break;
+          }
+        }
+
+        if (
+          reachedCutoff
+        ) {
+          break;
+        }
+
+        const oldest =
+          messages.reduce(
+            (
+              current,
+              message
+            ) => {
+              if (!current) {
+                return message;
+              }
+
+              return (
+                message.createdTimestamp <
+                current.createdTimestamp
+                  ? message
+                  : current
+              );
+            },
+            null
+          );
+
+        before =
+          oldest?.id ||
+          null;
+
+        if (
+          !before ||
+          batch.size < 100 ||
+          Number(
+            oldest?.createdTimestamp ||
+            0
+          ) < cutoff
+        ) {
+          break;
+        }
+      }
+
+      const count =
+        uniqueTickets.size;
+
+      const value = {
+        count,
+        remaining:
+          Math.max(
+            0,
+            maxAttempts -
+            count
+          ),
+        blocked:
+          count >=
+          maxAttempts,
+        windowDays,
+        maxAttempts,
+        available: true,
+      };
+
+      if (
+        Number(
+          INTERVIEW_ATTEMPT_STATUS_GENERATION.get(
+            normalizedCandidateId
+          ) ||
+          0
+        ) ===
+          generation
+      ) {
+        INTERVIEW_ATTEMPT_STATUS_CACHE.set(
+          cacheKey,
+          {
+            value,
+            expiresAt:
+              Date.now() +
+              INTERVIEW_ATTEMPT_STATUS_CACHE_TTL_MS,
+          }
+        );
+      }
+
+      return value;
+    })();
+
+  INTERVIEW_ATTEMPT_STATUS_INFLIGHT.set(
+    cacheKey,
+    scanPromise
+  );
+
+  try {
+    return await scanPromise;
+  } finally {
+    if (
+      INTERVIEW_ATTEMPT_STATUS_INFLIGHT.get(
+        cacheKey
+      ) ===
+        scanPromise
+    ) {
+      INTERVIEW_ATTEMPT_STATUS_INFLIGHT.delete(
+        cacheKey
+      );
+    }
+  }
 }
 
 function stringifyMessage(message) {

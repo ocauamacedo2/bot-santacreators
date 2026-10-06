@@ -1,6 +1,9 @@
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from 'discord.js';
 import entrevista from '../../utils/entrevista.js';
-import { canUseInterviewIntelligence } from '../../events/interviewIntelligence.js';
+import {
+  canUseInterviewIntelligence,
+  getInterviewAttemptStatus
+} from '../../events/interviewIntelligence.js';
 import { dashEmit } from "../../utils/dashHub.js";
 import { iaInterviewPauseForManualInterview } from "../../events/iaChatAuto.js";
 const ALERT_ROLE_IDS = [
@@ -214,6 +217,25 @@ export default {
 
       return true;
     }
+
+    // =====================================================
+    // 1.0.1 PRÉ-AQUECE A CONSULTA DE TENTATIVAS
+    //
+    // Não esperamos esta leitura aqui.
+    // Enquanto o botão é criado, o sistema já consulta o
+    // histórico de tentativas do candidato em background.
+    //
+    // Quando alguém clicar em "Iniciar Entrevista", essa
+    // informação normalmente já estará em cache.
+    // =====================================================
+
+    fireAndForget(
+      getInterviewAttemptStatus(
+        client,
+        openerId
+      ),
+      'prewarmInterviewAttemptStatus'
+    );
 
     // =====================================================
     // 1.1 APAGA O !PERGUNTAS IMEDIATAMENTE
