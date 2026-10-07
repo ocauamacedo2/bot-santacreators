@@ -2,121 +2,79 @@ import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
-export async function createShareAuditQueue(path, deliver) {
+// Uma entrega confirmada é retirada do disco; cada canal é uma tarefa independente.
+export async function createShareAuditQueue(path, deliver, options = {}) {
+  const now = options.now || Date.now;
+  const logger = options.logger || console;
   await mkdir(dirname(path), { recursive: true });
-
   let jobs = [];
-
-  try {
-    jobs = JSON.parse(await readFile(path, 'utf8'));
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-  }
-
-  if (!Array.isArray(jobs)) {
+  try { jobs = JSON.parse(await readFile(path, 'utf8')); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  if (!Array.isArray(jobs) || jobs.some(job => !job.id || !job.channel || !job.embed)) {
     throw new Error('Fila de auditoria inválida: ' + path);
   }
-
-  let writes = Promise.resolve();
-  let running = null;
-  let lastError = null;
-  let delivered = 0;
-
+  let writes = Promise.resolve(), running = null, lastError = null, delivered = 0;
+  const report = (error, channel = null) => {
+    lastError = { time: new Date(now()).toISOString(), channel,
+      status: error?.status || error?.statusCode || null,
+      code: error?.discordCode || error?.code || null,
+      message: error?.discordMessage || error?.message || String(error) };
+    logger.error('[SANTA AUDIT] Entrega pendente:', lastError);
+  };
   const persist = () => {
     const snapshot = JSON.stringify(jobs);
-
     const task = writes.catch(() => {}).then(async () => {
-      await writeFile(`${path}.tmp`, snapshot);
-      await rename(`${path}.tmp`, path);
+      const temp = `${path}.${randomUUID()}.tmp`;
+      await writeFile(temp, snapshot, { mode: 0o600 });
+      await rename(temp, path);
     });
-
     writes = task;
     return task;
   };
-
-  const report = error => {
-    lastError = {
-      time: new Date().toISOString(),
-      message: error.message,
-      code: error.discordCode || error.code || null,
-      channel: error.auditChannel || null
-    };
-
-    console.error('[SANTA AUDIT] Envio pendente; será repetido:', lastError);
-  };
-
   function pump() {
     if (running) return running;
-
     running = (async () => {
+      // Não enviar nada que ainda não tenha sido confirmado no armazenamento.
       await writes.catch(() => persist());
-
-      for (const job of [...jobs]
-        .filter(item => !item.next || item.next <= Date.now())
-        .slice(0, 30)) {
+      const ready = jobs.filter(job => !job.next || job.next <= now()).slice(0, 30);
+      for (const job of ready) {
         try {
           await deliver(job.channel, job.embed);
-          jobs = jobs.filter(item => item.id !== job.id);
-          delivered++;
         } catch (error) {
-          error.auditChannel = job.channel;
-          report(error);
-
+          report(error, job.channel);
           job.attempts = (job.attempts || 0) + 1;
-          job.next = Date.now() +
-            Math.min(300000, 5000 * 2 ** Math.min(job.attempts, 6));
+          job.next = now() + Math.max(error?.retryAfterMs || 0,
+            Math.min(300000, 5000 * 2 ** Math.min(job.attempts, 6)));
+          await persist();
+          continue;
         }
-
-        await persist();
+        jobs = jobs.filter(item => item.id !== job.id);
+        try { await persist(); delivered++; }
+        catch (error) {
+          // Preserva o registro se a confirmação no disco falhar.
+          jobs.push(job);
+          report(error, job.channel);
+          throw error;
+        }
       }
-    })()
-      .catch(report)
-      .finally(() => {
-        running = null;
-      });
-
+    })().catch(error => report(error)).finally(() => { running = null; });
     return running;
   }
-
-  const timer = setInterval(() => {
-    void pump();
-  }, 10000);
-
+  const timer = setInterval(() => { void pump(); }, options.intervalMs || 10000);
   timer.unref();
-
+  // Retoma também os registros de uma execução anterior.
+  if (options.autoStart !== false) void pump();
   return {
     async enqueue(channels, embed) {
       for (const channel of new Set(channels.filter(Boolean))) {
-        jobs.push({
-          id: randomUUID(),
-          channel,
-          embed,
-          attempts: 0,
-          next: 0
-        });
+        jobs.push({ id: randomUUID(), channel, embed, attempts: 0, next: 0 });
       }
-
-      try {
-        await persist();
-      } catch (error) {
-        report(error);
-        throw error;
-      }
-
-      void pump();
+      try { await persist(); } catch (error) { report(error); throw error; }
+      if (options.autoStart !== false) void pump();
     },
-
-    status: () => ({
-      pending: jobs.length,
-      deliveredSinceStart: delivered,
-      lastError
-    }),
-
-    flush: async () => {
-      await writes;
-      await pump();
-    },
-
-    close: () => clearInterval(timer)
+    status: () => ({ pending: jobs.length, deliveredSinceStart: delivered, lastError,
+      oldestPendingAt: jobs.length ? jobs[0].embed.timestamp || null : null }),
+    async flush() { await writes; await pump(); },
+    close() { clearInterval(timer); }
   };
 }
