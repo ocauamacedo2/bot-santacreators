@@ -29,10 +29,10 @@ const CFG = {
   GUILD_ID: "1262262852782129183",
 
   // Canal do MENU (mensagem fixa com botões de cidade)
-  CANAL_MENU: "1382830421909438484",
+  CANAL_MENU: String(process.env.SETSTAFF_V2_CANAL_MENU || "1382830421909438484").trim(),
 
   // Canal onde cai o pedido pra aprovar/reprovar
-  CANAL_REGISTRO: "1379024704957841509",
+  CANAL_REGISTRO: String(process.env.SETSTAFF_V2_CANAL_REGISTRO || "1379024704957841509").trim(),
 
   // Canal de notificação "novo set"
   CANAL_NOTIF: "1262262853436440652",
@@ -214,6 +214,47 @@ globalThis.__SC_SETSTAFF_V2__ ??= {
 };
 
 const ST = globalThis.__SC_SETSTAFF_V2__;
+ST.processing ??= new Set();
+
+async function withSetStaffLock(key, task) {
+  if (ST.processing.has(key)) {
+    throw Object.assign(new Error('Este pedido já está sendo processado. Aguarde.'), { status: 409 });
+  }
+  ST.processing.add(key);
+  try { return await task(); }
+  finally { ST.processing.delete(key); }
+}
+
+async function confirmSetStaffBase(guild, userId, cidade, nome, passaporte) {
+  let member = await guild.members.fetch({ user: String(userId), force: true });
+  const required = [CFG.CARGO_CIDADAO, CARGOS_CIDADES[cidade]];
+  if (required.some(roleId => !roleId) || new Set(required).size !== 2) {
+    throw new Error('Cargos do cadastro base inválidos.');
+  }
+  for (const roleId of required) {
+    if (!member.roles.cache.has(roleId)) {
+      await member.roles.add(roleId, 'Set Staff: cadastro comum');
+    }
+  }
+  member = await guild.members.fetch({ user: String(userId), force: true });
+  if (required.some(roleId => !member.roles.cache.has(roleId))) {
+    throw new Error('O Discord não confirmou Cidadão e cidade; SEM WL foi preservado.');
+  }
+  if (member.roles.cache.has(CFG.CARGO_SEM_WL)) {
+    await member.roles.remove(CFG.CARGO_SEM_WL, 'Set Staff: cadastro comum confirmado');
+  }
+  member = await guild.members.fetch({ user: String(userId), force: true });
+  if (member.roles.cache.has(CFG.CARGO_SEM_WL) || required.some(roleId => !member.roles.cache.has(roleId))) {
+    throw new Error('Os cargos mudaram durante o cadastro. Tente novamente.');
+  }
+  let warning = null;
+  try { await member.setNickname(`${nome} | ${passaporte}`.slice(0, 32), 'Set Staff: cadastro comum'); }
+  catch (error) {
+    warning = 'Cargos confirmados, mas o apelido precisa ser revisado pela gestão.';
+    console.warn('[SETSTAFF_V2] Falha ao atualizar apelido:', userId, error.message);
+  }
+  return { member, warning };
+}
 
 // =====================================================
 // PERSISTÊNCIA (arquivo próprio do módulo)
@@ -255,17 +296,22 @@ function loadAll() {
     const raw = fs.readFileSync(DATA_FILE, "utf8");
     const json = JSON.parse(raw || "{}");
     return normalizeAll(json);
-  } catch {
-    return { users: {}, byMsgId: {} };
+  } catch (error) {
+    console.error('[SETSTAFF_V2] histórico ilegível; os dados existentes foram preservados:', error);
+    throw error;
   }
 }
 
 function saveAll(obj) {
   ensureDataFile();
+  const temporary = `${DATA_FILE}.${process.pid}.tmp`;
   try {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(obj, null, 2));
-  } catch (e) {
-    console.error("[SETSTAFF_V2] erro salvando json:", e);
+    fs.writeFileSync(temporary, JSON.stringify(obj, null, 2), { mode: 0o600 });
+    fs.renameSync(temporary, DATA_FILE);
+  } catch (error) {
+    try { fs.unlinkSync(temporary); } catch {}
+    console.error('[SETSTAFF_V2] erro salvando json:', error);
+    throw error;
   }
 }
 
@@ -286,16 +332,18 @@ function getUltimo(userId) {
   return h.length ? h[h.length - 1] : null;
 }
 
-function updateUltimoStatus(userId, status) {
+function updateUltimoStatus(userId, status, msgId = null) {
   const all = loadAll();
   const h = Array.isArray(all.users[userId]) ? all.users[userId] : [];
   if (!h.length) return;
 
-  h[h.length - 1].status = status;
+  const index = msgId ? h.findIndex(item => String(item.msgId) === String(msgId)) : h.length - 1;
+  if (index < 0) return;
+  h[index].status = status;
   all.users[userId] = h;
 
   // se o último tiver msgId, atualiza também a tabela por msgId
-  const last = h[h.length - 1];
+  const last = h[index];
   if (last?.msgId) {
     all.byMsgId[last.msgId] = { ...(all.byMsgId[last.msgId] || {}), ...last, status };
   }
@@ -1566,7 +1614,10 @@ async function ensureFixedMessage(client, force = false) {
 
   try {
     const canal = await client.channels.fetch(CFG.CANAL_MENU).catch(() => null);
-    if (!canal || canal.type !== ChannelType.GuildText) return;
+    if (!canal || canal.type !== ChannelType.GuildText) {
+      console.error('[SETSTAFF_V2] Canal do menu inválido ou inacessível. Confira SETSTAFF_V2_CANAL_MENU:', CFG.CANAL_MENU);
+      return;
+    }
 
     const msgs = await canal.messages.fetch({ limit: 50 }).catch(() => null);
     if (!msgs) return;
@@ -1662,9 +1713,27 @@ export async function setStaffV2HandleMessage(message, client) {
 }
 
 export async function setStaffV2HandleInteraction(interaction, client) {
+  if (!interaction.guildId || interaction.guildId !== CFG.GUILD_ID) return false;
+  const decision = interaction.isButton?.() && /^ss2_(aprovar|reprovar)_/.test(interaction.customId || '');
+  const submission = interaction.isModalSubmit?.() && interaction.customId === 'ss2_modal_setstaff';
+  const key = decision ? `decision:${interaction.message?.id || interaction.customId}`
+    : submission ? `request:${interaction.user.id}` : null;
+  if (!key) return handleSetStaffV2Interaction(interaction, client);
+  try { return await withSetStaffLock(key, () => handleSetStaffV2Interaction(interaction, client)); }
+  catch (error) {
+    if (interaction.siteOrigin) throw error;
+    const payload = { content: `⚠️ ${error.message}`, ephemeral: true };
+    if (interaction.deferred || interaction.replied) await interaction.followUp(payload).catch(() => {});
+    else await interaction.reply(payload).catch(() => {});
+    return true;
+  }
+}
+
+async function handleSetStaffV2Interaction(interaction, client) {
   try {
     if (!interaction.guildId || interaction.guildId !== CFG.GUILD_ID) return false;
 
+    if (!String(interaction.customId || '').startsWith('ss2_')) return false;
     // sempre que alguém encostar em algo do setstaff, garante o botão fixo “vivo”
     // (isso atende teu “se auto edita sempre que é interagido”)
     ensureFixedMessage(client).catch(() => {});
@@ -1795,11 +1864,12 @@ if (interaction.isButton() && interaction.customId.startsWith("ss2_nivel_")) {
     // (D) SUBMIT DO MODAL
     // ===========================================
     if (interaction.isModalSubmit() && interaction.customId === "ss2_modal_setstaff") {
+  await interaction.deferReply({ ephemeral: true });
   const base = ST.pedidosMap.get(userId) || {};
   const { cidade, nivel } = base;
 
   if (!cidade || !nivel) {
-    await interaction.reply({
+    await interaction.editReply({
       content: "⚠️ Seu pedido perdeu o contexto (cidade/nível). Refaz o fluxo pelo menu.",
       ephemeral: true,
     });
@@ -1808,7 +1878,7 @@ if (interaction.isButton() && interaction.customId.startsWith("ss2_nivel_")) {
 
   const pedidoPendente = getPedidoPendente(userId);
   if (pedidoPendente) {
-    await interaction.reply({
+    await interaction.editReply({
       content:
         "⚠️ Você já possui um pedido de set staff pendente de análise.\n" +
         "Aguarde aprovação ou reprovação antes de enviar outro.",
@@ -1857,7 +1927,7 @@ if (
   !pasta ||
   !passaporte
 ) {
-  await interaction.reply({
+  await interaction.editReply({
     content:
       "❌ Preencha nome, pasta e passaporte corretamente.",
 
@@ -1896,12 +1966,13 @@ const payload = {
     null,
 };
 
+  await confirmSetStaffBase(interaction.guild, userId, cidade, nome, passaporte);
   const embed = buildEmbedPedido(payload);
   const row = buildRowAprovacao(userId);
 
   const canalRegistro = await resolveLogChannel(client, CFG.CANAL_REGISTRO);
   if (!canalRegistro) {
-    await interaction.reply({
+    await interaction.editReply({
       content: "❌ Não achei o canal de registro do set staff.",
       ephemeral: true,
     });
@@ -1919,7 +1990,7 @@ const payload = {
     });
   } catch (e) {
     console.error("[SETSTAFF_V2] erro enviando pedido no canal de registro:", e);
-    await interaction.reply({
+    await interaction.editReply({
       content: "❌ Não consegui enviar seu pedido para análise. Tente novamente em instantes.",
       ephemeral: true,
     });
@@ -1947,60 +2018,9 @@ const payload = {
       .catch(() => {});
   }
 
-const membro =
-  await interaction.guild.members
-    .fetch(userId)
-    .catch(() => null);
 
-if (membro) {
-  const cidadeRoleId =
-    CARGOS_CIDADES[cidade] ||
-    null;
 
-  const cargosBase = [
-    CFG.CARGO_CIDADAO,
-    cidadeRoleId,
-  ].filter(Boolean);
-
-  if (cargosBase.length) {
-    await membro.roles
-      .add(
-        [...new Set(cargosBase)],
-        "Set Staff pendente • cadastro base"
-      )
-      .catch((error) => {
-        console.error(
-          "[SETSTAFF_V2] Falha ao aplicar cargos base:",
-          error
-        );
-      });
-  }
-
-  await membro
-    .setNickname(
-      `${nome} | ${passaporte}`,
-      "Set Staff pendente • cadastro base"
-    )
-    .catch(() => {});
-
-  /*
-   * A pessoa já concluiu o cadastro base.
-   *
-   * A aprovação futura controla SOMENTE:
-   * - nível Staff;
-   * - Staff Geral;
-   * - extras do nível;
-   * - nickname final com sigla.
-   */
-  await membro.roles
-    .remove(
-      CFG.CARGO_SEM_WL,
-      "Set Staff pendente • WL concluída"
-    )
-    .catch(() => {});
-}
-
-  await interaction.reply({ content: "✅ Pedido enviado com sucesso!", ephemeral: true });
+  await interaction.editReply({ content: "✅ Pedido enviado com sucesso!", ephemeral: true });
   return true;
 }
     // ===========================================
@@ -2071,7 +2091,11 @@ if (!ultimo) {
       }
 
 if (!pedido) {
-  await interaction.followUp({ content: "⚠️ Pedido não encontrado no histórico.", ephemeral: true }).catch(() => {});
+  await interaction.followUp({ content: '⚠️ Pedido não encontrado no histórico.', ephemeral: true }).catch(() => {});
+  return true;
+}
+if (pedido.status && pedido.status !== 'pendente') {
+  await interaction.followUp({ content: `⚠️ Este pedido já está como ${pedido.status}.`, ephemeral: true }).catch(() => {});
   return true;
 }
 
@@ -2236,10 +2260,9 @@ if (
   if (
     rolesPendentes.length
   ) {
-    await membro.roles.add(
-      rolesPendentes,
-      `Set Staff aprovado por ${interaction.user.id}`
-    );
+    for (const roleId of rolesPendentes) {
+      await membro.roles.add(roleId, `Set Staff aprovado por ${interaction.user.id}`);
+    }
   }
 
   /*
@@ -2360,7 +2383,8 @@ if (
 
 updateUltimoStatus(
   userIdTarget,
-  "aprovado"
+  "aprovado",
+  interaction.message?.id
 );
 
 updateByMsgIdStatus(
@@ -2407,7 +2431,8 @@ updateSetStaffDecision({
 
 updateUltimoStatus(
   userIdTarget,
-  "reprovado"
+  "reprovado",
+  interaction.message?.id
 );
 
 updateByMsgIdStatus(
@@ -2493,6 +2518,11 @@ return true;
     return false;
   } catch (e) {
     console.error("[SETSTAFF_V2] HandleInteraction erro:", e);
+    if (interaction.siteOrigin) throw e;
+    if (interaction.deferred || interaction.replied) {
+      await interaction.followUp({ content: `⚠️ Não foi possível concluir: ${e.message}`, ephemeral: true }).catch(() => {});
+      return true;
+    }
     // tenta responder se ainda der
     try {
       if (!interaction.deferred && !interaction.replied) {
@@ -2509,6 +2539,10 @@ return true;
 function normalizeSetStaffCityKey(
   value
 ) {
+  const labelMatch = Object.entries(LABELS_CIDADES).find(([, label]) =>
+    String(label).toLowerCase() === String(value || '').trim().toLowerCase()
+  );
+  if (labelMatch) return labelMatch[0];
   const normalized =
     String(value || "")
       .trim()
@@ -2624,16 +2658,9 @@ export async function getSetStaffSiteSnapshot({
         () => null
       );
 
-  if (
-    !actor ||
-    !canApproveMember(
-      actor,
-      actorId
-    )
-  ) {
-    throw new Error(
-      "Você não possui permissão para visualizar a gestão de Set Staff."
-    );
+  const channel = await guild.channels.fetch(CFG.CANAL_REGISTRO).catch(() => null);
+  if (!actor || !channel?.permissionsFor(actor)?.has('ViewChannel')) {
+    throw Object.assign(new Error('Você não possui acesso ao canal de Set Staff.'), { status: 403 });
   }
 
   const all =
@@ -2730,7 +2757,7 @@ export async function getSetStaffSiteSnapshot({
         true,
 
       decide:
-        true,
+        canApproveMember(actor, actorId),
     },
 
     stats: {
@@ -2820,7 +2847,11 @@ export async function getSetStaffSiteSnapshot({
   };
 }
 
-export async function submitSetStaffFromSite({
+export async function submitSetStaffFromSite(options) {
+  return withSetStaffLock(`request:${String(options.userId)}`, () => submitSetStaffSiteRequest(options));
+}
+
+async function submitSetStaffSiteRequest({
   client,
   guild,
   userId,
@@ -2858,9 +2889,7 @@ export async function submitSetStaffFromSite({
     !cidade ||
     !nivel
   ) {
-    throw new Error(
-      "Cidade ou nível Staff inválido."
-    );
+    throw Object.assign(new Error('Cidade ou nível Staff inválido.'), { status: 400 });
   }
 
   if (
@@ -2870,9 +2899,7 @@ export async function submitSetStaffFromSite({
       passaporte
     )
   ) {
-    throw new Error(
-      "Nome, pasta ou ID inválido."
-    );
+    throw Object.assign(new Error('Nome, pasta ou ID inválido.'), { status: 400 });
   }
 
   const existing =
@@ -2881,11 +2908,10 @@ export async function submitSetStaffFromSite({
     );
 
   if (existing) {
-    throw new Error(
-      "Você já possui um pedido Staff pendente."
-    );
+    return { ok: true, msgId: existing.msgId, status: 'pendente', reused: true };
   }
 
+  const baseResult = await confirmSetStaffBase(guild, userId, cidade, nome, passaporte);
   const createdAt =
     Date.now();
 
@@ -2981,56 +3007,7 @@ export async function submitSetStaffFromSite({
     finalPayload
   );
 
-  const membro =
-    await guild.members
-      .fetch(
-        String(userId)
-      )
-      .catch(
-        () => null
-      );
 
-  if (membro) {
-    const roles = [
-      CFG.CARGO_CIDADAO,
-      CARGOS_CIDADES[
-        cidade
-      ],
-    ].filter(Boolean);
-
-    if (roles.length) {
-      await membro.roles
-        .add(
-          [
-            ...new Set(
-              roles
-            ),
-          ],
-          "Set Staff pelo site • cadastro base"
-        )
-        .catch(
-          () => {}
-        );
-    }
-
-    await membro.roles
-      .remove(
-        CFG.CARGO_SEM_WL,
-        "Set Staff pelo site • WL concluída"
-      )
-      .catch(
-        () => {}
-      );
-
-    await membro
-      .setNickname(
-        `${nome} | ${passaporte}`,
-        "Set Staff pelo site • cadastro base"
-      )
-      .catch(
-        () => {}
-      );
-  }
 
   const canalNotif =
     await resolveLogChannel(
@@ -3065,6 +3042,7 @@ export async function submitSetStaffFromSite({
 
     status:
       "pendente",
+    warning: baseResult.warning,
   };
 }
 // =====================================================
@@ -3125,9 +3103,7 @@ export async function decideSetStaffFromSite({
       normalizedActorId
     )
   ) {
-    throw new Error(
-      "Você não possui permissão para aprovar ou reprovar Set Staff."
-    );
+    throw Object.assign(new Error('Você não possui permissão para aprovar ou reprovar Set Staff.'), { status: 403 });
   }
 
   const pedido =
@@ -3178,6 +3154,7 @@ export async function decideSetStaffFromSite({
   }
 
   const fakeInteraction = {
+    siteOrigin: true,
     id:
       `site-setstaff-${Date.now()}-${normalizedActorId}`,
 
@@ -3273,20 +3250,9 @@ export async function decideSetStaffFromSite({
       normalizedMsgId
     );
 
-  return {
-    ok:
-      true,
-
-    msgId:
-      normalizedMsgId,
-
-    status:
-      updated?.status ||
-      (
-        normalizedAction ===
-          "approve"
-          ? "aprovado"
-          : "reprovado"
-      ),
-  };
+  const expected = normalizedAction === 'approve' ? 'aprovado' : 'reprovado';
+  if (updated?.status !== expected) {
+    throw new Error(fakeInteraction.lastReply?.content || 'A decisão não foi confirmada pelo Set Staff.');
+  }
+  return { ok: true, msgId: normalizedMsgId, status: updated.status };
 }

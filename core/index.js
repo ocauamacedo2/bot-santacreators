@@ -1,4 +1,3 @@
-// core/index.js — SantaCreators Bot Core
 import dotenv from "dotenv";
 dotenv.config({ override: true });
 
@@ -576,6 +575,8 @@ app.get("/transcript/:canalId", async (req, res) => {
  * A rota /site-hub continua protegida
  * pelo BRIDGE_SECRET.
  */
+const siteHubInstalled = installSiteHubApi({ app, client });
+
 app.get(
   "/health",
   (
@@ -594,7 +595,9 @@ app.get(
           "santa-creators-bot-api",
 
         siteHub:
-          true,
+          siteHubInstalled,
+        discordReady:
+          client.isReady(),
 
         timestamp:
           new Date()
@@ -602,11 +605,6 @@ app.get(
       });
   }
 );
-
-installSiteHubApi({
-  app,
-  client,
-});
 
 const API_PORT =
   Number(

@@ -1,4 +1,5 @@
 import express from "express";
+import { timingSafeEqual } from "node:crypto";
 
 import {
   PermissionFlagsBits,
@@ -30,13 +31,18 @@ import {
   adjustWeeklyPointsFromSite,
 } from "./scGeralWeeklyRanking.js";
 
-import {
-  getCronogramaData,
-} from "./cronogramaCreators.js";
-
-import {
-  generateSantaCreatorsStandaloneText,
-} from "./iaChatAuto.js";
+async function siteProvider(modulePath, exportName) {
+  try {
+    const module = await import(modulePath);
+    if (typeof module[exportName] !== 'function') {
+      throw new Error(`Exportação ${exportName} não encontrada.`);
+    }
+    return module[exportName];
+  } catch (error) {
+    console.error('[SITE HUB] Provedor indisponível:', modulePath, error.message);
+    throw Object.assign(new Error('Esta integração ainda precisa ser habilitada no bot.'), { status: 503 });
+  }
+}
 
 
 // =====================================================
@@ -90,7 +96,7 @@ const CHANNELS = {
   ],
 
   staff: [
-    "1379024704957841509",
+    String(process.env.SETSTAFF_V2_CANAL_REGISTRO || "1379024704957841509").trim(),
   ],
 
   hall: [
@@ -156,10 +162,9 @@ function safeSecretEqual(
     return false;
   }
 
-  return (
-    String(received) ===
-    `Bearer ${expected}`
-  );
+  const actual = Buffer.from(String(received));
+  const wanted = Buffer.from(`Bearer ${expected}`);
+  return actual.length === wanted.length && timingSafeEqual(actual, wanted);
 }
 
 
@@ -247,7 +252,7 @@ async function canViewAnyChannel(
           () => null
         );
 
-    if (!channel) {
+    if (!channel || channel.guildId !== member.guild.id) {
       continue;
     }
 
@@ -291,52 +296,6 @@ async function canAccessSiteModule(
       channelIds
     );
 
-  /*
-   * Rankings comunitários.
-   *
-   * Todo Cidadão com WL concluída
-   * ou membro Santa Creators
-   * pode visualizar.
-   */
-  if (
-    moduleKey ===
-      'hall' ||
-    moduleKey ===
-      'quiz'
-  ) {
-    return (
-      isCreatorsCommunityMember(
-        member
-      ) ||
-      discordChannelAccess
-    );
-  }
-
-  /*
-   * Set Staff.
-   *
-   * Não basta enxergar o canal.
-   * Precisa fazer parte da mesma
-   * regra oficial de aprovação.
-   */
-  if (
-    moduleKey ===
-    'staff'
-  ) {
-    return (
-      discordChannelAccess &&
-      canManageSetStaffFromSite(
-        member,
-        member.id
-      )
-    );
-  }
-
-  /*
-   * Demais módulos:
-   * Discord continua sendo
-   * a fonte oficial de acesso.
-   */
   return discordChannelAccess;
 }
 
@@ -382,6 +341,15 @@ async function assertModuleView(
   }
 }
 
+
+let permissionRefresh = null;
+async function refreshDiscordPermissions(guild) {
+  if (!permissionRefresh) {
+    permissionRefresh = Promise.all([guild.channels.fetch(), guild.roles.fetch()])
+      .finally(() => { permissionRefresh = null; });
+  }
+  await permissionRefresh;
+}
 
 export function installSiteHubApi({
   app,
@@ -492,9 +460,8 @@ export function installSiteHubApi({
         }
 
         if (
-          !/^\d{17,20}$/.test(
-            actorId
-          )
+          !action.startsWith('public.') &&
+          !/^\d{17,20}$/.test(actorId)
         ) {
           return res
             .status(400)
@@ -510,11 +477,30 @@ export function installSiteHubApi({
               GUILD_ID
             );
 
+        if (!client.isReady()) throw Object.assign(new Error('O bot ainda está conectando ao Discord.'), { status: 503 });
+        await refreshDiscordPermissions(guild);
+        if (action.startsWith('public.')) {
+          const modules = {};
+          for (const key of ['hall', 'quiz']) {
+            modules[key] = CHANNELS[key].some(channelId => {
+              const channel = guild.channels.cache.get(channelId);
+              return channel?.guildId === guild.id && channel.permissionsFor(guild.roles.everyone)?.has(PermissionFlagsBits.ViewChannel);
+            });
+          }
+          if (action === 'public.bootstrap') return res.json({ modules, source: 'discord-public' });
+          if (action === 'public.hall.snapshot' && modules.hall) {
+            return res.json(await getHallSiteSnapshot({ guild, publicAccess: true }));
+          }
+          if (action === 'public.quiz.snapshot' && modules.quiz) {
+            if (!globalThis.__SC_QUIZ_SITE_API__) throw Object.assign(new Error('Quiz ainda está inicializando.'), { status: 503 });
+            const snapshot = await globalThis.__SC_QUIZ_SITE_API__.snapshot({ actorId: '' });
+            return res.json({ ...snapshot, rights: { reset: false } });
+          }
+          return res.status(403).json({ error: 'Esta área exige login ou acesso ao canal do Discord.' });
+        }
         const member =
           await guild.members
-            .fetch(
-              actorId
-            )
+            .fetch({ user: actorId, force: true })
             .catch(
               () => null
             );
@@ -1123,10 +1109,10 @@ export function installSiteHubApi({
             "cronograma"
           );
 
-          return res.json({
-            data:
-              getCronogramaData(),
-          });
+      const getCronogramaData = await siteProvider('./cronogramaCreators.js', 'getCronogramaData');
+      return res.json({
+        data: await getCronogramaData(),
+      });
         }
 
 
@@ -1160,8 +1146,9 @@ export function installSiteHubApi({
             );
           }
 
-          const answer =
-            await generateSantaCreatorsStandaloneText({
+      const generateSantaCreatorsStandaloneText = await siteProvider('./iaChatAuto.js', 'generateSantaCreatorsStandaloneText');
+      const answer =
+        await generateSantaCreatorsStandaloneText({
               prompt,
 
               label:

@@ -13497,7 +13497,8 @@ globalThis.__SC_GI_SITE_API__ = {
     actorId,
   } = {}) {
     const guild =
-      client.guilds.cache.first();
+      client.guilds.cache.get('1262262852782129183') ||
+      await client.guilds.fetch('1262262852782129183').catch(() => null);
 
     if (!guild) {
       throw new Error(
@@ -13632,7 +13633,8 @@ globalThis.__SC_GI_SITE_API__ = {
     payload = {},
   } = {}) {
     const guild =
-      client.guilds.cache.first();
+      client.guilds.cache.get('1262262852782129183') ||
+      await client.guilds.fetch('1262262852782129183').catch(() => null);
 
     if (!guild) {
       throw new Error(

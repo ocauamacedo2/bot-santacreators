@@ -20084,22 +20084,14 @@ return true;
 export async function getHallSiteSnapshot({
   guild,
   actorId,
+  publicAccess = false,
 }) {
-  const member =
-    await guild.members
-      .fetch(
-        String(actorId)
-      )
-      .catch(
-        () => null
-      );
-
-  if (
-    !canUseRankingPrivate(
-      member,
-      String(actorId)
-    )
-  ) {
+  const viewer = publicAccess
+    ? guild.roles.everyone
+    : await guild.members.fetch({ user: String(actorId), force: true }).catch(() => null);
+  const orgsVisible = viewer && guild.channels.cache.get(HALL_ORGS_RANKING_CHANNEL_ID)?.permissionsFor(viewer)?.has('ViewChannel');
+  const playersVisible = viewer && guild.channels.cache.get(HALL_PLAYERS_RANKING_CHANNEL_ID)?.permissionsFor(viewer)?.has('ViewChannel');
+  if (!orgsVisible && !playersVisible) {
     throw new Error(
       "Você não possui acesso ao ranking."
     );
@@ -20108,19 +20100,11 @@ export async function getHallSiteSnapshot({
   const rankings =
     loadHallRankings();
 
-  const orgs =
-    getSortedRankingList(
-      rankings,
-      "org"
-    );
-
-  const players =
-    getSortedRankingList(
-      rankings,
-      "player"
-    );
+  const orgs = orgsVisible ? getSortedRankingList(rankings, 'org') : [];
+  const players = playersVisible ? getSortedRankingList(rankings, 'player') : [];
 
   return {
+    rights: { orgs: !!orgsVisible, players: !!playersVisible },
     updatedAt:
       Number(
         rankings.lastUpdatedAt ||
@@ -20162,3 +20146,7 @@ export async function getHallSiteSnapshot({
       ),
   };
 }
+
+
+
+// d:\bots\events\hierarquiaDivisoes.js
