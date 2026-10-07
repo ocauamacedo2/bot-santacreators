@@ -882,3 +882,84 @@ export async function rankingAprovadoresManagersHandleInteraction(interaction, c
     return false;
   }
 }
+// =====================================================
+// SITE HUB • RANKING APROVADORES MANAGERS
+// =====================================================
+
+export async function getRankingAprovadoresManagersSiteSnapshot({
+  client,
+  member,
+  actorId,
+}) {
+  const stats =
+    await scanRankingAprovadores(
+      client
+    );
+
+  const users =
+    makeUserList(
+      stats.users ||
+      {}
+    )
+      .sort(
+        (
+          a,
+          b
+        ) =>
+          b.total -
+            a.total ||
+          b.approved -
+            a.approved
+      );
+
+  const totalApproved =
+    users.reduce(
+      (
+        total,
+        item
+      ) =>
+        total +
+        item.approved,
+      0
+    );
+
+  const totalRejected =
+    users.reduce(
+      (
+        total,
+        item
+      ) =>
+        total +
+        item.rejected,
+      0
+    );
+
+  return {
+    month:
+      stats.month,
+
+    totalDecisions:
+      Number(
+        stats.totalDecisions ||
+        0
+      ),
+
+    totals: {
+      approved:
+        totalApproved,
+
+      rejected:
+        totalRejected,
+    },
+
+    users,
+
+    rights: {
+      refresh:
+        canUseRankingAprovadores(
+          member,
+          String(actorId)
+        ),
+    },
+  };
+}

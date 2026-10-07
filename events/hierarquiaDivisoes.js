@@ -2490,3 +2490,297 @@ export async function hierarquiaHandleMessage(message, client) {
   return false;
 
 }
+// =====================================================
+// SITE HUB • HIERARQUIA
+// =====================================================
+
+export async function getHierarchySiteSnapshot({
+  guild,
+  actorId,
+}) {
+  const actor =
+    await guild.members
+      .fetch(
+        String(actorId)
+      )
+      .catch(
+        () => null
+      );
+
+  if (!actor) {
+    throw new Error(
+      "Membro não encontrado."
+    );
+  }
+
+  const permission =
+    checkPermission(
+      actor
+    );
+
+  return {
+    hierarchy:
+      getOfficialSantaCreatorsHierarchySnapshot(
+        guild
+      ),
+
+    rights: {
+      edit:
+        permission !==
+        "NONE",
+
+      full:
+        permission ===
+        "ADMIN",
+    },
+
+    divisions:
+      Object.entries(
+        CONFIG.DIVISIONS
+      ).map(
+        (
+          [
+            key,
+            value,
+          ]
+        ) => ({
+          key,
+          label:
+            value.label,
+
+          emoji:
+            value.emoji,
+        })
+      ),
+
+    slots:
+      Object.values(
+        CONFIG.SLOTS
+      ).map(
+        key => ({
+          key,
+
+          label:
+            CONFIG.LABELS[
+              key
+            ],
+        })
+      ),
+  };
+}
+
+export async function hierarchySiteAction({
+  client,
+  guild,
+  actorId,
+  action,
+  targetId,
+  values,
+}) {
+  const actor =
+    await guild.members
+      .fetch(
+        String(actorId)
+      )
+      .catch(
+        () => null
+      );
+
+  const target =
+    await guild.members
+      .fetch(
+        String(targetId)
+      )
+      .catch(
+        () => null
+      );
+
+  if (
+    !actor ||
+    !target
+  ) {
+    throw new Error(
+      "Membro não encontrado."
+    );
+  }
+
+  const permission =
+    checkPermission(
+      actor
+    );
+
+  if (
+    permission ===
+    "NONE"
+  ) {
+    throw new Error(
+      "Você não possui permissão para alterar a hierarquia."
+    );
+  }
+
+  if (
+    action ===
+    "division"
+  ) {
+    if (
+      !isDivisionTargetRole(
+        target
+      )
+    ) {
+      throw new Error(
+        "Este membro não aceita divisão administrativa."
+      );
+    }
+
+    if (
+      !canManageDivisionTarget(
+        actor,
+        target
+      )
+    ) {
+      throw new Error(
+        "Sua hierarquia não permite alterar este membro."
+      );
+    }
+
+    const divisions =
+      loadDivisions();
+
+    const oldDivisions =
+      getMemberDivisions(
+        divisions,
+        target.id
+      );
+
+    const requested =
+      Array.isArray(values)
+        ? values
+        : [];
+
+    const newDivisions =
+      normalizeMemberDivisions(
+        requested,
+        target
+      );
+
+    divisions[
+      target.id
+    ] =
+      newDivisions;
+
+    saveDivisions(
+      divisions
+    );
+
+    await updateHierarchyPanel(
+      client
+    );
+
+    await logDivisionChange(
+      client,
+      actor.user,
+      target.user,
+      oldDivisions,
+      newDivisions
+    );
+
+    return {
+      ok:
+        true,
+
+      divisions:
+        newDivisions,
+    };
+  }
+
+  if (
+    action ===
+    "slot"
+  ) {
+    const newSlot =
+      String(
+        values?.[0] ||
+        ""
+      );
+
+    if (
+      !Object.values(
+        CONFIG.SLOTS
+      ).includes(
+        newSlot
+      )
+    ) {
+      throw new Error(
+        "Horário inválido."
+      );
+    }
+
+    const isEditable =
+      target.roles.cache.has(
+        CONFIG.ROLES.COORD_CREATOR
+      ) ||
+      target.roles.cache.has(
+        CONFIG.ROLES.RESP_LIDER
+      );
+
+    if (!isEditable) {
+      throw new Error(
+        "Este cargo não possui horário editável."
+      );
+    }
+
+    if (
+      permission ===
+        "MOD" &&
+      target.roles.cache.has(
+        CONFIG.ROLES.RESP_LIDER
+      )
+    ) {
+      throw new Error(
+        "Resp. Líder só pode editar Coordenação."
+      );
+    }
+
+    const slots =
+      loadSlots();
+
+    const oldSlot =
+      slots[
+        target.id
+      ] ||
+      CONFIG.SLOTS.NONE;
+
+    slots[
+      target.id
+    ] =
+      newSlot;
+
+    saveSlots(
+      slots
+    );
+
+    await updateHierarchyPanel(
+      client
+    );
+
+    await logChange(
+      client,
+      actor.user,
+      target.user,
+      oldSlot,
+      newSlot
+    );
+
+    return {
+      ok:
+        true,
+
+      slot:
+        newSlot,
+    };
+  }
+
+  throw new Error(
+    "Ação de hierarquia inválida."
+  );
+}

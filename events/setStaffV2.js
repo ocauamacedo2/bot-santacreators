@@ -1389,10 +1389,43 @@ function fmtExtrasLista(extrasKeys) {
   return labels.length ? labels.join(", ") : "—";
 }
 
-function canApprove(interaction) {
-  const isUserAllowed = CFG.PODE_APROVAR_USERS.includes(interaction.user.id);
-  const hasRoleAllowed = !!interaction.member?.roles?.cache?.some((r) => CFG.PODE_APROVAR_ROLES.includes(r.id));
-  return isUserAllowed || hasRoleAllowed;
+function canApproveMember(
+  member,
+  userId
+) {
+  const normalizedUserId =
+    String(
+      userId ||
+      member?.id ||
+      ""
+    );
+
+  const isUserAllowed =
+    CFG.PODE_APROVAR_USERS.includes(
+      normalizedUserId
+    );
+
+  const hasRoleAllowed =
+    !!member?.roles?.cache?.some(
+      role =>
+        CFG.PODE_APROVAR_ROLES.includes(
+          role.id
+        )
+    );
+
+  return (
+    isUserAllowed ||
+    hasRoleAllowed
+  );
+}
+
+function canApprove(
+  interaction
+) {
+  return canApproveMember(
+    interaction.member,
+    interaction.user.id
+  );
 }
 
 // =====================================================
@@ -1885,14 +1918,58 @@ const payload = {
       .catch(() => {});
   }
 
-  const membro = await interaction.guild.members.fetch(userId).catch(() => null);
-  if (membro) {
-    await membro.setNickname(`${nome} | ${passaporte}`).catch(() => {});
-    await membro.roles.add(CFG.CARGO_CIDADAO).catch(() => {});
+const membro =
+  await interaction.guild.members
+    .fetch(userId)
+    .catch(() => null);
 
-    // ✅ Remove o cargo SEM WL imediatamente ao enviar o pedido
-    await membro.roles.remove(CFG.CARGO_SEM_WL).catch(() => {});
+if (membro) {
+  const cidadeRoleId =
+    CARGOS_CIDADES[cidade] ||
+    null;
+
+  const cargosBase = [
+    CFG.CARGO_CIDADAO,
+    cidadeRoleId,
+  ].filter(Boolean);
+
+  if (cargosBase.length) {
+    await membro.roles
+      .add(
+        [...new Set(cargosBase)],
+        "Set Staff pendente • cadastro base"
+      )
+      .catch((error) => {
+        console.error(
+          "[SETSTAFF_V2] Falha ao aplicar cargos base:",
+          error
+        );
+      });
   }
+
+  await membro
+    .setNickname(
+      `${nome} | ${passaporte}`,
+      "Set Staff pendente • cadastro base"
+    )
+    .catch(() => {});
+
+  /*
+   * A pessoa já concluiu o cadastro base.
+   *
+   * A aprovação futura controla SOMENTE:
+   * - nível Staff;
+   * - Staff Geral;
+   * - extras do nível;
+   * - nickname final com sigla.
+   */
+  await membro.roles
+    .remove(
+      CFG.CARGO_SEM_WL,
+      "Set Staff pendente • WL concluída"
+    )
+    .catch(() => {});
+}
 
   await interaction.reply({ content: "✅ Pedido enviado com sucesso!", ephemeral: true });
   return true;
@@ -2218,4 +2295,777 @@ return true;
     } catch {}
     return true;
   }
+}
+// =====================================================
+// SITE HUB • SET STAFF
+// =====================================================
+
+function normalizeSetStaffCityKey(
+  value
+) {
+  const normalized =
+    String(value || "")
+      .trim()
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(
+        /[\u0300-\u036f]/g,
+        ""
+      )
+      .replace(
+        /[^a-z0-9]/g,
+        ""
+      );
+
+  const found =
+    Object.keys(
+      CARGOS_CIDADES
+    ).find(
+      key =>
+        key
+          .normalize("NFD")
+          .replace(
+            /[\u0300-\u036f]/g,
+            ""
+          )
+          .replace(
+            /[^a-z0-9]/gi,
+            ""
+          )
+          .toLowerCase() ===
+        normalized
+    );
+
+  return found || null;
+}
+
+function normalizeSetStaffLevelKey(
+  value
+) {
+  const key =
+    String(value || "")
+      .trim()
+      .toLowerCase();
+
+  return Object.hasOwn(
+    CARGOS_STAFF,
+    key
+  )
+    ? key
+    : null;
+}
+
+export function getSetStaffSiteOptions() {
+  return {
+    cities:
+      Object.keys(
+        CARGOS_CIDADES
+      ).map(
+        key => ({
+          key,
+          label:
+            LABELS_CIDADES[key] ||
+            key,
+        })
+      ),
+
+    levels:
+      Object.keys(
+        CARGOS_STAFF
+      )
+        .filter(
+          key =>
+            Object.hasOwn(
+              NIVEL_LABELS,
+              key
+            )
+        )
+        .map(
+          key => ({
+            key,
+            label:
+              NIVEL_LABELS[key],
+          })
+        ),
+  };
+}
+
+export async function getSetStaffSiteSnapshot({
+  guild,
+  actorId,
+}) {
+  const actor =
+    await guild.members
+      .fetch(
+        String(actorId)
+      )
+      .catch(
+        () => null
+      );
+
+  if (
+    !actor ||
+    !canApproveMember(
+      actor,
+      actorId
+    )
+  ) {
+    throw new Error(
+      "Você não possui permissão para visualizar a gestão de Set Staff."
+    );
+  }
+
+  const all =
+    loadAll();
+
+  const byId =
+    new Map();
+
+  for (
+    const [
+      msgId,
+      raw
+    ] of Object.entries(
+      all.byMsgId || {}
+    )
+  ) {
+    if (
+      !raw ||
+      typeof raw !== "object"
+    ) {
+      continue;
+    }
+
+    byId.set(
+      String(msgId),
+      {
+        ...raw,
+        msgId:
+          String(
+            raw.msgId ||
+            msgId
+          ),
+      }
+    );
+  }
+
+  const requests =
+    [...byId.values()]
+      .sort(
+        (
+          a,
+          b
+        ) =>
+          Number(
+            b.createdAt || 0
+          ) -
+          Number(
+            a.createdAt || 0
+          )
+      );
+
+  const now =
+    new Date();
+
+  const monthStart =
+    new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      1
+    ).getTime();
+
+  const pending =
+    requests.filter(
+      item =>
+        item.status ===
+        "pendente"
+    );
+
+  const approved =
+    requests.filter(
+      item =>
+        item.status ===
+        "aprovado"
+    );
+
+  const rejected =
+    requests.filter(
+      item =>
+        item.status ===
+        "reprovado"
+    );
+
+  const approvedThisMonth =
+    approved.filter(
+      item =>
+        Number(
+          item.decidedAt || 0
+        ) >= monthStart
+    );
+
+  return {
+    rights: {
+      view:
+        true,
+
+      decide:
+        true,
+    },
+
+    stats: {
+      pending:
+        pending.length,
+
+      approved:
+        approved.length,
+
+      rejected:
+        rejected.length,
+
+      approvedThisMonth:
+        approvedThisMonth.length,
+
+      total:
+        requests.length,
+    },
+
+    requests:
+      requests.map(
+        request => ({
+          msgId:
+            request.msgId,
+
+          userId:
+            String(
+              request.userId ||
+              ""
+            ),
+
+          name:
+            request.nome ||
+            "—",
+
+          folder:
+            request.pasta ||
+            "—",
+
+          gameId:
+            request.passaporte ||
+            "—",
+
+          city:
+            request.cidade ||
+            "—",
+
+          cityLabel:
+            LABELS_CIDADES[
+              request.cidade
+            ] ||
+            request.cidade ||
+            "—",
+
+          level:
+            request.nivel ||
+            "—",
+
+          levelLabel:
+            NIVEL_LABELS[
+              request.nivel
+            ] ||
+            request.nivel ||
+            "—",
+
+          status:
+            request.status ||
+            "pendente",
+
+          createdAt:
+            Number(
+              request.createdAt ||
+              0
+            ),
+
+          decidedAt:
+            Number(
+              request.decidedAt ||
+              0
+            ),
+
+          decisionBy:
+            request.decisionBy ||
+            null,
+        })
+      ),
+  };
+}
+
+export async function submitSetStaffFromSite({
+  client,
+  guild,
+  userId,
+  data,
+}) {
+  const cidade =
+    normalizeSetStaffCityKey(
+      data.city
+    );
+
+  const nivel =
+    normalizeSetStaffLevelKey(
+      data.level
+    );
+
+  const nome =
+    String(
+      data.name ||
+      ""
+    ).trim();
+
+  const pasta =
+    String(
+      data.folder ||
+      ""
+    ).trim();
+
+  const passaporte =
+    String(
+      data.gameId ||
+      ""
+    ).trim();
+
+  if (
+    !cidade ||
+    !nivel
+  ) {
+    throw new Error(
+      "Cidade ou nível Staff inválido."
+    );
+  }
+
+  if (
+    !nome ||
+    !pasta ||
+    !/^\d{1,10}$/.test(
+      passaporte
+    )
+  ) {
+    throw new Error(
+      "Nome, pasta ou ID inválido."
+    );
+  }
+
+  const existing =
+    getPedidoPendente(
+      userId
+    );
+
+  if (existing) {
+    throw new Error(
+      "Você já possui um pedido Staff pendente."
+    );
+  }
+
+  const createdAt =
+    Date.now();
+
+  const dataHora =
+    new Date(
+      createdAt
+    ).toLocaleString(
+      "pt-BR",
+      {
+        timeZone:
+          "America/Sao_Paulo",
+      }
+    );
+
+  const payload = {
+    userId:
+      String(userId),
+
+    cidade,
+    nivel,
+    nome,
+    pasta,
+    passaporte,
+    dataHora,
+    createdAt,
+
+    status:
+      "pendente",
+
+    decidedAt:
+      null,
+
+    decisionBy:
+      null,
+
+    decision:
+      null,
+
+    source:
+      "site",
+  };
+
+  const canalRegistro =
+    await resolveLogChannel(
+      client,
+      CFG.CANAL_REGISTRO
+    );
+
+  if (!canalRegistro) {
+    throw new Error(
+      "Canal de aprovação de Set Staff indisponível."
+    );
+  }
+
+  const msgRegistro =
+    await canalRegistro.send({
+      content:
+        `Novo pedido de set staff de <@${userId}> • enviado pelo site`,
+
+      embeds: [
+        buildEmbedPedido(
+          payload
+        ),
+      ],
+
+      components: [
+        buildRowAprovacao(
+          userId
+        ),
+      ],
+
+      allowedMentions: {
+        parse: [
+          "users",
+        ],
+      },
+    });
+
+  const finalPayload = {
+    ...payload,
+
+    msgId:
+      msgRegistro.id,
+  };
+
+  pushHistorico(
+    userId,
+    finalPayload
+  );
+
+  setByMsgId(
+    msgRegistro.id,
+    finalPayload
+  );
+
+  const membro =
+    await guild.members
+      .fetch(
+        String(userId)
+      )
+      .catch(
+        () => null
+      );
+
+  if (membro) {
+    const roles = [
+      CFG.CARGO_CIDADAO,
+      CARGOS_CIDADES[
+        cidade
+      ],
+    ].filter(Boolean);
+
+    if (roles.length) {
+      await membro.roles
+        .add(
+          [
+            ...new Set(
+              roles
+            ),
+          ],
+          "Set Staff pelo site • cadastro base"
+        )
+        .catch(
+          () => {}
+        );
+    }
+
+    await membro.roles
+      .remove(
+        CFG.CARGO_SEM_WL,
+        "Set Staff pelo site • WL concluída"
+      )
+      .catch(
+        () => {}
+      );
+
+    await membro
+      .setNickname(
+        `${nome} | ${passaporte}`,
+        "Set Staff pelo site • cadastro base"
+      )
+      .catch(
+        () => {}
+      );
+  }
+
+  const canalNotif =
+    await resolveLogChannel(
+      client,
+      CFG.CANAL_NOTIF
+    );
+
+  if (canalNotif) {
+    await canalNotif
+      .send({
+        content:
+          `📢 Novo pedido de set staff feito por <@${userId}> através do **Creators Hub**!\n` +
+          `📌 Analise aqui: <#${CFG.CANAL_REGISTRO}>`,
+
+        allowedMentions: {
+          parse: [
+            "users",
+          ],
+        },
+      })
+      .catch(
+        () => {}
+      );
+  }
+
+  return {
+    ok:
+      true,
+
+    msgId:
+      msgRegistro.id,
+
+    status:
+      "pendente",
+  };
+}
+// =====================================================
+// SITE HUB • DECIDIR SET STAFF
+// =====================================================
+
+export async function decideSetStaffFromSite({
+  client,
+  guild,
+  actorId,
+  msgId,
+  action,
+}) {
+  const normalizedActorId =
+    String(
+      actorId ||
+      ""
+    );
+
+  const normalizedMsgId =
+    String(
+      msgId ||
+      ""
+    );
+
+  const normalizedAction =
+    String(
+      action ||
+      ""
+    ).toLowerCase();
+
+  if (
+    ![
+      "approve",
+      "reject",
+    ].includes(
+      normalizedAction
+    )
+  ) {
+    throw new Error(
+      "Ação de Set Staff inválida."
+    );
+  }
+
+  const actor =
+    await guild.members
+      .fetch(
+        normalizedActorId
+      )
+      .catch(
+        () => null
+      );
+
+  if (
+    !actor ||
+    !canApproveMember(
+      actor,
+      normalizedActorId
+    )
+  ) {
+    throw new Error(
+      "Você não possui permissão para aprovar ou reprovar Set Staff."
+    );
+  }
+
+  const pedido =
+    getByMsgId(
+      normalizedMsgId
+    );
+
+  if (!pedido) {
+    throw new Error(
+      "Pedido de Set Staff não encontrado."
+    );
+  }
+
+  if (
+    pedido.status !==
+    "pendente"
+  ) {
+    throw new Error(
+      `Este pedido já está como ${pedido.status}.`
+    );
+  }
+
+  const canalRegistro =
+    await resolveLogChannel(
+      client,
+      CFG.CANAL_REGISTRO
+    );
+
+  if (!canalRegistro) {
+    throw new Error(
+      "Canal de Set Staff indisponível."
+    );
+  }
+
+  const message =
+    await canalRegistro.messages
+      .fetch(
+        normalizedMsgId
+      )
+      .catch(
+        () => null
+      );
+
+  if (!message) {
+    throw new Error(
+      "Mensagem do pedido não encontrada no Discord."
+    );
+  }
+
+  const fakeInteraction = {
+    id:
+      `site-setstaff-${Date.now()}-${normalizedActorId}`,
+
+    customId:
+      normalizedAction ===
+        "approve"
+        ? `ss2_aprovar_${pedido.userId}`
+        : `ss2_reprovar_${pedido.userId}`,
+
+    guild,
+    guildId:
+      guild.id,
+
+    channel:
+      canalRegistro,
+
+    channelId:
+      canalRegistro.id,
+
+    user:
+      actor.user,
+
+    member:
+      actor,
+
+    message,
+
+    deferred:
+      false,
+
+    replied:
+      false,
+
+    isButton() {
+      return true;
+    },
+
+    isModalSubmit() {
+      return false;
+    },
+
+    isRepliable() {
+      return true;
+    },
+
+    async deferUpdate() {
+      this.deferred =
+        true;
+    },
+
+    async reply(payload) {
+      this.replied =
+        true;
+
+      this.lastReply =
+        payload;
+
+      return payload;
+    },
+
+    async followUp(payload) {
+      this.replied =
+        true;
+
+      this.lastReply =
+        payload;
+
+      return payload;
+    },
+
+    async editReply(payload) {
+      this.lastReply =
+        payload;
+
+      return payload;
+    },
+  };
+
+  const handled =
+    await setStaffV2HandleInteraction(
+      fakeInteraction,
+      client
+    );
+
+  if (!handled) {
+    throw new Error(
+      "O Set Staff não reconheceu a decisão enviada pelo site."
+    );
+  }
+
+  const updated =
+    getByMsgId(
+      normalizedMsgId
+    );
+
+  return {
+    ok:
+      true,
+
+    msgId:
+      normalizedMsgId,
+
+    status:
+      updated?.status ||
+      (
+        normalizedAction ===
+          "approve"
+          ? "aprovado"
+          : "reprovado"
+      ),
+  };
 }

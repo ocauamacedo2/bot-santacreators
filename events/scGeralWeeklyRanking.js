@@ -6124,3 +6124,189 @@ export async function geralWeeklyRankHandleMessage(message, client) {
     return true;
   }
 }
+// =====================================================
+// SITE HUB • SC GERAL WEEKLY RANK
+// =====================================================
+
+function canAdjustWeeklyPoints(
+  member
+) {
+  if (!member) {
+    return false;
+  }
+
+  if (
+    ALLOWED_REMOVE_USERS.has(
+      String(
+        member.id
+      )
+    )
+  ) {
+    return true;
+  }
+
+  return (
+    getAllowedRemovalRoleIdsFromMember(
+      member
+    ).length > 0
+  );
+}
+
+export async function getWeeklyRankingSiteSnapshot({
+  client,
+  guild,
+  actorId,
+}) {
+  const member =
+    await guild.members
+      .fetch(
+        String(actorId)
+      )
+      .catch(
+        () => null
+      );
+
+  const ranking =
+    await getWeeklyRanking(
+      client
+    );
+
+  return {
+    ranking,
+
+    rights: {
+      adjust:
+        canAdjustWeeklyPoints(
+          member
+        ),
+    },
+  };
+}
+
+export async function adjustWeeklyPointsFromSite({
+  client,
+  guild,
+  actorId,
+  targetId,
+  amount,
+  mode,
+}) {
+  const qty =
+    Math.trunc(
+      Number(amount)
+    );
+
+  if (
+    !Number.isFinite(
+      qty
+    ) ||
+    qty <= 0 ||
+    qty > 1000
+  ) {
+    throw new Error(
+      "Quantidade de pontos inválida."
+    );
+  }
+
+  if (
+    ![
+      "add",
+      "remove",
+    ].includes(
+      mode
+    )
+  ) {
+    throw new Error(
+      "Tipo de ajuste inválido."
+    );
+  }
+
+  const perm =
+    await canRemovePointsFromTarget({
+      guild,
+
+      executorId:
+        String(
+          actorId
+        ),
+
+      targetUserId:
+        String(
+          targetId
+        ),
+    });
+
+  if (!perm.ok) {
+    throw new Error(
+      perm.reason
+    );
+  }
+
+  const weekKey =
+    weekKeyFromDateSP(
+      nowSP()
+    );
+
+  const delta =
+    mode ===
+      "add"
+      ? Math.abs(
+          qty
+        )
+      : -Math.abs(
+          qty
+        );
+
+  const {
+    before,
+    after,
+  } =
+    applyManualAdjustment({
+      weekKey,
+
+      userId:
+        String(
+          targetId
+        ),
+
+      delta,
+    });
+
+  clearWeeklyRankCache();
+
+  CACHE = {
+    at:
+      0,
+
+    payload:
+      null,
+  };
+
+  DEBUG.weekKeysFound =
+    {};
+
+  DIRTY =
+    true;
+
+  LAST_LIGHT_AT =
+    0;
+
+  await safeUpdate(
+    client,
+    `site ${mode} points`,
+    {
+      scanMode:
+        "full",
+    }
+  );
+
+  return {
+    ok:
+      true,
+
+    weekKey,
+    before,
+    after,
+    delta,
+  };
+}

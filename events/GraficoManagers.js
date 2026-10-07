@@ -194,16 +194,51 @@ const GM_ADJUST_ALLOWED_ROLE_IDS = [
   "1262262852949905408", // OWNER
 ];
 
-function canAdjust(interaction) {
-  const userId = String(interaction?.user?.id || "");
-  if (GM_ADJUST_ALLOWED_USERS.includes(userId)) return true;
+function canAdjustMember(
+  member,
+  userId
+) {
+  const normalizedUserId =
+    String(
+      userId ||
+      member?.id ||
+      ""
+    );
 
-  const memberRoleIds = interaction?.member?.roles?.cache
-    ? [...interaction.member.roles.cache.keys()].map(String)
-    : [];
+  if (
+    GM_ADJUST_ALLOWED_USERS.includes(
+      normalizedUserId
+    )
+  ) {
+    return true;
+  }
 
-  return GM_ADJUST_ALLOWED_ROLE_IDS.some((roleId) =>
-    memberRoleIds.includes(String(roleId))
+  const memberRoleIds =
+    member?.roles?.cache
+      ? [
+          ...member.roles.cache.keys(),
+        ].map(
+          String
+        )
+      : [];
+
+  return GM_ADJUST_ALLOWED_ROLE_IDS.some(
+    roleId =>
+      memberRoleIds.includes(
+        String(
+          roleId
+        )
+      )
+  );
+}
+
+
+function canAdjust(
+  interaction
+) {
+  return canAdjustMember(
+    interaction?.member,
+    interaction?.user?.id
   );
 }
 
@@ -2679,4 +2714,160 @@ if (interaction?.isModalSubmit?.() && interaction.customId === "GM_ADD_POINTS_MO
 // Se você quiser chamar quando RM aprovar/reprovar (opcional):
 export async function graficoManagersEmitUpdate(client, causeUserId = null, reason = "emit") {
   await updateDashboard(client, causeUserId, reason);
+}
+
+
+// =====================================================
+// SITE HUB • GRÁFICO MANAGERS
+// =====================================================
+
+export async function getGraficoManagersSiteSnapshot({
+  guild,
+  actorId,
+}) {
+  const actor =
+    await guild.members
+      .fetch(
+        String(actorId)
+      )
+      .catch(
+        () => null
+      );
+
+  if (!actor) {
+    throw new Error(
+      "Membro não encontrado."
+    );
+  }
+
+  const stats =
+    loadWeeklyStats();
+
+  const {
+    sunday,
+    saturday,
+    weekKey,
+  } =
+    getCurrentWeekSP();
+
+  const prevWeekKey =
+    getPrevWeekKey();
+
+  const current =
+    getWeekData(
+      stats,
+      weekKey
+    );
+
+  const previous =
+    getWeekData(
+      stats,
+      prevWeekKey
+    );
+
+  const priorityGroups =
+    await buildPriorityGroupStats(
+      guild,
+      current.approvedForManager
+    );
+
+  const ranking =
+    await Promise.all(
+      Object.entries(
+        current.approvedForManager ||
+        {}
+      )
+        .sort(
+          (
+            a,
+            b
+          ) =>
+            Number(
+              b[1] ||
+              0
+            ) -
+            Number(
+              a[1] ||
+              0
+            )
+        )
+        .map(
+          async (
+            [
+              userId,
+              points,
+            ],
+            index
+          ) => {
+            const member =
+              await guild.members
+                .fetch(
+                  userId
+                )
+                .catch(
+                  () => null
+                );
+
+            return {
+              position:
+                index + 1,
+
+              userId,
+
+              name:
+                member?.displayName ||
+                member?.user?.username ||
+                userId,
+
+              points:
+                Number(
+                  points ||
+                  0
+                ),
+            };
+          }
+        )
+    );
+
+  return {
+    week: {
+      key:
+        weekKey,
+
+      label:
+        weekRangeLabelBR({
+          sunday,
+          saturday,
+        }),
+
+      currentTotal:
+        Number(
+          current.total ||
+          0
+        ),
+
+      previousTotal:
+        Number(
+          previous.total ||
+          0
+        ),
+
+      smartGoal:
+        getSmartWeeklyGoal(
+          previous.total
+        ),
+    },
+
+    priorityGroups,
+
+    ranking,
+
+    rights: {
+      adjust:
+        canAdjustMember(
+          actor,
+          actorId
+        ),
+    },
+  };
 }

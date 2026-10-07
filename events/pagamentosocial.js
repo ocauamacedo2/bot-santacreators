@@ -324,21 +324,96 @@ function _hasAnyRole(interaction, roleIds) {
   return (member?.roles?.cache?.some((r) => roleIds.includes(r.id))) ?? false;
 }
 
-function temPermissaoPagamento(interaction) {
-  const hasRole = _hasAnyRole(interaction, ALLOWED_IDS);
-  const hasUser = ALLOWED_IDS.includes(interaction.user.id);
-  return hasRole || hasUser;
+function temPermissaoPagamentoMember(
+  member,
+  userId
+) {
+  const normalizedUserId =
+    String(
+      userId ||
+      member?.id ||
+      ""
+    );
+
+  const hasRole =
+    member?.roles?.cache
+      ?.some(
+        role =>
+          ALLOWED_IDS.includes(
+            role.id
+          )
+      ) ??
+    false;
+
+  const hasUser =
+    ALLOWED_IDS.includes(
+      normalizedUserId
+    );
+
+  return (
+    hasRole ||
+    hasUser
+  );
 }
 
-function temPermissaoPagamentoMensagem(message) {
-  const hasRole = message.member?.roles?.cache?.some((r) => ALLOWED_IDS.includes(r.id)) ?? false;
-  const hasUser = ALLOWED_IDS.includes(message.author?.id);
-  return hasRole || hasUser;
+
+function temPermissaoPagamento(
+  interaction
+) {
+  return temPermissaoPagamentoMember(
+    interaction.member,
+    interaction.user.id
+  );
 }
 
-function temPermissaoAprovacao(interaction) {
-  return _hasAnyRole(interaction, CARGOS_PODE_APROVAR) ||
-    CARGOS_PODE_APROVAR.includes(interaction.user.id);
+
+function temPermissaoPagamentoMensagem(
+  message
+) {
+  return temPermissaoPagamentoMember(
+    message.member,
+    message.author?.id
+  );
+}
+
+
+function temPermissaoAprovacaoMember(
+  member,
+  userId
+) {
+  const normalizedUserId =
+    String(
+      userId ||
+      member?.id ||
+      ""
+    );
+
+  const hasRole =
+    member?.roles?.cache
+      ?.some(
+        role =>
+          CARGOS_PODE_APROVAR.includes(
+            role.id
+          )
+      ) ??
+    false;
+
+  return (
+    hasRole ||
+    CARGOS_PODE_APROVAR.includes(
+      normalizedUserId
+    )
+  );
+}
+
+
+function temPermissaoAprovacao(
+  interaction
+) {
+  return temPermissaoAprovacaoMember(
+    interaction.member,
+    interaction.user.id
+  );
 }
 
 function podeAprovarProprio(interaction) {
@@ -7951,4 +8026,406 @@ void (async () => {
     console.warn("Erro no sistema de pagamentos:", err);
     return true;
   }
+}
+// =====================================================
+// SITE HUB • SOCIAL MEDIA
+// =====================================================
+
+export async function getPagamentoSocialSiteSnapshot({
+  guild,
+  actorId,
+}) {
+  const actor =
+    await guild.members
+      .fetch(
+        String(actorId)
+      )
+      .catch(
+        () => null
+      );
+
+  if (!actor) {
+    throw new Error(
+      "Membro não encontrado."
+    );
+  }
+
+  const stats =
+    loadStats();
+
+  const toRanking =
+    async map => {
+      const rows =
+        ordenarTop(
+          map,
+          100
+        );
+
+      return Promise.all(
+        rows.map(
+          async (
+            [
+              userId,
+              count,
+            ],
+            index
+          ) => {
+            const member =
+              await guild.members
+                .fetch(
+                  userId
+                )
+                .catch(
+                  () => null
+                );
+
+            return {
+              position:
+                index + 1,
+
+              userId,
+
+              name:
+                member?.displayName ||
+                member?.user?.username ||
+                userId,
+
+              count:
+                Number(
+                  count ||
+                  0
+                ),
+            };
+          }
+        )
+      );
+    };
+
+  const [
+    approvers,
+    rejecters,
+    creators,
+  ] =
+    await Promise.all([
+      toRanking(
+        stats.approvers
+      ),
+
+      toRanking(
+        stats.rejecters
+      ),
+
+      toRanking(
+        stats.creators
+      ),
+    ]);
+
+  return {
+    month:
+      stats.month,
+
+    totals: {
+      created:
+        Number(
+          stats.totalCreated ||
+          0
+        ),
+
+      approved:
+        Number(
+          stats.totalApproved ||
+          0
+        ),
+
+      rejected:
+        Number(
+          stats.totalRejected ||
+          0
+        ),
+
+      requested:
+        Number(
+          stats.totalRequested ||
+          0
+        ),
+
+      amountPaid:
+        Number(
+          stats.totalAmountPaid ||
+          0
+        ),
+    },
+
+    rankings: {
+      approvers,
+      rejecters,
+      creators,
+    },
+
+    categories: {
+      created:
+        stats.categories ||
+        {},
+
+      approved:
+        stats.categoriesApproved ||
+        {},
+
+      rejected:
+        stats.categoriesRejected ||
+        {},
+
+      requested:
+        stats.categoriesRequested ||
+        {},
+    },
+
+    cities: {
+      created:
+        stats.cities ||
+        {},
+
+      approved:
+        stats.citiesApproved ||
+        {},
+
+      rejected:
+        stats.citiesRejected ||
+        {},
+
+      requested:
+        stats.citiesRequested ||
+        {},
+
+      amounts:
+        stats.amountsByCity ||
+        {},
+    },
+
+    rights: {
+      use:
+        temPermissaoPagamentoMember(
+          actor,
+          actorId
+        ),
+
+      decide:
+        temPermissaoAprovacaoMember(
+          actor,
+          actorId
+        ),
+    },
+  };
+}
+
+
+export async function refreshPagamentoSocialFromSite({
+  client,
+  guild,
+  actorId,
+}) {
+  const actor =
+    await guild.members
+      .fetch(
+        String(actorId)
+      )
+      .catch(
+        () => null
+      );
+
+  if (
+    !actor ||
+    !temPermissaoPagamentoMember(
+      actor,
+      actorId
+    )
+  ) {
+    throw new Error(
+      "Você não possui permissão para atualizar o Social Media."
+    );
+  }
+
+  return sincronizarDashboardSocial(
+    client,
+    `site:${actorId}`,
+    {
+      forceUnlock:
+        false,
+
+      recreate:
+        false,
+    }
+  );
+}
+
+
+export async function pagamentoSocialSiteDecision({
+  client,
+  guild,
+  actorId,
+  messageId,
+  action,
+  description,
+}) {
+  const actor =
+    await guild.members
+      .fetch(
+        String(actorId)
+      )
+      .catch(
+        () => null
+      );
+
+  if (
+    !actor ||
+    !temPermissaoAprovacaoMember(
+      actor,
+      actorId
+    )
+  ) {
+    throw new Error(
+      "Você não possui permissão para alterar o status desse pagamento."
+    );
+  }
+
+  const normalizedAction =
+    String(
+      action ||
+      ""
+    ).toLowerCase();
+
+  if (
+    ![
+      "pago",
+      "solicitado",
+      "reprovado",
+    ].includes(
+      normalizedAction
+    )
+  ) {
+    throw new Error(
+      "Ação de pagamento inválida."
+    );
+  }
+
+  const normalizedDescription =
+    String(
+      description ||
+      ""
+    ).trim();
+
+  if (!normalizedDescription) {
+    throw new Error(
+      "Informe uma descrição para a ação."
+    );
+  }
+
+  const fakeInteraction = {
+    id:
+      `site-pagamento-${Date.now()}-${actorId}`,
+
+    customId:
+      `${normalizedAction}_desc_${messageId}`,
+
+    guild,
+    guildId:
+      guild.id,
+
+    user:
+      actor.user,
+
+    member:
+      actor,
+
+    deferred:
+      false,
+
+    replied:
+      false,
+
+    fields: {
+      getTextInputValue(
+        fieldId
+      ) {
+        if (
+          fieldId ===
+          "descricao"
+        ) {
+          return normalizedDescription;
+        }
+
+        return "";
+      },
+    },
+
+    isButton() {
+      return false;
+    },
+
+    isModalSubmit() {
+      return true;
+    },
+
+    isRepliable() {
+      return true;
+    },
+
+    async deferReply() {
+      this.deferred =
+        true;
+    },
+
+    async reply(payload) {
+      this.replied =
+        true;
+
+      this.lastReply =
+        payload;
+
+      return payload;
+    },
+
+    async editReply(payload) {
+      this.lastReply =
+        payload;
+
+      return payload;
+    },
+
+    async followUp(payload) {
+      this.lastReply =
+        payload;
+
+      return payload;
+    },
+  };
+
+  const handled =
+    await handlePagamentoSocial(
+      fakeInteraction,
+      client
+    );
+
+  if (!handled) {
+    throw new Error(
+      "O módulo Social Media não reconheceu a ação enviada pelo site."
+    );
+  }
+
+  return {
+    ok:
+      true,
+
+    messageId:
+      String(
+        messageId
+      ),
+
+    action:
+      normalizedAction,
+
+    response:
+      fakeInteraction.lastReply ||
+      null,
+  };
 }

@@ -20077,3 +20077,88 @@ return true;
 
     return false;
   }
+// =====================================================
+// SITE HUB • HALL DA FAMA
+// =====================================================
+
+export async function getHallSiteSnapshot({
+  guild,
+  actorId,
+}) {
+  const member =
+    await guild.members
+      .fetch(
+        String(actorId)
+      )
+      .catch(
+        () => null
+      );
+
+  if (
+    !canUseRankingPrivate(
+      member,
+      String(actorId)
+    )
+  ) {
+    throw new Error(
+      "Você não possui acesso ao ranking."
+    );
+  }
+
+  const rankings =
+    loadHallRankings();
+
+  const orgs =
+    getSortedRankingList(
+      rankings,
+      "org"
+    );
+
+  const players =
+    getSortedRankingList(
+      rankings,
+      "player"
+    );
+
+  return {
+    updatedAt:
+      Number(
+        rankings.lastUpdatedAt ||
+        Date.now()
+      ),
+
+    orgs:
+      orgs.map(
+        (
+          item,
+          index
+        ) => ({
+          position:
+            index + 1,
+
+          ...JSON.parse(
+            JSON.stringify(
+              item
+            )
+          ),
+        })
+      ),
+
+    players:
+      players.map(
+        (
+          item,
+          index
+        ) => ({
+          position:
+            index + 1,
+
+          ...JSON.parse(
+            JSON.stringify(
+              item
+            )
+          ),
+        })
+      ),
+  };
+}

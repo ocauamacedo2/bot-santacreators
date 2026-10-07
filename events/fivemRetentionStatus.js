@@ -3960,3 +3960,409 @@ export function fivemRetentionStatusOnChannelDelete(channel) {
  if (state?.intervalId) clearInterval(state.intervalId);
  if (channel?.id) FIVEM_STATE.delete(channel.id);
 }
+// =====================================================
+// SITE HUB • RETENÇÃO
+// =====================================================
+
+export async function getFivemRetentionSiteSnapshot({
+  cityKey = null,
+} = {}) {
+  const safe =
+    await createSafeCurrentSnapshot({
+      forceFresh:
+        false,
+    });
+
+  const current =
+    safe?.snapshot;
+
+  if (!current) {
+    throw new Error(
+      "Nenhum snapshot válido das cidades está disponível."
+    );
+  }
+
+  const [
+    yesterday,
+    lastWeek,
+    peaks,
+  ] =
+    await Promise.all([
+      getSnapshotDaysAgo(
+        1,
+        current
+      ),
+
+      getSnapshotDaysAgo(
+        7,
+        current
+      ),
+
+      loadPeaksMap(),
+    ]);
+
+  const todayKey =
+    current.spDate;
+
+  const yesterdayKey =
+    getDateKeyDaysAgoFromSnapshot(
+      current,
+      1
+    );
+
+  const lastWeekKey =
+    getDateKeyDaysAgoFromSnapshot(
+      current,
+      7
+    );
+
+  const todayPeaks =
+    peaks[todayKey] || {
+      total: {
+        peak: 0,
+      },
+
+      cities: {},
+    };
+
+  const yesterdayPeaks =
+    peaks[yesterdayKey] || {
+      total: {
+        peak: 0,
+      },
+
+      cities: {},
+    };
+
+  const lastWeekPeaks =
+    peaks[lastWeekKey] || {
+      total: {
+        peak: 0,
+      },
+
+      cities: {},
+    };
+
+  const cities =
+    FIVEM_CITIES.map(
+      city => {
+        const now =
+          current.cities?.[
+            city.key
+          ] || {};
+
+        const oldDay =
+          yesterday?.cities?.[
+            city.key
+          ] || {};
+
+        const oldWeek =
+          lastWeek?.cities?.[
+            city.key
+          ] || {};
+
+        const todayPeak =
+          todayPeaks
+            ?.cities?.[
+              city.key
+            ] || {};
+
+        const yesterdayPeak =
+          yesterdayPeaks
+            ?.cities?.[
+              city.key
+            ] || {};
+
+        const weekPeak =
+          lastWeekPeaks
+            ?.cities?.[
+              city.key
+            ] || {};
+
+        return {
+          key:
+            city.key,
+
+          name:
+            city.name,
+
+          emoji:
+            city.emoji,
+
+          online:
+            now.online ===
+            true,
+
+          stale:
+            now.stale ===
+            true,
+
+          current:
+            Number(
+              now.clients ||
+              0
+            ),
+
+          capacity:
+            Number(
+              now.maxClients ||
+              0
+            ),
+
+          occupancy:
+            Number(
+              now.maxClients ||
+              0
+            ) > 0
+              ? Number(
+                  (
+                    (
+                      Number(
+                        now.clients ||
+                        0
+                      ) /
+                      Number(
+                        now.maxClients
+                      )
+                    ) *
+                    100
+                  ).toFixed(
+                    2
+                  )
+                )
+              : 0,
+
+          yesterday:
+            Number(
+              oldDay.clients ||
+              0
+            ),
+
+          lastWeek:
+            Number(
+              oldWeek.clients ||
+              0
+            ),
+
+          diffYesterday:
+            calculateDiff(
+              Number(
+                now.clients ||
+                0
+              ),
+              Number(
+                oldDay.clients ||
+                0
+              )
+            ),
+
+          diffLastWeek:
+            calculateDiff(
+              Number(
+                now.clients ||
+                0
+              ),
+              Number(
+                oldWeek.clients ||
+                0
+              )
+            ),
+
+          peakToday: {
+            value:
+              Number(
+                todayPeak.peak ||
+                0
+              ),
+
+            time:
+              todayPeak.peakTime ||
+              null,
+          },
+
+          peakYesterday: {
+            value:
+              Number(
+                yesterdayPeak.peak ||
+                0
+              ),
+
+            time:
+              yesterdayPeak.peakTime ||
+              null,
+          },
+
+          peakLastWeek: {
+            value:
+              Number(
+                weekPeak.peak ||
+                0
+              ),
+
+            time:
+              weekPeak.peakTime ||
+              null,
+          },
+        };
+      }
+    );
+
+  let selectedCity =
+    null;
+
+  let eventReport =
+    null;
+
+  if (cityKey) {
+    const city =
+      FIVEM_CITIES.find(
+        item =>
+          item.key ===
+          String(
+            cityKey
+          ).toLowerCase()
+      );
+
+    if (!city) {
+      throw new Error(
+        "Cidade inválida."
+      );
+    }
+
+    selectedCity =
+      cities.find(
+        item =>
+          item.key ===
+          city.key
+      ) || null;
+
+    eventReport =
+      await buildCityEventPanelDescription(
+        city.key,
+        city.name,
+        city.emoji,
+        peaks,
+        current
+      );
+  }
+
+  const totalCurrent =
+    cities.reduce(
+      (
+        total,
+        city
+      ) =>
+        total +
+        city.current,
+      0
+    );
+
+  const totalCapacity =
+    cities.reduce(
+      (
+        total,
+        city
+      ) =>
+        total +
+        city.capacity,
+      0
+    );
+
+  return {
+    generatedAt:
+      Date.now(),
+
+    date:
+      current.spDate,
+
+    time:
+      current.spTime,
+
+    sourceStatus:
+      current.sourceStatus ||
+      null,
+
+    usedFallback:
+      !!safe.usedFallback,
+
+    totals: {
+      current:
+        totalCurrent,
+
+      capacity:
+        totalCapacity,
+
+      occupancy:
+        totalCapacity > 0
+          ? Number(
+              (
+                (
+                  totalCurrent /
+                  totalCapacity
+                ) *
+                100
+              ).toFixed(
+                2
+              )
+            )
+          : 0,
+
+      yesterday:
+        Number(
+          yesterday?.totalClients ||
+          0
+        ),
+
+      lastWeek:
+        Number(
+          lastWeek?.totalClients ||
+          0
+        ),
+
+      peakToday:
+        Number(
+          todayPeaks
+            ?.total
+            ?.peak ||
+          0
+        ),
+    },
+
+    cities,
+
+    selectedCity,
+
+    eventReport,
+
+    schedule:
+      getAllFivemEventSchedule()
+        .map(
+          event => ({
+            key:
+              event.key ||
+              event.eventKey ||
+              null,
+
+            city:
+              event.cityKey,
+
+            name:
+              getFivemEventDisplayName(
+                event,
+                loadCronogramaStateForFivem()
+              ),
+
+            weekday:
+              event.weekday,
+
+            category:
+              event.category,
+
+            time:
+              formatEventWindowLabel(
+                event
+              ),
+          })
+        ),
+  };
+}

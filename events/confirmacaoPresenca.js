@@ -1119,3 +1119,311 @@ if (interaction.isButton() && customId.startsWith("presenca_undo_")) {
 
   return false;
 }
+// =====================================================
+// SITE HUB • CONFIRMAÇÃO DE PRESENÇA
+// =====================================================
+
+export async function getConfirmacaoPresencaSiteSnapshot({
+  guild,
+  actorId,
+}) {
+  const actor =
+    await guild.members
+      .fetch(
+        String(actorId)
+      )
+      .catch(
+        () => null
+      );
+
+  if (!actor) {
+    throw new Error(
+      "Membro não encontrado."
+    );
+  }
+
+  let state =
+    loadState();
+
+  state =
+    syncOrgs(
+      state
+    );
+
+  saveState(
+    state
+  );
+
+  const organizations =
+    Object.entries(
+      state.statuses ||
+      {}
+    )
+      .map(
+        (
+          [
+            name,
+            info,
+          ]
+        ) => ({
+          name,
+
+          id:
+            getOrgId(
+              name
+            ),
+
+          status:
+            info?.status ||
+            "PENDING",
+
+          by:
+            info?.by ||
+            null,
+
+          time:
+            Number(
+              info?.time ||
+              0
+            ),
+        })
+      )
+      .sort(
+        (
+          a,
+          b
+        ) =>
+          a.name.localeCompare(
+            b.name,
+            "pt-BR"
+          )
+      );
+
+  return {
+    activeWindow:
+      state.activeWindow ||
+      1,
+
+    windowOpen:
+      isWindowOpen(
+        state
+      ),
+
+    stats: {
+      total:
+        organizations.length,
+
+      yes:
+        organizations.filter(
+          item =>
+            item.status ===
+            "YES"
+        ).length,
+
+      no:
+        organizations.filter(
+          item =>
+            item.status ===
+            "NO"
+        ).length,
+
+      pending:
+        organizations.filter(
+          item =>
+            item.status ===
+            "PENDING"
+        ).length,
+    },
+
+    organizations,
+
+    rights: {
+      confirm:
+        checkPerms(
+          actor,
+          "CONFIRM"
+        ),
+
+      admin:
+        checkPerms(
+          actor,
+          "ADMIN"
+        ),
+
+      bypass:
+        isPresenceBypass(
+          actor
+        ),
+    },
+  };
+}
+
+
+export async function setConfirmacaoPresencaFromSite({
+  client,
+  guild,
+  actorId,
+  org,
+  status,
+}) {
+  const actor =
+    await guild.members
+      .fetch(
+        String(actorId)
+      )
+      .catch(
+        () => null
+      );
+
+  if (!actor) {
+    throw new Error(
+      "Membro não encontrado."
+    );
+  }
+
+  if (
+    !checkPerms(
+      actor,
+      "CONFIRM"
+    )
+  ) {
+    throw new Error(
+      "Você não possui permissão para confirmar presença."
+    );
+  }
+
+  const normalizedStatus =
+    String(
+      status ||
+      ""
+    ).toUpperCase();
+
+  if (
+    ![
+      "YES",
+      "NO",
+    ].includes(
+      normalizedStatus
+    )
+  ) {
+    throw new Error(
+      "Status de presença inválido."
+    );
+  }
+
+  const orgInput =
+    String(
+      org ||
+      ""
+    ).trim();
+
+  if (!orgInput) {
+    throw new Error(
+      "Informe a organização."
+    );
+  }
+
+  const fakeInteraction = {
+    id:
+      `site-presenca-${Date.now()}-${actorId}`,
+
+    customId:
+      `modal_presenca_${normalizedStatus}`,
+
+    guild,
+    guildId:
+      guild.id,
+
+    user:
+      actor.user,
+
+    member:
+      actor,
+
+    deferred:
+      false,
+
+    replied:
+      false,
+
+    fields: {
+      getTextInputValue(
+        fieldId
+      ) {
+        if (
+          fieldId ===
+          "org_input"
+        ) {
+          return orgInput;
+        }
+
+        return "";
+      },
+    },
+
+    isButton() {
+      return false;
+    },
+
+    isModalSubmit() {
+      return true;
+    },
+
+    isRepliable() {
+      return true;
+    },
+
+    async deferReply() {
+      this.deferred =
+        true;
+    },
+
+    async reply(payload) {
+      this.replied =
+        true;
+
+      this.lastReply =
+        payload;
+
+      return payload;
+    },
+
+    async editReply(payload) {
+      this.lastReply =
+        payload;
+
+      return payload;
+    },
+
+    async update(payload) {
+      this.lastReply =
+        payload;
+
+      return payload;
+    },
+  };
+
+  const handled =
+    await confirmacaoPresencaHandleInteraction(
+      fakeInteraction,
+      client
+    );
+
+  if (!handled) {
+    throw new Error(
+      "O módulo de presença não reconheceu a solicitação do site."
+    );
+  }
+
+  return {
+    ok:
+      true,
+
+    status:
+      normalizedStatus,
+
+    response:
+      fakeInteraction.lastReply ||
+      null,
+  };
+}

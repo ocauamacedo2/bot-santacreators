@@ -78,6 +78,38 @@ const CARGOS_PODE_APROVAR = [
   "660311795327828008",  // você
 ];
 
+
+// =====================================================
+// PERMISSÃO CENTRALIZADA • REGISTRO MANAGER
+// =====================================================
+
+function canUseRmPermissionList(
+  member,
+  userId,
+  allowedIds
+) {
+  const normalizedUserId =
+    String(
+      userId ||
+      member?.id ||
+      ""
+    );
+
+  if (
+    allowedIds.includes(
+      normalizedUserId
+    )
+  ) {
+    return true;
+  }
+
+  return hasAnyRole(
+    member,
+    allowedIds
+  );
+}
+
+
 // ✅ NOVO: quem pode usar o botão de "limpar reprovados da semana"
 const RM_PURGE_REJECTED_ALLOWED = {
   userIds: new Set([
@@ -2921,7 +2953,13 @@ if (
   interaction.isButton() &&
   (interaction.customId === "sc_rm_open_v2" || interaction.customId === "sc_rm_open")
 ) {
-  const pode = hasAnyRole(interaction.member, CARGOS_PODE_REGISTRAR);
+  const pode =
+    canUseRmPermissionList(
+      interaction.member,
+      interaction.user.id,
+      CARGOS_PODE_REGISTRAR
+    );
+
   if (!pode) {
     return interaction.reply({ content: "❌ Você não tem os cargos necessários.", ephemeral: true }).catch(() => {});
   }
@@ -3221,9 +3259,15 @@ if (
 
 
 
-  // permissão de aprovar
-  const pode = hasAnyRole(interaction.member, CARGOS_PODE_APROVAR);
-  if (!pode) {
+// permissão de aprovar
+const pode =
+  canUseRmPermissionList(
+    interaction.member,
+    interaction.user.id,
+    CARGOS_PODE_APROVAR
+  );
+
+if (!pode) {
     if (!interaction.replied && !interaction.deferred) {
       await interaction
         .reply({ content: "❌ Sem permissão para aprovar/reprovar.", ephemeral: true })
@@ -3908,9 +3952,544 @@ if (
     console.error("[SC_RM] registroManagerHandleInteraction erro:", e);
     try {
       if (!interaction.replied && !interaction.deferred) {
-        await interaction.reply({ content: "⚠️ Ocorreu um erro ao processar a ação.", ephemeral: true }).catch(() => {});
+        await interaction.reply({
+          content: "⚠️ Ocorreu um erro ao processar a ação.",
+          ephemeral: true,
+        }).catch(() => {});
       }
     } catch {}
+
     return true;
   }
+}
+
+
+// =====================================================
+// SITE HUB • REGISTRO MANAGER
+// =====================================================
+
+function getRmSiteField(
+  embed,
+  includesText
+) {
+  const target =
+    String(
+      includesText ||
+      ""
+    )
+      .normalize("NFD")
+      .replace(
+        /[\u0300-\u036f]/g,
+        ""
+      )
+      .toLowerCase();
+
+  const field =
+    (
+      embed?.fields ||
+      []
+    ).find(
+      item =>
+        String(
+          item?.name ||
+          ""
+        )
+          .normalize("NFD")
+          .replace(
+            /[\u0300-\u036f]/g,
+            ""
+          )
+          .toLowerCase()
+          .includes(
+            target
+          )
+    );
+
+  return String(
+    field?.value ||
+    "—"
+  );
+}
+
+
+function resolveRmSiteStatus(
+  embed
+) {
+  const fieldsText =
+    (
+      embed?.fields ||
+      []
+    )
+      .map(
+        field =>
+          `${field.name} ${field.value}`
+      )
+      .join(" ")
+      .toLowerCase();
+
+  if (
+    fieldsText.includes(
+      "reprovado por"
+    ) ||
+    fieldsText.includes(
+      "registro reprovado"
+    )
+  ) {
+    return "rejected";
+  }
+
+  if (
+    fieldsText.includes(
+      "aprovado por"
+    ) ||
+    fieldsText.includes(
+      "registro aprovado"
+    )
+  ) {
+    return "approved";
+  }
+
+  return "pending";
+}
+
+
+export async function getRegistroManagerSiteSnapshot({
+  client,
+  guild,
+  actorId,
+}) {
+  const actor =
+    await guild.members
+      .fetch(
+        String(actorId)
+      )
+      .catch(
+        () => null
+      );
+
+  if (!actor) {
+    throw new Error(
+      "Membro não encontrado."
+    );
+  }
+
+  const channel =
+    await client.channels
+      .fetch(
+        CANAL_REGISTRO_MANAGER
+      )
+      .catch(
+        () => null
+      );
+
+  if (
+    !channel?.isTextBased?.()
+  ) {
+    throw new Error(
+      "Canal do Registro Manager indisponível."
+    );
+  }
+
+  const messages =
+    await channel.messages
+      .fetch({
+        limit:
+          100,
+      })
+      .catch(
+        () => null
+      );
+
+  const records =
+    [];
+
+  if (messages) {
+    for (
+      const message
+      of messages.values()
+    ) {
+      const embed =
+        message.embeds?.[0];
+
+      if (!embed) {
+        continue;
+      }
+
+      const title =
+        String(
+          embed.title ||
+          ""
+        ).toLowerCase();
+
+      if (
+        !title.includes(
+          "registro de evento - manager"
+        )
+      ) {
+        continue;
+      }
+
+      records.push({
+        messageId:
+          message.id,
+
+        url:
+          message.url,
+
+        org:
+          getRmSiteField(
+            embed,
+            "ORG"
+          ),
+
+        family:
+          getRmSiteField(
+            embed,
+            "Família Ativa"
+          ),
+
+        manager:
+          getRmSiteField(
+            embed,
+            "Manager responsável"
+          ),
+
+        leader:
+          getRmSiteField(
+            embed,
+            "Líder convidado"
+          ),
+
+        registeredBy:
+          getRmSiteField(
+            embed,
+            "Registrado por"
+          ),
+
+        week:
+          getRmSiteField(
+            embed,
+            "Semana"
+          ),
+
+        status:
+          resolveRmSiteStatus(
+            embed
+          ),
+
+        createdAt:
+          message.createdTimestamp,
+      });
+    }
+  }
+
+  records.sort(
+    (
+      a,
+      b
+    ) =>
+      Number(
+        b.createdAt
+      ) -
+      Number(
+        a.createdAt
+      )
+  );
+
+  return {
+    rights: {
+      register:
+        canUseRmPermissionList(
+          actor,
+          actorId,
+          CARGOS_PODE_REGISTRAR
+        ),
+
+      decide:
+        canUseRmPermissionList(
+          actor,
+          actorId,
+          CARGOS_PODE_APROVAR
+        ),
+
+      purge:
+        canUseRmPurgeRejected(
+          actor,
+          actorId
+        ),
+    },
+
+    stats: {
+      total:
+        records.length,
+
+      pending:
+        records.filter(
+          item =>
+            item.status ===
+            "pending"
+        ).length,
+
+      approved:
+        records.filter(
+          item =>
+            item.status ===
+            "approved"
+        ).length,
+
+      rejected:
+        records.filter(
+          item =>
+            item.status ===
+            "rejected"
+        ).length,
+    },
+
+    records,
+  };
+}
+
+
+export async function registroManagerSiteDecision({
+  client,
+  guild,
+  actorId,
+  messageId,
+  action,
+  reason = "",
+}) {
+  const actor =
+    await guild.members
+      .fetch(
+        String(actorId)
+      )
+      .catch(
+        () => null
+      );
+
+  if (!actor) {
+    throw new Error(
+      "Membro não encontrado."
+    );
+  }
+
+  if (
+    !canUseRmPermissionList(
+      actor,
+      actorId,
+      CARGOS_PODE_APROVAR
+    )
+  ) {
+    throw new Error(
+      "Você não possui permissão para decidir registros Manager."
+    );
+  }
+
+  const normalizedAction =
+    String(
+      action ||
+      ""
+    ).toLowerCase();
+
+  if (
+    ![
+      "approve",
+      "reject",
+    ].includes(
+      normalizedAction
+    )
+  ) {
+    throw new Error(
+      "Decisão Manager inválida."
+    );
+  }
+
+  const channel =
+    await client.channels
+      .fetch(
+        CANAL_REGISTRO_MANAGER
+      )
+      .catch(
+        () => null
+      );
+
+  if (
+    !channel?.isTextBased?.()
+  ) {
+    throw new Error(
+      "Canal do Manager indisponível."
+    );
+  }
+
+  const message =
+    await channel.messages
+      .fetch(
+        String(
+          messageId
+        )
+      )
+      .catch(
+        () => null
+      );
+
+  if (
+    !message ||
+    !message.embeds?.length
+  ) {
+    throw new Error(
+      "Registro Manager não encontrado."
+    );
+  }
+
+  if (
+    normalizedAction ===
+      "reject" &&
+    !String(
+      reason ||
+      ""
+    ).trim()
+  ) {
+    throw new Error(
+      "Informe o motivo da reprovação."
+    );
+  }
+
+  const fakeInteraction = {
+    id:
+      `site-rm-${Date.now()}-${actorId}`,
+
+    customId:
+      normalizedAction ===
+        "approve"
+        ? `sc_rm_approve_${message.id}`
+        : `sc_rm_modal_reject_${message.id}`,
+
+    guild,
+    guildId:
+      guild.id,
+
+    channel,
+    channelId:
+      channel.id,
+
+    user:
+      actor.user,
+
+    member:
+      actor,
+
+    message,
+
+    deferred:
+      false,
+
+    replied:
+      false,
+
+    fields: {
+      getTextInputValue(
+        fieldId
+      ) {
+        if (
+          fieldId ===
+          "rm_rej_reason"
+        ) {
+          return String(
+            reason ||
+            ""
+          );
+        }
+
+        return "";
+      },
+    },
+
+    isButton() {
+      return (
+        normalizedAction ===
+        "approve"
+      );
+    },
+
+    isModalSubmit() {
+      return (
+        normalizedAction ===
+        "reject"
+      );
+    },
+
+    isRepliable() {
+      return true;
+    },
+
+    async deferReply() {
+      this.deferred =
+        true;
+    },
+
+    async deferUpdate() {
+      this.deferred =
+        true;
+    },
+
+    async reply(payload) {
+      this.replied =
+        true;
+
+      this.lastReply =
+        payload;
+
+      return payload;
+    },
+
+    async editReply(payload) {
+      this.lastReply =
+        payload;
+
+      return payload;
+    },
+
+    async followUp(payload) {
+      this.lastReply =
+        payload;
+
+      return payload;
+    },
+
+    async update(payload) {
+      this.lastReply =
+        payload;
+
+      return payload;
+    },
+
+    async showModal() {
+      throw new Error(
+        "Modal não deve ser aberto pela API web."
+      );
+    },
+  };
+
+  const handled =
+    await registroManagerHandleInteraction(
+      fakeInteraction,
+      client
+    );
+
+  if (!handled) {
+    throw new Error(
+      "O Registro Manager não reconheceu a ação enviada pelo site."
+    );
+  }
+
+  return {
+    ok:
+      true,
+
+    messageId:
+      message.id,
+
+    action:
+      normalizedAction,
+  };
 }

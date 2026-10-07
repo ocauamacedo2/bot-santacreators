@@ -225,8 +225,12 @@ import {
   fivemRetentionStatusOnChannelDelete,
 } from "../events/fivemRetentionStatus.js";
 
+import {
+  installSiteHubApi,
+} from "../events/siteHubApi.js";
 
-///lembrete evenntos checklist 
+
+///lembrete evenntos checklist
 
 import {
   eventosChecklistNotifierOnReady,
@@ -543,8 +547,18 @@ mongoose
 
 app.get("/transcript/:canalId", async (req, res) => {
   const { canalId } = req.params;
-  const transcript = await Transcript.findOne({ canalId });
-  if (!transcript) return res.send("<h2>Transcript não encontrado.</h2>");
+
+  const transcript =
+    await Transcript.findOne({
+      canalId
+    });
+
+  if (!transcript) {
+    return res.send(
+      "<h2>Transcript não encontrado.</h2>"
+    );
+  }
+
   res.send(
     `<html><body><h1>Transcript: ${canalId}</h1><pre>${JSON.stringify(
       transcript.mensagens,
@@ -553,7 +567,22 @@ app.get("/transcript/:canalId", async (req, res) => {
     )}</pre></body></html>`
   );
 });
-app.listen(3000, () => {});
+
+/*
+ * API interna usada pelo Creators Share.
+ *
+ * Não possui acesso público sem BRIDGE_SECRET.
+ */
+installSiteHubApi({
+  app,
+  client,
+});
+
+app.listen(3000, () => {
+  console.log(
+    "[CORE] API interna do bot ativa na porta 3000."
+  );
+});
 
 // =====================================================
 // Registros Locais

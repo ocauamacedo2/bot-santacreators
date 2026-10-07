@@ -13488,7 +13488,405 @@ dashOn(
     }
   }
 );
+// =====================================================
+// SITE HUB • CONTROLE GI
+// =====================================================
 
+globalThis.__SC_GI_SITE_API__ = {
+  async snapshot({
+    actorId,
+  } = {}) {
+    const guild =
+      client.guilds.cache.first();
+
+    if (!guild) {
+      throw new Error(
+        "Servidor indisponível."
+      );
+    }
+
+    const actor =
+      await guild.members
+        .fetch(
+          String(actorId)
+        )
+        .catch(
+          () => null
+        );
+
+    if (!actor) {
+      throw new Error(
+        "Membro não encontrado."
+      );
+    }
+
+    const canManage =
+      hasAreaEditAuth(
+        actor
+      );
+
+    const records =
+      [...SC_GI_STATE
+        .registros
+        .values()]
+        .map(
+          rec => ({
+            messageId:
+              rec.messageId,
+
+            targetId:
+              rec.targetId,
+
+            area:
+              rec.area ||
+              "—",
+
+            active:
+              rec.active !==
+              false,
+
+            joinDateMs:
+              Number(
+                rec.joinDateMs ||
+                0
+              ),
+
+            createdAtMs:
+              Number(
+                rec.createdAtMs ||
+                0
+              ),
+
+            pausedAtMs:
+              rec.pausedAtMs ||
+              null,
+
+            responsibleUserId:
+              rec.responsibleUserId ||
+              null,
+
+            responsibleType:
+              rec.responsibleType ||
+              null,
+
+            note:
+              rec.note ||
+              null,
+
+            totalActiveMs:
+              getActiveTotalMs(
+                rec,
+                nowMs()
+              ),
+          })
+        )
+        .sort(
+          (
+            a,
+            b
+          ) =>
+            Number(
+              b.createdAtMs
+            ) -
+            Number(
+              a.createdAtMs
+            )
+        );
+
+    return {
+      rights: {
+        create:
+          hasAuth(
+            actor
+          ),
+
+        edit:
+          canManage,
+
+        toggle:
+          hasScopedGIActionAuth(
+            actor,
+            [
+              SC_GI_CFG
+                .ROLE_COORD_CREATORS,
+            ]
+          ),
+
+        disconnect:
+          hasScopedGIActionAuth(
+            actor,
+            [
+              SC_GI_CFG
+                .ROLE_COORD_CREATORS,
+            ]
+          ),
+      },
+
+      records,
+    };
+  },
+
+  async action({
+    actorId,
+    action,
+    payload = {},
+  } = {}) {
+    const guild =
+      client.guilds.cache.first();
+
+    if (!guild) {
+      throw new Error(
+        "Servidor indisponível."
+      );
+    }
+
+    const actor =
+      await guild.members
+        .fetch(
+          String(actorId)
+        )
+        .catch(
+          () => null
+        );
+
+    if (!actor) {
+      throw new Error(
+        "Membro não encontrado."
+      );
+    }
+
+    const actorUser =
+      actor.user;
+
+    if (
+      action ===
+      "create"
+    ) {
+      if (
+        !hasAuth(
+          actor
+        )
+      ) {
+        throw new Error(
+          "Sem permissão."
+        );
+      }
+
+      const result =
+        await createRegistro(
+          guild,
+          actorUser,
+          String(
+            payload.date ||
+            ""
+          ),
+          String(
+            payload.area ||
+            ""
+          ),
+          String(
+            payload.userId ||
+            ""
+          )
+        );
+
+      return {
+        ok:
+          true,
+
+        result,
+      };
+    }
+
+    const messageId =
+      String(
+        payload.messageId ||
+        ""
+      );
+
+    const rec =
+      SC_GI_STATE
+        .registros
+        .get(
+          messageId
+        );
+
+    if (!rec) {
+      throw new Error(
+        "Registro GI não encontrado."
+      );
+    }
+
+    if (
+      action ===
+      "toggle"
+    ) {
+      if (
+        !hasScopedGIActionAuth(
+          actor,
+          [
+            SC_GI_CFG
+              .ROLE_COORD_CREATORS,
+          ]
+        )
+      ) {
+        throw new Error(
+          "Sem permissão."
+        );
+      }
+
+      await toggleActive(
+        guild,
+        actorUser,
+        messageId
+      );
+
+      return {
+        ok:
+          true,
+      };
+    }
+
+    if (
+      action ===
+      "refresh"
+    ) {
+      await assertCanManageGIRecord(
+        guild,
+        actorUser,
+        rec.targetId,
+        "atualizar o controle",
+        {
+          extraAllowedRoleIds: [
+            SC_GI_CFG
+              .ROLE_COORD_CREATORS,
+
+            SC_GI_CFG
+              .ROLE_GESTOR_CREATORS,
+          ],
+        }
+      );
+
+      await refreshRegistroMessage(
+        guild,
+        actorUser,
+        messageId,
+        "Creators Hub"
+      );
+
+      return {
+        ok:
+          true,
+      };
+    }
+
+    if (
+      action ===
+      "responsible"
+    ) {
+      await setResponsibleAuto(
+        guild,
+        actorUser.id,
+        messageId,
+        String(
+          payload.userId ||
+          ""
+        )
+      );
+
+      return {
+        ok:
+          true,
+      };
+    }
+
+    if (
+      action ===
+      "edit"
+    ) {
+      if (
+        !hasAreaEditAuth(
+          actor
+        )
+      ) {
+        throw new Error(
+          "Sem permissão."
+        );
+      }
+
+      const result =
+        await editRegistro(
+          guild,
+          actorUser,
+          messageId,
+          String(
+            payload.area ||
+            ""
+          ),
+          String(
+            payload.note ||
+            ""
+          ),
+          String(
+            payload.date ||
+            ""
+          ),
+          String(
+            payload.discordId ||
+            rec.targetId
+          )
+        );
+
+      return {
+        ok:
+          true,
+
+        result,
+      };
+    }
+
+    if (
+      action ===
+      "disconnect"
+    ) {
+      if (
+        !hasScopedGIActionAuth(
+          actor,
+          [
+            SC_GI_CFG
+              .ROLE_COORD_CREATORS,
+          ]
+        )
+      ) {
+        throw new Error(
+          "Sem permissão."
+        );
+      }
+
+      await desligarRegistro(
+        guild,
+        actorUser,
+        messageId,
+        "Desligamento via Creators Hub",
+        {
+          extraAllowedRoleIds: [
+            SC_GI_CFG
+              .ROLE_COORD_CREATORS,
+          ],
+        }
+      );
+
+      return {
+        ok:
+          true,
+      };
+    }
+
+    throw new Error(
+      "Ação GI inválida."
+    );
+  },
+};
     // ====================== INTERAÇÕES ======================
     client.on(Events.InteractionCreate, async (interaction) => {
       try {
