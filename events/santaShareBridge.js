@@ -90,7 +90,7 @@ export default function installSantaShareBridge(client) {
   async function start() {
     if (started || !client.isReady()) return; started = true;
     try { panelId = JSON.parse(await readFile('data/santa_share_voice_panel.json', 'utf8')).id; } catch {}
-    void sync(); const timer = setInterval(() => { void sync(); }, 20000); timer.unref();
+    void sync(); const timer = setInterval(() => { void sync(); }, 10000); timer.unref();
     console.log('[SANTA SHARE BRIDGE] Integração de calls instalada.');
   }
   if (client.isReady()) void start();

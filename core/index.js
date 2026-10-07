@@ -1384,9 +1384,12 @@ try {
     } catch (e) {}
 
     console.log(`✅ Bot pronto como ${client.user.tag}`);
-    client.user.setActivity("Cauã Macedo – SantaCreators ✨", {
-      type: ActivityType.Watching,
-    });
+    client.user.setActivity(
+      "Creators Share • conecte, compartilhe e crie 💜",
+      {
+        type: ActivityType.Watching,
+      }
+    );
 
     try {
       await roleProtectOnReady(client);
@@ -1529,9 +1532,12 @@ if (
     client.__coreBootState.lateBootExecuted = true;
 
     entrevista.reanexar(client).catch(() => {});
-    client.user.setActivity("Cauã Macedo – SantaCreators ✨", {
-      type: ActivityType.Watching,
-    });
+    client.user.setActivity(
+      "Creators Share • conecte, compartilhe e crie 💜",
+      {
+        type: ActivityType.Watching,
+      }
+    );
 
     try {
       iniciarRegistroPoderes(client);
@@ -1644,9 +1650,13 @@ export const initBot = async () => {
       );
     }
 
-    const CANAL_BOTAO = "1383152873587740843";
+    const CANAL_BOTAO =
+      "1383152873587740843";
+
     const GIF_BANNER =
-      "https://media.discordapp.net/attachments/1362477839944777889/1384245215249825832/standard_2rss.gif";
+      process.env.SANTA_SHARE_URL
+        ? `${process.env.SANTA_SHARE_URL.replace(/\/$/, "")}/assets/creators-banner.gif`
+        : "https://media.discordapp.net/attachments/1362477839944777889/1384245215249825832/standard_2rss.gif";
 
     if (!globalThis.__SC_CORE_GUARDS__.setarNomeIntervalStarted) {
       globalThis.__SC_CORE_GUARDS__.setarNomeIntervalStarted = true;
@@ -1676,16 +1686,28 @@ export const initBot = async () => {
 
           if (mensagensBotao.size === 0) {
             const embed = new EmbedBuilder()
-              .setTitle("📌 | Identifique-se - SantaCreators")
-              .setDescription("Clique no botão abaixo para enviar seu **nome**.")
-              .setColor("#ff009a")
-              .setImage(GIF_BANNER);
+              .setTitle(
+                "💜 | Seu perfil Creators"
+              )
+              .setDescription(
+                "Conecte sua identidade à comunidade e mantenha seu perfil sempre certinho."
+              )
+              .setColor(
+                "#a855f7"
+              )
+              .setImage(
+                GIF_BANNER
+              );
 
             const row = new ActionRowBuilder().addComponents(
               new ButtonBuilder()
                 .setCustomId("setar_nome")
-                .setLabel("✍️ Enviar meu nome")
-                .setStyle(ButtonStyle.Primary)
+                .setLabel(
+                  "💜 Atualizar meu perfil"
+                )
+                .setStyle(
+                  ButtonStyle.Primary
+                )
             );
 
             await safeSend(canal, { embeds: [embed], components: [row] });
