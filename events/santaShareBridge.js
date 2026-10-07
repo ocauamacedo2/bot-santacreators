@@ -11,8 +11,8 @@ export default function installSantaShareBridge(client) {
   const flag = Symbol.for('SantaCreators.SantaShareBridge');
   if (client[flag]) return;
   const guildId = String(process.env.SANTA_SHARE_GUILD_ID || process.env.DISCORD_GUILD_ID || '1262262852782129183').trim();
-  const secret = String(process.env.SANTA_SHARE_BRIDGE_SECRET || '').trim();
-  const site = String(process.env.SANTA_SHARE_URL || '').trim().replace(/\/$/, '');
+  const secret = String(process.env.SANTA_SHARE_BRIDGE_SECRET || process.env.BRIDGE_SECRET || '').trim();
+  const site = String(process.env.SANTA_SHARE_URL || process.env.PUBLIC_URL || '').trim().replace(/\/$/, '');
   let bridgeReady = false;
   try { bridgeReady = new URL(site).protocol === 'https:' && secret.length >= 64; } catch {}
   if (!bridgeReady) console.error('[SANTA SHARE BRIDGE] URL/segredo inválidos. Logs do Discord continuam ativos; sincronização do site está desativada.');
@@ -114,6 +114,9 @@ let chain = Promise.resolve(),
     if (syncing) { retrySync = true; return; }
     syncing = true;
     try {
+      if (!client.options.intents.has(128)) {
+        throw new Error('GuildVoiceStates ausente. Ative esse intent antes de conectar o bot.');
+      }
       const guild = client.guilds.cache.get(guildId) || await client.guilds.fetch(guildId);
       if (!guild || guild.available === false) throw new Error(`Servidor ${guildId} indisponível para o bot.`);
       const states = [...guild.voiceStates.cache.values()].filter(state => state.channelId);
@@ -122,7 +125,7 @@ let chain = Promise.resolve(),
           const response = await fetch(`${site}/api/bridge/voice`, {
             method: 'POST', signal: AbortSignal.timeout(10000),
             headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ guildId, users: states.map(state => ({
+            body: JSON.stringify({ guildId, generatedAt: new Date().toISOString(), users: states.map(state => ({
               id: state.id, channelId: state.channelId,
               channelName: state.channel?.name || 'Call Discord', muted: !!(state.selfMute || state.serverMute)
             })) })
