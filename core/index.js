@@ -1654,10 +1654,9 @@ export const initBot = async () => {
       "1383152873587740843";
 
     const GIF_BANNER =
-      process.env.SANTA_SHARE_URL
-        ? `${process.env.SANTA_SHARE_URL.replace(/\/$/, "")}/assets/creators-banner.gif`
-        : "https://media.discordapp.net/attachments/1362477839944777889/1384245215249825832/standard_2rss.gif";
-
+  process.env.SANTA_SHARE_URL
+    ? `${process.env.SANTA_SHARE_URL.replace(/\/$/, "")}/assets/creators-city-night.png`
+    : "https://media.discordapp.net/attachments/1362477839944777889/1384245215249825832/standard_2rss.gif";
     if (!globalThis.__SC_CORE_GUARDS__.setarNomeIntervalStarted) {
       globalThis.__SC_CORE_GUARDS__.setarNomeIntervalStarted = true;
 

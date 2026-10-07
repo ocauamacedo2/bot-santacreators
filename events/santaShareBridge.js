@@ -16,7 +16,12 @@ export default function installSantaShareBridge(client) {
   }
   client[flag] = true;
   const joined = new Map();
-  let chain = Promise.resolve(), pending = 0, syncing = false, panelId, lastPanel = 0;
+let chain = Promise.resolve(),
+  pending = 0,
+  syncing = false,
+  panelId,
+  lastPanel = 0,
+  lastSyncLog = 0;
   function queue(task) {
     if (pending >= 300) { console.error('[SANTA SHARE BRIDGE] Fila de logs cheia.'); return; }
     pending++; chain = chain.then(task).catch(error => console.error('[SANTA SHARE BRIDGE] Log não enviado:', error.code || error.name)).finally(() => pending--);
@@ -38,11 +43,49 @@ export default function installSantaShareBridge(client) {
   client.on('voiceStateUpdate', (before, after) => {
     if (after.guild.id !== guildId) return;
     const id = after.id, time = Date.now(), duration = joined.has(id) ? `Tempo observado no canal: ${Math.round((time - joined.get(id)) / 1000)}s.` : 'Entrada anterior ao início deste módulo; duração desconhecida.';
-    if (!before.channelId && after.channelId) { joined.set(id, time); record('Entrada na call do Discord', id, after.channelId, '', 'enter'); }
-    else if (before.channelId && !after.channelId) { record('Saída da call do Discord', id, before.channelId, duration, 'leave'); joined.delete(id); }
-    else if (before.channelId !== after.channelId) {
-      record('Mudança de call no Discord', id, after.channelId, `Origem: <#${before.channelId}>\nDestino: <#${after.channelId}>\n${duration}`, 'move'); joined.set(id, time);
+    if (!before.channelId && after.channelId) {
+      joined.set(id, time);
+
+      record(
+        'Entrada na call do Discord',
+        id,
+        after.channelId,
+        '',
+        'enter'
+      );
     }
+
+    else if (before.channelId && !after.channelId) {
+      record(
+        'Saída da call do Discord',
+        id,
+        before.channelId,
+        duration,
+        'leave'
+      );
+
+      joined.delete(id);
+    }
+
+    else if (before.channelId !== after.channelId) {
+      record(
+        'Mudança de call no Discord',
+        id,
+        after.channelId,
+        `Origem: <#${before.channelId}>\nDestino: <#${after.channelId}>\n${duration}`,
+        'move'
+      );
+
+      joined.set(id, time);
+    }
+
+    /*
+     * Não espera o próximo ciclo de 10 segundos.
+     * Sempre que uma mudança de voz acontecer,
+     * tenta sincronizar imediatamente com o site.
+     */
+    void sync();
+
     if (!after.channelId) return;
     for (const [property, label] of [['selfMute', 'Microfone do usuário'], ['serverMute', 'Mute aplicado pelo servidor']]) {
       if (before[property] !== after[property]) record(after[property] ? 'Mute na call do Discord' : 'Desmute na call do Discord', id, after.channelId, label, after[property] ? 'mute' : 'unmute');
@@ -65,7 +108,38 @@ export default function installSantaShareBridge(client) {
         headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ guildId, users: states.map(state => ({ id: state.id, channelId: state.channelId,
           channelName: state.channel?.name || 'Call Discord', muted: !!(state.selfMute || state.serverMute) })) }) });
-      if (!response.ok) console.error('[SANTA SHARE BRIDGE] Sincronização recusada:', response.status);
+            if (!response.ok) {
+        const responseText =
+          await response
+            .text()
+            .catch(
+              () => ''
+            );
+
+        console.error(
+          '[SANTA SHARE BRIDGE] Sincronização recusada:',
+          response.status,
+          responseText.slice(
+            0,
+            300
+          )
+        );
+      } else if (
+        Date.now() - lastSyncLog >
+        60000
+      ) {
+        lastSyncLog =
+          Date.now();
+
+        console.log(
+          '[SANTA SHARE BRIDGE] Sincronização OK:',
+          {
+            guildId,
+            usuariosEmCall:
+              states.length
+          }
+        );
+      }
       if (Date.now() - lastPanel > 60000) {
         lastPanel = Date.now();
         const calls = [...new Set(states.map(state => state.channelId))];
@@ -83,8 +157,28 @@ export default function installSantaShareBridge(client) {
           await mkdir('data', { recursive: true }); await writeFile('data/santa_share_voice_panel.json', JSON.stringify({ id: panelId }));
         });
       }
-    } catch (error) { console.error('[SANTA SHARE BRIDGE] Sincronização indisponível:', error.name); }
-    finally { syncing = false; }
+    } catch (error) {
+      console.error(
+        '[SANTA SHARE BRIDGE] Sincronização indisponível:',
+        {
+          name:
+            error?.name ||
+            null,
+
+          message:
+            error?.message ||
+            String(error),
+
+          cause:
+            error?.cause?.message ||
+            null
+        }
+      );
+    }
+
+    finally {
+      syncing = false;
+    }
   }
   let started = false;
   async function start() {
