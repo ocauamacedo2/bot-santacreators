@@ -19,6 +19,7 @@ import {
   ButtonStyle,
   SlashCommandBuilder,
   Events,
+  GatewayIntentBits,
 } from "discord.js";
 
 // Importa o Client configurado
@@ -1566,6 +1567,7 @@ if (
 // =====================================================
 export const initBot = async () => {
   try {
+    client.options.intents = client.options.intents.add(GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates);
     loadRegistros();
     setupEventHandlers();
     setupBatePonto(client);
