@@ -1564,6 +1564,20 @@ export const initBot = async () => {
     setupEventHandlers();
     setupBatePonto(client);
     setupAlinhamentoDash(client);
+
+    try {
+      const { default: installSantaShareBridge } = await import(
+        "../events/santaShareBridge.js"
+      );
+
+      installSantaShareBridge(client);
+    } catch (error) {
+      console.error(
+        "[SANTA SHARE BRIDGE] Falha ao carregar a integração:",
+        error
+      );
+    }
+
    await import("../events/gestaoinfluencer.js");
 
     if (!client.__loggedIn) {
