@@ -569,20 +569,66 @@ app.get("/transcript/:canalId", async (req, res) => {
 });
 
 /*
- * API interna usada pelo Creators Share.
+ * =====================================================
+ * API INTERNA USADA PELO CREATORS SHARE
+ * =====================================================
  *
- * Não possui acesso público sem BRIDGE_SECRET.
+ * A rota /site-hub continua protegida
+ * pelo BRIDGE_SECRET.
  */
+app.get(
+  "/health",
+  (
+    req,
+    res
+  ) => {
+    res
+      .status(
+        200
+      )
+      .json({
+        ok:
+          true,
+
+        service:
+          "santa-creators-bot-api",
+
+        siteHub:
+          true,
+
+        timestamp:
+          new Date()
+            .toISOString(),
+      });
+  }
+);
+
 installSiteHubApi({
   app,
   client,
 });
 
-app.listen(3000, () => {
-  console.log(
-    "[CORE] API interna do bot ativa na porta 3000."
+const API_PORT =
+  Number(
+    process.env.PORT ||
+    3000
   );
-});
+
+const API_HOST =
+  String(
+    process.env.HOST ||
+    "0.0.0.0"
+  );
+
+app.listen(
+  API_PORT,
+  API_HOST,
+  () => {
+    console.log(
+      `[CORE] API interna do bot ativa em ${API_HOST}:${API_PORT}.`
+    );
+  }
+);
 
 // =====================================================
 // Registros Locais

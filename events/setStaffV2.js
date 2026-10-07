@@ -75,21 +75,50 @@ const CFG = {
 // CARGOS (Cidades / Níveis)
 // =====================================================
 const CARGOS_CIDADES = {
-  nobre: "1379021805544804382",
-  santa: "1379021888709464168",
-  maresia: "1379021994678288465",
-  royal: "1379021933324271719",
-  universo: "1379022090891427892",
-  kng: "1379022161519312896",
-  malta: "1379022050403815454",
-  real: "1423348501110198343",
-  grande: "1418691103397253322",
-  boomerang: "1423354185570586694",
-  district99: "1500677281864093746",
-  liberty99: "1500676325042688092",
-  prime: "1500677363917258822",
-  fronteira: "1500677363917258822",
-  goat: "1500669528479371268",
+  nobre:
+    "1379021805544804382",
+
+  santa:
+    "1379021888709464168",
+
+  maresia:
+    "1379021994678288465",
+
+  royal:
+    "1379021933324271719",
+
+  universo:
+    "1379022090891427892",
+
+  kng:
+    "1379022161519312896",
+
+  malta:
+    "1379022050403815454",
+
+  real:
+    "1423348501110198343",
+
+  grande:
+    "1418691103397253322",
+
+  boomerang:
+    "1423354185570586694",
+
+  district99:
+    "1500677281864093746",
+
+  liberty99:
+    "1500676325042688092",
+
+  prime:
+    "1500676778337763438",
+
+  fronteira:
+    "1500677363917258822",
+
+  goat:
+    "1500669528479371268",
 };
 
 const CARGOS_STAFF = {
@@ -2109,36 +2138,213 @@ let dmFalhou =
 let extrasAplicados =
   [];
 
-      if (acao === "aprovar") {
-        const rolesParaAdd = [];
+if (
+  acao ===
+  "aprovar"
+) {
+  const rolesParaAdd =
+    [];
 
-        if (CARGOS_CIDADES[cidade]) rolesParaAdd.push(CARGOS_CIDADES[cidade]);
-        if (CARGOS_STAFF[nivel]) rolesParaAdd.push(CARGOS_STAFF[nivel]);
+  if (
+    CARGOS_CIDADES[
+      cidade
+    ]
+  ) {
+    rolesParaAdd.push(
+      CARGOS_CIDADES[
+        cidade
+      ]
+    );
+  }
 
-        // extras
-        const extrasKeys = EXTRA_BY_LEVEL[nivel] || [];
-        for (const k of extrasKeys) {
-          const rid = CARGOS_STAFF[k];
-          if (rid && !rolesParaAdd.includes(rid)) rolesParaAdd.push(rid);
-        }
+  if (
+    CARGOS_STAFF[
+      nivel
+    ]
+  ) {
+    rolesParaAdd.push(
+      CARGOS_STAFF[
+        nivel
+      ]
+    );
+  }
 
-        // staff geral
-        if (CFG.CARGO_STAFF_GERAL && !rolesParaAdd.includes(CFG.CARGO_STAFF_GERAL)) rolesParaAdd.push(CFG.CARGO_STAFF_GERAL);
+  /*
+   * Extras associados
+   * ao nível Staff.
+   */
+  const extrasKeys =
+    EXTRA_BY_LEVEL[
+      nivel
+    ] ||
+    [];
 
-        // aplica
-        if (rolesParaAdd.length) await membro.roles.add(rolesParaAdd).catch(() => {});
-        
-        // ✅ Remove o cargo SEM WL automaticamente ao aprovar
-        await membro.roles.remove(CFG.CARGO_SEM_WL).catch(() => {});
+  for (
+    const k
+    of extrasKeys
+  ) {
+    const rid =
+      CARGOS_STAFF[
+        k
+      ];
 
-        await membro.setNickname(finalNickname).catch(() => {});
+    if (
+      rid &&
+      !rolesParaAdd.includes(
+        rid
+      )
+    ) {
+      rolesParaAdd.push(
+        rid
+      );
+    }
+  }
 
-        // quais extras entraram
-        extrasAplicados = [];
-        for (const k of extrasKeys) {
-          const rid = CARGOS_STAFF[k];
-          if (rid && rolesParaAdd.includes(rid)) extrasAplicados.push(k);
-        }
+  /*
+   * Cargo Staff geral.
+   */
+  if (
+    CFG.CARGO_STAFF_GERAL &&
+    !rolesParaAdd.includes(
+      CFG.CARGO_STAFF_GERAL
+    )
+  ) {
+    rolesParaAdd.push(
+      CFG.CARGO_STAFF_GERAL
+    );
+  }
+
+  /*
+   * Não tenta adicionar cargos
+   * que o membro já possui.
+   */
+  const rolesPendentes =
+    rolesParaAdd.filter(
+      roleId =>
+        !membro.roles.cache.has(
+          roleId
+        )
+    );
+
+  /*
+   * Não engolimos mais o erro.
+   *
+   * Se o bot não conseguir aplicar
+   * cidade ou Staff, o pedido NÃO
+   * continuará como aprovado.
+   */
+  if (
+    rolesPendentes.length
+  ) {
+    await membro.roles.add(
+      rolesPendentes,
+      `Set Staff aprovado por ${interaction.user.id}`
+    );
+  }
+
+  /*
+   * Busca novamente o membro
+   * diretamente no Discord.
+   */
+  const membroConfirmado =
+    await membro.fetch(
+      true
+    );
+
+  const cargosNaoConfirmados =
+    rolesParaAdd.filter(
+      roleId =>
+        !membroConfirmado
+          .roles
+          .cache
+          .has(
+            roleId
+          )
+    );
+
+  if (
+    cargosNaoConfirmados.length
+  ) {
+    throw new Error(
+      `O Discord não confirmou todos os cargos do Set Staff. Cargos pendentes: ${cargosNaoConfirmados.join(', ')}`
+    );
+  }
+
+  /*
+   * SEM WL só sai depois dos cargos
+   * de cidade + Staff estarem
+   * confirmados.
+   */
+  if (
+    CFG.CARGO_SEM_WL &&
+    membroConfirmado
+      .roles
+      .cache
+      .has(
+        CFG.CARGO_SEM_WL
+      )
+  ) {
+    await membroConfirmado
+      .roles
+      .remove(
+        CFG.CARGO_SEM_WL,
+        `Set Staff aprovado por ${interaction.user.id}`
+      );
+  }
+
+  /*
+   * Nickname pode falhar em membros
+   * acima do bot sem destruir o Set.
+   *
+   * Mas agora o erro fica registrado.
+   */
+  try {
+    await membroConfirmado
+      .setNickname(
+        finalNickname,
+        `Set Staff aprovado por ${interaction.user.id}`
+      );
+
+  } catch (
+    nicknameError
+  ) {
+    console.warn(
+      "[SETSTAFF_V2] Cargo aplicado, mas nickname não pôde ser alterado:",
+      {
+        userId:
+          userIdTarget,
+
+        message:
+          nicknameError?.message ||
+          nicknameError,
+      }
+    );
+  }
+
+  // quais extras entraram
+  extrasAplicados =
+    [];
+
+  for (
+    const k
+    of extrasKeys
+  ) {
+    const rid =
+      CARGOS_STAFF[
+        k
+      ];
+
+    if (
+      rid &&
+      rolesParaAdd.includes(
+        rid
+      )
+    ) {
+      extrasAplicados.push(
+        k
+      );
+    }
+  }
 
         await membro
           .send(
@@ -2354,7 +2560,22 @@ function normalizeSetStaffLevelKey(
     ? key
     : null;
 }
+export function canManageSetStaffFromSite(
+  member,
+  userId = member?.id
+) {
+  if (!member) {
+    return false;
+  }
 
+  return canApproveMember(
+    member,
+    String(
+      userId ||
+      member.id
+    )
+  );
+}
 export function getSetStaffSiteOptions() {
   return {
     cities:

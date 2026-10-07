@@ -1,29 +1,238 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createShareAuditQueue } from '../utils/shareAuditQueue.js';
 
-const logChannels = {
-  general: '1557160033324630086', enter: '1557160105525518418', leave: '1557160146986340383',
-  move: '1557160183770255401', stream: '1557160258424545402', mute: '1557160294114000976',
-  unmute: '1557160322790596732', active: '1557160836588380290', create: '1557160787011838082'
-};
+const SANTA_CREATORS_GUILD_ID =
+  '1262262852782129183';
 
-export default function installSantaShareBridge(client) {
-  const flag = Symbol.for('SantaCreators.SantaShareBridge');
-  if (client[flag]) return;
-  const guildId = String(process.env.SANTA_SHARE_GUILD_ID || process.env.DISCORD_GUILD_ID || '1262262852782129183').trim();
-  const secret = String(process.env.SANTA_SHARE_BRIDGE_SECRET || process.env.BRIDGE_SECRET || '').trim();
-  const site = String(process.env.SANTA_SHARE_URL || process.env.PUBLIC_URL || '').trim().replace(/\/$/, '');
+/*
+ * Servidor onde ficam os canais
+ * de auditoria do Creators Share.
+ *
+ * Ele pode ser diferente do
+ * servidor principal Santa Creators.
+ */
+const SANTA_SHARE_LOG_GUILD_ID =
+  String(
+    process.env
+      .SANTA_SHARE_LOG_GUILD_ID ||
+    process.env
+      .LOG_GUILD_ID ||
+    SANTA_CREATORS_GUILD_ID
+  ).trim();
+
+if (
+  !/^\d{17,20}$/.test(
+    SANTA_SHARE_LOG_GUILD_ID
+  )
+) {
+  throw new Error(
+    '[SANTA SHARE BRIDGE] SANTA_SHARE_LOG_GUILD_ID possui ID inválido.'
+  );
+}
+
+function readLogChannelId(
+  envName,
+  fallback
+) {
+  const value =
+    String(
+      process.env[envName] ||
+      fallback ||
+      ''
+    ).trim();
+
+  if (
+    !/^\d{17,20}$/.test(
+      value
+    )
+  ) {
+    throw new Error(
+      `[SANTA SHARE BRIDGE] ${envName} possui ID inválido: ${value || '(vazio)'}`
+    );
+  }
+
+  return value;
+}
+
+const logChannels =
+  Object.freeze({
+    general:
+      readLogChannelId(
+        'LOG_GENERAL_CHANNEL_ID',
+        '1557160033324630086'
+      ),
+
+    enter:
+      readLogChannelId(
+        'LOG_ENTER_CHANNEL_ID',
+        '1557160105525518418'
+      ),
+
+    leave:
+      readLogChannelId(
+        'LOG_LEAVE_CHANNEL_ID',
+        '1557160146986340383'
+      ),
+
+    move:
+      readLogChannelId(
+        'LOG_MOVE_CHANNEL_ID',
+        '1557160183770255401'
+      ),
+
+    stream:
+      readLogChannelId(
+        'LOG_STREAM_CHANNEL_ID',
+        '1557160258424545402'
+      ),
+
+    mute:
+      readLogChannelId(
+        'LOG_MUTE_CHANNEL_ID',
+        '1557160294114000976'
+      ),
+
+    unmute:
+      readLogChannelId(
+        'LOG_UNMUTE_CHANNEL_ID',
+        '1557160322790596732'
+      ),
+
+    active:
+      readLogChannelId(
+        'LOG_ACTIVE_CHANNEL_ID',
+        '1557160836588380290'
+      ),
+
+    create:
+      readLogChannelId(
+        'LOG_CREATE_CHANNEL_ID',
+        '1557160787011838082'
+      ),
+
+    chat:
+      readLogChannelId(
+        'LOG_CHAT_CHANNEL_ID',
+        '1557160033324630086'
+      ),
+  });
+
+export default function installSantaShareBridge(
+  client
+) {
+  const flag =
+    Symbol.for(
+      'SantaCreators.SantaShareBridge'
+    );
+
+  if (
+    client[flag]
+  ) {
+    return;
+  }
+
+  const configuredGuildId =
+    String(
+      process.env
+        .SANTA_SHARE_GUILD_ID ||
+      process.env
+        .DISCORD_GUILD_ID ||
+      SANTA_CREATORS_GUILD_ID
+    ).trim();
+
+  if (
+    configuredGuildId !==
+    SANTA_CREATORS_GUILD_ID
+  ) {
+    console.error(
+      '[SANTA SHARE BRIDGE] ⚠️ Guild configurada incorretamente.',
+      {
+        configurada:
+          configuredGuildId,
+
+        correta:
+          SANTA_CREATORS_GUILD_ID,
+      }
+    );
+  }
+
+  /*
+   * Esta integração pertence somente
+   * ao servidor oficial Santa Creators.
+   *
+   * Não permitimos que uma variável antiga
+   * faça as logs serem comparadas com outro servidor.
+   */
+  const guildId =
+  SANTA_CREATORS_GUILD_ID;
+
+const logGuildId =
+  SANTA_SHARE_LOG_GUILD_ID;
+
+const secret =
+    String(
+      process.env
+        .SANTA_SHARE_BRIDGE_SECRET ||
+      process.env
+        .BRIDGE_SECRET ||
+      ''
+    ).trim();
+
+  const site =
+    String(
+      process.env
+        .SANTA_SHARE_URL ||
+      process.env
+        .PUBLIC_URL ||
+      ''
+    )
+      .trim()
+      .replace(
+        /\/$/,
+        ''
+      );
   let bridgeReady = false;
   try { bridgeReady = new URL(site).protocol === 'https:' && secret.length >= 64; } catch {}
   if (!bridgeReady) console.error('[SANTA SHARE BRIDGE] URL/segredo inválidos. Logs do Discord continuam ativos; sincronização do site está desativada.');
   client[flag] = true;
   const joined = new Map();
   let retrySync = false, syncTimer;
-  const outbox = createShareAuditQueue('data/discord-audit-outbox.json', async (id, embed) => {
-    const channel = await client.channels.fetch(id);
-    if (channel?.guildId !== guildId || !channel.isTextBased() || !channel.send) throw new Error(`Canal ${id} inválido ou pertence a outro servidor.`);
-    await channel.send({ embeds: [embed], allowedMentions: { parse: [] } });
-  });
+const outbox =
+  createShareAuditQueue(
+    'data/discord-audit-outbox.json',
+
+    async (
+      id,
+      embed
+    ) => {
+      const channel =
+        await client.channels
+          .fetch(
+            id
+          );
+
+      if (
+        channel?.guildId !==
+          logGuildId ||
+        !channel.isTextBased() ||
+        !channel.send
+      ) {
+        throw new Error(
+          `Canal ${id} inválido ou não pertence ao servidor de logs ${logGuildId}.`
+        );
+      }
+
+      await channel.send({
+        embeds: [
+          embed
+        ],
+
+        allowedMentions: {
+          parse: []
+        }
+      });
+    }
+  );
   outbox.catch(error => console.error('[SANTA AUDIT] Falha ao iniciar fila do bot:', error.message));
   function requestSync() {
     if (syncTimer) return;
@@ -144,8 +353,19 @@ let chain = Promise.resolve(),
         const calls = [...new Set(states.map(state => state.channelId))];
         const description = calls.map(id => `<#${id}> · ${states.filter(state => state.channelId === id).length} pessoas`).join('\n').slice(0, 3800) || 'Nenhuma call ocupada agora.';
         queue(async () => {
-          const channel = await client.channels.fetch(logChannels.active);
-          if (channel?.guildId !== guildId || !channel.isTextBased()) return;
+const channel =
+  await client.channels
+    .fetch(
+      logChannels.active
+    );
+
+if (
+  channel?.guildId !==
+    logGuildId ||
+  !channel.isTextBased()
+) {
+  return;
+}
           const message = { embeds: [{ title: 'Santa Creators • Calls ativas no Discord', description,
             color: 0xa855f7, timestamp: new Date().toISOString(), footer: { text: 'Canais de voz reais • Atualização a cada minuto' } }], allowedMentions: { parse: [] } };
           if (panelId) {

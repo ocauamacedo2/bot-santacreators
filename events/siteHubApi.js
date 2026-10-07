@@ -13,6 +13,7 @@ import {
   getSetStaffSiteSnapshot,
   submitSetStaffFromSite,
   decideSetStaffFromSite,
+  canManageSetStaffFromSite,
 } from "./setStaffV2.js";
 
 import {
@@ -162,6 +163,72 @@ function safeSecretEqual(
 }
 
 
+const SITE_ROLE_CIDADAO =
+  '1262978759922028575';
+
+const SITE_ROLE_SEM_WL =
+  '1430984036972494908';
+
+const SITE_ROLE_SANTA_CREATORS =
+  '1352275728476930099';
+
+
+function siteMemberHasRole(
+  member,
+  roleId
+) {
+  return Boolean(
+    member?.roles?.cache?.has(
+      String(
+        roleId
+      )
+    )
+  );
+}
+
+
+function isCreatorsCommunityMember(
+  member
+) {
+  if (!member) {
+    return false;
+  }
+
+  /*
+   * Santa Creators pode acessar
+   * rankings comunitários.
+   */
+  if (
+    siteMemberHasRole(
+      member,
+      SITE_ROLE_SANTA_CREATORS
+    )
+  ) {
+    return true;
+  }
+
+  /*
+   * Cidadão com WL concluída.
+   */
+  const hasCidadao =
+    siteMemberHasRole(
+      member,
+      SITE_ROLE_CIDADAO
+    );
+
+  const hasSemWL =
+    siteMemberHasRole(
+      member,
+      SITE_ROLE_SEM_WL
+    );
+
+  return (
+    hasCidadao &&
+    !hasSemWL
+  );
+}
+
+
 async function canViewAnyChannel(
   client,
   member,
@@ -203,7 +270,7 @@ async function canViewAnyChannel(
 }
 
 
-async function assertModuleView(
+async function canAccessSiteModule(
   client,
   member,
   moduleKey
@@ -214,22 +281,98 @@ async function assertModuleView(
     ];
 
   if (!channelIds) {
-    throw new Error(
-      "Módulo desconhecido."
-    );
+    return false;
   }
 
-  const allowed =
+  const discordChannelAccess =
     await canViewAnyChannel(
       client,
       member,
       channelIds
     );
 
+  /*
+   * Rankings comunitários.
+   *
+   * Todo Cidadão com WL concluída
+   * ou membro Santa Creators
+   * pode visualizar.
+   */
+  if (
+    moduleKey ===
+      'hall' ||
+    moduleKey ===
+      'quiz'
+  ) {
+    return (
+      isCreatorsCommunityMember(
+        member
+      ) ||
+      discordChannelAccess
+    );
+  }
+
+  /*
+   * Set Staff.
+   *
+   * Não basta enxergar o canal.
+   * Precisa fazer parte da mesma
+   * regra oficial de aprovação.
+   */
+  if (
+    moduleKey ===
+    'staff'
+  ) {
+    return (
+      discordChannelAccess &&
+      canManageSetStaffFromSite(
+        member,
+        member.id
+      )
+    );
+  }
+
+  /*
+   * Demais módulos:
+   * Discord continua sendo
+   * a fonte oficial de acesso.
+   */
+  return discordChannelAccess;
+}
+
+
+async function assertModuleView(
+  client,
+  member,
+  moduleKey
+) {
+  if (
+    !CHANNELS[
+      moduleKey
+    ]
+  ) {
+    const error =
+      new Error(
+        'Módulo desconhecido.'
+      );
+
+    error.status =
+      404;
+
+    throw error;
+  }
+
+  const allowed =
+    await canAccessSiteModule(
+      client,
+      member,
+      moduleKey
+    );
+
   if (!allowed) {
     const error =
       new Error(
-        "Você não possui acesso a esta área no Discord."
+        'Você não possui acesso a esta área no Discord.'
       );
 
     error.status =
@@ -391,35 +534,39 @@ export function installSiteHubApi({
         // ==========================================
 
         if (
-          action ===
-          "bootstrap"
-        ) {
-          const entries =
-            await Promise.all(
-              Object.keys(
-                CHANNELS
-              ).map(
-                async key => [
-                  key,
+  action ===
+  "bootstrap"
+) {
+  const entries =
+    await Promise.all(
+      Object.keys(
+        CHANNELS
+      ).map(
+        async key => [
+          key,
 
-                  await canViewAnyChannel(
-                    client,
-                    member,
-                    CHANNELS[
-                      key
-                    ]
-                  ),
-                ]
-              )
-            );
+          await canAccessSiteModule(
+            client,
+            member,
+            key
+          ),
+        ]
+      )
+    );
 
-          return res.json({
-            modules:
-              Object.fromEntries(
-                entries
-              ),
-          });
-        }
+  return res.json({
+    modules:
+      Object.fromEntries(
+        entries
+      ),
+
+    source:
+      'discord-live',
+
+    generatedAt:
+      Date.now(),
+  });
+}
 
 
         // ==========================================
