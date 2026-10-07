@@ -12,6 +12,7 @@ import {
   getSetStaffSiteOptions,
   getSetStaffSiteSnapshot,
   submitSetStaffFromSite,
+  decideSetStaffFromSite,
 } from "./setStaffV2.js";
 
 import {
@@ -35,6 +36,40 @@ import {
 import {
   generateSantaCreatorsStandaloneText,
 } from "./iaChatAuto.js";
+
+
+// =====================================================
+// SITE HUB • MANAGERS
+// =====================================================
+
+import {
+  getRegistroManagerSiteSnapshot,
+  registroManagerSiteDecision,
+} from "./registroManager.js";
+
+import {
+  getConfirmacaoPresencaSiteSnapshot,
+  setConfirmacaoPresencaFromSite,
+} from "./confirmacaoPresenca.js";
+
+import {
+  getRankingAprovadoresManagersSiteSnapshot,
+} from "./RankingAprovadoresManagers.js";
+
+import {
+  getGraficoManagersSiteSnapshot,
+} from "./GraficoManagers.js";
+
+
+// =====================================================
+// SITE HUB • SOCIAL MEDIA
+// =====================================================
+
+import {
+  getPagamentoSocialSiteSnapshot,
+  refreshPagamentoSocialFromSite,
+  pagamentoSocialSiteDecision,
+} from "./pagamentosocial.js";
 
 
 const GUILD_ID =
@@ -84,6 +119,27 @@ const CHANNELS = {
 
   ai: [
     "1506520202576400404",
+  ],
+
+  /*
+   * Organização Manager.
+   *
+   * Basta conseguir visualizar pelo menos
+   * um dos canais oficiais abaixo.
+   */
+  manager: [
+    "1392680204517769277",
+    "1477800974574682242",
+  ],
+
+  /*
+   * Social Media.
+   *
+   * Registro + dashboard oficial.
+   */
+  social: [
+    "1387922662134775818",
+    "1505716526534103110",
   ],
 };
 
@@ -213,7 +269,7 @@ export function installSiteHubApi({
       "[SITE HUB] BRIDGE_SECRET inválido. API administrativa não iniciada."
     );
 
-    return;
+    return false;
   }
 
   app.post(
@@ -414,6 +470,214 @@ export function installSiteHubApi({
             await getSetStaffSiteSnapshot({
               guild,
               actorId,
+            })
+          );
+        }
+
+
+        if (
+          action ===
+          "staff.decide"
+        ) {
+          await assertModuleView(
+            client,
+            member,
+            "staff"
+          );
+
+          return res.json(
+            await decideSetStaffFromSite({
+              client,
+              guild,
+              actorId,
+
+              msgId:
+                payload.msgId,
+
+              action:
+                payload.action,
+            })
+          );
+        }
+
+
+        // ==========================================
+        // ORGANIZAÇÃO MANAGER
+        // ==========================================
+
+        if (
+          action ===
+          "manager.snapshot"
+        ) {
+          await assertModuleView(
+            client,
+            member,
+            "manager"
+          );
+
+          const [
+            records,
+            presence,
+            approvers,
+            performance,
+          ] =
+            await Promise.all([
+              getRegistroManagerSiteSnapshot({
+                client,
+                guild,
+                actorId,
+              }),
+
+              getConfirmacaoPresencaSiteSnapshot({
+                guild,
+                actorId,
+              }),
+
+              getRankingAprovadoresManagersSiteSnapshot({
+                client,
+                member,
+                actorId,
+              }),
+
+              getGraficoManagersSiteSnapshot({
+                guild,
+                actorId,
+              }),
+            ]);
+
+          return res.json({
+            records,
+            presence,
+            approvers,
+            performance,
+          });
+        }
+
+
+        if (
+          action ===
+          "manager.decision"
+        ) {
+          await assertModuleView(
+            client,
+            member,
+            "manager"
+          );
+
+          return res.json(
+            await registroManagerSiteDecision({
+              client,
+              guild,
+              actorId,
+
+              messageId:
+                payload.messageId,
+
+              action:
+                payload.action,
+
+              reason:
+                payload.reason ||
+                "",
+            })
+          );
+        }
+
+
+        if (
+          action ===
+          "manager.presence"
+        ) {
+          await assertModuleView(
+            client,
+            member,
+            "manager"
+          );
+
+          return res.json(
+            await setConfirmacaoPresencaFromSite({
+              client,
+              guild,
+              actorId,
+
+              org:
+                payload.org,
+
+              status:
+                payload.status,
+            })
+          );
+        }
+
+
+        // ==========================================
+        // SOCIAL MEDIA
+        // ==========================================
+
+        if (
+          action ===
+          "social.snapshot"
+        ) {
+          await assertModuleView(
+            client,
+            member,
+            "social"
+          );
+
+          return res.json(
+            await getPagamentoSocialSiteSnapshot({
+              guild,
+              actorId,
+            })
+          );
+        }
+
+
+        if (
+          action ===
+          "social.refresh"
+        ) {
+          await assertModuleView(
+            client,
+            member,
+            "social"
+          );
+
+          return res.json(
+            await refreshPagamentoSocialFromSite({
+              client,
+              guild,
+              actorId,
+            })
+          );
+        }
+
+
+        if (
+          action ===
+          "social.decision"
+        ) {
+          await assertModuleView(
+            client,
+            member,
+            "social"
+          );
+
+          return res.json(
+            await pagamentoSocialSiteDecision({
+              client,
+              guild,
+              actorId,
+
+              messageId:
+                payload.messageId,
+
+              action:
+                payload.action,
+
+              description:
+                payload.description ||
+                "",
             })
           );
         }
@@ -805,4 +1069,6 @@ export function installSiteHubApi({
   console.log(
     "[SITE HUB] API Discord ↔ Site instalada."
   );
+
+  return true;
 }
