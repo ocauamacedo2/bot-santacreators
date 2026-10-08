@@ -6165,6 +6165,33 @@ function canAdjustWeeklyPoints(
   );
 }
 
+function buildWeeklySiteAnalytics(items, ranking, weekKey) {
+  const visible = new Set(ranking.map(item => String(item.userId || item.id || '')));
+  const sourceTotals = {}, days = {};
+  for (const person of ranking) {
+    for (const [source, value] of Object.entries(person.sources || {})) {
+      sourceTotals[source] = (sourceTotals[source] || 0) + Number(value || 0);
+    }
+  }
+  const valid = applyPowerPointsCooldown((items || []).filter(item => weekKeyFromDateSP(item.ts) === weekKey));
+  for (const item of valid) {
+    const id = resolveDiscordIdentity(item.userId) || String(item.userId || '');
+    if (!visible.has(id)) continue;
+    const date = new Date(item.ts);
+    if (!Number.isFinite(date.getTime())) continue;
+    const day = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
+    days[day] = (days[day] || 0) + 1;
+  }
+  return {
+    weekKey,
+    sources: Object.entries(sourceTotals).map(([key, points]) => ({ key, label: SOURCE_LABEL[key] || key, points }))
+      .sort((a, b) => b.points - a.points),
+    days: Object.entries(days).map(([date, points]) => ({ date, points })).sort((a, b) => a.date.localeCompare(b.date)),
+    adjustments: ranking.reduce((sum, person) => sum + Number(person.adjustment || 0), 0),
+    dailyCoverage: 'Registros coletados e aceitos pelo mesmo filtro do ranking; ajustes manuais não têm data diária confirmada.',
+  };
+}
+
 export async function getWeeklyRankingSiteSnapshot({
   client,
   guild,
@@ -6186,6 +6213,7 @@ export async function getWeeklyRankingSiteSnapshot({
 
   return {
     ranking,
+    analytics: buildWeeklySiteAnalytics(CACHE.payload?.items || [], ranking, weekKeyFromDateSP(nowSP())),
 
     rights: {
       adjust:

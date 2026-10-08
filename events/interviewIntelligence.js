@@ -158,7 +158,10 @@ export function invalidateInterviewAttemptStatus(
   return true;
 }
 
-const GEMINI_API_KEY = String(process.env.GEMINI_API_KEY || '').trim();
+function readInterviewGeminiApiKey() {
+  return [process.env.GEMINI_API_KEY, process.env.GOOGLE_API_KEY]
+    .map(value => String(value || '').trim()).find(Boolean) || '';
+}
 const GEMINI_MODELS = [
   String(process.env.GEMINI_MODEL || '').trim() || 'gemini-3.6-flash',
   ...String(process.env.GEMINI_FALLBACK_MODELS || '')
@@ -666,10 +669,11 @@ let geminiClient = null;
 
 function getGeminiClient() {
   if (geminiClient) return geminiClient;
-  if (!GEMINI_API_KEY) return null;
+  const apiKey = readInterviewGeminiApiKey();
+  if (!apiKey) return null;
 
   geminiClient = new GoogleGenAI({
-    apiKey: GEMINI_API_KEY,
+    apiKey,
     httpOptions: { timeout: 90_000 },
   });
 

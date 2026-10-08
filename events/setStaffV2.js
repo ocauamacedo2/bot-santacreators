@@ -731,75 +731,23 @@ function resolveSetStaffCreatedAt(
 }
 
 function collectSetStaffRequests() {
-  const all =
-    loadAll();
-
-  const requestsByMessage =
-    Object.values(
-      all.byMsgId ||
-      {}
-    );
-
-  const requestsWithoutMessage =
-    Object.values(
-      all.users ||
-      {}
-    )
-      .flatMap(
-        history =>
-          Array.isArray(
-            history
-          )
-            ? history
-            : []
-      )
-      .filter(
-        item =>
-          !item?.msgId
-      );
-
-  const uniqueRequests =
-    new Map();
-
-  for (
-    const request of [
-      ...requestsByMessage,
-      ...requestsWithoutMessage,
-    ]
-  ) {
-    const createdAt =
-      resolveSetStaffCreatedAt(
-        request
-      );
-
-    const identity =
-      request?.msgId
-        ? `message:${request.msgId}`
-        : [
-            "legacy",
-            request?.userId ||
-              "unknown",
-            createdAt ||
-              request?.dataHora ||
-              "unknown",
-            request?.cidade ||
-              "unknown",
-            request?.nivel ||
-              "unknown",
-          ].join(":");
-
-    uniqueRequests.set(
-      identity,
-      {
-        ...request,
-        createdAt,
-      }
-    );
+  const all = loadAll();
+  const unique = new Map();
+  const add = (request, userId = '') => {
+    if (!request || typeof request !== 'object') return;
+    const createdAt = resolveSetStaffCreatedAt(request);
+    const id = String(request.userId || userId || '');
+    const key = request.msgId ? `message:${request.msgId}`
+      : ['legacy', id, createdAt || request.dataHora || '', request.cidade || '', request.nivel || ''].join(':');
+    unique.set(key, { ...unique.get(key), ...request, userId: id, createdAt });
+  };
+  for (const [userId, history] of Object.entries(all.users || {})) {
+    if (Array.isArray(history)) for (const request of history) add(request, userId);
   }
-
-  return [
-    ...uniqueRequests.values(),
-  ];
+  for (const [msgId, request] of Object.entries(all.byMsgId || {})) {
+    if (request && typeof request === 'object') add({ ...request, msgId: request.msgId || msgId });
+  }
+  return [...unique.values()];
 }
 
 function averageSetStaffValues(
@@ -2658,59 +2606,15 @@ export async function getSetStaffSiteSnapshot({
         () => null
       );
 
-  const channel = await guild.channels.fetch(CFG.CANAL_REGISTRO).catch(() => null);
+  const channel = guild.channels.cache.get(CFG.CANAL_REGISTRO) ||
+    await guild.channels.fetch(CFG.CANAL_REGISTRO).catch(() => null);
   if (!actor || !channel?.permissionsFor(actor)?.has('ViewChannel')) {
     throw Object.assign(new Error('Você não possui acesso ao canal de Set Staff.'), { status: 403 });
   }
 
-  const all =
-    loadAll();
-
-  const byId =
-    new Map();
-
-  for (
-    const [
-      msgId,
-      raw
-    ] of Object.entries(
-      all.byMsgId || {}
-    )
-  ) {
-    if (
-      !raw ||
-      typeof raw !== "object"
-    ) {
-      continue;
-    }
-
-    byId.set(
-      String(msgId),
-      {
-        ...raw,
-        msgId:
-          String(
-            raw.msgId ||
-            msgId
-          ),
-      }
-    );
-  }
-
-  const requests =
-    [...byId.values()]
-      .sort(
-        (
-          a,
-          b
-        ) =>
-          Number(
-            b.createdAt || 0
-          ) -
-          Number(
-            a.createdAt || 0
-          )
-      );
+  const requests = collectSetStaffRequests().sort(
+    (a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0)
+  );
 
   const now =
     new Date();

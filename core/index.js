@@ -612,12 +612,17 @@ app.get("/transcript/:canalId", async (req, res) => {
     );
   }
 
+  const safeChannelId = String(canalId).replace(/[&<>"']/g, character => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[character]);
+  const safeMessages = JSON.stringify(transcript.mensagens, null, 2)
+    .replace(/[&<>"']/g, character => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    })[character]);
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.setHeader('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'; base-uri 'none'");
   res.send(
-    `<html><body><h1>Transcript: ${canalId}</h1><pre>${JSON.stringify(
-      transcript.mensagens,
-      null,
-      2
-    )}</pre></body></html>`
+    `<html><body><h1>Transcript: ${safeChannelId}</h1><pre>${safeMessages}</pre></body></html>`
   );
 });
 

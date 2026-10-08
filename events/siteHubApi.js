@@ -350,6 +350,7 @@ async function assertModuleView(
 
 let permissionRefresh = null, permissionsRefreshedAt = 0;
 async function refreshDiscordPermissions(guild) {
+  if (guild.channels.cache.size && guild.roles.cache.has(guild.id)) return;
   if (Date.now() - permissionsRefreshedAt < 30000) return;
   if (!permissionRefresh) {
     permissionRefresh = Promise.all([guild.channels.fetch(), guild.roles.fetch()])
@@ -409,6 +410,10 @@ export function installSiteHubApi({
     generateAI: async options => {
       const generate = await siteProvider("./iaChatAuto.js", "generateSantaCreatorsSiteText");
       return generate(options);
+    },
+    logAI: async options => {
+      const enqueue = await siteProvider("./iaChatAuto.js", "enqueueSantaCreatorsSiteAiLog");
+      return enqueue({ client, ...options });
     },
   });
 
@@ -541,11 +546,8 @@ export function installSiteHubApi({
           );
         }
 
-        const guild =
-          await client.guilds
-            .fetch(
-              GUILD_ID
-            );
+        const guild = client.guilds.cache.get(GUILD_ID) ||
+          await client.guilds.fetch(GUILD_ID);
 
         await refreshDiscordPermissions(guild);
         if (action.startsWith('public.')) {

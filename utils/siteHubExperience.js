@@ -19,7 +19,7 @@ const cloneReadOnly = value => {
   visit(result); return result;
 };
 
-export function createSiteHubExperience({ client, channels, isTeamMember, generateAI, getContext = async () => ({}) }) {
+export function createSiteHubExperience({ client, channels, isTeamMember, generateAI, getContext = async () => ({}), logAI = async () => ({ queued: false }) }) {
   const directory = resolve(process.env.SANTA_SITE_HISTORY_DIR || 'data/site-history');
   const cache = new Map(), identities = new Map(), aiLocks = new Set(), aiRate = new Map();
   const archiveChannels = {
@@ -253,7 +253,16 @@ export function createSiteHubExperience({ client, channels, isTeamMember, genera
         { role: 'model', text: String(answer) }].slice(-24);
       await mkdir(folder, { recursive: true, mode: 0o700 });
       await writeFile(file + '.tmp', JSON.stringify(conversation), { mode: 0o600 }); await rename(file + '.tmp', file);
-      return { answer: String(answer), discordSynced, discordWarning, threadUrl, profile: context.profile };
+      let auditQueued = false, auditWarning = '';
+      try {
+        auditQueued = Boolean((await logAI({ member, prompt, answer: String(answer) }))?.queued);
+        if (!auditQueued) auditWarning = 'A fila das logs da IA não foi configurada.';
+      } catch (error) {
+        auditWarning = 'A conversa foi salva, mas não consegui gravar a fila das logs.';
+        console.error('[SITE AI AUDIT]', error.code || error.message);
+      }
+      return { answer: String(answer), discordSynced, discordWarning, threadUrl,
+        auditQueued, auditWarning, profile: context.profile };
     } finally { aiLocks.delete(actor); }
   }
   async function preferences(guild, member) {

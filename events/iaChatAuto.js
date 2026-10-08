@@ -32370,6 +32370,70 @@ function claimAiInboundMessage(message) {
 let AI_FORMS_PERSONAL_BRIDGE_INSTALLED =
   false;
 
+const SC_AI_PERSISTENT_QUEUES = new Map();
+
+async function getScAiPersistentQueue(name, deliver) {
+  if (!SC_AI_PERSISTENT_QUEUES.has(name)) {
+    const pending = import("../utils/shareAuditQueue.js")
+      .then(({ createShareAuditQueue }) => createShareAuditQueue(
+        path.resolve(process.env.SANTA_SITE_HISTORY_DIR || "data/site-history", name + ".json"),
+        async (_channel, payload) => deliver(payload)
+      )).catch(error => {
+        SC_AI_PERSISTENT_QUEUES.delete(name);
+        throw error;
+      });
+    SC_AI_PERSISTENT_QUEUES.set(name, pending);
+  }
+  return SC_AI_PERSISTENT_QUEUES.get(name);
+}
+
+function withScFormsPersistentQueue(handler) {
+  void getScAiPersistentQueue("forms-ai-pending", handler)
+    .catch(error => console.error("[IA FORMS QUEUE] Inicialização pendente:", error.message));
+  return async data => {
+    if (!data?.guildId || !data?.userId || !data?.messageId) return;
+    try {
+      const queue = await getScAiPersistentQueue("forms-ai-pending", handler);
+      await queue.enqueue([String(data.guildId)], { ...data });
+    } catch (error) {
+      console.error("[IA FORMS QUEUE] Não consegui persistir o comentário:", {
+        messageId: data.messageId, erro: error.message,
+      });
+    }
+  };
+}
+
+function getScSiteAiAuditQueue(client) {
+  return getScAiPersistentQueue("site-ai-dm-log-pending", async embed => {
+    const channel = client.channels.cache.get(AI_LOG_CHANNELS.DM_AI) ||
+      await client.channels.fetch(AI_LOG_CHANNELS.DM_AI);
+    if (!channel?.isTextBased?.()) throw new Error("Canal de logs privadas da IA indisponível.");
+    await channel.send({ embeds: [embed], allowedMentions: { parse: [] } });
+  });
+}
+
+export async function enqueueSantaCreatorsSiteAiLog({ client, member, prompt, answer }) {
+  const queue = await getScSiteAiAuditQueue(client);
+  const timestamp = new Date().toISOString();
+  for (const [title, text] of [["Usuário • Creators Share", prompt], ["Santa Creators IA • Creators Share", answer]]) {
+    const chunks = [];
+    let chunk = "";
+    for (const character of String(text || "")) {
+      if (chunk.length + character.length > 3500) { chunks.push(chunk); chunk = ""; }
+      chunk += character;
+    }
+    if (chunk) chunks.push(chunk);
+    for (let index = 0; index < chunks.length; index++) {
+      await queue.enqueue([AI_LOG_CHANNELS.DM_AI], {
+        color: 0xa855f7, title: `${title} • ${index + 1}/${chunks.length}`,
+        description: chunks[index], timestamp,
+        footer: { text: `${String(member.displayName || member.user?.username || "Usuário").slice(0, 180)} • ID ${member.id}` },
+      });
+    }
+  }
+  return { queued: true };
+}
+
 function installFormsCreatorPersonalTicketBridge(
   client
 ) {
@@ -32384,8 +32448,11 @@ function installFormsCreatorPersonalTicketBridge(
 
   dashOn(
     "formscreator:comentario_registrado",
-    async data => {
+    withScFormsPersistentQueue(async data => {
       try {
+        if (!readGeminiApiKey()) {
+          throw new Error("Gemini sem chave; comentário preservado na fila persistente.");
+        }
         const guildId =
           String(
             data?.guildId ||
@@ -32445,7 +32512,7 @@ function installFormsCreatorPersonalTicketBridge(
             );
 
         if (!guild) {
-          return;
+          throw new Error("Servidor indisponível; comentário preservado na fila.");
         }
 
         // ===============================================
@@ -32464,7 +32531,7 @@ function installFormsCreatorPersonalTicketBridge(
             `[IA FORMS BRIDGE] API de ticket pessoal indisponível para ${userId}.`
           );
 
-          return;
+          throw new Error("API de ticket pessoal indisponível; comentário preservado na fila.");
         }
 
         const ticket =
@@ -32482,7 +32549,7 @@ function installFormsCreatorPersonalTicketBridge(
             `[IA FORMS BRIDGE] Ticket pessoal não localizado para ${userId} (origem Forms: ${rawUserId || "desconhecida"}).`
           );
 
-          return;
+          throw new Error("Ticket pessoal não localizado; comentário preservado na fila.");
         }
 
         // ===============================================
@@ -32985,7 +33052,7 @@ O envio será dividido em partes, sem cortar o final. Conclua todas as frases.
 `.trim();
 
         const generated =
-          await generateSantaCreatorsStandaloneText({
+          data.__scGeneratedText || await generateSantaCreatorsStandaloneText({
             prompt,
 
             // Se ainda conseguimos buscar a mensagem original
@@ -33027,6 +33094,7 @@ O envio será dividido em partes, sem cortar o final. Conclua todas as frases.
             label:
               "Forms -> ticket pessoal",
           });
+        data.__scGeneratedText = generated;
 
         const finalText = limitDiscordText(
           String(
@@ -33079,12 +33147,12 @@ O envio será dividido em partes, sem cortar o final. Conclua todas as frases.
         );
 
         if (!finalText) {
-          return;
+          throw new Error("A IA retornou um comentário vazio; trabalho preservado na fila.");
         }
 
         const chunks = splitDiscordText(`<@${userId}> ${finalText}`, 1900);
-        let sent = null;
-        for (let index = 0; index < chunks.length; index++) {
+        let sent = data.__scFirstSent || null;
+        for (let index = Number(data.__scSentParts || 0); index < chunks.length; index++) {
           const part = await ticket.send({
             content: chunks[index],
             allowedMentions: {
@@ -33093,7 +33161,9 @@ O envio será dividido em partes, sem cortar o final. Conclua todas as frases.
               parse: [],
             },
           });
-          if (!sent) sent = part;
+          if (!sent) sent = { id: part.id, url: part.url };
+          data.__scFirstSent = sent;
+          data.__scSentParts = index + 1;
         }
 
         // ===============================================
@@ -33210,8 +33280,9 @@ O envio será dividido em partes, sem cortar o final. Conclua todas as frases.
           error?.message ||
           error
         );
+        throw error;
       }
-    }
+    })
   );
 }
 export function setupIaChatAuto(client) {
@@ -33237,10 +33308,21 @@ export function setupIaChatAuto(client) {
   );
 
   scInstallDiscordMemory(client);
+  void getScSiteAiAuditQueue(client)
+    .catch(error => console.error("[IA SITE AUDIT] Fila pendente:", error.message));
 
   console.log(
     "[IA CHAT AUTO] Sistema iniciado."
   );
+  console.log("[IA CONFIG]", {
+    processo: process.pid,
+    pastaAtual: process.cwd(),
+    arquivoEnv: path.resolve(".env"),
+    chaveConfigurada: Boolean(readGeminiApiKey()),
+    geminiApiKeyPresente: Boolean(String(process.env.GEMINI_API_KEY || "").trim()),
+    googleApiKeyPresente: Boolean(String(process.env.GOOGLE_API_KEY || "").trim()),
+    envNaPastaAtual: fs.existsSync(path.resolve(".env")),
+  });
 
   console.log(
     `[IA CHAT AUTO] Modelo: ${GEMINI_MODEL}`
