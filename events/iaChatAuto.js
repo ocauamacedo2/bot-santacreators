@@ -1,5 +1,6 @@
 // d:\santacreators-main\events\iaChatAuto.js
 
+import "dotenv/config";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -3083,8 +3084,13 @@ const GEMINI_FAST_REQUEST_TIMEOUT_MS =
 const GEMINI_CHAT_HEAVY_REQUEST_TIMEOUT_MS =
   12 * 1000;
 
-const GEMINI_API_KEY =
-  process.env.GEMINI_API_KEY || "";
+function readGeminiApiKey() {
+  return [process.env.GEMINI_API_KEY, process.env.GOOGLE_API_KEY]
+    .map(value => String(value || "").trim())
+    .find(Boolean) || "";
+}
+
+let geminiMissingKeyLoggedAt = 0;
 
 // =====================================================
 // IA — CONTROLE DE LATÊNCIA
@@ -4859,33 +4865,34 @@ IMPORTANTE:
 function getGeminiClient() {
   if (gemini) return gemini;
 
-  if (!GEMINI_API_KEY) {
-    console.error(
-      "[IA CHAT AUTO] GEMINI_API_KEY não encontrada."
-    );
-
+  const apiKey = readGeminiApiKey();
+  if (!apiKey) {
+    const now = Date.now();
+    if (!geminiMissingKeyLoggedAt || now - geminiMissingKeyLoggedAt >= 60000) {
+      console.error(
+        "[IA CHAT AUTO] IA indisponível: configure GEMINI_API_KEY ou GOOGLE_API_KEY no ambiente do bot e reinicie o processo."
+      );
+      geminiMissingKeyLoggedAt = now;
+    }
     return null;
   }
 
-  const provider = new GoogleGenAI({
-    apiKey: GEMINI_API_KEY,
-  });
-
+  const provider = new GoogleGenAI({ apiKey });
   gemini = {
-  models: {
-    generateContent: request => scRequest(provider, request),
-  },
+    models: {
+      generateContent: request => scRequest(provider, request),
+    },
 
-  // A Files API é usada somente como transporte temporário
-  // para anexos grandes. A memória permanente continua no Discord.
-  files: {
-    upload: request => provider.files.upload(request),
-    get: request => provider.files.get(request),
-    delete: request => provider.files.delete(request),
-  },
-};
-
-return gemini;
+    // A Files API é usada somente como transporte temporário
+    // para anexos grandes. A memória permanente continua no Discord.
+    files: {
+      upload: request => provider.files.upload(request),
+      get: request => provider.files.get(request),
+      delete: request => provider.files.delete(request),
+    },
+  };
+  geminiMissingKeyLoggedAt = 0;
+  return gemini;
 }
 
 // =====================================================
@@ -20942,9 +20949,9 @@ export async function generateSantaCreatorsStandaloneText({
   if (
     !geminiClient
   ) {
-    throw new Error(
-      "Cliente Gemini indisponível. Verifique GEMINI_API_KEY."
-    );
+    throw Object.assign(new Error(
+      "A IA está indisponível: configure GEMINI_API_KEY ou GOOGLE_API_KEY no ambiente do bot e reinicie o processo."
+    ), { status: 503, code: "GEMINI_NOT_CONFIGURED" });
   }
 
   const finalPrompt =

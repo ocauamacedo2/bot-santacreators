@@ -1227,7 +1227,9 @@ async function getSnapshotDaysAgo(days, currentSnapshot = null) {
  const targetMinutes = Number(currentSnapshot?.hour ?? getSaoPauloParts(new Date()).hour) * 60 + Number(currentSnapshot?.minute ?? getSaoPauloParts(new Date()).minute);
 
  try {
-   const candidates = await HistoryModel.find({ spDate: targetDateKey }).lean();
+   if (HistoryModel.db.readyState !== 1) return null;
+   const candidates = await HistoryModel.find({ spDate: targetDateKey })
+     .maxTimeMS(3000).lean();
 
    if (!candidates?.length) {
      FIVEM_DEBUG && console.log(
@@ -1305,19 +1307,38 @@ async function getExact21hHistory(dateKey) {
   }
 }
 
+const FIVEM_PEAKS_READ_CACHE = { at: 0, value: null, pending: null };
+
 async function loadPeaksMap() {
-  try {
-    const docs = await PeakModel.find().lean();
-    const map = {};
+  if (FIVEM_PEAKS_READ_CACHE.value &&
+      Date.now() - FIVEM_PEAKS_READ_CACHE.at < 60000) {
+    return FIVEM_PEAKS_READ_CACHE.value;
+  }
+  if (FIVEM_PEAKS_READ_CACHE.pending) return FIVEM_PEAKS_READ_CACHE.pending;
+  if (PeakModel.db.readyState !== 1) {
+    return FIVEM_PEAKS_READ_CACHE.value || {};
+  }
 
-    for (const document of docs) {
-      map[document.date] = document;
+  const task = (async () => {
+    try {
+      const docs = await PeakModel.find().maxTimeMS(3000).lean();
+      const map = {};
+      for (const document of docs) map[document.date] = document;
+      FIVEM_PEAKS_READ_CACHE.value = map;
+      FIVEM_PEAKS_READ_CACHE.at = Date.now();
+      return map;
+    } catch (e) {
+      console.error("[FIVEM_RETENTION] Erro ao carregar picos do MongoDB:", e);
+      return FIVEM_PEAKS_READ_CACHE.value || {};
     }
-
-    return map;
-  } catch (e) {
-    console.error("[FIVEM_RETENTION] Erro ao carregar picos do MongoDB:", e);
-    return {};
+  })();
+  FIVEM_PEAKS_READ_CACHE.pending = task;
+  try {
+    return await task;
+  } finally {
+    if (FIVEM_PEAKS_READ_CACHE.pending === task) {
+      FIVEM_PEAKS_READ_CACHE.pending = null;
+    }
   }
 }
 
@@ -1385,6 +1406,7 @@ async function getHistoricalCityPeakForWindow(dateKey, event, cityKey) {
   }
 
   try {
+    if (HistoryModel.db.readyState !== 1) return null;
     const snapshots = await HistoryModel.find({
       timestamp: {
         $gte: timestamps.startTimestamp,
@@ -1397,6 +1419,7 @@ async function getHistoricalCityPeakForWindow(dateKey, event, cityKey) {
         cities: 1,
       })
       .sort({ timestamp: 1 })
+      .maxTimeMS(3000)
       .lean();
 
     let bestPeak = null;
@@ -2172,9 +2195,10 @@ function hasStaleCityData(snapshot) {
 }
 
 async function getLastValidSnapshot() {
+ if (HistoryModel.db.readyState !== 1) return null;
  const candidates = await HistoryModel.find({
    totalMaxClients: { $gt: 0 },
- }).sort({ timestamp: -1 }).limit(50).lean();
+ }).sort({ timestamp: -1 }).limit(50).maxTimeMS(3000).lean();
 
  return candidates.find(isCompleteSnapshot) || candidates[0] || null;
 }
@@ -2261,7 +2285,11 @@ async function createSafeCurrentSnapshot(options = {}) {
  }
 
  const currentSnapshot = await createCurrentSnapshot();
- const fallbackSnapshot = await getLastValidSnapshot();
+ const fallbackSnapshot = isCompleteSnapshot(currentSnapshot)
+   ? null
+   : isValidSnapshot(FIVEM_SNAPSHOT_CACHE.value?.snapshot)
+     ? FIVEM_SNAPSHOT_CACHE.value.snapshot
+     : await getLastValidSnapshot();
 
  let result;
 
@@ -3964,14 +3992,47 @@ export function fivemRetentionStatusOnChannelDelete(channel) {
 // SITE HUB • RETENÇÃO
 // =====================================================
 
+function buildFivemSiteWeeklyEventPeaks(current, peaks) {
+  const scheduleState = loadCronogramaStateForFivem();
+  return getAllFivemEventSchedule().map(event => {
+    const date = getDateKeyFromWeekdayInCurrentWeek(current, event.weekday);
+    const previousDate = getDateKeyOffsetFromDateKey(date, -7);
+    const currentPeak = resolveComparableCityWindowFromPeaks(
+      peaks[date], event, event.cityKey
+    );
+    const previousPeak = resolveComparableCityWindowFromPeaks(
+      peaks[previousDate], event, event.cityKey
+    );
+    const measured = Boolean(currentPeak?.peakAt);
+    const previousMeasured = Boolean(previousPeak?.peakAt);
+    const fromPreviousWeek = !measured && previousMeasured;
+    const displayPeak = measured ? currentPeak : previousMeasured ? previousPeak : null;
+    return {
+      key: event.eventKey, city: event.cityKey,
+      name: getFivemEventDisplayName(event, scheduleState),
+      weekday: event.weekday, window: formatEventWindowLabel(event), date,
+      peak: currentPeak?.peak ?? null,
+      peakTime: currentPeak?.peakTime ?? null, measured,
+      previousWeek: {
+        date: previousDate, peak: previousPeak?.peak ?? null,
+        peakTime: previousPeak?.peakTime ?? null, measured: previousMeasured,
+      },
+      displayDate: fromPreviousWeek ? previousDate : date,
+      displayPeak: displayPeak?.peak ?? null,
+      displayPeakTime: displayPeak?.peakTime ?? null,
+      hasDisplayMeasurement: Boolean(displayPeak), fromPreviousWeek,
+    };
+  });
+}
+
 export async function getFivemRetentionSiteSnapshot({
   cityKey = null,
 } = {}) {
-  const safe =
-    await createSafeCurrentSnapshot({
-      forceFresh:
-        false,
-    });
+  const cached = FIVEM_SNAPSHOT_CACHE.value;
+  const cacheAge = Date.now() - FIVEM_SNAPSHOT_CACHE.createdAt;
+  const safe = cached?.snapshot && cacheAge >= 0 && cacheAge < 90000
+    ? cached
+    : await createSafeCurrentSnapshot({ forceFresh: false });
 
   const current =
     safe?.snapshot;
@@ -4338,6 +4399,8 @@ export async function getFivemRetentionSiteSnapshot({
             weekday: event.weekday, window: formatEventWindowLabel(event), date,
             peak: peak?.peak ?? null, peakTime: peak?.peakTime ?? null, measured: Boolean(peak?.peakAt) };
         })),
+    weeklyEventPeaks: buildFivemSiteWeeklyEventPeaks(current, peaks),
+    weeklyEventPeaks: buildFivemSiteWeeklyEventPeaks(current, peaks),
     cities: cities.sort((a, b) => Number(b.current) - Number(a.current)),
 
     selectedCity,

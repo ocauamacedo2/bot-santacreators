@@ -264,9 +264,21 @@ export function createSiteHubExperience({ client, channels, isTeamMember, genera
   async function handle({ guild, member, action, payload, res }) {
     if (action === 'profile.preferences') {
       if (!isTeamMember(member)) throw failure(403, 'A personalização da Central Creators é exclusiva da equipe.');
-      const value = { headline: String(payload.headline || '').trim().slice(0, 100),
-        bio: String(payload.bio || '').trim().slice(0, 500),
-        accent: ['purple', 'blue', 'pink'].includes(payload.accent) ? payload.accent : 'purple' };
+      const previous = await preferences(guild, member);
+      const value = {
+        ...previous,
+        headline: String(payload.headline ?? previous.headline ?? '').trim().slice(0, 100),
+        bio: String(payload.bio ?? previous.bio ?? '').trim().slice(0, 500),
+        accent: ['purple', 'blue', 'pink'].includes(payload.accent ?? previous.accent)
+          ? (payload.accent ?? previous.accent) : 'purple',
+        motto: String(payload.motto ?? previous.motto ?? '').trim().slice(0, 120),
+        cover: ['aurora', 'nebula', 'minimal'].includes(payload.cover ?? previous.cover)
+          ? (payload.cover ?? previous.cover) : 'aurora',
+        density: ['comfortable', 'compact'].includes(payload.density ?? previous.density)
+          ? (payload.density ?? previous.density) : 'comfortable',
+        showRoles: payload.showRoles === undefined
+          ? previous.showRoles !== false : payload.showRoles === 'yes',
+      };
       const folder = join(directory, guild.id, 'profiles'), file = join(folder, member.id + '.json');
       profileWrites = profileWrites.catch(() => {}).then(async () => {
         await mkdir(folder, { recursive: true, mode: 0o700 });
