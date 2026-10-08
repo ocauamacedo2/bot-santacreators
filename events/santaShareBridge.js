@@ -221,7 +221,7 @@ const outbox =
           `Canal ${id} inválido ou não pertence ao servidor de logs ${logGuildId}.`
         );
       }
-
+///teste
       await channel.send({
         embeds: [
           embed
