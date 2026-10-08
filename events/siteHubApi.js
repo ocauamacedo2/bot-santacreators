@@ -1,3 +1,6 @@
+import { createSiteSnapshotStore } from "../utils/siteSnapshotStore.js";
+import { getCronogramaSiteData } from "../utils/cronogramaSiteRead.js";
+import { fileURLToPath as snapshotPath } from "node:url";
 import express from "express";
 import { timingSafeEqual } from "node:crypto";
 
@@ -394,7 +397,7 @@ export function installSiteHubApi({
     getContext: async ({ guild, member, prompt }) => {
       const context = {};
       if (/cronograma|agenda|evento|hoje|amanh[ãa]/i.test(prompt) && await canAccessSiteModule(client, member, 'cronograma')) {
-        const getData = await siteProvider('./cronogramaCreators.js', 'getCronogramaData');
+        const getData = getCronogramaSiteData;
         context.cronograma = await getData();
       }
       if (/ranking|rank|\bggs?\b/i.test(prompt) && await canAccessSiteModule(client, member, 'hall')) {
@@ -408,6 +411,21 @@ export function installSiteHubApi({
       return generate(options);
     },
   });
+
+  const snapshots = createSiteSnapshotStore({ directory: snapshotPath(new URL('../data/site-consultas/', import.meta.url)) });
+  for (const event of ['guildMemberUpdate','guildMemberRemove','channelUpdate','channelDelete','roleUpdate','roleDelete'])
+    client.on(event, () => snapshots.invalidate());
+
+  const snapshotKey = (guild, member, action, payload = {}) => {
+    const moduleKey = action.split('.')[0];
+    const cleanPayload = { ...payload }; delete cleanPayload.refresh;
+    const permissionKey = [member.roles.cache.map(role => role.id).sort(),
+      member.permissions.bitfield.toString(), (CHANNELS[moduleKey] || []).map(id => {
+        const channel = guild.channels.cache.get(id);
+        return [id, channel?.permissionsFor(member)?.bitfield.toString() || ''];
+      })];
+    return snapshots.key([guild.id, member.id, action, cleanPayload, permissionKey]);
+  };
 
   app.post(
     "/site-hub",
@@ -562,6 +580,50 @@ export function installSiteHubApi({
         }
 
 
+        // Autorizar ANTES de ler qualquer consulta persistida, inclusive em atualização manual.
+        const moduleKey = action.split('.')[0];
+        if (action.endsWith('.snapshot') && CHANNELS[moduleKey]) {
+          await assertModuleView(client, member, moduleKey);
+          const key = snapshotKey(guild, member, action, payload);
+          const saved = snapshots.get(key);
+          const deliver = record => ({ ...record.value,
+            delivery: { savedAt: record.at, updating: !record.fresh, source: 'consulta-salva' } });
+          if (saved?.fresh && !payload.refresh) return res.json(deliver(saved));
+          const task = snapshots.begin(key);
+          if (!task.owner) {
+            if (saved) return res.json(deliver({ ...saved, fresh:false }));
+            const result = await task.promise;
+            if (result.error) throw result.error;
+            return res.json(result.value);
+          }
+          const realResponse = res;
+          const background = Boolean(saved && !payload.refresh);
+          if (background) realResponse.json(deliver({ ...saved, fresh:false }));
+          let statusCode = 200;
+          res = {
+            get statusCode() { return statusCode; },
+            status(code) { statusCode=code;return this; },
+            json(value) {
+              if (statusCode>=400 || value?.error) {
+                snapshots.finish(key,null,Object.assign(new Error(value?.error || 'Falha ao atualizar consulta'),{status:statusCode}));
+              } else {
+                if(moduleKey==='gi' && Array.isArray(value.records)) {
+                  value.records=[...new Map([...value.records].sort((a,b)=>Number(a.createdAtMs||0)-Number(b.createdAtMs||0)).map(item=>[String(item.targetId)+':'+String(item.area||''),item])).values()]
+                    .map(item=>({...item,rolePosition:guild.members.cache.get(String(item.targetId))?.roles.highest.position || 0}))
+                    .sort((a,b)=>b.rolePosition-a.rolePosition);
+                }
+                snapshots.finish(key,value);
+              }
+              if (!background) return realResponse.status(statusCode).json(value);
+              return value;
+            }
+          };
+        } else if (!['bootstrap','profile-options','identity.batch','ai.ask'].includes(action) &&
+          !action.startsWith('history.') && !action.startsWith('profile.')) {
+          // Toda escrita real passa pelas validações originais; a próxima consulta será refeita.
+          snapshots.invalidate();
+        }
+
         if (await experience.handle({ guild, member, action, payload, res })) return;
 
         // ==========================================
@@ -595,6 +657,16 @@ export function installSiteHubApi({
         entries
       ),
 
+    previews: Object.fromEntries(entries.filter(([,allowed]) => allowed).flatMap(([key]) => {
+      const saved = snapshots.get(snapshotKey(guild, member, key+'.snapshot', key==='retention'?{city:null}:{}));
+      if(!saved)return [];
+      const value=saved.value;
+      // Resumos leves: não duplicar listas completas na página inicial.
+      return [[key, { count: key==='weekly' ? (Array.isArray(value.ranking)?value.ranking:value.ranking?.ranking||value.ranking?.items||[]).length :
+        key==='gi' ? value.records?.length||0 : key==='manager' ? value.presence?.organizations?.length||0 :
+        key==='hall' ? value.players?.length||0 : key==='staff' ? value.requests?.length||value.records?.length||0 : 0,
+        totalPlayers:value.totals?.current ?? null, cityCount:value.cities?.length||0, savedAt:saved.at }]];
+    })),
     profile: { ...experience.profile(member), preferences: await experience.preferences(guild, member) },
     team: isOfficialSantaCreatorsTeamMember(member),
 
@@ -999,13 +1071,16 @@ export function installSiteHubApi({
             );
           }
 
-          return res.json(
-            await globalThis
-              .__SC_GI_SITE_API__
-              .snapshot({
-                actorId,
-              })
-          );
+          const giData = await globalThis.__SC_GI_SITE_API__.snapshot({ actorId });
+          const ids = [...new Set((giData.records || []).map(item => String(item.targetId)))];
+          let next = 0;
+          await Promise.all(Array.from({ length: Math.min(4, ids.length) }, async () => {
+            while (next < ids.length) {
+              const id = ids[next++];
+              if (!guild.members.cache.has(id)) await guild.members.fetch(id).catch(() => null);
+            }
+          }));
+          return res.json(giData);
         }
 
         if (
@@ -1161,7 +1236,7 @@ export function installSiteHubApi({
             "cronograma"
           );
 
-      const getCronogramaData = await siteProvider('./cronogramaCreators.js', 'getCronogramaData');
+      const getCronogramaData = getCronogramaSiteData;
       return res.json({
         data: await getCronogramaData(),
       });

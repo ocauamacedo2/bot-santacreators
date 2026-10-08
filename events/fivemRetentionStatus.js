@@ -4328,7 +4328,17 @@ export async function getFivemRetentionSiteSnapshot({
         ),
     },
 
-    cities,
+    eventPeaks: [[todayKey, todayPeaks], [yesterdayKey, yesterdayPeaks], [lastWeekKey, lastWeekPeaks]]
+      .flatMap(([date, document]) => getAllFivemEventSchedule()
+        .filter(event => event.weekday === new Date(date + 'T12:00:00Z').getUTCDay())
+        .map(event => {
+          const peak = resolveComparableCityWindowFromPeaks(document, event, event.cityKey);
+          return { key: event.eventKey, city: event.cityKey,
+            name: getFivemEventDisplayName(event, loadCronogramaStateForFivem()),
+            weekday: event.weekday, window: formatEventWindowLabel(event), date,
+            peak: peak?.peak ?? null, peakTime: peak?.peakTime ?? null, measured: Boolean(peak?.peakAt) };
+        })),
+    cities: cities.sort((a, b) => Number(b.current) - Number(a.current)),
 
     selectedCity,
 

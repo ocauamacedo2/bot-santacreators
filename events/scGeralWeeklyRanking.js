@@ -4959,7 +4959,8 @@ registerOperationalMetricProvider(
 // ✅ NOVO: Exporta o ranking semanal para outros módulos
 export async function getWeeklyRanking(client) {
   try {
-    const { items } = await collectAllPoints(client, "full");
+    // Navegação do site reaproveita a coleta recente; a rotina do bot mantém a varredura completa.
+    const { items } = await collectAllPoints(client, "light");
     const wkNow = weekKeyFromDateSP(nowSP());
     const agg = aggregateWeekDetailed(items, wkNow);
 
