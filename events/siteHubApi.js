@@ -24,7 +24,10 @@ import {
 import {
   getHierarchySiteSnapshot,
   hierarchySiteAction,
+  isOfficialSantaCreatorsTeamMember,
 } from "./hierarquiaDivisoes.js";
+
+import { createSiteHubExperience } from "../utils/siteHubExperience.js";
 
 import {
   getWeeklyRankingSiteSnapshot,
@@ -244,7 +247,7 @@ async function canViewAnyChannel(
     of channelIds
   ) {
     const channel =
-      await client.channels
+      client.channels.cache.get(channelId) || await client.channels
         .fetch(
           channelId
         )
@@ -342,10 +345,12 @@ async function assertModuleView(
 }
 
 
-let permissionRefresh = null;
+let permissionRefresh = null, permissionsRefreshedAt = 0;
 async function refreshDiscordPermissions(guild) {
+  if (Date.now() - permissionsRefreshedAt < 30000) return;
   if (!permissionRefresh) {
     permissionRefresh = Promise.all([guild.channels.fetch(), guild.roles.fetch()])
+      .then(() => { permissionsRefreshedAt = Date.now(); })
       .finally(() => { permissionRefresh = null; });
   }
   await permissionRefresh;
@@ -382,6 +387,27 @@ export function installSiteHubApi({
 
     return false;
   }
+
+  const experience = createSiteHubExperience({
+    client, channels: CHANNELS,
+    isTeamMember: isOfficialSantaCreatorsTeamMember,
+    getContext: async ({ guild, member, prompt }) => {
+      const context = {};
+      if (/cronograma|agenda|evento|hoje|amanh[ãa]/i.test(prompt) && await canAccessSiteModule(client, member, 'cronograma')) {
+        const getData = await siteProvider('./cronogramaCreators.js', 'getCronogramaData');
+        context.cronograma = await getData();
+      }
+      if (/ranking|rank|\bggs?\b/i.test(prompt) && await canAccessSiteModule(client, member, 'hall')) {
+        const ranking = await getHallSiteSnapshot({ guild, actorId: member.id });
+        context.hall = { orgs: ranking.orgs.slice(0, 10), players: ranking.players.slice(0, 10), updatedAt: ranking.updatedAt };
+      }
+      return context;
+    },
+    generateAI: async options => {
+      const generate = await siteProvider("./iaChatAuto.js", "generateSantaCreatorsSiteText");
+      return generate(options);
+    },
+  });
 
   app.post(
     "/site-hub",
@@ -536,6 +562,8 @@ export function installSiteHubApi({
         }
 
 
+        if (await experience.handle({ guild, member, action, payload, res })) return;
+
         // ==========================================
         // BOOTSTRAP
         // ==========================================
@@ -566,6 +594,9 @@ export function installSiteHubApi({
       Object.fromEntries(
         entries
       ),
+
+    profile: { ...experience.profile(member), preferences: await experience.preferences(guild, member) },
+    team: isOfficialSantaCreatorsTeamMember(member),
 
     source:
       'discord-live',
@@ -1227,3 +1258,6 @@ export function installSiteHubApi({
 
   return true;
 }
+
+
+

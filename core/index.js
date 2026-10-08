@@ -609,21 +609,53 @@ app.get(
 const API_PORT =
   Number(
     process.env.PORT ||
-    3000
+    80
   );
 
 const API_HOST =
   String(
     process.env.HOST ||
     "0.0.0.0"
+  ).trim();
+
+const apiServer =
+  app.listen(
+    API_PORT,
+    API_HOST,
+    () => {
+      console.log(
+        `[CORE] API interna do bot ativa em ${API_HOST}:${API_PORT}.`
+      );
+
+      console.log(
+        '[CORE] Estado da Central Creators:',
+        {
+          siteHubInstalled,
+          discordReady:
+            client.isReady(),
+        }
+      );
+    }
   );
 
-app.listen(
-  API_PORT,
-  API_HOST,
-  () => {
-    console.log(
-      `[CORE] API interna do bot ativa em ${API_HOST}:${API_PORT}.`
+apiServer.on(
+  'error',
+  error => {
+    console.error(
+      '[CORE] Não foi possível iniciar a API pública do bot:',
+      {
+        host:
+          API_HOST,
+
+        port:
+          API_PORT,
+
+        code:
+          error.code,
+
+        message:
+          error.message,
+      }
     );
   }
 );
