@@ -234,11 +234,28 @@ const outbox =
     }
   );
   outbox.catch(error => console.error('[SANTA AUDIT] Falha ao iniciar fila do bot:', error.message));
-  function requestSync() {
-    if (syncTimer) return;
-    syncTimer = setTimeout(() => { syncTimer = null; void sync(); }, 1000);
-    syncTimer.unref();
-  }
+let nextAttemptAt = 0;
+let consecutiveFailures = 0;
+let lastDeliveredSignature = null;
+let lastDeliveredAt = 0;
+
+const FULL_SYNC_MS = 30000;
+
+function requestSync() {
+  if (syncTimer) return;
+
+  const delay = Math.max(
+    1000,
+    nextAttemptAt - Date.now()
+  );
+
+  syncTimer = setTimeout(() => {
+    syncTimer = null;
+    void sync();
+  }, delay);
+
+  syncTimer.unref();
+}
 let chain = Promise.resolve(),
   pending = 0,
   syncing = false,
