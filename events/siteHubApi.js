@@ -471,13 +471,34 @@ export function installSiteHubApi({
             });
         }
 
+        if (
+          action ===
+          "profile-options"
+        ) {
+          return res.json(
+            getSetStaffSiteOptions()
+          );
+        }
+
+        if (
+          !client.isReady()
+        ) {
+          throw Object.assign(
+            new Error(
+              'O bot ainda está conectando ao Discord.'
+            ),
+            {
+              status: 503,
+            }
+          );
+        }
+
         const guild =
           await client.guilds
             .fetch(
               GUILD_ID
             );
 
-        if (!client.isReady()) throw Object.assign(new Error('O bot ainda está conectando ao Discord.'), { status: 503 });
         await refreshDiscordPermissions(guild);
         if (action.startsWith('public.')) {
           const modules = {};

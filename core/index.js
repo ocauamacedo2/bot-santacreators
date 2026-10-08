@@ -1265,7 +1265,39 @@ client.on("interactionCreate", async (interaction) => {
     if (
       await entrevistasTickets
         .onInteractionCreate(interaction)
-        .catch(() => false)
+        .catch(error => {
+          console.error(
+            '[CORE] Falha em entrevistasTickets.onInteractionCreate:',
+            {
+              interactionId:
+                interaction.id,
+
+              customId:
+                interaction.customId || null,
+
+              channelId:
+                interaction.channelId,
+
+              elapsedMs:
+                Date.now() -
+                interaction.createdTimestamp,
+
+              deferred:
+                interaction.deferred,
+
+              replied:
+                interaction.replied,
+
+              code:
+                error.code || null,
+
+              message:
+                error.message,
+            }
+          );
+
+          throw error;
+        })
     ) return;
 
       // Outros handlers...
